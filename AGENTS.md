@@ -12,13 +12,14 @@
   or `beast`; do not treat the local installation as a project blocker.
 - Preserve the required `rtk` command prefix, including remote access through
   `rtk proxy ssh`; transfer build artifacts with `rtk rsync`.
-- Source syncs must exclude every `build/` directory and use checksum-based,
-  non-mtime-preserving transfer:
-  `rtk rsync -az --checksum --no-times --exclude .git --exclude build
+- Source syncs must be exact mirrors outside generated directories: exclude
+  every `build/` directory, delete removed remote sources, and use
+  checksum-based, non-mtime-preserving transfer:
+  `rtk rsync -az --checksum --no-times --delete --exclude .git --exclude build
   --exclude '*/build' ./ HOST:/path/to/astra68/`. This prevents local products
-  from replacing host-built products and makes every changed source newer than
-  the host objects that depend on it. Transfer selected finished artifacts in
-  a separate explicit command.
+  from replacing host-built products, removes renamed/deleted source artifacts,
+  and makes every changed source newer than the host objects that depend on it.
+  Transfer selected finished artifacts in a separate explicit command.
 - Closing a local tool/SSH session does not prove that its remote CAD process
   exited. Before launching or accepting a remote build, check `pgrep -af
   nextpnr`/`yosys` on that host and terminate only stale, identified jobs.

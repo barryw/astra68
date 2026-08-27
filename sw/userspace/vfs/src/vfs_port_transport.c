@@ -114,6 +114,15 @@ port_client_reset(AstraVfsClient *client)
     client->port_area_capable = 0u;
 }
 
+void
+astra_vfs_port_abandon(AstraVfsClient *client)
+{
+    if (client == NULL)
+        return;
+    port_client_reset(client);
+    client->session = ASTRA_VFS_SESSION_INVALID;
+}
+
 static uint32_t
 reply_channel(AstraVfsClient *client)
 {

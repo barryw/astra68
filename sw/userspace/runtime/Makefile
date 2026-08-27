@@ -28,7 +28,8 @@ ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(TARGET_C_SOURCES)) \
 	$(patsubst ../../common/%.c,build/analyzer/common_%.o,$(COMMON_C_SOURCES))
 TARGET := build/m68k/libastrart.a
 PIC_TARGET := build/m68k/libastrart-pic.a
-PIC_OBJECTS := build/m68k/pic/syscall.o build/m68k/pic/memory.o \
+PIC_OBJECTS := build/m68k/pic/startup.o build/m68k/pic/syscall.o build/m68k/pic/port.o \
+	build/m68k/pic/memory.o \
 	build/m68k/pic/log.o build/m68k/pic/event_catalog.o \
 	build/m68k/pic/m68k/syscall.o
 CRT0 := build/m68k/crt0.o
@@ -40,12 +41,10 @@ all: $(TARGET) $(CRT0) link-contract size
 pic: $(PIC_TARGET)
 
 $(TARGET): $(TARGET_OBJECTS)
-	@mkdir -p $(@D)
-	$(AR) rcs $@ $^
+	$(ASTRA_REPLACE_ARCHIVE)
 
 $(PIC_TARGET): $(PIC_OBJECTS)
-	@mkdir -p $(@D)
-	$(AR) rcs $@ $^
+	$(ASTRA_REPLACE_ARCHIVE)
 
 build/m68k/pic/%.o: src/%.c
 	@mkdir -p $(@D)

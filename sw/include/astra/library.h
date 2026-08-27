@@ -102,8 +102,12 @@ _Static_assert(sizeof(AstraLibraryReference) == ASTRA_LIBRARY_REFERENCE_SIZE,
         library_author, library_copyright                                   \
     }
 
+#if defined(__ELF__)
 #define ASTRA_LIBRARY_EXPORTS \
     __attribute__((section(".astra_exports"), used, aligned(4)))
+#else
+#define ASTRA_LIBRARY_EXPORTS __attribute__((used, aligned(4)))
+#endif
 
 #endif
 

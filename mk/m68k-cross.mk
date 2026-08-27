@@ -17,3 +17,13 @@ endif
 # `?? ()`, which is the difference between diagnosing a fault and guessing at
 # one. Set ASTRA_DEBUG_FLAGS= to build without it.
 ASTRA_DEBUG_FLAGS ?= -g
+
+# `ar r` leaves members that are no longer named by the build.  A renamed or
+# removed object can therefore survive indefinitely and win symbol selection.
+# Recreate archives off to the side, then publish the exact member set at once.
+define ASTRA_REPLACE_ARCHIVE
+	@mkdir -p $(@D)
+	rm -f $@.tmp
+	$(AR) rcs $@.tmp $^
+	mv $@.tmp $@
+endef

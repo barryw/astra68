@@ -4,10 +4,11 @@ CFLAGS := -O2 -std=c11 -Wall -Wextra -Werror
 
 all: build/astra-bundle
 
-build/astra-bundle: bundle_tool.c ../ndk/src/bundle.c \
-		../ndk/include/astra/bundle.h
+build/astra-bundle: bundle_tool.c ../ndk/src/manifest.c ../ndk/src/bundle.c \
+		../ndk/include/astra/bundle.h ../sw/include/astra/process.h
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) bundle_tool.c ../ndk/src/bundle.c -o $@
+	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) bundle_tool.c ../ndk/src/manifest.c \
+		../ndk/src/bundle.c -o $@
 
 test: build/astra-bundle
 	python3 ./tests/test_bundle_tool.py ./build/astra-bundle

@@ -388,6 +388,31 @@ def test_loadable_libraries_use_owner_built_archives():
         )
 
 
+def test_static_archives_are_exact_replacements():
+    shared = (REPOSITORY / "mk" / "m68k-cross.mk").read_text()
+    for required in (
+        "rm -f $@.tmp",
+        "$(AR) rcs $@.tmp $^",
+        "mv $@.tmp $@",
+    ):
+        if required not in shared:
+            raise AssertionError(
+                "mk/m68k-cross.mk: archive replacement is not atomic and exact"
+            )
+    makefiles = list(USERSPACE.rglob("Makefile")) + [
+        REPOSITORY / "ndk" / "Makefile"
+    ]
+    direct_update = re.compile(
+        r"^\s*(?:\$\(AR\)|(?:[\w./-]+-)?ar)\s+[^\n]*\br(?:c|s|q)",
+        re.MULTILINE,
+    )
+    for path in makefiles:
+        if direct_update.search(path.read_text()):
+            raise AssertionError(
+                f"{relative(path)}: updates an archive without removing stale members"
+            )
+
+
 def test_ndk_private_headers_stay_in_ndk():
     forbidden = re.compile(r'#\s*include\s*[<"]internal/')
     for path in production_sources(USERSPACE):
@@ -551,6 +576,7 @@ def main():
         test_analyzer_targets_do_real_work,
         test_owner_analyzers_cover_production_sources,
         test_loadable_libraries_use_owner_built_archives,
+        test_static_archives_are_exact_replacements,
         test_ndk_private_headers_stay_in_ndk,
         test_public_headers_are_imported_by_namespace,
         test_gui_wire_types_are_owned_by_the_protocol,

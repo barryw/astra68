@@ -27,10 +27,12 @@ from either side.
 ```
 
 On Arty, `S02astra-firstboot` runs after networking and waits without a failure
-timeout until its SNTP client has set a valid Linux wall clock. HDMI, the boot
-splash, QEMU, and therefore Axiom cannot start earlier. Each failed attempt
-overwrites one diagnostic record rather than growing persistent storage while
-the network is unavailable.
+timeout until its SNTP client has set a valid Linux wall clock. When eth0 has no
+IPv4 address it retries the board's normal `ifdown`/`ifup` configuration before
+the next SNTP attempt, so a failed initial DHCP exchange cannot strand the gate.
+HDMI, the boot splash, QEMU, and therefore Axiom cannot start earlier. Each
+attempt replaces the bounded diagnostic log rather than growing persistent
+storage while the network is unavailable.
 
 ## What a person types
 

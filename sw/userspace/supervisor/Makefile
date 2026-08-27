@@ -9,12 +9,13 @@ RUNTIME := ../runtime
 STORAGE := ../storage
 ALLOC := ../alloc
 VFS := ../vfs
+CONFIG := ../config
 NDK := ../../../ndk
 NDK_LIB := $(NDK)/build/m68k/libastra.a
 LWEXT4 := ../../../third_party/lwext4
 CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include \
 	-I$(STORAGE)/include -I../metrics/include -I$(ALLOC)/include \
-	-I$(VFS)/include -I$(NDK)/include
+	-I$(VFS)/include -I$(CONFIG)/include -I$(NDK)/include
 # The volume check speaks lwext4 as well as Astra and links freestanding, so it
 # needs the vendored headers, the build profile, and the libc shims.
 EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
@@ -36,6 +37,7 @@ LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 SOURCES := src/supervisor.c src/main.c src/volume.c src/loader.c \
 	src/loader_manifest.c src/vfs_host.c src/vfs_read.c src/proc_tree.c
 OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES))
+CONFIG_OBJECT := build/m68k/config_document.o
 ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(SOURCES))
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 STORAGE_LIB := $(STORAGE)/build/m68k/libastrablock.a
@@ -71,10 +73,11 @@ image: $(IMAGE) $(CATALOG) size
 # The image is the deliverable, so the link contract is part of the build:
 # astra_user.ld produces exactly the shape kernel_elf_accept() takes. The
 # archives are named as prerequisites so a rebuilt library relinks the image.
-$(TARGET): $(OBJECTS) $(RUNTIME)/astra_user.ld $(RUNTIME_CRT0) $(EXT4_LIB) \
+$(TARGET): $(OBJECTS) $(CONFIG_OBJECT) $(RUNTIME)/astra_user.ld $(RUNTIME_CRT0) $(EXT4_LIB) \
 		$(STORAGE_LIB) $(ALLOC_LIB) $(RUNTIME_LIB) $(VFS_LIB) $(NDK_LIB)
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(RUNTIME_CRT0) $(OBJECTS) \
+		$(CONFIG_OBJECT) \
 		$(VFS_LIB) $(EXT4_LIB) \
 		$(STORAGE_LIB) $(ALLOC_LIB) \
 		$(NDK_LIB) $(RUNTIME_LIB) -lgcc
@@ -97,6 +100,11 @@ build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
 
+$(CONFIG_OBJECT): $(CONFIG)/src/config_document.c \
+		$(CONFIG)/include/astra/config_document.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
+
 build/m68k/proc_tree.o: src/proc_tree.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
@@ -110,12 +118,13 @@ $(HOST_TEST): $(TEST_SOURCES)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
-$(LOADER_TEST): src/loader_manifest.c $(NDK)/src/bundle.c \
+$(LOADER_TEST): src/loader_manifest.c $(NDK)/src/manifest.c \
+		$(NDK)/src/bundle.c \
 		tests/test_loader_manifest.c \
 		include/loader.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		src/loader_manifest.c $(NDK)/src/bundle.c \
+		src/loader_manifest.c $(NDK)/src/manifest.c $(NDK)/src/bundle.c \
 		tests/test_loader_manifest.c -o $@
 
 $(PROC_TREE_ROOT_TEST): tests/test_proc_tree_root.c
@@ -134,7 +143,8 @@ sanitize:
 		-o build/host/test_supervisor_sanitize
 	./build/host/test_supervisor_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		$(SANITIZER_FLAGS) src/loader_manifest.c $(NDK)/src/bundle.c \
+		$(SANITIZER_FLAGS) src/loader_manifest.c $(NDK)/src/manifest.c \
+		$(NDK)/src/bundle.c \
 		tests/test_loader_manifest.c -o build/host/test_loader_manifest_sanitize
 	./build/host/test_loader_manifest_sanitize
 

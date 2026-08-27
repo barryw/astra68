@@ -18,8 +18,7 @@ HOST_TEST := build/host/test_shell
 all: $(TARGET)
 
 $(TARGET): $(TARGET_OBJECTS)
-	@mkdir -p $(@D)
-	$(AR) rcs $@ $^
+	$(ASTRA_REPLACE_ARCHIVE)
 
 build/m68k/%.o: src/%.c include/astra/shell.h
 	@mkdir -p $(@D)

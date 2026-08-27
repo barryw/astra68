@@ -14,6 +14,9 @@
 #include <astra/status.h>
 #include <astra/syscall.h>
 
+_Static_assert(ASTRA_LAUNCH_GRANT_MAX == ASTRA_STARTUP_CAPABILITY_MAX - 2u,
+               "launch grants use every capability slot left after self");
+
 static uint32_t mock_number;
 static uint32_t mock_argument0;
 static uint32_t mock_argument1;

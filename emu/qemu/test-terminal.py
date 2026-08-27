@@ -87,6 +87,7 @@ PROMPT = "WORK:>"
 # says. Waiting for it is waiting for the window to exist and the shell inside
 # it to have run.
 BANNER = "COMMANDS"
+POSIX_COMMAND = 'posix -R +42 --cmd "set number" -- WORK:notes.txt'
 
 SCRIPT = [
     # `mkdir` is silent on success. The diagnostic event is the completion
@@ -225,7 +226,7 @@ SCRIPT = [
     # getcwd, and a heap. It reports by exit status rather than by text, so a
     # zero here is thirty-odd separate checks and a non-zero one names the step
     # -- see the enum at the top of `commands/posix/posix.c`.
-    ('posix -R +42 --cmd "set number" -- WORK:notes.txt', "POSIX RAW PASS"),
+    (POSIX_COMMAND, "POSIX RAW PASS"),
     ("echo $?", "0"),
     # Stock Lua, including the shared POSIX paths it depends on rather than a
     # command-private compatibility layer.
@@ -601,9 +602,6 @@ class Machine:
 
 def open_terminal(machine, boot_deadline, command_deadline):
     """Boots to the desktop and opens a terminal the way a person does."""
-    if (machine.word(RTC_STATUS) & RTC_VALID) == 0:
-        print("FAIL: machine model does not provide the required host clock")
-        return False
     if not machine.wait_for_serial(BOOT_MARKER, boot_deadline):
         print("FAIL: never reached the desktop; last serial lines:")
         for line in machine.log[-8:]:
@@ -649,7 +647,8 @@ def warm_the_store(qemu, rom, image, temporary, boot_deadline,
 
 
 def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
-        report_timings, prepared_image, performance_only, vim_gate):
+        report_timings, prepared_image, performance_only, vim_gate,
+        network_only):
     timings = []
     with tempfile.TemporaryDirectory(prefix="astra-terminal-") as temporary:
         scratch = os.path.join(temporary, "card.img")
@@ -657,7 +656,7 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         # Into the copy, so the image this gate was pointed at is untouched.
         if not prepared_image:
             astra_image.install(scratch, catalog)
-        if not performance_only and not warm_the_store(
+        if not performance_only and not network_only and not warm_the_store(
                 qemu, rom, scratch, temporary, boot_deadline,
                 command_deadline):
             return 1
@@ -667,14 +666,15 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         try:
             if not open_terminal(machine, boot_deadline, command_deadline):
                 return 1
-            script = (PERFORMANCE_SCRIPT if performance_only else
+            script = ([(POSIX_COMMAND, "POSIX RAW PASS")] if network_only else
+                      PERFORMANCE_SCRIPT if performance_only else
                       SCRIPT + VIM_SCRIPT if vim_gate else SCRIPT)
             for line, expected in script:
                 machine.settle()
                 before = machine.sequence()
                 started = time.monotonic()
                 machine.qmp.type_line(line)
-                if line == 'posix -R +42 --cmd "set number" -- WORK:notes.txt':
+                if line == POSIX_COMMAND:
                     ready, _ = machine.wait_for_text(
                         "POSIX RAW READY", command_deadline, before)
                     if ready is None:
@@ -708,6 +708,12 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                     print("FAIL: a command exceeded its budget")
                     return 1
                 print("ASTRA TERMINAL PERFORMANCE PASS")
+                return 0
+            if network_only:
+                if report_timings:
+                    for line, elapsed in timings:
+                        print("%-38s %6.2fs" % (line, elapsed))
+                print("ASTRA NETWORK PASS")
                 return 0
 
             # `>` truncates, and that is a claim about what is *not* in the
@@ -798,6 +804,8 @@ def main():
                         help="run the command-latency budget gate")
     parser.add_argument("--vim-gate", action="store_true",
                         help="also run the installed Vim argument gate")
+    parser.add_argument("--network-only", action="store_true",
+                        help="run only the POSIX networking integration gate")
     arguments = parser.parse_args()
     global MEMORY
     MEMORY = arguments.memory
@@ -805,7 +813,8 @@ def main():
                arguments.catalog, arguments.boot_deadline,
                arguments.command_deadline, arguments.verbose,
                arguments.report_timings, arguments.prepared_image,
-               arguments.performance_only, arguments.vim_gate)
+               arguments.performance_only, arguments.vim_gate,
+               arguments.network_only)
 
 
 if __name__ == "__main__":

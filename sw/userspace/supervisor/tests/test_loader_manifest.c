@@ -19,7 +19,8 @@ static void valid_manifest(void)
     assert(strcmp(manifest.entries[0].grants[0].name,
                   "BLOCK_DEVICE") == 0);
     assert(manifest.entries[0].grants[0].is_namespace == 0u);
-    assert(strcmp(manifest.entries[0].serves, "SYS") == 0);
+    assert(manifest.entries[0].serves_count == 1u);
+    assert(strcmp(manifest.entries[0].serves[0].name, "SYS") == 0);
     assert(manifest.entries[1].grants[1].rights ==
            (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE));
 
@@ -35,7 +36,7 @@ static void valid_manifest(void)
         assert(manifest.entries[0].grant_count == 8u);
         assert(manifest.entries[0].resident == 0u);
         assert(manifest.entries[0].delegates == 1u);
-        assert(manifest.entries[0].serves[0] == '\0');
+        assert(manifest.entries[0].serves_count == 0u);
     }
     {
         char display[] =
@@ -51,12 +52,27 @@ static void valid_manifest(void)
         assert(manifest.entries[0].resident == 1u);
         assert(strcmp(manifest.entries[0].grants[1].name,
                       "DISPLAY_IRQ") == 0);
-        assert(strcmp(manifest.entries[0].serves, "GUI") == 0);
-        assert(manifest.entries[0].serves_rights == 0u);
+        assert(strcmp(manifest.entries[0].serves[0].name, "GUI") == 0);
+        assert(manifest.entries[0].serves[0].rights == 0u);
         assert(manifest.entries[1].grant_count == 6u);
         assert(manifest.entries[1].resident == 0u);
         assert(strcmp(manifest.entries[1].grants[0].name, "GUI") == 0);
         assert(manifest.entries[1].delegates == 1u);
+    }
+    {
+        char network[] =
+            "service SERVICES:network grants NETWORK_DEVICE NETWORK_IRQ "
+            "serves NETWORK NETWORK_LISTEN required\n";
+
+        assert(supervisor_manifest_parse(network, sizeof(network) - 1u,
+                                         &manifest));
+        assert(manifest.count == 1u);
+        assert(manifest.entries[0].serves_count == 2u);
+        assert(strcmp(manifest.entries[0].serves[0].name, "NETWORK") == 0);
+        assert(manifest.entries[0].serves[0].rights == 0u);
+        assert(strcmp(manifest.entries[0].serves[1].name,
+                      "NETWORK_LISTEN") == 0);
+        assert(manifest.entries[0].serves[1].rights == 0u);
     }
     {
         char installer[] =
@@ -78,14 +94,7 @@ static void refuses_whole_file(void)
     char wrong_order[] =
         "service SERVICES:events serves EVENTS:r grants STORE:rw\n";
     char command[] = "command COMMANDS:shell grants SYS:r required\n";
-    char too_many[] =
-        "service SERVICES:storage grants BLOCK_DEVICE serves SYS:r required\n"
-        "service SERVICES:events grants STORE:rw serves EVENTS:r\n"
-        "service SERVICES:input grants SYS:r serves INPUT:r\n"
-        "service SERVICES:display grants SYS:r serves DISPLAY:r\n"
-        "service SERVICES:desktop grants GUI\n"
-        "service SERVICES:terminal grants GUI\n"
-        "service SERVICES:extra grants SYS:r\n";
+    char too_many[4096] = "";
     SupervisorManifest manifest;
 
     assert(!supervisor_manifest_parse(bad_right, sizeof(bad_right) - 1u,
@@ -95,7 +104,9 @@ static void refuses_whole_file(void)
                                       sizeof(wrong_order) - 1u, &manifest));
     assert(!supervisor_manifest_parse(command, sizeof(command) - 1u,
                                       &manifest));
-    assert(!supervisor_manifest_parse(too_many, sizeof(too_many) - 1u,
+    for (uint32_t index = 0u; index < ASTRA_PROCESS_COUNT_MAX; ++index)
+        (void)strcat(too_many, "service SERVICES:extra grants SYS:r\n");
+    assert(!supervisor_manifest_parse(too_many, strlen(too_many),
                                       &manifest));
     assert(manifest.count == 0u);
 }

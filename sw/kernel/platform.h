@@ -41,6 +41,15 @@ typedef struct KernelPlatformBlockCompletion {
     uint32_t host_generation;
 } KernelPlatformBlockCompletion;
 
+typedef struct KernelPlatformNetworkState {
+    uint32_t capabilities;
+    uint32_t state_flags;
+    uint32_t host_generation;
+    uint32_t queue_depth;
+    uint32_t maximum_transfer;
+    uint32_t active_endpoints;
+} KernelPlatformNetworkState;
+
 typedef struct KernelInputEvent {
     uint32_t header;
     uint32_t value;
@@ -84,6 +93,7 @@ uint64_t kernel_platform_monotonic_ns(void);
 bool kernel_platform_wall_clock_ns(uint64_t *nanoseconds);
 bool kernel_platform_wall_clock(uint64_t *nanoseconds, int32_t *utc_offset,
                                 uint32_t *zone);
+bool kernel_platform_wall_clock_set(uint64_t nanoseconds);
 uint64_t kernel_platform_cycles_to_ns(uint64_t cycles);
 bool kernel_platform_deadline_to_cycles(int64_t deadline_ns,
                                         uint64_t *deadline_cycles);
@@ -146,6 +156,14 @@ uint32_t kernel_platform_block_submit(uint32_t id, uint8_t operation,
 bool kernel_platform_block_pop_completion(
     KernelPlatformBlockCompletion *completion);
 void kernel_platform_block_ack_state(void);
+bool kernel_platform_network_present(void);
+bool kernel_platform_network_state(KernelPlatformNetworkState *state);
+uint32_t kernel_platform_network_execute(uint32_t physical_buffer,
+                                         uint32_t byte_size,
+                                         uint32_t command_count,
+                                         uint32_t *executed_commands);
+void kernel_platform_network_ack_ready(void);
+bool kernel_platform_network_reset(void);
 bool kernel_platform_input_present(void);
 uint32_t kernel_platform_input_status(void);
 bool kernel_input_peek(KernelInputEvent *event);

@@ -18,6 +18,7 @@ int astra_vfs_process_test_index(const uint8_t *bytes, uint32_t length,
 static uint32_t closes;
 static uint32_t connects;
 static uint32_t disconnects;
+static uint32_t abandons;
 static uint32_t fail_connect;
 
 int astra_startup_validate(const AstraStartupInfo *startup)
@@ -102,6 +103,12 @@ uint32_t astra_vfs_port_connect_lazy(AstraVfsClient *client,
                                      uint32_t service)
 {
     return astra_vfs_port_connect(client, service);
+}
+
+void astra_vfs_port_abandon(AstraVfsClient *client)
+{
+    ++abandons;
+    client->session = ASTRA_VFS_SESSION_INVALID;
 }
 
 uint32_t astra_vfs_disconnect(AstraVfsClient *client)
@@ -237,6 +244,19 @@ int main(void)
                0x12345678u);
         astra_process_vfs_close();
         assert(disconnects == 2u);
+
+        /* A fork child drops its cloned reply channel without closing the
+         * parent's service session, then reconnects lazily under its owner. */
+        connects = 0u;
+        disconnects = 0u;
+        abandons = 0u;
+        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        assert(astra_process_vfs_client() != NULL && connects == 1u);
+        assert(astra_process_vfs_after_fork_child(&startup) == ASTRA_VFS_OK);
+        assert(abandons == 1u && disconnects == 0u);
+        assert(astra_process_vfs_client() != NULL && connects == 2u);
+        astra_process_vfs_close();
+        assert(disconnects == 1u);
 
         /* A mount nobody named is a mount nobody disconnects either. */
         connects = 0u;

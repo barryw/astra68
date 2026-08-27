@@ -8,6 +8,7 @@
 #include "vesta.h"
 
 #include <astra/display.h>
+#include <astra/network.h>
 #include <astra/render_batch.h>
 
 #include <stddef.h>
@@ -265,6 +266,13 @@ uint64_t kernel_platform_cycles_to_ns(uint64_t cycles)
 bool kernel_platform_wall_clock_ns(uint64_t *nanoseconds)
 {
     return kernel_platform_wall_clock(nanoseconds, NULL, NULL);
+}
+
+bool kernel_platform_wall_clock_set(uint64_t nanoseconds)
+{
+    VESTA_WRITE(RTC_SET_NS_HI, (uint32_t)(nanoseconds >> 32));
+    VESTA_WRITE(RTC_SET_NS_LO, (uint32_t)nanoseconds);
+    return (VESTA_READ(RTC_STATUS) & RTC_VALID) != 0u;
 }
 
 /*
@@ -744,6 +752,14 @@ bool kernel_platform_device_irq_capture(uint8_t source, uint32_t *status)
          * without mistaking an undrained old one for progress. */
         pending = VESTA_READ(INPUT_DEVICE_SEQ);
         break;
+    case IRQ_SRC_NETWORK:
+        if ((VESTA_READ(NETWORK_QUEUE) &
+             NETWORK_QUEUE_EVENT_PENDING) == 0u)
+            return false;
+        pending = VESTA_READ(NETWORK_READY_SEQ);
+        if (pending == 0u)
+            return false;
+        break;
     case IRQ_SRC_VEGA:
         pending = VEGA_READ(IRQ_STAT) & VEGA_READ(IRQ_EN);
         if (pending == 0u)
@@ -785,6 +801,10 @@ bool kernel_platform_device_irq_complete(uint8_t source,
     case IRQ_SRC_INPUT:
         return (VESTA_READ(INPUT_STATUS) & INPUT_EVENT_VALID) == 0u ||
                VESTA_READ(INPUT_DEVICE_SEQ) != captured_status;
+    case IRQ_SRC_NETWORK:
+        kernel_platform_network_ack_ready();
+        return (VESTA_READ(NETWORK_QUEUE) &
+                NETWORK_QUEUE_EVENT_PENDING) == 0u;
     case IRQ_SRC_VEGA:
         return (VEGA_READ(IRQ_STAT) & VEGA_READ(IRQ_EN)) == 0u;
     case IRQ_SRC_USB:
@@ -804,6 +824,7 @@ bool kernel_platform_device_irq_quiesce(uint8_t source)
     switch (source) {
     case IRQ_SRC_STORAGE:
     case IRQ_SRC_INPUT:
+    case IRQ_SRC_NETWORK:
         return true;
     case IRQ_SRC_VEGA:
         pending = VEGA_READ(IRQ_STAT);
@@ -1073,6 +1094,76 @@ bool kernel_platform_block_pop_completion(
 void kernel_platform_block_ack_state(void)
 {
     VESTA_WRITE(BLOCK_STATE_ACK, BLOCK_STATE_ACK_BIT);
+}
+
+bool kernel_platform_network_present(void)
+{
+    return VESTA_READ(NETWORK_ID) == NETWORK_ID_MAGIC &&
+           (VESTA_READ(NETWORK_VERSION) >> 16) ==
+               (NETWORK_VERSION_1_0 >> 16);
+}
+
+bool kernel_platform_network_state(KernelPlatformNetworkState *state)
+{
+    uint32_t generation_before;
+    uint32_t generation_after;
+
+    if (state == NULL || !kernel_platform_network_present())
+        return false;
+    for (uint32_t attempt = 0u; attempt < 4u; ++attempt) {
+        generation_before = VESTA_READ(NETWORK_HOST_GEN);
+        state->capabilities = VESTA_READ(NETWORK_CAPS);
+        state->state_flags = VESTA_READ(NETWORK_STATE);
+        state->queue_depth = VESTA_READ(NETWORK_QUEUE) >> 16;
+        state->maximum_transfer = VESTA_READ(NETWORK_MAX_TRANSFER);
+        state->active_endpoints = VESTA_READ(NETWORK_ENDPOINTS);
+        generation_after = VESTA_READ(NETWORK_HOST_GEN);
+        if (generation_before == generation_after) {
+            state->host_generation = generation_after;
+            return true;
+        }
+    }
+    return false;
+}
+
+uint32_t kernel_platform_network_execute(uint32_t physical_buffer,
+                                         uint32_t byte_size,
+                                         uint32_t command_count,
+                                         uint32_t *executed_commands)
+{
+    uint32_t status;
+
+    if (executed_commands == NULL || !kernel_platform_network_present())
+        return ASTRA_SYSCALL_UNSUPPORTED;
+    *executed_commands = 0u;
+    if ((VESTA_READ(NETWORK_QUEUE) & NETWORK_QUEUE_READY) == 0u)
+        return ASTRA_SYSCALL_WOULD_BLOCK;
+    VESTA_WRITE(NETWORK_REQ_BUFFER, physical_buffer);
+    VESTA_WRITE(NETWORK_REQ_BYTES, byte_size);
+    VESTA_WRITE(NETWORK_REQ_COUNT, command_count);
+    VESTA_WRITE(NETWORK_EXECUTE, NETWORK_EXECUTE_BIT);
+    status = kernel_mmio_fence32(VESTA_ADDRESS(NETWORK_STATUS));
+    if (status == ASTRA_SYSCALL_OK)
+        *executed_commands = VESTA_READ(NETWORK_COMPLETED);
+    return status;
+}
+
+void kernel_platform_network_ack_ready(void)
+{
+    VESTA_WRITE(NETWORK_READY_ACK, NETWORK_READY_ACK_BIT);
+    kernel_mmio_cpu_sync();
+}
+
+bool kernel_platform_network_reset(void)
+{
+    uint32_t generation;
+
+    if (!kernel_platform_network_present())
+        return false;
+    generation = VESTA_READ(NETWORK_HOST_GEN);
+    VESTA_WRITE(NETWORK_RESET, NETWORK_RESET_BIT);
+    kernel_mmio_cpu_sync();
+    return VESTA_READ(NETWORK_HOST_GEN) != generation;
 }
 
 bool kernel_platform_input_present(void)

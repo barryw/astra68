@@ -14,7 +14,7 @@
  * and costs nothing: leases come from the shared pool above, so this is a
  * policy ceiling and not an array size.
  */
-#define KERNEL_DEVICE_LEASE_OWNER_MAX 4u
+#define KERNEL_DEVICE_LEASE_OWNER_MAX KERNEL_DEVICE_MAX
 
 #define KERNEL_DEVICE_RIGHT_QUERY      (1u << 0)
 #define KERNEL_DEVICE_RIGHT_TRANSFER   (1u << 5)

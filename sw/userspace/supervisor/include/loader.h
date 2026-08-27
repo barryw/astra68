@@ -8,7 +8,7 @@
 #include <astra/syscall.h>
 #include <astra/vfs_service.h>
 
-#define SUPERVISOR_MANIFEST_ENTRY_MAX 6u
+#define SUPERVISOR_MANIFEST_ENTRY_MAX (ASTRA_PROCESS_COUNT_MAX - 1u)
 /* Every process slot can be represented; the wait set has separate room. */
 #define SUPERVISOR_PROCESS_MAX ASTRA_PROCESS_COUNT_MAX
 /* Long enough for "SERVICES:display" and an application bundle name. */
@@ -17,6 +17,7 @@
 #define SUPERVISOR_PROC_PORT_MESSAGES 4u
 #define SUPERVISOR_PROC_PORT_BUDGET 8u
 #define SUPERVISOR_MANIFEST_GRANT_MAX ASTRA_LAUNCH_GRANT_MAX
+#define SUPERVISOR_MANIFEST_PUBLICATION_MAX ASTRA_MESSAGE_HANDLES_MAX
 #define SUPERVISOR_MANIFEST_PATH_MAX 128u
 
 typedef struct SupervisorManifestGrant {
@@ -25,12 +26,18 @@ typedef struct SupervisorManifestGrant {
     uint32_t is_namespace;
 } SupervisorManifestGrant;
 
+typedef struct SupervisorManifestPublication {
+    char name[ASTRA_CAPABILITY_NAME_MAX];
+    uint32_t rights;
+} SupervisorManifestPublication;
+
 typedef struct SupervisorManifestEntry {
     char path[SUPERVISOR_MANIFEST_PATH_MAX];
     SupervisorManifestGrant grants[SUPERVISOR_MANIFEST_GRANT_MAX];
     uint32_t grant_count;
-    char serves[ASTRA_CAPABILITY_NAME_MAX];
-    uint32_t serves_rights;
+    SupervisorManifestPublication
+        serves[SUPERVISOR_MANIFEST_PUBLICATION_MAX];
+    uint32_t serves_count;
     uint32_t delegates;
     uint32_t required;
     uint32_t resident;

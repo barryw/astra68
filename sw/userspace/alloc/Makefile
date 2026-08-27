@@ -20,8 +20,7 @@ HOST_TEST := build/host/test_alloc
 all: $(TARGET) size
 
 $(TARGET): $(OBJECTS)
-	@mkdir -p $(@D)
-	$(AR) rcs $@ $^
+	$(ASTRA_REPLACE_ARCHIVE)
 
 build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)

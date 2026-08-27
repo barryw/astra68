@@ -14,6 +14,27 @@ static uint32_t clone_pid = 123u;
 static uint32_t wait_result = ASTRA_SYSCALL_TIMED_OUT;
 static uint32_t child_status;
 static uint32_t closed_handle;
+static uint32_t after_fork_child_calls;
+static uint32_t file_after_fork_child_calls;
+
+int
+astra_posix_file_fork_ready(void)
+{
+    return 1;
+}
+
+int
+astra_posix_file_after_fork_child(void)
+{
+    ++file_after_fork_child_calls;
+    return 0;
+}
+
+void
+astra_posix_socket_after_fork_child(void)
+{
+    ++after_fork_child_calls;
+}
 
 uint32_t
 astra_process_clone(uint32_t *handle, uint32_t *pid)
@@ -73,6 +94,8 @@ main(void)
     clone_pid = 0u;
     clone_handle = 0u;
     assert(fork() == 0);
+    assert(file_after_fork_child_calls == 1u);
+    assert(after_fork_child_calls == 1u);
     assert(wait(NULL) == (pid_t)-1 && errno == ECHILD);
     assert(waitpid((pid_t)-2, NULL, 0) == (pid_t)-1 && errno == EINVAL);
     puts("ASTRA POSIX PROCESS PASS");

@@ -55,7 +55,8 @@ int supervisor_manifest_grant(char *text, SupervisorManifestGrant *grant)
 
 static int parse_line(char *line, SupervisorManifestEntry *entry)
 {
-    char *token[3u + SUPERVISOR_MANIFEST_GRANT_MAX + 4u];
+    char *token[3u + SUPERVISOR_MANIFEST_GRANT_MAX +
+                SUPERVISOR_MANIFEST_PUBLICATION_MAX + 4u];
     uint32_t count = astra_manifest_words(
         line, token, sizeof(token) / sizeof(token[0]));
     uint32_t at = 0u;
@@ -97,8 +98,20 @@ static int parse_line(char *line, SupervisorManifestEntry *entry)
     }
     if (at < count && strcmp(token[at], "serves") == 0) {
         ++at;
-        if (at == count || !authority(token[at++], entry->serves,
-                       &entry->serves_rights, 1))
+        while (at < count && strcmp(token[at], "delegates") != 0 &&
+               strcmp(token[at], "required") != 0) {
+            SupervisorManifestPublication *publication;
+
+            if (entry->serves_count ==
+                    SUPERVISOR_MANIFEST_PUBLICATION_MAX)
+                return 0;
+            publication = &entry->serves[entry->serves_count];
+            if (!authority(token[at++], publication->name,
+                           &publication->rights, 1))
+                return 0;
+            ++entry->serves_count;
+        }
+        if (entry->serves_count == 0u)
             return 0;
     }
     if (at < count && strcmp(token[at], "delegates") == 0) {

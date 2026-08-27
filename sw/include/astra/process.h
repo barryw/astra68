@@ -57,18 +57,13 @@
  * to expose as a syscall at all.
  */
 /*
- * Twelve. Ten was the terminal service's own launch -- ready endpoint,
- * display, input, input IRQ, work namespace, two-member COMMANDS: union,
- * shared LIBS:, events, event control -- and it was exactly ten, with nothing
- * left for the shell to say where the prompt is standing. A child gets CWD:
- * now, one grant per member of the assign the prompt is in, so two more.
- * Keep this one public ceiling tied to the kernel alias; separate limits
- * already failed once by drifting apart.
+ * A child always spends two startup slots naming itself and its first thread.
+ * Every remaining slot may be granted by its launcher; the startup page's
+ * actual packing check decides how many fit beside argv and the environment.
+ * There is no second deployment-sized ceiling to raise when a service gains a
+ * capability.
  */
-#define ASTRA_LAUNCH_GRANT_MAX 12u
-_Static_assert(ASTRA_LAUNCH_GRANT_MAX == 12u,
-               "the grant ceiling is ABI: a child's capability table and "
-               "every array sized by it are laid out from this number");
+#define ASTRA_LAUNCH_GRANT_MAX (ASTRA_STARTUP_CAPABILITY_MAX - 2u)
 /*
  * Arguments share the startup page with its capability table and environment.
  * These are physical upper bounds only; the kernel accepts the actual mixture

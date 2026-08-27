@@ -44,7 +44,8 @@ typedef enum PosixDescriptorKind {
     POSIX_DESCRIPTOR_STREAM,
     POSIX_DESCRIPTOR_FILE,
     POSIX_DESCRIPTOR_PIPE_READ,
-    POSIX_DESCRIPTOR_PIPE_WRITE
+    POSIX_DESCRIPTOR_PIPE_WRITE,
+    POSIX_DESCRIPTOR_SOCKET
 } PosixDescriptorKind;
 
 /* A default allocation, not a ceiling. The containing charged area is the
@@ -67,7 +68,7 @@ typedef struct PosixDescriptor {
 } PosixDescriptor;
 
 #define POSIX_EXEC_MAGIC 0x50584543u
-#define POSIX_EXEC_VERSION 1u
+#define POSIX_EXEC_VERSION 2u
 
 typedef struct PosixExecHeader {
     uint32_t magic;
@@ -75,6 +76,8 @@ typedef struct PosixExecHeader {
     uint32_t version;
     uint32_t file_state_offset;
     uint32_t file_state_size;
+    uint32_t socket_state_offset;
+    uint32_t socket_state_size;
     uint32_t descriptor_offset;
     uint32_t descriptor_count;
     uint32_t description_offset;
@@ -88,11 +91,12 @@ typedef struct PosixExecDescriptor {
 } PosixExecDescriptor;
 
 typedef struct PosixExecDescription {
-    AstraPosixFileExecState file;
     uint32_t kind;
     uint32_t status_flags;
     uint32_t value;
     uint32_t read_wait;
+    uint32_t state_offset;
+    uint32_t state_size;
 } PosixExecDescription;
 
 /*
@@ -105,6 +109,7 @@ static PosixOpenDescription initial_descriptions[3];
 static PosixDescriptor *descriptors = initial_descriptors;
 static uint32_t descriptor_capacity = 3u;
 static const AstraPosixFileOps *file_ops;
+static const AstraPosixSocketOps *socket_ops;
 static const AstraStartupInfo *startup_block;
 static char *empty_environment[] = { NULL };
 extern char **environ;
@@ -187,6 +192,12 @@ astra_posix_file_bind(const AstraPosixFileOps *ops)
     file_ops = ops;
 }
 
+void
+astra_posix_socket_bind(const AstraPosixSocketOps *ops)
+{
+    socket_ops = ops;
+}
+
 static int
 claim_descriptor(uint32_t minimum)
 {
@@ -204,6 +215,9 @@ claim_descriptor(uint32_t minimum)
     return (int)fd;
 }
 
+static int descriptor_native(PosixDescriptorKind kind, uint32_t handle,
+                             int flags);
+
 static int
 release_description(PosixOpenDescription *description)
 {
@@ -214,6 +228,9 @@ release_description(PosixOpenDescription *description)
         return 0;
     if (description->kind == POSIX_DESCRIPTOR_FILE && file_ops != NULL)
         result = file_ops->close(description->value);
+    else if (description->kind == POSIX_DESCRIPTOR_SOCKET &&
+             socket_ops != NULL)
+        result = socket_ops->close(description->value);
     else if (description->value != 0u &&
              astra_close(description->value) != ASTRA_SYSCALL_OK) {
         errno = EIO;
@@ -269,6 +286,16 @@ astra_posix_descriptor_file(uint32_t slot, int flags)
     description->status_flags = flags;
     description->references = 1u;
     descriptors[fd].description = description;
+    return fd;
+}
+
+int
+astra_posix_descriptor_socket(uint32_t slot, int flags)
+{
+    int fd = descriptor_native(POSIX_DESCRIPTOR_SOCKET, slot, flags);
+
+    if (fd < 0)
+        return -1;
     return fd;
 }
 
@@ -358,6 +385,28 @@ astra_posix_descriptor_slot(int fd)
     return (int)slot->value;
 }
 
+int
+astra_posix_descriptor_socket_slot(int fd)
+{
+    PosixOpenDescription *slot = entry(fd);
+
+    if (slot == NULL || slot->kind != POSIX_DESCRIPTOR_SOCKET)
+        return -1;
+    return (int)slot->value;
+}
+
+int
+astra_posix_descriptor_flags(int fd)
+{
+    PosixOpenDescription *slot = entry(fd);
+
+    if (slot == NULL) {
+        errno = EBADF;
+        return -1;
+    }
+    return slot->status_flags;
+}
+
 uint32_t
 astra_posix_descriptor_handle(int fd)
 {
@@ -383,16 +432,19 @@ int
 astra_posix_exec_export(void **state, uint32_t *size)
 {
     PosixOpenDescription **unique = NULL;
-    PosixExecHeader *header;
-    PosixExecDescriptor *wire_descriptors;
-    PosixExecDescription *wire_descriptions;
+    PosixExecHeader *header = NULL;
+    PosixExecDescriptor *wire_descriptors = NULL;
+    PosixExecDescription *wire_descriptions = NULL;
     uint32_t active = 0u;
     uint32_t unique_count = 0u;
     uint32_t file_size;
+    uint32_t socket_size = 0u;
+    uint32_t socket_description_size = 0u;
     uint32_t at;
     uint32_t total;
     uint32_t file_used = 0u;
-    uint8_t *bytes;
+    uint32_t socket_used = 0u;
+    uint8_t *bytes = NULL;
 
     if (state == NULL || size == NULL || file_ops == NULL ||
         file_ops->exec_size == NULL || file_ops->exec_export == NULL ||
@@ -403,26 +455,62 @@ astra_posix_exec_export(void **state, uint32_t *size)
     *state = NULL;
     *size = 0u;
     for (uint32_t fd = 0u; fd < descriptor_capacity; ++fd)
-        if (descriptors[fd].description != NULL)
+        if (descriptors[fd].description != NULL &&
+            (descriptors[fd].descriptor_flags & FD_CLOEXEC) == 0u)
             ++active;
-    if (active != 0u) {
-        unique = calloc(active, sizeof(*unique));
-        if (unique == NULL) {
-            errno = ENOMEM;
-            return -1;
-        }
+    unique = calloc(active == 0u ? 1u : active, sizeof(*unique));
+    if (unique == NULL) {
+        errno = ENOMEM;
+        return -1;
+    }
+    for (uint32_t fd = 0u; fd < descriptor_capacity; ++fd) {
+        PosixOpenDescription *description = descriptors[fd].description;
+        uint32_t index;
+
+        if (description == NULL ||
+            (descriptors[fd].descriptor_flags & FD_CLOEXEC) != 0u)
+            continue;
+        for (index = 0u; index < unique_count; ++index)
+            if (unique[index] == description)
+                break;
+        if (index == unique_count)
+            unique[unique_count++] = description;
     }
     file_size = file_ops->exec_size();
+    if (socket_ops != NULL) {
+        if (socket_ops->exec_size == NULL || socket_ops->socket_size == NULL ||
+            socket_ops->exec_export == NULL ||
+            socket_ops->socket_export == NULL) {
+            errno = EINVAL;
+            goto failed;
+        }
+        socket_size = socket_ops->exec_size();
+        socket_description_size = socket_ops->socket_size();
+    }
     if (file_size == 0u ||
         !align_offset((uint32_t)sizeof(*header) + file_size,
-                      _Alignof(PosixExecDescriptor), &at) ||
+                      _Alignof(uint32_t), &at) ||
+        socket_size > UINT32_MAX - at)
+        goto overflow;
+    at += socket_size;
+    if (!align_offset(at, _Alignof(PosixExecDescriptor), &at) ||
         active > (UINT32_MAX - at) / sizeof(*wire_descriptors))
         goto overflow;
     at += active * (uint32_t)sizeof(*wire_descriptors);
     if (!align_offset(at, _Alignof(PosixExecDescription), &at) ||
-        active > (UINT32_MAX - at) / sizeof(*wire_descriptions))
+        unique_count > (UINT32_MAX - at) / sizeof(*wire_descriptions))
         goto overflow;
-    total = at + active * (uint32_t)sizeof(*wire_descriptions);
+    total = at + unique_count * (uint32_t)sizeof(*wire_descriptions);
+    for (uint32_t index = 0u; index < unique_count; ++index) {
+        uint32_t state_size = unique[index]->kind == POSIX_DESCRIPTOR_FILE ?
+            (uint32_t)sizeof(AstraPosixFileExecState) :
+            unique[index]->kind == POSIX_DESCRIPTOR_SOCKET ?
+                socket_description_size : 0u;
+
+        if (state_size > UINT32_MAX - total)
+            goto overflow;
+        total += state_size;
+    }
     bytes = calloc(1u, total);
     if (bytes == NULL) {
         free(unique);
@@ -435,12 +523,17 @@ astra_posix_exec_export(void **state, uint32_t *size)
     header->version = POSIX_EXEC_VERSION;
     header->file_state_offset = sizeof(*header);
     header->file_state_size = file_size;
+    if (!align_offset((uint32_t)sizeof(*header) + file_size,
+                      _Alignof(uint32_t), &header->socket_state_offset))
+        goto failed;
+    header->socket_state_size = socket_size;
     header->descriptor_offset =
-        ((uint32_t)sizeof(*header) + file_size +
+        (header->socket_state_offset + socket_size +
          _Alignof(PosixExecDescriptor) - 1u) &
         ~((uint32_t)_Alignof(PosixExecDescriptor) - 1u);
     header->descriptor_count = active;
     header->description_offset = at;
+    header->description_count = unique_count;
     wire_descriptors = (PosixExecDescriptor *)(void *)
         (bytes + header->descriptor_offset);
     wire_descriptions = (PosixExecDescription *)(void *)
@@ -448,7 +541,41 @@ astra_posix_exec_export(void **state, uint32_t *size)
     if (file_ops->exec_export(bytes + header->file_state_offset, file_size,
                               &file_used) < 0 || file_used != file_size)
         goto failed;
+    if (socket_size != 0u &&
+        (socket_ops->exec_export(bytes + header->socket_state_offset,
+                                 socket_size, &socket_used) < 0 ||
+         socket_used != socket_size))
+        goto failed;
 
+    at = header->description_offset +
+         unique_count * (uint32_t)sizeof(*wire_descriptions);
+    for (uint32_t index = 0u; index < unique_count; ++index) {
+        PosixOpenDescription *description = unique[index];
+        PosixExecDescription *wire = &wire_descriptions[index];
+
+        wire->kind = description->kind;
+        wire->status_flags = (uint32_t)description->status_flags;
+        wire->value = description->value;
+        wire->read_wait = description->read_wait;
+        wire->state_offset = at;
+        if (description->kind == POSIX_DESCRIPTOR_FILE) {
+            wire->state_size = sizeof(AstraPosixFileExecState);
+            if (file_ops->file_export(description->value, bytes + at,
+                                      wire->state_size) < 0)
+                goto failed;
+            at += wire->state_size;
+        } else if (description->kind == POSIX_DESCRIPTOR_SOCKET) {
+            if (socket_ops == NULL || socket_description_size == 0u) {
+                errno = EINVAL;
+                goto failed;
+            }
+            wire->state_size = socket_description_size;
+            if (socket_ops->socket_export(description->value, bytes + at,
+                                          wire->state_size) < 0)
+                goto failed;
+            at += wire->state_size;
+        }
+    }
     active = 0u;
     for (uint32_t fd = 0u; fd < descriptor_capacity; ++fd) {
         PosixOpenDescription *description = descriptors[fd].description;
@@ -456,30 +583,20 @@ astra_posix_exec_export(void **state, uint32_t *size)
 
         if (description == NULL)
             continue;
+        if ((descriptors[fd].descriptor_flags & FD_CLOEXEC) != 0u)
+            continue;
         /* ponytail: exec is cold; replace this scan with a pointer hash only
          * if descriptor-heavy exec is measured hot. */
         for (index = 0u; index < unique_count; ++index)
             if (unique[index] == description)
                 break;
-        if (index == unique_count) {
-            PosixExecDescription *wire = &wire_descriptions[index];
-
-            unique[unique_count++] = description;
-            wire->kind = description->kind;
-            wire->status_flags = (uint32_t)description->status_flags;
-            wire->value = description->value;
-            wire->read_wait = description->read_wait;
-            if (description->kind == POSIX_DESCRIPTOR_FILE &&
-                file_ops->file_export(description->value, &wire->file,
-                                      sizeof(wire->file)) < 0)
-                goto failed;
-        }
+        if (index == unique_count)
+            goto failed;
         wire_descriptors[active].fd = fd;
         wire_descriptors[active].description = index;
         wire_descriptors[active].flags = descriptors[fd].descriptor_flags;
         ++active;
     }
-    header->description_count = unique_count;
     free(unique);
     *state = bytes;
     *size = total;
@@ -505,6 +622,8 @@ restore_exec_descriptors(const AstraStartupInfo *startup)
     const PosixExecDescription *wire_descriptions;
     PosixOpenDescription **restored = NULL;
     uint32_t maximum_fd = 0u;
+    uint32_t expected;
+    uint32_t state_at;
 
     if (startup == NULL || startup->handoff_size == 0u)
         return 0;
@@ -523,6 +642,9 @@ restore_exec_descriptors(const AstraStartupInfo *startup)
         header->file_state_offset > header->total_size ||
         header->file_state_size > header->total_size -
                                       header->file_state_offset ||
+        header->socket_state_offset > header->total_size ||
+        header->socket_state_size > header->total_size -
+                                        header->socket_state_offset ||
         header->descriptor_offset > header->total_size ||
         header->descriptor_count >
             (header->total_size - header->descriptor_offset) /
@@ -538,6 +660,30 @@ restore_exec_descriptors(const AstraStartupInfo *startup)
         errno = EINVAL;
         return -1;
     }
+    if (header->file_state_offset != sizeof(*header) ||
+        !align_offset((uint32_t)sizeof(*header) + header->file_state_size,
+                      _Alignof(uint32_t), &expected) ||
+        header->socket_state_offset != expected ||
+        header->socket_state_size > UINT32_MAX - expected ||
+        !align_offset(expected + header->socket_state_size,
+                      _Alignof(PosixExecDescriptor), &expected) ||
+        header->descriptor_offset != expected ||
+        header->descriptor_count >
+            (UINT32_MAX - expected) / sizeof(PosixExecDescriptor)) {
+        errno = EINVAL;
+        return -1;
+    }
+    expected += header->descriptor_count *
+                (uint32_t)sizeof(PosixExecDescriptor);
+    if (!align_offset(expected, _Alignof(PosixExecDescription), &expected) ||
+        header->description_offset != expected ||
+        header->description_count >
+            (UINT32_MAX - expected) / sizeof(PosixExecDescription)) {
+        errno = EINVAL;
+        return -1;
+    }
+    state_at = expected + header->description_count *
+                          (uint32_t)sizeof(PosixExecDescription);
     wire_descriptors = (const PosixExecDescriptor *)(const void *)
         (bytes + header->descriptor_offset);
     wire_descriptions = (const PosixExecDescription *)(const void *)
@@ -546,6 +692,14 @@ restore_exec_descriptors(const AstraStartupInfo *startup)
             startup, bytes + header->file_state_offset,
             header->file_state_size) < 0)
         return -1;
+    if (header->socket_state_size != 0u) {
+        if (socket_ops == NULL || socket_ops->exec_import == NULL ||
+            socket_ops->socket_size == NULL ||
+            socket_ops->socket_import == NULL ||
+            socket_ops->exec_import(bytes + header->socket_state_offset,
+                                    header->socket_state_size) < 0)
+            return -1;
+    }
     if (header->description_count != 0u) {
         restored = calloc(header->description_count, sizeof(*restored));
         if (restored == NULL) {
@@ -558,24 +712,50 @@ restore_exec_descriptors(const AstraStartupInfo *startup)
         PosixOpenDescription *description;
 
         if (wire->kind < POSIX_DESCRIPTOR_STREAM ||
-            wire->kind > POSIX_DESCRIPTOR_PIPE_WRITE) {
+            wire->kind > POSIX_DESCRIPTOR_SOCKET ||
+            wire->state_offset != state_at ||
+            wire->state_offset > header->total_size ||
+            wire->state_size > header->total_size - wire->state_offset) {
             errno = EINVAL;
             goto failed;
         }
+        state_at += wire->state_size;
         description = calloc(1u, sizeof(*description));
         if (description == NULL) {
             errno = ENOMEM;
             goto failed;
         }
-        restored[index] = description;
         description->kind = (uint8_t)wire->kind;
         description->status_flags = (int)wire->status_flags;
         description->value = wire->value;
         description->read_wait = wire->read_wait;
-        if (description->kind == POSIX_DESCRIPTOR_FILE &&
-            file_ops->file_import(&wire->file, sizeof(wire->file),
-                                  &description->value) < 0)
+        if (description->kind == POSIX_DESCRIPTOR_FILE) {
+            if (wire->state_size != sizeof(AstraPosixFileExecState) ||
+                file_ops->file_import(bytes + wire->state_offset,
+                                      wire->state_size,
+                                      &description->value) < 0) {
+                free(description);
+                goto failed;
+            }
+        } else if (description->kind == POSIX_DESCRIPTOR_SOCKET) {
+            if (socket_ops == NULL ||
+                wire->state_size != socket_ops->socket_size() ||
+                socket_ops->socket_import(bytes + wire->state_offset,
+                                          wire->state_size,
+                                          &description->value) < 0) {
+                free(description);
+                goto failed;
+            }
+        } else if (wire->state_size != 0u) {
+            errno = EINVAL;
+            free(description);
             goto failed;
+        }
+        restored[index] = description;
+    }
+    if (state_at != header->total_size) {
+        errno = EINVAL;
+        goto failed;
     }
     for (uint32_t index = 0u; index < header->descriptor_count; ++index) {
         const PosixExecDescriptor *wire = &wire_descriptors[index];
@@ -698,6 +878,14 @@ write(int fd, const void *bytes, size_t length)
         }
         return file_ops->write(slot->value, bytes, length);
     }
+    if (slot->kind == POSIX_DESCRIPTOR_SOCKET) {
+        if (socket_ops == NULL) {
+            errno = EBADF;
+            return -1;
+        }
+        return socket_ops->write(slot->value, bytes, length,
+                                 slot->status_flags);
+    }
     if (slot->kind == POSIX_DESCRIPTOR_PIPE_READ) {
         errno = EBADF;
         return -1;
@@ -784,6 +972,14 @@ read(int fd, void *bytes, size_t length)
             return -1;
         }
         return file_ops->read(slot->value, bytes, length);
+    }
+    if (slot->kind == POSIX_DESCRIPTOR_SOCKET) {
+        if (socket_ops == NULL) {
+            errno = EBADF;
+            return -1;
+        }
+        return socket_ops->read(slot->value, bytes, length,
+                                slot->status_flags);
     }
     if (slot->kind == POSIX_DESCRIPTOR_PIPE_WRITE) {
         errno = EBADF;
@@ -1018,6 +1214,13 @@ astra_posix_descriptor_poll(int fd, short events, short *revents,
         if ((events & POLLOUT) != 0 && access != O_RDONLY)
             *revents |= POLLOUT;
         return 0;
+    }
+    if (slot->kind == POSIX_DESCRIPTOR_SOCKET) {
+        if (socket_ops == NULL) {
+            *revents = POLLNVAL;
+            return 0;
+        }
+        return socket_ops->poll(slot->value, events, revents, handles, count);
     }
     if ((events & POLLIN) != 0 && access != O_WRONLY) {
         uint32_t status;

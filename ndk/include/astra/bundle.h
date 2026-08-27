@@ -3,13 +3,17 @@
 
 #include <stdint.h>
 
+#include <astra/process.h>
+
 #define ASTRA_BUNDLE_MANIFEST_VERSION 1u
 #define ASTRA_BUNDLE_MANIFEST_MAX 4096u
 #define ASTRA_BUNDLE_ID_MAX 64u
 #define ASTRA_BUNDLE_NAME_MAX 64u
 #define ASTRA_BUNDLE_PATH_MAX 160u
 #define ASTRA_BUNDLE_LIBRARY_MAX 8u
-#define ASTRA_BUNDLE_CAPABILITY_MAX 8u
+/* An application cannot use more manifest capabilities than can fit in the
+ * launch namespace; keep the parser and launch ABI on the same authority. */
+#define ASTRA_BUNDLE_CAPABILITY_MAX ASTRA_LAUNCH_GRANT_MAX
 #define ASTRA_BUNDLE_LIBRARY_NAME_MAX 48u
 
 enum {

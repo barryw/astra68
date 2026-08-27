@@ -11,7 +11,13 @@ capability COMMANDS:r
 capability LIBS:r
 capability EVENTS:r
 capability PROC:r
+capability CONFIG:rw
+capability CONFIG_COMMANDS:rw
 capability EVENT_CONTROL
+capability NETWORK
+capability NETWORK_LISTEN
+capability NTP
 requires graphics.library 1 1.1.0
 requires font.library 1 1.0.0
 requires filesystem.library 1 1.0.0
+requires network.library 1 1.0.0

@@ -33,6 +33,33 @@ build pass on Beast. The final kernel payload is 155,320 bytes. lwext4 patch
 remaining ownership-audit work is structured catalogs for resident services
 and real process integration gates for glue-only entry points.
 
+## Brokered IPv4/IPv6 networking (2026-08-26)
+
+The complete contract and evidence are in `docs/NETWORKING.md`. Axiom now owns
+a capability-restricted network lease, bounded DMA admission, and IRQ delivery;
+the network service alone owns that lease and every host endpoint. Applications
+use stable `network.library` ABI 1.1 through Network.kit, shared transfer slots,
+ports, and readiness events. Host descriptors, host address layouts, errno, and
+backend pointers never cross the ABI. `NETWORK_LISTEN` remains distinct from
+ordinary `NETWORK` access.
+
+Native IPv4/IPv6 TCP, UDP, asynchronous DNS, readiness, cancellation, and
+fork/exec endpoint inheritance pass. The shared POSIX library provides sockets,
+address conversion, resolver calls, socket options, scatter/gather messages,
+and descriptor inheritance without private command implementations. Four final
+source-identified QEMU network runs completed in 2.98--2.99 seconds; the full
+73-command two-boot gate, Vim, Lua, sanitizer, analyzer, clean MC68030 build,
+and generated-code inspection pass.
+
+Physical Arty qualification now passes. After carrier was restored, the patched
+firstboot path reacquired DHCP, synchronized NTP, and released Astra without
+intervention. The exact ARM QEMU, ROM, and prepared image passed the complete
+POSIX command including guest DNS, IPv4 UDP, TCP, descriptor inheritance, and
+TCP fork+exec twice in 33.61 and 32.48 seconds. The QEMU and ROM were promoted
+atomically with the prepared image; active boot reached stage 8 with the correct
+host wall clock. The previous three artifacts and their hashes remain under
+`/data/astra/deploy/network-1a8f8895868b/rollback`.
+
 ## Transactional streaming executable loading (2026-08-25)
 
 The syscall ABI is `0x00010022`. File-backed launch no longer allocates or maps
@@ -62,9 +89,10 @@ completed in 4.23 seconds.
 
 All generated kernel and ROM ELF/BIN/MAP files, the packaged legacy ROM, and
 the generated splash payload now live under owner `build/` directories. The
-mandatory source rsync excludes them, compares source content by checksum, and
-does not preserve source mtimes. Changed source therefore invalidates older
-remote objects while a Mac product cannot overwrite a Beast product. A
+mandatory source rsync excludes them, deletes removed remote sources, compares
+source content by checksum, and does not preserve source mtimes. Changed source
+therefore invalidates older remote objects, renamed or deleted source cannot
+survive remotely, and a Mac product cannot overwrite a Beast product. A
 retained proof hashed a clean Beast ROM, performed a full source sync, and
 obtained the identical hash. The layout gate also pins the placeholder-free
 Arty splash source and every primary firmware output to its canonical path.
@@ -4331,3 +4359,26 @@ The candidate package is installed atomically on the Arty SD card through Beast.
 The prior qualified BOOT/FIT hashes remain in their rollback files, `/` is
 read-only, and the exact production PL is active. The live HDMI manager SHA-256
 is `f4c4ab81b9a90e95748bc0896ddcbeb14e81bbc450ecbec5c64de2b853b8a6f3`.
+
+## Typed configuration library and ntpd migration (2026-08-26)
+
+`Configuration.kit` now provides `config.library` ABI 1.0. Programs open their
+scoped `CONFIG` capability and use typed get/set operations; paths, the backing
+`settings.conf`, parsing, preservation of hand-edited comments, and atomic
+replacement stay inside the library. Each key is an ordered value sequence, so
+index zero is a scalar and repeated keys are lists. Strings, signed and
+unsigned 64-bit integers, and forgiving boolean spellings are covered by the
+shared document tests. Reads and writes allocate from actual document sizes
+rather than a compiled configuration-size ceiling.
+
+Supervisor derives private roots under `CONFIG:system`, `services`, `commands`,
+and `applications`. Terminal receives only the command scope and attenuates it
+again for each launched command; programs never receive the broad root. `ntpd`
+now consumes its `pool` and `server` lists solely through the public library and
+reloads before periodic or requested synchronization.
+
+The focused configuration test/build, full userspace and ROM builds, NDK and
+userspace unit/sanitizer/analyzer suites, and the prepared-image QEMU POSIX
+network gate pass on Beast. The integration gate reaches the desktop and
+completes the raw DNS/UDP/TCP/fork+exec command in 2.98 seconds. No FPGA source,
+synthesis result, bitstream, or active Arty installation changed.

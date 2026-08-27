@@ -1,0 +1,10 @@
+#ifndef ASTRA_CLOCK_H
+#define ASTRA_CLOCK_H
+
+#include <stdint.h>
+
+#define ASTRA_DEVICE_CLASS_CLOCK UINT32_C(0x434c4f43) /* CLOC */
+#define ASTRA_DEVICE_ID_CLOCK0   UINT32_C(0x434c0001)
+#define ASTRA_CAPABILITY_CLOCK   "CLOCK"
+
+#endif

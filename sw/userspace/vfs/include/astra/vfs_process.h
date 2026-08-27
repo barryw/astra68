@@ -35,6 +35,8 @@ _Static_assert(sizeof(AstraProcessFileState) ==
 
 uint32_t astra_process_vfs_init(const AstraStartupInfo *startup);
 void astra_process_vfs_close(void);
+uint32_t astra_process_vfs_after_fork_child(
+    const AstraStartupInfo *startup);
 AstraAssignTable *astra_process_vfs_assigns(void);
 AstraVfsClient *astra_process_vfs_client(void);
 AstraVfsClient *astra_process_vfs_client_for(const AstraAssign *assign);

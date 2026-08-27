@@ -21,8 +21,11 @@
 #include <console_stream.h>
 
 #include <astra/bytes.h>
+#include <astra/config_document.h>
 #include <astra/event_control.h>
 #include <astra/keymap.h>
+#include <astra/network.h>
+#include <astra/ntp.h>
 #include <astra/runtime.h>
 #include <astra/shell.h>
 #include <astra/shell_service.h>
@@ -409,15 +412,10 @@ static uint32_t open_launch_source(const char *word,
 }
 
 /*
- * The grants a launched command is handed: three streams, and a namespace.
- *
- * This uses nine grants -- three streams, WORK, two COMMANDS members, LIBS,
- * EVENTS and EVENT_CONTROL -- worth stating
- * rather than discovering. **`SYS:` is the one left out**, deliberately: a
- * command needs somewhere to read its own data, somewhere to write, and its
- * history, and it does not need the whole volume. The day something does, the
- * ceiling is what has to move, and moving it is a decision rather than an
- * accident.
+ * The grants a launched command is handed: three streams, its namespace, and
+ * the delegable service authorities the terminal itself was granted. `SYS:`
+ * remains deliberately absent: a command gets its work, commands, libraries,
+ * history and process view, not the whole system volume.
  *
  * SIGNAL and nothing more, on all of them. A child sends on these and never
  * receives; the reply port a request needs is one the child creates and holds
@@ -438,9 +436,25 @@ static int root_append(char *root, uint32_t capacity, uint32_t *at,
     return 1;
 }
 
-static uint32_t launch_grants(AstraLaunchGrant *grants)
+static const char *command_owner(const char *command)
+{
+    const char *owner = command;
+
+    for (const char *at = command; *at != '\0'; ++at)
+        if (*at == ':' || *at == '/')
+            owner = at + 1u;
+    return owner;
+}
+
+static uint32_t launch_grants(AstraLaunchGrant *grants, const char *command)
 {
     static const char *const stream_names[] = {"STDOUT", "STDERR", "STDIN"};
+    static const char *const authority_names[] = {
+        ASTRA_CAPABILITY_EVENT_CONTROL,
+        ASTRA_CAPABILITY_NETWORK,
+        ASTRA_CAPABILITY_NETWORK_LISTEN,
+        ASTRA_CAPABILITY_NTP,
+    };
     /*
      * PROC: is a mount like any other from here, and that is the point: `ps`
      * reads process state with the protocol `cat` reads a file with, and this
@@ -450,22 +464,16 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
      * does not travel down this path.
      */
     static const char *const mount_names[] = {
-        "WORK", "COMMANDS", "LIBS", "EVENTS", "PROC"
+        "WORK", "COMMANDS", "LIBS", "EVENTS", "PROC",
+        ASTRA_CONFIG_COMMANDS_CAPABILITY
     };
     uint32_t streams[3];
     uint32_t count = 0u;
     _Static_assert(sizeof(stream_names) / sizeof(stream_names[0]) ==
                        sizeof(streams) / sizeof(streams[0]),
                    "stream names and handles must stay paired");
-    /*
-     * Whether either loop below ran out of room before it ran out of
-     * grants to make. It is 10 of 10 today -- three streams, WORK, two
-     * COMMANDS members, LIBS, EVENTS, PROC and EVENT_CONTROL -- so the next
-     * grant added here needs ASTRA_LAUNCH_GRANT_MAX raised with it. Until
-     * then a third COMMANDS member would push something out of a child's
-     * namespace, which is why the drop is counted and logged rather than
-     * silent, the same guard bind_standard_assigns has on the other side.
-     */
+    /* The startup page is the physical bound. Never silently lose authority
+     * when its actual mix of namespace members, argv and environment fills it. */
     int dropped = 0;
 
     streams[0] = shell.launch_stream_override ? shell.launch_streams[0] :
@@ -515,7 +523,11 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
                 dropped = 1;
                 break;
             }
-            astra_capability_name_set(grants[count].name, mount_names[index]);
+            astra_capability_name_set(
+                grants[count].name,
+                strcmp(mount_names[index],
+                       ASTRA_CONFIG_COMMANDS_CAPABILITY) == 0 ?
+                    ASTRA_CONFIG_CAPABILITY : mount_names[index]);
             grants[count].handle = assign->handle;
             grants[count].rights = ASTRA_RIGHT_SIGNAL;
             namespace_rights = assign->rights;
@@ -526,7 +538,19 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
                      ASTRA_CAPABILITY_FLAG_READ : 0u) |
                 ((namespace_rights & ASTRA_RIGHT_WRITE) != 0u ?
                      ASTRA_CAPABILITY_FLAG_WRITE : 0u);
-            astra_capability_root_set(grants[count].root, assign->root);
+            if (strcmp(mount_names[index],
+                       ASTRA_CONFIG_COMMANDS_CAPABILITY) == 0) {
+                char root[ASTRA_CAPABILITY_ROOT_MAX];
+
+                if (astra_config_owner_root(
+                        assign->root, command_owner(command), root,
+                        sizeof(root)) !=
+                    ASTRA_CONFIG_OK)
+                    continue;
+                astra_capability_root_set(grants[count].root, root);
+            } else {
+                astra_capability_root_set(grants[count].root, assign->root);
+            }
             ++count;
         }
     }
@@ -595,17 +619,23 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
             dropped = 1;
         }
     }
-    if (shell.backend.event_control != 0u) {
-        if (count < ASTRA_LAUNCH_GRANT_MAX) {
-            astra_capability_name_set(grants[count].name,
-                                      ASTRA_CAPABILITY_EVENT_CONTROL);
-            grants[count].handle = shell.backend.event_control;
-            grants[count].rights = ASTRA_RIGHT_SIGNAL;
-            grants[count].flags = 0u;
-            ++count;
-        } else {
+    for (uint32_t index = 0u;
+         index < sizeof(authority_names) / sizeof(authority_names[0]);
+         ++index) {
+        const AstraStartupCapability *held = astra_startup_capability(
+            shell.backend.startup, authority_names[index]);
+
+        if (held == NULL || (held->rights & ASTRA_RIGHT_SIGNAL) == 0u)
+            continue;
+        if (count >= ASTRA_LAUNCH_GRANT_MAX) {
             dropped = 1;
+            break;
         }
+        astra_capability_name_set(grants[count].name, authority_names[index]);
+        grants[count].handle = held->handle;
+        grants[count].rights = ASTRA_RIGHT_SIGNAL;
+        grants[count].flags = 0u;
+        ++count;
     }
     if (dropped) {
         ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_WARNING,
@@ -718,7 +748,7 @@ static uint32_t command_launch(astra_shell_words_t *words)
     status = astra_launch_stream(
         source.length, astra_vfs_read_source_read_at,
         astra_vfs_read_source_close, &source, grants,
-        launch_grants(grants), &arguments, &handle, &child_id);
+        launch_grants(grants, words->argv[0]), &arguments, &handle, &child_id);
     spawned = astra_clock_monotonic();
     if (status != ASTRA_SYSCALL_OK) {
         astra_terminal_write(&shell.terminal, words->argv[0]);

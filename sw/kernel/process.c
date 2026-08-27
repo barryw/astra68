@@ -1,6 +1,7 @@
 #include "process.h"
 
 #include <astra/block.h>
+#include <astra/clock.h>
 #include <astra/display.h>
 #include <astra/divide.h>
 #include <astra/endian.h>
@@ -8,6 +9,7 @@
 #include <astra/input.h>
 #include <astra/integer.h>
 #include <astra/library.h>
+#include <astra/network.h>
 #include <astra/process.h>
 #include <astra/render_batch.h>
 #include <astra/event.h>
@@ -1572,6 +1574,89 @@ static uint32_t block_syscall(KernelProcess *process, KernelThread *thread,
     }
 }
 
+static uint32_t network_syscall(KernelProcess *process, KernelThread *thread,
+                                uint32_t syscall,
+                                uint32_t device_generation)
+{
+    uint32_t user_address = thread->context.data[2];
+    KernelPlatformNetworkState state;
+    int copy_status;
+
+    if ((user_address & (ASTRA_ABI_ALIGNMENT - 1u)) != 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    if (!kernel_platform_network_state(&state))
+        return ASTRA_SYSCALL_PEER_DEAD;
+    if (syscall == ASTRA_SYSCALL_NETWORK_QUERY) {
+        AstraNetworkLeaseInfo info;
+
+        kernel_bytes_clear(&info, sizeof(info));
+        info.size = sizeof(info);
+        info.capabilities = state.capabilities;
+        info.state_flags = state.state_flags;
+        info.host_generation = state.host_generation;
+        info.queue_depth = state.queue_depth;
+        info.maximum_transfer = state.maximum_transfer;
+        info.active_endpoints = state.active_endpoints;
+        copy_status = kernel_copy_to_user(user_address, &info, sizeof(info));
+        return copy_status == KERNEL_USER_COPY_OK ? ASTRA_SYSCALL_OK :
+               copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+                       copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT ?
+                   ASTRA_SYSCALL_BAD_ADDRESS : ASTRA_SYSCALL_IO_ERROR;
+    }
+    {
+        AstraNetworkTransportRequest request;
+        KernelProcessDmaBuffer *buffer = NULL;
+        KernelHandleStatus handle_status;
+        KernelDmaToken token;
+        uint32_t executed = 0u;
+        uint32_t status;
+        uint32_t buffer_bytes;
+
+        copy_status = kernel_copy_from_user(&request, user_address,
+                                            sizeof(request));
+        if (copy_status != KERNEL_USER_COPY_OK)
+            return ASTRA_SYSCALL_BAD_ADDRESS;
+        if (request.size != sizeof(request) || request.command_count == 0u ||
+            request.reserved != 0u || request.byte_size == 0u ||
+            request.command_count > request.byte_size /
+                                        ASTRA_NETWORK_HOST_COMMAND_SIZE ||
+            request.byte_size > state.maximum_transfer ||
+            (request.buffer_offset & (ASTRA_ABI_ALIGNMENT - 1u)) != 0u)
+            return ASTRA_SYSCALL_INVALID_ARGUMENT;
+        handle_status = kernel_handle_lookup(
+            &process->handles, request.buffer, KERNEL_OBJECT_DMA,
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, (void **)&buffer);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH)
+            return ASTRA_SYSCALL_INVALID_HANDLE;
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED)
+            return ASTRA_SYSCALL_ACCESS_DENIED;
+        if (handle_status != KERNEL_HANDLE_OK || buffer == NULL ||
+            buffer->active == 0u)
+            return ASTRA_SYSCALL_IO_ERROR;
+        buffer_bytes = (uint32_t)buffer->page_count * KERNEL_PAGE_SIZE;
+        if (request.buffer_offset > buffer_bytes ||
+            request.byte_size > buffer_bytes - request.buffer_offset)
+            return ASTRA_SYSCALL_INVALID_ARGUMENT;
+        if (kernel_dma_begin(buffer->dma, process->owner,
+                             request.buffer_offset, request.byte_size,
+                             KERNEL_DMA_BIDIRECTIONAL, device_generation,
+                             &token) != KERNEL_DMA_OK)
+            return ASTRA_SYSCALL_WOULD_BLOCK;
+        status = kernel_platform_network_execute(
+            token.physical_address, request.byte_size,
+            request.command_count, &executed);
+        if (kernel_dma_complete(&token) != KERNEL_DMA_OK)
+            return ASTRA_SYSCALL_IO_ERROR;
+        if (status != ASTRA_SYSCALL_OK)
+            return status;
+        if (executed != request.command_count)
+            return ASTRA_SYSCALL_IO_ERROR;
+        thread->context.data[1] = executed;
+        return ASTRA_SYSCALL_OK;
+    }
+}
+
 static bool display_dma_abort_owner(uint32_t owner)
 {
     if (display_dma_active == 0u || display_dma_owner != owner)
@@ -2780,6 +2865,10 @@ failed:
 #define KERNEL_PROCESS_LAUNCH_HEADER_BYTES 1024u
 static uint8_t launch_page[KERNEL_PAGE_SIZE];
 static uint8_t launch_header[KERNEL_PROCESS_LAUNCH_HEADER_BYTES];
+/* Process creation is serialized on this single CPU. Keeping the page here
+ * avoids consuming half of the guarded 8 KiB supervisor stack while retaining
+ * the alignment required by AstraStartupCapability on the MC68030. */
+static _Alignas(4) uint8_t startup_page[ASTRA_STARTUP_BLOCK_SIZE];
 static char syscall_data[ASTRA_STARTUP_BLOCK_SIZE];
 static AstraStartupCapability
     exec_capabilities[ASTRA_STARTUP_CAPABILITY_MAX];
@@ -4017,15 +4106,6 @@ static KernelProcessStatus publish_startup_block(
     const char *argument_bytes, const char *environment,
     uint32_t handoff_address, uint32_t handoff_size)
 {
-    /*
-     * _Alignas(4): AstraStartupCapability's widest member is a uint32_t, and
-     * ASTRA_STARTUP_INFO_SIZE is itself a multiple of 4, so an aligned page
-     * keeps the cast below aligned too. Without this the array is a plain
-     * uint8_t[] with no alignment guarantee, and the cast through (void *)
-     * would silence -Wcast-align without making the access safe -- on a
-     * 68030 a misaligned access faults rather than merely costing cycles.
-     */
-    _Alignas(4) uint8_t page[ASTRA_STARTUP_BLOCK_SIZE];
     AstraStartupInfo info;
     /*
      * Written straight into the page. A second array of these used to sit on
@@ -4034,14 +4114,15 @@ static KernelProcessStatus publish_startup_block(
      * carrying ten grants of its own.
      */
     AstraStartupCapability *capability =
-        (AstraStartupCapability *)(void *)(page + ASTRA_STARTUP_INFO_SIZE);
+        (AstraStartupCapability *)(void *)(startup_page +
+                                           ASTRA_STARTUP_INFO_SIZE);
     uint32_t count = 2u + bootstrap_count;
     uint32_t published_bytes;
 
     if (bootstrap_count > KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     kernel_bytes_clear(&info, sizeof(info));
-    kernel_bytes_clear(page, sizeof(page));
+    kernel_bytes_clear(startup_page, sizeof(startup_page));
     published_bytes = ASTRA_STARTUP_INFO_SIZE +
                       (count * ASTRA_STARTUP_CAPABILITY_SIZE);
 
@@ -4075,7 +4156,8 @@ static KernelProcessStatus publish_startup_block(
 
     if (arguments != NULL && arguments->count != 0u) {
         uint32_t appended = append_vector(
-            page, published_bytes, (uint32_t)sizeof(page), argument_bytes,
+            startup_page, published_bytes, (uint32_t)sizeof(startup_page),
+            argument_bytes,
             arguments->length, arguments->count, 0, &info.argv_address,
             &info.argc);
 
@@ -4086,7 +4168,8 @@ static KernelProcessStatus publish_startup_block(
     }
     if (arguments != NULL && arguments->environment_count != 0u) {
         uint32_t appended = append_vector(
-            page, published_bytes, (uint32_t)sizeof(page), environment,
+            startup_page, published_bytes, (uint32_t)sizeof(startup_page),
+            environment,
             arguments->environment_length, arguments->environment_count, 1,
             &info.environment_address, &info.environment_count);
 
@@ -4095,9 +4178,9 @@ static KernelProcessStatus publish_startup_block(
         published_bytes += appended;
         info.total_size = published_bytes;
     }
-    kernel_bytes_copy(page, &info, sizeof(info));
+    kernel_bytes_copy(startup_page, &info, sizeof(info));
 
-    return publish_page(space, owner, KERNEL_PROCESS_STARTUP_BASE, page,
+    return publish_page(space, owner, KERNEL_PROCESS_STARTUP_BASE, startup_page,
                         published_bytes, KERNEL_VM_READ);
 }
 
@@ -7046,6 +7129,40 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         thread->context.data[4] = zone;
         break;
     }
+    case ASTRA_SYSCALL_CLOCK_SET: {
+        KernelDeviceLease *lease = NULL;
+        KernelDeviceSnapshot snapshot;
+        KernelHandleStatus handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_DEVICE,
+            KERNEL_DEVICE_RIGHT_ADMINISTER, (void **)&lease);
+        uint64_t nanoseconds =
+            ((uint64_t)thread->context.data[2] << 32) |
+            thread->context.data[3];
+
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || lease == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        if (kernel_device_query(lease, &snapshot) != KERNEL_DEVICE_OK) {
+            result = ASTRA_SYSCALL_PEER_DEAD;
+            break;
+        }
+        if (snapshot.class_id != ASTRA_DEVICE_CLASS_CLOCK ||
+            snapshot.device_id != ASTRA_DEVICE_ID_CLOCK0) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (!kernel_platform_wall_clock_set(nanoseconds))
+            result = ASTRA_SYSCALL_IO_ERROR;
+        break;
+    }
     case ASTRA_SYSCALL_EVENT_CREATE:
     case ASTRA_SYSCALL_SEMAPHORE_CREATE: {
         KernelSyncObject *object = NULL;
@@ -7885,6 +8002,44 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             break;
         }
         result = block_syscall(current, thread, syscall);
+        break;
+    }
+    case ASTRA_SYSCALL_NETWORK_QUERY:
+    case ASTRA_SYSCALL_NETWORK_EXECUTE: {
+        KernelDeviceLease *lease = NULL;
+        KernelDeviceSnapshot snapshot;
+        KernelHandleStatus handle_status;
+        uint32_t required_rights = syscall == ASTRA_SYSCALL_NETWORK_QUERY ?
+            KERNEL_DEVICE_RIGHT_QUERY : KERNEL_DEVICE_RIGHT_TRANSFER;
+
+        handle_status = kernel_handle_lookup(
+            &current->handles, thread->context.data[1], KERNEL_OBJECT_DEVICE,
+            required_rights, (void **)&lease);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || lease == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        if (kernel_device_query(lease, &snapshot) != KERNEL_DEVICE_OK) {
+            result = ASTRA_SYSCALL_IO_ERROR;
+            break;
+        }
+        if (snapshot.device_id != ASTRA_DEVICE_ID_NETWORK0) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (snapshot.lease_state != ASTRA_DEVICE_LEASE_ACTIVE) {
+            result = ASTRA_SYSCALL_PEER_DEAD;
+            break;
+        }
+        result = network_syscall(current, thread, syscall,
+                                 snapshot.generation);
         break;
     }
     case ASTRA_SYSCALL_DMA_CREATE: {

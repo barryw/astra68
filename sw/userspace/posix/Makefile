@@ -23,7 +23,7 @@ DEPFLAGS := -MMD -MP
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 
-SOURCES := src/startup.c src/console.c src/poll.c src/terminal.c src/file.c src/heap.c src/alloc.c src/time.c \
+SOURCES := src/startup.c src/console.c src/poll.c src/socket.c src/inet.c src/terminal.c src/file.c src/heap.c src/alloc.c src/time.c \
 	src/system.c src/scheduling.c src/signal.c \
 	src/identity.c src/process.c src/strftime_format.c src/path.c
 OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES))
@@ -41,13 +41,13 @@ STARTUP_TEST := build/host/test_startup
 POLL_TEST := build/host/test_poll
 IDENTITY_TEST := build/host/test_identity
 PROCESS_TEST := build/host/test_process
+SOCKET_ADDRESS_TEST := build/host/test_socket_address
 LIMITS_CONTRACT := build/m68k/limits-contract.o
 
 all: $(LIB)
 
 $(LIB): $(OBJECTS)
-	@mkdir -p $(@D)
-	$(AR) rcs $@ $(OBJECTS)
+	$(ASTRA_REPLACE_ARCHIVE)
 
 build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)
@@ -91,8 +91,15 @@ $(IDENTITY_TEST): src/identity.c tests/test_identity.c
 
 $(PROCESS_TEST): src/process.c tests/test_process.c
 	@mkdir -p $(@D)
-	$(HOST_CC) -I../../include -I$(RUNTIME)/include $(COMMON_FLAGS) -O2 \
+	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \
+		-I$(STREAMS)/include -I$(VFS)/include -I$(NDK)/include \
+		$(COMMON_FLAGS) -O2 \
 		src/process.c tests/test_process.c -o $@
+
+$(SOCKET_ADDRESS_TEST): src/inet.c tests/test_socket_address.c
+	@mkdir -p $(@D)
+	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \
+		-I$(VFS)/include -I$(NDK)/include $(COMMON_FLAGS) -O2 $^ -o $@
 
 $(LIMITS_CONTRACT): tests/limits_contract.c
 	@mkdir -p $(@D)
@@ -122,7 +129,7 @@ $(LINK_CONTRACT): tests/link_standard_main.c kit/program.c $(LIB) \
 	@$(CROSS)nm $@ | grep -q ' T main$$'
 	@echo "astra posix standard main link: PASS"
 
-test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) $(IDENTITY_TEST) $(PROCESS_TEST) $(LIMITS_CONTRACT) $(LINK_CONTRACT)
+test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) $(IDENTITY_TEST) $(PROCESS_TEST) $(SOCKET_ADDRESS_TEST) $(LIMITS_CONTRACT) $(LINK_CONTRACT)
 	./$(HOST_TEST)
 	./$(PATH_TEST)
 	./$(DESCRIPTOR_TEST)
@@ -130,6 +137,7 @@ test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) 
 	./$(POLL_TEST)
 	./$(IDENTITY_TEST)
 	./$(PROCESS_TEST)
+	./$(SOCKET_ADDRESS_TEST)
 
 sanitize:
 	@mkdir -p build/host

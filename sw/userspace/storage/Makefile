@@ -76,12 +76,10 @@ ALLOC_CPPFLAGS := -I$(ALLOC)/include
 all: $(TARGET) $(EXT4_TARGET) size
 
 $(TARGET): $(OBJECTS)
-	@mkdir -p $(@D)
-	$(AR) rcs $@ $^
+	$(ASTRA_REPLACE_ARCHIVE)
 
 $(EXT4_TARGET): $(LWEXT4_OBJECTS) $(PORT_OBJECTS)
-	@mkdir -p $(@D)
-	$(AR) rcs $@ $^
+	$(ASTRA_REPLACE_ARCHIVE)
 
 build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)

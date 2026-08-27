@@ -173,7 +173,8 @@ bool kernel_interrupt_device_binding(uint8_t source,
 {
     if (binding == NULL ||
         (source != IRQ_SRC_STORAGE && source != IRQ_SRC_INPUT &&
-         source != IRQ_SRC_USB && source != IRQ_SRC_VEGA &&
+         source != IRQ_SRC_NETWORK && source != IRQ_SRC_USB &&
+         source != IRQ_SRC_VEGA &&
          source != IRQ_SRC_ASTRAEA))
         return false;
     binding->capture = device_capture;

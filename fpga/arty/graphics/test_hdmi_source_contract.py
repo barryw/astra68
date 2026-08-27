@@ -66,12 +66,15 @@ require(
     "/data/astra/bin/astra-hdmi-link",
     "/data/astra/bin/astra-time-sync",
     "ASTRA_NTP_SERVER:-pool.ntp.org",
+    "ifup eth0",
 )
 firstboot = (ROOT / "fpga/arty/linux/rootfs-overlay/etc/init.d/astra-firstboot").read_text(
     encoding="utf-8"
 )
 if firstboot.index("astra-time-sync") > firstboot.index("astra-hdmi-link"):
     raise SystemExit("astra-firstboot: graphics starts before NTP synchronization")
+if firstboot.index("ifup eth0") > firstboot.index('"$time_sync"'):
+    raise SystemExit("astra-firstboot: NTP attempted before DHCP retry")
 require(
     "fpga/arty/linux/retire_nova_runtime.sh",
     "/etc/rc5.d/S02astra-firstboot",

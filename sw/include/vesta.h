@@ -150,7 +150,9 @@ typedef volatile struct {
     uint32_t RTC_NS_HI;      // 0x428 upper half of the LO-read snapshot
     uint32_t RTC_UTC_OFFSET; // 0x42C signed seconds east of UTC, DST applied
     uint32_t RTC_ZONE;       // 0x430 four characters, first in the high byte
-    uint32_t _r3[(0x500 - 0x434) / 4];
+    uint32_t RTC_SET_NS_HI;  // 0x434 stages the upper half of a new instant
+    uint32_t RTC_SET_NS_LO;  // 0x438 commits the staged coherent instant
+    uint32_t _r3[(0x500 - 0x43c) / 4];
     // UART 0x500
     uint32_t UART_DATA;      // 0x500
     uint32_t UART_STATUS;    // 0x504
@@ -183,6 +185,24 @@ typedef volatile struct {
     uint32_t BUS_FAULT_LOST;      // 0x814 saturating faults not recorded
     uint32_t BUS_TIMEOUT_CYCLES;  // 0x818 maximum slave completion deadline
     uint32_t BUS_FAULT_ACK;       // 0x81C RW1C BUS_FAULT_VALID
+    // host socket transport 0x820
+    uint32_t NETWORK_ID;          // 0x820 "NETW"
+    uint32_t NETWORK_VERSION;     // 0x824
+    uint32_t NETWORK_CAPS;        // 0x828
+    uint32_t NETWORK_STATE;       // 0x82C
+    uint32_t NETWORK_HOST_GEN;    // 0x830
+    uint32_t NETWORK_MAX_TRANSFER;// 0x834
+    uint32_t NETWORK_QUEUE;       // 0x838
+    uint32_t NETWORK_REQ_BUFFER;  // 0x83C physical command batch
+    uint32_t NETWORK_REQ_BYTES;   // 0x840
+    uint32_t NETWORK_REQ_COUNT;   // 0x844 command records
+    uint32_t NETWORK_EXECUTE;     // 0x848 write NETWORK_EXECUTE_BIT
+    uint32_t NETWORK_STATUS;      // 0x84C transport result
+    uint32_t NETWORK_COMPLETED;   // 0x850 command records completed
+    uint32_t NETWORK_ENDPOINTS;   // 0x854 active host endpoints
+    uint32_t NETWORK_READY_SEQ;   // 0x858 readiness generation
+    uint32_t NETWORK_READY_ACK;   // 0x85C write NETWORK_READY_ACK_BIT
+    uint32_t NETWORK_RESET;       // 0x860 write NETWORK_RESET_BIT
 } VestaRegs;
 
 #define VESTA ((VestaRegs *)VESTA_BASE)
@@ -326,7 +346,17 @@ typedef volatile struct {
 #define IRQ_SRC_VEGA     8
 #define IRQ_SRC_ASTRAEA  9
 #define IRQ_SRC_LYRA     10
+#define IRQ_SRC_NETWORK  11
 #define IRQ_BIT(src) (1u << (src))
+
+// ---- Host socket transport ----
+#define NETWORK_ID_MAGIC 0x4e455457u // "NETW"
+#define NETWORK_VERSION_1_0 0x00010000u
+#define NETWORK_QUEUE_READY (1u << 0)
+#define NETWORK_QUEUE_EVENT_PENDING (1u << 1)
+#define NETWORK_EXECUTE_BIT (1u << 0)
+#define NETWORK_READY_ACK_BIT (1u << 0)
+#define NETWORK_RESET_BIT (1u << 0)
 
 // ---- IRQ_CFG[i] ----
 #define IRQ_CFG_LEVEL(l)  ((l) & 7u)
@@ -352,6 +382,9 @@ typedef volatile struct {
  *
  * Reading RTC_NS_LO latches the pair, the same contract CPU_CYCLES uses, so a
  * 64-bit value cannot be torn across the two halves.
+ *
+ * A privileged kernel stages RTC_SET_NS_HI and commits with RTC_SET_NS_LO.
+ * Userspace cannot map Vesta; the CLOCK device lease gates the setting syscall.
  */
 #define RTC_VALID       (1u << 0)
 /*
@@ -448,6 +481,8 @@ _Static_assert(offsetof(VestaRegs, RTC_NS_HI) == 0x428u,
                "Vesta wall-clock upper-half ABI offset");
 _Static_assert(offsetof(VestaRegs, RTC_ZONE) == 0x430u,
                "Vesta wall-clock zone ABI offset");
+_Static_assert(offsetof(VestaRegs, RTC_SET_NS_LO) == 0x438u,
+               "Vesta wall-clock set ABI offset");
 _Static_assert(offsetof(VestaRegs, INPUT_ID) == 0x700u,
                "Vesta input ABI offset");
 _Static_assert(offsetof(VestaRegs, INPUT_POP) == 0x724u,

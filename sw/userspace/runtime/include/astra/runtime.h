@@ -11,6 +11,7 @@
 #include <astra/library.h>
 #include <astra/civil.h>
 #include <astra/process.h>
+#include <astra/network.h>
 #include <astra/syscall.h>
 
 /*
@@ -129,6 +130,7 @@ astra_elapsed_microseconds(uint64_t from, uint64_t to)
 uint32_t astra_clock_realtime(uint64_t *nanoseconds);
 uint32_t astra_clock_realtime_zone(uint64_t *nanoseconds,
                                    AstraTimeZone *zone);
+uint32_t astra_clock_set(uint32_t clock, uint64_t nanoseconds);
 uint32_t astra_wait_one(uint32_t handle, uint64_t deadline_ns,
                         uint32_t *detail);
 uint32_t astra_wait_multiple(const uint32_t *handles, uint32_t count,
@@ -144,7 +146,12 @@ uint32_t astra_block_lease_query(uint32_t device, AstraBlockLeaseInfo *geometry)
 uint32_t astra_block_lease_submit(uint32_t device, const AstraBlockRequest *request,
                             uint32_t *block_request);
 uint32_t astra_block_lease_collect(uint32_t device, uint32_t block_request,
-                             AstraBlockCompletion *completion);
+                                   AstraBlockCompletion *completion);
+uint32_t astra_network_lease_query(uint32_t device,
+                                   AstraNetworkLeaseInfo *info);
+uint32_t astra_network_lease_execute(
+    uint32_t device, const AstraNetworkTransportRequest *request,
+    uint32_t *executed_commands);
 uint32_t astra_console_info(uint32_t device, uint32_t *columns,
                             uint32_t *rows);
 uint32_t astra_console_write(uint32_t device, uint32_t cell,

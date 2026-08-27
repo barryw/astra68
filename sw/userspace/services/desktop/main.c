@@ -32,7 +32,9 @@ enum {
     DESKTOP_FAIL_FILESYSTEM = ASTRA_STATUS_PROGRAM_FIRST,
     DESKTOP_FAIL_INTERFACE,
     DESKTOP_FAIL_GRAPHICS,
-    DESKTOP_FAIL_MANIFEST,
+    DESKTOP_FAIL_MANIFEST_READ,
+    DESKTOP_FAIL_MANIFEST_PARSE,
+    DESKTOP_FAIL_ICON_PATH,
     DESKTOP_FAIL_ICON,
     DESKTOP_FAIL_SURFACE,
     DESKTOP_FAIL_WINDOW
@@ -163,20 +165,32 @@ static uint32_t paint(AstraSurfaceView *surface)
     char icon_path[ASTRA_VFS_PATH_MAX];
     uint32_t length = 0u;
     uint32_t line = 0u;
+    uint32_t status;
 
     astra_surface_clear(surface, astra_surface_rgb565(
         theme.canvas.red, theme.canvas.green, theme.canvas.blue));
-    if (astra_process_read_file(
-            &process_filesystem, TERMINAL_BUNDLE "/manifest", manifest_text,
-            ASTRA_BUNDLE_MANIFEST_MAX, &length) != ASTRA_VFS_OK)
-        return DESKTOP_FAIL_MANIFEST;
+    status = astra_process_read_file(
+        &process_filesystem, TERMINAL_BUNDLE "/manifest", manifest_text,
+        ASTRA_BUNDLE_MANIFEST_MAX, &length);
+    if (status != ASTRA_VFS_OK) {
+        (void)astra_log_failure("desktop manifest read", status);
+        return DESKTOP_FAIL_MANIFEST_READ;
+    }
     manifest_text[length] = '\0';
-    if (astra_bundle_manifest_parse(manifest_text, length, &manifest, &line) !=
-            ASTRA_BUNDLE_OK ||
-        process_filesystem.library->qualify(
-            "APPS", TERMINAL_BUNDLE_DIRECTORY, manifest.icon, icon_path,
-            sizeof(icon_path)) != ASTRA_VFS_OK)
-        return DESKTOP_FAIL_MANIFEST;
+    status = astra_bundle_manifest_parse(manifest_text, length, &manifest,
+                                         &line);
+    if (status != ASTRA_BUNDLE_OK) {
+        (void)astra_log_failure("desktop manifest parse", status);
+        (void)astra_log_failure("desktop manifest line", line);
+        return 0x444d0000u | line; /* "DM" and the failing line */
+    }
+    status = process_filesystem.library->qualify(
+        "APPS", TERMINAL_BUNDLE_DIRECTORY, manifest.icon, icon_path,
+        sizeof(icon_path));
+    if (status != ASTRA_VFS_OK) {
+        (void)astra_log_failure("desktop icon path", status);
+        return DESKTOP_FAIL_ICON_PATH;
+    }
     if (astra_process_read_file(&process_filesystem, icon_path, icon_bytes,
                                 sizeof(icon_bytes), &length) !=
             ASTRA_VFS_OK || graphics_library->aicon_open(

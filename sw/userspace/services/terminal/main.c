@@ -44,7 +44,6 @@ enum {
 ASTRA_PROGRAM("terminal", 0, 1, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
-static uint32_t event_control;
 static AstraLibraryHandle *font_handle;
 static AstraLibraryHandle *graphics_handle;
 static const AstraFontLibraryV1 *font_library;
@@ -589,7 +588,6 @@ int astra_main(const AstraStartupInfo *startup)
         return ASTRA_STATUS_BAD_HANDLE;
 
     status = astra_process_filesystem_open(&process_filesystem, startup);
-    event_control = control->handle;
     if (status == ASTRA_STATUS_OK)
         status = load_graphics_kit();
     if (status == ASTRA_STATUS_OK)
@@ -701,7 +699,7 @@ int astra_main(const AstraStartupInfo *startup)
         &window_terminal.window);
     backend.idle_poll_ns = TERMINAL_CURSOR_BLINK_NS;
     backend.process_filesystem = &process_filesystem;
-    backend.event_control = event_control;
+    backend.startup = startup;
     console_shell_run_backend(&backend);
     if (window_terminal.live) {
         AstraResult close_result = astra_window_close(&window_terminal.window);

@@ -1,5 +1,5 @@
-SUBDIRS := runtime metrics alloc storage vfs events input shell terminal graphics interface messaging \
-	streams posix commands supervisor services kits apps
+SUBDIRS := runtime metrics alloc storage vfs events input shell terminal graphics interface messaging network config \
+	streams posix ntp commands supervisor services kits apps
 SYSTEM_CATALOG := build/m68k/astra_events.cat
 SUPERVISOR_ELF := supervisor/build/m68k/astra_supervisor.elf
 TERMINAL_ELF := services/terminal/build/m68k/terminal.elf

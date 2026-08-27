@@ -17,6 +17,7 @@ PUBLIC_RENDER_PROTOCOL="$REPOSITORY/fpga/arty/linux/astra_render_protocol.h"
 PUBLIC_SYSCALL="$REPOSITORY/sw/include/astra/syscall.h"
 PUBLIC_MESSAGE_ABI="$REPOSITORY/sw/include/astra/message_abi.h"
 PUBLIC_LIMITS="$REPOSITORY/sw/include/astra/limits.h"
+PUBLIC_NETWORK="$REPOSITORY/sw/include/astra/network.h"
 
 sha256_file()
 {
@@ -61,6 +62,8 @@ overlay_identity()
             "sw/include/astra/message_abi.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_LIMITS")" \
             "sw/include/astra/limits.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_NETWORK")" \
+            "sw/include/astra/network.h"
     ) | sha256_stream
 }
 
@@ -140,6 +143,7 @@ cp "$PUBLIC_DISPLAY" "$STAGED_SOURCE/include/astra/display.h"
 cp "$PUBLIC_SYSCALL" "$STAGED_SOURCE/include/astra/syscall.h"
 cp "$PUBLIC_MESSAGE_ABI" "$STAGED_SOURCE/include/astra/message_abi.h"
 cp "$PUBLIC_LIMITS" "$STAGED_SOURCE/include/astra/limits.h"
+cp "$PUBLIC_NETWORK" "$STAGED_SOURCE/include/astra/network.h"
 ln -s include/astra "$STAGED_SOURCE/astra"
 patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/meson.build.patch" >&2
 patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/target-m68k-pmmu030.patch" >&2

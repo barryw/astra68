@@ -49,12 +49,10 @@ all: $(TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) library-contract
 pic: $(PIC_TARGET)
 
 $(TARGET): $(TARGET_OBJECTS)
-	@mkdir -p $(@D)
-	$(AR) rcs $@ $^
+	$(ASTRA_REPLACE_ARCHIVE)
 
 $(PIC_TARGET): $(PIC_OBJECTS)
-	@mkdir -p $(@D)
-	$(AR) rcs $@ $^
+	$(ASTRA_REPLACE_ARCHIVE)
 
 build/m68k/pic/%.o: src/%.c
 	@mkdir -p $(@D)

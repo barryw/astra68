@@ -44,6 +44,7 @@
 #include "worker.h"
 
 #include <astra/block.h>
+#include <astra/network.h>
 #include <vesta.h>
 #include <astra/syscall.h>
 #include <astra/display.h>
@@ -526,6 +527,13 @@ bool kernel_platform_wall_clock_ns(uint64_t *nanoseconds)
     return kernel_platform_wall_clock(nanoseconds, NULL, NULL);
 }
 
+bool kernel_platform_wall_clock_set(uint64_t nanoseconds)
+{
+    wall_clock_ns = nanoseconds;
+    wall_clock_valid = true;
+    return true;
+}
+
 bool kernel_platform_deadline_to_cycles(int64_t deadline_ns,
                                         uint64_t *deadline_cycles)
 {
@@ -730,6 +738,73 @@ static void reset_block_device(void)
                         BLOCK_STATE_WRITE_ENABLE;
     block_ack_calls = 0u;
     memset(&block_completion, 0, sizeof(block_completion));
+}
+
+static KernelPlatformNetworkState network_state;
+static uint32_t network_execute_status;
+static uint32_t network_execute_calls;
+static uint32_t network_executed_commands;
+static uint32_t network_physical_buffer;
+static uint32_t network_byte_size;
+static uint32_t network_command_count;
+
+bool kernel_platform_network_state(KernelPlatformNetworkState *state)
+{
+    if (state == NULL ||
+        (network_state.state_flags & ASTRA_NETWORK_STATE_LINK_UP) == 0u)
+        return false;
+    *state = network_state;
+    return true;
+}
+
+uint32_t kernel_platform_network_execute(uint32_t physical_buffer,
+                                         uint32_t byte_size,
+                                         uint32_t command_count,
+                                         uint32_t *executed_commands)
+{
+    ++network_execute_calls;
+    network_physical_buffer = physical_buffer;
+    network_byte_size = byte_size;
+    network_command_count = command_count;
+    if (executed_commands != NULL)
+        *executed_commands = network_executed_commands;
+    return network_execute_status;
+}
+
+static bool test_network_quiesce(uint32_t device_id, uint32_t generation,
+                                 void *context)
+{
+    (void)generation;
+    (void)context;
+    return device_id == ASTRA_DEVICE_ID_NETWORK0;
+}
+
+static bool test_network_reset(uint32_t device_id, uint32_t generation,
+                               void *context)
+{
+    (void)generation;
+    (void)context;
+    return device_id == ASTRA_DEVICE_ID_NETWORK0;
+}
+
+static void reset_network_device(void)
+{
+    network_state = (KernelPlatformNetworkState){
+        .capabilities = ASTRA_NETWORK_CAP_IPV4 | ASTRA_NETWORK_CAP_IPV6 |
+                        ASTRA_NETWORK_CAP_TCP | ASTRA_NETWORK_CAP_UDP |
+                        ASTRA_NETWORK_CAP_RESOLVE,
+        .state_flags = ASTRA_NETWORK_STATE_LINK_UP,
+        .host_generation = 5u,
+        .queue_depth = 16u,
+        .maximum_transfer = KERNEL_PAGE_SIZE,
+        .active_endpoints = 2u,
+    };
+    network_execute_status = ASTRA_SYSCALL_OK;
+    network_execute_calls = 0u;
+    network_executed_commands = 1u;
+    network_physical_buffer = 0u;
+    network_byte_size = 0u;
+    network_command_count = 0u;
 }
 
 void kernel_process_milestone_reached(const KernelSchedulerStats *stats)
@@ -951,6 +1026,7 @@ static void initialize_test(void)
     assert(kernel_vm_init() == KERNEL_VM_OK);
     assert(kernel_vm_enable() == KERNEL_VM_OK);
     reset_block_device();
+    reset_network_device();
     kernel_dma_init();
     kernel_block_init();
     assert(kernel_device_init());
@@ -1005,6 +1081,22 @@ static void initialize_test(void)
         };
 
         assert(kernel_device_register(&block) == KERNEL_DEVICE_OK);
+    }
+    {
+        const KernelDeviceDefinition network = {
+            .quiesce = test_network_quiesce,
+            .reset = test_network_reset,
+            .context = NULL,
+            .device_id = ASTRA_DEVICE_ID_NETWORK0,
+            .class_id = ASTRA_DEVICE_CLASS_NETWORK,
+            .capabilities = ASTRA_NETWORK_CAP_IPV4 |
+                            ASTRA_NETWORK_CAP_IPV6 |
+                            ASTRA_NETWORK_CAP_TCP |
+                            ASTRA_NETWORK_CAP_UDP |
+                            ASTRA_NETWORK_CAP_RESOLVE,
+        };
+
+        assert(kernel_device_register(&network) == KERNEL_DEVICE_OK);
     }
     assert(kernel_device_seal_registry());
     device_quiesce_count = 0u;
@@ -6378,6 +6470,100 @@ static void test_block_admission(void)
     assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
 }
 
+static void test_network_admission(void)
+{
+    const uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 64u;
+    const uint32_t user_request = KERNEL_PROCESS_STACK_TOP - 128u;
+    const uint32_t user_out = KERNEL_PROCESS_STACK_TOP - 256u;
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
+    KernelProcessBootstrapCapability capability = {0};
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    AstraDmaBufferInfo buffer;
+    AstraNetworkLeaseInfo info;
+    AstraNetworkTransportRequest request;
+    AstraStartupCapability table[3];
+    uint32_t process_id = 0u;
+    uint32_t lease_handle = 0u;
+
+    loader_build_image();
+    initialize_test();
+    capability.name = ASTRA_CAPABILITY_NETWORK_DEVICE;
+    capability.kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+    capability.device_id = ASTRA_DEVICE_ID_NETWORK0;
+    capability.rights = KERNEL_DEVICE_RIGHTS;
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            &capability, 1u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    assert(kernel_user_copy_from_asm(
+               table, KERNEL_VM_USER_MIN + ASTRA_STARTUP_INFO_SIZE,
+               sizeof(table)) == KERNEL_USER_COPY_OK);
+    for (uint32_t index = 0u; index < 3u; ++index)
+        if (astra_capability_name_equal(table[index].name,
+                                        ASTRA_CAPABILITY_NETWORK_DEVICE))
+            lease_handle = table[index].handle;
+    assert(lease_handle != 0u);
+
+    registers[0] = ASTRA_SYSCALL_NETWORK_QUERY;
+    registers[1] = lease_handle;
+    registers[2] = user_out;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&info, user_out, sizeof(info)) ==
+           KERNEL_USER_COPY_OK);
+    assert(info.size == ASTRA_NETWORK_LEASE_INFO_SIZE);
+    assert(info.capabilities == network_state.capabilities);
+    assert(info.state_flags == ASTRA_NETWORK_STATE_LINK_UP);
+    assert(info.host_generation == network_state.host_generation);
+    assert(info.queue_depth == network_state.queue_depth);
+    assert(info.maximum_transfer == network_state.maximum_transfer);
+    assert(info.active_endpoints == network_state.active_endpoints);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_DMA_CREATE;
+    registers[1] = KERNEL_PAGE_SIZE;
+    registers[2] = user_info;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&buffer, user_info, sizeof(buffer)) ==
+           KERNEL_USER_COPY_OK);
+
+    request = (AstraNetworkTransportRequest){
+        .size = ASTRA_NETWORK_TRANSPORT_REQUEST_SIZE,
+        .buffer = buffer.handle,
+        .byte_size = ASTRA_NETWORK_HOST_COMMAND_SIZE,
+        .command_count = 1u,
+    };
+    assert(kernel_user_copy_to_asm(user_request, &request, sizeof(request)) ==
+           KERNEL_USER_COPY_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_NETWORK_EXECUTE;
+    registers[1] = lease_handle;
+    registers[2] = user_request;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK && next->data[1] == 1u);
+    assert(network_execute_calls == 1u);
+    assert(network_physical_buffer != 0u);
+    assert(network_physical_buffer != buffer.virtual_base);
+    assert(network_byte_size == ASTRA_NETWORK_HOST_COMMAND_SIZE);
+    assert(network_command_count == 1u);
+
+    network_state.state_flags = 0u;
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_NETWORK_QUERY;
+    registers[1] = lease_handle;
+    registers[2] = user_out;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+}
+
 /*
  * Fault injection across the admission surface. STORAGE_AND_VFS.md requires
  * this before a filesystem is allowed to depend on the API, and the reason is
@@ -9123,6 +9309,7 @@ int main(void)
     test_dma_transfer_memory();
     test_block_admission();
     test_block_admission_faults();
+    test_network_admission();
     test_bootstrap_capabilities();
     test_capability_roots_are_carried();
     test_arguments_and_environment_are_published();

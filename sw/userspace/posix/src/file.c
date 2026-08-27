@@ -135,6 +135,27 @@ astra_posix_file_prepare(void)
     astra_posix_file_bind(&ops);
 }
 
+int
+astra_posix_file_fork_ready(void)
+{
+    for (uint32_t slot = 0u; slot < file_capacity; ++slot)
+        if (file_slots[slot].used != 0u)
+            return 0;
+    return 1;
+}
+
+int
+astra_posix_file_after_fork_child(void)
+{
+    uint32_t status = astra_process_vfs_after_fork_child(
+        astra_posix_startup());
+
+    if (status == ASTRA_VFS_OK)
+        return 0;
+    errno = posix_errno(status);
+    return -1;
+}
+
 static uint32_t
 file_exec_size(void)
 {

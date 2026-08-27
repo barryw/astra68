@@ -26,8 +26,7 @@ TEST_SOURCES := $(SOURCES) ../alloc/src/alloc.c ../storage/src/block_device.c \
 all: $(TARGET) size
 
 $(TARGET): $(OBJECTS)
-	@mkdir -p $(@D)
-	$(AR) rcs $@ $^
+	$(ASTRA_REPLACE_ARCHIVE)
 
 build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)

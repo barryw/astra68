@@ -491,6 +491,11 @@ static void test_device_endpoints_use_common_dispatch(void)
     assert(!kernel_interrupt_device_binding(
         IRQ_SRC_ASTRAHOST_MONITOR, &binding));
     assert(!kernel_interrupt_device_binding(IRQ_SRC_INPUT, NULL));
+    assert(kernel_interrupt_device_binding(IRQ_SRC_NETWORK, &binding));
+    assert(binding.source == IRQ_SRC_NETWORK);
+    assert(binding.trigger == KERNEL_IRQ_TRIGGER_LEVEL);
+    assert(binding.ipl == 3u);
+    assert(binding.vector == KERNEL_IRQ_COMMON_VECTOR);
 
     endpoint = bind_device(41u, IRQ_SRC_INPUT);
     waiter = allocate_running_thread();

@@ -50,7 +50,7 @@ TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/vfs_local_transport.o build/m68k/vfs_port_transport.o \
 	build/m68k/vfs_ext4_backend.o build/m68k/vfs_union.o \
 	build/m68k/vfs_process.o build/m68k/vfs_reader.o \
-	$(NDK)/build/m68k/bundle.o \
+	$(NDK)/build/m68k/manifest.o $(NDK)/build/m68k/bundle.o \
 	build/m68k/vfs_status.o
 FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library
 FILESYSTEM_LIBRARY_OBJECTS := build/m68k/library/filesystem_library.o \
@@ -63,8 +63,7 @@ HOST_TEST := build/host/test_vfs_service_core
 all: $(TARGET) $(FILESYSTEM_LIBRARY) library-contract
 
 $(TARGET): $(TARGET_OBJECTS)
-	@mkdir -p $(@D)
-	$(AR) rcs $@ $^
+	$(ASTRA_REPLACE_ARCHIVE)
 
 build/m68k/%.o: src/%.c $(HEADERS)
 	@mkdir -p $(@D)
@@ -88,7 +87,7 @@ build/m68k/vfs_reader.o: src/vfs_reader.c $(HEADERS)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
 
-$(NDK)/build/m68k/bundle.o:
+$(NDK)/build/m68k/manifest.o $(NDK)/build/m68k/bundle.o:
 	$(MAKE) -C $(NDK) $(@:$(NDK)/%=%)
 
 build/m68k/library/%.o: src/%.c $(HEADERS) \

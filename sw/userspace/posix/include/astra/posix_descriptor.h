@@ -36,6 +36,21 @@ typedef struct AstraPosixFileOps {
     int (*file_import)(const void *state, uint32_t size, uint32_t *slot);
 } AstraPosixFileOps;
 
+typedef struct AstraPosixSocketOps {
+    ssize_t (*read)(uint32_t slot, void *bytes, size_t length, int flags);
+    ssize_t (*write)(uint32_t slot, const void *bytes, size_t length,
+                     int flags);
+    int (*close)(uint32_t slot);
+    int (*poll)(uint32_t slot, short events, short *revents,
+                uint32_t handles[2], uint32_t *count);
+    uint32_t (*exec_size)(void);
+    uint32_t (*socket_size)(void);
+    int (*exec_export)(void *state, uint32_t capacity, uint32_t *used);
+    int (*exec_import)(const void *state, uint32_t size);
+    int (*socket_export)(uint32_t slot, void *state, uint32_t size);
+    int (*socket_import)(const void *state, uint32_t size, uint32_t *slot);
+} AstraPosixSocketOps;
+
 #define ASTRA_POSIX_FILE_EXEC_STATE_SIZE ASTRA_PROCESS_FILE_STATE_SIZE
 
 typedef AstraProcessFileState AstraPosixFileExecState;
@@ -46,6 +61,7 @@ _Static_assert(sizeof(AstraPosixFileExecState) ==
 
 /* Installed by the file half the first time a program opens something. */
 void astra_posix_file_bind(const AstraPosixFileOps *ops);
+void astra_posix_socket_bind(const AstraPosixSocketOps *ops);
 
 /*
  * Claims the lowest free descriptor for a file slot, or -1 with errno set.
@@ -53,9 +69,12 @@ void astra_posix_file_bind(const AstraPosixFileOps *ops);
  * depends on it.
  */
 int astra_posix_descriptor_file(uint32_t slot, int flags);
+int astra_posix_descriptor_socket(uint32_t slot, int flags);
 
 /* The file slot behind a descriptor, or -1 if it is not a file at all. */
 int astra_posix_descriptor_slot(int fd);
+int astra_posix_descriptor_socket_slot(int fd);
+int astra_posix_descriptor_flags(int fd);
 /* The kernel handle behind a stream descriptor, or zero for files/closed. */
 uint32_t astra_posix_descriptor_handle(int fd);
 
@@ -69,5 +88,9 @@ const AstraStartupInfo *astra_posix_startup(void);
 
 int astra_posix_exec_export(void **state, uint32_t *size);
 void astra_posix_file_prepare(void);
+void astra_posix_socket_prepare(void);
+int astra_posix_file_fork_ready(void);
+int astra_posix_file_after_fork_child(void);
+void astra_posix_socket_after_fork_child(void);
 
 #endif

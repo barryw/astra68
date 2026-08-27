@@ -44,6 +44,17 @@ TERMINFO_DIRECTORY = "terminfo"
 APPS_DIRECTORY = "apps"
 STARTUP_DIRECTORY = "startup"
 STARTUP_NAME = "system"
+CONFIG_DIRECTORY = "config"
+CONFIG_SCOPES = ("system", "services", "commands", "applications")
+CONFIGURATION = {
+    "system/network/resolv.conf": (
+        "# Astra delegates getaddrinfo(3) to the host resolver.\n"
+        "# DNS server selection remains host policy.\n"),
+    "services/ntpd/settings.conf": (
+        "astra-config 1\n"
+        "schema 1\n"
+        "pool pool.ntp.org\n"),
+}
 DEFAULT_SERVICES = os.path.join(
     REPOSITORY, "sw/userspace/services")
 DEFAULT_KITS = os.path.join(REPOSITORY, "sw/userspace/kits/build")
@@ -52,7 +63,8 @@ DEFAULT_TERMINFO = os.path.join(
     REPOSITORY,
     "sw/userspace/terminal/build/terminfo/a/astra-256color")
 KIT_BUNDLES = ("Graphics.kit", "Filesystem.kit", "Interface.kit",
-               "Events.kit", "Messaging.kit")
+               "Events.kit", "Messaging.kit", "Network.kit",
+               "Configuration.kit")
 APPLICATION_BUNDLES = ("Terminal.app",)
 PROVIDER_INDEX_MAGIC = 0x41505256  # "APRV"
 PROVIDER_INDEX_HEADER = struct.Struct(">IHHHHHHHHI")
@@ -70,16 +82,22 @@ PROVIDER_INDEX_MAX = 192
 DISPLAY_STARTUP_MANIFEST = (
     "service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
     "serves SYS:r required\n"
+    "service SERVICES:network grants NETWORK_DEVICE NETWORK_IRQ "
+    "serves NETWORK NETWORK_LISTEN required\n"
+    "service SERVICES:ntpd grants CLOCK CONFIG:r LIBS:r NETWORK "
+    "serves NTP required\n"
     "service SERVICES:events grants SYS:r STORE:rw LIBS:r "
-    "serves EVENTS:r required\n"
+    "serves EVENTS:r EVENT_CONTROL required\n"
     "service SERVICES:input grants INPUT INPUT_IRQ "
     "serves INPUT_SERVICE required\n"
     "service SERVICES:display grants DISPLAY DISPLAY_IRQ "
     "INPUT_SERVICE serves GUI required\n"
     "application SERVICES:desktop grants GUI APP_LAUNCH APPS:r LIBS:r "
+    "NETWORK NETWORK_LISTEN NTP "
     "required\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
-DISPLAY_SERVICES = ("storage", "events", "input", "display", "desktop")
+DISPLAY_SERVICES = ("storage", "network", "ntpd", "events", "input", "display",
+                    "desktop")
 
 
 def ext4_partition(image):
@@ -374,6 +392,26 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
                  optional=True)
         _debugfs(volume, "write %s %s" % (manifest, target),
                  "the startup manifest")
+
+        _mkdir(volume, "/%s" % CONFIG_DIRECTORY,
+               "the configuration directory")
+        for scope in CONFIG_SCOPES:
+            _mkdir(volume, "/%s/%s" % (CONFIG_DIRECTORY, scope),
+                   "configuration scope")
+        for path, contents in CONFIGURATION.items():
+            components = path.split("/")
+            for count in range(1, len(components)):
+                directory = "/%s/%s" % (
+                    CONFIG_DIRECTORY, "/".join(components[:count]))
+                _mkdir(volume, directory, "configuration directory")
+            host = os.path.join(temporary, path.replace("/", "-"))
+            with open(host, "w", encoding="ascii", newline="\n") as handle:
+                handle.write(contents)
+            target = "/%s/%s" % (CONFIG_DIRECTORY, path)
+            _debugfs(volume, "rm %s" % target, "old configuration",
+                     optional=True)
+            _debugfs(volume, "write %s %s" % (host, target),
+                     "configuration " + path)
 
         # The shadowing pair. `which` is installed on both members under two
         # names: the shipped one stays where it is, and a copy goes into the

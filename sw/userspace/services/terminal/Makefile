@@ -11,12 +11,13 @@ SHELL_DIR := ../../shell
 TERMINAL := ../../terminal
 SUPERVISOR := ../../supervisor
 GRAPHICS := ../../graphics
+CONFIG := ../../config
 NDK := ../../../../ndk
 CPPFLAGS := -Iinclude -I$(NDK)/include -I../../../include -I$(RUNTIME)/include \
 	-I$(STORAGE)/include \
 	-I$(VFS)/include \
 	-I$(STREAMS)/include -I$(SHELL_DIR)/include -I$(TERMINAL)/include \
-	-I$(GRAPHICS)/include
+	-I$(GRAPHICS)/include -I$(CONFIG)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
@@ -26,7 +27,7 @@ TARGET := build/m68k/terminal.elf
 IMAGE := build/m68k/terminal
 CATALOG := build/m68k/astra_events.cat
 OBJECTS := build/m68k/main.o build/m68k/console_shell.o \
-	build/m68k/console_stream.o
+	build/m68k/console_stream.o build/m68k/config_document.o
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
@@ -80,6 +81,11 @@ build/m68k/console_shell.o: console_shell.c include/console_shell.h
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
 build/m68k/console_stream.o: console_stream.c include/console_stream.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/config_document.o: $(CONFIG)/src/config_document.c \
+		$(CONFIG)/include/astra/config_document.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 

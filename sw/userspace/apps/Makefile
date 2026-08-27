@@ -10,7 +10,7 @@ all: $(STAMP)
 $(TERMINAL):
 	$(MAKE) -C ../services/terminal all
 
-$(BUNDLE_TOOL):
+$(BUNDLE_TOOL): FORCE
 	$(MAKE) -C ../../../tools all
 
 $(STAMP): $(MANIFEST) $(TERMINAL) $(ICON_TOOL) $(BUNDLE_TOOL)
@@ -29,4 +29,6 @@ sanitize analyze:
 clean:
 	rm -rf build
 
-.PHONY: all test sanitize analyze clean
+FORCE:
+
+.PHONY: all test sanitize analyze clean FORCE

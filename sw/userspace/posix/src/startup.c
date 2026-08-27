@@ -15,6 +15,7 @@ astra_main(const AstraStartupInfo *startup)
     char **argv;
 
     astra_posix_file_prepare();
+    astra_posix_socket_prepare();
     astra_posix_start(startup);
     if (startup == NULL || startup->argc == 0u ||
         startup->argv_address == 0u)

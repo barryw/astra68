@@ -16,6 +16,7 @@ static uint32_t pipe_tail;
 static int pipe_producer_closed;
 static int pipe_consumer_closed;
 static uint32_t file_imports;
+static uint32_t socket_imports;
 
 static uint32_t file_exec_size(void) { return sizeof(uint32_t); }
 static int file_exec_export(void *state, uint32_t capacity, uint32_t *used)
@@ -65,6 +66,68 @@ static const AstraPosixFileOps file_ops = {
     .exec_import = file_exec_import,
     .file_export = file_state_export,
     .file_import = file_state_import
+};
+
+static ssize_t socket_read(uint32_t slot, void *bytes, size_t length, int flags)
+{
+    (void)slot; (void)bytes; (void)length; (void)flags;
+    return 0;
+}
+
+static ssize_t socket_write(uint32_t slot, const void *bytes, size_t length,
+                            int flags)
+{
+    (void)slot; (void)bytes; (void)flags;
+    return (ssize_t)length;
+}
+
+static int socket_close(uint32_t slot) { (void)slot; return 0; }
+static int socket_poll(uint32_t slot, short events, short *revents,
+                       uint32_t handles[2], uint32_t *count)
+{
+    (void)slot; (void)events; (void)revents; (void)handles; (void)count;
+    return 0;
+}
+static uint32_t socket_exec_size(void) { return sizeof(uint32_t); }
+static uint32_t socket_state_size(void) { return sizeof(uint32_t); }
+static int socket_exec_export(void *state, uint32_t capacity, uint32_t *used)
+{
+    assert(capacity == sizeof(uint32_t));
+    *(uint32_t *)state = 0x534f434bu;
+    *used = sizeof(uint32_t);
+    return 0;
+}
+static int socket_exec_import(const void *state, uint32_t size)
+{
+    assert(size == sizeof(uint32_t));
+    assert(*(const uint32_t *)state == 0x534f434bu);
+    ++socket_imports;
+    return 0;
+}
+static int socket_state_export(uint32_t slot, void *state, uint32_t size)
+{
+    assert(size == sizeof(uint32_t));
+    *(uint32_t *)state = slot;
+    return 0;
+}
+static int socket_state_import(const void *state, uint32_t size,
+                               uint32_t *slot)
+{
+    assert(size == sizeof(uint32_t));
+    *slot = *(const uint32_t *)state;
+    return 0;
+}
+static const AstraPosixSocketOps socket_ops = {
+    .read = socket_read,
+    .write = socket_write,
+    .close = socket_close,
+    .poll = socket_poll,
+    .exec_size = socket_exec_size,
+    .socket_size = socket_state_size,
+    .exec_export = socket_exec_export,
+    .exec_import = socket_exec_import,
+    .socket_export = socket_state_export,
+    .socket_import = socket_state_import
 };
 
 uint32_t astra_yield(void) { return 0u; }
@@ -269,6 +332,26 @@ main(void)
         file_closes = 0u;
         assert(close(0) == 0 && file_closes == 0u);
         assert(close(2) == 0 && file_closes == 1u);
+    }
+    free(handoff);
+
+    astra_posix_start(NULL);
+    astra_posix_file_bind(&file_ops);
+    astra_posix_socket_bind(&socket_ops);
+    assert(astra_posix_descriptor_socket(77u, O_NONBLOCK) == 0);
+    assert(dup(0) == 1);
+    assert(fcntl(1, F_SETFD, FD_CLOEXEC) == 0);
+    assert(astra_posix_exec_export(&handoff, &handoff_size) == 0);
+    if ((uintptr_t)handoff <= UINT32_MAX) {
+        AstraStartupInfo startup = {
+            .handoff_address = (uint32_t)(uintptr_t)handoff,
+            .handoff_size = handoff_size
+        };
+
+        astra_posix_start(&startup);
+        assert(socket_imports == 1u);
+        assert(astra_posix_descriptor_socket_slot(0) == 77);
+        assert(astra_posix_descriptor_socket_slot(1) == -1);
     }
     free(handoff);
     return 0;

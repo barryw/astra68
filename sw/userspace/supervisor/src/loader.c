@@ -5,6 +5,8 @@
 #include <volume.h>
 
 #include <astra/bytes.h>
+#include <astra/config_document.h>
+#include <astra/config_library.h>
 #include <astra/application_service.h>
 #include <astra/boot.h>
 #include <astra/bundle.h>
@@ -27,6 +29,8 @@
 
 static char manifest_text[LOADER_MANIFEST_MAX];
 static char bundle_text[ASTRA_BUNDLE_MANIFEST_MAX + 1u];
+/* Sized by the process table, not by the number of services in one image. */
+static SupervisorManifest startup_manifest;
 static uint32_t process_handles[SUPERVISOR_PROCESS_MAX];
 /*
  * What each process was launched from, so PROC: can name it. A pid
@@ -36,10 +40,10 @@ static uint32_t process_handles[SUPERVISOR_PROCESS_MAX];
 static char process_paths[SUPERVISOR_PROCESS_MAX]
                          [SUPERVISOR_PROCESS_NAME_MAX];
 static uint32_t process_resident[SUPERVISOR_PROCESS_MAX];
-static uint32_t service_handles[SUPERVISOR_MANIFEST_ENTRY_MAX];
-static char service_names[SUPERVISOR_MANIFEST_ENTRY_MAX]
+static uint32_t service_handles[ASTRA_HANDLE_COUNT_MAX];
+static char service_names[ASTRA_HANDLE_COUNT_MAX]
                          [ASTRA_CAPABILITY_NAME_MAX];
-static AstraVfsClient service_clients[SUPERVISOR_MANIFEST_ENTRY_MAX];
+static AstraVfsClient service_clients[ASTRA_HANDLE_COUNT_MAX];
 static uint32_t process_count;
 static uint32_t supervisor_process_handle;
 static uint32_t service_count;
@@ -158,12 +162,32 @@ static const char *private_store_root(const SupervisorManifestEntry *entry)
     return *root == ':' ? root + 1 : "";
 }
 
+static uint32_t private_config_root(const SupervisorManifestEntry *entry,
+                                    const char *parent, char *out,
+                                    uint32_t capacity)
+{
+    return astra_config_capability_root(
+        parent,
+        entry->resident != 0u ? ASTRA_CONFIG_OWNER_SERVICE :
+                               ASTRA_CONFIG_OWNER_APPLICATION,
+        private_store_root(entry), out, capacity);
+}
+
 static uint32_t named_service(const char *name)
 {
     for (uint32_t index = 0u; index < service_count; ++index)
         if (astra_capability_name_equal(service_names[index], name))
             return service_handles[index];
     return 0u;
+}
+
+static int entry_serves(const SupervisorManifestEntry *entry,
+                        const char *name)
+{
+    for (uint32_t index = 0u; index < entry->serves_count; ++index)
+        if (astra_capability_name_equal(entry->serves[index].name, name))
+            return 1;
+    return 0;
 }
 
 static uint32_t add_grant(AstraLaunchGrant *out, uint32_t *count,
@@ -260,6 +284,36 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                 return status;
             continue;
         }
+        if (strcmp(wanted->name, ASTRA_CONFIG_CAPABILITY) == 0 ||
+            strcmp(wanted->name, ASTRA_CONFIG_COMMANDS_CAPABILITY) == 0) {
+            const AstraAssign *held = astra_assign_lookup(
+                supervisor_assigns(), ASTRA_CONFIG_CAPABILITY);
+            char root[ASTRA_CAPABILITY_ROOT_MAX];
+
+            if (held == NULL)
+                continue;
+            if ((held->rights & wanted->rights) != wanted->rights)
+                return ASTRA_STATUS_ACCESS;
+            if ((strcmp(wanted->name, ASTRA_CONFIG_CAPABILITY) == 0 ?
+                    private_config_root(entry, held->root, root,
+                                        sizeof(root)) :
+                    astra_config_scope_root(
+                        held->root, ASTRA_CONFIG_OWNER_COMMAND, root,
+                        sizeof(root))) != ASTRA_CONFIG_OK)
+                return ASTRA_STATUS_LIMIT;
+            status = add_grant(
+                out, count, wanted->name, held->handle,
+                ASTRA_RIGHT_SIGNAL | delegated,
+                ASTRA_CAPABILITY_FLAG_NAMESPACE |
+                    ((wanted->rights & ASTRA_RIGHT_READ) != 0u ?
+                         ASTRA_CAPABILITY_FLAG_READ : 0u) |
+                    ((wanted->rights & ASTRA_RIGHT_WRITE) != 0u ?
+                         ASTRA_CAPABILITY_FLAG_WRITE : 0u),
+                root);
+            if (status != ASTRA_STATUS_OK)
+                return status;
+            continue;
+        }
         for (uint32_t member = 0u; ; ++member) {
             const AstraAssign *held = astra_assign_member(
                 supervisor_assigns(), wanted->name, member);
@@ -281,7 +335,7 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                 return status;
         }
     }
-    if (strcmp(entry->serves, "EVENTS") == 0) {
+    if (entry_serves(entry, "EVENTS")) {
         if (event_target_send == 0u)
             return ASTRA_STATUS_BAD_HANDLE;
         status = add_grant(out, count, ASTRA_CAPABILITY_EVENT_TARGET,
@@ -308,21 +362,22 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
 
 static uint32_t receive_ready(uint32_t receive, uint32_t child,
                               uint32_t expected_handles,
-                              uint32_t published[2])
+                              uint32_t published[ASTRA_MESSAGE_HANDLES_MAX])
 {
     AstraServiceReady message;
-    uint32_t handles[2] = {0u, 0u};
+    uint32_t handles[ASTRA_MESSAGE_HANDLES_MAX] = {0u};
     uint32_t handle_count = 0u;
     uint32_t size = 0u;
     uint32_t status;
 
-    published[0] = 0u;
-    published[1] = 0u;
+    for (uint32_t index = 0u; index < ASTRA_MESSAGE_HANDLES_MAX; ++index)
+        published[index] = 0u;
     for (;;) {
         uint32_t exit_status = 0u;
 
         status = astra_port_receive(receive, &message, sizeof(message),
-                                    handles, 2u, &size, &handle_count);
+                                    handles, ASTRA_MESSAGE_HANDLES_MAX,
+                                    &size, &handle_count);
         if (status == ASTRA_SYSCALL_OK)
             break;
         if (status != ASTRA_SYSCALL_WOULD_BLOCK)
@@ -379,21 +434,19 @@ static uint32_t receive_ready(uint32_t receive, uint32_t child,
     return ASTRA_STATUS_OK;
 }
 
-static uint32_t publish(const SupervisorManifestEntry *entry,
+static uint32_t publish(const SupervisorManifestPublication *publication,
                         uint32_t handle)
 {
     AstraVfsClient *client;
 
-    if (entry->serves[0] == '\0')
-        return ASTRA_STATUS_OK;
-    if (strcmp(entry->serves, "SYS") == 0)
+    if (strcmp(publication->name, "SYS") == 0)
         return supervisor_vfs_start(handle) ? ASTRA_STATUS_OK :
                                               LOADER_FAIL_PUBLISH;
-    if (service_count == SUPERVISOR_MANIFEST_ENTRY_MAX)
+    if (service_count == ASTRA_HANDLE_COUNT_MAX)
         return ASTRA_STATUS_LIMIT;
     service_handles[service_count] = handle;
-    astra_capability_name_set(service_names[service_count], entry->serves);
-    if (entry->serves_rights == 0u) {
+    astra_capability_name_set(service_names[service_count], publication->name);
+    if (publication->rights == 0u) {
         ++service_count;
         return ASTRA_STATUS_OK;
     }
@@ -401,8 +454,8 @@ static uint32_t publish(const SupervisorManifestEntry *entry,
     if (astra_vfs_port_connect(client, service_handles[service_count]) !=
             ASTRA_VFS_OK ||
         supervisor_vfs_register(client, handle) == 0u ||
-        astra_assign_bind(supervisor_assigns(), entry->serves, handle,
-                          entry->serves_rights, "") != ASTRA_VFS_OK)
+        astra_assign_bind(supervisor_assigns(), publication->name, handle,
+                          publication->rights, "") != ASTRA_VFS_OK)
         return LOADER_FAIL_PUBLISH;
     ++service_count;
     return ASTRA_STATUS_OK;
@@ -506,9 +559,8 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
     uint32_t send = 0u;
     uint32_t child = 0u;
     uint32_t child_id = 0u;
-    uint32_t published[2] = {0u, 0u};
-    uint32_t expected_handles = entry->serves[0] == '\0' ? 0u :
-        (strcmp(entry->serves, "EVENTS") == 0 ? 2u : 1u);
+    uint32_t published[ASTRA_MESSAGE_HANDLES_MAX] = {0u};
+    uint32_t expected_handles = entry->serves_count;
     uint32_t status;
 
     if (entry->resident != 0u) {
@@ -565,7 +617,14 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
         (void)astra_close(child);
         return status;
     }
-    status = publish(entry, published[0]);
+    for (uint32_t index = 0u;
+         status == ASTRA_STATUS_OK && index < expected_handles; ++index) {
+        status = publish(&entry->serves[index], published[index]);
+        if (status == ASTRA_STATUS_OK &&
+            astra_capability_name_equal(entry->serves[index].name,
+                                        ASTRA_CAPABILITY_EVENT_CONTROL))
+            event_control_handle = published[index];
+    }
     if (status != ASTRA_STATUS_OK) {
         for (uint32_t index = 0u; index < expected_handles; ++index)
             if (published[index] != 0u)
@@ -573,8 +632,6 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
         (void)astra_close(child);
         return status;
     }
-    if (expected_handles == 2u)
-        event_control_handle = published[1];
     {
         uint32_t at = 0u;
 
@@ -809,7 +866,7 @@ static void pump_launch(const AstraStartupInfo *startup)
 
 uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
 {
-    SupervisorManifest manifest;
+    SupervisorManifest *manifest = &startup_manifest;
     uint32_t manifest_length = 0u;
     uint32_t image_length = 0u;
     uint32_t open_us = 0u;
@@ -822,9 +879,9 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
     if (status != ASTRA_VFS_OK)
         return ASTRA_STATUS_NOT_FOUND;
     manifest_text[manifest_length] = '\0';
-    if (!supervisor_manifest_parse(manifest_text, manifest_length, &manifest))
+    if (!supervisor_manifest_parse(manifest_text, manifest_length, manifest))
         return LOADER_FAIL_MANIFEST;
-    if (strcmp(manifest.entries[0].path, "SERVICES:storage") != 0)
+    if (strcmp(manifest->entries[0].path, "SERVICES:storage") != 0)
         return LOADER_FAIL_ORDER;
     if (astra_rt_port_create(1u, ASTRA_EVENT_CONTROL_REQUEST_SIZE,
                           &event_target_receive, &event_target_send) !=
@@ -845,15 +902,15 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
     if (status != ASTRA_VFS_OK)
         return launch_open_status(status);
 
-    status = launch_entry(startup, &manifest.entries[0], NULL,
+    status = launch_entry(startup, &manifest->entries[0], NULL,
                           NULL, image_length, open_us,
                           supervisor_volume_source_read_at,
                           release_bootstrap_source, NULL, NULL);
     if (status != ASTRA_STATUS_OK)
         return status;
     supervisor_bootstrap_block_close();
-    for (uint32_t index = 1u; index < manifest.count; ++index) {
-        const SupervisorManifestEntry *entry = &manifest.entries[index];
+    for (uint32_t index = 1u; index < manifest->count; ++index) {
+        const SupervisorManifestEntry *entry = &manifest->entries[index];
         char entry_path[ASTRA_VFS_PATH_MAX];
         char bundle_root[ASTRA_VFS_PATH_MAX];
 

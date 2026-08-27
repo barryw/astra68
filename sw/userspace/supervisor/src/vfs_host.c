@@ -39,6 +39,16 @@ bind_standard_assigns(void)
                             ASTRA_RIGHT_READ, "services");
     (void)astra_assign_bind(&vfs_assigns, "STARTUP", vfs_handle,
                             ASTRA_RIGHT_READ, "startup");
+    status = astra_vfs_mkdir(&vfs_client, "/config");
+    if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
+        (void)astra_assign_bind(&vfs_assigns, "CONFIG", vfs_handle,
+                                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE,
+                                "config");
+    } else {
+        ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
+                     ASTRA_EVENT_LEVEL_WARNING,
+                     "CONFIG: unbound, mkdir refused with status %u", status);
+    }
     status = astra_vfs_mkdir(&vfs_client, "/libs");
     if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
         (void)astra_assign_bind(&vfs_assigns, "LIBS", vfs_handle,

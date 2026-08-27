@@ -18,7 +18,8 @@ LIB := build/m68k/libastra.a
 PIC_LIB := build/m68k/libastra-pic.a
 SOURCES := src/resource.c src/area.c src/port.c src/bulk_ring.c \
 	src/front_panel.c src/font.c src/graphics.c src/pointer.c src/window.c \
-	src/application.c src/fixed.c src/bundle.c src/datetime.c
+	src/application.c src/fixed.c src/manifest.c src/bundle.c \
+	src/datetime.c
 TARGET_OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES))
 PIC_OBJECTS := $(patsubst build/m68k/%,build/m68k/pic/%,$(TARGET_OBJECTS))
 HOST_TESTS := build/host/test_front_panel build/host/test_font \
@@ -27,6 +28,7 @@ HOST_TESTS := build/host/test_front_panel build/host/test_font \
 HOST_TESTS += build/host/test_pointer build/host/test_window
 HOST_TESTS += build/host/test_application
 HOST_TESTS += build/host/test_fixed build/host/test_bundle
+
 SANITIZER_TESTS := build/host/test_front_panel_sanitize \
 	build/host/test_font_sanitize build/host/test_graphics_sanitize \
 	build/host/test_port_sanitize build/host/test_area_sanitize \
@@ -45,12 +47,10 @@ all: $(LIB)
 pic: $(PIC_LIB)
 
 $(LIB): $(TARGET_OBJECTS)
-	@mkdir -p $(@D)
-	$(AR) rcs $@ $^
+	$(ASTRA_REPLACE_ARCHIVE)
 
 $(PIC_LIB): $(PIC_OBJECTS)
-	@mkdir -p $(@D)
-	$(AR) rcs $@ $^
+	$(ASTRA_REPLACE_ARCHIVE)
 
 build/m68k/pic/%.o: src/%.c
 	@mkdir -p $(@D)
@@ -104,7 +104,7 @@ build/host/test_fixed: src/fixed.c tests/test_fixed.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
 
-build/host/test_bundle: src/bundle.c tests/test_bundle.c
+build/host/test_bundle: src/manifest.c src/bundle.c tests/test_bundle.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
 
@@ -166,7 +166,7 @@ build/host/test_fixed_sanitize: src/fixed.c tests/test_fixed.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
 
-build/host/test_bundle_sanitize: src/bundle.c tests/test_bundle.c
+build/host/test_bundle_sanitize: src/manifest.c src/bundle.c tests/test_bundle.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
 

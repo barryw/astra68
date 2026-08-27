@@ -1,0 +1,6 @@
+astra-bundle 1
+kind kit
+id org.astra.configuration
+name "Astra Configuration Kit"
+version 1.0.0
+provides config.library 1 1.0.0

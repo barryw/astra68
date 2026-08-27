@@ -6,7 +6,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010022
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010024
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -199,6 +199,11 @@
 #define ASTRA_SYSCALL_PROCESS_LOAD_WRITE  68
 #define ASTRA_SYSCALL_PROCESS_LOAD_CREATE 69
 #define ASTRA_SYSCALL_PROCESS_LOAD_COMMIT 70
+/* Protected network broker transport; application protocols stay userspace. */
+#define ASTRA_SYSCALL_NETWORK_QUERY        71
+#define ASTRA_SYSCALL_NETWORK_EXECUTE      72
+/* D1=CLOCK device lease, D2:D3=Unix epoch nanoseconds. */
+#define ASTRA_SYSCALL_CLOCK_SET            73
 
 #define ASTRA_VM_PRIVATE_READ  (1u << 0)
 #define ASTRA_VM_PRIVATE_WRITE (1u << 1)

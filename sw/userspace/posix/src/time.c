@@ -26,6 +26,7 @@
 #include <astra/posix.h>
 #include <astra/posix_descriptor.h>
 
+#include <astra/clock.h>
 #include <astra/runtime.h>
 #include <astra/syscall.h>
 
@@ -182,6 +183,38 @@ clock_gettime(clockid_t clock, struct timespec *value)
     (void)split(nanoseconds, &seconds, &rest);
     value->tv_sec = (time_t)seconds;
     value->tv_nsec = (long)rest;
+    return 0;
+}
+
+int
+clock_settime(clockid_t clock, const struct timespec *value)
+{
+    const AstraStartupCapability *capability;
+    uint64_t nanoseconds;
+
+    if (clock != CLOCK_REALTIME || value == NULL || value->tv_sec < 0 ||
+        value->tv_nsec < 0 || value->tv_nsec >= (long)NANOSECONDS_PER_SECOND) {
+        errno = EINVAL;
+        return -1;
+    }
+    if ((uint64_t)value->tv_sec >
+        (UINT64_MAX - (uint64_t)value->tv_nsec) /
+            NANOSECONDS_PER_SECOND) {
+        errno = EINVAL;
+        return -1;
+    }
+    capability = astra_startup_capability(astra_posix_startup(),
+                                           ASTRA_CAPABILITY_CLOCK);
+    if (capability == NULL) {
+        errno = EPERM;
+        return -1;
+    }
+    nanoseconds = (uint64_t)value->tv_sec * NANOSECONDS_PER_SECOND +
+                  (uint64_t)value->tv_nsec;
+    if (astra_clock_set(capability->handle, nanoseconds) != ASTRA_SYSCALL_OK) {
+        errno = EIO;
+        return -1;
+    }
     return 0;
 }
 

@@ -28,8 +28,7 @@ $(TERMINFO_ENTRY): $(TERMINFO_SOURCE)
 	@test -s $@
 
 $(TARGET): $(TARGET_OBJECTS)
-	@mkdir -p $(@D)
-	$(AR) rcs $@ $^
+	$(ASTRA_REPLACE_ARCHIVE)
 
 build/m68k/%.o: src/%.c include/astra/terminal.h include/astra/keymap.h
 	@mkdir -p $(@D)

@@ -9,6 +9,7 @@
  */
 
 #include "qemu/osdep.h"
+#include <poll.h>
 #include "qemu/bswap.h"
 #include "qemu/datadir.h"
 #include "qemu/error-report.h"
@@ -17,6 +18,8 @@
 #include "qemu/futex.h"
 #endif
 #include "qemu/iov.h"
+#include "qemu/main-loop.h"
+#include "qemu/sockets.h"
 #include "qemu/timer.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
@@ -28,6 +31,8 @@
 #include "hw/m68k/astra_render_batch.h"
 #include "hw/m68k/astra_render_protocol.h"
 #include "astra/display.h"
+#include "astra/network.h"
+#include "block/thread-pool.h"
 #include "sysemu/block-backend.h"
 #include "sysemu/block-backend-io.h"
 #include "sysemu/blockdev.h"
@@ -43,7 +48,7 @@
 #define ASTRA_ROM_BASE           0xffe00000u
 #define ASTRA_ROM_SIZE           (512 * KiB)
 #define ASTRA_VESTA_BASE         0xfff00000u
-#define ASTRA_VESTA_SIZE         0x800u
+#define ASTRA_VESTA_SIZE         0x900u
 #define ASTRA_PANEL_BASE         0xfff01000u
 #define ASTRA_PANEL_SIZE         0x100u
 #define ASTRA_PANEL_ACTIVITY     0x2cu
@@ -73,6 +78,7 @@
 #define IRQ_SOURCE_ASTRAEA       9
 #define IRQ_SOURCE_INPUT         5
 #define IRQ_SOURCE_STORAGE       4
+#define IRQ_SOURCE_NETWORK       11
 #define IRQ_VALID                (1u << 31)
 
 #define SYS_STATUS_BASE          0x0000000fu
@@ -165,6 +171,15 @@
  */
 #define BLOCK_SERVICE_DELAY_NS   20000ull
 #define DISPLAY_SERVICE_DELAY_NS 1000000ull
+
+#define NETWORK_ID_MAGIC         0x4e455457u
+#define NETWORK_VERSION_1_0      0x00010000u
+#define NETWORK_QUEUE_READY      (1u << 0)
+#define NETWORK_QUEUE_EVENT_PENDING (1u << 1)
+#define NETWORK_EXECUTE_BIT      (1u << 0)
+#define NETWORK_READY_ACK_BIT    (1u << 0)
+#define NETWORK_RESET_BIT        (1u << 0)
+#define NETWORK_COMMAND_BYTES    ASTRA_NETWORK_HOST_COMMAND_SIZE
 
 #define ASTRA_INPUT_QUEUE_SIZE   32u
 #define ASTRA_INPUT_QUEUE_MASK   (ASTRA_INPUT_QUEUE_SIZE - 1u)
@@ -303,6 +318,52 @@ typedef struct AstraDisplayState {
     bool completion_valid;
 } AstraDisplayState;
 
+typedef struct AstraNetworkEndpointState {
+    Astra68State *machine;
+    int fd;
+    uint32_t id;
+    uint32_t generation;
+    uint32_t readiness;
+    uint32_t error_status;
+    uint16_t family;
+    uint8_t type;
+    uint8_t protocol;
+    bool listening;
+    bool connecting;
+    bool armed;
+} AstraNetworkEndpointState;
+
+typedef struct AstraNetworkResolveJob {
+    Astra68State *machine;
+    char *name;
+    GArray *addresses;
+    uint32_t token;
+    uint32_t host_generation;
+    uint16_t family;
+    uint16_t port;
+    uint8_t type;
+    uint8_t protocol;
+    int resolver_status;
+    bool done;
+    bool discard;
+} AstraNetworkResolveJob;
+
+typedef struct AstraNetworkState {
+    GHashTable *endpoints;
+    GHashTable *resolvers;
+    uint32_t next_endpoint;
+    uint32_t next_generation;
+    uint32_t next_resolver;
+    uint32_t host_generation;
+    uint32_t ready_sequence;
+    uint32_t request_buffer;
+    uint32_t request_bytes;
+    uint32_t request_count;
+    uint32_t status;
+    uint32_t completed;
+    bool ready_pending;
+} AstraNetworkState;
+
 struct Astra68State {
     M68kCPU *cpu;
     MemoryRegion bram;
@@ -331,6 +392,10 @@ struct Astra68State {
     uint32_t ram_size;
     uint64_t reset_clock_ns;
     uint64_t rtc_latch;
+    uint64_t rtc_base_ns;
+    uint64_t rtc_base_clock_ns;
+    uint32_t rtc_set_high;
+    bool rtc_valid;
     uint32_t initial_sp;
     uint32_t initial_pc;
     uint32_t scratch;
@@ -343,6 +408,7 @@ struct Astra68State {
     AstraInputState input;
     AstraBlockState block;
     AstraDisplayState display;
+    AstraNetworkState network;
     uint8_t panel_led_data;
     uint8_t panel_led_ownership;
 #ifdef CONFIG_POSIX
@@ -728,34 +794,6 @@ static const QemuInputHandler astra_input_handler = {
     .sync = astra_input_sync,
 };
 
-/*
- * The host's local offset and zone abbreviation, from the host's own tzdata.
- * `name`, when given, receives up to four characters plus a NUL.
- */
-static long astra_host_utc_offset(char *name)
-{
-    time_t now = (time_t)(qemu_clock_get_ns(QEMU_CLOCK_HOST) /
-                          NANOSECONDS_PER_SECOND);
-    struct tm local;
-
-    if (name) {
-        name[0] = '\0';
-    }
-    if (localtime_r(&now, &local) == NULL) {
-        return 0;
-    }
-    if (name && local.tm_zone) {
-        int index = 0;
-
-        while (index < 4 && local.tm_zone[index] != '\0') {
-            name[index] = local.tm_zone[index];
-            ++index;
-        }
-        name[index] = '\0';
-    }
-    return local.tm_gmtoff;
-}
-
 static uint64_t astra_now_cycles(Astra68State *s)
 {
     uint64_t elapsed = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - s->reset_clock_ns;
@@ -995,6 +1033,879 @@ static void astra_block_pop_completion(Astra68State *s)
     block->head = (block->head + 1u) & BLOCK_COMPLETION_QUEUE_MASK;
 }
 
+static uint32_t astra_network_status_from_errno(int error)
+{
+    switch (error) {
+    case 0: return ASTRA_NETWORK_OK;
+    case EAGAIN: return ASTRA_NETWORK_WOULD_BLOCK;
+#if EWOULDBLOCK != EAGAIN
+    case EWOULDBLOCK: return ASTRA_NETWORK_WOULD_BLOCK;
+#endif
+    case EINPROGRESS: return ASTRA_NETWORK_IN_PROGRESS;
+    case ECANCELED: return ASTRA_NETWORK_CANCELLED;
+    case ETIMEDOUT: return ASTRA_NETWORK_TIMED_OUT;
+    case ECONNREFUSED: return ASTRA_NETWORK_REFUSED;
+    case ECONNRESET:
+    case EPIPE: return ASTRA_NETWORK_RESET;
+    case ENETUNREACH:
+    case EHOSTUNREACH: return ASTRA_NETWORK_UNREACHABLE;
+    case EADDRINUSE: return ASTRA_NETWORK_ADDRESS_IN_USE;
+    case EADDRNOTAVAIL: return ASTRA_NETWORK_ADDRESS_NOT_AVAILABLE;
+    case EACCES:
+    case EPERM: return ASTRA_NETWORK_ACCESS;
+    case ENOMEM:
+    case ENOBUFS:
+    case EMFILE:
+    case ENFILE: return ASTRA_NETWORK_RESOURCE_LIMIT;
+    case EAFNOSUPPORT:
+    case EPROTONOSUPPORT:
+    case ENOPROTOOPT:
+    case EOPNOTSUPP: return ASTRA_NETWORK_UNSUPPORTED;
+    default: return ASTRA_NETWORK_IO;
+    }
+}
+
+static uint32_t astra_network_status_from_gai(int status)
+{
+    if (status == 0) {
+        return ASTRA_NETWORK_OK;
+    }
+#ifdef EAI_AGAIN
+    if (status == EAI_AGAIN) {
+        return ASTRA_NETWORK_NAME_TEMPORARY;
+    }
+#endif
+#ifdef EAI_NONAME
+    if (status == EAI_NONAME) {
+        return ASTRA_NETWORK_NAME_NOT_FOUND;
+    }
+#endif
+#ifdef EAI_MEMORY
+    if (status == EAI_MEMORY) {
+        return ASTRA_NETWORK_OUT_OF_MEMORY;
+    }
+#endif
+#ifdef EAI_FAMILY
+    if (status == EAI_FAMILY) {
+        return ASTRA_NETWORK_UNSUPPORTED;
+    }
+#endif
+    return ASTRA_NETWORK_IO;
+}
+
+static uint32_t astra_network_next(uint32_t *value)
+{
+    if (++*value == 0) {
+        ++*value;
+    }
+    return *value;
+}
+
+static bool astra_network_guest_address(const uint8_t *source,
+                                        struct sockaddr_storage *storage,
+                                        socklen_t *length)
+{
+    uint16_t family = lduw_be_p(source + 4);
+    uint16_t port = lduw_be_p(source + 6);
+
+    memset(storage, 0, sizeof(*storage));
+    if (ldl_be_p(source) != ASTRA_NETWORK_ADDRESS_SIZE) {
+        return false;
+    }
+    if (family == ASTRA_NETWORK_FAMILY_IPV4) {
+        struct sockaddr_in *address = (struct sockaddr_in *)storage;
+
+        address->sin_family = AF_INET;
+        address->sin_port = htons(port);
+        memcpy(&address->sin_addr, source + 12, sizeof(address->sin_addr));
+        *length = sizeof(*address);
+        return true;
+    }
+    if (family == ASTRA_NETWORK_FAMILY_IPV6) {
+        struct sockaddr_in6 *address = (struct sockaddr_in6 *)storage;
+
+        address->sin6_family = AF_INET6;
+        address->sin6_port = htons(port);
+        address->sin6_scope_id = ldl_be_p(source + 8);
+        memcpy(&address->sin6_addr, source + 12, sizeof(address->sin6_addr));
+        *length = sizeof(*address);
+        return true;
+    }
+    return false;
+}
+
+static bool astra_network_store_address(uint8_t *destination,
+                                        const struct sockaddr *source,
+                                        socklen_t length)
+{
+    memset(destination, 0, ASTRA_NETWORK_ADDRESS_SIZE);
+    stl_be_p(destination, ASTRA_NETWORK_ADDRESS_SIZE);
+    if (source->sa_family == AF_INET &&
+        length >= sizeof(struct sockaddr_in)) {
+        const struct sockaddr_in *address =
+            (const struct sockaddr_in *)source;
+
+        stw_be_p(destination + 4, ASTRA_NETWORK_FAMILY_IPV4);
+        stw_be_p(destination + 6, ntohs(address->sin_port));
+        memcpy(destination + 12, &address->sin_addr,
+               sizeof(address->sin_addr));
+        return true;
+    }
+    if (source->sa_family == AF_INET6 &&
+        length >= sizeof(struct sockaddr_in6)) {
+        const struct sockaddr_in6 *address =
+            (const struct sockaddr_in6 *)source;
+
+        stw_be_p(destination + 4, ASTRA_NETWORK_FAMILY_IPV6);
+        stw_be_p(destination + 6, ntohs(address->sin6_port));
+        stl_be_p(destination + 8, address->sin6_scope_id);
+        memcpy(destination + 12, &address->sin6_addr,
+               sizeof(address->sin6_addr));
+        return true;
+    }
+    return false;
+}
+
+static void astra_network_endpoint_free(gpointer opaque)
+{
+    AstraNetworkEndpointState *endpoint = opaque;
+
+    if (endpoint->fd >= 0) {
+        qemu_set_fd_handler(endpoint->fd, NULL, NULL, NULL);
+        close(endpoint->fd);
+    }
+    g_free(endpoint);
+}
+
+static void astra_network_resolver_free(gpointer opaque)
+{
+    AstraNetworkResolveJob *job = opaque;
+
+    g_free(job->name);
+    if (job->addresses) {
+        g_array_free(job->addresses, true);
+    }
+    g_free(job);
+}
+
+static void astra_network_raise(Astra68State *s)
+{
+    s->network.ready_pending = true;
+    astra_network_next(&s->network.ready_sequence);
+    astra_update_irq(s);
+}
+
+static void astra_network_disarm(AstraNetworkEndpointState *endpoint)
+{
+    if (endpoint->armed) {
+        qemu_set_fd_handler(endpoint->fd, NULL, NULL, NULL);
+        endpoint->armed = false;
+    }
+}
+
+static void astra_network_ready(AstraNetworkEndpointState *endpoint,
+                                uint32_t readiness)
+{
+    endpoint->readiness |= readiness;
+    astra_network_disarm(endpoint);
+    astra_network_raise(endpoint->machine);
+}
+
+static void astra_network_read_ready(void *opaque)
+{
+    AstraNetworkEndpointState *endpoint = opaque;
+
+    astra_network_ready(endpoint, endpoint->listening ?
+                        ASTRA_NETWORK_READY_ACCEPTABLE :
+                        ASTRA_NETWORK_READY_READABLE);
+}
+
+static void astra_network_write_ready(void *opaque)
+{
+    AstraNetworkEndpointState *endpoint = opaque;
+    int error = 0;
+    socklen_t length = sizeof(error);
+
+    if (endpoint->connecting) {
+        if (getsockopt(endpoint->fd, SOL_SOCKET, SO_ERROR,
+                       (void *)&error, &length) < 0) {
+            error = errno;
+        }
+        endpoint->connecting = false;
+        endpoint->error_status = astra_network_status_from_errno(error);
+        astra_network_ready(endpoint, error == 0 ?
+                            ASTRA_NETWORK_READY_CONNECTED |
+                                ASTRA_NETWORK_READY_WRITABLE :
+                            ASTRA_NETWORK_READY_ERROR);
+        return;
+    }
+    astra_network_ready(endpoint, ASTRA_NETWORK_READY_WRITABLE);
+}
+
+static AstraNetworkEndpointState *
+astra_network_endpoint(Astra68State *s, uint32_t id, uint32_t generation)
+{
+    AstraNetworkEndpointState *endpoint = g_hash_table_lookup(
+        s->network.endpoints, GUINT_TO_POINTER(id));
+
+    return endpoint != NULL && endpoint->generation == generation ?
+           endpoint : NULL;
+}
+
+static AstraNetworkEndpointState *
+astra_network_endpoint_create(Astra68State *s, int fd, uint16_t family,
+                              uint8_t type, uint8_t protocol)
+{
+    AstraNetworkEndpointState *endpoint = g_new0(
+        AstraNetworkEndpointState, 1);
+
+    endpoint->machine = s;
+    endpoint->fd = fd;
+    endpoint->id = astra_network_next(&s->network.next_endpoint);
+    while (g_hash_table_contains(s->network.endpoints,
+                                 GUINT_TO_POINTER(endpoint->id))) {
+        endpoint->id = astra_network_next(&s->network.next_endpoint);
+    }
+    endpoint->generation = astra_network_next(&s->network.next_generation);
+    endpoint->family = family;
+    endpoint->type = type;
+    endpoint->protocol = protocol;
+    g_hash_table_insert(s->network.endpoints,
+                        GUINT_TO_POINTER(endpoint->id), endpoint);
+    return endpoint;
+}
+
+static int astra_network_resolve_worker(void *opaque)
+{
+    AstraNetworkResolveJob *job = opaque;
+    struct addrinfo hints = {0};
+    struct addrinfo *result = NULL;
+    struct addrinfo *current;
+    int status;
+
+    hints.ai_family = job->family == ASTRA_NETWORK_FAMILY_IPV4 ? AF_INET :
+                      job->family == ASTRA_NETWORK_FAMILY_IPV6 ? AF_INET6 :
+                      AF_UNSPEC;
+    hints.ai_socktype = job->type == ASTRA_NETWORK_TYPE_STREAM ? SOCK_STREAM :
+                        job->type == ASTRA_NETWORK_TYPE_DATAGRAM ? SOCK_DGRAM :
+                        0;
+    hints.ai_protocol = job->protocol;
+    status = getaddrinfo(job->name, NULL, &hints, &result);
+    if (status == 0) {
+        for (current = result; current != NULL; current = current->ai_next) {
+            AstraNetworkAddress address = {0};
+
+            address.size = sizeof(address);
+            address.port = job->port;
+            if (current->ai_family == AF_INET) {
+                const struct sockaddr_in *ipv4 =
+                    (const struct sockaddr_in *)current->ai_addr;
+
+                address.family = ASTRA_NETWORK_FAMILY_IPV4;
+                memcpy(address.address, &ipv4->sin_addr,
+                       sizeof(ipv4->sin_addr));
+            } else if (current->ai_family == AF_INET6) {
+                const struct sockaddr_in6 *ipv6 =
+                    (const struct sockaddr_in6 *)current->ai_addr;
+
+                address.family = ASTRA_NETWORK_FAMILY_IPV6;
+                address.scope_id = ipv6->sin6_scope_id;
+                memcpy(address.address, &ipv6->sin6_addr,
+                       sizeof(ipv6->sin6_addr));
+            } else {
+                continue;
+            }
+            g_array_append_val(job->addresses, address);
+        }
+        freeaddrinfo(result);
+    }
+    job->resolver_status = status;
+    if (status != 0) {
+        error_report("Astra68 host resolver failed for '%s': %s (%d), "
+                     "family=%u type=%u protocol=%u",
+                     job->name, gai_strerror(status), status, job->family,
+                     job->type, job->protocol);
+    }
+    return 0;
+}
+
+static void astra_network_resolve_complete(void *opaque, int ret)
+{
+    AstraNetworkResolveJob *job = opaque;
+    Astra68State *s = job->machine;
+
+    (void)ret;
+    if (job->discard || job->host_generation != s->network.host_generation) {
+        g_hash_table_remove(s->network.resolvers,
+                            GUINT_TO_POINTER(job->token));
+        return;
+    }
+    job->done = true;
+    astra_network_raise(s);
+}
+
+static void astra_network_reset(Astra68State *s)
+{
+    GHashTableIter iterator;
+    gpointer value;
+
+    if (s->network.endpoints) {
+        g_hash_table_remove_all(s->network.endpoints);
+    }
+    if (s->network.resolvers) {
+        g_hash_table_iter_init(&iterator, s->network.resolvers);
+        while (g_hash_table_iter_next(&iterator, NULL, &value)) {
+            AstraNetworkResolveJob *job = value;
+
+            if (job->done) {
+                g_hash_table_iter_remove(&iterator);
+            } else {
+                job->discard = true;
+            }
+        }
+    }
+    astra_network_next(&s->network.host_generation);
+    s->network.ready_pending = false;
+    s->network.request_buffer = 0;
+    s->network.request_bytes = 0;
+    s->network.request_count = 0;
+    s->network.status = ASTRA_SYSCALL_OK;
+    s->network.completed = 0;
+    astra_update_irq(s);
+}
+
+static uint8_t *astra_network_data(Astra68State *s, uint32_t physical,
+                                   uint32_t bytes, uint32_t offset,
+                                   uint32_t length)
+{
+    if (physical < ASTRA_SDRAM_BASE || bytes > s->ram_size ||
+        physical - ASTRA_SDRAM_BASE > s->ram_size - bytes ||
+        offset > bytes || length > bytes - offset) {
+        return NULL;
+    }
+    return s->sdram + physical - ASTRA_SDRAM_BASE + offset;
+}
+
+static void astra_network_command_clear_result(uint8_t *command)
+{
+    memset(command + 68, 0, 44);
+    stl_be_p(command + 68, ASTRA_NETWORK_INVALID);
+}
+
+static void astra_network_command_address(uint8_t *destination,
+                                          const AstraNetworkAddress *source)
+{
+    memset(destination, 0, ASTRA_NETWORK_ADDRESS_SIZE);
+    stl_be_p(destination, sizeof(*source));
+    stw_be_p(destination + 4, source->family);
+    stw_be_p(destination + 6, source->port);
+    stl_be_p(destination + 8, source->scope_id);
+    memcpy(destination + 12, source->address, sizeof(source->address));
+}
+
+static int astra_network_socket_option(uint32_t option, int *level,
+                                       int *name)
+{
+    switch (option) {
+    case ASTRA_NETWORK_OPTION_REUSE_ADDRESS:
+        *level = SOL_SOCKET; *name = SO_REUSEADDR; return 1;
+    case ASTRA_NETWORK_OPTION_KEEPALIVE:
+        *level = SOL_SOCKET; *name = SO_KEEPALIVE; return 1;
+    case ASTRA_NETWORK_OPTION_SEND_BUFFER:
+        *level = SOL_SOCKET; *name = SO_SNDBUF; return 1;
+    case ASTRA_NETWORK_OPTION_RECEIVE_BUFFER:
+        *level = SOL_SOCKET; *name = SO_RCVBUF; return 1;
+    case ASTRA_NETWORK_OPTION_TCP_NO_DELAY:
+        *level = IPPROTO_TCP; *name = TCP_NODELAY; return 1;
+    case ASTRA_NETWORK_OPTION_IPV6_ONLY:
+        *level = IPPROTO_IPV6; *name = IPV6_V6ONLY; return 1;
+    default:
+        return 0;
+    }
+}
+
+static uint32_t astra_network_arm_endpoint(AstraNetworkEndpointState *endpoint,
+                                           uint32_t interest)
+{
+    struct pollfd pollfd = {0};
+    uint32_t readiness = 0;
+    int result;
+
+    if ((interest & ~(ASTRA_NETWORK_READY_READABLE |
+                      ASTRA_NETWORK_READY_WRITABLE |
+                      ASTRA_NETWORK_READY_CONNECTED |
+                      ASTRA_NETWORK_READY_ACCEPTABLE)) != 0) {
+        return ASTRA_NETWORK_INVALID;
+    }
+    if (endpoint->readiness != 0) {
+        readiness = endpoint->readiness;
+        endpoint->readiness = 0;
+        goto arm_remaining;
+    }
+    pollfd.fd = endpoint->fd;
+    if ((interest & (ASTRA_NETWORK_READY_READABLE |
+                     ASTRA_NETWORK_READY_ACCEPTABLE)) != 0) {
+        pollfd.events |= POLLIN;
+    }
+    if ((interest & (ASTRA_NETWORK_READY_WRITABLE |
+                     ASTRA_NETWORK_READY_CONNECTED)) != 0) {
+        pollfd.events |= POLLOUT;
+    }
+    result = poll(&pollfd, 1, 0);
+    if (result < 0) {
+        endpoint->error_status =
+            astra_network_status_from_errno(errno);
+        return ASTRA_NETWORK_READY_ERROR;
+    }
+    if (result != 0) {
+        if ((pollfd.revents & (POLLERR | POLLNVAL)) != 0) {
+            readiness |= ASTRA_NETWORK_READY_ERROR;
+        }
+        if ((pollfd.revents & POLLHUP) != 0) {
+            readiness |= ASTRA_NETWORK_READY_PEER_CLOSED;
+        }
+        if ((pollfd.revents & POLLIN) != 0) {
+            readiness |= endpoint->listening ?
+                ASTRA_NETWORK_READY_ACCEPTABLE :
+                ASTRA_NETWORK_READY_READABLE;
+        }
+        if ((pollfd.revents & POLLOUT) != 0) {
+            if (endpoint->connecting) {
+                astra_network_write_ready(endpoint);
+                readiness |= endpoint->readiness;
+                endpoint->readiness = 0;
+            } else {
+                readiness |= ASTRA_NETWORK_READY_WRITABLE;
+            }
+        }
+    }
+
+arm_remaining:
+    if ((readiness & (ASTRA_NETWORK_READY_ERROR |
+                      ASTRA_NETWORK_READY_PEER_CLOSED)) != 0) {
+        interest = 0;
+    } else {
+        if ((readiness & (ASTRA_NETWORK_READY_READABLE |
+                          ASTRA_NETWORK_READY_ACCEPTABLE)) != 0) {
+            interest &= ~(ASTRA_NETWORK_READY_READABLE |
+                          ASTRA_NETWORK_READY_ACCEPTABLE);
+        }
+        if ((readiness & (ASTRA_NETWORK_READY_WRITABLE |
+                          ASTRA_NETWORK_READY_CONNECTED)) != 0) {
+            interest &= ~(ASTRA_NETWORK_READY_WRITABLE |
+                          ASTRA_NETWORK_READY_CONNECTED);
+        }
+    }
+    astra_network_disarm(endpoint);
+    if (interest == 0)
+        return readiness;
+    pollfd.events = 0;
+    if ((interest & (ASTRA_NETWORK_READY_READABLE |
+                     ASTRA_NETWORK_READY_ACCEPTABLE)) != 0)
+        pollfd.events |= POLLIN;
+    if ((interest & (ASTRA_NETWORK_READY_WRITABLE |
+                     ASTRA_NETWORK_READY_CONNECTED)) != 0)
+        pollfd.events |= POLLOUT;
+    qemu_set_fd_handler(endpoint->fd,
+                        (pollfd.events & POLLIN) != 0 ?
+                            astra_network_read_ready : NULL,
+                        (pollfd.events & POLLOUT) != 0 ?
+                            astra_network_write_ready : NULL,
+                        endpoint);
+    endpoint->armed = true;
+    return readiness;
+}
+
+static void astra_network_execute_resolve(Astra68State *s, uint8_t *command,
+                                          uint32_t physical, uint32_t bytes)
+{
+    uint32_t token = ldl_be_p(command + 24);
+    uint32_t data_offset = ldl_be_p(command + 56);
+    uint32_t data_length = ldl_be_p(command + 60);
+    uint32_t data_capacity = ldl_be_p(command + 64);
+    uint8_t *data;
+
+    if (token == 0) {
+        AstraNetworkResolveJob *job;
+
+        data = astra_network_data(s, physical, bytes, data_offset,
+                                  data_length);
+        if (data == NULL || data_length == 0 || data_length > 253 ||
+            memchr(data, 0, data_length) != NULL) {
+            stl_be_p(command + 68, ASTRA_NETWORK_INVALID);
+            return;
+        }
+        job = g_new0(AstraNetworkResolveJob, 1);
+        job->machine = s;
+        job->name = g_strndup((const char *)data, data_length);
+        job->addresses = g_array_new(false, false,
+                                     sizeof(AstraNetworkAddress));
+        job->token = astra_network_next(&s->network.next_resolver);
+        while (g_hash_table_contains(s->network.resolvers,
+                                     GUINT_TO_POINTER(job->token))) {
+            job->token = astra_network_next(&s->network.next_resolver);
+        }
+        job->host_generation = s->network.host_generation;
+        job->family = lduw_be_p(command + 20);
+        job->type = command[22];
+        job->protocol = command[23];
+        job->port = lduw_be_p(command + 34);
+        g_hash_table_insert(s->network.resolvers,
+                            GUINT_TO_POINTER(job->token), job);
+        thread_pool_submit_aio(astra_network_resolve_worker, job,
+                               astra_network_resolve_complete, job);
+        stl_be_p(command + 68, ASTRA_NETWORK_IN_PROGRESS);
+        stl_be_p(command + 80, job->token);
+        return;
+    }
+    {
+        AstraNetworkResolveJob *job = g_hash_table_lookup(
+            s->network.resolvers, GUINT_TO_POINTER(token));
+        uint32_t count;
+
+        if (job == NULL || job->host_generation !=
+                               s->network.host_generation) {
+            stl_be_p(command + 68, ASTRA_NETWORK_INVALID);
+            return;
+        }
+        if (!job->done) {
+            stl_be_p(command + 68, ASTRA_NETWORK_WOULD_BLOCK);
+            return;
+        }
+        if (job->resolver_status != 0) {
+            stl_be_p(command + 68,
+                     astra_network_status_from_gai(job->resolver_status));
+            g_hash_table_remove(s->network.resolvers,
+                                GUINT_TO_POINTER(token));
+            return;
+        }
+        count = job->addresses->len;
+        stl_be_p(command + 80, count);
+        if (data_capacity / ASTRA_NETWORK_ADDRESS_SIZE < count) {
+            stl_be_p(command + 68, ASTRA_NETWORK_BUFFER_TOO_SMALL);
+            return;
+        }
+        data = astra_network_data(s, physical, bytes, data_offset,
+                                  count * ASTRA_NETWORK_ADDRESS_SIZE);
+        if (data == NULL) {
+            stl_be_p(command + 68, ASTRA_NETWORK_INVALID);
+            return;
+        }
+        for (uint32_t index = 0; index < count; ++index) {
+            AstraNetworkAddress *address = &g_array_index(
+                job->addresses, AstraNetworkAddress, index);
+
+            astra_network_command_address(
+                data + index * ASTRA_NETWORK_ADDRESS_SIZE, address);
+        }
+        stl_be_p(command + 68, count == 0 ?
+                 ASTRA_NETWORK_NAME_NOT_FOUND : ASTRA_NETWORK_OK);
+        stl_be_p(command + 80, count);
+        g_hash_table_remove(s->network.resolvers, GUINT_TO_POINTER(token));
+    }
+}
+
+static void astra_network_execute_command(Astra68State *s, uint8_t *command,
+                                          uint32_t physical, uint32_t bytes)
+{
+    uint16_t operation;
+    uint32_t id;
+    uint32_t generation;
+    AstraNetworkEndpointState *endpoint;
+    struct sockaddr_storage address;
+    socklen_t address_length;
+    uint32_t status = ASTRA_NETWORK_OK;
+
+    astra_network_command_clear_result(command);
+    if (ldl_be_p(command) != NETWORK_COMMAND_BYTES ||
+        lduw_be_p(command + 4) != ASTRA_NETWORK_HOST_COMMAND_VERSION) {
+        return;
+    }
+    operation = lduw_be_p(command + 6);
+    id = ldl_be_p(command + 12);
+    generation = ldl_be_p(command + 16);
+    if (operation == ASTRA_NETWORK_HOST_RESOLVE) {
+        astra_network_execute_resolve(s, command, physical, bytes);
+        return;
+    }
+    if (operation == ASTRA_NETWORK_HOST_CANCEL) {
+        uint32_t token = ldl_be_p(command + 24);
+        AstraNetworkResolveJob *job = g_hash_table_lookup(
+            s->network.resolvers, GUINT_TO_POINTER(token));
+
+        if (job == NULL) {
+            return;
+        }
+        if (job->done) {
+            g_hash_table_remove(s->network.resolvers,
+                                GUINT_TO_POINTER(token));
+        } else {
+            job->discard = true;
+        }
+        stl_be_p(command + 68, ASTRA_NETWORK_CANCELLED);
+        return;
+    }
+    if (operation == ASTRA_NETWORK_HOST_ENDPOINT_OPEN) {
+        uint16_t family = lduw_be_p(command + 20);
+        uint8_t type = command[22];
+        uint8_t protocol = command[23];
+        int native_family = family == ASTRA_NETWORK_FAMILY_IPV4 ? AF_INET :
+                            family == ASTRA_NETWORK_FAMILY_IPV6 ? AF_INET6 :
+                            -1;
+        int native_type = type == ASTRA_NETWORK_TYPE_STREAM ? SOCK_STREAM :
+                          type == ASTRA_NETWORK_TYPE_DATAGRAM ? SOCK_DGRAM :
+                          -1;
+        int fd;
+
+        if (native_family < 0 || native_type < 0 ||
+            (protocol != ASTRA_NETWORK_PROTOCOL_DEFAULT &&
+             protocol != ASTRA_NETWORK_PROTOCOL_ICMP &&
+             protocol != ASTRA_NETWORK_PROTOCOL_TCP &&
+             protocol != ASTRA_NETWORK_PROTOCOL_UDP &&
+             protocol != ASTRA_NETWORK_PROTOCOL_ICMPV6)) {
+            return;
+        }
+        fd = qemu_socket(native_family, native_type, protocol);
+        if (fd < 0) {
+            stl_be_p(command + 68,
+                     astra_network_status_from_errno(errno));
+            return;
+        }
+        qemu_socket_set_nonblock(fd);
+        endpoint = astra_network_endpoint_create(s, fd, family, type,
+                                                 protocol);
+        stl_be_p(command + 68, ASTRA_NETWORK_OK);
+        stl_be_p(command + 72, endpoint->id);
+        stl_be_p(command + 76, endpoint->generation);
+        return;
+    }
+    endpoint = astra_network_endpoint(s, id, generation);
+    if (endpoint == NULL) {
+        return;
+    }
+    switch (operation) {
+    case ASTRA_NETWORK_HOST_BIND:
+    case ASTRA_NETWORK_HOST_CONNECT:
+        if (!astra_network_guest_address(command + 28, &address,
+                                          &address_length)) {
+            status = ASTRA_NETWORK_INVALID;
+            break;
+        }
+        if (operation == ASTRA_NETWORK_HOST_BIND) {
+            if (bind(endpoint->fd, (struct sockaddr *)&address,
+                     address_length) < 0) {
+                status = astra_network_status_from_errno(errno);
+            }
+        } else if (connect(endpoint->fd, (struct sockaddr *)&address,
+                           address_length) < 0) {
+            status = astra_network_status_from_errno(errno);
+            if (status == ASTRA_NETWORK_IN_PROGRESS) {
+                endpoint->connecting = true;
+            }
+        }
+        break;
+    case ASTRA_NETWORK_HOST_LISTEN:
+        if (listen(endpoint->fd, ldl_be_p(command + 24)) < 0) {
+            status = astra_network_status_from_errno(errno);
+        } else {
+            endpoint->listening = true;
+        }
+        break;
+    case ASTRA_NETWORK_HOST_ACCEPT: {
+        address_length = sizeof(address);
+        int fd = qemu_accept(endpoint->fd, (struct sockaddr *)&address,
+                             &address_length);
+
+        if (fd < 0) {
+            status = astra_network_status_from_errno(errno);
+        } else {
+            AstraNetworkEndpointState *accepted;
+
+            qemu_socket_set_nonblock(fd);
+            accepted = astra_network_endpoint_create(
+                s, fd, endpoint->family, endpoint->type, endpoint->protocol);
+            stl_be_p(command + 72, accepted->id);
+            stl_be_p(command + 76, accepted->generation);
+            if (!astra_network_store_address(command + 84,
+                                              (struct sockaddr *)&address,
+                                              address_length)) {
+                g_hash_table_remove(s->network.endpoints,
+                                    GUINT_TO_POINTER(accepted->id));
+                status = ASTRA_NETWORK_IO;
+            }
+        }
+        break;
+    }
+    case ASTRA_NETWORK_HOST_SEND:
+    case ASTRA_NETWORK_HOST_RECEIVE: {
+        uint32_t offset = ldl_be_p(command + 56);
+        uint32_t length = ldl_be_p(command + 60);
+        uint32_t capacity = ldl_be_p(command + 64);
+        uint32_t flags = ldl_be_p(command + 8);
+        uint8_t *data = astra_network_data(
+            s, physical, bytes, offset,
+            operation == ASTRA_NETWORK_HOST_SEND ? length : capacity);
+        int native_flags = 0;
+        ssize_t moved;
+
+        if (data == NULL || (flags & ~(ASTRA_NETWORK_MESSAGE_PEEK |
+                                       ASTRA_NETWORK_MESSAGE_WAIT_ALL |
+                                       ASTRA_NETWORK_MESSAGE_TRUNCATE)) != 0) {
+            status = ASTRA_NETWORK_INVALID;
+            break;
+        }
+        if ((flags & ASTRA_NETWORK_MESSAGE_PEEK) != 0) native_flags |= MSG_PEEK;
+        if ((flags & ASTRA_NETWORK_MESSAGE_WAIT_ALL) != 0)
+            native_flags |= MSG_WAITALL;
+#ifdef MSG_TRUNC
+        if ((flags & ASTRA_NETWORK_MESSAGE_TRUNCATE) != 0)
+            native_flags |= MSG_TRUNC;
+#endif
+#ifdef MSG_NOSIGNAL
+        if (operation == ASTRA_NETWORK_HOST_SEND) native_flags |= MSG_NOSIGNAL;
+#endif
+        address_length = sizeof(address);
+        if (operation == ASTRA_NETWORK_HOST_SEND) {
+            if (lduw_be_p(command + 32) != ASTRA_NETWORK_FAMILY_UNSPEC) {
+                if (!astra_network_guest_address(command + 28, &address,
+                                                  &address_length)) {
+                    status = ASTRA_NETWORK_INVALID;
+                    break;
+                }
+                moved = sendto(endpoint->fd, data, length, native_flags,
+                               (struct sockaddr *)&address, address_length);
+            } else {
+                moved = send(endpoint->fd, data, length, native_flags);
+            }
+        } else {
+            moved = recvfrom(endpoint->fd, data, capacity, native_flags,
+                             (struct sockaddr *)&address, &address_length);
+        }
+        if (moved < 0) {
+            status = astra_network_status_from_errno(errno);
+        } else if (moved == 0 && operation == ASTRA_NETWORK_HOST_RECEIVE &&
+                   endpoint->type == ASTRA_NETWORK_TYPE_STREAM) {
+            status = ASTRA_NETWORK_PEER_CLOSED;
+        } else {
+            stl_be_p(command + 80, moved);
+            if (operation == ASTRA_NETWORK_HOST_RECEIVE) {
+                (void)astra_network_store_address(
+                    command + 84, (struct sockaddr *)&address,
+                    address_length);
+            }
+        }
+        break;
+    }
+    case ASTRA_NETWORK_HOST_GET_LOCAL_ADDRESS:
+    case ASTRA_NETWORK_HOST_GET_PEER_ADDRESS:
+        address_length = sizeof(address);
+        if ((operation == ASTRA_NETWORK_HOST_GET_LOCAL_ADDRESS ?
+             getsockname(endpoint->fd, (struct sockaddr *)&address,
+                         &address_length) :
+             getpeername(endpoint->fd, (struct sockaddr *)&address,
+                         &address_length)) < 0) {
+            status = astra_network_status_from_errno(errno);
+        } else if (!astra_network_store_address(
+                       command + 84, (struct sockaddr *)&address,
+                       address_length)) {
+            status = ASTRA_NETWORK_IO;
+        }
+        break;
+    case ASTRA_NETWORK_HOST_GET_OPTION: {
+        uint32_t option = ldl_be_p(command + 24);
+        int level;
+        int name;
+        int value = 0;
+        socklen_t length = sizeof(value);
+
+        if (option == ASTRA_NETWORK_OPTION_ERROR) {
+            value = endpoint->error_status;
+            endpoint->error_status = 0;
+        } else if (option == ASTRA_NETWORK_OPTION_TYPE) {
+            value = endpoint->type;
+        } else if (!astra_network_socket_option(option, &level, &name)) {
+            status = ASTRA_NETWORK_UNSUPPORTED;
+        } else if (getsockopt(endpoint->fd, level, name,
+                              (void *)&value, &length) < 0) {
+            status = astra_network_status_from_errno(errno);
+        }
+        stl_be_p(command + 80, value);
+        break;
+    }
+    case ASTRA_NETWORK_HOST_SET_OPTION: {
+        uint32_t option = ldl_be_p(command + 24);
+        int level;
+        int name;
+        int value = ldl_be_p(command + 8);
+
+        if (!astra_network_socket_option(option, &level, &name)) {
+            status = ASTRA_NETWORK_UNSUPPORTED;
+        } else if (setsockopt(endpoint->fd, level, name,
+                              (void *)&value, sizeof(value)) < 0) {
+            status = astra_network_status_from_errno(errno);
+        }
+        break;
+    }
+    case ASTRA_NETWORK_HOST_SHUTDOWN: {
+        uint32_t flags = ldl_be_p(command + 8);
+        int how = flags == ASTRA_NETWORK_SHUTDOWN_READ ? SHUT_RD :
+                  flags == ASTRA_NETWORK_SHUTDOWN_WRITE ? SHUT_WR :
+                  flags == (ASTRA_NETWORK_SHUTDOWN_READ |
+                            ASTRA_NETWORK_SHUTDOWN_WRITE) ? SHUT_RDWR : -1;
+
+        if (how < 0) {
+            status = ASTRA_NETWORK_INVALID;
+        } else if (shutdown(endpoint->fd, how) < 0) {
+            status = astra_network_status_from_errno(errno);
+        }
+        break;
+    }
+    case ASTRA_NETWORK_HOST_ARM:
+        if ((ldl_be_p(command + 8) &
+             ~(ASTRA_NETWORK_READY_READABLE |
+               ASTRA_NETWORK_READY_WRITABLE |
+               ASTRA_NETWORK_READY_CONNECTED |
+               ASTRA_NETWORK_READY_ACCEPTABLE)) != 0) {
+            status = ASTRA_NETWORK_INVALID;
+        } else {
+            stl_be_p(command + 80,
+                     astra_network_arm_endpoint(endpoint,
+                                                ldl_be_p(command + 8)));
+        }
+        break;
+    case ASTRA_NETWORK_HOST_CLOSE:
+        g_hash_table_remove(s->network.endpoints, GUINT_TO_POINTER(id));
+        break;
+    default:
+        status = ASTRA_NETWORK_UNSUPPORTED;
+        break;
+    }
+    stl_be_p(command + 68, status);
+}
+
+static void astra_network_execute(Astra68State *s)
+{
+    uint8_t *base;
+
+    s->network.completed = 0;
+    s->network.status = ASTRA_SYSCALL_INVALID_ARGUMENT;
+    base = astra_network_data(s, s->network.request_buffer,
+                              s->network.request_bytes, 0,
+                              s->network.request_bytes);
+    if (base == NULL || s->network.request_count == 0 ||
+        s->network.request_count > s->network.request_bytes /
+                                       NETWORK_COMMAND_BYTES) {
+        return;
+    }
+    for (uint32_t index = 0; index < s->network.request_count; ++index) {
+        astra_network_execute_command(
+            s, base + index * NETWORK_COMMAND_BYTES,
+            s->network.request_buffer, s->network.request_bytes);
+        ++s->network.completed;
+    }
+    s->network.status = ASTRA_SYSCALL_OK;
+}
+
 static uint32_t astra_pending_raw(Astra68State *s)
 {
     uint32_t pending = s->irq_soft;
@@ -1025,6 +1936,9 @@ static uint32_t astra_pending_raw(Astra68State *s)
         (astra_block_completion_level(&s->block) != 0 ||
          s->block.state_change)) {
         pending |= 1u << IRQ_SOURCE_STORAGE;
+    }
+    if (s->network.ready_pending) {
+        pending |= 1u << IRQ_SOURCE_NETWORK;
     }
     return pending;
 }
@@ -1170,20 +2084,13 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
         return cycles >> 32;
     case 0x12c:
         return qemu_clock_get_ns(QEMU_CLOCK_REALTIME) / 1000u;
-    /*
-     * The date. QEMU_CLOCK_HOST is the host's wall clock in nanoseconds since
-     * the epoch, which on this machine and on the board is a Linux clock that
-     * NTP keeps honest -- so the guest's idea of the time is the host's, with
-     * no synchronisation protocol of its own to drift or to get wrong.
-     *
-     * Latched on the low read, as the contract says: the two halves are read
-     * by separate bus cycles and a value that ticked between them would be a
-     * second off once per second.
-     */
+    /* Astra sets this virtual RTC after its own NTP service synchronizes. */
     case 0x420:
-        return RTC_VALID | RTC_ZONE_VALID;
+        return s->rtc_valid ? RTC_VALID | RTC_ZONE_VALID : 0u;
     case 0x424:
-        s->rtc_latch = (uint64_t)qemu_clock_get_ns(QEMU_CLOCK_HOST);
+        s->rtc_latch = s->rtc_valid ? s->rtc_base_ns +
+            (uint64_t)qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) -
+                s->rtc_base_clock_ns : 0u;
         return (uint32_t)s->rtc_latch;
     case 0x428:
         return (uint32_t)(s->rtc_latch >> 32);
@@ -1194,17 +2101,9 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
      * a timezone database to recompute what this side already knows.
      */
     case 0x42c:
-        return (uint32_t)(int32_t)astra_host_utc_offset(NULL);
-    case 0x430: {
-        char zone[8] = {0};
-        uint32_t packed = 0;
-
-        (void)astra_host_utc_offset(zone);
-        for (int index = 0; index < 4; ++index) {
-            packed = (packed << 8) | (uint8_t)zone[index];
-        }
-        return packed;
-    }
+        return 0u;
+    case 0x430:
+        return 0x55544300u; /* UTC */
     case 0x150:
         return astra_block_present(s) ? BLOCK_ID_MAGIC : 0;
     case 0x154:
@@ -1293,6 +2192,26 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
         return astra_input_level(&s->input) != 0 ?
                s->input.queue[s->input.head].host_generation :
                s->input.host_generation;
+    case 0x820: return NETWORK_ID_MAGIC;
+    case 0x824: return NETWORK_VERSION_1_0;
+    case 0x828:
+        return ASTRA_NETWORK_CAP_IPV4 | ASTRA_NETWORK_CAP_IPV6 |
+               ASTRA_NETWORK_CAP_TCP | ASTRA_NETWORK_CAP_UDP |
+               ASTRA_NETWORK_CAP_RESOLVE | ASTRA_NETWORK_CAP_ICMP;
+    case 0x82c: return ASTRA_NETWORK_STATE_LINK_UP;
+    case 0x830: return s->network.host_generation;
+    case 0x834: return 2u * MiB;
+    case 0x838:
+        return (1u << 16) | NETWORK_QUEUE_READY |
+               (s->network.ready_pending ?
+                    NETWORK_QUEUE_EVENT_PENDING : 0u);
+    case 0x83c: return s->network.request_buffer;
+    case 0x840: return s->network.request_bytes;
+    case 0x844: return s->network.request_count;
+    case 0x84c: return s->network.status;
+    case 0x850: return s->network.completed;
+    case 0x854: return g_hash_table_size(s->network.endpoints);
+    case 0x858: return s->network.ready_sequence;
     default:
         if (offset >= 0x380 && offset <= 0x3fc && !(offset & 3)) {
             return s->irq_config[(offset - 0x380) / 4];
@@ -1357,6 +2276,15 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
         if (value & 1) {
             astra_bist_materialize(s);
         }
+        break;
+    case 0x434:
+        s->rtc_set_high = value;
+        break;
+    case 0x438:
+        s->rtc_base_ns = ((uint64_t)s->rtc_set_high << 32) | value;
+        s->rtc_base_clock_ns =
+            (uint64_t)qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+        s->rtc_valid = true;
         break;
     case 0x304:
         s->irq_enable = value;
@@ -1428,6 +2356,25 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
             s->input.overflow = false;
         }
         astra_update_irq(s);
+        break;
+    case 0x83c: s->network.request_buffer = value; break;
+    case 0x840: s->network.request_bytes = value; break;
+    case 0x844: s->network.request_count = value; break;
+    case 0x848:
+        if ((value & NETWORK_EXECUTE_BIT) != 0) {
+            astra_network_execute(s);
+        }
+        break;
+    case 0x85c:
+        if ((value & NETWORK_READY_ACK_BIT) != 0) {
+            s->network.ready_pending = false;
+            astra_update_irq(s);
+        }
+        break;
+    case 0x860:
+        if ((value & NETWORK_RESET_BIT) != 0) {
+            astra_network_reset(s);
+        }
         break;
     default:
         if (offset >= 0x380 && offset <= 0x3fc && !(offset & 3)) {
@@ -1949,6 +2896,11 @@ static void astra_machine_reset(void *opaque)
     s->cpu->env.aregs[7] = s->initial_sp;
     s->cpu->env.pc = s->initial_pc;
     s->reset_clock_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    s->rtc_latch = 0u;
+    s->rtc_base_ns = 0u;
+    s->rtc_base_clock_ns = 0u;
+    s->rtc_set_high = 0u;
+    s->rtc_valid = false;
     s->scratch = 0u;
     s->irq_enable = 0u;
     s->irq_soft = 0u;
@@ -2016,6 +2968,7 @@ static void astra_machine_reset(void *opaque)
     ++s->block.host_generation;
     s->block.state_change = astra_block_present(s);
     astra_display_reset(s);
+    astra_network_reset(s);
     astra_update_irq(s);
 }
 
@@ -2035,6 +2988,10 @@ static void astra68_init(MachineState *machine)
 
     s->trace_timers = g_getenv("ASTRA_QEMU_TIMER_TRACE") != NULL;
     s->input.host_generation = 0;
+    s->network.endpoints = g_hash_table_new_full(
+        g_direct_hash, g_direct_equal, NULL, astra_network_endpoint_free);
+    s->network.resolvers = g_hash_table_new_full(
+        g_direct_hash, g_direct_equal, NULL, astra_network_resolver_free);
     astra_input_machine = s;
     object_property_add_uint64_ptr(OBJECT(machine),
                                    "astra-block-read-requests",

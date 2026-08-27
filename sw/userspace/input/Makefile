@@ -22,8 +22,7 @@ HOST_TEST := build/host/test_input_service_core
 all: $(TARGET)
 
 $(TARGET): $(TARGET_OBJECTS)
-	@mkdir -p $(@D)
-	$(AR) rcs $@ $^
+	$(ASTRA_REPLACE_ARCHIVE)
 
 build/m68k/%.o: src/%.c $(HEADERS)
 	@mkdir -p $(@D)

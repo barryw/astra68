@@ -39,6 +39,9 @@ uint32_t astra_vfs_port_connect(AstraVfsClient *client, uint32_t service);
 /* Version 8: defer HELLO and fuse it with the first path operation. */
 uint32_t astra_vfs_port_connect_lazy(AstraVfsClient *client,
                                      uint32_t service);
+/* Drop this process's transport handles without sending BYE.  A fork child
+ * inherited the handles, but not ownership of the parent's service session. */
+void astra_vfs_port_abandon(AstraVfsClient *client);
 /*
  * Open, read whole, close -- one round trip -- answered in the transfer area.
  *

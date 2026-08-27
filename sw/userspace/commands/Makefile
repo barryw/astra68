@@ -19,6 +19,8 @@ RUNTIME := ../runtime
 STREAMS := ../streams
 VFS := ../vfs
 POSIX := ../posix
+NTP := ../ntp
+NETWORK := ../network
 NDK := ../../../ndk
 LUA := ../../../third_party/lua/src
 VIM_SOURCE ?= $(HOME)/vim-astra-v9.2.1001/src
@@ -28,6 +30,8 @@ VIM_IMAGE := $(VIM_SOURCE)/vim
 PICOLIBC ?= $(HOME)/picolibc-astra
 CPPFLAGS := -I../../include -I$(RUNTIME)/include -I$(STREAMS)/include \
 	-I$(VFS)/include -I$(POSIX)/include -I$(NDK)/include \
+	-I$(NTP)/include \
+	-I$(NETWORK)/include \
 	-isystem $(PICOLIBC)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
@@ -40,12 +44,14 @@ RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 POSIX_LIB := $(POSIX)/build/m68k/libastraposix.a
+NTP_LIB := $(NTP)/build/m68k/libastrantp.a
+NETWORK_LIB := $(NETWORK)/build/m68k/libastranetwork.a
 PICOLIBC_LIB := $(PICOLIBC)/lib/libc.a
 PICOLIBC_MATH := $(PICOLIBC)/lib/libm.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0.o
 
 COMMANDS := status events devices which hello ls ps cat mkdir rm posix \
-            heapbench date echo lua vim
+            heapbench date echo ntp ping lua vim
 NATIVE_COMMANDS := $(filter-out lua vim,$(COMMANDS))
 ANALYZER_OBJECTS := $(patsubst %,build/analyzer/%.o,$(NATIVE_COMMANDS)) \
 	build/analyzer/lua-adapter.o
@@ -53,7 +59,8 @@ ANALYZER_OBJECTS := $(patsubst %,build/analyzer/%.o,$(NATIVE_COMMANDS)) \
 # is, because a command carries no more DWARF onto a card than the supervisor
 # carries into ROM. The unstripped ELF stays beside it for a debugger.
 IMAGES := $(patsubst %,build/m68k/%,$(COMMANDS))
-ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(STREAMS) $(VFS) $(POSIX)
+ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(STREAMS) $(VFS) $(POSIX) $(NTP) \
+	$(NETWORK)
 ASTRA_PROGRAM_TARGETS := $(IMAGES) size
 include ../program.mk
 
@@ -73,7 +80,7 @@ LUA_CPPFLAGS := -I$(LUA) \
 LUA_FLAGS := -std=gnu11 -Wall -Wextra -Werror
 
 $(LUA_LIBRARY): $(LUA_OBJECTS)
-	$(AR) rcs $@ $^
+	$(ASTRA_REPLACE_ARCHIVE)
 
 build/m68k/lua-obj/%.o: $(LUA)/%.c
 	@mkdir -p $(@D)
@@ -131,11 +138,13 @@ build/m68k/vim: $(VIM_IMAGE)
 	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@
 
 build/m68k/%: $$*/$$*.c $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
-		$(POSIX_LIB) $(RUNTIME_CRT0) $(RUNTIME)/astra_user.ld
+		$(POSIX_LIB) $(NTP_LIB) $(NETWORK_LIB) $(RUNTIME_CRT0) \
+		$(RUNTIME)/astra_user.ld
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
 		$(LINK_FLAGS) -o $@.elf $(RUNTIME_CRT0) $< \
-		-Wl,--start-group $(VFS_LIB) $(STREAMS_LIB) $(POSIX_LIB) \
+		-Wl,--start-group $(NTP_LIB) $(NETWORK_LIB) $(VFS_LIB) \
+		$(STREAMS_LIB) $(POSIX_LIB) \
 		$(RUNTIME_LIB) $(PICOLIBC_LIB) -lgcc -Wl,--end-group
 	$(OBJCOPY) --strip-all --remove-section=.astra_events $@.elf $@
 

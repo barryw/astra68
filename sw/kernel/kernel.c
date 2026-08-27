@@ -1,7 +1,9 @@
 #include <astra/block.h>
 #include <astra/boot.h>
+#include <astra/clock.h>
 #include <astra/display.h>
 #include <astra/input.h>
+#include <astra/network.h>
 #include <astra/supervisor.h>
 
 #include "kernel_build_info.h"
@@ -42,6 +44,7 @@
 #define KERNEL_SELFTEST_USER_ADDRESS 0x10000000u
 #define KERNEL_SOAK_REPORT_INTERVAL 1000u
 #define PANIC_SCREEN_TRACE_RECORDS 6u
+#define PANIC_REPORT_TRACE_RECORDS 32u
 
 extern uint8_t _kernel_entry[];
 extern uint8_t _kernel_image_start[];
@@ -149,6 +152,24 @@ static bool display_device_reset(uint32_t device_id, uint32_t generation,
            kernel_platform_display_reset();
 }
 
+static bool network_device_reset(uint32_t device_id, uint32_t generation,
+                                 void *context)
+{
+    (void)generation;
+    (void)context;
+    return device_id == ASTRA_DEVICE_ID_NETWORK0 &&
+           kernel_platform_network_reset();
+}
+
+static bool clock_device_keep(uint32_t device_id, uint32_t generation,
+                              void *context)
+{
+    (void)generation;
+    (void)context;
+    /* Losing the setter must not make a previously synchronized clock vanish. */
+    return device_id == ASTRA_DEVICE_ID_CLOCK0;
+}
+
 static bool register_physical_devices(void)
 {
     KernelDeviceDefinition display;
@@ -169,6 +190,24 @@ static bool register_physical_devices(void)
         ASTRA_DEVICE_ID_BLOCK0,
         ASTRA_DEVICE_CLASS_BLOCK,
         ASTRA_BLOCK_CAP_READ | ASTRA_BLOCK_CAP_WRITE | ASTRA_BLOCK_CAP_FLUSH
+    };
+    static const KernelDeviceDefinition network = {
+        network_device_reset,
+        network_device_reset,
+        NULL,
+        ASTRA_DEVICE_ID_NETWORK0,
+        ASTRA_DEVICE_CLASS_NETWORK,
+        ASTRA_NETWORK_CAP_IPV4 | ASTRA_NETWORK_CAP_IPV6 |
+            ASTRA_NETWORK_CAP_TCP | ASTRA_NETWORK_CAP_UDP |
+            ASTRA_NETWORK_CAP_RESOLVE | ASTRA_NETWORK_CAP_ICMP
+    };
+    static const KernelDeviceDefinition clock = {
+        clock_device_keep,
+        clock_device_keep,
+        NULL,
+        ASTRA_DEVICE_ID_CLOCK0,
+        ASTRA_DEVICE_CLASS_CLOCK,
+        0u
     };
 
     display.quiesce = display_device_reset;
@@ -194,6 +233,12 @@ static bool register_physical_devices(void)
         if (kernel_device_register(&block) != KERNEL_DEVICE_OK)
             return false;
     }
+    if (kernel_platform_network_present()) {
+        if (kernel_device_register(&network) != KERNEL_DEVICE_OK)
+            return false;
+    }
+    if (kernel_device_register(&clock) != KERNEL_DEVICE_OK)
+        return false;
     return true;
 }
 #if ASTRA_KERNEL_SOAK_SELFTEST
@@ -423,8 +468,9 @@ static void panic_worker_state(void)
 
 static void panic_trace_records(void)
 {
-    KernelTraceRecord records[16];
-    uint32_t count = kernel_trace_copy_recent(records, 16u);
+    KernelTraceRecord records[PANIC_REPORT_TRACE_RECORDS];
+    uint32_t count = kernel_trace_copy_recent(
+        records, PANIC_REPORT_TRACE_RECORDS);
 
     console_puts("Trace: newest ");
     console_dec32(count);
@@ -1112,12 +1158,31 @@ static void start_initial_user_image(void)
         capabilities[capability_count].rights = KERNEL_IRQ_RIGHTS;
         ++capability_count;
     }
+    if (kernel_platform_network_present()) {
+        capabilities[capability_count].name =
+            ASTRA_CAPABILITY_NETWORK_DEVICE;
+        capabilities[capability_count].kind =
+            KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+        capabilities[capability_count].device_id = ASTRA_DEVICE_ID_NETWORK0;
+        capabilities[capability_count].rights = KERNEL_DEVICE_RIGHTS;
+        ++capability_count;
+        capabilities[capability_count].name = ASTRA_CAPABILITY_NETWORK_IRQ;
+        capabilities[capability_count].kind = KERNEL_PROCESS_BOOTSTRAP_IRQ;
+        capabilities[capability_count].irq_source = IRQ_SRC_NETWORK;
+        capabilities[capability_count].rights = KERNEL_IRQ_RIGHTS;
+        ++capability_count;
+    }
+    capabilities[capability_count].name = ASTRA_CAPABILITY_CLOCK;
+    capabilities[capability_count].kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+    capabilities[capability_count].device_id = ASTRA_DEVICE_ID_CLOCK0;
+    capabilities[capability_count].rights = KERNEL_DEVICE_RIGHTS;
+    ++capability_count;
     /*
      * Six sources, six slots. The compile-time check is here because the
      * array is sized by the ABI maximum and another grant would otherwise
      * overrun it silently.
      */
-    _Static_assert(KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX >= 6u,
+    _Static_assert(KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX >= 9u,
                    "bootstrap capability slots exhausted");
 
     status = kernel_process_create_executable(
@@ -1645,12 +1710,6 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     }
     kernel_bytes_copy(&boot_info, firmware_info, sizeof(boot_info));
     validate_image_contract();
-    {
-        uint64_t wall_ns;
-
-        if (!kernel_platform_wall_clock_ns(&wall_ns))
-            kernel_panic("valid host wall clock required");
-    }
     if (kernel_memory_init(&boot_info) != KERNEL_MEMORY_OK)
         kernel_panic("physical memory map rejected");
     if (kernel_vm_init() != KERNEL_VM_OK)
@@ -1720,7 +1779,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
 
         if (kernel_platform_wall_clock_ns(&wall_ns) &&
             astra_civil_iso8601(wall_ns, stamp, sizeof(stamp)) != 0u)
-            console_printf("Wall clock ......... %s, from the host\n", stamp);
+            console_printf("Wall clock ......... %s\n", stamp);
         else
             console_puts("Wall clock ......... not set; files will have no "
                          "dates\n");

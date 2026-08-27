@@ -1,4 +1,5 @@
 #include <astra/runtime.h>
+#include <astra/posix_descriptor.h>
 #include <astra/status.h>
 #include <astra/syscall.h>
 
@@ -31,11 +32,16 @@ discard_inherited_children(void)
 pid_t
 fork(void)
 {
-    AstraPosixChild *child = malloc(sizeof(*child));
+    AstraPosixChild *child;
     uint32_t handle;
     uint32_t process_id;
     uint32_t result;
 
+    if (!astra_posix_file_fork_ready()) {
+        errno = ENOTSUP;
+        return (pid_t)-1;
+    }
+    child = malloc(sizeof(*child));
     if (child == NULL) {
         errno = ENOMEM;
         return (pid_t)-1;
@@ -51,6 +57,9 @@ fork(void)
     if (process_id == 0u) {
         discard_inherited_children();
         free(child);
+        if (astra_posix_file_after_fork_child() != 0)
+            _exit(127);
+        astra_posix_socket_after_fork_child();
         return (pid_t)0;
     }
     if (handle == 0u) {

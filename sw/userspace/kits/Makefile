@@ -5,20 +5,27 @@ INTERFACE_LIBRARY := ../interface/build/m68k/libraries/interface.library
 INPUT_LIBRARY := ../interface/build/m68k/libraries/input.library
 EVENTS_LIBRARY := ../events/build/m68k/libraries/events.library
 MESSAGING_LIBRARY := ../messaging/build/m68k/libraries/messaging.library
+NETWORK_LIBRARY := ../network/build/m68k/libraries/network.library
+CONFIG_LIBRARY := ../config/build/m68k/libraries/config.library
 BUNDLE_TOOL := ../../../tools/build/astra-bundle
 GRAPHICS := build/Graphics.kit
 FILESYSTEM := build/Filesystem.kit
 INTERFACE := build/Interface.kit
 EVENTS := build/Events.kit
 MESSAGING := build/Messaging.kit
+NETWORK := build/Network.kit
+CONFIGURATION := build/Configuration.kit
 GRAPHICS_STAMP := build/.Graphics.kit.stamp
 FILESYSTEM_STAMP := build/.Filesystem.kit.stamp
 INTERFACE_STAMP := build/.Interface.kit.stamp
 EVENTS_STAMP := build/.Events.kit.stamp
 MESSAGING_STAMP := build/.Messaging.kit.stamp
+NETWORK_STAMP := build/.Network.kit.stamp
+CONFIGURATION_STAMP := build/.Configuration.kit.stamp
 
 all: $(GRAPHICS_STAMP) $(FILESYSTEM_STAMP) $(INTERFACE_STAMP) \
-	$(EVENTS_STAMP) $(MESSAGING_STAMP)
+	$(EVENTS_STAMP) $(MESSAGING_STAMP) $(NETWORK_STAMP) \
+	$(CONFIGURATION_STAMP)
 
 $(GRAPHICS_LIBRARY) $(FONT_LIBRARY):
 	$(MAKE) -C ../graphics all
@@ -35,7 +42,13 @@ $(EVENTS_LIBRARY):
 $(MESSAGING_LIBRARY):
 	$(MAKE) -C ../messaging all
 
-$(BUNDLE_TOOL):
+$(NETWORK_LIBRARY): FORCE
+	$(MAKE) -C ../network all
+
+$(CONFIG_LIBRARY): FORCE
+	$(MAKE) -C ../config all
+
+$(BUNDLE_TOOL): FORCE
 	$(MAKE) -C ../../../tools all
 
 $(GRAPHICS_STAMP): Graphics.kit/manifest $(GRAPHICS_LIBRARY) \
@@ -87,6 +100,23 @@ $(MESSAGING_STAMP): Messaging.kit/manifest $(MESSAGING_LIBRARY) $(BUNDLE_TOOL)
 	$(BUNDLE_TOOL) check $(MESSAGING)
 	@touch $@
 
+$(NETWORK_STAMP): Network.kit/manifest $(NETWORK_LIBRARY) $(BUNDLE_TOOL)
+	@mkdir -p $(NETWORK)/libraries/network.library/abi-1/1.0.0/m68k-68030
+	cp Network.kit/manifest $(NETWORK)/manifest
+	cp $(NETWORK_LIBRARY) \
+		$(NETWORK)/libraries/network.library/abi-1/1.0.0/m68k-68030/network.library
+	$(BUNDLE_TOOL) check $(NETWORK)
+	@touch $@
+
+$(CONFIGURATION_STAMP): Configuration.kit/manifest $(CONFIG_LIBRARY) \
+		$(BUNDLE_TOOL)
+	@mkdir -p $(CONFIGURATION)/libraries/config.library/abi-1/1.0.0/m68k-68030
+	cp Configuration.kit/manifest $(CONFIGURATION)/manifest
+	cp $(CONFIG_LIBRARY) \
+		$(CONFIGURATION)/libraries/config.library/abi-1/1.0.0/m68k-68030/config.library
+	$(BUNDLE_TOOL) check $(CONFIGURATION)
+	@touch $@
+
 test: all
 
 sanitize analyze:
@@ -95,4 +125,6 @@ sanitize analyze:
 clean:
 	rm -rf build
 
-.PHONY: all test sanitize analyze clean
+FORCE:
+
+.PHONY: all test sanitize analyze clean FORCE

@@ -20,18 +20,25 @@
  */
 
 #include <astra/posix.h>
+#include <astra/network.h>
+#include <astra/posix_descriptor.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 
+#include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <netdb.h>
+#include <netinet/in.h>
 #include <sys/resource.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <stdint.h>
 #include <termios.h>
 #include <unistd.h>
@@ -43,6 +50,7 @@
  * checks against is the one the POSIX layer actually defines.
  */
 extern void *sbrk(intptr_t increment);
+extern char **environ;
 
 ASTRA_PROGRAM("posix", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
@@ -116,6 +124,10 @@ enum {
     FAIL_PIPE_CONTENT = 75,
     FAIL_PIPE_CLOSE = 76,
     FAIL_PIPE_EOF = 77,
+    FAIL_DNS = 78,
+    FAIL_UDP = 79,
+    FAIL_TCP = 80,
+    FAIL_SOCKET_EXEC = 81,
 };
 
 #define DIRECTORY "posixcheck"
@@ -139,6 +151,39 @@ complain(int code, const char *what)
                    what, strerror(errno));
     (void)astra_log(report);
     return code;
+}
+
+static int
+complain_gai(int code, const char *what, int error)
+{
+    char report[160];
+    const char *reason = error == EAI_SYSTEM ? strerror(errno) :
+                         gai_strerror(error);
+
+    (void)fprintf(stderr, "posix: %s failed: %s\n", what, reason);
+    (void)fflush(stderr);
+    (void)snprintf(report, sizeof(report), "posix: %s failed: %s",
+                   what, reason);
+    (void)astra_log(report);
+    return code;
+}
+
+static int
+network_child(void)
+{
+    char reply[4];
+
+    if (send(3, "ping", 4u, 0) != 4)
+        return complain(FAIL_SOCKET_EXEC, "TCP exec child send");
+    if (recv(3, reply, sizeof(reply), MSG_WAITALL) != 4)
+        return complain(FAIL_SOCKET_EXEC, "TCP exec child receive");
+    if (memcmp(reply, "pong", 4u) != 0) {
+        errno = EPROTO;
+        return complain(FAIL_SOCKET_EXEC, "TCP exec child reply");
+    }
+    if (close(3) != 0)
+        return complain(FAIL_SOCKET_EXEC, "TCP exec child close");
+    return 0;
 }
 
 static int
@@ -172,6 +217,9 @@ main(int argc, char **argv)
     struct dirent *entry;
     int found = 0;
     int fd;
+
+    if (argc == 2 && strcmp(argv[1], "--network-child") == 0)
+        return network_child();
 
     if (argc != 1 &&
         argc != (int)(sizeof(expected_arguments) /
@@ -557,6 +605,130 @@ main(int argc, char **argv)
         if (setpriority(PRIO_PROCESS, 0, old_nice) != 0 ||
             getpriority(PRIO_PROCESS, 0) != old_nice)
             return complain(FAIL_SETPRIORITY, "setpriority");
+    }
+
+    {
+        struct addrinfo hints = {0};
+        struct addrinfo *addresses = NULL;
+        const AstraStartupInfo *startup = astra_posix_startup();
+        int resolved = 0;
+
+        if (astra_startup_capability(
+                startup, ASTRA_CAPABILITY_NETWORK_LISTEN) == NULL) {
+            errno = EACCES;
+            return complain(FAIL_DNS, "network-listen startup capability");
+        }
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        {
+            int error = getaddrinfo("localhost", "80", &hints, &addresses);
+
+            if (error != 0)
+                return complain_gai(FAIL_DNS, "getaddrinfo localhost",
+                                    error);
+        }
+        for (struct addrinfo *current = addresses; current != NULL;
+             current = current->ai_next)
+            if ((current->ai_family == AF_INET ||
+                 current->ai_family == AF_INET6) &&
+                current->ai_socktype == SOCK_STREAM)
+                resolved = 1;
+        freeaddrinfo(addresses);
+        if (!resolved) {
+            errno = EHOSTUNREACH;
+            return complain(FAIL_DNS, "resolved localhost address");
+        }
+    }
+    {
+        struct sockaddr_in address = {0};
+        struct sockaddr_in source;
+        socklen_t address_size = sizeof(address);
+        socklen_t source_size = sizeof(source);
+        char packet[4];
+        int receiver = socket(AF_INET, SOCK_DGRAM, 0);
+        int sender;
+
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (receiver < 0)
+            return complain(FAIL_UDP, "UDP receiver socket");
+        sender = socket(AF_INET, SOCK_DGRAM, 0);
+        if (sender < 0)
+            return complain(FAIL_UDP, "UDP sender socket");
+        if (bind(receiver, (struct sockaddr *)&address, sizeof(address)) != 0)
+            return complain(FAIL_UDP, "UDP bind");
+        if (getsockname(receiver, (struct sockaddr *)&address,
+                        &address_size) != 0)
+            return complain(FAIL_UDP, "UDP getsockname");
+        if (sendto(sender, "udp!", 4u, 0, (struct sockaddr *)&address,
+                   address_size) != 4)
+            return complain(FAIL_UDP, "UDP sendto");
+        if (recvfrom(receiver, packet, sizeof(packet), 0,
+                     (struct sockaddr *)&source, &source_size) != 4)
+            return complain(FAIL_UDP, "UDP recvfrom");
+        if (memcmp(packet, "udp!", 4u) != 0 || source.sin_family != AF_INET) {
+            errno = EPROTO;
+            return complain(FAIL_UDP, "UDP payload");
+        }
+        if (close(sender) != 0 || close(receiver) != 0)
+            return complain(FAIL_UDP, "UDP close");
+    }
+    {
+        struct sockaddr_in address = {0};
+        socklen_t address_size = sizeof(address);
+        char request[4];
+        int listener = socket(AF_INET, SOCK_STREAM, 0);
+        pid_t child;
+        int accepted;
+        int child_status;
+
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (listener < 0 ||
+            bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0 ||
+            getsockname(listener, (struct sockaddr *)&address,
+                        &address_size) != 0 || listen(listener, 4) != 0)
+            return complain(FAIL_TCP, "TCP listen");
+        child = fork();
+        if (child < 0)
+            return complain(FAIL_TCP, "TCP fork");
+        if (child == 0) {
+            int client;
+            char *child_argv[] = {"posix", "--network-child", NULL};
+
+            (void)close(listener);
+            client = socket(AF_INET, SOCK_STREAM, 0);
+            if (client < 0)
+                _exit(complain(FAIL_TCP, "TCP child socket"));
+            if (connect(client, (struct sockaddr *)&address,
+                        address_size) != 0)
+                _exit(complain(FAIL_TCP, "TCP child connect"));
+            if (client != 3 && dup2(client, 3) != 3)
+                _exit(complain(FAIL_TCP, "TCP child dup2"));
+            if (client != 3 && close(client) != 0)
+                _exit(complain(FAIL_TCP, "TCP child close"));
+            execve("COMMANDS:posix", child_argv, environ);
+            _exit(complain(FAIL_SOCKET_EXEC, "TCP child execve"));
+        }
+        accepted = accept(listener, NULL, NULL);
+        if (accepted < 0)
+            return complain(FAIL_SOCKET_EXEC, "TCP parent accept");
+        if (recv(accepted, request, sizeof(request), MSG_WAITALL) != 4)
+            return complain(FAIL_SOCKET_EXEC, "TCP parent receive");
+        if (memcmp(request, "ping", 4u) != 0) {
+            errno = EPROTO;
+            return complain(FAIL_SOCKET_EXEC, "TCP parent request");
+        }
+        if (send(accepted, "pong", 4u, 0) != 4)
+            return complain(FAIL_SOCKET_EXEC, "TCP parent send");
+        if (close(accepted) != 0 || close(listener) != 0)
+            return complain(FAIL_SOCKET_EXEC, "TCP parent close");
+        if (waitpid(child, &child_status, 0) != child)
+            return complain(FAIL_SOCKET_EXEC, "TCP parent waitpid");
+        if (!WIFEXITED(child_status) || WEXITSTATUS(child_status) != 0) {
+            errno = ECHILD;
+            return complain(FAIL_SOCKET_EXEC, "TCP child status");
+        }
     }
 
     printf("POSIX RAW PASS: %s\n", before);

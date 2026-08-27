@@ -303,6 +303,14 @@ static void test_wall_clock_read_and_absence(void)
         assert(offset == -4 * 3600);
         assert(zone == 0x45445400u);
     }
+
+    /* The high half stages and the low half commits one coherent instant. */
+    clear_registers(registers);
+    registers->RTC_STATUS = RTC_VALID; /* the fake register block acknowledges */
+    assert(kernel_platform_wall_clock_set(
+        UINT64_C(0x76543210fedcba98)));
+    assert(registers->RTC_SET_NS_HI == 0x76543210u);
+    assert(registers->RTC_SET_NS_LO == 0xfedcba98u);
 }
 
 static void test_fenced_display_transport(void)

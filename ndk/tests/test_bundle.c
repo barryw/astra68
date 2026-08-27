@@ -23,6 +23,22 @@ static void manifest_test(void)
     assert(manifest.require_count == 2u);
     assert(manifest.capability_count == 1u);
     {
+        char capabilities[] =
+            "astra-bundle 1\nkind application\nid org.astra.capabilities\n"
+            "name Capabilities\nversion 1.0.0\nexecutable bin/app\n"
+            "icon resources/app.aicon\n"
+            "capability GUI\ncapability WORK:rw\n"
+            "capability COMMANDS:r\ncapability LIBS:r\n"
+            "capability EVENTS:r\ncapability PROC:r\n"
+            "capability EVENT_CONTROL\ncapability NETWORK\n"
+            "capability NETWORK_LISTEN\n";
+
+        assert(astra_bundle_manifest_parse(
+                   capabilities, sizeof(capabilities) - 1u, &manifest,
+                   &line) == ASTRA_BUNDLE_OK);
+        assert(manifest.capability_count == 9u);
+    }
+    {
         char bad[] = "astra-bundle 1\nkind application\nid Bad/Id\n";
         assert(astra_bundle_manifest_parse(bad, sizeof(bad) - 1u, &manifest,
                                            &line) == ASTRA_BUNDLE_INVALID);

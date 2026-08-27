@@ -88,27 +88,17 @@ static void test_lifecycle(void)
     assert(kernel_device_pool_valid());
 }
 
-/*
- * One device past the per-owner quota, whatever the quota currently is.
- *
- * The counts are derived from KERNEL_DEVICE_LEASE_OWNER_MAX rather than written
- * out, because they were written out once: raising the quota from 2 to 4 for
- * the terminal's display lease left this test asserting the third acquisition
- * was refused, and it is not.
- */
-#define QUOTA_DEVICES (KERNEL_DEVICE_LEASE_OWNER_MAX + 1u)
-
-static void test_quota_and_owner_death(void)
+static void test_all_devices_and_owner_death(void)
 {
-    FakeDevice fake[QUOTA_DEVICES];
-    KernelDeviceLease *lease[QUOTA_DEVICES];
+    FakeDevice fake[KERNEL_DEVICE_MAX];
+    KernelDeviceLease *lease[KERNEL_DEVICE_MAX];
     uint32_t revoked = 0u;
 
-    /* The pool must be able to hold the quota, or this tests the wrong limit. */
-    assert(QUOTA_DEVICES <= KERNEL_DEVICE_LEASE_MAX);
+    assert(KERNEL_DEVICE_LEASE_OWNER_MAX == KERNEL_DEVICE_MAX);
+    assert(KERNEL_DEVICE_MAX <= KERNEL_DEVICE_LEASE_MAX);
 
     initialize();
-    for (uint32_t index = 0u; index < QUOTA_DEVICES; ++index) {
+    for (uint32_t index = 0u; index < KERNEL_DEVICE_MAX; ++index) {
         KernelDeviceDefinition value;
 
         fake[index].quiesces = 0u;
@@ -120,16 +110,13 @@ static void test_quota_and_owner_death(void)
         assert(kernel_device_register(&value) == KERNEL_DEVICE_OK);
     }
     assert(kernel_device_seal_registry());
-    for (uint32_t index = 0u; index < KERNEL_DEVICE_LEASE_OWNER_MAX; ++index) {
+    for (uint32_t index = 0u; index < KERNEL_DEVICE_MAX; ++index) {
         assert(kernel_device_acquire(4u, index + 1u, &lease[index]) ==
                KERNEL_DEVICE_OK);
     }
-    assert(kernel_device_acquire(4u, QUOTA_DEVICES,
-                                 &lease[QUOTA_DEVICES - 1u]) ==
-           KERNEL_DEVICE_QUOTA_EXCEEDED);
     assert(kernel_device_owner_died(4u, &revoked) == KERNEL_DEVICE_OK);
-    assert(revoked == KERNEL_DEVICE_LEASE_OWNER_MAX);
-    for (uint32_t index = 0u; index < KERNEL_DEVICE_LEASE_OWNER_MAX; ++index) {
+    assert(revoked == KERNEL_DEVICE_MAX);
+    for (uint32_t index = 0u; index < KERNEL_DEVICE_MAX; ++index) {
         assert(fake[index].quiesces == 1u && fake[index].resets == 1u);
         kernel_device_handle_release(lease[index], NULL);
     }
@@ -188,7 +175,7 @@ static void test_reset_failure_is_contained(void)
 int main(void)
 {
     test_lifecycle();
-    test_quota_and_owner_death();
+    test_all_devices_and_owner_death();
     test_failures();
     test_reset_failure_is_contained();
     puts("device lease tests passed");

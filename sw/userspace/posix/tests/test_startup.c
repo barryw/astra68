@@ -10,6 +10,10 @@ void astra_posix_file_prepare(void)
 {
 }
 
+void astra_posix_socket_prepare(void)
+{
+}
+
 char **environ;
 static int entered;
 static const AstraStartupInfo *seen_startup;

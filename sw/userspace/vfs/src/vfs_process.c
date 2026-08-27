@@ -847,7 +847,8 @@ build:
     return 1;
 }
 
-uint32_t astra_process_vfs_init(const AstraStartupInfo *startup)
+static uint32_t seed_process_vfs(const AstraStartupInfo *startup,
+                                 int fork_child)
 {
     const AstraStartupCapability *capabilities;
 
@@ -859,9 +860,18 @@ uint32_t astra_process_vfs_init(const AstraStartupInfo *startup)
     if (astra_assign_seed(&assigns, capabilities,
                           startup->capability_count) != ASTRA_VFS_OK)
         return ASTRA_VFS_ERR_INVALID;
-    astra_process_vfs_close();
+    if (fork_child) {
+        for (uint32_t index = 0u; index < client_count; ++index)
+            if (clients[index].connected != 0u)
+                astra_vfs_port_abandon(&clients[index].client);
+        client_count = 0u;
+        vfs_initialized = 0u;
+    } else {
+        astra_process_vfs_close();
+    }
     (void)memset(clients, 0, sizeof(clients));
-    (void)memset(open_libraries, 0, sizeof(open_libraries));
+    if (!fork_child)
+        (void)memset(open_libraries, 0, sizeof(open_libraries));
     /* The table describes the namespace this seeding just replaced. */
     kit_table_complete = 0u;
     kit_count = 0u;
@@ -884,6 +894,17 @@ uint32_t astra_process_vfs_init(const AstraStartupInfo *startup)
     }
     vfs_initialized = client_count != 0u;
     return vfs_initialized ? ASTRA_VFS_OK : ASTRA_VFS_ERR_NOT_FOUND;
+}
+
+uint32_t astra_process_vfs_init(const AstraStartupInfo *startup)
+{
+    return seed_process_vfs(startup, 0);
+}
+
+uint32_t astra_process_vfs_after_fork_child(
+    const AstraStartupInfo *startup)
+{
+    return seed_process_vfs(startup, 1);
 }
 
 AstraAssignTable *astra_process_vfs_assigns(void)
@@ -1032,7 +1053,7 @@ static uint32_t open_process_filesystem(
 uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
                                        const AstraStartupInfo *startup)
 {
-    return open_process_filesystem(filesystem, startup, open_cached_library);
+    return open_process_filesystem(filesystem, startup, open_loadable_library);
 }
 
 uint32_t astra_process_filesystem_open_bootstrap(

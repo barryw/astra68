@@ -396,6 +396,35 @@ astra_block_lease_query(uint32_t device, AstraBlockLeaseInfo *geometry)
 }
 
 uint32_t
+astra_network_lease_query(uint32_t device, AstraNetworkLeaseInfo *info)
+{
+    AstraSyscallResult result;
+
+    if (info == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_NETWORK_QUERY, device,
+                   (uint32_t)(uintptr_t)info, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
+astra_network_lease_execute(uint32_t device,
+                            const AstraNetworkTransportRequest *request,
+                            uint32_t *executed_commands)
+{
+    AstraSyscallResult result;
+
+    if (request == NULL || executed_commands == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    *executed_commands = 0u;
+    astra_syscall5(ASTRA_SYSCALL_NETWORK_EXECUTE, device,
+                   (uint32_t)(uintptr_t)request, 0u, 0u, 0u, &result);
+    if (result.status == ASTRA_SYSCALL_OK)
+        *executed_commands = result.value0;
+    return result.status;
+}
+
+uint32_t
 astra_block_lease_submit(uint32_t device, const AstraBlockRequest *request,
                    uint32_t *block_request)
 {
@@ -475,6 +504,16 @@ astra_clock_realtime_zone(uint64_t *nanoseconds, AstraTimeZone *zone)
         astra_civil_zone_unpack((int32_t)result.value2, result.value3, zone);
     }
     return ASTRA_SYSCALL_OK;
+}
+
+uint32_t astra_clock_set(uint32_t clock, uint64_t nanoseconds)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_CLOCK_SET, clock,
+                   (uint32_t)(nanoseconds >> 32), (uint32_t)nanoseconds,
+                   0u, 0u, &result);
+    return result.status;
 }
 
 /*

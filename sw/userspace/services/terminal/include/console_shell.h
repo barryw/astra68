@@ -23,7 +23,7 @@ typedef struct ConsoleShellBackend {
     uint32_t wait_handle;
     uint64_t idle_poll_ns;
     AstraProcessFilesystem *process_filesystem;
-    uint32_t event_control;
+    const AstraStartupInfo *startup;
 } ConsoleShellBackend;
 
 enum {
