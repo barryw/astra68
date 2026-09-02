@@ -7,13 +7,15 @@ static void valid_manifest(void)
 {
     char text[] =
         "# shipped startup\n"
-        "service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
-        "serves SYS:r required\n"
+            "service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
+            "serves SYS:r required\n"
+            "service SERVICES:hostfs grants HOST_DEVICE "
+            "serves WORK:rw required\n"
         "service SERVICES:events grants SYS:r STORE:rw serves EVENTS:r\n";
     SupervisorManifest manifest;
 
     assert(supervisor_manifest_parse(text, sizeof(text) - 1u, &manifest));
-    assert(manifest.count == 2u);
+    assert(manifest.count == 3u);
     assert(manifest.entries[0].required == 1u);
     assert(manifest.entries[0].grant_count == 2u);
     assert(strcmp(manifest.entries[0].grants[0].name,
@@ -21,7 +23,7 @@ static void valid_manifest(void)
     assert(manifest.entries[0].grants[0].is_namespace == 0u);
     assert(manifest.entries[0].serves_count == 1u);
     assert(strcmp(manifest.entries[0].serves[0].name, "SYS") == 0);
-    assert(manifest.entries[1].grants[1].rights ==
+    assert(manifest.entries[2].grants[1].rights ==
            (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE));
 
     {

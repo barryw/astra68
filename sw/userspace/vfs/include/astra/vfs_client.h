@@ -1,8 +1,10 @@
 #ifndef ASTRA_VFS_CLIENT_H
 #define ASTRA_VFS_CLIENT_H
 
+#include <stdatomic.h>
 #include <stdint.h>
 
+#include <astra/limits.h>
 #include <astra/vfs_service.h>
 
 /*
@@ -22,15 +24,67 @@
  * protocol's version are different numbers on purpose.
  */
 
+struct AstraVfsClient;
+struct AstraVfsBackendOps;
+
 typedef uint32_t (*AstraVfsTransport)(void *context, uint32_t operation,
                                       const AstraVfsRequest *request,
                                       AstraVfsReply *reply);
+typedef const uint8_t *(*AstraVfsAreaPayload)(const struct AstraVfsClient *,
+                                              uint32_t *capacity);
+
+typedef struct AstraVfsCallState {
+    AstraVfsRequest request;
+    AstraVfsRenameRequest rename_request;
+    AstraVfsReply reply;
+} AstraVfsCallState;
+
+typedef AstraVfsCallState *(*AstraVfsCallAcquire)(
+    struct AstraVfsClient *client);
+
+typedef struct AstraVfsPortThreadState {
+    uint32_t owner_thread;
+    AstraVfsCallState client_call;
+    AstraVfsRequestMessageBuffer outgoing;
+    AstraVfsReplyMessage incoming;
+    AstraVfsRequest area_request;
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+} AstraVfsPortThreadState;
+
+typedef struct AstraVfsPortLane {
+    uint32_t owner_thread;
+    uint32_t session;
+    uint32_t reply_receive;
+    uint32_t reply_source;
+    uint32_t reply_send;
+    uint32_t area;
+    uint32_t area_send;
+    void *area_address;
+    uint32_t area_size;
+    uint32_t direct_area;
+    void *direct_address;
+    uint32_t direct_size;
+} AstraVfsPortLane;
+typedef struct AstraVfsPortAcceleratorOps {
+    uint32_t (*connect)(struct AstraVfsClient *client, uint32_t device);
+    void (*disconnect)(struct AstraVfsClient *client);
+    void (*abandon)(struct AstraVfsClient *client);
+    uint32_t (*transport)(struct AstraVfsClient *client, uint32_t operation,
+                          const AstraVfsRequest *request,
+                          AstraVfsReply *reply);
+    uint32_t (*bulk)(struct AstraVfsClient *client, uint32_t operation,
+                     const AstraVfsRequest *request, void *buffer,
+                     uint32_t capacity, AstraVfsReply *reply);
+} AstraVfsPortAcceleratorOps;
 
 typedef struct AstraVfsClient {
     AstraVfsTransport transport;
     void *context;
-    uint32_t session;
-    uint16_t version;       /* the version agreed at connect */
+    AstraVfsAreaPayload area_payload;
+    AstraVfsCallAcquire call_acquire;
+    _Atomic(uint32_t) session;
+    _Atomic(uint16_t) version; /* the version agreed at connect */
     /*
      * What the owner of this client is currently doing. Stamped on every
      * request so one request is one story across every process it touches.
@@ -39,14 +93,28 @@ typedef struct AstraVfsClient {
     uint32_t activity;
     /* Private state used by astra_vfs_port_connect/transport. */
     uint8_t port_area_capable;
+    uint8_t port_direct_detached;
     uint32_t port_service;
-    uint32_t port_reply_receive;
-    uint32_t port_reply_source;
-    uint32_t port_reply_send;
-    uint32_t port_area;
-    uint32_t port_area_send;
-    void *port_area_address;
-    uint32_t port_area_size;
+    void *port_direct_address;
+    uint32_t port_direct_area;
+    uint32_t port_direct_device;
+    uint32_t port_direct_session;
+    uint32_t port_direct_lock;
+    const struct AstraVfsBackendOps *direct_backend_ops;
+    void *direct_backend_context;
+    uint32_t (*direct_backend_enter)(struct AstraVfsClient *client);
+    void (*direct_backend_leave)(struct AstraVfsClient *client);
+    uint32_t port_connect_lock;
+    volatile uint32_t port_connecting;
+    volatile uint32_t port_inflight;
+    volatile uint32_t port_inflight_waiters;
+    volatile uint32_t port_lifecycle;
+    volatile uint32_t port_thread_lock;
+    volatile uint32_t port_lane_lock;
+    const AstraVfsPortAcceleratorOps *port_accelerator_ops;
+    AstraVfsPortThreadState *port_thread_states;
+    uint32_t port_thread_capacity;
+    AstraVfsPortLane port_lanes[ASTRA_PROCESS_THREAD_COUNT_MAX];
     /*
      * The in-flight records live here rather than on the caller's stack, and
      * that is a requirement rather than a preference: a user thread gets one
@@ -56,15 +124,11 @@ typedef struct AstraVfsClient {
      * instead of once per call depth, and makes it caller-owned and countable
      * like every other buffer in this system.
      *
-     * The protocol is synchronous, so one client has at most one request
-     * outstanding. Two threads sharing a client would corrupt these; a thread
-     * that needs its own gets its own client, which is what a session is for.
+     * Retained for the process-state ABI while marshalling moves to
+     * thread-local call records. New code must not use these as in-flight
+     * storage: one process session is intentionally shared by many threads.
      */
-    AstraVfsRequest request;
-    AstraVfsReply reply;
-    AstraVfsRequestMessage port_outgoing;
-    AstraVfsReplyMessage port_incoming;
-    AstraVfsRequest port_area_request;
+    AstraVfsCallState call;
 } AstraVfsClient;
 
 /*
@@ -138,9 +202,13 @@ uint32_t astra_vfs_stat_meta(AstraVfsClient *client, const char *path,
                              AstraVfsDirEntry *meta);
 
 uint32_t astra_vfs_readdir_batch(AstraVfsClient *client, const char *path,
-                                 uint64_t cursor, AstraVfsDirEntry *entries,
-                                 uint32_t capacity, uint32_t *count,
-                                 uint64_t *next);
+                                  uint64_t cursor, AstraVfsDirEntry *entries,
+                                  uint32_t capacity, uint32_t *count,
+                                  uint64_t *next);
+uint32_t astra_vfs_readdir_file_batch(
+    AstraVfsClient *client, AstraVfsFile directory, const char *path,
+    uint64_t cursor, AstraVfsDirEntry *entries, uint32_t capacity,
+    uint32_t *count, uint64_t *next);
 uint32_t astra_vfs_mkdir(AstraVfsClient *client, const char *path);
 uint32_t astra_vfs_mkdir_mode(AstraVfsClient *client, const char *path,
                               uint16_t create_mode);
@@ -152,5 +220,7 @@ uint32_t astra_vfs_chmod(AstraVfsClient *client, const char *path,
 uint32_t astra_vfs_readlink(AstraVfsClient *client, const char *path,
                             void *buffer, uint32_t capacity,
                             uint32_t *length);
+uint32_t astra_vfs_symlink(AstraVfsClient *client, const char *target,
+                           const char *path);
 
 #endif

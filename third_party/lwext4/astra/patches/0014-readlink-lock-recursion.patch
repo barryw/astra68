@@ -1,0 +1,76 @@
+ext4 readlink: avoid recursively taking the mount lock
+
+ext4_readlink holds the exclusive mount lock while it opens and reads the
+symlink. Calling the public ext4_fread from inside that critical section tries
+to acquire the same mount's read lock, which deadlocks with a non-recursive
+lock and is reported as EDEADLK by pthread rwlocks. Split the read body into an
+already-locked helper and keep ext4_fread as the public locking wrapper.
+
+Covered by the MC68030 lwext4 reread gate, which creates a native symlink,
+reads it before unmount, reads it again after a fresh mount, and finishes with
+an independent e2fsck pass.
+
+diff --git a/src/ext4.c b/src/ext4.c
+--- a/src/ext4.c
++++ b/src/ext4.c
+@@ -1756,7 +1756,8 @@ static int ext4_fread_block(struct ext4_blockdev *bdev, ext4_fsblk_t fblock,
+ 	return ext4_block_set(bdev, &block);
+ }
+ 
+-int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
++static int ext4_fread_no_lock(ext4_file *file, void *buf, size_t size,
++			      size_t *rcnt)
+ {
+ 	uint32_t unalg;
+ 	uint32_t iblock_idx;
+@@ -1776,8 +1777,6 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
+ 	if (!size)
+ 		return EOK;
+ 
+-	EXT4_MP_READ_LOCK(file->mp);
+-
+ 	struct ext4_fs *const fs = &file->mp->fs;
+ 	struct ext4_sblock *const sb = &file->mp->fs.sb;
+ 
+@@ -1785,10 +1784,8 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
+ 		*rcnt = 0;
+ 
+ 	r = ext4_fs_get_inode_ref(fs, file->inode, &ref);
+-	if (r != EOK) {
+-		EXT4_MP_READ_UNLOCK(file->mp);
++	if (r != EOK)
+ 		return r;
+-	}
+ 
+ 	/*Sync file size*/
+ 	file->fsize = ext4_inode_get_size(sb, ref.inode);
+@@ -1931,6 +1928,20 @@ Finish:
+ 	ext4_fs_put_inode_ref(&ref);
+-	EXT4_MP_READ_UNLOCK(file->mp);
+ 	return r;
+ }
+ 
++int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt)
++{
++	int r;
++
++	ext4_assert(file && file->mp);
++	if (file->flags & O_WRONLY)
++		return EPERM;
++	if (!size)
++		return EOK;
++	EXT4_MP_READ_LOCK(file->mp);
++	r = ext4_fread_no_lock(file, buf, size, rcnt);
++	EXT4_MP_READ_UNLOCK(file->mp);
++	return r;
++}
++
+ static int ext4_fwrite_block(struct ext4_blockdev *bdev, ext4_fsblk_t fblock,
+@@ -2795,7 +2806,7 @@ int ext4_readlink(const char *path, char *buf, size_t bufsize, size_t *rcnt)
+ 	ext4_block_cache_write_back(mp->fs.bdev, 1);
+ 	r = ext4_generic_open2(&f, path, O_RDONLY, filetype, NULL, NULL);
+ 	if (r == EOK)
+-		r = ext4_fread(&f, buf, bufsize, rcnt);
++		r = ext4_fread_no_lock(&f, buf, bufsize, rcnt);
+ 	else
+ 		goto Finish;

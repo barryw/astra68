@@ -12,6 +12,7 @@ _start:
 	tst.l   %d0
 	beq     .Lbad_startup
 
+	jsr     astra_runtime_initialize
 	move.l  %d2, -(%sp)
 	jsr     astra_main
 	addq.l  #4, %sp
@@ -23,6 +24,16 @@ _start:
 	| so beats truncating it into a number that looks deliberate.
 	move.l  #ASTRA_STATUS_BAD_EXIT, %d1
 .Lexit:
+#if ASTRA_HOSTED_STARTUP
+	move.l  %d1, -(%sp)
+	jsr     exit
+	addq.l  #4, %sp
+#else
+	move.l  %d1, -(%sp)
+	jsr     astra_runtime_finalize
+	addq.l  #4, %sp
+	move.l  %d0, %d1
+#endif
 	moveq   #ASTRA_SYSCALL_PROCESS_EXIT, %d0
 	trap    #ASTRA_SYSCALL_TRAP
 	bra     .Lhalt

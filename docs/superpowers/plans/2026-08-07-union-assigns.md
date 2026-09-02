@@ -2387,7 +2387,7 @@ Landed as two commits: `a6c5f3a`, then a review fix pass, `cd914c9`.
 **Files:**
 - Modify: `docs/ABI.md` (the capability records and the grant ceiling)
 - Modify: `docs/CURRENT_STATE.md` (the Active Arty migration override block)
-- Modify: `docs/STATUS.md`
+- Modify: `docs/CURRENT_STATE.md`
 - Create: `docs/HANDOVER-union-assigns.md`
 - Modify: `docs/superpowers/plans/2026-08-07-union-assigns.md` (this file — a
   "what the build settled" block under each finished task)

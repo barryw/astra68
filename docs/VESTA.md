@@ -49,7 +49,7 @@ Block map (VESTA_BASE +):
 | 0x0014 | `RESET_REASON` | RO | — | `0=power-on 1=soft 2=watchdog` |
 | 0x0018 | `SCRATCH` | RW | 0 | persists across soft reset (boot handoff) |
 | 0x001C | `CPU_MODEL` | RO | `0x00068030` | MC68030 architectural target |
-| 0x0020 | `CPU_IMPL` | RO | `TGM2` | repaired TG68K.C 68030/PMMU implementation |
+| 0x0020 | `CPU_IMPL` | RO | `QEMU` | QEMU TCG MC68030/PMMU implementation |
 | 0x0024 | `CPU_FEATURES` | RO | varies | `[0]PMMU [1]FPU [2]DATA32 [3]ADDR32 [4]HOST_TIME` |
 | 0x0028 | `CPU_HZ` | RO | — | configured CPU/bus clock in Hz |
 | 0x002C | `RAM_BASE` | RO | — | physical SDRAM base advertised to boot software |
@@ -102,16 +102,16 @@ SDRAM until the test completes.
 | 0x00E8 | `MEMTEST_ACTUAL` | RO | actual byte for first failure |
 | 0x00EC | `CPU_CYCLES_LO` | RO | low word of free-running CPU/bus clock count; latches all 64 bits |
 | 0x00F0 | `CPU_CYCLES_HI` | RO | high word of the most recent `CPU_CYCLES_LO` snapshot |
-| 0x00F4 | `ICACHE_HITS` | RO | TG wrapper instruction-cache hit count |
-| 0x00F8 | `ICACHE_MISSES` | RO | TG wrapper instruction-cache miss count |
-| 0x00FC | `DCACHE_HITS` | RO | TG wrapper data-cache hit count |
+| 0x00F4 | reserved | RO | reads as zero |
+| 0x00F8 | reserved | RO | reads as zero |
+| 0x00FC | reserved | RO | reads as zero |
 
 CPU memory diagnostics continue in the MMU-control aperture so the identity
 block remains ABI-compatible:
 
 | Offset | Name | Acc | Description |
 |---|---|---|---|
-| 0x0110 | `DCACHE_MISSES` | RO | TG wrapper data-cache miss count |
+| 0x0110 | reserved | RO | reads as zero |
 | 0x0114 | `CPU_SDRAM_READS` | RO | CPU SDRAM read requests launched |
 | 0x0118 | `CPU_SDRAM_WRITES` | RO | CPU SDRAM write requests launched |
 | 0x011C | `CPU_SDRAM_WAIT` | RO | CPU clocks spent in the SDRAM wait state |
@@ -119,11 +119,10 @@ block remains ABI-compatible:
 | 0x0124 | `SDRAM_LINE_MISSES` | RO | external 16-byte line fills |
 | 0x0128 | `SDRAM_POSTED_WRITES` | RO | writes acknowledged before completion |
 
-### AstraHost boot state (0x0130)
+### Reserved legacy host boot state (0x0130)
 
-Production storage and ESP32 services use the SPI-only AstraHost transport
-specified in `docs/ASTRAHOST.md`. These registers expose boot-engine state to
-stage 0; they are not an alternate CPU-to-ESP byte transport.
+The active QEMU machine does not implement the retired external boot transport.
+These offsets remain reserved for ABI stability and read as zero.
 
 | Offset | Name | Acc | Description |
 |---|---|---|---|
@@ -136,16 +135,14 @@ stage 0; they are not an alternate CPU-to-ESP byte transport.
 | 0x0148 | `HOST_BYTES_RECEIVED` | RO | streaming progress in bytes |
 | 0x014C | `HOST_ERROR` | RO | AstraHost protocol status code |
 
-Software reads `CPU_CYCLES_LO` before `CPU_CYCLES_HI`. The TG68K bus performs
-a 32-bit MMIO read as two 16-bit transfers, so Vesta holds one coherent
-snapshot across both transfers and the following high-word read.
+Software reads `CPU_CYCLES_LO` before `CPU_CYCLES_HI`; Vesta holds one coherent
+snapshot across the pair.
 
-### AstraHost runtime block service (0x0150)
+### Hosted runtime block service (0x0150)
 
-This is a queued raw-block controller backed by the SPI AstraHost service. It
-addresses only the dedicated Astra GPT partition; the FAT/exFAT boot volume is
-never exposed as a raw device. All LBAs are partition-relative and all DMA
-buffers are physical addresses in the 32 MiB SDRAM aperture.
+This is a queued raw-block controller backed by QEMU's configured block image.
+All LBAs are image-relative and all DMA buffers are physical addresses inside
+the reported Astra guest RAM aperture.
 
 | Offset | Name | Acc | Description |
 |---|---|---|---|
@@ -270,15 +267,14 @@ errors, §3.)
 **Sources** (bit index in the bitmaps / `IRQ_CFG` index):
 ```
 0 TIMER0   1 TIMER1   2 UART_RX  3 UART_TX  4 STORAGE  5 INPUT
-6 RESERVED   7 USB_OHCI   8 VEGA   9 ASTRAEA   10 LYRA
+6 RESERVED   7 USB_OHCI   8 VEGA   9 ASTRAEA   10 RESERVED
 ```
-The chip lines (`VEGA`/`ASTRAEA`/`LYRA`) are the OR of that chip's own
+The implemented chip lines (`VEGA`/`ASTRAEA`) are the OR of that chip's own
 `IRQ_STAT & IRQ_EN`; the handler reads the chip's `IRQ_STAT` for the exact event
 (vblank vs raster, blit vs copper, …). The controller presents the highest-level
 pending+enabled source on the IPL lines; ties break by source index. The
 selected IPL is registered on the CPU clock, so a pending/mask/configuration
-change reaches the CPU no more than one CPU clock later and never places the
-priority encoder in the TG68K execution path.
+change reaches the CPU no more than one CPU clock later.
 
 Level sources remain pending until the device condition clears. Edge sources
 latch rising edges and clear through `IRQ_ACK`; a simultaneous new edge wins
@@ -321,8 +317,7 @@ zero never creates an underflow-length interval.
 ## 6. UART (0x0500)
 
 8N1 serial console (the memtest already exercises this path at 115200).
-This port is wired to FTDI for diagnostics and hardware tests. It is not wired
-to the ESP32 and is never an AstraHost transport.
+The QEMU machine exposes this port as its diagnostic serial stream.
 
 | Offset | Name | Acc | Description |
 |---|---|---|---|
@@ -333,13 +328,10 @@ to the ESP32 and is never an AstraHost transport.
 
 ---
 
-## 7. Direct SPI / SD recovery aperture (0x0600)
+## 7. Reserved SPI / SD aperture (0x0600)
 
-This low-level FPGA SPI master is present only in direct-recovery and simulation
-builds with `ASTRA_HOST_ENABLE=0`. Software may drive the SD card protocol in
-that build. Production builds release the shared SD pins to the ESP32 and use
-the SPI-only AstraHost service; this aperture must not be used by production
-software.
+The active QEMU machine does not implement a direct SPI controller. These
+offsets remain reserved and must not be used by production software.
 
 | Offset | Name | Acc | Description |
 |---|---|---|---|
@@ -352,9 +344,7 @@ software.
 ## 8. Input (0x0700)
 
 One coherent FIFO carries normalized keyboard, pointer, and gamepad events
-from AstraHost. The physical producer is board/service-specific, but every
-event reaches the FPGA over SPI and crosses into the CPU clock domain through
-a handshake FIFO.
+from QEMU's host input backend.
 
 | Offset | Name | Acc | Description |
 |---|---|---|---|
@@ -414,10 +404,8 @@ outcome, not a recoverable process fault.
 
 ## 10. Front-panel GPIO (0x1000)
 
-The ULX3S front panel has six software-visible pushbuttons, four DIP switches,
-and eight LEDs. The seventh pushbutton remains the active-low hardware reset
-and is not software-visible. Inputs are active-high logical values regardless
-of board-level polarity.
+The optional front-panel device exposes normalized active-high inputs and
+software-controlled LEDs independent of board-level polarity.
 
 This block occupies `0xFFF01000..0xFFF01FFF`, a separate 4 KiB page. Bare-metal
 software accesses it through the Astra NDK. A protected OS normally brokers it

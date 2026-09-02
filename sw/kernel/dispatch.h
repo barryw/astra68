@@ -24,6 +24,7 @@ KernelDispatchTarget kernel_access_entry_dispatch(
     const uint32_t *registers, void *raw_frame, uint32_t user_stack);
 KernelDispatchTarget kernel_syscall_entry_dispatch(
     const uint32_t *registers, const void *raw_frame, uint32_t user_stack);
+void kernel_dispatch_idle_enter(void);
 KernelDispatchTarget kernel_interrupt_entry_dispatch(
     const uint32_t *registers, const void *raw_frame, uint32_t user_stack);
 uint32_t kernel_dispatch_user_fault_irqoff_max_cycles(void);

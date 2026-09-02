@@ -3,6 +3,8 @@
 
 extern void astra_thread_start_trampoline(void);
 
+static _Thread_local uint32_t current_thread_handle;
+
 static AstraSyscallResult
 invoke(uint32_t number, uint32_t argument0)
 {
@@ -103,6 +105,37 @@ uint32_t
 astra_rt_event_reset(uint32_t handle)
 {
     return invoke(ASTRA_SYSCALL_EVENT_RESET, handle).status;
+}
+
+uint32_t
+astra_futex_wait(volatile uint32_t *address, uint32_t expected,
+                 uint64_t deadline_ns)
+{
+    AstraSyscallResult result;
+
+    if (address == NULL ||
+        ((uintptr_t)address & (sizeof(uint32_t) - 1u)) != 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_FUTEX_WAIT, (uint32_t)(uintptr_t)address,
+                   expected, (uint32_t)(deadline_ns >> 32),
+                   (uint32_t)deadline_ns, 0u, &result);
+    return result.status;
+}
+
+uint32_t
+astra_futex_wake(volatile uint32_t *address, uint32_t count,
+                 uint32_t *woken)
+{
+    AstraSyscallResult result;
+
+    if (address == NULL || count == 0u ||
+        ((uintptr_t)address & (sizeof(uint32_t) - 1u)) != 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_FUTEX_WAKE, (uint32_t)(uintptr_t)address,
+                   count, 0u, 0u, 0u, &result);
+    if (woken != NULL)
+        *woken = result.status == ASTRA_SYSCALL_OK ? result.value0 : 0u;
+    return result.status;
 }
 
 uint32_t
@@ -425,6 +458,83 @@ astra_network_lease_execute(uint32_t device,
 }
 
 uint32_t
+astra_host_lease_query(uint32_t device, AstraHostLeaseInfo *info)
+{
+    AstraSyscallResult result;
+
+    if (info == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_HOST_QUERY, device,
+                   (uint32_t)(uintptr_t)info, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
+astra_host_lease_execute(uint32_t device,
+                         const AstraHostTransportRequest *request,
+                         uint32_t *executed_commands)
+{
+    AstraSyscallResult result;
+
+    if (request == NULL || executed_commands == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    *executed_commands = 0u;
+    astra_syscall5(ASTRA_SYSCALL_HOST_EXECUTE, device,
+                   (uint32_t)(uintptr_t)request, 0u, 0u, 0u, &result);
+    if (result.status == ASTRA_SYSCALL_OK)
+        *executed_commands = result.value0;
+    return result.status;
+}
+
+uint32_t astra_host_channel_open(uint32_t device,
+                                 AstraHostChannelOpen *channel)
+{
+    AstraSyscallResult result;
+
+    if (channel == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_HOST_CHANNEL_OPEN, device,
+                   (uint32_t)(uintptr_t)channel, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t astra_host_channel_close(uint32_t device)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_HOST_CHANNEL_CLOSE, device,
+                   0u, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t astra_host_channel_kick(uint32_t channel_address,
+                                 uint32_t producer_position)
+{
+    volatile uint32_t *registers;
+
+    if (channel_address == 0u ||
+        (channel_address & (ASTRA_ABI_ALIGNMENT - 1u)) != 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    registers = (volatile uint32_t *)(uintptr_t)channel_address;
+    astra_memory_release_fence();
+    registers[ASTRA_HOST_CHANNEL_KICK_OFFSET / sizeof(*registers)] =
+        producer_position;
+    astra_compiler_barrier();
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t astra_host_channel_wait(uint32_t consumer_position,
+                                 uint64_t deadline_ns)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_HOST_CHANNEL_WAIT, 0u,
+                   consumer_position, (uint32_t)(deadline_ns >> 32),
+                   (uint32_t)deadline_ns, 0u, &result);
+    return result.status;
+}
+
+uint32_t
 astra_block_lease_submit(uint32_t device, const AstraBlockRequest *request,
                    uint32_t *block_request)
 {
@@ -445,6 +555,15 @@ uint32_t
 astra_block_lease_collect(uint32_t device, uint32_t block_request,
                     AstraBlockCompletion *completion)
 {
+    return astra_block_lease_collect_ex(device, block_request, completion,
+                                        NULL);
+}
+
+uint32_t
+astra_block_lease_collect_ex(uint32_t device, uint32_t block_request,
+                             AstraBlockCompletion *completion,
+                             uint32_t *serviced_completions)
+{
     AstraSyscallResult result;
 
     if (completion == NULL) {
@@ -453,6 +572,9 @@ astra_block_lease_collect(uint32_t device, uint32_t block_request,
     astra_syscall5(ASTRA_SYSCALL_BLOCK_COLLECT, device,
                    (uint32_t)(uintptr_t)completion, block_request, 0u, 0u,
                    &result);
+    if (serviced_completions != NULL) {
+        *serviced_completions = result.value0;
+    }
     return result.status;
 }
 
@@ -653,6 +775,31 @@ astra_query_abi(uint32_t *abi_version, uint32_t *process_handle,
         }
     }
     return result.status;
+}
+
+uint32_t
+astra_current_thread_handle(uint32_t *thread_handle)
+{
+    uint32_t handle;
+    uint32_t status;
+
+    if (thread_handle == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    handle = current_thread_handle;
+    if (handle == 0u) {
+        status = astra_query_abi(NULL, NULL, &handle);
+        if (status != ASTRA_SYSCALL_OK)
+            return status;
+        current_thread_handle = handle;
+    }
+    *thread_handle = handle;
+    return ASTRA_SYSCALL_OK;
+}
+
+void
+astra_runtime_forget_current_thread_handle(void)
+{
+    current_thread_handle = 0u;
 }
 
 void

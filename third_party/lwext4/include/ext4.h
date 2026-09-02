@@ -191,6 +191,13 @@ int ext4_umount(const char *mount_point);
  * @return  Standard error code. */
 int ext4_journal_start(const char *mount_point);
 
+/**@brief Commit the current running journal transaction, if any.
+ *
+ * This is the primitive used by a filesystem's commit timer. It makes the
+ * transaction durable but leaves checkpoint writeback to the cache policy.
+ */
+int ext4_journal_commit(const char *mount_point);
+
 /**@brief   Stops journaling. Journaling start/stop functions are transparent
  *          and might be used on filesystems without journaling support.
  *

@@ -818,7 +818,8 @@ bool kernel_monitor_spi_binding(KernelIrqInternalBinding *binding)
 }
 
 bool kernel_monitor_uart_irq_service(uint8_t source, uint64_t timestamp,
-                                     void *context)
+                                     void *context,
+                                     uint32_t *woken_threads)
 {
     KernelMonitorChannel *channel =
         &channels[KERNEL_MONITOR_TRANSPORT_FTDI];
@@ -828,8 +829,10 @@ bool kernel_monitor_uart_irq_service(uint8_t source, uint64_t timestamp,
     uint8_t value;
 
     (void)context;
-    if (!monitor_initialized || source != IRQ_SRC_UART_RX)
+    if (woken_threads == NULL || !monitor_initialized ||
+        source != IRQ_SRC_UART_RX)
         return false;
+    *woken_threads = 0u;
     status = kernel_platform_diagnostic_rx_status();
     while (received < KERNEL_MONITOR_UART_IRQ_BATCH &&
            kernel_platform_diagnostic_getc(&value)) {
@@ -854,7 +857,8 @@ bool kernel_monitor_uart_irq_service(uint8_t source, uint64_t timestamp,
 }
 
 bool kernel_monitor_spi_irq_service(uint8_t source, uint64_t timestamp,
-                                    void *context)
+                                    void *context,
+                                    uint32_t *woken_threads)
 {
     KernelMonitorChannel *channel =
         &channels[KERNEL_MONITOR_TRANSPORT_ASTRAHOST_SPI];
@@ -865,8 +869,10 @@ bool kernel_monitor_spi_irq_service(uint8_t source, uint64_t timestamp,
     uint8_t value;
 
     (void)context;
-    if (!monitor_initialized || source != IRQ_SRC_ASTRAHOST_MONITOR)
+    if (woken_threads == NULL || !monitor_initialized ||
+        source != IRQ_SRC_ASTRAHOST_MONITOR)
         return false;
+    *woken_threads = 0u;
     status = kernel_platform_monitor_spi_status();
     while (received < KERNEL_MONITOR_SPI_IRQ_BATCH &&
            kernel_platform_monitor_spi_getc(&value)) {

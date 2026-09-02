@@ -1,6 +1,7 @@
 #include <astra/ext4_alloc.h>
 
 #include <stddef.h>
+#include <string.h>
 #include <generated/ext4_config.h>
 
 /*
@@ -65,8 +66,7 @@ void *
 ext4_user_calloc(size_t count, size_t size)
 {
     size_t bytes;
-    unsigned char *block;
-    size_t index;
+    void *block;
 
     if (count != 0u && size > (size_t)-1 / count) {
         return NULL;
@@ -76,9 +76,7 @@ ext4_user_calloc(size_t count, size_t size)
     if (block == NULL) {
         return NULL;
     }
-    for (index = 0u; index < bytes; ++index) {
-        block[index] = 0u;
-    }
+    memset(block, 0, bytes);
     return block;
 }
 

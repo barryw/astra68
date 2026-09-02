@@ -11,15 +11,9 @@ FLAG=/data/.astra-firstboot-done
 
 # /data carries every persistent writable file. Do not let a missing or slow
 # data mount turn an early-boot write into a root-filesystem write.
-n=0
-while ! mountpoint -q /data 2>/dev/null && [ "$n" -lt 120 ]; do
-    n=$((n + 1))
+while ! mountpoint -q /data 2>/dev/null; do
     sleep 0.25
 done
-if ! mountpoint -q /data 2>/dev/null; then
-    echo "[astra-firstboot] /data unavailable"
-    exit 1
-fi
 
 # Samba and udev require writable state, but the appliance root remains
 # read-only. Rebuild /var/lib in tmpfs on every boot.
@@ -45,17 +39,37 @@ mountpoint -q /etc/ssh 2>/dev/null || mount --bind /data/ssh /etc/ssh
 
 mkdir -p /data/astra/log /data/astra/share
 
+boot_image=/run/media/boot-mmcblk0p1/BOOT.BIN
+boot_hash=$(sha256sum "$boot_image" | awk '{print $1}')
+GRAPHICS_ROOT=/data/astra/graphics/by-boot/$boot_hash
+release_tool=$GRAPHICS_ROOT/bin/astra-release.py
+if [ ! -r "$release_tool" ] ||
+   ! PYTHONDONTWRITEBYTECODE=1 python3 "$release_tool" verify --installed \
+       "$GRAPHICS_ROOT";
+then
+    echo "[astra-firstboot] graphics release verification failed"
+    exit 1
+fi
+
 # A power cycle leaves the Zynq at its build-time epoch. Astra reads the host
 # clock directly, so no graphics or guest process may start until NTP has set
 # Linux to a valid wall clock. This is a boot dependency, not a timeout: keep
 # waiting through link, DHCP, DNS, and server outages.
-time_sync=/data/astra/bin/astra-time-sync
+time_sync=$GRAPHICS_ROOT/bin/astra-time-sync
 time_log=/data/astra/log/time-sync.log
+bring_up_network()
+{
+    ifdown -f eth0 >>"$time_log" 2>&1 || true
+    ip link set dev eth0 up >>"$time_log" 2>&1 || true
+    while [ "$(cat /sys/class/net/eth0/carrier 2>/dev/null)" != 1 ]; do
+        sleep 0.25
+    done
+    ifup eth0 >>"$time_log" 2>&1 || true
+}
 while :; do
     : >"$time_log"
     if ! ip -4 addr show dev eth0 2>/dev/null | grep -q 'inet '; then
-        ifdown -f eth0 >>"$time_log" 2>&1 || true
-        ifup eth0 >>"$time_log" 2>&1 || true
+        bring_up_network
     fi
     if [ -x "$time_sync" ] &&
        "$time_sync" "${ASTRA_NTP_SERVER:-pool.ntp.org}" >>"$time_log" 2>&1;
@@ -68,7 +82,7 @@ while :; do
 done
 echo "[astra-firstboot] NTP synchronized"
 
-hdmi_link=/data/astra/bin/astra-hdmi-link
+hdmi_link=$GRAPHICS_ROOT/bin/astra-hdmi-link
 hdmi_log=/data/astra/log/hdmi-link.log
 if [ -x "$hdmi_link" ]; then
     "$hdmi_link" >>"$hdmi_log" 2>&1 &
@@ -77,8 +91,8 @@ else
     echo "[astra-firstboot] HDMI link manager not provisioned"
 fi
 
-graphics_loader=/data/astra/bin/astra-graphics-boot
-graphics_splash=/data/astra/assets/astra_boot_splash.rgb565
+graphics_loader=$GRAPHICS_ROOT/bin/astra-graphics-boot
+graphics_splash=$GRAPHICS_ROOT/assets/astra_boot_splash.rgb565
 graphics_log=/data/astra/log/graphics-boot.log
 if [ -x "$graphics_loader" ] && [ -r "$graphics_splash" ]; then
     if "$graphics_loader" "$graphics_splash" >"$graphics_log" 2>&1; then
@@ -92,7 +106,7 @@ fi
 
 # QEMU starts exactly once. Its input watcher attaches and detaches evdev
 # devices at runtime, so USB hot-plug cannot restart the guest.
-terminal_start=/data/astra/bin/astra-terminal-start
+terminal_start=$GRAPHICS_ROOT/bin/astra-terminal-start
 terminal_log=/data/astra/log/terminal.log
 if [ -x "$terminal_start" ]; then
     "$terminal_start" >>"$terminal_log" 2>&1 &

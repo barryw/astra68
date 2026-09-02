@@ -66,8 +66,8 @@ static void initialize_test(void)
     info.cpu_hz = 12500000u;
     info.ram_base = RAM_BASE;
     info.ram_size = sizeof(physical_memory);
-    info.rom_base = 0xffe00000u;
-    info.rom_size = ASTRA_ROM_BACKING_SIZE;
+    info.rom_base = ASTRA_ROM_ADDRESS;
+    info.rom_size = ASTRA_ROM_SIZE;
     info.kernel_base = ASTRA_KERNEL_LOAD_ADDRESS;
     info.kernel_image_size = 0x00010000u;
     info.kernel_memory_size = ASTRA_KERNEL_RESERVED_SIZE;
@@ -89,15 +89,7 @@ static void initialize_test(void)
               ASTRA_MEMORY_RANGE_KERNEL,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, ASTRA_KERNEL_USABLE_ADDRESS, ASTRA_KERNEL_USABLE_SIZE,
-              ASTRA_MEMORY_RANGE_USABLE,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
-                  ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, ASTRA_ROM_BACKING_ADDRESS, ASTRA_ROM_BACKING_SIZE,
-              ASTRA_MEMORY_RANGE_ROM_BACKING,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_EXECUTE |
-                  ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, 0x03e40000u, 0x000c0000u,
+    add_range(&info, ASTRA_KERNEL_USABLE_ADDRESS, (OHCI_DMA_POOL_BASE - ASTRA_KERNEL_USABLE_ADDRESS),
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);

@@ -387,8 +387,20 @@ KernelHandleStatus kernel_handle_clone_table(
         const KernelHandleEntry *from = &source->entries[index];
         KernelHandleEntry *to = &destination->entries[index];
 
-        if (from->occupied == 0u || from->retain == NULL)
+        if (from->occupied == 0u) {
+            to->generation = from->generation;
             continue;
+        }
+        if (from->retain == NULL) {
+            /*
+             * The address space was cloned too, so it can still contain this
+             * process-private handle value.  A child object installed into
+             * the now-free slot must not make that stale value authoritative.
+             */
+            to->generation = kernel_generation_next_masked(
+                from->generation, KERNEL_HANDLE_GENERATION_MASK);
+            continue;
+        }
         if (!handle_slot_free(destination, index) || to->occupied != 0u ||
             to->reserved != 0u ||
             !kernel_allocation_attempt(KERNEL_ALLOCATION_SITE_HANDLE_SLOT,

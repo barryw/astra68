@@ -6,7 +6,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010024
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010028
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -204,6 +204,21 @@
 #define ASTRA_SYSCALL_NETWORK_EXECUTE      72
 /* D1=CLOCK device lease, D2:D3=Unix epoch nanoseconds. */
 #define ASTRA_SYSCALL_CLOCK_SET            73
+/*
+ * Process-private atomic address waits. WAIT verifies the aligned word at D1
+ * equals D2 and sleeps until the absolute D3:D4 deadline. WAKE wakes at most
+ * D2 priority-ordered waiters for D1. The physical thread pool is the only
+ * bound on concurrent wait addresses.
+ */
+#define ASTRA_SYSCALL_FUTEX_WAIT            74
+#define ASTRA_SYSCALL_FUTEX_WAKE            75
+/* Capability-checked batched DMA transport to an attached host accelerator. */
+#define ASTRA_SYSCALL_HOST_QUERY             76
+#define ASTRA_SYSCALL_HOST_EXECUTE           77
+#define ASTRA_SYSCALL_HOST_CHANNEL_OPEN      78
+#define ASTRA_SYSCALL_HOST_CHANNEL_CLOSE     79
+/* D2=consumer position, D3:D4=deadline; the current thread owns the channel. */
+#define ASTRA_SYSCALL_HOST_CHANNEL_WAIT      80
 
 #define ASTRA_VM_PRIVATE_READ  (1u << 0)
 #define ASTRA_VM_PRIVATE_WRITE (1u << 1)
@@ -380,6 +395,8 @@
  * caller saw as "no input", so it looked like a hang rather than a refusal.
  */
 #define ASTRA_ABI_ALIGNMENT 4u
+/* Plain 32-bit scalar arrays follow the MC68030 ABI, which aligns them to 2. */
+#define ASTRA_SCALAR_ALIGNMENT 2u
 
 typedef struct AstraIrqRecord {
     _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t timestamp_high;

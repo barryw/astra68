@@ -51,15 +51,6 @@ static void clear_ring(AstraBulkRing *ring)
     ring->reserved = 0u;
 }
 
-static void release_fence(void)
-{
-#if defined(__m68k__)
-    __asm__ volatile("nop" : : : "memory");
-#else
-    astra_compiler_barrier();
-#endif
-}
-
 static int reserved_zero(const volatile uint32_t reserved[3])
 {
     return reserved[0] == 0u && reserved[1] == 0u && reserved[2] == 0u;
@@ -347,7 +338,7 @@ AstraResult astra_bulk_ring_write_commit(AstraBulkRing *ring)
     if (!header_valid(ring))
         return report_corruption(ring);
     next = ring->local_position + 1u;
-    release_fence();
+    astra_memory_release_fence();
     ring->header->producer_position = next;
     ring->local_position = next;
     ring->reservation_position = 0u;
@@ -394,7 +385,7 @@ AstraResult astra_bulk_ring_read_commit(AstraBulkRing *ring)
     if (!header_valid(ring))
         return report_corruption(ring);
     next = ring->local_position + 1u;
-    release_fence();
+    astra_memory_release_fence();
     ring->header->consumer_position = next;
     ring->local_position = next;
     ring->reservation_position = 0u;

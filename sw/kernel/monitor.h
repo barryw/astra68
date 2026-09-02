@@ -52,9 +52,11 @@ bool kernel_monitor_ready(void);
 bool kernel_monitor_uart_binding(KernelIrqInternalBinding *binding);
 bool kernel_monitor_spi_binding(KernelIrqInternalBinding *binding);
 bool kernel_monitor_uart_irq_service(uint8_t source, uint64_t timestamp,
-                                     void *context);
+                                     void *context,
+                                     uint32_t *woken_threads);
 bool kernel_monitor_spi_irq_service(uint8_t source, uint64_t timestamp,
-                                    void *context);
+                                    void *context,
+                                    uint32_t *woken_threads);
 bool kernel_monitor_stats(KernelMonitorStats *stats);
 
 #if defined(KERNEL_MONITOR_HOST_TEST)

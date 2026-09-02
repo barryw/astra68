@@ -100,7 +100,8 @@ typedef bool (*KernelIrqComplete)(uint8_t source,
                                   void *context);
 typedef bool (*KernelIrqQuiesce)(uint8_t source, void *context);
 typedef bool (*KernelIrqInternalService)(uint8_t source, uint64_t timestamp,
-                                         void *context);
+                                         void *context,
+                                         uint32_t *woken_threads);
 
 typedef struct KernelIrqBinding {
     KernelIrqCapture capture;

@@ -1,17 +1,15 @@
 # picolibc cross file for Astra 68.
 #
-# The stock scripts/cross-m68k-linux-gnu.txt targets -march=68020 with the
-# toolchain's default float ABI. Astra builds -m68030 -msoft-float, and a libc
-# built for a different float ABI links without complaint and returns wrong
-# answers, so this file exists rather than a flag on the command line.
+# Astra's compiler owns the CPU, float, and thread-pointer ABI defaults.  Keep
+# the libc build on that target so it cannot silently inherit Linux semantics.
 
 [binaries]
-c = ['m68k-linux-gnu-gcc', '-m68030', '-msoft-float', '-static', '-nostdlib', '-Wl,--build-id=none']
-ar = 'm68k-linux-gnu-ar'
-as = 'm68k-linux-gnu-as'
-ld = 'm68k-linux-gnu-ld'
-nm = 'm68k-linux-gnu-nm'
-strip = 'm68k-linux-gnu-strip'
+c = ['m68k-astra-gcc', '-static', '-nostdlib', '-Wl,--build-id=none']
+ar = 'm68k-astra-ar'
+as = 'm68k-astra-as'
+ld = 'm68k-astra-ld'
+nm = 'm68k-astra-nm'
+strip = 'm68k-astra-strip'
 
 [host_machine]
 system = 'unknown'

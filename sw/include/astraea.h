@@ -1,5 +1,5 @@
 // Astraea — DMA / blitter / copper / arbiter register interface for Astra 68.
-// Mirror of docs/ASTRAEA.md (v0.4). Keep in sync with that spec.
+// Astraea device ABI. Keep in sync with the active graphics implementation.
 //
 // 32-bit registers, 4-byte stride, big-endian (m68k). Supervisor-only MMIO.
 #ifndef ASTRA_ASTRAEA_H

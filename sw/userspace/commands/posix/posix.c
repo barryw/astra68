@@ -128,6 +128,13 @@ enum {
     FAIL_UDP = 79,
     FAIL_TCP = 80,
     FAIL_SOCKET_EXEC = 81,
+    FAIL_SYMLINK_CREATE = 82,
+    FAIL_SYMLINK_READ = 83,
+    FAIL_SYMLINK_LSTAT = 84,
+    FAIL_SYMLINK_STAT = 85,
+    FAIL_SYMLINK_OPEN = 86,
+    FAIL_SYMLINK_UNLINK = 87,
+    FAIL_DURABILITY = 88,
 };
 
 #define DIRECTORY "posixcheck"
@@ -135,6 +142,7 @@ enum {
 #define RENAMED "renamed.txt"
 #define EXCLUSIVE "exclusive.tmp"
 #define DURABLE "durable.tmp"
+#define LINK "notes.link"
 #define BODY "astra posix layer\n"
 /* Where the tail check seeks to, and what it must find from there. */
 #define TAIL_AT 6
@@ -187,6 +195,116 @@ network_child(void)
 }
 
 static int
+durability_probe(const char *path, const char *payload, int gated)
+{
+    size_t length = strlen(payload);
+    char *observed = malloc(length + 1u);
+    FILE *file;
+
+    if (observed == NULL)
+        return complain(FAIL_DURABILITY, "durability buffer");
+    if (gated) {
+        printf("ASTRA DURABILITY READY\n");
+        (void)fflush(stdout);
+        if (getchar() == EOF) {
+            free(observed);
+            return complain(FAIL_DURABILITY, "durability start gate");
+        }
+    }
+    file = fopen(path, "wb");
+    if (file == NULL || fwrite(payload, 1u, length, file) != length ||
+        fflush(file) != 0 || fsync(fileno(file)) != 0) {
+        if (file != NULL)
+            (void)fclose(file);
+        free(observed);
+        return complain(FAIL_DURABILITY, "durability fsync");
+    }
+    printf("ASTRA DURABILITY SYNCED\n");
+    (void)fflush(stdout);
+    if (gated && getchar() == EOF) {
+        (void)fclose(file);
+        free(observed);
+        return complain(FAIL_DURABILITY, "durability gate");
+    }
+    /* A later completed transition proves cuts after the first fsync ack. */
+    if (gated && fsync(fileno(file)) != 0) {
+        (void)fclose(file);
+        free(observed);
+        return complain(FAIL_DURABILITY, "durability post-sync barrier");
+    }
+    if (fclose(file) != 0) {
+        free(observed);
+        return complain(FAIL_DURABILITY, "durability close");
+    }
+    file = fopen(path, "rb");
+    if (file == NULL || fread(observed, 1u, length, file) != length ||
+        fgetc(file) != EOF || memcmp(observed, payload, length) != 0) {
+        if (file != NULL)
+            (void)fclose(file);
+        free(observed);
+        errno = EIO;
+        return complain(FAIL_DURABILITY, "durability readback");
+    }
+    if (fclose(file) != 0) {
+        free(observed);
+        return complain(FAIL_DURABILITY, "durability read close");
+    }
+    free(observed);
+    printf("ASTRA DURABILITY PASS\n");
+    (void)fflush(stdout);
+    return 0;
+}
+
+static int
+durability_check(const char *path, const char *payload)
+{
+    struct stat about;
+    size_t expected = strlen(payload);
+    char *observed;
+    FILE *file;
+
+    if (stat(path, &about) != 0) {
+        if (errno == ENOENT) {
+            printf("ASTRA DURABILITY ABSENT\n");
+            (void)fflush(stdout);
+            return 0;
+        }
+        return complain(FAIL_DURABILITY, "durability check stat");
+    }
+    if (about.st_size < 0 || (uint64_t)about.st_size > expected) {
+        errno = EIO;
+        return complain(FAIL_DURABILITY, "durability check size");
+    }
+    observed = malloc((size_t)about.st_size + 1u);
+    if (observed == NULL)
+        return complain(FAIL_DURABILITY, "durability check buffer");
+    file = fopen(path, "rb");
+    if (file == NULL ||
+        fread(observed, 1u, (size_t)about.st_size, file) !=
+            (size_t)about.st_size ||
+        fgetc(file) != EOF ||
+        memcmp(observed, payload, (size_t)about.st_size) != 0) {
+        if (file != NULL)
+            (void)fclose(file);
+        free(observed);
+        errno = EIO;
+        return complain(FAIL_DURABILITY, "durability check content");
+    }
+    if (fclose(file) != 0) {
+        free(observed);
+        return complain(FAIL_DURABILITY, "durability check close");
+    }
+    if (about.st_size == (off_t)expected)
+        printf("ASTRA DURABILITY EXACT\n");
+    else
+        printf("ASTRA DURABILITY PREFIX %lu\n",
+               (unsigned long)about.st_size);
+    (void)fflush(stdout);
+    free(observed);
+    return 0;
+}
+
+static int
 read_terminal_reply(uint8_t *reply, size_t capacity, uint8_t terminator,
                     size_t *length)
 {
@@ -220,6 +338,12 @@ main(int argc, char **argv)
 
     if (argc == 2 && strcmp(argv[1], "--network-child") == 0)
         return network_child();
+    if (argc == 4 && strcmp(argv[1], "--durability") == 0)
+        return durability_probe(argv[2], argv[3], 0);
+    if (argc == 4 && strcmp(argv[1], "--durability-gated") == 0)
+        return durability_probe(argv[2], argv[3], 1);
+    if (argc == 4 && strcmp(argv[1], "--durability-check") == 0)
+        return durability_check(argv[2], argv[3]);
 
     if (argc != 1 &&
         argc != (int)(sizeof(expected_arguments) /
@@ -432,6 +556,29 @@ main(int argc, char **argv)
     if (about.st_size != (off_t)(sizeof(BODY) - 1u) ||
         !S_ISREG(about.st_mode))
         return FAIL_STAT_SIZE;
+
+    if (symlink(NAME, DIRECTORY "/" LINK) != 0)
+        return complain(FAIL_SYMLINK_CREATE, "symlink");
+    (void)memset(buffer, 0, sizeof(buffer));
+    if (readlink(DIRECTORY "/" LINK, buffer, sizeof(buffer)) !=
+            (ssize_t)(sizeof(NAME) - 1u) ||
+        memcmp(buffer, NAME, sizeof(NAME) - 1u) != 0)
+        return complain(FAIL_SYMLINK_READ, "readlink");
+    if (lstat(DIRECTORY "/" LINK, &about) != 0 ||
+        !S_ISLNK(about.st_mode))
+        return complain(FAIL_SYMLINK_LSTAT, "lstat symlink");
+    if (stat(DIRECTORY "/" LINK, &about) != 0 ||
+        !S_ISREG(about.st_mode) ||
+        about.st_size != (off_t)(sizeof(BODY) - 1u))
+        return complain(FAIL_SYMLINK_STAT, "stat symlink target");
+    fd = open(DIRECTORY "/" LINK, O_RDONLY);
+    (void)memset(buffer, 0, sizeof(buffer));
+    if (fd < 0 || read(fd, buffer, sizeof(BODY) - 1u) !=
+                      (ssize_t)(sizeof(BODY) - 1u) ||
+        memcmp(buffer, BODY, sizeof(BODY) - 1u) != 0 || close(fd) != 0)
+        return complain(FAIL_SYMLINK_OPEN, "open symlink target");
+    if (unlink(DIRECTORY "/" LINK) != 0)
+        return complain(FAIL_SYMLINK_UNLINK, "unlink symlink");
 
     /* Cross every retired 8/16-entry table through the complete target path. */
     {

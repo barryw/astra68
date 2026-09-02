@@ -89,7 +89,7 @@ struct ext4_buf {
 	struct ext4_bcache *bc;
 
 	/**@brief   Whether or not buffer is on dirty list.*/
-	bool on_dirty_list;
+	bool on_dirty_tree;
 
 	/**@brief   LBA tree node*/
 	RB_ENTRY(ext4_buf) lba_node;
@@ -97,8 +97,8 @@ struct ext4_buf {
 	/**@brief   LRU tree node*/
 	RB_ENTRY(ext4_buf) lru_node;
 
-	/**@brief   Dirty list node*/
-	SLIST_ENTRY(ext4_buf) dirty_node;
+	/**@brief   Dirty tree node*/
+	RB_ENTRY(ext4_buf) dirty_node;
 
 	/**@brief   Callback routine after a disk-write operation.
 	 * @param   bc block cache descriptor
@@ -152,8 +152,15 @@ struct ext4_bcache {
 	/**@brief   A tree holding unreferenced bufs*/
 	RB_HEAD(ext4_buf_lru, ext4_buf) lru_root;
 
-	/**@brief   A singly-linked list holding dirty buffers*/
-	SLIST_HEAD(ext4_buf_dirty, ext4_buf) dirty_list;
+	/**@brief   Dirty buffers ordered by logical block address*/
+	RB_HEAD(ext4_buf_dirty, ext4_buf) dirty_root;
+
+	/**@brief   Reused scatter/gather state for dirty writeback.*/
+	void *writeback;
+	struct ext4_buf **write_bufs;
+	const void **write_data;
+	uint32_t *write_counts;
+	uint32_t write_capacity;
 };
 
 /**@brief buffer state bits
@@ -200,24 +207,14 @@ static inline void ext4_bcache_clear_dirty(struct ext4_buf *buf) {
 /**@brief   Insert buffer to dirty cache list
  * @param   bc block cache descriptor
  * @param   buf buffer descriptor */
-static inline void
-ext4_bcache_insert_dirty_node(struct ext4_bcache *bc, struct ext4_buf *buf) {
-	if (!buf->on_dirty_list) {
-		SLIST_INSERT_HEAD(&bc->dirty_list, buf, dirty_node);
-		buf->on_dirty_list = true;
-	}
-}
+void ext4_bcache_insert_dirty_node(struct ext4_bcache *bc,
+				    struct ext4_buf *buf);
 
 /**@brief   Remove buffer to dirty cache list
  * @param   bc block cache descriptor
  * @param   buf buffer descriptor */
-static inline void
-ext4_bcache_remove_dirty_node(struct ext4_bcache *bc, struct ext4_buf *buf) {
-	if (buf->on_dirty_list) {
-		SLIST_REMOVE(&bc->dirty_list, buf, ext4_buf, dirty_node);
-		buf->on_dirty_list = false;
-	}
-}
+void ext4_bcache_remove_dirty_node(struct ext4_bcache *bc,
+				    struct ext4_buf *buf);
 
 
 /**@brief   Dynamic initialization of block cache.
@@ -236,6 +233,16 @@ void ext4_bcache_cleanup(struct ext4_bcache *bc);
  * @param   bc block cache descriptor
  * @return  standard error code*/
 int ext4_bcache_fini_dynamic(struct ext4_bcache *bc);
+
+/**@brief   Allocate writeback vectors from a runtime device limit.*/
+int ext4_bcache_prepare_writeback(struct ext4_bcache *bc, uint32_t capacity);
+
+/**@brief   Collect the lowest contiguous run of ready dirty buffers.*/
+uint32_t ext4_bcache_dirty_run(struct ext4_bcache *bc,
+			       uint32_t blocks_per_buffer);
+
+/**@brief   Return the lowest ready dirty buffer.*/
+struct ext4_buf *ext4_bcache_first_dirty(struct ext4_bcache *bc);
 
 /**@brief   Get a buffer with the lowest LRU counter in bcache.
  * @param   bc block cache descriptor

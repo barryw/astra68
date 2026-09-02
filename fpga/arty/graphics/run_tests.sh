@@ -27,7 +27,7 @@ vvp "$BUILD/tb_astra_axi_read_3to1"
 iverilog -g2012 -Wall \
     -s tb_astra_front_panel_axi \
     -o "$BUILD/tb_astra_front_panel_axi" \
-    "$ROOT/fpga/soc/astra_front_panel.sv" \
+    "$ROOT/fpga/arty/common/astra_front_panel.sv" \
     "$ROOT/fpga/arty/rtl/astra_front_panel_axi.sv" \
     "$ROOT/fpga/arty/rtl/sim/tb_astra_front_panel_axi.sv"
 
@@ -129,7 +129,7 @@ run_sprite_line_builder 8 count_limit
 iverilog -g2012 -Wall \
     -s tb_astra_pixel_compositor \
     -o "$BUILD/tb_astra_pixel_compositor" \
-    "$ROOT/fpga/soc/astra_async_fifo.sv" \
+    "$ROOT/fpga/arty/common/astra_async_fifo.sv" \
     "$ROOT/fpga/arty/graphics/astra_palette_store.sv" \
     "$ROOT/fpga/arty/graphics/astra_premult_blend.sv" \
     "$ROOT/fpga/arty/graphics/astra_pixel_compositor.sv" \
@@ -140,7 +140,7 @@ vvp "$BUILD/tb_astra_pixel_compositor"
 iverilog -g2012 -Wall \
     -s tb_astra_palette_store \
     -o "$BUILD/tb_astra_palette_store" \
-    "$ROOT/fpga/soc/astra_async_fifo.sv" \
+    "$ROOT/fpga/arty/common/astra_async_fifo.sv" \
     "$ROOT/fpga/arty/graphics/astra_palette_store.sv" \
     "$ROOT/fpga/arty/graphics/sim/tb_astra_palette_store.sv"
 
@@ -208,7 +208,7 @@ vvp "$BUILD/tb_astra_copper_structural_state"
 iverilog -g2012 -Wall \
     -s tb_astra_copper_pixel_events \
     -o "$BUILD/tb_astra_copper_pixel_events" \
-    "$ROOT/fpga/soc/astra_async_fifo.sv" \
+    "$ROOT/fpga/arty/common/astra_async_fifo.sv" \
     "$ROOT/fpga/arty/graphics/astra_copper_pixel_events.sv" \
     "$ROOT/fpga/arty/graphics/sim/tb_astra_copper_pixel_events.sv"
 
@@ -247,7 +247,7 @@ PIPELINE_SOURCES=(
     "$ROOT/fpga/arty/graphics/astra_copper_beam_scheduler.sv"
     "$ROOT/fpga/arty/graphics/astra_copper_registers.sv"
     "$ROOT/fpga/arty/graphics/astra_copper_structural_state.sv"
-    "$ROOT/fpga/soc/astra_async_fifo.sv"
+    "$ROOT/fpga/arty/common/astra_async_fifo.sv"
     "$ROOT/fpga/arty/graphics/astra_copper_pixel_events.sv"
     "$ROOT/fpga/arty/graphics/astra_graphics_control.sv"
     "$ROOT/fpga/arty/graphics/astra_render_surface_validator.sv"

@@ -1,7 +1,7 @@
 include ../../../mk/m68k-cross.mk
 
 CC := $(CROSS)gcc
-AR := $(CROSS)ar
+AR := $(CROSS)gcc-ar
 READELF := $(CROSS)readelf
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
@@ -13,13 +13,15 @@ CPPFLAGS := -Iinclude -I../../include
 PORT_CPPFLAGS := $(CPPFLAGS) -I$(RUNTIME)/include -I$(NDK)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
-TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
+TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -flto -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 HOST_FLAGS := -O2
 HOST_THREAD_FLAGS := -pthread
+VFS_TEST_CPPFLAGS := -DASTRA_VFS_TEST_HOOKS=1
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
+THREAD_SANITIZER_FLAGS := -fsanitize=thread -fno-omit-frame-pointer -g
 LIBRARY_LD := ../runtime/astra_library.ld
-LIBRARY_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
+LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -flto -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections -fPIC -fvisibility=hidden
 LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
 	-Wl,--no-undefined -Wl,--build-id=none -Wl,--gc-sections \
@@ -40,6 +42,8 @@ HEADERS := include/astra/vfs_service_core.h include/astra/vfs_backend.h \
 	include/astra/vfs_assign.h include/astra/vfs_path.h \
 	include/astra/vfs_port_transport.h include/astra/vfs_union.h \
 	include/astra/vfs_process.h include/astra/vfs_reader.h \
+	include/astra/vfs_host_backend.h include/astra/vfs_host_transport.h \
+	include/astra/vfs_host_direct.h \
 	$(NDK)/include/astra/shared_library.h \
 	../../include/astra/vfs_service.h \
 	../../include/astra/syscall.h
@@ -48,7 +52,10 @@ TARGET := build/m68k/libastravfs.a
 TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/vfs_assign.o build/m68k/vfs_path.o \
 	build/m68k/vfs_local_transport.o build/m68k/vfs_port_transport.o \
-	build/m68k/vfs_ext4_backend.o build/m68k/vfs_union.o \
+	build/m68k/vfs_ext4_backend.o build/m68k/vfs_host_backend.o \
+	build/m68k/vfs_host_transport.o \
+	build/m68k/vfs_host_direct.o \
+	build/m68k/vfs_union.o \
 	build/m68k/vfs_process.o build/m68k/vfs_reader.o \
 	$(NDK)/build/m68k/manifest.o $(NDK)/build/m68k/bundle.o \
 	build/m68k/vfs_status.o
@@ -73,6 +80,16 @@ build/m68k/%.o: src/%.c $(HEADERS)
 # runtime's declarations. The core deliberately does not: a service core that
 # could reach the kernel directly would be one that could skip the protocol.
 build/m68k/vfs_port_transport.o: src/vfs_port_transport.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
+build/m68k/vfs_host_transport.o: src/vfs_host_transport.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
+build/m68k/vfs_host_direct.o: src/vfs_host_direct.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
@@ -103,14 +120,13 @@ $(FILESYSTEM_LIBRARY): $(FILESYSTEM_LIBRARY_OBJECTS) $(RUNTIME_PIC_LIB) \
 		$(LIBRARY_LD)
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(LIBRARY_LINK_FLAGS) \
-		-Wl,-soname,filesystem.library.1 -o $@ \
+		-Wl,-soname,filesystem.library.2 -o $@ \
 		$(FILESYSTEM_LIBRARY_OBJECTS) $(RUNTIME_PIC_LIB) -lgcc
 
 library-contract: $(FILESYSTEM_LIBRARY)
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
-		grep -q '^filesystem.library 1.4.0 ABI 1.4$$'
-	@! $(READELF) -r $(FILESYSTEM_LIBRARY) | \
-		grep -E 'R_68K_(GLOB_DAT|JMP_SLOT|32|PC32)'
+		grep -q '^filesystem.library 2.0.0 ABI 2.0$$'
+	$(call ASTRA_CHECK_DSO,$(FILESYSTEM_LIBRARY))
 
 # The one translation unit that is allowed to know what lwext4 is.
 build/m68k/vfs_ext4_backend.o: src/vfs_ext4_backend.c $(HEADERS)
@@ -120,7 +136,7 @@ build/m68k/vfs_ext4_backend.o: src/vfs_ext4_backend.c $(HEADERS)
 
 $(HOST_TEST): $(CORE_SOURCES) tests/test_vfs_service_core.c $(HEADERS)
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+	$(HOST_CC) $(CPPFLAGS) $(VFS_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) \
 		src/vfs_service_core.c src/vfs_client.c \
 		src/vfs_local_transport.c tests/test_vfs_service_core.c -o $@
@@ -146,19 +162,32 @@ $(UNION_TEST): src/vfs_union.c src/vfs_assign.c src/vfs_path.c \
 # them in the test: the seam is the three syscalls, so what is under test is
 # the transport, the serve loop and the client above them.
 PORT_TEST := build/host/test_vfs_port
+PORT_THREAD_TEST := build/host/test_vfs_port_threads
 
 $(PORT_TEST): src/vfs_port_transport.c src/vfs_service_core.c \
 		src/vfs_client.c src/vfs_local_transport.c tests/test_vfs_port.c \
 		$(HEADERS)
 	@mkdir -p $(@D)
-	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+	$(HOST_CC) $(PORT_CPPFLAGS) $(VFS_TEST_CPPFLAGS) \
+		$(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(HOST_THREAD_FLAGS) \
 		src/vfs_port_transport.c src/vfs_service_core.c src/vfs_client.c \
 		src/vfs_local_transport.c tests/test_vfs_port.c -o $@
+
+$(PORT_THREAD_TEST): src/vfs_port_transport.c \
+		tests/test_vfs_port_threads.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(HOST_THREAD_FLAGS) -ffunction-sections -Wl,--gc-sections \
+		-DASTRA_VFS_EMBEDDED_THREAD_STATE=1 \
+		src/vfs_port_transport.c tests/test_vfs_port_threads.c -o $@
 
 PATH_TEST := build/host/test_vfs_path
 PROCESS_TEST := build/host/test_vfs_process
 READER_TEST := build/host/test_vfs_reader
 FILESYSTEM_LIBRARY_TEST := build/host/test_filesystem_library
+HOST_BACKEND_TEST := build/host/test_vfs_host_backend
+HOST_TRANSPORT_TEST := build/host/test_vfs_host_transport
 
 $(PATH_TEST): src/vfs_path.c tests/test_vfs_path.c $(HEADERS)
 	@mkdir -p $(@D)
@@ -185,22 +214,40 @@ $(FILESYSTEM_LIBRARY_TEST): src/filesystem_library.c src/vfs_union.c \
 		src/filesystem_library.c src/vfs_union.c src/vfs_assign.c \
 		src/vfs_path.c tests/test_filesystem_library.c -o $@
 
+$(HOST_BACKEND_TEST): src/vfs_host_backend.c \
+		tests/test_vfs_host_backend.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/vfs_host_backend.c tests/test_vfs_host_backend.c -o $@
+
+$(HOST_TRANSPORT_TEST): src/vfs_host_transport.c \
+		tests/test_vfs_host_transport.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		-fno-pie -no-pie src/vfs_host_transport.c \
+		tests/test_vfs_host_transport.c -o $@
+
 test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
-		$(PROCESS_TEST) $(READER_TEST) $(FILESYSTEM_LIBRARY_TEST)
+		$(PORT_THREAD_TEST) \
+		$(PROCESS_TEST) $(READER_TEST) $(FILESYSTEM_LIBRARY_TEST) \
+		$(HOST_BACKEND_TEST) $(HOST_TRANSPORT_TEST)
 	./$(HOST_TEST)
 	./$(ASSIGN_TEST)
 	./$(UNION_TEST)
 	./$(PATH_TEST)
 	./$(PORT_TEST)
+	./$(PORT_THREAD_TEST)
 	./$(PROCESS_TEST)
 	./$(READER_TEST)
 	./$(FILESYSTEM_LIBRARY_TEST)
+	./$(HOST_BACKEND_TEST)
+	./$(HOST_TRANSPORT_TEST)
 
 # The path parser is nothing but bounds arithmetic over caller buffers, so it
 # is the one piece here where a sanitizer earns its run.
 sanitize:
 	@mkdir -p build/host
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+	$(HOST_CC) $(CPPFLAGS) $(VFS_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) $(SANITIZER_FLAGS) \
 		src/vfs_service_core.c src/vfs_client.c \
 		src/vfs_local_transport.c tests/test_vfs_service_core.c \
@@ -218,8 +265,9 @@ sanitize:
 		$(SANITIZER_FLAGS) src/vfs_union.c src/vfs_assign.c src/vfs_path.c \
 		tests/test_vfs_union.c -o build/host/test_vfs_union_sanitize
 	./build/host/test_vfs_union_sanitize
-	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		$(SANITIZER_FLAGS) src/vfs_port_transport.c src/vfs_service_core.c \
+	$(HOST_CC) $(PORT_CPPFLAGS) $(VFS_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(HOST_THREAD_FLAGS) $(SANITIZER_FLAGS) \
+		src/vfs_port_transport.c src/vfs_service_core.c \
 		src/vfs_client.c src/vfs_local_transport.c tests/test_vfs_port.c \
 		-o build/host/test_vfs_port_sanitize
 	./build/host/test_vfs_port_sanitize
@@ -232,6 +280,31 @@ sanitize:
 		src/vfs_assign.c src/vfs_path.c tests/test_filesystem_library.c \
 		-o build/host/test_filesystem_library_sanitize
 	./build/host/test_filesystem_library_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/vfs_host_backend.c \
+		tests/test_vfs_host_backend.c \
+		-o build/host/test_vfs_host_backend_sanitize
+	./build/host/test_vfs_host_backend_sanitize
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) -fno-pie -no-pie src/vfs_host_transport.c \
+		tests/test_vfs_host_transport.c \
+		-o build/host/test_vfs_host_transport_sanitize
+	./build/host/test_vfs_host_transport_sanitize
+
+tsan:
+	@mkdir -p build/host
+	$(HOST_CC) $(CPPFLAGS) $(VFS_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(HOST_THREAD_FLAGS) $(THREAD_SANITIZER_FLAGS) \
+		src/vfs_service_core.c src/vfs_client.c \
+		src/vfs_local_transport.c tests/test_vfs_service_core.c \
+		-o build/host/test_vfs_service_core_tsan
+	setarch x86_64 -R ./build/host/test_vfs_service_core_tsan
+	$(HOST_CC) $(PORT_CPPFLAGS) $(VFS_TEST_CPPFLAGS) \
+		$(COMMON_FLAGS) $(HOST_FLAGS) $(HOST_THREAD_FLAGS) \
+		$(THREAD_SANITIZER_FLAGS) src/vfs_port_transport.c \
+		src/vfs_service_core.c src/vfs_client.c src/vfs_local_transport.c \
+		tests/test_vfs_port.c -o build/host/test_vfs_port_tsan
+	setarch x86_64 -R ./build/host/test_vfs_port_tsan
 
 analyze:
 	@mkdir -p build/analyzer
@@ -258,6 +331,8 @@ analyze:
 	$(ANALYZER_CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		-fanalyzer -c src/vfs_ext4_backend.c \
 		-o build/analyzer/vfs_ext4_backend.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/vfs_host_backend.c -o build/analyzer/vfs_host_backend.o
 	$(ANALYZER_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/filesystem_library.c -o build/analyzer/filesystem_library.o
 
@@ -268,4 +343,4 @@ analyze:
 clean:
 	rm -rf build
 
-.PHONY: all test sanitize analyze library-contract clean
+.PHONY: all test sanitize tsan analyze library-contract clean

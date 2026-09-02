@@ -1,0 +1,38 @@
+#!/bin/sh
+set -eu
+
+root=${1:-}
+root=${root%/}
+rcs="$root/etc/default/rcS"
+populate="$root/etc/init.d/populate-volatile.sh"
+temporary="$rcs.astra-new.$$"
+trap 'rm -f "$temporary"' EXIT INT TERM
+
+[ -f "$rcs" ] || { echo "missing $rcs" >&2; exit 1; }
+[ -x "$populate" ] || { echo "missing executable $populate" >&2; exit 1; }
+grep -q '^ROOTFS_READ_ONLY=' "$rcs" || {
+    echo "missing ROOTFS_READ_ONLY in $rcs" >&2
+    exit 1
+}
+sed 's/^ROOTFS_READ_ONLY=.*/ROOTFS_READ_ONLY=yes/' "$rcs" >"$temporary"
+chmod 0644 "$temporary"
+mv "$temporary" "$rcs"
+trap - EXIT INT TERM
+
+"$populate"
+
+check_link() {
+    path=$1
+    expected=$2
+    [ -L "$root/$path" ] && [ "$(readlink "$root/$path")" = "$expected" ] || {
+        echo "$root/$path is not the required $expected symlink" >&2
+        exit 1
+    }
+}
+
+check_link tmp /var/tmp
+check_link var/log /var/volatile/log
+check_link var/lock /run/lock
+check_link var/run /run
+check_link var/tmp /var/volatile/tmp
+check_link etc/resolv.conf /var/run/resolv.conf

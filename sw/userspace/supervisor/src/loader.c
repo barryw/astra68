@@ -16,6 +16,7 @@
 #include <astra/service.h>
 #include <astra/status.h>
 #include <astra/vfs_path.h>
+#include <astra/vfs_host_direct.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_reader.h>
 #include <astra/vfs_service_core.h>
@@ -57,6 +58,7 @@ static uint32_t launch_receive;
  * child reads process state with the protocol it already reads files with.
  */
 static AstraVfsService proc_service;
+static AstraVfsSessionSlot proc_sessions[ASTRA_VFS_SESSION_MAX];
 static AstraVfsPortService proc_port;
 static uint32_t proc_receive;
 static uint32_t proc_send;
@@ -451,7 +453,8 @@ static uint32_t publish(const SupervisorManifestPublication *publication,
         return ASTRA_STATUS_OK;
     }
     client = &service_clients[service_count];
-    if (astra_vfs_port_connect(client, service_handles[service_count]) !=
+    if (astra_vfs_host_port_connect(client,
+                                    service_handles[service_count]) !=
             ASTRA_VFS_OK ||
         supervisor_vfs_register(client, handle) == 0u ||
         astra_assign_bind(supervisor_assigns(), publication->name, handle,
@@ -664,11 +667,12 @@ static void proc_tree_start(void)
         return;
     if (!astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile),
                                        &file_storage, &file_capacity) ||
-        !astra_vfs_service_init(&proc_service, supervisor_proc_ops(), NULL,
-                                file_storage, file_capacity))
+        !astra_vfs_service_init(
+            &proc_service, supervisor_proc_ops(), NULL, proc_sessions,
+            ASTRA_VFS_SESSION_MAX, file_storage, file_capacity))
         return;
     if (astra_rt_port_create(SUPERVISOR_PROC_PORT_MESSAGES,
-                             (uint32_t)sizeof(AstraVfsRequestMessage),
+                             (uint32_t)sizeof(AstraVfsRenameRequestMessage),
                              &proc_receive, &proc_send) != ASTRA_SYSCALL_OK) {
         proc_send = 0u;
         return;

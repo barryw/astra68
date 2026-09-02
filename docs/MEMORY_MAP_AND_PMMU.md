@@ -7,22 +7,10 @@ document defines how the kernel translates, owns, and changes those ranges.
 
 ## Physical memory
 
-| Physical range | Size | Kernel treatment |
-|---|---:|---|
-| `0x02000000..0x02003FFF` | 16 KiB | wired early log |
-| `0x02004000..0x0200FFFF` | 48 KiB | allocatable after handoff |
-| `0x02010000..0x0208FFFF` | 512 KiB | wired kernel bootstrap reservation |
-| `0x02090000..0x0209FFFF` | 64 KiB | wired retained trace |
-| `0x020A0000..0x03DFFFFF` | 29.375 MiB | allocatable |
-| `0x03E00000..0x03E3FFFF` | 256 KiB | wired ROM backing |
-| `0x03E40000..0x03FFFFFF` | 1.75 MiB | allocatable |
-| `0xFFE00000..0xFFE3FFFF` | 256 KiB | ULX3S read/execute ROM alias |
-| `0xFFE00000..0xFFE7FFFF` | 512 KiB | Arty-hosted read/execute ROM; not guest SDRAM |
-| `0xFFF00000..0xFFF4FFFF` | device pages | supervisor, cache-inhibited |
-
-Boot ranges come only from validated `AstraBootInfo`; the allocator does not
-infer ownership from linker symbols. Every one of the 8,192 current 4 KiB
-frames has an 8-byte owner/reference/pin/state record.
+The physical aperture and boot-reservation table lives only in
+`MEMORY_MAP.md`. Boot ranges come from validated `AstraBootInfo`; the allocator
+does not infer ownership from linker symbols. Frame metadata is sized from the
+reported 128 MiB guest map.
 
 ## Logical spaces
 
@@ -42,28 +30,11 @@ frames has an 8-byte owner/reference/pin/state record.
 Reset is not treated as an ATC invalidation guarantee. Before enabling
 translation, boot explicitly writes disabled TC and TT0/TT1, installs SRP and
 the initial CRP, sets SFC/DFC, executes `PFLUSHA`, independently invalidates the
-instruction and data caches through CACR, and only then loads enabled TC. A
-Motorola-directed RTL test covers simultaneous CACR I/D command decode even
-though the kernel deliberately emits the two invalidations separately.
-This follows MC68030 User's Manual section 9.2.2, which explicitly requires an
-ATC-flushing MMU instruction after reset and before translation is enabled.
-
-**CURRENT RTL:** source `c599f921cb35dcc7e8d2988ba253769341311516`
-separates deterministic ECP5 configuration initialization from architectural
-processor reset. One configuration-initialized bit clears scalar PMMU state and
-invalidates the ATC on the first released clock but is never re-armed by
-processor reset. MC68030 `RESET` clears only TC.E, TT0.E, and TT1.E; it
-preserves CRP, SRP, the other control fields, and valid ATC entries. A focused
-Motorola-directed test retains a deliberately stale translation across reset,
-observes it with level-zero `PTEST`, executes `PFLUSHA` while TC.E is clear,
-then proves that re-enabling translation walks to the changed descriptor. The
-complete strict Questa inventory is 141 total and 115 clean with the prior
-3 compile, 18 simulation, and 5 unscored buckets unchanged. GHDL 7.0 generates
-the complete core and a byte-identical pre-commit reduced-BIST full-SoC run
-passes POST, protected multitasking, offender-only fault containment, and four
-lifecycle soak cycles. The prior exact full-chip route and board reset/boot
-qualification pass; guarded-worker source `42f4bb55...` requires a new exact
-route and board promotion.
+instruction and data caches through CACR, and only then loads enabled TC. This
+follows MC68030 User's Manual section 9.2.2, which requires an ATC-flushing MMU
+instruction after reset and before translation is enabled. QEMU is the sole
+processor implementation and its PMMU behavior is covered by the kernel and
+machine qualification suites.
 
 ### User (one CRP per process)
 
@@ -90,13 +61,13 @@ user-copy, and teardown evidence is tied to that configuration and remains the
 comparison oracle.
 
 **LOCKED TARGET:** add an 8 KiB `9/10/13` build configuration and make it the
-stable default after it passes identical host, Musashi, RTL, route, and board
+stable default after it passes identical host, QEMU, route, and board
 gates. Keep 4 KiB as a supported build option. The selection report includes:
 
 | Metric | 4 KiB | 8 KiB |
 |---|---:|---:|
-| physical frames in 32 MiB | 8,192 | 4,096 |
-| metadata at 8 bytes/frame | 64 KiB | 32 KiB |
+| physical frames in 128 MiB | 32,768 | 16,384 |
+| metadata at 8 bytes/frame | 256 KiB | 128 KiB |
 | root descriptor bytes | 4,096 | 2,048 |
 | leaf descriptor bytes | 4,096 | 4,096 |
 | address span per leaf | 4 MiB | 8 MiB |
@@ -184,7 +155,7 @@ the destination logical range, and an ATC-valid mapping before entry.
 The current K1 target test gives two processes different instruction bytes and
 different stack markers at identical logical addresses. Both caches are enabled;
 the offender dies at its planned unmapped access while the survivor continues.
-The unchanged image passes on Musashi and the complete RTL cache/PMMU path.
+The unchanged image passes on the QEMU MC68030/PMMU path.
 
 ## Guards and residency
 

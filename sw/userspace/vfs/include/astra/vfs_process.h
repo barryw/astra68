@@ -12,7 +12,7 @@
 typedef struct AstraProcessFilesystem {
     AstraFilesystem filesystem;
     AstraLibraryHandle *handle;
-    const AstraFilesystemLibraryV1 *library;
+    const AstraFilesystemLibraryV2 *library;
 } AstraProcessFilesystem;
 
 #define ASTRA_PROCESS_FILESYSTEM_INIT { ASTRA_FILESYSTEM_INIT, 0, 0 }

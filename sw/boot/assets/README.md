@@ -23,7 +23,7 @@ The Arty boot text starts at `(264, 496)`, uses 36 columns by four rows, and
 renders 16x16 CP437 glyphs on a 32-pixel row pitch. The ARM writes cells only;
 it never paints text pixels into the framebuffer.
 
-## ULX3S 720x480 source
+## Archived 720x480 source
 
 `astra_boot_splash.png` is the canonical 720x480 indexed source for the
 firmware splash. It uses at most 252 image colors; palette entries 252 through
@@ -39,7 +39,7 @@ Regenerate the checked-in payload from the repository root with:
 ```sh
 python3 sw/boot/pack_boot_splash.py \
   --image sw/boot/assets/astra_boot_splash.png \
-  --font fpga/soc/post_fonts.hex \
+  --font assets/fonts/astra_8x16.hex \
   --output sw/boot/build/astra_boot_splash.pal8.lz4
 ```
 

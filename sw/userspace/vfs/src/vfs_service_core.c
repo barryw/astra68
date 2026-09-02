@@ -11,6 +11,7 @@
 #include <astra/endian.h>
 
 #include <stddef.h>
+#include <string.h>
 
 /*
  * A handle is (generation << 16) | (slot + 1).
@@ -26,9 +27,21 @@
 #define HANDLE_SLOT(handle) (((handle) & HANDLE_SLOT_MASK) - 1u)
 #define HANDLE_GENERATION(handle) ((uint16_t)((handle) >> 16))
 
+#ifdef ASTRA_VFS_TEST_HOOKS
+static void
+test_transition(AstraVfsService *service, uint32_t transition)
+{
+    if (service->test_transition != NULL)
+        service->test_transition(service->test_transition_context, transition);
+}
+#else
+#define test_transition(service, transition) ((void)(service))
+#endif
+
 static int
 state_acquire(AstraVfsService *service)
 {
+    test_transition(service, ASTRA_VFS_TEST_BEFORE_STATE_ACQUIRE);
     return service->state_acquire == NULL ||
            service->state_acquire(service->state_lock_context);
 }
@@ -38,17 +51,63 @@ state_release(AstraVfsService *service)
 {
     if (service->state_release != NULL)
         service->state_release(service->state_lock_context);
+    test_transition(service, ASTRA_VFS_TEST_AFTER_STATE_RELEASE);
+}
+
+static int
+file_acquire(AstraVfsService *service, AstraVfsOpenFile *file)
+{
+    while (file->active != 0u) {
+        uint32_t expected = file->sequence;
+        int waited;
+
+        if (service->state_wait == NULL || file->waiters == UINT16_MAX)
+            return 0;
+        ++file->waiters;
+        waited = service->state_wait(service->state_lock_context,
+                                     &file->sequence, expected);
+        --file->waiters;
+        if (!waited)
+            return 0;
+        if (file->state != ASTRA_VFS_FILE_OPEN)
+            return 0;
+    }
+    file->active = 1u;
+    return 1;
+}
+
+static void
+file_release(AstraVfsService *service, AstraVfsOpenFile *file)
+{
+    file->active = 0u;
+    ++file->sequence;
+    if (file->waiters != 0u && service->state_wake != NULL)
+        service->state_wake(service->state_lock_context, &file->sequence);
+}
+
+static int
+file_wait_idle(AstraVfsService *service, AstraVfsOpenFile *file)
+{
+    while (file->active != 0u) {
+        uint32_t expected = file->sequence;
+        int waited;
+
+        if (service->state_wait == NULL || file->waiters == UINT16_MAX)
+            return 0;
+        ++file->waiters;
+        waited = service->state_wait(service->state_lock_context,
+                                     &file->sequence, expected);
+        --file->waiters;
+        if (!waited)
+            return 0;
+    }
+    return 1;
 }
 
 static void
 clear_reply(AstraVfsReply *reply, uint16_t version)
 {
-    uint32_t index;
-    unsigned char *bytes = (unsigned char *)reply;
-
-    for (index = 0u; index < (uint32_t)sizeof(*reply); ++index) {
-        bytes[index] = 0u;
-    }
+    memset(reply, 0, sizeof(*reply));
     reply->size = (uint16_t)ASTRA_VFS_REPLY_SIZE;
     reply->version = version;
     reply->status = ASTRA_VFS_ERR_PROTOCOL;
@@ -96,7 +155,28 @@ operation_takes_path(uint32_t operation)
            operation == ASTRA_VFS_OP_RENAME_FROM ||
            operation == ASTRA_VFS_OP_RENAME_TO ||
            operation == ASTRA_VFS_OP_CHMOD ||
-           operation == ASTRA_VFS_OP_READLINK;
+           operation == ASTRA_VFS_OP_READLINK ||
+           operation == ASTRA_VFS_OP_SYMLINK_TARGET ||
+           operation == ASTRA_VFS_OP_SYMLINK_TO ||
+           operation == ASTRA_VFS_OP_RENAME ||
+           operation == ASTRA_VFS_OP_SYMLINK;
+}
+
+static int
+request_shape_valid(uint32_t operation, const AstraVfsRequest *request)
+{
+    uint16_t expected = operation == ASTRA_VFS_OP_RENAME ||
+                                operation == ASTRA_VFS_OP_SYMLINK ?
+        (uint16_t)ASTRA_VFS_RENAME_REQUEST_SIZE :
+        (uint16_t)ASTRA_VFS_REQUEST_SIZE;
+
+    if (request->size != expected ||
+        (operation_takes_path(operation) && !path_valid(request)))
+        return 0;
+    return (operation != ASTRA_VFS_OP_RENAME &&
+            operation != ASTRA_VFS_OP_SYMLINK) ||
+           bounded_path_valid((const char *)
+               ((const AstraVfsRenameRequest *)request)->to);
 }
 
 /*
@@ -129,18 +209,20 @@ node_info_publish(AstraVfsReply *reply, const AstraVfsNodeInfo *info)
     reply->nlink = info->nlink;
 }
 
-static uint32_t
-readdir_into_unlocked(AstraVfsService *service, const char *path,
-                      uint64_t cursor, uint32_t entry_limit,
-                      uint8_t *buffer, uint32_t capacity,
-                      uint32_t *used_out, uint64_t *next_out)
+uint32_t
+astra_vfs_backend_readdir_into(const AstraVfsBackend *backend,
+                               uintptr_t directory, const char *path,
+                               uint64_t cursor, uint32_t entry_limit,
+                               uint8_t *buffer, uint32_t capacity,
+                               uint32_t *used_out, uint64_t *next_out)
 {
     AstraVfsNodeInfo info;
     char name[ASTRA_VFS_NAME_MAX];
     uint32_t entries = 0u;
     uint32_t used = 0u;
 
-    if (service == NULL || path == NULL || !bounded_path_valid(path) ||
+    if (backend == NULL || backend->ops == NULL || path == NULL ||
+        !bounded_path_valid(path) ||
         entry_limit == 0u || buffer == NULL || used_out == NULL ||
         next_out == NULL || capacity < ASTRA_VFS_DIRENT_HEADER + 1u)
         return ASTRA_VFS_ERR_INVALID;
@@ -153,8 +235,8 @@ readdir_into_unlocked(AstraVfsService *service, const char *path,
 
         node_info_clear(&info);
         name[0] = '\0';
-        status = service->backend.ops->readdir(
-            service->backend.context, path, cursor, name,
+        status = backend->ops->readdir(
+            backend->context, directory, path, cursor, name,
             (uint32_t)sizeof(name), &info, &next);
         if (status == ASTRA_VFS_ERR_NOT_FOUND) {
             if (entries == 0u)
@@ -199,16 +281,17 @@ astra_vfs_service_readdir_into(AstraVfsService *service, const char *path,
                                uint8_t *buffer, uint32_t capacity,
                                uint32_t *used_out, uint64_t *next_out)
 {
-    return readdir_into_unlocked(service, path, cursor, entry_limit, buffer,
-                                 capacity, used_out, next_out);
+    return astra_vfs_backend_readdir_into(
+        &service->backend, 0u, path, cursor, entry_limit, buffer, capacity,
+        used_out, next_out);
 }
 
 static void
 handle_readdir_batch(AstraVfsService *service,
                      const AstraVfsRequest *request, AstraVfsReply *reply)
 {
-    reply->status = readdir_into_unlocked(
-        service, (const char *)request->body.path, request->offset,
+    reply->status = astra_vfs_backend_readdir_into(
+        &service->backend, 0u, (const char *)request->body.path, request->offset,
         request->length, reply->payload, ASTRA_VFS_IO_MAX, &reply->count,
         &reply->cursor);
 }
@@ -221,7 +304,7 @@ find_session(AstraVfsService *service, uint32_t session)
     if (session == ASTRA_VFS_SESSION_INVALID) {
         return NULL;
     }
-    for (index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index) {
+    for (index = 0u; index < service->session_capacity; ++index) {
         if (service->sessions[index].id == session) {
             return &service->sessions[index];
         }
@@ -279,6 +362,10 @@ finish_file_close(AstraVfsService *service, AstraVfsOpenFile *file)
     file->flags = 0u;
     file->kind = ASTRA_VFS_KIND_UNKNOWN;
     file->state = ASTRA_VFS_FILE_FREE;
+    file->active = 0u;
+    ++file->sequence;
+    if (service->state_wake != NULL)
+        service->state_wake(service->state_lock_context, &file->sequence);
     ++file->generation;
     if (file->generation == 0u)
         file->generation = 1u;
@@ -298,7 +385,12 @@ close_file(AstraVfsService *service, AstraVfsOpenFile *file)
     if (file->state != ASTRA_VFS_FILE_OPEN)
         return ASTRA_VFS_ERR_BUSY;
     file->state = ASTRA_VFS_FILE_CLOSING;
+    if (!file_wait_idle(service, file)) {
+        file->state = ASTRA_VFS_FILE_OPEN;
+        return ASTRA_VFS_ERR_IO;
+    }
     state_release(service);
+    test_transition(service, ASTRA_VFS_TEST_DURING_CLOSE);
     status = service->backend.ops->close(service->backend.context, node);
     if (!state_acquire(service))
         return ASTRA_VFS_ERR_IO;
@@ -308,7 +400,8 @@ close_file(AstraVfsService *service, AstraVfsOpenFile *file)
 
 int
 astra_vfs_service_init(AstraVfsService *service, const AstraVfsBackendOps *ops,
-                       void *context, AstraVfsOpenFile *files,
+                       void *context, AstraVfsSessionSlot *sessions,
+                       uint32_t session_capacity, AstraVfsOpenFile *files,
                        uint32_t file_capacity)
 {
     uint32_t index;
@@ -318,19 +411,17 @@ astra_vfs_service_init(AstraVfsService *service, const AstraVfsBackendOps *ops,
         ops->sync == NULL || ops->truncate == NULL ||
         ops->stat == NULL || ops->readdir == NULL || ops->mkdir == NULL ||
         ops->unlink == NULL || ops->rename == NULL || ops->chmod == NULL ||
-        ops->readlink == NULL || files == NULL ||
+        ops->readlink == NULL || ops->symlink == NULL || sessions == NULL ||
+        session_capacity == 0u ||
+        session_capacity > ASTRA_VFS_SESSION_MAX || files == NULL ||
         file_capacity == 0u || file_capacity > ASTRA_VFS_FILE_HANDLE_MAX) {
         return 0;
     }
-    {
-        unsigned char *bytes = (unsigned char *)service;
-
-        for (index = 0u; index < (uint32_t)sizeof(*service); ++index) {
-            bytes[index] = 0u;
-        }
-    }
+    memset(service, 0, sizeof(*service));
     service->backend.ops = ops;
     service->backend.context = context;
+    service->sessions = sessions;
+    service->session_capacity = session_capacity;
     service->files = files;
     service->file_capacity = file_capacity;
     service->file_high_water = 0u;
@@ -339,7 +430,8 @@ astra_vfs_service_init(AstraVfsService *service, const AstraVfsBackendOps *ops,
      * Generations start at 1 so a zeroed handle can never be mistaken for a
      * valid one from slot 0 generation 0.
      */
-    for (index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index) {
+    memset(sessions, 0, session_capacity * sizeof(*sessions));
+    for (index = 0u; index < session_capacity; ++index) {
         service->sessions[index].generation = 1u;
     }
     return 1;
@@ -359,6 +451,33 @@ astra_vfs_service_set_state_lock(AstraVfsService *service,
     return 1;
 }
 
+int
+astra_vfs_service_set_state_wait(AstraVfsService *service,
+                                 AstraVfsStateWait wait,
+                                 AstraVfsStateWake wake)
+{
+    if (service == NULL || wait == NULL || wake == NULL ||
+        service->state_acquire == NULL || service->state_release == NULL ||
+        service->state_wait != NULL || service->state_wake != NULL)
+        return 0;
+    service->state_wait = wait;
+    service->state_wake = wake;
+    return 1;
+}
+
+#ifdef ASTRA_VFS_TEST_HOOKS
+void
+astra_vfs_service_set_test_transition(AstraVfsService *service,
+                                      AstraVfsTestTransition transition,
+                                      void *context)
+{
+    if (service == NULL)
+        return;
+    service->test_transition = transition;
+    service->test_transition_context = context;
+}
+#endif
+
 static void
 handle_hello(AstraVfsService *service, uint32_t owner,
              const AstraVfsRequest *request,
@@ -366,7 +485,8 @@ handle_hello(AstraVfsService *service, uint32_t owner,
 {
     uint32_t index;
     uint32_t owner_sessions = 0u;
-    uint32_t owner_limit = ASTRA_VFS_SESSION_MAX / ASTRA_PROCESS_COUNT_MAX;
+    uint32_t owner_limit = service->session_capacity /
+                           ASTRA_PROCESS_COUNT_MAX;
 
     /*
      * The client sends the newest version it can speak. Agreeing on the lower
@@ -385,7 +505,7 @@ handle_hello(AstraVfsService *service, uint32_t owner,
     if (owner_limit == 0u)
         owner_limit = 1u;
     if (owner != 0u) {
-        for (index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index)
+        for (index = 0u; index < service->session_capacity; ++index)
             if (service->sessions[index].id != 0u &&
                 service->sessions[index].owner == owner)
                 ++owner_sessions;
@@ -396,14 +516,14 @@ handle_hello(AstraVfsService *service, uint32_t owner,
         }
     }
 
-    for (index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index) {
+    for (index = 0u; index < service->session_capacity; ++index) {
         if (service->sessions[index].id == 0u) {
             service->sessions[index].id = service->next_session++;
             service->sessions[index].owner = owner;
             service->sessions[index].open_files = 0u;
             service->sessions[index].version = reply->version;
-            service->sessions[index].rename_pending = 0u;
-            service->sessions[index].busy = 0u;
+            service->sessions[index].staged_operation = ASTRA_VFS_STAGE_NONE;
+            service->sessions[index].inflight = 0u;
             service->sessions[index].closing = 0u;
             if (service->next_session == 0u) {
                 service->next_session = 1u;
@@ -446,8 +566,8 @@ reap_session(AstraVfsService *service, AstraVfsSessionSlot *slot)
     slot->id = 0u;
     slot->owner = 0u;
     slot->open_files = 0u;
-    slot->rename_pending = 0u;
-    slot->busy = 0u;
+    slot->staged_operation = ASTRA_VFS_STAGE_NONE;
+    slot->inflight = 0u;
     slot->closing = 0u;
     ++slot->generation;
     --service->open_sessions;
@@ -457,10 +577,10 @@ reap_session(AstraVfsService *service, AstraVfsSessionSlot *slot)
 static void
 finish_session_request(AstraVfsService *service, AstraVfsSessionSlot *slot)
 {
-    if (slot->closing != 0u)
+    if (slot->inflight != 0u)
+        --slot->inflight;
+    if (slot->closing != 0u && slot->inflight == 0u)
         reap_session(service, slot);
-    else
-        slot->busy = 0u;
 }
 
 static AstraVfsSessionSlot *
@@ -473,13 +593,57 @@ begin_session_request(AstraVfsService *service, uint32_t session,
         *status = ASTRA_VFS_ERR_BAD_HANDLE;
         return NULL;
     }
-    if (slot->busy != 0u || slot->closing != 0u) {
+    if (slot->closing != 0u || slot->inflight == UINT16_MAX ||
+        (slot->version < UINT16_C(19) && slot->inflight != 0u)) {
         *status = ASTRA_VFS_ERR_BUSY;
         return NULL;
     }
-    slot->busy = 1u;
+    ++slot->inflight;
+    test_transition(service, ASTRA_VFS_TEST_AFTER_SESSION_RESERVE);
     *status = ASTRA_VFS_OK;
     return slot;
+}
+
+uint32_t
+astra_vfs_service_readdir_file_into(
+    AstraVfsService *service, uint32_t session, AstraVfsFile directory,
+    const char *path, uint64_t cursor, uint32_t entry_limit, uint8_t *buffer,
+    uint32_t capacity, uint32_t *used, uint64_t *next)
+{
+    AstraVfsSessionSlot *slot;
+    AstraVfsOpenFile *file;
+    uint32_t status;
+
+    if (service == NULL || !state_acquire(service))
+        return ASTRA_VFS_ERR_IO;
+    slot = begin_session_request(service, session, &status);
+    if (slot == NULL) {
+        state_release(service);
+        return status;
+    }
+    file = find_file(service, session, directory, &status);
+    if (file == NULL || file->kind != ASTRA_VFS_KIND_DIRECTORY) {
+        if (file != NULL)
+            status = ASTRA_VFS_ERR_NOT_DIR;
+        finish_session_request(service, slot);
+        state_release(service);
+        return status;
+    }
+    if (!file_acquire(service, file)) {
+        finish_session_request(service, slot);
+        state_release(service);
+        return ASTRA_VFS_ERR_IO;
+    }
+    state_release(service);
+    status = astra_vfs_backend_readdir_into(
+        &service->backend, file->node, path, cursor, entry_limit, buffer,
+        capacity, used, next);
+    if (!state_acquire(service))
+        return ASTRA_VFS_ERR_IO;
+    file_release(service, file);
+    finish_session_request(service, slot);
+    state_release(service);
+    return status;
 }
 
 void
@@ -495,8 +659,7 @@ astra_vfs_service_release_session(AstraVfsService *service, uint32_t session)
         return;
     }
     slot->closing = 1u;
-    if (slot->busy == 0u) {
-        slot->busy = 1u;
+    if (slot->inflight == 0u) {
         reap_session(service, slot);
     }
     state_release(service);
@@ -522,7 +685,7 @@ handle_open(AstraVfsService *service, uint32_t session,
         owner_limit = 1u;
     if (session_slot->owner == 0u)
         owner_limit = service->file_capacity;
-    for (uint32_t slot = 0u; slot < ASTRA_VFS_SESSION_MAX; ++slot)
+    for (uint32_t slot = 0u; slot < service->session_capacity; ++slot)
         if (service->sessions[slot].id != 0u &&
             service->sessions[slot].owner == session_slot->owner)
             owner_files += service->sessions[slot].open_files;
@@ -565,9 +728,11 @@ handle_open(AstraVfsService *service, uint32_t session,
         service->files[index].node = 0u;
         service->files[index].session = 0u;
         service->files[index].flags = 0u;
+        service->files[index].sequence = 0u;
         service->files[index].generation = 1u;
         service->files[index].kind = ASTRA_VFS_KIND_UNKNOWN;
         service->files[index].state = ASTRA_VFS_FILE_FREE;
+        service->files[index].active = 0u;
     }
     if (index >= service->file_capacity) {
         reply->status = ASTRA_VFS_ERR_LIMIT;
@@ -576,6 +741,7 @@ handle_open(AstraVfsService *service, uint32_t session,
 
     service->files[index].session = session;
     service->files[index].state = ASTRA_VFS_FILE_OPENING;
+    test_transition(service, ASTRA_VFS_TEST_AFTER_SESSION_RESERVE);
     ++service->open_files;
     ++session_slot->open_files;
 
@@ -627,11 +793,14 @@ read_file(AstraVfsService *service, AstraVfsOpenFile *file, uint64_t offset,
         return ASTRA_VFS_ERR_ACCESS;
     if (file->kind == ASTRA_VFS_KIND_DIRECTORY)
         return ASTRA_VFS_ERR_IS_DIR;
+    if (!file_acquire(service, file))
+        return ASTRA_VFS_ERR_IO;
     state_release(service);
     status = service->backend.ops->read(service->backend.context, file->node,
                                         offset, buffer, length, moved);
     if (!state_acquire(service))
         return ASTRA_VFS_ERR_IO;
+    file_release(service, file);
     if (status == ASTRA_VFS_OK && *moved > length)
         *moved = length;
     return status;
@@ -648,24 +817,25 @@ handle_read(AstraVfsService *service, AstraVfsOpenFile *file,
                               length, &reply->count);
 }
 
-static uint32_t
-read_path_unlocked(AstraVfsService *service, const char *path, void *buffer,
-                   uint32_t capacity, uint32_t *moved, uint64_t *node_size)
+uint32_t
+astra_vfs_backend_read_path(const AstraVfsBackend *backend, const char *path,
+                            void *buffer, uint32_t capacity, uint32_t *moved,
+                            uint64_t *node_size)
 {
     AstraVfsNodeInfo info;
     uintptr_t node = 0u;
     uint32_t status;
 
-    if (service == NULL || path == NULL || buffer == NULL || moved == NULL ||
+    if (backend == NULL || backend->ops == NULL || path == NULL ||
+        buffer == NULL || moved == NULL ||
         node_size == NULL || capacity == 0u) {
         return ASTRA_VFS_ERR_INVALID;
     }
     *moved = 0u;
     *node_size = 0u;
     node_info_clear(&info);
-    status = service->backend.ops->open(service->backend.context, path,
-                                        ASTRA_VFS_OPEN_READ,
-                                        ASTRA_VFS_MODE_DEFAULT, &node, &info);
+    status = backend->ops->open(backend->context, path, ASTRA_VFS_OPEN_READ,
+                                ASTRA_VFS_MODE_DEFAULT, &node, &info);
     if (status != ASTRA_VFS_OK) {
         return status;
     }
@@ -680,8 +850,8 @@ read_path_unlocked(AstraVfsService *service, const char *path, void *buffer,
         while (total < (uint32_t)info.size) {
             uint32_t chunk = 0u;
 
-            status = service->backend.ops->read(
-                service->backend.context, node, total,
+            status = backend->ops->read(
+                backend->context, node, total,
                 (uint8_t *)buffer + total, (uint32_t)info.size - total,
                 &chunk);
             if (status != ASTRA_VFS_OK || chunk == 0u) {
@@ -694,7 +864,7 @@ read_path_unlocked(AstraVfsService *service, const char *path, void *buffer,
         }
         *moved = total;
     }
-    (void)service->backend.ops->close(service->backend.context, node);
+    (void)backend->ops->close(backend->context, node);
     return status;
 }
 
@@ -703,8 +873,8 @@ astra_vfs_service_read_path(AstraVfsService *service, const char *path,
                             void *buffer, uint32_t capacity, uint32_t *moved,
                             uint64_t *node_size)
 {
-    return read_path_unlocked(service, path, buffer, capacity, moved,
-                              node_size);
+    return astra_vfs_backend_read_path(&service->backend, path, buffer,
+                                       capacity, moved, node_size);
 }
 
 static uint32_t
@@ -767,12 +937,15 @@ write_file(AstraVfsService *service, AstraVfsOpenFile *file, uint64_t offset,
         return ASTRA_VFS_ERR_ACCESS;
     if (file->kind == ASTRA_VFS_KIND_DIRECTORY)
         return ASTRA_VFS_ERR_IS_DIR;
+    if (!file_acquire(service, file))
+        return ASTRA_VFS_ERR_IO;
     state_release(service);
     status = service->backend.ops->write(service->backend.context, file->node,
                                          offset, file->flags, buffer, length,
                                          moved, position);
     if (!state_acquire(service))
         return ASTRA_VFS_ERR_IO;
+    file_release(service, file);
     if (status == ASTRA_VFS_OK && *moved > length)
         *moved = length;
     return status;
@@ -781,16 +954,17 @@ write_file(AstraVfsService *service, AstraVfsOpenFile *file, uint64_t offset,
 static uint32_t
 write_from_unlocked(AstraVfsService *service, uint32_t session,
                     AstraVfsFile handle, uint64_t offset, const void *buffer,
-                    uint32_t length, uint32_t *moved)
+                    uint32_t length, uint32_t *moved, uint64_t *position)
 {
     AstraVfsSessionSlot *slot;
     AstraVfsOpenFile *file;
     uint32_t status;
-    uint64_t position = offset;
 
-    if (service == NULL || buffer == NULL || moved == NULL || length == 0u)
+    if (service == NULL || buffer == NULL || moved == NULL ||
+        position == NULL || length == 0u)
         return ASTRA_VFS_ERR_INVALID;
     *moved = 0u;
+    *position = offset;
     slot = find_session(service, session);
     if (slot == NULL) {
         ++service->stats.protocol_rejects;
@@ -799,14 +973,14 @@ write_from_unlocked(AstraVfsService *service, uint32_t session,
     file = find_file(service, slot->id, handle, &status);
     if (file == NULL)
         return status;
-    return write_file(service, file, offset, buffer, length, moved, &position);
+    return write_file(service, file, offset, buffer, length, moved, position);
 }
 
 uint32_t
-astra_vfs_service_write_from(AstraVfsService *service, uint32_t session,
-                             AstraVfsFile handle, uint64_t offset,
-                             const void *buffer, uint32_t length,
-                             uint32_t *moved)
+astra_vfs_service_write_position_from(
+    AstraVfsService *service, uint32_t session, AstraVfsFile handle,
+    uint64_t offset, const void *buffer, uint32_t length, uint32_t *moved,
+    uint64_t *position)
 {
     AstraVfsSessionSlot *slot;
     uint32_t status;
@@ -819,10 +993,22 @@ astra_vfs_service_write_from(AstraVfsService *service, uint32_t session,
         return status;
     }
     status = write_from_unlocked(service, session, handle, offset, buffer,
-                                 length, moved);
+                                 length, moved, position);
     finish_session_request(service, slot);
     state_release(service);
     return status;
+}
+
+uint32_t
+astra_vfs_service_write_from(AstraVfsService *service, uint32_t session,
+                             AstraVfsFile handle, uint64_t offset,
+                             const void *buffer, uint32_t length,
+                             uint32_t *moved)
+{
+    uint64_t position = offset;
+
+    return astra_vfs_service_write_position_from(
+        service, session, handle, offset, buffer, length, moved, &position);
 }
 
 static void
@@ -862,7 +1048,7 @@ handle_readdir(AstraVfsService *service, const AstraVfsRequest *request,
     node_info_clear(&info);
     name[0] = '\0';
     reply->status = service->backend.ops->readdir(
-        service->backend.context, (const char *)request->body.path,
+        service->backend.context, 0u, (const char *)request->body.path,
         request->offset, name, (uint32_t)sizeof(name), &info, &next);
     if (reply->status != ASTRA_VFS_OK) {
         return;
@@ -890,6 +1076,7 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
     AstraVfsSessionSlot *slot = NULL;
     AstraVfsOpenFile *file;
     uint32_t status;
+    int reserved = 0;
 
     if (service == NULL || reply == NULL) {
         return;
@@ -911,9 +1098,8 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
      * doing, any value is as valid as any other, and a service that refused a
      * request over one would be refusing work because of a log field.
      */
-    if (request->size != (uint16_t)ASTRA_VFS_REQUEST_SIZE ||
-        operation == 0u || operation > ASTRA_VFS_OP_MAX ||
-        (operation_takes_path(operation) && !path_valid(request))) {
+    if (operation == 0u || operation > ASTRA_VFS_OP_MAX ||
+        !request_shape_valid(operation, request)) {
         ++service->stats.protocol_rejects;
         goto done;
     }
@@ -934,16 +1120,21 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         reply->status = ASTRA_VFS_ERR_ACCESS;
         goto done;
     }
-    if (slot->busy != 0u || slot->closing != 0u) {
+    if (slot->closing != 0u || slot->inflight == UINT16_MAX ||
+        (slot->version < UINT16_C(19) && slot->inflight != 0u)) {
         reply->status = ASTRA_VFS_ERR_BUSY;
         goto done;
     }
-    slot->busy = 1u;
+    ++slot->inflight;
+    reserved = 1;
+    test_transition(service, ASTRA_VFS_TEST_AFTER_SESSION_RESERVE);
     reply->version = slot->version;
     reply->session = slot->id;
     if (operation != ASTRA_VFS_OP_RENAME_FROM &&
-        operation != ASTRA_VFS_OP_RENAME_TO)
-        slot->rename_pending = 0u;
+        operation != ASTRA_VFS_OP_RENAME_TO &&
+        operation != ASTRA_VFS_OP_SYMLINK_TARGET &&
+        operation != ASTRA_VFS_OP_SYMLINK_TO)
+        slot->staged_operation = ASTRA_VFS_STAGE_NONE;
 
     switch (operation) {
     case ASTRA_VFS_OP_BYE:
@@ -992,11 +1183,14 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         file = find_file(service, slot->id, request->file, &status);
         if (file == NULL) {
             reply->status = status;
+        } else if (!file_acquire(service, file)) {
+            reply->status = ASTRA_VFS_ERR_IO;
         } else {
             state_release(service);
             reply->status = service->backend.ops->sync(
                 service->backend.context, file->node);
             (void)state_acquire(service);
+            file_release(service, file);
         }
         break;
     case ASTRA_VFS_OP_TRUNCATE:
@@ -1011,11 +1205,14 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
             reply->status = ASTRA_VFS_ERR_ACCESS;
         } else if (file->kind == ASTRA_VFS_KIND_DIRECTORY) {
             reply->status = ASTRA_VFS_ERR_IS_DIR;
+        } else if (!file_acquire(service, file)) {
+            reply->status = ASTRA_VFS_ERR_IO;
         } else {
             state_release(service);
             reply->status = service->backend.ops->truncate(
                 service->backend.context, file->node, request->offset);
             (void)state_acquire(service);
+            file_release(service, file);
         }
         break;
     case ASTRA_VFS_OP_STAT: {
@@ -1076,11 +1273,11 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
             break;
         }
         for (uint32_t index = 0u; index < ASTRA_VFS_PATH_MAX; ++index) {
-            slot->rename_from[index] = (char)request->body.path[index];
+            slot->staged_path[index] = (char)request->body.path[index];
             if (request->body.path[index] == 0u)
                 break;
         }
-        slot->rename_pending = 1u;
+        slot->staged_operation = ASTRA_VFS_STAGE_RENAME;
         reply->status = ASTRA_VFS_OK;
         break;
     case ASTRA_VFS_OP_RENAME_TO:
@@ -1088,17 +1285,33 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
             reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
             break;
         }
-        if (slot->rename_pending == 0u) {
+        if (slot->staged_operation != ASTRA_VFS_STAGE_RENAME) {
             reply->status = ASTRA_VFS_ERR_PROTOCOL;
             break;
         }
-        slot->rename_pending = 0u;
+        slot->staged_operation = ASTRA_VFS_STAGE_NONE;
         state_release(service);
         reply->status = service->backend.ops->rename(
-            service->backend.context, slot->rename_from,
+            service->backend.context, slot->staged_path,
             (const char *)request->body.path);
         (void)state_acquire(service);
         break;
+    case ASTRA_VFS_OP_RENAME: {
+        const AstraVfsRenameRequest *rename =
+            (const AstraVfsRenameRequest *)request;
+
+        if (slot->version < UINT16_C(16)) {
+            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
+            break;
+        }
+        state_release(service);
+        reply->status = service->backend.ops->rename(
+            service->backend.context,
+            (const char *)rename->request.body.path,
+            (const char *)rename->to);
+        (void)state_acquire(service);
+        break;
+    }
     case ASTRA_VFS_OP_CHMOD:
         if (slot->version < UINT16_C(14)) {
             reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
@@ -1135,6 +1348,52 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
             }
         }
         break;
+    case ASTRA_VFS_OP_SYMLINK_TARGET:
+        if (slot->version < UINT16_C(15) || request->body.path[0] == 0u) {
+            reply->status = slot->version < UINT16_C(15) ?
+                ASTRA_VFS_ERR_UNSUPPORTED : ASTRA_VFS_ERR_INVALID;
+            break;
+        }
+        for (uint32_t index = 0u; index < ASTRA_VFS_PATH_MAX; ++index) {
+            slot->staged_path[index] = (char)request->body.path[index];
+            if (request->body.path[index] == 0u)
+                break;
+        }
+        slot->staged_operation = ASTRA_VFS_STAGE_SYMLINK;
+        reply->status = ASTRA_VFS_OK;
+        break;
+    case ASTRA_VFS_OP_SYMLINK_TO:
+        if (slot->version < UINT16_C(15)) {
+            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
+            break;
+        }
+        if (slot->staged_operation != ASTRA_VFS_STAGE_SYMLINK) {
+            reply->status = ASTRA_VFS_ERR_PROTOCOL;
+            break;
+        }
+        slot->staged_operation = ASTRA_VFS_STAGE_NONE;
+        state_release(service);
+        reply->status = service->backend.ops->symlink(
+            service->backend.context, slot->staged_path,
+            (const char *)request->body.path);
+        (void)state_acquire(service);
+        break;
+    case ASTRA_VFS_OP_SYMLINK: {
+        const AstraVfsRenameRequest *symlink =
+            (const AstraVfsRenameRequest *)request;
+
+        if (slot->version < UINT16_C(19)) {
+            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
+            break;
+        }
+        state_release(service);
+        reply->status = service->backend.ops->symlink(
+            service->backend.context,
+            (const char *)symlink->request.body.path,
+            (const char *)symlink->to);
+        (void)state_acquire(service);
+        break;
+    }
     default:
         ++service->stats.protocol_rejects;
         reply->status = ASTRA_VFS_ERR_PROTOCOL;
@@ -1142,10 +1401,11 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
     }
 
 done:
+    test_transition(service, ASTRA_VFS_TEST_BEFORE_REPLY);
     if (reply->status != ASTRA_VFS_OK) {
         ++service->stats.replies_failed;
     }
-    if (slot != NULL && slot->busy != 0u) {
+    if (reserved) {
         finish_session_request(service, slot);
     }
 }
@@ -1186,7 +1446,7 @@ astra_vfs_service_session_owned(const AstraVfsService *service,
         return 0;
     if (!state_acquire(mutable))
         return 0;
-    for (uint32_t index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index)
+    for (uint32_t index = 0u; index < service->session_capacity; ++index)
         if (service->sessions[index].id == session) {
             owned = service->sessions[index].owner == owner;
             break;
@@ -1203,7 +1463,7 @@ astra_vfs_service_session_capacity_reached(const AstraVfsService *service)
 
     if (service == NULL || !state_acquire(mutable))
         return 0;
-    full = service->open_sessions == ASTRA_VFS_SESSION_MAX;
+    full = service->open_sessions == service->session_capacity;
     state_release(mutable);
     return full;
 }

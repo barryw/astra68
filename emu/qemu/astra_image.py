@@ -82,6 +82,7 @@ PROVIDER_INDEX_MAX = 192
 DISPLAY_STARTUP_MANIFEST = (
     "service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
     "serves SYS:r required\n"
+    "service SERVICES:hostfs grants HOST_DEVICE serves WORK:rw required\n"
     "service SERVICES:network grants NETWORK_DEVICE NETWORK_IRQ "
     "serves NETWORK NETWORK_LISTEN required\n"
     "service SERVICES:ntpd grants CLOCK CONFIG:r LIBS:r NETWORK "
@@ -96,8 +97,24 @@ DISPLAY_STARTUP_MANIFEST = (
     "NETWORK NETWORK_LISTEN NTP "
     "required\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
-DISPLAY_SERVICES = ("storage", "network", "ntpd", "events", "input", "display",
-                    "desktop")
+DISPLAY_SERVICES = ("storage", "hostfs", "network", "ntpd", "events",
+                    "input", "display", "desktop")
+HOSTBENCH_SERVICES = DISPLAY_SERVICES + ("hostbench",)
+HOSTBENCH_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
+    "application SERVICES:hostbench grants HOST_DEVICE required\n")
+
+
+def _build_current_userspace():
+    """Publish every image input from the current source tree."""
+    directory = os.path.join(REPOSITORY, "sw/userspace")
+    for target in ("clean", "all"):
+        result = subprocess.run(["make", "-C", directory, target],
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT)
+        if result.returncode != 0:
+            raise RuntimeError("cannot %s current userspace products: %s" %
+                               (target, result.stdout.decode(
+                                   "utf-8", "replace").strip()))
 
 
 def ext4_partition(image):
@@ -116,6 +133,56 @@ def ext4_partition(image):
             length = int.from_bytes(entry[12:16], "little") * 512
             return start, length
     raise RuntimeError("%s has no Linux partition" % image)
+
+
+def _write_partitioned_image(image, volume, total_size):
+    offset = 1 << 20
+    if total_size <= offset or total_size % 512 != 0:
+        raise RuntimeError("image size must be a multiple of 512 bytes and "
+                           "larger than its partition offset")
+    sectors = (total_size - offset) // 512
+    if sectors > 0xffffffff:
+        raise RuntimeError("image exceeds the MBR sector-address format")
+    if os.path.getsize(volume) != total_size - offset:
+        raise RuntimeError("formatted volume has the wrong size")
+    table = bytearray(512)
+    table[446:462] = struct.pack(
+        "<B3sB3sII", 0, bytes(3), 0x83, bytes(3), offset // 512, sectors)
+    table[510:512] = b"\x55\xaa"
+    with open(image, "xb") as handle:
+        handle.truncate(total_size)
+        handle.seek(0)
+        handle.write(table)
+    _splice(image, offset, volume)
+
+
+def publish(image, total_size):
+    """Atomically publish a clean system image from current source products."""
+    destination = os.path.abspath(image)
+    if os.path.exists(destination):
+        raise RuntimeError("refusing to replace existing image %s" % image)
+    if total_size <= 1 << 20 or total_size % 512 != 0:
+        raise RuntimeError("image size must be a multiple of 512 bytes and "
+                           "larger than its partition offset")
+    directory = os.path.dirname(destination)
+    storage = os.path.join(REPOSITORY, "sw/userspace/storage")
+    with tempfile.TemporaryDirectory(prefix="astra-publish-",
+                                     dir=directory) as temporary:
+        volume = os.path.join(temporary, "volume.img")
+        candidate = os.path.join(temporary, "system.img")
+        result = subprocess.run(
+            ["make", "-C", storage, "format-volume",
+             "VOLUME=%s" % volume,
+             "VOLUME_BYTES=%u" % (total_size - (1 << 20))],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        if result.returncode != 0:
+            raise RuntimeError("cannot format clean Astra volume: %s" %
+                               result.stdout.decode(
+                                   "utf-8", "replace").strip())
+        _write_partitioned_image(candidate, volume, total_size)
+        _build_current_userspace()
+        _install_built(candidate)
+        os.replace(candidate, destination)
 
 
 def _slice(image, offset, length, out):
@@ -162,29 +229,111 @@ def _mkdir(volume, path, what):
     _debugfs(volume, "mkdir %s" % path, what)
 
 
+def _directory_entries(volume, path):
+    result = subprocess.run(["debugfs", "-R", "ls -p %s" % path, volume],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT)
+    output = result.stdout.decode("utf-8", "replace")
+    if result.returncode != 0:
+        raise RuntimeError("cannot list image directory %s: %s" %
+                           (path, output.strip()))
+    entries = []
+    for line in output.splitlines():
+        if not line.startswith("/"):
+            continue
+        fields = line.split("/")
+        if len(fields) < 7:
+            raise RuntimeError("invalid debugfs directory entry: %s" % line)
+        name = fields[5]
+        if name in (".", ".."):
+            continue
+        if (not name or any(character not in
+                            "abcdefghijklmnopqrstuvwxyz"
+                            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                            "0123456789._+-" for character in name)):
+            raise RuntimeError("unsafe image directory entry %r in %s" %
+                               (name, path))
+        try:
+            mode = int(fields[2], 8)
+        except ValueError as error:
+            raise RuntimeError("invalid debugfs directory entry: %s" %
+                               line) from error
+        entries.append((name, mode & 0o170000 == 0o040000))
+    return entries
+
+
+def _clear_directory(volume, path):
+    """Remove every old publisher-owned entry beneath path."""
+    for name, directory in _directory_entries(volume, path):
+        target = "%s/%s" % (path, name)
+        if directory:
+            _clear_directory(volume, target)
+            _debugfs(volume, "rmdir %s" % target, "old image directory")
+        else:
+            _debugfs(volume, "rm %s" % target, "old image file")
+
+
+def _reset_journal(volume):
+    """Discard journal records made obsolete by debugfs' direct writes."""
+    commands = (
+        (["tune2fs", "-f", "-O", "^has_journal", volume], 0),
+        (["e2fsck", "-fy", volume], 2),
+        (["tune2fs", "-j", "-J", "size=4", volume], 0),
+        (["e2fsck", "-fy", volume], 2),
+    )
+    for command, maximum_status in commands:
+        result = subprocess.run(command, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT)
+        if result.returncode > maximum_status:
+            raise RuntimeError("cannot reset ext4 journal: %s" %
+                               result.stdout.decode(
+                                   "utf-8", "replace").strip())
+
+
 def _commands(directory):
-    """The built command images: every regular file that is not an ELF kept
-    for a debugger. `make` in sw/userspace/commands produces `status` beside
-    `status.elf`, and the volume gets the stripped one."""
+    """The exact command images published by the commands build."""
     if not os.path.isdir(directory):
         raise RuntimeError("no commands at %s -- build them first" % directory)
+    manifest = os.path.join(directory, ".commands")
+    try:
+        with open(manifest, "r", encoding="ascii") as handle:
+            names = [line.strip() for line in handle if line.strip()]
+    except OSError as error:
+        raise RuntimeError("no command manifest at %s -- build commands first" %
+                           manifest) from error
+    if not names or len(names) != len(set(names)):
+        raise RuntimeError("invalid command manifest at %s" % manifest)
     found = []
-    for name in sorted(os.listdir(directory)):
+    for name in names:
+        if name in (".", "..") or os.path.basename(name) != name:
+            raise RuntimeError("invalid command name %r in %s" %
+                               (name, manifest))
         path = os.path.join(directory, name)
-        if os.path.isfile(path) and not name.endswith((".elf", ".d")):
-            found.append((name, path))
-    if not found:
-        raise RuntimeError("no commands built in %s" % directory)
+        if not os.path.isfile(path):
+            raise RuntimeError("command manifest names missing image %s" % path)
+        found.append((name, path))
     return found
 
 
 def _services(directory, names):
     found = []
     for name in names:
-        path = os.path.join(directory, name, "build", "m68k", name)
+        service = os.path.join(directory, name)
+        target = os.path.join("build", "m68k", name)
+        path = os.path.join(service, target)
         if not os.path.isfile(path):
             raise RuntimeError("no service image at %s -- build services "
                                "first" % path)
+        current = subprocess.run(
+            ["make", "-q", "-C", service, target],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        if current.returncode != 0:
+            output = current.stdout.decode("utf-8", "replace").strip()
+            if current.returncode == 1:
+                raise RuntimeError("stale service image at %s -- build "
+                                   "services first" % path)
+            raise RuntimeError("cannot verify service image %s: %s" %
+                               (path, output or "make -q failed"))
         found.append((name, path))
     return found
 
@@ -268,8 +417,9 @@ def _install_bundle(volume, source, destination):
             _debugfs(volume, "write %s %s" % (host, guest), "bundle file")
 
 
-def install(image, catalog=None, commands=None, services=None, kits=None,
-            apps=None, terminfo=None,
+def install(image, catalog=DEFAULT_CATALOG, commands=DEFAULT_COMMANDS,
+            services=DEFAULT_SERVICES, kits=DEFAULT_KITS,
+            apps=DEFAULT_APPS, terminfo=DEFAULT_TERMINFO,
             service_names=DISPLAY_SERVICES,
             manifest_text=STARTUP_MANIFEST):
     """Writes this build's catalog and commands into the image's volume.
@@ -285,22 +435,29 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
     Both jobs happen inside the one lift, because two lifts would mean two
     journal recoveries and the second would replay over the first's work.
     """
-    catalog = catalog or DEFAULT_CATALOG
-    commands = commands or DEFAULT_COMMANDS
-    services = services or DEFAULT_SERVICES
-    kits = kits or DEFAULT_KITS
-    apps = apps or DEFAULT_APPS
-    terminfo = terminfo or DEFAULT_TERMINFO
+    _build_current_userspace()
+    _install_built(image, catalog, commands, services, kits, apps, terminfo,
+                   service_names, manifest_text)
+
+
+def _install_built(image, catalog=DEFAULT_CATALOG,
+                   commands=DEFAULT_COMMANDS,
+                   services=DEFAULT_SERVICES, kits=DEFAULT_KITS,
+                   apps=DEFAULT_APPS, terminfo=DEFAULT_TERMINFO,
+                   service_names=DISPLAY_SERVICES,
+                   manifest_text=STARTUP_MANIFEST):
+    """Install built products; private seam for isolated host tests."""
     if not os.path.exists(catalog):
         raise RuntimeError("no catalog at %s -- build the supervisor first" %
                            catalog)
-    if not os.path.isfile(terminfo):
+    if terminfo is not None and not os.path.isfile(terminfo):
         raise RuntimeError("no astra-256color terminfo at %s -- build the "
                            "terminal first" % terminfo)
-    built = _commands(commands)
+    built = [] if commands is None else _commands(commands)
     service_images = _services(services, service_names)
-    kit_bundles = _bundles(kits, KIT_BUNDLES)
-    application_bundles = _bundles(apps, APPLICATION_BUNDLES)
+    kit_bundles = [] if kits is None else _bundles(kits, KIT_BUNDLES)
+    application_bundles = [] if apps is None else \
+        _bundles(apps, APPLICATION_BUNDLES)
     offset, length = ext4_partition(image)
     with tempfile.TemporaryDirectory(prefix="astra-volume-") as temporary:
         volume = os.path.join(temporary, "volume.img")
@@ -320,6 +477,7 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
         # commands have to be here before the boot that runs them.
         _mkdir(volume, "/%s" % COMMANDS_DIRECTORY,
                "the commands directory")
+        _clear_directory(volume, "/%s" % COMMANDS_DIRECTORY)
         for name, path in built:
             target = "/%s/%s" % (COMMANDS_DIRECTORY, name)
             _debugfs(volume, "rm %s" % target, "an old command", optional=True)
@@ -327,6 +485,7 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
 
         _mkdir(volume, "/%s" % SERVICES_DIRECTORY,
                "the services directory")
+        _clear_directory(volume, "/%s" % SERVICES_DIRECTORY)
         for name, path in service_images:
             target = "/%s/%s" % (SERVICES_DIRECTORY, name)
             _debugfs(volume, "rm %s" % target, "an old service",
@@ -336,16 +495,18 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
 
         _mkdir(volume, "/%s" % LIBS_DIRECTORY,
                "the shared Kit directory")
-        terminfo_directory = "/%s/%s" % (LIBS_DIRECTORY,
-                                           TERMINFO_DIRECTORY)
-        _mkdir(volume, terminfo_directory, "the terminfo directory")
-        terminfo_letter = terminfo_directory + "/a"
-        _mkdir(volume, terminfo_letter, "the terminfo letter directory")
-        terminfo_target = terminfo_letter + "/astra-256color"
-        _debugfs(volume, "rm %s" % terminfo_target,
-                 "the old astra-256color terminfo", optional=True)
-        _debugfs(volume, "write %s %s" % (terminfo, terminfo_target),
-                 "the astra-256color terminfo")
+        _clear_directory(volume, "/%s" % LIBS_DIRECTORY)
+        if terminfo is not None:
+            terminfo_directory = "/%s/%s" % (LIBS_DIRECTORY,
+                                               TERMINFO_DIRECTORY)
+            _mkdir(volume, terminfo_directory, "the terminfo directory")
+            terminfo_letter = terminfo_directory + "/a"
+            _mkdir(volume, terminfo_letter, "the terminfo letter directory")
+            terminfo_target = terminfo_letter + "/astra-256color"
+            _debugfs(volume, "rm %s" % terminfo_target,
+                     "the old astra-256color terminfo", optional=True)
+            _debugfs(volume, "write %s %s" % (terminfo, terminfo_target),
+                     "the astra-256color terminfo")
         for bundle in kit_bundles:
             _install_bundle(volume, bundle,
                             "/%s/%s" % (LIBS_DIRECTORY,
@@ -377,6 +538,7 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
 
         _mkdir(volume, "/%s" % APPS_DIRECTORY,
                "the application directory")
+        _clear_directory(volume, "/%s" % APPS_DIRECTORY)
         for bundle in application_bundles:
             _install_bundle(volume, bundle,
                             "/%s/%s" % (APPS_DIRECTORY,
@@ -384,6 +546,7 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
 
         _mkdir(volume, "/%s" % STARTUP_DIRECTORY,
                "the startup directory")
+        _clear_directory(volume, "/%s" % STARTUP_DIRECTORY)
         manifest = os.path.join(temporary, STARTUP_NAME)
         with open(manifest, "w", encoding="ascii", newline="\n") as handle:
             handle.write(manifest_text)
@@ -395,6 +558,7 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
 
         _mkdir(volume, "/%s" % CONFIG_DIRECTORY,
                "the configuration directory")
+        _clear_directory(volume, "/%s" % CONFIG_DIRECTORY)
         for scope in CONFIG_SCOPES:
             _mkdir(volume, "/%s/%s" % (CONFIG_DIRECTORY, scope),
                    "configuration scope")
@@ -420,6 +584,7 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
         _mkdir(volume, "/local", "the local directory")
         _mkdir(volume, "/%s" % LOCAL_COMMANDS_DIRECTORY,
                "the local commands directory")
+        _clear_directory(volume, "/%s" % LOCAL_COMMANDS_DIRECTORY)
         for name, path in built:
             if name != "which":
                 continue
@@ -428,6 +593,7 @@ def install(image, catalog=None, commands=None, services=None, kits=None,
                      optional=True)
             _debugfs(volume, "write %s %s" % (path, target),
                      "a shadowing command")
+        _reset_journal(volume)
         _splice(image, offset, volume)
 
 
@@ -437,5 +603,16 @@ if __name__ == "__main__":
     elif len(sys.argv) == 3 and sys.argv[1] == "--display":
         install(sys.argv[2], service_names=DISPLAY_SERVICES,
                 manifest_text=DISPLAY_STARTUP_MANIFEST)
+    elif len(sys.argv) == 3 and sys.argv[1] == "--hostbench":
+        install(sys.argv[2], service_names=HOSTBENCH_SERVICES,
+                manifest_text=HOSTBENCH_STARTUP_MANIFEST)
+    elif len(sys.argv) == 4 and sys.argv[1] == "--create":
+        try:
+            size_mib = int(sys.argv[3], 10)
+        except ValueError as error:
+            raise SystemExit("image size must be an integer MiB value") from error
+        publish(sys.argv[2], size_mib * (1 << 20))
     else:
-        raise SystemExit("usage: astra_image.py [--display] IMAGE")
+        raise SystemExit(
+            "usage: astra_image.py [--display|--hostbench] IMAGE | "
+            "--create IMAGE SIZE_MIB")

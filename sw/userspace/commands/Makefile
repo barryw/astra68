@@ -12,7 +12,8 @@ include ../../../mk/m68k-cross.mk
 # and what is not is proved by the terminal gate running them on the machine.
 
 CC := $(CROSS)gcc
-AR := $(CROSS)ar
+AR := $(CROSS)gcc-ar
+RANLIB := $(CROSS)gcc-ranlib
 SIZE := $(CROSS)size
 OBJCOPY := $(CROSS)objcopy
 RUNTIME := ../runtime
@@ -24,6 +25,7 @@ NETWORK := ../network
 NDK := ../../../ndk
 LUA := ../../../third_party/lua/src
 VIM_SOURCE ?= $(HOME)/vim-astra-v9.2.1001/src
+VIM_TERMINFO_SOURCE ?= $(HOME)/ncurses-astra-6.6
 VIM_TERMINFO ?= $(HOME)/ncurses-astra
 VIM_TERMINFO_BUILD ?= $(HOME)/ncurses-astra-build
 VIM_IMAGE := $(VIM_SOURCE)/vim
@@ -36,10 +38,18 @@ CPPFLAGS := -I../../include -I$(RUNTIME)/include -I$(STREAMS)/include \
 	-isystem $(PICOLIBC)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
-TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
+TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -flto -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	-Wl,--build-id=none -Wl,--gc-sections -T $(RUNTIME)/astra_user.ld
+VENDOR_INCLUDE_FLAGS := -I$(abspath ../../include) \
+	-I$(abspath $(RUNTIME)/include) -I$(abspath $(STREAMS)/include) \
+	-I$(abspath $(VFS)/include) -I$(abspath $(POSIX)/include) \
+	-I$(abspath $(NDK)/include) -I$(VIM_TERMINFO)/include \
+	-I$(VIM_TERMINFO)/include/ncursesw \
+	-isystem $(PICOLIBC)/include \
+	-isystem $(shell $(CC) -print-file-name=include) \
+	-D_GNU_SOURCE -D_DEFAULT_SOURCE -DNDEBUG
 
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
@@ -49,20 +59,21 @@ NTP_LIB := $(NTP)/build/m68k/libastrantp.a
 NETWORK_LIB := $(NETWORK)/build/m68k/libastranetwork.a
 PICOLIBC_LIB := $(PICOLIBC)/lib/libc.a
 PICOLIBC_MATH := $(PICOLIBC)/lib/libm.a
-RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0.o
+RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0-hosted.o
 
 COMMANDS := status events devices which hello ls ps cat mkdir rm posix \
-            heapbench date echo ntp ping lua vim
-NATIVE_COMMANDS := $(filter-out lua vim,$(COMMANDS))
+            heapbench fsstress date echo ntp ping lua cxx vim
+NATIVE_COMMANDS := $(filter-out lua cxx vim,$(COMMANDS))
 ANALYZER_OBJECTS := $(patsubst %,build/analyzer/%.o,$(NATIVE_COMMANDS)) \
 	build/analyzer/lua-adapter.o
 # What the gate installs on the volume: stripped, the way the ROM's own image
 # is, because a command carries no more DWARF onto a card than the supervisor
 # carries into ROM. The unstripped ELF stays beside it for a debugger.
 IMAGES := $(patsubst %,build/m68k/%,$(COMMANDS))
+COMMAND_MANIFEST := build/m68k/.commands
 ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(STREAMS) $(VFS) $(POSIX) $(NTP) \
 	$(NETWORK)
-ASTRA_PROGRAM_TARGETS := $(IMAGES) size
+ASTRA_PROGRAM_TARGETS := $(IMAGES) $(COMMAND_MANIFEST) size
 include ../program.mk
 
 # .SECONDEXPANSION so a command's source is <name>/<name>.c rather than a
@@ -105,7 +116,24 @@ build/m68k/lua: lua/lua.c $(LUA_LIBRARY) build/m68k/lua-obj/interpreter.o \
 		$(PICOLIBC)/lib/libm.a -lgcc -Wl,--end-group
 	$(OBJCOPY) --strip-all --remove-section=.astra_events $@.elf $@
 
+CXX_IMAGE := $(POSIX)/build/m68k/cxx-runtime-test.elf
+
+build/m68k/cxx: $(POSIX)/tests/cxx_runtime.cpp $(POSIX)/kit/program.c \
+		$(POSIX_LIB) $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
+		$(PICOLIBC_LIB) $(PICOLIBC_MATH) $(RUNTIME_CRT0) \
+		$(RUNTIME)/astra_user.ld $(ASTRA_TOOLCHAIN_STAMP)
+	$(MAKE) -C $(POSIX) build/m68k/cxx-runtime-test.elf
+	$(OBJCOPY) --strip-all --remove-section=.astra_events $(CXX_IMAGE) $@
+
 VIM_PROGRAM := build/m68k/vim-program.o
+VIM_TERMINFO_LDFLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
+	-Wl,--build-id=none -Wl,--gc-sections \
+	-T $(abspath $(RUNTIME)/astra_user.ld) $(abspath $(RUNTIME_CRT0)) \
+	$(abspath $(VIM_PROGRAM))
+VIM_TERMINFO_LIBS := -Wl,--start-group $(abspath $(VFS_LIB)) \
+	$(abspath $(STREAMS_LIB)) $(abspath $(POSIX_LIB)) \
+	$(abspath $(RUNTIME_LIB)) $(abspath $(PICOLIBC_LIB)) \
+	$(abspath $(PICOLIBC_MATH)) -lgcc -Wl,--end-group
 
 $(VIM_PROGRAM): $(POSIX)/kit/program.c Makefile
 	@mkdir -p $(@D)
@@ -121,16 +149,40 @@ $(VIM_PROGRAM): $(POSIX)/kit/program.c Makefile
 # Rebuild its archive when the public terminal ABI changes; otherwise an old
 # four-byte winsize object accepts an eight-byte TIOCGWINSZ write.
 $(VIM_TERMINFO)/lib/libtinfow.a: $(PICOLIBC)/include/sys/termios.h \
-		$(PICOLIBC)/include/sys/ioctl.h
-	$(MAKE) -B -C $(VIM_TERMINFO_BUILD) install.libs
+		$(PICOLIBC)/include/sys/ioctl.h $(VIM_PROGRAM) $(POSIX_LIB) \
+		$(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) $(RUNTIME_CRT0) \
+		$(ASTRA_TOOLCHAIN_STAMP)
+	rm -rf $(VIM_TERMINFO_BUILD)
+	mkdir -p $(VIM_TERMINFO_BUILD)
+	cd $(VIM_TERMINFO_BUILD) && \
+		CC='$(CC)' AR='$(AR)' RANLIB='$(RANLIB)' \
+		CFLAGS='$(TARGET_FLAGS)' \
+		CPPFLAGS='-nostdinc $(VENDOR_INCLUDE_FLAGS)' \
+		LDFLAGS='$(VIM_TERMINFO_LDFLAGS)' \
+		LIBS='$(VIM_TERMINFO_LIBS)' \
+		$(VIM_TERMINFO_SOURCE)/configure \
+		--build=x86_64-pc-linux-gnu --host=m68k-unknown-elf \
+		--prefix=$(VIM_TERMINFO) \
+		--with-default-terminfo-dir=/LIBS/terminfo \
+		--with-terminfo-dirs=/LIBS/terminfo --with-termlib \
+		--enable-widec --without-shared --with-normal --without-cxx \
+		--without-cxx-binding --without-ada --without-progs \
+		--without-tests --without-manpages --without-debug \
+		--without-profile --disable-db-install --disable-home-terminfo
+	$(MAKE) -j1 -C $(VIM_TERMINFO_BUILD) install.libs
 
 # Vim's generated Makefile does not name external static archives as target
 # prerequisites. Relink its unchanged objects whenever Astra's shared POSIX
 # implementation changes, instead of silently packaging a stale executable.
 $(VIM_IMAGE): $(VIM_PROGRAM) $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
 		$(POSIX_LIB) $(PICOLIBC_LIB) $(PICOLIBC_MATH) \
-		$(VIM_TERMINFO)/lib/libtinfow.a
-	$(MAKE) -C $(VIM_SOURCE) -W objects/main.o vim \
+		$(VIM_TERMINFO)/lib/libtinfow.a $(ASTRA_TOOLCHAIN_STAMP)
+	$(MAKE) -C $(VIM_SOURCE) clean
+	$(MAKE) -C $(VIM_SOURCE) vim \
+		CC='$(CC)' \
+		CPPFLAGS='$(VENDOR_INCLUDE_FLAGS)' \
+		CFLAGS='$(TARGET_FLAGS) -D_REENTRANT \
+		-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1' \
 		LDFLAGS='-nostdlib -static -L$(VIM_TERMINFO)/lib \
 		-Wl,-z,max-page-size=0x1000 -Wl,--build-id=none \
 		-Wl,--gc-sections -T $(abspath $(RUNTIME)/astra_user.ld) \
@@ -158,6 +210,10 @@ build/m68k/%: $$*/$$*.c $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
 
 size: $(IMAGES)
 	$(SIZE) $(IMAGES)
+
+$(COMMAND_MANIFEST): Makefile $(IMAGES)
+	@{ for command in $(COMMANDS); do printf '%s\n' "$$command"; done; } >$@.tmp
+	mv $@.tmp $@
 
 # Header dependencies: a stale object compiled against an older ABI
 # constant is indistinguishable from a working one until it runs.

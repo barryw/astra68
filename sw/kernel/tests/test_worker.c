@@ -147,11 +147,6 @@ static void test_bounded_worker_state_machine(void)
     assert(stats.state == KERNEL_WORKER_BLOCKED);
     assert(stats.stack_canary_ok == 1u);
     assert(stats.stack_high_water == 48u);
-    assert(kernel_worker_select_idle());
-    assert(!kernel_worker_select_idle());
-    assert(kernel_worker_test_block_if_idle());
-    assert(worker_stats().state == KERNEL_WORKER_BLOCKED);
-
     assert(kernel_worker_signal(0u) == KERNEL_WORKER_INVALID_ARGUMENT);
     assert(kernel_worker_signal(2u) == KERNEL_WORKER_INVALID_ARGUMENT);
     assert(kernel_worker_signal(KERNEL_WORKER_PROCESS_REAP) ==
@@ -208,7 +203,7 @@ static void test_bounded_worker_state_machine(void)
     assert(stats.pending_work == 0u);
     assert(stats.retry_work == 0u);
     assert(stats.signals == 4u);
-    assert(stats.dispatches == 4u);
+    assert(stats.dispatches == 3u);
     assert(stats.service_passes == 4u);
     assert(stats.deferred_passes == 1u);
     assert(stats.retry_wakeups == 1u);

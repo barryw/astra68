@@ -4,9 +4,8 @@ This directory contains the Astra-owned delta against QEMU 9.2.4.  It exists
 to run the unchanged Astra boot ROM and Axiom K1-K10 kernel suite through
 QEMU's native ARMv7 TCG backend on the Arty Z7-20.
 
-The existing Musashi machine remains the behavioral oracle.  A QEMU result is
-accepted only when the exact ROM reaches the same kernel markers and the shared
-MC68030 PMMU/restart tests pass.
+A QEMU result is accepted only when the exact ROM reaches the required kernel
+markers and the shared MC68030 PMMU/restart tests pass.
 
 The initial overlay adds the physical machine map and device mechanisms.  The
 MC68030 PMMU target changes will be kept here as patches rather than depending
@@ -35,9 +34,8 @@ qemu-system-m68k -M astra68 -m 128M -bios astra_boot.bin \
     -drive if=none,format=raw,file=/data/astra/storage/astra.img
 ```
 
-The machine accepts exactly two RAM profiles: 32 MiB for the physical ULX3S
-contract and 128 MiB for the Arty-hosted guest. The Arty launcher uses a
-preallocated 128 MiB memory backend, so guest RAM is committed when QEMU
+The machine defaults to the Arty guest's 128 MiB profile. The Arty launcher
+uses a preallocated 128 MiB memory backend, so guest RAM is committed when QEMU
 starts instead of competing with Linux on demand.
 
 Sectors are 512 bytes. The hosted backend reports a 128-sector (64 KiB)

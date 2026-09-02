@@ -136,8 +136,8 @@ static void fill_info(AstraBootInfo *info)
     info->cpu_hz = 12500000u;
     info->ram_base = 0x02000000u;
     info->ram_size = 0x02000000u;
-    info->rom_base = 0xffe00000u;
-    info->rom_size = ASTRA_ROM_BACKING_SIZE;
+    info->rom_base = ASTRA_ROM_ADDRESS;
+    info->rom_size = ASTRA_ROM_SIZE;
     info->kernel_base = ASTRA_KERNEL_LOAD_ADDRESS;
     info->kernel_image_size = 0x00010000u;
     info->kernel_memory_size = ASTRA_KERNEL_RESERVED_SIZE;
@@ -159,15 +159,7 @@ static void fill_info(AstraBootInfo *info)
               ASTRA_MEMORY_RANGE_KERNEL,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_range(info, ASTRA_KERNEL_USABLE_ADDRESS, ASTRA_KERNEL_USABLE_SIZE,
-              ASTRA_MEMORY_RANGE_USABLE,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
-                  ASTRA_MEMORY_CACHEABLE);
-    add_range(info, ASTRA_ROM_BACKING_ADDRESS, ASTRA_ROM_BACKING_SIZE,
-              ASTRA_MEMORY_RANGE_ROM_BACKING,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_EXECUTE |
-                  ASTRA_MEMORY_CACHEABLE);
-    add_range(info, 0x03e40000u, 0x000c0000u,
+    add_range(info, ASTRA_KERNEL_USABLE_ADDRESS, (OHCI_DMA_POOL_BASE - ASTRA_KERNEL_USABLE_ADDRESS),
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
@@ -285,6 +277,57 @@ static void test_private_reservation_fault_and_decommit(void)
     assert(decommitted.free_frames == before.free_frames + 1u);
 }
 
+static void test_address_space_copy_crosses_pages_and_checks_rights(void)
+{
+    KernelAddressSpace space = {0};
+    uint8_t source[32];
+    uint8_t destination[32];
+    uint32_t first;
+    uint32_t second;
+    const uint32_t address = 0x00100ff0u;
+
+    initialize_test();
+    assert(kernel_vm_create_address_space(94u, &space) == KERNEL_VM_OK);
+    assert(kernel_memory_alloc_zeroed(1u, 1u, KERNEL_FRAME_PROCESS, 94u,
+                                      &first) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc_zeroed(1u, 1u, KERNEL_FRAME_PROCESS, 94u,
+                                      &second) == KERNEL_MEMORY_OK);
+    assert(kernel_vm_map_page(&space, address & ~(KERNEL_PAGE_SIZE - 1u),
+                              first, KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_map_page(&space,
+                              (address & ~(KERNEL_PAGE_SIZE - 1u)) +
+                                  KERNEL_PAGE_SIZE,
+                              second, KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+           KERNEL_VM_OK);
+    assert(kernel_memory_release(first, 1u, 94u) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_release(second, 1u, 94u) == KERNEL_MEMORY_OK);
+    for (uint32_t index = 0u; index < sizeof(source); ++index)
+        source[index] = (uint8_t)(index + 1u);
+    memset(destination, 0, sizeof(destination));
+    assert(kernel_vm_write(&space, address, source, sizeof(source)) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_read(&space, address, destination,
+                          sizeof(destination)) == KERNEL_VM_OK);
+    assert(memcmp(source, destination, sizeof(source)) == 0);
+    assert(kernel_vm_read(&space, address - KERNEL_PAGE_SIZE, destination,
+                          1u) == KERNEL_VM_NOT_MAPPED);
+    assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
+
+    initialize_test();
+    assert(kernel_vm_create_address_space(95u, &space) == KERNEL_VM_OK);
+    assert(kernel_memory_alloc_zeroed(1u, 1u, KERNEL_FRAME_PROCESS, 95u,
+                                      &first) == KERNEL_MEMORY_OK);
+    assert(kernel_vm_map_page(&space, 0x00100000u, first, KERNEL_VM_READ) ==
+           KERNEL_VM_OK);
+    assert(kernel_memory_release(first, 1u, 95u) == KERNEL_MEMORY_OK);
+    assert(kernel_vm_write(&space, 0x00100000u, source, 1u) ==
+           KERNEL_VM_NOT_OWNED);
+    assert(kernel_vm_read(&space, 0x00100000u, destination, 1u) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
+}
+
 static void test_kernel_root_and_enable_sequence(void)
 {
     KernelVmControlState control;
@@ -327,8 +370,7 @@ static void test_kernel_root_and_enable_sequence(void)
     top_physical = root[15] & 0xfffffff0u;
     top = physical_words(top_physical);
     assert(top[0] == 0x03c00001u);
-    assert(top[(ASTRA_ROM_BACKING_ADDRESS - 0x03c00000u) >> 12] ==
-           (ASTRA_ROM_BACKING_ADDRESS | 1u));
+    assert(top[(0x03e00000u - 0x03c00000u) >> 12] == 0x03e00001u);
     assert(top[(OHCI_DMA_POOL_BASE - 0x03c00000u) >> 12] ==
            (OHCI_DMA_POOL_BASE | 0x41u));
     assert(top[0x3ffu] == 0x03fff041u);
@@ -519,6 +561,62 @@ static void test_map_switch_unmap_and_stale_guards(void)
     assert(kernel_vm_stats(&stats));
     assert(stats.address_spaces == 0u && stats.user_mappings == 0u);
     assert(stats.user_table_pages == 0u);
+}
+
+static void test_host_channel_mapping_is_private_and_uncached(void)
+{
+    KernelAddressSpace parent = {0};
+    KernelAddressSpace child = {0};
+    uint32_t *root;
+    uint32_t *table;
+    uint32_t translated;
+    uint32_t physical = KERNEL_VM_HOST_CHANNEL_PHYSICAL_BASE +
+                        3u * KERNEL_PAGE_SIZE;
+    uint32_t second_virtual = KERNEL_VM_HOST_CHANNEL_BASE + KERNEL_PAGE_SIZE;
+    uint32_t second_physical = KERNEL_VM_HOST_CHANNEL_PHYSICAL_BASE +
+                               7u * KERNEL_PAGE_SIZE;
+
+    initialize_test();
+    assert(kernel_vm_enable() == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(42u, &parent) == KERNEL_VM_OK);
+    assert(kernel_vm_map_host_channel_page(
+               &parent, KERNEL_VM_HOST_CHANNEL_BASE,
+               KERNEL_VM_HOST_CHANNEL_PHYSICAL_BASE -
+                            KERNEL_PAGE_SIZE) == KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_map_host_channel_page(&parent,
+               KERNEL_VM_HOST_CHANNEL_BASE - KERNEL_PAGE_SIZE,
+               physical) == KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_map_host_channel_page(
+               &parent, KERNEL_VM_HOST_CHANNEL_BASE, physical) == KERNEL_VM_OK);
+    assert(kernel_vm_map_host_channel_page(
+               &parent, second_virtual, second_physical) == KERNEL_VM_OK);
+    root = physical_words(parent.root_physical);
+    table = physical_words(root[KERNEL_VM_HOST_CHANNEL_BASE >> 22] &
+                           0xfffffff0u);
+    assert(table[(KERNEL_VM_HOST_CHANNEL_BASE >> 12) & 0x3ffu] ==
+           (physical | 0x41u));
+    assert(kernel_vm_clone_address_space(&parent, 43u, &child) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_switch(&child) == KERNEL_VM_OK);
+    assert(kernel_vm_probe_current(KERNEL_VM_HOST_CHANNEL_BASE, false,
+                                   &translated) ==
+           KERNEL_VM_MAPPING_UNMAPPED);
+    assert(kernel_vm_probe_current(second_virtual, false, &translated) ==
+           KERNEL_VM_MAPPING_UNMAPPED);
+    assert(kernel_vm_switch(&parent) == KERNEL_VM_OK);
+    assert(kernel_vm_probe_current(KERNEL_VM_HOST_CHANNEL_BASE, false,
+                                   &translated) ==
+           KERNEL_VM_MAPPING_READ_WRITE);
+    assert(translated == physical);
+    assert(kernel_vm_probe_current(second_virtual, false, &translated) ==
+           KERNEL_VM_MAPPING_READ_WRITE);
+    assert(translated == second_physical);
+    assert(kernel_vm_unmap_page(&parent, KERNEL_VM_HOST_CHANNEL_BASE) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_unmap_page(&parent, second_virtual) == KERNEL_VM_OK);
+    assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&child) == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&parent) == KERNEL_VM_OK);
 }
 
 static void test_destroy_releases_read_only_mapping(void)
@@ -905,7 +1003,7 @@ static void test_library_code_range_is_shared_and_executable(void)
 }
 
 /*
- * A device aperture above the first 32 MiB must not be mapped cacheable.
+ * A device aperture above the initial root-table span must not be mapped cacheable.
  *
  * The supervisor map covers RAM beyond the low region in 4 MiB
  * early-termination pages. That is fine for RAM and wrong for a DMA pool: the
@@ -960,6 +1058,7 @@ int main(void)
     test_kernel_root_and_enable_sequence();
     test_page_table_injection_preserves_baseline();
     test_map_switch_unmap_and_stale_guards();
+    test_host_channel_mapping_is_private_and_uncached();
     test_destroy_releases_read_only_mapping();
     test_cow_alias_can_change_owner_and_become_private();
     test_clone_is_lazy_and_write_fault_copies_one_page();
@@ -968,6 +1067,7 @@ int main(void)
     test_library_code_range_is_shared_and_executable();
     test_device_aperture_above_the_low_region_is_uncached();
     test_private_reservation_fault_and_decommit();
+    test_address_space_copy_crosses_pages_and_checks_rights();
     puts("KERNEL VM PASS");
     return 0;
 }

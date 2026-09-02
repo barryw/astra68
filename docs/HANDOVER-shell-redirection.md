@@ -1,7 +1,6 @@
 # Astra 68 — Handover: quoting, redirection, and an append that was not one
 
-Date: 2026-08-19, continuing `HANDOVER-qualification-and-time.md`. Read
-`CLAUDE.md` first.
+Date: 2026-08-19. Read `CLAUDE.md` first.
 
 ---
 
@@ -14,8 +13,8 @@ learns that anything is unusual about its STDOUT. Nothing about the child
 changes, no descriptor table appears, and STDERR stays on the terminal so a
 program whose output is in a file can still say it failed.
 
-**The shell already quoted.** `HANDOVER-qualification-and-time.md` §3.2 said it
-could not, and `date` printed *"The shell cannot quote yet"* when it saw a
+**The shell already quoted.** An earlier handover said it could not, and `date`
+printed *"The shell cannot quote yet"* when it saw a
 second word. Both were wrong: `astra_shell_parse` has handled `'`, `"` and `\`
 since `8006c49`, `run_line` calls it, and arguments reach a child NUL-separated
 through `astra_launch_arguments_pack`. Proved on the emulator against the real
@@ -111,9 +110,6 @@ Both halves were made to fail on purpose:
   other way to put bytes in a file — is now gone. `cat` into a redirect does
   it. Removing it is a separate change and wants a replacement for the gate
   lines that use it.
-- Everything in `HANDOVER-qualification-and-time.md` §3.1, §3.3, §3.4 and §3.5
-  stands: storage and input are still not qualified, `console_printf` still has
-  ~480 call sites to convert, and the DE25 Nano still wants its list checked.
 
 ## 5. Traps this cost time to find
 
@@ -132,6 +128,4 @@ Both halves were made to fail on purpose:
 
 ## 6. How to run it
 
-Per `HANDOVER-qualification-and-time.md` §5, with `make -j8` before `make test`
-in `sw/userspace`. Nothing here touches `sw/kernel` or `sw/boot`, so the ROM is
-byte-identical and the qualification ROM is unaffected.
+Run `make -j8` before `make test` in `sw/userspace`.

@@ -198,15 +198,14 @@ the guest architecture or ABI. An external Vesta region MMU is not an alternate
 OS target.
 
 The QEMU implementation must continue to earn acceptance against Motorola
-MC68030 semantics, the shared conformance suite, Musashi, and retained RTL
-tests. No emulator-specific semantic may become part of the Astra ABI.
+MC68030 semantics and independent system tests. No emulator-specific semantic
+may become part of the Astra ABI.
 
 The active hardware baseline is:
 
 - one big-endian MC68030-class virtual CPU with an integrated PMMU;
-- the Arty Z7-20's 512 MiB DDR shared deliberately among Linux, QEMU guest RAM,
-  and reserved device memory, with the final guest allocation fixed by the boot
-  memory contract rather than the old 32 MiB ULX3S limit;
+- the Arty Z7-20's 512 MiB DDR divided into 128 MiB of Astra guest RAM, 128 MiB
+  of graphics RAM, and 256 MiB for Linux and host services;
 - full supervisor/user separation and paged address translation;
 - no hardware FPU, with soft-float where needed;
 - Arty Vega/Astraea graphics as frozen by `GRAPHICS_ARCHITECTURE.md`, including
@@ -217,9 +216,6 @@ The active hardware baseline is:
   Astra device contracts rather than inherited Nova behavior;
 - a separately specified audio subsystem and fixed-point game-math coprocessor;
 - enough immutable PL/boot state to report failure before normal services run.
-
-The retired ULX3S TG68K system remains valuable conformance and rollback
-evidence but is not the active resource, memory, or I/O topology.
 
 ## 5. System structure
 
@@ -728,23 +724,21 @@ multi-user server.
 Use established Ethernet/IP protocols and interoperable formats. Do not invent
 private replacements for IP, TCP, UDP, DHCP, or DNS merely to be distinctive.
 
-**LOCKED:** The ESP32 owns Wi-Fi association and link security plus the IP,
-ICMP, TCP, and UDP implementations. ESP-IDF's supported Wi-Fi components and
-lwIP are the starting point; Astra does not implement a second TCP/IP stack in
-the kernel or a native system service merely for architectural purity.
+**LOCKED:** The Linux host owns link setup and the IP implementation. Astra
+does not duplicate a TCP/IP stack in the kernel.
 
 A protected Astra network broker owns application-facing policy and object
-lifetime. It maps per-process capability handles onto generation-tagged ESP
+lifetime. It maps per-process capability handles onto generation-tagged host
 endpoint handles and exposes asynchronous operations for interface status,
 scan/connect/disconnect, name resolution, TCP connect/listen/accept, UDP
-bind/send/receive, shutdown, close, cancellation, and completion events. ESP
-socket descriptors, lwIP structures, pointers, `errno` values, and vendor ABI
+bind/send/receive, shutdown, close, cancellation, and completion events. Host
+socket descriptors, native structures, pointers, `errno` values, and vendor ABI
 details never cross the machine interface.
 
 Each endpoint has bounded receive and transmit credit. Control, storage, and
-network traffic use separate logical channels and queue budgets over the
-FPGA-ESP transport so a bulk transfer on one cannot cause unbounded
-head-of-line blocking on the others. An ESP reset changes the transport
+network traffic use separate logical channels and queue budgets so a bulk
+transfer on one cannot cause unbounded
+head-of-line blocking on the others. A host-backend reset changes the transport
 generation, invalidates every endpoint, and produces explicit peer-loss events;
 handles are never silently reused after reconnect.
 
@@ -756,13 +750,13 @@ requires an explicit capability.
 Placement of TLS, certificate/private-key custody, multicast policy, SoftAP,
 IPv6 requirements, and any raw diagnostic interface remains **OPEN**. HTTP,
 remote deployment, file transfer, and other application protocols remain
-protected Astra services or libraries above the ESP endpoint interface.
+protected Astra services or libraries above the endpoint interface.
 
 Security defaults:
 
 - no network service listens merely because a cable is connected;
 - remote development and administration authenticate the owner's key;
-- network-facing ESP code and Astra application-protocol parsers are bounded
+- network-facing host code and Astra application-protocol parsers are bounded
   and fuzzed on the host;
 - listening sockets, raw packets, and privileged protocols require explicit
   capabilities;
@@ -773,26 +767,14 @@ deployment, logs, debugger attachment, a terminal, and file transfer.
 
 ## 14. Storage, settings, and packages
 
-### 14.1 ESP32 storage-controller boundary
+### 14.1 Host storage-controller boundary
 
-**LOCKED:** The ESP32 owns the SD-card electrical and protocol layer. Its
-firmware uses Espressif's supported ESP-IDF FreeRTOS port from the first
-executable storage prototype; there is no bare-metal or cooperative ESP
-firmware phase that later becomes an accidental production foundation.
-
-**LOCKED:** Every ESP32-to-FPGA service uses the versioned SPI transport in
-`docs/ASTRAHOST.md`. UART is not a transport, fallback, control channel, or data
-path between them. Independent ESP and FPGA diagnostic consoles do not alter
-that boundary.
-
-The ESP exposes two versioned services to Astra:
-
-1. a deliberately small boot-file service backed by a FAT/exFAT boot/recovery
-   partition, normally read-only while Astra is running; and
-2. a raw multi-sector block service for partitions the ESP never mounts.
+**LOCKED:** Linux owns the SD-card electrical and protocol layer. Astra receives
+a versioned raw multi-sector block device and never receives host descriptors,
+pointers, filesystem structures, or native error layouts.
 
 Astra's writable native filesystem runs in a protected Astra service over the
-raw-block interface. The ESP and Astra never mount the same partition writable
+raw-block interface. Linux and Astra never mount the same partition writable
 at the same time. A filesystem nested inside a large FAT file may be useful for
 temporary bring-up, but it is not a shipping storage architecture.
 
@@ -1144,7 +1126,7 @@ containment in one observable result.
 
 - Safe DMA and cache-maintenance interfaces.
 - Kernel device transports and reset/recovery paths.
-- FreeRTOS ESP32 storage controller and versioned boot-file/raw-block transport.
+- Linux-hosted versioned raw-block transport.
 - read-only FAT-family compatibility, the SD block service, and the first
   journal/recovery-qualified AstraFS implementation.
 - Settings and early package/bundle loading.

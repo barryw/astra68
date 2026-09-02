@@ -1,7 +1,7 @@
 include ../../../mk/m68k-cross.mk
 
 CC := $(CROSS)gcc
-AR := $(CROSS)ar
+AR := $(CROSS)gcc-ar
 SIZE := $(CROSS)size
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
@@ -12,7 +12,7 @@ E2FSCK ?= e2fsck
 CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
-TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
+TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O2 -flto -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 HOST_FLAGS := -O2 -fno-builtin
 # Host tests need the same rebuild discipline as the target build: a test binary
@@ -218,6 +218,13 @@ EXT4_MKFS_FEATURES := ^64bit,^casefold,^extent,^ext_attr,^metadata_csum_seed
 # a default journal still mounts. See src/ext4_alloc.c.
 EXT4_MKFS_JOURNAL := -J size=4
 
+format-volume:
+	@test -n "$(VOLUME)"
+	@test -n "$(VOLUME_BYTES)"
+	truncate -s "$(VOLUME_BYTES)" "$(VOLUME)"
+	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) \
+		$(EXT4_MKFS_JOURNAL) -F "$(VOLUME)"
+
 # The volume is rebuilt on every run rather than cached. The test writes the
 # image back so e2fsck can judge it, which means a failed run leaves a
 # half-populated volume behind; inheriting that would make the next run's
@@ -256,6 +263,33 @@ ext4-test: build/host/test_ext4_mount
 			powercut-recover || exit 1; \
 		$(E2FSCK) -fn build/host/ext4-powercut.img || exit 1; \
 	done
+	@echo "--- journal I/O failure: abort read-only and recover cleanly"
+	dd if=/dev/zero of=build/host/ext4-journal-failure.img bs=1048576 \
+		count=16 status=none
+	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) \
+		$(EXT4_MKFS_JOURNAL) -F build/host/ext4-journal-failure.img
+	./build/host/test_ext4_mount build/host/ext4-journal-failure.img \
+		journal-failure-write
+	./build/host/test_ext4_mount build/host/ext4-journal-failure.img \
+		journal-failure-recover
+	$(E2FSCK) -fn build/host/ext4-journal-failure.img
+	@echo "--- stale journal: historical transactions must never replay"
+	dd if=/dev/zero of=build/host/ext4-stale.img bs=1048576 count=16 \
+		status=none
+	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) \
+		$(EXT4_MKFS_JOURNAL) -F build/host/ext4-stale.img
+	./build/host/test_ext4_mount build/host/ext4-stale.img stale-setup
+	./build/host/test_ext4_mount build/host/ext4-stale.img stale-history
+	./build/host/test_ext4_mount build/host/ext4-stale.img stale-delete
+	./build/host/test_ext4_mount build/host/ext4-stale.img stale-recover
+	$(E2FSCK) -fn build/host/ext4-stale.img
+	@echo "--- journal pressure: capacity commits before an operation can fail"
+	dd if=/dev/zero of=build/host/ext4-pressure.img bs=1048576 count=16 \
+		status=none
+	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) \
+		$(EXT4_MKFS_JOURNAL) -F build/host/ext4-pressure.img
+	./build/host/test_ext4_mount build/host/ext4-pressure.img journal-pressure
+	$(E2FSCK) -fn build/host/ext4-pressure.img
 
 ext4-sanitize: build/host/test_ext4_mount_sanitize
 	dd if=/dev/zero of=build/host/ext4-sanitize.img bs=1048576 count=16 \
@@ -348,5 +382,5 @@ size: $(OBJECTS) $(PORT_OBJECTS) $(LWEXT4_OBJECTS)
 clean:
 	rm -rf build
 
-.PHONY: all test ext4-test ext4-sanitize ext4-tsan linkcheck sanitize \
+.PHONY: all test format-volume ext4-test ext4-sanitize ext4-tsan linkcheck sanitize \
 	analyze size clean

@@ -138,7 +138,7 @@ static bool refresh_device_state(void)
     device_state.host_generation = current.host_generation;
     device_state.media_sectors = current.media_sectors;
     device_state.max_sectors = current.max_sectors;
-    device_state.reserved = 0u;
+    device_state.queue_depth = current.queue_depth;
     device_state_valid = true;
     if (changed) {
         device_generation = kernel_generation_next(device_generation);

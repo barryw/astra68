@@ -65,6 +65,7 @@ static AstraEventStore store;
 static AstraEventStore previous_store;
 static AstraEventsBackend backend;
 static AstraVfsService service;
+static AstraVfsSessionSlot service_sessions[ASTRA_VFS_SESSION_MAX];
 static AstraProcessFilesystem process_filesystem =
     ASTRA_PROCESS_FILESYSTEM_INIT;
 static AstraVfsPortService events_port;
@@ -292,6 +293,10 @@ save_snapshot(void)
     }
     saved = snapshot_write(&snapshot, snapshot_buffer.bytes,
                            snapshot_buffer.length);
+    if (saved && process_filesystem.library->sync(&snapshot.file) !=
+                     ASTRA_VFS_OK) {
+        saved = 0;
+    }
     if (process_filesystem.library->close(&snapshot.file) != ASTRA_VFS_OK) {
         saved = 0;
     }
@@ -387,8 +392,10 @@ events_start(uint32_t process_handle)
 
         if (!astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile),
                                            &file_storage, &file_capacity) ||
-            !astra_vfs_service_init(&service, astra_events_backend_ops(),
-                                    &backend, file_storage, file_capacity)) {
+            !astra_vfs_service_init(
+                &service, astra_events_backend_ops(), &backend,
+                service_sessions, ASTRA_VFS_SESSION_MAX, file_storage,
+                file_capacity)) {
             return EVENTS_FAIL_SERVICE;
         }
     }
@@ -399,7 +406,7 @@ events_start(uint32_t process_handle)
      */
     if (astra_rt_port_create(EVENTS_PORT_MESSAGES,
                           EVENTS_PORT_MESSAGES *
-                          (uint32_t)sizeof(AstraVfsRequestMessage),
+                          (uint32_t)sizeof(AstraVfsRenameRequestMessage),
                           &events_receive, &events_handle) !=
         ASTRA_SYSCALL_OK) {
         return EVENTS_FAIL_PORT;

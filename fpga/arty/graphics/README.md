@@ -174,6 +174,5 @@ verified on the physical board.
 Only 264 physical slices and 22 BRAM36 blocks remain. BRAM is the primary
 future capacity limit and placement is tight, so nominal unused LUTs are not
 evidence that another PL feature will route. See
-[`TIMING_CLOSURE.md`](TIMING_CLOSURE.md) and
-[`docs/FPGA_RESOURCE_BUDGET.md`](../../../docs/FPGA_RESOURCE_BUDGET.md) for
-the exact release identity and capacity history.
+[`TIMING_CLOSURE.md`](TIMING_CLOSURE.md) for the exact release identity and
+capacity history.

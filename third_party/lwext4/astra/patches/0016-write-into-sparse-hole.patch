@@ -1,0 +1,59 @@
+diff --git a/src/ext4_fs.c b/src/ext4_fs.c
+--- a/src/ext4_fs.c
++++ b/src/ext4_fs.c
+@@ -1269,6 +1269,10 @@ ext4_fsblk_t ext4_fs_inode_to_goal_block(struct ext4_inode_ref *inode_ref)
+ 	return (inode_ref->index - 1) / grp_inodes;
+ }
+ 
++static int ext4_fs_set_inode_data_block_index(
++	struct ext4_inode_ref *inode_ref, ext4_lblk_t iblock,
++	ext4_fsblk_t fblock);
++
+ /**@brief Compute 'goal' for allocation algorithm (For blockmap).
+  * @param inode_ref Reference to inode, to allocate block for
+  * @return error code
+@@ -1469,8 +1473,42 @@ int ext4_fs_get_inode_dblk_idx(struct ext4_inode_ref *inode_ref,
+ int ext4_fs_init_inode_dblk_idx(struct ext4_inode_ref *inode_ref,
+ 				ext4_lblk_t iblock, ext4_fsblk_t *fblock)
+ {
+-	return ext4_fs_get_inode_dblk_idx_internal(inode_ref, iblock, fblock,
+-						   true, true);
++	struct ext4_block block = EXT4_BLOCK_ZERO();
++	ext4_fsblk_t goal;
++	ext4_fsblk_t allocated;
++	uint32_t block_size;
++	int r;
++
++	r = ext4_fs_get_inode_dblk_idx_internal(inode_ref, iblock, fblock,
++						true, true);
++	if (r != EOK || *fblock != 0)
++		return r;
++
++	/* The non-extent path must materialize a sparse logical block too. */
++	r = ext4_fs_indirect_find_goal(inode_ref, &goal);
++	if (r != EOK)
++		return r;
++	r = ext4_balloc_alloc_block(inode_ref, goal, &allocated);
++	if (r != EOK)
++		return r;
++	r = ext4_block_get_noread(inode_ref->fs->bdev, &block, allocated);
++	if (r != EOK) {
++		ext4_balloc_free_block(inode_ref, allocated);
++		return r;
++	}
++	block_size = ext4_sb_get_block_size(&inode_ref->fs->sb);
++	memset(block.data, 0, block_size);
++	ext4_bcache_set_dirty(block.buf);
++	r = ext4_block_set(inode_ref->fs->bdev, &block);
++	if (r == EOK)
++		r = ext4_fs_set_inode_data_block_index(inode_ref, iblock,
++							allocated);
++	if (r != EOK) {
++		ext4_balloc_free_block(inode_ref, allocated);
++		return r;
++	}
++	*fblock = allocated;
++	return EOK;
+ }
+ 
+ static int ext4_fs_set_inode_data_block_index(struct ext4_inode_ref *inode_ref,

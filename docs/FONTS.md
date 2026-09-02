@@ -2,9 +2,7 @@
 
 > AFNT remains the native hardware-ready font contract. The Arty graphics
 > target adds A8 coverage and XRGB8888 destinations as required by
-> [`GRAPHICS_ARCHITECTURE.md`](GRAPHICS_ARCHITECTURE.md); existing
-> INDEX8/RGB565 Astraea details below describe the implemented ULX3S path until
-> the register-level Arty revision is written.
+> [`GRAPHICS_ARCHITECTURE.md`](GRAPHICS_ARCHITECTURE.md).
 
 This document defines the native font direction for Astra 68 and the boundary
 between font files, the font/display services, and Astraea. The graphical OS
@@ -187,13 +185,13 @@ A glyph job supplies one source strike and palette plus:
 - a bounded array of source rectangles and signed destination positions;
 - completion fence/event and optional damage rectangle.
 
-The implemented ULX3S low-level batch is an array of 16-byte big-endian
+The low-level batch is an array of 16-byte big-endian
 descriptors.
 Each descriptor carries a source offset relative to the strike bitmap base,
 unsigned source `(y,x)`, signed destination `(y,x)`, and unsigned
 `(height,width)`. Astraea validates every descriptor before using it and keeps
-the palette cached for the whole command. `ASTRAEA.md` is the normative ULX3S
-MMIO and descriptor contract; `GRAPHICS_ARCHITECTURE.md` defines the Arty
+the palette cached for the whole command. `ASTRAEA.md` is the MMIO and
+descriptor contract; `GRAPHICS_ARCHITECTURE.md` defines the Arty
 command boundary. Applications only see the protected draw-list API.
 
 Layout is deliberately outside hardware. Complex-script shaping, fallback, and
@@ -432,7 +430,7 @@ Host and native tooling should share the same AFNT writer and golden files.
 Amiga import is tested with monochrome, proportional, kerning, missing-glyph,
 and color-font fixtures.
 
-## 8. Legacy ULX3S hardware status and resource gate
+## 8. Hardware status and resource gate
 
 The glyph path uses the Astraea draw engine and exact SDRAM pixel port documented
 in `ASTRAEA.md`. The first implementation now provides:

@@ -71,12 +71,29 @@ static void test_copy(void)
 
 static void test_equal(void)
 {
-    const uint8_t left[] = {0u, 1u, 2u, 3u, 4u};
-    const uint8_t same[] = {9u, 1u, 2u, 3u, 8u};
-    const uint8_t different[] = {9u, 1u, 7u, 3u, 8u};
+    uint8_t left[TEST_MAX_SIZE + 3u];
+    uint8_t right[TEST_MAX_SIZE + 3u];
 
-    assert(kernel_bytes_equal(left + 1u, same + 1u, 3u));
-    assert(!kernel_bytes_equal(left + 1u, different + 1u, 3u));
+    for (uint32_t left_offset = 0u; left_offset < 4u; ++left_offset) {
+        for (uint32_t right_offset = 0u; right_offset < 4u; ++right_offset) {
+            for (uint32_t size = 0u; size <= TEST_MAX_SIZE; ++size) {
+                for (uint32_t index = 0u; index < size; ++index) {
+                    uint8_t value = (uint8_t)(index * 37u + 11u);
+
+                    left[left_offset + index] = value;
+                    right[right_offset + index] = value;
+                }
+                assert(kernel_bytes_equal(left + left_offset,
+                                          right + right_offset, size));
+                for (uint32_t index = 0u; index < size; ++index) {
+                    right[right_offset + index] ^= 0x80u;
+                    assert(!kernel_bytes_equal(left + left_offset,
+                                               right + right_offset, size));
+                    right[right_offset + index] ^= 0x80u;
+                }
+            }
+        }
+    }
     assert(kernel_bytes_equal(NULL, NULL, 0u));
 }
 

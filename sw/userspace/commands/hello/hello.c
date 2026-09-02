@@ -16,6 +16,7 @@
 #include <astra/program.h>
 #include <astra/runtime.h>
 
+#include <inttypes.h>
 #include <stdio.h>
 
 ASTRA_PROGRAM("hello", 1, 0, 0, "Barry Walker",
@@ -53,7 +54,7 @@ astra_main(const AstraStartupInfo *startup)
     printf("width %s\n", formatted);
     if (astra_startup_validate(startup))
         for (uint32_t index = 0u; index < startup->argc; ++index)
-            printf("argv[%u] = %s\n", index,
+            printf("argv[%" PRIu32 "] = %s\n", index,
                    astra_startup_argument(startup, index));
     if (fflush(stdout) != 0)
         return 12;

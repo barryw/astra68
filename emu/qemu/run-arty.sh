@@ -1,18 +1,46 @@
 #!/bin/sh
 set -eu
 
-ASTRA_ROOT=${ASTRA_ROOT:-/data/astra}
+ASTRA_STORE=${ASTRA_STORE:-/data/astra}
+ASTRA_ROOT=${ASTRA_ROOT:-$ASTRA_STORE/current}
+if ! ASTRA_ROOT=$(readlink -f "$ASTRA_ROOT"); then
+    echo "Astra release is not selected: $ASTRA_ROOT" >&2
+    exit 1
+fi
+RELEASE_TOOL=${ASTRA_RELEASE_TOOL:-$ASTRA_ROOT/bin/astra-release.py}
+if [ ! -r "$RELEASE_TOOL" ]; then
+    echo "Astra release verifier not found: $RELEASE_TOOL" >&2
+    exit 1
+fi
+if ! RELEASE_ID=$(PYTHONDONTWRITEBYTECODE=1 \
+        python3 "$RELEASE_TOOL" verify --installed "$ASTRA_ROOT"); then
+    echo "Astra release verification failed: $ASTRA_ROOT" >&2
+    exit 1
+fi
+case "$RELEASE_ID" in
+    *[!0-9a-f]*)
+        echo "Astra release identity is invalid: $RELEASE_ID" >&2
+        exit 1 ;;
+esac
+if [ "${#RELEASE_ID}" -ne 64 ]; then
+    echo "Astra release identity is invalid: $RELEASE_ID" >&2
+    exit 1
+fi
 QEMU=${QEMU:-$ASTRA_ROOT/qemu/bin/qemu-system-m68k-astra}
 ROM=${ROM:-$ASTRA_ROOT/rom/astra_boot.bin}
-STORAGE=${STORAGE:-$ASTRA_ROOT/storage-terminal.img}
+BASE_STORAGE=${ASTRA_BASE_STORAGE:-$ASTRA_ROOT/storage-terminal.img}
 LIBDIR=${LIBDIR:-$ASTRA_ROOT/qemu/lib}
 TERMINAL_DISPLAY=${ASTRA_TERMINAL_DISPLAY:-$ASTRA_ROOT/bin/astra-terminal-display}
 INPUT_HOTPLUG=${ASTRA_INPUT_HOTPLUG:-$ASTRA_ROOT/bin/astra-input-hotplug.py}
-TEXT_PLANE=${ASTRA_TEXT_PLANE_PATH:-$ASTRA_ROOT/run/post-text.bin}
-DISPLAY_MAILBOX=${ASTRA_DISPLAY_MAILBOX_PATH:-$ASTRA_ROOT/run/display.bin}
-QMP_SOCKET=${ASTRA_QMP_SOCKET:-$ASTRA_ROOT/run/qmp.sock}
-CONSOLE_LOG=${ASTRA_CONSOLE_LOG:-$ASTRA_ROOT/run/qemu-console.log}
-PANIC_LOG=${ASTRA_PANIC_LOG:-$ASTRA_ROOT/log/panic-latest.log}
+STATE_ROOT=${ASTRA_STATE_ROOT:-$ASTRA_STORE/state/$RELEASE_ID}
+RUN_ROOT=${ASTRA_RUN_ROOT:-/run/astra}
+LOG_ROOT=${ASTRA_LOG_ROOT:-$ASTRA_STORE/log}
+TEXT_PLANE=${ASTRA_TEXT_PLANE_PATH:-$RUN_ROOT/post-text.bin}
+DISPLAY_MAILBOX=${ASTRA_DISPLAY_MAILBOX_PATH:-$RUN_ROOT/display.bin}
+HOSTFS_ROOT=${ASTRA_HOSTFS_ROOT:-$ASTRA_STORE/hostfs}
+QMP_SOCKET=${ASTRA_QMP_SOCKET:-$RUN_ROOT/qmp.sock}
+CONSOLE_LOG=${ASTRA_CONSOLE_LOG:-$LOG_ROOT/qemu-console.log}
+PANIC_LOG=${ASTRA_PANIC_LOG:-$LOG_ROOT/panic-latest.log}
 MEMORY=${ASTRA_MEMORY:-128M}
 HOST_TIME_MIN=${ASTRA_HOST_TIME_MIN:-1735689600}
 host_epoch=$(date -u +%s)
@@ -27,8 +55,8 @@ if [ ! -x "$TERMINAL_DISPLAY" ]; then
     echo "Astra terminal display not found: $TERMINAL_DISPLAY" >&2
     exit 1
 fi
-if [ ! -r "$STORAGE" ]; then
-    echo "Astra storage image not found: $STORAGE" >&2
+if [ ! -r "$BASE_STORAGE" ]; then
+    echo "Astra base storage image not found: $BASE_STORAGE" >&2
     exit 1
 fi
 if [ ! -r "$INPUT_HOTPLUG" ]; then
@@ -37,10 +65,27 @@ if [ ! -r "$INPUT_HOTPLUG" ]; then
 fi
 
 mkdir -p "$(dirname "$TEXT_PLANE")" "$(dirname "$QMP_SOCKET")" \
-    "$(dirname "$PANIC_LOG")"
+    "$(dirname "$PANIC_LOG")" "$HOSTFS_ROOT" "$STATE_ROOT"
 exec 9>"$(dirname "$QMP_SOCKET")/runtime.lock"
 if ! flock -n 9; then
     echo "Astra runtime is already active" >&2
+    exit 1
+fi
+if [ -z "${STORAGE+x}" ]; then
+    STORAGE=$STATE_ROOT/storage-terminal.img
+    if [ ! -e "$STORAGE" ]; then
+        storage_temporary=$STATE_ROOT/.storage-terminal.img.$$.new
+        trap 'rm -f "$storage_temporary"' EXIT
+        cp "$BASE_STORAGE" "$storage_temporary"
+        chmod 0600 "$storage_temporary"
+        sync
+        mv "$storage_temporary" "$STORAGE"
+        storage_temporary=
+        trap - EXIT HUP INT TERM
+    fi
+fi
+if [ ! -f "$STORAGE" ] || [ -L "$STORAGE" ] || [ ! -w "$STORAGE" ]; then
+    echo "Astra runtime storage is not a writable regular file: $STORAGE" >&2
     exit 1
 fi
 rm -f "$QMP_SOCKET"
@@ -97,6 +142,7 @@ tee "$CONSOLE_LOG" <"$console_pipe" &
 log_pid=$!
 env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
     ASTRA_DISPLAY_MAILBOX_PATH="$DISPLAY_MAILBOX" \
+    ASTRA_HOSTFS_ROOT="$HOSTFS_ROOT" \
     LD_LIBRARY_PATH="$LIBDIR" "$QEMU" \
     -object memory-backend-ram,id=astra-ram,size="$MEMORY",prealloc=on \
     -M astra68,memory-backend=astra-ram -m "$MEMORY" -bios "$ROM" \

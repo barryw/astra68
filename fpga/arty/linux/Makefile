@@ -18,7 +18,7 @@ TARGETS := $(BOOT_TARGET) $(STATUS_TARGET) $(SPRITE_TARGET) $(RENDER_TARGET) \
 	$(TIME_SYNC_TARGET) $(SPLASH_TARGET)
 COMMON_SOURCES := astra_graphics_hw.c astra_boot_text.c
 COMMON_HEADERS := astra_graphics_hw.h astra_boot_text.h
-TERMINAL_FONT_SOURCE := ../../soc/post_fonts.hex
+TERMINAL_FONT_SOURCE := ../graphics/post_fonts.hex
 TERMINAL_FONT_HEADER := $(OUT)/astra_terminal_font.inc
 SPLASH_PACKER := ../../../sw/boot/pack_arty_splash.py
 SPLASH_SOURCE := ../../../sw/boot/assets/astra_boot_splash_1280x720_blank.png
@@ -130,6 +130,8 @@ test-host: $(OUT)/test-astra-boot-text $(OUT)/test-astra-terminal-display \
 	$(OUT)/test-astra-hdmi-link --self-test
 	$(PYTHON) test-astra-chip-reset.py
 	$(PYTHON) test-astra-terminal-start.py
+	$(PYTHON) test-astra-firstboot.py
+	$(PYTHON) test-configure-readonly-root.py
 
 $(OUT)/test-astra-boot-text: test_astra_boot_text.c \
 		$(COMMON_SOURCES) $(COMMON_HEADERS)

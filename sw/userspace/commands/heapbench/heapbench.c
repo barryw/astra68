@@ -1,5 +1,5 @@
 /*
- * `heapbench` -- the measurement HANDOVER-memory-and-modernity.md section 4
+ * `heapbench` -- the allocator measurement
  * asks for, and the instrument for the two numbers left open after the
  * reserve/commit split.
  *

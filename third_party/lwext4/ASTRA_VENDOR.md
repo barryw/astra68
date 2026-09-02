@@ -79,7 +79,7 @@ so a future fix has somewhere to land.
 
 ## Astra68 changes to upstream files
 
-Thirteen upstream changes are applied **in-tree**. The patches are retained
+Eighteen upstream changes are applied **in-tree**. The patches are retained
 verbatim under `astra/patches/` as the audit record and as the re-apply path
 for a future upstream bump.
 
@@ -98,6 +98,11 @@ for a future upstream bump.
 | `0011-durable-write-barriers.patch` | `include/ext4_blockdev.h:67`, `src/ext4_blockdev.c:113`, `src/ext4_journal.c:2181` | The block interface had no durability callback, so journal commit and `fsync` could return after writes reached only volatile device state. Adds an optional flush operation, orders journal records before the commit record with device barriers, and makes cache flush finish with a device barrier. |
 | `0012-coalesced-read-cache.patch` | `src/ext4.c:1899`, `src/ext4_blockdev.c:383` | Contiguous full-block file reads bypassed the coherent cache, so every external command launch reread its executable blocks. Keeps one coalesced device read on a cold miss, publishes the run into the existing cache, and returns warm runs without device I/O. |
 | `0013-extent-guard-local.patch` | `src/ext4_fs.c:805` | The no-extents Astra profile left an extent-only local outside its feature guard, producing an unused-variable warning on every target build. The declaration now has the same feature lifetime as its only uses. |
+| `0014-readlink-lock-recursion.patch` | `src/ext4.c:1759`, `src/ext4.c:2798` | `ext4_readlink` held the exclusive mount lock and called public `ext4_fread`, which recursively acquired the read lock and aborted or deadlocked. The shared read body now has an already-locked entry used by `readlink`, while public reads retain their read-lock wrapper. |
+| `0015-atomic-sparse-truncate-extension.patch` | `src/ext4.c:1674`, `src/ext4.c:2045` | Growing `ext4_ftruncate` returned success without changing the inode. Astra's backend compensated with repeated 64-byte writes, making one truncate slow and non-atomic. lwext4 now grows the inode inside its existing transaction, zeroes any previously allocated partial tail block, keeps whole-block gaps sparse, preserves the file position, timestamps size changes, and leaves the backend with one shared call. The patch also removes an erroneous unlock from the already-unlocked failure path and fixes `fwrite`/`ftruncate` access checks that tested `flags & O_RDONLY` even though `O_RDONLY` is zero. |
+| `0016-write-into-sparse-hole.patch` | `src/ext4_fs.c:1473` | The non-extent implementation ignored the create half of `ext4_fs_init_inode_dblk_idx`, so a write inside a sparse hole passed physical block zero into the cache and aborted while releasing it. It now allocates the requested logical block, zeroes it before publishing its inode mapping, and returns the real physical block. |
+| `0017-slicing-by-4-crc32c.patch` | `src/ext4_crc32.c:107`, `src/ext4_crc32.c:378` | Metadata and journal CRC32C was the hottest guest loop in the rename profile. The shared implementation now consumes four bytes per iteration with slicing-by-4 tables, retains byte loads for unaligned big-endian buffers, and uses a pointer bound so the MC68030 loop does not recompute the remaining word count on every iteration. |
+| `0018-create-final-component-only.patch` | `src/ext4.c:1020` | Upstream interpreted `O_CREAT` as permission to manufacture every missing path component as a directory. File creation now creates only the final component, matching POSIX and the VFS backend contract; a missing parent returns `ENOENT`. |
 
 Defect 0003 is invisible against lwext4's own `mkfs`, which leaves
 `s_hash_seed` zero. It appears only against an `mke2fs` image, which is the
@@ -132,6 +137,26 @@ second durability path.
 Patch 0012 is covered by a contiguous 12 KiB file oracle. Its cold read must
 perform physical I/O, while an immediate seek and reread must return identical
 bytes with zero physical reads. Raw, partitioned, sanitizer, and TSan runs pass.
+
+Patch 0015 is covered by a persistent sparse-extension oracle. It writes a
+three-byte prefix, extends the inode beyond one block, verifies the file offset
+did not move and the entire hole reads as zero, then repeats the byte and size
+checks from a fresh mount before `e2fsck` judges the image. A second fixture
+shrinks `AST` to `A`, re-extends it, and proves the discarded `ST` bytes cannot
+reappear from the allocated tail block. The same fixture is opened read-only
+and must reject both write and truncate without changing it.
+
+Patch 0016 is covered by appending into the sparse second block created by the
+Patch 0015 fixture. The append must materialize that exact logical block, keep
+the preceding hole zero, preserve the appended bytes through a fresh mount,
+and leave the image clean under independent `e2fsck`.
+
+Patch 0017 is checked against an independent bitwise CRC32C oracle across
+unaligned offsets and lengths plus the standard `123456789` vector. The
+generated MC68030 loop was inspected before and after the pointer-bound change;
+the retained version removes the per-iteration subtract and shift. In the
+single-client rename workload that refinement moved the identical seed from
+441 to 448 operations per second without changing physical I/O.
 
 Defect 0006 is also endian-independent, and it is invisible to a caller that
 resolves paths the way Linux does -- the VFS answers `.` and `..` itself and

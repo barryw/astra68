@@ -31,7 +31,7 @@ module tb_astra_boot_text_overlay;
     wire [23:0] output_rgb;
 
     astra_boot_text_overlay #(
-        .FONT_HEX("fpga/soc/post_fonts.hex")
+.FONT_HEX("assets/fonts/astra_8x16.hex")
     ) dut (
         .build_clk(build_clk),
         .build_reset(build_reset),

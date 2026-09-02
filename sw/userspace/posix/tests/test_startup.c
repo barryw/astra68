@@ -32,7 +32,7 @@ astra_posix_start(const AstraStartupInfo *startup)
 }
 
 int
-main(int argc, char **argv, char **envp)
+main(int argc, char **argv)
 {
     if (entered != 0) {
         assert(argc == 7);
@@ -44,8 +44,7 @@ main(int argc, char **argv, char **envp)
         assert(strcmp(argv[5], "--") == 0);
         assert(strcmp(argv[6], "WORK:notes.txt") == 0);
         assert(argv[7] == NULL);
-        assert(envp == environ);
-        assert(strcmp(envp[1], "TERM=astra-256color") == 0);
+        assert(strcmp(environ[1], "TERM=astra-256color") == 0);
         return 73;
     }
     {

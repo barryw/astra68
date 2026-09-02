@@ -17,7 +17,11 @@ PUBLIC_RENDER_PROTOCOL="$REPOSITORY/fpga/arty/linux/astra_render_protocol.h"
 PUBLIC_SYSCALL="$REPOSITORY/sw/include/astra/syscall.h"
 PUBLIC_MESSAGE_ABI="$REPOSITORY/sw/include/astra/message_abi.h"
 PUBLIC_LIMITS="$REPOSITORY/sw/include/astra/limits.h"
+PUBLIC_BLOCK="$REPOSITORY/sw/include/astra/block.h"
 PUBLIC_NETWORK="$REPOSITORY/sw/include/astra/network.h"
+PUBLIC_HOST="$REPOSITORY/sw/include/astra/host.h"
+PUBLIC_STATUS="$REPOSITORY/sw/include/astra/status.h"
+PUBLIC_VFS_SERVICE="$REPOSITORY/sw/include/astra/vfs_service.h"
 
 sha256_file()
 {
@@ -46,6 +50,8 @@ overlay_identity()
         done
         printf '%s  %s\n' "$(sha256_file "$SCRIPT_DIR/prepare-source.sh")" \
             "emu/qemu/prepare-source.sh"
+        printf '%s  %s\n' "$(sha256_file "$SCRIPT_DIR/build.sh")" \
+            "emu/qemu/build.sh"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_INPUT")" \
             "sw/include/astra/input.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_DISPLAY")" \
@@ -62,8 +68,16 @@ overlay_identity()
             "sw/include/astra/message_abi.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_LIMITS")" \
             "sw/include/astra/limits.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_BLOCK")" \
+            "sw/include/astra/block.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_NETWORK")" \
             "sw/include/astra/network.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_HOST")" \
+            "sw/include/astra/host.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_STATUS")" \
+            "sw/include/astra/status.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_VFS_SERVICE")" \
+            "sw/include/astra/vfs_service.h"
     ) | sha256_stream
 }
 
@@ -143,7 +157,11 @@ cp "$PUBLIC_DISPLAY" "$STAGED_SOURCE/include/astra/display.h"
 cp "$PUBLIC_SYSCALL" "$STAGED_SOURCE/include/astra/syscall.h"
 cp "$PUBLIC_MESSAGE_ABI" "$STAGED_SOURCE/include/astra/message_abi.h"
 cp "$PUBLIC_LIMITS" "$STAGED_SOURCE/include/astra/limits.h"
+cp "$PUBLIC_BLOCK" "$STAGED_SOURCE/include/astra/block.h"
 cp "$PUBLIC_NETWORK" "$STAGED_SOURCE/include/astra/network.h"
+cp "$PUBLIC_HOST" "$STAGED_SOURCE/include/astra/host.h"
+cp "$PUBLIC_STATUS" "$STAGED_SOURCE/include/astra/status.h"
+cp "$PUBLIC_VFS_SERVICE" "$STAGED_SOURCE/include/astra/vfs_service.h"
 ln -s include/astra "$STAGED_SOURCE/astra"
 patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/meson.build.patch" >&2
 patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/target-m68k-pmmu030.patch" >&2

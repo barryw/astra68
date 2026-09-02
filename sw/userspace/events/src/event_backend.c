@@ -662,13 +662,16 @@ readdir_activity(AstraEventsBackend *backend, uint64_t cookie, char *name,
 }
 
 static uint32_t
-events_readdir(void *context, const char *path, uint64_t cookie, char *name,
-               uint32_t capacity, AstraVfsNodeInfo *info, uint64_t *next)
+events_readdir(void *context, uintptr_t directory, const char *path,
+               uint64_t cookie, char *name, uint32_t capacity,
+               AstraVfsNodeInfo *info, uint64_t *next)
 {
     AstraEventsBackend *backend = backend_of(context);
     AstraEventsNode described;
     const char *entry = NULL;
     uint32_t status;
+
+    (void)directory;
 
     status = describe(backend, &described, path);
     if (status != ASTRA_VFS_OK) {
@@ -743,7 +746,8 @@ static const AstraVfsBackendOps events_ops = {
     astra_vfs_backend_deny_unlink,
     astra_vfs_backend_deny_rename,
     astra_vfs_backend_deny_chmod,
-    astra_vfs_backend_no_readlink
+    astra_vfs_backend_no_readlink,
+    astra_vfs_backend_deny_symlink
 };
 
 int

@@ -40,8 +40,8 @@ static void make_valid_info(AstraBootInfo *info)
     info->cpu_hz = 12500000u;
     info->ram_base = 0x02000000u;
     info->ram_size = 0x02000000u;
-    info->rom_base = 0xffe00000u;
-    info->rom_size = ASTRA_ROM_BACKING_SIZE;
+    info->rom_base = ASTRA_ROM_ADDRESS;
+    info->rom_size = ASTRA_ROM_SIZE;
     info->kernel_base = ASTRA_KERNEL_LOAD_ADDRESS;
     info->kernel_image_size = 0x00010000u;
     info->kernel_memory_size = ASTRA_KERNEL_RESERVED_SIZE;
@@ -66,13 +66,9 @@ static void make_valid_info(AstraBootInfo *info)
               ASTRA_MEMORY_RANGE_KERNEL,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
               ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_range(info, ASTRA_KERNEL_USABLE_ADDRESS, ASTRA_KERNEL_USABLE_SIZE,
+    add_range(info, ASTRA_KERNEL_USABLE_ADDRESS,
+              OHCI_DMA_POOL_BASE - ASTRA_KERNEL_USABLE_ADDRESS,
               ASTRA_MEMORY_RANGE_USABLE,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE | ASTRA_MEMORY_CACHEABLE);
-    add_range(info, ASTRA_ROM_BACKING_ADDRESS, ASTRA_ROM_BACKING_SIZE,
-              ASTRA_MEMORY_RANGE_ROM_BACKING,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_range(info, 0x03e40000u, 0x000c0000u, ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE | ASTRA_MEMORY_CACHEABLE);
     add_range(info, OHCI_DMA_POOL_BASE, OHCI_DMA_POOL_SIZE,
               ASTRA_MEMORY_RANGE_DEVICE,
@@ -107,7 +103,8 @@ static void test_boot_info(void)
     assert(astra_boot_info_validate(&info) == ASTRA_BOOT_BAD_MEMORY_MAP);
 
     make_valid_info(&info);
-    info.memory_ranges[8].flags |= ASTRA_MEMORY_CACHEABLE;
+    info.memory_ranges[info.memory_range_count - 1u].flags |=
+        ASTRA_MEMORY_CACHEABLE;
     astra_boot_info_finalize(&info);
     assert(astra_boot_info_validate(&info) == ASTRA_BOOT_BAD_MEMORY_MAP);
 }

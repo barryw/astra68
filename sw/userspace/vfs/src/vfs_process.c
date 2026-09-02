@@ -5,12 +5,13 @@
 #include <astra/shared_library.h>
 #include <astra/syscall.h>
 #include <astra/vfs_path.h>
+#include <astra/vfs_host_direct.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_process.h>
 
 #include <astra/endian.h>
 
-#define PROCESS_VFS_CLIENT_MAX 4u
+#define PROCESS_VFS_CLIENT_MAX ASTRA_ASSIGN_MAX
 
 typedef struct OpenLibraryRecord {
     AstraLibraryHandle handle;
@@ -57,7 +58,7 @@ static OpenLibraryRecord open_libraries[ASTRA_LIBRARY_SLOT_COUNT];
 static AstraVfsClient *client_ready(uint32_t slot);
 
 #define PROCESS_VFS_EXEC_MAGIC 0x56465345u
-#define PROCESS_VFS_EXEC_VERSION 2u
+#define PROCESS_VFS_EXEC_VERSION 4u
 
 typedef struct ProcessVfsExecHeader {
     uint32_t magic;
@@ -71,12 +72,10 @@ typedef struct ProcessVfsExecClient {
     uint32_t session;
     uint32_t activity;
     uint32_t port_service;
-    uint32_t port_reply_receive;
-    uint32_t port_reply_source;
-    uint32_t port_reply_send;
-    uint32_t port_area;
-    uint32_t port_area_send;
-    uint32_t port_area_size;
+    AstraVfsPortExecLane lane;
+    uint32_t port_direct_area;
+    uint32_t port_direct_device;
+    uint32_t port_direct_session;
     uint16_t version;
     uint8_t port_area_capable;
     uint8_t reserved;
@@ -132,12 +131,12 @@ uint32_t astra_process_vfs_export(void *state, uint32_t capacity,
         output[count].session = client->session;
         output[count].activity = client->activity;
         output[count].port_service = client->port_service;
-        output[count].port_reply_receive = client->port_reply_receive;
-        output[count].port_reply_source = client->port_reply_source;
-        output[count].port_reply_send = client->port_reply_send;
-        output[count].port_area = client->port_area;
-        output[count].port_area_send = client->port_area_send;
-        output[count].port_area_size = client->port_area_size;
+        if (astra_vfs_port_exec_lane_export(client, &output[count].lane) !=
+            ASTRA_VFS_OK)
+            return ASTRA_VFS_ERR_IO;
+        output[count].port_direct_area = client->port_direct_area;
+        output[count].port_direct_device = client->port_direct_device;
+        output[count].port_direct_session = client->port_direct_session;
         output[count].version = client->version;
         output[count].port_area_capable = client->port_area_capable;
         ++count;
@@ -199,7 +198,7 @@ uint32_t astra_process_file_import(const AstraProcessFileState *state,
     *file = (AstraFile)ASTRA_FILE_INIT;
     file->_private_client = client;
     file->_private_read_at = astra_vfs_port_read_bulk;
-    file->_private_write_at = astra_vfs_port_write_bulk;
+    file->_private_write_at = astra_vfs_port_write_bulk_position;
     file->_private_file = state->file;
     file->_private_flags = state->flags;
     file->_private_offset = state->offset;
@@ -240,39 +239,37 @@ uint32_t astra_process_vfs_import(const AstraStartupInfo *startup,
                 break;
         if (slot == client_count || input[index].port_service !=
                                     input[index].service ||
-            (input[index].port_area == 0u) !=
-                (input[index].port_area_size == 0u) ||
-            (input[index].port_reply_receive == 0u) !=
-                (input[index].port_reply_source == 0u))
+            ((input[index].port_direct_area == 0u) !=
+                 (input[index].port_direct_device == 0u)) ||
+            ((input[index].port_direct_area == 0u) !=
+                 (input[index].port_direct_session ==
+                  ASTRA_VFS_SESSION_INVALID)))
             goto invalid;
         client = &clients[slot].client;
         memset(client, 0, sizeof(*client));
         client->transport = astra_vfs_port_transport;
         client->context = client;
+        client->area_payload = astra_vfs_port_call_area;
+        client->call_acquire = astra_vfs_port_call_acquire;
+        if (astra_rt_semaphore_create(
+                1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
+                &client->port_connect_lock) != ASTRA_SYSCALL_OK)
+            goto invalid;
         client->session = input[index].session;
         client->activity = input[index].activity;
         client->port_service = input[index].port_service;
-        client->port_reply_receive = input[index].port_reply_receive;
-        client->port_reply_source = input[index].port_reply_source;
-        client->port_reply_send = input[index].port_reply_send;
-        client->port_area = input[index].port_area;
-        client->port_area_send = input[index].port_area_send;
-        client->port_area_size = input[index].port_area_size;
         client->version = input[index].version;
         client->port_area_capable = input[index].port_area_capable;
-        if (client->port_area != 0u) {
-            void *address = NULL;
-            uint32_t mapped = 0u;
-
-            if (astra_rt_area_map(client->port_area,
-                                  ASTRA_AREA_MAP_READ |
-                                      ASTRA_AREA_MAP_WRITE,
-                                  &address, &mapped) != ASTRA_SYSCALL_OK ||
-                mapped != client->port_area_size)
-                goto invalid;
-            client->port_area_address = address;
-        }
         clients[slot].connected = 1u;
+        if (astra_vfs_port_exec_lane_import(client, &input[index].lane) !=
+            ASTRA_VFS_OK)
+            goto invalid;
+        if (input[index].port_direct_area != 0u &&
+            astra_vfs_host_direct_resume(
+                client, input[index].port_direct_area,
+                input[index].port_direct_device,
+                input[index].port_direct_session) != ASTRA_VFS_OK)
+            goto invalid;
     }
     return ASTRA_VFS_OK;
 
@@ -291,8 +288,9 @@ static AstraVfsClient *client_ready(uint32_t slot)
     if (slot >= client_count)
         return NULL;
     if (clients[slot].connected == 0u) {
-        if (astra_vfs_port_connect_lazy(&clients[slot].client,
-                                        clients[slot].handle) != ASTRA_VFS_OK)
+        if (astra_vfs_host_port_connect_lazy(&clients[slot].client,
+                                             clients[slot].handle) !=
+            ASTRA_VFS_OK)
             return NULL;
         clients[slot].connected = 1u;
     }
@@ -851,6 +849,7 @@ static uint32_t seed_process_vfs(const AstraStartupInfo *startup,
                                  int fork_child)
 {
     const AstraStartupCapability *capabilities;
+    uint32_t previous_client_count = client_count;
 
     if (!astra_startup_validate(startup) ||
         startup->capabilities_address == 0u)
@@ -861,17 +860,35 @@ static uint32_t seed_process_vfs(const AstraStartupInfo *startup,
                           startup->capability_count) != ASTRA_VFS_OK)
         return ASTRA_VFS_ERR_INVALID;
     if (fork_child) {
-        for (uint32_t index = 0u; index < client_count; ++index)
-            if (clients[index].connected != 0u)
+        for (uint32_t index = 0u; index < client_count; ++index) {
+            uint32_t status;
+
+            if (clients[index].connected == 0u)
+                continue;
+            if (clients[index].client.port_direct_address != NULL) {
+                status = astra_vfs_host_direct_after_fork(
+                    &clients[index].client);
+                if (status != ASTRA_VFS_OK)
+                    return status;
+            } else {
                 astra_vfs_port_abandon(&clients[index].client);
-        client_count = 0u;
-        vfs_initialized = 0u;
+                clients[index].connected = 0u;
+            }
+        }
+        /* Fork preserves the namespace and its handles exactly. */
+        return vfs_initialized ? ASTRA_VFS_OK : ASTRA_VFS_ERR_NOT_FOUND;
     } else {
         astra_process_vfs_close();
     }
-    (void)memset(clients, 0, sizeof(clients));
-    if (!fork_child)
-        (void)memset(open_libraries, 0, sizeof(open_libraries));
+    /*
+     * Only records below client_count have ever held state.  Clearing the
+     * entire namespace-sized array in a COW child needlessly faults and copies
+     * every page that backs it; widening namespace capacity must not make a
+     * fork pay for mounts the process never had.
+     */
+    (void)memset(clients, 0,
+                 previous_client_count * (uint32_t)sizeof(*clients));
+    (void)memset(open_libraries, 0, sizeof(open_libraries));
     /* The table describes the namespace this seeding just replaced. */
     kit_table_complete = 0u;
     kit_count = 0u;
@@ -1042,7 +1059,7 @@ static uint32_t open_process_filesystem(
     status = filesystem->library->attach_io(
         &filesystem->filesystem, astra_process_vfs_assigns(),
         astra_process_vfs_assign_client, astra_vfs_port_read_bulk,
-        astra_vfs_port_write_bulk, NULL);
+        astra_vfs_port_write_bulk_position, NULL);
     if (status != ASTRA_VFS_OK) {
         astra_process_filesystem_close(filesystem);
         return status;

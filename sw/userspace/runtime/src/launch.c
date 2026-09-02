@@ -15,6 +15,8 @@
 #include <astra/runtime.h>
 #include <astra/syscall.h>
 
+extern void astra_runtime_forget_current_thread_handle(void);
+
 uint32_t
 astra_launch(const void *image, uint32_t length,
              const AstraLaunchGrant *grants, uint32_t count,
@@ -170,6 +172,8 @@ astra_process_clone(uint32_t *process_handle, uint32_t *process_id)
     if (result.status == ASTRA_SYSCALL_OK) {
         *process_handle = result.value0;
         *process_id = result.value1;
+        if (result.value1 == 0u)
+            astra_runtime_forget_current_thread_handle();
     }
     return result.status;
 }

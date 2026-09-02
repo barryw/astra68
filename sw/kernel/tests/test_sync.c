@@ -623,6 +623,48 @@ static void test_timer_wait_set_cancel_duplicate_and_close(void)
     assert(kernel_sync_pool_valid());
 }
 
+static void test_futex_waits_are_process_scoped_and_priority_ordered(void)
+{
+    KernelThread *low;
+    KernelThread *high;
+    uint32_t woken;
+
+    initialize_test();
+    low = allocate_thread(0u, 0u, 10u);
+    low = take_thread();
+    assert(kernel_futex_wait(0x1001u, 0x2000u, low, 0u,
+                             KERNEL_THREAD_DEADLINE_NEVER,
+                             ASTRA_SYSCALL_TIMED_OUT) ==
+           KERNEL_FUTEX_BLOCKED);
+    high = allocate_thread(0u, 1u, 20u);
+    high = take_thread();
+    assert(kernel_futex_wait(0x1001u, 0x2000u, high, 0u,
+                             KERNEL_THREAD_DEADLINE_NEVER,
+                             ASTRA_SYSCALL_TIMED_OUT) ==
+           KERNEL_FUTEX_BLOCKED);
+    assert(kernel_futex_wake(0x2002u, 0x2000u, 1u, ASTRA_SYSCALL_OK,
+                             &woken) == KERNEL_FUTEX_OK);
+    assert(woken == 0u);
+    assert(kernel_futex_wake(0x1001u, 0x2000u, 1u, ASTRA_SYSCALL_OK,
+                             &woken) == KERNEL_FUTEX_OK);
+    assert(woken == 1u);
+    assert(take_thread() == high);
+    assert(kernel_futex_wake(0x1001u, 0x2000u, UINT32_MAX,
+                             ASTRA_SYSCALL_OK, &woken) == KERNEL_FUTEX_OK);
+    assert(woken == 1u);
+    assert(take_thread() == low);
+    assert(kernel_futex_wait(0x1001u, 0x3000u, low, 0u,
+                             KERNEL_THREAD_DEADLINE_NEVER,
+                             ASTRA_SYSCALL_TIMED_OUT) ==
+           KERNEL_FUTEX_BLOCKED);
+    assert(kernel_futex_wake_all_irq(0x1001u, 0x3000u,
+                                     ASTRA_SYSCALL_OK, &woken) ==
+           KERNEL_FUTEX_OK);
+    assert(woken == 1u);
+    assert(take_thread() == low);
+    assert(kernel_sync_pool_valid());
+}
+
 int main(void)
 {
     test_object_injection_preserves_pool();
@@ -636,6 +678,7 @@ int main(void)
     test_wait_set_owner_death_reports_winning_member();
     test_timer_heap_order_rearm_and_level_readiness();
     test_timer_wait_set_cancel_duplicate_and_close();
+    test_futex_waits_are_process_scoped_and_priority_ordered();
     puts("sync tests passed");
     return 0;
 }

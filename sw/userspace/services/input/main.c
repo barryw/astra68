@@ -29,6 +29,20 @@ static AstraInputPortSendResult send_event(void *context,
     return ASTRA_INPUT_PORT_SEND_ERROR;
 }
 
+static AstraInputPortSendResult wait_event(void *context,
+                                           uint32_t send_handle)
+{
+    uint32_t status;
+
+    (void)context;
+    status = astra_wait_one(send_handle, ASTRA_DEADLINE_FOREVER, NULL);
+    if (status == ASTRA_SYSCALL_OK)
+        return ASTRA_INPUT_PORT_SEND_OK;
+    if (status == ASTRA_SYSCALL_PEER_DEAD || status == ASTRA_SYSCALL_CLOSED)
+        return ASTRA_INPUT_PORT_SEND_PEER_DEAD;
+    return ASTRA_INPUT_PORT_SEND_ERROR;
+}
+
 static void connected_reply(uint32_t handle, uint32_t transaction,
                             uint32_t status, uint32_t client,
                             uint32_t generation)
@@ -124,6 +138,7 @@ static void accept_client(
 
         client_id = client_index + 1u;
         sink->send = send_event;
+        sink->wait = wait_event;
         sink->send_handle = handles[0];
         if (!astra_input_service_attach(service, client_id,
                                         astra_input_port_deliver, sink) ||

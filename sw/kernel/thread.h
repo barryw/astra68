@@ -123,6 +123,8 @@ typedef struct KernelThread {
     uint32_t process_id;
     uint32_t user_stack_base;
     uint32_t user_stack_top;
+    uint32_t tls_base;
+    uint32_t tls_pages;
     uint32_t timer_ticks;
     uint32_t run_count;
     uint32_t syscall_count;
@@ -169,6 +171,8 @@ typedef struct KernelThreadSnapshot {
     uint32_t process_id;
     uint32_t user_stack_base;
     uint32_t user_stack_top;
+    uint32_t tls_base;
+    uint32_t tls_pages;
     uint32_t kernel_stack_guard;
     uint32_t kernel_stack_base;
     uint32_t kernel_stack_top;

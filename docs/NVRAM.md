@@ -52,18 +52,6 @@ comparison uses signed modulo-32-bit subtraction so wraparound is defined.
 
 ## Backends
 
-### ULX3S Prototype
-
-The detected ISSI IS25LP128 provides 16 MiB of configuration SPI flash. Astra
-bitstreams currently occupy roughly the first 2.3 MiB. The prototype may
-reserve the final two 64 KiB erase sectors at `0x00FE0000` and `0x00FF0000`.
-The reservation must also be enforced by every FPGA programming/package tool.
-
-Fabric access to configuration SPI requires the ECP5 user-clock path and a
-small flash controller. Early POST images must remain read-only until that path
-has hardware tests for address bounds, erase isolation, interrupted writes, and
-bitstream recovery.
-
 ### Product Hardware
 
 A dedicated I2C FRAM is preferred. It avoids configuration-flash coupling,

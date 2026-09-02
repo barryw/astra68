@@ -1292,6 +1292,16 @@ int jbd_journal_start(struct jbd_fs *jbd_fs,
 	journal->alloc_trans_id = journal->trans_id;
 
 	journal->block_size = jbd_get32(&jbd_fs->sb, blocksize);
+	/* JBD2 reserves at most one quarter of the usable log for a running
+	 * transaction.  The rest guarantees that commit and checkpoint can make
+	 * progress without overwriting live journal records. */
+	journal->max_transaction_buffers =
+		(jbd_get32(&jbd_fs->sb, maxlen) - journal->first) / 4u;
+	if (journal->max_transaction_buffers == 0u)
+		return ENOSPC;
+	journal->error = EOK;
+	journal->aborted = false;
+	journal->running_trans = NULL;
 
 	TAILQ_INIT(&journal->cp_queue);
 	RB_INIT(&journal->block_rec_root);
@@ -1419,6 +1429,10 @@ int jbd_journal_stop(struct jbd_journal *journal)
 	struct jbd_fs *jbd_fs = journal->jbd_fs;
 	uint32_t features_incompatible;
 
+	r = jbd_journal_commit_running(journal);
+	if (r != EOK)
+		return r;
+
 	/* Make sure that journalled content have reached
 	 * the disk.*/
 	jbd_journal_purge_cp_trans(journal, true, false);
@@ -1443,9 +1457,17 @@ int jbd_journal_stop(struct jbd_journal *journal)
 		return r;
 
 	journal->start = 0;
-	journal->trans_id = 0;
+	/* A clean journal stores the last used transaction ID.  The next
+	 * journalling session starts at sequence + 1, so preserving this value
+	 * makes every record from an older session fail recovery's sequence
+	 * check.  Resetting it to zero can splice new + historical records after
+	 * a power cut (lwext4 issue #86). */
+	journal->trans_id = journal->alloc_trans_id - 1u;
 	jbd_journal_write_sb(journal);
-	return jbd_write_sb(journal->jbd_fs);
+	r = jbd_write_sb(journal->jbd_fs);
+	if (r != EOK)
+		return r;
+	return ext4_block_flush(journal->jbd_fs->bdev);
 }
 
 /**@brief  Allocate a block in the journal.
@@ -1608,7 +1630,7 @@ jbd_trans_remove_block_rec(struct jbd_journal *journal,
  * @param  trans transaction
  * @param  block block descriptor
  * @return standard error code*/
-int jbd_trans_set_block_dirty(struct jbd_trans *trans,
+static int jbd_trans_set_block_dirty(struct jbd_trans *trans,
 			      struct ext4_block *block)
 {
 	struct jbd_buf *jbd_buf;
@@ -1693,7 +1715,7 @@ int jbd_trans_revoke_block(struct jbd_trans *trans,
  * @param  trans transaction
  * @param  lba logical block address
  * @return standard error code*/
-int jbd_trans_try_revoke_block(struct jbd_trans *trans,
+static int jbd_trans_try_revoke_block(struct jbd_trans *trans,
 			       ext4_fsblk_t lba)
 {
 	struct jbd_journal *journal = trans->journal;
@@ -1998,15 +2020,15 @@ static int
 jbd_journal_prepare_revoke(struct jbd_journal *journal,
 			   struct jbd_trans *trans)
 {
-	int rc = EOK, i = 0;
+	int rc = EOK;
 	struct ext4_block desc_block = EXT4_BLOCK_ZERO();
 	int32_t tag_tbl_size = 0;
 	uint32_t desc_iblock = 0;
 	char *blocks_entry = NULL;
-	struct jbd_revoke_rec *rec, *tmp;
 	struct jbd_revoke_header *header = NULL;
 	int32_t record_len = 4;
 	struct jbd_bhdr *bhdr = NULL;
+	struct jbd_revoke_rec *rec, *tmp;
 
 	if (JBD_HAS_INCOMPAT_FEATURE(&journal->jbd_fs->sb,
 				     JBD_FEATURE_INCOMPAT_64BIT))
@@ -2067,7 +2089,6 @@ again:
 		blocks_entry += record_len;
 		tag_tbl_size -= record_len;
 
-		i++;
 	}
 	if (rc == EOK && desc_iblock) {
 		if (header != NULL)
@@ -2151,6 +2172,9 @@ static void jbd_trans_end_write(struct ext4_bcache *bc __unused,
 	}
 }
 
+static void jbd_journal_publish_trans(struct jbd_journal *journal,
+				      struct jbd_trans *trans);
+
 /**@brief  Commit a transaction to the journal immediately.
  * @param  journal current journal session
  * @param  trans transaction
@@ -2160,7 +2184,6 @@ static int __jbd_journal_commit_trans(struct jbd_journal *journal,
 {
 	int rc = EOK;
 	uint32_t last = journal->last;
-	struct jbd_revoke_rec *rec, *tmp;
 
 	trans->trans_id = journal->alloc_trans_id;
 	rc = jbd_journal_prepare(journal, trans);
@@ -2195,6 +2218,20 @@ static int __jbd_journal_commit_trans(struct jbd_journal *journal,
 		goto Finish;
 
 	journal->alloc_trans_id++;
+	jbd_journal_publish_trans(journal, trans);
+
+Finish:
+	if (rc != EOK && rc != ENOSPC) {
+		journal->last = last;
+		jbd_journal_free_trans(journal, trans, true);
+	}
+	return rc;
+}
+
+static void jbd_journal_publish_trans(struct jbd_journal *journal,
+				      struct jbd_trans *trans)
+{
+	struct jbd_revoke_rec *rec, *tmp;
 
 	/* Complete the checkpoint of buffers which are revoked. */
 	RB_FOREACH_SAFE(rec, jbd_revoke_tree, &trans->revoke_root,
@@ -2256,12 +2293,6 @@ static int __jbd_journal_commit_trans(struct jbd_journal *journal,
 		if (trans->data_cnt)
 			jbd_journal_cp_trans(journal, trans);
 	}
-Finish:
-	if (rc != EOK && rc != ENOSPC) {
-		journal->last = last;
-		jbd_journal_free_trans(journal, trans, true);
-	}
-	return rc;
 }
 
 /**@brief  Allocate a new transaction
@@ -2282,6 +2313,281 @@ jbd_journal_new_trans(struct jbd_journal *journal)
 	trans->error = EOK;
 	TAILQ_INIT(&trans->buf_queue);
 	return trans;
+}
+
+static struct jbd_handle_buf *
+jbd_handle_buf_lookup(struct jbd_handle *handle, ext4_fsblk_t lba)
+{
+	struct jbd_handle_buf *record;
+
+	LIST_FOREACH(record, &handle->buffers, node) {
+		if (record->lba == lba)
+			return record;
+	}
+	return NULL;
+}
+
+static void jbd_handle_release_buffers(struct jbd_handle *handle)
+{
+	struct jbd_handle_buf *record, *tmp;
+	struct ext4_blockdev *bdev = handle->trans->journal->jbd_fs->bdev;
+
+	LIST_FOREACH_SAFE(record, &handle->buffers, node, tmp) {
+		struct ext4_block block = {
+			.lb_id = record->lba,
+			.data = record->buf->data,
+			.buf = record->buf,
+		};
+
+		LIST_REMOVE(record, node);
+		ext4_block_set(bdev, &block);
+		ext4_free(record->before);
+		ext4_free(record);
+	}
+}
+
+static void jbd_handle_release_revokes(struct jbd_handle *handle, bool abort)
+{
+	struct jbd_handle_revoke *record, *tmp;
+
+	LIST_FOREACH_SAFE(record, &handle->revokes, node, tmp) {
+		if (abort) {
+			struct jbd_revoke_rec key = {.lba = record->lba};
+			struct jbd_revoke_rec *revoke =
+				RB_FIND(jbd_revoke_tree,
+					&handle->trans->revoke_root, &key);
+
+			if (revoke) {
+				RB_REMOVE(jbd_revoke_tree,
+					  &handle->trans->revoke_root, revoke);
+				ext4_free(revoke);
+			}
+		}
+		LIST_REMOVE(record, node);
+		ext4_free(record);
+	}
+}
+
+int jbd_handle_get_access(struct jbd_handle *handle,
+			  struct ext4_block *block)
+{
+	struct jbd_handle_buf *record;
+	struct jbd_block_rec *block_rec;
+
+	if (!handle || !block || !block->buf)
+		return EINVAL;
+	if (jbd_handle_buf_lookup(handle, block->lb_id))
+		return EOK;
+
+	record = ext4_calloc(1, sizeof(*record));
+	if (!record)
+		return ENOMEM;
+	record->before = ext4_malloc(handle->trans->journal->block_size);
+	if (!record->before) {
+		ext4_free(record);
+		return ENOMEM;
+	}
+	record->lba = block->lb_id;
+	record->buf = block->buf;
+	record->was_dirty = ext4_bcache_test_flag(block->buf, BC_DIRTY);
+	block_rec = jbd_trans_block_rec_lookup(handle->trans->journal,
+					       block->lb_id);
+	record->was_in_transaction =
+		block_rec && block_rec->trans == handle->trans;
+	memcpy(record->before, block->data,
+	       handle->trans->journal->block_size);
+	ext4_bcache_inc_ref(block->buf);
+	LIST_INSERT_HEAD(&handle->buffers, record, node);
+	return EOK;
+}
+
+static void jbd_handle_forget_block(struct jbd_handle *handle,
+				    struct jbd_handle_buf *record)
+{
+	struct jbd_trans *trans = handle->trans;
+	struct jbd_block_rec *block_rec =
+		jbd_trans_block_rec_lookup(trans->journal, record->lba);
+	struct jbd_buf *jbd_buf, *tmp;
+
+	if (!block_rec || block_rec->trans != trans)
+		return;
+	TAILQ_FOREACH_SAFE(jbd_buf, &trans->buf_queue, buf_node, tmp) {
+		if (jbd_buf->block_rec != block_rec)
+			continue;
+
+		TAILQ_REMOVE(&trans->buf_queue, jbd_buf, buf_node);
+		TAILQ_REMOVE(&block_rec->dirty_buf_queue, jbd_buf,
+			     dirty_buf_node);
+		if (record->buf->end_write_arg == jbd_buf) {
+			record->buf->end_write = NULL;
+			record->buf->end_write_arg = NULL;
+		}
+		ext4_block_set(trans->journal->jbd_fs->bdev, &jbd_buf->block);
+		ext4_free(jbd_buf);
+		trans->data_cnt--;
+		break;
+	}
+
+	jbd_buf = TAILQ_LAST(&block_rec->dirty_buf_queue, jbd_buf_dirty);
+	if (jbd_buf) {
+		jbd_trans_change_ownership(block_rec, jbd_buf->trans);
+		record->buf->end_write = jbd_trans_end_write;
+		record->buf->end_write_arg = jbd_buf;
+	} else {
+		jbd_trans_remove_block_rec(trans->journal, block_rec, trans);
+	}
+}
+
+int jbd_handle_set_block_dirty(struct jbd_handle *handle,
+			       struct ext4_block *block)
+{
+	struct jbd_block_rec *block_rec;
+
+	if (!handle || !block)
+		return EINVAL;
+	/* get_write_access is a required part of the journalling contract. */
+	if (!jbd_handle_buf_lookup(handle, block->lb_id))
+		return EIO;
+	block_rec = jbd_trans_block_rec_lookup(handle->trans->journal,
+					       block->lb_id);
+	if ((!block_rec || block_rec->trans != handle->trans) &&
+	    (uint32_t)handle->trans->data_cnt >=
+		    handle->trans->journal->max_transaction_buffers)
+		return ENOSPC;
+	return jbd_trans_set_block_dirty(handle->trans, block);
+}
+
+int jbd_handle_try_revoke_block(struct jbd_handle *handle,
+			       ext4_fsblk_t lba)
+{
+	struct jbd_revoke_rec key = {.lba = lba};
+	struct jbd_handle_revoke *record;
+	bool existed;
+	int r;
+
+	if (!handle)
+		return EINVAL;
+	existed = RB_FIND(jbd_revoke_tree, &handle->trans->revoke_root,
+			  &key) != NULL;
+	r = jbd_trans_try_revoke_block(handle->trans, lba);
+	if (r != EOK || existed ||
+	    !RB_FIND(jbd_revoke_tree, &handle->trans->revoke_root, &key))
+		return r;
+	record = ext4_calloc(1, sizeof(*record));
+	if (!record) {
+		struct jbd_revoke_rec *revoke =
+			RB_FIND(jbd_revoke_tree, &handle->trans->revoke_root, &key);
+		RB_REMOVE(jbd_revoke_tree, &handle->trans->revoke_root, revoke);
+		ext4_free(revoke);
+		return ENOMEM;
+	}
+	record->lba = lba;
+	LIST_INSERT_HEAD(&handle->revokes, record, node);
+	return EOK;
+}
+
+int jbd_journal_start_handle(struct jbd_journal *journal,
+			     struct jbd_handle **handle_out)
+{
+	struct jbd_handle *handle;
+	int r;
+
+	if (!journal || !handle_out)
+		return EINVAL;
+	if (journal->aborted)
+		return EROFS;
+	if (journal->running_trans &&
+	    (uint32_t)journal->running_trans->data_cnt >=
+		    journal->max_transaction_buffers) {
+		r = jbd_journal_commit_running(journal);
+		if (r != EOK)
+			return r;
+	}
+	if (!journal->running_trans) {
+		journal->running_trans = jbd_journal_new_trans(journal);
+		if (!journal->running_trans)
+			return ENOMEM;
+	}
+	handle = ext4_calloc(1, sizeof(*handle));
+	if (!handle)
+		return ENOMEM;
+	handle->trans = journal->running_trans;
+	handle->sb_before = journal->jbd_fs->inode_ref.fs->sb;
+	handle->last_inode_bg_id_before =
+		journal->jbd_fs->inode_ref.fs->last_inode_bg_id;
+	LIST_INIT(&handle->buffers);
+	LIST_INIT(&handle->revokes);
+	*handle_out = handle;
+	return EOK;
+}
+
+int jbd_journal_stop_handle(struct jbd_handle *handle)
+{
+	if (!handle)
+		return EINVAL;
+	jbd_handle_release_buffers(handle);
+	jbd_handle_release_revokes(handle, false);
+	ext4_free(handle);
+	return EOK;
+}
+
+void jbd_journal_abort_handle(struct jbd_handle *handle)
+{
+	struct jbd_handle_buf *record;
+	struct ext4_fs *fs;
+
+	if (!handle)
+		return;
+	fs = handle->trans->journal->jbd_fs->inode_ref.fs;
+	LIST_FOREACH(record, &handle->buffers, node) {
+		memcpy(record->buf->data, record->before,
+		       handle->trans->journal->block_size);
+		if (!record->was_in_transaction)
+			jbd_handle_forget_block(handle, record);
+		if (record->was_dirty)
+			ext4_bcache_set_dirty(record->buf);
+		else
+			ext4_bcache_clear_dirty(record->buf);
+	}
+	fs->sb = handle->sb_before;
+	fs->last_inode_bg_id = handle->last_inode_bg_id_before;
+	jbd_handle_release_revokes(handle, true);
+	jbd_handle_release_buffers(handle);
+	ext4_free(handle);
+}
+
+int jbd_journal_commit_running(struct jbd_journal *journal)
+{
+	struct jbd_trans *trans;
+	int r;
+
+	if (!journal)
+		return EINVAL;
+	if (journal->aborted)
+		return EROFS;
+	trans = journal->running_trans;
+	if (!trans)
+		return EOK;
+	/* ext4's default data=ordered contract: file data reaches its home
+	 * blocks before the metadata transaction becomes durable. Journal-owned
+	 * metadata is pinned and therefore is not part of this drain. */
+	r = ext4_block_cache_drain(journal->jbd_fs->bdev);
+	if (r != EOK) {
+		journal->error = r;
+		journal->aborted = true;
+		journal->jbd_fs->inode_ref.fs->read_only = true;
+		return r;
+	}
+	journal->running_trans = NULL;
+	r = __jbd_journal_commit_trans(journal, trans);
+	if (r != EOK) {
+		journal->error = r;
+		journal->aborted = true;
+		journal->jbd_fs->inode_ref.fs->read_only = true;
+		if (r == ENOSPC)
+			jbd_journal_free_trans(journal, trans, true);
+	}
+	return r;
 }
 
 /**@brief  Commit a transaction to the journal immediately.

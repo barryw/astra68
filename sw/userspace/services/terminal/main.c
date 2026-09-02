@@ -89,31 +89,53 @@ static uint32_t load_title_icon(AstraArea *area, uint32_t *length)
     char path[ASTRA_VFS_PATH_MAX];
     uint32_t manifest_length = 0u;
     uint32_t line = 0u;
+    uint32_t status;
     AstraResult result;
 
-    if (astra_process_read_file(&process_filesystem, "APP:manifest",
-                                bundle_manifest_text,
-                                ASTRA_BUNDLE_MANIFEST_MAX,
-                                &manifest_length) != ASTRA_VFS_OK)
+    status = astra_process_read_file(&process_filesystem, "APP:manifest",
+                                     bundle_manifest_text,
+                                     ASTRA_BUNDLE_MANIFEST_MAX,
+                                     &manifest_length);
+    if (status != ASTRA_VFS_OK) {
+        (void)astra_log("Terminal icon manifest read failed");
+        (void)astra_log(astra_vfs_status_text(status));
         return TERMINAL_FAIL_ICON;
+    }
     bundle_manifest_text[manifest_length] = '\0';
     if (astra_bundle_manifest_parse(bundle_manifest_text, manifest_length,
-                                    &manifest, &line) != ASTRA_BUNDLE_OK ||
-        process_filesystem.library->qualify(
-            "APP", "", manifest.icon, path, sizeof(path)) != ASTRA_VFS_OK)
+                                    &manifest, &line) != ASTRA_BUNDLE_OK) {
+        (void)astra_log("Terminal icon manifest parse failed");
         return TERMINAL_FAIL_ICON;
+    }
+    if (process_filesystem.library->qualify(
+            "APP", "", manifest.icon, path, sizeof(path)) != ASTRA_VFS_OK) {
+        (void)astra_log("Terminal icon path failed");
+        return TERMINAL_FAIL_ICON;
+    }
     result = astra_area_create(
         ASTRA_WINDOW_TITLE_ICON_BYTES_MAX,
         ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
             ASTRA_RIGHT_TRANSFER,
         area);
-    if (result == ASTRA_OK)
-        result = astra_area_map(area,
-                                ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE);
-    if (result != ASTRA_OK ||
-        astra_process_read_file(&process_filesystem, path, area->address,
-                                area->size, length) != ASTRA_VFS_OK ||
-        *length == 0u) {
+    if (result != ASTRA_OK) {
+        (void)astra_log("Terminal icon area create failed");
+        return TERMINAL_FAIL_ICON;
+    }
+    result = astra_area_map(area,
+                            ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE);
+    if (result != ASTRA_OK) {
+        (void)astra_log("Terminal icon area map failed");
+        close_area(area);
+        return TERMINAL_FAIL_ICON;
+    }
+    status = astra_process_read_file(&process_filesystem, path, area->address,
+                                     area->size, length);
+    if (status != ASTRA_VFS_OK || *length == 0u) {
+        (void)astra_log(status != ASTRA_VFS_OK ?
+            "Terminal icon resource read failed" :
+            "Terminal icon resource is empty");
+        if (status != ASTRA_VFS_OK)
+            (void)astra_log(astra_vfs_status_text(status));
         if (area->handle != ASTRA_INVALID_HANDLE)
             close_area(area);
         return TERMINAL_FAIL_ICON;

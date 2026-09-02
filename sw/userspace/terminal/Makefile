@@ -9,7 +9,7 @@ INFOCMP ?= infocmp
 CPPFLAGS := -Iinclude -I../../include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror
 DEPFLAGS := -MMD -MP
-TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin $(ASTRA_DEBUG_FLAGS)
+TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin $(ASTRA_DEBUG_FLAGS)
 HOST_FLAGS := -O2
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 

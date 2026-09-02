@@ -7,6 +7,7 @@
 #include "monitor.h"
 #include "performance.h"
 #include "platform.h"
+#include "process.h"
 #include "trace.h"
 #include "vesta.h"
 #include "worker.h"
@@ -191,7 +192,7 @@ bool kernel_interrupt_device_binding(uint8_t source,
 bool kernel_interrupt_init(uint32_t cpu_hz)
 {
     /* Timer, and the monitor's UART and SPI when the build has a monitor. */
-    KernelIrqInternalBinding internal[3];
+    KernelIrqInternalBinding internal[4];
     KernelIrqControllerOps controller;
     uint32_t count = 0u;
 
@@ -220,6 +221,15 @@ bool kernel_interrupt_init(uint32_t cpu_hz)
     internal[count].ipl = 4u;
     internal[count].vector = KERNEL_IRQ_COMMON_VECTOR;
     ++count;
+    if (kernel_platform_host_present()) {
+        internal[count].service = kernel_process_host_channel_irq_service;
+        internal[count].context = NULL;
+        internal[count].source = IRQ_SRC_HOST;
+        internal[count].trigger = KERNEL_IRQ_TRIGGER_LEVEL;
+        internal[count].ipl = 3u;
+        internal[count].vector = KERNEL_IRQ_COMMON_VECTOR;
+        ++count;
+    }
     /*
      * The monitor is compiled out of a build with no debug surface -- the
      * qualification harness is one -- and then there is nothing behind either
@@ -281,6 +291,33 @@ KernelInterruptDispatchResult dispatch_timer_interrupt(
         *woken_threads,
         ((uint64_t)timestamp.high << 32) | timestamp.low, &trace);
     return KERNEL_INTERRUPT_FATAL;
+}
+
+static __attribute__((noinline))
+KernelInterruptDispatchResult dispatch_host_interrupt(
+    uint8_t vector, uint32_t *woken_threads)
+{
+    KernelPlatformCycleCount timestamp;
+    KernelInterruptDispatchResult result;
+    KernelIrqTrace trace;
+    KernelIrqStatus status;
+    uint64_t timestamp_value;
+    uint32_t elapsed;
+
+    kernel_platform_cpu_cycles(&timestamp);
+    timestamp_value = ((uint64_t)timestamp.high << 32) | timestamp.low;
+    status = kernel_irq_dispatch_claimed_traced(
+        IRQ_SRC_HOST, vector, timestamp_value, woken_threads, &trace);
+    elapsed = kernel_platform_cpu_cycles_low() - timestamp.low;
+    result = classify_device_status(status);
+    kernel_performance_record_call(
+        *woken_threads == 0u ? KERNEL_PERFORMANCE_HARD_IRQ :
+                              KERNEL_PERFORMANCE_HARD_IRQ_WAKE,
+        elapsed);
+    if (!write_dispatch_trace(IRQ_SRC_HOST, vector, status, result,
+                              *woken_threads, timestamp_value, &trace))
+        return KERNEL_INTERRUPT_FATAL;
+    return result;
 }
 
 static KernelInterruptDispatchResult classify_device_status(
@@ -345,6 +382,8 @@ KernelInterruptDispatchResult kernel_interrupt_dispatch(
         return KERNEL_INTERRUPT_NONE;
     if (source == IRQ_SRC_TIMER0)
         return dispatch_timer_interrupt(vector, woken_threads);
+    if (source == IRQ_SRC_HOST)
+        return dispatch_host_interrupt(vector, woken_threads);
     return dispatch_device_interrupt(source, vector);
 }
 

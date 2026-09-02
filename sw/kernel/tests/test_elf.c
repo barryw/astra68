@@ -113,6 +113,33 @@ static KernelElfStatus accept(void)
     return kernel_elf_accept(image, image_size, &limits, &plan);
 }
 
+static void add_valid_tls(void)
+{
+    const uint32_t header = PHOFF + PHNUM * KERNEL_ELF_PHENTSIZE;
+
+    put16(44u, PHNUM + 1u);
+    put32(header + 0u, 7u); /* PT_TLS */
+    put32(header + 4u, 0x1200u);
+    put32(header + 8u, DATA_VADDR + 0x200u);
+    put32(header + 12u, DATA_VADDR + 0x200u);
+    put32(header + 16u, 0x20u);
+    put32(header + 20u, 0x40u);
+    put32(header + 24u, 4u); /* PF_R */
+    put32(header + 28u, 16u);
+    /* New threads must copy an immutable original, not mutated process data. */
+    put32(PHOFF + 32u + 24u, 4u);
+}
+
+static void add_empty_tls(void)
+{
+    const uint32_t header = PHOFF + PHNUM * KERNEL_ELF_PHENTSIZE;
+
+    put16(44u, PHNUM + 1u);
+    put32(header + 0u, 7u);  /* PT_TLS */
+    put32(header + 24u, 4u); /* PF_R */
+    put32(header + 28u, 4u);
+}
+
 static void expect(KernelElfStatus want, const char *what)
 {
     KernelElfStatus got = accept();
@@ -148,6 +175,35 @@ static void test_valid_plan(void)
     assert(plan.segment[1].page_count == 2u);
     assert(plan.segment[1].rights ==
            (KERNEL_ELF_SEGMENT_READ | KERNEL_ELF_SEGMENT_WRITE));
+}
+
+static void test_valid_tls_plan(void)
+{
+    KernelElfImage plan;
+
+    build_valid();
+    add_valid_tls();
+    assert(kernel_elf_accept(image, image_size, &limits, &plan) ==
+           KERNEL_ELF_OK);
+    assert(plan.has_tls == 1u);
+    assert(plan.tls.file_offset == 0x1200u);
+    assert(plan.tls.file_size == 0x20u);
+    assert(plan.tls.virtual_address == DATA_VADDR + 0x200u);
+    assert(plan.tls.memory_size == 0x40u);
+    assert(plan.tls.alignment == 16u);
+    assert(plan.total_pages == 3u);
+}
+
+static void test_empty_tls_is_not_a_template(void)
+{
+    KernelElfImage plan;
+
+    build_valid();
+    add_empty_tls();
+    assert(kernel_elf_accept(image, image_size, &limits, &plan) ==
+           KERNEL_ELF_OK);
+    assert(plan.has_tls == 0u);
+    assert(plan.total_pages == 3u);
 }
 
 static void test_streamed_program_headers(void)
@@ -328,10 +384,6 @@ static void test_segment_rejections(void)
     expect(KERNEL_ELF_UNSUPPORTED_SEGMENT, "PT_INTERP");
 
     build_valid();
-    put32(PHOFF + 0u, 7u); /* PT_TLS */
-    expect(KERNEL_ELF_UNSUPPORTED_SEGMENT, "PT_TLS");
-
-    build_valid();
     put32(PHOFF + 0u, 0x70000000u);
     expect(KERNEL_ELF_UNSUPPORTED_SEGMENT, "unknown segment type");
 
@@ -404,6 +456,50 @@ static void test_segment_rejections(void)
     build_valid();
     put32(PHOFF + 20u, 0xfffff001u); /* memory size rounds past the top */
     expect(KERNEL_ELF_BAD_RANGE, "memory size overflow");
+}
+
+static void test_tls_rejections(void)
+{
+    uint32_t header = PHOFF + PHNUM * KERNEL_ELF_PHENTSIZE;
+
+    build_valid();
+    add_valid_tls();
+    put32(header + 16u, 0x41u);
+    expect(KERNEL_ELF_BAD_TLS, "TLS file size beyond memory size");
+
+    build_valid();
+    add_valid_tls();
+    put32(header + 24u, 6u);
+    expect(KERNEL_ELF_BAD_TLS, "writable TLS template");
+
+    build_valid();
+    add_valid_tls();
+    put32(header + 28u, 3u);
+    expect(KERNEL_ELF_BAD_TLS, "non-power-of-two TLS alignment");
+
+    build_valid();
+    add_valid_tls();
+    put32(header + 4u, image_size - 0x10u);
+    expect(KERNEL_ELF_BAD_TLS, "TLS template outside file");
+
+    build_valid();
+    add_valid_tls();
+    put32(header + 8u, TEXT_VADDR + 0x200u);
+    expect(KERNEL_ELF_BAD_TLS, "TLS template outside read-only load");
+
+    build_valid();
+    add_valid_tls();
+    put16(44u, PHNUM + 2u);
+    memcpy(image + header + KERNEL_ELF_PHENTSIZE, image + header,
+           KERNEL_ELF_PHENTSIZE);
+    expect(KERNEL_ELF_BAD_TLS, "duplicate TLS templates");
+
+    build_valid();
+    add_empty_tls();
+    put16(44u, PHNUM + 2u);
+    memcpy(image + header + KERNEL_ELF_PHENTSIZE, image + header,
+           KERNEL_ELF_PHENTSIZE);
+    expect(KERNEL_ELF_BAD_TLS, "duplicate empty TLS headers");
 }
 
 static void test_ordering_and_limits(void)
@@ -671,12 +767,15 @@ static void test_real_image(void)
 int main(void)
 {
     test_valid_plan();
+    test_valid_tls_plan();
+    test_empty_tls_is_not_a_template();
     test_streamed_program_headers();
     test_streamed_image_has_no_whole_file_ceiling();
     test_arguments();
     test_identity_rejections();
     test_header_rejections();
     test_segment_rejections();
+    test_tls_rejections();
     test_ordering_and_limits();
     test_segment_capacity();
     test_entry_rejections();

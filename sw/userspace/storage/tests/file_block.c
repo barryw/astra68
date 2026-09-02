@@ -104,10 +104,10 @@ file_flush(void *context, uint64_t deadline)
 }
 
 const AstraBlockBackend astra_file_block_backend = {
-    file_query,
-    file_read,
-    file_write,
-    file_flush
+    .query = file_query,
+    .read = file_read,
+    .write = file_write,
+    .flush = file_flush,
 };
 
 int

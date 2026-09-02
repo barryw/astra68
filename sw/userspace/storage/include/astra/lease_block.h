@@ -14,17 +14,32 @@
  * backend for tests. This is the same interface over the real device, so a
  * filesystem written against the memory backend runs on hardware unchanged.
  *
- * One transfer buffer is owned for the life of the attachment rather than
- * created per request: transfer memory is a hard-capped resource, and a
- * service that allocates per request would fail under exactly the load it
- * needs to survive.
+ * One lane is provisioned for every request the device advertises. Each lane
+ * owns its transfer buffer and completion event, so synchronous callers may
+ * sleep independently while the physical backend keeps the whole queue busy.
+ * All resources are claimed at attach time; the request path allocates none.
  */
+typedef struct AstraLeaseBlockLane {
+    uint32_t buffer;
+    uint32_t buffer_base;
+    uint32_t buffer_bytes;
+    uint32_t event;
+    uint32_t request;
+    AstraBlockCompletion completion;
+    uint32_t collect_status;
+    uint8_t in_use;
+    uint8_t active;
+    uint8_t completed;
+    uint8_t reserved;
+} AstraLeaseBlockLane;
+
 typedef struct AstraLeaseBlock {
     uint32_t device;        /* device lease handle */
     uint32_t irq;           /* completion endpoint handle */
-    uint32_t buffer;        /* transfer-memory handle */
-    uint32_t buffer_base;   /* mapped address of that memory */
-    uint32_t buffer_bytes;
+    uint32_t queue_depth;
+    uint32_t available;
+    uint32_t state_lock;
+    uint32_t completion_lock;
     uint32_t sector_bytes;
     uint32_t max_transfer_sectors;
     uint32_t media_generation;
@@ -51,6 +66,7 @@ typedef struct AstraLeaseBlock {
      */
     uint32_t last_site;
     uint32_t last_status;
+    AstraLeaseBlockLane lanes[ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE];
 } AstraLeaseBlock;
 
 /* Where in a request's life it was refused. Ordered as the request runs. */
@@ -74,9 +90,9 @@ typedef enum AstraLeaseBlockSite {
 uint32_t astra_lease_block_last_failure(const AstraLeaseBlock *lease);
 
 /*
- * Claims transfer memory sized for one maximum transfer and records the
- * device's geometry. Returns an ASTRA_BLOCK_* status; on failure nothing is
- * left claimed.
+ * Claims the advertised lane count, each sized for one maximum transfer, and
+ * records the device's geometry. Returns an ASTRA_BLOCK_* status; on failure
+ * nothing is left claimed.
  */
 AstraBlockStatus astra_lease_block_attach(AstraLeaseBlock *lease,
                                           uint32_t device_handle,

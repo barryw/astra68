@@ -64,15 +64,15 @@ typedef volatile struct {
     uint32_t MEMTEST_ACTUAL;     // 0x0E8 low byte
     uint32_t CPU_CYCLES_LO;      // 0x0EC; read latches the coherent 64-bit value
     uint32_t CPU_CYCLES_HI;      // 0x0F0; upper half of the LO-read snapshot
-    uint32_t ICACHE_HITS;         // 0x0F4 TG wrapper instruction-cache hits
-    uint32_t ICACHE_MISSES;       // 0x0F8 TG wrapper instruction-cache misses
-    uint32_t DCACHE_HITS;         // 0x0FC TG wrapper data-cache hits
+uint32_t RESERVED_0F4;        // 0x0F4
+uint32_t RESERVED_0F8;        // 0x0F8
+uint32_t RESERVED_0FC;        // 0x0FC
     // MMU control 0x100
     uint32_t MMU_CTRL;       // 0x100
     uint32_t MMU_FAULT_ADDR; // 0x104
     uint32_t MMU_FAULT_STAT; // 0x108
     uint32_t MMU_FAULT_ACK;  // 0x10C
-    uint32_t DCACHE_MISSES;       // 0x110 TG wrapper data-cache misses
+uint32_t RESERVED_110;        // 0x110
     uint32_t CPU_SDRAM_READS;     // 0x114 completed CPU SDRAM read requests
     uint32_t CPU_SDRAM_WRITES;    // 0x118 completed CPU SDRAM write requests
     uint32_t CPU_SDRAM_WAIT;      // 0x11C clocks spent waiting for CPU SDRAM
@@ -111,7 +111,7 @@ typedef volatile struct {
     uint32_t BLOCK_CPL_POP;         // 0x1A0 write bit 0
     uint32_t BLOCK_ERROR;           // 0x1A4 RW1C submit errors
     uint32_t BLOCK_HOST_GEN;        // 0x1A8
-    uint32_t BLOCK_STATE_ACK;       // 0x1AC write bit 0
+    uint32_t BLOCK_STATE_ACK;       // 0x1AC write ack/reset control bits
     uint32_t BLOCK_MAX_SECTORS;     // 0x1B0
     uint32_t MONITOR_ID;            // 0x1B4 "MONI"
     uint32_t MONITOR_VERSION;       // 0x1B8
@@ -203,6 +203,32 @@ typedef volatile struct {
     uint32_t NETWORK_READY_SEQ;   // 0x858 readiness generation
     uint32_t NETWORK_READY_ACK;   // 0x85C write NETWORK_READY_ACK_BIT
     uint32_t NETWORK_RESET;       // 0x860 write NETWORK_RESET_BIT
+    uint32_t _r7[(0x880 - 0x864) / 4];
+    // generic attached-host accelerator 0x880
+    uint32_t HOST_ACCEL_ID;          // 0x880 "HACC"
+    uint32_t HOST_ACCEL_VERSION;     // 0x884
+    uint32_t HOST_ACCEL_CAPS;        // 0x888
+    uint32_t HOST_ACCEL_STATE;       // 0x88C
+    uint32_t HOST_ACCEL_GENERATION;  // 0x890
+    uint32_t HOST_ACCEL_MAX_TRANSFER;// 0x894
+    uint32_t HOST_ACCEL_MAX_COMMANDS;// 0x898
+    uint32_t HOST_ACCEL_REQ_BUFFER;  // 0x89C physical command batch
+    uint32_t HOST_ACCEL_REQ_BYTES;   // 0x8A0
+    uint32_t HOST_ACCEL_REQ_COUNT;   // 0x8A4
+    uint32_t HOST_ACCEL_EXECUTE;     // 0x8A8 write bit 0
+    uint32_t HOST_ACCEL_STATUS;      // 0x8AC transport result
+    uint32_t HOST_ACCEL_COMPLETED;   // 0x8B0 commands completed
+    uint32_t HOST_ACCEL_RESET;       // 0x8B4 write bit 0
+    uint32_t HOST_ACCEL_OWNER;       // 0x8B8 kernel process owner
+    uint32_t HOST_ACCEL_RELEASE_OWNER;// 0x8BC release owner's host state
+    uint32_t HOST_ACCEL_SUBMIT;       // 0x8C0 physical AstraHostSubmission
+    uint32_t HOST_ACCEL_SUBMIT_RESULT;// 0x8C4 completed[31:16], status[15:0]
+    uint32_t HOST_ACCEL_CHANNEL_CONFIG;// 0x8C8 physical AstraHostChannelConfig
+    uint32_t HOST_ACCEL_CHANNEL_RESULT;// 0x8CC transport result
+    uint32_t HOST_ACCEL_CHANNEL_PENDING;// 0x8D0 any channel completed
+    uint32_t HOST_ACCEL_CHANNEL_ACK;   // 0x8D4 write bit 0 after drain
+    uint32_t HOST_ACCEL_INFLIGHT;      // 0x8D8 executing channel commands
+    uint32_t HOST_ACCEL_MAX_INFLIGHT;  // 0x8DC high-water mark
 } VestaRegs;
 
 #define VESTA ((VestaRegs *)VESTA_BASE)
@@ -212,12 +238,7 @@ typedef volatile struct {
 
 // ---- CPU_MODEL / CPU_IMPL / CPU_FEATURES ----
 #define CPU_MODEL_68030 0x00068030u
-#define CPU_IMPL_TGM2   0x54474D32u   // "TGM2"
-// Retired published values remain reserved and must never be reused.
-#define CPU_MODEL_68020 0x00068020u
-#define CPU_IMPL_WF30   0x57463330u   // "WF30" (retired)
-#define CPU_IMPL_TG20   0x54473230u   // "TG20" (retired)
-#define CPU_IMPL_TG30   0x54473330u   // "TG30" (retired)
+#define CPU_IMPL_QEMU   0x51454D55u   // "QEMU"
 #define CPU_FEAT_PMMU   (1u << 0)
 #define CPU_FEAT_FPU    (1u << 1)
 #define CPU_FEAT_DATA32 (1u << 2)
@@ -269,6 +290,7 @@ typedef volatile struct {
 // ---- AstraHost runtime block service ----
 #define BLOCK_ID_MAGIC 0x484F5354u // "HOST"
 #define BLOCK_VERSION_1_0 0x00010000u
+#define BLOCK_VERSION_1_1 0x00010001u
 #define BLOCK_CAP_READ  (1u << 0)
 #define BLOCK_CAP_WRITE (1u << 1)
 #define BLOCK_CAP_FLUSH (1u << 2)
@@ -279,12 +301,14 @@ typedef volatile struct {
 #define BLOCK_QUEUE_COMPLETION_LEVEL(v) (((v) >> 12) & 0x1Fu)
 #define BLOCK_QUEUE_REQUEST_READY (1u << 8)
 #define BLOCK_QUEUE_REQUEST_LEVEL(v) ((v) & 0x1Fu)
+#define BLOCK_QUEUE_DEPTH(v) (((v) >> 24) & 0x1Fu)
 #define BLOCK_OP_READ  1u
 #define BLOCK_OP_WRITE 2u
 #define BLOCK_OP_FLUSH 3u
 #define BLOCK_SUBMIT (1u << 0)
 #define BLOCK_CPL_POP_BIT (1u << 0)
 #define BLOCK_STATE_ACK_BIT (1u << 0)
+#define BLOCK_RESET_BIT (1u << 1)
 #define BLOCK_ERROR_BAD_OP        (1u << 0)
 #define BLOCK_ERROR_BAD_COUNT     (1u << 1)
 #define BLOCK_ERROR_BAD_BUFFER    (1u << 2)
@@ -294,6 +318,12 @@ typedef volatile struct {
 #define BLOCK_ERROR_QUEUE_FULL    (1u << 6)
 #define BLOCK_ERROR_BAD_ID        (1u << 7)
 #define BLOCK_ERROR_BAD_FLAGS     (1u << 8)
+
+// ---- Attached-host accelerator ----
+#define HOST_ACCEL_ID_MAGIC 0x48414343u // "HACC"
+#define HOST_ACCEL_VERSION_1_0 0x00010000u
+#define HOST_ACCEL_EXECUTE_BIT (1u << 0)
+#define HOST_ACCEL_RESET_BIT   (1u << 0)
 
 // ---- AstraHost kernel-monitor queues ----
 #define MONITOR_ID_MAGIC 0x4D4F4E49u // "MONI"
@@ -345,8 +375,9 @@ typedef volatile struct {
 #define IRQ_SRC_USB       7
 #define IRQ_SRC_VEGA     8
 #define IRQ_SRC_ASTRAEA  9
-#define IRQ_SRC_LYRA     10
+#define IRQ_SRC_RESERVED_10 10
 #define IRQ_SRC_NETWORK  11
+#define IRQ_SRC_HOST     12
 #define IRQ_BIT(src) (1u << (src))
 
 // ---- Host socket transport ----

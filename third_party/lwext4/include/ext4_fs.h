@@ -66,7 +66,7 @@ struct ext4_fs {
 
 	struct jbd_fs *jbd_fs;
 	struct jbd_journal *jbd_journal;
-	struct jbd_trans *curr_trans;
+	struct jbd_handle *curr_trans;
 };
 
 struct ext4_block_group_ref {

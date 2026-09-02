@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <astra/host.h>
+
 #define KERNEL_VM_USER_MIN 0x00010000u
 #define KERNEL_VM_USER_MAX 0x7fffffffu
 #define KERNEL_VM_AREA_BASE 0x40000000u
@@ -38,6 +40,16 @@
 #define KERNEL_VM_DMA_BASE 0x50000000u
 #define KERNEL_VM_DMA_SLOT_SIZE 0x00200000u
 #define KERNEL_VM_DMA_SLOT_COUNT 4u
+
+/*
+ * One process-private page per thread exposes only that thread's AstraHost
+ * doorbell. Mapping the whole device would let one process submit work as
+ * another. The virtual window and physical aperture both cover the system's
+ * complete thread pool.
+ */
+#define KERNEL_VM_HOST_CHANNEL_BASE 0x4ff00000u
+#define KERNEL_VM_HOST_CHANNEL_PHYSICAL_BASE ASTRA_HOST_CHANNEL_PHYSICAL_BASE
+#define KERNEL_VM_HOST_CHANNEL_PAGE_COUNT ASTRA_HOST_CHANNEL_COUNT
 
 /*
  * Clone-private anonymous memory occupies every whole 4 MiB PMMU root slot
@@ -175,6 +187,9 @@ KernelVmStatus kernel_vm_map_transfer_page(KernelAddressSpace *space,
                                            uint32_t virtual_address,
                                            uint32_t physical_address,
                                            uint32_t permissions);
+KernelVmStatus kernel_vm_map_host_channel_page(
+    KernelAddressSpace *space, uint32_t virtual_address,
+    uint32_t physical_address);
 KernelVmStatus kernel_vm_map_shared_range(
     KernelAddressSpace *space, uint32_t virtual_address,
     const uint32_t *physical_pages, uint32_t page_count,
@@ -185,12 +200,19 @@ KernelVmStatus kernel_vm_unmap_shared_range(
     uint32_t frame_owner);
 KernelVmStatus kernel_vm_switch(const KernelAddressSpace *space);
 KernelVmStatus kernel_vm_switch_to_empty(void);
+KernelVmStatus kernel_vm_deactivate(const KernelAddressSpace *space);
 KernelVmStatus kernel_vm_sync_shared_aliases(void);
 bool kernel_vm_stats(KernelVmStats *stats);
 bool kernel_vm_control_state(KernelVmControlState *state);
 KernelVmMapping kernel_vm_probe_current(uint32_t virtual_address,
                                         bool supervisor,
                                         uint32_t *physical_address);
+KernelVmStatus kernel_vm_read(const KernelAddressSpace *space,
+                              uint32_t virtual_address,
+                              void *destination, uint32_t byte_size);
+KernelVmStatus kernel_vm_write(KernelAddressSpace *space,
+                               uint32_t virtual_address,
+                               const void *source, uint32_t byte_size);
 
 #if defined(KERNEL_VM_HOST_TEST)
 typedef enum KernelVmSharedMapFault {

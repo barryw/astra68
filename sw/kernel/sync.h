@@ -59,6 +59,20 @@ typedef enum KernelSyncStatus {
     KERNEL_SYNC_CORRUPT
 } KernelSyncStatus;
 
+/*
+ * Address waits are the kernel half of pthread mutexes and condition
+ * variables.  Storage is bounded by the physical thread pool: there cannot
+ * be more distinct live wait addresses than blocked threads.
+ */
+typedef enum KernelFutexStatus {
+    KERNEL_FUTEX_OK = 0,
+    KERNEL_FUTEX_BLOCKED,
+    KERNEL_FUTEX_TIMED_OUT,
+    KERNEL_FUTEX_INVALID_ARGUMENT,
+    KERNEL_FUTEX_NO_SLOT,
+    KERNEL_FUTEX_CORRUPT
+} KernelFutexStatus;
+
 typedef struct KernelSyncObject KernelSyncObject;
 
 typedef struct KernelSyncSnapshot {
@@ -143,6 +157,17 @@ KernelSyncStatus kernel_sync_owner_died(uint32_t owner,
                                        uint32_t wake_result,
                                        uint32_t *closed_objects,
                                        uint32_t *woken_threads);
+KernelFutexStatus kernel_futex_wait(uint32_t process_id, uint32_t address,
+                                    KernelThread *thread, uint64_t now,
+                                    uint64_t deadline,
+                                    uint32_t timeout_result);
+KernelFutexStatus kernel_futex_wake(uint32_t process_id, uint32_t address,
+                                    uint32_t count, uint32_t result,
+                                    uint32_t *woken_threads);
+KernelFutexStatus kernel_futex_wake_all_irq(uint32_t process_id,
+                                            uint32_t address,
+                                            uint32_t result,
+                                            uint32_t *woken_threads);
 uint32_t kernel_sync_terminal_result(const KernelSyncObject *object);
 bool kernel_sync_snapshot(uint32_t slot, KernelSyncSnapshot *snapshot);
 bool kernel_sync_pool_stats(KernelSyncPoolStats *stats);

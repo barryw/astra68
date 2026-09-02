@@ -11,12 +11,12 @@ details.
 Authority, from highest to lowest:
 
 1. `docs/OS_VISION.md` defines the product and operating-system principles.
-2. `SPEC.md`, `docs/MC68030_COMPLIANCE.md`, `docs/VESTA.md`, and
-   `docs/SDRAM.md` define accepted platform behavior.
+2. `docs/VESTA.md`, `docs/MEMORY_MAP.md`, and the QEMU machine define accepted
+   platform behavior.
 3. `KERNEL_ARCHITECTURE.md`, `MEMORY_MAP_AND_PMMU.md`, `ABI.md`,
    `LOCKING_AND_PREEMPTION.md`, `RESOURCE_OWNERSHIP_AND_FAILURES.md`,
-   `MEMORY_BUDGET.md`, and `TEST_AND_FAULT_INJECTION_PLAN.md` define the
-   normative implementation contracts; `STATUS.md` says what is real now.
+   and `MEMORY_BUDGET.md` define the normative implementation contracts;
+   `CURRENT_STATE.md` says what is real now.
 4. This document preserves research rationale and milestone history.
 5. Source code must conform to the documents or update them deliberately.
 
@@ -58,8 +58,8 @@ The kernel does not natively implement:
 - complex parsers for storage, network, media, fonts, or packages.
 
 Filesystem, display, media, input, network-broker, settings, package, launcher,
-and inspection policy belong in protected services. The ESP32 running
-ESP-IDF/FreeRTOS owns SD protocol and Wi-Fi through TCP/UDP.
+and inspection policy belong in protected services. The Linux host owns
+physical storage and network protocols behind versioned device interfaces.
 
 ## 2. Kernel invariants
 
@@ -94,10 +94,10 @@ The first implementation and every later optimization preserve these rules:
 |---|---|
 | CPU | One big-endian MC68030-compatible integer CPU; no FPU |
 | Addressing | 32-bit logical and physical addresses |
-| Memory | 32 MiB SDRAM plus separately decoded ROM and MMIO |
+| Memory | 128 MiB Astra guest RAM plus separately decoded ROM and MMIO |
 | PMMU | MC68030 TC, CRP, SRP, TT0/TT1, MMUSR, ATC, and PMMU instructions |
-| Caches | Separate 256-byte instruction/data caches; write-through data path |
-| Coherence | PMMU cache-inhibit is honored; current DMA maintenance conservatively invalidates all cache entries |
+| Caches | QEMU TCG implements MC68030 architectural cache-control behavior; no FPGA CPU cache exists |
+| Coherence | PMMU cache-inhibit and device ownership are honored at the QEMU/host boundary |
 | Interrupts | Vesta vectored controller, 32 sources, seven 68k IPL levels |
 | Time | Two programmable Vesta timers and a free-running 64-bit CPU-cycle counter |
 | DMA | Multiple physical bus masters not constrained by the CPU PMMU |
@@ -126,7 +126,7 @@ The following are not software workarounds:
   pass successful and faulted walks without losing queued masters.
 - **CLOSED K-HW-4:** Vesta snapshots vector/spurious state for a complete IACK
   and has deterministic one-shot restart/expiry ordering. Icarus, Verilator,
-  complete pin-level boot, no-waiver routing, and repeated ULX3S scheduler
+  complete QEMU boot, no-waiver routing, and repeated Arty scheduler
   qualification pass the retained behavior and latency budgets.
 - **BLOCKER K-HW-5:** Untrusted service-directed DMA requires either hardware
   fences or a kernel submission path with complete address, length, wrap, and
@@ -555,7 +555,7 @@ holds the object reference, type, rights, generation, and accounting owner.
 
 Exact index/generation encoding, maximum handles, revocation trees, and whether
 diagnostic object IDs are 32 or 64 bits remain **OPEN**. Full seL4-style CSpace
-hierarchies are not presumed necessary for a 32 MiB personal computer.
+hierarchies are not presumed necessary for a 128 MiB personal computer.
 
 ### 10.3 Rights
 
@@ -859,11 +859,9 @@ captures CPU registers, exception frame, PMMU roots/status, current
 process/thread, recent trace, and hardware build identity, then resets into
 recovery. It does not attempt ordinary filesystem writes.
 
-K0 mirrors its early console to HDMI, the retained SDRAM log, and the FPGA's
-FTDI diagnostic UART. UART readiness is bounded by the CPU cycle counter so a
-failed diagnostic sink cannot deadlock boot or panic handling. The UART is not
-an ESP32 transport; all ESP32-to-FPGA application traffic remains AstraHost
-SPI.
+K0 mirrors its early console to HDMI, the retained RAM log, and the diagnostic
+UART. UART readiness is bounded by the CPU cycle counter so a failed diagnostic
+sink cannot deadlock boot or panic handling.
 
 ## 16. Implementation discipline
 
@@ -980,22 +978,7 @@ A fifth short document-only track can draft `BootInfo` version 0 from the
 existing ROM handoff and memory map. It remains provisional until the kernel
 entry probe proves every register and address assumption.
 
-The first PMMU research rig now exists in `third_party/musashi/astra`: an
-independent manual-derived PMMU model plus an end-to-end Musashi adapter. Its
-host and encoded-instruction suites are the executable baseline for KR-02.
-Musashi remains a fast differential oracle, not an architecture authority.
-The adapter now emits byte-checked 16-word format-A and 46-word format-B PMMU
-fault frames and exercises both unchanged-frame restart and handler-completed
-DIB/DOB cycles through `RTE`. It also replays prior multi-transfer cycles
-without repeating their host-visible side effects. This closes the host-model
-portion of KR-01/KR-03. Focused RTL tests now also pass cold translated-stack
-exception entry and four faulted SFC/DFC `MOVES.B` forms with exact-once side
-effects. The exact-source board run remains the architecture-authoritative
-promotion gate.
-
-The following questions require the RTL core or FPGA and therefore form the
-hardware rendezvous. The first two are closed in RTL simulation and await
-exact-source board promotion; the remaining items are still open:
+The following questions require exact QEMU and Arty evidence:
 
 - hardware repetition of exception stacking with a cold ATC and translated
   supervisor stack;
@@ -1012,12 +995,12 @@ an architectural question.
 |---|---:|---|---|
 | KR-01 | P0 | What exact exception and supervisor-stack strategy is safe? | Manual-cited frame notebook, assembly frame dumper, cold-ATC stack-walk tests, nested IRQ tests, selected ISP/MSP policy |
 | KR-02 | P0 | Which PMMU root and table geometry should Astra use? | Executable 4 KiB 10/10 prototype plus SRP/CRP, unified-root, and TT comparison; exact TC/descriptors/flush rules |
-| KR-03 | P0 | Can kernel user-copy recover safely? | Ordinary-access and `MOVES` variants, fault on every boundary, shared Musashi/RTL equivalence, exact-once side effects, and exact-source hardware promotion |
+| KR-03 | P0 | Can kernel user-copy recover safely? | Ordinary-access and `MOVES` variants, fault on every boundary, exact-once side effects, and exact-source QEMU/Arty promotion |
 | KR-04 | P0 | What is the native C, context, and trap ABI? | Compiler-generated ABI corpus, hand-written context round trip, proposed register/status convention, generated conformance tests |
 | KR-05 | P1 | What timer and scheduler substrate is actually bounded? | Timer race/latency measurements, fixed-priority bitmap prototype, starvation/process-fairness tests, initial quantum proposal |
 | KR-06 | P1 | What capability model is sufficient without seL4 complexity? | Host model for handle lookup/rights/generation/transfer/revoke, state-machine tests, memory-cost table |
 | KR-07 | P1 | What IPC shape is fast and non-contagiously blocking? | Host-fuzzed atomic channel model; target measurements across inline sizes; queue/backpressure/wait semantics selected |
-| KR-08 | P1 | What allocator is simplest and predictable in 32 MiB? | Bitmap/run allocator and typed object-pool prototype, fragmentation/failure-injection tests, metadata budget |
+| KR-08 | P1 | What allocator is simplest and predictable in 128 MiB? | Bitmap/run allocator and typed object-pool prototype, fragmentation/failure-injection tests, metadata budget |
 | KR-09 | P1 | What IRQ/DMA contract permits service restart? | Vesta IRQ probe, lease/generation model, cache/DMA state tests, hardware-fence decision |
 | KR-10 | P2 | Where does executable loading live? | Minimal ELF loader service design, process-start transaction, malformed ELF corpus, initial capability manifest |
 | KR-11 | P2 | What must be observable from day one? | Stable fault record v0, trace event list, panic handoff format, host decoder |

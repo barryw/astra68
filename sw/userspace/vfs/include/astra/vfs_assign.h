@@ -15,8 +15,8 @@
  * process was handed, so a name it does not hold cannot be reached by spelling
  * it correctly -- which is the property the whole namespace design rests on.
  *
- * Sixteen entries, because that is the startup capability table's own limit: a
- * namespace larger than the grant that seeds it cannot arise. It counts
+ * The startup capability table is the physical limit: a namespace larger
+ * than the table that seeds it cannot arise. It counts
  * *members* rather than names -- a member is a binding, and a union is two
  * bindings that share a name.
  *
@@ -25,7 +25,7 @@
  * set typed by people and a typo must not create a second namespace. What
  * follows the colon is byte-exact and is not this file's business.
  */
-#define ASTRA_ASSIGN_MAX 16u
+#define ASTRA_ASSIGN_MAX ASTRA_STARTUP_CAPABILITY_MAX
 
 /*
  * Where an assign begins inside its mount. This is the grant's root field and

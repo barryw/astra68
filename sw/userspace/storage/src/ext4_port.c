@@ -3,6 +3,7 @@
 #include <ext4_errno.h>
 
 #include <stddef.h>
+#include <string.h>
 
 /*
  * lwext4 recovers the port from the interface's user pointer. It is set once
@@ -26,6 +27,18 @@ transfer_deadline(const AstraExt4Port *port)
     }
     return astra_clock_read(port->device->clock, port->device->clock_context) +
            port->transfer_timeout;
+}
+
+static int
+validate_window(AstraExt4Port *port, uint64_t block, uint64_t count)
+{
+    if (count > port->sector_count || block < port->first_sector ||
+        block - port->first_sector > port->sector_count - count) {
+        ++port->out_of_partition_refusals;
+        port->last_status = ASTRA_BLOCK_OUT_OF_RANGE;
+        return EINVAL;
+    }
+    return EOK;
 }
 
 int
@@ -95,11 +108,7 @@ run_transfer(AstraExt4Port *port, void *read_buffer,
      * the only thing standing between a filesystem bug and an unbootable card
      * is that the bug happened not to point there.
      */
-    if ((uint64_t)count > port->sector_count ||
-        block < port->first_sector ||
-        block - port->first_sector > port->sector_count - (uint64_t)count) {
-        ++port->out_of_partition_refusals;
-        port->last_status = ASTRA_BLOCK_OUT_OF_RANGE;
+    if (validate_window(port, block, count) != EOK) {
         return EINVAL;
     }
 
@@ -223,6 +232,40 @@ port_bwrite(struct ext4_blockdev *blockdev, const void *buffer, uint64_t block,
 }
 
 static int
+port_bwritev(struct ext4_blockdev *blockdev, const void *const *buffers,
+             const uint32_t *counts, uint64_t block, uint32_t count)
+{
+    AstraExt4Port *port = port_of(blockdev);
+    AstraBlockVector vector;
+    AstraBlockStatus status;
+    uint64_t sectors = 0u;
+    uint32_t index;
+
+    if (port == NULL || buffers == NULL || counts == NULL || count == 0u) {
+        return EINVAL;
+    }
+    for (index = 0u; index < count; ++index) {
+        if (buffers[index] == NULL || counts[index] == 0u ||
+            sectors > UINT32_MAX - counts[index]) {
+            return EINVAL;
+        }
+        sectors += counts[index];
+    }
+    if (validate_window(port, block, sectors) != EOK) {
+        return EINVAL;
+    }
+    vector.buffers = buffers;
+    vector.sector_counts = counts;
+    vector.count = count;
+    status = astra_block_writev(port->device, block, &vector,
+                                transfer_deadline(port));
+    if (status != ASTRA_BLOCK_OK) {
+        port->last_status = status;
+    }
+    return astra_ext4_errno(status);
+}
+
+static int
 port_flush(struct ext4_blockdev *blockdev)
 {
     AstraExt4Port *port = port_of(blockdev);
@@ -275,10 +318,8 @@ astra_ext4_port_init(AstraExt4Port *port, AstraBlockDevice *device,
                      uint32_t sector_buffer_bytes, uint64_t transfer_timeout)
 {
     const AstraBlockGeometry *geometry;
-    unsigned char *clear;
     uint64_t first_sector = 0u;
     uint64_t sector_count;
-    uint32_t index;
 
     if (port == NULL || device == NULL || sector_buffer == NULL) {
         return ASTRA_EXT4_INVALID_ARGUMENT;
@@ -318,10 +359,7 @@ astra_ext4_port_init(AstraExt4Port *port, AstraBlockDevice *device,
         return ASTRA_EXT4_PARTITION_INVALID;
     }
 
-    clear = (unsigned char *)port;
-    for (index = 0u; index < (uint32_t)sizeof(*port); ++index) {
-        clear[index] = 0u;
-    }
+    memset(port, 0, sizeof(*port));
 
     port->device = device;
     port->transfer_timeout = transfer_timeout;
@@ -333,12 +371,14 @@ astra_ext4_port_init(AstraExt4Port *port, AstraBlockDevice *device,
     port->interface.open = port_open;
     port->interface.bread = port_bread;
     port->interface.bwrite = port_bwrite;
+    port->interface.bwritev = port_bwritev;
     port->interface.flush = port_flush;
     port->interface.close = port_close;
     port->interface.lock = port_lock;
     port->interface.unlock = port_unlock;
     port->interface.ph_bsize = geometry->sector_size;
     port->interface.ph_bcnt = geometry->sector_count;
+    port->interface.ph_bmax = geometry->max_transfer_sectors;
     port->interface.ph_bbuf = sector_buffer;
     port->interface.p_user = port;
 

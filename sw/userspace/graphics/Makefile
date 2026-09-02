@@ -9,11 +9,11 @@ CPPFLAGS := -I../../../ndk/include -Iinclude -I../runtime/include \
 	-I../../include -I../../../fpga/arty/linux
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
-TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
+TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 HOST_FLAGS := -O2
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
-FONT_SOURCE := ../../../fpga/soc/post_fonts.hex
+FONT_SOURCE := ../../../assets/fonts/astra_8x16.hex
 FONT_HEADER := build/generated/astra_font8x8.inc
 UI_FONT_SOURCE := fonts/astra-workbench.afnt
 UI_FONT_TOOL := ../../../tools/fonts/afnt.py
@@ -29,7 +29,7 @@ PIC_OBJECTS := build/m68k/pic/surface.o build/m68k/pic/shared_surface.o \
 	build/m68k/pic/render_builder.o
 HOST_TEST := build/host/test_surface
 LIBRARY_LD := ../runtime/astra_library.ld
-LIBRARY_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
+LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections -fPIC -fvisibility=hidden
 LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
 	-Wl,--no-undefined -Wl,--build-id=none -Wl,--gc-sections \
@@ -138,8 +138,7 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 		grep -q '^graphics.library 1.3.0 ABI 1.3$$'
 	@python3 ../../../tools/library_info.py $(FONT_LIBRARY) | \
 		grep -q '^font.library 1.0.0 ABI 1.0$$'
-	@! $(READELF) -r $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) | \
-		grep -E 'R_68K_(GLOB_DAT|JMP_SLOT|32|PC32)'
+	$(call ASTRA_CHECK_DSO,$(GRAPHICS_LIBRARY) $(FONT_LIBRARY))
 
 $(HOST_TEST): src/surface.c src/render_builder.c tests/test_surface.c \
 		include/astra/surface.h include/astra/render_builder.h \

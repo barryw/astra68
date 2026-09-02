@@ -8,8 +8,8 @@
 #include <astra/vfs_client.h>
 #include <astra/vfs_union.h>
 
-#define ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR 1u
-#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 4u
+#define ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR ASTRA_FILESYSTEM_LIBRARY_VERSION
+#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 0u
 #define ASTRA_FILESYSTEM_DIRECTORY_BATCH_MAX 32u
 
 enum {
@@ -22,8 +22,8 @@ typedef uint32_t (*AstraFilesystemReadAtFn)(AstraVfsClient *, AstraVfsFile,
                                             uint64_t, void *, uint32_t,
                                             uint32_t *);
 typedef uint32_t (*AstraFilesystemWriteAtFn)(AstraVfsClient *, AstraVfsFile,
-                                             uint64_t, const void *, uint32_t,
-                                             uint32_t *);
+                                             uint64_t, uint32_t, const void *,
+                                             uint32_t, uint32_t *, uint64_t *);
 
 typedef struct AstraFilesystem {
     const AstraAssignTable *_private_assigns;
@@ -86,6 +86,8 @@ typedef struct AstraDirectory {
     AstraFilesystem *_private_filesystem;
     char _private_path[ASTRA_VFS_PATH_MAX];
     uint64_t _private_cursor;
+    AstraVfsClient *_private_client;
+    AstraVfsFile _private_file;
     uint32_t _private_member;
     uint32_t _private_worst;
     uint8_t _private_active;
@@ -97,10 +99,11 @@ typedef struct AstraDirectory {
 #define ASTRA_FILE_INIT { 0, 0, 0, ASTRA_VFS_FILE_INVALID, 0, 0, 0, 0, 0 }
 #define ASTRA_FILE_INFO_INIT { sizeof(AstraFileInfo), 0, 0, 0, 0, 0, 0, \
                                0, 0, 0, 0 }
-#define ASTRA_DIRECTORY_INIT { 0, { 0 }, 0, 0, ASTRA_VFS_ERR_NOT_FOUND, \
-                               0, 0, 0 }
+#define ASTRA_DIRECTORY_INIT \
+    { 0, { 0 }, 0, 0, ASTRA_VFS_FILE_INVALID, 0, \
+      ASTRA_VFS_ERR_NOT_FOUND, 0, 0, 0 }
 
-typedef struct AstraFilesystemLibraryV1 {
+typedef struct AstraFilesystemLibraryV2 {
     uint16_t abi_major;
     uint16_t abi_minor;
     uint32_t structure_size;
@@ -181,6 +184,10 @@ typedef struct AstraFilesystemLibraryV1 {
     uint32_t (*attach_io)(AstraFilesystem *, const AstraAssignTable *,
                           AstraVfsAssignClientFn, AstraFilesystemReadAtFn,
                           AstraFilesystemWriteAtFn, void *);
-} AstraFilesystemLibraryV1;
+    /* ABI 1.5: append-only native symbolic-link support. */
+    uint32_t (*lstat)(AstraFilesystem *, const char *, AstraFileInfo *);
+    uint32_t (*symlink)(const char *, AstraFilesystem *, const char *);
+    uint32_t (*client_symlink)(AstraVfsClient *, const char *, const char *);
+} AstraFilesystemLibraryV2;
 
 #endif

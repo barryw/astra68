@@ -76,6 +76,36 @@ struct jbd_block_rec {
 	TAILQ_HEAD(jbd_buf_dirty, jbd_buf) dirty_buf_queue;
 };
 
+/*
+ * One filesystem operation joined to the running journal transaction.
+ *
+ * Linux JBD2 calls this a handle.  The transaction is the durability unit;
+ * the handle is the smaller atomic update performed by one filesystem call.
+ * Keeping those concepts separate is what permits group commit without
+ * making an unsuccessful call roll back earlier successful calls.
+ */
+struct jbd_handle_buf {
+	ext4_fsblk_t lba;
+	struct ext4_buf *buf;
+	void *before;
+	bool was_in_transaction;
+	bool was_dirty;
+	LIST_ENTRY(jbd_handle_buf) node;
+};
+
+struct jbd_handle_revoke {
+	ext4_fsblk_t lba;
+	LIST_ENTRY(jbd_handle_revoke) node;
+};
+
+struct jbd_handle {
+	struct jbd_trans *trans;
+	struct ext4_sblock sb_before;
+	uint32_t last_inode_bg_id_before;
+	LIST_HEAD(jbd_handle_buf_list, jbd_handle_buf) buffers;
+	LIST_HEAD(jbd_handle_revoke_list, jbd_handle_revoke) revokes;
+};
+
 struct jbd_trans {
 	uint32_t trans_id;
 
@@ -102,6 +132,10 @@ struct jbd_journal {
 	uint32_t alloc_trans_id;
 
 	uint32_t block_size;
+	uint32_t max_transaction_buffers;
+	int error;
+	bool aborted;
+	struct jbd_trans *running_trans;
 
 	TAILQ_HEAD(jbd_cp_queue, jbd_trans) cp_queue;
 	RB_HEAD(jbd_block, jbd_block_rec) block_rec_root;
@@ -121,11 +155,18 @@ int jbd_journal_start(struct jbd_fs *jbd_fs,
 int jbd_journal_stop(struct jbd_journal *journal);
 struct jbd_trans *
 jbd_journal_new_trans(struct jbd_journal *journal);
-int jbd_trans_set_block_dirty(struct jbd_trans *trans,
+int jbd_journal_start_handle(struct jbd_journal *journal,
+			     struct jbd_handle **handle);
+int jbd_journal_stop_handle(struct jbd_handle *handle);
+void jbd_journal_abort_handle(struct jbd_handle *handle);
+int jbd_journal_commit_running(struct jbd_journal *journal);
+int jbd_handle_get_access(struct jbd_handle *handle,
+			  struct ext4_block *block);
+int jbd_handle_set_block_dirty(struct jbd_handle *handle,
 			      struct ext4_block *block);
 int jbd_trans_revoke_block(struct jbd_trans *trans,
 			   ext4_fsblk_t lba);
-int jbd_trans_try_revoke_block(struct jbd_trans *trans,
+int jbd_handle_try_revoke_block(struct jbd_handle *handle,
 			       ext4_fsblk_t lba);
 void jbd_journal_free_trans(struct jbd_journal *journal,
 			    struct jbd_trans *trans,

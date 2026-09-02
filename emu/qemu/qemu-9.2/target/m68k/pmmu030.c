@@ -5,8 +5,7 @@
  *   Motorola MC68030 User's Manual, section 9
  *   Motorola M68000 Family Programmer's Reference Manual, PMMU instructions
  *
- * The implementation is intentionally independent of upstream Musashi's PMMU
- * source.  See ../ASTRA_VENDOR.md for provenance and review boundaries.
+ * See ../ASTRA_VENDOR.md for provenance and review boundaries.
  */
 
 #include "pmmu030.h"

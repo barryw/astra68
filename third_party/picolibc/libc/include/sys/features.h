@@ -401,6 +401,16 @@ extern "C" {
 #define __SSP_FORTIFY_LEVEL 0
 #endif
 
+/* Features implemented by Astra's POSIX kit rather than picolibc itself. */
+#ifdef __astra__
+#define _POSIX_VERSION                 200809L
+#define _POSIX_MONOTONIC_CLOCK         200809L
+#define _POSIX_CLOCK_SELECTION         200809L
+#define _POSIX_PRIORITY_SCHEDULING     200809L
+#define _POSIX_THREADS                 200809L
+#define _POSIX_THREAD_SAFE_FUNCTIONS   200809L
+#endif
+
 /* RTEMS adheres to POSIX -- 1003.1b with some features from annexes.  */
 
 #ifdef __rtems__

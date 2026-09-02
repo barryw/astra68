@@ -19,5 +19,5 @@ capability NETWORK_LISTEN
 capability NTP
 requires graphics.library 1 1.1.0
 requires font.library 1 1.0.0
-requires filesystem.library 1 1.0.0
+requires filesystem.library 2 2.0.0
 requires network.library 1 1.0.0

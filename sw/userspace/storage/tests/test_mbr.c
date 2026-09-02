@@ -68,9 +68,9 @@ bring_up(AstraMemoryBlock *memory, AstraBlockDevice *device)
 }
 
 static void
-test_classify_matches_stage0(void)
+test_classify_partition_types(void)
 {
-    /* Exactly sw/stage0's fat_partition_type(). */
+    /* Conventional FAT partition type bytes. */
     assert(astra_mbr_classify(0x04u) == ASTRA_MBR_FAT);
     assert(astra_mbr_classify(0x06u) == ASTRA_MBR_FAT);
     assert(astra_mbr_classify(0x0bu) == ASTRA_MBR_FAT);
@@ -159,11 +159,7 @@ test_rejects_bad_tables(void)
     assert(table.entry[0].kind == ASTRA_MBR_EMPTY);
     assert(astra_mbr_find(&table, ASTRA_MBR_FAT) == NULL);
 
-    /*
-     * A GPT card. stage0 lives in FPGA BRAM and only looks for FAT in the four
-     * primary slots, so this layout does not boot; naming the type makes that
-     * diagnosable rather than looking like an empty disk.
-     */
+    /* A GPT protective entry is identified rather than reported as empty. */
     begin_table();
     set_entry(0u, 0xeeu, 1u, SECTORS - 1u, 0);
     assert(astra_mbr_read(&device, sector_buffer, sizeof(sector_buffer),
@@ -272,7 +268,7 @@ test_range_conflicts(void)
 int
 main(void)
 {
-    test_classify_matches_stage0();
+    test_classify_partition_types();
     test_reads_a_boot_layout();
     test_rejects_bad_tables();
     test_range_conflicts();

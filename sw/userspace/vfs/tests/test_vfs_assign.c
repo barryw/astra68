@@ -476,21 +476,15 @@ test_seeding_skipped_first_record_still_binds(void)
     assert(astra_assign_member(&table, "EVENTS", 1u) == NULL);
 }
 
-/*
- * More grants than a namespace holds. It cannot happen from one launch today --
- * eight is the grant ceiling and sixteen the namespace's -- but the startup table
- * carries thirty-two, so the arithmetic that makes it impossible is somewhere
- * else. A namespace quietly missing the names past the sixteenth is the failure
- * this refuses to have.
- */
+/* Every namespace record that physically fits in the startup table fits here. */
 static void
-test_seeding_beyond_capacity(void)
+test_seeding_at_capacity(void)
 {
-    AstraStartupCapability capabilities[ASTRA_ASSIGN_MAX + 2u];
+    AstraStartupCapability capabilities[ASTRA_ASSIGN_MAX];
     AstraAssignTable table;
     uint32_t index;
 
-    for (index = 0u; index < ASTRA_ASSIGN_MAX + 2u; ++index) {
+    for (index = 0u; index < ASTRA_ASSIGN_MAX; ++index) {
         char name[ASTRA_CAPABILITY_NAME_MAX];
 
         name[0] = 'N';
@@ -499,8 +493,8 @@ test_seeding_beyond_capacity(void)
         name[3] = '\0';
         capability(&capabilities[index], name, index + 1u, ASTRA_RIGHT_READ);
     }
-    assert(astra_assign_seed(&table, capabilities, ASTRA_ASSIGN_MAX + 2u) ==
-           ASTRA_VFS_ERR_LIMIT);
+    assert(astra_assign_seed(&table, capabilities, ASTRA_ASSIGN_MAX) ==
+           ASTRA_VFS_OK);
     assert(table.count == ASTRA_ASSIGN_MAX);
 }
 
@@ -639,7 +633,7 @@ main(void)
     test_seeding_builds_a_union();
     test_seeding_refusals();
     test_seeding_skipped_first_record_still_binds();
-    test_seeding_beyond_capacity();
+    test_seeding_at_capacity();
     puts("ASTRA VFS ASSIGN PASS");
     return 0;
 }

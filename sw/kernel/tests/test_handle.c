@@ -144,6 +144,8 @@ static void test_table_clone_preserves_handle_values(void)
     KernelHandleTable destination_table;
     CloneState state = {1u, 0u, 0u, false};
     ReleaseState released = {0u, 0u};
+    ReleaseState child_released = {0u, 0u};
+    KernelHandle child_private;
     KernelHandle private_handle;
     KernelHandle shared_handle;
     void *object;
@@ -169,10 +171,19 @@ static void test_table_clone_preserves_handle_values(void)
     assert(kernel_handle_lookup_any(&destination_table, private_handle, 0u,
                                     &(KernelObjectType){0}, &object) ==
            KERNEL_HANDLE_INVALID_HANDLE);
+    assert(kernel_handle_install(
+               &destination_table, KERNEL_OBJECT_DEVICE, RIGHT_QUERY,
+               (void *)(uintptr_t)0x3333u, release_object, &child_released,
+               &child_private) == KERNEL_HANDLE_OK);
+    assert(child_private != private_handle);
+    assert(kernel_handle_lookup_any(&destination_table, private_handle, 0u,
+                                    &(KernelObjectType){0}, &object) ==
+           KERNEL_HANDLE_INVALID_HANDLE);
     assert(state.references == 2u && state.retain_calls == 1u);
-    assert(kernel_handle_close_all(&destination_table) == 1u);
+    assert(kernel_handle_close_all(&destination_table) == 2u);
     assert(kernel_handle_close_all(&source_table) == 2u);
-    assert(state.references == 0u && released.calls == 1u);
+    assert(state.references == 0u && released.calls == 1u &&
+           child_released.calls == 1u);
 }
 
 static void test_allocation_injection_preserves_authority(void)

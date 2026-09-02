@@ -280,17 +280,6 @@ bool kernel_worker_try_select(void)
     return true;
 }
 
-bool kernel_worker_select_idle(void)
-{
-    if (worker_state != KERNEL_WORKER_BLOCKED || pending_work != 0u)
-        return false;
-    if (!kernel_process_worker_enter())
-        return false;
-    worker_state = KERNEL_WORKER_RUNNING;
-    ++dispatch_count;
-    return true;
-}
-
 bool kernel_worker_work_pending(void)
 {
     return worker_state == KERNEL_WORKER_READY && pending_work != 0u;

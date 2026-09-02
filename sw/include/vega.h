@@ -1,5 +1,5 @@
 // Vega — video chip register interface for Astra 68.
-// Mirror of docs/VEGA.md (v0.5). Keep in sync with that spec.
+// Vega device ABI. Keep in sync with the active graphics implementation.
 //
 // 32-bit registers, 4-byte stride, big-endian (m68k). Supervisor-only MMIO.
 #ifndef ASTRA_VEGA_H

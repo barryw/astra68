@@ -12,8 +12,8 @@ serializer with new, unqualified logic.
 
 Local changes already present in the retained snapshot are:
 
-- `serializer.sv` includes an ECP5 synthesis branch. The Xilinx branch remains
-  the upstream OSERDESE2 implementation used by Astra on the Arty.
+- Retired ECP5 synthesis support is removed; Astra uses the upstream Xilinx
+  OSERDESE2 implementation on the Arty.
 - Floating-point video-rate parameters use integer hertz and millihertz values
   so Verilator and Yosys can constant-fold the audio calculations.
 - Packed array ports and warning fixes preserve compatibility with the Astra

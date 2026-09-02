@@ -15,7 +15,8 @@
 static AstraGuiWindowEvent delivered;
 static uint32_t delivered_count;
 static uint32_t send_would_block;
-static uint32_t yield_count;
+static uint32_t wait_count;
+static uint32_t wait_poll_status = ASTRA_SYSCALL_OK;
 
 uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
                          const uint32_t *handles, uint32_t handle_count)
@@ -32,9 +33,14 @@ uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
     return ASTRA_SYSCALL_OK;
 }
 
-uint32_t astra_yield(void)
+uint32_t astra_wait_one(uint32_t handle, uint64_t deadline_ns,
+                        uint32_t *flags)
 {
-    ++yield_count;
+    assert(handle == 0x500u && flags == NULL);
+    if (deadline_ns == 0u)
+        return wait_poll_status;
+    assert(deadline_ns == ASTRA_DEADLINE_FOREVER);
+    ++wait_count;
     return ASTRA_SYSCALL_OK;
 }
 
@@ -586,6 +592,16 @@ int main(void)
                delivered.event.data.text.codepoint == 'A' &&
                delivered.event.data.text.modifiers ==
                    ASTRA_INPUT_MOD_LEFT_SHIFT);
+        {
+            uint32_t blocked = 0u;
+
+            wait_poll_status = ASTRA_SYSCALL_TIMED_OUT;
+            assert(input_wait_handle(&state, 0x600u, &blocked) == 0x500u &&
+                   blocked == 1u);
+            wait_poll_status = ASTRA_SYSCALL_OK;
+            assert(input_wait_handle(&state, 0x600u, &blocked) == 0x600u &&
+                   blocked == 0u);
+        }
     }
     {
         AstraGuiWindowCommand present = {
@@ -768,7 +784,7 @@ int main(void)
             uint32_t before = delivered_count;
 
             send_would_block = 2u;
-            yield_count = 0u;
+            wait_count = 0u;
             assert(handle_pointer(&state, &button_down, &effects,
                                   &frame_window, &frame_timestamp) ==
                    ASTRA_STATUS_OK);
@@ -778,7 +794,7 @@ int main(void)
             assert(delivered_count == before + 1u &&
                    delivered.event.type ==
                        ASTRA_WINDOW_EVENT_CLOSE_REQUEST &&
-                   yield_count == 2u);
+                   wait_count == 2u);
         }
     }
     {

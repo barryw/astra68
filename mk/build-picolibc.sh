@@ -38,7 +38,7 @@ cd "$BUILD"
     -Dtests=false \
     -Dmultilib=false \
     -Dpicocrt=false \
-    -Dthread-local-storage=false \
+    -Dthread-local-storage=true \
     -Dspecsdir=none \
     "$SOURCE"
 ninja

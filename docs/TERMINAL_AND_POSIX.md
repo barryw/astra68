@@ -205,8 +205,8 @@ same object identity and capability checks.
 7. Run Vim with alternate screen, resize, suspend/resume, files, and crash
    recovery.
 
-Each stage runs under the emulator and RTL/shared platform harness where
-practical, then on the ULX3S. Test time, resident memory, binary/module size,
+Each stage runs under host tests and the QEMU MC68030, then on the Arty. Test
+time, resident memory, binary/module size,
 prompt latency, fork/spawn cycles, and terminal input-to-pixel latency are
 recorded continuously.
 

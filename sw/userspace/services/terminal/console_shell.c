@@ -107,7 +107,7 @@ static AstraFilesystem *filesystem(void)
     return &shell.backend.process_filesystem->filesystem;
 }
 
-static const AstraFilesystemLibraryV1 *filesystem_library(void)
+static const AstraFilesystemLibraryV2 *filesystem_library(void)
 {
     return shell.backend.process_filesystem->library;
 }
@@ -493,7 +493,8 @@ static uint32_t launch_grants(AstraLaunchGrant *grants, const char *command)
         }
         astra_capability_name_set(grants[count].name, stream_names[index]);
         grants[count].handle = streams[index];
-        grants[count].rights = ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_TRANSFER;
+        grants[count].rights = ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_WAIT |
+                               ASTRA_RIGHT_TRANSFER;
         /* A stream is authority, not a name: STDOUT:file.txt is nonsense. */
         grants[count].flags = 0u;
         ++count;

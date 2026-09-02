@@ -199,7 +199,7 @@ $(BUILD_DIR)/handle.o: handle.c handle.h bytes.h generation.h \
                        object_cache.h allocation.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/bytes.o: bytes.c bytes.h | $(BUILD_DIR)
+$(BUILD_DIR)/bytes.o: ../common/memory_m68k.S bytes.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/context.o: context.c context.h bytes.h exception.h | $(BUILD_DIR)

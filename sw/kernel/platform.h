@@ -29,7 +29,7 @@ typedef struct KernelPlatformBlockState {
     uint32_t host_generation;
     uint64_t media_sectors;
     uint16_t max_sectors;
-    uint16_t reserved;
+    uint16_t queue_depth;
 } KernelPlatformBlockState;
 
 typedef struct KernelPlatformBlockCompletion {
@@ -49,6 +49,21 @@ typedef struct KernelPlatformNetworkState {
     uint32_t maximum_transfer;
     uint32_t active_endpoints;
 } KernelPlatformNetworkState;
+
+typedef struct KernelPlatformHostState {
+    uint32_t capabilities;
+    uint32_t state_flags;
+    uint32_t host_generation;
+    uint32_t maximum_transfer;
+    uint32_t maximum_commands;
+} KernelPlatformHostState;
+
+typedef struct KernelPlatformHostChannelState {
+    uint32_t state_flags;
+    uint32_t generation;
+    uint32_t consumer_position;
+    uint32_t status;
+} KernelPlatformHostChannelState;
 
 typedef struct KernelInputEvent {
     uint32_t header;
@@ -132,7 +147,8 @@ bool kernel_platform_irq_mask(uint8_t source, void *context);
 bool kernel_platform_irq_enable(uint8_t source, void *context);
 bool kernel_platform_irq_acknowledge(uint8_t source, void *context);
 bool kernel_platform_timer_irq_service(uint8_t source, uint64_t timestamp,
-                                       void *context);
+                                       void *context,
+                                       uint32_t *woken_threads);
 bool kernel_platform_device_irq_capture(uint8_t source, uint32_t *status);
 bool kernel_platform_device_irq_complete(uint8_t source,
                                          uint32_t captured_status);
@@ -156,14 +172,41 @@ uint32_t kernel_platform_block_submit(uint32_t id, uint8_t operation,
 bool kernel_platform_block_pop_completion(
     KernelPlatformBlockCompletion *completion);
 void kernel_platform_block_ack_state(void);
+bool kernel_platform_block_reset(void);
 bool kernel_platform_network_present(void);
 bool kernel_platform_network_state(KernelPlatformNetworkState *state);
-uint32_t kernel_platform_network_execute(uint32_t physical_buffer,
+uint32_t kernel_platform_network_execute(uint32_t owner,
+                                         uint32_t physical_buffer,
                                          uint32_t byte_size,
                                          uint32_t command_count,
                                          uint32_t *executed_commands);
 void kernel_platform_network_ack_ready(void);
 bool kernel_platform_network_reset(void);
+bool kernel_platform_host_present(void);
+bool kernel_platform_host_state(KernelPlatformHostState *state);
+uint32_t kernel_platform_host_execute(uint32_t owner,
+                                      uint32_t physical_buffer,
+                                      uint32_t byte_size,
+                                      uint32_t command_count,
+                                      uint32_t *executed_commands);
+uint32_t kernel_platform_host_channel_open(
+    uint32_t owner, uint32_t host_generation, uint32_t channel_generation,
+    uint32_t slot, uint32_t physical_buffer, uint32_t byte_size,
+    uint32_t command_capacity);
+uint32_t kernel_platform_host_channel_close(
+    uint32_t owner, uint32_t host_generation, uint32_t channel_generation,
+    uint32_t slot);
+void kernel_platform_host_channel_kick(uint32_t slot,
+                                       uint32_t producer_position);
+void kernel_platform_host_channel_arm(uint32_t slot,
+                                      uint32_t consumer_position);
+void kernel_platform_host_channel_disarm(uint32_t slot);
+bool kernel_platform_host_channel_completion(
+    uint32_t physical_buffer, uint32_t byte_size, uint32_t command_capacity,
+    KernelPlatformHostChannelState *state);
+void kernel_platform_host_channel_ack(void);
+bool kernel_platform_host_reset(void);
+void kernel_platform_host_release_owner(uint32_t owner);
 bool kernel_platform_input_present(void);
 uint32_t kernel_platform_input_status(void);
 bool kernel_input_peek(KernelInputEvent *event);

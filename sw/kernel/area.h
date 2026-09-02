@@ -76,7 +76,7 @@
  * fault is the expensive part and it should be amortised. Sixteen pages is
  * 64 KiB, which is the order of magnitude the argument gives rather than a
  * measured optimum -- it is a knob, and it wants a number from the allocator
- * trace in HANDOVER-memory-and-modernity.md §4.
+ * trace retained by the kernel tests.
  *
  * Clusters are aligned to their own size inside the area, so repeated faults
  * walking upward land on distinct clusters and a fault never re-does work.

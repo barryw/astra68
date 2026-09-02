@@ -343,15 +343,20 @@ static void feed_spi(const char *text)
 
 static void drain_uart_irq(const KernelIrqInternalBinding *binding)
 {
+    uint32_t woken;
+
     while (uart_rx_head != uart_rx_tail)
-        assert(binding->service(IRQ_SRC_UART_RX, 0u, binding->context));
+        assert(binding->service(IRQ_SRC_UART_RX, 0u, binding->context,
+                                &woken));
 }
 
 static void drain_spi_irq(const KernelIrqInternalBinding *binding)
 {
+    uint32_t woken;
+
     while (spi_rx_head != spi_rx_tail)
         assert(binding->service(IRQ_SRC_ASTRAHOST_MONITOR, 0u,
-                                binding->context));
+                                binding->context, &woken));
 }
 
 static void service_until_complete(KernelMonitorTransport transport,

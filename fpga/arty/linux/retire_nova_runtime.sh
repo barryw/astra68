@@ -8,6 +8,7 @@ ASTRA_HOSTS="$OVERLAY_ROOT/etc/hosts"
 ASTRA_RESOLV="$OVERLAY_ROOT/etc/resolv.conf"
 ASTRA_SAMBA="$OVERLAY_ROOT/etc/samba/smb.conf"
 ASTRA_MODULE_BLACKLIST="$OVERLAY_ROOT/etc/modprobe.d/astra-blacklist.conf"
+ASTRA_READONLY_ROOT="$OVERLAY_ROOT/usr/sbin/astra-configure-readonly-root"
 
 for required_file in \
     "$ASTRA_FIRSTBOOT" \
@@ -15,7 +16,8 @@ for required_file in \
     "$ASTRA_HOSTS" \
     "$ASTRA_RESOLV" \
     "$ASTRA_SAMBA" \
-    "$ASTRA_MODULE_BLACKLIST"; do
+    "$ASTRA_MODULE_BLACKLIST" \
+    "$ASTRA_READONLY_ROOT"; do
     if [ ! -f "$required_file" ]; then
         echo "missing staged Astra rootfs file: $required_file" >&2
         exit 2
@@ -69,10 +71,14 @@ cp "$ASTRA_FIRSTBOOT" /etc/init.d/astra-firstboot
 chmod 0755 /etc/init.d/astra-firstboot
 cp "$ASTRA_HOSTNAME" /etc/hostname
 cp "$ASTRA_HOSTS" /etc/hosts
-cp "$ASTRA_RESOLV" /etc/resolv.conf
 cp "$ASTRA_SAMBA" /etc/samba/smb.conf
 mkdir -p /etc/modprobe.d
 cp "$ASTRA_MODULE_BLACKLIST" /etc/modprobe.d/astra-blacklist.conf
+mkdir -p /usr/sbin
+cp "$ASTRA_READONLY_ROOT" /usr/sbin/astra-configure-readonly-root
+chmod 0755 /usr/sbin/astra-configure-readonly-root
+/usr/sbin/astra-configure-readonly-root
+cp "$ASTRA_RESOLV" /var/run/resolv.conf
 ln -sf ../init.d/astra-firstboot /etc/rc5.d/S02astra-firstboot
 rm -f \
     /etc/rcS.d/S03astra-firstboot \

@@ -60,6 +60,7 @@ STATE_WRITE_ENABLE = 1 << 2
 
 QUEUE_COMPLETION_VALID = 1 << 20
 QUEUE_REQUEST_READY = 1 << 8
+QUEUE_DEPTH_SHIFT = 24
 
 OP_READ = 1
 OP_WRITE = 2
@@ -67,6 +68,7 @@ OP_FLUSH = 3
 SUBMIT = 1
 POP = 1
 STATE_ACK = 1
+DEVICE_RESET = 1 << 1
 
 ERROR_BAD_OP = 1 << 0
 ERROR_BAD_COUNT = 1 << 1
@@ -227,7 +229,7 @@ class AstraBlockTest:
     def test_identity(self):
         assert self.read32(RAM_SIZE) == SDRAM_SIZE
         assert self.read32(SYS_STATUS) & SYS_ASTRA_HOST, "SYS_ASTRA_HOST clear"
-        assert self.read32(BLOCK_VERSION) == 0x00010000
+        assert self.read32(BLOCK_VERSION) == 0x00010001
         assert self.read32(BLOCK_CAPS) == 0x7, "read, write, and flush expected"
         assert self.read32(BLOCK_MAX_SECTORS) == 128
         state = self.read32(BLOCK_STATE)
@@ -238,6 +240,7 @@ class AstraBlockTest:
         assert sectors == IMAGE_SECTORS, sectors
         assert self.read32(BLOCK_MEDIA_GEN) == 1
         assert self.read32(BLOCK_HOST_GEN) != 0
+        assert self.read32(BLOCK_QUEUE) >> QUEUE_DEPTH_SHIFT == 4
 
     def test_front_panel_bridge(self):
         assert self.read32(PANEL_ID) == 0x504E4C30
@@ -336,6 +339,30 @@ class AstraBlockTest:
 
     def test_write_and_flush(self):
         payload = bytes((i * 13 + 7) & 0xFF for i in range(2 * SECTOR))
+        for name in ("astra-block-write-requests",
+                     "astra-block-write-sectors",
+                     "astra-block-flush-requests"):
+            assert self.qmp.execute("qom-get", {
+                "path": "/machine", "property": name,
+            }) == 0
+        assert self.qmp.execute("qom-get", {
+            "path": "/machine",
+            "property": "astra-block-durability-transitions",
+        }) == 0
+        self.qmp.execute("qom-set", {
+            "path": "/machine",
+            "property": "astra-block-durability-transitions",
+            "value": 7,
+        })
+        assert self.qmp.execute("qom-get", {
+            "path": "/machine",
+            "property": "astra-block-durability-transitions",
+        }) == 7
+        self.qmp.execute("qom-set", {
+            "path": "/machine",
+            "property": "astra-block-durability-transitions",
+            "value": 0,
+        })
         self.write_memory(BUFFER, payload)
 
         request_id, error = self.submit(OP_WRITE, lba=10, sectors=2)
@@ -350,6 +377,22 @@ class AstraBlockTest:
         completion = self.await_completion()
         assert completion["status"] == 0 and completion["sectors"] == 0
         self.pop()
+        assert self.qmp.execute("qom-get", {
+            "path": "/machine",
+            "property": "astra-block-durability-transitions",
+        }) == 2
+        assert self.qmp.execute("qom-get", {
+            "path": "/machine",
+            "property": "astra-block-write-requests",
+        }) == 1
+        assert self.qmp.execute("qom-get", {
+            "path": "/machine",
+            "property": "astra-block-write-sectors",
+        }) == 2
+        assert self.qmp.execute("qom-get", {
+            "path": "/machine",
+            "property": "astra-block-flush-requests",
+        }) == 1
 
         with open(self.image_path, "rb") as image:
             image.seek(10 * SECTOR)
@@ -415,17 +458,84 @@ class AstraBlockTest:
         assert self.read32(BLOCK_ERROR) == 0
 
     def test_queue_full(self):
-        """A second submission while one transfer is active is refused."""
-        _, error = self.submit(OP_READ, lba=0, sectors=1)
-        assert error == 0
+        """The advertised queue accepts that many independent transfers."""
+        requests = {}
+        for index in range(4):
+            buffer = BUFFER + index * SECTOR
+            request_id, error = self.submit(
+                OP_READ, lba=index, sectors=1, buffer=buffer)
+            assert error == 0, f"request {index} rejected 0x{error:x}"
+            requests[request_id] = (index, buffer)
+
         queue = self.read32(BLOCK_QUEUE)
-        assert not queue & QUEUE_REQUEST_READY, "device claimed to be ready"
-        _, error = self.submit(OP_READ, lba=1, sectors=1)
+        assert not queue & QUEUE_REQUEST_READY, "full device claimed ready"
+        _, error = self.submit(OP_READ, lba=4, sectors=1,
+                               buffer=BUFFER + 4 * SECTOR)
         assert error & (1 << 6), f"expected queue-full, got 0x{error:x}"
-        completion = self.await_completion()
-        assert completion["status"] == 0
-        self.pop()
+
+        while requests:
+            completion = self.await_completion()
+            assert completion["status"] == 0, completion
+            assert completion["sectors"] == 1, completion
+            index, buffer = requests.pop(completion["id"])
+            got = self.read_memory(buffer, SECTOR)
+            want = bytes(image_byte(index * SECTOR + i)
+                         for i in range(SECTOR))
+            assert got == want, f"read {index} data mismatch"
+            self.pop()
         assert self.read32(BLOCK_QUEUE) & QUEUE_REQUEST_READY
+
+    def test_device_reset_cancels_the_whole_queue(self):
+        """Reset atomically revokes every lane and starts a new generation."""
+        host_generation = self.read32(BLOCK_HOST_GEN)
+        for index in range(4):
+            _, error = self.submit(
+                OP_READ, lba=index, sectors=1,
+                buffer=BUFFER + index * SECTOR)
+            assert error == 0, f"request {index} rejected 0x{error:x}"
+        assert not self.read32(BLOCK_QUEUE) & QUEUE_REQUEST_READY
+
+        self.write32(BLOCK_STATE_ACK, DEVICE_RESET)
+        assert self.read32(BLOCK_HOST_GEN) != host_generation
+        queue = self.read32(BLOCK_QUEUE)
+        assert queue & QUEUE_REQUEST_READY
+        assert not queue & QUEUE_COMPLETION_VALID
+        assert queue & 0x1F == 0, f"requests survived reset: 0x{queue:x}"
+        assert self.read32(BLOCK_STATE_ACK) == STATE_ACK
+        assert self.read32(IRQ_RAW) & IRQ_STORAGE
+
+        for _ in range(3):
+            self.qtest.send("clock_step")
+            assert not self.read32(BLOCK_QUEUE) & QUEUE_COMPLETION_VALID
+        self.write32(BLOCK_STATE_ACK, STATE_ACK)
+        assert not self.read32(IRQ_RAW) & IRQ_STORAGE
+
+    def test_flush_is_a_queue_barrier(self):
+        """A flush orders writes on both sides of it without draining depth."""
+        first = bytes((i * 5 + 1) & 0xFF for i in range(SECTOR))
+        second = bytes((i * 11 + 3) & 0xFF for i in range(SECTOR))
+        self.write_memory(BUFFER, first)
+        self.write_memory(BUFFER + SECTOR, second)
+
+        first_id, error = self.submit(
+            OP_WRITE, lba=20, sectors=1, buffer=BUFFER)
+        assert error == 0
+        flush_id, error = self.submit(OP_FLUSH)
+        assert error == 0
+        second_id, error = self.submit(
+            OP_WRITE, lba=21, sectors=1, buffer=BUFFER + SECTOR)
+        assert error == 0
+
+        for expected in (first_id, flush_id, second_id):
+            completion = self.await_completion()
+            assert completion["id"] == expected, completion
+            assert completion["status"] == 0, completion
+            self.pop()
+
+        with open(self.image_path, "rb") as image:
+            image.seek(20 * SECTOR)
+            assert image.read(SECTOR) == first
+            assert image.read(SECTOR) == second
 
     def run(self):
         self.detect_endian()
@@ -439,12 +549,104 @@ class AstraBlockTest:
         self.test_read_back_written_data()
         self.test_rejections()
         self.test_queue_full()
+        self.test_device_reset_cancels_the_whole_queue()
+        self.test_flush_is_a_queue_barrier()
 
 
 def build_image(path):
     with open(path, "wb") as image:
         image.write(bytes(image_byte(i)
                           for i in range(IMAGE_SECTORS * SECTOR)))
+
+
+def test_power_cut(command, environment, image_path, temp):
+    payload = bytes((i * 17 + 3) & 0xFF for i in range(SECTOR))
+
+    for cut_after, expected_op in ((1, "write"), (2, "flush")):
+        qtest_path = os.path.join(temp, f"cut-{cut_after}-qtest.sock")
+        qmp_path = os.path.join(temp, f"cut-{cut_after}-qmp.sock")
+        cut_command = command.copy()
+        cut_command[cut_command.index("-qtest") + 1] = \
+            f"unix:{qtest_path},server=on,wait=off"
+        cut_command[cut_command.index("-qmp") + 1] = \
+            f"unix:{qmp_path},server=on,wait=off"
+        process = subprocess.Popen(cut_command, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.PIPE, text=True,
+                                   env=environment)
+        qtest = qmp = None
+        try:
+            qtest = LineSocket(qtest_path)
+            qmp = QmpSocket(qmp_path)
+            qmp.execute("cont")
+            block = AstraBlockTest(qtest, qmp, image_path, "")
+            block.detect_endian()
+            qmp.execute("qom-set", {
+                "path": "/machine",
+                "property": "astra-block-power-cut-after",
+                "value": cut_after,
+            })
+            assert qmp.execute("qom-get", {
+                "path": "/machine",
+                "property": "astra-block-power-cut-after",
+            }) == cut_after
+            block.write_memory(BUFFER, payload)
+            _, error = block.submit(OP_WRITE, lba=20, sectors=1)
+            assert error == 0
+            if cut_after == 2:
+                assert block.await_completion()["status"] == 0
+                block.pop()
+                _, error = block.submit(OP_FLUSH)
+                assert error == 0
+            deadline = time.monotonic() + 5.0
+            while process.poll() is None and time.monotonic() < deadline:
+                try:
+                    qtest.send("clock_step")
+                except (BrokenPipeError, ConnectionResetError, RuntimeError):
+                    break
+                time.sleep(0.001)
+            try:
+                process.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                raise AssertionError(
+                    f"block cut {cut_after} did not terminate QEMU")
+            stderr = process.stderr.read()
+            assert process.returncode == 86, process.returncode
+            marker = (f"Astra68 block power cut: transition={cut_after} "
+                      f"op={expected_op}")
+            assert marker in stderr, stderr
+        finally:
+            if qmp is not None:
+                try:
+                    qmp.close()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            if qtest is not None:
+                try:
+                    qtest.close()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            if process.stderr is not None:
+                process.stderr.close()
+
+        with open(image_path, "rb") as image:
+            image.seek(20 * SECTOR)
+            assert image.read(SECTOR) == payload
+
+    invalid_environment = environment.copy()
+    invalid_environment["ASTRA_QEMU_BLOCK_CUT_AFTER"] = "invalid"
+    invalid_command = command.copy()
+    invalid_command[invalid_command.index("-qtest") + 1] = \
+        f"unix:{os.path.join(temp, 'invalid-qtest.sock')},server=on,wait=off"
+    invalid_command[invalid_command.index("-qmp") + 1] = \
+        f"unix:{os.path.join(temp, 'invalid-qmp.sock')},server=on,wait=off"
+    invalid = subprocess.run(invalid_command, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.PIPE, text=True,
+                             env=invalid_environment, timeout=5)
+    assert invalid.returncode != 0
+    assert "invalid ASTRA_QEMU_BLOCK_CUT_AFTER 'invalid'" in invalid.stderr
 
 
 def main():
@@ -504,6 +706,7 @@ def main():
                 panel.seek(0x2C)
                 activity = struct.unpack("<I", panel.read(4))[0]
             assert activity == 1, "block requests did not trigger HDD LED"
+            test_power_cut(command, environment, image, temp)
             print("ASTRA QEMU BLOCK PASS")
         finally:
             if qmp is not None:

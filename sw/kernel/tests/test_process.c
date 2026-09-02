@@ -12,6 +12,7 @@
 #include "process.h"
 
 #include <astra/render_batch.h>
+#include <vesta.h>
 
 /*
  * A thread's committed stack in pages. Written out once here rather than at
@@ -44,6 +45,7 @@
 #include "worker.h"
 
 #include <astra/block.h>
+#include <astra/host.h>
 #include <astra/network.h>
 #include <vesta.h>
 #include <astra/syscall.h>
@@ -81,6 +83,7 @@ static uint32_t last_soak_free_frames;
 static uint64_t scheduler_test_cycles;
 static uint32_t timer_arm_count;
 static uint32_t timer_last_load;
+static uint32_t pmmu_crp_load_count;
 static uint32_t interrupt_enable_count;
 static uint32_t interrupt_disable_count;
 static uint32_t disable_hook_process_slot;
@@ -570,6 +573,7 @@ void kernel_pmmu_load_srp(const KernelPmmuRootPointer *root)
 void kernel_pmmu_load_crp(const KernelPmmuRootPointer *root)
 {
     (void)root;
+    ++pmmu_crp_load_count;
 }
 
 void kernel_pmmu_load_tt0(const uint32_t *value)
@@ -657,6 +661,7 @@ bool kernel_platform_block_state(KernelPlatformBlockState *state)
     state->host_generation = block_host_generation;
     state->media_sectors = 2048u;
     state->max_sectors = 16u;
+    state->queue_depth = 4u;
     return true;
 }
 
@@ -757,11 +762,13 @@ bool kernel_platform_network_state(KernelPlatformNetworkState *state)
     return true;
 }
 
-uint32_t kernel_platform_network_execute(uint32_t physical_buffer,
+uint32_t kernel_platform_network_execute(uint32_t owner,
+                                         uint32_t physical_buffer,
                                          uint32_t byte_size,
                                          uint32_t command_count,
                                          uint32_t *executed_commands)
 {
+    (void)owner;
     ++network_execute_calls;
     network_physical_buffer = physical_buffer;
     network_byte_size = byte_size;
@@ -805,6 +812,180 @@ static void reset_network_device(void)
     network_physical_buffer = 0u;
     network_byte_size = 0u;
     network_command_count = 0u;
+}
+
+static KernelPlatformHostState host_state;
+static uint32_t host_execute_status;
+static uint32_t host_execute_calls;
+static uint32_t host_execute_owner;
+static uint32_t host_released_owner;
+static uint32_t host_executed_commands;
+static uint32_t host_physical_buffer;
+static uint32_t host_byte_size;
+static uint32_t host_command_count;
+static uint32_t host_channel_open_calls;
+static uint32_t host_channel_close_calls;
+static uint32_t host_channel_physical;
+static uint32_t host_channel_slot;
+static uint32_t host_channel_kick_calls;
+static uint32_t host_channel_kick_slot;
+static uint32_t host_channel_kick_producer;
+static uint32_t host_channel_complete_on_kick;
+static uint32_t host_channel_arm_calls;
+static uint32_t host_channel_arm_slot;
+static uint32_t host_channel_arm_consumer;
+static uint32_t host_channel_disarm_calls;
+static KernelPlatformHostChannelState
+    host_channel_states[KERNEL_THREAD_MAX];
+static uint32_t host_channel_ack_calls;
+
+bool kernel_platform_host_state(KernelPlatformHostState *state)
+{
+    if (state == NULL ||
+        (host_state.state_flags & ASTRA_HOST_STATE_READY) == 0u)
+        return false;
+    *state = host_state;
+    return true;
+}
+
+uint32_t kernel_platform_host_execute(uint32_t owner,
+                                      uint32_t physical_buffer,
+                                      uint32_t byte_size,
+                                      uint32_t command_count,
+                                      uint32_t *executed_commands)
+{
+    ++host_execute_calls;
+    host_execute_owner = owner;
+    host_physical_buffer = physical_buffer;
+    host_byte_size = byte_size;
+    host_command_count = command_count;
+    if (executed_commands != NULL)
+        *executed_commands = host_executed_commands;
+    return host_execute_status;
+}
+
+uint32_t kernel_platform_host_channel_open(
+    uint32_t owner, uint32_t host_generation, uint32_t channel_generation,
+    uint32_t slot, uint32_t physical_buffer, uint32_t byte_size,
+    uint32_t command_capacity)
+{
+    assert(owner != 0u && host_generation == host_state.host_generation);
+    assert(channel_generation != 0u && slot < KERNEL_THREAD_MAX);
+    assert(byte_size == KERNEL_PAGE_SIZE && command_capacity == 1u);
+    host_channel_physical = physical_buffer;
+    host_channel_slot = slot;
+    host_channel_states[slot].state_flags = ASTRA_HOST_STATE_READY;
+    host_channel_states[slot].generation = channel_generation;
+    host_channel_states[slot].status = ASTRA_SYSCALL_OK;
+    ++host_channel_open_calls;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t kernel_platform_host_channel_close(
+    uint32_t owner, uint32_t host_generation, uint32_t channel_generation,
+    uint32_t slot)
+{
+    assert(owner != 0u && host_generation == host_state.host_generation);
+    assert(channel_generation != 0u && slot < KERNEL_THREAD_MAX);
+    memset(&host_channel_states[slot], 0,
+           sizeof(host_channel_states[slot]));
+    ++host_channel_close_calls;
+    return ASTRA_SYSCALL_OK;
+}
+
+void kernel_platform_host_channel_kick(uint32_t slot,
+                                       uint32_t producer_position)
+{
+    assert(slot < KERNEL_THREAD_MAX);
+    ++host_channel_kick_calls;
+    host_channel_kick_slot = slot;
+    host_channel_kick_producer = producer_position;
+    if (host_channel_complete_on_kick != 0u)
+        host_channel_states[slot].consumer_position = producer_position;
+}
+
+void kernel_platform_host_channel_arm(uint32_t slot,
+                                      uint32_t consumer_position)
+{
+    assert(slot < KERNEL_THREAD_MAX);
+    ++host_channel_arm_calls;
+    host_channel_arm_slot = slot;
+    host_channel_arm_consumer = consumer_position;
+}
+
+void kernel_platform_host_channel_disarm(uint32_t slot)
+{
+    assert(slot < KERNEL_THREAD_MAX);
+    ++host_channel_disarm_calls;
+}
+
+bool kernel_platform_host_channel_completion(
+    uint32_t physical_buffer, uint32_t byte_size, uint32_t command_capacity,
+    KernelPlatformHostChannelState *state)
+{
+    uint32_t slot = host_channel_slot;
+
+    if (state == NULL || slot >= KERNEL_THREAD_MAX ||
+        physical_buffer != host_channel_physical ||
+        byte_size != KERNEL_PAGE_SIZE || command_capacity != 1u ||
+        host_channel_states[slot].generation == 0u)
+        return false;
+    *state = host_channel_states[slot];
+    return true;
+}
+
+void kernel_platform_host_channel_ack(void)
+{
+    ++host_channel_ack_calls;
+}
+
+void kernel_platform_host_release_owner(uint32_t owner)
+{
+    host_released_owner = owner;
+}
+
+static bool test_host_reset(uint32_t device_id, uint32_t generation,
+                            void *context)
+{
+    (void)generation;
+    (void)context;
+    return device_id == ASTRA_DEVICE_ID_HOST0;
+}
+
+static void reset_host_device(void)
+{
+    host_state = (KernelPlatformHostState){
+        .capabilities = ASTRA_HOST_CAP_FILESYSTEM |
+                        ASTRA_HOST_CAP_OWNER_SCOPED |
+                        ASTRA_HOST_CAP_CHANNEL |
+                        ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ,
+        .state_flags = ASTRA_HOST_STATE_READY,
+        .host_generation = 9u,
+        .maximum_transfer = 2u * KERNEL_PAGE_SIZE,
+        .maximum_commands = 16u,
+    };
+    host_execute_status = ASTRA_SYSCALL_OK;
+    host_execute_calls = 0u;
+    host_execute_owner = 0u;
+    host_released_owner = 0u;
+    host_executed_commands = 1u;
+    host_physical_buffer = 0u;
+    host_byte_size = 0u;
+    host_command_count = 0u;
+    host_channel_open_calls = 0u;
+    host_channel_close_calls = 0u;
+    host_channel_physical = 0u;
+    host_channel_slot = UINT32_MAX;
+    host_channel_kick_calls = 0u;
+    host_channel_kick_slot = UINT32_MAX;
+    host_channel_kick_producer = 0u;
+    host_channel_complete_on_kick = 0u;
+    host_channel_arm_calls = 0u;
+    host_channel_arm_slot = UINT32_MAX;
+    host_channel_arm_consumer = 0u;
+    host_channel_disarm_calls = 0u;
+    memset(host_channel_states, 0, sizeof(host_channel_states));
+    host_channel_ack_calls = 0u;
 }
 
 void kernel_process_milestone_reached(const KernelSchedulerStats *stats)
@@ -976,8 +1157,8 @@ static void initialize_test(void)
     info.cpu_hz = 12500000u;
     info.ram_base = 0x02000000u;
     info.ram_size = 0x02000000u;
-    info.rom_base = 0xffe00000u;
-    info.rom_size = ASTRA_ROM_BACKING_SIZE;
+    info.rom_base = ASTRA_ROM_ADDRESS;
+    info.rom_size = ASTRA_ROM_SIZE;
     info.kernel_base = ASTRA_KERNEL_LOAD_ADDRESS;
     info.kernel_image_size = 0x00010000u;
     info.kernel_memory_size = ASTRA_KERNEL_RESERVED_SIZE;
@@ -999,15 +1180,7 @@ static void initialize_test(void)
               ASTRA_MEMORY_RANGE_KERNEL,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, ASTRA_KERNEL_USABLE_ADDRESS, ASTRA_KERNEL_USABLE_SIZE,
-              ASTRA_MEMORY_RANGE_USABLE,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
-                  ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, ASTRA_ROM_BACKING_ADDRESS, ASTRA_ROM_BACKING_SIZE,
-              ASTRA_MEMORY_RANGE_ROM_BACKING,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_EXECUTE |
-                  ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, 0x03e40000u, 0x000c0000u,
+    add_range(&info, ASTRA_KERNEL_USABLE_ADDRESS, (OHCI_DMA_POOL_BASE - ASTRA_KERNEL_USABLE_ADDRESS),
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
@@ -1027,6 +1200,7 @@ static void initialize_test(void)
     assert(kernel_vm_enable() == KERNEL_VM_OK);
     reset_block_device();
     reset_network_device();
+    reset_host_device();
     kernel_dma_init();
     kernel_block_init();
     assert(kernel_device_init());
@@ -1098,6 +1272,18 @@ static void initialize_test(void)
 
         assert(kernel_device_register(&network) == KERNEL_DEVICE_OK);
     }
+    {
+        const KernelDeviceDefinition host = {
+            .quiesce = test_host_reset,
+            .reset = test_host_reset,
+            .context = NULL,
+            .device_id = ASTRA_DEVICE_ID_HOST0,
+            .class_id = ASTRA_DEVICE_CLASS_HOST,
+            .capabilities = ASTRA_HOST_CAP_FILESYSTEM,
+        };
+
+        assert(kernel_device_register(&host) == KERNEL_DEVICE_OK);
+    }
     assert(kernel_device_seal_registry());
     device_quiesce_count = 0u;
     device_reset_count = 0u;
@@ -1135,6 +1321,7 @@ static void initialize_test(void)
     scheduler_test_cycles = 0u;
     timer_arm_count = 0u;
     timer_last_load = 0u;
+    pmmu_crp_load_count = 0u;
     interrupt_enable_count = 0u;
     interrupt_disable_count = 0u;
     disable_hook_process_slot = 0u;
@@ -3255,6 +3442,44 @@ static void test_priority_selection_and_equal_priority_rotation(void)
     assert(stats.same_address_space_switches == 2u);
 }
 
+static void test_interrupt_wakeup_hands_off_to_equal_priority_thread(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x60u, 0xfcu};
+    KernelCpuContext *next;
+    KernelSchedulerStats stats;
+    KernelThreadSnapshot woken;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+    uint32_t thread_id;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(kernel_process_create_thread(
+               process_id, 0u, 1u, KERNEL_THREAD_PRIORITY_NORMAL,
+               &thread_id) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, 64u, KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+
+    assert(kernel_process_on_interrupt_wakeup(
+               registers, KERNEL_PROCESS_STACK_TOP - 16u, frame,
+               false, &next) == KERNEL_PROCESS_OK);
+    assert(kernel_thread_snapshot(1u, &woken));
+    assert(woken.state == KERNEL_THREAD_READY);
+    assert(kernel_process_stats(&stats));
+    assert(stats.wake_preemptions == 0u);
+
+    assert(kernel_process_on_interrupt_wakeup(
+               registers, KERNEL_PROCESS_STACK_TOP - 16u, frame,
+               true, &next) == KERNEL_PROCESS_OK);
+    assert(thread_id != 0u);
+    assert(kernel_thread_snapshot(1u, &woken));
+    assert(woken.state == KERNEL_THREAD_RUNNING);
+    assert(kernel_process_stats(&stats));
+    assert(stats.wake_preemptions == 1u);
+}
+
 static void test_per_process_thread_limit_is_bounded_and_reclaimable(void)
 {
     static const uint8_t image[] = {0x4eu, 0x71u};
@@ -3313,12 +3538,15 @@ static void test_last_runnable_timed_wait_wakes_from_supervisor_idle(void)
     uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
     uint32_t process_id;
     uint32_t event_handle;
+    uint32_t crp_loads_after_start;
     uint64_t deadline_ns;
 
     initialize_test();
     assert(kernel_process_create(image, sizeof(image), 0u, 0u,
                                  &process_id) == KERNEL_PROCESS_OK);
     assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    crp_loads_after_start = pmmu_crp_load_count;
+    assert(crp_loads_after_start != 0u);
     registers[0] = ASTRA_SYSCALL_EVENT_CREATE;
     registers[2] = TEST_SYNC_RIGHTS;
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
@@ -3343,12 +3571,14 @@ static void test_last_runnable_timed_wait_wakes_from_supervisor_idle(void)
     assert(next == NULL);
     assert(!kernel_process_active());
     assert(timer_last_load == 2500u);
+    assert(pmmu_crp_load_count == crp_loads_after_start);
 
     scheduler_test_cycles += 2500u;
     assert(kernel_process_on_supervisor_timer() == KERNEL_PROCESS_OK);
     assert(kernel_process_active());
     next = kernel_process_current_context();
     assert(next != NULL);
+    assert(pmmu_crp_load_count == crp_loads_after_start);
     assert(next->data[0] == ASTRA_SYSCALL_TIMED_OUT);
     assert(kernel_process_stats(&stats));
     assert(stats.deadline_expirations == 1u);
@@ -3735,13 +3965,28 @@ static void test_thread_publish_commit_excludes_supervisor_timer(void)
     assert(process.thread_count == 3u);
     assert(process.live_threads == 3u);
     assert(kernel_process_stats(&scheduler));
-    assert(scheduler.deadline_expirations == 1u);
-    assert(scheduler.deadline_depth == 0u);
+    assert(scheduler.deadline_expirations == 0u);
+    assert(scheduler.deadline_depth == 1u);
+    assert(scheduler.supervisor_timer_deferrals == 1u);
     assert(kernel_thread_pool_stats(&threads));
-    assert(threads.ready_threads == 2u);
+    assert(threads.ready_threads == 1u);
     assert(kernel_thread_pool_valid());
 
     memset(registers, 0, sizeof(registers));
+    make_frame(frame, 0u, 80u, KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_process_on_timer(
+               registers,
+               KERNEL_PROCESS_STACK_TOP + KERNEL_THREAD_STACK_STRIDE - 8u,
+               frame, &next) == KERNEL_PROCESS_OK);
+    assert(next != NULL);
+    assert(kernel_process_stats(&scheduler));
+    assert(scheduler.deadline_expirations == 1u);
+    assert(scheduler.deadline_depth == 0u);
+    assert(kernel_thread_pool_valid());
+
+    memset(registers, 0, sizeof(registers));
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
     registers[0] = ASTRA_SYSCALL_EXIT;
     assert(kernel_process_on_syscall(
                registers,
@@ -4142,11 +4387,12 @@ static void test_wait_multiple_syscall_contract_and_races(void)
 
     handles[0] = first_event_handle;
     handles[1] = second_event_handle;
-    assert(kernel_user_copy_to_asm(wait_array_address, handles,
+    handles[0] = KERNEL_HANDLE_INVALID;
+    assert(kernel_user_copy_to_asm(wait_array_address + 2u, handles,
                                    2u * sizeof(handles[0])) ==
            KERNEL_USER_COPY_OK);
 
-    /* Invalid shape and address failures never retain a user pointer. */
+    /* A uint32_t array may have the MC68030 ABI's two-byte alignment. */
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_WAIT_MULTIPLE;
     registers[1] = wait_array_address + 2u;
@@ -4155,10 +4401,16 @@ static void test_wait_multiple_syscall_contract_and_races(void)
     registers[4] = ASTRA_DEADLINE_NONE_LO;
     assert(kernel_process_on_syscall(registers, main_user_stack, frame,
                                      &next) == KERNEL_PROCESS_OK);
-    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
     assert(next->data[1] == ASTRA_WAIT_INDEX_NONE);
     assert(next->data[2] == 0u);
 
+    handles[0] = first_event_handle;
+    assert(kernel_user_copy_to_asm(wait_array_address, handles,
+                                   2u * sizeof(handles[0])) ==
+           KERNEL_USER_COPY_OK);
+
+    /* Invalid shape and address failures never retain a user pointer. */
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_WAIT_MULTIPLE;
     registers[1] = 0u;
@@ -4890,8 +5142,10 @@ static void test_message_port_syscall_atomicity_and_cleanup(void)
     } message;
     const uint32_t input_message_address = KERNEL_PROCESS_STACK_TOP - 1024u;
     const uint32_t output_message_address = KERNEL_PROCESS_STACK_TOP - 768u;
-    const uint32_t input_handles_address = KERNEL_PROCESS_STACK_TOP - 512u;
-    const uint32_t output_handles_address = KERNEL_PROCESS_STACK_TOP - 256u;
+    const uint32_t input_handles_address =
+        KERNEL_PROCESS_STACK_TOP - 512u + 2u;
+    const uint32_t output_handles_address =
+        KERNEL_PROCESS_STACK_TOP - 256u + 2u;
     const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 1536u;
     KernelMemoryStats baseline;
     KernelMemoryStats final;
@@ -6272,6 +6526,78 @@ static void loader_build_image(void)
     loader_image[KERNEL_PAGE_SIZE + 1u] = 0x71u;
 }
 
+static void loader_add_tls(void)
+{
+    uint32_t header = LOADER_PHOFF + 64u;
+
+    loader_put16(44u, 3u);
+    /* The template load is immutable; each thread receives a writable copy. */
+    loader_put32(LOADER_PHOFF + 32u + 24u, 4u);
+    loader_put32(header + 0u, 7u); /* PT_TLS */
+    loader_put32(header + 4u, 2u * KERNEL_PAGE_SIZE + 0x10u);
+    loader_put32(header + 8u, LOADER_DATA_VADDR + 0x10u);
+    loader_put32(header + 16u, 4u);
+    loader_put32(header + 20u, 8u);
+    loader_put32(header + 24u, 4u);
+    loader_put32(header + 28u, 4u);
+    loader_image[2u * KERNEL_PAGE_SIZE + 0x10u] = 0x11u;
+    loader_image[2u * KERNEL_PAGE_SIZE + 0x11u] = 0x22u;
+    loader_image[2u * KERNEL_PAGE_SIZE + 0x12u] = 0x33u;
+    loader_image[2u * KERNEL_PAGE_SIZE + 0x13u] = 0x44u;
+}
+
+static void test_executable_threads_receive_independent_tls(void)
+{
+    KernelCpuContext *next;
+    KernelThreadSnapshot found[2];
+    uint8_t bytes[8];
+    uint8_t changed = 0xa5u;
+    uint32_t process_id = 0u;
+    uint32_t thread_id = 0u;
+    uint32_t count = 0u;
+
+    loader_build_image();
+    loader_add_tls();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_create_thread(
+               process_id, 0u, 0u, KERNEL_THREAD_PRIORITY_NORMAL,
+               &thread_id) == KERNEL_PROCESS_OK);
+    assert(thread_id != 0u);
+    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        KernelThreadSnapshot snapshot;
+
+        if (!kernel_thread_snapshot(slot, &snapshot) ||
+            snapshot.process_id != process_id)
+            continue;
+        assert(count < 2u);
+        found[count++] = snapshot;
+    }
+    assert(count == 2u);
+    assert(found[0].tls_pages == 1u && found[1].tls_pages == 1u);
+    assert(found[0].tls_base != found[1].tls_base);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(next->address[4] == found[0].tls_base + 0x7000u ||
+           next->address[4] == found[1].tls_base + 0x7000u);
+    for (uint32_t index = 0u; index < 2u; ++index) {
+        memset(bytes, 0xff, sizeof(bytes));
+        assert(kernel_user_copy_from_asm(bytes, found[index].tls_base,
+                                         sizeof(bytes)) ==
+               KERNEL_USER_COPY_OK);
+        assert(bytes[0] == 0x11u && bytes[1] == 0x22u &&
+               bytes[2] == 0x33u && bytes[3] == 0x44u);
+        assert(bytes[4] == 0u && bytes[5] == 0u &&
+               bytes[6] == 0u && bytes[7] == 0u);
+    }
+    assert(kernel_user_copy_to_asm(found[0].tls_base, &changed,
+                                   sizeof(changed)) == KERNEL_USER_COPY_OK);
+    assert(kernel_user_copy_from_asm(bytes, found[1].tls_base,
+                                     sizeof(bytes)) == KERNEL_USER_COPY_OK);
+    assert(bytes[0] == 0x11u);
+}
+
 static void test_executable_loading(void)
 {
     KernelProcessSnapshot snapshot;
@@ -6403,7 +6729,7 @@ static void test_block_admission(void)
     assert(geometry.sector_bytes == ASTRA_BLOCK_SECTOR_BYTES);
     assert(geometry.sector_count == 2048u);
     assert(geometry.max_transfer_sectors == 16u);
-    assert(geometry.queue_depth == 1u);
+    assert(geometry.queue_depth == 4u);
     assert((geometry.capabilities & ASTRA_BLOCK_CAP_READ) != 0u);
 
     /* Transfer memory, then one read of the first sector. */
@@ -6450,11 +6776,13 @@ static void test_block_admission(void)
     assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
            KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_WOULD_BLOCK);
+    assert(next->data[1] == 0u);
 
     block_complete_request(0u, 1u);
     assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
            KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == 1u);
     assert(kernel_user_copy_from_asm(&completion, user_out,
                                      sizeof(completion)) ==
            KERNEL_USER_COPY_OK);
@@ -6562,6 +6890,212 @@ static void test_network_admission(void)
     assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
            KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+}
+
+static void test_host_admission(void)
+{
+    const uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 64u;
+    const uint32_t user_request = KERNEL_PROCESS_STACK_TOP - 128u;
+    const uint32_t user_out = KERNEL_PROCESS_STACK_TOP - 256u;
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
+    KernelProcessBootstrapCapability capability = {0};
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    AstraDmaBufferInfo buffer;
+    AstraHostLeaseInfo info;
+    AstraHostTransportRequest request;
+    AstraHostChannelOpen channel;
+    KernelThreadSnapshot thread;
+    AstraStartupCapability table[3];
+    uint32_t process_id = 0u;
+    uint32_t lease_handle = 0u;
+
+    loader_build_image();
+    initialize_test();
+    capability.name = ASTRA_CAPABILITY_HOST_DEVICE;
+    capability.kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+    capability.device_id = ASTRA_DEVICE_ID_HOST0;
+    capability.rights = KERNEL_DEVICE_RIGHTS;
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            &capability, 1u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    assert(kernel_user_copy_from_asm(
+               table, KERNEL_VM_USER_MIN + ASTRA_STARTUP_INFO_SIZE,
+               sizeof(table)) == KERNEL_USER_COPY_OK);
+    for (uint32_t index = 0u; index < 3u; ++index)
+        if (astra_capability_name_equal(table[index].name,
+                                        ASTRA_CAPABILITY_HOST_DEVICE))
+            lease_handle = table[index].handle;
+    assert(lease_handle != 0u);
+
+    registers[0] = ASTRA_SYSCALL_HOST_QUERY;
+    registers[1] = lease_handle;
+    registers[2] = user_out;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&info, user_out, sizeof(info)) ==
+           KERNEL_USER_COPY_OK);
+    assert(info.size == ASTRA_HOST_LEASE_INFO_SIZE);
+    assert(info.capabilities == (ASTRA_HOST_CAP_FILESYSTEM |
+                                 ASTRA_HOST_CAP_OWNER_SCOPED |
+                                 ASTRA_HOST_CAP_CHANNEL |
+                                 ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ));
+    assert(info.host_generation == host_state.host_generation);
+    assert(info.maximum_transfer == host_state.maximum_transfer);
+    assert(info.maximum_commands == host_state.maximum_commands);
+
+    registers[0] = ASTRA_SYSCALL_DMA_CREATE;
+    registers[1] = KERNEL_PAGE_SIZE;
+    registers[2] = user_info;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&buffer, user_info, sizeof(buffer)) ==
+           KERNEL_USER_COPY_OK);
+
+    request = (AstraHostTransportRequest){
+        .size = ASTRA_HOST_TRANSPORT_REQUEST_SIZE,
+        .buffer = buffer.handle,
+        .byte_size = ASTRA_HOST_COMMAND_SIZE,
+        .command_count = 1u,
+    };
+    assert(kernel_user_copy_to_asm(user_request, &request, sizeof(request)) ==
+           KERNEL_USER_COPY_OK);
+    registers[0] = ASTRA_SYSCALL_HOST_EXECUTE;
+    registers[1] = lease_handle;
+    registers[2] = user_request;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK && next->data[1] == 1u);
+    assert(host_execute_calls == 1u);
+    assert(host_execute_owner == process_id);
+    assert(host_physical_buffer != 0u &&
+           host_physical_buffer != buffer.virtual_base);
+    assert(host_byte_size == ASTRA_HOST_COMMAND_SIZE);
+    assert(host_command_count == 1u);
+
+    request.command_count = host_state.maximum_commands + 1u;
+    assert(kernel_user_copy_to_asm(user_request, &request, sizeof(request)) ==
+           KERNEL_USER_COPY_OK);
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(host_execute_calls == 1u);
+
+    memset(&channel, 0, sizeof(channel));
+    channel.size = sizeof(channel);
+    channel.buffer = buffer.handle;
+    channel.byte_size = KERNEL_PAGE_SIZE;
+    channel.command_capacity = 1u;
+    assert(kernel_user_copy_to_asm(user_request, &channel, sizeof(channel)) ==
+           KERNEL_USER_COPY_OK);
+    registers[0] = ASTRA_SYSCALL_HOST_CHANNEL_OPEN;
+    registers[1] = lease_handle;
+    registers[2] = user_request;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&channel, user_request,
+                                     sizeof(channel)) ==
+           KERNEL_USER_COPY_OK);
+    assert(channel.channel_generation != 0u &&
+           channel.channel_address == KERNEL_VM_HOST_CHANNEL_BASE &&
+           channel.host_generation == host_state.host_generation);
+    assert(host_channel_open_calls == 1u && host_channel_physical != 0u);
+    {
+        uint32_t physical = 0u;
+        uint32_t slot;
+
+        assert(kernel_vm_probe_current(channel.channel_address, false,
+                                       &physical) ==
+               KERNEL_VM_MAPPING_READ_WRITE);
+        assert(physical >= KERNEL_VM_HOST_CHANNEL_PHYSICAL_BASE &&
+               physical < KERNEL_VM_HOST_CHANNEL_PHYSICAL_BASE +
+                              KERNEL_VM_HOST_CHANNEL_PAGE_COUNT *
+                                  KERNEL_PAGE_SIZE);
+        assert(physical != host_channel_physical);
+        slot = (physical - KERNEL_VM_HOST_CHANNEL_PHYSICAL_BASE) /
+               KERNEL_PAGE_SIZE;
+        assert(slot < KERNEL_THREAD_MAX);
+        /* A completion cursor may pass this ticket while several requests
+         * from the same thread are in flight. */
+        host_channel_states[slot].consumer_position = 19u;
+        registers[0] = ASTRA_SYSCALL_HOST_CHANNEL_WAIT;
+        /* Waiting is authorized by the thread-bound open channel itself. */
+        registers[1] = UINT32_MAX;
+        registers[2] = 17u;
+        registers[3] = 0x7fffffffu;
+        registers[4] = 0xffffffffu;
+        assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        assert(host_channel_kick_calls == 0u && host_channel_arm_calls == 0u &&
+               host_channel_disarm_calls == 0u);
+        uint32_t woken = UINT32_MAX;
+        assert(kernel_process_host_channel_irq_service(
+            IRQ_SRC_HOST, 0u, NULL, &woken));
+        assert(woken == 0u);
+        assert(host_channel_ack_calls == 1u);
+
+        host_channel_states[slot].consumer_position = 19u;
+        host_channel_complete_on_kick = 1u;
+        registers[0] = ASTRA_SYSCALL_HOST_CHANNEL_WAIT;
+        registers[1] = lease_handle;
+        registers[2] = 20u;
+        registers[3] = 0x7fffffffu;
+        registers[4] = 0xffffffffu;
+        assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next != NULL && next->data[0] == ASTRA_SYSCALL_OK);
+        assert(kernel_thread_snapshot(slot, &thread));
+        assert(thread.state == KERNEL_THREAD_RUNNING);
+        assert(host_channel_kick_calls == 1u &&
+               host_channel_kick_slot == slot &&
+               host_channel_kick_producer == 20u);
+        assert(host_channel_arm_calls == 1u &&
+               host_channel_arm_slot == slot &&
+               host_channel_arm_consumer == 20u &&
+               host_channel_disarm_calls == 1u);
+
+        host_channel_complete_on_kick = 0u;
+        host_channel_states[slot].consumer_position = 20u;
+        registers[2] = 21u;
+        assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                         &next) ==
+               KERNEL_PROCESS_NO_RUNNABLE);
+        assert(next == NULL);
+        assert(kernel_thread_snapshot(slot, &thread));
+        assert(thread.state == KERNEL_THREAD_BLOCKED);
+        assert(host_channel_kick_calls == 2u &&
+               host_channel_kick_slot == slot &&
+               host_channel_kick_producer == 21u);
+        assert(host_channel_arm_calls == 2u &&
+               host_channel_arm_consumer == 21u &&
+               host_channel_disarm_calls == 1u);
+
+        host_channel_states[slot].consumer_position = 21u;
+        assert(kernel_process_host_channel_irq_service(
+            IRQ_SRC_HOST, 0u, NULL, &woken));
+        assert(woken == 1u);
+        assert(host_channel_ack_calls == 2u);
+        assert(host_channel_disarm_calls == 1u);
+        next = kernel_process_resume_idle();
+        assert(next != NULL && next->data[0] == ASTRA_SYSCALL_OK);
+        assert(kernel_thread_snapshot(slot, &thread));
+        assert(thread.state == KERNEL_THREAD_RUNNING);
+    }
+    host_state.state_flags = 0u;
+    registers[0] = ASTRA_SYSCALL_HOST_CHANNEL_CLOSE;
+    registers[1] = lease_handle;
+    registers[2] = 0u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(host_channel_close_calls == 1u);
 }
 
 /*
@@ -8488,13 +9022,16 @@ static void test_process_info_syscall(void)
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_PROCESS_INFO;
     registers[1] = self_handle;
-    registers[2] = user_info + 1u;
+    registers[2] = user_info + 2u; /* m68k ABI alignment */
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
                KERNEL_PROCESS_CODE_BASE, 0u);
     assert(kernel_process_on_syscall(registers,
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
-    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&info, user_info + 2u, sizeof(info)) ==
+           KERNEL_USER_COPY_OK);
+    assert(info.id == process_id);
 
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_PROCESS_INFO;
@@ -9285,6 +9822,7 @@ int main(void)
     test_input_batch_read_is_bounded_and_fault_atomic();
     test_private_irq_qualification_control();
     test_priority_selection_and_equal_priority_rotation();
+    test_interrupt_wakeup_hands_off_to_equal_priority_thread();
     test_per_process_thread_limit_is_bounded_and_reclaimable();
     test_last_runnable_timed_wait_wakes_from_supervisor_idle();
     test_prestart_timer_cannot_consume_published_thread();
@@ -9306,10 +9844,12 @@ int main(void)
     test_area_publication_rolls_back_when_handle_table_full();
     test_area_and_ring_endpoint_transfer_over_port();
     test_executable_loading();
+    test_executable_threads_receive_independent_tls();
     test_dma_transfer_memory();
     test_block_admission();
     test_block_admission_faults();
     test_network_admission();
+    test_host_admission();
     test_bootstrap_capabilities();
     test_capability_roots_are_carried();
     test_arguments_and_environment_are_published();

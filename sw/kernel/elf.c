@@ -158,6 +158,60 @@ static KernelElfStatus accept_load_segment(const uint8_t *header,
     return KERNEL_ELF_OK;
 }
 
+static KernelElfStatus accept_tls_segment(const uint8_t *header,
+                                          uint32_t image_size,
+                                          KernelElfTls *tls)
+{
+    uint32_t flags = astra_load_be32(header + 24);
+    uint32_t alignment = astra_load_be32(header + 28);
+
+    tls->file_offset = astra_load_be32(header + 4);
+    tls->virtual_address = astra_load_be32(header + 8);
+    tls->file_size = astra_load_be32(header + 16);
+    tls->memory_size = astra_load_be32(header + 20);
+    tls->alignment = alignment <= 1u ? 1u : alignment;
+    if (flags != ELF_PF_R || tls->file_size > tls->memory_size ||
+        !range_within(tls->file_offset, tls->file_size, image_size) ||
+        (alignment > 1u && !astra_u32_is_power_of_two(alignment)) ||
+        (tls->file_offset & (tls->alignment - 1u)) !=
+            (tls->virtual_address & (tls->alignment - 1u)))
+        return KERNEL_ELF_BAD_TLS;
+    return KERNEL_ELF_OK;
+}
+
+static bool tls_covered_by_load(const KernelElfImage *plan)
+{
+    uint32_t tls_file_end;
+    uint32_t tls_memory_end;
+
+    if (!astra_u32_add_checked(plan->tls.virtual_address,
+                               plan->tls.memory_size, &tls_memory_end) ||
+        tls_memory_end <= plan->tls.virtual_address)
+        return false;
+    if (plan->tls.file_size == 0u)
+        return true;
+    if (!astra_u32_add_checked(plan->tls.file_offset, plan->tls.file_size,
+                               &tls_file_end))
+        return false;
+    for (uint32_t index = 0u; index < plan->segment_count; ++index) {
+        const KernelElfSegment *segment = &plan->segment[index];
+        uint32_t segment_file_end;
+
+        if ((segment->rights &
+             (KERNEL_ELF_SEGMENT_WRITE | KERNEL_ELF_SEGMENT_EXEC)) != 0u ||
+            !astra_u32_add_checked(segment->file_offset, segment->file_size,
+                                   &segment_file_end) ||
+            plan->tls.file_offset < segment->file_offset ||
+            tls_file_end > segment_file_end ||
+            plan->tls.virtual_address < segment->virtual_address)
+            continue;
+        if (plan->tls.file_offset - segment->file_offset ==
+            plan->tls.virtual_address - segment->virtual_address)
+            return true;
+    }
+    return false;
+}
+
 static KernelElfStatus stream_fail(KernelElfStream *stream,
                                    KernelElfStatus status)
 {
@@ -259,6 +313,16 @@ KernelElfStatus kernel_elf_stream_add_header(KernelElfStream *stream,
     if (type == ELF_PT_GNU_STACK) {
         if ((astra_load_be32(bytes + 24) & ELF_PF_X) != 0u)
             return stream_fail(stream, KERNEL_ELF_EXECUTABLE_STACK);
+    } else if (type == ELF_PT_TLS && stream->library == 0u) {
+        if (stream->tls_seen != 0u)
+            return stream_fail(stream, KERNEL_ELF_BAD_TLS);
+        status = accept_tls_segment(bytes, stream->image_size,
+                                    &stream->plan.tls);
+        if (status != KERNEL_ELF_OK)
+            return stream_fail(stream, status);
+        stream->tls_seen = 1u;
+        if (stream->plan.tls.memory_size != 0u)
+            stream->plan.has_tls = 1u;
     } else if (type != ELF_PT_LOAD) {
         if (!ignorable_segment(type, stream->library != 0u))
             return stream_fail(stream, KERNEL_ELF_UNSUPPORTED_SEGMENT);
@@ -308,6 +372,9 @@ KernelElfStatus kernel_elf_stream_finish(KernelElfStream *stream,
         return KERNEL_ELF_TRUNCATED;
     if (stream->plan.segment_count == 0u)
         return stream_fail(stream, KERNEL_ELF_NO_SEGMENTS);
+    if (stream->plan.has_tls != 0u &&
+        !tls_covered_by_load(&stream->plan))
+        return stream_fail(stream, KERNEL_ELF_BAD_TLS);
     if (stream->library != 0u) {
         if (stream->entry != 0u)
             return stream_fail(stream, KERNEL_ELF_BAD_ENTRY);
@@ -392,6 +459,7 @@ const char *kernel_elf_status_text(KernelElfStatus status)
     case KERNEL_ELF_UNORDERED: return "segments out of order";
     case KERNEL_ELF_OVERLAP: return "segments overlap";
     case KERNEL_ELF_TOO_LARGE: return "image needs too many pages";
+    case KERNEL_ELF_BAD_TLS: return "invalid TLS template";
     case KERNEL_ELF_BAD_ENTRY: return "entry point outside executable code";
     }
     return "unknown";

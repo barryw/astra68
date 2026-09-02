@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define KERNEL_MMIO_PHYSICAL_BASE 0xfff00000u
+#define KERNEL_MMIO_PHYSICAL_BASE 0xffd00000u
 #define KERNEL_MMIO_PHYSICAL_LIMIT UINT32_MAX
 
 static inline __attribute__((always_inline)) bool

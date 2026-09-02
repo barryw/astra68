@@ -177,6 +177,7 @@ _kernel_restore_user_context:
 	movem.l KERNEL_CONTEXT_D0_OFFSET(%a0), %d0-%d7/%a0-%a6
 	rte
 .Lkernel_idle:
+	jsr     kernel_dispatch_idle_enter
 	jsr     kernel_irqoff_latency_exit
 	lea     _kernel_stack_top, %sp
 	moveq   #0, %d0

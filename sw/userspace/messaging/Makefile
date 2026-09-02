@@ -11,7 +11,7 @@ CPPFLAGS := -Iinclude -I$(RUNTIME)/include -I../../include \
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 HOST_FLAGS := -O2
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
-LIBRARY_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
+LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections -fPIC -fvisibility=hidden
 LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
 	-Wl,--no-undefined -Wl,--build-id=none -Wl,--gc-sections \
@@ -46,7 +46,7 @@ $(TARGET): $(OBJECTS) $(NDK_PIC_LIB) $(RUNTIME_PIC_LIB) \
 library-contract: $(TARGET)
 	@python3 ../../../tools/library_info.py $(TARGET) | \
 		grep -q '^messaging.library 1.0.0 ABI 1.0$$'
-	@! $(READELF) -r $(TARGET) | grep -E 'R_68K_(GLOB_DAT|JMP_SLOT|32|PC32)'
+	$(call ASTRA_CHECK_DSO,$(TARGET))
 
 $(HOST_TEST): src/messaging_library.c tests/test_messaging_library.c
 	@mkdir -p $(@D)

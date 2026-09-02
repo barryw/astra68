@@ -20,6 +20,7 @@
 #define MOUNT_POINT "/vol/"
 #define DEVICE_NAME "astra"
 #define STORAGE_WORKER_MAX (ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE + 1u)
+#define JOURNAL_COMMIT_NS (UINT64_C(5) * UINT64_C(1000000000))
 
 enum {
     STORAGE_FAIL_ATTACH = ASTRA_STATUS_PROGRAM_FIRST,
@@ -31,6 +32,7 @@ enum {
     STORAGE_FAIL_MOUNT,
     STORAGE_FAIL_RECOVER,
     STORAGE_FAIL_JOURNAL,
+    STORAGE_FAIL_WRITEBACK,
     STORAGE_FAIL_LOCK,
     STORAGE_FAIL_THREAD,
     STORAGE_FAIL_READY
@@ -47,6 +49,7 @@ static AstraAllocator allocator;
 static AstraExt4Port ext4_port;
 static AstraVfsExt4Backend backend;
 static AstraVfsService service;
+static AstraVfsSessionSlot service_sessions[ASTRA_VFS_SESSION_MAX];
 static AstraVfsPortService port;
 static uint8_t sector[ASTRA_BLOCK_SECTOR_BYTES];
 static AstraVfsPortWorker workers[STORAGE_WORKER_MAX];
@@ -60,6 +63,9 @@ static uint32_t cache_lock;
 static uint32_t fill_lock;
 static uint32_t backend_table_lock;
 static uint32_t backend_scan_lock;
+static uint32_t journal_timer;
+static uint32_t journal_thread_handle;
+static AstraThreadStart journal_thread_start;
 static uint32_t mount_readers;
 
 static int vfs_state_acquire(void *context)
@@ -212,10 +218,36 @@ static uint32_t mount_volume(uint32_t device, uint32_t irq)
         return STORAGE_FAIL_RECOVER;
     if (ext4_journal_start(MOUNT_POINT) != EOK)
         return STORAGE_FAIL_JOURNAL;
+    /* Keep checkpoint buffers dirty across requests. Journal commits remain
+     * durable, fsync drains them explicitly, and cache/journal pressure makes
+     * forward progress without turning every mutation into write-through I/O. */
+    if (ext4_cache_write_back(MOUNT_POINT, true) != EOK)
+        return STORAGE_FAIL_WRITEBACK;
     return ASTRA_STATUS_OK;
 }
 
 static void storage_worker(uint32_t index) __attribute__((noreturn));
+
+static void journal_worker(uint32_t unused) __attribute__((noreturn));
+
+static void journal_worker(uint32_t unused)
+{
+    (void)unused;
+    for (;;) {
+        uint64_t deadline = astra_clock_monotonic() + JOURNAL_COMMIT_NS;
+        uint32_t status = astra_wait_one(journal_timer, deadline, NULL);
+
+        if (status != ASTRA_SYSCALL_TIMED_OUT) {
+            (void)astra_log_failure("storage journal timer", status);
+            astra_thread_exit(status);
+        }
+        status = (uint32_t)ext4_journal_commit(MOUNT_POINT);
+        if (status != EOK) {
+            (void)astra_log_failure("storage journal commit", status);
+            astra_thread_exit(STORAGE_FAIL_JOURNAL);
+        }
+    }
+}
 
 static void storage_worker(uint32_t index)
 {
@@ -273,7 +305,9 @@ int astra_main(const AstraStartupInfo *startup)
         astra_rt_semaphore_create(
             1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
             &backend_scan_lock) !=
-            ASTRA_SYSCALL_OK)
+            ASTRA_SYSCALL_OK ||
+        astra_rt_semaphore_create(0u, 1u, ASTRA_RIGHT_WAIT,
+                                  &journal_timer) != ASTRA_SYSCALL_OK)
         status = STORAGE_FAIL_LOCK;
     else
         status = mount_volume(device->handle, irq->handle);
@@ -298,6 +332,7 @@ int astra_main(const AstraStartupInfo *startup)
                        vfs_state_release, &backend_scan_lock) ||
                    !astra_vfs_service_init(
                        &service, astra_vfs_ext4_ops(), &backend,
+                       service_sessions, ASTRA_VFS_SESSION_MAX,
                        service_storage, service_capacity)) {
             status = ASTRA_STATUS_IO;
         }
@@ -307,9 +342,14 @@ int astra_main(const AstraStartupInfo *startup)
              &service, vfs_state_acquire, vfs_state_release, &state_lock))
         status = STORAGE_FAIL_LOCK;
     if (status == ASTRA_STATUS_OK &&
+        !astra_vfs_service_set_state_wait(
+            &service, astra_vfs_state_futex_wait,
+            astra_vfs_state_futex_wake))
+        status = STORAGE_FAIL_LOCK;
+    if (status == ASTRA_STATUS_OK &&
         (astra_rt_port_create(ASTRA_PORT_MESSAGES_MAX,
                            ASTRA_PORT_MESSAGES_MAX *
-                               (uint32_t)sizeof(AstraVfsRequestMessage),
+                               (uint32_t)sizeof(AstraVfsRenameRequestMessage),
                            &receive, &send) != ASTRA_SYSCALL_OK ||
          !astra_vfs_port_service_init(&port, receive, &service)))
         status = ASTRA_STATUS_LIMIT;
@@ -333,6 +373,15 @@ int astra_main(const AstraStartupInfo *startup)
                     &worker_starts[index - 1u], info.default_priority,
                     ASTRA_RIGHT_READ | ASTRA_RIGHT_WAIT,
                     &worker_handles[index - 1u], NULL) != ASTRA_SYSCALL_OK)
+                status = STORAGE_FAIL_THREAD;
+        }
+        if (status == ASTRA_STATUS_OK) {
+            journal_thread_start.entry = journal_worker;
+            journal_thread_start.argument = 0u;
+            if (astra_rt_thread_create(
+                    &journal_thread_start, info.default_priority,
+                    ASTRA_RIGHT_READ | ASTRA_RIGHT_WAIT,
+                    &journal_thread_handle, NULL) != ASTRA_SYSCALL_OK)
                 status = STORAGE_FAIL_THREAD;
         }
     }

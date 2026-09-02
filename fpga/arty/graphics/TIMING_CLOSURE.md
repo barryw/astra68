@@ -4027,8 +4027,8 @@ qualified run-4 QoR file and persistent output; campaign use is 2/5.
 Gate 3/5 stopped before synthesis because the Beast source mirror did not
 contain the untracked `fpga/arty/audio` RTL directory. It produced no netlist,
 timing result, bitstream, or capacity evidence. The invocation still counts.
-The corrective action is one complete nondeleting sync of `fpga/arty` and
-`fpga/soc`, followed by explicit source/hash checks; gate 4 must use a fresh
+The corrective action is one complete nondeleting sync of `fpga/arty`, followed
+by explicit source/hash checks; gate 4 must use a fresh
 persistent output directory rather than resume the partial project.
 
 Gate 4/5 is the exact clean full production implementation after that source

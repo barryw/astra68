@@ -58,7 +58,8 @@ A format containing a space has to wait for the shell to learn quoting: every
 word is its own argument today, and `date` says so rather than silently
 rendering the first word.
 
-`date -s` is refused. The clock is read-only here by design.
+`date -s` is refused. Only a process holding the privileged clock capability
+can adjust the machine offset; the resident `ntpd` service owns that authority.
 
 ## What an application asks
 
@@ -80,13 +81,12 @@ disagree about which second they meant.
 
 ## The decisions, and why
 
-**The machine does not keep time; it reads it.** There is no software clock
-counting from a boot-time sample, and no synchronisation protocol of Astra's
-own. Every `CLOCK_REALTIME` reads the register at the moment it is asked, so a
-correction made underneath — NTP stepping the host — is visible immediately
-rather than being a drift this machine accumulated and never noticed. That is
-also why the emulator and the board are the same code: on both, the thing
-keeping time is a Linux clock somebody else is already keeping right.
+**The host clock is the source; Astra keeps only an offset.** QEMU seeds a zero
+offset from `QEMU_CLOCK_HOST` on every reset. Every `CLOCK_REALTIME` reads the
+host epoch at that moment and adds the offset last set through Astra's
+privileged clock ABI. A correction underneath — Linux NTP stepping the host —
+is therefore visible immediately, while Astra's resident `ntpd` can still
+discipline the guest without replacing the host clock with a boot-time sample.
 
 **Nanoseconds since the Unix epoch, in 64 bits.** Not 32-bit seconds: a
 seconds register is the 2038 problem compiled into the hardware contract, and
@@ -97,9 +97,10 @@ Reading `RTC_NS_LO` latches both halves, so the pair cannot tear.
 clock is running from one whose is not. The platform primitive and syscall
 retain an explicit failure result for testability, but a production kernel now
 panics during boot with `valid host wall clock required` if the bit is absent.
-The QEMU terminal gate checks the register independently before opening a
-Terminal, and the Arty launcher refuses a stale Linux clock. Astra therefore
-never reaches userspace with an invented epoch or a silently missing date:
+The common QEMU terminal gate checks both the valid bit and that the latched
+64-bit value is near the test host before opening a Terminal, and the Arty
+launcher refuses a stale Linux clock. Astra therefore never reaches userspace
+with host uptime masquerading as an epoch or with a silently missing date:
 
 | layer | no clock |
 |---|---|
@@ -151,17 +152,19 @@ upstream did: zeros.
 | `sw/userspace/storage` `make ext4-test` | a written file and its directory carry a time near now |
 | `emu/qemu/test-clock.py` | the whole chain: `date` against the host's clock, `-u`, `-uIs` and `+FORMAT` agreeing, `%Z` rendering a real zone, and a file written now listed with today's *local* date. Run it under `TZ=America/New_York` as well as UTC -- both pass, and the second is the one that proves the zone is not decoration |
 
-The gate is the one that matters. On 2026-08-24 it measured guest epoch
-`1787595485` against host epoch `1787595484` with zero-second rounded drift;
-the active event-overwrite candidate's second physical Arty boot reported
-`2026-08-24T19:59:32Z, from the host`; a live `date -e` completed successfully
-after that reboot.
+The gate is the one that matters. On 2026-08-28 QEMU source identity
+`81c56093f2bacaa9559e447a6951a0a872b5672f2e6902400d5498b9a4842e1b`
+measured guest epoch `1787892004` against host epoch `1787892004` with
+zero-second rounded drift and stamped a new inode on the same date. Its exact
+Cortex-A9 build then reported `2026-08-28T04:42:20Z` on the Arty and passed a
+guest filesystem operation whose retained volume was independently clean.
 
 ## What is not here
 
-- **Setting the time from Astra.** The register is read-only. The clock belongs
-  to the layer below, which has NTP; a machine that could set it would be a
-  machine that could disagree with the thing keeping it right.
+- **Unprivileged clock setting.** Applications and `date` cannot set time. The
+  clock capability is granted only to the resident `ntpd`; its write updates
+  Astra's offset from the host clock rather than creating a second free-running
+  clock.
 - **A timezone database.** Deliberately absent -- see above. What that costs is
   historical conversion: the machine can render *now* in its zone, but not "what
   was the offset here in 1997", because nothing on this side knows the rules.

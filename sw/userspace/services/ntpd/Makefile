@@ -14,7 +14,7 @@ CPPFLAGS := -I../../../include -I$(RUNTIME)/include -I$(STREAMS)/include \
 	-I$(VFS)/include -I$(POSIX)/include -I$(NTP)/include -I$(NDK)/include \
 	-isystem $(PICOLIBC)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
-TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
+TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 LINK_FLAGS := -nostdlib -static -Wl,--build-id=none -Wl,--gc-sections \
 	-Wl,-z,max-page-size=0x1000 -T $(RUNTIME)/astra_user.ld

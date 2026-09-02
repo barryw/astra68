@@ -53,6 +53,13 @@ typedef struct AstraVfsNodeInfo {
 
 typedef struct AstraVfsBackendOps {
     /*
+     * Path metadata is no-follow: stat reports a final symbolic link and
+     * readlink returns its stored target. Backends also leave intermediate
+     * links unresolved (normally reporting NOT_DIR). The shared assign layer
+     * alone follows links in Astra's logical namespace, rechecks rights after
+     * traversal, and permits cross-filesystem targets.
+     */
+    /*
      * Opens `path` and yields a backend-private token. `flags` carries the
      * ASTRA_VFS_OPEN_* set. A directory open is requested explicitly, so a
      * backend never has to guess what the caller meant by a path.
@@ -70,35 +77,38 @@ typedef struct AstraVfsBackendOps {
     uint32_t (*truncate)(void *context, uintptr_t node, uint64_t size);
     uint32_t (*stat)(void *context, const char *path, AstraVfsNodeInfo *info);
     /*
-     * Returns one entry of the directory at `path`, resuming from `cookie`,
-     * and yields in `next` the cookie that reaches the entry after it. A
-     * `cookie` of zero starts a scan; running past the last entry is
-     * ASTRA_VFS_ERR_NOT_FOUND, which is how a listing ends rather than a
-     * failure.
-     *
-     * The cookie is the backend's own -- an offset, an index, whatever it can
-     * resume from in constant time. The service stores nothing and hands it
-     * back unread, so the protocol stays stateless per request and a client
-     * that dies mid-scan strands nothing. That was the reason this was
-     * index-addressed; a cookie keeps the property and drops the cost, because
-     * an index makes a backend walk from the start for every entry and a
-     * directory listing quadratic.
+     * Returns one entry from an open `directory`, resuming from the backend's
+     * opaque `cookie`. Zero starts a scan; running past the last entry returns
+     * ASTRA_VFS_ERR_NOT_FOUND. Legacy path-only requests pass directory zero.
+     * Open-handle lifecycle belongs to open/close, so stream-bound host
+     * cookies are never replayed against a different directory stream.
      */
-    uint32_t (*readdir)(void *context, const char *path, uint64_t cookie,
-                        char *name, uint32_t name_capacity,
-                        AstraVfsNodeInfo *info, uint64_t *next);
+    uint32_t (*readdir)(void *context, uintptr_t directory,
+                        const char *path, uint64_t cookie, char *name,
+                        uint32_t name_capacity, AstraVfsNodeInfo *info,
+                        uint64_t *next);
     uint32_t (*mkdir)(void *context, const char *path, uint16_t create_mode);
     uint32_t (*unlink)(void *context, const char *path);
     uint32_t (*rename)(void *context, const char *from, const char *to);
     uint32_t (*chmod)(void *context, const char *path, uint16_t mode);
     uint32_t (*readlink)(void *context, const char *path, void *buffer,
                          uint32_t capacity, uint32_t *length);
+    uint32_t (*symlink)(void *context, const char *target, const char *path);
 } AstraVfsBackendOps;
 
 struct AstraVfsBackend {
     const AstraVfsBackendOps *ops;
     void *context;
 };
+
+/* Shared wire encoders used by both the service and the direct host adapter. */
+uint32_t astra_vfs_backend_readdir_into(
+    const AstraVfsBackend *backend, uintptr_t directory, const char *path,
+    uint64_t cursor, uint32_t entry_limit, uint8_t *buffer,
+    uint32_t capacity, uint32_t *used, uint64_t *next);
+uint32_t astra_vfs_backend_read_path(
+    const AstraVfsBackend *backend, const char *path, void *buffer,
+    uint32_t capacity, uint32_t *moved, uint64_t *node_size);
 
 /* Shared operation table entries for immutable synthetic filesystems. */
 static inline uint32_t
@@ -180,6 +190,16 @@ astra_vfs_backend_no_readlink(void *context, const char *path, void *buffer,
     (void)capacity;
     (void)length;
     return ASTRA_VFS_ERR_NOT_FOUND;
+}
+
+static inline uint32_t
+astra_vfs_backend_deny_symlink(void *context, const char *target,
+                               const char *path)
+{
+    (void)context;
+    (void)target;
+    (void)path;
+    return ASTRA_VFS_ERR_ACCESS;
 }
 
 #endif

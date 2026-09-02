@@ -15,9 +15,12 @@ typedef enum AstraInputPortSendResult {
 typedef AstraInputPortSendResult (*AstraInputPortSend)(
     void *context, uint32_t send_handle, const void *message,
     uint32_t message_size);
+typedef AstraInputPortSendResult (*AstraInputPortWait)(
+    void *context, uint32_t send_handle);
 
 typedef struct AstraInputPortSink {
     AstraInputPortSend send;
+    AstraInputPortWait wait;
     void *context;
     uint32_t send_handle;
 } AstraInputPortSink;

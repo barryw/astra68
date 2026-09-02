@@ -23,7 +23,6 @@
 #define DISPLAY_INPUT_QUEUE 8u
 #define DISPLAY_DOUBLE_CLICK_MS 500u
 #define DISPLAY_DOUBLE_CLICK_DISTANCE 4
-#define DISPLAY_CLOSE_EVENT_RETRIES 8u
 
 typedef struct DamageRect {
     int32_t left;
@@ -410,11 +409,12 @@ static uint32_t send_event(DisplayWindow *window, AstraWindowEvent *event)
     message.event = *event;
     status = astra_port_send(window->event_send, &message, sizeof(message),
                              NULL, 0u);
-    for (uint32_t retry = 0u;
-         status == ASTRA_SYSCALL_WOULD_BLOCK &&
-         event->type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST &&
-         retry < DISPLAY_CLOSE_EVENT_RETRIES; ++retry) {
-        (void)astra_yield();
+    while (status == ASTRA_SYSCALL_WOULD_BLOCK &&
+           event->type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST) {
+        status = astra_wait_one(window->event_send, ASTRA_DEADLINE_FOREVER,
+                                NULL);
+        if (status != ASTRA_SYSCALL_OK)
+            break;
         status = astra_port_send(window->event_send, &message,
                                  sizeof(message), NULL, 0u);
     }
@@ -929,6 +929,22 @@ static uint32_t active_window(const DisplayState *state)
                 ASTRA_WINDOW_STATE_MINIMIZED)
             return index - 1u;
     return state->count;
+}
+
+static uint32_t input_wait_handle(const DisplayState *state,
+                                  uint32_t input_receive,
+                                  uint32_t *blocked)
+{
+    uint32_t index = active_window(state);
+
+    *blocked = 0u;
+    if (index != state->count &&
+        astra_wait_one(state->windows[index].event_send, 0u, NULL) ==
+            ASTRA_SYSCALL_TIMED_OUT) {
+        *blocked = 1u;
+        return state->windows[index].event_send;
+    }
+    return input_receive;
 }
 
 static void key_event(DisplayWindow *window,
@@ -2509,8 +2525,11 @@ static void serve_windows(uint32_t device, uint32_t irq,
     for (;;) {
         uint32_t waits[DISPLAY_WINDOW_MAX + 2u];
         uint32_t sources[DISPLAY_WINDOW_MAX + 2u];
+        uint32_t input_blocked = 0u;
+        uint32_t input_wait = input_wait_handle(
+            &state, input_receive, &input_blocked);
         uint32_t wait_count = display_wait_handles(
-            &state, gui_receive, input_receive, first_wait, waits, sources);
+            &state, gui_receive, input_wait, first_wait, waits, sources);
         uint32_t selected = 0u;
         uint32_t status;
 
@@ -2524,23 +2543,17 @@ static void serve_windows(uint32_t device, uint32_t irq,
         if (selected == 0u)
             receive_open(device, irq, framebuffer, &state, gui_receive,
                          &next_fence, &armed);
-        else if (selected == 1u) {
+        else if (selected == 1u && input_blocked == 0u) {
             uint32_t effects = 0u;
             uint32_t frame_window = 0u;
             uint32_t frame_timestamp = 0u;
+            AstraLogicalInputEvent event;
 
-            for (uint32_t drained = 0u; drained < DISPLAY_INPUT_QUEUE;
-                 ++drained) {
-                AstraLogicalInputEvent event;
-
-                status = receive_input(input_receive, &event);
-                if (drained != 0u && status == ASTRA_SYSCALL_WOULD_BLOCK)
-                    break;
-                if (status != ASTRA_STATUS_OK ||
-                    handle_pointer(&state, &event, &effects, &frame_window,
-                                   &frame_timestamp) != ASTRA_STATUS_OK)
-                    astra_process_exit(DISPLAY_FAIL_PROTOCOL);
-            }
+            status = receive_input(input_receive, &event);
+            if (status != ASTRA_STATUS_OK ||
+                handle_pointer(&state, &event, &effects, &frame_window,
+                               &frame_timestamp) != ASTRA_STATUS_OK)
+                astra_process_exit(DISPLAY_FAIL_PROTOCOL);
             if ((effects & DISPLAY_POINTER_CURSOR) != 0u &&
                 update_cursor(device, irq, state.pointer_x, state.pointer_y,
                               1u, 0u,

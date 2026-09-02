@@ -11,6 +11,6 @@
 /** Logical name resolved beneath `LIBS:` by OpenLibrary(). */
 #define ASTRA_FILESYSTEM_LIBRARY_NAME "filesystem.library"
 /** Minimum compatible Filesystem Kit ABI major requested by applications. */
-#define ASTRA_FILESYSTEM_LIBRARY_VERSION 1u
+#define ASTRA_FILESYSTEM_LIBRARY_VERSION 2u
 
 #endif

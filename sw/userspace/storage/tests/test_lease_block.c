@@ -20,6 +20,9 @@
 #define MOCK_IRQ 0x200u
 #define MOCK_BUFFER 0x300u
 #define MOCK_REQUEST 0x400u
+#define MOCK_SEMAPHORE_BASE 0x600u
+#define MOCK_LANE_MAX 2u
+#define MOCK_SEMAPHORE_COUNT (3u + ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE)
 
 /*
  * The endpoint states kernel_irq_arm() and kernel_irq_ack() move through, not a
@@ -39,8 +42,8 @@ static int mock_answers_before_collect;
 static int mock_answers_during_collect;
 static int mock_completion_queued;   /* the transport's completion-valid bit */
 static int mock_record_pending;
-static int mock_request_active;
-static int mock_request_complete;
+static int mock_request_active[MOCK_LANE_MAX];
+static int mock_request_complete[MOCK_LANE_MAX];
 static uint32_t mock_completion_status;
 static uint32_t mock_completion_sectors;
 static uint32_t mock_reset_calls;
@@ -54,6 +57,15 @@ static int mock_device_answers;      /* 0 models a device that never replies */
 static uint32_t mock_sequence;
 static uint32_t mock_submitted_operation;
 static int mock_submitted_while_armed;
+static uint32_t mock_semaphore_creates;
+static uint32_t mock_semaphore_value[MOCK_SEMAPHORE_COUNT];
+static uint32_t mock_semaphore_maximum[MOCK_SEMAPHORE_COUNT];
+static uint32_t mock_queue_depth;
+static uint32_t mock_dma_creates;
+static uint32_t mock_maximum_active;
+static AstraLeaseBlock *mock_reentrant_lease;
+static AstraBlockStatus mock_reentrant_status;
+static int mock_reentrant_started;
 
 static void
 mock_reset(void)
@@ -65,8 +77,8 @@ mock_reset(void)
     mock_answers_during_collect = 0;
     mock_completion_queued = 0;
     mock_record_pending = 0;
-    mock_request_active = 0;
-    mock_request_complete = 0;
+    memset(mock_request_active, 0, sizeof(mock_request_active));
+    memset(mock_request_complete, 0, sizeof(mock_request_complete));
     mock_completion_status = ASTRA_BLOCK_COMPLETION_OK;
     mock_completion_sectors = 0u;
     mock_reset_calls = 0u;
@@ -80,6 +92,15 @@ mock_reset(void)
     mock_sequence = 1u;
     mock_submitted_operation = 0u;
     mock_submitted_while_armed = 0;
+    mock_semaphore_creates = 0u;
+    mock_queue_depth = 1u;
+    mock_dma_creates = 0u;
+    mock_maximum_active = 0u;
+    mock_reentrant_lease = NULL;
+    mock_reentrant_status = ASTRA_BLOCK_CORRUPT;
+    mock_reentrant_started = 0;
+    memset(mock_semaphore_value, 0, sizeof(mock_semaphore_value));
+    memset(mock_semaphore_maximum, 0, sizeof(mock_semaphore_maximum));
 }
 
 static void
@@ -89,7 +110,7 @@ fill_lease_info(AstraBlockLeaseInfo *info)
     info->size = ASTRA_BLOCK_LEASE_INFO_SIZE;
     info->sector_bytes = ASTRA_BLOCK_SECTOR_BYTES;
     info->max_transfer_sectors = 8u;
-    info->queue_depth = 1u;
+    info->queue_depth = mock_queue_depth;
     info->capabilities = ASTRA_BLOCK_CAP_READ | ASTRA_BLOCK_CAP_WRITE |
                          ASTRA_BLOCK_CAP_FLUSH;
     info->state_flags = ASTRA_BLOCK_STATE_LINK_UP |
@@ -116,14 +137,17 @@ astra_block_lease_query(uint32_t device, AstraBlockLeaseInfo *info)
 uint32_t
 astra_dma_create(uint32_t byte_size, AstraDmaBufferInfo *info)
 {
-    static uint8_t transfer_memory[8u * ASTRA_BLOCK_SECTOR_BYTES];
+    static uint8_t transfer_memory[MOCK_LANE_MAX]
+                                  [8u * ASTRA_BLOCK_SECTOR_BYTES];
+    uint32_t slot = mock_dma_creates++;
 
-    assert(byte_size <= sizeof(transfer_memory));
+    assert(slot < MOCK_LANE_MAX);
+    assert(byte_size <= sizeof(transfer_memory[slot]));
     memset(info, 0, sizeof(*info));
     info->size = ASTRA_DMA_BUFFER_INFO_SIZE;
-    info->handle = MOCK_BUFFER;
-    info->virtual_base = 0x50000000u;
-    info->byte_size = (uint32_t)sizeof(transfer_memory);
+    info->handle = MOCK_BUFFER + slot;
+    info->virtual_base = 0x50000000u + slot * 0x10000u;
+    info->byte_size = (uint32_t)sizeof(transfer_memory[slot]);
     info->page_count = 2u;
     return ASTRA_SYSCALL_OK;
 }
@@ -132,14 +156,29 @@ uint32_t
 astra_block_lease_submit(uint32_t device, const AstraBlockRequest *request,
                          uint32_t *block_request)
 {
+    uint32_t active = 0u;
+    uint32_t slot;
+
     assert(device == MOCK_DEVICE);
+    for (slot = 0u; slot < mock_queue_depth; ++slot) {
+        if (!mock_request_active[slot]) {
+            break;
+        }
+    }
+    assert(slot < mock_queue_depth);
     ++mock_submit_calls;
     mock_submitted_operation = request->operation;
     /* The endpoint must already be armed: the event cannot be missed. */
     mock_submitted_while_armed = mock_irq_state != MOCK_IRQ_MASKED;
-    mock_request_active = 1;
-    mock_request_complete = 0;
-    *block_request = MOCK_REQUEST;
+    mock_request_active[slot] = 1;
+    mock_request_complete[slot] = 0;
+    *block_request = MOCK_REQUEST + slot;
+    for (uint32_t index = 0u; index < mock_queue_depth; ++index) {
+        active += mock_request_active[index] != 0;
+    }
+    if (active > mock_maximum_active) {
+        mock_maximum_active = active;
+    }
     if (mock_answers_before_collect) {
         /*
          * What the device model actually does: the completion and its record
@@ -147,7 +186,7 @@ astra_block_lease_submit(uint32_t device, const AstraBlockRequest *request,
          * succeeds and the request never waits. That is the path every boot
          * takes, and the one the wait-driven tests below never reach.
          */
-        mock_request_complete = 1;
+        mock_request_complete[slot] = 1;
         mock_completion_queued = 1;
         mock_record_pending = 1;
         mock_irq_state = MOCK_IRQ_PENDING;
@@ -159,18 +198,22 @@ uint32_t
 astra_block_lease_collect(uint32_t device, uint32_t block_request,
                           AstraBlockCompletion *completion)
 {
+    uint32_t slot;
+
     assert(device == MOCK_DEVICE);
-    assert(block_request == MOCK_REQUEST);
+    assert(block_request >= MOCK_REQUEST);
+    slot = block_request - MOCK_REQUEST;
+    assert(slot < mock_queue_depth);
     /*
      * Collection drains the transport before it looks anything up, which is
      * what clears the completion the interrupt is still pointing at. It
      * happens on every call, including the ones that find nothing to return.
      */
     mock_completion_queued = 0;
-    if (!mock_request_active) {
+    if (!mock_request_active[slot]) {
         return ASTRA_SYSCALL_INVALID_HANDLE;
     }
-    if (!mock_request_complete) {
+    if (!mock_request_complete[slot]) {
         if (mock_answers_during_collect) {
             /*
              * The race a real device wins about one request in fifteen: this
@@ -179,7 +222,7 @@ astra_block_lease_collect(uint32_t device, uint32_t block_request,
              * acknowledges here is acknowledging a completion still sitting in
              * the transport.
              */
-            mock_request_complete = 1;
+            mock_request_complete[slot] = 1;
             mock_completion_queued = 1;
             mock_record_pending = 1;
             mock_irq_state = MOCK_IRQ_PENDING;
@@ -188,11 +231,33 @@ astra_block_lease_collect(uint32_t device, uint32_t block_request,
     }
     memset(completion, 0, sizeof(*completion));
     completion->size = ASTRA_BLOCK_COMPLETION_SIZE;
-    completion->request = MOCK_REQUEST;
+    completion->request = block_request;
     completion->status = mock_completion_status;
     completion->sectors = mock_completion_sectors;
-    mock_request_active = 0;
+    mock_request_active[slot] = 0;
     return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_block_lease_collect_ex(uint32_t device, uint32_t block_request,
+                             AstraBlockCompletion *completion,
+                             uint32_t *serviced_completions)
+{
+    uint32_t serviced = 0u;
+
+    if (mock_completion_queued != 0) {
+        for (uint32_t index = 0u; index < mock_queue_depth; ++index) {
+            serviced += mock_request_active[index] != 0 &&
+                        mock_request_complete[index] != 0;
+        }
+    }
+    uint32_t status = astra_block_lease_collect(device, block_request,
+                                                completion);
+
+    if (serviced_completions != NULL) {
+        *serviced_completions = serviced;
+    }
+    return status;
 }
 
 /*
@@ -260,6 +325,17 @@ astra_irq_ack(uint32_t handle, uint32_t sequence)
 uint32_t
 astra_wait_one(uint32_t handle, uint64_t deadline_ns, uint32_t *detail)
 {
+    if (handle >= MOCK_SEMAPHORE_BASE &&
+        handle < MOCK_SEMAPHORE_BASE + MOCK_SEMAPHORE_COUNT) {
+        uint32_t slot = handle - MOCK_SEMAPHORE_BASE;
+
+        (void)detail;
+        if (mock_semaphore_value[slot] == 0u) {
+            return ASTRA_SYSCALL_TIMED_OUT;
+        }
+        --mock_semaphore_value[slot];
+        return ASTRA_SYSCALL_OK;
+    }
     assert(handle == MOCK_IRQ);
     assert(deadline_ns > mock_now_ns);
     (void)detail;
@@ -271,11 +347,92 @@ astra_wait_one(uint32_t handle, uint64_t deadline_ns, uint32_t *detail)
         mock_now_ns += 1000000000u;
         return ASTRA_SYSCALL_TIMED_OUT;
     }
-    /* The device answers: a completion and its interrupt arrive. */
-    mock_request_complete = 1;
+    /* The device answers every request currently resident in its queue. */
+    for (uint32_t index = 0u; index < mock_queue_depth; ++index) {
+        if (mock_request_active[index]) {
+            mock_request_complete[index] = 1;
+        }
+    }
     mock_completion_queued = 1;
     mock_record_pending = 1;
     mock_irq_state = MOCK_IRQ_PENDING;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_wait_multiple(const uint32_t *handles, uint32_t count,
+                    uint64_t deadline_ns, uint32_t *index, uint32_t *detail)
+{
+    uint32_t event_slot;
+    uint32_t status;
+
+    assert(handles != NULL && count == 2u);
+    assert(handles[1] == MOCK_IRQ);
+    event_slot = handles[0] - MOCK_SEMAPHORE_BASE;
+    assert(event_slot < MOCK_SEMAPHORE_COUNT);
+    if (mock_semaphore_value[event_slot] != 0u) {
+        --mock_semaphore_value[event_slot];
+        if (index != NULL) {
+            *index = 0u;
+        }
+        if (detail != NULL) {
+            *detail = 0u;
+        }
+        return ASTRA_SYSCALL_OK;
+    }
+    if (mock_reentrant_lease != NULL && !mock_reentrant_started) {
+        mock_reentrant_started = 1;
+        mock_reentrant_status =
+            astra_lease_block_backend()->flush(mock_reentrant_lease, 0u);
+        if (mock_semaphore_value[event_slot] != 0u) {
+            --mock_semaphore_value[event_slot];
+            if (index != NULL) {
+                *index = 0u;
+            }
+            return ASTRA_SYSCALL_OK;
+        }
+    }
+    if (mock_record_pending) {
+        if (index != NULL) {
+            *index = 1u;
+        }
+        return ASTRA_SYSCALL_OK;
+    }
+    status = astra_wait_one(MOCK_IRQ, deadline_ns, detail);
+    if (status == ASTRA_SYSCALL_OK && index != NULL) {
+        *index = 1u;
+    }
+    return status;
+}
+
+uint32_t
+astra_rt_semaphore_create(uint32_t initial, uint32_t maximum,
+                          uint32_t rights, uint32_t *handle)
+{
+    uint32_t slot = mock_semaphore_creates++;
+
+    assert(slot < MOCK_SEMAPHORE_COUNT);
+    assert(initial <= maximum);
+    assert(rights == (ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL));
+    assert(handle != NULL);
+    mock_semaphore_value[slot] = initial;
+    mock_semaphore_maximum[slot] = maximum;
+    *handle = MOCK_SEMAPHORE_BASE + slot;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_rt_signal(uint32_t handle, uint32_t count, uint32_t *previous_count)
+{
+    uint32_t slot = handle - MOCK_SEMAPHORE_BASE;
+
+    assert(slot < MOCK_SEMAPHORE_COUNT);
+    assert(count == 1u);
+    if (previous_count != NULL) {
+        *previous_count = mock_semaphore_value[slot];
+    }
+    assert(mock_semaphore_value[slot] < mock_semaphore_maximum[slot]);
+    ++mock_semaphore_value[slot];
     return ASTRA_SYSCALL_OK;
 }
 
@@ -285,9 +442,12 @@ astra_device_reset(uint32_t handle)
     assert(handle == MOCK_DEVICE);
     ++mock_reset_calls;
     mock_completion_status = ASTRA_BLOCK_COMPLETION_RESET;
-    mock_request_complete = 1;
+    for (uint32_t index = 0u; index < mock_queue_depth; ++index) {
+        if (mock_request_active[index]) {
+            mock_request_complete[index] = 1;
+        }
+    }
     mock_completion_queued = 1;
-    mock_request_active = 1;
     return ASTRA_SYSCALL_OK;
 }
 
@@ -300,7 +460,9 @@ astra_clock_monotonic(void)
 uint32_t
 astra_close(uint32_t handle)
 {
-    assert(handle == MOCK_BUFFER);
+    assert((handle >= MOCK_BUFFER && handle < MOCK_BUFFER + MOCK_LANE_MAX) ||
+           (handle >= MOCK_SEMAPHORE_BASE &&
+            handle < MOCK_SEMAPHORE_BASE + MOCK_SEMAPHORE_COUNT));
     return ASTRA_SYSCALL_OK;
 }
 
@@ -312,20 +474,48 @@ attach(AstraLeaseBlock *lease)
 }
 
 static void
-test_attach_claims_one_transfer(void)
+test_attach_claims_advertised_lanes(void)
 {
     AstraLeaseBlock lease;
 
     assert(attach(&lease) == ASTRA_BLOCK_OK);
     assert(lease.device == MOCK_DEVICE);
     assert(lease.irq == MOCK_IRQ);
-    assert(lease.buffer == MOCK_BUFFER);
+    assert(lease.queue_depth == 1u);
+    assert(lease.lanes[0].buffer == MOCK_BUFFER);
     assert(lease.sector_bytes == ASTRA_BLOCK_SECTOR_BYTES);
     assert(lease.max_transfer_sectors == 8u);
     /* Sized for one maximum transfer, claimed once, not per request. */
-    assert(lease.buffer_bytes >= 8u * ASTRA_BLOCK_SECTOR_BYTES);
+    assert(lease.lanes[0].buffer_bytes >=
+           8u * ASTRA_BLOCK_SECTOR_BYTES);
     astra_lease_block_detach(&lease);
-    assert(lease.buffer == 0u);
+    assert(lease.lanes[0].buffer == 0u);
+}
+
+static void
+test_two_callers_keep_two_requests_in_flight(void)
+{
+    AstraLeaseBlock lease;
+
+    mock_reset();
+    mock_queue_depth = 2u;
+    assert(astra_lease_block_attach(&lease, MOCK_DEVICE, MOCK_IRQ) ==
+           ASTRA_BLOCK_OK);
+    assert(lease.queue_depth == 2u);
+    assert(lease.lanes[0].buffer == MOCK_BUFFER);
+    assert(lease.lanes[1].buffer == MOCK_BUFFER + 1u);
+
+    /* Re-enter while the first synchronous caller sleeps for its completion. */
+    mock_reentrant_lease = &lease;
+    assert(astra_lease_block_backend()->flush(&lease, 0u) == ASTRA_BLOCK_OK);
+    assert(mock_reentrant_status == ASTRA_BLOCK_OK);
+    assert(mock_submit_calls == 2u);
+    assert(mock_maximum_active == 2u);
+    assert(mock_wait_calls == 1u);
+    assert(mock_ack_calls == 1u);
+    assert(mock_ack_before_collect == 0u);
+    assert(mock_arm_refusals == 0u);
+    astra_lease_block_detach(&lease);
 }
 
 static void
@@ -593,7 +783,8 @@ main(void)
 {
     test_status_translation();
     test_geometry_translation();
-    test_attach_claims_one_transfer();
+    test_attach_claims_advertised_lanes();
+    test_two_callers_keep_two_requests_in_flight();
     test_attach_rejections();
     test_request_order();
     test_second_transfer_on_one_attachment();

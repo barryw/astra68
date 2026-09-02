@@ -2,11 +2,16 @@
 set -eu
 
 RUNS="${1:-10}"
-ASTRA_ROOT="${ASTRA_ROOT:-/data/astra}"
+ASTRA_STORE="${ASTRA_STORE:-/data/astra}"
+ASTRA_ROOT="${ASTRA_ROOT:-$ASTRA_STORE/current}"
+ASTRA_ROOT=$(readlink -f "$ASTRA_ROOT")
+RELEASE_TOOL="${ASTRA_RELEASE_TOOL:-$ASTRA_ROOT/bin/astra-release.py}"
+PYTHONDONTWRITEBYTECODE=1 python3 "$RELEASE_TOOL" verify --installed \
+    "$ASTRA_ROOT" >/dev/null
 QEMU="${QEMU:-$ASTRA_ROOT/qemu/bin/qemu-system-m68k-astra}"
 ROM="${ROM:-$ASTRA_ROOT/rom/astra_boot.bin}"
 LIBDIR="${LIBDIR:-$ASTRA_ROOT/qemu/lib}"
-LOGDIR="${LOGDIR:-$ASTRA_ROOT/log}"
+LOGDIR="${LOGDIR:-$ASTRA_STORE/log}"
 TIMINGS="$LOGDIR/qemu-arty-timings.txt"
 MARKERS="$LOGDIR/qemu-arty-markers.txt"
 RUN_ERR="$LOGDIR/qemu-arty-run.err"

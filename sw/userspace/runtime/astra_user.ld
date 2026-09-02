@@ -33,6 +33,7 @@ PHDRS
     text PT_LOAD FILEHDR PHDRS FLAGS(5); /* ELF headers + R + X text */
     rodata PT_LOAD FLAGS(4);    /* R */
     data PT_LOAD FLAGS(6);      /* R + W */
+    tls PT_TLS FLAGS(4);        /* immutable template copied per thread */
     stack PT_GNU_STACK FLAGS(6);
 }
 
@@ -47,6 +48,8 @@ SECTIONS
     .text : {
         *(.text.startup)
         *(.text .text.*)
+        KEEP(*(.init))
+        KEEP(*(.fini))
     } :text
 
     . = ALIGN(ASTRA_PAGE_SIZE);
@@ -71,7 +74,56 @@ SECTIONS
 
     .rodata : {
         *(.rodata .rodata.*)
+        *(.data.rel.ro .data.rel.ro.*)
+        *(.gcc_except_table .gcc_except_table.*)
     } :rodata
+
+    .eh_frame_hdr : {
+        *(.eh_frame_hdr)
+    } :rodata
+
+    .eh_frame : {
+        KEEP(*(.eh_frame))
+    } :rodata
+
+    .note.gnu.build-id : {
+        KEEP(*(.note.gnu.build-id))
+    } :rodata
+
+    .preinit_array : {
+        PROVIDE_HIDDEN(__preinit_array_start = .);
+        KEEP(*(.preinit_array))
+        PROVIDE_HIDDEN(__preinit_array_end = .);
+    } :rodata
+
+    .init_array : {
+        PROVIDE_HIDDEN(__init_array_start = .);
+        KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*)))
+        KEEP(*(.init_array))
+        PROVIDE_HIDDEN(__init_array_end = .);
+    } :rodata
+
+    .fini_array : {
+        PROVIDE_HIDDEN(__fini_array_start = .);
+        KEEP(*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
+        KEEP(*(.fini_array))
+        PROVIDE_HIDDEN(__fini_array_end = .);
+    } :rodata
+
+    /*
+     * The mapped bytes are the pristine template. GNU m68k local-exec TLS
+     * addresses each variable relative to a per-thread copy; keeping this
+     * load read-only ensures a later thread cannot inherit mutations made by
+     * an earlier one.
+     */
+    .tdata : {
+        *(.tdata .tdata.* .gnu.linkonce.td.*)
+    } :rodata :tls
+
+    .tbss (NOLOAD) : {
+        *(.tbss .tbss.* .gnu.linkonce.tb.*)
+        *(.tcommon)
+    } :rodata :tls
 
     . = ALIGN(ASTRA_PAGE_SIZE);
 
@@ -127,8 +179,7 @@ SECTIONS
      */
     /DISCARD/ : {
         *(.comment)
-        *(.note .note.*)
-        *(.eh_frame .eh_frame_hdr)
+        *(.note.GNU-stack)
         *(.gnu.attributes)
     }
 }

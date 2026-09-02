@@ -1,14 +1,15 @@
 /* Astra 68 — boot ROM linker script.
  *
- * Physical decode:
- *   SDRAM 0x00000000..0x01FFFFFF (32 MB)     — general RAM
- *   ROM   0xFFE00000..0xFFE7FFFF (512 KB)    — hosted boot ROM
- *   MMIO  0xFFF00000..0xFFFFFFFF             — chipset (Vesta/Astraea/Vega/Lyra)
+ * Boot address windows:
+ *   scratch/initial stack below 0x02000000
+ *   guest RAM at 0x02000000..0x09FFFFFF (128 MiB)
+ *   ROM at 0xFFE00000..0xFFE7FFFF (512 KiB)
+ *   MMIO at 0xFFF00000..0xFFFFFFFF
  *
  * At reset the ROM overlay maps this ROM to $0 so the CPU fetches the initial
  * SP ($0) and reset PC ($4) from the vector table below; the reset PC points at
  * the ROM's real address, so execution continues from ROM and the overlay can
- * be disabled. (Overlay hardware lands with the RTL — SPEC open item #1.)
+ * be disabled.
  */
 OUTPUT_FORMAT("elf32-m68k")
 OUTPUT_ARCH(m68k)
@@ -16,10 +17,10 @@ ENTRY(_start)
 
 MEMORY {
   ROM (rx)  : ORIGIN = 0xFFE00000, LENGTH = 512K
-  RAM (rwx) : ORIGIN = 0x00000000, LENGTH = 32M
+  BOOT (rwx) : ORIGIN = 0x00000000, LENGTH = 0x02000000
 }
 
-_stack_top = ORIGIN(RAM) + LENGTH(RAM);   /* 0x02000000, top of SDRAM */
+_stack_top = ORIGIN(BOOT) + LENGTH(BOOT);
 
 SECTIONS {
   .vectors : { KEEP(*(.vectors)) } > ROM
@@ -38,7 +39,7 @@ SECTIONS {
     *(.data .data.*)
     . = ALIGN(4);
     _data_end = .;
-  } > RAM
+  } > BOOT
   _data_load = LOADADDR(.data);
 
   .bss (NOLOAD) : {
@@ -48,7 +49,7 @@ SECTIONS {
     *(COMMON)
     . = ALIGN(4);
     _bss_end = .;
-  } > RAM
+  } > BOOT
 
   /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) }
 }

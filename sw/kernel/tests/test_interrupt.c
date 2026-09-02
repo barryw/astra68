@@ -14,6 +14,7 @@
 static uint32_t trace_event_count[KERNEL_TRACE_EVENT_MONITOR_DROP + 1u];
 static uint32_t monitor_irq_services;
 static uint32_t monitor_spi_irq_services;
+static uint32_t host_irq_services;
 static bool monitor_spi_binding_available = true;
 static bool monitor_ready = true;
 static bool staged_trace_pending;
@@ -26,6 +27,20 @@ static KernelWorkerService irq_worker_service;
 static void *irq_worker_context;
 static KernelHandle next_thread_handle = 0x00010101u;
 static uint8_t interrupts_masked;
+
+bool kernel_process_host_channel_irq_service(uint8_t source,
+                                             uint64_t timestamp,
+                                             void *context,
+                                             uint32_t *woken_threads)
+{
+    assert(source == IRQ_SRC_HOST);
+    assert(woken_threads != NULL);
+    (void)timestamp;
+    (void)context;
+    *woken_threads = 1u;
+    ++host_irq_services;
+    return true;
+}
 
 uint16_t kernel_interrupt_save_disable(void)
 {
@@ -42,8 +57,10 @@ void kernel_interrupt_restore(uint16_t status_register)
 }
 
 static bool monitor_irq_service(uint8_t source, uint64_t timestamp,
-                                void *context)
+                                void *context, uint32_t *woken_threads)
 {
+    assert(woken_threads != NULL);
+    *woken_threads = 0u;
     (void)timestamp;
     (void)context;
     assert(source == IRQ_SRC_UART_RX);
@@ -70,8 +87,11 @@ bool kernel_monitor_uart_binding(KernelIrqInternalBinding *binding)
 }
 
 static bool monitor_spi_irq_service(uint8_t source, uint64_t timestamp,
-                                    void *context)
+                                    void *context,
+                                    uint32_t *woken_threads)
 {
+    assert(woken_threads != NULL);
+    *woken_threads = 0u;
     (void)timestamp;
     (void)context;
     assert(source == IRQ_SRC_ASTRAHOST_MONITOR);
@@ -199,6 +219,39 @@ static void advertise_monitor_spi(VestaRegs *registers)
     registers->MONITOR_VERSION = MONITOR_VERSION_1_0;
     registers->MONITOR_CAPS =
         MONITOR_CAP_RX | MONITOR_CAP_TX | MONITOR_CAP_IRQ;
+}
+
+static void advertise_host(VestaRegs *registers)
+{
+    registers->HOST_ACCEL_ID = HOST_ACCEL_ID_MAGIC;
+    registers->HOST_ACCEL_VERSION = HOST_ACCEL_VERSION_1_0;
+}
+
+static void select_interrupt(VestaRegs *registers, uint8_t source);
+
+static void test_host_completion_dispatches_without_worker_handoff(void)
+{
+    VestaRegs *registers = kernel_platform_test_registers();
+    uint32_t woken;
+
+    assert(registers != NULL);
+    clear_registers(registers);
+    advertise_host(registers);
+    clear_trace();
+    host_irq_services = 0u;
+    monitor_ready = false;
+    kernel_allocation_test_clear_failure();
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    assert(kernel_interrupt_init(KERNEL_PLATFORM_CPU_HZ));
+
+    select_interrupt(registers, IRQ_SRC_HOST);
+    assert(kernel_interrupt_dispatch(&woken) == KERNEL_INTERRUPT_DEVICE);
+    assert(woken == 1u);
+    assert(host_irq_services == 1u);
+    assert(irq_worker_signals == 0u);
+    assert((registers->IRQ_ENABLE & IRQ_BIT(IRQ_SRC_HOST)) != 0u);
+    monitor_ready = true;
 }
 
 static void clear_vega(VegaRegs *registers)
@@ -536,6 +589,14 @@ static void test_device_endpoints_use_common_dispatch(void)
     service_deferred_irq();
     assert(kernel_irq_read(endpoint, &record, &event_flags) == KERNEL_IRQ_OK);
     assert(record.status == registers->BLOCK_QUEUE);
+    /* A multiqueue device may complete more work while this record retires. */
+    registers->BLOCK_QUEUE = BLOCK_QUEUE_COMPLETION_VALID | (1u << 12);
+    assert(kernel_irq_ack(endpoint, record.sequence) == KERNEL_IRQ_OK);
+    assert((registers->IRQ_ENABLE & IRQ_BIT(IRQ_SRC_STORAGE)) != 0u);
+    select_interrupt(registers, IRQ_SRC_STORAGE);
+    assert(kernel_interrupt_dispatch(&woken) == KERNEL_INTERRUPT_DEVICE);
+    service_deferred_irq();
+    assert(kernel_irq_read(endpoint, &record, &event_flags) == KERNEL_IRQ_OK);
     registers->BLOCK_QUEUE = 0u;
     assert(kernel_irq_ack(endpoint, record.sequence) == KERNEL_IRQ_OK);
     release_device(endpoint);
@@ -712,6 +773,7 @@ int main(void)
 {
     test_init_profiles_optional_spi();
     test_init_without_monitor();
+    test_host_completion_dispatches_without_worker_handoff();
     test_timer_and_quarantine_use_common_dispatch();
     test_device_endpoints_use_common_dispatch();
     test_device_service_death_quiesces_source();

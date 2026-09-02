@@ -93,7 +93,8 @@ mode_string(uint16_t mode, uint16_t kind, char *out)
      * so it prints a row of question marks and the reader knows to stop
      * believing this column.
      */
-    out[0] = kind == ASTRA_VFS_KIND_DIRECTORY ? 'd' : '-';
+    out[0] = kind == ASTRA_VFS_KIND_DIRECTORY ? 'd' :
+             kind == ASTRA_VFS_KIND_SYMLINK ? 'l' : '-';
     for (uint32_t index = 0u; index < 9u; ++index)
         out[index + 1u] = mode == 0u ? '?' :
             ((mode & (1u << (8u - index))) != 0u ? bits[index] : '-');

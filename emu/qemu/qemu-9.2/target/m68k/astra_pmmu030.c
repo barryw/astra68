@@ -1,9 +1,9 @@
 /*
  * QEMU adapter for Astra68's independent MC68030 PMMU model.
  *
- * The architectural table walker and ATC live in pmmu030.c and are shared
- * with Musashi.  This file only connects that model to QEMU's physical bus,
- * softmmu TLB, and translated PMMU instructions.
+ * The architectural table walker and ATC live in pmmu030.c. This file connects
+ * that model to QEMU's physical bus, softmmu TLB, and translated PMMU
+ * instructions.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -110,6 +110,7 @@ bool m68k_pmmu030_tlb_fill(CPUState *cs, vaddr address, int size,
     uint8_t function_code;
     int prot;
 
+    ++env->pmmu030.qemu_tlb_fills;
     if (!pmmu030_translation_active_inline(&env->pmmu030)) {
         tlb_set_page(cs, address & TARGET_PAGE_MASK,
                      address & TARGET_PAGE_MASK,
@@ -122,6 +123,11 @@ bool m68k_pmmu030_tlb_fill(CPUState *cs, vaddr address, int size,
     access = qemu_pmmu_access(access_type);
     result = pmmu030_translate(&env->pmmu030, &bus, address,
                                function_code, access);
+    if (result.atc_hit) {
+        ++env->pmmu030.qemu_atc_hits;
+    } else if (!result.transparent) {
+        ++env->pmmu030.qemu_table_walks;
+    }
     if (likely(result.fault == PMMU030_FAULT_NONE)) {
         if (result.transparent ||
             (env->pmmu030.tc & PMMU030_TC_ENABLE) == 0u) {
@@ -288,6 +294,13 @@ static void qemu_pmmu_pmove_root_or_tc(CPUM68KState *env, uint32_t address,
         uint32_t high = cpu_ldl_data_ra(env, address, retaddr);
         uint32_t low = cpu_ldl_data_ra(env, address + 4u, retaddr);
 
+        if (preg == 3u) {
+            ++env->pmmu030.qemu_crp_writes;
+            if (env->pmmu030.crp[0] != (high & PMMU030_RP_MASK_HI) ||
+                env->pmmu030.crp[1] != (low & PMMU030_RP_MASK_LO)) {
+                ++env->pmmu030.qemu_crp_changes;
+            }
+        }
         valid = preg == 2u ?
                 pmmu030_write_srp(&env->pmmu030, high, low, flush_disabled) :
                 pmmu030_write_crp(&env->pmmu030, high, low, flush_disabled);

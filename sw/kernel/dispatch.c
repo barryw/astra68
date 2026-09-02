@@ -19,6 +19,7 @@
 static uint32_t user_fault_irqoff_max_cycles;
 static uint32_t last_supervisor_irq_pc;
 static uint16_t last_supervisor_irq_sr;
+static uint8_t idle_active;
 #if ASTRA_KERNEL_SCHED_TRACE
 #define KERNEL_DISPATCH_WAIT_SET_TRACE_MAX 8u
 #define KERNEL_DISPATCH_THREAD_CREATE_TRACE_MAX 8u
@@ -53,6 +54,11 @@ static void schedule_process_worker(void)
     if (kernel_worker_schedule(KERNEL_WORKER_PROCESS_REAP) !=
         KERNEL_WORKER_OK)
         kernel_panic("process worker scheduling failed");
+}
+
+void kernel_dispatch_idle_enter(void)
+{
+    idle_active = 1u;
 }
 
 uint32_t kernel_dispatch_user_fault_irqoff_max_cycles(void)
@@ -359,9 +365,10 @@ KernelDispatchTarget syscall_entry_dispatch_fast(
     if (kernel_worker_try_select())
         return KERNEL_DISPATCH_WORKER;
     if (next == NULL) {
-        if (kernel_worker_select_idle())
-            return KERNEL_DISPATCH_WORKER;
-        kernel_panic("blocked syscall could not select idle worker");
+        next = kernel_process_resume_idle();
+        if (next != NULL)
+            return kernel_dispatch_user_target(next);
+        return KERNEL_DISPATCH_RESUME;
     }
     scheduler_trace(0x4b534f55u); /* KSOU */
     return kernel_dispatch_user_target(next);
@@ -467,10 +474,24 @@ KernelDispatchTarget interrupt_entry_dispatch_fast(
                                     KERNEL_EXCEPTION_FRAME_MAX_SIZE,
                                     &frame) != KERNEL_EXCEPTION_OK)
             kernel_exception_panic(raw_frame);
-        if (frame.from_user == 0u || !kernel_process_active())
+        if (frame.from_user == 0u) {
+            if (idle_active != 0u) {
+                if (kernel_worker_try_select()) {
+                    idle_active = 0u;
+                    return KERNEL_DISPATCH_WORKER;
+                }
+                next = kernel_process_resume_idle();
+                if (next != NULL) {
+                    idle_active = 0u;
+                    return kernel_dispatch_user_target(next);
+                }
+            }
+            return KERNEL_DISPATCH_RESUME;
+        }
+        if (!kernel_process_active())
             return KERNEL_DISPATCH_RESUME;
         status = kernel_process_on_interrupt_wakeup(
-            registers, user_stack, raw_frame, &next);
+            registers, user_stack, raw_frame, woken_threads != 0u, &next);
         if (status != KERNEL_PROCESS_OK || next == NULL)
             kernel_panic("device interrupt scheduling failed");
         if (kernel_worker_try_select())
@@ -489,10 +510,23 @@ KernelDispatchTarget interrupt_entry_dispatch_fast(
      * resume the interrupted handler; only user frames are schedulable.
      */
     if (frame.from_user == 0u) {
+        bool was_idle = idle_active != 0u;
+
         last_supervisor_irq_pc = frame.program_counter;
         last_supervisor_irq_sr = frame.status_register;
         if (kernel_process_on_supervisor_timer() != KERNEL_PROCESS_OK)
             kernel_panic("supervisor timer scheduling failed");
+        if (!was_idle)
+            return KERNEL_DISPATCH_RESUME;
+        if (kernel_worker_try_select()) {
+            idle_active = 0u;
+            return KERNEL_DISPATCH_WORKER;
+        }
+        next = kernel_process_current_context();
+        if (next != NULL) {
+            idle_active = 0u;
+            return kernel_dispatch_user_target(next);
+        }
         return KERNEL_DISPATCH_RESUME;
     }
     if (!kernel_process_active())

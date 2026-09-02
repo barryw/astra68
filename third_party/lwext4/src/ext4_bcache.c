@@ -66,6 +66,29 @@ RB_GENERATE_INTERNAL(ext4_buf_lba, ext4_buf, lba_node,
 		     ext4_bcache_lba_compare, static inline)
 RB_GENERATE_INTERNAL(ext4_buf_lru, ext4_buf, lru_node,
 		     ext4_bcache_lru_compare, static inline)
+RB_GENERATE_INTERNAL(ext4_buf_dirty, ext4_buf, dirty_node,
+		     ext4_bcache_lba_compare, static inline)
+
+static struct ext4_buf *ext4_buf_lookup(struct ext4_bcache *bc,
+					uint64_t lba);
+
+void ext4_bcache_insert_dirty_node(struct ext4_bcache *bc,
+				    struct ext4_buf *buf)
+{
+	if (!buf->on_dirty_tree) {
+		RB_INSERT(ext4_buf_dirty, &bc->dirty_root, buf);
+		buf->on_dirty_tree = true;
+	}
+}
+
+void ext4_bcache_remove_dirty_node(struct ext4_bcache *bc,
+				    struct ext4_buf *buf)
+{
+	if (buf->on_dirty_tree) {
+		RB_REMOVE(ext4_buf_dirty, &bc->dirty_root, buf);
+		buf->on_dirty_tree = false;
+	}
+}
 
 int ext4_bcache_init_dynamic(struct ext4_bcache *bc, uint32_t cnt,
 			     uint32_t itemsize)
@@ -93,8 +116,70 @@ void ext4_bcache_cleanup(struct ext4_bcache *bc)
 
 int ext4_bcache_fini_dynamic(struct ext4_bcache *bc)
 {
+	ext4_free(bc->writeback);
 	memset(bc, 0, sizeof(struct ext4_bcache));
 	return EOK;
+}
+
+int ext4_bcache_prepare_writeback(struct ext4_bcache *bc, uint32_t capacity)
+{
+	size_t buf_bytes;
+	size_t data_bytes;
+	size_t count_bytes;
+	uint8_t *memory;
+
+	if (!bc || !capacity)
+		return EINVAL;
+	if (capacity > bc->cnt)
+		capacity = bc->cnt;
+	buf_bytes = (size_t)capacity * sizeof(*bc->write_bufs);
+	data_bytes = (size_t)capacity * sizeof(*bc->write_data);
+	count_bytes = (size_t)capacity * sizeof(*bc->write_counts);
+	if (buf_bytes > SIZE_MAX - data_bytes ||
+	    buf_bytes + data_bytes > SIZE_MAX - count_bytes)
+		return ENOMEM;
+	memory = ext4_malloc(buf_bytes + data_bytes + count_bytes);
+	if (!memory)
+		return ENOMEM;
+	bc->writeback = memory;
+	bc->write_bufs = (struct ext4_buf **)memory;
+	bc->write_data = (const void **)(memory + buf_bytes);
+	bc->write_counts = (uint32_t *)(memory + buf_bytes + data_bytes);
+	bc->write_capacity = capacity;
+	return EOK;
+}
+
+uint32_t ext4_bcache_dirty_run(struct ext4_bcache *bc,
+			       uint32_t blocks_per_buffer)
+{
+	struct ext4_buf *buf;
+	uint32_t count = 0;
+
+	if (!bc || !bc->writeback || !blocks_per_buffer)
+		return 0;
+
+	buf = RB_MIN(ext4_buf_dirty, &bc->dirty_root);
+	while (buf) {
+		if (!buf->on_dirty_tree ||
+		    !ext4_bcache_test_flag(buf, BC_DIRTY) ||
+		    !ext4_bcache_test_flag(buf, BC_UPTODATE))
+			break;
+		bc->write_bufs[count] = buf;
+		bc->write_data[count] = buf->data;
+		bc->write_counts[count] = blocks_per_buffer;
+		count++;
+		if (count == bc->write_capacity)
+			break;
+		buf = RB_NEXT(ext4_buf_dirty, &bc->dirty_root, buf);
+		if (buf && buf->lba != bc->write_bufs[count - 1]->lba + 1)
+			break;
+	}
+	return count;
+}
+
+struct ext4_buf *ext4_bcache_first_dirty(struct ext4_bcache *bc)
+{
+	return bc ? RB_MIN(ext4_buf_dirty, &bc->dirty_root) : NULL;
 }
 
 /**@brief:

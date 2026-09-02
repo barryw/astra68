@@ -1,0 +1,13 @@
+diff --git a/src/ext4.c b/src/ext4.c
+index 2c01b25..88819ed 100644
+--- a/src/ext4.c
++++ b/src/ext4.c
+@@ -1017,7 +1017,7 @@ static int ext4_generic_open2_mode(ext4_file *f, const char *path, int flags,
+ 			if (r != ENOENT)
+ 				break;
+ 
+-			if (!(f->flags & O_CREAT))
++			if (!(f->flags & O_CREAT) || !is_goal)
+ 				break;
+ 
+ 			/*O_CREAT allows create new entry*/

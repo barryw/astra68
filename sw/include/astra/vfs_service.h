@@ -21,14 +21,14 @@
  * big-endian MC68030 today and must not acquire a host dependency.
  *
  * Control records only. Inline I/O is deliberately smaller than the complete
- * message payload; bulk data uses shared areas.
- * stays small. Version 3 adds bounded shared-area reads; version 4 adds
- * batched directory replies. Version 9 adds shared-area writes after event
- * persistence measured one service round trip per 72-byte stored record.
+ * message payload; bulk data uses shared areas. Version 3 adds bounded
+ * shared-area reads; version 4 adds batched directory replies. Version 9 adds
+ * shared-area writes after event persistence measured one service round trip
+ * per 72-byte stored record.
  */
 
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
-#define ASTRA_VFS_VERSION  UINT16_C(14)
+#define ASTRA_VFS_VERSION  UINT16_C(21)
 
 /*
  * The oldest version this build can still speak. A client asks for a minimum
@@ -55,6 +55,24 @@
  * Version 14 adds creation modes, chmod and symlink reads. Creation mode is
  * carried in `offset` for OPEN and MKDIR; those operations otherwise have no
  * byte offset, so the wire record does not grow or overload the open flags.
+ * Version 15 adds atomic symlink creation as a two-record transaction: the
+ * target is staged first and the link path commits it. Both records remain
+ * ordinary bounded path payloads, so the fixed request ABI does not grow.
+ * Version 16 carries both complete rename paths in one extended request. The
+ * original 224-byte request remains the prefix and every older operation keeps
+ * its wire size, so rolling updates still negotiate versions with old peers.
+ * Version 18 lets a service attach an owner-scoped host data-plane capability
+ * to HELLO. The port remains the authenticated control plane; subsequent VFS
+ * work can use the same service core locally without crossing address spaces.
+ * Version 19 carries a symlink target and path in one extended request. This
+ * removes the last session-staged transaction, so independent requests from
+ * one process can safely remain in flight together.
+ * Version 20 binds one reply channel and transfer area per calling thread.
+ * Threads share the session namespace and its open handles, while unrelated
+ * requests have independent completion and bulk-data ownership.
+ * Version 21 returns the atomic post-write position from WRITE_AREA, allowing
+ * append writes to use the bulk path without guessing a concurrently changing
+ * end-of-file offset.
  */
 #define ASTRA_VFS_VERSION_MIN UINT16_C(2)
 
@@ -129,7 +147,12 @@
 #define ASTRA_VFS_OP_TRUNCATE    UINT32_C(20)
 #define ASTRA_VFS_OP_CHMOD       UINT32_C(21)
 #define ASTRA_VFS_OP_READLINK    UINT32_C(22)
-#define ASTRA_VFS_OP_MAX         ASTRA_VFS_OP_READLINK
+#define ASTRA_VFS_OP_SYMLINK_TARGET UINT32_C(23)
+#define ASTRA_VFS_OP_SYMLINK_TO  UINT32_C(24)
+#define ASTRA_VFS_OP_RENAME      UINT32_C(25)
+#define ASTRA_VFS_OP_SYMLINK     UINT32_C(26)
+#define ASTRA_VFS_OP_BIND_LANE   UINT32_C(27)
+#define ASTRA_VFS_OP_MAX         ASTRA_VFS_OP_BIND_LANE
 
 /*
  * One shared-area transfer, and the unit the whole read path is sized around.
@@ -156,6 +179,7 @@
 #define ASTRA_VFS_KIND_UNKNOWN   UINT16_C(0)
 #define ASTRA_VFS_KIND_FILE      UINT16_C(1)
 #define ASTRA_VFS_KIND_DIRECTORY UINT16_C(2)
+#define ASTRA_VFS_KIND_SYMLINK   UINT16_C(3)
 
 /*
  * Status values.
@@ -194,6 +218,7 @@
  */
 #define ASTRA_VFS_ERR_PEER        ((uint32_t)ASTRA_STATUS_PEER_DEAD)
 #define ASTRA_VFS_ERR_CROSS_DEVICE ((uint32_t)ASTRA_STATUS_CROSS_DEVICE)
+#define ASTRA_VFS_ERR_LOOP          ((uint32_t)ASTRA_STATUS_LOOP)
 
 /*
  * A protocol status as a word, or NULL for a number nothing has named yet.
@@ -273,6 +298,19 @@ typedef struct AstraVfsRequest {
 _Static_assert(sizeof(AstraVfsRequest) == ASTRA_VFS_REQUEST_SIZE,
                "VFS request ABI size changed");
 
+#define ASTRA_VFS_RENAME_REQUEST_SIZE \
+    (ASTRA_VFS_REQUEST_SIZE + ASTRA_VFS_PATH_MAX)
+
+/* Version 16 extension: both paths, at their full ordinary path capacity. */
+typedef struct AstraVfsRenameRequest {
+    AstraVfsRequest request;
+    uint8_t to[ASTRA_VFS_PATH_MAX];
+} AstraVfsRenameRequest;
+
+_Static_assert(sizeof(AstraVfsRenameRequest) ==
+                   ASTRA_VFS_RENAME_REQUEST_SIZE,
+               "VFS rename request ABI size changed");
+
 typedef struct AstraVfsReply {
     uint16_t size;          /* ASTRA_VFS_REPLY_SIZE */
     uint16_t version;       /* the version the service chose */
@@ -320,6 +358,16 @@ typedef struct AstraVfsRequestMessage {
     AstraVfsRequest request;
 } AstraVfsRequestMessage;
 
+typedef struct AstraVfsRenameRequestMessage {
+    AstraMessageHeader header;
+    AstraVfsRenameRequest request;
+} AstraVfsRenameRequestMessage;
+
+typedef union AstraVfsRequestMessageBuffer {
+    AstraVfsRequestMessage standard;
+    AstraVfsRenameRequestMessage rename;
+} AstraVfsRequestMessageBuffer;
+
 typedef struct AstraVfsReplyMessage {
     AstraMessageHeader header;
     AstraVfsReply reply;
@@ -331,6 +379,8 @@ typedef struct AstraVfsReplyMessage {
  */
 _Static_assert(sizeof(AstraVfsRequestMessage) <= ASTRA_MESSAGE_SIZE_MAX,
                "VFS request message exceeds the port message limit");
+_Static_assert(sizeof(AstraVfsRenameRequestMessage) <= ASTRA_MESSAGE_SIZE_MAX,
+               "VFS rename request message exceeds the port message limit");
 _Static_assert(sizeof(AstraVfsReplyMessage) <= ASTRA_MESSAGE_SIZE_MAX,
                "VFS reply message exceeds the port message limit");
 

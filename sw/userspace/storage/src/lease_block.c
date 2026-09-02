@@ -4,13 +4,6 @@
 #include <astra/runtime.h>
 #include <astra/syscall.h>
 
-/*
- * A bound on the drain loop, not the kernel's record ring depth, which is not
- * part of the syscall ABI. The loop ends when the endpoint reports it has no
- * record left; this only stops a kernel that never says so from spinning here.
- */
-#define LEASE_BLOCK_DRAIN_LIMIT 8u
-
 AstraBlockStatus
 astra_lease_block_status(uint32_t completion_status)
 {
@@ -71,10 +64,10 @@ astra_lease_block_geometry(const AstraBlockLeaseInfo *info,
  * two causes. A state change and a completion each leave a record, and a
  * record left behind refuses every later arm.
  *
- * It may only be called with nothing in flight. The transport refuses to
- * complete its interrupt while a completion is still queued, and a failed
- * acknowledgement does not merely fail: it marks the endpoint with a device
- * error and masks it, which no arm can undo.
+ * Multiqueue storage is level-triggered. A new completion may arrive while a
+ * prior record is being retired; the kernel re-enables the source and records
+ * that work again. This loop therefore consumes the records that exist rather
+ * than imposing a guessed count on a queue whose depth is negotiated.
  */
 static uint32_t
 drain(AstraLeaseBlock *lease)
@@ -82,9 +75,8 @@ drain(AstraLeaseBlock *lease)
     AstraIrqRecord record;
     uint32_t events = 0u;
     uint32_t status;
-    uint32_t taken;
 
-    for (taken = 0u; taken < LEASE_BLOCK_DRAIN_LIMIT; ++taken) {
+    for (;;) {
         (void)memset(&record, 0, sizeof(record));
         status = astra_irq_read(lease->irq, &record, &events);
         if (status == ASTRA_SYSCALL_WOULD_BLOCK) {
@@ -101,7 +93,6 @@ drain(AstraLeaseBlock *lease)
         }
         lease->armed = 1u;
     }
-    return ASTRA_SYSCALL_OK;
 }
 
 /*
@@ -141,42 +132,359 @@ arm(AstraLeaseBlock *lease)
  * being thrown away at the boundary: a person shown "I/O error" can still ask
  * what the device actually did.
  */
-static AstraBlockStatus
-refused(AstraLeaseBlock *lease, AstraLeaseBlockSite site, uint32_t status)
+static uint32_t
+semaphore_release(uint32_t handle)
 {
+    return astra_rt_signal(handle, 1u, NULL);
+}
+
+static void
+record_failure(AstraLeaseBlock *lease, AstraLeaseBlockSite site,
+               uint32_t status)
+{
+    uint32_t locked = 0u;
+
+    if (lease->state_lock != 0u &&
+        astra_wait_one(lease->state_lock, ASTRA_DEADLINE_FOREVER, NULL) ==
+            ASTRA_SYSCALL_OK) {
+        locked = 1u;
+    }
     lease->last_site = (uint32_t)site;
     lease->last_status = status;
-    return ASTRA_BLOCK_IO_ERROR;
+    if (locked != 0u) {
+        (void)semaphore_release(lease->state_lock);
+    }
 }
 
 static AstraBlockStatus
-run_request(AstraLeaseBlock *lease, uint32_t operation, uint64_t lba,
-            uint32_t sector_count, uint64_t deadline)
+refused(AstraLeaseBlock *lease, AstraLeaseBlockSite site, uint32_t status)
 {
-    AstraBlockRequest request;
-    AstraBlockCompletion completion;
-    uint32_t block_request = 0u;
+    record_failure(lease, site, status);
+    return ASTRA_BLOCK_IO_ERROR;
+}
+
+static uint32_t
+lane_lock(AstraLeaseBlock *lease)
+{
+    return astra_wait_one(lease->state_lock, ASTRA_DEADLINE_FOREVER, NULL);
+}
+
+static uint32_t
+lane_unlock(AstraLeaseBlock *lease)
+{
+    return semaphore_release(lease->state_lock);
+}
+
+static AstraBlockStatus
+claim_lane(AstraLeaseBlock *lease, uint64_t deadline,
+           AstraLeaseBlockLane **claimed)
+{
     uint32_t status;
 
-    /*
-     * Nothing is in flight at this point, so the transport has no completion
-     * queued and a record left over from the last request can be safely
-     * acknowledged. Doing it before the arm matters twice over: the kernel
-     * refuses to arm an endpoint that still holds a record.
-     */
-    status = drain(lease);
-    if (status != ASTRA_SYSCALL_OK) {
-        return refused(lease, ASTRA_LEASE_BLOCK_SITE_DRAIN_BEFORE_ARM, status);
+    *claimed = NULL;
+    if (deadline == 0u) {
+        deadline = ASTRA_DEADLINE_FOREVER;
     }
-    status = arm(lease);
-    if (status != ASTRA_SYSCALL_OK) {
-        return refused(lease, ASTRA_LEASE_BLOCK_SITE_ARM, status);
+    status = astra_wait_one(lease->available, deadline, NULL);
+    if (status == ASTRA_SYSCALL_TIMED_OUT) {
+        return ASTRA_BLOCK_TIMED_OUT;
     }
+    if (status != ASTRA_SYSCALL_OK) {
+        return refused(lease, ASTRA_LEASE_BLOCK_SITE_WAIT, status);
+    }
+    if (lane_lock(lease) != ASTRA_SYSCALL_OK) {
+        (void)semaphore_release(lease->available);
+        return refused(lease, ASTRA_LEASE_BLOCK_SITE_WAIT,
+                       ASTRA_SYSCALL_IO_ERROR);
+    }
+    for (uint32_t index = 0u; index < lease->queue_depth; ++index) {
+        AstraLeaseBlockLane *lane = &lease->lanes[index];
+
+        if (lane->in_use != 0u) {
+            continue;
+        }
+        lane->in_use = 1u;
+        lane->active = 0u;
+        lane->completed = 0u;
+        lane->request = 0u;
+        lane->collect_status = ASTRA_SYSCALL_WOULD_BLOCK;
+        (void)memset(&lane->completion, 0, sizeof(lane->completion));
+        *claimed = lane;
+        break;
+    }
+    status = lane_unlock(lease);
+    if (*claimed != NULL && status == ASTRA_SYSCALL_OK) {
+        return ASTRA_BLOCK_OK;
+    }
+    (void)semaphore_release(lease->available);
+    return refused(lease, ASTRA_LEASE_BLOCK_SITE_WAIT,
+                   status == ASTRA_SYSCALL_OK ? ASTRA_SYSCALL_IO_ERROR :
+                                                status);
+}
+
+static AstraBlockStatus
+release_lane(AstraLeaseBlock *lease, AstraLeaseBlockLane *lane)
+{
+    uint32_t status;
+
+    if (lane_lock(lease) != ASTRA_SYSCALL_OK) {
+        return refused(lease, ASTRA_LEASE_BLOCK_SITE_WAIT,
+                       ASTRA_SYSCALL_IO_ERROR);
+    }
+    lane->in_use = 0u;
+    lane->active = 0u;
+    lane->completed = 0u;
+    lane->request = 0u;
+    status = lane_unlock(lease);
+    if (status == ASTRA_SYSCALL_OK) {
+        status = semaphore_release(lease->available);
+    }
+    return status == ASTRA_SYSCALL_OK ? ASTRA_BLOCK_OK :
+        refused(lease, ASTRA_LEASE_BLOCK_SITE_WAIT, status);
+}
+
+static uint32_t
+publish_lane(AstraLeaseBlock *lease, AstraLeaseBlockLane *lane,
+             uint32_t request, uint32_t collect_status,
+             const AstraBlockCompletion *completion)
+{
+    uint32_t status;
+    uint32_t signal = 0u;
+
+    if (lane_lock(lease) != ASTRA_SYSCALL_OK) {
+        return ASTRA_SYSCALL_IO_ERROR;
+    }
+    if (lane->in_use != 0u && lane->active != 0u &&
+        lane->request == request && lane->completed == 0u) {
+        lane->collect_status = collect_status;
+        if (completion != NULL) {
+            (void)memcpy(&lane->completion, completion,
+                         sizeof(lane->completion));
+        }
+        lane->active = 0u;
+        lane->completed = 1u;
+        signal = 1u;
+    }
+    status = lane_unlock(lease);
+    if (status == ASTRA_SYSCALL_OK && signal != 0u) {
+        status = semaphore_release(lane->event);
+    }
+    return status;
+}
+
+/*
+ * The first collect drains the hardware completion ring into kernel request
+ * slots. A later collect in the same pass can drain a completion for a lane
+ * already visited, so the kernel reports that count and the owner repeats
+ * until a whole pass drains none. That is work-driven draining, not polling.
+ */
+static uint32_t
+service_completions(AstraLeaseBlock *lease)
+{
+    uint32_t drained;
+
+    do {
+        drained = 0u;
+        for (uint32_t index = 0u; index < lease->queue_depth; ++index) {
+            AstraLeaseBlockLane *lane = &lease->lanes[index];
+            AstraBlockCompletion completion;
+            uint32_t request = 0u;
+            uint32_t serviced = 0u;
+            uint32_t status;
+
+            if (lane_lock(lease) != ASTRA_SYSCALL_OK) {
+                return ASTRA_SYSCALL_IO_ERROR;
+            }
+            if (lane->in_use != 0u && lane->active != 0u &&
+                lane->completed == 0u) {
+                request = lane->request;
+            }
+            if (lane_unlock(lease) != ASTRA_SYSCALL_OK) {
+                return ASTRA_SYSCALL_IO_ERROR;
+            }
+            if (request == 0u) {
+                continue;
+            }
+            (void)memset(&completion, 0, sizeof(completion));
+            status = astra_block_lease_collect_ex(
+                lease->device, request, &completion, &serviced);
+            drained += serviced;
+            if (status == ASTRA_SYSCALL_WOULD_BLOCK) {
+                continue;
+            }
+            if (publish_lane(lease, lane, request, status,
+                             status == ASTRA_SYSCALL_OK ? &completion :
+                                                          NULL) !=
+                ASTRA_SYSCALL_OK) {
+                return ASTRA_SYSCALL_IO_ERROR;
+            }
+        }
+    } while (drained != 0u);
+    return ASTRA_SYSCALL_OK;
+}
+
+static uint32_t
+service_irq(AstraLeaseBlock *lease)
+{
+    uint32_t status = service_completions(lease);
+
+    if (status != ASTRA_SYSCALL_OK) {
+        return status;
+    }
+    return drain(lease);
+}
+
+static int
+lane_completed(AstraLeaseBlock *lease, AstraLeaseBlockLane *lane)
+{
+    int completed;
+
+    if (lane_lock(lease) != ASTRA_SYSCALL_OK) {
+        return -1;
+    }
+    completed = lane->completed != 0u;
+    if (lane_unlock(lease) != ASTRA_SYSCALL_OK) {
+        return -1;
+    }
+    return completed;
+}
+
+static AstraBlockStatus
+reset_timed_out_requests(AstraLeaseBlock *lease,
+                         AstraLeaseBlockLane *timed_out)
+{
+    uint32_t status;
+    int completed;
+
+    status = astra_wait_one(lease->completion_lock,
+                            ASTRA_DEADLINE_FOREVER, NULL);
+    if (status != ASTRA_SYSCALL_OK) {
+        return refused(lease, ASTRA_LEASE_BLOCK_SITE_RESET, status);
+    }
+    completed = lane_completed(lease, timed_out);
+    if (completed == 0) {
+        status = astra_device_reset(lease->device);
+        if (status == ASTRA_SYSCALL_OK) {
+            status = service_irq(lease);
+        }
+    } else if (completed < 0) {
+        status = ASTRA_SYSCALL_IO_ERROR;
+    } else {
+        status = ASTRA_SYSCALL_OK;
+    }
+    if (semaphore_release(lease->completion_lock) != ASTRA_SYSCALL_OK &&
+        status == ASTRA_SYSCALL_OK) {
+        status = ASTRA_SYSCALL_IO_ERROR;
+    }
+    if (status != ASTRA_SYSCALL_OK) {
+        return refused(lease, ASTRA_LEASE_BLOCK_SITE_RESET, status);
+    }
+    return completed == 0 ? ASTRA_BLOCK_TIMED_OUT : ASTRA_BLOCK_OK;
+}
+
+static AstraBlockStatus
+wait_for_lane(AstraLeaseBlock *lease, AstraLeaseBlockLane *lane,
+              uint64_t deadline)
+{
+    const uint32_t handles[2] = {lane->event, lease->irq};
+    int timed_out = 0;
+
+    if (deadline == 0u) {
+        deadline = ASTRA_DEADLINE_FOREVER;
+    }
+    for (;;) {
+        uint32_t index = ASTRA_WAIT_INDEX_NONE;
+        uint32_t status = astra_wait_multiple(handles, 2u, deadline,
+                                              &index, NULL);
+
+        if (status == ASTRA_SYSCALL_TIMED_OUT) {
+            AstraBlockStatus reset = reset_timed_out_requests(lease, lane);
+
+            if (reset != ASTRA_BLOCK_TIMED_OUT && reset != ASTRA_BLOCK_OK) {
+                return reset;
+            }
+            timed_out = reset == ASTRA_BLOCK_TIMED_OUT;
+            deadline = ASTRA_DEADLINE_FOREVER;
+            continue;
+        }
+        if (status != ASTRA_SYSCALL_OK) {
+            return refused(lease, ASTRA_LEASE_BLOCK_SITE_WAIT, status);
+        }
+        if (index == 0u) {
+            AstraBlockCompletion completion;
+            uint32_t collect_status;
+
+            if (lane_lock(lease) != ASTRA_SYSCALL_OK) {
+                return refused(lease, ASTRA_LEASE_BLOCK_SITE_COLLECT,
+                               ASTRA_SYSCALL_IO_ERROR);
+            }
+            completion = lane->completion;
+            collect_status = lane->collect_status;
+            status = lane_unlock(lease);
+            if (status != ASTRA_SYSCALL_OK) {
+                return refused(lease, ASTRA_LEASE_BLOCK_SITE_COLLECT,
+                               status);
+            }
+            if (timed_out != 0) {
+                return ASTRA_BLOCK_TIMED_OUT;
+            }
+            if (collect_status != ASTRA_SYSCALL_OK) {
+                return refused(lease, ASTRA_LEASE_BLOCK_SITE_COLLECT,
+                               collect_status);
+            }
+            if (completion.status == ASTRA_BLOCK_COMPLETION_OK &&
+                completion.sectors != 0u &&
+                completion.sectors > lease->max_transfer_sectors) {
+                return refused(lease,
+                               ASTRA_LEASE_BLOCK_SITE_SHORT_TRANSFER,
+                               completion.sectors);
+            }
+            return astra_lease_block_status(completion.status);
+        }
+        if (index != 1u) {
+            return refused(lease, ASTRA_LEASE_BLOCK_SITE_WAIT,
+                           ASTRA_SYSCALL_IO_ERROR);
+        }
+        status = astra_wait_one(lease->completion_lock, deadline, NULL);
+        if (status == ASTRA_SYSCALL_TIMED_OUT) {
+            AstraBlockStatus reset = reset_timed_out_requests(lease, lane);
+
+            if (reset != ASTRA_BLOCK_TIMED_OUT && reset != ASTRA_BLOCK_OK) {
+                return reset;
+            }
+            timed_out = reset == ASTRA_BLOCK_TIMED_OUT;
+            deadline = ASTRA_DEADLINE_FOREVER;
+            continue;
+        }
+        if (status != ASTRA_SYSCALL_OK) {
+            return refused(lease, ASTRA_LEASE_BLOCK_SITE_WAIT, status);
+        }
+        status = service_irq(lease);
+        if (semaphore_release(lease->completion_lock) != ASTRA_SYSCALL_OK &&
+            status == ASTRA_SYSCALL_OK) {
+            status = ASTRA_SYSCALL_IO_ERROR;
+        }
+        if (status != ASTRA_SYSCALL_OK) {
+            return refused(lease,
+                           ASTRA_LEASE_BLOCK_SITE_DRAIN_AFTER_COLLECT,
+                           status);
+        }
+    }
+}
+
+static AstraBlockStatus
+run_request(AstraLeaseBlock *lease, AstraLeaseBlockLane *lane,
+            uint32_t operation, uint64_t lba, uint32_t sector_count,
+            uint64_t deadline)
+{
+    AstraBlockRequest request;
+    uint32_t block_request = 0u;
+    uint32_t status;
 
     (void)memset(&request, 0, sizeof(request));
     request.size = ASTRA_BLOCK_REQUEST_SIZE;
     request.operation = operation;
-    request.buffer = operation == ASTRA_BLOCK_OP_FLUSH ? 0u : lease->buffer;
+    request.buffer = operation == ASTRA_BLOCK_OP_FLUSH ? 0u : lane->buffer;
     request.sectors = sector_count;
     request.lba = lba;
     status = astra_block_lease_submit(lease->device, &request,
@@ -193,63 +501,23 @@ run_request(AstraLeaseBlock *lease, uint32_t operation, uint64_t lba,
     if (status != ASTRA_SYSCALL_OK) {
         return refused(lease, ASTRA_LEASE_BLOCK_SITE_SUBMIT, status);
     }
-
-    if (deadline == 0u)
-        deadline = ASTRA_DEADLINE_FOREVER;
-    for (;;) {
-        (void)memset(&completion, 0, sizeof(completion));
-        status = astra_block_lease_collect(lease->device, block_request,
-                                           &completion);
-        if (status == ASTRA_SYSCALL_OK) {
-            /*
-             * The records are drained here and nowhere else in this loop.
-             * Collecting is what pops the completion out of the transport,
-             * and the transport refuses to complete its interrupt while one
-             * is still queued. Only once this request has been collected is
-             * nothing in flight, and only then can no further completion
-             * appear between the check and the acknowledgement.
-             *
-             * Acknowledging after a collection that returned nothing is the
-             * shape that fails: it races the device, which queues the
-             * completion in the gap, and the acknowledgement then quarantines
-             * the endpoint instead of merely failing.
-             */
-            uint32_t drained = drain(lease);
-
-            if (drained != ASTRA_SYSCALL_OK) {
-                return refused(lease,
-                               ASTRA_LEASE_BLOCK_SITE_DRAIN_AFTER_COLLECT,
-                               drained);
-            }
-            if (completion.status == ASTRA_BLOCK_COMPLETION_OK &&
-                completion.sectors != sector_count &&
-                operation != ASTRA_BLOCK_OP_FLUSH) {
-                /* A short transfer reported as success is still short. */
-                return refused(lease, ASTRA_LEASE_BLOCK_SITE_SHORT_TRANSFER,
-                               completion.sectors);
-            }
-            return astra_lease_block_status(completion.status);
-        }
-        if (status != ASTRA_SYSCALL_WOULD_BLOCK) {
-            return refused(lease, ASTRA_LEASE_BLOCK_SITE_COLLECT, status);
-        }
-
-        status = astra_wait_one(lease->irq, deadline, NULL);
-        if (status == ASTRA_SYSCALL_TIMED_OUT) {
-            break;
-        }
-        if (status != ASTRA_SYSCALL_OK) {
-            return refused(lease, ASTRA_LEASE_BLOCK_SITE_WAIT, status);
-        }
+    if (lane_lock(lease) != ASTRA_SYSCALL_OK) {
+        return refused(lease, ASTRA_LEASE_BLOCK_SITE_SUBMIT,
+                       ASTRA_SYSCALL_IO_ERROR);
     }
-
-    status = astra_device_reset(lease->device);
+    lane->request = block_request;
+    lane->active = 1u;
+    status = lane_unlock(lease);
     if (status != ASTRA_SYSCALL_OK) {
-        return refused(lease, ASTRA_LEASE_BLOCK_SITE_RESET, status);
+        return refused(lease, ASTRA_LEASE_BLOCK_SITE_SUBMIT, status);
     }
-    (void)astra_block_lease_collect(lease->device, block_request,
-                                    &completion);
-    return ASTRA_BLOCK_TIMED_OUT;
+    status = (uint32_t)wait_for_lane(lease, lane, deadline);
+    if (status == ASTRA_BLOCK_OK && operation != ASTRA_BLOCK_OP_FLUSH &&
+        lane->completion.sectors != sector_count) {
+        return refused(lease, ASTRA_LEASE_BLOCK_SITE_SHORT_TRANSFER,
+                       lane->completion.sectors);
+    }
+    return (AstraBlockStatus)status;
 }
 
 static AstraBlockStatus
@@ -276,24 +544,36 @@ lease_read(void *context, uint64_t lba, uint32_t sector_count, void *buffer,
            uint64_t deadline)
 {
     AstraLeaseBlock *lease = context;
+    AstraLeaseBlockLane *lane;
     AstraBlockStatus status;
 
     if (lease == NULL || buffer == NULL || sector_count == 0u) {
         return ASTRA_BLOCK_INVALID_ARGUMENT;
     }
     if (sector_count > lease->max_transfer_sectors ||
-        sector_count * lease->sector_bytes > lease->buffer_bytes) {
+        sector_count > UINT32_MAX / lease->sector_bytes) {
         return ASTRA_BLOCK_TRANSFER_TOO_LARGE;
     }
-    status = run_request(lease, ASTRA_BLOCK_OP_READ, lba, sector_count,
-                         deadline);
+    status = claim_lane(lease, deadline, &lane);
     if (status != ASTRA_BLOCK_OK) {
         return status;
     }
-    /* The device wrote transfer memory; the caller's buffer is ordinary. */
-    (void)memcpy(buffer, (const void *)(uintptr_t)lease->buffer_base,
-                 sector_count * lease->sector_bytes);
-    return ASTRA_BLOCK_OK;
+    if (sector_count * lease->sector_bytes > lane->buffer_bytes) {
+        status = ASTRA_BLOCK_TRANSFER_TOO_LARGE;
+    } else {
+        status = run_request(lease, lane, ASTRA_BLOCK_OP_READ, lba,
+                             sector_count, deadline);
+    }
+    if (status == ASTRA_BLOCK_OK) {
+        /* The device wrote transfer memory; the caller's buffer is ordinary. */
+        (void)memcpy(buffer, (const void *)(uintptr_t)lane->buffer_base,
+                     sector_count * lease->sector_bytes);
+    }
+    {
+        AstraBlockStatus released = release_lane(lease, lane);
+
+        return status == ASTRA_BLOCK_OK ? released : status;
+    }
 }
 
 static AstraBlockStatus
@@ -301,36 +581,114 @@ lease_write(void *context, uint64_t lba, uint32_t sector_count,
             const void *buffer, uint64_t deadline)
 {
     AstraLeaseBlock *lease = context;
+    AstraLeaseBlockLane *lane;
+    AstraBlockStatus status;
 
     if (lease == NULL || buffer == NULL || sector_count == 0u) {
         return ASTRA_BLOCK_INVALID_ARGUMENT;
     }
     if (sector_count > lease->max_transfer_sectors ||
-        sector_count * lease->sector_bytes > lease->buffer_bytes) {
+        sector_count > UINT32_MAX / lease->sector_bytes) {
         return ASTRA_BLOCK_TRANSFER_TOO_LARGE;
     }
-    (void)memcpy((void *)(uintptr_t)lease->buffer_base, buffer,
-                 sector_count * lease->sector_bytes);
-    return run_request(lease, ASTRA_BLOCK_OP_WRITE, lba, sector_count,
-                       deadline);
+    status = claim_lane(lease, deadline, &lane);
+    if (status != ASTRA_BLOCK_OK) {
+        return status;
+    }
+    if (sector_count * lease->sector_bytes > lane->buffer_bytes) {
+        status = ASTRA_BLOCK_TRANSFER_TOO_LARGE;
+    } else {
+        (void)memcpy((void *)(uintptr_t)lane->buffer_base, buffer,
+                     sector_count * lease->sector_bytes);
+        status = run_request(lease, lane, ASTRA_BLOCK_OP_WRITE, lba,
+                             sector_count, deadline);
+    }
+    {
+        AstraBlockStatus released = release_lane(lease, lane);
+
+        return status == ASTRA_BLOCK_OK ? released : status;
+    }
+}
+
+static AstraBlockStatus
+lease_writev(void *context, uint64_t lba, const AstraBlockVector *vector,
+             uint64_t deadline)
+{
+    AstraLeaseBlock *lease = context;
+    AstraLeaseBlockLane *lane;
+    AstraBlockStatus status;
+    uint64_t total = 0u;
+    uint32_t index;
+    uint8_t *out;
+
+    if (lease == NULL || vector == NULL || vector->buffers == NULL ||
+        vector->sector_counts == NULL || vector->count == 0u) {
+        return ASTRA_BLOCK_INVALID_ARGUMENT;
+    }
+    for (index = 0u; index < vector->count; ++index) {
+        if (vector->buffers[index] == NULL ||
+            vector->sector_counts[index] == 0u) {
+            return ASTRA_BLOCK_INVALID_ARGUMENT;
+        }
+        total += vector->sector_counts[index];
+        if (total > lease->max_transfer_sectors ||
+            total > UINT32_MAX / lease->sector_bytes) {
+            return ASTRA_BLOCK_TRANSFER_TOO_LARGE;
+        }
+    }
+    status = claim_lane(lease, deadline, &lane);
+    if (status != ASTRA_BLOCK_OK) {
+        return status;
+    }
+    if (total * lease->sector_bytes > lane->buffer_bytes) {
+        (void)release_lane(lease, lane);
+        return ASTRA_BLOCK_TRANSFER_TOO_LARGE;
+    }
+    out = (void *)(uintptr_t)lane->buffer_base;
+    for (index = 0u; index < vector->count; ++index) {
+        uint32_t bytes = vector->sector_counts[index] * lease->sector_bytes;
+
+        (void)memcpy(out, vector->buffers[index], bytes);
+        out += bytes;
+    }
+    status = run_request(lease, lane, ASTRA_BLOCK_OP_WRITE, lba,
+                         (uint32_t)total, deadline);
+    {
+        AstraBlockStatus released = release_lane(lease, lane);
+
+        return status == ASTRA_BLOCK_OK ? released : status;
+    }
 }
 
 static AstraBlockStatus
 lease_flush(void *context, uint64_t deadline)
 {
     AstraLeaseBlock *lease = context;
+    AstraLeaseBlockLane *lane;
+    AstraBlockStatus status;
 
     if (lease == NULL) {
         return ASTRA_BLOCK_INVALID_ARGUMENT;
     }
-    return run_request(lease, ASTRA_BLOCK_OP_FLUSH, 0u, 0u, deadline);
+    status = claim_lane(lease, deadline, &lane);
+    if (status != ASTRA_BLOCK_OK) {
+        return status;
+    }
+    status = run_request(lease, lane, ASTRA_BLOCK_OP_FLUSH, 0u, 0u,
+                         deadline);
+    {
+        AstraBlockStatus released = release_lane(lease, lane);
+
+        return status == ASTRA_BLOCK_OK ? released : status;
+    }
 }
 
 static const AstraBlockBackend lease_backend = {
-    lease_query,
-    lease_read,
-    lease_write,
-    lease_flush
+    .query = lease_query,
+    .read = lease_read,
+    .write = lease_write,
+    .writev = lease_writev,
+    .flush = lease_flush,
 };
 
 const AstraBlockBackend *
@@ -344,8 +702,8 @@ astra_lease_block_attach(AstraLeaseBlock *lease, uint32_t device_handle,
                          uint32_t irq_handle)
 {
     AstraBlockLeaseInfo info;
-    AstraDmaBufferInfo buffer;
     uint32_t transfer_bytes;
+    uint32_t status;
 
     if (lease == NULL || device_handle == 0u || irq_handle == 0u) {
         return ASTRA_BLOCK_INVALID_ARGUMENT;
@@ -358,7 +716,12 @@ astra_lease_block_attach(AstraLeaseBlock *lease, uint32_t device_handle,
     }
     if (info.sector_bytes < ASTRA_BLOCK_SECTOR_SIZE_MIN ||
         info.sector_bytes > ASTRA_BLOCK_SECTOR_SIZE_MAX ||
-        info.max_transfer_sectors == 0u) {
+        info.max_transfer_sectors == 0u ||
+        info.max_transfer_sectors > ASTRA_BLOCK_TRANSFER_SECTORS_MAX ||
+        info.max_transfer_sectors > UINT32_MAX / info.sector_bytes ||
+        info.queue_depth == 0u ||
+        info.queue_depth > ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE ||
+        info.queue_depth > ASTRA_DMA_MAX_BUFFERS_PER_SERVICE) {
         return ASTRA_BLOCK_CORRUPT;
     }
     if ((info.state_flags & ASTRA_BLOCK_STATE_MEDIA_PRESENT) == 0u) {
@@ -366,34 +729,84 @@ astra_lease_block_attach(AstraLeaseBlock *lease, uint32_t device_handle,
     }
 
     transfer_bytes = info.max_transfer_sectors * info.sector_bytes;
-    (void)memset(&buffer, 0, sizeof(buffer));
-    if (astra_dma_create(transfer_bytes, &buffer) != ASTRA_SYSCALL_OK ||
-        buffer.size != ASTRA_DMA_BUFFER_INFO_SIZE || buffer.handle == 0u ||
-        buffer.byte_size < transfer_bytes) {
-        return ASTRA_BLOCK_IO_ERROR;
-    }
-
     lease->device = device_handle;
     lease->irq = irq_handle;
-    lease->buffer = buffer.handle;
-    lease->buffer_base = buffer.virtual_base;
-    lease->buffer_bytes = buffer.byte_size;
+    lease->queue_depth = info.queue_depth;
     lease->sector_bytes = info.sector_bytes;
     lease->max_transfer_sectors = info.max_transfer_sectors;
     lease->media_generation = info.media_generation;
+
+    if (astra_rt_semaphore_create(
+            1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
+            &lease->state_lock) != ASTRA_SYSCALL_OK ||
+        astra_rt_semaphore_create(
+            1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
+            &lease->completion_lock) != ASTRA_SYSCALL_OK ||
+        astra_rt_semaphore_create(
+            lease->queue_depth, lease->queue_depth,
+            ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
+            &lease->available) != ASTRA_SYSCALL_OK) {
+        astra_lease_block_detach(lease);
+        return ASTRA_BLOCK_IO_ERROR;
+    }
+    for (uint32_t index = 0u; index < lease->queue_depth; ++index) {
+        AstraDmaBufferInfo buffer;
+        AstraLeaseBlockLane *lane = &lease->lanes[index];
+
+        (void)memset(&buffer, 0, sizeof(buffer));
+        if (astra_dma_create(transfer_bytes, &buffer) != ASTRA_SYSCALL_OK ||
+            buffer.size != ASTRA_DMA_BUFFER_INFO_SIZE ||
+            buffer.handle == 0u || buffer.virtual_base == 0u ||
+            buffer.byte_size < transfer_bytes ||
+            astra_rt_semaphore_create(
+                0u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
+                &lane->event) != ASTRA_SYSCALL_OK) {
+            if (buffer.handle != 0u) {
+                (void)astra_close(buffer.handle);
+            }
+            astra_lease_block_detach(lease);
+            return ASTRA_BLOCK_IO_ERROR;
+        }
+        lane->buffer = buffer.handle;
+        lane->buffer_base = buffer.virtual_base;
+        lane->buffer_bytes = buffer.byte_size;
+    }
+    status = drain(lease);
+    if (status == ASTRA_SYSCALL_OK) {
+        status = arm(lease);
+    }
+    if (status != ASTRA_SYSCALL_OK) {
+        astra_lease_block_detach(lease);
+        return ASTRA_BLOCK_IO_ERROR;
+    }
     return ASTRA_BLOCK_OK;
 }
 
 void
 astra_lease_block_detach(AstraLeaseBlock *lease)
 {
-    if (lease == NULL || lease->buffer == 0u) {
+    if (lease == NULL) {
         return;
     }
-    (void)astra_close(lease->buffer);
-    lease->buffer = 0u;
-    lease->buffer_base = 0u;
-    lease->buffer_bytes = 0u;
+    for (uint32_t index = 0u;
+         index < ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE; ++index) {
+        if (lease->lanes[index].event != 0u) {
+            (void)astra_close(lease->lanes[index].event);
+        }
+        if (lease->lanes[index].buffer != 0u) {
+            (void)astra_close(lease->lanes[index].buffer);
+        }
+    }
+    if (lease->available != 0u) {
+        (void)astra_close(lease->available);
+    }
+    if (lease->completion_lock != 0u) {
+        (void)astra_close(lease->completion_lock);
+    }
+    if (lease->state_lock != 0u) {
+        (void)astra_close(lease->state_lock);
+    }
+    (void)memset(lease, 0, sizeof(*lease));
 }
 
 uint32_t

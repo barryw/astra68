@@ -326,12 +326,14 @@ proc_stat(void *context, const char *path, AstraVfsNodeInfo *info)
 }
 
 static uint32_t
-proc_readdir(void *context, const char *path, uint64_t cookie, char *name,
-             uint32_t capacity, AstraVfsNodeInfo *info, uint64_t *next)
+proc_readdir(void *context, uintptr_t directory, const char *path,
+             uint64_t cookie, char *name, uint32_t capacity,
+             AstraVfsNodeInfo *info, uint64_t *next)
 {
     int leaf = 0;
 
     (void)context;
+    (void)directory;
     if (!supervisor_proc_path_is_root(path)) {
         uint32_t index = parse_path(path, &leaf);
 
@@ -401,6 +403,7 @@ static const AstraVfsBackendOps proc_ops = {
     .rename = astra_vfs_backend_deny_rename,
     .chmod = astra_vfs_backend_deny_chmod,
     .readlink = astra_vfs_backend_no_readlink,
+    .symlink = astra_vfs_backend_deny_symlink,
 };
 
 const AstraVfsBackendOps *

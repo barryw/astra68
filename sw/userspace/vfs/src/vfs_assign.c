@@ -184,19 +184,17 @@ astra_assign_join(AstraAssignTable *table, const char *name, uint32_t handle,
     return ASTRA_VFS_OK;
 }
 
-const AstraAssign *
-astra_assign_member(const AstraAssignTable *table, const char *name,
-                    uint32_t member)
+static const AstraAssign *
+member_canonical(const AstraAssignTable *table, const char *name,
+                 uint32_t member)
 {
-    char canonical_name[ASTRA_CAPABILITY_NAME_MAX];
     uint32_t index;
     uint32_t seen = 0u;
 
-    if (table == NULL || !canonical(name, canonical_name)) {
+    if (table == NULL)
         return NULL;
-    }
     for (index = 0u; index < table->count; ++index) {
-        if (!same(table->entries[index].name, canonical_name)) {
+        if (!same(table->entries[index].name, name)) {
             continue;
         }
         if (seen == member) {
@@ -205,6 +203,16 @@ astra_assign_member(const AstraAssignTable *table, const char *name,
         ++seen;
     }
     return NULL;
+}
+
+const AstraAssign *
+astra_assign_member(const AstraAssignTable *table, const char *name,
+                    uint32_t member)
+{
+    char canonical_name[ASTRA_CAPABILITY_NAME_MAX];
+
+    return table != NULL && canonical(name, canonical_name) ?
+        member_canonical(table, canonical_name, member) : NULL;
 }
 
 uint32_t
@@ -319,24 +327,28 @@ astra_assign_resolve(const AstraAssignTable *table, const char *path,
                      uint32_t capacity, const AstraAssign **assign)
 {
     char name[ASTRA_CAPABILITY_NAME_MAX];
-    /*
-     * The one scratch buffer in the namespace path, and a frame the deep chain
-     * never sees: resolution finishes before the client call it feeds, so this
-     * is not paid on top of the service, the backend and lwext4 underneath.
-     */
-    char rest[ASTRA_VFS_PATH_MAX];
     const AstraAssign *found;
+    const char *rest;
+    uint32_t index = 0u;
     uint32_t length = 0u;
     uint32_t status;
 
     if (wire == NULL || capacity < 2u) {
         return ASTRA_VFS_ERR_INVALID;
     }
-    status = astra_path_split(path, name, sizeof(name), rest, sizeof(rest));
-    if (status != ASTRA_VFS_OK) {
-        return status;
+    if (path == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    while (path[index] != ':') {
+        if (path[index] == '\0' || index + 1u >= sizeof(name))
+            return ASTRA_VFS_ERR_INVALID;
+        name[index] = astra_ascii_upper(path[index]);
+        ++index;
     }
-    found = astra_assign_member(table, name, member);
+    if (index == 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    name[index] = '\0';
+    rest = path + index + 1u;
+    found = member_canonical(table, name, member);
     if (found == NULL) {
         return ASTRA_VFS_ERR_NOT_FOUND;
     }

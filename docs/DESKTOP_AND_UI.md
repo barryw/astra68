@@ -4,8 +4,8 @@ Status: architecture direction with a protected window-service prototype.
 
 This document defines the intended feel and behavioral model of Astra's native
 graphical environment. `GRAPHICS_ARCHITECTURE.md` defines the active Arty
-target. `PRESENTATION.md`, `VEGA.md`, `ASTRAEA.md`, and `FONTS.md` retain the
-implemented ULX3S behavior and contracts carried forward by the new design.
+target. `PRESENTATION.md`, `VEGA.md`, `ASTRAEA.md`, and `FONTS.md` define the
+supporting behavior and contracts.
 `INTERFACE_SPECIFICATION.md` is the normative visual language and NDK window
 style contract.
 
@@ -203,7 +203,7 @@ The UI treats responsiveness as correctness:
   graphics-engine resets are observable.
 
 Initial numeric gates and memory envelopes are in `USERSPACE_BUDGET.md`. They
-are provisional until measured on the qualified ULX3S build, but regressions
+are provisional until measured on the qualified Arty build, but regressions
 may not be hidden by silently relaxing them.
 
 ## 11. First desktop milestone

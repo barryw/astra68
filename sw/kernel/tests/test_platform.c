@@ -2,6 +2,7 @@
 #include "qualification.h"
 
 #include <astra/display.h>
+#include <astra/host.h>
 #include <astra/render_batch.h>
 #include <assert.h>
 #include <stdint.h>
@@ -40,6 +41,7 @@ static void clear_registers(VestaRegs *registers)
 static void test_one_shot_configuration_and_restart(void)
 {
     VestaRegs *registers = kernel_platform_test_registers();
+    uint32_t woken = UINT32_MAX;
 
     clear_registers(registers);
     kernel_platform_interrupt_init(12500000u);
@@ -66,11 +68,14 @@ static void test_one_shot_configuration_and_restart(void)
     assert(registers->IRQ_ENABLE == IRQ_BIT(IRQ_SRC_TIMER0));
 
     registers->TIMER[0].STATUS = TMR_EXPIRED;
-    assert(kernel_platform_timer_irq_service(IRQ_SRC_TIMER0, 1u, NULL));
+    assert(kernel_platform_timer_irq_service(IRQ_SRC_TIMER0, 1u, NULL,
+                                             &woken));
+    assert(woken == 0u);
     assert(kernel_platform_ticks() == 1u);
     assert(registers->TIMER[0].STATUS == TMR_EXPIRED);
     assert(registers->TIMER[0].LOAD == 62500u);
-    assert(!kernel_platform_timer_irq_service(IRQ_SRC_TIMER1, 2u, NULL));
+    assert(!kernel_platform_timer_irq_service(IRQ_SRC_TIMER1, 2u, NULL,
+                                              &woken));
     assert(kernel_platform_irq_acknowledge(IRQ_SRC_TIMER0, NULL));
     assert(registers->IRQ_ACK == IRQ_BIT(IRQ_SRC_TIMER0));
     assert(kernel_platform_irq_mask(IRQ_SRC_TIMER0, NULL));
@@ -259,6 +264,55 @@ static void test_monotonic_nanosecond_deadline_conversion(void)
     assert(!kernel_platform_deadline_to_cycles(1, NULL));
     assert(kernel_platform_cycles_to_ns(UINT64_MAX) ==
            (uint64_t)INT64_MAX - 1u);
+}
+
+static void test_block_reset_contract(void)
+{
+    VestaRegs *registers = kernel_platform_test_registers();
+
+    clear_registers(registers);
+    assert(!kernel_platform_block_reset());
+    registers->BLOCK_ID = BLOCK_ID_MAGIC;
+    registers->BLOCK_VERSION = BLOCK_VERSION_1_0;
+    registers->BLOCK_HOST_GEN = 7u;
+    assert(!kernel_platform_block_reset());
+    assert(registers->BLOCK_HOST_GEN == 7u);
+
+    registers->BLOCK_VERSION = BLOCK_VERSION_1_1;
+    assert(kernel_platform_block_reset());
+    assert(registers->BLOCK_HOST_GEN == 8u);
+    assert(registers->BLOCK_STATE_ACK == BLOCK_STATE_ACK_BIT);
+}
+
+static void test_owner_scoped_host_transport(void)
+{
+    VestaRegs *registers = kernel_platform_test_registers();
+    uint32_t completed = 0u;
+
+    clear_registers(registers);
+    registers->HOST_ACCEL_ID = HOST_ACCEL_ID_MAGIC;
+    registers->HOST_ACCEL_VERSION = ASTRA_HOST_VERSION;
+    registers->HOST_ACCEL_STATUS = ASTRA_SYSCALL_OK;
+    registers->HOST_ACCEL_COMPLETED = 3u;
+    assert(kernel_platform_host_execute(0x10000021u, 0x02010000u,
+                                        3u * ASTRA_HOST_COMMAND_SIZE, 3u,
+                                        &completed) == ASTRA_SYSCALL_OK);
+    assert(completed == 3u);
+    assert(registers->HOST_ACCEL_OWNER == 0x10000021u);
+    assert(registers->HOST_ACCEL_REQ_BUFFER == 0x02010000u);
+    assert(registers->HOST_ACCEL_REQ_COUNT == 3u);
+    registers->HOST_ACCEL_CHANNEL_RESULT = ASTRA_SYSCALL_OK;
+    assert(kernel_platform_host_channel_open(
+               0x10000021u, 7u, 3u, 2u, 0x02010000u, 4096u, 1u) ==
+           ASTRA_SYSCALL_OK);
+    assert(registers->HOST_ACCEL_CHANNEL_CONFIG != 0u &&
+           (registers->HOST_ACCEL_CHANNEL_CONFIG & 63u) == 0u);
+    assert(kernel_platform_host_channel_close(
+               0x10000021u, 7u, 3u, 2u) == ASTRA_SYSCALL_OK);
+    kernel_platform_host_channel_ack();
+    assert(registers->HOST_ACCEL_CHANNEL_ACK == 1u);
+    kernel_platform_host_release_owner(0x10000021u);
+    assert(registers->HOST_ACCEL_RELEASE_OWNER == 0x10000021u);
 }
 
 /*
@@ -491,6 +545,8 @@ int main(void)
     test_typed_identity_console_and_device_queries();
     test_sticky_bus_fault_snapshot_and_acknowledge();
     test_monotonic_nanosecond_deadline_conversion();
+    test_block_reset_contract();
+    test_owner_scoped_host_transport();
     test_wall_clock_read_and_absence();
     test_fenced_display_transport();
     test_production_irq_qualification_controls();

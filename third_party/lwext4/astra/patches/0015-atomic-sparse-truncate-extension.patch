@@ -1,0 +1,101 @@
+diff --git a/src/ext4.c b/src/ext4.c
+--- a/src/ext4.c
++++ b/src/ext4.c
+@@ -1671,24 +1671,63 @@ int ext4_fclose(ext4_file *file)
+ 	return EOK;
+ }
+ 
++static int ext4_fzero_tail(struct ext4_inode_ref *ref, uint64_t start,
++			   uint64_t end)
++{
++	struct ext4_block block = EXT4_BLOCK_ZERO();
++	struct ext4_blockdev *bdev = ref->fs->bdev;
++	uint32_t block_size = ext4_sb_get_block_size(&ref->fs->sb);
++	uint32_t offset = (uint32_t)(start % block_size);
++	ext4_fsblk_t fblock;
++	size_t length;
++	int r;
++
++	if (start >= end || offset == 0)
++		return EOK;
++	length = block_size - offset;
++	if ((uint64_t)length > end - start)
++		length = (size_t)(end - start);
++	r = ext4_fs_get_inode_dblk_idx(ref, start / block_size, &fblock, true);
++	if (r != EOK || fblock == 0)
++		return r;
++	r = ext4_block_get(bdev, &block, fblock);
++	if (r != EOK)
++		return r;
++	memset(block.data + offset, 0, length);
++	ext4_bcache_set_dirty(block.buf);
++	return ext4_block_set(bdev, &block);
++}
++
+ static int ext4_ftruncate_no_lock(ext4_file *file, uint64_t size)
+ {
+ 	struct ext4_inode_ref ref;
++	uint64_t old_size;
+ 	int r;
+ 
+ 
+ 	r = ext4_fs_get_inode_ref(&file->mp->fs, file->inode, &ref);
+-	if (r != EOK) {
+-		EXT4_MP_UNLOCK(file->mp);
++	if (r != EOK)
+ 		return r;
+-	}
+ 
+ 	/*Sync file size*/
+ 	file->fsize = ext4_inode_get_size(&file->mp->fs.sb, ref.inode);
+-	if (file->fsize <= size) {
++	old_size = file->fsize;
++	if (file->fsize == size) {
+ 		r = EOK;
+ 		goto Finish;
+ 	}
++	if (file->fsize < size) {
++		/* Do not expose bytes left in the old partial tail block. */
++		r = ext4_fzero_tail(&ref, file->fsize, size);
++		if (r != EOK)
++			goto Finish;
++		/* Whole blocks beyond EOF remain sparse and read as zero. */
++		ext4_inode_set_size(ref.inode, size);
++		ref.dirty = true;
++		file->fsize = size;
++		r = EOK;
++		goto Finish;
++	}
+ 
+ 	/*Start write back cache mode.*/
+ 	r = ext4_block_cache_write_back(file->mp->fs.bdev, 1);
+@@ -1710,6 +1749,11 @@ static int ext4_ftruncate_no_lock(ext4_file *file, uint64_t size)
+ 		goto Finish;
+ 
+ Finish:
++	if (r == EOK && old_size != size) {
++		ext4_inode_set_modif_time(ref.inode, ext4_now());
++		ext4_inode_set_change_inode_time(ref.inode, ext4_now());
++		ref.dirty = true;
++	}
+ 	ext4_fs_put_inode_ref(&ref);
+ 	return r;
+ 
+@@ -1723,7 +1767,7 @@ int ext4_ftruncate(ext4_file *f, uint64_t size)
+ 	if (f->mp->fs.read_only)
+ 		return EROFS;
+ 
+-	if (f->flags & O_RDONLY)
++	if (!(f->flags & (O_WRONLY | O_RDWR)))
+ 		return EPERM;
+ 
+ 	EXT4_MP_LOCK(f->mp);
+@@ -2000,7 +2044,7 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
+ 	if (file->mp->fs.read_only)
+ 		return EROFS;
+ 
+-	if (file->flags & O_RDONLY)
++	if (!(file->flags & (O_WRONLY | O_RDWR)))
+ 		return EPERM;
+ 
+ 	if (!size)

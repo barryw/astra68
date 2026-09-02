@@ -113,6 +113,9 @@ class AstraInputTest:
 
     def run(self):
         self.detect_endian()
+        assert self.read32(VESTA + 0x01C) == 0x00068030
+        assert self.read32(VESTA + 0x020) == 0x51454D55  # QEMU
+        assert self.read32(VESTA + 0x030) == 128 * 1024 * 1024
         assert self.read32(VESTA + 0x704) == 0x00010001
         assert self.read32(VESTA + 0x708) == 0x00000003
         assert self.read32(INPUT_STATUS) == 0
@@ -164,7 +167,7 @@ def main():
             output.write(struct.pack(">II", 0x02001000, 0xFFE00008))
 
         command = [
-            args.qemu, "-machine", "astra68,accel=qtest", "-m", "32M",
+            args.qemu, "-machine", "astra68,accel=qtest",
             "-bios", rom, "-S", "-display", "none", "-nodefaults",
             "-qtest", f"unix:{qtest_path},server=on,wait=off",
             "-qmp", f"unix:{qmp_path},server=on,wait=off",

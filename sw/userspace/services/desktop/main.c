@@ -90,6 +90,12 @@ static uint16_t icon_color(const AstraAicon *icon, uint16_t index)
     return astra_surface_rgb565(rgba[0], rgba[1], rgba[2]);
 }
 
+#if defined(__GNUC__) && !defined(__clang__)
+/* active_count is published only after initialized current entries are copied;
+ * GCC's analyzer does not carry that invariant across loop iterations. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wanalyzer-use-of-uninitialized-value"
+#endif
 static void flush_run(AstraSurfaceView *surface, const AstraAicon *icon,
                       uint16_t color_index, const IconRun *run)
 {
@@ -155,6 +161,9 @@ static int draw_strike(AstraSurfaceView *surface, const AstraAicon *icon,
     }
     return 1;
 }
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 static uint32_t paint(AstraSurfaceView *surface)
 {

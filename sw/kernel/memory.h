@@ -72,8 +72,8 @@
 
 /*
  * The supervisor identity-maps all of RAM, whatever the boot info says there
- * is -- see the root descriptor loop in vm.c. It used to stop at 32 MiB, the
- * ULX3S's SDRAM, which made every frame above that a landmine: still
+ * is -- see the root descriptor loop in vm.c. A fixed upper bound made every
+ * frame above it a landmine: still
  * classified usable, still handed out, and a supervisor bus error on the
  * write that zeroed it. There is no direct-map limit to respect any more,
  * which is why nothing here caps where the zone may sit.
@@ -85,7 +85,6 @@ typedef enum KernelFrameState {
     KERNEL_FRAME_FIRMWARE,
     KERNEL_FRAME_EARLY_LOG,
     KERNEL_FRAME_KERNEL,
-    KERNEL_FRAME_ROM_BACKING,
     KERNEL_FRAME_PAGE_TABLE,
     KERNEL_FRAME_PROCESS,
     KERNEL_FRAME_COW_READ_ONLY,

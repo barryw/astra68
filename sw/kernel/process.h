@@ -15,6 +15,7 @@
 #include <stdint.h>
 
 #include <astra/process.h>
+#include <astra/limits.h>
 
 #ifndef ASTRA_KERNEL_SOAK_SELFTEST
 #define ASTRA_KERNEL_SOAK_SELFTEST 0
@@ -70,8 +71,12 @@ _Static_assert(KERNEL_PROCESS_MAX == KERNEL_VM_ADDRESS_SPACE_MAX,
 /* The top of the first slot's reservation: where its stack pointer starts. */
 #define KERNEL_PROCESS_STACK_TOP \
     (KERNEL_PROCESS_STACK_BASE + KERNEL_THREAD_STACK_STRIDE)
+#define KERNEL_PROCESS_TLS_BASE \
+    (KERNEL_THREAD_STACK_BASE + \
+     KERNEL_PROCESS_THREAD_MAX * KERNEL_THREAD_STACK_STRIDE)
+#define KERNEL_PROCESS_TLS_END (KERNEL_VM_USER_MAX + 1u)
 #define KERNEL_PROCESS_PROGRESS_GOAL 64u
-#define KERNEL_PROCESS_THREAD_MAX 16u
+#define KERNEL_PROCESS_THREAD_MAX ASTRA_PROCESS_THREAD_COUNT_MAX
 
 /*
  * ELF acceptance is bounded by the process virtual-address region. Mapping is
@@ -309,6 +314,10 @@ typedef struct KernelSchedulerStats {
 } KernelSchedulerStats;
 
 void kernel_process_init(void);
+bool kernel_process_host_channel_irq_service(uint8_t source,
+                                             uint64_t timestamp,
+                                             void *context,
+                                             uint32_t *woken_threads);
 KernelProcessStatus kernel_process_create(const void *image,
                                           uint32_t image_size,
                                           uint32_t entry_offset,
@@ -470,6 +479,7 @@ bool kernel_process_qualification_status(uint32_t process_id,
 KernelProcessStatus kernel_process_start(KernelCpuContext **next_context);
 bool kernel_process_active(void);
 KernelCpuContext *kernel_process_current_context(void);
+KernelCpuContext *kernel_process_resume_idle(void);
 bool kernel_process_worker_enter(void);
 KernelCpuContext *kernel_process_worker_resume(void);
 KernelProcessStatus kernel_process_on_timer(const uint32_t *registers,
@@ -478,7 +488,7 @@ KernelProcessStatus kernel_process_on_timer(const uint32_t *registers,
                                             KernelCpuContext **next_context);
 KernelProcessStatus kernel_process_on_interrupt_wakeup(
     const uint32_t *registers, uint32_t user_stack, const void *raw_frame,
-    KernelCpuContext **next_context);
+    bool thread_woken, KernelCpuContext **next_context);
 KernelProcessStatus kernel_process_on_supervisor_timer(void);
 KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                                               uint32_t user_stack,

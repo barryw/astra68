@@ -19,6 +19,14 @@ AstraInputDeliveryResult astra_input_port_deliver(
     message.event = *event;
     result = sink->send(sink->context, sink->send_handle, &message,
                         sizeof(message));
+    while (result == ASTRA_INPUT_PORT_SEND_FULL && sink->wait != NULL &&
+           event->type != ASTRA_INPUT_EVENT_POINTER_MOTION) {
+        result = sink->wait(sink->context, sink->send_handle);
+        if (result != ASTRA_INPUT_PORT_SEND_OK)
+            break;
+        result = sink->send(sink->context, sink->send_handle, &message,
+                            sizeof(message));
+    }
     if (result == ASTRA_INPUT_PORT_SEND_OK)
         return ASTRA_INPUT_DELIVERY_OK;
     if (result == ASTRA_INPUT_PORT_SEND_FULL)

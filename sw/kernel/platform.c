@@ -8,6 +8,7 @@
 #include "vesta.h"
 
 #include <astra/display.h>
+#include <astra/host.h>
 #include <astra/network.h>
 #include <astra/render_batch.h>
 
@@ -51,6 +52,22 @@
 #define OHCI_SOFT_RESET_TIMEOUT_CYCLES \
     (KERNEL_PLATFORM_CPU_HZ / 100000u)
 
+#define HOST_SUBMIT_STATUS_MASK 0xffffu
+#define HOST_SUBMIT_COMPLETED_SHIFT 16u
+
+static KernelPlatformHostState host_state_cache;
+static bool host_state_cached;
+
+static void host_state_copy(KernelPlatformHostState *destination,
+                            const KernelPlatformHostState *source)
+{
+    destination->capabilities = source->capabilities;
+    destination->state_flags = source->state_flags;
+    destination->maximum_transfer = source->maximum_transfer;
+    destination->maximum_commands = source->maximum_commands;
+    destination->host_generation = source->host_generation;
+}
+
 #if defined(KERNEL_PLATFORM_HOST_TEST)
 #define PLATFORM_TEST_MMIO_SIZE \
     ((OHCI_BASE - VESTA_BASE) + (uint32_t)sizeof(OhciRegs))
@@ -59,6 +76,7 @@ static _Alignas(256) OhciHcca platform_test_ohci_hcca;
 
 VestaRegs *kernel_platform_test_registers(void)
 {
+    host_state_cached = false;
     if (!kernel_mmio_test_bind(VESTA_BASE, platform_test_mmio,
                                sizeof(platform_test_mmio)))
         return NULL;
@@ -101,9 +119,7 @@ static uint32_t quantum_cycles;
 
 /*
  * The HCCA sits at the base of the controller's own DMA pool, wherever the
- * block reports it. It used to be OHCI_DMA_POOL_BASE, which described the top
- * of a 32 MiB ULX3S and stopped being true the moment a design placed its pool
- * anywhere else.
+ * block reports it rather than a fixed platform constant.
  */
 static volatile OhciHcca *ohci_hcca(void)
 {
@@ -715,14 +731,16 @@ bool kernel_platform_irq_acknowledge(uint8_t source, void *context)
 }
 
 bool kernel_platform_timer_irq_service(uint8_t source, uint64_t timestamp,
-                                       void *context)
+                                       void *context,
+                                       uint32_t *woken_threads)
 {
     (void)timestamp;
     (void)context;
-    if (source != IRQ_SRC_TIMER0 ||
+    if (woken_threads == NULL || source != IRQ_SRC_TIMER0 ||
         (kernel_mmio_read32(VESTA_TIMER_ADDRESS(0u, STATUS)) &
          TMR_EXPIRED) == 0u)
         return false;
+    *woken_threads = 0u;
     VESTA_TIMER_WRITE(0u, STATUS, TMR_EXPIRED);
     ++tick_count;
     kernel_platform_timer_arm(quantum_cycles);
@@ -794,10 +812,14 @@ bool kernel_platform_device_irq_complete(uint8_t source,
 {
     switch (source) {
     case IRQ_SRC_STORAGE:
-        return (VESTA_READ(BLOCK_QUEUE) &
-                BLOCK_QUEUE_COMPLETION_VALID) == 0u &&
-               (VESTA_READ(BLOCK_STATE_ACK) &
-                BLOCK_STATE_ACK_BIT) == 0u;
+        /*
+         * Storage is a level-triggered multiqueue source. More work may land
+         * after the driver drained the captured batch but before it retires
+         * this record. Re-enabling the source must deliver that work again;
+         * treating a still-asserted level as a device failure quarantines a
+         * healthy busy disk and loses the queue.
+         */
+        return true;
     case IRQ_SRC_INPUT:
         return (VESTA_READ(INPUT_STATUS) & INPUT_EVENT_VALID) == 0u ||
                VESTA_READ(INPUT_DEVICE_SEQ) != captured_status;
@@ -997,6 +1019,7 @@ uint32_t kernel_platform_block_state_flags(void)
 
 bool kernel_platform_block_state(KernelPlatformBlockState *state)
 {
+    uint32_t version;
     uint32_t capabilities_before;
     uint32_t flags_before;
     uint32_t media_before;
@@ -1004,6 +1027,7 @@ bool kernel_platform_block_state(KernelPlatformBlockState *state)
     uint32_t size_hi_before;
     uint32_t size_lo_before;
     uint32_t max_before;
+    uint32_t depth_before;
     uint32_t capabilities_after;
     uint32_t flags_after;
     uint32_t media_after;
@@ -1011,9 +1035,11 @@ bool kernel_platform_block_state(KernelPlatformBlockState *state)
     uint32_t size_hi_after;
     uint32_t size_lo_after;
     uint32_t max_after;
+    uint32_t depth_after;
 
     if (state == 0 || !kernel_platform_block_present())
         return false;
+    version = VESTA_READ(BLOCK_VERSION);
     for (uint32_t attempt = 0u; attempt < 4u; ++attempt) {
         capabilities_before = VESTA_READ(BLOCK_CAPS);
         flags_before = VESTA_READ(BLOCK_STATE);
@@ -1022,6 +1048,8 @@ bool kernel_platform_block_state(KernelPlatformBlockState *state)
         size_hi_before = VESTA_READ(BLOCK_MEDIA_SIZE_HI);
         size_lo_before = VESTA_READ(BLOCK_MEDIA_SIZE_LO);
         max_before = VESTA_READ(BLOCK_MAX_SECTORS);
+        depth_before = version >= BLOCK_VERSION_1_1 ?
+            BLOCK_QUEUE_DEPTH(VESTA_READ(BLOCK_QUEUE)) : 1u;
 
         capabilities_after = VESTA_READ(BLOCK_CAPS);
         flags_after = VESTA_READ(BLOCK_STATE);
@@ -1030,10 +1058,13 @@ bool kernel_platform_block_state(KernelPlatformBlockState *state)
         size_hi_after = VESTA_READ(BLOCK_MEDIA_SIZE_HI);
         size_lo_after = VESTA_READ(BLOCK_MEDIA_SIZE_LO);
         max_after = VESTA_READ(BLOCK_MAX_SECTORS);
+        depth_after = version >= BLOCK_VERSION_1_1 ?
+            BLOCK_QUEUE_DEPTH(VESTA_READ(BLOCK_QUEUE)) : 1u;
         if (capabilities_before == capabilities_after &&
             flags_before == flags_after && host_before == host_after &&
             media_before == media_after && size_hi_before == size_hi_after &&
-            size_lo_before == size_lo_after && max_before == max_after) {
+            size_lo_before == size_lo_after && max_before == max_after &&
+            depth_before == depth_after && depth_after != 0u) {
             state->capabilities = capabilities_after;
             state->state_flags = flags_after;
             state->media_generation = media_after;
@@ -1041,7 +1072,7 @@ bool kernel_platform_block_state(KernelPlatformBlockState *state)
             state->media_sectors = ((uint64_t)size_hi_after << 32) |
                                    size_lo_after;
             state->max_sectors = (uint16_t)max_after;
-            state->reserved = 0u;
+            state->queue_depth = (uint16_t)depth_after;
             return true;
         }
     }
@@ -1096,6 +1127,25 @@ void kernel_platform_block_ack_state(void)
     VESTA_WRITE(BLOCK_STATE_ACK, BLOCK_STATE_ACK_BIT);
 }
 
+bool kernel_platform_block_reset(void)
+{
+    uint32_t host_generation;
+
+    if (!kernel_platform_block_present() ||
+        VESTA_READ(BLOCK_VERSION) < BLOCK_VERSION_1_1)
+        return false;
+    host_generation = VESTA_READ(BLOCK_HOST_GEN);
+    VESTA_WRITE(BLOCK_STATE_ACK, BLOCK_RESET_BIT);
+#if defined(KERNEL_PLATFORM_HOST_TEST)
+    /* The host MMIO buffer has no register side effects; model reset. */
+    VESTA_WRITE(BLOCK_HOST_GEN, host_generation + 1u);
+    VESTA_WRITE(BLOCK_STATE_ACK, BLOCK_STATE_ACK_BIT);
+#endif
+    kernel_mmio_cpu_sync();
+    return kernel_mmio_fence32(VESTA_ADDRESS(BLOCK_HOST_GEN)) !=
+           host_generation;
+}
+
 bool kernel_platform_network_present(void)
 {
     return VESTA_READ(NETWORK_ID) == NETWORK_ID_MAGIC &&
@@ -1126,11 +1176,13 @@ bool kernel_platform_network_state(KernelPlatformNetworkState *state)
     return false;
 }
 
-uint32_t kernel_platform_network_execute(uint32_t physical_buffer,
+uint32_t kernel_platform_network_execute(uint32_t owner,
+                                         uint32_t physical_buffer,
                                          uint32_t byte_size,
                                          uint32_t command_count,
                                          uint32_t *executed_commands)
 {
+    (void)owner;
     uint32_t status;
 
     if (executed_commands == NULL || !kernel_platform_network_present())
@@ -1152,6 +1204,234 @@ void kernel_platform_network_ack_ready(void)
 {
     VESTA_WRITE(NETWORK_READY_ACK, NETWORK_READY_ACK_BIT);
     kernel_mmio_cpu_sync();
+}
+
+bool kernel_platform_host_present(void)
+{
+    if (host_state_cached)
+        return true;
+    return VESTA_READ(HOST_ACCEL_ID) == HOST_ACCEL_ID_MAGIC &&
+           (VESTA_READ(HOST_ACCEL_VERSION) >> 16) ==
+               (HOST_ACCEL_VERSION_1_0 >> 16);
+}
+
+bool kernel_platform_host_state(KernelPlatformHostState *state)
+{
+    uint32_t generation_before;
+    uint32_t generation_after;
+
+    if (state == NULL)
+        return false;
+    if (host_state_cached) {
+        host_state_copy(state, &host_state_cache);
+        return true;
+    }
+    if (!kernel_platform_host_present())
+        return false;
+    for (uint32_t attempt = 0u; attempt < 4u; ++attempt) {
+        generation_before = VESTA_READ(HOST_ACCEL_GENERATION);
+        state->capabilities = VESTA_READ(HOST_ACCEL_CAPS);
+        state->state_flags = VESTA_READ(HOST_ACCEL_STATE);
+        state->maximum_transfer = VESTA_READ(HOST_ACCEL_MAX_TRANSFER);
+        state->maximum_commands = VESTA_READ(HOST_ACCEL_MAX_COMMANDS);
+        generation_after = VESTA_READ(HOST_ACCEL_GENERATION);
+        if (generation_before == generation_after) {
+            state->host_generation = generation_after;
+            host_state_copy(&host_state_cache, state);
+            host_state_cached = true;
+            return true;
+        }
+    }
+    return false;
+}
+
+uint32_t kernel_platform_host_execute(uint32_t owner,
+                                      uint32_t physical_buffer,
+                                      uint32_t byte_size,
+                                      uint32_t command_count,
+                                      uint32_t *executed_commands)
+{
+    static _Alignas(64) volatile AstraHostSubmission submission;
+    KernelPlatformHostState state;
+    uint32_t status;
+
+    if (executed_commands == NULL || !kernel_platform_host_present())
+        return ASTRA_SYSCALL_UNSUPPORTED;
+    *executed_commands = 0u;
+    if (kernel_platform_host_state(&state) &&
+        (state.capabilities & ASTRA_HOST_CAP_SUBMISSION_DESCRIPTOR) != 0u &&
+        command_count <= UINT16_MAX) {
+        uint32_t result;
+
+        submission.size = sizeof(submission);
+        submission.version = ASTRA_HOST_SUBMISSION_VERSION;
+        submission.flags = 0u;
+        submission.owner = owner;
+        submission.host_generation = state.host_generation;
+        submission.physical_buffer = physical_buffer;
+        submission.byte_size = byte_size;
+        submission.command_count = command_count;
+        for (uint32_t index = 0u;
+             index < sizeof(submission.reserved) /
+                         sizeof(submission.reserved[0]); ++index)
+            submission.reserved[index] = 0u;
+        kernel_mmio_cpu_sync();
+        VESTA_WRITE(HOST_ACCEL_SUBMIT,
+                    (uint32_t)(uintptr_t)&submission);
+        result = kernel_mmio_fence32(
+            VESTA_ADDRESS(HOST_ACCEL_SUBMIT_RESULT));
+        *executed_commands = result >> HOST_SUBMIT_COMPLETED_SHIFT;
+        return result & HOST_SUBMIT_STATUS_MASK;
+    }
+    VESTA_WRITE(HOST_ACCEL_OWNER, owner);
+    VESTA_WRITE(HOST_ACCEL_REQ_BUFFER, physical_buffer);
+    VESTA_WRITE(HOST_ACCEL_REQ_BYTES, byte_size);
+    VESTA_WRITE(HOST_ACCEL_REQ_COUNT, command_count);
+    VESTA_WRITE(HOST_ACCEL_EXECUTE, HOST_ACCEL_EXECUTE_BIT);
+    status = kernel_mmio_fence32(VESTA_ADDRESS(HOST_ACCEL_STATUS));
+    if (status == ASTRA_SYSCALL_OK)
+        *executed_commands = VESTA_READ(HOST_ACCEL_COMPLETED);
+    return status;
+}
+
+static uint32_t kernel_platform_host_channel_configure(
+    uint16_t operation, uint32_t owner, uint32_t host_generation,
+    uint32_t channel_generation, uint32_t slot, uint32_t physical_buffer,
+    uint32_t byte_size, uint32_t command_capacity)
+{
+    static _Alignas(64) volatile AstraHostChannelConfig config;
+
+    if (!kernel_platform_host_present())
+        return ASTRA_SYSCALL_UNSUPPORTED;
+    config.size = sizeof(config);
+    config.version = ASTRA_HOST_CHANNEL_CONFIG_VERSION;
+    config.operation = operation;
+    config.slot = slot;
+    config.owner = owner;
+    config.host_generation = host_generation;
+    config.channel_generation = channel_generation;
+    config.physical_buffer = physical_buffer;
+    config.byte_size = byte_size;
+    config.command_capacity = command_capacity;
+    for (uint32_t index = 0u;
+         index < sizeof(config.reserved) / sizeof(config.reserved[0]); ++index)
+        config.reserved[index] = 0u;
+    kernel_mmio_cpu_sync();
+    VESTA_WRITE(HOST_ACCEL_CHANNEL_CONFIG,
+                (uint32_t)(uintptr_t)&config);
+    return kernel_mmio_fence32(VESTA_ADDRESS(HOST_ACCEL_CHANNEL_RESULT));
+}
+
+uint32_t kernel_platform_host_channel_open(
+    uint32_t owner, uint32_t host_generation, uint32_t channel_generation,
+    uint32_t slot, uint32_t physical_buffer, uint32_t byte_size,
+    uint32_t command_capacity)
+{
+    return kernel_platform_host_channel_configure(
+        ASTRA_HOST_CHANNEL_CONFIG_OPEN, owner, host_generation,
+        channel_generation, slot, physical_buffer, byte_size,
+        command_capacity);
+}
+
+uint32_t kernel_platform_host_channel_close(
+    uint32_t owner, uint32_t host_generation, uint32_t channel_generation,
+    uint32_t slot)
+{
+    return kernel_platform_host_channel_configure(
+        ASTRA_HOST_CHANNEL_CONFIG_CLOSE, owner, host_generation,
+        channel_generation, slot, 0u, 0u, 0u);
+}
+
+void kernel_platform_host_channel_kick(uint32_t slot,
+                                       uint32_t producer_position)
+{
+    kernel_mmio_write32(
+        ASTRA_HOST_CHANNEL_PHYSICAL_BASE +
+            slot * ASTRA_HOST_CHANNEL_PAGE_SIZE +
+            ASTRA_HOST_CHANNEL_KICK_OFFSET,
+        producer_position);
+}
+
+void kernel_platform_host_channel_arm(uint32_t slot,
+                                      uint32_t consumer_position)
+{
+    kernel_mmio_write32(
+        ASTRA_HOST_CHANNEL_PHYSICAL_BASE +
+            slot * ASTRA_HOST_CHANNEL_PAGE_SIZE +
+            ASTRA_HOST_CHANNEL_ARM_OFFSET,
+        consumer_position);
+}
+
+void kernel_platform_host_channel_disarm(uint32_t slot)
+{
+    kernel_mmio_write32(
+        ASTRA_HOST_CHANNEL_PHYSICAL_BASE +
+            slot * ASTRA_HOST_CHANNEL_PAGE_SIZE +
+            ASTRA_HOST_CHANNEL_DISARM_OFFSET,
+        1u);
+}
+
+bool kernel_platform_host_channel_completion(
+    uint32_t physical_buffer, uint32_t byte_size, uint32_t command_capacity,
+    KernelPlatformHostChannelState *state)
+{
+    volatile const AstraHostChannelHeader *header;
+    uint32_t data_offset;
+
+    if (state == NULL || physical_buffer == 0u ||
+        (physical_buffer & (ASTRA_ABI_ALIGNMENT - 1u)) != 0u ||
+        command_capacity == 0u ||
+        command_capacity >
+            (UINT32_MAX - ASTRA_HOST_CHANNEL_HEADER_SIZE) /
+                ASTRA_HOST_COMMAND_SIZE)
+        return false;
+    data_offset = ASTRA_HOST_CHANNEL_HEADER_SIZE +
+                  command_capacity * ASTRA_HOST_COMMAND_SIZE;
+    if (byte_size <= data_offset)
+        return false;
+    header = (volatile const AstraHostChannelHeader *)(uintptr_t)
+        physical_buffer;
+    kernel_mmio_cpu_sync();
+    if (header->magic != ASTRA_HOST_CHANNEL_MAGIC ||
+        header->version != ASTRA_HOST_CHANNEL_VERSION ||
+        header->header_size != ASTRA_HOST_CHANNEL_HEADER_SIZE ||
+        header->flags != 0u ||
+        header->command_size != ASTRA_HOST_COMMAND_SIZE ||
+        header->command_capacity != command_capacity ||
+        header->command_offset != ASTRA_HOST_CHANNEL_HEADER_SIZE ||
+        header->data_offset != data_offset ||
+        header->total_size != byte_size)
+        return false;
+    state->state_flags = ASTRA_HOST_STATE_READY;
+    state->generation = header->channel_generation;
+    state->consumer_position = header->consumer_position;
+    state->status = header->transport_status;
+    kernel_mmio_cpu_sync();
+    return true;
+}
+
+void kernel_platform_host_channel_ack(void)
+{
+    VESTA_WRITE(HOST_ACCEL_CHANNEL_ACK, 1u);
+}
+
+void kernel_platform_host_release_owner(uint32_t owner)
+{
+    if (owner != 0u && kernel_platform_host_present())
+        VESTA_WRITE(HOST_ACCEL_RELEASE_OWNER, owner);
+}
+
+bool kernel_platform_host_reset(void)
+{
+    uint32_t generation;
+
+    if (!kernel_platform_host_present())
+        return false;
+    generation = VESTA_READ(HOST_ACCEL_GENERATION);
+    host_state_cached = false;
+    VESTA_WRITE(HOST_ACCEL_RESET, HOST_ACCEL_RESET_BIT);
+    kernel_mmio_cpu_sync();
+    return VESTA_READ(HOST_ACCEL_GENERATION) != generation;
 }
 
 bool kernel_platform_network_reset(void)

@@ -1,6 +1,8 @@
 #ifndef ASTRA_PROGRAM_H
 #define ASTRA_PROGRAM_H
 
+#include <astra/compiler.h>
+
 /*
  * What a program says it is.
  *

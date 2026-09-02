@@ -10,7 +10,7 @@ NDK := ../../../ndk
 CPPFLAGS := -Iinclude -I$(NDK)/include -I../../include \
 	-I$(RUNTIME)/include -I$(VFS)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
-TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
+TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections -fPIC -fvisibility=hidden
 LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic -Wl,--no-undefined \
 	-Wl,--build-id=none -Wl,--gc-sections -Wl,--hash-style=sysv \
@@ -43,7 +43,8 @@ build/m68k/vfs_client.o: $(VFS)/src/vfs_client.c
 
 build/m68k/vfs_port_transport.o: $(VFS)/src/vfs_port_transport.c
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+	$(CC) $(CPPFLAGS) -DASTRA_VFS_EMBEDDED_THREAD_STATE=1 \
+		$(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
 $(NDK_PIC_LIB): FORCE
 	$(MAKE) -C $(NDK) pic
@@ -60,7 +61,7 @@ $(LIBRARY): $(LIBRARY_OBJECTS) $(NDK_PIC_LIB) $(RUNTIME_PIC_LIB) \
 library-contract: $(LIBRARY)
 	@python3 ../../../tools/library_info.py $(LIBRARY) | \
 		grep -q '^config.library 1.0.0 ABI 1.0$$'
-	@! $(READELF) -r $(LIBRARY) | grep -E 'R_68K_(GLOB_DAT|JMP_SLOT|32|PC32)'
+	$(call ASTRA_CHECK_DSO,$(LIBRARY))
 
 $(HOST_TEST): src/config_document.c $(NDK)/src/manifest.c \
 		tests/test_config_document.c

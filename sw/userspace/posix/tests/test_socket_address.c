@@ -18,6 +18,9 @@ int main(void)
     assert(inet_pton(AF_INET6, "2001:db8::1", address) == 1);
     assert(inet_ntop(AF_INET6, address, text, sizeof(text)) == text);
     assert(strcmp(text, "2001:db8::1") == 0);
+    assert(inet_pton(AF_INET6, "::", address) == 1);
+    assert(inet_ntop(AF_INET6, address, text, sizeof(text)) == text);
+    assert(strcmp(text, "::") == 0);
     assert(inet_pton(AF_INET6, "::ffff:192.0.2.1", address) == 1);
     assert(inet_pton(AF_INET6, "2001:::1", address) == 0);
     return 0;

@@ -32,7 +32,7 @@ module hdmi
     // **All parameters below matter ONLY IF you plan on sending auxiliary data (DVI_OUTPUT == 1'b0)**
 
     // Specify the refresh rate in millihertz for audio calculations.
-    // 59940 selects the 59.94 Hz CEA clocks used by the Nova ULX3S build.
+    // 59940 selects the standard 59.94 Hz CEA clock family.
     parameter int VIDEO_REFRESH_RATE_MILLIHZ = 59940,
 
     // As specified in Section 7.3, the minimal audio requirements are met: 16-bit or more L-PCM audio at 32 kHz, 44.1 kHz, or 48 kHz.

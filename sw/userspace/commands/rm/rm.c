@@ -44,7 +44,7 @@ static int remove_name(const char *name)
 
     status = astra_process_path(name, typed, sizeof(typed));
     if (status == ASTRA_VFS_OK)
-        status = astra_vfs_assign_stat(
+        status = astra_vfs_assign_lstat(
             astra_process_vfs_assigns(), typed, ASTRA_RIGHT_WRITE,
             astra_process_vfs_assign_client, NULL, wire, sizeof(wire), NULL,
             &client, NULL, NULL);

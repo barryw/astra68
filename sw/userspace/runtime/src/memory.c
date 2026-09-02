@@ -24,6 +24,7 @@ typedef uint32_t AstraWord __attribute__((may_alias));
 #define ASTRA_WORD_SIZE ((size_t)sizeof(AstraWord))
 #define ASTRA_WORD_MASK (ASTRA_WORD_SIZE - 1u)
 
+#if !defined(__m68k__)
 void *
 memcpy(void *restrict destination, const void *restrict source, size_t count)
 {
@@ -164,6 +165,7 @@ memcmp(const void *left, const void *right, size_t count)
     }
     return 0;
 }
+#endif
 
 size_t
 strlen(const char *text)

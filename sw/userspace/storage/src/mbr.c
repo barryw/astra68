@@ -26,11 +26,7 @@ astra_mbr_classify(uint8_t type)
     switch (type) {
     case 0x00u:
         return ASTRA_MBR_EMPTY;
-    /*
-     * Exactly sw/stage0's fat_partition_type(). These two lists must not
-     * drift: a partition Astra calls FAT but stage0 does not is a card that
-     * mounts fine and refuses to boot.
-     */
+    /* Conventional FAT partition type bytes. */
     case 0x04u:
     case 0x06u:
     case 0x0bu:
@@ -42,12 +38,7 @@ astra_mbr_classify(uint8_t type)
     case 0x05u:
     case 0x0fu:
         return ASTRA_MBR_EXTENDED;
-    /*
-     * A GPT disk carries one protective entry of this type. stage0 does not
-     * recognise it and will not find a FAT partition behind it, so a GPT card
-     * does not boot. Naming it here makes that diagnosable instead of
-     * appearing as an empty table.
-     */
+    /* A GPT disk carries one protective entry of this type. */
     case 0xeeu:
         return ASTRA_MBR_GPT_PROTECTIVE;
     default:

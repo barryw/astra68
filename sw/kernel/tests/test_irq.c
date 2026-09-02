@@ -186,10 +186,12 @@ static bool fake_quiesce(uint8_t source, void *context)
 }
 
 static bool fake_internal_service(uint8_t source, uint64_t timestamp,
-                                  void *context)
+                                  void *context, uint32_t *woken_threads)
 {
     FakeDevice *device = context;
 
+    assert(woken_threads != NULL);
+    *woken_threads = 0u;
     assert(source < KERNEL_IRQ_SOURCE_COUNT);
     assert(timestamp != UINT64_MAX);
     log_operation(device->controller, 'I');

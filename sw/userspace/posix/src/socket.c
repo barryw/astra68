@@ -264,18 +264,29 @@ static int to_network_address(const struct sockaddr *source, socklen_t length,
     return 0;
 }
 
+#if defined(__GNUC__) && !defined(__clang__)
+/* GCC's analyzer loses the full-byte initialization when the aligned union is
+ * subsequently written through a sockaddr member. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wanalyzer-use-of-uninitialized-value"
+#endif
 static int from_network_address(const AstraNetworkAddress *source,
                                 struct sockaddr *target, socklen_t *length)
 {
-    uint8_t storage[sizeof(struct sockaddr_in6)] = {0};
+    union {
+        struct sockaddr base;
+        struct sockaddr_in ipv4;
+        struct sockaddr_in6 ipv6;
+    } storage;
     uint32_t needed;
 
     if (length == NULL) {
         errno = EFAULT;
         return 0;
     }
+    (void)__builtin_memset(&storage, 0, sizeof(storage));
     if (source->family == ASTRA_NETWORK_FAMILY_IPV4) {
-        struct sockaddr_in *address = (struct sockaddr_in *)(void *)storage;
+        struct sockaddr_in *address = &storage.ipv4;
 
         needed = sizeof(*address);
         address->sin_family = AF_INET;
@@ -283,7 +294,7 @@ static int from_network_address(const AstraNetworkAddress *source,
         (void)memcpy(&address->sin_addr, source->address,
                      sizeof(address->sin_addr));
     } else if (source->family == ASTRA_NETWORK_FAMILY_IPV6) {
-        struct sockaddr_in6 *address = (struct sockaddr_in6 *)(void *)storage;
+        struct sockaddr_in6 *address = &storage.ipv6;
 
         needed = sizeof(*address);
         address->sin6_family = AF_INET6;
@@ -296,10 +307,14 @@ static int from_network_address(const AstraNetworkAddress *source,
         return 0;
     }
     if (target != NULL && *length != 0u)
-        (void)memcpy(target, storage, *length < needed ? *length : needed);
+        (void)memcpy(target, &storage,
+                     *length < needed ? *length : needed);
     *length = needed;
     return 1;
 }
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 static ssize_t socket_send(PosixSocket *socket, const void *buffer,
                            size_t length, int flags,

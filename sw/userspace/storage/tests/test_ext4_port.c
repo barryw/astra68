@@ -329,6 +329,40 @@ test_transfer_is_split_not_refused(void)
 }
 
 static void
+test_scatter_write_is_one_bounded_transfer(void)
+{
+    AstraMemoryBlock memory;
+    AstraBlockDevice device;
+    AstraExt4Port port;
+    struct ext4_blockdev *blockdev;
+    const void *buffers[2] = {expected, expected + 8u * TEST_SECTOR_SIZE};
+    const uint32_t counts[2] = {8u, 8u};
+    const uint32_t too_large[2] = {9u, 9u};
+    uint64_t calls;
+    size_t index;
+
+    bring_up(&memory, &device, &port);
+    blockdev = astra_ext4_port_blockdev(&port);
+    assert(blockdev->bdif->ph_bmax == TEST_MAX_TRANSFER);
+    assert(blockdev->bdif->bwritev != NULL);
+    for (index = 0u; index < 16u * TEST_SECTOR_SIZE; ++index) {
+        expected[index] = (uint8_t)(index * 11u + 5u);
+    }
+    calls = device.metrics.operation[ASTRA_BLOCK_OPERATION_WRITE].calls;
+    assert(blockdev->bdif->bwritev(blockdev, buffers, counts, 100u, 2u) ==
+           EOK);
+    assert(device.metrics.operation[ASTRA_BLOCK_OPERATION_WRITE].calls ==
+           calls + 1u);
+    assert(memcmp(storage + 100u * TEST_SECTOR_SIZE, expected,
+                  16u * TEST_SECTOR_SIZE) == 0);
+
+    assert(blockdev->bdif->bwritev(blockdev, buffers, too_large, 100u, 2u) ==
+           EINVAL);
+    assert(blockdev->bdif->bwritev(blockdev, buffers, counts,
+                                   TEST_SECTORS - 8u, 2u) == EINVAL);
+}
+
+static void
 test_failures_map_and_are_recorded(void)
 {
     AstraMemoryBlock memory;
@@ -492,6 +526,12 @@ test_foreign_blockdev_is_refused(void)
 
     assert(real->bdif->bread(&blockdev, transfer, 0u, 1u) == EINVAL);
     assert(real->bdif->bwrite(&blockdev, transfer, 0u, 1u) == EINVAL);
+    {
+        const void *buffers[] = {transfer};
+        const uint32_t counts[] = {1u};
+        assert(real->bdif->bwritev(&blockdev, buffers, counts, 0u, 1u) ==
+               EINVAL);
+    }
     assert(real->bdif->flush(&blockdev) == EINVAL);
     assert(real->bdif->open(&blockdev) == EINVAL);
     assert(real->bdif->close(&blockdev) == EINVAL);
@@ -511,6 +551,7 @@ main(void)
     test_window_refuses_addresses_outside_it();
     test_blockdev_shape();
     test_transfer_is_split_not_refused();
+    test_scatter_write_is_one_bounded_transfer();
     test_failures_map_and_are_recorded();
     test_errno_map_is_total();
     test_lock_refuses_reentry();

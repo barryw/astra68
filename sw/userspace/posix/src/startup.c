@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 extern char **environ;
-extern int main(int argc, char **argv, char **envp);
+extern int main(int argc, char **argv);
 
 /* Standard C/POSIX entry for unmodified applications. Native Astra programs
  * define astra_main themselves, so this archive member is not selected. */
@@ -21,5 +21,5 @@ astra_main(const AstraStartupInfo *startup)
         startup->argv_address == 0u)
         return 1;
     argv = (char **)(uintptr_t)startup->argv_address;
-    return main((int)startup->argc, argv, environ);
+    return main((int)startup->argc, argv);
 }

@@ -4,10 +4,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <astra/compiler.h>
 #include <astra/block.h>
 #include <astra/display.h>
 #include <astra/event.h>
 #include <astra/input.h>
+#include <astra/host.h>
 #include <astra/library.h>
 #include <astra/civil.h>
 #include <astra/process.h>
@@ -110,6 +112,8 @@ uint32_t astra_rt_library_attach(const AstraLibraryReference *reference,
                                  uint32_t *base, uint32_t *span);
 uint32_t astra_query_abi(uint32_t *abi_version, uint32_t *process_handle,
                          uint32_t *thread_handle);
+/* Cached independently in each thread; a successful lookup never goes stale. */
+uint32_t astra_current_thread_handle(uint32_t *thread_handle);
 uint32_t astra_process_info(uint32_t handle, AstraProcessInfo *info);
 uint32_t astra_process_priority(uint32_t handle, uint32_t priority,
                                 uint32_t *previous_priority);
@@ -136,6 +140,52 @@ uint32_t astra_wait_one(uint32_t handle, uint64_t deadline_ns,
 uint32_t astra_wait_multiple(const uint32_t *handles, uint32_t count,
                              uint64_t deadline_ns, uint32_t *index,
                              uint32_t *detail);
+uint32_t astra_futex_wait(volatile uint32_t *address, uint32_t expected,
+                          uint64_t deadline_ns);
+uint32_t astra_futex_wake(volatile uint32_t *address, uint32_t count,
+                          uint32_t *woken);
+
+/* Shared sleepable mutex word: uncontended lock/unlock stays in user mode. */
+static inline uint32_t astra_mutex_lock(volatile uint32_t *state)
+{
+    uint32_t expected = 0u;
+
+    if (state == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    if (__atomic_compare_exchange_n(state, &expected, 1u, 0,
+                                    __ATOMIC_ACQUIRE,
+                                    __ATOMIC_RELAXED))
+        return ASTRA_SYSCALL_OK;
+    for (;;) {
+        uint32_t previous = expected;
+        uint32_t status;
+
+        if (previous != 2u)
+            previous = __atomic_exchange_n(state, 2u, __ATOMIC_ACQUIRE);
+        if (previous == 0u)
+            return ASTRA_SYSCALL_OK;
+        status = astra_futex_wait(state, 2u, ASTRA_DEADLINE_FOREVER);
+        if (status != ASTRA_SYSCALL_OK &&
+            status != ASTRA_SYSCALL_WOULD_BLOCK)
+            return status;
+        expected = __atomic_exchange_n(state, 2u, __ATOMIC_ACQUIRE);
+        if (expected == 0u)
+            return ASTRA_SYSCALL_OK;
+    }
+}
+
+static inline uint32_t astra_mutex_unlock(volatile uint32_t *state)
+{
+    uint32_t previous;
+
+    if (state == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    previous = __atomic_exchange_n(state, 0u, __ATOMIC_RELEASE);
+    if (previous == 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    return previous == 2u ? astra_futex_wake(state, 1u, NULL) :
+                            ASTRA_SYSCALL_OK;
+}
 uint32_t astra_irq_arm(uint32_t handle);
 uint32_t astra_irq_mask(uint32_t handle);
 uint32_t astra_irq_read(uint32_t handle, AstraIrqRecord *record,
@@ -146,12 +196,27 @@ uint32_t astra_block_lease_query(uint32_t device, AstraBlockLeaseInfo *geometry)
 uint32_t astra_block_lease_submit(uint32_t device, const AstraBlockRequest *request,
                             uint32_t *block_request);
 uint32_t astra_block_lease_collect(uint32_t device, uint32_t block_request,
-                                   AstraBlockCompletion *completion);
+                            AstraBlockCompletion *completion);
+uint32_t astra_block_lease_collect_ex(uint32_t device,
+                                     uint32_t block_request,
+                                     AstraBlockCompletion *completion,
+                                     uint32_t *serviced_completions);
 uint32_t astra_network_lease_query(uint32_t device,
                                    AstraNetworkLeaseInfo *info);
 uint32_t astra_network_lease_execute(
     uint32_t device, const AstraNetworkTransportRequest *request,
     uint32_t *executed_commands);
+uint32_t astra_host_lease_query(uint32_t device, AstraHostLeaseInfo *info);
+uint32_t astra_host_lease_execute(
+    uint32_t device, const AstraHostTransportRequest *request,
+    uint32_t *executed_commands);
+uint32_t astra_host_channel_open(uint32_t device,
+                                 AstraHostChannelOpen *channel);
+uint32_t astra_host_channel_close(uint32_t device);
+uint32_t astra_host_channel_kick(uint32_t channel_address,
+                                 uint32_t producer_position);
+uint32_t astra_host_channel_wait(uint32_t consumer_position,
+                                 uint64_t deadline_ns);
 uint32_t astra_console_info(uint32_t device, uint32_t *columns,
                             uint32_t *rows);
 uint32_t astra_console_write(uint32_t device, uint32_t cell,

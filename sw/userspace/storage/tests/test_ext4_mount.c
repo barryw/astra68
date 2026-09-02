@@ -7,10 +7,9 @@
  * journals, writes, renames, unlinks and re-reads without ever seeing a libc
  * heap or a transfer longer than the device permits.
  *
- * The device is deliberately given a small max_transfer_sectors so that every
- * 4 KiB filesystem block crosses the port's splitting path. A cap that no real
- * request exceeded would leave that code untested here and discovered on
- * hardware.
+ * The device advertises the production 64 KiB transfer window so this
+ * whole-stack gate also proves adjacent dirty blocks become one scatter/gather
+ * request. Transfer splitting remains covered directly by test_ext4_port.
  *
  * The image is written back on exit so e2fsck — which shares no code with
  * lwext4 — can judge the result.
@@ -34,15 +33,18 @@
 #include <astra/memory_block.h>
 
 #include <ext4.h>
+#include <ext4_crc32.h>
 #include <ext4_debug.h>
 
 #include "file_block.h"
 
 #define MOUNT_POINT "/volume/"
 #define SECTOR_SIZE 512u
-#define MAX_TRANSFER_SECTORS 4u
+#define MAX_TRANSFER_SECTORS 128u
 #define BIG_FILE_BYTES (192u * 1024u)
 #define MANY_FILES 200u
+#define TRUNCATE_EXTENDED_BYTES (4096u + 3u)
+#define TRUNCATE_APPEND_BYTES 2u
 
 static uint8_t *storage;
 static uint8_t *durable_storage;
@@ -89,9 +91,16 @@ typedef struct ControlledBlock {
     pthread_mutex_t mutex;
     pthread_cond_t changed;
     uint64_t reads;
+    uint64_t writes;
+    uint64_t scatter_writes;
+    uint32_t largest_scatter;
     int hold_next_read;
     int read_entered;
     int release_read;
+    int fail_next_write;
+    int fail_next_flush;
+    unsigned race_waiters;
+    int release_race;
 } ControlledBlock;
 
 static ControlledBlock controlled = {
@@ -132,8 +141,24 @@ controlled_write(void *context, uint64_t lba, uint32_t count,
                  const void *buffer, uint64_t deadline)
 {
     (void)context;
+    ++controlled.writes;
+    if (controlled.fail_next_write) {
+        controlled.fail_next_write = 0;
+        return ASTRA_BLOCK_IO_ERROR;
+    }
     return astra_memory_block_backend.write(&memory, lba, count, buffer,
                                             deadline);
+}
+
+static AstraBlockStatus
+controlled_writev(void *context, uint64_t lba,
+                  const AstraBlockVector *vector, uint64_t deadline)
+{
+    (void)context;
+    ++controlled.scatter_writes;
+    if (controlled.largest_scatter < vector->count)
+        controlled.largest_scatter = vector->count;
+    return astra_memory_block_backend.writev(&memory, lba, vector, deadline);
 }
 
 static AstraBlockStatus
@@ -142,6 +167,10 @@ controlled_flush(void *context, uint64_t deadline)
     AstraBlockStatus status;
 
     (void)context;
+    if (controlled.fail_next_flush) {
+        controlled.fail_next_flush = 0;
+        return ASTRA_BLOCK_IO_ERROR;
+    }
     status = astra_memory_block_backend.flush(&memory, deadline);
     if (status == ASTRA_BLOCK_OK && durable_storage != NULL) {
         memcpy(durable_storage, storage, storage_bytes);
@@ -153,6 +182,7 @@ static const AstraBlockBackend controlled_backend = {
     .query = controlled_query,
     .read = controlled_read,
     .write = controlled_write,
+    .writev = controlled_writev,
     .flush = controlled_flush,
 };
 
@@ -256,7 +286,9 @@ static AstraAllocator allocator;
 #define HOST_CLASS_COUNT 6u
 
 static const AstraAllocClass host_classes[HOST_CLASS_COUNT] = {
-    {64u, 16u},    /* nothing lands here on LP64; kept so the shape matches */
+    /* Group commit keeps one LP64 journal block record per cached metadata
+     * block until commit.  The cache is the physical upper bound. */
+    {64u, CONFIG_BLOCK_DEV_CACHE_SIZE + 8u},
     {128u, 900u},  /* measured peak_live=838 */
     {256u, CONFIG_BLOCK_DEV_CACHE_SIZE + 8u}, /* LP64 ext4_buf is 144 B */
     {2048u, 40u},  /* measured peak_live=29 */
@@ -272,6 +304,44 @@ static AstraAllocScalar arena[ASTRA_EXT4_ARENA_BYTES /
                               sizeof(AstraAllocScalar)];
 
 static int failures;
+static int fail(const char *what, int rc);
+
+static uint32_t
+crc32c_oracle(uint32_t crc, const uint8_t *bytes, size_t length)
+{
+    while (length-- != 0u) {
+        crc ^= *bytes++;
+        for (unsigned bit = 0u; bit < 8u; ++bit)
+            crc = (crc >> 1) ^ (UINT32_C(0x82f63b78) &
+                                (uint32_t)-(int32_t)(crc & 1u));
+    }
+    return crc;
+}
+
+static int
+check_crc32c_contract(void)
+{
+    static const char vector[] = "123456789";
+    uint8_t bytes[260];
+
+    if (~ext4_crc32c(~UINT32_C(0), vector, sizeof(vector) - 1u) !=
+        UINT32_C(0xe3069283))
+        return fail("CRC32C standard vector", 0);
+    for (unsigned index = 0u; index < sizeof(bytes); ++index)
+        bytes[index] = (uint8_t)(index * 37u + (index >> 2));
+    for (unsigned offset = 0u; offset < 4u; ++offset) {
+        for (unsigned length = 0u; length <= 256u; ++length) {
+            uint32_t expected = crc32c_oracle(UINT32_C(0x13579bdf),
+                                              bytes + offset, length);
+            uint32_t actual = ext4_crc32c(UINT32_C(0x13579bdf),
+                                         bytes + offset, length);
+
+            if (actual != expected)
+                return fail("CRC32C alignment/length", 0);
+        }
+    }
+    return 0;
+}
 
 static uint64_t
 nanoseconds(void *context)
@@ -599,6 +669,39 @@ do_umount(void)
 }
 
 static int
+check_writeback_barrier_contract(void)
+{
+    const AstraBlockMetrics *metrics = astra_block_metrics(&device);
+    uint64_t flushes =
+        metrics->operation[ASTRA_BLOCK_OPERATION_FLUSH].calls;
+    int rc;
+
+    rc = ext4_cache_write_back(MOUNT_POINT, 0);
+    if (rc != EOK)
+        return fail("disable writeback", rc);
+    if (metrics->operation[ASTRA_BLOCK_OPERATION_FLUSH].calls != flushes)
+        return fail("writeback drain issued durability barrier", 0);
+
+    rc = ext4_cache_flush(MOUNT_POINT);
+    if (rc != EOK)
+        return fail("explicit cache flush", rc);
+    if (metrics->operation[ASTRA_BLOCK_OPERATION_FLUSH].calls != flushes + 1u)
+        return fail("explicit cache flush omitted durability barrier", 0);
+
+    flushes = metrics->operation[ASTRA_BLOCK_OPERATION_FLUSH].calls;
+    rc = ext4_cache_flush(MOUNT_POINT);
+    if (rc != EOK)
+        return fail("repeat cache flush", rc);
+    if (metrics->operation[ASTRA_BLOCK_OPERATION_FLUSH].calls != flushes)
+        return fail("clean cache flush issued redundant barrier", 0);
+
+    rc = ext4_cache_write_back(MOUNT_POINT, 1);
+    if (rc != EOK)
+        return fail("enable writeback", rc);
+    return 0;
+}
+
+static int
 write_file(const char *path, unsigned index, unsigned bytes)
 {
     ext4_file file;
@@ -632,6 +735,142 @@ write_file(const char *path, unsigned index, unsigned bytes)
         return fail("ext4_fclose(w)", rc);
     }
     return 0;
+}
+
+static int read_verify(const char *path, unsigned index, unsigned bytes);
+
+static int
+check_group_commit_contract(void)
+{
+    const AstraBlockMetrics *metrics = astra_block_metrics(&device);
+    uint64_t before = metrics->operation[ASTRA_BLOCK_OPERATION_FLUSH].calls;
+    char path[sizeof(MOUNT_POINT "journal-group-00")];
+    int rc;
+
+    for (unsigned index = 0u; index < 8u; ++index) {
+        (void)snprintf(path, sizeof(path), MOUNT_POINT "journal-group-%02u",
+                       index);
+        if (write_file(path, 230u + index, 1u) != 0)
+            return 1;
+        if (metrics->operation[ASTRA_BLOCK_OPERATION_FLUSH].calls != before)
+            return fail("ordinary mutation forced journal commit", 0);
+    }
+    rc = ext4_cache_flush(MOUNT_POINT);
+    if (rc != EOK ||
+        metrics->operation[ASTRA_BLOCK_OPERATION_FLUSH].calls == before)
+        return fail("explicit flush did not commit running transaction", rc);
+
+    before = metrics->operation[ASTRA_BLOCK_OPERATION_FLUSH].calls;
+    for (unsigned index = 0u; index < 8u; ++index) {
+        (void)snprintf(path, sizeof(path), MOUNT_POINT "journal-group-%02u",
+                       index);
+        rc = ext4_fremove(path);
+        if (rc != EOK)
+            return fail("remove journal grouping fixture", rc);
+        if (metrics->operation[ASTRA_BLOCK_OPERATION_FLUSH].calls != before)
+            return fail("ordinary unlink forced journal commit", 0);
+    }
+    rc = ext4_cache_flush(MOUNT_POINT);
+    return rc == EOK ? 0 : fail("flush journal grouping cleanup", rc);
+}
+
+/*
+ * A handle is one atomic filesystem operation; a running transaction contains
+ * many handles.  Fail a data write after allocation metadata has already been
+ * touched and prove that aborting that handle preserves the successful handles
+ * on both sides of it.
+ */
+static int
+check_handle_abort_savepoint_contract(void)
+{
+    static uint8_t block[4096];
+    ext4_file failed;
+    ext4_file probe;
+    size_t moved = 0u;
+    int rc;
+
+    if (write_file(MOUNT_POINT "savepoint-before", 240u, 1u))
+        return 1;
+    rc = ext4_fopen(&failed, MOUNT_POINT "savepoint-failed", "wb");
+    if (rc != EOK)
+        return fail("open savepoint failure fixture", rc);
+    memset(block, 0x5au, sizeof(block));
+    controlled.fail_next_write = 1;
+    rc = ext4_fwrite(&failed, block, sizeof(block), &moved);
+    (void)ext4_fclose(&failed);
+    if (rc != EIO || moved != 0u)
+        return fail("injected write failure was not reported", rc);
+    if (write_file(MOUNT_POINT "savepoint-after", 241u, 1u))
+        return 1;
+    rc = ext4_cache_flush(MOUNT_POINT);
+    if (rc != EOK)
+        return fail("flush savepoint transaction", rc);
+    if (read_verify(MOUNT_POINT "savepoint-before", 240u, 1u) ||
+        read_verify(MOUNT_POINT "savepoint-after", 241u, 1u))
+        return 1;
+    rc = ext4_fopen(&probe, MOUNT_POINT "savepoint-failed", "rb");
+    if (rc != EOK || ext4_fsize(&probe) != 0u) {
+        if (rc == EOK)
+            (void)ext4_fclose(&probe);
+        return fail("failed handle leaked allocation or size", rc);
+    }
+    (void)ext4_fclose(&probe);
+    return 0;
+}
+
+static int
+check_journal_failure_contract(void)
+{
+    ext4_file file;
+    int rc;
+
+    if (write_file(MOUNT_POINT "journal-failure", 242u, 1u))
+        return 1;
+    controlled.fail_next_flush = 1;
+    rc = ext4_cache_flush(MOUNT_POINT);
+    if (rc != EIO)
+        return fail("journal flush failure was not reported", rc);
+    rc = ext4_fopen(&file, MOUNT_POINT "after-journal-failure", "wb");
+    if (rc == EOK)
+        (void)ext4_fclose(&file);
+    return rc == EROFS ? 0 : fail("aborted journal accepted mutation", rc);
+}
+
+static int
+check_journal_pressure_contract(void)
+{
+    const AstraBlockMetrics *metrics = astra_block_metrics(&device);
+    struct ext4_mount_stats stats;
+    uint64_t flushes;
+    char path[sizeof(MOUNT_POINT "journal-pressure-00000000")];
+    unsigned created;
+    int rc;
+
+    rc = ext4_cache_flush(MOUNT_POINT);
+    if (rc != EOK)
+        return fail("flush before journal pressure", rc);
+    rc = ext4_mount_point_stats(MOUNT_POINT, &stats);
+    if (rc != EOK)
+        return fail("journal pressure mount stats", rc);
+    flushes = metrics->operation[ASTRA_BLOCK_OPERATION_FLUSH].calls;
+    for (created = 0u; created < stats.free_inodes_count; ++created) {
+        ext4_file file;
+
+        (void)snprintf(path, sizeof(path),
+                       MOUNT_POINT "journal-pressure-%08x", created);
+        rc = ext4_fopen(&file, path, "wb");
+        if (rc != EOK)
+            return fail("journal pressure create", rc);
+        rc = ext4_fclose(&file);
+        if (rc != EOK)
+            return fail("journal pressure close", rc);
+        if (metrics->operation[ASTRA_BLOCK_OPERATION_FLUSH].calls > flushes) {
+            printf("journal pressure: committed after %u handles\n",
+                   created + 1u);
+            return 0;
+        }
+    }
+    return fail("journal capacity never forced a commit", 0);
 }
 
 /*
@@ -810,6 +1049,8 @@ populate(void)
 {
     char path[64];
     ext4_file exclusive;
+    static const uint8_t truncate_prefix[] = {0x41u, 0x53u, 0x54u};
+    size_t moved = 0u;
     unsigned index;
     int rc;
 
@@ -840,6 +1081,14 @@ populate(void)
     rc = ext4_dir_mk_mode(MOUNT_POINT "mode-dir", 0710u);
     if (rc != EOK)
         return fail("ext4_dir_mk_mode", rc);
+    rc = ext4_fopen2(&exclusive, MOUNT_POINT "missing/child",
+                     O_WRONLY | O_CREAT | O_EXCL);
+    if (rc == EOK) {
+        (void)ext4_fclose(&exclusive);
+        return fail("ext4_fopen2 created missing parent", rc);
+    }
+    if (rc != ENOENT)
+        return fail("ext4_fopen2 missing parent", rc);
     rc = ext4_fopen2_mode(&exclusive, MOUNT_POINT "mode-file",
                           O_WRONLY | O_CREAT | O_EXCL, 0600u);
     if (rc != EOK)
@@ -880,6 +1129,9 @@ populate(void)
     if (rc != EOK) {
         return fail("ext4_frename", rc);
     }
+    rc = ext4_fsymlink("renamed.txt", MOUNT_POINT "dir/renamed-link");
+    if (rc != EOK)
+        return fail("ext4_fsymlink", rc);
     rc = ext4_fremove(MOUNT_POINT "many/entry_007.dat");
     if (rc != EOK) {
         return fail("ext4_fremove", rc);
@@ -899,6 +1151,79 @@ populate(void)
     if (write_file(MOUNT_POINT "dir/CASE.DAT", 5u, 192u)) {
         return 1;
     }
+    rc = ext4_fopen(&exclusive, MOUNT_POINT "truncate-extended.bin", "wb+");
+    if (rc != EOK)
+        return fail("ext4_fopen(truncate extension)", rc);
+    rc = ext4_fwrite(&exclusive, truncate_prefix, sizeof(truncate_prefix),
+                     &moved);
+    if (rc != EOK || moved != sizeof(truncate_prefix))
+        return fail("ext4_fwrite(truncate prefix)", rc);
+    rc = ext4_ftruncate(&exclusive, TRUNCATE_EXTENDED_BYTES);
+    if (rc != EOK || ext4_fsize(&exclusive) != TRUNCATE_EXTENDED_BYTES ||
+        ext4_ftell(&exclusive) != sizeof(truncate_prefix))
+        return fail("ext4_ftruncate(extension)", rc);
+    rc = ext4_fclose(&exclusive);
+    if (rc != EOK)
+        return fail("ext4_fclose(truncate extension)", rc);
+    rc = ext4_fopen2(&exclusive, MOUNT_POINT "truncate-extended.bin",
+                     O_WRONLY | O_APPEND);
+    if (rc != EOK)
+        return fail("ext4_fopen append sparse extension", rc);
+    {
+        static const uint8_t appended[TRUNCATE_APPEND_BYTES] = {0xdeu, 0xadu};
+
+        rc = ext4_fwrite(&exclusive, appended, sizeof(appended), &moved);
+    }
+    if (rc != EOK || moved != TRUNCATE_APPEND_BYTES) {
+        (void)ext4_fclose(&exclusive);
+        return fail("ext4_fwrite append sparse extension", rc);
+    }
+    rc = ext4_fclose(&exclusive);
+    if (rc != EOK)
+        return fail("ext4_fclose append sparse extension", rc);
+
+    rc = ext4_fopen(&exclusive, MOUNT_POINT "truncate-reextended.bin", "wb+");
+    if (rc != EOK)
+        return fail("ext4_fopen(truncate re-extension)", rc);
+    rc = ext4_fwrite(&exclusive, truncate_prefix, sizeof(truncate_prefix),
+                     &moved);
+    if (rc != EOK || moved != sizeof(truncate_prefix) ||
+        ext4_ftruncate(&exclusive, 1u) != EOK ||
+        ext4_ftruncate(&exclusive, sizeof(truncate_prefix)) != EOK) {
+        (void)ext4_fclose(&exclusive);
+        return fail("ext4_ftruncate(re-extension)", rc);
+    }
+    rc = ext4_fclose(&exclusive);
+    if (rc != EOK)
+        return fail("ext4_fclose(truncate re-extension)", rc);
+
+    if (write_file(MOUNT_POINT "open-truncate.bin", 6u, 8192u))
+        return 1;
+    rc = ext4_fopen(&exclusive, MOUNT_POINT "open-truncate.bin", "wb");
+    if (rc != EOK || ext4_fsize(&exclusive) != 0u)
+        return fail("ext4_fopen(existing O_TRUNC)", rc);
+    moved = 0u;
+    rc = ext4_fwrite(&exclusive, truncate_prefix, sizeof(truncate_prefix),
+                     &moved);
+    if (rc != EOK || moved != sizeof(truncate_prefix))
+        return fail("ext4_fwrite(existing O_TRUNC)", rc);
+    rc = ext4_fclose(&exclusive);
+    if (rc != EOK)
+        return fail("ext4_fclose(existing O_TRUNC)", rc);
+
+    rc = ext4_fopen(&exclusive, MOUNT_POINT "truncate-extended.bin", "rb");
+    if (rc != EOK)
+        return fail("ext4_fopen(read-only mutation)", rc);
+    moved = 0u;
+    if (ext4_fwrite(&exclusive, truncate_prefix, sizeof(truncate_prefix),
+                    &moved) != EPERM || moved != 0u ||
+        ext4_ftruncate(&exclusive, 0u) != EPERM) {
+        (void)ext4_fclose(&exclusive);
+        return fail("read-only handle accepted mutation", 0);
+    }
+    rc = ext4_fclose(&exclusive);
+    if (rc != EOK)
+        return fail("ext4_fclose(read-only mutation)", rc);
     return 0;
 }
 
@@ -913,6 +1238,97 @@ verify(void)
     unsigned index;
     ext4_file probe;
     int rc;
+
+    {
+        static const uint8_t expected[] = {0x41u, 0x53u, 0x54u};
+        uint8_t bytes[sizeof(expected)];
+        ext4_file truncated;
+        size_t moved = 0u;
+
+        rc = ext4_fopen(&truncated, MOUNT_POINT "open-truncate.bin", "rb");
+        if (rc != EOK || ext4_fsize(&truncated) != sizeof(expected))
+            return fail("verify existing O_TRUNC size", rc);
+        rc = ext4_fread(&truncated, bytes, sizeof(bytes), &moved);
+        if (rc != EOK || moved != sizeof(bytes) ||
+            memcmp(bytes, expected, sizeof(bytes)) != 0)
+            return fail("verify existing O_TRUNC bytes", rc);
+        rc = ext4_fclose(&truncated);
+        if (rc != EOK)
+            return fail("verify existing O_TRUNC close", rc);
+    }
+
+    {
+        ext4_file extended;
+        uint8_t bytes[256];
+        size_t moved = 0u;
+        uint32_t remaining = TRUNCATE_EXTENDED_BYTES + TRUNCATE_APPEND_BYTES;
+        uint32_t offset = 0u;
+
+        rc = ext4_fopen(&extended, MOUNT_POINT "truncate-extended.bin", "rb");
+        if (rc != EOK || ext4_fsize(&extended) != remaining)
+            return fail("verify truncate extension size", rc);
+        while (remaining != 0u) {
+            size_t part = remaining < sizeof(bytes) ? remaining : sizeof(bytes);
+
+            rc = ext4_fread(&extended, bytes, part, &moved);
+            if (rc != EOK || moved != part)
+                return fail("verify truncate extension read", rc);
+            for (size_t index = 0u; index < part; ++index) {
+                uint32_t position = offset + (uint32_t)index;
+                uint8_t expected = position == 0u ? 0x41u :
+                                   position == 1u ? 0x53u :
+                                   position == 2u ? 0x54u :
+                                   position == TRUNCATE_EXTENDED_BYTES ?
+                                       0xdeu :
+                                   position == TRUNCATE_EXTENDED_BYTES + 1u ?
+                                       0xadu : 0u;
+
+                if (bytes[index] != expected)
+                    return fail("verify truncate extension bytes", 0);
+            }
+            offset += (uint32_t)part;
+            remaining -= (uint32_t)part;
+        }
+        rc = ext4_fclose(&extended);
+        if (rc != EOK)
+            return fail("verify truncate extension close", rc);
+    }
+
+    {
+        ext4_file extended;
+        uint8_t bytes[sizeof("AST") - 1u];
+        size_t moved = 0u;
+
+        rc = ext4_fopen(&extended,
+                        MOUNT_POINT "truncate-reextended.bin", "rb");
+        if (rc != EOK || ext4_fsize(&extended) != sizeof(bytes))
+            return fail("verify truncate re-extension size", rc);
+        rc = ext4_fread(&extended, bytes, sizeof(bytes), &moved);
+        if (rc != EOK || moved != sizeof(bytes) || bytes[0] != 0x41u ||
+            bytes[1] != 0u || bytes[2] != 0u) {
+            (void)ext4_fclose(&extended);
+            return fail("verify truncate re-extension bytes", rc);
+        }
+        rc = ext4_fclose(&extended);
+        if (rc != EOK)
+            return fail("verify truncate re-extension close", rc);
+    }
+
+    {
+        char target[32];
+        size_t length = 0u;
+        uint32_t mode = 0u;
+
+        rc = ext4_readlink(MOUNT_POINT "dir/renamed-link", target,
+                           sizeof(target), &length);
+        if (rc != EOK || length != strlen("renamed.txt") ||
+            memcmp(target, "renamed.txt", length) != 0)
+            return fail("ext4_readlink", rc);
+        rc = ext4_mode_get(MOUNT_POINT "dir/renamed-link", &mode);
+        if (rc != EOK || (mode & EXT4_INODE_MODE_TYPE_MASK) !=
+                           EXT4_INODE_MODE_SOFTLINK)
+            return fail("symlink inode mode", rc);
+    }
 
     {
         uint32_t mode = 0u;
@@ -1149,6 +1565,272 @@ realtime_after_ms(long milliseconds)
     return deadline;
 }
 
+static void
+race_reset(void)
+{
+    if (pthread_mutex_lock(&controlled.mutex) != 0)
+        abort();
+    controlled.race_waiters = 0u;
+    controlled.release_race = 0;
+    if (pthread_mutex_unlock(&controlled.mutex) != 0)
+        abort();
+}
+
+static void
+race_wait(void)
+{
+    if (pthread_mutex_lock(&controlled.mutex) != 0)
+        abort();
+    ++controlled.race_waiters;
+    (void)pthread_cond_broadcast(&controlled.changed);
+    while (!controlled.release_race)
+        (void)pthread_cond_wait(&controlled.changed, &controlled.mutex);
+    if (pthread_mutex_unlock(&controlled.mutex) != 0)
+        abort();
+}
+
+static int
+race_release_pair(void)
+{
+    struct timespec deadline = realtime_after_ms(5000L);
+    int ready;
+
+    if (pthread_mutex_lock(&controlled.mutex) != 0)
+        abort();
+    while (controlled.race_waiters != 2u &&
+           pthread_cond_timedwait(&controlled.changed, &controlled.mutex,
+                                  &deadline) == 0) {
+    }
+    ready = controlled.race_waiters == 2u;
+    controlled.release_race = 1;
+    (void)pthread_cond_broadcast(&controlled.changed);
+    if (pthread_mutex_unlock(&controlled.mutex) != 0)
+        abort();
+    return ready;
+}
+
+enum MutationOperation {
+    MUTATION_CREATE_EXCLUSIVE,
+    MUTATION_WRITE,
+    MUTATION_TRUNCATE,
+    MUTATION_RENAME,
+    MUTATION_UNLINK
+};
+
+typedef struct MutationJob {
+    enum MutationOperation operation;
+    const char *path;
+    const char *to;
+    ext4_file *file;
+    const uint8_t *bytes;
+    size_t length;
+    int rc;
+    size_t moved;
+} MutationJob;
+
+static void *
+run_mutation(void *argument)
+{
+    MutationJob *job = argument;
+
+    race_wait();
+    if (job->operation == MUTATION_CREATE_EXCLUSIVE) {
+        ext4_file file;
+
+        job->rc = ext4_fopen2(&file, job->path,
+                              O_WRONLY | O_CREAT | O_EXCL);
+        if (job->rc == EOK)
+            job->rc = ext4_fclose(&file);
+    } else if (job->operation == MUTATION_TRUNCATE) {
+        job->rc = ext4_ftruncate(job->file, job->length);
+    } else if (job->operation == MUTATION_RENAME) {
+        job->rc = ext4_frename(job->path, job->to);
+    } else if (job->operation == MUTATION_UNLINK) {
+        job->rc = ext4_fremove(job->path);
+    } else {
+        job->rc = ext4_fwrite(job->file, job->bytes, job->length,
+                              &job->moved);
+    }
+    return NULL;
+}
+
+static int
+run_mutation_pair(MutationJob *left, MutationJob *right)
+{
+    pthread_t left_thread;
+    pthread_t right_thread;
+    int ready;
+
+    race_reset();
+    if (pthread_create(&left_thread, NULL, run_mutation, left) != 0)
+        return fail("pthread_create mutation pair", 0);
+    if (pthread_create(&right_thread, NULL, run_mutation, right) != 0) {
+        if (pthread_mutex_lock(&controlled.mutex) != 0)
+            abort();
+        controlled.release_race = 1;
+        (void)pthread_cond_broadcast(&controlled.changed);
+        if (pthread_mutex_unlock(&controlled.mutex) != 0)
+            abort();
+        (void)pthread_join(left_thread, NULL);
+        return fail("pthread_create mutation pair", 0);
+    }
+    ready = race_release_pair();
+    (void)pthread_join(left_thread, NULL);
+    (void)pthread_join(right_thread, NULL);
+    return ready ? 0 : fail("mutation pair did not reach start gate", 0);
+}
+
+static int
+check_concurrent_mutation_linearization(void)
+{
+    static uint8_t left_bytes[4096];
+    static uint8_t right_bytes[4096];
+    static uint8_t result[8192];
+    const char *exclusive_path = MOUNT_POINT "race-exclusive.bin";
+    const char *append_path = MOUNT_POINT "race-append.bin";
+    const char *write_path = MOUNT_POINT "race-write.bin";
+    const char *truncate_path = MOUNT_POINT "race-truncate.bin";
+    const char *rename_from = MOUNT_POINT "race-rename-from.bin";
+    const char *rename_to = MOUNT_POINT "race-rename-to.bin";
+    MutationJob left = {.operation = MUTATION_CREATE_EXCLUSIVE,
+                        .path = exclusive_path};
+    MutationJob right = {.operation = MUTATION_CREATE_EXCLUSIVE,
+                         .path = exclusive_path};
+    ext4_file left_file;
+    ext4_file right_file;
+    ext4_file check;
+    size_t moved = 0u;
+    uint64_t final_size;
+    int rc;
+
+    if (run_mutation_pair(&left, &right) ||
+        !((left.rc == EOK && right.rc == EEXIST) ||
+          (left.rc == EEXIST && right.rc == EOK)))
+        return fail("exclusive create did not have one winner", 0);
+
+    memset(left_bytes, 0x35, sizeof(left_bytes));
+    memset(right_bytes, 0xcau, sizeof(right_bytes));
+    rc = ext4_fopen(&check, append_path, "wb");
+    if (rc != EOK || ext4_fclose(&check) != EOK ||
+        ext4_fopen(&left_file, append_path, "ab") != EOK ||
+        ext4_fopen(&right_file, append_path, "ab") != EOK)
+        return fail("open append race", rc);
+    left = (MutationJob){.operation = MUTATION_WRITE,
+                         .file = &left_file,
+                         .bytes = left_bytes,
+                         .length = sizeof(left_bytes)};
+    right = (MutationJob){.operation = MUTATION_WRITE,
+                          .file = &right_file,
+                          .bytes = right_bytes,
+                          .length = sizeof(right_bytes)};
+    if (run_mutation_pair(&left, &right) || left.rc != EOK ||
+        right.rc != EOK || left.moved != sizeof(left_bytes) ||
+        right.moved != sizeof(right_bytes))
+        return fail("append race writes", left.rc != EOK ? left.rc : right.rc);
+    (void)ext4_fclose(&left_file);
+    (void)ext4_fclose(&right_file);
+    rc = ext4_fopen(&check, append_path, "rb");
+    if (rc != EOK || ext4_fsize(&check) != sizeof(result) ||
+        ext4_fread(&check, result, sizeof(result), &moved) != EOK ||
+        moved != sizeof(result))
+        return fail("append race readback", rc);
+    (void)ext4_fclose(&check);
+    if (!((result[0] == 0x35u && result[4096] == 0xcau) ||
+          (result[0] == 0xcau && result[4096] == 0x35u)))
+        return fail("append reservations overlapped", 0);
+    for (size_t index = 0u; index < sizeof(result); ++index) {
+        uint8_t expected = index < 4096u ? result[0] : result[4096];
+
+        if (result[index] != expected)
+            return fail("append write was torn", 0);
+    }
+
+    if (write_file(write_path, 213u, sizeof(left_bytes)) ||
+        ext4_fopen(&left_file, write_path, "r+b") != EOK ||
+        ext4_fopen(&right_file, write_path, "r+b") != EOK)
+        return fail("open conflicting write race", 0);
+    left = (MutationJob){.operation = MUTATION_WRITE,
+                         .file = &left_file,
+                         .bytes = left_bytes,
+                         .length = sizeof(left_bytes)};
+    right = (MutationJob){.operation = MUTATION_WRITE,
+                          .file = &right_file,
+                          .bytes = right_bytes,
+                          .length = sizeof(right_bytes)};
+    if (run_mutation_pair(&left, &right) || left.rc != EOK ||
+        right.rc != EOK)
+        return fail("conflicting write race",
+                    left.rc != EOK ? left.rc : right.rc);
+    (void)ext4_fclose(&left_file);
+    (void)ext4_fclose(&right_file);
+    rc = ext4_fopen(&check, write_path, "rb");
+    if (rc != EOK || ext4_fread(&check, result, sizeof(left_bytes), &moved) !=
+                       EOK || moved != sizeof(left_bytes))
+        return fail("conflicting write readback", rc);
+    (void)ext4_fclose(&check);
+    if (result[0] != 0x35u && result[0] != 0xcau)
+        return fail("conflicting write had invalid winner", 0);
+    for (size_t index = 1u; index < sizeof(left_bytes); ++index)
+        if (result[index] != result[0])
+            return fail("conflicting write was torn", 0);
+
+    if (write_file(truncate_path, 212u, sizeof(left_bytes)) ||
+        ext4_fopen(&left_file, truncate_path, "r+b") != EOK ||
+        ext4_fopen(&right_file, truncate_path, "r+b") != EOK)
+        return fail("open truncate race", 0);
+    left = (MutationJob){.operation = MUTATION_WRITE,
+                         .file = &left_file,
+                         .bytes = left_bytes,
+                         .length = sizeof(left_bytes)};
+    right = (MutationJob){.operation = MUTATION_TRUNCATE,
+                          .file = &right_file};
+    if (run_mutation_pair(&left, &right) || left.rc != EOK || right.rc != EOK)
+        return fail("truncate/write race", left.rc != EOK ? left.rc : right.rc);
+    (void)ext4_fclose(&left_file);
+    (void)ext4_fclose(&right_file);
+    rc = ext4_fopen(&check, truncate_path, "rb");
+    if (rc != EOK)
+        return fail("truncate race readback open", rc);
+    final_size = ext4_fsize(&check);
+    if (final_size == sizeof(left_bytes)) {
+        moved = 0u;
+        rc = ext4_fread(&check, result, sizeof(left_bytes), &moved);
+        if (rc != EOK || moved != sizeof(left_bytes))
+            return fail("truncate race readback", rc);
+        for (size_t index = 0u; index < sizeof(left_bytes); ++index)
+            if (result[index] != 0x35u)
+                return fail("truncate/write result was torn", 0);
+    } else if (final_size != 0u) {
+        return fail("truncate/write had no linear order", 0);
+    }
+    (void)ext4_fclose(&check);
+
+    if (write_file(rename_from, 214u, 64u))
+        return fail("create rename race fixture", 0);
+    left = (MutationJob){.operation = MUTATION_RENAME,
+                         .path = rename_from,
+                         .to = rename_to};
+    right = (MutationJob){.operation = MUTATION_UNLINK,
+                          .path = rename_from};
+    if (run_mutation_pair(&left, &right))
+        return 1;
+    rc = ext4_fopen(&check, rename_to, "rb");
+    if (left.rc == EOK && right.rc == ENOENT) {
+        if (rc != EOK)
+            return fail("rename winner missing destination", rc);
+        (void)ext4_fclose(&check);
+    } else if (left.rc == ENOENT && right.rc == EOK) {
+        if (rc != ENOENT)
+            return fail("unlink winner left destination", rc);
+    } else {
+        if (rc == EOK)
+            (void)ext4_fclose(&check);
+        return fail("rename/unlink had no linear order", 0);
+    }
+    puts("concurrency oracle: inode and namespace mutations linearized");
+    return 0;
+}
+
 /*
  * A is held inside a physical cache fill. B's unrelated byte is warm, so it
  * must finish without waiting for A and without issuing another device read.
@@ -1267,8 +1949,11 @@ check_concurrent_read_oracle(void)
         a_second_job.byte != pattern_byte(1u, 0u) || b_job.rc != EOK ||
         b_job.moved != 1u || b_job.byte != pattern_byte(3u, 0u))
         return fail("concurrency oracle bytes", a_job.rc);
-    if (controlled.reads != reads_at_stall + 1u)
+    /* A complete 4 KiB block is one physical request at production geometry;
+     * the peer must add none. */
+    if (controlled.reads != reads_at_stall) {
         return fail("same-block miss issued duplicate I/O", 0);
+    }
     (void)ext4_fclose(&a);
     (void)ext4_fclose(&a_second);
     (void)ext4_fclose(&b);
@@ -1321,6 +2006,10 @@ report(void)
            (unsigned long long)(
                block->operation[ASTRA_BLOCK_OPERATION_READ].failures +
                block->operation[ASTRA_BLOCK_OPERATION_WRITE].failures));
+    printf("writeback: scalar=%llu scatter=%llu largest_scatter=%lu\n",
+           (unsigned long long)controlled.writes,
+           (unsigned long long)controlled.scatter_writes,
+           (unsigned long)controlled.largest_scatter);
 }
 
 int
@@ -1337,12 +2026,25 @@ main(int argc, char **argv)
     int full_volume;
     int powercut_write;
     int powercut_recover;
+    int journal_failure_write;
+    int journal_failure_recover;
+    int stale_setup;
+    int stale_history;
+    int stale_delete;
+    int stale_recover;
+    int stale_mode;
+    int journal_pressure;
 
     setvbuf(stdout, NULL, _IONBF, 0);
 
+    if (check_crc32c_contract())
+        return 1;
+
     if (argc < 2) {
         printf("usage: %s <image> [verify-only|partitioned|on-file|full|"
-               "powercut-write|powercut-recover]\n", argv[0]);
+               "powercut-write|powercut-recover|journal-failure-write|"
+               "journal-failure-recover|stale-setup|stale-history|"
+               "stale-delete|stale-recover|journal-pressure]\n", argv[0]);
         return 2;
     }
     verify_only = argc > 2 && strcmp(argv[2], "verify-only") == 0;
@@ -1351,6 +2053,16 @@ main(int argc, char **argv)
     full_volume = argc > 2 && strcmp(argv[2], "full") == 0;
     powercut_write = argc > 2 && strcmp(argv[2], "powercut-write") == 0;
     powercut_recover = argc > 2 && strcmp(argv[2], "powercut-recover") == 0;
+    journal_failure_write =
+        argc > 2 && strcmp(argv[2], "journal-failure-write") == 0;
+    journal_failure_recover =
+        argc > 2 && strcmp(argv[2], "journal-failure-recover") == 0;
+    stale_setup = argc > 2 && strcmp(argv[2], "stale-setup") == 0;
+    stale_history = argc > 2 && strcmp(argv[2], "stale-history") == 0;
+    stale_delete = argc > 2 && strcmp(argv[2], "stale-delete") == 0;
+    stale_recover = argc > 2 && strcmp(argv[2], "stale-recover") == 0;
+    stale_mode = stale_setup || stale_history || stale_delete || stale_recover;
+    journal_pressure = argc > 2 && strcmp(argv[2], "journal-pressure") == 0;
 
     if (getenv("ASTRA_EXT4_DEBUG") != NULL) {
         ext4_dmask_set(DEBUG_ALL);
@@ -1364,7 +2076,7 @@ main(int argc, char **argv)
     } else if (load_image(argv[1])) {
         return 1;
     }
-    if (powercut_write) {
+    if (powercut_write || journal_failure_write || stale_delete) {
         durable_storage = malloc(storage_bytes);
         if (durable_storage == NULL) {
             return fail("malloc durable image", 0);
@@ -1383,8 +2095,46 @@ main(int argc, char **argv)
     if (do_mount()) {
         return 1;
     }
-    if (powercut_write) {
+    if (!stale_mode && !journal_pressure &&
+        check_writeback_barrier_contract()) {
+        return 1;
+    }
+    if (!stale_mode && !journal_pressure && check_group_commit_contract()) {
+        return 1;
+    }
+    if (!stale_mode && !journal_pressure &&
+        check_handle_abort_savepoint_contract()) {
+        return 1;
+    }
+    if (stale_setup) {
+        if (write_file(MOUNT_POINT "stale-marker", 243u, 1u) != 0 ||
+            ext4_cache_flush(MOUNT_POINT) != EOK)
+            return 1;
+    } else if (stale_history) {
+        if (ext4_fremove(MOUNT_POINT "stale-marker") != EOK ||
+            ext4_cache_flush(MOUNT_POINT) != EOK ||
+            write_file(MOUNT_POINT "stale-marker", 243u, 1u) != 0 ||
+            ext4_cache_flush(MOUNT_POINT) != EOK)
+            return 1;
+    } else if (stale_delete) {
+        if (ext4_fremove(MOUNT_POINT "stale-marker") == EOK &&
+            ext4_journal_commit(MOUNT_POINT) == EOK &&
+            store_bytes(argv[1], durable_storage, storage_bytes) == 0)
+            puts("stale-log oracle: persisted committed delete only");
+        free(durable_storage);
+        free(storage);
+        return failures != 0;
+    } else if (stale_recover) {
+        ext4_file absent;
+        int rc = ext4_fopen(&absent, MOUNT_POINT "stale-marker", "rb");
+
+        if (rc == EOK)
+            (void)ext4_fclose(&absent);
+        if (rc != ENOENT)
+            (void)fail("historical journal transaction was replayed", rc);
+    } else if (powercut_write) {
         if (write_file(MOUNT_POINT "powercut.bin", 220u, 16384u) == 0 &&
+            ext4_cache_flush(MOUNT_POINT) == EOK &&
             store_bytes(argv[1], durable_storage, storage_bytes) == 0) {
             puts("power-cut oracle: persisted only device-flushed bytes");
         }
@@ -1392,8 +2142,27 @@ main(int argc, char **argv)
         free(storage);
         return failures != 0;
     }
-    if (powercut_recover) {
+    if (journal_pressure) {
+        (void)check_journal_pressure_contract();
+    } else if (stale_mode) {
+        /* The stale-log modes form one focused multi-mount oracle. */
+    } else if (powercut_recover) {
         (void)read_verify(MOUNT_POINT "powercut.bin", 220u, 16384u);
+    } else if (journal_failure_write) {
+        if (check_journal_failure_contract() == 0 &&
+            store_bytes(argv[1], durable_storage, storage_bytes) == 0)
+            puts("journal failure oracle: filesystem aborted read-only");
+        free(durable_storage);
+        free(storage);
+        return failures != 0;
+    } else if (journal_failure_recover) {
+        ext4_file absent;
+        int rc = ext4_fopen(&absent, MOUNT_POINT "journal-failure", "rb");
+
+        if (rc == EOK)
+            (void)ext4_fclose(&absent);
+        if (rc != ENOENT)
+            (void)fail("failed journal transaction survived recovery", rc);
     } else if (verify_only) {
         if (verify() == 0) {
             (void)read_verify(MOUNT_POINT "concurrent-left.bin", 210u,
@@ -1406,8 +2175,9 @@ main(int argc, char **argv)
     } else if (populate() == 0) {
         if (verify() == 0 && !on_file &&
             check_coalesced_read_cache() == 0 &&
-            check_concurrent_read_oracle() == 0)
-            (void)check_concurrent_disjoint_writes();
+            check_concurrent_read_oracle() == 0 &&
+            check_concurrent_disjoint_writes() == 0)
+            (void)check_concurrent_mutation_linearization();
     }
     do_umount();
     report();
@@ -1434,8 +2204,11 @@ main(int argc, char **argv)
         printf("FAIL allocator invariants broken\n");
         ++failures;
     }
-    if (port.split_transfers == 0u) {
-        printf("FAIL no transfer was split; the cap never bound\n");
+    if (!on_file && !verify_only && !full_volume && !powercut_recover &&
+        !journal_failure_recover &&
+        !stale_mode && !journal_pressure &&
+        controlled.largest_scatter < 2u) {
+        printf("FAIL dirty writeback never coalesced adjacent blocks\n");
         ++failures;
     }
     /*

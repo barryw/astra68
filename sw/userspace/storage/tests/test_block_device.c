@@ -77,6 +77,52 @@ test_contract(AstraBlockDevice *device, AstraMemoryBlock *memory)
 }
 
 static void
+test_scatter_write(AstraBlockDevice *device, AstraMemoryBlock *memory)
+{
+    uint8_t first[2u * 512u];
+    uint8_t second[2u * 512u];
+    uint8_t third[3u * 512u];
+    const void *buffers[] = {first, second, third};
+    const void *bad_buffers[] = {first, NULL, third};
+    const uint32_t counts[] = {1u, 2u, 3u};
+    const uint32_t too_large[] = {6u, 6u, 6u};
+    AstraBlockVector vector = {buffers, counts, 3u};
+    AstraBlockVector bad = {bad_buffers, counts, 3u};
+    AstraBlockVector oversized = {buffers, too_large, 3u};
+    uint64_t calls = device->metrics.operation[ASTRA_BLOCK_OPERATION_WRITE]
+                         .calls;
+    uint64_t operations = memory->operation_count;
+
+    memset(first, 0x11, sizeof(first));
+    memset(second, 0x22, sizeof(second));
+    memset(third, 0x33, sizeof(third));
+    assert(astra_block_writev(device, 20u, &vector, 0u) == ASTRA_BLOCK_OK);
+    assert(memory->operation_count == operations + 1u);
+    assert(device->metrics.operation[ASTRA_BLOCK_OPERATION_WRITE].calls ==
+           calls + 1u);
+    assert(device->metrics.operation[ASTRA_BLOCK_OPERATION_WRITE].units ==
+           6u);
+    assert(memcmp(storage + 20u * 512u, first, 512u) == 0);
+    assert(memcmp(storage + 21u * 512u, second, sizeof(second)) == 0);
+    assert(memcmp(storage + 23u * 512u, third, 3u * 512u) == 0);
+
+    operations = memory->operation_count;
+    assert(astra_block_writev(device, 0u, NULL, 0u) ==
+           ASTRA_BLOCK_INVALID_ARGUMENT);
+    vector.count = 0u;
+    assert(astra_block_writev(device, 0u, &vector, 0u) ==
+           ASTRA_BLOCK_INVALID_ARGUMENT);
+    assert(astra_block_writev(device, 0u, &bad, 0u) ==
+           ASTRA_BLOCK_INVALID_ARGUMENT);
+    assert(astra_block_writev(device, 0u, &oversized, 0u) ==
+           ASTRA_BLOCK_TRANSFER_TOO_LARGE);
+    vector.count = 3u;
+    assert(astra_block_writev(device, TEST_SECTORS - 4u, &vector, 0u) ==
+           ASTRA_BLOCK_OUT_OF_RANGE);
+    assert(memory->operation_count == operations);
+}
+
+static void
 stress(AstraBlockDevice *device)
 {
     uint32_t random = 0x68a57a31u;
@@ -144,6 +190,7 @@ main(void)
     astra_block_device_init(&device, &astra_memory_block_backend, &memory,
                             nanoseconds, NULL);
     test_contract(&device, &memory);
+    test_scatter_write(&device, &memory);
     stress(&device);
     report(&device);
     puts("astra block device: PASS");

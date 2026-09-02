@@ -3,8 +3,8 @@
 > The scene ownership and all-or-nothing presentation invariant in this
 > document carry forward to Arty. The active dimensions, formats, memory
 > topology, triple-bank behavior, and command dependencies are frozen by
-> [`GRAPHICS_ARCHITECTURE.md`](GRAPHICS_ARCHITECTURE.md). Numeric 720x480 and
-> ULX3S examples below describe the implemented legacy path.
+> [`GRAPHICS_ARCHITECTURE.md`](GRAPHICS_ARCHITECTURE.md). Numeric 720x480
+> examples below are illustrative only.
 
 ## Status
 

@@ -21,11 +21,31 @@
 #include <astra/vfs_service.h>
 #include <astra/vfs_service_core.h>
 
+typedef struct AstraVfsPortExecLane {
+    uint32_t owner_thread;
+    uint32_t session;
+    uint32_t reply_receive;
+    uint32_t reply_source;
+    uint32_t reply_send;
+    uint32_t area;
+    uint32_t area_send;
+    uint32_t area_size;
+} AstraVfsPortExecLane;
+
+/* Shared production implementation for service state locks and file waits. */
+int astra_vfs_state_lock_acquire(void *context);
+void astra_vfs_state_lock_release(void *context);
+int astra_vfs_state_futex_wait(void *context,
+                               volatile uint32_t *sequence,
+                               uint32_t expected);
+void astra_vfs_state_futex_wake(void *context,
+                                volatile uint32_t *sequence);
+
 /*
- * The client half. Use astra_vfs_port_connect(): version 3 transfers one reply
- * send handle during HELLO and reuses the receive handle for the session.
- * Version 2 remains the per-request fallback for a rolling update against an
- * older service.
+ * The client half. Use astra_vfs_port_connect(): version 20+ retains one reply
+ * channel and transfer area per calling thread inside a shared session.
+ * Versions 3 through 19 retain one channel per session; version 2 remains the
+ * per-request fallback for a rolling update against an older service.
  *
  * The return value is the transport's verdict, never the filesystem's: a peer
  * that has gone is ASTRA_VFS_ERR_PEER, and a request that was answered is
@@ -35,10 +55,30 @@
 uint32_t astra_vfs_port_transport(void *context, uint32_t operation,
                                   const AstraVfsRequest *request,
                                   AstraVfsReply *reply);
+/* Lifecycle guard used by an in-process backend bound to this transport. */
+uint32_t astra_vfs_port_client_enter(AstraVfsClient *client);
+void astra_vfs_port_client_leave(AstraVfsClient *client);
+AstraVfsCallState *astra_vfs_port_call_acquire(AstraVfsClient *client);
+/*
+ * Astra executables use native TLS for call scratch. A shared library, whose
+ * dynamic TLS ABI is intentionally not part of Astra yet, supplies one record
+ * for each thread the process can actually own. Records are selected by the
+ * generation-safe kernel thread handle; no request is serialized through a
+ * process-global fallback.
+ */
+int astra_vfs_port_set_thread_storage(
+    AstraVfsClient *client, AstraVfsPortThreadState *states,
+    uint32_t capacity);
 uint32_t astra_vfs_port_connect(AstraVfsClient *client, uint32_t service);
+uint32_t astra_vfs_port_connect_with_accelerator(
+    AstraVfsClient *client, uint32_t service,
+    const AstraVfsPortAcceleratorOps *accelerator);
 /* Version 8: defer HELLO and fuse it with the first path operation. */
 uint32_t astra_vfs_port_connect_lazy(AstraVfsClient *client,
                                      uint32_t service);
+uint32_t astra_vfs_port_connect_lazy_with_accelerator(
+    AstraVfsClient *client, uint32_t service,
+    const AstraVfsPortAcceleratorOps *accelerator);
 /* Drop this process's transport handles without sending BYE.  A fork child
  * inherited the handles, but not ownership of the parent's service session. */
 void astra_vfs_port_abandon(AstraVfsClient *client);
@@ -48,7 +88,8 @@ void astra_vfs_port_abandon(AstraVfsClient *client);
  * This is the shape almost every read in the system actually wants: a manifest,
  * an icon, a library image, a program. Doing it as three operations cost three
  * round trips, and a round trip is milliseconds. Same borrow lifetime as
- * astra_vfs_port_read_borrow: valid until the next operation on this client.
+ * astra_vfs_port_read_borrow: valid until the next operation on this thread's
+ * lane.
  *
  * Answers ASTRA_VFS_ERR_UNSUPPORTED against a peer older than version 5, and
  * ASTRA_VFS_ERR_LIMIT for a file larger than the area, filling `node_size` so
@@ -74,8 +115,8 @@ uint32_t astra_vfs_port_read_path_inline(AstraVfsClient *client,
  * manifest, hand an image to the library loader -- can read them where they
  * already are.
  *
- * The pointer is valid until the next operation on this client, because the
- * next one reuses the area. Copy anything that has to outlive that.
+ * The pointer is valid until the next operation on the calling thread's lane,
+ * because that lane reuses the area. Copy anything that has to outlive that.
  *
  * Refuses a length the area cannot hold; the caller falls back to read_bulk.
  */
@@ -91,6 +132,19 @@ uint32_t astra_vfs_port_read_bulk(AstraVfsClient *client, AstraVfsFile file,
 uint32_t astra_vfs_port_write_bulk(AstraVfsClient *client, AstraVfsFile file,
                                    uint64_t offset, const void *buffer,
                                    uint32_t length, uint32_t *moved);
+/* Version 21: bulk write plus its atomic post-write position. */
+uint32_t astra_vfs_port_write_bulk_position(
+    AstraVfsClient *client, AstraVfsFile file, uint64_t offset,
+    uint32_t flags, const void *buffer, uint32_t length, uint32_t *moved,
+    uint64_t *position);
+
+/* Payload produced by the calling thread's most recent area operation. */
+const uint8_t *astra_vfs_port_call_area(const AstraVfsClient *client,
+                                        uint32_t *capacity);
+uint32_t astra_vfs_port_exec_lane_export(AstraVfsClient *client,
+                                         AstraVfsPortExecLane *state);
+uint32_t astra_vfs_port_exec_lane_import(AstraVfsClient *client,
+                                         const AstraVfsPortExecLane *state);
 
 /*
  * Maps one reserved area as a lazily committed service table. Physical pages
@@ -107,7 +161,7 @@ int astra_vfs_port_quota_storage(uint32_t element_size, void **storage,
  * blocked in its own receive would stop the child it is serving.
  */
 typedef struct AstraVfsPortWorker {
-    AstraVfsRequestMessage incoming;
+    AstraVfsRequestMessageBuffer incoming;
     AstraVfsReplyMessage outgoing;
 } AstraVfsPortWorker;
 
@@ -124,7 +178,9 @@ typedef struct AstraVfsPortService {
      * calling -- which cost an afternoon telling those two apart.
      */
     uint32_t stalled;
+    uint32_t accelerator;
     uint32_t reply_sessions[ASTRA_VFS_SESSION_MAX];
+    uint32_t reply_lanes[ASTRA_VFS_SESSION_MAX];
     uint32_t reply_handles[ASTRA_VFS_SESSION_MAX];
     uint32_t area_handles[ASTRA_VFS_SESSION_MAX];
     uint8_t *area_addresses[ASTRA_VFS_SESSION_MAX];
@@ -144,6 +200,8 @@ int astra_vfs_port_service_set_state_lock(AstraVfsPortService *host,
                                           AstraVfsStateAcquire acquire,
                                           AstraVfsStateRelease release,
                                           void *context);
+int astra_vfs_port_service_set_accelerator(AstraVfsPortService *host,
+                                           uint32_t accelerator);
 
 /* Handles at most `budget` requests and returns how many it answered. */
 uint32_t astra_vfs_port_service_pump(AstraVfsPortService *host,

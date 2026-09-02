@@ -8,7 +8,7 @@
  * cutting through the middle of it. A freed 40-byte hole cannot answer a
  * 48-byte request, and after enough churn the heap is mostly holes.
  *
- * HANDOVER-memory-and-modernity.md section 4 said that was a claim to be
+ * Earlier allocator work said that was a claim to be
  * settled against a number rather than taste, and set the bar: peak footprint
  * over peak live bytes, above roughly 1.5 means first-fit is costing real
  * memory on a 128 MB machine. `heapbench` runs the editor-shaped trace and

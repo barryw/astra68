@@ -2,6 +2,7 @@
 #include <astra/boot.h>
 #include <astra/clock.h>
 #include <astra/display.h>
+#include <astra/host.h>
 #include <astra/input.h>
 #include <astra/network.h>
 #include <astra/supervisor.h>
@@ -121,8 +122,7 @@ static bool block_device_reset(uint32_t device_id, uint32_t generation,
     (void)context;
     if (device_id != ASTRA_DEVICE_ID_BLOCK0)
         return false;
-    kernel_platform_block_ack_state();
-    return true;
+    return kernel_platform_block_reset();
 }
 
 static bool input_device_quiesce(uint32_t device_id, uint32_t generation,
@@ -159,6 +159,14 @@ static bool network_device_reset(uint32_t device_id, uint32_t generation,
     (void)context;
     return device_id == ASTRA_DEVICE_ID_NETWORK0 &&
            kernel_platform_network_reset();
+}
+
+static bool host_device_reset(uint32_t device_id, uint32_t generation,
+                              void *context)
+{
+    (void)generation;
+    (void)context;
+    return device_id == ASTRA_DEVICE_ID_HOST0 && kernel_platform_host_reset();
 }
 
 static bool clock_device_keep(uint32_t device_id, uint32_t generation,
@@ -201,6 +209,14 @@ static bool register_physical_devices(void)
             ASTRA_NETWORK_CAP_TCP | ASTRA_NETWORK_CAP_UDP |
             ASTRA_NETWORK_CAP_RESOLVE | ASTRA_NETWORK_CAP_ICMP
     };
+    static const KernelDeviceDefinition host = {
+        host_device_reset,
+        host_device_reset,
+        NULL,
+        ASTRA_DEVICE_ID_HOST0,
+        ASTRA_DEVICE_CLASS_HOST,
+        ASTRA_HOST_CAP_FILESYSTEM
+    };
     static const KernelDeviceDefinition clock = {
         clock_device_keep,
         clock_device_keep,
@@ -226,8 +242,7 @@ static bool register_physical_devices(void)
     }
     /*
      * The block controller is only present when the host runtime attached
-     * media. A machine without it boots without a block service rather than
-     * failing, which is the ULX3S case today.
+     * media. A machine without it boots without a block service.
      */
     if (kernel_platform_block_present()) {
         if (kernel_device_register(&block) != KERNEL_DEVICE_OK)
@@ -235,6 +250,10 @@ static bool register_physical_devices(void)
     }
     if (kernel_platform_network_present()) {
         if (kernel_device_register(&network) != KERNEL_DEVICE_OK)
+            return false;
+    }
+    if (kernel_platform_host_present()) {
+        if (kernel_device_register(&host) != KERNEL_DEVICE_OK)
             return false;
     }
     if (kernel_device_register(&clock) != KERNEL_DEVICE_OK)
@@ -1172,6 +1191,14 @@ static void start_initial_user_image(void)
         capabilities[capability_count].rights = KERNEL_IRQ_RIGHTS;
         ++capability_count;
     }
+    if (kernel_platform_host_present()) {
+        capabilities[capability_count].name = ASTRA_CAPABILITY_HOST_DEVICE;
+        capabilities[capability_count].kind =
+            KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+        capabilities[capability_count].device_id = ASTRA_DEVICE_ID_HOST0;
+        capabilities[capability_count].rights = KERNEL_DEVICE_RIGHTS;
+        ++capability_count;
+    }
     capabilities[capability_count].name = ASTRA_CAPABILITY_CLOCK;
     capabilities[capability_count].kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
     capabilities[capability_count].device_id = ASTRA_DEVICE_ID_CLOCK0;
@@ -1182,7 +1209,7 @@ static void start_initial_user_image(void)
      * array is sized by the ABI maximum and another grant would otherwise
      * overrun it silently.
      */
-    _Static_assert(KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX >= 9u,
+    _Static_assert(KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX >= 10u,
                    "bootstrap capability slots exhausted");
 
     status = kernel_process_create_executable(

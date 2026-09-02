@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -270,6 +271,8 @@ main(void)
     astra_posix_start(NULL);
     astra_posix_file_bind(&file_ops);
     assert(astra_posix_descriptor_file(99u, 0) == 0);
+    errno = 0;
+    assert(dup2(0, INT_MAX) == -1 && errno == EMFILE);
     assert(dup(0) == 1);
     assert(astra_posix_descriptor_slot(1) == 99);
     assert(fcntl(0, F_SETFL, O_NONBLOCK) == 0);

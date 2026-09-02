@@ -4,8 +4,8 @@ This document is the authoritative registry of CPU-visible address ranges.
 Per-device documents define registers inside each allocated aperture; they may
 not allocate a new global range without updating this file.
 
-The table describes the currently implemented production SoC, not a future
-low-memory layout. All addresses are physical 68030 bus addresses. MMIO is
+The table describes the active QEMU machine on the Arty. All addresses are
+physical MC68030 bus addresses. MMIO is
 uncached and uses 32-bit, big-endian registers unless a device specification
 explicitly says otherwise.
 
@@ -13,25 +13,15 @@ explicitly says otherwise.
 
 | Start | End | Size | Owner | Access | State |
 |---|---|---:|---|---|---|
-| `0x00000000` | `0x00001FFF` | 8 KiB | Stage 0 reset alias | RO | Active while the reset overlay is selected |
-| `0x00000000` | `0x0003FFFF` | 256 KiB | ULX3S system ROM low alias | RO | Active after the stage-0 handoff |
 | `0x00000000` | `0x0007FFFF` | 512 KiB | Arty-hosted system ROM low alias | RO | Implemented in QEMU |
 | `0x01FF8000` | `0x01FFFFFF` | 32 KiB | Bootstrap scratch BRAM | RWX | Implemented |
-| `0x02000000` | `0x03FFFFFF` | 32 MiB | SDRAM CPU aperture, ULX3S profile | RWX | Implemented |
 | `0x02000000` | `0x09FFFFFF` | 128 MiB | SDRAM CPU aperture, Arty-hosted profile | RWX | Implemented in QEMU |
-| `0xFFE00000` | `0xFFE3FFFF` | 256 KiB | ULX3S system ROM aperture | RX | Alias of reserved SDRAM backing storage |
 | `0xFFE00000` | `0xFFE7FFFF` | 512 KiB | Arty-hosted system ROM aperture | RX | QEMU host memory; no PL or guest-RAM cost |
 | `0xFFF00000` | `0xFFF0FFFF` | 64 KiB | Vesta system and I/O | MMIO | Allocated |
 | `0xFFF10000` | `0xFFF1FFFF` | 64 KiB | Astraea DMA/blitter/copper | MMIO | Allocated |
 | `0xFFF20000` | `0xFFF2FFFF` | 64 KiB | Vega video | MMIO | Allocated |
-| `0xFFF30000` | `0xFFF3FFFF` | 64 KiB | Lyra audio | MMIO | Reserved; not instantiated |
+| `0xFFF30000` | `0xFFF3FFFF` | 64 KiB | Reserved device aperture | MMIO | Unimplemented |
 | `0xFFF40000` | `0xFFF40FFF` | 4 KiB | OHCI USB host | MMIO | Implemented |
-| `0xFFFC0000` | `0xFFFC1FFF` | 8 KiB | Immutable stage 0 | RX | Implemented |
-
-The ROM payload occupies SDRAM controller offsets
-`0x01E00000..0x01E3FFFF`, visible through the normal SDRAM aperture at
-`0x03E00000..0x03E3FFFF`. The OS must reserve that backing range while the ROM
-aperture is in use.
 
 ## ROM budgets
 
@@ -39,18 +29,13 @@ The active Arty-hosted ROM is a 512 KiB QEMU memory region. It consumes ARM
 host memory, not FPGA BRAM or guest SDRAM, and ends below the Vesta MMIO
 aperture at `0xFFF00000`.
 
-The legacy ULX3S ROM is a fixed 256 KiB window decoded in RTL — `boot_memory_map.sv` compares
-`address[31:18]` for both the low alias and the `0xFFE00000` aperture, and the
-SDRAM backing translation adds an 18-bit offset to `0x01E00000`. Enlarging it is
-a bitstream change and therefore a timing-closure re-qualification, so the
-budget is fixed and software fits inside it.
-
 **What may live in ROM:** exactly the chain that runs before a filesystem
 exists, plus enough to explain a failure when one never will — reset vectors and
 firmware, the kernel, the initial user image, the block-device service, a
 read-only reader for the boot volume, and the console font. Everything else is a
 file on storage: filesystem stacks beyond the boot volume, terminal, shell,
 fonts, desktop, applications, and diagnostics beyond POST.
+
 
 lwext4 is the load-bearing example. It is 64–74 KiB of MC68030 text
 (`docs/STORAGE_AND_VFS.md`) and currently lives in the embedded Supervisor only
@@ -60,40 +45,14 @@ reserves only the pages the image actually occupies and returns the rest to the
 allocator. Later programs are files and use the transactional streaming loader,
 so this firmware-only reservation is not an application-size ceiling.
 
-The current Arty/QEMU software image is close to this same fixed ceiling. The
-2026-08-08 event-durability checkpoint is 249,000 of 262,144 bytes, leaving
-13,144 bytes. Its supervisor image is 106,840 bytes on disk (95,903 text, 12
-data, 377,382 BSS) and compresses to 65,906 bytes. The embedded copy is made
-with `objcopy --strip-all`; the separate linked ELF retains symbols for
-debugging. Keeping symbol and string tables in the ROM copy previously spent
-about 20 KiB of raw payload on bytes the machine never loads.
-
-Measured at ROM v0.3 with boot ABI 0.3 (`astra68.rom` reports this on every
-build):
-
-| Payload | Bytes | Form |
-|---|---:|---|
-| kernel image | 85,032 | LZ4 of 129,244 |
-| splash asset | 86,654 | LZ4 of 350,720 |
-| firmware code, rodata, vectors | ~15,000 | uncompressed; it is the decoder |
-| initial user image | 1,913 | LZ4 of 6,468 |
-| **used** | **189,064** | 72.1% |
-| **free** | **73,080** | |
-
-Both loadable images ship as LZ4-legacy streams decoded into their load
-addresses by the same decoder the splash has always used, then verified by
-CRC-32 against a build-time constant. That replaced a read-back comparison
-which compression made impossible, and it preserves what that comparison
-actually proved: the destination RAM holds the intended image. Stronger codecs
-were measured and rejected — gzip and xz save a further 28 KiB and 46 KiB but
-cost roughly 1.5–3 s of decode at 12.5 MHz, plus a larger decoder, to buy space
-that is not currently scarce.
+The current image size and retained identity are recorded in
+`CURRENT_STATE.md`. Loadable images are LZ4-compressed and CRC-32 verified after
+decode.
 
 ## Boot reservations
 
-The boot ABI publishes these sorted physical ranges in `AstraBootInfo`. They
-are fixed for boot ABI 0.x and must not be inferred from linker symbols by the
-kernel.
+The boot ABI publishes sorted physical ranges in `AstraBootInfo`; the kernel
+must not infer them from linker symbols.
 
 | Start | End | Size | Type | Initial ownership |
 |---|---|---:|---|---|
@@ -104,13 +63,12 @@ kernel.
 | `0x020C4000` | `0x020D3FFF` | 64 KiB | Retained kernel trace | Kernel diagnostics |
 | `0x020D4000` | `0x02153FFF` | 512 KiB | Frame and ownership metadata for up to 128 MiB | Kernel |
 | `0x02154000` | `0x02353FFF` | 2 MiB | Kernel object and scheduler tables | Kernel |
-| `0x02354000` | `0x03DFFFFF` | 26.672 MiB | Usable RAM | Physical-page allocator |
-| `0x03E00000` | `0x03E3FFFF` | 256 KiB | System-ROM backing | Firmware/ROM mapping |
-| `0x03E40000` | `0x03FFFFFF` | 1.75 MiB | Usable RAM | Physical-page allocator |
-| `0x04000000` | `0x09FFFFFF` | 96 MiB | Hosted-profile extension | Physical-page allocator on the 128 MiB profile only |
+| `0x02354000` | `0x03EFFFFF` | 27.668 MiB | Usable RAM | Physical-page allocator |
+| `0x03F00000` | `0x03FFFFFF` | 1 MiB | OHCI DMA pool | Device-owned, uncached |
+| `0x04000000` | `0x09FFFFFF` | 96 MiB | Usable RAM | Physical-page allocator |
 
 `AstraBootInfo` itself begins at `0x01FF8000` and is 268 bytes as of boot ABI
-0.3. The linker reserves the first 1 KiB of bootstrap BRAM for the handoff
+0.6. The linker reserves the first 1 KiB of bootstrap BRAM for the handoff
 structure and ABI growth. The canonical definitions are in
 `sw/include/astra/boot.h`.
 
@@ -123,13 +81,11 @@ bytes long after it has taken ownership of the map, and the allocator must
 never hand them out. The image is capped at `ASTRA_USER_IMAGE_MAX_SIZE`
 (256 KiB) and validation rejects any description that escapes a firmware range.
 
-The kernel is linked once for both profiles. Its large per-frame tables live
-after the fixed trace ring, so crash tooling keeps the same address while the
-32 MiB physical profile pays only the static reservation, not a second kernel
-image. Firmware accepts a page-aligned RAM map beginning at the early-log base
+The kernel's large per-frame tables live after the fixed trace ring, so crash
+tooling keeps the same address. Firmware accepts a page-aligned RAM map
+beginning at the early-log base
 and extending through the fixed bootstrap reservations; Axiom sizes its frame
-tables from the reported map. The qualified production profiles remain 32 MiB
-ULX3S and 128 MiB Arty-hosted.
+tables from the reported map. The production profile is 128 MiB Arty-hosted.
 
 Addresses not listed above are unallocated. In particular, the current SoC
 does not yet expose general SDRAM at `0x00040000..0x01FF7FFF`; software must use

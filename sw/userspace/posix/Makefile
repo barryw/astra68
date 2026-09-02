@@ -7,7 +7,8 @@ include ../../../mk/m68k-cross.mk
 # command written against the NDK must not pay for printf it never calls.
 
 CC := $(CROSS)gcc
-AR := $(CROSS)ar
+CXX := $(CROSS)g++
+AR := $(CROSS)gcc-ar
 HOST_CC ?= cc
 RUNTIME := ../runtime
 STREAMS := ../streams
@@ -15,22 +16,26 @@ VFS := ../vfs
 NDK := ../../../ndk
 PICOLIBC ?= $(HOME)/picolibc-astra
 include kit/astra-posix.mk
-CPPFLAGS := -I include -I../../include -I$(RUNTIME)/include \
+PROJECT_CPPFLAGS := -I include -I../../include -I$(RUNTIME)/include \
 	-I$(STREAMS)/include -I$(VFS)/include -I$(NDK)/include \
-	-isystem $(PICOLIBC)/include
+
+CPPFLAGS := $(PROJECT_CPPFLAGS) -isystem $(PICOLIBC)/include
+CXX_CPPFLAGS := $(PROJECT_CPPFLAGS)
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
-TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
+TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -flto -ffreestanding -fno-builtin \
+	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
+CXX_TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -flto \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 
-SOURCES := src/startup.c src/console.c src/poll.c src/socket.c src/inet.c src/terminal.c src/file.c src/heap.c src/alloc.c src/time.c \
+SOURCES := src/startup.c src/console.c src/poll.c src/socket.c src/inet.c src/terminal.c src/file.c src/heap.c src/alloc.c src/time.c src/pthread.c \
 	src/system.c src/scheduling.c src/signal.c \
 	src/identity.c src/process.c src/strftime_format.c src/path.c
 OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES))
 ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(SOURCES))
 LIB := build/m68k/libastraposix.a
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
-RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0.o
+RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0-hosted.o
 STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 LINK_CONTRACT := build/m68k/link-standard-main.elf
@@ -42,7 +47,11 @@ POLL_TEST := build/host/test_poll
 IDENTITY_TEST := build/host/test_identity
 PROCESS_TEST := build/host/test_process
 SOCKET_ADDRESS_TEST := build/host/test_socket_address
+PTHREAD_TEST := build/host/test_pthread
 LIMITS_CONTRACT := build/m68k/limits-contract.o
+CXX_HEADERS_CONTRACT := build/m68k/cxx-headers-contract.o
+CXX_PROGRAM_OBJECT := build/m68k/cxx-program.o
+CXX_LINK_CONTRACT := build/m68k/cxx-runtime-test.elf
 
 all: $(LIB)
 
@@ -101,9 +110,52 @@ $(SOCKET_ADDRESS_TEST): src/inet.c tests/test_socket_address.c
 	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \
 		-I$(VFS)/include -I$(NDK)/include $(COMMON_FLAGS) -O2 $^ -o $@
 
+$(PTHREAD_TEST): src/pthread.c tests/test_pthread.c
+	@mkdir -p $(@D)
+	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \
+		$(COMMON_FLAGS) -O2 -D_POSIX_C_SOURCE=200809L \
+		-D_BITS_PTHREADTYPES_COMMON_H=1 \
+		-DASTRA_PTHREAD_NO_LIBC_LOCKS=1 $^ -o $@
+
 $(LIMITS_CONTRACT): tests/limits_contract.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -c $< -o $@
+
+$(CXX_HEADERS_CONTRACT): tests/cxx_headers.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(CXX_CPPFLAGS) -std=c++17 -Wall -Wextra -Werror -pedantic \
+		$(CXX_TARGET_FLAGS) -c $< -o $@
+
+$(CXX_PROGRAM_OBJECT): kit/program.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
+		-DASTRA_POSIX_PROGRAM_NAME='"cxx-runtime-test"' \
+		-DASTRA_POSIX_PROGRAM_MAJOR=1 -DASTRA_POSIX_PROGRAM_MINOR=0 \
+		-DASTRA_POSIX_PROGRAM_PATCH=0 \
+		-DASTRA_POSIX_PROGRAM_AUTHOR='"Astra68"' \
+		-DASTRA_POSIX_PROGRAM_COPYRIGHT='"Copyright 2026 Astra68 contributors"' \
+		-c $< -o $@
+
+$(CXX_LINK_CONTRACT): tests/cxx_runtime.cpp $(CXX_PROGRAM_OBJECT) $(LIB) \
+		$(RUNTIME_LIB) $(RUNTIME_CRT0) $(STREAMS_LIB) $(VFS_LIB)
+	$(CXX) $(CXX_CPPFLAGS) -std=c++17 -Wall -Wextra -Werror -pedantic \
+		$(CXX_TARGET_FLAGS) $(ASTRA_POSIX_LDFLAGS) \
+		-o $@ $(ASTRA_POSIX_CRT0) \
+		$(shell $(CXX) -print-file-name=crtbegin.o) \
+		tests/cxx_runtime.cpp $(CXX_PROGRAM_OBJECT) \
+		-Wl,--start-group -lstdc++ $(LIB) $(STREAMS_LIB) $(VFS_LIB) \
+		$(RUNTIME_LIB) $(PICOLIBC)/lib/libc.a $(PICOLIBC)/lib/libm.a \
+		-lgcc -Wl,--end-group \
+		$(shell $(CXX) -print-file-name=crtend.o)
+	@$(CROSS)readelf -SW $@ | grep -q ' \.init_array ' || \
+		{ echo "C++ link contract: missing .init_array" >&2; exit 1; }
+	@$(CROSS)readelf -SW $@ | grep -q ' \.fini_array ' || \
+		{ echo "C++ link contract: missing .fini_array" >&2; exit 1; }
+	@! $(CROSS)readelf -SW $@ | grep -Eq ' \.(ctors|dtors)([[:space:]]|$$)' || \
+		{ echo "C++ link contract: legacy constructor sections" >&2; exit 1; }
+	@$(CROSS)readelf -lW $@ | grep -q ' TLS ' || \
+		{ echo "C++ link contract: missing PT_TLS" >&2; exit 1; }
+	@echo "astra C++ runtime link: PASS"
 
 $(RUNTIME_LIB) $(RUNTIME_CRT0):
 	$(MAKE) -C $(RUNTIME) all
@@ -129,7 +181,7 @@ $(LINK_CONTRACT): tests/link_standard_main.c kit/program.c $(LIB) \
 	@$(CROSS)nm $@ | grep -q ' T main$$'
 	@echo "astra posix standard main link: PASS"
 
-test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) $(IDENTITY_TEST) $(PROCESS_TEST) $(SOCKET_ADDRESS_TEST) $(LIMITS_CONTRACT) $(LINK_CONTRACT)
+test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) $(IDENTITY_TEST) $(PROCESS_TEST) $(SOCKET_ADDRESS_TEST) $(PTHREAD_TEST) $(LIMITS_CONTRACT) $(CXX_HEADERS_CONTRACT) $(LINK_CONTRACT) $(CXX_LINK_CONTRACT)
 	./$(HOST_TEST)
 	./$(PATH_TEST)
 	./$(DESCRIPTOR_TEST)
@@ -138,6 +190,7 @@ test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) 
 	./$(IDENTITY_TEST)
 	./$(PROCESS_TEST)
 	./$(SOCKET_ADDRESS_TEST)
+	./$(PTHREAD_TEST)
 
 sanitize:
 	@mkdir -p build/host

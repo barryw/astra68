@@ -146,6 +146,60 @@ astra_block_write(AstraBlockDevice *device, uint64_t lba,
 }
 
 AstraBlockStatus
+astra_block_writev(AstraBlockDevice *device, uint64_t lba,
+                   const AstraBlockVector *vector, uint64_t deadline)
+{
+    AstraBlockStatus status;
+    uint64_t total = 0u;
+    uint64_t start = device != NULL ? clock_read(device) : 0u;
+    uint32_t index;
+
+    if (vector == NULL || vector->buffers == NULL ||
+        vector->sector_counts == NULL || vector->count == 0u) {
+        status = ASTRA_BLOCK_INVALID_ARGUMENT;
+    } else {
+        status = ASTRA_BLOCK_OK;
+        for (index = 0u; index < vector->count; ++index) {
+            if (vector->buffers[index] == NULL ||
+                vector->sector_counts[index] == 0u ||
+                total > UINT32_MAX - vector->sector_counts[index]) {
+                status = ASTRA_BLOCK_INVALID_ARGUMENT;
+                break;
+            }
+            total += vector->sector_counts[index];
+        }
+        if (status == ASTRA_BLOCK_OK) {
+            status = validate_transfer(device, lba, (uint32_t)total,
+                                       vector->buffers[0], 1);
+        }
+    }
+    if (status == ASTRA_BLOCK_OK) {
+        if (device->backend->writev != NULL) {
+            status = device->backend->writev(device->backend_context, lba,
+                                             vector, deadline);
+        } else if (device->backend->write != NULL) {
+            for (index = 0u; index < vector->count; ++index) {
+                status = device->backend->write(
+                    device->backend_context, lba,
+                    vector->sector_counts[index], vector->buffers[index],
+                    deadline);
+                if (status != ASTRA_BLOCK_OK) {
+                    break;
+                }
+                lba += vector->sector_counts[index];
+            }
+        } else {
+            status = ASTRA_BLOCK_INVALID_ARGUMENT;
+        }
+    }
+    if (device != NULL) {
+        record(device, ASTRA_BLOCK_OPERATION_WRITE, status,
+               status == ASTRA_BLOCK_OK ? (uint32_t)total : 0u, start);
+    }
+    return status;
+}
+
+AstraBlockStatus
 astra_block_flush(AstraBlockDevice *device, uint64_t deadline)
 {
     AstraBlockStatus status;

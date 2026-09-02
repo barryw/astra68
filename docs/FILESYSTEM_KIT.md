@@ -1,90 +1,101 @@
 # Filesystem Kit
 
-Status: `filesystem.library` ABI 1.1 is implemented as the shared client layer
-over Astra's existing VFS, assign, union, and service protocols. It does not
+Status: `filesystem.library` ABI 1.5 is the shared, backend-neutral client layer
+over Astra's VFS protocol, assign namespaces, and union policy. It does not
 create a second filesystem stack.
 
-## Native contract
+## Native application contract
 
 Applications open `filesystem.library` through `OpenLibrary()` and use its
 typed `AstraFilesystemLibraryV1` export table. An `AstraFilesystem` attaches to
-the process namespace that the runtime already built from its startup grants.
-The attachment borrows those assign and client objects; it neither owns nor
-duplicates their service sessions.
+the process namespace already built from its startup grants; it borrows those
+assign and client objects and cannot expand their rights.
 
-The ABI is backend-neutral. It exposes no ext4 structures, backend error
-numbers, block sizes, or on-disk formats. Any service that implements the VFS
-protocol can back an assign member, so disk volumes, RAM drives, network
-filesystems, and mixed union assigns use the same application API.
+The API provides assign-aware open/close, sequential and positioned I/O,
+64-bit seek, sync, truncate, stat and lstat, chmod, mkdir, unlink, atomic
+rename, readlink, symlink, bounded directory batches, and path qualification.
+Creation modes are explicit. Directory entries carry metadata in the listing
+response so `ls -l` does not pay another service round trip per entry.
 
-The high-level API provides:
+The low-level portion of the same export table exposes the VFS client and
+assign primitives needed by filesystem services, diagnostic tools, and
+compatibility runtimes. Applications never see ext4 objects, backend errno
+values, block sizes, mount internals, or on-disk formats.
 
-- assign-aware open and close;
-- sequential and explicit-offset reads and writes;
-- 64-bit seek and file information;
-- path stat, directory creation, unlink, and atomic rename;
-- bounded directory batches across every member of an assign union, retaining
-  the member number for each entry; and
-- path qualification for shell- and application-style current directories.
+## Name and link semantics
 
-The low-level portion of the same export table exposes the existing VFS client,
-assign-resolution, and union-open primitives. Filesystem handlers, diagnostic
-tools, and compatibility runtimes can therefore use the protocol directly
-without applications depending on private service structures.
+Symbolic links live in Astra's logical namespace, above individual filesystem
+backends. The shared assign layer owns traversal for every native and POSIX
+caller:
 
-All operations are synchronous and bounded. The caller owns context, file, and
-directory objects and must close live files before detaching. Process teardown
-remains the hard cleanup boundary for service handles and shared libraries.
+- `stat`, open, and ordinary path operations follow the final link; `lstat`,
+  `readlink`, `unlink`, and replacement rename inspect the link itself;
+- relative targets are resolved from the link's logical parent;
+- absolute targets use Astra's `ASSIGN:path` form and must name an assign the
+  process actually holds;
+- normalization rejects attempts to escape above an assign root;
+- rights are checked again after traversal, against the resolved assign; and
+- cycles or more than 40 traversals return `ASTRA_VFS_ERR_LOOP` (`ELOOP` in
+  POSIX). Forty is the established Unix traversal ceiling, not a storage-size
+  limit.
+
+Backends expose no-follow `stat`/`readlink`/`symlink` primitives. They do not
+interpret assigns, follow cross-filesystem targets, or make capability
+decisions. This keeps ext4, a future RAM filesystem, SMB, and NFS under one
+namespace and security policy.
 
 ## POSIX compatibility boundary
 
-The native API deliberately retains Astra assigns, capability-derived rights,
-typed status values, and explicit objects. A POSIX compatibility library will
-layer process-local state over it:
+The implemented POSIX library maps integer descriptors and errno onto the same
+native operations:
 
 | POSIX surface | Filesystem Kit primitive |
 | --- | --- |
-| `open` / `close` | `open` / `close` |
-| `read` / `write` | stateful `read` / `write` |
-| `pread` / `pwrite` | `read_at` / `write_at` |
-| `lseek` | 64-bit `seek` |
-| `stat` / `fstat` | `stat` / `file_info` |
-| `mkdir` / `unlink` | `mkdir` / `unlink` |
-| `rename` | atomic `rename` |
-| `opendir` / `readdir` | `directory_open` / bounded `directory_read` |
+| `open`, `close`, `read`, `write` | `open_mode`, `close`, `read`, `write` |
+| `pread`, `pwrite`, `lseek` | `read_at`, `write_at`, `seek` |
+| `stat`, `lstat`, `fstat` | `stat`, `lstat`, `file_info` |
+| `fsync`, `ftruncate`, `chmod` | `sync`, `truncate`, `chmod` |
+| `mkdir`, `unlink`, `rename` | `mkdir_mode`, `unlink`, `rename` |
+| `readlink`, `symlink` | `readlink`, `symlink` |
+| `opendir`, `readdir` | `directory_open`, `directory_read` |
 
-That layer will own integer file-descriptor tables, current-directory rules,
-POSIX path presentation, `errno` translation, and libc cancellation behavior.
-Those policies do not belong in the native filesystem library.
+Descriptor tables, current-directory presentation, cancellation, and errno
+translation remain POSIX policy and do not leak into the native library.
 
-ABI 1.1 adds rename once through VFS protocol 11 and the ext4 backend; native
-and POSIX callers share that implementation. It does not pretend the service
-already supports links, metadata mutation, locking, truncate, or durable-sync
-operations. Each lands
-once in the VFS protocol and backend first, then appears in this export table,
-then receives its POSIX mapping. This keeps native and compatibility behavior
-from silently disagreeing.
+## Filesystem service boundary
+
+`AstraVfsBackendOps` is the private implementation seam used by today's
+storage service. The service core owns protocol decoding, validation, sessions,
+handles, generations, concurrency, cancellation, and accounting. A backend
+owns filesystem nodes and medium access, returns Astra VFS statuses, provides
+its own filesystem locking, and never retains request pointers. lwext4 and the
+in-memory tests already implement the same operation table.
+
+A public filesystem-service kit should expose this split as a versioned server
+contract only when an out-of-tree filesystem is ready to consume it. That kit
+will package mount lifecycle and the service runner around a backend operation
+table; it will not expose the current private structure verbatim or force a
+block-device model on network filesystems. This is the minimum stable boundary
+needed for plug-in filesystems without freezing unfinished SMB/NFS policy now.
 
 ## Installation and versioning
 
 The image builder installs the MC68030 library at:
 
 ```text
-LIBS:Filesystem.kit/libraries/filesystem.library/abi-1/1.1.0/m68k-68030/filesystem.library
+LIBS:Filesystem.kit/libraries/filesystem.library/abi-1/1.5.0/m68k-68030/filesystem.library
 ```
 
-Other ABI majors and versions live beside it. Applications request the minimum
-compatible ABI through `OpenLibrary()`; they do not construct or search these
-paths themselves.
+The Kit is version 1.4.0 and provides `filesystem.library` 1.5.0. Other ABI
+majors and versions live beside it. Programs request a minimum compatible ABI
+through `OpenLibrary()`; they never construct provider paths.
 
-The image builder also derives `LIBS:.providers/filesystem.library.abi-1` from
-the authoritative Kit manifest and embedded library identity. After the first
-successful load Axiom retains the exact identity and initial pages, so later
-processes attach without searching or reading the library file. Read-only
-pages are shared and writable pages remain process-private.
+The image builder derives `LIBS:.providers/filesystem.library.abi-1` from the
+authoritative manifest and the library's embedded identity. Kit builds start
+from an empty bundle, so removed versions and undeclared stale payloads cannot
+survive an incremental rebuild.
 
-Terminal, `events`, and `which` now use this interface for filesystem work.
-Only the supervisor's bootstrap loader talks to the VFS client directly,
-because it must read `filesystem.library` before that library can be opened;
-filesystem services and the library implementation remain direct protocol
-code by definition.
+Only the supervisor bootstrap loader talks directly to VFS before it can load
+`filesystem.library`; filesystem services and the library implementation use
+the protocol directly by definition. All other application-facing filesystem
+behavior belongs in the shared library.

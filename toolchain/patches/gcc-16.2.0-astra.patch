@@ -1,0 +1,120 @@
+diff --git a/config.sub b/config.sub
+--- a/config.sub
++++ b/config.sub
+@@ -1732,7 +1732,7 @@ case $os in
+ 	     | mirbsd* | netbsd* | dicos* | openedition* | ose* \
+ 	     | bitrig* | openbsd* | secbsd* | solidbsd* | libertybsd* | os108* \
+ 	     | ekkobsd* | freebsd* | riscix* | lynxos* | os400* \
+-	     | bosx* | nextstep* | cxux* | aout* | elf* | oabi* \
++	     | astra* | bosx* | nextstep* | cxux* | aout* | elf* | oabi* \
+ 	     | ptx* | coff* | ecoff* | winnt* | domain* | vsta* \
+ 	     | udi* | lites* | ieee* | go32* | aux* | hcos* \
+ 	     | chorusrdb* | cegcc* | glidix* | serenity* \
+diff --git a/gcc/config.gcc b/gcc/config.gcc
+--- a/gcc/config.gcc
++++ b/gcc/config.gcc
+@@ -2461,2 +2461,11 @@ m32rle-*-elf*)
++m68k-*-astra*)
++	default_m68k_cpu=68030
++	default_cf_cpu=5206
++	tm_file="${tm_file} m68k/m68k-none.h m68k/m68kelf.h elfos.h newlib-stdint.h m68k/m68kemb.h m68k/m68020-elf.h m68k/astra.h"
++	tm_defines="${tm_defines} MOTOROLA=1"
++	tmake_file="m68k/t-floatlib m68k/t-m68kbare m68k/t-m68kelf"
++	# Astra's runtime consumes .init_array/.fini_array directly.
++	gcc_cv_initfini_array=yes
++	;;
+ m68k-*-elf* | fido-*-elf*)
+ 	case ${target} in
+diff --git a/gcc/config/m68k/astra.h b/gcc/config/m68k/astra.h
+new file mode 100644
+--- /dev/null
++++ b/gcc/config/m68k/astra.h
+@@ -0,0 +1,41 @@
++/* Astra68 MC68030 userspace ABI.  */
++
++#undef TARGET_OS_CPP_BUILTINS
++#define TARGET_OS_CPP_BUILTINS() \
++  do { \
++    builtin_define ("__astra__"); \
++    builtin_define ("__ASTRA__"); \
++    builtin_assert ("system=astra"); \
++  } while (0)
++
++/* A4 is the thread pointer.  A5 remains available to the m68k PIC ABI.  */
++#undef DRIVER_SELF_SPECS
++#define DRIVER_SELF_SPECS "-ffixed-a4 -msoft-float"
++
++/* Keep Astra's established ILP32 ABI compatible with GNU/Linux m68k.  */
++#undef SIZE_TYPE
++#define SIZE_TYPE "unsigned int"
++#undef PTRDIFF_TYPE
++#define PTRDIFF_TYPE "int"
++#undef STDINT_LONG32
++#define STDINT_LONG32 0
++
++/* Mark every generated object, including crtbegin/crtend, non-executable.  */
++#undef TARGET_ASM_FILE_END
++#define TARGET_ASM_FILE_END file_end_indicate_exec_stack
++
++/* Astra images are static ELF and use the system's own startup object.  */
++#undef STARTFILE_SPEC
++#define STARTFILE_SPEC "crt0-hosted.o%s crtbegin.o%s"
++
++#undef ENDFILE_SPEC
++#define ENDFILE_SPEC "crtend.o%s"
++
++/* Executables are static; Kit libraries must remain real ELF DSOs.  */
++#undef LINK_SPEC
++#define LINK_SPEC "%{shared:-shared} %{!shared:-static}"
++
++#undef LIB_SPEC
++#define LIB_SPEC \
++  "--start-group -lastraposix -lastrastreams -lastravfs -lastrart " \
++  "-lc -lm --end-group"
+diff --git a/libgcc/config.host b/libgcc/config.host
+--- a/libgcc/config.host
++++ b/libgcc/config.host
+@@ -1018,6 +1018,10 @@ m32r-*-elf*)
+ m32rle-*-elf*)
+ 	tmake_file=t-fdpbit
+ 	;;
++m68k-*-astra*)
++	tmake_file="$tmake_file m68k/t-floatlib t-libgcc-pic"
++	extra_parts="$extra_parts crtbegin.o crtend.o"
++	;;
+ m68k-*-elf* | fido-*-elf)
+ 	tmake_file="$tmake_file m68k/t-floatlib"
+ 	;;
+diff --git a/libgcc/config/m68k/lb1sf68.S b/libgcc/config/m68k/lb1sf68.S
+--- a/libgcc/config/m68k/lb1sf68.S
++++ b/libgcc/config/m68k/lb1sf68.S
+@@ -4125,7 +4125,7 @@ SYM (__lesf2):
+ 	rts
+ #endif /* L_lesf2 */
+ 
+-#if defined (__ELF__) && defined (__linux__)
++#if defined (__ELF__) && (defined (__linux__) || defined (__astra__))
+ 	/* Make stack non-executable for ELF linux targets.  */
+ 	.section	.note.GNU-stack,"",@progbits
+ #endif
+diff --git a/libgcc/gthr-posix.h b/libgcc/gthr-posix.h
+--- a/libgcc/gthr-posix.h
++++ b/libgcc/gthr-posix.h
+@@ -130,7 +130,7 @@ __gthrw(pthread_join)
+ __gthrw(pthread_equal)
+ __gthrw(pthread_self)
+ __gthrw(pthread_detach)
+-#ifndef __BIONIC__
++#if !defined(__BIONIC__) && !defined(__astra__)
+ __gthrw(pthread_cancel)
+ #endif
+ __gthrw(sched_yield)
+@@ -276,7 +276,7 @@ __gthrw2(__gthrw_(__pthread_key_create),
+ 	 __pthread_key_create,
+ 	 pthread_key_create)
+ # define GTHR_ACTIVE_PROXY	__gthrw_(__pthread_key_create)
+-#elif defined (__BIONIC__)
++#elif defined (__BIONIC__) || defined (__astra__)
+ # define GTHR_ACTIVE_PROXY	__gthrw_(pthread_create)
+ #else
+ # define GTHR_ACTIVE_PROXY	__gthrw_(pthread_cancel)

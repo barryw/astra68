@@ -44,9 +44,8 @@ system is **Astra OS**.
   handles and rights, shared areas, fault containment, memory pressure
   handling, device infrastructure, tracing, panic output, and performance
   gates.
-- The active Arty Z7-20 machine runs the big-endian MC68030/PMMU environment on
-  the Zynq ARM processing system and reserves a contiguous 128 MiB DDR arena
-  for custom programmable-logic graphics.
+- The Arty's 512 MiB DDR is divided into 128 MiB of Astra guest RAM, 128 MiB of
+  graphics RAM, and 256 MiB for Linux and host services.
 - The hardware-qualified 1280x720p60 graphics path includes RGB565/XRGB8888/
   INDEX8 framebuffers, two independently scrolling tile layers, 64 INDEX8
   sprites up to 128x128, sixteen per-sprite palette banks, alpha and opacity,
@@ -60,8 +59,6 @@ system is **Astra OS**.
   opacity, all sixteen ROPs, and supported format conversion. Its 200 MHz
   timing and integrated hardware release gates are still open.
 - The Astra QEMU backend runs the active Arty machine and is the only emulator.
-  The Musashi MC68030/PMMU model is retained as a conformance oracle for the
-  RTL CPU, not as a machine to run Astra on.
 
 ## Direction
 
@@ -101,10 +98,9 @@ Astra applications and system services
    FPGA display, sprites, tiles, and render engines
 ```
 
-The active machine uses the Arty Z7-20 processing system for CPU execution and
-the FPGA fabric for specialized hardware. The retained TG68K.C MC68030/PMMU
-RTL core, Musashi model, shared conformance suite, and historical ULX3S system
-remain valuable behavioral and regression oracles.
+The active machine runs the MC68030/PMMU environment in QEMU TCG on the Arty
+Z7-20 processing system and uses the FPGA fabric for graphics and peripherals.
+QEMU is the only CPU implementation in this repository.
 
 ## Repository map
 
@@ -115,9 +111,7 @@ remain valuable behavioral and regression oracles.
 | [`sw/boot/`](sw/boot/) | Boot ROM, splash assets, loaders, and boot contracts |
 | [`ndk/`](ndk/) | Public Astra developer interfaces and generated documentation |
 | [`fpga/arty/`](fpga/arty/) | Active Zynq/Arty hardware, Linux integration, and graphics RTL |
-| [`fpga/cpu/`](fpga/cpu/) | Retained MC68030/PMMU RTL and conformance integration |
 | [`emu/qemu/`](emu/qemu/) | The Astra QEMU machine backend |
-| [`conformance/`](conformance/) | Shared architectural tests and implementation adapters |
 | [`third_party/`](third_party/) | Vendored upstream components with their original notices |
 
 ## Build and test
@@ -142,9 +136,8 @@ route, deployment, and rollback procedures are intentionally kept in the
 component documentation because a reduced or unconstrained bitstream is not
 release evidence.
 
-See [the inventory](docs/INVENTORY.md) for the machines, boards and toolchains,
-[Arty graphics](fpga/arty/graphics/README.md), and the
-[shared conformance harness](conformance/README.md) for focused setup.
+See [the inventory](docs/INVENTORY.md) for the machines, boards and toolchains
+and [Arty graphics](fpga/arty/graphics/README.md) for focused setup.
 
 ## Engineering rules
 
@@ -163,12 +156,10 @@ See [the inventory](docs/INVENTORY.md) for the machines, boards and toolchains,
 
 - [Current engineering state](docs/CURRENT_STATE.md)
 - [Kernel architecture](docs/KERNEL_ARCHITECTURE.md)
-- [Kernel implementation status](docs/STATUS.md)
 - [Memory map and PMMU](docs/MEMORY_MAP_AND_PMMU.md)
 - [System ABI](docs/ABI.md)
 - [Graphics architecture](docs/GRAPHICS_ARCHITECTURE.md)
 - [Astra OS vision](docs/OS_VISION.md)
-- [FPGA resource budget](docs/FPGA_RESOURCE_BUDGET.md)
 - [Arty graphics timing closure](fpga/arty/graphics/TIMING_CLOSURE.md)
 - [Build and test artifact policy](docs/ARTIFACT_POLICY.md)
 

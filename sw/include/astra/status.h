@@ -53,7 +53,8 @@
  */
 #define ASTRA_STATUS_PEER_DEAD       16
 #define ASTRA_STATUS_CROSS_DEVICE    17
-/* 18..31 are unassigned, and are the system's to spend. */
+#define ASTRA_STATUS_LOOP            18
+/* 19..31 are unassigned, and are the system's to spend. */
 #define ASTRA_STATUS_SYSTEM_MAX      31
 
 /*

@@ -3,8 +3,7 @@
  *
  * This is an independent implementation from the programmer-visible
  * behaviour documented in Motorola's MC68030 User's Manual and M68000
- * Family Programmer's Reference Manual.  It contains no code from the PMMU
- * implementation that upstream Musashi distributes.
+ * Family Programmer's Reference Manual.
  */
 
 #ifndef ASTRA_PMMU030_H
@@ -92,6 +91,11 @@ typedef struct pmmu030_state {
     uint8_t replacement_cursor;
     pmmu030_atc_entry atc[PMMU030_ATC_ENTRIES];
     uint8_t atc_hints[PMMU030_ATC_HINTS];
+    uint64_t qemu_tlb_fills;
+    uint64_t qemu_atc_hits;
+    uint64_t qemu_table_walks;
+    uint64_t qemu_crp_writes;
+    uint64_t qemu_crp_changes;
 } pmmu030_state;
 
 

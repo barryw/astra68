@@ -103,6 +103,9 @@ static const KernelAllocationSiteInfo site_info[KERNEL_ALLOCATION_SITE_COUNT] = 
     },
     [KERNEL_ALLOCATION_SITE_PROCESS_LOAD_RECORD] = {
         "process-load-record", KERNEL_ALLOCATION_TAG_PROCESS, 0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_THREAD_TLS_PAGE] = {
+        "thread-tls-page", KERNEL_ALLOCATION_TAG_THREAD, 0u, 1u, 0u
     }
 };
 

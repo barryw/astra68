@@ -34,9 +34,18 @@ struct KernelSyncObject {
     uint8_t state;
 };
 
+typedef struct KernelFutexSlot {
+    KernelThreadWaitQueue waiters;
+    uint32_t process_id;
+    uint32_t address;
+    uint8_t occupied;
+    uint8_t reserved[3];
+} KernelFutexSlot;
+
 #define KERNEL_SYNC_TIMER_SLOT_NONE UINT8_MAX
 
 static KernelSyncObject objects[KERNEL_SYNC_OBJECT_MAX] KERNEL_TABLES;
+static KernelFutexSlot futex_slots[KERNEL_THREAD_MAX] KERNEL_TABLES;
 static KernelObjectCache object_cache;
 static uint32_t object_cache_bitmap[
     KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_SYNC_OBJECT_MAX)];
@@ -49,6 +58,42 @@ static uint8_t timer_count;
 
 _Static_assert(sizeof(KernelSyncObject) == 36u,
                "synchronization object memory budget changed");
+_Static_assert(sizeof(KernelFutexSlot) == 24u,
+               "futex slot memory budget changed");
+
+static void futex_slot_clear(KernelFutexSlot *slot)
+{
+    kernel_bytes_clear(slot, sizeof(*slot));
+    kernel_thread_wait_queue_init(&slot->waiters);
+}
+
+static KernelFutexSlot *futex_slot_find(uint32_t process_id,
+                                        uint32_t address, bool create)
+{
+    KernelFutexSlot *available = NULL;
+
+    for (uint32_t index = 0u; index < KERNEL_THREAD_MAX; ++index) {
+        KernelFutexSlot *slot = &futex_slots[index];
+        uint32_t waiters = kernel_thread_wait_queue_count(&slot->waiters);
+
+        if (waiters == UINT32_MAX) {
+            pool_corrupt = 1u;
+            return NULL;
+        }
+        if (slot->occupied != 0u && slot->process_id == process_id &&
+            slot->address == address)
+            return slot;
+        if (waiters == 0u && available == NULL)
+            available = slot;
+    }
+    if (!create || available == NULL)
+        return NULL;
+    futex_slot_clear(available);
+    available->process_id = process_id;
+    available->address = address;
+    available->occupied = 1u;
+    return available;
+}
 
 static bool valid_type(uint8_t type)
 {
@@ -335,9 +380,93 @@ void kernel_sync_pool_init(void)
         timer_heap[slot] = KERNEL_SYNC_TIMER_SLOT_NONE;
         timer_positions[slot] = KERNEL_SYNC_TIMER_SLOT_NONE;
     }
+    for (uint32_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot)
+        futex_slot_clear(&futex_slots[slot]);
     kernel_bytes_clear(&pool_stats, sizeof(pool_stats));
     pool_corrupt = 0u;
     timer_count = 0u;
+}
+
+KernelFutexStatus kernel_futex_wait(uint32_t process_id, uint32_t address,
+                                    KernelThread *thread, uint64_t now,
+                                    uint64_t deadline,
+                                    uint32_t timeout_result)
+{
+    KernelFutexSlot *slot;
+    KernelThreadStatus status;
+    uint32_t sequence;
+
+    if (process_id == 0u || address == 0u ||
+        (address & (sizeof(uint32_t) - 1u)) != 0u || thread == NULL)
+        return KERNEL_FUTEX_INVALID_ARGUMENT;
+    slot = futex_slot_find(process_id, address, true);
+    if (slot == NULL)
+        return pool_corrupt != 0u ? KERNEL_FUTEX_CORRUPT :
+                                   KERNEL_FUTEX_NO_SLOT;
+    sequence = kernel_thread_wait_queue_sequence(&slot->waiters);
+    status = kernel_thread_block_until(thread, &slot->waiters, sequence, now,
+                                       deadline, timeout_result);
+    if (status == KERNEL_THREAD_OK)
+        return KERNEL_FUTEX_BLOCKED;
+    if (kernel_thread_wait_queue_count(&slot->waiters) == 0u)
+        futex_slot_clear(slot);
+    if (status == KERNEL_THREAD_DEADLINE_EXPIRED)
+        return KERNEL_FUTEX_TIMED_OUT;
+    if (status == KERNEL_THREAD_INVALID_ARGUMENT ||
+        status == KERNEL_THREAD_INVALID_STATE)
+        return KERNEL_FUTEX_INVALID_ARGUMENT;
+    return KERNEL_FUTEX_CORRUPT;
+}
+
+KernelFutexStatus kernel_futex_wake(uint32_t process_id, uint32_t address,
+                                    uint32_t count, uint32_t result,
+                                    uint32_t *woken_threads)
+{
+    KernelFutexSlot *slot;
+    uint32_t woken = 0u;
+
+    if (woken_threads == NULL || process_id == 0u || address == 0u ||
+        (address & (sizeof(uint32_t) - 1u)) != 0u || count == 0u)
+        return KERNEL_FUTEX_INVALID_ARGUMENT;
+    *woken_threads = 0u;
+    slot = futex_slot_find(process_id, address, false);
+    if (slot == NULL)
+        return pool_corrupt != 0u ? KERNEL_FUTEX_CORRUPT : KERNEL_FUTEX_OK;
+    while (woken < count &&
+           kernel_thread_wait_queue_count(&slot->waiters) != 0u) {
+        KernelThread *thread;
+        KernelThreadStatus status = kernel_thread_wake_one(
+            &slot->waiters, result, &thread);
+
+        if (status != KERNEL_THREAD_OK || thread == NULL)
+            return KERNEL_FUTEX_CORRUPT;
+        ++woken;
+    }
+    if (kernel_thread_wait_queue_count(&slot->waiters) == 0u)
+        futex_slot_clear(slot);
+    *woken_threads = woken;
+    return KERNEL_FUTEX_OK;
+}
+
+KernelFutexStatus kernel_futex_wake_all_irq(uint32_t process_id,
+                                            uint32_t address,
+                                            uint32_t result,
+                                            uint32_t *woken_threads)
+{
+    KernelFutexSlot *slot;
+
+    if (woken_threads == NULL || process_id == 0u || address == 0u ||
+        (address & (sizeof(uint32_t) - 1u)) != 0u)
+        return KERNEL_FUTEX_INVALID_ARGUMENT;
+    *woken_threads = 0u;
+    slot = futex_slot_find(process_id, address, false);
+    if (slot == NULL)
+        return pool_corrupt != 0u ? KERNEL_FUTEX_CORRUPT : KERNEL_FUTEX_OK;
+    if (kernel_thread_wake_all_irq(&slot->waiters, result, woken_threads) !=
+        KERNEL_THREAD_OK)
+        return KERNEL_FUTEX_CORRUPT;
+    futex_slot_clear(slot);
+    return KERNEL_FUTEX_OK;
 }
 
 KernelSyncStatus kernel_sync_create_event(uint32_t owner, uint32_t flags,
@@ -809,6 +938,21 @@ bool kernel_sync_pool_valid(void)
         !kernel_object_cache_valid(&object_cache) ||
         timer_count > KERNEL_SYNC_OBJECT_MAX)
         return false;
+    for (uint32_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        const KernelFutexSlot *futex = &futex_slots[slot];
+        uint32_t waiters = kernel_thread_wait_queue_count(&futex->waiters);
+
+        if (waiters == UINT32_MAX || waiters > KERNEL_THREAD_MAX)
+            return false;
+        if (futex->occupied == 0u) {
+            if (futex->process_id != 0u || futex->address != 0u ||
+                waiters != 0u)
+                return false;
+        } else if (futex->process_id == 0u || futex->address == 0u ||
+                   (futex->address & (sizeof(uint32_t) - 1u)) != 0u) {
+            return false;
+        }
+    }
     for (uint32_t position = 0u; position < timer_count; ++position) {
         uint8_t slot = timer_heap[position];
 

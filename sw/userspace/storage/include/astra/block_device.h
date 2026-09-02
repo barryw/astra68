@@ -64,6 +64,14 @@ typedef AstraBlockStatus (*AstraBlockTransfer)(
 typedef AstraBlockStatus (*AstraBlockWrite)(
     void *context, uint64_t lba, uint32_t sector_count, const void *buffer,
     uint64_t deadline);
+typedef struct AstraBlockVector {
+    const void *const *buffers;
+    const uint32_t *sector_counts;
+    uint32_t count;
+} AstraBlockVector;
+typedef AstraBlockStatus (*AstraBlockWritev)(
+    void *context, uint64_t lba, const AstraBlockVector *vector,
+    uint64_t deadline);
 typedef AstraBlockStatus (*AstraBlockFlush)(void *context, uint64_t deadline);
 typedef AstraBlockStatus (*AstraBlockQuery)(void *context,
                                             AstraBlockGeometry *geometry);
@@ -72,6 +80,7 @@ typedef struct AstraBlockBackend {
     AstraBlockQuery query;
     AstraBlockTransfer read;
     AstraBlockWrite write;
+    AstraBlockWritev writev;
     AstraBlockFlush flush;
 } AstraBlockBackend;
 
@@ -96,6 +105,9 @@ AstraBlockStatus astra_block_read(AstraBlockDevice *device, uint64_t lba,
 AstraBlockStatus astra_block_write(AstraBlockDevice *device, uint64_t lba,
                                    uint32_t sector_count, const void *buffer,
                                    uint64_t deadline);
+AstraBlockStatus astra_block_writev(AstraBlockDevice *device, uint64_t lba,
+                                    const AstraBlockVector *vector,
+                                    uint64_t deadline);
 AstraBlockStatus astra_block_flush(AstraBlockDevice *device,
                                    uint64_t deadline);
 const AstraBlockMetrics *astra_block_metrics(const AstraBlockDevice *device);

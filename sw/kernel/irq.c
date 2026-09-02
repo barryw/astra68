@@ -64,6 +64,7 @@ static KernelIrqRoute routes[KERNEL_IRQ_SOURCE_COUNT];
 static KernelObjectCache endpoint_cache;
 static uint32_t endpoint_cache_bitmap[
     KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_IRQ_ENDPOINT_MAX)];
+static uint32_t revocation_pending_bitmap;
 static KernelIrqControllerOps controller;
 static KernelIrqPoolStats pool_stats;
 static uint8_t pool_initialized;
@@ -75,6 +76,8 @@ _Static_assert(sizeof(KernelIrqEndpoint) == 128u,
 #endif
 _Static_assert(sizeof(KernelIrqRecord) == 16u,
                "IRQ record ABI size changed");
+_Static_assert(KERNEL_IRQ_ENDPOINT_MAX <= 32u,
+               "IRQ revocation bitmap is too narrow");
 
 static uint16_t endpoint_trace_flags(const KernelIrqEndpoint *endpoint)
 {
@@ -299,6 +302,8 @@ static bool finish_quiesce(KernelIrqEndpoint *endpoint)
     if (!controller_acknowledge(endpoint->source))
         return false;
     endpoint->flags |= KERNEL_IRQ_FLAG_QUIESCED;
+    revocation_pending_bitmap &=
+        ~(UINT32_C(1) << endpoint_slot(endpoint));
     trace_endpoint(KERNEL_TRACE_LEVEL_NOTICE,
                    KERNEL_TRACE_EVENT_DEVICE_RESET, endpoint,
                    endpoint->source, 0u);
@@ -370,6 +375,7 @@ bool kernel_irq_pool_init(const KernelIrqControllerOps *ops)
         clear_route((uint8_t)source);
     kernel_bytes_copy(&controller, ops, sizeof(controller));
     kernel_bytes_clear(&pool_stats, sizeof(pool_stats));
+    revocation_pending_bitmap = 0u;
     pool_corrupt = 0u;
     pool_initialized = 1u;
     return true;
@@ -714,7 +720,8 @@ static void note_storm_delivery(KernelIrqEndpoint *endpoint,
 
 static __attribute__((noinline)) KernelIrqStatus dispatch_internal(
     KernelIrqRoute *route, uint8_t source, uint8_t vector,
-    uint64_t timestamp, bool source_claimed, KernelIrqTrace *trace)
+    uint64_t timestamp, uint32_t *woken_threads, bool source_claimed,
+    KernelIrqTrace *trace)
 {
     bool masked = true;
 
@@ -745,7 +752,8 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_internal(
         if (!masked)
             return KERNEL_IRQ_DEVICE_ERROR;
     }
-    if (!route->internal_service(source, timestamp, route->context)) {
+    if (!route->internal_service(source, timestamp, route->context,
+                                 woken_threads)) {
         route->internal_armed = 0u;
         (void)controller_mask(source);
         (void)controller_acknowledge(source);
@@ -764,6 +772,7 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_internal(
     }
     route->internal_armed = 1u;
     astra_u32_increment_saturating(&pool_stats.internal_deliveries);
+    pool_stats.wait_wakeups += *woken_threads;
     set_dispatch_trace(
         trace, KERNEL_TRACE_LEVEL_DEBUG, KERNEL_TRACE_EVENT_IRQ_DELIVER,
         KERNEL_IRQ_TRACE_INTERNAL |
@@ -974,7 +983,7 @@ static KernelIrqStatus dispatch_common(uint8_t source, uint8_t vector,
     endpoint = route->endpoint;
     if (endpoint == NULL && route->internal_service != NULL)
         return dispatch_internal(route, source, vector, timestamp,
-                                 source_claimed, trace);
+                                 woken_threads, source_claimed, trace);
     if (endpoint == NULL)
         return quarantine_unclaimed(source, trace);
     return dispatch_endpoint(route, endpoint, source, vector, timestamp,
@@ -1244,6 +1253,8 @@ KernelIrqStatus kernel_irq_revoke(KernelIrqEndpoint *endpoint,
             return KERNEL_IRQ_CORRUPT;
         }
         endpoint->state = KERNEL_IRQ_REVOKING;
+        revocation_pending_bitmap |=
+            UINT32_C(1) << endpoint_slot(endpoint);
         endpoint->record_count = 0u;
         endpoint->head = 0u;
         endpoint->tail = 0u;
@@ -1336,14 +1347,8 @@ KernelIrqStatus kernel_irq_service_revocations(uint32_t batch_limit,
 
 bool kernel_irq_revocation_pending(void)
 {
-    if (pool_initialized == 0u || pool_corrupt != 0u)
-        return false;
-    for (uint32_t slot = 0u; slot < KERNEL_IRQ_ENDPOINT_MAX; ++slot) {
-        if (endpoints[slot].state == KERNEL_IRQ_REVOKING &&
-            (endpoints[slot].flags & KERNEL_IRQ_FLAG_QUIESCED) == 0u)
-            return true;
-    }
-    return false;
+    return pool_initialized != 0u && pool_corrupt == 0u &&
+           revocation_pending_bitmap != 0u;
 }
 
 bool kernel_irq_snapshot(uint32_t slot, KernelIrqSnapshot *snapshot)
@@ -1453,6 +1458,7 @@ bool kernel_irq_pool_valid(void)
 {
     uint32_t live = 0u;
     uint32_t revoking = 0u;
+    uint32_t pending = 0u;
     uint32_t internal = 0u;
 
     if (!kernel_irq_pool_healthy() ||
@@ -1476,6 +1482,8 @@ bool kernel_irq_pool_valid(void)
             return false;
         if (endpoint->state == KERNEL_IRQ_REVOKING) {
             ++revoking;
+            if ((endpoint->flags & KERNEL_IRQ_FLAG_QUIESCED) == 0u)
+                pending |= UINT32_C(1) << slot;
             if ((endpoint->flags & KERNEL_IRQ_FLAG_QUIESCED) == 0u &&
                 routes[endpoint->source].endpoint != endpoint)
                 return false;
@@ -1504,7 +1512,8 @@ bool kernel_irq_pool_valid(void)
         if (route->internal_service != NULL)
             ++internal;
     }
-    return live == pool_stats.live_endpoints &&
+    return pending == revocation_pending_bitmap &&
+           live == pool_stats.live_endpoints &&
            revoking == pool_stats.revoking_endpoints &&
            internal == pool_stats.internal_routes &&
            live == endpoint_cache.live &&

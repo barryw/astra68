@@ -1,0 +1,22 @@
+diff --git a/config.sub b/config.sub
+--- a/config.sub
++++ b/config.sub
+@@ -1978,6 +1978,7 @@ case $os in
+ 	| aof* \
+ 	| aos* \
+ 	| aros* \
++	| astra* \
+ 	| atheos* \
+ 	| auroraux* \
+ 	| aux* \
+diff --git a/gas/configure.tgt b/gas/configure.tgt
+--- a/gas/configure.tgt
++++ b/gas/configure.tgt
+@@ -296,6 +296,7 @@ case ${generic_target} in
+   m68hc11-*-* | m6811-*-*)		fmt=elf ;;
+   m68hc12-*-* | m6812-*-*)		fmt=elf ;;
+ 
++  m68k-*-astra*)			fmt=elf ;;
+   m68k-*-elf*)				fmt=elf ;;
+   m68k-*-linux-*)			fmt=elf em=linux ;;
+   m68k-*-uclinux*)			fmt=elf em=uclinux ;;

@@ -12,6 +12,7 @@
 
 #include <astra/event_emit.h>
 #include <astra/runtime.h>
+#include <astra/vfs_host_direct.h>
 #include <astra/vfs_port_transport.h>
 
 static AstraVfsClient vfs_client;
@@ -186,7 +187,8 @@ supervisor_vfs_start(uint32_t port_handle)
      * somewhere to report it, instead of the first `ls` returning something
      * unhelpful.
      */
-    if (astra_vfs_port_connect(&vfs_client, vfs_handle) != ASTRA_VFS_OK) {
+    if (astra_vfs_host_port_connect(&vfs_client, vfs_handle) !=
+        ASTRA_VFS_OK) {
         return 0;
     }
     /*

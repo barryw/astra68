@@ -45,13 +45,9 @@ format-0 MSP frame plus format-1 ISP throwaway frame. Entry masks IPL without
 clearing M, and `RTE` returns through the already post-incremented MSP. Exact
 Motorola-directed and full-system regressions cover this path.
 
-The exact `bbb1616a1e65ef56619bffb11cb21e9ea1bc5202` hardware soak measured a
-maximum user-fault dispatch interval of 8,834 CPU cycles, or 706.72 us at
-12.5 MHz, well below one nominal timer period. The candidate gate rejects any
-value above 125,000 cycles (10 ms). Musashi measured 4,482 cycles and the full
-pin-level RTL model measured 8,866 cycles. This closes the prior unbounded,
-multi-period IPL-7 teardown path; it does not turn ordinary teardown into hard
-IRQ work.
+The user-fault dispatch gate rejects any value above one 10 ms timer period.
+This closes the prior unbounded, multi-period IPL-7 teardown path; it does not
+turn ordinary teardown into hard IRQ work.
 
 ## Preemption model
 
@@ -74,7 +70,7 @@ range -7 through 15 (`nice = 16 - priority`), not a second scheduler scale.
 
 All registers, USP, PC, and SR are thread state. CRP is process state. A switch
 between threads in one process does not reload CRP or flush caches/ATC; host,
-Musashi, full pin-level, and ULX3S tests count that path separately from a
+QEMU, and Arty tests count that path separately from a
 cross-CRP switch. Timer and voluntary-yield paths apply priority selection.
 The public event/semaphore/timer and death-wait paths prove immediate handoff
 when a higher-priority waiter wakes or its deadline expires. K9 retains

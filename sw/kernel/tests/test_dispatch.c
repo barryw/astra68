@@ -28,20 +28,20 @@ static KernelInterruptDispatchResult interrupt_result;
 static bool process_is_active;
 static bool maintenance_pending;
 static bool worker_select_result;
-static bool worker_idle_select_result;
 static bool worker_work_pending_result;
 static uint32_t interrupt_calls;
 static uint32_t interrupt_woken;
 static uint32_t timer_calls;
 static uint32_t interrupt_wakeup_calls;
+static bool interrupt_thread_woken;
 static uint32_t syscall_calls;
 static uint32_t fault_calls;
 static uint32_t worker_signal_calls;
 static uint32_t worker_schedule_calls;
 static uint32_t worker_timer_calls;
 static uint32_t worker_select_calls;
-static uint32_t worker_idle_select_calls;
 static uint32_t supervisor_timer_calls;
+static uint32_t idle_resume_calls;
 static uint32_t cpu_cycle_count;
 static uint32_t cpu_cycle_step;
 static KernelProcessStatus syscall_result;
@@ -50,6 +50,8 @@ static const uint32_t *timer_registers;
 static const void *timer_frame;
 static uint32_t timer_user_stack;
 static KernelCpuContext timer_context;
+static KernelCpuContext *current_context_result;
+static KernelCpuContext *idle_resume_result;
 static KernelFaultReport captured_fault;
 static KernelFaultReport panic_fault;
 static bool fault_capture_result;
@@ -101,20 +103,20 @@ static void reset_fakes(void)
     process_is_active = true;
     maintenance_pending = false;
     worker_select_result = false;
-    worker_idle_select_result = false;
     worker_work_pending_result = false;
     interrupt_calls = 0u;
     interrupt_woken = 0u;
     timer_calls = 0u;
     interrupt_wakeup_calls = 0u;
+    interrupt_thread_woken = false;
     syscall_calls = 0u;
     fault_calls = 0u;
     worker_signal_calls = 0u;
     worker_schedule_calls = 0u;
     worker_timer_calls = 0u;
     worker_select_calls = 0u;
-    worker_idle_select_calls = 0u;
     supervisor_timer_calls = 0u;
+    idle_resume_calls = 0u;
     cpu_cycle_count = 100u;
     cpu_cycle_step = 37u;
     syscall_result = KERNEL_PROCESS_OK;
@@ -122,6 +124,8 @@ static void reset_fakes(void)
     timer_registers = NULL;
     timer_frame = NULL;
     timer_user_stack = 0u;
+    current_context_result = NULL;
+    idle_resume_result = NULL;
     memset(&captured_fault, 0, sizeof(captured_fault));
     captured_fault.logical_address = 0x10001000u;
     captured_fault.kind = KERNEL_FAULT_PMMU_TRANSLATION;
@@ -160,6 +164,17 @@ bool kernel_process_active(void)
     return process_is_active;
 }
 
+KernelCpuContext *kernel_process_current_context(void)
+{
+    return current_context_result;
+}
+
+KernelCpuContext *kernel_process_resume_idle(void)
+{
+    ++idle_resume_calls;
+    return idle_resume_result;
+}
+
 bool kernel_process_maintenance_pending(void)
 {
     return maintenance_pending;
@@ -186,9 +201,10 @@ KernelProcessStatus kernel_process_on_supervisor_timer(void)
 
 KernelProcessStatus kernel_process_on_interrupt_wakeup(
     const uint32_t *registers, uint32_t user_stack, const void *raw_frame,
-    KernelCpuContext **next_context)
+    bool thread_woken, KernelCpuContext **next_context)
 {
     ++interrupt_wakeup_calls;
+    interrupt_thread_woken = thread_woken;
     timer_registers = registers;
     timer_user_stack = user_stack;
     timer_frame = raw_frame;
@@ -254,12 +270,6 @@ bool kernel_worker_try_select(void)
 {
     ++worker_select_calls;
     return worker_select_result;
-}
-
-bool kernel_worker_select_idle(void)
-{
-    ++worker_idle_select_calls;
-    return worker_idle_select_result;
 }
 
 bool kernel_worker_work_pending(void)
@@ -612,6 +622,23 @@ static void test_user_interrupt_without_process_returns(void)
     assert(timer_calls == 0u);
 }
 
+static void test_idle_timer_wakeup_resumes_user_directly(void)
+{
+    uint32_t registers[15] = {0u};
+    uint8_t frame[8];
+
+    reset_fakes();
+    process_is_active = false;
+    current_context_result = &timer_context;
+    make_frame(frame, 0x2000u, TIMER_VECTOR_OFFSET);
+    kernel_dispatch_idle_enter();
+
+    assert(kernel_interrupt_entry_dispatch(registers, frame, 0u) ==
+           kernel_dispatch_user_target(&timer_context));
+    assert(supervisor_timer_calls == 1u);
+    assert(worker_select_calls == 1u);
+}
+
 static void test_unhandled_interrupt_does_not_inspect_frame(void)
 {
     uint32_t registers[15] = {0u};
@@ -639,6 +666,7 @@ static void test_user_device_wakeup_reconsiders_scheduler(void)
     assert(kernel_interrupt_entry_dispatch(registers, frame, 0x70000f80u) ==
            kernel_dispatch_user_target(&timer_context));
     assert(interrupt_wakeup_calls == 1u);
+    assert(interrupt_thread_woken);
     assert(timer_registers == registers);
     assert(timer_frame == frame);
     assert(timer_user_stack == 0x70000f80u);
@@ -660,6 +688,7 @@ static void test_device_irq_can_select_deferred_worker(void)
     assert(kernel_interrupt_entry_dispatch(registers, frame, 0x70000f80u) ==
            KERNEL_DISPATCH_WORKER);
     assert(interrupt_wakeup_calls == 1u);
+    assert(!interrupt_thread_woken);
     assert(worker_select_calls == 1u);
 }
 
@@ -677,6 +706,44 @@ static void test_supervisor_device_irq_defers_reschedule(void)
            KERNEL_DISPATCH_RESUME);
     assert(interrupt_wakeup_calls == 0u);
     assert(worker_select_calls == 0u);
+}
+
+static void test_idle_host_wakeup_resumes_user_directly(void)
+{
+    uint32_t registers[15] = {0u};
+    uint8_t frame[8];
+
+    reset_fakes();
+    interrupt_result = KERNEL_INTERRUPT_DEVICE;
+    interrupt_woken = 1u;
+    process_is_active = false;
+    idle_resume_result = &timer_context;
+    make_frame(frame, 0x2000u, TIMER_VECTOR_OFFSET);
+    kernel_dispatch_idle_enter();
+
+    assert(kernel_interrupt_entry_dispatch(registers, frame, 0u) ==
+           kernel_dispatch_user_target(&timer_context));
+    assert(interrupt_wakeup_calls == 0u);
+    assert(worker_select_calls == 1u);
+    assert(idle_resume_calls == 1u);
+}
+
+static void test_scheduler_transition_irq_resumes_supervisor(void)
+{
+    uint32_t registers[15] = {0u};
+    uint8_t frame[8];
+
+    reset_fakes();
+    interrupt_result = KERNEL_INTERRUPT_DEVICE;
+    interrupt_woken = 1u;
+    process_is_active = false;
+    idle_resume_result = &timer_context;
+    make_frame(frame, 0x2000u, TIMER_VECTOR_OFFSET);
+
+    assert(kernel_interrupt_entry_dispatch(registers, frame, 0u) ==
+           KERNEL_DISPATCH_RESUME);
+    assert(worker_select_calls == 0u);
+    assert(idle_resume_calls == 0u);
 }
 
 static void test_last_process_exit_selects_worker(void)
@@ -731,7 +798,6 @@ static void test_nonexit_syscall_resumes_user(void)
     assert(syscall_calls == 1u);
     assert(worker_signal_calls == 0u);
     assert(worker_select_calls == 1u);
-    assert(worker_idle_select_calls == 0u);
 }
 
 static void test_thread_lifecycle_uses_dedicated_metrics(void)
@@ -790,24 +856,39 @@ static void test_shared_ipc_uses_dedicated_metrics(void)
     }
 }
 
-static void test_last_runnable_block_selects_idle_worker(void)
+static void test_last_runnable_block_enters_kernel_idle(void)
 {
     uint32_t registers[15] = {0u};
     uint8_t frame[8];
 
     reset_fakes();
     syscall_result = KERNEL_PROCESS_NO_RUNNABLE;
-    worker_idle_select_result = true;
     registers[0] = 0x7f000003u;
     make_frame(frame, 0x0000u, ASTRA_SYSCALL_VECTOR * 4u);
 
     assert(kernel_syscall_entry_dispatch(registers, frame, 0x70000f80u) ==
-           KERNEL_DISPATCH_WORKER);
+           KERNEL_DISPATCH_RESUME);
     assert(syscall_calls == 1u);
     assert(worker_select_calls == 1u);
-    assert(worker_idle_select_calls == 1u);
     assert(worker_schedule_calls == 0u);
     assert(!process_is_active);
+}
+
+static void test_last_runnable_wakeup_before_idle_resumes_user(void)
+{
+    uint32_t registers[15] = {0u};
+    uint8_t frame[8];
+
+    reset_fakes();
+    syscall_result = KERNEL_PROCESS_NO_RUNNABLE;
+    idle_resume_result = &timer_context;
+    registers[0] = 0x7f000003u;
+    make_frame(frame, 0x0000u, ASTRA_SYSCALL_VECTOR * 4u);
+
+    assert(kernel_syscall_entry_dispatch(registers, frame, 0x70000f80u) ==
+           kernel_dispatch_user_target(&timer_context));
+    assert(worker_select_calls == 1u);
+    assert(idle_resume_calls == 1u);
 }
 
 int main(void)
@@ -823,16 +904,20 @@ int main(void)
     test_user_interrupt_enters_scheduler();
     test_timer_retry_preempts_user_for_worker();
     test_user_interrupt_without_process_returns();
+    test_idle_timer_wakeup_resumes_user_directly();
     test_unhandled_interrupt_does_not_inspect_frame();
     test_user_device_wakeup_reconsiders_scheduler();
     test_device_irq_can_select_deferred_worker();
     test_supervisor_device_irq_defers_reschedule();
+    test_idle_host_wakeup_resumes_user_directly();
+    test_scheduler_transition_irq_resumes_supervisor();
     test_last_process_exit_selects_worker();
     test_last_process_fault_selects_worker();
     test_nonexit_syscall_resumes_user();
     test_thread_lifecycle_uses_dedicated_metrics();
     test_shared_ipc_uses_dedicated_metrics();
-    test_last_runnable_block_selects_idle_worker();
+    test_last_runnable_block_enters_kernel_idle();
+    test_last_runnable_wakeup_before_idle_resumes_user();
     puts("dispatch tests passed");
     return 0;
 }

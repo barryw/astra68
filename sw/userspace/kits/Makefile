@@ -53,6 +53,7 @@ $(BUNDLE_TOOL): FORCE
 
 $(GRAPHICS_STAMP): Graphics.kit/manifest $(GRAPHICS_LIBRARY) \
 		$(FONT_LIBRARY) $(BUNDLE_TOOL)
+	rm -rf $(GRAPHICS)
 	@mkdir -p $(GRAPHICS)/libraries/graphics.library/abi-1/1.3.0/m68k-68030
 	@mkdir -p $(GRAPHICS)/libraries/font.library/abi-1/1.0.0/m68k-68030
 	cp Graphics.kit/manifest $(GRAPHICS)/manifest
@@ -65,15 +66,17 @@ $(GRAPHICS_STAMP): Graphics.kit/manifest $(GRAPHICS_LIBRARY) \
 
 $(FILESYSTEM_STAMP): Filesystem.kit/manifest $(FILESYSTEM_LIBRARY) \
 		$(BUNDLE_TOOL)
-	@mkdir -p $(FILESYSTEM)/libraries/filesystem.library/abi-1/1.4.0/m68k-68030
+	rm -rf $(FILESYSTEM)
+	@mkdir -p $(FILESYSTEM)/libraries/filesystem.library/abi-2/2.0.0/m68k-68030
 	cp Filesystem.kit/manifest $(FILESYSTEM)/manifest
 	cp $(FILESYSTEM_LIBRARY) \
-		$(FILESYSTEM)/libraries/filesystem.library/abi-1/1.4.0/m68k-68030/filesystem.library
+		$(FILESYSTEM)/libraries/filesystem.library/abi-2/2.0.0/m68k-68030/filesystem.library
 	$(BUNDLE_TOOL) check $(FILESYSTEM)
 	@touch $@
 
 $(INTERFACE_STAMP): Interface.kit/manifest $(INTERFACE_LIBRARY) \
 		$(INPUT_LIBRARY) $(BUNDLE_TOOL)
+	rm -rf $(INTERFACE)
 	@mkdir -p $(INTERFACE)/libraries/interface.library/abi-1/1.1.0/m68k-68030
 	@mkdir -p $(INTERFACE)/libraries/input.library/abi-1/1.0.0/m68k-68030
 	cp Interface.kit/manifest $(INTERFACE)/manifest
@@ -85,6 +88,7 @@ $(INTERFACE_STAMP): Interface.kit/manifest $(INTERFACE_LIBRARY) \
 	@touch $@
 
 $(EVENTS_STAMP): Events.kit/manifest $(EVENTS_LIBRARY) $(BUNDLE_TOOL)
+	rm -rf $(EVENTS)
 	@mkdir -p $(EVENTS)/libraries/events.library/abi-1/1.0.0/m68k-68030
 	cp Events.kit/manifest $(EVENTS)/manifest
 	cp $(EVENTS_LIBRARY) \
@@ -93,6 +97,7 @@ $(EVENTS_STAMP): Events.kit/manifest $(EVENTS_LIBRARY) $(BUNDLE_TOOL)
 	@touch $@
 
 $(MESSAGING_STAMP): Messaging.kit/manifest $(MESSAGING_LIBRARY) $(BUNDLE_TOOL)
+	rm -rf $(MESSAGING)
 	@mkdir -p $(MESSAGING)/libraries/messaging.library/abi-1/1.0.0/m68k-68030
 	cp Messaging.kit/manifest $(MESSAGING)/manifest
 	cp $(MESSAGING_LIBRARY) \
@@ -101,6 +106,7 @@ $(MESSAGING_STAMP): Messaging.kit/manifest $(MESSAGING_LIBRARY) $(BUNDLE_TOOL)
 	@touch $@
 
 $(NETWORK_STAMP): Network.kit/manifest $(NETWORK_LIBRARY) $(BUNDLE_TOOL)
+	rm -rf $(NETWORK)
 	@mkdir -p $(NETWORK)/libraries/network.library/abi-1/1.0.0/m68k-68030
 	cp Network.kit/manifest $(NETWORK)/manifest
 	cp $(NETWORK_LIBRARY) \
@@ -110,6 +116,7 @@ $(NETWORK_STAMP): Network.kit/manifest $(NETWORK_LIBRARY) $(BUNDLE_TOOL)
 
 $(CONFIGURATION_STAMP): Configuration.kit/manifest $(CONFIG_LIBRARY) \
 		$(BUNDLE_TOOL)
+	rm -rf $(CONFIGURATION)
 	@mkdir -p $(CONFIGURATION)/libraries/config.library/abi-1/1.0.0/m68k-68030
 	cp Configuration.kit/manifest $(CONFIGURATION)/manifest
 	cp $(CONFIG_LIBRARY) \
@@ -118,6 +125,10 @@ $(CONFIGURATION_STAMP): Configuration.kit/manifest $(CONFIG_LIBRARY) \
 	@touch $@
 
 test: all
+	@touch $(FILESYSTEM)/stale-artifact
+	@rm -f $(FILESYSTEM_STAMP)
+	@$(MAKE) $(FILESYSTEM_STAMP)
+	@test ! -e $(FILESYSTEM)/stale-artifact
 
 sanitize analyze:
 	@true

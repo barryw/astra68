@@ -9,7 +9,7 @@ RUNTIME := ../runtime
 NDK := ../../../ndk
 CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include -I$(NDK)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
-TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
+TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections
 LIBRARY_FLAGS := $(TARGET_FLAGS) -fPIC -fvisibility=hidden
 LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
@@ -62,8 +62,7 @@ $(NETWORK_LIBRARY): $(NETWORK_LIBRARY_OBJECTS) $(RUNTIME_PIC_LIB) \
 library-contract: $(NETWORK_LIBRARY)
 	@python3 ../../../tools/library_info.py $(NETWORK_LIBRARY) | \
 		grep -q '^network.library 1.0.0 ABI 1.1$$'
-	@! $(READELF) -r $(NETWORK_LIBRARY) | \
-		grep -E 'R_68K_(GLOB_DAT|JMP_SLOT|32|PC32)'
+	$(call ASTRA_CHECK_DSO,$(NETWORK_LIBRARY))
 
 $(HOST_TEST): $(CORE) tests/test_network_core.c
 	@mkdir -p $(@D)

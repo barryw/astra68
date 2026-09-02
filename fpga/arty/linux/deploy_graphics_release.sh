@@ -2,12 +2,13 @@
 set -euo pipefail
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
+repository=$(cd "$script_dir/../../.." && pwd)
 release_dir=${ASTRA_ARTY_RELEASE_DIR:?set ASTRA_ARTY_RELEASE_DIR}
 board=${ASTRA_ARTY_BOARD:-root@192.168.1.188}
 ssh=${SSH:-ssh}
 scp=${SCP:-scp}
-expected_active_boot=${ASTRA_ACTIVE_BOOT_SHA256:-b88b142cc4624ea70dafc65b0aec900d506bcf17f90fc1c7ea6f5f834d8098a5}
-expected_active_fit=${ASTRA_ACTIVE_FIT_SHA256:-e9ef016f059cb3bc71138edf2a5ae47646a0e11b3dab3b81f7362f592b97b542}
+expected_active_boot=${ASTRA_ACTIVE_BOOT_SHA256:?set ASTRA_ACTIVE_BOOT_SHA256}
+expected_active_fit=${ASTRA_ACTIVE_FIT_SHA256:?set ASTRA_ACTIVE_FIT_SHA256}
 expected_splash=${ASTRA_SPLASH_SHA256:-86eb30739db77b85f4deb1915fb9cb9263ab4755ae318ffb1b7a4a95b7017ba4}
 
 boot="$release_dir/BOOT.BIN"
@@ -20,16 +21,19 @@ copper_tool="$release_dir/astra-copper-certify"
 audio_tool="$release_dir/astra-audio-certify"
 hdmi_link="$release_dir/astra-hdmi-link"
 splash="$release_dir/astra_boot_splash.rgb565"
+terminal_display="$release_dir/astra-terminal-display"
+time_sync="$release_dir/astra-time-sync"
 chip_reset="$script_dir/astra_chip_reset.sh"
 terminal_start="$script_dir/astra_terminal_start.sh"
 firstboot="$script_dir/rootfs-overlay/etc/init.d/astra-firstboot"
-time_sync="$release_dir/astra-time-sync"
 resolv="$script_dir/rootfs-overlay/etc/resolv.conf"
+readonly_root="$script_dir/rootfs-overlay/usr/sbin/astra-configure-readonly-root"
+release_tool="$repository/tools/astra_release.py"
 
 for file in "$boot" "$fit" "$loader" "$status_tool" "$sprite_tool" \
     "$render_tool" "$copper_tool" "$audio_tool" "$hdmi_link" "$splash" \
-    "$chip_reset" "$terminal_start" "$firstboot" "$time_sync" \
-    "$resolv"; do
+    "$terminal_display" "$time_sync" "$chip_reset" "$terminal_start" \
+    "$firstboot" "$resolv" "$readonly_root" "$release_tool"; do
     test -s "$file"
 done
 
@@ -37,15 +41,6 @@ sha256() {
     sha256sum "$1" | awk '{print $1}'
 }
 
-boot_hash=$(sha256 "$boot")
-fit_hash=$(sha256 "$fit")
-loader_hash=$(sha256 "$loader")
-status_tool_hash=$(sha256 "$status_tool")
-sprite_tool_hash=$(sha256 "$sprite_tool")
-render_tool_hash=$(sha256 "$render_tool")
-copper_tool_hash=$(sha256 "$copper_tool")
-audio_tool_hash=$(sha256 "$audio_tool")
-hdmi_link_hash=$(sha256 "$hdmi_link")
 splash_hash=$(sha256 "$splash")
 if [ "$splash_hash" != "$expected_splash" ]; then
     echo "refusing nonblank or unqualified boot splash: $splash" >&2
@@ -53,56 +48,54 @@ if [ "$splash_hash" != "$expected_splash" ]; then
     echo "actual   $splash_hash" >&2
     exit 1
 fi
-chip_reset_hash=$(sha256 "$chip_reset")
-terminal_start_hash=$(sha256 "$terminal_start")
-time_sync_hash=$(sha256 "$time_sync")
-resolv_hash=$(sha256 "$resolv")
-release_id=${boot_hash:0:12}
-stage="/data/astra/deploy/graphics-$release_id"
 
-"$ssh" "$board" "mkdir -p '$stage'"
-"$scp" "$boot" "$board:$stage/BOOT.BIN"
-"$scp" "$fit" "$board:$stage/image.ub"
-"$scp" "$loader" "$board:$stage/astra-graphics-boot"
-"$scp" "$status_tool" "$board:$stage/astra-boot-status"
-"$scp" "$sprite_tool" "$board:$stage/astra-sprite-certify"
-"$scp" "$render_tool" "$board:$stage/astra-render-certify"
-"$scp" "$copper_tool" "$board:$stage/astra-copper-certify"
-"$scp" "$audio_tool" "$board:$stage/astra-audio-certify"
-"$scp" "$hdmi_link" "$board:$stage/astra-hdmi-link"
-"$scp" "$splash" "$board:$stage/astra_boot_splash.rgb565"
-"$scp" "$chip_reset" "$board:$stage/astra-chip-reset"
-"$scp" "$terminal_start" "$board:$stage/astra-terminal-start"
-"$scp" "$firstboot" "$board:$stage/astra-firstboot"
-"$scp" "$time_sync" "$board:$stage/astra-time-sync"
-"$scp" "$resolv" "$board:$stage/resolv.conf"
+work=$(mktemp -d)
+remote_incoming=
+cleanup_local() {
+    status=$?
+    rm -rf "$work"
+    if [ -n "$remote_incoming" ]; then
+        "$ssh" "$board" "rm -rf '$remote_incoming'" >/dev/null 2>&1 || true
+    fi
+    exit "$status"
+}
+trap cleanup_local EXIT
+local_release="$work/release"
+release_id=$(PYTHONDONTWRITEBYTECODE=1 python3 "$release_tool" create \
+    "$local_release" \
+    "BOOT.BIN=$boot" \
+    "image.ub=$fit" \
+    "bin/astra-graphics-boot=$loader" \
+    "bin/astra-boot-status=$status_tool" \
+    "bin/astra-sprite-certify=$sprite_tool" \
+    "bin/astra-render-certify=$render_tool" \
+    "bin/astra-copper-certify=$copper_tool" \
+    "bin/astra-audio-certify=$audio_tool" \
+    "bin/astra-hdmi-link=$hdmi_link" \
+    "bin/astra-terminal-display=$terminal_display" \
+    "bin/astra-time-sync=$time_sync" \
+    "bin/astra-chip-reset=$chip_reset" \
+    "bin/astra-terminal-start=$terminal_start" \
+    "bin/astra-release.py=$release_tool" \
+    "assets/astra_boot_splash.rgb565=$splash" \
+    "etc/init.d/astra-firstboot=$firstboot" \
+    "etc/resolv.conf=$resolv" \
+    "sbin/astra-configure-readonly-root=$readonly_root")
+remote_incoming="/data/astra/graphics/incoming-$release_id-$$"
+
+"$ssh" "$board" "mkdir -p '$remote_incoming'"
+"$scp" -r "$local_release/." "$board:$remote_incoming/"
 
 "$ssh" "$board" sh -s -- \
-    "$stage" \
-    "$expected_active_boot" "$expected_active_fit" \
-    "$boot_hash" "$fit_hash" "$loader_hash" "$status_tool_hash" \
-    "$sprite_tool_hash" "$render_tool_hash" "$copper_tool_hash" \
-    "$audio_tool_hash" "$hdmi_link_hash" "$splash_hash" "$chip_reset_hash" \
-    "$terminal_start_hash" "$time_sync_hash" "$resolv_hash" <<'REMOTE'
+    "$remote_incoming" "$release_id" \
+    "$expected_active_boot" "$expected_active_fit" <<'REMOTE'
 set -eu
 
-stage=$1
-expected_active_boot=$2
-expected_active_fit=$3
-boot_hash=$4
-fit_hash=$5
-loader_hash=$6
-status_tool_hash=$7
-sprite_tool_hash=$8
-render_tool_hash=$9
-copper_tool_hash=${10}
-audio_tool_hash=${11}
-hdmi_link_hash=${12}
-splash_hash=${13}
-chip_reset_hash=${14}
-terminal_start_hash=${15}
-time_sync_hash=${16}
-resolv_hash=${17}
+incoming=$1
+release_id=$2
+expected_active_boot=$3
+expected_active_fit=$4
+store=/data/astra/graphics
 fat=/run/media/boot-mmcblk0p1
 root_writable=0
 
@@ -126,90 +119,54 @@ check_hash() {
     fi
 }
 
-check_hash "$boot_hash" "$stage/BOOT.BIN"
-check_hash "$fit_hash" "$stage/image.ub"
-check_hash "$loader_hash" "$stage/astra-graphics-boot"
-check_hash "$status_tool_hash" "$stage/astra-boot-status"
-check_hash "$sprite_tool_hash" "$stage/astra-sprite-certify"
-check_hash "$render_tool_hash" "$stage/astra-render-certify"
-check_hash "$copper_tool_hash" "$stage/astra-copper-certify"
-check_hash "$audio_tool_hash" "$stage/astra-audio-certify"
-check_hash "$hdmi_link_hash" "$stage/astra-hdmi-link"
-check_hash "$splash_hash" "$stage/astra_boot_splash.rgb565"
-check_hash "$chip_reset_hash" "$stage/astra-chip-reset"
-check_hash "$terminal_start_hash" "$stage/astra-terminal-start"
-check_hash "$time_sync_hash" "$stage/astra-time-sync"
-check_hash "$resolv_hash" "$stage/resolv.conf"
+actual_id=$(PYTHONDONTWRITEBYTECODE=1 \
+    python3 "$incoming/bin/astra-release.py" verify "$incoming")
+if [ "$actual_id" != "$release_id" ]; then
+    echo "transferred graphics release identity changed" >&2
+    exit 1
+fi
+installed_id=$(PYTHONDONTWRITEBYTECODE=1 \
+    python3 "$incoming/bin/astra-release.py" install --no-activate \
+        "$incoming" "$store")
+if [ "$installed_id" != "$release_id" ]; then
+    echo "installed graphics release identity changed" >&2
+    exit 1
+fi
+[ ! -e "$incoming" ] || rm -rf "$incoming"
+stage=$store/releases/$release_id
+boot_hash=$(sha256sum "$stage/BOOT.BIN" | awk '{print $1}')
+mkdir -p "$store/by-boot"
+selected_id=$(PYTHONDONTWRITEBYTECODE=1 \
+    python3 "$stage/bin/astra-release.py" select "$store" \
+        "by-boot/$boot_hash" "$release_id")
+if [ "$selected_id" != "$release_id" ]; then
+    echo "graphics boot selector identity changed" >&2
+    exit 1
+fi
 check_hash "$expected_active_boot" "$fat/BOOT.BIN"
 check_hash "$expected_active_fit" "$fat/image.ub"
 
-mkdir -p /data/astra/bin /data/astra/assets /data/astra/log
-cp "$stage/astra-graphics-boot" /data/astra/bin/astra-graphics-boot.new
-chmod 0755 /data/astra/bin/astra-graphics-boot.new
-mv /data/astra/bin/astra-graphics-boot.new \
-   /data/astra/bin/astra-graphics-boot
-cp "$stage/astra-boot-status" /data/astra/bin/astra-boot-status.new
-chmod 0755 /data/astra/bin/astra-boot-status.new
-mv /data/astra/bin/astra-boot-status.new \
-   /data/astra/bin/astra-boot-status
-cp "$stage/astra-sprite-certify" /data/astra/bin/astra-sprite-certify.new
-chmod 0755 /data/astra/bin/astra-sprite-certify.new
-mv /data/astra/bin/astra-sprite-certify.new \
-   /data/astra/bin/astra-sprite-certify
-cp "$stage/astra-render-certify" /data/astra/bin/astra-render-certify.new
-chmod 0755 /data/astra/bin/astra-render-certify.new
-mv /data/astra/bin/astra-render-certify.new \
-   /data/astra/bin/astra-render-certify
-cp "$stage/astra-copper-certify" /data/astra/bin/astra-copper-certify.new
-chmod 0755 /data/astra/bin/astra-copper-certify.new
-mv /data/astra/bin/astra-copper-certify.new \
-   /data/astra/bin/astra-copper-certify
-cp "$stage/astra-audio-certify" /data/astra/bin/astra-audio-certify.new
-chmod 0755 /data/astra/bin/astra-audio-certify.new
-mv /data/astra/bin/astra-audio-certify.new \
-   /data/astra/bin/astra-audio-certify
-cp "$stage/astra-hdmi-link" /data/astra/bin/astra-hdmi-link.new
-chmod 0755 /data/astra/bin/astra-hdmi-link.new
-mv /data/astra/bin/astra-hdmi-link.new /data/astra/bin/astra-hdmi-link
-cp "$stage/astra_boot_splash.rgb565" \
-   /data/astra/assets/astra_boot_splash.rgb565.new
-mv /data/astra/assets/astra_boot_splash.rgb565.new \
-   /data/astra/assets/astra_boot_splash.rgb565
-cp "$stage/astra-chip-reset" /data/astra/bin/astra-chip-reset.new
-chmod 0755 /data/astra/bin/astra-chip-reset.new
-mv /data/astra/bin/astra-chip-reset.new /data/astra/bin/astra-chip-reset
-cp "$stage/astra-terminal-start" /data/astra/bin/astra-terminal-start.new
-chmod 0755 /data/astra/bin/astra-terminal-start.new
-mv /data/astra/bin/astra-terminal-start.new \
-   /data/astra/bin/astra-terminal-start
-cp "$stage/astra-time-sync" /data/astra/bin/astra-time-sync.new
-chmod 0755 /data/astra/bin/astra-time-sync.new
-mv /data/astra/bin/astra-time-sync.new /data/astra/bin/astra-time-sync
-check_hash "$loader_hash" /data/astra/bin/astra-graphics-boot
-check_hash "$status_tool_hash" /data/astra/bin/astra-boot-status
-check_hash "$sprite_tool_hash" /data/astra/bin/astra-sprite-certify
-check_hash "$render_tool_hash" /data/astra/bin/astra-render-certify
-check_hash "$copper_tool_hash" /data/astra/bin/astra-copper-certify
-check_hash "$audio_tool_hash" /data/astra/bin/astra-audio-certify
-check_hash "$hdmi_link_hash" /data/astra/bin/astra-hdmi-link
-check_hash "$splash_hash" /data/astra/assets/astra_boot_splash.rgb565
-check_hash "$chip_reset_hash" /data/astra/bin/astra-chip-reset
-check_hash "$terminal_start_hash" /data/astra/bin/astra-terminal-start
-check_hash "$time_sync_hash" /data/astra/bin/astra-time-sync
-
 mount -o remount,rw /
 root_writable=1
-cp "$stage/astra-firstboot" /etc/init.d/astra-firstboot.new
+cp "$stage/sbin/astra-configure-readonly-root" \
+    /usr/sbin/astra-configure-readonly-root.new
+chmod 0755 /usr/sbin/astra-configure-readonly-root.new
+mv /usr/sbin/astra-configure-readonly-root.new \
+    /usr/sbin/astra-configure-readonly-root
+/usr/sbin/astra-configure-readonly-root
+cp "$stage/etc/init.d/astra-firstboot" /etc/init.d/astra-firstboot.new
 chmod 0755 /etc/init.d/astra-firstboot.new
 mv /etc/init.d/astra-firstboot.new /etc/init.d/astra-firstboot
-cp "$stage/resolv.conf" /etc/resolv.conf
-check_hash "$resolv_hash" /etc/resolv.conf
+cp "$stage/etc/resolv.conf" /var/run/resolv.conf
+check_hash "$(sha256sum "$stage/etc/resolv.conf" | awk '{print $1}')" \
+    /etc/resolv.conf
 ln -sf ../init.d/astra-firstboot /etc/rc5.d/S02astra-firstboot
 rm -f /etc/rcS.d/S03astra-firstboot /etc/rcS.d/S04astra-firstboot
 sync
 mount -o remount,ro /
 root_writable=0
 
+fit_hash=$(sha256sum "$stage/image.ub" | awk '{print $1}')
 boot_short=$(printf '%.12s' "$expected_active_boot")
 fit_short=$(printf '%.12s' "$expected_active_fit")
 rollback_boot="$fat/BOOT.BIN.rollback-$boot_short"
@@ -227,7 +184,6 @@ cp "$stage/image.ub" "$fat/image.ub.astra-new"
 sync
 check_hash "$fit_hash" "$fat/image.ub.astra-new"
 mv "$fat/image.ub.astra-new" "$fat/image.ub"
-
 cp "$stage/BOOT.BIN" "$fat/BOOT.BIN.astra-new"
 sync
 check_hash "$boot_hash" "$fat/BOOT.BIN.astra-new"
@@ -237,7 +193,8 @@ sync
 check_hash "$boot_hash" "$fat/BOOT.BIN"
 check_hash "$fit_hash" "$fat/image.ub"
 mount | grep -F '/dev/root on / type ext4 (ro,' >/dev/null
-echo "ASTRA_ARTY_DEPLOY PASS boot=$boot_hash fit=$fit_hash"
+echo "ASTRA_ARTY_DEPLOY PASS release=$release_id boot=$boot_hash fit=$fit_hash"
 REMOTE
+remote_incoming=
 
 echo "ASTRA_ARTY_DEPLOY STAGED $board release=$release_id"

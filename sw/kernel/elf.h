@@ -24,6 +24,7 @@
  *   - PT_LOAD segments only, each page-aligned in both file and memory,
  *     ascending, non-overlapping, readable, and never both writable and
  *     executable
+ *   - at most one read-only PT_TLS template, wholly covered by one PT_LOAD
  *   - an entry point inside an executable segment at an even address
  *
  * Executables and shared libraries have separate entry points below. Shared
@@ -63,6 +64,7 @@ typedef enum KernelElfStatus {
     KERNEL_ELF_UNORDERED,
     KERNEL_ELF_OVERLAP,
     KERNEL_ELF_TOO_LARGE,
+    KERNEL_ELF_BAD_TLS,
     KERNEL_ELF_BAD_ENTRY
 } KernelElfStatus;
 
@@ -82,11 +84,21 @@ typedef struct KernelElfSegment {
     uint32_t rights;          /* KERNEL_ELF_SEGMENT_* */
 } KernelElfSegment;
 
+typedef struct KernelElfTls {
+    uint32_t file_offset;
+    uint32_t file_size;
+    uint32_t virtual_address;
+    uint32_t memory_size;
+    uint32_t alignment;
+} KernelElfTls;
+
 typedef struct KernelElfImage {
     KernelElfSegment segment[KERNEL_ELF_SEGMENT_MAX];
+    KernelElfTls tls;
     uint32_t segment_count;
     uint32_t entry;
     uint32_t total_pages;
+    uint8_t has_tls;
 } KernelElfImage;
 
 /*
@@ -107,7 +119,7 @@ typedef struct KernelElfStream {
     uint8_t library;
     uint8_t failed;
     uint8_t complete;
-    uint8_t reserved;
+    uint8_t tls_seen;
 } KernelElfStream;
 
 KernelElfStatus kernel_elf_stream_begin(const void *header,

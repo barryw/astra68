@@ -44,13 +44,14 @@ CPPFLAGS := -I$(STORAGE)/tests -I$(LWEXT4)/include -I$(STORAGE)/port/include \
 	-DCONFIG_USE_DEFAULT_CFG=0
 COMMON_FLAGS := -std=gnu11 -O2 -g -fno-strict-aliasing
 TARGET_FLAGS := -static -m68030
-SIZE_FLAGS := -std=gnu11 -Os -m68030 -msoft-float -ffreestanding -fno-builtin \
+SIZE_FLAGS := -std=gnu11 -Os $(ASTRA_TARGET_ABI_FLAGS) -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections
 
 # Exactly the sources the service links, plus the mount test that drives them.
 PORT_SOURCES := $(STORAGE)/src/block_device.c $(STORAGE)/src/memory_block.c \
 	$(STORAGE)/src/mbr.c $(STORAGE)/src/ext4_port.c \
-	$(STORAGE)/src/ext4_alloc.c $(STORAGE)/src/ext4_xattr_stub.c \
+	$(STORAGE)/src/ext4_alloc.c $(STORAGE)/src/ext4_time.c \
+	$(STORAGE)/src/ext4_xattr_stub.c \
 	$(ALLOC_DIR)/src/alloc.c
 MOUNT_TEST := $(STORAGE)/tests/test_ext4_mount.c \
 	$(STORAGE)/tests/file_block.c

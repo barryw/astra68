@@ -194,7 +194,7 @@ module tb_astra_graphics_pipeline #(
         .TOTAL_HEIGHT(TOTAL_HEIGHT),
         .OUTPUT_PREFETCH(37),
         .AXI_ID_WIDTH(AXI_ID_WIDTH),
-        .BOOT_FONT_HEX("fpga/soc/post_fonts.hex")
+.BOOT_FONT_HEX("assets/fonts/astra_8x16.hex")
     ) dut (.*);
 
     astra_render_axi_memory_model #(

@@ -48,6 +48,7 @@ fork(void)
     }
     result = astra_process_clone(&handle, &process_id);
     if (result != ASTRA_SYSCALL_OK) {
+        (void)astra_log_failure("fork clone", result);
         free(child);
         errno = result == ASTRA_SYSCALL_OUT_OF_MEMORY ||
                         result == ASTRA_SYSCALL_RESOURCE_LIMIT ?
@@ -57,8 +58,15 @@ fork(void)
     if (process_id == 0u) {
         discard_inherited_children();
         free(child);
-        if (astra_posix_file_after_fork_child() != 0)
+        if (astra_posix_file_after_fork_child() != 0) {
+            static const char message[] =
+                "fork: child filesystem reinitialization failed\n";
+
+            (void)astra_log_failure("fork filesystem reinitialization",
+                                    (uint32_t)errno);
+            (void)write(STDERR_FILENO, message, sizeof(message) - 1u);
             _exit(127);
+        }
         astra_posix_socket_after_fork_child();
         return (pid_t)0;
     }

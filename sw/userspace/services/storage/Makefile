@@ -13,7 +13,7 @@ CPPFLAGS := -I../../include -I../../../include -I$(RUNTIME)/include \
 	-I$(LWEXT4)/include -I$(STORAGE)/port/include \
 	-DCONFIG_USE_DEFAULT_CFG=0 -I$(RUNTIME)/freestanding
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
-TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
+TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O2 -flto -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	-Wl,--build-id=none -Wl,--gc-sections -T $(RUNTIME)/astra_user.ld

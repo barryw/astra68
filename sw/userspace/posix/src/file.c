@@ -45,14 +45,20 @@ static char cwd[ASTRA_VFS_PATH_MAX];
 static int started;
 static mode_t creation_mask = 0022u;
 
-#define HAS_LIBRARY_FIELD(minor, field)                                      \
-    (filesystem.library->abi_minor >= (minor) &&                             \
+#define ABI_AT_LEAST(major, minor, required_major, required_minor)           \
+    ((major) > (required_major) ||                                           \
+     ((major) == (required_major) && (minor) >= (required_minor)))
+#define HAS_LIBRARY_FIELD(major, minor, field)                               \
+    (ABI_AT_LEAST(filesystem.library->abi_major,                             \
+                  filesystem.library->abi_minor, (major), (minor)) &&        \
      filesystem.library->structure_size >=                                  \
-         offsetof(AstraFilesystemLibraryV1, field) +                         \
+         offsetof(AstraFilesystemLibraryV2, field) +                         \
              sizeof(filesystem.library->field))
 
+_Static_assert(ABI_AT_LEAST(2u, 0u, 1u, 5u),
+               "a new ABI major retains fields from older ABI minors");
+
 typedef struct PosixPath {
-    char normal[ASTRA_VFS_PATH_MAX];
     char native[ASTRA_VFS_PATH_MAX];
     int root;
 } PosixPath;
@@ -84,6 +90,7 @@ posix_errno(uint32_t status)
     case ASTRA_VFS_ERR_BUSY:      return EBUSY;
     case ASTRA_VFS_ERR_BUFFER_TOO_SMALL: return ERANGE;
     case ASTRA_VFS_ERR_CROSS_DEVICE: return EXDEV;
+    case ASTRA_VFS_ERR_LOOP:        return ELOOP;
     default:                      return EIO;
     }
 }
@@ -308,7 +315,7 @@ start(void)
 
 /* One namespace conversion shared by every file and directory operation. */
 static int
-resolve(const char *path, PosixPath *out)
+resolve_path(const char *path, PosixPath *out, char *normal)
 {
     int result;
 
@@ -318,15 +325,23 @@ resolve(const char *path, PosixPath *out)
     }
     if (!start())
         return 0;
-    result = astra_posix_path_resolve(cwd, path, out->normal,
-                                      sizeof(out->normal), out->native,
-                                      sizeof(out->native));
+    result = normal != NULL ?
+        astra_posix_path_resolve(cwd, path, normal, ASTRA_VFS_PATH_MAX,
+                                 out->native, sizeof(out->native)) :
+        astra_posix_path_resolve_native(cwd, path, out->native,
+                                        sizeof(out->native));
     if (result < 0) {
         errno = ENAMETOOLONG;
         return 0;
     }
     out->root = result == 0;
     return 1;
+}
+
+static int
+resolve(const char *path, PosixPath *out)
+{
+    return resolve_path(path, out, NULL);
 }
 
 static int
@@ -485,7 +500,7 @@ open(const char *path, int flags, ...)
         wanted |= ASTRA_VFS_OPEN_EXCLUSIVE;
     if ((flags & O_APPEND) != 0)
         wanted |= ASTRA_VFS_OPEN_APPEND;
-    if (!HAS_LIBRARY_FIELD(3u, open_mode)) {
+    if (!HAS_LIBRARY_FIELD(1u, 3u, open_mode)) {
         errno = ENOSYS;
         return -1;
     }
@@ -607,7 +622,7 @@ fsync(int fd)
         errno = EBADF;
         return -1;
     }
-    if (!HAS_LIBRARY_FIELD(2u, sync)) {
+    if (!HAS_LIBRARY_FIELD(1u, 2u, sync)) {
         errno = ENOSYS;
         return -1;
     }
@@ -630,7 +645,7 @@ ftruncate(int fd, off_t length)
         errno = EBADF;
         return -1;
     }
-    if (!HAS_LIBRARY_FIELD(2u, truncate)) {
+    if (!HAS_LIBRARY_FIELD(1u, 2u, truncate)) {
         errno = ENOSYS;
         return -1;
     }
@@ -652,11 +667,12 @@ static void
 fill(struct stat *out, const AstraFileInfo *info)
 {
     int directory = info->kind == ASTRA_VFS_KIND_DIRECTORY;
+    int symlink = info->kind == ASTRA_VFS_KIND_SYMLINK;
 
     (void)memset(out, 0, sizeof(*out));
-    out->st_mode = (mode_t)((directory ? S_IFDIR : S_IFREG) |
+    out->st_mode = (mode_t)((directory ? S_IFDIR : symlink ? S_IFLNK : S_IFREG) |
                             (info->mode != 0u ? info->mode :
-                             (directory ? 0755u : 0644u)));
+                             (directory ? 0755u : symlink ? 0777u : 0644u)));
     out->st_size = (off_t)info->byte_size;
     out->st_nlink = (nlink_t)(info->nlink != 0u ? info->nlink : 1u);
     out->st_uid = (uid_t)info->uid;
@@ -668,8 +684,8 @@ fill(struct stat *out, const AstraFileInfo *info)
     out->st_blocks = (blkcnt_t)((info->byte_size + 511u) / 512u);
 }
 
-int
-stat(const char *path, struct stat *out)
+static int
+stat_path(const char *path, struct stat *out, int literal)
 {
     AstraFileInfo info = ASTRA_FILE_INFO_INIT;
     PosixPath resolved;
@@ -688,12 +704,29 @@ stat(const char *path, struct stat *out)
         out->st_blksize = 512;
         return 0;
     }
-    status = filesystem.library->stat(&filesystem.filesystem, resolved.native,
-                                      &info);
+    if (literal && !HAS_LIBRARY_FIELD(1u, 5u, lstat)) {
+        errno = ENOSYS;
+        return -1;
+    }
+    status = literal ?
+        filesystem.library->lstat(&filesystem.filesystem, resolved.native,
+                                  &info) :
+        filesystem.library->stat(&filesystem.filesystem, resolved.native,
+                                  &info);
     if (status != ASTRA_VFS_OK)
         return fail(status);
     fill(out, &info);
     return 0;
+}
+
+int stat(const char *path, struct stat *out)
+{
+    return stat_path(path, out, 0);
+}
+
+int lstat(const char *path, struct stat *out)
+{
+    return stat_path(path, out, 1);
 }
 
 int
@@ -753,7 +786,7 @@ mkdir(const char *path, mode_t mode)
         errno = EEXIST;
         return -1;
     }
-    if (!HAS_LIBRARY_FIELD(3u, mkdir_mode)) {
+    if (!HAS_LIBRARY_FIELD(1u, 3u, mkdir_mode)) {
         errno = ENOSYS;
         return -1;
     }
@@ -793,7 +826,7 @@ rename(const char *from, const char *to)
         errno = EBUSY;
         return -1;
     }
-    if (!HAS_LIBRARY_FIELD(1u, rename)) {
+    if (!HAS_LIBRARY_FIELD(1u, 1u, rename)) {
         errno = ENOSYS;
         return -1;
     }
@@ -824,7 +857,7 @@ chmod(const char *path, mode_t mode)
         errno = EROFS;
         return -1;
     }
-    if (!HAS_LIBRARY_FIELD(3u, chmod)) {
+    if (!HAS_LIBRARY_FIELD(1u, 3u, chmod)) {
         errno = ENOSYS;
         return -1;
     }
@@ -838,8 +871,11 @@ ssize_t
 readlink(const char *path, char *buffer, size_t capacity)
 {
     PosixPath resolved;
+    char native_target[ASTRA_VFS_PATH_MAX + 1u];
+    char posix_target[ASTRA_VFS_PATH_MAX + 2u];
     uint32_t length = 0u;
     uint32_t status;
+    size_t moved;
 
     if (buffer == NULL) {
         errno = EFAULT;
@@ -855,16 +891,65 @@ readlink(const char *path, char *buffer, size_t capacity)
         errno = EINVAL;
         return -1;
     }
-    if (!HAS_LIBRARY_FIELD(3u, readlink)) {
+    if (!HAS_LIBRARY_FIELD(1u, 3u, readlink)) {
         errno = ENOSYS;
         return -1;
     }
-    if (capacity > UINT32_MAX)
-        capacity = UINT32_MAX;
     status = filesystem.library->readlink(
-        &filesystem.filesystem, resolved.native, buffer, (uint32_t)capacity,
-        &length);
-    return status == ASTRA_VFS_OK ? (ssize_t)length : fail(status);
+        &filesystem.filesystem, resolved.native, native_target,
+        ASTRA_VFS_PATH_MAX, &length);
+    if (status != ASTRA_VFS_OK)
+        return fail(status);
+    if (length > ASTRA_VFS_PATH_MAX) {
+        errno = EIO;
+        return -1;
+    }
+    native_target[length] = '\0';
+    if (astra_posix_link_target_to_posix(native_target, posix_target,
+                                         sizeof(posix_target)) != 0) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    moved = strlen(posix_target);
+    if (moved > capacity)
+        moved = capacity;               /* POSIX readlink truncates. */
+    (void)memcpy(buffer, posix_target, moved);
+    return (ssize_t)moved;
+}
+
+int
+symlink(const char *target, const char *path)
+{
+    PosixPath resolved;
+    char native_target[ASTRA_VFS_PATH_MAX];
+    uint32_t status;
+
+    if (target == NULL || path == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (target[0] == '\0') {
+        errno = ENOENT;
+        return -1;
+    }
+    if (!resolve(path, &resolved))
+        return -1;
+    if (resolved.root) {
+        errno = EEXIST;
+        return -1;
+    }
+    if (!HAS_LIBRARY_FIELD(1u, 5u, symlink)) {
+        errno = ENOSYS;
+        return -1;
+    }
+    if (astra_posix_link_target_to_native(target, native_target,
+                                          sizeof(native_target)) != 0) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    status = filesystem.library->symlink(
+        native_target, &filesystem.filesystem, resolved.native);
+    return status == ASTRA_VFS_OK ? 0 : fail(status);
 }
 
 /*
@@ -883,9 +968,10 @@ chdir(const char *path)
 {
     AstraFileInfo info = ASTRA_FILE_INFO_INIT;
     PosixPath resolved;
+    char normal[ASTRA_VFS_PATH_MAX];
     uint32_t status;
 
-    if (!resolve(path, &resolved))
+    if (!resolve_path(path, &resolved, normal))
         return -1;
     if (resolved.root) {
         (void)strcpy(cwd, "/");
@@ -899,7 +985,7 @@ chdir(const char *path)
         errno = ENOTDIR;
         return -1;
     }
-    (void)strcpy(cwd, resolved.normal);
+    (void)strcpy(cwd, normal);
     return 0;
 }
 
@@ -1035,7 +1121,8 @@ readdir(DIR *dir)
     entry = &state->batch[state->next++];
     (void)memset(&dir->dirent, 0, sizeof(dir->dirent));
     dir->dirent.d_type = entry->kind == ASTRA_VFS_KIND_DIRECTORY ? DT_DIR :
-                                                                   DT_REG;
+                         entry->kind == ASTRA_VFS_KIND_SYMLINK ? DT_LNK :
+                                                                DT_REG;
     for (index = 0u; index + 1u < sizeof(dir->dirent.d_name) &&
                      entry->name[index] != '\0'; ++index)
         dir->dirent.d_name[index] = entry->name[index];

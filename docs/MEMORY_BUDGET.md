@@ -1,11 +1,9 @@
 # Axiom kernel memory budget
 
-Status: dual 32/128 MiB kernel profile implemented and hardware-gated (2026-08-09);
-historical K9/K10 measurements retained below
+Status: 128 MiB Arty guest profile implemented and hardware-gated (2026-08-09)
 
-The physical ULX3S machine has exactly 32 MiB of SDRAM. The active Arty-hosted
-machine has 128 MiB of guest RAM. One kernel image supports both exact profiles;
-its per-frame tables are sized for 32,768 pages, while initialization and
+The active Arty-hosted machine has 128 MiB of guest RAM. Its per-frame tables
+are sized for 32,768 pages, while initialization and
 allocator accounting use the RAM size reported by BootInfo. Every static pool,
 frame, mapping, queue, pin, and graphics reservation is reported separately. A
 budget is not permission to allocate dynamically without a quota.
@@ -39,15 +37,8 @@ reservations taken from Linux or the 128 MiB physical graphics arena.
 
 ## Physical baseline
 
-| Reservation | Bytes |
-|---|---:|
-| early retained log | 16,384 |
-| kernel image, trace, metadata, and stacks | 1,114,112 |
-| ROM backing | 262,144 |
-| maximum allocator input before the conditional USB DMA carveout | 32,161,792 |
-
-The detailed split and bootstrap BRAM are in `MEMORY_MAP.md`. The kernel starts
-from BootInfo ranges, not the arithmetic above.
+The exact reservations are in `MEMORY_MAP.md`. The kernel starts from BootInfo
+ranges and sizes allocator accounting from the reported 128 MiB guest map.
 
 ## Provisional device-lease substrate (2026-08-04)
 

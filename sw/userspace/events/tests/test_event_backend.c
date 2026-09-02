@@ -277,7 +277,7 @@ static void test_the_tree_lists_itself(void)
     append(3u, ASTRA_EVENT_LEVEL_INFO, base, 0x1au);
     append(4u, ASTRA_EVENT_LEVEL_INFO, base + 128u, 0x2bu);
 
-    while (ops->readdir(&backend, "/", cookie, name, sizeof(name), &info,
+    while (ops->readdir(&backend, 0u, "/", cookie, name, sizeof(name), &info,
                         &cookie) == ASTRA_VFS_OK) {
         assert(info.kind == ASTRA_VFS_KIND_DIRECTORY);
         ++entries;
@@ -287,7 +287,7 @@ static void test_the_tree_lists_itself(void)
     /* One entry per story, named by its first appearance, listed once. */
     cookie = 0u;
     entries = 0u;
-    while (ops->readdir(&backend, "/activity", cookie, name, sizeof(name),
+    while (ops->readdir(&backend, 0u, "/activity", cookie, name, sizeof(name),
                         &info, &cookie) == ASTRA_VFS_OK) {
         if (entries == 0u) {
             assert(strcmp(name, "0000001a") == 0);
@@ -301,7 +301,7 @@ static void test_the_tree_lists_itself(void)
     /* A subsystem is a directory of levels now. */
     cookie = 0u;
     entries = 0u;
-    while (ops->readdir(&backend, "/subsystem/shell", cookie, name,
+    while (ops->readdir(&backend, 0u, "/subsystem/shell", cookie, name,
                         sizeof(name), &info, &cookie) == ASTRA_VFS_OK) {
         assert(info.kind == ASTRA_VFS_KIND_FILE);
         ++entries;
@@ -311,7 +311,7 @@ static void test_the_tree_lists_itself(void)
     /* boot/ holds current/ and nothing it cannot answer for. */
     cookie = 0u;
     entries = 0u;
-    while (ops->readdir(&backend, "/boot", cookie, name, sizeof(name), &info,
+    while (ops->readdir(&backend, 0u, "/boot", cookie, name, sizeof(name), &info,
                         &cookie) == ASTRA_VFS_OK) {
         assert(strcmp(name, "current") == 0);
         ++entries;
@@ -336,10 +336,10 @@ static void test_the_previous_boot_is_real_or_absent(void)
     (void)read_all("/boot/-1/warning", text, sizeof(text));
     assert(strstr(text, "command accepted") != NULL);
 
-    assert(ops->readdir(&backend, "/boot", 0u, name, sizeof(name), &info,
+    assert(ops->readdir(&backend, 0u, "/boot", 0u, name, sizeof(name), &info,
                         &next) == ASTRA_VFS_OK);
     assert(strcmp(name, "current") == 0 && next == 1u);
-    assert(ops->readdir(&backend, "/boot", next, name, sizeof(name), &info,
+    assert(ops->readdir(&backend, 0u, "/boot", next, name, sizeof(name), &info,
                         &next) == ASTRA_VFS_OK);
     assert(strcmp(name, "-1") == 0 && next == 2u);
 }

@@ -8,13 +8,6 @@
 /*
  * Read-only master boot record reader.
  *
- * Astra's boot chain is frozen around the MBR: `sw/stage0` lives in FPGA BRAM,
- * so its partition scan cannot change without a bitstream rebuild and a timing
- * closure re-qualification. It looks for a FAT partition in one of the four
- * primary slots and nothing else. Every later layout decision inherits that —
- * a GPT disk presents a protective entry of type 0xEE that stage0 rejects, so
- * the card would not boot.
- *
  * This is deliberately not lwext4's `ext4_mbr_scan`. That one hands back four
  * `ext4_blockdev` structures sharing the parent's interface, which bypasses the
  * port's accounting, transfer splitting and lock; and its companion
@@ -63,7 +56,7 @@ AstraBlockStatus astra_mbr_read(AstraBlockDevice *device, void *sector_buffer,
                                 uint32_t sector_buffer_bytes,
                                 AstraMbrTable *table, uint64_t deadline);
 
-/* Classifies a partition type byte. The FAT set matches sw/stage0 exactly. */
+/* Classifies a partition type byte. */
 AstraMbrKind astra_mbr_classify(uint8_t type);
 
 /* The first entry of the given kind, or NULL. */

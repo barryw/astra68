@@ -155,36 +155,58 @@ stream_errno(uint32_t status)
     }
 }
 
+#if defined(__GNUC__) && !defined(__clang__)
+/* GCC analyzer bug 113990 mistakes realloc ownership returned to persistent
+ * state for a leak. Keep every other analyzer diagnostic enabled here. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wanalyzer-malloc-leak"
+#endif
 static int
 grow_descriptors(uint32_t wanted)
 {
     PosixDescriptor *grown;
+    const uint32_t maximum_capacity =
+        UINT32_MAX / (uint32_t)sizeof(*grown);
     uint32_t old_capacity = descriptor_capacity;
     uint32_t capacity = descriptor_capacity;
+    int using_initial = descriptors == initial_descriptors;
 
-    while (capacity < wanted) {
-        if (capacity > (uint32_t)INT_MAX / 2u) {
-            errno = EMFILE;
-            return 0;
-        }
-        capacity *= 2u;
-    }
-    grown = descriptors == initial_descriptors ?
-        calloc(capacity, sizeof(*grown)) :
-        realloc(descriptors, (size_t)capacity * sizeof(*grown));
-    if (grown == NULL) {
-        errno = ENOMEM;
+    if (wanted <= capacity)
+        return 1;
+    if (wanted > maximum_capacity) {
+        errno = EMFILE;
         return 0;
     }
-    if (descriptors == initial_descriptors)
+
+    while (capacity < wanted) {
+        capacity = capacity > maximum_capacity / 2u ?
+            wanted : capacity * 2u;
+    }
+    if (using_initial) {
+        grown = calloc(capacity, sizeof(*grown));
+        if (grown == NULL) {
+            errno = ENOMEM;
+            return 0;
+        }
         (void)memcpy(grown, descriptors,
                      (size_t)old_capacity * sizeof(*grown));
+    } else {
+        grown = realloc(descriptors,
+                        (size_t)capacity * sizeof(*grown));
+        if (grown == NULL) {
+            errno = ENOMEM;
+            return 0;
+        }
+    }
     (void)memset(&grown[old_capacity], 0,
                  (size_t)(capacity - old_capacity) * sizeof(*grown));
     descriptors = grown;
     descriptor_capacity = capacity;
     return 1;
 }
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 void
 astra_posix_file_bind(const AstraPosixFileOps *ops)

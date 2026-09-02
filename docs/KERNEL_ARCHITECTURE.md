@@ -5,7 +5,7 @@ Status: normative design contract, revision 0.3 (2026-07-25)
 This document defines the kernel shape. Exact memory, ABI, locking, ownership,
 budget, testing, and implementation status live in the companion documents
 linked below. `KERNEL_SPEC.md` remains design rationale; where it differs from
-this contract, this contract and `STATUS.md` win.
+this contract, this contract and `CURRENT_STATE.md` win.
 
 Status words are precise:
 
@@ -17,7 +17,8 @@ Status words are precise:
 ## Machine contract
 
 - **LOCKED:** one big-endian MC68030-compatible CPU with integrated PMMU.
-- **LOCKED:** 32 MiB physical SDRAM, no kernel floating point, `-msoft-float`.
+- **LOCKED:** 128 MiB Astra guest RAM, no kernel floating point,
+  `-msoft-float`.
 - **LOCKED:** no SMP, RCU, lock-free framework, swap, or memory overcommit.
 - **LOCKED:** bounded latency and predictable memory use outrank feature count.
 - **LOCKED:** Motorola MC68030 behavior is the architectural authority.

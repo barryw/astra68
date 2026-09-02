@@ -564,7 +564,7 @@ add_files -norecurse [list \
     [file join $hdmi_dir auxiliary_video_information_info_frame.sv] \
     [file join $hdmi_dir source_product_description_info_frame.sv] \
 ]
-set boot_font [file join $repo_root fpga soc post_fonts.hex]
+set boot_font [file join $repo_root fpga arty graphics post_fonts.hex]
 add_files -norecurse $boot_font
 set_property FILE_TYPE {Memory Initialization Files} [get_files $boot_font]
 add_files -fileset constrs_1 -norecurse [list \

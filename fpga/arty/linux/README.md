@@ -51,29 +51,23 @@ vertical blank. The loader has finite timeouts and reports a precise failure;
 it never prints `OK` for a check it did not perform.
 
 `astra-boot-status` updates one row after boot without rebuilding the complete
-plane:
+plane. Resolve it from the release selected by the BOOT image actually running:
 
 ```sh
-/data/astra/bin/astra-boot-status stage 3 'Axiom launch' READY amber
+boot=$(sha256sum /run/media/boot-mmcblk0p1/BOOT.BIN | awk '{print $1}')
+/data/astra/graphics/by-boot/$boot/bin/astra-boot-status \
+  stage 3 'Axiom launch' READY amber
 ```
 
 The common MMIO layer validates device identity, version, capabilities, text
 geometry, and origin before use. Both tools are static ARM executables. The
 host formatter tests and GCC static analyzer are part of release packaging.
 
-Active release identities are:
-
-| Artifact | SHA-256 |
-|---|---|
-| `BOOT.BIN` | `9637e1035acb9d1bd6d2bd0eec2e3cf9ca5c13023560af8d2b4f27a546444504` |
-| `image.ub` | `c9a77be0f5085ce048860d12bd88ce7a246b813cf76c20339e8c18b7f9358944` |
-| Device tree | `422c7d48554512f313f19d2e750d19ed2a426b46c53befcbe3e3e4c80ed9cfc4` |
-| Graphics loader | `6be16a2515161a9fe98b316e0ddba3c3c516d8393bf8422201ee76df29eebd43` |
-| Boot-status utility | `1cf76956e6a406d0d05247b97262aecffdf7c4e15e96c03141042358f1254020` |
-| Sprite certifier | `0bad57d1a227137fcffd8d5477c98cc5d06187e4e1329e297929b5a7d7e1b52e` |
-| Renderer certifier | `3c62ba876f3df9c29d87e4ed52aa651c12f7d5f098e86cd73ed6c9406c51da9d` |
-| Copper certifier | `28a318ccdaade128e21199c139c20c7aab2c80c3270a9283850bddc43dc8edb3` |
-| Blank RGB565 splash | `86eb30739db77b85f4deb1915fb9cb9263ab4755ae318ffb1b7a4a95b7017ba4` |
+Current physical identities and the cold-boot result live only in
+`docs/CURRENT_STATE.md`; duplicating an active hash table here previously made
+this document another stale selector. The blank RGB565 splash remains pinned
+by the deploy gate to SHA-256
+`86eb30739db77b85f4deb1915fb9cb9263ab4755ae318ffb1b7a4a95b7017ba4`.
 
 The board readback passes all 1,843,200 bytes with CRC32 `611029ee`, activates
 scene generation 1 with zero deferrals, publishes final boot-text generation

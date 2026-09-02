@@ -49,6 +49,8 @@ import threading
 import queue
 import time
 
+sys.dont_write_bytecode = True
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
@@ -60,10 +62,12 @@ import astra_image
 MEMORY = "128M"
 import trace_decode
 
-# Vesta input block; the low byte of the status word is the queued count.
+# Vesta input block; the low five bits are the queued count.
 INPUT_STATUS = 0xFFF0070C
-INPUT_COUNT_MASK = 0xFF
+INPUT_COUNT_MASK = 0x1F
 RTC_STATUS = 0xFFF00420
+RTC_NS_LO = 0xFFF00424
+RTC_NS_HI = 0xFFF00428
 RTC_VALID = 1 << 0
 
 # The kernel trace ring, at the fixed address the loader retains it at.
@@ -88,6 +92,8 @@ PROMPT = "WORK:>"
 # it to have run.
 BANNER = "COMMANDS"
 POSIX_COMMAND = 'posix -R +42 --cmd "set number" -- WORK:notes.txt'
+DURABILITY_COMMAND = (
+    "posix --durability WORK:durability-cut.txt durable-data-68030")
 
 SCRIPT = [
     # `mkdir` is silent on success. The diagnostic event is the completion
@@ -228,6 +234,10 @@ SCRIPT = [
     # -- see the enum at the top of `commands/posix/posix.c`.
     (POSIX_COMMAND, "POSIX RAW PASS"),
     ("echo $?", "0"),
+    (DURABILITY_COMMAND,
+     ("ASTRA DURABILITY SYNCED", "ASTRA DURABILITY PASS")),
+    ("posix --durability-check WORK:durability-cut.txt durable-data-68030",
+     "ASTRA DURABILITY EXACT"),
     # Stock Lua, including the shared POSIX paths it depends on rather than a
     # command-private compatibility layer.
     ("lua -v", "Lua 5.5.1"),
@@ -343,7 +353,7 @@ RECORD = re.compile(
 
 
 class Qmp:
-    def __init__(self, path, deadline=20.0):
+    def __init__(self, path, deadline=20.0, process=None):
         self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         end = time.monotonic() + deadline
         while True:
@@ -351,13 +361,23 @@ class Qmp:
                 self.socket.connect(path)
                 break
             except (FileNotFoundError, ConnectionRefusedError):
+                if process is not None and process.poll() is not None:
+                    self.socket.close()
+                    raise RuntimeError(
+                        "QEMU exited with status %d before QMP was available" %
+                        process.returncode)
                 if time.monotonic() >= end:
+                    self.socket.close()
                     raise
                 time.sleep(0.05)
         self.file = self.socket.makefile("rwb", buffering=0)
-        greeting = json.loads(self.file.readline())
-        if "QMP" not in greeting:
-            raise RuntimeError("invalid QMP greeting: %s" % greeting)
+        while True:
+            greeting = json.loads(self.file.readline())
+            if "event" in greeting:
+                continue
+            if "QMP" not in greeting:
+                raise RuntimeError("invalid QMP greeting: %s" % greeting)
+            break
         self.execute("qmp_capabilities")
 
     def execute(self, command, arguments=None):
@@ -374,21 +394,41 @@ class Qmp:
                                                           reply["error"]))
             return reply.get("return")
 
+    def close(self):
+        self.file.close()
+        self.socket.close()
+
     def monitor(self, line):
         return self.execute("human-monitor-command", {"command-line": line})
 
+    def word(self, address):
+        for token in self.monitor("xp /1xw 0x%x" % address).split():
+            if token.startswith("0x") and len(token) == 10:
+                return int(token, 16)
+        raise RuntimeError("no word read back from 0x%x" % address)
+
+    def input_events(self, events):
+        queued = self.word(INPUT_STATUS) & INPUT_COUNT_MASK
+        while queued > INPUT_COUNT_MASK - len(events):
+            time.sleep(0.001)
+            queued = self.word(INPUT_STATUS) & INPUT_COUNT_MASK
+        self.execute("input-send-event", {"events": events})
+        while (self.word(INPUT_STATUS) & INPUT_COUNT_MASK) > queued:
+            time.sleep(0.001)
+
     def send(self, down, qcode):
-        self.execute("input-send-event", {"events": [
+        self.input_events([
             {"type": "key",
              "data": {"down": down,
-                      "key": {"type": "qcode", "data": qcode}}}]})
-        time.sleep(0.02)
+                      "key": {"type": "qcode", "data": qcode}}}])
 
     def key(self, qcode):
-        # Press and release: the shell acts on the press, but a key left down
-        # would hold the modifier state the next press is translated against.
-        for down in (True, False):
-            self.send(down, qcode)
+        # Deliver both edges atomically so a slow guest cannot auto-repeat a
+        # key while the host is waiting to send its release.
+        self.input_events([
+            {"type": "key", "data": {
+                "down": down, "key": {"type": "qcode", "data": qcode}}}
+            for down in (True, False)])
 
     def chord(self, modifier, qcode):
         # The keymap translates a press against the modifiers held at that
@@ -417,15 +457,13 @@ class Qmp:
                 raise RuntimeError("no qcode for %r" % character)
 
     def point(self, x, y):
-        self.execute("input-send-event", {"events": [
+        self.input_events([
             {"type": "abs", "data": {"axis": "x", "value": x}},
-            {"type": "abs", "data": {"axis": "y", "value": y}}]})
-        time.sleep(0.05)
+            {"type": "abs", "data": {"axis": "y", "value": y}}])
 
     def button(self, down):
-        self.execute("input-send-event", {"events": [
-            {"type": "btn", "data": {"button": "left", "down": down}}]})
-        time.sleep(0.05)
+        self.input_events([
+            {"type": "btn", "data": {"button": "left", "down": down}}])
 
     def double_click(self, x, y):
         self.point(x, y)
@@ -434,30 +472,23 @@ class Qmp:
             self.button(False)
 
 
+def qemu_environment(qemu, environment=None):
+    environment = (os.environ if environment is None else environment).copy()
+    private_lib = os.path.realpath(
+        os.path.join(os.path.dirname(qemu), "..", "lib"))
+    if os.path.isdir(private_lib):
+        existing = environment.get("LD_LIBRARY_PATH")
+        environment["LD_LIBRARY_PATH"] = (
+            private_lib if not existing else "%s:%s" % (private_lib,
+                                                        existing))
+    return environment
+
+
 class Machine:
-    def __init__(self, qemu, rom, image, socket_directory):
-        self.qmp_path = os.path.join(socket_directory, "terminal-qmp.sock")
-        self.ring_path = os.path.join(socket_directory, "ring.bin")
-        command = [qemu, "-M", "astra68", "-m", MEMORY, "-bios", rom,
-                   "-display", "none", "-monitor", "none", "-serial", "stdio",
-                   "-no-reboot",
-                   "-qmp", "unix:%s,server=on,wait=off" % self.qmp_path,
-                   "-drive", "if=none,format=raw,file=%s" % image]
-        environment = os.environ.copy()
-        private_lib = os.path.realpath(
-            os.path.join(os.path.dirname(qemu), "..", "lib"))
-        if os.path.isdir(private_lib):
-            existing = environment.get("LD_LIBRARY_PATH")
-            environment["LD_LIBRARY_PATH"] = (
-                private_lib if not existing else "%s:%s" % (private_lib,
-                                                            existing))
-        self.process = subprocess.Popen(
-            command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True, bufsize=1, env=environment)
-        self.serial = queue.Queue()
-        self.log = []
-        threading.Thread(target=self._pump, daemon=True).start()
-        self.qmp = Qmp(self.qmp_path)
+    def __init__(self, qemu, rom, image, socket_directory, extra_args=(),
+                 hostfs_root=None):
+        # Resolve every source-relative input before starting QEMU.  A missing
+        # catalog must not leave a live emulator behind.
         self.names = trace_decode.kernel_event_names(
             os.path.join(ROOT, "sw/kernel/trace.h"))
         self.catalog = trace_decode.load_catalogs([
@@ -465,7 +496,46 @@ class Machine:
                          "m68k", "astra_supervisor.elf"),
             os.path.join(ROOT, "sw/userspace", "services", "terminal",
                          "build", "m68k", "terminal.elf")])
-
+        self.runtime_directory = tempfile.mkdtemp(prefix="astra-qmp-")
+        self.qmp_path = os.path.join(self.runtime_directory, "qmp.sock")
+        self.ring_path = os.path.join(socket_directory, "ring.bin")
+        command = ([qemu, "-M", "astra68", "-m", MEMORY, "-bios", rom,
+                    "-display", "none", "-monitor", "none", "-serial", "stdio",
+                    "-no-reboot",
+                    "-qmp", "unix:%s,server=on,wait=off" % self.qmp_path] +
+                   list(extra_args) +
+                   ["-drive", "if=none,format=raw,file=%s" % image])
+        environment = qemu_environment(qemu)
+        hostfs_root = hostfs_root or environment.get(
+            "ASTRA_HOSTFS_ROOT", os.path.join(socket_directory, "hostfs"))
+        os.makedirs(hostfs_root, exist_ok=True)
+        environment["ASTRA_HOSTFS_ROOT"] = hostfs_root
+        self.process = subprocess.Popen(
+            command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, bufsize=1, env=environment)
+        self.serial = queue.Queue()
+        self.log = []
+        self._pump_thread = threading.Thread(target=self._pump, daemon=True)
+        self._pump_thread.start()
+        try:
+            self.qmp = Qmp(self.qmp_path, process=self.process)
+            if (self.qmp.word(RTC_STATUS) & RTC_VALID) == 0:
+                raise RuntimeError(
+                    "Astra machine started without the host wall clock")
+            low = self.qmp.word(RTC_NS_LO)
+            high = self.qmp.word(RTC_NS_HI)
+            if abs(((high << 32) | low) - time.time_ns()) > 600_000_000_000:
+                raise RuntimeError(
+                    "Astra machine started with the wrong host wall clock")
+        except Exception:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
+            shutil.rmtree(self.runtime_directory)
+            raise
     def _pump(self):
         for line in self.process.stdout:
             self.serial.put(line.rstrip("\n"))
@@ -496,10 +566,7 @@ class Machine:
         return self.log[-20:]
 
     def word(self, address):
-        for token in self.qmp.monitor("xp /1xw 0x%x" % address).split():
-            if token.startswith("0x") and len(token) == 10:
-                return int(token, 16)
-        raise RuntimeError("no word read back from 0x%x" % address)
+        return self.qmp.word(address)
 
     def said(self, after=0):
         """Every line the machine has printed since sequence `after`.
@@ -601,6 +668,11 @@ class Machine:
             self.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             self.process.kill()
+            self.process.wait()
+        self.qmp.close()
+        self._pump_thread.join(timeout=1)
+        self.recent_serial()
+        shutil.rmtree(self.runtime_directory)
 
 
 def open_terminal(machine, boot_deadline, command_deadline):
@@ -617,6 +689,13 @@ def open_terminal(machine, boot_deadline, command_deadline):
     lines, _ = machine.wait_for_text(BANNER, command_deadline)
     if lines is None:
         print("FAIL: the terminal never drew its banner after a double click")
+        for line in machine.said()[0][-40:]:
+            print("    |%s|" % line)
+        for line in machine.recent_faults():
+            print("    %s" % line)
+        print("last serial lines:")
+        for line in machine.recent_serial():
+            print("    %s" % line)
         return False
     return machine.settle()
 
@@ -763,7 +842,7 @@ def warm_the_store(qemu, rom, image, temporary, boot_deadline,
 
 def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         report_timings, prepared_image, performance_only, vim_gate,
-        network_only, vim_only):
+        network_only, vim_only, cxx_only):
     timings = []
     with tempfile.TemporaryDirectory(prefix="astra-terminal-") as temporary:
         scratch = os.path.join(temporary, "card.img")
@@ -771,7 +850,8 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         # Into the copy, so the image this gate was pointed at is untouched.
         if not prepared_image:
             astra_image.install(scratch, catalog)
-        needs_warm_store = not (performance_only or network_only or vim_only)
+        needs_warm_store = not (performance_only or network_only or vim_only or
+                                cxx_only)
         if needs_warm_store and not warm_the_store(
                 qemu, rom, scratch, temporary, boot_deadline,
                 command_deadline):
@@ -782,7 +862,8 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         try:
             if not open_terminal(machine, boot_deadline, command_deadline):
                 return 1
-            script = ([] if vim_only else
+            script = ([('cxx', 'ASTRA C++ PASS')] if cxx_only else
+                      [] if vim_only else
                       [(POSIX_COMMAND, "POSIX RAW PASS")] if network_only else
                       PERFORMANCE_SCRIPT if performance_only else SCRIPT)
             for line, expected in script:
@@ -930,6 +1011,8 @@ def main():
                         help="run only the interactive Vim-to-Lua gate")
     parser.add_argument("--network-only", action="store_true",
                         help="run only the POSIX networking integration gate")
+    parser.add_argument("--cxx-only", action="store_true",
+                        help="run only the C++ runtime integration gate")
     arguments = parser.parse_args()
     global MEMORY
     MEMORY = arguments.memory
@@ -938,7 +1021,8 @@ def main():
                arguments.command_deadline, arguments.verbose,
                arguments.report_timings, arguments.prepared_image,
                arguments.performance_only, arguments.vim_gate,
-               arguments.network_only, arguments.vim_only)
+               arguments.network_only, arguments.vim_only,
+               arguments.cxx_only)
 
 
 if __name__ == "__main__":

@@ -407,7 +407,10 @@ ext4_backend_sync(void *context, uintptr_t node)
 
     if (file_of(backend, node) == NULL)
         return ASTRA_VFS_ERR_BAD_HANDLE;
-    return status_of(ext4_cache_flush(backend->mount_point));
+    /* Like ext4/JBD2 fsync, durability requires the running journal
+     * transaction to commit; checkpointing its metadata back to home blocks
+     * is independent background work. */
+    return status_of(ext4_journal_commit(backend->mount_point));
 }
 
 static uint32_t
@@ -415,29 +418,10 @@ ext4_backend_truncate(void *context, uintptr_t node, uint64_t size)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
     ext4_file *file = file_of(backend, node);
-    uint64_t original;
-    uint8_t zeros[64] = {0};
-    int rc;
 
     if (file == NULL)
         return ASTRA_VFS_ERR_BAD_HANDLE;
-    original = ext4_ftell(file);
-    rc = ext4_ftruncate(file, size);
-    if (rc == EOK && ext4_fsize(file) < size) {
-        rc = ext4_fseek(file, 0, SEEK_END);
-        while (rc == EOK && ext4_fsize(file) < size) {
-            uint64_t remaining = size - ext4_fsize(file);
-            size_t count = 0u;
-            size_t part = remaining < sizeof(zeros) ? (size_t)remaining :
-                                                        sizeof(zeros);
-
-            rc = ext4_fwrite(file, zeros, part, &count);
-            if (rc == EOK && count != part)
-                rc = EIO;
-        }
-    }
-    file->fpos = original;
-    return status_of(rc);
+    return status_of(ext4_ftruncate(file, size));
 }
 
 static uint32_t
@@ -445,30 +429,31 @@ ext4_backend_stat(void *context, const char *path, AstraVfsNodeInfo *info)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
     char full[ASTRA_VFS_EXT4_PATH_MAX];
-    ext4_dir directory;
-    ext4_file file;
+    uint32_t mode = 0u;
+    uint32_t mtime = 0u;
+    uint32_t nlink = 0u;
     int rc;
 
-    if (!build_path(backend, path, full, sizeof(full))) {
+    if (!build_path(backend, path, full, sizeof(full)))
         return ASTRA_VFS_ERR_INVALID;
-    }
-    /* Directory first: opening one as a file succeeds on some backends. */
-    rc = ext4_dir_open(&directory, full);
-    if (rc == EOK) {
-        (void)ext4_dir_close(&directory);
-        info->size = 0u;
-        info->kind = ASTRA_VFS_KIND_DIRECTORY;
-        fill_metadata(full, info, 0);
-        return ASTRA_VFS_OK;
-    }
-    rc = ext4_fopen(&file, full, "rb");
-    if (rc != EOK) {
+    rc = ext4_meta_get(full, &mode, &info->uid, &info->gid, &mtime,
+                       &nlink, &info->size);
+    if (rc != EOK)
         return status_of(rc);
+    info->mode = (uint16_t)mode;
+    info->mtime = (int64_t)(uint64_t)mtime;
+    info->nlink = (uint16_t)nlink;
+    switch (mode & EXT4_INODE_MODE_TYPE_MASK) {
+    case EXT4_INODE_MODE_DIRECTORY:
+        info->kind = ASTRA_VFS_KIND_DIRECTORY;
+        break;
+    case EXT4_INODE_MODE_SOFTLINK:
+        info->kind = ASTRA_VFS_KIND_SYMLINK;
+        break;
+    default:
+        info->kind = ASTRA_VFS_KIND_FILE;
+        break;
     }
-    info->size = ext4_fsize(&file);
-    info->kind = ASTRA_VFS_KIND_FILE;
-    (void)ext4_fclose(&file);
-    fill_metadata(full, info, 0);
     return ASTRA_VFS_OK;
 }
 
@@ -480,9 +465,9 @@ ext4_backend_stat(void *context, const char *path, AstraVfsNodeInfo *info)
  * stateless protocol while avoiding one ext4 open/close per listed entry.
  */
 static uint32_t
-ext4_backend_readdir(void *context, const char *path, uint64_t cookie,
-                     char *name, uint32_t capacity, AstraVfsNodeInfo *info,
-                     uint64_t *next)
+ext4_backend_readdir(void *context, uintptr_t directory, const char *path,
+                     uint64_t cookie, char *name, uint32_t capacity,
+                     AstraVfsNodeInfo *info, uint64_t *next)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
     char full[ASTRA_VFS_EXT4_PATH_MAX];
@@ -490,6 +475,7 @@ ext4_backend_readdir(void *context, const char *path, uint64_t cookie,
     uint32_t copied;
     int rc;
 
+    (void)directory;
     if (!build_path(backend, path, full, sizeof(full))) {
         return ASTRA_VFS_ERR_INVALID;
     }
@@ -529,7 +515,9 @@ ext4_backend_readdir(void *context, const char *path, uint64_t cookie,
     name[entry->name_length] = '\0';
     info->size = 0u;
     info->kind = entry->inode_type == EXT4_DE_DIR ?
-        ASTRA_VFS_KIND_DIRECTORY : ASTRA_VFS_KIND_FILE;
+        ASTRA_VFS_KIND_DIRECTORY :
+        entry->inode_type == EXT4_DE_SYMLINK ? ASTRA_VFS_KIND_SYMLINK :
+                                               ASTRA_VFS_KIND_FILE;
     /*
      * The entry itself carries a name and a type and nothing else, so the
      * metadata comes from the inode behind it. One lookup per entry, in this
@@ -653,6 +641,22 @@ ext4_backend_readlink(void *context, const char *path, void *buffer,
     return status_of(rc);
 }
 
+static uint32_t
+ext4_backend_symlink(void *context, const char *target, const char *path)
+{
+    AstraVfsExt4Backend *backend = backend_of(context);
+    char full[ASTRA_VFS_EXT4_PATH_MAX];
+
+    if (target == NULL || target[0] == '\0' ||
+        !build_path(backend, path, full, sizeof(full)))
+        return ASTRA_VFS_ERR_INVALID;
+    if (!scan_lock(backend))
+        return ASTRA_VFS_ERR_IO;
+    close_scan(backend);
+    scan_unlock(backend);
+    return status_of(ext4_fsymlink(target, full));
+}
+
 static const AstraVfsBackendOps ext4_ops = {
     ext4_backend_open,
     ext4_backend_close,
@@ -666,7 +670,8 @@ static const AstraVfsBackendOps ext4_ops = {
     ext4_backend_unlink,
     ext4_backend_rename,
     ext4_backend_chmod,
-    ext4_backend_readlink
+    ext4_backend_readlink,
+    ext4_backend_symlink
 };
 
 const AstraVfsBackendOps *

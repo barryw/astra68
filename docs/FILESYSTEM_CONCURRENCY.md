@@ -1,7 +1,8 @@
 # Astra filesystem concurrency design
 
-Status: implementation in progress; Phase D read concurrency and the first
-physical Phase E dirty-shutdown checkpoint pass
+Status: implementation in progress; Phase D read concurrency and mutation
+linearization checkpoints pass, as does the first physical Phase E
+dirty-shutdown checkpoint
 
 This document defines what Astra means by a multi-threaded filesystem and the
 minimum implementation that may claim it. It extends
@@ -46,37 +47,33 @@ contention, not burning the only CPU while waiting for physics.
 
 ## 2. Current implementation
 
-The present stack is deliberately synchronous end to end:
+The present stack admits several synchronous callers concurrently:
 
 ```text
 client thread
   -> AstraVfsClient
   -> astra_vfs_port_transport()
-  -> storage receive port (2 messages)
-  -> storage main thread
-  -> astra_vfs_port_service_pump(..., 1)
+  -> storage receive port
+  -> storage worker pool
+  -> astra_vfs_port_service_worker_pump(..., worker_scratch, 1)
   -> AstraVfsService
   -> AstraVfsExt4Backend
   -> lwext4
   -> AstraExt4Port
   -> AstraBlockDevice
-  -> AstraLeaseBlock (one transfer buffer, one request, one IRQ wait)
+  -> host-backed block request lanes
 ```
 
-Specific single-thread assumptions that must be removed or made explicit:
+Protocol v20 keeps one process-wide VFS session and namespace while assigning
+each calling thread its own reply channel, transaction identity, transfer
+area, direct-transfer scratch, and wire records. The service keys retained
+reply resources by `(session, lane)` and the storage worker count is the
+advertised block queue depth plus one CPU/cache lane. A first-use connection
+is published once; later calls do not pass through that connection gate.
 
-- `sw/userspace/services/storage/main.c` has one receive/pump loop.
-- `vfs_port_transport.c` has process-global client reply handles and static
-  wire records.
-- `astra_vfs_port_service_pump()` has static request/reply records.
-- `AstraVfsService` session and open-file tables have no synchronization.
-- the ext4 backend open-file table and one cached directory scan are shared
-  without synchronization.
-- `AstraExt4Port::lock_depth` detects reentry; it is not a lock.
-- `AstraLeaseBlock` owns one bounce buffer and assumes one request in flight.
-- lwext4 can install one mount lock, but that lock surrounds complete public
-  operations, including block waits. It is a correctness fallback, not the
-  required concurrency result.
+Remaining concurrency work is below lwext4's retained read split: mutation
+and journal paths still serialize where their shared filesystem structures
+require it, and the physical device queue depth remains the real ceiling.
 
 The kernel already supplies the needed scheduling substrate: same-process
 threads avoid a CRP/ATC switch, ports provide bounded FIFO/backpressure,
@@ -88,14 +85,16 @@ or polling loop.
 
 ### 3.1 Concurrency boundary
 
-The VFS service may execute requests from different sessions concurrently.
-One session still has at most one request in flight. `AstraVfsClient` already
-documents that one client belongs to one synchronous thread; another thread
-uses another client and therefore another session.
+The VFS service may execute requests from different sessions and from
+different thread lanes of one session concurrently. `AstraVfsClient` is
+process-shared: all threads see the same namespace and open-file table, but
+each synchronous thread owns an independent request/reply/bulk lane. No
+session-wide transport lock may serialize those lanes.
 
-Receiving a second request for a busy session returns `ASTRA_VFS_ERR_BUSY`.
-It must never race the first request, overwrite the session's two-part rename
-state, or wait while holding a transport lock.
+A second request on the same lane returns `ASTRA_VFS_ERR_BUSY`; independent
+lanes remain admissible. Ordering is attached to the actual shared object:
+conflicting operations on one open file or inode may wait, while unrelated
+files and cached work proceed.
 
 ### 3.2 Linearization
 
@@ -229,15 +228,11 @@ and prevents backend I/O from recursing into service bookkeeping.
 
 ## 6. Transport and client state
 
-Move the client reply channel and all wire records into `AstraVfsClient` (or a
-caller-owned transport member referenced by it). The current process-global
-`reply_receive`, `reply_send`, `outgoing`, `incoming`, and `area_request`
-make two clients in one process unsafe even when they are used by different
-threads.
-
-The server side similarly moves static wire records into
-`AstraVfsPortWorker`. Persistent reply handles and transfer-area mappings
-remain session-owned shared state and use the VFS state lock.
+Client wire records are per-thread. Protocol v20 retains reply handles and
+transfer-area mappings per `(session, lane)`, not per process or per session.
+The server wire records live in caller-owned `AstraVfsPortWorker` records, one
+per storage worker. Personality exec exports and restores only the surviving
+caller's lane; other thread lanes are not collapsed into it.
 
 Transport rules remain unchanged:
 
@@ -249,8 +244,22 @@ Transport rules remain unchanged:
 - activity is adopted per worker and restored before that worker receives its
   next request.
 
-Host tests must run two clients in parallel often enough for a race detector
-to observe shared state; sequential tests of two clients are insufficient.
+Host tests queue two application requests from two real threads sharing one
+client before either reply is released. They also prove concurrent lazy first
+use creates one session and distinct lanes rather than racing two sessions.
+The physical Arty stress gate exposes QEMU's active-job gauge and high-water
+mark. A four-worker run completed 400 operations with `inflight=0` at the end
+and `max-inflight=3`; the gate now rejects a multi-worker run that never
+exceeds one host job. This proves the per-thread lanes overlap on the
+production boundary rather than merely admitting several guest callers.
+
+The kernel-free raw-channel gate exercises the stronger per-thread invariant:
+one channel publishes batches while earlier commands remain outstanding. Its
+physical Arty qualification completed 100,000 commands in 1,586 submissions,
+reached 64 simultaneous host jobs, and sustained 28,281 commands/s. The empty
+doorbell control sustained 236,806 writes/s. A future transport change that
+serializes a lane therefore fails the raw gate even if a multi-threaded VFS
+test still happens to overlap separate lanes.
 
 ## 7. Filesystem-handler contract
 
@@ -422,6 +431,32 @@ smaller handle table before the session table filled. Receive-side cleanup now
 runs only on the kernel's actual resource-pressure result, reaps all dead idle
 sessions, and retries the queued receive. Host, sanitizer, analyzer, MC68030,
 and the full QEMU gate pass; physical pressure qualification remains required.
+
+Patch 0015 removes a non-atomic truncate-extension workaround from the ext4
+backend. lwext4 now grows the inode inside the same transaction and mount write
+lock that orders truncation with other inode mutations, zeroing only an existing
+partial tail block while keeping whole-block gaps sparse. The operation
+preserves the file position and performs no data-block allocation or repeated
+64-byte writes. The same patch fixes lwext4's read-only
+write/truncate checks, which previously tested `flags & O_RDONLY` even though
+`O_RDONLY` is zero.
+
+The retained mutation oracle releases paired host threads together and proves
+one exclusive-create winner, disjoint atomic append reservations, untorn
+conflicting writes, a legal truncate/write order, and atomic rename/unlink
+visibility. The sparse extension survives a fresh mount with every hole byte
+zero and leaves the image clean under independent `e2fsck`. Normal,
+ASan/UBSan, TSan, and MC68030 builds pass on Beast.
+
+The retained VFS model now performs exactly one million operations across four
+independent sessions and byte models with fixed PRNG seeds. Every request is
+checked against its model, and test-only hooks force a scheduler handoff at
+state-lock acquisition/release, session and file reservation, close, and reply
+publication. The state-lock release/acquire pair brackets backend entry, I/O
+completion, and result commit; the controlled-block oracle separately forces
+the before/after I/O-wait interleaving. Normal, ASan/UBSan, TSan, analyzer, and
+MC68030 builds pass. The hooks compile out of target builds. Exhaustive physical
+cut-point injection remains open; this checkpoint does not claim it.
 
 ## 9. Block layer
 
@@ -624,8 +659,9 @@ The implementation is incomplete until all of these pass:
 2. two misses for the same block cause one physical read and identical data;
 3. independent cached reads from all workers return byte-exact data;
 4. concurrent disjoint writes survive unmount, remount, and `e2fsck`;
-5. conflicting writes, append, truncate, create-exclusive, rename, unlink,
-   and fsync satisfy the linearization rules above;
+5. [done] conflicting writes, append, truncate,
+   create-exclusive, rename, and unlink satisfy the linearization rules above;
+   fsync durability has the separate volatile-media crash oracle;
 6. close/BYE/client death racing a request causes no stale-handle use, leak,
    double close, or missing wakeup;
 7. device timeout, reset, and media change wake every affected worker and
@@ -634,8 +670,8 @@ The implementation is incomplete until all of these pass:
    later request makes progress;
 9. one abusive owner cannot exhaust another owner's sessions, files, messages,
    memory, or worker progress;
-10. at least one million deterministic randomized operations against an
-    independent model complete under forced thread switches;
+10. [done] one million deterministic randomized operations against four
+    independent byte models complete under forced thread switches;
 11. [host repeated, physical checkpoint done] dirty shutdown/recovery passes
     byte comparison and `e2fsck`;
 12. ASan, UBSan, static analysis, MC68030 build, QEMU, and physical Arty gates

@@ -12,7 +12,7 @@ CPPFLAGS := -Iinclude -I$(GRAPHICS)/include -I$(RUNTIME)/include \
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 HOST_FLAGS := -O2
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
-LIBRARY_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
+LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections -fPIC -fvisibility=hidden
 LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
 	-Wl,--no-undefined -Wl,--build-id=none -Wl,--gc-sections \
@@ -74,10 +74,7 @@ library-contract: $(INTERFACE_TARGET) $(INPUT_TARGET)
 		grep -q '^interface.library 1.1.0 ABI 1.1$$'
 	@python3 ../../../tools/library_info.py $(INPUT_TARGET) | \
 		grep -q '^input.library 1.0.0 ABI 1.0$$'
-	@! $(READELF) -r $(INTERFACE_TARGET) | \
-		grep -E 'R_68K_(GLOB_DAT|JMP_SLOT|32|PC32)'
-	@! $(READELF) -r $(INPUT_TARGET) | \
-		grep -E 'R_68K_(GLOB_DAT|JMP_SLOT|32|PC32)'
+	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET) $(INPUT_TARGET))
 
 $(INTERFACE_HOST_TEST): src/interface_library.c tests/test_interface.c
 	@mkdir -p $(@D)

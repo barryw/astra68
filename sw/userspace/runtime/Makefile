@@ -3,40 +3,47 @@ include ../../../mk/m68k-cross.mk
 CC := $(CROSS)gcc
 AR := $(CROSS)ar
 SIZE := $(CROSS)size
+READELF := $(CROSS)readelf
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
 CPPFLAGS := -Iinclude -I../../include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
-TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
+TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 PIC_FLAGS := $(TARGET_FLAGS) -fPIC -fvisibility=hidden
 HOST_FLAGS := -O2 -fno-builtin
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
-TARGET_C_SOURCES := src/startup.c src/service.c src/arguments.c src/syscall.c src/launch.c src/port.c \
+TARGET_C_SOURCES := src/startup.c src/lifecycle.c src/service.c src/arguments.c src/syscall.c src/launch.c src/port.c \
 	src/event_control.c src/memory.c \
 	src/log.c src/sort.c src/assert.c src/event_catalog.c src/library.c
-TARGET_ASM_SOURCES := src/m68k/syscall.S src/m68k/thread_start.S
+TARGET_ASM_SOURCES := src/m68k/syscall.S src/m68k/thread_start.S \
+	src/m68k/read_tp.S
+COMMON_ASM_SOURCES := ../../common/memory_m68k.S
 # The calendar is shared with the kernel rather than copied into userspace:
 # `ls -l`, `date` and the boot line render the same instant, and two
 # implementations of a leap year is one too many.
 COMMON_C_SOURCES := ../../common/civil.c ../../common/divide.c
 TARGET_OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(TARGET_C_SOURCES)) \
 	$(patsubst ../../common/%.c,build/m68k/common_%.o,$(COMMON_C_SOURCES)) \
-	$(patsubst src/%.S,build/m68k/%.o,$(TARGET_ASM_SOURCES))
+	$(patsubst src/%.S,build/m68k/%.o,$(TARGET_ASM_SOURCES)) \
+	$(patsubst ../../common/%.S,build/m68k/common_%.o,$(COMMON_ASM_SOURCES))
 ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(TARGET_C_SOURCES)) \
 	$(patsubst ../../common/%.c,build/analyzer/common_%.o,$(COMMON_C_SOURCES))
 TARGET := build/m68k/libastrart.a
 PIC_TARGET := build/m68k/libastrart-pic.a
 PIC_OBJECTS := build/m68k/pic/startup.o build/m68k/pic/syscall.o build/m68k/pic/port.o \
 	build/m68k/pic/memory.o \
-	build/m68k/pic/log.o build/m68k/pic/event_catalog.o \
-	build/m68k/pic/m68k/syscall.o
+	build/m68k/pic/log.o build/m68k/pic/assert.o \
+	build/m68k/pic/event_catalog.o \
+	build/m68k/pic/m68k/syscall.o build/m68k/pic/common_memory_m68k.o
 CRT0 := build/m68k/crt0.o
+HOSTED_CRT0 := build/m68k/crt0-hosted.o
 HOST_TEST := build/host/test_runtime
 STARTUP_SERVICE_TEST := build/host/test_startup_service
+LIFECYCLE_TEST := build/host/test_lifecycle
 
-all: $(TARGET) $(CRT0) link-contract size
+all: $(TARGET) $(CRT0) $(HOSTED_CRT0) link-contract size
 
 pic: $(PIC_TARGET)
 
@@ -52,7 +59,11 @@ build/m68k/pic/%.o: src/%.c
 
 build/m68k/pic/%.o: src/%.S
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) -m68030 -msoft-float -fPIC $(DEPFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(ASTRA_TARGET_ABI_FLAGS) -fPIC $(DEPFLAGS) -c $< -o $@
+
+build/m68k/pic/common_%.o: ../../common/%.S
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(ASTRA_TARGET_ABI_FLAGS) -fPIC $(DEPFLAGS) -c $< -o $@
 
 build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)
@@ -62,13 +73,22 @@ build/m68k/common_%.o: ../../common/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
 
+build/m68k/common_%.o: ../../common/%.S
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(ASTRA_TARGET_ABI_FLAGS) $(DEPFLAGS) -c $< -o $@
+
 build/m68k/%.o: src/%.S
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) -m68030 -msoft-float $(DEPFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(ASTRA_TARGET_ABI_FLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(CRT0): src/m68k/crt0.S
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) -m68030 -msoft-float $(DEPFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(ASTRA_TARGET_ABI_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(HOSTED_CRT0): src/m68k/crt0.S
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(ASTRA_TARGET_ABI_FLAGS) -DASTRA_HOSTED_STARTUP=1 \
+		$(DEPFLAGS) -c $< -o $@
 
 HOST_TEST_SOURCES := src/startup.c src/arguments.c src/syscall.c src/launch.c src/port.c \
 	src/event_control.c src/memory.c \
@@ -85,9 +105,14 @@ $(STARTUP_SERVICE_TEST): src/startup.c src/service.c tests/test_startup_service.
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -no-pie $^ -o $@
 
-test: $(HOST_TEST) $(STARTUP_SERVICE_TEST)
+$(LIFECYCLE_TEST): src/lifecycle.c tests/test_lifecycle.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
+
+test: $(HOST_TEST) $(STARTUP_SERVICE_TEST) $(LIFECYCLE_TEST)
 	./$(HOST_TEST)
 	./$(STARTUP_SERVICE_TEST)
+	./$(LIFECYCLE_TEST)
 
 sanitize:
 	@mkdir -p build/host
@@ -135,6 +160,12 @@ link-contract: tests/link_contract_with.c tests/link_contract_without.c \
 		{ echo "link contract: the record did not survive the link"; \
 		  python3 ../../../tools/program_info.py build/contract/with.elf; \
 		  exit 1; }
+	@$(READELF) -lW build/contract/with.elf | grep -q ' TLS ' || \
+		{ echo "link contract: PT_TLS is missing"; exit 1; }
+	@$(READELF) -SW build/contract/with.elf | grep -q ' \.init_array ' || \
+		{ echo "link contract: constructors are missing"; exit 1; }
+	@$(READELF) -SW build/contract/with.elf | grep -q ' \.fini_array ' || \
+		{ echo "link contract: destructors are missing"; exit 1; }
 	@if $(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) \
 		$(LINK_CONTRACT_FLAGS) tests/link_contract_without.c \
 		-o build/contract/without.elf >/dev/null 2>&1; then \
@@ -143,7 +174,7 @@ link-contract: tests/link_contract_with.c tests/link_contract_without.c \
 	fi
 	@echo "link contract: PASS"
 
-size: $(TARGET_OBJECTS) $(CRT0)
+size: $(TARGET_OBJECTS) $(CRT0) $(HOSTED_CRT0)
 	$(SIZE) $^
 
 # Header dependencies: a stale object compiled against an older ABI

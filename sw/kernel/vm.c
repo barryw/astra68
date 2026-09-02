@@ -191,25 +191,15 @@ static volatile uint32_t *physical_words(uint32_t physical_address)
 #endif
 }
 
-KernelVmMapping kernel_vm_probe_current(uint32_t virtual_address,
-                                        bool supervisor,
-                                        uint32_t *physical_address)
+static KernelVmMapping probe_root(uint32_t root_physical,
+                                  uint32_t virtual_address,
+                                  uint32_t *physical_address)
 {
     volatile uint32_t *root;
     volatile uint32_t *table;
-    uint32_t ignored_physical;
-    uint32_t root_physical;
     uint32_t root_descriptor;
     uint32_t page_descriptor;
 
-    if (!initialized)
-        return KERNEL_VM_MAPPING_UNKNOWN;
-    if (physical_address == NULL)
-        physical_address = &ignored_physical;
-    if (!supervisor && (virtual_address < KERNEL_VM_USER_MIN ||
-                        virtual_address > KERNEL_VM_USER_MAX))
-        return KERNEL_VM_MAPPING_UNMAPPED;
-    root_physical = supervisor ? kernel_root_physical : current_user_root;
     if (root_physical == 0u)
         return KERNEL_VM_MAPPING_UNKNOWN;
     root = physical_words(root_physical);
@@ -238,6 +228,90 @@ KernelVmMapping kernel_vm_probe_current(uint32_t virtual_address,
                         (virtual_address & (KERNEL_PAGE_SIZE - 1u));
     return (page_descriptor & VM_DESC_WRITE_PROTECT) != 0u ?
         KERNEL_VM_MAPPING_READ_ONLY : KERNEL_VM_MAPPING_READ_WRITE;
+}
+
+KernelVmMapping kernel_vm_probe_current(uint32_t virtual_address,
+                                        bool supervisor,
+                                        uint32_t *physical_address)
+{
+    uint32_t ignored_physical;
+    uint32_t root_physical;
+
+    if (!initialized)
+        return KERNEL_VM_MAPPING_UNKNOWN;
+    if (physical_address == NULL)
+        physical_address = &ignored_physical;
+    if (!supervisor && (virtual_address < KERNEL_VM_USER_MIN ||
+                        virtual_address > KERNEL_VM_USER_MAX))
+        return KERNEL_VM_MAPPING_UNMAPPED;
+    root_physical = supervisor ? kernel_root_physical : current_user_root;
+    return probe_root(root_physical, virtual_address, physical_address);
+}
+
+static KernelVmStatus copy_address_space(const KernelAddressSpace *space,
+                                         uint32_t virtual_address,
+                                         void *destination,
+                                         const void *source,
+                                         uint32_t byte_size, bool write)
+{
+    uint8_t *output = destination;
+    const uint8_t *input = source;
+    uint64_t end = (uint64_t)virtual_address + byte_size;
+
+    if (!initialized || space == NULL || space->initialized == 0u ||
+        (byte_size != 0u && (write ? source == NULL : destination == NULL)) ||
+        virtual_address < KERNEL_VM_USER_MIN || end > KERNEL_VM_USER_MAX + 1u)
+        return KERNEL_VM_INVALID_ARGUMENT;
+    while (byte_size != 0u) {
+        uint32_t physical;
+        uint32_t offset = virtual_address & (KERNEL_PAGE_SIZE - 1u);
+        uint32_t chunk = KERNEL_PAGE_SIZE - offset;
+        KernelVmMapping mapping = probe_root(
+            space->root_physical, virtual_address, &physical);
+        volatile uint8_t *page;
+
+        if (mapping == KERNEL_VM_MAPPING_UNMAPPED)
+            return KERNEL_VM_NOT_MAPPED;
+        if (mapping == KERNEL_VM_MAPPING_UNKNOWN)
+            return KERNEL_VM_CORRUPT;
+        if (write && mapping != KERNEL_VM_MAPPING_READ_WRITE)
+            return KERNEL_VM_NOT_OWNED;
+        if (chunk > byte_size)
+            chunk = byte_size;
+        page = (volatile uint8_t *)physical_words(
+            physical & ~(KERNEL_PAGE_SIZE - 1u));
+        if (page == NULL)
+            return KERNEL_VM_CORRUPT;
+        for (uint32_t index = 0u; index < chunk; ++index) {
+            if (write)
+                page[offset + index] = input[index];
+            else
+                output[index] = page[offset + index];
+        }
+        if (write)
+            input += chunk;
+        else
+            output += chunk;
+        virtual_address += chunk;
+        byte_size -= chunk;
+    }
+    return KERNEL_VM_OK;
+}
+
+KernelVmStatus kernel_vm_read(const KernelAddressSpace *space,
+                              uint32_t virtual_address,
+                              void *destination, uint32_t byte_size)
+{
+    return copy_address_space(space, virtual_address, destination, NULL,
+                              byte_size, false);
+}
+
+KernelVmStatus kernel_vm_write(KernelAddressSpace *space,
+                               uint32_t virtual_address,
+                               const void *source, uint32_t byte_size)
+{
+    return copy_address_space(space, virtual_address, NULL, source, byte_size,
+                              true);
 }
 
 #if defined(KERNEL_VM_HOST_TEST)
@@ -636,11 +710,9 @@ static KernelVmStatus build_supervisor_root(void)
     /*
      * The rest of RAM, however much of it there is.
      *
-     * VM_SDRAM_TOP_ROOT_INDEX is 15, which is 32 MiB, which is exactly the
-     * ULX3S's SDRAM -- the map was sized for the board this project used to
-     * run on and never grew when the target became a 128 MB Arty guest. The
+     * A fixed top-level map did not grow with reported RAM. The
      * consequence was not a smaller machine but a landmine: every frame above
-     * 32 MiB was still classified usable and still handed out, and the first
+     * the fixed map was still classified usable and still handed out, and the first
      * write to one -- zeroing it on allocation -- was a supervisor bus error.
      * Only the allocator's habit of searching upward from frame zero kept the
      * machine away from it.
@@ -694,6 +766,8 @@ static KernelVmStatus build_supervisor_root(void)
     set_mmio_range(high_table, 0xfff10000u, 16u);
     set_mmio_range(high_table, 0xfff20000u, 16u);
     set_mmio_range(high_table, 0xfff40000u, 1u);
+    set_mmio_range(high_table, KERNEL_VM_HOST_CHANNEL_PHYSICAL_BASE,
+                   KERNEL_VM_HOST_CHANNEL_PAGE_COUNT);
     return KERNEL_VM_OK;
 
 fail:
@@ -706,6 +780,32 @@ static bool valid_user_page(uint32_t virtual_address)
     return (virtual_address & (KERNEL_PAGE_SIZE - 1u)) == 0u &&
            virtual_address >= KERNEL_VM_USER_MIN &&
            virtual_address <= KERNEL_VM_USER_MAX - (KERNEL_PAGE_SIZE - 1u);
+}
+
+static bool host_channel_virtual_page(uint32_t virtual_address)
+{
+    return (virtual_address & (KERNEL_PAGE_SIZE - 1u)) == 0u &&
+           virtual_address >= KERNEL_VM_HOST_CHANNEL_BASE &&
+           virtual_address < KERNEL_VM_HOST_CHANNEL_BASE +
+                                 KERNEL_VM_HOST_CHANNEL_PAGE_COUNT *
+                                     KERNEL_PAGE_SIZE;
+}
+
+static bool host_channel_physical_page(uint32_t physical_address)
+{
+    return (physical_address & (KERNEL_PAGE_SIZE - 1u)) == 0u &&
+           physical_address >= KERNEL_VM_HOST_CHANNEL_PHYSICAL_BASE &&
+           physical_address < KERNEL_VM_HOST_CHANNEL_PHYSICAL_BASE +
+                                KERNEL_VM_HOST_CHANNEL_PAGE_COUNT *
+                                    KERNEL_PAGE_SIZE;
+}
+
+static bool host_channel_mapping(uint32_t virtual_address,
+                                 uint32_t descriptor)
+{
+    return host_channel_virtual_page(virtual_address) &&
+           host_channel_physical_page(descriptor & VM_DESC_PAGE_ADDRESS) &&
+           (descriptor & VM_DESC_CACHE_INHIBIT) != 0u;
 }
 
 static uint32_t private_slot(uint32_t virtual_address)
@@ -1297,6 +1397,60 @@ static KernelVmStatus map_owned_page(KernelAddressSpace *space,
     return KERNEL_VM_OK;
 }
 
+KernelVmStatus kernel_vm_map_host_channel_page(
+    KernelAddressSpace *space, uint32_t virtual_address,
+    uint32_t physical_address)
+{
+    volatile uint32_t *root;
+    volatile uint32_t *table;
+    uint32_t root_index = VM_ROOT_INDEX(virtual_address);
+    uint32_t table_index = VM_TABLE_INDEX(virtual_address);
+    uint32_t table_physical;
+    bool allocated_table = false;
+
+    if (!initialized || space == NULL || space->initialized == 0u ||
+        !host_channel_virtual_page(virtual_address) ||
+        !host_channel_physical_page(physical_address))
+        return KERNEL_VM_INVALID_ARGUMENT;
+    root = physical_words(space->root_physical);
+    if (root == NULL)
+        return KERNEL_VM_CORRUPT;
+    if ((root[root_index] & VM_DESC_TYPE_MASK) == VM_DESC_INVALID) {
+        KernelVmStatus status = allocate_table(space->owner,
+                                               &table_physical);
+
+        if (status != KERNEL_VM_OK)
+            return status;
+        root[root_index] = table_physical | VM_DESC_TABLE;
+        ++space->table_pages;
+        ++vm_stats.user_table_pages;
+        allocated_table = true;
+    } else if ((root[root_index] & VM_DESC_TYPE_MASK) == VM_DESC_TABLE) {
+        table_physical = root[root_index] & VM_DESC_TABLE_ADDRESS;
+    } else {
+        return KERNEL_VM_CORRUPT;
+    }
+    table = physical_words(table_physical);
+    if (table == NULL ||
+        (table[table_index] & VM_DESC_TYPE_MASK) != VM_DESC_INVALID) {
+        if (allocated_table) {
+            root[root_index] = VM_DESC_INVALID;
+            (void)kernel_memory_release(table_physical, 1u, space->owner);
+            --space->table_pages;
+            --vm_stats.user_table_pages;
+        }
+        return table == NULL ? KERNEL_VM_CORRUPT :
+                               KERNEL_VM_ALREADY_MAPPED;
+    }
+    table[table_index] = physical_address | VM_DESC_CACHE_INHIBIT |
+                         VM_DESC_PAGE;
+    invalidate_caches();
+    flush_page(virtual_address);
+    ++space->mapped_pages;
+    ++vm_stats.user_mappings;
+    return KERNEL_VM_OK;
+}
+
 KernelVmStatus kernel_vm_map_page(KernelAddressSpace *space,
                                   uint32_t virtual_address,
                                   uint32_t physical_address,
@@ -1545,12 +1699,15 @@ static KernelVmStatus restore_single_cow_pages(KernelAddressSpace *space)
             if ((table[table_index] & VM_DESC_TYPE_MASK) != VM_DESC_PAGE)
                 continue;
             physical = table[table_index] & VM_DESC_PAGE_ADDRESS;
+            virtual_address = (root_index << 22) |
+                              (table_index << KERNEL_PAGE_SHIFT);
+            if (host_channel_mapping(virtual_address,
+                                     table[table_index]))
+                continue;
             if (!kernel_memory_frame_info(physical, &frame))
                 return KERNEL_VM_CORRUPT;
             if (!cow_mapping_state((KernelFrameState)frame.state))
                 continue;
-            virtual_address = (root_index << 22) |
-                              (table_index << KERNEL_PAGE_SHIFT);
             status = kernel_vm_cow_make_private(space, virtual_address);
             if (status != KERNEL_VM_OK && status != KERNEL_VM_BUSY)
                 return KERNEL_VM_CORRUPT;
@@ -1609,6 +1766,8 @@ KernelVmStatus kernel_vm_clone_address_space(
             physical = descriptor & VM_DESC_PAGE_ADDRESS;
             virtual_address = (root_index << 22) |
                               (table_index << KERNEL_PAGE_SHIFT);
+            if (host_channel_mapping(virtual_address, descriptor))
+                continue;
             if (!kernel_memory_frame_info(physical, &frame)) {
                 result = KERNEL_VM_CORRUPT;
                 goto failed;
@@ -1708,6 +1867,22 @@ KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,
         return KERNEL_VM_NOT_MAPPED;
 
     page_physical = table[table_index] & VM_DESC_PAGE_ADDRESS;
+    if (host_channel_mapping(virtual_address, table[table_index])) {
+        table[table_index] = VM_DESC_INVALID;
+        flush_page(virtual_address);
+        --space->mapped_pages;
+        --vm_stats.user_mappings;
+        if (table_empty(table)) {
+            root[root_index] = VM_DESC_INVALID;
+            flush_all();
+            if (kernel_memory_release(table_physical, 1u, space->owner) !=
+                KERNEL_MEMORY_OK)
+                return KERNEL_VM_CORRUPT;
+            --space->table_pages;
+            --vm_stats.user_table_pages;
+        }
+        return KERNEL_VM_OK;
+    }
     if (!kernel_memory_frame_info(page_physical, &frame) ||
         (frame.state != KERNEL_FRAME_PROCESS &&
          frame.state != KERNEL_FRAME_COW_READ_ONLY &&
@@ -2067,6 +2242,13 @@ KernelVmStatus kernel_vm_destroy_address_space(KernelAddressSpace *space)
             page_physical = table[table_index] & VM_DESC_PAGE_ADDRESS;
             virtual_address = (root_index << 22) |
                               (table_index << KERNEL_PAGE_SHIFT);
+            if (host_channel_mapping(virtual_address,
+                                     table[table_index])) {
+                table[table_index] = VM_DESC_INVALID;
+                --space->mapped_pages;
+                --vm_stats.user_mappings;
+                continue;
+            }
             if (!kernel_memory_frame_info(page_physical, &frame) ||
                 (frame.state != KERNEL_FRAME_PROCESS &&
                  frame.state != KERNEL_FRAME_COW_READ_ONLY &&
@@ -2142,6 +2324,15 @@ KernelVmStatus kernel_vm_switch_to_empty(void)
     if (!initialized || !enabled)
         return KERNEL_VM_INVALID_ARGUMENT;
     return switch_user_root(empty_root_physical);
+}
+
+KernelVmStatus kernel_vm_deactivate(const KernelAddressSpace *space)
+{
+    if (!initialized || !enabled || space == NULL ||
+        space->initialized == 0u)
+        return KERNEL_VM_INVALID_ARGUMENT;
+    return space->root_physical == current_user_root ?
+        switch_user_root(empty_root_physical) : KERNEL_VM_OK;
 }
 
 KernelVmStatus kernel_vm_sync_shared_aliases(void)

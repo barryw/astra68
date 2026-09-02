@@ -6,17 +6,20 @@
 #include <astra/filesystem_library.h>
 #include <astra/vfs_port_transport.h>
 
-extern const AstraFilesystemLibraryV1 astra_library_exports;
+extern const AstraFilesystemLibraryV2 astra_library_exports;
 
 static AstraVfsClient client;
 static AstraVfsClient secondary_client;
 static uint8_t contents[512];
 static uint64_t content_size;
 static uint32_t read_calls;
+static uint32_t open_calls;
+static uint32_t stat_calls;
 static uint32_t write_calls;
 static uint32_t bulk_write_calls;
 static uint32_t made_directory;
 static uint32_t removed_file;
+static uint32_t removed_link;
 static uint32_t renamed_file;
 static uint16_t last_create_mode;
 static uint16_t last_chmod_mode;
@@ -24,6 +27,8 @@ static AstraVfsClient *last_open_client;
 static char last_open_path[ASTRA_VFS_PATH_MAX];
 static char last_rename_from[ASTRA_VFS_PATH_MAX];
 static char last_rename_to[ASTRA_VFS_PATH_MAX];
+static char last_symlink_target[ASTRA_VFS_PATH_MAX];
+static char last_symlink_path[ASTRA_VFS_PATH_MAX];
 
 static int same(const char *left, const char *right)
 {
@@ -57,11 +62,36 @@ uint32_t astra_vfs_open_mode(AstraVfsClient *value, const char *path,
                              AstraVfsFile *file, uint64_t *size,
                              uint16_t *kind)
 {
-    (void)flags;
+    ++open_calls;
     last_create_mode = create_mode;
     last_open_client = value;
     strcpy(last_open_path, path);
+    if (same(path, "/work/link") || same(path, "/work/dangling") ||
+        same(path, "/work/dir-link/note"))
+        return ASTRA_VFS_ERR_LOOP;
+    if (same(path, "/work") &&
+        (flags & ASTRA_VFS_OPEN_DIRECTORY) != 0u) {
+        *file = 2u;
+        if (size != NULL)
+            *size = 0u;
+        if (kind != NULL)
+            *kind = ASTRA_VFS_KIND_DIRECTORY;
+        return ASTRA_VFS_OK;
+    }
     if (same(path, "/work/note")) {
+        if ((flags & (ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_EXCLUSIVE)) ==
+            (ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_EXCLUSIVE))
+            return ASTRA_VFS_ERR_EXISTS;
+        *file = 1u;
+        if (size != NULL)
+            *size = content_size;
+        if (kind != NULL)
+            *kind = ASTRA_VFS_KIND_FILE;
+        return ASTRA_VFS_OK;
+    }
+    if (same(path, "/work/real-dir/note") ||
+        (same(path, "/work/new-target") &&
+         (flags & ASTRA_VFS_OPEN_CREATE) != 0u)) {
         *file = 1u;
         if (size != NULL)
             *size = content_size;
@@ -83,7 +113,8 @@ uint32_t astra_vfs_open_mode(AstraVfsClient *value, const char *path,
 uint32_t astra_vfs_close(AstraVfsClient *value, AstraVfsFile file)
 {
     (void)value;
-    return file == 1u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_BAD_HANDLE;
+    return file == 1u || file == 2u ? ASTRA_VFS_OK :
+                                      ASTRA_VFS_ERR_BAD_HANDLE;
 }
 
 uint32_t astra_vfs_read(AstraVfsClient *value, AstraVfsFile file,
@@ -136,11 +167,18 @@ uint32_t astra_vfs_write_position(AstraVfsClient *value, AstraVfsFile file,
 }
 
 static uint32_t bulk_write(AstraVfsClient *value, AstraVfsFile file,
-                           uint64_t offset, const void *buffer,
-                           uint32_t length, uint32_t *moved)
+                           uint64_t offset, uint32_t flags,
+                           const void *buffer, uint32_t length,
+                           uint32_t *moved, uint64_t *position)
 {
+    uint32_t status;
+
     ++bulk_write_calls;
-    return astra_vfs_write(value, file, offset, buffer, length, moved);
+    (void)flags;
+    status = astra_vfs_write(value, file, offset, buffer, length, moved);
+    if (status == ASTRA_VFS_OK)
+        *position = offset + *moved;
+    return status;
 }
 
 uint32_t astra_vfs_sync(AstraVfsClient *value, AstraVfsFile file)
@@ -186,6 +224,10 @@ uint32_t astra_vfs_stat_meta(AstraVfsClient *value, const char *path,
 uint32_t astra_vfs_stat(AstraVfsClient *value, const char *path,
                         uint64_t *size, uint16_t *kind)
 {
+    ++stat_calls;
+    if (same(path, "/work/dir-link/note") ||
+        same(path, "/work/dir-link/renamed"))
+        return ASTRA_VFS_ERR_NOT_DIR;
     if (same(path, "/work")) {
         if (size != NULL)
             *size = 0u;
@@ -201,6 +243,30 @@ uint32_t astra_vfs_stat(AstraVfsClient *value, const char *path,
         return ASTRA_VFS_OK;
     }
     if (same(path, "/work/note") && removed_file == 0u) {
+        if (size != NULL)
+            *size = content_size;
+        if (kind != NULL)
+            *kind = ASTRA_VFS_KIND_FILE;
+        return ASTRA_VFS_OK;
+    }
+    if (value == &client &&
+        (same(path, "/work/link") || same(path, "/work/loop-a") ||
+         same(path, "/work/loop-b") || same(path, "/work/dangling") ||
+         same(path, "/work/dir-link"))) {
+        if (size != NULL)
+            *size = 4u;
+        if (kind != NULL)
+            *kind = ASTRA_VFS_KIND_SYMLINK;
+        return ASTRA_VFS_OK;
+    }
+    if (same(path, "/work/real-dir")) {
+        if (size != NULL)
+            *size = 0u;
+        if (kind != NULL)
+            *kind = ASTRA_VFS_KIND_DIRECTORY;
+        return ASTRA_VFS_OK;
+    }
+    if (same(path, "/work/real-dir/note")) {
         if (size != NULL)
             *size = content_size;
         if (kind != NULL)
@@ -227,6 +293,17 @@ uint32_t astra_vfs_readdir_batch(AstraVfsClient *value, const char *path,
     return ASTRA_VFS_OK;
 }
 
+uint32_t astra_vfs_readdir_file_batch(
+    AstraVfsClient *value, AstraVfsFile directory, const char *path,
+    uint64_t cursor, AstraVfsDirEntry *entries, uint32_t capacity,
+    uint32_t *count, uint64_t *next)
+{
+    if (directory != 2u)
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    return astra_vfs_readdir_batch(value, path, cursor, entries, capacity,
+                                   count, next);
+}
+
 uint32_t astra_vfs_mkdir(AstraVfsClient *value, const char *path)
 {
     return astra_vfs_mkdir_mode(value, path, ASTRA_VFS_MODE_DEFAULT);
@@ -245,16 +322,24 @@ uint32_t astra_vfs_unlink(AstraVfsClient *value, const char *path)
 {
     (void)value;
     removed_file = same(path, "/work/note");
-    return removed_file != 0u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_INVALID;
+    removed_link = same(path, "/work/link");
+    return removed_file != 0u || removed_link != 0u ? ASTRA_VFS_OK :
+                                                      ASTRA_VFS_ERR_INVALID;
 }
 
 uint32_t astra_vfs_rename(AstraVfsClient *value, const char *from,
                           const char *to)
 {
     (void)value;
+    if (same(from, "/work/dir-link/note") ||
+        same(to, "/work/dir-link/renamed"))
+        return ASTRA_VFS_ERR_NOT_DIR;
     snprintf(last_rename_from, sizeof(last_rename_from), "%s", from);
     snprintf(last_rename_to, sizeof(last_rename_to), "%s", to);
-    renamed_file = same(from, "/work/note") && same(to, "/work/renamed");
+    renamed_file =
+        (same(from, "/work/note") && same(to, "/work/renamed")) ||
+        (same(from, "/work/real-dir/note") &&
+         same(to, "/work/real-dir/renamed"));
     return renamed_file != 0u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_INVALID;
 }
 
@@ -271,14 +356,30 @@ uint32_t astra_vfs_readlink(AstraVfsClient *value, const char *path,
                             void *buffer, uint32_t capacity,
                             uint32_t *length)
 {
-    static const char target[] = "note";
+    const char *target = same(path, "/work/loop-a") ? "loop-b" :
+                         same(path, "/work/loop-b") ? "loop-a" :
+                         same(path, "/work/dangling") ? "new-target" :
+                         same(path, "/work/dir-link") ? "real-dir" : "note";
 
-    if (value != &client || !same(path, "/work/link"))
+    if (value != &client ||
+        (!same(path, "/work/link") && !same(path, "/work/loop-a") &&
+         !same(path, "/work/loop-b") && !same(path, "/work/dangling") &&
+         !same(path, "/work/dir-link")))
         return ASTRA_VFS_ERR_NOT_FOUND;
-    if (capacity < sizeof(target) - 1u)
+    if (capacity < strlen(target))
         return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
-    memcpy(buffer, target, sizeof(target) - 1u);
-    *length = sizeof(target) - 1u;
+    memcpy(buffer, target, strlen(target));
+    *length = (uint32_t)strlen(target);
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_vfs_symlink(AstraVfsClient *value, const char *target,
+                           const char *path)
+{
+    if (value != &client)
+        return ASTRA_VFS_ERR_INVALID;
+    snprintf(last_symlink_target, sizeof(last_symlink_target), "%s", target);
+    snprintf(last_symlink_path, sizeof(last_symlink_path), "%s", path);
     return ASTRA_VFS_OK;
 }
 
@@ -321,9 +422,14 @@ static AstraVfsClient *client_for(const AstraAssign *assign, void *context)
 
 int main(void)
 {
-    const AstraFilesystemLibraryV1 *library = &astra_library_exports;
+    const AstraFilesystemLibraryV2 *library = &astra_library_exports;
+
+    assert(ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR ==
+           ASTRA_FILESYSTEM_LIBRARY_VERSION);
     AstraAssignTable assigns;
+    AstraAssignTable single_assigns;
     AstraFilesystem filesystem = ASTRA_FILESYSTEM_INIT;
+    AstraFilesystem single_filesystem = ASTRA_FILESYSTEM_INIT;
     AstraFile file = ASTRA_FILE_INIT;
     AstraFileInfo info = ASTRA_FILE_INFO_INIT;
     AstraDirectory directory = ASTRA_DIRECTORY_INIT;
@@ -338,6 +444,53 @@ int main(void)
     uint32_t length;
 
     assert(library->abi_major == ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR);
+    astra_assign_table_init(&single_assigns);
+    assert(astra_assign_bind(&single_assigns, "WORK", 7u,
+                             ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE,
+                             "work") == ASTRA_VFS_OK);
+    assert(library->attach(&single_filesystem, &single_assigns, client_for,
+                           NULL, NULL) == ASTRA_VFS_OK);
+    stat_calls = 0u;
+    open_calls = 0u;
+    assert(library->open(&single_filesystem, "WORK:note",
+                         ASTRA_VFS_OPEN_READ, &file) == ASTRA_VFS_OK);
+    assert(stat_calls == 0u && open_calls == 1u);
+    assert(library->close(&file) == ASTRA_VFS_OK);
+    stat_calls = 0u;
+    open_calls = 0u;
+    assert(library->open(&single_filesystem, "WORK:link",
+                         ASTRA_VFS_OPEN_READ, &file) == ASTRA_VFS_OK);
+    assert(stat_calls != 0u && open_calls == 2u &&
+           same(last_open_path, "/work/note"));
+    assert(library->close(&file) == ASTRA_VFS_OK);
+    stat_calls = 0u;
+    open_calls = 0u;
+    assert(library->open(&single_filesystem, "WORK:note",
+                         ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+                             ASTRA_VFS_OPEN_EXCLUSIVE,
+                         &file) == ASTRA_VFS_ERR_EXISTS);
+    assert(stat_calls == 0u && open_calls == 1u);
+    stat_calls = 0u;
+    open_calls = 0u;
+    assert(library->open(&single_filesystem, "WORK:new-target",
+                         ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE,
+                         &file) == ASTRA_VFS_OK);
+    assert(stat_calls == 0u && open_calls == 1u);
+    assert(library->close(&file) == ASTRA_VFS_OK);
+    stat_calls = 0u;
+    renamed_file = 0u;
+    assert(library->rename(&single_filesystem, "WORK:note", "WORK:renamed") ==
+           ASTRA_VFS_OK);
+    assert(stat_calls == 0u && renamed_file != 0u);
+    stat_calls = 0u;
+    renamed_file = 0u;
+    assert(library->rename(&single_filesystem, "WORK:dir-link/note",
+                           "WORK:dir-link/renamed") == ASTRA_VFS_OK);
+    assert(stat_calls != 0u && renamed_file != 0u &&
+           same(last_rename_from, "/work/real-dir/note") &&
+           same(last_rename_to, "/work/real-dir/renamed"));
+    library->detach(&single_filesystem);
+
     astra_assign_table_init(&assigns);
     assert(astra_assign_bind(&assigns, "WORK", 7u,
                              ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE,
@@ -425,8 +578,45 @@ int main(void)
     assert(library->readlink(&filesystem, "WORK:link", read, sizeof(read),
                              &length) == ASTRA_VFS_OK);
     assert(length == 4u && memcmp(read, "note", length) == 0);
+    assert(library->lstat(&filesystem, "WORK:link", &info) == ASTRA_VFS_OK &&
+           info.kind == ASTRA_VFS_KIND_SYMLINK);
+    assert(library->stat(&filesystem, "WORK:link", &info) == ASTRA_VFS_OK &&
+           info.kind == ASTRA_VFS_KIND_FILE &&
+           info.byte_size == sizeof(written));
+    assert(library->open(&filesystem, "WORK:link", ASTRA_VFS_OPEN_READ,
+                         &file) == ASTRA_VFS_OK &&
+           same(last_open_path, "/work/note"));
+    assert(library->close(&file) == ASTRA_VFS_OK);
+    assert(library->open(
+               &filesystem, "WORK:link",
+               ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+                   ASTRA_VFS_OPEN_EXCLUSIVE,
+               &file) == ASTRA_VFS_ERR_EXISTS);
+    assert(library->open(&filesystem, "WORK:dangling",
+                         ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE,
+                         &file) == ASTRA_VFS_OK &&
+           same(last_open_path, "/work/new-target"));
+    assert(library->close(&file) == ASTRA_VFS_OK);
+    assert(library->open(&filesystem, "WORK:dir-link/note",
+                         ASTRA_VFS_OPEN_READ, &file) == ASTRA_VFS_OK &&
+           same(last_open_path, "/work/real-dir/note"));
+    assert(library->close(&file) == ASTRA_VFS_OK);
+    assert(library->lstat(&filesystem, "WORK:dir-link/note", &info) ==
+           ASTRA_VFS_OK && info.kind == ASTRA_VFS_KIND_FILE);
+    assert(library->open(&filesystem, "WORK:loop-a", ASTRA_VFS_OPEN_READ,
+                         &file) == ASTRA_VFS_ERR_LOOP);
+    assert(library->symlink("note", &filesystem, "WORK:new-link") ==
+           ASTRA_VFS_OK);
+    assert(same(last_symlink_target, "note") &&
+           same(last_symlink_path, "/work/new-link"));
+    assert(library->unlink(&filesystem, "WORK:link") == ASTRA_VFS_OK &&
+           removed_link != 0u);
+    stat_calls = 0u;
     assert(library->rename(&filesystem, "WORK:note", "WORK:renamed") ==
            ASTRA_VFS_OK);
+    /* One source lookup and one destination union walk. WORK has two members,
+     * so a missing destination must ask both exactly once, not twice. */
+    assert(stat_calls == 3u);
     assert(renamed_file != 0u && same(last_rename_from, "/work/note") &&
            same(last_rename_to, "/work/renamed"));
     assert(library->rename(&filesystem, "WORK:note", "WORK:tool") ==

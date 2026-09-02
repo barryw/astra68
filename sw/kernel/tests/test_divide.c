@@ -87,6 +87,21 @@ int main(void)
             assert(remainder == values[v] % divisor);
         }
     }
+    for (uint64_t value = 0u; value < 100u; ++value)
+        for (uint64_t multiplier = 0u; multiplier < 100u; ++multiplier)
+            for (uint64_t divisor = 1u; divisor < 100u; ++divisor)
+                assert(astra_multiply_divide_u64(value, multiplier,
+                                                  divisor) ==
+                       value * multiplier / divisor);
+    assert(astra_multiply_divide_u64(UINT64_MAX - 1u,
+                                     UINT64_C(1000000000), UINT64_MAX) ==
+           UINT64_C(999999999));
+    assert(astra_multiply_divide_u64(UINT64_MAX, 2u, 3u) ==
+           UINT64_C(12297829382473034410));
+    assert(astra_multiply_divide_u64(UINT64_MAX, UINT64_MAX,
+                                     UINT64_MAX) == UINT64_MAX);
+    assert(astra_multiply_divide_u64(UINT64_MAX, 2u, 1u) == UINT64_MAX);
+    assert(astra_multiply_divide_u64(1u, 1u, 0u) == UINT64_MAX);
 
     /* Dividing by zero is a caller's bug, and it saturates rather than trapping. */
     {

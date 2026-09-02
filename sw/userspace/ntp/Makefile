@@ -8,7 +8,7 @@ RUNTIME := ../runtime
 CPPFLAGS := -Iinclude -I../../include -I../posix/include -I$(RUNTIME)/include \
 	-isystem $(PICOLIBC)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
-TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
+TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 SOURCES := src/ntp_core.c src/ntp_client.c src/ntp_control.c
 OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES))

@@ -6,10 +6,9 @@ This is the resume point for two things: making the system **pluggable** through
 typed service protocols, and giving a thread a **usable stack**. They arrived
 together because the first one is what exposed the second.
 
-`docs/HANDOVER-userspace-bringup.md` remains the resume point for the
+`docs/FILESYSTEM_CONCURRENCY.md` remains the resume point for the
 storage/loader line beneath this. `docs/CURRENT_STATE.md` is the project-wide
-map; mind its override. Where this file and an older one disagree, this one is
-newer.
+map and takes precedence over this historical handover.
 
 ---
 

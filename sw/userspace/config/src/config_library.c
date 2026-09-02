@@ -16,6 +16,7 @@ ASTRA_LIBRARY("config.library", 1, 0, 0,
 
 typedef struct ConfigState {
     AstraVfsClient client;
+    AstraVfsPortThreadState client_threads[ASTRA_PROCESS_THREAD_COUNT_MAX];
     uint32_t schema_version;
     uint32_t flags;
     uint32_t text_area;
@@ -252,6 +253,12 @@ static uint32_t config_open(const AstraStartupInfo *startup,
     if (status != ASTRA_CONFIG_OK)
         return status;
     (void)memset(state, 0, sizeof(*state));
+    if (!astra_vfs_port_set_thread_storage(
+            &state->client, state->client_threads,
+            ASTRA_PROCESS_THREAD_COUNT_MAX)) {
+        status = ASTRA_CONFIG_NO_MEMORY;
+        goto failed;
+    }
     state->schema_version = schema_version;
     state->flags = flags;
     if (!root_copy(state->root, capability->root) ||

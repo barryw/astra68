@@ -29,6 +29,8 @@ typedef struct AstraVfsUnionDirectory {
     void *context;
     char path[ASTRA_VFS_PATH_MAX];
     uint64_t cursor;
+    AstraVfsClient *client;
+    AstraVfsFile file;
     uint32_t member;
     uint32_t worst;
     uint8_t active;
@@ -36,7 +38,8 @@ typedef struct AstraVfsUnionDirectory {
 } AstraVfsUnionDirectory;
 
 #define ASTRA_VFS_UNION_DIRECTORY_INIT \
-    { 0, 0, 0, { 0 }, 0, 0, ASTRA_VFS_ERR_NOT_FOUND, 0, 0 }
+    { 0, 0, 0, { 0 }, 0, 0, ASTRA_VFS_FILE_INVALID, 0, \
+      ASTRA_VFS_ERR_NOT_FOUND, 0, 0 }
 
 uint32_t astra_vfs_assign_primary(
     const AstraAssignTable *table, const char *path, uint32_t rights,
@@ -48,6 +51,28 @@ uint32_t astra_vfs_assign_stat(
     AstraVfsAssignClientFn client_for, void *context, char *wire,
     uint32_t capacity, AstraVfsDirEntry *entry, AstraVfsClient **client,
     const AstraAssign **found_assign, uint32_t *member);
+
+/* Metadata for the named node itself; unlike stat, the final link is not followed. */
+uint32_t astra_vfs_assign_lstat(
+    const AstraAssignTable *table, const char *path, uint32_t rights,
+    AstraVfsAssignClientFn client_for, void *context, char *wire,
+    uint32_t capacity, AstraVfsDirEntry *entry, AstraVfsClient **client,
+    const AstraAssign **found_assign, uint32_t *member);
+
+/* Resolve intermediate links and optionally the final component. */
+uint32_t astra_vfs_assign_resolve_links(
+    const AstraAssignTable *table, const char *path, uint32_t rights,
+    int follow_final, int allow_missing_final,
+    AstraVfsAssignClientFn client_for, void *context, char *logical,
+    uint32_t capacity);
+
+/* Resolve a create/rename destination once. An existing node returns its
+ * serving union member; a missing final node returns the writable primary. */
+uint32_t astra_vfs_assign_destination(
+    const AstraAssignTable *table, const char *path, uint32_t rights,
+    int follow_final, AstraVfsAssignClientFn client_for, void *context,
+    char *logical, uint32_t logical_capacity, char *wire,
+    uint32_t wire_capacity, AstraVfsClient **client, uint32_t *member);
 
 /*
  * One directory walk for every caller. filesystem.library keeps its ABI by

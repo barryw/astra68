@@ -17,9 +17,8 @@ The logical chip names remain:
 They may be implemented as one AXI-connected PL subsystem. Their ownership and
 failure boundaries remain distinct even if physical implementation is shared.
 
-`VEGA.md` v0.5 and `ASTRAEA.md` v0.4 describe the implemented ULX3S chipset and
-remain historical implementation evidence. They are not the Arty register or
-capacity contract. `PRESENTATION.md` remains authoritative for the tear-free
+`VEGA.md` v0.5 and `ASTRAEA.md` v0.4 describe the device register contracts.
+`PRESENTATION.md` remains authoritative for the tear-free
 scene invariant where it does not conflict with the dimensions, formats, and
 transport defined here.
 

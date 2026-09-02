@@ -90,3 +90,45 @@ uint64_t astra_divide_u64_u64(uint64_t value, uint64_t divisor,
         *remainder = rest;
     return quotient;
 }
+
+uint64_t astra_multiply_divide_u64(uint64_t value, uint64_t multiplier,
+                                   uint64_t divisor)
+{
+    uint64_t whole;
+    uint64_t remainder;
+    uint64_t fraction = 0u;
+    uint64_t fraction_remainder = 0u;
+    uint64_t result;
+
+    if (divisor == 0u)
+        return UINT64_MAX;
+    if (value == 0u || multiplier == 0u)
+        return 0u;
+    whole = astra_divide_u64_u64(value, divisor, &remainder);
+    if (whole > UINT64_MAX / multiplier)
+        return UINT64_MAX;
+    result = whole * multiplier;
+
+    for (uint64_t mask = UINT64_C(1) << 63; mask != 0u; mask >>= 1) {
+        if (fraction > UINT64_MAX / 2u)
+            return UINT64_MAX;
+        fraction *= 2u;
+        if (fraction_remainder >= divisor - fraction_remainder) {
+            fraction_remainder -= divisor - fraction_remainder;
+            ++fraction;
+        } else {
+            fraction_remainder += fraction_remainder;
+        }
+        if ((multiplier & mask) != 0u) {
+            if (fraction_remainder >= divisor - remainder) {
+                fraction_remainder -= divisor - remainder;
+                if (fraction == UINT64_MAX)
+                    return UINT64_MAX;
+                ++fraction;
+            } else {
+                fraction_remainder += remainder;
+            }
+        }
+    }
+    return result > UINT64_MAX - fraction ? UINT64_MAX : result + fraction;
+}

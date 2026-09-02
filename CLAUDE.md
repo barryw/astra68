@@ -1,8 +1,7 @@
 # Astra 68 — read this first, every session
 
-This file is loaded automatically. `AGENTS.md` is **not** — it is for Codex-style
-agents and parts of it are out of date. Where the two disagree, this file and
-`docs/CURRENT_STATE.md` win.
+This file is loaded automatically. `AGENTS.md` defines the execution topology;
+`docs/CURRENT_STATE.md` defines the current engineering state.
 
 `docs/INVENTORY.md` is the complete audit: every machine, board, subsystem,
 toolchain and build command. Read it when you need detail. This page is the
@@ -16,7 +15,6 @@ orientation you need before touching anything.
 |---|---|---|---|
 | Mac | local | Apple Silicon, this session's cwd `/Users/barry/Git/astra68` | Editing, userspace + ELF work, host tests |
 | `beast` | 192.168.1.3 | 32 core, 61 GB, Ubuntu | **Everything that must build or run for real**: kernel, boot ROM, m68k gates, QEMU, analyzer |
-| `nuc` | 192.168.1.2 | 8 core, 31 GB, Ubuntu | ULX3S work (historical), FPGA tooling |
 | `astra-arty` | 192.168.1.188 | **The board.** Arty Z7-20, ARMv7, Linux 6.6-xilinx | Running Astra on hardware |
 | `nas.lan` | 192.168.1.5 | Storage | Durable evidence under `/mnt/Documents/astra68/` |
 
@@ -38,34 +36,13 @@ fabric.** A board run is real hardware for storage, graphics and the SD path,
 but the CPU is still TCG — 68030 timing is no more real there than on `beast`.
 Accepted CPU baseline is roughly 30 MHz equivalent.
 
-**ULX3S — historical.** ECP5, attached to `nuc`. The ULX3S + TG68K FPGA CPU line
-is superseded; see the override below.
-
-## Active vs historical — the thing that causes the most confusion
-
-`docs/CURRENT_STATE.md` carries an **Active Arty migration override
-(2026-07-30)**. It states that any claim of ULX3S, 32 MiB SDRAM, 16 sprites,
-720x480, the FPGA TG68K core, NUC attachment, or AstraHost/ESP transport as the
-*active production boundary* is **historical** unless the override repeats it.
-Much of that document sits below the override and reads as current. It is not.
-
-Currently true:
-
-- Target is the Arty Z7-20; the m68k runs under the **Astra QEMU backend**.
-- **Musashi and the retained TG68K RTL core are conformance oracles**, not
-  emulators. `conformance/` runs the same architectural case against
-  `musashi-68030` and `rtl-tg68k030-mmu2` and compares them. Deleting either
-  removes the CPU verification oracle.
-- The FPGA MC68030 is **not** in the active Arty PL budget.
-
 ## The emulator
 
 **`emu/qemu` — the Astra QEMU 9.2.4 fork. It is the only emulator.** It carries
 the astra68 machine and the Vesta block and input models. Build with
 `emu/qemu/build.sh {host|desktop|arty}`; `arty` cross-compiles for the board.
 
-AstraVM, a second Rust machine on Musashi, was removed on 2026-08-05. Musashi
-itself stays, as a conformance oracle only — see above.
+There is no alternative CPU or emulator implementation in the repository.
 
 ## Traps that have each cost real time
 
@@ -160,12 +137,10 @@ itself stays, as a conformance oracle only — see above.
 | Question | File |
 |---|---|
 | Complete inventory of everything | `docs/INVENTORY.md` |
-| Project-wide continuation map | `docs/CURRENT_STATE.md` (mind the override) |
-| Storage / filesystem line of work | `docs/HANDOVER-userspace-bringup.md` |
+| Project-wide continuation map | `docs/CURRENT_STATE.md` |
+| Storage / filesystem line of work | `docs/FILESYSTEM_CONCURRENCY.md`, `docs/FILESYSTEM_KIT.md` |
 | **Current resume point** | `docs/HANDOVER-shell-redirection.md` — quoting was already there, redirection now is; what is left is `<`, `2>` and pipes |
-| The gate, the listing, and the clock before that | `docs/HANDOVER-qualification-and-time.md` — its §3.1, §3.3–§3.5 still stand: storage/input provocation, `console_printf`, and the DE25 Nano |
-| Boards, USB, and the qualification's history | `docs/HANDOVER-boards-and-usb.md` |
-| The memory work in full, with its numbers | `docs/HANDOVER-memory-and-modernity.md` — §5 is done; §6.2 onward is the record |
+| Memory topology and budgets | `docs/MEMORY_BUDGET.md`, `docs/MEMORY_MAP.md` |
 | Boot fix, the shell gate, commands and the POSIX half | `docs/HANDOVER-boot-and-shell-gate.md` — every gate green |
 | The libc, the commands, and the kernel limits | `docs/HANDOVER-libc-and-limits.md` — its §10.1 and §10.2 are done |
 | Compositor and launch latency | `docs/HANDOVER-launch-latency.md` — the blitter's `arlen` is the item left |
@@ -175,8 +150,7 @@ itself stays, as a conformance oracle only — see above.
 | ROM budget and memory layout | `docs/MEMORY_MAP.md`, `sw/include/astra/boot.h` |
 | The wall clock, and what has a date | `docs/TIME.md` |
 | Debugging a program on the machine | `docs/DEBUGGING.md` |
-| What is implemented vs planned | `docs/STATUS.md` |
-| FPGA timing closure | `fpga/soc/oss_flow/TIMING_CLOSURE.md` |
+| FPGA timing closure | `fpga/arty/graphics/TIMING_CLOSURE.md` |
 
 ## Standing instructions
 
@@ -187,7 +161,7 @@ itself stays, as a conformance oracle only — see above.
   complexity. Never the 1980s answer: no fixed partitions, no ceilings compiled
   into an image, no handle-and-lock discipline pushed onto every caller. Where
   the capability model can do better than Unix, do better. See
-  `docs/HANDOVER-memory-and-modernity.md` §1.
+  `docs/MEMORY_BUDGET.md`.
 - Profile everything; regressions must be visible.
 - Broken tests are an emergency. Never commit with failing tests.
 - Git holds source, authored docs and deterministic generators — never build

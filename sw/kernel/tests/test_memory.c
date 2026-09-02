@@ -40,8 +40,8 @@ static void make_valid_info(AstraBootInfo *info)
     info->cpu_hz = 12500000u;
     info->ram_base = 0x02000000u;
     info->ram_size = 0x02000000u;
-    info->rom_base = 0xffe00000u;
-    info->rom_size = ASTRA_ROM_BACKING_SIZE;
+    info->rom_base = ASTRA_ROM_ADDRESS;
+    info->rom_size = ASTRA_ROM_SIZE;
     info->kernel_base = ASTRA_KERNEL_LOAD_ADDRESS;
     info->kernel_image_size = 0x00010000u;
     info->kernel_memory_size = ASTRA_KERNEL_RESERVED_SIZE;
@@ -69,15 +69,7 @@ static void make_valid_info(AstraBootInfo *info)
               ASTRA_MEMORY_RANGE_KERNEL,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_range(info, ASTRA_KERNEL_USABLE_ADDRESS, ASTRA_KERNEL_USABLE_SIZE,
-              ASTRA_MEMORY_RANGE_USABLE,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
-                  ASTRA_MEMORY_CACHEABLE);
-    add_range(info, ASTRA_ROM_BACKING_ADDRESS, ASTRA_ROM_BACKING_SIZE,
-              ASTRA_MEMORY_RANGE_ROM_BACKING,
-              ASTRA_MEMORY_READ | ASTRA_MEMORY_EXECUTE |
-                  ASTRA_MEMORY_CACHEABLE);
-    add_range(info, 0x03e40000u, 0x000c0000u,
+    add_range(info, ASTRA_KERNEL_USABLE_ADDRESS, (OHCI_DMA_POOL_BASE - ASTRA_KERNEL_USABLE_ADDRESS),
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
@@ -99,8 +91,9 @@ static void test_initial_map(void)
     assert(stats.ram_base == 0x02000000u);
     assert(stats.total_frames == 8192u);
     assert(stats.free_frames ==
-           (ASTRA_USER_IMAGE_MAX_SIZE + ASTRA_KERNEL_USABLE_SIZE +
-            0x000c0000u) / KERNEL_PAGE_SIZE -
+           (ASTRA_USER_IMAGE_MAX_SIZE +
+            (OHCI_DMA_POOL_BASE - ASTRA_KERNEL_USABLE_ADDRESS)) /
+                   KERNEL_PAGE_SIZE -
                KERNEL_EMERGENCY_RESERVE_FRAMES);
     assert(stats.high_water_frames == stats.total_frames - stats.free_frames);
     assert(stats.owner_slots_used == 0u);
@@ -123,8 +116,8 @@ static void test_initial_map(void)
     assert(frame.state == KERNEL_FRAME_KERNEL);
     assert(kernel_memory_frame_info(ASTRA_KERNEL_TRACE_ADDRESS, &frame));
     assert(frame.state == KERNEL_FRAME_KERNEL);
-    assert(kernel_memory_frame_info(ASTRA_ROM_BACKING_ADDRESS, &frame));
-    assert(frame.state == KERNEL_FRAME_ROM_BACKING);
+    assert(kernel_memory_frame_info(0x03e00000u, &frame));
+    assert(frame.state == KERNEL_FRAME_FREE);
     assert(kernel_memory_frame_info(0x02004000u, &frame));
     assert(frame.state == KERNEL_FRAME_FREE);
     assert(kernel_memory_frame_info(0x03eff000u, &frame));
@@ -408,38 +401,27 @@ static void test_exhaustion_and_checked_ranges(void)
     KernelMemoryStats stats;
     uint32_t first;
     uint32_t second;
-    uint32_t third;
     uint32_t extra = 0u;
 
     make_valid_info(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     assert(kernel_memory_protect_owner(1u));
+    assert(kernel_memory_stats(&stats));
     /*
-     * Drains the three usable regions exactly, so the sizes are derived from
+     * Drains the two usable regions exactly, so the sizes are derived from
      * the layout rather than written out: ABI 0.4 moved 52 frames from the tail
      * into the user image hole and literal counts stopped matching.
      */
     assert(kernel_memory_alloc(ASTRA_USER_IMAGE_MAX_SIZE / 0x1000u, 1u,
                                KERNEL_FRAME_PROCESS, 1u, &first) ==
            KERNEL_MEMORY_OK);
-    assert(kernel_memory_alloc(ASTRA_KERNEL_USABLE_SIZE / 0x1000u, 1u,
-                               KERNEL_FRAME_PROCESS, 1u, &second) ==
-           KERNEL_MEMORY_OK);
-    /*
-     * The tail region, less the two reservations that live at the top of
-     * memory: the emergency frames and the DMA zone. Derived rather than
-     * written out, because both are policy numbers and a literal here would
-     * have to be found and changed every time one of them moved.
-     */
-    assert(kernel_memory_stats(&stats));
-    assert(kernel_memory_alloc((0xc0000u / 0x1000u) -
-                                   KERNEL_EMERGENCY_RESERVE_FRAMES -
-                                   stats.dma_zone_frames,
-                               1u, KERNEL_FRAME_PROCESS, 1u, &third) ==
+    assert(kernel_memory_alloc(
+               (OHCI_DMA_POOL_BASE - ASTRA_KERNEL_USABLE_ADDRESS) / 0x1000u -
+                   KERNEL_EMERGENCY_RESERVE_FRAMES - stats.dma_zone_frames,
+               1u, KERNEL_FRAME_PROCESS, 1u, &second) ==
            KERNEL_MEMORY_OK);
     assert(first == ASTRA_USER_IMAGE_ADDRESS);
     assert(second == ASTRA_KERNEL_USABLE_ADDRESS);
-    assert(third == 0x03e40000u);
     assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 1u, &extra) ==
            KERNEL_MEMORY_OUT_OF_MEMORY);
     assert(kernel_memory_stats(&stats));
@@ -474,7 +456,6 @@ static void test_emergency_reserve_isolated_and_replenished(void)
     uint32_t emergency[KERNEL_EMERGENCY_RESERVE_FRAMES];
     uint32_t first;
     uint32_t second;
-    uint32_t third;
     uint32_t extra;
     uint32_t released = 0u;
 
@@ -485,15 +466,10 @@ static void test_emergency_reserve_isolated_and_replenished(void)
     assert(kernel_memory_alloc(ASTRA_USER_IMAGE_MAX_SIZE / 0x1000u, 1u,
                                KERNEL_FRAME_PROCESS, 1u, &first) ==
            KERNEL_MEMORY_OK);
-    assert(kernel_memory_alloc(ASTRA_KERNEL_USABLE_SIZE / 0x1000u, 1u,
-                               KERNEL_FRAME_PROCESS, 1u,
-                               &second) == KERNEL_MEMORY_OK);
-    /* The tail, less the emergency frames and the DMA zone above it. */
-    assert(kernel_memory_alloc((0xc0000u / 0x1000u) -
-                                   KERNEL_EMERGENCY_RESERVE_FRAMES -
-                                   baseline.dma_zone_frames,
-                               1u, KERNEL_FRAME_PROCESS, 1u, &third) ==
-           KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc(
+               (OHCI_DMA_POOL_BASE - ASTRA_KERNEL_USABLE_ADDRESS) / 0x1000u -
+                   KERNEL_EMERGENCY_RESERVE_FRAMES - baseline.dma_zone_frames,
+               1u, KERNEL_FRAME_PROCESS, 1u, &second) == KERNEL_MEMORY_OK);
     assert(kernel_memory_stats(&exhausted));
     assert(exhausted.free_frames == baseline.dma_zone_frames);
     assert(exhausted.emergency_available_frames ==
@@ -553,7 +529,6 @@ static void test_emergency_reserve_isolated_and_replenished(void)
     assert(kernel_allocation_valid());
     (void)first;
     (void)second;
-    (void)third;
 }
 
 static void test_protected_reserve_survives_ordinary_exhaustion(void)
@@ -749,7 +724,7 @@ static void test_retained_log_is_allocation_free_under_pressure(void)
 /*
  * Whether physical fragmentation is a real risk on this machine or only a
  * theoretical one, which is the question section 5 item 5 of
- * HANDOVER-memory-and-modernity.md has to answer before choosing between a
+ * The memory policy has to answer before choosing between a
  * buddy allocator, a reserved zone, and doing nothing.
  *
  * The whole kernel asks for exactly one contiguous multi-frame run: DMA. The

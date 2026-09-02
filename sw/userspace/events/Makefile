@@ -12,7 +12,7 @@ CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include -I$(VFS)/include \
 	-I$(NDK)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
-TARGET_FLAGS := -m68030 -msoft-float -Os -ffreestanding -fno-builtin \
+TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 LIBRARY_FLAGS := $(TARGET_FLAGS) -fPIC -fvisibility=hidden
 LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
@@ -75,8 +75,7 @@ $(EVENTS_LIBRARY): $(EVENTS_LIBRARY_OBJECTS) $(RUNTIME_PIC_LIB) \
 library-contract: $(EVENTS_LIBRARY)
 	@python3 ../../../tools/library_info.py $(EVENTS_LIBRARY) | \
 		grep -q '^events.library 1.0.0 ABI 1.0$$'
-	@! $(READELF) -r $(EVENTS_LIBRARY) | \
-		grep -E 'R_68K_(GLOB_DAT|JMP_SLOT|32|PC32)'
+	$(call ASTRA_CHECK_DSO,$(EVENTS_LIBRARY))
 
 BACKEND_TEST_SOURCES := src/event_backend.c src/event_store.c \
 	$(RUNTIME)/src/event_catalog.c tests/test_event_backend.c

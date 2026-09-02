@@ -108,6 +108,22 @@ static int ext4_bdif_bwrite(struct ext4_blockdev *bdev, const void *buf,
 	ext4_bdif_lock(bdev);
 	int r = bdev->bdif->bwrite(bdev, buf, blk_id, blk_cnt);
 	bdev->bdif->bwrite_ctr++;
+	if (r == EOK)
+		bdev->bdif->flush_pending = true;
+	ext4_bdif_unlock(bdev);
+	return r;
+}
+
+static int ext4_bdif_bwritev(struct ext4_blockdev *bdev,
+			     const void *const *bufs,
+			     const uint32_t *blk_cnts, uint64_t blk_id,
+			     uint32_t buf_cnt)
+{
+	ext4_bdif_lock(bdev);
+	int r = bdev->bdif->bwritev(bdev, bufs, blk_cnts, blk_id, buf_cnt);
+	bdev->bdif->bwrite_ctr++;
+	if (r == EOK)
+		bdev->bdif->flush_pending = true;
 	ext4_bdif_unlock(bdev);
 	return r;
 }
@@ -121,7 +137,13 @@ int ext4_block_flush(struct ext4_blockdev *bdev)
 		return EOK;
 
 	ext4_bdif_lock(bdev);
+	if (!bdev->bdif->flush_pending) {
+		ext4_bdif_unlock(bdev);
+		return EOK;
+	}
 	r = bdev->bdif->flush(bdev);
+	if (r == EOK)
+		bdev->bdif->flush_pending = false;
 	ext4_bdif_unlock(bdev);
 	return r;
 }
@@ -152,7 +174,18 @@ int ext4_block_init(struct ext4_blockdev *bdev)
 
 int ext4_block_bind_bcache(struct ext4_blockdev *bdev, struct ext4_bcache *bc)
 {
+	uint32_t blocks_per_buf;
+	uint32_t capacity;
+	int r;
+
 	ext4_assert(bdev && bc);
+	blocks_per_buf = bdev->lg_bsize / bdev->bdif->ph_bsize;
+	capacity = blocks_per_buf ? bdev->bdif->ph_bmax / blocks_per_buf : 0;
+	if (bdev->bdif->bwritev && capacity > 1) {
+		r = ext4_bcache_prepare_writeback(bc, capacity);
+		if (r != EOK)
+			return r;
+	}
 	bdev->bc = bc;
 	bc->bdev = bdev;
 	return EOK;
@@ -182,31 +215,31 @@ int ext4_block_fini(struct ext4_blockdev *bdev)
 	return bdev->bdif->close(bdev);
 }
 
+static void ext4_block_finish_write(struct ext4_blockdev *bdev,
+				    struct ext4_buf *buf, int r)
+{
+	struct ext4_bcache *bc = bdev->bc;
+
+	if (r == EOK) {
+		ext4_bcache_remove_dirty_node(bc, buf);
+		ext4_bcache_clear_flag(buf, BC_DIRTY);
+	}
+	if (buf->end_write) {
+		bc->dont_shake = true;
+		buf->end_write(bc, buf, r, buf->end_write_arg);
+		bc->dont_shake = false;
+	}
+}
+
 int ext4_block_flush_buf(struct ext4_blockdev *bdev, struct ext4_buf *buf)
 {
 	int r;
-	struct ext4_bcache *bc = bdev->bc;
 
 	if (ext4_bcache_test_flag(buf, BC_DIRTY) &&
 	    ext4_bcache_test_flag(buf, BC_UPTODATE)) {
 		r = ext4_blocks_set_direct(bdev, buf->data, buf->lba, 1);
-		if (r) {
-			if (buf->end_write) {
-				bc->dont_shake = true;
-				buf->end_write(bc, buf, r, buf->end_write_arg);
-				bc->dont_shake = false;
-			}
-
-			return r;
-		}
-
-		ext4_bcache_remove_dirty_node(bc, buf);
-		ext4_bcache_clear_flag(buf, BC_DIRTY);
-		if (buf->end_write) {
-			bc->dont_shake = true;
-			buf->end_write(bc, buf, r, buf->end_write_arg);
-			bc->dont_shake = false;
-		}
+		ext4_block_finish_write(bdev, buf, r);
+		return r;
 	}
 	return EOK;
 }
@@ -618,17 +651,43 @@ int ext4_block_readbytes(struct ext4_blockdev *bdev, uint64_t off, void *buf,
 	return r;
 }
 
-int ext4_block_cache_flush(struct ext4_blockdev *bdev)
+int ext4_block_cache_drain(struct ext4_blockdev *bdev)
 {
-	while (!SLIST_EMPTY(&bdev->bc->dirty_list)) {
+	while (!RB_EMPTY(&bdev->bc->dirty_root)) {
+		uint32_t blocks_per_buf = bdev->lg_bsize / bdev->bdif->ph_bsize;
+		uint32_t count;
+		uint32_t index;
+		uint64_t pba;
 		int r;
-		struct ext4_buf *buf = SLIST_FIRST(&bdev->bc->dirty_list);
+		struct ext4_buf *buf = ext4_bcache_first_dirty(bdev->bc);
 		ext4_assert(buf);
-		r = ext4_block_flush_buf(bdev, buf);
+		if (!bdev->bdif->bwritev || bdev->bc->write_capacity < 2) {
+			r = ext4_block_flush_buf(bdev, buf);
+			if (r != EOK)
+				return r;
+			continue;
+		}
+		count = ext4_bcache_dirty_run(bdev->bc, blocks_per_buf);
+		ext4_assert(count);
+		pba = (bdev->bc->write_bufs[0]->lba * bdev->lg_bsize +
+		       bdev->part_offset) / bdev->bdif->ph_bsize;
+		r = ext4_bdif_bwritev(
+			bdev, bdev->bc->write_data, bdev->bc->write_counts,
+			pba, count);
+		for (index = 0; index < count; ++index)
+			ext4_block_finish_write(bdev, bdev->bc->write_bufs[index], r);
 		if (r != EOK)
 			return r;
-
 	}
+	return EOK;
+}
+
+int ext4_block_cache_flush(struct ext4_blockdev *bdev)
+{
+	int r = ext4_block_cache_drain(bdev);
+
+	if (r != EOK)
+		return r;
 	return ext4_block_flush(bdev);
 }
 
@@ -643,8 +702,9 @@ int ext4_block_cache_write_back(struct ext4_blockdev *bdev, uint8_t on_off)
 	if (bdev->cache_write_back)
 		return EOK;
 
-	/*Flush data in all delayed cache blocks*/
-	return ext4_block_cache_flush(bdev);
+	/* Drain delayed blocks. Durability belongs to an explicit cache flush or
+	 * to the journal commit barriers which order this drain. */
+	return ext4_block_cache_drain(bdev);
 }
 
 /**

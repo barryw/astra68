@@ -37,9 +37,12 @@ typedef struct AstraVfsOpenFile {
     uintptr_t node;
     uint32_t session;       /* the owning session id, 0 when the slot is free */
     uint32_t flags;
+    volatile uint32_t sequence;
     uint16_t generation;
     uint16_t kind;
+    uint16_t waiters;
     uint8_t state;
+    uint8_t active;
 } AstraVfsOpenFile;
 
 enum {
@@ -55,11 +58,17 @@ typedef struct AstraVfsSessionSlot {
     uint32_t open_files;
     uint16_t generation;
     uint16_t version;       /* the version agreed at HELLO */
-    char rename_from[ASTRA_VFS_PATH_MAX];
-    uint8_t rename_pending;
-    uint8_t busy;
+    char staged_path[ASTRA_VFS_PATH_MAX];
+    uint16_t inflight;
+    uint8_t staged_operation;
     uint8_t closing;
 } AstraVfsSessionSlot;
+
+enum {
+    ASTRA_VFS_STAGE_NONE = 0,
+    ASTRA_VFS_STAGE_RENAME,
+    ASTRA_VFS_STAGE_SYMLINK
+};
 
 typedef struct AstraVfsServiceStats {
     uint32_t requests;
@@ -80,10 +89,29 @@ typedef struct AstraVfsServiceStats {
 
 typedef int (*AstraVfsStateAcquire)(void *context);
 typedef void (*AstraVfsStateRelease)(void *context);
+/* Called with the state lock held and returns with it held. */
+typedef int (*AstraVfsStateWait)(void *context,
+                                volatile uint32_t *sequence,
+                                uint32_t expected);
+typedef void (*AstraVfsStateWake)(void *context,
+                                 volatile uint32_t *sequence);
+
+#ifdef ASTRA_VFS_TEST_HOOKS
+enum {
+    ASTRA_VFS_TEST_BEFORE_STATE_ACQUIRE = 0,
+    ASTRA_VFS_TEST_AFTER_STATE_RELEASE,
+    ASTRA_VFS_TEST_AFTER_SESSION_RESERVE,
+    ASTRA_VFS_TEST_DURING_CLOSE,
+    ASTRA_VFS_TEST_BEFORE_REPLY,
+    ASTRA_VFS_TEST_TRANSITION_COUNT
+};
+typedef void (*AstraVfsTestTransition)(void *context, uint32_t transition);
+#endif
 
 typedef struct AstraVfsService {
     AstraVfsBackend backend;
-    AstraVfsSessionSlot sessions[ASTRA_VFS_SESSION_MAX];
+    AstraVfsSessionSlot *sessions;
+    uint32_t session_capacity;
     AstraVfsOpenFile *files;
     uint32_t file_capacity;
     uint32_t file_high_water;
@@ -93,17 +121,33 @@ typedef struct AstraVfsService {
     uint32_t open_files;
     AstraVfsStateAcquire state_acquire;
     AstraVfsStateRelease state_release;
+    AstraVfsStateWait state_wait;
+    AstraVfsStateWake state_wake;
     void *state_lock_context;
+#ifdef ASTRA_VFS_TEST_HOOKS
+    AstraVfsTestTransition test_transition;
+    void *test_transition_context;
+#endif
 } AstraVfsService;
 
 /* Returns 0 when the backend or caller-owned file storage is invalid. */
 int astra_vfs_service_init(AstraVfsService *service,
                            const AstraVfsBackendOps *ops, void *context,
+                           AstraVfsSessionSlot *sessions,
+                           uint32_t session_capacity,
                            AstraVfsOpenFile *files, uint32_t file_capacity);
 int astra_vfs_service_set_state_lock(AstraVfsService *service,
                                      AstraVfsStateAcquire acquire,
                                      AstraVfsStateRelease release,
                                      void *context);
+int astra_vfs_service_set_state_wait(AstraVfsService *service,
+                                     AstraVfsStateWait wait,
+                                     AstraVfsStateWake wake);
+#ifdef ASTRA_VFS_TEST_HOOKS
+void astra_vfs_service_set_test_transition(AstraVfsService *service,
+                                           AstraVfsTestTransition transition,
+                                           void *context);
+#endif
 
 /*
  * One request in, one reply out. Always writes a complete reply, including for
@@ -151,12 +195,20 @@ uint32_t astra_vfs_service_write_from(AstraVfsService *service,
                                       uint32_t session, AstraVfsFile file,
                                       uint64_t offset, const void *buffer,
                                       uint32_t length, uint32_t *moved);
+uint32_t astra_vfs_service_write_position_from(
+    AstraVfsService *service, uint32_t session, AstraVfsFile file,
+    uint64_t offset, const void *buffer, uint32_t length, uint32_t *moved,
+    uint64_t *position);
 
 /* Packs directory records into an arbitrary bounded buffer. */
 uint32_t astra_vfs_service_readdir_into(
     AstraVfsService *service, const char *path, uint64_t cursor,
     uint32_t entry_limit, uint8_t *buffer, uint32_t capacity,
     uint32_t *used, uint64_t *next);
+uint32_t astra_vfs_service_readdir_file_into(
+    AstraVfsService *service, uint32_t session, AstraVfsFile directory,
+    const char *path, uint64_t cursor, uint32_t entry_limit, uint8_t *buffer,
+    uint32_t capacity, uint32_t *used, uint64_t *next);
 
 /*
  * Releases everything a session held. Called when a client dies; the port

@@ -20,5 +20,7 @@ uint64_t astra_divide_u64(uint64_t value, uint32_t divisor,
                           uint32_t *remainder);
 uint64_t astra_divide_u64_u64(uint64_t value, uint64_t divisor,
                               uint64_t *remainder);
+uint64_t astra_multiply_divide_u64(uint64_t value, uint64_t multiplier,
+                                   uint64_t divisor);
 
 #endif

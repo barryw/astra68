@@ -67,6 +67,28 @@ memory_write(void *context, uint64_t lba, uint32_t sector_count,
 }
 
 static AstraBlockStatus
+memory_writev(void *context, uint64_t lba, const AstraBlockVector *vector,
+              uint64_t deadline)
+{
+    AstraMemoryBlock *memory = context;
+    uint8_t *out = memory->storage + (size_t)lba * memory->sector_size;
+    uint32_t index;
+
+    (void)deadline;
+    if (maybe_fail(memory) != ASTRA_BLOCK_OK) {
+        return ASTRA_BLOCK_IO_ERROR;
+    }
+    for (index = 0u; index < vector->count; ++index) {
+        size_t bytes = (size_t)vector->sector_counts[index] *
+                       memory->sector_size;
+
+        memcpy(out, vector->buffers[index], bytes);
+        out += bytes;
+    }
+    return ASTRA_BLOCK_OK;
+}
+
+static AstraBlockStatus
 memory_flush(void *context, uint64_t deadline)
 {
     AstraMemoryBlock *memory = context;
@@ -76,10 +98,11 @@ memory_flush(void *context, uint64_t deadline)
 }
 
 const AstraBlockBackend astra_memory_block_backend = {
-    memory_query,
-    memory_read,
-    memory_write,
-    memory_flush
+    .query = memory_query,
+    .read = memory_read,
+    .write = memory_write,
+    .writev = memory_writev,
+    .flush = memory_flush,
 };
 
 void

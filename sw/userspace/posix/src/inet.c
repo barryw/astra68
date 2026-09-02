@@ -117,6 +117,12 @@ static char *put_decimal(char *at, uint32_t value)
     return at;
 }
 
+#if defined(__GNUC__) && !defined(__clang__)
+/* The analyzer cannot relate the symbolic memcpy length to the bytes emitted
+ * by the IPv6 compression loop. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wanalyzer-use-of-uninitialized-value"
+#endif
 const char *inet_ntop(int family, const void *address, char *text,
                       socklen_t size)
 {
@@ -184,6 +190,9 @@ const char *inet_ntop(int family, const void *address, char *text,
     (void)memcpy(text, output, (size_t)(at - output) + 1u);
     return text;
 }
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 int inet_aton(const char *text, struct in_addr *address)
 {

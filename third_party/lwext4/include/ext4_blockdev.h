@@ -66,6 +66,16 @@ struct ext4_blockdev_iface {
 	int (*bwrite)(struct ext4_blockdev *bdev, const void *buf,
 		      uint64_t blk_id, uint32_t blk_cnt);
 
+	/**@brief   Write a contiguous range from scatter/gather buffers.
+	 * @param   bdev block device
+	 * @param   bufs input buffers
+	 * @param   blk_id first physical block id
+	 * @param   blk_cnts physical block count for each buffer
+	 * @param   buf_cnt buffer count. Not mandatory.*/
+	int (*bwritev)(struct ext4_blockdev *bdev,
+		       const void *const *bufs, const uint32_t *blk_cnts,
+		       uint64_t blk_id, uint32_t buf_cnt);
+
 	/**@brief   Make every preceding write durable. Not mandatory. */
 	int (*flush)(struct ext4_blockdev *bdev);
 
@@ -89,6 +99,9 @@ struct ext4_blockdev_iface {
 	/**@brief   Block count: physical*/
 	uint64_t ph_bcnt;
 
+	/**@brief   Maximum physical blocks per transfer. Zero means one.*/
+	uint32_t ph_bmax;
+
 	/**@brief   Block size buffer: physical*/
 	uint8_t *ph_bbuf;
 
@@ -100,6 +113,9 @@ struct ext4_blockdev_iface {
 
 	/**@brief   Physical write counter*/
 	uint32_t bwrite_ctr;
+
+	/**@brief   Successful writes not covered by a completed flush. */
+	bool flush_pending;
 
 	/**@brief   User data pointer*/
 	void* p_user;
@@ -175,6 +191,9 @@ int ext4_block_fini(struct ext4_blockdev *bdev);
  * @param   bdev block device descriptor
  * @return  standard error code*/
 int ext4_block_flush(struct ext4_blockdev *bdev);
+
+/**@brief Drain dirty cache buffers without issuing a durability barrier. */
+int ext4_block_cache_drain(struct ext4_blockdev *bdev);
 
 /**@brief   Flush data in given buffer to disk.
  * @param   bdev block device descriptor
