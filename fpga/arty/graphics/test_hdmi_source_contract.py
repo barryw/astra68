@@ -34,7 +34,15 @@ require(
     "CONFIG.PCW_GPIO_EMIO_GPIO_ENABLE {1}",
     "make_bd_intf_pins_external -name IIC_0 [get_bd_intf_pins ps7/IIC_0]",
     "make_bd_intf_pins_external -name GPIO_0 [get_bd_intf_pins ps7/GPIO_0]",
+    "fpga arty common astra_front_panel.sv",
+    "fpga arty common astra_async_fifo.sv",
 )
+for path in (
+    "fpga/arty/scripts/build_graphics.tcl",
+    "fpga/arty/graphics/scripts/synth_copper_pixel_events_ooc.tcl",
+    "fpga/arty/graphics/scripts/synth_palette_ooc.tcl",
+):
+    forbid(path, "fpga soc")
 require(
     "fpga/arty/rtl/astra_arty_graphics_top.sv",
     "hdmi_tx_scl",
@@ -58,13 +66,18 @@ require(
 require(
     "third_party/hdl-util-hdmi/hdmi.sv",
     "input logic hdmi_output_enable",
+    "video_timing",
     "hdmi_mode_control",
     "!hdmi_output_active",
 )
 require(
+    "fpga/arty/scripts/build_graphics.tcl",
+    "[file join $hdmi_dir video_timing.sv]",
+)
+require(
     "fpga/arty/linux/rootfs-overlay/etc/init.d/astra-firstboot",
-    "/data/astra/bin/astra-hdmi-link",
-    "/data/astra/bin/astra-time-sync",
+    "$GRAPHICS_ROOT/bin/astra-hdmi-link",
+    "$GRAPHICS_ROOT/bin/astra-time-sync",
     "ASTRA_NTP_SERVER:-pool.ntp.org",
     "ifup eth0",
 )

@@ -442,7 +442,8 @@ astra_main(const AstraStartupInfo *startup)
      * redirected `events` should do.
      */
     (void)astra_stream_size(out, &columns, &rows);
-    offset = rows > 1u ? tail_from(&file, rows - 1u) : 0u;
+    offset = previous_boot ? 0u :
+        (rows > 1u ? tail_from(&file, rows - 1u) : 0u);
     offset = print_from(&file, offset);
     if (offset == 0u) {
         say("(nothing at that level)");

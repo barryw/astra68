@@ -143,23 +143,24 @@ astra_event_catalog_render(const AstraEventCatalog *catalog, uint32_t message,
     if (out == NULL || capacity == 0u) {
         return 0u;
     }
-    record = astra_event_catalog_lookup(catalog, message);
-    if (record == NULL) {
-        /* No text, so the id itself. Honest, and still enough to grep for. */
-        at = append(out, capacity, at, "message 0x");
-        at = append_unsigned(out, capacity, at, message, 16u);
-        out[at] = '\0';
-        return at;
-    }
     /*
      * An inline string is the payload, whole. It is the one argument type that
      * costs what text logging costs, and it exists for the case where there is
-     * no object to name -- a label off a disk that would not mount.
+     * no object to name -- a label off a disk that would not mount. It is
+     * self-describing, so it must not depend on a catalog descriptor.
      */
     if ((flags & ASTRA_EVENT_FLAG_INLINE_STRING) != 0u) {
         for (index = 0u; index < payload_length && at + 1u < capacity; ++index) {
             out[at++] = (char)payload[index];
         }
+        out[at] = '\0';
+        return at;
+    }
+    record = astra_event_catalog_lookup(catalog, message);
+    if (record == NULL) {
+        /* No text, so the id itself. Honest, and still enough to grep for. */
+        at = append(out, capacity, at, "message 0x");
+        at = append_unsigned(out, capacity, at, message, 16u);
         out[at] = '\0';
         return at;
     }

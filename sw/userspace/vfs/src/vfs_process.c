@@ -213,6 +213,8 @@ uint32_t astra_process_vfs_import(const AstraStartupInfo *startup,
 {
     const ProcessVfsExecHeader *header = state;
     const ProcessVfsExecClient *input;
+    const char *failure_operation = NULL;
+    uint32_t failure = ASTRA_VFS_ERR_INVALID;
     uint32_t status;
 
     if (state == NULL || size < sizeof(*header) ||
@@ -251,31 +253,45 @@ uint32_t astra_process_vfs_import(const AstraStartupInfo *startup,
         client->context = client;
         client->area_payload = astra_vfs_port_call_area;
         client->call_acquire = astra_vfs_port_call_acquire;
-        if (astra_rt_semaphore_create(
-                1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
-                &client->port_connect_lock) != ASTRA_SYSCALL_OK)
+        status = astra_rt_semaphore_create(
+            1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
+            &client->port_connect_lock);
+        if (status != ASTRA_SYSCALL_OK) {
+            failure_operation = "VFS exec lock restore";
+            failure = status == ASTRA_SYSCALL_RESOURCE_LIMIT ||
+                      status == ASTRA_SYSCALL_OUT_OF_MEMORY ?
+                ASTRA_VFS_ERR_LIMIT : ASTRA_VFS_ERR_IO;
             goto invalid;
+        }
         client->session = input[index].session;
         client->activity = input[index].activity;
         client->port_service = input[index].port_service;
         client->version = input[index].version;
         client->port_area_capable = input[index].port_area_capable;
         clients[slot].connected = 1u;
-        if (astra_vfs_port_exec_lane_import(client, &input[index].lane) !=
-            ASTRA_VFS_OK)
+        status = astra_vfs_port_exec_lane_import(client, &input[index].lane);
+        if (status != ASTRA_VFS_OK) {
+            failure_operation = "VFS exec lane restore";
+            failure = status;
             goto invalid;
+        }
         if (input[index].port_direct_area != 0u &&
-            astra_vfs_host_direct_resume(
+            (status = astra_vfs_host_direct_resume(
                 client, input[index].port_direct_area,
                 input[index].port_direct_device,
-                input[index].port_direct_session) != ASTRA_VFS_OK)
+                input[index].port_direct_session)) != ASTRA_VFS_OK) {
+            failure_operation = "VFS exec direct restore";
+            failure = status;
             goto invalid;
+        }
     }
     return ASTRA_VFS_OK;
 
 invalid:
+    if (failure_operation != NULL)
+        (void)astra_log_failure(failure_operation, failure);
     astra_process_vfs_close();
-    return ASTRA_VFS_ERR_INVALID;
+    return failure;
 }
 
 /*
@@ -865,6 +881,7 @@ static uint32_t seed_process_vfs(const AstraStartupInfo *startup,
 
             if (clients[index].connected == 0u)
                 continue;
+            astra_vfs_port_after_fork_child(&clients[index].client);
             if (clients[index].client.port_direct_address != NULL) {
                 status = astra_vfs_host_direct_after_fork(
                     &clients[index].client);

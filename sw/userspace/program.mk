@@ -12,7 +12,7 @@ $(ASTRA_PROGRAM_PRODUCTS): $(ASTRA_TOOLCHAIN_STAMP)
 
 all:
 	$(MAKE) libraries
-	$(MAKE) program
+	$(MAKE) ASTRA_PROGRAM_OWNERS_READY=1 program
 
 libraries:
 	@for directory in $(ASTRA_PROGRAM_OWNER_DIRS); do \
@@ -20,5 +20,18 @@ libraries:
 	done
 
 program: $(ASTRA_PROGRAM_TARGETS)
+
+ASTRA_PROGRAM_DIRECT_GOALS := $(filter $(ASTRA_PROGRAM_TARGETS),$(MAKECMDGOALS))
+ifeq ($(ASTRA_PROGRAM_OWNERS_READY),)
+ifneq ($(ASTRA_PROGRAM_DIRECT_GOALS),)
+$(ASTRA_PROGRAM_DIRECT_GOALS): | __astra_program_direct
+
+__astra_program_direct:
+	$(MAKE) libraries
+	$(MAKE) ASTRA_PROGRAM_OWNERS_READY=1 $(ASTRA_PROGRAM_DIRECT_GOALS)
+
+.PHONY: __astra_program_direct
+endif
+endif
 
 .PHONY: all libraries program

@@ -299,7 +299,7 @@ static int execute_render_batch(const struct astra_graphics_device *device,
         fprintf(stderr, "render batch graphics mapping failed\n");
         return -1;
     }
-    (void)memcpy((void *)mapping.data, (const void *)batch, bytes);
+    astra_graphics_memory_copy_to(mapping.data, (const void *)batch, bytes);
     astra_graphics_memory_barrier();
     profile_copied = astra_monotonic_nanoseconds();
 
@@ -847,7 +847,8 @@ int main(int argc, char **argv)
     if (pointer_initialize(&device) != 0)
         goto done;
 
-    (void)memset((void *)device.framebuffer, 0, ASTRA_FRAMEBUFFER_BYTES);
+    astra_graphics_memory_fill(device.framebuffer, 0,
+                               ASTRA_FRAMEBUFFER_BYTES);
     copy_cells(current, plane);
     (void)copy_cursor(&cursor, plane);
     for (cell = 0; cell < TEXT_CELLS; ++cell)
@@ -904,8 +905,8 @@ int main(int argc, char **argv)
                            ASTRA_DISPLAY_FRAME_PRESENT_RGB565 &&
                        request.frame_pitch == ASTRA_FRAMEBUFFER_PITCH &&
                        request.frame_bytes == ASTRA_FRAMEBUFFER_BYTES) {
-                (void)memcpy(
-                    (void *)device.framebuffer,
+                astra_graphics_memory_copy_to(
+                    device.framebuffer,
                     (const uint8_t *)(const void *)mailbox +
                         ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
                     ASTRA_FRAMEBUFFER_BYTES);

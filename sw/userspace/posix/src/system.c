@@ -74,7 +74,8 @@ duplicate_stream(int fd, uint32_t *handles, uint32_t *count, uint8_t *index)
     if (source == 0u)
         return 1;
     if (astra_rt_handle_duplicate(source,
-                                  ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_TRANSFER,
+                                  ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_WAIT |
+                                      ASTRA_RIGHT_TRANSFER,
                                   &duplicate) != ASTRA_SYSCALL_OK) {
         errno = EACCES;
         return 0;

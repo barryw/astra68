@@ -178,6 +178,7 @@ with tempfile.TemporaryDirectory() as directory:
     assert astra_image._services(directory, ("storage",)) == [
         ("storage", image)]
     assert checks == [["make", "-q", "-C", service,
+                       "ASTRA_PROGRAM_OWNERS_READY=1",
                        "build/m68k/storage"]]
 
     astra_image.subprocess.run = lambda *_args, **_kwargs: Result(

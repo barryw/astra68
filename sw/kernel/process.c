@@ -277,6 +277,8 @@ static uint32_t host_channel_open(
     AstraHostChannelOpen *channel,
     uint32_t device_generation, const KernelPlatformHostState *state,
     uint32_t user_address);
+static KernelProcessStatus clone_startup_identity(
+    KernelProcess *process, const KernelThread *thread);
 
 /* Whole pages, and the floor of every slot must stay unmapped. */
 _Static_assert(KERNEL_THREAD_STACK_SIZE % KERNEL_PAGE_SIZE == 0u &&
@@ -3192,6 +3194,9 @@ static KernelProcessStatus clone_current_process(
     result = prepare_cloned_thread(child, source_thread, &prepared);
     if (result != KERNEL_PROCESS_OK)
         goto failed;
+    result = clone_startup_identity(child, prepared.thread);
+    if (result != KERNEL_PROCESS_OK)
+        goto failed;
     result = retain_process_handle(child);
     if (result != KERNEL_PROCESS_OK)
         goto failed;
@@ -3742,6 +3747,53 @@ static KernelProcessStatus publish_page(KernelAddressSpace *space,
     return publish_page_tagged(
         space, owner, virtual_address, source, source_size, rights,
         KERNEL_ALLOCATION_SITE_PROCESS_CODE_PAGE);
+}
+
+static KernelProcessStatus clone_startup_identity(
+    KernelProcess *process, const KernelThread *thread)
+{
+    AstraStartupInfo info;
+    const uint32_t first_handle =
+        ASTRA_STARTUP_INFO_SIZE +
+        (uint32_t)offsetof(AstraStartupCapability, handle);
+    const uint32_t second_handle =
+        first_handle + ASTRA_STARTUP_CAPABILITY_SIZE;
+    KernelVmStatus vm_status;
+
+    if (process == NULL || thread == NULL)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    vm_status = kernel_vm_read(&process->address_space,
+                               KERNEL_PROCESS_STARTUP_BASE, startup_page,
+                               sizeof(startup_page));
+    if (vm_status == KERNEL_VM_NOT_MAPPED)
+        return KERNEL_PROCESS_OK;
+    if (vm_status != KERNEL_VM_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    kernel_bytes_copy(&info, startup_page, sizeof(info));
+    if (info.magic != ASTRA_STARTUP_MAGIC ||
+        info.header_size != ASTRA_STARTUP_INFO_SIZE ||
+        info.capability_count < 2u ||
+        info.capability_count > ASTRA_STARTUP_CAPABILITY_MAX ||
+        info.capabilities_address !=
+            KERNEL_PROCESS_STARTUP_BASE + ASTRA_STARTUP_INFO_SIZE ||
+        info.total_size < ASTRA_STARTUP_INFO_SIZE +
+                              (2u * ASTRA_STARTUP_CAPABILITY_SIZE) ||
+        info.total_size > ASTRA_STARTUP_BLOCK_SIZE)
+        return KERNEL_PROCESS_CORRUPT;
+
+    info.process_handle = process->self_handle;
+    info.thread_handle = thread->self_handle;
+    kernel_bytes_copy(startup_page, &info, sizeof(info));
+    kernel_bytes_copy(startup_page + first_handle, &process->self_handle,
+                      sizeof(process->self_handle));
+    kernel_bytes_copy(startup_page + second_handle, &thread->self_handle,
+                      sizeof(thread->self_handle));
+    if (kernel_vm_unmap_page(&process->address_space,
+                             KERNEL_PROCESS_STARTUP_BASE) != KERNEL_VM_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    return publish_page(&process->address_space, process->owner,
+                        KERNEL_PROCESS_STARTUP_BASE, startup_page,
+                        sizeof(startup_page), KERNEL_VM_READ);
 }
 
 static bool tls_base_find(const KernelProcess *process, uint32_t span,

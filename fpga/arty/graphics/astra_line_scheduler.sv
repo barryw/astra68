@@ -190,7 +190,7 @@ module astra_line_scheduler #(
         end
     endtask
 
-    always @(posedge build_clk) begin
+    always @(posedge build_clk or posedge build_reset) begin
         if (build_reset) begin
             retired_toggle_meta <= 1'b0;
             retired_toggle_sync <= 1'b0;
@@ -364,12 +364,8 @@ module astra_line_scheduler #(
     wire [9:0] retired_target = retired_plus_four >= OUTPUT_HEIGHT ?
         retired_plus_four - OUTPUT_HEIGHT : retired_plus_four[9:0];
 
-    always @(posedge pixel_clk) begin
+    always @(posedge pixel_clk or posedge pixel_reset) begin
         if (pixel_reset) begin
-            retired_target_pixel <= 10'd0;
-            retired_toggle_pixel <= 1'b0;
-            held_slot_valid_pixel <= 1'b0;
-            held_slot_pixel <= 2'd0;
             slot_toggle_meta <= 4'd0;
             slot_toggle_sync <= 4'd0;
             slot_success_meta <= 4'd0;
@@ -384,17 +380,6 @@ module astra_line_scheduler #(
             slot_tag3_sync <= 10'd0;
             scene_epoch_meta <= 1'b0;
             scene_epoch_sync <= 1'b0;
-            slot_toggle_seen <= 4'd0;
-            slot_capture_pending <= 4'd0;
-            scene_epoch_seen <= 1'b0;
-            pixel_read_slot <= 2'd0;
-            pixel_line_available <= 1'b0;
-            pixel_underruns <= 32'd0;
-            pixel_slot_valid <= 4'd0;
-            pixel_slot_tag0 <= 10'd0;
-            pixel_slot_tag1 <= 10'd0;
-            pixel_slot_tag2 <= 10'd0;
-            pixel_slot_tag3 <= 10'd0;
         end else begin
             slot_toggle_meta <= slot_toggle;
             slot_toggle_sync <= slot_toggle_meta;
@@ -410,7 +395,27 @@ module astra_line_scheduler #(
             slot_tag3_sync <= slot_tag3_meta;
             scene_epoch_meta <= scene_epoch_toggle;
             scene_epoch_sync <= scene_epoch_meta;
+        end
+    end
 
+    always @(posedge pixel_clk) begin
+        if (pixel_reset) begin
+            retired_target_pixel <= 10'd0;
+            retired_toggle_pixel <= 1'b0;
+            held_slot_valid_pixel <= 1'b0;
+            held_slot_pixel <= 2'd0;
+            slot_toggle_seen <= 4'd0;
+            slot_capture_pending <= 4'd0;
+            scene_epoch_seen <= 1'b0;
+            pixel_read_slot <= 2'd0;
+            pixel_line_available <= 1'b0;
+            pixel_underruns <= 32'd0;
+            pixel_slot_valid <= 4'd0;
+            pixel_slot_tag0 <= 10'd0;
+            pixel_slot_tag1 <= 10'd0;
+            pixel_slot_tag2 <= 10'd0;
+            pixel_slot_tag3 <= 10'd0;
+        end else begin
             if (scene_epoch_sync != scene_epoch_seen) begin
                 scene_epoch_seen <= scene_epoch_sync;
                 pixel_line_available <= 1'b0;

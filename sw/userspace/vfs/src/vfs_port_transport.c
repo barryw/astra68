@@ -38,6 +38,22 @@ void astra_vfs_test_port_lane_lookup(AstraVfsClient *client);
 static _Thread_local AstraVfsPortCallState port_tls;
 #endif
 
+void
+astra_vfs_port_after_fork_child(AstraVfsClient *client)
+{
+#if defined(ASTRA_VFS_EMBEDDED_THREAD_STATE)
+    if (client != NULL && client->port_thread_states != NULL) {
+        memset(client->port_thread_states, 0,
+               client->port_thread_capacity *
+                   sizeof(*client->port_thread_states));
+        client->port_thread_lock = 0u;
+    }
+#else
+    (void)client;
+    memset(&port_tls, 0, sizeof(port_tls));
+#endif
+}
+
 int
 astra_vfs_port_set_thread_storage(AstraVfsClient *client,
                                   AstraVfsPortThreadState *states,

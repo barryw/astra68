@@ -17,7 +17,7 @@
 
 void astra_graphics_memory_barrier(void)
 {
-#if defined(__arm__)
+#if defined(__arm__) || defined(__aarch64__)
     __asm__ volatile("dsb sy" ::: "memory");
 #else
     __sync_synchronize();
@@ -193,6 +193,48 @@ void astra_graphics_memory_map_close(
     if (mapping->mapping != MAP_FAILED)
         (void)munmap(mapping->mapping, mapping->mapping_bytes);
     astra_graphics_memory_map_init(mapping);
+}
+
+void astra_graphics_memory_fill(volatile void *destination, uint8_t value,
+                                size_t bytes)
+{
+    volatile uint8_t *out = destination;
+    uint64_t wide_value = UINT64_C(0x0101010101010101) * value;
+
+    while (bytes != 0u && ((uintptr_t)out & 7u) != 0u) {
+        *out++ = value;
+        --bytes;
+    }
+    while (bytes >= sizeof(wide_value)) {
+        *(volatile uint64_t *)(uintptr_t)out = wide_value;
+        out += sizeof(wide_value);
+        bytes -= sizeof(wide_value);
+    }
+    while (bytes-- != 0u)
+        *out++ = value;
+}
+
+void astra_graphics_memory_copy_to(volatile void *destination,
+                                   const void *source, size_t bytes)
+{
+    volatile uint8_t *out = destination;
+    const uint8_t *in = source;
+
+    while (bytes != 0u && ((uintptr_t)out & 7u) != 0u) {
+        *out++ = *in++;
+        --bytes;
+    }
+    while (bytes >= sizeof(uint64_t)) {
+        uint64_t value;
+
+        __builtin_memcpy(&value, in, sizeof(value));
+        *(volatile uint64_t *)(uintptr_t)out = value;
+        out += sizeof(value);
+        in += sizeof(value);
+        bytes -= sizeof(value);
+    }
+    while (bytes-- != 0u)
+        *out++ = *in++;
 }
 
 int astra_graphics_scene_commit(

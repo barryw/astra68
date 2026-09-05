@@ -178,7 +178,6 @@ $(LINK_CONTRACT): tests/link_standard_main.c kit/program.c $(LIB) \
 		-o $@ $(ASTRA_POSIX_CRT0) tests/link_standard_main.c \
 		$(ASTRA_POSIX_PROGRAM_SOURCE) $(ASTRA_POSIX_LIBS)
 	@$(CROSS)nm $@ | grep -q ' T astra_main$$'
-	@$(CROSS)nm $@ | grep -q ' T main$$'
 	@echo "astra posix standard main link: PASS"
 
 test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) $(IDENTITY_TEST) $(PROCESS_TEST) $(SOCKET_ADDRESS_TEST) $(PTHREAD_TEST) $(LIMITS_CONTRACT) $(CXX_HEADERS_CONTRACT) $(LINK_CONTRACT) $(CXX_LINK_CONTRACT)

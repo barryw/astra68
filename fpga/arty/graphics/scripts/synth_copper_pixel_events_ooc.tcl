@@ -7,7 +7,7 @@ if {$output_dir eq ""} {
 }
 file mkdir $output_dir
 
-read_verilog -sv [file join $repo_root fpga soc astra_async_fifo.sv]
+read_verilog -sv [file join $repo_root fpga arty common astra_async_fifo.sv]
 read_verilog -sv [file join $graphics_dir astra_copper_pixel_events.sv]
 synth_design -top astra_copper_pixel_events -part xc7z020clg400-1 \
     -mode out_of_context -flatten_hierarchy rebuilt

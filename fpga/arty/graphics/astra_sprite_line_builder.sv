@@ -253,10 +253,10 @@ module astra_sprite_line_builder #(
     // latency. Each 64-bit row memory is replicated four times for four
     // arbitrary source-byte lookups per build clock. The slot is the upper
     // two bits of the 64-word memory address.
-    (* ram_style = "distributed" *) reg [63:0] row_rep0 [0:63];
-    (* ram_style = "distributed" *) reg [63:0] row_rep1 [0:63];
-    (* ram_style = "distributed" *) reg [63:0] row_rep2 [0:63];
-    (* ram_style = "distributed" *) reg [63:0] row_rep3 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [63:0] row_rep0 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [63:0] row_rep1 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [63:0] row_rep2 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [63:0] row_rep3 [0:63];
 
     reg [3:0] buffer_ready_q;
     reg [3:0] buffer_fetch_busy_q;
@@ -326,10 +326,10 @@ module astra_sprite_line_builder #(
     // Every legal 128-byte source row needs at most two bursts because source
     // bases and pitches are 64-byte aligned. Four row slots therefore need at
     // most eight queued bursts. One fixed AXI ID preserves response order.
-    (* ram_style = "distributed" *) reg [1:0] request_slot [0:7];
-    (* ram_style = "distributed" *) reg [4:0] request_start_word [0:7];
-    (* ram_style = "distributed" *) reg [4:0] request_beats [0:7];
-    (* ram_style = "distributed" *) reg request_last_for_sprite [0:7];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [1:0] request_slot [0:7];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [4:0] request_start_word [0:7];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [4:0] request_beats [0:7];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg request_last_for_sprite [0:7];
     reg [2:0] request_write_ptr_q;
     reg [2:0] request_read_ptr_q;
     reg [3:0] request_count_q;
@@ -2052,8 +2052,8 @@ module astra_sprite_collision_bank (
     input  wire [2:0]  published_read_row,
     output reg  [63:0] published_read_data
 );
-    (* ram_style = "block" *) reg [63:0] current [0:7];
-    (* ram_style = "block" *) reg [63:0] published [0:7];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [63:0] current [0:7];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [63:0] published [0:7];
     reg command_valid_q;
     reg command_rotate_q;
     (* keep = "true" *) reg [2:0] command_row_q;

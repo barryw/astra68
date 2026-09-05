@@ -6,9 +6,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef ASTRA_GRAPHICS_ARENA_BASE_VALUE
+#define ASTRA_GRAPHICS_ARENA_BASE_VALUE 0x18000000u
+#endif
+#ifndef ASTRA_GRAPHICS_ARENA_LIMIT_VALUE
+#define ASTRA_GRAPHICS_ARENA_LIMIT_VALUE 0x20000000u
+#endif
+#ifndef ASTRA_CONTROL_BASE_VALUE
+#define ASTRA_CONTROL_BASE_VALUE 0x43c00000u
+#endif
+
 enum {
-    ASTRA_GRAPHICS_ARENA_BASE = 0x18000000u,
-    ASTRA_GRAPHICS_ARENA_LIMIT = 0x20000000u,
+    ASTRA_GRAPHICS_ARENA_BASE = ASTRA_GRAPHICS_ARENA_BASE_VALUE,
+    ASTRA_GRAPHICS_ARENA_LIMIT = ASTRA_GRAPHICS_ARENA_LIMIT_VALUE,
     ASTRA_GRAPHICS_ARENA_BYTES =
         ASTRA_GRAPHICS_ARENA_LIMIT - ASTRA_GRAPHICS_ARENA_BASE,
     ASTRA_FRAMEBUFFER_BASE = ASTRA_GRAPHICS_ARENA_BASE,
@@ -18,10 +28,10 @@ enum {
     ASTRA_FRAMEBUFFER_PITCH = ASTRA_FRAMEBUFFER_WIDTH * 2u,
     ASTRA_FRAMEBUFFER_BYTES =
         ASTRA_FRAMEBUFFER_PITCH * ASTRA_FRAMEBUFFER_HEIGHT,
-    ASTRA_CONTROL_BASE = 0x43c00000u,
+    ASTRA_CONTROL_BASE = ASTRA_CONTROL_BASE_VALUE,
     ASTRA_CONTROL_BYTES = 0x00010000u,
     ASTRA_GRAPHICS_DEVICE_ID = 0x41535452u,
-    ASTRA_GRAPHICS_VERSION = 0x00010005u,
+    ASTRA_GRAPHICS_VERSION = 0x00010006u,
     ASTRA_CAP_BOOT_TEXT = 0x00000040u,
     ASTRA_CAP_SPRITE_ENGINE = 0x00000080u,
     ASTRA_CAP_RENDER_ENGINE = 0x00000100u,
@@ -44,6 +54,11 @@ enum astra_graphics_register {
     ASTRA_REG_ARENA_LIMIT = 0x020,
     ASTRA_REG_COMMIT_ERRORS = 0x024,
     ASTRA_REG_COMMIT_DEFERRALS = 0x028,
+    ASTRA_REG_FB_AXI_STATUS = 0x02c,
+    ASTRA_REG_FB_AXI_AR_ACCEPTED = 0x030,
+    ASTRA_REG_FB_AXI_R_ACCEPTED = 0x034,
+    ASTRA_REG_FB_AXI_LAST_AR_ADDRESS = 0x038,
+    ASTRA_REG_FB_AXI_RESPONSE_STALL_CYCLES = 0x03c,
     ASTRA_REG_FB_BASE = 0x040,
     ASTRA_REG_FB_PITCH = 0x044,
     ASTRA_REG_FB_SIZE = 0x048,
@@ -192,6 +207,10 @@ int astra_graphics_memory_map_open(
     uint32_t physical_address, size_t bytes);
 void astra_graphics_memory_map_close(
     struct astra_graphics_memory_map *mapping);
+void astra_graphics_memory_fill(volatile void *destination, uint8_t value,
+                                size_t bytes);
+void astra_graphics_memory_copy_to(volatile void *destination,
+                                   const void *source, size_t bytes);
 int astra_graphics_scene_commit(
     const struct astra_graphics_device *device, uint64_t timeout_ns,
     uint32_t *generation_out);

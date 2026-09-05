@@ -536,6 +536,20 @@ def test_identical_device_callbacks_are_not_duplicated():
 
 
 def test_program_build_order_is_shared():
+    shared = (USERSPACE / "program.mk").read_text()
+    if ("ASTRA_PROGRAM_DIRECT_GOALS" not in shared or
+            "$(MAKE) libraries" not in shared or
+            "ASTRA_PROGRAM_OWNERS_READY=1 $(ASTRA_PROGRAM_DIRECT_GOALS)" not in shared or
+            "ASTRA_PROGRAM_OWNERS_READY=1 program" not in shared):
+        raise AssertionError(
+            "sw/userspace/program.mk: direct program targets bypass library owners"
+        )
+    commands = (USERSPACE / "commands" / "Makefile").read_text()
+    if re.search(r"^build/m68k/%\s*:", commands, re.MULTILINE):
+        raise AssertionError(
+            "sw/userspace/commands/Makefile: implicit command rule is hidden "
+            "by direct-target owner prerequisites"
+        )
     makefiles = (
         USERSPACE / "commands" / "Makefile",
         USERSPACE / "supervisor" / "Makefile",

@@ -64,7 +64,9 @@ fork(void)
 
             (void)astra_log_failure("fork filesystem reinitialization",
                                     (uint32_t)errno);
-            (void)write(STDERR_FILENO, message, sizeof(message) - 1u);
+            ssize_t ignored = write(STDERR_FILENO, message,
+                                    sizeof(message) - 1u);
+            (void)ignored;
             _exit(127);
         }
         astra_posix_socket_after_fork_child();

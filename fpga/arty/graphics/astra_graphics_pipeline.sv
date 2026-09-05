@@ -41,6 +41,11 @@ module astra_graphics_pipeline #(
     output wire [31:0]                  commit_deferrals,
     output wire                         scene_active,
     output wire                         render_interrupt,
+    output wire [31:0]                  framebuffer_axi_debug_status,
+    output wire [31:0]                  framebuffer_axi_ar_accept_count,
+    output wire [31:0]                  framebuffer_axi_r_accept_count,
+    output wire [31:0]                  framebuffer_axi_last_ar_address,
+    output wire [31:0]                  framebuffer_axi_response_stall_cycles,
 
     input  wire [31:0]                  s_axi_awaddr,
     input  wire [2:0]                   s_axi_awprot,
@@ -181,14 +186,14 @@ module astra_graphics_pipeline #(
     (* ASYNC_REG = "TRUE" *) reg frame_toggle_sync;
     reg frame_toggle_seen;
 
-    always @(posedge pixel_clk) begin
+    always @(posedge pixel_clk or posedge pixel_reset) begin
         if (pixel_reset)
             frame_toggle_pixel <= 1'b0;
         else if (pixel_x == 11'd0 && pixel_y == OUTPUT_HEIGHT)
             frame_toggle_pixel <= ~frame_toggle_pixel;
     end
 
-    always @(posedge build_clk) begin
+    always @(posedge build_clk or posedge build_reset) begin
         if (build_reset) begin
             frame_toggle_meta <= 1'b0;
             frame_toggle_sync <= 1'b0;
@@ -241,7 +246,6 @@ module astra_graphics_pipeline #(
     wire framebuffer_wrap_y_baseline;
     wire framebuffer_key_enable_baseline;
     wire [31:0] framebuffer_key_baseline;
-
     wire tile0_enable_build;
     wire tile0_above_build;
     wire [7:0] tile0_opacity_build;
@@ -906,6 +910,12 @@ module astra_graphics_pipeline #(
         .framebuffer_wrap_y(framebuffer_wrap_y_baseline),
         .framebuffer_key_enable(framebuffer_key_enable_baseline),
         .framebuffer_key(framebuffer_key_baseline),
+        .framebuffer_axi_debug_status(framebuffer_axi_debug_status),
+        .framebuffer_axi_ar_accept_count(framebuffer_axi_ar_accept_count),
+        .framebuffer_axi_r_accept_count(framebuffer_axi_r_accept_count),
+        .framebuffer_axi_last_ar_address(framebuffer_axi_last_ar_address),
+        .framebuffer_axi_response_stall_cycles(
+            framebuffer_axi_response_stall_cycles),
         .tile0_enable(tile0_enable_baseline),
         .tile0_above_framebuffer(tile0_above_baseline),
         .tile0_opacity(tile0_opacity_baseline),
@@ -1338,6 +1348,11 @@ module astra_graphics_pipeline #(
         .deadline_error(framebuffer_deadline_error),
         .build_cycles(framebuffer_build_cycles),
         .read_bytes(framebuffer_read_bytes),
+        .axi_debug_status(framebuffer_axi_debug_status),
+        .axi_ar_accept_count(framebuffer_axi_ar_accept_count),
+        .axi_r_accept_count(framebuffer_axi_r_accept_count),
+        .axi_last_ar_address(framebuffer_axi_last_ar_address),
+        .axi_response_stall_cycles(framebuffer_axi_response_stall_cycles),
         .m_axi_arid(fb_axi_arid),
         .m_axi_araddr(fb_axi_araddr),
         .m_axi_arlen(fb_axi_arlen),
@@ -1590,7 +1605,7 @@ module astra_graphics_pipeline #(
     };
     (* ASYNC_REG = "TRUE" *) reg [26:0] pixel_config_meta;
     (* ASYNC_REG = "TRUE" *) reg [26:0] pixel_config_sync;
-    always @(posedge pixel_clk) begin
+    always @(posedge pixel_clk or posedge pixel_reset) begin
         if (pixel_reset) begin
             pixel_config_meta <= 27'd0;
             pixel_config_sync <= 27'd0;
@@ -1795,7 +1810,7 @@ module astra_graphics_pipeline #(
     (* ASYNC_REG = "TRUE" *) reg copper_irq_delivery_meta;
     (* ASYNC_REG = "TRUE" *) reg copper_irq_delivery_sync;
     reg copper_irq_delivery_seen;
-    always @(posedge pixel_clk) begin
+    always @(posedge pixel_clk or posedge pixel_reset) begin
         if (pixel_reset)
             copper_irq_delivery_toggle_pixel <= 1'b0;
         else if (copper_pixel_event_valid && copper_pixel_event_ready &&
@@ -1803,7 +1818,7 @@ module astra_graphics_pipeline #(
             copper_irq_delivery_toggle_pixel <=
                 ~copper_irq_delivery_toggle_pixel;
     end
-    always @(posedge build_clk) begin
+    always @(posedge build_clk or posedge build_reset) begin
         if (build_reset) begin
             copper_irq_delivery_meta <= 1'b0;
             copper_irq_delivery_sync <= 1'b0;

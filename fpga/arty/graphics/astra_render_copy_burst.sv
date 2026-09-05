@@ -100,7 +100,7 @@ module astra_render_copy_burst #(
         realignment_index_q;
     reg [127:0] realignment_pair_q;
     reg [63:0] realigned_write_data_q;
-    (* ram_style = "distributed" *) reg [63:0] data [0:15];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [63:0] data [0:15];
 
     wire read_bad = m_axi_rid != READ_ID || m_axi_rresp != 2'b00;
     wire read_expected_last = read_index_q + 5'd1 == read_beats_q;

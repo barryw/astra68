@@ -145,6 +145,7 @@ uint32_t astra_vfs_port_exec_lane_export(AstraVfsClient *client,
                                          AstraVfsPortExecLane *state);
 uint32_t astra_vfs_port_exec_lane_import(AstraVfsClient *client,
                                          const AstraVfsPortExecLane *state);
+void astra_vfs_port_after_fork_child(AstraVfsClient *client);
 
 /*
  * Maps one reserved area as a lazily committed service table. Physical pages

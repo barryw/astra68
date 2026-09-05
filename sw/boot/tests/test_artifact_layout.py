@@ -21,6 +21,8 @@ def test_product_artifacts_stay_in_sync_excluded_build_directories():
     assert "BOOT_MAP = build/astra_boot.map" in boot
     assert "astra68.rom" not in boot
     assert "SPLASH_PAYLOAD = build/astra_boot_splash.pal8.lz4" in boot
+    assert "HOST_PLATFORM ?= ARTY_Z7_20" in boot
+    assert "HOST=$(HOST_PLATFORM)" in boot
     assert "KERNEL_BIN = $(BUILD_DIR)/astra_kernel.bin" in kernel
     assert "KERNEL_ELF = $(BUILD_DIR)/astra_kernel.elf" in kernel
     assert "KERNEL_MAP = $(BUILD_DIR)/astra_kernel.map" in kernel

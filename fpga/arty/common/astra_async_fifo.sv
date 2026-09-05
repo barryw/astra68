@@ -31,9 +31,9 @@ module astra_async_fifo #(
     reg [DATA_WIDTH-1:0] memory [0:DEPTH-1];
 
     reg [ADDR_WIDTH:0] wr_binary;
-    reg [ADDR_WIDTH:0] wr_gray;
+    (* preserve *) reg [ADDR_WIDTH:0] wr_gray;
     reg [ADDR_WIDTH:0] rd_binary;
-    reg [ADDR_WIDTH:0] rd_gray;
+    (* preserve *) reg [ADDR_WIDTH:0] rd_gray;
     reg [ADDR_WIDTH:0] rd_gray_wr_1;
     reg [ADDR_WIDTH:0] rd_gray_wr_2;
     reg [ADDR_WIDTH:0] wr_gray_rd_1;

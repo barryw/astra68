@@ -47,8 +47,8 @@ module astra_boot_text_overlay #(
     // Cell bits 7:0 select CP437, bits 9:8 select the fixed boot palette.
     // The memories live entirely in the pixel domain; the mailbox below is
     // the only control-to-pixel crossing.
-    (* ram_style = "distributed" *) reg [15:0] cell_bank0 [0:CELLS-1];
-    (* ram_style = "distributed" *) reg [15:0] cell_bank1 [0:CELLS-1];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [15:0] cell_bank0 [0:CELLS-1];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [15:0] cell_bank1 [0:CELLS-1];
     (* rom_style = "distributed" *) reg [7:0] font_rom [0:FONT_BYTES-1];
 
     integer init_index;
@@ -144,21 +144,14 @@ module astra_boot_text_overlay #(
     assign commit_ready = write_ready;
     assign active_enable = active_enable_sync;
 
-    always @(posedge build_clk) begin
+    always @(posedge build_clk or posedge build_reset) begin
         if (build_reset) begin
-            write_index_hold <= 8'd0;
-            write_cell_hold <= 16'h0020;
-            write_request_toggle <= 1'b0;
-            commit_enable_hold <= 1'b0;
-            commit_request_toggle <= 1'b0;
             write_ack_meta <= 1'b0;
             write_ack_sync <= 1'b0;
             commit_ack_meta <= 1'b0;
             commit_ack_sync <= 1'b0;
             active_enable_meta <= 1'b0;
             active_enable_sync <= 1'b0;
-            commit_ack_seen <= 1'b0;
-            generation <= 32'd0;
         end else begin
             write_ack_meta <= write_ack_toggle_pixel;
             write_ack_sync <= write_ack_meta;
@@ -166,7 +159,19 @@ module astra_boot_text_overlay #(
             commit_ack_sync <= commit_ack_meta;
             active_enable_meta <= active_enable_pixel;
             active_enable_sync <= active_enable_meta;
+        end
+    end
 
+    always @(posedge build_clk) begin
+        if (build_reset) begin
+            write_index_hold <= 8'd0;
+            write_cell_hold <= 16'h0020;
+            write_request_toggle <= 1'b0;
+            commit_enable_hold <= 1'b0;
+            commit_request_toggle <= 1'b0;
+            commit_ack_seen <= 1'b0;
+            generation <= 32'd0;
+        end else begin
             if (write_strobe && write_ready) begin
                 write_index_hold <= write_index;
                 write_cell_hold <= write_cell;
@@ -183,7 +188,7 @@ module astra_boot_text_overlay #(
         end
     end
 
-    always @(posedge pixel_clk) begin
+    always @(posedge pixel_clk or posedge pixel_reset) begin
         if (pixel_reset) begin
             write_request_meta <= 1'b0;
             write_request_sync <= 1'b0;
@@ -195,13 +200,6 @@ module astra_boot_text_overlay #(
             commit_request_sync <= 1'b0;
             commit_enable_meta <= 1'b0;
             commit_enable_sync <= 1'b0;
-            write_ack_toggle_pixel <= 1'b0;
-            commit_ack_toggle_pixel <= 1'b0;
-            active_bank_pixel <= 1'b0;
-            active_enable_pixel <= 1'b0;
-            commit_waiting_pixel <= 1'b0;
-            clone_active_pixel <= 1'b0;
-            clone_index_pixel <= 8'd0;
         end else begin
             write_request_meta <= write_request_toggle;
             write_request_sync <= write_request_meta;
@@ -213,7 +211,19 @@ module astra_boot_text_overlay #(
             commit_request_sync <= commit_request_meta;
             commit_enable_meta <= commit_enable_hold;
             commit_enable_sync <= commit_enable_meta;
+        end
+    end
 
+    always @(posedge pixel_clk) begin
+        if (pixel_reset) begin
+            write_ack_toggle_pixel <= 1'b0;
+            commit_ack_toggle_pixel <= 1'b0;
+            active_bank_pixel <= 1'b0;
+            active_enable_pixel <= 1'b0;
+            commit_waiting_pixel <= 1'b0;
+            clone_active_pixel <= 1'b0;
+            clone_index_pixel <= 8'd0;
+        end else begin
             if (apply_mailbox_write) begin
                 write_ack_toggle_pixel <= write_request_sync;
             end

@@ -9,13 +9,23 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 REPOSITORY=$(CDPATH='' cd -- "$SCRIPT_DIR/../.." && pwd)
 RELEASE=$1
 BOARD=${ASTRA_ARTY_BOARD:-root@192.168.1.188}
+STORE=${ASTRA_STORE:-/data/astra}
 SSH=${SSH:-ssh}
 SCP=${SCP:-scp}
 RELEASE_TOOL=$REPOSITORY/tools/astra_release.py
+case "$STORE" in
+    /*) ;;
+    *) echo "Astra store must be an absolute path: $STORE" >&2; exit 2 ;;
+esac
+case "$STORE" in
+    *[!A-Za-z0-9_./-]*|*..*)
+        echo "Astra store contains unsafe path characters: $STORE" >&2
+        exit 2 ;;
+esac
 IDENTITY=$(PYTHONDONTWRITEBYTECODE=1 \
     python3 "$RELEASE_TOOL" verify "$RELEASE")
 INCOMING=$($SSH "$BOARD" \
-    "mkdir -p /data/astra/incoming && mktemp -d /data/astra/incoming/release.XXXXXX")
+    "mkdir -p '$STORE/incoming' && mktemp -d '$STORE/incoming/release.XXXXXX'")
 
 cleanup() {
     status=$?
@@ -28,15 +38,15 @@ trap cleanup EXIT
 $SCP -r "$RELEASE/." "$BOARD:$INCOMING/"
 INSTALLED=$($SSH "$BOARD" \
     "PYTHONDONTWRITEBYTECODE=1 python3 '$INCOMING/bin/astra-release.py' \
-install '$INCOMING' /data/astra")
+install '$INCOMING' '$STORE'")
 if [ "$INSTALLED" != "$IDENTITY" ]; then
     echo "installed Astra release identity changed" >&2
     exit 1
 fi
 ACTIVE=$($SSH "$BOARD" \
     "PYTHONDONTWRITEBYTECODE=1 python3 \
-/data/astra/current/bin/astra-release.py verify --installed \
-/data/astra/current")
+'$STORE/current/bin/astra-release.py' verify --installed \
+'$STORE/current'")
 if [ "$ACTIVE" != "$IDENTITY" ]; then
     echo "active Astra release identity changed" >&2
     exit 1

@@ -1876,6 +1876,27 @@ test_an_answer_with_nowhere_to_go_is_counted(void)
     assert(host.refused == 0u);
 }
 
+static void
+test_fork_child_rebinds_lane_owner(void)
+{
+    AstraVfsClient client;
+    AstraVfsPortExecLane before;
+    AstraVfsPortExecLane after;
+    uint32_t service_handle;
+
+    mock_reset();
+    service_handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_vfs_port_connect_lazy(&client, service_handle) ==
+           ASTRA_VFS_OK);
+    assert(astra_vfs_port_exec_lane_export(&client, &before) == ASTRA_VFS_OK);
+    mock_thread = before.owner_thread + 1u;
+    astra_vfs_port_after_fork_child(&client);
+    assert(astra_vfs_port_exec_lane_export(&client, &after) == ASTRA_VFS_OK);
+    assert(after.owner_thread == mock_thread &&
+           after.owner_thread != before.owner_thread);
+    astra_vfs_port_abandon(&client);
+}
+
 int
 main(void)
 {
@@ -1903,6 +1924,7 @@ main(void)
     test_the_service_adopts_the_callers_activity();
     test_a_message_that_is_not_the_protocol_is_refused();
     test_an_answer_with_nowhere_to_go_is_counted();
+    test_fork_child_rebinds_lane_owner();
     puts("ASTRA VFS PORT PASS");
     return 0;
 }

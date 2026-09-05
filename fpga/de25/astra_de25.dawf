@@ -1,0 +1,49 @@
+# These ports are intentionally outside the synchronous I/O timing model.
+# The generated protocol clocks are constrained as clocks in ghrd_timing.sdc;
+# HDMI_TX_INT is false-pathed only into its two-register synchronizer; and the
+# LEDs have no external capture device.
+
+::drc::add_waiver \
+	-description {LEDs have no external capture device or timing requirement.} \
+	-rule_id {TMC-20012} \
+	-query_string {Port =~ 'LED['} \
+	-stages {{Timing Signoff}} \
+	-tag {asynchronous-io} \
+	-owner {Astra68} \
+	-no_warn
+
+::drc::add_waiver \
+	-description {I2C SCL is a generated protocol clock, not captured data.} \
+	-rule_id {TMC-20012} \
+	-query_string {Port == 'HDMI_I2C_SCL'} \
+	-stages {{Timing Signoff}} \
+	-tag {generated-clock-output} \
+	-owner {Astra68} \
+	-no_warn
+
+::drc::add_waiver \
+	-description {I2S SCLK is a generated protocol clock, not captured data.} \
+	-rule_id {TMC-20012} \
+	-query_string {Port == 'HDMI_SCLK'} \
+	-stages {{Timing Signoff}} \
+	-tag {generated-clock-output} \
+	-owner {Astra68} \
+	-no_warn
+
+::drc::add_waiver \
+	-description {HDMI_TX_INT is asynchronous and feeds a two-register synchronizer.} \
+	-rule_id {TMC-20011} \
+	-query_string {Port == 'HDMI_TX_INT'} \
+	-stages {{Timing Signoff}} \
+	-tag {asynchronous-io} \
+	-owner {Astra68} \
+	-no_warn
+
+::drc::add_waiver \
+	-description {The line visual payload is stable before the synchronized slot publication toggle and is captured only after the synchronized tag is accepted.} \
+	-rule_id {CDC-50012} \
+	-query_string {To =~ 'graphics_i|pipeline_i|pixel_line_visual_q'} \
+	-stages {{Timing Signoff}} \
+	-tag {bundled-data-handshake} \
+	-owner {Astra68} \
+	-no_warn

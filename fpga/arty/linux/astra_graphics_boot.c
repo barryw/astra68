@@ -67,16 +67,12 @@ static int copy_surface(int image_fd, volatile uint8_t *framebuffer,
         }
 
         crc = crc32_update(crc, buffer, (size_t)received);
-        memcpy((void *)(framebuffer + destination), buffer,
-               (size_t)received);
+        astra_graphics_memory_copy_to(framebuffer + destination, buffer,
+                                      (size_t)received);
         destination += (size_t)received;
     }
 
-#if defined(__arm__)
-    __asm__ volatile("dsb sy" ::: "memory");
-#else
-    __sync_synchronize();
-#endif
+    astra_graphics_memory_barrier();
     *crc_out = crc ^ UINT32_MAX;
     free(buffer);
     return 0;

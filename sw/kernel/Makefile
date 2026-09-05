@@ -81,7 +81,7 @@ WARNINGS = -Wall -Wextra -Werror -Wshadow -Wcast-align -Wcast-qual \
            -Wstrict-prototypes -Wmissing-prototypes -Wshift-overflow=2
 CFLAGS = -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin \
          -fno-common -fno-pic -fno-pie -fno-stack-protector \
-         -Wa,--noexecstack $(WARNINGS) -ffunction-sections \
+         -Wa,--noexecstack $(WARNINGS) -ffunction-sections -fstack-usage \
          $(ASTRA_DEBUG_FLAGS)
 # kernel.ld already KEEPs the three sections nothing references by symbol --
 # .text.entry, .vectors and .kernel_trace -- which is what makes collecting the

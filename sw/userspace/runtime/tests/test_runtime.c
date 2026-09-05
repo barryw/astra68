@@ -1350,6 +1350,13 @@ static void test_event_catalog(void)
                                      sizeof(text));
     assert(strcmp(text, "raw line") == 0);
 
+    /* Reserved unstructured text is self-describing and needs no catalog. */
+    (void)astra_event_catalog_render(NULL, ASTRA_EVENT_MESSAGE_UNSTRUCTURED,
+                                     ASTRA_EVENT_FLAG_INLINE_STRING,
+                                     (const uint8_t *)"prior boot", 10u, text,
+                                     sizeof(text));
+    assert(strcmp(text, "prior boot") == 0);
+
     /* An id no catalog holds renders as itself rather than as nothing. */
     (void)astra_event_catalog_render(&catalog, 0x12345678u, 0u, NULL, 0u, text,
                                      sizeof(text));

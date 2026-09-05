@@ -643,6 +643,7 @@ restore_exec_descriptors(const AstraStartupInfo *startup)
     const PosixExecDescriptor *wire_descriptors;
     const PosixExecDescription *wire_descriptions;
     PosixOpenDescription **restored = NULL;
+    const char *failure_operation = NULL;
     uint32_t maximum_fd = 0u;
     uint32_t expected;
     uint32_t state_at;
@@ -712,15 +713,19 @@ restore_exec_descriptors(const AstraStartupInfo *startup)
         (bytes + header->description_offset);
     if (file_ops->exec_import(
             startup, bytes + header->file_state_offset,
-            header->file_state_size) < 0)
+            header->file_state_size) < 0) {
+        (void)astra_log_failure("POSIX file restore", (uint32_t)errno);
         return -1;
+    }
     if (header->socket_state_size != 0u) {
         if (socket_ops == NULL || socket_ops->exec_import == NULL ||
             socket_ops->socket_size == NULL ||
             socket_ops->socket_import == NULL ||
             socket_ops->exec_import(bytes + header->socket_state_offset,
-                                    header->socket_state_size) < 0)
+                                    header->socket_state_size) < 0) {
+            (void)astra_log_failure("POSIX socket restore", (uint32_t)errno);
             return -1;
+        }
     }
     if (header->description_count != 0u) {
         restored = calloc(header->description_count, sizeof(*restored));
@@ -729,6 +734,7 @@ restore_exec_descriptors(const AstraStartupInfo *startup)
             return -1;
         }
     }
+    failure_operation = "POSIX open description restore";
     for (uint32_t index = 0u; index < header->description_count; ++index) {
         const PosixExecDescription *wire = &wire_descriptions[index];
         PosixOpenDescription *description;
@@ -779,6 +785,7 @@ restore_exec_descriptors(const AstraStartupInfo *startup)
         errno = EINVAL;
         goto failed;
     }
+    failure_operation = "POSIX descriptor table restore";
     for (uint32_t index = 0u; index < header->descriptor_count; ++index) {
         const PosixExecDescriptor *wire = &wire_descriptors[index];
 
@@ -815,6 +822,8 @@ restore_exec_descriptors(const AstraStartupInfo *startup)
     return 1;
 
 failed:
+    if (failure_operation != NULL)
+        (void)astra_log_failure(failure_operation, (uint32_t)errno);
     for (uint32_t fd = 0u; fd < descriptor_capacity; ++fd) {
         descriptors[fd].description = NULL;
         descriptors[fd].descriptor_flags = 0u;
@@ -832,6 +841,7 @@ astra_posix_start(const AstraStartupInfo *startup)
     static const char *const standard_names[] = {
         "STDIN", "STDOUT", "STDERR"
     };
+    int restored;
 
     for (uint32_t fd = 0u; fd < descriptor_capacity; ++fd)
         (void)release_descriptor(&descriptors[fd]);
@@ -846,7 +856,10 @@ astra_posix_start(const AstraStartupInfo *startup)
     if (startup != NULL && startup->environment_count != 0u &&
         startup->environment_address != 0u)
         environ = (char **)(uintptr_t)startup->environment_address;
-    if (restore_exec_descriptors(startup) != 0)
+    restored = restore_exec_descriptors(startup);
+    if (restored < 0)
+        (void)astra_log_failure("POSIX descriptor restore", (uint32_t)errno);
+    if (restored != 0)
         return;
     if (!astra_startup_validate(startup))
         return;

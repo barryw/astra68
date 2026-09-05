@@ -325,7 +325,8 @@ def _services(directory, names):
             raise RuntimeError("no service image at %s -- build services "
                                "first" % path)
         current = subprocess.run(
-            ["make", "-q", "-C", service, target],
+            ["make", "-q", "-C", service,
+             "ASTRA_PROGRAM_OWNERS_READY=1", target],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         if current.returncode != 0:
             output = current.stdout.decode("utf-8", "replace").strip()

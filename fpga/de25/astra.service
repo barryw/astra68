@@ -1,0 +1,23 @@
+[Unit]
+Description=Astra OS runtime
+Wants=network-online.target time-sync.target systemd-time-wait-sync.service
+After=network-online.target time-sync.target systemd-time-wait-sync.service
+ConditionFileIsExecutable=/var/lib/astra/current/bin/run-arty.sh
+ConditionKernelCommandLine=astra.fabric=ready
+
+[Service]
+Type=simple
+Environment=ASTRA_STORE=/var/lib/astra
+Environment=ASTRA_FRONT_PANEL_MMIO_PATH=/dev/mem
+Environment=ASTRA_FRONT_PANEL_MMIO_OFFSET=0x20107000
+ExecStart=/var/lib/astra/current/bin/run-arty.sh
+Restart=always
+RestartSec=1
+Nice=-10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=0
+KillMode=mixed
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -2,6 +2,8 @@
 
 #define _POSIX_C_SOURCE 200809L
 
+#include "astra_graphics_hw.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
@@ -13,7 +15,7 @@
 #include <unistd.h>
 
 enum {
-    AUDIO_BASE = 0x43c06000u,
+    AUDIO_BASE = ASTRA_CONTROL_BASE + 0x6000u,
     AUDIO_BYTES = 0x1000u,
     AUDIO_ID = 0x41554430u,
     AUDIO_VERSION = 0x00010000u,

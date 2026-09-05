@@ -44,6 +44,11 @@ module astra_graphics_control #(
     output wire        framebuffer_wrap_y,
     output wire        framebuffer_key_enable,
     output wire [31:0] framebuffer_key,
+    input  wire [31:0] framebuffer_axi_debug_status,
+    input  wire [31:0] framebuffer_axi_ar_accept_count,
+    input  wire [31:0] framebuffer_axi_r_accept_count,
+    input  wire [31:0] framebuffer_axi_last_ar_address,
+    input  wire [31:0] framebuffer_axi_response_stall_cycles,
 
     output wire        tile0_enable,
     output wire        tile0_above_framebuffer,
@@ -192,7 +197,7 @@ module astra_graphics_control #(
     input  wire        s_axi_rready
 );
     localparam [31:0] DEVICE_ID = 32'h41535452;
-    localparam [31:0] VERSION = 32'h00010005;
+    localparam [31:0] VERSION = 32'h00010006;
     localparam [31:0] CAPABILITIES = 32'h000003ff;
     localparam integer BOOT_TEXT_CELLS = BOOT_TEXT_COLS * BOOT_TEXT_ROWS;
 
@@ -561,6 +566,11 @@ reg [9:0] read_bank_valid_q;
                 4'h8: read_bank0 = ARENA_LIMIT;
                 4'h9: read_bank0 = commit_errors;
                 4'ha: read_bank0 = commit_deferrals;
+                4'hb: read_bank0 = framebuffer_axi_debug_status;
+                4'hc: read_bank0 = framebuffer_axi_ar_accept_count;
+                4'hd: read_bank0 = framebuffer_axi_r_accept_count;
+                4'he: read_bank0 = framebuffer_axi_last_ar_address;
+                4'hf: read_bank0 = framebuffer_axi_response_stall_cycles;
                 default: read_bank0 = 32'd0;
             endcase
         end
@@ -1436,7 +1446,7 @@ reg [9:0] read_bank_valid_q;
                 read_bank_data_q[7] <= read_bank7(read_bank_word_q[7]);
                 read_bank_data_q[8] <= read_bank8(read_bank_word_q[8]);
                 read_bank_data_q[9] <= read_bank9(read_bank_word_q[9]);
-                read_bank_valid_q[0] <= read_bank_word_q[0] <= 4'ha;
+                read_bank_valid_q[0] <= 1'b1;
                 read_bank_valid_q[1] <= read_bank_word_q[1] <= 4'h6;
                 read_bank_valid_q[2] <= read_bank_word_q[2] <= 4'h6;
                 read_bank_valid_q[3] <= read_bank_word_q[3] <= 4'h6;

@@ -109,11 +109,19 @@ def main():
             observed / "hostfs")
         assert (root / "storage-terminal.img").read_bytes() == b"disk"
 
+        (observed / "qemu.args").unlink()
         launch_environment["ASTRA_HOST_TIME_MIN"] = str(int(time.time()) + 60)
-        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                text=True, capture_output=True, check=False)
-        assert result.returncode != 0
-        assert "host clock is stale" in result.stderr
+        waiting = subprocess.Popen([str(RUN_ARTY)], env=launch_environment,
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL)
+        try:
+            time.sleep(0.1)
+            assert waiting.poll() is None
+            assert not (observed / "qemu.args").exists()
+        finally:
+            waiting.terminate()
+            waiting.wait(timeout=2.0)
+        launch_environment.pop("ASTRA_HOST_TIME_MIN")
 
         (root / "storage-terminal.img").chmod(0o644)
         (root / "storage-terminal.img").write_bytes(b"stale")

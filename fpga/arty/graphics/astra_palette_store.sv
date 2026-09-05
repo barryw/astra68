@@ -136,6 +136,16 @@ module astra_palette_store (
     (* ASYNC_REG = "TRUE" *) reg restore_ack_meta;
     (* ASYNC_REG = "TRUE" *) reg restore_ack_sync;
 
+    always @(posedge control_clk or posedge control_reset) begin
+        if (control_reset) begin
+            restore_ack_meta <= 1'b0;
+            restore_ack_sync <= 1'b0;
+        end else begin
+            restore_ack_meta <= restore_ack_toggle_pixel;
+            restore_ack_sync <= restore_ack_meta;
+        end
+    end
+
     always @(posedge control_clk) begin
         baseline_restore_done <= 1'b0;
         if (control_reset) begin
@@ -145,12 +155,7 @@ module astra_palette_store (
             restore_address_q <= 12'd0;
             restore_data_q <= 32'd0;
             restore_ack_start_q <= 1'b0;
-            restore_ack_meta <= 1'b0;
-            restore_ack_sync <= 1'b0;
         end else begin
-            restore_ack_meta <= restore_ack_toggle_pixel;
-            restore_ack_sync <= restore_ack_meta;
-
             case (restore_state)
                 RESTORE_IDLE: if (baseline_restore_start) begin
                     restore_index <= 13'd0;

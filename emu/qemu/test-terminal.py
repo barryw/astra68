@@ -350,6 +350,15 @@ SHIFTED = {":": "semicolon", "+": "equal", "%": "5", "_": "minus",
 # in the next, which is why this gate never matches against a single record.
 RECORD = re.compile(
     r"^seq\s+(\d+)\s+\S+\s+[0-9a-f]{8}/\d+(?:\s+act\s+[0-9a-f]+)?\s(.*)$")
+READY_RECORD = re.compile(
+    r"^seq\s+(\d+)\s+info\s+[0-9a-f]{8}/\d+"
+    r"(?:\s+act\s+[0-9a-f]+)?\s+shell ready\s+"
+    r"\(console_shell\.c:\d+\)$")
+
+
+def ready_sequence(line):
+    match = READY_RECORD.match(line)
+    return int(match.group(1)) if match is not None else None
 
 
 class Qmp:
@@ -568,6 +577,16 @@ class Machine:
     def word(self, address):
         return self.qmp.word(address)
 
+    def trace(self):
+        reply = self.qmp.monitor('pmemsave 0x%08x %d "%s"'
+                                 % (RING_ADDRESS, RING_SIZE, self.ring_path))
+        if reply and reply.strip():
+            raise RuntimeError("ring unavailable: %s" % reply.strip())
+        with open(self.ring_path, "rb") as handle:
+            _, rendered = trace_decode.decode(handle.read(), self.catalog,
+                                               self.names)
+        return rendered
+
     def said(self, after=0):
         """Every line the machine has printed since sequence `after`.
 
@@ -577,17 +596,10 @@ class Machine:
         a check against single records would fail on the length of its own
         needle rather than on anything the machine did.
         """
-        reply = self.qmp.monitor('pmemsave 0x%08x %d "%s"'
-                                 % (RING_ADDRESS, RING_SIZE, self.ring_path))
-        if reply and reply.strip():
-            raise RuntimeError("ring unavailable: %s" % reply.strip())
-        with open(self.ring_path, "rb") as handle:
-            _, rendered = trace_decode.decode(handle.read(), self.catalog,
-                                               self.names)
         lines = []
         pending = ""
         highest = after
-        for line in rendered:
+        for line in self.trace():
             match = RECORD.match(line)
             if match is None:
                 continue
@@ -610,14 +622,7 @@ class Machine:
         return self.said()[1]
 
     def recent_faults(self):
-        reply = self.qmp.monitor('pmemsave 0x%08x %d "%s"'
-                                 % (RING_ADDRESS, RING_SIZE, self.ring_path))
-        if reply and reply.strip():
-            raise RuntimeError("ring unavailable: %s" % reply.strip())
-        with open(self.ring_path, "rb") as handle:
-            _, rendered = trace_decode.decode(handle.read(), self.catalog,
-                                               self.names)
-        return [line for line in rendered if "fault" in line.lower()][-8:]
+        return [line for line in self.trace() if "fault" in line.lower()][-8:]
 
     def wait_for_text(self, text, deadline, after=0, exact=False):
         """Waits until every needle has been printed since `after`.
@@ -636,6 +641,16 @@ class Machine:
                 return lines, highest
             if time.monotonic() >= end:
                 return None, highest
+            time.sleep(0.25)
+
+    def wait_for_ready(self, deadline, after=0):
+        end = time.monotonic() + deadline
+        while True:
+            if any((sequence := ready_sequence(line)) is not None and
+                   sequence > after for line in self.trace()):
+                return True
+            if time.monotonic() >= end:
+                return False
             time.sleep(0.25)
 
     def settle(self, deadline=8.0, quiet=0.4):
@@ -685,8 +700,9 @@ def open_terminal(machine, boot_deadline, command_deadline):
     # The desktop has to have painted before a click lands on an icon, and
     # what says it painted is the launch report for the app it is running.
     time.sleep(2.0)
+    before = machine.sequence()
     machine.qmp.double_click(*TERMINAL_ICON)
-    lines, _ = machine.wait_for_text(BANNER, command_deadline)
+    lines, _ = machine.wait_for_text(BANNER, command_deadline, before)
     if lines is None:
         print("FAIL: the terminal never drew its banner after a double click")
         for line in machine.said()[0][-40:]:
@@ -697,7 +713,20 @@ def open_terminal(machine, boot_deadline, command_deadline):
         for line in machine.recent_serial():
             print("    %s" % line)
         return False
-    return machine.settle()
+    if not machine.wait_for_ready(command_deadline, before):
+        print("FAIL: the terminal drew but never became ready")
+        for line in machine.said(before)[0][-40:]:
+            print("    |%s|" % line)
+        return False
+    return True
+
+
+def wait_for_command(machine, expected, deadline, before, exact=False):
+    """Return only after both the answer and the following prompt exist."""
+    said, _ = machine.wait_for_text(expected, deadline, before, exact=exact)
+    if said is None:
+        return None
+    return said if machine.wait_for_ready(deadline, before) else None
 
 
 def vim_creates_and_runs_lua(machine, command_deadline, verbose=False):
@@ -729,8 +758,9 @@ def vim_creates_and_runs_lua(machine, command_deadline, verbose=False):
             return False
         before = machine.sequence()
         machine.qmp.type_line("ls")
-        machine.settle()
-        if any(VIM_LUA_FILE in line for line in machine.said(before)[0]):
+        said = wait_for_command(machine, VIM_LUA_FILE, command_deadline,
+                                before)
+        if said is not None:
             break
     else:
         print("FAIL: Vim never completed startup")
@@ -768,8 +798,8 @@ def vim_creates_and_runs_lua(machine, command_deadline, verbose=False):
     machine.settle()
     before = machine.sequence()
     machine.qmp.type_line("cat " + VIM_LUA_FILE)
-    if machine.wait_for_text("print(6*7)", command_deadline, before,
-                             exact=True)[0] is None:
+    if wait_for_command(machine, "print(6*7)", command_deadline, before,
+                        exact=True) is None:
         print("FAIL: Vim did not write the Lua program")
         for line in machine.said(interaction_before)[0][-80:]:
             print("    |%s|" % line)
@@ -781,8 +811,8 @@ def vim_creates_and_runs_lua(machine, command_deadline, verbose=False):
     machine.settle()
     before = machine.sequence()
     machine.qmp.type_line(":q")
-    if machine.wait_for_text("finished with status 0", command_deadline,
-                             before)[0] is None:
+    if wait_for_command(machine, "finished with status 0", command_deadline,
+                        before) is None:
         print("FAIL: Vim did not exit cleanly after writing the Lua program")
         return False
 
@@ -792,8 +822,8 @@ def vim_creates_and_runs_lua(machine, command_deadline, verbose=False):
     machine.settle()
     before = machine.sequence()
     machine.qmp.type_line("lua " + VIM_LUA_FILE)
-    if machine.wait_for_text("42", command_deadline, before,
-                             exact=True)[0] is None:
+    if wait_for_command(machine, "42", command_deadline, before,
+                        exact=True) is None:
         print("FAIL: Lua did not execute the program created in Vim")
         for line in machine.said(before)[0][-80:]:
             print("    |%s|" % line)
@@ -804,8 +834,8 @@ def vim_creates_and_runs_lua(machine, command_deadline, verbose=False):
     machine.settle()
     before = machine.sequence()
     machine.qmp.type_line("rm " + VIM_LUA_FILE)
-    if machine.wait_for_text("rm " + VIM_LUA_FILE, command_deadline,
-                             before)[0] is None:
+    if wait_for_command(machine, "rm " + VIM_LUA_FILE, command_deadline,
+                        before) is None:
         print("FAIL: the Vim-created Lua fixture was not removed")
         return False
     return True
@@ -830,8 +860,8 @@ def warm_the_store(qemu, rom, image, temporary, boot_deadline,
             return False
         before = machine.sequence()
         machine.qmp.type_line("mkdir priorboot")
-        if machine.wait_for_text("finished with status 0", command_deadline,
-                                 before)[0] is None:
+        if wait_for_command(machine, "finished with status 0",
+                            command_deadline, before) is None:
             print("FAIL: the boot before the run answered no command")
             return False
         machine.settle()
@@ -867,7 +897,6 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                       [(POSIX_COMMAND, "POSIX RAW PASS")] if network_only else
                       PERFORMANCE_SCRIPT if performance_only else SCRIPT)
             for line, expected in script:
-                machine.settle()
                 before = machine.sequence()
                 started = time.monotonic()
                 machine.qmp.type_line(line)
@@ -878,14 +907,16 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                         print("FAIL: posix never entered raw terminal mode")
                         return 1
                     machine.qmp.key("up")
-                said, _ = machine.wait_for_text(expected, command_deadline,
-                                                before,
-                                                exact=line == "echo $?")
+                said = wait_for_command(machine, expected, command_deadline,
+                                        before, exact=line == "echo $?")
                 elapsed = time.monotonic() - started
                 if said is None:
                     print("FAIL: %r never answered with %r" % (line, expected))
                     for text in machine.said(before)[0][-80:]:
                         print("    |%s|" % text)
+                    print("recent trace records:")
+                    for text in machine.trace()[-40:]:
+                        print("    %s" % text)
                     print("last serial lines:")
                     for text in machine.recent_serial():
                         print("    %s" % text)
@@ -928,18 +959,19 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
             machine.qmp.type_line("which devices > out.txt")
             # The status, because a redirected command prints nothing at all
             # and the shell no longer narrates one.
-            machine.settle()
+            if not machine.wait_for_ready(command_deadline, before):
+                print("FAIL: the truncating redirect never completed")
+                return 1
             before = machine.sequence()
             machine.qmp.type_line("echo $?")
-            if machine.wait_for_text("0", command_deadline, before,
-                                     exact=True)[0] is None:
+            if wait_for_command(machine, "0", command_deadline, before,
+                                exact=True) is None:
                 print("FAIL: the truncating redirect never finished")
                 return 1
-            machine.settle()
             before = machine.sequence()
             machine.qmp.type_line("cat out.txt")
-            said, _ = machine.wait_for_text("/local/commands/devices [0]",
-                                            command_deadline, before)
+            said = wait_for_command(machine, "/local/commands/devices [0]",
+                                    command_deadline, before)
             if said is None:
                 print("FAIL: the truncated file did not hold the new answer")
                 return 1
@@ -959,11 +991,10 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
 
             # The prompt has to still be there at the end. A shell that
             # answered every line and then died would pass every check above.
-            machine.settle()
             before = machine.sequence()
             machine.qmp.type_line("assign")
-            if machine.wait_for_text(PROMPT, command_deadline,
-                                     before)[0] is None:
+            if wait_for_command(machine, PROMPT, command_deadline,
+                                before) is None:
                 print("FAIL: the shell stopped prompting")
                 return 1
 

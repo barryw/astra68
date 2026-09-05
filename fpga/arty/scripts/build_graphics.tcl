@@ -514,7 +514,7 @@ set audio_dir [file join $repo_root fpga arty audio]
 set hdmi_dir [file join $repo_root third_party hdl-util-hdmi]
 add_files -norecurse [list \
     [file join $audio_dir astra_hdmi_audio.sv] \
-    [file join $repo_root fpga soc astra_front_panel.sv] \
+    [file join $repo_root fpga arty common astra_front_panel.sv] \
     [file join $repo_root fpga arty rtl astra_front_panel_axi.sv] \
     [file join $graphics_dir astra_framebuffer_config_validator.sv] \
     [file join $graphics_dir astra_tile_config_validator.sv] \
@@ -538,7 +538,7 @@ add_files -norecurse [list \
     [file join $graphics_dir astra_copper_beam_scheduler.sv] \
     [file join $graphics_dir astra_copper_registers.sv] \
     [file join $graphics_dir astra_copper_structural_state.sv] \
-    [file join $repo_root fpga soc astra_async_fifo.sv] \
+    [file join $repo_root fpga arty common astra_async_fifo.sv] \
     [file join $graphics_dir astra_copper_pixel_events.sv] \
     [file join $graphics_dir astra_graphics_control.sv] \
     [file join $graphics_dir astra_render_protocol.vh] \
@@ -552,6 +552,7 @@ add_files -norecurse [list \
     [file join $graphics_dir astra_render_command_processor.sv] \
     [file join $graphics_dir astra_graphics_pipeline.sv] \
     [file join $repo_root fpga arty rtl astra_arty_graphics_top.sv] \
+    [file join $hdmi_dir video_timing.sv] \
     [file join $hdmi_dir hdmi.sv] \
     [file join $hdmi_dir hdmi_mode_control.sv] \
     [file join $hdmi_dir tmds_channel.sv] \

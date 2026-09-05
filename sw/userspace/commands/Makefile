@@ -197,7 +197,8 @@ build/m68k/vim: $(VIM_IMAGE)
 	@mkdir -p $(@D)
 	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@
 
-build/m68k/%: $$*/$$*.c $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
+$(patsubst %,build/m68k/%,$(NATIVE_COMMANDS)): build/m68k/%: \
+		$$*/$$*.c $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
 		$(POSIX_LIB) $(NTP_LIB) $(NETWORK_LIB) $(RUNTIME_CRT0) \
 		$(RUNTIME)/astra_user.ld
 	@mkdir -p $(@D)

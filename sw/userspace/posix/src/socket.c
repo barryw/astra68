@@ -338,6 +338,7 @@ static ssize_t socket_send(PosixSocket *socket, const void *buffer,
         if (status == ASTRA_NETWORK_OK)
             return (ssize_t)moved;
         if (status != ASTRA_NETWORK_WOULD_BLOCK) {
+            (void)astra_log_failure("POSIX socket send", status);
             errno = network_errno(status);
             return -1;
         }
@@ -515,6 +516,7 @@ static int descriptor_socket_exec_import(const void *state, uint32_t size)
     status = network_library->session_import(&wire->session,
                                               &network_session);
     if (status != ASTRA_NETWORK_OK) {
+        (void)astra_log_failure("POSIX socket exec session import", status);
         errno = network_errno(status);
         return -1;
     }
@@ -557,6 +559,7 @@ static int descriptor_socket_state_import(const void *state, uint32_t size,
     status = network_library->endpoint_import(
         &network_session, wire, &sockets[slot].endpoint);
     if (status != ASTRA_NETWORK_OK) {
+        (void)astra_log_failure("POSIX socket exec endpoint import", status);
         errno = network_errno(status);
         return -1;
     }
@@ -785,9 +788,15 @@ ssize_t send(int fd, const void *buffer, size_t length, int flags)
     PosixSocket *socket = socket_for_fd(fd);
     int status_flags;
 
-    if (socket == NULL)
+    if (socket == NULL) {
+        (void)astra_log_failure("POSIX socket lookup", (uint32_t)errno);
         return -1;
+    }
     status_flags = astra_posix_descriptor_flags(fd);
+    if (status_flags < 0) {
+        (void)astra_log_failure("POSIX socket descriptor", (uint32_t)fd);
+        return -1;
+    }
     return socket_send(socket, buffer, length, flags, NULL, status_flags);
 }
 

@@ -9,6 +9,14 @@ python3 "$ROOT/fpga/arty/graphics/protocol/generate_protocol.py"
 python3 "$ROOT/fpga/arty/graphics/test_hdmi_source_contract.py"
 
 iverilog -g2012 -Wall \
+    -s tb_video_timing \
+    -o "$BUILD/tb_video_timing" \
+    "$ROOT/third_party/hdl-util-hdmi/video_timing.sv" \
+    "$ROOT/fpga/arty/graphics/sim/tb_video_timing.sv"
+
+vvp "$BUILD/tb_video_timing"
+
+iverilog -g2012 -Wall \
     -s tb_hdmi_source_mode \
     -o "$BUILD/tb_hdmi_source_mode" \
     "$ROOT/third_party/hdl-util-hdmi/hdmi_mode_control.sv" \

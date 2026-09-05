@@ -83,127 +83,43 @@ module hdmi
     // All outputs below this line stay inside the FPGA
     // They are used (by you) to pick the color each pixel should have
     // i.e. always_ff @(posedge pixel_clk) rgb <= {8'd0, 8'(cx), 8'(cy)};
-    output logic [BIT_WIDTH-1:0] cx = START_X,
-    output logic [BIT_HEIGHT-1:0] cy = START_Y,
+    output wire [BIT_WIDTH-1:0] cx,
+    output wire [BIT_HEIGHT-1:0] cy,
 
     // The screen is at the upper left corner of the frame.
     // 0,0 = 0,0 in video
     // the frame includes extra space for sending auxiliary data
-    output logic [BIT_WIDTH-1:0] frame_width,
-    output logic [BIT_HEIGHT-1:0] frame_height,
-    output logic [BIT_WIDTH-1:0] screen_width,
-    output logic [BIT_HEIGHT-1:0] screen_height,
+    output wire [BIT_WIDTH-1:0] frame_width,
+    output wire [BIT_HEIGHT-1:0] frame_height,
+    output wire [BIT_WIDTH-1:0] screen_width,
+    output wire [BIT_HEIGHT-1:0] screen_height,
     output logic hdmi_output_active
 );
 
 localparam int NUM_CHANNELS = 3;
 logic hsync;
 logic vsync;
+logic video_data_period;
 
-logic [BIT_WIDTH-1:0] hsync_pulse_start, hsync_pulse_size;
-logic [BIT_HEIGHT-1:0] vsync_pulse_start, vsync_pulse_size;
-logic invert;
-// See CEA-861-D for more specifics formats described below.
-generate
-    case (VIDEO_ID_CODE)
-        1:
-        begin
-            assign frame_width = 800;
-            assign frame_height = 525;
-            assign screen_width = 640;
-            assign screen_height = 480;
-            assign hsync_pulse_start = 16;
-            assign hsync_pulse_size = 96;
-            assign vsync_pulse_start = 10;
-            assign vsync_pulse_size = 2;
-            assign invert = 1;
-            end
-        2, 3:
-        begin
-            assign frame_width = 858;
-            assign frame_height = 525;
-            assign screen_width = 720;
-            assign screen_height = 480;
-            assign hsync_pulse_start = 16;
-            assign hsync_pulse_size = 62;
-            assign vsync_pulse_start = 9;
-            assign vsync_pulse_size = 6;
-            assign invert = 1;
-            end
-        4:
-        begin
-            assign frame_width = 1650;
-            assign frame_height = 750;
-            assign screen_width = 1280;
-            assign screen_height = 720;
-            assign hsync_pulse_start = 110;
-            assign hsync_pulse_size = 40;
-            assign vsync_pulse_start = 5;
-            assign vsync_pulse_size = 5;
-            assign invert = 0;
-        end
-        16, 34:
-        begin
-            assign frame_width = 2200;
-            assign frame_height = 1125;
-            assign screen_width = 1920;
-            assign screen_height = 1080;
-            assign hsync_pulse_start = 88;
-            assign hsync_pulse_size = 44;
-            assign vsync_pulse_start = 4;
-            assign vsync_pulse_size = 5;
-            assign invert = 0;
-        end
-        17, 18:
-        begin
-            assign frame_width = 864;
-            assign frame_height = 625;
-            assign screen_width = 720;
-            assign screen_height = 576;
-            assign hsync_pulse_start = 12;
-            assign hsync_pulse_size = 64;
-            assign vsync_pulse_start = 5;
-            assign vsync_pulse_size = 5;
-            assign invert = 1;
-        end
-        19:
-        begin
-            assign frame_width = 1980;
-            assign frame_height = 750;
-            assign screen_width = 1280;
-            assign screen_height = 720;
-            assign hsync_pulse_start = 440;
-            assign hsync_pulse_size = 40;
-            assign vsync_pulse_start = 5;
-            assign vsync_pulse_size = 5;
-            assign invert = 0;
-        end
-        95, 105, 97, 107:
-        begin
-            assign frame_width = 4400;
-            assign frame_height = 2250;
-            assign screen_width = 3840;
-            assign screen_height = 2160;
-            assign hsync_pulse_start = 176;
-            assign hsync_pulse_size = 88;
-            assign vsync_pulse_start = 8;
-            assign vsync_pulse_size = 10;
-            assign invert = 0;
-        end
-    endcase
-endgenerate
-
-always_comb begin
-    hsync = invert ^ (cx >= screen_width + hsync_pulse_start && cx < screen_width + hsync_pulse_start + hsync_pulse_size);
-    // vsync pulses should begin and end at the start of hsync, so special
-    // handling is required for the lines on which vsync starts and ends
-    if (cy == screen_height + vsync_pulse_start - 1)
-        vsync = invert ^ (cx >= screen_width + hsync_pulse_start);
-    else if (cy == screen_height + vsync_pulse_start + vsync_pulse_size - 1)
-        vsync = invert ^ (cx < screen_width + hsync_pulse_start);
-    else
-        vsync = invert ^ (cy >= screen_height + vsync_pulse_start && cy < screen_height + vsync_pulse_start + vsync_pulse_size);
-end
+video_timing #(
+    .VIDEO_ID_CODE(VIDEO_ID_CODE),
+    .BIT_WIDTH(BIT_WIDTH),
+    .BIT_HEIGHT(BIT_HEIGHT),
+    .START_X(START_X),
+    .START_Y(START_Y)
+) timing_i (
+    .clk_pixel(clk_pixel),
+    .reset(reset),
+    .cx(cx),
+    .cy(cy),
+    .frame_width(frame_width),
+    .frame_height(frame_height),
+    .screen_width(screen_width),
+    .screen_height(screen_height),
+    .hsync(hsync),
+    .vsync(vsync),
+    .video_data_period(video_data_period)
+);
 
 localparam int VIDEO_RATE_HZ = VIDEO_ID_CODE == 1 ? (VIDEO_REFRESH_RATE_MILLIHZ == 59940 ? 25175000 : 25200000)
     : VIDEO_ID_CODE == 2 || VIDEO_ID_CODE == 3 ? (VIDEO_REFRESH_RATE_MILLIHZ == 59940 ? 27000000 : 27027000)
@@ -214,31 +130,6 @@ localparam int VIDEO_RATE_HZ = VIDEO_ID_CODE == 1 ? (VIDEO_REFRESH_RATE_MILLIHZ 
     : VIDEO_ID_CODE == 34 ? (VIDEO_REFRESH_RATE_MILLIHZ == 29970 ? 74176000 : 74250000)
     : VIDEO_ID_CODE == 95 || VIDEO_ID_CODE == 105 || VIDEO_ID_CODE == 97 || VIDEO_ID_CODE == 107 ? 594000000
     : 0;
-
-// Wrap-around pixel position counters indicating the pixel to be generated by the user in THIS clock and sent out in the NEXT clock.
-always_ff @(posedge clk_pixel)
-begin
-    if (reset)
-    begin
-        cx <= BIT_WIDTH'(START_X);
-        cy <= BIT_HEIGHT'(START_Y);
-    end
-    else
-    begin
-        cx <= cx == frame_width-1'b1 ? BIT_WIDTH'(0) : cx + 1'b1;
-        cy <= cx == frame_width-1'b1 ? cy == frame_height-1'b1 ? BIT_HEIGHT'(0) : cy + 1'b1 : cy;
-    end
-end
-
-// See Section 5.2
-logic video_data_period = 0;
-always_ff @(posedge clk_pixel)
-begin
-    if (reset)
-        video_data_period <= 0;
-    else
-        video_data_period <= cx < screen_width && cy < screen_height;
-end
 
 logic [2:0] mode = 3'd1;
 logic [23:0] video_data = 24'd0;

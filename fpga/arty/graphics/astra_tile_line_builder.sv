@@ -252,7 +252,7 @@ localparam [3:0] ST_VALIDATE = 4'd15;
     // use synchronous block RAM instead of consuming scarce SLICEM capacity.
     (* ram_style = "block" *) reg [24:0] span_mem [0:255];
     (* ram_style = "block" *) reg [22:0] descriptor_mem [0:255];
-    (* ram_style = "distributed" *) reg        pattern_half_mem [0:255];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg        pattern_half_mem [0:255];
     (* ram_style = "block" *) reg [63:0] pattern_low_mem [0:255];
     (* ram_style = "block" *) reg [63:0] pattern_high_mem [0:255];
     reg [8:0] span_count;
@@ -264,7 +264,7 @@ localparam [3:0] ST_VALIDATE = 4'd15;
         span_mapped, span_screen_x, span_pixels, span_tile_x, span_tile_y
     };
 
-    (* ram_style = "distributed" *) reg [TAG_WIDTH-1:0]
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [TAG_WIDTH-1:0]
         tag_fifo [0:TAG_DEPTH-1];
     reg [TAG_WIDTH-1:0] tag_head_q;
     reg [3:0] tag_write_ptr;

@@ -18,6 +18,16 @@ static int pipe_producer_closed;
 static int pipe_consumer_closed;
 static uint32_t file_imports;
 static uint32_t socket_imports;
+static uint32_t restore_failures;
+static uint32_t restore_status;
+
+uint32_t astra_log_failure(const char *operation, uint32_t status)
+{
+    assert(strcmp(operation, "POSIX descriptor restore") == 0);
+    ++restore_failures;
+    restore_status = status;
+    return ASTRA_SYSCALL_OK;
+}
 
 static uint32_t file_exec_size(void) { return sizeof(uint32_t); }
 static int file_exec_export(void *state, uint32_t capacity, uint32_t *used)
@@ -355,6 +365,11 @@ main(void)
         assert(socket_imports == 1u);
         assert(astra_posix_descriptor_socket_slot(0) == 77);
         assert(astra_posix_descriptor_socket_slot(1) == -1);
+
+        *(uint32_t *)handoff = 0u;
+        errno = 0;
+        astra_posix_start(&startup);
+        assert(restore_failures == 1u && restore_status == EINVAL);
     }
     free(handoff);
     return 0;

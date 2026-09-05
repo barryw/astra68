@@ -29,6 +29,11 @@ module tb_astra_graphics_control;
     wire framebuffer_wrap_y;
     wire framebuffer_key_enable;
     wire [31:0] framebuffer_key;
+    reg [31:0] framebuffer_axi_debug_status = 32'h89abcdef;
+    reg [31:0] framebuffer_axi_ar_accept_count = 32'h10203040;
+    reg [31:0] framebuffer_axi_r_accept_count = 32'h50607080;
+    reg [31:0] framebuffer_axi_last_ar_address = 32'h40001280;
+    reg [31:0] framebuffer_axi_response_stall_cycles = 32'h00012345;
 
     wire tile0_enable;
     wire tile0_above_framebuffer;
@@ -257,6 +262,12 @@ wire [31:0] sprite_scale_step_x;
         .framebuffer_wrap_y(framebuffer_wrap_y),
         .framebuffer_key_enable(framebuffer_key_enable),
         .framebuffer_key(framebuffer_key),
+        .framebuffer_axi_debug_status(framebuffer_axi_debug_status),
+        .framebuffer_axi_ar_accept_count(framebuffer_axi_ar_accept_count),
+        .framebuffer_axi_r_accept_count(framebuffer_axi_r_accept_count),
+        .framebuffer_axi_last_ar_address(framebuffer_axi_last_ar_address),
+        .framebuffer_axi_response_stall_cycles(
+            framebuffer_axi_response_stall_cycles),
         .tile0_enable(tile0_enable),
         .tile0_above_framebuffer(tile0_above_framebuffer),
         .tile0_opacity(tile0_opacity),
@@ -587,7 +598,7 @@ wire [31:0] sprite_scale_step_x;
             end
             held_data = s_axi_rdata;
             held_response = s_axi_rresp;
-            if (held_data !== 32'h00010005 || held_response !== 2'b00)
+            if (held_data !== 32'h00010006 || held_response !== 2'b00)
                 $fatal(1, "backpressured AXI read returned bad data");
 
             // Present a second request while the first response is held.
@@ -654,10 +665,17 @@ wire [31:0] sprite_scale_step_x;
         reset = 1'b0;
 
         axi_read(32'h00000000, 32'h41535452, 2'b00);
-        axi_read(32'h00000004, 32'h00010005, 2'b00);
+        axi_read(32'h00000004, 32'h00010006, 2'b00);
         axi_read(32'h00000008, 32'h000003ff, 2'b00);
         axi_read(32'h0000001c, 32'h18000000, 2'b00);
         axi_read(32'h00000020, 32'h20000000, 2'b00);
+        axi_read(32'h0000002c, framebuffer_axi_debug_status, 2'b00);
+        axi_read(32'h00000030, framebuffer_axi_ar_accept_count, 2'b00);
+        axi_read(32'h00000034, framebuffer_axi_r_accept_count, 2'b00);
+        axi_read(32'h00000038, framebuffer_axi_last_ar_address, 2'b00);
+        axi_read(32'h0000003c,
+                 framebuffer_axi_response_stall_cycles, 2'b00);
+        axi_write(32'h0000002c, 32'd0, 4'hf, 0, 2'b11);
         axi_read(32'h00000003, 32'd0, 2'b11);
         axi_read_backpressure();
         $display("identity/read-decode pass");

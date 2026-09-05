@@ -54,6 +54,11 @@ module tb_astra_graphics_pipeline #(
     wire [31:0] commit_deferrals;
     wire scene_active;
     wire render_interrupt;
+    wire [31:0] framebuffer_axi_debug_status;
+    wire [31:0] framebuffer_axi_ar_accept_count;
+    wire [31:0] framebuffer_axi_r_accept_count;
+    wire [31:0] framebuffer_axi_last_ar_address;
+    wire [31:0] framebuffer_axi_response_stall_cycles;
 
     reg [31:0] s_axi_awaddr = 32'd0;
     reg [2:0] s_axi_awprot = 3'd0;
@@ -913,6 +918,13 @@ module tb_astra_graphics_pipeline #(
 
         test_render_fill();
         prepare_copper_dispatch_command();
+
+        // Exercise the real control-to-pixel mailbox with consecutive host
+        // writes; the control-only test replaces this handshake with a stub.
+        axi_write(32'h00000140, 32'h00000001);
+        axi_write(32'h00000144, 32'h00000000);
+        axi_write(32'h00000148, 32'h0000013e);
+        axi_write(32'h00000148, 32'h00000020);
 
         axi_write(32'h00000040, FRAMEBUFFER_BASE);
         axi_write(32'h00000044, FRAMEBUFFER_PITCH);

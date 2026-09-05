@@ -207,6 +207,7 @@ file_exec_import(const AstraStartupInfo *startup, const void *state,
                  uint32_t size)
 {
     const PosixFileExecHeader *header = state;
+    uint32_t status;
 
     if (state == NULL || size < sizeof(*header) ||
         header->magic != POSIX_FILE_EXEC_MAGIC ||
@@ -214,9 +215,13 @@ file_exec_import(const AstraStartupInfo *startup, const void *state,
         header->total_size != size ||
         header->vfs_size != size - (uint32_t)sizeof(*header) ||
         header->cwd[sizeof(header->cwd) - 1u] != '\0' ||
-        (header->creation_mask & ~(uint32_t)0777u) != 0u ||
-        astra_process_vfs_import(startup, header + 1, header->vfs_size) !=
-            ASTRA_VFS_OK) {
+        (header->creation_mask & ~(uint32_t)0777u) != 0u) {
+        errno = EINVAL;
+        return -1;
+    }
+    status = astra_process_vfs_import(startup, header + 1, header->vfs_size);
+    if (status != ASTRA_VFS_OK) {
+        (void)astra_log_failure("POSIX VFS restore", status);
         errno = EINVAL;
         return -1;
     }

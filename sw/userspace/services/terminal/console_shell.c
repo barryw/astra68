@@ -1411,6 +1411,8 @@ static void feed_key(uint32_t code)
         run_line(shell.editor.line);
         astra_shell_editor_commit(&shell.editor);
         prompt();
+        ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
+                     "shell ready");
         return;
     }
     if (result != ASTRA_SHELL_CHANGED)
@@ -1663,6 +1665,8 @@ void console_shell_run_backend(const ConsoleShellBackend *backend)
     write_line("namespace: WORK: writable");
     command_help();
     prompt();
+    ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
+                 "shell ready");
     if (!flush_terminal()) {
         return;
     }

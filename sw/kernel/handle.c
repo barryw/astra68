@@ -37,6 +37,9 @@
 #define KERNEL_HANDLE_BATCH_PREPARED 1u
 #define KERNEL_HANDLE_BATCH_COMMITTED 2u
 
+#define KERNEL_HANDLE_SLOT_IMPORT_RESERVED 1u
+#define KERNEL_HANDLE_SLOT_CLOSING 2u
+
 _Static_assert(KERNEL_HANDLE_MAX_ENTRIES > 0u &&
                    KERNEL_HANDLE_MAX_ENTRIES <= 255u,
                "eight-bit handle slot requires 1..255 entries");
@@ -285,15 +288,8 @@ static KernelHandleStatus find_entry_mutable(KernelHandleTable *table,
     return KERNEL_HANDLE_OK;
 }
 
-static void invalidate_entry(KernelHandleTable *table,
-                             KernelHandleEntry *entry,
-                             KernelHandleReleaseRecord *record)
+static void retire_entry(KernelHandleTable *table, KernelHandleEntry *entry)
 {
-    if (record != NULL) {
-        record->object = entry->object;
-        record->release = entry->release;
-        record->context = entry->release_context;
-    }
     entry->object = NULL;
     entry->retain = NULL;
     entry->release = NULL;
@@ -309,6 +305,18 @@ static void invalidate_entry(KernelHandleTable *table,
         transfer_pool_corrupt = 1u;
     if (!release_free_slot(table, entry))
         transfer_pool_corrupt = 1u;
+}
+
+static void invalidate_entry(KernelHandleTable *table,
+                             KernelHandleEntry *entry,
+                             KernelHandleReleaseRecord *record)
+{
+    if (record != NULL) {
+        record->object = entry->object;
+        record->release = entry->release;
+        record->context = entry->release_context;
+    }
+    retire_entry(table, entry);
 }
 
 void kernel_handle_transfer_pool_init(void)
@@ -669,32 +677,40 @@ KernelHandleStatus kernel_handle_close(KernelHandleTable *table,
 
 uint32_t kernel_handle_close_all(KernelHandleTable *table)
 {
-    KernelHandleReleaseRecord records[KERNEL_HANDLE_MAX_ENTRIES];
     uint32_t count = 0u;
 
     if (table == NULL)
         return 0u;
     for (uint32_t index = 0u; index < KERNEL_HANDLE_MAX_ENTRIES; ++index) {
-        if (table->entries[index].occupied == 0u) {
-            if (table->entries[index].reserved != 0u &&
-                !kernel_allocation_release(
-                    KERNEL_ALLOCATION_SITE_HANDLE_SLOT, 1u,
-                    sizeof(table->entries[index])))
-                transfer_pool_corrupt = 1u;
-            if (table->entries[index].reserved != 0u) {
-                table->entries[index].reserved = 0u;
-                if (!release_free_slot(table, &table->entries[index]))
-                    transfer_pool_corrupt = 1u;
-            }
+        KernelHandleEntry *entry = &table->entries[index];
+
+        if (entry->occupied != 0u) {
+            entry->occupied = 0u;
+            entry->reserved = KERNEL_HANDLE_SLOT_CLOSING;
+            ++count;
             continue;
         }
-        invalidate_entry(table, &table->entries[index], &records[count]);
-        ++count;
+        if (entry->reserved != KERNEL_HANDLE_SLOT_IMPORT_RESERVED)
+            continue;
+        if (!kernel_allocation_release(
+                KERNEL_ALLOCATION_SITE_HANDLE_SLOT, 1u, sizeof(*entry)))
+            transfer_pool_corrupt = 1u;
+        entry->reserved = 0u;
+        if (!release_free_slot(table, entry))
+            transfer_pool_corrupt = 1u;
     }
-    for (uint32_t index = 0u; index < count; ++index) {
-        if (records[index].release != NULL)
-            records[index].release(records[index].object,
-                                   records[index].context);
+    for (uint32_t index = 0u; index < KERNEL_HANDLE_MAX_ENTRIES; ++index) {
+        KernelHandleEntry *entry = &table->entries[index];
+        KernelHandleReleaseRecord record;
+
+        if (entry->reserved != KERNEL_HANDLE_SLOT_CLOSING)
+            continue;
+        record.object = entry->object;
+        record.release = entry->release;
+        record.context = entry->release_context;
+        retire_entry(table, entry);
+        if (record.release != NULL)
+            record.release(record.object, record.context);
     }
     return count;
 }
@@ -1039,7 +1055,7 @@ KernelHandleStatus kernel_handle_import_reserve(
             entry->generation = 1u;
         destination_table->free_slots[handle_slot_word(slot)] &=
             ~handle_slot_bit(slot);
-        entry->reserved = 1u;
+        entry->reserved = KERNEL_HANDLE_SLOT_IMPORT_RESERVED;
         if (!kernel_allocation_commit(
                 KERNEL_ALLOCATION_SITE_HANDLE_SLOT, 1u, sizeof(*entry),
                 destination_table->owner)) {
@@ -1093,7 +1109,8 @@ KernelHandleStatus kernel_handle_import_commit(
         if (slot >= KERNEL_HANDLE_MAX_ENTRIES)
             return KERNEL_HANDLE_INVALID_STATE;
         destination = &destination_table->entries[slot];
-        if (destination->occupied != 0u || destination->reserved != 1u ||
+        if (destination->occupied != 0u ||
+            destination->reserved != KERNEL_HANDLE_SLOT_IMPORT_RESERVED ||
             handle_slot_free(destination_table, slot) ||
             reservation->handles[index] !=
                 make_handle(slot, destination->generation) ||
@@ -1140,7 +1157,8 @@ KernelHandleStatus kernel_handle_import_cancel(
 
         if (slot >= KERNEL_HANDLE_MAX_ENTRIES ||
             destination_table->entries[slot].occupied != 0u ||
-            destination_table->entries[slot].reserved != 1u ||
+            destination_table->entries[slot].reserved !=
+                KERNEL_HANDLE_SLOT_IMPORT_RESERVED ||
             handle_slot_free(destination_table, slot))
             return KERNEL_HANDLE_INVALID_STATE;
     }

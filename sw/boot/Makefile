@@ -7,6 +7,7 @@ HOST_CC ?= cc
 UART_MONITOR ?= 0
 UART_BAUD ?= 115200
 ROM_VERSION ?= 0.3
+HOST_PLATFORM ?= ARTY_Z7_20
 BUILD_INFO = build/rom_build_info.h
 ROM_PAYLOADS = build/rom_payloads.h
 KERNEL_PAYLOAD = build/astra_kernel.lz4
@@ -55,7 +56,7 @@ KERNEL_ID_SRCS = $(KERNEL_DIR)/Makefile \
                          $(KERNEL_DIR)/*.S $(KERNEL_DIR)/*.ld \
                          $(KERNEL_DIR)/*.py))
 
-BUILD_CONFIG = TARGET=QEMU_TCG_M68030 HOST=ARTY_Z7_20 \
+BUILD_CONFIG = TARGET=QEMU_TCG_M68030 HOST=$(HOST_PLATFORM) \
                ROM_VERSION=$(ROM_VERSION) KERNEL_VERSION=$(KERNEL_VERSION) \
                KERNEL_PANIC_SELFTEST=$(KERNEL_PANIC_SELFTEST) \
                KERNEL_SCHED_TRACE=$(KERNEL_SCHED_TRACE) \

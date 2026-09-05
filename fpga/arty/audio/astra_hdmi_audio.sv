@@ -68,7 +68,7 @@ module astra_hdmi_audio (
     wire fifo_rd_ready = (audio_enable || audio_drain) && fifo_rd_valid;
 
     reg [31:0] underflow_count_q;
-    reg [31:0] underflow_gray_q;
+    (* preserve *) reg [31:0] underflow_gray_q;
     (* ASYNC_REG = "TRUE" *) reg [31:0] underflow_gray_sync1_q;
     (* ASYNC_REG = "TRUE" *) reg [31:0] underflow_gray_sync2_q;
 

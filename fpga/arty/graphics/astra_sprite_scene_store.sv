@@ -118,23 +118,23 @@ module astra_sprite_scene_store #(
     localparam [1:0] R_READ = 2'd1;
     localparam [1:0] R_WRITE = 2'd2;
 
-    (* ram_style = "distributed" *) reg [31:0] scale_step0 [0:63];
-    (* ram_style = "distributed" *) reg [31:0] scale_step1 [0:63];
-    (* ram_style = "distributed" *) reg [7:0] priority0 [0:63];
-    (* ram_style = "distributed" *) reg [7:0] priority1 [0:63];
-    (* ram_style = "distributed" *) reg [5:0] order0 [0:63];
-    (* ram_style = "distributed" *) reg [5:0] order1 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [31:0] scale_step0 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [31:0] scale_step1 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [7:0] priority0 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [7:0] priority1 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [5:0] order0 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [5:0] order1 [0:63];
 
-    (* ram_style = "distributed" *) reg [31:0] active_word0 [0:63];
-    (* ram_style = "distributed" *) reg [31:0] active_word1 [0:63];
-    (* ram_style = "distributed" *) reg [31:0] active_word2 [0:63];
-    (* ram_style = "distributed" *) reg [31:0] active_word3 [0:63];
-    (* ram_style = "distributed" *) reg [31:0] active_word4 [0:63];
-    (* ram_style = "distributed" *) reg [31:0] active_word5 [0:63];
-    (* ram_style = "distributed" *) reg [31:0] active_word6 [0:63];
-    (* ram_style = "distributed" *) reg [31:0] active_scale_step [0:63];
-    (* ram_style = "distributed" *) reg [5:0] active_order [0:63];
-    (* ram_style = "distributed" *) reg [63:0] active_compatible [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [31:0] active_word0 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [31:0] active_word1 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [31:0] active_word2 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [31:0] active_word3 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [31:0] active_word4 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [31:0] active_word5 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [31:0] active_word6 [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [31:0] active_scale_step [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [5:0] active_order [0:63];
+    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [63:0] active_compatible [0:63];
 
     integer initialize_index;
     initial begin

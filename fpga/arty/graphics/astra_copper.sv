@@ -144,13 +144,13 @@ localparam [3:0] EXEC_MOVE_COMMIT = 4'd12;
         end
     endfunction
 
-    // Four explicit 4096x32 memories infer sixteen RAMB36 tiles total. Port A
-    // is the inactive-bank software window. Port B is active execution or
-    // inactive validation, so validation and execution can proceed together.
-    (* ram_style = "block" *) reg [31:0] bank0_w0 [0:4095];
-    (* ram_style = "block" *) reg [31:0] bank0_w1 [0:4095];
-    (* ram_style = "block" *) reg [31:0] bank1_w0 [0:4095];
-    (* ram_style = "block" *) reg [31:0] bank1_w1 [0:4095];
+    // Split each word into byte-wide memories. This expresses byte writes as
+    // independent RAM write enables, which both Vivado and Quartus infer as
+    // block RAM without changing the old-data read-during-write contract.
+    (* ram_style = "block" *) reg [7:0] bank0_w0 [0:3][0:4095];
+    (* ram_style = "block" *) reg [7:0] bank0_w1 [0:3][0:4095];
+    (* ram_style = "block" *) reg [7:0] bank1_w0 [0:3][0:4095];
+    (* ram_style = "block" *) reg [7:0] bank1_w1 [0:3][0:4095];
 
     wire edit_bank = ~active_bank;
     assign program_write_ready = !validate_busy;
@@ -352,11 +352,31 @@ localparam [3:0] EXEC_MOVE_COMMIT = 4'd12;
                 program_read_bank_q <= edit_bank;
                 program_read_half_q <= program_half;
                 if (!program_half) begin
-                    program_bank0_w0_q <= bank0_w0[program_index];
-                    program_bank1_w0_q <= bank1_w0[program_index];
+                    program_bank0_w0_q <= {
+                        bank0_w0[3][program_index],
+                        bank0_w0[2][program_index],
+                        bank0_w0[1][program_index],
+                        bank0_w0[0][program_index]
+                    };
+                    program_bank1_w0_q <= {
+                        bank1_w0[3][program_index],
+                        bank1_w0[2][program_index],
+                        bank1_w0[1][program_index],
+                        bank1_w0[0][program_index]
+                    };
                 end else begin
-                    program_bank0_w1_q <= bank0_w1[program_index];
-                    program_bank1_w1_q <= bank1_w1[program_index];
+                    program_bank0_w1_q <= {
+                        bank0_w1[3][program_index],
+                        bank0_w1[2][program_index],
+                        bank0_w1[1][program_index],
+                        bank0_w1[0][program_index]
+                    };
+                    program_bank1_w1_q <= {
+                        bank1_w1[3][program_index],
+                        bank1_w1[2][program_index],
+                        bank1_w1[1][program_index],
+                        bank1_w1[0][program_index]
+                    };
                 end
             end
         end
@@ -367,12 +387,10 @@ localparam [3:0] EXEC_MOVE_COMMIT = 4'd12;
                      write_lane = write_lane + 1)
                     if (program_write_strobe[write_lane]) begin
                         if (!program_half)
-                            bank0_w0[program_index]
-                                [write_lane * 8 +: 8] <=
+                            bank0_w0[write_lane][program_index] <=
                                 program_write_data[write_lane * 8 +: 8];
                         else
-                            bank0_w1[program_index]
-                                [write_lane * 8 +: 8] <=
+                            bank0_w1[write_lane][program_index] <=
                                 program_write_data[write_lane * 8 +: 8];
                     end
             end else begin
@@ -380,12 +398,10 @@ localparam [3:0] EXEC_MOVE_COMMIT = 4'd12;
                      write_lane = write_lane + 1)
                     if (program_write_strobe[write_lane]) begin
                         if (!program_half)
-                            bank1_w0[program_index]
-                                [write_lane * 8 +: 8] <=
+                            bank1_w0[write_lane][program_index] <=
                                 program_write_data[write_lane * 8 +: 8];
                         else
-                            bank1_w1[program_index]
-                                [write_lane * 8 +: 8] <=
+                            bank1_w1[write_lane][program_index] <=
                                 program_write_data[write_lane * 8 +: 8];
                     end
             end
@@ -393,14 +409,30 @@ localparam [3:0] EXEC_MOVE_COMMIT = 4'd12;
     end
 
     always @(posedge clk) begin
-        bank0_exec_w0_q <= bank0_w0[
-            active_bank ? validate_index : pc];
-        bank0_exec_w1_q <= bank0_w1[
-            active_bank ? validate_index : pc];
-        bank1_exec_w0_q <= bank1_w0[
-            active_bank ? pc : validate_index];
-        bank1_exec_w1_q <= bank1_w1[
-            active_bank ? pc : validate_index];
+        bank0_exec_w0_q <= {
+            bank0_w0[3][active_bank ? validate_index : pc],
+            bank0_w0[2][active_bank ? validate_index : pc],
+            bank0_w0[1][active_bank ? validate_index : pc],
+            bank0_w0[0][active_bank ? validate_index : pc]
+        };
+        bank0_exec_w1_q <= {
+            bank0_w1[3][active_bank ? validate_index : pc],
+            bank0_w1[2][active_bank ? validate_index : pc],
+            bank0_w1[1][active_bank ? validate_index : pc],
+            bank0_w1[0][active_bank ? validate_index : pc]
+        };
+        bank1_exec_w0_q <= {
+            bank1_w0[3][active_bank ? pc : validate_index],
+            bank1_w0[2][active_bank ? pc : validate_index],
+            bank1_w0[1][active_bank ? pc : validate_index],
+            bank1_w0[0][active_bank ? pc : validate_index]
+        };
+        bank1_exec_w1_q <= {
+            bank1_w1[3][active_bank ? pc : validate_index],
+            bank1_w1[2][active_bank ? pc : validate_index],
+            bank1_w1[1][active_bank ? pc : validate_index],
+            bank1_w1[0][active_bank ? pc : validate_index]
+        };
     end
 
     always @(posedge clk) begin

@@ -9,6 +9,124 @@ The platform is **Astra 68**, its kernel is **Axiom**, and the complete
 user-facing system is **Astra OS**. The Astra NDK is the stable developer
 surface; Axiom's internal interfaces are not a module ABI.
 
+## DE25-Nano migration checkpoint (2026-09-05)
+
+The DE25-Nano attached to Beast is the active Astra machine; the Arty Z7-20 is
+the rollback platform. The active DE25 build pins and checks the exact USB/JTAG
+identity, Agilex 5 device, Quartus Pro 26.1.1 tool and license, vendor GHRD
+source, restored QSF, and HPS SPL input before every build.
+
+`fpga/de25/build_vendor_baseline.sh` cleanly restores and upgrades the vendor
+25.3.1 design, compiles it in staging, requires successful fit and fully
+constrained setup/hold timing, hashes and verifies both programming files, and
+publishes only after every gate passes. The retained build uses 9,160 / 46,800
+ALMs and 131 / 358 RAM blocks, with +1.662 ns setup slack, 0.000 ns hold slack,
+and zero TNS. Its exact HPS SOF programmed successfully and cold-booted the
+physical board through 1 GiB LPDDR4A calibration, SD, all four ARM64 cores,
+ext4 recovery, networking, SSH, and the serial login prompt. Detailed source,
+artifact, and JTAG identities are in `fpga/de25/TIMING_CLOSURE.md`.
+
+The existing Astra QEMU/runtime stack now also builds for the DE25's AArch64
+HPS against an Ubuntu 22.04 sysroot instead of Beast's newer host ABI. The
+resulting QEMU 9.2.4 binary has SHA-256
+`52ed189975d15019d696f99635081016499d989f549f4d9b55804ea172c5744e`,
+requires no glibc symbol newer than `GLIBC_2.34`, and executes on the board's
+glibc 2.35 userspace. Its build directory is keyed by the build contract as
+well as the patched QEMU source identity, so a changed profile cannot silently
+reuse an incompatible configured tree.
+
+The retained production shell enables Platform Designer's native
+out-of-order support on every HPS/graphics master connected to LPDDR4B. It uses
+41,860 / 46,800 ALMs, 3,818,968 / 7,331,840 block-memory bits, 290 / 358 RAM
+blocks, 58 / 376 DSP blocks, and 5 / 11 PLLs. Every production clock is fully
+constrained and routed; setup, hold, recovery, removal, and minimum-pulse slack
+are respectively +0.671 ns, 0.000 ns, +2.661 ns, +0.024 ns, and +0.220 ns.
+The final Design Assistant report has zero high-severity violations. Exact
+artifact hashes are RBF
+`2486427470514318a8f669f61dbeb766b2f18501eb6569b0fa13562cda0ce8c4`,
+HPS JIC
+`c61af281078482027fdbd0c0a94130bee83e11daba8acf1abe5814ae344c18df`,
+full SOF
+`633a7bfa76139900cba5e9a1bc4c490fcef3170fe636558b0a5c8be18353d562`,
+and HPS SOF
+`c102e120e4278269d32f4666cf2f32bf02e25a9ba0b86b75b8a100a7c9a26417`.
+
+The exact RBF and boot script were installed atomically into the SD boot
+chain. `verify_running_shell.sh` now verifies the complete retained build
+manifest and uses System Console `design_link` against the physical JTAG
+device, so an old programmed image cannot masquerade as the candidate. That
+gate passed again after a physical power cycle. The board then cold-booted
+LPDDR4A, the Astra fabric, SD Linux, all four ARM64 cores, ext3 recovery,
+1-Gbps Ethernet, SSH, and the Astra runtime normally.
+
+The former concurrent HPS access failure is closed. Fifty-four concurrent and
+alternating AArch64 workloads transferred 99,532,800 bytes through the shared
+LPDDR4B arena with zero hangs. Intel PMON counted exactly 12,441,600 response
+beats, equal to 54 times the expected 230,400 beats, with no overflow. This is
+the measured effect of the native out-of-order setting; no custom ordering
+shim was retained.
+
+The first normal runtime exposed a separate Linux-helper fault: glibc's AArch64
+`memset` selected `DC ZVA` for the device-mapped framebuffer and raised
+`SIGBUS`. A captured core located the exact instruction. All device-memory
+fills and copies now route through the shared graphics hardware library, whose
+generated code contains only explicit volatile byte and 64-bit loads/stores.
+The fixed terminal display SHA-256 is
+`fe62b9c45b45aa493e6eb4f3fd0554d95f54f0c2b168ac1140238f7c7a78fb87`.
+It remains resident through POST, storage recovery, hostfs, network, NTP, and
+stage 8. The first fixed-display release was intentionally superseded after a
+cold boot proved that systemd's `time-sync.target` only waited for the NTP
+daemon to start: Astra inherited the board's RTC about 28 minutes before the
+first network synchronization. The DE25 unit now pulls in systemd's native
+`systemd-time-wait-sync.service`, whose start timeout is infinite, and orders
+Astra after both it and `time-sync.target`. This avoids the sticky
+`NTPSynchronized` property that a live negative test proved unsuitable as a
+custom polling interface. Current immutable runtime release
+`d7b5b035315219fcdc47bd34fa1c2726685904c9663e68a06c09533f01204344`
+remains byte-verified. The final cold boot started the native wait service with
+the board's stale 2023 RTC, held Astra until NTP synchronized at
+`2026-09-05T16:11:25Z`, completed the wait barrier, and started Astra in that
+same second. The guest inherited `2026-09-05T16:11:29Z` and reached stage 8.
+
+On the physical DE25, that exact release passed the complete 70-command
+terminal gate covering filesystem mutation and durability, POSIX networking,
+Lua, process reporting, events, redirects, assigns, and the 2026 host clock.
+Three consecutive hardware sweeps passed full splash transfer/readback, every
+64-sprite phase, the complete renderer/blitter/geometry/AFNT/flood/compositor
+suite, dual-bank copper, and 48-kHz HDMI audio with zero AXI errors and zero
+renderer backpressure. A second power cycle again loaded the exact FPGA shell
+but exposed the NTP-ordering defect above; the following cold boot passed the
+native synchronization barrier and exact-shell gate. The live display mailbox
+completed the desktop's render request at graphics generation 4. The live
+graphics registers reported the expected device identity and capabilities,
+the 1280x720 scanout at `0x40200000`, zero commit errors, zero response stalls,
+and zero renderer failures or backpressure. Requesting the HDMI link made the
+hardware report both requested and transmitter-ready; removing the request
+returned it to idle. The exact-shell, cold-boot, runtime, scanout, and HDMI-link
+gates are therefore closed without requiring an external capture device.
+
+Direct hardware testing established the boot-order requirement. Loading the
+HPS-bearing Astra SOF stops a running HPS, while loading its RBF preserves the
+HPS but disables the HPS-to-FPGA bridges; a status read at `0xff420000` then
+raises `SIGBUS`. The SD U-Boot script enables those bridges before Linux.
+Production must therefore load the Astra RBF in the boot chain before `bridge
+enable`, not reconfigure the fabric after Linux starts.
+
+The DE25 Linux image no longer carries its previous Ultimate128 runtime. The
+input daemon and every installed binary variant, state directory, Avahi
+advertisement, hostname, DTB reservation, memory-limit argument, and matching
+boot backup were removed. A physical recovery boot reached an `astra68` login
+with only the vendor service-buffer reservation, no retired service, the full
+expected 934 MiB Linux memory pool, networking, and SSH. A Linux warm reboot
+previously stalled after the HPS reset request and required a fabric/HPS cold
+start. The current instrumented SD image completed a warm reboot successfully;
+cold-boot repetition remains required before that older limitation can be
+retired from the release gate.
+
+DE25 parity is complete. The next CPU architecture project is a measured
+MC68040 migration. It remains separate from the board move so PMMU, exception,
+cache, and performance changes can be attributed and qualified independently.
+
 ## Physical host-storage media checkpoint (2026-09-01)
 
 Production `/data` remains ext4 with `fast_commit` on SD partition
@@ -71,19 +189,18 @@ FAT boot volume is mounted, and the USB disk remains unmounted.
 ## Active execution boundary
 
 The sole MC68030 implementation is the Astra QEMU TCG backend running on the
-Arty Z7-20 Cortex-A9 processing system. The Arty FPGA fabric implements
-graphics and peripherals; it does not contain the CPU. CPU RTL, alternate
-emulators, obsolete board SoCs, and their private verification harnesses were
-removed on 2026-08-27 so the repository cannot present a retired execution
-path as current. Shared FIFO, front-panel, and font assets used by the Arty
-design now live under their active owners.
+DE25-Nano AArch64 HPS. The FPGA fabric implements graphics and peripherals; it
+does not contain the CPU. The Arty Z7-20 is the rollback platform. CPU RTL,
+alternate emulators, obsolete board SoCs, and their private verification
+harnesses were removed on 2026-08-27 so the repository cannot present a
+retired execution path as current. Shared FIFO, front-panel, and font assets
+live under their active owners.
 
-The Arty's 512 MiB DDR budget is exactly 128 MiB of Astra guest RAM, 128 MiB
-of contiguous graphics RAM, and 256 MiB for Linux and host services. The
-device tree exposes 384 MiB as normal Linux System RAM only because QEMU backs
-Astra's 128 MiB guest allocation from that cached memory; QEMU preallocates it
-at launch, leaving Linux and host services their 256 MiB budget. The graphics
-arena remains the separate `no-map` `0x18000000..0x1fffffff` range.
+The DE25 has separate 1 GiB LPDDR4 banks: LPDDR4A belongs to the HPS and
+LPDDR4B is the graphics arena at `0x40000000..0x7fffffff`. Linux exposes
+934 MiB of the HPS bank as normal System RAM, and QEMU preallocates Astra's
+128 MiB guest RAM from that cached memory. Graphics control registers occupy
+the separate lightweight-bridge aperture beginning at `0x20100000`.
 
 ## Immutable Arty releases (2026-08-30)
 

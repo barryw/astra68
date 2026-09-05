@@ -25,8 +25,16 @@ static uint32_t fail_connect;
 static uint32_t seed_distinct;
 static uint32_t direct_connect;
 static uint32_t direct_resumes;
+static uint32_t fail_direct_resume;
 static uint32_t direct_forks;
+static uint32_t port_fork_rebinds;
 static uint32_t next_semaphore = 100u;
+
+uint32_t astra_log_failure(const char *operation, uint32_t status)
+{
+    (void)operation;
+    return status;
+}
 
 int astra_startup_validate(const AstraStartupInfo *startup)
 {
@@ -202,6 +210,8 @@ uint32_t astra_vfs_host_direct_resume(AstraVfsClient *client, uint32_t area,
     assert(client != NULL && area == 0x41u && device == 0x42u &&
            session == 0x43u);
     ++direct_resumes;
+    if (fail_direct_resume != 0u)
+        return ASTRA_VFS_ERR_IO;
     client->port_direct_address = (void *)(uintptr_t)1u;
     client->port_direct_area = area;
     client->port_direct_device = device;
@@ -220,6 +230,12 @@ void astra_vfs_port_abandon(AstraVfsClient *client)
 {
     ++abandons;
     client->session = ASTRA_VFS_SESSION_INVALID;
+}
+
+void astra_vfs_port_after_fork_child(AstraVfsClient *client)
+{
+    assert(client != NULL);
+    ++port_fork_rebinds;
 }
 
 uint32_t astra_vfs_disconnect(AstraVfsClient *client)
@@ -362,10 +378,12 @@ int main(void)
         connects = 0u;
         disconnects = 0u;
         abandons = 0u;
+        port_fork_rebinds = 0u;
         assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
         assert(astra_process_vfs_client() != NULL && connects == 1u);
         assert(astra_process_vfs_after_fork_child(&startup) == ASTRA_VFS_OK);
-        assert(abandons == 1u && disconnects == 0u);
+        assert(abandons == 1u && disconnects == 0u &&
+               port_fork_rebinds == 1u);
         assert(astra_process_vfs_client() != NULL && connects == 2u);
         astra_process_vfs_close();
         assert(disconnects == 1u);
@@ -376,10 +394,12 @@ int main(void)
         disconnects = 0u;
         direct_connect = 1u;
         direct_forks = 0u;
+        port_fork_rebinds = 0u;
         assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
         assert(astra_process_vfs_client() != NULL && connects == 1u);
         assert(astra_process_vfs_after_fork_child(&startup) == ASTRA_VFS_OK);
-        assert(direct_forks == 1u && connects == 1u);
+        assert(direct_forks == 1u && connects == 1u &&
+               port_fork_rebinds == 1u);
         astra_process_vfs_close();
         assert(disconnects == 1u);
         direct_connect = 0u;
@@ -407,11 +427,15 @@ int main(void)
                        ASTRA_VFS_OK &&
                    used == size);
             direct_connect = 0u;
+            fail_direct_resume = 1u;
+            assert(astra_process_vfs_import(&startup, state, size) ==
+                   ASTRA_VFS_ERR_IO);
+            fail_direct_resume = 0u;
             assert(astra_process_vfs_import(&startup, state, size) ==
                    ASTRA_VFS_OK);
             free(state);
             client = astra_process_vfs_client();
-            assert(client != NULL && direct_resumes == 1u &&
+            assert(client != NULL && direct_resumes == 2u &&
                    client->port_direct_address != NULL);
             astra_process_vfs_close();
         }

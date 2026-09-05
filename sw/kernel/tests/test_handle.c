@@ -21,6 +21,13 @@ typedef struct CloneState {
     bool reject_retain;
 } CloneState;
 
+typedef struct CloseAllState {
+    KernelHandleTable *table;
+    KernelHandle other;
+    KernelHandle replacement;
+    uint32_t calls;
+} CloseAllState;
+
 static void release_object(void *object, void *context)
 {
     ReleaseState *state = context;
@@ -49,6 +56,23 @@ static void release_clone(void *object, void *context)
     assert(state->references != 0u);
     --state->references;
     ++state->release_calls;
+}
+
+static void release_during_close_all(void *object, void *context)
+{
+    CloseAllState *state = context;
+    void *found;
+
+    ++state->calls;
+    if ((uintptr_t)object != 1u)
+        return;
+    assert(kernel_handle_lookup(state->table, state->other,
+                                KERNEL_OBJECT_SYNC, RIGHT_QUERY,
+                                &found) == KERNEL_HANDLE_INVALID_HANDLE);
+    assert(kernel_handle_install(
+               state->table, KERNEL_OBJECT_SYNC, RIGHT_QUERY,
+               (void *)(uintptr_t)3u, NULL, NULL,
+               &state->replacement) == KERNEL_HANDLE_OK);
 }
 
 static void test_free_slot_bitmap_invariants(void)
@@ -331,6 +355,41 @@ static void test_capacity_and_close_all(void)
                                     &object) == KERNEL_HANDLE_INVALID_HANDLE);
     }
     assert(kernel_handle_close_all(&table) == 0u);
+}
+
+static void test_close_all_is_reentrant(void)
+{
+    KernelHandleTable table;
+    CloseAllState state = {&table, KERNEL_HANDLE_INVALID,
+                           KERNEL_HANDLE_INVALID, 0u};
+    KernelHandle first;
+    void *object;
+
+    kernel_handle_table_init(&table);
+    assert(kernel_handle_install(
+               &table, KERNEL_OBJECT_SYNC, RIGHT_QUERY,
+               (void *)(uintptr_t)1u, release_during_close_all,
+               &state, &first) == KERNEL_HANDLE_OK);
+    assert(kernel_handle_install(
+               &table, KERNEL_OBJECT_SYNC, RIGHT_QUERY,
+               (void *)(uintptr_t)2u, release_during_close_all,
+               &state, &state.other) == KERNEL_HANDLE_OK);
+
+    assert(kernel_handle_close_all(&table) == 2u);
+    assert(state.calls == 2u);
+    assert(kernel_handle_lookup(&table, first, KERNEL_OBJECT_SYNC,
+                                RIGHT_QUERY, &object) ==
+           KERNEL_HANDLE_INVALID_HANDLE);
+    assert(kernel_handle_lookup(&table, state.other, KERNEL_OBJECT_SYNC,
+                                RIGHT_QUERY, &object) ==
+           KERNEL_HANDLE_INVALID_HANDLE);
+    assert(kernel_handle_lookup(&table, state.replacement,
+                                KERNEL_OBJECT_SYNC, RIGHT_QUERY,
+                                &object) == KERNEL_HANDLE_OK);
+    assert((uintptr_t)object == 3u);
+    assert(kernel_handle_close(&table, state.replacement) ==
+           KERNEL_HANDLE_OK);
+    assert(kernel_handle_table_valid(&table));
 }
 
 static void test_invalid_arguments(void)
@@ -662,6 +721,7 @@ int main(void)
     test_allocation_injection_preserves_authority();
     test_lookup_rights_type_and_stale_reuse();
     test_capacity_and_close_all();
+    test_close_all_is_reentrant();
     test_invalid_arguments();
     test_cloneable_rights_reduction_and_lifetime();
     test_table_clone_preserves_handle_values();

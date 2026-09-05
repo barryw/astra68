@@ -42,6 +42,11 @@ module astra_framebuffer_line_builder #(
     output reg                          deadline_error,
     output reg  [31:0]                  build_cycles,
     output reg  [31:0]                  read_bytes,
+    output wire [31:0]                  axi_debug_status,
+    output reg  [31:0]                  axi_ar_accept_count,
+    output reg  [31:0]                  axi_r_accept_count,
+    output reg  [31:0]                  axi_last_ar_address,
+    output reg  [31:0]                  axi_response_stall_cycles,
 
     output wire [AXI_ID_WIDTH-1:0]      m_axi_arid,
     output wire [31:0]                  m_axi_araddr,
@@ -105,7 +110,6 @@ module astra_framebuffer_line_builder #(
     endfunction
 
     reg [4:0] state;
-    reg segment_response_enable_q;
     reg [1:0] build_slot_q;
     reg [9:0] line_y_q;
     reg [1:0] format_q;
@@ -225,12 +229,16 @@ module astra_framebuffer_line_builder #(
     reg [2:0] burst_write_ptr;
     reg [2:0] burst_read_ptr;
     reg [3:0] burst_count;
+    reg [5:0] reserved_beats;
     reg response_active;
     reg [4:0] response_beats_left;
 
+    wire [5:0] selected_burst_beats_wide = {1'b0, selected_burst_beats};
+    wire issue_credit_available =
+        reserved_beats + selected_burst_beats_wide <= BEAT_FIFO_DEPTH;
     wire ar_plan = state == ST_SEGMENT && !ar_request_valid &&
         issue_beats_remaining != 11'd0 &&
-        burst_count < BURST_FIFO_DEPTH;
+        burst_count < BURST_FIFO_DEPTH && issue_credit_available;
     assign m_axi_arvalid = ar_request_valid;
     assign m_axi_arid = AXI_ID;
     assign m_axi_araddr = ar_request_address;
@@ -239,7 +247,10 @@ module astra_framebuffer_line_builder #(
     assign m_axi_arburst = 2'b01;
     assign m_axi_arcache = 4'b0011;
     assign m_axi_arprot = 3'b000;
-    assign m_axi_arqos = 4'b1111;
+    // The memory controller may implement QoS as strict priority.  The
+    // framebuffer is continuous traffic, so a nonzero value can starve HPS
+    // accesses indefinitely even when memory bandwidth remains available.
+    assign m_axi_arqos = 4'b0000;
     wire ar_accept = m_axi_arvalid && m_axi_arready;
 
     reg [63:0] beat_fifo [0:BEAT_FIFO_DEPTH-1];
@@ -250,12 +261,33 @@ module astra_framebuffer_line_builder #(
     wire [4:0] expected_response_beats = response_active ?
         response_beats_left : burst_head_beats;
     wire expected_response_last = expected_response_beats == 5'd1;
-    assign m_axi_rready = segment_response_enable_q &&
-        beat_count < BEAT_FIFO_DEPTH && burst_count != 4'd0;
+    // AXI reads cannot be cancelled after AR acceptance.  A completed or
+    // timed-out line therefore keeps RREADY asserted while discarding every
+    // remaining response before the builder can be reused.
+    assign m_axi_rready = burst_count != 4'd0 &&
+        (state == ST_SEGMENT || state == ST_SEGMENT_DRAIN);
     wire response_accept = m_axi_rvalid && m_axi_rready;
     wire burst_pop = response_accept &&
         (m_axi_rlast || expected_response_last);
-    wire beat_push = response_accept;
+    wire beat_push = response_accept && state == ST_SEGMENT;
+
+    assign axi_debug_status = {
+        issue_beats_remaining != 11'd0,
+        beat_active,
+        state == ST_SEGMENT_DRAIN,
+        response_active,
+        beat_count,
+        reserved_beats,
+        burst_count,
+        m_axi_rready,
+        m_axi_rvalid,
+        m_axi_arready,
+        m_axi_arvalid,
+        fetch_error,
+        deadline_error,
+        busy,
+        state
+    };
 
     reg beat_active;
     reg first_beat;
@@ -319,7 +351,6 @@ module astra_framebuffer_line_builder #(
     always @(posedge build_clk) begin
         if (build_reset) begin
             state <= ST_IDLE;
-            segment_response_enable_q <= 1'b0;
             busy <= 1'b0;
             done <= 1'b0;
             line_complete <= 1'b0;
@@ -330,6 +361,10 @@ module astra_framebuffer_line_builder #(
             deadline_error <= 1'b0;
             build_cycles <= 32'd0;
             read_bytes <= 32'd0;
+            axi_ar_accept_count <= 32'd0;
+            axi_r_accept_count <= 32'd0;
+            axi_last_ar_address <= 32'd0;
+            axi_response_stall_cycles <= 32'd0;
             build_slot_q <= 2'd0;
             line_y_q <= 10'd0;
             format_q <= FORMAT_INDEX8;
@@ -379,6 +414,7 @@ module astra_framebuffer_line_builder #(
             burst_write_ptr <= 3'd0;
             burst_read_ptr <= 3'd0;
             burst_count <= 4'd0;
+            reserved_beats <= 6'd0;
             response_active <= 1'b0;
             response_beats_left <= 5'd0;
             beat_write_ptr <= 5'd0;
@@ -413,8 +449,82 @@ module astra_framebuffer_line_builder #(
                 line_write_byte3_q <= active_byte3;
             end
 
-            if (busy)
+            if (busy && !deadline_error)
                 build_cycles <= build_cycles + 32'd1;
+
+            if (ar_accept) begin
+                axi_ar_accept_count <= axi_ar_accept_count + 32'd1;
+                axi_last_ar_address <= m_axi_araddr;
+            end
+            if (response_accept) begin
+                axi_r_accept_count <= axi_r_accept_count + 32'd1;
+                axi_response_stall_cycles <= 32'd0;
+            end else if (burst_count != 4'd0 &&
+                         axi_response_stall_cycles != 32'hffffffff) begin
+                axi_response_stall_cycles <=
+                    axi_response_stall_cycles + 32'd1;
+            end else if (burst_count == 4'd0) begin
+                axi_response_stall_cycles <= 32'd0;
+            end
+
+            if (response_accept) begin
+                if (state == ST_SEGMENT) begin
+                    beat_fifo[beat_write_ptr] <= m_axi_rdata;
+                    beat_write_ptr <= beat_write_ptr + 5'd1;
+                end
+                if (m_axi_rid != AXI_ID || m_axi_rresp != 2'b00 ||
+                    m_axi_rlast != expected_response_last)
+                    fetch_error <= 1'b1;
+
+                if (burst_pop) begin
+                    response_active <= 1'b0;
+                    response_beats_left <= 5'd0;
+                end else begin
+                    response_active <= 1'b1;
+                    response_beats_left <= expected_response_beats - 5'd1;
+                end
+            end
+
+            case ({ar_accept, burst_pop})
+                2'b10: begin
+                    burst_count <= burst_count + 4'd1;
+                    if (burst_count == 4'd0) begin
+                        burst_head_beats <= ar_request_beats;
+                    end else begin
+                        burst_fifo[burst_write_ptr] <= ar_request_beats;
+                        burst_write_ptr <= burst_write_ptr + 3'd1;
+                    end
+                end
+                2'b01: begin
+                    burst_count <= burst_count - 4'd1;
+                    if (burst_count > 4'd1) begin
+                        burst_head_beats <= burst_fifo[burst_read_ptr];
+                        burst_read_ptr <= burst_read_ptr + 3'd1;
+                    end else begin
+                        burst_head_beats <= 5'd0;
+                    end
+                end
+                2'b11: begin
+                    if (burst_count > 4'd1) begin
+                        burst_head_beats <= burst_fifo[burst_read_ptr];
+                        burst_read_ptr <= burst_read_ptr + 3'd1;
+                        burst_fifo[burst_write_ptr] <= ar_request_beats;
+                        burst_write_ptr <= burst_write_ptr + 3'd1;
+                    end else begin
+                        burst_head_beats <= ar_request_beats;
+                    end
+                end
+                default: begin end
+            endcase
+
+            case ({ar_accept, beat_pop})
+                2'b10: reserved_beats <=
+                    reserved_beats + {1'b0, ar_request_beats};
+                2'b01: reserved_beats <= reserved_beats - 6'd1;
+                2'b11: reserved_beats <=
+                    reserved_beats + {1'b0, ar_request_beats} - 6'd1;
+                default: begin end
+            endcase
 
             if (state == ST_SEGMENT) begin
                 if (ar_plan) begin
@@ -433,54 +543,6 @@ module astra_framebuffer_line_builder #(
                         ({27'd0, ar_request_beats} << 3);
                 end
 
-                if (response_accept) begin
-                    beat_fifo[beat_write_ptr] <= m_axi_rdata;
-                    beat_write_ptr <= beat_write_ptr + 5'd1;
-                    if (m_axi_rid != AXI_ID || m_axi_rresp != 2'b00 ||
-                        m_axi_rlast != expected_response_last)
-                        fetch_error <= 1'b1;
-
-                    if (burst_pop) begin
-                        response_active <= 1'b0;
-                        response_beats_left <= 5'd0;
-                    end else begin
-                        response_active <= 1'b1;
-                        response_beats_left <= expected_response_beats - 5'd1;
-                    end
-                end
-
-                case ({ar_accept, burst_pop})
-                    2'b10: begin
-                        burst_count <= burst_count + 4'd1;
-                        if (burst_count == 4'd0) begin
-                            burst_head_beats <= ar_request_beats;
-                        end else begin
-                            burst_fifo[burst_write_ptr] <= ar_request_beats;
-                            burst_write_ptr <= burst_write_ptr + 3'd1;
-                        end
-                    end
-                    2'b01: begin
-                        burst_count <= burst_count - 4'd1;
-                        if (burst_count > 4'd1) begin
-                            burst_head_beats <= burst_fifo[burst_read_ptr];
-                            burst_read_ptr <= burst_read_ptr + 3'd1;
-                        end else begin
-                            burst_head_beats <= 5'd0;
-                        end
-                    end
-                    2'b11: begin
-                        if (burst_count > 4'd1) begin
-                            burst_head_beats <= burst_fifo[burst_read_ptr];
-                            burst_read_ptr <= burst_read_ptr + 3'd1;
-                            burst_fifo[burst_write_ptr] <= ar_request_beats;
-                            burst_write_ptr <= burst_write_ptr + 3'd1;
-                        end else begin
-                            burst_head_beats <= ar_request_beats;
-                        end
-                    end
-                    default: begin end
-                endcase
-
                 if (beat_pop)
                     beat_read_ptr <= beat_read_ptr + 5'd1;
                 case ({beat_push, beat_pop})
@@ -493,7 +555,6 @@ module astra_framebuffer_line_builder #(
             case (state)
                 ST_IDLE: begin
                     if (start) begin
-                        segment_response_enable_q <= 1'b0;
                         config_error <= 1'b0;
                         fetch_error <= 1'b0;
                         deadline_error <= 1'b0;
@@ -683,6 +744,7 @@ module astra_framebuffer_line_builder #(
                     burst_write_ptr <= 3'd0;
                     burst_read_ptr <= 3'd0;
                     burst_count <= 4'd0;
+                    reserved_beats <= 6'd0;
                     burst_head_beats <= 5'd0;
                     response_active <= 1'b0;
                     response_beats_left <= 5'd0;
@@ -692,7 +754,6 @@ module astra_framebuffer_line_builder #(
                     beat_active <= 1'b0;
                     first_beat <= 1'b1;
                     active_byte <= 3'd0;
-                    segment_response_enable_q <= 1'b1;
                     state <= ST_SEGMENT;
                 end
 
@@ -710,7 +771,9 @@ module astra_framebuffer_line_builder #(
                             segment_pixels_active_q <= 1'b0;
                             segment_last_pixel_q <= 1'b0;
                             beat_active <= 1'b0;
-                            segment_response_enable_q <= 1'b0;
+                            ar_request_valid <= 1'b0;
+                            issue_beats_remaining <= 11'd0;
+                            beat_count <= 6'd0;
                             state <= ST_SEGMENT_DRAIN;
                         end else begin
                             segment_last_pixel_q <=
@@ -726,10 +789,12 @@ module astra_framebuffer_line_builder #(
                 end
 
                 ST_SEGMENT_DRAIN: begin
-                    if (issue_beats_remaining == 11'd0 &&
-                        burst_count == 4'd0 && beat_count == 6'd0 &&
-                        !beat_active) begin
-                        if (wrap_x_q && output_x_q < OUTPUT_WIDTH) begin
+                    if (burst_count == 4'd0 && !response_active) begin
+                        if (deadline_error) begin
+                            busy <= 1'b0;
+                            done <= 1'b1;
+                            state <= ST_IDLE;
+                        end else if (wrap_x_q && output_x_q < OUTPUT_WIDTH) begin
                             source_x_q <= 13'd0;
                             mapped_pixels_q <= OUTPUT_WIDTH - output_x_q;
                             state <= ST_SEGMENT_ADDRESS;
@@ -768,19 +833,20 @@ module astra_framebuffer_line_builder #(
                     busy <= 1'b0;
                     config_error <= 1'b1;
                     done <= 1'b1;
-                    segment_response_enable_q <= 1'b0;
                     state <= ST_IDLE;
                 end
             endcase
 
             if (busy && build_cycles == MAX_BUILD_CYCLES - 1) begin
-                busy <= 1'b0;
-                done <= 1'b1;
                 fetch_error <= 1'b1;
                 deadline_error <= 1'b1;
                 slot_valid[build_slot_q] <= 1'b0;
-                segment_response_enable_q <= 1'b0;
-                state <= ST_IDLE;
+                ar_request_valid <= 1'b0;
+                issue_beats_remaining <= 11'd0;
+                beat_count <= 6'd0;
+                beat_active <= 1'b0;
+                segment_pixels_active_q <= 1'b0;
+                state <= ST_SEGMENT_DRAIN;
             end
         end
     end

@@ -9738,6 +9738,45 @@ static void test_process_clone_returns_twice_and_is_waitable(void)
     assert(final.free_frames == baseline.free_frames);
 }
 
+static void test_process_clone_rebinds_startup_identity(void)
+{
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
+    AstraStartupCapability capabilities[2];
+    AstraStartupInfo startup;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t parent_id = 0u;
+    uint32_t child_id;
+
+    launch_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(
+               launch_image, sizeof(launch_image), NULL, 0u, &parent_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               LAUNCH_VADDR + 0x100u, 0u);
+    registers[0] = ASTRA_SYSCALL_PROCESS_CLONE;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    child_id = next->data[2];
+    assert(child_id != 0u && child_id != parent_id);
+
+    select_process(child_id, registers, frame, &next);
+    assert(kernel_user_copy_from_asm(&startup, KERNEL_VM_USER_MIN,
+                                     sizeof(startup)) ==
+           KERNEL_USER_COPY_OK);
+    assert(startup.process_handle == next->data[4]);
+    assert(startup.thread_handle == next->data[5]);
+    assert(kernel_user_copy_from_asm(capabilities,
+                                     startup.capabilities_address,
+                                     sizeof(capabilities)) ==
+           KERNEL_USER_COPY_OK);
+    assert(capabilities[0].handle == next->data[4]);
+    assert(capabilities[1].handle == next->data[5]);
+}
+
 static void test_interval_timer_delivers_and_sigreturn_restores_context(void)
 {
     static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u,
@@ -9866,6 +9905,7 @@ int main(void)
     test_reserved_area_faults_in_through_the_exception_path();
     test_private_memory_faults_in_through_the_exception_path();
     test_process_clone_returns_twice_and_is_waitable();
+    test_process_clone_rebinds_startup_identity();
     test_interval_timer_delivers_and_sigreturn_restores_context();
     test_any_process_may_emit_an_event();
     test_no_debug_surface_closes_only_the_console();

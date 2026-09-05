@@ -12,6 +12,12 @@
 #include <astra/stream.h>
 #include <astra/syscall.h>
 
+uint32_t astra_log_failure(const char *operation, uint32_t status)
+{
+    (void)operation;
+    return status;
+}
+
 static int read_ready;
 static int write_ready;
 static int wake_read;

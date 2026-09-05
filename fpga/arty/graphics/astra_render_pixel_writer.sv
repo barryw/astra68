@@ -103,7 +103,7 @@ module astra_render_pixel_writer #(
     reg [7:0] fifo_stage_strobes;
 
     reg [31:0] fifo_address [0:FIFO_DEPTH-1];
-    (* ram_style = "distributed" *)
+    (* ram_style = "distributed", ramstyle = "MLAB" *)
     reg [63:0] fifo_data [0:FIFO_DEPTH-1];
     reg [7:0] fifo_strobes [0:FIFO_DEPTH-1];
     reg [FIFO_POINTER_WIDTH-1:0] fifo_write_pointer;

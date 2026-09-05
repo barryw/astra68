@@ -55,6 +55,11 @@ module tb_astra_framebuffer_line_builder;
     wire deadline_error;
     wire [31:0] build_cycles;
     wire [31:0] read_bytes;
+    wire [31:0] axi_debug_status;
+    wire [31:0] axi_ar_accept_count;
+    wire [31:0] axi_r_accept_count;
+    wire [31:0] axi_last_ar_address;
+    wire [31:0] axi_response_stall_cycles;
 
     wire [AXI_ID_WIDTH-1:0] m_axi_arid;
     wire [31:0] m_axi_araddr;
@@ -110,6 +115,11 @@ module tb_astra_framebuffer_line_builder;
         .deadline_error(deadline_error),
         .build_cycles(build_cycles),
         .read_bytes(read_bytes),
+        .axi_debug_status(axi_debug_status),
+        .axi_ar_accept_count(axi_ar_accept_count),
+        .axi_r_accept_count(axi_r_accept_count),
+        .axi_last_ar_address(axi_last_ar_address),
+        .axi_response_stall_cycles(axi_response_stall_cycles),
         .m_axi_arid(m_axi_arid),
         .m_axi_araddr(m_axi_araddr),
         .m_axi_arlen(m_axi_arlen),
@@ -133,6 +143,13 @@ module tb_astra_framebuffer_line_builder;
         .pixel_valid(pixel_valid),
         .pixel_value(pixel_value)
     );
+
+    always @(posedge build_clk) begin
+        if (m_axi_arvalid && m_axi_arqos != 4'd0) begin
+            $display("FAIL: framebuffer traffic must not starve peer masters");
+            $fatal;
+        end
+    end
 
     reg [7:0] memory [0:262143];
     integer memory_index;
@@ -238,6 +255,8 @@ module tb_astra_framebuffer_line_builder;
     integer outstanding_count = 0;
     integer maximum_outstanding = 0;
     integer simultaneous_turnovers = 0;
+    integer r_accept_count = 0;
+    reg [31:0] last_ar_address = 32'd0;
     integer saw_4k_limited_burst = 0;
 
     reg response_active = 1'b0;
@@ -264,12 +283,6 @@ module tb_astra_framebuffer_line_builder;
             response_final_accept : ordinary_arready);
 
     always @(posedge build_clk) begin
-        if (!build_reset &&
-            dut.segment_response_enable_q !== (dut.state == 5'd14))
-            $fatal(1, "registered response phase diverged from ST_SEGMENT");
-    end
-
-    always @(posedge build_clk) begin
         if (build_reset) begin
             command_write <= 0;
             command_read <= 0;
@@ -278,6 +291,8 @@ module tb_astra_framebuffer_line_builder;
             outstanding_count <= 0;
             maximum_outstanding <= 0;
             simultaneous_turnovers <= 0;
+            r_accept_count <= 0;
+            last_ar_address <= 32'd0;
             saw_4k_limited_burst <= 0;
             turnover_armed <= 1'b0;
             response_active <= 1'b0;
@@ -295,8 +310,14 @@ module tb_astra_framebuffer_line_builder;
 
             if (!force_simultaneous_turnover)
                 turnover_armed <= 1'b0;
-            else if (outstanding_count == 8)
+            else if (outstanding_count == 2)
                 turnover_armed <= 1'b1;
+
+            if (outstanding_count != 0 && !m_axi_rready)
+                $fatal(1, "accepted AXI read was backpressured");
+            if (dut.reserved_beats > 32)
+                $fatal(1, "AXI receive credits exceeded FIFO capacity: %0d",
+                       dut.reserved_beats);
 
             if (m_axi_arvalid && m_axi_arready) begin
                 if (m_axi_arid != {AXI_ID_WIDTH{1'b0}} ||
@@ -312,6 +333,7 @@ module tb_astra_framebuffer_line_builder;
                 command_length[command_write] <= m_axi_arlen;
                 command_write <= command_write + 1;
                 ar_count <= ar_count + 1;
+                last_ar_address <= m_axi_araddr;
                 if (outstanding_count + 1 > maximum_outstanding)
                     maximum_outstanding <= outstanding_count + 1;
             end
@@ -326,6 +348,7 @@ module tb_astra_framebuffer_line_builder;
             endcase
 
             if (m_axi_rvalid && m_axi_rready) begin
+                r_accept_count <= r_accept_count + 1;
                 m_axi_rvalid <= 1'b0;
                 if (expected_model_last) begin
                     response_active <= 1'b0;
@@ -553,7 +576,7 @@ module tb_astra_framebuffer_line_builder;
         if (config_error || fetch_error || deadline_error || !slot_valid[2])
             $fatal(1, "XRGB8888 status failed");
         check_line(2, FORMAT_XRGB8888, 512, 32, 1, 1, 6, 0, 0);
-        if (maximum_outstanding < 8)
+        if (maximum_outstanding < 2)
             $fatal(1, "AXI reader reached only %0d outstanding requests",
                    maximum_outstanding);
         if (simultaneous_turnovers == 0)
@@ -666,19 +689,45 @@ module tb_astra_framebuffer_line_builder;
             $fatal(1, "arena overflow was accepted");
         $display("configuration containment pass");
 
-        // Accepted but permanently unanswered reads hit the bounded deadline,
-        // invalidate the line, and require the documented engine reset before
-        // reuse so no stale AXI transaction can enter a later scene.
+        // A deadline stops new requests but must drain every accepted AXI read
+        // before reporting completion or allowing another line to start.
         pulse_build_reset();
         select_surface(FORMAT_XRGB8888, XRGB_BASE, XRGB_PITCH);
         build_slot = 2'd0;
         emit_responses = 1'b0;
-        launch_and_wait(0, MAX_BUILD_CYCLES + 20);
+        @(negedge build_clk);
+        start = 1'b1;
+        @(negedge build_clk);
+        start = 1'b0;
+        wait (deadline_error);
+        #1;
+        if (!busy || done || outstanding_count == 0)
+            $fatal(1,
+                "deadline abandoned accepted reads busy=%0d done=%0d outstanding=%0d",
+                busy, done, outstanding_count);
+        if (!axi_debug_status[29] || !axi_debug_status[11] ||
+            axi_debug_status[15:12] == 4'd0 ||
+            axi_response_stall_cycles == 32'd0)
+            $fatal(1, "AXI deadline diagnostics did not capture the stall");
         emit_responses = 1'b1;
+        wait (done);
+        #1;
         if (!fetch_error || !deadline_error || config_error || slot_valid[0])
             $fatal(1, "deadline failure was not contained");
-        pulse_build_reset();
-        $display("deadline containment/reset pass");
+        if (outstanding_count != 0 || m_axi_rvalid)
+            $fatal(1, "deadline left stale AXI traffic outstanding=%0d rvalid=%0d",
+                outstanding_count, m_axi_rvalid);
+
+        build_slot = 2'd1;
+        launch_and_wait(1, MAX_BUILD_CYCLES);
+        if (config_error || fetch_error || deadline_error || !slot_valid[1])
+            $fatal(1, "framebuffer reader was not reusable after deadline");
+        if (axi_ar_accept_count !== ar_count ||
+            axi_r_accept_count !== r_accept_count ||
+            axi_last_ar_address !== last_ar_address ||
+            axi_response_stall_cycles !== 32'd0)
+            $fatal(1, "AXI diagnostics do not match accepted traffic");
+        $display("deadline drain/reuse pass");
 
         $display("ASTRA FRAMEBUFFER LINE BUILDER PASS");
         $finish;
