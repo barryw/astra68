@@ -229,7 +229,7 @@ index 17ae0d0..33b3252 100644
 +	/*
 +	 * Slicing-by-4 for the reflected Castagnoli polynomial.  These tables are
 +	 * derived from crc32c_tab[0] by repeatedly applying its byte recurrence.
-+	 * Byte loads keep this correct and fast on unaligned big-endian MC68030
++	 * Byte loads keep this correct and fast on unaligned big-endian MC68040
 +	 * buffers without an endian conversion or alignment branch.
 +	 */
 +	while (p != end) {

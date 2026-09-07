@@ -4,7 +4,7 @@ Status: design direction; the protected storage, events, input, and display
 services and the desktop and terminal applications now launch.
 
 This document refines `OS_VISION.md` into a coherent userspace shape. It does
-not change the kernel boundary in `KERNEL_SPEC.md` or imply that the current
+not change the kernel boundary in `KERNEL_ARCHITECTURE.md` or imply that the current
 kernel can start these services. `USERSPACE_RUNTIME.md` defines the implemented
 machine-facing runtime foundation. Exact service wire records land only with
 implementations and executable protocol tests.

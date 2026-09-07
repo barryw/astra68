@@ -6,7 +6,7 @@
 /*
  * A render batch is copied unchanged into Astraea's graphics arena. Commands,
  * descriptors, glyph masks, and source pixels therefore use the hardware's
- * native big-endian records and arena-relative offsets. The 68030 builds the
+ * native big-endian records and arena-relative offsets. The MC68040 builds the
  * records; it never expands them into framebuffer pixels.
  */
 #define ASTRA_RENDER_BATCH_MAGIC UINT32_C(0x41524254) /* ARBT */

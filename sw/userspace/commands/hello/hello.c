@@ -49,7 +49,7 @@ astra_main(const AstraStartupInfo *startup)
         formatted[16] != '0' || formatted[17] != 'f')
         return 11;
 
-    printf("hello from picolibc on m68030\n");
+    printf("hello from picolibc on m68040\n");
     /* The three things hand-rolled formatting cannot do, in one line. */
     printf("width %s\n", formatted);
     if (astra_startup_validate(startup))

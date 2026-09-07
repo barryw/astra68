@@ -237,7 +237,7 @@ uint32_t RESERVED_110;        // 0x110
 #define VESTA_VERSION_1_0 0x00010000u
 
 // ---- CPU_MODEL / CPU_IMPL / CPU_FEATURES ----
-#define CPU_MODEL_68030 0x00068030u
+#define CPU_MODEL_68040 0x00068040u
 #define CPU_IMPL_QEMU   0x51454D55u   // "QEMU"
 #define CPU_FEAT_PMMU   (1u << 0)
 #define CPU_FEAT_FPU    (1u << 1)
@@ -457,10 +457,10 @@ uint32_t RESERVED_110;        // 0x110
 #define BUS_FAULT_SIZE_MASK  (3u << BUS_FAULT_SIZE_SHIFT)
 #define BUS_FAULT_SIZE(status) \
     (((status) & BUS_FAULT_SIZE_MASK) >> BUS_FAULT_SIZE_SHIFT)
-#define BUS_FAULT_FC_SHIFT 8u
-#define BUS_FAULT_FC_MASK  (7u << BUS_FAULT_FC_SHIFT)
-#define BUS_FAULT_FC(status) \
-    (((status) & BUS_FAULT_FC_MASK) >> BUS_FAULT_FC_SHIFT)
+#define BUS_FAULT_TM_SHIFT 8u
+#define BUS_FAULT_TM_MASK  (7u << BUS_FAULT_TM_SHIFT)
+#define BUS_FAULT_TM(status) \
+    (((status) & BUS_FAULT_TM_MASK) >> BUS_FAULT_TM_SHIFT)
 
 #define BUS_FAULT_TARGET_UNKNOWN           0u
 #define BUS_FAULT_TARGET_UNMAPPED          1u

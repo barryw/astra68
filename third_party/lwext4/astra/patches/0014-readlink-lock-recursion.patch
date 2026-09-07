@@ -6,7 +6,7 @@ to acquire the same mount's read lock, which deadlocks with a non-recursive
 lock and is reported as EDEADLK by pthread rwlocks. Split the read body into an
 already-locked helper and keep ext4_fread as the public locking wrapper.
 
-Covered by the MC68030 lwext4 reread gate, which creates a native symlink,
+Covered by the MC68040 lwext4 reread gate, which creates a native symlink,
 reads it before unmount, reads it again after a fresh mount, and finishes with
 an independent e2fsck pass.
 

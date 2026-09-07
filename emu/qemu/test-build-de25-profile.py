@@ -17,8 +17,9 @@ for required in (
     "-print-file-name=include",
     "-I$COMPILER_INCLUDE",
     "/usr/lib/aarch64-linux-gnu/pkgconfig",
-    "-mcpu=cortex-a55",
+    "-mcpu=cortex-a76",
 ):
     assert required in build, f"missing DE25 build contract: {required}"
+assert "-mcpu=cortex-a55" not in build
 
 print("DE25 QEMU build profile test: PASS")

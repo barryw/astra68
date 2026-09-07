@@ -5,7 +5,7 @@
 #include <generated/ext4_config.h>
 
 /*
- * Measured on big-endian MC68030 under qemu-m68k, running the storage suite's
+ * Measured on big-endian MC68040 under qemu-m68k, running the storage suite's
  * own mount test against mke2fs volumes.
  *
  * The demand is set by the **journal size**, not the volume size. Measured

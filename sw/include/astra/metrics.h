@@ -25,6 +25,30 @@
 
 #define ASTRA_METRIC_GROUP_MAX 32u
 #define ASTRA_METRIC_SAMPLE_MAX 64u
+#define ASTRA_METRIC_NAME_MAX 64u
+
+/* Fixed big-endian records carried by METRICS:snapshot. */
+#define ASTRA_METRIC_RECORD_VERSION UINT16_C(1)
+#define ASTRA_METRIC_RECORD_SIZE 144u
+typedef struct AstraMetricRecord {
+    uint32_t size;
+    uint16_t version;
+    uint16_t reserved;
+    char group[ASTRA_METRIC_NAME_MAX];
+    char name[ASTRA_METRIC_NAME_MAX];
+    uint32_t value_hi;
+    uint32_t value_lo;
+} AstraMetricRecord;
+
+_Static_assert(sizeof(AstraMetricRecord) == ASTRA_METRIC_RECORD_SIZE,
+               "metric record ABI changed");
+
+static inline uint64_t astra_metric_record_value(
+    const AstraMetricRecord *record)
+{
+    return record != NULL ? ((uint64_t)record->value_hi << 32) |
+                                record->value_lo : 0u;
+}
 
 typedef struct AstraMetricSample {
     const char *name;

@@ -71,11 +71,11 @@ write cannot replace the last valid configuration.
 ## Validation
 
 Network core/library, service, POSIX, runtime, supervisor, Terminal, kernel,
-sanitizer, analyzer, and clean MC68030 builds pass on Beast. The source-identified
+sanitizer, analyzer, and clean MC68040 builds pass on Beast. The source-identified
 QEMU gate covers DNS plus IPv4 UDP and TCP through a fork+exec child. Four final
 focused runs completed in 2.98, 2.98, 2.99, and 2.99 seconds; the complete
 two-boot 73-command gate, Vim, Lua, pipes, redirects, filesystem, and desktop
-tests also pass. Generated MC68030 for the exchange, transfer, readiness, IRQ,
+tests also pass. Generated MC68040 for the exchange, transfer, readiness, IRQ,
 and platform paths was inspected; measurement did not justify an assembly fork
 of the shared C implementation.
 
@@ -95,7 +95,7 @@ DHCP reacquired `192.168.1.188`, and the already-installed firstboot source
 synchronized NTP and released Astra without intervention. The exact candidate
 then passed the complete POSIX command including guest DNS, IPv4 UDP, TCP
 listen/connect, descriptor inheritance, and TCP fork+exec twice on the
-Cortex-A9-hosted MC68030, in 33.61 and 32.48 seconds. The command includes the
+Cortex-A9-hosted MC68040, in 33.61 and 32.48 seconds. The command includes the
 full POSIX/filesystem matrix before its network phase; those times are not
 claimed as isolated socket latency.
 

@@ -157,6 +157,13 @@ bool kernel_performance_pass(const KernelPerformanceStats *stats,
                              uint32_t required_mask,
                              KernelPerformanceMetric *failed_metric);
 
+#if defined(ASTRA_KERNEL_SCHED_TRACE) && ASTRA_KERNEL_SCHED_TRACE
+#define KERNEL_PERFORMANCE_TRACE_SAMPLE_MAX 64u
+uint32_t kernel_performance_trace_count(KernelPerformanceMetric metric);
+uint32_t kernel_performance_trace_sample(KernelPerformanceMetric metric,
+                                         uint32_t index);
+#endif
+
 static inline __attribute__((always_inline))
 KernelPerformanceToken kernel_performance_begin(
     KernelPerformanceMetric metric)

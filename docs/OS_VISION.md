@@ -9,7 +9,7 @@ must avoid. It is not yet a syscall specification, an ABI promise, or a detailed
 implementation plan.
 
 The evolving privileged-core contract and its research gates are maintained in
-`docs/KERNEL_SPEC.md`. That specification must implement this vision rather
+`docs/KERNEL_ARCHITECTURE.md`. That specification must implement this vision rather
 than silently redefining it.
 
 Focused userspace direction is maintained in:
@@ -191,19 +191,19 @@ the native design rather than defining it.
 
 ## 4. Current hardware assumption
 
-**LOCKED:** Astra OS sees one big-endian MC68030-class CPU with its paged PMMU
+**LOCKED:** Astra OS sees one big-endian MC68040-class CPU with its paged PMMU
 and caches. The active Arty target executes that machine through QEMU TCG on
 the Zynq ARM processing system. This changes the implementation boundary, not
 the guest architecture or ABI. An external Vesta region MMU is not an alternate
 OS target.
 
 The QEMU implementation must continue to earn acceptance against Motorola
-MC68030 semantics and independent system tests. No emulator-specific semantic
+MC68040 semantics and independent system tests. No emulator-specific semantic
 may become part of the Astra ABI.
 
 The active hardware baseline is:
 
-- one big-endian MC68030-class virtual CPU with an integrated PMMU;
+- one big-endian MC68040-class virtual CPU with an integrated PMMU;
 - the Arty Z7-20's 512 MiB DDR divided into 128 MiB of Astra guest RAM, 128 MiB
   of graphics RAM, and 256 MiB for Linux and host services;
 - full supervisor/user separation and paged address translation;
@@ -297,7 +297,7 @@ from the unusually small mechanism kernel created by Astra's other decisions:
 the ESP owns SD protocol plus TCP/UDP, while filesystems, networking policy,
 graphics, media, settings, packages, and most device policy live in protected,
 restartable services. The remaining privileged core is specifically the part
-that must match Astra's 68030 PMMU, caches, DMA behavior, capability handles,
+that must match Astra's 68040 PMMU, caches, DMA behavior, capability handles,
 bounded IPC, scheduling, and failure model.
 
 The candidate landscape has no implementation that matches both the processor
@@ -318,7 +318,7 @@ and the intended architecture:
   Astra's protected application foundation. FreeRTOS remains the correct
   choice on the ESP coprocessor.
 - Haiku is a source of application, media, and user-interface ideas, not a
-  suitable 68030 kernel base or a product identity to inherit.
+  suitable 68040 kernel base or a product identity to inherit.
 
 **LOCKED reuse rule:** Astra should write its kernel, not its universe. Copy
 good ideas without importing an entire foreign architecture. Existing code,
@@ -446,7 +446,7 @@ is destroyed as one protected unit and the kernel reclaims its handles.
 
 ### 8.1 Initial PMMU use
 
-**DIRECTION:** Use the MC68030 PMMU for isolation before using it for clever
+**DIRECTION:** Use the MC68040 PMMU for isolation before using it for clever
 virtual-memory features.
 
 The first implementation needs:
@@ -486,7 +486,7 @@ reservation succeeds only when its backing can be guaranteed.
 
 ### 8.3 Execute protection limitation
 
-**OPEN:** The MC68030 PMMU has no modern no-execute page permission. Read-only
+**OPEN:** The MC68040 PMMU has no modern no-execute page permission. Read-only
 code and software W^X policy are still useful, but they do not provide hardware
 NX for stacks and data.
 
@@ -711,7 +711,7 @@ unbounded allocation, or ordinary-priority blocking.
 Audio continuity while the CPU, UI, storage, and network are busy is a primary
 system acceptance test, not merely an audio-driver test.
 
-The hosted MC68030/PMMU vCPU is isolated on ARM core 1. Linux IRQs, QEMU I/O,
+The hosted MC68040/PMMU vCPU is isolated on ARM core 1. Linux IRQs, QEMU I/O,
 audio mixing and synthesis, and the fixed-point game-math worker remain on
 core 0. Guest-visible audio and math devices enqueue bounded asynchronous work;
 they do not perform expensive operations synchronously on the vCPU thread.

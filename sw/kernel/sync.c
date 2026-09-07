@@ -110,8 +110,11 @@ static uint8_t timer_slot(const KernelSyncObject *object)
 
 static bool timer_less(uint8_t left, uint8_t right)
 {
-    return timer_deadlines[left] < timer_deadlines[right] ||
-           (timer_deadlines[left] == timer_deadlines[right] && left < right);
+    uint64_t left_deadline = timer_deadlines[left];
+    uint64_t right_deadline = timer_deadlines[right];
+
+    return left_deadline < right_deadline ||
+           (left_deadline == right_deadline && left < right);
 }
 
 static void timer_heap_swap(uint8_t left, uint8_t right)

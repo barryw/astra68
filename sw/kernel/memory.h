@@ -1,6 +1,8 @@
 #ifndef ASTRA_KERNEL_MEMORY_H
 #define ASTRA_KERNEL_MEMORY_H
 
+#include "dma.h"
+
 #include <astra/boot.h>
 #include <astra/process.h>
 #include <astra/syscall.h>
@@ -59,16 +61,14 @@
  * same test. It also has one customer: every other allocation in this kernel
  * asks for a single frame and does not care where it lands.
  *
- * So the answer is the cheap and predictable one. 128 frames is 512 KiB, which
- * is 0.4% of the machine, and it is the measured demand rather than a round
- * number: 64 for the display's framebuffer -- ASTRA_RENDER_BUILDER_BYTES, the
- * only large contiguous request on the machine -- and two for each of the
- * KERNEL_DMA_MAX_BUFFERS block transfer slots. DMA takes from here first and
- * falls back to the general pool, so nothing that works today stops working;
- * what changes is that a display service restarting at hour six finds its
- * framebuffer where it left it.
+ * So the answer is the cheap and predictable one: 64 frames for the display's
+ * framebuffer -- ASTRA_RENDER_BUILDER_BYTES, the only large contiguous
+ * request on the machine -- and two for every legal DMA buffer. DMA takes
+ * from here first and falls back to the general pool, so nothing that works
+ * today stops working; what changes is that a display service restarting at
+ * hour six finds its framebuffer where it left it.
  */
-#define KERNEL_DMA_ZONE_FRAMES 128u
+#define KERNEL_DMA_ZONE_FRAMES (64u + 2u * KERNEL_DMA_MAX_BUFFERS)
 
 /*
  * The supervisor identity-maps all of RAM, whatever the boot info says there

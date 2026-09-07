@@ -22,6 +22,11 @@ Two things are asserted:
   * every milestone marker the harness prints is present, K1 through K8, and
     the machine reaches KERNEL MULTITASKING.
 
+The qualification clock advances 16 ns per executed guest instruction. This
+matches the measured DE25 MC68040 throughput closely while keeping host
+scheduling and first-use TCG translation out of the kernel's cycle budgets.
+Real elapsed boot time is still reported separately.
+
 A source that regresses does not produce a smaller mask: the harness fails the
 record check and the process dies, the milestone never prints, and the gate
 times out with the serial tail. Both halves are failures here.
@@ -71,7 +76,8 @@ def boot(qemu, rom, image, memory, deadline):
         shutil.copyfile(image, scratch)
         command = [qemu, "-M", "astra68", "-m", memory, "-bios", rom,
                    "-nographic", "-monitor", "none", "-serial", "stdio",
-                   "-no-reboot",
+                   "-no-reboot", "-icount",
+                   "shift=4,align=off,sleep=off",
                    "-drive", "if=none,format=raw,file=%s" % scratch]
         process = subprocess.Popen(
             command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -141,8 +147,8 @@ def main():
     if failures:
         for failure in failures:
             print("FAIL: %s" % failure, file=sys.stderr)
-        print("--- last serial ---", file=sys.stderr)
-        for line in lines[-20:]:
+        print("--- serial ---", file=sys.stderr)
+        for line in lines:
             print(line, file=sys.stderr)
         return 1
     print("ASTRA QUALIFICATION PASS %d markers" % len(MARKERS))

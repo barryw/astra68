@@ -5,15 +5,16 @@ AR := $(CROSS)ar
 SIZE := $(CROSS)size
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
-CPPFLAGS := -I../../include -I../alloc/include -I../storage/include
+CPPFLAGS := -I../../include -I../alloc/include -I../storage/include \
+	-I../vfs/include -Iinclude
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 HOST_FLAGS := -O2 -fno-builtin
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
-SOURCES := src/metrics.c
-OBJECTS := build/m68k/metrics.o
+SOURCES := src/metrics.c src/metrics_vfs.c
+OBJECTS := build/m68k/metrics.o build/m68k/metrics_vfs.o
 TARGET := build/m68k/libastrametric.a
 HOST_TEST := build/host/test_metrics
 
@@ -50,6 +51,8 @@ analyze:
 	@mkdir -p build/analyzer
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/metrics.c -o build/analyzer/metrics.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/metrics_vfs.c -o build/analyzer/metrics_vfs.o
 
 size: $(OBJECTS)
 	$(SIZE) $^

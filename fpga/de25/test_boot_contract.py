@@ -39,6 +39,10 @@ assert "&&" not in boot
 assert "mem=" not in boot
 assert "ASTRA BOOT HALTED" in boot
 assert "astra.fabric=ready" in boot
+assert "rootflags=commit=5" in boot
+assert "commit=1" not in boot
+assert "barrier=0" not in boot
+assert "data=writeback" not in boot
 
 build = (HERE / "build_boot_bundle.sh").read_text(encoding="utf-8")
 for required in (

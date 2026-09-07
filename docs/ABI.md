@@ -57,7 +57,7 @@ neither the grant nor the reason, latent for four tasks before it was found.
 
 ## Machine ABI
 
-- CPU: MC68030, `-m68030`, software floating point.
+- CPU: MC68040, `-m68040`, software floating point.
 - Integer byte order: big-endian.
 - `char` 8 bits, `short` 16 bits, `int`, `long`, and pointers 32 bits.
 - Public 64-bit values are aligned to 4 bytes, not a compiler-selected 8-byte
@@ -69,6 +69,22 @@ neither the grant nor the reason, latent for four tasks before it was found.
 All reserved fields are written as zero and ignored on input unless a protocol
 version says otherwise. Structure input begins with `size`; the kernel accepts
 only the documented minimum through maximum and never reads beyond `size`.
+
+## Host-device ABI 1.5
+
+`sw/include/astra/host.h` defines the guest/host command ABI. Version 1.5 adds
+the `ASTRA_HOST_CAP_METRICS` capability and service 2 without changing the
+filesystem service. `ASTRA_HOST_METRICS_SNAPSHOT` returns one zero-reserved,
+352-byte `AstraHostMetricsSnapshot`: a coherent set of 42 split-64-bit block,
+host-channel, and per-filesystem-operation counters. The guest validates the
+advertised capability, exact result size, version, value count, and every
+reserved field before accepting it.
+
+The developer-facing representation is the independent 144-byte
+`AstraMetricRecord` from `sw/include/astra/metrics.h`. It carries a versioned
+header, bounded NUL-terminated group and value names, and one split 64-bit
+value. `METRICS:snapshot` is a sequence of those records; consumers need no
+hostfs-private structure knowledge.
 
 ## Trap ABI 0.6
 
@@ -152,10 +168,10 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 65 | `SIGNAL_RETURN` | CURRENT CANDIDATE | restores the kernel-held context saved by the active signal upcall |
 | 66 | `PROCESS_EXEC` | CURRENT CANDIDATE | `D1=image`, `D2=image bytes`, `D3=32-byte AstraExecRequest`; atomically replaces the caller's image, startup vectors, private VM, and threads while preserving process identity and eligible handles; success resumes at the new entry and does not return |
 
-Areas are at most 4 MiB. This is one complete 1,024-entry MC68030 page table,
-not an application-size policy; larger shared mappings require a multi-table
-transaction or a streaming protocol. VFS bulk transfers use this same bound
-instead of imposing a smaller protocol limit.
+Areas are at most 4 MiB. This is an address-map allocation unit, not an
+application-size policy; the VM publishes and rolls back every MC68040 table
+touched by the mapping as one transaction. VFS bulk transfers use this same
+bound instead of imposing a smaller protocol limit.
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
 not panic. `QUERY_ABI` reports revision `0x0001001d`; a later revision may add
@@ -469,8 +485,9 @@ session.
 `AREA_CREATE` accepts 1 through 2,097,152 bytes, rounds upward to complete 4 KiB
 pages, commits and zeroes every frame before publication, and charges the
 creator's real commit budget. `AREA_MAP` accepts `READ` or `READ|WRITE` and
-chooses a fixed process-local address from `0x40000000..0x40ffffff`; mappings
-of one area use the same logical base in every process. Mapping and unmapping
+chooses a free process-local slot in the area window; the same shared area may
+occupy a different logical slot in another process. MC68040 caches are
+physically addressed, so those aliases remain coherent. Mapping and unmapping
 are complete transactions. A failed descriptor publication, copy, cache/ATC
 maintenance step, or quota check restores every frame, descriptor, reference,
 and accounting count to its prior state.

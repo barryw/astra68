@@ -1,6 +1,11 @@
 # Axiom shared areas and bounded bulk IPC rings
 
-Status: K8 locked implementation contract, revision 0.1 (2026-07-25)
+Status: historical K8 qualification contract, superseded by `ABI.md` and the
+public NDK headers
+
+The values and same-logical-address cache rule below record the original
+MC68040 K8 gate. They are retained as test history, not current MC68040 limits
+or implementation guidance.
 
 K7 message ports remain the control plane. K8 adds explicitly mapped shared
 areas and bounded single-producer/single-consumer rings for payloads that
@@ -145,7 +150,7 @@ keeps wrap behavior defined while capacity remains below `2^31`.
 
 Producer publication order is payload write, release fence, producer-position
 write. Consumer order is producer-position read, acquire fence, payload read,
-then release fence and consumer-position write. The MC68030 release fence emits
+then release fence and consumer-position write. The MC68040 release fence emits
 a compiler memory barrier plus the documented `NOP` needed to complete prior
 external writes before publishing the position. The NDK never uses C bitfields,
 packed structures, raw atomics requiring `libatomic`, or host-endian wire data.

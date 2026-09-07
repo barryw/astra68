@@ -36,7 +36,7 @@ KERNEL_K1_QUALIFICATION ?= 0
 # shipped a release kernel under a debug name.
 ASTRA_BUILD ?= release
 
-CFLAGS  = -m68030 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib \
+CFLAGS  = -m68040 -msoft-float -Os -ffreestanding -fno-builtin -nostdlib \
           -Wa,--noexecstack -Wall -Wextra \
           -I../include -I../../ndk/include -Ibuild $(EXTRA_CFLAGS)
 LD      = astra_st.ld
@@ -56,7 +56,7 @@ KERNEL_ID_SRCS = $(KERNEL_DIR)/Makefile \
                          $(KERNEL_DIR)/*.S $(KERNEL_DIR)/*.ld \
                          $(KERNEL_DIR)/*.py))
 
-BUILD_CONFIG = TARGET=QEMU_TCG_M68030 HOST=$(HOST_PLATFORM) \
+BUILD_CONFIG = TARGET=QEMU_TCG_M68040 HOST=$(HOST_PLATFORM) \
                ROM_VERSION=$(ROM_VERSION) KERNEL_VERSION=$(KERNEL_VERSION) \
                KERNEL_PANIC_SELFTEST=$(KERNEL_PANIC_SELFTEST) \
                KERNEL_SCHED_TRACE=$(KERNEL_SCHED_TRACE) \

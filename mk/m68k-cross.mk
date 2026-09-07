@@ -26,7 +26,7 @@ ASTRA_DEBUG_FLAGS ?= -g
 # A4 is Astra's thread pointer register. GNU m68k local-exec TLS still calls
 # __m68k_read_tp; reserving A4 makes that helper one move while leaving A5 to
 # the established PIC/GOT ABI used by Kits.
-ASTRA_TARGET_ABI_FLAGS ?= -m68030 -msoft-float -ffixed-a4 -D__astra__=1
+ASTRA_TARGET_ABI_FLAGS ?= -m68040 -msoft-float -ffixed-a4 -D__astra__=1
 
 # An Astra compiler owns its matching libc headers and archives.  Keeping a
 # second path in each program is how old headers were mixed with a new libc.

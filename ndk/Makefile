@@ -3,7 +3,7 @@ CC := $(CROSS)gcc
 AR := $(CROSS)ar
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
-CPU_FLAGS ?= -m68030 -msoft-float
+CPU_FLAGS ?= -m68040 -msoft-float
 
 CPPFLAGS := -Iinclude -I../sw/include -I../sw/userspace/runtime/include
 TARGET_CFLAGS := $(CPU_FLAGS) -Os -ffreestanding -fno-builtin -std=c11 \

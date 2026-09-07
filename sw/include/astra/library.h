@@ -19,7 +19,7 @@
 #define ASTRA_LIBRARY_NAME_MAX 24u
 #define ASTRA_LIBRARY_AUTHOR_MAX 32u
 #define ASTRA_LIBRARY_COPYRIGHT_MAX 40u
-#define ASTRA_LIBRARY_TARGET_M68030 0x4d303330u /* "M030" */
+#define ASTRA_LIBRARY_TARGET_M68040 0x4d303430u /* "M040" */
 #define ASTRA_LIBRARY_EXPORTS_OFFSET 0x00f00000u
 
 /* Runtime mapping window: fifteen independent 16 MiB slots. */
@@ -97,7 +97,7 @@ _Static_assert(sizeof(AstraLibraryReference) == ASTRA_LIBRARY_REFERENCE_SIZE,
         ASTRA_LIBRARY_MAGIC, ASTRA_LIBRARY_RECORD_VERSION,                  \
         ASTRA_LIBRARY_SIZE, library_major, library_minor, library_patch,    \
         library_abi_major, library_abi_minor, 0u,                           \
-        ASTRA_LIBRARY_TARGET_M68030, ASTRA_BUILD_ID,                       \
+        ASTRA_LIBRARY_TARGET_M68040, ASTRA_BUILD_ID,                       \
         ASTRA_LIBRARY_EXPORTS_OFFSET, library_name,                        \
         library_author, library_copyright                                   \
     }

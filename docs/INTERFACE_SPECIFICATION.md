@@ -10,7 +10,7 @@ counterpart is `ndk/include/astra/theme.h`, `ndk/include/astra/window.h`, and
 
 ## 1. Design intent
 
-Astra is a high-resolution 68030 workstation. It should feel like a precise
+Astra is a high-resolution 68040 workstation. It should feel like a precise
 instrument: immediate, legible, compact, and deliberately constructed. Its
 retro character comes from visible structure and crisp bitmap-aligned detail,
 not from imitating the low resolution or heavy bevels of older systems. Its
@@ -221,7 +221,7 @@ subscribe to keys, text, focus, capture, or window-relative coordinates.
 Closing its receive endpoint revokes the subscription through ordinary port
 lifetime; no invisible window or global process identifier is involved.
 
-Sprite 0 is the desktop pointer. The MC68030 submits only clipped position and
+Sprite 0 is the desktop pointer. The MC68040 submits only clipped position and
 visibility; the Arty display owner updates the Astraea sprite descriptor and
 commits the scene. Pointer position commits before any hover or pressed chrome
 repaint and never redraws the framebuffer merely to move the pointer. Chrome

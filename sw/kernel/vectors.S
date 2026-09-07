@@ -83,17 +83,12 @@ _kernel_access_fault_entry:
 	move.w  6(%sp), %d0
 	lsr.w   #8, %d0
 	lsr.w   #4, %d0
-	cmpi.w  #0x0a, %d0
-	beq     .Lcollapse_format_a
-	cmpi.w  #0x0b, %d0
-	beq     .Lcollapse_format_b
+	cmpi.w  #0x07, %d0
+	beq     .Lcollapse_format_7
 	bra     _kernel_exception_entry
 
-.Lcollapse_format_a:
-	lea     24(%sp), %a0
-	bra     .Lcollapse_access_frame
-.Lcollapse_format_b:
-	lea     84(%sp), %a0
+.Lcollapse_format_7:
+	lea     52(%sp), %a0
 .Lcollapse_access_frame:
 	move.l  (%sp), %d0
 	move.l  %d0, (%a0)

@@ -8,7 +8,7 @@
  * functions the runtime does not implement would turn a compile error into a
  * link error.
  *
- * The widths match the MC68030 LP32 model, where long is 32 bits and long long
+ * The widths match the MC68040 LP32 model, where long is 32 bits and long long
  * is 64.
  */
 #ifndef ASTRA_FREESTANDING_INTTYPES_H

@@ -5,7 +5,7 @@ Per-device documents define registers inside each allocated aperture; they may
 not allocate a new global range without updating this file.
 
 The table describes the active QEMU machine on the Arty. All addresses are
-physical MC68030 bus addresses. MMIO is
+physical MC68040 bus addresses. MMIO is
 uncached and uses 32-bit, big-endian registers unless a device specification
 explicitly says otherwise.
 
@@ -37,7 +37,7 @@ file on storage: filesystem stacks beyond the boot volume, terminal, shell,
 fonts, desktop, applications, and diagnostics beyond POST.
 
 
-lwext4 is the load-bearing example. It is 64–74 KiB of MC68030 text
+lwext4 is the load-bearing example. It is 64–74 KiB of MC68040 text
 (`docs/STORAGE_AND_VFS.md`) and currently lives in the embedded Supervisor only
 long enough to mount the boot volume and launch the storage service. The
 initial-image reservation is 256 KiB at `0x02004000..0x02043fff`; firmware

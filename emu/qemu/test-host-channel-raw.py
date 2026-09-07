@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure the bare MC68030-to-QEMU AstraHost channel without Axiom."""
+"""Measure the bare MC68040-to-QEMU AstraHost channel without Axiom."""
 
 import argparse
 import importlib.util
@@ -25,6 +25,7 @@ PROPERTIES = (
     "astra-host-submissions",
     "astra-host-commands",
     "astra-host-execution-ns",
+    "astra-host-fs-invalid-execution-ns",
     "astra-host-inflight",
     "astra-host-max-inflight",
 )
@@ -123,14 +124,20 @@ def run(qemu, rom, expected_mode, deadline):
                            (expected_mode, values))
     elapsed_ns = elapsed_us * 1000
     callback_ns = values["astra-host-execution-ns"]
+    operation_ns = values["astra-host-fs-invalid-execution-ns"]
     submissions = values["astra-host-submissions"]
+    if ((expected_mode == "empty" and operation_ns != 0) or
+            (expected_mode == "command" and
+             (operation_ns == 0 or operation_ns > callback_ns))):
+        raise RuntimeError("invalid %s operation timing: %r" %
+                           (expected_mode, values))
     print("raw-host: %s depth=%d submissions=%d commands=%d max-inflight=%d "
           "elapsed-ns=%d ns-per-iteration=%.1f iterations-per-second=%.1f "
-          "callback-ns-per-command=%.1f" % (
+          "callback-ns-per-command=%.1f operation-ns-per-command=%.1f" % (
               expected_mode, depth, submissions, values["astra-host-commands"],
               values["astra-host-max-inflight"], elapsed_ns,
               elapsed_ns / iterations, iterations * 1_000_000_000 / elapsed_ns,
-              callback_ns / iterations), flush=True)
+              callback_ns / iterations, operation_ns / iterations), flush=True)
 
 
 def main():

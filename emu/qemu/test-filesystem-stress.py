@@ -31,13 +31,6 @@ BLOCK_PROPERTIES = (
     "astra-block-write-sectors",
     "astra-block-flush-requests",
 )
-PMMU_PROPERTIES = (
-    "astra-pmmu-tlb-fills",
-    "astra-pmmu-atc-hits",
-    "astra-pmmu-table-walks",
-    "astra-pmmu-crp-writes",
-    "astra-pmmu-crp-changes",
-)
 HOST_PROPERTIES = (
     "astra-host-submissions",
     "astra-host-commands",
@@ -52,6 +45,8 @@ HOST_OPERATION_PROPERTIES = tuple(
         "invalid", "open", "close", "read", "write", "sync", "truncate",
         "stat", "readdir", "mkdir", "unlink", "rename", "chmod",
         "readlink", "symlink"))
+HOST_OPERATION_TIMING_PROPERTIES = tuple(
+    name + "-execution-ns" for name in HOST_OPERATION_PROPERTIES)
 
 
 def wait_serial(machine, marker):
@@ -117,9 +112,9 @@ def machine_stats(machine):
         return {
             name: machine.qmp.execute("qom-get", {
                 "path": "/machine", "property": name,
-            }) for name in BLOCK_PROPERTIES + PMMU_PROPERTIES +
+            }) for name in BLOCK_PROPERTIES +
             HOST_PROPERTIES + HOST_GAUGE_PROPERTIES +
-            HOST_OPERATION_PROPERTIES
+            HOST_OPERATION_PROPERTIES + HOST_OPERATION_TIMING_PROPERTIES
         }
     finally:
         machine.qmp.execute("cont")
@@ -219,10 +214,12 @@ def run_seed(args, seed):
         machine.qmp.type_text(command)
         start_profiler()
         machine.qmp.key("ret")
+        deadline = (None if args.command_deadline is None else
+                    time.monotonic() + args.command_deadline)
         lines, _ = wait_text(
             machine, ("ASTRA FSSTRESS PASS", "ASTRA FSSTRESS FAIL",
                       "fsstress: crashed", "resident process exited:"),
-            before, time.monotonic() + args.command_deadline)
+            before, deadline)
         stop_profiler()
         write_perf_report()
         if lines is None:
@@ -240,13 +237,18 @@ def run_seed(args, seed):
         stats_after = machine_stats(machine)
         delta = {name: stats_after[name] - stats_before[name]
                  for name in BLOCK_PROPERTIES}
-        pmmu_delta = {name: stats_after[name] - stats_before[name]
-                      for name in PMMU_PROPERTIES}
         host_delta = {name: stats_after[name] - stats_before[name]
                       for name in HOST_PROPERTIES}
         host_operation_delta = {
             name: stats_after[name] - stats_before[name]
             for name in HOST_OPERATION_PROPERTIES}
+        host_operation_timing_delta = {
+            name: stats_after[name] - stats_before[name]
+            for name in HOST_OPERATION_TIMING_PROPERTIES}
+        host_operation_execution_ns = sum(
+            host_operation_timing_delta.values())
+        host_queue_ns = (host_delta["astra-host-execution-ns"] -
+                         host_operation_execution_ns)
         print("fsstress: block read-requests=%d read-sectors=%d" %
               (delta["astra-block-read-requests"],
                delta["astra-block-read-sectors"]), flush=True)
@@ -254,15 +256,19 @@ def run_seed(args, seed):
               (delta["astra-block-write-requests"],
                delta["astra-block-write-sectors"],
                delta["astra-block-flush-requests"]), flush=True)
-        print("fsstress: pmmu fills=%d atc-hits=%d walks=%d "
-              "crp-writes=%d crp-changes=%d" %
-              tuple(pmmu_delta[name] for name in PMMU_PROPERTIES), flush=True)
         print("fsstress: host submissions=%d commands=%d execution-ns=%d" %
               tuple(host_delta[name] for name in HOST_PROPERTIES), flush=True)
         print("fsstress: host operations " + " ".join(
             "%s=%d" % (name.removeprefix("astra-host-fs-"),
                          host_operation_delta[name])
             for name in HOST_OPERATION_PROPERTIES), flush=True)
+        print("fsstress: host operation-execution-ns " + " ".join(
+            "%s=%d" % (name.removeprefix("astra-host-fs-").removesuffix(
+                            "-execution-ns"),
+                        host_operation_timing_delta[name])
+            for name in HOST_OPERATION_TIMING_PROPERTIES), flush=True)
+        print("fsstress: host operation-execution-ns-total=%d queue-ns=%d" %
+              (host_operation_execution_ns, host_queue_ns), flush=True)
         print("fsstress: host inflight=%d max-inflight=%d->%d" %
               (stats_after["astra-host-inflight"],
                stats_before["astra-host-max-inflight"],
@@ -276,16 +282,21 @@ def run_seed(args, seed):
         if sum(host_operation_delta.values()) != host_delta[
                 "astra-host-commands"]:
             raise RuntimeError("host operation accounting disagrees")
-        if (pmmu_delta["astra-pmmu-tlb-fills"] == 0 or
-                pmmu_delta["astra-pmmu-crp-writes"] == 0 or
-                pmmu_delta["astra-pmmu-crp-changes"] == 0 or
-                pmmu_delta["astra-pmmu-crp-changes"] >
-                pmmu_delta["astra-pmmu-crp-writes"] or
-                pmmu_delta["astra-pmmu-atc-hits"] +
-                pmmu_delta["astra-pmmu-table-walks"] >
-                pmmu_delta["astra-pmmu-tlb-fills"]):
-            raise RuntimeError("invalid PMMU accounting: %r" % pmmu_delta)
+        if host_queue_ns < 0:
+            raise RuntimeError("host operation timing exceeds total timing")
     except Exception as error:
+        try:
+            failed_stats = machine_stats(machine)
+            print("fsstress: failure host submissions=%d commands=%d "
+                  "inflight=%d max-inflight=%d qemu-fds=%d" % (
+                      failed_stats["astra-host-submissions"],
+                      failed_stats["astra-host-commands"],
+                      failed_stats["astra-host-inflight"],
+                      failed_stats["astra-host-max-inflight"],
+                      len(os.listdir("/proc/%d/fd" % machine.process.pid))),
+                  flush=True)
+        except (OSError, RuntimeError):
+            pass
         machine.recent_serial()
         raise RuntimeError("seed 0x%08x failed (%s)\n%s" %
                            (seed, error, "\n".join(machine.log[-100:]))) \
@@ -331,7 +342,9 @@ def main():
     parser.add_argument("--operation", choices=(
         "write", "read", "append", "truncate", "rename", "move",
         "delete", "sync"))
-    parser.add_argument("--command-deadline", type=float, default=120.0)
+    parser.add_argument(
+        "--command-deadline", type=float,
+        help="fail after this many seconds; by default wait for completion")
     parser.add_argument("--qemu-arg", action="append", default=[])
     parser.add_argument("--qemu-log")
     parser.add_argument("--perf")
@@ -359,7 +372,8 @@ def main():
             args.workers < 1 or args.workers > 0xffffffff or
             args.files < 1 or args.files > 0xffffffff or
             args.max_bytes < 1 or args.max_bytes > 0xffffffff or
-            args.command_deadline <= 0.0 or
+            (args.command_deadline is not None and
+             args.command_deadline <= 0.0) or
             any(seed < 1 or seed > 0xffffffff for seed in args.seeds)):
         parser.error("counts and seeds must be positive 32-bit values")
     os.makedirs(args.work, exist_ok=True)

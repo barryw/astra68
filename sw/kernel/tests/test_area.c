@@ -17,15 +17,15 @@
 
 static uint8_t physical_memory[32u * 1024u * 1024u];
 
-void kernel_pmmu_load_tc(const uint32_t *value) { (void)value; }
-void kernel_pmmu_load_srp(const KernelPmmuRootPointer *root) { (void)root; }
-void kernel_pmmu_load_crp(const KernelPmmuRootPointer *root) { (void)root; }
-void kernel_pmmu_load_tt0(const uint32_t *value) { (void)value; }
-void kernel_pmmu_load_tt1(const uint32_t *value) { (void)value; }
+void kernel_pmmu_load_tc(uint32_t value) { (void)value; }
+void kernel_pmmu_load_srp(uint32_t root) { (void)root; }
+void kernel_pmmu_load_urp(uint32_t root) { (void)root; }
+void kernel_pmmu_disable_transparent_translation(void) { }
 void kernel_pmmu_read_tc(uint32_t *value) { *value = 0u; }
-void kernel_pmmu_read_srp(KernelPmmuRootPointer *root) { *root = (KernelPmmuRootPointer){0}; }
-void kernel_pmmu_read_crp(KernelPmmuRootPointer *root) { *root = (KernelPmmuRootPointer){0}; }
+void kernel_pmmu_read_srp(uint32_t *root) { *root = 0u; }
+void kernel_pmmu_read_urp(uint32_t *root) { *root = 0u; }
 void kernel_pmmu_flush_all(void) { }
+void kernel_pmmu_flush_non_global(void) { }
 void kernel_pmmu_flush_page(uint32_t virtual_address) { (void)virtual_address; }
 void kernel_pmmu_set_user_function_codes(void) { }
 void kernel_cache_invalidate_all(void) { }
@@ -55,7 +55,7 @@ static void initialize_test(void)
     info.flags = ASTRA_BOOT_REQUIRED_FLAGS;
     info.machine_id = 0x41363801u;
     info.hardware_build_id = 0x12345678u;
-    info.cpu_model = 0x00068030u;
+    info.cpu_model = 0x00068040u;
     info.cpu_implementation = 0x54474d32u;
     info.cpu_features = 0x0000000du;
     info.cpu_hz = 12500000u;
@@ -324,16 +324,136 @@ static void test_child_lifetime_and_quotas(void)
     assert(kernel_area_pool_valid());
 }
 
+static void test_global_area_objects_match_the_process_contract(void)
+{
+    enum {
+        area_count = KERNEL_VM_ADDRESS_SPACE_MAX * KERNEL_AREA_OWNER_MAX
+    };
+    KernelArea *areas[area_count];
+    KernelArea *extra = NULL;
+    uint32_t frame_owners[area_count];
+
+    initialize_test();
+    for (uint32_t index = 0u; index < area_count; ++index) {
+        uint32_t owner = 1000u + index / KERNEL_AREA_OWNER_MAX;
+        KernelAreaSnapshot snapshot;
+
+        assert(kernel_area_create(owner, KERNEL_PAGE_SIZE,
+                                  KERNEL_AREA_CREATE_RESERVED,
+                                  &areas[index]) == KERNEL_AREA_OK);
+        assert(kernel_area_snapshot(index, &snapshot));
+        frame_owners[index] = snapshot.frame_owner;
+        for (uint32_t prior = 0u; prior < index; ++prior)
+            assert(frame_owners[prior] != frame_owners[index]);
+    }
+    assert(kernel_area_create(2000u, KERNEL_PAGE_SIZE,
+                              KERNEL_AREA_CREATE_RESERVED,
+                              &extra) == KERNEL_AREA_NO_SLOT);
+    assert(extra == NULL);
+    for (uint32_t index = 0u; index < area_count; ++index)
+        kernel_area_handle_release(areas[index], NULL);
+    assert(kernel_area_pool_valid());
+}
+
+static void test_area_slots_belong_to_address_spaces(void)
+{
+    KernelAddressSpace first = {0};
+    KernelAddressSpace second = {0};
+    KernelArea *shared = NULL;
+    KernelArea *local = NULL;
+    uint32_t first_base;
+    uint32_t second_base;
+    uint32_t local_base;
+    uint32_t size;
+    uint32_t first_physical;
+    uint32_t second_physical;
+
+    initialize_test();
+    assert(kernel_vm_create_address_space(1200u, &first) == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(1201u, &second) == KERNEL_VM_OK);
+    assert(kernel_area_create(1200u, KERNEL_PAGE_SIZE, 0u, &shared) ==
+           KERNEL_AREA_OK);
+    assert(kernel_area_create(1201u, KERNEL_PAGE_SIZE, 0u, &local) ==
+           KERNEL_AREA_OK);
+    assert(kernel_area_map(shared, 1200u, &first,
+                           KERNEL_VM_READ | KERNEL_VM_WRITE,
+                           &first_base, &size) == KERNEL_AREA_OK);
+    assert(kernel_area_map(local, 1201u, &second,
+                           KERNEL_VM_READ | KERNEL_VM_WRITE,
+                           &local_base, &size) == KERNEL_AREA_OK);
+    assert(first_base == KERNEL_VM_AREA_BASE);
+    assert(local_base == KERNEL_VM_AREA_BASE);
+    assert(kernel_area_map(shared, 1201u, &second, KERNEL_VM_READ,
+                           &second_base, &size) == KERNEL_AREA_OK);
+    assert(second_base == KERNEL_VM_AREA_BASE + KERNEL_VM_AREA_SLOT_SIZE);
+    assert(kernel_vm_switch(&first) == KERNEL_VM_OK);
+    assert(kernel_vm_test_translate_current(first_base, true,
+                                            &first_physical));
+    assert(kernel_vm_switch(&second) == KERNEL_VM_OK);
+    assert(kernel_vm_test_translate_current(second_base, false,
+                                            &second_physical));
+    assert(first_physical == second_physical);
+    assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
+    assert(kernel_area_unmap(1200u, &first, first_base) == KERNEL_AREA_OK);
+    assert(kernel_area_unmap(1201u, &second, second_base) == KERNEL_AREA_OK);
+    assert(kernel_area_unmap(1201u, &second, local_base) == KERNEL_AREA_OK);
+    kernel_area_handle_release(shared, NULL);
+    kernel_area_handle_release(local, NULL);
+    assert(kernel_vm_destroy_address_space(&first) == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&second) == KERNEL_VM_OK);
+    assert(kernel_memory_release_owner(1200u, NULL) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_release_owner(1201u, NULL) == KERNEL_MEMORY_OK);
+    assert(kernel_area_pool_valid());
+}
+
+static void test_process_clone_inherits_area_mappings(void)
+{
+    KernelAddressSpace parent = {0};
+    KernelAddressSpace child = {0};
+    KernelArea *area = NULL;
+    uint32_t base;
+    uint32_t size;
+    uint32_t physical;
+    uint32_t unmapped;
+
+    initialize_test();
+    assert(kernel_vm_create_address_space(1300u, &parent) == KERNEL_VM_OK);
+    assert(kernel_area_create(1300u, 2u * KERNEL_PAGE_SIZE,
+                              KERNEL_AREA_CREATE_RESERVED,
+                              &area) == KERNEL_AREA_OK);
+    assert(kernel_area_map(area, 1300u, &parent,
+                           KERNEL_VM_READ | KERNEL_VM_WRITE,
+                           &base, &size) == KERNEL_AREA_OK);
+    assert(kernel_area_fault(1300u, &parent, base));
+    assert(kernel_vm_clone_address_space(&parent, 1301u, &child) ==
+           KERNEL_VM_OK);
+    assert(kernel_area_clone_process(1300u, &parent, 1301u, &child) ==
+           KERNEL_AREA_OK);
+    assert(kernel_vm_switch(&child) == KERNEL_VM_OK);
+    assert(kernel_vm_test_translate_current(base, true, &physical));
+    assert(kernel_area_unmap_process(1301u, &unmapped) == KERNEL_AREA_OK);
+    assert(unmapped == 1u);
+    assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
+    assert(kernel_area_unmap(1300u, &parent, base) == KERNEL_AREA_OK);
+    kernel_area_handle_release(area, NULL);
+    assert(kernel_vm_destroy_address_space(&parent) == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&child) == KERNEL_VM_OK);
+    assert(kernel_memory_release_owner(1300u, NULL) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_release_owner(1301u, NULL) == KERNEL_MEMORY_OK);
+    assert(kernel_area_pool_valid());
+}
+
 static void test_service_can_map_every_area_slot(void)
 {
     KernelAddressSpace service = {0};
-    KernelArea *areas[KERNEL_AREA_MAX];
-    uint32_t bases[KERNEL_AREA_MAX];
-    uint32_t sizes[KERNEL_AREA_MAX];
+    KernelArea *areas[KERNEL_AREA_PROCESS_MAPPING_MAX];
+    uint32_t bases[KERNEL_AREA_PROCESS_MAPPING_MAX];
+    uint32_t sizes[KERNEL_AREA_PROCESS_MAPPING_MAX];
 
     initialize_test();
     assert(kernel_vm_create_address_space(200u, &service) == KERNEL_VM_OK);
-    for (uint32_t index = 0u; index < KERNEL_AREA_MAX; ++index) {
+    for (uint32_t index = 0u; index < KERNEL_AREA_PROCESS_MAPPING_MAX;
+         ++index) {
         uint32_t owner = 201u + index / KERNEL_AREA_OWNER_MAX;
 
         assert(kernel_area_create(owner, KERNEL_PAGE_SIZE, 0u, &areas[index]) ==
@@ -346,7 +466,8 @@ static void test_service_can_map_every_area_slot(void)
                index * KERNEL_VM_AREA_SLOT_SIZE);
         assert(sizes[index] == KERNEL_PAGE_SIZE);
     }
-    for (uint32_t index = 0u; index < KERNEL_AREA_MAX; ++index) {
+    for (uint32_t index = 0u; index < KERNEL_AREA_PROCESS_MAPPING_MAX;
+         ++index) {
         uint32_t owner = 201u + index / KERNEL_AREA_OWNER_MAX;
 
         assert(kernel_area_unmap(200u, &service, bases[index]) ==
@@ -586,11 +707,11 @@ static void test_reserved_area_commits_only_what_is_touched(void)
     assert(kernel_area_fault(300u, &space, base + touched * KERNEL_PAGE_SIZE));
     assert(kernel_memory_stats(&after));
     /*
-     * The cluster, plus the page table it is published through: mapping an
+     * The cluster, plus the 68040 pointer and page tables it is published through: mapping an
      * area with nothing committed publishes no descriptors, so the table for
      * the slot is bought by the first commit rather than by the map.
      */
-    assert(before.free_frames - after.free_frames == cluster + 1u);
+    assert(before.free_frames - after.free_frames == cluster + 2u);
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.committed_pages == cluster);
 
@@ -828,11 +949,9 @@ static void test_reserved_area_decommit_returns_frames(void)
     assert(kernel_memory_stats(&after));
     assert(released == cluster);
     /*
-     * The cluster, and the page table each holder was using it through: the
-     * last descriptor leaving a table takes the table with it, and there are
-     * two address spaces holding this area.
+     * The cluster, and the pointer/page-table pair each holder used.
      */
-    assert(after.free_frames - before.free_frames == cluster + 2u);
+    assert(after.free_frames - before.free_frames == cluster + 4u);
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.committed_pages == 0u);
     assert(snapshot.page_count == KERNEL_AREA_PAGE_MAX);
@@ -1026,6 +1145,9 @@ int main(void)
     test_allocation_injection_preserves_mapping_baseline();
     test_same_address_aliases_survive_creator_death();
     test_child_lifetime_and_quotas();
+    test_global_area_objects_match_the_process_contract();
+    test_area_slots_belong_to_address_spaces();
+    test_process_clone_inherits_area_mappings();
     test_service_can_map_every_area_slot();
     test_screen_sized_area_reaches_its_last_pixel();
     test_create_transaction_rolls_back_every_stage();

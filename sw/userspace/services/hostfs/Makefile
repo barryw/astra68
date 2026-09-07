@@ -5,8 +5,9 @@ SIZE := $(CROSS)size
 OBJCOPY := $(CROSS)objcopy
 RUNTIME := ../../runtime
 VFS := ../../vfs
+METRICS := ../../metrics
 CPPFLAGS := -I../../include -I../../../include -I$(RUNTIME)/include \
-	-I$(VFS)/include -I$(RUNTIME)/freestanding
+	-I$(VFS)/include -I$(METRICS)/include -I$(RUNTIME)/freestanding
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O2 -flto -ffreestanding \
 	-fno-builtin -ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
@@ -17,15 +18,16 @@ IMAGE := build/m68k/hostfs
 OBJECT := build/m68k/main.o
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
+METRICS_LIB := $(METRICS)/build/m68k/libastrametric.a
 CRT0 := $(RUNTIME)/build/m68k/crt0.o
-ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(VFS)
+ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(VFS) $(METRICS)
 include ../../program.mk
 
-$(TARGET): $(OBJECT) $(CRT0) $(VFS_LIB) $(RUNTIME_LIB) \
+$(TARGET): $(OBJECT) $(CRT0) $(METRICS_LIB) $(VFS_LIB) $(RUNTIME_LIB) \
 		$(RUNTIME)/astra_user.ld
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(CRT0) $(OBJECT) \
-		$(VFS_LIB) $(RUNTIME_LIB) -lgcc
+		$(METRICS_LIB) $(VFS_LIB) $(RUNTIME_LIB) -lgcc
 
 $(IMAGE): $(TARGET)
 	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@

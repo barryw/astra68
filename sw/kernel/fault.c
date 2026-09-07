@@ -5,10 +5,6 @@
 #include <stddef.h>
 
 #define M68K_BUS_ERROR_VECTOR_OFFSET 0x0008u
-#define M68K_SSW_READ 0x0040u
-#define M68K_SSW_SIZE_SHIFT 4u
-#define M68K_SSW_SIZE_MASK 0x0003u
-#define M68K_SSW_FC_MASK 0x0007u
 
 static void clear_report(KernelFaultReport *report)
 {
@@ -36,11 +32,9 @@ static bool bus_record_matches(const KernelExceptionFrame *frame,
         (bus_fault->status & BUS_FAULT_VALID) == 0u ||
         !mapping_has_physical(mapping) ||
         bus_fault->address != expected_physical ||
-        BUS_FAULT_FC(bus_fault->status) !=
-            (frame->special_status & M68K_SSW_FC_MASK) ||
-        BUS_FAULT_SIZE(bus_fault->status) !=
-            ((frame->special_status >> M68K_SSW_SIZE_SHIFT) &
-             M68K_SSW_SIZE_MASK))
+        BUS_FAULT_TM(bus_fault->status) !=
+            frame->access_transfer_mode ||
+        BUS_FAULT_SIZE(bus_fault->status) != frame->access_size)
         return false;
     recorded_write = (bus_fault->status & BUS_FAULT_WRITE) != 0u;
     return recorded_write == write;
@@ -57,12 +51,11 @@ bool kernel_fault_classify(const KernelExceptionFrame *frame,
 
     if (frame == NULL || report == NULL || frame->access_fault == 0u ||
         frame->vector_offset != M68K_BUS_ERROR_VECTOR_OFFSET ||
-        (frame->format != 0xau && frame->format != 0xbu) ||
         mapping > KERNEL_VM_MAPPING_READ_WRITE)
         return false;
 
     clear_report(report);
-    write = (frame->special_status & M68K_SSW_READ) == 0u;
+    write = frame->access_write != 0u;
     report->logical_address = frame->fault_address;
     report->expected_physical = expected_physical;
     report->mapping = (uint8_t)mapping;
@@ -112,16 +105,12 @@ bool kernel_fault_capture(const KernelExceptionFrame *frame,
     KernelPlatformBusFault bus_fault;
     KernelVmMapping mapping;
     uint32_t physical_address = 0u;
-    uint32_t function_code;
-    bool supervisor_translation;
     bool bus_present;
 
     if (frame == NULL || report == NULL)
         return false;
-    function_code = frame->special_status & M68K_SSW_FC_MASK;
-    supervisor_translation = (function_code & 4u) != 0u;
     mapping = kernel_vm_probe_current(frame->fault_address,
-                                      supervisor_translation,
+                                      frame->access_supervisor != 0u,
                                       &physical_address);
     bus_present = kernel_platform_bus_fault_read(&bus_fault);
     return kernel_fault_classify(frame, mapping, physical_address,

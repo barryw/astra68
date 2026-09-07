@@ -13,9 +13,9 @@
 /*
  * Sixteen was a machine whose graphical half was one program. A desktop is
  * seven: every window is a surface its client created, and every mount a
- * program reads through wants a transfer area of its own. A 4 MiB slot is one
- * complete MC68030 page table, so mapping it is atomic without another level
- * of rollback state. Reserved areas commit no RAM until touched.
+ * program reads through wants a transfer area of its own. A 4 MiB slot spans
+ * sixteen MC68040 page tables; the VM transaction owns their publication and
+ * rollback. Reserved areas commit no RAM until touched.
  */
 #define KERNEL_VM_AREA_SLOT_COUNT 32u
 /*
@@ -120,10 +120,8 @@ typedef struct KernelVmStats {
 } KernelVmStats;
 
 typedef struct KernelVmControlState {
-    uint32_t srp_limit_descriptor;
     uint32_t srp_table_address;
-    uint32_t crp_limit_descriptor;
-    uint32_t crp_table_address;
+    uint32_t urp_table_address;
     uint32_t translation_control;
     uint32_t cache_control;
     uint8_t translation_enabled;

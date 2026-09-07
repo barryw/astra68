@@ -12,10 +12,55 @@ typedef struct AstraVfsHostLaneCache {
 
 static _Thread_local AstraVfsHostLaneCache lane_cache;
 
+#ifndef ASTRA_VFS_HOST_COMPLETION_POLLS
+#define ASTRA_VFS_HOST_COMPLETION_POLLS 512u
+#endif
+#define ASTRA_VFS_HOST_COMPLETION_BURST 8u
+
+_Static_assert(ASTRA_VFS_HOST_COMPLETION_POLLS %
+                   ASTRA_VFS_HOST_COMPLETION_BURST == 0u,
+               "host completion polling burst must divide the poll count");
+
 static int channel_pending(const volatile AstraHostChannelHeader *header,
                            uint32_t producer)
 {
     return (int32_t)(header->consumer_position - producer) < 0;
+}
+
+static int channel_poll(const volatile AstraHostChannelHeader *header,
+                        uint32_t producer)
+{
+    for (uint32_t poll = 0u; poll < ASTRA_VFS_HOST_COMPLETION_POLLS;
+         poll += ASTRA_VFS_HOST_COMPLETION_BURST) {
+        uint32_t consumer;
+
+        consumer = header->consumer_position;
+        consumer = header->consumer_position;
+        consumer = header->consumer_position;
+        consumer = header->consumer_position;
+        consumer = header->consumer_position;
+        consumer = header->consumer_position;
+        consumer = header->consumer_position;
+        consumer = header->consumer_position;
+        if ((int32_t)(consumer - producer) >= 0)
+            return 1;
+    }
+    return 0;
+}
+
+static uint32_t channel_submit(AstraVfsHostLane *lane,
+                               volatile AstraHostChannelHeader *header,
+                               uint32_t producer)
+{
+    uint32_t status = astra_host_channel_kick(lane->channel_address,
+                                              producer);
+
+    if (status != ASTRA_SYSCALL_OK)
+        return status;
+    if (channel_poll(header, producer))
+        return ASTRA_SYSCALL_OK;
+    return astra_host_channel_wait(producer,
+                                   UINT64_C(0x7fffffffffffffff));
 }
 
 static uint32_t publish_path(char destination[ASTRA_HOST_FS_PATH_MAX],
@@ -126,6 +171,8 @@ int astra_vfs_host_transport_init(AstraVfsHostTransport *transport,
         (lease.capabilities & (ASTRA_HOST_CAP_CHANNEL |
                                ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ)) ==
         (ASTRA_HOST_CAP_CHANNEL | ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ);
+    transport->metrics_supported =
+        (lease.capabilities & ASTRA_HOST_CAP_METRICS) != 0u;
     transport->acquire = acquire;
     transport->release = release;
     transport->lock_context = lock_context;
@@ -414,15 +461,7 @@ uint32_t astra_vfs_host_transport_submit(
     header = (volatile AstraHostChannelHeader *)(void *)lane->bytes;
     astra_memory_release_fence();
     header->producer_position = request->private_producer;
-    status = astra_host_channel_kick(lane->channel_address,
-                                     request->private_producer);
-    if (status == ASTRA_SYSCALL_OK) {
-        astra_compiler_barrier();
-        if (channel_pending(header, request->private_producer))
-            status = astra_host_channel_wait(
-                request->private_producer,
-                UINT64_C(0x7fffffffffffffff));
-    }
+    status = channel_submit(lane, header, request->private_producer);
     astra_memory_acquire_fence();
     if (status == ASTRA_SYSCALL_OK &&
         channel_pending(header, request->private_producer))
@@ -439,6 +478,40 @@ uint32_t astra_vfs_host_transport_submit(
         return ASTRA_VFS_ERR_IO;
     if (output_capacity != 0u && command->result_length != 0u)
         memcpy(output, lane->bytes + data_offset, command->result_length);
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_vfs_host_metrics(AstraVfsHostTransport *transport,
+                                AstraHostMetricsSnapshot *snapshot)
+{
+    AstraVfsHostRequest request;
+    AstraHostCommand *command;
+    uint32_t status;
+
+    if (transport == NULL || snapshot == NULL ||
+        transport->metrics_supported == 0u)
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    status = astra_vfs_host_transport_begin(
+        transport, sizeof(*snapshot), &request);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    command = request.command;
+    memset(command, 0, sizeof(*command));
+    command->size = sizeof(*command);
+    command->version = ASTRA_HOST_COMMAND_VERSION;
+    command->service = ASTRA_HOST_SERVICE_METRICS;
+    command->operation = ASTRA_HOST_METRICS_SNAPSHOT;
+    command->generation = transport->generation;
+    memset(snapshot, 0, sizeof(*snapshot));
+    status = astra_vfs_host_transport_submit(
+        transport, &request, NULL, 0u, snapshot, sizeof(*snapshot));
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (snapshot->size != sizeof(*snapshot) ||
+        snapshot->version != ASTRA_HOST_METRICS_VERSION ||
+        snapshot->count != ASTRA_HOST_METRIC_COUNT ||
+        snapshot->reserved[0] != 0u || snapshot->reserved[1] != 0u)
+        return ASTRA_VFS_ERR_PROTOCOL;
     return ASTRA_VFS_OK;
 }
 
@@ -536,14 +609,7 @@ uint32_t astra_vfs_host_transport_execute_batch(
 
         astra_memory_release_fence();
         header->producer_position = producer;
-        status = astra_host_channel_kick(lane->channel_address, producer);
-        if (status == ASTRA_SYSCALL_OK) {
-            astra_compiler_barrier();
-            if (channel_pending(header, producer))
-                status = astra_host_channel_wait(
-                    producer,
-                    UINT64_C(0x7fffffffffffffff));
-        }
+        status = channel_submit(lane, header, producer);
         astra_memory_acquire_fence();
         if (status == ASTRA_SYSCALL_OK &&
             channel_pending(header, producer))

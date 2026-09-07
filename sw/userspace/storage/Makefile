@@ -210,7 +210,7 @@ EXT4_MKFS_FEATURES := ^64bit,^casefold,^extent,^ext_attr,^metadata_csum_seed
 # journal costs 1,767 of the 33..64-byte descriptors against 855 for this one,
 # at any volume size. Recovery: replay after an unclean shutdown is
 # proportional to outstanding journal content, and this machine is a 12.5 MHz
-# 68030 behind an SD card, so a 128 MiB journal bounds worst-case boot delay
+# MC68040 behind an SD card, so a 128 MiB journal bounds worst-case boot delay
 # 32 times worse than a 4 MiB one.
 #
 # Astra's write workload is small; 4 MiB is many transactions' worth. The class
@@ -349,7 +349,7 @@ build/analyzer/%.o: src/%.c
 # Freestanding link proof.
 #
 # "lwext4 needs no C library" is a claim that only a link can settle. This
-# links the whole filesystem stack into a real MC68030 image under the same
+# links the whole filesystem stack into a real MC68040 image under the same
 # -nostdlib contract a service uses, so any libc symbol that crept in through a
 # vendored source or a port shim is an error here rather than a discovery made
 # while bringing up hardware.

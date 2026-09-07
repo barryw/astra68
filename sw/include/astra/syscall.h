@@ -395,7 +395,7 @@
  * caller saw as "no input", so it looked like a hang rather than a refusal.
  */
 #define ASTRA_ABI_ALIGNMENT 4u
-/* Plain 32-bit scalar arrays follow the MC68030 ABI, which aligns them to 2. */
+/* Plain 32-bit scalar arrays follow the m68k ABI, which aligns them to 2. */
 #define ASTRA_SCALAR_ALIGNMENT 2u
 
 typedef struct AstraIrqRecord {

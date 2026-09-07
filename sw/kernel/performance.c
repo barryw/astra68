@@ -14,6 +14,12 @@ static uint16_t performance_generation;
 static uint8_t performance_window_active;
 uint8_t kernel_performance_sampling_enabled;
 
+#if defined(ASTRA_KERNEL_SCHED_TRACE) && ASTRA_KERNEL_SCHED_TRACE
+static uint32_t performance_trace_counts[KERNEL_PERFORMANCE_METRIC_COUNT];
+static uint32_t performance_trace_samples[KERNEL_PERFORMANCE_METRIC_COUNT]
+                                         [KERNEL_PERFORMANCE_TRACE_SAMPLE_MAX];
+#endif
+
 #define KERNEL_PERFORMANCE_INTERRUPT_RECORD_COUNT 64u
 
 typedef struct PerformanceInterruptRecord {
@@ -132,6 +138,12 @@ void kernel_performance_init(void)
     }
     performance_generation = 1u;
     performance_window_active = 0u;
+#if defined(ASTRA_KERNEL_SCHED_TRACE) && ASTRA_KERNEL_SCHED_TRACE
+    kernel_bytes_clear(performance_trace_counts,
+                       sizeof(performance_trace_counts));
+    kernel_bytes_clear(performance_trace_samples,
+                       sizeof(performance_trace_samples));
+#endif
     for (uint32_t metric = 0u;
          metric < KERNEL_PERFORMANCE_METRIC_COUNT; ++metric)
         performance_stats.metric[metric].budget_cycles =
@@ -240,6 +252,13 @@ void kernel_performance_record(KernelPerformanceMetric metric,
 
     if (!valid_metric(metric))
         return;
+#if defined(ASTRA_KERNEL_SCHED_TRACE) && ASTRA_KERNEL_SCHED_TRACE
+    if (performance_trace_counts[metric] <
+        KERNEL_PERFORMANCE_TRACE_SAMPLE_MAX) {
+        performance_trace_samples[metric]
+                                 [performance_trace_counts[metric]++] = cycles;
+    }
+#endif
     stats = &performance_stats.metric[metric];
     if (stats->samples != UINT32_MAX)
         ++stats->samples;
@@ -255,6 +274,21 @@ void kernel_performance_record(KernelPerformanceMetric metric,
     if (cycles > stats->budget_cycles && stats->overruns != UINT32_MAX)
         ++stats->overruns;
 }
+
+#if defined(ASTRA_KERNEL_SCHED_TRACE) && ASTRA_KERNEL_SCHED_TRACE
+uint32_t kernel_performance_trace_count(KernelPerformanceMetric metric)
+{
+    return valid_metric(metric) ? performance_trace_counts[metric] : 0u;
+}
+
+uint32_t kernel_performance_trace_sample(KernelPerformanceMetric metric,
+                                         uint32_t index)
+{
+    return valid_metric(metric) &&
+           index < performance_trace_counts[metric] ?
+        performance_trace_samples[metric][index] : 0u;
+}
+#endif
 
 void kernel_performance_record_call(KernelPerformanceMetric metric,
                                     uint32_t cycles)

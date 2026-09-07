@@ -223,8 +223,8 @@ static void uart_version(uint32_t version)
 
 static const char *cpu_name(uint32_t model, uint32_t implementation)
 {
-    if (implementation == CPU_IMPL_QEMU) return "QEMU TCG MC68030";
-    if (model == CPU_MODEL_68030) return "68030-compatible";
+    if (implementation == CPU_IMPL_QEMU) return "QEMU TCG MC68040";
+    if (model == CPU_MODEL_68040) return "68040-compatible";
     return "unknown";
 }
 
@@ -254,7 +254,7 @@ static void print_inventory(void)
 
     uart_puts("MMU:    ");
     uart_puts((VESTA->CPU_FEATURES & CPU_FEAT_PMMU) ?
-              "integrated 68030 PMMU\n" : "none\n");
+              "integrated MC68040 MMU\n" : "none\n");
 
     uart_puts("RAM:    ");
     uart_dec32(VESTA->RAM_SIZE >> 20);
@@ -1299,7 +1299,7 @@ void kmain(void)
     uart_puts(" cycles\n");
     uart_puts("CPU benchmark ...... ");
     uart_dec32(cpu_effective_hz);
-    uart_puts(" Hz 68030 equivalent");
+    uart_puts(" Hz effective");
     if (cpu_benchmark_us != 0u) {
         uart_puts(" (best ");
         uart_dec32(cpu_benchmark_us);

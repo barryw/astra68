@@ -15,10 +15,10 @@ orientation you need before touching anything.
 |---|---|---|---|
 | Mac | local | Apple Silicon, this session's cwd `/Users/barry/Git/astra68` | Editing, userspace + ELF work, host tests |
 | `beast` | 192.168.1.3 | 32 core, 61 GB, Ubuntu | **Everything that must build or run for real**: kernel, boot ROM, m68k gates, QEMU, analyzer |
-| `astra-arty` | 192.168.1.188 | **The board.** Arty Z7-20, ARMv7, Linux 6.6-xilinx | Running Astra on hardware |
+| `astra-de25` | 192.168.1.52 | **The board.** DE25-Nano, AArch64, Linux | Running Astra on hardware |
 | `nas.lan` | 192.168.1.5 | Storage | Durable evidence under `/mnt/Documents/astra68/` |
 
-`astra-arty` is reachable **as root from `beast`**, not from the Mac. Two hops.
+`astra-de25` is reachable from `beast`, not from the Mac. Two hops.
 
 The Mac **cannot** build the kernel image or `test_process` (Mach-O section
 attributes). It has `m68k-elf-gcc`, `mke2fs` and `lz4`, but **no `e2fsck` and no
@@ -27,14 +27,13 @@ go to `beast`, do not treat it as a project blocker.
 
 ## The boards
 
-**Arty Z7-20 — the active target.** A Xilinx **Zynq**: two ARM Cortex-A9 cores
-running Linux, with the graphics design in the PL. Its JTAG/UART is on `beast`;
-it is also a networked Linux host (`astra-arty`).
+**DE25-Nano — the active target.** An Intel Agilex 5 SoC: four AArch64 cores
+running Linux, with the graphics design in the fabric. Its JTAG/UART is on
+`beast`; it is also a networked Linux host (`astra-de25`).
 
-**The MC68030 is emulated by QEMU on those ARM cores. It is not in the FPGA
-fabric.** A board run is real hardware for storage, graphics and the SD path,
-but the CPU is still TCG — 68030 timing is no more real there than on `beast`.
-Accepted CPU baseline is roughly 30 MHz equivalent.
+**The MC68040 is emulated by QEMU TCG on the DE25's Cortex-A76 core. It is not
+in the FPGA fabric.** A board run is physical evidence for the complete host,
+storage, graphics and SD path. Beast runs are development evidence only.
 
 ## The emulator
 
@@ -60,11 +59,10 @@ There is no alternative CPU or emulator implementation in the repository.
   kernel tests did.
 - **The board is BusyBox**: no `truncate`, `timeout`, `pkill`; `losetup` takes
   `-o OFS LOOPDEV FILE`. `/` is read-only, only `/data` is writable.
-- **QEMU's cycle counter is TCG bookkeeping**, not 68030 time. Any `N cycles`
-  from emulation is meaningless — and that applies on the board too.
+- **QEMU's cycle counter is the guest monotonic timebase**, not a count of
+  physical MC68040 clocks. Use it for guest latency and deadline behavior;
+  report physical DE25 throughput separately.
 - `qemu-user` on `beast` is the **armhf** package and cannot execute on x86_64.
-- The astra68 QEMU fork **cannot build a `m68k-linux-user` target** without
-  guarding `INSN(pmmu030, ...)` in `target/m68k/translate.c`.
 - **`pytest` is not installed on `beast`**, so `sw/boot`'s Python half only runs
   on the Mac.
 - **`ASTRA_VFS_OPEN_CREATE` without `ASTRA_VFS_OPEN_TRUNCATE` used to
@@ -139,23 +137,17 @@ There is no alternative CPU or emulator implementation in the repository.
 | Complete inventory of everything | `docs/INVENTORY.md` |
 | Project-wide continuation map | `docs/CURRENT_STATE.md` |
 | Storage / filesystem line of work | `docs/FILESYSTEM_CONCURRENCY.md`, `docs/FILESYSTEM_KIT.md` |
-| **Current resume point** | `docs/HANDOVER-shell-redirection.md` — quoting was already there, redirection now is; what is left is `<`, `2>` and pipes |
 | Memory topology and budgets | `docs/MEMORY_BUDGET.md`, `docs/MEMORY_MAP.md` |
-| Boot fix, the shell gate, commands and the POSIX half | `docs/HANDOVER-boot-and-shell-gate.md` — every gate green |
-| The libc, the commands, and the kernel limits | `docs/HANDOVER-libc-and-limits.md` — its §10.1 and §10.2 are done |
-| Compositor and launch latency | `docs/HANDOVER-launch-latency.md` — the blitter's `arlen` is the item left |
-| Storage/VFS resume point before that | `docs/HANDOVER-union-assigns.md` |
-| Debug surface, and how the namespace got started | `docs/HANDOVER-debug-and-namespace.md` |
-| Service protocols and thread stacks | `docs/HANDOVER-vfs-and-stacks.md` |
+| Kernel design and active certification | `docs/KERNEL_ARCHITECTURE.md`, `docs/CURRENT_STATE.md` |
 | ROM budget and memory layout | `docs/MEMORY_MAP.md`, `sw/include/astra/boot.h` |
 | The wall clock, and what has a date | `docs/TIME.md` |
 | Debugging a program on the machine | `docs/DEBUGGING.md` |
-| FPGA timing closure | `fpga/arty/graphics/TIMING_CLOSURE.md` |
+| FPGA timing closure | `fpga/de25/TIMING_CLOSURE.md` |
 
 ## Standing instructions
 
 - **No throwaway code.** Build the real long-term piece even if incomplete.
-- **Modern methods, sized for this machine.** A 68030 with an MMU, 128 MB and
+- **Modern methods, sized for this machine.** An MC68040 with an MMU, 128 MB and
   one core. Take the *idea* a modern system expresses, not its implementation —
   and drop what does not apply, because no SMP deletes most of an allocator's
   complexity. Never the 1980s answer: no fixed partitions, no ceilings compiled

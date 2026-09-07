@@ -26,6 +26,7 @@ struct AstraVfsHostTransport {
     uint32_t maximum_commands;
     uint32_t generation;
     uint8_t channel_supported;
+    uint8_t metrics_supported;
     AstraVfsStateAcquire acquire;
     AstraVfsStateRelease release;
     void *lock_context;
@@ -60,5 +61,7 @@ uint32_t astra_vfs_host_transport_submit(
 uint32_t astra_vfs_host_transport_execute_batch(
     AstraVfsHostTransport *transport, AstraVfsHostTransfer *transfers,
     uint32_t count);
+uint32_t astra_vfs_host_metrics(AstraVfsHostTransport *transport,
+                                AstraHostMetricsSnapshot *snapshot);
 
 #endif

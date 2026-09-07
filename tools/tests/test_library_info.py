@@ -14,7 +14,7 @@ def record(name="graphics.library", major=1, minor=0, patch=0,
            abi_major=1, abi_minor=0, magic=library_info.RECORD_MAGIC,
            record_version=library_info.RECORD_VERSION,
            size=library_info.RECORD_SIZE,
-           target=library_info.TARGET_M68030):
+           target=library_info.TARGET_M68040):
     blob = struct.pack(library_info._HEAD, magic, record_version, size,
                        major, minor, patch, abi_major, abi_minor, 0, target,
                        0x10203040, 0x00F00000)

@@ -219,10 +219,8 @@ bool kernel_vm_stats(KernelVmStats *stats)
 bool kernel_vm_control_state(KernelVmControlState *state)
 {
     memset(state, 0, sizeof(*state));
-    state->srp_limit_descriptor = 0x80000002u;
     state->srp_table_address = 0x02004000u;
-    state->crp_limit_descriptor = 0x80000002u;
-    state->crp_table_address = 0x0200c000u;
+    state->urp_table_address = 0x0200c000u;
     state->translation_control = 0x82c08700u;
     state->cache_control = 0x00003119u;
     state->translation_enabled = 1u;
@@ -400,7 +398,7 @@ static void test_ftdi_parser_and_zero_memory_command(void)
     assert(strstr((char *)uart_tx, "help build threads") != NULL);
     assert(strstr((char *)uart_tx, "total=8192 free=0") != NULL);
     assert(strstr((char *)uart_tx,
-                  "srp=0x02004000 crp=0x0200C000 tc=0x82C08700 "
+                  "srp=0x02004000 urp=0x0200C000 tc=0x82C08700 "
                   "cacr=0x00003119 enabled=1") != NULL);
     assert(kernel_monitor_stats(&stats));
     assert(stats.transport[KERNEL_MONITOR_TRANSPORT_FTDI].commands == 3u);

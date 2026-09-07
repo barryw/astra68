@@ -4,7 +4,7 @@ Vesta is the Astra 68 system-glue chip (Gary/Gayle analog): the interrupt
 controller every other chip routes into, timers, FTDI diagnostic console,
 AstraHost boot state, input, machine identity, and reset control.
 
-> Process translation and protection use the CPU's built-in MC68030 PMMU. The
+> Process translation and protection use the CPU's built-in MC68040 MMU. The
 > former Vesta region-MMU aperture and contract are retired. Their published
 > numeric identifiers remain reserved but no active build implements them.
 
@@ -48,8 +48,8 @@ Block map (VESTA_BASE +):
 | 0x0010 | `SYS_STATUS` | RO | — | general status |
 | 0x0014 | `RESET_REASON` | RO | — | `0=power-on 1=soft 2=watchdog` |
 | 0x0018 | `SCRATCH` | RW | 0 | persists across soft reset (boot handoff) |
-| 0x001C | `CPU_MODEL` | RO | `0x00068030` | MC68030 architectural target |
-| 0x0020 | `CPU_IMPL` | RO | `QEMU` | QEMU TCG MC68030/PMMU implementation |
+| 0x001C | `CPU_MODEL` | RO | `0x00068040` | MC68040 architectural target |
+| 0x0020 | `CPU_IMPL` | RO | `QEMU` | QEMU TCG MC68040/MMU implementation |
 | 0x0024 | `CPU_FEATURES` | RO | varies | `[0]PMMU [1]FPU [2]DATA32 [3]ADDR32 [4]HOST_TIME` |
 | 0x0028 | `CPU_HZ` | RO | — | configured CPU/bus clock in Hz |
 | 0x002C | `RAM_BASE` | RO | — | physical SDRAM base advertised to boot software |
@@ -63,7 +63,7 @@ Block map (VESTA_BASE +):
 
 Hosted implementations that set `HOST_TIME` expose the low 32 bits of a
 monotonic microsecond counter at `0x012C`. Firmware uses it only to benchmark
-emulated MC68030 instruction throughput; `CPU_HZ` remains the timer and device
+emulated MC68040 instruction throughput; `CPU_HZ` remains the timer and device
 clock contract. Physical implementations leave the feature clear.
 
 The hosted boot estimate warms the production kernel decompressor, measures five
@@ -190,7 +190,7 @@ stored data, and every bit in every byte must store both zero and one.
 
 This section documents a retired interface for historical builds only. New
 hardware reserves these offsets until the performance counters currently mixed
-into this range are assigned a permanent home. New software uses the MC68030
+into this range are assigned a permanent home. New software uses the MC68040
 PMMU and must not probe or program the former region table.
 
 <!-- Historical interface retained temporarily for migration. -->
@@ -383,9 +383,9 @@ address, status, target, and timestamp even during a fault storm.
 | 0x081C | `BUS_FAULT_ACK` | RW1C | 0 | write `[0]VALID=1` after copying the record |
 
 `BUS_FAULT_STATUS` is `[0]VALID [1]TIMEOUT [2]UNMAPPED [3]DEVICE
-[4]WRITE [6:5]SIZ [10:8]FC`. `SIZ` is the raw MC68030 transfer-size field:
+[4]WRITE [6:5]SIZ [10:8]TM`. `SIZ` is the normalized MC68040 transfer-size field:
 `0=long`, `1=byte`, `2=word`, and `3=three bytes`. `FC` is the raw function
-code. Hardware supplies `VALID`; fault producers cannot clear it.
+transfer mode. Hardware supplies `VALID`; fault producers cannot clear it.
 
 Target values are `0=UNKNOWN`, `1=UNMAPPED`, `2=SDRAM`, `3=USB`, `4=VEGA`,
 `5=ASTRAEA`, `6=ASTRAHOST`, `7=UART`, `8=SPI`, `9=PANEL`, `10=BOOT_MEMORY`,

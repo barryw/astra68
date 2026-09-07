@@ -145,6 +145,8 @@ because both use addresses beginning at `0x00100000`.
 
 | Want | Use |
 |---|---|
+| What every process is consuming | `ps` or `cat PROC:<pid>/status` |
+| Where host I/O is bottlenecked | `metrics` (fixed records are also at `METRICS:snapshot`) |
 | Does the terminal still work end to end | `python3 emu/qemu/test-terminal.py <qemu> sw/boot/build/astra_boot.bin --image /tmp/part.img` |
 | Where the boot time went | `python3 emu/qemu/time-boot.py ... --budget 1.0` |
 | What the kernel suites actually cover | `cd sw/kernel && make coverage` |
@@ -158,9 +160,6 @@ because both use addresses beginning at `0x00100000`.
   surface answers whoever reaches the UART. Per-connection authority would be
   `ASTRA_RIGHT_DEBUG` held by an operator process; the right exists and the
   monitor does not consult it.
-- **The metrics registry still has no reader.** `astra_metric_register` is
-  called by nothing and `--gc-sections` collects it. Every performance number
-  in this repo comes from outside the machine.
 - **The trace ring does not survive a reset**, so a crash in the field leaves
   nothing behind.
 - **Nothing symbolizes a kernel stack**; the fault report gives one program

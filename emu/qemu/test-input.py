@@ -113,7 +113,7 @@ class AstraInputTest:
 
     def run(self):
         self.detect_endian()
-        assert self.read32(VESTA + 0x01C) == 0x00068030
+        assert self.read32(VESTA + 0x01C) == 0x00068040
         assert self.read32(VESTA + 0x020) == 0x51454D55  # QEMU
         assert self.read32(VESTA + 0x030) == 128 * 1024 * 1024
         assert self.read32(VESTA + 0x704) == 0x00010001
@@ -154,10 +154,27 @@ class AstraInputTest:
         assert self.read32(INPUT_STATUS) == 0
 
 
+def assert_only_m68040(qemu):
+    with tempfile.NamedTemporaryFile(prefix="astra-cpu-", suffix=".rom") as rom:
+        rom.write(struct.pack(">II", 0x02001000, 0xFFE00008))
+        rom.flush()
+        try:
+            result = subprocess.run([
+                qemu, "-machine", "astra68", "-cpu", "m68060",
+                "-bios", rom.name, "-display", "none", "-nodefaults", "-S",
+            ], capture_output=True, text=True, timeout=1.0, check=False)
+        except subprocess.TimeoutExpired as error:
+            raise AssertionError("Astra accepted a non-MC68040 CPU") from error
+    assert result.returncode != 0
+    assert "only valid type is: m68040" in result.stderr.lower()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("qemu", help="Astra QEMU system emulator")
     args = parser.parse_args()
+
+    assert_only_m68040(args.qemu)
 
     with tempfile.TemporaryDirectory(prefix="astra-input-") as temp:
         rom = os.path.join(temp, "input-test.rom")

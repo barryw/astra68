@@ -8,7 +8,7 @@ Status: native/POSIX runtime, allocator, metrics, and executable loading impleme
 Kits and any later C library. It owns only:
 
 - validation of the versioned initial-process startup block;
-- the MC68030 `TRAP #15` calling veneer and typed syscall wrappers;
+- the MC68040 `TRAP #15` calling veneer and typed syscall wrappers;
 - process entry and terminal process/thread exit;
 - freestanding byte primitives required by C code and compiler output.
 
@@ -114,12 +114,12 @@ one of the first 32 allocation sites through injection and requires an exact
 resource baseline afterwards.
 
 The default class table was measured, not guessed. Running lwext4's full
-evaluation workload big-endian on MC68030 through this allocator
+evaluation workload big-endian on MC68040 through this allocator
 (`make astra-alloc` in `sw/userspace/storage/lwext4-eval`) performs 15,475
 allocations with 855 simultaneously live 33..64-byte descriptors, 17 live
 4 KiB block buffers, a 126,144-byte charged peak, zero failures, zero
 rejections, zero live blocks at unmount, and `astra_alloc_valid()` true
-throughout, against a 151,936-byte arena. The MC68030 object is 1,270 bytes of
+throughout, against a 151,936-byte arena. The MC68040 object is 1,270 bytes of
 text with no data or BSS.
 
 Commit accounting and per-process limits still belong to the kernel side and do
@@ -136,17 +136,17 @@ peak occupancy, failures, and rejections are readable through the contract in
 module publishes into. `OBSERVABILITY.md` is the normative contract; the short
 version is that a module supplies a sampler and its owner registers it under an
 instance name, publishing costs only the header, and the registry is 320 bytes
-of MC68030 text with exactly 388 bytes of BSS.
+of MC68040 text with exactly 388 bytes of BSS.
 
 ## Build and acceptance
 
-The canonical target is big-endian `m68k-linux-gnu-gcc -m68030 -msoft-float`
+The canonical target is big-endian `m68k-linux-gnu-gcc -m68040 -msoft-float`
 on Beast. Every runtime change must pass:
 
 - warnings-as-errors host tests;
 - ASan and UBSan tests;
 - GCC `-fanalyzer`;
-- canonical MC68030 cross-compilation;
+- canonical MC68040 cross-compilation;
 - generated veneer inspection when trap or entry assembly changes;
 - target object size reporting.
 
@@ -216,7 +216,7 @@ touches and requires the free frame count to return to its exact pre-load
 value each time.
 
 Recording the executable span per process costs four bytes in `KernelProcess`,
-which moves from 544 to 548 bytes on MC68030. The acceptance profile itself is
+which moves from 544 to 548 bytes on MC68040. The acceptance profile itself is
 1,668 bytes of text with no data or BSS.
 
 Granting foreign objects at launch is not implemented. The capability table
@@ -240,7 +240,7 @@ with its last handle and no later poll could recover it.
 
 Gathering is separated from judging. `supervisor_validate()` takes what was
 observed and returns the verdict, so the whole judgement runs on the host under
-ASan/UBSan and `-fanalyzer`, where a `trap` instruction cannot. The MC68030
+ASan/UBSan and `-fanalyzer`, where a `trap` instruction cannot. The MC68040
 image is 1,306 bytes of text with no data or BSS.
 
 ## The boot path for the first image

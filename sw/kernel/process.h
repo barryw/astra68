@@ -421,7 +421,7 @@ typedef struct KernelProcessBootstrapCapability {
 } KernelProcessBootstrapCapability;
 
 /*
- * Loads a validated big-endian MC68030 executable into a new process, publishes
+ * Loads a validated big-endian MC68040 executable into a new process, publishes
  * its startup block and self capabilities, and makes its initial thread
  * runnable. All or nothing: a failure anywhere leaves no frames, mappings, or
  * handles behind.

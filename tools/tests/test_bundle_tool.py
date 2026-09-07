@@ -28,7 +28,7 @@ def kit(root):
         "name Graphics\nversion 1.0.0\n"
         "provides graphics.library 1 1.0.0\n", encoding="utf-8")
     payload = (root / "libraries" / "graphics.library" / "abi-1" /
-               "1.0.0" / "m68k-68030")
+               "1.0.0" / "m68k-68040")
     payload.mkdir(parents=True)
     (payload / "graphics.library").write_bytes(b"elf")
 

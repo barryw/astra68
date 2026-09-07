@@ -13,7 +13,7 @@ Before changing code:
    baseline.
 4. Keep the change scoped and add failure-path tests as well as success tests.
 
-CPU behavior must follow Motorola's MC68030 documentation. A test, emulator,
+CPU behavior must follow Motorola's MC68040 documentation. A test, emulator,
 or FPGA implementation may reveal an error but does not define an
 Astra-specific instruction semantic.
 
@@ -24,7 +24,7 @@ evidence.
 
 Kernel pull requests should preserve bounded allocation and queue limits,
 explicit ownership, failure behavior, and existing performance gates. Avoid
-speculative portability layers: Axiom is intentionally MC68030-specific.
+speculative portability layers: Axiom is intentionally MC68040-specific.
 
 Do not include credentials, private keys, proprietary tool installations,
 vendor-generated build trees, test corpora, bitstreams, test output, hardware

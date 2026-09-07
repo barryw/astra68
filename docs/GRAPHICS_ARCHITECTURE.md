@@ -150,7 +150,7 @@ resource.
 
 The Linux platform driver owns the PL register aperture, IRQs, reserved memory,
 and ARM/PL cache transitions. The QEMU device exposes the Astra hardware
-contract to the big-endian MC68030 guest. Host endianness and Linux internals do
+contract to the big-endian MC68040 guest. Host endianness and Linux internals do
 not leak into the Astra ABI.
 
 Fullscreen applications may acquire an exclusive Scene through the display
@@ -676,7 +676,7 @@ validates the batch envelope and places it unchanged in the reserved graphics
 arena. Astraea validates each command and performs the pixel work. The NDK and
 font service may decode UTF-8, select strikes, position glyphs, clip, schedule,
 and wait on fences, but production code must not rasterize a UI glyph or shape
-into a framebuffer on the 68030.
+into a framebuffer on the 68040.
 
 Framebuffer output is double-buffered. A batch targets the allocation that is
 not ACTIVE, and the Linux display owner changes `FB_BASE` only after every
@@ -687,7 +687,7 @@ remain protected from renderer writes.
 The current window server gives each live window one fixed graphics-arena
 cache. Chrome or content changes rebuild that cache with Astraea commands.
 Movement, z-order changes, activation, and exposure reuse the cache with
-clipped masked `BLIT`; the MC68030 only updates state and emits commands. A
+clipped masked `BLIT`; the MC68040 only updates state and emits commands. A
 bounded union damage rectangle is retained for each alternating scanout, so a
 frame is repaired before it can become ACTIVE. Rounded corners require no
 special CPU repair: the cache mask suppresses corner pixels while lower

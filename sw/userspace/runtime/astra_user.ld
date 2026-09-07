@@ -2,7 +2,7 @@
  * Astra user process link contract.
  *
  * Produces exactly the shape kernel_elf_accept() will take: ET_EXEC for
- * MC68030, big-endian, with each loadable segment starting on its own page in
+ * MC68040, big-endian, with each loadable segment starting on its own page in
  * both the file and memory, and no segment both writable and executable.
  *
  * The page separation is deliberate and costs a little padding. The looser

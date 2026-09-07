@@ -10,7 +10,7 @@ static void valid_manifest(void)
             "service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
             "serves SYS:r required\n"
             "service SERVICES:hostfs grants HOST_DEVICE "
-            "serves WORK:rw required\n"
+            "serves WORK:rw METRICS:r required\n"
         "service SERVICES:events grants SYS:r STORE:rw serves EVENTS:r\n";
     SupervisorManifest manifest;
 
@@ -23,6 +23,8 @@ static void valid_manifest(void)
     assert(manifest.entries[0].grants[0].is_namespace == 0u);
     assert(manifest.entries[0].serves_count == 1u);
     assert(strcmp(manifest.entries[0].serves[0].name, "SYS") == 0);
+    assert(manifest.entries[1].serves_count == 2u);
+    assert(strcmp(manifest.entries[1].serves[1].name, "METRICS") == 0);
     assert(manifest.entries[2].grants[1].rights ==
            (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE));
 

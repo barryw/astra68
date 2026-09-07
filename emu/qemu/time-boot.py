@@ -18,7 +18,7 @@ it.
 What these numbers are: host time for a fixed workload, comparable between two
 builds on the same machine. That is exactly what a regression check needs.
 
-What they are not: 68030 time. The CPU is TCG here and it is TCG on the board
+What they are not: physical MC68040 time. The CPU is TCG here and on the board
 too, so no figure from either is a cycle count. A stage that doubles is worth
 investigating on any machine; a stage that takes 40 ms is not thereby a claim
 about hardware.
@@ -34,6 +34,7 @@ import threading
 import time
 
 import astra_image
+from qemu_runtime import qemu_environment
 
 # In the order the boot emits them. Each is matched once, in sequence, so a
 # marker that also appears in later output cannot be picked up twice.
@@ -49,7 +50,7 @@ MARKERS = [
 ]
 
 
-def run_once(qemu, rom, image, memory, deadline):
+def run_once(qemu, rom, image, memory, deadline, hostfs_root):
     """Boots once and returns {label: seconds since launch}."""
     command = [qemu, "-M", "astra68", "-m", memory, "-bios", rom,
                "-nographic", "-monitor", "none", "-serial", "stdio",
@@ -57,9 +58,10 @@ def run_once(qemu, rom, image, memory, deadline):
     if image is not None:
         command += ["-drive", "if=none,format=raw,file=%s" % image]
 
+    environment = qemu_environment(qemu, hostfs_root=hostfs_root)
     process = subprocess.Popen(
         command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, text=True, bufsize=1)
+        stderr=subprocess.STDOUT, text=True, bufsize=1, env=environment)
 
     start = time.monotonic()
     reached = {}
@@ -112,6 +114,7 @@ def main():
     arguments = parser.parse_args()
 
     with tempfile.TemporaryDirectory(prefix="astra-boot-time-") as temporary:
+        hostfs_root = os.path.join(temporary, "hostfs")
         image = arguments.image
         if image is not None:
             scratch = os.path.join(temporary, "card.img")
@@ -119,7 +122,7 @@ def main():
             astra_image.install(scratch, arguments.catalog)
             image = scratch
         runs = [run_once(arguments.qemu, arguments.rom, image,
-                         arguments.memory, arguments.deadline)
+                         arguments.memory, arguments.deadline, hostfs_root)
                 for _ in range(arguments.runs)]
 
     print("%-22s %8s %8s   %s" % ("stage", "median", "delta", "samples"))

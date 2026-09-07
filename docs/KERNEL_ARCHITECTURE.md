@@ -4,8 +4,8 @@ Status: normative design contract, revision 0.3 (2026-07-25)
 
 This document defines the kernel shape. Exact memory, ABI, locking, ownership,
 budget, testing, and implementation status live in the companion documents
-linked below. `KERNEL_SPEC.md` remains design rationale; where it differs from
-this contract, this contract and `CURRENT_STATE.md` win.
+linked below. `CURRENT_STATE.md` records the active measured state; this
+document owns the kernel design contract.
 
 Status words are precise:
 
@@ -16,23 +16,18 @@ Status words are precise:
 
 ## Machine contract
 
-- **LOCKED:** one big-endian MC68030-compatible CPU with integrated PMMU.
+- **LOCKED:** one big-endian MC68040-compatible CPU with integrated MMU.
 - **LOCKED:** 128 MiB Astra guest RAM, no kernel floating point,
   `-msoft-float`.
 - **LOCKED:** no SMP, RCU, lock-free framework, swap, or memory overcommit.
 - **LOCKED:** bounded latency and predictable memory use outrank feature count.
-- **LOCKED:** Motorola MC68030 behavior is the architectural authority.
-- **LOCKED:** the stable VM targets 8 KiB pages by default and retains a 4 KiB
-  build option for measurement and compatibility. The current 4 KiB K1 image
-  remains the reference oracle until the 8 KiB build passes the same gates.
+- **LOCKED:** Motorola MC68040 behavior is the architectural authority.
+- **LOCKED:** the VM uses the MC68040's native 4 KiB page geometry.
 
 The primary architectural authority is Motorola's
-[MC68030 User's Manual, revision 3](https://www.nxp.com/docs/en/reference-manual/MC68030UM.pdf).
-In particular, section 9.2.2 defines reset/ATC behavior, sections 9.7.2 and
-9.7.3 define page geometry and transparent translation, sections 3.5.4 and
-7.6 define `NOP` pipeline/bus synchronization, and section 7.5.4 defines the
-double-bus-fault halt condition. Tests and implementation notes should cite
-those sections instead of relying on behavior inferred from another system.
+[M68040 User's Manual](https://www.nxp.com/docs/en/data-sheet/M68040UM.pdf).
+Tests and implementation notes cite its exception, MMU, ATC, cache, and bus
+chapters instead of relying on behavior inferred from another system.
 
 ## Privileged boundary
 
@@ -72,7 +67,7 @@ not runtime-loadable: it is reviewed, rebuilt, linked, and qualified with the
 kernel, may use only the internal device-boundary interfaces, and has no ABI
 compatibility guarantee. Third-party binary kexts are deliberately unsupported.
 
-The MC68030 PMMU constrains CPU accesses, not independent FPGA bus masters.
+The MC68040 MMU constrains CPU accesses, not independent FPGA bus masters.
 User-space DMA therefore requires FPGA-enforced address/length bounds or
 kernel-submitted descriptors from pages pinned and charged to the driver
 service. Until that enforcement is qualified, a user driver receives no raw
@@ -112,13 +107,12 @@ uint32_t kernel_mmio_fence32(uint32_t fence_address);
 ```
 
 They perform aligned, volatile, native-big-endian accesses with compiler memory
-ordering; debug builds reject width/alignment violations. On MC68030,
-`kernel_mmio_cpu_sync` emits the documented post-write `NOP` that waits for the
-CPU-side external write to complete. It does not prove that a posted FPGA bridge
-or asynchronous engine completed; that requires `kernel_mmio_fence32` to read a
-device-documented fence/status register or a sequence fence to retire. Device
-wrappers own that choice. Raw volatile register-structure dereferences are
-transitional K1 code and cannot become the stable driver interface.
+ordering; debug builds reject width/alignment violations. CPU-side ordering
+does not prove that a posted FPGA bridge or asynchronous engine completed; that
+requires `kernel_mmio_fence32` to read a device-documented fence/status register
+or a sequence fence to retire. Device wrappers own that choice. Raw volatile
+register-structure dereferences are transitional K1 code and cannot become the
+stable driver interface.
 
 ## Hardware reliability contract
 
@@ -164,7 +158,7 @@ comes from a process-private generation handle carrying explicit rights.
 1. Assembly installs the 8 KiB interrupt stack (ISP) and VBR.
 2. C validates and copies the fixed 256-byte `AstraBootInfo`.
 3. The frame allocator classifies every physical page.
-4. VM constructs wired SRP and empty CRP trees, then enables translation.
+4. VM constructs wired SRP and empty URP trees, then enables translation.
 5. The guarded 8 KiB master stack (MSP), deferred worker, interrupts,
    scheduler, and object pools initialize with devices masked.
 6. The immutable initial image receives a minimal initial handle set.
@@ -197,7 +191,7 @@ resource destruction.
 
 ## Current K6 thread substrate
 
-These are measured MC68030 implementation facts, not the final object limits:
+These are historical K6 implementation facts, not current object limits:
 
 | Structure/pool | Exact current value |
 |---|---:|
@@ -419,7 +413,7 @@ subsystem is in development.
 Every scheduler, exception, syscall, VM, IPC, synchronization, and user-copy
 change starts from a target-representative cycle and image-size baseline. The
 change must retain an automated budget and report the before/after result.
-Generated MC68030 code is inspected before replacing C with assembly. Assembly
+Generated MC68040 code is inspected before replacing C with assembly. Assembly
 is preferred when measurement proves a material hot-path improvement, while a
 tested C-level contract remains the behavioral oracle. Astra does not carry
 speculative portability layers for another ISA.

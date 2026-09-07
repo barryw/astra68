@@ -28,6 +28,18 @@ static void test_bounded_sampling_windows_and_totals(void)
     assert(stats.metric[KERNEL_PERFORMANCE_SCHEDULER_PICK].total_cycles_high ==
            0u);
     assert(stats.metric[KERNEL_PERFORMANCE_SCHEDULER_PICK].overruns == 0u);
+#if defined(ASTRA_KERNEL_SCHED_TRACE) && ASTRA_KERNEL_SCHED_TRACE
+    assert(kernel_performance_trace_count(
+               KERNEL_PERFORMANCE_SCHEDULER_PICK) == 3u);
+    assert(kernel_performance_trace_sample(
+               KERNEL_PERFORMANCE_SCHEDULER_PICK, 0u) == 7u);
+    assert(kernel_performance_trace_sample(
+               KERNEL_PERFORMANCE_SCHEDULER_PICK, 2u) == 7u);
+    assert(kernel_performance_trace_sample(
+               KERNEL_PERFORMANCE_SCHEDULER_PICK, 3u) == 0u);
+    assert(kernel_performance_trace_count(
+               KERNEL_PERFORMANCE_METRIC_COUNT) == 0u);
+#endif
 
     token = kernel_performance_begin(
         KERNEL_PERFORMANCE_SCHEDULER_PICK);

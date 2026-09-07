@@ -353,11 +353,11 @@ static void console_puts_limit(const char *text, uint32_t limit)
 
     if (text == NULL)
         return;
-    while (text[length] != '\0' && length < limit) {
+    while (length < limit && text[length] != '\0') {
         console_putc(text[length]);
         ++length;
     }
-    if (text[length] != '\0')
+    if (length == limit)
         console_puts("...");
 }
 
@@ -809,20 +809,23 @@ static void kernel_user_copy_selftest(void)
 static void validate_image_contract(void)
 {
     uint32_t linked_image_size =
-        (uint32_t)(_kernel_file_end - _kernel_image_start);
+        (uint32_t)((uintptr_t)_kernel_file_end -
+                   (uintptr_t)_kernel_image_start);
     uint32_t linked_memory_size =
-        (uint32_t)(_kernel_memory_end - _kernel_image_start);
+        (uint32_t)((uintptr_t)_kernel_memory_end -
+                   (uintptr_t)_kernel_image_start);
 
-    if (boot_info.cpu_model != CPU_MODEL_68030 ||
+    if (boot_info.cpu_model != CPU_MODEL_68040 ||
         (boot_info.cpu_features & CPU_FEAT_PMMU) == 0u)
-        kernel_panic("MC68030 PMMU platform required");
+        kernel_panic("MC68040 MMU platform required");
     if (boot_info.kernel_base != (uint32_t)_kernel_image_start ||
         boot_info.kernel_entry != (uint32_t)_kernel_entry ||
         boot_info.kernel_image_size != linked_image_size ||
         boot_info.kernel_memory_size < linked_memory_size)
         kernel_panic("kernel image contract mismatch");
     if ((uint32_t)_kernel_trace_start != ASTRA_KERNEL_TRACE_ADDRESS ||
-        (uint32_t)(_kernel_trace_end - _kernel_trace_start) !=
+        (uint32_t)((uintptr_t)_kernel_trace_end -
+                   (uintptr_t)_kernel_trace_start) !=
             ASTRA_KERNEL_TRACE_SIZE)
         kernel_panic("retained trace contract mismatch");
     if (boot_info.early_log_base != ASTRA_EARLY_LOG_ADDRESS ||
@@ -1042,7 +1045,48 @@ static void report_kernel_performance(
     console_puts(" overruns=");
     console_dec32(deferred_overruns);
     console_putc('\n');
+    for (uint32_t metric = 0u;
+         metric < KERNEL_PERFORMANCE_METRIC_COUNT; ++metric) {
+        const KernelPerformanceMetricStats *stats =
+            &performance->metric[metric];
+
+        if (stats->samples == 0u)
+            continue;
+        console_puts("K PERF RAW metric=");
+        console_dec32(metric);
+        console_puts(" calls=");
+        console_dec32(stats->calls);
+        console_puts(" samples=");
+        console_dec32(stats->samples);
+        console_puts(" min=");
+        console_dec32(stats->minimum_cycles);
+        console_puts(" max=");
+        console_dec32(stats->maximum_cycles);
+        console_puts(" total=0x");
+        console_hex32(stats->total_cycles_high);
+        console_hex32(stats->total_cycles_low);
+        console_puts(" overruns=");
+        console_dec32(stats->overruns);
+        console_putc('\n');
+    }
 #if ASTRA_KERNEL_SCHED_TRACE
+    for (uint32_t metric = 0u;
+         metric < KERNEL_PERFORMANCE_METRIC_COUNT; ++metric) {
+        if (performance->metric[metric].overruns == 0u)
+            continue;
+        console_puts("K PERF TRACE metric=");
+        console_dec32(metric);
+        console_puts(" cycles=");
+        for (uint32_t index = 0u;
+             index < kernel_performance_trace_count(
+                         (KernelPerformanceMetric)metric); ++index) {
+            if (index != 0u)
+                console_putc(',');
+            console_dec32(kernel_performance_trace_sample(
+                (KernelPerformanceMetric)metric, index));
+        }
+        console_putc('\n');
+    }
     console_puts("K2 TRACE syscall max id=");
     console_dec32(kernel_dispatch_syscall_max_number());
     console_puts(" arg=");
@@ -1079,7 +1123,6 @@ static void report_kernel_performance_failure(
 {
     const KernelPerformanceMetricStats *metric;
 
-    report_kernel_performance(performance);
     console_puts("K2 PERF FAIL metric=");
     console_dec32((uint32_t)failed_metric);
     if ((uint32_t)failed_metric >= KERNEL_PERFORMANCE_METRIC_COUNT) {
@@ -1428,6 +1471,7 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     uint32_t qualification_completed;
 
     kernel_performance_freeze();
+    kernel_irqoff_latency_freeze();
     if (validated == NULL)
         kernel_panic("scheduler statistics unavailable");
     kernel_bytes_copy(&stats, validated, sizeof(stats));
@@ -1448,13 +1492,6 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
         qualification_completed == KERNEL_QUALIFICATION_IRQ_SOURCE_MASK ?
             KERNEL_PERFORMANCE_RELEASE_MASK :
             KERNEL_PERFORMANCE_REQUIRED_MASK;
-    if (!kernel_performance_pass(&performance, performance_mask,
-                                 &failed_metric)) {
-        report_kernel_performance_failure(&performance, failed_metric);
-        kernel_panic("kernel performance budget exceeded");
-    }
-    if (performance_mask == KERNEL_PERFORMANCE_RELEASE_MASK)
-        console_puts("K10 PERFORMANCE PASS\n");
     console_puts("\nUser tasks .......... OK, 5 ms one-shot quantum\n");
     console_puts("Fault containment ... OK, offender reaped\n");
     console_puts("Device IRQs ......... ");
@@ -1477,7 +1514,7 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     console_puts("\nThread scheduler .... ");
     console_dec32(stats.live_threads);
     console_puts(" live, priority queues OK\n");
-    console_puts("Same-CRP switches ... ");
+    console_puts("Same-URP switches ... ");
     console_dec32(stats.same_address_space_switches);
     console_putc('\n');
     console_puts("Wait/wake ........... ");
@@ -1580,7 +1617,25 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     console_dec32(stats.irq_wake_to_run_max_cycles);
     console_puts(" irqoff_max=");
     console_dec32(irqoff_stats.maximum_cycles);
+    console_putc('/');
+    console_dec32(KERNEL_IRQOFF_LATENCY_BUDGET_CYCLES);
+    console_puts(" sample=");
+    console_dec32(irqoff_stats.maximum_sample);
+    console_putc('/');
+    console_dec32(irqoff_stats.samples);
+    console_puts(" nested=");
+    console_dec32(irqoff_stats.nested_entries);
     console_putc('\n');
+#if ASTRA_KERNEL_SCHED_TRACE
+    console_puts("K10 IRQOFF TRACE cycles=");
+    for (uint32_t index = 0u;
+         index < kernel_irqoff_latency_trace_count(); ++index) {
+        if (index != 0u)
+            console_putc(',');
+        console_dec32(kernel_irqoff_latency_trace_sample(index));
+    }
+    console_putc('\n');
+#endif
     console_puts("K10 BOOT trace_init=");
     console_dec32(trace_init_cycles);
     console_puts(" process_init=");
@@ -1599,6 +1654,21 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     console_puts(" dropped=");
     console_dec32(trace_stage_stats.dropped);
     console_putc('\n');
+    if (!kernel_performance_pass(&performance, performance_mask,
+                                 &failed_metric)) {
+        report_kernel_performance_failure(&performance, failed_metric);
+        kernel_panic("kernel performance budget exceeded");
+    }
+    if (!kernel_irqoff_latency_within_budget(&irqoff_stats)) {
+        console_puts("K10 IRQOFF FAIL max=");
+        console_dec32(irqoff_stats.maximum_cycles);
+        console_putc('/');
+        console_dec32(KERNEL_IRQOFF_LATENCY_BUDGET_CYCLES);
+        console_putc('\n');
+        kernel_panic("interrupt-disabled latency budget exceeded");
+    }
+    if (performance_mask == KERNEL_PERFORMANCE_RELEASE_MASK)
+        console_puts("K10 PERFORMANCE PASS\n");
     console_puts("K2 PERFORMANCE PASS\n");
     console_puts("\nK8 SHARED BULK IPC PASS\n");
     console_puts("\nK7 MESSAGE PORTS PASS\n");
@@ -1611,7 +1681,9 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     console_puts("\nK2 THREAD SUBSTRATE PASS\n");
     console_puts("\nK1 PROTECTED ENTRY PASS\n");
     console_puts("KERNEL MULTITASKING\n");
+#if !ASTRA_KERNEL_SOAK_SELFTEST
     kernel_platform_debug_marker(ASTRA_KERNEL_STATUS_K1_READY);
+#endif
 }
 #endif
 
@@ -1638,6 +1710,7 @@ void kernel_process_soak_checkpoint(uint32_t cycles,
     if (!kernel_performance_pass(&performance,
                                  KERNEL_PERFORMANCE_REQUIRED_MASK,
                                  &failed_metric)) {
+        report_kernel_performance(&performance);
         report_kernel_performance_failure(&performance, failed_metric);
         kernel_panic("K2 soak performance budget exceeded");
     }
@@ -1710,7 +1783,6 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
 
     kernel_platform_debug_marker(ASTRA_KERNEL_STATUS_BOOTING);
     console_init();
-    kernel_irqoff_latency_init();
     trace_started = kernel_platform_cpu_cycles_low();
     if (!kernel_trace_init() ||
         !kernel_trace_write(
@@ -1789,7 +1861,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     console_printf("VBR ................ OK @ 0x%08X\n", kernel_read_vbr());
     console_printf("Kernel image ....... %u bytes @ 0x%08X\n",
                    boot_info.kernel_image_size, boot_info.kernel_base);
-    console_printf("CPU ................ MC68030, %u Hz equivalent\n",
+    console_printf("CPU ................ MC68040, %u Hz effective\n",
                    boot_info.cpu_effective_hz != 0u ?
                    boot_info.cpu_effective_hz : boot_info.cpu_hz);
     console_printf("Timer .............. %u Hz\n", boot_info.cpu_hz);
@@ -1811,7 +1883,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
             console_puts("Wall clock ......... not set; files will have no "
                          "dates\n");
     }
-    console_printf("PMMU ............... enabled, SRP 0x%08X\n",
+    console_printf("MMU ................ enabled, SRP 0x%08X\n",
                    vm_stats.kernel_root_physical);
     console_printf("Physical pages ..... %u free / %u total\n",
                    memory_stats.free_frames, memory_stats.total_frames);
@@ -1830,6 +1902,8 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     kernel_process_init();
     process_init_cycles =
         kernel_platform_cpu_cycles_low() - process_bootstrap_started;
+    /* Boot deliberately runs at IPL7; latency accounting starts at runtime. */
+    kernel_irqoff_latency_init();
     kernel_enable_interrupts();
     uint32_t timer_start = kernel_platform_cpu_cycles_low();
     while (kernel_platform_ticks() < 2u) {

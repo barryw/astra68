@@ -2,7 +2,7 @@
 
 Status: normative single-core concurrency contract, revision 0.3 (2026-07-25)
 
-This design is for one MC68030. It does not emulate SMP. Correct interrupt,
+This design is for one MC68040. It does not emulate SMP. Correct interrupt,
 DMA, and MMIO ordering still applies even though only one CPU executes C code.
 
 ## Execution contexts
@@ -40,7 +40,7 @@ that neither process maintenance nor an owner release occurs during fault
 dispatch. There is no lost-wakeup window: worker state changes to `BLOCKED`
 with interrupts masked and `STOP #$3000` enables interrupts atomically.
 
-An interrupt accepted while the worker runs in master mode uses the MC68030
+An interrupt accepted while the worker runs in master mode uses the MC68040
 format-0 MSP frame plus format-1 ISP throwaway frame. Entry masks IPL without
 clearing M, and `RTE` returns through the already post-incremented MSP. Exact
 Motorola-directed and full-system regressions cover this path.

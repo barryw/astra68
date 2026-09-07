@@ -3,7 +3,7 @@
  *
  * lwext4 never derives endianness itself: CONFIG_BIG_ENDIAN is a porter-supplied
  * define and no upstream build sets it. Derive it from the compiler so the same
- * profile is correct on an x86_64 host and on a big-endian MC68030.
+ * profile is correct on an x86_64 host and on a big-endian MC68040.
  */
 #ifndef ASTRA_EXT4_CONFIG_H
 #define ASTRA_EXT4_CONFIG_H
@@ -13,7 +13,7 @@
 #define CONFIG_BIG_ENDIAN 1
 #endif
 
-/* MC68030 faults on misaligned word/long access. */
+/* MC68040 faults on misaligned word/long access. */
 #define CONFIG_UNALIGNED_ACCESS 0
 
 #define CONFIG_EXT_FEATURE_SET_LVL 4 /* F_SET_EXT4 */

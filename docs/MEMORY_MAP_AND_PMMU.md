@@ -28,58 +28,34 @@ reported 128 MiB guest map.
   use normal supervisor descriptors with explicit permissions and cache policy.
 
 Reset is not treated as an ATC invalidation guarantee. Before enabling
-translation, boot explicitly writes disabled TC and TT0/TT1, installs SRP and
-the initial CRP, sets SFC/DFC, executes `PFLUSHA`, independently invalidates the
-instruction and data caches through CACR, and only then loads enabled TC. This
-follows MC68030 User's Manual section 9.2.2, which requires an ATC-flushing MMU
-instruction after reset and before translation is enabled. QEMU is the sole
-processor implementation and its PMMU behavior is covered by the kernel and
-machine qualification suites.
+translation, boot explicitly writes disabled TC and ITT0/ITT1/DTT0/DTT1,
+installs SRP and the initial URP, sets SFC/DFC, executes `PFLUSHA`, invalidates
+and pushes the instruction and data caches, and only then loads enabled TC.
+QEMU is the sole processor implementation and its MC68040 MMU behavior is
+covered by the kernel and machine qualification suites.
 
-### User (one CRP per process)
+### User (one URP per process)
 
 - Valid user range is `0x00010000..0x7FFFFFFF`; null and the first 64 KiB are
   always unmapped.
 - K1 maps one read/execute page at `0x00100000` and one read/write stack page at
   `0x70000000`; adjacent pages are unmapped guards.
-- User CRP trees never map kernel, page-table, firmware, ROM-control, or MMIO
+- User URP trees never map kernel, page-table, firmware, ROM-control, or MMIO
   frames. Privileged device mappings are a later explicit object type.
-- Threads in one process share a CRP. Switching between them does not reload
-  CRP or flush the ATC.
+- Threads in one process share a URP. Switching between them does not reload
+  URP or flush the ATC.
 
-The current PMMU configuration is 4 KiB, two-level short descriptors with a
-`10/10/12` split and separate SRP/CRP roots. A user root is 4 KiB; each leaf is
-4 KiB and maps 4 MiB. K1's code and stack therefore cost one root plus two
-leaves, or 12 KiB of table memory per process. Common bootstrap translation
-cost is 16 KiB: one SRP root, one leaf for the low SDRAM/stack-guard region,
-one high-MMIO leaf, and one empty CRP root.
+The current MMU configuration uses native MC68040 three-level descriptors with
+a `7/7/6/12` split and separate SRP/URP roots. A root covers 4 GiB, each pointer
+table entry covers 256 KiB, and each 64-entry page table maps 256 KiB with 4 KiB
+pages. Axiom allocates each table from one zeroed, owner-charged 4 KiB frame so
+publication, rollback, and release use the ordinary frame allocator.
 
 ## Page-size decision
 
-**CURRENT:** the K1 qualification image uses 4 KiB. Existing fault, stacking,
-user-copy, and teardown evidence is tied to that configuration and remains the
-comparison oracle.
-
-**LOCKED TARGET:** add an 8 KiB `9/10/13` build configuration and make it the
-stable default after it passes identical host, QEMU, route, and board
-gates. Keep 4 KiB as a supported build option. The selection report includes:
-
-| Metric | 4 KiB | 8 KiB |
-|---|---:|---:|
-| physical frames in 128 MiB | 32,768 | 16,384 |
-| metadata at 8 bytes/frame | 256 KiB | 128 KiB |
-| root descriptor bytes | 4,096 | 2,048 |
-| leaf descriptor bytes | 4,096 | 4,096 |
-| address span per leaf | 4 MiB | 8 MiB |
-| internal fragmentation | measured | measured |
-| ATC reach/miss rate | measured | measured |
-| map/unmap and CRP-switch cycles | measured | measured |
-
-The 22-entry ATC reaches at most 88 KiB with 4 KiB pages and 176 KiB with 8 KiB
-pages. The 8 KiB implementation also needs a bounded table-slab allocator so a
-2 KiB root does not consume an otherwise unusable 8 KiB frame. It is not
-accepted merely because those static numbers improve; the table walker, fault
-frames, internal fragmentation, and application working sets must agree.
+**LOCKED:** 4 KiB is the MC68040 page size selected by TC and the only supported
+VM geometry. Fault, stacking, user-copy, teardown, and hardware qualification
+all exercise that exact configuration.
 
 ## Descriptor ownership
 
@@ -95,8 +71,8 @@ For every mapping, the VM records:
 - mapping and pin/reference counts;
 - whether hardware or another process may access the frame.
 
-MC68030 short descriptors enforce write protection but not execute-disable.
-W^X is kernel policy and must not be described as hardware NX.
+MC68040 page descriptors enforce write protection but not execute-disable. W^X
+is kernel policy and must not be described as hardware NX.
 
 ## Mapping transitions
 
@@ -111,7 +87,7 @@ retained across a transition.
 3. Retain every physical frame.
 4. Write the final page descriptor once.
 5. Complete required cache synchronization, then perform the documented
-   Motorola `PFLUSH` operation before returning success.
+   MC68040 `PFLUSH` operation before returning success.
 6. Publish area/accounting state only after translation is usable.
 
 Any failure unwinds in reverse order and leaves no descriptor reachable.
@@ -126,11 +102,11 @@ Any failure unwinds in reverse order and leaves no descriptor reachable.
 5. Wait in thread context for existing pins/references; never wait in IRQ.
 6. Release empty leaves, commit charge, and frames.
 
-The current K1 implementation uses a conservative full ATC flush after each
-descriptor change and CRP reload. Mapping publication and removal invalidate
-both logical caches first. A cross-CRP switch invalidates both caches, loads
-CRP, then executes `PFLUSHA`; a same-CRP switch does neither. Address-selective
-maintenance is an optimization only after exact Motorola and RTL tests.
+The current implementation uses address-selective `PFLUSH` for one-page
+descriptor changes and `PFLUSHA` for wider transitions. A cross-URP switch
+loads URP and flushes the ATC; a same-URP switch does neither. Cache maintenance
+is reserved for transitions that require it rather than every address-space
+switch.
 
 ## Cache and alias policy
 
@@ -144,18 +120,18 @@ One physical frame has one cache policy across all logical aliases:
 | DMA shared with ESP, USB, graphics, or audio | cache-inhibited or explicit ownership transfer plus cache maintenance |
 | page tables | kernel cacheable, never DMA-visible |
 
-Two simultaneous user cached logical aliases are rejected by a fixed 1,024-byte
-ledger containing one bit for each physical frame. The permanent supervisor
-physical map is the one deliberate alias: code/data is written through it only
-before user publication or under an explicit ownership transfer, followed by
-full data/instruction-cache invalidation before user access. Loading executable
-bytes requires data-cache synchronization, instruction-cache invalidation for
-the destination logical range, and an ATC-valid mapping before entry.
+The MC68040's caches are physically addressed, so one shared-area frame may be
+mapped at different logical slots in different processes. A runtime-sized
+per-frame ledger still enforces mapping class and alias-count invariants. The
+permanent supervisor physical map is deliberate: code/data is written through
+it only before user publication or under explicit ownership transfer, followed
+by required cache maintenance before user access. Loading executable bytes
+pushes data and invalidates instruction cache before entry.
 
 The current K1 target test gives two processes different instruction bytes and
 different stack markers at identical logical addresses. Both caches are enabled;
 the offender dies at its planned unmapped access while the survivor continues.
-The unchanged image passes on the QEMU MC68030/PMMU path.
+The qualification image passes on the QEMU MC68040/MMU path.
 
 ## Guards and residency
 
@@ -167,10 +143,11 @@ The unchanged image passes on the QEMU MC68030/PMMU path.
   valid. Host tests inspect both exact descriptors, and normal plus soak target
   images run with this tree enabled.
 - A kernel guard fault during stacking is fatal; recovery is not attempted.
-- **CURRENT SIM:** a deliberate access to `0x02028000` enters vector 2 with a
-  format-A supervisor fault, prints the exact address, sets retained panic
+- **CURRENT:** a deliberate access enters vector 2 with an MC68040 format-7
+  supervisor access-error frame, prints the exact address, sets retained panic
   state, and reaches the full-SoC panic oracle. Hardware repetition remains.
-- Exception-frame maximum is 92 bytes. The worker stack has a bottom canary,
+- The only supported MC68040 frames are formats 0, 1, 2, 3, and 7; the maximum
+  is 60 bytes. The worker stack has a bottom canary,
   debug poison, and exact high-water reporting. Equivalent per-user-thread
   kernel-stack accounting remains stable-kernel work in `STATUS.md`.
 

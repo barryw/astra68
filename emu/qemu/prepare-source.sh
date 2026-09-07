@@ -142,9 +142,6 @@ for required in configure meson.build hw/m68k/meson.build target/m68k/cpu.c; do
 done
 
 cp "$OVERLAY/hw/m68k/astra68.c" "$STAGED_SOURCE/hw/m68k/astra68.c"
-cp "$OVERLAY/target/m68k/astra_pmmu030.c" "$STAGED_SOURCE/target/m68k/astra_pmmu030.c"
-cp "$OVERLAY/target/m68k/pmmu030.c" "$STAGED_SOURCE/target/m68k/pmmu030.c"
-cp "$OVERLAY/target/m68k/pmmu030.h" "$STAGED_SOURCE/target/m68k/pmmu030.h"
 cp "$PUBLIC_INPUT" "$STAGED_SOURCE/include/hw/m68k/astra_input.h"
 cp "$PUBLIC_DISPLAY_MAILBOX" \
     "$STAGED_SOURCE/include/hw/m68k/astra_display_mailbox.h"
@@ -164,8 +161,8 @@ cp "$PUBLIC_STATUS" "$STAGED_SOURCE/include/astra/status.h"
 cp "$PUBLIC_VFS_SERVICE" "$STAGED_SOURCE/include/astra/vfs_service.h"
 ln -s include/astra "$STAGED_SOURCE/astra"
 patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/meson.build.patch" >&2
-patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/target-m68k-pmmu030.patch" >&2
-patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/target-m68k-68030-frames.patch" >&2
+patch -d "$STAGED_SOURCE" -p1 --forward \
+    < "$OVERLAY/target-m68k-pflush-global.patch" >&2
 
 {
     printf 'qemu_version=%s\n' "$QEMU_VERSION"

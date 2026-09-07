@@ -39,7 +39,7 @@ static AstraAssignTable assigns;
  *
  * **It used to connect all of them at startup.** A connect is a HELLO and a
  * BIND_AREA -- two cross-process round trips, and a round trip on this machine
- * is ~7.5 ms because the 68030 has no address-space tag and every switch
+ * is ~7.5 ms because the MC68040 has no address-space tag and every switch
  * flushes the ATC. A command is granted WORK, COMMANDS twice, LIBS, EVENTS and
  * PROC, so six handles were connected before `main` and most programs use two.
  * `ls` never touches EVENTS: or PROC:; `status` touches nothing at all.
@@ -855,7 +855,7 @@ build:
         !append_number(path, capacity, selected[1]) ||
         !append(path, capacity, ".") ||
         !append_number(path, capacity, selected[2]) ||
-        !append(path, capacity, "/m68k-68030/") ||
+        !append(path, capacity, "/m68k-68040/") ||
         !append(path, capacity, name))
         return 0;
     return 1;

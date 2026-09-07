@@ -121,13 +121,14 @@
 #define KERNEL_QUALIFICATION_TIMEOUT_NS 1000000
 #define KERNEL_QUALIFICATION_K6_TIMEOUT_NS 20000000
 #define KERNEL_QUALIFICATION_K6_TIMER_NS 2000000
+#define KERNEL_QUALIFICATION_K6_SPIN_NS 40000000
 /*
  * How long the survivor and the offender stay runnable together, doing
  * nothing but burning time at the same priority. The milestone asserts a
  * quantum preemption happened, and only two co-runnable threads of equal
  * priority can produce one; the quantum is 5 ms, so this is two of them and a
  * margin. It is a duration rather than an iteration count because the count
- * that lasted a quantum on a 30 MHz 68030 lasts a fraction of one under an
+ * that lasted a quantum on a 30 MHz 68040 lasts a fraction of one under an
  * emulator, and the preemption then never happens.
  */
 #define KERNEL_QUALIFICATION_QUANTUM_SPIN_NS 12000000

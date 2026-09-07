@@ -49,8 +49,12 @@ _Static_assert(KERNEL_PAGE_SIZE == ASTRA_EXECUTABLE_TRANSFER_MAX,
 #endif
 
 #define PROCESS_OWNER_PREFIX 0x10000000u
+#define PROCESS_ID_SLOT_BITS 5u
+#define PROCESS_ID_GENERATION_MASK \
+    ((PROCESS_OWNER_PREFIX - 1u) >> PROCESS_ID_SLOT_BITS)
+_Static_assert(KERNEL_PROCESS_MAX <= (1u << PROCESS_ID_SLOT_BITS),
+               "process id slot field is too narrow");
 #define PROCESS_QUALIFICATION_CLIENT_MAX 2u
-#define M68K_SSW_READ 0x0040u
 #define KERNEL_SIGNAL_ALARM 14u
 #define KERNEL_SIGNAL_ALARM_BIT (1u << KERNEL_SIGNAL_ALARM)
 #define KERNEL_PROCESS_LOAD_RIGHT (1u << 0)
@@ -696,8 +700,9 @@ static KernelProcessStatus claim_process_record(KernelProcess **created,
     kernel_thread_wait_queue_init(&process->death_waiters);
     process->generation = generation;
     process->id = PROCESS_OWNER_PREFIX |
-                  ((generation & 0x000fffffu) << 4) |
-                  ((uint32_t)slot + 1u);
+                  ((generation & PROCESS_ID_GENERATION_MASK) <<
+                   PROCESS_ID_SLOT_BITS) |
+                  (uint32_t)slot;
     process->owner = process->id;
     process->started_cycles = scheduler_cycles();
     process->default_priority = KERNEL_THREAD_PRIORITY_NORMAL;
@@ -1029,10 +1034,10 @@ static KernelProcessStatus schedule_next(KernelCpuContext **next_context)
         return activate(next, next_context);
     case KERNEL_THREAD_NO_RUNNABLE:
         /*
-         * Supervisor execution uses SRP, so keep the last CRP installed while
+         * Supervisor execution uses SRP, so keep the last URP installed while
          * the worker waits. If that process wakes next, kernel_vm_switch()
          * becomes a no-op instead of invalidating the ATC twice for one wait.
-         * The reaper moves CRP to the empty root before destroying the space.
+         * The reaper moves URP to the empty root before destroying the space.
          */
         current_thread = NULL;
         runtime_active = 0u;
@@ -1399,6 +1404,7 @@ static void check_milestone(void)
     if (!kernel_thread_measure_stacks(&measured_stack_use) ||
         measured_stack_use == 0u)
         return;
+    stats.kernel_stack_max_used = measured_stack_use;
     scheduler_stats.milestone_complete = 1u;
     stats.milestone_complete = 1u;
     kernel_process_milestone_reached(&stats);
@@ -3139,6 +3145,7 @@ static KernelProcessStatus clone_current_process(
     uint16_t slot;
     uint16_t saved_status;
     bool owner_protected = false;
+    bool area_mappings_cloned = false;
 
     if (source == NULL || source_thread == NULL || process_id == NULL ||
         process_handle == NULL || process_for_thread(source_thread) != source)
@@ -3171,6 +3178,18 @@ static KernelProcessStatus clone_current_process(
         result = vm_status == KERNEL_VM_OUT_OF_MEMORY ?
             KERNEL_PROCESS_OUT_OF_MEMORY : KERNEL_PROCESS_CORRUPT;
         goto failed;
+    }
+    {
+        KernelAreaStatus area_status = kernel_area_clone_process(
+            source->id, &source->address_space, child->id,
+            &child->address_space);
+
+        if (area_status != KERNEL_AREA_OK) {
+            result = area_status == KERNEL_AREA_NO_SLOT ?
+                KERNEL_PROCESS_RESOURCE_LIMIT : KERNEL_PROCESS_CORRUPT;
+            goto failed;
+        }
+        area_mappings_cloned = true;
     }
     handle_status = kernel_handle_clone_table(source->handles,
                                               child->handles);
@@ -3233,6 +3252,8 @@ failed:
     if (prepared.thread != NULL)
         (void)abort_cloned_thread(&prepared);
     (void)kernel_handle_close_all(child->handles);
+    if (area_mappings_cloned)
+        (void)kernel_area_unmap_process(child->id, NULL);
     if (child->address_space.initialized != 0u)
         (void)kernel_vm_destroy_address_space(&child->address_space);
     (void)kernel_memory_release_owner(child->owner, NULL);
@@ -3402,11 +3423,15 @@ failed:
 #define KERNEL_PROCESS_LAUNCH_HEADER_BYTES 1024u
 static uint8_t launch_page[KERNEL_PAGE_SIZE];
 static uint8_t launch_header[KERNEL_PROCESS_LAUNCH_HEADER_BYTES];
-/* Process creation is serialized on this single CPU. Keeping the page here
- * avoids consuming half of the guarded 8 KiB supervisor stack while retaining
- * the alignment required by AstraStartupCapability on the MC68030. */
+/* Process creation is serialized on this single CPU; interrupt handlers never
+ * enter the syscall path. Keep its page and launch metadata here instead of
+ * consuming most of a guarded 8 KiB supervisor stack on every syscall. */
 static _Alignas(4) uint8_t startup_page[ASTRA_STARTUP_BLOCK_SIZE];
 static char syscall_data[ASTRA_STARTUP_BLOCK_SIZE];
+static AstraLaunchGrant launch_grants[ASTRA_LAUNCH_GRANT_MAX];
+static KernelProcessBootstrapCapability
+    launch_capabilities[ASTRA_LAUNCH_GRANT_MAX];
+static char launch_names[ASTRA_LAUNCH_GRANT_MAX][ASTRA_CAPABILITY_NAME_MAX];
 static AstraStartupCapability
     exec_capabilities[ASTRA_STARTUP_CAPABILITY_MAX];
 
@@ -4270,7 +4295,7 @@ static bool library_reference_from_image(const uint8_t *image,
         astra_load_be16(record + 4u) != ASTRA_LIBRARY_RECORD_VERSION ||
         astra_load_be16(record + 6u) != ASTRA_LIBRARY_SIZE ||
         astra_load_be16(record + 18u) != 0u ||
-        astra_load_be32(record + 20u) != ASTRA_LIBRARY_TARGET_M68030 ||
+        astra_load_be32(record + 20u) != ASTRA_LIBRARY_TARGET_M68040 ||
         astra_load_be32(record + 28u) != ASTRA_LIBRARY_EXPORTS_OFFSET)
         return false;
     kernel_bytes_clear(reference, sizeof(*reference));
@@ -5940,8 +5965,9 @@ KernelProcessStatus kernel_process_on_interrupt_wakeup(
     if (status != KERNEL_PROCESS_OK)
         return status;
     (void)current;
-    if (ready_thread_preempts(previous, thread_woken)) {
-        status = schedule_pending(next_context, thread_woken);
+    (void)thread_woken;
+    if (ready_thread_outranks(previous)) {
+        status = schedule_pending(next_context, false);
         if (status == KERNEL_PROCESS_OK &&
             *next_context != &previous->context)
             ++scheduler_stats.wake_preemptions;
@@ -6591,12 +6617,6 @@ static bool valid_message_header(const uint8_t *message,
  * *result set is an answer for the caller, anything else is a fault for the
  * dispatcher to act on.
  *
- * This buys readability and nothing else, which is worth saying because the
- * obvious other reason to do it does not hold: the dispatcher's stack frame is
- * 464 bytes measured by -fstack-usage both before and after, since the case
- * scopes are disjoint and GCC already shared the slots. The gain is that the
- * dispatcher drops from 1,563 lines to 1,341 and these 224 can be read on
- * their own.
  */
 static KernelProcessStatus port_syscall(KernelProcess *current,
                                         KernelThread *thread, uint32_t syscall,
@@ -7134,6 +7154,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
          * exactly where something went wrong, so the right moved to reading.
          */
         uint8_t payload[ASTRA_EVENT_ARGUMENT_MAX];
+        const uint8_t *payload_data = NULL;
         KernelTraceUserRecord record;
         uint32_t message = thread->context.data[1];
         uint32_t flags = thread->context.data[2];
@@ -7160,6 +7181,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             }
             if (copy_status != KERNEL_USER_COPY_OK)
                 return KERNEL_PROCESS_CORRUPT;
+            payload_data = payload;
         }
         /*
          * The ring refuses only what this handler has already checked, so a
@@ -7170,7 +7192,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if (kernel_trace_write_user(message, current->id,
                                     (uint16_t)current_thread->id,
                                     current_thread->activity, (uint16_t)flags,
-                                    length != 0u ? payload : NULL, length)) {
+                                    payload_data, length)) {
             ++scheduler_stats.diagnostic_logs;
             scheduler_stats.diagnostic_log_bytes += length;
         } else {
@@ -7192,7 +7214,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         record.thread = (uint16_t)current_thread->id;
         record.payload_length = (uint16_t)length;
         if (diagnostic_console_open) {
-            kernel_process_diagnostic_log(&record, payload, length);
+            kernel_process_diagnostic_log(&record, payload_data, length);
         }
         break;
     }
@@ -7266,9 +7288,6 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         break;
     }
     case ASTRA_SYSCALL_PROCESS_LOAD_CREATE: {
-        AstraLaunchGrant grants[ASTRA_LAUNCH_GRANT_MAX];
-        KernelProcessBootstrapCapability requested[ASTRA_LAUNCH_GRANT_MAX];
-        char names[ASTRA_LAUNCH_GRANT_MAX][ASTRA_CAPABILITY_NAME_MAX];
         AstraLaunchArguments arguments;
         KernelExecutableLoad *load = NULL;
         KernelHandleStatus handle_status;
@@ -7296,11 +7315,11 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             return KERNEL_PROCESS_CORRUPT;
         result = copy_launch_metadata(
             current, thread->context.data[2], grant_count, argument_address,
-            grants, requested, names, &arguments);
+            launch_grants, launch_capabilities, launch_names, &arguments);
         if (result != ASTRA_SYSCALL_OK)
             break;
         load_status = executable_load_create_process(
-            load, current->handles, requested, grant_count,
+            load, current->handles, launch_capabilities, grant_count,
             arguments.count != 0u || arguments.environment_count != 0u ||
                     arguments.flags != 0u ?
                 &arguments : NULL,
@@ -7358,9 +7377,6 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
          * There is no fork, so there is nothing to inherit implicitly and no
          * second path that answers the same question differently.
          */
-        AstraLaunchGrant grants[ASTRA_LAUNCH_GRANT_MAX];
-        KernelProcessBootstrapCapability requested[ASTRA_LAUNCH_GRANT_MAX];
-        char names[ASTRA_LAUNCH_GRANT_MAX][ASTRA_CAPABILITY_NAME_MAX];
         AstraLaunchArguments arguments;
         uint32_t image = thread->context.data[1];
         uint32_t image_size = thread->context.data[2];
@@ -7388,13 +7404,14 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             break;
         }
         result = copy_launch_metadata(
-            current, grant_address, grant_count, argument_address, grants,
-            requested, names, &arguments);
+            current, grant_address, grant_count, argument_address,
+            launch_grants, launch_capabilities, launch_names, &arguments);
         if (result != ASTRA_SYSCALL_OK)
             break;
 
         launch_status = kernel_process_launch(
-            NULL, image_size, image, current->handles, requested, grant_count,
+            NULL, image_size, image, current->handles, launch_capabilities,
+            grant_count,
             arguments.count != 0u || arguments.environment_count != 0u ||
                     arguments.flags != 0u ?
                 &arguments : NULL,
@@ -9574,14 +9591,14 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
      */
     if (frame.access_fault != 0u &&
         (grow_user_stack(current, thread, frame.fault_address) ||
-         ((frame.special_status & M68K_SSW_READ) == 0u &&
+         (frame.access_write != 0u &&
           kernel_vm_cow_fault(&current->address_space,
                               frame.fault_address) == KERNEL_VM_OK) ||
          kernel_area_fault(current->id, &current->address_space,
                            frame.fault_address) ||
          kernel_vm_private_fault(
              &current->address_space, frame.fault_address,
-             (frame.special_status & M68K_SSW_READ) == 0u) == KERNEL_VM_OK)) {
+             frame.access_write != 0u) == KERNEL_VM_OK)) {
         *next_context = runtime_resume(thread);
         return KERNEL_PROCESS_OK;
     }

@@ -224,7 +224,7 @@ depend on it. Code moves into Axiom only when measurements prove all of these:
 
 Convenience and speculative speed are not sufficient reasons to add kernel
 policy. Assembly is appropriate for measured Axiom or service hot paths when
-generated MC68030 code demonstrates a material gain.
+generated MC68040 code demonstrates a material gain.
 
 ## 7. Input stack
 
@@ -277,7 +277,7 @@ event protocol are also implemented in `sw/userspace/input`. It provides:
 - generation and overflow repair through synthetic state-reset events;
 - fixed-size port messages with full-queue and peer-death handling.
 
-The MC68030 library contributes 3,095 bytes of text. Its caller-owned service
+The MC68040 library contributes 3,095 bytes of text. Its caller-owned service
 state is exactly 368 bytes on the target and performs no dynamic allocation.
 Each logical event is 32 bytes; its complete port message is 56 bytes. A client
 port can therefore use the kernel's eight-message limit with a 448-byte queue.

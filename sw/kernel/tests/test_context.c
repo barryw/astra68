@@ -1,4 +1,5 @@
 #include "context.h"
+#include "exception.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -21,7 +22,7 @@ static void put_be32(uint8_t *bytes, uint32_t offset, uint32_t value)
 static void make_frame(uint8_t *frame, uint16_t status, uint32_t pc,
                        uint8_t format, uint16_t vector)
 {
-    for (uint32_t index = 0u; index < 92u; ++index)
+    for (uint32_t index = 0u; index < KERNEL_EXCEPTION_FRAME_MAX_SIZE; ++index)
         frame[index] = 0u;
     put_be16(frame, 0u, status);
     put_be32(frame, 2u, pc);
@@ -48,7 +49,7 @@ static void test_capture_and_sanitize(void)
 {
     KernelCpuContext context;
     uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT];
-    uint8_t frame[92];
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
 
     for (uint32_t index = 0u; index < KERNEL_CONTEXT_REGISTER_COUNT; ++index)
         registers[index] = 0x11110000u + index;
@@ -71,12 +72,12 @@ static void test_rejections(void)
 {
     KernelCpuContext context;
     uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0};
-    uint8_t frame[92];
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
 
     make_frame(frame, 0x2000u, 0x00100000u, 0u, 47u);
     assert(kernel_context_capture(&context, registers, 0x70001000u,
                                   frame) == KERNEL_CONTEXT_NOT_USER);
-    make_frame(frame, 0u, 0x00100000u, 3u, 47u);
+    make_frame(frame, 0u, 0x00100000u, 4u, 47u);
     assert(kernel_context_capture(&context, registers, 0x70001000u,
                                   frame) == KERNEL_CONTEXT_INVALID_FRAME);
     assert(kernel_context_capture(NULL, registers, 0x70001000u,

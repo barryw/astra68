@@ -4,7 +4,7 @@
 # the libc build on that target so it cannot silently inherit Linux semantics.
 
 [binaries]
-c = ['m68k-astra-gcc', '-static', '-nostdlib', '-Wl,--build-id=none']
+c = ['m68k-astra-gcc', '-m68040', '-msoft-float', '-ffixed-a4', '-static', '-nostdlib', '-Wl,--build-id=none']
 ar = 'm68k-astra-ar'
 as = 'm68k-astra-as'
 ld = 'm68k-astra-ld'
@@ -14,7 +14,7 @@ strip = 'm68k-astra-strip'
 [host_machine]
 system = 'unknown'
 cpu_family = 'm68k'
-cpu = '68030'
+cpu = '68040'
 endian = 'big'
 
 [properties]

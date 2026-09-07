@@ -4,11 +4,11 @@
  * reserve/commit split.
  *
  * It answers three questions, and deliberately answers none of them with a
- * clock. QEMU's cycle counter is TCG bookkeeping rather than 68030 time, and
+ * clock. QEMU's cycle counter is TCG bookkeeping rather than physical CPU time, and
  * that is true on the Arty too because the m68k there is emulated on the ARM
  * cores. So every number printed here is a *count* -- bytes, pages, faults --
  * which is exactly as true on this machine as on hardware. Converting a fault
- * count into a time is a job for a real 68030 and is left undone rather than
+ * count into a time is a job for a physical MC68040 and is left undone rather than
  * done wrongly.
  *
  *   1. **Allocator fragmentation.** Editor-shaped churn -- many small objects,

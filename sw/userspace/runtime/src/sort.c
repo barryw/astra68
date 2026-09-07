@@ -10,7 +10,7 @@
  * is directory entries read from a volume Astra did not create, so its
  * ordering is attacker-influenced. Quicksort's worst case is reachable by
  * choosing the input; heapsort's is not. A 4 KiB block holds a few hundred
- * sort entries, and O(n^2) on a 16 MHz MC68030 is a visible stall on every
+ * sort entries, and O(n^2) on the MC68040 is a visible stall on every
  * directory split.
  */
 

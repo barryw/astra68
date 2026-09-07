@@ -241,7 +241,7 @@ static void render_current(KernelMonitorBuilder *builder)
     builder_key_dec(builder, "process=", stats.current_process_id);
     builder_key_dec(builder, " thread=", stats.current_thread_id);
     builder_key_dec(builder, " switches=", stats.context_switches);
-    builder_key_dec(builder, " crp_switches=",
+    builder_key_dec(builder, " urp_switches=",
                     stats.cross_address_space_switches);
 }
 
@@ -444,7 +444,7 @@ static void render_mmu(KernelMonitorBuilder *builder)
         return;
     }
     builder_key_hex(builder, "srp=0x", control.srp_table_address);
-    builder_key_hex(builder, " crp=0x", control.crp_table_address);
+    builder_key_hex(builder, " urp=0x", control.urp_table_address);
     builder_key_hex(builder, " tc=0x", control.translation_control);
     builder_key_hex(builder, " cacr=0x", control.cache_control);
     builder_key_dec(builder, " enabled=", control.translation_enabled);

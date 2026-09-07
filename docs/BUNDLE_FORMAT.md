@@ -18,15 +18,15 @@ installing an application does not silently pin it.
 ```
 APPS:Terminal.app/
     manifest
-    bin/m68k-68030/Terminal
+    bin/m68k-68040/Terminal
     resources/Terminal.aicon
     libs/                         optional private libraries
     licenses/                     optional notices
 
 LIBS:Graphics.kit/
     manifest
-    libraries/graphics.library/abi-1/1.1.0/m68k-68030/graphics.library
-    libraries/font.library/abi-1/1.0.0/m68k-68030/font.library
+    libraries/graphics.library/abi-1/1.1.0/m68k-68040/graphics.library
+    libraries/font.library/abi-1/1.0.0/m68k-68040/font.library
     headers/...                   optional development payloads
     licenses/
 ```
@@ -37,7 +37,7 @@ Names shown to a person come from the manifest, not the directory name.
 Every `provides NAME ABI VERSION` payload has one canonical location:
 
 ```
-libraries/NAME/abi-ABI/VERSION/m68k-68030/NAME
+libraries/NAME/abi-ABI/VERSION/m68k-68040/NAME
 ```
 
 The image builder validates providers against their embedded library identity

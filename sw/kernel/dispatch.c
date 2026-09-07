@@ -356,8 +356,13 @@ KernelDispatchTarget syscall_entry_dispatch_fast(
                                        &next);
     if (!((status == KERNEL_PROCESS_OK && next != NULL) ||
           (status == KERNEL_PROCESS_NO_RUNNABLE && next == NULL &&
-           !kernel_process_active())))
-        kernel_panic("syscall left no runnable process");
+           !kernel_process_active()))) {
+        (void)kernel_trace_write(
+            KERNEL_TRACE_EVENT_SYSCALL_EXIT, KERNEL_TRACE_LEVEL_ERROR,
+            registers != NULL ? registers[0] : UINT32_MAX, (uint32_t)status,
+            (uint32_t)(uintptr_t)next, kernel_process_active() ? 1u : 0u);
+        kernel_panic("syscall dispatch contract failed");
+    }
     if (kernel_process_maintenance_pending()) {
         schedule_process_worker();
         return KERNEL_DISPATCH_WORKER;

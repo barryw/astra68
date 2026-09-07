@@ -12,7 +12,7 @@ The Arty's 512 MiB DDR is divided at runtime into 128 MiB of physically reserved
 graphics memory, 128 MiB preallocated as cached QEMU guest RAM, and a 256 MiB
 Linux/host-services budget. Guest RAM deliberately stays in Linux's normal
 cached allocator; an uncached `/dev/mem` reservation would make every emulated
-68030 memory access a device-memory access.
+68040 memory access a device-memory access.
 
 The current release kernel is 124,908 bytes on disk. Its 128 MiB frame metadata
 ends at `0x02140280`, inside the `0x02044000..0x02153fff` kernel reservation,
@@ -42,7 +42,7 @@ ranges and sizes allocator accounting from the reported 128 MiB guest map.
 
 ## Provisional device-lease substrate (2026-08-04)
 
-The MC68030 object reports 494 bytes of fixed BSS and 1,830 bytes of text for
+The MC68040 object reports 494 bytes of fixed BSS and 1,830 bytes of text for
 `device.o`. BSS is exact: eight 16-byte lease records (128 bytes), eight
 36-byte device records (288 bytes), 44 bytes of counters, 26 bytes of object-
 cache state, a 4-byte bitmap, and four bytes of flags/padding. It allocates no
@@ -216,7 +216,7 @@ The exact hardware-qualified K5 binary SHA-256 is
 `260bbcf82fbf955cee42d5798054e6d6549daa8921462d7216a241a685095e03`.
 K5 adds 3,680 flat-binary bytes and 560 BSS bytes over K4. The image ends at
 `0x0206e000` and leaves 139,264 bytes in the fixed 512 KiB kernel reservation.
-The measured MC68030 layouts are 180 bytes per `KernelThread` and 450 bytes per
+The measured MC68040 layouts are 180 bytes per `KernelThread` and 450 bytes per
 `KernelProcess`; compile-time assertions require both documents to change if
 either layout moves. The 16 records therefore consume 2,880 thread bytes and
 the four process records consume 1,800 bytes. Three new 36-byte lifecycle
@@ -245,7 +245,7 @@ The image ends at `0x02071000` and leaves exactly 126,976 bytes in the fixed
 `17476aa268db37dde0e066f4cc0799848bc0024ae12bba809ec8cffedf84f425`.
 K6 reserves 2,048 BSS bytes for `16 x 16`
 intrusive wait registrations at eight bytes each. Registrations are partitioned
-by thread slot and require no allocator metadata. The measured MC68030 layouts
+by thread slot and require no allocator metadata. The measured MC68040 layouts
 are 172 bytes per `KernelThread` and 596 bytes per `KernelProcess`; compile-time
 assertions reject silent movement. The 16 thread records consume 2,752 bytes
 and four process records consume 2,384 bytes. The process record grew from
@@ -257,7 +257,7 @@ or expiry path allocates memory. The structural sizes are compile-time asserted.
 
 ## K7 implemented static budget
 
-K7 consumes at most 20 KiB of incremental fixed state. Compile-time MC68030
+K7 consumes at most 20 KiB of incremental fixed state. Compile-time MC68040
 assertions and the exact qualified Beast build measure:
 
 | Object | Limit | Measured bytes |
@@ -303,7 +303,7 @@ close, or peer-death path allocates memory.
 
 ## K8 implemented static budget
 
-The exact hardware-qualified MC68030 K8 release build reports:
+The exact hardware-qualified MC68040 K8 release build reports:
 
 | ELF section | Bytes |
 |---|---:|
@@ -352,7 +352,7 @@ The exact flat-binary SHA-256 is
 
 ## K9 implemented static budget
 
-The exact hardware-qualified MC68030 K9 release build reports:
+The exact hardware-qualified MC68040 K9 release build reports:
 
 | ELF section | Bytes |
 |---|---:|
@@ -434,11 +434,11 @@ Major current static objects are:
 The interactive GUI profile now allows the six resident system processes plus
 nine concurrent applications. Each process has 48 handles in the same bounded
 two-word bitmap, and shared-area alias capacity matches all 15 process slots.
-The compile-time `KernelProcess` size gate is 1,496 bytes under the MC68030 ABI.
+The compile-time `KernelProcess` size gate is 1,496 bytes under the MC68040 ABI.
 
 ## K10 implemented candidate budget
 
-The current pre-route MC68030 K10 build reports:
+The current pre-route MC68040 K10 build reports:
 
 | ELF section | Bytes |
 |---|---:|

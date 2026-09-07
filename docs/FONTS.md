@@ -25,7 +25,7 @@ must not draw bitmap glyphs with CPU pixel loops.
   input format.
 
 This split keeps complex and untrusted parsing out of RTL while removing the
-expensive per-pixel work from the 68030.
+expensive per-pixel work from the 68040.
 
 ## 2. Guaranteed resident fonts
 

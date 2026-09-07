@@ -38,7 +38,8 @@ def fixture(directory, delay, output="", status=0):
     (root / "rom/astra_boot.bin").write_bytes(b"rom")
     (root / "storage-terminal.img").write_bytes(b"disk")
     shutil.copyfile(RELEASE_TOOL, root / "bin/astra-release.py")
-    write_executable(root / "bin/astra-terminal-display", """#!/bin/sh
+    write_executable(root / "bin/astra-terminal-display", f"""#!/bin/sh
+python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))' >"{observed}/display.affinity"
 trap '' TERM
 while :; do sleep 1; done
 """)
@@ -51,8 +52,10 @@ printf '%s' {output!r}
 exit {status}
 """)
     write_executable(root / "bin/astra-input-hotplug.py", f"""#!/usr/bin/env python3
-import pathlib, signal, sys, time
+import os, pathlib, signal, sys, time
 pathlib.Path({str(observed / 'hotplug.args')!r}).write_text('\\n'.join(sys.argv[1:]))
+pathlib.Path({str(observed / 'hotplug.affinity')!r}).write_text(
+    ' '.join(str(cpu) for cpu in sorted(os.sched_getaffinity(0))))
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 while True: time.sleep(0.05)
 """)
@@ -72,6 +75,7 @@ while True: time.sleep(0.05)
 
 
 def environment(root, observed):
+    available = sorted(os.sched_getaffinity(0))
     return dict(
         os.environ,
         ASTRA_ROOT=str(root),
@@ -80,6 +84,8 @@ def environment(root, observed):
         ASTRA_RUN_ROOT=str(observed / "run"),
         ASTRA_LOG_ROOT=str(observed / "log"),
         ASTRA_HOSTFS_ROOT=str(observed / "hostfs"),
+        ASTRA_AUX_CPU=str(available[0]),
+        ASTRA_DISPLAY_CPU=str(available[-1]),
     )
 
 
@@ -90,6 +96,16 @@ def main():
     with tempfile.TemporaryDirectory() as directory:
         root, observed = fixture(directory, 0.2)
         launch_environment = environment(root, observed)
+        available = sorted(os.sched_getaffinity(0))
+        aux_cpu = available[0]
+        display_cpu = available[-1]
+        invalid_environment = dict(launch_environment,
+                                   ASTRA_AUX_CPU="%d:%d" %
+                                   (aux_cpu, display_cpu))
+        result = subprocess.run([str(RUN_ARTY)], env=invalid_environment,
+                                text=True, capture_output=True, check=False)
+        assert result.returncode != 0
+        assert "helper CPU assignments are invalid" in result.stderr
         result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
                                 text=True, capture_output=True, check=False)
         assert result.returncode == 0, result.stderr
@@ -102,6 +118,10 @@ def main():
         assert not any("input-linux" in argument for argument in qemu_args)
         hotplug_args = (observed / "hotplug.args").read_text().splitlines()
         assert hotplug_args == ["--qmp", str(observed / "run/qmp.sock")]
+        assert (observed / "display.affinity").read_text().strip() == \
+            str(display_cpu)
+        assert (observed / "hotplug.affinity").read_text().strip() == \
+            str(aux_cpu)
         storage = qemu_args[qemu_args.index("-drive") + 1]
         assert storage == "if=none,format=raw,file=%s" % (
             observed / "state/storage-terminal.img")

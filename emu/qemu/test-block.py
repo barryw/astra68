@@ -22,6 +22,7 @@ TIMER0_LOAD = VESTA + 0x400
 TIMER0_CONTROL = VESTA + 0x408
 
 SCRATCH = VESTA + 0x018
+ASTRA_KERNEL_SOAK = 0x4B31534B
 DISPLAY_REQ_ID = VESTA + 0x1E4
 DISPLAY_REQ_OP = VESTA + 0x1E8
 DISPLAY_REQ_SOURCE = VESTA + 0x1EC
@@ -551,6 +552,8 @@ class AstraBlockTest:
         self.test_queue_full()
         self.test_device_reset_cancels_the_whole_queue()
         self.test_flush_is_a_queue_barrier()
+        self.write32(SCRATCH, ASTRA_KERNEL_SOAK)
+        assert self.qmp.execute("query-status")["status"] == "running"
 
 
 def build_image(path):

@@ -5,10 +5,7 @@
 
 #include <stddef.h>
 
-#define M68K_SSW_DATA_FAULT 0x0100u
-#define M68K_SSW_READ       0x0040u
-#define M68K_SSW_FC_MASK    0x0007u
-#define M68K_FC_USER_DATA   0x0001u
+#define M68040_TM_USER_DATA 0x0001u
 #define M68K_BUS_ERROR_VECTOR_OFFSET 0x0008u
 
 /*
@@ -162,16 +159,16 @@ bool kernel_user_copy_recover_frame(
         return false;
     if (frame.vector_offset != M68K_BUS_ERROR_VECTOR_OFFSET ||
         frame.from_user != 0u || frame.access_fault == 0u ||
-        (frame.special_status & M68K_SSW_DATA_FAULT) == 0u ||
-        (frame.special_status & M68K_SSW_FC_MASK) != M68K_FC_USER_DATA ||
+        frame.access_data == 0u ||
+        frame.access_transfer_mode != M68040_TM_USER_DATA ||
         frame.fault_address < scope->start ||
         frame.fault_address >= scope->end)
         return false;
     if (scope->direction == KERNEL_USER_COPY_FROM_USER &&
-        (frame.special_status & M68K_SSW_READ) == 0u)
+        frame.access_write != 0u)
         return false;
     if (scope->direction == KERNEL_USER_COPY_TO_USER &&
-        (frame.special_status & M68K_SSW_READ) != 0u)
+        frame.access_write == 0u)
         return false;
 
     for (uint32_t index = 0u; index < site_count; ++index) {
@@ -194,8 +191,10 @@ bool kernel_user_copy_handle_fault(void *raw_frame)
     (void)raw_frame;
     return false;
 #else
-    uint32_t site_count = (uint32_t)(_kernel_user_copy_sites_end -
-                                     _kernel_user_copy_sites_start);
+    uintptr_t site_bytes = (uintptr_t)_kernel_user_copy_sites_end -
+                           (uintptr_t)_kernel_user_copy_sites_start;
+    uint32_t site_count = (uint32_t)(site_bytes /
+                                     sizeof(KernelUserCopyFaultSite));
 
     return kernel_user_copy_recover_frame(
         raw_frame, KERNEL_EXCEPTION_FRAME_MAX_SIZE, &active_scope,

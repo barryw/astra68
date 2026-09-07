@@ -1,4 +1,4 @@
-| Stackful supervisor worker coroutine for the MC68030.
+| Stackful supervisor worker coroutine for the MC68040.
 |
 | The worker runs with S=1/M=1 on MSP. Asynchronous interrupts therefore use
 | the processor's documented MSP format-0 plus ISP format-1 frame sequence.

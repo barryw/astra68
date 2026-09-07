@@ -70,7 +70,7 @@ astra_hostbench_run:
 .Lpublish:
 	add.l   %d1, %d6
 	move.l  %d6, 36(%a0)		| producer_position
-	nop				| MC68030 release fence
+	nop				| MC68040 bus-serialization fence
 	move.l  %d6, 32(%a2)		| ASTRA_HOST_CHANNEL_KICK_OFFSET
 	bra.s   .Lpoll
 

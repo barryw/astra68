@@ -1,4 +1,4 @@
-	/* Shared MC68030 block primitives.  Host builds keep their C sources as
+	/* Shared MC68040 block primitives.  Host builds keep their C sources as
 	 * executable reference contracts; Astra target builds select these
 	 * post-increment and pre-decrement loops. */
 

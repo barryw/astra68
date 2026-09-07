@@ -49,7 +49,7 @@ The same source builds three ways:
 | Build | Purpose |
 |---|---|
 | host `gcc` | little-endian reference behaviour |
-| `m68k-linux-gnu-gcc -m68030`, run under `qemu-m68k` | real big-endian, 32-bit execution |
+| `m68k-linux-gnu-gcc -m68040`, run under `qemu-m68k` | real big-endian, 32-bit execution |
 | same, with `-DASTRA_FORCE_LE` | m68k control that disables the endian macros |
 
 The third build is the control that separates "big-endian defect" from "32-bit
@@ -67,7 +67,7 @@ guest path or file requests.
 Measured on Beast (Ubuntu 24.04, x86_64), 2026-08-04, with
 `m68k-linux-gnu-gcc` 13 and a `qemu-m68k` 9.2.4 user-mode build.
 
-Unpatched lwext4 on big-endian MC68030 aborts during a rename, and cannot mount
+Unpatched lwext4 on big-endian MC68040 aborts during a rename, and cannot mount
 an `mke2fs`-created ext4 volume at all. Three one-line defects account for all
 of it:
 
@@ -115,7 +115,7 @@ mapping, i.e. an ext3-shaped volume that the Linux ext4 driver still mounts.
 
 ## Measurements
 
-MC68030 object text, `-Os -ffreestanding -ffunction-sections -fdata-sections`,
+MC68040 object text, `-Os -ffreestanding -ffunction-sections -fdata-sections`,
 debug printf and assert off, before section garbage collection:
 
 | Profile | text | data | bss |
@@ -152,7 +152,7 @@ astra_alloc[populate]: allocations=15475 frees=15475 failures=0 rejections=0
 Charged bytes exceed the 110,592-byte request peak because a bounded allocator
 charges whole slots. The arena the class table needs is 151,936 bytes.
 
-These figures are host-emulated. No MC68030 cycle count, no real block backend,
+These figures are host-emulated. No MC68040 cycle count, no real block backend,
 and no Astra service measurement exists yet. The journal scales with volume
 size, so the class table must be re-measured against the real volume before any
 service ships with it.
@@ -160,7 +160,7 @@ service ships with it.
 ## C library surface
 
 lwext4 does not need a C library. The external symbols left undefined by the
-freestanding MC68030 build are:
+freestanding MC68040 build are:
 
 ```
 libc:    malloc free qsort memcmp memcpy memmove memset strcmp strlen strncmp strncpy
@@ -194,15 +194,12 @@ make patch
 make interop          # mke2fs image, big-endian populate, e2fsck
 make alloc            # allocation accounting through a tracking host heap
 make astra-alloc      # same workload carried by libastraalloc
-make size             # MC68030 object sizes for both profiles
+make size             # MC68040 object sizes for both profiles
 sudo mount -o loop,ro build/probe.img /mnt/x && python3 verify_mount.py /mnt/x
 python3 populate_linux.py /mnt/x   # reverse direction: Linux writes, m68k reads
 ```
 
-`qemu-m68k` user mode is required. The astra68 QEMU fork does not build a
-`m68k-linux-user` target: `target/m68k/translate.c` registers `INSN(pmmu030,
-...)` unconditionally while `disas_pmmu030` is behind `!CONFIG_USER_ONLY`. Build
-the user-mode emulator from an unmodified 9.2.4 tree, or add that guard.
+`qemu-m68k` user mode is required; Beast's distro package provides it.
 
 ## What is still missing
 
@@ -210,5 +207,5 @@ The gates in `docs/STORAGE_AND_VFS.md` that this rig does not touch: an exact
 frozen mkfs feature profile, power-cut and recovery testing after every block
 write/flush transition, a malformed and adversarial image corpus with fuzzing,
 model-based random operation testing against an oracle, parallel client and
-queue saturation, and real block-backend and MC68030 performance baselines.
+queue saturation, and real block-backend and MC68040 performance baselines.
 The three patches also need to go upstream or be carried as a recorded fork.

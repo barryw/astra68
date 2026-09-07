@@ -631,7 +631,7 @@ static void test_library_relocation(void)
     put_be16(mapping, ASTRA_LIBRARY_FILE_OFFSET + 14u, 1u);
     put_be16(mapping, ASTRA_LIBRARY_FILE_OFFSET + 16u, 0u);
     put_be32(mapping, ASTRA_LIBRARY_FILE_OFFSET + 20u,
-             ASTRA_LIBRARY_TARGET_M68030);
+             ASTRA_LIBRARY_TARGET_M68040);
     put_be32(mapping, ASTRA_LIBRARY_FILE_OFFSET + 28u,
              ASTRA_LIBRARY_EXPORTS_OFFSET);
     memcpy(mapping + ASTRA_LIBRARY_FILE_OFFSET + 32u, "font.library", 13u);

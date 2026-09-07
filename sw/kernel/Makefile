@@ -1,11 +1,11 @@
-# Astra 68 kernel bootstrap. Freestanding MC68030 image loaded by the system ROM.
+# Astra 68 kernel bootstrap. Freestanding MC68040 image loaded by the system ROM.
 include ../../mk/m68k-cross.mk
 CC = $(CROSS)gcc
 OBJCOPY = $(CROSS)objcopy
 OBJDUMP = $(CROSS)objdump
 HOST_CC ?= cc
 HOST_EXTRA_FLAGS ?=
-HOST_EXTRA_FLAGS += -I../include
+override HOST_EXTRA_FLAGS += -I../include
 
 KERNEL_VERSION ?= 0.1.0-dev
 PANIC_SELFTEST ?= 0
@@ -66,7 +66,8 @@ CPPFLAGS = -I../include -I$(BUILD_DIR) -include $(BUILD_INFO) \
 # bytes and is not worth the object-layout churn.
 # Beyond -Wall -Wextra. Each of these is a class of defect this kernel cannot
 # afford rather than a style preference: -Wcast-align and -Wpointer-arith
-# because the target is a 68030 where a misaligned access faults;
+# because the target is a 68040 where a misaligned access may be split into
+# multiple bus cycles and remains a defect in MMIO and ABI data;
 # -Wjump-misses-init because every allocating path here unwinds through a
 # `goto failed`; -Wundef because reading an undefined macro as 0 silently picks
 # a branch, which has already cost this project time in lwext4's config guard;
@@ -79,7 +80,7 @@ WARNINGS = -Wall -Wextra -Werror -Wshadow -Wcast-align -Wcast-qual \
            -Wduplicated-cond -Wduplicated-branches -Wlogical-op \
            -Wjump-misses-init -Warray-bounds=2 -Wformat=2 \
            -Wstrict-prototypes -Wmissing-prototypes -Wshift-overflow=2
-CFLAGS = -m68030 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin \
+CFLAGS = -m68040 -msoft-float -std=gnu11 -Os -ffreestanding -fno-builtin \
          -fno-common -fno-pic -fno-pie -fno-stack-protector \
          -Wa,--noexecstack $(WARNINGS) -ffunction-sections -fstack-usage \
          $(ASTRA_DEBUG_FLAGS)

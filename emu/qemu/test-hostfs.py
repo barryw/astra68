@@ -49,6 +49,7 @@ FS_OPEN = 1
 FS_CLOSE = 2
 FS_READ = 3
 FS_WRITE = 4
+FS_SYNC = 5
 FS_TRUNCATE = 6
 FS_STAT = 7
 FS_READDIR = 8
@@ -56,6 +57,10 @@ FS_MKDIR = 9
 FS_RENAME = 11
 FS_READLINK = 13
 FS_SYMLINK = 14
+SERVICE_METRICS = 2
+METRICS_SNAPSHOT = 1
+METRICS_SIZE = 352
+METRIC_HOST_COMMANDS = 8
 
 OPEN_READ = 1 << 0
 OPEN_WRITE = 1 << 1
@@ -148,9 +153,9 @@ def get64(command, offset):
 
 def make_command(generation, operation, path="", path2="", flags=0,
                  handle=0, value=0, offset=0, data_offset=0,
-                 data_length=0, data_capacity=0):
+                 data_length=0, data_capacity=0, service=1):
     command = bytearray(COMMAND_SIZE)
-    struct.pack_into(">IHHHH", command, 0, COMMAND_SIZE, 1, 1,
+    struct.pack_into(">IHHHH", command, 0, COMMAND_SIZE, 1, service,
                      operation, flags)
     put32(command, 16, handle)
     put32(command, 20, generation)
@@ -208,13 +213,29 @@ def configure_channel(qtest, generation, operation, slot=3, owner=0x1001,
 
 def run(qtest, root, outside):
     qtest.detect_endian()
-    assert qtest.read32(HACC_VERSION) == 0x00010004
-    assert qtest.read32(HACC_CAPS) == 31
+    assert qtest.read32(HACC_VERSION) == 0x00010005
+    assert qtest.read32(HACC_CAPS) == 63
     assert qtest.read32(HACC_STATE) == 1
     assert qtest.read32(HACC_MAX_TRANSFER) == 2 * 1024 * 1024
     assert qtest.read32(HACC_MAX_COMMANDS) == 4096
     generation = qtest.read32(HACC_GENERATION)
     assert generation != 0
+
+    metrics = execute(qtest, [make_command(
+        generation, METRICS_SNAPSHOT, data_offset=COMMAND_SIZE,
+        data_capacity=METRICS_SIZE, service=SERVICE_METRICS)],
+        b"\xA5" * METRICS_SIZE)[0]
+    assert status(metrics) == STATUS_OK
+    assert get32(metrics, 52) == METRICS_SIZE
+    snapshot = qtest.read(BUFFER + COMMAND_SIZE, METRICS_SIZE)
+    assert struct.unpack_from(">IHH", snapshot, 0) == (METRICS_SIZE, 1, 42)
+    assert get64(snapshot, 16) != 0
+    assert get64(snapshot, 16 + METRIC_HOST_COMMANDS * 8) == 0
+    too_small = execute(qtest, [make_command(
+        generation, METRICS_SNAPSHOT, data_offset=COMMAND_SIZE,
+        data_capacity=METRICS_SIZE - 1, service=SERVICE_METRICS)],
+        b"\xA5" * (METRICS_SIZE - 1))[0]
+    assert status(too_small) == STATUS_INVALID
 
     assert configure_channel(qtest, generation, 1) == 0
     assert qtest.read32(CHANNEL_APERTURE + 3 * 4096) == 0x41484348
@@ -235,6 +256,7 @@ def run(qtest, root, outside):
     assert qtest.read32(BUFFER + 48) == 1
     assert qtest.read32(BUFFER + 52) == 0
     assert status(qtest.read(BUFFER + CHANNEL_HEADER_SIZE, COMMAND_SIZE)) == 0
+    assert qtest.read32(HACC_MAX_INFLIGHT) >= 1
     assert qtest.read32(HACC_CHANNEL_PENDING) == 0
     qtest.write32(CHANNEL_APERTURE + 3 * 4096 + 0x24, 1)
     assert qtest.read32(HACC_CHANNEL_PENDING) == 1
@@ -293,6 +315,73 @@ def run(qtest, root, outside):
         assert status(command) == STATUS_OK
     assert configure_channel(qtest, generation, 2, slot=5,
                              channel_generation=9) == 0
+
+    handle_buffer = BUFFER + 0xA000
+    handle_capacity = 64
+    handle_bytes = CHANNEL_HEADER_SIZE + handle_capacity * COMMAND_SIZE + 64
+    assert configure_channel(qtest, generation, 1, slot=5,
+                             channel_generation=10,
+                             buffer=handle_buffer,
+                             byte_size=handle_bytes,
+                             capacity=handle_capacity) == 0
+    qtest.write(handle_buffer + CHANNEL_HEADER_SIZE, b"".join(
+        make_command(generation, FS_OPEN, f"/handle-{index}",
+                     flags=OPEN_READ | OPEN_WRITE | OPEN_CREATE |
+                     OPEN_EXCLUSIVE, value=0o600)
+        for index in range(handle_capacity)))
+    qtest.write32(handle_buffer + 36, handle_capacity)
+    qtest.write32(CHANNEL_APERTURE + 5 * 4096 + 0x20, handle_capacity)
+    qtest.wait32(handle_buffer + 48, handle_capacity)
+    handles = []
+    for index in range(handle_capacity):
+        command = qtest.read(
+            handle_buffer + CHANNEL_HEADER_SIZE + index * COMMAND_SIZE,
+            COMMAND_SIZE)
+        assert status(command) == STATUS_OK
+        handles.append(get32(command, 16))
+    assert 0 not in handles and len(set(handles)) == handle_capacity
+    sync_data = handle_buffer + CHANNEL_HEADER_SIZE + \
+        handle_capacity * COMMAND_SIZE
+    qtest.write(sync_data, b"x")
+    qtest.write(handle_buffer + CHANNEL_HEADER_SIZE, b"".join(
+        make_command(generation, FS_WRITE, handle=handle,
+                     data_offset=sync_data - handle_buffer, data_length=1)
+        for handle in handles))
+    qtest.write32(handle_buffer + 36, 2 * handle_capacity)
+    qtest.write32(CHANNEL_APERTURE + 5 * 4096 + 0x20,
+                  2 * handle_capacity)
+    qtest.wait32(handle_buffer + 48, 2 * handle_capacity)
+    for index in range(handle_capacity):
+        command = qtest.read(
+            handle_buffer + CHANNEL_HEADER_SIZE + index * COMMAND_SIZE,
+            COMMAND_SIZE)
+        assert status(command) == STATUS_OK
+    qtest.write(handle_buffer + CHANNEL_HEADER_SIZE, b"".join(
+        make_command(generation, FS_SYNC, handle=handle)
+        for handle in handles))
+    qtest.write32(handle_buffer + 36, 3 * handle_capacity)
+    qtest.write32(CHANNEL_APERTURE + 5 * 4096 + 0x20,
+                  3 * handle_capacity)
+    qtest.wait32(handle_buffer + 48, 3 * handle_capacity)
+    for index in range(handle_capacity):
+        command = qtest.read(
+            handle_buffer + CHANNEL_HEADER_SIZE + index * COMMAND_SIZE,
+            COMMAND_SIZE)
+        assert status(command) == STATUS_OK
+    qtest.write(handle_buffer + CHANNEL_HEADER_SIZE, b"".join(
+        make_command(generation, FS_CLOSE, handle=handle)
+        for handle in handles))
+    qtest.write32(handle_buffer + 36, 4 * handle_capacity)
+    qtest.write32(CHANNEL_APERTURE + 5 * 4096 + 0x20,
+                  4 * handle_capacity)
+    qtest.wait32(handle_buffer + 48, 4 * handle_capacity)
+    for index in range(handle_capacity):
+        command = qtest.read(
+            handle_buffer + CHANNEL_HEADER_SIZE + index * COMMAND_SIZE,
+            COMMAND_SIZE)
+        assert status(command) == STATUS_OK
+    assert configure_channel(qtest, generation, 2, slot=5,
+                             channel_generation=10) == 0
 
     overlap_buffer = BUFFER + 0xC000
     overlap_capacity = 2

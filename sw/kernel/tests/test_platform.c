@@ -101,7 +101,7 @@ static void test_sticky_bus_fault_snapshot_and_acknowledge(void)
     registers->BUS_FAULT_STATUS =
         BUS_FAULT_VALID | BUS_FAULT_TIMEOUT | BUS_FAULT_DEVICE |
         BUS_FAULT_WRITE | (2u << BUS_FAULT_SIZE_SHIFT) |
-        (5u << BUS_FAULT_FC_SHIFT);
+        (5u << BUS_FAULT_TM_SHIFT);
     registers->BUS_FAULT_ADDRESS = 0xfff40020u;
     registers->BUS_FAULT_TARGET = BUS_FAULT_TARGET_USB;
     registers->BUS_FAULT_CYCLES_LO = 0x89abcdefu;

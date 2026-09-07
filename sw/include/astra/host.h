@@ -10,6 +10,7 @@
  * so hardware and software implementations use the same data plane.
  */
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <astra/message_abi.h>
@@ -22,15 +23,18 @@
 #define ASTRA_HOST_VERSION_1_1 UINT32_C(0x00010001)
 #define ASTRA_HOST_VERSION_1_2 UINT32_C(0x00010002)
 #define ASTRA_HOST_VERSION_1_3 UINT32_C(0x00010003)
-#define ASTRA_HOST_VERSION     UINT32_C(0x00010004)
+#define ASTRA_HOST_VERSION_1_4 UINT32_C(0x00010004)
+#define ASTRA_HOST_VERSION     UINT32_C(0x00010005)
 #define ASTRA_HOST_CAP_FILESYSTEM (1u << 0)
 #define ASTRA_HOST_CAP_OWNER_SCOPED (1u << 1)
 #define ASTRA_HOST_CAP_SUBMISSION_DESCRIPTOR (1u << 2)
 #define ASTRA_HOST_CAP_CHANNEL (1u << 3)
 #define ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ (1u << 4)
+#define ASTRA_HOST_CAP_METRICS (1u << 5)
 #define ASTRA_HOST_STATE_READY    (1u << 0)
 
 #define ASTRA_HOST_SERVICE_FILESYSTEM UINT16_C(1)
+#define ASTRA_HOST_SERVICE_METRICS UINT16_C(2)
 #define ASTRA_HOST_FS_PATH_MAX 192u
 
 enum {
@@ -53,13 +57,80 @@ enum {
 /* Flags carried in the command header in addition to ASTRA_VFS_OPEN_*. */
 #define ASTRA_HOST_FS_WRITE_APPEND (1u << 15)
 
+#define ASTRA_HOST_METRICS_SNAPSHOT UINT16_C(1)
+#define ASTRA_HOST_METRICS_VERSION UINT16_C(1)
+
+/*
+ * A point-in-time, read-only view of the work done below Astra's VFS. Values
+ * are append-only and indexed so this wire record can grow without exposing
+ * QEMU structures or host pointers. Each 64-bit value is split explicitly;
+ * the ABI is identical on the MC68040, Linux, and a future hardware bridge.
+ */
+enum {
+    ASTRA_HOST_METRIC_TIMESTAMP_NS = 0,
+    ASTRA_HOST_METRIC_BLOCK_READ_REQUESTS,
+    ASTRA_HOST_METRIC_BLOCK_READ_SECTORS,
+    ASTRA_HOST_METRIC_BLOCK_WRITE_REQUESTS,
+    ASTRA_HOST_METRIC_BLOCK_WRITE_SECTORS,
+    ASTRA_HOST_METRIC_BLOCK_FLUSH_REQUESTS,
+    ASTRA_HOST_METRIC_BLOCK_DURABILITY_TRANSITIONS,
+    ASTRA_HOST_METRIC_HOST_SUBMISSIONS,
+    ASTRA_HOST_METRIC_HOST_COMMANDS,
+    ASTRA_HOST_METRIC_HOST_EXECUTION_NS,
+    ASTRA_HOST_METRIC_HOST_INFLIGHT,
+    ASTRA_HOST_METRIC_HOST_MAX_INFLIGHT,
+    ASTRA_HOST_METRIC_FS_COUNT_BASE,
+    ASTRA_HOST_METRIC_FS_EXECUTION_NS_BASE =
+        ASTRA_HOST_METRIC_FS_COUNT_BASE + ASTRA_HOST_FS_SYMLINK + 1u,
+    ASTRA_HOST_METRIC_COUNT =
+        ASTRA_HOST_METRIC_FS_EXECUTION_NS_BASE +
+        ASTRA_HOST_FS_SYMLINK + 1u
+};
+
+typedef struct AstraHostMetricValue {
+    uint32_t hi;
+    uint32_t lo;
+} AstraHostMetricValue;
+
+#define ASTRA_HOST_METRICS_SNAPSHOT_SIZE 352u
+typedef struct AstraHostMetricsSnapshot {
+    _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t size;
+    uint16_t version;
+    uint16_t count;
+    uint32_t reserved[2];
+    AstraHostMetricValue values[ASTRA_HOST_METRIC_COUNT];
+} AstraHostMetricsSnapshot;
+
+_Static_assert(sizeof(AstraHostMetricsSnapshot) ==
+                   ASTRA_HOST_METRICS_SNAPSHOT_SIZE,
+               "host metrics snapshot ABI changed");
+
+static inline uint64_t
+astra_host_metric_value(const AstraHostMetricsSnapshot *snapshot,
+                        uint32_t metric)
+{
+    return snapshot != NULL && metric < snapshot->count ?
+        ((uint64_t)snapshot->values[metric].hi << 32) |
+            snapshot->values[metric].lo : 0u;
+}
+
+static inline void
+astra_host_metric_set(AstraHostMetricsSnapshot *snapshot, uint32_t metric,
+                      uint64_t value)
+{
+    if (snapshot == NULL || metric >= ASTRA_HOST_METRIC_COUNT)
+        return;
+    snapshot->values[metric].hi = (uint32_t)(value >> 32);
+    snapshot->values[metric].lo = (uint32_t)value;
+}
+
 #define ASTRA_HOST_COMMAND_VERSION 1u
 #define ASTRA_HOST_COMMAND_SIZE 512u
 
 /*
  * One filesystem command.  The paths match the VFS wire limit exactly; data
  * follows the command array inside the same DMA buffer.  Split 64-bit values
- * keep the layout identical on MC68030, Linux and a future RTL engine.
+ * keep the layout identical on MC68040, Linux and a future RTL engine.
  */
 typedef struct AstraHostCommand {
     _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t size;

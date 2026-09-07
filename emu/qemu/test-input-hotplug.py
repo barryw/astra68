@@ -3,6 +3,7 @@
 
 import importlib.util
 import pathlib
+from unittest import mock
 
 
 SOURCE = pathlib.Path(__file__).with_name("astra-input-hotplug.py")
@@ -95,14 +96,20 @@ def main():
         "query-cpus-fast": [{"cpu-index": 0, "thread-id": 102}],
     })
     affinities = []
-    priorities = []
     assert HOTPLUG.tune_runtime(
         qmp, task_ids=[100, 101, 102],
         set_affinity=lambda task, cpus: affinities.append((task, cpus)),
-        set_priority=lambda which, task, value:
-            priorities.append((which, task, value)), report=report)
-    assert affinities == [(100, {0}), (101, {0}), (102, {1})]
-    assert priorities == [(HOTPLUG.os.PRIO_PROCESS, 102, -10)]
+        report=report)
+    assert affinities == [(100, {3}), (101, {3}), (102, {2})]
+
+    affinities.clear()
+    with mock.patch.dict(HOTPLUG.os.environ,
+                         {"ASTRA_VCPU_CPU": "2", "ASTRA_IO_CPU": "3"}):
+        assert HOTPLUG.tune_runtime(
+            qmp, task_ids=[100, 101, 102],
+            set_affinity=lambda task, cpus: affinities.append((task, cpus)),
+            report=report)
+    assert affinities == [(100, {3}), (101, {3}), (102, {2})]
 
     qmp = FakeQmp(responses={"query-cpus-fast": []})
     assert not HOTPLUG.tune_runtime(qmp, task_ids=[], report=report)

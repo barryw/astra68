@@ -1,15 +1,16 @@
 # Astra68 QEMU TCG backend
 
-This directory contains the Astra-owned delta against QEMU 9.2.4.  It exists
-to run the unchanged Astra boot ROM and Axiom K1-K10 kernel suite through
-QEMU's native ARMv7 TCG backend on the Arty Z7-20.
+This directory contains the Astra-owned delta against QEMU 9.2.4. It runs the
+unchanged Astra boot ROM and Axiom K1-K10 kernel suite through QEMU's m68k TCG
+backend on the DE25-Nano's AArch64 Linux host. The Arty Z7-20 is the rollback
+platform.
 
 A QEMU result is accepted only when the exact ROM reaches the required kernel
-markers and the shared MC68030 PMMU/restart tests pass.
+markers and the native MC68040 MMU/restart tests pass.
 
 The initial overlay adds the physical machine map and device mechanisms.  The
-MC68030 PMMU target changes will be kept here as patches rather than depending
-on an untracked QEMU checkout on a build host.
+MC68040 target changes are kept here as patches rather than depending on an
+untracked QEMU checkout on a build host.
 
 The keyboard and pointer transport can be certified independently of the guest
 boot path:
@@ -65,15 +66,18 @@ counts, a flush carrying sectors, unaligned and out-of-range buffers, LBA past
 the media, a transfer crossing the end of the media, a zero request ID, and
 unknown flags.
 
-On the Arty, `run-arty.sh` starts QEMU once and holds an exclusive runtime
-lock. `astra-input-hotplug.py` watches stable udev keyboard and pointer paths
-and adds or removes QEMU `input-linux` objects through QMP. Linux autorepeat is
-suppressed; the Astra input service owns repeat policy. Attaching or removing a
-USB input device does not restart QEMU or the guest. The same reconciler pins
-the single TCG vCPU to CPU1 at nice -10 and QEMU's host I/O threads to CPU0;
-failure to apply this optional tuning leaves the guest running.
+On the active board, `run-arty.sh` starts QEMU once and holds an exclusive
+runtime lock. `astra-input-hotplug.py` watches stable udev keyboard and pointer
+paths and adds or removes QEMU `input-linux` objects through QMP. Linux
+autorepeat is suppressed; the Astra input service owns repeat policy. Attaching
+or removing a USB input device does not restart QEMU or the guest.
 
-CPU1 is the MC68030/PMMU execution core. CPU0 owns Linux device IRQs, QEMU
-coordination and I/O, and future host-backed audio and fixed-math workers.
-Those workers use preallocated queues and complete asynchronously; expensive
-mixing, synthesis, or math never executes synchronously on the vCPU thread.
+The DE25's measured topology assigns input and console-log helpers to Cortex-A55
+CPU0, the hardware display renderer to Cortex-A55 CPU1, the single TCG vCPU to
+Cortex-A76 CPU2, and QEMU main/AIO/filesystem threads to Cortex-A76 CPU3. New
+QEMU workers inherit CPU3. The whole service runs at nice -10. This keeps Linux
+device IRQs on CPU0 away from both QEMU cores and gives MC68040 execution the
+fastest physical core; moving the vCPU to an A55 cut its measured effective
+rate from about 72 MHz to about 36 MHz. Host-backed workers use preallocated
+queues and complete asynchronously, so expensive mixing, synthesis, or math
+never executes synchronously on the vCPU thread.

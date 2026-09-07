@@ -42,6 +42,8 @@ QMP_SOCKET=${ASTRA_QMP_SOCKET:-$RUN_ROOT/qmp.sock}
 CONSOLE_LOG=${ASTRA_CONSOLE_LOG:-$LOG_ROOT/qemu-console.log}
 PANIC_LOG=${ASTRA_PANIC_LOG:-$LOG_ROOT/panic-latest.log}
 MEMORY=${ASTRA_MEMORY:-128M}
+AUX_CPU=${ASTRA_AUX_CPU:-0}
+DISPLAY_CPU=${ASTRA_DISPLAY_CPU:-1}
 HOST_TIME_MIN=${ASTRA_HOST_TIME_MIN:-1735689600}
 case "$HOST_TIME_MIN" in
     ''|*[!0-9]*) echo "Astra host clock check is invalid" >&2; exit 1 ;;
@@ -66,6 +68,28 @@ if [ ! -r "$INPUT_HOTPLUG" ]; then
     echo "Astra input hotplug service not found: $INPUT_HOTPLUG" >&2
     exit 1
 fi
+case "$AUX_CPU" in
+    ''|*[!0-9]*) echo "Astra helper CPU assignments are invalid" >&2; exit 1 ;;
+esac
+case "$DISPLAY_CPU" in
+    ''|*[!0-9]*) echo "Astra helper CPU assignments are invalid" >&2; exit 1 ;;
+esac
+if [ "$AUX_CPU" = "$DISPLAY_CPU" ]; then
+    echo "Astra auxiliary and display CPUs must be distinct" >&2
+    exit 1
+fi
+if ! command -v taskset >/dev/null 2>&1; then
+    echo "Astra helper CPU assignment requires taskset" >&2
+    exit 1
+fi
+
+start_helper()
+{
+    helper_cpu=$1
+    shift
+    taskset -c "$helper_cpu" "$@" &
+    started_pid=$!
+}
 
 mkdir -p "$(dirname "$TEXT_PLANE")" "$(dirname "$QMP_SOCKET")" \
     "$(dirname "$PANIC_LOG")" "$HOSTFS_ROOT" "$STATE_ROOT"
@@ -94,8 +118,9 @@ fi
 rm -f "$QMP_SOCKET"
 dd if=/dev/zero of="$TEXT_PLANE" bs=4096 count=1 2>/dev/null
 dd if=/dev/zero of="$DISPLAY_MAILBOX" bs=4096 count=451 2>/dev/null
-"$TERMINAL_DISPLAY" "$TEXT_PLANE" "$DISPLAY_MAILBOX" &
-display_pid=$!
+start_helper "$DISPLAY_CPU" "$TERMINAL_DISPLAY" "$TEXT_PLANE" \
+    "$DISPLAY_MAILBOX"
+display_pid=$started_pid
 input_pid=
 qemu_pid=
 log_pid=
@@ -141,7 +166,7 @@ trap 'exit 143' TERM
 
 rm -f "$console_pipe"
 mkfifo "$console_pipe"
-tee "$CONSOLE_LOG" <"$console_pipe" &
+taskset -c "$AUX_CPU" tee "$CONSOLE_LOG" <"$console_pipe" &
 log_pid=$!
 env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
     ASTRA_DISPLAY_MAILBOX_PATH="$DISPLAY_MAILBOX" \
@@ -154,8 +179,8 @@ env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
     -qmp "unix:$QMP_SOCKET,server=on,wait=off" "$@" \
     >"$console_pipe" 2>&1 &
 qemu_pid=$!
-python3 "$INPUT_HOTPLUG" --qmp "$QMP_SOCKET" &
-input_pid=$!
+start_helper "$AUX_CPU" python3 "$INPUT_HOTPLUG" --qmp "$QMP_SOCKET"
+input_pid=$started_pid
 set +e
 wait "$qemu_pid"
 status=$?

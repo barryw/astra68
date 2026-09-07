@@ -323,6 +323,8 @@ analyze:
 	$(ANALYZER_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/vfs_port_transport.c -o build/analyzer/vfs_port_transport.o
 	$(ANALYZER_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/vfs_host_transport.c -o build/analyzer/vfs_host_transport.o
+	$(ANALYZER_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/vfs_process.c -o build/analyzer/vfs_process.o
 	$(ANALYZER_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/vfs_reader.c -o build/analyzer/vfs_reader.o

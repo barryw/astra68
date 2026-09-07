@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 import tempfile
 
+from qemu_runtime import qemu_environment
+
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location(
@@ -16,11 +18,15 @@ with tempfile.TemporaryDirectory() as temporary:
     qemu = root / "qemu" / "bin" / "qemu-system-m68k-astra"
     library = root / "qemu" / "lib"
     library.mkdir(parents=True)
-    environment = terminal.qemu_environment(
-        str(qemu), {"LD_LIBRARY_PATH": "/system/lib", "KEEP": "yes"})
+    hostfs = root / "hostfs"
+    environment = qemu_environment(
+        str(qemu), {"LD_LIBRARY_PATH": "/system/lib", "KEEP": "yes"},
+        str(hostfs))
     assert environment["LD_LIBRARY_PATH"] == \
         "%s:/system/lib" % os.path.realpath(library)
     assert environment["KEEP"] == "yes"
+    assert environment["ASTRA_HOSTFS_ROOT"] == str(hostfs)
+    assert hostfs.is_dir()
 
 
 class ExitedProcess:

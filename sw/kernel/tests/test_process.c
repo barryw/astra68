@@ -560,30 +560,24 @@ static void advance_quantum(void)
     scheduler_test_cycles += kernel_platform_quantum_cycles();
 }
 
-void kernel_pmmu_load_tc(const uint32_t *value)
+void kernel_pmmu_load_tc(uint32_t value)
 {
     (void)value;
 }
 
-void kernel_pmmu_load_srp(const KernelPmmuRootPointer *root)
+void kernel_pmmu_load_srp(uint32_t root)
 {
     (void)root;
 }
 
-void kernel_pmmu_load_crp(const KernelPmmuRootPointer *root)
+void kernel_pmmu_load_urp(uint32_t root)
 {
     (void)root;
     ++pmmu_crp_load_count;
 }
 
-void kernel_pmmu_load_tt0(const uint32_t *value)
+void kernel_pmmu_disable_transparent_translation(void)
 {
-    (void)value;
-}
-
-void kernel_pmmu_load_tt1(const uint32_t *value)
-{
-    (void)value;
 }
 
 void kernel_pmmu_read_tc(uint32_t *value)
@@ -591,17 +585,21 @@ void kernel_pmmu_read_tc(uint32_t *value)
     *value = 0u;
 }
 
-void kernel_pmmu_read_srp(KernelPmmuRootPointer *root)
+void kernel_pmmu_read_srp(uint32_t *root)
 {
-    *root = (KernelPmmuRootPointer){0};
+    *root = 0u;
 }
 
-void kernel_pmmu_read_crp(KernelPmmuRootPointer *root)
+void kernel_pmmu_read_urp(uint32_t *root)
 {
-    *root = (KernelPmmuRootPointer){0};
+    *root = 0u;
 }
 
 void kernel_pmmu_flush_all(void)
+{
+}
+
+void kernel_pmmu_flush_non_global(void)
 {
 }
 
@@ -1049,7 +1047,8 @@ void kernel_process_diagnostic_log(const KernelTraceUserRecord *record,
     last_diagnostic_message = record->message;
     last_diagnostic_length = length;
     assert(length <= ASTRA_EVENT_ARGUMENT_MAX);
-    memcpy(last_diagnostic_text, payload, length);
+    if (length != 0u)
+        memcpy(last_diagnostic_text, payload, length);
     last_diagnostic_text[length] = '\0';
 }
 
@@ -1083,8 +1082,8 @@ static void make_frame(uint8_t *frame, uint8_t format, uint16_t vector,
     put_be32(frame, 2u, pc);
     put_be16(frame, 6u,
              (uint16_t)((uint16_t)format << 12 | (vector << 2)));
-    if (format == 0xau || format == 0xbu)
-        put_be32(frame, 16u, fault_address);
+    if (format == 0x7u)
+        put_be32(frame, 20u, fault_address);
 }
 
 static void select_process(uint32_t process_id, uint32_t *registers,
@@ -1151,7 +1150,7 @@ static void initialize_test(void)
     info.flags = ASTRA_BOOT_REQUIRED_FLAGS;
     info.machine_id = 0x41363801u;
     info.hardware_build_id = 0x12345678u;
-    info.cpu_model = 0x00068030u;
+    info.cpu_model = 0x00068040u;
     info.cpu_implementation = 0x54474d32u;
     info.cpu_features = 0x0000000du;
     info.cpu_hz = 12500000u;
@@ -1765,7 +1764,7 @@ static void test_preemption_fault_containment_and_teardown(void)
                registers, sibling_thread.user_stack_top - 8u, frame,
                &next) == KERNEL_PROCESS_OK);
 
-    make_frame(frame, 0xau, 2u, KERNEL_PROCESS_CODE_BASE + 6u,
+    make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE + 6u,
                0x60000000u);
     registers[2] = 1u;
     assert(kernel_memory_stats(&before_fault));
@@ -2137,7 +2136,7 @@ static void test_soak_relaunches_only_after_exact_teardown(void)
             assert(next->data[0] == ASTRA_SYSCALL_OK);
         }
 
-        make_frame(frame, 0xau, 2u, KERNEL_PROCESS_CODE_BASE + 6u,
+        make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE + 6u,
                    0x60000000u);
         assert(kernel_memory_stats(&before_fault));
         assert(kernel_process_on_fault(registers,
@@ -2223,7 +2222,7 @@ static void test_soak_rejects_unexplained_frame_loss(void)
     assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
     select_process(offender_id, registers, frame, &next);
 
-    make_frame(frame, 0xau, 2u, KERNEL_PROCESS_CODE_BASE + 6u,
+    make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE + 6u,
                0x60000000u);
     assert(kernel_process_on_fault(registers,
                                    KERNEL_PROCESS_STACK_TOP - 32u, frame,
@@ -3442,7 +3441,7 @@ static void test_priority_selection_and_equal_priority_rotation(void)
     assert(stats.same_address_space_switches == 2u);
 }
 
-static void test_interrupt_wakeup_hands_off_to_equal_priority_thread(void)
+static void test_interrupt_wakeup_preserves_equal_priority_quantum(void)
 {
     static const uint8_t image[] = {0x4eu, 0x71u, 0x60u, 0xfcu};
     KernelCpuContext *next;
@@ -3475,9 +3474,9 @@ static void test_interrupt_wakeup_hands_off_to_equal_priority_thread(void)
                true, &next) == KERNEL_PROCESS_OK);
     assert(thread_id != 0u);
     assert(kernel_thread_snapshot(1u, &woken));
-    assert(woken.state == KERNEL_THREAD_RUNNING);
+    assert(woken.state == KERNEL_THREAD_READY);
     assert(kernel_process_stats(&stats));
-    assert(stats.wake_preemptions == 1u);
+    assert(stats.wake_preemptions == 0u);
 }
 
 static void test_per_process_thread_limit_is_bounded_and_reclaimable(void)
@@ -4317,7 +4316,7 @@ static void test_real_stack_oom_rolls_back_thread_create(void)
 
     attempts_before_fault = allocation_attempt_total();
     memset(registers, 0, sizeof(registers));
-    make_frame(frame, 0xau, 2u, KERNEL_PROCESS_CODE_BASE + 2u,
+    make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE + 2u,
                0x60000000u);
     assert(kernel_process_on_fault(registers,
                                    KERNEL_PROCESS_STACK_TOP - 32u, frame,
@@ -4392,7 +4391,7 @@ static void test_wait_multiple_syscall_contract_and_races(void)
                                    2u * sizeof(handles[0])) ==
            KERNEL_USER_COPY_OK);
 
-    /* A uint32_t array may have the MC68030 ABI's two-byte alignment. */
+    /* The m68k ABI permits two-byte alignment for uint32_t arrays. */
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_WAIT_MULTIPLE;
     registers[1] = wait_array_address + 2u;
@@ -5085,7 +5084,7 @@ static void test_process_fault_death_reports_peer_dead(void)
                                      &next) == KERNEL_PROCESS_OK);
 
     memset(registers, 0, sizeof(registers));
-    make_frame(frame, 0xau, 2u, KERNEL_PROCESS_CODE_BASE,
+    make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE,
                0x60000000u);
     assert(kernel_process_on_fault(registers, user_stack, frame,
                                    &next) == KERNEL_PROCESS_OK);
@@ -9088,7 +9087,7 @@ static void test_user_stack_grows_on_fault_and_guards_the_floor(void)
     /* One byte under the committed base: the ordinary case, one page. */
     memset(registers, 0, sizeof(registers));
     assert(kernel_memory_stats(&baseline));
-    make_frame(frame, 0xau, 2u, fault_pc, TEST_STACK_BASE(0) - 4u);
+    make_frame(frame, 0x7u, 2u, fault_pc, TEST_STACK_BASE(0) - 4u);
     assert(kernel_process_on_fault(registers, TEST_STACK_BASE(0) - 4u, frame,
                                    &next) == KERNEL_PROCESS_OK);
     assert(next != NULL);
@@ -9122,7 +9121,7 @@ static void test_user_stack_grows_on_fault_and_guards_the_floor(void)
      * between the address and what is held has to arrive at once -- a hole
      * would leave user_stack_base describing pages that are not mapped.
      */
-    make_frame(frame, 0xau, 2u, fault_pc,
+    make_frame(frame, 0x7u, 2u, fault_pc,
                TEST_STACK_BASE(0) - (4u * KERNEL_PAGE_SIZE) + 8u);
     assert(kernel_process_on_fault(registers, TEST_STACK_BASE(0) - 4u, frame,
                                    &next) == KERNEL_PROCESS_OK);
@@ -9150,7 +9149,7 @@ static void test_user_stack_grows_on_fault_and_guards_the_floor(void)
      * The floor is still a wall. This is the only process, so retiring it
      * leaves nothing runnable -- which is the answer, not an error.
      */
-    make_frame(frame, 0xau, 2u, fault_pc, TEST_STACK_FLOOR(0) - 4u);
+    make_frame(frame, 0x7u, 2u, fault_pc, TEST_STACK_FLOOR(0) - 4u);
     assert(kernel_process_on_fault(registers, TEST_STACK_FLOOR(0) - 4u, frame,
                                    &next) == KERNEL_PROCESS_NO_RUNNABLE);
     assert(kernel_process_snapshot(0u, &process));
@@ -9442,7 +9441,7 @@ static void test_fault_report_names_only_what_it_knows(void)
                                  &process_id) == KERNEL_PROCESS_OK);
     assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
 
-    make_frame(frame, 0xau, 2u, KERNEL_PROCESS_CODE_BASE + 6u, 0x60000000u);
+    make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE + 6u, 0x60000000u);
     assert(kernel_process_on_fault(registers, KERNEL_PROCESS_STACK_TOP - 8u,
                                    frame, &next) ==
            KERNEL_PROCESS_NO_RUNNABLE);
@@ -9459,7 +9458,7 @@ static void test_fault_report_names_only_what_it_knows(void)
     assert(kernel_process_create(image, sizeof(image), 0u, 0u,
                                  &process_id) == KERNEL_PROCESS_OK);
     assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
-    make_frame(frame, 0xau, 2u, KERNEL_PROCESS_CODE_BASE + 6u,
+    make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE + 6u,
                TEST_STACK_BASE(3));
     assert(kernel_process_on_fault(registers, KERNEL_PROCESS_STACK_TOP - 8u,
                                    frame, &next) ==
@@ -9552,7 +9551,7 @@ static void test_reserved_area_faults_in_through_the_exception_path(void)
      */
     assert(kernel_memory_stats(&baseline));
     memset(registers, 0, sizeof(registers));
-    make_frame(frame, 0xau, 2u, fault_pc,
+    make_frame(frame, 0x7u, 2u, fault_pc,
                area_base + 40u * KERNEL_PAGE_SIZE);
     assert(kernel_process_on_fault(registers, user_stack, frame, &next) ==
            KERNEL_PROCESS_OK);
@@ -9567,7 +9566,7 @@ static void test_reserved_area_faults_in_through_the_exception_path(void)
     assert(snapshot.committed_pages == KERNEL_AREA_COMMIT_CLUSTER_PAGES);
     assert(kernel_memory_stats(&after));
     assert(baseline.free_frames - after.free_frames ==
-           KERNEL_AREA_COMMIT_CLUSTER_PAGES + 1u);
+           KERNEL_AREA_COMMIT_CLUSTER_PAGES + 2u);
 
     /* Handing it back, through the syscall this time. */
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
@@ -9590,7 +9589,7 @@ static void test_reserved_area_faults_in_through_the_exception_path(void)
      * in, because reading hex will not tell anybody that.
      */
     memset(registers, 0, sizeof(registers));
-    make_frame(frame, 0xau, 2u, fault_pc,
+    make_frame(frame, 0x7u, 2u, fault_pc,
                KERNEL_VM_AREA_BASE +
                    (KERNEL_VM_AREA_SLOT_COUNT - 1u) *
                        KERNEL_VM_AREA_SLOT_SIZE);
@@ -9635,7 +9634,7 @@ static void test_private_memory_faults_in_through_the_exception_path(void)
     assert(after.free_frames == baseline.free_frames);
 
     memset(registers, 0, sizeof(registers));
-    make_frame(frame, 0xau, 2u, fault_pc, private_base + 17u);
+    make_frame(frame, 0x7u, 2u, fault_pc, private_base + 17u);
     assert(kernel_process_on_fault(registers, user_stack, frame, &next) ==
            KERNEL_PROCESS_OK);
     assert(next == kernel_process_current_context());
@@ -9644,7 +9643,7 @@ static void test_private_memory_faults_in_through_the_exception_path(void)
     assert(process.process_state == KERNEL_PROCESS_RUNNING);
     assert(fault_reports == 0u);
     assert(kernel_memory_stats(&after));
-    assert(after.free_frames + 2u == baseline.free_frames);
+    assert(after.free_frames + 3u == baseline.free_frames);
 
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
     memset(registers, 0, sizeof(registers));
@@ -9660,7 +9659,7 @@ static void test_private_memory_faults_in_through_the_exception_path(void)
 
     /* A private-window address not reserved by this process still dies. */
     memset(registers, 0, sizeof(registers));
-    make_frame(frame, 0xau, 2u, fault_pc,
+    make_frame(frame, 0x7u, 2u, fault_pc,
                KERNEL_VM_PRIVATE_END - KERNEL_PAGE_SIZE);
     assert(kernel_process_on_fault(registers, user_stack, frame, &next) ==
            KERNEL_PROCESS_NO_RUNNABLE);
@@ -9704,7 +9703,7 @@ static void test_process_clone_returns_twice_and_is_waitable(void)
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(next->data[1] == 0u && next->data[2] == 0u);
     memset(registers, 0, sizeof(registers));
-    make_frame(frame, 0xau, 2u, KERNEL_PROCESS_CODE_BASE + 2u,
+    make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE + 2u,
                KERNEL_PROCESS_DATA_BASE);
     assert(kernel_process_on_fault(registers, user_stack, frame,
                                    &next) == KERNEL_PROCESS_OK);
@@ -9775,6 +9774,40 @@ static void test_process_clone_rebinds_startup_identity(void)
            KERNEL_USER_COPY_OK);
     assert(capabilities[0].handle == next->data[4]);
     assert(capabilities[1].handle == next->data[5]);
+}
+
+static void test_process_clone_exhaustion_is_reported(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t parent_id;
+    KernelProcessStatus status;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &parent_id) == KERNEL_PROCESS_OK);
+    assert(parent_id != 0u);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+
+    for (uint32_t child = 1u; child < KERNEL_PROCESS_MAX; ++child) {
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_PROCESS_CLONE;
+        status = kernel_process_on_syscall(registers, user_stack, frame,
+                                           &next);
+        assert(status == KERNEL_PROCESS_OK);
+        assert(next != NULL && next->data[0] == ASTRA_SYSCALL_OK);
+    }
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_CLONE;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next != NULL &&
+           next->data[0] == ASTRA_SYSCALL_RESOURCE_LIMIT);
 }
 
 static void test_interval_timer_delivers_and_sigreturn_restores_context(void)
@@ -9861,7 +9894,7 @@ int main(void)
     test_input_batch_read_is_bounded_and_fault_atomic();
     test_private_irq_qualification_control();
     test_priority_selection_and_equal_priority_rotation();
-    test_interrupt_wakeup_hands_off_to_equal_priority_thread();
+    test_interrupt_wakeup_preserves_equal_priority_quantum();
     test_per_process_thread_limit_is_bounded_and_reclaimable();
     test_last_runnable_timed_wait_wakes_from_supervisor_idle();
     test_prestart_timer_cannot_consume_published_thread();
@@ -9906,6 +9939,7 @@ int main(void)
     test_private_memory_faults_in_through_the_exception_path();
     test_process_clone_returns_twice_and_is_waitable();
     test_process_clone_rebinds_startup_identity();
+    test_process_clone_exhaustion_is_reported();
     test_interval_timer_delivers_and_sigreturn_restores_context();
     test_any_process_may_emit_an_event();
     test_no_debug_surface_closes_only_the_console();

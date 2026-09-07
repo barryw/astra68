@@ -7,7 +7,7 @@ RAW_COMMAND_CAPACITY ?= 64
 RAW_ITERATIONS ?= 100000
 RAW_OPERATION ?= 0
 RAW_EXPECTED_STATUS ?= ASTRA_STATUS_UNSUPPORTED
-CFLAGS := -m68030 -msoft-float -O3 -ffreestanding -fno-builtin -nostdlib \
+CFLAGS := -m68040 -msoft-float -O3 -ffreestanding -fno-builtin -nostdlib \
 	-Wa,--noexecstack -Wall -Wextra -Werror -I../../sw/include
 LDFLAGS := -T ../../sw/boot/astra.ld -nostdlib -Wl,--build-id=none
 SOURCE := benchmark-host-channel-raw.c

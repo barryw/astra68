@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Aggregate QEMU -perfmap guest PCs into MC68030 source functions."""
+"""Aggregate QEMU -perfmap guest PCs into MC68040 source functions."""
 
 import argparse
 import re

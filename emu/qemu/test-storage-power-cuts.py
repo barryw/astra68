@@ -23,7 +23,7 @@ PROPERTY = "astra-block-durability-transitions"
 CUT_PROPERTY = "astra-block-power-cut-after"
 QEMU_ARGS = ("-icount", "shift=8,align=off,sleep=on")
 BLOCK_QUIET_SECONDS = 2.0
-PAYLOAD = "durable-data-68030"
+PAYLOAD = "durable-data-68040"
 PATH = "WORK:durability-cut.txt"
 WRITE = "posix --durability-gated %s %s" % (PATH, PAYLOAD)
 CHECK = "posix --durability-check %s %s" % (PATH, PAYLOAD)

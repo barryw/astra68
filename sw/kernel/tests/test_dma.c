@@ -31,7 +31,7 @@ static void initialize_memory(void)
     info.flags = ASTRA_BOOT_REQUIRED_FLAGS;
     info.machine_id = 0x41363801u;
     info.hardware_build_id = 0x12345678u;
-    info.cpu_model = 0x00068030u;
+    info.cpu_model = 0x00068040u;
     info.cpu_implementation = 0x54474d32u;
     info.cpu_features = 0x0000000du;
     info.cpu_hz = 12500000u;

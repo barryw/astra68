@@ -18,7 +18,7 @@
  * Every record is fixed-width, four-byte aligned, and explicit about its own
  * size, so a mismatched build is refused rather than misread. There are no
  * pointers, no bitfields, and no compiler-native enums: the encoding is
- * big-endian MC68030 today and must not acquire a host dependency.
+ * big-endian MC68040 and must not acquire a host dependency.
  *
  * Control records only. Inline I/O is deliberately smaller than the complete
  * message payload; bulk data uses shared areas. Version 3 adds bounded

@@ -235,7 +235,26 @@ _k1_survivor_image_entry:
 	cmpi.l  #KERNEL_QUALIFICATION_K6_EXIT_STATUS, %d2
 	bne     .Lmain_fail
 
-	| With no runnable peer, the supervisor timer expires the whole set.
+	move.l  KERNEL_QUALIFICATION_K6_THREAD_HANDLE_OFFSET(%a0), %d1
+	moveq   #ASTRA_SYSCALL_CLOSE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+
+	| Keep a lower-priority peer running across the bounded wait. The deadline
+	| must make this thread ready and preempt that peer; an idle expiration
+	| proves timeout handling, but it cannot prove deadline preemption.
+	move.l  #KERNEL_QUALIFICATION_CODE_BASE + \
+		(.Lk6_deadline_thread - _k1_survivor_image_start), %d1
+	move.l  #KERNEL_QUALIFICATION_K6_ARGUMENT, %d2
+	moveq   #KERNEL_QUALIFICATION_K6_THREAD_PRIORITY, %d3
+	moveq   #KERNEL_QUALIFICATION_THREAD_RIGHTS, %d4
+	moveq   #ASTRA_SYSCALL_THREAD_CREATE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	move.l  %d1, KERNEL_QUALIFICATION_K6_THREAD_HANDLE_OFFSET(%a0)
+
 	move.l  KERNEL_QUALIFICATION_SEMAPHORE_HANDLE_OFFSET(%a0), 4(%sp)
 	moveq   #ASTRA_SYSCALL_CLOCK_MONOTONIC, %d0
 	trap    #ASTRA_SYSCALL_TRAP
@@ -257,6 +276,15 @@ _k1_survivor_image_entry:
 	tst.l   %d2
 	bne     .Lmain_fail
 
+	move.l  KERNEL_QUALIFICATION_K6_THREAD_HANDLE_OFFSET(%a0), %d1
+	move.l  #ASTRA_DEADLINE_NONE_HI, %d2
+	moveq   #-1, %d3
+	moveq   #ASTRA_SYSCALL_WAIT_ONE, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lmain_fail
+	cmpi.l  #KERNEL_QUALIFICATION_K6_EXIT_STATUS, %d1
+	bne     .Lmain_fail
 	move.l  KERNEL_QUALIFICATION_K6_THREAD_HANDLE_OFFSET(%a0), %d1
 	moveq   #ASTRA_SYSCALL_CLOSE, %d0
 	trap    #ASTRA_SYSCALL_TRAP
@@ -935,6 +963,27 @@ _k1_survivor_image_entry:
 	move.l  #KERNEL_QUALIFICATION_PHASE_ERROR, \
 		KERNEL_QUALIFICATION_PHASE_OFFSET(%a0)
 	moveq   #ASTRA_SYSCALL_PROCESS_EXIT, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	bra     .Lk6_fail
+
+.Lk6_deadline_thread:
+	cmpi.l  #KERNEL_QUALIFICATION_K6_ARGUMENT, %d2
+	bne     .Lk6_fail
+	moveq   #ASTRA_SYSCALL_CLOCK_MONOTONIC, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lk6_fail
+	move.l  %d2, %d5
+.Lk6_deadline_spin:
+	moveq   #ASTRA_SYSCALL_CLOCK_MONOTONIC, %d0
+	trap    #ASTRA_SYSCALL_TRAP
+	tst.l   %d0
+	bne     .Lk6_fail
+	sub.l   %d5, %d2
+	cmpi.l  #KERNEL_QUALIFICATION_K6_SPIN_NS, %d2
+	blo     .Lk6_deadline_spin
+	move.l  #KERNEL_QUALIFICATION_K6_EXIT_STATUS, %d1
+	moveq   #ASTRA_SYSCALL_THREAD_EXIT, %d0
 	trap    #ASTRA_SYSCALL_TRAP
 	bra     .Lk6_fail
 

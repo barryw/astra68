@@ -54,73 +54,73 @@ $(BUNDLE_TOOL): FORCE
 $(GRAPHICS_STAMP): Graphics.kit/manifest $(GRAPHICS_LIBRARY) \
 		$(FONT_LIBRARY) $(BUNDLE_TOOL)
 	rm -rf $(GRAPHICS)
-	@mkdir -p $(GRAPHICS)/libraries/graphics.library/abi-1/1.3.0/m68k-68030
-	@mkdir -p $(GRAPHICS)/libraries/font.library/abi-1/1.0.0/m68k-68030
+	@mkdir -p $(GRAPHICS)/libraries/graphics.library/abi-1/1.3.0/m68k-68040
+	@mkdir -p $(GRAPHICS)/libraries/font.library/abi-1/1.0.0/m68k-68040
 	cp Graphics.kit/manifest $(GRAPHICS)/manifest
 	cp $(GRAPHICS_LIBRARY) \
-		$(GRAPHICS)/libraries/graphics.library/abi-1/1.3.0/m68k-68030/graphics.library
+		$(GRAPHICS)/libraries/graphics.library/abi-1/1.3.0/m68k-68040/graphics.library
 	cp $(FONT_LIBRARY) \
-		$(GRAPHICS)/libraries/font.library/abi-1/1.0.0/m68k-68030/font.library
+		$(GRAPHICS)/libraries/font.library/abi-1/1.0.0/m68k-68040/font.library
 	$(BUNDLE_TOOL) check $(GRAPHICS)
 	@touch $@
 
 $(FILESYSTEM_STAMP): Filesystem.kit/manifest $(FILESYSTEM_LIBRARY) \
 		$(BUNDLE_TOOL)
 	rm -rf $(FILESYSTEM)
-	@mkdir -p $(FILESYSTEM)/libraries/filesystem.library/abi-2/2.0.0/m68k-68030
+	@mkdir -p $(FILESYSTEM)/libraries/filesystem.library/abi-2/2.0.0/m68k-68040
 	cp Filesystem.kit/manifest $(FILESYSTEM)/manifest
 	cp $(FILESYSTEM_LIBRARY) \
-		$(FILESYSTEM)/libraries/filesystem.library/abi-2/2.0.0/m68k-68030/filesystem.library
+		$(FILESYSTEM)/libraries/filesystem.library/abi-2/2.0.0/m68k-68040/filesystem.library
 	$(BUNDLE_TOOL) check $(FILESYSTEM)
 	@touch $@
 
 $(INTERFACE_STAMP): Interface.kit/manifest $(INTERFACE_LIBRARY) \
 		$(INPUT_LIBRARY) $(BUNDLE_TOOL)
 	rm -rf $(INTERFACE)
-	@mkdir -p $(INTERFACE)/libraries/interface.library/abi-1/1.1.0/m68k-68030
-	@mkdir -p $(INTERFACE)/libraries/input.library/abi-1/1.0.0/m68k-68030
+	@mkdir -p $(INTERFACE)/libraries/interface.library/abi-1/1.1.0/m68k-68040
+	@mkdir -p $(INTERFACE)/libraries/input.library/abi-1/1.0.0/m68k-68040
 	cp Interface.kit/manifest $(INTERFACE)/manifest
 	cp $(INTERFACE_LIBRARY) \
-		$(INTERFACE)/libraries/interface.library/abi-1/1.1.0/m68k-68030/interface.library
+		$(INTERFACE)/libraries/interface.library/abi-1/1.1.0/m68k-68040/interface.library
 	cp $(INPUT_LIBRARY) \
-		$(INTERFACE)/libraries/input.library/abi-1/1.0.0/m68k-68030/input.library
+		$(INTERFACE)/libraries/input.library/abi-1/1.0.0/m68k-68040/input.library
 	$(BUNDLE_TOOL) check $(INTERFACE)
 	@touch $@
 
 $(EVENTS_STAMP): Events.kit/manifest $(EVENTS_LIBRARY) $(BUNDLE_TOOL)
 	rm -rf $(EVENTS)
-	@mkdir -p $(EVENTS)/libraries/events.library/abi-1/1.0.0/m68k-68030
+	@mkdir -p $(EVENTS)/libraries/events.library/abi-1/1.0.0/m68k-68040
 	cp Events.kit/manifest $(EVENTS)/manifest
 	cp $(EVENTS_LIBRARY) \
-		$(EVENTS)/libraries/events.library/abi-1/1.0.0/m68k-68030/events.library
+		$(EVENTS)/libraries/events.library/abi-1/1.0.0/m68k-68040/events.library
 	$(BUNDLE_TOOL) check $(EVENTS)
 	@touch $@
 
 $(MESSAGING_STAMP): Messaging.kit/manifest $(MESSAGING_LIBRARY) $(BUNDLE_TOOL)
 	rm -rf $(MESSAGING)
-	@mkdir -p $(MESSAGING)/libraries/messaging.library/abi-1/1.0.0/m68k-68030
+	@mkdir -p $(MESSAGING)/libraries/messaging.library/abi-1/1.0.0/m68k-68040
 	cp Messaging.kit/manifest $(MESSAGING)/manifest
 	cp $(MESSAGING_LIBRARY) \
-		$(MESSAGING)/libraries/messaging.library/abi-1/1.0.0/m68k-68030/messaging.library
+		$(MESSAGING)/libraries/messaging.library/abi-1/1.0.0/m68k-68040/messaging.library
 	$(BUNDLE_TOOL) check $(MESSAGING)
 	@touch $@
 
 $(NETWORK_STAMP): Network.kit/manifest $(NETWORK_LIBRARY) $(BUNDLE_TOOL)
 	rm -rf $(NETWORK)
-	@mkdir -p $(NETWORK)/libraries/network.library/abi-1/1.0.0/m68k-68030
+	@mkdir -p $(NETWORK)/libraries/network.library/abi-1/1.0.0/m68k-68040
 	cp Network.kit/manifest $(NETWORK)/manifest
 	cp $(NETWORK_LIBRARY) \
-		$(NETWORK)/libraries/network.library/abi-1/1.0.0/m68k-68030/network.library
+		$(NETWORK)/libraries/network.library/abi-1/1.0.0/m68k-68040/network.library
 	$(BUNDLE_TOOL) check $(NETWORK)
 	@touch $@
 
 $(CONFIGURATION_STAMP): Configuration.kit/manifest $(CONFIG_LIBRARY) \
 		$(BUNDLE_TOOL)
 	rm -rf $(CONFIGURATION)
-	@mkdir -p $(CONFIGURATION)/libraries/config.library/abi-1/1.0.0/m68k-68030
+	@mkdir -p $(CONFIGURATION)/libraries/config.library/abi-1/1.0.0/m68k-68040
 	cp Configuration.kit/manifest $(CONFIGURATION)/manifest
 	cp $(CONFIG_LIBRARY) \
-		$(CONFIGURATION)/libraries/config.library/abi-1/1.0.0/m68k-68030/config.library
+		$(CONFIGURATION)/libraries/config.library/abi-1/1.0.0/m68k-68040/config.library
 	$(BUNDLE_TOOL) check $(CONFIGURATION)
 	@touch $@
 

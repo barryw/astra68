@@ -77,7 +77,7 @@ if [ ! -f "$BUILD/build.ninja" ]; then
                     COMPILER_INCLUDE=$("$CROSS_PREFIX"gcc -print-file-name=include)
                     PKG_CONFIG_SYSROOT_DIR=$DE25_SYSROOT
                     PKG_CONFIG_LIBDIR=$DE25_SYSROOT/usr/lib/aarch64-linux-gnu/pkgconfig:$DE25_SYSROOT/usr/share/pkgconfig
-                    CPU_FLAGS='-mcpu=cortex-a55'
+                    CPU_FLAGS='-mcpu=cortex-a76'
                     ;;
             esac
             case "$PROFILE" in

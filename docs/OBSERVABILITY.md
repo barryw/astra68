@@ -1,7 +1,7 @@
 # Astra observability and namespace rules
 
-Status: metrics, user logging, and process introspection implemented;
-additional introspection trees remain planned
+Status: developer-visible metrics, user logging, and process introspection
+implemented; additional introspection trees remain planned
 
 This document exists because three requirements are architectural rather than
 features. Logging, introspection, and networking all fail the same way: if the
@@ -18,10 +18,34 @@ a name, a sampler function, and a context pointer. A reader asks the sampler to
 fill a bounded array of `(name, value)` pairs. No struct layout is shared
 between a module and its readers.
 
-That indirection is the whole point. The introspection filesystem, a terminal
-command, a log drain, and a test harness are all readers walking the same
-registry. None of them is special-cased into the modules, and a module never
-changes its accounting to stay readable.
+That indirection is the whole point. `METRICS:snapshot`, the `metrics` command,
+and host tests are readers walking the same registry. None of them is
+special-cased into the modules, and a module never changes its accounting to
+stay readable.
+
+`METRICS:` is separate from `PROC:` because the ownership is different.
+`PROC:` is the supervisor's generation-checked view of processes it owns.
+`METRICS:` is a read-only capability served by hostfs, which already owns the
+host-device channel and the primary VFS service whose counters it publishes.
+The terminal receives `METRICS:r`; programs which are not granted that mount
+cannot inspect it. Host-device authority never crosses into the terminal or a
+command.
+
+The current snapshot contains fixed, versioned `AstraMetricRecord` values for:
+
+- host block read, write, flush, sector, and durability-transition counts;
+- host-channel submissions, completions, execution time, current in-flight
+  requests, and maximum concurrency;
+- hostfs VFS requests, failures, protocol and ownership rejections, session
+  and file lifetimes, and peak resource use;
+- call counts and host execution time for every filesystem operation.
+
+Counters are cumulative. Taking two snapshots gives rates and deltas without
+putting clocks, formatting, logging, or a metrics-filesystem lock in the I/O
+hot path. The host snapshot itself is coherent; hostfs refreshes it once when
+`METRICS:snapshot` is opened and serves that cached generation until close.
+The generic fixed-record format means future owners can publish additional
+groups without teaching `metrics` their private layouts.
 
 Rules:
 
@@ -35,16 +59,16 @@ Rules:
   more than its capacity is discarded, not trusted.
 - The module supplies the sampler; the *owner* registers it under an instance
   name. One process with two block devices publishes two groups.
-- Durations use an injected clock and are counted in ticks. A service under
-  measurement supplies a real clock; a service in production may supply none
-  and pay nothing. When a cheap user-readable cycle counter exists it swaps in
-  behind the same injection point, and no module changes.
+- Durations use an injected clock and are counted in ticks. A native module
+  under measurement supplies a real clock; a production module may supply none
+  and pay nothing. The host channel reports nanoseconds already measured by
+  the host worker, so exposing them adds no guest hot-path timestamp.
 
 `AstraOpMetrics` is the standard shape for an operation class: calls, failures,
 units, ticks, maximum ticks. `units` is named per group — sectors for a block
 device, bytes for a transport, entries for a directory read.
 
-Measured cost on MC68030: the registry is 320 bytes of text and exactly 388
+Measured cost on MC68040: the registry is 320 bytes of text and exactly 388
 bytes of BSS. A sampler costs its module roughly 700 bytes, almost all of it
 the static sample-name strings. That is the price of being readable and it is
 paid per module, once.
@@ -69,15 +93,24 @@ The kernel monitor in `sw/kernel/monitor.c` stays what it is: the kernel's own
 debug console over FTDI and AstraHost SPI. It is not the user terminal, in the
 same way that a kernel console is not a tty.
 
+`tools/gdb-kernel-snapshot.py` adds `astra-kernel-snapshot` to GDB. Against a
+stopped physical guest it prints every live process and thread, saved user PC,
+wait registration, handle-to-object mapping, active port queue, and queued
+message. It also poison-scans each guarded kernel stack and reconciles that
+with the recorded low-water mark. It is the standard way to distinguish an
+idle system from a lost wakeup or a service blocked behind another endpoint,
+and to inspect production stack headroom without adding a diagnostic kernel ABI
+or application-specific probe.
+
 ## Introspection filesystem
 
-Astra exposes live process state as a filesystem, in the spirit of `/proc`.
+Astra exposes live process and system state as capability-backed filesystems,
+in the spirit of `/proc` without Unix's ambient visibility.
 
 It is not a special mechanism. `docs/STORAGE_AND_VFS.md` already defines one
 node-oriented handler contract with FAT/exFAT, a native writable volume, and
-RAM as handlers. The introspection handler is another handler implementing the
-same contract, with a synthetic tree whose leaves are rendered from the metric
-registry, the trace ring, and per-process kernel state.
+RAM as handlers. Each introspection handler implements the same contract, with
+synthetic leaves rendered from its owner's metric registry or process state.
 
 This imposes one requirement on the VFS handler contract, which must be
 honoured when the contract is written rather than retrofitted:
@@ -151,8 +184,8 @@ The result keeps `ps`, `top`, and `kill` exactly as familiar as they should be,
 without granting every process the ability to inspect every other one by
 default.
 
-How much history and which additional trees live beside `PROC:` remain open.
-The constraint that matters now is that no special case is needed to add them.
+History and trace publication remain open. System and service counters already
+live at `METRICS:` rather than being forced into the process tree.
 
 ## Networking is not a later layer
 
@@ -174,18 +207,18 @@ contract is written:
   must be reachable by name and readable through the same introspection surface
   as everything else.
 
-No networking code exists yet, and none is warranted until storage and a
-terminal work. These three rules cost nothing today and are expensive to
-retrofit.
+The network service, Network Kit, POSIX socket layer, `ping`, `ntp`, and `ntpd`
+now use these rules. They remain the constraints for future transports rather
+than a plan for a subsystem that does not exist.
 
 ## Performance is evidence, not intent
 
 Every retained piece reports its own numbers, and those numbers are recorded
 where the piece is documented. The existing baselines follow this pattern:
 block facade at 84 ns average read and 74 ns average write on the host memory
-backend; allocator at 1,270 bytes of MC68030 text carrying lwext4's full
+backend; allocator at 1,270 bytes of MC68040 text carrying lwext4's full
 workload with zero failures against a 151,936-byte arena.
 
 A new implementation fails its gate if it silently regresses average or tail
-latency, throughput, MC68030 cycles, copies, or memory. Threshold changes
+latency, throughput, MC68040 cycles, copies, or memory. Threshold changes
 require a recorded explanation, never an updated expected number.

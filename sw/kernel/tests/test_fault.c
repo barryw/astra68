@@ -33,13 +33,23 @@ bool kernel_platform_bus_fault_read(KernelPlatformBusFault *fault)
 
 static KernelExceptionFrame make_frame(uint16_t special_status)
 {
+    static const uint8_t normalized_sizes[] = {2u, 0u, 1u, 3u};
     KernelExceptionFrame frame = {0};
+    uint8_t transfer_mode = (uint8_t)(special_status & 0x0007u);
 
     frame.fault_address = 0x40001234u;
     frame.vector_offset = 0x0008u;
     frame.special_status = special_status;
-    frame.format = 0xbu;
+    frame.format = 0x7u;
     frame.access_fault = 1u;
+    frame.access_write =
+        (special_status & 0x0100u) == 0u ? 1u : 0u;
+    frame.access_data =
+        (transfer_mode & 0x03u) == 0x01u ? 1u : 0u;
+    frame.access_transfer_mode = transfer_mode;
+    frame.access_supervisor =
+        (frame.access_transfer_mode & 4u) != 0u ? 1u : 0u;
+    frame.access_size = normalized_sizes[(special_status >> 5) & 3u];
     return frame;
 }
 
@@ -76,7 +86,7 @@ static void test_pmmu_and_invalid_classification(void)
     assert(report.kind == KERNEL_FAULT_PMMU_TRANSLATION);
     assert(report.write == 0u && report.bus_record_present == 0u);
 
-    frame = make_frame(0x0101u);
+    frame = make_frame(0x0021u);
     assert(kernel_fault_classify(&frame, KERNEL_VM_MAPPING_READ_ONLY,
                                  0x02010234u, NULL, &report));
     assert(report.kind == KERNEL_FAULT_PMMU_PROTECTION);
@@ -90,12 +100,12 @@ static void test_pmmu_and_invalid_classification(void)
 
 static void test_matching_physical_classes(void)
 {
-    KernelExceptionFrame frame = make_frame(0x0105u);
+    KernelExceptionFrame frame = make_frame(0x0025u);
     KernelPlatformBusFault bus;
     KernelFaultReport report;
 
     bus = make_bus(BUS_FAULT_TIMEOUT | BUS_FAULT_DEVICE |
-                   BUS_FAULT_WRITE | (5u << BUS_FAULT_FC_SHIFT));
+                   BUS_FAULT_WRITE | (5u << BUS_FAULT_TM_SHIFT));
     assert(kernel_fault_classify(&frame, KERNEL_VM_MAPPING_READ_WRITE,
                                  bus.address, &bus, &report));
     assert(report.kind == KERNEL_FAULT_PHYSICAL_TIMEOUT);
@@ -107,18 +117,18 @@ static void test_matching_physical_classes(void)
     assert(report.bus_timeout_cycles == 2048u);
 
     bus = make_bus(BUS_FAULT_UNMAPPED | BUS_FAULT_WRITE |
-                   (5u << BUS_FAULT_FC_SHIFT));
+                   (5u << BUS_FAULT_TM_SHIFT));
     assert(kernel_fault_classify(&frame, KERNEL_VM_MAPPING_READ_WRITE,
                                  bus.address, &bus, &report));
     assert(report.kind == KERNEL_FAULT_PHYSICAL_UNMAPPED);
 
     bus = make_bus(BUS_FAULT_DEVICE | BUS_FAULT_WRITE |
-                   (5u << BUS_FAULT_FC_SHIFT));
+                   (5u << BUS_FAULT_TM_SHIFT));
     assert(kernel_fault_classify(&frame, KERNEL_VM_MAPPING_READ_WRITE,
                                  bus.address, &bus, &report));
     assert(report.kind == KERNEL_FAULT_PHYSICAL_DEVICE);
 
-    bus = make_bus(BUS_FAULT_WRITE | (5u << BUS_FAULT_FC_SHIFT));
+    bus = make_bus(BUS_FAULT_WRITE | (5u << BUS_FAULT_TM_SHIFT));
     assert(kernel_fault_classify(&frame, KERNEL_VM_MAPPING_READ_WRITE,
                                  bus.address, &bus, &report));
     assert(report.kind == KERNEL_FAULT_PHYSICAL_EXTERNAL);
@@ -126,10 +136,10 @@ static void test_matching_physical_classes(void)
 
 static void test_stale_record_never_overrides_pmmu(void)
 {
-    KernelExceptionFrame frame = make_frame(0x0105u);
+    KernelExceptionFrame frame = make_frame(0x0025u);
     KernelPlatformBusFault bus = make_bus(
         BUS_FAULT_DEVICE | BUS_FAULT_WRITE |
-        (5u << BUS_FAULT_FC_SHIFT));
+        (5u << BUS_FAULT_TM_SHIFT));
     KernelFaultReport report;
 
     bus.address += 4u;
@@ -148,7 +158,7 @@ static void test_stale_record_never_overrides_pmmu(void)
     assert(report.bus_record_matched == 0u);
 
     bus.status = BUS_FAULT_VALID | BUS_FAULT_DEVICE |
-                 BUS_FAULT_WRITE | (1u << BUS_FAULT_FC_SHIFT);
+                 BUS_FAULT_WRITE | (1u << BUS_FAULT_TM_SHIFT);
     assert(kernel_fault_classify(&frame, KERNEL_VM_MAPPING_READ_WRITE,
                                  bus.address, &bus, &report));
     assert(report.kind == KERNEL_FAULT_KERNEL_BUG);
@@ -157,7 +167,7 @@ static void test_stale_record_never_overrides_pmmu(void)
 
     bus.status = BUS_FAULT_VALID | BUS_FAULT_DEVICE |
                  BUS_FAULT_WRITE | (2u << BUS_FAULT_SIZE_SHIFT) |
-                 (5u << BUS_FAULT_FC_SHIFT);
+                 (5u << BUS_FAULT_TM_SHIFT);
     assert(kernel_fault_classify(&frame, KERNEL_VM_MAPPING_READ_WRITE,
                                  bus.address, &bus, &report));
     assert(report.kind == KERNEL_FAULT_KERNEL_BUG);
@@ -167,23 +177,23 @@ static void test_stale_record_never_overrides_pmmu(void)
 
 static void test_runtime_capture_uses_ssw_function_code(void)
 {
-    KernelExceptionFrame frame = make_frame(0x0105u);
+    KernelExceptionFrame frame = make_frame(0x0025u);
     KernelFaultReport report;
 
     simulated_mapping = KERNEL_VM_MAPPING_READ_WRITE;
     simulated_physical = 0x02010234u;
     simulated_bus_present = true;
     simulated_bus = make_bus(BUS_FAULT_DEVICE | BUS_FAULT_WRITE |
-                             (5u << BUS_FAULT_FC_SHIFT));
+                             (5u << BUS_FAULT_TM_SHIFT));
     observed_supervisor_translation = false;
     assert(kernel_fault_capture(&frame, &report));
     assert(observed_supervisor_translation);
     assert(report.kind == KERNEL_FAULT_PHYSICAL_DEVICE);
 
-    frame.special_status = 0x0101u;
+    frame = make_frame(0x0021u);
     simulated_bus.status = BUS_FAULT_VALID | BUS_FAULT_DEVICE |
                            BUS_FAULT_WRITE |
-                           (1u << BUS_FAULT_FC_SHIFT);
+                           (1u << BUS_FAULT_TM_SHIFT);
     observed_supervisor_translation = true;
     assert(kernel_fault_capture(&frame, &report));
     assert(!observed_supervisor_translation);

@@ -90,9 +90,9 @@ static void make_access_frame(uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE],
     memset(frame, 0, KERNEL_EXCEPTION_FRAME_MAX_SIZE);
     astra_store_be16(frame, status_register);
     astra_store_be32(frame + 2u, 0x02011000u);
-    astra_store_be16(frame + 6u, 0xb008u);
-    astra_store_be16(frame + 10u, special_status);
-    astra_store_be32(frame + 16u, fault_address);
+    astra_store_be16(frame + 6u, 0x7008u);
+    astra_store_be16(frame + 12u, special_status);
+    astra_store_be32(frame + 20u, fault_address);
 }
 
 static void reset_fakes(void)
@@ -891,6 +891,29 @@ static void test_last_runnable_wakeup_before_idle_resumes_user(void)
     assert(idle_resume_calls == 1u);
 }
 
+static void test_syscall_contract_panic_records_cause(void)
+{
+    uint32_t registers[15] = {0u};
+    uint8_t frame[8];
+
+    reset_fakes();
+    syscall_result = KERNEL_PROCESS_RESOURCE_LIMIT;
+    registers[0] = ASTRA_SYSCALL_HOST_CHANNEL_WAIT;
+    make_frame(frame, 0x0000u, ASTRA_SYSCALL_VECTOR * 4u);
+    panic_expected = true;
+    if (setjmp(panic_jump) == 0)
+        (void)kernel_syscall_entry_dispatch(registers, frame, 0x70000f80u);
+    panic_expected = false;
+
+    assert(observed_trace_count == 1u);
+    assert(observed_trace[0].event == KERNEL_TRACE_EVENT_SYSCALL_EXIT);
+    assert(observed_trace[0].flags == KERNEL_TRACE_LEVEL_ERROR);
+    assert(observed_trace[0].argument[0] == ASTRA_SYSCALL_HOST_CHANNEL_WAIT);
+    assert(observed_trace[0].argument[1] == KERNEL_PROCESS_RESOURCE_LIMIT);
+    assert(observed_trace[0].argument[2] == 0u);
+    assert(observed_trace[0].argument[3] == 1u);
+}
+
 int main(void)
 {
     test_supervisor_copy_recovers_only_pmmu_fault();
@@ -918,6 +941,7 @@ int main(void)
     test_shared_ipc_uses_dedicated_metrics();
     test_last_runnable_block_enters_kernel_idle();
     test_last_runnable_wakeup_before_idle_resumes_user();
+    test_syscall_contract_panic_records_cause();
     puts("dispatch tests passed");
     return 0;
 }

@@ -56,6 +56,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import astra_image
+from qemu_runtime import qemu_environment
 
 # RAM the gate boots with. A module global so --memory can prove that the
 # machine works at a size other than the one it was written against.
@@ -93,7 +94,7 @@ PROMPT = "WORK:>"
 BANNER = "COMMANDS"
 POSIX_COMMAND = 'posix -R +42 --cmd "set number" -- WORK:notes.txt'
 DURABILITY_COMMAND = (
-    "posix --durability WORK:durability-cut.txt durable-data-68030")
+    "posix --durability WORK:durability-cut.txt durable-data-68040")
 
 SCRIPT = [
     # `mkdir` is silent on success. The diagnostic event is the completion
@@ -220,6 +221,11 @@ SCRIPT = [
     # init, the desktop, this dynamically launched Terminal, and ps itself.
     ("ps", ("ROM:supervisor", "SERVICES:desktop", "APPS:Terminal.app",
             "COMMANDS:ps")),
+    # System counters are a capability-backed filesystem view, not a QMP-only
+    # diagnostic. This proves an ordinary Astra program can read the host
+    # channel and the VFS service accounting through METRICS:.
+    ("metrics", ("host.channel.commands ", "hostfs.vfs.requests ",
+                 "host.fs.open.calls ")),
     # This used to have to be last, because the check that followed SCRIPT
     # reread the rendered screen and needed this line's output to still be on
     # it -- thirty rows of terminal, and five commands' worth of listings were
@@ -236,7 +242,7 @@ SCRIPT = [
     ("echo $?", "0"),
     (DURABILITY_COMMAND,
      ("ASTRA DURABILITY SYNCED", "ASTRA DURABILITY PASS")),
-    ("posix --durability-check WORK:durability-cut.txt durable-data-68030",
+    ("posix --durability-check WORK:durability-cut.txt durable-data-68040",
      "ASTRA DURABILITY EXACT"),
     # Stock Lua, including the shared POSIX paths it depends on rather than a
     # command-private compatibility layer.
@@ -309,7 +315,7 @@ VIM_LUA_FILE = "vim-created.lua"
 # The shell does not print that any more -- a status is `$?` -- so a command
 # with no output has nothing to wait for, and the baseline was reset here on
 # commands that answer. The numbers below are therefore not comparable with
-# the ones in HANDOVER-launch-latency.md before 2026-08-19.
+# the pre-2026-08-19 compatibility aliases.
 PERFORMANCE_SCRIPT = [
     ("hello", "hello from picolibc"),
     ("echo one", "one"),
@@ -481,18 +487,6 @@ class Qmp:
             self.button(False)
 
 
-def qemu_environment(qemu, environment=None):
-    environment = (os.environ if environment is None else environment).copy()
-    private_lib = os.path.realpath(
-        os.path.join(os.path.dirname(qemu), "..", "lib"))
-    if os.path.isdir(private_lib):
-        existing = environment.get("LD_LIBRARY_PATH")
-        environment["LD_LIBRARY_PATH"] = (
-            private_lib if not existing else "%s:%s" % (private_lib,
-                                                        existing))
-    return environment
-
-
 class Machine:
     def __init__(self, qemu, rom, image, socket_directory, extra_args=(),
                  hostfs_root=None):
@@ -514,11 +508,9 @@ class Machine:
                     "-qmp", "unix:%s,server=on,wait=off" % self.qmp_path] +
                    list(extra_args) +
                    ["-drive", "if=none,format=raw,file=%s" % image])
-        environment = qemu_environment(qemu)
-        hostfs_root = hostfs_root or environment.get(
+        hostfs_root = hostfs_root or os.environ.get(
             "ASTRA_HOSTFS_ROOT", os.path.join(socket_directory, "hostfs"))
-        os.makedirs(hostfs_root, exist_ok=True)
-        environment["ASTRA_HOSTFS_ROOT"] = hostfs_root
+        environment = qemu_environment(qemu, hostfs_root=hostfs_root)
         self.process = subprocess.Popen(
             command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1, env=environment)

@@ -7,17 +7,17 @@
 <h1 align="center">Astra 68</h1>
 
 <p align="center">
-  <strong>A modern fantasy MC68030 computer, accelerated graphics platform,
+  <strong>A modern fantasy MC68040 computer, accelerated graphics platform,
   and operating system built from first principles.</strong>
 </p>
 
 <p align="center">
   <img alt="Status: active development"
        src="https://img.shields.io/badge/status-active%20development-f59e0b">
-  <img alt="CPU: MC68030 and PMMU"
-       src="https://img.shields.io/badge/CPU-MC68030%20%2B%20PMMU-22d3ee">
-  <img alt="Hardware: Arty Z7-20"
-       src="https://img.shields.io/badge/hardware-Arty%20Z7--20-8b5cf6">
+  <img alt="CPU: MC68040 and MMU"
+       src="https://img.shields.io/badge/CPU-MC68040%20%2B%20MMU-22d3ee">
+  <img alt="Hardware: DE25-Nano"
+       src="https://img.shields.io/badge/hardware-DE25--Nano-8b5cf6">
   <img alt="Display: 1280 by 720 at 60 Hz"
        src="https://img.shields.io/badge/display-1280%C3%97720p60-10b981">
 </p>
@@ -39,13 +39,13 @@ system is **Astra OS**.
 
 ## What works today
 
-- Axiom reaches its K1-K10 protected-kernel milestones with MC68030 PMMU,
+- Axiom reaches its K1-K10 protected-kernel milestones with the MC68040 MMU,
   process and thread separation, preemptive scheduling, bounded IPC and waits,
   handles and rights, shared areas, fault containment, memory pressure
   handling, device infrastructure, tracing, panic output, and performance
   gates.
-- The Arty's 512 MiB DDR is divided into 128 MiB of Astra guest RAM, 128 MiB of
-  graphics RAM, and 256 MiB for Linux and host services.
+- The DE25 has separate 1 GiB LPDDR4 banks for the HPS and graphics. Astra uses
+  128 MiB of cached HPS memory; the FPGA owns the separate graphics bank.
 - The hardware-qualified 1280x720p60 graphics path includes RGB565/XRGB8888/
   INDEX8 framebuffers, two independently scrolling tile layers, 64 INDEX8
   sprites up to 128x128, sixteen per-sprite palette banks, alpha and opacity,
@@ -58,7 +58,7 @@ system is **Astra OS**.
   scaling, reflection, keying, MASK1, palette attachments, source-over,
   opacity, all sixteen ROPs, and supported format conversion. Its 200 MHz
   timing and integrated hardware release gates are still open.
-- The Astra QEMU backend runs the active Arty machine and is the only emulator.
+- The Astra QEMU backend runs on the active DE25 and is the only emulator.
 
 ## Direction
 
@@ -91,26 +91,27 @@ Astra applications and system services
                  |
           Axiom protected kernel
                  |
-        MC68030 + PMMU environment
+         MC68040 + MMU environment
                  |
      bounded MMIO and shared command rings
                  |
    FPGA display, sprites, tiles, and render engines
 ```
 
-The active machine runs the MC68030/PMMU environment in QEMU TCG on the Arty
-Z7-20 processing system and uses the FPGA fabric for graphics and peripherals.
-QEMU is the only CPU implementation in this repository.
+The active machine runs the MC68040/MMU environment in QEMU TCG on the
+DE25-Nano HPS and uses the FPGA fabric for graphics and peripherals. QEMU is
+the only CPU implementation in this repository.
 
 ## Repository map
 
 | Path | Contents |
 |---|---|
 | [`docs/`](docs/) | Architecture, ABI, status, budgets, and measured timing records |
-| [`sw/kernel/`](sw/kernel/) | Axiom MC68030 kernel and host-side state-machine tests |
+| [`sw/kernel/`](sw/kernel/) | Axiom MC68040 kernel and host-side state-machine tests |
 | [`sw/boot/`](sw/boot/) | Boot ROM, splash assets, loaders, and boot contracts |
 | [`ndk/`](ndk/) | Public Astra developer interfaces and generated documentation |
-| [`fpga/arty/`](fpga/arty/) | Active Zynq/Arty hardware, Linux integration, and graphics RTL |
+| [`fpga/de25/`](fpga/de25/) | Active Agilex/DE25 hardware and Linux integration |
+| [`fpga/arty/`](fpga/arty/) | Retained rollback-platform integration and graphics sources |
 | [`emu/qemu/`](emu/qemu/) | The Astra QEMU machine backend |
 | [`third_party/`](third_party/) | Vendored upstream components with their original notices |
 
@@ -123,7 +124,7 @@ host-side entry points are:
 # Axiom host tests
 make -C sw/kernel test
 
-# Emulator for the host, the desktop, or the Arty board
+# Emulator for the host, the desktop, or the DE25 board
 emu/qemu/build.sh host
 
 # Directed active-graphics RTL suite (requires Icarus Verilog)
@@ -141,7 +142,7 @@ and [Arty graphics](fpga/arty/graphics/README.md) for focused setup.
 
 ## Engineering rules
 
-- Motorola MC68030 behavior is authoritative; implementation shortcuts do not
+- Motorola MC68040 behavior is authoritative; implementation shortcuts do not
   define a new CPU dialect.
 - Bounded latency, predictable memory use, failure isolation, and measurable
   performance take priority over feature count.

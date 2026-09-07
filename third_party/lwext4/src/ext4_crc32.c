@@ -383,7 +383,7 @@ uint32_t ext4_crc32c(uint32_t crc, const void *buf, uint32_t size)
 	/*
 	 * Slicing-by-4 for the reflected Castagnoli polynomial.  These tables are
 	 * derived from crc32c_tab[0] by repeatedly applying its byte recurrence.
-	 * Byte loads keep this correct and fast on unaligned big-endian MC68030
+	 * Byte loads keep this correct and fast on unaligned big-endian MC68040
 	 * buffers without an endian conversion or alignment branch.
 	 */
 	while (p != end) {

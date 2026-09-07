@@ -27,7 +27,7 @@ have meant committing to a Linux personality in the kernel.
   right home for.
 * `scripts/cross-m68k-astra.txt` — **added** for the Astra CPU/float ABI.
   Upstream's `cross-m68k-linux-gnu.txt` targets `-march=68020` with the
-  toolchain's default float ABI; Astra builds `-m68030 -msoft-float`. A libc
+  toolchain's default float ABI; Astra builds `-m68040 -msoft-float`. A libc
   built for a different float ABI links without a complaint and returns wrong
   answers, so this is a file rather than a flag somebody remembers to pass.
 
@@ -46,7 +46,8 @@ listed above so they cannot disappear into an installed sysroot.
 
     mk/build-picolibc.sh
 
-which configures out of tree and installs to `~/picolibc-astra` by default. The
+which configures out of tree and installs to the compiler's reported Astra
+sysroot by default. The
 options that are not upstream defaults, and why:
 
 | option | why |

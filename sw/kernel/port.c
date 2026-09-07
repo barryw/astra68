@@ -92,6 +92,24 @@ _Static_assert(sizeof(KernelPortMessage) <=
 _Static_assert(sizeof(ports) + sizeof(messages) <= 1024u * 1024u,
                "message-port fixed pool exceeds its share of TABLES");
 
+static void reset_message_metadata(KernelPortMessage *message,
+                                   uint32_t generation, uint8_t state)
+{
+    /*
+     * Payload and detached slots are bounded by size and handle_count and are
+     * overwritten before publication.  Clearing the entire 1,096-byte record
+     * on both claim and release made a 36-byte send pay for 2,192 bytes while
+     * exposing no additional state to a receiver.
+     */
+    message->generation = generation;
+    message->sender = 0u;
+    message->next = KERNEL_PORT_SLOT_NONE;
+    message->size = 0u;
+    message->port_slot = KERNEL_PORT_SLOT_NONE;
+    message->handle_count = 0u;
+    message->state = state;
+}
+
 static uint16_t port_slot(const KernelPort *port)
 {
     return (uint16_t)(port - &ports[0]);
@@ -193,11 +211,8 @@ static KernelPortStatus allocate_message(uint32_t owner,
         return KERNEL_PORT_CORRUPT;
     }
     generation = kernel_generation_next(message->generation);
-    kernel_bytes_clear(message, sizeof(*message));
-    message->generation = generation;
-    message->next = KERNEL_PORT_SLOT_NONE;
-    message->port_slot = KERNEL_PORT_SLOT_NONE;
-    message->state = KERNEL_PORT_MESSAGE_RESERVED;
+    reset_message_metadata(message, generation,
+                           KERNEL_PORT_MESSAGE_RESERVED);
     *result = message;
     return KERNEL_PORT_OK;
 }
@@ -213,11 +228,7 @@ static void free_message(KernelPortMessage *message)
         return;
     }
     generation = message->generation;
-    kernel_bytes_clear(message, sizeof(*message));
-    message->generation = generation;
-    message->next = KERNEL_PORT_SLOT_NONE;
-    message->port_slot = KERNEL_PORT_SLOT_NONE;
-    message->state = KERNEL_PORT_MESSAGE_FREE;
+    reset_message_metadata(message, generation, KERNEL_PORT_MESSAGE_FREE);
     if (kernel_object_cache_release(&message_cache, message) !=
         KERNEL_OBJECT_CACHE_OK)
         pool_corrupt = 1u;

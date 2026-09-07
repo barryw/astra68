@@ -8,7 +8,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define KERNEL_AREA_MAX KERNEL_VM_AREA_SLOT_COUNT
+#define KERNEL_AREA_MAX \
+    (KERNEL_VM_ADDRESS_SPACE_MAX * KERNEL_AREA_OWNER_MAX)
 /*
  * Four was one short of what a terminal in a window needs: its own surface,
  * and a transfer area for each mount it reads through. It ran out between
@@ -38,21 +39,21 @@
  * transfer areas and an editor is refused a buffer it should have had. At
  * 4096 the owner's frames are bounded by the address space it was already
  * allowed to name, and what actually refuses is
- * KERNEL_AREA_SYSTEM_PAGE_MAX -- 16384 pages, half the machine -- and then
- * the free frame count, which are the honest limits.
+ * KERNEL_AREA_SYSTEM_PAGE_MAX and then the free frame count, which are the
+ * honest limits.
  */
 #define KERNEL_AREA_OWNER_PAGE_MAX \
     (KERNEL_AREA_OWNER_MAX * KERNEL_AREA_PAGE_MAX)
 #define KERNEL_AREA_SYSTEM_PAGE_MAX (KERNEL_AREA_MAX * KERNEL_AREA_PAGE_MAX)
 /*
- * Every area slot, aliased into every process. Bounded by the process count
- * rather than by the frame ledger's alias ceiling: the ledger says what one
- * frame can bear, this says how many mappings can exist at once.
+ * Every address space may fill every process-local area slot. The mapping
+ * table records those independent placements; the frame ledger separately
+ * bounds how many address spaces may alias one committed page.
  */
 #define KERNEL_AREA_MAPPING_MAX \
-    (KERNEL_AREA_MAX * KERNEL_VM_ADDRESS_SPACE_MAX)
+    (KERNEL_VM_AREA_SLOT_COUNT * KERNEL_VM_ADDRESS_SPACE_MAX)
 /* One address space can use every area slot; the VM layout is the quota. */
-#define KERNEL_AREA_PROCESS_MAPPING_MAX KERNEL_AREA_MAX
+#define KERNEL_AREA_PROCESS_MAPPING_MAX KERNEL_VM_AREA_SLOT_COUNT
 
 #define KERNEL_AREA_RIGHTS \
     ((1u << 0) | (1u << 1) | (1u << 2) | (1u << 5) | (1u << 6))
@@ -71,7 +72,7 @@
 
 /*
  * How much a fault commits. One page would be correct and slow: on a 30 MHz
- * 68030 the frame push, the handler entry, the table walk and the ATC fill
+ * 68040 the frame push, the handler entry, the table walk and the ATC fill
  * around a fault cost far more than clearing the pages themselves, so the
  * fault is the expensive part and it should be amortised. Sixteen pages is
  * 64 KiB, which is the order of magnitude the argument gives rather than a
@@ -104,7 +105,6 @@ typedef struct KernelAreaSnapshot {
     uint32_t frame_owner;
     uint32_t generation;
     uint32_t byte_size;
-    uint32_t virtual_base;
     uint32_t terminal_result;
     uint16_t handle_references;
     uint16_t child_references;
@@ -180,6 +180,9 @@ KernelAreaStatus kernel_area_map(KernelArea *area, uint32_t process_id,
                                  uint32_t permissions,
                                  uint32_t *virtual_base,
                                  uint32_t *byte_size);
+KernelAreaStatus kernel_area_clone_process(
+    uint32_t source_process_id, const KernelAddressSpace *source_space,
+    uint32_t destination_process_id, KernelAddressSpace *destination_space);
 KernelAreaStatus kernel_area_unmap(uint32_t process_id,
                                    KernelAddressSpace *space,
                                    uint32_t virtual_base);

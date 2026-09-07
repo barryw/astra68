@@ -36,9 +36,9 @@ static void make_fault(uint8_t *raw, uint32_t pc, uint32_t address,
     memset(raw, 0, KERNEL_EXCEPTION_FRAME_MAX_SIZE);
     astra_store_be16(raw, 0x2000u);
     astra_store_be32(raw + 2u, pc);
-    astra_store_be16(raw + 6u, 0xb008u);
-    astra_store_be16(raw + 10u, ssw);
-    astra_store_be32(raw + 16u, address);
+    astra_store_be16(raw + 6u, 0x7008u);
+    astra_store_be16(raw + 12u, ssw);
+    astra_store_be32(raw + 20u, address);
 }
 
 static void test_checked_wrappers(void)
@@ -86,28 +86,28 @@ static void test_precise_fault_recovery(void)
          KERNEL_USER_COPY_TO_USER}
     };
 
-    make_fault(raw, 0x02011000u, 0x10001fffu, 0x0141u);
+    make_fault(raw, 0x02011000u, 0x10001fffu, 0x0501u);
     assert(kernel_user_copy_recover_frame(
         raw, sizeof(raw), &scope, sites, 2u));
     assert(kernel_exception_decode(raw, sizeof(raw), &frame) ==
            KERNEL_EXCEPTION_OK);
     assert(frame.program_counter == 0x02011080u);
 
-    make_fault(raw, 0x02011000u, 0x10002000u, 0x0141u);
+    make_fault(raw, 0x02011000u, 0x10002000u, 0x0501u);
     assert(!kernel_user_copy_recover_frame(
         raw, sizeof(raw), &scope, sites, 2u));
-    make_fault(raw, 0x02011000u, 0x10001fffu, 0x0101u);
+    make_fault(raw, 0x02011000u, 0x10001fffu, 0x0401u);
     assert(!kernel_user_copy_recover_frame(
         raw, sizeof(raw), &scope, sites, 2u));
-    make_fault(raw, 0x02011010u, 0x10001fffu, 0x0141u);
+    make_fault(raw, 0x02011010u, 0x10001fffu, 0x0501u);
     assert(!kernel_user_copy_recover_frame(
         raw, sizeof(raw), &scope, sites, 2u));
-    make_fault(raw, 0x02011000u, 0x10001fffu, 0x0145u);
+    make_fault(raw, 0x02011000u, 0x10001fffu, 0x0505u);
     assert(!kernel_user_copy_recover_frame(
         raw, sizeof(raw), &scope, sites, 2u));
 
     scope.direction = KERNEL_USER_COPY_TO_USER;
-    make_fault(raw, 0x02012004u, 0x10001000u, 0x0101u);
+    make_fault(raw, 0x02012004u, 0x10001000u, 0x0401u);
     assert(kernel_user_copy_recover_frame(
         raw, sizeof(raw), &scope, sites, 2u));
     scope.active = 0u;

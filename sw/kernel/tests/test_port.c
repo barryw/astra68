@@ -153,6 +153,43 @@ static void test_fifo_capacity_and_peer_drain(void)
     assert(kernel_port_pool_valid());
 }
 
+static void test_reused_message_slot_exposes_only_new_payload(void)
+{
+    KernelHandleTable source;
+    KernelHandleTable destination;
+    KernelPortReceipt receipt;
+    KernelPort *port;
+    uint8_t first[40];
+    uint8_t second[32];
+    uint8_t replacement[24];
+    uint32_t woken;
+
+    initialize_test();
+    kernel_handle_table_init(&source);
+    kernel_handle_table_init(&destination);
+    make_message(first, sizeof(first), 0x11u);
+    make_message(second, sizeof(second), 0x51u);
+    make_message(replacement, sizeof(replacement), 0xa1u);
+    assert(kernel_port_create(1u, 3u, 96u, &port) == KERNEL_PORT_OK);
+    assert(kernel_port_send(port, &source, first, sizeof(first), NULL, 0u,
+                            &woken) == KERNEL_PORT_OK);
+    assert(kernel_port_send(port, &source, second, sizeof(second), NULL, 0u,
+                            &woken) == KERNEL_PORT_OK);
+    receive_and_commit(port, &destination, first, sizeof(first), 0u,
+                       &receipt);
+
+    /* The released first slot is reused while its old successor is live. */
+    assert(kernel_port_send(port, &source, replacement,
+                            sizeof(replacement), NULL, 0u,
+                            &woken) == KERNEL_PORT_OK);
+    receive_and_commit(port, &destination, second, sizeof(second), 0u,
+                       &receipt);
+    receive_and_commit(port, &destination, replacement,
+                       sizeof(replacement), 0u, &receipt);
+    release_port(port);
+    assert(kernel_port_pool_valid());
+}
+
 static void test_allocation_injection_preserves_queue(void)
 {
     KernelAllocationStats message_allocation;
@@ -710,6 +747,7 @@ int main(void)
 {
     test_allocation_injection_preserves_queue();
     test_fifo_capacity_and_peer_drain();
+    test_reused_message_slot_exposes_only_new_payload();
     test_atomic_handle_move_cancel_and_commit();
     test_failed_send_leaves_source_authority();
     test_receive_capacity_and_destination_full();

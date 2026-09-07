@@ -82,7 +82,8 @@ PROVIDER_INDEX_MAX = 192
 DISPLAY_STARTUP_MANIFEST = (
     "service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
     "serves SYS:r required\n"
-    "service SERVICES:hostfs grants HOST_DEVICE serves WORK:rw required\n"
+    "service SERVICES:hostfs grants HOST_DEVICE "
+    "serves WORK:rw METRICS:r required\n"
     "service SERVICES:network grants NETWORK_DEVICE NETWORK_IRQ "
     "serves NETWORK NETWORK_LISTEN required\n"
     "service SERVICES:ntpd grants CLOCK CONFIG:r LIBS:r NETWORK "
@@ -379,7 +380,7 @@ def _providers(bundles):
                                        (manifest, line.strip()))
                 key = (name, abi)
                 if key not in found or version > found[key][0]:
-                    relative = "libraries/%s/abi-%u/%s/m68k-68030/%s" % (
+                    relative = "libraries/%s/abi-%u/%s/m68k-68040/%s" % (
                         name, abi, fields[3], name)
                     image = os.path.join(bundle, relative)
                     with open(image, "rb") as library:
@@ -392,7 +393,7 @@ def _providers(bundles):
                         "ascii")
                     if (header[0] != 0x414c4942 or header[1:3] != (1, 128) or
                             header[3:6] != version or header[6] != abi or
-                            header[8] != 0 or header[9] != 0x4d303330 or
+                            header[8] != 0 or header[9] != 0x4d303430 or
                             header[11] != 0x00f00000 or actual_name != name):
                         raise RuntimeError("library identity disagrees with %s" %
                                            manifest)

@@ -4,7 +4,7 @@
 # big-endian defect patches applied in tree, so this rig no longer points at an
 # external checkout and no longer applies patches. What it does now is keep the
 # vendored tree honest: it builds the same port, the same build profile and the
-# same bounded allocator the MC68030 service ships, as a Linux user-mode m68k
+# same bounded allocator the MC68040 service ships, as a Linux user-mode m68k
 # binary, and runs the storage suite's own mount test under qemu-m68k against a
 # real mke2fs image that e2fsck then judges.
 #
@@ -43,7 +43,7 @@ CPPFLAGS := -I$(STORAGE)/tests -I$(LWEXT4)/include -I$(STORAGE)/port/include \
 	-I$(USERSPACE)/runtime/include -I$(ALLOC_DIR)/include \
 	-DCONFIG_USE_DEFAULT_CFG=0
 COMMON_FLAGS := -std=gnu11 -O2 -g -fno-strict-aliasing
-TARGET_FLAGS := -static -m68030
+TARGET_FLAGS := -static -m68040
 SIZE_FLAGS := -std=gnu11 -Os $(ASTRA_TARGET_ABI_FLAGS) -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections
 

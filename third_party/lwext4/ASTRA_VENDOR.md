@@ -101,7 +101,7 @@ for a future upstream bump.
 | `0014-readlink-lock-recursion.patch` | `src/ext4.c:1759`, `src/ext4.c:2798` | `ext4_readlink` held the exclusive mount lock and called public `ext4_fread`, which recursively acquired the read lock and aborted or deadlocked. The shared read body now has an already-locked entry used by `readlink`, while public reads retain their read-lock wrapper. |
 | `0015-atomic-sparse-truncate-extension.patch` | `src/ext4.c:1674`, `src/ext4.c:2045` | Growing `ext4_ftruncate` returned success without changing the inode. Astra's backend compensated with repeated 64-byte writes, making one truncate slow and non-atomic. lwext4 now grows the inode inside its existing transaction, zeroes any previously allocated partial tail block, keeps whole-block gaps sparse, preserves the file position, timestamps size changes, and leaves the backend with one shared call. The patch also removes an erroneous unlock from the already-unlocked failure path and fixes `fwrite`/`ftruncate` access checks that tested `flags & O_RDONLY` even though `O_RDONLY` is zero. |
 | `0016-write-into-sparse-hole.patch` | `src/ext4_fs.c:1473` | The non-extent implementation ignored the create half of `ext4_fs_init_inode_dblk_idx`, so a write inside a sparse hole passed physical block zero into the cache and aborted while releasing it. It now allocates the requested logical block, zeroes it before publishing its inode mapping, and returns the real physical block. |
-| `0017-slicing-by-4-crc32c.patch` | `src/ext4_crc32.c:107`, `src/ext4_crc32.c:378` | Metadata and journal CRC32C was the hottest guest loop in the rename profile. The shared implementation now consumes four bytes per iteration with slicing-by-4 tables, retains byte loads for unaligned big-endian buffers, and uses a pointer bound so the MC68030 loop does not recompute the remaining word count on every iteration. |
+| `0017-slicing-by-4-crc32c.patch` | `src/ext4_crc32.c:107`, `src/ext4_crc32.c:378` | Metadata and journal CRC32C was the hottest guest loop in the rename profile. The shared implementation now consumes four bytes per iteration with slicing-by-4 tables, retains byte loads for unaligned big-endian buffers, and uses a pointer bound so the MC68040 loop does not recompute the remaining word count on every iteration. |
 | `0018-create-final-component-only.patch` | `src/ext4.c:1020` | Upstream interpreted `O_CREAT` as permission to manufacture every missing path component as a directory. File creation now creates only the final component, matching POSIX and the VFS backend contract; a missing parent returns `ENOENT`. |
 
 Defect 0003 is invisible against lwext4's own `mkfs`, which leaves
@@ -153,7 +153,7 @@ and leave the image clean under independent `e2fsck`.
 
 Patch 0017 is checked against an independent bitwise CRC32C oracle across
 unaligned offsets and lengths plus the standard `123456789` vector. The
-generated MC68030 loop was inspected before and after the pointer-bound change;
+generated MC68040 loop was inspected before and after the pointer-bound change;
 the retained version removes the per-iteration subtract and shift. In the
 single-client rename workload that refinement moved the identical seed from
 441 to 448 operations per second without changing physical I/O.
@@ -192,7 +192,7 @@ cd third_party/lwext4 && for p in astra/patches/*.patch; do patch -p1 -N < "$p";
 The focused verification commands are:
 
 ```sh
-# freestanding MC68030 library, host port tests, sanitizers, analyzer
+# freestanding MC68040 library, host port tests, sanitizers, analyzer
 cd sw/userspace/storage && make test && make sanitize && make analyze && make all
 
 # big-endian regression against this vendored tree (Beast: needs

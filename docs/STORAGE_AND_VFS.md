@@ -241,7 +241,7 @@ constrains it.
 `sw/userspace/storage/lwext4-eval` now measures both of the recorded risks on
 2026-08-04 instead of assuming them. Big-endian is not merely untested: lwext4
 never derives `CONFIG_BIG_ENDIAN` itself, no upstream build sets it, and on a
-big-endian MC68030 the unpatched library aborts on rename and cannot mount an
+big-endian MC68040 the unpatched library aborts on rename and cannot mount an
 `mke2fs`-created ext4 volume at all. Three one-line defects account for all
 observed failures: a raw `dentry->inode` read in `ext4_create_hardlink`, a
 `to_le32()` applied to the one-byte `s_checksum_type`, and the on-disk
@@ -266,14 +266,14 @@ could be flipped later without revisiting the import. The cost is on the
 record: indirect block mapping, and no on-disk home for POSIX ACLs or security
 labels.
 
-Measured costs. MC68030 object text for the shipped profile is 63,934 bytes
+Measured costs. MC68040 object text for the shipped profile is 63,934 bytes
 with `m68k-elf-gcc` 13 and 73,568 bytes with `m68k-elf-gcc` 16.1, both with
 4,652 bytes of BSS — the spread is the toolchain, not the profile, and the
 number is only meaningful when quoted with its compiler. The whole filesystem
 stack — lwext4, the port, the block facade, the bounded allocator and the
-runtime — links to 82,936 bytes of MC68030 text.
+runtime — links to 82,936 bytes of MC68040 text.
 
-Allocation shape, measured on big-endian MC68030 under `qemu-m68k` against a
+Allocation shape, measured on big-endian MC68040 under `qemu-m68k` against a
 16 MiB volume through the shipped port: 9,394 allocations, 888 simultaneously
 live blocks, a 126,400-byte peak charge, nothing live at unmount. It is not a
 heap workload: 855 live 33..64-byte descriptors and exactly
@@ -292,7 +292,7 @@ block — so a host measurement must never be used to size it.
 ### What actually drives the filesystem's memory demand
 
 It is the **journal size**, not the volume size. Measured on big-endian
-MC68030 across volumes from 16 MiB to 1 TiB:
+MC68040 across volumes from 16 MiB to 1 TiB:
 
 | Journal | 33..64-byte descriptors live at peak |
 |---|---:|
@@ -308,7 +308,7 @@ why the effect looks like volume scaling until it is measured directly.
 The frozen profile therefore **pins the journal at 4 MiB** rather than letting
 `mke2fs` derive it, which would give a 20 GB card a 128 MiB one. The larger
 reason is not memory but recovery: replay after an unclean shutdown is
-proportional to outstanding journal content, and on a 12.5 MHz 68030 behind an
+proportional to outstanding journal content, and on a 12.5 MHz 68040 behind an
 SD card a 128 MiB journal bounds worst-case boot delay 32 times worse than a
 4 MiB one. That cost is not yet measured on hardware — QEMU's cycle counter is
 TCG bookkeeping and neither block backend has realistic timing — but its shape

@@ -61,7 +61,7 @@ static int kit_payload(const char *path, const AstraBundleLibrary *library)
     char payload[PATH_MAX];
     struct stat info;
     int count = snprintf(relative, sizeof(relative),
-                         "libraries/%s/abi-%u/%u.%u.%u/m68k-68030/%s",
+                         "libraries/%s/abi-%u/%u.%u.%u/m68k-68040/%s",
                          library->name, library->abi, library->version.major,
                          library->version.minor, library->version.patch,
                          library->name);

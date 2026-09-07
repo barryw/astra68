@@ -138,20 +138,21 @@ def synchronize(qmp_path, attached, desired, client=QmpClient, report=print):
         qmp.close()
 
 
-def tune_runtime(qmp, task_ids=None, set_affinity=None,
-                 set_priority=None, report=print):
-    """Keep the single TCG vCPU off the Linux device/IRQ core."""
+def tune_runtime(qmp, task_ids=None, set_affinity=None, report=print):
+    """Give the TCG vCPU and QEMU host work separate physical cores."""
     if (os.cpu_count() or 1) < 2:
         return True
     try:
+        vcpu_cpu = int(os.environ.get("ASTRA_VCPU_CPU", "2"))
+        io_cpu = int(os.environ.get("ASTRA_IO_CPU", "3"))
+        if vcpu_cpu < 0 or io_cpu < 0 or vcpu_cpu == io_cpu:
+            raise ValueError("runtime CPU assignments must be distinct and nonnegative")
         cpus = qmp.execute("query-cpus-fast")
         vcpu_tasks = {int(cpu["thread-id"]) for cpu in cpus}
         if not vcpu_tasks:
             raise QmpError("QEMU reported no vCPU thread")
         if set_affinity is None:
             set_affinity = os.sched_setaffinity
-        if set_priority is None:
-            set_priority = os.setpriority
         if task_ids is None:
             first = next(iter(vcpu_tasks))
             with open(f"/proc/{first}/status", encoding="ascii") as status:
@@ -160,14 +161,13 @@ def tune_runtime(qmp, task_ids=None, set_affinity=None,
             task_ids = [int(os.path.basename(path)) for path in
                         glob.glob(f"/proc/{tgid}/task/*")]
         for task_id in task_ids:
-            set_affinity(task_id, {1} if task_id in vcpu_tasks else {0})
-        for task_id in vcpu_tasks:
-            set_priority(os.PRIO_PROCESS, task_id, -10)
+            set_affinity(task_id,
+                         {vcpu_cpu} if task_id in vcpu_tasks else {io_cpu})
     except (KeyError, OSError, QmpError, StopIteration, TypeError,
             ValueError) as error:
         report(f"Astra runtime tuning unavailable: {error}", file=sys.stderr)
         return False
-    report("Astra runtime: vCPU on CPU1, host I/O on CPU0")
+    report(f"Astra runtime: vCPU on CPU{vcpu_cpu}, host I/O on CPU{io_cpu}")
     return True
 
 

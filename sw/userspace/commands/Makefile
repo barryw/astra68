@@ -61,7 +61,7 @@ PICOLIBC_LIB := $(PICOLIBC)/lib/libc.a
 PICOLIBC_MATH := $(PICOLIBC)/lib/libm.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0-hosted.o
 
-COMMANDS := status events devices which hello ls ps cat mkdir rm posix \
+COMMANDS := status events devices which hello ls ps metrics cat mkdir rm posix \
             heapbench fsstress date echo ntp ping lua cxx vim
 NATIVE_COMMANDS := $(filter-out lua cxx vim,$(COMMANDS))
 ANALYZER_OBJECTS := $(patsubst %,build/analyzer/%.o,$(NATIVE_COMMANDS)) \

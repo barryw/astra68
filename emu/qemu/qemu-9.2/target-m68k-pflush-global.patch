@@ -1,0 +1,45 @@
+diff --git a/target/m68k/cpu.h b/target/m68k/cpu.h
+index 7f3a3e7..fb3f9a1 100644
+--- a/target/m68k/cpu.h
++++ b/target/m68k/cpu.h
+@@ -132,6 +132,7 @@ typedef struct CPUArchState {
+         bool fault;
+         uint32_t ttr[4];
+         uint32_t mmusr;
++        bool supervisor_tlb_has_nonglobal;
+     } mmu;
+ 
+     /* Control registers.  */
+diff --git a/target/m68k/helper.c b/target/m68k/helper.c
+index aa1319a..86090bd 100644
+--- a/target/m68k/helper.c
++++ b/target/m68k/helper.c
+@@ -891,6 +891,10 @@ static int get_physical_address(CPUM68KState *env, hwaddr *physical,
+             return -1;
+         }
+     }
++    if ((access_type & (ACCESS_SUPER | ACCESS_DEBUG)) == ACCESS_SUPER &&
++        !(next & M68K_DESC_GLOBAL)) {
++        env->mmu.supervisor_tlb_has_nonglobal = true;
++    }
+ 
+     return 0;
+ 
+@@ -1503,10 +1507,15 @@ void HELPER(pflush)(CPUM68KState *env, uint32_t addr, uint32_t opmode)
+         tlb_flush_page(cs, addr);
+         break;
+     case 2: /* Flush all except global entries */
+-        tlb_flush(cs);
++        if (env->mmu.supervisor_tlb_has_nonglobal) {
++            tlb_flush_by_mmuidx(cs, 1u << MMU_KERNEL_IDX);
++            env->mmu.supervisor_tlb_has_nonglobal = false;
++        }
++        tlb_flush_by_mmuidx(cs, 1u << MMU_USER_IDX);
+         break;
+     case 3: /* Flush all entries */
+         tlb_flush(cs);
++        env->mmu.supervisor_tlb_has_nonglobal = false;
+         break;
+     }
+ }
+ 

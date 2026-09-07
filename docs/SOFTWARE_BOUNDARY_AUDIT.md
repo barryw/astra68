@@ -78,7 +78,7 @@ coverage:
   so source synchronization cannot replace a remote build with a stale local
   binary or generated splash payload.
 
-The Axiom hot-path changes were checked in generated MC68030 code. The shared
+The Axiom hot-path changes were checked in generated MC68040 code. The shared
 64-bit bit helper and compiler barrier are inlined, introduce no helper calls,
 and do not pull in `__ashldi3`. The one intentionally forced-inline saturating
 IRQ increment remains measured policy, not a blanket inline convention.
@@ -124,16 +124,16 @@ These are visible gaps, not silent acceptance:
 All target builds ran on Beast from the synchronized workspace:
 
 - clean full userspace behavior matrix, ASan/UBSan matrix, analyzer matrix,
-  and MC68030 build: pass;
+  and MC68040 build: pass;
 - commands built standalone from clean owner and NDK state, including Lua
   5.5.1 and the 2,157,012-byte stripped Vim file: pass;
 - all six services built standalone from clean owner and NDK state: pass;
 - NDK host tests, ASan/UBSan, analyzer, normal archive, and PIC archive: pass;
-- complete Axiom host suite plus MC68030 `all verify`: pass; final kernel
+- complete Axiom host suite plus MC68040 `all verify`: pass; final kernel
   payload is 155,320 bytes;
 - firmware LZ4 test, 46 Python payload/layout tests, complete ROM build, and firmware
   verification: pass;
-- focused storage tests, ASan/UBSan, analyzer, and MC68030 build after lwext4
+- focused storage tests, ASan/UBSan, analyzer, and MC68040 build after lwext4
   patch 0013: pass with the prior unused-variable warning removed;
 - transactional streaming rollback, sparse-offset, source-ownership, and VFS
   reader tests: pass; the complete 73-command QEMU gate passes Lua, POSIX, and

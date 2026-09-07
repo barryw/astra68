@@ -14,9 +14,10 @@ $(BUNDLE_TOOL): FORCE
 	$(MAKE) -C ../../../tools all
 
 $(STAMP): $(MANIFEST) $(TERMINAL) $(ICON_TOOL) $(BUNDLE_TOOL)
-	@mkdir -p $(BUNDLE)/bin/m68k-68030 $(BUNDLE)/resources
+	rm -rf $(BUNDLE)
+	@mkdir -p $(BUNDLE)/bin/m68k-68040 $(BUNDLE)/resources
 	cp $(MANIFEST) $(BUNDLE)/manifest
-	cp $(TERMINAL) $(BUNDLE)/bin/m68k-68030/Terminal
+	cp $(TERMINAL) $(BUNDLE)/bin/m68k-68040/Terminal
 	python3 $(ICON_TOOL) $(BUNDLE)/resources/Terminal.aicon
 	$(BUNDLE_TOOL) check $(BUNDLE)
 	@touch $@

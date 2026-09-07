@@ -13,7 +13,7 @@ for namespace, media, persistence, resource, and block-device behavior.
 
 One slow filesystem request must not stop unrelated filesystem work.
 
-On Astra's single MC68030, concurrency means several requests may be in
+On Astra's single MC68040, concurrency means several requests may be in
 progress while only one thread executes instructions at an instant. When one
 request waits for block I/O or a filesystem lock, another ready request can
 use the CPU. This is useful without SMP and is the behavior early single-CPU
@@ -393,7 +393,7 @@ A is stalled in a cold read, cached B finishes before A is released with no
 device call, and a second cold A remains asleep then returns identical data.
 The one 4 KiB fill is exactly the two physical calls required by the configured
 four-sector transfer cap; the peer adds none. Normal, partitioned, ASan/UBSan,
-TSan, and MC68030 builds pass on Beast.
+TSan, and MC68040 builds pass on Beast.
 
 The independent image checker exposed an older checksum-ordering defect while
 this gate was being made real: indexed-directory initialization wrote the empty
@@ -422,14 +422,14 @@ cache capacity retain the direct path instead of using a guessed cutoff.
 
 The retained 12 KiB oracle performs a cold contiguous read and an immediate
 seek/reread, verifies identical bytes, and requires zero physical I/O on the
-second read. Raw, partitioned, ASan/UBSan, TSan, MC68030, and the complete
+second read. Raw, partitioned, ASan/UBSan, TSan, MC68040, and the complete
 73-command QEMU gate pass. On Arty, a never-launched command read 24 sectors on
 its cold launch and zero on the next. The earlier warm `cat` number is not
 evidence: the file was absent and the shell measured its error path. Longer
 stress also exposed retained dead VFS sessions exhausting the storage process's
 smaller handle table before the session table filled. Receive-side cleanup now
 runs only on the kernel's actual resource-pressure result, reaps all dead idle
-sessions, and retries the queued receive. Host, sanitizer, analyzer, MC68030,
+sessions, and retries the queued receive. Host, sanitizer, analyzer, MC68040,
 and the full QEMU gate pass; physical pressure qualification remains required.
 
 Patch 0015 removes a non-atomic truncate-extension workaround from the ext4
@@ -446,7 +446,7 @@ one exclusive-create winner, disjoint atomic append reservations, untorn
 conflicting writes, a legal truncate/write order, and atomic rename/unlink
 visibility. The sparse extension survives a fresh mount with every hole byte
 zero and leaves the image clean under independent `e2fsck`. Normal,
-ASan/UBSan, TSan, and MC68030 builds pass on Beast.
+ASan/UBSan, TSan, and MC68040 builds pass on Beast.
 
 The retained VFS model now performs exactly one million operations across four
 independent sessions and byte models with fixed PRNG seeds. Every request is
@@ -455,7 +455,7 @@ state-lock acquisition/release, session and file reservation, close, and reply
 publication. The state-lock release/acquire pair brackets backend entry, I/O
 completion, and result commit; the controlled-block oracle separately forces
 the before/after I/O-wait interleaving. Normal, ASan/UBSan, TSan, analyzer, and
-MC68030 builds pass. The hooks compile out of target builds. Exhaustive physical
+MC68040 builds pass. The hooks compile out of target builds. Exhaustive physical
 cut-point injection remains open; this checkpoint does not claim it.
 
 ## 9. Block layer
@@ -552,7 +552,7 @@ retained change:
 7. improve cache lookup/replacement and metadata locality;
 8. add bounded sequential read-ahead or delayed writeback only when a measured
    workload proves it reduces target latency or physical requests;
-9. inspect generated MC68030 code and optimize the remaining measured CPU hot
+9. inspect generated MC68040 code and optimize the remaining measured CPU hot
    path, using assembly only for a material proven gain.
 
 Do not add speculative read-ahead, a second cache, a write-behind daemon, or a
@@ -568,7 +568,7 @@ client/transport + queue + locks + filesystem CPU + copies + device wait + reply
 
 The optimization loop ends only when retained experiments cannot reduce the
 non-device portion without losing correctness/maintainability, or the request
-is bounded by the measured device service time or necessary MC68030 work. The
+is bounded by the measured device service time or necessary MC68040 work. The
 record must name that physical or instruction-level limit. “Fast enough” and
 an unexplained timeout are not terminal conditions.
 
@@ -630,7 +630,7 @@ transport refactoring in one unreviewable change.
    remain exclusive until their own object audit and proof exist.
 4. [done] Pass stalled-miss/cached-hit and same-block-coalescing gates.
    Concurrent disjoint writes also pass readback, remount, and `e2fsck`.
-5. [done] Inspect generated MC68030 code and measure the new hot lock/cache
+5. [done] Inspect generated MC68040 code and measure the new hot lock/cache
    path on QEMU and Arty. The retained C uses pointer increments rather than a
    per-block multiply; assembly is not justified by the measured result.
 
@@ -674,7 +674,7 @@ The implementation is incomplete until all of these pass:
     independent byte models complete under forced thread switches;
 11. [host repeated, physical checkpoint done] dirty shutdown/recovery passes
     byte comparison and `e2fsck`;
-12. ASan, UBSan, static analysis, MC68030 build, QEMU, and physical Arty gates
+12. ASan, UBSan, static analysis, MC68040 build, QEMU, and physical Arty gates
     pass with no metric wrap, drop, or monotonic resource growth.
 13. under mixed cached reads, cache misses, directory walks, and journaled
     writes, no ready cached request waits behind an unrelated blocked request;
@@ -710,7 +710,7 @@ and completes the cached path; while the eligible I/O queue is nonempty, the
 number of active device lanes equals advertised depth.
 
 Assembly is considered only after the correct shared C path passes and the
-generated MC68030 code identifies a measured hot instruction sequence. Keep
+generated MC68040 code identifies a measured hot instruction sequence. Keep
 the C implementation and tests as the behavioral oracle.
 
 ## 17. Rejected shortcuts

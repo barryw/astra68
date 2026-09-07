@@ -22,15 +22,15 @@
 static uint8_t physical_memory[32u * 1024u * 1024u];
 static KernelHandle next_thread_handle;
 
-void kernel_pmmu_load_tc(const uint32_t *value) { (void)value; }
-void kernel_pmmu_load_srp(const KernelPmmuRootPointer *root) { (void)root; }
-void kernel_pmmu_load_crp(const KernelPmmuRootPointer *root) { (void)root; }
-void kernel_pmmu_load_tt0(const uint32_t *value) { (void)value; }
-void kernel_pmmu_load_tt1(const uint32_t *value) { (void)value; }
+void kernel_pmmu_load_tc(uint32_t value) { (void)value; }
+void kernel_pmmu_load_srp(uint32_t root) { (void)root; }
+void kernel_pmmu_load_urp(uint32_t root) { (void)root; }
+void kernel_pmmu_disable_transparent_translation(void) { }
 void kernel_pmmu_read_tc(uint32_t *value) { *value = 0u; }
-void kernel_pmmu_read_srp(KernelPmmuRootPointer *root) { *root = (KernelPmmuRootPointer){0}; }
-void kernel_pmmu_read_crp(KernelPmmuRootPointer *root) { *root = (KernelPmmuRootPointer){0}; }
+void kernel_pmmu_read_srp(uint32_t *root) { *root = 0u; }
+void kernel_pmmu_read_urp(uint32_t *root) { *root = 0u; }
 void kernel_pmmu_flush_all(void) { }
+void kernel_pmmu_flush_non_global(void) { }
 void kernel_pmmu_flush_page(uint32_t virtual_address) { (void)virtual_address; }
 void kernel_pmmu_set_user_function_codes(void) { }
 void kernel_cache_invalidate_all(void) { }
@@ -60,7 +60,7 @@ static void initialize_test(void)
     info.flags = ASTRA_BOOT_REQUIRED_FLAGS;
     info.machine_id = 0x41363801u;
     info.hardware_build_id = 0x12345678u;
-    info.cpu_model = 0x00068030u;
+    info.cpu_model = 0x00068040u;
     info.cpu_implementation = 0x54474d32u;
     info.cpu_features = 0x0000000du;
     info.cpu_hz = 12500000u;

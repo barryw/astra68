@@ -1,7 +1,7 @@
 /*
  * Freestanding <string.h> for Astra userspace.
  *
- * The MC68030 toolchain ships no C library and services link -nostdlib, so
+ * The MC68040 toolchain ships no C library and services link -nostdlib, so
  * vendored third-party code that includes <string.h> has nothing to include.
  * This declares exactly the primitives libastrart implements, so a caller
  * reaching for anything else fails at compile time instead of at link time in

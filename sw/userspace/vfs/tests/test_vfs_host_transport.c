@@ -31,6 +31,7 @@ static pthread_cond_t kick_condition = PTHREAD_COND_INITIALIZER;
 static int require_two_in_flight;
 static int complete_on_wait_only;
 static uint32_t concurrent_kick_base;
+static uint64_t mock_metric_value = UINT64_C(0x123456789abcdef0);
 
 static uint32_t dma_slot(uint32_t handle)
 {
@@ -160,7 +161,20 @@ static void complete_channel(uint32_t slot, uint32_t producer)
 
         command->status = ASTRA_VFS_OK;
         command->handle = 0x5678u + position;
-        if (command->operation == ASTRA_HOST_FS_WRITE) {
+        if (command->service == ASTRA_HOST_SERVICE_METRICS) {
+            AstraHostMetricsSnapshot *snapshot = (void *)(
+                dma_storage[slot] + command->data_offset);
+
+            assert(command->operation == ASTRA_HOST_METRICS_SNAPSHOT);
+            assert(command->data_capacity >= sizeof(*snapshot));
+            memset(snapshot, 0, sizeof(*snapshot));
+            snapshot->size = sizeof(*snapshot);
+            snapshot->version = ASTRA_HOST_METRICS_VERSION;
+            snapshot->count = ASTRA_HOST_METRIC_COUNT;
+            astra_host_metric_set(snapshot, ASTRA_HOST_METRIC_HOST_COMMANDS,
+                                  mock_metric_value);
+            command->result_length = sizeof(*snapshot);
+        } else if (command->operation == ASTRA_HOST_FS_WRITE) {
             assert(command->data_length == 4u);
             assert(memcmp(dma_storage[slot] + command->data_offset,
                           "send", 4u) == 0);
@@ -342,7 +356,8 @@ int main(void)
     memset(&transport, 0, sizeof(transport));
     capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
                    ASTRA_HOST_CAP_CHANNEL |
-                   ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ;
+                   ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ |
+                   ASTRA_HOST_CAP_METRICS;
     assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
                                          &lock_depth));
     memset(batch_commands, 0, sizeof(batch_commands));
@@ -423,6 +438,15 @@ int main(void)
     assert(channel_kicks == 7u);
     assert(channel_waits - wait_base <= 1u);
     require_two_in_flight = 0;
+    {
+        AstraHostMetricsSnapshot snapshot;
+
+        assert(astra_vfs_host_metrics(&transport, &snapshot) ==
+               ASTRA_VFS_OK);
+        assert(astra_host_metric_value(
+                   &snapshot, ASTRA_HOST_METRIC_HOST_COMMANDS) ==
+               mock_metric_value);
+    }
     astra_vfs_host_transport_destroy(&transport);
     assert(channel_opens == 3u && channel_closes == 3u && closes == 4u);
     return 0;

@@ -80,10 +80,10 @@ needed for plug-in filesystems without freezing unfinished SMB/NFS policy now.
 
 ## Installation and versioning
 
-The image builder installs the MC68030 library at:
+The image builder installs the MC68040 library at:
 
 ```text
-LIBS:Filesystem.kit/libraries/filesystem.library/abi-1/1.5.0/m68k-68030/filesystem.library
+LIBS:Filesystem.kit/libraries/filesystem.library/abi-1/1.5.0/m68k-68040/filesystem.library
 ```
 
 The Kit is version 1.4.0 and provides `filesystem.library` 1.5.0. Other ABI

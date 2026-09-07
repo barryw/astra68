@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds picolibc for Astra's m68030 target.
+# Builds picolibc for Astra's m68040 target.
 #
 # The source is vendored at third_party/picolibc; see its ASTRA_VENDOR.md for
 # what was removed and which source differences are retained. This builds out of
@@ -17,7 +17,8 @@ set -eu
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 SOURCE=${PICOLIBC_SOURCE:-$HERE/../third_party/picolibc}
 BUILD=${PICOLIBC_BUILD:-$HOME/picolibc-build}
-PREFIX=${PICOLIBC_PREFIX:-$HOME/picolibc-astra}
+DEFAULT_PREFIX=$(m68k-astra-gcc -print-sysroot)
+PREFIX=${PICOLIBC_PREFIX:-$DEFAULT_PREFIX}
 MESON=${MESON:-meson}
 
 if [ ! -f "$SOURCE/meson.build" ]; then
@@ -43,4 +44,9 @@ cd "$BUILD"
     "$SOURCE"
 ninja
 ninja install
+if ! grep -aq 'mcpu=68040' "$PREFIX/lib/libc.a" ||
+        strings "$PREFIX/lib/libc.a" | grep 'mcpu=' | grep -qv 'mcpu=68040'; then
+    echo "installed picolibc does not contain only MC68040 objects" >&2
+    exit 1
+fi
 echo "picolibc installed to $PREFIX"

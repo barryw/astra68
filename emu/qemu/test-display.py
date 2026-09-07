@@ -14,6 +14,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import astra_image
+from qemu_runtime import qemu_environment
 
 BOOT_MARKER = "stage 8"
 DISPLAY_QUEUE = 0xFFF001E0
@@ -109,13 +110,15 @@ def run(qemu, rom, image, catalog, deadline):
             scratch, catalog,
             service_names=astra_image.DISPLAY_SERVICES,
             manifest_text=astra_image.DISPLAY_STARTUP_MANIFEST)
+        environment = qemu_environment(
+            qemu, hostfs_root=os.path.join(directory, "hostfs"))
         machine = subprocess.Popen(
             [qemu, "-M", "astra68", "-m", "128M", "-bios", rom,
              "-display", "none", "-monitor", "none", "-serial", "stdio",
              "-no-reboot", "-qmp", "unix:%s,server=on,wait=off" % socket_path,
              "-drive", "if=none,format=raw,file=%s" % scratch],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True)
+            stderr=subprocess.STDOUT, text=True, env=environment)
         booted = threading.Event()
         serial = []
 

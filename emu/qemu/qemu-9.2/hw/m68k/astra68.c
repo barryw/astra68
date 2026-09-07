@@ -467,6 +467,7 @@ typedef struct AstraHostState {
     uint64_t commands;
     uint64_t execution_ns;
     uint64_t operation_counts[ASTRA_HOST_FS_SYMLINK + 1u];
+    uint64_t operation_execution_ns[ASTRA_HOST_FS_SYMLINK + 1u];
     uint64_t inflight;
     uint64_t max_inflight;
     uint32_t channel_result;
@@ -1021,16 +1022,18 @@ static void astra_block_complete(void *opaque, int rc)
             const char *op = request->operation == BLOCK_OP_WRITE ?
                 "write" : "flush";
 
-            ++block->durability_transitions;
-            if (block->durability_transitions ==
+            qatomic_inc(&block->durability_transitions);
+            if (qatomic_read(&block->durability_transitions) ==
                 block->cut_after_transition) {
                 error_report("Astra68 block power cut: transition=%" PRIu64
-                             " op=%s", block->durability_transitions, op);
+                             " op=%s",
+                             qatomic_read(&block->durability_transitions), op);
                 fflush(stderr);
                 _exit(86);
             } else if (block->trace_durability) {
                 error_report("Astra68 block durability transition=%" PRIu64
-                             " op=%s", block->durability_transitions, op);
+                             " op=%s",
+                             qatomic_read(&block->durability_transitions), op);
             }
         }
         astra_block_push_completion(s, request, BLOCK_COMPLETION_OK,
@@ -1055,8 +1058,8 @@ static void astra_block_start(AstraHostBlockRequest *request)
 
     switch (request->operation) {
     case BLOCK_OP_READ:
-        ++block->read_requests;
-        block->read_sectors += request->sectors;
+        qatomic_inc(&block->read_requests);
+        qatomic_add(&block->read_sectors, request->sectors);
         qemu_iovec_init_buf(&request->qiov, buffer, bytes);
         request->qiov_initialized = true;
         request->aiocb = blk_aio_preadv(
@@ -1064,8 +1067,8 @@ static void astra_block_start(AstraHostBlockRequest *request)
             &request->qiov, 0, astra_block_complete, request);
         break;
     case BLOCK_OP_WRITE:
-        ++block->write_requests;
-        block->write_sectors += request->sectors;
+        qatomic_inc(&block->write_requests);
+        qatomic_add(&block->write_sectors, request->sectors);
         qemu_iovec_init_buf(&request->qiov, buffer, bytes);
         request->qiov_initialized = true;
         request->aiocb = blk_aio_pwritev(
@@ -1073,7 +1076,7 @@ static void astra_block_start(AstraHostBlockRequest *request)
             &request->qiov, 0, astra_block_complete, request);
         break;
     default:
-        ++block->flush_requests;
+        qatomic_inc(&block->flush_requests);
         request->aiocb = blk_aio_flush(block->blk, astra_block_complete,
                                        request);
         break;
@@ -2578,6 +2581,124 @@ static uint8_t *astra_host_command_data(Astra68State *s, uint32_t physical,
     return astra_dma_data(s, physical, bytes, offset, amount);
 }
 
+static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
+                                  uint8_t *command, uint32_t physical,
+                                  uint32_t bytes, uint32_t command_bytes,
+                                  uint32_t expected_generation);
+
+static void astra_host_metrics_put(uint8_t *snapshot, uint32_t metric,
+                                   uint64_t value)
+{
+    size_t offset = offsetof(AstraHostMetricsSnapshot, values) +
+                    metric * sizeof(AstraHostMetricValue);
+
+    stl_be_p(snapshot + offset, value >> 32);
+    stl_be_p(snapshot + offset + sizeof(uint32_t), value);
+}
+
+static void astra_host_execute_metrics(Astra68State *s, uint8_t *command,
+                                       uint32_t physical, uint32_t bytes,
+                                       uint32_t command_bytes,
+                                       uint32_t expected_generation)
+{
+    uint8_t *snapshot = NULL;
+    uint32_t status = ASTRA_STATUS_INVALID;
+    uint32_t capacity = ldl_be_p(command + HOST_FIELD(data_capacity));
+
+    memset(command + HOST_FIELD(status), 0, sizeof(uint32_t));
+    memset(command + HOST_FIELD(result_length), 0,
+           HOST_FIELD(path) - HOST_FIELD(result_length));
+    if (ldl_be_p(command + HOST_FIELD(size)) != ASTRA_HOST_COMMAND_SIZE ||
+        lduw_be_p(command + HOST_FIELD(version)) !=
+            ASTRA_HOST_COMMAND_VERSION ||
+        lduw_be_p(command + HOST_FIELD(service)) !=
+            ASTRA_HOST_SERVICE_METRICS ||
+        lduw_be_p(command + HOST_FIELD(operation)) !=
+            ASTRA_HOST_METRICS_SNAPSHOT ||
+        lduw_be_p(command + HOST_FIELD(flags)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(generation)) != expected_generation ||
+        ldl_be_p(command + HOST_FIELD(handle)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(offset_hi)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(offset_lo)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(value_hi)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(value_lo)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(data_length)) != 0u ||
+        capacity < ASTRA_HOST_METRICS_SNAPSHOT_SIZE)
+        goto done;
+    for (size_t index = HOST_FIELD(path); index < ASTRA_HOST_COMMAND_SIZE;
+         ++index)
+        if (command[index] != 0u)
+            goto done;
+    snapshot = astra_host_command_data(
+        s, physical, bytes, command_bytes, command,
+        ASTRA_HOST_METRICS_SNAPSHOT_SIZE);
+    if (snapshot == NULL)
+        goto done;
+    memset(snapshot, 0, ASTRA_HOST_METRICS_SNAPSHOT_SIZE);
+    stl_be_p(snapshot + offsetof(AstraHostMetricsSnapshot, size),
+             ASTRA_HOST_METRICS_SNAPSHOT_SIZE);
+    stw_be_p(snapshot + offsetof(AstraHostMetricsSnapshot, version),
+             ASTRA_HOST_METRICS_VERSION);
+    stw_be_p(snapshot + offsetof(AstraHostMetricsSnapshot, count),
+             ASTRA_HOST_METRIC_COUNT);
+    astra_host_metrics_put(
+        snapshot, ASTRA_HOST_METRIC_TIMESTAMP_NS,
+        qemu_clock_get_ns(QEMU_CLOCK_REALTIME));
+    astra_host_metrics_put(snapshot, ASTRA_HOST_METRIC_BLOCK_READ_REQUESTS,
+                           qatomic_read(&s->block.read_requests));
+    astra_host_metrics_put(snapshot, ASTRA_HOST_METRIC_BLOCK_READ_SECTORS,
+                           qatomic_read(&s->block.read_sectors));
+    astra_host_metrics_put(snapshot, ASTRA_HOST_METRIC_BLOCK_WRITE_REQUESTS,
+                           qatomic_read(&s->block.write_requests));
+    astra_host_metrics_put(snapshot, ASTRA_HOST_METRIC_BLOCK_WRITE_SECTORS,
+                           qatomic_read(&s->block.write_sectors));
+    astra_host_metrics_put(snapshot, ASTRA_HOST_METRIC_BLOCK_FLUSH_REQUESTS,
+                           qatomic_read(&s->block.flush_requests));
+    astra_host_metrics_put(
+        snapshot, ASTRA_HOST_METRIC_BLOCK_DURABILITY_TRANSITIONS,
+        qatomic_read(&s->block.durability_transitions));
+    astra_host_metrics_put(snapshot, ASTRA_HOST_METRIC_HOST_SUBMISSIONS,
+                           qatomic_read(&s->host.submissions));
+    astra_host_metrics_put(snapshot, ASTRA_HOST_METRIC_HOST_COMMANDS,
+                           qatomic_read(&s->host.commands));
+    astra_host_metrics_put(snapshot, ASTRA_HOST_METRIC_HOST_EXECUTION_NS,
+                           qatomic_read(&s->host.execution_ns));
+    astra_host_metrics_put(snapshot, ASTRA_HOST_METRIC_HOST_INFLIGHT,
+                           qatomic_read(&s->host.inflight));
+    astra_host_metrics_put(snapshot, ASTRA_HOST_METRIC_HOST_MAX_INFLIGHT,
+                           qatomic_read(&s->host.max_inflight));
+    for (uint32_t operation = 0u;
+         operation <= ASTRA_HOST_FS_SYMLINK; ++operation) {
+        astra_host_metrics_put(
+            snapshot, ASTRA_HOST_METRIC_FS_COUNT_BASE + operation,
+            qatomic_read(&s->host.operation_counts[operation]));
+        astra_host_metrics_put(
+            snapshot, ASTRA_HOST_METRIC_FS_EXECUTION_NS_BASE + operation,
+            qatomic_read(&s->host.operation_execution_ns[operation]));
+    }
+    stl_be_p(command + HOST_FIELD(result_length),
+             ASTRA_HOST_METRICS_SNAPSHOT_SIZE);
+    status = ASTRA_STATUS_OK;
+
+done:
+    stl_be_p(command + HOST_FIELD(status), status);
+}
+
+static void astra_host_execute_command(Astra68State *s, uint32_t owner,
+                                       uint8_t *command,
+                                       uint32_t physical, uint32_t bytes,
+                                       uint32_t command_bytes,
+                                       uint32_t expected_generation)
+{
+    if (lduw_be_p(command + HOST_FIELD(service)) ==
+            ASTRA_HOST_SERVICE_METRICS)
+        astra_host_execute_metrics(s, command, physical, bytes,
+                                   command_bytes, expected_generation);
+    else
+        astra_host_execute_fs(s, owner, command, physical, bytes,
+                              command_bytes, expected_generation);
+}
+
 static uint32_t astra_host_stat_path(Astra68State *s, const char *path,
                                      struct stat *st)
 {
@@ -2605,6 +2726,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     uint16_t operation = lduw_be_p(command + HOST_FIELD(operation));
     uint16_t flags = lduw_be_p(command + HOST_FIELD(flags));
     uint32_t handle = ldl_be_p(command + HOST_FIELD(handle));
+    uint32_t operation_index = 0;
+    uint64_t started_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
     AstraHostFile *file;
     uint32_t status = ASTRA_STATUS_INVALID;
     struct stat st;
@@ -2621,8 +2744,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         qatomic_inc(&s->host.operation_counts[0]);
         goto done;
     }
-    qatomic_inc(&s->host.operation_counts[
-        operation <= ASTRA_HOST_FS_SYMLINK ? operation : 0u]);
+    operation_index = operation <= ASTRA_HOST_FS_SYMLINK ? operation : 0u;
+    qatomic_inc(&s->host.operation_counts[operation_index]);
 
     switch (operation) {
     case ASTRA_HOST_FS_OPEN: {
@@ -3025,6 +3148,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
 
 done:
     stl_be_p(command + HOST_FIELD(status), status);
+    qatomic_add(&s->host.operation_execution_ns[operation_index],
+                qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - started_ns);
 }
 
 static void astra_host_reset(Astra68State *s)
@@ -3070,16 +3195,17 @@ static void astra_host_execute(Astra68State *s)
         return;
     }
     started = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-    ++s->host.submissions;
+    qatomic_inc(&s->host.submissions);
     for (uint32_t index = 0; index < s->host.request_count; ++index) {
-        astra_host_execute_fs(s, s->host.owner,
+        astra_host_execute_command(s, s->host.owner,
                               base + index * ASTRA_HOST_COMMAND_SIZE,
                               s->host.request_buffer, s->host.request_bytes,
                               command_bytes, s->host.generation);
         ++s->host.completed;
     }
-    s->host.commands += s->host.completed;
-    s->host.execution_ns += qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - started;
+    qatomic_add(&s->host.commands, s->host.completed);
+    qatomic_add(&s->host.execution_ns,
+                qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - started);
     s->host.status = ASTRA_SYSCALL_OK;
 }
 
@@ -3307,7 +3433,7 @@ static int astra_host_channel_worker(void *opaque)
     if (base == NULL) {
         return -EFAULT;
     }
-    astra_host_execute_fs(
+    astra_host_execute_command(
         s, job->owner, base + ASTRA_HOST_CHANNEL_HEADER_SIZE +
             (job->position & (job->command_capacity - 1u)) *
                 ASTRA_HOST_COMMAND_SIZE,
@@ -3325,7 +3451,7 @@ static void astra_host_channel_publish_completion(
     if (ret != 0) {
         channel->status = ASTRA_SYSCALL_IO_ERROR;
     } else {
-        ++s->host.commands;
+        qatomic_inc(&s->host.commands);
     }
     channel->completed[position & (channel->command_capacity - 1u)] = 1;
     old_consumer = channel->consumer_position;
@@ -3363,8 +3489,8 @@ static void astra_host_channel_complete(void *opaque, int ret)
 
     assert(channel->jobs != 0);
     --channel->jobs;
-    assert(s->host.inflight != 0);
-    --s->host.inflight;
+    assert(qatomic_read(&s->host.inflight) != 0);
+    qatomic_dec(&s->host.inflight);
     if (!channel->active ||
         channel->owner != job->owner ||
         channel->host_generation != job->host_generation ||
@@ -3374,8 +3500,8 @@ static void astra_host_channel_complete(void *opaque, int ret)
     }
     base = astra_dma_data(s, channel->physical_buffer, channel->byte_size, 0,
                           channel->byte_size);
-    s->host.execution_ns += qemu_clock_get_ns(QEMU_CLOCK_REALTIME) -
-                            job->started_ns;
+    qatomic_add(&s->host.execution_ns,
+                qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - job->started_ns);
     astra_host_channel_publish_completion(s, channel, base, job->position,
                                           ret);
     g_free(job);
@@ -3454,17 +3580,22 @@ static bool astra_host_channel_data_safe(const AstraHostChannel *channel,
         const uint8_t *command = base + ASTRA_HOST_CHANNEL_HEADER_SIZE +
             (position & (channel->command_capacity - 1u)) *
                 ASTRA_HOST_COMMAND_SIZE;
+        uint16_t service = lduw_be_p(command + HOST_FIELD(service));
         uint16_t operation = lduw_be_p(command + HOST_FIELD(operation));
         uint32_t amount;
         uint32_t offset;
         bool writable;
 
-        if (operation == ASTRA_HOST_FS_WRITE) {
+        if (service == ASTRA_HOST_SERVICE_FILESYSTEM &&
+            operation == ASTRA_HOST_FS_WRITE) {
             amount = ldl_be_p(command + HOST_FIELD(data_length));
             writable = false;
-        } else if (operation == ASTRA_HOST_FS_READ ||
+        } else if ((service == ASTRA_HOST_SERVICE_FILESYSTEM &&
+                    (operation == ASTRA_HOST_FS_READ ||
                    operation == ASTRA_HOST_FS_READDIR ||
-                   operation == ASTRA_HOST_FS_READLINK) {
+                    operation == ASTRA_HOST_FS_READLINK)) ||
+                   (service == ASTRA_HOST_SERVICE_METRICS &&
+                    operation == ASTRA_HOST_METRICS_SNAPSHOT)) {
             amount = ldl_be_p(command + HOST_FIELD(data_capacity));
             writable = true;
         } else {
@@ -3547,26 +3678,8 @@ static void astra_host_channel_kick(Astra68State *s, uint32_t slot,
     if (pending == 0) {
         return;
     }
-    ++s->host.submissions;
+    qatomic_inc(&s->host.submissions);
     channel->submitted_position = producer;
-    if (pending == 1 && outstanding == 0) {
-        uint64_t started = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
-
-        astra_host_execute_fs(
-            s, channel->owner,
-            base + ASTRA_HOST_CHANNEL_HEADER_SIZE +
-                ((producer - 1u) & (channel->command_capacity - 1u)) *
-                    ASTRA_HOST_COMMAND_SIZE,
-            channel->physical_buffer, channel->byte_size,
-            ASTRA_HOST_CHANNEL_HEADER_SIZE +
-                channel->command_capacity * ASTRA_HOST_COMMAND_SIZE,
-            channel->host_generation);
-        s->host.execution_ns += qemu_clock_get_ns(QEMU_CLOCK_REALTIME) -
-                                started;
-        astra_host_channel_publish_completion(s, channel, base, producer - 1u,
-                                              0);
-        return;
-    }
     for (uint32_t position = producer - pending;
          position != producer; ++position) {
         AstraHostJob *job = g_new0(AstraHostJob, 1);
@@ -3582,9 +3695,11 @@ static void astra_host_channel_kick(Astra68State *s, uint32_t slot,
         job->position = position;
         job->started_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
         ++channel->jobs;
-        ++s->host.inflight;
-        if (s->host.inflight > s->host.max_inflight) {
-            s->host.max_inflight = s->host.inflight;
+        qatomic_inc(&s->host.inflight);
+        if (qatomic_read(&s->host.inflight) >
+            qatomic_read(&s->host.max_inflight)) {
+            qatomic_set(&s->host.max_inflight,
+                        qatomic_read(&s->host.inflight));
         }
         thread_pool_submit_aio(astra_host_channel_worker, job,
                                astra_host_channel_complete, job);
@@ -3746,7 +3861,7 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
                (astra_block_present(s) ? SYS_STATUS_ASTRA_HOST : 0) |
                (s->ohci.present ? SYS_STATUS_USB_READY : 0);
     case 0x018: return s->scratch;
-    case 0x01c: return 0x00068030;
+    case 0x01c: return 0x00068040;
     case 0x020: return 0x51454d55; /* QEMU */
     case 0x024: return 0x0000001d;
     case 0x028: return ASTRA_CPU_HZ;
@@ -3915,7 +4030,8 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
             ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
                 ASTRA_HOST_CAP_SUBMISSION_DESCRIPTOR |
                 ASTRA_HOST_CAP_CHANNEL |
-                ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ : 0u;
+                ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ |
+                ASTRA_HOST_CAP_METRICS : 0u;
     case 0x88c:
         return s->host.root_fd >= 0 ? ASTRA_HOST_STATE_READY : 0u;
     case 0x890: return s->host.generation;
@@ -3931,8 +4047,8 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
                (s->host.status & 0xffffu);
     case 0x8cc: return s->host.channel_result;
     case 0x8d0: return s->host.completion_pending ? 1u : 0u;
-    case 0x8d8: return s->host.inflight;
-    case 0x8dc: return s->host.max_inflight;
+    case 0x8d8: return qatomic_read(&s->host.inflight);
+    case 0x8dc: return qatomic_read(&s->host.max_inflight);
     default:
         if (offset >= 0x380 && offset <= 0x3fc && !(offset & 3)) {
             return s->irq_config[(offset - 0x380) / 4];
@@ -3959,7 +4075,7 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     }
 }
 
-static void astra_finish(Astra68State *s, uint32_t value)
+static void astra_report_status(Astra68State *s, uint32_t value)
 {
     const char *result;
 
@@ -3974,9 +4090,11 @@ static void astra_finish(Astra68State *s, uint32_t value)
     fprintf(stderr, "\nASTRA68-QEMU %s cycles=%" PRIu64
             " pc=%08x scratch=%08x\n", result, astra_now_cycles(s),
             s->cpu->env.pc, value);
-    qemu_system_shutdown_request(value == ASTRA_KERNEL_PANIC ?
-                                 SHUTDOWN_CAUSE_GUEST_PANIC :
-                                 SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
+    if (value != ASTRA_KERNEL_SOAK) {
+        qemu_system_shutdown_request(value == ASTRA_KERNEL_PANIC ?
+                                     SHUTDOWN_CAUSE_GUEST_PANIC :
+                                     SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
+    }
 }
 
 static void astra_vesta_write32(Astra68State *s, hwaddr offset,
@@ -3990,7 +4108,7 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
         s->scratch = value;
         if (value == ASTRA_KERNEL_READY || value == ASTRA_KERNEL_SOAK ||
             value == ASTRA_KERNEL_PANIC) {
-            astra_finish(s, value);
+            astra_report_status(s, value);
         }
         break;
     case 0x0d0:
@@ -4841,23 +4959,44 @@ static void astra68_init(MachineState *machine)
                                    &s->host.execution_ns,
                                    OBJ_PROP_FLAG_READ);
     {
-        static const char *const names[] = {
-            "astra-host-fs-invalid", "astra-host-fs-open",
-            "astra-host-fs-close", "astra-host-fs-read",
-            "astra-host-fs-write", "astra-host-fs-sync",
-            "astra-host-fs-truncate", "astra-host-fs-stat",
-            "astra-host-fs-readdir", "astra-host-fs-mkdir",
-            "astra-host-fs-unlink", "astra-host-fs-rename",
-            "astra-host-fs-chmod", "astra-host-fs-readlink",
-            "astra-host-fs-symlink"
+        static const struct {
+            const char *count;
+            const char *execution_ns;
+        } properties[] = {
+            { "astra-host-fs-invalid",
+              "astra-host-fs-invalid-execution-ns" },
+            { "astra-host-fs-open", "astra-host-fs-open-execution-ns" },
+            { "astra-host-fs-close", "astra-host-fs-close-execution-ns" },
+            { "astra-host-fs-read", "astra-host-fs-read-execution-ns" },
+            { "astra-host-fs-write", "astra-host-fs-write-execution-ns" },
+            { "astra-host-fs-sync", "astra-host-fs-sync-execution-ns" },
+            { "astra-host-fs-truncate",
+              "astra-host-fs-truncate-execution-ns" },
+            { "astra-host-fs-stat", "astra-host-fs-stat-execution-ns" },
+            { "astra-host-fs-readdir",
+              "astra-host-fs-readdir-execution-ns" },
+            { "astra-host-fs-mkdir", "astra-host-fs-mkdir-execution-ns" },
+            { "astra-host-fs-unlink",
+              "astra-host-fs-unlink-execution-ns" },
+            { "astra-host-fs-rename",
+              "astra-host-fs-rename-execution-ns" },
+            { "astra-host-fs-chmod", "astra-host-fs-chmod-execution-ns" },
+            { "astra-host-fs-readlink",
+              "astra-host-fs-readlink-execution-ns" },
+            { "astra-host-fs-symlink",
+              "astra-host-fs-symlink-execution-ns" }
         };
 
-        G_STATIC_ASSERT(G_N_ELEMENTS(names) ==
+        G_STATIC_ASSERT(G_N_ELEMENTS(properties) ==
                         ASTRA_HOST_FS_SYMLINK + 1u);
-        for (size_t index = 0; index < G_N_ELEMENTS(names); ++index)
+        for (size_t index = 0; index < G_N_ELEMENTS(properties); ++index) {
             object_property_add_uint64_ptr(
-                OBJECT(machine), names[index],
+                OBJECT(machine), properties[index].count,
                 &s->host.operation_counts[index], OBJ_PROP_FLAG_READ);
+            object_property_add_uint64_ptr(
+                OBJECT(machine), properties[index].execution_ns,
+                &s->host.operation_execution_ns[index], OBJ_PROP_FLAG_READ);
+        }
     }
     object_property_add_uint64_ptr(OBJECT(machine),
                                    "astra-host-inflight",
@@ -4960,26 +5099,6 @@ static void astra68_init(MachineState *machine)
 
     s->ram_size = machine->ram_size;
     s->cpu = M68K_CPU(cpu_create(machine->cpu_type));
-    object_property_add_uint64_ptr(OBJECT(machine),
-                                   "astra-pmmu-tlb-fills",
-                                   &s->cpu->env.pmmu030.qemu_tlb_fills,
-                                   OBJ_PROP_FLAG_READ);
-    object_property_add_uint64_ptr(OBJECT(machine),
-                                   "astra-pmmu-atc-hits",
-                                   &s->cpu->env.pmmu030.qemu_atc_hits,
-                                   OBJ_PROP_FLAG_READ);
-    object_property_add_uint64_ptr(OBJECT(machine),
-                                   "astra-pmmu-table-walks",
-                                   &s->cpu->env.pmmu030.qemu_table_walks,
-                                   OBJ_PROP_FLAG_READ);
-    object_property_add_uint64_ptr(OBJECT(machine),
-                                   "astra-pmmu-crp-writes",
-                                   &s->cpu->env.pmmu030.qemu_crp_writes,
-                                   OBJ_PROP_FLAG_READ);
-    object_property_add_uint64_ptr(OBJECT(machine),
-                                   "astra-pmmu-crp-changes",
-                                   &s->cpu->env.pmmu030.qemu_crp_changes,
-                                   OBJ_PROP_FLAG_READ);
     qemu_register_reset(astra_machine_reset, s);
 
     memory_region_add_subregion(sysmem, ASTRA_SDRAM_BASE, machine->ram);
@@ -5154,9 +5273,15 @@ static void astra68_init(MachineState *machine)
 
 static void astra68_machine_init(MachineClass *mc)
 {
+    static const char * const valid_cpu_types[] = {
+        M68K_CPU_TYPE_NAME("m68040"),
+        NULL,
+    };
+
     mc->desc = "Astra 68 reference machine";
     mc->init = astra68_init;
-    mc->default_cpu_type = M68K_CPU_TYPE_NAME("m68030");
+    mc->default_cpu_type = M68K_CPU_TYPE_NAME("m68040");
+    mc->valid_cpu_types = valid_cpu_types;
     mc->default_ram_size = ASTRA_SDRAM_HOSTED_SIZE;
     mc->default_ram_id = "astra68.sdram";
     mc->max_cpus = 1;

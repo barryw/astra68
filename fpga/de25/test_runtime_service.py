@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pin the DE25 runtime's persistent paths and physical front-panel address."""
+"""Pin the DE25 service boundary and keep runtime policy in the release."""
 
 from pathlib import Path
 
@@ -20,5 +20,9 @@ for required in (
     "IOSchedulingPriority=0",
 ):
     assert required in unit, required
+
+for release_policy in ("ASTRA_VCPU_CPU", "ASTRA_IO_CPU", "ASTRA_AUX_CPU",
+                       "ASTRA_DISPLAY_CPU"):
+    assert release_policy not in unit, release_policy
 
 print("DE25 runtime service contract: PASS")

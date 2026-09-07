@@ -1,4 +1,4 @@
-# Shared MC68030 compile and link contract for unmodified POSIX programs.
+# Shared MC68040 compile and link contract for unmodified POSIX programs.
 ASTRA_POSIX_KIT_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 ASTRA_ROOT ?= $(abspath $(ASTRA_POSIX_KIT_DIR)/../../../..)
 PICOLIBC ?= $(HOME)/picolibc-astra

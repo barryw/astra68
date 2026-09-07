@@ -68,7 +68,7 @@ static int identity_valid(const uint8_t *record, const char *expected_name,
            astra_load_be16(record + 14u) == abi_major &&
            astra_load_be16(record + 16u) >= minimum_abi_minor &&
            astra_load_be16(record + 18u) == 0u &&
-           astra_load_be32(record + 20u) == ASTRA_LIBRARY_TARGET_M68030 &&
+           astra_load_be32(record + 20u) == ASTRA_LIBRARY_TARGET_M68040 &&
            astra_load_be32(record + 28u) == ASTRA_LIBRARY_EXPORTS_OFFSET &&
            name_equal(name, expected_name);
 }

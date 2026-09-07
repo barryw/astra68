@@ -8,6 +8,7 @@
 #include <astra/block_device.h>
 #include <astra/memory_block.h>
 #include <astra/metrics.h>
+#include <astra/metrics_vfs.h>
 
 static uint32_t
 two_samples(void *context, AstraMetricSample *out, uint32_t capacity)
@@ -129,6 +130,58 @@ test_op_metrics(void)
     assert(astra_clock_read(NULL, NULL) == 0u);
 }
 
+static uint32_t refreshes;
+
+static uint32_t
+refresh_metrics(void *context)
+{
+    ++refreshes;
+    ++*(uint64_t *)context;
+    return ASTRA_VFS_OK;
+}
+
+static void
+test_vfs_snapshot(void)
+{
+    static uint64_t value = 40u;
+    AstraMetricVfs metrics;
+    const AstraVfsBackendOps *ops = astra_metric_vfs_ops();
+    AstraVfsNodeInfo info = {0};
+    AstraMetricRecord records[2];
+    uintptr_t node = 0u;
+    uint32_t moved = 0u;
+    uint64_t next = 0u;
+    char name[16];
+
+    astra_metric_reset_registry();
+    refreshes = 0u;
+    assert(astra_metric_register("test", two_samples, &value) ==
+           ASTRA_METRIC_OK);
+    assert(astra_metric_vfs_init(&metrics, refresh_metrics, &value));
+    assert(ops->open(&metrics, "snapshot", ASTRA_VFS_OPEN_READ,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) == ASTRA_VFS_OK);
+    assert(refreshes == 1u && value == 41u);
+    assert(node != 0u && info.kind == ASTRA_VFS_KIND_FILE);
+    assert(info.size == sizeof(records));
+    memset(records, 0, sizeof(records));
+    assert(ops->read(&metrics, node, 0u, records, sizeof(records), &moved) ==
+           ASTRA_VFS_OK);
+    assert(moved == sizeof(records));
+    assert(records[0].size == sizeof(records[0]));
+    assert(records[0].version == ASTRA_METRIC_RECORD_VERSION);
+    assert(strcmp(records[0].group, "test") == 0);
+    assert(strcmp(records[0].name, "alpha") == 0);
+    assert(astra_metric_record_value(&records[0]) == 41u);
+    assert(strcmp(records[1].name, "beta") == 0);
+    assert(astra_metric_record_value(&records[1]) == 42u);
+    assert(ops->readdir(&metrics, 0u, "", 0u, name, sizeof(name), &info,
+                        &next) == ASTRA_VFS_OK);
+    assert(strcmp(name, "snapshot") == 0 && next == 1u);
+    assert(ops->open(&metrics, "missing", ASTRA_VFS_OPEN_READ,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+           ASTRA_VFS_ERR_NOT_FOUND);
+}
+
 /*
  * The contract is only real if unrelated modules with unrelated accounting
  * shapes can both publish through it without changing their own structures.
@@ -206,6 +259,7 @@ main(void)
     test_registry_bounds();
     test_overrun_rejected();
     test_op_metrics();
+    test_vfs_snapshot();
     test_real_modules();
     puts("astra metrics: PASS");
     return 0;

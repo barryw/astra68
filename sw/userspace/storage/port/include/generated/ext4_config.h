@@ -4,7 +4,7 @@
  * lwext4 includes this file as <generated/ext4_config.h> whenever
  * CONFIG_USE_DEFAULT_CFG is 0. It is the single place the vendored library is
  * configured, and the same profile is used for the host tests and for the
- * freestanding MC68030 build. Those two must not diverge: a host test that
+ * freestanding MC68040 build. Those two must not diverge: a host test that
  * exercises a different configuration than the one that ships is not a test of
  * what ships.
  */
@@ -15,7 +15,7 @@
  * lwext4 never derives endianness itself: CONFIG_BIG_ENDIAN is a
  * porter-supplied define and no upstream build sets it, which is why upstream
  * big-endian was never compiled. Derive it from the compiler so the same
- * profile is correct on an x86_64 host and on a big-endian MC68030.
+ * profile is correct on an x86_64 host and on a big-endian MC68040.
  * ASTRA_FORCE_LE is the control build that separates a big-endian defect from
  * a 32-bit or m68k ABI defect.
  */
@@ -24,7 +24,7 @@
 #define CONFIG_BIG_ENDIAN 1
 #endif
 
-/* MC68030 faults on misaligned word/long access. */
+/* MC68040 faults on misaligned word/long access. */
 #define CONFIG_UNALIGNED_ACCESS 0
 
 #define CONFIG_EXT_FEATURE_SET_LVL 4 /* F_SET_EXT4 */
@@ -43,7 +43,7 @@
 #define CONFIG_BLOCK_DEV_CACHE_SIZE 1024
 
 /*
- * Astra links -nostdlib and the MC68030 toolchain ships no C library at all,
+ * Astra links -nostdlib and the MC68040 toolchain ships no C library at all,
  * so every libc-derived declaration must come from the port. Owning errno and
  * the open flags removes <errno.h>, <fcntl.h> and <unistd.h> from the
  * dependency set outright; what remains is covered by port/freestanding.

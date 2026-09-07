@@ -18,7 +18,7 @@ The version-1 layout is:
 ```text
 Example.app/
   manifest
-  bin/m68k-68030/Example
+  bin/m68k-68040/Example
   resources/
   icons/
   locales/

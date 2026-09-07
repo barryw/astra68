@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define KERNEL_EXCEPTION_FRAME_MAX_SIZE 92u
+#define KERNEL_EXCEPTION_FRAME_MAX_SIZE 60u
 
 typedef enum KernelExceptionStatus {
     KERNEL_EXCEPTION_OK = 0,
@@ -18,8 +18,6 @@ typedef struct KernelExceptionFrame {
     uint32_t program_counter;
     uint32_t instruction_address;
     uint32_t fault_address;
-    uint32_t data_output;
-    uint32_t stage_b_address;
     uint16_t status_register;
     uint16_t format_vector;
     uint16_t vector_offset;
@@ -28,7 +26,11 @@ typedef struct KernelExceptionFrame {
     uint8_t format;
     uint8_t from_user;
     uint8_t access_fault;
-    uint8_t reserved;
+    uint8_t access_write;
+    uint8_t access_data;
+    uint8_t access_supervisor;
+    uint8_t access_size;
+    uint8_t access_transfer_mode;
 } KernelExceptionFrame;
 
 KernelExceptionStatus kernel_exception_decode(const void *raw_frame,

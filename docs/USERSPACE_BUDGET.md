@@ -3,7 +3,7 @@
 Status: active measurement policy.
 
 This document turns "small and fast" into values that must be measured on the
-QEMU MC68030 and qualified Arty system. A value may change after evidence and
+QEMU MC68040 and qualified Arty system. A value may change after evidence and
 an explicit design decision; it may not drift silently.
 
 `MEMORY_BUDGET.md` remains authoritative for kernel and physical-memory
@@ -17,7 +17,7 @@ heaps.
 - Linux and host services: 256 MiB.
 - Primary display: 1280x720 at 60 Hz.
 - One RGB565 scanout surface: `1280 * 720 * 2 = 1,843,200` bytes.
-- CPU: QEMU TCG MC68030 without hardware FPU, approximately 30 MHz equivalent.
+- CPU: QEMU TCG MC68040 without hardware FPU, approximately 30 MHz equivalent.
 
 ## 2. Resource policy
 

@@ -8,6 +8,17 @@ READELF=${READELF:-${CROSS}readelf}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/astra-gcc-driver.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 
+"$CC" -dM -E - </dev/null >"$WORK/macros"
+grep -q '^#define __mc68040__ 1$' "$WORK/macros"
+
+for archive in "$($CC -print-libgcc-file-name)" \
+        "$($CXX -print-file-name=libstdc++.a)" \
+        "$($CXX -print-file-name=libsupc++.a)"; do
+    test -f "$archive"
+    grep -aq 'mcpu=68040' "$archive"
+    ! strings "$archive" | grep 'mcpu=' | grep -qv 'mcpu=68040'
+done
+
 cat >"$WORK/shared.c" <<'EOF'
 int astra_driver_value;
 int *astra_driver_pointer = &astra_driver_value;

@@ -4,8 +4,16 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define KERNEL_DMA_MAX_BUFFERS 32u
+#include <astra/block.h>
+#include <astra/process.h>
+
+/* Every legal per-process DMA slot must have backing engine metadata. */
+#define KERNEL_DMA_MAX_BUFFERS \
+    (ASTRA_PROCESS_COUNT_MAX * ASTRA_DMA_MAX_BUFFERS_PER_SERVICE)
 #define KERNEL_DMA_HANDLE_INVALID 0u
+
+_Static_assert(KERNEL_DMA_MAX_BUFFERS <= UINT16_MAX,
+               "DMA slot count exceeds the handle encoding");
 
 typedef uint32_t KernelDmaHandle;
 

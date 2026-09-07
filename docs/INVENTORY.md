@@ -24,7 +24,7 @@ a fact that took more than five minutes to establish, it belongs here.
 - 512 MiB DDR: 128 MiB Astra guest RAM, 128 MiB graphics RAM at the contiguous
   `no-map` range `0x18000000..0x1fffffff`, and 256 MiB for Linux/host services.
 - **The PL carries the 1280x720p60 graphics design. It does not carry the
-  MC68030.** The m68k is QEMU on the ARM cores.
+  MC68040.** The m68k is QEMU on the ARM cores.
 
 Filesystem layout on the board:
 
@@ -103,7 +103,7 @@ Notes that matter:
 
 | Path | Tracked | What it is | Status |
 |---|---:|---|---|
-| `sw/kernel` | – | **Axiom**, the MC68030 kernel | active |
+| `sw/kernel` | – | **Axiom**, the MC68040 kernel | active |
 | `sw/boot` | – | firmware / ROM, LZ4 payload packing, POST | active |
 | `sw/userspace` | – | runtime, alloc, metrics, storage, input, shell, supervisor | active |
 | `sw/include/astra` | – | shared ABI headers (`boot.h`, `block.h`, `supervisor.h`, …) | active |
@@ -125,7 +125,7 @@ Generated build products are excluded from source syncs and version control.
 Arty Z7 Linux (ARM Cortex-A9)
   -> Astra QEMU backend  (the m68k machine; TCG, ~30 MHz equivalent)
      -> firmware / ROM: POST, LZ4 decode + CRC-32 of kernel and user image
-        -> Axiom kernel (MC68030, PMMU)
+        -> Axiom kernel (MC68040, PMMU)
            -> initial user image (supervisor)
 ```
 
@@ -174,7 +174,7 @@ The storage stack accepts the partition formats documented by its active tests.
 ## 5. Build and gate commands
 
 ```sh
-# userspace: host tests, sanitizers, analyzer, MC68030 cross-build   (beast)
+# userspace: host tests, sanitizers, analyzer, MC68040 cross-build   (beast)
 cd sw/userspace && make test && make sanitize && make analyze && make all
 
 # kernel: 30 suites, default image, qualification image              (beast)
@@ -189,7 +189,7 @@ cd sw/boot && make astra_boot.bin && make test   # pytest half: Mac only
 # filesystem, host + freestanding link
 cd sw/userspace/storage && make ext4-test && make linkcheck
 
-# filesystem on big-endian MC68030, judged by e2fsck                (beast)
+# filesystem on big-endian MC68040, judged by e2fsck                (beast)
 cd sw/userspace/storage/lwext4-eval
 export QEMU_M68K=/tmp/qemu-m68k-user-build/qemu-m68k
 make interop && make reread && make partitioned && make measure && make bigvolume

@@ -150,7 +150,7 @@ Required properties include:
 - no duplicated authority except the explicitly selected compatibility set;
 - identical parent/child user state at the return boundary;
 - copy-on-write faults with exact commit accounting and no overcommit;
-- cache/ATC maintenance consistent with the MC68030 contract;
+- cache/ATC maintenance consistent with the MC68040 contract;
 - bounded rollback on allocation failure;
 - no cloning of in-flight kernel waits or device ownership accidentally;
 - performance counters for clone, first-write faults, and reclamation.
@@ -160,7 +160,7 @@ small, maintainable patch preserves semantics. True subshell behavior still
 uses the compatibility clone path. An eager-copy prototype may be useful as a
 correctness oracle, but it is not the intended interactive fast path.
 
-This mechanism requires an explicit revision to `KERNEL_SPEC.md` before code;
+This mechanism requires an explicit revision to `KERNEL_ARCHITECTURE.md` before code;
 this document does not silently authorize it.
 
 ## 7. Signals and job control
@@ -205,7 +205,7 @@ same object identity and capability checks.
 7. Run Vim with alternate screen, resize, suspend/resume, files, and crash
    recovery.
 
-Each stage runs under host tests and the QEMU MC68030, then on the Arty. Test
+Each stage runs under host tests and the QEMU MC68040, then on the Arty. Test
 time, resident memory, binary/module size,
 prompt latency, fork/spawn cycles, and terminal input-to-pixel latency are
 recorded continuously.

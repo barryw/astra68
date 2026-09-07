@@ -464,7 +464,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants, const char *command)
      * does not travel down this path.
      */
     static const char *const mount_names[] = {
-        "WORK", "COMMANDS", "LIBS", "EVENTS", "PROC",
+        "WORK", "COMMANDS", "LIBS", "EVENTS", "PROC", "METRICS",
         ASTRA_CONFIG_COMMANDS_CAPABILITY
     };
     uint32_t streams[3];

@@ -29,7 +29,7 @@ def main():
             "python3", "-B", "-c", "import event_catalog, trace_decode",
         ], cwd=release / "emu/qemu", check=True,
                        env=environment, stdout=subprocess.PIPE, text=True)
-        for script in ("test-filesystem-stress.py",
+        for script in ("benchmark-hostbench.py", "test-filesystem-stress.py",
                        "test-host-channel-userspace.py", "test-terminal.py"):
             subprocess.run([
                 "python3", str(release / "emu/qemu" / script), "--help",
@@ -41,7 +41,9 @@ def main():
             "bin/astra-release.py",
             "emu/qemu/astra-input-hotplug.py",
             "emu/qemu/astra_image.py",
+            "emu/qemu/benchmark-hostbench.py",
             "emu/qemu/event_catalog.py",
+            "emu/qemu/qemu_runtime.py",
             "emu/qemu/test-filesystem-stress.py",
             "emu/qemu/test-host-channel-userspace.py",
             "emu/qemu/test-terminal.py",

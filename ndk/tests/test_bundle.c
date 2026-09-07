@@ -8,7 +8,7 @@ static void manifest_test(void)
     char text[] =
         "astra-bundle 1\nkind application\nid org.astra.terminal\n"
         "name \"Astra Terminal\"\nversion 0.1.0\n"
-        "executable bin/m68k-68030/Terminal\n"
+        "executable bin/m68k-68040/Terminal\n"
         "icon resources/Terminal.aicon\ncapability GUI\n"
         "requires graphics.library 1 1.0.0\n"
         "requires font.library 1 1.0.0 # comment\n";
@@ -19,7 +19,7 @@ static void manifest_test(void)
                                        &line) == ASTRA_BUNDLE_OK);
     assert(manifest.kind == ASTRA_BUNDLE_APPLICATION);
     assert(strcmp(manifest.name, "Astra Terminal") == 0);
-    assert(strcmp(manifest.executable, "bin/m68k-68030/Terminal") == 0);
+    assert(strcmp(manifest.executable, "bin/m68k-68040/Terminal") == 0);
     assert(manifest.require_count == 2u);
     assert(manifest.capability_count == 1u);
     {

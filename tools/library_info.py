@@ -10,7 +10,7 @@ from event_catalog import CatalogError, read_section
 RECORD_SIZE = 128
 RECORD_MAGIC = 0x414C4942
 RECORD_VERSION = 1
-TARGET_M68030 = 0x4D303330
+TARGET_M68040 = 0x4D303430
 NAME_MAX = 24
 AUTHOR_MAX = 32
 COPYRIGHT_MAX = 40
@@ -44,7 +44,7 @@ def parse(blob):
     if header_size != RECORD_SIZE:
         raise LibraryError("record declares size %d, expected %d" %
                            (header_size, RECORD_SIZE))
-    if target != TARGET_M68030:
+    if target != TARGET_M68040:
         raise LibraryError("unsupported target 0x%08x" % target)
     at = _HEAD_SIZE
     return {

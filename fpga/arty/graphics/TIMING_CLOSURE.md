@@ -4693,7 +4693,7 @@ Hash-verified atomic deployment replaced the qualified 166.667 MHz image while
 preserving rollback copies. Three consecutive boots verify the exact BOOT/FIT
 hashes, FPGA-manager `operating`, `0x05f5e100,0x0b2d05e0` assigned clock rates,
 read-only `/`, writable `/data`, 378,380 KiB Linux memory over System RAM
-`0x00000000..0x17ffffff`, 128 MiB preallocated Astra RAM, MC68030/PMMU and
+`0x00000000..0x17ffffff`, 128 MiB preallocated Astra RAM, then-selected CPU/MMU and
 full-range SDRAM POST, filesystem round-trip, terminal display ready, and
 initial-image stage 8. Build identity remains nonzero `0x18EBE2E1`; graphics
 generation 1 exposes capabilities `0x000003ff` and reads back the exact
@@ -4765,7 +4765,7 @@ change it. Minimal-init experiments proved that one normal Linux
 `ip link set eth0 up` before the existing chip reset makes every subsequent
 attach reliable. The shared reset helper now performs that idempotent PHY
 prime before asserting reset. The final cold boot negotiates 1 Gbit/s, has no
-ALDPS timeout, reports FPGA manager `operating`, passes full MC68030/PMMU,
+ALDPS timeout, reports FPGA manager `operating`, passes the then-selected CPU/MMU,
 SDRAM, front-panel, filesystem, and terminal POST, and reaches initial-image
 stage 8.
 
@@ -5431,7 +5431,7 @@ software root-cause fix. STOR v9 writes the existing bounded alternating-bank
 event snapshot through one shared-area request instead of one request per
 record; `ls` uses one stdio buffer; and `readdir_batch` packs actual name
 lengths. Host tests, strict warnings, static analysis, and the complete
-MC68030 userspace build pass on Beast. The exact pre-boot storage image is
+then-selected userspace build pass on Beast. The exact pre-boot storage image is
 `e6d6f7379bf53303065bf954f44c359e96ba62bf71affd741bf55c9c0bf5c3e2`.
 
 The physical Arty completed 20/20 exact `ls -l COMMANDS:` runs at a

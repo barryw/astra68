@@ -16,7 +16,8 @@ assert astra_image.HOSTBENCH_STARTUP_MANIFEST == \
 startup = astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
 assert startup[0].startswith("service SERVICES:storage ")
 assert startup[1] == \
-    "service SERVICES:hostfs grants HOST_DEVICE serves WORK:rw required"
+    "service SERVICES:hostfs grants HOST_DEVICE " \
+    "serves WORK:rw METRICS:r required"
 
 
 class Result:
@@ -210,13 +211,13 @@ with tempfile.TemporaryDirectory() as directory:
         with open(os.path.join(bundle, "manifest"), "w", encoding="ascii") as manifest:
             manifest.write("kind kit\nprovides filesystem.library 1 %s\n" % version)
         library = os.path.join(bundle, "libraries", "filesystem.library",
-                               "abi-1", version, "m68k-68030")
+                               "abi-1", version, "m68k-68040")
         os.makedirs(library)
         with open(os.path.join(library, "filesystem.library"), "wb") as image:
             identity = struct.pack(
                 ">IHHHHHHHHIII24s32s40s", 0x414c4942, 1, 128,
                 *(int(part) for part in version.split(".")), 1, 0, 0,
-                0x4d303330, 0x12345678, 0x00f00000,
+                0x4d303430, 0x12345678, 0x00f00000,
                 b"filesystem.library", b"test", b"test")
             image.write(bytes(0x200))
             image.write(identity)
@@ -226,6 +227,6 @@ with tempfile.TemporaryDirectory() as directory:
     assert providers[("filesystem.library", 1)] == (
         (1, 10, 0), 0, 0x12345678,
         "LIBS:New.kit/libraries/filesystem.library/abi-1/1.10.0/"
-        "m68k-68030/filesystem.library")
+        "m68k-68040/filesystem.library")
 
 print("astra image provider index: PASS")

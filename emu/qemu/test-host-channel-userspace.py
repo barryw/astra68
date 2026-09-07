@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure the steady-state userspace MC68030 host-channel ceiling."""
+"""Measure the steady-state userspace m68k host-channel ceiling."""
 
 import argparse
 import importlib.util
@@ -27,7 +27,7 @@ RESULT = re.compile(
     r"RAW USER depth=([0-9a-f]{8}) iterations=([0-9a-f]{8}) "
     r"elapsed-ns=([0-9a-f]{16})")
 LAYER_RESULT = re.compile(
-    r"LAYER name=([a-z-]+) iterations=([0-9a-f]{8}) "
+    r"LAYER name=([a-z0-9-]+) iterations=([0-9a-f]{8}) "
     r"elapsed-ns=([0-9a-f]{16})")
 ADAPT_RESULT = re.compile(
     r"ADAPT polls=([0-9a-f]{8}) iterations=([0-9a-f]{8}) "
@@ -41,6 +41,31 @@ PROPERTIES = (
     "astra-host-execution-ns",
     "astra-host-inflight",
     "astra-host-max-inflight",
+)
+
+LAYER_COMMANDS = (
+    ("transport-unsupported", 1, 1),
+    ("transport-stat", 1, 1),
+    ("backend-stat", 1, 1),
+    ("transport-write192-invalid-handle", 1, 1),
+    ("backend-write192-open-handle", 1, 2),
+    ("direct-vfs-stat", 1, 1),
+    ("path-normalise", 0, 0),
+    ("assign-member-hit", 0, 0),
+    ("assign-member-miss", 0, 0),
+    ("assign-resolve", 0, 0),
+    ("filesystem-stat", 1, 1),
+    ("direct-backend-open-close-paired", 2, 2),
+    ("direct-vfs-open-close-paired", 2, 2),
+    ("filesystem-direct-open-close-paired", 2, 2),
+    ("direct-backend-open-write192-close-no-truncate", 3, 0),
+    ("direct-backend-open-truncate-close", 2, 0),
+    ("direct-backend-open-write192-close-paired", 3, 0),
+    ("direct-vfs-open-write192-close-paired", 3, 0),
+    ("filesystem-direct-open-write192-close-paired", 3, 0),
+    ("direct-backend-open-write192-sync-close", 4, 0),
+    ("direct-vfs-open-write192-sync-close", 4, 0),
+    ("filesystem-direct-open-write192-sync-close", 4, 0),
 )
 
 
@@ -123,13 +148,7 @@ def run(arguments):
             any(iterations == 0 or elapsed == 0
                 for _, iterations, elapsed in results) or
             [name for name, _, _ in layers] != [
-                "transport-unsupported", "transport-stat", "backend-stat",
-                "direct-vfs-stat", "path-normalise",
-                "assign-member-hit", "assign-member-miss", "assign-resolve",
-                "filesystem-stat",
-                "direct-backend-open-close-paired",
-                "direct-vfs-open-close-paired",
-                "filesystem-direct-open-close-paired"] or
+                name for name, _, _ in LAYER_COMMANDS] or
             any(iterations == 0 or elapsed == 0
                 for _, iterations, elapsed in layers) or
             not adaptive or
@@ -142,11 +161,9 @@ def run(arguments):
                 for _, byte_count, elapsed in memory) or
             values["astra-host-commands"] !=
             sum(iterations for _, iterations, _ in results) +
-            sum((iterations + 1) *
-                (0 if name.startswith(("path-", "assign-")) else
-                 2 if name.endswith(("open-close", "open-close-paired"))
-                 else 1)
-                for name, iterations, _ in layers) + 2 +
+            sum(iterations * commands + warmup
+                for (_, iterations, _), (_, commands, warmup) in
+                zip(layers, LAYER_COMMANDS)) + 2 +
             sum(iterations for _, iterations, _, _ in adaptive) or
             values["astra-host-inflight"] != 0 or
             values["astra-host-max-inflight"] != depths[-1]):

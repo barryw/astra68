@@ -17,7 +17,7 @@ static inline int astra_u32_add_checked(uint32_t left, uint32_t right,
     return 1;
 }
 
-/* Avoids the 68030 libgcc call emitted for a variable 64-bit shift. */
+/* Avoids the MC68040 libgcc call emitted for a variable 64-bit shift. */
 static inline uint64_t astra_u64_bit(uint32_t bit)
 {
     return bit < 32u ? (uint64_t)((uint32_t)1u << bit)
