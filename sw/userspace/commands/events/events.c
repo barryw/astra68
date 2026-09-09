@@ -18,11 +18,19 @@
  */
 
 #include <astra/program.h>
+#include <astra/posix.h>
 #include <astra/runtime.h>
 #include <astra/event.h>
 #include <astra/event_control.h>
-#include <astra/stream.h>
 #include <astra/vfs_process.h>
+
+#include <errno.h>
+#include <sys/types.h>
+#include <poll.h>
+#include <stdio.h>
+#include <sys/ioctl.h>
+#include <sys/termios.h>
+#include <unistd.h>
 
 ASTRA_PROGRAM("events", 1, 1, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
@@ -39,7 +47,6 @@ ASTRA_PROGRAM("events", 1, 1, 0, "Barry Walker",
 /* Statically allocated, because a user thread gets one 4 KiB stack. */
 static AstraProcessFilesystem process_filesystem =
     ASTRA_PROCESS_FILESYSTEM_INIT;
-static uint32_t out;
 static uint8_t chunk[EVENTS_READ_CHUNK];
 
 static int
@@ -77,8 +84,8 @@ append(char *out_path, uint32_t capacity, uint32_t at, const char *text)
 static void
 say(const char *text)
 {
-    (void)astra_print(out, text);
-    (void)astra_print(out, "\n");
+    (void)fputs(text, stdout);
+    (void)fputc('\n', stdout);
 }
 
 /*
@@ -134,27 +141,10 @@ print_from(AstraFile *file, uint64_t offset)
             break;
         }
         {
-            uint32_t written = 0u;
+            size_t written = fwrite(chunk, 1u, moved, stdout);
 
-            /*
-             * Retried until it lands. A page of history that stopped halfway
-             * because the sink was momentarily full would be a report a person
-             * reads as complete.
-             */
-            while (written < moved) {
-                uint32_t sent = 0u;
-                uint32_t status = astra_stream_write(out, chunk + written,
-                                                     moved - written, &sent);
-
-                written += sent;
-                if (written >= moved) {
-                    break;
-                }
-                if (status != ASTRA_SYSCALL_WOULD_BLOCK) {
-                    return offset + written;
-                }
-                (void)astra_yield();
-            }
+            if (written != moved)
+                return offset + written;
         }
         offset += moved;
     }
@@ -210,31 +200,40 @@ tail_from(AstraFile *file, uint32_t lines)
  * telling somebody to do something that will not work.
  */
 static void
-follow(uint32_t stdin_handle, AstraFile *file, uint64_t offset)
+follow(AstraFile *file, uint64_t offset)
 {
     say("-- following, press return --");
     for (;;) {
+        struct pollfd input = {STDIN_FILENO, POLLIN | POLLHUP, 0};
         uint8_t typed[1];
-        uint32_t length = 0u;
         uint64_t moved_to = print_from(file, offset);
+        int ready;
 
         offset = moved_to;
-        if (stdin_handle == 0u) {
-            return;
-        }
-        if (astra_stream_read(stdin_handle, typed, sizeof(typed), &length) !=
-                ASTRA_SYSCALL_OK ||
-            length != 0u) {
+        if (fflush(stdout) != 0)
             break;
+        ready = poll(&input, 1u, 100);
+        if (ready < 0 && errno == EINTR)
+            continue;
+        if (ready < 0)
+            break;
+        if (ready > 0) {
+            ssize_t length;
+
+            do {
+                length = read(STDIN_FILENO, typed, sizeof(typed));
+            } while (length < 0 && errno == EINTR);
+            if (length >= 0 || errno != EAGAIN)
+                break;
         }
-        (void)astra_yield();
     }
     say("");
 }
 
 int
-astra_main(const AstraStartupInfo *startup)
+main(int argc, char **argv)
 {
+    const AstraStartupInfo *startup = astra_posix_startup();
     static const char *const level_name[] = {"all", "notice", "warning",
                                              "error"};
     static const char *const set_level_name[] = {
@@ -250,9 +249,7 @@ astra_main(const AstraStartupInfo *startup)
     const char *level = "notice";
     const char *subsystem = NULL;
     AstraFile file = ASTRA_FILE_INIT;
-    uint32_t stdin_handle = 0u;
     uint32_t control_handle = 0u;
-    uint32_t columns = 0u;
     uint32_t rows = 0u;
     uint64_t offset;
     uint32_t at = 0u;
@@ -267,24 +264,13 @@ astra_main(const AstraStartupInfo *startup)
     if (!astra_startup_validate(startup)) {
         return ASTRA_STATUS_INVALID;
     }
-    capability = astra_startup_capability(startup, "STDOUT");
-    if (capability != NULL)
-        out = capability->handle;
-    capability = astra_startup_capability(startup, "STDIN");
-    if (capability != NULL)
-        stdin_handle = capability->handle;
     capability = astra_startup_capability(startup,
                                           ASTRA_CAPABILITY_EVENT_CONTROL);
     if (capability != NULL)
         control_handle = capability->handle;
-    if (out == 0u) {
-        /* Nowhere to write is not a failure this program can report. */
-        return ASTRA_STATUS_ACCESS;
-    }
-    for (uint32_t index = 1u; index < startup->argc; ++index) {
-        const char *word = astra_startup_argument(startup, index);
-        const char *value = index + 1u < startup->argc ?
-            astra_startup_argument(startup, index + 1u) : NULL;
+    for (int index = 1; index < argc; ++index) {
+        const char *word = argv[index];
+        const char *value = index + 1 < argc ? argv[index + 1] : NULL;
 
         if (equal(word, "--all")) {
             level = "all";
@@ -345,7 +331,7 @@ astra_main(const AstraStartupInfo *startup)
             say("events: no wall clock yet, so no time range");
             return ASTRA_STATUS_UNSUPPORTED;
         } else if (equal(word, "--level-set")) {
-            if (index != 1u || startup->argc != 4u) {
+            if (index != 1 || argc != 4) {
                 say("events: --level-set takes a subsystem and level alone");
                 return ASTRA_STATUS_INVALID;
             }
@@ -358,8 +344,7 @@ astra_main(const AstraStartupInfo *startup)
             }
             for (set_level = 0u; set_level <= ASTRA_EVENT_LEVEL_ERROR;
                  ++set_level) {
-                if (equal(astra_startup_argument(startup, index + 2u),
-                          set_level_name[set_level]))
+                if (equal(argv[index + 2], set_level_name[set_level]))
                     break;
             }
             if (set_subsystem == ASTRA_EVENT_SUBSYSTEM_MAX ||
@@ -367,7 +352,7 @@ astra_main(const AstraStartupInfo *startup)
                 say("events: unknown subsystem or level");
                 return ASTRA_STATUS_INVALID;
             }
-            index += 2u;
+            index += 2;
         } else {
             say("events: unknown option");
             return ASTRA_STATUS_INVALID;
@@ -402,11 +387,6 @@ astra_main(const AstraStartupInfo *startup)
         say("events: a previous boot cannot grow");
         return ASTRA_STATUS_INVALID;
     }
-    if (following && stdin_handle == 0u) {
-        say("events: no input, so nothing could end a follow");
-        return ASTRA_STATUS_INVALID;
-    }
-
     status = astra_process_filesystem_open(&process_filesystem, startup);
     if (status != ASTRA_VFS_OK) {
         say("events: filesystem unavailable");
@@ -441,7 +421,12 @@ astra_main(const AstraStartupInfo *startup)
      * geometry answers zero, and zero means do not page -- which is what a
      * redirected `events` should do.
      */
-    (void)astra_stream_size(out, &columns, &rows);
+    {
+        struct winsize window = {0};
+
+        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &window) == 0)
+            rows = window.ws_row;
+    }
     offset = previous_boot ? 0u :
         (rows > 1u ? tail_from(&file, rows - 1u) : 0u);
     offset = print_from(&file, offset);
@@ -449,7 +434,7 @@ astra_main(const AstraStartupInfo *startup)
         say("(nothing at that level)");
     }
     if (following) {
-        follow(stdin_handle, &file, offset);
+        follow(&file, offset);
     }
     (void)process_filesystem.library->close(&file);
     return close_with(ASTRA_STATUS_OK);

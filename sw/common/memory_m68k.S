@@ -5,6 +5,7 @@
 	.section .text.memcpy, "ax", @progbits
 	.balign 2
 	.globl memcpy
+	.weak memcpy
 	.type memcpy, @function
 memcpy:
 	move.l  %d2, -(%sp)
@@ -69,6 +70,7 @@ memcpy:
 	.section .text.memset, "ax", @progbits
 	.balign 2
 	.globl memset
+	.weak memset
 	.type memset, @function
 memset:
 	move.l  %d2, -(%sp)
@@ -159,6 +161,7 @@ kernel_words_fill:
 	.section .text.memcmp, "ax", @progbits
 	.balign 2
 	.globl memcmp
+	.weak memcmp
 	.type memcmp, @function
 memcmp:
 	movea.l 4(%sp), %a0
@@ -245,6 +248,7 @@ kernel_bytes_equal:
 	.section .text.memmove, "ax", @progbits
 	.balign 2
 	.globl memmove
+	.weak memmove
 	.type memmove, @function
 memmove:
 	move.l  %d2, -(%sp)

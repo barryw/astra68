@@ -657,6 +657,23 @@ ext4_backend_symlink(void *context, const char *target, const char *path)
     return status_of(ext4_fsymlink(target, full));
 }
 
+static uint32_t
+ext4_backend_link(void *context, const char *from, const char *to)
+{
+    AstraVfsExt4Backend *backend = backend_of(context);
+    char from_full[ASTRA_VFS_EXT4_PATH_MAX];
+    char to_full[ASTRA_VFS_EXT4_PATH_MAX];
+
+    if (!build_path(backend, from, from_full, sizeof(from_full)) ||
+        !build_path(backend, to, to_full, sizeof(to_full)))
+        return ASTRA_VFS_ERR_INVALID;
+    if (!scan_lock(backend))
+        return ASTRA_VFS_ERR_IO;
+    close_scan(backend);
+    scan_unlock(backend);
+    return status_of(ext4_flink(from_full, to_full));
+}
+
 static const AstraVfsBackendOps ext4_ops = {
     ext4_backend_open,
     ext4_backend_close,
@@ -671,7 +688,8 @@ static const AstraVfsBackendOps ext4_ops = {
     ext4_backend_rename,
     ext4_backend_chmod,
     ext4_backend_readlink,
-    ext4_backend_symlink
+    ext4_backend_symlink,
+    ext4_backend_link
 };
 
 const AstraVfsBackendOps *

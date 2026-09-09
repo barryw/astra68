@@ -2,6 +2,8 @@
 
 import os
 
+DEFAULT_MEMORY = "512M"
+
 
 def qemu_environment(qemu, environment=None, hostfs_root=None):
     environment = (os.environ if environment is None else environment).copy()

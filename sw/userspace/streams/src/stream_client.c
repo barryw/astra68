@@ -195,7 +195,8 @@ exchange_handles(uint32_t handle, const void *request, uint32_t request_size,
          * type, which on a machine whose shell is also the thing that has to
          * answer is time taken from the answer.
          */
-        status = astra_wait_one(receive, ASTRA_DEADLINE_FOREVER, NULL);
+        status = astra_wait_one_restart(receive, ASTRA_DEADLINE_FOREVER,
+                                        NULL);
         if (status != ASTRA_SYSCALL_OK) {
             (void)astra_close(receive);
             return status;
@@ -403,4 +404,30 @@ astra_stream_tty_set(uint32_t handle, uint32_t action,
     if (status != ASTRA_SYSCALL_OK)
         return status;
     return reply.status;
+}
+
+uint32_t
+astra_stream_identity(uint32_t handle, AstraStreamIdentity *identity)
+{
+    AstraStreamIdentity reply;
+    uint32_t status;
+
+    if (handle == 0u || identity == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    status = ask(handle, ASTRA_STREAM_OPERATION_IDENTITY, 0u, &reply,
+                 (uint32_t)sizeof(reply),
+                 ASTRA_STREAM_OPERATION_IDENTITY_REPLY);
+    if (status != ASTRA_SYSCALL_OK)
+        return status;
+    if (reply.status != ASTRA_SYSCALL_OK)
+        return reply.status;
+    if ((reply.kind & ~ASTRA_STREAM_KIND_TERMINAL) != 0u ||
+        (reply.directions & ~(ASTRA_STREAM_DIRECTION_READ |
+                              ASTRA_STREAM_DIRECTION_WRITE)) != 0u ||
+        reply.directions == 0u ||
+        ((reply.kind & ASTRA_STREAM_KIND_TERMINAL) == 0u &&
+         reply.object_id != 0u))
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    *identity = reply;
+    return ASTRA_SYSCALL_OK;
 }

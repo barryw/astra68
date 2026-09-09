@@ -8,6 +8,9 @@
 #include <unistd.h>
 #include <astra/posix.h>
 #include <astra/posix_descriptor.h>
+#include <astra/posix_process.h>
+#include <astra/status.h>
+#include <astra/stream.h>
 #include <astra/syscall.h>
 
 static uint32_t file_closes;
@@ -20,6 +23,12 @@ static uint32_t file_imports;
 static uint32_t socket_imports;
 static uint32_t restore_failures;
 static uint32_t restore_status;
+static uint32_t process_service;
+static uint32_t stream_read_handle;
+static uint32_t stream_write_handle;
+static uint32_t stream_write_limit;
+static uint32_t stream_write_calls;
+static uint32_t stream_write_cancel_once;
 
 uint32_t astra_log_failure(const char *operation, uint32_t status)
 {
@@ -217,8 +226,16 @@ uint32_t
 astra_stream_write(uint32_t handle, const void *bytes, uint32_t length,
                    uint32_t *written)
 {
-    (void)handle;
+    stream_write_handle = handle;
     (void)bytes;
+    ++stream_write_calls;
+    if (stream_write_cancel_once != 0u) {
+        --stream_write_cancel_once;
+        *written = 0u;
+        return ASTRA_SYSCALL_CANCELLED;
+    }
+    if (stream_write_limit != 0u && length > stream_write_limit)
+        length = stream_write_limit;
     *written = length;
     return 0u;
 }
@@ -227,7 +244,7 @@ uint32_t
 astra_stream_read(uint32_t handle, void *bytes, uint32_t capacity,
                   uint32_t *length)
 {
-    (void)handle;
+    stream_read_handle = handle;
     (void)bytes;
     (void)capacity;
     *length = 0u;
@@ -252,6 +269,30 @@ astra_stream_read_wait(uint32_t handle, uint32_t *wait_handle,
     return ASTRA_SYSCALL_OK;
 }
 
+uint32_t
+astra_stream_identity(uint32_t handle, AstraStreamIdentity *identity)
+{
+    *identity = (AstraStreamIdentity){
+        .kind = ASTRA_STREAM_KIND_TERMINAL,
+        .directions = handle == 10u ? ASTRA_STREAM_DIRECTION_READ :
+                                      ASTRA_STREAM_DIRECTION_WRITE,
+        .object_id = 100u,
+    };
+    return handle >= 10u && handle <= 12u ? ASTRA_SYSCALL_OK :
+                                            ASTRA_SYSCALL_INVALID_ARGUMENT;
+}
+
+uint32_t astra_posix_process_service(void) { return process_service; }
+
+uint32_t
+astra_posix_process_tty_foreground(uint32_t service,
+                                   AstraPosixProcessReply *reply)
+{
+    assert(service == 9u && reply != NULL);
+    *reply = (AstraPosixProcessReply){.session = 100, .group = 100};
+    return ASTRA_STATUS_OK;
+}
+
 void
 astra_process_exit(uint32_t status)
 {
@@ -270,6 +311,51 @@ main(void)
     uint32_t handoff_size;
     ssize_t (*read_call)(int, void *, size_t) = read;
     ssize_t (*write_call)(int, const void *, size_t) = write;
+
+    {
+        static const AstraStartupCapability capabilities[] = {
+            {.name = "STDIN", .handle = 10u},
+            {.name = "STDOUT", .handle = 11u},
+            {.name = "STDERR", .handle = 12u},
+        };
+        AstraStartupInfo startup = {
+            .magic = ASTRA_STARTUP_MAGIC,
+            .abi_version = ASTRA_STARTUP_ABI_VERSION,
+            .header_size = ASTRA_STARTUP_INFO_SIZE,
+            .total_size = ASTRA_STARTUP_INFO_SIZE,
+            .syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION,
+            .capability_count = 3u,
+            .capabilities_address = (uint32_t)(uintptr_t)capabilities,
+        };
+        int tty;
+
+        if ((uintptr_t)capabilities <= UINT32_MAX) {
+            process_service = 9u;
+            astra_posix_start(&startup);
+            assert(isatty(0) && isatty(1) && isatty(2));
+            tty = astra_posix_descriptor_controlling_terminal(
+                O_RDWR | O_NONBLOCK);
+            assert(tty == 3 &&
+                   astra_posix_descriptor_terminal_id(tty) == 100u);
+            assert(write_call(tty, "x", 1u) == 1 &&
+                   stream_write_handle == 11u);
+            stream_write_limit = 2u;
+            stream_write_cancel_once = 1u;
+            stream_write_calls = 0u;
+            assert(astra_posix_write_all(1, "hello", 5u) == 0);
+            assert(stream_write_calls == 4u);
+            stream_write_limit = 0u;
+            errno = 0;
+            assert(read_call(tty, bytes, 1u) == -1 && errno == EAGAIN &&
+                   stream_read_handle == 10u);
+            assert(close(0) == 0);
+            tty = astra_posix_descriptor_controlling_terminal(O_RDONLY);
+            assert(tty == 0);
+            assert(close(tty) == 0);
+        }
+        process_service = 0u;
+        astra_posix_start(NULL);
+    }
 
     astra_posix_start(NULL);
     for (uint32_t slot = 0u; slot < 64u; ++slot) {

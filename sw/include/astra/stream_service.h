@@ -27,7 +27,7 @@
 #include <astra/syscall.h>
 
 #define ASTRA_STREAM_SERVICE_PROTOCOL UINT32_C(0x5354524d) /* STRM */
-#define ASTRA_STREAM_SERVICE_VERSION  UINT16_C(3)
+#define ASTRA_STREAM_SERVICE_VERSION  UINT16_C(4)
 
 /*
  * One message of text. Sized so the whole message stays inside the port's
@@ -46,9 +46,15 @@
 #define ASTRA_STREAM_OPERATION_TTY_SET UINT32_C(8)
 #define ASTRA_STREAM_OPERATION_READ_WAIT UINT32_C(9)
 #define ASTRA_STREAM_OPERATION_WAIT_STATE UINT32_C(10)
+#define ASTRA_STREAM_OPERATION_IDENTITY UINT32_C(11)
+#define ASTRA_STREAM_OPERATION_IDENTITY_REPLY UINT32_C(12)
 
 #define ASTRA_STREAM_READY_READ UINT32_C(0x0001)
 #define ASTRA_STREAM_DATA_EOF   UINT16_C(0x0001)
+
+#define ASTRA_STREAM_DIRECTION_READ  UINT32_C(0x0001)
+#define ASTRA_STREAM_DIRECTION_WRITE UINT32_C(0x0002)
+#define ASTRA_STREAM_KIND_TERMINAL    UINT32_C(0x0001)
 
 /* Stable terminal-state bits. The POSIX personality translates to these. */
 #define ASTRA_TTY_IFLAG_BRKINT UINT32_C(0x0001)
@@ -197,6 +203,15 @@ typedef struct AstraStreamWaitState {
     uint32_t events;
 } AstraStreamWaitState;
 
+/* Stable identity, separate from terminal attributes and window geometry. */
+typedef struct AstraStreamIdentity {
+    AstraMessageHeader header;
+    uint32_t status;
+    uint32_t kind;
+    uint32_t directions;
+    uint32_t object_id;
+} AstraStreamIdentity;
+
 typedef struct AstraTtySet {
     AstraMessageHeader header;
     uint16_t action;
@@ -218,6 +233,7 @@ typedef struct AstraTtyReply {
 #define ASTRA_TTY_SET_SIZE      (ASTRA_MESSAGE_HEADER_SIZE + 4u + 48u)
 #define ASTRA_TTY_REPLY_SIZE    (ASTRA_MESSAGE_HEADER_SIZE + 4u + 48u)
 #define ASTRA_STREAM_WAIT_STATE_SIZE (ASTRA_MESSAGE_HEADER_SIZE + 8u)
+#define ASTRA_STREAM_IDENTITY_SIZE (ASTRA_MESSAGE_HEADER_SIZE + 16u)
 
 _Static_assert(sizeof(AstraStreamWrite) == ASTRA_STREAM_WRITE_SIZE,
                "stream write message ABI size changed");
@@ -229,6 +245,8 @@ _Static_assert(sizeof(AstraStreamSize) == ASTRA_STREAM_SIZE_SIZE,
                "stream size message ABI size changed");
 _Static_assert(sizeof(AstraStreamWaitState) == ASTRA_STREAM_WAIT_STATE_SIZE,
                "stream wait-state message ABI size changed");
+_Static_assert(sizeof(AstraStreamIdentity) == ASTRA_STREAM_IDENTITY_SIZE,
+               "stream identity message ABI size changed");
 _Static_assert(sizeof(AstraTtyState) == 48u,
                "terminal state ABI size changed");
 _Static_assert(sizeof(AstraTtySet) == ASTRA_TTY_SET_SIZE,

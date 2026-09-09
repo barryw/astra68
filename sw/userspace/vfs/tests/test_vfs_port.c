@@ -65,6 +65,7 @@ static uint32_t backend_write_length;
 static uint32_t backend_write_flags;
 static char backend_rename_from[ASTRA_VFS_PATH_MAX];
 static char backend_rename_to[ASTRA_VFS_PATH_MAX];
+static uint32_t backend_two_path_operation;
 static uint32_t direct_connects;
 static uint32_t direct_disconnects;
 static uint32_t direct_operations;
@@ -82,12 +83,20 @@ static int direct_hold;
 static uint32_t direct_entered;
 static int mock_hold_waits;
 static uint32_t mock_blocked_waits;
+static uint32_t mock_cancelled_waits;
 static pthread_mutex_t port_threads_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t port_threads_changed = PTHREAD_COND_INITIALIZER;
 static uint32_t port_threads_ready;
 static int port_threads_go;
 static atomic_uint mock_next_thread = 1u;
 static _Thread_local uint32_t mock_thread;
+
+uint32_t
+astra_log_failure(const char *operation, uint32_t status)
+{
+    (void)operation;
+    return status;
+}
 
 void
 astra_assert_failed(const char *file, unsigned int line,
@@ -157,6 +166,7 @@ mock_reset(void)
     backend_write_flags = 0u;
     backend_rename_from[0] = '\0';
     backend_rename_to[0] = '\0';
+    backend_two_path_operation = 0u;
     direct_connects = 0u;
     direct_disconnects = 0u;
     direct_operations = 0u;
@@ -168,6 +178,7 @@ mock_reset(void)
     direct_entered = 0u;
     mock_hold_waits = 0;
     mock_blocked_waits = 0u;
+    mock_cancelled_waits = 0u;
     port_threads_ready = 0u;
     port_threads_go = 0;
 }
@@ -671,6 +682,10 @@ astra_wait_one(uint32_t handle, uint64_t deadline_ns, uint32_t *detail)
     if (deadline_ns == 0u)
         return handle == dead_reply_handle ? ASTRA_SYSCALL_PEER_DEAD :
                                              ASTRA_SYSCALL_OK;
+    if (mock_cancelled_waits != 0u) {
+        --mock_cancelled_waits;
+        return ASTRA_SYSCALL_CANCELLED;
+    }
     assert(pthread_mutex_lock(&mock_wait_mutex) == 0);
     if (mock_hold_waits != 0) {
         ++mock_blocked_waits;
@@ -842,7 +857,26 @@ backend_rename(void *context, const char *from, const char *to)
                     from) < (int)sizeof(backend_rename_from));
     assert(snprintf(backend_rename_to, sizeof(backend_rename_to), "%s", to) <
            (int)sizeof(backend_rename_to));
+    backend_two_path_operation = ASTRA_VFS_OP_RENAME;
     return ASTRA_VFS_OK;
+}
+
+static uint32_t
+backend_symlink(void *context, const char *target, const char *path)
+{
+    uint32_t status = backend_rename(context, target, path);
+
+    backend_two_path_operation = ASTRA_VFS_OP_SYMLINK;
+    return status;
+}
+
+static uint32_t
+backend_link(void *context, const char *from, const char *to)
+{
+    uint32_t status = backend_rename(context, from, to);
+
+    backend_two_path_operation = ASTRA_VFS_OP_LINK;
+    return status;
 }
 
 static uint32_t
@@ -880,7 +914,8 @@ static const AstraVfsBackendOps backend_ops = {
     .rename = backend_rename,
     .chmod = backend_chmod,
     .readlink = backend_readlink,
-    .symlink = astra_vfs_backend_deny_symlink,
+    .symlink = backend_symlink,
+    .link = backend_link,
 };
 
 static AstraVfsService service;
@@ -1062,6 +1097,29 @@ test_first_operation_shares_the_hello_round_trip(void)
     assert(astra_vfs_open(&remote, "/a", ASTRA_VFS_OPEN_READ, &file, NULL,
                           NULL) == ASTRA_VFS_OK);
     assert(remote.session != ASTRA_VFS_SESSION_INVALID && host.requests == 1u);
+    assert(astra_vfs_disconnect(&remote) == ASTRA_VFS_OK);
+    served = NULL;
+}
+
+static void
+test_signal_cancellation_does_not_abandon_an_inflight_reply(void)
+{
+    AstraVfsPortService host;
+    AstraVfsClient remote;
+    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
+    uint32_t service_handle;
+
+    mock_reset();
+    service_start();
+    service_handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_vfs_port_service_init(&host, service_handle, &service));
+    served = &host;
+    assert(astra_vfs_port_connect_lazy(&remote, service_handle) ==
+           ASTRA_VFS_OK);
+    mock_cancelled_waits = 1u;
+    assert(astra_vfs_open(&remote, "/a", ASTRA_VFS_OPEN_READ, &file, NULL,
+                          NULL) == ASTRA_VFS_OK);
+    assert(file != ASTRA_VFS_FILE_INVALID && host.requests == 1u);
     assert(astra_vfs_disconnect(&remote) == ASTRA_VFS_OK);
     served = NULL;
 }
@@ -1282,7 +1340,7 @@ test_shared_lazy_client_opens_one_session_for_two_threads(void)
 }
 
 static void
-test_atomic_rename_crosses_in_one_request(void)
+test_two_path_operations_cross_atomically(void)
 {
     AstraVfsPortService host;
     AstraVfsClient remote;
@@ -1298,8 +1356,21 @@ test_atomic_rename_crosses_in_one_request(void)
     before = host.requests;
     assert(astra_vfs_rename(&remote, "/from", "/to") == ASTRA_VFS_OK);
     assert(host.requests == before + 1u);
+    assert(backend_two_path_operation == ASTRA_VFS_OP_RENAME);
     assert(strcmp(backend_rename_from, "/from") == 0);
     assert(strcmp(backend_rename_to, "/to") == 0);
+    before = host.requests;
+    assert(astra_vfs_symlink(&remote, "/target", "/link") == ASTRA_VFS_OK);
+    assert(host.requests == before + 1u);
+    assert(backend_two_path_operation == ASTRA_VFS_OP_SYMLINK);
+    assert(strcmp(backend_rename_from, "/target") == 0);
+    assert(strcmp(backend_rename_to, "/link") == 0);
+    before = host.requests;
+    assert(astra_vfs_link(&remote, "/from", "/hard-link") == ASTRA_VFS_OK);
+    assert(host.requests == before + 1u);
+    assert(backend_two_path_operation == ASTRA_VFS_OP_LINK);
+    assert(strcmp(backend_rename_from, "/from") == 0);
+    assert(strcmp(backend_rename_to, "/hard-link") == 0);
     assert(astra_vfs_disconnect(&remote) == ASTRA_VFS_OK);
     served = NULL;
 }
@@ -1904,11 +1975,12 @@ main(void)
     test_a_dead_peer_is_reported_and_not_waited_on();
     test_clients_own_independent_reply_channels();
     test_first_operation_shares_the_hello_round_trip();
+    test_signal_cancellation_does_not_abandon_an_inflight_reply();
     test_host_accelerator_moves_data_plane_out_of_the_service();
     test_shared_accelerated_client_keeps_thread_requests_in_flight();
     test_shared_port_client_keeps_thread_requests_in_flight();
     test_shared_lazy_client_opens_one_session_for_two_threads();
-    test_atomic_rename_crosses_in_one_request();
+    test_two_path_operations_cross_atomically();
     test_version_two_keeps_per_request_reply_ports();
     test_bulk_read_crosses_once_through_a_shared_area();
     test_bulk_write_crosses_once_through_a_shared_area();

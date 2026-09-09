@@ -19,7 +19,7 @@
  */
 
 /* Creates both ports and binds the sink to `terminal`. Zero on failure. */
-int console_stream_start(AstraTerminal *terminal);
+int console_stream_start(AstraTerminal *terminal, uint32_t process_service);
 
 /* Non-zero once the ports exist and there is something to grant. */
 int console_stream_ready(void);

@@ -2,6 +2,7 @@
 
 #include <astra/program.h>
 #include <astra/divide.h>
+#include <astra/posix.h>
 
 #include <dirent.h>
 #include <errno.h>
@@ -163,21 +164,6 @@ file_path(Worker *worker, uint32_t slot, uint8_t directory, uint8_t name)
             worker->path_capacity;
 }
 
-static int
-file_write_all(int descriptor, const uint8_t *bytes, uint32_t length)
-{
-    uint32_t done = 0u;
-
-    while (done < length) {
-        ssize_t moved = write(descriptor, bytes + done, length - done);
-
-        if (moved <= 0)
-            return -1;
-        done += (uint32_t)moved;
-    }
-    return 0;
-}
-
 static void
 make_bytes(uint8_t *bytes, uint32_t length, uint32_t token)
 {
@@ -228,7 +214,7 @@ operation_write(Worker *worker, uint32_t slot, Report *report,
     }
     if (descriptor < 0)
         return -1;
-    if (file_write_all(descriptor, model->bytes, size) != 0) {
+    if (astra_posix_write_all(descriptor, model->bytes, size) != 0) {
         (void)close(descriptor);
         return -1;
     }
@@ -306,7 +292,7 @@ operation_append(Worker *worker, uint32_t slot, Report *report,
     model->size = old_size + added;
     descriptor = open(path, O_WRONLY | O_APPEND);
     if (descriptor < 0 ||
-        file_write_all(descriptor, model->bytes + old_size, added) != 0 ||
+        astra_posix_write_all(descriptor, model->bytes + old_size, added) != 0 ||
         close(descriptor) != 0) {
         if (descriptor >= 0)
             (void)close(descriptor);

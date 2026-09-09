@@ -33,9 +33,7 @@
  * rather than as noise.
  */
 
-#include <astra/posix.h>
 #include <astra/program.h>
-#include <astra/runtime.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -87,7 +85,7 @@ ASTRA_PROGRAM("heapbench", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
 int
-astra_main(const AstraStartupInfo *startup)
+main(int argc, char **argv)
 {
     static uint8_t *slots[SLOTS];
     static uint32_t sizes[SLOTS];
@@ -101,7 +99,8 @@ astra_main(const AstraStartupInfo *startup)
     uint32_t failures = 0u;
     uint32_t frees = 0u;
 
-    astra_posix_start(startup);
+    (void)argc;
+    (void)argv;
     memset(slots, 0, sizeof(slots));
     memset(sizes, 0, sizeof(sizes));
     /*

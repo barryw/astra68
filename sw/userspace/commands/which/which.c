@@ -1,25 +1,25 @@
 /* `which` -- where a bare command name resolves in the COMMANDS: union. */
 
 #include <astra/program.h>
+#include <astra/posix.h>
 #include <astra/runtime.h>
-#include <astra/stream.h>
 #include <astra/vfs_path.h>
 #include <astra/vfs_process.h>
 #include <astra/vfs_union.h>
 
+#include <stdio.h>
+
 ASTRA_PROGRAM("which", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
-static uint32_t out;
-
 static void say(const char *text)
 {
-    (void)astra_print(out, text);
+    (void)fputs(text, stdout);
 }
 
-int astra_main(const AstraStartupInfo *startup)
+int main(int argc, char **argv)
 {
-    const AstraStartupCapability *standard_output;
+    const AstraStartupInfo *startup = astra_posix_startup();
     const char *name;
     AstraVfsClient *client = NULL;
     AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
@@ -32,16 +32,11 @@ int astra_main(const AstraStartupInfo *startup)
 
     if (!astra_startup_validate(startup))
         return ASTRA_STATUS_INVALID;
-    standard_output = astra_startup_capability(startup, "STDOUT");
-    if (standard_output != NULL)
-        out = standard_output->handle;
-    if (out == 0u)
-        return ASTRA_STATUS_ACCESS;
-    name = astra_startup_argument(startup, 1u);
-    if (name == NULL) {
+    if (argc < 2) {
         say("which: name it\n");
         return ASTRA_STATUS_INVALID;
     }
+    name = argv[1];
     status = astra_path_qualify("COMMANDS", "", name, typed, sizeof(typed));
     if (status != ASTRA_VFS_OK) {
         say("which: name too long, refused rather than cut\n");
@@ -62,7 +57,7 @@ int astra_main(const AstraStartupInfo *startup)
     }
     say(wire);
     say(" [");
-    (void)astra_print_u32(out, member);
+    (void)printf("%lu", (unsigned long)member);
     say("]\n");
     return ASTRA_STATUS_OK;
 }

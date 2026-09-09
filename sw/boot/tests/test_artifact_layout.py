@@ -30,7 +30,10 @@ def test_product_artifacts_stay_in_sync_excluded_build_directories():
     assert 'else "build/astra_boot.bin"' in converter
     assert "SPLASH_SOURCE := ../../../sw/boot/assets/" \
            "astra_boot_splash_1280x720_blank.png" in arty
-    assert "TERMINAL_FONT_SOURCE := ../graphics/post_fonts.hex" in arty
+    assert "GRAPHICS_SOURCES := $(GRAPHICS)/src/surface.c" in arty
+    assert "$(GRAPHICS)/src/render_builder.c" in arty
+    assert "$(GRAPHICS_GENERATED)/astra_mono_font.inc" in arty
+    assert "astra_terminal_font.inc" not in arty
     assert "fpga arty graphics post_fonts.hex" in graphics_build
     assert hashlib.sha256(boot_font.read_bytes()).hexdigest() == (
         "3f288d4c72e019d06941de12bd841b20a91cc36873c6bec9552fd8d87abb0042"

@@ -539,8 +539,12 @@ static uint32_t filesystem_unlink(AstraFilesystem *filesystem,
     return status == ASTRA_VFS_OK ? astra_vfs_unlink(client, wire) : status;
 }
 
-static uint32_t filesystem_rename(AstraFilesystem *filesystem,
-                                  const char *from, const char *to)
+typedef uint32_t (*FilesystemTwoPathOperation)(AstraVfsClient *, const char *,
+                                               const char *);
+
+static uint32_t filesystem_two_paths(AstraFilesystem *filesystem,
+                                     const char *from, const char *to,
+                                     FilesystemTwoPathOperation operation)
 {
     AstraVfsClient *from_client = NULL;
     AstraVfsClient *to_client = NULL;
@@ -555,7 +559,7 @@ static uint32_t filesystem_rename(AstraFilesystem *filesystem,
         filesystem_resolve_single(filesystem, to, ASTRA_RIGHT_WRITE, to_wire,
                                   &to_client) &&
         from_client == to_client) {
-        status = astra_vfs_rename(from_client, from_wire, to_wire);
+        status = operation(from_client, from_wire, to_wire);
         if (status != ASTRA_VFS_ERR_NOT_DIR)
             return status;
     }
@@ -573,7 +577,19 @@ static uint32_t filesystem_rename(AstraFilesystem *filesystem,
         return status;
     if (from_client != to_client)
         return ASTRA_VFS_ERR_CROSS_DEVICE;
-    return astra_vfs_rename(from_client, from_wire, to_wire);
+    return operation(from_client, from_wire, to_wire);
+}
+
+static uint32_t filesystem_rename(AstraFilesystem *filesystem,
+                                  const char *from, const char *to)
+{
+    return filesystem_two_paths(filesystem, from, to, astra_vfs_rename);
+}
+
+static uint32_t filesystem_link(AstraFilesystem *filesystem,
+                                const char *from, const char *to)
+{
+    return filesystem_two_paths(filesystem, from, to, astra_vfs_link);
 }
 
 static uint32_t filesystem_chmod(AstraFilesystem *filesystem,
@@ -798,4 +814,6 @@ const AstraFilesystemLibraryV2 astra_library_exports ASTRA_LIBRARY_EXPORTS = {
     filesystem_lstat,
     filesystem_symlink,
     astra_vfs_symlink,
+    filesystem_link,
+    astra_vfs_link,
 };

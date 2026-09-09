@@ -167,6 +167,7 @@ invalid:
 
 uint32_t astra_vfs_host_direct_after_fork(AstraVfsClient *client)
 {
+    AstraVfsHostDirect *direct;
     uint32_t activity;
     uint32_t area;
     uint32_t device;
@@ -177,11 +178,15 @@ uint32_t astra_vfs_host_direct_after_fork(AstraVfsClient *client)
         client->port_direct_area == 0u || client->port_direct_device == 0u)
         return ASTRA_VFS_ERR_INVALID;
     activity = client->activity;
+    direct = client->port_direct_address;
     area = client->port_direct_area;
     device = client->port_direct_device;
     service = client->port_service;
 
-    /* Fork clones capabilities but not mappings or process-local DMA state. */
+    /* The address-space clone includes area mappings, but host channels and
+     * DMA handles remain process-local. Drop the inherited mapping and its
+     * parent-thread lane before constructing the child's transport. */
+    astra_vfs_host_transport_after_fork(&direct->transport);
     client->port_direct_address = NULL;
     client->port_direct_area = 0u;
     client->port_direct_device = 0u;
@@ -191,6 +196,7 @@ uint32_t astra_vfs_host_direct_after_fork(AstraVfsClient *client)
     client->direct_backend_context = NULL;
     client->direct_backend_enter = NULL;
     client->direct_backend_leave = NULL;
+    (void)astra_rt_area_unmap(direct);
     (void)astra_close(area);
 
     /* Drop only the child's cloned port session, retaining its host device. */
@@ -204,9 +210,8 @@ uint32_t astra_vfs_host_direct_after_fork(AstraVfsClient *client)
     client->activity = activity;
     status = astra_vfs_host_direct_connect(client, device);
     if (status != ASTRA_VFS_OK) {
-        /* The clean lazy client remains a correct service-backed fallback. */
         (void)astra_close(device);
-        return ASTRA_VFS_OK;
+        return status;
     }
     client->session = client->port_direct_session;
     client->port_direct_detached = 1u;
@@ -244,20 +249,17 @@ void astra_vfs_host_direct_disconnect(AstraVfsClient *client)
 
 void astra_vfs_host_direct_abandon(AstraVfsClient *client)
 {
+    void *address;
     uint32_t area;
     uint32_t device;
 
     if (client == NULL || client->port_direct_address == NULL)
         return;
+    address = client->port_direct_address;
     area = client->port_direct_area;
     device = client->port_direct_device;
-    /*
-     * A clone inherits cloneable capabilities, not shared-area mappings or
-     * process-local DMA buffers.  The pointer therefore belongs to the
-     * parent and must never be dereferenced here.  Closing the cloned area
-     * and device handles drops all authority the child actually inherited;
-     * the non-cloneable DMA handle remains solely the parent's.
-     */
+    astra_vfs_host_transport_after_fork(
+        &((AstraVfsHostDirect *)address)->transport);
     client->port_direct_address = NULL;
     client->port_direct_area = 0u;
     client->port_direct_device = 0u;
@@ -268,6 +270,7 @@ void astra_vfs_host_direct_abandon(AstraVfsClient *client)
     client->direct_backend_context = NULL;
     client->direct_backend_enter = NULL;
     client->direct_backend_leave = NULL;
+    (void)astra_rt_area_unmap(address);
     (void)astra_close(area);
     (void)astra_close(device);
 }
@@ -580,6 +583,18 @@ uint32_t astra_vfs_host_direct_transport(
             ops->symlink(backend.context,
                          (const char *)symlink->request.body.path,
                          (const char *)symlink->to);
+        break;
+    }
+    case ASTRA_VFS_OP_LINK: {
+        const AstraVfsRenameRequest *link =
+            (const AstraVfsRenameRequest *)request;
+
+        reply->status = client->version < UINT16_C(22) ||
+                                request->size != ASTRA_VFS_RENAME_REQUEST_SIZE ?
+            ASTRA_VFS_ERR_UNSUPPORTED :
+            ops->link(backend.context,
+                      (const char *)link->request.body.path,
+                      (const char *)link->to);
         break;
     }
     default:

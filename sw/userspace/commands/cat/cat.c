@@ -1,162 +1,91 @@
-/*
- * `cat` -- a file, or several, onto standard output.
- *
- * It was a builtin, and it moved out for the reason `ls` did: a builtin cannot
- * be replaced, cannot be run by anything but the shell carrying it, and is a
- * second implementation of reading a file to keep in step with the first. What
- * it gains by being a program is the thing it will be needed for -- once a
- * stream can be pointed somewhere other than the terminal, `cat` writing to
- * standard output is how a file gets written without an editor, and a builtin
- * writing straight into the terminal model could never have been redirected.
- *
- * A path with no assign is resolved against CWD:, which is where the shell
- * says the prompt is standing. That grant is the whole reason this can be a
- * program: the machine has no root and no current directory, so `cat foo`
- * would otherwise name nothing at all.
- */
+/* `cat` -- copy files, or standard input, to standard output. */
 
-#include <astra/vfs_process.h>
 #include <astra/program.h>
-#include <astra/runtime.h>
-#include <astra/stream.h>
-#include <astra/vfs_port_transport.h>
-#include <astra/vfs_union.h>
+#include <astra/posix.h>
+
+#include <errno.h>
+#include <fcntl.h>
+#include <stddef.h>
+#include <string.h>
+#include <unistd.h>
 
 ASTRA_PROGRAM("cat", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
-enum {
-    CAT_CHUNK = 512u,
-};
-
-static uint32_t stdout_handle;
-static uint32_t error_handle;
+enum { CAT_CHUNK = 512u };
 
 static void
 say(const char *text)
 {
-    (void)astra_print(error_handle, text);
+    (void)astra_posix_write_all(STDERR_FILENO, text, strlen(text));
 }
 
 static void
-complain(const char *path, uint32_t status)
+complain(const char *path)
 {
-    const char *text = astra_vfs_status_text(status);
+    int error = errno;
 
     say("cat: ");
     say(path);
     say(": ");
-    if (text != NULL) {
-        say(text);
-    } else {
-        say("operation failed");
-    }
+    say(strerror(error));
     say("\n");
+}
+
+static int
+emit_descriptor(int descriptor, const char *name)
+{
+    char chunk[CAT_CHUNK];
+
+    for (;;) {
+        ssize_t moved = read(descriptor, chunk, sizeof(chunk));
+
+        if (moved < 0) {
+            if (errno == EINTR)
+                continue;
+            complain(name);
+            return 1;
+        }
+        if (moved == 0)
+            return 0;
+        if (astra_posix_write_all(STDOUT_FILENO, chunk,
+                                  (size_t)moved) != 0) {
+            complain("standard output");
+            return 1;
+        }
+    }
 }
 
 static int
 emit(const char *path)
 {
-    static uint8_t chunk[CAT_CHUNK];
-    AstraVfsClient *client = NULL;
-    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
-    uint64_t offset = 0u;
-    uint64_t size = 0u;
-    uint16_t kind = 0u;
-    char typed[ASTRA_VFS_PATH_MAX];
-    char wire[ASTRA_VFS_PATH_MAX];
-    uint32_t status;
+    int descriptor;
+    int result;
 
-    /*
-     * "CWD" and an empty directory, not the shell's assign and directory: the
-     * directory is already folded into the root the grant carries, so this
-     * qualifies a bare name and leaves an ASSIGN:path one alone.
-     */
-    status = astra_process_path(path, typed, sizeof(typed));
-    if (status == ASTRA_VFS_OK)
-        status = astra_vfs_assign_open(
-            astra_process_vfs_assigns(), typed, ASTRA_RIGHT_READ,
-            ASTRA_VFS_OPEN_READ, astra_process_vfs_assign_client, NULL,
-            wire, sizeof(wire), &file, &size, &kind, &client, NULL);
-    if (status != ASTRA_VFS_OK) {
-        complain(path, status);
-        return (int)status;
+    if (strcmp(path, "-") == 0)
+        return emit_descriptor(STDIN_FILENO, "standard input");
+    descriptor = open(path, O_RDONLY);
+    if (descriptor < 0) {
+        complain(path);
+        return 1;
     }
-    for (;;) {
-        uint32_t moved = 0u;
-
-        status = astra_vfs_port_read_bulk(client, file, offset, chunk,
-                                          sizeof(chunk), &moved);
-        if (status != ASTRA_VFS_OK) {
-            complain(path, status);
-            break;
-        }
-        /* A short read is normal: one message carries a bounded payload. */
-        if (moved == 0u)
-            break;
-        offset += moved;
-        if (astra_stream_write_all(stdout_handle, chunk, moved) !=
-            ASTRA_SYSCALL_OK) {
-            say("cat: ");
-            say(path);
-            say(": output stopped\n");
-            status = ASTRA_VFS_ERR_IO;
-            break;
-        }
+    result = emit_descriptor(descriptor, path);
+    if (close(descriptor) != 0 && result == 0) {
+        complain(path);
+        result = 1;
     }
-    (void)astra_vfs_close(client, file);
-    return status == ASTRA_VFS_OK ? 0 : (int)status;
+    return result;
 }
 
 int
-astra_main(const AstraStartupInfo *startup)
+main(int argc, char **argv)
 {
-    const AstraStartupCapability *capability;
     int result = 0;
-    int named = 0;
-    uint32_t status;
 
-    if (!astra_startup_validate(startup))
-        return ASTRA_STATUS_INVALID;
-    capability = astra_startup_capability(startup, "STDOUT");
-    if (capability != NULL)
-        stdout_handle = capability->handle;
-    capability = astra_startup_capability(startup, "STDERR");
-    if (capability != NULL)
-        error_handle = capability->handle;
-    if (stdout_handle == 0u)
-        return ASTRA_STATUS_ACCESS;
-    if (error_handle == 0u)
-        error_handle = stdout_handle;
-    if (startup->argc < 2u) {
-        /*
-         * No standard input to fall back on yet, so this says what it needs
-         * rather than waiting on a stream nothing will write.
-         */
-        say("cat: needs a file\n");
-        return ASTRA_STATUS_INVALID;
-    }
-    status = astra_process_vfs_init(startup);
-    if (status != ASTRA_VFS_OK) {
-        say("cat: filesystem unavailable\n");
-        return (int)status;
-    }
-    for (uint32_t index = 1u; index < startup->argc; ++index) {
-        const char *word = astra_startup_argument(startup, index);
-        int one;
-
-        if (word == NULL || word[0] == '\0')
-            continue;
-        named = 1;
-        /* Every file is attempted; the first refusal is what is returned. */
-        one = emit(word);
-        if (one != 0 && result == 0)
-            result = one;
-    }
-    if (!named) {
-        say("cat: needs a file\n");
-        result = ASTRA_STATUS_INVALID;
-    }
-    astra_process_vfs_close();
+    if (argc < 2)
+        return emit_descriptor(STDIN_FILENO, "standard input");
+    for (int index = 1; index < argc; ++index)
+        if (emit(argv[index]) != 0)
+            result = 1;
     return result;
 }

@@ -29,6 +29,8 @@ static char last_rename_from[ASTRA_VFS_PATH_MAX];
 static char last_rename_to[ASTRA_VFS_PATH_MAX];
 static char last_symlink_target[ASTRA_VFS_PATH_MAX];
 static char last_symlink_path[ASTRA_VFS_PATH_MAX];
+static char last_link_from[ASTRA_VFS_PATH_MAX];
+static char last_link_to[ASTRA_VFS_PATH_MAX];
 
 static int same(const char *left, const char *right)
 {
@@ -383,6 +385,16 @@ uint32_t astra_vfs_symlink(AstraVfsClient *value, const char *target,
     return ASTRA_VFS_OK;
 }
 
+uint32_t astra_vfs_link(AstraVfsClient *value, const char *from,
+                        const char *to)
+{
+    if (value != &client)
+        return ASTRA_VFS_ERR_INVALID;
+    snprintf(last_link_from, sizeof(last_link_from), "%s", from);
+    snprintf(last_link_to, sizeof(last_link_to), "%s", to);
+    return ASTRA_VFS_OK;
+}
+
 uint32_t astra_vfs_port_transport(void *context, uint32_t operation,
                                   const AstraVfsRequest *request,
                                   AstraVfsReply *reply)
@@ -444,6 +456,7 @@ int main(void)
     uint32_t length;
 
     assert(library->abi_major == ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR);
+    assert(library->abi_minor == ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR);
     astra_assign_table_init(&single_assigns);
     assert(astra_assign_bind(&single_assigns, "WORK", 7u,
                              ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE,
@@ -609,6 +622,12 @@ int main(void)
            ASTRA_VFS_OK);
     assert(same(last_symlink_target, "note") &&
            same(last_symlink_path, "/work/new-link"));
+    assert(library->link(&filesystem, "WORK:note", "WORK:hard-link") ==
+           ASTRA_VFS_OK);
+    assert(same(last_link_from, "/work/note") &&
+           same(last_link_to, "/work/hard-link"));
+    assert(library->link(&filesystem, "WORK:note", "WORK:tool") ==
+           ASTRA_VFS_ERR_CROSS_DEVICE);
     assert(library->unlink(&filesystem, "WORK:link") == ASTRA_VFS_OK &&
            removed_link != 0u);
     stat_calls = 0u;

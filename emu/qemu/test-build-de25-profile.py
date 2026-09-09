@@ -18,6 +18,8 @@ for required in (
     "-I$COMPILER_INCLUDE",
     "/usr/lib/aarch64-linux-gnu/pkgconfig",
     "-mcpu=cortex-a76",
+    'ninja -C "$BUILD" -j "$ASTRA_QEMU_JOBS" qemu-system-m68k >&2',
+    'ninja -C "$BUILD" qemu-system-m68k >&2',
 ):
     assert required in build, f"missing DE25 build contract: {required}"
 assert "-mcpu=cortex-a55" not in build

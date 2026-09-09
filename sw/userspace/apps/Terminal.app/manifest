@@ -7,17 +7,18 @@ executable bin/m68k-68040/Terminal
 icon resources/Terminal.aicon
 capability GUI
 capability WORK:rw
+capability HOME:rw
 capability COMMANDS:r
 capability LIBS:r
 capability EVENTS:r
 capability PROC:r
 capability METRICS:r
-capability CONFIG:rw
-capability CONFIG_COMMANDS:rw
+capability CONFIG_COMMANDS:r
 capability EVENT_CONTROL
 capability NETWORK
 capability NETWORK_LISTEN
 capability NTP
+capability POSIX_PROCESS
 requires graphics.library 1 1.1.0
 requires font.library 1 1.0.0
 requires filesystem.library 2 2.0.0

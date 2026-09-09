@@ -11,6 +11,8 @@
 
 #include <astra/endian.h>
 
+#include <string.h>
+
 #define PROCESS_VFS_CLIENT_MAX ASTRA_ASSIGN_MAX
 
 typedef struct OpenLibraryRecord {
@@ -33,6 +35,8 @@ typedef struct LibraryImage {
 } LibraryImage;
 
 static AstraAssignTable assigns;
+static char current_assign[ASTRA_CAPABILITY_NAME_MAX];
+static char current_directory[ASTRA_VFS_PATH_MAX];
 /*
  * One client per distinct mount handle, connected the first time something
  * asks for it.
@@ -91,6 +95,8 @@ void astra_process_vfs_close(void)
         clients[client_count].connected = 0u;
     }
     vfs_initialized = 0u;
+    current_assign[0] = '\0';
+    current_directory[0] = '\0';
 }
 
 uint32_t astra_process_vfs_state_size(void)
@@ -304,10 +310,13 @@ static AstraVfsClient *client_ready(uint32_t slot)
     if (slot >= client_count)
         return NULL;
     if (clients[slot].connected == 0u) {
-        if (astra_vfs_host_port_connect_lazy(&clients[slot].client,
-                                             clients[slot].handle) !=
-            ASTRA_VFS_OK)
+        uint32_t status = astra_vfs_host_port_connect_lazy(
+            &clients[slot].client, clients[slot].handle);
+
+        if (status != ASTRA_VFS_OK) {
+            (void)astra_log_failure("VFS port reconnect", status);
             return NULL;
+        }
         clients[slot].connected = 1u;
     }
     return &clients[slot].client;
@@ -870,11 +879,6 @@ static uint32_t seed_process_vfs(const AstraStartupInfo *startup,
     if (!astra_startup_validate(startup) ||
         startup->capabilities_address == 0u)
         return ASTRA_VFS_ERR_INVALID;
-    capabilities = (const AstraStartupCapability *)(uintptr_t)
-        startup->capabilities_address;
-    if (astra_assign_seed(&assigns, capabilities,
-                          startup->capability_count) != ASTRA_VFS_OK)
-        return ASTRA_VFS_ERR_INVALID;
     if (fork_child) {
         for (uint32_t index = 0u; index < client_count; ++index) {
             uint32_t status;
@@ -894,9 +898,13 @@ static uint32_t seed_process_vfs(const AstraStartupInfo *startup,
         }
         /* Fork preserves the namespace and its handles exactly. */
         return vfs_initialized ? ASTRA_VFS_OK : ASTRA_VFS_ERR_NOT_FOUND;
-    } else {
-        astra_process_vfs_close();
     }
+    capabilities = (const AstraStartupCapability *)(uintptr_t)
+        startup->capabilities_address;
+    astra_process_vfs_close();
+    if (astra_assign_seed(&assigns, capabilities,
+                          startup->capability_count) != ASTRA_VFS_OK)
+        return ASTRA_VFS_ERR_INVALID;
     /*
      * Only records below client_count have ever held state.  Clearing the
      * entire namespace-sized array in a COW child needlessly faults and copies
@@ -927,12 +935,20 @@ static uint32_t seed_process_vfs(const AstraStartupInfo *startup,
         ++client_count;
     }
     vfs_initialized = client_count != 0u;
+    if (vfs_initialized) {
+        const AstraAssign *cwd = astra_assign_lookup(&assigns, "CWD");
+
+        if (cwd == NULL)
+            cwd = astra_assign_lookup(&assigns, "WORK");
+        if (cwd != NULL)
+            (void)strcpy(current_assign, cwd->name);
+    }
     return vfs_initialized ? ASTRA_VFS_OK : ASTRA_VFS_ERR_NOT_FOUND;
 }
 
 uint32_t astra_process_vfs_init(const AstraStartupInfo *startup)
 {
-    return seed_process_vfs(startup, 0);
+    return vfs_initialized ? ASTRA_VFS_OK : seed_process_vfs(startup, 0);
 }
 
 uint32_t astra_process_vfs_after_fork_child(
@@ -944,6 +960,33 @@ uint32_t astra_process_vfs_after_fork_child(
 AstraAssignTable *astra_process_vfs_assigns(void)
 {
     return &assigns;
+}
+
+uint32_t astra_process_vfs_set_current_directory(const char *assign,
+                                                 const char *path)
+{
+    char normal[ASTRA_VFS_PATH_MAX];
+    const AstraAssign *binding;
+    uint32_t status;
+
+    if (!vfs_initialized || assign == NULL || path == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    if (assign[0] == '\0') {
+        if (path[0] != '\0')
+            return ASTRA_VFS_ERR_INVALID;
+        current_assign[0] = '\0';
+        current_directory[0] = '\0';
+        return ASTRA_VFS_OK;
+    }
+    binding = astra_assign_lookup(&assigns, assign);
+    if (binding == NULL)
+        return ASTRA_VFS_ERR_NOT_FOUND;
+    status = astra_path_normalise(path, normal, sizeof(normal));
+    if (status != ASTRA_VFS_OK)
+        return status;
+    (void)strcpy(current_assign, binding->name);
+    (void)strcpy(current_directory, normal);
+    return ASTRA_VFS_OK;
 }
 
 AstraVfsClient *astra_process_vfs_client(void)
@@ -1110,10 +1153,10 @@ uint32_t astra_process_filesystem_open_bootstrap(
  */
 uint32_t astra_process_path(const char *typed, char *out, uint32_t capacity)
 {
-    const char *assign;
-
-    assign = astra_assign_lookup(&assigns, "CWD") != NULL ? "CWD" : "WORK";
-    return astra_path_qualify(assign, "", typed, out, capacity);
+    if (current_assign[0] == '\0')
+        return ASTRA_VFS_ERR_NOT_FOUND;
+    return astra_path_qualify(current_assign, current_directory, typed, out,
+                              capacity);
 }
 
 uint32_t astra_process_read_file(AstraProcessFilesystem *filesystem,

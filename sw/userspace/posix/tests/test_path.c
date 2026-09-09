@@ -40,6 +40,8 @@ int main(void)
            "/SYS/vim", "SYS:vim");
     expect("/WORK", "commands:vim", 1,
            "/commands/vim", "COMMANDS:vim");
+    expect("/WORK", "HOME:/.zshrc", 1,
+           "/HOME/.zshrc", "HOME:.zshrc");
     expect("/WORK", "../../..", 0, "/", "");
     expect("/", "WORK", 1, "/WORK", "WORK:");
     expect("/A/B/C", "../../D", 1, "/A/D", "A:D");

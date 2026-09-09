@@ -10,14 +10,15 @@ document defines how the kernel translates, owns, and changes those ranges.
 The physical aperture and boot-reservation table lives only in
 `MEMORY_MAP.md`. Boot ranges come from validated `AstraBootInfo`; the allocator
 does not infer ownership from linker symbols. Frame metadata is sized from the
-reported 128 MiB guest map.
+reported guest map and carved from its largest usable range.
 
 ## Logical spaces
 
 ### Supervisor (SRP)
 
-- Kernel SDRAM is identity mapped at `0x02000000..0x03FFFFFF` except for the
-  ISP and deferred-worker MSP guard pages selected by the linker.
+- Kernel SDRAM is identity mapped across the RAM ranges reported by validated
+  BootInfo except for the ISP and deferred-worker MSP guard pages selected by
+  the linker.
 - Required Vesta, Astraea, Vega, and OHCI pages are identity mapped
   cache-inhibited in `0xFFF00000..0xFFF40FFF`.
 - Vectors, exception code, active ISP/MSP stacks, page tables, frame

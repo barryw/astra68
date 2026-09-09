@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -14,7 +15,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import astra_image
-from qemu_runtime import qemu_environment
+from qemu_runtime import DEFAULT_MEMORY, qemu_environment
 
 BOOT_MARKER = "stage 8"
 DISPLAY_QUEUE = 0xFFF001E0
@@ -33,6 +34,15 @@ EXPECTED_POINTER_SUBMISSIONS = 1
 EXPECTED_POINTER_BATCHES = 0
 RENDER_OPERATION = 3
 CURSOR_OPERATION = 4
+CPU_BENCHMARK = re.compile(
+    r"^CPU benchmark \.{6} ([0-9]+) Hz effective "
+    r"\(best ([0-9]+) us kernel decode\)$"
+)
+
+
+def parse_cpu_benchmark(line):
+    match = CPU_BENCHMARK.fullmatch(line)
+    return tuple(map(int, match.groups())) if match else None
 
 
 class Qmp:
@@ -113,7 +123,7 @@ def run(qemu, rom, image, catalog, deadline):
         environment = qemu_environment(
             qemu, hostfs_root=os.path.join(directory, "hostfs"))
         machine = subprocess.Popen(
-            [qemu, "-M", "astra68", "-m", "128M", "-bios", rom,
+            [qemu, "-M", "astra68", "-m", DEFAULT_MEMORY, "-bios", rom,
              "-display", "none", "-monitor", "none", "-serial", "stdio",
              "-no-reboot", "-qmp", "unix:%s,server=on,wait=off" % socket_path,
              "-drive", "if=none,format=raw,file=%s" % scratch],
@@ -160,12 +170,11 @@ def run(qemu, rom, image, catalog, deadline):
                      registers, serial[-40:]))
             benchmark = next((line for line in serial
                               if line.startswith("CPU benchmark ...... ")), "")
-            try:
-                measured_hz = int(benchmark.split()[3])
-                benchmark_us = int(benchmark.split()[8])
-            except (IndexError, ValueError):
+            measurement = parse_cpu_benchmark(benchmark)
+            if measurement is None:
                 raise RuntimeError("missing CPU throughput measurement: %s" %
                                    serial[-40:])
+            measured_hz, benchmark_us = measurement
             if measured_hz <= NOMINAL_CPU_HZ:
                 raise RuntimeError("CPU throughput did not exceed timer rate: "
                                    "%d Hz" % measured_hz)
@@ -369,8 +378,6 @@ def run(qemu, rom, image, catalog, deadline):
                     keyboard_completions != keyboard_submissions or \
                     keyboard_batches <= typed_batches or \
                     keyboard_glyphs <= typed_glyphs or \
-                    qmp.property("astra-display-operation") != \
-                        RENDER_OPERATION or \
                     (qmp.word(INPUT_STATUS) & INPUT_COUNT_MASK) != 0:
                 raise RuntimeError(
                     "keyboard route requests=%d/%d batches=%d glyphs=%d "

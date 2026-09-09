@@ -222,5 +222,7 @@ uint32_t astra_vfs_readlink(AstraVfsClient *client, const char *path,
                             uint32_t *length);
 uint32_t astra_vfs_symlink(AstraVfsClient *client, const char *target,
                            const char *path);
+uint32_t astra_vfs_link(AstraVfsClient *client, const char *from,
+                        const char *to);
 
 #endif

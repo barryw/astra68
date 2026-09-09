@@ -57,9 +57,10 @@ FS_MKDIR = 9
 FS_RENAME = 11
 FS_READLINK = 13
 FS_SYMLINK = 14
+FS_LINK = 15
 SERVICE_METRICS = 2
 METRICS_SNAPSHOT = 1
-METRICS_SIZE = 352
+METRICS_SIZE = 368
 METRIC_HOST_COMMANDS = 8
 
 OPEN_READ = 1 << 0
@@ -213,7 +214,7 @@ def configure_channel(qtest, generation, operation, slot=3, owner=0x1001,
 
 def run(qtest, root, outside):
     qtest.detect_endian()
-    assert qtest.read32(HACC_VERSION) == 0x00010005
+    assert qtest.read32(HACC_VERSION) == 0x00010006
     assert qtest.read32(HACC_CAPS) == 63
     assert qtest.read32(HACC_STATE) == 1
     assert qtest.read32(HACC_MAX_TRANSFER) == 2 * 1024 * 1024
@@ -228,7 +229,7 @@ def run(qtest, root, outside):
     assert status(metrics) == STATUS_OK
     assert get32(metrics, 52) == METRICS_SIZE
     snapshot = qtest.read(BUFFER + COMMAND_SIZE, METRICS_SIZE)
-    assert struct.unpack_from(">IHH", snapshot, 0) == (METRICS_SIZE, 1, 42)
+    assert struct.unpack_from(">IHH", snapshot, 0) == (METRICS_SIZE, 1, 44)
     assert get64(snapshot, 16) != 0
     assert get64(snapshot, 16 + METRIC_HOST_COMMANDS * 8) == 0
     too_small = execute(qtest, [make_command(
@@ -499,6 +500,12 @@ def run(qtest, root, outside):
     assert status(read) == STATUS_OK
     assert get32(read, 52) == capacity
     assert qtest.read(BUFFER + COMMAND_SIZE, capacity) == payload
+
+    hard_linked = execute(qtest, [make_command(
+        generation, FS_LINK, "/data", "/data-hard-link")])[0]
+    assert status(hard_linked) == STATUS_OK
+    assert os.path.samefile(os.path.join(root, "data"),
+                            os.path.join(root, "data-hard-link"))
 
     malformed = execute(qtest, [make_command(
         generation, FS_READ, handle=handle, data_offset=0,

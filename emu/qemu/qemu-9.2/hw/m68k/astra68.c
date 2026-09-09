@@ -38,6 +38,7 @@
 #include "hw/m68k/astra_render_batch.h"
 #include "hw/m68k/astra_render_protocol.h"
 #include "astra/block.h"
+#include "astra/boot.h"
 #include "astra/display.h"
 #include "astra/host.h"
 #include "astra/network.h"
@@ -54,9 +55,6 @@
 #define ASTRA_BRAM_BASE          0x01ff8000u
 #define ASTRA_BRAM_SIZE          (32 * KiB)
 #define ASTRA_SDRAM_BASE         0x02000000u
-#define ASTRA_SDRAM_HOSTED_SIZE  (128 * MiB)
-#define ASTRA_ROM_BASE           0xffe00000u
-#define ASTRA_ROM_SIZE           (512 * KiB)
 #define ASTRA_VESTA_BASE         0xfff00000u
 #define ASTRA_VESTA_SIZE         0x900u
 #define ASTRA_PANEL_BASE         0xfff01000u
@@ -112,7 +110,7 @@
  * board-specific assumptions were hiding.
  *
  * The aperture matches the guest's reference constants in sw/include/ohci.h.
- * The active 128 MiB guest has RAM above it, which exercises split usable
+ * The active 512 MiB guest has RAM above it, which exercises split usable
  * ranges around a device aperture.
  */
 #define ASTRA_OHCI_BASE          0xfff40000u
@@ -466,8 +464,8 @@ typedef struct AstraHostState {
     uint64_t submissions;
     uint64_t commands;
     uint64_t execution_ns;
-    uint64_t operation_counts[ASTRA_HOST_FS_SYMLINK + 1u];
-    uint64_t operation_execution_ns[ASTRA_HOST_FS_SYMLINK + 1u];
+    uint64_t operation_counts[ASTRA_HOST_FS_LINK + 1u];
+    uint64_t operation_execution_ns[ASTRA_HOST_FS_LINK + 1u];
     uint64_t inflight;
     uint64_t max_inflight;
     uint32_t channel_result;
@@ -2668,7 +2666,7 @@ static void astra_host_execute_metrics(Astra68State *s, uint8_t *command,
     astra_host_metrics_put(snapshot, ASTRA_HOST_METRIC_HOST_MAX_INFLIGHT,
                            qatomic_read(&s->host.max_inflight));
     for (uint32_t operation = 0u;
-         operation <= ASTRA_HOST_FS_SYMLINK; ++operation) {
+         operation <= ASTRA_HOST_FS_LINK; ++operation) {
         astra_host_metrics_put(
             snapshot, ASTRA_HOST_METRIC_FS_COUNT_BASE + operation,
             qatomic_read(&s->host.operation_counts[operation]));
@@ -2744,7 +2742,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         qatomic_inc(&s->host.operation_counts[0]);
         goto done;
     }
-    operation_index = operation <= ASTRA_HOST_FS_SYMLINK ? operation : 0u;
+    operation_index = operation <= ASTRA_HOST_FS_LINK ? operation : 0u;
     qatomic_inc(&s->host.operation_counts[operation_index]);
 
     switch (operation) {
@@ -3141,6 +3139,30 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         }
         break;
     }
+    case ASTRA_HOST_FS_LINK: {
+        char left_leaf[ASTRA_HOST_FS_PATH_MAX];
+        char right_leaf[ASTRA_HOST_FS_PATH_MAX];
+        int left_parent;
+        int right_parent;
+
+        if (!astra_host_path_terminated((const uint8_t *)path) ||
+            !astra_host_path_terminated((const uint8_t *)path2) ||
+            astra_host_parent_pair(s, path, path2, &left_parent, left_leaf,
+                                   &right_parent, right_leaf) < 0) {
+            status = astra_host_status_from_errno(errno);
+        } else if (left_leaf[0] == '\0' || right_leaf[0] == '\0') {
+            status = ASTRA_STATUS_ACCESS;
+            close(left_parent);
+            close(right_parent);
+        } else {
+            status = linkat(left_parent, left_leaf, right_parent, right_leaf,
+                            0) == 0 ?
+                     ASTRA_STATUS_OK : astra_host_status_from_errno(errno);
+            close(left_parent);
+            close(right_parent);
+        }
+        break;
+    }
     default:
         status = ASTRA_STATUS_UNSUPPORTED;
         break;
@@ -3312,6 +3334,12 @@ static void astra_host_channel_configure(Astra68State *s, uint32_t physical)
             !channel->active || channel->owner != owner ||
             channel->host_generation != host_generation ||
             channel->channel_generation != channel_generation) {
+            error_report("Astra68 host channel close rejected: slot=%u "
+                         "active=%u owner=%u/%u host=%u/%u channel=%u/%u",
+                         slot, channel->active ? 1u : 0u, owner,
+                         channel->owner, host_generation,
+                         channel->host_generation, channel_generation,
+                         channel->channel_generation);
             s->host.channel_result = channel->active ?
                 ASTRA_SYSCALL_ACCESS_DENIED : ASTRA_SYSCALL_PEER_DEAD;
             return;
@@ -3644,6 +3672,8 @@ static void astra_host_channel_kick(Astra68State *s, uint32_t slot,
     uint32_t outstanding;
 
     if (!channel->active) {
+        error_report("Astra68 host channel kick rejected: slot=%u inactive",
+                     slot);
         channel->status = ASTRA_SYSCALL_PEER_DEAD;
         return;
     }
@@ -3655,6 +3685,10 @@ static void astra_host_channel_kick(Astra68State *s, uint32_t slot,
     if (base == NULL || !astra_host_channel_header_valid(channel, base) ||
         ldl_be_p(base + HOST_CHANNEL_HEADER_FIELD(producer_position)) !=
             producer) {
+        error_report("Astra68 host channel kick rejected: slot=%u "
+                     "producer=%u submitted=%u consumer=%u",
+                     slot, producer, channel->submitted_position,
+                     channel->consumer_position);
         return;
     }
     outstanding = channel->submitted_position - channel->consumer_position;
@@ -3867,7 +3901,7 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     case 0x028: return ASTRA_CPU_HZ;
     case 0x02c: return ASTRA_SDRAM_BASE;
     case 0x030: return s->ram_size;
-    case 0x034: return ASTRA_ROM_BASE;
+    case 0x034: return ASTRA_ROM_ADDRESS;
     case 0x038: return ASTRA_ROM_SIZE;
     case 0x03c: return ASTRA_BUILD_ID;
     case 0x040: return 3;
@@ -4984,11 +5018,12 @@ static void astra68_init(MachineState *machine)
             { "astra-host-fs-readlink",
               "astra-host-fs-readlink-execution-ns" },
             { "astra-host-fs-symlink",
-              "astra-host-fs-symlink-execution-ns" }
+              "astra-host-fs-symlink-execution-ns" },
+            { "astra-host-fs-link", "astra-host-fs-link-execution-ns" }
         };
 
         G_STATIC_ASSERT(G_N_ELEMENTS(properties) ==
-                        ASTRA_HOST_FS_SYMLINK + 1u);
+                        ASTRA_HOST_FS_LINK + 1u);
         for (size_t index = 0; index < G_N_ELEMENTS(properties); ++index) {
             object_property_add_uint64_ptr(
                 OBJECT(machine), properties[index].count,
@@ -5086,10 +5121,10 @@ static void astra68_init(MachineState *machine)
     /* Real constraints only: POST minimum, page alignment, and aperture. */
     if (machine->ram_size < MiB ||
         (machine->ram_size & (4 * KiB - 1)) != 0 ||
-        (uint64_t)ASTRA_SDRAM_BASE + machine->ram_size > ASTRA_ROM_BASE) {
+        (uint64_t)ASTRA_SDRAM_BASE + machine->ram_size > ASTRA_ROM_ADDRESS) {
         error_report("Astra68 RAM must be at least 1 MiB, a multiple of 4 KiB,"
                      " and must fit below the ROM aperture at 0x%08x",
-                     ASTRA_ROM_BASE);
+                     ASTRA_ROM_ADDRESS);
         exit(EXIT_FAILURE);
     }
     if (!firmware) {
@@ -5109,7 +5144,7 @@ static void astra68_init(MachineState *machine)
 
     memory_region_init_rom(&s->rom, NULL, "astra68.rom", ASTRA_ROM_SIZE,
                            &error_fatal);
-    memory_region_add_subregion(sysmem, ASTRA_ROM_BASE, &s->rom);
+    memory_region_add_subregion(sysmem, ASTRA_ROM_ADDRESS, &s->rom);
     memory_region_init_alias(&s->rom_alias, NULL, "astra68.rom-alias",
                              &s->rom, 0, ASTRA_ROM_SIZE);
     memory_region_add_subregion(sysmem, 0, &s->rom_alias);
@@ -5282,7 +5317,7 @@ static void astra68_machine_init(MachineClass *mc)
     mc->init = astra68_init;
     mc->default_cpu_type = M68K_CPU_TYPE_NAME("m68040");
     mc->valid_cpu_types = valid_cpu_types;
-    mc->default_ram_size = ASTRA_SDRAM_HOSTED_SIZE;
+    mc->default_ram_size = ASTRA_RAM_SIZE_DE25_GUEST;
     mc->default_ram_id = "astra68.sdram";
     mc->max_cpus = 1;
     mc->no_floppy = 1;

@@ -22,6 +22,8 @@ PROJECT_CPPFLAGS := -I include -I../../include -I$(RUNTIME)/include \
 CPPFLAGS := $(PROJECT_CPPFLAGS) -isystem $(PICOLIBC)/include
 CXX_CPPFLAGS := $(PROJECT_CPPFLAGS)
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
+HOST_RESOURCE_DEFINES := -Dgetrlimit=astra_test_getrlimit \
+	-Dsetrlimit=astra_test_setrlimit
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -flto -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
@@ -30,7 +32,7 @@ CXX_TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -flto \
 
 SOURCES := src/startup.c src/console.c src/poll.c src/socket.c src/inet.c src/terminal.c src/file.c src/heap.c src/alloc.c src/time.c src/pthread.c \
 	src/system.c src/scheduling.c src/signal.c \
-	src/identity.c src/process.c src/strftime_format.c src/path.c
+	src/identity.c src/process.c src/resource.c src/strftime_format.c src/path.c
 OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES))
 ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(SOURCES))
 LIB := build/m68k/libastraposix.a
@@ -46,8 +48,10 @@ STARTUP_TEST := build/host/test_startup
 POLL_TEST := build/host/test_poll
 IDENTITY_TEST := build/host/test_identity
 PROCESS_TEST := build/host/test_process
+SIGNAL_TEST := build/host/test_signal
 SOCKET_ADDRESS_TEST := build/host/test_socket_address
 PTHREAD_TEST := build/host/test_pthread
+RESOURCE_TEST := build/host/test_resource
 LIMITS_CONTRACT := build/m68k/limits-contract.o
 CXX_HEADERS_CONTRACT := build/m68k/cxx-headers-contract.o
 CXX_PROGRAM_OBJECT := build/m68k/cxx-program.o
@@ -72,12 +76,12 @@ $(PATH_TEST): src/path.c tests/test_path.c
 	$(HOST_CC) -Isrc -I../../include -std=c11 -Wall -Wextra -Werror -pedantic -O2 \
 	src/path.c tests/test_path.c -o $@
 
-$(DESCRIPTOR_TEST): src/console.c $(RUNTIME)/src/startup.c tests/test_descriptor.c
+$(DESCRIPTOR_TEST): src/console.c src/resource.c $(RUNTIME)/src/startup.c tests/test_descriptor.c
 	@mkdir -p $(@D)
 	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \
 		-I$(STREAMS)/include -I$(VFS)/include -I$(NDK)/include \
-		$(COMMON_FLAGS) -O2 -no-pie -ffunction-sections \
-		-Wl,--gc-sections src/console.c $(RUNTIME)/src/startup.c \
+		$(COMMON_FLAGS) $(HOST_RESOURCE_DEFINES) -O2 -no-pie -ffunction-sections \
+		-Wl,--gc-sections src/console.c src/resource.c $(RUNTIME)/src/startup.c \
 		tests/test_descriptor.c -o $@
 
 $(STARTUP_TEST): src/startup.c tests/test_startup.c
@@ -86,12 +90,12 @@ $(STARTUP_TEST): src/startup.c tests/test_startup.c
 		-I$(STREAMS)/include -I$(VFS)/include -I$(NDK)/include \
 		$(COMMON_FLAGS) -O2 -no-pie src/startup.c tests/test_startup.c -o $@
 
-$(POLL_TEST): src/console.c src/poll.c $(RUNTIME)/src/startup.c tests/test_poll.c
+$(POLL_TEST): src/console.c src/poll.c src/resource.c $(RUNTIME)/src/startup.c tests/test_poll.c
 	@mkdir -p $(@D)
 	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \
 		-I$(STREAMS)/include -I$(VFS)/include -I$(NDK)/include \
-		$(COMMON_FLAGS) -O2 -no-pie -ffunction-sections \
-		-Wl,--gc-sections src/console.c src/poll.c $(RUNTIME)/src/startup.c \
+		$(COMMON_FLAGS) $(HOST_RESOURCE_DEFINES) -O2 -no-pie -ffunction-sections \
+		-Wl,--gc-sections src/console.c src/poll.c src/resource.c $(RUNTIME)/src/startup.c \
 		tests/test_poll.c -o $@
 
 $(IDENTITY_TEST): src/identity.c tests/test_identity.c
@@ -105,6 +109,12 @@ $(PROCESS_TEST): src/process.c tests/test_process.c
 		$(COMMON_FLAGS) -O2 \
 		src/process.c tests/test_process.c -o $@
 
+$(SIGNAL_TEST): src/signal.c tests/test_signal.c
+	@mkdir -p $(@D)
+	$(HOST_CC) -Itests/include -Iinclude -I../../include -I$(RUNTIME)/include \
+		-I$(STREAMS)/include -I$(VFS)/include -I$(NDK)/include \
+		$(COMMON_FLAGS) -O2 src/signal.c tests/test_signal.c -o $@
+
 $(SOCKET_ADDRESS_TEST): src/inet.c tests/test_socket_address.c
 	@mkdir -p $(@D)
 	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \
@@ -116,6 +126,10 @@ $(PTHREAD_TEST): src/pthread.c tests/test_pthread.c
 		$(COMMON_FLAGS) -O2 -D_POSIX_C_SOURCE=200809L \
 		-D_BITS_PTHREADTYPES_COMMON_H=1 \
 		-DASTRA_PTHREAD_NO_LIBC_LOCKS=1 $^ -o $@
+
+$(RESOURCE_TEST): src/resource.c tests/test_resource.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(COMMON_FLAGS) $(HOST_RESOURCE_DEFINES) -O2 $^ -o $@
 
 $(LIMITS_CONTRACT): tests/limits_contract.c
 	@mkdir -p $(@D)
@@ -180,7 +194,7 @@ $(LINK_CONTRACT): tests/link_standard_main.c kit/program.c $(LIB) \
 	@$(CROSS)nm $@ | grep -q ' T astra_main$$'
 	@echo "astra posix standard main link: PASS"
 
-test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) $(IDENTITY_TEST) $(PROCESS_TEST) $(SOCKET_ADDRESS_TEST) $(PTHREAD_TEST) $(LIMITS_CONTRACT) $(CXX_HEADERS_CONTRACT) $(LINK_CONTRACT) $(CXX_LINK_CONTRACT)
+test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) $(IDENTITY_TEST) $(PROCESS_TEST) $(SIGNAL_TEST) $(SOCKET_ADDRESS_TEST) $(PTHREAD_TEST) $(RESOURCE_TEST) $(LIMITS_CONTRACT) $(CXX_HEADERS_CONTRACT) $(LINK_CONTRACT) $(CXX_LINK_CONTRACT)
 	./$(HOST_TEST)
 	./$(PATH_TEST)
 	./$(DESCRIPTOR_TEST)
@@ -188,8 +202,10 @@ test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) 
 	./$(POLL_TEST)
 	./$(IDENTITY_TEST)
 	./$(PROCESS_TEST)
+	./$(SIGNAL_TEST)
 	./$(SOCKET_ADDRESS_TEST)
 	./$(PTHREAD_TEST)
+	./$(RESOURCE_TEST)
 
 sanitize:
 	@mkdir -p build/host
@@ -204,12 +220,13 @@ sanitize:
 	./build/host/test_path_sanitize
 	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \
 		-I$(STREAMS)/include -I$(VFS)/include -I$(NDK)/include \
-		$(COMMON_FLAGS) -O2 -ffunction-sections -Wl,--gc-sections \
+		$(COMMON_FLAGS) $(HOST_RESOURCE_DEFINES) -O2 -ffunction-sections \
+		-Wl,--gc-sections \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
 		-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
 		-Dread=astra_posix_test_read -Dwrite=astra_posix_test_write \
 		-Dpipe=astra_posix_test_pipe \
-		src/console.c $(RUNTIME)/src/startup.c tests/test_descriptor.c \
+		src/console.c src/resource.c $(RUNTIME)/src/startup.c tests/test_descriptor.c \
 		-o build/host/test_descriptor_sanitize
 	./build/host/test_descriptor_sanitize
 

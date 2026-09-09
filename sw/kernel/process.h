@@ -88,7 +88,9 @@ _Static_assert(KERNEL_PROCESS_MAX == KERNEL_VM_ADDRESS_SPACE_MAX,
 
 #define KERNEL_PROCESS_RIGHT_QUERY     (1u << 0)
 #define KERNEL_PROCESS_RIGHT_TERMINATE (1u << 1)
+#define KERNEL_PROCESS_RIGHT_SIGNAL    (1u << 3)
 #define KERNEL_PROCESS_RIGHT_WAIT      (1u << 4)
+#define KERNEL_PROCESS_RIGHT_TRANSFER  (1u << 5)
 #define KERNEL_PROCESS_RIGHT_PRIORITY  (1u << 6)
 /*
  * ASTRA_RIGHT_DEBUG in the same bit. Deliberately outside
@@ -99,7 +101,8 @@ _Static_assert(KERNEL_PROCESS_MAX == KERNEL_VM_ADDRESS_SPACE_MAX,
 #define KERNEL_PROCESS_RIGHT_DEBUG     (1u << 7)
 #define KERNEL_PROCESS_RIGHTS \
     (KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_TERMINATE | \
-     KERNEL_PROCESS_RIGHT_WAIT | KERNEL_PROCESS_RIGHT_PRIORITY)
+     KERNEL_PROCESS_RIGHT_SIGNAL | KERNEL_PROCESS_RIGHT_WAIT | \
+     KERNEL_PROCESS_RIGHT_TRANSFER | KERNEL_PROCESS_RIGHT_PRIORITY)
 
 typedef enum KernelProcessState {
     KERNEL_PROCESS_UNUSED = 0,
@@ -113,7 +116,8 @@ typedef enum KernelProcessExitReason {
     KERNEL_PROCESS_EXIT_NONE = 0,
     KERNEL_PROCESS_EXIT_SYSCALL,
     KERNEL_PROCESS_EXIT_LAST_THREAD,
-    KERNEL_PROCESS_EXIT_USER_FAULT
+    KERNEL_PROCESS_EXIT_USER_FAULT,
+    KERNEL_PROCESS_EXIT_SIGNAL
 } KernelProcessExitReason;
 
 typedef enum KernelProcessStatus {
@@ -189,7 +193,8 @@ typedef struct KernelProcessSnapshot {
     uint8_t supervisor_guard_pages;
     uint16_t handle_references;
     uint16_t death_waiters;
-    uint8_t reserved[2];
+    uint8_t suspended;
+    uint8_t reserved;
 } KernelProcessSnapshot;
 
 typedef struct KernelSchedulerStats {

@@ -6,7 +6,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010028
+#define ASTRA_SYSCALL_ABI_VERSION 0x0001002cu
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -99,10 +99,10 @@
  * AstraLaunchArguments block, or zero for none. The record may point at one
  * bounded packed environment block; the kernel copies it before launching and
  * publishes a conventional null-terminated `environ` vector. It returns a
- * handle to the new process in data[1] -- carrying QUERY, WAIT, TERMINATE and
- * ADMINISTER for priority, and never DEBUG, because having launched something
- * is not authority to inspect its event stream -- and the new process id in
- * data[2].
+ * handle to the new process in data[1] -- carrying QUERY, WAIT, SIGNAL,
+ * TERMINATE, TRANSFER and ADMINISTER for priority, and never DEBUG, because
+ * having launched something is not authority to inspect its event stream --
+ * and the new process id in data[2].
  *
  * Every grant names a handle the caller already holds, with rights that are a
  * subset of the caller's. A handle it does not hold, or rights wider than its
@@ -158,7 +158,11 @@
  * data[1]. New threads inherit the new process default.
  */
 #define ASTRA_SYSCALL_PROCESS_PRIORITY 57
-/* COW clone: D1=child handle and D2=child id in the parent, both zero child. */
+/*
+ * COW clone. The child is atomically created suspended so its parent can
+ * publish required bookkeeping before resuming it. D1=child handle and
+ * D2=child id in the parent, both zero in the child.
+ */
 #define ASTRA_SYSCALL_PROCESS_CLONE    58
 /* Kernel-serialized transfers for clone-safe byte-mode bulk rings. */
 #define ASTRA_SYSCALL_RING_READ_TRY    59
@@ -219,6 +223,42 @@
 #define ASTRA_SYSCALL_HOST_CHANNEL_CLOSE     79
 /* D2=consumer position, D3:D4=deadline; the current thread owns the channel. */
 #define ASTRA_SYSCALL_HOST_CHANNEL_WAIT      80
+/*
+ * Delivers one process notification through the registered user trampoline.
+ * D1 names a process handle carrying SIGNAL; D2 is a bit number from 1..31.
+ * Standard notifications coalesce while pending. Policy such as POSIX process
+ * groups stays in its userspace service; Axiom only enforces the capability
+ * and arranges the upcall.
+ */
+#define ASTRA_SYSCALL_PROCESS_SIGNAL          81
+/*
+ * Unconditionally retires the named process. D1 carries TERMINATE and D2 is
+ * the nonzero 1..31 reason preserved for a waiter. This is the native
+ * mechanism POSIX uses for SIGKILL; it cannot be masked or redirected through
+ * a user trampoline.
+ */
+#define ASTRA_SYSCALL_PROCESS_TERMINATE       82
+/* Stops/continues all live threads without disturbing blocked waits. */
+#define ASTRA_SYSCALL_PROCESS_SUSPEND         83
+#define ASTRA_SYSCALL_PROCESS_RESUME          84
+/*
+ * Interruptible sleep on the monotonic clock. D1:D2 is an absolute deadline.
+ * With ASTRA_THREAD_SLEEP_REPLACE_SIGNAL_MASK, D4 atomically replaces the
+ * signal mask before the pending-signal check and D1 returns the old mask.
+ */
+#define ASTRA_SYSCALL_THREAD_SLEEP             85
+#define ASTRA_THREAD_SLEEP_REPLACE_SIGNAL_MASK (1u << 0)
+#define ASTRA_THREAD_SLEEP_RELATIVE            (1u << 1)
+#define ASTRA_THREAD_SLEEP_FLAG_MASK \
+    (ASTRA_THREAD_SLEEP_REPLACE_SIGNAL_MASK | ASTRA_THREAD_SLEEP_RELATIVE)
+/*
+ * Complete live-process snapshot for the initial supervisor's PROC: service.
+ * D1 is its own PROCESS handle, D2 an AstraProcSnapshot array, and D3 its
+ * record capacity. The fixed-slot array is always written in full and D1
+ * returns its number of live records. This authority is deliberately not
+ * conferred by an ordinary process handle.
+ */
+#define ASTRA_SYSCALL_PROCESS_SNAPSHOT          86
 
 #define ASTRA_VM_PRIVATE_READ  (1u << 0)
 #define ASTRA_VM_PRIVATE_WRITE (1u << 1)

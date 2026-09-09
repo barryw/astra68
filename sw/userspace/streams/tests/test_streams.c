@@ -19,7 +19,7 @@
 #include <astra/syscall.h>
 #include <astra/terminal.h>
 
-#define MOCK_PORT_MAX 8u
+#define MOCK_PORT_MAX 16u
 #define MOCK_QUEUE_MAX 4u
 
 typedef struct MockPort {
@@ -47,6 +47,8 @@ static uint32_t next_port = 1u;
 static uint32_t mock_activity = 0x5A5A5A5Au;
 static uint32_t yields;
 static uint32_t closes;
+static uint32_t tty_signal_count;
+static uint32_t tty_signal_control;
 /*
  * The service side runs inside the client's wait. Not a convenience for the
  * test: on the machine the supervisor's loop pumps while a child is blocked
@@ -65,8 +67,18 @@ mock_reset(void)
     next_port = 1u;
     yields = 0u;
     closes = 0u;
+    tty_signal_count = 0u;
+    tty_signal_control = 0u;
     served_source = NULL;
     served_sink = NULL;
+}
+
+static void
+record_tty_signal(void *context, uint32_t control)
+{
+    assert(context == &tty_signal_count);
+    ++tty_signal_count;
+    tty_signal_control = control;
 }
 
 uint32_t
@@ -640,7 +652,7 @@ test_terminal_control_is_shared_and_flushes_input(void)
     assert(astra_stream_sink_init(&sink, output, to_terminal, NULL));
     assert(astra_stream_source_init(&source, input));
     astra_stream_tty_state_init(&state);
-    astra_stream_tty_bind(&sink, &source, &state);
+    astra_stream_tty_bind(&sink, &source, &state, 42u);
     astra_stream_sink_size(&sink, 100u, 40u, 800u, 640u);
 
     served_source = &source;
@@ -684,6 +696,27 @@ test_terminal_control_is_shared_and_flushes_input(void)
            observed.rows == 40u && observed.pixel_width == 800u &&
            observed.pixel_height == 640u);
     served_sink = NULL;
+
+    served_source = &source;
+    {
+        AstraStreamIdentity identity;
+
+        assert(astra_stream_identity(input, &identity) == ASTRA_SYSCALL_OK);
+        assert(identity.kind == ASTRA_STREAM_KIND_TERMINAL &&
+               identity.directions == ASTRA_STREAM_DIRECTION_READ &&
+               identity.object_id == 42u);
+    }
+    served_source = NULL;
+    served_sink = &sink;
+    {
+        AstraStreamIdentity identity;
+
+        assert(astra_stream_identity(output, &identity) == ASTRA_SYSCALL_OK);
+        assert(identity.kind == ASTRA_STREAM_KIND_TERMINAL &&
+               identity.directions == ASTRA_STREAM_DIRECTION_WRITE &&
+               identity.object_id == 42u);
+    }
+    served_sink = NULL;
 }
 
 static void
@@ -709,7 +742,7 @@ test_terminal_line_discipline(void)
     assert(astra_stream_sink_init(&sink, output, to_terminal, NULL));
     assert(astra_stream_source_init(&source, input));
     astra_stream_tty_state_init(&state);
-    astra_stream_tty_bind(&sink, &source, &state);
+    astra_stream_tty_bind(&sink, &source, &state, 42u);
     served_source = &source;
 
     assert(astra_stream_tty_input(
@@ -738,6 +771,24 @@ test_terminal_line_discipline(void)
     assert(astra_stream_read_ex(input, bytes, sizeof(bytes), &length,
                                 &flags) == ASTRA_SYSCALL_OK);
     assert(length == 3u && flags == 0u && memcmp(bytes, "\x1b[A", 3u) == 0);
+
+    state.local_flags |= ASTRA_TTY_LFLAG_ICANON | ASTRA_TTY_LFLAG_ISIG;
+    astra_stream_tty_signal(&source, record_tty_signal, &tty_signal_count);
+    assert(astra_stream_tty_input(
+               &source, (const uint8_t *)"held", 4u) == 4u);
+    assert(astra_stream_tty_input(
+               &source, &state.control_characters[ASTRA_TTY_VINTR], 1u) == 1u);
+    assert(tty_signal_count == 1u &&
+           tty_signal_control == ASTRA_TTY_VINTR);
+    assert(source.length == 0u && !astra_stream_source_ready(&source));
+
+    state.local_flags |= ASTRA_TTY_LFLAG_NOFLSH;
+    assert(astra_stream_tty_input(
+               &source, (const uint8_t *)"held", 4u) == 4u);
+    assert(astra_stream_tty_input(
+               &source, &state.control_characters[ASTRA_TTY_VSUSP], 1u) == 1u);
+    assert(tty_signal_count == 2u &&
+           tty_signal_control == ASTRA_TTY_VSUSP && source.length == 4u);
 
     served_source = NULL;
     astra_stream_source_destroy(&source);

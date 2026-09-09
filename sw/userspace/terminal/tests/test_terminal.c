@@ -448,6 +448,7 @@ static char echoed[8][64];
 static uint32_t echoed_lines;
 static char replies[8][32];
 static uint32_t reply_count;
+static uint32_t prompt_count;
 
 static void record_echo(void *context, const char *line, uint32_t length)
 {
@@ -475,6 +476,27 @@ static int refuse_reply(void *context, const uint8_t *bytes, uint32_t length)
     (void)bytes;
     (void)length;
     return 0;
+}
+
+static void record_prompt(void *context)
+{
+    (void)context;
+    ++prompt_count;
+}
+
+static void test_shell_prompt_markers_are_reported(void)
+{
+    AstraTerminal terminal;
+
+    reset(&terminal);
+    prompt_count = 0u;
+    astra_terminal_set_prompt(&terminal, record_prompt, NULL);
+    astra_terminal_write(&terminal, "\x1b]133;A\x07");
+    astra_terminal_write(&terminal, "\x1b]133;B\x07");
+    astra_terminal_write(&terminal, "\x1b]133;B\x1b\\");
+    astra_terminal_write(&terminal, "\x1b]133;BX\x07");
+    assert(prompt_count == 2u);
+    assert(astra_terminal_cell(&terminal, 0u, 0u) == ' ');
 }
 
 static void test_terminal_queries_reply_on_the_input_path(void)
@@ -554,6 +576,7 @@ int main(void)
     test_preallocated_resize();
     test_echo_reports_each_line_once();
     test_terminal_queries_reply_on_the_input_path();
+    test_shell_prompt_markers_are_reported();
     puts("astra terminal: PASS");
     return 0;
 }

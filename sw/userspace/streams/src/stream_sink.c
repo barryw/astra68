@@ -72,16 +72,28 @@ astra_stream_tty_state_init(AstraTtyState *state)
 
 void
 astra_stream_tty_bind(AstraStreamSink *output, AstraStreamSource *input,
-                      AstraTtyState *state)
+                      AstraTtyState *state, uint32_t terminal_id)
 {
     if (output != NULL) {
         output->tty = state;
         output->input = input;
+        output->terminal_id = terminal_id;
     }
     if (input != NULL) {
         input->tty = state;
         input->output = output;
+        input->terminal_id = terminal_id;
     }
+}
+
+void
+astra_stream_tty_signal(AstraStreamSource *input,
+                        AstraStreamTtySignal signal, void *context)
+{
+    if (input == NULL)
+        return;
+    input->signal = signal;
+    input->signal_context = context;
 }
 
 /*
@@ -122,6 +134,7 @@ astra_stream_sink_init(AstraStreamSink *sink, uint32_t receive,
     sink->dropped = 0u;
     sink->tty = NULL;
     sink->input = NULL;
+    sink->terminal_id = 0u;
     sink->idle = 1u;
     return 1;
 }
@@ -268,6 +281,24 @@ answer_size(AstraStreamSink *sink, const AstraStreamRead *request,
     }
 }
 
+static void
+answer_identity(const AstraMessageHeader *request, uint32_t reply_handle,
+                uint32_t kind, uint32_t directions, uint32_t object_id,
+                uint32_t *dropped)
+{
+    AstraStreamIdentity reply = {0};
+
+    reply_header(&reply.header, request, ASTRA_STREAM_OPERATION_IDENTITY_REPLY,
+                 (uint32_t)sizeof(reply));
+    reply.status = ASTRA_SYSCALL_OK;
+    reply.kind = kind;
+    reply.directions = directions;
+    reply.object_id = object_id;
+    if (astra_port_send(reply_handle, &reply, sizeof(reply), NULL, 0u) !=
+        ASTRA_SYSCALL_OK)
+        ++*dropped;
+}
+
 uint32_t
 astra_stream_sink_pump(AstraStreamSink *sink, uint32_t budget)
 {
@@ -324,6 +355,21 @@ astra_stream_sink_pump(AstraStreamSink *sink, uint32_t budget)
             ++rendered;
             continue;
         }
+        if (accept_header(&message.header, size,
+                          ASTRA_STREAM_OPERATION_IDENTITY,
+                          (uint32_t)sizeof(AstraStreamRead))) {
+            if (handle_count == 1u)
+                answer_identity(&message.header, handles[0],
+                                sink->tty != NULL ? ASTRA_STREAM_KIND_TERMINAL :
+                                                    0u,
+                                ASTRA_STREAM_DIRECTION_WRITE,
+                                sink->terminal_id, &sink->dropped);
+            else
+                ++sink->refused;
+            if (handle_count == 1u)
+                (void)astra_close(handles[0]);
+            continue;
+        }
         if (!accept_header(&message.header, size,
                            ASTRA_STREAM_OPERATION_WRITE,
                            (uint32_t)sizeof(message)) ||
@@ -377,6 +423,9 @@ astra_stream_source_init_storage(AstraStreamSource *source, uint32_t receive,
     source->readiness_failures = 0u;
     source->tty = NULL;
     source->output = NULL;
+    source->terminal_id = 0u;
+    source->signal = NULL;
+    source->signal_context = NULL;
     return 1;
 }
 
@@ -395,6 +444,11 @@ astra_stream_source_destroy(AstraStreamSource *source)
     source->length = 0u;
     source->committed = 0u;
     source->eof_pending = 0u;
+    source->tty = NULL;
+    source->output = NULL;
+    source->terminal_id = 0u;
+    source->signal = NULL;
+    source->signal_context = NULL;
 }
 
 int
@@ -482,6 +536,28 @@ astra_stream_tty_input(AstraStreamSource *source, const uint8_t *bytes,
         }
         if ((tty->input_flags & ASTRA_TTY_IFLAG_ISTRIP) != 0u)
             value &= 0x7fu;
+
+        if ((tty->local_flags & ASTRA_TTY_LFLAG_ISIG) != 0u &&
+            (tty_control(tty, ASTRA_TTY_VINTR, value) ||
+             tty_control(tty, ASTRA_TTY_VQUIT, value) ||
+             tty_control(tty, ASTRA_TTY_VSUSP, value))) {
+            uint32_t control = tty_control(tty, ASTRA_TTY_VINTR, value) ?
+                ASTRA_TTY_VINTR :
+                (tty_control(tty, ASTRA_TTY_VQUIT, value) ?
+                    ASTRA_TTY_VQUIT : ASTRA_TTY_VSUSP);
+
+            if ((tty->local_flags & ASTRA_TTY_LFLAG_NOFLSH) == 0u) {
+                source->head = 0u;
+                source->length = 0u;
+                source->committed = 0u;
+                source->eof_pending = 0u;
+                source_reset_readable(source);
+            }
+            if (source->signal != NULL)
+                source->signal(source->signal_context, control);
+            ++consumed;
+            continue;
+        }
 
         if (canonical && tty_control(tty, ASTRA_TTY_VERASE, value)) {
             if (source->length > source->committed) {
@@ -596,6 +672,21 @@ astra_stream_source_pump(AstraStreamSource *source, uint32_t budget)
         ++processed;
         if (handle_tty(&message, size, handles[0], handle_count, source->tty,
                        source, source->output, &source->refused)) {
+            if (handle_count == 1u)
+                (void)astra_close(handles[0]);
+            continue;
+        }
+        if (accept_header(&request->header, size,
+                          ASTRA_STREAM_OPERATION_IDENTITY,
+                          (uint32_t)sizeof(*request))) {
+            if (handle_count == 1u)
+                answer_identity(&request->header, handles[0],
+                                source->tty != NULL ?
+                                    ASTRA_STREAM_KIND_TERMINAL : 0u,
+                                ASTRA_STREAM_DIRECTION_READ,
+                                source->terminal_id, &source->refused);
+            else
+                ++source->refused;
             if (handle_count == 1u)
                 (void)astra_close(handles[0]);
             continue;

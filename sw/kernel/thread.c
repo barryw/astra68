@@ -401,6 +401,7 @@ static KernelThreadStatus enqueue_ready(KernelThread *thread)
     uint16_t tail;
 
     if (!valid_thread(thread) || thread->state != KERNEL_THREAD_READY ||
+        thread->suspended != 0u ||
         thread->effective_priority >= KERNEL_THREAD_PRIORITY_LEVELS ||
         thread->ready_previous != KERNEL_THREAD_SLOT_NONE ||
         thread->ready_next != KERNEL_THREAD_SLOT_NONE)
@@ -821,6 +822,8 @@ static KernelThreadStatus complete_wait(
         thread->context.data[1] = detail;
     }
     thread->state = KERNEL_THREAD_READY;
+    if (thread->suspended != 0u)
+        return KERNEL_THREAD_OK;
     status = enqueue_ready(thread);
     return status == KERNEL_THREAD_OK ? KERNEL_THREAD_OK :
                                        KERNEL_THREAD_CORRUPT;
@@ -1207,7 +1210,8 @@ KernelThreadStatus kernel_thread_make_ready(KernelThread *thread)
     KernelThreadStatus status;
     uint8_t previous_state;
 
-    if (!valid_thread(thread) || thread->state != KERNEL_THREAD_RUNNING)
+    if (!valid_thread(thread) || thread->state != KERNEL_THREAD_RUNNING ||
+        thread->suspended != 0u)
         return KERNEL_THREAD_INVALID_STATE;
     previous_state = thread->state;
     thread->state = KERNEL_THREAD_READY;
@@ -1246,6 +1250,7 @@ kernel_thread_set_process_priority(uint16_t process_slot, uint8_t priority)
             thread->base_priority == priority)
             continue;
         if (thread->state == KERNEL_THREAD_READY &&
+            thread->suspended == 0u &&
             remove_ready(thread) != KERNEL_THREAD_OK)
             return KERNEL_THREAD_CORRUPT;
         members = thread->state == KERNEL_THREAD_BLOCKED ?
@@ -1260,6 +1265,7 @@ kernel_thread_set_process_priority(uint16_t process_slot, uint8_t priority)
         thread->base_priority = priority;
         thread->effective_priority = priority;
         if (thread->state == KERNEL_THREAD_READY &&
+            thread->suspended == 0u &&
             enqueue_ready(thread) != KERNEL_THREAD_OK)
             return KERNEL_THREAD_CORRUPT;
         for (uint16_t member = 0u; member < members; ++member) {
@@ -1267,6 +1273,76 @@ kernel_thread_set_process_priority(uint16_t process_slot, uint8_t priority)
                 KERNEL_THREAD_OK)
                 return KERNEL_THREAD_CORRUPT;
         }
+    }
+    return KERNEL_THREAD_OK;
+}
+
+KernelThreadStatus kernel_thread_suspend_process(uint16_t process_slot)
+{
+    bool found = false;
+
+    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        const KernelThread *thread = &threads[slot];
+
+        if (thread->occupied == 0u || thread->process_slot != process_slot ||
+            thread->state == KERNEL_THREAD_DEAD)
+            continue;
+        found = true;
+        if (thread->suspended != 0u ||
+            (thread->state != KERNEL_THREAD_READY &&
+             thread->state != KERNEL_THREAD_RUNNING &&
+             thread->state != KERNEL_THREAD_BLOCKED))
+            return KERNEL_THREAD_INVALID_STATE;
+    }
+    if (!found)
+        return KERNEL_THREAD_INVALID_STATE;
+
+    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        KernelThread *thread = &threads[slot];
+
+        if (thread->occupied == 0u || thread->process_slot != process_slot ||
+            thread->state == KERNEL_THREAD_DEAD)
+            continue;
+        if (thread->state == KERNEL_THREAD_READY &&
+            remove_ready(thread) != KERNEL_THREAD_OK)
+            return KERNEL_THREAD_CORRUPT;
+        if (thread->state == KERNEL_THREAD_RUNNING)
+            thread->state = KERNEL_THREAD_READY;
+        thread->suspended = 1u;
+        clear_irq_wake(thread->slot);
+    }
+    return KERNEL_THREAD_OK;
+}
+
+KernelThreadStatus kernel_thread_resume_process(uint16_t process_slot)
+{
+    bool found = false;
+
+    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        const KernelThread *thread = &threads[slot];
+
+        if (thread->occupied == 0u || thread->process_slot != process_slot ||
+            thread->state == KERNEL_THREAD_DEAD)
+            continue;
+        found = true;
+        if (thread->suspended == 0u ||
+            (thread->state != KERNEL_THREAD_READY &&
+             thread->state != KERNEL_THREAD_BLOCKED))
+            return KERNEL_THREAD_INVALID_STATE;
+    }
+    if (!found)
+        return KERNEL_THREAD_INVALID_STATE;
+
+    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        KernelThread *thread = &threads[slot];
+
+        if (thread->occupied == 0u || thread->process_slot != process_slot ||
+            thread->state == KERNEL_THREAD_DEAD)
+            continue;
+        thread->suspended = 0u;
+        if (thread->state == KERNEL_THREAD_READY &&
+            enqueue_ready(thread) != KERNEL_THREAD_OK)
+            return KERNEL_THREAD_CORRUPT;
     }
     return KERNEL_THREAD_OK;
 }
@@ -1591,7 +1667,7 @@ KernelThreadStatus wake_all_fast(KernelThreadWaitQueue *queue,
                         write_one_detail) !=
                 KERNEL_THREAD_OK)
             return KERNEL_THREAD_CORRUPT;
-        if (irq_wake) {
+        if (irq_wake && waiter->suspended == 0u) {
             irq_wake_cycles[waiter->slot] = wake_cycle;
             irq_wake_bitmap |= astra_u64_bit(waiter->slot);
         }
@@ -1788,7 +1864,8 @@ static KernelThreadStatus retire_process_threads(uint16_t process_slot,
             thread->process_slot != process_slot ||
             thread->state == KERNEL_THREAD_DEAD || thread == survivor)
             continue;
-        if (thread->state == KERNEL_THREAD_READY) {
+        if (thread->state == KERNEL_THREAD_READY &&
+            thread->suspended == 0u) {
             KernelThreadStatus status = remove_ready(thread);
 
             if (status != KERNEL_THREAD_OK)
@@ -1811,6 +1888,7 @@ static KernelThreadStatus retire_process_threads(uint16_t process_slot,
         thread->exit_status = 0u;
         thread->terminal_result = terminal_result;
         thread->state = KERNEL_THREAD_DEAD;
+        thread->suspended = 0u;
         if (release_stacks)
             thread->stack_released = 1u;
         mark_reap_pending(thread);
@@ -1929,8 +2007,8 @@ bool kernel_thread_snapshot(uint32_t slot, KernelThreadSnapshot *snapshot)
     snapshot->stack_released = thread->stack_released;
     snapshot->reap_pending = thread->reap_pending;
     snapshot->stack_pages = thread->stack_pages;
-    snapshot->reserved[0] = 0u;
-    snapshot->reserved[1] = 0u;
+    snapshot->suspended = thread->suspended;
+    snapshot->reserved = 0u;
     snapshot->exit_status = thread->exit_status;
     snapshot->terminal_result = thread->terminal_result;
     snapshot->handle_references = thread->handle_references;
@@ -1974,7 +2052,15 @@ bool kernel_thread_pool_stats(KernelThreadPoolStats *stats)
             observed_reap_bitmap |= (uint16_t)(1u << slot);
         if (!kernel_stack_valid(thread))
             return false;
-        if (thread->handle_references > 1u ||
+        if (thread->suspended > 1u ||
+            ((thread->state == KERNEL_THREAD_CREATED ||
+              thread->state == KERNEL_THREAD_DEAD) &&
+             thread->suspended != 0u) ||
+            (thread->suspended != 0u &&
+             thread->state == KERNEL_THREAD_READY &&
+             (thread->ready_previous != KERNEL_THREAD_SLOT_NONE ||
+              thread->ready_next != KERNEL_THREAD_SLOT_NONE)) ||
+            thread->handle_references > 1u ||
             !valid_wait_queue(&thread->death_waiters) ||
             (thread->state != KERNEL_THREAD_DEAD &&
              thread->stack_released != 0u) ||
@@ -2066,6 +2152,7 @@ bool kernel_thread_process_runnable(uint16_t process_slot)
 
         if (thread->occupied != 0u &&
             thread->process_slot == process_slot &&
+            thread->suspended == 0u &&
             (thread->state == KERNEL_THREAD_READY ||
              thread->state == KERNEL_THREAD_RUNNING))
             return true;

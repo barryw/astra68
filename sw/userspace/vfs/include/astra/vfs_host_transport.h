@@ -47,6 +47,7 @@ int astra_vfs_host_transport_init(AstraVfsHostTransport *transport,
                                   AstraVfsStateRelease release,
                                   void *lock_context);
 void astra_vfs_host_transport_destroy(AstraVfsHostTransport *transport);
+void astra_vfs_host_transport_after_fork(AstraVfsHostTransport *transport);
 uint32_t astra_vfs_host_transport_execute(
     void *context, AstraHostCommand *command, const void *input,
     uint32_t input_size, void *output, uint32_t output_capacity);

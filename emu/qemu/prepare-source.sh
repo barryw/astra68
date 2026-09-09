@@ -17,6 +17,7 @@ PUBLIC_RENDER_PROTOCOL="$REPOSITORY/fpga/arty/linux/astra_render_protocol.h"
 PUBLIC_SYSCALL="$REPOSITORY/sw/include/astra/syscall.h"
 PUBLIC_MESSAGE_ABI="$REPOSITORY/sw/include/astra/message_abi.h"
 PUBLIC_LIMITS="$REPOSITORY/sw/include/astra/limits.h"
+PUBLIC_BOOT="$REPOSITORY/sw/include/astra/boot.h"
 PUBLIC_BLOCK="$REPOSITORY/sw/include/astra/block.h"
 PUBLIC_NETWORK="$REPOSITORY/sw/include/astra/network.h"
 PUBLIC_HOST="$REPOSITORY/sw/include/astra/host.h"
@@ -68,6 +69,8 @@ overlay_identity()
             "sw/include/astra/message_abi.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_LIMITS")" \
             "sw/include/astra/limits.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_BOOT")" \
+            "sw/include/astra/boot.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_BLOCK")" \
             "sw/include/astra/block.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_NETWORK")" \
@@ -154,6 +157,7 @@ cp "$PUBLIC_DISPLAY" "$STAGED_SOURCE/include/astra/display.h"
 cp "$PUBLIC_SYSCALL" "$STAGED_SOURCE/include/astra/syscall.h"
 cp "$PUBLIC_MESSAGE_ABI" "$STAGED_SOURCE/include/astra/message_abi.h"
 cp "$PUBLIC_LIMITS" "$STAGED_SOURCE/include/astra/limits.h"
+cp "$PUBLIC_BOOT" "$STAGED_SOURCE/include/astra/boot.h"
 cp "$PUBLIC_BLOCK" "$STAGED_SOURCE/include/astra/block.h"
 cp "$PUBLIC_NETWORK" "$STAGED_SOURCE/include/astra/network.h"
 cp "$PUBLIC_HOST" "$STAGED_SOURCE/include/astra/host.h"

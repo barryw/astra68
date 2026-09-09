@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-#include <astra/process.h>
+#include <astra/posix.h>
 #include <astra/vfs_process.h>
 
 /*
@@ -70,6 +70,7 @@ void astra_posix_socket_bind(const AstraPosixSocketOps *ops);
  */
 int astra_posix_descriptor_file(uint32_t slot, int flags);
 int astra_posix_descriptor_socket(uint32_t slot, int flags);
+int astra_posix_descriptor_controlling_terminal(int flags);
 
 /* The file slot behind a descriptor, or -1 if it is not a file at all. */
 int astra_posix_descriptor_slot(int fd);
@@ -77,14 +78,12 @@ int astra_posix_descriptor_socket_slot(int fd);
 int astra_posix_descriptor_flags(int fd);
 /* The kernel handle behind a stream descriptor, or zero for files/closed. */
 uint32_t astra_posix_descriptor_handle(int fd);
+uint32_t astra_posix_descriptor_terminal_id(int fd);
 
 /* Builds the native wait set for one poll descriptor and reports anything
  * already ready.  At most two handles are returned: input and output. */
 int astra_posix_descriptor_poll(int fd, short events, short *revents,
                                 uint32_t handles[2], uint32_t *count);
-
-/* The startup block `astra_posix_start` was given, for the file half's use. */
-const AstraStartupInfo *astra_posix_startup(void);
 
 int astra_posix_exec_export(void **state, uint32_t *size);
 void astra_posix_file_prepare(void);

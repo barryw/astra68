@@ -94,6 +94,7 @@ typedef struct AstraVfsBackendOps {
     uint32_t (*readlink)(void *context, const char *path, void *buffer,
                          uint32_t capacity, uint32_t *length);
     uint32_t (*symlink)(void *context, const char *target, const char *path);
+    uint32_t (*link)(void *context, const char *from, const char *to);
 } AstraVfsBackendOps;
 
 struct AstraVfsBackend {
@@ -199,6 +200,15 @@ astra_vfs_backend_deny_symlink(void *context, const char *target,
     (void)context;
     (void)target;
     (void)path;
+    return ASTRA_VFS_ERR_ACCESS;
+}
+
+static inline uint32_t
+astra_vfs_backend_deny_link(void *context, const char *from, const char *to)
+{
+    (void)context;
+    (void)from;
+    (void)to;
     return ASTRA_VFS_ERR_ACCESS;
 }
 

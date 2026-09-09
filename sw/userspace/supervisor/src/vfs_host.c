@@ -99,6 +99,15 @@ bind_standard_assigns(void)
                      ASTRA_EVENT_LEVEL_WARNING,
                      "WORK: unbound, mkdir refused with status %u", status);
     }
+    status = astra_vfs_mkdir(&vfs_client, "/home");
+    if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
+        (void)astra_assign_bind(&vfs_assigns, "HOME", vfs_handle,
+                                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "home");
+    } else {
+        ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
+                     ASTRA_EVENT_LEVEL_WARNING,
+                     "HOME: unbound, mkdir refused with status %u", status);
+    }
     /*
      * Where programs live, and a union: the person's own directory first, then
      * the shipped one. A name found in `local/commands` shadows the command

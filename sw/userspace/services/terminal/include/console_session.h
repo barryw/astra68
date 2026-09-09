@@ -1,12 +1,12 @@
-#ifndef ASTRA_TERMINAL_CONSOLE_SHELL_H
-#define ASTRA_TERMINAL_CONSOLE_SHELL_H
+#ifndef ASTRA_TERMINAL_CONSOLE_SESSION_H
+#define ASTRA_TERMINAL_CONSOLE_SESSION_H
 
 #include <stdint.h>
 
 #include <astra/terminal.h>
 #include <astra/vfs_process.h>
 
-typedef struct ConsoleShellBackend {
+typedef struct ConsoleSessionBackend {
     uint32_t columns;
     uint32_t rows;
     uint32_t pixel_width;
@@ -24,20 +24,16 @@ typedef struct ConsoleShellBackend {
     uint64_t idle_poll_ns;
     AstraProcessFilesystem *process_filesystem;
     const AstraStartupInfo *startup;
-} ConsoleShellBackend;
+} ConsoleSessionBackend;
 
 enum {
-    CONSOLE_SHELL_INPUT_STOP = -2,
-    CONSOLE_SHELL_INPUT_ERROR = -1,
-    CONSOLE_SHELL_INPUT_NONE = 0,
-    CONSOLE_SHELL_INPUT_KEY = 1
+    CONSOLE_SESSION_INPUT_STOP = -2,
+    CONSOLE_SESSION_INPUT_ERROR = -1,
+    CONSOLE_SESSION_INPUT_NONE = 0,
+    CONSOLE_SESSION_INPUT_KEY = 1
 };
 
-/*
- * Runs the terminal until it is asked to stop. Never returns a failure code:
- * the status halfword has no bits left, so how far it got is reported through
- * the progress counter and the caller parks either way.
- */
-void console_shell_run_backend(const ConsoleShellBackend *backend);
+/* Runs one interactive zsh session and returns its exit status. */
+uint32_t console_session_run_backend(const ConsoleSessionBackend *backend);
 
 #endif

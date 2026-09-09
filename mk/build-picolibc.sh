@@ -11,7 +11,8 @@
 #   picocrt=false  Astra has its own crt0 and linker script.
 #   semihost       ARM debug-host I/O; there is no host to semihost to.
 #   tests          they need to execute m68k binaries, which this host cannot.
-#   thread-local-storage  the runtime places thread state itself.
+#   mb-capable     POSIX terminal programs use UTF-8 multibyte conversion.
+#   thread-local-storage  libc state is per-thread; Astra initializes PT_TLS.
 set -eu
 
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -37,6 +38,7 @@ cd "$BUILD"
     -Dposix-console=true \
     -Dsemihost=false \
     -Dtests=false \
+    -Dmb-capable=true \
     -Dmultilib=false \
     -Dpicocrt=false \
     -Dthread-local-storage=true \

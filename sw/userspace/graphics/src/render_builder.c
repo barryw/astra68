@@ -20,9 +20,8 @@
 enum {
     DESCRIPTOR_ARENA_OFFSET = ASTRA_RENDER_BATCH_RESOURCE_OFFSET,
     DESCRIPTOR_MAX = 128u,
-    GLYPH_ARENA_OFFSET = 0x0041a000u,
-    GLYPH_MAX = 2048u,
-    DATA_ARENA_OFFSET = 0x00422000u,
+    GLYPH_ARENA_OFFSET = ASTRA_RENDER_BATCH_GLYPH_OFFSET,
+    DATA_ARENA_OFFSET = ASTRA_RENDER_BATCH_DATA_OFFSET,
     SURFACE_ARENA_OFFSET = 0x00800000u,
     SURFACE_ARENA_LIMIT = 0x01000000u,
     COMMAND_DEADLINE_US = 500000u,
@@ -163,7 +162,7 @@ int astra_render_builder_init(AstraRenderBuilder *builder, void *storage,
     if (builder == NULL || storage == NULL ||
         bytes < ASTRA_RENDER_BUILDER_BYTES || generation == 0u)
         return 0;
-    memset(storage, 0, ASTRA_RENDER_BUILDER_BYTES);
+    memset(storage, 0, ASTRA_RENDER_BATCH_HEADER_BYTES);
     *builder = (AstraRenderBuilder){
         .bytes = storage,
         .capacity = ASTRA_RENDER_BUILDER_BYTES,
@@ -184,6 +183,24 @@ uint32_t astra_render_builder_frame(const AstraRenderBuilder *builder)
 {
     return builder == NULL || builder->failed != 0u ? 0u :
            DESCRIPTOR_ARENA_OFFSET;
+}
+
+uint32_t astra_render_builder_scanout(AstraRenderBuilder *builder,
+                                      uint32_t scanout_offset)
+{
+    if (builder == NULL ||
+        (scanout_offset != ASTRA_RENDER_BATCH_SCANOUT0_OFFSET &&
+         scanout_offset != ASTRA_RENDER_BATCH_SCANOUT1_OFFSET)) {
+        if (builder != NULL)
+            builder->failed = ASTRA_RENDER_BUILDER_FAILURE_SURFACE;
+        return 0u;
+    }
+    return descriptor(builder, scanout_offset,
+                      ASTRA_DISPLAY_WIDTH * ASTRA_DISPLAY_HEIGHT * 2u,
+                      ASTRA_DISPLAY_WIDTH * 2u, ASTRA_DISPLAY_WIDTH,
+                      ASTRA_DISPLAY_HEIGHT, ASTRA_RENDER_FORMAT_RGB565,
+                      ASTRA_RENDER_SURFACE_READ |
+                          ASTRA_RENDER_SURFACE_WRITE);
 }
 
 uint32_t astra_render_builder_surface(AstraRenderBuilder *builder,
@@ -364,7 +381,7 @@ static int builder_text(AstraRenderBuilder *builder, uint32_t destination,
     }
     if (count == 0u)
         return 1;
-    if (builder->glyph_count + count > GLYPH_MAX)
+    if (builder->glyph_count + count > ASTRA_RENDER_BUILDER_GLYPH_MAX)
         return builder->failed = ASTRA_RENDER_BUILDER_FAILURE_GLYPH, 0;
     cell_pitch = (max_width + 7u) / 8u;
     cell_bytes = cell_pitch * strike->height;
@@ -682,12 +699,17 @@ int astra_render_builder_blit(AstraRenderBuilder *builder,
 
 uint32_t astra_render_builder_finish(AstraRenderBuilder *builder)
 {
+    uint32_t bytes;
+
     if (builder == NULL || builder->failed != 0u ||
         builder->command_count == 0u)
         return 0u;
+    bytes = builder->glyph_count != 0u ? align4(builder->data_cursor) :
+        relative(DESCRIPTOR_ARENA_OFFSET) +
+            builder->descriptor_count * ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES;
     astra_store_be32(builder->bytes + 0u, ASTRA_RENDER_BATCH_MAGIC);
     astra_store_be32(builder->bytes + 4u, ASTRA_RENDER_BATCH_VERSION_1_0);
-    astra_store_be32(builder->bytes + 8u, ASTRA_RENDER_BUILDER_BYTES);
+    astra_store_be32(builder->bytes + 8u, bytes);
     astra_store_be32(builder->bytes + 12u, builder->command_count);
     astra_store_be32(builder->bytes + 16u, ASTRA_RENDER_BATCH_SUBMISSION_OFFSET);
     astra_store_be32(builder->bytes + 20u, ASTRA_RENDER_BATCH_COMPLETION_OFFSET);
@@ -696,5 +718,5 @@ uint32_t astra_render_builder_finish(AstraRenderBuilder *builder)
           (builder->generation & 1u) != 0u ?
               ASTRA_RENDER_BATCH_SCANOUT1_OFFSET :
               ASTRA_RENDER_BATCH_SCANOUT0_OFFSET);
-    return ASTRA_RENDER_BUILDER_BYTES;
+    return bytes;
 }

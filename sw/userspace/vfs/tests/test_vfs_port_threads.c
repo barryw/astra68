@@ -13,6 +13,12 @@ static pthread_mutex_t gate_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t gate_changed = PTHREAD_COND_INITIALIZER;
 static uint32_t gate_arrived;
 
+uint32_t astra_log_failure(const char *operation, uint32_t status)
+{
+    (void)operation;
+    return status;
+}
+
 uint32_t astra_query_abi(uint32_t *abi, uint32_t *process, uint32_t *thread)
 {
     if (abi != NULL)

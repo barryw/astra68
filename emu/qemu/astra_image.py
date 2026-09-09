@@ -45,6 +45,7 @@ APPS_DIRECTORY = "apps"
 STARTUP_DIRECTORY = "startup"
 STARTUP_NAME = "system"
 CONFIG_DIRECTORY = "config"
+HOME_DIRECTORY = "home"
 CONFIG_SCOPES = ("system", "services", "commands", "applications")
 CONFIGURATION = {
     "system/network/resolv.conf": (
@@ -54,6 +55,24 @@ CONFIGURATION = {
         "astra-config 1\n"
         "schema 1\n"
         "pool pool.ntp.org\n"),
+    "commands/zsh/zshrc": (
+        "# User startup remains zsh's normal HOME:/.zshrc.\n"
+        "if [[ -r HOME:/.motd.zsh ]]; then\n"
+        "  source HOME:/.motd.zsh\n"
+        "elif [[ -r HOME:/.motd ]]; then\n"
+        "  print -r -- \"$(<HOME:/.motd)\"\n"
+        "elif [[ -r CONFIG:motd.zsh ]]; then\n"
+        "  source CONFIG:motd.zsh\n"
+        "elif [[ -r CONFIG:motd ]]; then\n"
+        "  print -r -- \"$(<CONFIG:motd)\"\n"
+        "fi\n"
+        "_astra_prompt_start() { print -n -- $'\\e]133;A\\e\\\\' }\n"
+        "precmd_functions+=(_astra_prompt_start)\n"
+        "PROMPT+=$'%{\\e]133;B\\e\\\\%}'\n"),
+    "commands/zsh/motd": (
+        "Astra 68\n"
+        "Run help for shell help, ps for processes, and metrics for system "
+        "metrics.\n"),
 }
 DEFAULT_SERVICES = os.path.join(
     REPOSITORY, "sw/userspace/services")
@@ -82,6 +101,7 @@ PROVIDER_INDEX_MAX = 192
 DISPLAY_STARTUP_MANIFEST = (
     "service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
     "serves SYS:r required\n"
+    "service SERVICES:posixd grants serves POSIX_PROCESS required\n"
     "service SERVICES:hostfs grants HOST_DEVICE "
     "serves WORK:rw METRICS:r required\n"
     "service SERVICES:network grants NETWORK_DEVICE NETWORK_IRQ "
@@ -98,7 +118,7 @@ DISPLAY_STARTUP_MANIFEST = (
     "NETWORK NETWORK_LISTEN NTP "
     "required\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
-DISPLAY_SERVICES = ("storage", "hostfs", "network", "ntpd", "events",
+DISPLAY_SERVICES = ("storage", "posixd", "hostfs", "network", "ntpd", "events",
                     "input", "display", "desktop")
 HOSTBENCH_SERVICES = DISPLAY_SERVICES + ("hostbench",)
 HOSTBENCH_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
@@ -109,7 +129,10 @@ def _build_current_userspace():
     """Publish every image input from the current source tree."""
     directory = os.path.join(REPOSITORY, "sw/userspace")
     for target in ("clean", "all"):
-        result = subprocess.run(["make", "-C", directory, target],
+        command = ["make", "-C", directory, target]
+        if target == "all":
+            command[1:1] = ["-j", str(os.cpu_count() or 1)]
+        result = subprocess.run(command,
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT)
         if result.returncode != 0:
@@ -578,6 +601,10 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
                      optional=True)
             _debugfs(volume, "write %s %s" % (host, target),
                      "configuration " + path)
+
+        # HOME: is user-owned state, not a publisher-owned tree. Ensure the
+        # stable mount point exists and leave every existing entry untouched.
+        _mkdir(volume, "/%s" % HOME_DIRECTORY, "the home directory")
 
         # The shadowing pair. `which` is installed on both members under two
         # names: the shipped one stays where it is, and a copy goes into the

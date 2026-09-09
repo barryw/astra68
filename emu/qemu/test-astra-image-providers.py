@@ -8,14 +8,30 @@ import tempfile
 import astra_image
 
 
+assert astra_image.HOME_DIRECTORY == "home"
+with open(os.path.join(astra_image.REPOSITORY,
+                       "sw/userspace/apps/Terminal.app/manifest"),
+          encoding="ascii") as manifest:
+    assert "capability HOME:rw\n" in manifest.read()
 assert astra_image.HOSTBENCH_SERVICES == \
     astra_image.DISPLAY_SERVICES + ("hostbench",)
 assert astra_image.HOSTBENCH_STARTUP_MANIFEST == \
     astra_image.DISPLAY_STARTUP_MANIFEST + \
     "application SERVICES:hostbench grants HOST_DEVICE required\n"
+assert "commands/zsh/zshrc" in astra_image.CONFIGURATION
+assert "commands/zsh/motd" in astra_image.CONFIGURATION
+zshrc = astra_image.CONFIGURATION["commands/zsh/zshrc"]
+assert "HOME:/.motd.zsh" in zshrc
+assert "CONFIG:motd.zsh" in zshrc
+assert zshrc.index("HOME:/.motd.zsh") < zshrc.index("elif [[ -r HOME:/.motd ]]")
+assert zshrc.index("CONFIG:motd.zsh") < zshrc.index("elif [[ -r CONFIG:motd ]]")
+assert "$(<HOME:/.motd)" in zshrc and "$(<CONFIG:motd)" in zshrc
+assert "\\e]133;A" in zshrc and "\\e]133;B" in zshrc
 startup = astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
 assert startup[0].startswith("service SERVICES:storage ")
 assert startup[1] == \
+    "service SERVICES:posixd grants serves POSIX_PROCESS required"
+assert startup[2] == \
     "service SERVICES:hostfs grants HOST_DEVICE " \
     "serves WORK:rw METRICS:r required"
 
@@ -27,6 +43,7 @@ class Result:
 
 
 original_run = astra_image.subprocess.run
+original_cpu_count = astra_image.os.cpu_count
 commands = []
 
 
@@ -50,10 +67,12 @@ with tempfile.TemporaryDirectory() as directory:
 
 astra_image.subprocess.run = lambda command, **_kwargs: \
     commands.append(command) or Result()
+astra_image.os.cpu_count = lambda: 32
 astra_image._build_current_userspace()
 userspace = os.path.join(astra_image.REPOSITORY, "sw/userspace")
 assert commands == [["make", "-C", userspace, "clean"],
-                    ["make", "-C", userspace, "all"]]
+                    ["make", "-j", "32", "-C", userspace, "all"]]
+astra_image.os.cpu_count = original_cpu_count
 
 astra_image.subprocess.run = lambda *_args, **_kwargs: Result(b"failed", 2)
 try:

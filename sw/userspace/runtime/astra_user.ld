@@ -54,6 +54,8 @@ SECTIONS
 
     . = ALIGN(ASTRA_PAGE_SIZE);
 
+    __astra_data_start = .;
+
     /*
      * What this image says it is: one ASTRA_PROGRAM record, and the assertion
      * at the end of this file that there is exactly one.
@@ -151,6 +153,8 @@ SECTIONS
         *(COMMON)
         __bss_end = .;
     } :data
+
+    __astra_data_end = .;
 
     /*
      * The event catalog: every ASTRA_EVENT call site's subsystem, level, file,

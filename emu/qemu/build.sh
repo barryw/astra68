@@ -119,8 +119,8 @@ if [ ! -f "$BUILD/build.ninja" ]; then
 fi
 
 if [ -n "${ASTRA_QEMU_JOBS:-}" ]; then
-    ninja -C "$BUILD" -j "$ASTRA_QEMU_JOBS" qemu-system-m68k
+    ninja -C "$BUILD" -j "$ASTRA_QEMU_JOBS" qemu-system-m68k >&2
 else
-    ninja -C "$BUILD" qemu-system-m68k
+    ninja -C "$BUILD" qemu-system-m68k >&2
 fi
 printf '%s\n' "$BUILD/qemu-system-m68k"

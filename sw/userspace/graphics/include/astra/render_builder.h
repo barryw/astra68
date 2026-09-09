@@ -7,6 +7,7 @@
 #include <astra/draw_list.h>
 
 #define ASTRA_RENDER_BUILDER_BYTES 0x00040000u
+#define ASTRA_RENDER_BUILDER_GLYPH_MAX 2048u
 
 typedef enum AstraRenderBuilderFailure {
     ASTRA_RENDER_BUILDER_FAILURE_NONE = 0u,
@@ -35,6 +36,8 @@ typedef struct AstraRenderBuilder {
 int astra_render_builder_init(AstraRenderBuilder *builder, void *storage,
                               uint32_t bytes, uint32_t generation);
 uint32_t astra_render_builder_frame(const AstraRenderBuilder *builder);
+uint32_t astra_render_builder_scanout(AstraRenderBuilder *builder,
+                                      uint32_t scanout_offset);
 uint32_t astra_render_builder_surface(AstraRenderBuilder *builder,
                                       uint16_t width, uint16_t height);
 uint32_t astra_render_builder_surface_at(AstraRenderBuilder *builder,

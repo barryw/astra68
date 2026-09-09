@@ -223,15 +223,15 @@ emu/qemu/build.sh arty      # ARM, for the board
 
 ```sh
 # from beast; creation accepts only explicitly named inputs and a new output
-ASTRA_ARTY_QEMU=<qemu> ASTRA_ARTY_ROM=<rom> \
-ASTRA_ARTY_STORAGE=<clean-image> ASTRA_ARTY_TERMINAL_DISPLAY=<display> \
-ASTRA_ARTY_QEMU_LIBDIR=/usr/lib/arm-linux-gnueabihf \
-  emu/qemu/create-arty-release.sh <release-directory>
-emu/qemu/deploy-arty-release.sh <release-directory>
+ASTRA_DE25_QEMU=<qemu> ASTRA_DE25_ROM=<rom> \
+ASTRA_DE25_STORAGE=<clean-image> ASTRA_DE25_TERMINAL_DISPLAY=<display> \
+ASTRA_DE25_QEMU_LIBDIR=<aarch64-library-directory> \
+  emu/qemu/create-de25-release.sh <release-directory>
+emu/qemu/deploy-de25-release.sh <release-directory>
 ```
 
 The deployer re-verifies after transfer, installs the content-addressed tree
-read-only, and atomically replaces `/data/astra/current`. Verify the emulator
+read-only, and atomically replaces `/var/lib/astra/current`. Verify the emulator
 actually has the storage model before blaming the ROM:
 
 ```sh

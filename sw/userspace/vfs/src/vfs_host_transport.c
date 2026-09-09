@@ -59,8 +59,11 @@ static uint32_t channel_submit(AstraVfsHostLane *lane,
         return status;
     if (channel_poll(header, producer))
         return ASTRA_SYSCALL_OK;
-    return astra_host_channel_wait(producer,
-                                   UINT64_C(0x7fffffffffffffff));
+    status = astra_host_channel_wait(producer,
+                                     UINT64_C(0x7fffffffffffffff));
+    if (status != ASTRA_SYSCALL_OK)
+        (void)astra_log_failure("VFS host channel wait", status);
+    return status;
 }
 
 static uint32_t publish_path(char destination[ASTRA_HOST_FS_PATH_MAX],
@@ -96,6 +99,7 @@ static uint32_t publish_command(AstraHostCommand *destination,
         return publish_path(destination->path, source->path);
     case ASTRA_HOST_FS_RENAME:
     case ASTRA_HOST_FS_SYMLINK:
+    case ASTRA_HOST_FS_LINK:
         if (publish_path(destination->path, source->path) != ASTRA_VFS_OK)
             return ASTRA_VFS_ERR_INVALID;
         return publish_path(destination->path2, source->path2);
@@ -192,21 +196,33 @@ void astra_vfs_host_transport_destroy(AstraVfsHostTransport *transport)
     memset(transport, 0, sizeof(*transport));
 }
 
+void astra_vfs_host_transport_after_fork(AstraVfsHostTransport *transport)
+{
+    if (lane_cache.transport == transport)
+        memset(&lane_cache, 0, sizeof(lane_cache));
+}
+
 static uint32_t lane_open(AstraVfsHostTransport *transport,
                           AstraVfsHostLane *lane, uint32_t thread)
 {
     AstraHostChannelOpen channel = {0};
+    uint32_t status;
 
     channel.size = sizeof(channel);
     channel.buffer = lane->dma;
     channel.byte_size = lane->byte_size;
     channel.command_capacity = lane->command_capacity;
-    if (channel.byte_size > transport->maximum_transfer ||
-        astra_host_channel_open(transport->device, &channel) !=
-            ASTRA_SYSCALL_OK ||
+    if (channel.byte_size > transport->maximum_transfer)
+        return ASTRA_VFS_ERR_LIMIT;
+    status = astra_host_channel_open(transport->device, &channel);
+    if (status != ASTRA_SYSCALL_OK) {
+        (void)astra_log_failure("VFS host channel open", status);
+        return astra_vfs_host_status_from_syscall(status);
+    }
+    if (
         channel.channel_generation == 0u || channel.channel_address == 0u ||
         channel.host_generation != transport->generation)
-        return ASTRA_VFS_ERR_PEER;
+        return ASTRA_VFS_ERR_PROTOCOL;
     lane->thread = thread;
     lane->channel_address = channel.channel_address;
     lane->producer_position = 0u;
@@ -221,8 +237,12 @@ static uint32_t lane_allocate(AstraVfsHostTransport *transport,
     AstraDmaBufferInfo dma = {0};
     uint32_t status;
 
-    if (astra_dma_create(needed, &dma) != ASTRA_SYSCALL_OK ||
-        dma.handle == 0u || dma.virtual_base == 0u || dma.byte_size < needed ||
+    status = astra_dma_create(needed, &dma);
+    if (status != ASTRA_SYSCALL_OK) {
+        (void)astra_log_failure("VFS host DMA create", status);
+        return astra_vfs_host_status_from_syscall(status);
+    }
+    if (dma.handle == 0u || dma.virtual_base == 0u || dma.byte_size < needed ||
         dma.byte_size > transport->maximum_transfer) {
         if (dma.handle != 0u)
             (void)astra_close(dma.handle);
@@ -373,8 +393,11 @@ lane_get_slow(AstraVfsHostTransport *transport, uint32_t data_capacity,
     uint32_t thread;
     uint32_t status;
 
-    if (astra_current_thread_handle(&thread) != ASTRA_SYSCALL_OK)
+    status = astra_current_thread_handle(&thread);
+    if (status != ASTRA_SYSCALL_OK) {
+        (void)astra_log_failure("VFS current thread", status);
         return ASTRA_VFS_ERR_PEER;
+    }
     if (transport->acquire != NULL &&
         !transport->acquire(transport->lock_context))
         return ASTRA_VFS_ERR_IO;

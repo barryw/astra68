@@ -76,6 +76,7 @@ struct rusage {
 #define RLIMIT_CORE   4 /* Limit on size of core image. */
 #define RLIMIT_NOFILE 5 /* Limit on number of open files. */
 #define RLIMIT_AS     6 /* Limit on address space size. */
+#define RLIM_NLIMITS  7 /* Number of resource limits. */
 
 #if __XSI_VISIBLE
 int getpriority(int, id_t);

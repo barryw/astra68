@@ -40,6 +40,17 @@
 #define ASTRA_PROCESS_NICE_MAX \
     ((int)ASTRA_PROCESS_PRIORITY_NORMAL - (int)ASTRA_PROCESS_PRIORITY_MIN)
 
+/* Signal numbers are part of Astra's m68k process ABI. */
+#define ASTRA_SIGNAL_HANGUP    1u
+#define ASTRA_SIGNAL_INTERRUPT 2u
+#define ASTRA_SIGNAL_QUIT      3u
+#define ASTRA_SIGNAL_KILL      9u
+#define ASTRA_SIGNAL_ALARM     14u
+#define ASTRA_SIGNAL_STOP      17u
+#define ASTRA_SIGNAL_TTY_STOP  18u
+#define ASTRA_SIGNAL_CONTINUE  19u
+#define ASTRA_SIGNAL_CHILD     20u
+
 /*
  * Capability names a process always receives: itself and its first thread.
  *
@@ -248,7 +259,8 @@ typedef struct AstraProcessInfo {
     uint8_t priority_ceiling;
     uint8_t exit_reason;
     uint8_t thread_state;
-    uint8_t reserved[3];
+    uint8_t suspended;
+    uint8_t reserved[2];
     uint64_t runtime_ns;
     uint64_t elapsed_ns;
     uint32_t fault_pc;

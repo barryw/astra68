@@ -37,10 +37,10 @@
 #include "vega.h"
 #include "vesta.h"
 
-#define SCREEN_TOP_MARGIN 2u
-#define SCREEN_LEFT_MARGIN 2u
-#define SCREEN_RIGHT_MARGIN 2u
-#define SCREEN_BOTTOM_MARGIN 2u
+#define SCREEN_TOP_MARGIN ASTRA_TEXT_TOP_MARGIN
+#define SCREEN_LEFT_MARGIN ASTRA_TEXT_LEFT_MARGIN
+#define SCREEN_RIGHT_MARGIN ASTRA_TEXT_RIGHT_MARGIN
+#define SCREEN_BOTTOM_MARGIN ASTRA_TEXT_BOTTOM_MARGIN
 #define KERNEL_SELFTEST_OWNER 0xfffffff0u
 #define KERNEL_SELFTEST_USER_ADDRESS 0x10000000u
 #define KERNEL_SOAK_REPORT_INTERVAL 1000u
@@ -267,12 +267,15 @@ static KernelPlatformCycleCount soak_started;
 static void screen_clear(void)
 {
     if (!screen_enabled) return;
+    kernel_platform_post_text_update_begin();
     for (uint32_t index = 0; index < VEGA_POST_COLS * VEGA_POST_ROWS; ++index) {
         if (!kernel_platform_post_text_write(index, ' ')) {
+            kernel_platform_post_text_update_end();
             screen_enabled = 0;
             return;
         }
     }
+    kernel_platform_post_text_update_end();
     screen_row = SCREEN_TOP_MARGIN;
     screen_col = SCREEN_LEFT_MARGIN;
 }
@@ -282,6 +285,7 @@ static void screen_scroll(void)
     const uint32_t last_row = VEGA_POST_ROWS - SCREEN_BOTTOM_MARGIN - 1u;
     const uint32_t last_col = VEGA_POST_COLS - SCREEN_RIGHT_MARGIN;
 
+    kernel_platform_post_text_update_begin();
     for (uint32_t row = SCREEN_TOP_MARGIN; row < last_row; ++row) {
         for (uint32_t col = SCREEN_LEFT_MARGIN; col < last_col; ++col) {
             uint8_t value;
@@ -290,6 +294,7 @@ static void screen_scroll(void)
 
             if (!kernel_platform_post_text_read(source, &value) ||
                 !kernel_platform_post_text_write(destination, value)) {
+                kernel_platform_post_text_update_end();
                 screen_enabled = 0;
                 return;
             }
@@ -298,10 +303,12 @@ static void screen_scroll(void)
     for (uint32_t col = SCREEN_LEFT_MARGIN; col < last_col; ++col) {
         if (!kernel_platform_post_text_write(
                 last_row * VEGA_POST_COLS + col, ' ')) {
+            kernel_platform_post_text_update_end();
             screen_enabled = 0;
             return;
         }
     }
+    kernel_platform_post_text_update_end();
     screen_row = last_row;
     screen_col = SCREEN_LEFT_MARGIN;
 }

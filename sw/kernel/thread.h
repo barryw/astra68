@@ -164,6 +164,7 @@ typedef struct KernelThread {
      * rather than derived from a constant that is no longer fixed.
      */
     uint8_t stack_pages;
+    uint8_t suspended;
 } KernelThread;
 
 typedef struct KernelThreadSnapshot {
@@ -195,7 +196,8 @@ typedef struct KernelThreadSnapshot {
     uint8_t stack_released;
     uint8_t reap_pending;
     uint8_t stack_pages;
-    uint8_t reserved[2];
+    uint8_t suspended;
+    uint8_t reserved;
     uint32_t exit_status;
     uint32_t terminal_result;
     uint16_t handle_references;
@@ -269,6 +271,8 @@ KernelThreadStatus kernel_thread_make_ready(KernelThread *thread);
 KernelThreadStatus kernel_thread_take_next(KernelThread **thread);
 KernelThreadStatus kernel_thread_set_process_priority(uint16_t process_slot,
                                                       uint8_t priority);
+KernelThreadStatus kernel_thread_suspend_process(uint16_t process_slot);
+KernelThreadStatus kernel_thread_resume_process(uint16_t process_slot);
 void kernel_thread_wait_queue_init(KernelThreadWaitQueue *queue);
 uint32_t kernel_thread_wait_queue_sequence(
     const KernelThreadWaitQueue *queue);

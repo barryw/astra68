@@ -8,7 +8,9 @@
 #include <unistd.h>
 
 #include <astra/posix.h>
+#include <astra/posix_process.h>
 #include <astra/runtime.h>
+#include <astra/status.h>
 #include <astra/stream.h>
 #include <astra/syscall.h>
 
@@ -24,6 +26,23 @@ static int wake_read;
 static int wake_write;
 static int eof_next;
 static AstraStartupCapability capabilities[3];
+
+uint32_t astra_posix_process_service(void) { return 0u; }
+uint32_t
+astra_posix_process_tty_foreground(uint32_t service,
+                                   AstraPosixProcessReply *reply)
+{
+    (void)service;
+    (void)reply;
+    return ASTRA_STATUS_INVALID;
+}
+uint32_t
+astra_stream_identity(uint32_t handle, AstraStreamIdentity *identity)
+{
+    (void)handle;
+    (void)identity;
+    return ASTRA_SYSCALL_INVALID_ARGUMENT;
+}
 
 uint32_t astra_yield(void) { return ASTRA_SYSCALL_OK; }
 uint64_t astra_clock_monotonic(void) { return 100u; }

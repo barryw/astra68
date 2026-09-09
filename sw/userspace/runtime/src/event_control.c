@@ -40,7 +40,7 @@ astra_event_control_set(uint32_t handle, uint32_t subsystem, uint32_t level)
         if (status == ASTRA_SYSCALL_OK)
             break;
         if (status != ASTRA_SYSCALL_WOULD_BLOCK ||
-            astra_wait_one(receive, ASTRA_DEADLINE_FOREVER, NULL) !=
+            astra_wait_one_restart(receive, ASTRA_DEADLINE_FOREVER, NULL) !=
                 ASTRA_SYSCALL_OK) {
             (void)astra_close(receive);
             return ASTRA_STATUS_PEER_DEAD;

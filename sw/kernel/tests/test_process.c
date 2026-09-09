@@ -52,6 +52,7 @@
 #include <astra/display.h>
 #include <astra/input.h>
 #include <astra/process.h>
+#include <astra/proc.h>
 #include <astra/event.h>
 #include <astra/status.h>
 
@@ -69,6 +70,10 @@
     (TEST_SYNC_RIGHTS | ASTRA_RIGHT_TRANSFER)
 #define TEST_PROCESS_WAIT_RIGHTS \
     (ASTRA_RIGHT_READ | ASTRA_RIGHT_WAIT)
+#define TEST_PROCESS_SIGNAL_RIGHTS \
+    (ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_WAIT | ASTRA_RIGHT_TRANSFER)
+#define TEST_PROCESS_TERMINATE_RIGHTS \
+    (ASTRA_RIGHT_WRITE | ASTRA_RIGHT_WAIT)
 
 static uint8_t physical_memory[32u * 1024u * 1024u];
 static uint32_t milestone_calls;
@@ -123,6 +128,8 @@ static uint32_t input_overflow_acks;
 
 static uint8_t console_cells[TEST_CONSOLE_COLUMNS * TEST_CONSOLE_ROWS];
 static uint32_t console_writes;
+static uint32_t console_updates_started;
+static uint32_t console_updates_completed;
 static uint32_t console_cursor_writes;
 static uint32_t console_cursor_row;
 static uint32_t console_cursor_column;
@@ -153,6 +160,16 @@ bool kernel_platform_post_text_write(uint32_t cell, uint8_t value)
     console_cells[cell] = value;
     ++console_writes;
     return true;
+}
+
+void kernel_platform_post_text_update_begin(void)
+{
+    ++console_updates_started;
+}
+
+void kernel_platform_post_text_update_end(void)
+{
+    ++console_updates_completed;
 }
 
 bool kernel_platform_post_text_cursor(uint32_t row, uint32_t column,
@@ -1289,6 +1306,8 @@ static void initialize_test(void)
     device_reset_ok = true;
     memset(console_cells, 0, sizeof(console_cells));
     console_writes = 0u;
+    console_updates_started = 0u;
+    console_updates_completed = 0u;
     console_cursor_writes = 0u;
     console_cursor_row = 0u;
     console_cursor_column = 0u;
@@ -2911,6 +2930,8 @@ static void test_console_writes_through_a_display_lease(void)
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(console_writes == sizeof(text));
+    assert(console_updates_started == 1u);
+    assert(console_updates_completed == 1u);
     assert(console_cells[TEST_CONSOLE_COLUMNS + 2u] == 'A');
     assert(console_cells[TEST_CONSOLE_COLUMNS + 5u] == 'D');
     assert(console_cells[TEST_CONSOLE_COLUMNS + 1u] == 0u);
@@ -8607,6 +8628,10 @@ static void test_exec_replaces_one_image_and_preserves_argv(void)
     static const char handoff[] = "posix-fds";
     AstraExecRequest request;
     AstraStartupInfo startup;
+    AstraStartupCapability capabilities[3];
+    KernelProcessBootstrapCapability host = {0};
+    AstraDmaBufferInfo buffer;
+    AstraHostChannelOpen channel;
     KernelCpuContext *next;
     uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
     uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
@@ -8619,15 +8644,29 @@ static void test_exec_replaces_one_image_and_preserves_argv(void)
     uint32_t user_arguments = user_request + sizeof(request);
     uint32_t user_environment = user_arguments + sizeof(arguments);
     uint32_t user_handoff = user_environment + sizeof(environment);
+    uint32_t user_channel = user_page + KERNEL_PAGE_SIZE - 256u;
+    uint32_t host_handle = 0u;
 
     launch_build_image();
     initialize_test();
+    host.name = ASTRA_CAPABILITY_HOST_DEVICE;
+    host.kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+    host.device_id = ASTRA_DEVICE_ID_HOST0;
+    host.rights = KERNEL_DEVICE_RIGHTS;
     assert(kernel_process_create_executable(
-               launch_image, sizeof(launch_image), NULL, 0u, &process_id) ==
+               launch_image, sizeof(launch_image), &host, 1u, &process_id) ==
            KERNEL_PROCESS_OK);
     assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
     process_handle = next->data[4];
     assert(process_handle != 0u);
+    assert(kernel_user_copy_from_asm(
+               capabilities, KERNEL_VM_USER_MIN + ASTRA_STARTUP_INFO_SIZE,
+               sizeof(capabilities)) == KERNEL_USER_COPY_OK);
+    for (uint32_t index = 0u; index < 3u; ++index)
+        if (astra_capability_name_equal(capabilities[index].name,
+                                        ASTRA_CAPABILITY_HOST_DEVICE))
+            host_handle = capabilities[index].handle;
+    assert(host_handle != 0u);
 
     memset(&request, 0, sizeof(request));
     request.size = ASTRA_EXEC_REQUEST_SIZE;
@@ -8669,9 +8708,39 @@ static void test_exec_replaces_one_image_and_preserves_argv(void)
     assert(next->program_counter == LAUNCH_VADDR + 0x100u);
     assert(next->data[4] == process_handle);
 
+    /* An exec closes its old per-thread host channel before replacing the
+     * address space; the new image can reopen it from preserved authority. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_DMA_CREATE;
+    registers[1] = KERNEL_PAGE_SIZE;
+    registers[2] = user_channel;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&buffer, user_channel, sizeof(buffer)) ==
+           KERNEL_USER_COPY_OK);
+    memset(&channel, 0, sizeof(channel));
+    channel.size = sizeof(channel);
+    channel.buffer = buffer.handle;
+    channel.byte_size = KERNEL_PAGE_SIZE;
+    channel.command_capacity = 1u;
+    assert(kernel_user_copy_to_asm(user_channel, &channel, sizeof(channel)) ==
+           KERNEL_USER_COPY_OK);
+    registers[0] = ASTRA_SYSCALL_HOST_CHANNEL_OPEN;
+    registers[1] = host_handle;
+    registers[2] = user_channel;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(host_channel_open_calls == 1u && host_channel_close_calls == 0u);
+
     launch_build_image();
     assert(kernel_user_copy_to_asm(user_page, launch_image,
                                    sizeof(launch_image)) ==
+           KERNEL_USER_COPY_OK);
+    assert(kernel_user_copy_to_asm(user_request, &request, sizeof(request)) ==
            KERNEL_USER_COPY_OK);
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_PROCESS_EXEC;
@@ -8685,6 +8754,7 @@ static void test_exec_replaces_one_image_and_preserves_argv(void)
     assert(next->usp == KERNEL_PROCESS_STACK_TOP);
     assert(next->data[2] == KERNEL_VM_USER_MIN);
     assert(next->data[4] == process_handle);
+    assert(host_channel_close_calls == 1u);
     assert(kernel_user_copy_from_asm(&startup, KERNEL_VM_USER_MIN,
                                      sizeof(startup)) == KERNEL_USER_COPY_OK);
     assert(startup.abi_version == ASTRA_STARTUP_ABI_VERSION);
@@ -8960,8 +9030,8 @@ static void test_process_info_syscall(void)
     assert(info.owner == process_id);
     assert(info.live_threads == 1u && info.thread_count == 1u);
     assert(info.handle_references != 0u);
-    assert(info.reserved[0] == 0u && info.reserved[1] == 0u &&
-           info.reserved[2] == 0u);
+    assert(info.suspended == 0u && info.reserved[0] == 0u &&
+           info.reserved[1] == 0u);
     assert(info.run_count == 1u);
     assert(info.timer_ticks == 0u);
     assert(info.syscall_count == 2u);
@@ -9042,6 +9112,127 @@ static void test_process_info_syscall(void)
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_BAD_ADDRESS);
+}
+
+/*
+ * PROC: is the supervisor's capability-gated view of the kernel's complete
+ * live process registry. It must not collapse to the subset the supervisor
+ * happened to launch itself: terminal children, fork children and exec names
+ * all come from this same authority.
+ */
+static void test_initial_supervisor_can_snapshot_every_live_process(void)
+{
+    static const char child_arguments[] = "zsh\0-f\0";
+    AstraLaunchArguments launch = {0};
+    AstraProcSnapshot records[ASTRA_PROCESS_COUNT_MAX];
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t user_records = KERNEL_PROCESS_STACK_TOP - sizeof(records);
+    uint32_t supervisor_id;
+    uint32_t child_id;
+    uint32_t supervisor_handle;
+    uint32_t child_handle;
+
+    loader_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &supervisor_id) ==
+           KERNEL_PROCESS_OK);
+    launch.count = 2u;
+    launch.length = sizeof(child_arguments) - 1u;
+    launch.source = ASTRA_LAUNCH_SOURCE_SHELL;
+    assert(kernel_process_launch(loader_image, loader_image_size, 0u, NULL,
+                                 NULL, 0u, &launch, child_arguments, NULL,
+                                 &child_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+
+    registers[0] = ASTRA_SYSCALL_QUERY_ABI;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    supervisor_handle = next->data[2];
+
+    /* A process handle alone is not machine-wide observation authority. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_SNAPSHOT;
+    registers[1] = supervisor_handle;
+    registers[2] = user_records;
+    registers[3] = ASTRA_PROCESS_COUNT_MAX;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+
+    kernel_process_register_initial_image(supervisor_id);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == 2u);
+    assert(kernel_user_copy_from_asm(records, user_records,
+                                     2u * sizeof(records[0])) ==
+           KERNEL_USER_COPY_OK);
+    assert(records[0].process.id == supervisor_id);
+    assert(strcmp(records[0].name, "ROM:supervisor") == 0);
+    assert(records[1].process.id == child_id);
+    assert(strcmp(records[1].name, "zsh") == 0);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_SNAPSHOT;
+    registers[1] = supervisor_handle;
+    registers[2] = user_records;
+    registers[3] = ASTRA_PROCESS_COUNT_MAX - 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_BUFFER_TOO_SMALL);
+    assert(next->data[1] == ASTRA_PROCESS_COUNT_MAX);
+
+    /* The same call remains forbidden after scheduling the ordinary child. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_YIELD;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_QUERY_ABI;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    child_handle = next->data[2];
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_SNAPSHOT;
+    registers[1] = child_handle;
+    registers[2] = user_records;
+    registers[3] = ASTRA_PROCESS_COUNT_MAX;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+
+    /* Exit bookkeeping may retain a handle, but PROC has no zombie row. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_EXIT;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_SNAPSHOT;
+    registers[1] = supervisor_handle;
+    registers[2] = user_records;
+    registers[3] = ASTRA_PROCESS_COUNT_MAX;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == 1u);
+    assert(kernel_user_copy_from_asm(records, user_records,
+                                     sizeof(records)) ==
+           KERNEL_USER_COPY_OK);
+    assert(records[0].process.id == supervisor_id);
+    assert(records[1].process.id == 0u);
 }
 
 
@@ -9674,12 +9865,14 @@ static void test_process_clone_returns_twice_and_is_waitable(void)
     KernelCpuContext *next;
     KernelMemoryStats baseline;
     KernelMemoryStats final;
+    KernelProcessSnapshot child_snapshot;
     KernelSchedulerStats stats;
     uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
     uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
     uint32_t parent_id;
     uint32_t child_id;
     KernelHandle child_handle;
+    bool found_child = false;
 
     initialize_test();
     assert(kernel_memory_stats(&baseline));
@@ -9698,6 +9891,21 @@ static void test_process_clone_returns_twice_and_is_waitable(void)
            child_id != parent_id);
     assert(kernel_process_stats(&stats));
     assert(stats.live_processes == 2u && stats.live_threads == 2u);
+    for (uint32_t slot = 0u; slot < KERNEL_PROCESS_MAX; ++slot) {
+        assert(kernel_process_snapshot(slot, &child_snapshot));
+        if (child_snapshot.id == child_id) {
+            found_child = true;
+            break;
+        }
+    }
+    assert(found_child && child_snapshot.suspended == 1u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_RESUME;
+    registers[1] = child_handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
 
     select_process(child_id, registers, frame, &next);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
@@ -9747,6 +9955,7 @@ static void test_process_clone_rebinds_startup_identity(void)
     uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
     uint32_t parent_id = 0u;
     uint32_t child_id;
+    KernelHandle child_handle;
 
     launch_build_image();
     initialize_test();
@@ -9759,8 +9968,15 @@ static void test_process_clone_rebinds_startup_identity(void)
     registers[0] = ASTRA_SYSCALL_PROCESS_CLONE;
     assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
            KERNEL_PROCESS_OK);
+    child_handle = next->data[1];
     child_id = next->data[2];
     assert(child_id != 0u && child_id != parent_id);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_RESUME;
+    registers[1] = child_handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
 
     select_process(child_id, registers, frame, &next);
     assert(kernel_user_copy_from_asm(&startup, KERNEL_VM_USER_MIN,
@@ -9876,6 +10092,329 @@ static void test_interval_timer_delivers_and_sigreturn_restores_context(void)
     assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
 }
 
+static void test_thread_sleep_is_timed_and_signal_atomic(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
+    const uint32_t signal_stack_top =
+        KERNEL_PROCESS_DATA_BASE + KERNEL_PAGE_SIZE;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+    uint32_t self_handle;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_QUERY_ABI;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    self_handle = next->data[2];
+    assert(self_handle != 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_SIGNAL_CONFIGURE;
+    registers[1] = KERNEL_PROCESS_CODE_BASE;
+    registers[2] = signal_stack_top;
+    registers[3] = 1u << 2u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_SIGNAL;
+    registers[1] = self_handle;
+    registers[2] = 2u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->program_counter != KERNEL_PROCESS_CODE_BASE);
+
+    /* Replacing the mask and checking pending state are one kernel action. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_THREAD_SLEEP;
+    registers[1] = ASTRA_DEADLINE_NONE_HI;
+    registers[2] = ASTRA_DEADLINE_NONE_LO;
+    registers[3] = ASTRA_THREAD_SLEEP_REPLACE_SIGNAL_MASK;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->program_counter == KERNEL_PROCESS_CODE_BASE);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_SIGNAL_RETURN;
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_process_on_syscall(registers,
+                                     signal_stack_top - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_CANCELLED);
+    assert(next->data[1] == (1u << 2u));
+
+    /* An expired absolute deadline does not allocate or block. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_THREAD_SLEEP;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_TIMED_OUT);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_EXIT;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+}
+
+static void test_process_signal_is_capability_checked_and_delivered(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u,
+                                    0x4eu, 0x71u};
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
+    const uint32_t signal_stack_top =
+        KERNEL_PROCESS_DATA_BASE + KERNEL_PAGE_SIZE;
+    KernelHandle signal_handle;
+    KernelHandle wait_handle;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint32_t signal_frame[2];
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t observer_id;
+    uint32_t target_id;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &observer_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &target_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_grant_handle(
+               observer_id, target_id, TEST_PROCESS_SIGNAL_RIGHTS,
+               &signal_handle) == KERNEL_PROCESS_OK);
+    assert(kernel_process_grant_handle(
+               observer_id, target_id, TEST_PROCESS_WAIT_RIGHTS,
+               &wait_handle) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+
+    /* A launcher can retain its wait handle and delegate reduced control. */
+    registers[0] = ASTRA_SYSCALL_HANDLE_DUPLICATE;
+    registers[1] = signal_handle;
+    registers[2] = ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_TRANSFER;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK && next->data[1] != 0u);
+    signal_handle = next->data[1];
+
+    /* Configure the target, then return to the observer. */
+    registers[0] = ASTRA_SYSCALL_YIELD;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_SIGNAL_CONFIGURE;
+    registers[1] = KERNEL_PROCESS_CODE_BASE;
+    registers[2] = signal_stack_top;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_YIELD;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+
+    /* Mere observation authority cannot inject execution into the target. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_SIGNAL;
+    registers[1] = wait_handle;
+    registers[2] = 2u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_SIGNAL;
+    registers[1] = signal_handle;
+    registers[2] = 2u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    /* The target receives the pending signal on its next user-mode return. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_YIELD;
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 4u, 0u);
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->program_counter == KERNEL_PROCESS_CODE_BASE);
+    assert(next->usp == signal_stack_top - sizeof(signal_frame));
+    assert(kernel_user_copy_from_asm(&signal_frame, next->usp,
+                                     sizeof(signal_frame)) ==
+           KERNEL_USER_COPY_OK);
+    assert(signal_frame[0] == 0u && signal_frame[1] == 2u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_SIGNAL_RETURN;
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    assert(kernel_process_on_syscall(registers,
+                                     signal_stack_top - sizeof(signal_frame),
+                                     frame, &next) == KERNEL_PROCESS_OK);
+    assert(next->program_counter == KERNEL_PROCESS_CODE_BASE + 2u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_EXIT;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_EXIT;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+}
+
+static void test_process_terminate_preserves_signal_wait_status(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
+    KernelHandle handle;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t observer_id;
+    uint32_t target_id;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &observer_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &target_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_grant_handle(
+               observer_id, target_id, TEST_PROCESS_TERMINATE_RIGHTS,
+               &handle) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_TERMINATE;
+    registers[1] = handle;
+    registers[2] = 9u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_WAIT_ONE;
+    registers[1] = handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+    assert(next->data[1] == ASTRA_STATUS_SIGNALLED(9u));
+
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CLOSE;
+    registers[1] = handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_EXIT;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+}
+
+static void test_process_suspend_resume_preserves_execution(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
+    KernelHandle control_handle;
+    KernelCpuContext *next;
+    KernelProcessSnapshot snapshot;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t observer_id;
+    uint32_t self_handle;
+    uint32_t target_id;
+    bool found = false;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &observer_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &target_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_grant_handle(
+               observer_id, target_id, TEST_PROCESS_SIGNAL_RIGHTS,
+               &control_handle) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+
+    registers[0] = ASTRA_SYSCALL_PROCESS_SUSPEND;
+    registers[1] = control_handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    for (uint32_t slot = 0u; slot < KERNEL_PROCESS_MAX; ++slot) {
+        assert(kernel_process_snapshot(slot, &snapshot));
+        if (snapshot.id == target_id) {
+            found = true;
+            break;
+        }
+    }
+    assert(found && snapshot.suspended == 1u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_YIELD;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_RESUME;
+    registers[1] = control_handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_YIELD;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_QUERY_ABI;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    self_handle = next->data[2];
+    assert(self_handle != KERNEL_HANDLE_INVALID);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_SUSPEND;
+    registers[1] = self_handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_RESUME;
+    registers[1] = control_handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_YIELD;
+    assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    for (uint32_t remaining = 2u; remaining != 0u; --remaining) {
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_PROCESS_EXIT;
+        assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                         &next) ==
+               (remaining == 1u ? KERNEL_PROCESS_NO_RUNNABLE :
+                                  KERNEL_PROCESS_OK));
+    }
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+}
+
 int main(void)
 {
     test_dead_process_cannot_pin_library_cache();
@@ -9941,12 +10480,17 @@ int main(void)
     test_process_clone_rebinds_startup_identity();
     test_process_clone_exhaustion_is_reported();
     test_interval_timer_delivers_and_sigreturn_restores_context();
+    test_thread_sleep_is_timed_and_signal_atomic();
+    test_process_signal_is_capability_checked_and_delivered();
+    test_process_terminate_preserves_signal_wait_status();
+    test_process_suspend_resume_preserves_execution();
     test_any_process_may_emit_an_event();
     test_no_debug_surface_closes_only_the_console();
     test_fault_report_names_only_what_it_knows();
     test_executable_rejections_do_not_allocate();
     test_executable_load_rolls_back_every_allocation();
     test_process_info_syscall();
+    test_initial_supervisor_can_snapshot_every_live_process();
     puts("process tests passed");
     return 0;
 }

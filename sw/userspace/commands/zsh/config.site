@@ -1,0 +1,18 @@
+# Runtime facts configure cannot execute while cross-compiling for Astra.
+# Keep only target facts here; link-time feature probes remain upstream's.
+zsh_cv_64_bit_type='long long'
+zsh_cv_64_bit_utype='unsigned long long'
+zsh_cv_printf_has_lld=yes
+
+# Astra's slash namespace exposes commands at /commands. It has neither a
+# Unix login database nor a magic descriptor filesystem.
+zsh_cv_cs_path=/commands
+zsh_cv_path_utmp=no
+zsh_cv_path_utmpx=no
+zsh_cv_path_wtmp=no
+zsh_cv_path_wtmpx=no
+zsh_cv_sys_path_dev_fd=no
+
+# A controlling /dev/tty exists; PTY allocation and named FIFOs do not yet.
+ac_cv_have_dev_ptmx=no
+zsh_cv_sys_fifo=no

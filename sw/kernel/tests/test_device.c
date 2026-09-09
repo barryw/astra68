@@ -123,6 +123,35 @@ static void test_all_devices_and_owner_death(void)
     assert(kernel_device_pool_valid());
 }
 
+static void test_inherited_lease_survives_acquirer_death(void)
+{
+    FakeDevice fake = {0u, 0u, true, true};
+    KernelDeviceDefinition definition = define(1u, 20u, &fake);
+    KernelDeviceLease *lease = NULL;
+    KernelDeviceSnapshot snapshot;
+    uint32_t revoked = UINT32_MAX;
+
+    initialize();
+    assert(kernel_device_register(&definition) == KERNEL_DEVICE_OK);
+    assert(kernel_device_seal_registry());
+    assert(kernel_device_acquire(4u, 1u, &lease) == KERNEL_DEVICE_OK);
+    assert(kernel_device_handle_retain(lease, NULL));
+
+    assert(kernel_device_owner_died(4u, &revoked) == KERNEL_DEVICE_OK);
+    assert(revoked == 0u);
+    assert(fake.quiesces == 0u && fake.resets == 0u);
+    assert(kernel_device_query(lease, &snapshot) == KERNEL_DEVICE_OK);
+    assert(snapshot.lease_state == KERNEL_DEVICE_LEASE_ACTIVE &&
+           snapshot.references == 2u);
+
+    kernel_device_handle_release(lease, NULL);
+    assert(kernel_device_query(lease, &snapshot) == KERNEL_DEVICE_OK);
+    assert(snapshot.references == 1u);
+    kernel_device_handle_release(lease, NULL);
+    assert(fake.quiesces == 1u && fake.resets == 1u);
+    assert(kernel_device_pool_valid());
+}
+
 static void test_failures(void)
 {
     FakeDevice fake = {0u, 0u, false, true};
@@ -176,6 +205,7 @@ int main(void)
 {
     test_lifecycle();
     test_all_devices_and_owner_death();
+    test_inherited_lease_survives_acquirer_death();
     test_failures();
     test_reset_failure_is_contained();
     puts("device lease tests passed");

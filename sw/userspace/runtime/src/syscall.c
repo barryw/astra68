@@ -290,6 +290,24 @@ astra_rt_signal_return(void)
 }
 
 uint32_t
+astra_rt_thread_sleep(uint64_t deadline_ns, uint32_t flags,
+                      uint32_t signal_mask, uint32_t *previous_signal_mask)
+{
+    AstraSyscallResult result;
+
+    if ((flags & ~ASTRA_THREAD_SLEEP_FLAG_MASK) != 0u ||
+        ((flags & ASTRA_THREAD_SLEEP_REPLACE_SIGNAL_MASK) != 0u &&
+         previous_signal_mask == NULL))
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_THREAD_SLEEP,
+                   (uint32_t)(deadline_ns >> 32), (uint32_t)deadline_ns,
+                   flags, signal_mask, 0u, &result);
+    if (previous_signal_mask != NULL)
+        *previous_signal_mask = result.value0;
+    return result.status;
+}
+
+uint32_t
 astra_rt_interval_timer_get(uint64_t *delay_ns, uint64_t *interval_ns)
 {
     return astra_rt_interval_timer(UINT64_MAX, UINT64_MAX, delay_ns,
@@ -729,6 +747,21 @@ astra_process_info(uint32_t handle, AstraProcessInfo *info)
     }
     astra_syscall5(ASTRA_SYSCALL_PROCESS_INFO, handle,
                    (uint32_t)(uintptr_t)info, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
+astra_process_snapshot(uint32_t observer, AstraProcSnapshot *records,
+                       uint32_t capacity, uint32_t *live_count)
+{
+    AstraSyscallResult result;
+
+    if (records == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_SNAPSHOT, observer,
+                   (uint32_t)(uintptr_t)records, capacity, 0u, 0u, &result);
+    if (result.status == ASTRA_SYSCALL_OK && live_count != NULL)
+        *live_count = result.value0;
     return result.status;
 }
 

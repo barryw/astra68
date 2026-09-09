@@ -159,14 +159,16 @@ operation_takes_path(uint32_t operation)
            operation == ASTRA_VFS_OP_SYMLINK_TARGET ||
            operation == ASTRA_VFS_OP_SYMLINK_TO ||
            operation == ASTRA_VFS_OP_RENAME ||
-           operation == ASTRA_VFS_OP_SYMLINK;
+           operation == ASTRA_VFS_OP_SYMLINK ||
+           operation == ASTRA_VFS_OP_LINK;
 }
 
 static int
 request_shape_valid(uint32_t operation, const AstraVfsRequest *request)
 {
     uint16_t expected = operation == ASTRA_VFS_OP_RENAME ||
-                                operation == ASTRA_VFS_OP_SYMLINK ?
+                                operation == ASTRA_VFS_OP_SYMLINK ||
+                                operation == ASTRA_VFS_OP_LINK ?
         (uint16_t)ASTRA_VFS_RENAME_REQUEST_SIZE :
         (uint16_t)ASTRA_VFS_REQUEST_SIZE;
 
@@ -174,7 +176,8 @@ request_shape_valid(uint32_t operation, const AstraVfsRequest *request)
         (operation_takes_path(operation) && !path_valid(request)))
         return 0;
     return (operation != ASTRA_VFS_OP_RENAME &&
-            operation != ASTRA_VFS_OP_SYMLINK) ||
+            operation != ASTRA_VFS_OP_SYMLINK &&
+            operation != ASTRA_VFS_OP_LINK) ||
            bounded_path_valid((const char *)
                ((const AstraVfsRenameRequest *)request)->to);
 }
@@ -411,7 +414,8 @@ astra_vfs_service_init(AstraVfsService *service, const AstraVfsBackendOps *ops,
         ops->sync == NULL || ops->truncate == NULL ||
         ops->stat == NULL || ops->readdir == NULL || ops->mkdir == NULL ||
         ops->unlink == NULL || ops->rename == NULL || ops->chmod == NULL ||
-        ops->readlink == NULL || ops->symlink == NULL || sessions == NULL ||
+        ops->readlink == NULL || ops->symlink == NULL || ops->link == NULL ||
+        sessions == NULL ||
         session_capacity == 0u ||
         session_capacity > ASTRA_VFS_SESSION_MAX || files == NULL ||
         file_capacity == 0u || file_capacity > ASTRA_VFS_FILE_HANDLE_MAX) {
@@ -1391,6 +1395,22 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
             service->backend.context,
             (const char *)symlink->request.body.path,
             (const char *)symlink->to);
+        (void)state_acquire(service);
+        break;
+    }
+    case ASTRA_VFS_OP_LINK: {
+        const AstraVfsRenameRequest *link =
+            (const AstraVfsRenameRequest *)request;
+
+        if (slot->version < UINT16_C(22)) {
+            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
+            break;
+        }
+        state_release(service);
+        reply->status = service->backend.ops->link(
+            service->backend.context,
+            (const char *)link->request.body.path,
+            (const char *)link->to);
         (void)state_acquire(service);
         break;
     }

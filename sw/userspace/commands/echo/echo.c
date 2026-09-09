@@ -12,55 +12,34 @@
  */
 
 #include <astra/program.h>
-#include <astra/runtime.h>
-#include <astra/stream.h>
+
+#include <stdio.h>
+#include <string.h>
 
 ASTRA_PROGRAM("echo", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
 int
-astra_main(const AstraStartupInfo *startup)
+main(int argc, char **argv)
 {
-    const AstraStartupCapability *standard_output;
-    char output[ASTRA_LAUNCH_ARGUMENT_BYTES + ASTRA_LAUNCH_ARGUMENT_MAX + 1u];
-    uint32_t out = 0u;
-    uint32_t stdout_handle = 0u;
-    uint32_t first = 1u;
+    int first = 1;
     int newline = 1;
 
-    if (!astra_startup_validate(startup))
-        return 1;
-    standard_output = astra_startup_capability(startup, "STDOUT");
-    if (standard_output != NULL)
-        stdout_handle = standard_output->handle;
-    if (stdout_handle == 0u)
-        return 1;
     /*
      * `-n` and nothing else. The shell does the quoting and the expansion, so
      * by the time a word arrives here it is already exactly what it should
      * print -- there is nothing left for this program to interpret, and every
      * escape sequence `echo` grew elsewhere is a thing it interprets wrongly.
      */
-    if (startup->argc > 1u) {
-        const char *word = astra_startup_argument(startup, 1u);
-
-        if (word != NULL && word[0] == '-' && word[1] == 'n' &&
-            word[2] == '\0') {
-            newline = 0;
-            first = 2u;
-        }
+    if (argc > 1 && strcmp(argv[1], "-n") == 0) {
+        newline = 0;
+        first = 2;
     }
-    for (uint32_t index = first; index < startup->argc; ++index) {
-        const char *word = astra_startup_argument(startup, index);
-
-        if (index != first)
-            output[out++] = ' ';
-        if (word != NULL)
-            while (*word != '\0')
-                output[out++] = *word++;
-    }
-    if (newline)
-        output[out++] = '\n';
-    return astra_stream_write_all(stdout_handle, output, out) ==
-           ASTRA_SYSCALL_OK ? 0 : 1;
+    for (int index = first; index < argc; ++index)
+        if ((index != first && putchar(' ') == EOF) ||
+            fputs(argv[index], stdout) == EOF)
+            return 1;
+    if (newline && putchar('\n') == EOF)
+        return 1;
+    return fflush(stdout) == 0 ? 0 : 1;
 }

@@ -398,3 +398,41 @@ cold boot, live scanout, terminal residency, and three exhaustive hardware
 sweeps, this closes the DE25 migration release gate without an external video
 capture device. The DE25 is the active Astra machine; the Arty is the rollback
 platform. The next independently measured project is the MC68040 migration.
+
+## 2026-09-08: 512 MiB Media RAM route and runtime
+
+- Host/tool: exact-mirror source on `beast`, Quartus Pro 26.1.1 Build 130.
+- Architecture: the HPS-visible Media RAM arena is
+  `0x40000000..0x5fffffff`; the upper half of LPDDR4B is outside the published
+  graphics/audio arena. Astra guest RAM is independently 512 MiB in QEMU.
+- The complete production build passed synthesis, fit, route, signoff,
+  assembly, manifest verification, boot-bundle installation, and physical
+  `design_link` verification. Every production clock is constrained.
+- Timing: setup +0.740 ns, hold 0.000 ns, recovery +2.771 ns, removal
+  +0.085 ns, and minimum pulse width +0.220 ns, with zero TNS and zero failing
+  endpoints.
+- Resources: 41,788 / 46,800 ALMs; 3,818,968 / 7,331,840 block-memory bits;
+  290 / 358 RAM blocks; 58 / 376 DSP blocks; 5 / 11 PLLs.
+- Retained identities:
+  - `BUILD_SHA256SUMS`:
+    `f6c0be98bd8ae461f6a5ae170437263762c42a229b051f6c15d4b02ba911bdf4`
+  - SD RBF:
+    `a2dbcc47dffc872e44c22d4c512b4d931ded14928154ecfe4182e7c6b60fe2ab`
+  - HPS JIC:
+    `db9dbdf8fb4e8897f671b26c0aa1351bafcee10dc1ccd80df89b731d2fd8641e`
+  - full SOF:
+    `926b86653e6e8eb4859f62b652fa0e1a448807072da985b44f4eb38d27c598e6`
+  - HPS SOF:
+    `8d8dc330cf9418315ff9aadff1543a29214f7db4897f6ca03aca15b072776dc6`
+- Physical Media RAM passed stuck-address, random-value, XOR, subtract,
+  multiply, divide, OR, AND, sequential-increment, and all 64 solid-bit
+  patterns over the full 512 MiB window with zero mismatches. The next
+  block-sequential algorithm was intentionally stopped and is not claimed.
+- Graphics calibration/readiness passed, the splash read back at CRC32
+  `611029ee`, and the hardware reported the expected 512 MiB arena.
+- Immutable runtime release
+  `b05969f66fe1a4ce0b70d1fe595c4a0ea40dc32a8bbb0ad5aa079955649a11c4`
+  passed full-range 512 MiB guest POST, reported 131,072 physical pages,
+  mounted and verified storage, launched every service, and reached stage 8.
+  The physical MC68040 measured 70.117 MHz effective; QEMU settled at 553,940
+  KiB RSS and `astra.service` remained active with zero restarts.

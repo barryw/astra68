@@ -136,6 +136,58 @@ static void test_process_priority_reorders_ready_and_blocked_threads(void)
     assert(kernel_thread_pool_valid());
 }
 
+static void test_process_suspend_preserves_wait_state(void)
+{
+    KernelThreadWaitQueue queue;
+    KernelThread *target;
+    KernelThread *other;
+    KernelThread *selected;
+    KernelThreadSnapshot snapshot;
+    uint32_t sequence;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    kernel_thread_wait_queue_init(&queue);
+    sequence = kernel_thread_wait_queue_sequence(&queue);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u, 20u,
+                                  &target) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(2u, 0x10000002u, 1u, 0x00100010u,
+                                  0x70011000u, 0u, 10u,
+                                  &other) == KERNEL_THREAD_OK);
+    publish_thread(target);
+    publish_thread(other);
+
+    assert(kernel_thread_suspend_process(1u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_snapshot(target->slot, &snapshot));
+    assert(snapshot.state == KERNEL_THREAD_READY && snapshot.suspended == 1u);
+    assert(!kernel_thread_process_runnable(1u));
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == other);
+
+    assert(kernel_thread_resume_process(1u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_make_ready(other) == KERNEL_THREAD_OK);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == target);
+    assert(kernel_thread_block(target, &queue, sequence) == KERNEL_THREAD_OK);
+    assert(kernel_thread_suspend_process(1u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_wake_one(&queue, 0x12345678u, &selected) ==
+           KERNEL_THREAD_OK);
+    assert(selected == target);
+    assert(target->context.data[0] == 0x12345678u);
+    assert(kernel_thread_snapshot(target->slot, &snapshot));
+    assert(snapshot.state == KERNEL_THREAD_READY && snapshot.suspended == 1u);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == other);
+
+    assert(kernel_thread_set_process_priority(1u, 22u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_resume_process(1u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_make_ready(other) == KERNEL_THREAD_OK);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == target && selected->effective_priority == 22u);
+    assert(kernel_thread_pool_valid());
+}
+
 static void test_record_injection_preserves_pool(void)
 {
     KernelAllocationStats allocation_stats;
@@ -981,6 +1033,7 @@ int main(void)
     test_record_injection_preserves_pool();
     test_priority_fifo_and_process_retirement();
     test_process_priority_reorders_ready_and_blocked_threads();
+    test_process_suspend_preserves_wait_state();
     test_slot_fifteen_generation_ids_do_not_repeat();
     test_invalid_inputs_do_not_consume_slots();
     test_all_priority_levels_select_highest_first();

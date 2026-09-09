@@ -13,6 +13,8 @@
 #include <astra/library.h>
 #include <astra/civil.h>
 #include <astra/process.h>
+#include <astra/proc.h>
+#include <astra/posix_process.h>
 #include <astra/network.h>
 #include <astra/syscall.h>
 
@@ -97,6 +99,9 @@ uint32_t astra_rt_interval_timer(uint64_t delay_ns, uint64_t interval_ns,
 uint32_t astra_rt_interval_timer_get(uint64_t *delay_ns,
                                      uint64_t *interval_ns);
 uint32_t astra_rt_signal_return(void);
+uint32_t astra_rt_thread_sleep(uint64_t deadline_ns, uint32_t flags,
+                               uint32_t signal_mask,
+                               uint32_t *previous_signal_mask);
 uint32_t astra_rt_ring_create(uint32_t area, uint32_t offset,
                               uint32_t element_size, uint32_t capacity,
                               uint32_t flags, uint32_t *producer,
@@ -115,6 +120,10 @@ uint32_t astra_query_abi(uint32_t *abi_version, uint32_t *process_handle,
 /* Cached independently in each thread; a successful lookup never goes stale. */
 uint32_t astra_current_thread_handle(uint32_t *thread_handle);
 uint32_t astra_process_info(uint32_t handle, AstraProcessInfo *info);
+uint32_t astra_process_snapshot(uint32_t observer,
+                                AstraProcSnapshot *records,
+                                uint32_t capacity,
+                                uint32_t *live_count);
 uint32_t astra_process_priority(uint32_t handle, uint32_t priority,
                                 uint32_t *previous_priority);
 uint32_t astra_progress(uint32_t value);
@@ -137,6 +146,20 @@ uint32_t astra_clock_realtime_zone(uint64_t *nanoseconds,
 uint32_t astra_clock_set(uint32_t clock, uint64_t nanoseconds);
 uint32_t astra_wait_one(uint32_t handle, uint64_t deadline_ns,
                         uint32_t *detail);
+/* Complete an internal synchronization or protocol wait after signal
+ * delivery. Application-facing waits use astra_wait_one() so they can expose
+ * interruption as EINTR. */
+static inline uint32_t astra_wait_one_restart(uint32_t handle,
+                                              uint64_t deadline_ns,
+                                              uint32_t *detail)
+{
+    uint32_t status;
+
+    do {
+        status = astra_wait_one(handle, deadline_ns, detail);
+    } while (status == ASTRA_SYSCALL_CANCELLED);
+    return status;
+}
 uint32_t astra_wait_multiple(const uint32_t *handles, uint32_t count,
                              uint64_t deadline_ns, uint32_t *index,
                              uint32_t *detail);
@@ -166,6 +189,7 @@ static inline uint32_t astra_mutex_lock(volatile uint32_t *state)
             return ASTRA_SYSCALL_OK;
         status = astra_futex_wait(state, 2u, ASTRA_DEADLINE_FOREVER);
         if (status != ASTRA_SYSCALL_OK &&
+            status != ASTRA_SYSCALL_CANCELLED &&
             status != ASTRA_SYSCALL_WOULD_BLOCK)
             return status;
         expected = __atomic_exchange_n(state, 2u, __ATOMIC_ACQUIRE);
@@ -244,9 +268,9 @@ void astra_thread_exit(uint32_t status) __attribute__((noreturn));
  * capability which did not exist a moment earlier.
  *
  * Nothing is validated here that the kernel validates: one answer to one
- * question. The handle that comes back carries QUERY, WAIT and TERMINATE, and
- * never DEBUG -- having started something is not permission to read its account
- * of itself.
+ * question. The handle that comes back carries QUERY, WAIT, SIGNAL, TERMINATE,
+ * TRANSFER, and priority administration, and never DEBUG -- having started
+ * something is not permission to read its account of itself.
  */
 uint32_t astra_launch(const void *image, uint32_t length,
                       const AstraLaunchGrant *grants, uint32_t count,
@@ -283,6 +307,29 @@ uint32_t astra_exec_request_pack(AstraExecRequest *request, char *storage,
                                  AstraLaunchSource source,
                                  char *const argv[], char *const envp[]);
 uint32_t astra_process_clone(uint32_t *process_handle, uint32_t *process_id);
+uint32_t astra_process_signal(uint32_t process_handle, uint32_t signal);
+uint32_t astra_process_terminate(uint32_t process_handle, uint32_t reason);
+uint32_t astra_process_suspend(uint32_t process_handle);
+uint32_t astra_process_resume(uint32_t process_handle);
+uint32_t astra_posix_process_register(uint32_t service,
+                                      uint32_t process_handle,
+                                      uint32_t process_id, uint32_t flags);
+uint32_t astra_posix_process_signal(uint32_t service, int32_t selector,
+                                    uint32_t signal);
+uint32_t astra_posix_process_signal_group(uint32_t service, int32_t group,
+                                          uint32_t signal);
+uint32_t astra_posix_process_setpgid(uint32_t service, int32_t process,
+                                     int32_t group);
+uint32_t astra_posix_process_setsid(uint32_t service,
+                                    AstraPosixProcessReply *reply);
+uint32_t astra_posix_process_query(uint32_t service, int32_t process,
+                                   AstraPosixProcessReply *reply);
+uint32_t astra_posix_process_tty_attach(uint32_t service);
+uint32_t astra_posix_process_tty_foreground(
+    uint32_t service, AstraPosixProcessReply *reply);
+uint32_t astra_posix_process_tty_set_foreground(uint32_t service,
+                                                int32_t group);
+uint32_t astra_posix_process_tty_signal(uint32_t service, uint32_t signal);
 uint32_t astra_process_exec(const void *image, uint32_t length,
                             const AstraExecRequest *request);
 

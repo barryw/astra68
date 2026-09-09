@@ -4,8 +4,8 @@ This document is the authoritative registry of CPU-visible address ranges.
 Per-device documents define registers inside each allocated aperture; they may
 not allocate a new global range without updating this file.
 
-The table describes the active QEMU machine on the Arty. All addresses are
-physical MC68040 bus addresses. MMIO is
+The table describes the active QEMU machine on the DE25-Nano. All addresses
+are physical MC68040 bus addresses. MMIO is
 uncached and uses 32-bit, big-endian registers unless a device specification
 explicitly says otherwise.
 
@@ -13,10 +13,10 @@ explicitly says otherwise.
 
 | Start | End | Size | Owner | Access | State |
 |---|---|---:|---|---|---|
-| `0x00000000` | `0x0007FFFF` | 512 KiB | Arty-hosted system ROM low alias | RO | Implemented in QEMU |
+| `0x00000000` | `0x0007FFFF` | 512 KiB | DE25-hosted system ROM low alias | RO | Implemented in QEMU |
 | `0x01FF8000` | `0x01FFFFFF` | 32 KiB | Bootstrap scratch BRAM | RWX | Implemented |
-| `0x02000000` | `0x09FFFFFF` | 128 MiB | SDRAM CPU aperture, Arty-hosted profile | RWX | Implemented in QEMU |
-| `0xFFE00000` | `0xFFE7FFFF` | 512 KiB | Arty-hosted system ROM aperture | RX | QEMU host memory; no PL or guest-RAM cost |
+| `0x02000000` | `0x21FFFFFF` | 512 MiB | SDRAM CPU aperture, DE25-hosted profile | RWX | Implemented in QEMU |
+| `0xFFE00000` | `0xFFE7FFFF` | 512 KiB | DE25-hosted system ROM aperture | RX | QEMU host memory; no PL or guest-RAM cost |
 | `0xFFF00000` | `0xFFF0FFFF` | 64 KiB | Vesta system and I/O | MMIO | Allocated |
 | `0xFFF10000` | `0xFFF1FFFF` | 64 KiB | Astraea DMA/blitter/copper | MMIO | Allocated |
 | `0xFFF20000` | `0xFFF2FFFF` | 64 KiB | Vega video | MMIO | Allocated |
@@ -25,7 +25,7 @@ explicitly says otherwise.
 
 ## ROM budgets
 
-The active Arty-hosted ROM is a 512 KiB QEMU memory region. It consumes ARM
+The active DE25-hosted ROM is a 512 KiB QEMU memory region. It consumes ARM
 host memory, not FPGA BRAM or guest SDRAM, and ends below the Vesta MMIO
 aperture at `0xFFF00000`.
 
@@ -61,11 +61,12 @@ must not infer them from linker symbols.
 | `0x02004000` | `0x02043FFF` | 256 KiB | Initial user image, then usable RAM | Firmware for the pages the image fills; allocator for the rest |
 | `0x02044000` | `0x020C3FFF` | 512 KiB | Kernel image, BSS, and guarded stacks | Kernel |
 | `0x020C4000` | `0x020D3FFF` | 64 KiB | Retained kernel trace | Kernel diagnostics |
-| `0x020D4000` | `0x02153FFF` | 512 KiB | Frame and ownership metadata for up to 128 MiB | Kernel |
+| `0x020D4000` | `0x02153FFF` | 512 KiB | Retained kernel ABI padding | Kernel |
 | `0x02154000` | `0x02353FFF` | 2 MiB | Kernel object and scheduler tables | Kernel |
 | `0x02354000` | `0x03EFFFFF` | 27.668 MiB | Usable RAM | Physical-page allocator |
 | `0x03F00000` | `0x03FFFFFF` | 1 MiB | OHCI DMA pool | Device-owned, uncached |
-| `0x04000000` | `0x09FFFFFF` | 96 MiB | Usable RAM | Physical-page allocator |
+| `0x04000000` | `0x0422FFFF` | 2.188 MiB | Dynamic frame/ownership metadata for the 512 MiB profile | Kernel |
+| `0x04230000` | `0x21FFFFFF` | 477.812 MiB | Usable RAM | Physical-page allocator |
 
 `AstraBootInfo` itself begins at `0x01FF8000` and is 268 bytes as of boot ABI
 0.6. The linker reserves the first 1 KiB of bootstrap BRAM for the handoff
@@ -81,11 +82,11 @@ bytes long after it has taken ownership of the map, and the allocator must
 never hand them out. The image is capped at `ASTRA_USER_IMAGE_MAX_SIZE`
 (256 KiB) and validation rejects any description that escapes a firmware range.
 
-The kernel's large per-frame tables live after the fixed trace ring, so crash
-tooling keeps the same address. Firmware accepts a page-aligned RAM map
-beginning at the early-log base
-and extending through the fixed bootstrap reservations; Axiom sizes its frame
-tables from the reported map. The production profile is 128 MiB Arty-hosted.
+The fixed trace and object-table addresses stay stable. Firmware accepts a
+page-aligned RAM map beginning at the early-log base and extending through the
+fixed bootstrap reservations; Axiom sizes its frame metadata from the reported
+map and carves it from the largest usable range. The production profile is a
+512 MiB DE25-hosted guest.
 
 Addresses not listed above are unallocated. In particular, the current SoC
 does not yet expose general SDRAM at `0x00040000..0x01FF7FFF`; software must use

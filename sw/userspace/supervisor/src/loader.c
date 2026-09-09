@@ -12,6 +12,7 @@
 #include <astra/bundle.h>
 #include <astra/display.h>
 #include <astra/event_control.h>
+#include <astra/posix_process.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
 #include <astra/status.h>
@@ -33,13 +34,6 @@ static char bundle_text[ASTRA_BUNDLE_MANIFEST_MAX + 1u];
 /* Sized by the process table, not by the number of services in one image. */
 static SupervisorManifest startup_manifest;
 static uint32_t process_handles[SUPERVISOR_PROCESS_MAX];
-/*
- * What each process was launched from, so PROC: can name it. A pid
- * with no name is a number, and `ps` that prints numbers is a worse `ps` than
- * the one nobody wrote.
- */
-static char process_paths[SUPERVISOR_PROCESS_MAX]
-                         [SUPERVISOR_PROCESS_NAME_MAX];
 static uint32_t process_resident[SUPERVISOR_PROCESS_MAX];
 static uint32_t service_handles[ASTRA_HANDLE_COUNT_MAX];
 static char service_names[ASTRA_HANDLE_COUNT_MAX]
@@ -188,6 +182,15 @@ static int entry_serves(const SupervisorManifestEntry *entry,
 {
     for (uint32_t index = 0u; index < entry->serves_count; ++index)
         if (astra_capability_name_equal(entry->serves[index].name, name))
+            return 1;
+    return 0;
+}
+
+static int entry_grants(const SupervisorManifestEntry *entry,
+                        const char *name)
+{
+    for (uint32_t index = 0u; index < entry->grant_count; ++index)
+        if (astra_capability_name_equal(entry->grants[index].name, name))
             return 1;
     return 0;
 }
@@ -554,6 +557,7 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
                              void *source,
                              uint32_t *process_id)
 {
+    AstraLaunchArguments default_arguments = {0};
     AstraLaunchArguments essential_arguments = {0};
     const AstraLaunchArguments *launch_arguments = arguments;
     AstraLaunchGrant grants[ASTRA_LAUNCH_GRANT_MAX];
@@ -566,9 +570,20 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
     uint32_t expected_handles = entry->serves_count;
     uint32_t status;
 
+    if (launch_arguments == NULL) {
+        uint32_t length = 0u;
+
+        while (entry->path[length] != '\0')
+            ++length;
+        default_arguments.count = 1u;
+        default_arguments.length = (uint16_t)(length + 1u);
+        default_arguments.source = ASTRA_LAUNCH_SOURCE_SYSTEM;
+        default_arguments.argument_address =
+            (uint32_t)(uintptr_t)entry->path;
+        launch_arguments = &default_arguments;
+    }
     if (entry->resident != 0u) {
-        if (arguments != NULL)
-            essential_arguments = *arguments;
+        essential_arguments = *launch_arguments;
         essential_arguments.flags |= ASTRA_LAUNCH_FLAG_ESSENTIAL;
         launch_arguments = &essential_arguments;
     }
@@ -593,9 +608,21 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
             image_length, read_at, release, source, grants, grant_count,
             launch_arguments, &child, &child_id);
 
-        if (launch_status == ASTRA_SYSCALL_OK)
+        if (launch_status == ASTRA_SYSCALL_OK) {
             status = ASTRA_STATUS_OK;
-        else {
+            if (entry_grants(entry, ASTRA_CAPABILITY_POSIX_PROCESS)) {
+                uint32_t service = named_service(
+                    ASTRA_CAPABILITY_POSIX_PROCESS);
+
+                status = service != 0u ?
+                    astra_posix_process_register(
+                        service, child, child_id,
+                        ASTRA_POSIX_PROCESS_NEW_SESSION) :
+                    ASTRA_STATUS_BAD_HANDLE;
+                if (status != ASTRA_STATUS_OK)
+                    (void)astra_process_terminate(child, 9u);
+            }
+        } else {
             (void)astra_log_failure("astra_launch_stream", launch_status);
             status = launch_status == ASTRA_SYSCALL_IO_ERROR ?
                          ASTRA_STATUS_IO : ASTRA_STATUS_INVALID;
@@ -635,18 +662,8 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
         (void)astra_close(child);
         return status;
     }
-    {
-        uint32_t at = 0u;
-
-        while (at < SUPERVISOR_PROCESS_NAME_MAX - 1u &&
-               entry->path[at] != '\0') {
-            process_paths[process_count][at] = entry->path[at];
-            ++at;
-        }
-        process_paths[process_count][at] = '\0';
-        process_resident[process_count] = entry->resident;
-        process_handles[process_count++] = child;
-    }
+    process_resident[process_count] = entry->resident;
+    process_handles[process_count++] = child;
     if (process_id != NULL)
         *process_id = child_id;
     return ASTRA_STATUS_OK;
@@ -969,32 +986,9 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
     return ASTRA_STATUS_OK;
 }
 
-/*
- * The process table, for the PROC: tree to render. An accessor rather
- * than a shared array because the table is the loader's: it decides what is
- * tracked and it compacts the list when something exits, and a second file
- * indexing into it directly would be a second place that has to know both.
- */
-uint32_t supervisor_loader_process_count(void)
+uint32_t supervisor_loader_process_handle(void)
 {
-    return process_count + (supervisor_process_handle != 0u ? 1u : 0u);
-}
-
-uint32_t supervisor_loader_process_at(uint32_t index, const char **path)
-{
-    if (supervisor_process_handle != 0u) {
-        if (index == 0u) {
-            if (path != NULL)
-                *path = "ROM:supervisor";
-            return supervisor_process_handle;
-        }
-        --index;
-    }
-    if (index >= process_count)
-        return 0u;
-    if (path != NULL)
-        *path = process_paths[index];
-    return process_handles[index];
+    return supervisor_process_handle;
 }
 
 uint32_t supervisor_loader_event_control(void)
@@ -1057,8 +1051,6 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
                 --process_count;
                 process_handles[slot] = process_handles[process_count];
                 process_resident[slot] = process_resident[process_count];
-                for (uint32_t at = 0u; at < SUPERVISOR_PROCESS_NAME_MAX; ++at)
-                    process_paths[slot][at] = process_paths[process_count][at];
                 continue;
             }
         }

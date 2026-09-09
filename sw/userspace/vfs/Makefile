@@ -125,7 +125,7 @@ $(FILESYSTEM_LIBRARY): $(FILESYSTEM_LIBRARY_OBJECTS) $(RUNTIME_PIC_LIB) \
 
 library-contract: $(FILESYSTEM_LIBRARY)
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
-		grep -q '^filesystem.library 2.0.0 ABI 2.0$$'
+		grep -q '^filesystem.library 2.0.0 ABI 2.1$$'
 	$(call ASTRA_CHECK_DSO,$(FILESYSTEM_LIBRARY))
 
 # The one translation unit that is allowed to know what lwext4 is.

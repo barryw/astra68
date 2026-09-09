@@ -266,6 +266,8 @@ AstraTerminalStatus astra_terminal_init_capacity(
     terminal->echo_context = NULL;
     terminal->reply = NULL;
     terminal->reply_context = NULL;
+    terminal->prompt = NULL;
+    terminal->prompt_context = NULL;
     terminal->echo_length = 0u;
     terminal->echo_columns = 0u;
     terminal->echo_carriage_return = 0u;
@@ -277,6 +279,7 @@ AstraTerminalStatus astra_terminal_init_capacity(
     terminal->csi_parameter_count = 0u;
     terminal->csi_private = 0u;
     terminal->csi_overflow = 0u;
+    terminal->osc_prompt_match = 0u;
     terminal->utf8_remaining = 0u;
     terminal->cursor_visible = 1u;
     terminal->alternate_screen = 0u;
@@ -809,6 +812,15 @@ void astra_terminal_set_reply(AstraTerminal *terminal,
     terminal->reply_context = context;
 }
 
+void astra_terminal_set_prompt(AstraTerminal *terminal,
+                               AstraTerminalPrompt prompt, void *context)
+{
+    if (terminal == NULL)
+        return;
+    terminal->prompt = prompt;
+    terminal->prompt_context = context;
+}
+
 void astra_terminal_set_scroll(AstraTerminal *terminal,
                                AstraTerminalScroll scroll_callback)
 {
@@ -904,7 +916,10 @@ static void escape_byte(AstraTerminal *terminal, uint8_t value)
     terminal->parser_state = PARSER_GROUND;
     switch (value) {
     case '[': begin_csi(terminal); break;
-    case ']': terminal->parser_state = PARSER_OSC; break;
+    case ']':
+        terminal->parser_state = PARSER_OSC;
+        terminal->osc_prompt_match = 0u;
+        break;
     case '(':
     case ')': terminal->parser_state = PARSER_CHARSET; break;
     case '7': save_cursor(terminal); break;
@@ -921,6 +936,24 @@ static void escape_byte(AstraTerminal *terminal, uint8_t value)
     case 'c': reset_terminal(terminal); break;
     default: break;
     }
+}
+
+static void osc_byte(AstraTerminal *terminal, uint8_t value)
+{
+    static const uint8_t prompt[] = "133;B";
+
+    if (terminal->osc_prompt_match >= sizeof(prompt) - 1u ||
+        value != prompt[terminal->osc_prompt_match])
+        terminal->osc_prompt_match = UINT8_MAX;
+    else
+        ++terminal->osc_prompt_match;
+}
+
+static void finish_osc(AstraTerminal *terminal)
+{
+    if (terminal->osc_prompt_match == 5u && terminal->prompt != NULL)
+        terminal->prompt(terminal->prompt_context);
+    terminal->parser_state = PARSER_GROUND;
 }
 
 static void csi_byte(AstraTerminal *terminal, uint8_t value)
@@ -1013,13 +1046,20 @@ void astra_terminal_putc(AstraTerminal *terminal, uint8_t value)
         return;
     if (terminal->parser_state == PARSER_OSC) {
         if (value == 0x07u)
-            terminal->parser_state = PARSER_GROUND;
+            finish_osc(terminal);
         else if (value == 0x1bu)
             terminal->parser_state = PARSER_OSC_ESCAPE;
+        else
+            osc_byte(terminal, value);
         return;
     }
     if (terminal->parser_state == PARSER_OSC_ESCAPE) {
-        terminal->parser_state = value == '\\' ? PARSER_GROUND : PARSER_OSC;
+        if (value == '\\')
+            finish_osc(terminal);
+        else {
+            terminal->osc_prompt_match = UINT8_MAX;
+            terminal->parser_state = PARSER_OSC;
+        }
         return;
     }
     if (value == 0x1bu) {

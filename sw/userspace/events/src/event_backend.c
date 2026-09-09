@@ -747,7 +747,8 @@ static const AstraVfsBackendOps events_ops = {
     astra_vfs_backend_deny_rename,
     astra_vfs_backend_deny_chmod,
     astra_vfs_backend_no_readlink,
-    astra_vfs_backend_deny_symlink
+    astra_vfs_backend_deny_symlink,
+    astra_vfs_backend_deny_link
 };
 
 int

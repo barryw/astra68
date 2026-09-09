@@ -479,9 +479,13 @@ port_client_finish(AstraVfsClient *client, int abandon)
 uint32_t
 astra_vfs_port_client_enter(AstraVfsClient *client)
 {
-    if (__atomic_load_n(&client->port_lifecycle, __ATOMIC_ACQUIRE) !=
-        PORT_CLIENT_OPEN)
+    uint32_t state = __atomic_load_n(&client->port_lifecycle,
+                                     __ATOMIC_ACQUIRE);
+
+    if (state != PORT_CLIENT_OPEN) {
+        (void)astra_log_failure("VFS port lifecycle", state);
         return ASTRA_VFS_ERR_PEER;
+    }
     (void)__atomic_add_fetch(&client->port_inflight, 1u, __ATOMIC_ACQ_REL);
     if (__atomic_load_n(&client->port_lifecycle, __ATOMIC_ACQUIRE) ==
         PORT_CLIENT_OPEN)
@@ -490,6 +494,8 @@ astra_vfs_port_client_enter(AstraVfsClient *client)
         __atomic_load_n(&client->port_inflight_waiters,
                         __ATOMIC_ACQUIRE) != 0u)
         (void)astra_futex_wake(&client->port_inflight, UINT32_MAX, NULL);
+    state = __atomic_load_n(&client->port_lifecycle, __ATOMIC_ACQUIRE);
+    (void)astra_log_failure("VFS port lifecycle changed", state);
     return ASTRA_VFS_ERR_PEER;
 }
 
@@ -783,10 +789,16 @@ ensure_accelerated_connection(AstraVfsClient *client)
 
     if (port_client_session(client) != ASTRA_VFS_SESSION_INVALID)
         return ASTRA_VFS_OK;
-    if (client->port_connect_lock == 0u ||
-        astra_wait_one(client->port_connect_lock, ASTRA_DEADLINE_FOREVER,
-                       NULL) != ASTRA_SYSCALL_OK)
+    if (client->port_connect_lock == 0u) {
+        (void)astra_log_failure("VFS port connect lock", 0u);
         return ASTRA_VFS_ERR_PEER;
+    }
+    status = astra_wait_one_restart(client->port_connect_lock,
+                                    ASTRA_DEADLINE_FOREVER, NULL);
+    if (status != ASTRA_SYSCALL_OK) {
+        (void)astra_log_failure("VFS port connect wait", status);
+        return ASTRA_VFS_ERR_PEER;
+    }
     if (port_client_session(client) == ASTRA_VFS_SESSION_INVALID) {
         status = astra_vfs_connect(client, astra_vfs_port_transport, client);
         client->port_area_capable = status == ASTRA_VFS_OK;
@@ -795,9 +807,11 @@ ensure_accelerated_connection(AstraVfsClient *client)
     } else {
         status = ASTRA_VFS_OK;
     }
-    if (astra_rt_signal(client->port_connect_lock, 1u, NULL) !=
-        ASTRA_SYSCALL_OK)
+    status = astra_rt_signal(client->port_connect_lock, 1u, NULL);
+    if (status != ASTRA_SYSCALL_OK) {
+        (void)astra_log_failure("VFS port connect signal", status);
         return ASTRA_VFS_ERR_PEER;
+    }
     return status;
 }
 
@@ -861,12 +875,20 @@ astra_vfs_port_call_area(const AstraVfsClient *client, uint32_t *capacity)
 }
 
 static uint32_t
+operation_uses_extended_request(uint32_t operation)
+{
+    return operation == ASTRA_VFS_OP_RENAME ||
+           operation == ASTRA_VFS_OP_SYMLINK ||
+           operation == ASTRA_VFS_OP_LINK;
+}
+
+static uint32_t
 request_message_size(uint32_t operation, const AstraVfsRequest *request)
 {
-    if (operation == ASTRA_VFS_OP_RENAME &&
+    if (operation_uses_extended_request(operation) &&
         request->size == ASTRA_VFS_RENAME_REQUEST_SIZE)
         return (uint32_t)sizeof(AstraVfsRenameRequestMessage);
-    if (operation != ASTRA_VFS_OP_RENAME &&
+    if (!operation_uses_extended_request(operation) &&
         request->size == ASTRA_VFS_REQUEST_SIZE)
         return (uint32_t)sizeof(AstraVfsRequestMessage);
     return 0u;
@@ -1140,6 +1162,7 @@ vfs_port_transport_call(void *context, uint32_t operation,
     status = astra_port_send(client->port_service, outgoing,
                              message_size, handles, handle_count);
     if (status != ASTRA_SYSCALL_OK) {
+        (void)astra_log_failure("VFS port send", status);
         if (operation == ASTRA_VFS_OP_BIND_AREA) {
             if (lane->area_send != 0u)
                 (void)astra_close(lane->area_send);
@@ -1190,12 +1213,16 @@ vfs_port_transport_call(void *context, uint32_t operation,
      * The request cannot be answered until this thread lets the service run.
      * Peer closure wakes the wait; elapsed time does not prove peer death.
      */
-    status = astra_wait_one(lane->reply_receive,
-                            ASTRA_DEADLINE_FOREVER, NULL);
+    status = astra_wait_one_restart(lane->reply_receive,
+                                    ASTRA_DEADLINE_FOREVER, NULL);
+    if (status != ASTRA_SYSCALL_OK)
+        (void)astra_log_failure("VFS port reply wait", status);
     if (status == ASTRA_SYSCALL_OK) {
         status = astra_port_receive(lane->reply_receive, incoming,
                                     sizeof(*incoming), reply_handles, 1u,
                                     &size, &reply_handle_count);
+        if (status != ASTRA_SYSCALL_OK)
+            (void)astra_log_failure("VFS port reply receive", status);
     }
     if (status != ASTRA_SYSCALL_OK) {
         port_client_fail(client);
@@ -2154,12 +2181,12 @@ astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
          * No reply handle, no reply. A request that did not say where the
          * answer goes cannot be answered, and there is nothing to close.
          */
-        uint32_t expected_size = incoming->header.operation ==
-                                     ASTRA_VFS_OP_RENAME ?
+        uint32_t expected_size = operation_uses_extended_request(
+                                     incoming->header.operation) ?
             (uint32_t)sizeof(AstraVfsRenameRequestMessage) :
             (uint32_t)sizeof(AstraVfsRequestMessage);
-        uint16_t expected_request_size = incoming->header.operation ==
-                                             ASTRA_VFS_OP_RENAME ?
+        uint16_t expected_request_size = operation_uses_extended_request(
+                                             incoming->header.operation) ?
             (uint16_t)ASTRA_VFS_RENAME_REQUEST_SIZE :
             (uint16_t)ASTRA_VFS_REQUEST_SIZE;
         if (size != expected_size || incoming->header.total_size != size ||

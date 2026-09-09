@@ -91,6 +91,7 @@ typedef void (*AstraTerminalEcho)(void *context, const char *line,
                                   uint32_t length);
 typedef int (*AstraTerminalReply)(void *context, const uint8_t *bytes,
                                   uint32_t length);
+typedef void (*AstraTerminalPrompt)(void *context);
 
 typedef struct AstraTerminal {
     AstraTerminalCell *cells;
@@ -126,6 +127,7 @@ typedef struct AstraTerminal {
     uint8_t csi_overflow;
     uint8_t utf8_remaining;
     uint8_t utf8_expected;
+    uint8_t osc_prompt_match;
     uint8_t cursor_visible;
     uint8_t alternate_screen;
     uint8_t echo_carriage_return;
@@ -136,6 +138,8 @@ typedef struct AstraTerminal {
     void *echo_context;
     AstraTerminalReply reply;
     void *reply_context;
+    AstraTerminalPrompt prompt;
+    void *prompt_context;
     /* One line being assembled for `echo`; never read by the model itself. */
     uint32_t echo_length;
     uint32_t echo_columns;
@@ -178,6 +182,9 @@ void astra_terminal_set_echo(AstraTerminal *terminal, AstraTerminalEcho echo,
                              void *context);
 void astra_terminal_set_reply(AstraTerminal *terminal,
                               AstraTerminalReply reply, void *context);
+/* Reports the standard OSC 133;B semantic prompt-end marker. */
+void astra_terminal_set_prompt(AstraTerminal *terminal,
+                               AstraTerminalPrompt prompt, void *context);
 void astra_terminal_set_scroll(AstraTerminal *terminal,
                                AstraTerminalScroll scroll);
 

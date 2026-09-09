@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include "heap_internal.h"
+#include "resource_internal.h"
 
 #define ASTRA_HEAP_ALIGNMENT 8u
 #define ASTRA_HEAP_PAGE_SIZE 4096u
@@ -16,6 +17,8 @@ static uint8_t *heap_base;
 static uint32_t heap_span;
 static uint32_t heap_used;
 static AstraPosixHeapLayout heap_layout;
+extern uint8_t __astra_data_start[];
+extern uint8_t __astra_data_end[];
 /*
  * The high-water mark of committed pages, which is not the same as the break:
  * shrinking hands pages back, so the next growth has to be able to tell the
@@ -132,7 +135,11 @@ sbrk(intptr_t increment)
     }
     wanted = (wanted + ASTRA_HEAP_ALIGNMENT - 1u) &
              ~(uint32_t)(ASTRA_HEAP_ALIGNMENT - 1u);
-    if (wanted > heap_span - heap_used) {
+    if (wanted > heap_span - heap_used ||
+        !astra_posix_resource_heap_allows(
+            (uint64_t)((uintptr_t)__astra_data_end -
+                       (uintptr_t)__astra_data_start),
+            heap_used, wanted)) {
         errno = ENOMEM;
         return (void *)-1;
     }

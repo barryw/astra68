@@ -3,13 +3,10 @@
  *
  * `docs/OBSERVABILITY.md` specifies this tree and the reason it is a view
  * rather than an ambient namespace. A Unix /proc lets any process enumerate
- * every other one because the namespace is global; Astra is capability-based,
- * and the kernel keeps `PROCESS_INFO` scoped to a handle the caller already
- * holds so that enumeration cannot be had by guessing numbers. That decision
- * is what makes this file necessary and what shapes it: the supervisor is the
- * process that holds handles to everything it launched, so the supervisor is
- * the one that can answer, and a child sees the tree only because it was
- * granted the mount.
+ * every other one because the namespace is global; Astra is capability-based.
+ * The kernel grants its complete fixed-slot snapshot only to the registered
+ * initial supervisor, and a child sees this rendering only when it is granted
+ * the PROC: mount.
  *
  * The layout, per that document:
  *
@@ -38,6 +35,23 @@
 #define PROC_RENDER_MAX 512u
 
 static char render[PROC_RENDER_MAX];
+static AstraProcSnapshot snapshot[ASTRA_PROCESS_COUNT_MAX];
+
+static uint32_t
+refresh_snapshot(void)
+{
+    uint32_t live = 0u;
+    uint32_t status = astra_process_snapshot(
+        supervisor_loader_process_handle(), snapshot,
+        ASTRA_PROCESS_COUNT_MAX, &live);
+
+    (void)live;
+    if (status == ASTRA_SYSCALL_OK)
+        return ASTRA_VFS_OK;
+    if (status == ASTRA_SYSCALL_ACCESS_DENIED)
+        return ASTRA_VFS_ERR_ACCESS;
+    return ASTRA_VFS_ERR_IO;
+}
 
 static uint32_t
 append_text(char *out, uint32_t used, const char *text)
@@ -93,7 +107,7 @@ append_field64(char *out, uint32_t used, const char *name, uint64_t value)
 /*
  * A path is "", "<id>" or "<id>/status", with an optional leading slash so a
  * caller that built one by joining is not punished for the join. Returns the
- * table index, or the count when no process matches.
+ * kernel slot, or the physical process count when no process matches.
  */
 static uint32_t
 parse_path(const char *path, int *leaf)
@@ -104,7 +118,7 @@ parse_path(const char *path, int *leaf)
 
     *leaf = 0;
     if (path == NULL)
-        return supervisor_loader_process_count();
+        return ASTRA_PROCESS_COUNT_MAX;
     while (path[at] == '/')
         ++at;
     while (path[at] >= '0' && path[at] <= '9' && digits < 10u) {
@@ -113,7 +127,7 @@ parse_path(const char *path, int *leaf)
         ++digits;
     }
     if (digits == 0u)
-        return supervisor_loader_process_count();
+        return ASTRA_PROCESS_COUNT_MAX;
     while (path[at] == '/')
         ++at;
     if (path[at] != '\0') {
@@ -123,62 +137,53 @@ parse_path(const char *path, int *leaf)
         while (want[index] != '\0' && path[at + index] == want[index])
             ++index;
         if (want[index] != '\0' || path[at + index] != '\0')
-            return supervisor_loader_process_count();
+            return ASTRA_PROCESS_COUNT_MAX;
         *leaf = 1;
     }
-    for (uint32_t index = 0u; index < supervisor_loader_process_count();
-         ++index) {
-        AstraProcessInfo info = {0};
-        uint32_t handle = supervisor_loader_process_at(index, NULL);
-
-        info.size = sizeof(info);
-        if (handle != 0u &&
-            astra_process_info(handle, &info) == ASTRA_SYSCALL_OK &&
-            info.id == id)
+    for (uint32_t index = 0u; index < ASTRA_PROCESS_COUNT_MAX; ++index) {
+        if (snapshot[index].process.id == id)
             return index;
     }
-    return supervisor_loader_process_count();
+    return ASTRA_PROCESS_COUNT_MAX;
 }
 
 static uint32_t
 render_status(uint32_t index, uint32_t *length)
 {
-    AstraProcessInfo info = {0};
-    const char *path = NULL;
-    uint32_t handle = supervisor_loader_process_at(index, &path);
+    const AstraProcessInfo *info;
     uint32_t used = 0u;
 
-    info.size = sizeof(info);
-    if (handle == 0u ||
-        astra_process_info(handle, &info) != ASTRA_SYSCALL_OK)
+    if (index >= ASTRA_PROCESS_COUNT_MAX || snapshot[index].process.id == 0u)
         return ASTRA_VFS_ERR_NOT_FOUND;
+    info = &snapshot[index].process;
     used = append_text(render, used, "name ");
-    used = append_text(render, used, path != NULL ? path : "?");
+    used = append_text(render, used, snapshot[index].name);
     used = append_text(render, used, "\n");
-    used = append_field(render, used, "id", info.id);
+    used = append_field(render, used, "id", info->id);
     /*
      * The generation travels with the identifier because a number alone must
      * never name a process here: a control operation carries the generation
      * the caller observed and the kernel refuses it if the slot was recycled.
      */
-    used = append_field(render, used, "generation", info.generation);
-    used = append_field(render, used, "owner", info.owner);
-    used = append_field(render, used, "state", info.process_state);
-    used = append_field(render, used, "thread_state", info.thread_state);
-    used = append_field(render, used, "threads", info.thread_count);
-    used = append_field(render, used, "live", info.live_threads);
-    used = append_field(render, used, "priority", info.default_priority);
-    used = append_field(render, used, "ceiling", info.priority_ceiling);
-    used = append_field(render, used, "frames", info.resident_frames);
+    used = append_field(render, used, "generation", info->generation);
+    used = append_field(render, used, "owner", info->owner);
+    used = append_field(render, used, "state", info->process_state);
+    used = append_field(render, used, "thread_state", info->thread_state);
+    used = append_field(render, used, "suspended", info->suspended);
+    used = append_field(render, used, "threads", info->thread_count);
+    used = append_field(render, used, "live", info->live_threads);
+    used = append_field(render, used, "priority", info->default_priority);
+    used = append_field(render, used, "ceiling", info->priority_ceiling);
+    used = append_field(render, used, "frames", info->resident_frames);
     /* Schedule counts, not time. Named so nobody reads them as seconds. */
-    used = append_field(render, used, "runs", info.run_count);
-    used = append_field(render, used, "ticks", info.timer_ticks);
-    used = append_field(render, used, "syscalls", info.syscall_count);
-    used = append_field(render, used, "handles", info.handle_references);
-    used = append_field64(render, used, "runtime_ns", info.runtime_ns);
-    used = append_field64(render, used, "elapsed_ns", info.elapsed_ns);
-    used = append_field(render, used, "exit_reason", info.exit_reason);
-    used = append_field(render, used, "exit_status", info.exit_status);
+    used = append_field(render, used, "runs", info->run_count);
+    used = append_field(render, used, "ticks", info->timer_ticks);
+    used = append_field(render, used, "syscalls", info->syscall_count);
+    used = append_field(render, used, "handles", info->handle_references);
+    used = append_field64(render, used, "runtime_ns", info->runtime_ns);
+    used = append_field64(render, used, "elapsed_ns", info->elapsed_ns);
+    used = append_field(render, used, "exit_reason", info->exit_reason);
+    used = append_field(render, used, "exit_status", info->exit_status);
     render[used] = '\0';
     *length = used;
     return ASTRA_VFS_OK;
@@ -187,34 +192,20 @@ render_status(uint32_t index, uint32_t *length)
 static uint32_t
 read_snapshot(uint64_t offset, uint8_t *out, uint32_t length, uint32_t *moved)
 {
-    uint64_t position = 0u;
+    const uint8_t *bytes = (const uint8_t *)snapshot;
+    uint32_t total = sizeof(snapshot);
 
     *moved = 0u;
-    for (uint32_t index = 0u; index < supervisor_loader_process_count();
-         ++index) {
-        AstraProcSnapshot record = {0};
-        const char *path = NULL;
-        const uint8_t *bytes = (const uint8_t *)&record;
-        uint32_t handle = supervisor_loader_process_at(index, &path);
-        uint32_t name = 0u;
-
-        record.process.size = sizeof(record.process);
-        if (handle == 0u || astra_process_info(handle, &record.process) !=
-                                ASTRA_SYSCALL_OK)
-            continue;
-        while (path != NULL && path[name] != '\0' &&
-               name + 1u < sizeof(record.name)) {
-            record.name[name] = path[name];
-            ++name;
-        }
-        for (uint32_t at = 0u; at < sizeof(record); ++at, ++position) {
-            if (position < offset)
-                continue;
-            if (*moved == length)
-                return ASTRA_VFS_OK;
-            out[(*moved)++] = bytes[at];
-        }
-    }
+    if (refresh_snapshot() != ASTRA_VFS_OK)
+        return ASTRA_VFS_ERR_IO;
+    if (offset >= total)
+        return ASTRA_VFS_OK;
+    total -= (uint32_t)offset;
+    if (total > length)
+        total = length;
+    for (uint32_t at = 0u; at < total; ++at)
+        out[at] = bytes[(uint32_t)offset + at];
+    *moved = total;
     return ASTRA_VFS_OK;
 }
 
@@ -241,16 +232,16 @@ proc_open(void *context, const char *path, uint32_t flags,
     }
     if (supervisor_proc_path_is_snapshot(path)) {
         *node = UINTPTR_MAX;
-        /* READ_PATH consumes this immediately; a later read may still shorten. */
-        info->size = supervisor_loader_process_count() *
-                     sizeof(AstraProcSnapshot);
+        info->size = sizeof(snapshot);
         info->kind = ASTRA_VFS_KIND_FILE;
         info->mode = 0400u;
         info->nlink = 1u;
         return ASTRA_VFS_OK;
     }
+    if (refresh_snapshot() != ASTRA_VFS_OK)
+        return ASTRA_VFS_ERR_IO;
     index = parse_path(path, &leaf);
-    if (index >= supervisor_loader_process_count())
+    if (index >= ASTRA_PROCESS_COUNT_MAX)
         return ASTRA_VFS_ERR_NOT_FOUND;
     if (!leaf) {
         *node = 0u;
@@ -262,13 +253,8 @@ proc_open(void *context, const char *path, uint32_t flags,
     }
     if (render_status(index, &length) != ASTRA_VFS_OK)
         return ASTRA_VFS_ERR_NOT_FOUND;
-    /*
-     * The node is the table index plus one. It is not a pointer and it is not
-     * the identifier: a reader that holds this open while the process exits
-     * gets a short read rather than another process's status, because the read
-     * re-renders and the identifier will not match.
-     */
-    *node = (uintptr_t)(index + 1u);
+    /* The generation-bearing id prevents an open node following slot reuse. */
+    *node = (uintptr_t)snapshot[index].process.id;
     info->size = length;
     info->kind = ASTRA_VFS_KIND_FILE;
     info->mode = 0400u;
@@ -298,8 +284,12 @@ proc_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
         return read_snapshot(offset, out, length, moved);
     if (node == 0u)
         return ASTRA_VFS_ERR_IS_DIR;
-    index = (uint32_t)node - 1u;
-    if (index >= supervisor_loader_process_count() ||
+    if (refresh_snapshot() != ASTRA_VFS_OK)
+        return ASTRA_VFS_ERR_IO;
+    for (index = 0u; index < ASTRA_PROCESS_COUNT_MAX; ++index)
+        if (snapshot[index].process.id == (uint32_t)node)
+            break;
+    if (index == ASTRA_PROCESS_COUNT_MAX ||
         render_status(index, &rendered) != ASTRA_VFS_OK)
         return ASTRA_VFS_OK; /* it exited; a short read is the honest answer */
     if (offset >= rendered)
@@ -335,9 +325,11 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
     (void)context;
     (void)directory;
     if (!supervisor_proc_path_is_root(path)) {
+        if (refresh_snapshot() != ASTRA_VFS_OK)
+            return ASTRA_VFS_ERR_IO;
         uint32_t index = parse_path(path, &leaf);
 
-        if (leaf || index >= supervisor_loader_process_count())
+        if (leaf || index >= ASTRA_PROCESS_COUNT_MAX)
             return ASTRA_VFS_ERR_NOT_FOUND;
         if (cookie != 0u)
             return ASTRA_VFS_ERR_NOT_FOUND;
@@ -364,19 +356,18 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
         *next = 1u;
         return ASTRA_VFS_OK;
     }
+    if (refresh_snapshot() != ASTRA_VFS_OK)
+        return ASTRA_VFS_ERR_IO;
     for (uint32_t index = (uint32_t)cookie - 1u;
-         index < supervisor_loader_process_count(); ++index) {
-        AstraProcessInfo process = {0};
-        uint32_t handle = supervisor_loader_process_at(index, NULL);
+         index < ASTRA_PROCESS_COUNT_MAX; ++index) {
+        const AstraProcessInfo *process = &snapshot[index].process;
         uint32_t used = 0u;
 
-        process.size = sizeof(process);
-        if (handle == 0u ||
-            astra_process_info(handle, &process) != ASTRA_SYSCALL_OK)
+        if (process->id == 0u)
             continue;
         if (capacity < 12u)
             return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
-        used = append_number(name, used, process.id);
+        used = append_number(name, used, process->id);
         name[used] = '\0';
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_DIRECTORY;
@@ -388,7 +379,7 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
     return ASTRA_VFS_ERR_NOT_FOUND;
 }
 
-/* Process control needs explicit authority; PROC: is an immutable view. */
+/* Process control needs explicit authority; PROC: is a read-only live view. */
 static const AstraVfsBackendOps proc_ops = {
     .open = proc_open,
     .close = proc_close,
@@ -404,6 +395,7 @@ static const AstraVfsBackendOps proc_ops = {
     .chmod = astra_vfs_backend_deny_chmod,
     .readlink = astra_vfs_backend_no_readlink,
     .symlink = astra_vfs_backend_deny_symlink,
+    .link = astra_vfs_backend_deny_link,
 };
 
 const AstraVfsBackendOps *

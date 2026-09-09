@@ -29,6 +29,7 @@ static uint32_t fail_direct_resume;
 static uint32_t direct_forks;
 static uint32_t port_fork_rebinds;
 static uint32_t next_semaphore = 100u;
+static uint32_t seeds;
 
 uint32_t astra_log_failure(const char *operation, uint32_t status)
 {
@@ -59,6 +60,7 @@ uint32_t astra_assign_seed(AstraAssignTable *table,
 {
     (void)capabilities;
     (void)count;
+    ++seeds;
     memset(table, 0, sizeof(*table));
     if (seed_distinct != 0u) {
         table->count = ASTRA_ASSIGN_MAX;
@@ -67,10 +69,46 @@ uint32_t astra_assign_seed(AstraAssignTable *table,
         return ASTRA_VFS_OK;
     }
     table->count = 3u;
+    (void)strcpy(table->entries[0].name, "CWD");
     table->entries[0].handle = 11u;
+    table->entries[0].rights = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE;
+    (void)strcpy(table->entries[1].name, "WORK");
     table->entries[1].handle = 11u;
+    table->entries[1].rights = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE;
+    (void)strcpy(table->entries[2].name, "LIBS");
     table->entries[2].handle = 22u;
+    table->entries[2].rights = ASTRA_RIGHT_READ;
     return ASTRA_VFS_OK;
+}
+
+const AstraAssign *astra_assign_lookup(const AstraAssignTable *table,
+                                       const char *name)
+{
+    for (uint32_t index = 0u; index < table->count; ++index)
+        if (strcmp(table->entries[index].name, name) == 0)
+            return &table->entries[index];
+    return NULL;
+}
+
+uint32_t astra_path_normalise(const char *path, char *out, uint32_t capacity)
+{
+    size_t length = strlen(path);
+
+    if (length + 1u > capacity || strstr(path, "..") != NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    memcpy(out, path, length + 1u);
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_path_qualify(const char *assign, const char *directory,
+                            const char *path, char *out, uint32_t capacity)
+{
+    int length = snprintf(out, capacity, "%s:%s%s%s", assign, directory,
+                          directory[0] != '\0' && path[0] != '\0' ? "/" : "",
+                          path);
+
+    return length >= 0 && (uint32_t)length < capacity ? ASTRA_VFS_OK :
+                                                       ASTRA_VFS_ERR_LIMIT;
 }
 
 /*
@@ -325,6 +363,37 @@ int main(void)
          * this counter staying at zero here is the whole of that claim.
          */
         assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        {
+            char path[64];
+            uint32_t seeded = seeds;
+
+            assert(astra_process_path("file", path, sizeof(path)) ==
+                       ASTRA_VFS_OK &&
+                   strcmp(path, "CWD:file") == 0);
+            assert(astra_process_vfs_set_current_directory("CWD", "proto") ==
+                   ASTRA_VFS_OK);
+            assert(astra_process_path("file", path, sizeof(path)) ==
+                       ASTRA_VFS_OK &&
+                   strcmp(path, "CWD:proto/file") == 0);
+            assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+            assert(seeds == seeded);
+            assert(astra_process_path("file", path, sizeof(path)) ==
+                       ASTRA_VFS_OK &&
+                   strcmp(path, "CWD:proto/file") == 0);
+            assert(astra_process_vfs_after_fork_child(&startup) ==
+                   ASTRA_VFS_OK);
+            assert(seeds == seeded);
+            assert(astra_process_path("file", path, sizeof(path)) ==
+                       ASTRA_VFS_OK &&
+                   strcmp(path, "CWD:proto/file") == 0);
+            assert(astra_process_vfs_set_current_directory("WORK", "other") ==
+                   ASTRA_VFS_OK);
+            assert(astra_process_path("file", path, sizeof(path)) ==
+                       ASTRA_VFS_OK &&
+                   strcmp(path, "WORK:other/file") == 0);
+            assert(astra_process_vfs_set_current_directory("MISSING", "") ==
+                   ASTRA_VFS_ERR_NOT_FOUND);
+        }
         assert(connects == 0u);
         /* First use is what connects, and only once however often it is asked. */
         assert(astra_process_vfs_client() != NULL);

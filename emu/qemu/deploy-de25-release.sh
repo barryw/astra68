@@ -8,8 +8,8 @@ fi
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 REPOSITORY=$(CDPATH='' cd -- "$SCRIPT_DIR/../.." && pwd)
 RELEASE=$1
-BOARD=${ASTRA_ARTY_BOARD:-root@192.168.1.188}
-STORE=${ASTRA_STORE:-/data/astra}
+BOARD=${ASTRA_DE25_BOARD:-root@192.168.1.52}
+STORE=${ASTRA_STORE:-/var/lib/astra}
 SSH=${SSH:-ssh}
 SCP=${SCP:-scp}
 RELEASE_TOOL=$REPOSITORY/tools/astra_release.py
@@ -52,4 +52,4 @@ if [ "$ACTIVE" != "$IDENTITY" ]; then
     exit 1
 fi
 INCOMING=
-echo "ASTRA_ARTY_RELEASE PASS release=$IDENTITY"
+echo "ASTRA_DE25_RELEASE PASS release=$IDENTITY"

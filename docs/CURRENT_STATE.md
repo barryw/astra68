@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-09-07
+Status: active continuation map, 2026-09-08
 
 This file contains current facts only. Git history holds superseded board,
 processor, benchmark, and milestone records. The platform is **Astra 68**, its
@@ -24,14 +24,14 @@ kernel is **Axiom**, and the user-facing system is **Astra OS**.
   after launch inherited CPU3 while the vCPU remained on CPU2. The MC68040
   benchmark reaches about 72 MHz effective on CPU2; the rejected A55 placement
   reached about 36 MHz.
-- Astra owns 128 MiB guest RAM. Graphics owns the separate 1 GiB LPDDR4B arena
-  at `0x40000000..0x7fffffff`. Linux uses LPDDR4A and exposes 934 MiB as normal
-  system RAM.
+- Astra owns 512 MiB guest RAM preallocated from HPS LPDDR4A. Media RAM owns
+  512 MiB of the separate LPDDR4B device at `0x40000000..0x5fffffff` for
+  graphics and sound. Linux exposes 934 MiB of LPDDR4A as normal system RAM.
 - The ROM aperture is 512 KiB at `0xffe00000`.
 
 The production Agilex 5 shell routes with every clock constrained. Retained
-setup, hold, recovery, removal, and minimum-pulse slack are +0.671 ns, 0.000 ns,
-+2.661 ns, +0.024 ns, and +0.220 ns. Resource use is 41,860 / 46,800 ALMs,
+setup, hold, recovery, removal, and minimum-pulse slack are +0.740 ns, 0.000 ns,
++2.771 ns, +0.085 ns, and +0.220 ns. Resource use is 41,788 / 46,800 ALMs,
 3,818,968 / 7,331,840 block-memory bits, 290 / 358 RAM blocks, 58 / 376 DSPs,
 and 5 / 11 PLLs. Exact build and deployment evidence belongs in
 `fpga/de25/TIMING_CLOSURE.md`.
@@ -157,7 +157,7 @@ five-second journal interval while ordered journaling, write barriers, and
 explicit `fsync`/`fdatasync` durability remain intact. The live root is
 `rw,relatime`; `findmnt` omits `commit=5` because it is the ext4 default.
 
-The selected release carries QEMU SHA-256
+The retained filesystem baseline release carries QEMU SHA-256
 `c06b6fab7e4b88d4e0e921d906801316a2da7a8d6002e39be8dd0c3840c14316`,
 production ROM `a8e34319e74ac9efc60f1056fc452cba5566a462a997b0c60e36a69a7784b685`,
 and storage base
@@ -200,12 +200,17 @@ This is the current durable end-to-end baseline; it does not yet meet the
 
 ## Developer observability
 
-`PROC:` remains the supervisor-owned process view used by `ps`, including
-measured CPU runtime, elapsed lifetime, resident memory, state, scheduling,
-syscall, handle, and fault information. System and service counters are exposed
-separately through the read-only `METRICS:` capability. Hostfs owns that view
-because it already owns the host-device channel and its VFS service; neither
-authority is delegated to commands.
+`PROC:` is the supervisor-rendered, capability-gated process view used by `ps`.
+Its source is Axiom's complete live-process registry, not the supervisor's
+launch bookkeeping, so services, desktop applications, Terminal children,
+forked processes, and `ps` itself follow one visibility rule. Only the initial
+supervisor can take the complete fixed-slot snapshot; commands receive only the
+read-only `PROC:` mount. Records include measured CPU runtime, elapsed lifetime,
+resident memory, state, scheduling, syscall, handle, and fault information.
+System and service counters remain separate through the read-only `METRICS:`
+capability. Hostfs owns that view because it already owns the host-device
+channel and its VFS service; neither underlying authority is delegated to
+commands.
 
 `METRICS:snapshot` contains versioned fixed records for block traffic and
 durability transitions, host-channel submissions/completions/execution and
@@ -226,6 +231,79 @@ The complete 71-command gate used the
 same ROM and storage content under the current-source host QEMU so that its QMP
 driver could inject input and inspect the trace without granting physical-board
 users control of the production QMP socket.
+
+The last complete terminal gate passed 84 commands, including upstream
+zsh arithmetic, PATH lookup, exit status, nested command substitutions,
+external pipelines, stdin, stdout/stderr redirection, and Lua execution. The
+intermittent `lua: wait failed` / `POSIX VFS:16` class was measured as
+`ASTRA_SYSCALL_CANCELLED` interrupting a VFS reply wait after its request had
+already been sent; treating that as peer death closed a healthy storage
+session. Internal protocol and synchronization waits now share the runtime's
+restart-after-signal contract, while application-facing POSIX waits remain
+interruptible. A regression injects cancellation between request and reply.
+That exact clean Beast QEMU gate used image SHA-256
+`3bb30aac26ef298c794130b99950ee11008c9b485ebce76ba305cbddcaf98f60`,
+ROM SHA-256
+`6b55f9e5b786705031aa51fbc2d7b7452e9c2595b7b396ed85820a9b828c70b4`,
+and QEMU SHA-256
+`1302f467d8e63ff3af38d94a57b5cdb7d37e75fe764714fe40f484ea35d71999`.
+The image's extracted ext4 volume passed read-only `e2fsck`. Physical DE25
+cold-boot qualification of this source remains outstanding.
+
+A subsequent clean focused gate proved the shared process view and zsh's
+interactive contract on the MC68040 target. Its 14 scripting cases passed in
+0.34--0.77 seconds each, then a second Terminal's `ps` listed both Terminal
+processes, the live interactive `zsh`, and the observer `ps`. ZLE editing,
+history replay, clean exit, and Terminal session recovery passed. The clean
+image SHA-256 was
+`b9cf7b7eb83e874623a9da423b033bd9159121b1004053c879fe785be55f0152`,
+the ROM SHA-256 was
+`769968541d13d860bf4b835aab4af23893dac3be23ae065b4e6d5a4088cb5e11`,
+and QEMU SHA-256 remained
+`1302f467d8e63ff3af38d94a57b5cdb7d37e75fe764714fe40f484ea35d71999`.
+The extracted ext4 volume passed read-only `e2fsck`; physical DE25 cold-boot
+qualification of this source remains outstanding.
+
+Immutable 512 MiB release
+`b05969f66fe1a4ce0b70d1fe595c4a0ea40dc32a8bbb0ad5aa079955649a11c4`
+is selected, byte-verified, and running on the DE25. Its AArch64 QEMU, ROM,
+clean storage base, display helper, and launcher SHA-256 values are
+`09f177837ef3c0d0a2dc0c482bc98e9935e9c2919e1387269f782bf15bd604bd`,
+`96dcfa24ca2f39ba163e1c36c7122d94e5f9d65e012b1e69dc9e8f311331f30f`,
+`9bb24543fbf2f69c008b8c0d946eeb1173cbdead9224dd781c35e712406c2c42`,
+`ce47c8af92de431758739cbc4c95fe0d7996ff232000330f849bdffcc18f9743`,
+and `b413bf10b7ddb11990f510aa5ff2f5f099e7d09fa7115f87ba027c065d632e74`.
+The extracted ext4 volume passed read-only `e2fsck`. A physical service start
+reported 512 MiB, passed full-range POST, exposed 131,072 pages, recovered and
+verified storage, launched every protected service, and reached stage 8 at
+70.117 MHz effective. QEMU settled at 553,940 KiB RSS; the systemd unit was
+active with zero restarts and the terminal display resident.
+
+The 512 MiB Media RAM window passed stuck-address, random-value, XOR, subtract,
+multiply, divide, OR, AND, sequential-increment, and all 64 solid-bit patterns
+with zero mismatches. The following block-sequential phase was stopped at the
+operator-selected acceptance boundary rather than represented as completed.
+The exact shell also passed calibration/readiness, splash CRC32 `611029ee`, and
+the 512 MiB arena identity check.
+
+All window-content scrolling uses the shared draw-list copy operation, which
+the renderer lowers to an overlap-safe FPGA BLIT. The boot console now uses the
+same renderer and AFNT font, retains exact state for both scanouts, repairs any
+coalesced changes around a measured-cost scroll candidate, and presents only
+complete inactive scanouts at vblank. It no longer writes a live framebuffer.
+Render batches carry their exact live high-water mark, and the host copies only
+the protocol regions the hardware may read rather than reserved ring gaps.
+
+Physical DE25 counters measured the resulting steady window-scroll frames at
+102528 bytes, 37--38 commands, 0.28--0.34 ms of graphics-memory transfer,
+1.08--1.15 ms in the FPGA renderer, and 2.30--2.49 ms total render handling.
+Presentation then waits for the next 60 Hz vblank, so sustained visible
+scrolling is refresh-limited rather than renderer-limited. Before the retained
+transport change, equivalent frames copied 139264 bytes in 7.6--7.9 ms and
+took 9.6--10.0 ms of render handling. Coalesced boot-console scrolling fell
+from 103--110 ms hardware repaints to roughly 19 ms hardware batches, with
+about 2.2 ms of transfer. A physical 121-line zsh scroll workload completed
+without corruption or a service restart.
 
 ## Build and artifact rules
 

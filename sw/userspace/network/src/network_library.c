@@ -48,7 +48,8 @@ static AstraNetworkStatus session_lock(AstraNetworkSession *session)
     if (session == NULL || session->_private_lock == 0u)
         return ASTRA_NETWORK_INVALID;
     return astra_network_status_from_syscall(
-        astra_wait_one(session->_private_lock, ASTRA_DEADLINE_FOREVER, NULL));
+        astra_wait_one_restart(session->_private_lock,
+                               ASTRA_DEADLINE_FOREVER, NULL));
 }
 
 static void session_unlock(AstraNetworkSession *session)
@@ -77,8 +78,8 @@ static AstraNetworkStatus exchange_locked(
                                 (1u << 16) | status);
         return astra_network_status_from_syscall(status);
     }
-    status = astra_wait_one(session->_private_reply,
-                            ASTRA_DEADLINE_FOREVER, NULL);
+    status = astra_wait_one_restart(session->_private_reply,
+                                    ASTRA_DEADLINE_FOREVER, NULL);
     if (status != ASTRA_SYSCALL_OK) {
         (void)astra_log_failure("network exchange wait",
                                 (2u << 16) | status);
@@ -225,7 +226,8 @@ static AstraNetworkStatus network_session_open(AstraHandle factory,
     (void)astra_close(reply_source);
     reply_source = 0u;
     stage = 7u;
-    status = astra_wait_one(reply_receive, ASTRA_DEADLINE_FOREVER, NULL);
+    status = astra_wait_one_restart(reply_receive, ASTRA_DEADLINE_FOREVER,
+                                    NULL);
     if (status != ASTRA_SYSCALL_OK)
         goto fail;
     clear_bytes(&reply, sizeof(reply));

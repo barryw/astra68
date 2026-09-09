@@ -22,27 +22,30 @@
  */
 
 #include <astra/program.h>
+#include <astra/posix.h>
 #include <astra/runtime.h>
 #include <astra/status.h>
-#include <astra/stream.h>
 #include <astra/syscall.h>
+
+#include <stdio.h>
 
 ASTRA_PROGRAM("devices", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
-static uint32_t out;
+static int output_failed;
 
 static void
 say(const char *text)
 {
-    (void)astra_print(out, text);
+    if (fputs(text, stdout) == EOF)
+        output_failed = 1;
 }
 
 static void
 say_line(const char *text)
 {
-    (void)astra_print(out, text);
-    (void)astra_print(out, "\n");
+    say(text);
+    say("\n");
 }
 
 /* Right-aligned in `width`, because a column of numbers is read down. */
@@ -133,24 +136,19 @@ say_events(uint8_t flags)
 }
 
 int
-astra_main(const AstraStartupInfo *startup)
+main(int argc, char **argv)
 {
-    const AstraStartupCapability *standard_output;
+    const AstraStartupInfo *startup = astra_posix_startup();
     AstraIrqEndpointInfo info;
     uint32_t slots = 0u;
     uint32_t status;
     uint32_t shown = 0u;
 
+    (void)argc;
+    (void)argv;
     if (!astra_startup_validate(startup)) {
         return ASTRA_STATUS_INVALID;
     }
-    standard_output = astra_startup_capability(startup, "STDOUT");
-    if (standard_output != NULL)
-        out = standard_output->handle;
-    if (out == 0u) {
-        return ASTRA_STATUS_ACCESS;
-    }
-
     /*
      * The first call is also the one that says how many slots there are, so a
      * refusal is reported before anything is printed rather than as a table
@@ -193,5 +191,5 @@ astra_main(const AstraStartupInfo *startup)
     if (shown == 0u) {
         say_line("(no endpoints bound)");
     }
-    return 0;
+    return output_failed || fflush(stdout) != 0 ? (int)ASTRA_STATUS_IO : 0;
 }

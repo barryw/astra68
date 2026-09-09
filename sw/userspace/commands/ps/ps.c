@@ -20,12 +20,14 @@
  */
 
 #include <astra/program.h>
+#include <astra/posix.h>
 #include <astra/proc.h>
 #include <astra/divide.h>
 #include <astra/runtime.h>
-#include <astra/stream.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_process.h>
+
+#include <stdio.h>
 
 ASTRA_PROGRAM("ps", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
@@ -35,12 +37,11 @@ enum {
 };
 
 static char output[PS_OUTPUT_MAX];
+static AstraProcSnapshot records[ASTRA_PROCESS_COUNT_MAX];
 static const char header[] =
     "       PID   GEN STATE  PRI  NI THR MEM(K)  CPU%        TIME    RUNS "
     "  CALLS HND COMMAND\n";
 static uint32_t output_used;
-static uint32_t stdout_handle;
-static uint32_t error_handle;
 
 static uint32_t
 read_snapshot(AstraProcSnapshot *records, uint32_t capacity, uint32_t *moved)
@@ -73,17 +74,16 @@ read_snapshot(AstraProcSnapshot *records, uint32_t capacity, uint32_t *moved)
 static void
 say_error(const char *text)
 {
-    (void)astra_print(error_handle, text);
+    (void)fputs(text, stderr);
 }
 
 static int
 flush_output(void)
 {
-    uint32_t status = astra_stream_write_all(stdout_handle, output,
-                                             output_used);
+    int written = fwrite(output, 1u, output_used, stdout) == output_used;
 
     output_used = 0u;
-    return status == ASTRA_SYSCALL_OK;
+    return written;
 }
 
 static int
@@ -182,6 +182,13 @@ state_name(uint32_t value)
     return value < sizeof(names) / sizeof(names[0]) ? names[value] : "?";
 }
 
+static const char *
+process_state_name(const AstraProcessInfo *process)
+{
+    return process->suspended != 0u ? "stop" :
+                                      state_name(process->thread_state);
+}
+
 static uint32_t
 append_cpu(char *out, uint32_t at, uint64_t runtime, uint64_t elapsed)
 {
@@ -268,26 +275,17 @@ append_row(uint32_t id, uint32_t generation, const char *state,
 }
 
 int
-astra_main(const AstraStartupInfo *startup)
+main(int argc, char **argv)
 {
-    const AstraStartupCapability *capability;
-    AstraProcSnapshot records[ASTRA_PROCESS_COUNT_MAX] = {0};
+    const AstraStartupInfo *startup = astra_posix_startup();
     uint32_t listed = 0u;
     uint32_t moved = 0u;
     uint32_t status;
 
+    (void)argc;
+    (void)argv;
     if (!astra_startup_validate(startup))
         return ASTRA_STATUS_INVALID;
-    capability = astra_startup_capability(startup, "STDOUT");
-    if (capability != NULL)
-        stdout_handle = capability->handle;
-    capability = astra_startup_capability(startup, "STDERR");
-    if (capability != NULL)
-        error_handle = capability->handle;
-    if (stdout_handle == 0u)
-        return ASTRA_STATUS_ACCESS;
-    if (error_handle == 0u)
-        error_handle = stdout_handle;
     status = astra_process_vfs_init(startup);
     if (status != ASTRA_VFS_OK) {
         say_error("ps: filesystem unavailable\n");
@@ -310,8 +308,14 @@ astra_main(const AstraStartupInfo *startup)
              ++index) {
             const AstraProcessInfo *process = &records[index].process;
 
+            if (process->id == 0u)
+                continue;
+            if (process->size != sizeof(*process)) {
+                status = ASTRA_VFS_ERR_PROTOCOL;
+                break;
+            }
             if (!append_row(process->id, process->generation,
-                            state_name(process->thread_state),
+                            process_state_name(process),
                             process->default_priority, process->live_threads,
                             process->resident_frames,
                             process->runtime_ns, process->elapsed_ns,
@@ -322,22 +326,6 @@ astra_main(const AstraStartupInfo *startup)
             else
                 ++listed;
         }
-    }
-    if (status == ASTRA_VFS_OK) {
-        AstraProcessInfo self = {0};
-
-        self.size = sizeof(self);
-        if (astra_process_info(startup->process_handle, &self) !=
-                ASTRA_SYSCALL_OK ||
-            !append_row(self.id, self.generation,
-                        state_name(self.thread_state), self.default_priority,
-                        self.live_threads,
-                        self.resident_frames, self.runtime_ns,
-                        self.elapsed_ns, self.run_count, self.syscall_count,
-                        self.handle_references, "COMMANDS:ps"))
-            status = ASTRA_VFS_ERR_IO;
-        else
-            ++listed;
     }
     astra_process_vfs_close();
     if (status == ASTRA_VFS_OK && !flush_output())

@@ -179,6 +179,54 @@ astra_process_clone(uint32_t *process_handle, uint32_t *process_id)
 }
 
 uint32_t
+astra_process_signal(uint32_t process_handle, uint32_t signal)
+{
+    AstraSyscallResult result;
+
+    if (process_handle == 0u || signal == 0u || signal >= 32u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_SIGNAL, process_handle, signal,
+                   0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
+astra_process_terminate(uint32_t process_handle, uint32_t reason)
+{
+    AstraSyscallResult result;
+
+    if (process_handle == 0u || reason == 0u || reason >= 32u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_TERMINATE, process_handle, reason,
+                   0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
+astra_process_suspend(uint32_t process_handle)
+{
+    AstraSyscallResult result;
+
+    if (process_handle == 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_SUSPEND, process_handle, 0u,
+                   0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
+astra_process_resume(uint32_t process_handle)
+{
+    AstraSyscallResult result;
+
+    if (process_handle == 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_RESUME, process_handle, 0u,
+                   0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
 astra_process_exec(const void *image, uint32_t length,
                    const AstraExecRequest *request)
 {

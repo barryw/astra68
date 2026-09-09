@@ -12,6 +12,7 @@
 #include <astra/library.h>
 #include <astra/network.h>
 #include <astra/process.h>
+#include <astra/proc.h>
 #include <astra/render_batch.h>
 #include <astra/event.h>
 #include <astra/status.h>
@@ -55,8 +56,6 @@ _Static_assert(KERNEL_PAGE_SIZE == ASTRA_EXECUTABLE_TRANSFER_MAX,
 _Static_assert(KERNEL_PROCESS_MAX <= (1u << PROCESS_ID_SLOT_BITS),
                "process id slot field is too narrow");
 #define PROCESS_QUALIFICATION_CLIENT_MAX 2u
-#define KERNEL_SIGNAL_ALARM 14u
-#define KERNEL_SIGNAL_ALARM_BIT (1u << KERNEL_SIGNAL_ALARM)
 #define KERNEL_PROCESS_LOAD_RIGHT (1u << 0)
 #define M68K_TLS_THREAD_POINTER_BIAS 0x7000u
 
@@ -150,6 +149,8 @@ typedef struct KernelProcess {
     uint8_t handles_closed;
     uint8_t address_space_destroyed;
     uint8_t host_used;
+    uint8_t suspended;
+    char name[ASTRA_PROC_NAME_MAX];
     uint16_t dma_pages;
     KernelProcessDmaBuffer dma_buffers[KERNEL_VM_DMA_SLOT_COUNT];
 } KernelProcess;
@@ -219,6 +220,7 @@ static KernelObjectCache executable_load_cache;
 static uint32_t executable_load_cache_bitmap[
     KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_PROCESS_MAX)];
 static KernelSchedulerStats scheduler_stats;
+static KernelThreadWaitQueue sleep_waiters;
 /*
  * Whether the console still narrates what programs say.
  *
@@ -366,7 +368,10 @@ _Static_assert(ASTRA_RIGHT_READ == KERNEL_THREAD_RIGHT_QUERY &&
                        KERNEL_THREAD_RIGHT_CANCEL_WAIT,
                "thread-right ABI mismatch");
 _Static_assert(ASTRA_RIGHT_READ == KERNEL_PROCESS_RIGHT_QUERY &&
+                   ASTRA_RIGHT_WRITE == KERNEL_PROCESS_RIGHT_TERMINATE &&
+                   ASTRA_RIGHT_SIGNAL == KERNEL_PROCESS_RIGHT_SIGNAL &&
                    ASTRA_RIGHT_WAIT == KERNEL_PROCESS_RIGHT_WAIT &&
+                   ASTRA_RIGHT_TRANSFER == KERNEL_PROCESS_RIGHT_TRANSFER &&
                    ASTRA_RIGHT_ADMINISTER == KERNEL_PROCESS_RIGHT_PRIORITY,
                "process-right ABI mismatch");
 _Static_assert(KERNEL_AREA_RIGHTS ==
@@ -515,6 +520,12 @@ static KernelProcessStatus retain_process_handle(KernelProcess *process)
     return KERNEL_PROCESS_OK;
 }
 
+static bool process_handle_retain(void *object, void *context)
+{
+    (void)context;
+    return retain_process_handle(object) == KERNEL_PROCESS_OK;
+}
+
 static void maybe_release_process_record(KernelProcess *process)
 {
     if (!valid_process_pointer(process) ||
@@ -640,6 +651,11 @@ static bool process_pool_valid(void)
         }
         if (references != process->handle_references)
             return false;
+        if (process->suspended > 1u ||
+            (process->suspended != 0u &&
+             process->process_state != KERNEL_PROCESS_CREATED &&
+             process->process_state != KERNEL_PROCESS_RUNNING))
+            return false;
         if (process->process_state == KERNEL_PROCESS_UNUSED) {
             if (claimed || process->id != 0u || references != 0u ||
                 waiters != 0u)
@@ -706,9 +722,33 @@ static KernelProcessStatus claim_process_record(KernelProcess **created,
     process->owner = process->id;
     process->started_cycles = scheduler_cycles();
     process->default_priority = KERNEL_THREAD_PRIORITY_NORMAL;
+    process->name[0] = '?';
+    process->name[1] = '\0';
     *created = process;
     *created_slot = slot;
     return KERNEL_PROCESS_OK;
+}
+
+static void process_name_set(KernelProcess *process,
+                             const AstraLaunchArguments *arguments,
+                             const char *argument_bytes)
+{
+    uint32_t length = 0u;
+
+    if (process == NULL)
+        return;
+    if (arguments == NULL || arguments->count == 0u ||
+        argument_bytes == NULL) {
+        process->name[0] = '?';
+        process->name[1] = '\0';
+        return;
+    }
+    while (length + 1u < sizeof(process->name) &&
+           length < arguments->length && argument_bytes[length] != '\0') {
+        process->name[length] = argument_bytes[length];
+        ++length;
+    }
+    process->name[length] = '\0';
 }
 
 static uint64_t interval_timer_earliest(void)
@@ -767,6 +807,50 @@ static void signal_deliver(KernelThread *thread)
     process->signal_pending &= ~(1u << signal);
     thread->context.usp = stack;
     thread->context.program_counter = process->signal_trampoline;
+}
+
+/*
+ * Queue one notification and interrupt only the process's selected receiving
+ * thread. Pending standard notifications coalesce in the bitset. A blocked
+ * notification stays pending without producing a spurious EINTR.
+ */
+static KernelProcessStatus queue_process_signal(KernelProcess *process,
+                                                uint32_t signal,
+                                                bool *woke)
+{
+    KernelThread *target = NULL;
+    uint32_t bit;
+
+    if (woke != NULL)
+        *woke = false;
+    if (process == NULL || signal == 0u || signal >= 32u ||
+        (process->process_state != KERNEL_PROCESS_CREATED &&
+         process->process_state != KERNEL_PROCESS_RUNNING))
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    bit = UINT32_C(1) << signal;
+    process->signal_pending |= bit;
+    if ((process->signal_blocked & bit) != 0u)
+        return KERNEL_PROCESS_OK;
+    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        KernelThread *candidate = kernel_thread_at(slot);
+
+        if (candidate != NULL && candidate->process_id == process->id &&
+            candidate->state != KERNEL_THREAD_DEAD &&
+            (candidate->id == process->signal_target_thread ||
+             target == NULL)) {
+            target = candidate;
+            if (candidate->id == process->signal_target_thread)
+                break;
+        }
+    }
+    if (target != NULL && target->state == KERNEL_THREAD_BLOCKED) {
+        if (kernel_thread_cancel_wait(target, ASTRA_SYSCALL_CANCELLED) !=
+            KERNEL_THREAD_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        if (woke != NULL)
+            *woke = true;
+    }
+    return KERNEL_PROCESS_OK;
 }
 
 static KernelCpuContext *runtime_resume(KernelThread *thread)
@@ -867,14 +951,13 @@ static KernelProcessStatus scheduler_expire_due(
     if (interval_next_deadline <= now) {
         for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
             KernelProcess *process = &processes[index];
-            KernelThread *target = NULL;
+            bool woke = false;
 
             if ((process->process_state != KERNEL_PROCESS_CREATED &&
                  process->process_state != KERNEL_PROCESS_RUNNING) ||
                 process->interval_deadline == 0u ||
                 process->interval_deadline > now)
                 continue;
-            process->signal_pending |= KERNEL_SIGNAL_ALARM_BIT;
             if (process->interval_period == 0u) {
                 process->interval_deadline = 0u;
             } else {
@@ -890,28 +973,13 @@ static KernelProcessStatus scheduler_expire_due(
                 else
                     process->interval_deadline = now + increment;
             }
-            for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
-                KernelThread *candidate = kernel_thread_at(slot);
-
-                if (candidate != NULL &&
-                    candidate->process_id == process->id &&
-                    candidate->state != KERNEL_THREAD_DEAD &&
-                    (candidate->id == process->signal_target_thread ||
-                     target == NULL)) {
-                    target = candidate;
-                    if (candidate->id == process->signal_target_thread)
-                        break;
-                }
-            }
-            if (target != NULL && target->state == KERNEL_THREAD_BLOCKED) {
-                KernelThreadStatus cancel = kernel_thread_cancel_wait(
-                    target, ASTRA_SYSCALL_CANCELLED);
-
-                if (cancel != KERNEL_THREAD_OK)
-                    return KERNEL_PROCESS_CORRUPT;
+            if (queue_process_signal(process, ASTRA_SIGNAL_ALARM, &woke) !=
+                KERNEL_PROCESS_OK)
+                return KERNEL_PROCESS_CORRUPT;
+            if (woke) {
                 ++expired;
-                if (target->effective_priority > highest)
-                    highest = target->effective_priority;
+                if (!kernel_thread_highest_ready_priority(&highest))
+                    return KERNEL_PROCESS_CORRUPT;
             }
         }
         interval_next_deadline = interval_timer_earliest();
@@ -2345,13 +2413,14 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
     }
 }
 
-static KernelProcessStatus retire_current(KernelProcessExitReason reason,
+static KernelProcessStatus retire_process(KernelProcess *retiring,
+                                          KernelProcessExitReason reason,
                                           uint32_t exit_status,
                                           KernelCpuContext **next_context)
 {
-    KernelProcess *retiring;
     KernelProcessStatus status;
     uint16_t retiring_slot;
+    bool retires_current;
     uint32_t closed_sync_objects;
     uint32_t closed_ports;
     uint32_t closed_rings;
@@ -2365,13 +2434,16 @@ static KernelProcessStatus retire_current(KernelProcessExitReason reason,
     uint32_t woken_sync_waiters;
     KernelIrqStatus irq_status;
 
-    if (next_context == NULL || current_thread == NULL)
+    if (retiring == NULL || next_context == NULL || current_thread == NULL)
         return KERNEL_PROCESS_INVALID_STATE;
-    retiring_slot = current_thread->process_slot;
-    if (retiring_slot >= KERNEL_PROCESS_MAX)
+    retiring_slot = (uint16_t)(retiring - processes);
+    if (retiring_slot >= KERNEL_PROCESS_MAX ||
+        (retiring->process_state != KERNEL_PROCESS_CREATED &&
+         retiring->process_state != KERNEL_PROCESS_RUNNING))
         return KERNEL_PROCESS_CORRUPT;
-    retiring = &processes[retiring_slot];
+    retires_current = current_thread->process_slot == retiring_slot;
     retiring->process_state = KERNEL_PROCESS_EXITING;
+    retiring->suspended = 0u;
     process_exit_pending_bitmap |= UINT32_C(1) << retiring_slot;
     interval_next_deadline = interval_timer_earliest();
     retiring->exit_reason = (uint8_t)reason;
@@ -2390,12 +2462,17 @@ static KernelProcessStatus retire_current(KernelProcessExitReason reason,
      */
     if (reason == KERNEL_PROCESS_EXIT_USER_FAULT)
         retiring->exit_status = (uint32_t)ASTRA_STATUS_FAULTED;
+    else if (reason == KERNEL_PROCESS_EXIT_SIGNAL && exit_status != 0u &&
+             exit_status < 32u)
+        retiring->exit_status = ASTRA_STATUS_SIGNALLED(exit_status);
     else if ((exit_status & (uint32_t)ASTRA_STATUS_VERDICT) != 0u)
         retiring->exit_status = (uint32_t)ASTRA_STATUS_BAD_EXIT;
     else
         retiring->exit_status = exit_status;
-    retiring->terminal_result = reason == KERNEL_PROCESS_EXIT_USER_FAULT ?
-        ASTRA_SYSCALL_PEER_DEAD : ASTRA_SYSCALL_OK;
+    retiring->terminal_result =
+        reason == KERNEL_PROCESS_EXIT_USER_FAULT ||
+        reason == KERNEL_PROCESS_EXIT_SIGNAL ?
+            ASTRA_SYSCALL_PEER_DEAD : ASTRA_SYSCALL_OK;
     /*
      * The initial image is the one process whose death the kernel itself must
      * notice: its record is reclaimed as soon as the last handle closes, and
@@ -2446,12 +2523,27 @@ static KernelProcessStatus retire_current(KernelProcessExitReason reason,
     if (wake_process_death(retiring) != KERNEL_PROCESS_OK)
         return KERNEL_PROCESS_CORRUPT;
     --scheduler_stats.live_processes;
+    if (!retires_current) {
+        check_milestone();
+        return KERNEL_PROCESS_OK;
+    }
     status = schedule_next(next_context);
     if (status != KERNEL_PROCESS_OK &&
         status != KERNEL_PROCESS_NO_RUNNABLE)
         return status;
     check_milestone();
     return status;
+}
+
+static KernelProcessStatus retire_current(KernelProcessExitReason reason,
+                                          uint32_t exit_status,
+                                          KernelCpuContext **next_context)
+{
+    if (current_thread == NULL ||
+        current_thread->process_slot >= KERNEL_PROCESS_MAX)
+        return KERNEL_PROCESS_INVALID_STATE;
+    return retire_process(&processes[current_thread->process_slot], reason,
+                          exit_status, next_context);
 }
 
 static KernelProcessStatus retire_current_thread(
@@ -2528,6 +2620,7 @@ void kernel_process_init(void)
     kernel_bytes_clear(&scheduler_stats, sizeof(scheduler_stats));
     kernel_bytes_clear(signal_saved_context, sizeof(signal_saved_context));
     kernel_bytes_clear(signal_context_active, sizeof(signal_context_active));
+    kernel_thread_wait_queue_init(&sleep_waiters);
     kernel_bytes_clear(host_channels, sizeof(host_channels));
     for (uint32_t index = 0u; index < KERNEL_THREAD_MAX; ++index)
         kernel_thread_wait_queue_init(&host_channels[index].waiters);
@@ -2629,7 +2722,8 @@ bool kernel_process_debug_surface(void)
  */
 static uint32_t self_handle_rights(void)
 {
-    return KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_PRIORITY |
+    return KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_TERMINATE |
+           KERNEL_PROCESS_RIGHT_SIGNAL | KERNEL_PROCESS_RIGHT_PRIORITY |
            (kernel_process_debug_surface() ? KERNEL_PROCESS_RIGHT_DEBUG : 0u);
 }
 
@@ -3158,6 +3252,7 @@ static KernelProcessStatus clone_current_process(
         return result;
     child->image_size = source->image_size;
     child->entry_base = source->entry_base;
+    kernel_bytes_copy(child->name, source->name, sizeof(child->name));
     kernel_bytes_copy(&child->tls, &source->tls, sizeof(child->tls));
     child->default_priority = source->default_priority;
     child->priority_ceiling = source->priority_ceiling;
@@ -3219,9 +3314,12 @@ static KernelProcessStatus clone_current_process(
     result = retain_process_handle(child);
     if (result != KERNEL_PROCESS_OK)
         goto failed;
-    handle_status = kernel_handle_install(
+    handle_status = kernel_handle_install_cloneable(
         source->handles, KERNEL_OBJECT_PROCESS,
-        KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_WAIT, child,
+        KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_TERMINATE |
+            KERNEL_PROCESS_RIGHT_SIGNAL | KERNEL_PROCESS_RIGHT_WAIT |
+            KERNEL_PROCESS_RIGHT_TRANSFER,
+        child, process_handle_retain,
         process_handle_release, NULL, &parent_handle);
     if (handle_status != KERNEL_HANDLE_OK) {
         process_handle_release(child, NULL);
@@ -3234,6 +3332,13 @@ static KernelProcessStatus clone_current_process(
     result = commit_thread(&prepared, &child_thread_id,
                            &child_thread_handle);
     if (result == KERNEL_PROCESS_OK) {
+        KernelThreadStatus thread_status = kernel_thread_suspend_process(slot);
+
+        if (thread_status != KERNEL_THREAD_OK) {
+            kernel_interrupt_restore(saved_status);
+            return KERNEL_PROCESS_CORRUPT;
+        }
+        child->suspended = 1u;
         ++scheduler_stats.created_processes;
         ++scheduler_stats.live_processes;
         *process_id = child->id;
@@ -3427,6 +3532,9 @@ static uint8_t launch_header[KERNEL_PROCESS_LAUNCH_HEADER_BYTES];
  * enter the syscall path. Keep its page and launch metadata here instead of
  * consuming most of a guarded 8 KiB supervisor stack on every syscall. */
 static _Alignas(4) uint8_t startup_page[ASTRA_STARTUP_BLOCK_SIZE];
+_Static_assert(ASTRA_PROCESS_COUNT_MAX * sizeof(AstraProcSnapshot) <=
+                   sizeof(startup_page),
+               "process snapshot must fit the serialized syscall page");
 static char syscall_data[ASTRA_STARTUP_BLOCK_SIZE];
 static AstraLaunchGrant launch_grants[ASTRA_LAUNCH_GRANT_MAX];
 static KernelProcessBootstrapCapability
@@ -3541,6 +3649,17 @@ static KernelProcessStatus publish_exec_handoff(
     return KERNEL_PROCESS_OK;
 }
 
+static KernelProcessStatus
+trace_exec_corruption(const KernelProcess *process, uint32_t stage,
+                      uint32_t detail)
+{
+    (void)kernel_trace_write(
+        KERNEL_TRACE_EVENT_SYSCALL_EXIT, KERNEL_TRACE_LEVEL_ERROR,
+        ASTRA_SYSCALL_PROCESS_EXEC, 0xE0000000u | stage, detail,
+        process != NULL ? process->id : 0u);
+    return KERNEL_PROCESS_CORRUPT;
+}
+
 static KernelProcessStatus replace_process_image(
     KernelProcess *process, KernelThread *thread, uint32_t user_image,
     uint32_t image_size, AstraExecRequest *request,
@@ -3612,22 +3731,53 @@ static KernelProcessStatus replace_process_image(
         goto failed;
 
     /* Everything below is the no-allocation commit. */
-    if (!display_dma_abort_owner(process->owner) ||
-        kernel_block_revoke_owner(process->owner, &released_buffers,
-                                  &deferred_buffers) != KERNEL_BLOCK_OK ||
-        deferred_buffers != 0u) {
-        status = KERNEL_PROCESS_CORRUPT;
+    if (host_channels_close_process(process) != ASTRA_SYSCALL_OK) {
+        status = trace_exec_corruption(process, 1u, 0u);
+        goto failed;
+    }
+    if (!display_dma_abort_owner(process->owner)) {
+        status = trace_exec_corruption(process, 2u, 0u);
+        goto failed;
+    }
+    {
+        KernelBlockStatus block_status = kernel_block_revoke_owner(
+            process->owner, &released_buffers, &deferred_buffers);
+
+        if (block_status != KERNEL_BLOCK_OK) {
+            status = trace_exec_corruption(process, 3u,
+                                           (uint32_t)block_status);
+            goto failed;
+        }
+    }
+    if (deferred_buffers != 0u) {
+        status = trace_exec_corruption(process, 4u, deferred_buffers);
         goto failed;
     }
     (void)kernel_handle_close_type(process->handles, KERNEL_OBJECT_DMA);
-    if (process->dma_pages != 0u ||
-        kernel_area_unmap_process(process->id, &unmapped_areas) !=
-            KERNEL_AREA_OK ||
-        kernel_thread_exec_retire_others(
-            (uint16_t)(process - processes), thread,
-            ASTRA_SYSCALL_PEER_DEAD, &retired) != KERNEL_THREAD_OK) {
-        status = KERNEL_PROCESS_CORRUPT;
+    if (process->dma_pages != 0u) {
+        status = trace_exec_corruption(process, 5u, process->dma_pages);
         goto failed;
+    }
+    {
+        KernelAreaStatus area_status =
+            kernel_area_unmap_process(process->id, &unmapped_areas);
+
+        if (area_status != KERNEL_AREA_OK) {
+            status = trace_exec_corruption(process, 6u,
+                                           (uint32_t)area_status);
+            goto failed;
+        }
+    }
+    {
+        KernelThreadStatus thread_status = kernel_thread_exec_retire_others(
+            (uint16_t)(process - processes), thread,
+            ASTRA_SYSCALL_PEER_DEAD, &retired);
+
+        if (thread_status != KERNEL_THREAD_OK) {
+            status = trace_exec_corruption(process, 7u,
+                                           (uint32_t)thread_status);
+            goto failed;
+        }
     }
     (void)released_buffers;
     (void)unmapped_areas;
@@ -3641,17 +3791,38 @@ static KernelProcessStatus replace_process_image(
         if (other->self_handle != KERNEL_HANDLE_INVALID &&
             kernel_handle_close(process->handles, other->self_handle) !=
                 KERNEL_HANDLE_OK) {
-            status = KERNEL_PROCESS_CORRUPT;
+            status = trace_exec_corruption(process, 8u,
+                                           other->self_handle);
             goto failed;
         }
     }
-    if (retired > process->live_threads ||
-        retired > scheduler_stats.live_threads ||
-        kernel_vm_exchange_address_spaces(&process->address_space,
-                                           &replacement) != KERNEL_VM_OK ||
-        kernel_vm_switch(&process->address_space) != KERNEL_VM_OK ||
-        kernel_vm_destroy_address_space(&replacement) != KERNEL_VM_OK)
-        return KERNEL_PROCESS_CORRUPT;
+    if (retired > process->live_threads)
+        return trace_exec_corruption(process, 9u, retired);
+    if (retired > scheduler_stats.live_threads)
+        return trace_exec_corruption(process, 10u, retired);
+    {
+        KernelVmStatus vm_status = kernel_vm_exchange_address_spaces(
+            &process->address_space, &replacement);
+
+        if (vm_status != KERNEL_VM_OK)
+            return trace_exec_corruption(process, 11u,
+                                         (uint32_t)vm_status);
+    }
+    {
+        KernelVmStatus vm_status = kernel_vm_switch(&process->address_space);
+
+        if (vm_status != KERNEL_VM_OK)
+            return trace_exec_corruption(process, 12u,
+                                         (uint32_t)vm_status);
+    }
+    {
+        KernelVmStatus vm_status =
+            kernel_vm_destroy_address_space(&replacement);
+
+        if (vm_status != KERNEL_VM_OK)
+            return trace_exec_corruption(process, 13u,
+                                         (uint32_t)vm_status);
+    }
 
     process->live_threads = (uint8_t)(process->live_threads - retired);
     scheduler_stats.live_threads -= retired;
@@ -3670,6 +3841,8 @@ static KernelProcessStatus replace_process_image(
     thread->context.data[5] = thread->self_handle;
     process->entry_base = entry_base;
     process->image_size = entry_size;
+    process_name_set(process, &request->arguments,
+                     request->arguments.count != 0u ? syscall_data : NULL);
     kernel_bytes_clear(&process->tls, sizeof(process->tls));
     if (plan.has_tls != 0u)
         kernel_bytes_copy(&process->tls, &plan.tls, sizeof(process->tls));
@@ -3693,7 +3866,7 @@ static KernelProcessStatus replace_process_image(
 failed:
     if (replacement.initialized != 0u &&
         kernel_vm_destroy_address_space(&replacement) != KERNEL_VM_OK)
-        return KERNEL_PROCESS_CORRUPT;
+        return trace_exec_corruption(process, 14u, (uint32_t)status);
     return status;
 }
 
@@ -5081,6 +5254,7 @@ static KernelProcessStatus prepare_executable_process(
         argument_bytes, environment, 0u, 0u);
     if (result != KERNEL_PROCESS_OK)
         goto failed;
+    process_name_set(process, arguments, argument_bytes);
     *created = process;
     return KERNEL_PROCESS_OK;
 
@@ -5376,11 +5550,13 @@ static KernelProcessStatus executable_load_commit(
         destroy_prepared_executable(child, &prepared);
         return status;
     }
-    handle_status = kernel_handle_install(
+    handle_status = kernel_handle_install_cloneable(
         launcher->handles, KERNEL_OBJECT_PROCESS,
         KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_WAIT |
-            KERNEL_PROCESS_RIGHT_TERMINATE | KERNEL_PROCESS_RIGHT_PRIORITY,
-        child, process_handle_release, NULL, child_handle);
+            KERNEL_PROCESS_RIGHT_TERMINATE | KERNEL_PROCESS_RIGHT_SIGNAL |
+            KERNEL_PROCESS_RIGHT_TRANSFER | KERNEL_PROCESS_RIGHT_PRIORITY,
+        child, process_handle_retain, process_handle_release, NULL,
+        child_handle);
     if (handle_status != KERNEL_HANDLE_OK) {
         process_handle_release(child, NULL);
         destroy_prepared_executable(child, &prepared);
@@ -5459,9 +5635,16 @@ KernelProcessStatus kernel_process_launch(
 
 void kernel_process_register_initial_image(uint32_t process_id)
 {
+    KernelProcess *process = find_process_by_id(process_id);
+
     initial_image_process_id = process_id;
     initial_image_progress = 0u;
     initial_image_exited = 0u;
+    if (process != NULL) {
+        static const char name[] = "ROM:supervisor";
+
+        kernel_bytes_copy(process->name, name, sizeof(name));
+    }
 }
 
 KernelProcessStatus kernel_process_create(const void *image,
@@ -5556,9 +5739,9 @@ KernelProcessStatus kernel_process_grant_handle(
     status = retain_process_handle(target);
     if (status != KERNEL_PROCESS_OK)
         return status;
-    handle_status = kernel_handle_install(
+    handle_status = kernel_handle_install_cloneable(
         recipient->handles, KERNEL_OBJECT_PROCESS, rights, target,
-        process_handle_release, NULL, handle);
+        process_handle_retain, process_handle_release, NULL, handle);
     if (handle_status == KERNEL_HANDLE_OK)
         return process_pool_valid() ? KERNEL_PROCESS_OK :
                                       KERNEL_PROCESS_CORRUPT;
@@ -6852,6 +7035,42 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
     return KERNEL_PROCESS_OK;
 }
 
+static void process_info_fill(const KernelProcess *process,
+                              AstraProcessInfo *info)
+{
+    uint16_t slot = (uint16_t)(process - processes);
+    uint32_t frames = 0u;
+
+    kernel_bytes_clear(info, sizeof(*info));
+    info->size = sizeof(*info);
+    info->id = process->id;
+    info->generation = process->generation;
+    info->owner = process->owner;
+    if (kernel_memory_owner_frames(process->owner, &frames))
+        info->resident_frames = frames;
+    info->run_count = kernel_thread_process_run_count(slot);
+    info->timer_ticks = kernel_thread_process_timer_ticks(slot);
+    info->syscall_count = kernel_thread_process_syscalls(slot);
+    info->exit_status = process->exit_status;
+    info->handle_references = process->handle_references;
+    info->process_state = process->process_state;
+    info->thread_count = process->thread_count;
+    info->live_threads = process->live_threads;
+    info->default_priority = process->default_priority;
+    info->priority_ceiling = process->priority_ceiling;
+    info->exit_reason = process->exit_reason;
+    info->thread_state = (uint8_t)
+        kernel_thread_process_representative_state(slot);
+    info->suspended = process->suspended;
+    info->runtime_ns = kernel_platform_cycles_to_ns(process->runtime_cycles);
+    info->elapsed_ns = kernel_platform_cycles_to_ns(
+        scheduler_cycles() - process->started_cycles);
+    info->fault_pc = process->fault_pc;
+    info->fault_address = process->fault_address;
+    info->fault_vector = process->fault_vector;
+    info->fault_status = process->fault_status;
+}
+
 KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                                               uint32_t user_stack,
                                               const void *raw_frame,
@@ -7058,6 +7277,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             }
             if (copy_status != KERNEL_USER_COPY_OK)
                 return KERNEL_PROCESS_CORRUPT;
+            kernel_platform_post_text_update_begin();
             for (index = 0u; index < count; ++index) {
                 if (!kernel_platform_post_text_write(cell + index,
                                                      cells[index])) {
@@ -7065,6 +7285,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                     break;
                 }
             }
+            kernel_platform_post_text_update_end();
         }
         break;
     }
@@ -7454,6 +7675,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             current->id, child_id,
             KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_WAIT |
                 KERNEL_PROCESS_RIGHT_TERMINATE |
+                KERNEL_PROCESS_RIGHT_SIGNAL |
+                KERNEL_PROCESS_RIGHT_TRANSFER |
                 KERNEL_PROCESS_RIGHT_PRIORITY,
             &child_handle);
         /* The slot was reserved above, so a failure here is not a shortage. */
@@ -8192,8 +8415,10 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         thread->context.data[2] = current->signal_blocked;
         current->signal_trampoline = trampoline;
         current->signal_stack_top = stack_top;
+        current->signal_target_thread = thread->id;
         current->signal_blocked =
-            blocked & ~((1u << 9u) | (1u << 19u));
+            blocked & ~((1u << ASTRA_SIGNAL_KILL) |
+                        (1u << ASTRA_SIGNAL_STOP));
         break;
     }
     case ASTRA_SYSCALL_INTERVAL_TIMER: {
@@ -8251,6 +8476,64 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         signal_context_active[thread->slot] = 0u;
         *next_context = runtime_resume(thread);
         return KERNEL_PROCESS_OK;
+    case ASTRA_SYSCALL_THREAD_SLEEP: {
+        uint64_t deadline;
+        uint64_t now;
+        uint64_t time_ns = ((uint64_t)thread->context.data[1] << 32) |
+                           thread->context.data[2];
+        uint32_t flags = thread->context.data[3];
+        KernelThreadStatus thread_status;
+
+        now = scheduler_cycles();
+        if ((flags & ~ASTRA_THREAD_SLEEP_FLAG_MASK) != 0u ||
+            ((flags & ASTRA_THREAD_SLEEP_RELATIVE) != 0u ?
+                 ((time_ns & (1ull << 63)) != 0u ||
+                  !kernel_platform_deadline_to_cycles((int64_t)time_ns,
+                                                       &deadline) ||
+                  UINT64_MAX - now < deadline) :
+                 !decode_wait_deadline(thread->context.data[1],
+                                       thread->context.data[2], &deadline))) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if ((flags & ASTRA_THREAD_SLEEP_RELATIVE) != 0u)
+            deadline += now;
+        if ((flags & ASTRA_THREAD_SLEEP_REPLACE_SIGNAL_MASK) != 0u) {
+            thread->context.data[1] = current->signal_blocked;
+                current->signal_blocked = thread->context.data[4] &
+                    ~((1u << ASTRA_SIGNAL_KILL) |
+                      (1u << ASTRA_SIGNAL_STOP));
+            current->signal_target_thread = thread->id;
+        }
+        if ((current->signal_pending & ~current->signal_blocked) != 0u) {
+            result = ASTRA_SYSCALL_CANCELLED;
+            break;
+        }
+        thread_status = kernel_thread_block_until(
+            thread, &sleep_waiters,
+            kernel_thread_wait_queue_sequence(&sleep_waiters), now,
+            deadline, ASTRA_SYSCALL_TIMED_OUT);
+        if (thread_status == KERNEL_THREAD_DEADLINE_EXPIRED) {
+            result = ASTRA_SYSCALL_TIMED_OUT;
+            break;
+        }
+        if (thread_status == KERNEL_THREAD_NO_SLOT) {
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        if (thread_status != KERNEL_THREAD_OK)
+            return thread_status == KERNEL_THREAD_INVALID_ARGUMENT ||
+                           thread_status == KERNEL_THREAD_INVALID_STATE ||
+                           thread_status == KERNEL_THREAD_CONDITION_CHANGED ?
+                KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
+        ++scheduler_stats.wait_blocks;
+        status = schedule_next(next_context);
+        if (status != KERNEL_PROCESS_OK &&
+            status != KERNEL_PROCESS_NO_RUNNABLE)
+            return status;
+        check_milestone();
+        return status;
+    }
     case ASTRA_SYSCALL_RING_CREATE: {
         KernelArea *area = NULL;
         KernelRing *ring = NULL;
@@ -8911,7 +9194,6 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         KernelHandleStatus handle_status;
         AstraProcessInfo info;
         uint32_t user_info = thread->context.data[2];
-        uint32_t frames = 0u;
         int copy_status;
 
         handle_status = kernel_handle_lookup(
@@ -8928,39 +9210,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         }
         if (handle_status != KERNEL_HANDLE_OK || target == NULL)
             return KERNEL_PROCESS_CORRUPT;
-        kernel_bytes_clear(&info, sizeof(info));
-        info.size = sizeof(info);
-        info.id = target->id;
-        info.generation = target->generation;
-        info.owner = target->owner;
-        /* Constant-time owner ledger lookup; this is the PROC: mem leaf. */
-        if (kernel_memory_owner_frames(target->owner, &frames))
-            info.resident_frames = frames;
-        info.run_count = kernel_thread_process_run_count(
-            (uint16_t)(target - processes));
-        info.timer_ticks = kernel_thread_process_timer_ticks(
-            (uint16_t)(target - processes));
-        info.syscall_count = kernel_thread_process_syscalls(
-            (uint16_t)(target - processes));
-        info.exit_status = target->exit_status;
-        info.handle_references = target->handle_references;
-        info.process_state = target->process_state;
-        info.thread_count = target->thread_count;
-        info.live_threads = target->live_threads;
-        info.default_priority = target->default_priority;
-        info.priority_ceiling = target->priority_ceiling;
-        info.exit_reason = target->exit_reason;
-        info.thread_state = (uint8_t)
-            kernel_thread_process_representative_state(
-                (uint16_t)(target - processes));
-        info.runtime_ns = kernel_platform_cycles_to_ns(
-            target->runtime_cycles);
-        info.elapsed_ns = kernel_platform_cycles_to_ns(
-            scheduler_cycles() - target->started_cycles);
-        info.fault_pc = target->fault_pc;
-        info.fault_address = target->fault_address;
-        info.fault_vector = target->fault_vector;
-        info.fault_status = target->fault_status;
+        process_info_fill(target, &info);
 
         copy_status = kernel_copy_to_user(user_info, &info, sizeof(info));
         if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
@@ -8971,6 +9221,147 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if (copy_status != KERNEL_USER_COPY_OK)
             return KERNEL_PROCESS_CORRUPT;
         result = ASTRA_SYSCALL_OK;
+        break;
+    }
+    case ASTRA_SYSCALL_PROCESS_SNAPSHOT: {
+        AstraProcSnapshot *records = (AstraProcSnapshot *)(void *)startup_page;
+        KernelProcess *observer = NULL;
+        KernelHandleStatus handle_status;
+        uint32_t live = 0u;
+        int copy_status;
+
+        handle_status = kernel_handle_lookup(
+            current->handles, thread->context.data[1], KERNEL_OBJECT_PROCESS,
+            KERNEL_PROCESS_RIGHT_QUERY, (void **)&observer);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || observer == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        if (observer != current || current->id != initial_image_process_id) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (thread->context.data[3] < KERNEL_PROCESS_MAX) {
+            thread->context.data[1] = KERNEL_PROCESS_MAX;
+            result = ASTRA_SYSCALL_BUFFER_TOO_SMALL;
+            break;
+        }
+        kernel_bytes_clear(records,
+                           KERNEL_PROCESS_MAX * sizeof(records[0]));
+        for (uint32_t slot = 0u; slot < KERNEL_PROCESS_MAX; ++slot) {
+            const KernelProcess *process = &processes[slot];
+
+            if (process->process_state != KERNEL_PROCESS_CREATED &&
+                process->process_state != KERNEL_PROCESS_RUNNING)
+                continue;
+            process_info_fill(process, &records[slot].process);
+            kernel_bytes_copy(records[slot].name, process->name,
+                              sizeof(records[slot].name));
+            ++live;
+        }
+        copy_status = kernel_copy_to_user(
+            thread->context.data[2], records,
+            KERNEL_PROCESS_MAX * (uint32_t)sizeof(records[0]));
+        if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+            copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
+            result = ASTRA_SYSCALL_BAD_ADDRESS;
+            break;
+        }
+        if (copy_status != KERNEL_USER_COPY_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        thread->context.data[1] = live;
+        result = ASTRA_SYSCALL_OK;
+        break;
+    }
+
+    case ASTRA_SYSCALL_PROCESS_SIGNAL:
+    case ASTRA_SYSCALL_PROCESS_TERMINATE:
+    case ASTRA_SYSCALL_PROCESS_SUSPEND:
+    case ASTRA_SYSCALL_PROCESS_RESUME: {
+        KernelProcess *target = NULL;
+        KernelHandleStatus handle_status;
+        uint32_t signal = thread->context.data[2];
+        uint32_t required_right =
+            syscall == ASTRA_SYSCALL_PROCESS_TERMINATE ?
+                KERNEL_PROCESS_RIGHT_TERMINATE :
+                KERNEL_PROCESS_RIGHT_SIGNAL;
+        bool carries_signal = syscall == ASTRA_SYSCALL_PROCESS_SIGNAL ||
+                              syscall == ASTRA_SYSCALL_PROCESS_TERMINATE;
+
+        if (carries_signal && (signal == 0u || signal >= 32u)) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        handle_status = kernel_handle_lookup(
+            current->handles, thread->context.data[1], KERNEL_OBJECT_PROCESS,
+            required_right, (void **)&target);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || target == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        if (target->process_state != KERNEL_PROCESS_CREATED &&
+            target->process_state != KERNEL_PROCESS_RUNNING) {
+            result = ASTRA_SYSCALL_PEER_DEAD;
+            break;
+        }
+        if (syscall == ASTRA_SYSCALL_PROCESS_SIGNAL) {
+            if (queue_process_signal(target, signal, NULL) !=
+                KERNEL_PROCESS_OK)
+                return KERNEL_PROCESS_CORRUPT;
+        } else if (syscall == ASTRA_SYSCALL_PROCESS_TERMINATE) {
+            bool self = target == current;
+            KernelProcessStatus terminate_status = retire_process(
+                target, KERNEL_PROCESS_EXIT_SIGNAL, signal, next_context);
+
+            if (terminate_status != KERNEL_PROCESS_OK)
+                return terminate_status;
+            if (self)
+                return terminate_status;
+        } else if (syscall == ASTRA_SYSCALL_PROCESS_SUSPEND) {
+            KernelThreadStatus thread_status;
+            bool self = target == current;
+
+            if (target->suspended != 0u)
+                break;
+            thread_status = kernel_thread_suspend_process(
+                (uint16_t)(target - processes));
+            if (thread_status != KERNEL_THREAD_OK)
+                return thread_status == KERNEL_THREAD_INVALID_STATE ?
+                    KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
+            target->suspended = 1u;
+            if (self) {
+                thread->context.data[0] = ASTRA_SYSCALL_OK;
+                status = schedule_next(next_context);
+                return status == KERNEL_PROCESS_OK ||
+                       status == KERNEL_PROCESS_NO_RUNNABLE ?
+                    status : KERNEL_PROCESS_CORRUPT;
+            }
+        } else {
+            KernelThreadStatus thread_status;
+
+            if (target->suspended == 0u)
+                break;
+            thread_status = kernel_thread_resume_process(
+                (uint16_t)(target - processes));
+            if (thread_status != KERNEL_THREAD_OK)
+                return thread_status == KERNEL_THREAD_INVALID_STATE ?
+                    KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
+            target->suspended = 0u;
+        }
         break;
     }
 
@@ -9858,8 +10249,8 @@ bool kernel_process_snapshot(uint32_t slot, KernelProcessSnapshot *snapshot)
     snapshot->supervisor_guard_pages = process->supervisor_guard_pages;
     snapshot->handle_references = process->handle_references;
     snapshot->death_waiters = (uint16_t)death_waiters;
-    snapshot->reserved[0] = 0u;
-    snapshot->reserved[1] = 0u;
+    snapshot->suspended = process->suspended;
+    snapshot->reserved = 0u;
     return true;
 }
 

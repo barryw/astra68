@@ -34,7 +34,7 @@ import threading
 import time
 
 import astra_image
-from qemu_runtime import qemu_environment
+from qemu_runtime import DEFAULT_MEMORY, qemu_environment
 
 # In the order the boot emits them. Each is matched once, in sequence, so a
 # marker that also appears in later output cannot be picked up twice.
@@ -105,7 +105,7 @@ def main():
     parser.add_argument("--image", help="card image; omit to boot without media")
     parser.add_argument("--catalog", default=astra_image.DEFAULT_CATALOG,
                         help="catalog installed with commands and services")
-    parser.add_argument("--memory", default="128M")
+    parser.add_argument("--memory", default=DEFAULT_MEMORY)
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--deadline", type=float, default=120.0,
                         help="give up on a run after this many seconds")

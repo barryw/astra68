@@ -2,7 +2,7 @@
  *
  * Boot address windows:
  *   scratch/initial stack below 0x02000000
- *   guest RAM at 0x02000000..0x09FFFFFF (128 MiB)
+ *   guest RAM at 0x02000000..0x21FFFFFF (512 MiB)
  *   ROM at 0xFFE00000..0xFFE7FFFF (512 KiB)
  *   MMIO at 0xFFF00000..0xFFFFFFFF
  *

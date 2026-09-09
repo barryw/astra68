@@ -34,6 +34,7 @@ static uint32_t mock_stream_commit_calls;
 static uint32_t mock_stream_closed_handle;
 static uint32_t mock_thread_handle = 0x22222222u;
 static int mock_clone_child;
+static uint32_t mock_cancel_wait_once;
 
 #define MOCK_STREAM_FILE_OFFSET (5u * 1024u * 1024u)
 #define MOCK_STREAM_FILE_BYTES 17u
@@ -109,6 +110,12 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_DISPLAY_COLLECT &&
         number != ASTRA_SYSCALL_LIBRARY_MAP &&
         number != ASTRA_SYSCALL_PROCESS_PRIORITY &&
+        number != ASTRA_SYSCALL_PROCESS_SNAPSHOT &&
+        number != ASTRA_SYSCALL_PROCESS_SIGNAL &&
+        number != ASTRA_SYSCALL_PROCESS_TERMINATE &&
+        number != ASTRA_SYSCALL_PROCESS_SUSPEND &&
+        number != ASTRA_SYSCALL_PROCESS_RESUME &&
+        number != ASTRA_SYSCALL_THREAD_SLEEP &&
         number != ASTRA_SYSCALL_SIGNAL_CONFIGURE &&
         number != ASTRA_SYSCALL_INTERVAL_TIMER &&
         number != ASTRA_SYSCALL_VM_PRIVATE_RESERVE &&
@@ -129,6 +136,10 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         assert(argument4 == 0u);
     }
     result->status = mock_status;
+    if (number == ASTRA_SYSCALL_WAIT_ONE && mock_cancel_wait_once != 0u) {
+        --mock_cancel_wait_once;
+        result->status = ASTRA_SYSCALL_CANCELLED;
+    }
     result->value0 = ASTRA_SYSCALL_ABI_VERSION;
     result->value1 = 0x11111111u;
     if (number == ASTRA_SYSCALL_ACTIVITY) {
@@ -363,6 +374,7 @@ test_qsort(void)
 static void
 test_syscall_wrappers(void)
 {
+    AstraProcSnapshot process_records[ASTRA_PROCESS_COUNT_MAX];
     AstraDisplayFrameRequest request = {0};
     AstraDisplayFrameCompletion completion = {0};
     AstraHostLeaseInfo host_info = {0};
@@ -381,12 +393,14 @@ test_syscall_wrappers(void)
     uint32_t thread_id;
     uint32_t futex_word = 7u;
     uint32_t woken;
+    uint32_t detail;
     AstraThreadStart thread_start = {
         .entry = dummy_thread,
         .argument = 0x12345678u,
     };
     uint32_t pending;
     uint32_t previous_blocked;
+    uint32_t sleep_previous;
     uint64_t old_delay;
     uint64_t old_interval;
     void *private_address;
@@ -433,6 +447,11 @@ test_syscall_wrappers(void)
     assert(mock_number == ASTRA_SYSCALL_FUTEX_WAKE);
     assert(mock_argument0 == (uint32_t)(uintptr_t)&futex_word);
     assert(mock_argument1 == 3u && woken == ASTRA_SYSCALL_ABI_VERSION);
+    calls = mock_calls;
+    mock_cancel_wait_once = 1u;
+    assert(astra_wait_one_restart(7u, ASTRA_DEADLINE_FOREVER, &detail) ==
+           ASTRA_SYSCALL_OK);
+    assert(mock_calls == calls + 2u && detail == ASTRA_SYSCALL_ABI_VERSION);
     assert(astra_irq_mask(0x87654321u) == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_IRQ_MASK);
     assert(mock_argument0 == 0x87654321u);
@@ -446,6 +465,17 @@ test_syscall_wrappers(void)
     assert(mock_argument0 == process);
     assert(mock_argument1 == 12u);
     assert(abi == ASTRA_SYSCALL_ABI_VERSION);
+    assert(astra_process_snapshot(process, process_records,
+                                  ASTRA_PROCESS_COUNT_MAX, &moved) ==
+           ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_PROCESS_SNAPSHOT);
+    assert(mock_argument0 == process);
+    assert(mock_argument1 == (uint32_t)(uintptr_t)process_records);
+    assert(mock_argument2 == ASTRA_PROCESS_COUNT_MAX);
+    assert(moved == ASTRA_SYSCALL_ABI_VERSION);
+    assert(astra_process_snapshot(process, NULL,
+                                  ASTRA_PROCESS_COUNT_MAX, &moved) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(astra_rt_ring_create(
                9u, 64u, 1u, 65536u,
                ASTRA_BULK_RING_CREATE_KERNEL_COPY, &producer, &consumer) ==
@@ -503,6 +533,19 @@ test_syscall_wrappers(void)
     assert(old_delay ==
            ((uint64_t)ASTRA_SYSCALL_ABI_VERSION << 32 | 0x11111111u));
     assert(old_interval == UINT64_C(0x2222222233333333));
+    assert(astra_rt_thread_sleep(
+               UINT64_C(0x123456789abcdef0),
+               ASTRA_THREAD_SLEEP_REPLACE_SIGNAL_MASK, 0x55u,
+               &sleep_previous) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_THREAD_SLEEP);
+    assert(mock_argument0 == 0x12345678u &&
+           mock_argument1 == 0x9abcdef0u &&
+           mock_argument2 == ASTRA_THREAD_SLEEP_REPLACE_SIGNAL_MASK &&
+           mock_argument3 == 0x55u);
+    assert(sleep_previous == ASTRA_SYSCALL_ABI_VERSION);
+    assert(astra_rt_thread_sleep(0u,
+               ASTRA_THREAD_SLEEP_REPLACE_SIGNAL_MASK, 0u, NULL) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(astra_activity_begin() == 0x1234u);
     assert(mock_argument0 == 0u);
     assert(astra_activity_current() == 0x1234u);
@@ -1000,6 +1043,35 @@ static void test_process_wait(void)
 
     calls = mock_calls;
     assert(astra_process_wait(9u, 0u, NULL) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(mock_calls == calls);
+
+    assert(astra_process_signal(9u, 2u) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_PROCESS_SIGNAL);
+    assert(mock_argument0 == 9u && mock_argument1 == 2u);
+    assert(astra_process_terminate(9u, 9u) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_PROCESS_TERMINATE);
+    assert(mock_argument0 == 9u && mock_argument1 == 9u);
+    assert(astra_process_suspend(9u) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_PROCESS_SUSPEND);
+    assert(mock_argument0 == 9u && mock_argument1 == 0u);
+    assert(astra_process_resume(9u) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_PROCESS_RESUME);
+    assert(mock_argument0 == 9u && mock_argument1 == 0u);
+    calls = mock_calls;
+    assert(astra_process_signal(0u, 2u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_process_signal(9u, 0u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_process_signal(9u, 32u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_process_terminate(0u, 9u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_process_terminate(9u, 0u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_process_terminate(9u, 32u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_process_suspend(0u) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_process_resume(0u) == ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(mock_calls == calls);
 }
 

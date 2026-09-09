@@ -2,7 +2,7 @@
 set -eu
 
 RUNS="${1:-10}"
-ASTRA_STORE="${ASTRA_STORE:-/data/astra}"
+ASTRA_STORE="${ASTRA_STORE:-/var/lib/astra}"
 ASTRA_ROOT="${ASTRA_ROOT:-$ASTRA_STORE/current}"
 ASTRA_ROOT=$(readlink -f "$ASTRA_ROOT")
 RELEASE_TOOL="${ASTRA_RELEASE_TOOL:-$ASTRA_ROOT/bin/astra-release.py}"
@@ -15,6 +15,7 @@ LOGDIR="${LOGDIR:-$ASTRA_STORE/log}"
 TIMINGS="$LOGDIR/qemu-arty-timings.txt"
 MARKERS="$LOGDIR/qemu-arty-markers.txt"
 RUN_ERR="$LOGDIR/qemu-arty-run.err"
+MEMORY="${ASTRA_MEMORY:-512M}"
 
 mkdir -p "$LOGDIR"
 : > "$TIMINGS"
@@ -26,8 +27,8 @@ while [ "$i" -le "$RUNS" ]; do
     /usr/bin/time -f "$i %e %U %S" -a -o "$TIMINGS" \
         env LD_LIBRARY_PATH="$LIBDIR" \
         "$QEMU" \
-        -object memory-backend-ram,id=astra-ram,size=128M,prealloc=on \
-        -M astra68,memory-backend=astra-ram -m 128M -bios "$ROM" \
+        -object memory-backend-ram,id=astra-ram,size="$MEMORY",prealloc=on \
+        -M astra68,memory-backend=astra-ram -m "$MEMORY" -bios "$ROM" \
         -nographic -monitor none -serial none -no-reboot \
         -icount shift=8,align=off,sleep=off \
         >/dev/null 2>"$RUN_ERR"

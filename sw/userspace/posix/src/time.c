@@ -31,11 +31,13 @@
 #include <astra/syscall.h>
 
 #include <errno.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/time.h>
 #include <sys/times.h>
 #include <time.h>
+#include <unistd.h>
 
 #define NANOSECONDS_PER_SECOND 1000000000u
 
@@ -131,6 +133,79 @@ getitimer(int which, struct itimerval *value)
     nanoseconds_to_timeval(delay, &value->it_value);
     nanoseconds_to_timeval(interval, &value->it_interval);
     return 0;
+}
+
+unsigned int
+alarm(unsigned int seconds)
+{
+    struct itimerval timer = {0};
+    struct itimerval previous = {0};
+    unsigned int remaining;
+
+    timer.it_value.tv_sec = (time_t)seconds;
+    if (setitimer(ITIMER_REAL, &timer, &previous) != 0)
+        return 0u;
+    remaining = (unsigned int)previous.it_value.tv_sec;
+    if (previous.it_value.tv_usec != 0 && remaining != UINT_MAX)
+        ++remaining;
+    return remaining;
+}
+
+int
+nanosleep(const struct timespec *request, struct timespec *remaining)
+{
+    uint64_t duration;
+    uint64_t started;
+    uint64_t elapsed;
+    uint32_t generation;
+
+    if (request == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (request->tv_sec < 0 || request->tv_nsec < 0 ||
+        request->tv_nsec >= (long)NANOSECONDS_PER_SECOND ||
+        (uint64_t)request->tv_sec >
+            (UINT64_MAX - (uint64_t)request->tv_nsec) /
+                NANOSECONDS_PER_SECOND) {
+        errno = EINVAL;
+        return -1;
+    }
+    duration = (uint64_t)request->tv_sec * NANOSECONDS_PER_SECOND +
+               (uint64_t)request->tv_nsec;
+    if (duration == 0u) {
+        if (remaining != NULL)
+            remaining->tv_sec = remaining->tv_nsec = 0;
+        return 0;
+    }
+    started = astra_clock_monotonic();
+    generation = astra_posix_signal_generation();
+    for (;;) {
+        uint32_t status = astra_rt_thread_sleep(
+            duration, ASTRA_THREAD_SLEEP_RELATIVE, 0u, NULL);
+
+        elapsed = astra_clock_monotonic() - started;
+        if (status == ASTRA_SYSCALL_TIMED_OUT || elapsed >= duration) {
+            if (remaining != NULL)
+                remaining->tv_sec = remaining->tv_nsec = 0;
+            return 0;
+        }
+        if (status == ASTRA_SYSCALL_CANCELLED &&
+            astra_posix_signal_generation() == generation) {
+            duration -= elapsed;
+            started += elapsed;
+            continue;
+        }
+        if (remaining != NULL) {
+            uint64_t rest = duration - elapsed;
+
+            remaining->tv_sec = (time_t)(rest / NANOSECONDS_PER_SECOND);
+            remaining->tv_nsec =
+                (long)(rest % NANOSECONDS_PER_SECOND);
+        }
+        errno = status == ASTRA_SYSCALL_CANCELLED ? EINTR : EIO;
+        return -1;
+    }
 }
 
 int

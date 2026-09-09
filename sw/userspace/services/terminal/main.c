@@ -1,4 +1,4 @@
-#include <console_shell.h>
+#include <console_session.h>
 #include <console_stream.h>
 
 #include <astra/bytes.h>
@@ -523,14 +523,14 @@ static int window_next_key(void *context, uint32_t *key)
         AstraResult result = astra_window_event_try(&window->window, &event);
 
         if (result == ASTRA_ERROR_WOULD_BLOCK)
-            return CONSOLE_SHELL_INPUT_NONE;
+            return CONSOLE_SESSION_INPUT_NONE;
         if (result != ASTRA_OK)
-            return CONSOLE_SHELL_INPUT_ERROR;
+            return CONSOLE_SESSION_INPUT_ERROR;
         if (event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST) {
             if (astra_window_close(&window->window) != ASTRA_OK)
-                return CONSOLE_SHELL_INPUT_ERROR;
+                return CONSOLE_SESSION_INPUT_ERROR;
             window->live = 0u;
-            return CONSOLE_SHELL_INPUT_STOP;
+            return CONSOLE_SESSION_INPUT_STOP;
         }
         if (event.type == ASTRA_WINDOW_EVENT_FRAME) {
             uint16_t width = event.data.frame.frame.width;
@@ -543,7 +543,7 @@ static int window_next_key(void *context, uint32_t *key)
                 if (window->terminal == NULL ||
                     !window_resize_model(window, terminal_columns(window),
                                          terminal_rows(window)))
-                    return CONSOLE_SHELL_INPUT_ERROR;
+                    return CONSOLE_SESSION_INPUT_ERROR;
                 window->force_present = 1u;
             }
             continue;
@@ -568,7 +568,7 @@ static int window_next_key(void *context, uint32_t *key)
                 translated == ASTRA_KEYMAP_END ||
                 (chord && translated != ASTRA_KEYMAP_NONE)) {
                 *key = translated;
-                return CONSOLE_SHELL_INPUT_KEY;
+                return CONSOLE_SESSION_INPUT_KEY;
             }
             continue;
         }
@@ -581,7 +581,7 @@ static int window_next_key(void *context, uint32_t *key)
                 *key = codepoint;
             else
                 continue;
-            return CONSOLE_SHELL_INPUT_KEY;
+            return CONSOLE_SESSION_INPUT_KEY;
         }
     }
 }
@@ -592,7 +592,7 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *gui;
     const AstraStartupCapability *control;
-    ConsoleShellBackend backend;
+    ConsoleSessionBackend backend;
     uint32_t status;
     uint32_t title_icon_length = 0u;
     uint32_t terminal_capacity_columns = 0u;
@@ -723,7 +723,7 @@ int astra_main(const AstraStartupInfo *startup)
     backend.idle_poll_ns = TERMINAL_CURSOR_BLINK_NS;
     backend.process_filesystem = &process_filesystem;
     backend.startup = startup;
-    console_shell_run_backend(&backend);
+    status = console_session_run_backend(&backend);
     if (window_terminal.live) {
         AstraResult close_result = astra_window_close(&window_terminal.window);
 
@@ -734,5 +734,5 @@ int astra_main(const AstraStartupInfo *startup)
     CloseLibrary(graphics_handle);
     CloseLibrary(font_handle);
     astra_process_filesystem_close(&process_filesystem);
-    return ASTRA_STATUS_OK;
+    return (int)status;
 }

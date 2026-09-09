@@ -12,23 +12,18 @@
  * way. If this program's output is right, that ends.
  */
 
-#include <astra/posix.h>
 #include <astra/program.h>
-#include <astra/runtime.h>
 
-#include <inttypes.h>
 #include <stdio.h>
 
 ASTRA_PROGRAM("hello", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
 int
-astra_main(const AstraStartupInfo *startup)
+main(int argc, char **argv)
 {
     char formatted[64];
     int printed;
-
-    astra_posix_start(startup);
 
     /*
      * The verdict is the exit status, not the text, because the text lands on
@@ -52,10 +47,8 @@ astra_main(const AstraStartupInfo *startup)
     printf("hello from picolibc on m68040\n");
     /* The three things hand-rolled formatting cannot do, in one line. */
     printf("width %s\n", formatted);
-    if (astra_startup_validate(startup))
-        for (uint32_t index = 0u; index < startup->argc; ++index)
-            printf("argv[%" PRIu32 "] = %s\n", index,
-                   astra_startup_argument(startup, index));
+    for (int index = 0; index < argc; ++index)
+        printf("argv[%d] = %s\n", index, argv[index]);
     if (fflush(stdout) != 0)
         return 12;
     return 0;

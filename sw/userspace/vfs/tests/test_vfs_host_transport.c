@@ -22,6 +22,7 @@ static uint32_t channel_opens;
 static uint32_t channel_closes;
 static uint32_t channel_kicks;
 static uint32_t channel_waits;
+static uint32_t channel_open_status;
 static uint32_t maximum_kick_batch;
 static uint32_t lock_depth;
 static uint32_t lock_acquires;
@@ -32,6 +33,12 @@ static int require_two_in_flight;
 static int complete_on_wait_only;
 static uint32_t concurrent_kick_base;
 static uint64_t mock_metric_value = UINT64_C(0x123456789abcdef0);
+
+uint32_t astra_log_failure(const char *operation, uint32_t status)
+{
+    assert(operation != NULL);
+    return status;
+}
 
 static uint32_t dma_slot(uint32_t handle)
 {
@@ -109,6 +116,8 @@ uint32_t astra_host_channel_open(uint32_t device,
     assert(channel->command_capacity != 0u &&
            (channel->command_capacity &
             (channel->command_capacity - 1u)) == 0u);
+    if (channel_open_status != ASTRA_SYSCALL_OK)
+        return channel_open_status;
     assert(channel_opened[slot] == 0u);
     memset(header, 0, sizeof(*header));
     header->magic = ASTRA_HOST_CHANNEL_MAGIC;
@@ -449,5 +458,37 @@ int main(void)
     }
     astra_vfs_host_transport_destroy(&transport);
     assert(channel_opens == 3u && channel_closes == 3u && closes == 4u);
+
+    memset(&transport, 0, sizeof(transport));
+    assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
+                                         &lock_depth));
+    current_thread = 1u;
+    memset(&command, 0, sizeof(command));
+    command.generation = transport.generation;
+    assert(astra_vfs_host_transport_execute(
+               &transport, &command, NULL, 0u, NULL, 0u) == ASTRA_VFS_OK);
+    {
+        uint32_t opens = channel_opens;
+
+        astra_vfs_host_transport_after_fork(&transport);
+        current_thread = 7u;
+        assert(astra_vfs_host_transport_execute(
+                   &transport, &command, NULL, 0u, NULL, 0u) ==
+               ASTRA_VFS_OK);
+        assert(channel_opens == opens + 1u);
+    }
+    astra_vfs_host_transport_destroy(&transport);
+    current_thread = 1u;
+
+    memset(&transport, 0, sizeof(transport));
+    assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
+                                         &lock_depth));
+    channel_open_status = ASTRA_SYSCALL_RESOURCE_LIMIT;
+    memset(&command, 0, sizeof(command));
+    command.generation = transport.generation;
+    assert(astra_vfs_host_transport_execute(
+               &transport, &command, NULL, 0u, NULL, 0u) ==
+           ASTRA_VFS_ERR_LIMIT);
+    astra_vfs_host_transport_destroy(&transport);
     return 0;
 }

@@ -164,7 +164,7 @@ for required in (
     "astra_graphics_pipeline #(",
     ".framebuffer_axi_debug_status(framebuffer_axi_debug_status)",
     ".ARENA_BASE(32'h40000000)",
-    ".ARENA_LIMIT(32'h80000000)",
+    ".ARENA_LIMIT(32'h60000000)",
     ".AXI_ID_WIDTH(3)",
     "astra_axi_read_3to1 #(",
     "astra_hdmi_audio audio_i",
@@ -178,6 +178,46 @@ for required in (
     assert required in graphics, required
 
 assert "altsource_probe" not in graphics
+
+boot = (ROOT / "sw/include/astra/boot.h").read_text(encoding="utf-8")
+qemu = (ROOT / "emu/qemu/qemu-9.2/hw/m68k/astra68.c").read_text(
+    encoding="utf-8"
+)
+runner = (ROOT / "emu/qemu/run-arty.sh").read_text(encoding="utf-8")
+debugger = (ROOT / "emu/qemu/debug.sh").read_text(encoding="utf-8")
+qemu_runtime = (ROOT / "emu/qemu/qemu_runtime.py").read_text(encoding="utf-8")
+terminal_gate = (ROOT / "emu/qemu/test-terminal.py").read_text(encoding="utf-8")
+display_gate = (ROOT / "emu/qemu/test-display.py").read_text(encoding="utf-8")
+raw_host_gate = (ROOT / "emu/qemu/test-host-channel-raw.py").read_text(
+    encoding="utf-8"
+)
+qualification_gate = (ROOT / "emu/qemu/test-qualification.py").read_text(
+    encoding="utf-8"
+)
+boot_timer = (ROOT / "emu/qemu/time-boot.py").read_text(encoding="utf-8")
+prepare_qemu = (ROOT / "emu/qemu/prepare-source.sh").read_text(encoding="utf-8")
+service = (HERE / "astra.service").read_text(encoding="utf-8")
+linux_makefile = (ROOT / "fpga/arty/linux/Makefile").read_text(encoding="utf-8")
+assert "#define ASTRA_RAM_SIZE_DE25_GUEST  0x20000000u" in boot
+assert '#include "astra/boot.h"' in qemu
+assert "mc->default_ram_size = ASTRA_RAM_SIZE_DE25_GUEST;" in qemu
+assert "#define ASTRA_ROM_BASE" not in qemu
+assert "#define ASTRA_ROM_SIZE" not in qemu
+assert 'PUBLIC_BOOT="$REPOSITORY/sw/include/astra/boot.h"' in prepare_qemu
+assert 'cp "$PUBLIC_BOOT" "$STAGED_SOURCE/include/astra/boot.h"' in prepare_qemu
+assert "MEMORY=${ASTRA_MEMORY:-512M}" in runner
+assert '${ASTRA_MEMORY:-512M}' in debugger
+assert 'DEFAULT_MEMORY = "512M"' in qemu_runtime
+assert "MEMORY = DEFAULT_MEMORY" in terminal_gate
+assert 'parser.add_argument("--memory", default=MEMORY' in terminal_gate
+assert '"-m", DEFAULT_MEMORY' in display_gate
+assert '"-m", DEFAULT_MEMORY' in raw_host_gate
+assert 'parser.add_argument("--memory", default=DEFAULT_MEMORY)' in qualification_gate
+assert 'parser.add_argument("--memory", default=DEFAULT_MEMORY)' in boot_timer
+assert "Environment=ASTRA_MEMORY=512M" in service
+assert linux_makefile.count("ASTRA_GRAPHICS_ARENA_LIMIT_VALUE=0x60000000u") == 2
+assert "EXPECT_ARENA_LIMIT=0x60000000u" in linux_makefile
+assert "$(TARGETS) $(HOST_TEST_TARGETS): Makefile" in linux_makefile
 
 with tempfile.TemporaryDirectory() as temporary_text:
     temporary = Path(temporary_text)

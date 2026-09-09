@@ -27,6 +27,7 @@
  */
 typedef void (*AstraStreamRender)(void *context, const uint8_t *bytes,
                                   uint32_t length, uint32_t activity);
+typedef void (*AstraStreamTtySignal)(void *context, uint32_t control);
 
 typedef struct AstraStreamSource AstraStreamSource;
 
@@ -55,6 +56,7 @@ typedef struct AstraStreamSink {
     uint32_t dropped;    /* answered nobody: the reply had nowhere to go */
     AstraTtyState *tty;
     AstraStreamSource *input;
+    uint32_t terminal_id;
     uint8_t idle;
 } AstraStreamSink;
 
@@ -95,6 +97,9 @@ struct AstraStreamSource {
     uint32_t readiness_failures;
     AstraTtyState *tty;
     AstraStreamSink *output;
+    uint32_t terminal_id;
+    AstraStreamTtySignal signal;
+    void *signal_context;
 };
 
 int astra_stream_source_init(AstraStreamSource *source, uint32_t receive);
@@ -124,7 +129,9 @@ void astra_stream_source_destroy(AstraStreamSource *source);
 /* Binds both stream directions to one terminal-control state. */
 void astra_stream_tty_state_init(AstraTtyState *state);
 void astra_stream_tty_bind(AstraStreamSink *output, AstraStreamSource *input,
-                           AstraTtyState *state);
+                           AstraTtyState *state, uint32_t terminal_id);
+void astra_stream_tty_signal(AstraStreamSource *input,
+                             AstraStreamTtySignal signal, void *context);
 
 /*
  * One message of text, and never part of one. A length past
@@ -193,5 +200,6 @@ uint32_t astra_stream_read_wait(uint32_t source, uint32_t *wait_handle,
 uint32_t astra_stream_tty_get(uint32_t handle, AstraTtyState *state);
 uint32_t astra_stream_tty_set(uint32_t handle, uint32_t action,
                               const AstraTtyState *state);
+uint32_t astra_stream_identity(uint32_t handle, AstraStreamIdentity *identity);
 
 #endif

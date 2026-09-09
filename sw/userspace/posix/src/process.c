@@ -1,3 +1,5 @@
+#define _GNU_SOURCE 1
+
 #include <astra/runtime.h>
 #include <astra/posix_descriptor.h>
 #include <astra/status.h>
@@ -17,6 +19,32 @@ typedef struct AstraPosixChild {
 } AstraPosixChild;
 
 static AstraPosixChild *children;
+
+uint32_t
+astra_posix_process_service(void)
+{
+    const AstraStartupCapability *capability = astra_startup_capability(
+        astra_posix_startup(), ASTRA_CAPABILITY_POSIX_PROCESS);
+
+    return capability != NULL ? capability->handle : 0u;
+}
+
+static int
+posix_process_error(uint32_t status)
+{
+    if (status == ASTRA_STATUS_NOT_FOUND)
+        errno = ESRCH;
+    else if (status == ASTRA_STATUS_ACCESS)
+        errno = EPERM;
+    else if (status == ASTRA_STATUS_BUSY)
+        errno = EPERM;
+    else if (status == ASTRA_STATUS_INVALID ||
+             status == ASTRA_STATUS_PROTOCOL)
+        errno = EINVAL;
+    else
+        errno = EIO;
+    return -1;
+}
 
 static void
 discard_inherited_children(void)
@@ -77,6 +105,29 @@ fork(void)
         errno = EIO;
         return (pid_t)-1;
     }
+    {
+        uint32_t service = astra_posix_process_service();
+
+        if (service != 0u) {
+            result = astra_posix_process_register(service, handle,
+                                                   process_id, 0u);
+            if (result != ASTRA_STATUS_OK) {
+                (void)astra_process_terminate(handle, SIGKILL);
+                (void)astra_close(handle);
+                free(child);
+                (void)posix_process_error(result);
+                return (pid_t)-1;
+            }
+        }
+    }
+    result = astra_process_resume(handle);
+    if (result != ASTRA_SYSCALL_OK) {
+        (void)astra_process_terminate(handle, SIGKILL);
+        (void)astra_close(handle);
+        free(child);
+        errno = EIO;
+        return (pid_t)-1;
+    }
     child->handle = handle;
     child->pid = (pid_t)process_id;
     child->next = children;
@@ -84,9 +135,163 @@ fork(void)
     return child->pid;
 }
 
+pid_t
+getpid(void)
+{
+    AstraPosixProcessReply reply;
+    uint32_t service = astra_posix_process_service();
+
+    if (service == 0u ||
+        astra_posix_process_query(service, 0, &reply) != ASTRA_STATUS_OK)
+        return (pid_t)-1;
+    return (pid_t)reply.process;
+}
+
+pid_t
+getppid(void)
+{
+    AstraPosixProcessReply reply;
+    uint32_t service = astra_posix_process_service();
+
+    if (service == 0u ||
+        astra_posix_process_query(service, 0, &reply) != ASTRA_STATUS_OK)
+        return (pid_t)-1;
+    return (pid_t)reply.parent;
+}
+
+int
+kill(pid_t process, int signal_number)
+{
+    uint32_t service = astra_posix_process_service();
+    uint32_t status;
+
+    if (signal_number < 0 || signal_number >= 32) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (service == 0u) {
+        errno = ENOSYS;
+        return -1;
+    }
+    status = astra_posix_process_signal(service, (int32_t)process,
+                                        (uint32_t)signal_number);
+    return status == ASTRA_STATUS_OK ? 0 : posix_process_error(status);
+}
+
+int
+killpg(pid_t group, int signal_number)
+{
+    uint32_t service = astra_posix_process_service();
+    uint32_t status;
+
+    if (group <= 0 || signal_number < 0 || signal_number >= 32) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (service == 0u) {
+        errno = ENOSYS;
+        return -1;
+    }
+    status = astra_posix_process_signal_group(
+        service, (int32_t)group, (uint32_t)signal_number);
+    return status == ASTRA_STATUS_OK ? 0 : posix_process_error(status);
+}
+
+int
+setpgid(pid_t process, pid_t group)
+{
+    uint32_t service = astra_posix_process_service();
+    uint32_t status;
+
+    if (process < 0 || group < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (service == 0u) {
+        errno = ENOSYS;
+        return -1;
+    }
+    status = astra_posix_process_setpgid(service, (int32_t)process,
+                                         (int32_t)group);
+    return status == ASTRA_STATUS_OK ? 0 : posix_process_error(status);
+}
+
+pid_t
+getpgid(pid_t process)
+{
+    AstraPosixProcessReply reply;
+    uint32_t service = astra_posix_process_service();
+    uint32_t status;
+
+    if (process < 0) {
+        errno = EINVAL;
+        return (pid_t)-1;
+    }
+    if (service == 0u) {
+        errno = ENOSYS;
+        return (pid_t)-1;
+    }
+    status = astra_posix_process_query(service, (int32_t)process, &reply);
+    if (status != ASTRA_STATUS_OK) {
+        (void)posix_process_error(status);
+        return (pid_t)-1;
+    }
+    return (pid_t)reply.group;
+}
+
+pid_t
+getpgrp(void)
+{
+    return getpgid(0);
+}
+
+pid_t
+getsid(pid_t process)
+{
+    AstraPosixProcessReply reply;
+    uint32_t service = astra_posix_process_service();
+    uint32_t status;
+
+    if (process < 0) {
+        errno = EINVAL;
+        return (pid_t)-1;
+    }
+    if (service == 0u) {
+        errno = ENOSYS;
+        return (pid_t)-1;
+    }
+    status = astra_posix_process_query(service, (int32_t)process, &reply);
+    if (status != ASTRA_STATUS_OK) {
+        (void)posix_process_error(status);
+        return (pid_t)-1;
+    }
+    return (pid_t)reply.session;
+}
+
+pid_t
+setsid(void)
+{
+    AstraPosixProcessReply reply;
+    uint32_t service = astra_posix_process_service();
+    uint32_t status;
+
+    if (service == 0u) {
+        errno = ENOSYS;
+        return (pid_t)-1;
+    }
+    status = astra_posix_process_setsid(service, &reply);
+    if (status != ASTRA_STATUS_OK) {
+        (void)posix_process_error(status);
+        return (pid_t)-1;
+    }
+    return (pid_t)reply.session;
+}
+
 static int
 posix_wait_status(uint32_t astra_status, uint32_t wait_result)
 {
+    if (ASTRA_STATUS_IS_SIGNALLED(astra_status))
+        return (int)ASTRA_STATUS_SIGNAL_NUMBER(astra_status);
     if (wait_result == ASTRA_SYSCALL_PEER_DEAD ||
         (astra_status & ASTRA_STATUS_VERDICT) != 0u)
         return SIGSEGV;
@@ -116,7 +321,8 @@ reap_child(AstraPosixChild *child, AstraPosixChild *previous,
 pid_t
 waitpid(pid_t pid, int *status, int options)
 {
-    if ((options & ~WNOHANG) != 0 || pid == 0 || pid < (pid_t)-1) {
+    if ((options & ~(WNOHANG | WUNTRACED | WCONTINUED)) != 0 ||
+        pid == 0 || pid < (pid_t)-1) {
         errno = EINVAL;
         return (pid_t)-1;
     }

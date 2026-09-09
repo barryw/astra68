@@ -13,8 +13,10 @@
 
 #include <console_stream.h>
 
+#include <astra/posix_process.h>
 #include <astra/runtime.h>
 #include <astra/keymap.h>
+#include <astra/status.h>
 #include <astra/stream.h>
 #include <astra/syscall.h>
 
@@ -55,6 +57,7 @@ static uint32_t source_area;
 static uint8_t *source_storage;
 static uint32_t source_storage_size;
 static int stream_ready;
+static uint32_t posix_process_service;
 /*
  * The other place STDOUT can point. One port, made the first time something
  * asks and kept afterwards, because a shell redirects often and a port per
@@ -95,9 +98,25 @@ render(void *context, const uint8_t *bytes, uint32_t length,
     }
 }
 
-int
-console_stream_start(AstraTerminal *terminal)
+static void
+terminal_signal(void *context, uint32_t control)
 {
+    uint32_t service = *(const uint32_t *)context;
+    uint32_t signal = control == ASTRA_TTY_VINTR ?
+        ASTRA_POSIX_SIGNAL_INTERRUPT :
+        (control == ASTRA_TTY_VQUIT ? ASTRA_POSIX_SIGNAL_QUIT :
+                                     ASTRA_POSIX_SIGNAL_TTY_STOP);
+
+    if (service != 0u)
+        (void)astra_posix_process_tty_signal(service, signal);
+}
+
+int
+console_stream_start(AstraTerminal *terminal, uint32_t process_service)
+{
+    AstraPosixProcessReply process = {0};
+    uint32_t terminal_id = 0u;
+
     if (stream_ready) {
         return 1;
     }
@@ -155,7 +174,13 @@ console_stream_start(AstraTerminal *terminal)
         return 0;
     }
     astra_stream_tty_state_init(&tty);
-    astra_stream_tty_bind(&sink, &source, &tty);
+    if (process_service != 0u &&
+        astra_posix_process_query(process_service, 0, &process) ==
+            ASTRA_STATUS_OK)
+        terminal_id = (uint32_t)process.session;
+    astra_stream_tty_bind(&sink, &source, &tty, terminal_id);
+    posix_process_service = process_service;
+    astra_stream_tty_signal(&source, terminal_signal, &posix_process_service);
     /*
      * How big this sink is, for a program that pages. It comes from the
      * terminal rather than a constant, which is the whole reason the question

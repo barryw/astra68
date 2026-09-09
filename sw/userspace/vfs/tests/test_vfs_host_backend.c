@@ -99,6 +99,10 @@ uint32_t astra_vfs_host_transport_submit(
         assert(strcmp(command->path, "/new") == 0 &&
                strcmp(command->path2, "/link") == 0);
         break;
+    case ASTRA_HOST_FS_LINK:
+        assert(strcmp(command->path, "/new") == 0 &&
+               strcmp(command->path2, "/hard-link") == 0);
+        break;
     case ASTRA_HOST_FS_SYNC:
     case ASTRA_HOST_FS_CLOSE:
         assert(command->handle == 0x1234u);
@@ -166,9 +170,11 @@ int main(void)
     assert(moved == 4u && memcmp(bytes, "/new", 4u) == 0);
     EXPECT(ASTRA_HOST_FS_SYMLINK);
     assert(ops->symlink(&backend, "/new", "/link") == ASTRA_VFS_OK);
+    EXPECT(ASTRA_HOST_FS_LINK);
+    assert(ops->link(&backend, "/new", "/hard-link") == ASTRA_VFS_OK);
     EXPECT(ASTRA_HOST_FS_CLOSE);
     assert(ops->close(&backend, node) == ASTRA_VFS_OK);
 #undef EXPECT
-    assert(host.calls == 14u);
+    assert(host.calls == 15u);
     return 0;
 }

@@ -942,3 +942,35 @@ astra_vfs_symlink(AstraVfsClient *client, const char *target,
         return ASTRA_VFS_ERR_INVALID;
     return exchange(client, call, ASTRA_VFS_OP_SYMLINK_TO);
 }
+
+uint32_t
+astra_vfs_link(AstraVfsClient *client, const char *from, const char *to)
+{
+    const AstraVfsBackendOps *ops;
+    void *context;
+    AstraVfsCallState *call;
+    AstraVfsRenameRequest *request;
+    uint32_t status;
+
+    if (client == NULL || from == NULL || to == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    if (client->version < UINT16_C(22))
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    if (client->direct_backend_ops != NULL) {
+        status = backend_enter(client, &ops, &context);
+        if (status != ASTRA_VFS_OK)
+            return status;
+        status = ops->link(context, from, to);
+        backend_leave(client);
+        return status;
+    }
+    call = call_state(client);
+    request = &call->rename_request;
+    begin_request(client, &request->request,
+                  (uint16_t)ASTRA_VFS_RENAME_REQUEST_SIZE);
+    if (!set_path(&request->request, from) ||
+        !set_path_bytes(request->to, to))
+        return ASTRA_VFS_ERR_INVALID;
+    return exchange_request(client, ASTRA_VFS_OP_LINK, &request->request,
+                            call);
+}

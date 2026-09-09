@@ -11,6 +11,8 @@ import tempfile
 import threading
 import time
 
+from qemu_runtime import DEFAULT_MEMORY
+
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SPEC = importlib.util.spec_from_file_location(
@@ -39,7 +41,7 @@ def run(qemu, rom, expected_mode, deadline):
         environment = os.environ.copy()
         environment["ASTRA_HOSTFS_ROOT"] = hostfs
         process = subprocess.Popen([
-            qemu, "-M", "astra68", "-m", "128M", "-bios", rom,
+            qemu, "-M", "astra68", "-m", DEFAULT_MEMORY, "-bios", rom,
             "-display", "none", "-monitor", "none", "-serial", "stdio",
             "-no-reboot", "-qmp", "unix:%s,server=on,wait=off" % qmp_path,
         ], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,

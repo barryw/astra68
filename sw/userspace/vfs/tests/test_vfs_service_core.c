@@ -370,10 +370,22 @@ fake_symlink(void *context, const char *target, const char *path)
     return ASTRA_VFS_OK;
 }
 
+static char linked_from[ASTRA_VFS_PATH_MAX];
+static char linked_to[ASTRA_VFS_PATH_MAX];
+
+static uint32_t
+fake_link(void *context, const char *from, const char *to)
+{
+    (void)context;
+    (void)snprintf(linked_from, sizeof(linked_from), "%s", from);
+    (void)snprintf(linked_to, sizeof(linked_to), "%s", to);
+    return ASTRA_VFS_OK;
+}
+
 static const AstraVfsBackendOps fake_ops = {
     fake_open, fake_close, fake_read, fake_write, fake_sync, fake_truncate,
     fake_stat, fake_readdir, fake_mkdir, fake_unlink, fake_rename,
-    fake_chmod, fake_readlink, fake_symlink
+    fake_chmod, fake_readlink, fake_symlink, fake_link
 };
 
 static AstraVfsService service;
@@ -1488,6 +1500,14 @@ test_client_through_transport(void)
            ASTRA_VFS_ERR_NOT_FOUND);
     assert(astra_vfs_stat(&client, "/dir/renamed.txt", &size, &kind) ==
            ASTRA_VFS_OK);
+    assert(astra_vfs_link(&client, "/dir/renamed.txt", "/dir/alias.txt") ==
+           ASTRA_VFS_OK);
+    assert(strcmp(linked_from, "/dir/renamed.txt") == 0);
+    assert(strcmp(linked_to, "/dir/alias.txt") == 0);
+    client.version = UINT16_C(21);
+    assert(astra_vfs_link(&client, "/dir/renamed.txt", "/dir/old.txt") ==
+           ASTRA_VFS_ERR_UNSUPPORTED);
+    client.version = ASTRA_VFS_VERSION;
     assert(fake_create("/a", ASTRA_VFS_KIND_FILE) != NULL);
     assert(fake_create("/b", ASTRA_VFS_KIND_FILE) != NULL);
     assert(fake_create("/c", ASTRA_VFS_KIND_FILE) != NULL);

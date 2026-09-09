@@ -24,7 +24,8 @@ special-cased into the modules, and a module never changes its accounting to
 stay readable.
 
 `METRICS:` is separate from `PROC:` because the ownership is different.
-`PROC:` is the supervisor's generation-checked view of processes it owns.
+`PROC:` is the supervisor's capability-gated rendering of Axiom's complete
+generation-checked live-process registry.
 `METRICS:` is a read-only capability served by hostfs, which already owns the
 host-device channel and the primary VFS service whose counters it publishes.
 The terminal receives `METRICS:r`; programs which are not granted that mount
@@ -138,13 +139,16 @@ ticks, syscalls, handle references, accumulated runtime, and elapsed lifetime.
 Separate `mem`, `cpu`, and `threads` leaves remain optional presentation work;
 the accounting they would expose is not duplicated to create them.
 
-`snapshot` is the list fast path. Each 96-byte `AstraProcSnapshot` contains the
-80-byte process information record and a bounded 32-byte command name. The
-supervisor renders it directly from the process handles it already owns, and
-`ps` reads the complete bounded table with the existing fused `READ_PATH`
-operation rather than attaching the filesystem library or opening and parsing
-one text leaf per process. A disappearing process is skipped, so the view never
-fabricates a stale row.
+`snapshot` is the list fast path. Each 112-byte `AstraProcSnapshot` contains the
+80-byte process information record and a bounded 32-byte command name. Axiom
+fills the physical process-slot table from every created or running process,
+regardless of which service or application launched it; unused and dead slots
+are zero. Only the registered initial supervisor can take that complete
+snapshot. The supervisor renders it through `PROC:`, and `ps` reads the fixed
+table with the existing fused `READ_PATH` operation rather than opening and
+parsing one text leaf per process. This gives every granted observer one
+consistent view without retaining dead processes as zombies or making process
+visibility depend on launcher bookkeeping.
 
 CPU time is measured, not inferred from schedule counts. Axiom timestamps the
 common user-resume and kernel-entry boundaries with the low cycle counter and
@@ -174,11 +178,12 @@ A Unix `/proc` is ambient: any process can enumerate every other process
 because the namespace is global. Astra is capability-based, and that difference
 must not be papered over.
 
-`PROC:` is a view rendered by an introspection service that holds the observer
-authority. A process can see it because it was granted a handle to that mount,
-and the rights on that mount decide how much it can see. Killing is not a write
-to a control file: it is a process-control operation that requires
-process-control authority, mediated by the same service.
+`PROC:` is a view rendered by the initial supervisor, which alone holds the
+kernel's complete-snapshot authority. A process can see it because it was
+granted a handle to that mount, and the rights on that mount decide how much it
+can see. Killing is not a write to a control file: it is a process-control
+operation that requires process-control authority, mediated by the same
+service.
 
 The result keeps `ps`, `top`, and `kill` exactly as familiar as they should be,
 without granting every process the ability to inspect every other one by

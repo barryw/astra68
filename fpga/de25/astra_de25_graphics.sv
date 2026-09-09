@@ -425,7 +425,7 @@ module astra_de25_graphics (
     wire [31:0] framebuffer_axi_response_stall_cycles;
     wire scene_active;
     astra_graphics_pipeline #(
-        .ARENA_BASE(32'h40000000), .ARENA_LIMIT(32'h80000000),
+        .ARENA_BASE(32'h40000000), .ARENA_LIMIT(32'h60000000),
         .AXI_ID_WIDTH(3)
     ) pipeline_i (
         .build_clk(build_clk), .build_reset(build_reset),

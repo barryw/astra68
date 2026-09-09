@@ -320,10 +320,15 @@ static uint32_t host_symlink(void *context, const char *target,
     return host_two_paths(context, target, path, ASTRA_HOST_FS_SYMLINK);
 }
 
+static uint32_t host_link(void *context, const char *from, const char *to)
+{
+    return host_two_paths(context, from, to, ASTRA_HOST_FS_LINK);
+}
+
 static const AstraVfsBackendOps host_ops = {
     host_open, host_close, host_read, host_write, host_sync, host_truncate,
     host_stat, host_readdir, host_mkdir, host_unlink, host_rename, host_chmod,
-    host_readlink, host_symlink
+    host_readlink, host_symlink, host_link
 };
 
 int astra_vfs_host_init(AstraVfsHostBackend *backend,

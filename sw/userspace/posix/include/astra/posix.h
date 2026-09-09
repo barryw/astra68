@@ -1,6 +1,7 @@
 #ifndef ASTRA_POSIX_H
 #define ASTRA_POSIX_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <astra/process.h>
@@ -24,5 +25,15 @@
  * from the POSIX library's `main` adapter when that archive member is needed.
  */
 void astra_posix_start(const AstraStartupInfo *startup);
+
+/* Native capabilities remain available to POSIX-entry Astra programs. */
+const AstraStartupInfo *astra_posix_startup(void);
+
+/* The process/session service granted at startup, or zero when unavailable. */
+uint32_t astra_posix_process_service(void);
+uint32_t astra_posix_signal_generation(void);
+
+/* Completes a POSIX write across short transfers and signal interruption. */
+int astra_posix_write_all(int descriptor, const void *bytes, size_t length);
 
 #endif

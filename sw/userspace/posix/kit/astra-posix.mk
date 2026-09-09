@@ -28,6 +28,7 @@ ASTRA_POSIX_CXXFLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os \
 	-ffunction-sections -fdata-sections
 ASTRA_POSIX_LDFLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	-Wl,--build-id=none -Wl,--gc-sections \
+	-Wl,--undefined=astra_posix_entry_contract \
 	-T $(ASTRA_POSIX_RUNTIME)/astra_user.ld
 ASTRA_POSIX_CRT0 := $(ASTRA_POSIX_RUNTIME)/build/m68k/crt0-hosted.o
 ASTRA_POSIX_PROGRAM_SOURCE := $(ASTRA_POSIX_KIT_DIR)/program.c

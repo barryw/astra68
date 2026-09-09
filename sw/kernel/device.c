@@ -335,6 +335,7 @@ KernelDeviceStatus kernel_device_owner_died(uint32_t owner,
 {
     uint32_t revoked = 0u;
     KernelDeviceStatus result = KERNEL_DEVICE_OK;
+    bool owned = false;
 
     if (owner == 0u)
         return KERNEL_DEVICE_INVALID_ARGUMENT;
@@ -345,12 +346,15 @@ KernelDeviceStatus kernel_device_owner_died(uint32_t owner,
         if (lease->state != KERNEL_DEVICE_LEASE_ACTIVE ||
             lease->owner != owner)
             continue;
+        owned = true;
+        if (lease->references != 1u)
+            continue;
         status = revoke_lease(lease);
         if (status != KERNEL_DEVICE_OK && result == KERNEL_DEVICE_OK)
             result = status;
         ++revoked;
     }
-    if (revoked != 0u)
+    if (owned)
         ++device_stats.owner_deaths;
     if (revoked_leases != NULL)
         *revoked_leases = revoked;

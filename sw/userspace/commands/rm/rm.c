@@ -18,20 +18,20 @@
  */
 
 #include <astra/vfs_process.h>
+#include <astra/posix.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
-#include <astra/stream.h>
 #include <astra/vfs_union.h>
+
+#include <stdio.h>
 
 ASTRA_PROGRAM("rm", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
-static uint32_t error_handle;
-
 static void
 say(const char *text)
 {
-    (void)astra_print(error_handle, text);
+    (void)fputs(text, stderr);
 }
 
 static int remove_name(const char *name)
@@ -66,22 +66,15 @@ static int remove_name(const char *name)
 }
 
 int
-astra_main(const AstraStartupInfo *startup)
+main(int argc, char **argv)
 {
-    const AstraStartupCapability *capability;
+    const AstraStartupInfo *startup = astra_posix_startup();
     int result = 0;
     uint32_t status;
 
     if (!astra_startup_validate(startup))
         return ASTRA_STATUS_INVALID;
-    capability = astra_startup_capability(startup, "STDERR");
-    if (capability == NULL)
-        capability = astra_startup_capability(startup, "STDOUT");
-    if (capability != NULL)
-        error_handle = capability->handle;
-    if (error_handle == 0u)
-        return ASTRA_STATUS_ACCESS;
-    if (startup->argc < 2u) {
+    if (argc < 2) {
         say("rm: needs a name\n");
         return ASTRA_STATUS_INVALID;
     }
@@ -90,8 +83,8 @@ astra_main(const AstraStartupInfo *startup)
         say("rm: filesystem unavailable\n");
         return (int)status;
     }
-    for (uint32_t index = 1u; index < startup->argc; ++index) {
-        const char *word = astra_startup_argument(startup, index);
+    for (int index = 1; index < argc; ++index) {
+        const char *word = argv[index];
         int one;
 
         if (word == NULL || word[0] == '\0')

@@ -7,7 +7,7 @@ ifeq ($(PLATFORM),arty)
 PLATFORM_CPPFLAGS :=
 else ifeq ($(PLATFORM),de25)
 PLATFORM_CPPFLAGS := -DASTRA_GRAPHICS_ARENA_BASE_VALUE=0x40000000u \
-	-DASTRA_GRAPHICS_ARENA_LIMIT_VALUE=0x80000000u \
+	-DASTRA_GRAPHICS_ARENA_LIMIT_VALUE=0x60000000u \
 	-DASTRA_CONTROL_BASE_VALUE=0x20100000u
 else
 $(error unsupported graphics platform: $(PLATFORM))
@@ -26,24 +26,37 @@ SPLASH_TARGET := $(OUT)/astra_boot_splash.rgb565
 TARGETS := $(BOOT_TARGET) $(STATUS_TARGET) $(SPRITE_TARGET) $(RENDER_TARGET) \
 	$(COPPER_TARGET) $(AUDIO_TARGET) $(TERMINAL_TARGET) \
 	$(TIME_SYNC_TARGET) $(SPLASH_TARGET)
+HOST_TEST_TARGETS := $(OUT)/test-astra-boot-text \
+	$(OUT)/test-astra-terminal-display $(OUT)/test-astra-audio \
+	$(OUT)/test-astra-hdmi-link $(OUT)/test-astra-graphics-platform \
+	$(OUT)/test-astra-graphics-platform-de25
 ifeq ($(PLATFORM),arty)
 TARGETS += $(HDMI_LINK_TARGET)
 endif
 COMMON_SOURCES := astra_graphics_hw.c astra_boot_text.c
 COMMON_HEADERS := astra_graphics_hw.h astra_boot_text.h
-TERMINAL_FONT_SOURCE := ../graphics/post_fonts.hex
-TERMINAL_FONT_HEADER := $(OUT)/astra_terminal_font.inc
+GRAPHICS := ../../../sw/userspace/graphics
+GRAPHICS_INCLUDE := $(GRAPHICS)/include
+GRAPHICS_GENERATED := $(GRAPHICS)/build/generated
+GRAPHICS_SOURCES := $(GRAPHICS)/src/surface.c \
+	$(GRAPHICS)/src/render_builder.c
+GRAPHICS_FONT_HEADERS := $(GRAPHICS_GENERATED)/astra_font8x8.inc \
+	$(GRAPHICS_GENERATED)/astra_ui_font.inc \
+	$(GRAPHICS_GENERATED)/astra_mono_font.inc
 SPLASH_PACKER := ../../../sw/boot/pack_arty_splash.py
 SPLASH_SOURCE := ../../../sw/boot/assets/astra_boot_splash_1280x720_blank.png
 ASTRA_INCLUDE := ../../../sw/include
 NDK_INCLUDE := ../../../ndk/include
 PROTOCOL_SPEC := ../graphics/protocol/astra_render_v1.json
 PROTOCOL_GENERATOR := ../graphics/protocol/generate_protocol.py
-CFLAGS := -std=c11 -O2 -pipe -Wall -Wextra -Werror -Wformat=2 \
-	-Wshadow -Wstrict-prototypes -D_FORTIFY_SOURCE=2 $(PLATFORM_CPPFLAGS)
+BASE_CFLAGS := -std=c11 -O2 -pipe -Wall -Wextra -Werror -Wformat=2 \
+	-Wshadow -Wstrict-prototypes -D_FORTIFY_SOURCE=2
+CFLAGS := $(BASE_CFLAGS) $(PLATFORM_CPPFLAGS)
 LDFLAGS := -static -Wl,--gc-sections
 
 .PHONY: all clean analyze test-host
+
+$(TARGETS) $(HOST_TEST_TARGETS): Makefile
 
 all: $(TARGETS)
 
@@ -100,25 +113,23 @@ $(HDMI_LINK_TARGET): astra_hdmi_link.c
 	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections \
 		astra_hdmi_link.c $(LDFLAGS) -o $@
 
-$(TERMINAL_FONT_HEADER): $(TERMINAL_FONT_SOURCE)
-	mkdir -p $(OUT)
-	{ printf 'static const uint8_t terminal_font[] = {\n'; \
-	  awk '{ printf "0x%s,\n", $$1 }' $<; \
-	  printf '};\n'; } > $@
+$(GRAPHICS_FONT_HEADERS):
+	$(MAKE) -C $(GRAPHICS) $(@:$(GRAPHICS)/%=%)
 
 $(TERMINAL_TARGET): astra_terminal_display.c $(COMMON_SOURCES) \
-		$(COMMON_HEADERS) $(TERMINAL_FONT_HEADER) \
+		$(COMMON_HEADERS) $(GRAPHICS_SOURCES) $(GRAPHICS_FONT_HEADERS) \
 		astra_render_protocol.h \
 		$(ASTRA_INCLUDE)/astra/display.h \
 		$(ASTRA_INCLUDE)/astra/display_mailbox.h \
 		$(ASTRA_INCLUDE)/astra/render_batch.h
 	mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -I$(OUT) -I$(ASTRA_INCLUDE) \
+	$(CC) $(CFLAGS) -I. -I$(OUT) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
+		-I$(GRAPHICS_INCLUDE) -I$(GRAPHICS_GENERATED) \
 		-ffunction-sections -fdata-sections \
-		astra_terminal_display.c $(COMMON_SOURCES) \
+		astra_terminal_display.c $(COMMON_SOURCES) $(GRAPHICS_SOURCES) \
 		$(LDFLAGS) -o $@
 
-analyze: astra_render_protocol.h $(TERMINAL_FONT_HEADER)
+analyze: astra_render_protocol.h $(GRAPHICS_FONT_HEADERS)
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only \
 		astra_graphics_boot.c $(COMMON_SOURCES)
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only \
@@ -132,13 +143,12 @@ analyze: astra_render_protocol.h $(TERMINAL_FONT_HEADER)
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_audio_certify.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_hdmi_link.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_time_sync.c
-	$(CC) $(CFLAGS) -I$(OUT) -I$(ASTRA_INCLUDE) -fanalyzer -fsyntax-only \
-		astra_terminal_display.c $(COMMON_SOURCES)
+	$(CC) $(CFLAGS) -I. -I$(OUT) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
+		-I$(GRAPHICS_INCLUDE) -I$(GRAPHICS_GENERATED) \
+		-fanalyzer -fsyntax-only astra_terminal_display.c \
+		$(COMMON_SOURCES) $(GRAPHICS_SOURCES)
 
-test-host: $(OUT)/test-astra-boot-text $(OUT)/test-astra-terminal-display \
-		$(OUT)/test-astra-audio $(OUT)/test-astra-hdmi-link \
-		$(OUT)/test-astra-graphics-platform \
-		$(OUT)/test-astra-graphics-platform-de25
+test-host: $(HOST_TEST_TARGETS)
 	$(OUT)/test-astra-boot-text
 	$(OUT)/test-astra-terminal-display --self-test
 	$(OUT)/test-astra-audio --self-test
@@ -156,14 +166,16 @@ $(OUT)/test-astra-boot-text: test_astra_boot_text.c \
 	$(HOSTCC) $(CFLAGS) test_astra_boot_text.c $(COMMON_SOURCES) -o $@
 
 $(OUT)/test-astra-terminal-display: astra_terminal_display.c \
-		$(COMMON_SOURCES) $(COMMON_HEADERS) $(TERMINAL_FONT_HEADER) \
+		$(COMMON_SOURCES) $(COMMON_HEADERS) $(GRAPHICS_SOURCES) \
+		$(GRAPHICS_FONT_HEADERS) \
 		astra_render_protocol.h \
 		$(ASTRA_INCLUDE)/astra/display.h \
 		$(ASTRA_INCLUDE)/astra/display_mailbox.h \
 		$(ASTRA_INCLUDE)/astra/render_batch.h
 	mkdir -p $(OUT)
-	$(HOSTCC) $(CFLAGS) -I$(OUT) -I$(ASTRA_INCLUDE) astra_terminal_display.c \
-		$(COMMON_SOURCES) -o $@
+	$(HOSTCC) $(CFLAGS) -I. -I$(OUT) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
+		-I$(GRAPHICS_INCLUDE) -I$(GRAPHICS_GENERATED) \
+		astra_terminal_display.c $(COMMON_SOURCES) $(GRAPHICS_SOURCES) -o $@
 
 $(OUT)/test-astra-audio: astra_audio_certify.c
 	mkdir -p $(OUT)
@@ -176,25 +188,20 @@ $(OUT)/test-astra-hdmi-link: astra_hdmi_link.c
 $(OUT)/test-astra-graphics-platform: test_astra_graphics_platform.c \
         astra_graphics_hw.c astra_graphics_hw.h
 	mkdir -p $(OUT)
-	$(HOSTCC) $(CFLAGS) test_astra_graphics_platform.c \
+	$(HOSTCC) $(BASE_CFLAGS) test_astra_graphics_platform.c \
 		astra_graphics_hw.c -o $@
 
 $(OUT)/test-astra-graphics-platform-de25: test_astra_graphics_platform.c \
         astra_graphics_hw.c astra_graphics_hw.h
 	mkdir -p $(OUT)
-	$(HOSTCC) $(CFLAGS) \
+	$(HOSTCC) $(BASE_CFLAGS) \
 		-DASTRA_GRAPHICS_ARENA_BASE_VALUE=0x40000000u \
-		-DASTRA_GRAPHICS_ARENA_LIMIT_VALUE=0x80000000u \
+		-DASTRA_GRAPHICS_ARENA_LIMIT_VALUE=0x60000000u \
 		-DASTRA_CONTROL_BASE_VALUE=0x20100000u \
 		-DEXPECT_ARENA_BASE=0x40000000u \
-		-DEXPECT_ARENA_LIMIT=0x80000000u \
+		-DEXPECT_ARENA_LIMIT=0x60000000u \
 		-DEXPECT_CONTROL_BASE=0x20100000u \
 		test_astra_graphics_platform.c astra_graphics_hw.c -o $@
 
 clean:
-	rm -f $(TARGETS) $(OUT)/test-astra-boot-text \
-		$(OUT)/test-astra-terminal-display $(OUT)/test-astra-audio \
-		$(OUT)/test-astra-hdmi-link \
-		$(OUT)/test-astra-graphics-platform \
-		$(OUT)/test-astra-graphics-platform-de25 \
-		$(TERMINAL_FONT_HEADER)
+	rm -f $(TARGETS) $(HOST_TEST_TARGETS)

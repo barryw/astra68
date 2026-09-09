@@ -14,7 +14,7 @@ TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -ffreestanding -fno-builtin \
 PIC_FLAGS := $(TARGET_FLAGS) -fPIC -fvisibility=hidden
 HOST_FLAGS := -O2 -fno-builtin
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
-TARGET_C_SOURCES := src/startup.c src/lifecycle.c src/service.c src/arguments.c src/syscall.c src/launch.c src/port.c \
+TARGET_C_SOURCES := src/startup.c src/lifecycle.c src/service.c src/arguments.c src/syscall.c src/launch.c src/port.c src/posix_process.c \
 	src/event_control.c src/memory.c \
 	src/log.c src/sort.c src/assert.c src/event_catalog.c src/library.c
 TARGET_ASM_SOURCES := src/m68k/syscall.S src/m68k/thread_start.S \
@@ -42,6 +42,7 @@ HOSTED_CRT0 := build/m68k/crt0-hosted.o
 HOST_TEST := build/host/test_runtime
 STARTUP_SERVICE_TEST := build/host/test_startup_service
 LIFECYCLE_TEST := build/host/test_lifecycle
+POSIX_PROCESS_TEST := build/host/test_posix_process
 
 all: $(TARGET) $(CRT0) $(HOSTED_CRT0) link-contract size
 
@@ -109,10 +110,15 @@ $(LIFECYCLE_TEST): src/lifecycle.c tests/test_lifecycle.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
-test: $(HOST_TEST) $(STARTUP_SERVICE_TEST) $(LIFECYCLE_TEST)
+$(POSIX_PROCESS_TEST): src/posix_process.c tests/test_posix_process.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
+
+test: $(HOST_TEST) $(STARTUP_SERVICE_TEST) $(LIFECYCLE_TEST) $(POSIX_PROCESS_TEST)
 	./$(HOST_TEST)
 	./$(STARTUP_SERVICE_TEST)
 	./$(LIFECYCLE_TEST)
+	./$(POSIX_PROCESS_TEST)
 
 sanitize:
 	@mkdir -p build/host

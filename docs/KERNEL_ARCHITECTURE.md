@@ -17,7 +17,7 @@ Status words are precise:
 ## Machine contract
 
 - **LOCKED:** one big-endian MC68040-compatible CPU with integrated MMU.
-- **LOCKED:** 128 MiB Astra guest RAM, no kernel floating point,
+- **LOCKED:** 512 MiB Astra guest RAM, no kernel floating point,
   `-msoft-float`.
 - **LOCKED:** no SMP, RCU, lock-free framework, swap, or memory overcommit.
 - **LOCKED:** bounded latency and predictable memory use outrank feature count.

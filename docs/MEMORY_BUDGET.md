@@ -1,26 +1,23 @@
 # Axiom kernel memory budget
 
-Status: 128 MiB Arty guest profile implemented and hardware-gated (2026-08-09)
+Status: 512 MiB DE25 guest and 512 MiB Media RAM profile certified
 
-The active Arty-hosted machine has 128 MiB of guest RAM. Its per-frame tables
-are sized for 32,768 pages, while initialization and
-allocator accounting use the RAM size reported by BootInfo. Every static pool,
-frame, mapping, queue, pin, and graphics reservation is reported separately. A
-budget is not permission to allocate dynamically without a quota.
+The active DE25-hosted machine has 512 MiB of guest RAM. Its per-frame tables
+are sized for 131,072 pages from the RAM size reported by BootInfo. Every
+static pool, frame, mapping, queue, pin, and Media RAM reservation is reported
+separately. A budget is not permission to allocate dynamically without a quota.
 
-The Arty's 512 MiB DDR is divided at runtime into 128 MiB of physically reserved
-graphics memory, 128 MiB preallocated as cached QEMU guest RAM, and a 256 MiB
-Linux/host-services budget. Guest RAM deliberately stays in Linux's normal
-cached allocator; an uncached `/dev/mem` reservation would make every emulated
-68040 memory access a device-memory access.
+The DE25 has two independent 1 GiB LPDDR4 devices. QEMU preallocates the 512 MiB
+guest from HPS LPDDR4A; Linux and host services use the remainder. The FPGA
+owns LPDDR4B and exposes a 512 MiB Media RAM arena for graphics and sound.
+Guest RAM deliberately stays in Linux's normal cached allocator; an uncached
+`/dev/mem` reservation would make every emulated 68040 memory access a
+device-memory access.
 
-The current release kernel is 124,908 bytes on disk. Its 128 MiB frame metadata
-ends at `0x02140280`, inside the `0x02044000..0x02153fff` kernel reservation,
-with the retained trace address unchanged at `0x020c4000`.
-
-The retained Arty run reports 32,768 guest pages, 32,370 initially free,
-147,892 KiB QEMU RSS, 203,232 KiB Linux `MemAvailable`, and zero swap after the
-terminal reaches `WORK:>`.
+The 512 MiB profile needs 2,293,760 bytes of frame metadata, rounded to 560
+pages. It is carved at `0x04000000..0x0422ffff` from the largest usable BootInfo
+range; fixed trace and object-table addresses do not move. Exact release image
+sizes and retained hardware measurements live in `CURRENT_STATE.md`.
 
 The filesystem cache is 1,024 x 4 KiB and lives inside a fixed 5 MiB arena in
 each image that mounts ext4. The supervisor uses its arena only for bootstrap;
@@ -29,16 +26,23 @@ admission is capped at 2,048 pages (8 MiB), raised from 128 pages because the
 old 512 KiB ceiling rejected the bounded arena before its allocator could run.
 Pages remain allocated and charged on demand; the ceiling reserves nothing.
 
-A shared area may contain at most 2 MiB, enough for one 1280x720 RGB565 surface
-(1,843,200 bytes). The current desktop uses a 900x500 client surface (900,000
-bytes); the display service separately owns one 1,843,200-byte contiguous DMA
-scanout. These are charged allocations inside the 128 MiB guest, not static
-reservations taken from Linux or the 128 MiB physical graphics arena.
+A shared area may contain at most 2 MiB. The current desktop uses a 900x500
+client surface (900,000 bytes); the display service separately owns its scanout
+surface. These are charged allocations inside the 512 MiB guest, not static
+reservations taken from Linux or the separate Media RAM arena.
 
 ## Physical baseline
 
 The exact reservations are in `MEMORY_MAP.md`. The kernel starts from BootInfo
-ranges and sizes allocator accounting from the reported 128 MiB guest map.
+ranges and sizes allocator accounting from the reported guest map.
+
+The retained DE25 release passed the ROM's full-range 512 MiB guest BIST,
+reported 131,072 physical pages and 127,244 free pages at Axiom startup, and
+reached stage 8 with storage and every resident service running. QEMU used
+553,940 KiB RSS after startup. The separate 512 MiB Media RAM window passed
+stuck-address, random-value, arithmetic, logical, sequential-increment, and all
+64 solid-bit patterns with zero mismatches. Testing stopped when the following
+block-sequential phase began; no claim is made for the uncompleted algorithms.
 
 ## Provisional device-lease substrate (2026-08-04)
 
@@ -571,10 +575,9 @@ canary and high-water values under nested format-B faults and interrupt storms.
 
 ## Graphics arena
 
-Graphics memory is excluded from general kernel/free-process statistics once
-the boot arena is carved. The Arty target reserves the contiguous 128 MiB range
-`0x18000000..0x1fffffff` from its 512 MiB DDR as `no-map`; Linux and Axiom use
-the lower 384 MiB as general memory. The physical address is board-specific and
+Media RAM is excluded from general kernel/free-process statistics. The DE25
+target exposes the 512 MiB range `0x40000000..0x5fffffff` from FPGA LPDDR4B to
+the graphics and sound allocator. The physical address is board-specific and
 is not part of the application ABI.
 
 Baseline double-buffered 1280x720 RGB565 scanout is:

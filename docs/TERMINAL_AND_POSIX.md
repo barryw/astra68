@@ -1,11 +1,11 @@
 # Astra terminal, POSIX personality, and zsh direction
 
-Status: active implementation. Astra has a resizable GUI Terminal, shared cell
-model, command execution, exit status, files, environment, redirection, and a
-POSIX library used by stock Lua and pristine Vim. Its ANSI/VT parser covers the
-core screen, color, cursor, alternate-screen, query, and UTF-8 operations
-advertised by `astra-256color`; PTYs, job control, zsh, and Vim's complete
-interactive/full-screen qualification remain to be completed.
+Status: active implementation. Astra's resizable GUI Terminal now launches zsh
+as its default and only shell. The Terminal owns the window, terminal model,
+streams, and child lifecycle; zsh owns parsing, expansion, pipelines,
+redirection, jobs, command lookup, startup files, and exit status. The deleted
+bootstrap shell is not retained as a fallback. Stock Lua and pristine Vim use
+the same POSIX and terminal contracts.
 
 The cell model no longer has a compiled 128-by-64 ceiling. Its caller supplies
 resource-accounted storage, resize preserves content, and the Terminal
@@ -62,9 +62,25 @@ native Astra mechanisms and services
   handles | ports | shared areas | spawn | VFS | process death | waits
 ```
 
-The terminal emulator does not own shell policy. The shell does not draw
-pixels. The POSIX personality does not own native Astra process or resource
-semantics.
+The terminal emulator does not own shell policy. Zsh does not draw pixels. The
+POSIX personality does not own native Astra process or resource semantics.
+
+Terminal launches `COMMANDS:zsh` with `HOME=HOME:`, `PATH=/commands`,
+`SHELL=/commands/zsh`, and `TERM=astra-256color`. Its system zsh startup is
+scoped to `CONFIG:commands/zsh`; zsh therefore reads `CONFIG:/zshrc` without
+learning the host volume layout. Normal user startup remains `HOME:/.zshrc`.
+
+The startup file sources the first script found at `HOME:/.motd.zsh` or
+`CONFIG:motd.zsh`. If neither exists, it prints the first plain file found at
+`HOME:/.motd` or `CONFIG:motd`. Scripts can call `ps`, `metrics`, or other
+commands for dynamic content; plain files are deliberately literal and need no
+second placeholder language. User files override system files.
+
+Zsh emits the standard OSC 133 `A` prompt-start marker from `precmd` and `B`
+at the end of `PROMPT`. Terminal consumes both without drawing them and
+publishes the existing `shell ready` diagnostic event only for `B`. Tests and
+debugging tools can therefore distinguish a drawn window from a shell ready
+for input without guessing from delays or prompt text.
 
 ## 3. Terminal behavior
 
@@ -136,14 +152,9 @@ accounting, deadlines, queue limits, and peer-death behavior as native code.
 
 ## 6. Fork and subshells
 
-Full zsh semantics use process cloning for subshells, pipelines, command
-substitution, jobs, and some builtins. A spawn-only imitation is not enough.
-
-**OPEN, preferred direction:** after basic VM, shared areas, executable loading,
-and map/protect tests are stable, add one narrow kernel mechanism to clone a
-process address space with copy-on-write mappings and an explicit inherited
-handle set. The POSIX personality exposes that mechanism as `fork()`; native
-application APIs remain spawn-first and need not expose Unix inheritance.
+Zsh uses the POSIX personality's process cloning for subshells, pipelines,
+command substitution, jobs, and external commands. Native Astra applications
+remain spawn-first; Unix inheritance is confined to POSIX processes.
 
 Required properties include:
 
@@ -155,13 +166,9 @@ Required properties include:
 - no cloning of in-flight kernel waits or device ownership accidentally;
 - performance counters for clone, first-write faults, and reclamation.
 
-The zsh port should use native spawn for simple external commands where a
-small, maintainable patch preserves semantics. True subshell behavior still
-uses the compatibility clone path. An eager-copy prototype may be useful as a
-correctness oracle, but it is not the intended interactive fast path.
-
-This mechanism requires an explicit revision to `KERNEL_ARCHITECTURE.md` before code;
-this document does not silently authorize it.
+The implementation is exercised by direct external commands, pipelines,
+redirection, command substitution, exit-status propagation, Lua `os.execute`,
+and concurrent interactive zsh sessions in the QEMU gate.
 
 ## 7. Signals and job control
 
@@ -194,18 +201,18 @@ same object identity and capability checks.
 
 ## 9. Porting stages
 
-1. Build a cross libc and configure-probe profile without weakening upstream
-   feature tests.
-2. Run noninteractive `zsh -f -c` scripts with files, environment, and status.
-3. Add interactive ZLE operation on an Astra PTY.
-4. Pass redirection, pipes, command substitution, and subshell tests.
-5. Pass foreground/background jobs, stop/continue, terminal interrupt, and
-   child-death tests.
-6. Enable history, completion, selected modules, and startup caching.
-7. Run Vim with alternate screen, resize, suspend/resume, files, and crash
-   recovery.
+1. **DONE:** build the pinned upstream zsh with the Astra POSIX kit.
+2. **DONE:** make zsh the Terminal's direct default shell.
+3. **DONE:** pass files, environment, status, redirection, pipelines, command
+   substitution, ZLE editing, history, and concurrent-session tests.
+4. Qualify foreground/background jobs, stop/continue, terminal interrupt, and
+   child-death behavior.
+5. Enable completion and selected modules only where the target tests require
+   them.
+6. Finish Vim alternate-screen, resize, suspend/resume, files, and crash
+   recovery qualification.
 
-Each stage runs under host tests and the QEMU MC68040, then on the Arty. Test
+Each stage runs under host tests and the QEMU MC68040, then on the DE25. Test
 time, resident memory, binary/module size,
 prompt latency, fork/spawn cycles, and terminal input-to-pixel latency are
 recorded continuously.

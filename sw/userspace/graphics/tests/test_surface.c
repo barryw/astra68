@@ -1,4 +1,5 @@
 #include <astra/draw_list.h>
+#include <astra/display.h>
 #include <astra/render_batch.h>
 #include <astra/render_builder.h>
 #include <astra/surface.h>
@@ -17,6 +18,17 @@ static uint32_t be32(const uint8_t *bytes)
 {
     return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
            ((uint32_t)bytes[2] << 8) | bytes[3];
+}
+
+static uint32_t finish_batch(AstraRenderBuilder *builder,
+                             const uint8_t *storage)
+{
+    uint32_t bytes = astra_render_builder_finish(builder);
+
+    assert(bytes >= ASTRA_RENDER_BATCH_MIN_BYTES);
+    assert(bytes <= ASTRA_RENDER_BUILDER_BYTES);
+    assert(be32(storage + 8u) == bytes);
+    return bytes;
 }
 
 static void test_clipped_drawing_and_blit(void)
@@ -175,8 +187,7 @@ static void test_hardware_draw_list_batch(void)
     assert(astra_render_builder_blit_clipped(
         &builder, frame, offscreen, 12, 20, 160u, 80u, 8u, 1,
         17, 24, 120, 76));
-    assert(astra_render_builder_finish(&builder) ==
-           ASTRA_RENDER_BUILDER_BYTES);
+    assert(finish_batch(&builder, batch_storage) != 0u);
     assert(be32(batch_storage) == ASTRA_RENDER_BATCH_MAGIC);
     for (uint32_t index = 0u; index < be32(batch_storage + 12u); ++index) {
         const uint8_t *command = batch_storage +
@@ -215,8 +226,31 @@ static void test_hardware_draw_list_batch(void)
                                          2, 30, 940u, 548u, 10u, 0));
         assert(builder.data_cursor == data_cursor);
     }
-    assert(astra_render_builder_finish(&builder) ==
-           ASTRA_RENDER_BUILDER_BYTES);
+    assert(finish_batch(&builder, batch_storage) != 0u);
+}
+
+static void test_scanout_source_is_explicit(void)
+{
+    uint8_t batch_storage[ASTRA_RENDER_BUILDER_BYTES];
+    AstraRenderBuilder builder;
+    uint32_t frame;
+    uint32_t scanout;
+
+    assert(astra_render_builder_init(&builder, batch_storage,
+                                     sizeof(batch_storage), 1u));
+    frame = astra_render_builder_frame(&builder);
+    scanout = astra_render_builder_scanout(
+        &builder, ASTRA_RENDER_BATCH_SCANOUT0_OFFSET);
+    assert(frame != 0u && scanout != 0u && scanout != frame);
+    assert(astra_render_builder_blit_region(
+        &builder, frame, scanout, 0, 0, 0, 0,
+        ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT));
+    assert(finish_batch(&builder, batch_storage) != 0u);
+
+    assert(astra_render_builder_init(&builder, batch_storage,
+                                     sizeof(batch_storage), 1u));
+    assert(astra_render_builder_scanout(&builder, UINT32_C(0x00400000)) ==
+           0u);
 }
 
 static void test_mono_draw_list(void)
@@ -270,8 +304,7 @@ static void test_draw_list_copy_is_a_hardware_self_blit(void)
     destination = astra_render_builder_surface(&builder, 80u, 40u);
     assert(destination != 0u);
     assert(astra_render_builder_replay(&builder, destination, header));
-    assert(astra_render_builder_finish(&builder) ==
-           ASTRA_RENDER_BUILDER_BYTES);
+    assert(finish_batch(&builder, batch_storage) != 0u);
     render = batch_storage + ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
              ASTRA_RENDER_BATCH_ARENA_OFFSET;
     assert(be32(render + 4u) >> 16 == ASTRA_RENDER_OP_BLIT);
@@ -325,8 +358,7 @@ static void test_rounded_fill_has_no_overlap(void)
     assert(surface != 0u);
     assert(astra_render_builder_rounded(&solid, surface, 0, 0,
                                         100u, 60u, 12u, 0x1234u));
-    assert(astra_render_builder_finish(&solid) ==
-           ASTRA_RENDER_BUILDER_BYTES);
+    assert(finish_batch(&solid, batch_storage) != 0u);
     for (uint32_t index = 0u; index < be32(batch_storage + 12u); ++index) {
         const uint8_t *item = batch_storage +
             ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
@@ -347,6 +379,7 @@ int main(void)
     test_text();
     test_proportional_utf8_text();
     test_hardware_draw_list_batch();
+    test_scanout_source_is_explicit();
     test_mono_draw_list();
     test_draw_list_copy_is_a_hardware_self_blit();
     test_text_box_scroll_uses_overlap_safe_copy();

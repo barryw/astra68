@@ -1,4 +1,7 @@
+#include <astra/posix.h>
 #include <astra/posix_descriptor.h>
+#include <astra/runtime.h>
+#include <astra/status.h>
 #include <astra/stream.h>
 #include <astra/syscall.h>
 
@@ -44,6 +47,63 @@ static int tty_error(uint32_t status)
 {
     errno = status == ASTRA_SYSCALL_INVALID_ARGUMENT ? ENOTTY : EIO;
     return -1;
+}
+
+static int
+tty_process_error(uint32_t status)
+{
+    if (status == ASTRA_STATUS_ACCESS)
+        errno = EPERM;
+    else if (status == ASTRA_STATUS_INVALID)
+        errno = EINVAL;
+    else if (status == ASTRA_STATUS_NOT_FOUND)
+        errno = ENOTTY;
+    else
+        errno = EIO;
+    return -1;
+}
+
+static int
+tty_validate(int fd)
+{
+    AstraTtyState state;
+    uint32_t handle = tty_handle(fd);
+    uint32_t status;
+
+    if (handle == 0u)
+        return -1;
+    status = astra_stream_tty_get(handle, &state);
+    return status == ASTRA_SYSCALL_OK ? 0 : tty_error(status);
+}
+
+int
+ttyname_r(int fd, char *name, size_t size)
+{
+    static const char path[] = "/dev/tty";
+    uint32_t terminal;
+
+    if (name == NULL)
+        return EFAULT;
+    terminal = astra_posix_descriptor_terminal_id(fd);
+    if (terminal == 0u)
+        return errno;
+    if (size < sizeof(path))
+        return ERANGE;
+    (void)memcpy(name, path, sizeof(path));
+    return 0;
+}
+
+char *
+ttyname(int fd)
+{
+    static char path[sizeof("/dev/tty")];
+    int error = ttyname_r(fd, path, sizeof(path));
+
+    if (error != 0) {
+        errno = error;
+        return NULL;
+    }
+    return path;
 }
 
 static void state_to_termios(const AstraTtyState *state,
@@ -258,8 +318,62 @@ int tcsendbreak(int fd, int duration)
 
 pid_t tcgetsid(int fd)
 {
-    if (tty_handle(fd) == 0u)
+    AstraPosixProcessReply reply;
+    uint32_t service;
+    uint32_t status;
+
+    if (tty_validate(fd) != 0)
         return (pid_t)-1;
-    errno = ENOTSUP;
-    return (pid_t)-1;
+    service = astra_posix_process_service();
+    if (service == 0u) {
+        errno = ENOSYS;
+        return (pid_t)-1;
+    }
+    status = astra_posix_process_tty_foreground(service, &reply);
+    if (status != ASTRA_STATUS_OK) {
+        (void)tty_process_error(status);
+        return (pid_t)-1;
+    }
+    return (pid_t)reply.session;
+}
+
+pid_t tcgetpgrp(int fd)
+{
+    AstraPosixProcessReply reply;
+    uint32_t service;
+    uint32_t status;
+
+    if (tty_validate(fd) != 0)
+        return (pid_t)-1;
+    service = astra_posix_process_service();
+    if (service == 0u) {
+        errno = ENOSYS;
+        return (pid_t)-1;
+    }
+    status = astra_posix_process_tty_foreground(service, &reply);
+    if (status != ASTRA_STATUS_OK) {
+        (void)tty_process_error(status);
+        return (pid_t)-1;
+    }
+    return (pid_t)reply.group;
+}
+
+int tcsetpgrp(int fd, pid_t group)
+{
+    uint32_t service;
+    uint32_t status;
+
+    if (group <= 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (tty_validate(fd) != 0)
+        return -1;
+    service = astra_posix_process_service();
+    if (service == 0u) {
+        errno = ENOSYS;
+        return -1;
+    }
+    status = astra_posix_process_tty_set_foreground(service, (int32_t)group);
+    return status == ASTRA_STATUS_OK ? 0 : tty_process_error(status);
 }

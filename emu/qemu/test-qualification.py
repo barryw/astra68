@@ -42,6 +42,8 @@ import tempfile
 import threading
 import time
 
+from qemu_runtime import DEFAULT_MEMORY
+
 # Bits 7, 8 and 9: USB, Vega and Astraea. Storage (4) and input (5) are
 # present under the emulator and cannot be provoked from inside it.
 DEFAULT_MASK = 0x380
@@ -115,7 +117,7 @@ def main():
     parser.add_argument("rom", help="astra_boot.bin built with KERNEL_K1_QUALIFICATION=1")
     parser.add_argument("--image", required=True,
                         help="storage image; copied, never booted in place")
-    parser.add_argument("--memory", default="128M")
+    parser.add_argument("--memory", default=DEFAULT_MEMORY)
     parser.add_argument("--mask", default=hex(DEFAULT_MASK),
                         help="IRQ sources this machine must qualify")
     parser.add_argument("--deadline", type=float, default=120.0)

@@ -7,7 +7,6 @@ RUNTIME := ../../runtime
 STORAGE := ../../storage
 VFS := ../../vfs
 STREAMS := ../../streams
-SHELL_DIR := ../../shell
 TERMINAL := ../../terminal
 SUPERVISOR := ../../supervisor
 GRAPHICS := ../../graphics
@@ -16,7 +15,7 @@ NDK := ../../../../ndk
 CPPFLAGS := -Iinclude -I$(NDK)/include -I../../../include -I$(RUNTIME)/include \
 	-I$(STORAGE)/include \
 	-I$(VFS)/include \
-	-I$(STREAMS)/include -I$(SHELL_DIR)/include -I$(TERMINAL)/include \
+	-I$(STREAMS)/include -I$(TERMINAL)/include \
 	-I$(GRAPHICS)/include -I$(CONFIG)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
@@ -26,30 +25,29 @@ LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 TARGET := build/m68k/terminal.elf
 IMAGE := build/m68k/terminal
 CATALOG := build/m68k/astra_events.cat
-OBJECTS := build/m68k/main.o build/m68k/console_shell.o \
+OBJECTS := build/m68k/main.o build/m68k/console_session.o \
 	build/m68k/console_stream.o build/m68k/config_document.o
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
-SHELL_LIB := $(SHELL_DIR)/build/m68k/libastrashell.a
 TERMINAL_LIB := $(TERMINAL)/build/m68k/libastraterminal.a
 NDK_LIB := $(NDK)/build/m68k/libastra.a
 CRT0 := $(RUNTIME)/build/m68k/crt0.o
 SUPERVISOR_CATALOG := $(SUPERVISOR)/build/m68k/astra_events.cat
 EVENT_BASE_LD := build/m68k/event_base.ld
 CATALOG_TOOL := ../../../../tools/system_event_catalog.py
-ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(VFS) $(STREAMS) $(SHELL_DIR) \
+ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(VFS) $(STREAMS) \
 	$(TERMINAL) $(NDK) $(SUPERVISOR)
 ASTRA_PROGRAM_TARGETS := $(IMAGE) catalog-contract size
 include ../../program.mk
 
 $(TARGET): $(OBJECTS) $(EVENT_BASE_LD) $(CRT0) $(STREAMS_LIB) $(VFS_LIB) $(TERMINAL_LIB) \
-		$(SHELL_LIB) $(NDK_LIB) $(RUNTIME_LIB) \
+		$(NDK_LIB) $(RUNTIME_LIB) \
 		$(RUNTIME)/astra_user.ld
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -T $(EVENT_BASE_LD) \
 		-T $(RUNTIME)/astra_user.ld -o $@ $(CRT0) $(OBJECTS) \
-		$(STREAMS_LIB) $(VFS_LIB) $(TERMINAL_LIB) $(SHELL_LIB) \
+		$(STREAMS_LIB) $(VFS_LIB) $(TERMINAL_LIB) \
 		$(NDK_LIB) $(RUNTIME_LIB) -lgcc
 
 $(NDK_LIB):
@@ -76,7 +74,7 @@ build/m68k/main.o: main.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
-build/m68k/console_shell.o: console_shell.c include/console_shell.h
+build/m68k/console_session.o: console_session.c include/console_session.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
@@ -100,7 +98,7 @@ analyze:
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
 		-c main.c -o build/analyzer/main.o
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
-		-c console_shell.c -o build/analyzer/console_shell.o
+		-c console_session.c -o build/analyzer/console_session.o
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
 		-c console_stream.c -o build/analyzer/console_stream.o
 

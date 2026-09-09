@@ -38,6 +38,10 @@ have meant committing to a Linux personality in the kernel.
 * `libc/include/sys/termios.h` — carries the conventional `ws_xpixel` and
   `ws_ypixel` members in `struct winsize`; terminal applications use the same
   four-field ioctl ABI as other POSIX systems.
+* `libc/include/sys/resource.h` — defines `RLIM_NLIMITS` for the complete
+  public resource-limit set; portable shells use it to size their limit table.
+* `libc/machine/m68k/setjmp.S` — emits the non-executable GNU stack note for
+  every ELF target, including Astra, rather than only Linux ELF targets.
 
 A version bump is a re-vendor, not a merge. Retained source differences are
 listed above so they cannot disappear into an installed sysroot.
@@ -56,7 +60,8 @@ options that are not upstream defaults, and why:
 | `-Dpicocrt=false` | Astra has its own `crt0` and linker script |
 | `-Dsemihost=false` | ARM debug-host I/O; there is no host to semihost to |
 | `-Dtests=false` | they execute m68k binaries; see above |
-| `-Dthread-local-storage=false` | the Astra runtime places thread state itself |
+| `-Dmb-capable=true` | enables UTF-8 conversion required by modern terminal programs |
+| `-Dthread-local-storage=true` | libc state is per-thread; Astra initializes each program's PT_TLS image |
 | `-Dmultilib=false` | one ABI, chosen in the cross file |
 
 ## The licence position

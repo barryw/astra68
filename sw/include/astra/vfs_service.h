@@ -28,7 +28,7 @@
  */
 
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
-#define ASTRA_VFS_VERSION  UINT16_C(21)
+#define ASTRA_VFS_VERSION  UINT16_C(22)
 
 /*
  * The oldest version this build can still speak. A client asks for a minimum
@@ -73,6 +73,7 @@
  * Version 21 returns the atomic post-write position from WRITE_AREA, allowing
  * append writes to use the bulk path without guessing a concurrently changing
  * end-of-file offset.
+ * Version 22 adds atomic hard links using the existing two-path request.
  */
 #define ASTRA_VFS_VERSION_MIN UINT16_C(2)
 
@@ -152,7 +153,8 @@
 #define ASTRA_VFS_OP_RENAME      UINT32_C(25)
 #define ASTRA_VFS_OP_SYMLINK     UINT32_C(26)
 #define ASTRA_VFS_OP_BIND_LANE   UINT32_C(27)
-#define ASTRA_VFS_OP_MAX         ASTRA_VFS_OP_BIND_LANE
+#define ASTRA_VFS_OP_LINK        UINT32_C(28)
+#define ASTRA_VFS_OP_MAX         ASTRA_VFS_OP_LINK
 
 /*
  * One shared-area transfer, and the unit the whole read path is sized around.

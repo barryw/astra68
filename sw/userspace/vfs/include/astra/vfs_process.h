@@ -37,6 +37,9 @@ uint32_t astra_process_vfs_init(const AstraStartupInfo *startup);
 void astra_process_vfs_close(void);
 uint32_t astra_process_vfs_after_fork_child(
     const AstraStartupInfo *startup);
+/* Sets the base used by bare paths without changing the process's assigns. */
+uint32_t astra_process_vfs_set_current_directory(const char *assign,
+                                                 const char *path);
 AstraAssignTable *astra_process_vfs_assigns(void);
 AstraVfsClient *astra_process_vfs_client(void);
 AstraVfsClient *astra_process_vfs_client_for(const AstraAssign *assign);

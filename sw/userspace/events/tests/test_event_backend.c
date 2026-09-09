@@ -61,7 +61,7 @@ reset(void)
     catalog_records[0].subsystem = ASTRA_EVENT_SUBSYSTEM_SHELL;
     catalog_records[0].line = 467u;
     set_text(catalog_records[0].file, ASTRA_EVENT_FILE_MAX,
-             "src/console_shell.c");
+             "console_session.c");
     set_text(catalog_records[0].format, ASTRA_EVENT_FORMAT_MAX,
              "command accepted");
     catalog_records[1].magic = ASTRA_EVENT_DESCRIPTOR_MAGIC;
@@ -128,7 +128,7 @@ static void test_a_leaf_renders_its_events(void)
      */
     assert(strcmp(text,
                   "seq 2  info  10000011/16 act 0000001a  command accepted "
-                  "(src/console_shell.c:467)\n"
+                  "(console_session.c:467)\n"
                   "seq 4  warning  10000011/16 act 0000001a  volume refused "
                   "(src/volume.c:12)\n") == 0);
 

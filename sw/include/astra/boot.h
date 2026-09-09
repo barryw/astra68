@@ -36,11 +36,10 @@
 #define ASTRA_KERNEL_TRACE_ADDRESS    0x020c4000u
 #define ASTRA_KERNEL_TRACE_SIZE       0x00010000u
 /*
- * Kernel image and stacks (512 KiB), trace ring (64 KiB), frame metadata
- * (512 KiB) and object tables (2 MiB). The tables were added when raising the
- * port and message limits ran the kernel region out of room: they live above
- * the metadata so no address below them moves, and the only boundary that
- * shifts is where usable RAM begins.
+ * Kernel image and stacks (512 KiB), trace ring (64 KiB), retained ABI padding
+ * (512 KiB), and object tables (2 MiB). Per-frame metadata scales with the
+ * reported machine and is carved from its largest usable range by the kernel;
+ * it is not part of this fixed reservation.
  */
 #define ASTRA_KERNEL_TABLES_ADDRESS   0x02154000u
 #define ASTRA_KERNEL_TABLES_SIZE      0x00200000u
@@ -57,7 +56,7 @@
     (ASTRA_BOOT_FLAG_INTERRUPTS_MASKED | ASTRA_BOOT_FLAG_PMMU_DISABLED | \
      ASTRA_BOOT_FLAG_OVERLAY_DISABLED | ASTRA_BOOT_FLAG_DMA_IDLE)
 
-#define ASTRA_RAM_SIZE_ARTY_GUEST  0x08000000u
+#define ASTRA_RAM_SIZE_DE25_GUEST  0x20000000u
 
 #define ASTRA_MEMORY_READ        (1u << 0)
 #define ASTRA_MEMORY_WRITE       (1u << 1)

@@ -9,7 +9,7 @@
 #include <astra/vfs_union.h>
 
 #define ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR ASTRA_FILESYSTEM_LIBRARY_VERSION
-#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 0u
+#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 1u
 #define ASTRA_FILESYSTEM_DIRECTORY_BATCH_MAX 32u
 
 enum {
@@ -188,6 +188,9 @@ typedef struct AstraFilesystemLibraryV2 {
     uint32_t (*lstat)(AstraFilesystem *, const char *, AstraFileInfo *);
     uint32_t (*symlink)(const char *, AstraFilesystem *, const char *);
     uint32_t (*client_symlink)(AstraVfsClient *, const char *, const char *);
+    /* ABI 2.1: atomic hard links; cross-filesystem links are refused. */
+    uint32_t (*link)(AstraFilesystem *, const char *, const char *);
+    uint32_t (*client_link)(AstraVfsClient *, const char *, const char *);
 } AstraFilesystemLibraryV2;
 
 #endif

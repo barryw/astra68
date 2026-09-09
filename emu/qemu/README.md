@@ -31,12 +31,12 @@ run in emulation. Attach an image with `if=none`, which is the interface QEMU
 lets a machine claim without a qdev device behind it:
 
 ```sh
-qemu-system-m68k -M astra68 -m 128M -bios astra_boot.bin \
+qemu-system-m68k -M astra68 -m 512M -bios astra_boot.bin \
     -drive if=none,format=raw,file=/data/astra/storage/astra.img
 ```
 
-The machine defaults to the Arty guest's 128 MiB profile. The Arty launcher
-uses a preallocated 128 MiB memory backend, so guest RAM is committed when QEMU
+The machine defaults to the DE25 guest's 512 MiB profile. The board launcher
+uses a preallocated 512 MiB memory backend, so guest RAM is committed when QEMU
 starts instead of competing with Linux on demand.
 
 Sectors are 512 bytes. The hosted backend reports a 128-sector (64 KiB)

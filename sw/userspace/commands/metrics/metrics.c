@@ -1,28 +1,20 @@
 /* `metrics` -- the system and service counters published at METRICS:. */
 
 #include <astra/metrics.h>
+#include <astra/posix.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
-#include <astra/stream.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_process.h>
 #include <astra/vfs_union.h>
 
+#include <stdio.h>
 #include <string.h>
 
 ASTRA_PROGRAM("metrics", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
 #define METRIC_READ_RECORDS 8u
-
-static uint32_t stdout_handle;
-static uint32_t error_handle;
-
-static int write_all(const char *text, uint32_t length)
-{
-    return astra_stream_write_all(stdout_handle, text, length) ==
-           ASTRA_SYSCALL_OK;
-}
 
 static int emit_record(const AstraMetricRecord *record)
 {
@@ -55,7 +47,7 @@ static int emit_record(const AstraMetricRecord *record)
     while (count != 0u)
         line[used++] = digits[--count];
     line[used++] = '\n';
-    return write_all(line, used);
+    return fwrite(line, 1u, used, stdout) == used;
 }
 
 static int show_metrics(void)
@@ -98,33 +90,24 @@ static int show_metrics(void)
     return status == ASTRA_VFS_OK && offset == size ? 0 : (int)status;
 }
 
-int astra_main(const AstraStartupInfo *startup)
+int main(int argc, char **argv)
 {
-    const AstraStartupCapability *capability;
+    const AstraStartupInfo *startup = astra_posix_startup();
     uint32_t status;
     int result;
 
+    (void)argc;
+    (void)argv;
     if (!astra_startup_validate(startup))
         return ASTRA_STATUS_INVALID;
-    capability = astra_startup_capability(startup, "STDOUT");
-    if (capability != NULL)
-        stdout_handle = capability->handle;
-    capability = astra_startup_capability(startup, "STDERR");
-    if (capability != NULL)
-        error_handle = capability->handle;
-    if (stdout_handle == 0u)
-        return ASTRA_STATUS_ACCESS;
-    if (error_handle == 0u)
-        error_handle = stdout_handle;
     status = astra_process_vfs_init(startup);
     if (status != ASTRA_VFS_OK) {
-        (void)astra_print(error_handle, "metrics: filesystem unavailable\n");
+        (void)fputs("metrics: filesystem unavailable\n", stderr);
         return (int)status;
     }
     result = show_metrics();
     astra_process_vfs_close();
     if (result != 0)
-        (void)astra_print(error_handle,
-                          "metrics: METRICS: unavailable or invalid\n");
-    return result;
+        (void)fputs("metrics: METRICS: unavailable or invalid\n", stderr);
+    return fflush(stdout) == 0 ? result : (int)ASTRA_STATUS_IO;
 }

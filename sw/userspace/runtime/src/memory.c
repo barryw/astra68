@@ -2,6 +2,12 @@
 #include <stdint.h>
 
 /*
+ * These are the freestanding runtime's libc fallbacks.  Hosted programs also
+ * link picolibc, whose strong definitions must be allowed to replace them.
+ */
+#define ASTRA_LIBC_FALLBACK __attribute__((weak))
+
+/*
  * Block primitives, a word at a time.
  *
  * These were byte loops, and every byte the system moves goes through them:
@@ -25,7 +31,7 @@ typedef uint32_t AstraWord __attribute__((may_alias));
 #define ASTRA_WORD_MASK (ASTRA_WORD_SIZE - 1u)
 
 #if !defined(__m68k__)
-void *
+ASTRA_LIBC_FALLBACK void *
 memcpy(void *restrict destination, const void *restrict source, size_t count)
 {
     unsigned char *to = destination;
@@ -68,7 +74,7 @@ memcpy(void *restrict destination, const void *restrict source, size_t count)
     return destination;
 }
 
-void *
+ASTRA_LIBC_FALLBACK void *
 memmove(void *destination, const void *source, size_t count)
 {
     unsigned char *to = destination;
@@ -109,7 +115,7 @@ memmove(void *destination, const void *source, size_t count)
     return destination;
 }
 
-void *
+ASTRA_LIBC_FALLBACK void *
 memset(void *destination, int value, size_t count)
 {
     unsigned char *to = destination;
@@ -150,7 +156,7 @@ memset(void *destination, int value, size_t count)
     return destination;
 }
 
-int
+ASTRA_LIBC_FALLBACK int
 memcmp(const void *left, const void *right, size_t count)
 {
     const unsigned char *a = left;
@@ -167,7 +173,7 @@ memcmp(const void *left, const void *right, size_t count)
 }
 #endif
 
-size_t
+ASTRA_LIBC_FALLBACK size_t
 strlen(const char *text)
 {
     const char *end = text;
@@ -178,7 +184,7 @@ strlen(const char *text)
     return (size_t)(end - text);
 }
 
-int
+ASTRA_LIBC_FALLBACK int
 strcmp(const char *left, const char *right)
 {
     while (*left != '\0' && *left == *right) {
@@ -188,7 +194,7 @@ strcmp(const char *left, const char *right)
     return (int)(unsigned char)*left - (int)(unsigned char)*right;
 }
 
-int
+ASTRA_LIBC_FALLBACK int
 strncmp(const char *left, const char *right, size_t count)
 {
     while (count != 0u && *left != '\0' && *left == *right) {
@@ -202,7 +208,7 @@ strncmp(const char *left, const char *right, size_t count)
     return (int)(unsigned char)*left - (int)(unsigned char)*right;
 }
 
-char *
+ASTRA_LIBC_FALLBACK char *
 strcpy(char *destination, const char *source)
 {
     char *out = destination;
@@ -212,7 +218,7 @@ strcpy(char *destination, const char *source)
     return destination;
 }
 
-char *
+ASTRA_LIBC_FALLBACK char *
 strncpy(char *destination, const char *source, size_t count)
 {
     char *out = destination;

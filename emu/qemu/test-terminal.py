@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive the Astra shell from outside and judge what it answered.
+"""Drive the Astra zsh session from outside and judge what it answered.
 
 Everything below the terminal has a gate; the terminal itself had none, and
 the gap cost a session. A refused input syscall made the shell yield forever:
@@ -15,7 +15,7 @@ with ASTRA_SYSCALL_CONSOLE_WRITE. The terminal is a window client now: it
 draws glyphs into a surface the display service composites, nothing writes the
 character plane any more, and a screen made of pixels says nothing to anything
 but an eye. So the terminal model echoes each completed line into the kernel
-trace ring -- `astra_terminal_set_echo`, installed by the shell -- and this
+trace ring -- `astra_terminal_set_echo`, installed by the session host -- and this
 reads the ring. It is the same text, from the same place a panic report and
 the debugger already read, and it works on a machine with no screen attached.
 
@@ -56,11 +56,11 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import astra_image
-from qemu_runtime import qemu_environment
+from qemu_runtime import DEFAULT_MEMORY, qemu_environment
 
 # RAM the gate boots with. A module global so --memory can prove that the
 # machine works at a size other than the one it was written against.
-MEMORY = "128M"
+MEMORY = DEFAULT_MEMORY
 import trace_decode
 
 # Vesta input block; the low five bits are the queued count.
@@ -82,229 +82,111 @@ BOOT_MARKER = "stage 8"
 # with no window server to ask is a program that exits before it draws.
 TERMINAL_ICON = (70, 90)
 
-# The prompt the shell settles on. It is `shell.assign + ":" + directory + "> "`
-# from console_shell.c's `prompt()`. It reaches the ring attached to whatever
-# was typed after it, because a prompt carries no newline of its own -- so this
-# is a substring to look for, never a whole line to match.
-PROMPT = "WORK:>"
-
-# One line of the shell's banner, which is the first thing a live terminal
-# says. Waiting for it is waiting for the window to exist and the shell inside
-# it to have run.
-BANNER = "COMMANDS"
+# The shipped plain MOTD is zsh's startup fallback. Seeing it proves the
+# terminal launched zsh and zsh read its system startup file.
+BANNER = "Astra 68"
 POSIX_COMMAND = 'posix -R +42 --cmd "set number" -- WORK:notes.txt'
 DURABILITY_COMMAND = (
     "posix --durability WORK:durability-cut.txt durable-data-68040")
 
+ZSH_SCRIPT = [
+    # The result is beyond 32 bits, proving the cross-configured arithmetic
+    # type and its decimal formatting on the actual MC68040 target.
+    ('print $((4294967296+7))', "4294967303"),
+    ('print -r -- ZSH-PATH-$PATH', "ZSH-PATH-/commands"),
+    ('print -r -- ZSH-HOME-$HOME', "ZSH-HOME-HOME:"),
+    # A bare external command must resolve through Astra's /commands PATH;
+    # Status is checked in the same zsh command that launched the program.
+    ('status 23; print -r -- ZSH-STATUS-$?',
+     "ZSH-STATUS-23"),
+    ('print $((6*7)) | cat', "42"),
+    ('/commands/echo 42 | cat', "42"),
+    ('print -r -- ZSH-SUB-$(print ok)', "ZSH-SUB-ok"),
+    ('print -r -- ZSH-EXEC-$(/commands/echo 42)',
+     "ZSH-EXEC-42"),
+    # External commands use the same inherited descriptor table as ported
+    # programs; neither a pipe nor a redirect may fall back to startup streams.
+    ('print -r -- ZSH-PIPE-$(/commands/echo 42 | cat)',
+     "ZSH-PIPE-42"),
+    ('print -r -- ZSH-WHICH-$(/commands/which status | cat)',
+     "ZSH-WHICH-/commands/status"),
+    ('print $((6*7)) > WORK:zsh.out; cat WORK:zsh.out; rm WORK:zsh.out',
+     "42"),
+    ('/commands/echo 42 > WORK:zsh-command.out; '
+     'print -r -- ZSH-FILE-$(cat WORK:zsh-command.out); '
+     'rm WORK:zsh-command.out', "ZSH-FILE-42"),
+    ('/commands/date > WORK:zsh-date.out; '
+     '[[ -s WORK:zsh-date.out ]] && print ZSH-DATE-FILE; '
+     'rm WORK:zsh-date.out', "ZSH-DATE-FILE"),
+    ('/commands/ls -z 2> WORK:zsh-error.out; '
+     '[[ -s WORK:zsh-error.out ]] && print ZSH-STDERR-FILE; '
+     'rm WORK:zsh-error.out', "ZSH-STDERR-FILE"),
+]
+
 SCRIPT = [
-    # `mkdir` is silent on success. The diagnostic event is the completion
-    # barrier; `ls` below proves the directory was actually created.
-    ("mkdir proto", "finished with status 0"),
-    ("write hello.txt via the protocol", "hello.txt"),
+    ("mkdir proto; print ASTRA-MKDIR", "ASTRA-MKDIR"),
+    ("print -r -- 'via the protocol' > hello.txt", "hello.txt"),
     ("ls", "proto/"),
-    # `cd` and then bare names, which is the whole reason a launched program
-    # is granted CWD:. The machine has no root and no current directory --
-    # a path is ASSIGN:path -- so `mkdir inner` typed here names nothing at
-    # all unless the shell has told the child where the prompt is standing.
-    # While these were builtins the shell qualified for them and the question
-    # never came up; the first thing that would have broken on the day they
-    # became programs is exactly this.
-    #
-    # `cd` says nothing when it works, so its own line is only the line coming
-    # back. `pwd` and the four after it are what prove it moved.
-    ("cd proto", "cd proto"),
-    ("pwd", "WORK:proto"),
-    ("mkdir inner", "mkdir inner"),
+    ("cd proto; pwd", "/CWD/proto"),
+    ("mkdir inner; print ASTRA-INNER", "ASTRA-INNER"),
     ("ls", "inner/"),
-    ("write scratch.txt hi", "scratch.txt"),
-    ("cat scratch.txt", "hi"),
-    ("rm scratch.txt", "rm scratch.txt"),
-    ("echo $?", "0"),
-    # And back, by the same door: `cd` with no name is the assign's root, and
-    # `proto/` is only in the root -- so this is the check that it returned
-    # rather than the check that it is somewhere.
-    ("cd", "cd"),
-    ("ls", "proto/"),
+    ("print -r -- hi > scratch.txt; cat scratch.txt", "hi"),
+    ("rm scratch.txt; print ASTRA-RM-$?", "ASTRA-RM-0"),
+    ("cd ..; pwd", "/CWD"),
     ("cat hello.txt", "via the protocol"),
-    # The terminal is a least-authority process: WORK: is writable, while the
-    # event tree it can inspect is read-only. The refusal comes from the assign
-    # rather than from the service behind it.
-    ("write events:no no", "access denied"),
-    # EVENTS: is a tree, and that is the whole claim: no bespoke client, no
-    # query language, just a path. `ls` walks it and `cat` reads it.
-    ("ls events:", "activity/"),
-    ("ls events:boot/current", "earliest"),
-    # One command is one story, read back on the machine that recorded it. The
-    # first line typed at this prompt begins activity 1 -- the kernel's counter
-    # starts there every boot -- and that line was `mkdir proto`, so this is
-    # the shell's own account of the first thing this test did.
-    ("cat events:activity/00000001", "command accepted"),
-    # And the refusal, which is the one that pays for the design: its story
-    # holds both the line the shell accepted and the refusal it answered
-    # with, and neither passed an activity to the other. The name is the
-    # activity in hex, activities are numbered from one in the order the shell
-    # accepted them, and `write events:no no` is the fifteenth line typed --
-    # so 0x0f. Inserting a line above it moves this, which is what the
-    # assertions below the script turn into a named failure. Every `echo $?`
-    # is a line too: asking for the status costs an activity.
-    ("cat events:activity/0000000f", "command refused"),
-    # The command: the same store, the last screen of it, and two dimensions at
-    # once -- which is the one thing a path could not say until subsystem/ grew
-    # levels under it.
-    # The bare command shows the last screen of the store, so what it is
-    # asserted on has to be recent: this is the shell's own record of having
-    # launched a program, which is a notice and therefore absent from the
-    # level-filtered listing below. `namespace bound` used to be the needle
-    # here and is not in this window on a seven-process boot -- it is the
-    # first thing the machine recorded, and the last line of this script is
-    # where a whole boot gets read back.
-    ("events", "launching from place"),
-    ("events --subsystem shell --level warning", "command refused"),
-    # A program. `status` is a file in COMMANDS: that the gate installed, not
-    # anything the ROM carries: this is the first line in this script whose
-    # answer required loading an ELF off the volume and running it.
-    #
-    # It prints nothing, on purpose -- what is on the screen is the shell
-    # reporting what the child exited with, so the number proves the argument
-    # vector arrived and the status came back through the wait.
-    ("status 7", "status 7"),
-    ("echo $?", "7"),
-    # No argument is zero, which is what a program that did what it was asked
-    # says. It also proves argc reaches the child correctly rather than the
-    # child reading whatever was after the vector.
-    ("status", "status"),
-    # COMMANDS: is bound and searched, so a bare name resolves there without
-    # the person naming it -- and naming it explicitly is the same file.
-    ("commands:status 3", "commands:status 3"),
-    ("echo $?", "3"),
-    # Commands can be loaded but not rewritten by the terminal process.
-    ("write commands:status no", "access denied"),
-    # Both members remain visible: `devices` is the fixture's own
-    # shadow copy and `which` is only on the shipped member, so a listing
-    # holding them both is a union that did not collapse while crossing into
-    # the terminal process.
-    #
-    # The tag is part of the union contract: duplicates are intentionally
-    # visible, and the member says which binding supplied each row.
-    ("ls commands:", ("devices  [0]", "devices  [1]", "which  [1]")),
-    # And the milder failure the same conflation caused in `rm`: a name on
-    # no member at all must be reported "not found", not "access denied" --
-    # a member refusing on rights alone has said nothing about whether the
-    # name is there, and mistaking that refusal for the answer is exactly
-    # the bug the two lines above also guard against.
-    ("rm commands:doesnotexist", "not found"),
-    # And the one that used to be a hang waiting to happen: a name that is not
-    # a builtin and is not a file. Two places are looked in, both top level
-    # only, and then it says so.
-    ("nosuchthing", "not a command"),
-    # 127 is what every shell answers for a name it could not find, and
-    # the only way to see it is `$?` -- the shell prints no status now.
-    ("echo $?", "127"),
-    # The namespace printed back, and the whole of the order a lookup uses.
-    # Before this existed the search order was a comment in one function.
-    ("assign", ("local/commands", "LIBS: [0] r  /libs")),
-    # A child resolving through a union it was granted. `which` holds COMMANDS:
-    # as two grants with two roots and loops them with the same Kit function
-    # the shell uses -- so this line is the roots-in-grants fix and the union
-    # crossing a process boundary at once. `status` is only on the shipped
-    # member, so member 1 is the honest answer.
-    ("which status", "/commands/status [1]"),
-    # And the shadowing. The gate installed a `devices` into the writable
-    # member, so the person's own copy is what a lookup finds -- member 0,
-    # ahead of the shipped one.
-    ("which devices", "/local/commands/devices [0]"),
-    # Which is also what runs: the shadowing copy is `which`'s image under
-    # another name, so it answers the way `which` does rather than the way the
-    # shipped `devices` does.
+    ("print no > EVENTS:no", "permission denied"),
+    ("ls EVENTS:", "activity/"),
+    ("ls EVENTS:boot/current", "earliest"),
+    ("events", "shell ready"),
+    ("status 7; print ASTRA-STATUS-$?", "ASTRA-STATUS-7"),
+    ("status; print ASTRA-STATUS-$?", "ASTRA-STATUS-0"),
+    ("/commands/status 3; print ASTRA-STATUS-$?", "ASTRA-STATUS-3"),
+    ("print no > COMMANDS:status", "permission denied"),
+    ("ls COMMANDS:", ("devices  [0]", "devices  [1]", "which  [1]")),
+    ("rm COMMANDS:doesnotexist", "not found"),
+    ("nosuchthing", "command not found"),
+    ("print ASTRA-STATUS-$?", "ASTRA-STATUS-127"),
+    ("which status", "/commands/status"),
+    ("which devices", "/commands/devices"),
     ("devices status", "/commands/status [1]"),
-    # PROC: is the whole running machine, not only boot services. It includes
-    # init, the desktop, this dynamically launched Terminal, and ps itself.
     ("ps", ("ROM:supervisor", "SERVICES:desktop", "APPS:Terminal.app",
-            "COMMANDS:ps")),
-    # System counters are a capability-backed filesystem view, not a QMP-only
-    # diagnostic. This proves an ordinary Astra program can read the host
-    # channel and the VFS service accounting through METRICS:.
+            " ps", " zsh")),
     ("metrics", ("host.channel.commands ", "hostfs.vfs.requests ",
                  "host.fs.open.calls ")),
-    # This used to have to be last, because the check that followed SCRIPT
-    # reread the rendered screen and needed this line's output to still be on
-    # it -- thirty rows of terminal, and five commands' worth of listings were
-    # enough to scroll it away before the check ran. The ring is cumulative
-    # and each command is judged against the records its own Enter produced,
-    # so nothing here depends on its position any more.
     ("events --boot -1", "namespace bound"),
-    # The POSIX file and directory layer, checked against itself: open, read,
-    # write, lseek, stat, fstat, opendir, readdir, mkdir, unlink, chdir,
-    # getcwd, and a heap. It reports by exit status rather than by text, so a
-    # zero here is thirty-odd separate checks and a non-zero one names the step
-    # -- see the enum at the top of `commands/posix/posix.c`.
     (POSIX_COMMAND, "POSIX RAW PASS"),
-    ("echo $?", "0"),
+    ("print ASTRA-STATUS-$?", "ASTRA-STATUS-0"),
     (DURABILITY_COMMAND,
      ("ASTRA DURABILITY SYNCED", "ASTRA DURABILITY PASS")),
     ("posix --durability-check WORK:durability-cut.txt durable-data-68040",
      "ASTRA DURABILITY EXACT"),
-    # Stock Lua, including the shared POSIX paths it depends on rather than a
-    # command-private compatibility layer.
     ("lua -v", "Lua 5.5.1"),
     ("lua -e \"print(6*7)\"", "42"),
-    # The expected fraction is absent from the echoed command, so a crash
-    # cannot pass by merely rendering what was typed.
     ("lua -e \"print(1/2)\"", "0.5"),
-    ("write luafile.lua \"print(6*7)\"", "luafile.lua"),
-    ("lua luafile.lua", "42"),
-    ("rm luafile.lua", "rm luafile.lua"),
+    ("print -r -- 'print(6*7)' > luafile.lua; lua luafile.lua", "42"),
+    ("rm luafile.lua; print ASTRA-LUA-RM-$?", "ASTRA-LUA-RM-0"),
     ("FOO=bar lua -e \"print(os.getenv('FOO'))\"", "bar"),
     ("lua -e \"local a,b,c=os.execute('status 23');print(a,b,c)\"",
      "exit"),
-    ("lua -e \"print(os.date('!%Y'))\"", "2026"),
+    ("lua -e 'print(os.date(\"!%Y\"))'", "2026"),
     ("lua -e \"local f=assert(io.open('luatest','w'));"
      "f:write('ok');f:close();assert(os.rename('luatest','luanew'));"
      "print(assert(io.open('luanew')):read('*a'));os.remove('luanew')\"",
      "ok"),
-    # Quoting, proved by a name that could not exist without it. Two words
-    # arriving as two arguments makes `two/`, and one word makes `two words/`
-    # -- so the listing is the whole assertion and no message has to be
-    # believed.
-    ("mkdir \"two words\"", "two words"),
-    ("ls", "two words/"),
-    # Redirection, and the only honest way to check it: the answer must *not*
-    # be on the screen after the first line -- the shell echoes what the
-    # terminal renders into the ring, and a redirected child renders nothing --
-    # and must be in the file on the second.
+    *ZSH_SCRIPT,
+    ("mkdir 'two words'; ls", "two words/"),
     ("which status > out.txt", "out.txt"),
-    ("cat out.txt", "/commands/status [1]"),
-    # `>>` keeps what is there, so both answers are in one file. A truncating
-    # append would leave only the second, which is why the needle is both.
+    ("cat out.txt", "/commands/status"),
     ("which devices >> out.txt", "out.txt"),
-    ("cat out.txt", ("/commands/status [1]",
-                     "/local/commands/devices [0]")),
-    # The two refusals. A builtin has no stream to move, and a redirect with
-    # no name is not a command -- both said rather than done quietly.
-    ("pwd > out.txt", "cannot be redirected"),
-    ("ls >", "syntax"),
-    # Names. A line that is only `NAME=VALUE` sets one in this shell; `$NAME`
-    # is how it comes back, and `set` is the whole list.
-    ("GREETING=hello", "GREETING=hello"),
-    ("echo $GREETING", "hello"),
-    ("set", "GREETING=hello"),
-    # `?` is there and marked as never crossing a launch, which is the one
-    # thing about it a person has to know.
-    ("set", "this shell only"),
-    ("set GREETING", "set GREETING"),
-    # An unset name expands to nothing rather than to its own spelling, so the
-    # dash is the whole of the output and proves the expansion ran.
-    ("echo $GREETING-", "-"),
-    # A value with a space in it survives, which is quoting and expansion in
-    # one line -- and `echo` is a program, so it also proves the vector.
-    ("PHRASE=\"two words\"", "PHRASE="),
-    ("echo -$PHRASE-", "-two words-"),
-    # And a redirect on a program whose output is a value.
-    ("echo $PHRASE > phrase.txt", "phrase.txt"),
-    ("cat phrase.txt", "two words"),
-    # A builtin still refuses an environment, and says so rather than dropping
-    # the name.
-    ("A=1 pwd", "cannot be redirected or given an environment"),
+    ("cat out.txt", ("/commands/status",
+                     "/commands/devices")),
+    ("pwd > pwd.txt; cat pwd.txt", "/CWD"),
+    ("ls >", "parse error"),
+    ("GREETING=hello; print -r -- $GREETING", "hello"),
+    ("unset GREETING; print -r -- -$GREETING-", "--"),
+    ("PHRASE='two words'; print -r -- -$PHRASE-", "-two words-"),
+    ("print -r -- $PHRASE > phrase.txt; cat phrase.txt", "two words"),
+    ("A=1 /commands/echo scoped; print -r -- ${A-unset}", "unset"),
 ]
 
 VIM_LUA_FILE = "vim-created.lua"
@@ -319,8 +201,8 @@ VIM_LUA_FILE = "vim-created.lua"
 PERFORMANCE_SCRIPT = [
     ("hello", "hello from picolibc"),
     ("echo one", "one"),
-    ("which status", "/commands/status [1]"),
-    ("which devices", "/local/commands/devices [0]"),
+    ("which status", "/commands/status"),
+    ("which devices", "/commands/devices"),
     ("devices status", "/commands/status [1]"),
 ]
 PERFORMANCE_BUDGET_SECONDS = {
@@ -331,25 +213,19 @@ PERFORMANCE_BUDGET_SECONDS = {
     "devices status": 7.0,
 }
 
-# The two `cat events:activity/N` lines name an activity by number, and the
-# number is a position in the list above. Nothing else ties them together, so a
-# line inserted before either one would send the gate looking at somebody
-# else's story and report the wrong command as unrecorded.
-assert SCRIPT[0][0] == "mkdir proto", (
-    "SCRIPT's first line is activity 1, which "
-    "(\"cat events:activity/00000001\", \"command accepted\") reads back")
-assert SCRIPT[14][0] == "write events:no no", (
-    "SCRIPT's fifteenth line is activity 0x0f, which "
-    "(\"cat events:activity/0000000f\", \"command refused\") reads back")
-
 QCODE = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus",
-         "=": "equal", ",": "comma", ";": "semicolon", "'": "apostrophe"}
+         "=": "equal", ",": "comma", ";": "semicolon", "'": "apostrophe",
+         "[": "bracket_left", "]": "bracket_right",
+         "`": "grave_accent", "\\": "backslash"}
 # Keys that need a modifier held. A capital is handled in type_text as the
 # shift chord over its lowercase key; these are the punctuation that only
 # exists shifted, and `+` is here because `date +FORMAT` needs it.
 SHIFTED = {":": "semicolon", "+": "equal", "%": "5", "_": "minus",
            "?": "slash", "\"": "apostrophe", ">": "dot", "<": "comma",
-           "$": "4", "(": "9", ")": "0", "*": "8", "!": "1"}
+           "$": "4", "(": "9", ")": "0", "*": "8", "!": "1",
+           "@": "2", "#": "3", "^": "6", "&": "7",
+           "{": "bracket_left", "}": "bracket_right",
+           "~": "grave_accent", "|": "backslash"}
 
 # A user record the decoder rendered. The body is what the shell wrote; a
 # record whose text did not fit one record ends in a backslash and continues
@@ -359,7 +235,8 @@ RECORD = re.compile(
 READY_RECORD = re.compile(
     r"^seq\s+(\d+)\s+info\s+[0-9a-f]{8}/\d+"
     r"(?:\s+act\s+[0-9a-f]+)?\s+shell ready\s+"
-    r"\(console_shell\.c:\d+\)$")
+    r"\(console_session\.c:\d+\)$")
+TRACE_RECORD = re.compile(r"^seq\s+(\d+)\s+")
 
 
 def ready_sequence(line):
@@ -556,7 +433,7 @@ class Machine:
                 return True
         return False
 
-    def recent_serial(self):
+    def recent_serial(self, limit=20):
         while True:
             try:
                 line = self.serial.get_nowait()
@@ -564,7 +441,7 @@ class Machine:
                 break
             if line is not None:
                 self.log.append(line)
-        return self.log[-20:]
+        return self.log[-limit:]
 
     def word(self, address):
         return self.qmp.word(address)
@@ -612,6 +489,26 @@ class Machine:
 
     def sequence(self):
         return self.said()[1]
+
+    def trace_sequence(self):
+        highest = 0
+        for line in self.trace():
+            match = TRACE_RECORD.match(line)
+            if match is not None:
+                highest = max(highest, int(match.group(1)))
+        return highest
+
+    def wait_for_trace_text(self, text, deadline, after=0):
+        end = time.monotonic() + deadline
+        while True:
+            for line in self.trace():
+                match = TRACE_RECORD.match(line)
+                if (match is not None and int(match.group(1)) > after and
+                        text in line):
+                    return True
+            if time.monotonic() >= end:
+                return False
+            time.sleep(0.25)
 
     def recent_faults(self):
         return [line for line in self.trace() if "fault" in line.lower()][-8:]
@@ -721,6 +618,68 @@ def wait_for_command(machine, expected, deadline, before, exact=False):
     return said if machine.wait_for_ready(deadline, before) else None
 
 
+def zsh_interactive(machine, command_deadline, verbose=False):
+    """Exercise the default zsh's own line editor on the terminal TTY."""
+    # Use a second terminal to prove the first terminal is already running
+    # zsh, rather than a session host which merely launches one on demand.
+    before = machine.sequence()
+    machine.qmp.double_click(*TERMINAL_ICON)
+    if machine.wait_for_text(BANNER, command_deadline, before)[0] is None:
+        print("FAIL: no observer terminal opened for interactive zsh")
+        return False
+    if not machine.wait_for_ready(command_deadline, before):
+        print("FAIL: observer zsh never became ready")
+        return False
+    before = machine.sequence()
+    machine.qmp.type_line("ps; print ASTRA-PS-DONE")
+    observed = wait_for_command(machine, "ASTRA-PS-DONE", command_deadline,
+                                before, exact=True)
+    if observed is None or sum(" zsh" in line for line in observed) < 2:
+        print("FAIL: both terminal windows did not own zsh sessions")
+        for text in machine.said(before)[0][-80:]:
+            print("    |%s|" % text)
+        return False
+
+    # Move the observer away, return focus to zsh, and edit a typo through
+    # ZLE. The resulting line can only be produced if raw input and erase
+    # handling are owned by zsh rather than the Terminal session host.
+    machine.qmp.point(500, 105)
+    machine.qmp.button(True)
+    machine.qmp.point(700, 155)
+    machine.qmp.button(False)
+    machine.qmp.point(200, 140)
+    machine.qmp.button(True)
+    machine.qmp.button(False)
+    before = machine.sequence()
+    machine.qmp.type_text("print -r -- ASTRA-INTERACTIVE-ZSX")
+    machine.qmp.key("backspace")
+    machine.qmp.key("backspace")
+    machine.qmp.type_text("SH")
+    machine.qmp.key("ret")
+    if machine.wait_for_text("ASTRA-INTERACTIVE-ZSH", command_deadline,
+                             before, exact=True)[0] is None:
+        print("FAIL: zsh ZLE did not edit and execute the interactive line")
+        return False
+
+    before = machine.sequence()
+    machine.qmp.key("up")
+    machine.qmp.key("ret")
+    if machine.wait_for_text("ASTRA-INTERACTIVE-ZSH", command_deadline,
+                             before, exact=True)[0] is None:
+        print("FAIL: zsh ZLE history did not replay the interactive line")
+        return False
+
+    finished_after = machine.trace_sequence()
+    machine.qmp.type_line("exit")
+    if not machine.wait_for_trace_text("finished with status 0",
+                                       command_deadline, finished_after):
+        print("FAIL: interactive zsh did not exit cleanly")
+        return False
+    if verbose:
+        print("ok: default zsh ZLE, history, and clean terminal exit")
+    return True
+
+
 def vim_creates_and_runs_lua(machine, command_deadline, verbose=False):
     """Create a Lua program through Vim's full-screen terminal interface."""
     machine.settle()
@@ -803,8 +762,7 @@ def vim_creates_and_runs_lua(machine, command_deadline, verbose=False):
     machine.settle()
     before = machine.sequence()
     machine.qmp.type_line(":q")
-    if wait_for_command(machine, "finished with status 0", command_deadline,
-                        before) is None:
+    if not machine.wait_for_ready(command_deadline, before):
         print("FAIL: Vim did not exit cleanly after writing the Lua program")
         return False
 
@@ -825,8 +783,8 @@ def vim_creates_and_runs_lua(machine, command_deadline, verbose=False):
 
     machine.settle()
     before = machine.sequence()
-    machine.qmp.type_line("rm " + VIM_LUA_FILE)
-    if wait_for_command(machine, "rm " + VIM_LUA_FILE, command_deadline,
+    machine.qmp.type_line("rm " + VIM_LUA_FILE + "; print ASTRA-VIM-RM-$?")
+    if wait_for_command(machine, "ASTRA-VIM-RM-0", command_deadline,
                         before) is None:
         print("FAIL: the Vim-created Lua fixture was not removed")
         return False
@@ -851,8 +809,8 @@ def warm_the_store(qemu, rom, image, temporary, boot_deadline,
             print("FAIL: the boot before the run never reached a terminal")
             return False
         before = machine.sequence()
-        machine.qmp.type_line("mkdir priorboot")
-        if wait_for_command(machine, "finished with status 0",
+        machine.qmp.type_line("mkdir priorboot; print ASTRA-WARM-$?")
+        if wait_for_command(machine, "ASTRA-WARM-0",
                             command_deadline, before) is None:
             print("FAIL: the boot before the run answered no command")
             return False
@@ -864,7 +822,7 @@ def warm_the_store(qemu, rom, image, temporary, boot_deadline,
 
 def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         report_timings, prepared_image, performance_only, vim_gate,
-        network_only, vim_only, cxx_only):
+        network_only, vim_only, cxx_only, zsh_only):
     timings = []
     with tempfile.TemporaryDirectory(prefix="astra-terminal-") as temporary:
         scratch = os.path.join(temporary, "card.img")
@@ -873,7 +831,7 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         if not prepared_image:
             astra_image.install(scratch, catalog)
         needs_warm_store = not (performance_only or network_only or vim_only or
-                                cxx_only)
+                                cxx_only or zsh_only)
         if needs_warm_store and not warm_the_store(
                 qemu, rom, scratch, temporary, boot_deadline,
                 command_deadline):
@@ -884,7 +842,8 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         try:
             if not open_terminal(machine, boot_deadline, command_deadline):
                 return 1
-            script = ([('cxx', 'ASTRA C++ PASS')] if cxx_only else
+            script = (ZSH_SCRIPT if zsh_only else
+                      [('cxx', 'ASTRA C++ PASS')] if cxx_only else
                       [] if vim_only else
                       [(POSIX_COMMAND, "POSIX RAW PASS")] if network_only else
                       PERFORMANCE_SCRIPT if performance_only else SCRIPT)
@@ -900,7 +859,8 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                         return 1
                     machine.qmp.key("up")
                 said = wait_for_command(machine, expected, command_deadline,
-                                        before, exact=line == "echo $?")
+                                        before,
+                                        exact=zsh_only or line == "echo $?")
                 elapsed = time.monotonic() - started
                 if said is None:
                     print("FAIL: %r never answered with %r" % (line, expected))
@@ -921,6 +881,11 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                 return 1
             if vim_only:
                 print("ASTRA VIM LUA PASS")
+                return 0
+            if zsh_only:
+                if not zsh_interactive(machine, command_deadline, verbose):
+                    return 1
+                print("ASTRA ZSH PASS")
                 return 0
             if performance_only:
                 failed = False
@@ -962,12 +927,12 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                 return 1
             before = machine.sequence()
             machine.qmp.type_line("cat out.txt")
-            said = wait_for_command(machine, "/local/commands/devices [0]",
+            said = wait_for_command(machine, "/commands/devices",
                                     command_deadline, before)
             if said is None:
                 print("FAIL: the truncated file did not hold the new answer")
                 return 1
-            if any("/commands/status [1]" in line for line in said):
+            if any("/commands/status" in line for line in said):
                 print("FAIL: `>` kept what was in the file; it must truncate")
                 for text in said[-20:]:
                     print("    |%s|" % text)
@@ -984,9 +949,9 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
             # The prompt has to still be there at the end. A shell that
             # answered every line and then died would pass every check above.
             before = machine.sequence()
-            machine.qmp.type_line("assign")
-            if wait_for_command(machine, PROMPT, command_deadline,
-                                before) is None:
+            machine.qmp.type_line("print ASTRA-STILL-PROMPTING")
+            if wait_for_command(machine, "ASTRA-STILL-PROMPTING",
+                                command_deadline, before, exact=True) is None:
                 print("FAIL: the shell stopped prompting")
                 return 1
 
@@ -1001,7 +966,7 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
             print("FAIL: QEMU exited during terminal gate: %s (status %s)" %
                   (error, "running" if status is None else status))
             print("last serial lines:")
-            for text in machine.recent_serial():
+            for text in machine.recent_serial(200):
                 print("    %s" % text)
             return 1
         finally:
@@ -1009,6 +974,8 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
 
 
 def main():
+    global MEMORY
+
     parser = argparse.ArgumentParser()
     parser.add_argument("qemu", help="qemu-system-m68k carrying astra68")
     parser.add_argument("rom", help="astra_boot.bin")
@@ -1020,8 +987,8 @@ def main():
     parser.add_argument("--boot-deadline", type=float, default=90.0)
     parser.add_argument("--command-deadline", type=float, default=60.0)
     parser.add_argument("--verbose", action="store_true")
-    parser.add_argument("--memory", default="128M",
-                        help="RAM to boot with, e.g. 256M")
+    parser.add_argument("--memory", default=MEMORY,
+                        help="RAM to boot with, e.g. 512M")
     parser.add_argument("--report-timings", action="store_true",
                         help="print Enter-to-answer command latency")
     parser.add_argument("--prepared-image", action="store_true",
@@ -1036,8 +1003,9 @@ def main():
                         help="run only the POSIX networking integration gate")
     parser.add_argument("--cxx-only", action="store_true",
                         help="run only the C++ runtime integration gate")
+    parser.add_argument("--zsh-only", action="store_true",
+                        help="run only the upstream zsh integration gate")
     arguments = parser.parse_args()
-    global MEMORY
     MEMORY = arguments.memory
     return run(arguments.qemu, arguments.rom, arguments.image,
                arguments.catalog, arguments.boot_deadline,
@@ -1045,7 +1013,7 @@ def main():
                arguments.report_timings, arguments.prepared_image,
                arguments.performance_only, arguments.vim_gate,
                arguments.network_only, arguments.vim_only,
-               arguments.cxx_only)
+               arguments.cxx_only, arguments.zsh_only)
 
 
 if __name__ == "__main__":

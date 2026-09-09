@@ -17,7 +17,7 @@
 /*
  * There is no maximum frame count, and that is deliberate.
  *
- * This used to be ASTRA_RAM_SIZE_ARTY_GUEST / KERNEL_PAGE_SIZE -- 32768 -- and
+ * This used to be 128 MiB / KERNEL_PAGE_SIZE -- 32768 -- and
  * every per-frame table was a static array of that length. It made the size of
  * the machine a property of the image: a board with more RAM than the constant
  * was refused outright at `kernel_memory_init`, and a board with less carried

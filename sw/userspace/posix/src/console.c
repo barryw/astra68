@@ -18,6 +18,7 @@
 
 #include <astra/process.h>
 #include <astra/runtime.h>
+#include <astra/status.h>
 #include <astra/stream.h>
 #include <astra/syscall.h>
 
@@ -33,6 +34,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "resource_internal.h"
+
 enum {
     POSIX_STDIN = 0,
     POSIX_STDOUT = 1,
@@ -45,7 +48,8 @@ typedef enum PosixDescriptorKind {
     POSIX_DESCRIPTOR_FILE,
     POSIX_DESCRIPTOR_PIPE_READ,
     POSIX_DESCRIPTOR_PIPE_WRITE,
-    POSIX_DESCRIPTOR_SOCKET
+    POSIX_DESCRIPTOR_SOCKET,
+    POSIX_DESCRIPTOR_TTY
 } PosixDescriptorKind;
 
 /* A default allocation, not a ceiling. The containing charged area is the
@@ -57,6 +61,7 @@ typedef struct PosixOpenDescription {
     uint8_t reserved[3];
     /* A stream capability, or the file half's slot. Never both. */
     uint32_t value;
+    uint32_t auxiliary;
     uint32_t read_wait;
     int status_flags;
     uint32_t references;
@@ -68,12 +73,16 @@ typedef struct PosixDescriptor {
 } PosixDescriptor;
 
 #define POSIX_EXEC_MAGIC 0x50584543u
-#define POSIX_EXEC_VERSION 2u
+#define POSIX_EXEC_VERSION 4u
 
 typedef struct PosixExecHeader {
     uint32_t magic;
     uint32_t total_size;
     uint32_t version;
+    uint32_t terminal_id;
+    uint32_t terminal_read;
+    uint32_t terminal_write;
+    AstraPosixResourceState resources;
     uint32_t file_state_offset;
     uint32_t file_state_size;
     uint32_t socket_state_offset;
@@ -94,6 +103,7 @@ typedef struct PosixExecDescription {
     uint32_t kind;
     uint32_t status_flags;
     uint32_t value;
+    uint32_t auxiliary;
     uint32_t read_wait;
     uint32_t state_offset;
     uint32_t state_size;
@@ -111,6 +121,9 @@ static uint32_t descriptor_capacity = 3u;
 static const AstraPosixFileOps *file_ops;
 static const AstraPosixSocketOps *socket_ops;
 static const AstraStartupInfo *startup_block;
+static uint32_t controlling_terminal_id;
+static uint32_t controlling_terminal_read;
+static uint32_t controlling_terminal_write;
 static char *empty_environment[] = { NULL };
 extern char **environ;
 
@@ -223,15 +236,20 @@ astra_posix_socket_bind(const AstraPosixSocketOps *ops)
 static int
 claim_descriptor(uint32_t minimum)
 {
+    uint32_t limit = astra_posix_resource_nofile();
     uint32_t fd;
 
-    if (minimum > (uint32_t)INT_MAX) {
-        errno = EINVAL;
+    if (minimum > (uint32_t)INT_MAX || minimum >= limit) {
+        errno = EMFILE;
         return -1;
     }
-    for (fd = minimum; fd < descriptor_capacity; ++fd)
+    for (fd = minimum; fd < descriptor_capacity && fd < limit; ++fd)
         if (descriptors[fd].description == NULL)
             return (int)fd;
+    if (fd >= limit) {
+        errno = EMFILE;
+        return -1;
+    }
     if (!grow_descriptors(fd + 1u))
         return -1;
     return (int)fd;
@@ -253,7 +271,10 @@ release_description(PosixOpenDescription *description)
     else if (description->kind == POSIX_DESCRIPTOR_SOCKET &&
              socket_ops != NULL)
         result = socket_ops->close(description->value);
-    else if (description->value != 0u &&
+    else if (description->kind != POSIX_DESCRIPTOR_TTY &&
+             description->value != 0u &&
+             description->value != controlling_terminal_read &&
+             description->value != controlling_terminal_write &&
              astra_close(description->value) != ASTRA_SYSCALL_OK) {
         errno = EIO;
         result = -1;
@@ -318,6 +339,42 @@ astra_posix_descriptor_socket(uint32_t slot, int flags)
 
     if (fd < 0)
         return -1;
+    return fd;
+}
+
+int
+astra_posix_descriptor_controlling_terminal(int flags)
+{
+    PosixOpenDescription *description;
+    int access = flags & O_ACCMODE;
+    int fd;
+
+    if (controlling_terminal_id == 0u ||
+        ((access == O_RDONLY || access == O_RDWR) &&
+         controlling_terminal_read == 0u) ||
+        ((access == O_WRONLY || access == O_RDWR) &&
+         controlling_terminal_write == 0u)) {
+        errno = ENXIO;
+        return -1;
+    }
+    if (access != O_RDONLY && access != O_WRONLY && access != O_RDWR) {
+        errno = EINVAL;
+        return -1;
+    }
+    fd = claim_descriptor(0u);
+    if (fd < 0)
+        return -1;
+    description = calloc(1u, sizeof(*description));
+    if (description == NULL) {
+        errno = ENOMEM;
+        return -1;
+    }
+    description->kind = POSIX_DESCRIPTOR_TTY;
+    description->value = controlling_terminal_read;
+    description->auxiliary = controlling_terminal_write;
+    description->status_flags = flags;
+    description->references = 1u;
+    descriptors[fd].description = description;
     return fd;
 }
 
@@ -434,8 +491,42 @@ astra_posix_descriptor_handle(int fd)
 {
     PosixOpenDescription *slot = entry(fd);
 
-    return slot != NULL && slot->kind == POSIX_DESCRIPTOR_STREAM ?
-        slot->value : 0u;
+    if (slot == NULL)
+        return 0u;
+    if (slot->kind == POSIX_DESCRIPTOR_STREAM)
+        return slot->value;
+    if (slot->kind == POSIX_DESCRIPTOR_TTY)
+        return (slot->status_flags & O_ACCMODE) == O_WRONLY ?
+            slot->auxiliary : slot->value;
+    return 0u;
+}
+
+uint32_t
+astra_posix_descriptor_terminal_id(int fd)
+{
+    PosixOpenDescription *slot = entry(fd);
+    AstraStreamIdentity identity;
+    uint32_t handle;
+
+    if (slot == NULL) {
+        errno = EBADF;
+        return 0u;
+    }
+    if (slot->kind == POSIX_DESCRIPTOR_TTY)
+        return controlling_terminal_id;
+    if (slot->kind != POSIX_DESCRIPTOR_STREAM) {
+        errno = ENOTTY;
+        return 0u;
+    }
+    handle = slot->value;
+    if (astra_stream_identity(handle, &identity) != ASTRA_SYSCALL_OK ||
+        (identity.kind & ASTRA_STREAM_KIND_TERMINAL) == 0u ||
+        identity.object_id == 0u ||
+        identity.object_id != controlling_terminal_id) {
+        errno = ENOTTY;
+        return 0u;
+    }
+    return identity.object_id;
 }
 
 static int
@@ -543,6 +634,10 @@ astra_posix_exec_export(void **state, uint32_t *size)
     header->magic = POSIX_EXEC_MAGIC;
     header->total_size = total;
     header->version = POSIX_EXEC_VERSION;
+    header->terminal_id = controlling_terminal_id;
+    header->terminal_read = controlling_terminal_read;
+    header->terminal_write = controlling_terminal_write;
+    astra_posix_resource_export(&header->resources);
     header->file_state_offset = sizeof(*header);
     header->file_state_size = file_size;
     if (!align_offset((uint32_t)sizeof(*header) + file_size,
@@ -578,6 +673,7 @@ astra_posix_exec_export(void **state, uint32_t *size)
         wire->kind = description->kind;
         wire->status_flags = (uint32_t)description->status_flags;
         wire->value = description->value;
+        wire->auxiliary = description->auxiliary;
         wire->read_wait = description->read_wait;
         wire->state_offset = at;
         if (description->kind == POSIX_DESCRIPTOR_FILE) {
@@ -684,6 +780,9 @@ restore_exec_descriptors(const AstraStartupInfo *startup)
         return -1;
     }
     if (header->file_state_offset != sizeof(*header) ||
+        ((header->terminal_id == 0u) !=
+         (header->terminal_read == 0u && header->terminal_write == 0u)) ||
+        !astra_posix_resource_validate(&header->resources) ||
         !align_offset((uint32_t)sizeof(*header) + header->file_state_size,
                       _Alignof(uint32_t), &expected) ||
         header->socket_state_offset != expected ||
@@ -740,7 +839,7 @@ restore_exec_descriptors(const AstraStartupInfo *startup)
         PosixOpenDescription *description;
 
         if (wire->kind < POSIX_DESCRIPTOR_STREAM ||
-            wire->kind > POSIX_DESCRIPTOR_SOCKET ||
+            wire->kind > POSIX_DESCRIPTOR_TTY ||
             wire->state_offset != state_at ||
             wire->state_offset > header->total_size ||
             wire->state_size > header->total_size - wire->state_offset) {
@@ -756,7 +855,23 @@ restore_exec_descriptors(const AstraStartupInfo *startup)
         description->kind = (uint8_t)wire->kind;
         description->status_flags = (int)wire->status_flags;
         description->value = wire->value;
+        description->auxiliary = wire->auxiliary;
         description->read_wait = wire->read_wait;
+        if ((description->kind != POSIX_DESCRIPTOR_TTY &&
+             description->auxiliary != 0u) ||
+            (description->kind == POSIX_DESCRIPTOR_TTY &&
+             (description->value != header->terminal_read ||
+              description->auxiliary != header->terminal_write ||
+              (((description->status_flags & O_ACCMODE) == O_RDONLY ||
+                (description->status_flags & O_ACCMODE) == O_RDWR) &&
+               description->value == 0u) ||
+              (((description->status_flags & O_ACCMODE) == O_WRONLY ||
+                (description->status_flags & O_ACCMODE) == O_RDWR) &&
+               description->auxiliary == 0u)))) {
+            errno = EINVAL;
+            free(description);
+            goto failed;
+        }
         if (description->kind == POSIX_DESCRIPTOR_FILE) {
             if (wire->state_size != sizeof(AstraPosixFileExecState) ||
                 file_ops->file_import(bytes + wire->state_offset,
@@ -818,6 +933,10 @@ restore_exec_descriptors(const AstraStartupInfo *startup)
     for (uint32_t index = 0u; index < header->description_count; ++index)
         if (restored[index]->references == 0u)
             (void)release_description(restored[index]);
+    controlling_terminal_id = header->terminal_id;
+    controlling_terminal_read = header->terminal_read;
+    controlling_terminal_write = header->terminal_write;
+    astra_posix_resource_import(&header->resources);
     free(restored);
     return 1;
 
@@ -843,8 +962,18 @@ astra_posix_start(const AstraStartupInfo *startup)
     };
     int restored;
 
+    uint32_t held_read = controlling_terminal_read;
+    uint32_t held_write = controlling_terminal_write;
+
     for (uint32_t fd = 0u; fd < descriptor_capacity; ++fd)
         (void)release_descriptor(&descriptors[fd]);
+    controlling_terminal_id = 0u;
+    controlling_terminal_read = 0u;
+    controlling_terminal_write = 0u;
+    if (held_read != 0u)
+        (void)astra_close(held_read);
+    if (held_write != 0u && held_write != held_read)
+        (void)astra_close(held_write);
     if (descriptors != initial_descriptors)
         free(descriptors);
     descriptors = initial_descriptors;
@@ -852,6 +981,7 @@ astra_posix_start(const AstraStartupInfo *startup)
     (void)memset(descriptors, 0, sizeof(initial_descriptors));
     (void)memset(initial_descriptions, 0, sizeof(initial_descriptions));
     startup_block = startup;
+    astra_posix_resource_reset();
     environ = empty_environment;
     if (startup != NULL && startup->environment_count != 0u &&
         startup->environment_address != 0u)
@@ -886,6 +1016,36 @@ astra_posix_start(const AstraStartupInfo *startup)
         descriptors[POSIX_STDERR].description =
             descriptors[POSIX_STDOUT].description;
         ++descriptors[POSIX_STDERR].description->references;
+    }
+    {
+        AstraPosixProcessReply foreground;
+        uint32_t service = astra_posix_process_service();
+
+        if (service == 0u ||
+            astra_posix_process_tty_foreground(service, &foreground) !=
+                ASTRA_STATUS_OK || foreground.session <= 0)
+            return;
+        for (uint32_t fd = 0u; fd < 3u; ++fd) {
+            PosixOpenDescription *description = descriptors[fd].description;
+            AstraStreamIdentity identity;
+
+            if (description == NULL ||
+                description->kind != POSIX_DESCRIPTOR_STREAM ||
+                astra_stream_identity(description->value, &identity) !=
+                    ASTRA_SYSCALL_OK ||
+                (identity.kind & ASTRA_STREAM_KIND_TERMINAL) == 0u ||
+                identity.object_id != (uint32_t)foreground.session)
+                continue;
+            if ((identity.directions & ASTRA_STREAM_DIRECTION_READ) != 0u &&
+                controlling_terminal_read == 0u)
+                controlling_terminal_read = description->value;
+            if ((identity.directions & ASTRA_STREAM_DIRECTION_WRITE) != 0u &&
+                controlling_terminal_write == 0u)
+                controlling_terminal_write = description->value;
+        }
+        if (controlling_terminal_read != 0u ||
+            controlling_terminal_write != 0u)
+            controlling_terminal_id = (uint32_t)foreground.session;
     }
 }
 
@@ -966,7 +1126,14 @@ write(int fd, const void *bytes, size_t length)
      * error; it does not answer WOULD_BLOCK.
      */
     for (;;) {
-        status = astra_stream_write(slot->value, bytes, (uint32_t)length,
+        uint32_t handle = slot->kind == POSIX_DESCRIPTOR_TTY ?
+            slot->auxiliary : slot->value;
+
+        if (handle == 0u) {
+            errno = EBADF;
+            return -1;
+        }
+        status = astra_stream_write(handle, bytes, (uint32_t)length,
                                     &written);
         if (status == ASTRA_SYSCALL_OK || written != 0u)
             return (ssize_t)written;
@@ -978,12 +1145,35 @@ write(int fd, const void *bytes, size_t length)
             errno = EAGAIN;
             return -1;
         }
-        status = astra_wait_one(slot->value, ASTRA_DEADLINE_FOREVER, NULL);
+        status = astra_wait_one(handle, ASTRA_DEADLINE_FOREVER, NULL);
         if (status != ASTRA_SYSCALL_OK) {
             errno = stream_errno(status);
             return -1;
         }
     }
+}
+
+int
+astra_posix_write_all(int descriptor, const void *bytes, size_t length)
+{
+    const uint8_t *at = bytes;
+
+    while (length != 0u) {
+        ssize_t moved = write(descriptor, at, length);
+
+        if (moved < 0) {
+            if (errno == EINTR)
+                continue;
+            return -1;
+        }
+        if (moved == 0) {
+            errno = EIO;
+            return -1;
+        }
+        at += moved;
+        length -= (size_t)moved;
+    }
+    return 0;
 }
 
 ssize_t
@@ -1063,8 +1253,14 @@ read(int fd, void *bytes, size_t length)
      */
     for (;;) {
         uint32_t flags = 0u;
+        uint32_t handle = slot->value;
 
-        status = astra_stream_read_ex(slot->value, bytes, (uint32_t)length,
+        if (handle == 0u) {
+            errno = EBADF;
+            return -1;
+        }
+
+        status = astra_stream_read_ex(handle, bytes, (uint32_t)length,
                                       &taken, &flags);
         if (status != ASTRA_SYSCALL_OK) {
             errno = stream_errno(status);
@@ -1082,7 +1278,7 @@ read(int fd, void *bytes, size_t length)
         if (slot->read_wait == 0u) {
             uint32_t events = 0u;
 
-            status = astra_stream_read_wait(slot->value, &slot->read_wait,
+            status = astra_stream_read_wait(handle, &slot->read_wait,
                                             &events);
             if (status != ASTRA_SYSCALL_OK || slot->read_wait == 0u) {
                 errno = stream_errno(status);
@@ -1131,6 +1327,10 @@ duplicate_descriptor(int oldfd, int minimum, int exact)
     }
     if (exact != 0 && oldfd == minimum)
         return oldfd;
+    if ((uint32_t)minimum >= astra_posix_resource_nofile()) {
+        errno = exact != 0 ? EBADF : EINVAL;
+        return -1;
+    }
     if (exact != 0) {
         if (!grow_descriptors((uint32_t)minimum + 1u))
             return -1;
@@ -1258,12 +1458,13 @@ astra_posix_descriptor_poll(int fd, short events, short *revents,
         return socket_ops->poll(slot->value, events, revents, handles, count);
     }
     if ((events & POLLIN) != 0 && access != O_WRONLY) {
+        uint32_t input = slot->value;
         uint32_t status;
 
         if (slot->read_wait == 0u) {
             uint32_t ready = 0u;
 
-            status = astra_stream_read_wait(slot->value, &slot->read_wait,
+            status = astra_stream_read_wait(input, &slot->read_wait,
                                             &ready);
             if (status == ASTRA_SYSCALL_PEER_DEAD ||
                 status == ASTRA_SYSCALL_CLOSED) {
@@ -1291,13 +1492,15 @@ astra_posix_descriptor_poll(int fd, short events, short *revents,
         }
     }
     if ((events & POLLOUT) != 0 && access != O_RDONLY) {
-        uint32_t status = astra_wait_one(slot->value,
+        uint32_t output = slot->kind == POSIX_DESCRIPTOR_TTY ?
+            slot->auxiliary : slot->value;
+        uint32_t status = astra_wait_one(output,
                                          astra_clock_monotonic(), NULL);
 
         if (status == ASTRA_SYSCALL_OK)
             *revents |= POLLOUT;
         else if (status == ASTRA_SYSCALL_TIMED_OUT)
-            handles[(*count)++] = slot->value;
+            handles[(*count)++] = output;
         else if (status == ASTRA_SYSCALL_PEER_DEAD ||
                  status == ASTRA_SYSCALL_CLOSED)
             *revents |= POLLERR | POLLHUP;
@@ -1316,15 +1519,12 @@ isatty(int fd)
         errno = EBADF;
         return 0;
     }
-    if (slot->kind != POSIX_DESCRIPTOR_STREAM) {
+    if (slot->kind != POSIX_DESCRIPTOR_STREAM &&
+        slot->kind != POSIX_DESCRIPTOR_TTY) {
         errno = ENOTTY;
         return 0;
     }
-    /*
-     * Every stream a program is granted today is a port to something rendering
-     * text. When a pipe becomes a thing this has to ask the stream what it is.
-     */
-    return 1;
+    return astra_posix_descriptor_terminal_id(fd) != 0u;
 }
 
 off_t

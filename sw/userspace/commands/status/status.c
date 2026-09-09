@@ -15,13 +15,12 @@
  */
 
 #include <astra/program.h>
-#include <astra/runtime.h>
 
 ASTRA_PROGRAM("status", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
 int
-astra_main(const AstraStartupInfo *startup)
+main(int argc, char **argv)
 {
     const char *word;
     uint32_t value = 0u;
@@ -32,10 +31,10 @@ astra_main(const AstraStartupInfo *startup)
      * says. The startup block itself was already validated by crt0, which
      * exits before reaching here if it was not.
      */
-    word = astra_startup_argument(startup, 1u);
-    if (word == NULL) {
+    if (argc < 2) {
         return 0;
     }
+    word = argv[1];
     /*
      * Decimal digits, and bounded at four of them. Nothing here can reach the
      * verdict bit that says a process never got to answer -- a program must not

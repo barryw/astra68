@@ -31,8 +31,8 @@ loaded — the ROM at `0xffe00400`, the kernel at its link address, the user
 image at `0x00100000`. `continue` boots it.
 
 ```
-(gdb) break console_shell_run
-Breakpoint 1 at 0x1011d6: file src/console_shell.c, line 530.
+(gdb) break console_session_run_backend
+Breakpoint 1 at 0x1011d6: file console_session.c.
 (gdb) break kernel_process_on_fault
 Breakpoint 2 at 0x205a29c: file process.c, line 5109.
 ```

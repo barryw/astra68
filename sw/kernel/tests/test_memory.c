@@ -11,7 +11,7 @@
  * any more -- the tables are carved from RAM at init -- so a test that wants a
  * scratch array per frame states the size of its own synthetic machine.
  */
-#define TEST_MAX_FRAMES (ASTRA_RAM_SIZE_ARTY_GUEST / KERNEL_PAGE_SIZE)
+#define TEST_MAX_FRAMES (ASTRA_RAM_SIZE_DE25_GUEST / KERNEL_PAGE_SIZE)
 
 static void add_range(AstraBootInfo *info, uint32_t base, uint32_t size,
                       uint32_t type, uint32_t flags)
@@ -126,15 +126,16 @@ static void test_initial_map(void)
     assert(frame.state == KERNEL_FRAME_DEVICE);
 }
 
-static void test_arty_guest_map(void)
+static void test_de25_guest_map(void)
 {
     AstraBootInfo info;
     KernelFrameInfo frame;
     KernelMemoryStats stats;
 
     make_valid_info(&info);
-    info.ram_size = ASTRA_RAM_SIZE_ARTY_GUEST;
-    add_range(&info, 0x04000000u, 0x06000000u,
+    info.ram_size = ASTRA_RAM_SIZE_DE25_GUEST;
+    add_range(&info, 0x04000000u,
+              info.ram_base + info.ram_size - 0x04000000u,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
@@ -143,7 +144,7 @@ static void test_arty_guest_map(void)
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     assert(kernel_memory_stats(&stats));
     assert(stats.total_frames == TEST_MAX_FRAMES);
-    assert(kernel_memory_frame_info(0x09fff000u, &frame));
+    assert(kernel_memory_frame_info(0x21fff000u, &frame));
     assert(frame.state == KERNEL_FRAME_EMERGENCY_RESERVED);
 }
 
@@ -801,7 +802,7 @@ static void test_contiguous_demand_survives_a_combed_frame_map(void)
 /*
  * A board larger than the constant this used to be compiled against.
  *
- * KERNEL_MAX_FRAMES was ASTRA_RAM_SIZE_ARTY_GUEST / 4096 -- 32768 -- and
+ * KERNEL_MAX_FRAMES was 128 MiB / 4096 -- 32768 -- and
  * `kernel_memory_init` refused any map larger than it outright, so a board
  * with more RAM than the image was built for did not boot. Behind that sat a
  * second, quieter ceiling: the owner frame links were `uint16_t`, so even
@@ -891,7 +892,7 @@ static void test_cow_frame_changes_owner_without_changing_charge(void)
 int main(void)
 {
     test_initial_map();
-    test_arty_guest_map();
+    test_de25_guest_map();
     test_rejects_unclassified_and_unaligned_ram();
     test_allocation_references_and_pins();
     test_owner_teardown_is_atomic_while_dma_is_pinned();

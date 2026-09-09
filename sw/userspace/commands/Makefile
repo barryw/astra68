@@ -29,6 +29,10 @@ VIM_TERMINFO_SOURCE ?= $(HOME)/ncurses-astra-6.6
 VIM_TERMINFO ?= $(HOME)/ncurses-astra
 VIM_TERMINFO_BUILD ?= $(HOME)/ncurses-astra-build
 VIM_IMAGE := $(VIM_SOURCE)/vim
+ZSH_SOURCE ?= $(HOME)/zsh-astra-v5.9.2
+ZSH_BUILD ?= $(HOME)/zsh-astra-build
+ZSH_IMAGE := $(ZSH_BUILD)/Src/zsh
+ZSH_CONFIG_SITE := $(CURDIR)/zsh/config.site
 # picolibc, built out of tree: see third_party/picolibc/ASTRA_VENDOR.md.
 PICOLIBC ?= $(HOME)/picolibc-astra
 CPPFLAGS := -I../../include -I$(RUNTIME)/include -I$(STREAMS)/include \
@@ -41,7 +45,8 @@ DEPFLAGS := -MMD -MP
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -flto -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
-	-Wl,--build-id=none -Wl,--gc-sections -T $(RUNTIME)/astra_user.ld
+	-Wl,--build-id=none -Wl,--gc-sections \
+	-Wl,--undefined=astra_posix_entry_contract -T $(RUNTIME)/astra_user.ld
 VENDOR_INCLUDE_FLAGS := -I$(abspath ../../include) \
 	-I$(abspath $(RUNTIME)/include) -I$(abspath $(STREAMS)/include) \
 	-I$(abspath $(VFS)/include) -I$(abspath $(POSIX)/include) \
@@ -50,6 +55,10 @@ VENDOR_INCLUDE_FLAGS := -I$(abspath ../../include) \
 	-isystem $(PICOLIBC)/include \
 	-isystem $(shell $(CC) -print-file-name=include) \
 	-D_GNU_SOURCE -D_DEFAULT_SOURCE -DNDEBUG
+# Ncurses deliberately exposes an opaque public TERMINAL while compiling a
+# larger internal definition.  Cross-unit LTO treats those as incompatible;
+# keep LTO on the applications, but not on this ABI boundary.
+VIM_TERMINFO_CFLAGS := $(filter-out -flto,$(TARGET_FLAGS))
 
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
@@ -62,9 +71,9 @@ PICOLIBC_MATH := $(PICOLIBC)/lib/libm.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0-hosted.o
 
 COMMANDS := status events devices which hello ls ps metrics cat mkdir rm posix \
-            heapbench fsstress date echo ntp ping lua cxx vim
-NATIVE_COMMANDS := $(filter-out lua cxx vim,$(COMMANDS))
-ANALYZER_OBJECTS := $(patsubst %,build/analyzer/%.o,$(NATIVE_COMMANDS)) \
+            heapbench fsstress date echo ntp ping lua cxx vim zsh
+SOURCE_COMMANDS := $(filter-out lua cxx vim zsh,$(COMMANDS))
+ANALYZER_OBJECTS := $(patsubst %,build/analyzer/%.o,$(SOURCE_COMMANDS)) \
 	build/analyzer/lua-adapter.o
 # What the gate installs on the volume: stripped, the way the ROM's own image
 # is, because a command carries no more DWARF onto a card than the supervisor
@@ -128,6 +137,7 @@ build/m68k/cxx: $(POSIX)/tests/cxx_runtime.cpp $(POSIX)/kit/program.c \
 VIM_PROGRAM := build/m68k/vim-program.o
 VIM_TERMINFO_LDFLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	-Wl,--build-id=none -Wl,--gc-sections \
+	-Wl,--undefined=astra_posix_entry_contract \
 	-T $(abspath $(RUNTIME)/astra_user.ld) $(abspath $(RUNTIME_CRT0)) \
 	$(abspath $(VIM_PROGRAM))
 VIM_TERMINFO_LIBS := -Wl,--start-group $(abspath $(VFS_LIB)) \
@@ -156,7 +166,7 @@ $(VIM_TERMINFO)/lib/libtinfow.a: $(PICOLIBC)/include/sys/termios.h \
 	mkdir -p $(VIM_TERMINFO_BUILD)
 	cd $(VIM_TERMINFO_BUILD) && \
 		CC='$(CC)' AR='$(AR)' RANLIB='$(RANLIB)' \
-		CFLAGS='$(TARGET_FLAGS)' \
+		CFLAGS='$(VIM_TERMINFO_CFLAGS)' \
 		CPPFLAGS='-nostdinc $(VENDOR_INCLUDE_FLAGS)' \
 		LDFLAGS='$(VIM_TERMINFO_LDFLAGS)' \
 		LIBS='$(VIM_TERMINFO_LIBS)' \
@@ -185,7 +195,8 @@ $(VIM_IMAGE): $(VIM_PROGRAM) $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
 		-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1' \
 		LDFLAGS='-nostdlib -static -L$(VIM_TERMINFO)/lib \
 		-Wl,-z,max-page-size=0x1000 -Wl,--build-id=none \
-		-Wl,--gc-sections -T $(abspath $(RUNTIME)/astra_user.ld) \
+		-Wl,--gc-sections -Wl,--undefined=astra_posix_entry_contract \
+		-T $(abspath $(RUNTIME)/astra_user.ld) \
 		$(abspath $(RUNTIME_CRT0)) $(abspath $(VIM_PROGRAM)) \
 		-Wl,--as-needed' \
 		LIBS='-Wl,--start-group -ltinfow $(abspath $(VFS_LIB)) \
@@ -197,7 +208,52 @@ build/m68k/vim: $(VIM_IMAGE)
 	@mkdir -p $(@D)
 	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@
 
-$(patsubst %,build/m68k/%,$(NATIVE_COMMANDS)): build/m68k/%: \
+ZSH_PROGRAM := build/m68k/zsh-program.o
+ZSH_SOURCES := $(shell find $(ZSH_SOURCE) -type f 2>/dev/null)
+ZSH_LDFLAGS := $(abspath $(RUNTIME_CRT0)) -nostdlib -static \
+	-Wl,-z,max-page-size=0x1000 -Wl,--build-id=none -Wl,--gc-sections \
+	-Wl,--undefined=astra_posix_entry_contract \
+	-T $(abspath $(RUNTIME)/astra_user.ld)
+ZSH_LIBS := $(abspath $(ZSH_PROGRAM)) -Wl,--start-group \
+	$(abspath $(VIM_TERMINFO)/lib/libtinfow.a) $(abspath $(POSIX_LIB)) \
+	$(abspath $(STREAMS_LIB)) $(abspath $(VFS_LIB)) \
+	$(abspath $(RUNTIME_LIB)) $(abspath $(PICOLIBC_LIB)) \
+	$(abspath $(PICOLIBC_MATH)) -lgcc -Wl,--end-group
+
+$(ZSH_PROGRAM): $(POSIX)/kit/program.c Makefile
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
+		-DASTRA_POSIX_PROGRAM_NAME='"zsh"' \
+		-DASTRA_POSIX_PROGRAM_MAJOR=5 -DASTRA_POSIX_PROGRAM_MINOR=9 \
+		-DASTRA_POSIX_PROGRAM_PATCH=2 \
+		-DASTRA_POSIX_PROGRAM_AUTHOR='"zsh contributors"' \
+		-DASTRA_POSIX_PROGRAM_COPYRIGHT='"Copyright zsh contributors"' \
+		-c $< -o $@
+
+$(ZSH_IMAGE): $(ZSH_SOURCES) $(ZSH_CONFIG_SITE) $(ZSH_PROGRAM) \
+		$(POSIX_LIB) $(RUNTIME_LIB) \
+		$(STREAMS_LIB) $(VFS_LIB) $(PICOLIBC_LIB) $(PICOLIBC_MATH) \
+		$(VIM_TERMINFO)/lib/libtinfow.a $(ASTRA_TOOLCHAIN_STAMP)
+	rm -rf $(ZSH_BUILD)
+	mkdir -p $(ZSH_BUILD)
+	cd $(ZSH_BUILD) && \
+		CONFIG_SITE='$(ZSH_CONFIG_SITE)' \
+		CC='$(CC)' \
+		CFLAGS='$(TARGET_FLAGS)' \
+		CPPFLAGS='$(VENDOR_INCLUDE_FLAGS)' \
+		LDFLAGS='$(ZSH_LDFLAGS)' \
+		LIBS='$(ZSH_LIBS)' \
+		$(ZSH_SOURCE)/configure --host=m68k-unknown-elf \
+		--cache-file=/dev/null --disable-dynamic --disable-pcre \
+		--enable-multibyte \
+		--enable-etcdir=CONFIG:
+	$(MAKE) -C $(ZSH_BUILD)
+
+build/m68k/zsh: $(ZSH_IMAGE)
+	@mkdir -p $(@D)
+	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@
+
+$(patsubst %,build/m68k/%,$(SOURCE_COMMANDS)): build/m68k/%: \
 		$$*/$$*.c $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
 		$(POSIX_LIB) $(NTP_LIB) $(NETWORK_LIB) $(RUNTIME_CRT0) \
 		$(RUNTIME)/astra_user.ld

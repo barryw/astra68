@@ -57,6 +57,11 @@
 
 static KernelPlatformHostState host_state_cache;
 static bool host_state_cached;
+static uint8_t post_text_sequence;
+
+_Static_assert(VEGA_POST_COLS == ASTRA_TEXT_COLUMNS &&
+                   VEGA_POST_ROWS == ASTRA_TEXT_ROWS,
+               "kernel and host text geometry differ");
 
 static void host_state_copy(KernelPlatformHostState *destination,
                             const KernelPlatformHostState *source)
@@ -381,16 +386,28 @@ bool kernel_platform_post_text_write(uint32_t cell, uint8_t value)
     return true;
 }
 
+void kernel_platform_post_text_update_begin(void)
+{
+    ++post_text_sequence;
+    kernel_mmio_write8(VEGA_POST_TEXT_BASE +
+                           ASTRA_TEXT_CURSOR_SEQUENCE_OFFSET,
+                       post_text_sequence);
+}
+
+void kernel_platform_post_text_update_end(void)
+{
+    ++post_text_sequence;
+    kernel_mmio_write8(VEGA_POST_TEXT_BASE +
+                           ASTRA_TEXT_CURSOR_SEQUENCE_OFFSET,
+                       post_text_sequence);
+}
+
 bool kernel_platform_post_text_cursor(uint32_t row, uint32_t column,
                                       bool visible)
 {
-    static uint8_t sequence;
-    uint8_t next = (uint8_t)(sequence + 2u);
     uint32_t base = VEGA_POST_TEXT_BASE + ASTRA_TEXT_CURSOR_OFFSET;
 
-    kernel_mmio_write8(VEGA_POST_TEXT_BASE +
-                           ASTRA_TEXT_CURSOR_SEQUENCE_OFFSET,
-                       (uint8_t)(next - 1u));
+    kernel_platform_post_text_update_begin();
     kernel_mmio_write8(base + 0u, ASTRA_TEXT_CURSOR_MAGIC_0);
     kernel_mmio_write8(base + 1u, ASTRA_TEXT_CURSOR_MAGIC_1);
     kernel_mmio_write8(base + 2u, ASTRA_TEXT_CURSOR_MAGIC_2);
@@ -401,10 +418,7 @@ bool kernel_platform_post_text_cursor(uint32_t row, uint32_t column,
                        (uint8_t)column);
     kernel_mmio_write8(VEGA_POST_TEXT_BASE + ASTRA_TEXT_CURSOR_FLAGS_OFFSET,
                        visible ? ASTRA_TEXT_CURSOR_VISIBLE : 0u);
-    kernel_mmio_write8(VEGA_POST_TEXT_BASE +
-                           ASTRA_TEXT_CURSOR_SEQUENCE_OFFSET,
-                       next);
-    sequence = next;
+    kernel_platform_post_text_update_end();
     return true;
 }
 

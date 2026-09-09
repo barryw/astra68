@@ -83,10 +83,17 @@
 
 /*
  * The file-backed QEMU text page keeps renderer-only state at its end. The
- * sequence is odd while the guest updates the cursor and even when complete,
- * so the ARM renderer never has to accept a torn row/column pair.
+ * sequence is odd while the guest updates a multi-cell text operation or the
+ * cursor and even when complete, so the host renderer never accepts a torn
+ * scroll, write, or row/column pair.
  */
 #define ASTRA_TEXT_PLANE_BYTES 4096u
+#define ASTRA_TEXT_COLUMNS 90u
+#define ASTRA_TEXT_ROWS 30u
+#define ASTRA_TEXT_TOP_MARGIN 2u
+#define ASTRA_TEXT_LEFT_MARGIN 2u
+#define ASTRA_TEXT_RIGHT_MARGIN 2u
+#define ASTRA_TEXT_BOTTOM_MARGIN 2u
 #define ASTRA_TEXT_CURSOR_OFFSET (ASTRA_TEXT_PLANE_BYTES - 8u)
 #define ASTRA_TEXT_CURSOR_MAGIC_0 ((uint8_t)'A')
 #define ASTRA_TEXT_CURSOR_MAGIC_1 ((uint8_t)'C')

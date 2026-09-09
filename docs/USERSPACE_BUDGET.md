@@ -3,7 +3,7 @@
 Status: active measurement policy.
 
 This document turns "small and fast" into values that must be measured on the
-QEMU MC68040 and qualified Arty system. A value may change after evidence and
+QEMU MC68040 and qualified DE25-Nano system. A value may change after evidence and
 an explicit design decision; it may not drift silently.
 
 `MEMORY_BUDGET.md` remains authoritative for kernel and physical-memory
@@ -12,12 +12,12 @@ heaps.
 
 ## 1. Machine envelope
 
-- Astra guest RAM: 128 MiB.
-- Graphics RAM: 128 MiB, separate from guest RAM.
-- Linux and host services: 256 MiB.
-- Primary display: 1280x720 at 60 Hz.
-- One RGB565 scanout surface: `1280 * 720 * 2 = 1,843,200` bytes.
-- CPU: QEMU TCG MC68040 without hardware FPU, approximately 30 MHz equivalent.
+- Astra guest RAM: 512 MiB, preallocated from HPS LPDDR4A.
+- Media RAM: 512 MiB of FPGA LPDDR4B, separate from guest and host RAM.
+- Linux and host services: the remainder of the 1 GiB HPS LPDDR4A device.
+- Primary display: 1920x1080 at 60 Hz.
+- One RGB565 scanout surface: `1920 * 1080 * 2 = 4,147,200` bytes.
+- CPU: QEMU TCG MC68040 without hardware FPU, approximately 72 MHz equivalent.
 
 ## 2. Resource policy
 

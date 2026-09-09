@@ -71,9 +71,9 @@ static const char *const fs_group_names[] = {
     "host.fs.invalid", "host.fs.open", "host.fs.close", "host.fs.read",
     "host.fs.write", "host.fs.sync", "host.fs.truncate", "host.fs.stat",
     "host.fs.readdir", "host.fs.mkdir", "host.fs.unlink", "host.fs.rename",
-    "host.fs.chmod", "host.fs.readlink", "host.fs.symlink"
+    "host.fs.chmod", "host.fs.readlink", "host.fs.symlink", "host.fs.link"
 };
-static HostFsMetricGroup fs_groups[ASTRA_HOST_FS_SYMLINK + 1u];
+static HostFsMetricGroup fs_groups[ASTRA_HOST_FS_LINK + 1u];
 static const HostMetricGroup block_group = {
     block_names, block_metrics, sizeof(block_metrics) / sizeof(block_metrics[0])
 };
@@ -172,7 +172,7 @@ static int register_metrics(void)
             ASTRA_METRIC_OK)
         return 0;
     for (uint32_t operation = 0u;
-         operation <= ASTRA_HOST_FS_SYMLINK; ++operation) {
+         operation <= ASTRA_HOST_FS_LINK; ++operation) {
         fs_groups[operation].operation = operation;
         if (astra_metric_register(fs_group_names[operation], sample_host_fs,
                                   &fs_groups[operation]) != ASTRA_METRIC_OK)

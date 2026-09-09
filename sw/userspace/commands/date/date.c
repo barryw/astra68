@@ -31,12 +31,13 @@
  */
 
 #include <astra/civil.h>
+#include <astra/posix.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/status.h>
-#include <astra/stream.h>
 #include <astra/syscall.h>
 
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 
@@ -59,9 +60,6 @@ typedef enum DateForm {
     DATE_FORM_CUSTOM
 } DateForm;
 
-static uint32_t stdout_handle;
-static uint32_t error_handle;
-
 /* No TZ environment exists; the instant already carries its resolved zone. */
 void
 tzset(void)
@@ -71,7 +69,7 @@ tzset(void)
 static void
 say_error(const char *text)
 {
-    (void)astra_print(error_handle, text);
+    (void)fputs(text, stderr);
 }
 
 static uint32_t
@@ -99,8 +97,8 @@ static int
 emit_line(char *out, uint32_t length)
 {
     out[length++] = '\n';
-    return astra_stream_write_all(stdout_handle, out, length) ==
-           ASTRA_SYSCALL_OK ? 0 : (int)ASTRA_STATUS_IO;
+    return fwrite(out, 1u, length, stdout) == length && fflush(stdout) == 0 ?
+        0 : (int)ASTRA_STATUS_IO;
 }
 
 /*
@@ -157,9 +155,9 @@ offset_string(int32_t offset, char *out)
 }
 
 int
-astra_main(const AstraStartupInfo *startup)
+main(int argc, char **argv)
 {
-    const AstraStartupCapability *capability;
+    const AstraStartupInfo *startup = astra_posix_startup();
     AstraCivilTime civil;
     AstraTimeZone zone = ASTRA_TIME_ZONE_UTC;
     AstraTimeZone utc = ASTRA_TIME_ZONE_UTC;
@@ -175,18 +173,8 @@ astra_main(const AstraStartupInfo *startup)
 
     if (!astra_startup_validate(startup))
         return ASTRA_STATUS_INVALID;
-    capability = astra_startup_capability(startup, "STDOUT");
-    if (capability != NULL)
-        stdout_handle = capability->handle;
-    capability = astra_startup_capability(startup, "STDERR");
-    if (capability != NULL)
-        error_handle = capability->handle;
-    if (stdout_handle == 0u)
-        return ASTRA_STATUS_ACCESS;
-    if (error_handle == 0u)
-        error_handle = stdout_handle;
-    for (uint32_t index = 1u; index < startup->argc; ++index) {
-        const char *word = astra_startup_argument(startup, index);
+    for (int index = 1; index < argc; ++index) {
+        const char *word = argv[index];
 
         if (word == NULL)
             continue;
@@ -232,7 +220,7 @@ astra_main(const AstraStartupInfo *startup)
                 return ASTRA_STATUS_UNSUPPORTED;
             default:
                 say_error("date: unknown option -");
-                (void)astra_stream_write_all(error_handle, &word[at], 1u);
+                (void)fputc(word[at], stderr);
                 say_error("\n");
                 return ASTRA_STATUS_INVALID;
             }
@@ -299,7 +287,7 @@ astra_main(const AstraStartupInfo *startup)
         if (astra_civil_expand_zone(chosen, &civil, expanded,
                                     sizeof(expanded)) == 0u) {
             say_error("date: the format does not fit in ");
-            (void)astra_print_u32(error_handle, sizeof(expanded));
+            (void)fprintf(stderr, "%lu", (unsigned long)sizeof(expanded));
             say_error(" bytes\n");
             return ASTRA_STATUS_INVALID;
         }
@@ -311,7 +299,7 @@ astra_main(const AstraStartupInfo *startup)
              * format nobody typed by accident.
              */
             say_error("date: the result does not fit in ");
-            (void)astra_print_u32(error_handle, sizeof(output));
+            (void)fprintf(stderr, "%lu", (unsigned long)sizeof(output));
             say_error(" bytes\n");
             return ASTRA_STATUS_INVALID;
         }
