@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define ASTRA_DRAW_LIST_MAGIC UINT32_C(0x41444c54) /* ADLT */
-#define ASTRA_DRAW_LIST_VERSION_1_0 UINT32_C(0x00010000)
+#define ASTRA_DRAW_LIST_VERSION_1_1 UINT32_C(0x00010001)
 #define ASTRA_DRAW_LIST_AREA_BYTES 16384u
 #define ASTRA_DRAW_LIST_COMMAND_MAX 128u
 #define ASTRA_DRAW_LIST_PAYLOAD_OFFSET 8256u
@@ -44,7 +44,11 @@ typedef struct AstraDrawListCommand {
     uint32_t payload_bytes;
     uint16_t font_height;
     uint16_t reserved16;
-    uint32_t reserved[4];
+    uint16_t clip_left;
+    uint16_t clip_top;
+    uint16_t clip_right;
+    uint16_t clip_bottom;
+    uint32_t reserved[2];
 } AstraDrawListCommand;
 
 _Static_assert(sizeof(AstraDrawListHeader) == 64u,

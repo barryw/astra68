@@ -76,6 +76,15 @@ RING_ADDRESS = 0x020C4000
 RING_SIZE = 0x10000
 
 BOOT_MARKER = "stage 8"
+INTERFACE_LAYOUT = re.compile(
+    r"INTERFACE LAYOUT controls=([0-9a-f]{8}) "
+    r"iterations=([0-9a-f]{8}) elapsed-ns=([0-9a-f]{16})")
+INTERFACE_LAYOUT_CASES = {12: 4096, 64: 1024, 256: 256}
+# The physical 70 MHz MC68040 baseline is 6.90--7.55 us/control across the
+# three cases.  Ten microseconds preserves at least 32% scheduling headroom
+# while rejecting a material regression before layout becomes a visible part
+# of a 60 Hz frame.
+INTERFACE_LAYOUT_MAX_NS_PER_CONTROL = 10_000
 
 # The desktop's Terminal icon. A double click here is what starts a terminal;
 # there is no manifest entry that starts one directly, because a window client
@@ -610,6 +619,47 @@ def open_terminal(machine, boot_deadline, command_deadline):
     return True
 
 
+def interface_layout_benchmark(machine, boot_deadline):
+    if not machine.wait_for_serial(BOOT_MARKER, boot_deadline):
+        print("FAIL: interface layout benchmark never reached the desktop")
+        return False
+    needles = tuple("INTERFACE LAYOUT controls=%08x" % count
+                    for count in INTERFACE_LAYOUT_CASES)
+    lines, _ = machine.wait_for_text(needles, boot_deadline)
+    if lines is None:
+        print("FAIL: interface layout benchmark did not finish")
+        return False
+    results = {}
+    for line in lines:
+        match = INTERFACE_LAYOUT.search(line)
+        if match is None:
+            continue
+        count, iterations, elapsed = (int(value, 16)
+                                      for value in match.groups())
+        if count in results or INTERFACE_LAYOUT_CASES.get(count) != iterations:
+            print("FAIL: malformed or duplicate layout result: %s" % line)
+            return False
+        results[count] = elapsed
+    if set(results) != set(INTERFACE_LAYOUT_CASES) or any(
+            elapsed == 0 for elapsed in results.values()):
+        print("FAIL: incomplete interface layout benchmark: %r" % results)
+        return False
+    if any(elapsed > INTERFACE_LAYOUT_MAX_NS_PER_CONTROL *
+           INTERFACE_LAYOUT_CASES[count] * count
+           for count, elapsed in results.items()):
+        print("FAIL: interface layout exceeded %u ns/control: %r" %
+              (INTERFACE_LAYOUT_MAX_NS_PER_CONTROL, results))
+        return False
+    for count in sorted(results):
+        iterations = INTERFACE_LAYOUT_CASES[count]
+        elapsed = results[count]
+        print("%3u controls  %5u reflows  %9.1f ns/reflow  %7.1f ns/control" %
+              (count, iterations, elapsed / iterations,
+               elapsed / (iterations * count)))
+    print("ASTRA INTERFACE LAYOUT PASS")
+    return True
+
+
 def wait_for_command(machine, expected, deadline, before, exact=False):
     """Return only after both the answer and the following prompt exist."""
     said, _ = machine.wait_for_text(expected, deadline, before, exact=exact)
@@ -822,7 +872,7 @@ def warm_the_store(qemu, rom, image, temporary, boot_deadline,
 
 def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         report_timings, prepared_image, performance_only, vim_gate,
-        network_only, vim_only, cxx_only, zsh_only):
+        network_only, vim_only, cxx_only, zsh_only, interface_layout_only):
     timings = []
     with tempfile.TemporaryDirectory(prefix="astra-terminal-") as temporary:
         scratch = os.path.join(temporary, "card.img")
@@ -831,7 +881,7 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         if not prepared_image:
             astra_image.install(scratch, catalog)
         needs_warm_store = not (performance_only or network_only or vim_only or
-                                cxx_only or zsh_only)
+                                cxx_only or zsh_only or interface_layout_only)
         if needs_warm_store and not warm_the_store(
                 qemu, rom, scratch, temporary, boot_deadline,
                 command_deadline):
@@ -840,6 +890,9 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         os.mkdir(run_dir)
         machine = Machine(qemu, rom, scratch, run_dir)
         try:
+            if interface_layout_only:
+                return 0 if interface_layout_benchmark(
+                    machine, boot_deadline) else 1
             if not open_terminal(machine, boot_deadline, command_deadline):
                 return 1
             script = (ZSH_SCRIPT if zsh_only else
@@ -1005,6 +1058,8 @@ def main():
                         help="run only the C++ runtime integration gate")
     parser.add_argument("--zsh-only", action="store_true",
                         help="run only the upstream zsh integration gate")
+    parser.add_argument("--interface-layout-only", action="store_true",
+                        help="run only the target interface reflow benchmark")
     arguments = parser.parse_args()
     MEMORY = arguments.memory
     return run(arguments.qemu, arguments.rom, arguments.image,
@@ -1013,7 +1068,8 @@ def main():
                arguments.report_timings, arguments.prepared_image,
                arguments.performance_only, arguments.vim_gate,
                arguments.network_only, arguments.vim_only,
-               arguments.cxx_only, arguments.zsh_only)
+               arguments.cxx_only, arguments.zsh_only,
+               arguments.interface_layout_only)
 
 
 if __name__ == "__main__":

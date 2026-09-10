@@ -5,10 +5,10 @@
 
 #include <astra/surface.h>
 
-#define ASTRA_FONT_LIBRARY_ABI_MAJOR 1u
+#define ASTRA_FONT_LIBRARY_ABI_MAJOR 2u
 #define ASTRA_FONT_LIBRARY_ABI_MINOR 0u
 
-typedef struct AstraFontLibraryV1 {
+typedef struct AstraFontLibraryV2 {
     uint16_t abi_major;
     uint16_t abi_minor;
     uint32_t structure_size;
@@ -18,6 +18,6 @@ typedef struct AstraFontLibraryV1 {
     void (*draw_list_mono_text)(AstraSurfaceView *, int32_t, int32_t,
                                 const char *, uint32_t, uint16_t, uint16_t,
                                 uint16_t);
-} AstraFontLibraryV1;
+} AstraFontLibraryV2;
 
 #endif

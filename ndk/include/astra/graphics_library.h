@@ -6,10 +6,10 @@
 #include <astra/bundle.h>
 #include <astra/surface.h>
 
-#define ASTRA_GRAPHICS_LIBRARY_ABI_MAJOR 1u
-#define ASTRA_GRAPHICS_LIBRARY_ABI_MINOR 3u
+#define ASTRA_GRAPHICS_LIBRARY_ABI_MAJOR 2u
+#define ASTRA_GRAPHICS_LIBRARY_ABI_MINOR 0u
 
-typedef struct AstraGraphicsLibraryV1 {
+typedef struct AstraGraphicsLibraryV2 {
     uint16_t abi_major;
     uint16_t abi_minor;
     uint32_t structure_size;
@@ -35,6 +35,8 @@ typedef struct AstraGraphicsLibraryV1 {
     int (*draw_list_copy)(AstraSurfaceView *, uint32_t, uint32_t, uint32_t,
                           uint32_t, uint32_t, uint32_t);
     int (*text_box_scroll)(AstraTextBox *, int32_t);
-} AstraGraphicsLibraryV1;
+    int (*surface_clip)(AstraSurfaceView *, int32_t, int32_t,
+                        uint32_t, uint32_t);
+} AstraGraphicsLibraryV2;
 
 #endif

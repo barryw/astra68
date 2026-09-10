@@ -10,7 +10,10 @@ typedef struct AstraSurfaceView {
     uint16_t width;
     uint16_t height;
     uint16_t kind;
-    uint16_t reserved;
+    uint16_t clip_left;
+    uint16_t clip_top;
+    uint16_t clip_right;
+    uint16_t clip_bottom;
 } AstraSurfaceView;
 
 typedef struct AstraTextBox {
@@ -35,6 +38,8 @@ typedef struct AstraSharedSurface {
 int astra_surface_view_init(AstraSurfaceView *surface, void *pixels,
                             uint32_t byte_size, uint16_t width,
                             uint16_t height, uint32_t pitch);
+int astra_surface_clip(AstraSurfaceView *surface, int32_t x, int32_t y,
+                       uint32_t width, uint32_t height);
 int astra_draw_list_view_init(AstraSurfaceView *surface, void *storage,
                               uint32_t byte_size, uint16_t width,
                               uint16_t height);

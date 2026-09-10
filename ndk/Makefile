@@ -20,7 +20,7 @@ PIC_LIB := build/m68k/libastra-pic.a
 SOURCES := src/resource.c src/area.c src/port.c src/bulk_ring.c \
 	src/front_panel.c src/font.c src/graphics.c src/pointer.c src/window.c \
 	src/application.c src/fixed.c src/manifest.c src/bundle.c \
-	src/datetime.c src/display_mode.c
+	src/datetime.c src/display_mode.c src/keymap.c
 TARGET_OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES))
 PIC_OBJECTS := $(patsubst build/m68k/%,build/m68k/pic/%,$(TARGET_OBJECTS))
 HOST_TESTS := build/host/test_front_panel build/host/test_font \

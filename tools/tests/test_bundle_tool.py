@@ -14,7 +14,8 @@ def bundle(root):
     (root / "bin").mkdir()
     (root / "resources").mkdir()
     (root / "bin" / "Terminal").write_bytes(b"elf")
-    (root / "resources" / "Terminal.aicon").write_bytes(aicon.build())
+    (root / "resources" / "Terminal.aicon").write_bytes(
+        aicon.build("terminal"))
     (root / "manifest").write_text(
         "astra-bundle 1\nkind application\nid org.astra.terminal\n"
         "name Terminal\nversion 0.1.0\nexecutable bin/Terminal\n"

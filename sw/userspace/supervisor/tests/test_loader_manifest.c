@@ -31,8 +31,7 @@ static void valid_manifest(void)
     {
         char terminal[] =
         "application SERVICES:terminal grants DISPLAY INPUT INPUT_IRQ "
-            "WORK:rw COMMANDS:r LIBS:r EVENTS:r EVENT_CONTROL delegates "
-            "required\n";
+            "WORK:rw COMMANDS:r LIBS:r EVENTS:r EVENT_CONTROL delegates\n";
 
         assert(supervisor_manifest_parse(terminal, sizeof(terminal) - 1u,
                                          &manifest));
@@ -47,7 +46,7 @@ static void valid_manifest(void)
             "service SERVICES:display grants DISPLAY DISPLAY_IRQ "
             "serves GUI required\n"
             "application SERVICES:terminal grants GUI WORK:rw COMMANDS:r "
-            "LIBS:r EVENTS:r EVENT_CONTROL delegates required\n";
+            "LIBS:r EVENTS:r EVENT_CONTROL delegates\n";
 
         assert(supervisor_manifest_parse(display, sizeof(display) - 1u,
                                          &manifest));
@@ -78,16 +77,6 @@ static void valid_manifest(void)
                       "NETWORK_LISTEN") == 0);
         assert(manifest.entries[0].serves[1].rights == 0u);
     }
-    {
-        char installer[] =
-            "application SERVICES:installer grants LIBS:rw required\n";
-
-        assert(supervisor_manifest_parse(installer, sizeof(installer) - 1u,
-                                         &manifest));
-        assert(manifest.entries[0].grant_count == 1u);
-        assert(manifest.entries[0].grants[0].rights ==
-               (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE));
-    }
 }
 
 static void refuses_whole_file(void)
@@ -98,6 +87,8 @@ static void refuses_whole_file(void)
     char wrong_order[] =
         "service SERVICES:events serves EVENTS:r grants STORE:rw\n";
     char command[] = "command COMMANDS:shell grants SYS:r required\n";
+    char required_application[] =
+        "application APPS:Broken.app grants GUI required\n";
     char too_many[4096] = "";
     SupervisorManifest manifest;
 
@@ -107,6 +98,9 @@ static void refuses_whole_file(void)
     assert(!supervisor_manifest_parse(wrong_order,
                                       sizeof(wrong_order) - 1u, &manifest));
     assert(!supervisor_manifest_parse(command, sizeof(command) - 1u,
+                                      &manifest));
+    assert(!supervisor_manifest_parse(required_application,
+                                      sizeof(required_application) - 1u,
                                       &manifest));
     for (uint32_t index = 0u; index < ASTRA_PROCESS_COUNT_MAX; ++index)
         (void)strcat(too_many, "service SERVICES:extra grants SYS:r\n");

@@ -1,5 +1,9 @@
 # AstraVM Interface System
 
+> This file defines the host-side AstraVM instrument. The guest Astra OS has a
+> separate interface system in [astra-os.md](astra-os.md); do not merge their
+> component or token contracts.
+
 ## Direction
 
 AstraVM is a purpose-built reference instrument for the person designing,

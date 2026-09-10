@@ -119,6 +119,8 @@ static int parse_line(char *line, SupervisorManifestEntry *entry)
         ++at;
     }
     if (at < count && strcmp(token[at], "required") == 0) {
+        if (entry->resident == 0u)
+            return 0;
         entry->required = 1u;
         ++at;
     }

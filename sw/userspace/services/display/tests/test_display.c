@@ -823,43 +823,29 @@ int main(void)
                (focus.windows[1].request.flags & ASTRA_WINDOW_ACTIVE) != 0u);
     }
     {
-        /* Nothing may be painted where an opaque window above will cover it,
-           and a draw list that opens with a full-surface fill makes the
-           compositor's own initialise-fill redundant. */
+        /* Every damaged layer is submitted bottom-to-top. Astraea resolves
+           overlap by command order; the MC68040 does not split visible
+           regions. A draw list that opens with a full-surface fill still
+           makes the compositor's own initialise-fill redundant. */
         DisplayState stack = {
             .damage = {
                 { 100, 100, 300, 300, 1u },
                 { 100, 100, 300, 300, 1u }
             }
         };
-        DamageRect whole = { 0, 0, 100, 100, 1u };
-        DamageRect middle = { 20, 20, 80, 80, 1u };
-        DamageRect all = { 0, 0, 100, 100, 1u };
-        DamageRect apart = { 200, 200, 300, 300, 1u };
-        DamageRect pieces[4];
-        DamageRect region[DISPLAY_REGION_MAX];
         uint32_t bytes;
-
-        assert(rect_subtract(&whole, &middle, pieces) == 4u);
-        assert(rect_subtract(&whole, &all, pieces) == 0u);
-        assert(rect_subtract(&whole, &apart, pieces) == 1u &&
-               pieces[0].left == 0 && pieces[0].right == 100);
 
         add_window(&stack, 0u, ASTRA_WINDOW_DESKTOP, 0u, DISPLAY_WORK_TOP,
                    ASTRA_DISPLAY_WIDTH,
                    DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP, 0u, 0u);
         add_window(&stack, 1u, ASTRA_WINDOW_FULLSCREEN, 100u, 100u,
                    200u, 200u, ASTRA_WINDOW_ACTIVE, 0u);
-        assert(visible_region(&stack, &theme, &stack.damage[0], 1u,
-                              region) == 0u);
-        assert(visible_region(&stack, &theme, &stack.damage[0], 2u,
-                              region) == 1u);
 
         bytes = compose(batch, 2u, &stack, &error, NULL);
         assert(bytes != 0u && error == ASTRA_STATUS_OK);
-        assert(!batch_has_fill(100, 100, 200u, 200u, color(theme.canvas)));
+        assert(batch_has_fill(100, 100, 200u, 200u, color(theme.canvas)));
         assert(batch_fill_count(0, 0, 200u, 200u, color(theme.client)) == 1u);
-        assert(batch_blit_count() == 1u);
+        assert(batch_blit_count() == 2u);
     }
     puts("display compositor tests passed");
     return 0;

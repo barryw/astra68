@@ -90,30 +90,35 @@ build/m68k/library/graphics_library.o: src/graphics_library.c \
 		../../../ndk/include/astra/graphics_library.h \
 		../../include/astra/library.h
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
 
 build/m68k/library/font_library.o: src/font_library.c \
 		../../../ndk/include/astra/font_library.h \
 		../../include/astra/library.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) -Ibuild/generated \
-		-c $< -o $@
+		$(DEPFLAGS) -c $< -o $@
 
 build/m68k/library/graphics_surface.o: src/surface.c $(FONT_HEADER) \
 		$(UI_FONT_HEADER) $(MONO_FONT_HEADER)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(LIBRARY_FLAGS) \
-		-c $< -o $@
+		$(DEPFLAGS) -c $< -o $@
 
 build/m68k/library/font_surface.o: src/surface.c $(FONT_HEADER) \
 		$(UI_FONT_HEADER) $(MONO_FONT_HEADER)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(LIBRARY_FLAGS) \
-		-c $< -o $@
+		$(DEPFLAGS) -c $< -o $@
 
 build/m68k/library/graphics_shared_surface.o: src/shared_surface.c
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
+$(TARGET_OBJECTS) $(PIC_OBJECTS): Makefile
+$(GRAPHICS_LIBRARY_OBJECTS) $(FONT_LIBRARY_OBJECTS): Makefile
 
 $(NDK_PIC_LIB):
 	$(MAKE) -C ../../../ndk pic
@@ -125,21 +130,21 @@ $(GRAPHICS_LIBRARY): $(GRAPHICS_LIBRARY_OBJECTS) $(NDK_PIC_LIB) \
 		$(RUNTIME_PIC_LIB) $(LIBRARY_LD)
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(LIBRARY_LINK_FLAGS) \
-		-Wl,-soname,graphics.library.1 -o $@ \
+		-Wl,-soname,graphics.library.2 -o $@ \
 		$(GRAPHICS_LIBRARY_OBJECTS) -Wl,--start-group $(NDK_PIC_LIB) \
 		$(RUNTIME_PIC_LIB) -Wl,--end-group -lgcc
 
 $(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(RUNTIME_PIC_LIB) $(LIBRARY_LD)
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(LIBRARY_LINK_FLAGS) \
-		-Wl,-soname,font.library.1 -o $@ $(FONT_LIBRARY_OBJECTS) \
+		-Wl,-soname,font.library.2 -o $@ $(FONT_LIBRARY_OBJECTS) \
 		$(RUNTIME_PIC_LIB) -lgcc
 
 library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@python3 ../../../tools/library_info.py $(GRAPHICS_LIBRARY) | \
-		grep -q '^graphics.library 1.3.0 ABI 1.3$$'
+		grep -q '^graphics.library 2.0.0 ABI 2.0$$'
 	@python3 ../../../tools/library_info.py $(FONT_LIBRARY) | \
-		grep -q '^font.library 1.0.0 ABI 1.0$$'
+		grep -q '^font.library 2.0.0 ABI 2.0$$'
 	$(call ASTRA_CHECK_DSO,$(GRAPHICS_LIBRARY) $(FONT_LIBRARY))
 
 $(HOST_TEST): src/surface.c src/render_builder.c tests/test_surface.c \

@@ -1,5 +1,5 @@
 SUBDIRS := runtime metrics alloc storage vfs events input terminal graphics interface messaging network config \
-	streams posix ntp commands supervisor services kits apps
+	streams posix ntp commands supervisor services applications kits apps
 NDK := ../../ndk
 SYSTEM_CATALOG := build/m68k/astra_events.cat
 SUPERVISOR_ELF := supervisor/build/m68k/astra_supervisor.elf

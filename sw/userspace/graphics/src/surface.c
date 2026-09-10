@@ -54,13 +54,17 @@ static AstraDrawListCommand *draw_commands(AstraSurfaceView *surface)
                                     sizeof(AstraDrawListHeader));
 }
 
+static int clip_valid(const AstraSurfaceView *surface);
+static int clip_empty(const AstraSurfaceView *surface);
+
 static AstraDrawListCommand *append_command(AstraSurfaceView *surface,
                                             uint32_t operation)
 {
     AstraDrawListHeader *header;
     AstraDrawListCommand *command;
 
-    if (surface == NULL || surface->kind != ASTRA_SURFACE_VIEW_DRAW_LIST)
+    if (!clip_valid(surface) || clip_empty(surface) ||
+        surface->kind != ASTRA_SURFACE_VIEW_DRAW_LIST)
         return NULL;
     header = draw_header(surface);
     if (header->command_count >= ASTRA_DRAW_LIST_COMMAND_MAX)
@@ -68,6 +72,10 @@ static AstraDrawListCommand *append_command(AstraSurfaceView *surface,
     command = &draw_commands(surface)[header->command_count++];
     *command = (AstraDrawListCommand){0};
     command->operation = operation;
+    command->clip_left = surface->clip_left;
+    command->clip_top = surface->clip_top;
+    command->clip_right = surface->clip_right;
+    command->clip_bottom = surface->clip_bottom;
     return command;
 }
 
@@ -75,6 +83,29 @@ static const uint16_t *const_row(const AstraSurfaceView *surface, uint32_t y)
 {
     return (const uint16_t *)((const uint8_t *)surface->pixels +
                              y * surface->pitch);
+}
+
+static void full_clip(AstraSurfaceView *surface)
+{
+    surface->clip_left = 0u;
+    surface->clip_top = 0u;
+    surface->clip_right = surface->width;
+    surface->clip_bottom = surface->height;
+}
+
+static int clip_valid(const AstraSurfaceView *surface)
+{
+    return surface != NULL && surface->pixels != NULL &&
+           surface->clip_left <= surface->clip_right &&
+           surface->clip_right <= surface->width &&
+           surface->clip_top <= surface->clip_bottom &&
+           surface->clip_bottom <= surface->height;
+}
+
+static int clip_empty(const AstraSurfaceView *surface)
+{
+    return surface->clip_left == surface->clip_right ||
+           surface->clip_top == surface->clip_bottom;
 }
 
 int astra_surface_view_init(AstraSurfaceView *surface, void *pixels,
@@ -95,7 +126,7 @@ int astra_surface_view_init(AstraSurfaceView *surface, void *pixels,
     surface->width = width;
     surface->height = height;
     surface->kind = ASTRA_SURFACE_VIEW_RGB565;
-    surface->reserved = 0u;
+    full_clip(surface);
     return 1;
 }
 
@@ -114,11 +145,11 @@ int astra_draw_list_view_init(AstraSurfaceView *surface, void *storage,
     surface->width = width;
     surface->height = height;
     surface->kind = ASTRA_SURFACE_VIEW_DRAW_LIST;
-    surface->reserved = 0u;
+    full_clip(surface);
     header = draw_header(surface);
     *header = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_0,
+        .version = ASTRA_DRAW_LIST_VERSION_1_1,
         .total_bytes = ASTRA_DRAW_LIST_AREA_BYTES,
         .width = width,
         .height = height,
@@ -135,7 +166,7 @@ int astra_draw_list_view_adopt(AstraSurfaceView *surface, void *storage,
     if (surface == NULL || storage == NULL ||
         byte_size < ASTRA_DRAW_LIST_AREA_BYTES ||
         header->magic != ASTRA_DRAW_LIST_MAGIC ||
-        header->version != ASTRA_DRAW_LIST_VERSION_1_0 ||
+        header->version != ASTRA_DRAW_LIST_VERSION_1_1 ||
         header->total_bytes != ASTRA_DRAW_LIST_AREA_BYTES ||
         header->width != width || header->height != height ||
         header->command_count > ASTRA_DRAW_LIST_COMMAND_MAX ||
@@ -147,7 +178,32 @@ int astra_draw_list_view_adopt(AstraSurfaceView *surface, void *storage,
     surface->width = width;
     surface->height = height;
     surface->kind = ASTRA_SURFACE_VIEW_DRAW_LIST;
-    surface->reserved = 0u;
+    full_clip(surface);
+    return 1;
+}
+
+int astra_surface_clip(AstraSurfaceView *surface, int32_t x, int32_t y,
+                       uint32_t width, uint32_t height)
+{
+    int64_t left = x;
+    int64_t top = y;
+    int64_t right = left + width;
+    int64_t bottom = top + height;
+
+    if (!clip_valid(surface))
+        return 0;
+    if (left < surface->clip_left) left = surface->clip_left;
+    if (top < surface->clip_top) top = surface->clip_top;
+    if (left > surface->clip_right) left = surface->clip_right;
+    if (top > surface->clip_bottom) top = surface->clip_bottom;
+    if (right > surface->clip_right) right = surface->clip_right;
+    if (bottom > surface->clip_bottom) bottom = surface->clip_bottom;
+    if (right < left) right = left;
+    if (bottom < top) bottom = top;
+    surface->clip_left = (uint16_t)left;
+    surface->clip_top = (uint16_t)top;
+    surface->clip_right = (uint16_t)right;
+    surface->clip_bottom = (uint16_t)bottom;
     return 1;
 }
 
@@ -170,7 +226,8 @@ void astra_surface_fill(AstraSurfaceView *surface, int32_t x, int32_t y,
     uint32_t last_y;
 
     if (surface != NULL && surface->kind == ASTRA_SURFACE_VIEW_DRAW_LIST) {
-        if (width == 0u || height == 0u)
+        if (!clip_valid(surface) || clip_empty(surface) ||
+            width == 0u || height == 0u)
             return;
         command = append_command(surface, ASTRA_DRAW_LIST_FILL);
         if (command != NULL) {
@@ -182,18 +239,20 @@ void astra_surface_fill(AstraSurfaceView *surface, int32_t x, int32_t y,
         }
         return;
     }
-    if (surface == NULL || surface->pixels == NULL || width == 0u ||
+    if (!clip_valid(surface) || width == 0u ||
         height == 0u)
         return;
     right = (int64_t)x + width;
     bottom = (int64_t)y + height;
-    if (right <= 0 || bottom <= 0 || x >= surface->width ||
-        y >= surface->height)
+    if (right <= surface->clip_left || bottom <= surface->clip_top ||
+        x >= surface->clip_right || y >= surface->clip_bottom)
         return;
-    first_x = x < 0 ? 0u : (uint32_t)x;
-    first_y = y < 0 ? 0u : (uint32_t)y;
-    last_x = right > surface->width ? surface->width : (uint32_t)right;
-    last_y = bottom > surface->height ? surface->height : (uint32_t)bottom;
+    first_x = x < surface->clip_left ? surface->clip_left : (uint32_t)x;
+    first_y = y < surface->clip_top ? surface->clip_top : (uint32_t)y;
+    last_x = right > surface->clip_right ? surface->clip_right :
+                                                (uint32_t)right;
+    last_y = bottom > surface->clip_bottom ? surface->clip_bottom :
+                                                  (uint32_t)bottom;
     for (uint32_t at_y = first_y; at_y < last_y; ++at_y) {
         uint16_t *pixels = row(surface, at_y);
 
@@ -216,7 +275,8 @@ int astra_draw_list_copy(AstraSurfaceView *surface, uint32_t source_x,
 {
     AstraDrawListCommand *command;
 
-    if (surface == NULL || surface->kind != ASTRA_SURFACE_VIEW_DRAW_LIST ||
+    if (!clip_valid(surface) ||
+        surface->kind != ASTRA_SURFACE_VIEW_DRAW_LIST ||
         width == 0u || height == 0u ||
         source_x > surface->width || width > surface->width - source_x ||
         source_y > surface->height || height > surface->height - source_y ||
@@ -225,6 +285,8 @@ int astra_draw_list_copy(AstraSurfaceView *surface, uint32_t source_x,
         destination_y > surface->height ||
         height > surface->height - destination_y)
         return 0;
+    if (clip_empty(surface))
+        return 1;
     command = append_command(surface, ASTRA_DRAW_LIST_COPY);
     if (command == NULL)
         return 0;
@@ -310,17 +372,27 @@ void astra_surface_blit(AstraSurfaceView *destination, int32_t x, int32_t y,
     uint32_t width;
     uint32_t height;
 
-    if (destination == NULL || source == NULL || destination->pixels == NULL ||
-        source->pixels == NULL || destination_x >= destination->width ||
-        destination_y >= destination->height || source_x >= source->width ||
-        source_y >= source->height)
+    if (!clip_valid(destination) || source == NULL || source->pixels == NULL ||
+        destination_x >= destination->clip_right ||
+        destination_y >= destination->clip_bottom ||
+        source_x >= source->width || source_y >= source->height)
+        return;
+    if (destination_x < destination->clip_left) {
+        source_x += destination->clip_left - destination_x;
+        destination_x = destination->clip_left;
+    }
+    if (destination_y < destination->clip_top) {
+        source_y += destination->clip_top - destination_y;
+        destination_y = destination->clip_top;
+    }
+    if (source_x >= source->width || source_y >= source->height)
         return;
     width = source->width - source_x;
     height = source->height - source_y;
-    if (width > destination->width - destination_x)
-        width = destination->width - destination_x;
-    if (height > destination->height - destination_y)
-        height = destination->height - destination_y;
+    if (width > destination->clip_right - destination_x)
+        width = destination->clip_right - destination_x;
+    if (height > destination->clip_bottom - destination_y)
+        height = destination->clip_bottom - destination_y;
     for (uint32_t at_y = 0u; at_y < height; ++at_y) {
         uint16_t *out = row(destination, destination_y + at_y) + destination_x;
         const uint16_t *in = const_row(source, source_y + at_y) + source_x;
@@ -336,8 +408,7 @@ void astra_surface_blit_round(AstraSurfaceView *destination, int32_t x,
 {
     uint32_t bounded_radius = radius;
 
-    if (destination == NULL || source == NULL || destination->pixels == NULL ||
-        source->pixels == NULL)
+    if (!clip_valid(destination) || source == NULL || source->pixels == NULL)
         return;
     if (bounded_radius > source->width / 2u)
         bounded_radius = source->width / 2u;
@@ -350,14 +421,16 @@ void astra_surface_blit_round(AstraSurfaceView *destination, int32_t x,
         const uint16_t *in = const_row(source, source_y);
         uint16_t *out;
 
-        if (destination_y < 0 || destination_y >= destination->height)
+        if (destination_y < destination->clip_top ||
+            destination_y >= destination->clip_bottom)
             continue;
         out = row(destination, (uint32_t)destination_y);
         for (uint32_t source_x = inset;
              source_x < (uint32_t)source->width - inset; ++source_x) {
             int64_t destination_x = (int64_t)x + source_x;
 
-            if (destination_x >= 0 && destination_x < destination->width)
+            if (destination_x >= destination->clip_left &&
+                destination_x < destination->clip_right)
                 out[destination_x] = in[source_x];
         }
     }
@@ -370,8 +443,7 @@ void astra_surface_blit_round_bottom(AstraSurfaceView *destination, int32_t x,
 {
     uint32_t bounded_radius = radius;
 
-    if (destination == NULL || source == NULL || destination->pixels == NULL ||
-        source->pixels == NULL)
+    if (!clip_valid(destination) || source == NULL || source->pixels == NULL)
         return;
     if (bounded_radius > source->width / 2u)
         bounded_radius = source->width / 2u;
@@ -385,14 +457,16 @@ void astra_surface_blit_round_bottom(AstraSurfaceView *destination, int32_t x,
         const uint16_t *in = const_row(source, source_y);
         uint16_t *out;
 
-        if (destination_y < 0 || destination_y >= destination->height)
+        if (destination_y < destination->clip_top ||
+            destination_y >= destination->clip_bottom)
             continue;
         out = row(destination, (uint32_t)destination_y);
         for (uint32_t source_x = inset;
              source_x < (uint32_t)source->width - inset; ++source_x) {
             int64_t destination_x = (int64_t)x + source_x;
 
-            if (destination_x >= 0 && destination_x < destination->width)
+            if (destination_x >= destination->clip_left &&
+                destination_x < destination->clip_right)
                 out[destination_x] = in[source_x];
         }
     }
@@ -566,7 +640,7 @@ static void draw_list_text(AstraSurfaceView *surface, int32_t x, int32_t y,
     AstraDrawListHeader *header;
     AstraDrawListCommand *command;
 
-    if (surface == NULL || utf8 == NULL ||
+    if (!clip_valid(surface) || clip_empty(surface) || utf8 == NULL ||
         surface->kind != ASTRA_SURFACE_VIEW_DRAW_LIST)
         return;
     header = draw_header(surface);

@@ -13,7 +13,7 @@
 ASTRA_EXTERN_C_BEGIN
 
 /** Version of the immutable system theme snapshot. */
-#define ASTRA_THEME_GENERATION UINT32_C(4)
+#define ASTRA_THEME_GENERATION UINT32_C(5)
 
 /** Native strike sizes selected by the immutable Astra 0.1 theme. */
 #define ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT UINT16_C(11)
@@ -39,14 +39,30 @@ typedef struct AstraTheme {
     AstraColorRGBA8 control_hover;
     AstraColorRGBA8 control_pressed;
     AstraColorRGBA8 text_primary;
+    AstraColorRGBA8 text_secondary;
+    AstraColorRGBA8 text_tertiary;
     AstraColorRGBA8 text_muted;
+    AstraColorRGBA8 client_text;
+    AstraColorRGBA8 client_text_secondary;
+    AstraColorRGBA8 surface_raised;
+    AstraColorRGBA8 surface_inset;
+    AstraColorRGBA8 border_soft;
+    AstraColorRGBA8 border_emphasis;
+    AstraColorRGBA8 client_border;
     AstraColorRGBA8 accent;
+    AstraColorRGBA8 accent_text;
     AstraColorRGBA8 warning;
     AstraColorRGBA8 fault;
+    AstraColorRGBA8 control_disabled;
+    AstraColorRGBA8 control_selected;
+    AstraColorRGBA8 control_error;
+    AstraColorRGBA8 control_focus;
+    uint16_t scale;
     uint16_t body_font_height;
     uint16_t title_font_height;
     uint16_t mono_font_height;
     uint16_t mono_cell_width;
+    uint16_t control_font_height;
     uint16_t spacing_unit;
     uint16_t window_radius;
     uint16_t frame_width;
@@ -58,7 +74,10 @@ typedef struct AstraTheme {
     uint16_t control_radius;
     uint16_t card_radius;
     uint16_t resize_hit;
-    uint16_t reserved16;
+    uint16_t control_height;
+    uint16_t control_padding_x;
+    uint16_t control_border_width;
+    uint16_t focus_width;
     uint32_t reserved[4];
 } AstraTheme;
 
@@ -70,13 +89,23 @@ typedef struct AstraTheme {
     { 25, 34, 42, 255 }, { 236, 239, 240, 255 }, \
     { 70, 79, 86, 255 }, { 92, 104, 112, 255 }, \
     { 45, 54, 61, 255 }, { 239, 244, 246, 255 }, \
-    { 151, 163, 169, 255 }, { 45, 174, 184, 255 }, \
+    { 201, 211, 216, 255 }, { 151, 163, 169, 255 }, \
+    { 111, 126, 139, 255 }, { 26, 36, 43, 255 }, \
+    { 92, 104, 112, 255 }, { 247, 249, 249, 255 }, \
+    { 227, 231, 233, 255 }, { 38, 48, 59, 255 }, \
+    { 45, 54, 61, 255 }, { 214, 220, 223, 255 }, \
+    { 45, 174, 184, 255 }, { 6, 34, 39, 255 }, \
     { 211, 154, 57, 255 }, { 177, 73, 73, 255 }, \
+    { 214, 220, 223, 255 }, { 45, 174, 184, 255 }, \
+    { 177, 73, 73, 255 }, { 45, 174, 184, 255 }, \
+    1, \
     ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT, \
     ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT, \
     ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT, \
     ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH, \
-    4, 12, 2, 26, 22, 2, 20, 10, 8, 8, 6, 0, { 0, 0, 0, 0 } \
+    ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT, \
+    4, 12, 2, 26, 22, 2, 20, 10, 8, 8, 6, 28, 14, 1, 2, \
+    { 0, 0, 0, 0 } \
 }
 
 ASTRA_EXTERN_C_END

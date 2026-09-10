@@ -27,6 +27,7 @@
 #include <astra/posix.h>
 #include <astra/runtime.h>
 #include <astra/stream.h>
+#include <astra/input_modifiers.h>
 #include <astra/keymap.h>
 #include <astra/terminal.h>
 #include <astra/events_kit.h>

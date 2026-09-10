@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-09-09
+Status: active continuation map, 2026-09-10
 
 This file contains current facts only. Git history holds superseded board,
 processor, benchmark, and milestone records. The platform is **Astra 68**, its
@@ -67,15 +67,129 @@ clock. Requested clock values, generated PLL clocks, Platform Designer
 metadata, RTL timing constants, TimeQuest constraints, and physical behavior
 must agree; none may substitute for another as release evidence.
 
+Retained interface-performance release
+`1c12a8d59120f00181cdda7171330922febd623590bd24adb7f61db25505f0e1`
+established the current flat-layout baseline. Its storage, ROM, and QEMU
+SHA-256 values are respectively
+`01c7a3ce8a99ccec41687eb401d780852f77047564382d6fd2ba1878bbffc3f4`,
+`750be675b149b2355d6ddd1d5aa22264e63ee420ad44694b00ea307d8e64e2a6`,
+and `4c5606a57402fff5c404da0d0033eed975ed3f6454b2244f9fe32de12ea3df5e`.
+Its interface library and gallery executable hashes are
+`c51cdb243fad5f2326c7c7da1296b22165b176320669ec7503862930b5af7405`
+and `095bfd474644bfe6efc9b1c2fced252b995e2963600e683163a6d7a44ffbdeee`.
+It launches Interface Gallery against `interface.library` ABI 1.4 with Label,
+Button, Checkbox, Radio, Switch, Slider, and Progress controls. A physical Cam
+Link capture shows the shared five-segment checkbox mark and outlined off-state
+switch thumb. A second capture taken while the slider button was still held
+shows its label changed from `62%` to `93%`; the update is not deferred until
+release. The retained Beast captures are
+`/tmp/astra-switch-off-clear-1c12.png` and
+`/tmp/astra-slider-held-1c12.png`, with SHA-256 values
+`c8e08a974787014d9f1a9683ecff0b93f2df5ff7216ac30ed7b39a1d848d62aa`
+and `a5a84e3fa070f6f54940f73ac05c407e5f44abca8cb9fec1e86b0a9a4c80cdf3`.
+
+The retained integer flex engine measured 7.126, 6.962, and
+7.295 microseconds per control: 85.511 microseconds/reflow for 12 controls,
+445.550 for 64, and 1.867 milliseconds for 256. The 10-microsecond/control
+automated gate retains at least 27% headroom over this run. The retained Beast
+trace is `/tmp/astra-interface-ring-6a512f28.bin`, SHA-256
+`a6bdb60a1bf3f633823883d8705d64d478f974c1e216e4ea673f7e6458951813`.
+
 Immutable release
-`b20178fb3f52a997bbcde9501fb435867d95cc3e25c232c51c764306a3f26066`
-contains the corrected compositor layout and is selected on the DE25. It
-reached stage 8, opened and moved Terminal, and completed balanced display
-submissions. Across 463 captured physical HDMI frames, the former corruption
-band at y=580..781 remained constant while the cursor visibly blinked; after a
-window drag, another 300 frames had zero black-band frames. The pre-fix band
-was an exact software overlap: the 3,855,360-byte desktop surface occupied a
-2 MiB slot, so the following Terminal slot overwrote precisely those rows.
+`06f28a5787a70c38d032b04a66242349b0c4f975a99613670715e3bf9c544c61`
+is the byte-verified runtime selected by `/var/lib/astra/current`. Its display
+service, Interface Gallery, and storage image SHA-256 values are respectively
+`5a4b6b04c71f4b9620d932dd28d481d1e543d8677132fa16f4cdb2ecb9c3aec9`,
+`baab9ded2e39b4410e87cb3267386064c4e0b76f295131dcfe2cdba726467a0f`,
+and `d13a6322d7bf3c988df5044f1b9b1df9c4e2a0d99c427b0f834a7b3b5e201d2e`.
+The physical DE25 service is active with zero restarts. A Cam Link capture
+shows Interface Gallery alive and completely rendered after launch, while the
+kernel, supervisor, resident services, and desktop remain alive. The failure
+that formerly killed the system was not a kernel fault: the manifest marked an
+ordinary application `required`, its window-open render failed, and the
+supervisor exited. Manifest parsing now rejects `required` on applications.
+
+The shared render builder now treats a fully clipped primitive as a successful
+no-op, while an exhausted command ring remains a distinct failure. This fixed
+the Gallery window-open failure at its common rendering boundary and retains
+strict errors for invalid destinations, descriptors, surfaces, and storage.
+Focused graphics and display tests pass normally, under ASan/UBSan, and through
+the MC68040 cross-build. The physical capture is retained locally as
+`/private/tmp/astra-interface-fix-v6-resume.png`.
+
+The NDK now owns the sole HID-to-key translation source used by Terminal and
+the input service. Their prior independent implementations were consolidated
+without changing terminal control-key or input text-event behavior. Terminal
+and input builds also include dependency files only for their declared object
+graphs, so a removed or renamed source can no longer remain build-authoritative
+through a stale wildcard-imported `.d` file. Interface Kit packaging derives
+its ABI and version payload paths from its manifest rather than repeating a
+second version literal.
+
+A physical southeast resize advanced renderer batches from 2 to 4 and
+submissions/completions from 3/3 to 7/7. Both snapshots remained unchanged one
+second later. The pre-fix build advanced by another 20 batches and 240 glyphs
+in the same interval because every same-size frame notification redamaged the
+UI; `interface.library` now reflows and damages only when the parent extent
+actually changes, and a focused regression test retains that contract.
+
+This release retains the corrected compositor layout. Across 463 captured
+physical HDMI frames, the former corruption band at y=580..781 remained
+constant while the cursor visibly blinked; after a window drag, another 300
+frames had zero black-band frames. The pre-fix band was an exact software
+overlap: the 3,855,360-byte desktop surface occupied a 2 MiB slot, so the
+following Terminal slot overwrote precisely those rows.
+
+Current source removes the MC68040's bounded visible-region
+subtraction pass. The display service now emits every damaged window in
+bottom-to-top order, clipped to the frame damage, and Astraea's ordered blits
+resolve overlap. The former eight-region overflow fallback is gone. Display
+tests prove the complete damaged stack is submitted, and pass normally,
+under ASan/UBSan, GCC analysis, and in the MC68040 target build. Dynamic
+window/resource storage and a batched hardware scene descriptor remain the
+next compositor work; the current four-window service table is not an accepted
+product limit.
+
+Immutable release
+`69c97c7381e7daffad96064ae41a1410b7d31bb01f1a469d3263bd6c5e355a7b`
+advances Graphics, Font, and Interface Kits to
+ABI 2.0. Interface controls now support caller-owned nested flex containers
+with parent-before-child validation, reverse-order intrinsic measurement, and
+iterative descendant reflow without heap allocation, recursion, or a child or
+depth cap. Ancestor clipping governs hit testing, damage, and painting; draw
+list ABI 1.1 carries the clip into Astraea's hardware command clip. Graphics
+and Interface host, sanitizer, analyzer, and MC68040 gates pass. The physical
+70.324 MHz MC68040 nested-layout measurements are 92.449 microseconds per
+12-control reflow, 325.825 microseconds for 64 controls, and 1.480 milliseconds
+for 256 controls: respectively 7.704, 5.091, and 5.783 microseconds per control,
+all inside the 10-microsecond gate. Full-window frame damage now suppresses
+per-control damage-union work that cannot enlarge the dirty region; compared
+with the immediately preceding physical build this reduced the three workloads
+by 28.4%, 35.2%, and 11.7% without changing layout or damage results.
+
+The release's storage image, Graphics library, Interface library, Gallery, and
+trace SHA-256 values are respectively
+`472897d5732523e4c455e44d89729afb45b267ec1564781a8448761b7b317085`,
+`739ed3a46abad7d81b33aae51d612b2112148d4a69a84d542459cbdd4b1d42dd`,
+`7612e7460fd1d91d9e54e02760894c9e20adee2b29e40fb25a1a46a2c18a0b8c`,
+`d72a1cb3eb63cda20554acb886440ef396139ad846263a4425e6adddaa8d239f`,
+and `80957f5c117953b03db7b2dcb09635244e17ff3c1a7d3458427b4f2bb217061c`.
+The trace is retained on Beast as
+`/tmp/astra-interface-abi2-v3-ring.bin`. Cam Link captures show the Gallery
+alive and Terminal launched above it after executing `echo terminal-ok`; their
+local paths are `/private/tmp/astra-interface-abi2-v3-gallery.png` and
+`/private/tmp/astra-interface-abi2-v3-terminal.png`, with SHA-256 values
+`73014e5614e9eaf849d24f15e87fc872cbc21c520b9fb8ee1b86986c0b9ed61a`
+and `4bc4930544dceedd546ba0c32f5da3f685bac6725beb2150ec9c1e53c99dff1b`.
+The service remains active at stage 8 with zero restarts.
+
+The launch failure in the preceding candidate was a stale
+`graphics_shared_surface.o`: Graphics' explicit loadable-library recipes did
+not generate header dependency files, so ABI-1 surface layout code was linked
+into an ABI-2 library. Graphics and Interface library recipes now generate and
+include dependency files, and their objects depend on their owning Makefiles
+so the corrected recipes bootstrap themselves. An executable boundary test
+retains both build-graph contracts.
 
 ## MC68040 contract
 

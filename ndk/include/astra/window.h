@@ -10,6 +10,7 @@
 
 #include <astra/attributes.h>
 #include <astra/gui.h>
+#include <astra/input_modifiers.h>
 #include <astra/resource.h>
 #include <astra/theme.h>
 #include <astra/types.h>

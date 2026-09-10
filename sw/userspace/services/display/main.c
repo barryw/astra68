@@ -13,7 +13,6 @@
 #include <astra/window.h>
 
 #define DISPLAY_WINDOW_MAX 4u
-#define DISPLAY_REGION_MAX 8u
 #define DISPLAY_WORK_TOP 34u
 #define DISPLAY_WORK_BOTTOM (ASTRA_DISPLAY_HEIGHT - 42u)
 #define WINDOW_CACHE_BASE UINT32_C(0x01000000)
@@ -224,86 +223,6 @@ static int decorated(const DisplayWindow *window)
 {
     return window->request.type != ASTRA_WINDOW_FULLSCREEN &&
            window->request.type != ASTRA_WINDOW_DESKTOP;
-}
-
-/* The part of a window that paints every pixel it touches. A rounded window
-   masks its outer `radius` columns, so only the centre band is opaque. */
-static DamageRect opaque_bounds(const AstraTheme *theme,
-                                const DisplayWindow *window)
-{
-    DamageRect rect = bounds(theme, window);
-    uint16_t radius = window_radius(theme, window);
-
-    rect.left += radius;
-    rect.right -= radius;
-    if (rect.left >= rect.right)
-        rect.valid = 0u;
-    return rect;
-}
-
-static uint32_t rect_subtract(const DamageRect *rect, const DamageRect *cover,
-                              DamageRect *out)
-{
-    uint32_t count = 0u;
-    int32_t top;
-    int32_t bottom;
-
-    if (!overlaps(rect, cover)) {
-        out[0] = *rect;
-        return 1u;
-    }
-    if (cover->top > rect->top)
-        out[count++] = (DamageRect){rect->left, rect->top,
-                                    rect->right, cover->top, 1u};
-    if (cover->bottom < rect->bottom)
-        out[count++] = (DamageRect){rect->left, cover->bottom,
-                                    rect->right, rect->bottom, 1u};
-    top = cover->top > rect->top ? cover->top : rect->top;
-    bottom = cover->bottom < rect->bottom ? cover->bottom : rect->bottom;
-    if (cover->left > rect->left)
-        out[count++] = (DamageRect){rect->left, top, cover->left, bottom, 1u};
-    if (cover->right < rect->right)
-        out[count++] = (DamageRect){cover->right, top, rect->right, bottom, 1u};
-    return count;
-}
-
-/* `damage` with every opaque window from index `above` upwards cut out of it.
-   Painting a layer only inside this region keeps the renderer off pixels a
-   window above will overwrite: the blitter costs ~15 cycles a pixel. */
-static uint32_t visible_region(const DisplayState *state,
-                               const AstraTheme *theme,
-                               const DamageRect *damage, uint32_t above,
-                               DamageRect *region)
-{
-    uint32_t count = 1u;
-
-    region[0] = *damage;
-    for (uint32_t index = above; index < state->count; ++index) {
-        DamageRect scratch[DISPLAY_REGION_MAX];
-        DamageRect cover;
-        uint32_t produced = 0u;
-
-        if (state->windows[index].state == ASTRA_WINDOW_STATE_MINIMIZED)
-            continue;
-        cover = opaque_bounds(theme, &state->windows[index]);
-        for (uint32_t at = 0u; at < count; ++at) {
-            DamageRect pieces[4];
-            uint32_t pieces_count = rect_subtract(&region[at], &cover, pieces);
-
-            /* ponytail: bounded split; overflow keeps the coarser region and
-               paints more than needed, never less. */
-            if (produced + pieces_count > DISPLAY_REGION_MAX)
-                return count;
-            for (uint32_t piece = 0u; piece < pieces_count; ++piece)
-                scratch[produced++] = pieces[piece];
-        }
-        for (uint32_t at = 0u; at < produced; ++at)
-            region[at] = scratch[at];
-        count = produced;
-        if (count == 0u)
-            return 0u;
-    }
-    return count;
 }
 
 static void damage_add(DamageRect *damage, DamageRect add)
@@ -1324,8 +1243,6 @@ static uint32_t compose(void *storage, uint32_t fence,
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     uint32_t cache[DISPLAY_WINDOW_MAX] = {0};
     uint32_t content[DISPLAY_WINDOW_MAX] = {0};
-    DamageRect region[DISPLAY_REGION_MAX];
-    uint32_t region_count;
     uint32_t framebuffer;
     uint32_t buffer = (fence & 1u) != 0u ? 1u : 0u;
     DamageRect *damage = &state->damage[buffer];
@@ -1401,9 +1318,7 @@ static uint32_t compose(void *storage, uint32_t fence,
                                        ASTRA_STATUS_PROTOCOL);
         }
     }
-    region_count = visible_region(state, &theme, damage, 0u, region);
-    for (uint32_t at = 0u; at < region_count; ++at)
-        desktop_damage(&builder, framebuffer, &theme, &region[at]);
+    desktop_damage(&builder, framebuffer, &theme, damage);
     for (uint32_t index = 0u; index < state->count; ++index) {
         const DisplayWindow *window = &state->windows[index];
         DamageRect window_bounds;
@@ -1413,23 +1328,16 @@ static uint32_t compose(void *storage, uint32_t fence,
         window_bounds = bounds(&theme, window);
         if (!overlaps(damage, &window_bounds))
             continue;
-        region_count = visible_region(state, &theme, damage, index + 1u,
-                                      region);
-        for (uint32_t at = 0u; at < region_count; ++at) {
-            if (!overlaps(&region[at], &window_bounds))
-                continue;
-            if (!astra_render_builder_blit_clipped(
-                    &builder, framebuffer,
-                    decorated(window) ? cache[index] : content[index],
-                    window->request.x, window->request.y,
-                    (uint16_t)outer_width(&theme, window),
-                    (uint16_t)outer_height(&theme, window),
-                    window_radius(&theme, window), 1,
-                    region[at].left, region[at].top,
-                    region[at].right, region[at].bottom))
-                return compose_failed(&builder, error, failure,
-                                      ASTRA_STATUS_LIMIT);
-        }
+        if (!astra_render_builder_blit_clipped(
+                &builder, framebuffer,
+                decorated(window) ? cache[index] : content[index],
+                window->request.x, window->request.y,
+                (uint16_t)outer_width(&theme, window),
+                (uint16_t)outer_height(&theme, window),
+                window_radius(&theme, window), 1,
+                damage->left, damage->top, damage->right, damage->bottom))
+            return compose_failed(&builder, error, failure,
+                                  ASTRA_STATUS_LIMIT);
     }
     framebuffer = astra_render_builder_finish(&builder);
     if (framebuffer == 0u)
@@ -1445,7 +1353,7 @@ static void log_builder_failure(uint32_t failure)
         "display render data arena is full",
         "display render descriptor table is full",
         "display render command has an invalid destination",
-        "display render command ring or clip is invalid",
+        "display render command ring is full",
         "display render surface geometry is invalid",
         "display render glyph table is full",
     };
@@ -1566,7 +1474,7 @@ static uint32_t render(uint32_t device, uint32_t irq,
     return status;
 }
 
-static void render_failure(const char *phase, uint32_t status)
+static void log_render_failure(const char *phase, uint32_t status)
 {
     (void)astra_log(phase);
     if (last_builder_failure != ASTRA_RENDER_BUILDER_FAILURE_NONE)
@@ -1579,6 +1487,11 @@ static void render_failure(const char *phase, uint32_t status)
         (void)astra_log("display render had no valid damage or batch");
     else
         (void)astra_log("display hardware submission or completion failed");
+}
+
+static void render_failure(const char *phase, uint32_t status)
+{
+    log_render_failure(phase, status);
     astra_process_exit(DISPLAY_FAIL_COMPLETION);
 }
 
@@ -2290,6 +2203,8 @@ static void receive_open(uint32_t device, uint32_t irq,
                      1, 0u);
         status = render(device, irq, framebuffer, state,
                         next_fence, armed);
+        if (status != ASTRA_STATUS_OK)
+            log_render_failure("display window-open render failed", status);
     }
     if (handle_count == 3u || handle_count == 4u) {
         const DisplayWindow *window = status == ASTRA_STATUS_OK ?

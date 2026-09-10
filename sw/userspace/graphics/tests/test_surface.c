@@ -100,6 +100,69 @@ static void test_clipped_drawing_and_blit(void)
     assert(destination_pixels[4u * 8u + 3u] == 7u);
 }
 
+static void test_surface_clip_is_inherited(void)
+{
+    uint16_t pixels[8u * 6u] = {0};
+    AstraSurfaceView surface;
+
+    assert(astra_surface_view_init(&surface, pixels, sizeof(pixels), 8u, 6u,
+                                   8u * sizeof(uint16_t)));
+    assert(astra_surface_clip(&surface, 2, 1, 4u, 3u));
+    assert(astra_surface_clip(&surface, 0, 2, 8u, 3u));
+    astra_surface_fill(&surface, 0, 0, 8u, 6u, 0x55aau);
+    for (uint32_t y = 0u; y < 6u; ++y)
+        for (uint32_t x = 0u; x < 8u; ++x)
+            assert(pixels[y * 8u + x] ==
+                   ((x >= 2u && x < 6u && y >= 2u && y < 4u) ?
+                        0x55aau : 0u));
+
+    assert(astra_surface_clip(&surface, 3, 3, 0u, 0u));
+    astra_surface_clear(&surface, 0xffffu);
+    for (uint32_t index = 0u; index < 8u * 6u; ++index)
+        assert(pixels[index] != 0xffffu);
+}
+
+static void test_draw_list_clip_reaches_hardware(void)
+{
+    uint8_t draw_storage[ASTRA_DRAW_LIST_AREA_BYTES];
+    uint8_t batch_storage[ASTRA_RENDER_BUILDER_BYTES];
+    AstraSurfaceView surface;
+    AstraRenderBuilder builder;
+    const AstraDrawListHeader *header;
+    AstraDrawListCommand *draw;
+    const uint8_t *render;
+    uint32_t destination;
+
+    assert(astra_draw_list_view_init(&surface, draw_storage,
+                                     sizeof(draw_storage), 20u, 10u));
+    assert(astra_surface_clip(&surface, 4, 3, 8u, 5u));
+    astra_surface_fill(&surface, 0, 0, 20u, 10u, 0x1234u);
+    header = (const AstraDrawListHeader *)(const void *)draw_storage;
+    draw = (AstraDrawListCommand *)(void *)(header + 1);
+    assert(header->version == ASTRA_DRAW_LIST_VERSION_1_1);
+    assert(draw->clip_left == 4u && draw->clip_top == 3u &&
+           draw->clip_right == 12u && draw->clip_bottom == 8u);
+    assert(!astra_draw_list_covers(header, 20u, 10u));
+
+    assert(astra_render_builder_init(&builder, batch_storage,
+                                     sizeof(batch_storage), 1u));
+    destination = astra_render_builder_surface(&builder, 20u, 10u);
+    assert(destination != 0u);
+    assert(astra_render_builder_replay(&builder, destination, header));
+    assert(finish_batch(&builder, batch_storage) != 0u);
+    render = batch_storage + ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
+             ASTRA_RENDER_BATCH_ARENA_OFFSET;
+    assert(be32(render + 24u) == ((uint32_t)4u << 16 | 3u));
+    assert(be32(render + 28u) == ((uint32_t)12u << 16 | 8u));
+
+    draw->clip_right = 21u;
+    assert(astra_render_builder_init(&builder, batch_storage,
+                                     sizeof(batch_storage), 2u));
+    destination = astra_render_builder_surface(&builder, 20u, 10u);
+    assert(destination != 0u &&
+           !astra_render_builder_replay(&builder, destination, header));
+}
+
 static void test_color_and_glyph(void)
 {
     static const uint8_t glyph[8] = {
@@ -339,6 +402,33 @@ static void test_scanout_source_is_explicit(void)
            0u);
 }
 
+static void test_command_failure_reason(void)
+{
+    static uint8_t batch_storage[ASTRA_RENDER_BUILDER_BYTES];
+    AstraRenderBuilder builder;
+    uint32_t frame;
+    uint32_t source;
+
+    assert(astra_render_builder_init(&builder, batch_storage,
+                                     sizeof(batch_storage), 1u));
+    frame = astra_render_builder_frame(&builder);
+    source = astra_render_builder_surface(&builder, 16u, 16u);
+    assert(astra_render_builder_blit_clipped(
+        &builder, frame, source, 0, 0, 16u, 16u, 0u, 0,
+        8, 8, 8, 16));
+    assert(builder.failed == ASTRA_RENDER_BUILDER_FAILURE_NONE);
+    assert(builder.command_count == 0u);
+
+    assert(astra_render_builder_init(&builder, batch_storage,
+                                     sizeof(batch_storage), 2u));
+    frame = astra_render_builder_frame(&builder);
+    for (uint32_t index = 0u; index < ASTRA_RENDER_RING_ENTRIES; ++index)
+        assert(astra_render_builder_fill(&builder, frame, 0, 0, 1u, 1u,
+                                         0u));
+    assert(!astra_render_builder_fill(&builder, frame, 0, 0, 1u, 1u, 0u));
+    assert(builder.failed == ASTRA_RENDER_BUILDER_FAILURE_COMMAND_CAPACITY);
+}
+
 static void test_mono_draw_list(void)
 {
     uint8_t storage[ASTRA_DRAW_LIST_AREA_BYTES];
@@ -461,12 +551,15 @@ static void test_rounded_fill_has_no_overlap(void)
 int main(void)
 {
     test_clipped_drawing_and_blit();
+    test_surface_clip_is_inherited();
+    test_draw_list_clip_reaches_hardware();
     test_color_and_glyph();
     test_text();
     test_proportional_utf8_text();
     test_font_advance_and_baseline();
     test_hardware_draw_list_batch();
     test_scanout_source_is_explicit();
+    test_command_failure_reason();
     test_mono_draw_list();
     test_draw_list_copy_is_a_hardware_self_blit();
     test_text_box_scroll_uses_overlap_safe_copy();

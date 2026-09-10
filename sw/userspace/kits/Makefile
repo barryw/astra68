@@ -16,8 +16,24 @@ MESSAGING := build/Messaging.kit
 NETWORK := build/Network.kit
 CONFIGURATION := build/Configuration.kit
 GRAPHICS_STAMP := build/.Graphics.kit.stamp
+GRAPHICS_LIBRARY_PROVIDES := $(shell sed -n \
+	's/^provides graphics\.library //p' Graphics.kit/manifest)
+GRAPHICS_LIBRARY_ABI := $(word 1,$(GRAPHICS_LIBRARY_PROVIDES))
+GRAPHICS_LIBRARY_VERSION := $(word 2,$(GRAPHICS_LIBRARY_PROVIDES))
+FONT_LIBRARY_PROVIDES := $(shell sed -n \
+	's/^provides font\.library //p' Graphics.kit/manifest)
+FONT_LIBRARY_ABI := $(word 1,$(FONT_LIBRARY_PROVIDES))
+FONT_LIBRARY_VERSION := $(word 2,$(FONT_LIBRARY_PROVIDES))
 FILESYSTEM_STAMP := build/.Filesystem.kit.stamp
 INTERFACE_STAMP := build/.Interface.kit.stamp
+INTERFACE_LIBRARY_PROVIDES := $(shell sed -n \
+	's/^provides interface\.library //p' Interface.kit/manifest)
+INTERFACE_LIBRARY_ABI := $(word 1,$(INTERFACE_LIBRARY_PROVIDES))
+INTERFACE_LIBRARY_VERSION := $(word 2,$(INTERFACE_LIBRARY_PROVIDES))
+INPUT_LIBRARY_PROVIDES := $(shell sed -n \
+	's/^provides input\.library //p' Interface.kit/manifest)
+INPUT_LIBRARY_ABI := $(word 1,$(INPUT_LIBRARY_PROVIDES))
+INPUT_LIBRARY_VERSION := $(word 2,$(INPUT_LIBRARY_PROVIDES))
 EVENTS_STAMP := build/.Events.kit.stamp
 MESSAGING_STAMP := build/.Messaging.kit.stamp
 NETWORK_STAMP := build/.Network.kit.stamp
@@ -44,13 +60,13 @@ $(LIBRARIES) $(BUNDLE_TOOL): | owners
 $(GRAPHICS_STAMP): Graphics.kit/manifest $(GRAPHICS_LIBRARY) \
 		$(FONT_LIBRARY) $(BUNDLE_TOOL)
 	rm -rf $(GRAPHICS)
-	@mkdir -p $(GRAPHICS)/libraries/graphics.library/abi-1/1.3.0/m68k-68040
-	@mkdir -p $(GRAPHICS)/libraries/font.library/abi-1/1.0.0/m68k-68040
+	@mkdir -p $(GRAPHICS)/libraries/graphics.library/abi-$(GRAPHICS_LIBRARY_ABI)/$(GRAPHICS_LIBRARY_VERSION)/m68k-68040
+	@mkdir -p $(GRAPHICS)/libraries/font.library/abi-$(FONT_LIBRARY_ABI)/$(FONT_LIBRARY_VERSION)/m68k-68040
 	cp Graphics.kit/manifest $(GRAPHICS)/manifest
 	cp $(GRAPHICS_LIBRARY) \
-		$(GRAPHICS)/libraries/graphics.library/abi-1/1.3.0/m68k-68040/graphics.library
+		$(GRAPHICS)/libraries/graphics.library/abi-$(GRAPHICS_LIBRARY_ABI)/$(GRAPHICS_LIBRARY_VERSION)/m68k-68040/graphics.library
 	cp $(FONT_LIBRARY) \
-		$(GRAPHICS)/libraries/font.library/abi-1/1.0.0/m68k-68040/font.library
+		$(GRAPHICS)/libraries/font.library/abi-$(FONT_LIBRARY_ABI)/$(FONT_LIBRARY_VERSION)/m68k-68040/font.library
 	$(BUNDLE_TOOL) check $(GRAPHICS)
 	@touch $@
 
@@ -67,13 +83,13 @@ $(FILESYSTEM_STAMP): Filesystem.kit/manifest $(FILESYSTEM_LIBRARY) \
 $(INTERFACE_STAMP): Interface.kit/manifest $(INTERFACE_LIBRARY) \
 		$(INPUT_LIBRARY) $(BUNDLE_TOOL)
 	rm -rf $(INTERFACE)
-	@mkdir -p $(INTERFACE)/libraries/interface.library/abi-1/1.1.0/m68k-68040
-	@mkdir -p $(INTERFACE)/libraries/input.library/abi-1/1.0.0/m68k-68040
+	@mkdir -p $(INTERFACE)/libraries/interface.library/abi-$(INTERFACE_LIBRARY_ABI)/$(INTERFACE_LIBRARY_VERSION)/m68k-68040
+	@mkdir -p $(INTERFACE)/libraries/input.library/abi-$(INPUT_LIBRARY_ABI)/$(INPUT_LIBRARY_VERSION)/m68k-68040
 	cp Interface.kit/manifest $(INTERFACE)/manifest
 	cp $(INTERFACE_LIBRARY) \
-		$(INTERFACE)/libraries/interface.library/abi-1/1.1.0/m68k-68040/interface.library
+		$(INTERFACE)/libraries/interface.library/abi-$(INTERFACE_LIBRARY_ABI)/$(INTERFACE_LIBRARY_VERSION)/m68k-68040/interface.library
 	cp $(INPUT_LIBRARY) \
-		$(INTERFACE)/libraries/input.library/abi-1/1.0.0/m68k-68040/input.library
+		$(INTERFACE)/libraries/input.library/abi-$(INPUT_LIBRARY_ABI)/$(INPUT_LIBRARY_VERSION)/m68k-68040/input.library
 	$(BUNDLE_TOOL) check $(INTERFACE)
 	@touch $@
 

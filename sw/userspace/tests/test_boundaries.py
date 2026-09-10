@@ -413,6 +413,66 @@ def test_static_archives_are_exact_replacements():
             )
 
 
+def test_graphics_library_objects_track_all_inputs():
+    path = USERSPACE / "graphics" / "Makefile"
+    text = path.read_text()
+    for target in (
+        "build/m68k/library/graphics_library.o",
+        "build/m68k/library/font_library.o",
+        "build/m68k/library/graphics_surface.o",
+        "build/m68k/library/font_surface.o",
+        "build/m68k/library/graphics_shared_surface.o",
+    ):
+        match = re.search(
+            rf"^{re.escape(target)}:.*?(?=^\S|\Z)",
+            text,
+            re.MULTILINE | re.DOTALL,
+        )
+        if match is None or "$(DEPFLAGS)" not in match.group(0):
+            raise AssertionError(
+                f"sw/userspace/graphics/Makefile: {target} can remain stale "
+                "after an included header changes"
+            )
+    if "$(GRAPHICS_LIBRARY_OBJECTS) $(FONT_LIBRARY_OBJECTS): Makefile" not in text:
+        raise AssertionError(
+            "sw/userspace/graphics/Makefile: library objects do not rebuild "
+            "when their dependency recipe changes"
+        )
+    if "build/m68k/*/*.d" not in text:
+        raise AssertionError(
+            "sw/userspace/graphics/Makefile: library dependency files are ignored"
+        )
+
+
+def test_interface_library_objects_track_all_inputs():
+    path = USERSPACE / "interface" / "Makefile"
+    text = path.read_text()
+    for target in (
+        "build/m68k/interface_library.o",
+        "build/m68k/control.o",
+        "build/m68k/input_library.o",
+    ):
+        match = re.search(
+            rf"^{re.escape(target)}:.*?(?=^\S|\Z)",
+            text,
+            re.MULTILINE | re.DOTALL,
+        )
+        if match is None or "$(DEPFLAGS)" not in match.group(0):
+            raise AssertionError(
+                f"sw/userspace/interface/Makefile: {target} can remain stale "
+                "after an included header changes"
+            )
+    if "$(INTERFACE_OBJECTS) $(INPUT_OBJECTS): Makefile" not in text:
+        raise AssertionError(
+            "sw/userspace/interface/Makefile: library objects do not rebuild "
+            "when their dependency recipe changes"
+        )
+    if "build/m68k/*.d" not in text:
+        raise AssertionError(
+            "sw/userspace/interface/Makefile: library dependency files are ignored"
+        )
+
+
 def test_ndk_private_headers_stay_in_ndk():
     forbidden = re.compile(r'#\s*include\s*[<"]internal/')
     for path in production_sources(USERSPACE):
@@ -623,6 +683,8 @@ def main():
         test_owner_analyzers_cover_production_sources,
         test_loadable_libraries_use_owner_built_archives,
         test_static_archives_are_exact_replacements,
+        test_graphics_library_objects_track_all_inputs,
+        test_interface_library_objects_track_all_inputs,
         test_ndk_private_headers_stay_in_ndk,
         test_public_headers_are_imported_by_namespace,
         test_ndk_owns_user_facing_headers,

@@ -14,8 +14,8 @@
 #include <astra/surface.h>
 
 #define ASTRA_FONT_LIBRARY_NAME "font.library"
-#define ASTRA_FONT_LIBRARY_VERSION 1u
+#define ASTRA_FONT_LIBRARY_VERSION 2u
 #define ASTRA_GRAPHICS_LIBRARY_NAME "graphics.library"
-#define ASTRA_GRAPHICS_LIBRARY_VERSION 1u
+#define ASTRA_GRAPHICS_LIBRARY_VERSION 2u
 
 #endif

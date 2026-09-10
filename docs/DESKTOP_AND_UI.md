@@ -94,6 +94,8 @@ copying Workbench pixel for pixel:
   objects;
 - compact windows with obvious focus, depth, resize, and close controls;
 - a launcher and command palette that do not require navigating the filesystem;
+- Telescope, a centered Cmd-Space search surface for finding and opening
+  indexed files and applications;
 - direct keyboard access to a terminal from anywhere;
 - context menus and drag and drop using the common command/resource model;
 - deterministic placement and restoration rather than windows jumping as
@@ -102,6 +104,11 @@ copying Workbench pixel for pixel:
 The desktop is not merely the filesystem. Applications, documents, volumes,
 services, running jobs, and queries are distinct typed objects even when they
 have icons or can be reached by paths.
+
+Telescope consumes filesystem change notifications rather than inspecting a
+particular filesystem implementation. Its indexer and SQLite database live on
+the Linux side; Astra receives ranked search results through a stable service
+contract and opens the selected typed object through the common command model.
 
 Window chrome, its semantic palette, and its geometry are specified in
 `INTERFACE_SPECIFICATION.md`. Icon language, menu activation behavior, and the

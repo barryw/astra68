@@ -10,6 +10,7 @@
 #include <astra/display_mailbox.h>
 #include <astra/render_batch.h>
 #include <astra/render_builder.h>
+#include <astra/theme.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -31,14 +32,14 @@ enum {
     TEXT_ROWS = ASTRA_TEXT_ROWS,
     TEXT_CELLS = TEXT_COLUMNS * TEXT_ROWS,
     TEXT_PAGE_BYTES = 4096u,
-    TEXT_CELL_WIDTH = 14u,
+    TEXT_CELL_WIDTH = ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH,
     TEXT_CELL_HEIGHT = 24u,
     TEXT_ORIGIN_X = (ASTRA_DISPLAY_WIDTH -
                      TEXT_COLUMNS * TEXT_CELL_WIDTH) / 2u,
     TEXT_ORIGIN_Y = (ASTRA_DISPLAY_HEIGHT -
                      TEXT_ROWS * TEXT_CELL_HEIGHT) / 2u,
-    TEXT_FONT_WIDTH = 8u,
-    TEXT_FONT_HEIGHT = 16u,
+    TEXT_FONT_WIDTH = ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH,
+    TEXT_FONT_HEIGHT = ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT,
     TEXT_ROWS_PER_BATCH =
         ASTRA_RENDER_BUILDER_GLYPH_MAX / TEXT_COLUMNS,
     CURSOR_HEIGHT = 3u,
@@ -1184,6 +1185,11 @@ static int self_test(void)
     pid_t child;
     int child_status;
 
+    if (TEXT_FONT_WIDTH != ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH ||
+        TEXT_FONT_HEIGHT != ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT ||
+        cell_x(1u) - cell_x(0u) != ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH)
+        return EXIT_FAILURE;
+
     if (cp437_to_utf8(utf8, cp437, sizeof(cp437)) != 6u ||
         memcmp(utf8, "A\xc3\x87\xe2\x96\x88", sizeof(utf8)) != 0)
         return EXIT_FAILURE;
@@ -1513,7 +1519,7 @@ int main(int argc, char **argv)
     while (running) {
         struct display_request request;
         struct terminal_cursor sampled;
-        struct terminal_damage damage;
+        struct terminal_damage damage = {0};
         struct terminal_scanout_state *target_state;
         uint32_t target_index;
         uint32_t scroll_rows;

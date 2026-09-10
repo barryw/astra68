@@ -1,4 +1,5 @@
 #include <astra/input_service_core.h>
+#include <astra/keymap.h>
 
 #include <stddef.h>
 
@@ -198,44 +199,27 @@ static void set_held(AstraInputService *service, uint32_t usage, bool down)
         service->held[usage >> 5] &= ~mask;
 }
 
-static uint32_t us_key_codepoint(uint32_t usage, uint32_t modifiers)
+static uint32_t keymap_modifiers(uint32_t modifiers)
 {
-    bool shift = (modifiers & ASTRA_INPUT_MOD_SHIFT) != 0u;
-    bool caps = (modifiers & ASTRA_INPUT_MOD_CAPS_LOCK) != 0u;
-    static const char unshifted[] = "1234567890-=[]\\;'`,./";
-    static const char shifted[] = "!@#$%^&*()_+{}|:\"~<>?";
+    uint32_t mapped = 0u;
 
-    if (usage >= 0x04u && usage <= 0x1du) {
-        uint32_t letter = (uint32_t)'a' + usage - 0x04u;
-        return shift != caps ? letter - ('a' - 'A') : letter;
-    }
-    if (usage == 0x28u)
-        return '\n';
-    if (usage == 0x2bu)
-        return '\t';
-    if (usage == 0x2cu)
-        return ' ';
-    if ((usage >= 0x1eu && usage <= 0x27u) ||
-        (usage >= 0x2du && usage <= 0x38u)) {
-        uint32_t index;
+    if ((modifiers & ASTRA_INPUT_MOD_SHIFT) != 0u)
+        mapped |= ASTRA_KEYMAP_MOD_SHIFT;
+    if ((modifiers & ASTRA_INPUT_MOD_CTRL) != 0u)
+        mapped |= ASTRA_KEYMAP_MOD_CONTROL;
+    if ((modifiers & ASTRA_INPUT_MOD_CAPS_LOCK) != 0u)
+        mapped |= ASTRA_KEYMAP_MOD_CAPS;
+    return mapped;
+}
 
-        if (usage <= 0x27u)
-            index = usage - 0x1eu;
-        else {
-            static const uint8_t punctuation_usage[] = {
-                0x2du, 0x2eu, 0x2fu, 0x30u, 0x31u, 0x33u, 0x34u,
-                0x35u, 0x36u, 0x37u, 0x38u
-            };
-            index = 10u;
-            while (index < sizeof(punctuation_usage) + 10u &&
-                   punctuation_usage[index - 10u] != usage)
-                ++index;
-            if (index == sizeof(punctuation_usage) + 10u)
-                return 0u;
-        }
-        return (uint8_t)(shift ? shifted[index] : unshifted[index]);
-    }
-    return 0u;
+static uint32_t default_key_codepoint(uint32_t usage, uint32_t modifiers)
+{
+    uint32_t translated = astra_keymap_translate(
+        usage, keymap_modifiers(modifiers));
+
+    if (translated == ASTRA_KEYMAP_ENTER) return '\n';
+    if (translated == ASTRA_KEYMAP_TAB) return '\t';
+    return translated <= UINT8_MAX ? translated : 0u;
 }
 
 static void emit_key(AstraInputService *service, uint32_t usage, bool down,
@@ -255,7 +239,7 @@ static void emit_key(AstraInputService *service, uint32_t usage, bool down,
     codepoint = service->config.translate != NULL ?
         service->config.translate(service->config.translate_context, usage,
                                   service->modifiers) :
-        us_key_codepoint(usage, service->modifiers);
+        default_key_codepoint(usage, service->modifiers);
     if (down && codepoint != 0u &&
         (service->modifiers & (ASTRA_INPUT_MOD_CTRL | ASTRA_INPUT_MOD_ALT |
                                ASTRA_INPUT_MOD_GUI)) == 0u) {

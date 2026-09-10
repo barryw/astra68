@@ -46,8 +46,8 @@ ASTRA_PROGRAM("terminal", 0, 1, 0, "Barry Walker",
 
 static AstraLibraryHandle *font_handle;
 static AstraLibraryHandle *graphics_handle;
-static const AstraFontLibraryV1 *font_library;
-static const AstraGraphicsLibraryV1 *graphics_library;
+static const AstraFontLibraryV2 *font_library;
+static const AstraGraphicsLibraryV2 *graphics_library;
 static AstraProcessFilesystem process_filesystem =
     ASTRA_PROCESS_FILESYSTEM_INIT;
 
@@ -160,7 +160,6 @@ static uint32_t load_graphics_kit(void)
         return TERMINAL_FAIL_LIBRARY;
     graphics_library = graphics_handle->exports;
     if (graphics_library->abi_major != ASTRA_GRAPHICS_LIBRARY_ABI_MAJOR ||
-        graphics_library->abi_minor < ASTRA_GRAPHICS_LIBRARY_ABI_MINOR ||
         graphics_library->structure_size < sizeof(*graphics_library))
         return TERMINAL_FAIL_LIBRARY;
     return ASTRA_STATUS_OK;

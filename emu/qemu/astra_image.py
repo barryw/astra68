@@ -84,7 +84,7 @@ DEFAULT_TERMINFO = os.path.join(
 KIT_BUNDLES = ("Graphics.kit", "Filesystem.kit", "Interface.kit",
                "Events.kit", "Messaging.kit", "Network.kit",
                "Configuration.kit")
-APPLICATION_BUNDLES = ("Terminal.app",)
+APPLICATION_BUNDLES = ("Terminal.app", "InterfaceGallery.app")
 PROVIDER_INDEX_MAGIC = 0x41505256  # "APRV"
 PROVIDER_INDEX_HEADER = struct.Struct(">IHHHHHHHHI")
 LIBRARY_IDENTITY_HEADER = struct.Struct(">IHHHHHHHHIII")
@@ -115,14 +115,15 @@ DISPLAY_STARTUP_MANIFEST = (
     "service SERVICES:display grants DISPLAY DISPLAY_IRQ "
     "INPUT_SERVICE serves GUI required\n"
     "application SERVICES:desktop grants GUI APP_LAUNCH APPS:r LIBS:r "
-    "NETWORK NETWORK_LISTEN NTP "
-    "required\n")
+    "NETWORK NETWORK_LISTEN NTP\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("storage", "posixd", "hostfs", "network", "ntpd", "events",
                     "input", "display", "desktop")
 HOSTBENCH_SERVICES = DISPLAY_SERVICES + ("hostbench",)
 HOSTBENCH_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
-    "application SERVICES:hostbench grants HOST_DEVICE required\n")
+    "application SERVICES:hostbench grants HOST_DEVICE\n")
+INTERFACE_GALLERY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
+    "application APPS:InterfaceGallery.app grants GUI LIBS:r\n")
 
 
 def _build_current_userspace():
@@ -631,6 +632,9 @@ if __name__ == "__main__":
     elif len(sys.argv) == 3 and sys.argv[1] == "--hostbench":
         install(sys.argv[2], service_names=HOSTBENCH_SERVICES,
                 manifest_text=HOSTBENCH_STARTUP_MANIFEST)
+    elif len(sys.argv) == 3 and sys.argv[1] == "--interface-gallery":
+        install(sys.argv[2], service_names=DISPLAY_SERVICES,
+                manifest_text=INTERFACE_GALLERY_STARTUP_MANIFEST)
     elif len(sys.argv) == 4 and sys.argv[1] == "--create":
         try:
             size_mib = int(sys.argv[3], 10)
@@ -639,5 +643,6 @@ if __name__ == "__main__":
         publish(sys.argv[2], size_mib * (1 << 20))
     else:
         raise SystemExit(
-            "usage: astra_image.py [--display|--hostbench] IMAGE | "
+            "usage: astra_image.py "
+            "[--display|--hostbench|--interface-gallery] IMAGE | "
             "--create IMAGE SIZE_MIB")

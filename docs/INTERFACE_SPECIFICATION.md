@@ -6,7 +6,8 @@ contract for the Astra OS guest.
 This document specifies Astra's native interface. It does not describe the
 AstraVM host application, whose visual system is separate. The public code
 counterpart is `ndk/include/astra/theme.h`, `ndk/include/astra/window.h`, and
-`ndk/include/astra/pointer.h`.
+`ndk/include/astra/pointer.h`. Client controls are defined by
+`ndk/include/astra/control.h`.
 
 ## 1. Design intent
 
@@ -36,7 +37,10 @@ All interface components consume semantic roles from one versioned
 colors, radii, spacing, or gadget geometry. The initial system has exactly one
 immutable theme and no theme editor. It is compiled into both the NDK and
 window server from `ASTRA_THEME_SYSTEM_INIT`; dynamic distribution is deferred
-until runtime theme selection exists.
+until runtime theme selection exists. Theme generation 5 records an integer
+UI scale and includes separate client/chrome text, surface, border, focus,
+selection, disabled, warning, and error roles. Every geometry value is in
+logical pixels at that scale; display scaling remains FPGA-owned.
 
 The color world is:
 
@@ -136,22 +140,65 @@ pressed, and focus transitions; applications retain only semantic enablement.
   application process.
 - Only one window is active in the normal workspace; inactive chrome uses the
   inactive title role and has no signal rail.
-- Windows may overlap. The compositor paints them in back-to-front workspace
-  order, and activating a window raises it above ordinary peers.
+- Windows may overlap. The protected display service owns focus and ordered
+  z-stack policy; activating a window raises it above ordinary peers. Astraea
+  consumes that order and performs clipping, overlap resolution, composition,
+  and presentation in hardware.
 - The active titlebar uses the brighter title role; brightness and the signal
   rail communicate focus without changing application-owned content.
 
 ## 7. Control language
 
-Every future control inherits the same palette, 4-pixel grid, 8-pixel control
-radius, typography roles, and state model. Components define semantic variants
-such as primary, warning, or destructive; they do not define arbitrary colors.
+Every control inherits the same palette, 4-pixel grid, 8-pixel control radius,
+typography roles, and state model. Components define semantic variants such as
+primary, warning, or destructive; they do not define arbitrary colors.
 
-The first complete control set should include buttons, text fields, checkboxes,
-radio controls, sliders, scrollbars, tabs, menus, list/table rows, progress,
-toolbars, splitters, and status bars. Each must specify normal, hover, pressed,
-focused, disabled, selected, and error states where applicable before it is
-accepted into the NDK.
+`interface.library` ABI 2.0 implements the retained client-control foundation:
+caller-owned contexts and controls, intrinsic measurement, deterministic flex
+layout, reverse-order hit testing, keyboard focus, pointer and keyboard
+capture, state transitions, bounded damage, and rendering through the shared
+Graphics Kit surface primitives. Label and Button are the first controls.
+Buttons implement normal, hovered, pressed, focused, disabled, selected, and
+error states plus primary, warning, and destructive variants. Checkbox, radio,
+and switch controls share the same capture and focus path; radio groups enforce
+single selection at construction, pointer/keyboard activation, and
+programmatic state changes. Horizontal and vertical sliders support signed
+ranges, explicit steps, pointer capture, clamping, and Arrow/Home/End keyboard
+control. Value-change actions are emitted during pointer capture, and the
+public text setter remeasures, reflows when needed, and damages dynamic labels.
+Determinate and indeterminate progress controls use the same retained paint and
+animation clock. Release outside a captured button cancels activation; Tab and either
+physical Shift key plus Tab move focus in opposite directions; Enter, keypad
+Enter, and Space activate the focused button or binary control.
+
+Layout is declarative but compiled. Applications provide public
+`AstraFlexLayout` structures for the root and any nonvisual container controls,
+plus one `AstraFlexItem` per control; they never assign ordinary control
+coordinates. A row or column supplies integer padding and gaps, optional
+wrapping, start/center/end/space-between justification, and
+start/center/end/stretch alignment. Items supply a parent ID, intrinsic or
+explicit basis, grow and shrink weights, min/max constraints, alignment
+override, and semantic line breaks. Parents precede their descendants, making
+construction validation and reflow a bounded iterative traversal rather than
+recursive stack work. There is no heap allocation, floating point, runtime
+layout-file parser, or hidden child-count or hierarchy-depth ceiling. A future
+visual layout tool may compile a resource into the same structures, but runtime
+configuration is not an application layout language.
+
+The context copies its root layout. A nonzero window-frame event updates the
+parent extent and immediately recomputes all descendant frames before it
+returns to the application. Reflow preserves interaction state and marks the
+complete new extent damaged; the application only resets its draw-list
+dimensions, renders, and presents. Each descendant inherits the intersection
+of its ancestors' content bounds. The Graphics Kit carries that clip through
+draw-list ABI 1.1 and lowers it into Astraea's hardware command clip. Absolute
+positioning remains reserved for true overlays owned by the window/compositor
+contract, not ordinary controls.
+
+The remaining control set must add text fields, scrollbars, tabs, menus,
+list/table rows, toolbars, splitters, and status bars. Each must
+specify normal, hover, pressed, focused, disabled, selected, and error states
+where applicable before it is accepted into the NDK.
 
 ## 8. Typography and icons
 
@@ -186,6 +233,21 @@ content rectangle. The server retains the last completed content surface, so
 chrome-only changes and small content damage do not replay unaffected glyphs
 or primitives.
 
+`InterfaceGallery.app` is the native client-control acceptance application. It
+loads the Graphics and Interface Kits through their public ABIs and exercises
+Label, Button, Checkbox, Radio, Switch, and Slider through their interaction
+states and semantic variants. Its dedicated
+image profile launches the same bundle and libraries installed for ordinary
+desktop use; it does not link a private control implementation. The gallery
+also executes target-side reflow workloads at 12, 64, and 256 controls and
+emits diagnostic trace records so MC68040 performance and sampled guest
+hotspots can be compared between builds. The physical 70 MHz nested ABI-2
+measurements are 7.704, 5.091, and 5.783 microseconds per control: 92.449
+microseconds for 12 controls, 325.825 microseconds for 64, and 1.480
+milliseconds for 256. The automated gate rejects results over 10 microseconds
+per control, retaining at least 22% scheduling headroom over the measured board
+result.
+
 The initial visual acceptance gallery contains four real service windows:
 
 1. active Standard with normal, hover, and pressed gadgets;
@@ -194,9 +256,11 @@ The initial visual acceptance gallery contains four real service windows:
 4. border-only Popover without titlebar or gadgets.
 
 This set must boot through the ordinary service manifest, exercise the complete
-scripted management sequence, present 17 consumed display fences, remain within
-the existing four mapped surfaces per process, and render from the NDK theme
-and window attributes without per-window chrome constants in the compositor.
+scripted management sequence, present 17 consumed display fences, and render
+from the NDK theme and window attributes without per-window chrome constants in
+the compositor. Four windows provide the visual-state matrix; they are not a
+product limit. Window and surface admission is governed only by accountable
+kernel, IPC, render-batch, and Media RAM resources.
 
 ## 10. Pointer routing and application events
 

@@ -102,26 +102,28 @@ static uint32_t descriptor(AstraRenderBuilder *builder, uint32_t data_offset,
     return offset;
 }
 
-static uint8_t *command(AstraRenderBuilder *builder, uint16_t opcode,
-                        uint16_t flags, uint32_t destination,
-                        int32_t clip_left, int32_t clip_top,
-                        int32_t clip_right, int32_t clip_bottom)
+static int command(AstraRenderBuilder *builder, uint16_t opcode,
+                   uint16_t flags, uint32_t destination,
+                   int32_t clip_left, int32_t clip_top,
+                   int32_t clip_right, int32_t clip_bottom,
+                   uint8_t **record_out)
 {
     uint32_t descriptor_index;
     uint32_t offset;
     uint8_t *record;
 
+    *record_out = NULL;
     if (destination < DESCRIPTOR_ARENA_OFFSET ||
         (destination - DESCRIPTOR_ARENA_OFFSET) %
             ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES != 0u) {
         builder->failed = ASTRA_RENDER_BUILDER_FAILURE_DESTINATION;
-        return NULL;
+        return 0;
     }
     descriptor_index = (destination - DESCRIPTOR_ARENA_OFFSET) /
                        ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES;
     if (descriptor_index >= builder->descriptor_count) {
         builder->failed = ASTRA_RENDER_BUILDER_FAILURE_DESTINATION;
-        return NULL;
+        return 0;
     }
     if (clip_left < 0)
         clip_left = 0;
@@ -131,14 +133,19 @@ static uint8_t *command(AstraRenderBuilder *builder, uint16_t opcode,
         clip_right = builder->descriptor_width[descriptor_index];
     if (clip_bottom > builder->descriptor_height[descriptor_index])
         clip_bottom = builder->descriptor_height[descriptor_index];
-    if (builder->command_count >= ASTRA_RENDER_RING_ENTRIES ||
-        clip_left >= clip_right || clip_top >= clip_bottom ||
-        clip_left < INT16_MIN || clip_left > INT16_MAX ||
-        clip_top < INT16_MIN || clip_top > INT16_MAX ||
-        clip_right < INT16_MIN || clip_right > INT16_MAX ||
-        clip_bottom < INT16_MIN || clip_bottom > INT16_MAX) {
-        builder->failed = ASTRA_RENDER_BUILDER_FAILURE_COMMAND;
-        return NULL;
+    if (clip_left > builder->descriptor_width[descriptor_index])
+        clip_left = builder->descriptor_width[descriptor_index];
+    if (clip_top > builder->descriptor_height[descriptor_index])
+        clip_top = builder->descriptor_height[descriptor_index];
+    if (clip_right < 0)
+        clip_right = 0;
+    if (clip_bottom < 0)
+        clip_bottom = 0;
+    if (clip_left >= clip_right || clip_top >= clip_bottom)
+        return 1;
+    if (builder->command_count >= ASTRA_RENDER_RING_ENTRIES) {
+        builder->failed = ASTRA_RENDER_BUILDER_FAILURE_COMMAND_CAPACITY;
+        return 0;
     }
     offset = relative(ASTRA_RENDER_BATCH_SUBMISSION_OFFSET) +
              builder->command_count * ASTRA_RENDER_COMMAND_BYTES;
@@ -154,7 +161,8 @@ static uint8_t *command(AstraRenderBuilder *builder, uint16_t opcode,
     astra_store_be32(record + 28u, pair_s16(clip_right, clip_bottom));
     astra_store_be32(record + 32u, destination);
     ++builder->command_count;
-    return record;
+    *record_out = record;
+    return 1;
 }
 
 int astra_render_builder_init(AstraRenderBuilder *builder, void *storage,
@@ -263,24 +271,35 @@ uint32_t astra_render_builder_surface_at(AstraRenderBuilder *builder,
                           ASTRA_RENDER_SURFACE_WRITE);
 }
 
-int astra_render_builder_fill(AstraRenderBuilder *builder,
-                              uint32_t destination, int32_t x, int32_t y,
-                              uint32_t width, uint32_t height,
-                              uint16_t color)
+static int builder_fill(AstraRenderBuilder *builder, uint32_t destination,
+                        int32_t x, int32_t y, uint32_t width,
+                        uint32_t height, uint16_t color,
+                        int32_t clip_left, int32_t clip_top,
+                        int32_t clip_right, int32_t clip_bottom)
 {
     uint8_t *record;
 
     if (builder == NULL || destination == 0u || width == 0u || height == 0u ||
         width > UINT16_MAX || height > UINT16_MAX)
         return 0;
-    record = command(builder, ASTRA_RENDER_OP_FILL, 0u, destination,
-                     INT16_MIN, INT16_MIN, INT16_MAX, INT16_MAX);
-    if (record == NULL)
+    if (!command(builder, ASTRA_RENDER_OP_FILL, 0u, destination,
+                 clip_left, clip_top, clip_right, clip_bottom, &record))
         return 0;
+    if (record == NULL)
+        return 1;
     astra_store_be32(record + 48u, pair_s16(x, y));
     astra_store_be32(record + 56u, pair_u16((uint16_t)width, (uint16_t)height));
     astra_store_be32(record + 60u, color);
     return 1;
+}
+
+int astra_render_builder_fill(AstraRenderBuilder *builder,
+                              uint32_t destination, int32_t x, int32_t y,
+                              uint32_t width, uint32_t height,
+                              uint16_t color)
+{
+    return builder_fill(builder, destination, x, y, width, height, color,
+                        INT16_MIN, INT16_MIN, INT16_MAX, INT16_MAX);
 }
 
 static int circle(AstraRenderBuilder *builder, uint32_t destination,
@@ -288,22 +307,25 @@ static int circle(AstraRenderBuilder *builder, uint32_t destination,
                   int32_t left, int32_t top, int32_t right, int32_t bottom,
                   uint16_t color)
 {
-    uint8_t *record = command(builder, ASTRA_RENDER_OP_CIRCLE,
-                              ASTRA_RENDER_GEOMETRY_FLAG_FILLED,
-                              destination, left, top, right, bottom);
+    uint8_t *record;
 
-    if (record == NULL)
+    if (!command(builder, ASTRA_RENDER_OP_CIRCLE,
+                 ASTRA_RENDER_GEOMETRY_FLAG_FILLED, destination,
+                 left, top, right, bottom, &record))
         return 0;
+    if (record == NULL)
+        return 1;
     astra_store_be32(record + 44u, pair_s16(center_x, center_y));
     astra_store_be32(record + 52u, pair_u16(radius, 0u));
     astra_store_be32(record + 60u, color);
     return 1;
 }
 
-int astra_render_builder_rounded(AstraRenderBuilder *builder,
-                                 uint32_t destination, int32_t x, int32_t y,
-                                 uint32_t width, uint32_t height,
-                                 uint16_t radius, uint16_t color)
+static int builder_rounded(AstraRenderBuilder *builder, uint32_t destination,
+                           int32_t x, int32_t y, uint32_t width,
+                           uint32_t height, uint16_t radius, uint16_t color,
+                           int32_t clip_left, int32_t clip_top,
+                           int32_t clip_right, int32_t clip_bottom)
 {
     uint32_t bounded = radius;
     int32_t right;
@@ -318,41 +340,62 @@ int astra_render_builder_rounded(AstraRenderBuilder *builder,
     if (bounded > height / 2u)
         bounded = height / 2u;
     if (bounded == 0u)
-        return astra_render_builder_fill(builder, destination, x, y,
-                                         width, height, color);
+        return builder_fill(builder, destination, x, y, width, height, color,
+                            clip_left, clip_top, clip_right, clip_bottom);
     right = x + (int32_t)width;
     bottom = y + (int32_t)height;
+    if (clip_left < x) clip_left = x;
+    if (clip_top < y) clip_top = y;
+    if (clip_right > right) clip_right = right;
+    if (clip_bottom > bottom) clip_bottom = bottom;
     if (width > bounded * 2u)
-        horizontal = astra_render_builder_fill(
+        horizontal = builder_fill(
             builder, destination, x + (int32_t)bounded, y,
-            width - bounded * 2u, height, color);
+            width - bounded * 2u, height, color,
+            clip_left, clip_top, clip_right, clip_bottom);
     /* Side bands, not a full-width one: a full-width band would repaint every
        pixel the horizontal band already covered, and fill costs real time. */
     if (height > bounded * 2u)
-        vertical = astra_render_builder_fill(
+        vertical = builder_fill(
                        builder, destination, x, y + (int32_t)bounded,
-                       bounded, height - bounded * 2u, color) &&
-                   astra_render_builder_fill(
+                       bounded, height - bounded * 2u, color,
+                       clip_left, clip_top, clip_right, clip_bottom) &&
+                   builder_fill(
                        builder, destination, right - (int32_t)bounded,
                        y + (int32_t)bounded, bounded,
-                       height - bounded * 2u, color);
+                       height - bounded * 2u, color,
+                       clip_left, clip_top, clip_right, clip_bottom);
     return horizontal && vertical &&
            circle(builder, destination, x + bounded, y + bounded,
-                  bounded, x, y, right, bottom, color) &&
+                  bounded, clip_left, clip_top, clip_right, clip_bottom,
+                  color) &&
            circle(builder, destination, right - bounded - 1,
-                  y + bounded, bounded, x, y, right, bottom, color) &&
+                  y + bounded, bounded, clip_left, clip_top,
+                  clip_right, clip_bottom, color) &&
            circle(builder, destination, x + bounded,
                   bottom - bounded - 1, bounded,
-                  x, y, right, bottom, color) &&
+                  clip_left, clip_top, clip_right, clip_bottom, color) &&
            circle(builder, destination, right - bounded - 1,
                   bottom - bounded - 1, bounded,
-                  x, y, right, bottom, color);
+                  clip_left, clip_top, clip_right, clip_bottom, color);
+}
+
+int astra_render_builder_rounded(AstraRenderBuilder *builder,
+                                 uint32_t destination, int32_t x, int32_t y,
+                                 uint32_t width, uint32_t height,
+                                 uint16_t radius, uint16_t color)
+{
+    return builder_rounded(builder, destination, x, y, width, height,
+                           radius, color, INT16_MIN, INT16_MIN,
+                           INT16_MAX, INT16_MAX);
 }
 
 static int builder_text(AstraRenderBuilder *builder, uint32_t destination,
                         int32_t x, int32_t y, const char *utf8,
                         uint32_t length, uint16_t pixel_height,
-                        uint16_t cell_width, uint16_t color)
+                        uint16_t cell_width, uint16_t color,
+                        int32_t clip_left, int32_t clip_top,
+                        int32_t clip_right, int32_t clip_bottom)
 {
     const AstraUiStrike *strike = cell_width != 0u ?
         astra_mono_font_strike(pixel_height) :
@@ -433,10 +476,11 @@ static int builder_text(AstraRenderBuilder *builder, uint32_t destination,
         pen_26_6 += astra_ui_glyph_advance(glyph, cell_width);
         at += consumed;
     }
-    record = command(builder, ASTRA_RENDER_OP_GLYPH_RUN, 0u, destination,
-                     INT16_MIN, INT16_MIN, INT16_MAX, INT16_MAX);
-    if (record == NULL)
+    if (!command(builder, ASTRA_RENDER_OP_GLYPH_RUN, 0u, destination,
+                 clip_left, clip_top, clip_right, clip_bottom, &record))
         return 0;
+    if (record == NULL)
+        return 1;
     astra_store_be32(record + 36u, source_descriptor);
     astra_store_be32(record + 40u, glyph_offset);
     astra_store_be32(record + 44u, count);
@@ -450,7 +494,8 @@ int astra_render_builder_text(AstraRenderBuilder *builder,
                               uint16_t pixel_height, uint16_t color)
 {
     return builder_text(builder, destination, x, y, utf8, length,
-                        pixel_height, 0u, color);
+                        pixel_height, 0u, color,
+                        INT16_MIN, INT16_MIN, INT16_MAX, INT16_MAX);
 }
 
 int astra_render_builder_mono_text(AstraRenderBuilder *builder,
@@ -461,7 +506,8 @@ int astra_render_builder_mono_text(AstraRenderBuilder *builder,
 {
     return cell_width != 0u &&
            builder_text(builder, destination, x, y, utf8, length,
-                        pixel_height, cell_width, color);
+                        pixel_height, cell_width, color,
+                        INT16_MIN, INT16_MIN, INT16_MAX, INT16_MAX);
 }
 
 static int command_valid(const AstraDrawListHeader *header,
@@ -470,7 +516,11 @@ static int command_valid(const AstraDrawListHeader *header,
     uint64_t end = (uint64_t)item->payload_offset + item->payload_bytes;
 
     if (item->flags != 0u || item->reserved16 != 0u ||
-        !astra_words_zero(item->reserved, 4u))
+        !astra_words_zero(item->reserved, 2u) ||
+        item->clip_left >= item->clip_right ||
+        item->clip_right > header->width ||
+        item->clip_top >= item->clip_bottom ||
+        item->clip_bottom > header->height)
         return 0;
     if (item->operation == ASTRA_DRAW_LIST_FILL ||
         item->operation == ASTRA_DRAW_LIST_FILL_ROUNDED)
@@ -508,7 +558,7 @@ int astra_draw_list_covers(const AstraDrawListHeader *header,
     const AstraDrawListCommand *first;
 
     if (header == NULL || header->magic != ASTRA_DRAW_LIST_MAGIC ||
-        header->version != ASTRA_DRAW_LIST_VERSION_1_0 ||
+        header->version != ASTRA_DRAW_LIST_VERSION_1_1 ||
         header->total_bytes != ASTRA_DRAW_LIST_AREA_BYTES ||
         header->command_count == 0u ||
         header->command_count > ASTRA_DRAW_LIST_COMMAND_MAX ||
@@ -519,10 +569,20 @@ int astra_draw_list_covers(const AstraDrawListHeader *header,
     if (!command_valid(header, first) ||
         first->operation != ASTRA_DRAW_LIST_FILL)
         return 0;
-    return first->x <= 0 && first->y <= 0 &&
+    return first->clip_left == 0u && first->clip_top == 0u &&
+           first->clip_right >= width && first->clip_bottom >= height &&
+           first->x <= 0 && first->y <= 0 &&
            (int64_t)first->x + first->width >= (int64_t)width &&
            (int64_t)first->y + first->height >= (int64_t)height;
 }
+
+static int blit_region(AstraRenderBuilder *builder, uint32_t destination,
+                       uint32_t source, uint32_t mask, uint16_t flags,
+                       int32_t source_x, int32_t source_y,
+                       int32_t destination_x, int32_t destination_y,
+                       uint16_t width, uint16_t height,
+                       int32_t clip_left, int32_t clip_top,
+                       int32_t clip_right, int32_t clip_bottom);
 
 int astra_render_builder_replay(AstraRenderBuilder *builder,
                                 uint32_t destination,
@@ -532,7 +592,7 @@ int astra_render_builder_replay(AstraRenderBuilder *builder,
 
     if (builder == NULL || destination == 0u || header == NULL ||
         header->magic != ASTRA_DRAW_LIST_MAGIC ||
-        header->version != ASTRA_DRAW_LIST_VERSION_1_0 ||
+        header->version != ASTRA_DRAW_LIST_VERSION_1_1 ||
         header->total_bytes != ASTRA_DRAW_LIST_AREA_BYTES ||
         header->command_count > ASTRA_DRAW_LIST_COMMAND_MAX ||
         header->payload_bytes > ASTRA_DRAW_LIST_PAYLOAD_BYTES ||
@@ -546,32 +606,41 @@ int astra_render_builder_replay(AstraRenderBuilder *builder,
         if (!command_valid(header, item))
             return 0;
         if (item->operation == ASTRA_DRAW_LIST_FILL)
-            ok = astra_render_builder_fill(
+            ok = builder_fill(
                 builder, destination, item->x, item->y,
-                item->width, item->height, (uint16_t)item->foreground);
+                item->width, item->height, (uint16_t)item->foreground,
+                item->clip_left, item->clip_top,
+                item->clip_right, item->clip_bottom);
         else if (item->operation == ASTRA_DRAW_LIST_FILL_ROUNDED)
-            ok = astra_render_builder_rounded(
+            ok = builder_rounded(
                 builder, destination, item->x, item->y,
                 item->width, item->height, (uint16_t)item->radius,
-                (uint16_t)item->foreground);
+                (uint16_t)item->foreground,
+                item->clip_left, item->clip_top,
+                item->clip_right, item->clip_bottom);
         else if (item->operation == ASTRA_DRAW_LIST_TEXT)
-            ok = astra_render_builder_text(
+            ok = builder_text(
                 builder, destination, item->x, item->y,
                 (const char *)header + item->payload_offset,
                 item->payload_bytes, item->font_height,
-                (uint16_t)item->foreground);
+                0u, (uint16_t)item->foreground,
+                item->clip_left, item->clip_top,
+                item->clip_right, item->clip_bottom);
         else if (item->operation == ASTRA_DRAW_LIST_MONO_TEXT)
-            ok = astra_render_builder_mono_text(
+            ok = builder_text(
                 builder, destination, item->x, item->y,
                 (const char *)header + item->payload_offset,
                 item->payload_bytes, item->font_height,
-                (uint16_t)item->width, (uint16_t)item->foreground);
+                (uint16_t)item->width, (uint16_t)item->foreground,
+                item->clip_left, item->clip_top,
+                item->clip_right, item->clip_bottom);
         else
-            ok = astra_render_builder_blit_region(
-                builder, destination, destination,
+            ok = blit_region(builder, destination, destination, 0u, 0u,
                 (int32_t)item->foreground, (int32_t)item->background,
                 item->x, item->y, (uint16_t)item->width,
-                (uint16_t)item->height);
+                (uint16_t)item->height,
+                item->clip_left, item->clip_top,
+                item->clip_right, item->clip_bottom);
         if (!ok)
             return 0;
     }
@@ -590,10 +659,11 @@ static int blit_region(AstraRenderBuilder *builder, uint32_t destination,
 
     if (width == 0u || height == 0u)
         return 1;
-    record = command(builder, ASTRA_RENDER_OP_BLIT, flags, destination,
-                     clip_left, clip_top, clip_right, clip_bottom);
-    if (record == NULL)
+    if (!command(builder, ASTRA_RENDER_OP_BLIT, flags, destination,
+                 clip_left, clip_top, clip_right, clip_bottom, &record))
         return 0;
+    if (record == NULL)
+        return 1;
     astra_store_be32(record + 36u, source);
     astra_store_be32(record + 40u, mask);
     astra_store_be32(record + 44u, pair_s16(source_x, source_y));
@@ -612,8 +682,8 @@ int astra_render_builder_blit_region(
         return 0;
     return blit_region(builder, destination, source, 0u, 0u,
                        source_x, source_y, destination_x, destination_y,
-                       width, height, 0, 0,
-                       ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT);
+                       width, height, INT16_MIN, INT16_MIN,
+                       INT16_MAX, INT16_MAX);
 }
 
 int astra_render_builder_blit_clipped(
@@ -702,7 +772,7 @@ int astra_render_builder_blit(AstraRenderBuilder *builder,
 {
     return astra_render_builder_blit_clipped(
         builder, destination, source, x, y, width, height, radius, round_top,
-        0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT);
+        INT16_MIN, INT16_MIN, INT16_MAX, INT16_MAX);
 }
 
 uint32_t astra_render_builder_finish(AstraRenderBuilder *builder)

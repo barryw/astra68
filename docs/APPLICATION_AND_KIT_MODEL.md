@@ -93,7 +93,7 @@ The remaining planned Kits are:
 
 - Core: handles, errors, time, waits, memory and process operations;
 - Application: launch, lifecycle, commands and settings;
-- Interface extensions: views, controls, layout, clipboard and drag/drop;
+- Interface extensions: remaining views and controls, clipboard and drag/drop;
 - Media: audio streams, voices, clocks and synchronization;
 - Network: asynchronous endpoints and name resolution;
 - POSIX: libc, file descriptors, paths, PTYs, jobs and compatibility.
@@ -112,6 +112,16 @@ real system service to own subscriptions, filtering, and backpressure.
 `events.library` ABI 1.0 exposes the existing diagnostic event emitter, log,
 trace reader, and event catalog. It records observable system events; it does
 not replace interprocess messaging.
+
+`interface.library` ABI 2.0 exposes the retained control context through the
+public NDK. Label, Button, and the other primitive controls share intrinsic
+measurement, deterministic nested flex layout, hit testing, focus/capture,
+interaction state, damage, clipping, and Graphics Kit rendering. Controls and
+their hierarchy remain caller-owned; the Interface Kit retains the compiled
+layout description and iteratively reflows every descendant when a parent
+extent changes. The alert implementation and `InterfaceGallery.app` consume
+that same code; applications do not own parallel widget painters, coordinate
+tables, resize handlers, or input state machines.
 
 ## 5. Shared code direction
 

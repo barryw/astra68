@@ -56,8 +56,8 @@ static AstraProcessFilesystem process_filesystem =
     ASTRA_PROCESS_FILESYSTEM_INIT;
 static AstraLibraryHandle *graphics_handle;
 static AstraLibraryHandle *interface_handle;
-static const AstraGraphicsLibraryV1 *graphics_library;
-static const AstraInterfaceLibraryV1 *interface_library;
+static const AstraGraphicsLibraryV2 *graphics_library;
+static const AstraInterfaceLibraryV2 *interface_library;
 static char manifest_text[ASTRA_BUNDLE_MANIFEST_MAX + 1u];
 static uint8_t icon_bytes[ICON_BYTES_MAX];
 
@@ -260,8 +260,6 @@ int astra_main(const AstraStartupInfo *startup)
             graphics_library = graphics_handle->exports;
             if (graphics_library->abi_major !=
                     ASTRA_GRAPHICS_LIBRARY_ABI_MAJOR ||
-                graphics_library->abi_minor <
-                    ASTRA_GRAPHICS_LIBRARY_ABI_MINOR ||
                 graphics_library->structure_size < sizeof(*graphics_library))
                 status = DESKTOP_FAIL_GRAPHICS;
         }

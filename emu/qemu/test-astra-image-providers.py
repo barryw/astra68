@@ -17,7 +17,14 @@ assert astra_image.HOSTBENCH_SERVICES == \
     astra_image.DISPLAY_SERVICES + ("hostbench",)
 assert astra_image.HOSTBENCH_STARTUP_MANIFEST == \
     astra_image.DISPLAY_STARTUP_MANIFEST + \
-    "application SERVICES:hostbench grants HOST_DEVICE required\n"
+    "application SERVICES:hostbench grants HOST_DEVICE\n"
+assert astra_image.INTERFACE_GALLERY_STARTUP_MANIFEST == \
+    astra_image.DISPLAY_STARTUP_MANIFEST + \
+    "application APPS:InterfaceGallery.app grants GUI LIBS:r\n"
+assert not any(line.startswith("application ") and line.endswith(" required")
+               for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines())
+assert astra_image.APPLICATION_BUNDLES == \
+    ("Terminal.app", "InterfaceGallery.app")
 assert "commands/zsh/zshrc" in astra_image.CONFIGURATION
 assert "commands/zsh/motd" in astra_image.CONFIGURATION
 zshrc = astra_image.CONFIGURATION["commands/zsh/zshrc"]

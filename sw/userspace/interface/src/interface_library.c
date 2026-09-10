@@ -8,14 +8,12 @@
 #include <astra/theme.h>
 #include <astra/window.h>
 
+#include "control_internal.h"
+
 #define ALERT_WIDTH 420u
 #define ALERT_HEIGHT 150u
-#define ALERT_BUTTON_X 304
-#define ALERT_BUTTON_Y 98
-#define ALERT_BUTTON_WIDTH 96u
-#define ALERT_BUTTON_HEIGHT 32u
 
-ASTRA_LIBRARY("interface.library", 1, 1, 0,
+ASTRA_LIBRARY("interface.library", 2, 0, 0,
               ASTRA_INTERFACE_LIBRARY_ABI_MAJOR,
               ASTRA_INTERFACE_LIBRARY_ABI_MINOR,
               "Barry Walker", "Copyright 2026 Barry Walker");
@@ -46,36 +44,70 @@ static uint16_t color(AstraColorRGBA8 value)
     return astra_surface_rgb565(value.red, value.green, value.blue);
 }
 
-static void paint(AstraSurfaceView *surface, const AstraAlertInfo *info)
+static AstraResult alert_controls(const AstraAlertInfo *info,
+                                  AstraControl controls[2],
+                                  AstraUIContext *context)
+{
+    AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
+    AstraButtonInfo button = ASTRA_BUTTON_INFO_INIT;
+    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraResult result;
+
+    label.id = 1u;
+    label.text = info->message;
+    label.text_length = info->message_length;
+    label.text_role = ASTRA_TEXT_CLIENT_PRIMARY;
+    result = astra_interface_label_init(&controls[0], &label);
+    if (result != ASTRA_OK) return result;
+    button.id = 2u;
+    button.text = info->button;
+    button.text_length = info->button_length;
+    button.variant = info->kind == ASTRA_ALERT_WARNING ?
+        ASTRA_BUTTON_WARNING :
+        (info->kind == ASTRA_ALERT_ERROR ? ASTRA_BUTTON_DESTRUCTIVE :
+                                          ASTRA_BUTTON_PRIMARY);
+    result = astra_interface_button_init(&controls[1], &button);
+    if (result != ASTRA_OK) return result;
+    item.minimum_width = 96u;
+    item.minimum_height = 32u;
+    item.align_self = ASTRA_FLEX_ALIGN_END;
+    result = astra_interface_control_set_flex(&controls[1], &item);
+    if (result != ASTRA_OK) return result;
+    result = astra_interface_ui_init(context, controls, 2u,
+                                     ALERT_WIDTH, ALERT_HEIGHT);
+    if (result != ASTRA_OK) return result;
+    layout.direction = ASTRA_FLEX_COLUMN;
+    layout.justify = ASTRA_FLEX_JUSTIFY_SPACE_BETWEEN;
+    layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
+    layout.padding_left = 22u;
+    layout.padding_top = 22u;
+    layout.padding_right = 20u;
+    layout.padding_bottom = 20u;
+    return astra_interface_ui_layout(context, &layout);
+}
+
+static AstraResult paint(AstraSurfaceView *surface, const AstraAlertInfo *info,
+                         const AstraUIContext *context)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     AstraColorRGBA8 signal = info->kind == ASTRA_ALERT_ERROR ? theme.fault :
         (info->kind == ASTRA_ALERT_WARNING ? theme.warning : theme.accent);
-    uint32_t button_text_width = astra_surface_ui_text_width(
-        info->button, info->button_length, theme.body_font_height);
 
     astra_surface_clear(surface, color(theme.client));
     astra_surface_fill(surface, 0, 0, 6u, ALERT_HEIGHT, color(signal));
-    astra_surface_ui_text(surface, 22, 30, info->message,
-                          astra_surface_ui_text_fit(
-                              info->message, info->message_length,
-                              theme.body_font_height, ALERT_WIDTH - 44u),
-                          theme.body_font_height, color(theme.frame));
-    astra_surface_fill_round(surface, ALERT_BUTTON_X, ALERT_BUTTON_Y,
-                             ALERT_BUTTON_WIDTH, ALERT_BUTTON_HEIGHT,
-                             theme.control_radius, color(theme.accent));
-    astra_surface_ui_text(
-        surface,
-        ALERT_BUTTON_X + (int32_t)(ALERT_BUTTON_WIDTH - button_text_width) / 2,
-        ALERT_BUTTON_Y + 10, info->button, info->button_length,
-        theme.body_font_height, color(theme.text_primary));
+    return astra_interface_ui_render(context, surface);
 }
 
 #if defined(ASTRA_INTERFACE_TEST)
 void astra_interface_test_paint(AstraSurfaceView *surface,
                                 const AstraAlertInfo *info)
 {
-    paint(surface, info);
+    AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+
+    if (alert_controls(info, controls, &context) == ASTRA_OK)
+        (void)paint(surface, info, &context);
 }
 #endif
 
@@ -83,6 +115,8 @@ static AstraResult show_alert(AstraHandle gui, const AstraAlertInfo *info)
 {
     AstraSharedSurface surface = {0};
     AstraWindow window = ASTRA_WINDOW_INIT;
+    AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
     AstraWindowCreateInfo create = ASTRA_WINDOW_CREATE_INFO_INIT;
     AstraResult result;
     uint32_t status;
@@ -92,7 +126,14 @@ static AstraResult show_alert(AstraHandle gui, const AstraAlertInfo *info)
     status = astra_shared_draw_list_create(&surface, ALERT_WIDTH, ALERT_HEIGHT);
     if (status != ASTRA_SYSCALL_OK)
         return astra_result_from_syscall(status);
-    paint(&surface.view, info);
+    result = alert_controls(info, controls, &context);
+    if (result == ASTRA_OK)
+        result = paint(&surface.view, info, &context);
+    if (result != ASTRA_OK) {
+        (void)astra_shared_surface_close(&surface);
+        return result;
+    }
+    astra_interface_ui_damage_clear(&context);
     create.flags = ASTRA_WINDOW_MODAL | ASTRA_WINDOW_ACTIVE;
     create.x = 430u;
     create.y = 250u;
@@ -105,25 +146,48 @@ static AstraResult show_alert(AstraHandle gui, const AstraAlertInfo *info)
     create.content_format = ASTRA_WINDOW_CONTENT_DRAW_LIST;
     create.pitch = 0u;
     create.event_mask = ASTRA_WINDOW_SUBSCRIBE_CLOSE_REQUEST |
-                        ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON;
+                        ASTRA_WINDOW_SUBSCRIBE_POINTER_MOTION |
+                        ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON |
+                        ASTRA_WINDOW_SUBSCRIBE_FOCUS |
+                        ASTRA_WINDOW_SUBSCRIBE_KEY;
     result = astra_window_create(gui, surface.area, &create, &window);
     if (result == ASTRA_OK) {
         for (;;) {
             AstraWindowEvent event = {0};
+            AstraUIAction action = ASTRA_UI_ACTION_INIT;
 
             result = astra_window_event_wait(
                 &window, &event, ASTRA_DEADLINE_INFINITE);
             if (result != ASTRA_OK ||
-                event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST ||
-                (event.type == ASTRA_WINDOW_EVENT_POINTER_BUTTON &&
-                 (event.flags & ASTRA_WINDOW_EVENT_DOWN) != 0u &&
-                 event.data.pointer.x >= ALERT_BUTTON_X &&
-                 event.data.pointer.x < ALERT_BUTTON_X +
-                                                (int32_t)ALERT_BUTTON_WIDTH &&
-                 event.data.pointer.y >= ALERT_BUTTON_Y &&
-                 event.data.pointer.y < ALERT_BUTTON_Y +
-                                               (int32_t)ALERT_BUTTON_HEIGHT))
+                event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST)
                 break;
+            result = astra_interface_ui_handle_event(
+                &context, &event, &action);
+            if (result != ASTRA_OK ||
+                action.type == ASTRA_UI_ACTION_ACTIVATE)
+                break;
+            {
+                AstraControlFrame damage;
+
+                if (astra_interface_ui_damage(&context, &damage) == ASTRA_OK) {
+                    AstraWindowFrame region = {
+                        (uint16_t)damage.x, (uint16_t)damage.y,
+                        (uint16_t)damage.width, (uint16_t)damage.height};
+
+                    if (!astra_draw_list_view_init(
+                            &surface.view, surface.view.pixels,
+                            surface.view.byte_size, ALERT_WIDTH, ALERT_HEIGHT)) {
+                        result = ASTRA_ERROR_IO;
+                        break;
+                    }
+                    result = paint(&surface.view, info, &context);
+                    if (result == ASTRA_OK)
+                        result = astra_window_present_region(&window, &region);
+                    if (result != ASTRA_OK)
+                        break;
+                    astra_interface_ui_damage_clear(&context);
+                }
+            }
         }
         {
             AstraResult close_result = astra_window_close(&window);
@@ -136,10 +200,10 @@ static AstraResult show_alert(AstraHandle gui, const AstraAlertInfo *info)
     return result;
 }
 
-const AstraInterfaceLibraryV1 astra_library_exports ASTRA_LIBRARY_EXPORTS = {
+const AstraInterfaceLibraryV2 astra_library_exports ASTRA_LIBRARY_EXPORTS = {
     ASTRA_INTERFACE_LIBRARY_ABI_MAJOR,
     ASTRA_INTERFACE_LIBRARY_ABI_MINOR,
-    sizeof(AstraInterfaceLibraryV1),
+    sizeof(AstraInterfaceLibraryV2),
     show_alert,
     astra_window_create,
     astra_window_get_info,
@@ -161,4 +225,26 @@ const AstraInterfaceLibraryV1 astra_library_exports ASTRA_LIBRARY_EXPORTS = {
     astra_window_event_try,
     astra_window_event_wait,
     astra_window_event_wait_handle,
+    astra_interface_label_init,
+    astra_interface_button_init,
+    astra_interface_control_set_flex,
+    astra_interface_ui_init,
+    astra_interface_ui_measure,
+    astra_interface_ui_layout,
+    astra_interface_ui_set_state,
+    astra_interface_ui_render,
+    astra_interface_ui_handle_event,
+    astra_interface_ui_damage,
+    astra_interface_ui_damage_clear,
+    astra_interface_checkbox_init,
+    astra_interface_radio_init,
+    astra_interface_switch_init,
+    astra_interface_slider_init,
+    astra_interface_control_set_value,
+    astra_interface_control_get_value,
+    astra_interface_progress_init,
+    astra_interface_progress_set,
+    astra_interface_ui_tick,
+    astra_interface_control_set_text,
+    astra_interface_container_init,
 };
