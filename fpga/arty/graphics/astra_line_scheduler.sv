@@ -128,6 +128,10 @@ module astra_line_scheduler #(
     reg [3:0] slot_success;
     reg [3:0] slot_toggle;
     reg scene_epoch_toggle;
+    reg scene_epoch_wait;
+    reg scene_epoch_ack_pixel;
+    (* ASYNC_REG = "TRUE" *) reg scene_epoch_ack_meta;
+    (* ASYNC_REG = "TRUE" *) reg scene_epoch_ack_sync;
 
     (* ASYNC_REG = "TRUE" *) reg [3:0] slot_toggle_meta;
     (* ASYNC_REG = "TRUE" *) reg [3:0] slot_toggle_sync;
@@ -249,6 +253,8 @@ module astra_line_scheduler #(
             held_valid_sync <= 1'b0;
             held_slot_meta <= 2'd0;
             held_slot_sync <= 2'd0;
+            scene_epoch_ack_meta <= 1'b0;
+            scene_epoch_ack_sync <= 1'b0;
         end else begin
             retired_toggle_meta <= retired_toggle_pixel;
             retired_toggle_sync <= retired_toggle_meta;
@@ -258,6 +264,8 @@ module astra_line_scheduler #(
             held_valid_sync <= held_valid_meta;
             held_slot_meta <= held_slot_pixel;
             held_slot_sync <= held_slot_meta;
+            scene_epoch_ack_meta <= scene_epoch_ack_pixel;
+            scene_epoch_ack_sync <= scene_epoch_ack_meta;
         end
     end
 
@@ -300,6 +308,7 @@ module astra_line_scheduler #(
             slot_success <= 4'd0;
             slot_toggle <= 4'd0;
             scene_epoch_toggle <= 1'b0;
+            scene_epoch_wait <= 1'b0;
             lines_built <= 32'd0;
             lines_failed <= 32'd0;
             scheduler_overruns <= 32'd0;
@@ -344,7 +353,7 @@ module astra_line_scheduler #(
                 successful_clients <= 4'd0;
                 prepared_clients <= 4'd0;
                 prepared_scene_enable <= 1'b0;
-                bootstrap_active <= scene_enable;
+                bootstrap_active <= 1'b0;
                 bootstrap_line <= 3'd0;
                 request_write_ptr <= 2'd0;
                 request_read_ptr <= 2'd0;
@@ -353,7 +362,13 @@ module astra_line_scheduler #(
                 event_capture_pending <= 1'b0;
                 slot_success <= 4'd0;
                 scene_epoch_toggle <= ~scene_epoch_toggle;
+                scene_epoch_wait <= 1'b1;
             end else begin
+                if (!quiesce && scene_epoch_wait &&
+                    scene_epoch_ack_sync == scene_epoch_toggle) begin
+                    scene_epoch_wait <= 1'b0;
+                    bootstrap_active <= scene_enable;
+                end
                 if (quiesce) begin
                     bootstrap_active <= 1'b0;
                     request_write_ptr <= 2'd0;
@@ -502,6 +517,7 @@ module astra_line_scheduler #(
             slot_toggle_seen <= 4'd0;
             slot_capture_pending <= 4'd0;
             scene_epoch_seen <= 1'b0;
+            scene_epoch_ack_pixel <= 1'b0;
             pixel_read_slot <= 2'd0;
             pixel_line_available <= 1'b0;
             pixel_underruns <= 32'd0;
@@ -515,10 +531,12 @@ module astra_line_scheduler #(
         end else begin
             if (scene_epoch_sync != scene_epoch_seen) begin
                 scene_epoch_seen <= scene_epoch_sync;
+                scene_epoch_ack_pixel <= scene_epoch_sync;
                 pixel_line_available <= 1'b0;
                 held_slot_valid_pixel <= 1'b0;
                 pixel_slot_valid <= 4'd0;
                 slot_capture_pending <= 4'd0;
+                slot_toggle_seen <= slot_toggle_sync;
             end else begin
                 if (slot_capture_pending[0]) begin
                     slot_capture_pending[0] <= 1'b0;

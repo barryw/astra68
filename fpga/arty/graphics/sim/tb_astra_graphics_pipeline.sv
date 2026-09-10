@@ -797,8 +797,12 @@ module tb_astra_graphics_pipeline #(
             if (active_generation != generation ||
                 lines_built < minimum_lines)
                 $fatal(1,
-                    "generation wait timed out expected=%0d actual=%0d lines=%0d",
-                    generation, active_generation, lines_built);
+                    "generation wait timed out expected=%0d actual=%0d lines=%0d epoch=%0d ack=%0d wait=%0d quiesce=%0d idle=%0d state=%0d",
+                    generation, active_generation, lines_built,
+                    dut.scheduler_i.scene_epoch_toggle,
+                    dut.scheduler_i.scene_epoch_ack_sync,
+                    dut.scheduler_i.scene_epoch_wait, dut.commit_quiesce,
+                    dut.scheduler_idle, dut.scheduler_i.scheduler_state);
         end
     endtask
 

@@ -257,7 +257,7 @@ module tb_astra_line_scheduler;
             last_source[index] = -1;
         end
 
-        repeat (5) @(posedge build_clk);
+        repeat (12) @(posedge build_clk);
         repeat (3) @(posedge pixel_clk);
         pixel_reset = 1'b0;
 
@@ -285,8 +285,6 @@ module tb_astra_line_scheduler;
         @(negedge pixel_clk);
         pixel_reset = 1'b1;
         repeat (3) @(posedge pixel_clk);
-        @(negedge pixel_clk);
-        pixel_reset = 1'b0;
         $display("bundled slot CDC skew pass");
 
         @(negedge build_clk);
@@ -294,9 +292,24 @@ module tb_astra_line_scheduler;
 
         line_prepare_ready = 1'b0;
         pulse_scene_changed();
-        repeat (5) @(posedge build_clk);
+        repeat (20) @(posedge build_clk);
+        if (total_starts != 0 || line_prepare_valid)
+            $fatal(1,
+                "new scene prepared before pixel epoch acknowledgement");
+        @(negedge pixel_clk);
+        pixel_reset = 1'b0;
+        quiesce_cycles = 0;
+        while (!line_prepare_valid && quiesce_cycles < 100) begin
+            @(posedge build_clk);
+            quiesce_cycles = quiesce_cycles + 1;
+        end
         if (!line_prepare_valid || line_prepare_y != 0 || total_starts != 0)
-            $fatal(1, "line preparation did not backpressure bootstrap");
+            $fatal(1,
+                "line preparation did not backpressure bootstrap valid=%0d y=%0d starts=%0d wait=%0d epoch=%0d ack=%0d bootstrap=%0d state=%0d",
+                line_prepare_valid, line_prepare_y, total_starts,
+                dut.scene_epoch_wait, dut.scene_epoch_toggle,
+                dut.scene_epoch_ack_sync, dut.bootstrap_active,
+                dut.scheduler_state);
         line_prepare_ready = 1'b1;
         wait_for_counts(4, 0);
         wait_for_pixel_slot(0, 0, 1);

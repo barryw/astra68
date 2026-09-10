@@ -42,6 +42,7 @@ uint32_t astra_render_builder_surface(AstraRenderBuilder *builder,
                                       uint16_t width, uint16_t height);
 uint32_t astra_render_builder_surface_at(AstraRenderBuilder *builder,
                                          uint32_t data_offset,
+                                         uint32_t data_capacity,
                                          uint16_t width, uint16_t height);
 int astra_render_builder_fill(AstraRenderBuilder *builder,
                               uint32_t destination, int32_t x, int32_t y,

@@ -94,9 +94,9 @@ module astra_boot_text_overlay #(
     (* ASYNC_REG = "TRUE" *) reg commit_enable_sync;
 
     // hdl-util-hdmi presents the pixel requested in this cycle for capture on
-    // the next rising edge. Look two pixels ahead so the cell RAM and font ROM
-    // each get a register stage before the final HDMI video-data path.
-    wire [11:0] render_x = pixel_x + 12'd2;
+    // the next rising edge. Look three pixels ahead so the cell address, cell
+    // RAM, and font ROM each get a register stage before the final HDMI path.
+    wire [11:0] render_x = pixel_x + 12'd3;
     wire in_text_bounds =
         render_x >= ORIGIN_X && render_x < ORIGIN_X + TEXT_WIDTH &&
         pixel_y >= ORIGIN_Y && pixel_y < ORIGIN_Y + TEXT_HEIGHT;
@@ -124,8 +124,29 @@ module astra_boot_text_overlay #(
         (apply_mailbox_write || apply_clone_write);
     wire [7:0] memory_write_index = apply_mailbox_write ?
         write_index_sync : clone_index_pixel;
+    reg [7:0] lookup_cell_address_q;
+    reg [2:0] lookup_glyph_col_q;
+    reg [3:0] lookup_glyph_row_q;
+    reg lookup_glyph_region_q;
+    reg lookup_enable_q;
+    always @(posedge pixel_clk) begin
+        if (pixel_reset) begin
+            lookup_cell_address_q <= 8'd0;
+            lookup_glyph_col_q <= 3'd0;
+            lookup_glyph_row_q <= 4'd0;
+            lookup_glyph_region_q <= 1'b0;
+            lookup_enable_q <= 1'b0;
+        end else begin
+            lookup_cell_address_q <= cell_address;
+            lookup_glyph_col_q <= glyph_col;
+            lookup_glyph_row_q <= glyph_row;
+            lookup_glyph_region_q <= glyph_region;
+            lookup_enable_q <= active_enable_pixel;
+        end
+    end
+
     wire [7:0] memory_read_index = clone_active_pixel ?
-        clone_index_pixel : cell_address;
+        clone_index_pixel : lookup_cell_address_q;
     wire [15:0] bank0_read_data = cell_bank0[memory_read_index];
     wire [15:0] bank1_read_data = cell_bank1[memory_read_index];
     wire [15:0] bank0_write_data = apply_mailbox_write ?
@@ -278,10 +299,10 @@ module astra_boot_text_overlay #(
             render_enable_q <= 1'b0;
         end else begin
             render_cell_q <= active_cell;
-            render_glyph_col_q <= glyph_col;
-            render_glyph_row_q <= glyph_row;
-            render_glyph_region_q <= glyph_region;
-            render_enable_q <= active_enable_pixel;
+            render_glyph_col_q <= lookup_glyph_col_q;
+            render_glyph_row_q <= lookup_glyph_row_q;
+            render_glyph_region_q <= lookup_glyph_region_q;
+            render_enable_q <= lookup_enable_q;
         end
     end
 

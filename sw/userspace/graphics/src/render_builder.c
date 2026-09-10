@@ -22,10 +22,16 @@ enum {
     DESCRIPTOR_MAX = 128u,
     GLYPH_ARENA_OFFSET = ASTRA_RENDER_BATCH_GLYPH_OFFSET,
     DATA_ARENA_OFFSET = ASTRA_RENDER_BATCH_DATA_OFFSET,
-    SURFACE_ARENA_OFFSET = 0x00800000u,
+    SURFACE_ARENA_OFFSET =
+        ASTRA_RENDER_BATCH_ARENA_OFFSET + ASTRA_RENDER_BUILDER_BYTES,
     SURFACE_ARENA_LIMIT = 0x01000000u,
     COMMAND_DEADLINE_US = 500000u,
 };
+
+_Static_assert(SURFACE_ARENA_OFFSET >=
+                   ASTRA_RENDER_BATCH_ARENA_OFFSET +
+                       ASTRA_RENDER_BUILDER_BYTES,
+               "scratch surfaces overlap the render batch");
 
 static uint32_t pair_u16(uint16_t high, uint16_t low)
 {
@@ -232,6 +238,7 @@ uint32_t astra_render_builder_surface(AstraRenderBuilder *builder,
 
 uint32_t astra_render_builder_surface_at(AstraRenderBuilder *builder,
                                          uint32_t data_offset,
+                                         uint32_t data_capacity,
                                          uint16_t width, uint16_t height)
 {
     uint32_t bytes;
@@ -245,7 +252,7 @@ uint32_t astra_render_builder_surface_at(AstraRenderBuilder *builder,
         return 0u;
     }
     bytes = (uint32_t)width * height * 2u;
-    if (bytes > ASTRA_RENDER_BATCH_MAX_BYTES ||
+    if (bytes > data_capacity || bytes > ASTRA_RENDER_BATCH_MAX_BYTES ||
         data_offset > UINT32_MAX - bytes) {
         builder->failed = ASTRA_RENDER_BUILDER_FAILURE_SURFACE;
         return 0u;

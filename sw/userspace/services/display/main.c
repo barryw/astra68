@@ -3,6 +3,7 @@
 #include <astra/gui.h>
 #include <astra/input_service.h>
 #include <astra/program.h>
+#include <astra/render_batch.h>
 #include <astra/render_builder.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
@@ -16,13 +17,25 @@
 #define DISPLAY_WORK_TOP 34u
 #define DISPLAY_WORK_BOTTOM (ASTRA_DISPLAY_HEIGHT - 42u)
 #define WINDOW_CACHE_BASE UINT32_C(0x01000000)
-#define WINDOW_CACHE_STRIDE UINT32_C(0x00200000)
-#define WINDOW_CONTENT_BASE UINT32_C(0x02000000)
-#define WINDOW_CONTENT_STRIDE UINT32_C(0x00200000)
+#define WINDOW_SURFACE_STRIDE ASTRA_RENDER_BATCH_SCANOUT_STRIDE
+#define WINDOW_CONTENT_BASE \
+    (WINDOW_CACHE_BASE + DISPLAY_WINDOW_MAX * WINDOW_SURFACE_STRIDE)
+#define WINDOW_SURFACE_MAX_BYTES \
+    (ASTRA_DISPLAY_WIDTH * (DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP) * 2u)
 #define DISPLAY_IRQ_DRAIN_MAX 8u
 #define DISPLAY_INPUT_QUEUE 8u
 #define DISPLAY_DOUBLE_CLICK_MS 500u
 #define DISPLAY_DOUBLE_CLICK_DISTANCE 4
+
+_Static_assert(ASTRA_RENDER_BATCH_SCANOUT1_OFFSET +
+                       ASTRA_RENDER_BATCH_SCANOUT_BYTES <=
+                   ASTRA_RENDER_BATCH_ARENA_OFFSET,
+               "scanouts overlap the render arena");
+_Static_assert(ASTRA_RENDER_BATCH_ARENA_OFFSET +
+                       ASTRA_RENDER_BUILDER_BYTES <= WINDOW_CACHE_BASE,
+               "render arena overlaps window caches");
+_Static_assert(WINDOW_SURFACE_MAX_BYTES <= WINDOW_SURFACE_STRIDE,
+               "window surface does not fit its slot");
 
 typedef struct DamageRect {
     int32_t left;
@@ -1340,7 +1353,8 @@ static uint32_t compose(void *storage, uint32_t fence,
         if (decorated(window)) {
             cache[index] = astra_render_builder_surface_at(
                 &builder, WINDOW_CACHE_BASE +
-                    window->cache_slot * WINDOW_CACHE_STRIDE,
+                    window->cache_slot * WINDOW_SURFACE_STRIDE,
+                WINDOW_SURFACE_STRIDE,
                 (uint16_t)outer_width(&theme, window),
                 (uint16_t)outer_height(&theme, window));
             if (cache[index] == 0u) {
@@ -1350,7 +1364,8 @@ static uint32_t compose(void *storage, uint32_t fence,
         }
         content[index] = astra_render_builder_surface_at(
             &builder, WINDOW_CONTENT_BASE +
-                window->cache_slot * WINDOW_CONTENT_STRIDE,
+                window->cache_slot * WINDOW_SURFACE_STRIDE,
+            WINDOW_SURFACE_STRIDE,
             window->request.width, window->request.height);
         if (content[index] == 0u ||
             (window->content_initialized == 0u &&

@@ -116,11 +116,14 @@ module tb_astra_boot_text_overlay;
         input [10:0] target_y
     );
         begin
-            // The overlay prefetches two pixels ahead: one register captures
-            // the cell lookup and one captures the font lookup.
+            // The overlay prefetches three pixels ahead: registers capture the
+            // cell address, cell lookup, and font lookup.
+            @(negedge pixel_clk);
+            pixel_x = target_x - 11'd3;
+            pixel_y = target_y;
+            @(posedge pixel_clk);
             @(negedge pixel_clk);
             pixel_x = target_x - 11'd2;
-            pixel_y = target_y;
             @(posedge pixel_clk);
             @(negedge pixel_clk);
             pixel_x = target_x - 11'd1;

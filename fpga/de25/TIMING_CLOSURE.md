@@ -1,5 +1,46 @@
 # DE25-Nano Timing Closure
 
+## 2026-09-10: scene epoch route and compositor surface correction
+
+- The retained full production route adds an explicit pixel/build scene-epoch
+  acknowledge and registers the boot-overlay glyph lookup pipeline. Focused
+  scheduler, pipeline, and overlay simulations pass. Quartus Pro 26.1.1 on
+  `beast` completed the exact full route with setup +0.009 ns, hold 0.000 ns,
+  recovery +2.479 ns, removal +0.032 ns, and minimum pulse width +0.220 ns.
+  Resources are 43,611 / 46,800 ALMs and 340 / 358 RAM blocks. The epoch
+  handshake is retained as the correct scene CDC contract, but physical HDMI
+  measurement proved it was not the black-band root cause.
+- Measured pre-fix frames alternated at the 500 ms cursor period between a
+  clean desktop and a full-width black band at y=580..781. The geometry led to
+  the display service's fixed media map: its 1920x1004 RGB565 desktop needs
+  3,855,360 bytes, but window content slots were only 2 MiB apart. Terminal's
+  772,800-byte black content surface therefore began 2,097,152 bytes into the
+  desktop, exactly at desktop row 546 / screen y=580, and overwrote through
+  screen y=781.
+- The correction uses the existing 4 MiB native scanout stride as the single
+  surface-slot contract. Scanouts, render workspace, window caches, and window
+  content now have compile-time non-overlap proofs. The shared render builder
+  requires external surfaces to declare slot capacity and rejects oversized
+  registrations. Its temporary surfaces also start after the 256 KiB render
+  batch; a focused regression caught that latent overlap. Graphics and display
+  tests pass normally and under ASan/UBSan.
+- Immutable release
+  `b20178fb3f52a997bbcde9501fb435867d95cc3e25c232c51c764306a3f26066`
+  verified before and after installation, reached stage 8, and remained active
+  with the real Terminal. The display service image SHA-256 is
+  `aad710b5adb0e9b4418934fad958e4a888d1a8761b97a81983938e64a5632ba8`;
+  the AArch64 renderer is
+  `fe1dcc00777894c5ca8515705ccbe0e7d852687e2da47c98c16816e9f45c3943`.
+  An eight-second physical HDMI capture covered 463 frames and multiple cursor
+  transitions: the former band crop was identical in every frame at YAVG
+  35.9862 while the cursor crop varied from 16.0 to 39.0451. After dragging the
+  Terminal, a second 300-frame capture kept the exposed band region at YAVG
+  39.0 with zero black frames. Capture SHA-256 values are respectively
+  `022e455481e1d8af287775820de8f995c062d39e62e5b3263c92d633fbf32272`
+  and `23e1a4b39ff733aaccb93d33df64ec0c72414cd615eb12f994486b400ddc5fe3`.
+  This closes the cursor-blink/window-drag corruption as a software ownership
+  defect; no masking, reduced feature set, or timing exception is involved.
+
 ## 2026-09-09: complete 1080p scaler/pointer release route
 
 - Host/tool: `beast`, Quartus Pro 26.1.1 Build 130; exact mirrored source,

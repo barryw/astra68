@@ -254,8 +254,12 @@ static void test_hardware_draw_list_batch(void)
     frame = astra_render_builder_frame(&builder);
     offscreen = astra_render_builder_surface(&builder, 160u, 80u);
     cached = astra_render_builder_surface_at(
-        &builder, 0x01000000u, 320u, 200u);
+        &builder, 0x01000000u, ASTRA_RENDER_BATCH_SCANOUT_STRIDE,
+        320u, 200u);
     assert(frame != 0u && offscreen != 0u && cached != 0u);
+    assert(be32(batch_storage + offscreen - ASTRA_RENDER_BATCH_ARENA_OFFSET +
+                8u) >= ASTRA_RENDER_BATCH_ARENA_OFFSET +
+                           ASTRA_RENDER_BUILDER_BYTES);
     assert(astra_render_builder_replay(&builder, offscreen, header));
     assert(astra_render_builder_rounded(&builder, offscreen, 60, 10,
                                         14u, 14u, 7u, 0x2222u));
@@ -291,7 +295,8 @@ static void test_hardware_draw_list_batch(void)
                                      sizeof(batch_storage), 8u));
     frame = astra_render_builder_frame(&builder);
     cached = astra_render_builder_surface_at(
-        &builder, 0x01000000u, 1280u, 720u);
+        &builder, 0x01000000u, ASTRA_RENDER_BATCH_SCANOUT_STRIDE,
+        1280u, 720u);
     {
         uint32_t data_cursor = builder.data_cursor;
 
@@ -302,6 +307,12 @@ static void test_hardware_draw_list_batch(void)
         assert(builder.data_cursor == data_cursor);
     }
     assert(finish_batch(&builder, batch_storage) != 0u);
+
+    assert(astra_render_builder_init(&builder, batch_storage,
+                                     sizeof(batch_storage), 9u));
+    assert(astra_render_builder_surface_at(
+               &builder, 0x01000000u, 4095u, 64u, 32u) == 0u);
+    assert(builder.failed == ASTRA_RENDER_BUILDER_FAILURE_SURFACE);
 }
 
 static void test_scanout_source_is_explicit(void)

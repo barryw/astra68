@@ -286,6 +286,10 @@ int main(void)
     uint32_t error;
     int changed;
 
+    assert((uint64_t)WINDOW_SURFACE_STRIDE >=
+           (uint64_t)ASTRA_DISPLAY_WIDTH *
+               (DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP) * sizeof(uint16_t));
+
     {
         AstraRenderBuilder builder;
         DisplayWindow icon_window = {0};
@@ -301,7 +305,7 @@ int main(void)
             16u, 16u, pixels, sizeof(pixels)};
         assert(astra_render_builder_init(&builder, batch, sizeof(batch), 1u));
         destination = astra_render_builder_surface_at(
-            &builder, WINDOW_CACHE_BASE, 64u, 32u);
+            &builder, WINDOW_CACHE_BASE, WINDOW_SURFACE_STRIDE, 64u, 32u);
         assert(destination != 0u);
         assert(draw_title_icon(&builder, destination, &icon_window, 13, 7));
         assert(astra_render_builder_finish(&builder) != 0u);

@@ -30,8 +30,8 @@ kernel is **Axiom**, and the user-facing system is **Astra OS**.
 - The ROM aperture is 512 KiB at `0xffe00000`.
 
 The production Agilex 5 shell routes with every clock constrained. Retained
-setup, hold, recovery, removal, and minimum-pulse slack are +0.035 ns, 0.000 ns,
-+2.826 ns, +0.036 ns, and +0.220 ns. Resource use is 43,495 / 46,800 ALMs,
+setup, hold, recovery, removal, and minimum-pulse slack are +0.009 ns, 0.000 ns,
++2.479 ns, +0.032 ns, and +0.220 ns. Resource use is 43,611 / 46,800 ALMs,
 4,183,520 / 7,331,840 block-memory bits, 340 / 358 RAM blocks, 59 / 376 DSPs,
 and 5 / 11 PLLs. Exact build and deployment evidence belongs in
 `fpga/de25/TIMING_CLOSURE.md`.
@@ -45,6 +45,15 @@ double-buffered 32x32 ARGB hardware pointer is the native unscaled output
 plane. The MC68040 supplies logical content and mode requests but never scales
 pixels.
 
+Media RAM is a service-owned arena, not raw process memory. Applications send
+validated draw lists through GUI IPC; only the display service holds the
+exclusive display lease and chooses media offsets. Scanouts use two 4 MiB
+slots, the render batch and scratch workspace occupy 8..16 MiB, window caches
+occupy 16..32 MiB, and window content occupies 32..48 MiB. Compile-time layout
+proofs and the shared render builder's per-slot capacity check prevent a
+surface from crossing those boundaries. Temporary render surfaces begin after
+the 256 KiB batch rather than at its base.
+
 The exact routed shell passed cold boot, JTAG design identity, native splash
 readback/presentation, the complete renderer suite, live 320x200-to-1080p 5x
 integer presentation, the complete 64-sprite variable-geometry sweep, copper,
@@ -57,6 +66,16 @@ restored and reaches stage 8 at 70.192 MHz effective with the correct wall
 clock. Requested clock values, generated PLL clocks, Platform Designer
 metadata, RTL timing constants, TimeQuest constraints, and physical behavior
 must agree; none may substitute for another as release evidence.
+
+Immutable release
+`b20178fb3f52a997bbcde9501fb435867d95cc3e25c232c51c764306a3f26066`
+contains the corrected compositor layout and is selected on the DE25. It
+reached stage 8, opened and moved Terminal, and completed balanced display
+submissions. Across 463 captured physical HDMI frames, the former corruption
+band at y=580..781 remained constant while the cursor visibly blinked; after a
+window drag, another 300 frames had zero black-band frames. The pre-fix band
+was an exact software overlap: the 3,855,360-byte desktop surface occupied a
+2 MiB slot, so the following Terminal slot overwrote precisely those rows.
 
 ## MC68040 contract
 
