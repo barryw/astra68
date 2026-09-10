@@ -67,6 +67,23 @@ clock. Requested clock values, generated PLL clocks, Platform Designer
 metadata, RTL timing constants, TimeQuest constraints, and physical behavior
 must agree; none may substitute for another as release evidence.
 
+Immutable release
+`00cb50981461fabb6b10ddc6a99b6b38a9cdc1b94df400f5cd4117aa635e2095`
+corrects the POST/panic console's stale 14-pixel character spacing. The host
+renderer now consumes the NDK's 8-pixel Astra Mono cell advance and has
+SHA-256
+`8b03e3b59136d8cd389f39b0888aaf07490d6352a4295e321afebcaa228673aa`;
+its ROM and storage inputs are byte-identical to the preceding accepted
+release. A physical Cam Link specimen measured repeated `I` glyph starts at
+x=616, 624, 632, and 640 and repeated `W` glyph starts at x=655, 663, 671,
+and 679: exact 8-pixel advances. The capture is
+`/private/tmp/astra-post-spacing-v1-proof.png`, SHA-256
+`b4862be2f89ae28da4c7831708c35af0ee193a39f24d22c1c7501323fb82bfc2`.
+The restored runtime reached stage 8 at 70.275 MHz effective; the board
+service is active with zero restarts, and the live renderer hash matches the
+release. DE25 release creation now force-rebuilds this small renderer from the
+current mirrored source, so a caller cannot package an older release's copy.
+
 Retained interface-performance release
 `1c12a8d59120f00181cdda7171330922febd623590bd24adb7f61db25505f0e1`
 established the current flat-layout baseline. Its storage, ROM, and QEMU

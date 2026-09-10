@@ -11,9 +11,17 @@ OUTPUT=$1
 QEMU=${ASTRA_DE25_QEMU:?set ASTRA_DE25_QEMU}
 ROM=${ASTRA_DE25_ROM:?set ASTRA_DE25_ROM}
 STORAGE=${ASTRA_DE25_STORAGE:?set ASTRA_DE25_STORAGE}
-DISPLAY=${ASTRA_DE25_TERMINAL_DISPLAY:?set ASTRA_DE25_TERMINAL_DISPLAY}
 LIBDIR=${ASTRA_DE25_QEMU_LIBDIR:?set ASTRA_DE25_QEMU_LIBDIR}
+DISPLAY=$REPOSITORY/build/de25-graphics/linux/astra-terminal-display
 RELEASE_TOOL=$REPOSITORY/tools/astra_release.py
+JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1\n')
+
+# POST and panic are rendered by this small host binary. Always rebuild it
+# from the mirrored tree so a prior release cannot silently supply its font
+# metrics or generated assets.
+make -B -j "$JOBS" -C "$REPOSITORY/fpga/arty/linux" \
+    PLATFORM=de25 CROSS_COMPILE=aarch64-linux-gnu- \
+    ../../../build/de25-graphics/linux/astra-terminal-display
 
 PYTHONDONTWRITEBYTECODE=1 python3 "$RELEASE_TOOL" create "$OUTPUT" \
     "qemu/bin/qemu-system-m68k-astra=$QEMU" \

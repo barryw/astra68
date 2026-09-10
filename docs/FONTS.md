@@ -48,6 +48,12 @@ system ROM image, or the font service has failed.
   is an 8-pixel advance, 12-pixel ascent, and 4-pixel descent; integer hardware
   enlargement scales the bitmap and every metric together.
 
+The DE25 POST/panic renderer consumes those NDK metrics directly. Physical
+release `00cb50981461fabb6b10ddc6a99b6b38a9cdc1b94df400f5cd4117aa635e2095`
+measured exact 8-pixel advances across repeated narrow and wide glyphs; release
+creation force-rebuilds the renderer so an older hard-coded advance cannot be
+packaged again.
+
 The BRAM face is intentionally small and monochrome. It is an emergency output
 facility, not the normal desktop typography system.
 

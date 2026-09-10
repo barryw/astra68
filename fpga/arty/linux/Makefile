@@ -126,7 +126,8 @@ $(TERMINAL_TARGET): astra_terminal_display.c $(COMMON_SOURCES) \
 		astra_render_protocol.h \
 		$(ASTRA_INCLUDE)/astra/display.h \
 		$(ASTRA_INCLUDE)/astra/display_mailbox.h \
-		$(ASTRA_INCLUDE)/astra/render_batch.h
+		$(ASTRA_INCLUDE)/astra/render_batch.h \
+		$(NDK_INCLUDE)/astra/theme.h
 	mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -I. -I$(OUT) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
 		-I$(GRAPHICS_INCLUDE) -I$(GRAPHICS_GENERATED) \
@@ -179,7 +180,8 @@ $(OUT)/test-astra-terminal-display: astra_terminal_display.c \
 		astra_render_protocol.h \
 		$(ASTRA_INCLUDE)/astra/display.h \
 		$(ASTRA_INCLUDE)/astra/display_mailbox.h \
-		$(ASTRA_INCLUDE)/astra/render_batch.h
+		$(ASTRA_INCLUDE)/astra/render_batch.h \
+		$(NDK_INCLUDE)/astra/theme.h
 	mkdir -p $(OUT)
 	$(HOSTCC) $(CFLAGS) -I. -I$(OUT) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
 		-I$(GRAPHICS_INCLUDE) -I$(GRAPHICS_GENERATED) \
