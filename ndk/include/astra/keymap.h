@@ -22,17 +22,17 @@
 
 /* Returned instead of a character for keys that move rather than type. */
 #define ASTRA_KEYMAP_NONE      0u
-#define ASTRA_KEYMAP_ENTER     0x100u
-#define ASTRA_KEYMAP_BACKSPACE 0x101u
-#define ASTRA_KEYMAP_DELETE    0x102u
-#define ASTRA_KEYMAP_LEFT      0x103u
-#define ASTRA_KEYMAP_RIGHT     0x104u
-#define ASTRA_KEYMAP_UP        0x105u
-#define ASTRA_KEYMAP_DOWN      0x106u
-#define ASTRA_KEYMAP_HOME      0x107u
-#define ASTRA_KEYMAP_END       0x108u
-#define ASTRA_KEYMAP_TAB       0x109u
-#define ASTRA_KEYMAP_ESCAPE    0x10au
+#define ASTRA_KEYMAP_ENTER     0x110000u
+#define ASTRA_KEYMAP_BACKSPACE 0x110001u
+#define ASTRA_KEYMAP_DELETE    0x110002u
+#define ASTRA_KEYMAP_LEFT      0x110003u
+#define ASTRA_KEYMAP_RIGHT     0x110004u
+#define ASTRA_KEYMAP_UP        0x110005u
+#define ASTRA_KEYMAP_DOWN      0x110006u
+#define ASTRA_KEYMAP_HOME      0x110007u
+#define ASTRA_KEYMAP_END       0x110008u
+#define ASTRA_KEYMAP_TAB       0x110009u
+#define ASTRA_KEYMAP_ESCAPE    0x11000au
 
 /* HID usages for the modifier keys, so a caller can track them. */
 #define ASTRA_KEYMAP_USAGE_CAPS_LOCK    0x39u
@@ -42,7 +42,7 @@
 #define ASTRA_KEYMAP_USAGE_RIGHT_CONTROL 0xe4u
 
 /*
- * Returns a character in 0x01..0x7e, one of the codes above, or
+ * Returns a Unicode scalar, one of the out-of-Unicode codes above, or
  * ASTRA_KEYMAP_NONE for a usage that produces nothing. Control collapses a
  * letter to its control code, so ^C arrives as 0x03.
  */

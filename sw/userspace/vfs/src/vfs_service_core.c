@@ -9,6 +9,7 @@
 #include <astra/vfs_service_core.h>
 
 #include <astra/endian.h>
+#include <astra/utf8.h>
 
 #include <stddef.h>
 #include <string.h>
@@ -128,9 +129,8 @@ bounded_path_valid(const char *path)
     uint32_t index;
 
     for (index = 0u; index < ASTRA_VFS_PATH_MAX; ++index) {
-        if (path[index] == '\0') {
-            return 1;
-        }
+        if (path[index] == '\0')
+            return astra_utf8_validate(path, index, 0u);
     }
     return 0;
 }
@@ -251,7 +251,8 @@ astra_vfs_backend_readdir_into(const AstraVfsBackend *backend,
             return status;
         while (length < ASTRA_VFS_NAME_MAX && name[length] != '\0')
             ++length;
-        if (length == 0u || length == ASTRA_VFS_NAME_MAX || next == cursor)
+        if (length == 0u || length == ASTRA_VFS_NAME_MAX || next == cursor ||
+            !astra_utf8_validate(name, length, 0u))
             return ASTRA_VFS_ERR_PROTOCOL;
         if (ASTRA_VFS_DIRENT_HEADER + length > capacity - used) {
             if (entries == 0u)
@@ -1345,7 +1346,8 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
                 &length);
             (void)state_acquire(service);
             if (reply->status == ASTRA_VFS_OK) {
-                if (length > capacity)
+                if (length > capacity ||
+                    !astra_utf8_validate(reply->payload, length, 0u))
                     reply->status = ASTRA_VFS_ERR_PROTOCOL;
                 else
                     reply->count = length;

@@ -1258,6 +1258,14 @@ test_malformed_records(void)
     request.size = (uint16_t)(ASTRA_VFS_REQUEST_SIZE - 1u);
     astra_vfs_service_dispatch(&service, ASTRA_VFS_OP_STAT, &request, &reply);
     assert(reply.status == ASTRA_VFS_ERR_PROTOCOL);
+
+    /* Path records are UTF-8 text, never arbitrary non-NUL bytes. */
+    begin_request(&request, session, "/a");
+    request.body.path[1] = UINT8_C(0xc0);
+    request.body.path[2] = UINT8_C(0x80);
+    request.body.path[3] = 0u;
+    astra_vfs_service_dispatch(&service, ASTRA_VFS_OP_STAT, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_PROTOCOL);
     assert(reply.size == ASTRA_VFS_REPLY_SIZE);
 
     /*

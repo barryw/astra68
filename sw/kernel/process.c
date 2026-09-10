@@ -16,6 +16,7 @@
 #include <astra/render_batch.h>
 #include <astra/event.h>
 #include <astra/status.h>
+#include <astra/utf8.h>
 
 #include "area.h"
 #include "block.h"
@@ -41,6 +42,14 @@
 
 _Static_assert(KERNEL_PAGE_SIZE == ASTRA_EXECUTABLE_TRANSFER_MAX,
                "streaming executable transfer must remain one VM page");
+_Static_assert(KERNEL_VM_DMA_SLOT_SIZE >=
+                   ASTRA_DISPLAY_WIDTH * ASTRA_DISPLAY_HEIGHT *
+                       sizeof(uint16_t),
+               "one DMA slot must hold a native RGB565 frame");
+_Static_assert(ASTRA_DMA_MAX_PAGES_PER_SERVICE >=
+                   KERNEL_VM_DMA_SLOT_COUNT *
+                       (KERNEL_VM_DMA_SLOT_SIZE / KERNEL_PAGE_SIZE),
+               "the process DMA page budget must cover every slot");
 
 /* Object tables live above the frame metadata; see kernel.ld. */
 #if defined(__m68k__)
@@ -4998,8 +5007,9 @@ static uint32_t append_vector(uint8_t *page, uint32_t at, uint32_t capacity,
             ++length;
         }
         if (consumed + length >= byte_count ||
+            !astra_utf8_validate(bytes + consumed, length, 0u) ||
             (environment && (equals == UINT32_MAX || equals == 0u))) {
-            /* A count that promises more words than the bytes hold. */
+            /* Invalid text, or a count that promises more words than exist. */
             return 0u;
         }
         page[vector_at + (index * 4u)] = (uint8_t)(address >> 24);

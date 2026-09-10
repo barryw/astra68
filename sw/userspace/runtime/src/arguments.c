@@ -1,4 +1,11 @@
 #include <astra/runtime.h>
+#include <astra/utf8.h>
+
+static int
+utf8_string(const char *text, uint32_t length)
+{
+    return astra_utf8_validate(text, length, 0u);
+}
 
 uint32_t
 astra_launch_arguments_pack(AstraLaunchArguments *arguments, char *storage,
@@ -24,6 +31,8 @@ astra_launch_arguments_pack(AstraLaunchArguments *arguments, char *storage,
                 return ASTRA_SYSCALL_RESOURCE_LIMIT;
             storage[length++] = values[index][at++];
         }
+        if (!utf8_string(values[index], at))
+            return ASTRA_SYSCALL_INVALID_ARGUMENT;
         storage[length++] = '\0';
     }
     arguments->count = (uint16_t)count;
@@ -63,6 +72,9 @@ astra_launch_environment_pack(AstraLaunchArguments *arguments, char *storage,
         }
         while (values[index][value_length] != '\0')
             ++value_length;
+        if (!utf8_string(names[index], name_length) ||
+            !utf8_string(values[index], value_length))
+            return ASTRA_SYSCALL_INVALID_ARGUMENT;
         if (length + name_length + value_length + 2u > capacity ||
             length + name_length + value_length + 2u >
                 ASTRA_LAUNCH_ENVIRONMENT_BYTES)
@@ -102,6 +114,8 @@ astra_exec_request_pack(AstraExecRequest *request, char *storage,
             return ASTRA_SYSCALL_RESOURCE_LIMIT;
         while (argv[argc][length] != '\0')
             ++length;
+        if (!utf8_string(argv[argc], length))
+            return ASTRA_SYSCALL_INVALID_ARGUMENT;
         if (length + 1u > capacity - used)
             return ASTRA_SYSCALL_RESOURCE_LIMIT;
         for (uint32_t at = 0u; at <= length; ++at)
@@ -125,6 +139,8 @@ astra_exec_request_pack(AstraExecRequest *request, char *storage,
                 ++length;
             }
             if (equals == UINT32_MAX || equals == 0u)
+                return ASTRA_SYSCALL_INVALID_ARGUMENT;
+            if (!utf8_string(envp[envc], length))
                 return ASTRA_SYSCALL_INVALID_ARGUMENT;
             if (length + 1u > capacity - used)
                 return ASTRA_SYSCALL_RESOURCE_LIMIT;

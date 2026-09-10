@@ -31,6 +31,12 @@ test_splitting(void)
 static void
 test_refusals(void)
 {
+    static const char malformed_assign[] = {
+        'W', (char)0xc0, (char)0x80, 'K', ':', 'x', '\0'
+    };
+    static const char malformed_rest[] = {
+        'W', 'O', 'R', 'K', ':', (char)0xed, (char)0xa0, (char)0x80, '\0'
+    };
     char name[ASTRA_CAPABILITY_NAME_MAX];
     char rest[64];
     char tiny[4];
@@ -53,11 +59,19 @@ test_refusals(void)
     /* Truncation would name a different file, so it is refused. */
     assert(astra_path_split("WORK:src/main.c", name, sizeof(name), tiny,
                             sizeof(tiny)) == ASTRA_VFS_ERR_INVALID);
+    assert(astra_path_split(malformed_assign, name, sizeof(name), rest,
+                            sizeof(rest)) == ASTRA_VFS_ERR_INVALID);
+    assert(astra_path_split(malformed_rest, name, sizeof(name), rest,
+                            sizeof(rest)) == ASTRA_VFS_ERR_INVALID);
 }
 
 static void
 test_normalising(void)
 {
+    static const char malformed[] = {
+        's', 'r', 'c', '/', (char)0xf4, (char)0x90, (char)0x80,
+        (char)0x80, '\0'
+    };
     char out[64];
 
     assert(astra_path_normalise("src/./main.c", out, sizeof(out)) ==
@@ -88,6 +102,8 @@ test_normalising(void)
            ASTRA_VFS_ERR_INVALID);
     assert(astra_path_normalise("src", out, 4u) == ASTRA_VFS_OK);
     assert(strcmp(out, "src") == 0);
+    assert(astra_path_normalise(malformed, out, sizeof(out)) ==
+           ASTRA_VFS_ERR_INVALID);
 }
 
 static void
@@ -125,6 +141,7 @@ test_dotdot_cannot_climb_out(void)
 static void
 test_qualifying(void)
 {
+    static const char malformed[] = {'x', (char)0x80, '\0'};
     char out[64];
 
     /* A relative word is relative to where the shell is standing. */
@@ -143,6 +160,8 @@ test_qualifying(void)
     assert(astra_path_qualify("APPS", "Terminal.app", "icon.aicon", out,
                               sizeof(out)) == ASTRA_VFS_OK);
     assert(strcmp(out, "APPS:Terminal.app/icon.aicon") == 0);
+    assert(astra_path_qualify("WORK", "src", malformed, out,
+                              sizeof(out)) == ASTRA_VFS_ERR_INVALID);
 
     /* No word at all names where the shell is standing. */
     assert(astra_path_qualify("WORK", "src", NULL, out, sizeof(out)) ==

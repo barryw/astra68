@@ -6,6 +6,7 @@
 #include <astra/vfs_client.h>
 
 #include <astra/endian.h>
+#include <astra/utf8.h>
 #include <astra/vfs_backend.h>
 
 #include <stddef.h>
@@ -82,21 +83,34 @@ begin(AstraVfsClient *client)
  * would answer about that one.
  */
 static int
-set_path_bytes(uint8_t destination[ASTRA_VFS_PATH_MAX], const char *path)
+path_text_valid(const char *path, uint32_t *length)
 {
     uint32_t index = 0u;
 
-    if (path == NULL) {
+    if (path == NULL)
         return 0;
-    }
     while (path[index] != '\0') {
-        if (index + 1u >= ASTRA_VFS_PATH_MAX) {
+        if (index + 1u >= ASTRA_VFS_PATH_MAX)
             return 0;
-        }
-        destination[index] = (uint8_t)path[index];
         ++index;
     }
-    destination[index] = 0u;
+    if (!astra_utf8_validate(path, index, 0u))
+        return 0;
+    if (length != NULL)
+        *length = index;
+    return 1;
+}
+
+static int
+set_path_bytes(uint8_t destination[ASTRA_VFS_PATH_MAX], const char *path)
+{
+    uint32_t length;
+
+    if (!path_text_valid(path, &length))
+        return 0;
+    for (uint32_t index = 0u; index < length; ++index)
+        destination[index] = (uint8_t)path[index];
+    destination[length] = 0u;
     return 1;
 }
 
@@ -240,7 +254,7 @@ astra_vfs_open_mode(AstraVfsClient *client, const char *path, uint32_t flags,
             ASTRA_VFS_OPEN_DIRECTORY | ASTRA_VFS_OPEN_EXCLUSIVE |
             ASTRA_VFS_OPEN_APPEND;
 
-        if (path == NULL || (flags & ~allowed) != 0u ||
+        if (!path_text_valid(path, NULL) || (flags & ~allowed) != 0u ||
             (flags & (ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE)) == 0u ||
             ((flags & ASTRA_VFS_OPEN_EXCLUSIVE) != 0u &&
              (flags & ASTRA_VFS_OPEN_CREATE) == 0u))
@@ -481,7 +495,7 @@ astra_vfs_stat_meta(AstraVfsClient *client, const char *path,
     if (client == NULL || meta == NULL)
         return ASTRA_VFS_ERR_INVALID;
     if (client->direct_backend_ops != NULL) {
-        if (path == NULL)
+        if (!path_text_valid(path, NULL))
             return ASTRA_VFS_ERR_INVALID;
         status = backend_enter(client, &ops, &context);
         if (status != ASTRA_VFS_OK)
@@ -533,7 +547,7 @@ astra_vfs_stat(AstraVfsClient *client, const char *path, uint64_t *size,
         return ASTRA_VFS_ERR_INVALID;
     }
     if (client->direct_backend_ops != NULL) {
-        if (path == NULL)
+        if (!path_text_valid(path, NULL))
             return ASTRA_VFS_ERR_INVALID;
         status = backend_enter(client, &ops, &context);
         if (status != ASTRA_VFS_OK)
@@ -594,6 +608,8 @@ astra_vfs_readdir(AstraVfsClient *client, const char *path, uint64_t cursor,
     for (at = 0u; at < call->reply.count; ++at) {
         name[at] = (char)call->reply.payload[at];
     }
+    if (!astra_utf8_validate(name, call->reply.count, 0u))
+        return ASTRA_VFS_ERR_PROTOCOL;
     name[call->reply.count] = '\0';
     if (kind != NULL) {
         *kind = call->reply.kind;
@@ -679,6 +695,8 @@ readdir_batch(AstraVfsClient *client, AstraVfsFile directory,
         for (uint32_t index = 0u; index < length; ++index)
             entries[found].name[index] =
                 (char)payload[at + index];
+        if (!astra_utf8_validate(entries[found].name, length, 0u))
+            return ASTRA_VFS_ERR_PROTOCOL;
         entries[found].name[length] = '\0';
         at += length;
         ++found;
@@ -736,7 +754,7 @@ astra_vfs_mkdir_mode(AstraVfsClient *client, const char *path,
         client->version < UINT16_C(14))
         return ASTRA_VFS_ERR_UNSUPPORTED;
     if (client->direct_backend_ops != NULL) {
-        if (path == NULL)
+        if (!path_text_valid(path, NULL))
             return ASTRA_VFS_ERR_INVALID;
         status = backend_enter(client, &ops, &context);
         if (status != ASTRA_VFS_OK)
@@ -765,7 +783,7 @@ astra_vfs_unlink(AstraVfsClient *client, const char *path)
         return ASTRA_VFS_ERR_INVALID;
     }
     if (client->direct_backend_ops != NULL) {
-        if (path == NULL)
+        if (!path_text_valid(path, NULL))
             return ASTRA_VFS_ERR_INVALID;
         status = backend_enter(client, &ops, &context);
         if (status != ASTRA_VFS_OK)
@@ -793,7 +811,7 @@ astra_vfs_rename(AstraVfsClient *client, const char *from, const char *to)
         return client == NULL ? ASTRA_VFS_ERR_INVALID :
                                 ASTRA_VFS_ERR_UNSUPPORTED;
     if (client->direct_backend_ops != NULL) {
-        if (from == NULL || to == NULL)
+        if (!path_text_valid(from, NULL) || !path_text_valid(to, NULL))
             return ASTRA_VFS_ERR_INVALID;
         status = backend_enter(client, &ops, &context);
         if (status != ASTRA_VFS_OK)
@@ -839,7 +857,7 @@ astra_vfs_chmod(AstraVfsClient *client, const char *path, uint16_t mode)
     if (client->version < UINT16_C(14))
         return ASTRA_VFS_ERR_UNSUPPORTED;
     if (client->direct_backend_ops != NULL) {
-        if (path == NULL)
+        if (!path_text_valid(path, NULL))
             return ASTRA_VFS_ERR_INVALID;
         status = backend_enter(client, &ops, &context);
         if (status != ASTRA_VFS_OK)
@@ -873,7 +891,7 @@ astra_vfs_readlink(AstraVfsClient *client, const char *path, void *buffer,
         capacity = ASTRA_VFS_IO_MAX;
     *length = 0u;
     if (client->direct_backend_ops != NULL) {
-        if (path == NULL)
+        if (!path_text_valid(path, NULL))
             return ASTRA_VFS_ERR_INVALID;
         status = backend_enter(client, &ops, &context);
         if (status != ASTRA_VFS_OK)
@@ -892,6 +910,8 @@ astra_vfs_readlink(AstraVfsClient *client, const char *path, void *buffer,
         return status;
     if (call->reply.count > capacity)
         return ASTRA_VFS_ERR_PROTOCOL;
+    if (!astra_utf8_validate(call->reply.payload, call->reply.count, 0u))
+        return ASTRA_VFS_ERR_PROTOCOL;
     for (uint32_t index = 0u; index < call->reply.count; ++index)
         bytes[index] = call->reply.payload[index];
     *length = call->reply.count;
@@ -907,7 +927,8 @@ astra_vfs_symlink(AstraVfsClient *client, const char *target,
     AstraVfsCallState *call;
     uint32_t status;
 
-    if (client == NULL || target == NULL || target[0] == '\0' || path == NULL)
+    if (client == NULL || !path_text_valid(target, NULL) ||
+        target[0] == '\0' || !path_text_valid(path, NULL))
         return ASTRA_VFS_ERR_INVALID;
     if (client->version < UINT16_C(15))
         return ASTRA_VFS_ERR_UNSUPPORTED;
@@ -952,7 +973,8 @@ astra_vfs_link(AstraVfsClient *client, const char *from, const char *to)
     AstraVfsRenameRequest *request;
     uint32_t status;
 
-    if (client == NULL || from == NULL || to == NULL)
+    if (client == NULL || !path_text_valid(from, NULL) ||
+        !path_text_valid(to, NULL))
         return ASTRA_VFS_ERR_INVALID;
     if (client->version < UINT16_C(22))
         return ASTRA_VFS_ERR_UNSUPPORTED;

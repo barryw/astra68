@@ -155,6 +155,8 @@ static void test_unavailable_objects(void)
     AstraRectI32 clip = { 0, 0, 320, 200 };
     AstraRectI32 rectangle = { 3, 4, 20, 10 };
     AstraDrawPaint paint = ASTRA_DRAW_PAINT_INIT;
+    AstraTextPaint text_paint = ASTRA_TEXT_PAINT_INIT;
+    AstraTextLayout text_layout = ASTRA_TEXT_LAYOUT_INIT;
     AstraPattern8 pattern = { UINT64_C(0xaa55aa55aa55aa55), 0, 0 };
     AstraPointI32 p0 = { 0, 0 };
     AstraPointI32 p1 = { 10, 7 };
@@ -221,6 +223,13 @@ static void test_unavailable_objects(void)
           ASTRA_ERROR_INVALID_ARGUMENT);
     paint.reserved[0] = 1;
     CHECK(astra_draw_line(&list, p0, p1, &paint) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    text_paint.flags = ASTRA_TEXT_PAINT_UNDERLINE |
+                       ASTRA_TEXT_PAINT_STRIKETHROUGH;
+    CHECK(astra_draw_text_layout(&list, &text_layout, p0, &text_paint) ==
+          ASTRA_ERROR_INVALID_HANDLE);
+    text_paint.flags = UINT32_C(1) << 31;
+    CHECK(astra_draw_text_layout(&list, &text_layout, p0, &text_paint) ==
           ASTRA_ERROR_INVALID_ARGUMENT);
 
     CHECK(astra_draw_submit(&list, &fence) == ASTRA_ERROR_INVALID_HANDLE);

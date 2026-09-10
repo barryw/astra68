@@ -59,7 +59,9 @@ static int paint_valid(const AstraDrawPaint *paint)
 static int text_paint_valid(const AstraTextPaint *paint)
 {
     return paint != 0 && paint->size >= sizeof(*paint) &&
-           (paint->flags & ~ASTRA_TEXT_PAINT_OPAQUE_BACKGROUND) == 0 &&
+           (paint->flags & ~(ASTRA_TEXT_PAINT_OPAQUE_BACKGROUND |
+                             ASTRA_TEXT_PAINT_UNDERLINE |
+                             ASTRA_TEXT_PAINT_STRIKETHROUGH)) == 0 &&
            paint->embedded_color_policy <= ASTRA_TEXT_EMBEDDED_COLOR_REJECT &&
            paint->reserved16 == 0 && astra_words_zero(paint->reserved, 5);
 }

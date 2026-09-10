@@ -10,6 +10,7 @@
 #include <astra/status.h>
 #include <astra/surface.h>
 #include <astra/theme.h>
+#include <astra/utf8.h>
 #include <astra/window.h>
 
 #define DISPLAY_WINDOW_MAX 4u
@@ -1527,6 +1528,7 @@ static int valid_open(const AstraGuiOpenWindow *request, uint32_t size,
            request->minimize_state <= ASTRA_GADGET_DISABLED &&
            request->maximize_state <= ASTRA_GADGET_DISABLED &&
            request->title_length <= ASTRA_WINDOW_TITLE_MAX &&
+           astra_utf8_validate(request->title, request->title_length, 0u) &&
            request->title_icon_length <=
                ASTRA_WINDOW_TITLE_ICON_BYTES_MAX &&
            (title == 0u || request->width >= 96u) &&
@@ -1576,7 +1578,8 @@ static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
                request->width != 0u && request->height != 0u &&
                request->title_length == 0u && request->flags == 0u;
     if (request->action == ASTRA_GUI_WINDOW_SET_TITLE)
-        return frame_zero && request->flags == 0u;
+        return frame_zero && request->flags == 0u &&
+               astra_utf8_validate(request->title, request->title_length, 0u);
     if (request->action == ASTRA_GUI_WINDOW_SET_EVENT_MASK)
         return frame_zero && request->title_length == 0u &&
                (request->flags & ~ASTRA_WINDOW_SUBSCRIBE_ALL) == 0u;
@@ -1852,6 +1855,9 @@ static uint32_t handle_pointer(DisplayState *state,
 
     if (input->type == ASTRA_INPUT_EVENT_KEY ||
         input->type == ASTRA_INPUT_EVENT_TEXT) {
+        if (input->type == ASTRA_INPUT_EVENT_TEXT &&
+            !astra_unicode_scalar_valid(input->code))
+            return ASTRA_STATUS_INVALID;
         index = active_window(state);
         if (index != state->count)
             key_event(&state->windows[index], input);

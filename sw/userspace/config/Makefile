@@ -64,6 +64,7 @@ library-contract: $(LIBRARY)
 	$(call ASTRA_CHECK_DSO,$(LIBRARY))
 
 $(HOST_TEST): src/config_document.c $(NDK)/src/manifest.c \
+		$(NDK)/src/utf8.c \
 		tests/test_config_document.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 $^ -o $@
@@ -74,7 +75,7 @@ test: $(HOST_TEST)
 sanitize:
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 $(SANITIZER_FLAGS) \
-		src/config_document.c $(NDK)/src/manifest.c \
+		src/config_document.c $(NDK)/src/manifest.c $(NDK)/src/utf8.c \
 		tests/test_config_document.c -o build/host/test_config_document_sanitize
 	./build/host/test_config_document_sanitize
 

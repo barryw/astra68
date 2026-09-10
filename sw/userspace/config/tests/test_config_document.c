@@ -61,6 +61,13 @@ static void reports_damage_without_guessing(void)
     static const char future[] = "astra-config 1\nschema 2\n";
     static const char bad_escape[] =
         "astra-config 1\nschema 1\nname \"bad\\q\"\n";
+    static const char bad_utf8[] = {
+        'a', 's', 't', 'r', 'a', '-', 'c', 'o', 'n', 'f', 'i', 'g', ' ',
+        '1', '\n', 's', 'c', 'h', 'e', 'm', 'a', ' ', '1', '\n',
+        'x', ' ', (char)0xc0, (char)0x80, '\n'
+    };
+    char value[8];
+    uint32_t length = 0u;
 
     assert(astra_config_document_validate(
                bad_quote, sizeof(bad_quote) - 1u, 1u, &error) ==
@@ -74,10 +81,16 @@ static void reports_damage_without_guessing(void)
                future, sizeof(future) - 1u, 1u, &error) ==
            ASTRA_CONFIG_UNSUPPORTED_VERSION);
     assert(error.line == 2u && error.version == 2u);
+    assert(astra_config_document_get(
+               bad_utf8, sizeof(bad_utf8), "x", 0u, value, sizeof(value),
+               &length) == ASTRA_CONFIG_INVALID);
 }
 
 static void edits_preserve_the_rest(void)
 {
+    static const char malformed[] = {
+        'b', 'a', 'd', (char)0xc0, (char)0x80, '\0'
+    };
     char changed[512];
     char removed[512];
     char value[64];
@@ -108,6 +121,9 @@ static void edits_preserve_the_rest(void)
                                      value, sizeof(value), &length) ==
            ASTRA_CONFIG_OK);
     assert(strcmp(value, "third.example") == 0);
+    assert(astra_config_document_replace(
+               document, sizeof(document) - 1u, "server", 0u, malformed,
+               changed, sizeof(changed), &required) == ASTRA_CONFIG_INVALID);
 }
 
 static void reads_typed_scalars(void)

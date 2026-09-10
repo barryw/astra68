@@ -43,6 +43,8 @@ static void test_digits_and_symbols(void)
 
 static void test_editing_keys(void)
 {
+    assert(ASTRA_KEYMAP_ENTER > 0x10ffffu);
+    assert(ASTRA_KEYMAP_ESCAPE > 0x10ffffu);
     assert(astra_keymap_translate(0x28u, 0u) == ASTRA_KEYMAP_ENTER);
     assert(astra_keymap_translate(0x29u, 0u) == ASTRA_KEYMAP_ESCAPE);
     assert(astra_keymap_translate(0x2au, 0u) == ASTRA_KEYMAP_BACKSPACE);

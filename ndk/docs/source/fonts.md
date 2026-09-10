@@ -41,13 +41,22 @@ Role selection lets users replace desktop defaults without requiring
 applications to change. Explicit family and style lookup remains available for
 documents and font-aware tools.
 
-## Native strikes
+## Native strikes and styles
 
-Astra fonts contain designed bitmap strikes. A request states pixel dimensions,
-weight, stretch, style, color preference, and whether an exact strike is
-required. The service does not synthesize runtime bitmap scaling; callers query
-{c:struct}`AstraFontInfo` to learn the actual selected dimensions and bitmap
-format.
+Astra fonts expose hardware-ready bitmap strikes. A request states pixel
+dimensions, weight, stretch, slant, color preference, and whether an exact
+strike is required. Designed bold and italic faces are preferred. If no
+designed face exists and {c:enumerator}`ASTRA_FONT_MATCH_ALLOW_SYNTHESIS` is
+set, the service may materialize and cache an emboldened or slanted strike;
+{c:struct}`AstraFontInfo` reports the synthetic result. Applications do not
+carry duplicate glyph sets and the MC68040 does not scale or transform glyph
+pixels.
+
+Underline and strikeout are paint decorations positioned from
+{c:struct}`AstraFontMetrics`; they never select alternate glyph bitmaps. The
+same metrics provide ascent, descent, line gap, cap height, x-height, maximum
+advance, and the baseline-relative decoration positions needed by editors and
+document applications.
 
 ## Layout boundaries
 

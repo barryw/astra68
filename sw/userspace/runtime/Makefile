@@ -25,8 +25,10 @@ COMMON_ASM_SOURCES := ../../common/memory_m68k.S
 # `ls -l`, `date` and the boot line render the same instant, and two
 # implementations of a leap year is one too many.
 COMMON_C_SOURCES := ../../common/civil.c ../../common/divide.c
+NDK_C_SOURCES := $(NDK)/src/utf8.c
 TARGET_OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(TARGET_C_SOURCES)) \
 	$(patsubst ../../common/%.c,build/m68k/common_%.o,$(COMMON_C_SOURCES)) \
+	build/m68k/ndk_utf8.o \
 	$(patsubst src/%.S,build/m68k/%.o,$(TARGET_ASM_SOURCES)) \
 	$(patsubst ../../common/%.S,build/m68k/common_%.o,$(COMMON_ASM_SOURCES))
 ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(TARGET_C_SOURCES)) \
@@ -75,6 +77,10 @@ build/m68k/common_%.o: ../../common/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
 
+build/m68k/ndk_utf8.o: $(NDK)/src/utf8.c $(NDK)/include/astra/utf8.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
+
 build/m68k/common_%.o: ../../common/%.S
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(ASTRA_TARGET_ABI_FLAGS) $(DEPFLAGS) -c $< -o $@
@@ -95,7 +101,7 @@ $(HOSTED_CRT0): src/m68k/crt0.S
 HOST_TEST_SOURCES := src/startup.c src/arguments.c src/syscall.c src/launch.c src/port.c \
 	src/event_control.c src/memory.c \
 	src/sort.c src/log.c src/event_catalog.c src/library.c \
-	$(COMMON_C_SOURCES) \
+	$(COMMON_C_SOURCES) $(NDK_C_SOURCES) \
 	tests/test_runtime.c
 
 $(HOST_TEST): $(HOST_TEST_SOURCES)

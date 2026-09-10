@@ -53,27 +53,27 @@ $(GRAPHICS_FONT_HEADERS):
 
 $(HOST_TEST): main.c tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
 		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/render_builder.c \
-		$(NDK)/src/bundle.c
+		$(NDK)/src/bundle.c $(NDK)/src/utf8.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated \
 		$(COMMON_FLAGS) -O2 -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections $(GRAPHICS)/src/surface.c \
 		$(GRAPHICS)/src/render_builder.c $(NDK)/src/bundle.c \
-		tests/test_display.c -o $@
+		$(NDK)/src/utf8.c tests/test_display.c -o $@
 
 test: $(HOST_TEST)
 	./$(HOST_TEST)
 
 $(HOST_TEST_SANITIZE): main.c tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
 		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/render_builder.c \
-		$(NDK)/src/bundle.c
+		$(NDK)/src/bundle.c $(NDK)/src/utf8.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated \
 		$(COMMON_FLAGS) -O1 -fsanitize=address,undefined \
 		-fno-omit-frame-pointer -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections $(GRAPHICS)/src/surface.c \
 		$(GRAPHICS)/src/render_builder.c $(NDK)/src/bundle.c \
-		tests/test_display.c -o $@
+		$(NDK)/src/utf8.c tests/test_display.c -o $@
 
 sanitize: $(HOST_TEST_SANITIZE)
 	./$(HOST_TEST_SANITIZE)

@@ -1,6 +1,7 @@
 #include <astra/config_document.h>
 #include <astra/config_library.h>
 #include <astra/manifest.h>
+#include <astra/utf8.h>
 
 #include <stddef.h>
 #include <string.h>
@@ -324,7 +325,8 @@ static uint32_t find(const char *text, uint32_t length, const char *key,
 {
     uint32_t cursor = 0u, effective = 0u, matches = 0u;
 
-    if (text == NULL || !key_valid(key))
+    if (text == NULL || !key_valid(key) ||
+        !astra_manifest_text_valid(text, length))
         return ASTRA_CONFIG_INVALID;
     while (cursor < length) {
         ConfigLine line;
@@ -544,11 +546,16 @@ uint32_t astra_config_document_replace(
     const char *value, char *out, uint32_t capacity, uint32_t *required)
 {
     ConfigLine line;
+    size_t source_value_length;
     uint32_t count = 0u, key_length, value_length, prefix, suffix, newline;
     uint32_t total, status;
     char *at;
 
     if (required == NULL || value == NULL || !key_valid(key))
+        return ASTRA_CONFIG_INVALID;
+    source_value_length = strlen(value);
+    if (source_value_length > UINT32_MAX ||
+        !astra_utf8_validate(value, (uint32_t)source_value_length, 0u))
         return ASTRA_CONFIG_INVALID;
     *required = 0u;
     status = find(text, length, key, index, &line, &count);

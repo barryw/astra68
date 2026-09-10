@@ -6,6 +6,7 @@
 #include <astra/runtime.h>
 #include <astra/surface.h>
 #include <astra/theme.h>
+#include <astra/utf8.h>
 #include <astra/window.h>
 
 #include "control_internal.h"
@@ -25,8 +26,11 @@ static int valid(const AstraAlertInfo *info)
            info->kind <= ASTRA_ALERT_ERROR && info->title != NULL &&
            info->title_length != 0u &&
            info->title_length <= ASTRA_WINDOW_TITLE_MAX &&
-           info->message != NULL && info->message_length != 0u &&
-           info->button != NULL && info->button_length != 0u &&
+           astra_utf8_validate(info->title, info->title_length, 0u) &&
+           info->message_length != 0u &&
+           astra_utf8_validate(info->message, info->message_length, 0u) &&
+           info->button_length != 0u &&
+           astra_utf8_validate(info->button, info->button_length, 0u) &&
            info->button_length <= 16u && info->reserved16 == 0u &&
            info->reserved16_2 == 0u && info->reserved16_3 == 0u &&
            astra_words_zero(info->reserved, 4u);

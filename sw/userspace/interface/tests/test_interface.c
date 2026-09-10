@@ -512,6 +512,7 @@ static void test_flex_growth(void)
 
 static void test_control_rejections(void)
 {
+    static const char malformed_utf8[] = {(char)0xc0, (char)0x80};
     AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
     AstraButtonInfo info = ASTRA_BUTTON_INFO_INIT;
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
@@ -531,6 +532,12 @@ static void test_control_rejections(void)
            ASTRA_ERROR_INVALID_ARGUMENT);
 
     info.preview_state = 0u;
+    info.text = malformed_utf8;
+    info.text_length = sizeof(malformed_utf8);
+    assert(astra_interface_button_init(&controls[0], &info) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    info.text = "A";
+    info.text_length = 1u;
     assert(astra_interface_button_init(&controls[0], &info) == ASTRA_OK);
     assert(astra_interface_ui_init(&context, controls, 1u, 100u, 100u) ==
            ASTRA_OK);
@@ -566,7 +573,7 @@ static void test_toggle_controls(void)
     assert(astra_interface_radio_init(&controls[1], &info) == ASTRA_OK);
     info.id = 3u;
     info.text = "XRGB8888";
-    info.text_length = 9u;
+    info.text_length = 8u;
     info.state = 0u;
     assert(astra_interface_radio_init(&controls[2], &info) == ASTRA_OK);
     info.id = 4u;
@@ -871,6 +878,7 @@ static void test_progress_control(void)
 
 int main(void)
 {
+    static const char malformed_utf8[] = {(char)0xed, (char)0xa0, (char)0x80};
     AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
 
     info.title = "Error";
@@ -886,6 +894,11 @@ int main(void)
     info.reserved[0] = 1u;
     assert(!astra_interface_test_valid(&info));
     info.reserved[0] = 0u;
+    info.message = malformed_utf8;
+    info.message_length = sizeof(malformed_utf8);
+    assert(!astra_interface_test_valid(&info));
+    info.message = "Could not launch application.";
+    info.message_length = 29u;
     {
         AstraSurfaceView surface = {
             render_pixels, sizeof(render_pixels), 420u * sizeof(uint16_t),

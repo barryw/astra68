@@ -2,6 +2,7 @@
 
 #include <astra/port.h>
 #include <astra/runtime.h>
+#include <astra/utf8.h>
 
 #include "internal/status.h"
 
@@ -37,6 +38,8 @@ AstraResult astra_application_launch_with_arguments(
         (source != ASTRA_LAUNCH_SOURCE_SHELL &&
          source != ASTRA_LAUNCH_SOURCE_DESKTOP))
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (!astra_utf8_validate(bundle_path, path_length, 0u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
     *process_id = 0u;
     for (uint32_t at = 0u; at < path_length; ++at)
         path[at] = bundle_path[at];
@@ -55,6 +58,8 @@ AstraResult astra_application_launch_with_arguments(
                     return ASTRA_ERROR_NO_RESOURCES;
                 request.arguments.bytes[length++] = value[at++];
             }
+            if (!astra_utf8_validate(value, at, 0u))
+                return ASTRA_ERROR_INVALID_ARGUMENT;
             request.arguments.bytes[length++] = '\0';
         }
         request.arguments.count = argument_count + 1u;

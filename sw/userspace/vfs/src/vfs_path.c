@@ -8,8 +8,21 @@
 #include <astra/vfs_path.h>
 
 #include <astra/ascii.h>
+#include <astra/utf8.h>
 
 #include <stddef.h>
+
+static int
+utf8_string(const char *text)
+{
+    uint32_t length = 0u;
+
+    if (text == NULL)
+        return 0;
+    while (text[length] != '\0')
+        ++length;
+    return astra_utf8_validate(text, length, 0u);
+}
 
 uint32_t
 astra_path_split(const char *path, char *name, uint32_t name_capacity,
@@ -18,7 +31,8 @@ astra_path_split(const char *path, char *name, uint32_t name_capacity,
     uint32_t index = 0u;
     uint32_t out = 0u;
 
-    if (path == NULL || name == NULL || rest == NULL || name_capacity == 0u ||
+    if (!utf8_string(path) || name == NULL || rest == NULL ||
+        name_capacity == 0u ||
         rest_capacity == 0u) {
         return ASTRA_VFS_ERR_INVALID;
     }
@@ -87,8 +101,10 @@ astra_path_qualify(const char *assign, const char *directory,
 {
     uint32_t length = 0u;
 
-    if (assign == NULL || assign[0] == '\0' || directory == NULL ||
-        out == NULL || capacity == 0u) {
+    if (!utf8_string(assign) || assign[0] == '\0' ||
+        !utf8_string(directory) ||
+        (typed != NULL && !utf8_string(typed)) || out == NULL ||
+        capacity == 0u) {
         return ASTRA_VFS_ERR_INVALID;
     }
     out[0] = '\0';
@@ -133,7 +149,7 @@ astra_path_normalise(const char *rest, char *out, uint32_t capacity)
     uint32_t index = 0u;
     uint32_t length = 0u;
 
-    if (rest == NULL || out == NULL || capacity == 0u) {
+    if (!utf8_string(rest) || out == NULL || capacity == 0u) {
         return ASTRA_VFS_ERR_INVALID;
     }
     out[0] = '\0';

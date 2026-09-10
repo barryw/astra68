@@ -1,7 +1,7 @@
-# Astra Fonts and Hardware Glyph Rendering (draft v0.2)
+# Astra Fonts and Hardware Glyph Rendering (draft v0.3)
 
-> AFNT remains the native hardware-ready font contract. The Arty graphics
-> target adds A8 coverage and XRGB8888 destinations as required by
+> AFNT remains the native hardware-ready font contract. The DE25 graphics
+> target provides A8 coverage and XRGB8888 destinations as required by
 > [`GRAPHICS_ARCHITECTURE.md`](GRAPHICS_ARCHITECTURE.md).
 
 This document defines the native font direction for Astra 68 and the boundary
@@ -12,8 +12,10 @@ must not draw bitmap glyphs with CPU pixel loops.
 
 - The native font container is **AFNT** (Astra Font), a passive, versioned,
   big-endian bitmap-font format.
-- AFNT contains one or more designed bitmap strikes. Runtime scaling is not
-  required for the initial OS.
+- AFNT contains one or more designed bitmap strikes and may retain a sanitized
+  scalable source for sizes not already materialized. The host font worker
+  rasterizes a missing size into a protected cache; the MC68040 never runs an
+  outline rasterizer or scales glyph pixels.
 - Software performs UTF-8 decoding, character-to-glyph mapping, fallback,
   kerning, shaping, and line layout.
 - Astraea expands already-positioned glyph runs into RGB565 or INDEX8 drawing
@@ -112,19 +114,40 @@ Initial chunk types:
 | Chunk | Purpose |
 |---|---|
 | `NAME` | UTF-8 family, style, author, license, and provenance strings |
-| `FACE` | weight, style, stretch, and face-wide defaults |
+| `FACE` | weight, style, stretch, units-per-em, and face-wide defaults |
 | `CMAP` | sorted Unicode scalar to glyph-ID mapping |
-| `STRK` | pixel size, ascent, descent, line gap, format, and atlas references |
-| `GLYP` | source rectangle, bearings, advances, and glyph flags |
-| `KERN` | optional sorted glyph-pair adjustments |
+| `STRK` | x/y pixel size, ascent, descent, line gap, cap/x height, underline/strikeout metrics, format, and atlas references |
+| `GLYP` | source rectangle, horizontal/vertical bearings and advances, and glyph flags |
+| `KERN` | optional sorted glyph-pair adjustments for legacy/simple faces |
+| `BASE` | optional script baseline coordinates for horizontal and vertical layout |
+| `OTL ` | optional sanitized OpenType GDEF/GSUB/GPOS shaping data |
+| `OUTL` | optional normalized OpenType outline source for host-side size generation |
 | `PALT` | optional color palette and transparent entry |
 | `BITM` | bitmap payload for one or more strikes |
 
 Metrics use signed 26.6 fixed point. Character maps use 32-bit Unicode scalar
 values and 32-bit glyph IDs rather than an 8-bit contiguous character range.
-Each strike records horizontal and vertical pixel size separately. The primary
-1920x1080 mode uses square pixels; independent metrics preserve imported and
-future-mode fidelity without changing AFNT.
+Each strike records horizontal and vertical pixel size separately. Its normal
+horizontal baseline is `line_top + ascent`; this is derived state, not a second
+stored coordinate that can disagree with ascent. A glyph's top-left ink origin
+is placed from that baseline using its signed bearings. `BASE` supplies the
+additional named script baselines needed to align Latin, ideographic, hanging,
+and mathematical runs, and vertical glyph metrics provide the corresponding
+vertical pen geometry.
+
+Typographic ascent/descent/line gap determine default line spacing. Separate
+ink/clipping bounds prevent accents and decorations from being clipped. Cap
+height, x-height, maximum advances, underline position/thickness, and
+strikeout position/thickness are preserved when the source provides them.
+Missing optional legacy metrics are represented as unavailable, never guessed
+into the file without provenance.
+
+The primary 1920x1080 mode uses square pixels; independent metrics preserve
+imported and future-mode fidelity without changing AFNT. OpenType glyph IDs are
+preserved whenever shaping tables are retained, so shaped output addresses the
+same bitmap records. A variable OpenType face is instantiated at explicit axis
+coordinates for cached strikes while retaining those coordinates in
+provenance.
 
 The exact disk record sizes are frozen only when the AFNT reader, writer,
 validator, and malformed-file tests land together. Version 0 files are not an
@@ -414,7 +437,35 @@ it does not simulate successful font behavior. The OS implementation, live
 handle/stale-handle tests, service protocol, and draw-list bridge must land
 together before the service advertises itself as present.
 
-## 7. Amiga import compatibility
+## 7. Import and style compatibility
+
+One shared host/native AFNT writer owns conversion and validation. Import is an
+installation/build operation, not an application rendering path:
+
+- TTF, OTF, and TTC enter through FreeType plus the OpenType shaping tables;
+- WOFF and WOFF2 are decoded to their OpenType form before the same pipeline;
+- BDF, PCF, and other passive bitmap formats enter through the bitmap importer;
+- classic Amiga disk fonts enter through the bounded importer below;
+- every import records source hashes, source format, face/collection index,
+  variation axes, selected strike sizes, converter versions, license, and
+  source character mapping.
+
+Importers render requested MASK1/A4/A8 or indexed strikes, then feed the same
+AFNT writer and validator. Common UI sizes can ship prebuilt. For a scalable
+face, an absent size is generated by the host worker and cached by source hash,
+face index, axes, size, hinting mode, bitmap format, and synthesis parameters.
+Applications still open an AFNT face and never know which source format was
+installed.
+
+Designed weight and italic/oblique faces are always preferred. If the caller
+allows synthesis and no designed face exists, the font service may create a
+cached emboldened or slanted strike from the installed face; packages do not
+carry duplicate glyph sets for synthetic styles. Underline and strikeout are
+drawn as decorations from the strike metrics and never alter or duplicate
+glyph bitmaps. The resolved `AstraFontInfo` reports synthetic weight/slant so a
+typographically exact application may refuse it.
+
+### 7.1 Amiga import compatibility
 
 Amiga fonts are useful content, not the Astra ABI. The importer accepts classic
 bitmap disk fonts without executing them and converts:

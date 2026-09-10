@@ -184,10 +184,12 @@ policy, current directories, and process-visible handles. A handler receives
 one validated component at a time. Names and message records are bounded; no
 filesystem operation allocates without a charged upper bound.
 
-### Names are case-sensitive and byte-exact
+### Names are UTF-8, case-sensitive, and byte-exact
 
 Astra's native namespace is case-sensitive. `Makefile` and `makefile` are two
-different files. Name comparison is a byte comparison: VFS and handlers must
+different files. Every path component and symlink target is valid UTF-8;
+malformed names exposed by a foreign or native backend are rejected at the VFS
+boundary. Name comparison is nevertheless a byte comparison: VFS and handlers must
 not case-fold, must not apply Unicode normalization, and must not reorder or
 rewrite bytes on create or lookup. A name is stored exactly as supplied and
 matched exactly as supplied.

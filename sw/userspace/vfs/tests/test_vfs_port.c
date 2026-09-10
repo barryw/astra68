@@ -57,7 +57,7 @@ static uint32_t dead_reply_handle;
 static uint32_t mock_empty_receives;
 static uint32_t mock_receive_resource_limits;
 static uint32_t mock_area_maps;
-static uint32_t mock_futex_wakes;
+static atomic_uint mock_futex_wakes;
 static uint32_t mock_sender;
 static uint8_t backend_written[64];
 static uint64_t backend_write_offset;
@@ -158,7 +158,7 @@ mock_reset(void)
     mock_empty_receives = 0u;
     mock_receive_resource_limits = 0u;
     mock_area_maps = 0u;
-    mock_futex_wakes = 0u;
+    atomic_store_explicit(&mock_futex_wakes, 0u, memory_order_relaxed);
     mock_sender = 0x10000001u;
     memset(backend_written, 0, sizeof(backend_written));
     backend_write_offset = 0u;
@@ -597,7 +597,8 @@ uint32_t astra_futex_wake(volatile uint32_t *address, uint32_t count,
                           uint32_t *woken)
 {
     (void)address;
-    ++mock_futex_wakes;
+    (void)atomic_fetch_add_explicit(&mock_futex_wakes, 1u,
+                                    memory_order_relaxed);
     if (woken != NULL)
         *woken = count;
     return ASTRA_SYSCALL_OK;
@@ -972,11 +973,13 @@ test_a_request_crosses_and_the_reply_is_the_same(void)
     assert(astra_vfs_open(&local, "/a", ASTRA_VFS_OPEN_READ, &local_file,
                           &local_size, &local_kind) == ASTRA_VFS_OK);
     {
-        uint32_t wakes = mock_futex_wakes;
+        uint32_t wakes = atomic_load_explicit(&mock_futex_wakes,
+                                              memory_order_relaxed);
 
     assert(astra_vfs_open(&remote, "/a", ASTRA_VFS_OPEN_READ, &remote_file,
                           &remote_size, &remote_kind) == ASTRA_VFS_OK);
-        assert(mock_futex_wakes == wakes);
+        assert(atomic_load_explicit(&mock_futex_wakes,
+                                    memory_order_relaxed) == wakes);
     }
     assert(remote_size == local_size);
     assert(remote_kind == local_kind);

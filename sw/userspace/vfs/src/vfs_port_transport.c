@@ -20,6 +20,7 @@
 #include <astra/bytes.h>
 
 #include <astra/runtime.h>
+#include <astra/utf8.h>
 #include <astra/syscall.h>
 
 #include <stddef.h>
@@ -1408,12 +1409,16 @@ static int port_set_path(AstraVfsRequest *request, const char *path)
 {
     uint32_t at = 0u;
 
+    if (path == NULL)
+        return 0;
     while (path[at] != '\0') {
         if (at + 1u >= ASTRA_VFS_PATH_MAX)
             return 0;
         request->body.path[at] = (uint8_t)path[at];
         ++at;
     }
+    if (!astra_utf8_validate(path, at, 0u))
+        return 0;
     request->body.path[at] = 0u;
     return 1;
 }

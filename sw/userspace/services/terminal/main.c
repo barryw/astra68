@@ -576,7 +576,8 @@ static int window_next_key(void *context, uint32_t *key)
 
             if (codepoint == '\n' || codepoint == '\r')
                 *key = ASTRA_KEYMAP_ENTER;
-            else if (codepoint >= 0x20u && codepoint <= 0x7eu)
+            else if (codepoint >= 0x20u &&
+                     astra_unicode_scalar_valid(codepoint))
                 *key = codepoint;
             else
                 continue;

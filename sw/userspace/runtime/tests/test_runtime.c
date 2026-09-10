@@ -719,6 +719,9 @@ static void test_launch(void)
     };
     static const char *const environment_names[] = {"HOME", "TZ"};
     static const char *const environment_values[] = {"WORK:", "UTC"};
+    static const char malformed[] = {'b', 'a', 'd', (char)0xc0, (char)0x80,
+                                     '\0'};
+    static const char *const malformed_values[] = {malformed};
     AstraLaunchGrant grants[2];
     AstraLaunchArguments arguments;
     char argument_storage[ASTRA_LAUNCH_ARGUMENT_BYTES];
@@ -789,6 +792,14 @@ static void test_launch(void)
     assert(astra_launch_arguments_pack(
                &arguments, argument_storage, sizeof(argument_storage),
                ASTRA_LAUNCH_SOURCE_DESKTOP, 1u, NULL) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_launch_arguments_pack(
+               &arguments, argument_storage, sizeof(argument_storage),
+               ASTRA_LAUNCH_SOURCE_SHELL, 1u, malformed_values) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_launch_environment_pack(
+               &arguments, environment, sizeof(environment), 1u,
+               environment_names, malformed_values) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(astra_launch_arguments_pack(
                &arguments, argument_storage, sizeof(argument_storage),
@@ -946,6 +957,14 @@ static void test_exec(void)
         "HOME=WORK:", "TERM=astra-256color", NULL
     };
     static char *const bad_envp[] = { "HOME", NULL };
+    static char malformed_argument[] = {
+        'b', 'a', 'd', (char)0xed, (char)0xa0, (char)0x80, '\0'
+    };
+    static char malformed_environment[] = {
+        'T', 'Z', '=', (char)0xf4, (char)0x90, (char)0x80, (char)0x80, '\0'
+    };
+    static char *const bad_argv_utf8[] = {malformed_argument, NULL};
+    static char *const bad_envp_utf8[] = {malformed_environment, NULL};
     uint8_t image[64] = {0u};
     char storage[ASTRA_STARTUP_BLOCK_SIZE];
     AstraExecRequest request;
@@ -978,6 +997,12 @@ static void test_exec(void)
     assert(astra_exec_request_pack(
                &request, storage, sizeof(storage), ASTRA_LAUNCH_SOURCE_SHELL,
                argv, bad_envp) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_exec_request_pack(
+               &request, storage, sizeof(storage), ASTRA_LAUNCH_SOURCE_SHELL,
+               bad_argv_utf8, NULL) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_exec_request_pack(
+               &request, storage, sizeof(storage), ASTRA_LAUNCH_SOURCE_SHELL,
+               argv, bad_envp_utf8) == ASTRA_SYSCALL_INVALID_ARGUMENT);
 
     assert(astra_exec_request_pack(
                &request, storage, sizeof(storage), ASTRA_LAUNCH_SOURCE_SHELL,

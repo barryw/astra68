@@ -6,6 +6,7 @@
 #include <astra/input_modifiers.h>
 #include <astra/surface.h>
 #include <astra/theme.h>
+#include <astra/utf8.h>
 
 #include <limits.h>
 #include <stddef.h>
@@ -351,7 +352,8 @@ AstraResult astra_interface_label_init(AstraControl *control,
                                        const AstraLabelInfo *info)
 {
     if (control == NULL || info == NULL || info->size < sizeof(*info) ||
-        info->id == 0u || info->text == NULL || info->text_length == 0u ||
+        info->id == 0u || info->text_length == 0u ||
+        !astra_utf8_validate(info->text, info->text_length, 0u) ||
         info->text_role < ASTRA_TEXT_CLIENT_PRIMARY ||
         info->text_role > ASTRA_TEXT_CLIENT_MUTED ||
         !astra_words_zero(info->reserved, 4u))
@@ -369,7 +371,8 @@ AstraResult astra_interface_button_init(AstraControl *control,
                                         const AstraButtonInfo *info)
 {
     if (control == NULL || info == NULL || info->size < sizeof(*info) ||
-        info->id == 0u || info->text == NULL || info->text_length == 0u ||
+        info->id == 0u || info->text_length == 0u ||
+        !astra_utf8_validate(info->text, info->text_length, 0u) ||
         info->variant > ASTRA_BUTTON_DESTRUCTIVE ||
         (info->state & ~CONTROL_SEMANTIC_STATES) != 0u ||
         (info->preview_state & ~CONTROL_PREVIEW_STATES) != 0u ||
@@ -404,7 +407,8 @@ static AstraResult toggle_init(AstraControl *control,
                                const AstraToggleInfo *info, uint32_t kind)
 {
     if (control == NULL || info == NULL || info->size < sizeof(*info) ||
-        info->id == 0u || info->text == NULL || info->text_length == 0u ||
+        info->id == 0u || info->text_length == 0u ||
+        !astra_utf8_validate(info->text, info->text_length, 0u) ||
         (info->state & ~CONTROL_SEMANTIC_STATES) != 0u ||
         (kind == ASTRA_CONTROL_RADIO ? info->group_id == 0u :
                                       info->group_id != 0u) ||
@@ -515,7 +519,8 @@ AstraResult astra_interface_control_set_text(AstraUIContext *context,
     AstraControlSize size;
     AstraResult result;
 
-    if (index == CONTROL_NONE || text == NULL || text_length == 0u ||
+    if (index == CONTROL_NONE || text_length == 0u ||
+        !astra_utf8_validate(text, text_length, 0u) ||
         (control->_private_control_kind != ASTRA_CONTROL_LABEL &&
          control->_private_control_kind != ASTRA_CONTROL_BUTTON &&
          !TOGGLE_KINDS(control->_private_control_kind)))

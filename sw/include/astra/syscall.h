@@ -263,7 +263,7 @@
 #define ASTRA_VM_PRIVATE_READ  (1u << 0)
 #define ASTRA_VM_PRIVATE_WRITE (1u << 1)
 /* Complete anonymous window in the 32-bit Astra process address map. */
-#define ASTRA_VM_PRIVATE_ADDRESS_SPACE_MAX 0x1f800000u
+#define ASTRA_VM_PRIVATE_ADDRESS_SPACE_MAX 0x1f000000u
 
 /*
  * The most one call copies. Small on purpose: a drain is a bounded page and a

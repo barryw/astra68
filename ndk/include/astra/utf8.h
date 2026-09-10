@@ -1,7 +1,41 @@
 #ifndef ASTRA_UTF8_H
 #define ASTRA_UTF8_H
 
+/**
+ * @file utf8.h
+ * @brief The single UTF-8 validation, decoding, and scalar-boundary contract.
+ */
+
 #include <stdint.h>
+
+#include <astra/types.h>
+
+ASTRA_EXTERN_C_BEGIN
+
+#define ASTRA_UTF8_REPLACEMENT UINT32_C(0xfffd)
+
+enum {
+    /** Permit a U+0000 scalar inside an explicit byte span. */
+    ASTRA_UTF8_ALLOW_NUL = UINT32_C(1) << 0
+};
+
+/** Nonzero for a Unicode scalar value (not a UTF-16 surrogate). */
+static inline int astra_unicode_scalar_valid(uint32_t scalar)
+{
+    return scalar <= UINT32_C(0x10ffff) &&
+           !(scalar >= UINT32_C(0xd800) && scalar <= UINT32_C(0xdfff));
+}
+
+/** Validate one explicit UTF-8 byte span.  Empty spans are valid. */
+int astra_utf8_validate(const void *text, uint32_t length, uint32_t flags);
+
+/** Advance one valid Unicode scalar boundary without modifying on failure. */
+int astra_utf8_scalar_advance(const void *text, uint32_t length,
+                              uint32_t *offset);
+
+/** Retreat one valid Unicode scalar boundary without modifying on failure. */
+int astra_utf8_scalar_retreat(const void *text, uint32_t length,
+                              uint32_t *offset);
 
 /* Decode one scalar. Invalid or incomplete input consumes one byte. */
 static inline uint32_t astra_utf8_decode(const void *text, uint32_t length,
@@ -11,7 +45,7 @@ static inline uint32_t astra_utf8_decode(const void *text, uint32_t length,
     uint8_t first;
 
     if (bytes == 0 || length == 0u || consumed == 0)
-        return 0xfffdu;
+        return ASTRA_UTF8_REPLACEMENT;
     first = bytes[0];
     *consumed = 1u;
     if (first < 0x80u)
@@ -42,7 +76,7 @@ static inline uint32_t astra_utf8_decode(const void *text, uint32_t length,
                ((uint32_t)(bytes[2] & 0x3fu) << 6u) |
                (bytes[3] & 0x3fu);
     }
-    return 0xfffdu;
+    return ASTRA_UTF8_REPLACEMENT;
 }
 
 /* Encode one Unicode scalar. Invalid scalar values become U+FFFD. */
@@ -54,7 +88,7 @@ static inline uint32_t astra_utf8_encode(uint32_t scalar, void *output)
         return 0u;
     if (scalar > 0x10ffffu ||
         (scalar >= 0xd800u && scalar <= 0xdfffu))
-        scalar = 0xfffdu;
+        scalar = ASTRA_UTF8_REPLACEMENT;
     if (scalar <= 0x7fu) {
         bytes[0] = (uint8_t)scalar;
         return 1u;
@@ -76,5 +110,7 @@ static inline uint32_t astra_utf8_encode(uint32_t scalar, void *output)
     bytes[3] = (uint8_t)(0x80u | (scalar & 0x3fu));
     return 4u;
 }
+
+ASTRA_EXTERN_C_END
 
 #endif

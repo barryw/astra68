@@ -7,6 +7,10 @@ behind it.
 Purpose: nothing about this project should have to be rediscovered. If you learn
 a fact that took more than five minutes to establish, it belongs here.
 
+The system-wide text encoding and boundary rules are normative in
+[`TEXT_AND_UNICODE.md`](TEXT_AND_UNICODE.md). Font metrics, baseline semantics,
+and source-format conversion are normative in [`FONTS.md`](FONTS.md).
+
 ---
 
 ## 1. Hardware

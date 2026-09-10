@@ -208,6 +208,28 @@ include dependency files, and their objects depend on their owning Makefiles
 so the corrected recipes bootstrap themselves. An executable boundary test
 retains both build-graph contracts.
 
+Current source defines UTF-8 as Astra OS's sole text encoding and moves
+validation, scalar encoding/decoding, and scalar-boundary traversal into the
+NDK's single `astra/utf8.h` implementation. NDK calls, launch arguments and
+environment values, config documents, VFS paths and returned names, display
+IPC, window titles, and interface labels reject malformed complete spans;
+terminal byte streams replace malformed input with U+FFFD. Editing-key
+sentinels now live above U+10FFFF and cannot collide with Unicode characters.
+
+The Font Kit contract now carries baseline-relative ascent/descent/line-gap,
+cap-height, x-height, maximum advance, underline, and strikeout metrics.
+Designed weight/slant faces are preferred; callers may allow cached synthetic
+weight or slant, which the resolved font reports. Underline and strikeout are
+metric-positioned decorations and never duplicate glyph bitmaps. The current
+AFNT bitmap/Amiga importer remains operational; the documented scalable
+TTF/OTF/WOFF pipeline is not yet implemented.
+
+A forced kernel rebuild exposed a stale 1080p contract: the advertised native
+RGB565 frame is 4,147,200 bytes but a transfer slot held only 2 MiB. Current
+source derives four 4 MiB process DMA slots and their 4,096-page aggregate
+budget from that requirement. The anonymous private window correspondingly
+spans 496 MiB; allocation remains demand-paged and owner-charged.
+
 ## MC68040 contract
 
 Every Astra target build uses `-m68040`; user software reserves A4 for the

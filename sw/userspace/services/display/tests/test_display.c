@@ -336,6 +336,39 @@ int main(void)
         };
 
         assert(valid_open(&open, sizeof(open), 3u));
+        {
+            AstraGuiOpenWindow malformed = open;
+
+            malformed.type = ASTRA_WINDOW_STANDARD;
+            malformed.x = 100u;
+            malformed.y = 100u;
+            malformed.width = 200u;
+            malformed.height = 120u;
+            malformed.title_length = 2u;
+            malformed.title[0] = (char)0xc0;
+            malformed.title[1] = (char)0x80;
+            assert(!valid_open(&malformed, sizeof(malformed), 3u));
+        }
+        {
+            AstraGuiWindowCommand malformed = {
+                .header = {
+                    .total_size = sizeof(AstraGuiWindowCommand),
+                    .header_size = ASTRA_MESSAGE_HEADER_SIZE,
+                    .protocol = ASTRA_GUI_PROTOCOL,
+                    .protocol_version = ASTRA_GUI_VERSION,
+                    .operation = ASTRA_GUI_WINDOW_COMMAND,
+                    .transaction_id = 1u,
+                },
+                .window = 1u,
+                .generation = 1u,
+                .action = ASTRA_GUI_WINDOW_SET_TITLE,
+                .title_length = 3u,
+                .title = {(char)0xed, (char)0xa0, (char)0x80},
+            };
+
+            assert(!valid_command(&malformed, sizeof(malformed), 1u, 1u,
+                                  200u, 120u));
+        }
         add_window(&desktop, 0u, ASTRA_WINDOW_DESKTOP, 0u,
                    DISPLAY_WORK_TOP, ASTRA_DISPLAY_WIDTH,
                    DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP, 0u, 0u);
@@ -603,6 +636,10 @@ int main(void)
                delivered.event.data.text.codepoint == 'A' &&
                delivered.event.data.text.modifiers ==
                    ASTRA_INPUT_MOD_LEFT_SHIFT);
+        text_event.code = 0xd800u;
+        assert(handle_pointer(&state, &text_event, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_INVALID);
+        assert(delivered_count == before + 2u);
         {
             uint32_t blocked = 0u;
 

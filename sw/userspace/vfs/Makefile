@@ -9,6 +9,7 @@ LWEXT4 := ../../../third_party/lwext4
 RUNTIME := ../runtime
 STORAGE := ../storage
 NDK := ../../../ndk
+UTF8_SOURCE := $(NDK)/src/utf8.c
 CPPFLAGS := -I$(NDK)/include -Iinclude -I../../include
 PORT_CPPFLAGS := $(CPPFLAGS) -I$(RUNTIME)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
@@ -49,7 +50,8 @@ HEADERS := include/astra/vfs_service_core.h include/astra/vfs_backend.h \
 	../../include/astra/syscall.h
 
 TARGET := build/m68k/libastravfs.a
-NDK_OBJECTS := $(NDK)/build/m68k/manifest.o $(NDK)/build/m68k/bundle.o
+NDK_OBJECTS := $(NDK)/build/m68k/manifest.o $(NDK)/build/m68k/bundle.o \
+	$(NDK)/build/m68k/utf8.o
 TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/vfs_assign.o build/m68k/vfs_path.o \
 	build/m68k/vfs_local_transport.o build/m68k/vfs_port_transport.o \
@@ -65,6 +67,7 @@ FILESYSTEM_LIBRARY_OBJECTS := build/m68k/library/filesystem_library.o \
 	build/m68k/library/vfs_path.o build/m68k/library/vfs_union.o
 
 RUNTIME_PIC_LIB := $(RUNTIME)/build/m68k/libastrart-pic.a
+NDK_PIC_LIB := $(NDK)/build/m68k/libastra-pic.a
 HOST_TEST := build/host/test_vfs_service_core
 
 all: $(TARGET) $(FILESYSTEM_LIBRARY) library-contract
@@ -118,12 +121,16 @@ build/m68k/library/%.o: src/%.c $(HEADERS) \
 $(RUNTIME_PIC_LIB):
 	$(MAKE) -C $(RUNTIME) pic
 
-$(FILESYSTEM_LIBRARY): $(FILESYSTEM_LIBRARY_OBJECTS) $(RUNTIME_PIC_LIB) \
-		$(LIBRARY_LD)
+$(NDK_PIC_LIB):
+	$(MAKE) -C $(NDK) pic
+
+$(FILESYSTEM_LIBRARY): $(FILESYSTEM_LIBRARY_OBJECTS) $(NDK_PIC_LIB) \
+        $(RUNTIME_PIC_LIB) $(LIBRARY_LD)
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(LIBRARY_LINK_FLAGS) \
 		-Wl,-soname,filesystem.library.2 -o $@ \
-		$(FILESYSTEM_LIBRARY_OBJECTS) $(RUNTIME_PIC_LIB) -lgcc
+		$(FILESYSTEM_LIBRARY_OBJECTS) $(NDK_PIC_LIB) \
+		$(RUNTIME_PIC_LIB) -lgcc
 
 library-contract: $(FILESYSTEM_LIBRARY)
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
@@ -141,23 +148,25 @@ $(HOST_TEST): $(CORE_SOURCES) tests/test_vfs_service_core.c $(HEADERS)
 	$(HOST_CC) $(CPPFLAGS) $(VFS_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) \
 		src/vfs_service_core.c src/vfs_client.c \
-		src/vfs_local_transport.c tests/test_vfs_service_core.c -o $@
+		src/vfs_local_transport.c $(UTF8_SOURCE) \
+		tests/test_vfs_service_core.c -o $@
 
 ASSIGN_TEST := build/host/test_vfs_assign
 
-$(ASSIGN_TEST): src/vfs_assign.c src/vfs_path.c tests/test_vfs_assign.c \
+$(ASSIGN_TEST): src/vfs_assign.c src/vfs_path.c $(UTF8_SOURCE) tests/test_vfs_assign.c \
 		$(HEADERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		src/vfs_assign.c src/vfs_path.c tests/test_vfs_assign.c -o $@
+		src/vfs_assign.c src/vfs_path.c $(UTF8_SOURCE) \
+		tests/test_vfs_assign.c -o $@
 
 UNION_TEST := build/host/test_vfs_union
 
-$(UNION_TEST): src/vfs_union.c src/vfs_assign.c src/vfs_path.c \
+$(UNION_TEST): src/vfs_union.c src/vfs_assign.c src/vfs_path.c $(UTF8_SOURCE) \
 		tests/test_vfs_union.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		src/vfs_union.c src/vfs_assign.c src/vfs_path.c \
+		src/vfs_union.c src/vfs_assign.c src/vfs_path.c $(UTF8_SOURCE) \
 		tests/test_vfs_union.c -o $@
 
 # The port transport needs the runtime's port wrappers declared, and replaces
@@ -168,21 +177,22 @@ PORT_THREAD_TEST := build/host/test_vfs_port_threads
 
 $(PORT_TEST): src/vfs_port_transport.c src/vfs_service_core.c \
 		src/vfs_client.c src/vfs_local_transport.c tests/test_vfs_port.c \
-		$(HEADERS)
+		$(UTF8_SOURCE) $(HEADERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(PORT_CPPFLAGS) $(VFS_TEST_CPPFLAGS) \
 		$(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) \
 		src/vfs_port_transport.c src/vfs_service_core.c src/vfs_client.c \
-		src/vfs_local_transport.c tests/test_vfs_port.c -o $@
+		src/vfs_local_transport.c $(UTF8_SOURCE) tests/test_vfs_port.c -o $@
 
 $(PORT_THREAD_TEST): src/vfs_port_transport.c \
-		tests/test_vfs_port_threads.c $(HEADERS)
+		$(UTF8_SOURCE) tests/test_vfs_port_threads.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) -ffunction-sections -Wl,--gc-sections \
 		-DASTRA_VFS_EMBEDDED_THREAD_STATE=1 \
-		src/vfs_port_transport.c tests/test_vfs_port_threads.c -o $@
+		src/vfs_port_transport.c $(UTF8_SOURCE) \
+		tests/test_vfs_port_threads.c -o $@
 
 PATH_TEST := build/host/test_vfs_path
 PROCESS_TEST := build/host/test_vfs_process
@@ -191,10 +201,10 @@ FILESYSTEM_LIBRARY_TEST := build/host/test_filesystem_library
 HOST_BACKEND_TEST := build/host/test_vfs_host_backend
 HOST_TRANSPORT_TEST := build/host/test_vfs_host_transport
 
-$(PATH_TEST): src/vfs_path.c tests/test_vfs_path.c $(HEADERS)
+$(PATH_TEST): src/vfs_path.c $(UTF8_SOURCE) tests/test_vfs_path.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		src/vfs_path.c tests/test_vfs_path.c -o $@
+		src/vfs_path.c $(UTF8_SOURCE) tests/test_vfs_path.c -o $@
 
 $(PROCESS_TEST): src/vfs_process.c tests/test_vfs_process.c $(HEADERS)
 	@mkdir -p $(@D)
@@ -209,12 +219,13 @@ $(READER_TEST): src/vfs_reader.c tests/test_vfs_reader.c $(HEADERS) \
 		src/vfs_reader.c tests/test_vfs_reader.c -o $@
 
 $(FILESYSTEM_LIBRARY_TEST): src/filesystem_library.c src/vfs_union.c \
-		src/vfs_assign.c src/vfs_path.c tests/test_filesystem_library.c \
+		src/vfs_assign.c src/vfs_path.c $(UTF8_SOURCE) \
+		tests/test_filesystem_library.c \
 		$(HEADERS) $(NDK)/include/astra/filesystem_library.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/filesystem_library.c src/vfs_union.c src/vfs_assign.c \
-		src/vfs_path.c tests/test_filesystem_library.c -o $@
+		src/vfs_path.c $(UTF8_SOURCE) tests/test_filesystem_library.c -o $@
 
 $(HOST_BACKEND_TEST): src/vfs_host_backend.c \
 		tests/test_vfs_host_backend.c $(HEADERS)
@@ -252,25 +263,29 @@ sanitize:
 	$(HOST_CC) $(CPPFLAGS) $(VFS_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) $(SANITIZER_FLAGS) \
 		src/vfs_service_core.c src/vfs_client.c \
-		src/vfs_local_transport.c tests/test_vfs_service_core.c \
+		src/vfs_local_transport.c $(UTF8_SOURCE) \
+		tests/test_vfs_service_core.c \
 		-o build/host/test_vfs_service_core_sanitize
 	./build/host/test_vfs_service_core_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		$(SANITIZER_FLAGS) src/vfs_path.c tests/test_vfs_path.c \
+		$(SANITIZER_FLAGS) src/vfs_path.c $(UTF8_SOURCE) \
+		tests/test_vfs_path.c \
 		-o build/host/test_vfs_path_sanitize
 	./build/host/test_vfs_path_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		$(SANITIZER_FLAGS) src/vfs_assign.c src/vfs_path.c \
+		$(SANITIZER_FLAGS) src/vfs_assign.c src/vfs_path.c $(UTF8_SOURCE) \
 		tests/test_vfs_assign.c -o build/host/test_vfs_assign_sanitize
 	./build/host/test_vfs_assign_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) src/vfs_union.c src/vfs_assign.c src/vfs_path.c \
+		$(UTF8_SOURCE) \
 		tests/test_vfs_union.c -o build/host/test_vfs_union_sanitize
 	./build/host/test_vfs_union_sanitize
 	$(HOST_CC) $(PORT_CPPFLAGS) $(VFS_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) $(SANITIZER_FLAGS) \
 		src/vfs_port_transport.c src/vfs_service_core.c \
-		src/vfs_client.c src/vfs_local_transport.c tests/test_vfs_port.c \
+		src/vfs_client.c src/vfs_local_transport.c $(UTF8_SOURCE) \
+		tests/test_vfs_port.c \
 		-o build/host/test_vfs_port_sanitize
 	./build/host/test_vfs_port_sanitize
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
@@ -279,7 +294,8 @@ sanitize:
 	./build/host/test_vfs_reader_sanitize
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) src/filesystem_library.c src/vfs_union.c \
-		src/vfs_assign.c src/vfs_path.c tests/test_filesystem_library.c \
+		src/vfs_assign.c src/vfs_path.c $(UTF8_SOURCE) \
+		tests/test_filesystem_library.c \
 		-o build/host/test_filesystem_library_sanitize
 	./build/host/test_filesystem_library_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
@@ -298,14 +314,16 @@ tsan:
 	$(HOST_CC) $(CPPFLAGS) $(VFS_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) $(THREAD_SANITIZER_FLAGS) \
 		src/vfs_service_core.c src/vfs_client.c \
-		src/vfs_local_transport.c tests/test_vfs_service_core.c \
+		src/vfs_local_transport.c $(UTF8_SOURCE) \
+		tests/test_vfs_service_core.c \
 		-o build/host/test_vfs_service_core_tsan
 	setarch x86_64 -R ./build/host/test_vfs_service_core_tsan
 	$(HOST_CC) $(PORT_CPPFLAGS) $(VFS_TEST_CPPFLAGS) \
 		$(COMMON_FLAGS) $(HOST_FLAGS) $(HOST_THREAD_FLAGS) \
 		$(THREAD_SANITIZER_FLAGS) src/vfs_port_transport.c \
 		src/vfs_service_core.c src/vfs_client.c src/vfs_local_transport.c \
-		tests/test_vfs_port.c -o build/host/test_vfs_port_tsan
+		$(UTF8_SOURCE) tests/test_vfs_port.c \
+		-o build/host/test_vfs_port_tsan
 	setarch x86_64 -R ./build/host/test_vfs_port_tsan
 
 analyze:

@@ -7476,14 +7476,6 @@ static void test_dma_transfer_memory(void)
            KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
 
-    /* The page ceiling binds independently of the buffer count. */
-    memset(registers, 0, sizeof(registers));
-    registers[0] = ASTRA_SYSCALL_DMA_CREATE;
-    registers[1] = ASTRA_DMA_MAX_PAGES_PER_SERVICE * KERNEL_PAGE_SIZE;
-    registers[2] = user_info;
-    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
-           KERNEL_PROCESS_OK);
-    assert(next->data[0] == ASTRA_SYSCALL_RESOURCE_LIMIT);
 }
 
 static void test_bootstrap_capabilities(void)
@@ -8636,6 +8628,7 @@ static void test_exec_replaces_one_image_and_preserves_argv(void)
     uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
     uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
     uint8_t vector[16];
+    uint8_t malformed_arguments[sizeof(arguments)];
     char text[32];
     uint32_t process_id = 0u;
     uint32_t process_handle;
@@ -8707,6 +8700,30 @@ static void test_exec_replaces_one_image_and_preserves_argv(void)
     assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(next->program_counter == LAUNCH_VADDR + 0x100u);
     assert(next->data[4] == process_handle);
+
+    /* Direct syscalls cannot publish malformed UTF-8 by bypassing the NDK. */
+    memcpy(malformed_arguments, arguments, sizeof(arguments));
+    malformed_arguments[1] = UINT8_C(0x80);
+    launch_build_image();
+    assert(kernel_user_copy_to_asm(user_page, launch_image,
+                                   sizeof(launch_image)) ==
+           KERNEL_USER_COPY_OK);
+    assert(kernel_user_copy_to_asm(user_arguments, malformed_arguments,
+                                   sizeof(malformed_arguments)) ==
+           KERNEL_USER_COPY_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_EXEC;
+    registers[1] = user_page;
+    registers[2] = sizeof(launch_image);
+    registers[3] = user_request;
+    registers[4] = process_handle;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(next->data[4] == process_handle);
+    assert(kernel_user_copy_to_asm(user_arguments, arguments,
+                                   sizeof(arguments)) == KERNEL_USER_COPY_OK);
 
     /* An exec closes its old per-thread host channel before replacing the
      * address space; the new image can reopen it from preserved authority. */

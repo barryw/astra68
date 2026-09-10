@@ -55,7 +55,9 @@ enum {
     /** Four-bit palette index with binary transparency. */
     ASTRA_FONT_BITMAP_INDEX4 = 3,
     /** Eight-bit palette index with binary transparency. */
-    ASTRA_FONT_BITMAP_INDEX8 = 4
+    ASTRA_FONT_BITMAP_INDEX8 = 4,
+    /** Eight-bit foreground coverage. */
+    ASTRA_FONT_BITMAP_A8 = 5
 };
 
 /** Face style characteristics. */
@@ -63,7 +65,11 @@ enum {
     /** Designed italic face. */
     ASTRA_FONT_STYLE_ITALIC = 1u << 0,
     /** Designed oblique face. */
-    ASTRA_FONT_STYLE_OBLIQUE = 1u << 1
+    ASTRA_FONT_STYLE_OBLIQUE = 1u << 1,
+    /** Output-only: requested weight was synthesized from the selected face. */
+    ASTRA_FONT_STYLE_SYNTHETIC_WEIGHT = 1u << 16,
+    /** Output-only: requested slant was synthesized from the selected face. */
+    ASTRA_FONT_STYLE_SYNTHETIC_SLANT = 1u << 17
 };
 
 /** Font matching policy in ::AstraFontRequest. */
@@ -75,7 +81,9 @@ enum {
     /** Prefer an indexed-color strike when otherwise equivalent. */
     ASTRA_FONT_MATCH_PREFER_COLOR = 1u << 2,
     /** Reject faces that cannot provide an indexed-color strike. */
-    ASTRA_FONT_MATCH_REQUIRE_COLOR = 1u << 3
+    ASTRA_FONT_MATCH_REQUIRE_COLOR = 1u << 3,
+    /** Permit cached synthetic weight or slant when no designed face exists. */
+    ASTRA_FONT_MATCH_ALLOW_SYNTHESIS = 1u << 4
 };
 
 /** Capabilities reported in ::AstraFontInfo. */
@@ -93,7 +101,13 @@ enum {
     /** At least one INDEX4 strike is available. */
     ASTRA_FONT_CAP_INDEX4 = 1u << 5,
     /** At least one INDEX8 strike is available. */
-    ASTRA_FONT_CAP_INDEX8 = 1u << 6
+    ASTRA_FONT_CAP_INDEX8 = 1u << 6,
+    /** At least one A8 strike is available. */
+    ASTRA_FONT_CAP_A8 = 1u << 7,
+    /** The service can synthesize heavier weight without source duplicates. */
+    ASTRA_FONT_CAP_SYNTHETIC_WEIGHT = 1u << 8,
+    /** The service can synthesize italic/oblique slant without source duplicates. */
+    ASTRA_FONT_CAP_SYNTHETIC_SLANT = 1u << 9
 };
 
 /** Metadata strings available from a face or resolved font. */
@@ -173,7 +187,11 @@ enum {
 /** Flags controlling text paint behavior. */
 enum {
     /** Fill the glyph cell background with the paint background color. */
-    ASTRA_TEXT_PAINT_OPAQUE_BACKGROUND = 1u << 0
+    ASTRA_TEXT_PAINT_OPAQUE_BACKGROUND = 1u << 0,
+    /** Draw a metric-positioned underline; glyph bitmaps are unchanged. */
+    ASTRA_TEXT_PAINT_UNDERLINE = 1u << 1,
+    /** Draw a metric-positioned strikeout; glyph bitmaps are unchanged. */
+    ASTRA_TEXT_PAINT_STRIKETHROUGH = 1u << 2
 };
 
 /**
@@ -280,8 +298,12 @@ typedef struct AstraFontMetrics {
     AstraFixed26_6 underline_position;
     /** Recommended positive underline thickness. */
     AstraFixed26_6 underline_thickness;
+    /** Signed strikeout offset from the baseline; positive is upward. */
+    AstraFixed26_6 strikeout_position;
+    /** Recommended positive strikeout thickness. */
+    AstraFixed26_6 strikeout_thickness;
     /** Reserved for source-compatible growth; currently zero. */
-    uint32_t reserved[4];
+    uint32_t reserved[2];
 } AstraFontMetrics;
 
 /** Text-layout constraints and paragraph policy. */
@@ -368,7 +390,12 @@ typedef struct AstraTextHit {
     uint32_t reserved[5];
 } AstraTextHit;
 
-/** Paint parameters consumed by the future graphics draw-list text command. */
+/**
+ * Paint parameters consumed by the future graphics draw-list text command.
+ *
+ * Underline and strikeout are line decorations positioned from
+ * ::AstraFontMetrics. They never select or manufacture alternate glyphs.
+ */
 typedef struct AstraTextPaint {
     /** Size of this structure in bytes. */
     uint32_t size;
@@ -395,7 +422,8 @@ typedef struct AstraTextPaint {
 
 /** Default font request; the caller must set a positive pixel height. */
 #define ASTRA_FONT_REQUEST_INIT \
-    { sizeof(AstraFontRequest), ASTRA_FONT_MATCH_ALLOW_FALLBACK, 0, 0, \
+    { sizeof(AstraFontRequest), ASTRA_FONT_MATCH_ALLOW_FALLBACK | \
+      ASTRA_FONT_MATCH_ALLOW_SYNTHESIS, 0, 0, \
       400, 100, 0, { 0, 0, 0, 0, 0 } }
 /** Initializer for an output ::AstraFontInfo. */
 #define ASTRA_FONT_INFO_INIT \
@@ -403,8 +431,8 @@ typedef struct AstraTextPaint {
       { 0, 0, 0, 0, 0 } }
 /** Initializer for an output ::AstraFontMetrics. */
 #define ASTRA_FONT_METRICS_INIT \
-    { sizeof(AstraFontMetrics), 0, 0, 0, 0, 0, 0, 0, 0, \
-      { 0, 0, 0, 0 } }
+    { sizeof(AstraFontMetrics), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, \
+      { 0, 0 } }
 /** Default unconstrained, start-aligned, automatic-direction layout options. */
 #define ASTRA_TEXT_LAYOUT_OPTIONS_INIT \
     { sizeof(AstraTextLayoutOptions), 0, 0, 0, 0, \
@@ -603,6 +631,14 @@ ASTRA_NODISCARD AstraResult astra_font_face_get_string(
  * with zero bytes selects the process default. The NDK validates the tag's
  * alphanumeric subtag and hyphen structure. The font service determines
  * whether a syntactically valid tag is supported.
+ *
+ * A designed face matching the requested weight and italic/oblique style is
+ * always preferred. When no such face exists and
+ * ::ASTRA_FONT_MATCH_ALLOW_SYNTHESIS is present, the service may create a
+ * protected cached emboldened or slanted strike from the selected bitmap.
+ * It reports that choice with `ASTRA_FONT_STYLE_SYNTHETIC_*`; applications do
+ * not create or ship duplicate glyph sets. Without the match flag, absence of
+ * the designed style is reported rather than silently changing typography.
  *
  * @param[in] face Live face handle.
  * @param[in] request Versioned native-strike request.

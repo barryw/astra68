@@ -4,6 +4,7 @@
 #include <astra/gui.h>
 #include <astra/port.h>
 #include <astra/resource.h>
+#include <astra/utf8.h>
 
 #include "internal/status.h"
 
@@ -51,7 +52,7 @@ static AstraResult command(AstraWindow *window, uint32_t action,
 
     if (!window_live(window) || action < ASTRA_GUI_WINDOW_QUERY ||
         action > ASTRA_GUI_WINDOW_PRESENT ||
-        (title_length != 0u && title == 0) ||
+        !astra_utf8_validate(title, title_length, 0u) ||
         title_length > ASTRA_WINDOW_TITLE_MAX)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     result = astra_port_create(1u, sizeof(reply), &reply_port);
@@ -160,7 +161,7 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
         !state_valid(info->minimize_state) ||
         !state_valid(info->maximize_state) ||
         info->title_length > ASTRA_WINDOW_TITLE_MAX ||
-        (info->title_length != 0 && info->title == 0) ||
+        !astra_utf8_validate(info->title, info->title_length, 0u) ||
         (info->event_mask & ~known_events) != 0u ||
         ((info->title_icon_area == ASTRA_INVALID_HANDLE) !=
          (info->title_icon_length == 0u)) ||
@@ -420,6 +421,8 @@ static AstraResult receive_event(AstraWindow *window, AstraWindowEvent *event,
         message.event.version != ASTRA_WINDOW_EVENT_VERSION ||
         message.event.type < ASTRA_WINDOW_EVENT_POINTER_MOTION ||
         message.event.type > ASTRA_WINDOW_EVENT_TEXT ||
+        (message.event.type == ASTRA_WINDOW_EVENT_TEXT &&
+         !astra_unicode_scalar_valid(message.event.data.text.codepoint)) ||
         message.event.generation == 0u)
         return ASTRA_ERROR_IO;
     if (message.event.generation > window->_private_generation)

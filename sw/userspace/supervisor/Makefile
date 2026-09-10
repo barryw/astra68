@@ -119,12 +119,14 @@ $(HOST_TEST): $(TEST_SOURCES)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
 $(LOADER_TEST): src/loader_manifest.c $(NDK)/src/manifest.c \
+		$(NDK)/src/utf8.c \
 		$(NDK)/src/bundle.c \
 		tests/test_loader_manifest.c \
 		include/loader.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/loader_manifest.c $(NDK)/src/manifest.c $(NDK)/src/bundle.c \
+		$(NDK)/src/utf8.c \
 		tests/test_loader_manifest.c -o $@
 
 $(PROC_TREE_ROOT_TEST): tests/test_proc_tree_root.c
@@ -144,6 +146,7 @@ sanitize:
 	./build/host/test_supervisor_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) src/loader_manifest.c $(NDK)/src/manifest.c \
+		$(NDK)/src/utf8.c \
 		$(NDK)/src/bundle.c \
 		tests/test_loader_manifest.c -o build/host/test_loader_manifest_sanitize
 	./build/host/test_loader_manifest_sanitize

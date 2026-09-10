@@ -16,6 +16,8 @@ static uint32_t pending_action;
 static uint32_t next_open_status;
 static uint32_t expected_icon_area;
 static uint8_t expected_type = ASTRA_WINDOW_STANDARD;
+static uint16_t next_event_type = ASTRA_WINDOW_EVENT_POINTER_MOTION;
+static uint32_t next_text_codepoint;
 static AstraGuiWindowCommand last_command;
 
 static void header(AstraMessageHeader *value, uint32_t size,
@@ -105,12 +107,16 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
                    ASTRA_GUI_WINDOW_EVENT, 9u);
             message->event.size = sizeof(message->event);
             message->event.version = ASTRA_WINDOW_EVENT_VERSION;
-            message->event.type = ASTRA_WINDOW_EVENT_POINTER_MOTION;
+            message->event.type = next_event_type;
             message->event.generation = 9u;
-            message->event.data.pointer.x = 12;
-            message->event.data.pointer.y = 18;
-            message->event.data.pointer.screen_x = 52;
-            message->event.data.pointer.screen_y = 68;
+            if (next_event_type == ASTRA_WINDOW_EVENT_TEXT) {
+                message->event.data.text.codepoint = next_text_codepoint;
+            } else {
+                message->event.data.pointer.x = 12;
+                message->event.data.pointer.y = 18;
+                message->event.data.pointer.screen_x = 52;
+                message->event.data.pointer.screen_y = 68;
+            }
             *out_d1 = sizeof(*message);
         } else if (pending_operation == ASTRA_GUI_WINDOW_OPENED) {
             AstraGuiWindowOpened *reply = (AstraGuiWindowOpened *)d2;
@@ -171,6 +177,8 @@ static void expect_action(uint32_t before, uint32_t action)
 int main(void)
 {
     static const char title[] = "Gallery";
+    static const char malformed_utf8[] = {(char)0xf4, (char)0x90,
+                                          (char)0x80, (char)0x80};
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     AstraWindowCreateInfo create = ASTRA_WINDOW_CREATE_INFO_INIT;
     AstraWindowInfo info = ASTRA_WINDOW_INFO_INIT;
@@ -231,6 +239,11 @@ int main(void)
     expect_action(before, ASTRA_GUI_WINDOW_SET_TITLE);
     assert(last_command.title_length == 7u && last_command.title[0] == 'R');
     before = call_count;
+    assert(astra_window_set_title(&window, malformed_utf8,
+                                  sizeof(malformed_utf8)) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(call_count == before);
+    before = call_count;
     assert(astra_window_set_event_mask(
                &window, ASTRA_WINDOW_SUBSCRIBE_POINTER_MOTION |
                             ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON) == ASTRA_OK);
@@ -265,6 +278,17 @@ int main(void)
         assert(event.data.pointer.screen_x == 52 &&
                event.data.pointer.screen_y == 68);
         assert(window._private_generation == generation);
+
+        next_event_type = ASTRA_WINDOW_EVENT_TEXT;
+        next_text_codepoint = 0xd800u;
+        before = call_count;
+        assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
+        assert(call_count == before + 1u);
+        next_text_codepoint = 0x1f600u;
+        assert(astra_window_event_try(&window, &event) == ASTRA_OK);
+        assert(event.type == ASTRA_WINDOW_EVENT_TEXT &&
+               event.data.text.codepoint == 0x1f600u);
+        next_event_type = ASTRA_WINDOW_EVENT_POINTER_MOTION;
     }
     before = call_count;
     {
@@ -325,6 +349,11 @@ int main(void)
     create.title_length = ASTRA_WINDOW_TITLE_MAX + 1u;
     assert(astra_window_create(1, 2, &create, &window) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
+    create.title = malformed_utf8;
+    create.title_length = sizeof(malformed_utf8);
+    assert(astra_window_create(1, 2, &create, &window) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    create.title = title;
     create.title_length = sizeof(title) - 1u;
     next_open_status = ASTRA_STATUS_LIMIT;
     assert(astra_window_create(1, 2, &create, &window) ==

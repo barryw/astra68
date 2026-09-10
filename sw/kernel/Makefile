@@ -5,7 +5,7 @@ OBJCOPY = $(CROSS)objcopy
 OBJDUMP = $(CROSS)objdump
 HOST_CC ?= cc
 HOST_EXTRA_FLAGS ?=
-override HOST_EXTRA_FLAGS += -I../include
+override HOST_EXTRA_FLAGS += -I../include -I../../ndk/include
 
 KERNEL_VERSION ?= 0.1.0-dev
 PANIC_SELFTEST ?= 0
@@ -51,7 +51,7 @@ KERNEL_ELF = $(BUILD_DIR)/astra_kernel.elf
 KERNEL_BIN = $(BUILD_DIR)/astra_kernel.bin
 KERNEL_MAP = $(BUILD_DIR)/astra_kernel.map
 
-CPPFLAGS = -I../include -I$(BUILD_DIR) -include $(BUILD_INFO) \
+CPPFLAGS = -I../include -I../../ndk/include -I$(BUILD_DIR) -include $(BUILD_INFO) \
            -DKERNEL_TRACE_BUILD_LEVEL=$(KERNEL_TRACE_BUILD_LEVEL) \
            $(CPPFLAGS_DEBUG_SURFACE)
 # -ffunction-sections with --gc-sections below. A large part of this kernel is
@@ -106,6 +106,7 @@ OBJECTS = $(BUILD_DIR)/entry.o $(BUILD_DIR)/vectors.o \
 	  $(BUILD_DIR)/thread.o $(BUILD_DIR)/sync.o $(BUILD_DIR)/port.o \
           $(BUILD_DIR)/area.o $(BUILD_DIR)/ring.o \
           $(BUILD_DIR)/elf.o \
+          $(BUILD_DIR)/ndk_utf8.o \
           $(BUILD_DIR)/process.o \
           $(BUILD_DIR)/user_test.o \
           $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/worker.o \
@@ -242,6 +243,10 @@ $(BUILD_DIR)/ring.o: ring.c ring.h area.h thread.h bytes.h generation.h \
 			     object_cache.h allocation.h \
                      vm.h ../include/astra/syscall.h \
                      ../include/astra/integer.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/ndk_utf8.o: ../../ndk/src/utf8.c \
+                         ../../ndk/include/astra/utf8.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/process.o: process.c process.h thread.h sync.h port.h area.h ring.h context.h handle.h block.h device.h interrupt.h \
@@ -656,8 +661,11 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
                             platform.h ../common/boot_contract.c \
                             ../common/divide.c ../include/astra/divide.h \
                             ../include/astra/boot.h ../include/ohci.h \
+                            ../include/astra/display.h \
                             ../include/astra/process.h \
-                            ../include/astra/syscall.h | $(BUILD_DIR)
+                            ../include/astra/syscall.h \
+                            ../../ndk/src/utf8.c \
+                            ../../ndk/include/astra/utf8.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -DKERNEL_VM_HOST_TEST=1 \
 		-DKERNEL_MEMORY_HOST_TEST=1 \
@@ -670,7 +678,7 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
 		dma.c block.c device.c vm.c exception.c \
 		user_copy.c \
 		bytes.c context.c handle.c performance.c thread.c sync.c port.c \
-		area.c ring.c irq.c elf.c trace.c process.c \
+		area.c ring.c irq.c elf.c trace.c ../../ndk/src/utf8.c process.c \
 		tests/test_process.c -o $@
 
 $(BUILD_DIR)/test_dispatch: tests/test_dispatch.c dispatch.c dispatch.h \

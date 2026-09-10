@@ -92,7 +92,7 @@ library-contract: $(INTERFACE_TARGET) $(INPUT_TARGET)
 	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET) $(INPUT_TARGET))
 
 $(INTERFACE_HOST_TEST): src/interface_library.c src/control.c \
-		tests/test_interface.c tests/test_layout.c
+		$(NDK)/src/utf8.c tests/test_interface.c tests/test_layout.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -DASTRA_INTERFACE_TEST \
 		-DASTRA_NDK_TEST \
@@ -111,7 +111,7 @@ sanitize:
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -DASTRA_INTERFACE_TEST -DASTRA_NDK_TEST \
 		-ffunction-sections -Wl,--gc-sections src/interface_library.c \
-		src/control.c \
+		src/control.c $(NDK)/src/utf8.c \
 		tests/test_interface.c tests/test_layout.c \
 		-o build/host/test_interface_sanitize
 	./build/host/test_interface_sanitize

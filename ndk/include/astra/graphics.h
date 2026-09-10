@@ -751,7 +751,7 @@ ASTRA_NODISCARD AstraResult astra_draw_flood_fill(
  * @param[in,out] draw_list Mutable destination list.
  * @param[in] layout Validated immutable text layout.
  * @param[in] origin Layout origin in destination pixels.
- * @param[in] paint Text color and embedded-color policy.
+ * @param[in] paint Text color, decoration, and embedded-color policy.
  * @return ::ASTRA_OK on success or a negative ::AstraResult error.
  */
 ASTRA_NODISCARD AstraResult astra_draw_text_layout(

@@ -47,10 +47,15 @@ static void test_initializers(void)
     AstraTextPaint paint = ASTRA_TEXT_PAINT_INIT;
 
     CHECK(request.size == sizeof(request));
-    CHECK(request.match_flags == ASTRA_FONT_MATCH_ALLOW_FALLBACK);
+    CHECK(request.match_flags == (ASTRA_FONT_MATCH_ALLOW_FALLBACK |
+                                  ASTRA_FONT_MATCH_ALLOW_SYNTHESIS));
+    CHECK(ASTRA_FONT_BITMAP_A8 != ASTRA_FONT_BITMAP_INDEX8);
+    CHECK((ASTRA_FONT_CAP_A8 & ASTRA_FONT_CAP_SYNTHETIC_WEIGHT) == 0u);
     CHECK(request.weight == 400 && request.stretch_percent == 100);
     CHECK(info.size == sizeof(info));
     CHECK(metrics.size == sizeof(metrics));
+    CHECK(metrics.strikeout_position == 0);
+    CHECK(metrics.strikeout_thickness == 0);
     CHECK(options.size == sizeof(options));
     CHECK(options.alignment == ASTRA_TEXT_ALIGNMENT_START);
     CHECK(options.direction == ASTRA_TEXT_DIRECTION_AUTO);
@@ -145,6 +150,15 @@ static void test_unavailable_font_and_layout(void)
     uint32_t required = 0;
 
     request.pixel_height = 16 * ASTRA_FIXED26_6_ONE;
+    request.weight = 700;
+    request.style_flags = ASTRA_FONT_STYLE_ITALIC;
+    CHECK(astra_font_create(&face, &request, 0, 0, &font) ==
+          ASTRA_ERROR_INVALID_HANDLE);
+    request.style_flags = ASTRA_FONT_STYLE_SYNTHETIC_SLANT;
+    CHECK(astra_font_create(&face, &request, 0, 0, &font) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    request.style_flags = 0;
+    request.weight = 400;
     CHECK(astra_font_create(&face, &request, 0, 0, &font) ==
           ASTRA_ERROR_INVALID_HANDLE);
     request.pixel_height = 0;

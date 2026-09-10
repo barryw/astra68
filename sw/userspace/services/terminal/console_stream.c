@@ -19,6 +19,7 @@
 #include <astra/status.h>
 #include <astra/stream.h>
 #include <astra/syscall.h>
+#include <astra/utf8.h>
 
 #include <stddef.h>
 
@@ -246,14 +247,14 @@ console_stream_key(uint32_t key)
     static const uint8_t delete_key[] = "\x1b[3~";
     const uint8_t *bytes = NULL;
     uint32_t length = 0u;
+    uint8_t encoded[4];
     uint8_t one;
 
     if (!stream_ready)
         return 0;
-    if (key != 0u && key < 0x80u) {
-        one = (uint8_t)key;
-        bytes = &one;
-        length = 1u;
+    if (key != 0u && astra_unicode_scalar_valid(key)) {
+        length = astra_utf8_encode(key, encoded);
+        bytes = encoded;
     } else {
         switch (key) {
         case ASTRA_KEYMAP_ENTER: one = '\r'; bytes = &one; length = 1u; break;

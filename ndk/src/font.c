@@ -1,5 +1,6 @@
 #include <astra/font.h>
 #include <astra/bytes.h>
+#include <astra/utf8.h>
 
 /* The direct-MMIO NDK has no font service; keep validation ABI-compatible. */
 
@@ -7,7 +8,8 @@
     (ASTRA_FONT_STYLE_ITALIC | ASTRA_FONT_STYLE_OBLIQUE)
 #define FONT_MATCH_FLAGS \
     (ASTRA_FONT_MATCH_EXACT_STRIKE | ASTRA_FONT_MATCH_ALLOW_FALLBACK | \
-     ASTRA_FONT_MATCH_PREFER_COLOR | ASTRA_FONT_MATCH_REQUIRE_COLOR)
+     ASTRA_FONT_MATCH_PREFER_COLOR | ASTRA_FONT_MATCH_REQUIRE_COLOR | \
+     ASTRA_FONT_MATCH_ALLOW_SYNTHESIS)
 #define TEXT_LAYOUT_FLAGS \
     (ASTRA_TEXT_LAYOUT_WRAP_WORD | ASTRA_TEXT_LAYOUT_WRAP_GRAPHEME | \
      ASTRA_TEXT_LAYOUT_ELLIPSIZE_END | \
@@ -22,64 +24,6 @@ static int font_string_property_valid(uint32_t property)
 {
     return property >= ASTRA_FONT_STRING_FAMILY &&
            property <= ASTRA_FONT_STRING_PROVENANCE;
-}
-
-static int utf8_continuation(unsigned char value)
-{
-    return value >= 0x80u && value <= 0xbfu;
-}
-
-static int utf8_valid(const char *text, uint32_t bytes, int allow_nul)
-{
-    uint32_t index = 0;
-
-    if (text == 0)
-        return bytes == 0;
-    while (index < bytes) {
-        const unsigned char first = (unsigned char)text[index];
-        const uint32_t remaining = bytes - index;
-
-        if (first <= 0x7fu) {
-            if (first == 0 && !allow_nul)
-                return 0;
-            index++;
-        } else if (first >= 0xc2u && first <= 0xdfu) {
-            if (remaining < 2 ||
-                !utf8_continuation((unsigned char)text[index + 1]))
-                return 0;
-            index += 2;
-        } else if (first >= 0xe0u && first <= 0xefu) {
-            unsigned char second;
-
-            if (remaining < 3)
-                return 0;
-            second = (unsigned char)text[index + 1];
-            if (!utf8_continuation((unsigned char)text[index + 2]) ||
-                (first == 0xe0u && (second < 0xa0u || second > 0xbfu)) ||
-                (first == 0xedu && (second < 0x80u || second > 0x9fu)) ||
-                (first != 0xe0u && first != 0xedu &&
-                 !utf8_continuation(second)))
-                return 0;
-            index += 3;
-        } else if (first >= 0xf0u && first <= 0xf4u) {
-            unsigned char second;
-
-            if (remaining < 4)
-                return 0;
-            second = (unsigned char)text[index + 1];
-            if (!utf8_continuation((unsigned char)text[index + 2]) ||
-                !utf8_continuation((unsigned char)text[index + 3]) ||
-                (first == 0xf0u && (second < 0x90u || second > 0xbfu)) ||
-                (first == 0xf4u && (second < 0x80u || second > 0x8fu)) ||
-                (first != 0xf0u && first != 0xf4u &&
-                 !utf8_continuation(second)))
-                return 0;
-            index += 4;
-        } else {
-            return 0;
-        }
-    }
-    return 1;
 }
 
 static int language_tag_valid(const char *tag, uint32_t bytes)
@@ -169,8 +113,9 @@ AstraResult astra_font_face_open_family(
     uint32_t style_bytes,
     AstraFontFace *face)
 {
-    if (family_bytes == 0 || !utf8_valid(family_utf8, family_bytes, 0) ||
-        !utf8_valid(style_utf8, style_bytes, 0) || face == 0 ||
+    if (family_bytes == 0 ||
+        !astra_utf8_validate(family_utf8, family_bytes, 0u) ||
+        !astra_utf8_validate(style_utf8, style_bytes, 0u) || face == 0 ||
         face->_private_handle != ASTRA_INVALID_HANDLE)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return ASTRA_ERROR_NOT_PRESENT;
@@ -260,7 +205,8 @@ AstraResult astra_text_layout_create(
     const AstraTextLayoutOptions *options,
     AstraTextLayout *layout)
 {
-    if (font == 0 || !utf8_valid(utf8, utf8_bytes, 1) ||
+    if (font == 0 ||
+        !astra_utf8_validate(utf8, utf8_bytes, ASTRA_UTF8_ALLOW_NUL) ||
         !layout_options_valid(options) || layout == 0 ||
         layout->_private_handle != ASTRA_INVALID_HANDLE)
         return ASTRA_ERROR_INVALID_ARGUMENT;

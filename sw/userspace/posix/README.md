@@ -65,7 +65,7 @@ allocates nothing. Pay for what you ask for.
 
 The heap reserves the complete anonymous window and spends no frames for the
 reservation. Each data or allocator-metadata page arrives on first touch,
-charged to this process. The address-map boundary is 504 MiB; installed RAM,
+charged to this process. The address-map boundary is 496 MiB; installed RAM,
 the owner quota, and the kernel reserve are the physical limits.
 
 There is no `astra_heap_bytes` any more. A knob whose only correct setting is

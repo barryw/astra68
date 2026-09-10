@@ -68,12 +68,27 @@ int main(void)
     static const char *const dropped[] = {
         "WORK:first.txt", "WORK:second.txt"
     };
+    static const char malformed_path[] = {
+        'A', 'P', 'P', 'S', ':', (char)0xc0, (char)0x80, '\0'
+    };
+    static const char malformed_argument[] = {
+        'W', 'O', 'R', 'K', ':', (char)0xed, (char)0xa0, (char)0x80, '\0'
+    };
+    static const char *const malformed_arguments[] = {malformed_argument};
     uint32_t process_id = 0u;
 
     assert(astra_application_launch(ASTRA_INVALID_HANDLE,
                                     "APPS:Terminal.app", 17u,
                                     &process_id) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_application_launch(7u, malformed_path,
+                                    (uint16_t)(sizeof(malformed_path) - 1u),
+                                    &process_id) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_application_launch_with_arguments(
+               7u, "APPS:Terminal.app", 17u,
+               ASTRA_LAUNCH_SOURCE_DESKTOP, malformed_arguments, 1u,
+               &process_id) == ASTRA_ERROR_INVALID_ARGUMENT);
     expected_count = 1u;
     expected_source = ASTRA_LAUNCH_SOURCE_DESKTOP;
     assert(astra_application_launch(7u, "APPS:Terminal.app", 17u,
