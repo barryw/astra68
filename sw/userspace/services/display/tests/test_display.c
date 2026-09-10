@@ -480,6 +480,12 @@ int main(void)
                        DISPLAY_POINTER_FRAME)) ==
            (DISPLAY_POINTER_CURSOR | DISPLAY_POINTER_RENDER |
             DISPLAY_POINTER_FRAME));
+    assert(cursor_request_flags(DISPLAY_POINTER_CURSOR) ==
+           ASTRA_DISPLAY_CURSOR_VISIBLE);
+    assert(cursor_request_flags(DISPLAY_POINTER_CURSOR |
+                                DISPLAY_POINTER_RENDER) ==
+           (ASTRA_DISPLAY_CURSOR_VISIBLE |
+            ASTRA_DISPLAY_CURSOR_DEFER_COMMIT));
     assert(frame_window == 4u && frame_timestamp == 100u);
     assert((ASTRA_DISPLAY_CURSOR_VISIBLE |
             ASTRA_DISPLAY_CURSOR_DEFER_COMMIT) == 3u);

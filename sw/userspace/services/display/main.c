@@ -126,6 +126,13 @@ enum {
     DISPLAY_POINTER_FRAME = 1u << 2,
 };
 
+static uint32_t cursor_request_flags(uint32_t effects)
+{
+    return ASTRA_DISPLAY_CURSOR_VISIBLE |
+        ((effects & DISPLAY_POINTER_RENDER) != 0u ?
+             ASTRA_DISPLAY_CURSOR_DEFER_COMMIT : 0u);
+}
+
 enum {
     DISPLAY_FAIL_ARM = ASTRA_STATUS_PROGRAM_FIRST,
     DISPLAY_FAIL_SUBMIT,
@@ -1427,8 +1434,7 @@ static uint32_t present(uint32_t device, uint32_t irq,
 }
 
 static uint32_t update_cursor(uint32_t device, uint32_t irq,
-                              int32_t x, int32_t y, uint32_t visible,
-                              uint32_t defer_commit,
+                              int32_t x, int32_t y, uint32_t flags,
                               uint32_t *fence, uint32_t *armed)
 {
     AstraDisplayFrameRequest request = {
@@ -1437,9 +1443,7 @@ static uint32_t update_cursor(uint32_t device, uint32_t irq,
         .fence = *fence,
         .source = (uint32_t)x,
         .pitch = (uint32_t)y,
-        .byte_size = (visible != 0u ? ASTRA_DISPLAY_CURSOR_VISIBLE : 0u) |
-                     (defer_commit != 0u ?
-                          ASTRA_DISPLAY_CURSOR_DEFER_COMMIT : 0u),
+        .byte_size = flags,
     };
     uint32_t status = submit_request(device, irq, &request, armed);
 
@@ -2492,7 +2496,7 @@ static void serve_windows(uint32_t device, uint32_t irq,
                 astra_process_exit(DISPLAY_FAIL_PROTOCOL);
             if ((effects & DISPLAY_POINTER_CURSOR) != 0u &&
                 update_cursor(device, irq, state.pointer_x, state.pointer_y,
-                              1u, 0u,
+                              cursor_request_flags(effects),
                               &cursor_fence, &armed) != ASTRA_STATUS_OK)
                 astra_process_exit(DISPLAY_FAIL_COMPLETION);
             if ((effects & DISPLAY_POINTER_RENDER) != 0u) {

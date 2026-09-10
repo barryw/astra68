@@ -158,8 +158,23 @@ static int pointer_initialize(const struct astra_graphics_device *device)
     return wait_pointer_generation(device, generation);
 }
 
+static bool pointer_request_commits(uint32_t flags)
+{
+    return (flags & ASTRA_DISPLAY_CURSOR_DEFER_COMMIT) == 0u;
+}
+
+static int pointer_commit_begin(const struct astra_graphics_device *device,
+                                uint32_t *generation)
+{
+    if (wait_pointer_ready(device) != 0)
+        return -1;
+    *generation = astra_mmio_read(device, ASTRA_REG_POINTER_GENERATION);
+    astra_mmio_write(device, ASTRA_REG_POINTER_COMMIT, 1u);
+    return 0;
+}
+
 static int pointer_update(const struct astra_graphics_device *device,
-                          uint32_t packed)
+                          uint32_t packed, bool commit)
 {
     uint32_t x = packed & ASTRA_DISPLAY_HOST_CURSOR_X_MASK;
     uint32_t y = (packed & ASTRA_DISPLAY_HOST_CURSOR_Y_MASK) >>
@@ -175,9 +190,10 @@ static int pointer_update(const struct astra_graphics_device *device,
     astra_mmio_write(device, ASTRA_REG_POINTER_POSITION, (y << 16) | x);
     astra_mmio_write(device, ASTRA_REG_POINTER_CONTROL,
                      (packed & ASTRA_DISPLAY_HOST_CURSOR_VISIBLE) != 0u);
-    generation = astra_mmio_read(device, ASTRA_REG_POINTER_GENERATION);
-    astra_mmio_write(device, ASTRA_REG_POINTER_COMMIT, 1u);
-    return wait_pointer_generation(device, generation);
+    if (!commit)
+        return 0;
+    return pointer_commit_begin(device, &generation) == 0 ?
+        wait_pointer_generation(device, generation) : -1;
 }
 
 struct terminal_cursor {
@@ -652,10 +668,13 @@ static bool copy_cursor(struct terminal_cursor *out,
 }
 
 static int present(const struct astra_graphics_device *device,
-                   uint32_t scanout_offset)
+                   uint32_t scanout_offset, bool commit_pointer)
 {
     uint32_t size = (ASTRA_FRAMEBUFFER_HEIGHT << 16) |
                     ASTRA_FRAMEBUFFER_WIDTH;
+    uint32_t pointer_generation = 0u;
+    int scene_status;
+    int pointer_status = 0;
 
     if (astra_mmio_read(device, ASTRA_REG_ARENA_BASE) !=
             ASTRA_GRAPHICS_ARENA_BASE ||
@@ -676,7 +695,14 @@ static int present(const struct astra_graphics_device *device,
     astra_mmio_write(device, ASTRA_REG_TILE0_CONTROL, 0u);
     astra_mmio_write(device, ASTRA_REG_TILE1_CONTROL, 0u);
     astra_mmio_write(device, ASTRA_REG_GLOBAL_CONTROL, 1u);
-    return astra_graphics_scene_commit(device, UINT64_C(2000000000), NULL);
+    if (commit_pointer &&
+        pointer_commit_begin(device, &pointer_generation) != 0)
+        return -1;
+    scene_status = astra_graphics_scene_commit(
+        device, UINT64_C(2000000000), NULL);
+    if (commit_pointer)
+        pointer_status = wait_pointer_generation(device, pointer_generation);
+    return scene_status == 0 && pointer_status == 0 ? 0 : -1;
 }
 
 struct terminal_damage {
@@ -977,7 +1003,7 @@ static int present_solid_frame(
             ASTRA_DISPLAY_HEIGHT, color) ||
         execute_finished_batch(device, &builder, &scanout) != 0 ||
         scanout != scanout_for_generation(frame_generation) ||
-        present(device, scanout) != 0)
+        present(device, scanout, false) != 0)
         return -1;
     *active_scanout = scanout;
     return 0;
@@ -1001,7 +1027,7 @@ static int present_rgb565_frame(
                                   ASTRA_FRAMEBUFFER_BYTES);
     astra_graphics_memory_barrier();
     astra_graphics_memory_map_close(&mapping);
-    if (present(device, target) != 0)
+    if (present(device, target, false) != 0)
         return -1;
     *active_scanout = target;
     return 0;
@@ -1030,7 +1056,7 @@ static int make_render_target_inactive(
             &builder, destination, source, 0, 0, 0, 0,
             ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT) ||
         execute_finished_batch(device, &builder, &scanout) != 0 ||
-        scanout == target || present(device, scanout) != 0)
+        scanout == target || present(device, scanout, false) != 0)
         return -1;
     *active_scanout = scanout;
     return 0;
@@ -1076,7 +1102,7 @@ static int present_full_text(const struct astra_graphics_device *device,
             scanout != target)
             return -1;
     }
-    if (present(device, target) != 0)
+    if (present(device, target, false) != 0)
         return -1;
     *active_scanout = target;
     return 0;
@@ -1153,7 +1179,7 @@ static int present_text_update(
     if (!add_cursor(&builder, destination, cursor, cursor_drawn) ||
         execute_finished_batch(device, &builder, &scanout) != 0 ||
         scanout != scanout_for_generation(frame_generation) ||
-        present(device, scanout) != 0)
+        present(device, scanout, false) != 0)
         return -1;
     *active_scanout = scanout;
     return 0;
@@ -1197,6 +1223,10 @@ static int self_test(void)
     for (uint32_t y = 0u; y < POINTER_HEIGHT; ++y)
         if ((pointer_inner[y] & (uint16_t)~pointer_outer[y]) != 0u)
             return EXIT_FAILURE;
+    if (!pointer_request_commits(ASTRA_DISPLAY_CURSOR_VISIBLE) ||
+        pointer_request_commits(ASTRA_DISPLAY_CURSOR_VISIBLE |
+                                ASTRA_DISPLAY_CURSOR_DEFER_COMMIT))
+        return EXIT_FAILURE;
 
     (void)memset(plane, 0, sizeof(plane));
     plane[0] = 'A';
@@ -1438,6 +1468,7 @@ int main(int argc, char **argv)
     uint32_t active_scanout;
     uint32_t mailbox_sequence = 0u;
     bool display_owned = false;
+    bool pointer_deferred = false;
 
     if (argc == 2 && strcmp(argv[1], "--self-test") == 0)
         return self_test();
@@ -1591,7 +1622,7 @@ int main(int argc, char **argv)
                 }
                 profile_rendered = astra_monotonic_nanoseconds();
                 present_status = render_status == 0 ?
-                    present(&device, scanout_offset) : -1;
+                    present(&device, scanout_offset, pointer_deferred) : -1;
                 profile_presented = astra_monotonic_nanoseconds();
                 if (getenv("ASTRA_DISPLAY_PROFILE") != NULL)
                     fprintf(stderr,
@@ -1605,6 +1636,7 @@ int main(int argc, char **argv)
                             (unsigned long long)
                                 ((profile_presented - profile_rendered) / 1000u));
                 if (render_status == 0 && present_status == 0) {
+                    pointer_deferred = false;
                     active_scanout = scanout_offset;
                     generation = astra_mmio_read(&device,
                                                  ASTRA_REG_GENERATION);
@@ -1619,7 +1651,11 @@ int main(int argc, char **argv)
                        (request.frame_bytes &
                         ~(ASTRA_DISPLAY_CURSOR_VISIBLE |
                           ASTRA_DISPLAY_CURSOR_DEFER_COMMIT)) == 0u) {
-                if (pointer_update(&device, request.color_rgb565) == 0) {
+                bool commit = pointer_request_commits(request.frame_bytes);
+
+                if (pointer_update(&device, request.color_rgb565,
+                                   commit) == 0) {
+                    pointer_deferred = !commit;
                     generation = astra_mmio_read(&device,
                                                  ASTRA_REG_GENERATION);
                     status = ASTRA_DISPLAY_COMPLETION_OK;
@@ -1633,7 +1669,7 @@ int main(int argc, char **argv)
                 const struct terminal_cursor panic_cursor = {0};
 
                 if (copy_cells(current, plane) &&
-                    pointer_update(&device, 0u) == 0 &&
+                    pointer_update(&device, 0u, true) == 0 &&
                     present_text_on_both_scanouts(
                         &device, current, &panic_cursor, false, text_states,
                         &text_generation, &active_scanout) == 0 &&
