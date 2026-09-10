@@ -23,19 +23,21 @@ enum {
         ASTRA_GRAPHICS_ARENA_LIMIT - ASTRA_GRAPHICS_ARENA_BASE,
     ASTRA_FRAMEBUFFER_BASE = ASTRA_GRAPHICS_ARENA_BASE,
     ASTRA_FRAMEBUFFER_LIMIT = ASTRA_GRAPHICS_ARENA_LIMIT,
-    ASTRA_FRAMEBUFFER_WIDTH = 1280u,
-    ASTRA_FRAMEBUFFER_HEIGHT = 720u,
+    ASTRA_FRAMEBUFFER_WIDTH = 1920u,
+    ASTRA_FRAMEBUFFER_HEIGHT = 1080u,
     ASTRA_FRAMEBUFFER_PITCH = ASTRA_FRAMEBUFFER_WIDTH * 2u,
     ASTRA_FRAMEBUFFER_BYTES =
         ASTRA_FRAMEBUFFER_PITCH * ASTRA_FRAMEBUFFER_HEIGHT,
     ASTRA_CONTROL_BASE = ASTRA_CONTROL_BASE_VALUE,
     ASTRA_CONTROL_BYTES = 0x00010000u,
     ASTRA_GRAPHICS_DEVICE_ID = 0x41535452u,
-    ASTRA_GRAPHICS_VERSION = 0x00010006u,
+    ASTRA_GRAPHICS_VERSION = 0x00010008u,
     ASTRA_CAP_BOOT_TEXT = 0x00000040u,
     ASTRA_CAP_SPRITE_ENGINE = 0x00000080u,
     ASTRA_CAP_RENDER_ENGINE = 0x00000100u,
     ASTRA_CAP_COPPER = 0x00000200u,
+    ASTRA_CAP_DISPLAY_SCALER = 0x00000400u,
+    ASTRA_CAP_HARDWARE_POINTER = 0x00000800u,
     ASTRA_BOOT_TEXT_COLS = 36u,
     ASTRA_BOOT_TEXT_ROWS = 4u,
     ASTRA_BOOT_TEXT_CELLS =
@@ -66,6 +68,11 @@ enum astra_graphics_register {
     ASTRA_REG_FB_VIEWPORT_Y = 0x050,
     ASTRA_REG_FB_CONTROL = 0x054,
     ASTRA_REG_FB_KEY = 0x058,
+    ASTRA_REG_DISPLAY_SOURCE_SIZE = 0x05c,
+    ASTRA_REG_DISPLAY_CROP_ORIGIN = 0x060,
+    ASTRA_REG_DISPLAY_CROP_SIZE = 0x064,
+    ASTRA_REG_DISPLAY_VIEWPORT_ORIGIN = 0x068,
+    ASTRA_REG_DISPLAY_VIEWPORT_SIZE = 0x06c,
     ASTRA_REG_TILE0_CONTROL = 0x098,
     ASTRA_REG_TILE1_CONTROL = 0x0d8,
     ASTRA_REG_BOOT_TEXT_CONTROL = 0x140,
@@ -75,6 +82,14 @@ enum astra_graphics_register {
     ASTRA_REG_BOOT_TEXT_GENERATION = 0x150,
     ASTRA_REG_BOOT_TEXT_GEOMETRY = 0x154,
     ASTRA_REG_BOOT_TEXT_ORIGIN = 0x158,
+    ASTRA_REG_POINTER_CONTROL = 0x160,
+    ASTRA_REG_POINTER_POSITION = 0x164,
+    ASTRA_REG_POINTER_HOTSPOT = 0x168,
+    ASTRA_REG_POINTER_IMAGE_SELECTOR = 0x16c,
+    ASTRA_REG_POINTER_IMAGE_DATA = 0x170,
+    ASTRA_REG_POINTER_COMMIT = 0x174,
+    ASTRA_REG_POINTER_GENERATION = 0x178,
+    ASTRA_REG_POINTER_STATUS = 0x17c,
     ASTRA_REG_SPRITE_CONTROL = 0x180,
     ASTRA_REG_SPRITE_DESCRIPTOR_SELECTOR = 0x184,
     ASTRA_REG_SPRITE_DESCRIPTOR_DATA = 0x188,
@@ -181,6 +196,11 @@ enum astra_sprite_status {
     ASTRA_SPRITE_STATUS_COLLISION_EVENT = 1u << 15,
 };
 
+enum astra_pointer_status {
+    ASTRA_POINTER_STATUS_WRITE_READY = 1u << 0,
+    ASTRA_POINTER_STATUS_COMMIT_READY = 1u << 1,
+};
+
 struct astra_graphics_memory_map {
     void *mapping;
     size_t mapping_bytes;
@@ -211,6 +231,9 @@ void astra_graphics_memory_fill(volatile void *destination, uint8_t value,
                                 size_t bytes);
 void astra_graphics_memory_copy_to(volatile void *destination,
                                    const void *source, size_t bytes);
+void astra_graphics_memory_copy_from(void *destination,
+                                     volatile const void *source,
+                                     size_t bytes);
 int astra_graphics_scene_commit(
     const struct astra_graphics_device *device, uint64_t timeout_ns,
     uint32_t *generation_out);

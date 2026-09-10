@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-09-08
+Status: active continuation map, 2026-09-09
 
 This file contains current facts only. Git history holds superseded board,
 processor, benchmark, and milestone records. The platform is **Astra 68**, its
@@ -30,11 +30,33 @@ kernel is **Axiom**, and the user-facing system is **Astra OS**.
 - The ROM aperture is 512 KiB at `0xffe00000`.
 
 The production Agilex 5 shell routes with every clock constrained. Retained
-setup, hold, recovery, removal, and minimum-pulse slack are +0.740 ns, 0.000 ns,
-+2.771 ns, +0.085 ns, and +0.220 ns. Resource use is 41,788 / 46,800 ALMs,
-3,818,968 / 7,331,840 block-memory bits, 290 / 358 RAM blocks, 58 / 376 DSPs,
+setup, hold, recovery, removal, and minimum-pulse slack are +0.035 ns, 0.000 ns,
++2.826 ns, +0.036 ns, and +0.220 ns. Resource use is 43,495 / 46,800 ALMs,
+4,183,520 / 7,331,840 block-memory bits, 340 / 358 RAM blocks, 59 / 376 DSPs,
 and 5 / 11 PLLs. Exact build and deployment evidence belongs in
 `fpga/de25/TIMING_CLOSURE.md`.
+
+The active display checkpoint has a fixed 1920x1080x60 HDMI output at 148.500
+MHz and a 165 MHz graphics-build domain. The FPGA performs nearest-neighbor
+logical scaling, integer fit/letterboxing when possible, fractional fit/fill
+otherwise, composed-line replay, and logical copper-beam translation. The
+framebuffer, tiles, sprites, copper, and boot overlay scale together; the
+double-buffered 32x32 ARGB hardware pointer is the native unscaled output
+plane. The MC68040 supplies logical content and mode requests but never scales
+pixels.
+
+The exact routed shell passed cold boot, JTAG design identity, native splash
+readback/presentation, the complete renderer suite, live 320x200-to-1080p 5x
+integer presentation, the complete 64-sprite variable-geometry sweep, copper,
+48 kHz HDMI audio, and POST status updates. The physical sprite run reported
+zero AXI and deadline errors, and Linux remained healthy. The prior fatal HPS
+SError was eliminated at its root: recoverable scene validation failures now
+increment the existing commit-error counter and return AXI `OKAY`, while true
+transport faults retain AXI error responses. The normal immutable runtime is
+restored and reaches stage 8 at 70.192 MHz effective with the correct wall
+clock. Requested clock values, generated PLL clocks, Platform Designer
+metadata, RTL timing constants, TimeQuest constraints, and physical behavior
+must agree; none may substitute for another as release evidence.
 
 ## MC68040 contract
 

@@ -23,6 +23,31 @@ typedef struct AstraUiGlyph {
     int32_t advance_x;
 } AstraUiGlyph;
 
+static inline int32_t astra_ui_fixed_floor(int32_t value)
+{
+    int32_t pixels = value / 64;
+
+    return pixels - (value < 0 && value % 64 != 0);
+}
+
+static inline int32_t astra_ui_glyph_x(int32_t pen_26_6,
+                                       const AstraUiGlyph *glyph)
+{
+    return astra_ui_fixed_floor(pen_26_6 + glyph->bearing_x);
+}
+
+static inline int32_t astra_ui_glyph_y(int32_t baseline_26_6,
+                                       const AstraUiGlyph *glyph)
+{
+    return astra_ui_fixed_floor(baseline_26_6 - glyph->bearing_y);
+}
+
+static inline int32_t astra_ui_glyph_advance(const AstraUiGlyph *glyph,
+                                              uint16_t cell_width)
+{
+    return cell_width != 0u ? (int32_t)cell_width * 64 : glyph->advance_x;
+}
+
 const AstraUiStrike *astra_ui_font_strike(uint16_t pixel_height);
 uint32_t astra_ui_font_scalar(const char *text, uint32_t length,
                               uint32_t *consumed);

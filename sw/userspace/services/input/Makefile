@@ -5,7 +5,9 @@ SIZE := $(CROSS)size
 OBJCOPY := $(CROSS)objcopy
 RUNTIME := ../../runtime
 INPUT := ../../input
-CPPFLAGS := -I../../../include -I$(RUNTIME)/include -I$(INPUT)/include
+NDK := ../../../../ndk
+CPPFLAGS := -I$(NDK)/include -I../../../include -I$(RUNTIME)/include \
+	-I$(INPUT)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
@@ -17,7 +19,7 @@ OBJECT := build/m68k/main.o
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 INPUT_LIB := $(INPUT)/build/m68k/libastrainput.a
 CRT0 := $(RUNTIME)/build/m68k/crt0.o
-ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(INPUT)
+ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(INPUT) $(NDK)
 include ../../program.mk
 
 $(TARGET): $(OBJECT) $(CRT0) $(INPUT_LIB) $(RUNTIME_LIB) \

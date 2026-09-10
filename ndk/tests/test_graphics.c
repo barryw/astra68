@@ -21,6 +21,8 @@ _Static_assert(sizeof(AstraRasterProgram) == 4, "AstraRasterProgram ABI");
 _Static_assert(sizeof(AstraFence) == 4, "AstraFence ABI");
 _Static_assert(sizeof(AstraPointI32) == 8, "AstraPointI32 ABI");
 _Static_assert(sizeof(AstraRectI32) == 16, "AstraRectI32 ABI");
+_Static_assert(sizeof(AstraDisplayMode) == 28, "AstraDisplayMode ABI");
+_Static_assert(sizeof(AstraDisplayLayout) == 20, "AstraDisplayLayout ABI");
 _Static_assert(sizeof(AstraGraphicsInfo) == 44, "AstraGraphicsInfo ABI");
 _Static_assert(sizeof(AstraSurfaceCreateInfo) == 40,
                "AstraSurfaceCreateInfo ABI");
@@ -34,7 +36,7 @@ _Static_assert(ASTRA_SPRITE_SOURCE_WIDTH_MAX == 128,
                "sprite source width");
 _Static_assert(ASTRA_SPRITE_SOURCE_HEIGHT_MAX == 128,
                "sprite source height");
-_Static_assert(ASTRA_SPRITE_DESTINATION_EXTENT_MAX == 1024,
+_Static_assert(ASTRA_SPRITE_DESTINATION_EXTENT_MAX == 2047,
                "sprite destination extent");
 _Static_assert(ASTRA_SPRITES_PER_LINE == 16,
                "sprites per line");
@@ -56,6 +58,8 @@ static void test_initializers(void)
     AstraTileLayerUpdate tile = ASTRA_TILE_LAYER_UPDATE_INIT;
     AstraDisplayStatus display_status = ASTRA_DISPLAY_STATUS_INIT;
     AstraPresentOptions present = ASTRA_PRESENT_OPTIONS_INIT;
+    AstraDisplayMode mode = ASTRA_DISPLAY_MODE_INIT;
+    AstraHardwarePointerImage pointer = ASTRA_HARDWARE_POINTER_IMAGE_INIT;
 
     CHECK(display._private_handle == ASTRA_INVALID_HANDLE);
     CHECK(surface._private_handle == ASTRA_INVALID_HANDLE);
@@ -76,6 +80,67 @@ static void test_initializers(void)
     CHECK(display_status.size == sizeof(display_status));
     CHECK(present.size == sizeof(present));
     CHECK(present.palette == 0 && present.tile_layers == 0);
+    CHECK(mode.size == sizeof(mode) &&
+          mode.scaling == ASTRA_DISPLAY_SCALE_AUTO);
+    CHECK(pointer.size == sizeof(pointer) && pointer.pixels == 0);
+}
+
+static void test_display_layouts(void)
+{
+    AstraDisplayMode mode = ASTRA_DISPLAY_MODE_INIT;
+    AstraDisplayLayout layout;
+
+    mode.width = 1920;
+    mode.height = 1080;
+    CHECK(astra_display_layout_calculate(&mode, 1920, 1080, &layout) ==
+          ASTRA_OK);
+    CHECK(layout.viewport_x == 0 && layout.viewport_y == 0 &&
+          layout.viewport_width == 1920 && layout.viewport_height == 1080);
+
+    mode.width = 320;
+    mode.height = 200;
+    CHECK(astra_display_layout_calculate(&mode, 1920, 1080, &layout) ==
+          ASTRA_OK);
+    CHECK(layout.crop_width == 320 && layout.crop_height == 200 &&
+          layout.viewport_x == 160 && layout.viewport_y == 40 &&
+          layout.viewport_width == 1600 && layout.viewport_height == 1000);
+
+    mode.width = 1280;
+    mode.height = 720;
+    CHECK(astra_display_layout_calculate(&mode, 1920, 1080, &layout) ==
+          ASTRA_OK);
+    CHECK(layout.viewport_x == 0 && layout.viewport_y == 0 &&
+          layout.viewport_width == 1920 && layout.viewport_height == 1080);
+
+    mode.width = 640;
+    mode.height = 480;
+    mode.scaling = ASTRA_DISPLAY_SCALE_INTEGER;
+    CHECK(astra_display_layout_calculate(&mode, 1920, 1080, &layout) ==
+          ASTRA_OK);
+    CHECK(layout.viewport_x == 320 && layout.viewport_y == 60 &&
+          layout.viewport_width == 1280 && layout.viewport_height == 960);
+
+    mode.width = 320;
+    mode.height = 200;
+    mode.scaling = ASTRA_DISPLAY_SCALE_FIT;
+    CHECK(astra_display_layout_calculate(&mode, 1920, 1080, &layout) ==
+          ASTRA_OK);
+    CHECK(layout.viewport_x == 96 && layout.viewport_y == 0 &&
+          layout.viewport_width == 1728 && layout.viewport_height == 1080);
+
+    mode.scaling = ASTRA_DISPLAY_SCALE_FILL;
+    CHECK(astra_display_layout_calculate(&mode, 1920, 1080, &layout) ==
+          ASTRA_OK);
+    CHECK(layout.crop_x == 0 && layout.crop_y == 10 &&
+          layout.crop_width == 320 && layout.crop_height == 180 &&
+          layout.viewport_width == 1920 && layout.viewport_height == 1080);
+
+    mode.width = 0;
+    CHECK(astra_display_layout_calculate(&mode, 1920, 1080, &layout) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    mode.width = 2000;
+    CHECK(astra_display_layout_calculate(&mode, 1920, 1080, &layout) ==
+          ASTRA_ERROR_UNSUPPORTED);
 }
 
 static void test_unavailable_objects(void)
@@ -93,6 +158,10 @@ static void test_unavailable_objects(void)
     AstraPattern8 pattern = { UINT64_C(0xaa55aa55aa55aa55), 0, 0 };
     AstraPointI32 p0 = { 0, 0 };
     AstraPointI32 p1 = { 10, 7 };
+    AstraDisplayMode mode = ASTRA_DISPLAY_MODE_INIT;
+    AstraDisplayLayout layout;
+    AstraColorRGBA8 pointer_pixel = { 255, 255, 255, 255 };
+    AstraHardwarePointerImage pointer = ASTRA_HARDWARE_POINTER_IMAGE_INIT;
     int signaled = 0;
     AstraResult completion = ASTRA_OK;
 
@@ -102,6 +171,23 @@ static void test_unavailable_objects(void)
     CHECK(astra_graphics_get_info(&info) == ASTRA_ERROR_INVALID_ARGUMENT);
     CHECK(astra_display_open(&display) == ASTRA_ERROR_NOT_PRESENT);
     CHECK(astra_display_open(0) == ASTRA_ERROR_INVALID_ARGUMENT);
+    mode.width = 320;
+    mode.height = 200;
+    CHECK(astra_display_set_mode(&display, &mode, &fence) ==
+          ASTRA_ERROR_INVALID_HANDLE);
+    CHECK(astra_display_layout_calculate(&mode, 1920, 1080, &layout) ==
+          ASTRA_OK);
+    pointer.pixels = &pointer_pixel;
+    pointer.width = 1;
+    pointer.height = 1;
+    pointer.pitch = sizeof(pointer_pixel);
+    CHECK(astra_display_set_pointer_image(&display, &pointer, &fence) ==
+          ASTRA_ERROR_INVALID_HANDLE);
+    CHECK(astra_display_set_pointer_state(&display, p0, 1, &fence) ==
+          ASTRA_ERROR_INVALID_HANDLE);
+    pointer.width = 33;
+    CHECK(astra_display_set_pointer_image(&display, &pointer, &fence) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
 
     create_info.flags = ASTRA_SURFACE_DRAW_TARGET;
     create_info.width = 320;
@@ -191,8 +277,8 @@ static void test_sprite_and_raster_validation(void)
     CHECK(astra_sprite_set_update(&sprites, 0, &update) ==
           ASTRA_ERROR_INVALID_ARGUMENT);
     update.source_rect = (AstraRectI32){ 0, 0, 128, 128 };
-    update.destination_width = 1024;
-    update.destination_height = 1024;
+    update.destination_width = 2047;
+    update.destination_height = 2047;
     update.priority = 255;
     update.transparent_index = 255;
     CHECK(astra_sprite_set_update(&sprites, 63, &update) ==
@@ -200,11 +286,11 @@ static void test_sprite_and_raster_validation(void)
     update.destination_width = 0;
     CHECK(astra_sprite_set_update(&sprites, 0, &update) ==
           ASTRA_ERROR_INVALID_ARGUMENT);
-    update.destination_width = 1025;
+    update.destination_width = 2048;
     CHECK(astra_sprite_set_update(&sprites, 0, &update) ==
           ASTRA_ERROR_INVALID_ARGUMENT);
     update.destination_width = 16;
-    update.destination_height = 1025;
+    update.destination_height = 2048;
     CHECK(astra_sprite_set_update(&sprites, 0, &update) ==
           ASTRA_ERROR_INVALID_ARGUMENT);
     update.destination_height = 16;
@@ -217,6 +303,14 @@ static void test_sprite_and_raster_validation(void)
 
     CHECK(astra_raster_program_create(&display, changes, 2, &program) ==
           ASTRA_ERROR_INVALID_HANDLE);
+    changes[1].beam_x = ASTRA_GRAPHICS_OUTPUT_WIDTH;
+    CHECK(astra_raster_program_create(&display, changes, 2, &program) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    changes[1].beam_x = 0;
+    changes[1].beam_y = ASTRA_GRAPHICS_OUTPUT_HEIGHT;
+    CHECK(astra_raster_program_create(&display, changes, 2, &program) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    changes[1].beam_y = 0;
     changes[1].beam_y = 10;
     CHECK(astra_raster_program_create(&display, changes, 2, &program) ==
           ASTRA_ERROR_INVALID_ARGUMENT);
@@ -291,6 +385,7 @@ static void test_empty_cleanup(void)
 int main(void)
 {
     test_initializers();
+    test_display_layouts();
     test_unavailable_objects();
     test_sprite_and_raster_validation();
     test_palette_tile_and_status_validation();

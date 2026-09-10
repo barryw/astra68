@@ -1,5 +1,172 @@
 # DE25-Nano Timing Closure
 
+## 2026-09-09: complete 1080p scaler/pointer release route
+
+- Host/tool: `beast`, Quartus Pro 26.1.1 Build 130; exact mirrored source,
+  complete production feature set, and pinned vendor inputs from
+  `fpga/de25/platform.json`.
+- Architecture: fixed VIC 16 1920x1080x60 output at 148.500 MHz; hardware
+  nearest-neighbor logical scaling and composed-scanline replay; copper sees
+  the logical beam; framebuffer, tiles, sprites, copper, and boot overlay share
+  the scaled plane; the double-buffered 32x32 ARGB pointer remains a native,
+  unscaled output plane. Display configuration crosses from the build clock as
+  an atomic request/acknowledge snapshot and becomes active only at physical
+  vertical blank.
+- Result: the complete graphics regression, synthesis, fit, route, final
+  multicorner timing, Design Assistant, assembly, programming-file generation,
+  staged checksum verification, and atomic publication all passed. Every
+  constrained clock has zero failing endpoints and zero TNS. Worst setup,
+  hold, recovery, removal, and minimum-pulse slack are +0.035 ns, 0.000 ns,
+  +2.826 ns, +0.036 ns, and +0.220 ns.
+- Design Assistant: zero unwaived high-severity violations in the final
+  snapshot. The remaining medium findings are 67 underutilized-RAM notices,
+  two reset-synchronization notices, one clock-target notice, one partial
+  min/max-delay notice, and one ignored/overridden-constraint notice; no broad
+  display or pointer CDC exception is present.
+- Resources: 43,495 / 46,800 ALMs (93%); 80,964 registers; 4,183,520 /
+  7,331,840 block-memory bits (57%); 340 / 358 RAM blocks (95%); 59 / 376 DSP
+  blocks (16%); 5 / 11 PLLs (45%).
+- Routed source identities: `astra_de25_graphics.sv`
+  `dfb00375ac13cf341c843bc6da878ad25236cc6bcd0caf8e5a8b152cb21db341`,
+  `astra_graphics_pipeline.sv`
+  `efda442d6b6a268a7558cf1fb4446f0f4dd47a68220f9afc756b78824b091e26`,
+  `astra_graphics_control.sv`
+  `253e0fb2db9a20a3f1f95867aef25bf9dfd2b0475673893270ec6e5f9f272bbd`,
+  `astra_display_axis_scaler.sv`
+  `2143ae8974a9d1fa08de178cd955e44618f59059e4ae0f435cd0f130380b6e5f`,
+  `astra_scanline_replay.sv`
+  `b1cf424fb4b7b5a1a91b099eb333c36575268e1c77247da924ad3ed834659f08`,
+  and `astra_hardware_pointer.sv`
+  `63aebe147931f24a7241e421f7441d6030fd05a08e964f73ce218fcec1edce96`.
+- Retained manifest identity: `BUILD_SHA256SUMS`
+  `df405e0d3ab6a38c7d56db12181ad63b079c7455bf71e89740b9fc0bd1308294`.
+  Retained output identities: `golden_top.sof`
+  `02d49a23480704d47359a0323a59d019b1d2038e315728b258a2a7391efff23a`,
+  `golden_top_boot.core.rbf`
+  `cd4f8eedd3bb14a03d929a21767582d71aaa43c5f1d1758741985bb9a7518902`,
+  and `astra68.hps.jic`
+  `823969d7d4037b5d46a9a81bd8e9ab594bc2537c3bbbd6ddd012e954c8a2b7ad`.
+- Disposition: retained as the production implementation checkpoint. Physical
+  cold boot and exact JTAG `design_link` passed. Native 1920x1080 presentation
+  passed with capabilities `0x00000fff`, zero commit deferrals, and verified
+  4,147,200-byte splash CRC32 `639de5a9`. The complete renderer suite passed;
+  320x200 hardware presentation selected the expected 5x integer viewport at
+  `160,40+1600x1000` and restored the prior scene. The complete 64-sprite
+  variable-geometry sweep passed with zero AXI and deadline errors; copper,
+  HDMI audio at 48 kHz, and POST status updates also passed. Linux remained
+  healthy throughout. The normal runtime was then restored and reached stage
+  8 at 70.192 MHz effective with the correct wall clock.
+
+The sprite release gate exposed and localized a separate control-path defect.
+An instrumented physical run completed stress, hidden, clipping, and grid
+phases, then Linux reported an asynchronous HPS SError at the instruction after
+the sprite-scene commit write and panicked. Symbolized AArch64 code placed the
+fault in `astra_graphics_scene_commit`, before its status read. PMON recorded
+exactly 213,760 accepted and completed AR, R, AW, W, and B transactions with
+zero overflow, proving the Media RAM transfer itself completed.
+
+The root cause was a stale scene validator limit of 1,024 destination pixels.
+The descriptor ABI has 11-bit destination extents and therefore supports 1..2047;
+the certifier's first 1920x1080 dimension phase was rejected. The control block
+then translated that recoverable semantic rejection into AXI `SLVERR`, which
+the Agilex HPS delivered as a fatal asynchronous SError. The shared ABI limit
+is now 2,047, the redundant RTL limit is removed, and exhaustive simulation
+passes all 262,016 source/destination scale pairs plus native 1920x1080 and
+2047x2047 boundaries. Semantic commit rejection now increments the existing
+commit-error counter and returns AXI `OKAY`; true transport, decode, and
+alignment faults retain AXI error responses. This is a permanent HPS boundary
+rule: software-recoverable validation failures must never be encoded as bus
+faults. The replacement full route and physical sprite rerun both pass, closing
+this release gate.
+
+The physical investigation also replaced byte-at-a-time Media RAM verification
+with the shared explicit 64-bit device-memory copy primitive. Generated AArch64
+contains direct `ldr`/`str` operations and no libc or `DC ZVA`; PMON transaction
+counts fell from 1,406,336 to 213,760. This was not the panic root cause, but it
+is retained as the correct common device-memory path.
+
+Failed measured experiments retained:
+
+1. The first complete implementation inferred both pointer image banks as
+   registers because the conditional read prevented block-RAM inference. Fit
+   rejected 8,205 required LABs against 4,680 available; the pointer alone used
+   24,312 logic cells and 66,134 registers. A synchronous read from both banks
+   followed by a registered mux now infers 65,536 block-memory bits.
+2. The corrected pointer-RAM route met timing but final Design Assistant found
+   two pointer-toggle CDC violations and two display-configuration CDC
+   violations. The pointer synchronizer reset was made asynchronous, matching
+   the established safe toggle protocol, and the structural backdrop source
+   was corrected to the baseline rather than live copper-mutated state.
+3. The next exact route met timing but retained one optimized display backdrop
+   crossing despite preservation attributes. More importantly, the continuously
+   sampled 71-bit configuration bus could tear. Attributes were rejected as a
+   workaround; the final implementation uses the atomic held snapshot protocol
+   described above and closes every high-severity CDC rule.
+4. A requested 150 MHz build-clock experiment generated 148.500 MHz while
+   Platform Designer still described 150 MHz. It was rejected: requested PLL
+   values are not clock evidence. Generated PLL output, Platform Designer
+   metadata, RTL timing parameters, TimeQuest clocks, and physical behavior
+   must agree before a build can be retained.
+5. The raw HDMI configuration `READY` bit was deliberately synchronized into
+   the build domain, but TimeQuest still timed the asynchronous source to the
+   first synchronizer stage and reported impossible setup/hold failures. A
+   surgical false path covers only that structurally verified source-to-first-
+   stage arc. No broad clock or hierarchy exception is permitted.
+6. The renderer deadline multiplier still used the old 200-cycles/us default
+   after the build PLL changed. Forwarding the exact 165-cycles/us parameter
+   removed the false timing pressure. Every elapsed-time constant must come
+   from the actual domain clock; duplicated clock assumptions are release
+   defects.
+
+## 2026-09-09: native 1920x1080x60 source-synchronous closure
+
+- Host/tool: `beast`, Quartus Pro 26.1.1 Build 130; complete production
+  feature set and the pinned vendor inputs from `fpga/de25/platform.json`.
+- Change: launch HDMI D, DE, HS, and VS on the preceding rising edge instead
+  of the falling edge. This gives the ADV7513 input a full 6.734 ns pixel
+  period without changing its rising-edge capture contract.
+- Result: synthesis, fit, route, Timing Analyzer, assembly, and atomic
+  publication all passed. Every constrained clock has zero setup and hold
+  failing endpoints. The 148.500 MHz internal pixel clock closes at +0.057 ns
+  setup/+0.015 ns hold; the external HDMI interface closes at +0.120 ns
+  setup/+0.001 ns hold.
+- Resources: 42,149 / 46,800 ALMs; 78,611 registers; 4,060,120 / 7,331,840
+  block-memory bits; 290 / 358 RAM blocks; 58 / 376 DSP blocks; 5 / 11 PLLs.
+- Routed source identities: `astra_de25_graphics.sv`
+  `369237922c8ec2271950b1f678f16752d5e988945183f286513aaa588f86603b`,
+  `astra_graphics_pipeline.sv`
+  `8f273c611d247948fca6f38dea23e54a897926f4a73dc7d7fe0ae7fde799005c`,
+  `astra_graphics_control.sv`
+  `63086d9a53c572df90b8898af5f50fe92fa43f3df75f4661b0c68d26b5dfe37e`,
+  and `astra_display_axis_scaler.sv`
+  `2143ae8974a9d1fa08de178cd955e44618f59059e4ae0f435cd0f130380b6e5f`.
+- Published `golden_top.sof` SHA-256:
+  `9eaf00becf84d380a9d822e48226b30db291a1b1b438e718844e078071a61669`.
+- Disposition: retained as the first timing-clean native mode checkpoint. It
+  is not the final scaler release because the composed-line replay and
+  hardware-pointer plane were not in this route.
+
+## 2026-09-09: first native 1920x1080x60 route
+
+- Host/tool: `beast`, Quartus Pro 26.1.1 Build 130; exact pinned vendor GHRD
+  and DE25 resource archives from `fpga/de25/platform.json`.
+- Change: VIC 16 timing at 2200x1125 and a verified 148.500 MHz HDMI pixel
+  PLL. The complete graphics feature set was retained.
+- Result: synthesis, fit, route, Timing Analyzer, and assembly completed. The
+  internal 148.500 MHz pixel domain closed with +0.138 ns setup slack, proving
+  the compositor and line-store path can sustain one native pixel per clock.
+- Resources: 42,089 / 46,800 ALMs; 77,996 registers; 4,060,120 / 7,331,840
+  block-memory bits; 290 / 358 RAM blocks; 58 / 376 DSP blocks; 5 / 11 PLLs.
+- Release disposition: rejected. The 27 source-synchronous HDMI outputs missed
+  setup by -2.239 ns (TNS -54.875 ns). Every failing endpoint was an HDMI data,
+  DE, HS, or VS pin launched on the falling pixel edge; the half-period budget
+  was 3.367 ns while the worst-corner output buffer delay alone was 5.352 ns.
+  The internal pixel clock had no failing endpoint.
+- Corrective architecture: register the complete HDMI bundle on the preceding
+  rising edge, giving the receiver a full pixel period while preserving the
+  ADV7513 rising-edge capture contract. The next full route must close both
+  setup and hold before hardware deployment.
+
 ## 2026-09-02: qualified vendor baseline
 
 - Host: `beast`

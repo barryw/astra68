@@ -6,7 +6,8 @@
 
 module astra_de25_graphics (
     input  wire        clock_50,
-    input  wire        build_clk,
+    output wire        build_clk,
+    output wire        build_reset_n,
     input  wire        reset_n,
     input  wire [1:0]  buttons,
     input  wire [3:0]  switches,
@@ -112,23 +113,31 @@ module astra_de25_graphics (
     input  wire        render_rvalid,
     output wire        render_rready
 );
-    wire build_reset = ~reset_n;
     wire pixel_clk;
     wire audio_mclk;
     wire pixel_locked;
     wire audio_locked;
+    wire pll_reset = ~reset_n;
 
     sys_pll pixel_pll_i (
-        .refclk(clock_50), .rst(build_reset), .outclk_0(pixel_clk),
+        .refclk(clock_50), .rst(pll_reset), .outclk_0(pixel_clk),
+        .outclk_1(build_clk),
         .locked(pixel_locked)
     );
     av_pll audio_pll_i (
-        .refclk(clock_50), .rst(build_reset), .outclk_0(audio_mclk),
+        .refclk(clock_50), .rst(pll_reset), .outclk_0(audio_mclk),
         .locked(audio_locked)
     );
 
+    (* ASYNC_REG = "TRUE" *) reg [3:0] build_reset_sync_q = 4'hf;
     (* ASYNC_REG = "TRUE" *) reg [3:0] pixel_reset_sync_q = 4'hf;
     (* ASYNC_REG = "TRUE" *) reg [3:0] audio_reset_sync_q = 4'hf;
+    always @(posedge build_clk or negedge pixel_locked) begin
+        if (!pixel_locked)
+            build_reset_sync_q <= 4'hf;
+        else
+            build_reset_sync_q <= {build_reset_sync_q[2:0], 1'b0};
+    end
     always @(posedge pixel_clk or negedge pixel_locked) begin
         if (!pixel_locked)
             pixel_reset_sync_q <= 4'hf;
@@ -141,20 +150,22 @@ module astra_de25_graphics (
         else
             audio_reset_sync_q <= {audio_reset_sync_q[2:0], 1'b0};
     end
+    wire build_reset = build_reset_sync_q[3];
     wire pixel_reset = pixel_reset_sync_q[3];
     wire audio_reset = audio_reset_sync_q[3];
+    assign build_reset_n = ~build_reset;
     assign hdmi_tx_clk = pixel_clk;
 
-    wire [10:0] pixel_x;
-    wire [9:0] pixel_y;
-    wire [10:0] frame_width;
-    wire [9:0] frame_height;
-    wire [10:0] screen_width;
-    wire [9:0] screen_height;
+    wire [11:0] pixel_x;
+    wire [10:0] pixel_y;
+    wire [11:0] frame_width;
+    wire [10:0] frame_height;
+    wire [11:0] screen_width;
+    wire [10:0] screen_height;
     wire hsync;
     wire vsync;
     wire video_active;
-    video_timing #(.VIDEO_ID_CODE(4)) timing_i (
+    video_timing #(.VIDEO_ID_CODE(16)) timing_i (
         .clk_pixel(pixel_clk), .reset(pixel_reset),
         .cx(pixel_x), .cy(pixel_y),
         .frame_width(frame_width), .frame_height(frame_height),
@@ -164,23 +175,38 @@ module astra_de25_graphics (
 
     wire pipeline_valid;
     wire [23:0] pipeline_rgb;
-    // ADV7513 captures on the rising pixel-clock edge. Launching the parallel
-    // bus on the falling edge provides the data-sheet setup and hold window.
-    always @(negedge pixel_clk) begin
+    // The native pointer's RAM lookup plus exact alpha pipeline delays the
+    // completed RGB stream by six clocks. Delay every timing signal by the
+    // same amount so pixels and the source-synchronous HDMI bundle remain
+    // aligned.
+    reg [5:0] hsync_delay_q;
+    reg [5:0] vsync_delay_q;
+    reg [5:0] active_delay_q;
+    // The ADV7513 captures each bundle on the following rising edge. Register
+    // data and control together here so the source-synchronous interface gets
+    // a full pixel period and the output registers can pack beside the pins.
+    always @(posedge pixel_clk) begin
         if (pixel_reset) begin
+            hsync_delay_q <= 6'd0;
+            vsync_delay_q <= 6'd0;
+            active_delay_q <= 6'd0;
             hdmi_tx_hs <= 1'b0;
             hdmi_tx_vs <= 1'b0;
             hdmi_tx_d <= 24'd0;
             hdmi_tx_de <= 1'b0;
         end else begin
-            hdmi_tx_hs <= hsync;
-            hdmi_tx_vs <= vsync;
+            hsync_delay_q <= {hsync_delay_q[4:0], hsync};
+            vsync_delay_q <= {vsync_delay_q[4:0], vsync};
+            active_delay_q <= {active_delay_q[4:0], video_active};
+            hdmi_tx_hs <= hsync_delay_q[5];
+            hdmi_tx_vs <= vsync_delay_q[5];
             hdmi_tx_d <= pipeline_valid ? pipeline_rgb : 24'd0;
-            hdmi_tx_de <= video_active;
+            hdmi_tx_de <= active_delay_q[5];
         end
     end
 
     wire hdmi_ready;
+    (* ASYNC_REG = "TRUE" *) reg [1:0] hdmi_ready_build_sync_q = 2'b00;
     (* ASYNC_REG = "TRUE" *) reg [1:0] hdmi_int_sync_q = 2'b11;
     always @(posedge clock_50 or negedge reset_n) begin
         if (!reset_n)
@@ -193,6 +219,9 @@ module astra_de25_graphics (
         .I2C_SCLK(hdmi_i2c_scl), .I2C_SDAT(hdmi_i2c_sda),
         .HDMI_TX_INT(hdmi_int_sync_q[1]), .READY(hdmi_ready)
     );
+    always @(posedge build_clk)
+        hdmi_ready_build_sync_q <= {hdmi_ready_build_sync_q[0], hdmi_ready};
+    wire hdmi_ready_build = hdmi_ready_build_sync_q[1];
 
     wire [1:0][23:0] audio_sample_word;
     wire hdmi_output_requested;
@@ -337,7 +366,7 @@ module astra_de25_graphics (
         .build_clk(build_clk), .build_reset(build_reset),
         .audio_clk(audio_sample_clk), .audio_reset(audio_reset),
         .audio_sample_word(audio_sample_word),
-        .hdmi_output_active(hdmi_ready && hdmi_output_requested),
+        .hdmi_output_active(hdmi_ready_build && hdmi_output_requested),
         .hdmi_output_requested(hdmi_output_requested),
         .s_axi_awaddr(audio_awaddr), .s_axi_awprot(audio_awprot),
         .s_axi_awvalid(audio_awvalid), .s_axi_awready(audio_awready),
@@ -388,7 +417,7 @@ module astra_de25_graphics (
     assign {sprite_rvalid, tile1_rvalid, tile0_rvalid} = scene_client_rvalid;
 
     astra_axi_read_3to1 #(.AXI_ID_WIDTH(3)) scene_arbiter_i (
-        .aclk(build_clk), .aresetn(reset_n),
+        .aclk(build_clk), .aresetn(build_reset_n),
         .s_axi_arid({sprite_arid, tile1_arid, tile0_arid}),
         .s_axi_araddr({sprite_araddr, tile1_araddr, tile0_araddr}),
         .s_axi_arlen({sprite_arlen, tile1_arlen, tile0_arlen}),
@@ -426,6 +455,9 @@ module astra_de25_graphics (
     wire scene_active;
     astra_graphics_pipeline #(
         .ARENA_BASE(32'h40000000), .ARENA_LIMIT(32'h60000000),
+        .OUTPUT_WIDTH(1920), .OUTPUT_HEIGHT(1080),
+        .TOTAL_WIDTH(2200), .TOTAL_HEIGHT(1125),
+        .BUILD_CYCLES_PER_US(165),
         .AXI_ID_WIDTH(3)
     ) pipeline_i (
         .build_clk(build_clk), .build_reset(build_reset),
@@ -507,11 +539,11 @@ module astra_de25_graphics (
     );
 
     astra_front_panel_axi #(
-        .CLK_HZ(100000000), .CAPABILITIES(32'h1f040208), .ACTIVITY_LED(3)
+        .CLK_HZ(165000000), .CAPABILITIES(32'h1f040208), .ACTIVITY_LED(3)
     ) panel_i (
         .clk(build_clk), .reset(build_reset),
         .buttons({4'd0, buttons}), .switches(switches),
-        .diagnostic_leds({5'd0, scene_active, ~build_reset, hdmi_ready}),
+        .diagnostic_leds({5'd0, scene_active, ~build_reset, hdmi_ready_build}),
         .leds(leds),
         .s_axi_awaddr(panel_awaddr), .s_axi_awprot(panel_awprot),
         .s_axi_awvalid(panel_awvalid), .s_axi_awready(panel_awready),

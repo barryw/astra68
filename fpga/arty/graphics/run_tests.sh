@@ -3,8 +3,12 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 BUILD=${BUILD:-"$ROOT/build/arty-graphics"}
+BOOT_FONT="$ROOT/build/arty-graphics/post_fonts.hex"
 
-mkdir -p "$BUILD"
+mkdir -p "$BUILD" "$(dirname "$BOOT_FONT")"
+python3 "$ROOT/tools/fonts/test_afnt.py"
+python3 "$ROOT/tools/fonts/afnt.py" emit-cp437-hex \
+    "$ROOT/sw/userspace/graphics/fonts/astra-mono.afnt" "$BOOT_FONT"
 python3 "$ROOT/fpga/arty/graphics/protocol/generate_protocol.py"
 python3 "$ROOT/fpga/arty/graphics/test_hdmi_source_contract.py"
 
@@ -15,6 +19,39 @@ iverilog -g2012 -Wall \
     "$ROOT/fpga/arty/graphics/sim/tb_video_timing.sv"
 
 vvp "$BUILD/tb_video_timing"
+
+iverilog -g2012 -Wall \
+    -s tb_video_timing_1080p \
+    -o "$BUILD/tb_video_timing_1080p" \
+    "$ROOT/third_party/hdl-util-hdmi/video_timing.sv" \
+    "$ROOT/fpga/arty/graphics/sim/tb_video_timing_1080p.sv"
+
+vvp "$BUILD/tb_video_timing_1080p"
+
+iverilog -g2012 -Wall \
+    -s tb_astra_display_axis_scaler \
+    -o "$BUILD/tb_astra_display_axis_scaler" \
+    "$ROOT/fpga/arty/graphics/astra_display_axis_scaler.sv" \
+    "$ROOT/fpga/arty/graphics/sim/tb_astra_display_axis_scaler.sv"
+
+vvp "$BUILD/tb_astra_display_axis_scaler"
+
+iverilog -g2012 -Wall \
+    -s tb_astra_scanline_replay \
+    -o "$BUILD/tb_astra_scanline_replay" \
+    "$ROOT/fpga/arty/graphics/astra_scanline_replay.sv" \
+    "$ROOT/fpga/arty/graphics/sim/tb_astra_scanline_replay.sv"
+
+vvp "$BUILD/tb_astra_scanline_replay"
+
+iverilog -g2012 -Wall \
+    -s tb_astra_hardware_pointer \
+    -o "$BUILD/tb_astra_hardware_pointer" \
+    "$ROOT/fpga/arty/graphics/astra_pixel_compositor.sv" \
+    "$ROOT/fpga/arty/graphics/astra_hardware_pointer.sv" \
+    "$ROOT/fpga/arty/graphics/sim/tb_astra_hardware_pointer.sv"
+
+vvp "$BUILD/tb_astra_hardware_pointer"
 
 iverilog -g2012 -Wall \
     -s tb_hdmi_source_mode \
@@ -157,6 +194,7 @@ vvp "$BUILD/tb_astra_palette_store"
 iverilog -g2012 -Wall \
     -s tb_astra_line_scheduler \
     -o "$BUILD/tb_astra_line_scheduler" \
+    "$ROOT/fpga/arty/graphics/astra_display_axis_scaler.sv" \
     "$ROOT/fpga/arty/graphics/astra_line_scheduler.sv" \
     "$ROOT/fpga/arty/graphics/sim/tb_astra_line_scheduler.sv"
 
@@ -244,6 +282,9 @@ PIPELINE_SOURCES=(
     "$ROOT/fpga/arty/graphics/astra_tile_line_builder.sv"
     "$ROOT/fpga/arty/graphics/astra_sprite_line_store.sv"
     "$ROOT/fpga/arty/graphics/astra_sprite_line_builder.sv"
+    "$ROOT/fpga/arty/graphics/astra_display_axis_scaler.sv"
+    "$ROOT/fpga/arty/graphics/astra_scanline_replay.sv"
+    "$ROOT/fpga/arty/graphics/astra_hardware_pointer.sv"
     "$ROOT/fpga/arty/graphics/astra_line_scheduler.sv"
     "$ROOT/fpga/arty/graphics/astra_palette_store.sv"
     "$ROOT/fpga/arty/graphics/astra_premult_blend.sv"
@@ -279,8 +320,8 @@ iverilog -g2012 -Wall -I "$ROOT/fpga/arty/graphics" \
 
 iverilog -g2012 -Wall -I "$ROOT/fpga/arty/graphics" \
     -s tb_astra_graphics_pipeline \
-    -Ptb_astra_graphics_pipeline.OUTPUT_WIDTH=1280 \
-    -Ptb_astra_graphics_pipeline.TOTAL_WIDTH=1650 \
+    -Ptb_astra_graphics_pipeline.OUTPUT_WIDTH=1920 \
+    -Ptb_astra_graphics_pipeline.TOTAL_WIDTH=2200 \
     -o "$BUILD/tb_astra_graphics_pipeline_screen_width" \
     "${PIPELINE_SOURCES[@]}"
 

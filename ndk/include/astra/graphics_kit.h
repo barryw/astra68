@@ -7,8 +7,11 @@
  */
 
 #include <astra/font.h>
+#include <astra/font_library.h>
 #include <astra/graphics.h>
+#include <astra/graphics_library.h>
 #include <astra/shared_library.h>
+#include <astra/surface.h>
 
 #define ASTRA_FONT_LIBRARY_NAME "font.library"
 #define ASTRA_FONT_LIBRARY_VERSION 1u

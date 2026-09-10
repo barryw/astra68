@@ -1,8 +1,15 @@
 #ifndef ASTRA_VFS_CLIENT_H
 #define ASTRA_VFS_CLIENT_H
 
-#include <stdatomic.h>
 #include <stdint.h>
+
+#ifndef __cplusplus
+#include <stdatomic.h>
+#define ASTRA_VFS_ATOMIC(type) _Atomic(type)
+#else
+/* C++ owns only the storage; filesystem.library performs atomic access. */
+#define ASTRA_VFS_ATOMIC(type) type
+#endif
 
 #include <astra/limits.h>
 #include <astra/vfs_service.h>
@@ -83,8 +90,8 @@ typedef struct AstraVfsClient {
     void *context;
     AstraVfsAreaPayload area_payload;
     AstraVfsCallAcquire call_acquire;
-    _Atomic(uint32_t) session;
-    _Atomic(uint16_t) version; /* the version agreed at connect */
+    ASTRA_VFS_ATOMIC(uint32_t) session;
+    ASTRA_VFS_ATOMIC(uint16_t) version; /* the version agreed at connect */
     /*
      * What the owner of this client is currently doing. Stamped on every
      * request so one request is one story across every process it touches.
@@ -130,6 +137,8 @@ typedef struct AstraVfsClient {
      */
     AstraVfsCallState call;
 } AstraVfsClient;
+
+#undef ASTRA_VFS_ATOMIC
 
 /*
  * Performs the HELLO handshake and records the agreed version. Returns an

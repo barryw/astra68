@@ -40,8 +40,8 @@ module tb_astra_graphics_pipeline #(
 
     reg build_reset = 1'b1;
     reg pixel_reset = 1'b1;
-    reg [10:0] pixel_x = 11'd0;
-    reg [9:0] pixel_y = 10'd0;
+    reg [11:0] pixel_x = 12'd0;
+    reg [10:0] pixel_y = 11'd0;
     wire pixel_output_valid;
     wire [23:0] pixel_output_rgb;
 
@@ -197,9 +197,9 @@ module tb_astra_graphics_pipeline #(
         .OUTPUT_HEIGHT(OUTPUT_HEIGHT),
         .TOTAL_WIDTH(TOTAL_WIDTH),
         .TOTAL_HEIGHT(TOTAL_HEIGHT),
-        .OUTPUT_PREFETCH(37),
+        .OUTPUT_PREFETCH(38),
         .AXI_ID_WIDTH(AXI_ID_WIDTH),
-.BOOT_FONT_HEX("assets/fonts/astra_8x16.hex")
+.BOOT_FONT_HEX("build/arty-graphics/post_fonts.hex")
     ) dut (.*);
 
     astra_render_axi_memory_model #(
@@ -248,14 +248,14 @@ module tb_astra_graphics_pipeline #(
 
     always @(posedge pixel_clk) begin
         if (pixel_reset) begin
-            pixel_x <= 11'd0;
-            pixel_y <= 10'd0;
+            pixel_x <= 12'd0;
+            pixel_y <= 11'd0;
         end else if (pixel_x == TOTAL_WIDTH - 1) begin
-            pixel_x <= 11'd0;
+            pixel_x <= 12'd0;
             pixel_y <= pixel_y == TOTAL_HEIGHT - 1 ?
-                10'd0 : pixel_y + 10'd1;
+                11'd0 : pixel_y + 11'd1;
         end else begin
-            pixel_x <= pixel_x + 11'd1;
+            pixel_x <= pixel_x + 12'd1;
         end
     end
 
@@ -550,9 +550,9 @@ module tb_astra_graphics_pipeline #(
 
     function automatic [31:0] copper_beam0(
         input [2:0] opcode,
-        input [9:0] y
+        input [10:0] y
     );
-        copper_beam0 = {opcode, 19'd0, y};
+        copper_beam0 = {opcode, 18'd0, y};
     endfunction
 
     task automatic write_copper_instruction(
@@ -826,13 +826,13 @@ module tb_astra_graphics_pipeline #(
                     pixel_y >= 1 && pixel_y < 3)
                     expected_rgb = blend_straight_over_opaque(
                         expected_rgb, SPRITE_ARGB);
-                if (!pixel_output_valid)
+                if (!dut.scanline_output_valid)
                     $fatal(1, "missing pixel x=%0d y=%0d",
                            pixel_x, pixel_y);
-                if (pixel_output_rgb !== expected_rgb)
+                if (dut.scanline_output_rgb !== expected_rgb)
                     $fatal(1,
                         "pixel mismatch x=%0d y=%0d got=%06x expected=%06x underruns=%0d read_slot=%0d valid=%b tags=%0d,%0d,%0d,%0d copper=%0d/%0d/%0d sprite_build=%0d visual2=%0d",
-                        pixel_x, pixel_y, pixel_output_rgb, expected_rgb,
+                        pixel_x, pixel_y, dut.scanline_output_rgb, expected_rgb,
                         pixel_underruns, dut.pixel_read_slot,
                         dut.pixel_slot_valid, dut.pixel_slot_tag0,
                         dut.pixel_slot_tag1, dut.pixel_slot_tag2,

@@ -43,15 +43,12 @@ enum {
         ASTRA_RENDER_BUILDER_GLYPH_MAX / TEXT_COLUMNS,
     CURSOR_HEIGHT = 3u,
     CURSOR_BLINK_POLLS = 32u,
-    POINTER_SPRITE = 0u,
-    POINTER_WIDTH = ASTRA_RENDER_CURSOR_WIDTH,
-    POINTER_HEIGHT = ASTRA_RENDER_CURSOR_HEIGHT,
-    POINTER_PITCH = 64u,
-    POINTER_BYTES = POINTER_PITCH * POINTER_HEIGHT,
-    POINTER_PALETTE = ASTRA_RENDER_CURSOR_PALETTE_BANK,
+    POINTER_WIDTH = 16u,
+    POINTER_HEIGHT = 24u,
     POINTER_HOT_X = 3u,
     POINTER_HOT_Y = 1u,
-    SPRITE_COUNT = 64u,
+    POINTER_IMAGE_WIDTH = 32u,
+    POINTER_IMAGE_HEIGHT = 32u,
     /* DE25 hardware counters: choose a blit only when it beats repainting. */
     DE25_GLYPH_CYCLES = 6200u,
     DE25_FILL_CYCLES_PER_PIXEL = 3u,
@@ -64,9 +61,9 @@ _Static_assert(TEXT_COLUMNS * TEXT_CELL_WIDTH <= ASTRA_DISPLAY_WIDTH &&
                    TEXT_ROWS * TEXT_CELL_HEIGHT <= ASTRA_DISPLAY_HEIGHT &&
                    TEXT_ROWS_PER_BATCH != 0u,
                "text grid must fit the hardware scanout and glyph arena");
-_Static_assert(POINTER_PITCH >= POINTER_WIDTH &&
-                   (POINTER_PITCH & 63u) == 0u,
-               "sprite rows require a 64-byte-aligned pitch");
+_Static_assert(POINTER_WIDTH <= POINTER_IMAGE_WIDTH &&
+                   POINTER_HEIGHT <= POINTER_IMAGE_HEIGHT,
+               "pointer artwork must fit the hardware pointer plane");
 
 static volatile sig_atomic_t running = 1;
 static uint8_t terminal_batch[ASTRA_RENDER_BUILDER_BYTES];
@@ -93,14 +90,17 @@ static void stop(int signal_number)
     running = 0;
 }
 
-static int wait_sprite_write_ready(
+static int wait_pointer_ready(
     const struct astra_graphics_device *device)
 {
     const struct timespec delay = { .tv_sec = 0, .tv_nsec = 1000000 };
     uint64_t deadline = astra_monotonic_nanoseconds() + RENDER_TIMEOUT_NS;
 
-    while ((astra_mmio_read(device, ASTRA_REG_SPRITE_STATUS) &
-            ASTRA_SPRITE_STATUS_WRITE_READY) == 0u) {
+    while ((astra_mmio_read(device, ASTRA_REG_POINTER_STATUS) &
+            (ASTRA_POINTER_STATUS_WRITE_READY |
+             ASTRA_POINTER_STATUS_COMMIT_READY)) !=
+           (ASTRA_POINTER_STATUS_WRITE_READY |
+            ASTRA_POINTER_STATUS_COMMIT_READY)) {
         if (astra_monotonic_nanoseconds() >= deadline)
             return -1;
         while (nanosleep(&delay, NULL) != 0 && errno == EINTR) {
@@ -109,88 +109,74 @@ static int wait_sprite_write_ready(
     return 0;
 }
 
-static void write_sprite_descriptor(
-    const struct astra_graphics_device *device, unsigned sprite,
-    const uint32_t words[8])
+static int wait_pointer_generation(
+    const struct astra_graphics_device *device, uint32_t previous)
 {
-    for (unsigned word = 0u; word < 8u; ++word) {
-        astra_mmio_write(device, ASTRA_REG_SPRITE_DESCRIPTOR_SELECTOR,
-                         (word << 8) | sprite);
-        astra_mmio_write(device, ASTRA_REG_SPRITE_DESCRIPTOR_DATA,
-                         words[word]);
-    }
-}
+    const struct timespec delay = { .tv_sec = 0, .tv_nsec = 1000000 };
+    uint64_t deadline = astra_monotonic_nanoseconds() + RENDER_TIMEOUT_NS;
 
-static void encode_pointer_descriptor(uint32_t words[8], uint32_t x,
-                                      uint32_t y, bool visible)
-{
-    words[0] = (visible ? UINT32_C(0x13) : UINT32_C(0x12)) |
-               (POINTER_PALETTE << 16);
-    words[1] = (uint16_t)(x - POINTER_HOT_X) |
-               ((uint32_t)(uint16_t)(y - POINTER_HOT_Y) << 16);
-    words[2] = POINTER_WIDTH | (POINTER_HEIGHT << 8) | (255u << 16);
-    words[3] = POINTER_WIDTH | (POINTER_HEIGHT << 16);
-    words[4] = ASTRA_GRAPHICS_ARENA_BASE + ASTRA_RENDER_CURSOR_OFFSET;
-    words[5] = POINTER_PITCH;
-    words[6] = 0u;
-    words[7] = 0u;
+    while (astra_mmio_read(device, ASTRA_REG_POINTER_GENERATION) ==
+           previous) {
+        if (astra_monotonic_nanoseconds() >= deadline)
+            return -1;
+        while (nanosleep(&delay, NULL) != 0 && errno == EINTR) {
+        }
+    }
+    return 0;
 }
 
 static int pointer_initialize(const struct astra_graphics_device *device)
 {
-    struct astra_graphics_memory_map mapping;
-    uint32_t words[8] = { 0u };
+    uint32_t generation;
 
-    astra_graphics_memory_map_init(&mapping);
-    if (astra_graphics_memory_map_open(
-            device, &mapping,
-            ASTRA_GRAPHICS_ARENA_BASE + ASTRA_RENDER_CURSOR_OFFSET,
-            POINTER_BYTES) != 0)
+    if ((astra_mmio_read(device, ASTRA_REG_CAPABILITIES) &
+         ASTRA_CAP_HARDWARE_POINTER) == 0u || wait_pointer_ready(device) != 0)
         return -1;
-    for (unsigned y = 0u; y < POINTER_HEIGHT; ++y) {
-        for (unsigned x = 0u; x < POINTER_WIDTH; ++x) {
-            uint16_t bit = (uint16_t)(UINT16_C(0x8000) >> x);
+    astra_mmio_write(device, ASTRA_REG_POINTER_IMAGE_SELECTOR, 0u);
+    for (unsigned y = 0u; y < POINTER_IMAGE_HEIGHT; ++y) {
+        for (unsigned x = 0u; x < POINTER_IMAGE_WIDTH; ++x) {
+            uint32_t argb = 0u;
 
-            mapping.data[y * POINTER_PITCH + x] =
-                (pointer_inner[y] & bit) != 0u ? 2u :
-                (pointer_outer[y] & bit) != 0u ? 1u : 0u;
+            if (x < POINTER_WIDTH && y < POINTER_HEIGHT) {
+                uint16_t bit = (uint16_t)(UINT16_C(0x8000) >> x);
+
+                argb = (pointer_inner[y] & bit) != 0u ?
+                    UINT32_C(0xffffffff) :
+                    (pointer_outer[y] & bit) != 0u ?
+                        UINT32_C(0xff000000) : 0u;
+            }
+            astra_mmio_write(device, ASTRA_REG_POINTER_IMAGE_DATA, argb);
         }
     }
-    astra_graphics_memory_barrier();
-    astra_graphics_memory_map_close(&mapping);
-    if (wait_sprite_write_ready(device) != 0)
-        return -1;
-    astra_mmio_write(device, ASTRA_REG_SPRITE_PALETTE_SELECTOR,
-                     POINTER_PALETTE << 8);
-    astra_mmio_write(device, ASTRA_REG_SPRITE_PALETTE_DATA, 0x00000000u);
-    astra_mmio_write(device, ASTRA_REG_SPRITE_PALETTE_SELECTOR,
-                     (POINTER_PALETTE << 8) | 1u);
-    astra_mmio_write(device, ASTRA_REG_SPRITE_PALETTE_DATA, 0xff000000u);
-    astra_mmio_write(device, ASTRA_REG_SPRITE_PALETTE_SELECTOR,
-                     (POINTER_PALETTE << 8) | 2u);
-    astra_mmio_write(device, ASTRA_REG_SPRITE_PALETTE_DATA, 0xffffffffu);
-    encode_pointer_descriptor(words, 0u, 0u, false);
-    for (unsigned sprite = 0u; sprite < SPRITE_COUNT; ++sprite)
-        write_sprite_descriptor(device, sprite, words);
-    astra_mmio_write(device, ASTRA_REG_SPRITE_CONTROL, 1u);
-    return 0;
+    astra_mmio_write(device, ASTRA_REG_POINTER_CONTROL, 0u);
+    astra_mmio_write(device, ASTRA_REG_POINTER_POSITION, 0u);
+    astra_mmio_write(device, ASTRA_REG_POINTER_HOTSPOT,
+                     (POINTER_HOT_Y << 16) | POINTER_HOT_X);
+    generation = astra_mmio_read(device, ASTRA_REG_POINTER_GENERATION);
+    astra_mmio_write(device, ASTRA_REG_POINTER_COMMIT, 3u);
+    return wait_pointer_generation(device, generation);
 }
 
 static int pointer_update(const struct astra_graphics_device *device,
-                          uint32_t packed, bool commit)
+                          uint32_t packed)
 {
-    uint32_t words[8];
+    uint32_t x = packed & ASTRA_DISPLAY_HOST_CURSOR_X_MASK;
+    uint32_t y = (packed & ASTRA_DISPLAY_HOST_CURSOR_Y_MASK) >>
+                 ASTRA_DISPLAY_HOST_CURSOR_Y_SHIFT;
+    uint32_t generation;
 
-    if (wait_sprite_write_ready(device) != 0)
+    if (wait_pointer_ready(device) != 0)
         return -1;
-    encode_pointer_descriptor(
-        words, packed & ASTRA_DISPLAY_HOST_CURSOR_X_MASK,
-        (packed & ASTRA_DISPLAY_HOST_CURSOR_Y_MASK) >>
-            ASTRA_DISPLAY_HOST_CURSOR_Y_SHIFT,
-        (packed & ASTRA_DISPLAY_HOST_CURSOR_VISIBLE) != 0u);
-    write_sprite_descriptor(device, POINTER_SPRITE, words);
-    return commit ?
-        astra_graphics_scene_commit(device, RENDER_TIMEOUT_NS, NULL) : 0;
+    if (x >= ASTRA_DISPLAY_WIDTH)
+        x = ASTRA_DISPLAY_WIDTH - 1u;
+    if (y >= ASTRA_DISPLAY_HEIGHT)
+        y = ASTRA_DISPLAY_HEIGHT - 1u;
+    astra_mmio_write(device, ASTRA_REG_POINTER_POSITION, (y << 16) | x);
+    astra_mmio_write(device, ASTRA_REG_POINTER_CONTROL,
+                     (packed & ASTRA_DISPLAY_HOST_CURSOR_VISIBLE) != 0u);
+    generation = astra_mmio_read(device, ASTRA_REG_POINTER_GENERATION);
+    astra_mmio_write(device, ASTRA_REG_POINTER_COMMIT, 1u);
+    return wait_pointer_generation(device, generation);
 }
 
 struct terminal_cursor {
@@ -1449,9 +1435,14 @@ int main(int argc, char **argv)
 
     if (argc == 2 && strcmp(argv[1], "--self-test") == 0)
         return self_test();
+    if (argc == 2 && strcmp(argv[1], "--mailbox-bytes") == 0) {
+        printf("%u\n", ASTRA_DISPLAY_MAILBOX_BYTES);
+        return EXIT_SUCCESS;
+    }
     if (argc != 3) {
-        fprintf(stderr, "usage: %s <shared-post-text-page> "
-                "<shared-display-mailbox>\n", argv[0]);
+        fprintf(stderr, "usage: %s [--self-test|--mailbox-bytes] | "
+                "<shared-post-text-page> <shared-display-mailbox>\n",
+                argv[0]);
         return EXIT_FAILURE;
     }
 
@@ -1622,10 +1613,7 @@ int main(int argc, char **argv)
                        (request.frame_bytes &
                         ~(ASTRA_DISPLAY_CURSOR_VISIBLE |
                           ASTRA_DISPLAY_CURSOR_DEFER_COMMIT)) == 0u) {
-                if (pointer_update(
-                        &device, request.color_rgb565,
-                        (request.frame_bytes &
-                         ASTRA_DISPLAY_CURSOR_DEFER_COMMIT) == 0u) == 0) {
+                if (pointer_update(&device, request.color_rgb565) == 0) {
                     generation = astra_mmio_read(&device,
                                                  ASTRA_REG_GENERATION);
                     status = ASTRA_DISPLAY_COMPLETION_OK;
@@ -1639,7 +1627,7 @@ int main(int argc, char **argv)
                 const struct terminal_cursor panic_cursor = {0};
 
                 if (copy_cells(current, plane) &&
-                    pointer_update(&device, 0u, false) == 0 &&
+                    pointer_update(&device, 0u) == 0 &&
                     present_text_on_both_scanouts(
                         &device, current, &panic_cursor, false, text_states,
                         &text_generation, &active_scanout) == 0 &&

@@ -86,10 +86,13 @@ Exact hashes, resources, timing, failed experiments, and evidence are in
 `fpga/arty/graphics/TIMING_CLOSURE.md`.
 
 The boot CP437 plane is deliberately not the version-1 application font
-engine. It exists before Astraea command submission is available, uses a fixed
-16x16 cell and four-color palette, and accepts only bounded status rows. Normal
-Astra OS text continues to use positioned AFNT glyph runs and the hardware
-glyph expansion contract in section 8.
+engine. It exists before Astraea command submission is available, uses the
+true 8x16 Spleen rescue strike with an explicit fixed advance and 12/4
+ascent/descent, and accepts only bounded status rows. The FPGA build generates
+its CP437 ROM from the validated Astra Mono AFNT source, preventing the boot
+and system copies from drifting. Normal Astra OS text continues to use
+positioned AFNT glyph runs and the hardware glyph expansion contract in
+section 8.
 
 Primary references:
 

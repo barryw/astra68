@@ -27,7 +27,7 @@ enum {
     VARIABLE_SHAPE_STORAGE_BYTES = 1024u * 1024u,
     SHAPE_STORAGE_BYTES = MAX_SHAPE_STORAGE_BYTES +
         VARIABLE_SHAPE_STORAGE_BYTES,
-    SHAPE_STORAGE_BASE = ASTRA_GRAPHICS_ARENA_BASE + 0x00200000u,
+    SHAPE_STORAGE_BASE = ASTRA_GRAPHICS_ARENA_BASE + 0x01000000u,
     STRESS_DEST_WIDTH = 128u,
     STRESS_DEST_HEIGHT = 720u,
     CLIP_DEST_WIDTH = 96u,
@@ -77,12 +77,14 @@ struct phase_metrics {
 };
 
 struct counter_snapshot {
-    uint32_t frame;
     uint32_t admitted;
     uint32_t dropped;
     uint32_t overflow;
     uint32_t axi_errors;
     uint32_t deadline_errors;
+    uint32_t fb_ar_accepted;
+    uint32_t fb_r_accepted;
+    uint32_t fb_stall_cycles;
 };
 
 struct sprite_shape {
@@ -182,7 +184,7 @@ static uint32_t prepare_variable_shapes(
     return next;
 }
 
-static void write_max_shapes(volatile uint8_t *storage)
+static void write_max_shapes(uint8_t *storage)
 {
     unsigned sprite;
 
@@ -200,10 +202,9 @@ static void write_max_shapes(volatile uint8_t *storage)
             }
         }
     }
-    astra_graphics_memory_barrier();
 }
 
-static int verify_max_shapes(volatile const uint8_t *storage)
+static int verify_max_shapes(const uint8_t *storage)
 {
     unsigned sprite;
 
@@ -233,7 +234,7 @@ static int verify_max_shapes(volatile const uint8_t *storage)
 }
 
 static void write_variable_shapes(
-    volatile uint8_t *storage,
+    uint8_t *storage,
     const struct sprite_shape shapes[VARIABLE_SCENE_COUNT][SPRITE_COUNT])
 {
     unsigned scene;
@@ -259,11 +260,10 @@ static void write_variable_shapes(
             }
         }
     }
-    astra_graphics_memory_barrier();
 }
 
 static int verify_variable_shapes(
-    volatile const uint8_t *storage,
+    const uint8_t *storage,
     const struct sprite_shape shapes[VARIABLE_SCENE_COUNT][SPRITE_COUNT])
 {
     unsigned scene;
@@ -569,8 +569,6 @@ static void program_variable_grid_scene(
 static void capture_counters(const struct astra_graphics_device *device,
                              struct counter_snapshot *snapshot)
 {
-    snapshot->frame =
-        astra_mmio_read(device, ASTRA_REG_SPRITE_COLLISION_FRAME);
     snapshot->admitted =
         astra_mmio_read(device, ASTRA_REG_SPRITE_PIXELS_ADMITTED);
     snapshot->dropped =
@@ -581,6 +579,12 @@ static void capture_counters(const struct astra_graphics_device *device,
         astra_mmio_read(device, ASTRA_REG_SPRITE_AXI_ERRORS);
     snapshot->deadline_errors =
         astra_mmio_read(device, ASTRA_REG_SPRITE_DEADLINE_ERRORS);
+    snapshot->fb_ar_accepted =
+        astra_mmio_read(device, ASTRA_REG_FB_AXI_AR_ACCEPTED);
+    snapshot->fb_r_accepted =
+        astra_mmio_read(device, ASTRA_REG_FB_AXI_R_ACCEPTED);
+    snapshot->fb_stall_cycles =
+        astra_mmio_read(device, ASTRA_REG_FB_AXI_RESPONSE_STALL_CYCLES);
 }
 
 static int monitor_phase(const struct astra_graphics_device *device,
@@ -589,6 +593,9 @@ static int monitor_phase(const struct astra_graphics_device *device,
                          struct phase_metrics *metrics)
 {
     uint64_t deadline = deadline_after(PHASE_TIMEOUT_NS);
+    uint32_t start_frame =
+        astra_mmio_read(device, ASTRA_REG_SPRITE_COLLISION_FRAME);
+    uint32_t generation;
 
     *metrics = (struct phase_metrics){0};
     for (;;) {
@@ -603,7 +610,7 @@ static int monitor_phase(const struct astra_graphics_device *device,
         uint32_t hardware_max_build_cycles = astra_mmio_read(
             device, ASTRA_REG_SPRITE_MAX_BUILD_CYCLES);
 
-        metrics->frames = frame - initial->frame;
+        metrics->frames = frame - start_frame;
         metrics->status_or |= status;
         if (build_cycles > metrics->max_build_cycles)
             metrics->max_build_cycles = build_cycles;
@@ -615,14 +622,44 @@ static int monitor_phase(const struct astra_graphics_device *device,
         if (astra_monotonic_nanoseconds() >= deadline) {
             fprintf(stderr,
                     "sprite frame monitor timed out: start=%" PRIu32
-                    " current=%" PRIu32 " status=%08" PRIx32 "\n",
-                    initial->frame, frame, status);
+                    " current=%" PRIu32 " status=%08" PRIx32
+                    " build=%" PRIu32 " hardware_max=%" PRIu32
+                    " read=%" PRIu32 " admitted=%" PRIu32
+                    " dropped=%" PRIu32 " overflow=%" PRIu32
+                    " axi_errors=%" PRIu32 " deadline_errors=%" PRIu32
+                    " fb_status=%08" PRIx32 " fb_ar=%" PRIu32
+                    " fb_r=%" PRIu32 " fb_stall=%" PRIu32
+                    "\n",
+                    start_frame, frame, status, build_cycles,
+                    hardware_max_build_cycles, read_bytes,
+                    astra_mmio_read(device,
+                        ASTRA_REG_SPRITE_PIXELS_ADMITTED) - initial->admitted,
+                    astra_mmio_read(device,
+                        ASTRA_REG_SPRITE_PIXELS_DROPPED) - initial->dropped,
+                    astra_mmio_read(device,
+                        ASTRA_REG_SPRITE_OVERFLOW_COUNT) - initial->overflow,
+                    astra_mmio_read(device, ASTRA_REG_SPRITE_AXI_ERRORS) -
+                        initial->axi_errors,
+                    astra_mmio_read(device,
+                        ASTRA_REG_SPRITE_DEADLINE_ERRORS) -
+                        initial->deadline_errors,
+                    astra_mmio_read(device, ASTRA_REG_FB_AXI_STATUS),
+                    astra_mmio_read(device, ASTRA_REG_FB_AXI_AR_ACCEPTED) -
+                        initial->fb_ar_accepted,
+                    astra_mmio_read(device, ASTRA_REG_FB_AXI_R_ACCEPTED) -
+                        initial->fb_r_accepted,
+                    astra_mmio_read(device,
+                        ASTRA_REG_FB_AXI_RESPONSE_STALL_CYCLES) -
+                        initial->fb_stall_cycles);
             return -1;
         }
         if (sleep_nanoseconds(50000L) != 0)
             return -1;
     }
 
+    /* Switch to an empty scene at vblank before reading cumulative counters. */
+    if (quiesce_sprites(device, &generation) != 0)
+        return -1;
     metrics->admitted =
         astra_mmio_read(device, ASTRA_REG_SPRITE_PIXELS_ADMITTED) -
         initial->admitted;
@@ -643,16 +680,10 @@ static int monitor_phase(const struct astra_graphics_device *device,
 
 static int validate_stress_metrics(const struct phase_metrics *metrics)
 {
-    const uint32_t complete_frames = metrics->frames == 0u ?
-        0u : metrics->frames - 1u;
-    const uint32_t maximum_frames = metrics->frames + 1u;
-    const uint32_t admitted_per_frame =
-        ASTRA_SPRITE_PIXELS_PER_LINE * ASTRA_FRAMEBUFFER_HEIGHT;
-    const uint32_t dropped_per_frame =
-        (SPRITE_COUNT * STRESS_DEST_WIDTH -
-         ASTRA_SPRITE_PIXELS_PER_LINE) * ASTRA_FRAMEBUFFER_HEIGHT;
-    const uint32_t minimum_overflow =
-        ASTRA_FRAMEBUFFER_HEIGHT * complete_frames;
+    const uint32_t admitted_per_line = ASTRA_SPRITE_PIXELS_PER_LINE;
+    const uint32_t dropped_per_line =
+        SPRITE_COUNT * STRESS_DEST_WIDTH - admitted_per_line;
+    const uint32_t processed_lines = metrics->overflow;
 
     if ((metrics->status_or & ASTRA_SPRITE_STATUS_SLOT_VALID_MASK) == 0u ||
         (metrics->status_or & (ASTRA_SPRITE_STATUS_FETCH_ERROR |
@@ -661,12 +692,9 @@ static int validate_stress_metrics(const struct phase_metrics *metrics)
         metrics->max_build_cycles >= BUILD_CYCLE_LIMIT ||
         metrics->hardware_max_build_cycles >= BUILD_CYCLE_LIMIT ||
         metrics->max_read_bytes != ASTRA_SPRITE_PIXELS_PER_LINE ||
-        metrics->admitted < admitted_per_frame * complete_frames ||
-        metrics->admitted > admitted_per_frame * maximum_frames ||
-        metrics->dropped < dropped_per_frame * complete_frames ||
-        metrics->dropped > dropped_per_frame * maximum_frames ||
-        metrics->overflow < minimum_overflow ||
-        metrics->overflow > ASTRA_FRAMEBUFFER_HEIGHT * maximum_frames ||
+        processed_lines < PHASE_FRAMES * STRESS_DEST_HEIGHT ||
+        metrics->admitted != processed_lines * admitted_per_line ||
+        metrics->dropped != processed_lines * dropped_per_line ||
         metrics->axi_errors != 0u ||
         metrics->deadline_errors != 0u) {
         fprintf(stderr,
@@ -726,16 +754,7 @@ static int validate_dimension_metrics(
     const uint32_t dropped_width =
         dimension_dropped_width_sum(shapes);
     const uint32_t expected_read = dimension_admitted_read_sum(shapes);
-    const uint32_t complete_frames = metrics->frames == 0u ?
-        0u : metrics->frames - 1u;
-    const uint32_t maximum_frames = metrics->frames + 1u;
-    /* Counter snapshots can bracket partial first and last frames. */
-    const uint32_t admitted_per_frame = admitted_width *
-        ASTRA_FRAMEBUFFER_HEIGHT;
-    const uint32_t dropped_per_frame = dropped_width *
-        ASTRA_FRAMEBUFFER_HEIGHT;
-    const uint32_t minimum_admitted =
-        admitted_per_frame * complete_frames;
+    const uint32_t processed_lines = metrics->overflow;
 
     if ((metrics->status_or & ASTRA_SPRITE_STATUS_SLOT_VALID_MASK) == 0u ||
         (metrics->status_or & (ASTRA_SPRITE_STATUS_FETCH_ERROR |
@@ -744,12 +763,9 @@ static int validate_dimension_metrics(
         metrics->max_build_cycles >= BUILD_CYCLE_LIMIT ||
         metrics->hardware_max_build_cycles >= BUILD_CYCLE_LIMIT ||
         metrics->max_read_bytes != expected_read ||
-        metrics->admitted < admitted_per_frame * complete_frames ||
-        metrics->admitted > admitted_per_frame * maximum_frames ||
-        metrics->dropped < dropped_per_frame * complete_frames ||
-        metrics->dropped > dropped_per_frame * maximum_frames ||
-        metrics->overflow < ASTRA_FRAMEBUFFER_HEIGHT * complete_frames ||
-        metrics->overflow > ASTRA_FRAMEBUFFER_HEIGHT * maximum_frames ||
+        processed_lines < PHASE_FRAMES * ASTRA_FRAMEBUFFER_HEIGHT ||
+        metrics->admitted != processed_lines * admitted_width ||
+        metrics->dropped != processed_lines * dropped_width ||
         metrics->axi_errors != 0u ||
         metrics->deadline_errors != 0u) {
         fprintf(stderr,
@@ -765,7 +781,7 @@ static int validate_dimension_metrics(
                 metrics->max_build_cycles,
                 metrics->hardware_max_build_cycles,
                 metrics->max_read_bytes, expected_read,
-                metrics->admitted, minimum_admitted,
+                metrics->admitted, processed_lines * admitted_width,
                 metrics->dropped, metrics->overflow,
                 metrics->axi_errors, metrics->deadline_errors);
         return -1;
@@ -863,12 +879,18 @@ int main(int argc, char **argv)
     uint32_t capabilities;
     unsigned scene;
     bool sprites_accessible = false;
+    uint8_t *shape_image = NULL;
+    uint8_t *shape_readback = NULL;
     int result = EXIT_FAILURE;
 
     astra_graphics_device_init(&device);
     astra_graphics_memory_map_init(&shape_map);
     if (argc != 1) {
         fprintf(stderr, "usage: %s\n", argv[0]);
+        return EXIT_FAILURE;
+    }
+    if (setvbuf(stdout, NULL, _IOLBF, 0) != 0) {
+        perror("configure sprite certification output");
         return EXIT_FAILURE;
     }
 
@@ -888,6 +910,10 @@ int main(int argc, char **argv)
         goto done;
     }
     sprites_accessible = true;
+    /* This tool owns the complete scene while certifying sprite throughput. */
+    astra_mmio_write(&device, ASTRA_REG_FB_CONTROL, 0u);
+    astra_mmio_write(&device, ASTRA_REG_TILE0_CONTROL, 0u);
+    astra_mmio_write(&device, ASTRA_REG_TILE1_CONTROL, 0u);
     if (quiesce_sprites(&device, &generation) != 0)
         goto done;
     variable_end = prepare_variable_shapes(variable_shapes);
@@ -905,10 +931,22 @@ int main(int argc, char **argv)
         goto done;
     }
 
-    write_max_shapes(shape_map.data);
-    write_variable_shapes(shape_map.data, variable_shapes);
-    if (verify_max_shapes(shape_map.data) != 0 ||
-        verify_variable_shapes(shape_map.data, variable_shapes) != 0)
+    shape_image = calloc(1u, variable_end);
+    shape_readback = malloc(variable_end);
+    if (shape_image == NULL || shape_readback == NULL) {
+        perror("allocate sprite shape transfer buffers");
+        goto done;
+    }
+    printf("ASTRA_SPRITE_TRANSFER_BEGIN bytes=%" PRIu32 "\n",
+           variable_end);
+    write_max_shapes(shape_image);
+    write_variable_shapes(shape_image, variable_shapes);
+    astra_graphics_memory_copy_to(shape_map.data, shape_image, variable_end);
+    astra_graphics_memory_barrier();
+    astra_graphics_memory_copy_from(shape_readback, shape_map.data,
+                                    variable_end);
+    if (verify_max_shapes(shape_readback) != 0 ||
+        verify_variable_shapes(shape_readback, variable_shapes) != 0)
         goto done;
     printf("ASTRA_SPRITE_MAX_SHAPES PASS base=%08x bytes=%u "
            "shapes=%u geometry=%ux%u pitch=%u\n",
@@ -920,16 +958,17 @@ int main(int argc, char **argv)
            variable_end - MAX_SHAPE_STORAGE_BYTES,
            VARIABLE_SCENE_COUNT);
 
+    printf("ASTRA_SPRITE_STRESS_BEGIN\n");
     if (wait_for_sprite_write_ready(&device, COMMIT_TIMEOUT_NS) != 0)
         goto done;
     program_palettes(&device);
+    capture_counters(&device, &counters);
     program_stress_scene(&device);
     astra_mmio_write(&device, ASTRA_REG_SPRITE_CONTROL, 1u);
     astra_mmio_write(&device, ASTRA_REG_GLOBAL_CONTROL, 1u);
     if (astra_graphics_scene_commit(&device, COMMIT_TIMEOUT_NS,
                                     &generation) != 0)
         goto done;
-    capture_counters(&device, &counters);
     if (monitor_phase(&device, PHASE_FRAMES, &counters, &metrics) != 0 ||
         validate_stress_metrics(&metrics) != 0)
         goto done;
@@ -937,11 +976,11 @@ int main(int argc, char **argv)
 
     if (wait_for_sprite_write_ready(&device, COMMIT_TIMEOUT_NS) != 0)
         goto done;
+    capture_counters(&device, &counters);
     program_hidden_scene(&device);
     if (astra_graphics_scene_commit(&device, COMMIT_TIMEOUT_NS,
                                     &generation) != 0)
         goto done;
-    capture_counters(&device, &counters);
     if (monitor_phase(&device, PHASE_FRAMES, &counters, &metrics) != 0 ||
         validate_hidden_metrics(&metrics) != 0)
         goto done;
@@ -949,11 +988,11 @@ int main(int argc, char **argv)
 
     if (wait_for_sprite_write_ready(&device, COMMIT_TIMEOUT_NS) != 0)
         goto done;
+    capture_counters(&device, &counters);
     program_clip_scene(&device);
     if (astra_graphics_scene_commit(&device, COMMIT_TIMEOUT_NS,
                                     &generation) != 0)
         goto done;
-    capture_counters(&device, &counters);
     if (monitor_phase(&device, PHASE_FRAMES, &counters, &metrics) != 0 ||
         validate_grid_metrics(&metrics) != 0)
         goto done;
@@ -961,11 +1000,11 @@ int main(int argc, char **argv)
 
     if (wait_for_sprite_write_ready(&device, COMMIT_TIMEOUT_NS) != 0)
         goto done;
+    capture_counters(&device, &counters);
     program_grid_scene(&device);
     if (astra_graphics_scene_commit(&device, COMMIT_TIMEOUT_NS,
                                     &generation) != 0)
         goto done;
-    capture_counters(&device, &counters);
     if (monitor_phase(&device, PHASE_FRAMES, &counters, &metrics) != 0 ||
         validate_grid_metrics(&metrics) != 0)
         goto done;
@@ -975,11 +1014,11 @@ int main(int argc, char **argv)
         if (wait_for_sprite_write_ready(&device,
                                         COMMIT_TIMEOUT_NS) != 0)
             goto done;
+        capture_counters(&device, &counters);
         program_dimension_scene(&device, variable_shapes[scene]);
         if (astra_graphics_scene_commit(&device, COMMIT_TIMEOUT_NS,
                                         &generation) != 0)
             goto done;
-        capture_counters(&device, &counters);
         if (monitor_phase(&device, PHASE_FRAMES,
                           &counters, &metrics) != 0 ||
             validate_dimension_metrics(&metrics,
@@ -992,12 +1031,12 @@ int main(int argc, char **argv)
 
     if (wait_for_sprite_write_ready(&device, COMMIT_TIMEOUT_NS) != 0)
         goto done;
+    capture_counters(&device, &counters);
     program_variable_grid_scene(
         &device, variable_shapes[VARIABLE_SCENE_COUNT - 1u]);
     if (astra_graphics_scene_commit(&device, COMMIT_TIMEOUT_NS,
                                     &generation) != 0)
         goto done;
-    capture_counters(&device, &counters);
     if (monitor_phase(&device, PHASE_FRAMES, &counters, &metrics) != 0 ||
         validate_variable_grid_metrics(&metrics) != 0)
         goto done;
@@ -1016,6 +1055,8 @@ done:
         fprintf(stderr, "failed to restore the quiescent sprite scene\n");
         result = EXIT_FAILURE;
     }
+    free(shape_readback);
+    free(shape_image);
     astra_graphics_memory_map_close(&shape_map);
     astra_graphics_device_close(&device);
     return result;

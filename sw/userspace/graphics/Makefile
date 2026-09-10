@@ -73,7 +73,7 @@ $(MONO_FONT_HEADER): $(MONO_FONT_SOURCE) $(UI_FONT_TOOL)
 	@mkdir -p $(@D)
 	python3 $(UI_FONT_TOOL) emit-c --prefix astra_mono $< $@
 
-build/m68k/%.o: src/%.c include/astra/surface.h \
+build/m68k/%.o: src/%.c ../../../ndk/include/astra/surface.h \
 	../../../ndk/include/astra/window.h ../../include/astra/gui.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(TARGET_FLAGS) \
@@ -87,12 +87,14 @@ build/m68k/pic/render_builder.o: $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 	../../../fpga/arty/linux/astra_render_protocol.h
 
 build/m68k/library/graphics_library.o: src/graphics_library.c \
-		include/astra/graphics_library.h ../../include/astra/library.h
+		../../../ndk/include/astra/graphics_library.h \
+		../../include/astra/library.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) -c $< -o $@
 
 build/m68k/library/font_library.o: src/font_library.c \
-		include/astra/font_library.h ../../include/astra/library.h
+		../../../ndk/include/astra/font_library.h \
+		../../include/astra/library.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) -Ibuild/generated \
 		-c $< -o $@
@@ -141,7 +143,7 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	$(call ASTRA_CHECK_DSO,$(GRAPHICS_LIBRARY) $(FONT_LIBRARY))
 
 $(HOST_TEST): src/surface.c src/render_builder.c tests/test_surface.c \
-		include/astra/surface.h include/astra/render_builder.h \
+		../../../ndk/include/astra/surface.h include/astra/render_builder.h \
 		src/rounded.h $(FONT_HEADER)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) \

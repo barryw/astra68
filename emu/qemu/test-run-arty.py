@@ -26,7 +26,7 @@ def writable(root):
             path.chmod(path.stat().st_mode | 0o200)
 
 
-def fixture(directory, delay, output="", status=0):
+def fixture(directory, delay, output="", status=0, mailbox_bytes=8193):
     container = pathlib.Path(directory)
     root = container / "release"
     observed = container / "observed"
@@ -39,12 +39,14 @@ def fixture(directory, delay, output="", status=0):
     (root / "storage-terminal.img").write_bytes(b"disk")
     shutil.copyfile(RELEASE_TOOL, root / "bin/astra-release.py")
     write_executable(root / "bin/astra-terminal-display", f"""#!/bin/sh
+if [ "$1" = --mailbox-bytes ]; then echo {mailbox_bytes}; exit 0; fi
 python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))' >"{observed}/display.affinity"
 trap '' TERM
 while :; do sleep 1; done
 """)
     write_executable(root / "qemu/bin/qemu-system-m68k-astra", f"""#!/bin/sh
 test -d "$ASTRA_HOSTFS_ROOT" || exit 97
+stat -c %s "$ASTRA_DISPLAY_MAILBOX_PATH" >"{observed}/mailbox.size"
 printf '%s\n' "$ASTRA_HOSTFS_ROOT" >"{observed}/hostfs.root"
 printf '%s\\n' "$@" >"{observed}/qemu.args"
 sleep {delay}
@@ -122,6 +124,9 @@ def main():
             str(display_cpu)
         assert (observed / "hotplug.affinity").read_text().strip() == \
             str(aux_cpu)
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        mailbox_size = ((8193 + page_size - 1) // page_size) * page_size
+        assert int((observed / "mailbox.size").read_text()) == mailbox_size
         storage = qemu_args[qemu_args.index("-drive") + 1]
         assert storage == "if=none,format=raw,file=%s" % (
             observed / "state/storage-terminal.img")

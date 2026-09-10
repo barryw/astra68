@@ -9,6 +9,7 @@
  * include a narrower component header when minimizing dependencies matters.
  */
 
+#include <astra/compiler.h>
 #include <astra/version.h>
 #include <astra/attributes.h>
 #include <astra/types.h>
@@ -19,9 +20,15 @@
 #include <astra/area.h>
 #include <astra/datetime.h>
 #include <astra/port.h>
+#include <astra/program.h>
 #include <astra/bulk_ring.h>
 #include <astra/front_panel.h>
 #include <astra/filesystem_kit.h>
+#include <astra/posix.h>
+#include <astra/runtime.h>
+#include <astra/stream.h>
+#include <astra/keymap.h>
+#include <astra/terminal.h>
 #include <astra/events_kit.h>
 #include <astra/font.h>
 #include <astra/graphics.h>

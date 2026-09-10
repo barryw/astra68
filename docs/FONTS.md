@@ -41,10 +41,12 @@ system ROM image, or the font service has failed.
 - Covers printable ASCII, Latin-1 characters needed by diagnostics, CP437 box
   drawing, arrows, and a replacement glyph.
 - Exactly 256 glyphs x 16 bytes = 4096 bytes for the bitmap bank.
-- The planned source is the BSD-2-Clause Spleen 8x16 bitmap design, packaged as
-  Astra Rescue Mono with its copyright and license retained.
-- The existing 8x8-doubled POST font remains the implementation until the new
-  bank has visual and hardware acceptance.
+- The source is the BSD-2-Clause Spleen 8x16 bitmap design, packaged as Astra
+  Rescue Mono with its copyright and license retained.
+- POST uses the same validated AFNT strike as normal Astra Mono and generates
+  its 256-entry CP437 hardware image during the FPGA build. The cell contract
+  is an 8-pixel advance, 12-pixel ascent, and 4-pixel descent; integer hardware
+  enlargement scales the bitmap and every metric together.
 
 The BRAM face is intentionally small and monochrome. It is an emergency output
 facility, not the normal desktop typography system.

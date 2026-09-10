@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
-// Load the fixed 720p boot surface, verify it, and publish real boot stages.
+// Load the fixed 1080p boot surface, verify it, and publish real boot stages.
 
 #define _POSIX_C_SOURCE 200809L
 #define _FILE_OFFSET_BITS 64
 
 #include "astra_boot_text.h"
 #include "astra_graphics_hw.h"
+
+#include <astra/graphics.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -115,11 +117,22 @@ static int verify_surface(volatile const uint8_t *framebuffer,
 
 static int present_surface(const struct astra_graphics_device *device)
 {
+    AstraDisplayMode mode = ASTRA_DISPLAY_MODE_INIT;
+    AstraDisplayLayout layout;
     const uint32_t framebuffer_size =
         (ASTRA_FRAMEBUFFER_HEIGHT << 16) | ASTRA_FRAMEBUFFER_WIDTH;
     const uint32_t framebuffer_control = 0x00000003u;
     const uint64_t timeout_ns = UINT64_C(2000000000);
     uint32_t generation;
+
+    mode.width = ASTRA_FRAMEBUFFER_WIDTH;
+    mode.height = ASTRA_FRAMEBUFFER_HEIGHT;
+    if (astra_display_layout_calculate(
+            &mode, ASTRA_FRAMEBUFFER_WIDTH, ASTRA_FRAMEBUFFER_HEIGHT,
+            &layout) != ASTRA_OK) {
+        fprintf(stderr, "native display mode rejected\n");
+        return -1;
+    }
 
     if (astra_mmio_read(device, ASTRA_REG_ARENA_BASE) !=
             ASTRA_GRAPHICS_ARENA_BASE ||
@@ -137,6 +150,20 @@ static int present_surface(const struct astra_graphics_device *device)
     astra_mmio_write(device, ASTRA_REG_FB_VIEWPORT_Y, 0u);
     astra_mmio_write(device, ASTRA_REG_FB_CONTROL, framebuffer_control);
     astra_mmio_write(device, ASTRA_REG_FB_KEY, 0u);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_SOURCE_SIZE,
+                     ((uint32_t)layout.source_height << 16) |
+                         layout.source_width);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_CROP_ORIGIN,
+                     ((uint32_t)layout.crop_y << 16) | layout.crop_x);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_CROP_SIZE,
+                     ((uint32_t)layout.crop_height << 16) |
+                         layout.crop_width);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_VIEWPORT_ORIGIN,
+                     ((uint32_t)layout.viewport_y << 16) |
+                         layout.viewport_x);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_VIEWPORT_SIZE,
+                     ((uint32_t)layout.viewport_height << 16) |
+                         layout.viewport_width);
     astra_mmio_write(device, ASTRA_REG_TILE0_CONTROL, 0u);
     astra_mmio_write(device, ASTRA_REG_TILE1_CONTROL, 0u);
     astra_mmio_write(device, ASTRA_REG_GLOBAL_CONTROL, 1u);
@@ -188,7 +215,7 @@ int main(int argc, char **argv)
 
     astra_graphics_device_init(&device);
     if (argc != 2) {
-        fprintf(stderr, "usage: %s <1280x720-big-endian-rgb565>\n",
+        fprintf(stderr, "usage: %s <1920x1080-big-endian-rgb565>\n",
                 argv[0]);
         return EXIT_FAILURE;
     }

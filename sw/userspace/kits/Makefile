@@ -22,34 +22,24 @@ EVENTS_STAMP := build/.Events.kit.stamp
 MESSAGING_STAMP := build/.Messaging.kit.stamp
 NETWORK_STAMP := build/.Network.kit.stamp
 CONFIGURATION_STAMP := build/.Configuration.kit.stamp
+LIBRARIES := $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) $(FILESYSTEM_LIBRARY) \
+	$(INTERFACE_LIBRARY) $(INPUT_LIBRARY) $(EVENTS_LIBRARY) \
+	$(MESSAGING_LIBRARY) $(NETWORK_LIBRARY) $(CONFIG_LIBRARY)
+OWNER_DIRS := ../graphics ../vfs ../interface ../events ../messaging \
+	../network ../config
 
 all: $(GRAPHICS_STAMP) $(FILESYSTEM_STAMP) $(INTERFACE_STAMP) \
 	$(EVENTS_STAMP) $(MESSAGING_STAMP) $(NETWORK_STAMP) \
 	$(CONFIGURATION_STAMP)
 
-$(GRAPHICS_LIBRARY) $(FONT_LIBRARY):
-	$(MAKE) -C ../graphics all
-
-$(FILESYSTEM_LIBRARY):
-	$(MAKE) -C ../vfs all
-
-$(INTERFACE_LIBRARY) $(INPUT_LIBRARY):
-	$(MAKE) -C ../interface all
-
-$(EVENTS_LIBRARY):
-	$(MAKE) -C ../events all
-
-$(MESSAGING_LIBRARY):
-	$(MAKE) -C ../messaging all
-
-$(NETWORK_LIBRARY): FORCE
-	$(MAKE) -C ../network all
-
-$(CONFIG_LIBRARY): FORCE
-	$(MAKE) -C ../config all
-
-$(BUNDLE_TOOL): FORCE
+owners:
+	@for directory in $(OWNER_DIRS); do \
+		$(MAKE) -C $$directory all || exit $$?; \
+	done
 	$(MAKE) -C ../../../tools all
+
+$(LIBRARIES) $(BUNDLE_TOOL): | owners
+	@test -s $@
 
 $(GRAPHICS_STAMP): Graphics.kit/manifest $(GRAPHICS_LIBRARY) \
 		$(FONT_LIBRARY) $(BUNDLE_TOOL)
@@ -136,6 +126,4 @@ sanitize analyze:
 clean:
 	rm -rf build
 
-FORCE:
-
-.PHONY: all test sanitize analyze clean FORCE
+.PHONY: all owners test sanitize analyze clean

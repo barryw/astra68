@@ -41,7 +41,7 @@ typedef struct AstraBundleManifest {
     char name[ASTRA_BUNDLE_NAME_MAX];
     char executable[ASTRA_BUNDLE_PATH_MAX];
     char icon[ASTRA_BUNDLE_PATH_MAX];
-    AstraBundleLibrary requires[ASTRA_BUNDLE_LIBRARY_MAX];
+    AstraBundleLibrary requirements[ASTRA_BUNDLE_LIBRARY_MAX];
     AstraBundleLibrary provides[ASTRA_BUNDLE_LIBRARY_MAX];
     char capabilities[ASTRA_BUNDLE_CAPABILITY_MAX][ASTRA_BUNDLE_NAME_MAX];
     uint16_t require_count;

@@ -79,7 +79,10 @@ mkdir -p "$INCOMING/astra/graphics" "$INCOMING/astra/audio" \
     "$INCOMING/astra/common" "$INCOMING/vendor_hdmi"
 cp "$ROOT"/fpga/arty/graphics/*.sv "$INCOMING/astra/graphics/"
 cp "$ROOT/fpga/arty/graphics/astra_render_protocol.vh" \
-    "$ROOT/fpga/arty/graphics/post_fonts.hex" "$INCOMING/astra/graphics/"
+    "$INCOMING/astra/graphics/"
+python3 "$ROOT/tools/fonts/afnt.py" emit-cp437-hex \
+    "$ROOT/sw/userspace/graphics/fonts/astra-mono.afnt" \
+    "$INCOMING/astra/graphics/post_fonts.hex"
 cp "$ROOT/fpga/arty/audio/astra_hdmi_audio.sv" "$INCOMING/astra/audio/"
 cp "$ROOT/fpga/arty/common/astra_async_fifo.sv" \
     "$ROOT/fpga/arty/common/astra_front_panel.sv" \
@@ -90,6 +93,8 @@ cp "$ROOT/fpga/arty/common/astra_async_fifo.sv" \
 cp "$ROOT/fpga/de25/astra_de25.dawf" "$INCOMING/"
 extract_resource "$HDMI_PIXEL_PLL" "$INCOMING/vendor_hdmi/sys_pll.ip" \
     "$HDMI_PIXEL_PLL_SHA256"
+python3 "$ROOT/fpga/de25/patch_vendor_pixel_pll.py" \
+    "$INCOMING/vendor_hdmi/sys_pll.ip"
 extract_resource "$HDMI_AUDIO_PLL" "$INCOMING/vendor_hdmi/av_pll.ip" \
     "$HDMI_AUDIO_PLL_SHA256"
 extract_resource "$HDMI_I2C_CONFIG" \

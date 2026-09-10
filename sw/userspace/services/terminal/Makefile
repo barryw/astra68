@@ -15,7 +15,7 @@ NDK := ../../../../ndk
 CPPFLAGS := -Iinclude -I$(NDK)/include -I../../../include -I$(RUNTIME)/include \
 	-I$(STORAGE)/include \
 	-I$(VFS)/include \
-	-I$(STREAMS)/include -I$(TERMINAL)/include \
+	-I$(STREAMS)/include \
 	-I$(GRAPHICS)/include -I$(CONFIG)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \

@@ -19,7 +19,7 @@ module astra_framebuffer_line_builder #(
 
     input  wire                         start,
     input  wire [1:0]                   build_slot,
-    input  wire [9:0]                   line_y,
+    input  wire [10:0]                  line_y,
     input  wire [1:0]                   format,
     input  wire [31:0]                  framebuffer_base,
     input  wire [31:0]                  pitch,
@@ -111,7 +111,7 @@ module astra_framebuffer_line_builder #(
 
     reg [4:0] state;
     reg [1:0] build_slot_q;
-    reg [9:0] line_y_q;
+    reg [10:0] line_y_q;
     reg [1:0] format_q;
     reg [1:0] bytes_shift_q;
     reg [2:0] bytes_per_pixel_q;
@@ -167,9 +167,9 @@ module astra_framebuffer_line_builder #(
 
     wire signed [32:0] planned_world_y =
         $signed({viewport_y_q[31], viewport_y_q}) +
-        $signed({23'd0, line_y_q});
+        $signed({22'd0, line_y_q});
     wire [13:0] wrapped_y_sum =
-        {1'b0, viewport_y_q[12:0]} + {4'd0, line_y_q};
+    {1'b0, viewport_y_q[12:0]} + {3'd0, line_y_q};
     wire viewport_x_negative = viewport_x_q[31];
     wire [31:0] viewport_x_magnitude = ~viewport_x_q + 32'd1;
     wire [31:0] planned_source_x_wide = viewport_x_negative ?
@@ -271,6 +271,8 @@ module astra_framebuffer_line_builder #(
         (m_axi_rlast || expected_response_last);
     wire beat_push = response_accept && state == ST_SEGMENT;
 
+    reg beat_active;
+
     assign axi_debug_status = {
         issue_beats_remaining != 11'd0,
         beat_active,
@@ -289,15 +291,17 @@ module astra_framebuffer_line_builder #(
         state
     };
 
-    reg beat_active;
     reg first_beat;
     // Keep this register outside the BRAM output stage. The integrated route
     // otherwise absorbs it into DO_REG and leaves byte selection on the
     // BRAM's 2.45 ns clock-to-output path.
     (* dont_touch = "yes" *) reg [63:0] active_beat;
     reg [2:0] active_byte;
-    wire beat_pop = state == ST_SEGMENT && !beat_active &&
-                    beat_count != 6'd0;
+    wire active_beat_exhausted = beat_active &&
+        segment_pixels_active_q && !segment_last_pixel_q &&
+        ({1'b0, active_byte} + {1'b0, bytes_per_pixel_q} >= 4'd8);
+    wire beat_pop = state == ST_SEGMENT && beat_count != 6'd0 &&
+                    (!beat_active || active_beat_exhausted);
 
     wire [7:0] active_byte0 = beat_byte(active_beat, active_byte);
     wire [7:0] active_byte1 = beat_byte(active_beat, active_byte + 3'd1);
@@ -366,7 +370,7 @@ module astra_framebuffer_line_builder #(
             axi_last_ar_address <= 32'd0;
             axi_response_stall_cycles <= 32'd0;
             build_slot_q <= 2'd0;
-            line_y_q <= 10'd0;
+            line_y_q <= 11'd0;
             format_q <= FORMAT_INDEX8;
             bytes_shift_q <= 2'd0;
             bytes_per_pixel_q <= 3'd1;
@@ -779,11 +783,18 @@ module astra_framebuffer_line_builder #(
                             segment_last_pixel_q <=
                                 segment_pixels_remaining == 11'd2;
                             if ({1'b0, active_byte} +
-                                {1'b0, bytes_per_pixel_q} >= 4'd8)
-                                beat_active <= 1'b0;
-                            else
+                                {1'b0, bytes_per_pixel_q} >= 4'd8) begin
+                                if (beat_count != 6'd0) begin
+                                    active_beat <= beat_fifo[beat_read_ptr];
+                                    active_byte <= 3'd0;
+                                    beat_active <= 1'b1;
+                                end else begin
+                                    beat_active <= 1'b0;
+                                end
+                            end else begin
                                 active_byte <= active_byte +
                                     bytes_per_pixel_q;
+                            end
                         end
                     end
                 end

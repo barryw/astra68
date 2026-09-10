@@ -32,7 +32,7 @@ module tb_astra_framebuffer_line_builder;
     reg pixel_reset = 1'b1;
     reg start = 1'b0;
     reg [1:0] build_slot = 2'd0;
-    reg [9:0] line_y = 10'd0;
+    reg [10:0] line_y = 11'd0;
     reg [1:0] format = FORMAT_INDEX8;
     reg [31:0] framebuffer_base = INDEX_BASE;
     reg [31:0] pitch = INDEX_PITCH;
@@ -270,6 +270,7 @@ module tb_astra_framebuffer_line_builder;
     reg inject_bad_id = 1'b0;
     reg inject_bad_resp = 1'b0;
     reg inject_bad_last = 1'b0;
+    reg fast_responses = 1'b0;
     reg force_simultaneous_turnover = 1'b0;
     reg turnover_armed = 1'b0;
 
@@ -355,7 +356,8 @@ module tb_astra_framebuffer_line_builder;
                 end else begin
                     response_index <= response_index + 8'd1;
                     response_address <= response_address + 32'd8;
-                    response_delay <= 1 + (model_cycle & 1);
+                    response_delay <= fast_responses ? 0 :
+                        1 + (model_cycle & 1);
                 end
             end
 
@@ -365,7 +367,8 @@ module tb_astra_framebuffer_line_builder;
                 response_address <= command_address[command_read];
                 response_length <= command_length[command_read];
                 response_index <= 8'd0;
-                response_delay <= 12 + (model_cycle & 3);
+                response_delay <= fast_responses ? 0 :
+                    12 + (model_cycle & 3);
                 command_read <= command_read + 1;
             end else if (response_active && !m_axi_rvalid &&
                          emit_responses) begin
@@ -585,6 +588,16 @@ module tb_astra_framebuffer_line_builder;
         $display("XRGB8888 byte-order/outstanding pass cycles=%0d bytes=%0d outstanding=%0d turnovers=%0d",
                  build_cycles, read_bytes, maximum_outstanding,
                  simultaneous_turnovers);
+
+        // A streaming memory slave must sustain one decoded pixel per cycle
+        // after the first beat, including XRGB8888's two-pixel beats.
+        fast_responses = 1'b1;
+        launch_and_wait(1, MAX_BUILD_CYCLES);
+        fast_responses = 1'b0;
+        if (build_cycles >= 32'd400)
+            $fatal(1, "XRGB8888 streaming throughput failed: cycles=%0d",
+                   build_cycles);
+        $display("XRGB8888 streaming pass cycles=%0d", build_cycles);
 
         // Wrapping splits the line into two bounded contiguous regions and
         // wraps the row independently.

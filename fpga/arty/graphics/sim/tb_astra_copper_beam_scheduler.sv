@@ -10,15 +10,22 @@ module tb_astra_copper_beam_scheduler;
     reg copper_enabled = 1'b1;
     reg copper_running = 1'b1;
     reg copper_waiting = 1'b0;
+    reg [10:0] source_width = 11'd1920;
+    reg [10:0] source_height = 11'd1080;
+    reg [10:0] last_visible_source_y = 11'd1079;
     reg line_prepare_valid = 1'b0;
-    reg [9:0] line_prepare_y = 10'd0;
+    reg [10:0] line_prepare_y = 11'd0;
     wire line_prepare_ready;
-    wire [10:0] beam_x;
-    wire [9:0] beam_y;
+    wire [11:0] beam_x;
+    wire [10:0] beam_y;
 
-    astra_copper_beam_scheduler dut (.*);
+    astra_copper_beam_scheduler #(
+        .OUTPUT_HEIGHT(1080),
+        .TOTAL_WIDTH(2200),
+        .TOTAL_HEIGHT(1125)
+    ) dut (.*);
 
-    task automatic request_line(input [9:0] line);
+    task automatic request_line(input [10:0] line);
         begin
             @(negedge clk);
             line_prepare_y = line;
@@ -60,19 +67,19 @@ module tb_astra_copper_beam_scheduler;
         line_prepare_valid = 1'b0;
         copper_waiting = 1'b0;
 
-        request_line(10'd1);
-        if (beam_x != 11'd1649 || beam_y != 10'd0)
+        request_line(11'd1);
+        if (beam_x != 12'd1919 || beam_y != 11'd0)
             $fatal(1, "line one did not advance through line zero");
 
-        request_line(10'd719);
-        if (beam_x != 11'd1649 || beam_y != 10'd718)
+        request_line(11'd1079);
+        if (beam_x != 12'd1919 || beam_y != 11'd1078)
             $fatal(1, "last line preparation coordinate mismatch");
         @(negedge clk);
-        if (beam_x != 11'd1649 || beam_y != 10'd749)
+        if (beam_x != 12'd1919 || beam_y != 11'd1079)
             $fatal(1, "vertical blank was not finalized");
 
         copper_enabled = 1'b0;
-        line_prepare_y = 10'd8;
+        line_prepare_y = 11'd8;
         line_prepare_valid = 1'b1;
         @(negedge clk);
         #1;

@@ -44,9 +44,10 @@ GRAPHICS_FONT_HEADERS := $(GRAPHICS_GENERATED)/astra_font8x8.inc \
 	$(GRAPHICS_GENERATED)/astra_ui_font.inc \
 	$(GRAPHICS_GENERATED)/astra_mono_font.inc
 SPLASH_PACKER := ../../../sw/boot/pack_arty_splash.py
-SPLASH_SOURCE := ../../../sw/boot/assets/astra_boot_splash_1280x720_blank.png
+SPLASH_SOURCE := ../../../sw/boot/assets/astra_boot_splash_1920x1080_blank.png
 ASTRA_INCLUDE := ../../../sw/include
 NDK_INCLUDE := ../../../ndk/include
+DISPLAY_MODE_SOURCE := ../../../ndk/src/display_mode.c
 PROTOCOL_SPEC := ../graphics/protocol/astra_render_v1.json
 PROTOCOL_GENERATOR := ../graphics/protocol/generate_protocol.py
 BASE_CFLAGS := -std=c11 -O2 -pipe -Wall -Wextra -Werror -Wformat=2 \
@@ -70,10 +71,12 @@ $(TIME_SYNC_TARGET): astra_time_sync.c
 	mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections $< $(LDFLAGS) -o $@
 
-$(BOOT_TARGET): astra_graphics_boot.c $(COMMON_SOURCES) $(COMMON_HEADERS)
+$(BOOT_TARGET): astra_graphics_boot.c $(COMMON_SOURCES) $(COMMON_HEADERS) \
+		$(DISPLAY_MODE_SOURCE)
 	mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections \
-		astra_graphics_boot.c $(COMMON_SOURCES) \
+	$(CC) $(CFLAGS) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
+		-ffunction-sections -fdata-sections \
+		astra_graphics_boot.c $(COMMON_SOURCES) $(DISPLAY_MODE_SOURCE) \
 		$(LDFLAGS) -o $@
 
 $(STATUS_TARGET): astra_boot_status.c $(COMMON_SOURCES) $(COMMON_HEADERS)
@@ -85,15 +88,17 @@ $(STATUS_TARGET): astra_boot_status.c $(COMMON_SOURCES) $(COMMON_HEADERS)
 $(SPRITE_TARGET): astra_sprite_certify.c astra_graphics_hw.c \
 		astra_graphics_hw.h $(NDK_INCLUDE)/astra/graphics.h
 	mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -I$(NDK_INCLUDE) -ffunction-sections -fdata-sections \
+	$(CC) $(CFLAGS) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
+		-ffunction-sections -fdata-sections \
 		astra_sprite_certify.c astra_graphics_hw.c \
 		$(LDFLAGS) -o $@
 
 $(RENDER_TARGET): astra_render_certify.c astra_graphics_hw.c \
-		astra_graphics_hw.h astra_render_protocol.h
+		astra_graphics_hw.h astra_render_protocol.h $(DISPLAY_MODE_SOURCE)
 	mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections \
-		astra_render_certify.c astra_graphics_hw.c \
+	$(CC) $(CFLAGS) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
+		-ffunction-sections -fdata-sections \
+		astra_render_certify.c astra_graphics_hw.c $(DISPLAY_MODE_SOURCE) \
 		$(LDFLAGS) -o $@
 
 $(COPPER_TARGET): astra_copper_certify.c astra_graphics_hw.c \
@@ -130,14 +135,17 @@ $(TERMINAL_TARGET): astra_terminal_display.c $(COMMON_SOURCES) \
 		$(LDFLAGS) -o $@
 
 analyze: astra_render_protocol.h $(GRAPHICS_FONT_HEADERS)
-	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only \
-		astra_graphics_boot.c $(COMMON_SOURCES)
+	$(CC) $(CFLAGS) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
+		-fanalyzer -fsyntax-only \
+		astra_graphics_boot.c $(COMMON_SOURCES) $(DISPLAY_MODE_SOURCE)
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only \
 		astra_boot_status.c $(COMMON_SOURCES)
-	$(CC) $(CFLAGS) -I$(NDK_INCLUDE) -fanalyzer -fsyntax-only \
+	$(CC) $(CFLAGS) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
+		-fanalyzer -fsyntax-only \
 		astra_sprite_certify.c astra_graphics_hw.c
-	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only \
-		astra_render_certify.c astra_graphics_hw.c
+	$(CC) $(CFLAGS) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
+		-fanalyzer -fsyntax-only \
+		astra_render_certify.c astra_graphics_hw.c $(DISPLAY_MODE_SOURCE)
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only \
 		astra_copper_certify.c astra_graphics_hw.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_audio_certify.c

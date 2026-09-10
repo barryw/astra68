@@ -1,6 +1,7 @@
 #include <astra/application.h>
 #include <astra/bundle.h>
 #include <astra/bytes.h>
+#include <astra/display.h>
 #include <astra/gui.h>
 #include <astra/graphics_kit.h>
 #include <astra/graphics_library.h>
@@ -16,9 +17,9 @@
 #include <astra/vfs_process.h>
 #include <astra/window.h>
 
-#define DESKTOP_WIDTH 1280u
+#define DESKTOP_WIDTH ASTRA_DISPLAY_WIDTH
 #define DESKTOP_TOP 34u
-#define DESKTOP_BOTTOM 678u
+#define DESKTOP_BOTTOM (ASTRA_DISPLAY_HEIGHT - 42u)
 #define DESKTOP_HEIGHT (DESKTOP_BOTTOM - DESKTOP_TOP)
 #define TERMINAL_BUNDLE_DIRECTORY "Terminal.app"
 #define TERMINAL_BUNDLE "APPS:" TERMINAL_BUNDLE_DIRECTORY

@@ -70,8 +70,7 @@ astra_image.subprocess.run = lambda command, **_kwargs: \
 astra_image.os.cpu_count = lambda: 32
 astra_image._build_current_userspace()
 userspace = os.path.join(astra_image.REPOSITORY, "sw/userspace")
-assert commands == [["make", "-C", userspace, "clean"],
-                    ["make", "-j", "32", "-C", userspace, "all"]]
+assert commands == [["make", "-j", "32", "-C", userspace, "all"]]
 astra_image.os.cpu_count = original_cpu_count
 
 astra_image.subprocess.run = lambda *_args, **_kwargs: Result(b"failed", 2)
@@ -79,7 +78,7 @@ try:
     astra_image._build_current_userspace()
     raise AssertionError("failed userspace build was accepted")
 except RuntimeError as error:
-    assert "cannot clean current userspace products: failed" == str(error)
+    assert "cannot build current userspace products: failed" == str(error)
 astra_image.subprocess.run = original_run
 commands.clear()
 

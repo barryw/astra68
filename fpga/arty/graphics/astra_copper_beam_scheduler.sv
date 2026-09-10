@@ -18,22 +18,26 @@ module astra_copper_beam_scheduler #(
     input  wire        copper_enabled,
     input  wire        copper_running,
     input  wire        copper_waiting,
+    input  wire [10:0] source_width,
+    input  wire [10:0] source_height,
+    input  wire [10:0] last_visible_source_y,
 
     input  wire        line_prepare_valid,
-    input  wire [9:0]  line_prepare_y,
+    input  wire [10:0] line_prepare_y,
     output wire        line_prepare_ready,
 
-    output reg  [10:0] beam_x,
-    output reg  [9:0]  beam_y
+    output reg  [11:0] beam_x,
+    output reg  [10:0] beam_y
 );
-    localparam [10:0] LAST_BEAM_X = TOTAL_WIDTH - 1;
-    localparam [9:0] LAST_BEAM_Y = TOTAL_HEIGHT - 1;
-    localparam [9:0] LAST_ACTIVE_Y = OUTPUT_HEIGHT - 1;
+    wire [11:0] last_beam_x = {1'b0, source_width} - 12'd1;
+    wire [10:0] last_beam_y = source_height - 11'd1;
 
     reg prepare_active_q;
-    reg [9:0] prepared_y_q;
+    reg [10:0] prepared_y_q;
     reg finalize_pending_q;
     reg copper_settled_q;
+    reg last_prepared_valid_q;
+    reg [10:0] last_prepared_y_q;
 
     wire copper_settled = !copper_enabled || !copper_running ||
                            copper_waiting;
@@ -44,11 +48,13 @@ module astra_copper_beam_scheduler #(
     always @(posedge clk) begin
         if (reset || frame_start) begin
             prepare_active_q <= 1'b0;
-            prepared_y_q <= 10'd0;
+            prepared_y_q <= 11'd0;
             finalize_pending_q <= 1'b0;
             copper_settled_q <= 1'b0;
-            beam_x <= 11'd0;
-            beam_y <= 10'd0;
+            last_prepared_valid_q <= 1'b0;
+            last_prepared_y_q <= 11'd0;
+            beam_x <= 12'd0;
+            beam_y <= 11'd0;
         end else begin
             copper_settled_q <= copper_settled;
             if (!prepare_active_q && line_prepare_valid) begin
@@ -57,13 +63,19 @@ module astra_copper_beam_scheduler #(
                 // sampled WAIT can be stale after the beam advances.
                 copper_settled_q <= !copper_enabled || !copper_running;
                 prepared_y_q <= line_prepare_y;
-                if (line_prepare_y == 10'd0) begin
-                    beam_x <= 11'd0;
-                    beam_y <= 10'd0;
+                if (last_prepared_valid_q &&
+                    line_prepare_y == last_prepared_y_q) begin
+                    // A vertically repeated row inherits the already settled
+                    // logical scanline without rewinding the virtual beam.
+                end else if (line_prepare_y == 11'd0) begin
+                    beam_x <= 12'd0;
+                    beam_y <= 11'd0;
                 end else begin
-                    beam_x <= LAST_BEAM_X;
-                    beam_y <= line_prepare_y - 10'd1;
+                    beam_x <= last_beam_x;
+                    beam_y <= line_prepare_y - 11'd1;
                 end
+                last_prepared_valid_q <= 1'b1;
+                last_prepared_y_q <= line_prepare_y;
             end
 
             if (line_prepare_ready) begin
@@ -71,7 +83,7 @@ module astra_copper_beam_scheduler #(
                 // Do not let the sampled WAIT state acknowledge the next
                 // line after advancing the virtual beam releases the copper.
                 copper_settled_q <= 1'b0;
-                if (prepared_y_q == LAST_ACTIVE_Y)
+                if (prepared_y_q == last_visible_source_y)
                     finalize_pending_q <= 1'b1;
             end
 
@@ -79,8 +91,8 @@ module astra_copper_beam_scheduler #(
             // the remaining active line and vertical blank may execute. Their
             // next-scanline writes cannot affect an already launched line.
             if (finalize_pending_q) begin
-                beam_x <= LAST_BEAM_X;
-                beam_y <= LAST_BEAM_Y;
+                beam_x <= last_beam_x;
+                beam_y <= last_beam_y;
                 finalize_pending_q <= 1'b0;
             end
         end
@@ -90,8 +102,8 @@ module astra_copper_beam_scheduler #(
     initial begin
         if (OUTPUT_HEIGHT < 1 || OUTPUT_HEIGHT > TOTAL_HEIGHT)
             $fatal(1, "invalid copper beam output height");
-        if (TOTAL_WIDTH < 1 || TOTAL_WIDTH > 2048 ||
-            TOTAL_HEIGHT < 1 || TOTAL_HEIGHT > 1024)
+        if (TOTAL_WIDTH < 1 || TOTAL_WIDTH > 4096 ||
+            TOTAL_HEIGHT < 1 || TOTAL_HEIGHT > 2048)
             $fatal(1, "copper beam dimensions exceed coordinate width");
     end
 `endif

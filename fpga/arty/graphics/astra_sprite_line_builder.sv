@@ -19,7 +19,7 @@ module astra_sprite_line_builder #(
     input  wire                         build_reset,
     input  wire                         start,
     input  wire [1:0]                   build_slot,
-    input  wire [9:0]                   line_y,
+    input  wire [10:0]                  line_y,
 
     output wire                         order_read_enable,
     output wire [5:0]                   order_read_position,
@@ -62,7 +62,7 @@ module astra_sprite_line_builder #(
     output reg  [31:0]                  deadline_error_count,
     output reg  [31:0]                  read_bytes,
     output reg  [63:0]                  overflow_bitmap,
-    output reg  [9:0]                   overflow_line,
+    output reg  [10:0]                  overflow_line,
     output reg  [31:0]                  overflow_count,
     output reg  [31:0]                  pixels_admitted,
     output reg  [31:0]                  pixels_dropped,
@@ -167,11 +167,11 @@ module astra_sprite_line_builder #(
     reg [3:0] state;
     reg start_q;
     reg [1:0] start_build_slot_q;
-    reg [9:0] start_line_y_q;
+    reg [10:0] start_line_y_q;
     reg [BUILD_COUNTER_WIDTH-1:0] build_cycles_q;
     reg [BUILD_COUNTER_WIDTH-1:0] max_build_cycles_q;
     reg [1:0] build_slot_q;
-    reg [9:0] line_y_q;
+    reg [10:0] line_y_q;
     reg [8:0] clear_quad_q;
     reg clear_active_q;
     reg [5:0] admission_position_q;
@@ -217,7 +217,7 @@ module astra_sprite_line_builder #(
     wire signed [17:0] admission_right_signed = admission_x +
         $signed({7'd0, admission_destination_width});
     wire signed [17:0] admission_line_delta =
-        $signed({8'd0, line_y_q}) - admission_y;
+        $signed({7'd0, line_y_q}) - admission_y;
     wire admission_line_visible = !admission_line_delta_full_q[17] &&
         admission_line_delta_full_q <
             $signed({7'd0, admission_destination_height_q});
@@ -312,7 +312,7 @@ module astra_sprite_line_builder #(
         $signed({1'b0, prep_screen_x_q}) -
         $signed({descriptor_word1[15], descriptor_word1[15:0]});
     wire signed [17:0] prep_line_delta =
-        $signed({8'd0, line_y_q}) -
+        $signed({7'd0, line_y_q}) -
         $signed({descriptor_word1[31], descriptor_word1[31],
                  descriptor_word1[31:16]});
     reg [20:0] prep_row_offset_q;
@@ -1311,7 +1311,7 @@ module astra_sprite_line_builder #(
             state <= S_IDLE;
             start_q <= 1'b0;
             start_build_slot_q <= 2'd0;
-            start_line_y_q <= 10'd0;
+        start_line_y_q <= 11'd0;
             prep_state <= P_IDLE;
             render_state <= R_IDLE;
             busy <= 1'b0;
@@ -1327,7 +1327,7 @@ module astra_sprite_line_builder #(
             deadline_error_count <= 32'd0;
             read_bytes <= 32'd0;
             overflow_bitmap <= 64'd0;
-            overflow_line <= 10'd0;
+            overflow_line <= 11'd0;
             overflow_count <= 32'd0;
             pixels_admitted <= 32'd0;
             pixels_dropped <= 32'd0;
@@ -1337,7 +1337,7 @@ module astra_sprite_line_builder #(
             collision_current_frame_q <= 32'd0;
             collision_rotate_frame_q <= 1'b0;
             build_slot_q <= 2'd0;
-            line_y_q <= 10'd0;
+        line_y_q <= 11'd0;
             clear_quad_q <= 9'd0;
             clear_active_q <= 1'b0;
             admission_position_q <= 6'd0;
@@ -1833,7 +1833,7 @@ module astra_sprite_line_builder #(
                             slot_valid[start_build_slot_q] <= 1'b0;
                             line_y_q <= start_line_y_q;
                             collision_rotate_frame_q <=
-                                start_line_y_q == 10'd0;
+        start_line_y_q == 11'd0;
                             clear_quad_q <= 9'd0;
                             clear_active_q <= 1'b1;
                             admission_position_q <= 6'd0;
@@ -1848,7 +1848,7 @@ module astra_sprite_line_builder #(
                             prep_state <= P_IDLE;
                             render_state <= R_IDLE;
                             state <= S_ORDER;
-                            if (start_line_y_q == 10'd0) begin
+            if (start_line_y_q == 11'd0) begin
                                 collision_frame <= collision_current_frame_q;
                                 collision_current_frame_q <=
                                     collision_current_frame_q + 32'd1;

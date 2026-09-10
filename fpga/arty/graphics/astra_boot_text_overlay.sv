@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Astra68 contributors
 //
-// Boot-only tear-free text overlay for the Arty splash screen. The ARM writes
+// Boot-only tear-free text overlay for the Astra splash screen. The host writes
 // an inactive character bank through a bundled-data CDC mailbox. A commit
 // swaps banks only at vertical blank, then clones the visible bank back to the
 // shadow bank so later software updates can replace one row without rebuilding
@@ -12,10 +12,10 @@ module astra_boot_text_overlay #(
     parameter FONT_HEX = "post_fonts.hex",
     parameter integer COLS = 36,
     parameter integer ROWS = 4,
-    parameter integer ORIGIN_X = 264,
-    parameter integer ORIGIN_Y = 496,
-    parameter integer CELL_WIDTH = 16,
-    parameter integer ROW_PITCH = 32
+    parameter integer ORIGIN_X = 396,
+    parameter integer ORIGIN_Y = 744,
+    parameter integer CELL_WIDTH = 24,
+    parameter integer ROW_PITCH = 48
 ) (
     input  wire        build_clk,
     input  wire        build_reset,
@@ -33,16 +33,23 @@ module astra_boot_text_overlay #(
     input  wire        pixel_reset,
     input  wire        pixel_frame_boundary,
     input  wire        input_valid,
-    input  wire [10:0] pixel_x,
-    input  wire [9:0]  pixel_y,
+    input  wire [11:0] pixel_x,
+    input  wire [10:0] pixel_y,
     input  wire [23:0] input_rgb,
     output wire        output_valid,
     output reg  [23:0] output_rgb
 );
     localparam integer CELLS = COLS * ROWS;
-    localparam integer FONT_BYTES = 256 * 8;
+    localparam integer FONT_WIDTH = 8;
+    localparam integer FONT_HEIGHT = 16;
+    localparam integer FONT_ASCENT = 12;
+    localparam integer FONT_DESCENT = 4;
+    localparam integer FONT_BYTES = 256 * FONT_HEIGHT;
     localparam integer TEXT_WIDTH = COLS * CELL_WIDTH;
     localparam integer TEXT_HEIGHT = ROWS * ROW_PITCH;
+    localparam integer GLYPH_SCALE_X = CELL_WIDTH / FONT_WIDTH;
+    localparam integer GLYPH_SCALE_Y =
+        ROW_PITCH / (FONT_ASCENT + FONT_DESCENT);
 
     // Cell bits 7:0 select CP437, bits 9:8 select the fixed boot palette.
     // The memories live entirely in the pixel domain; the mailbox below is
@@ -89,19 +96,21 @@ module astra_boot_text_overlay #(
     // hdl-util-hdmi presents the pixel requested in this cycle for capture on
     // the next rising edge. Look two pixels ahead so the cell RAM and font ROM
     // each get a register stage before the final HDMI video-data path.
-    wire [10:0] render_x = pixel_x + 11'd2;
+    wire [11:0] render_x = pixel_x + 12'd2;
     wire in_text_bounds =
         render_x >= ORIGIN_X && render_x < ORIGIN_X + TEXT_WIDTH &&
         pixel_y >= ORIGIN_Y && pixel_y < ORIGIN_Y + TEXT_HEIGHT;
-    wire [10:0] relative_x = render_x - ORIGIN_X;
-    wire [9:0] relative_y = pixel_y - ORIGIN_Y;
+    wire [11:0] relative_x = render_x - ORIGIN_X;
+    wire [10:0] relative_y = pixel_y - ORIGIN_Y;
     wire [5:0] text_col = relative_x / CELL_WIDTH;
     wire [1:0] text_row = relative_y / ROW_PITCH;
-    wire [3:0] cell_x = relative_x % CELL_WIDTH;
-    wire [4:0] cell_y = relative_y % ROW_PITCH;
-    wire glyph_region = in_text_bounds && cell_y < 16;
-    wire [2:0] glyph_col = cell_x[3:1];
-    wire [2:0] glyph_row = cell_y[3:1];
+    wire [4:0] cell_x = relative_x % CELL_WIDTH;
+    wire [5:0] cell_y = relative_y % ROW_PITCH;
+    wire glyph_region = in_text_bounds &&
+        cell_x < FONT_WIDTH * GLYPH_SCALE_X &&
+        cell_y < FONT_HEIGHT * GLYPH_SCALE_Y;
+    wire [2:0] glyph_col = cell_x / GLYPH_SCALE_X;
+    wire [3:0] glyph_row = cell_y / GLYPH_SCALE_Y;
     wire [7:0] cell_address_raw = text_row * COLS + text_col;
     wire [7:0] cell_address = in_text_bounds ? cell_address_raw : 8'd0;
 
@@ -257,14 +266,14 @@ module astra_boot_text_overlay #(
 
     reg [15:0] render_cell_q;
     reg [2:0] render_glyph_col_q;
-    reg [2:0] render_glyph_row_q;
+    reg [3:0] render_glyph_row_q;
     reg render_glyph_region_q;
     reg render_enable_q;
     always @(posedge pixel_clk) begin
         if (pixel_reset) begin
             render_cell_q <= 16'h0020;
             render_glyph_col_q <= 3'd0;
-            render_glyph_row_q <= 3'd0;
+            render_glyph_row_q <= 4'd0;
             render_glyph_region_q <= 1'b0;
             render_enable_q <= 1'b0;
         end else begin
@@ -305,6 +314,15 @@ module astra_boot_text_overlay #(
         else
             output_rgb = input_rgb;
     end
+
+`ifndef SYNTHESIS
+    initial begin
+        if (CELL_WIDTH < FONT_WIDTH || CELL_WIDTH % FONT_WIDTH != 0 ||
+            ROW_PITCH < FONT_HEIGHT ||
+            ROW_PITCH % (FONT_ASCENT + FONT_DESCENT) != 0)
+            $fatal(1, "invalid boot-text glyph geometry");
+    end
+`endif
 endmodule
 
 `default_nettype wire

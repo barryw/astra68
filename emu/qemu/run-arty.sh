@@ -60,6 +60,24 @@ if [ ! -x "$TERMINAL_DISPLAY" ]; then
     echo "Astra terminal display not found: $TERMINAL_DISPLAY" >&2
     exit 1
 fi
+if ! DISPLAY_MAILBOX_BYTES=$(
+        "$TERMINAL_DISPLAY" --mailbox-bytes); then
+    echo "Cannot determine Astra display mailbox size" >&2
+    exit 1
+fi
+case "$DISPLAY_MAILBOX_BYTES" in
+''|*[!0-9]*|0) echo "Astra display mailbox size is invalid" >&2; exit 1 ;;
+esac
+if ! HOST_PAGE_BYTES=$(getconf PAGESIZE); then
+    echo "Cannot determine host page size" >&2
+    exit 1
+fi
+case "$HOST_PAGE_BYTES" in
+''|*[!0-9]*|0) echo "Host page size is invalid" >&2; exit 1 ;;
+esac
+DISPLAY_MAILBOX_STORAGE_BYTES=$((
+    (DISPLAY_MAILBOX_BYTES + HOST_PAGE_BYTES - 1) /
+    HOST_PAGE_BYTES * HOST_PAGE_BYTES))
 if [ ! -r "$BASE_STORAGE" ]; then
     echo "Astra base storage image not found: $BASE_STORAGE" >&2
     exit 1
@@ -117,7 +135,8 @@ if [ ! -f "$STORAGE" ] || [ -L "$STORAGE" ] || [ ! -w "$STORAGE" ]; then
 fi
 rm -f "$QMP_SOCKET"
 dd if=/dev/zero of="$TEXT_PLANE" bs=4096 count=1 2>/dev/null
-dd if=/dev/zero of="$DISPLAY_MAILBOX" bs=4096 count=451 2>/dev/null
+dd if=/dev/zero of="$DISPLAY_MAILBOX" bs="$DISPLAY_MAILBOX_STORAGE_BYTES" \
+    count=1 2>/dev/null
 start_helper "$DISPLAY_CPU" "$TERMINAL_DISPLAY" "$TEXT_PLANE" \
     "$DISPLAY_MAILBOX"
 display_pid=$started_pid

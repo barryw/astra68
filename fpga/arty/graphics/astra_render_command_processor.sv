@@ -175,6 +175,9 @@ module astra_render_command_processor #(
     localparam [1:0] SEQUENCE_BAD_GENERATION = 2'd2;
     localparam [1:0] SEQUENCE_BAD_DEADLINE = 2'd3;
 
+    localparam integer DEADLINE_SUBCYCLE_WIDTH =
+        CYCLES_PER_US <= 1 ? 1 : $clog2(CYCLES_PER_US);
+
     function automatic [31:0] swap32(input [31:0] value);
         begin
             swap32 = {value[7:0], value[15:8],
@@ -182,16 +185,18 @@ module astra_render_command_processor #(
         end
     endfunction
 
+    initial begin
+        if (CYCLES_PER_US < 1)
+            $fatal(1, "CYCLES_PER_US must be positive");
+    end
+
     (* fsm_encoding = "one_hot" *) reg [5:0] state;
     reg [31:0] cycle_counter;
     reg command_active;
     reg command_dispatched_q;
     reg [31:0] command_start_cycle;
-    reg [31:0] deadline_budget_q;
-    (* extract_enable = "no" *)
-    reg [15:0] deadline_remaining_low_q;
-    (* extract_enable = "no" *)
-    reg [15:0] deadline_remaining_high_q;
+    reg [31:0] deadline_remaining_us_q;
+    reg [DEADLINE_SUBCYCLE_WIDTH-1:0] deadline_subcycle_q;
     reg deadline_active;
     reg deadline_expired_q;
     reg [7:0] reset_hold_count;
@@ -1049,9 +1054,8 @@ reg [1:0] completion_beat_index;
             command_active <= 1'b0;
             command_dispatched_q <= 1'b0;
             command_start_cycle <= 32'd0;
-            deadline_budget_q <= 32'd0;
-            deadline_remaining_low_q <= 16'd0;
-            deadline_remaining_high_q <= 16'd0;
+            deadline_remaining_us_q <= 32'd0;
+            deadline_subcycle_q <= {DEADLINE_SUBCYCLE_WIDTH{1'b0}};
             deadline_active <= 1'b0;
             deadline_expired_q <= 1'b0;
             reset_hold_count <= 8'd0;
@@ -1319,20 +1323,18 @@ reg [1:0] completion_beat_index;
                 end
             end
 
-            if (deadline_active &&
-                (deadline_remaining_high_q != 16'd0 ||
-                 deadline_remaining_low_q != 16'd0)) begin
-                if (deadline_remaining_low_q == 16'd0) begin
-                    deadline_remaining_low_q <= 16'hffff;
-                    deadline_remaining_high_q <=
-                        deadline_remaining_high_q - 16'd1;
+            if (deadline_active && deadline_remaining_us_q != 32'd0) begin
+                if (CYCLES_PER_US == 1 ||
+                    deadline_subcycle_q == CYCLES_PER_US - 1) begin
+                    deadline_subcycle_q <=
+                        {DEADLINE_SUBCYCLE_WIDTH{1'b0}};
+                    deadline_remaining_us_q <=
+                        deadline_remaining_us_q - 32'd1;
+                    if (deadline_remaining_us_q == 32'd1)
+                        deadline_expired_q <= 1'b1;
                 end else begin
-                    deadline_remaining_low_q <=
-                        deadline_remaining_low_q - 16'd1;
+                    deadline_subcycle_q <= deadline_subcycle_q + 1'b1;
                 end
-                if (deadline_remaining_high_q == 16'd0 &&
-                    deadline_remaining_low_q == 16'd1)
-                    deadline_expired_q <= 1'b1;
             end else if (!deadline_active) begin
                 deadline_expired_q <= 1'b0;
             end
@@ -1649,8 +1651,6 @@ reg [1:0] completion_beat_index;
                     end
 
                     ST_VALIDATE_SEQUENCE_CHECK: begin
-                        deadline_budget_q <=
-                            command_deadline_us_q * CYCLES_PER_US;
                         if (!sequence_valid_q) begin
                             sequence_result_q <= SEQUENCE_BAD_ORDER;
                         end else if (command_generation_q !=
@@ -2625,10 +2625,9 @@ reg [1:0] completion_beat_index;
                             reset_hold_count <= RESET_HOLD_CYCLES - 1;
                             state <= ST_ENGINE_RESET_HOLD;
                         end else begin
-                            deadline_remaining_low_q <=
-                                deadline_budget_q[15:0];
-                            deadline_remaining_high_q <=
-                                deadline_budget_q[31:16];
+                            deadline_remaining_us_q <= command_deadline_us_q;
+                            deadline_subcycle_q <=
+                                {DEADLINE_SUBCYCLE_WIDTH{1'b0}};
                             deadline_active <= 1'b1;
                             if (command_is_geometry_q)
                                 geometry_start <= 1'b1;

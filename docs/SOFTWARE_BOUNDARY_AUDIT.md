@@ -21,7 +21,7 @@ is retained only when its contract actually differs.
 | `sw/include/astra` | wire ABI, resource limits, and freestanding value primitives | no private kernel, NDK, application, or service headers |
 | `sw/kernel` | Axiom objects, scheduling, VM, handles, syscalls, and devices | shared ABI and kernel-private headers |
 | `sw/userspace/runtime` | program startup, arguments, syscalls, service readiness, shared-library loading, diagnostics, and runtime clocks | shared ABI only |
-| `ndk` | stable application-facing native API | shared ABI and runtime entry points; its `src/internal` headers stay private |
+| `ndk` | sole source of stable application-facing native declarations | shared ABI and runtime entry points; its `src/internal` headers stay private |
 | userspace libraries | reusable storage, VFS, events, input, streams, shell, terminal, graphics, interface, messaging, POSIX, allocation, and metrics behavior | public ABI plus explicitly linked owner archives |
 | Supervisor and services | process policy and device/application wiring | public owner headers and archives; never another service's implementation |
 | commands and applications | command-specific presentation and orchestration | runtime, NDK, and public libraries |
@@ -34,6 +34,12 @@ Terminal compiling Supervisor code, local startup/service-ready parsing,
 foreign library implementation sources in production archives, incomplete
 analyzer source lists, and local copies of the shared primitives extracted by
 this audit.
+
+Astra's applications, commands, services, runtime, and public libraries compile
+against `ndk/include` exactly as third-party programs do. User-facing runtime,
+stream, POSIX, filesystem, graphics, font, terminal, and keymap declarations
+have no shadow
+copies beneath their implementations; the boundary test rejects their return.
 
 ## Consolidations retained
 

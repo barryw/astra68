@@ -7,6 +7,8 @@
 #include "astra_graphics_hw.h"
 #include "astra_render_protocol.h"
 
+#include <astra/graphics.h>
+
 #include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
@@ -175,6 +177,8 @@ _Static_assert(SCRATCH_DESCRIPTOR_OFFSET == COMPLETION_RING_OFFSET +
 _Static_assert(FRAME_DATA_OFFSET + ASTRA_FRAMEBUFFER_BYTES <=
                    ASTRA_GRAPHICS_ARENA_BYTES,
                "certification framebuffer exceeds the graphics arena");
+_Static_assert(ASTRA_FRAMEBUFFER_HEIGHT >= 100u,
+               "clipping certification needs 100 visible rows");
 _Static_assert(SCRATCH_REGION_BYTES >=
                    FLOOD_WORKSPACE_DATA_OFFSET + FLOOD_WORKSPACE_BYTES -
                        SCRATCH_DATA_OFFSET,
@@ -207,6 +211,11 @@ struct scene_state {
     uint32_t viewport_y;
     uint32_t framebuffer_control;
     uint32_t framebuffer_key;
+    uint32_t display_source_size;
+    uint32_t display_crop_origin;
+    uint32_t display_crop_size;
+    uint32_t display_viewport_origin;
+    uint32_t display_viewport_size;
     uint32_t tile0_control;
     uint32_t tile1_control;
     uint32_t sprite_control;
@@ -1042,7 +1051,8 @@ static int prepare_workload(struct render_maps *maps)
                    COLOR_LEFT) != 0 ||
         write_fill(maps, 4u, 5u, 800, 280, 360u, 280u,
                    COLOR_RIGHT) != 0 ||
-        write_fill(maps, 5u, 6u, -40, 620, 200u, 140u,
+        write_fill(maps, 5u, 6u, -40,
+                   (int16_t)(ASTRA_FRAMEBUFFER_HEIGHT - 100u), 200u, 140u,
                    COLOR_CLIPPED) != 0 ||
         write_complete_blitter_commands(maps) != 0 ||
         write_virtual_sprite_group_commands(maps) != 0 ||
@@ -1636,7 +1646,7 @@ static uint16_t expected_frame_pixel(unsigned x, unsigned y)
         color = COLOR_LEFT;
     if (x >= 800u && x < 1160u && y >= 280u && y < 560u)
         color = COLOR_RIGHT;
-    if (x < 160u && y >= 620u)
+    if (x < 160u && y >= ASTRA_FRAMEBUFFER_HEIGHT - 100u)
         color = COLOR_CLIPPED;
     return color;
 }
@@ -1978,6 +1988,16 @@ static void save_scene(const struct astra_graphics_device *device,
     scene->framebuffer_control = astra_mmio_read(device,
                                                  ASTRA_REG_FB_CONTROL);
     scene->framebuffer_key = astra_mmio_read(device, ASTRA_REG_FB_KEY);
+    scene->display_source_size = astra_mmio_read(
+        device, ASTRA_REG_DISPLAY_SOURCE_SIZE);
+    scene->display_crop_origin = astra_mmio_read(
+        device, ASTRA_REG_DISPLAY_CROP_ORIGIN);
+    scene->display_crop_size = astra_mmio_read(
+        device, ASTRA_REG_DISPLAY_CROP_SIZE);
+    scene->display_viewport_origin = astra_mmio_read(
+        device, ASTRA_REG_DISPLAY_VIEWPORT_ORIGIN);
+    scene->display_viewport_size = astra_mmio_read(
+        device, ASTRA_REG_DISPLAY_VIEWPORT_SIZE);
     scene->tile0_control = astra_mmio_read(device, ASTRA_REG_TILE0_CONTROL);
     scene->tile1_control = astra_mmio_read(device, ASTRA_REG_TILE1_CONTROL);
     scene->sprite_control = astra_mmio_read(device,
@@ -1996,6 +2016,16 @@ static void write_scene(const struct astra_graphics_device *device,
     astra_mmio_write(device, ASTRA_REG_FB_CONTROL,
                      scene->framebuffer_control);
     astra_mmio_write(device, ASTRA_REG_FB_KEY, scene->framebuffer_key);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_SOURCE_SIZE,
+                     scene->display_source_size);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_CROP_ORIGIN,
+                     scene->display_crop_origin);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_CROP_SIZE,
+                     scene->display_crop_size);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_VIEWPORT_ORIGIN,
+                     scene->display_viewport_origin);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_VIEWPORT_SIZE,
+                     scene->display_viewport_size);
     astra_mmio_write(device, ASTRA_REG_TILE0_CONTROL, scene->tile0_control);
     astra_mmio_write(device, ASTRA_REG_TILE1_CONTROL, scene->tile1_control);
     astra_mmio_write(device, ASTRA_REG_SPRITE_CONTROL,
@@ -2005,8 +2035,10 @@ static void write_scene(const struct astra_graphics_device *device,
 }
 
 static int present_result(const struct astra_graphics_device *device,
-                          unsigned milliseconds)
+                          unsigned milliseconds, bool scaled)
 {
+    AstraDisplayMode mode = ASTRA_DISPLAY_MODE_INIT;
+    AstraDisplayLayout layout;
     struct scene_state saved;
     struct scene_state certification;
     uint32_t generation;
@@ -2025,6 +2057,22 @@ static int present_result(const struct astra_graphics_device *device,
     certification.viewport_y = 0u;
     certification.framebuffer_control = 3u;
     certification.framebuffer_key = 0u;
+    mode.width = scaled ? 320u : ASTRA_FRAMEBUFFER_WIDTH;
+    mode.height = scaled ? 200u : ASTRA_FRAMEBUFFER_HEIGHT;
+    if (astra_display_layout_calculate(
+            &mode, ASTRA_FRAMEBUFFER_WIDTH, ASTRA_FRAMEBUFFER_HEIGHT,
+            &layout) != ASTRA_OK)
+        goto restore;
+    certification.display_source_size =
+        ((uint32_t)layout.source_height << 16) | layout.source_width;
+    certification.display_crop_origin =
+        ((uint32_t)layout.crop_y << 16) | layout.crop_x;
+    certification.display_crop_size =
+        ((uint32_t)layout.crop_height << 16) | layout.crop_width;
+    certification.display_viewport_origin =
+        ((uint32_t)layout.viewport_y << 16) | layout.viewport_x;
+    certification.display_viewport_size =
+        ((uint32_t)layout.viewport_height << 16) | layout.viewport_width;
     certification.tile0_control = 0u;
     certification.tile1_control = 0u;
     certification.sprite_control = 0u;
@@ -2033,7 +2081,10 @@ static int present_result(const struct astra_graphics_device *device,
                                     &generation) != 0)
         goto restore;
     printf("ASTRA_RENDER_PRESENT generation=%" PRIu32
-           " milliseconds=%u\n", generation, milliseconds);
+           " logical=%ux%u viewport=%u,%u+%ux%u milliseconds=%u\n",
+           generation, mode.width, mode.height, layout.viewport_x,
+           layout.viewport_y, layout.viewport_width, layout.viewport_height,
+           milliseconds);
     if (sleep_milliseconds(milliseconds) != 0)
         goto restore;
     result = 0;
@@ -2050,16 +2101,20 @@ restore:
 }
 
 static int parse_present_milliseconds(int argc, char **argv,
-                                      unsigned *milliseconds)
+                                      unsigned *milliseconds, bool *scaled)
 {
     char *end = NULL;
     unsigned long parsed;
 
     *milliseconds = 0u;
+    *scaled = false;
     if (argc == 1)
         return 0;
-    if (argc != 3 || strcmp(argv[1], "--present-ms") != 0) {
-        fprintf(stderr, "usage: %s [--present-ms 1..60000]\n", argv[0]);
+    if (argc != 3 || (strcmp(argv[1], "--present-ms") != 0 &&
+                      strcmp(argv[1], "--present-scaled-ms") != 0)) {
+        fprintf(stderr,
+                "usage: %s [--present-ms|--present-scaled-ms 1..60000]\n",
+                argv[0]);
         return -1;
     }
     errno = 0;
@@ -2070,6 +2125,7 @@ static int parse_present_milliseconds(int argc, char **argv,
         return -1;
     }
     *milliseconds = (unsigned)parsed;
+    *scaled = strcmp(argv[1], "--present-scaled-ms") == 0;
     return 0;
 }
 
@@ -2110,11 +2166,13 @@ int main(int argc, char **argv)
     uint32_t screen_offset_cycles;
     uint32_t compositor_cycles;
     unsigned present_milliseconds;
+    bool present_scaled;
     uint32_t capabilities;
     uint32_t status;
     int result = EXIT_FAILURE;
 
-    if (parse_present_milliseconds(argc, argv, &present_milliseconds) != 0)
+    if (parse_present_milliseconds(
+            argc, argv, &present_milliseconds, &present_scaled) != 0)
         return EXIT_FAILURE;
     astra_graphics_device_init(&device);
     init_maps(&maps);
@@ -2459,7 +2517,7 @@ int main(int argc, char **argv)
            ASTRA_FRAMEBUFFER_WIDTH, SCREEN_OFFSET_HEIGHT,
            SCREEN_OFFSET_SOURCE_Y, screen_offset_cycles);
     if (present_milliseconds != 0u &&
-        present_result(&device, present_milliseconds) != 0)
+        present_result(&device, present_milliseconds, present_scaled) != 0)
         goto stop_engine;
     if (certify_lane_realignment(&device, &maps, &lane_cycles) != 0)
         goto stop_engine;

@@ -6,6 +6,9 @@ and Messaging Kits are implemented. Private-library resolution and
 transactional installation remain design direction; discovery deliberately
 needs no registrar.
 
+The locked package transport and universal shared-library direction are in
+`PACKAGE_FORMAT.md` and `SHARED_LIBRARY_FORMAT.md`.
+
 ## 1. Native application identity
 
 A native application is an inspectable bundle containing code,

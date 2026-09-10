@@ -99,7 +99,7 @@ module tb_astra_render_command_processor;
     astra_render_command_processor #(
         .ARENA_BASE(32'd0),
         .ARENA_LIMIT(ARENA_BYTES),
-        .CYCLES_PER_US(1),
+        .CYCLES_PER_US(3),
         .RESET_HOLD_CYCLES(4)
     ) dut (
         .clk(clk), .reset(reset), .enable(enable),

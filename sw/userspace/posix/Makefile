@@ -16,8 +16,8 @@ VFS := ../vfs
 NDK := ../../../ndk
 PICOLIBC ?= $(HOME)/picolibc-astra
 include kit/astra-posix.mk
-PROJECT_CPPFLAGS := -I include -I../../include -I$(RUNTIME)/include \
-	-I$(STREAMS)/include -I$(VFS)/include -I$(NDK)/include \
+PROJECT_CPPFLAGS := -I$(NDK)/include -I include -I../../include \
+	-I$(RUNTIME)/include -I$(STREAMS)/include -I$(VFS)/include \
 
 CPPFLAGS := $(PROJECT_CPPFLAGS) -isystem $(PICOLIBC)/include
 CXX_CPPFLAGS := $(PROJECT_CPPFLAGS)
@@ -122,7 +122,8 @@ $(SOCKET_ADDRESS_TEST): src/inet.c tests/test_socket_address.c
 
 $(PTHREAD_TEST): src/pthread.c tests/test_pthread.c
 	@mkdir -p $(@D)
-	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \
+	$(HOST_CC) -I$(NDK)/include -Iinclude -I../../include \
+		-I$(RUNTIME)/include \
 		$(COMMON_FLAGS) -O2 -D_POSIX_C_SOURCE=200809L \
 		-D_BITS_PTHREADTYPES_COMMON_H=1 \
 		-DASTRA_PTHREAD_NO_LIBC_LOCKS=1 $^ -o $@
@@ -171,7 +172,7 @@ $(CXX_LINK_CONTRACT): tests/cxx_runtime.cpp $(CXX_PROGRAM_OBJECT) $(LIB) \
 		{ echo "C++ link contract: missing PT_TLS" >&2; exit 1; }
 	@echo "astra C++ runtime link: PASS"
 
-$(RUNTIME_LIB) $(RUNTIME_CRT0):
+$(RUNTIME_LIB) $(RUNTIME_CRT0) &:
 	$(MAKE) -C $(RUNTIME) all
 
 $(STREAMS_LIB):

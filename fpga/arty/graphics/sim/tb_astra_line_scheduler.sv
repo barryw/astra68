@@ -20,13 +20,20 @@ module tb_astra_line_scheduler;
     reg tile0_enable = 1'b1;
     reg tile1_enable = 1'b1;
     reg sprite_enable = 1'b1;
+    reg [10:0] display_viewport_y = 11'd0;
+    reg [10:0] display_viewport_height = OUTPUT_HEIGHT;
+    reg [10:0] display_source_y = 11'd0;
+    reg [10:0] display_source_height = OUTPUT_HEIGHT;
     wire line_prepare_valid;
-    wire [9:0] line_prepare_y;
+    wire [10:0] line_prepare_y;
+    wire [10:0] line_prepare_source_y;
+    wire line_prepare_source_active;
     reg line_prepare_ready = 1'b1;
 
     wire client_start;
     wire [1:0] client_build_slot;
-    wire [9:0] client_line_y;
+    wire [10:0] client_line_y;
+    wire [10:0] client_source_y;
     wire [3:0] client_enable;
     reg [3:0] client_done = 4'd0;
     reg [3:0] client_line_complete = 4'd0;
@@ -35,16 +42,18 @@ module tb_astra_line_scheduler;
     wire [31:0] scheduler_overruns;
     wire scheduler_idle;
 
-    reg [10:0] pixel_x = 11'd0;
-    reg [9:0] pixel_y = 10'd0;
+    reg [11:0] pixel_x = 12'd0;
+    reg [10:0] pixel_y = 11'd0;
     wire [1:0] pixel_read_slot;
     wire pixel_line_available;
     wire [31:0] pixel_underruns;
     wire [3:0] pixel_slot_valid;
-    wire [9:0] pixel_slot_tag0;
-    wire [9:0] pixel_slot_tag1;
-    wire [9:0] pixel_slot_tag2;
-    wire [9:0] pixel_slot_tag3;
+    wire [10:0] pixel_slot_tag0;
+    wire [10:0] pixel_slot_tag1;
+    wire [10:0] pixel_slot_tag2;
+    wire [10:0] pixel_slot_tag3;
+    wire pixel_source_active;
+    wire [10:0] pixel_source_y;
 
     astra_line_scheduler #(
         .OUTPUT_WIDTH(OUTPUT_WIDTH),
@@ -60,12 +69,19 @@ module tb_astra_line_scheduler;
         .tile0_enable(tile0_enable),
         .tile1_enable(tile1_enable),
         .sprite_enable(sprite_enable),
+        .display_viewport_y(display_viewport_y),
+        .display_viewport_height(display_viewport_height),
+        .display_source_y(display_source_y),
+        .display_source_height(display_source_height),
         .line_prepare_valid(line_prepare_valid),
         .line_prepare_y(line_prepare_y),
+        .line_prepare_source_y(line_prepare_source_y),
+        .line_prepare_source_active(line_prepare_source_active),
         .line_prepare_ready(line_prepare_ready),
         .client_start(client_start),
         .client_build_slot(client_build_slot),
         .client_line_y(client_line_y),
+        .client_source_y(client_source_y),
         .client_enable(client_enable),
         .client_done(client_done),
         .client_line_complete(client_line_complete),
@@ -84,15 +100,18 @@ module tb_astra_line_scheduler;
         .pixel_slot_tag0(pixel_slot_tag0),
         .pixel_slot_tag1(pixel_slot_tag1),
         .pixel_slot_tag2(pixel_slot_tag2),
-        .pixel_slot_tag3(pixel_slot_tag3)
+        .pixel_slot_tag3(pixel_slot_tag3),
+        .pixel_source_active(pixel_source_active),
+        .pixel_source_y(pixel_source_y)
     );
 
     integer countdown0 = 0;
     integer countdown1 = 0;
     integer countdown2 = 0;
     integer countdown3 = 0;
-    reg [9:0] active_line = 10'd0;
+    reg [10:0] active_line = 11'd0;
     integer start_count [0:7];
+    integer last_source [0:7];
     integer total_starts = 0;
     integer index;
 
@@ -104,12 +123,19 @@ module tb_astra_line_scheduler;
             countdown1 <= 0;
             countdown2 <= 0;
             countdown3 <= 0;
-            active_line <= 10'd0;
+            active_line <= 11'd0;
         end else begin
             if (client_start) begin
-                if (client_enable != 4'b1111)
+                if (client_enable != {sprite_enable, tile1_enable,
+                                      tile0_enable, framebuffer_enable})
                     $fatal(1, "scheduler launched wrong client mask %b",
                            client_enable);
+                if (display_viewport_y == 0 &&
+                    display_viewport_height == OUTPUT_HEIGHT &&
+                    client_source_y != client_line_y)
+                    $fatal(1, "native source line mismatch physical=%0d source=%0d",
+                           client_line_y, client_source_y);
+                last_source[client_line_y] <= client_source_y;
                 active_line <= client_line_y;
                 start_count[client_line_y] <=
                     start_count[client_line_y] + 1;
@@ -182,7 +208,7 @@ module tb_astra_line_scheduler;
         input integer valid
     );
         integer cycles;
-        reg [9:0] observed_tag;
+        reg [10:0] observed_tag;
         begin
             cycles = 0;
             observed_tag = 10'h3ff;
@@ -222,10 +248,14 @@ module tb_astra_line_scheduler;
     integer built_before_hold;
     integer starts_before_quiesce;
     integer built_after_drain;
+    integer built_before_scaled;
+    integer starts_before_scaled;
     integer quiesce_cycles;
     initial begin
-        for (index = 0; index < 8; index = index + 1)
+        for (index = 0; index < 8; index = index + 1) begin
             start_count[index] = 0;
+            last_source[index] = -1;
+        end
 
         repeat (5) @(posedge build_clk);
         repeat (3) @(posedge pixel_clk);
@@ -366,6 +396,32 @@ module tb_astra_line_scheduler;
         wait_for_pixel_slot(2, 2, 1);
         wait_for_pixel_slot(3, 3, 1);
         $display("zero-client backdrop bootstrap pass");
+
+        // The shared vertical mapper suppresses letterbox work and repeats
+        // logical lines without changing physical slot ownership.
+        framebuffer_enable = 1'b1;
+        display_viewport_y = 11'd2;
+        display_viewport_height = 11'd4;
+        display_source_y = 11'd10;
+        display_source_height = 11'd2;
+        built_before_scaled = lines_built;
+        starts_before_scaled = total_starts;
+        pulse_scene_changed();
+        wait_for_counts(built_before_scaled + 4, lines_failed);
+        if (total_starts != starts_before_scaled + 2 ||
+            last_source[2] != 10 || last_source[3] != 10)
+            $fatal(1, "scaled bootstrap mismatch starts=%0d y2=%0d y3=%0d",
+                   total_starts - starts_before_scaled,
+                   last_source[2], last_source[3]);
+        drive_line_end(TOTAL_HEIGHT - 1);
+        if (pixel_source_active)
+            $fatal(1, "top letterbox line became active");
+        drive_line_end(0);
+        drive_line_end(1);
+        if (!pixel_source_active || pixel_source_y != 11'd10)
+            $fatal(1, "scaled source metadata mismatch active=%0d y=%0d",
+                   pixel_source_active, pixel_source_y);
+        $display("vertical scaling/letterbox pass");
 
         $display("ASTRA LINE SCHEDULER PASS");
         $finish;

@@ -6,7 +6,9 @@ OBJCOPY := $(CROSS)objcopy
 RUNTIME := ../../runtime
 VFS := ../../vfs
 METRICS := ../../metrics
-CPPFLAGS := -I../../include -I../../../include -I$(RUNTIME)/include \
+NDK := ../../../../ndk
+CPPFLAGS := -I$(NDK)/include -I../../include -I../../../include \
+	-I$(RUNTIME)/include \
 	-I$(VFS)/include -I$(METRICS)/include -I$(RUNTIME)/freestanding
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O2 -flto -ffreestanding \
@@ -20,7 +22,7 @@ RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 METRICS_LIB := $(METRICS)/build/m68k/libastrametric.a
 CRT0 := $(RUNTIME)/build/m68k/crt0.o
-ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(VFS) $(METRICS)
+ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(VFS) $(METRICS) $(NDK)
 include ../../program.mk
 
 $(TARGET): $(OBJECT) $(CRT0) $(METRICS_LIB) $(VFS_LIB) $(RUNTIME_LIB) \

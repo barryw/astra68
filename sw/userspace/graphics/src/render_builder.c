@@ -361,7 +361,7 @@ static int builder_text(AstraRenderBuilder *builder, uint32_t destination,
     uint32_t glyph_offset;
     uint8_t *source;
     uint8_t *record;
-    int32_t pen = x;
+    int32_t pen_26_6 = x * 64;
 
     if (builder == NULL || destination == 0u || utf8 == NULL ||
         strike == NULL)
@@ -417,12 +417,13 @@ static int builder_text(AstraRenderBuilder *builder, uint32_t destination,
         astra_store_be32(glyph_record + 0u, index * cell_bytes);
         astra_store_be32(glyph_record + 4u, 0u);
         astra_store_be32(glyph_record + 8u,
-              pair_s16(pen + glyph->bearing_x / 64,
-                       y + strike->ascent - glyph->bearing_y / 64));
+              pair_s16(astra_ui_glyph_x(pen_26_6, glyph),
+                       astra_ui_glyph_y(
+                           (y + strike->ascent) * 64, glyph)));
         astra_store_be32(glyph_record + 12u,
               pair_u16(glyph->width, glyph->height));
         ++builder->glyph_count;
-        pen += cell_width != 0u ? cell_width : glyph->advance_x / 64;
+        pen_26_6 += astra_ui_glyph_advance(glyph, cell_width);
         at += consumed;
     }
     record = command(builder, ASTRA_RENDER_OP_GLYPH_RUN, 0u, destination,

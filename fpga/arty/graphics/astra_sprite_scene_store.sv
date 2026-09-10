@@ -678,9 +678,7 @@ module astra_sprite_scene_store #(
         validation_source_height >= 8'd1 &&
         validation_source_height <= 8'd128 &&
         validation_destination_width >= 11'd1 &&
-        validation_destination_width <= 11'd1024 &&
         validation_destination_height >= 11'd1 &&
-        validation_destination_height <= 11'd1024 &&
         validation_word4_q[5:0] == 6'd0 &&
         validation_word4_q >= ARENA_BASE &&
         validation_pitch[5:0] == 6'd0 &&

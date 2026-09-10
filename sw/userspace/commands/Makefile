@@ -82,6 +82,7 @@ IMAGES := $(patsubst %,build/m68k/%,$(COMMANDS))
 COMMAND_MANIFEST := build/m68k/.commands
 ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(STREAMS) $(VFS) $(POSIX) $(NTP) \
 	$(NETWORK)
+ASTRA_PROGRAM_PREPARE_TARGETS := cxx-runtime
 ASTRA_PROGRAM_TARGETS := $(IMAGES) $(COMMAND_MANIFEST) size
 include ../program.mk
 
@@ -127,14 +128,26 @@ build/m68k/lua: lua/lua.c $(LUA_LIBRARY) build/m68k/lua-obj/interpreter.o \
 
 CXX_IMAGE := $(POSIX)/build/m68k/cxx-runtime-test.elf
 
-build/m68k/cxx: $(POSIX)/tests/cxx_runtime.cpp $(POSIX)/kit/program.c \
+cxx-runtime:
+	$(MAKE) -C $(POSIX) build/m68k/cxx-runtime-test.elf
+
+build/m68k/cxx: $(CXX_IMAGE) $(POSIX)/tests/cxx_runtime.cpp \
+		$(POSIX)/kit/program.c \
 		$(POSIX_LIB) $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
 		$(PICOLIBC_LIB) $(PICOLIBC_MATH) $(RUNTIME_CRT0) \
 		$(RUNTIME)/astra_user.ld $(ASTRA_TOOLCHAIN_STAMP)
-	$(MAKE) -C $(POSIX) build/m68k/cxx-runtime-test.elf
 	$(OBJCOPY) --strip-all --remove-section=.astra_events $(CXX_IMAGE) $@
 
 VIM_PROGRAM := build/m68k/vim-program.o
+VIM_PROGRAM_DEFINES := -DASTRA_POSIX_PROGRAM_NAME='"vim"' \
+	-DASTRA_POSIX_PROGRAM_MAJOR=9 -DASTRA_POSIX_PROGRAM_MINOR=2 \
+	-DASTRA_POSIX_PROGRAM_PATCH=1001 \
+	-DASTRA_POSIX_PROGRAM_AUTHOR='"Vim contributors"' \
+	-DASTRA_POSIX_PROGRAM_COPYRIGHT='"Copyright Vim contributors"'
+VIM_PROGRAM_CONFIG_ID := $(shell printf '%s\n' vim 9 2 1001 \
+	'Vim contributors' 'Copyright Vim contributors' | cksum | awk '{print $$1 "-" $$2}')
+VIM_PROGRAM_CONFIG := build/.program-config/vim-$(VIM_PROGRAM_CONFIG_ID)
+VIM_BUILD_CONFIG := build/.vendor-config/vim-$(ASTRA_TOOLCHAIN_ID)
 VIM_TERMINFO_LDFLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	-Wl,--build-id=none -Wl,--gc-sections \
 	-Wl,--undefined=astra_posix_entry_contract \
@@ -144,24 +157,24 @@ VIM_TERMINFO_LIBS := -Wl,--start-group $(abspath $(VFS_LIB)) \
 	$(abspath $(STREAMS_LIB)) $(abspath $(POSIX_LIB)) \
 	$(abspath $(RUNTIME_LIB)) $(abspath $(PICOLIBC_LIB)) \
 	$(abspath $(PICOLIBC_MATH)) -lgcc -Wl,--end-group
+VIM_LIBS := -Wl,--start-group -ltinfow $(abspath $(VFS_LIB)) \
+	$(abspath $(STREAMS_LIB)) $(abspath $(POSIX_LIB)) \
+	$(abspath $(RUNTIME_LIB)) $(abspath $(PICOLIBC_LIB)) \
+	$(abspath $(PICOLIBC_MATH)) -lgcc -Wl,--end-group
 
-$(VIM_PROGRAM): $(POSIX)/kit/program.c Makefile
+$(VIM_PROGRAM): $(POSIX)/kit/program.c $(VIM_PROGRAM_CONFIG)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
-		-DASTRA_POSIX_PROGRAM_NAME='"vim"' \
-		-DASTRA_POSIX_PROGRAM_MAJOR=9 -DASTRA_POSIX_PROGRAM_MINOR=2 \
-		-DASTRA_POSIX_PROGRAM_PATCH=1001 \
-		-DASTRA_POSIX_PROGRAM_AUTHOR='"Vim contributors"' \
-		-DASTRA_POSIX_PROGRAM_COPYRIGHT='"Copyright Vim contributors"' \
+		$(VIM_PROGRAM_DEFINES) \
 		-c $< -o $@
 
 # Ncurses' generated dependencies do not include installed system headers.
 # Rebuild its archive when the public terminal ABI changes; otherwise an old
 # four-byte winsize object accepts an eight-byte TIOCGWINSZ write.
 $(VIM_TERMINFO)/lib/libtinfow.a: $(PICOLIBC)/include/sys/termios.h \
-		$(PICOLIBC)/include/sys/ioctl.h $(VIM_PROGRAM) $(POSIX_LIB) \
+		$(PICOLIBC)/include/sys/ioctl.h $(POSIX_LIB) \
 		$(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) $(RUNTIME_CRT0) \
-		$(ASTRA_TOOLCHAIN_STAMP)
+		$(ASTRA_TOOLCHAIN_STAMP) | $(VIM_PROGRAM)
 	rm -rf $(VIM_TERMINFO_BUILD)
 	mkdir -p $(VIM_TERMINFO_BUILD)
 	cd $(VIM_TERMINFO_BUILD) && \
@@ -184,10 +197,19 @@ $(VIM_TERMINFO)/lib/libtinfow.a: $(PICOLIBC)/include/sys/termios.h \
 # Vim's generated Makefile does not name external static archives as target
 # prerequisites. Relink its unchanged objects whenever Astra's shared POSIX
 # implementation changes, instead of silently packaging a stale executable.
-$(VIM_IMAGE): $(VIM_PROGRAM) $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
+$(VIM_BUILD_CONFIG): $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) $(POSIX_LIB) \
+		$(PICOLIBC_LIB) $(PICOLIBC_MATH) $(VIM_TERMINFO)/lib/libtinfow.a \
+		$(ASTRA_TOOLCHAIN_STAMP)
+	$(MAKE) -C $(VIM_SOURCE) clean
+	@mkdir -p $(@D)
+	@rm -f build/.vendor-config/vim-*
+	@touch $@
+
+$(VIM_IMAGE): Makefile $(VIM_BUILD_CONFIG) $(VIM_PROGRAM) \
+		$(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
 		$(POSIX_LIB) $(PICOLIBC_LIB) $(PICOLIBC_MATH) \
 		$(VIM_TERMINFO)/lib/libtinfow.a $(ASTRA_TOOLCHAIN_STAMP)
-	$(MAKE) -C $(VIM_SOURCE) clean
+	@rm -f $(VIM_IMAGE)
 	$(MAKE) -C $(VIM_SOURCE) vim \
 		CC='$(CC)' \
 		CPPFLAGS='$(VENDOR_INCLUDE_FLAGS)' \
@@ -199,16 +221,22 @@ $(VIM_IMAGE): $(VIM_PROGRAM) $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
 		-T $(abspath $(RUNTIME)/astra_user.ld) \
 		$(abspath $(RUNTIME_CRT0)) $(abspath $(VIM_PROGRAM)) \
 		-Wl,--as-needed' \
-		LIBS='-Wl,--start-group -ltinfow $(abspath $(VFS_LIB)) \
-		$(abspath $(STREAMS_LIB)) $(abspath $(POSIX_LIB)) \
-		$(abspath $(RUNTIME_LIB)) $(abspath $(PICOLIBC_LIB)) \
-		$(abspath $(PICOLIBC_MATH)) -lgcc -Wl,--end-group'
+		LIBS='$(VIM_LIBS)'
 
 build/m68k/vim: $(VIM_IMAGE)
 	@mkdir -p $(@D)
 	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@
 
 ZSH_PROGRAM := build/m68k/zsh-program.o
+ZSH_PROGRAM_DEFINES := -DASTRA_POSIX_PROGRAM_NAME='"zsh"' \
+	-DASTRA_POSIX_PROGRAM_MAJOR=5 -DASTRA_POSIX_PROGRAM_MINOR=9 \
+	-DASTRA_POSIX_PROGRAM_PATCH=2 \
+	-DASTRA_POSIX_PROGRAM_AUTHOR='"zsh contributors"' \
+	-DASTRA_POSIX_PROGRAM_COPYRIGHT='"Copyright zsh contributors"'
+ZSH_PROGRAM_CONFIG_ID := $(shell printf '%s\n' zsh 5 9 2 \
+	'zsh contributors' 'Copyright zsh contributors' | cksum | awk '{print $$1 "-" $$2}')
+ZSH_PROGRAM_CONFIG := build/.program-config/zsh-$(ZSH_PROGRAM_CONFIG_ID)
+ZSH_BUILD_CONFIG := build/.vendor-config/zsh-$(ASTRA_TOOLCHAIN_ID)
 ZSH_SOURCES := $(shell find $(ZSH_SOURCE) -type f 2>/dev/null)
 ZSH_LDFLAGS := $(abspath $(RUNTIME_CRT0)) -nostdlib -static \
 	-Wl,-z,max-page-size=0x1000 -Wl,--build-id=none -Wl,--gc-sections \
@@ -220,17 +248,17 @@ ZSH_LIBS := $(abspath $(ZSH_PROGRAM)) -Wl,--start-group \
 	$(abspath $(RUNTIME_LIB)) $(abspath $(PICOLIBC_LIB)) \
 	$(abspath $(PICOLIBC_MATH)) -lgcc -Wl,--end-group
 
-$(ZSH_PROGRAM): $(POSIX)/kit/program.c Makefile
+$(ZSH_PROGRAM): $(POSIX)/kit/program.c $(ZSH_PROGRAM_CONFIG)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
-		-DASTRA_POSIX_PROGRAM_NAME='"zsh"' \
-		-DASTRA_POSIX_PROGRAM_MAJOR=5 -DASTRA_POSIX_PROGRAM_MINOR=9 \
-		-DASTRA_POSIX_PROGRAM_PATCH=2 \
-		-DASTRA_POSIX_PROGRAM_AUTHOR='"zsh contributors"' \
-		-DASTRA_POSIX_PROGRAM_COPYRIGHT='"Copyright zsh contributors"' \
+		$(ZSH_PROGRAM_DEFINES) \
 		-c $< -o $@
 
-$(ZSH_IMAGE): $(ZSH_SOURCES) $(ZSH_CONFIG_SITE) $(ZSH_PROGRAM) \
+build/.program-config/%:
+	@mkdir -p $(@D)
+	@touch $@
+
+$(ZSH_BUILD_CONFIG): $(ZSH_CONFIG_SITE) $(ZSH_SOURCE)/configure \
 		$(POSIX_LIB) $(RUNTIME_LIB) \
 		$(STREAMS_LIB) $(VFS_LIB) $(PICOLIBC_LIB) $(PICOLIBC_MATH) \
 		$(VIM_TERMINFO)/lib/libtinfow.a $(ASTRA_TOOLCHAIN_STAMP)
@@ -247,6 +275,12 @@ $(ZSH_IMAGE): $(ZSH_SOURCES) $(ZSH_CONFIG_SITE) $(ZSH_PROGRAM) \
 		--cache-file=/dev/null --disable-dynamic --disable-pcre \
 		--enable-multibyte \
 		--enable-etcdir=CONFIG:
+	@mkdir -p $(@D)
+	@rm -f build/.vendor-config/zsh-*
+	@touch $@
+
+$(ZSH_IMAGE): $(ZSH_SOURCES) $(ZSH_BUILD_CONFIG) $(ZSH_PROGRAM)
+	@rm -f $(ZSH_IMAGE)
 	$(MAKE) -C $(ZSH_BUILD)
 
 build/m68k/zsh: $(ZSH_IMAGE)
@@ -294,4 +328,4 @@ build/analyzer/%.o: $$*/$$*.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer -c $< -o $@
 
-.PHONY: all libraries size test sanitize analyze clean
+.PHONY: all libraries cxx-runtime size test sanitize analyze clean

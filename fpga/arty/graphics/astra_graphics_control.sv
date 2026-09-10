@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Astra68 contributors
 //
-// AXI4-Lite control plane for the first Arty Vega integration. Software edits
+// AXI4-Lite control plane for Vega. Software edits
 // shadow registers and requests an atomic frame-boundary promotion. Palette
 // writes are accepted only while scanout is disabled.
 `timescale 1ns/1ps
@@ -9,14 +9,14 @@
 module astra_graphics_control #(
     parameter [31:0] ARENA_BASE = 32'h18000000,
     parameter [31:0] ARENA_LIMIT = 32'h20000000,
-    parameter integer OUTPUT_WIDTH = 1280,
-    parameter integer OUTPUT_HEIGHT = 720,
+    parameter integer OUTPUT_WIDTH = 1920,
+    parameter integer OUTPUT_HEIGHT = 1080,
     parameter integer BOOT_TEXT_COLS = 36,
     parameter integer BOOT_TEXT_ROWS = 4,
-    parameter integer BOOT_TEXT_ORIGIN_X = 264,
-    parameter integer BOOT_TEXT_ORIGIN_Y = 496,
-    parameter integer BOOT_TEXT_CELL_WIDTH = 16,
-    parameter integer BOOT_TEXT_ROW_PITCH = 32
+    parameter integer BOOT_TEXT_ORIGIN_X = 396,
+    parameter integer BOOT_TEXT_ORIGIN_Y = 744,
+    parameter integer BOOT_TEXT_CELL_WIDTH = 24,
+    parameter integer BOOT_TEXT_ROW_PITCH = 48
 ) (
     input  wire        clk,
     input  wire        reset,
@@ -44,6 +44,16 @@ module astra_graphics_control #(
     output wire        framebuffer_wrap_y,
     output wire        framebuffer_key_enable,
     output wire [31:0] framebuffer_key,
+    output wire [10:0] display_source_width,
+    output wire [10:0] display_source_height,
+    output wire [10:0] display_crop_x,
+    output wire [10:0] display_crop_y,
+    output wire [10:0] display_crop_width,
+    output wire [10:0] display_crop_height,
+    output wire [10:0] display_viewport_x,
+    output wire [10:0] display_viewport_y,
+    output wire [10:0] display_viewport_width,
+    output wire [10:0] display_viewport_height,
     input  wire [31:0] framebuffer_axi_debug_status,
     input  wire [31:0] framebuffer_axi_ar_accept_count,
     input  wire [31:0] framebuffer_axi_r_accept_count,
@@ -114,7 +124,7 @@ module astra_graphics_control #(
     input  wire [31:0] sprite_deadline_error_count,
     input  wire [31:0] sprite_read_bytes,
     input  wire [63:0] sprite_overflow_bitmap,
-    input  wire [9:0]  sprite_overflow_line,
+    input  wire [10:0] sprite_overflow_line,
     input  wire [31:0] sprite_overflow_count,
     input  wire [31:0] sprite_pixels_admitted,
     input  wire [31:0] sprite_pixels_dropped,
@@ -141,6 +151,20 @@ module astra_graphics_control #(
     input  wire        boot_text_commit_ready,
     input  wire        boot_text_active_enable,
     input  wire [31:0] boot_text_generation,
+
+    output wire        pointer_shadow_enable,
+    output wire [10:0] pointer_shadow_x,
+    output wire [10:0] pointer_shadow_y,
+    output wire [4:0]  pointer_shadow_hot_x,
+    output wire [4:0]  pointer_shadow_hot_y,
+    output reg         pointer_image_write_enable,
+    output reg  [9:0]  pointer_image_write_index,
+    output reg  [31:0] pointer_image_write_argb,
+    output reg         pointer_commit_enable,
+    output reg         pointer_commit_swap_image,
+    input  wire        pointer_write_ready,
+    input  wire        pointer_commit_ready,
+    input  wire [31:0] pointer_generation,
 
     output wire        render_enable,
     output reg         render_queue_rebase,
@@ -197,9 +221,16 @@ module astra_graphics_control #(
     input  wire        s_axi_rready
 );
     localparam [31:0] DEVICE_ID = 32'h41535452;
-    localparam [31:0] VERSION = 32'h00010006;
-    localparam [31:0] CAPABILITIES = 32'h000003ff;
+    localparam [31:0] VERSION = 32'h00010008;
+    localparam [31:0] CAPABILITIES = 32'h00000fff;
     localparam integer BOOT_TEXT_CELLS = BOOT_TEXT_COLS * BOOT_TEXT_ROWS;
+    localparam [31:0] DEFAULT_FB_PITCH = OUTPUT_WIDTH * 2;
+    localparam [31:0] DEFAULT_FB_SIZE = {
+        3'd0, OUTPUT_HEIGHT[12:0], 3'd0, OUTPUT_WIDTH[12:0]
+    };
+    localparam [31:0] DEFAULT_DISPLAY_SIZE = {
+        5'd0, OUTPUT_HEIGHT[10:0], 5'd0, OUTPUT_WIDTH[10:0]
+    };
 
     function automatic [31:0] merge_write(
         input [31:0] previous,
@@ -224,6 +255,11 @@ module astra_graphics_control #(
     reg [31:0] shadow_fb_viewport_y;
     reg [31:0] shadow_fb_control;
     reg [31:0] shadow_fb_key;
+    reg [31:0] shadow_display_source_size;
+    reg [31:0] shadow_display_crop_origin;
+    reg [31:0] shadow_display_crop_size;
+    reg [31:0] shadow_display_viewport_origin;
+    reg [31:0] shadow_display_viewport_size;
     reg [31:0] shadow_tile0_map_base;
     reg [31:0] shadow_tile0_pattern_base;
     reg [31:0] shadow_tile0_scroll_x;
@@ -249,6 +285,11 @@ module astra_graphics_control #(
     reg [31:0] pending_fb_viewport_y_q;
     reg [31:0] pending_fb_control_q;
     reg [31:0] pending_fb_key_q;
+    reg [31:0] pending_display_source_size_q;
+    reg [31:0] pending_display_crop_origin_q;
+    reg [31:0] pending_display_crop_size_q;
+    reg [31:0] pending_display_viewport_origin_q;
+    reg [31:0] pending_display_viewport_size_q;
     reg        pending_fb_protection_valid_q;
     reg [31:0] pending_fb_protection_offset_q;
     reg [31:0] pending_fb_protection_bytes_q;
@@ -277,6 +318,11 @@ module astra_graphics_control #(
     reg [31:0] active_fb_viewport_y_q;
     reg [31:0] active_fb_control_q;
     reg [31:0] active_fb_key_q;
+    reg [31:0] active_display_source_size_q;
+    reg [31:0] active_display_crop_origin_q;
+    reg [31:0] active_display_crop_size_q;
+    reg [31:0] active_display_viewport_origin_q;
+    reg [31:0] active_display_viewport_size_q;
     reg        active_fb_protection_valid_q;
     reg [31:0] active_fb_protection_offset_q;
     reg [31:0] active_fb_protection_bytes_q;
@@ -304,6 +350,10 @@ module astra_graphics_control #(
     reg [11:0] sprite_palette_selector;
     reg [31:0] shadow_boot_text_control;
     reg [7:0] boot_text_selector;
+    reg [31:0] shadow_pointer_control;
+    reg [31:0] shadow_pointer_position;
+    reg [31:0] shadow_pointer_hotspot;
+    reg [9:0] pointer_image_selector;
     reg [31:0] render_control_q;
     reg render_irq_pending_q;
     reg boot_text_write_busy_q;
@@ -312,6 +362,11 @@ module astra_graphics_control #(
     reg boot_text_commit_busy_seen_q;
 
     assign boot_text_shadow_enable = shadow_boot_text_control[0];
+    assign pointer_shadow_enable = shadow_pointer_control[0];
+    assign pointer_shadow_x = shadow_pointer_position[10:0];
+    assign pointer_shadow_y = shadow_pointer_position[26:16];
+    assign pointer_shadow_hot_x = shadow_pointer_hotspot[4:0];
+    assign pointer_shadow_hot_y = shadow_pointer_hotspot[20:16];
     wire boot_text_write_available = boot_text_write_ready &&
         !boot_text_write_busy_q && !boot_text_commit_busy_q;
     wire boot_text_commit_available = boot_text_commit_ready &&
@@ -402,7 +457,45 @@ module astra_graphics_control #(
     wire sprite_validator_result = sprite_validator_result_q;
     // shadow_sprite_control is assigned only after the write-time validator
     // has proved that bit 0 is the sole settable bit.
+    wire [11:0] shadow_crop_right =
+        {1'b0, shadow_display_crop_origin[10:0]} +
+        {1'b0, shadow_display_crop_size[10:0]};
+    wire [11:0] shadow_crop_bottom =
+        {1'b0, shadow_display_crop_origin[26:16]} +
+        {1'b0, shadow_display_crop_size[26:16]};
+    wire [11:0] shadow_viewport_right =
+        {1'b0, shadow_display_viewport_origin[10:0]} +
+        {1'b0, shadow_display_viewport_size[10:0]};
+    wire [11:0] shadow_viewport_bottom =
+        {1'b0, shadow_display_viewport_origin[26:16]} +
+        {1'b0, shadow_display_viewport_size[26:16]};
+    wire display_config_valid =
+        shadow_display_source_size[10:0] != 0 &&
+        shadow_display_source_size[26:16] != 0 &&
+        shadow_display_crop_size[10:0] != 0 &&
+        shadow_display_crop_size[26:16] != 0 &&
+        shadow_display_viewport_size[10:0] != 0 &&
+        shadow_display_viewport_size[26:16] != 0 &&
+        shadow_crop_right <= {1'b0, shadow_display_source_size[10:0]} &&
+        shadow_crop_bottom <= {1'b0, shadow_display_source_size[26:16]} &&
+        shadow_viewport_right <= OUTPUT_WIDTH &&
+        shadow_viewport_bottom <= OUTPUT_HEIGHT &&
+        shadow_display_crop_size[10:0] <=
+            shadow_display_viewport_size[10:0] &&
+        shadow_display_crop_size[26:16] <=
+            shadow_display_viewport_size[26:16] &&
+        shadow_display_source_size[31:27] == 0 &&
+        shadow_display_source_size[15:11] == 0 &&
+        shadow_display_crop_origin[31:27] == 0 &&
+        shadow_display_crop_origin[15:11] == 0 &&
+        shadow_display_crop_size[31:27] == 0 &&
+        shadow_display_crop_size[15:11] == 0 &&
+        shadow_display_viewport_origin[31:27] == 0 &&
+        shadow_display_viewport_origin[15:11] == 0 &&
+        shadow_display_viewport_size[31:27] == 0 &&
+        shadow_display_viewport_size[15:11] == 0;
     wire validated_scene_valid = sprite_validator_result &&
+        display_config_valid &&
         (!shadow_global_control[0] ||
          ((!shadow_fb_control[0] || framebuffer_validator_result) &&
           (!shadow_tile0_control[0] || tile0_validator_result) &&
@@ -427,6 +520,16 @@ module astra_graphics_control #(
     assign framebuffer_wrap_y = active_fb_control_q[4];
     assign framebuffer_key_enable = active_fb_control_q[5];
     assign framebuffer_key = active_fb_key_q;
+    assign display_source_width = active_display_source_size_q[10:0];
+    assign display_source_height = active_display_source_size_q[26:16];
+    assign display_crop_x = active_display_crop_origin_q[10:0];
+    assign display_crop_y = active_display_crop_origin_q[26:16];
+    assign display_crop_width = active_display_crop_size_q[10:0];
+    assign display_crop_height = active_display_crop_size_q[26:16];
+    assign display_viewport_x = active_display_viewport_origin_q[10:0];
+    assign display_viewport_y = active_display_viewport_origin_q[26:16];
+    assign display_viewport_width = active_display_viewport_size_q[10:0];
+    assign display_viewport_height = active_display_viewport_size_q[26:16];
 
     assign tile0_enable = active_tile0_control_q[0];
     assign tile0_above_framebuffer = active_tile0_control_q[1];
@@ -491,6 +594,11 @@ module astra_graphics_control #(
     reg write_boot_selector_valid_q;
     reg write_boot_cell_valid_q;
     reg write_boot_commit_valid_q;
+    reg write_pointer_control_valid_q;
+    reg write_pointer_position_valid_q;
+    reg write_pointer_hotspot_valid_q;
+    reg write_pointer_selector_valid_q;
+    reg write_pointer_commit_valid_q;
     reg write_sprite_control_valid_q;
     reg write_sprite_descriptor_selector_valid_q;
     reg write_sprite_palette_selector_valid_q;
@@ -542,7 +650,7 @@ reg [9:0] read_bank_valid_q;
         !copper_dispatch_host_conflict && !render_queue_rebase;
     wire write_changes_scene =
         awaddr_q[11:0] == 12'h00c || awaddr_q[11:0] == 12'h018 ||
-        (awaddr_q[11:0] >= 12'h040 && awaddr_q[11:0] <= 12'h058) ||
+        (awaddr_q[11:0] >= 12'h040 && awaddr_q[11:0] <= 12'h06c) ||
         (awaddr_q[11:0] >= 12'h080 && awaddr_q[11:0] <= 12'h098) ||
         (awaddr_q[11:0] >= 12'h0c0 && awaddr_q[11:0] <= 12'h0d8) ||
         awaddr_q[11:0] == 12'h180 || awaddr_q[11:0] == 12'h188 ||
@@ -586,6 +694,11 @@ reg [9:0] read_bank_valid_q;
                 4'h4: read_bank1 = shadow_fb_viewport_y;
                 4'h5: read_bank1 = shadow_fb_control;
                 4'h6: read_bank1 = shadow_fb_key;
+                4'h7: read_bank1 = shadow_display_source_size;
+                4'h8: read_bank1 = shadow_display_crop_origin;
+                4'h9: read_bank1 = shadow_display_crop_size;
+                4'ha: read_bank1 = shadow_display_viewport_origin;
+                4'hb: read_bank1 = shadow_display_viewport_size;
                 default: read_bank1 = 32'd0;
             endcase
         end
@@ -644,6 +757,13 @@ reg [9:0] read_bank_valid_q;
                     BOOT_TEXT_CELL_WIDTH[7:0]};
                 4'h6: read_bank5 = {BOOT_TEXT_ORIGIN_Y[15:0],
                     BOOT_TEXT_ORIGIN_X[15:0]};
+                4'h8: read_bank5 = shadow_pointer_control;
+                4'h9: read_bank5 = shadow_pointer_position;
+                4'ha: read_bank5 = shadow_pointer_hotspot;
+                4'hb: read_bank5 = {22'd0, pointer_image_selector};
+                4'he: read_bank5 = pointer_generation;
+                4'hf: read_bank5 = {30'd0, pointer_commit_ready,
+                    pointer_write_ready};
                 default: read_bank5 = 32'd0;
             endcase
         end
@@ -670,7 +790,7 @@ reg [9:0] read_bank_valid_q;
                 4'h9: read_bank6 = sprite_pixels_dropped;
                 4'ha: read_bank6 = sprite_overflow_bitmap[31:0];
                 4'hb: read_bank6 = sprite_overflow_bitmap[63:32];
-                4'hc: read_bank6 = {22'd0, sprite_overflow_line};
+4'hc: read_bank6 = {21'd0, sprite_overflow_line};
                 4'hd: read_bank6 = sprite_overflow_count;
                 4'he: read_bank6 = {26'd0, sprite_collision_read_row};
                 4'hf: read_bank6 = sprite_collision_read_data[31:0];
@@ -741,6 +861,12 @@ reg [9:0] read_bank_valid_q;
             pending_fb_viewport_y_q <= shadow_fb_viewport_y;
             pending_fb_control_q <= shadow_fb_control;
             pending_fb_key_q <= shadow_fb_key;
+            pending_display_source_size_q <= shadow_display_source_size;
+            pending_display_crop_origin_q <= shadow_display_crop_origin;
+            pending_display_crop_size_q <= shadow_display_crop_size;
+            pending_display_viewport_origin_q <=
+                shadow_display_viewport_origin;
+            pending_display_viewport_size_q <= shadow_display_viewport_size;
             pending_fb_protection_valid_q <= shadow_global_control[0] &&
                 shadow_fb_control[0] && framebuffer_validator_valid;
             pending_fb_protection_offset_q <= shadow_fb_base - ARENA_BASE;
@@ -775,6 +901,12 @@ reg [9:0] read_bank_valid_q;
             active_fb_viewport_y_q <= pending_fb_viewport_y_q;
             active_fb_control_q <= pending_fb_control_q;
             active_fb_key_q <= pending_fb_key_q;
+            active_display_source_size_q <= pending_display_source_size_q;
+            active_display_crop_origin_q <= pending_display_crop_origin_q;
+            active_display_crop_size_q <= pending_display_crop_size_q;
+            active_display_viewport_origin_q <=
+                pending_display_viewport_origin_q;
+            active_display_viewport_size_q <= pending_display_viewport_size_q;
             active_fb_protection_valid_q <= pending_fb_protection_valid_q;
             active_fb_protection_offset_q <= pending_fb_protection_offset_q;
             active_fb_protection_bytes_q <= pending_fb_protection_bytes_q;
@@ -821,12 +953,17 @@ reg [9:0] read_bank_valid_q;
             shadow_global_control <= 32'd0;
             shadow_backdrop <= 32'h00101820;
             shadow_fb_base <= ARENA_BASE;
-            shadow_fb_pitch <= 32'd2560;
-            shadow_fb_size <= {3'd0, 13'd720, 3'd0, 13'd1280};
+            shadow_fb_pitch <= DEFAULT_FB_PITCH;
+            shadow_fb_size <= DEFAULT_FB_SIZE;
             shadow_fb_viewport_x <= 32'd0;
             shadow_fb_viewport_y <= 32'd0;
             shadow_fb_control <= 32'h00000003;
             shadow_fb_key <= 32'd0;
+            shadow_display_source_size <= DEFAULT_DISPLAY_SIZE;
+            shadow_display_crop_origin <= 32'd0;
+            shadow_display_crop_size <= DEFAULT_DISPLAY_SIZE;
+            shadow_display_viewport_origin <= 32'd0;
+            shadow_display_viewport_size <= DEFAULT_DISPLAY_SIZE;
             shadow_tile0_map_base <= ARENA_BASE + 32'h00400000;
             shadow_tile0_pattern_base <= ARENA_BASE + 32'h00420000;
             shadow_tile0_scroll_x <= 32'd0;
@@ -845,12 +982,17 @@ reg [9:0] read_bank_valid_q;
             pending_global_control_q <= 32'd0;
             pending_backdrop_q <= 32'h00101820;
             pending_fb_base_q <= ARENA_BASE;
-            pending_fb_pitch_q <= 32'd2560;
-            pending_fb_size_q <= {3'd0, 13'd720, 3'd0, 13'd1280};
+            pending_fb_pitch_q <= DEFAULT_FB_PITCH;
+            pending_fb_size_q <= DEFAULT_FB_SIZE;
             pending_fb_viewport_x_q <= 32'd0;
             pending_fb_viewport_y_q <= 32'd0;
             pending_fb_control_q <= 32'h00000003;
             pending_fb_key_q <= 32'd0;
+            pending_display_source_size_q <= DEFAULT_DISPLAY_SIZE;
+            pending_display_crop_origin_q <= 32'd0;
+            pending_display_crop_size_q <= DEFAULT_DISPLAY_SIZE;
+            pending_display_viewport_origin_q <= 32'd0;
+            pending_display_viewport_size_q <= DEFAULT_DISPLAY_SIZE;
             pending_fb_protection_valid_q <= 1'b0;
             pending_fb_protection_offset_q <= 32'd0;
             pending_fb_protection_bytes_q <= 32'd0;
@@ -872,12 +1014,17 @@ reg [9:0] read_bank_valid_q;
             active_global_control_q <= 32'd0;
             active_backdrop_q <= 32'h00101820;
             active_fb_base_q <= ARENA_BASE;
-            active_fb_pitch_q <= 32'd2560;
-            active_fb_size_q <= {3'd0, 13'd720, 3'd0, 13'd1280};
+            active_fb_pitch_q <= DEFAULT_FB_PITCH;
+            active_fb_size_q <= DEFAULT_FB_SIZE;
             active_fb_viewport_x_q <= 32'd0;
             active_fb_viewport_y_q <= 32'd0;
             active_fb_control_q <= 32'h00000003;
             active_fb_key_q <= 32'd0;
+            active_display_source_size_q <= DEFAULT_DISPLAY_SIZE;
+            active_display_crop_origin_q <= 32'd0;
+            active_display_crop_size_q <= DEFAULT_DISPLAY_SIZE;
+            active_display_viewport_origin_q <= 32'd0;
+            active_display_viewport_size_q <= DEFAULT_DISPLAY_SIZE;
             active_fb_protection_valid_q <= 1'b0;
             active_fb_protection_offset_q <= 32'd0;
             active_fb_protection_bytes_q <= 32'd0;
@@ -952,6 +1099,15 @@ reg [9:0] read_bank_valid_q;
             boot_text_write_busy_seen_q <= 1'b0;
             boot_text_commit_busy_q <= 1'b0;
             boot_text_commit_busy_seen_q <= 1'b0;
+            shadow_pointer_control <= 32'd0;
+            shadow_pointer_position <= 32'd0;
+            shadow_pointer_hotspot <= 32'd0;
+            pointer_image_selector <= 10'd0;
+            pointer_image_write_enable <= 1'b0;
+            pointer_image_write_index <= 10'd0;
+            pointer_image_write_argb <= 32'd0;
+            pointer_commit_enable <= 1'b0;
+            pointer_commit_swap_image <= 1'b0;
             render_control_q <= 32'd0;
             render_queue_rebase <= 1'b0;
             render_soft_reset <= 1'b0;
@@ -979,6 +1135,8 @@ reg [9:0] read_bank_valid_q;
             sprite_activate_start <= 1'b0;
             boot_text_write_enable <= 1'b0;
             boot_text_commit_enable <= 1'b0;
+            pointer_image_write_enable <= 1'b0;
+            pointer_commit_enable <= 1'b0;
             render_queue_rebase <= 1'b0;
             render_soft_reset <= 1'b0;
 
@@ -1056,6 +1214,18 @@ reg [9:0] read_bank_valid_q;
                     wdata_q[31:10] == 22'd0;
                 write_boot_commit_valid_q <= wstrb_q == 4'hf &&
                     wdata_q == 32'd1;
+                write_pointer_control_valid_q <= wstrb_q == 4'hf &&
+                    (wdata_q & 32'hfffffffe) == 32'd0;
+                write_pointer_position_valid_q <= wstrb_q == 4'hf &&
+                    (wdata_q & 32'hf800f800) == 32'd0 &&
+                    wdata_q[10:0] < OUTPUT_WIDTH &&
+                    wdata_q[26:16] < OUTPUT_HEIGHT;
+                write_pointer_hotspot_valid_q <= wstrb_q == 4'hf &&
+                    (wdata_q & 32'hffe0ffe0) == 32'd0;
+                write_pointer_selector_valid_q <= wstrb_q == 4'hf &&
+                    wdata_q[31:10] == 22'd0;
+                write_pointer_commit_valid_q <= wstrb_q == 4'hf &&
+                    wdata_q[31:2] == 30'd0 && wdata_q[0];
                 write_sprite_control_valid_q <= wstrb_q == 4'hf &&
                     (wdata_q & 32'hfffffffe) == 32'd0;
                 write_sprite_descriptor_selector_valid_q <=
@@ -1084,13 +1254,15 @@ reg [9:0] read_bank_valid_q;
                         12'h00c: shadow_global_control <= merge_write(
                             shadow_global_control, wdata_q, wstrb_q);
                         12'h010: begin
+                            // The AXI transfer succeeded even when the scene
+                            // is rejected. Report semantic failure through
+                            // commit_errors; HPS treats SLVERR as fatal SError.
                             if (!write_commit_request_valid_q) begin
-                                write_response_q <= 2'b10;
+                                commit_errors <= commit_errors + 32'd1;
                             end else if (commit_pending_q ||
                                 sprite_pending_valid ||
                                 sprite_activation_pending_q ||
                                 !sprite_scene_write_ready) begin
-                                write_response_q <= 2'b10;
                                 commit_errors <= commit_errors + 32'd1;
                             end else begin
                                 // Hold the response through validation and
@@ -1124,6 +1296,16 @@ reg [9:0] read_bank_valid_q;
                             shadow_fb_control, wdata_q, wstrb_q);
                         12'h058: shadow_fb_key <= merge_write(
                             shadow_fb_key, wdata_q, wstrb_q);
+                        12'h05c: shadow_display_source_size <= merge_write(
+                            shadow_display_source_size, wdata_q, wstrb_q);
+                        12'h060: shadow_display_crop_origin <= merge_write(
+                            shadow_display_crop_origin, wdata_q, wstrb_q);
+                        12'h064: shadow_display_crop_size <= merge_write(
+                            shadow_display_crop_size, wdata_q, wstrb_q);
+                        12'h068: shadow_display_viewport_origin <= merge_write(
+                            shadow_display_viewport_origin, wdata_q, wstrb_q);
+                        12'h06c: shadow_display_viewport_size <= merge_write(
+                            shadow_display_viewport_size, wdata_q, wstrb_q);
                         12'h080: shadow_tile0_map_base <= merge_write(
                             shadow_tile0_map_base, wdata_q, wstrb_q);
                         12'h084: shadow_tile0_pattern_base <= merge_write(
@@ -1222,6 +1404,54 @@ reg [9:0] read_bank_valid_q;
                                 boot_text_commit_enable <= 1'b1;
                                 boot_text_commit_busy_q <= 1'b1;
                                 boot_text_commit_busy_seen_q <= 1'b0;
+                            end
+                        end
+                        12'h160: begin
+                            if (!write_pointer_control_valid_q)
+                                write_response_q <= 2'b10;
+                            else
+                                shadow_pointer_control <= wdata_q;
+                        end
+                        12'h164: begin
+                            if (!write_pointer_position_valid_q)
+                                write_response_q <= 2'b10;
+                            else
+                                shadow_pointer_position <= wdata_q;
+                        end
+                        12'h168: begin
+                            if (!write_pointer_hotspot_valid_q)
+                                write_response_q <= 2'b10;
+                            else
+                                shadow_pointer_hotspot <= wdata_q;
+                        end
+                        12'h16c: begin
+                            if (!write_pointer_selector_valid_q ||
+                                !pointer_write_ready)
+                                write_response_q <= 2'b10;
+                            else
+                                pointer_image_selector <= wdata_q[9:0];
+                        end
+                        12'h170: begin
+                            if (!write_full_strobe_q ||
+                                !pointer_write_ready) begin
+                                write_response_q <= 2'b10;
+                            end else begin
+                                pointer_image_write_enable <= 1'b1;
+                                pointer_image_write_index <=
+                                    pointer_image_selector;
+                                pointer_image_write_argb <= wdata_q;
+                                if (pointer_image_selector != 10'd1023)
+                                    pointer_image_selector <=
+                                        pointer_image_selector + 10'd1;
+                            end
+                        end
+                        12'h174: begin
+                            if (!write_pointer_commit_valid_q ||
+                                !pointer_commit_ready) begin
+                                write_response_q <= 2'b10;
+                            end else begin
+                                pointer_commit_enable <= 1'b1;
+                                pointer_commit_swap_image <= wdata_q[1];
                             end
                         end
                         12'h180: begin
@@ -1369,7 +1599,7 @@ reg [9:0] read_bank_valid_q;
                     shadow_config_dirty_q <= 1'b0;
                     shadow_scene_valid_q <= 1'b0;
                     s_axi_bvalid <= 1'b1;
-                    s_axi_bresp <= 2'b10;
+                    s_axi_bresp <= 2'b00;
                     commit_errors <= commit_errors + 32'd1;
                 end
             end
@@ -1447,7 +1677,7 @@ reg [9:0] read_bank_valid_q;
                 read_bank_data_q[8] <= read_bank8(read_bank_word_q[8]);
                 read_bank_data_q[9] <= read_bank9(read_bank_word_q[9]);
                 read_bank_valid_q[0] <= 1'b1;
-                read_bank_valid_q[1] <= read_bank_word_q[1] <= 4'h6;
+                read_bank_valid_q[1] <= read_bank_word_q[1] <= 4'hb;
                 read_bank_valid_q[2] <= read_bank_word_q[2] <= 4'h6;
                 read_bank_valid_q[3] <= read_bank_word_q[3] <= 4'h6;
                 read_bank_valid_q[4] <= read_bank_word_q[4] == 4'h0 ||
@@ -1455,7 +1685,9 @@ reg [9:0] read_bank_valid_q;
                 read_bank_valid_q[5] <= read_bank_word_q[5] == 4'h0 ||
                     read_bank_word_q[5] == 4'h1 ||
                     (read_bank_word_q[5] >= 4'h3 &&
-                     read_bank_word_q[5] <= 4'h6);
+                     read_bank_word_q[5] <= 4'hb) ||
+                    read_bank_word_q[5] == 4'he ||
+                    read_bank_word_q[5] == 4'hf;
                 read_bank_valid_q[6] <= 1'b1;
                 read_bank_valid_q[7] <= read_bank_word_q[7] <= 4'h4;
                 read_bank_valid_q[8] <= 1'b1;

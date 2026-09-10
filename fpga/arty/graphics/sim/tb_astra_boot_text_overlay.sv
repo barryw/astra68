@@ -3,8 +3,8 @@
 
 module tb_astra_boot_text_overlay;
     localparam integer COLS = 36;
-    localparam integer ORIGIN_X = 264;
-    localparam integer ORIGIN_Y = 496;
+    localparam integer ORIGIN_X = 396;
+    localparam integer ORIGIN_Y = 744;
 
     reg build_clk = 1'b0;
     always #2.5 build_clk = ~build_clk;
@@ -24,14 +24,14 @@ module tb_astra_boot_text_overlay;
     wire [31:0] generation;
     reg pixel_frame_boundary = 1'b0;
     reg input_valid = 1'b1;
-    reg [10:0] pixel_x = ORIGIN_X;
-    reg [9:0] pixel_y = ORIGIN_Y;
+    reg [11:0] pixel_x = ORIGIN_X;
+    reg [10:0] pixel_y = ORIGIN_Y;
     reg [23:0] input_rgb = 24'h123456;
     wire output_valid;
     wire [23:0] output_rgb;
 
     astra_boot_text_overlay #(
-.FONT_HEX("assets/fonts/astra_8x16.hex")
+        .FONT_HEX("build/arty-graphics/post_fonts.hex")
     ) dut (
         .build_clk(build_clk),
         .build_reset(build_reset),
@@ -113,7 +113,7 @@ module tb_astra_boot_text_overlay;
 
     task automatic prepare_pixel(
         input [10:0] target_x,
-        input [9:0] target_y
+        input [10:0] target_y
     );
         begin
             // The overlay prefetches two pixels ahead: one register captures
@@ -146,6 +146,7 @@ module tb_astra_boot_text_overlay;
         // Bank one receives two cyan glyphs while bank zero remains visible.
         write_character(8'd0, 2'd0, "A");
         write_character(8'd1, 2'd0, "C");
+        write_character(8'd2, 2'd0, 8'hdb);
         request_commit(1'b1);
         repeat (8) @(posedge pixel_clk);
         if (active_enable || commit_ready)
@@ -155,9 +156,9 @@ module tb_astra_boot_text_overlay;
         if (!active_enable || !commit_ready)
             $fatal(1, "first text generation did not complete");
 
-        // CP437 A row zero is 0x30: glyph column two is lit, column zero is
-        // clear. Each source pixel is doubled in both dimensions.
-        prepare_pixel(ORIGIN_X + 4, ORIGIN_Y);
+        // Spleen A begins on source row two. Each source pixel is tripled in
+        // both dimensions, with a fixed 24-pixel advance and 48-pixel line.
+        prepare_pixel(ORIGIN_X + 3, ORIGIN_Y + 6);
         #1;
         if (output_rgb != 24'h00e5e5)
             $fatal(1, "cyan A glyph was not rendered");
@@ -165,6 +166,18 @@ module tb_astra_boot_text_overlay;
         #1;
         if (output_rgb != input_rgb)
             $fatal(1, "transparent glyph background was not preserved");
+
+        // A full-block glyph must end exactly at its cell boundary; the next
+        // untouched cell remains transparent. Its last source row also ends
+        // exactly at the 48-pixel line boundary.
+        prepare_pixel(ORIGIN_X + 2 * 24 + 23, ORIGIN_Y + 47);
+        #1;
+        if (output_rgb != 24'h00e5e5)
+            $fatal(1, "fixed-width glyph did not fill its final cell pixel");
+        prepare_pixel(ORIGIN_X + 3 * 24, ORIGIN_Y + 47);
+        #1;
+        if (output_rgb != input_rgb)
+            $fatal(1, "fixed-width glyph crossed its cell advance");
 
         // The post-commit clone lets software replace only cell zero. C in
         // cell one must survive the second bank swap.
@@ -177,11 +190,11 @@ module tb_astra_boot_text_overlay;
         repeat (8) @(posedge pixel_clk);
         pulse_frame_boundary();
         wait_generation(32'd2);
-        prepare_pixel(ORIGIN_X, ORIGIN_Y);
+        prepare_pixel(ORIGIN_X + 3, ORIGIN_Y + 6);
         #1;
         if (output_rgb != 24'hff9d00)
             $fatal(1, "amber B glyph was not promoted");
-        prepare_pixel(ORIGIN_X + 16 + 4, ORIGIN_Y);
+        prepare_pixel(ORIGIN_X + 24 + 3, ORIGIN_Y + 6);
         #1;
         if (output_rgb != 24'h00e5e5)
             $fatal(1, "unchanged C glyph was not cloned forward");

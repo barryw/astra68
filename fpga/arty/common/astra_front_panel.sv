@@ -68,11 +68,14 @@ module astra_front_panel #(
         {byte_enable[1] ? write_data[11:8] : 4'd0,
          byte_enable[0] ? write_data[5:0]  : 6'd0} : 10'd0;
 
+    always @(posedge clk) begin
+        input_meta <= input_pins;
+        input_sync <= input_meta;
+    end
+
     integer input_index;
     always @(posedge clk) begin
         if (rst) begin
-            input_meta <= 10'd0;
-            input_sync <= 10'd0;
             input_stable <= 10'd0;
             input_events <= 10'd0;
             sample_counter <= {SAMPLE_COUNTER_WIDTH{1'b0}};
@@ -80,8 +83,6 @@ module astra_front_panel #(
                  input_index = input_index + 1)
                 debounce_count[input_index] <= {DEBOUNCE_COUNTER_WIDTH{1'b0}};
         end else begin
-            input_meta <= input_pins;
-            input_sync <= input_meta;
             input_events <= 10'd0;
 
             if (sample_tick)

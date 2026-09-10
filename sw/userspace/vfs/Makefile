@@ -9,8 +9,8 @@ LWEXT4 := ../../../third_party/lwext4
 RUNTIME := ../runtime
 STORAGE := ../storage
 NDK := ../../../ndk
-CPPFLAGS := -Iinclude -I../../include
-PORT_CPPFLAGS := $(CPPFLAGS) -I$(RUNTIME)/include -I$(NDK)/include
+CPPFLAGS := -I$(NDK)/include -Iinclude -I../../include
+PORT_CPPFLAGS := $(CPPFLAGS) -I$(RUNTIME)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -flto -ffreestanding -fno-builtin \
@@ -38,10 +38,10 @@ EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
 	-DCONFIG_USE_DEFAULT_CFG=0 -I$(RUNTIME)/freestanding
 
 HEADERS := include/astra/vfs_service_core.h include/astra/vfs_backend.h \
-	include/astra/vfs_client.h include/astra/vfs_local_transport.h \
-	include/astra/vfs_assign.h include/astra/vfs_path.h \
-	include/astra/vfs_port_transport.h include/astra/vfs_union.h \
-	include/astra/vfs_process.h include/astra/vfs_reader.h \
+	$(NDK)/include/astra/vfs_client.h include/astra/vfs_local_transport.h \
+	$(NDK)/include/astra/vfs_assign.h $(NDK)/include/astra/vfs_path.h \
+	include/astra/vfs_port_transport.h $(NDK)/include/astra/vfs_union.h \
+	$(NDK)/include/astra/vfs_process.h include/astra/vfs_reader.h \
 	include/astra/vfs_host_backend.h include/astra/vfs_host_transport.h \
 	include/astra/vfs_host_direct.h \
 	$(NDK)/include/astra/shared_library.h \
@@ -49,6 +49,7 @@ HEADERS := include/astra/vfs_service_core.h include/astra/vfs_backend.h \
 	../../include/astra/syscall.h
 
 TARGET := build/m68k/libastravfs.a
+NDK_OBJECTS := $(NDK)/build/m68k/manifest.o $(NDK)/build/m68k/bundle.o
 TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/vfs_assign.o build/m68k/vfs_path.o \
 	build/m68k/vfs_local_transport.o build/m68k/vfs_port_transport.o \
@@ -56,8 +57,7 @@ TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/vfs_host_transport.o \
 	build/m68k/vfs_host_direct.o \
 	build/m68k/vfs_union.o \
-	build/m68k/vfs_process.o build/m68k/vfs_reader.o \
-	$(NDK)/build/m68k/manifest.o $(NDK)/build/m68k/bundle.o \
+	build/m68k/vfs_process.o build/m68k/vfs_reader.o $(NDK_OBJECTS) \
 	build/m68k/vfs_status.o
 FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library
 FILESYSTEM_LIBRARY_OBJECTS := build/m68k/library/filesystem_library.o \
@@ -104,11 +104,13 @@ build/m68k/vfs_reader.o: src/vfs_reader.c $(HEADERS)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
 
-$(NDK)/build/m68k/manifest.o $(NDK)/build/m68k/bundle.o:
-	$(MAKE) -C $(NDK) $(@:$(NDK)/%=%)
+$(NDK_OBJECTS): | ndk
+
+ndk:
+	$(MAKE) -C $(NDK) all
 
 build/m68k/library/%.o: src/%.c $(HEADERS) \
-		include/astra/filesystem_library.h
+		$(NDK)/include/astra/filesystem_library.h
 	@mkdir -p $(@D)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
@@ -208,7 +210,7 @@ $(READER_TEST): src/vfs_reader.c tests/test_vfs_reader.c $(HEADERS) \
 
 $(FILESYSTEM_LIBRARY_TEST): src/filesystem_library.c src/vfs_union.c \
 		src/vfs_assign.c src/vfs_path.c tests/test_filesystem_library.c \
-		$(HEADERS) include/astra/filesystem_library.h
+		$(HEADERS) $(NDK)/include/astra/filesystem_library.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/filesystem_library.c src/vfs_union.c src/vfs_assign.c \
@@ -345,4 +347,4 @@ analyze:
 clean:
 	rm -rf build
 
-.PHONY: all test sanitize tsan analyze library-contract clean
+.PHONY: all ndk test sanitize tsan analyze library-contract clean

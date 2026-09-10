@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Astra68 contributors
 //
-// First production Arty graphics pipeline: frame-safe control, four-line
+// Production Vega graphics pipeline: frame-safe control, four-line
 // scheduling, independent DDR readers, dual-clock line stores, palettes, and
 // the fixed-order framebuffer/tile compositor.
 `timescale 1ns/1ps
@@ -9,26 +9,27 @@
 module astra_graphics_pipeline #(
     parameter [31:0] ARENA_BASE = 32'h18000000,
     parameter [31:0] ARENA_LIMIT = 32'h20000000,
-    parameter integer OUTPUT_WIDTH = 1280,
-    parameter integer OUTPUT_HEIGHT = 720,
-    parameter integer TOTAL_WIDTH = 1650,
-    parameter integer TOTAL_HEIGHT = 750,
-    parameter integer OUTPUT_PREFETCH = 37,
+    parameter integer OUTPUT_WIDTH = 1920,
+    parameter integer OUTPUT_HEIGHT = 1080,
+    parameter integer TOTAL_WIDTH = 2200,
+    parameter integer TOTAL_HEIGHT = 1125,
+    parameter integer BUILD_CYCLES_PER_US = 200,
+    parameter integer OUTPUT_PREFETCH = 38,
     parameter integer AXI_ID_WIDTH = 6,
     parameter BOOT_FONT_HEX = "post_fonts.hex",
     parameter integer BOOT_TEXT_COLS = 36,
     parameter integer BOOT_TEXT_ROWS = 4,
-    parameter integer BOOT_TEXT_ORIGIN_X = 264,
-    parameter integer BOOT_TEXT_ORIGIN_Y = 496,
-    parameter integer BOOT_TEXT_CELL_WIDTH = 16,
-    parameter integer BOOT_TEXT_ROW_PITCH = 32
+    parameter integer BOOT_TEXT_ORIGIN_X = 396,
+    parameter integer BOOT_TEXT_ORIGIN_Y = 744,
+    parameter integer BOOT_TEXT_CELL_WIDTH = 24,
+    parameter integer BOOT_TEXT_ROW_PITCH = 48
 ) (
     input  wire                         build_clk,
     input  wire                         build_reset,
     input  wire                         pixel_clk,
     input  wire                         pixel_reset,
-    input  wire [10:0]                  pixel_x,
-    input  wire [9:0]                   pixel_y,
+    input  wire [11:0]                  pixel_x,
+    input  wire [10:0]                  pixel_y,
     output wire                         pixel_output_valid,
     output wire [23:0]                  pixel_output_rgb,
 
@@ -189,7 +190,7 @@ module astra_graphics_pipeline #(
     always @(posedge pixel_clk or posedge pixel_reset) begin
         if (pixel_reset)
             frame_toggle_pixel <= 1'b0;
-        else if (pixel_x == 11'd0 && pixel_y == OUTPUT_HEIGHT)
+        else if (pixel_x == 12'd0 && pixel_y == OUTPUT_HEIGHT)
             frame_toggle_pixel <= ~frame_toggle_pixel;
     end
 
@@ -246,6 +247,16 @@ module astra_graphics_pipeline #(
     wire framebuffer_wrap_y_baseline;
     wire framebuffer_key_enable_baseline;
     wire [31:0] framebuffer_key_baseline;
+    wire [10:0] display_source_width;
+    wire [10:0] display_source_height;
+    wire [10:0] display_crop_x;
+    wire [10:0] display_crop_y;
+    wire [10:0] display_crop_width;
+    wire [10:0] display_crop_height;
+    wire [10:0] display_viewport_x;
+    wire [10:0] display_viewport_y;
+    wire [10:0] display_viewport_width;
+    wire [10:0] display_viewport_height;
     wire tile0_enable_build;
     wire tile0_above_build;
     wire [7:0] tile0_opacity_build;
@@ -380,7 +391,7 @@ module astra_graphics_pipeline #(
     wire [31:0] sprite_deadline_error_count;
     wire [31:0] sprite_read_bytes;
     wire [63:0] sprite_overflow_bitmap;
-    wire [9:0] sprite_overflow_line;
+    wire [10:0] sprite_overflow_line;
     wire [31:0] sprite_overflow_count;
     wire [31:0] sprite_pixels_admitted;
     wire [31:0] sprite_pixels_dropped;
@@ -410,6 +421,19 @@ module astra_graphics_pipeline #(
     wire boot_text_commit_ready;
     wire boot_text_active_enable;
     wire [31:0] boot_text_generation;
+    wire pointer_shadow_enable;
+    wire [10:0] pointer_shadow_x;
+    wire [10:0] pointer_shadow_y;
+    wire [4:0] pointer_shadow_hot_x;
+    wire [4:0] pointer_shadow_hot_y;
+    wire pointer_image_write_enable;
+    wire [9:0] pointer_image_write_index;
+    wire [31:0] pointer_image_write_argb;
+    wire pointer_commit_enable;
+    wire pointer_commit_swap_image;
+    wire pointer_write_ready;
+    wire pointer_commit_ready;
+    wire [31:0] pointer_generation;
     wire render_enable_build;
     wire render_queue_rebase;
     wire render_soft_reset;
@@ -481,8 +505,8 @@ module astra_graphics_pipeline #(
     wire copper_move_valid;
     wire [15:0] copper_move_target;
     wire [31:0] copper_move_data;
-    wire [10:0] copper_move_beam_x;
-    wire [9:0] copper_move_beam_y;
+    wire [11:0] copper_move_beam_x;
+    wire [10:0] copper_move_beam_y;
     wire [1:0] copper_move_class;
     wire [15:0] copper_validate_move_target;
     wire [31:0] copper_validate_move_data;
@@ -494,16 +518,16 @@ module astra_graphics_pipeline #(
     wire [15:0] copper_validate_dispatch_id;
     wire copper_irq_event;
     wire [15:0] copper_irq_sources;
-    wire [10:0] copper_irq_beam_x;
-    wire [9:0] copper_irq_beam_y;
+    wire [11:0] copper_irq_beam_x;
+    wire [10:0] copper_irq_beam_y;
     wire copper_interrupt;
     wire copper_baseline_restore;
     wire copper_enabled;
     wire copper_running;
     wire copper_waiting;
     wire copper_faulted;
-    wire [10:0] copper_virtual_beam_x;
-    wire [9:0] copper_virtual_beam_y;
+    wire [11:0] copper_virtual_beam_x;
+    wire [10:0] copper_virtual_beam_y;
     wire graphics_render_interrupt;
     wire copper_register_move_ready;
     wire copper_move_allowed;
@@ -521,8 +545,8 @@ module astra_graphics_pipeline #(
     wire copper_exact_enqueue_ready;
     wire copper_irq_delivery_build;
     wire copper_pixel_event_irq;
-    wire [9:0] copper_pixel_event_y;
-    wire [10:0] copper_pixel_event_x;
+    wire [10:0] copper_pixel_event_y;
+    wire [11:0] copper_pixel_event_x;
     wire [15:0] copper_pixel_event_target;
     wire [31:0] copper_pixel_event_data;
     wire copper_pixel_event_valid;
@@ -910,6 +934,16 @@ module astra_graphics_pipeline #(
         .framebuffer_wrap_y(framebuffer_wrap_y_baseline),
         .framebuffer_key_enable(framebuffer_key_enable_baseline),
         .framebuffer_key(framebuffer_key_baseline),
+        .display_source_width(display_source_width),
+        .display_source_height(display_source_height),
+        .display_crop_x(display_crop_x),
+        .display_crop_y(display_crop_y),
+        .display_crop_width(display_crop_width),
+        .display_crop_height(display_crop_height),
+        .display_viewport_x(display_viewport_x),
+        .display_viewport_y(display_viewport_y),
+        .display_viewport_width(display_viewport_width),
+        .display_viewport_height(display_viewport_height),
         .framebuffer_axi_debug_status(framebuffer_axi_debug_status),
         .framebuffer_axi_ar_accept_count(framebuffer_axi_ar_accept_count),
         .framebuffer_axi_r_accept_count(framebuffer_axi_r_accept_count),
@@ -1004,6 +1038,19 @@ module astra_graphics_pipeline #(
         .boot_text_commit_ready(boot_text_commit_ready),
         .boot_text_active_enable(boot_text_active_enable),
         .boot_text_generation(boot_text_generation),
+        .pointer_shadow_enable(pointer_shadow_enable),
+        .pointer_shadow_x(pointer_shadow_x),
+        .pointer_shadow_y(pointer_shadow_y),
+        .pointer_shadow_hot_x(pointer_shadow_hot_x),
+        .pointer_shadow_hot_y(pointer_shadow_hot_y),
+        .pointer_image_write_enable(pointer_image_write_enable),
+        .pointer_image_write_index(pointer_image_write_index),
+        .pointer_image_write_argb(pointer_image_write_argb),
+        .pointer_commit_enable(pointer_commit_enable),
+        .pointer_commit_swap_image(pointer_commit_swap_image),
+        .pointer_write_ready(pointer_write_ready),
+        .pointer_commit_ready(pointer_commit_ready),
+        .pointer_generation(pointer_generation),
         .render_enable(render_enable_build),
         .render_queue_rebase(render_queue_rebase),
         .render_soft_reset(render_soft_reset),
@@ -1062,7 +1109,8 @@ module astra_graphics_pipeline #(
     astra_render_command_processor #(
         .ARENA_BASE(ARENA_BASE),
         .ARENA_LIMIT(ARENA_LIMIT),
-        .AXI_ID_WIDTH(AXI_ID_WIDTH)
+        .AXI_ID_WIDTH(AXI_ID_WIDTH),
+        .CYCLES_PER_US(BUILD_CYCLES_PER_US)
     ) render_command_i (
         .clk(build_clk),
         .reset(build_reset),
@@ -1195,20 +1243,25 @@ module astra_graphics_pipeline #(
 
     wire scheduler_start;
     wire scheduler_line_prepare_valid;
-    wire [9:0] scheduler_line_prepare_y;
+    wire [10:0] scheduler_line_prepare_y;
+    wire [10:0] scheduler_line_prepare_source_y;
+    wire scheduler_line_prepare_source_active;
     wire scheduler_line_prepare_ready;
     wire [1:0] scheduler_build_slot;
-    wire [9:0] scheduler_line_y;
+    wire [10:0] scheduler_line_y;
+    wire [10:0] scheduler_source_y;
     wire [3:0] scheduler_client_enable;
     wire [3:0] scheduler_client_done;
     wire [3:0] scheduler_client_complete;
     wire [1:0] pixel_read_slot;
     wire pixel_line_available;
     wire [3:0] pixel_slot_valid;
-    wire [9:0] pixel_slot_tag0;
-    wire [9:0] pixel_slot_tag1;
-    wire [9:0] pixel_slot_tag2;
-    wire [9:0] pixel_slot_tag3;
+    wire [10:0] pixel_slot_tag0;
+    wire [10:0] pixel_slot_tag1;
+    wire [10:0] pixel_slot_tag2;
+    wire [10:0] pixel_slot_tag3;
+    wire pixel_source_active;
+    wire [10:0] pixel_source_y;
 
     astra_copper_beam_scheduler #(
         .OUTPUT_HEIGHT(OUTPUT_HEIGHT),
@@ -1223,8 +1276,11 @@ module astra_graphics_pipeline #(
         .copper_enabled(copper_enabled),
         .copper_running(copper_running),
         .copper_waiting(copper_waiting),
+        .source_width(display_source_width),
+        .source_height(display_source_height),
+        .last_visible_source_y(display_crop_y + display_crop_height - 11'd1),
         .line_prepare_valid(scheduler_line_prepare_valid),
-        .line_prepare_y(scheduler_line_prepare_y),
+        .line_prepare_y(scheduler_line_prepare_source_y),
         .line_prepare_ready(scheduler_line_prepare_ready),
         .beam_x(copper_virtual_beam_x),
         .beam_y(copper_virtual_beam_y)
@@ -1245,12 +1301,19 @@ module astra_graphics_pipeline #(
         .tile0_enable(tile0_enable_build),
         .tile1_enable(tile1_enable_build),
         .sprite_enable(sprite_enable_build),
+        .display_viewport_y(display_viewport_y),
+        .display_viewport_height(display_viewport_height),
+        .display_source_y(display_crop_y),
+        .display_source_height(display_crop_height),
         .line_prepare_valid(scheduler_line_prepare_valid),
         .line_prepare_y(scheduler_line_prepare_y),
+        .line_prepare_source_y(scheduler_line_prepare_source_y),
+        .line_prepare_source_active(scheduler_line_prepare_source_active),
         .line_prepare_ready(scheduler_line_prepare_ready),
         .client_start(scheduler_start),
         .client_build_slot(scheduler_build_slot),
         .client_line_y(scheduler_line_y),
+        .client_source_y(scheduler_source_y),
         .client_enable(scheduler_client_enable),
         .client_done(scheduler_client_done),
         .client_line_complete(scheduler_client_complete),
@@ -1269,7 +1332,9 @@ module astra_graphics_pipeline #(
         .pixel_slot_tag0(pixel_slot_tag0),
         .pixel_slot_tag1(pixel_slot_tag1),
         .pixel_slot_tag2(pixel_slot_tag2),
-        .pixel_slot_tag3(pixel_slot_tag3)
+        .pixel_slot_tag3(pixel_slot_tag3),
+        .pixel_source_active(pixel_source_active),
+        .pixel_source_y(pixel_source_y)
     );
 
 
@@ -1326,7 +1391,7 @@ module astra_graphics_pipeline #(
         .build_reset(build_reset),
         .start(scheduler_start && scheduler_client_enable[0]),
         .build_slot(scheduler_build_slot),
-        .line_y(scheduler_line_y),
+        .line_y(scheduler_source_y),
         .format(framebuffer_format_build),
         .framebuffer_base(framebuffer_base_build),
         .pitch(framebuffer_pitch_build),
@@ -1387,7 +1452,7 @@ module astra_graphics_pipeline #(
         .build_reset(build_reset),
         .start(scheduler_start && scheduler_client_enable[1]),
         .build_slot(scheduler_build_slot),
-        .line_y({1'b0, scheduler_line_y}),
+        .line_y(scheduler_source_y),
         .scroll_x(tile0_scroll_x_build),
         .scroll_y(tile0_scroll_y_build),
         .tile_16(tile0_tile_16_build),
@@ -1449,7 +1514,7 @@ module astra_graphics_pipeline #(
         .build_reset(build_reset),
         .start(scheduler_start && scheduler_client_enable[2]),
         .build_slot(scheduler_build_slot),
-        .line_y({1'b0, scheduler_line_y}),
+        .line_y(scheduler_source_y),
         .scroll_x(tile1_scroll_x_build),
         .scroll_y(tile1_scroll_y_build),
         .tile_16(tile1_tile_16_build),
@@ -1514,7 +1579,7 @@ module astra_graphics_pipeline #(
         .build_reset(build_reset),
         .start(scheduler_start && scheduler_client_enable[3]),
         .build_slot(scheduler_build_slot),
-        .line_y(scheduler_line_y),
+        .line_y(scheduler_source_y),
         .order_read_enable(sprite_order_read_enable),
         .order_read_position(sprite_order_read_position),
         .order_read_index(sprite_order_read_index),
@@ -1594,35 +1659,109 @@ module astra_graphics_pipeline #(
         framebuffer_line_complete
     };
 
-    // Structural pixel configuration remains stable for a complete frame.
+    // Structural pixel configuration crosses as one atomic frame snapshot.
+    // The source holds the data until the pixel side acknowledges it; the
+    // pixel side activates it only at the physical vertical-blank boundary.
     // Visual controls are captured separately with each completed line slot
     // so next-scanline copper changes cannot affect an earlier prefetched
     // line.
-    wire [26:0] build_pixel_config = {
+    wire [70:0] build_pixel_config = {
+        display_viewport_x,
+        display_viewport_width,
+        display_crop_x,
+        display_crop_width,
         scene_enable_build,
-        backdrop_rgb_build,
+        backdrop_rgb_baseline,
         framebuffer_format_build
     };
-    (* ASYNC_REG = "TRUE" *) reg [26:0] pixel_config_meta;
-    (* ASYNC_REG = "TRUE" *) reg [26:0] pixel_config_sync;
+    localparam [70:0] DEFAULT_PIXEL_CONFIG = {
+        11'd0, OUTPUT_WIDTH[10:0],
+        11'd0, OUTPUT_WIDTH[10:0],
+        1'b0, 24'h101820, 2'b01
+    };
+
+    reg [70:0] pixel_config_hold_build;
+    reg [70:0] pixel_config_pending_build;
+    reg pixel_config_pending_valid_build;
+    reg pixel_config_request_build;
+    reg pixel_config_ack_pixel;
+    (* preserve *) reg pixel_config_ack_meta_build;
+    (* preserve *) reg pixel_config_ack_sync_build;
+    wire pixel_config_ready_build =
+        pixel_config_ack_sync_build == pixel_config_request_build;
+
+    always @(posedge build_clk or posedge build_reset) begin
+        if (build_reset) begin
+            pixel_config_hold_build <= DEFAULT_PIXEL_CONFIG;
+            pixel_config_pending_build <= DEFAULT_PIXEL_CONFIG;
+            pixel_config_pending_valid_build <= 1'b1;
+            pixel_config_request_build <= 1'b0;
+            pixel_config_ack_meta_build <= 1'b0;
+            pixel_config_ack_sync_build <= 1'b0;
+        end else begin
+            pixel_config_ack_meta_build <= pixel_config_ack_pixel;
+            pixel_config_ack_sync_build <= pixel_config_ack_meta_build;
+
+            if (pixel_config_ready_build &&
+                pixel_config_pending_valid_build) begin
+                pixel_config_hold_build <= pixel_config_pending_build;
+                pixel_config_request_build <= ~pixel_config_request_build;
+                pixel_config_pending_valid_build <= scene_changed;
+                if (scene_changed)
+                    pixel_config_pending_build <= build_pixel_config;
+            end else if (pixel_config_ready_build && scene_changed) begin
+                pixel_config_hold_build <= build_pixel_config;
+                pixel_config_request_build <= ~pixel_config_request_build;
+            end else if (scene_changed) begin
+                pixel_config_pending_build <= build_pixel_config;
+                pixel_config_pending_valid_build <= 1'b1;
+            end
+        end
+    end
+
+    (* preserve *) reg pixel_config_request_meta_pixel;
+    (* preserve *) reg pixel_config_request_sync_pixel;
+    (* preserve *) reg [70:0] pixel_config_meta_pixel;
+    (* preserve *) reg [70:0] pixel_config_sync_pixel;
+    reg [70:0] pixel_config_active_pixel;
     always @(posedge pixel_clk or posedge pixel_reset) begin
         if (pixel_reset) begin
-            pixel_config_meta <= 27'd0;
-            pixel_config_sync <= 27'd0;
+            pixel_config_request_meta_pixel <= 1'b0;
+            pixel_config_request_sync_pixel <= 1'b0;
+            pixel_config_meta_pixel <= DEFAULT_PIXEL_CONFIG;
+            pixel_config_sync_pixel <= DEFAULT_PIXEL_CONFIG;
+            pixel_config_active_pixel <= DEFAULT_PIXEL_CONFIG;
+            pixel_config_ack_pixel <= 1'b0;
         end else begin
-            pixel_config_meta <= build_pixel_config;
-            pixel_config_sync <= pixel_config_meta;
+            pixel_config_request_meta_pixel <= pixel_config_request_build;
+            pixel_config_request_sync_pixel <=
+                pixel_config_request_meta_pixel;
+            pixel_config_meta_pixel <= pixel_config_hold_build;
+            pixel_config_sync_pixel <= pixel_config_meta_pixel;
+            if (pixel_x == 12'd0 && pixel_y == OUTPUT_HEIGHT &&
+                pixel_config_request_sync_pixel != pixel_config_ack_pixel) begin
+                pixel_config_active_pixel <= pixel_config_sync_pixel;
+                pixel_config_ack_pixel <= pixel_config_request_sync_pixel;
+            end
         end
     end
 
     wire scene_enable_pixel;
     wire [23:0] backdrop_rgb_pixel_baseline;
     wire [1:0] framebuffer_format_pixel;
+    wire [10:0] display_viewport_x_pixel;
+    wire [10:0] display_viewport_width_pixel;
+    wire [10:0] display_crop_x_pixel;
+    wire [10:0] display_crop_width_pixel;
     assign {
+        display_viewport_x_pixel,
+        display_viewport_width_pixel,
+        display_crop_x_pixel,
+        display_crop_width_pixel,
         scene_enable_pixel,
         backdrop_rgb_pixel_baseline,
         framebuffer_format_pixel
-    } = pixel_config_sync;
+    } = pixel_config_active_pixel;
     assign scene_active = scene_enable_build;
 
     wire [54:0] build_line_visual = {
@@ -1652,10 +1791,10 @@ module astra_graphics_pipeline #(
         end
     end
 
-    wire [9:0] visual_candidate_line =
-        pixel_y == TOTAL_HEIGHT - 1 ? 10'd0 : pixel_y + 10'd1;
+    wire [10:0] visual_candidate_line =
+        pixel_y == TOTAL_HEIGHT - 1 ? 11'd0 : pixel_y + 11'd1;
     wire [1:0] visual_candidate_slot = visual_candidate_line[1:0];
-    wire [9:0] visual_candidate_tag =
+    wire [10:0] visual_candidate_tag =
         visual_candidate_slot == 2'd0 ? pixel_slot_tag0 :
         visual_candidate_slot == 2'd1 ? pixel_slot_tag1 :
         visual_candidate_slot == 2'd2 ? pixel_slot_tag2 : pixel_slot_tag3;
@@ -1709,7 +1848,7 @@ module astra_graphics_pipeline #(
             backdrop_rgb_pixel_active <= 24'd0;
             backdrop_pixel_mutated <= 1'b0;
         end else begin
-            if (pixel_x == 11'd0 && pixel_y == OUTPUT_HEIGHT)
+            if (pixel_x == 12'd0 && pixel_y == OUTPUT_HEIGHT)
                 backdrop_pixel_mutated <= 1'b0;
             if (!backdrop_pixel_mutated)
                 backdrop_rgb_pixel_active <= backdrop_rgb_pixel_baseline;
@@ -1727,23 +1866,42 @@ module astra_graphics_pipeline #(
     wire current_line_active = pixel_y < OUTPUT_HEIGHT;
     wire next_line_active = pixel_y < OUTPUT_HEIGHT - 1 ||
                             pixel_y == TOTAL_HEIGHT - 1;
-    assign line_read_x = prefetch_current ?
-        pixel_x + OUTPUT_PREFETCH :
-        prefetch_next ? pixel_x - (TOTAL_WIDTH - OUTPUT_PREFETCH) : 11'd0;
-    wire line_source_request = scene_enable_pixel &&
-        pixel_line_available &&
-        ((prefetch_current && current_line_active) ||
-         (prefetch_next && next_line_active));
-    wire [9:0] line_source_y = prefetch_current ? pixel_y :
-        (pixel_y == TOTAL_HEIGHT - 1 ? 10'd0 : pixel_y + 10'd1);
+    wire [10:0] requested_physical_x = prefetch_current ?
+        pixel_x[10:0] + OUTPUT_PREFETCH :
+        prefetch_next ?
+            pixel_x[10:0] - (TOTAL_WIDTH - OUTPUT_PREFETCH) : 11'd0;
+    wire coordinate_request =
+        (prefetch_current && current_line_active) ||
+        (prefetch_next && next_line_active);
+    wire horizontal_map_valid;
+    wire horizontal_map_active;
+    wire [10:0] horizontal_source_x;
+    astra_display_axis_scaler #(.WIDTH(11)) horizontal_mapper_i (
+        .clk(pixel_clk),
+        .reset(pixel_reset),
+        .sample_valid(coordinate_request),
+        .sequence_start(requested_physical_x == 11'd0),
+        .physical_position(requested_physical_x),
+        .viewport_origin(display_viewport_x_pixel),
+        .viewport_extent(display_viewport_width_pixel),
+        .source_origin(display_crop_x_pixel),
+        .source_extent(display_crop_width_pixel),
+        .output_valid(horizontal_map_valid),
+        .output_active(horizontal_map_active),
+        .source_position(horizontal_source_x)
+    );
+    assign line_read_x = horizontal_source_x;
+    wire line_source_request = scene_enable_pixel && pixel_source_active &&
+        pixel_line_available && horizontal_map_valid && horizontal_map_active;
+    wire [10:0] line_source_y = pixel_source_y;
     reg line_source_valid_q;
     reg [10:0] line_source_x_q;
-    reg [9:0] line_source_y_q;
+    reg [10:0] line_source_y_q;
     always @(posedge pixel_clk) begin
         if (pixel_reset) begin
             line_source_valid_q <= 1'b0;
             line_source_x_q <= 11'd0;
-            line_source_y_q <= 10'd0;
+            line_source_y_q <= 11'd0;
         end else begin
             line_source_valid_q <= line_source_request;
             line_source_x_q <= line_read_x;
@@ -1918,6 +2076,8 @@ module astra_graphics_pipeline #(
         .output_rgb(compositor_output_rgb)
     );
 
+    wire boot_overlay_output_valid;
+    wire [23:0] boot_overlay_output_rgb;
     astra_boot_text_overlay #(
         .FONT_HEX(BOOT_FONT_HEX),
         .COLS(BOOT_TEXT_COLS),
@@ -1941,11 +2101,62 @@ module astra_graphics_pipeline #(
         .pixel_clk(pixel_clk),
         .pixel_reset(pixel_reset),
         .pixel_frame_boundary(
-            pixel_x == 11'd0 && pixel_y == OUTPUT_HEIGHT),
+            pixel_x == 12'd0 && pixel_y == OUTPUT_HEIGHT),
         .input_valid(compositor_output_valid),
         .pixel_x(pixel_x),
         .pixel_y(pixel_y),
         .input_rgb(compositor_output_rgb),
+        .output_valid(boot_overlay_output_valid),
+        .output_rgb(boot_overlay_output_rgb)
+    );
+
+    wire scanline_replaying;
+    wire scanline_output_valid;
+    wire [23:0] scanline_output_rgb;
+    astra_scanline_replay #(
+        .OUTPUT_WIDTH(OUTPUT_WIDTH),
+        .TOTAL_WIDTH(TOTAL_WIDTH)
+    ) scanline_replay_i (
+        .pixel_clk(pixel_clk),
+        .pixel_reset(pixel_reset),
+        .pixel_x(pixel_x),
+        .next_frame(pixel_x == TOTAL_WIDTH - 1 &&
+                    pixel_y == TOTAL_HEIGHT - 1),
+        .line_source_active(pixel_source_active),
+        .line_source_y(pixel_source_y),
+        .input_valid(boot_overlay_output_valid),
+        .input_rgb(boot_overlay_output_rgb),
+        .output_valid(scanline_output_valid),
+        .output_rgb(scanline_output_rgb),
+        .replaying(scanline_replaying)
+    );
+
+    astra_hardware_pointer #(
+        .OUTPUT_WIDTH(OUTPUT_WIDTH),
+        .OUTPUT_HEIGHT(OUTPUT_HEIGHT)
+    ) hardware_pointer_i (
+        .build_clk(build_clk),
+        .build_reset(build_reset),
+        .shadow_enable(pointer_shadow_enable),
+        .shadow_x(pointer_shadow_x),
+        .shadow_y(pointer_shadow_y),
+        .shadow_hot_x(pointer_shadow_hot_x),
+        .shadow_hot_y(pointer_shadow_hot_y),
+        .image_write_enable(pointer_image_write_enable),
+        .image_write_index(pointer_image_write_index),
+        .image_write_argb(pointer_image_write_argb),
+        .commit_strobe(pointer_commit_enable),
+        .commit_swap_image(pointer_commit_swap_image),
+        .write_ready(pointer_write_ready),
+        .commit_ready(pointer_commit_ready),
+        .generation(pointer_generation),
+        .pixel_clk(pixel_clk),
+        .pixel_reset(pixel_reset),
+        .frame_boundary(pixel_x == 12'd0 && pixel_y == OUTPUT_HEIGHT),
+        .pixel_x(pixel_x),
+        .pixel_y(pixel_y),
+        .input_valid(scanline_output_valid),
+        .input_rgb(scanline_output_rgb),
         .output_valid(pixel_output_valid),
         .output_rgb(pixel_output_rgb)
     );
@@ -1981,7 +2192,8 @@ module astra_graphics_pipeline #(
         tile1_build_cycles,
         tile1_map_read_bytes,
         tile1_pattern_read_bytes,
-        sprite_completed_slot
+        sprite_completed_slot,
+        scanline_replaying
     };
 endmodule
 

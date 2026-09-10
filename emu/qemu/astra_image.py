@@ -128,17 +128,13 @@ HOSTBENCH_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
 def _build_current_userspace():
     """Publish every image input from the current source tree."""
     directory = os.path.join(REPOSITORY, "sw/userspace")
-    for target in ("clean", "all"):
-        command = ["make", "-C", directory, target]
-        if target == "all":
-            command[1:1] = ["-j", str(os.cpu_count() or 1)]
-        result = subprocess.run(command,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT)
-        if result.returncode != 0:
-            raise RuntimeError("cannot %s current userspace products: %s" %
-                               (target, result.stdout.decode(
-                                   "utf-8", "replace").strip()))
+    command = ["make", "-j", str(os.cpu_count() or 1),
+               "-C", directory, "all"]
+    result = subprocess.run(command, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT)
+    if result.returncode != 0:
+        raise RuntimeError("cannot build current userspace products: %s" %
+                           result.stdout.decode("utf-8", "replace").strip())
 
 
 def ext4_partition(image):

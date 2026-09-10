@@ -1,5 +1,5 @@
-#ifndef ASTRA_USERSPACE_FONT_LIBRARY_H
-#define ASTRA_USERSPACE_FONT_LIBRARY_H
+#ifndef ASTRA_FONT_LIBRARY_H
+#define ASTRA_FONT_LIBRARY_H
 
 #include <stdint.h>
 

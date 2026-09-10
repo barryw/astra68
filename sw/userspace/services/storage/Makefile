@@ -7,8 +7,10 @@ RUNTIME := ../../runtime
 STORAGE := ../../storage
 ALLOC := ../../alloc
 VFS := ../../vfs
+NDK := ../../../../ndk
 LWEXT4 := ../../../../third_party/lwext4
-CPPFLAGS := -I../../include -I../../../include -I$(RUNTIME)/include \
+CPPFLAGS := -I$(NDK)/include -I../../include -I../../../include \
+	-I$(RUNTIME)/include \
 	-I$(STORAGE)/include -I$(ALLOC)/include -I$(VFS)/include \
 	-I$(LWEXT4)/include -I$(STORAGE)/port/include \
 	-DCONFIG_USE_DEFAULT_CFG=0 -I$(RUNTIME)/freestanding
@@ -26,7 +28,7 @@ EXT4_LIB := $(STORAGE)/build/m68k/libastraext4.a
 ALLOC_LIB := $(ALLOC)/build/m68k/libastraalloc.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 CRT0 := $(RUNTIME)/build/m68k/crt0.o
-ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(STORAGE) $(ALLOC) $(VFS)
+ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(STORAGE) $(ALLOC) $(VFS) $(NDK)
 include ../../program.mk
 
 $(TARGET): $(OBJECT) $(CRT0) $(VFS_LIB) $(EXT4_LIB) $(STORAGE_LIB) \

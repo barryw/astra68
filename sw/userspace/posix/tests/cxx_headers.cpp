@@ -1,5 +1,4 @@
-#include <astra/program.h>
-#include <astra/runtime.h>
+#include <astra/ndk.h>
 #include <pthread.h>
 
 static_assert(sizeof(AstraProgram) == ASTRA_PROGRAM_SIZE);

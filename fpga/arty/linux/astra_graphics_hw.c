@@ -237,6 +237,29 @@ void astra_graphics_memory_copy_to(volatile void *destination,
         *out++ = *in++;
 }
 
+void astra_graphics_memory_copy_from(void *destination,
+                                     volatile const void *source,
+                                     size_t bytes)
+{
+    uint8_t *out = destination;
+    volatile const uint8_t *in = source;
+
+    while (bytes != 0u && ((uintptr_t)in & 7u) != 0u) {
+        *out++ = *in++;
+        --bytes;
+    }
+    while (bytes >= sizeof(uint64_t)) {
+        uint64_t value = *(volatile const uint64_t *)(uintptr_t)in;
+
+        __builtin_memcpy(out, &value, sizeof(value));
+        out += sizeof(value);
+        in += sizeof(value);
+        bytes -= sizeof(value);
+    }
+    while (bytes-- != 0u)
+        *out++ = *in++;
+}
+
 int astra_graphics_scene_commit(
     const struct astra_graphics_device *device, uint64_t timeout_ns,
     uint32_t *generation_out)

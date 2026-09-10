@@ -6,7 +6,8 @@ HOST_CC ?= cc
 ANALYZER_CC ?= gcc
 RUNTIME := ../runtime
 TERMINAL_DIR := ../terminal
-CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include
+NDK := ../../../ndk
+CPPFLAGS := -I$(NDK)/include -Iinclude -I../../include -I$(RUNTIME)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
@@ -15,14 +16,14 @@ HOST_FLAGS := -O2 -fno-builtin
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 
 SOURCES := src/stream_sink.c src/stream_client.c
-HEADERS := include/astra/stream.h ../../include/astra/stream_service.h \
+HEADERS := $(NDK)/include/astra/stream.h ../../include/astra/stream_service.h \
 	../../include/astra/syscall.h
 
 TARGET := build/m68k/libastrastreams.a
 TARGET_OBJECTS := build/m68k/stream_sink.o build/m68k/stream_client.o
 # The sink renders into the terminal model, so the test links it: "a write
 # renders" is only worth asserting against what will actually be on the screen.
-TEST_CPPFLAGS := $(CPPFLAGS) -I$(TERMINAL_DIR)/include
+TEST_CPPFLAGS := $(CPPFLAGS)
 TEST_SOURCES := $(SOURCES) $(TERMINAL_DIR)/src/terminal.c \
 	tests/test_streams.c
 HOST_TEST := build/host/test_streams

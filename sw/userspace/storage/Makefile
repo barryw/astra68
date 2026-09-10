@@ -6,10 +6,11 @@ SIZE := $(CROSS)size
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
 RUNTIME := ../runtime
+NDK := ../../../ndk
 LWEXT4 := ../../../third_party/lwext4
 MKE2FS ?= mke2fs
 E2FSCK ?= e2fsck
-CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include
+CPPFLAGS := -I$(NDK)/include -Iinclude -I../../include -I$(RUNTIME)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O2 -flto -ffreestanding -fno-builtin \
@@ -25,6 +26,7 @@ HOST_FLAGS := -O2 -fno-builtin
 # and it rebuilds more than it must; host tests are cheap and a wrong pass is
 # not.
 HOST_HEADERS := $(wildcard include/astra/*.h ../../include/astra/*.h \
+	$(NDK)/include/astra/*.h \
 	$(RUNTIME)/include/astra/*.h $(ALLOC)/include/astra/*.h \
 	port/include/generated/*.h tests/*.h)
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer

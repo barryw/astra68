@@ -336,7 +336,7 @@ static int has_dependents(const char *target,
 
             for (uint32_t provide = 0u;
                  provide < target_manifest->provide_count; ++provide)
-                if (requirement_matches(&consumer->requires[need],
+                if (requirement_matches(&consumer->requirements[need],
                                         &target_manifest->provides[provide]))
                     supplied_by_target = 1;
             if (!supplied_by_target) continue;
@@ -347,7 +347,7 @@ static int has_dependents(const char *target,
                      provide < bundles[candidate].manifest.provide_count;
                      ++provide)
                     if (requirement_matches(
-                            &consumer->requires[need],
+                            &consumer->requirements[need],
                             &bundles[candidate].manifest.provides[provide])) {
                         alternative = 1;
                         break;
@@ -355,11 +355,11 @@ static int has_dependents(const char *target,
             }
             if (!alternative) {
                 fprintf(stderr, "%s requires %s ABI %u >= %u.%u.%u\n",
-                        bundles[at].path, consumer->requires[need].name,
-                        consumer->requires[need].abi,
-                        consumer->requires[need].version.major,
-                        consumer->requires[need].version.minor,
-                        consumer->requires[need].version.patch);
+                        bundles[at].path, consumer->requirements[need].name,
+                        consumer->requirements[need].abi,
+                        consumer->requirements[need].version.major,
+                        consumer->requirements[need].version.minor,
+                        consumer->requirements[need].version.patch);
                 blocked = 1;
             }
         }

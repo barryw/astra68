@@ -4,18 +4,19 @@ CC := $(CROSS)gcc
 OBJCOPY := $(CROSS)objcopy
 SIZE := $(CROSS)size
 HOST_CC ?= cc
+NDK := ../../../../ndk
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	-Wl,--build-id=none -Wl,--gc-sections -T ../../runtime/astra_user.ld
-CPPFLAGS := -I../../../include -I../../runtime/include
+CPPFLAGS := -I$(NDK)/include -I../../../include -I../../runtime/include
 TARGET := build/m68k/posixd.elf
 IMAGE := build/m68k/posixd
 OBJECTS := build/m68k/main.o build/m68k/process_table.o
 RUNTIME_LIB := ../../runtime/build/m68k/libastrart.a
 CRT0 := ../../runtime/build/m68k/crt0.o
-ASTRA_PROGRAM_OWNER_DIRS := ../../runtime
+ASTRA_PROGRAM_OWNER_DIRS := ../../runtime $(NDK)
 include ../../program.mk
 TEST := build/host/test_process_table
 

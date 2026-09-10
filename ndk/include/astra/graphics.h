@@ -46,7 +46,23 @@ enum {
     /** Bounded hardware flood fill is available. */
     ASTRA_GRAPHICS_CAP_FLOOD_FILL = 1u << 8,
     /** A copied 256-entry display palette is available. */
-    ASTRA_GRAPHICS_CAP_PALETTE = 1u << 9
+    ASTRA_GRAPHICS_CAP_PALETTE = 1u << 9,
+    /** Logical scenes are scaled to the fixed physical output in hardware. */
+    ASTRA_GRAPHICS_CAP_DISPLAY_SCALER = 1u << 10,
+    /** A native-resolution 32 by 32 ARGB pointer plane is available. */
+    ASTRA_GRAPHICS_CAP_HARDWARE_POINTER = 1u << 11
+};
+
+/** Logical-scene placement policies for the fixed physical output. */
+enum {
+    /** Prefer useful integer enlargement, otherwise use aspect-preserving fit. */
+    ASTRA_DISPLAY_SCALE_AUTO = 0,
+    /** Use the largest integer enlargement and letterbox the remainder. */
+    ASTRA_DISPLAY_SCALE_INTEGER = 1,
+    /** Fill as much output as possible without cropping or distorting. */
+    ASTRA_DISPLAY_SCALE_FIT = 2,
+    /** Fill the output and symmetrically crop the logical scene as needed. */
+    ASTRA_DISPLAY_SCALE_FILL = 3
 };
 
 /** Pixel storage formats accepted by surfaces and source images. */
@@ -123,8 +139,12 @@ enum {
     ASTRA_DISPLAY_STATUS_CONFIG_ERROR = 1u << 2
 };
 
-/** Static hardware sprite limits for the primary 720-pixel scanout mode. */
+/** Static physical-output and hardware-sprite limits. */
 enum {
+    /** Fixed physical output width. */
+    ASTRA_GRAPHICS_OUTPUT_WIDTH = 1920,
+    /** Fixed physical output height. */
+    ASTRA_GRAPHICS_OUTPUT_HEIGHT = 1080,
     /** Number of hardware sprite descriptors. */
     ASTRA_GRAPHICS_SPRITE_COUNT = 64,
     /** Maximum INDEX8 source width. */
@@ -132,7 +152,7 @@ enum {
     /** Maximum INDEX8 source height. */
     ASTRA_SPRITE_SOURCE_HEIGHT_MAX = 128,
     /** Maximum destination width or height after scaling. */
-    ASTRA_SPRITE_DESTINATION_EXTENT_MAX = 1024,
+    ASTRA_SPRITE_DESTINATION_EXTENT_MAX = 2047,
     /** Maximum complete sprite spans admitted on one scanline. */
     ASTRA_SPRITES_PER_LINE = 16,
     /** Guaranteed aggregate admitted sprite pixels per scanline. */
@@ -242,6 +262,12 @@ typedef struct AstraFence {
 #define ASTRA_PRESENT_OPTIONS_INIT \
     { sizeof(AstraPresentOptions), 0, 0, 0, 0, 0, \
       { 0, 0, 0, 0 } }
+#define ASTRA_DISPLAY_MODE_INIT \
+    { sizeof(AstraDisplayMode), ASTRA_DISPLAY_SCALE_AUTO, 0, 0, \
+      { 0, 0, 0, 0 } }
+#define ASTRA_HARDWARE_POINTER_IMAGE_INIT \
+    { sizeof(AstraHardwarePointerImage), 0, 0, 0, 0, { 0, 0 }, \
+      { 0, 0, 0, 0 } }
 
 /** Declare a display handle that closes itself at normal scope exit. */
 #define ASTRA_AUTO_DISPLAY(name) \
@@ -291,6 +317,52 @@ typedef struct AstraRectI32 {
     /** Nonzero height. */
     uint32_t height;
 } AstraRectI32;
+
+/** Requested logical scene and hardware scaling policy. */
+typedef struct AstraDisplayMode {
+    /** Structure size in bytes. */
+    uint32_t size;
+    /** One `ASTRA_DISPLAY_SCALE_*` policy. */
+    uint32_t scaling;
+    /** Logical scene width in pixels. */
+    uint16_t width;
+    /** Logical scene height in pixels. */
+    uint16_t height;
+    /** Reserved for compatible growth; initialize to zero. */
+    uint32_t reserved[4];
+} AstraDisplayMode;
+
+/** Exact crop and viewport generated for the hardware scaler. */
+typedef struct AstraDisplayLayout {
+    uint16_t source_width;
+    uint16_t source_height;
+    uint16_t crop_x;
+    uint16_t crop_y;
+    uint16_t crop_width;
+    uint16_t crop_height;
+    uint16_t viewport_x;
+    uint16_t viewport_y;
+    uint16_t viewport_width;
+    uint16_t viewport_height;
+} AstraDisplayLayout;
+
+/** Copied native-resolution hardware-pointer image. */
+typedef struct AstraHardwarePointerImage {
+    /** Structure size in bytes. */
+    uint32_t size;
+    /** Row-major RGBA pixels copied before return. */
+    const AstraColorRGBA8 *pixels;
+    /** Image width from one through 32. */
+    uint16_t width;
+    /** Image height from one through 32. */
+    uint16_t height;
+    /** Source row pitch in bytes. */
+    uint32_t pitch;
+    /** Hotspot within the image. */
+    AstraPointI32 hotspot;
+    /** Reserved for compatible growth; initialize to zero. */
+    uint32_t reserved[4];
+} AstraHardwarePointerImage;
 
 /** Static graphics and output limits. */
 typedef struct AstraGraphicsInfo {
@@ -448,9 +520,9 @@ typedef struct AstraSpriteUpdate {
 
 /** One validated beam-synchronized register change. */
 typedef struct AstraRasterChange {
-    /** Physical beam line from zero through 479. */
+    /** Logical source beam line. */
     uint16_t beam_y;
-    /** Physical beam column from zero through 719. */
+    /** Logical source beam column. */
     uint16_t beam_x;
     /** One `ASTRA_RASTER_TARGET_*` value. */
     uint16_t target;
@@ -518,6 +590,28 @@ ASTRA_NODISCARD AstraResult astra_display_open(AstraDisplay *display);
  * @return ::ASTRA_OK on success or a negative ::AstraResult error.
  */
 ASTRA_NODISCARD AstraResult astra_display_close(AstraDisplay *display);
+
+/**
+ * Calculate the exact scaler crop and viewport without floating-point math.
+ *
+ * The physical timing never changes. Integer modes and fractional modes use
+ * the same nearest-neighbor hardware path; letterbox pixels are black.
+ */
+ASTRA_NODISCARD AstraResult astra_display_layout_calculate(
+    const AstraDisplayMode *mode, uint16_t output_width,
+    uint16_t output_height, AstraDisplayLayout *layout);
+/** Apply a logical mode atomically at vertical blank. */
+ASTRA_NODISCARD AstraResult astra_display_set_mode(
+    const AstraDisplay *display, const AstraDisplayMode *mode,
+    AstraFence *fence);
+/** Replace the copied 32 by 32 native hardware-pointer image at vertical blank. */
+ASTRA_NODISCARD AstraResult astra_display_set_pointer_image(
+    const AstraDisplay *display, const AstraHardwarePointerImage *image,
+    AstraFence *fence);
+/** Move and enable or disable the native hardware pointer at vertical blank. */
+ASTRA_NODISCARD AstraResult astra_display_set_pointer_state(
+    const AstraDisplay *display, AstraPointI32 position, int enabled,
+    AstraFence *fence);
 
 /**
  * Allocate a protected surface owned by the caller.
@@ -740,7 +834,7 @@ ASTRA_NODISCARD AstraResult astra_tile_layers_close(
     AstraTileLayers *tile_layers);
 
 /**
- * Allocate a set containing up to 32 hardware sprites.
+ * Allocate a set containing up to 64 hardware sprites.
  *
  * @param[in] display Display that owns the sprite set.
  * @param[out] sprite_set Empty handle that receives the set.
@@ -752,7 +846,7 @@ ASTRA_NODISCARD AstraResult astra_sprite_set_create(
  * Replace one sprite entry; a null update disables it.
  *
  * @param[in,out] sprite_set Mutable sprite set.
- * @param[in] index Sprite index from zero through 31.
+ * @param[in] index Sprite index from zero through 63.
  * @param[in] update Copied sprite state, or null to disable the entry.
  * @return ::ASTRA_OK on success or a negative ::AstraResult error.
  */

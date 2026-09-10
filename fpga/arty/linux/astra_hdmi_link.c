@@ -25,7 +25,7 @@
 enum {
     EDID_BLOCK_BYTES = 128u,
     EDID_DDC_ADDRESS = 0x50u,
-    HDMI_VIC_720P60 = 4u,
+    HDMI_VIC_1080P60 = 16u,
 };
 
 static int checksum_valid(const uint8_t block[EDID_BLOCK_BYTES])
@@ -38,7 +38,7 @@ static int checksum_valid(const uint8_t block[EDID_BLOCK_BYTES])
     return (sum & 0xffu) == 0u;
 }
 
-static int edid_supports_hdmi_720p(
+static int edid_supports_hdmi_1080p(
     const uint8_t base[EDID_BLOCK_BYTES],
     const uint8_t cta[EDID_BLOCK_BYTES])
 {
@@ -48,7 +48,7 @@ static int edid_supports_hdmi_720p(
     unsigned end;
     unsigned offset;
     int hdmi = 0;
-    int vic4 = 0;
+    int vic16 = 0;
 
     if (memcmp(base, header, sizeof(header)) != 0 ||
         !checksum_valid(base) || base[18] != 1u || base[19] < 3u ||
@@ -69,8 +69,8 @@ static int edid_supports_hdmi_720p(
             return 0;
         if (tag == 2u) {
             for (byte = 0u; byte < length; ++byte) {
-                if ((cta[offset + byte] & 0x7fu) == HDMI_VIC_720P60)
-                    vic4 = 1;
+                if ((cta[offset + byte] & 0x7fu) == HDMI_VIC_1080P60)
+                    vic16 = 1;
             }
         } else if (tag == 3u && length >= 5u &&
                    cta[offset] == 0x03u && cta[offset + 1u] == 0x0cu &&
@@ -79,7 +79,7 @@ static int edid_supports_hdmi_720p(
         }
         offset += length;
     }
-    return hdmi && vic4;
+    return hdmi && vic16;
 }
 
 static void finish_checksum(uint8_t block[EDID_BLOCK_BYTES])
@@ -110,7 +110,7 @@ static int self_test(void)
     cta[1] = 0x03u;
     cta[2] = 12u;
     cta[4] = 0x41u;
-    cta[5] = HDMI_VIC_720P60;
+    cta[5] = HDMI_VIC_1080P60;
     cta[6] = 0x65u;
     cta[7] = 0x03u;
     cta[8] = 0x0cu;
@@ -118,26 +118,26 @@ static int self_test(void)
     cta[10] = 0x10u;
     cta[11] = 0x00u;
     finish_checksum(cta);
-    if (!edid_supports_hdmi_720p(base, cta))
+    if (!edid_supports_hdmi_1080p(base, cta))
         return EXIT_FAILURE;
 
     base[127] ^= 1u;
-    if (edid_supports_hdmi_720p(base, cta))
+    if (edid_supports_hdmi_1080p(base, cta))
         return EXIT_FAILURE;
     base[127] ^= 1u;
     cta[9] = 1u;
     finish_checksum(cta);
-    if (edid_supports_hdmi_720p(base, cta))
+    if (edid_supports_hdmi_1080p(base, cta))
         return EXIT_FAILURE;
     cta[9] = 0u;
-    cta[5] = 16u;
+    cta[5] = 4u;
     finish_checksum(cta);
-    if (edid_supports_hdmi_720p(base, cta))
+    if (edid_supports_hdmi_1080p(base, cta))
         return EXIT_FAILURE;
-    cta[5] = HDMI_VIC_720P60;
+    cta[5] = HDMI_VIC_1080P60;
     cta[2] = 7u;
     finish_checksum(cta);
-    return edid_supports_hdmi_720p(base, cta) ?
+    return edid_supports_hdmi_1080p(base, cta) ?
            EXIT_FAILURE : EXIT_SUCCESS;
 }
 
@@ -251,8 +251,8 @@ static int configure_link(volatile uint32_t *registers, int event_fd)
         return -1;
     }
     (void)close(fd);
-    if (!edid_supports_hdmi_720p(base, cta)) {
-        puts("ASTRA HDMI LINK DVI sink lacks HDMI VSDB or VIC 4");
+    if (!edid_supports_hdmi_1080p(base, cta)) {
+        puts("ASTRA HDMI LINK DVI sink lacks HDMI VSDB or VIC 16");
         return 0;
     }
     connected = hpd_connected(event_fd);
@@ -261,7 +261,7 @@ static int configure_link(volatile uint32_t *registers, int event_fd)
     if (!connected)
         return 0;
     write_reg(registers, REG_LINK_CONTROL, 1u);
-    puts("ASTRA HDMI LINK HDMI 720p60 audio=2ch-LPCM-48k-24bit");
+    puts("ASTRA HDMI LINK HDMI 1080p60 audio=2ch-LPCM-48k-24bit");
     return 0;
 }
 

@@ -6,7 +6,8 @@ SIZE := $(CROSS)size
 READELF := $(CROSS)readelf
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
-CPPFLAGS := -Iinclude -I../../include
+NDK := ../../../ndk
+CPPFLAGS := -I$(NDK)/include -Iinclude -I../../include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -ffreestanding -fno-builtin \

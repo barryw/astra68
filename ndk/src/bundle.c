@@ -155,7 +155,7 @@ static int parse_line(char *line, AstraBundleManifest *manifest)
         uint16_t *used;
         if (count != 4u) return 0;
         if (strcmp(word[0], "requires") == 0) {
-            entry = manifest->requires;
+            entry = manifest->requirements;
             used = &manifest->require_count;
         } else {
             entry = manifest->provides;

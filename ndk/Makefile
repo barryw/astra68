@@ -2,6 +2,7 @@ include ../mk/m68k-cross.mk
 CC := $(CROSS)gcc
 AR := $(CROSS)ar
 HOST_CC ?= cc
+HOST_CXX ?= c++
 ANALYZER_CC ?= gcc
 CPU_FLAGS ?= -m68040 -msoft-float
 
@@ -19,7 +20,7 @@ PIC_LIB := build/m68k/libastra-pic.a
 SOURCES := src/resource.c src/area.c src/port.c src/bulk_ring.c \
 	src/front_panel.c src/font.c src/graphics.c src/pointer.c src/window.c \
 	src/application.c src/fixed.c src/manifest.c src/bundle.c \
-	src/datetime.c
+	src/datetime.c src/display_mode.c
 TARGET_OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES))
 PIC_OBJECTS := $(patsubst build/m68k/%,build/m68k/pic/%,$(TARGET_OBJECTS))
 HOST_TESTS := build/host/test_front_panel build/host/test_font \
@@ -68,7 +69,7 @@ build/host/test_font: src/font.c tests/test_font.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
 
-build/host/test_graphics: src/graphics.c tests/test_graphics.c
+build/host/test_graphics: src/graphics.c src/display_mode.c tests/test_graphics.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
 
@@ -108,7 +109,7 @@ build/host/test_bundle: src/manifest.c src/bundle.c tests/test_bundle.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
 
-test: $(HOST_TESTS)
+test: $(HOST_TESTS) header-contract
 	./build/host/test_front_panel
 	./build/host/test_font
 	./build/host/test_graphics
@@ -129,7 +130,8 @@ build/host/test_font_sanitize: src/font.c tests/test_font.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
 
-build/host/test_graphics_sanitize: src/graphics.c tests/test_graphics.c
+build/host/test_graphics_sanitize: src/graphics.c src/display_mode.c \
+		tests/test_graphics.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
 
@@ -214,11 +216,20 @@ docs-clean:
 
 sdk: all check analyze example docs
 
-install: $(LIB)
+header-contract:
+	rm -rf build/header-contract
+	$(MAKE) install-headers DESTDIR=$(abspath build/header-contract) PREFIX=
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -pedantic \
+		-Ibuild/header-contract/include -fsyntax-only tests/headers.c
+	$(HOST_CXX) -std=c++17 -Wall -Wextra -Werror -pedantic \
+		-Ibuild/header-contract/include -fsyntax-only tests/headers.cpp
+
+install-headers:
 	install -d $(DESTDIR)$(PREFIX)/include/astra $(DESTDIR)$(PREFIX)/lib
 	install -m 0644 include/astra/*.h $(DESTDIR)$(PREFIX)/include/astra/
-	install -m 0644 ../sw/include/astra/message_abi.h \
-		$(DESTDIR)$(PREFIX)/include/astra/
+	install -m 0644 ../sw/include/astra/*.h $(DESTDIR)$(PREFIX)/include/astra/
+
+install: $(LIB) install-headers
 	install -m 0644 $(LIB) $(DESTDIR)$(PREFIX)/lib/
 
 clean:
@@ -227,4 +238,4 @@ clean:
 -include $(TARGET_OBJECTS:.o=.d) $(PIC_OBJECTS:.o=.d)
 
 .PHONY: all pic test sanitize check analyze example docs docs-html docs-pdf \
-	docs-check docs-clean sdk install clean
+	docs-check docs-clean sdk header-contract install-headers install clean

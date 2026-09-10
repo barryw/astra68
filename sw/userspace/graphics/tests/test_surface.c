@@ -4,6 +4,7 @@
 #include <astra/render_builder.h>
 #include <astra/surface.h>
 #include <astra/theme.h>
+#include <astra/ui_font.h>
 
 #include <assert.h>
 #include <stdint.h>
@@ -18,6 +19,16 @@ static uint32_t be32(const uint8_t *bytes)
 {
     return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
            ((uint32_t)bytes[2] << 8) | bytes[3];
+}
+
+static int32_t high_s16(uint32_t value)
+{
+    return (int16_t)(value >> 16);
+}
+
+static int32_t low_s16(uint32_t value)
+{
+    return (int16_t)value;
 }
 
 static uint32_t finish_batch(AstraRenderBuilder *builder,
@@ -153,6 +164,70 @@ static void test_proportional_utf8_text(void)
     assert(!"UTF-8 UI text drew no pixels");
 }
 
+static void test_font_advance_and_baseline(void)
+{
+    static uint8_t batch[ASTRA_RENDER_BUILDER_BYTES];
+    AstraRenderBuilder builder;
+    const AstraUiStrike *strike;
+    const AstraUiGlyph *first;
+    const AstraUiGlyph *second;
+    const uint8_t *records = batch + ASTRA_RENDER_BATCH_GLYPH_OFFSET -
+                             ASTRA_RENDER_BATCH_ARENA_OFFSET;
+    uint32_t destination;
+    uint32_t first_position;
+    uint32_t second_position;
+
+    {
+        const AstraUiGlyph fractional = {
+            .bearing_x = 32,
+            .bearing_y = 32,
+            .advance_x = 96,
+        };
+
+        assert(astra_ui_glyph_x(0, &fractional) == 0);
+        assert(astra_ui_glyph_x(96, &fractional) == 2);
+        assert(astra_ui_glyph_x(-96, &fractional) == -1);
+        assert(astra_ui_glyph_y(0, &fractional) == -1);
+    }
+
+    for (uint16_t height = 11u; height <= 13u; height += 2u) {
+        strike = astra_ui_font_strike(height);
+        first = astra_ui_font_glyph(strike, 'I');
+        second = astra_ui_font_glyph(strike, 'W');
+        assert(first->advance_x < second->advance_x);
+        assert(astra_render_builder_init(&builder, batch, sizeof(batch), 1u));
+        destination = astra_render_builder_surface(&builder, 160u, 80u);
+        assert(astra_render_builder_text(
+            &builder, destination, 11, 7, "IW", 2u, height, 0xffffu));
+        first_position = be32(records + 8u);
+        second_position = be32(
+            records + ASTRA_RENDER_GLYPH_DESCRIPTOR_BYTES + 8u);
+        assert(high_s16(first_position) == astra_ui_glyph_x(11 * 64, first));
+        assert(high_s16(second_position) == astra_ui_glyph_x(
+            11 * 64 + astra_ui_glyph_advance(first, 0u), second));
+        assert(low_s16(first_position) + first->bearing_y / 64 ==
+               7 + strike->ascent);
+        assert(low_s16(second_position) + second->bearing_y / 64 ==
+               7 + strike->ascent);
+    }
+
+    strike = astra_mono_font_strike(16u);
+    first = astra_mono_font_glyph(strike, 'I');
+    second = astra_mono_font_glyph(strike, 'W');
+    assert(astra_render_builder_init(&builder, batch, sizeof(batch), 2u));
+    destination = astra_render_builder_surface(&builder, 160u, 80u);
+    assert(astra_render_builder_mono_text(
+        &builder, destination, 5, 3, "IW", 2u, 16u, 14u, 0xffffu));
+    first_position = be32(records + 8u);
+    second_position = be32(
+        records + ASTRA_RENDER_GLYPH_DESCRIPTOR_BYTES + 8u);
+    assert(high_s16(second_position) - high_s16(first_position) == 14);
+    assert(low_s16(first_position) + first->bearing_y / 64 ==
+           3 + strike->ascent);
+    assert(low_s16(second_position) + second->bearing_y / 64 ==
+           3 + strike->ascent);
+}
+
 static void test_hardware_draw_list_batch(void)
 {
     static uint8_t draw_storage[ASTRA_DRAW_LIST_AREA_BYTES];
@@ -249,7 +324,7 @@ static void test_scanout_source_is_explicit(void)
 
     assert(astra_render_builder_init(&builder, batch_storage,
                                      sizeof(batch_storage), 1u));
-    assert(astra_render_builder_scanout(&builder, UINT32_C(0x00400000)) ==
+    assert(astra_render_builder_scanout(&builder, UINT32_C(0x00600000)) ==
            0u);
 }
 
@@ -378,6 +453,7 @@ int main(void)
     test_color_and_glyph();
     test_text();
     test_proportional_utf8_text();
+    test_font_advance_and_baseline();
     test_hardware_draw_list_batch();
     test_scanout_source_is_explicit();
     test_mono_draw_list();

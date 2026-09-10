@@ -1,9 +1,9 @@
-# Arty graphics RTL
+# Vega graphics RTL
 
-This directory contains the production Zynq PL implementation of the Astra 68
-version-1 graphics architecture for the Arty Z7-20. The normative behavioral
+This historical path contains the shared production RTL used by the DE25-Nano
+Astra shell. The normative behavioral
 contract is [`docs/GRAPHICS_ARCHITECTURE.md`](../../../docs/GRAPHICS_ARCHITECTURE.md);
-[`TIMING_CLOSURE.md`](TIMING_CLOSURE.md) records exact source identities,
+[`fpga/de25/TIMING_CLOSURE.md`](../../de25/TIMING_CLOSURE.md) records current source identities,
 failed experiments, routed results, release artifacts, and hardware evidence.
 
 The complete graphics subsystem is implemented and hardware-qualified. It is
@@ -14,7 +14,9 @@ new architecture decision and complete regression, route, and hardware gates.
 
 ### Display and composition
 
-- Fixed 1280x720 progressive HDMI output at 60 Hz.
+- Fixed 1920x1080 progressive HDMI output at 60 Hz.
+- Frame-atomic logical scene modes with hardware nearest-neighbor scaling,
+  symmetric crop, letterboxing, integer enlargement, and fractional fit.
 - INDEX8, big-endian RGB565, and XRGB8888 framebuffer scanout.
 - Pixel-granular horizontal, vertical, and diagonal framebuffer scrolling,
   with independent X/Y wrapping over a virtual framebuffer.
@@ -22,7 +24,8 @@ new architecture decision and complete regression, route, and hardware gates.
   patterns, per-tile palette selection, reflection, transparency, and
   independent X/Y wrapping.
 - Ordered composition of tile layers, framebuffer, boot text, and sprite
-  planes into RGB888.
+  planes into RGB888, followed by exact repeated-line replay and a native
+  32x32 ARGB hardware-pointer plane.
 - Triple-buffered scene metadata and fenced, atomic frame-boundary promotion.
   Applications do not perform visible-state writes or wait directly for
   vblank.
@@ -39,8 +42,9 @@ new architecture decision and complete regression, route, and hardware gates.
   nearest-neighbor scaling, X/Y reflection, priority, front/behind placement,
   opacity, and source alpha.
 - All-pairs collision reporting.
-- Sprite 0 may be reserved by system policy as the hardware pointer; hardware
-  does not prevent applications with exclusive scene ownership from using it.
+- All 64 scene sprites remain available when the independent hardware pointer
+  is enabled or disabled. Scene sprites scale with the logical display mode;
+  the hardware pointer never scales.
 - Virtual sprites are bounded groups of ordinary blits into hidden surfaces.
   They inherit normal validation, timeout, completion, reset, and fence rules.
 
@@ -67,7 +71,8 @@ new architecture decision and complete regression, route, and hardware gates.
 - Hardware AFNT glyph expansion for MASK1, A4, A8, INDEX4, and INDEX8 glyph
   data through the same writer, blend, completion, timeout, and reset paths.
 - The four-row CP437 boot-text plane remains available for diagnostics before
-  the general command processor is usable. It is separate from AFNT.
+  the general command processor is usable. It uses the generated true 8x16
+  Spleen rescue strike and is separate from the AFNT command path.
 
 ### Copper
 
@@ -90,7 +95,10 @@ The real-time scanout side is divided into bounded stages:
 3. Framebuffer, descriptor, pattern, palette, tile, and sprite stores build
    complete line slots.
 4. The compositor resolves the ordered layers and sprite planes into RGB888.
-5. HDMI consumes only a complete, correctly tagged line slot.
+5. The scaler maps the fixed physical beam to logical source coordinates and
+   replays completed composed lines when vertical enlargement repeats a row.
+6. The native hardware-pointer plane composites after scaling.
+7. HDMI consumes the aligned RGB/timing bundle at 1920x1080p60.
 
 Linux reserves the contiguous 128 MiB physical range
 `0x18000000..0x1fffffff` as `no-map` graphics memory. Framebuffers, sprite
@@ -116,8 +124,8 @@ be zero. This plane is an early-host diagnostic surface, not the AFNT engine.
 | `0x148` | W | Cell value; successful writes auto-increment without wrapping. |
 | `0x14c` | R/W | Read bits 0/1/2 as write-ready, commit-ready, active; write exactly 1 to request vblank commit. |
 | `0x150` | R | Commit generation. |
-| `0x154` | R | Rows, columns, row pitch, and cell width: `0x04242010`. |
-| `0x158` | R | Y/X origin: `0x01f00108` (`x=264`, `y=496`). |
+| `0x154` | R | Rows, columns, row pitch, and cell width: `0x04243018`. |
+| `0x158` | R | Y/X origin: `0x02e8018c` (`x=396`, `y=744`). |
 
 The complete register, descriptor, command, scene, and timing-class contracts
 are defined in the architecture and generated public headers. Do not infer a
@@ -125,7 +133,7 @@ software ABI from internal RTL signals or historical checkpoint offsets.
 
 ## Verification
 
-Run the complete directed suite on Beast or NUC:
+Run the complete directed suite on Beast:
 
 ```sh
 fpga/arty/graphics/run_tests.sh
@@ -151,28 +159,8 @@ synthesis, route, and test artifacts must not be committed.
 
 ## Qualified release
 
-The clean from-source Vivado 2024.2 production flow routes the exact complete
-design with no failed, unrouted, partially routed, or overlapping nets and
-generates a valid bitstream. The retained result has:
-
-| Gate | Result |
-|---|---:|
-| Setup slack | +0.036 ns |
-| Hold slack | +0.016 ns |
-| Slice LUTs | 37,534 / 53,200 (70.55%) |
-| LUT as memory | 5,025 / 17,400 (28.88%) |
-| Slice registers | 44,655 / 106,400 (41.97%) |
-| Physical slices | 13,036 / 13,300 (98.02%) |
-| BRAM36 | 118 / 140 (84.29%) |
-| DSP48E1 | 83 / 220 (37.73%) |
-
-Ten consecutive Arty hardware certifications pass the copper, renderer, and
-sprite suites. The FPGA manager reports `operating`; HDMI, splash readback,
-scene promotion, renderer output, sprite output, and copper behavior are
-verified on the physical board.
-
-Only 264 physical slices and 22 BRAM36 blocks remain. BRAM is the primary
-future capacity limit and placement is tight, so nominal unused LUTs are not
-evidence that another PL feature will route. See
-[`TIMING_CLOSURE.md`](TIMING_CLOSURE.md) for the exact release identity and
-capacity history.
+Only the exact DE25 build that passes complete simulation, full-route timing,
+artifact hashing, deployment, repeated boot, and physical HDMI checks is a
+release. Current identities and capacity are recorded in
+[`fpga/de25/TIMING_CLOSURE.md`](../../de25/TIMING_CLOSURE.md), not duplicated
+here.

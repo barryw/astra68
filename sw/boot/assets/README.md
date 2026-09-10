@@ -1,27 +1,31 @@
 # Astra 68 Boot Splash
 
-## Arty 1280x720 source
+## DE25 1920x1080 source
 
-`astra_boot_splash_1280x720_blank.png` is the canonical Arty background. It is
-exactly 1280x720 and deliberately contains no sample status text. The hardware
+`astra_boot_splash_1920x1080_blank.png` is the canonical DE25 background. It is
+exactly 1920x1080 and deliberately contains no sample status text. The hardware
 boot plane writes real machine state into the lower panel at runtime. Source
 SHA-256 is
-`cdf001bb70e130c9267f5205261eb3855f1b74cbbba832dbcd22fb6d66f77ff9`.
+`db26450ae49471e81d90d4fdf554f1dd7226cf85f402af09d3f9e7e28cd2b687`.
 
 Regenerate its deterministic big-endian RGB565 payload with:
 
 ```sh
 python3 sw/boot/pack_arty_splash.py \
-  --image sw/boot/assets/astra_boot_splash_1280x720_blank.png \
+  --image sw/boot/assets/astra_boot_splash_1920x1080_blank.png \
   --output astra_boot_splash.rgb565
 ```
 
-The result is exactly 1,843,200 bytes at a 2,560-byte pitch, CRC32
-`611029ee`, and SHA-256
-`86eb30739db77b85f4deb1915fb9cb9263ab4755ae318ffb1b7a4a95b7017ba4`.
-The Arty boot text starts at `(264, 496)`, uses 36 columns by four rows, and
-renders 16x16 CP437 glyphs on a 32-pixel row pitch. The ARM writes cells only;
-it never paints text pixels into the framebuffer.
+The result is exactly 4,147,200 bytes at a 3,840-byte pitch, CRC32 `639de5a9`,
+and SHA-256
+`b61e792ce65f76dd60343c48f2b94b2c43f28dcba187be1f090f2b56a7c349b7`.
+The hardware boot text uses 36 columns by four rows. Its true 8x16 Spleen
+strike is generated from `sw/userspace/graphics/fonts/astra-mono.afnt`; each
+8-pixel advance and 12/4 ascent/descent line is enlarged 3x to a 24x48 physical
+cell. The ARM writes cells only; it never paints text pixels into the
+framebuffer.
+
+The retained `astra_boot_splash_1280x720_blank.png` is the former Arty source.
 
 ## Archived 720x480 source
 

@@ -29,6 +29,16 @@ module tb_astra_graphics_control;
     wire framebuffer_wrap_y;
     wire framebuffer_key_enable;
     wire [31:0] framebuffer_key;
+    wire [10:0] display_source_width;
+    wire [10:0] display_source_height;
+    wire [10:0] display_crop_x;
+    wire [10:0] display_crop_y;
+    wire [10:0] display_crop_width;
+    wire [10:0] display_crop_height;
+    wire [10:0] display_viewport_x;
+    wire [10:0] display_viewport_y;
+    wire [10:0] display_viewport_width;
+    wire [10:0] display_viewport_height;
     reg [31:0] framebuffer_axi_debug_status = 32'h89abcdef;
     reg [31:0] framebuffer_axi_ar_accept_count = 32'h10203040;
     reg [31:0] framebuffer_axi_r_accept_count = 32'h50607080;
@@ -125,6 +135,19 @@ wire [31:0] sprite_scale_step_x;
     reg boot_text_commit_ready = 1'b1;
     reg boot_text_active_enable = 1'b0;
     reg [31:0] boot_text_generation = 32'd0;
+    wire pointer_shadow_enable;
+    wire [10:0] pointer_shadow_x;
+    wire [10:0] pointer_shadow_y;
+    wire [4:0] pointer_shadow_hot_x;
+    wire [4:0] pointer_shadow_hot_y;
+    wire pointer_image_write_enable;
+    wire [9:0] pointer_image_write_index;
+    wire [31:0] pointer_image_write_argb;
+    wire pointer_commit_enable;
+    wire pointer_commit_swap_image;
+    reg pointer_write_ready = 1'b1;
+    reg pointer_commit_ready = 1'b1;
+    reg [31:0] pointer_generation = 32'd0;
     wire render_enable;
     wire render_queue_rebase;
     wire render_soft_reset;
@@ -262,6 +285,16 @@ wire [31:0] sprite_scale_step_x;
         .framebuffer_wrap_y(framebuffer_wrap_y),
         .framebuffer_key_enable(framebuffer_key_enable),
         .framebuffer_key(framebuffer_key),
+        .display_source_width(display_source_width),
+        .display_source_height(display_source_height),
+        .display_crop_x(display_crop_x),
+        .display_crop_y(display_crop_y),
+        .display_crop_width(display_crop_width),
+        .display_crop_height(display_crop_height),
+        .display_viewport_x(display_viewport_x),
+        .display_viewport_y(display_viewport_y),
+        .display_viewport_width(display_viewport_width),
+        .display_viewport_height(display_viewport_height),
         .framebuffer_axi_debug_status(framebuffer_axi_debug_status),
         .framebuffer_axi_ar_accept_count(framebuffer_axi_ar_accept_count),
         .framebuffer_axi_r_accept_count(framebuffer_axi_r_accept_count),
@@ -331,7 +364,7 @@ wire [31:0] sprite_scale_step_x;
         .sprite_deadline_error_count(32'h00000034),
         .sprite_read_bytes(32'd0),
         .sprite_overflow_bitmap(64'd0),
-        .sprite_overflow_line(10'd0),
+        .sprite_overflow_line(11'd0),
         .sprite_overflow_count(32'd0),
         .sprite_pixels_admitted(32'd0),
         .sprite_pixels_dropped(32'd0),
@@ -359,6 +392,19 @@ wire [31:0] sprite_scale_step_x;
         .boot_text_commit_ready(boot_text_commit_ready),
         .boot_text_active_enable(boot_text_active_enable),
         .boot_text_generation(boot_text_generation),
+        .pointer_shadow_enable(pointer_shadow_enable),
+        .pointer_shadow_x(pointer_shadow_x),
+        .pointer_shadow_y(pointer_shadow_y),
+        .pointer_shadow_hot_x(pointer_shadow_hot_x),
+        .pointer_shadow_hot_y(pointer_shadow_hot_y),
+        .pointer_image_write_enable(pointer_image_write_enable),
+        .pointer_image_write_index(pointer_image_write_index),
+        .pointer_image_write_argb(pointer_image_write_argb),
+        .pointer_commit_enable(pointer_commit_enable),
+        .pointer_commit_swap_image(pointer_commit_swap_image),
+        .pointer_write_ready(pointer_write_ready),
+        .pointer_commit_ready(pointer_commit_ready),
+        .pointer_generation(pointer_generation),
         .render_enable(render_enable),
         .render_queue_rebase(render_queue_rebase),
         .render_soft_reset(render_soft_reset),
@@ -418,6 +464,8 @@ wire [31:0] sprite_scale_step_x;
     integer tile_palette_writes = 0;
     integer boot_text_writes = 0;
     integer boot_text_commits = 0;
+    integer pointer_image_writes = 0;
+    integer pointer_commits = 0;
     integer boot_text_write_countdown = 0;
     integer boot_text_commit_countdown = 0;
     reg boot_text_auto_handshake = 1'b1;
@@ -457,6 +505,17 @@ wire [31:0] sprite_scale_step_x;
                 boot_text_commit_ready <= 1'b0;
                 boot_text_commit_countdown <= 3;
             end
+        end
+        if (pointer_image_write_enable) begin
+            pointer_image_writes <= pointer_image_writes + 1;
+            if (pointer_image_write_index != 10'd5 ||
+                pointer_image_write_argb != 32'h80abcdef)
+                $fatal(1, "wrong pointer image write");
+        end
+        if (pointer_commit_enable) begin
+            pointer_commits <= pointer_commits + 1;
+            if (!pointer_commit_swap_image)
+                $fatal(1, "pointer image swap missing");
         end
         if (boot_text_write_countdown > 0) begin
             boot_text_write_countdown <= boot_text_write_countdown - 1;
@@ -598,7 +657,7 @@ wire [31:0] sprite_scale_step_x;
             end
             held_data = s_axi_rdata;
             held_response = s_axi_rresp;
-            if (held_data !== 32'h00010006 || held_response !== 2'b00)
+            if (held_data !== 32'h00010008 || held_response !== 2'b00)
                 $fatal(1, "backpressured AXI read returned bad data");
 
             // Present a second request while the first response is held.
@@ -665,8 +724,13 @@ wire [31:0] sprite_scale_step_x;
         reset = 1'b0;
 
         axi_read(32'h00000000, 32'h41535452, 2'b00);
-        axi_read(32'h00000004, 32'h00010006, 2'b00);
-        axi_read(32'h00000008, 32'h000003ff, 2'b00);
+        axi_read(32'h00000004, 32'h00010008, 2'b00);
+        axi_read(32'h00000008, 32'h00000fff, 2'b00);
+        axi_read(32'h0000005c, 32'h04380780, 2'b00);
+        axi_read(32'h00000060, 32'd0, 2'b00);
+        axi_read(32'h00000064, 32'h04380780, 2'b00);
+        axi_read(32'h00000068, 32'd0, 2'b00);
+        axi_read(32'h0000006c, 32'h04380780, 2'b00);
         axi_read(32'h0000001c, 32'h18000000, 2'b00);
         axi_read(32'h00000020, 32'h20000000, 2'b00);
         axi_read(32'h0000002c, framebuffer_axi_debug_status, 2'b00);
@@ -828,8 +892,8 @@ wire [31:0] sprite_scale_step_x;
 
         axi_read(32'h0000014c, 32'h00000003, 2'b00);
         axi_read(32'h00000150, 32'h00000000, 2'b00);
-        axi_read(32'h00000154, 32'h04242010, 2'b00);
-        axi_read(32'h00000158, 32'h01f00108, 2'b00);
+        axi_read(32'h00000154, 32'h04243018, 2'b00);
+        axi_read(32'h00000158, 32'h02e8018c, 2'b00);
         axi_write(32'h00000140, 32'h00000001, 4'hf, 0, 2'b00);
         axi_write(32'h00000144, 32'd35, 4'hf, 1, 2'b00);
         axi_write(32'h00000148, 32'h00000141, 4'hf, 0, 2'b00);
@@ -858,9 +922,49 @@ wire [31:0] sprite_scale_step_x;
             $fatal(1, "rejected boot text operation emitted a pulse");
         $display("boot text MMIO/flow-control pass");
 
+        axi_write(32'h00000160, 32'd1, 4'hf, 0, 2'b00);
+        axi_write(32'h00000164, 32'h0014000a, 4'hf, 1, 2'b00);
+        axi_write(32'h00000168, 32'h00010003, 4'hf, 0, 2'b00);
+        axi_write(32'h0000016c, 32'd5, 4'hf, 1, 2'b00);
+        axi_write(32'h00000170, 32'h80abcdef, 4'hf, 0, 2'b00);
+        axi_read(32'h00000160, 32'd1, 2'b00);
+        axi_read(32'h00000164, 32'h0014000a, 2'b00);
+        axi_read(32'h00000168, 32'h00010003, 2'b00);
+        axi_read(32'h0000016c, 32'd6, 2'b00);
+        axi_write(32'h00000174, 32'd3, 4'hf, 1, 2'b00);
+        repeat (2) @(posedge clk);
+        if (!pointer_shadow_enable || pointer_shadow_x != 11'd10 ||
+            pointer_shadow_y != 11'd20 || pointer_shadow_hot_x != 5'd3 ||
+            pointer_shadow_hot_y != 5'd1 || pointer_image_writes != 1 ||
+            pointer_commits != 1)
+            $fatal(1, "pointer MMIO programming mismatch");
+        pointer_generation = 32'd9;
+        axi_read(32'h00000178, 32'd9, 2'b00);
+        axi_read(32'h0000017c, 32'd3, 2'b00);
+        axi_write(32'h00000164, 32'h00000780, 4'hf, 0, 2'b10);
+        axi_write(32'h00000168, 32'h00000020, 4'hf, 1, 2'b10);
+        axi_write(32'h0000016c, 32'd1024, 4'hf, 0, 2'b10);
+        pointer_write_ready = 1'b0;
+        axi_write(32'h00000170, 32'd0, 4'hf, 1, 2'b10);
+        pointer_write_ready = 1'b1;
+        pointer_commit_ready = 1'b0;
+        axi_write(32'h00000174, 32'd1, 4'hf, 0, 2'b10);
+        pointer_commit_ready = 1'b1;
+        if (pointer_image_writes != 1 || pointer_commits != 1)
+            $fatal(1, "rejected pointer operation emitted a pulse");
+        $display("hardware pointer MMIO/flow-control pass");
+
         // Byte strobes update only the selected backdrop bytes.
         axi_write(32'h00000018, 32'h00aabbcc, 4'b0011, 0, 2'b00);
         axi_read(32'h00000018, 32'h0010bbcc, 2'b00);
+
+        // A 320x200 logical scene maps atomically at 5x into the centered
+        // 1600x1000 physical viewport. All fields use the shared scene commit.
+        axi_write(32'h0000005c, 32'h00c80140, 4'hf, 0, 2'b00);
+        axi_write(32'h00000060, 32'd0, 4'hf, 0, 2'b00);
+        axi_write(32'h00000064, 32'h00c80140, 4'hf, 0, 2'b00);
+        axi_write(32'h00000068, 32'h002800a0, 4'hf, 0, 2'b00);
+        axi_write(32'h0000006c, 32'h03e80640, 4'hf, 0, 2'b00);
 
         axi_write(32'h0000000c, 32'h00000001, 4'hf, 1, 2'b00);
         axi_write(32'h00000010, 32'h00000001, 4'hf, 0, 2'b00);
@@ -868,8 +972,10 @@ wire [31:0] sprite_scale_step_x;
             $fatal(1, "valid scene was not queued");
         if (!render_protected1_valid ||
             render_protected1_offset != 32'd0 ||
-            render_protected1_bytes != 32'h001c2000)
-            $fatal(1, "pending framebuffer protection is incorrect");
+            render_protected1_bytes != 32'h003f4800)
+            $fatal(1, "pending framebuffer protection valid=%0d offset=%08x bytes=%08x",
+                   render_protected1_valid, render_protected1_offset,
+                   render_protected1_bytes);
         // Editing SHADOW after submission must not mutate PENDING.
         axi_write(32'h00000018, 32'h00ddee11, 4'hf, 0, 2'b00);
         axi_read(32'h00000018, 32'h00ddee11, 2'b00);
@@ -890,13 +996,22 @@ wire [31:0] sprite_scale_step_x;
             !sprite_enable ||
             !framebuffer_enable || framebuffer_format != 2'd1 ||
             framebuffer_base != 32'h18000000 ||
-            framebuffer_pitch != 32'd2560 ||
-            framebuffer_width != 13'd1280 ||
-            framebuffer_height != 13'd720)
+            framebuffer_pitch != 32'd3840 ||
+            framebuffer_width != 13'd1920 ||
+            framebuffer_height != 13'd1080 ||
+            display_source_width != 11'd320 ||
+            display_source_height != 11'd200 ||
+            display_crop_x != 0 || display_crop_y != 0 ||
+            display_crop_width != 11'd320 ||
+            display_crop_height != 11'd200 ||
+            display_viewport_x != 11'd160 ||
+            display_viewport_y != 11'd40 ||
+            display_viewport_width != 11'd1600 ||
+            display_viewport_height != 11'd1000)
             $fatal(1, "frame-boundary promotion failed");
         if (!render_protected0_valid ||
             render_protected0_offset != 32'd0 ||
-            render_protected0_bytes != 32'h001c2000)
+            render_protected0_bytes != 32'h003f4800)
             $fatal(1, "active framebuffer protection is incorrect");
         $display("validated/deferred/atomic promotion pass");
 
@@ -908,7 +1023,7 @@ wire [31:0] sprite_scale_step_x;
         // Only one pending generation exists.
         axi_write(32'h0000000c, 32'h00000000, 4'hf, 0, 2'b00);
         axi_write(32'h00000010, 32'h00000001, 4'hf, 0, 2'b00);
-        axi_write(32'h00000010, 32'h00000001, 4'hf, 1, 2'b10);
+        axi_write(32'h00000010, 32'h00000001, 4'hf, 1, 2'b00);
         pulse_frame_and_wait_promotion();
         if (scene_enable || active_generation != 32'd2)
             $fatal(1, "disable generation was not promoted");
@@ -917,7 +1032,7 @@ wire [31:0] sprite_scale_step_x;
         // The shared framebuffer validator rejects an unaligned allocation.
         axi_write(32'h00000040, 32'h18000001, 4'hf, 0, 2'b00);
         axi_write(32'h0000000c, 32'h00000001, 4'hf, 0, 2'b00);
-        axi_write(32'h00000010, 32'h00000001, 4'hf, 0, 2'b10);
+        axi_write(32'h00000010, 32'h00000001, 4'hf, 0, 2'b00);
         if (commit_pending_status || scene_enable || commit_errors != 32'd2)
             $fatal(1, "invalid framebuffer scene was accepted");
 
@@ -925,7 +1040,7 @@ wire [31:0] sprite_scale_step_x;
         axi_write(32'h00000040, 32'h18000000, 4'hf, 0, 2'b00);
         axi_write(32'h00000080, 32'h18400001, 4'hf, 1, 2'b00);
         axi_write(32'h00000098, 32'h00ff0001, 4'hf, 0, 2'b00);
-        axi_write(32'h00000010, 32'h00000001, 4'hf, 0, 2'b10);
+        axi_write(32'h00000010, 32'h00000001, 4'hf, 0, 2'b00);
         if (commit_pending_status || commit_errors != 32'd3)
             $fatal(1, "invalid tile scene was accepted");
         $display("shared-validator commit rejection pass");
@@ -936,11 +1051,17 @@ wire [31:0] sprite_scale_step_x;
         axi_write(32'h00000098, 32'h00ff0000, 4'hf, 0, 2'b00);
         axi_write(32'h00000184, 32'h00000000, 4'hf, 0, 2'b00);
         axi_write(32'h00000188, 32'h00000003, 4'hf, 0, 2'b00);
-        axi_write(32'h00000010, 32'h00000001, 4'hf, 0, 2'b10);
+        axi_write(32'h00000010, 32'h00000001, 4'hf, 0, 2'b00);
         if (commit_pending_status || commit_errors != 32'd4)
             $fatal(1, "invalid sprite scene was accepted");
         axi_write(32'h00000188, 32'h00000000, 4'hf, 0, 2'b00);
         $display("sprite-validator commit rejection pass");
+
+        axi_write(32'h0000006c, 32'd0, 4'hf, 0, 2'b00);
+        axi_write(32'h00000010, 32'h00000001, 4'hf, 0, 2'b00);
+        if (commit_pending_status || commit_errors != 32'd5)
+            $fatal(1, "invalid display mapping was accepted");
+        $display("display-validator commit rejection pass");
 
         axi_write(32'h00000248, 32'd0, 4'hf, 0, 2'b11);
         axi_read(32'h00000248, 32'd0, 2'b11);

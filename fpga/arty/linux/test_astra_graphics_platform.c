@@ -22,6 +22,7 @@ _Static_assert(ASTRA_CONTROL_BASE == EXPECT_CONTROL_BASE,
 int main(void)
 {
     uint8_t device[35];
+    uint8_t readback[35];
     uint8_t source[35];
 
     for (size_t index = 0; index < sizeof(source); ++index)
@@ -36,6 +37,13 @@ int main(void)
     astra_graphics_memory_copy_to(device + 1, source + 1,
                                   sizeof(device) - 2u);
     if (memcmp(device + 1, source + 1, sizeof(device) - 2u) != 0)
+        return 1;
+    (void)memset(readback, 0, sizeof(readback));
+    astra_graphics_memory_copy_from(readback + 1, device + 1,
+                                    sizeof(device) - 2u);
+    if (readback[0] != 0u ||
+        readback[sizeof(readback) - 1u] != 0u ||
+        memcmp(readback + 1, source + 1, sizeof(readback) - 2u) != 0)
         return 1;
     return 0;
 }

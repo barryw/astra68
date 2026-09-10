@@ -121,7 +121,7 @@ wire [31:0] descriptor_scale_step_x;
 
     reg start = 1'b0;
     reg [1:0] build_slot = 2'd0;
-    reg [9:0] line_y = 10'd0;
+    reg [10:0] line_y = 11'd0;
     wire busy;
     wire done;
     wire line_complete;
@@ -135,7 +135,7 @@ wire [31:0] descriptor_scale_step_x;
     wire [31:0] deadline_error_count;
     wire [31:0] read_bytes;
     wire [63:0] overflow_bitmap;
-    wire [9:0] overflow_line;
+    wire [10:0] overflow_line;
     wire [31:0] overflow_count;
     wire [31:0] pixels_admitted;
     wire [31:0] pixels_dropped;
@@ -469,7 +469,7 @@ wire [31:0] descriptor_scale_step_x;
 
     task automatic build_line(
         input [1:0] slot,
-        input [9:0] y
+        input [10:0] y
     );
         integer line_timeout;
         begin

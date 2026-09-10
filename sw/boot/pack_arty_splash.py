@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert the fixed 1280x720 Astra splash PNG to big-endian RGB565."""
+"""Convert the fixed 1920x1080 Astra splash PNG to big-endian RGB565."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ import zlib
 
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
-WIDTH = 1280
-HEIGHT = 720
+WIDTH = 1920
+HEIGHT = 1080
 PITCH = WIDTH * 2
 OUTPUT_BYTES = PITCH * HEIGHT
 

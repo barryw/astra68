@@ -879,9 +879,31 @@ unrelated programs mutate each other's state.
 
 ### 14.4 Packages and dependencies
 
-**DIRECTION:** Installation is atomic and rollback-capable. Packages and
-application bundles declare exact dependencies and do not run unrestricted
-privileged install scripts.
+**LOCKED DIRECTION:** The package service is the standard software installation
+path. A package is the transport and transaction unit; `.app` and `.kit`
+bundles remain the installed discovery units. Kernel/system images, the NDK,
+Kits and libraries, services, commands, applications, development headers,
+debug symbols, and documentation all carry independent package identities and
+versions.
+
+Package metadata separates the component version from its compatibility axes:
+kernel/user ABI, NDK API, library ABI major, service protocol, target
+architecture, and minimum hardware/OS versions. Dependencies name compatible
+ranges, while an installed transaction records the exact selected version and
+content digest. Reusing one name and version for different bytes is forbidden.
+
+Installation stages and validates the complete dependency closure, then
+atomically selects a new system generation. Failure leaves the previous
+generation selected; rollback requires no downgrade scripts. Packages do not
+run unrestricted privileged install scripts. Files are removed only after no
+selected generation, installed bundle, or running process references their
+exact identities.
+
+Debian and RPM packages are useful ecosystem inputs for a host-side porting
+tool, but their filesystem layouts and maintainer-script semantics are not the
+native Astra installation contract. The native package envelope will preserve
+the manifest, immutable-payload, capability, atomicity, and rollback rules
+above.
 
 Avoid global in-place library replacement and current-directory library
 search. Immutable versioned system kits and application-local dependencies

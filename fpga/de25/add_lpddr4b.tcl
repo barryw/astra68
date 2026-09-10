@@ -60,12 +60,25 @@ add_connection clk_100.out_clk astra_lpddr4b_status.clk
 add_connection rst_in.out_reset astra_lpddr4b.s0_axi4lite_reset_n
 add_connection rst_in.out_reset astra_lpddr4b_status.reset
 
+add_instance astra_build_clock altera_clock_bridge
+set_instance_parameter_value astra_build_clock EXPLICIT_CLOCK_RATE 165000000
+set_instance_parameter_value astra_build_clock NUM_CLOCK_OUTPUTS 1
+add_interface astra_build_clk clock end
+set_interface_property astra_build_clk EXPORT_OF astra_build_clock.in_clk
+
+add_instance astra_build_reset altera_reset_bridge
+set_instance_parameter_value astra_build_reset ACTIVE_LOW_RESET 1
+set_instance_parameter_value astra_build_reset SYNCHRONOUS_EDGES none
+set_instance_parameter_value astra_build_reset NUM_RESET_OUTPUTS 1
+add_interface astra_build_reset_n reset end
+set_interface_property astra_build_reset_n EXPORT_OF astra_build_reset.in_reset
+
 add_instance astra_control_bridge altera_axi_bridge
 set_instance_parameter_value astra_control_bridge AXI_VERSION AXI4-Lite
 set_instance_parameter_value astra_control_bridge ADDR_WIDTH 16
 set_instance_parameter_value astra_control_bridge DATA_WIDTH 32
-add_connection clk_100.out_clk astra_control_bridge.clk
-add_connection rst_in.out_reset astra_control_bridge.clk_reset
+add_connection astra_build_clock.out_clk astra_control_bridge.clk
+add_connection astra_build_reset.out_reset astra_control_bridge.clk_reset
 add_connection subsys_hps.lwhps2fpga astra_control_bridge.s0
 set_connection_parameter_value \
     subsys_hps.lwhps2fpga/astra_control_bridge.s0 baseAddress 0x100000
@@ -81,8 +94,8 @@ proc add_memory_bridge {name exported read write id_width} {
     set_instance_parameter_value $name M0_ID_WIDTH $id_width
     set_instance_parameter_value $name ENABLE_AXI4_READ_ONLY_INTERFACE $read
     set_instance_parameter_value $name ENABLE_AXI4_WRITE_ONLY_INTERFACE $write
-    add_connection clk_100.out_clk $name.clk
-    add_connection rst_in.out_reset $name.clk_reset
+    add_connection astra_build_clock.out_clk $name.clk
+    add_connection astra_build_reset.out_reset $name.clk_reset
     add_connection $name.m0 astra_lpddr4b.s0_axi4
     set_connection_parameter_value \
         $name.m0/astra_lpddr4b.s0_axi4 baseAddress 0x40000000

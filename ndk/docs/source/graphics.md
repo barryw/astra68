@@ -19,6 +19,13 @@ the shared engines, and retires ownership only after a fence signals.
 5. Present a scanout surface at vblank with
    {c:func}`astra_display_present_surface`.
 
+The physical output is always 1920x1080p60. Select a logical scene with
+{c:func}`astra_display_set_mode`; its fence covers source, crop, and viewport
+as one frame-boundary transaction. `AUTO` uses the largest useful integer
+scale (320x200 becomes 1600x1000) and falls back to aspect-preserving
+fractional fit when only 1x would fit. Explicit integer, fit, and fill policies
+use the same nearest-neighbor FPGA path. The MC68040 never resamples pixels.
+
 Draw lists are mutable until submission and sealed while in flight. Surfaces,
 font strikes, palettes, and other referenced objects remain pinned through the
 completion fence, so application cleanup cannot create a DMA use-after-free.
@@ -73,6 +80,11 @@ An {c:struct}`AstraRasterProgram` is an immutable ordered list of validated beam
 changes. Public target identifiers deliberately expose only display-safe
 operations; they are translated to privileged copper instructions by the
 service. Applications cannot issue arbitrary copper MMIO writes.
+
+The dedicated 32x32 ARGB hardware pointer is composed after scene scaling, so
+it remains native-sized in every logical mode. Image, position, and enable
+changes are frame-atomic. Disabling it leaves all 64 ordinary scaled sprites
+available.
 
 ## Lifetime
 

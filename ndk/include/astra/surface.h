@@ -1,5 +1,5 @@
-#ifndef ASTRA_USERSPACE_SURFACE_H
-#define ASTRA_USERSPACE_SURFACE_H
+#ifndef ASTRA_SURFACE_H
+#define ASTRA_SURFACE_H
 
 #include <stdint.h>
 

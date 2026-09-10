@@ -14,7 +14,7 @@ def test_product_artifacts_stay_in_sync_excluded_build_directories():
     graphics_build = (ROOT / "fpga/arty/scripts/build_graphics.tcl").read_text()
     boot_font = ROOT / "fpga/arty/graphics/post_fonts.hex"
     agent_rules = (ROOT / "AGENTS.md").read_text()
-    blank_splash = ROOT / "sw/boot/assets/astra_boot_splash_1280x720_blank.png"
+    blank_splash = ROOT / "sw/boot/assets/astra_boot_splash_1920x1080_blank.png"
 
     assert "BOOT_BIN = build/astra_boot.bin" in boot
     assert "BOOT_ELF = build/astra_boot.elf" in boot
@@ -29,17 +29,17 @@ def test_product_artifacts_stay_in_sync_excluded_build_directories():
     assert '.incbin "build/astra_boot_splash.pal8.lz4"' in splash
     assert 'else "build/astra_boot.bin"' in converter
     assert "SPLASH_SOURCE := ../../../sw/boot/assets/" \
-           "astra_boot_splash_1280x720_blank.png" in arty
+           "astra_boot_splash_1920x1080_blank.png" in arty
     assert "GRAPHICS_SOURCES := $(GRAPHICS)/src/surface.c" in arty
     assert "$(GRAPHICS)/src/render_builder.c" in arty
     assert "$(GRAPHICS_GENERATED)/astra_mono_font.inc" in arty
     assert "astra_terminal_font.inc" not in arty
-    assert "fpga arty graphics post_fonts.hex" in graphics_build
-    assert hashlib.sha256(boot_font.read_bytes()).hexdigest() == (
-        "3f288d4c72e019d06941de12bd841b20a91cc36873c6bec9552fd8d87abb0042"
-    )
+    assert "tools fonts afnt.py" in graphics_build
+    assert "emit-cp437-hex" in graphics_build
+    assert "build fpga post_fonts.hex" in graphics_build
+    assert not boot_font.exists()
     assert "--checksum --no-times" in agent_rules
     assert "--exclude '*/build'" in agent_rules
     assert hashlib.sha256(blank_splash.read_bytes()).hexdigest() == (
-        "cdf001bb70e130c9267f5205261eb3855f1b74cbbba832dbcd22fb6d66f77ff9"
+        "db26450ae49471e81d90d4fdf554f1dd7226cf85f402af09d3f9e7e28cd2b687"
     )

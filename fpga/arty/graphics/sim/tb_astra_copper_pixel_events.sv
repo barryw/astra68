@@ -10,8 +10,8 @@ module tb_astra_copper_pixel_events;
     reg pixel_reset = 1'b1;
     reg enqueue_frame = 1'b0;
     reg enqueue_irq = 1'b0;
-    reg [9:0] enqueue_y = 10'd0;
-    reg [10:0] enqueue_x = 11'd0;
+    reg [10:0] enqueue_y = 11'd0;
+    reg [11:0] enqueue_x = 12'd0;
     reg [15:0] enqueue_target = 16'd0;
     reg [31:0] enqueue_data = 32'd0;
     reg enqueue_valid = 1'b0;
@@ -19,11 +19,11 @@ module tb_astra_copper_pixel_events;
     wire [3:0] enqueue_level;
     reg pixel_frame = 1'b0;
     reg source_valid = 1'b0;
-    reg [9:0] source_y = 10'd0;
+    reg [10:0] source_y = 11'd0;
     reg [10:0] source_x = 11'd0;
     wire event_irq;
-    wire [9:0] event_y;
-    wire [10:0] event_x;
+    wire [10:0] event_y;
+    wire [11:0] event_x;
     wire [15:0] event_target;
     wire [31:0] event_data;
     wire event_valid;
@@ -38,8 +38,8 @@ module tb_astra_copper_pixel_events;
     task automatic enqueue(
         input frame,
         input irq,
-        input [9:0] y,
-        input [10:0] x,
+        input [10:0] y,
+        input [11:0] x,
         input [15:0] target,
         input [31:0] data
     );
@@ -60,8 +60,8 @@ module tb_astra_copper_pixel_events;
 
     task automatic expect_event(
         input irq,
-        input [9:0] y,
-        input [10:0] x,
+        input [10:0] y,
+        input [11:0] x,
         input [15:0] target,
         input [31:0] data
     );

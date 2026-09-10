@@ -14,8 +14,8 @@ module astra_copper_pixel_events #(
     input  wire        build_reset,
     input  wire        enqueue_frame,
     input  wire        enqueue_irq,
-    input  wire [9:0]  enqueue_y,
-    input  wire [10:0] enqueue_x,
+    input  wire [10:0] enqueue_y,
+    input  wire [11:0] enqueue_x,
     input  wire [15:0] enqueue_target,
     input  wire [31:0] enqueue_data,
     input  wire        enqueue_valid,
@@ -26,11 +26,11 @@ module astra_copper_pixel_events #(
     input  wire        pixel_reset,
     input  wire        pixel_frame,
     input  wire        source_valid,
-    input  wire [9:0]  source_y,
+    input  wire [10:0] source_y,
     input  wire [10:0] source_x,
     output wire        event_irq,
-    output wire [9:0]  event_y,
-    output wire [10:0] event_x,
+    output wire [10:0] event_y,
+    output wire [11:0] event_x,
     output wire [15:0] event_target,
     output wire [31:0] event_data,
     output wire        event_valid,
@@ -41,7 +41,7 @@ module astra_copper_pixel_events #(
     output reg         stale_event,
     output reg         late_event
 );
-    localparam integer RECORD_WIDTH = 72;
+    localparam integer RECORD_WIDTH = 74;
 
     wire [RECORD_WIDTH-1:0] fifo_write_data = {
         enqueue_frame, enqueue_irq, enqueue_y, enqueue_x,
@@ -51,10 +51,10 @@ module astra_copper_pixel_events #(
     wire fifo_read_valid;
     wire fifo_underflow;
 
-    wire record_frame = fifo_read_data[71];
-    assign event_irq = fifo_read_data[70];
-    assign event_y = fifo_read_data[69:60];
-    assign event_x = fifo_read_data[59:49];
+    wire record_frame = fifo_read_data[73];
+    assign event_irq = fifo_read_data[72];
+    assign event_y = fifo_read_data[71:61];
+    assign event_x = fifo_read_data[60:49];
     assign event_target = fifo_read_data[48:33];
     assign event_data = fifo_read_data[32:1];
 

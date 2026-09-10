@@ -20,6 +20,16 @@ CMAP = struct.Struct(">II")
 CHUNKS = (b"NAME", b"CMAP", b"STRK", b"GLYP", b"BITM")
 MASK1 = 1
 
+# CP437 bytes 1..31 are printable symbols, unlike the Unicode C0 controls.
+# Spleen uses the standard arrow/corner forms for the three pointer variants
+# it does not encode separately.
+CP437_LOW = (
+    0x20, 0x263A, 0x263B, 0x2665, 0x2666, 0x2663, 0x2660, 0x2022,
+    0x25D8, 0x25CB, 0x25D9, 0x2642, 0x2640, 0x266A, 0x266B, 0x263C,
+    0x2192, 0x2190, 0x2195, 0x203C, 0x00B6, 0x00A7, 0x25AC, 0x21A8,
+    0x2191, 0x2193, 0x2192, 0x2190, 0x2514, 0x2194, 0x25B2, 0x25BC,
+)
+
 
 def align4(value: int) -> int:
     return (value + 3) & ~3
@@ -277,6 +287,35 @@ def emit_c(data: bytes, output: Path, prefix: str) -> None:
     output.write_text(out.getvalue(), encoding="ascii")
 
 
+def emit_cp437_hex(data: bytes) -> str:
+    cmap, strikes, glyphs, bitmap = unpack_afnt(data)
+    if len(strikes) != 1:
+        raise ValueError("rescue font must contain exactly one strike")
+    _, height, ascent, descent, leading, _, first, count, _, _, _ = strikes[0]
+    if (height, ascent, descent, leading) != (16, 12, 4, 0):
+        raise ValueError("rescue font must use 8x16 Spleen line metrics")
+
+    glyph_ids = {scalar: glyph_id for scalar, glyph_id in cmap}
+    scalars = list(CP437_LOW)
+    scalars.extend(ord(bytes((value,)).decode("cp437"))
+                   for value in range(32, 127))
+    scalars.append(0x2302)
+    scalars.extend(ord(bytes((value,)).decode("cp437"))
+                   for value in range(128, 256))
+    output = bytearray()
+    for scalar in scalars:
+        glyph_id = glyph_ids.get(scalar)
+        if glyph_id is None or glyph_id >= count:
+            raise ValueError(f"rescue font lacks U+{scalar:04X}")
+        (_, offset, length, width, glyph_height, pitch, flags,
+         bearing_x, bearing_y, advance) = glyphs[first + glyph_id]
+        if (width, glyph_height, pitch, flags, bearing_x, bearing_y,
+                advance, length) != (8, 16, 1, 0, 0, 12 * 64, 8 * 64, 16):
+            raise ValueError(f"U+{scalar:04X} violates rescue-cell metrics")
+        output.extend(bitmap[offset:offset + length])
+    return "".join(f"{value:02x}\n" for value in output)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
@@ -298,6 +337,9 @@ def main() -> int:
     emitter.add_argument("input", type=Path)
     emitter.add_argument("output", type=Path)
     emitter.add_argument("--prefix", default="astra_ui")
+    rescue = commands.add_parser("emit-cp437-hex")
+    rescue.add_argument("input", type=Path)
+    rescue.add_argument("output", type=Path)
     args = parser.parse_args()
     try:
         if args.command in ("import-amiga", "import-bitmap"):
@@ -309,8 +351,12 @@ def main() -> int:
             cmap, strikes, glyphs, bitmap = unpack_afnt(args.input.read_bytes())
             print(f"AFNT PASS cmap={len(cmap)} strikes={len(strikes)} "
                   f"glyphs={len(glyphs)} bitmap={len(bitmap)}")
-        else:
+        elif args.command == "emit-c":
             emit_c(args.input.read_bytes(), args.output, args.prefix)
+        else:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(
+                emit_cp437_hex(args.input.read_bytes()), encoding="ascii")
     except (OSError, ValueError, UnicodeError, json.JSONDecodeError) as error:
         print(f"afnt: {error}", file=sys.stderr)
         return 1

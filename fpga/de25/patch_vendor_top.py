@@ -78,6 +78,8 @@ axil_driver_calibration #(
 
 GRAPHICS = r'''wire [7:0] astra_leds;
 wire astra_render_interrupt;
+wire astra_build_clk;
+wire astra_build_reset_n;
 wire [15:0] astra_control_awaddr;
 wire [2:0] astra_control_awprot;
 wire astra_control_awvalid, astra_control_awready;
@@ -132,8 +134,9 @@ wire [63:0] astra_render_rdata;
 wire astra_render_rlast, astra_render_rvalid, astra_render_rready;
 
 astra_de25_graphics graphics_i (
-    .clock_50(system_clk_50), .build_clk(system_clk_100_internal),
-    .reset_n(system_reset_n), .buttons(fpga_debounced_buttons),
+    .clock_50(system_clk_50), .build_clk(astra_build_clk),
+    .build_reset_n(astra_build_reset_n),
+    .reset_n(system_reset_n), .buttons(~fpga_button_pio),
     .switches(fpga_dipsw_pio), .leds(astra_leds),
     .render_interrupt(astra_render_interrupt),
     .hdmi_tx_clk(HDMI_TX_CLK), .hdmi_tx_hs(HDMI_TX_HS),
@@ -201,7 +204,9 @@ astra_de25_graphics graphics_i (
 
 '''
 
-PORTS = r'''        .astra_control_awaddr                   (astra_control_awaddr),
+PORTS = r'''        .astra_build_clk_clk                    (astra_build_clk),
+        .astra_build_reset_n_reset_n            (astra_build_reset_n),
+        .astra_control_awaddr                   (astra_control_awaddr),
         .astra_control_awprot                   (astra_control_awprot),
         .astra_control_awvalid                  (astra_control_awvalid),
         .astra_control_awready                  (astra_control_awready),
@@ -396,7 +401,7 @@ def main() -> None:
         "[get_ports HDMI_MCLK]\n"
         "\n"
         "# ADV7513 Rev. B input requirements, with video launched on the "
-        "falling pixel edge.\n"
+"preceding rising pixel edge.\n"
         "create_generated_clock -name ASTRA_HDMI_PIXEL_CLOCK "
         "-source [get_clock_info -targets [get_clocks "
         "{graphics_i|pixel_pll_i|iopll_0_outclk0}]] -divide_by 1 "
@@ -433,6 +438,7 @@ def main() -> None:
         "[get_ports HDMI_I2C_SDA]\n"
         "set_clock_groups -asynchronous "
         "-group [get_clocks {pll_inst|iopll_0_outclk0}] "
+        "-group [get_clocks {graphics_i|pixel_pll_i|iopll_0_outclk1}] "
         "-group [get_clocks {graphics_i|pixel_pll_i|iopll_0_outclk0 "
         "ASTRA_HDMI_PIXEL_CLOCK}] "
         "-group [get_clocks {graphics_i|audio_pll_i|iopll_0_outclk0 "
@@ -443,10 +449,12 @@ def main() -> None:
         "set audio_lock_source [get_registers -nowarn "
         "{*audio_pll_i*pll_ctrl_reg}]\n"
         "set_false_path -from $pixel_lock_source -to "
-        "[get_registers {graphics_i|pixel_reset_sync_q*}]\n"
+        "[get_registers {graphics_i|pixel_reset_sync_q* "
+        "graphics_i|build_reset_sync_q*}]\n"
         "set_false_path -from $audio_lock_source -to "
         "[get_registers {graphics_i|audio_reset_sync_q*}]\n"
-        "set build_clock [get_clocks {pll_inst|iopll_0_outclk0}]\n"
+        "set build_clock [get_clocks "
+        "{graphics_i|pixel_pll_i|iopll_0_outclk1}]\n"
         "set pixel_clock [get_clocks "
         "{graphics_i|pixel_pll_i|iopll_0_outclk0}]\n"
         "set audio_clock [get_clocks "
@@ -476,7 +484,10 @@ def main() -> None:
         "set_false_path -through [get_pins -nowarn "
         "{synchronize_async_rst|*|clrn}]\n"
         "set_false_path -from [get_ports HDMI_TX_INT] "
-        "-to [get_registers {graphics_i|hdmi_int_sync_q[0]}]",
+        "-to [get_registers {graphics_i|hdmi_int_sync_q[0]}]\n"
+        "set_false_path -from [get_registers "
+        "{graphics_i|hdmi_config_i|READY}] -to [get_registers "
+        "{graphics_i|hdmi_ready_build_sync_q[0]}]",
         "50 MHz fabric reference clock",
     )
     timing = replace_once(

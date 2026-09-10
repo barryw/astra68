@@ -438,6 +438,38 @@ def test_public_headers_are_imported_by_namespace():
                 )
 
 
+def test_ndk_owns_user_facing_headers():
+    public = (
+        "event_catalog.h",
+        "filesystem_library.h",
+        "font_library.h",
+        "graphics_library.h",
+        "keymap.h",
+        "posix.h",
+        "runtime.h",
+        "stream.h",
+        "surface.h",
+        "terminal.h",
+        "vfs_assign.h",
+        "vfs_client.h",
+        "vfs_path.h",
+        "vfs_process.h",
+        "vfs_union.h",
+    )
+    ndk = REPOSITORY / "ndk" / "include" / "astra"
+
+    for name in public:
+        implementation_copies = tuple(
+            USERSPACE.glob(f"*/include/astra/{name}")
+        )
+        if not (ndk / name).is_file() or implementation_copies:
+            raise AssertionError(
+                f"{name}: user-facing contract must exist only in "
+                f"ndk/include/astra; implementation copies="
+                f"{[relative(path) for path in implementation_copies]}"
+            )
+
+
 def test_gui_wire_types_are_owned_by_the_protocol():
     gui = (REPOSITORY / "sw" / "include" / "astra" / "gui.h").read_text()
     window = (REPOSITORY / "ndk" / "include" / "astra" /
@@ -593,6 +625,7 @@ def main():
         test_static_archives_are_exact_replacements,
         test_ndk_private_headers_stay_in_ndk,
         test_public_headers_are_imported_by_namespace,
+        test_ndk_owns_user_facing_headers,
         test_gui_wire_types_are_owned_by_the_protocol,
         test_message_header_serialization_is_shared,
         test_ascii_case_primitives_are_shared,

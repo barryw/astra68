@@ -3,11 +3,14 @@
 
 #include <stdint.h>
 
-#include <astra/filesystem_kit.h>
 #include <astra/vfs_assign.h>
 #include <astra/vfs_client.h>
 #include <astra/vfs_union.h>
 
+/** Logical name resolved beneath `LIBS:` by OpenLibrary(). */
+#define ASTRA_FILESYSTEM_LIBRARY_NAME "filesystem.library"
+/** Minimum compatible Filesystem Kit ABI major requested by applications. */
+#define ASTRA_FILESYSTEM_LIBRARY_VERSION 2u
 #define ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR ASTRA_FILESYSTEM_LIBRARY_VERSION
 #define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 1u
 #define ASTRA_FILESYSTEM_DIRECTORY_BATCH_MAX 32u

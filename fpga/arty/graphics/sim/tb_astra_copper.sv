@@ -45,14 +45,14 @@ wire [31:0] validate_move_data;
     wire baseline_restore;
     wire active_bank;
     reg enable = 1'b1;
-    reg [10:0] beam_x = 11'd0;
-    reg [9:0] beam_y = 10'd0;
+    reg [11:0] beam_x = 12'd0;
+    reg [10:0] beam_y = 11'd0;
     wire move_valid;
     reg move_ready = 1'b1;
     wire [15:0] move_target;
     wire [31:0] move_data;
-    wire [10:0] move_beam_x;
-    wire [9:0] move_beam_y;
+    wire [11:0] move_beam_x;
+    wire [10:0] move_beam_y;
     reg runtime_move_permission = 1'b1;
     wire move_allowed = runtime_move_permission &&
         (move_target == 16'h0100 || move_target == 16'h0104);
@@ -65,8 +65,8 @@ wire [31:0] validate_move_data;
     wire irq_event;
     reg irq_ready = 1'b1;
 wire [15:0] irq_sources;
-wire [10:0] irq_beam_x;
-wire [9:0] irq_beam_y;
+wire [11:0] irq_beam_x;
+wire [10:0] irq_beam_y;
     wire running;
     wire waiting;
     reg fault_clear = 1'b0;
@@ -80,12 +80,12 @@ wire [9:0] irq_beam_y;
     integer dispatch_count = 0;
     integer irq_count = 0;
     reg [15:0] last_irq = 16'd0;
-    reg [10:0] last_irq_x = 11'd0;
-    reg [9:0] last_irq_y = 10'd0;
+    reg [11:0] last_irq_x = 12'd0;
+    reg [10:0] last_irq_y = 11'd0;
 
     astra_copper #(
-        .TOTAL_WIDTH(1650),
-        .TOTAL_HEIGHT(750),
+        .TOTAL_WIDTH(2200),
+        .TOTAL_HEIGHT(1125),
         .MAX_INSTRUCTIONS_PER_FRAME(8)
     ) dut (
         .clk(clk),
@@ -166,8 +166,8 @@ wire [9:0] irq_beam_y;
         ins0 = {op, 13'd0, arg};
     endfunction
 
-    function automatic [31:0] beam0(input [2:0] op, input [9:0] y);
-        beam0 = {op, 19'd0, y};
+    function automatic [31:0] beam0(input [2:0] op, input [10:0] y);
+        beam0 = {op, 18'd0, y};
     endfunction
 
     task automatic write_word(
@@ -323,14 +323,14 @@ wire [9:0] irq_beam_y;
         write_instruction(12'd0, ins0(OP_DISPATCH, 16'h9999), 32'd0);
         write_instruction(12'd1, ins0(OP_END, 16'd0), 32'd0);
         validate_list(12'd0, 13'd2, 1'b0, 8'd4);
-        write_instruction(12'd0, beam0(OP_WAIT, 10'd750), 32'd0);
+        write_instruction(12'd0, beam0(OP_WAIT, 11'd1125), 32'd0);
         write_instruction(12'd1, ins0(OP_END, 16'd0), 32'd0);
         validate_list(12'd0, 13'd2, 1'b0, 8'd1);
 
         // Valid bank 1: MOVE, WAIT, true SKIP, dispatch, IRQ, END.
         write_instruction(12'd10, ins0(OP_MOVE, 16'h0100), 32'hcafef00d);
-        write_instruction(12'd11, beam0(OP_WAIT, 10'd2), 32'd5);
-        write_instruction(12'd12, beam0(OP_SKIP, 10'd2), 32'd5);
+        write_instruction(12'd11, beam0(OP_WAIT, 11'd1079), 32'd1919);
+        write_instruction(12'd12, beam0(OP_SKIP, 11'd1079), 32'd1919);
         write_instruction(12'd13, ins0(OP_IRQ, 16'hdead), 32'd0);
         write_instruction(12'd14, ins0(OP_DISPATCH, 16'h0055), 32'd0);
         write_instruction(12'd15, ins0(OP_IRQ, 16'h1234), 32'd0);
@@ -347,13 +347,13 @@ wire [9:0] irq_beam_y;
             @(negedge clk);
             if (!move_valid || move_target != 16'h0100 ||
                 move_data != 32'hcafef00d || move_class != 2'd2 ||
-                move_beam_x != 11'd0 || move_beam_y != 10'd0)
+                move_beam_x != 12'd0 || move_beam_y != 11'd0)
                 $fatal(1, "MOVE changed while backpressured");
         end
         move_ready = 1'b1;
         wait_for(1);
-        beam_y = 10'd2;
-        beam_x = 11'd5;
+        beam_y = 11'd1079;
+        beam_x = 12'd1919;
         wait_for(2);
         if (dispatch_id != 16'h0055)
             $fatal(1, "dispatch ID mismatch");
@@ -366,7 +366,7 @@ wire [9:0] irq_beam_y;
         repeat (3) begin
             @(negedge clk);
             if (!irq_event || irq_sources != 16'h1234 ||
-                irq_beam_x != 11'd5 || irq_beam_y != 10'd2)
+                irq_beam_x != 12'd1919 || irq_beam_y != 11'd1079)
                 $fatal(1, "IRQ changed while backpressured");
         end
         if (irq_count != 0)
@@ -374,8 +374,8 @@ wire [9:0] irq_beam_y;
         irq_ready = 1'b1;
         wait_for(3);
         if (move_count != 1 || dispatch_count != 1 || irq_count != 1 ||
-            last_irq != 16'h1234 || last_irq_x != 11'd5 ||
-            last_irq_y != 10'd2)
+            last_irq != 16'h1234 || last_irq_x != 12'd1919 ||
+            last_irq_y != 11'd1079)
             $fatal(1, "list effects mismatch move=%0d dispatch=%0d irq=%0d source=%04x",
                 move_count, dispatch_count, irq_count, last_irq);
 
@@ -386,8 +386,8 @@ wire [9:0] irq_beam_y;
         write_instruction(12'd23, ins0(OP_END, 16'd0), 32'd0);
         expect_read(13'd40, ins0(OP_JUMP, 16'd22));
         validate_list(12'd20, 13'd4, 1'b1, 8'd0);
-        beam_x = 11'd0;
-        beam_y = 10'd0;
+        beam_x = 12'd0;
+        beam_y = 11'd0;
         pulse_frame(1'b1);
         wait_for(3);
         if (active_bank || irq_count != 2 || last_irq != 16'h600d)

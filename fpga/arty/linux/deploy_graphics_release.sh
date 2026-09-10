@@ -9,7 +9,7 @@ ssh=${SSH:-ssh}
 scp=${SCP:-scp}
 expected_active_boot=${ASTRA_ACTIVE_BOOT_SHA256:?set ASTRA_ACTIVE_BOOT_SHA256}
 expected_active_fit=${ASTRA_ACTIVE_FIT_SHA256:?set ASTRA_ACTIVE_FIT_SHA256}
-expected_splash=${ASTRA_SPLASH_SHA256:-86eb30739db77b85f4deb1915fb9cb9263ab4755ae318ffb1b7a4a95b7017ba4}
+expected_splash=${ASTRA_SPLASH_SHA256:-b61e792ce65f76dd60343c48f2b94b2c43f28dcba187be1f090f2b56a7c349b7}
 
 boot="$release_dir/BOOT.BIN"
 fit="$release_dir/image.ub"

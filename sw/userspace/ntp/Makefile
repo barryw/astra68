@@ -5,7 +5,9 @@ AR := $(CROSS)ar
 HOST_CC ?= cc
 PICOLIBC ?= $(HOME)/picolibc-astra
 RUNTIME := ../runtime
-CPPFLAGS := -Iinclude -I../../include -I../posix/include -I$(RUNTIME)/include \
+NDK := ../../../ndk
+CPPFLAGS := -I$(NDK)/include -Iinclude -I../../include -I../posix/include \
+	-I$(RUNTIME)/include \
 	-isystem $(PICOLIBC)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \

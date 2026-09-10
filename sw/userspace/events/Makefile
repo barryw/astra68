@@ -24,7 +24,7 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 
 HEADERS := include/astra/event_store.h include/astra/event_backend.h \
 	include/astra/event_persist.h ../../include/astra/crc32.h \
-	$(RUNTIME)/include/astra/event_catalog.h \
+	$(NDK)/include/astra/event_catalog.h \
 	../../include/astra/event.h ../../include/astra/event_descriptor.h
 
 TARGET := build/m68k/libastraevents.a

@@ -46,15 +46,15 @@ module astra_copper #(
     output reg         active_bank,
 
     input  wire        enable,
-    input  wire [10:0] beam_x,
-    input  wire [9:0]  beam_y,
+    input  wire [11:0] beam_x,
+    input  wire [10:0] beam_y,
 
     output reg         move_valid,
     input  wire        move_ready,
     output wire [15:0] move_target,
     output wire [31:0] move_data,
-    output wire [10:0] move_beam_x,
-    output wire [9:0]  move_beam_y,
+    output wire [11:0] move_beam_x,
+    output wire [10:0] move_beam_y,
     input  wire        move_allowed,
     input  wire [1:0]  move_timing_class,
     output reg  [1:0]  move_class,
@@ -67,8 +67,8 @@ module astra_copper #(
     output reg         irq_event,
     input  wire        irq_ready,
     output reg  [15:0] irq_sources,
-    output wire [10:0] irq_beam_x,
-    output wire [9:0]  irq_beam_y,
+    output wire [11:0] irq_beam_x,
+    output wire [10:0] irq_beam_y,
     output wire        running,
     output wire        waiting,
     input  wire        fault_clear,
@@ -133,10 +133,10 @@ localparam [3:0] EXEC_MOVE_COMMIT = 4'd12;
     localparam [1:0] VALID_ACTION_FINISH  = 2'd2;
 
     function automatic beam_reached(
-        input [9:0] target_y,
-        input [10:0] target_x,
-        input [9:0] current_y,
-        input [10:0] current_x
+        input [10:0] target_y,
+        input [11:0] target_x,
+        input [10:0] current_y,
+        input [11:0] current_x
     );
         begin
             beam_reached = current_y > target_y ||
@@ -209,10 +209,10 @@ localparam [3:0] EXEC_MOVE_COMMIT = 4'd12;
         {1'b0, validate_jump_target} >= {1'b0, validate_first_q} &&
         {1'b0, validate_jump_target} < validate_end_q;
     wire validate_skip_in_list = validate_remaining_q > 13'd2;
-    wire validate_wait_in_range = validate_w0_q[9:0] < TOTAL_HEIGHT &&
-        validate_w1_q[10:0] < TOTAL_WIDTH &&
-        validate_w0_q[28:10] == 19'd0 &&
-        validate_w1_q[31:11] == 21'd0;
+    wire validate_wait_in_range = validate_w0_q[10:0] < TOTAL_HEIGHT &&
+        validate_w1_q[11:0] < TOTAL_WIDTH &&
+        validate_w0_q[28:11] == 18'd0 &&
+        validate_w1_q[31:12] == 20'd0;
     assign validate_move_target = validate_w0_q[15:0];
     assign validate_move_data = validate_w1_q;
     assign validate_dispatch_id = validate_w0_q[15:0];
@@ -224,12 +224,12 @@ localparam [3:0] EXEC_MOVE_COMMIT = 4'd12;
     reg [12:0] active_end_q;
     reg [14:0] frame_instruction_count_q;
     reg execute_move_allowed_q;
-    reg [10:0] execution_beam_x_q;
-    reg [9:0] execution_beam_y_q;
+    reg [11:0] execution_beam_x_q;
+    reg [10:0] execution_beam_y_q;
     reg [1:0] retire_pc_action_q;
     reg [1:0] retire_beam_action_q;
-    reg [10:0] retire_beam_x_q;
-    reg [9:0] retire_beam_y_q;
+    reg [11:0] retire_beam_x_q;
+    reg [10:0] retire_beam_y_q;
     reg execute_wait_reached_q;
     reg pc_in_active_list_q;
     wire pc_in_active_list = {1'b0, pc} >= {1'b0, active_first_q} &&
@@ -242,7 +242,7 @@ localparam [3:0] EXEC_MOVE_COMMIT = 4'd12;
     assign irq_beam_x = execution_beam_x_q;
     assign irq_beam_y = execution_beam_y_q;
     wire execute_wait_reached_now = beam_reached(
-        execute_w0_q[9:0], execute_w1_q[10:0], beam_y, beam_x);
+        execute_w0_q[10:0], execute_w1_q[11:0], beam_y, beam_x);
     wire execute_wait_reached = execute_wait_reached_q;
     wire edit_bank_valid = edit_bank ? bank1_valid_q : bank0_valid_q;
     wire promotion_now = promotion_pending ||
@@ -315,13 +315,13 @@ localparam [3:0] EXEC_MOVE_COMMIT = 4'd12;
     task automatic advance_execution_beam;
         begin
             if (execution_beam_x_q == TOTAL_WIDTH - 1) begin
-                execution_beam_x_q <= 11'd0;
+                execution_beam_x_q <= 12'd0;
                 if (execution_beam_y_q == TOTAL_HEIGHT - 1)
-                    execution_beam_y_q <= 10'd0;
+                    execution_beam_y_q <= 11'd0;
                 else
-                    execution_beam_y_q <= execution_beam_y_q + 10'd1;
+                    execution_beam_y_q <= execution_beam_y_q + 11'd1;
             end else begin
-                execution_beam_x_q <= execution_beam_x_q + 11'd1;
+                execution_beam_x_q <= execution_beam_x_q + 12'd1;
             end
         end
     endtask
@@ -682,12 +682,12 @@ localparam [3:0] EXEC_MOVE_COMMIT = 4'd12;
             fault_pc <= 12'd0;
             frame_instruction_count_q <= 15'd0;
             execute_move_allowed_q <= 1'b0;
-            execution_beam_x_q <= 11'd0;
-            execution_beam_y_q <= 10'd0;
+            execution_beam_x_q <= 12'd0;
+            execution_beam_y_q <= 11'd0;
             retire_pc_action_q <= RETIRE_PC_PLUS_ONE;
             retire_beam_action_q <= RETIRE_BEAM_NONE;
-            retire_beam_x_q <= 11'd0;
-            retire_beam_y_q <= 10'd0;
+            retire_beam_x_q <= 12'd0;
+            retire_beam_y_q <= 11'd0;
             execute_wait_reached_q <= 1'b0;
             pc_in_active_list_q <= 1'b0;
             instructions_retired <= 32'd0;
@@ -702,8 +702,8 @@ localparam [3:0] EXEC_MOVE_COMMIT = 4'd12;
             // The target is meaningful only when RETIRE_BEAM_TARGET is
             // selected. Loading it every cycle avoids a beam comparator on
             // the clock-enable path of all 21 target flops.
-            retire_beam_x_q <= execute_w1_q[10:0];
-            retire_beam_y_q <= execute_w0_q[9:0];
+            retire_beam_x_q <= execute_w1_q[11:0];
+            retire_beam_y_q <= execute_w0_q[10:0];
             execute_wait_reached_q <= execute_wait_reached_now;
             if (fault_clear) begin
                 fault <= 1'b0;
@@ -732,8 +732,8 @@ localparam [3:0] EXEC_MOVE_COMMIT = 4'd12;
                 dispatch_valid <= 1'b0;
                 irq_event <= 1'b0;
                 frame_instruction_count_q <= 15'd0;
-                execution_beam_x_q <= 11'd0;
-                execution_beam_y_q <= 10'd0;
+                execution_beam_x_q <= 12'd0;
+                execution_beam_y_q <= 11'd0;
                 if (promotion_now) begin
                     active_bank <= edit_bank;
                     if (edit_bank) begin

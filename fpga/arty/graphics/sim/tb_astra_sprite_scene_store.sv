@@ -320,6 +320,14 @@ module tb_astra_sprite_scene_store;
         end
         $display("sprite copper palette restore pass cycles=%0d", wait_cycles);
 
+        write_descriptor_word(6'd0, 3'd3,
+            {5'd0, 11'd1080, 5'd0, 11'd1920});
+        request_validation(1'b1);
+        write_descriptor_word(6'd0, 3'd3,
+            {5'd0, 11'd2047, 5'd0, 11'd2047});
+        request_validation(1'b1);
+        $display("sprite native and ABI-maximum destination extents pass");
+
         for (scale_slot = 0; scale_slot < 64;
              scale_slot = scale_slot + 1) begin
             write_descriptor_word(scale_slot[5:0], 3'd0, 32'h00000003);
@@ -330,13 +338,13 @@ module tb_astra_sprite_scene_store;
             write_descriptor_word(scale_slot[5:0], 3'd7, 32'd0);
         end
 
-        for (scale_batch = 0; scale_batch < 2048;
+        for (scale_batch = 0; scale_batch < 4094;
              scale_batch = scale_batch + 1) begin
             for (scale_slot = 0; scale_slot < 64;
                  scale_slot = scale_slot + 1) begin
                 scale_pair = scale_batch * 64 + scale_slot;
-                scale_source = scale_pair / 1024 + 1;
-                scale_destination = scale_pair % 1024 + 1;
+                scale_source = scale_pair / 2047 + 1;
+                scale_destination = scale_pair % 2047 + 1;
                 scale_source_height =
                     (scale_destination - 1) % 128 + 1;
                 scale_destination_height = scale_destination;
@@ -352,8 +360,8 @@ module tb_astra_sprite_scene_store;
             for (scale_slot = 0; scale_slot < 64;
                  scale_slot = scale_slot + 1) begin
                 scale_pair = scale_batch * 64 + scale_slot;
-                scale_source = scale_pair / 1024 + 1;
-                scale_destination = scale_pair % 1024 + 1;
+                scale_source = scale_pair / 2047 + 1;
+                scale_destination = scale_pair % 2047 + 1;
                 scale_numerator = scale_source;
                 scale_numerator = (scale_numerator << 24) +
                     scale_destination - 1;
@@ -385,7 +393,7 @@ module tb_astra_sprite_scene_store;
                 end
             end
         end
-        $display("sprite dimension/scaling exactness pass pairs=131072 source_size_pairs=16384");
+        $display("sprite dimension/scaling exactness pass pairs=262016 source_size_pairs=16384");
 
         write_descriptor_word(6'd0, 3'd2, 32'h00ff0100);
         request_validation(1'b0);

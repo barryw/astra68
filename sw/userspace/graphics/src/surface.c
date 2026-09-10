@@ -515,7 +515,7 @@ uint32_t astra_surface_ui_text_width(const char *utf8, uint32_t length,
                                      uint16_t pixel_height)
 {
     const AstraUiStrike *strike = astra_ui_font_strike(pixel_height);
-    uint32_t width = 0u;
+    uint64_t width_26_6 = 0u;
     uint32_t at = 0u;
 
     if (utf8 == NULL || strike == NULL)
@@ -525,10 +525,11 @@ uint32_t astra_surface_ui_text_width(const char *utf8, uint32_t length,
         const AstraUiGlyph *glyph = astra_ui_font_glyph(
             strike, astra_ui_font_scalar(utf8 + at, length - at, &consumed));
 
-        width += (uint32_t)glyph->advance_x >> 6u;
+        width_26_6 += (uint32_t)astra_ui_glyph_advance(glyph, 0u);
         at += consumed;
     }
-    return width;
+    width_26_6 = (width_26_6 + 63u) / 64u;
+    return width_26_6 > UINT32_MAX ? UINT32_MAX : (uint32_t)width_26_6;
 }
 
 uint32_t astra_surface_ui_text_fit(const char *utf8, uint32_t length,
@@ -536,7 +537,8 @@ uint32_t astra_surface_ui_text_fit(const char *utf8, uint32_t length,
                                    uint32_t maximum_width)
 {
     const AstraUiStrike *strike = astra_ui_font_strike(pixel_height);
-    uint32_t width = 0u;
+    uint64_t width_26_6 = 0u;
+    uint64_t maximum_width_26_6 = (uint64_t)maximum_width * 64u;
     uint32_t at = 0u;
 
     if (utf8 == NULL || strike == NULL)
@@ -545,11 +547,12 @@ uint32_t astra_surface_ui_text_fit(const char *utf8, uint32_t length,
         uint32_t consumed;
         const AstraUiGlyph *glyph = astra_ui_font_glyph(
             strike, astra_ui_font_scalar(utf8 + at, length - at, &consumed));
-        uint32_t advance = (uint32_t)glyph->advance_x >> 6u;
+        uint32_t advance_26_6 =
+            (uint32_t)astra_ui_glyph_advance(glyph, 0u);
 
-        if (advance > maximum_width - width)
+        if (width_26_6 + advance_26_6 > maximum_width_26_6)
             break;
-        width += advance;
+        width_26_6 += advance_26_6;
         at += consumed;
     }
     return at;
@@ -591,7 +594,7 @@ static void font_text(AstraSurfaceView *surface, int32_t x, int32_t y,
                       uint16_t color, const AstraFontBank *font)
 {
     const AstraUiStrike *strike;
-    int32_t pen = x;
+    int32_t pen_26_6 = x * 64;
     uint32_t at = 0u;
 
     if (surface == NULL || utf8 == NULL)
@@ -610,8 +613,9 @@ static void font_text(AstraSurfaceView *surface, int32_t x, int32_t y,
         const AstraUiGlyph *glyph = font_glyph(
             font, strike,
             astra_ui_font_scalar(utf8 + at, length - at, &consumed));
-        int32_t glyph_x = pen + glyph->bearing_x / 64;
-        int32_t glyph_y = y + strike->ascent - glyph->bearing_y / 64;
+        int32_t glyph_x = astra_ui_glyph_x(pen_26_6, glyph);
+        int32_t glyph_y = astra_ui_glyph_y(
+            (y + strike->ascent) * 64, glyph);
         const uint8_t *bitmap = &font->bitmap[glyph->bitmap_offset];
 
         for (uint32_t row_index = 0u; row_index < glyph->height; ++row_index)
@@ -622,7 +626,7 @@ static void font_text(AstraSurfaceView *surface, int32_t x, int32_t y,
                                        glyph_x + (int32_t)column,
                                        glyph_y + (int32_t)row_index,
                                        1u, 1u, color);
-        pen += cell_width != 0u ? cell_width : glyph->advance_x / 64;
+        pen_26_6 += astra_ui_glyph_advance(glyph, cell_width);
         at += consumed;
     }
 }

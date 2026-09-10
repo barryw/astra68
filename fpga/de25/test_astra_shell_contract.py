@@ -46,6 +46,15 @@ for required in (
     "subsys_hps.lwhps2fpga astra_control_bridge.s0",
     "subsys_hps.lwhps2fpga/astra_control_bridge.s0 baseAddress 0x100000",
     "astra_control axi4lite start",
+    "add_instance astra_build_clock altera_clock_bridge",
+    "set_instance_parameter_value astra_build_clock EXPLICIT_CLOCK_RATE 165000000",
+    "astra_build_clk clock end",
+    "add_instance astra_build_reset altera_reset_bridge",
+    "astra_build_reset_n reset end",
+    "add_connection astra_build_clock.out_clk astra_control_bridge.clk",
+    "add_connection astra_build_clock.out_clk $name.clk",
+    "add_connection astra_build_reset.out_reset astra_control_bridge.clk_reset",
+    "add_connection astra_build_reset.out_reset $name.clk_reset",
     "proc add_memory_bridge",
     "add_connection $name.m0 astra_lpddr4b.s0_axi4",
     "add_memory_bridge astra_fb_bridge astra_fb 1 0 1",
@@ -56,6 +65,8 @@ for required in (
 assert tcl.count("qsys_mm.enableOutOfOrderSupport true") == 2
 assert "subsys_debug.fpga_m_master/astra_control_bridge.s0" not in tcl
 assert "subsys_hps.hps2fpga astra_lpddr4b.s0_axi4" not in tcl
+assert "add_connection clk_100.out_clk astra_control_bridge.clk" not in tcl
+assert "add_connection clk_100.out_clk $name.clk" not in tcl
 
 build = (HERE / "build_astra_shell.sh").read_text(encoding="utf-8")
 build += (HERE / "build_common.sh").read_text(encoding="utf-8")
@@ -66,6 +77,7 @@ for required in (
     "sha256sum -c",
     "add_lpddr4b.tcl",
     "patch_vendor_top.py",
+    "patch_vendor_pixel_pll.py",
     "compile_de25_tree",
     "golden_top_hps.sof",
     "golden_top_boot.core.rbf",
@@ -78,6 +90,8 @@ for required in (
     "require_zero_high_severity",
     "-o hps=1",
     "astra_de25_graphics.sv",
+    "emit-cp437-hex",
+    "sw/userspace/graphics/fonts/astra-mono.afnt",
     "video_timing.sv",
     "I2C_HDMI_Config.v",
     "sys_pll.ip",
@@ -172,12 +186,33 @@ for required in (
     ".sample_clk(audio_sample_clk)",
     "astra_front_panel_axi #(",
     "I2C_HDMI_Config hdmi_config_i",
-    "always @(negedge pixel_clk)",
+"always @(posedge pixel_clk)",
     "hdmi_int_sync_q",
+    "hdmi_ready_build_sync_q",
+    ".hdmi_output_active(hdmi_ready_build && hdmi_output_requested)",
+    ".aresetn(build_reset_n)",
+    ".BUILD_CYCLES_PER_US(165)",
+    ".CLK_HZ(165000000)",
+    "video_timing #(.VIDEO_ID_CODE(16))",
+    ".OUTPUT_WIDTH(1920)",
+    ".OUTPUT_HEIGHT(1080)",
+    ".TOTAL_WIDTH(2200)",
+    ".TOTAL_HEIGHT(1125)",
 ):
     assert required in graphics, required
 
 assert "altsource_probe" not in graphics
+assert ".aresetn(reset_n)" not in graphics
+
+front_panel = (ROOT / "fpga/arty/common/astra_front_panel.sv").read_text(
+    encoding="utf-8"
+)
+assert (
+    "always @(posedge clk) begin\n"
+    "        input_meta <= input_pins;\n"
+    "        input_sync <= input_meta;\n"
+    "    end"
+) in front_panel
 
 boot = (ROOT / "sw/include/astra/boot.h").read_text(encoding="utf-8")
 qemu = (ROOT / "emu/qemu/qemu-9.2/hw/m68k/astra68.c").read_text(
@@ -266,8 +301,11 @@ with tempfile.TemporaryDirectory() as temporary_text:
     assert "astra_de25_graphics graphics_i" in patched_top
     assert ".astra_control_awaddr" in patched_top
     assert ".astra_fb_araddr" in patched_top
+    assert ".astra_build_clk" in patched_top
+    assert ".astra_build_reset_n" in patched_top
     assert ".astra_scene_araddr" in patched_top
     assert ".astra_render_awaddr" in patched_top
+    assert ".buttons(~fpga_button_pio)" in patched_top
     assert ".hdmi_tx_d(HDMI_TX_D)" in patched_top
     assert "fpga_led_pio = astra_leds" in patched_top
     assert "{31'd0, astra_render_interrupt}" in patched_top
@@ -317,7 +355,8 @@ with tempfile.TemporaryDirectory() as temporary_text:
     ) in patched_timing
     assert (
         "set_clock_groups -asynchronous "
-        "-group [get_clocks {pll_inst|iopll_0_outclk0}]"
+        "-group [get_clocks {pll_inst|iopll_0_outclk0}] "
+        "-group [get_clocks {graphics_i|pixel_pll_i|iopll_0_outclk1}]"
     ) in patched_timing
     assert "SYNCHRONIZATION_REGISTER_CHAIN_LENGTH 1" not in patched_qsf
     assert (
@@ -330,6 +369,9 @@ with tempfile.TemporaryDirectory() as temporary_text:
         "set_net_delay -from $gray_sources -to $gray_heads -max",
         "pixel_pll_i*pll_ctrl_reg",
         "audio_pll_i*pll_ctrl_reg",
+        "set build_clock [get_clocks "
+        "{graphics_i|pixel_pll_i|iopll_0_outclk1}]",
+        "graphics_i|build_reset_sync_q*",
         "synchronize_async_rst|*|clrn",
         "set sample_clock [get_clocks {ASTRA_AUDIO_SAMPLE_CLOCK}]",
     ):
@@ -350,6 +392,9 @@ with tempfile.TemporaryDirectory() as temporary_text:
         "set_input_delay -clock ASTRA_HDMI_I2C_BUS_CLOCK -max 3450.0",
         "set_input_delay -clock ASTRA_HDMI_I2C_BUS_CLOCK -min 0.0",
         "set_false_path -from [get_ports HDMI_TX_INT]",
+        "set_false_path -from [get_registers "
+        "{graphics_i|hdmi_config_i|READY}] -to [get_registers "
+        "{graphics_i|hdmi_ready_build_sync_q[0]}]",
     ):
         assert interface_constraint in patched_timing, interface_constraint
 

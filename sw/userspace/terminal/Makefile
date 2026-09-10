@@ -6,7 +6,8 @@ HOST_CC ?= cc
 ANALYZER_CC ?= gcc
 TIC ?= tic
 INFOCMP ?= infocmp
-CPPFLAGS := -Iinclude -I../../include
+NDK := ../../../ndk
+CPPFLAGS := -I$(NDK)/include -I../../include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin $(ASTRA_DEBUG_FLAGS)
@@ -30,15 +31,18 @@ $(TERMINFO_ENTRY): $(TERMINFO_SOURCE)
 $(TARGET): $(TARGET_OBJECTS)
 	$(ASTRA_REPLACE_ARCHIVE)
 
-build/m68k/%.o: src/%.c include/astra/terminal.h include/astra/keymap.h
+build/m68k/%.o: src/%.c $(NDK)/include/astra/terminal.h \
+		$(NDK)/include/astra/keymap.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
 
-$(HOST_TEST): src/terminal.c tests/test_terminal.c include/astra/terminal.h
+$(HOST_TEST): src/terminal.c tests/test_terminal.c \
+		$(NDK)/include/astra/terminal.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(filter %.c,$^) -o $@
 
-$(HOST_KEYMAP_TEST): src/keymap.c tests/test_keymap.c include/astra/keymap.h
+$(HOST_KEYMAP_TEST): src/keymap.c tests/test_keymap.c \
+		$(NDK)/include/astra/keymap.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(filter %.c,$^) -o $@
 

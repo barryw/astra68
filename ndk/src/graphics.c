@@ -95,6 +95,51 @@ AstraResult astra_display_close(AstraDisplay *display)
     return ASTRA_ERROR_INVALID_HANDLE;
 }
 
+AstraResult astra_display_set_mode(const AstraDisplay *display,
+                                   const AstraDisplayMode *mode,
+                                   AstraFence *fence)
+{
+    AstraDisplayLayout layout;
+    AstraResult result;
+
+    if (display == 0 || fence == 0 || !empty_handle(fence->_private_handle))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_display_layout_calculate(
+        mode, ASTRA_GRAPHICS_OUTPUT_WIDTH, ASTRA_GRAPHICS_OUTPUT_HEIGHT,
+        &layout);
+    return result == ASTRA_OK ? ASTRA_ERROR_INVALID_HANDLE : result;
+}
+
+AstraResult astra_display_set_pointer_image(
+    const AstraDisplay *display, const AstraHardwarePointerImage *image,
+    AstraFence *fence)
+{
+    if (display == 0 || image == 0 || image->size < sizeof(*image) ||
+        image->pixels == 0 || image->width == 0 || image->width > 32u ||
+        image->height == 0 || image->height > 32u ||
+        image->pitch < (uint32_t)image->width * sizeof(*image->pixels) ||
+        image->hotspot.x < 0 || image->hotspot.y < 0 ||
+        (uint32_t)image->hotspot.x >= image->width ||
+        (uint32_t)image->hotspot.y >= image->height ||
+        !astra_words_zero(image->reserved, 4) || fence == 0 ||
+        !empty_handle(fence->_private_handle))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return ASTRA_ERROR_INVALID_HANDLE;
+}
+
+AstraResult astra_display_set_pointer_state(
+    const AstraDisplay *display, AstraPointI32 position, int enabled,
+    AstraFence *fence)
+{
+    if (display == 0 || position.x < 0 || position.y < 0 ||
+        position.x >= ASTRA_GRAPHICS_OUTPUT_WIDTH ||
+        position.y >= ASTRA_GRAPHICS_OUTPUT_HEIGHT ||
+        (enabled != 0 && enabled != 1) || fence == 0 ||
+        !empty_handle(fence->_private_handle))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return ASTRA_ERROR_INVALID_HANDLE;
+}
+
 AstraResult astra_surface_create(const AstraDisplay *display,
                                  const AstraSurfaceCreateInfo *create_info,
                                  AstraSurface *surface)
@@ -372,7 +417,8 @@ AstraResult astra_raster_program_create(const AstraDisplay *display,
     for (index = 0; index < change_count; ++index) {
         if (changes[index].target < ASTRA_RASTER_TARGET_BACKDROP ||
             changes[index].target > ASTRA_RASTER_TARGET_TILE1_SCROLL ||
-            changes[index].beam_x >= 720u || changes[index].beam_y >= 480u)
+            changes[index].beam_x >= ASTRA_GRAPHICS_OUTPUT_WIDTH ||
+            changes[index].beam_y >= ASTRA_GRAPHICS_OUTPUT_HEIGHT)
             return ASTRA_ERROR_INVALID_ARGUMENT;
         if (index != 0 &&
             (changes[index].beam_y < changes[index - 1].beam_y ||
