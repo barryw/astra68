@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <astra/text_surface.h>
+
 /*
  * The terminal cell model.
  *
@@ -22,38 +24,11 @@
 #define ASTRA_TERMINAL_TAB_WIDTH 8u
 #define ASTRA_TERMINAL_STORAGE_ALIGNMENT 4u
 #define ASTRA_TERMINAL_CSI_PARAMETERS 32u
-#define ASTRA_TERMINAL_COLOR_DEFAULT UINT32_MAX
-#define ASTRA_TERMINAL_COLOR_RGB(red, green, blue)                          \
-    (UINT32_C(0x01000000) | ((uint32_t)(red) << 16u) |                     \
-     ((uint32_t)(green) << 8u) | (uint32_t)(blue))
-#define ASTRA_TERMINAL_COLOR_IS_RGB(color)                                  \
-    (((color) & UINT32_C(0xff000000)) == UINT32_C(0x01000000))
-
-enum {
-    ASTRA_TERMINAL_BOLD = 1u << 0,
-    ASTRA_TERMINAL_FAINT = 1u << 1,
-    ASTRA_TERMINAL_ITALIC = 1u << 2,
-    ASTRA_TERMINAL_UNDERLINE = 1u << 3,
-    ASTRA_TERMINAL_BLINK = 1u << 4,
-    ASTRA_TERMINAL_INVERSE = 1u << 5,
-    ASTRA_TERMINAL_HIDDEN = 1u << 6,
-    ASTRA_TERMINAL_STRIKE = 1u << 7,
-};
-
-typedef struct AstraTerminalCell {
-    uint32_t codepoint;
-    uint32_t foreground;
-    uint32_t background;
-    uint16_t attributes;
-    uint8_t width;
-    uint8_t reserved;
-} AstraTerminalCell;
-
 /* Constant-expression form for fixed test and bootstrap storage. */
 #define ASTRA_TERMINAL_STORAGE_BYTES(columns, rows)                         \
     ((size_t)(ASTRA_TERMINAL_STORAGE_ALIGNMENT - 1u) +                     \
      (size_t)(rows) * (size_t)(columns) *                                  \
-         2u * sizeof(AstraTerminalCell) +                                  \
+         2u * sizeof(AstraTextCell) +                                      \
      (size_t)(rows) * 2u * sizeof(uint32_t) +                              \
      (size_t)(columns) * 4u)
 
@@ -71,7 +46,7 @@ typedef enum AstraTerminalStatus {
  */
 typedef int (*AstraTerminalRender)(void *context, uint32_t row,
                                    uint32_t column,
-                                   const AstraTerminalCell *cells,
+                                   const AstraTextCell *cells,
                                    uint32_t count);
 
 /* Moves already-rendered rows upward before changed rows are redrawn. */
@@ -94,9 +69,9 @@ typedef int (*AstraTerminalReply)(void *context, const uint8_t *bytes,
 typedef void (*AstraTerminalPrompt)(void *context);
 
 typedef struct AstraTerminal {
-    AstraTerminalCell *cells;
-    AstraTerminalCell *primary_cells;
-    AstraTerminalCell *alternate_cells;
+    AstraTextCell *cells;
+    AstraTextCell *primary_cells;
+    AstraTextCell *alternate_cells;
     /* Inclusive range of columns changed since the last flush, per row. */
     uint32_t *dirty_first;
     uint32_t *dirty_last;
@@ -200,7 +175,7 @@ AstraTerminalStatus astra_terminal_redraw(AstraTerminal *terminal);
 
 uint32_t astra_terminal_cell(const AstraTerminal *terminal, uint32_t row,
                              uint32_t column);
-const AstraTerminalCell *astra_terminal_cell_at(
+const AstraTextCell *astra_terminal_cell_at(
     const AstraTerminal *terminal, uint32_t row, uint32_t column);
 
 #endif

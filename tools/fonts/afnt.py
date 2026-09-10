@@ -14,7 +14,7 @@ from pathlib import Path
 
 HEADER = struct.Struct(">4sHHHHIIII")
 DIRECTORY = struct.Struct(">4sIIII")
-STRIKE = struct.Struct(">HHhhhHIIIII")
+STRIKE = struct.Struct(">HHHHiiiiiiiiiiIIIII")
 GLYPH = struct.Struct(">IIIHHHHiii")
 CMAP = struct.Struct(">II")
 CHUNKS = (b"NAME", b"CMAP", b"STRK", b"GLYP", b"BITM")
@@ -142,10 +142,23 @@ def build_afnt(args: argparse.Namespace) -> bytes:
                 (glyph.shift_up + glyph.height) * 64,
                 glyph.advance_width * 64,
             ))
+        cap_height = max(0, encoded.get(ord("H"), default).shift_up +
+                         encoded.get(ord("H"), default).height)
+        x_height = max(0, encoded.get(ord("x"), default).shift_up +
+                       encoded.get(ord("x"), default).height)
+        max_advance = max(glyph.advance_width for glyph in ordered)
+        thickness = max(1, (font.line_height + 15) // 16)
+        underline_position = max(1, (font.descent + 1) // 2)
+        strikeout_position = max(1, x_height // 2 if x_height else
+                                 font.ascent // 3)
         strike_records.append(STRIKE.pack(
-            strike_id, font.line_height, font.ascent, font.descent,
-            font.leading, MASK1, glyph_first, len(ordered), GLYPH.size,
-            0, 0,
+            strike_id, MASK1,
+            max_advance if args.monospaced else 0, font.line_height,
+            font.ascent * 64, font.descent * 64, font.leading * 64,
+            cap_height * 64, x_height * 64, max_advance * 64,
+            underline_position * 64, thickness * 64,
+            strikeout_position * 64, thickness * 64,
+            glyph_first, len(ordered), GLYPH.size, 0, 0,
         ))
         glyph_first += len(ordered)
 
@@ -183,7 +196,7 @@ def build_afnt(args: argparse.Namespace) -> bytes:
         cursor += len(data)
     directory = b"".join(entries)
     total = payload_offset + len(payload)
-    header = HEADER.pack(b"AFNT", 0, 1, HEADER.size, DIRECTORY.size,
+    header = HEADER.pack(b"AFNT", 0, 2, HEADER.size, DIRECTORY.size,
                          len(CHUNKS), total, crc32(directory), 0)
     return header + directory + bytes(payload_offset - HEADER.size - len(directory)) + payload
 
@@ -193,7 +206,7 @@ def parse_afnt(data: bytes) -> dict[bytes, bytes]:
         raise ValueError("truncated AFNT header")
     magic, major, minor, header_size, entry_size, count, total, directory_crc, flags = HEADER.unpack_from(data)
     if (magic, major, minor, header_size, entry_size, total, flags) != (
-            b"AFNT", 0, 1, HEADER.size, DIRECTORY.size, len(data), 0):
+        b"AFNT", 0, 2, HEADER.size, DIRECTORY.size, len(data), 0):
         raise ValueError("invalid AFNT header")
     directory_end = header_size + count * entry_size
     if directory_end > len(data):
@@ -240,10 +253,18 @@ def unpack_afnt(data: bytes):
               for index in range(glyph_count)]
     if cmap != sorted(cmap) or len({scalar for scalar, _ in cmap}) != len(cmap):
         raise ValueError("CMAP must be unique and sorted")
-    for strike_id, height, ascent, descent, leading, bitmap_format, first, count, record_size, reserved0, reserved1 in strikes:
-        if (strike_id >= strike_count or height == 0 or ascent < 0 or descent < 0 or
+    for (strike_id, bitmap_format, pixel_width, pixel_height, ascent,
+         descent, line_gap, cap_height, x_height, max_advance,
+         underline_position, underline_thickness, strikeout_position,
+         strikeout_thickness, first, count, record_size, flags,
+         reserved) in strikes:
+        if (strike_id >= strike_count or pixel_height == 0 or
+                ascent < 0 or descent < 0 or line_gap < 0 or
+                cap_height < 0 or x_height < 0 or max_advance <= 0 or
+                underline_thickness <= 0 or strikeout_thickness <= 0 or
                 bitmap_format != MASK1 or record_size != GLYPH.size or
-                first > glyph_count or count > glyph_count - first or reserved0 or reserved1):
+                first > glyph_count or count > glyph_count - first or
+                flags or reserved or (pixel_width and pixel_width * 64 != max_advance)):
             raise ValueError("invalid strike record")
         ids = [record[0] for record in glyphs[first:first + count]]
         if ids != list(range(count)):
@@ -275,8 +296,18 @@ def emit_c(data: bytes, output: Path, prefix: str) -> None:
     emit_array(out, f"{prefix}_cmap_codepoints", [entry[0] for entry in cmap], "uint32_t")
     emit_array(out, f"{prefix}_cmap_glyphs", [entry[1] for entry in cmap], "uint16_t")
     out.write(f"static const AstraUiStrike {prefix}_strikes[] = {{\n")
-    for _, height, ascent, descent, leading, _, first, count, _, _, _ in strikes:
-        out.write(f"    {{ {height}u, {ascent}u, {descent}u, {leading}u, {first}u, {count}u }},\n")
+    for (strike_id, bitmap_format, pixel_width, pixel_height, ascent,
+         descent, line_gap, cap_height, x_height, max_advance,
+         underline_position, underline_thickness, strikeout_position,
+         strikeout_thickness, first, count, record_size, flags,
+         reserved) in strikes:
+        del strike_id, record_size, flags, reserved
+        out.write(
+            f"    {{ {pixel_width}u, {pixel_height}u, {bitmap_format}u, 0u, "
+            f"{ascent}, {descent}, {line_gap}, {cap_height}, {x_height}, "
+            f"{max_advance}, {underline_position}, {underline_thickness}, "
+            f"{strikeout_position}, {strikeout_thickness}, {first}u, "
+            f"{count}u }},\n")
     out.write(f"}};\n\nstatic const AstraUiGlyph {prefix}_glyphs[] = {{\n")
     for glyph_id, offset, length, width, height, pitch, _, bearing_x, bearing_y, advance in glyphs:
         out.write(f"    {{ {offset}u, {length}u, {width}u, {height}u, {pitch}u, "
@@ -291,8 +322,12 @@ def emit_cp437_hex(data: bytes) -> str:
     cmap, strikes, glyphs, bitmap = unpack_afnt(data)
     if len(strikes) != 1:
         raise ValueError("rescue font must contain exactly one strike")
-    _, height, ascent, descent, leading, _, first, count, _, _, _ = strikes[0]
-    if (height, ascent, descent, leading) != (16, 12, 4, 0):
+    (_, bitmap_format, pixel_width, pixel_height, ascent, descent, line_gap,
+     _cap_height, _x_height, max_advance, _underline_position,
+     _underline_thickness, _strikeout_position, _strikeout_thickness,
+     first, count, _record_size, _flags, _reserved) = strikes[0]
+    if (bitmap_format, pixel_width, pixel_height, ascent, descent, line_gap,
+            max_advance) != (MASK1, 8, 16, 12 * 64, 4 * 64, 0, 8 * 64):
         raise ValueError("rescue font must use 8x16 Spleen line metrics")
 
     glyph_ids = {scalar: glyph_id for scalar, glyph_id in cmap}

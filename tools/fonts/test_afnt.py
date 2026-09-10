@@ -13,8 +13,25 @@ afnt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(afnt)
 
 source = ROOT / "sw/userspace/graphics/fonts/astra-mono.afnt"
-generated = afnt.emit_cp437_hex(source.read_bytes())
+source_bytes = source.read_bytes()
+generated = afnt.emit_cp437_hex(source_bytes)
 rows = generated.splitlines()
+
+assert source_bytes[:8] == b"AFNT\x00\x00\x00\x02"
+_, strikes, _, _ = afnt.unpack_afnt(source_bytes)
+assert len(strikes) == 1
+(strike_id, bitmap_format, pixel_width, pixel_height, ascent, descent,
+ line_gap, cap_height, x_height, max_advance, underline_position,
+ underline_thickness, strikeout_position, strikeout_thickness,
+ glyph_first, glyph_count, glyph_record_size, flags, reserved) = strikes[0]
+assert (strike_id, bitmap_format, pixel_width, pixel_height) == (0, 1, 8, 16)
+assert (ascent, descent, line_gap, max_advance) == (12 * 64, 4 * 64, 0,
+                                                    8 * 64)
+assert cap_height >= x_height > 0
+assert underline_position > 0 and underline_thickness > 0
+assert strikeout_position > 0 and strikeout_thickness > 0
+assert glyph_first == 0 and glyph_count == 1002
+assert glyph_record_size == afnt.GLYPH.size and flags == reserved == 0
 
 assert len(rows) == 256 * 16
 assert rows[ord("A") * 16:(ord("A") + 1) * 16] == [

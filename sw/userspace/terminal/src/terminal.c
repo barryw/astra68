@@ -22,9 +22,9 @@ enum {
     PARSER_CHARSET,
 };
 
-static AstraTerminalCell blank_cell(const AstraTerminal *terminal)
+static AstraTextCell blank_cell(const AstraTerminal *terminal)
 {
-    AstraTerminalCell blank = {
+    AstraTextCell blank = {
         TERMINAL_BLANK,
         terminal->foreground,
         terminal->background,
@@ -36,14 +36,14 @@ static AstraTerminalCell blank_cell(const AstraTerminal *terminal)
     return blank;
 }
 
-static AstraTerminalCell *cell(AstraTerminal *terminal, uint32_t row,
+static AstraTextCell *cell(AstraTerminal *terminal, uint32_t row,
                                uint32_t column)
 {
     return terminal->cells + (size_t)row * terminal->capacity_columns +
            column;
 }
 
-static const AstraTerminalCell *const_cell(const AstraTerminal *terminal,
+static const AstraTextCell *const_cell(const AstraTerminal *terminal,
                                            uint32_t row, uint32_t column)
 {
     return terminal->cells + (size_t)row * terminal->capacity_columns +
@@ -190,8 +190,8 @@ AstraTerminalStatus astra_terminal_storage_size(uint32_t columns,
         return ASTRA_TERMINAL_INVALID_ARGUMENT;
     if (!add_size(&cells, rows, columns) ||
         !add_size(&total, rows, 2u * sizeof(uint32_t)) ||
-        !add_size(&total, cells, sizeof(AstraTerminalCell)) ||
-        !add_size(&total, cells, sizeof(AstraTerminalCell)) ||
+        !add_size(&total, cells, sizeof(AstraTextCell)) ||
+        !add_size(&total, cells, sizeof(AstraTextCell)) ||
         !add_size(&total, columns, 4u))
         return ASTRA_TERMINAL_STORAGE_TOO_SMALL;
     *bytes = total;
@@ -221,10 +221,10 @@ static int bind_storage(AstraTerminal *terminal, uint32_t columns,
     at += (size_t)rows * sizeof(uint32_t);
     terminal->dirty_last = (uint32_t *)(void *)at;
     at += (size_t)rows * sizeof(uint32_t);
-    terminal->primary_cells = (AstraTerminalCell *)(void *)at;
-    at += (size_t)rows * columns * sizeof(AstraTerminalCell);
-    terminal->alternate_cells = (AstraTerminalCell *)(void *)at;
-    at += (size_t)rows * columns * sizeof(AstraTerminalCell);
+    terminal->primary_cells = (AstraTextCell *)(void *)at;
+    at += (size_t)rows * columns * sizeof(AstraTextCell);
+    terminal->alternate_cells = (AstraTextCell *)(void *)at;
+    at += (size_t)rows * columns * sizeof(AstraTextCell);
     terminal->cells = terminal->primary_cells;
     terminal->echo_line = (char *)(void *)at;
     terminal->storage = storage;
@@ -272,8 +272,8 @@ AstraTerminalStatus astra_terminal_init_capacity(
     terminal->echo_columns = 0u;
     terminal->echo_carriage_return = 0u;
     terminal->reply_failures = 0u;
-    terminal->foreground = ASTRA_TERMINAL_COLOR_DEFAULT;
-    terminal->background = ASTRA_TERMINAL_COLOR_DEFAULT;
+    terminal->foreground = ASTRA_TEXT_COLOR_DEFAULT;
+    terminal->background = ASTRA_TEXT_COLOR_DEFAULT;
     terminal->attributes = 0u;
     terminal->parser_state = 0u;
     terminal->csi_parameter_count = 0u;
@@ -319,7 +319,7 @@ AstraTerminalStatus astra_terminal_resize(AstraTerminal *terminal,
                           storage_size))
             return ASTRA_TERMINAL_STORAGE_TOO_SMALL;
         for (uint32_t screen = 0u; screen < 2u; ++screen) {
-            AstraTerminalCell *old_cells = screen == 0u ?
+            AstraTextCell *old_cells = screen == 0u ?
                 terminal->primary_cells : terminal->alternate_cells;
 
             replacement.cells = screen == 0u ? replacement.primary_cells :
@@ -346,7 +346,7 @@ AstraTerminalStatus astra_terminal_resize(AstraTerminal *terminal,
             replacement.echo_line[index] = terminal->echo_line[index];
         *terminal = replacement;
     } else {
-        AstraTerminalCell *active = terminal->cells;
+        AstraTextCell *active = terminal->cells;
 
         for (uint32_t screen = 0u; screen < 2u; ++screen) {
             terminal->cells = screen == 0u ? terminal->primary_cells :
@@ -526,29 +526,29 @@ static void set_graphics(AstraTerminal *terminal)
         switch (value) {
         case 0u:
             terminal->attributes = 0u;
-            terminal->foreground = ASTRA_TERMINAL_COLOR_DEFAULT;
-            terminal->background = ASTRA_TERMINAL_COLOR_DEFAULT;
+            terminal->foreground = ASTRA_TEXT_COLOR_DEFAULT;
+            terminal->background = ASTRA_TEXT_COLOR_DEFAULT;
             break;
-        case 1u: terminal->attributes |= ASTRA_TERMINAL_BOLD; break;
-        case 2u: terminal->attributes |= ASTRA_TERMINAL_FAINT; break;
-        case 3u: terminal->attributes |= ASTRA_TERMINAL_ITALIC; break;
-        case 4u: terminal->attributes |= ASTRA_TERMINAL_UNDERLINE; break;
-        case 5u: terminal->attributes |= ASTRA_TERMINAL_BLINK; break;
-        case 7u: terminal->attributes |= ASTRA_TERMINAL_INVERSE; break;
-        case 8u: terminal->attributes |= ASTRA_TERMINAL_HIDDEN; break;
-        case 9u: terminal->attributes |= ASTRA_TERMINAL_STRIKE; break;
+        case 1u: terminal->attributes |= ASTRA_TEXT_STYLE_BOLD; break;
+        case 2u: terminal->attributes |= ASTRA_TEXT_STYLE_FAINT; break;
+        case 3u: terminal->attributes |= ASTRA_TEXT_STYLE_ITALIC; break;
+        case 4u: terminal->attributes |= ASTRA_TEXT_STYLE_UNDERLINE; break;
+        case 5u: terminal->attributes |= ASTRA_TEXT_STYLE_BLINK; break;
+        case 7u: terminal->attributes |= ASTRA_TEXT_STYLE_INVERSE; break;
+        case 8u: terminal->attributes |= ASTRA_TEXT_STYLE_HIDDEN; break;
+        case 9u: terminal->attributes |= ASTRA_TEXT_STYLE_STRIKETHROUGH; break;
         case 22u:
             terminal->attributes &=
-                (uint16_t)~(ASTRA_TERMINAL_BOLD | ASTRA_TERMINAL_FAINT);
+                (uint16_t)~(ASTRA_TEXT_STYLE_BOLD | ASTRA_TEXT_STYLE_FAINT);
             break;
-        case 23u: terminal->attributes &= (uint16_t)~ASTRA_TERMINAL_ITALIC; break;
-        case 24u: terminal->attributes &= (uint16_t)~ASTRA_TERMINAL_UNDERLINE; break;
-        case 25u: terminal->attributes &= (uint16_t)~ASTRA_TERMINAL_BLINK; break;
-        case 27u: terminal->attributes &= (uint16_t)~ASTRA_TERMINAL_INVERSE; break;
-        case 28u: terminal->attributes &= (uint16_t)~ASTRA_TERMINAL_HIDDEN; break;
-        case 29u: terminal->attributes &= (uint16_t)~ASTRA_TERMINAL_STRIKE; break;
-        case 39u: terminal->foreground = ASTRA_TERMINAL_COLOR_DEFAULT; break;
-        case 49u: terminal->background = ASTRA_TERMINAL_COLOR_DEFAULT; break;
+        case 23u: terminal->attributes &= (uint16_t)~ASTRA_TEXT_STYLE_ITALIC; break;
+        case 24u: terminal->attributes &= (uint16_t)~ASTRA_TEXT_STYLE_UNDERLINE; break;
+        case 25u: terminal->attributes &= (uint16_t)~ASTRA_TEXT_STYLE_BLINK; break;
+        case 27u: terminal->attributes &= (uint16_t)~ASTRA_TEXT_STYLE_INVERSE; break;
+        case 28u: terminal->attributes &= (uint16_t)~ASTRA_TEXT_STYLE_HIDDEN; break;
+        case 29u: terminal->attributes &= (uint16_t)~ASTRA_TEXT_STYLE_STRIKETHROUGH; break;
+        case 39u: terminal->foreground = ASTRA_TEXT_COLOR_DEFAULT; break;
+        case 49u: terminal->background = ASTRA_TEXT_COLOR_DEFAULT; break;
         default:
             if (value >= 30u && value <= 37u)
                 terminal->foreground = value - 30u;
@@ -569,7 +569,7 @@ static void set_graphics(AstraTerminal *terminal)
             } else if (color != NULL &&
                        index + 4u < terminal->csi_parameter_count &&
                        parameter(terminal, index + 1u, 0u, 0) == 2u) {
-                *color = ASTRA_TERMINAL_COLOR_RGB(
+                *color = ASTRA_TEXT_COLOR_RGB(
                     parameter(terminal, index + 2u, 0u, 0) & 0xffu,
                     parameter(terminal, index + 3u, 0u, 0) & 0xffu,
                     parameter(terminal, index + 4u, 0u, 0) & 0xffu);
@@ -836,7 +836,7 @@ static void put_scalar(AstraTerminal *terminal, uint32_t scalar)
     if (terminal->cursor_column >= terminal->columns)
         newline(terminal);
     *cell(terminal, terminal->cursor_row, terminal->cursor_column) =
-        (AstraTerminalCell){scalar, terminal->foreground,
+        (AstraTextCell){scalar, terminal->foreground,
                             terminal->background, terminal->attributes,
                             1u, 0u};
     mark(terminal, terminal->cursor_row, terminal->cursor_column);
@@ -900,8 +900,8 @@ static void begin_csi(AstraTerminal *terminal)
 static void reset_terminal(AstraTerminal *terminal)
 {
     alternate_screen(terminal, 0);
-    terminal->foreground = ASTRA_TERMINAL_COLOR_DEFAULT;
-    terminal->background = ASTRA_TERMINAL_COLOR_DEFAULT;
+    terminal->foreground = ASTRA_TEXT_COLOR_DEFAULT;
+    terminal->background = ASTRA_TEXT_COLOR_DEFAULT;
     terminal->attributes = 0u;
     terminal->scroll_top = 0u;
     terminal->scroll_bottom = terminal->rows - 1u;
@@ -1159,7 +1159,7 @@ uint32_t astra_terminal_cell(const AstraTerminal *terminal, uint32_t row,
     return const_cell(terminal, row, column)->codepoint;
 }
 
-const AstraTerminalCell *astra_terminal_cell_at(
+const AstraTextCell *astra_terminal_cell_at(
     const AstraTerminal *terminal, uint32_t row, uint32_t column)
 {
     if (terminal == NULL || row >= terminal->rows ||

@@ -9,8 +9,8 @@
 #include <astra/graphics_library.h>
 #include <astra/graphics_kit.h>
 #include <astra/input_service.h>
+#include <astra/interface_kit.h>
 #include <astra/keymap.h>
-#include <astra/font_library.h>
 #include <astra/port.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
@@ -29,8 +29,8 @@
 #define TERMINAL_MARGIN_Y 8u
 #define TERMINAL_FONT_HEIGHT ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT
 #define TERMINAL_LINE_HEIGHT (TERMINAL_FONT_HEIGHT + 4u)
-#define TERMINAL_CURSOR_HEIGHT 2u
 #define TERMINAL_CURSOR_BLINK_NS UINT64_C(500000000)
+#define TERMINAL_TEXT_SCRATCH_BYTES (ASTRA_DISPLAY_WIDTH * 4u)
 
 enum {
     TERMINAL_FAIL_SURFACE = ASTRA_STATUS_PROGRAM_FIRST,
@@ -44,9 +44,9 @@ enum {
 ASTRA_PROGRAM("terminal", 0, 1, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
-static AstraLibraryHandle *font_handle;
+static AstraLibraryHandle *interface_handle;
 static AstraLibraryHandle *graphics_handle;
-static const AstraFontLibraryV2 *font_library;
+static const AstraInterfaceLibraryV2 *interface_library;
 static const AstraGraphicsLibraryV2 *graphics_library;
 static AstraProcessFilesystem process_filesystem =
     ASTRA_PROCESS_FILESYSTEM_INIT;
@@ -56,6 +56,8 @@ typedef struct WindowTerminal {
     AstraArea model_area;
     AstraWindow window;
     AstraTerminal *terminal;
+    AstraTextSurface text_surface;
+    char text_scratch[TERMINAL_TEXT_SCRATCH_BYTES];
     uint16_t width;
     uint16_t height;
     uint16_t cell_width;
@@ -143,15 +145,16 @@ static uint32_t load_title_icon(AstraArea *area, uint32_t *length)
     return ASTRA_STATUS_OK;
 }
 
-static uint32_t load_graphics_kit(void)
+static uint32_t load_interface_kits(void)
 {
-    font_handle = OpenLibrary(ASTRA_FONT_LIBRARY_NAME,
-                              ASTRA_FONT_LIBRARY_VERSION);
-    if (font_handle == NULL)
+    interface_handle = OpenLibrary(ASTRA_INTERFACE_LIBRARY_NAME,
+                                   ASTRA_INTERFACE_LIBRARY_VERSION);
+    if (interface_handle == NULL)
         return TERMINAL_FAIL_LIBRARY;
-    font_library = font_handle->exports;
-    if (font_library->abi_major != ASTRA_FONT_LIBRARY_ABI_MAJOR ||
-        font_library->structure_size < sizeof(*font_library))
+    interface_library = interface_handle->exports;
+    if (interface_library->abi_major != ASTRA_INTERFACE_LIBRARY_ABI_MAJOR ||
+        interface_library->abi_minor < ASTRA_INTERFACE_LIBRARY_ABI_MINOR ||
+        interface_library->structure_size < sizeof(*interface_library))
         return TERMINAL_FAIL_LIBRARY;
 
     graphics_handle = OpenLibrary(ASTRA_GRAPHICS_LIBRARY_NAME,
@@ -170,7 +173,8 @@ static uint16_t rgb565(AstraColorRGBA8 color)
     return graphics_library->rgb565(color.red, color.green, color.blue);
 }
 
-static uint16_t terminal_color(uint32_t color, uint16_t fallback)
+static uint16_t terminal_color(void *context, uint32_t color,
+                               uint16_t fallback)
 {
     static const uint8_t ansi[16][3] = {
         {0u, 0u, 0u},       {205u, 49u, 49u},   {13u, 188u, 121u},
@@ -184,9 +188,11 @@ static uint16_t terminal_color(uint32_t color, uint16_t fallback)
     uint32_t green;
     uint32_t blue;
 
-    if (color == ASTRA_TERMINAL_COLOR_DEFAULT)
+    (void)context;
+
+    if (color == ASTRA_TEXT_COLOR_DEFAULT)
         return fallback;
-    if (ASTRA_TERMINAL_COLOR_IS_RGB(color)) {
+    if (ASTRA_TEXT_COLOR_IS_RGB(color)) {
         red = color >> 16u & 0xffu;
         green = color >> 8u & 0xffu;
         blue = color & 0xffu;
@@ -230,86 +236,6 @@ static uint32_t terminal_rows(const WindowTerminal *window)
     return rows;
 }
 
-static void draw_cells(WindowTerminal *window, uint32_t x, uint32_t y,
-                       const AstraTerminalCell *cells, uint32_t count,
-                       uint16_t color)
-{
-    char utf8[count * 4u];
-    uint32_t bytes = 0u;
-
-    for (uint32_t index = 0u; index < count; ++index)
-        bytes += astra_utf8_encode(cells[index].codepoint, utf8 + bytes);
-    font_library->draw_list_mono_text(
-        &window->surface.view, (int32_t)x, (int32_t)y, utf8, bytes,
-        TERMINAL_FONT_HEIGHT, window->cell_width, color);
-}
-
-static void paint_cells(WindowTerminal *window, uint32_t row, uint32_t column,
-                        const AstraTerminalCell *cells, uint32_t count)
-{
-    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
-    uint16_t default_foreground = rgb565(theme.text_primary);
-    uint16_t default_background = rgb565(theme.system_bar);
-    uint32_t first = 0u;
-
-    while (first < count) {
-        uint32_t last = first + 1u;
-        uint32_t foreground_value = cells[first].foreground;
-        uint32_t background_value = cells[first].background;
-        uint16_t attributes = cells[first].attributes;
-        uint16_t foreground;
-        uint16_t background;
-        uint32_t visible_first;
-        uint32_t visible_last;
-        uint32_t x = TERMINAL_MARGIN_X +
-            (column + first) * window->cell_width;
-        uint32_t y = TERMINAL_MARGIN_Y + row * TERMINAL_LINE_HEIGHT;
-
-        while (last < count &&
-               cells[last].foreground == foreground_value &&
-               cells[last].background == background_value &&
-               cells[last].attributes == attributes)
-            ++last;
-        foreground = terminal_color(foreground_value, default_foreground);
-        background = terminal_color(background_value, default_background);
-        if ((attributes & ASTRA_TERMINAL_INVERSE) != 0u) {
-            uint16_t swap = foreground;
-            foreground = background;
-            background = swap;
-        }
-        if ((attributes & ASTRA_TERMINAL_HIDDEN) != 0u)
-            foreground = background;
-        graphics_library->fill(&window->surface.view, x, y,
-                               (last - first) * window->cell_width,
-                               TERMINAL_LINE_HEIGHT, background);
-        visible_first = first;
-        visible_last = last;
-        while (visible_first < visible_last &&
-               cells[visible_first].codepoint == ' ')
-            ++visible_first;
-        while (visible_last > visible_first &&
-               cells[visible_last - 1u].codepoint == ' ')
-            --visible_last;
-        if (visible_first < visible_last)
-            draw_cells(window,
-                       TERMINAL_MARGIN_X +
-                           (column + visible_first) * window->cell_width,
-                       y, cells + visible_first, visible_last - visible_first,
-                       foreground);
-        if ((attributes & ASTRA_TERMINAL_UNDERLINE) != 0u)
-            graphics_library->fill(
-                &window->surface.view, x,
-                y + TERMINAL_FONT_HEIGHT + 1u,
-                (last - first) * window->cell_width, 1u, foreground);
-        if ((attributes & ASTRA_TERMINAL_STRIKE) != 0u)
-            graphics_library->fill(
-                &window->surface.view, x,
-                y + TERMINAL_FONT_HEIGHT / 2u,
-                (last - first) * window->cell_width, 1u, foreground);
-        first = last;
-    }
-}
-
 static void window_damage(WindowTerminal *window, uint32_t x, uint32_t y,
                           uint32_t width, uint32_t height)
 {
@@ -336,7 +262,7 @@ static void window_damage(WindowTerminal *window, uint32_t x, uint32_t y,
 }
 
 static int window_render(void *context, uint32_t row, uint32_t column,
-                         const AstraTerminalCell *cells, uint32_t count)
+                         const AstraTextCell *cells, uint32_t count)
 {
     WindowTerminal *window = context;
     uint32_t x = TERMINAL_MARGIN_X + column * window->cell_width;
@@ -347,7 +273,11 @@ static int window_render(void *context, uint32_t row, uint32_t column,
             &window->surface.view, window->surface.mapping,
             window->surface.view.byte_size, window->width, window->height))
         return 0;
-    paint_cells(window, row, column, cells, count);
+    if (interface_library->text_surface_render_cells(
+            &window->text_surface, &window->surface.view,
+            TERMINAL_MARGIN_X, TERMINAL_MARGIN_Y,
+            row, column, cells, count) != ASTRA_OK)
+        return 0;
     window_damage(window, x, y, width, TERMINAL_LINE_HEIGHT);
     window->dirty = 1u;
     return 1;
@@ -359,15 +289,6 @@ static int window_scroll(void *context, uint32_t rows,
     WindowTerminal *window = context;
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     uint32_t width = terminal_columns(window) * window->cell_width;
-    uint32_t scroll_pixels = rows * TERMINAL_LINE_HEIGHT;
-    uint32_t height = preserved_rows * TERMINAL_LINE_HEIGHT;
-    AstraTextBox text_box = {
-        &window->surface.view,
-        TERMINAL_MARGIN_X,
-        TERMINAL_MARGIN_Y,
-        width,
-        scroll_pixels + height,
-    };
 
     if (preserved_rows == 0u ||
         (!window->dirty && !graphics_library->draw_list_view_init(
@@ -377,8 +298,11 @@ static int window_scroll(void *context, uint32_t rows,
     if (window->cursor_row != UINT32_MAX)
         draw_cursor(window, window->cursor_row, window->cursor_column,
                     rgb565(theme.system_bar));
-    if (!graphics_library->text_box_scroll(&text_box,
-                                            (int32_t)scroll_pixels))
+    if (interface_library->text_surface_scroll(
+            &window->text_surface, &window->surface.view,
+            TERMINAL_MARGIN_X, TERMINAL_MARGIN_Y,
+            terminal_columns(window), rows + preserved_rows,
+            rows, preserved_rows) != ASTRA_OK)
         return 0;
     window_damage(window, TERMINAL_MARGIN_X, TERMINAL_MARGIN_Y, width,
                   (rows + preserved_rows) * TERMINAL_LINE_HEIGHT);
@@ -431,12 +355,13 @@ static void draw_cursor(WindowTerminal *window, uint32_t row, uint32_t column,
                         uint16_t color)
 {
     uint32_t x = TERMINAL_MARGIN_X + column * window->cell_width;
-    uint32_t y = TERMINAL_MARGIN_Y + row * TERMINAL_LINE_HEIGHT +
-                 TERMINAL_FONT_HEIGHT + 1u;
+    uint32_t y = TERMINAL_MARGIN_Y + (row + 1u) * TERMINAL_LINE_HEIGHT - 2u;
 
-    graphics_library->fill(&window->surface.view, x, y, window->cell_width,
-                           TERMINAL_CURSOR_HEIGHT, color);
-    window_damage(window, x, y, window->cell_width, TERMINAL_CURSOR_HEIGHT);
+    (void)interface_library->text_surface_draw_caret(
+        &window->text_surface, &window->surface.view,
+        TERMINAL_MARGIN_X, TERMINAL_MARGIN_Y, row, column,
+        ASTRA_TEXT_CARET_UNDERLINE, color);
+    window_damage(window, x, y, window->cell_width, 2u);
 }
 
 static int window_present(void *context, const AstraTerminal *terminal)
@@ -465,10 +390,14 @@ static int window_present(void *context, const AstraTerminal *terminal)
                                              window->height};
         window->damage_valid = 1u;
         for (uint32_t row = 0u; row < terminal->rows; ++row) {
-            const AstraTerminalCell *cells = terminal->cells +
+            const AstraTextCell *cells = terminal->cells +
                 (size_t)row * terminal->capacity_columns;
 
-            paint_cells(window, row, 0u, cells, terminal->columns);
+            if (interface_library->text_surface_render_cells(
+                    &window->text_surface, &window->surface.view,
+                    TERMINAL_MARGIN_X, TERMINAL_MARGIN_Y,
+                    row, 0u, cells, terminal->columns) != ASTRA_OK)
+                return 0;
         }
     } else {
         if (!window->dirty && !graphics_library->draw_list_view_init(
@@ -612,22 +541,39 @@ int astra_main(const AstraStartupInfo *startup)
 
     status = astra_process_filesystem_open(&process_filesystem, startup);
     if (status == ASTRA_STATUS_OK)
-        status = load_graphics_kit();
+        status = load_interface_kits();
     if (status == ASTRA_STATUS_OK)
         status = load_title_icon(&title_icon, &title_icon_length);
 
     (void)memset(&window_terminal, 0, sizeof(window_terminal));
     window_terminal.model_area = (AstraArea)ASTRA_AREA_INIT;
+    window_terminal.text_surface =
+        (AstraTextSurface)ASTRA_TEXT_SURFACE_INIT;
     window_terminal.width = 840u;
     window_terminal.height = 460u;
-    window_terminal.cell_width = status == ASTRA_STATUS_OK ?
-        font_library->mono_cell_width(TERMINAL_FONT_HEIGHT) : 0u;
+    window_terminal.cell_width = ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH;
     window_terminal.cursor_row = UINT32_MAX;
     window_terminal.cursor_column = UINT32_MAX;
     window_terminal.cursor_visible = 1u;
     window_terminal.force_present = 1u;
     if (status == ASTRA_STATUS_OK && window_terminal.cell_width == 0u)
         status = TERMINAL_FAIL_FONT;
+    if (status == ASTRA_STATUS_OK) {
+        AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+        AstraTextSurfaceInfo text_info = ASTRA_TEXT_SURFACE_INFO_INIT;
+
+        text_info.font_height = TERMINAL_FONT_HEIGHT;
+        text_info.cell_width = window_terminal.cell_width;
+        text_info.line_height = TERMINAL_LINE_HEIGHT;
+        text_info.default_foreground = rgb565(theme.text_primary);
+        text_info.default_background = rgb565(theme.system_bar);
+        text_info.scratch = window_terminal.text_scratch;
+        text_info.scratch_bytes = sizeof(window_terminal.text_scratch);
+        text_info.resolve_color = terminal_color;
+        if (interface_library->text_surface_init(
+                &window_terminal.text_surface, &text_info) != ASTRA_OK)
+            status = TERMINAL_FAIL_FONT;
+    }
     if (status == ASTRA_STATUS_OK) {
         terminal_capacity_columns =
             (ASTRA_DISPLAY_WIDTH - TERMINAL_MARGIN_X * 2u) /
@@ -701,7 +647,7 @@ int astra_main(const AstraStartupInfo *startup)
         if (window_terminal.model_area.handle != ASTRA_INVALID_HANDLE)
             close_area(&window_terminal.model_area);
         CloseLibrary(graphics_handle);
-        CloseLibrary(font_handle);
+        CloseLibrary(interface_handle);
         astra_process_filesystem_close(&process_filesystem);
         return (int)status;
     }
@@ -732,7 +678,7 @@ int astra_main(const AstraStartupInfo *startup)
     (void)graphics_library->shared_surface_close(&window_terminal.surface);
     close_area(&window_terminal.model_area);
     CloseLibrary(graphics_handle);
-    CloseLibrary(font_handle);
+    CloseLibrary(interface_handle);
     astra_process_filesystem_close(&process_filesystem);
     return (int)status;
 }

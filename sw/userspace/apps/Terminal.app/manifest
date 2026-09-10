@@ -20,6 +20,6 @@ capability NETWORK_LISTEN
 capability NTP
 capability POSIX_PROCESS
 requires graphics.library 2 2.0.0
-requires font.library 2 2.0.0
+requires interface.library 2 2.1.0
 requires filesystem.library 2 2.0.0
 requires network.library 1 1.0.0

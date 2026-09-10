@@ -4,6 +4,7 @@
 #include <astra/display.h>
 #include <astra/endian.h>
 #include <astra/render_batch.h>
+#include <astra/surface.h>
 #include <astra/ui_font.h>
 
 #pragma GCC diagnostic push
@@ -390,12 +391,19 @@ int astra_render_builder_rounded(AstraRenderBuilder *builder,
                            INT16_MAX, INT16_MAX);
 }
 
+static void mask_pixel(uint8_t *bitmap, uint32_t pitch,
+                       uint32_t x, uint32_t y)
+{
+    bitmap[y * pitch + x / 8u] |= (uint8_t)(0x80u >> (x & 7u));
+}
+
 static int builder_text(AstraRenderBuilder *builder, uint32_t destination,
                         int32_t x, int32_t y, const char *utf8,
                         uint32_t length, uint16_t pixel_height,
                         uint16_t cell_width, uint16_t color,
                         int32_t clip_left, int32_t clip_top,
-                        int32_t clip_right, int32_t clip_bottom)
+                        int32_t clip_right, int32_t clip_bottom,
+                        uint32_t style_flags)
 {
     const AstraUiStrike *strike = cell_width != 0u ?
         astra_mono_font_strike(pixel_height) :
@@ -412,9 +420,11 @@ static int builder_text(AstraRenderBuilder *builder, uint32_t destination,
     uint8_t *source;
     uint8_t *record;
     int32_t pen_26_6 = x * 64;
+    uint32_t embolden = astra_ui_bold_strength(pixel_height, style_flags);
 
     if (builder == NULL || destination == 0u || utf8 == NULL ||
-        strike == NULL)
+        strike == NULL ||
+        (style_flags & ~ASTRA_TEXT_RENDER_STYLE_MASK) != 0u)
         return 0;
     while (at < length) {
         uint32_t consumed;
@@ -424,8 +434,14 @@ static int builder_text(AstraRenderBuilder *builder, uint32_t destination,
             astra_mono_font_glyph(strike, scalar) :
             astra_ui_font_glyph(strike, scalar);
 
-        if (glyph->width > max_width)
-            max_width = glyph->width;
+        int32_t minimum_shift;
+        uint32_t styled_width;
+
+        astra_ui_style_extents(glyph, style_flags, embolden, &minimum_shift,
+                               &styled_width);
+        (void)minimum_shift;
+        if (styled_width > max_width)
+            max_width = styled_width;
         ++count;
         at += consumed;
     }
@@ -433,15 +449,22 @@ static int builder_text(AstraRenderBuilder *builder, uint32_t destination,
         return 1;
     if (builder->glyph_count + count > ASTRA_RENDER_BUILDER_GLYPH_MAX)
         return builder->failed = ASTRA_RENDER_BUILDER_FAILURE_GLYPH, 0;
+    if (max_width > UINT16_MAX)
+        return 0;
     cell_pitch = (max_width + 7u) / 8u;
-    cell_bytes = cell_pitch * strike->height;
+    if (cell_pitch > UINT32_MAX / strike->pixel_height)
+        return 0;
+    cell_bytes = cell_pitch * strike->pixel_height;
+    if (count > UINT32_MAX / cell_bytes)
+        return 0;
     source_bytes = cell_bytes * count;
     source = allocate_data(builder, source_bytes, &source_data);
     if (source == NULL)
         return 0;
+    memset(source, 0, source_bytes);
     source_descriptor = descriptor(
         builder, source_data, source_bytes, cell_pitch,
-        (uint16_t)max_width, strike->height, ASTRA_RENDER_FORMAT_MASK1,
+        (uint16_t)max_width, strike->pixel_height, ASTRA_RENDER_FORMAT_MASK1,
         ASTRA_RENDER_SURFACE_READ);
     if (source_descriptor == 0u)
         return 0;
@@ -461,17 +484,41 @@ static int builder_text(AstraRenderBuilder *builder, uint32_t destination,
             relative(GLYPH_ARENA_OFFSET + builder->glyph_count *
                      ASTRA_RENDER_GLYPH_DESCRIPTOR_BYTES);
 
-        for (uint32_t row = 0u; row < glyph->height; ++row)
-            memcpy(source + index * cell_bytes + row * cell_pitch,
-                   bitmap + row * glyph->pitch, glyph->pitch);
+        int32_t minimum_shift;
+        uint32_t styled_width;
+        uint8_t *styled = source + index * cell_bytes;
+
+        astra_ui_style_extents(glyph, style_flags, embolden, &minimum_shift,
+                               &styled_width);
+        if ((style_flags & (ASTRA_TEXT_STYLE_BOLD |
+                            ASTRA_TEXT_STYLE_ITALIC)) == 0u) {
+            for (uint32_t row = 0u; row < glyph->height; ++row)
+                memcpy(styled + row * cell_pitch,
+                       bitmap + row * glyph->pitch, glyph->pitch);
+        } else {
+            for (uint32_t row = 0u; row < glyph->height; ++row) {
+                int32_t shift =
+                    (style_flags & ASTRA_TEXT_STYLE_ITALIC) != 0u ?
+                        astra_ui_italic_shift(glyph, row) : 0;
+                uint32_t origin = (uint32_t)(shift - minimum_shift);
+
+                for (uint32_t column = 0u; column < glyph->width; ++column)
+                    if ((bitmap[row * glyph->pitch + column / 8u] &
+                         (uint8_t)(0x80u >> (column & 7u))) != 0u)
+                        for (uint32_t weight = 0u; weight <= embolden;
+                             ++weight)
+                            mask_pixel(styled, cell_pitch,
+                                       origin + column + weight, row);
+            }
+        }
         astra_store_be32(glyph_record + 0u, index * cell_bytes);
         astra_store_be32(glyph_record + 4u, 0u);
         astra_store_be32(glyph_record + 8u,
-              pair_s16(astra_ui_glyph_x(pen_26_6, glyph),
+              pair_s16(astra_ui_glyph_x(pen_26_6, glyph) + minimum_shift,
                        astra_ui_glyph_y(
-                           (y + strike->ascent) * 64, glyph)));
+                           y * 64 + strike->ascent, glyph)));
         astra_store_be32(glyph_record + 12u,
-              pair_u16(glyph->width, glyph->height));
+              pair_u16((uint16_t)styled_width, glyph->height));
         ++builder->glyph_count;
         pen_26_6 += astra_ui_glyph_advance(glyph, cell_width);
         at += consumed;
@@ -485,6 +532,24 @@ static int builder_text(AstraRenderBuilder *builder, uint32_t destination,
     astra_store_be32(record + 40u, glyph_offset);
     astra_store_be32(record + 44u, count);
     astra_store_be32(record + 48u, color);
+    if ((style_flags & ASTRA_TEXT_STYLE_UNDERLINE) != 0u &&
+        !builder_fill(
+            builder, destination, x,
+            y + astra_ui_fixed_floor(strike->ascent) +
+                astra_ui_fixed_floor(strike->underline_position),
+            (uint32_t)(pen_26_6 - x * 64 + 63) / 64u,
+            (uint32_t)(strike->underline_thickness + 63) / 64u, color,
+            clip_left, clip_top, clip_right, clip_bottom))
+        return 0;
+    if ((style_flags & ASTRA_TEXT_STYLE_STRIKETHROUGH) != 0u &&
+        !builder_fill(
+            builder, destination, x,
+            y + astra_ui_fixed_floor(strike->ascent) -
+                astra_ui_fixed_floor(strike->strikeout_position),
+            (uint32_t)(pen_26_6 - x * 64 + 63) / 64u,
+            (uint32_t)(strike->strikeout_thickness + 63) / 64u, color,
+            clip_left, clip_top, clip_right, clip_bottom))
+        return 0;
     return 1;
 }
 
@@ -495,7 +560,7 @@ int astra_render_builder_text(AstraRenderBuilder *builder,
 {
     return builder_text(builder, destination, x, y, utf8, length,
                         pixel_height, 0u, color,
-                        INT16_MIN, INT16_MIN, INT16_MAX, INT16_MAX);
+                        INT16_MIN, INT16_MIN, INT16_MAX, INT16_MAX, 0u);
 }
 
 int astra_render_builder_mono_text(AstraRenderBuilder *builder,
@@ -507,7 +572,7 @@ int astra_render_builder_mono_text(AstraRenderBuilder *builder,
     return cell_width != 0u &&
            builder_text(builder, destination, x, y, utf8, length,
                         pixel_height, cell_width, color,
-                        INT16_MIN, INT16_MIN, INT16_MAX, INT16_MAX);
+                        INT16_MIN, INT16_MIN, INT16_MAX, INT16_MAX, 0u);
 }
 
 static int command_valid(const AstraDrawListHeader *header,
@@ -515,7 +580,7 @@ static int command_valid(const AstraDrawListHeader *header,
 {
     uint64_t end = (uint64_t)item->payload_offset + item->payload_bytes;
 
-    if (item->flags != 0u || item->reserved16 != 0u ||
+    if (item->reserved16 != 0u ||
         !astra_words_zero(item->reserved, 2u) ||
         item->clip_left >= item->clip_right ||
         item->clip_right > header->width ||
@@ -524,12 +589,13 @@ static int command_valid(const AstraDrawListHeader *header,
         return 0;
     if (item->operation == ASTRA_DRAW_LIST_FILL ||
         item->operation == ASTRA_DRAW_LIST_FILL_ROUNDED)
-        return item->width != 0u && item->height != 0u &&
+        return item->flags == 0u && item->width != 0u && item->height != 0u &&
                item->payload_offset == 0u && item->payload_bytes == 0u &&
                item->font_height == 0u;
     if (item->operation == ASTRA_DRAW_LIST_TEXT ||
         item->operation == ASTRA_DRAW_LIST_MONO_TEXT)
-        return (item->operation == ASTRA_DRAW_LIST_TEXT ?
+        return (item->flags & ~ASTRA_TEXT_RENDER_STYLE_MASK) == 0u &&
+               (item->operation == ASTRA_DRAW_LIST_TEXT ?
                     item->width == 0u : item->width != 0u) &&
                item->height == 0u &&
                item->radius == 0u && item->payload_bytes != 0u &&
@@ -537,7 +603,8 @@ static int command_valid(const AstraDrawListHeader *header,
                end <= (uint64_t)ASTRA_DRAW_LIST_PAYLOAD_OFFSET +
                          header->payload_bytes;
     if (item->operation == ASTRA_DRAW_LIST_COPY)
-        return item->x >= 0 && item->y >= 0 && item->width != 0u &&
+        return item->flags == 0u && item->x >= 0 && item->y >= 0 &&
+               item->width != 0u &&
                item->height != 0u && item->radius == 0u &&
                item->payload_offset == 0u && item->payload_bytes == 0u &&
                item->font_height == 0u &&
@@ -625,7 +692,7 @@ int astra_render_builder_replay(AstraRenderBuilder *builder,
                 item->payload_bytes, item->font_height,
                 0u, (uint16_t)item->foreground,
                 item->clip_left, item->clip_top,
-                item->clip_right, item->clip_bottom);
+                item->clip_right, item->clip_bottom, item->flags);
         else if (item->operation == ASTRA_DRAW_LIST_MONO_TEXT)
             ok = builder_text(
                 builder, destination, item->x, item->y,
@@ -633,7 +700,7 @@ int astra_render_builder_replay(AstraRenderBuilder *builder,
                 item->payload_bytes, item->font_height,
                 (uint16_t)item->width, (uint16_t)item->foreground,
                 item->clip_left, item->clip_top,
-                item->clip_right, item->clip_bottom);
+                item->clip_right, item->clip_bottom, item->flags);
         else
             ok = blit_region(builder, destination, destination, 0u, 0u,
                 (int32_t)item->foreground, (int32_t)item->background,

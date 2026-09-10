@@ -166,6 +166,31 @@ void astra_surface_ui_text(AstraSurfaceView *surface, int32_t x, int32_t y,
     last_text_color = color;
 }
 
+int astra_surface_mono_text_styled(AstraSurfaceView *surface, int32_t x,
+                                   int32_t y, const char *utf8,
+                                   uint32_t length, uint16_t pixel_height,
+                                   uint16_t cell_width, uint16_t color,
+                                   uint32_t style_flags)
+{
+    (void)surface;
+    (void)x;
+    (void)y;
+    (void)utf8;
+    (void)length;
+    (void)pixel_height;
+    (void)cell_width;
+    (void)color;
+    (void)style_flags;
+    return 1;
+}
+
+int astra_text_box_scroll(AstraTextBox *text_box, int32_t pixels)
+{
+    (void)text_box;
+    (void)pixels;
+    return 1;
+}
+
 static AstraWindowEvent pointer_event(uint16_t type, uint32_t flags,
                                       int32_t x, int32_t y)
 {

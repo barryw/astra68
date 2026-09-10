@@ -3,10 +3,11 @@
 
 #include <astra/control.h>
 #include <astra/interface.h>
+#include <astra/text_surface.h>
 #include <astra/window.h>
 
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 2u
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 0u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 1u
 
 typedef struct AstraInterfaceLibraryV2 {
     uint16_t abi_major;
@@ -64,6 +65,18 @@ typedef struct AstraInterfaceLibraryV2 {
     AstraResult (*control_set_text)(AstraUIContext *, AstraControl *,
                                     const char *, uint32_t);
     AstraResult (*container_init)(AstraControl *, const AstraContainerInfo *);
+    AstraResult (*text_surface_init)(AstraTextSurface *,
+                                     const AstraTextSurfaceInfo *);
+    AstraResult (*text_surface_render_cells)(
+        const AstraTextSurface *, AstraSurfaceView *, int32_t, int32_t,
+        uint32_t, uint32_t, const AstraTextCell *, uint32_t);
+    AstraResult (*text_surface_draw_caret)(
+        const AstraTextSurface *, AstraSurfaceView *, int32_t, int32_t,
+        uint32_t, uint32_t, uint32_t, uint16_t);
+    AstraResult (*text_surface_scroll)(
+        const AstraTextSurface *, AstraSurfaceView *, uint32_t, uint32_t,
+        uint32_t, uint32_t, uint32_t, uint32_t);
+    AstraResult (*text_surface_set_blink)(AstraTextSurface *, uint32_t);
 } AstraInterfaceLibraryV2;
 
 #endif

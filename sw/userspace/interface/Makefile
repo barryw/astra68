@@ -20,7 +20,8 @@ LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
 	-Wl,--hash-style=sysv -Wl,-z,max-page-size=0x1000 \
 	-T $(RUNTIME)/astra_library.ld
 INTERFACE_TARGET := build/m68k/libraries/interface.library
-INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o
+INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
+	build/m68k/text_surface.o
 INPUT_TARGET := build/m68k/libraries/input.library
 INPUT_OBJECTS := build/m68k/input_library.o
 GRAPHICS_PIC_LIB := $(GRAPHICS)/build/m68k/libastragraphics-pic.a
@@ -28,6 +29,7 @@ NDK_PIC_LIB := $(NDK)/build/m68k/libastra-pic.a
 RUNTIME_PIC_LIB := $(RUNTIME)/build/m68k/libastrart-pic.a
 INTERFACE_HOST_TEST := build/host/test_interface
 INPUT_HOST_TEST := build/host/test_input_library
+TEXT_SURFACE_HOST_TEST := build/host/test_text_surface
 
 all: $(INTERFACE_TARGET) $(INPUT_TARGET) library-contract
 
@@ -48,6 +50,11 @@ build/m68k/interface_library.o: src/interface_library.c
 		$(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
 build/m68k/control.o: src/control.c src/control_internal.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated $(COMMON_FLAGS) \
+		$(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+build/m68k/text_surface.o: src/text_surface.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated $(COMMON_FLAGS) \
 		$(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
@@ -86,12 +93,12 @@ $(INPUT_TARGET): $(INPUT_OBJECTS) $(NDK_PIC_LIB) $(RUNTIME_PIC_LIB) \
 
 library-contract: $(INTERFACE_TARGET) $(INPUT_TARGET)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library 2.0.0 ABI 2.0$$'
+		grep -q '^interface.library 2.1.0 ABI 2.1$$'
 	@python3 ../../../tools/library_info.py $(INPUT_TARGET) | \
 		grep -q '^input.library 1.0.0 ABI 1.0$$'
 	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET) $(INPUT_TARGET))
 
-$(INTERFACE_HOST_TEST): src/interface_library.c src/control.c \
+$(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/text_surface.c \
 		$(NDK)/src/utf8.c tests/test_interface.c tests/test_layout.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -DASTRA_INTERFACE_TEST \
@@ -102,16 +109,23 @@ $(INPUT_HOST_TEST): src/input_library.c tests/test_input_library.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
-test: $(INTERFACE_HOST_TEST) $(INPUT_HOST_TEST)
+$(TEXT_SURFACE_HOST_TEST): src/text_surface.c tests/test_text_surface.c \
+		$(NDK)/src/utf8.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/text_surface.c $(NDK)/src/utf8.c tests/test_text_surface.c -o $@
+
+test: $(INTERFACE_HOST_TEST) $(INPUT_HOST_TEST) $(TEXT_SURFACE_HOST_TEST)
 	./$(INTERFACE_HOST_TEST)
 	./$(INPUT_HOST_TEST)
+	./$(TEXT_SURFACE_HOST_TEST)
 
 sanitize:
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -DASTRA_INTERFACE_TEST -DASTRA_NDK_TEST \
 		-ffunction-sections -Wl,--gc-sections src/interface_library.c \
-		src/control.c $(NDK)/src/utf8.c \
+		src/control.c src/text_surface.c $(NDK)/src/utf8.c \
 		tests/test_interface.c tests/test_layout.c \
 		-o build/host/test_interface_sanitize
 	./build/host/test_interface_sanitize
@@ -126,6 +140,8 @@ analyze:
 		-c src/interface_library.c -o build/analyzer/interface_library.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/control.c -o build/analyzer/control.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/text_surface.c -o build/analyzer/text_surface.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/input_library.c -o build/analyzer/input_library.o
 

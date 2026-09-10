@@ -279,7 +279,7 @@ static uint32_t rendered_activity;
 
 static int
 no_render(void *context, uint32_t row, uint32_t column,
-          const AstraTerminalCell *cells, uint32_t count)
+          const AstraTextCell *cells, uint32_t count)
 {
     (void)context;
     (void)row;

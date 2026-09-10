@@ -149,9 +149,13 @@ same bitmap records. A variable OpenType face is instantiated at explicit axis
 coordinates for cached strikes while retaining those coordinates in
 provenance.
 
-The exact disk record sizes are frozen only when the AFNT reader, writer,
-validator, and malformed-file tests land together. Version 0 files are not an
-application ABI.
+AFNT 0.2 is the checked-in bitmap-strike format used by the graphics build. Its
+`STRK` record carries pixel width/height, bitmap format, signed 26.6 ascent,
+descent, line gap, cap height, x-height, maximum advance, underline and
+strikeout positions/thicknesses, glyph range, record size, flags, and reserved
+space. The shared writer, reader, malformed-file tests, and C-table emitter own
+that layout together. Version 0 files remain an internal build format rather
+than an application ABI.
 
 ## 4. Native bitmap formats
 
@@ -464,6 +468,14 @@ carry duplicate glyph sets for synthetic styles. Underline and strikeout are
 drawn as decorations from the strike metrics and never alter or duplicate
 glyph bitmaps. The resolved `AstraFontInfo` reports synthetic weight/slant so a
 typographically exact application may refuse it.
+
+The current `font.library` 2.1 draw-list path implements the same fallback for
+resident MASK1 strikes: bold is a deterministic horizontal embolden, italic is
+a baseline-relative shear, and underline/strikeout use AFNT metrics. Plain and
+styled runs share one glyph source; styled command data is synthesized while
+the draw list is lowered, then glyph expansion remains hardware-rendered. A
+font-service cache is still required before scalable faces advertise synthetic
+matches through `AstraFontInfo`.
 
 ### 7.1 Amiga import compatibility
 

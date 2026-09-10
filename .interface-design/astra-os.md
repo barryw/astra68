@@ -87,6 +87,19 @@ Tab advances focus and either physical Shift key plus Tab reverses it. Input
 modifier bits come from the shared public NDK contract, never private service
 copies.
 
+## Text surfaces
+
+- `interface.library` owns reusable grid, code, and flow text presentation;
+  Terminal is an escape-sequence producer for grid mode, not a painter.
+- All modes share UTF-8 validation, font metrics, styled glyph runs, logical
+  colors, caret, selection, clipboard, scrolling, undo, and find behavior.
+- Designed bold/italic faces are preferred. Synthetic bold and italic reuse the
+  installed glyph source; underline and strikeout use AFNT metrics instead of
+  duplicate glyph images.
+- The current foundation implements grid runs, style resolution, caret, and
+  hardware-blit scrolling. Wide cells and the editing/code/flow layers remain
+  pending and must extend this component rather than fork it.
+
 ## Validation pattern
 
 - Exercise reusable controls in the native `InterfaceGallery.app` through the

@@ -30,6 +30,7 @@
 #include <astra/input_modifiers.h>
 #include <astra/keymap.h>
 #include <astra/terminal.h>
+#include <astra/text_surface.h>
 #include <astra/events_kit.h>
 #include <astra/font.h>
 #include <astra/graphics.h>

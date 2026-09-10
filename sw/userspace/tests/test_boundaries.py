@@ -510,6 +510,8 @@ def test_ndk_owns_user_facing_headers():
         "stream.h",
         "surface.h",
         "terminal.h",
+        "text_style.h",
+        "text_surface.h",
         "vfs_assign.h",
         "vfs_client.h",
         "vfs_path.h",

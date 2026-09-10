@@ -2,6 +2,6 @@ astra-bundle 1
 kind kit
 id org.astra.graphics
 name "Astra Graphics Kit"
-version 2.0.0
+version 2.1.0
 provides graphics.library 2 2.0.0
-provides font.library 2 2.0.0
+provides font.library 2 2.1.0

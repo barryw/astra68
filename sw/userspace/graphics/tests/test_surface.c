@@ -269,9 +269,9 @@ static void test_font_advance_and_baseline(void)
         assert(high_s16(second_position) == astra_ui_glyph_x(
             11 * 64 + astra_ui_glyph_advance(first, 0u), second));
         assert(low_s16(first_position) + first->bearing_y / 64 ==
-               7 + strike->ascent);
+               7 + strike->ascent / 64);
         assert(low_s16(second_position) + second->bearing_y / 64 ==
-               7 + strike->ascent);
+               7 + strike->ascent / 64);
     }
 
     strike = astra_mono_font_strike(16u);
@@ -286,9 +286,9 @@ static void test_font_advance_and_baseline(void)
         records + ASTRA_RENDER_GLYPH_DESCRIPTOR_BYTES + 8u);
     assert(high_s16(second_position) - high_s16(first_position) == 14);
     assert(low_s16(first_position) + first->bearing_y / 64 ==
-           3 + strike->ascent);
+           3 + strike->ascent / 64);
     assert(low_s16(second_position) + second->bearing_y / 64 ==
-           3 + strike->ascent);
+           3 + strike->ascent / 64);
 }
 
 static void test_hardware_draw_list_batch(void)
@@ -448,8 +448,72 @@ static void test_mono_draw_list(void)
         storage + sizeof(*header));
     assert(header->command_count == 1u && header->payload_bytes == 2u &&
            command->operation == ASTRA_DRAW_LIST_MONO_TEXT &&
+           command->flags == 0u &&
            command->font_height == ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT &&
            command->width == ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH);
+}
+
+static void test_styled_text_uses_one_glyph_source(void)
+{
+    static uint8_t draw_storage[ASTRA_DRAW_LIST_AREA_BYTES];
+    static uint8_t batch_storage[ASTRA_RENDER_BUILDER_BYTES];
+    AstraSurfaceView surface;
+    AstraRenderBuilder builder;
+    const AstraDrawListHeader *header;
+    AstraDrawListCommand *command;
+    uint32_t destination;
+    uint32_t regular_source;
+    uint32_t styled_source;
+    const uint8_t *glyphs = batch_storage + ASTRA_RENDER_BATCH_GLYPH_OFFSET -
+                            ASTRA_RENDER_BATCH_ARENA_OFFSET;
+
+    assert(astra_draw_list_view_init(&surface, draw_storage,
+                                     sizeof(draw_storage), 80u, 24u));
+    assert(astra_draw_list_mono_text_styled(
+        &surface, 2, 3, "A", 1u, ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT,
+        ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH, 0xffffu,
+        ASTRA_TEXT_STYLE_BOLD | ASTRA_TEXT_STYLE_ITALIC |
+        ASTRA_TEXT_STYLE_UNDERLINE | ASTRA_TEXT_STYLE_STRIKETHROUGH));
+    header = (const AstraDrawListHeader *)(const void *)draw_storage;
+    command = (AstraDrawListCommand *)(void *)(header + 1);
+    assert(header->command_count == 1u && header->payload_bytes == 1u);
+    assert(command->flags == (ASTRA_TEXT_STYLE_BOLD |
+                              ASTRA_TEXT_STYLE_ITALIC |
+                              ASTRA_TEXT_STYLE_UNDERLINE |
+                              ASTRA_TEXT_STYLE_STRIKETHROUGH));
+    assert(astra_render_builder_init(&builder, batch_storage,
+                                     sizeof(batch_storage), 3u));
+    destination = astra_render_builder_surface(&builder, 80u, 24u);
+    assert(destination != 0u);
+    assert(astra_render_builder_replay(&builder, destination, header));
+    assert(builder.glyph_count == 1u);
+    styled_source = be32(glyphs);
+    assert(be32(glyphs + 12u) >> 16 >
+           astra_mono_font_glyph(astra_mono_font_strike(16u), 'A')->width);
+    assert(builder.command_count == 3u);
+
+    assert(astra_draw_list_view_init(&surface, draw_storage,
+                                     sizeof(draw_storage), 80u, 24u));
+    astra_draw_list_mono_text(&surface, 2, 3, "A", 1u,
+                              ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT,
+                              ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH, 0xffffu);
+    header = (const AstraDrawListHeader *)(const void *)draw_storage;
+    assert(astra_render_builder_init(&builder, batch_storage,
+                                     sizeof(batch_storage), 4u));
+    destination = astra_render_builder_surface(&builder, 80u, 24u);
+    assert(destination != 0u);
+    assert(astra_render_builder_replay(&builder, destination, header));
+    assert(builder.glyph_count == 1u && builder.command_count == 1u);
+    regular_source = be32(glyphs);
+    assert(regular_source == styled_source);
+
+    command = (AstraDrawListCommand *)(void *)(header + 1);
+    command->flags = UINT32_C(1) << 31;
+    assert(astra_render_builder_init(&builder, batch_storage,
+                                     sizeof(batch_storage), 5u));
+    destination = astra_render_builder_surface(&builder, 80u, 24u);
+    assert(destination != 0u &&
+           !astra_render_builder_replay(&builder, destination, header));
 }
 
 static void test_draw_list_copy_is_a_hardware_self_blit(void)
@@ -561,6 +625,7 @@ int main(void)
     test_scanout_source_is_explicit();
     test_command_failure_reason();
     test_mono_draw_list();
+    test_styled_text_uses_one_glyph_source();
     test_draw_list_copy_is_a_hardware_self_blit();
     test_text_box_scroll_uses_overlap_safe_copy();
     test_rounded_fill_has_no_overlap();

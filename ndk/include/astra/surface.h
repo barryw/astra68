@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include <astra/text_style.h>
+
 typedef struct AstraSurfaceView {
     uint16_t *pixels;
     uint32_t byte_size;
@@ -76,15 +78,29 @@ uint32_t astra_surface_ui_text_fit(const char *utf8, uint32_t length,
 void astra_surface_ui_text(AstraSurfaceView *surface, int32_t x, int32_t y,
                            const char *utf8, uint32_t length,
                            uint16_t pixel_height, uint16_t color);
+int astra_surface_ui_text_styled(AstraSurfaceView *surface, int32_t x,
+                                 int32_t y, const char *utf8,
+                                 uint32_t length, uint16_t pixel_height,
+                                 uint16_t color, uint32_t style_flags);
 uint16_t astra_surface_mono_cell_width(uint16_t pixel_height);
 void astra_surface_mono_text(AstraSurfaceView *surface, int32_t x, int32_t y,
                              const char *utf8, uint32_t length,
                              uint16_t pixel_height, uint16_t cell_width,
                              uint16_t color);
+int astra_surface_mono_text_styled(AstraSurfaceView *surface, int32_t x,
+                                   int32_t y, const char *utf8,
+                                   uint32_t length, uint16_t pixel_height,
+                                   uint16_t cell_width, uint16_t color,
+                                   uint32_t style_flags);
 void astra_draw_list_mono_text(AstraSurfaceView *surface, int32_t x, int32_t y,
                                const char *utf8, uint32_t length,
                                uint16_t pixel_height, uint16_t cell_width,
                                uint16_t color);
+int astra_draw_list_mono_text_styled(AstraSurfaceView *surface, int32_t x,
+                                     int32_t y, const char *utf8,
+                                     uint32_t length, uint16_t pixel_height,
+                                     uint16_t cell_width, uint16_t color,
+                                     uint32_t style_flags);
 int astra_draw_list_copy(AstraSurfaceView *surface, uint32_t source_x,
                          uint32_t source_y, uint32_t destination_x,
                          uint32_t destination_y, uint32_t width,

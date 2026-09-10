@@ -16,7 +16,7 @@
 #define TEST_COLUMNS 20u
 #define TEST_ROWS 4u
 
-static AstraTerminalCell rendered[TEST_ROWS][TEST_COLUMNS];
+static AstraTextCell rendered[TEST_ROWS][TEST_COLUMNS];
 static uint8_t terminal_storage[
     ASTRA_TERMINAL_STORAGE_BYTES(TEST_COLUMNS, TEST_ROWS)];
 static uint32_t render_calls;
@@ -27,7 +27,7 @@ static uint32_t scrolled_rows;
 static uint32_t preserved_rows;
 
 static int record(void *context, uint32_t row, uint32_t column,
-                  const AstraTerminalCell *cells, uint32_t count)
+                  const AstraTextCell *cells, uint32_t count)
 {
     uint32_t index;
 
@@ -251,7 +251,7 @@ static void test_controls_and_invalid_utf8(void)
 static void test_utf8_attributes_and_truecolor(void)
 {
     AstraTerminal terminal;
-    const AstraTerminalCell *styled;
+    const AstraTextCell *styled;
 
     reset(&terminal);
     astra_terminal_write(&terminal, "A\xc3\xa9\xf0\x9f\x98\x80");
@@ -262,13 +262,13 @@ static void test_utf8_attributes_and_truecolor(void)
         &terminal, "\x1b[1;3;4;38;5;196;48;2;1;2;3mX");
     styled = astra_terminal_cell_at(&terminal, 0u, 3u);
     assert(styled != NULL && styled->codepoint == 'X');
-    assert((styled->attributes & (ASTRA_TERMINAL_BOLD |
-                                  ASTRA_TERMINAL_ITALIC |
-                                  ASTRA_TERMINAL_UNDERLINE)) ==
-           (ASTRA_TERMINAL_BOLD | ASTRA_TERMINAL_ITALIC |
-            ASTRA_TERMINAL_UNDERLINE));
+    assert((styled->attributes & (ASTRA_TEXT_STYLE_BOLD |
+                                  ASTRA_TEXT_STYLE_ITALIC |
+                                  ASTRA_TEXT_STYLE_UNDERLINE)) ==
+           (ASTRA_TEXT_STYLE_BOLD | ASTRA_TEXT_STYLE_ITALIC |
+            ASTRA_TEXT_STYLE_UNDERLINE));
     assert(styled->foreground == 196u);
-    assert(styled->background == ASTRA_TERMINAL_COLOR_RGB(1u, 2u, 3u));
+    assert(styled->background == ASTRA_TEXT_COLOR_RGB(1u, 2u, 3u));
 }
 
 static void test_cursor_erase_and_alternate_screen(void)

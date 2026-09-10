@@ -216,11 +216,15 @@ IPC, window titles, and interface labels reject malformed complete spans;
 terminal byte streams replace malformed input with U+FFFD. Editing-key
 sentinels now live above U+10FFFF and cannot collide with Unicode characters.
 
-The Font Kit contract now carries baseline-relative ascent/descent/line-gap,
-cap-height, x-height, maximum advance, underline, and strikeout metrics.
-Designed weight/slant faces are preferred; callers may allow cached synthetic
-weight or slant, which the resolved font reports. Underline and strikeout are
-metric-positioned decorations and never duplicate glyph bitmaps. The current
+AFNT 0.2 and `font.library` 2.1 now carry baseline-relative
+ascent/descent/line-gap, cap-height, x-height, maximum advance, underline, and
+strikeout metrics. The draw-list renderer synthesizes bold and italic from one
+resident glyph source and positions underline/strikeout from those metrics;
+glyph expansion remains hardware work. `interface.library` 2.1 adds the shared
+TextSurface fixed-grid renderer, and Terminal now consumes it for styled runs,
+logical colors, carets, and hardware-blit scrolling instead of owning a private
+painter. Text selection, clipboard, scrollback, find, wide cells, code/flow
+layout, and a persistent synthetic-strike cache remain pending. The current
 AFNT bitmap/Amiga importer remains operational; the documented scalable
 TTF/OTF/WOFF pipeline is not yet implemented.
 
