@@ -41,6 +41,27 @@ typedef struct AstraTextCell {
     uint8_t reserved;
 } AstraTextCell;
 
+/** One cell boundary in a fixed-grid text surface. */
+typedef struct AstraTextGridPosition {
+    uint32_t row;
+    uint32_t column;
+} AstraTextGridPosition;
+
+/** Half-open fixed-grid selection with logical foreground/background colors. */
+typedef struct AstraTextGridSelection {
+    uint32_t size;
+    AstraTextGridPosition anchor;
+    AstraTextGridPosition focus;
+    uint32_t foreground;
+    uint32_t background;
+    uint32_t reserved[4];
+} AstraTextGridSelection;
+
+#define ASTRA_TEXT_GRID_SELECTION_INIT {                                   \
+    sizeof(AstraTextGridSelection), { 0u, 0u }, { 0u, 0u },                \
+    ASTRA_TEXT_COLOR_DEFAULT, ASTRA_TEXT_COLOR_DEFAULT, { 0u, 0u, 0u, 0u } \
+}
+
 typedef uint16_t (*AstraTextColorResolver)(void *context, uint32_t color,
                                            uint16_t fallback);
 
@@ -95,6 +116,17 @@ ASTRA_NODISCARD AstraResult astra_text_surface_render_cells(
     const AstraTextSurface *text_surface, AstraSurfaceView *target,
     int32_t origin_x, int32_t origin_y, uint32_t row, uint32_t column,
     const AstraTextCell *cells, uint32_t count);
+/** Render cells with an optional half-open selection overlay. */
+ASTRA_NODISCARD AstraResult astra_text_surface_render_grid(
+    const AstraTextSurface *text_surface, AstraSurfaceView *target,
+    int32_t origin_x, int32_t origin_y, uint32_t row, uint32_t column,
+    const AstraTextCell *cells, uint32_t count,
+    const AstraTextGridSelection *selection);
+/** Map a content-local point to the nearest fixed-grid cell boundary. */
+ASTRA_NODISCARD AstraResult astra_text_surface_grid_hit_test(
+    const AstraTextSurface *text_surface, int32_t origin_x, int32_t origin_y,
+    uint32_t columns, uint32_t rows, int32_t x, int32_t y,
+    AstraTextGridPosition *position);
 ASTRA_NODISCARD AstraResult astra_text_surface_draw_caret(
     const AstraTextSurface *text_surface, AstraSurfaceView *target,
     int32_t origin_x, int32_t origin_y, uint32_t row, uint32_t column,

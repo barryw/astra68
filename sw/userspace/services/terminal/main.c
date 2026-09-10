@@ -57,6 +57,7 @@ typedef struct WindowTerminal {
     AstraWindow window;
     AstraTerminal *terminal;
     AstraTextSurface text_surface;
+    AstraTextGridSelection selection;
     char text_scratch[TERMINAL_TEXT_SCRATCH_BYTES];
     uint16_t width;
     uint16_t height;
@@ -65,6 +66,7 @@ typedef struct WindowTerminal {
     uint8_t force_present;
     uint8_t live;
     uint8_t cursor_visible;
+    uint8_t selecting;
     uint32_t cursor_row;
     uint32_t cursor_column;
     uint64_t cursor_deadline;
@@ -173,6 +175,11 @@ static uint16_t rgb565(AstraColorRGBA8 color)
     return graphics_library->rgb565(color.red, color.green, color.blue);
 }
 
+static uint32_t text_rgb(AstraColorRGBA8 color)
+{
+    return ASTRA_TEXT_COLOR_RGB(color.red, color.green, color.blue);
+}
+
 static uint16_t terminal_color(void *context, uint32_t color,
                                uint16_t fallback)
 {
@@ -273,10 +280,10 @@ static int window_render(void *context, uint32_t row, uint32_t column,
             &window->surface.view, window->surface.mapping,
             window->surface.view.byte_size, window->width, window->height))
         return 0;
-    if (interface_library->text_surface_render_cells(
+    if (interface_library->text_surface_render_grid(
             &window->text_surface, &window->surface.view,
             TERMINAL_MARGIN_X, TERMINAL_MARGIN_Y,
-            row, column, cells, count) != ASTRA_OK)
+            row, column, cells, count, &window->selection) != ASTRA_OK)
         return 0;
     window_damage(window, x, y, width, TERMINAL_LINE_HEIGHT);
     window->dirty = 1u;
@@ -289,6 +296,14 @@ static int window_scroll(void *context, uint32_t rows,
     WindowTerminal *window = context;
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     uint32_t width = terminal_columns(window) * window->cell_width;
+
+    if (window->selection.anchor.row != window->selection.focus.row ||
+        window->selection.anchor.column != window->selection.focus.column) {
+        window->selection.focus = window->selection.anchor;
+        window->selecting = 0u;
+        window->force_present = 1u;
+        return 1;
+    }
 
     if (preserved_rows == 0u ||
         (!window->dirty && !graphics_library->draw_list_view_init(
@@ -393,10 +408,11 @@ static int window_present(void *context, const AstraTerminal *terminal)
             const AstraTextCell *cells = terminal->cells +
                 (size_t)row * terminal->capacity_columns;
 
-            if (interface_library->text_surface_render_cells(
+            if (interface_library->text_surface_render_grid(
                     &window->text_surface, &window->surface.view,
                     TERMINAL_MARGIN_X, TERMINAL_MARGIN_Y,
-                    row, 0u, cells, terminal->columns) != ASTRA_OK)
+                    row, 0u, cells, terminal->columns,
+                    &window->selection) != ASTRA_OK)
                 return 0;
         }
     } else {
@@ -442,6 +458,26 @@ static uint32_t keymap_modifiers(uint32_t modifiers)
     return mapped;
 }
 
+static int window_select(WindowTerminal *window, int32_t x, int32_t y,
+                         int begin)
+{
+    AstraTextGridPosition position;
+
+    if (interface_library->text_surface_grid_hit_test(
+            &window->text_surface, TERMINAL_MARGIN_X, TERMINAL_MARGIN_Y,
+            terminal_columns(window), terminal_rows(window),
+            x, y, &position) != ASTRA_OK)
+        return 0;
+    if (begin)
+        window->selection.anchor = position;
+    if (begin || position.row != window->selection.focus.row ||
+        position.column != window->selection.focus.column) {
+        window->selection.focus = position;
+        window->force_present = 1u;
+    }
+    return 1;
+}
+
 static int window_next_key(void *context, uint32_t *key)
 {
     WindowTerminal *window = context;
@@ -474,6 +510,30 @@ static int window_next_key(void *context, uint32_t *key)
                     return CONSOLE_SESSION_INPUT_ERROR;
                 window->force_present = 1u;
             }
+            continue;
+        }
+        if (event.type == ASTRA_WINDOW_EVENT_POINTER_BUTTON &&
+            event.data.pointer.button == ASTRA_INPUT_BUTTON_LEFT) {
+            int down = (event.flags & ASTRA_WINDOW_EVENT_DOWN) != 0u;
+
+            if ((down || window->selecting) &&
+                !window_select(window, event.data.pointer.x,
+                               event.data.pointer.y, down))
+                return CONSOLE_SESSION_INPUT_ERROR;
+            window->selecting = (uint8_t)down;
+            continue;
+        }
+        if (event.type == ASTRA_WINDOW_EVENT_POINTER_MOTION) {
+            if (window->selecting &&
+                !window_select(window, event.data.pointer.x,
+                               event.data.pointer.y, 0))
+                return CONSOLE_SESSION_INPUT_ERROR;
+            continue;
+        }
+        if (event.type == ASTRA_WINDOW_EVENT_STATE_RESET ||
+            (event.type == ASTRA_WINDOW_EVENT_FOCUS &&
+             (event.flags & ASTRA_WINDOW_EVENT_FOCUSED) == 0u)) {
+            window->selecting = 0u;
             continue;
         }
         if (event.type == ASTRA_WINDOW_EVENT_KEY &&
@@ -549,6 +609,8 @@ int astra_main(const AstraStartupInfo *startup)
     window_terminal.model_area = (AstraArea)ASTRA_AREA_INIT;
     window_terminal.text_surface =
         (AstraTextSurface)ASTRA_TEXT_SURFACE_INIT;
+    window_terminal.selection =
+        (AstraTextGridSelection)ASTRA_TEXT_GRID_SELECTION_INIT;
     window_terminal.width = 840u;
     window_terminal.height = 460u;
     window_terminal.cell_width = ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH;
@@ -570,6 +632,8 @@ int astra_main(const AstraStartupInfo *startup)
         text_info.scratch = window_terminal.text_scratch;
         text_info.scratch_bytes = sizeof(window_terminal.text_scratch);
         text_info.resolve_color = terminal_color;
+        window_terminal.selection.foreground = text_rgb(theme.accent_text);
+        window_terminal.selection.background = text_rgb(theme.accent);
         if (interface_library->text_surface_init(
                 &window_terminal.text_surface, &text_info) != ASTRA_OK)
             status = TERMINAL_FAIL_FONT;
@@ -625,6 +689,8 @@ int astra_main(const AstraStartupInfo *startup)
         info.title = "TERMINAL";
         info.title_length = 8u;
         info.event_mask = ASTRA_WINDOW_SUBSCRIBE_DEFAULT |
+                          ASTRA_WINDOW_SUBSCRIBE_POINTER_MOTION |
+                          ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON |
                           ASTRA_WINDOW_SUBSCRIBE_KEY |
                           ASTRA_WINDOW_SUBSCRIBE_TEXT;
         info.title_icon_area = title_icon.handle;

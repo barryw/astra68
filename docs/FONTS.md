@@ -441,6 +441,14 @@ it does not simulate successful font behavior. The OS implementation, live
 handle/stale-handle tests, service protocol, and draw-list bridge must land
 together before the service advertises itself as present.
 
+TextSurface is a consumer of this object graph, not another font system. Grid,
+code, and flow modes must take resolved fonts/layouts and returned metrics;
+they must not select private resident arrays from a family name, requested
+weight, or nominal size. The current resident grid renderer is the bootstrap
+path only. Replacing it requires the OS font backend and a draw-list strike
+reference to land together so applications never observe a false-success font
+handle or an MC68040 bitmap-scaling fallback.
+
 ## 7. Import and style compatibility
 
 One shared host/native AFNT writer owns conversion and validation. Import is an

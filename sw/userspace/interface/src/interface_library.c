@@ -14,7 +14,7 @@
 #define ALERT_WIDTH 420u
 #define ALERT_HEIGHT 150u
 
-ASTRA_LIBRARY("interface.library", 2, 1, 0,
+ASTRA_LIBRARY("interface.library", 2, 2, 0,
               ASTRA_INTERFACE_LIBRARY_ABI_MAJOR,
               ASTRA_INTERFACE_LIBRARY_ABI_MINOR,
               "Barry Walker", "Copyright 2026 Barry Walker");
@@ -256,4 +256,6 @@ const AstraInterfaceLibraryV2 astra_library_exports ASTRA_LIBRARY_EXPORTS = {
     astra_text_surface_draw_caret,
     astra_text_surface_scroll,
     astra_text_surface_set_blink,
+    astra_text_surface_render_grid,
+    astra_text_surface_grid_hit_test,
 };

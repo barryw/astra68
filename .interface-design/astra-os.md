@@ -96,9 +96,16 @@ copies.
 - Designed bold/italic faces are preferred. Synthetic bold and italic reuse the
   installed glyph source; underline and strikeout use AFNT metrics instead of
   duplicate glyph images.
-- The current foundation implements grid runs, style resolution, caret, and
-  hardware-blit scrolling. Wide cells and the editing/code/flow layers remain
-  pending and must extend this component rather than fork it.
+- The current foundation implements grid runs, style resolution, caret,
+  half-open grid selection painting/hit testing, and hardware-blit scrolling;
+  Terminal uses the shared path for pointer-drag selection. Clipboard transfer,
+  wide cells, and the editing/code/flow layers remain pending and must extend
+  this component rather than fork it.
+- TextSurface consumes the NDK's resolved `AstraFont` and `AstraTextLayout`
+  contracts once the OS font backend is live; it must not grow a second face,
+  strike, weight, or shaping API. The font service prefers designed styles,
+  owns fallback/shaping and generated-strike caches, and emits positioned glyph
+  runs. The FPGA expands glyphs; the MC68040 never scales or rasterizes them.
 
 ## Validation pattern
 

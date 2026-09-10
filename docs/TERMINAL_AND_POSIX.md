@@ -106,12 +106,13 @@ Output is parsed in bounded chunks. Damage is accumulated by row and rendered
 as batched glyph/background runs. Scrolling uses surface blits or a ring surface
 rather than redrawing every cell with the CPU.
 
-Terminal uses the public `interface.library` 2.1 TextSurface grid renderer for
-cell runs, ANSI color resolution, styles, caret, and hardware-blit scrolling.
-The shared `AstraTextCell` contract is owned by the NDK; Terminal retains escape
-parsing and PTY/session policy only. Text selection, clipboard, scrollback,
-find, and wide-cell behavior remain TextSurface work rather than
-Terminal-private extensions.
+Terminal uses the public `interface.library` 2.2 TextSurface grid renderer for
+cell runs, ANSI color resolution, styles, caret, grid hit testing, normalized
+half-open pointer selections, and hardware-blit scrolling. The shared
+`AstraTextCell` contract is owned by the NDK; Terminal retains escape parsing
+and PTY/session policy only. Selection extraction, clipboard, scrollback, find,
+and wide-cell behavior remain TextSurface work rather than Terminal-private
+extensions.
 
 A terminal event loop waits simultaneously for PTY data, input, resize,
 animation/cursor timers, render fences, process death, and closure. It must not

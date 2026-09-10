@@ -220,13 +220,16 @@ AFNT 0.2 and `font.library` 2.1 now carry baseline-relative
 ascent/descent/line-gap, cap-height, x-height, maximum advance, underline, and
 strikeout metrics. The draw-list renderer synthesizes bold and italic from one
 resident glyph source and positions underline/strikeout from those metrics;
-glyph expansion remains hardware work. `interface.library` 2.1 adds the shared
+glyph expansion remains hardware work. `interface.library` 2.2 adds the shared
 TextSurface fixed-grid renderer, and Terminal now consumes it for styled runs,
 logical colors, carets, and hardware-blit scrolling instead of owning a private
-painter. Text selection, clipboard, scrollback, find, wide cells, code/flow
-layout, and a persistent synthetic-strike cache remain pending. The current
-AFNT bitmap/Amiga importer remains operational; the documented scalable
-TTF/OTF/WOFF pipeline is not yet implemented.
+painter. The component now also performs grid hit testing and renders
+normalized, half-open selections without storing selection state in its ABI
+object; Terminal uses both for pointer-drag selection. Clipboard transfer,
+scrollback, find, wide cells, and code/flow layout remain pending. The current
+AFNT bitmap/Amiga importer remains operational; the
+documented scalable TTF/OTF/WOFF pipeline and persistent synthetic-strike cache
+are not yet implemented.
 
 Commit `b36a784` is physically accepted for this fixed-grid cutover in immutable
 DE25 release

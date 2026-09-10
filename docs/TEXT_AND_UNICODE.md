@@ -44,9 +44,10 @@ to equal scalar count.
 
 The NDK's `AstraTextCell` is the shared fixed-grid interchange type used by the
 Terminal parser and TextSurface. The current grid renderer accepts one-column
-Unicode scalar cells and rejects malformed scalars before drawing anything.
-Zero-width continuation cells, double-width cells, grapheme-aware selection,
-and code/flow shaping remain required work; applications must not invent
+Unicode scalar cells, rejects malformed scalars before drawing anything, and
+owns normalized half-open grid selection painting and coordinate hit testing.
+Zero-width continuation cells, double-width cells, grapheme-aware code/flow
+selection, and shaping remain required work; applications must not invent
 private cell encodings while those contracts are completed.
 
 UTF-8 does not imply glyph coverage, shaping, bidirectional layout, line

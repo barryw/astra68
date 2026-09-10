@@ -31,7 +31,7 @@ order needed to finish the complete design without application-private UI.
 | Retained layout | all | nested row/column/wrap containers, intrinsic measurement, reflow, clipping | complete; physical ABI-2 gate passed |
 | Primitive controls | 1d, 4a | label, button, field, check, radio, switch, slider, stepper, popup, combo, segmented, tags, disclosure, progress | label/button/check/radio/switch/slider/progress complete |
 | Collection controls | 1d, 2b, 4a | scroll model, scrollbar, splitter, tabs, list, tree, table, grid, columns, toolbar, status, pagination | pending |
-| TextSurface | 7a-7b | shared UTF-8 model, grid/code/flow layout, runs, gutters, overlays, caret, selection, undo, find, clipboard, scrollback | grid renderer and Terminal source cutover physically accepted; editing work pending |
+| TextSurface | 7a-7b | shared UTF-8 model, grid/code/flow layout, runs, gutters, overlays, caret, selection, undo, find, clipboard, scrollback | grid renderer and Terminal source cutover physically accepted; grid selection paint/hit test and Terminal drag interaction complete; clipboard/editing pending |
 | Input vocabulary | 6a-6b | keymap-selected Meta labels and immutable system/workspace/app shortcut tiers | pending |
 | Command model | 1e, 2a, 6b | stable IDs, typed arguments, state, metadata, asynchronous invocation; shared by menus, palette, toolbar, scripting | pending |
 | Menus and palette | 1e, 2a, 3a | persistent application strip, skeleton menus, command palette, system escape shortcuts | pending |
@@ -84,13 +84,15 @@ the DE25 without weakening the existing frame or layout budgets.
   surface, arrow keys select a result, and Enter invokes the shared open
   command.
 
-`interface.library` 2.1 owns the first TextSurface layer: validated fixed-grid
+`interface.library` 2.2 owns the first TextSurface layer: validated fixed-grid
 UTF-8 cells, logical color resolution, background/style runs, synthetic
 bold/italic, metric underline/strikeout, blink/hidden/faint/inverse state,
-carets, and hardware-blit scrolling. Terminal now feeds its parser cells into
-that public component and contains no private text painter. Selection,
-scrollback, clipboard, find, wide-cell behavior, and code/flow layout remain
-unfinished and must land in TextSurface rather than Terminal.
+carets, normalized half-open selection painting/hit testing, and hardware-blit
+scrolling. Terminal now feeds its parser cells and pointer coordinates into
+that public component and contains no private text painter or hit-test math.
+Selection extraction, scrollback, clipboard, find, wide-cell behavior, and
+code/flow layout remain unfinished and must land in TextSurface rather than
+Terminal.
 
 The fixed-grid source cutover is physically accepted at commit `b36a784` in
 immutable DE25 release

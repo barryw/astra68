@@ -59,10 +59,18 @@ AstraResult astra_text_surface_init(AstraTextSurface *text,
         !astra_words_zero(info->reserved, 4u))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *text = (AstraTextSurface){
-        sizeof(*text), info->mode, info->font_height, info->cell_width,
-        info->line_height, info->default_foreground,
-        info->default_background, 0u, info->scratch, info->scratch_bytes,
-        info->resolve_color, info->color_context, 1u, {0u, 0u, 0u}
+        ._private_structure_size = sizeof(*text),
+        ._private_mode = info->mode,
+        ._private_font_height = info->font_height,
+        ._private_cell_width = info->cell_width,
+        ._private_line_height = info->line_height,
+        ._private_default_foreground = info->default_foreground,
+        ._private_default_background = info->default_background,
+        ._private_scratch = info->scratch,
+        ._private_scratch_bytes = info->scratch_bytes,
+        ._private_resolve_color = info->resolve_color,
+        ._private_color_context = info->color_context,
+        ._private_blink_visible = 1u,
     };
     return ASTRA_OK;
 }
@@ -72,6 +80,37 @@ static int run_matches(const AstraTextCell *left, const AstraTextCell *right)
     return left->foreground == right->foreground &&
            left->background == right->background &&
            left->attributes == right->attributes;
+}
+
+static int position_before(AstraTextGridPosition left,
+                           AstraTextGridPosition right)
+{
+    return left.row < right.row ||
+           (left.row == right.row && left.column < right.column);
+}
+
+static int selection_columns(const AstraTextGridSelection *selection,
+                             uint32_t row, uint32_t *first, uint32_t *last)
+{
+    AstraTextGridPosition start;
+    AstraTextGridPosition end;
+
+    if (selection == NULL ||
+        (selection->anchor.row == selection->focus.row &&
+         selection->anchor.column == selection->focus.column))
+        return 0;
+    start = selection->anchor;
+    end = selection->focus;
+    if (position_before(end, start)) {
+        AstraTextGridPosition swap = start;
+        start = end;
+        end = swap;
+    }
+    if (row < start.row || row > end.row)
+        return 0;
+    *first = row == start.row ? start.column : 0u;
+    *last = row == end.row ? end.column : UINT32_MAX;
+    return *first < *last;
 }
 
 static AstraResult render_run(const AstraTextSurface *text,
@@ -109,17 +148,32 @@ static AstraResult render_run(const AstraTextSurface *text,
     return ASTRA_OK;
 }
 
-AstraResult astra_text_surface_render_cells(
+static AstraResult render_cells(
     const AstraTextSurface *text, AstraSurfaceView *target,
     int32_t origin_x, int32_t origin_y, uint32_t row, uint32_t column,
-    const AstraTextCell *cells, uint32_t count)
+    const AstraTextCell *cells, uint32_t count,
+    const AstraTextGridSelection *selection)
 {
     uint64_t x64;
     uint64_t y64;
     uint64_t last_x64;
     uint32_t first;
+    uint16_t selection_foreground = 0u;
+    uint16_t selection_background = 0u;
+    uint32_t selection_first = 0u;
+    uint32_t selection_last = 0u;
+    int selection_on_row;
+    int selection_colors_valid = 1;
 
-    if (!valid(text) || target == NULL || (count != 0u && cells == NULL))
+    if (!valid(text) || target == NULL || (count != 0u && cells == NULL) ||
+        (selection != NULL &&
+         (selection->size < sizeof(*selection) ||
+          !astra_words_zero(selection->reserved, 4u) ||
+          (text->_private_resolve_color == NULL &&
+           ((selection->foreground != ASTRA_TEXT_COLOR_DEFAULT &&
+             selection->foreground > UINT16_MAX) ||
+            (selection->background != ASTRA_TEXT_COLOR_DEFAULT &&
+             selection->background > UINT16_MAX))))))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     x64 = (uint64_t)column * text->_private_cell_width;
     y64 = (uint64_t)row * text->_private_line_height;
@@ -139,6 +193,18 @@ AstraResult astra_text_surface_render_cells(
               (cells[index].background != ASTRA_TEXT_COLOR_DEFAULT &&
                cells[index].background > UINT16_MAX))))
             return ASTRA_ERROR_INVALID_ARGUMENT;
+    selection_on_row = selection_columns(
+        selection, row, &selection_first, &selection_last);
+    if (selection_on_row) {
+        selection_foreground = color(
+            text, selection->foreground,
+            text->_private_default_foreground, &selection_colors_valid);
+        selection_background = color(
+            text, selection->background,
+            text->_private_default_background, &selection_colors_valid);
+        if (!selection_colors_valid)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+    }
     first = 0u;
     while (first < count) {
         uint32_t last = first + 1u;
@@ -150,9 +216,14 @@ AstraResult astra_text_surface_render_cells(
         uint64_t run_width64;
         uint16_t foreground;
         uint16_t background;
+        int selected = selection_on_row &&
+                       column + first >= selection_first &&
+                       column + first < selection_last;
         int colors_valid = 1;
 
-        while (last < count && run_matches(&cells[first], &cells[last]))
+        while (last < count && run_matches(&cells[first], &cells[last]) &&
+               (selection_on_row && column + last >= selection_first &&
+                column + last < selection_last) == selected)
             ++last;
         run_width64 = (uint64_t)(last - first) * text->_private_cell_width;
         if (run_x64 > INT32_MAX || run_width64 > UINT32_MAX)
@@ -167,6 +238,10 @@ AstraResult astra_text_surface_render_cells(
             uint16_t swap = foreground;
             foreground = background;
             background = swap;
+        }
+        if (selected) {
+            foreground = selection_foreground;
+            background = selection_background;
         }
         if ((attributes & ASTRA_TEXT_STYLE_HIDDEN) != 0u ||
             ((attributes & ASTRA_TEXT_STYLE_BLINK) != 0u &&
@@ -203,6 +278,58 @@ AstraResult astra_text_surface_render_cells(
         }
         first = last;
     }
+    return ASTRA_OK;
+}
+
+AstraResult astra_text_surface_render_cells(
+    const AstraTextSurface *text, AstraSurfaceView *target,
+    int32_t origin_x, int32_t origin_y, uint32_t row, uint32_t column,
+    const AstraTextCell *cells, uint32_t count)
+{
+    return render_cells(text, target, origin_x, origin_y, row, column,
+                        cells, count, NULL);
+}
+
+AstraResult astra_text_surface_render_grid(
+    const AstraTextSurface *text, AstraSurfaceView *target,
+    int32_t origin_x, int32_t origin_y, uint32_t row, uint32_t column,
+    const AstraTextCell *cells, uint32_t count,
+    const AstraTextGridSelection *selection)
+{
+    return render_cells(text, target, origin_x, origin_y, row, column,
+                        cells, count, selection);
+}
+
+AstraResult astra_text_surface_grid_hit_test(
+    const AstraTextSurface *text, int32_t origin_x, int32_t origin_y,
+    uint32_t columns, uint32_t rows, int32_t x, int32_t y,
+    AstraTextGridPosition *position)
+{
+    int64_t relative_x;
+    int64_t relative_y;
+    uint64_t width;
+    uint64_t height;
+
+    if (!valid(text) || columns == 0u || rows == 0u || position == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    relative_x = (int64_t)x - origin_x;
+    relative_y = (int64_t)y - origin_y;
+    width = (uint64_t)columns * text->_private_cell_width;
+    height = (uint64_t)rows * text->_private_line_height;
+    if (relative_y >= 0 && (uint64_t)relative_y >= height) {
+        *position = (AstraTextGridPosition){rows, 0u};
+        return ASTRA_OK;
+    }
+    position->row = relative_y <= 0 ? 0u :
+        (uint32_t)((uint64_t)relative_y / text->_private_line_height);
+    if (relative_x <= 0)
+        position->column = 0u;
+    else if ((uint64_t)relative_x >= width)
+        position->column = columns;
+    else
+        position->column = (uint32_t)(
+            ((uint64_t)relative_x + text->_private_cell_width / 2u) /
+            text->_private_cell_width);
     return ASTRA_OK;
 }
 

@@ -4,6 +4,11 @@
 #include <stdio.h>
 #include <string.h>
 
+_Static_assert(sizeof(AstraTextGridPosition) == 8u,
+               "grid position ABI");
+_Static_assert(sizeof(AstraTextGridSelection) == 44u,
+               "grid selection ABI");
+
 static uint32_t fill_count;
 static uint32_t text_count;
 static uint32_t scroll_count;
@@ -12,6 +17,8 @@ static uint16_t last_foreground;
 static uint16_t last_fill_color;
 static uint32_t last_text_length;
 static char last_text[8];
+static uint16_t fill_colors[8];
+static uint16_t text_colors[8];
 
 void astra_surface_fill(AstraSurfaceView *surface, int32_t x, int32_t y,
                         uint32_t width, uint32_t height, uint16_t color)
@@ -23,6 +30,8 @@ void astra_surface_fill(AstraSurfaceView *surface, int32_t x, int32_t y,
     (void)height;
     ++fill_count;
     last_fill_color = color;
+    if (fill_count <= sizeof(fill_colors) / sizeof(fill_colors[0]))
+        fill_colors[fill_count - 1u] = color;
 }
 
 int astra_surface_mono_text_styled(AstraSurfaceView *surface, int32_t x,
@@ -39,6 +48,8 @@ int astra_surface_mono_text_styled(AstraSurfaceView *surface, int32_t x,
     ++text_count;
     last_style = style_flags;
     last_foreground = color;
+    if (text_count <= sizeof(text_colors) / sizeof(text_colors[0]))
+        text_colors[text_count - 1u] = color;
     last_text_length = length;
     memcpy(last_text, utf8, length);
     return 1;
@@ -63,6 +74,8 @@ static void reset_calls(void)
     last_style = last_text_length = 0u;
     last_foreground = last_fill_color = 0u;
     memset(last_text, 0, sizeof(last_text));
+    memset(fill_colors, 0, sizeof(fill_colors));
+    memset(text_colors, 0, sizeof(text_colors));
 }
 
 int main(void)
@@ -122,6 +135,45 @@ int main(void)
     text._private_resolve_color = resolve;
     cells[1].foreground = 0x1111u;
 
+    {
+        AstraTextCell selection_cells[] = {
+            {'A', 0x1111u, 0x2222u, 0u, 1u, 0u},
+            {'B', 0x1111u, 0x2222u, 0u, 1u, 0u},
+            {'C', 0x1111u, 0x2222u, 0u, 1u, 0u},
+            {'D', 0x1111u, 0x2222u, 0u, 1u, 0u},
+        };
+        AstraTextGridSelection selection = ASTRA_TEXT_GRID_SELECTION_INIT;
+
+        selection.anchor = (AstraTextGridPosition){3u, 4u};
+        selection.focus = (AstraTextGridPosition){3u, 2u};
+        selection.foreground = 0xaaaau;
+        selection.background = 0xbbbbu;
+        reset_calls();
+        assert(astra_text_surface_render_grid(
+                   &text, &target, 0, 0, 3u, 1u,
+                   selection_cells, 4u, &selection) == ASTRA_OK);
+        assert(fill_count == 3u && text_count == 3u);
+        assert(fill_colors[0] == 0x2222u);
+        assert(fill_colors[1] == 0xbbbbu);
+        assert(fill_colors[2] == 0x2222u);
+        assert(text_colors[0] == 0x1111u);
+        assert(text_colors[1] == 0xaaaau);
+        assert(text_colors[2] == 0x1111u);
+
+        selection.anchor = selection.focus;
+        reset_calls();
+        assert(astra_text_surface_render_grid(
+                   &text, &target, 0, 0, 3u, 1u,
+                   selection_cells, 4u, &selection) == ASTRA_OK);
+        assert(fill_count == 1u && text_count == 1u);
+
+        selection.size = 0u;
+        assert(astra_text_surface_render_grid(
+                   &text, &target, 0, 0, 3u, 1u,
+                   selection_cells, 4u, &selection) ==
+               ASTRA_ERROR_INVALID_ARGUMENT);
+    }
+
     reset_calls();
     assert(astra_text_surface_draw_caret(
                &text, &target, 10, 8, 1u, 2u,
@@ -130,6 +182,23 @@ int main(void)
     assert(astra_text_surface_scroll(&text, &target, 10u, 8u, 20u, 6u,
                                      1u, 5u) == ASTRA_OK);
     assert(scroll_count == 1u);
+
+    {
+        AstraTextGridPosition position = {99u, 99u};
+
+        assert(astra_text_surface_grid_hit_test(
+                   &text, 10, 8, 20u, 6u, 10, 8, &position) == ASTRA_OK);
+        assert(position.row == 0u && position.column == 0u);
+        assert(astra_text_surface_grid_hit_test(
+                   &text, 10, 8, 20u, 6u, 14, 27, &position) == ASTRA_OK);
+        assert(position.row == 0u && position.column == 1u);
+        assert(astra_text_surface_grid_hit_test(
+                   &text, 10, 8, 20u, 6u, -100, -100, &position) == ASTRA_OK);
+        assert(position.row == 0u && position.column == 0u);
+        assert(astra_text_surface_grid_hit_test(
+                   &text, 10, 8, 20u, 6u, 1000, 1000, &position) == ASTRA_OK);
+        assert(position.row == 6u && position.column == 0u);
+    }
 
     info.scratch_bytes = 3u;
     assert(astra_text_surface_init(&text, &info) ==
