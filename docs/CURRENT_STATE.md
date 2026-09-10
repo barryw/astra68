@@ -228,6 +228,26 @@ layout, and a persistent synthetic-strike cache remain pending. The current
 AFNT bitmap/Amiga importer remains operational; the documented scalable
 TTF/OTF/WOFF pipeline is not yet implemented.
 
+Commit `b36a784` is physically accepted for this fixed-grid cutover in immutable
+DE25 release
+`5b00754844ed0714b8ecce98fe8042a9d130031ba2014bfd1d49207818fecabb`.
+The board completed POST, reached initial-image stage 8, reported an effective
+70,196,000 Hz MC68040 and remained active with zero service restarts. Opening
+Terminal and executing `echo textsurface-ok` produced the expected command,
+output, and prompt on HDMI. The first output appeared in 108.041 ms and settled
+in 205.463 ms through two display batches, two glyph commands, 189 renderer
+commands, 29 fills, 158 blits, and two completed submissions. The retained
+Cam Link frame is `/private/tmp/astra-textsurface-terminal-5b007548.png`,
+SHA-256 `30f43a3f234208ad570ce0b22cfefc647b293a7f8f85c9a2cfea44d883babf23`.
+Release artifact SHA-256 values are
+`472897d5732523e4c455e44d89729afb45b267ec1564781a8448761b7b317085`
+for `storage-terminal.img`,
+`4c5606a57402fff5c404da0d0033eed975ed3f6454b2244f9fe32de12ea3df5e`
+for QEMU, `a84456a3d4026e6fdca0d02fb0c949fa5e48040971b7781a7e2d75ddd86f47e9`
+for the boot ROM, and
+`c109cadab97c18500ee7bfb2bb4c4701542342b6effc48d6204832b0578f5bb1`
+for the terminal display renderer.
+
 A forced kernel rebuild exposed a stale 1080p contract: the advertised native
 RGB565 frame is 4,147,200 bytes but a transfer slot held only 2 MiB. Current
 source derives four 4 MiB process DMA slots and their 4,096-page aggregate

@@ -31,7 +31,7 @@ order needed to finish the complete design without application-private UI.
 | Retained layout | all | nested row/column/wrap containers, intrinsic measurement, reflow, clipping | complete; physical ABI-2 gate passed |
 | Primitive controls | 1d, 4a | label, button, field, check, radio, switch, slider, stepper, popup, combo, segmented, tags, disclosure, progress | label/button/check/radio/switch/slider/progress complete |
 | Collection controls | 1d, 2b, 4a | scroll model, scrollbar, splitter, tabs, list, tree, table, grid, columns, toolbar, status, pagination | pending |
-| TextSurface | 7a-7b | shared UTF-8 model, grid/code/flow layout, runs, gutters, overlays, caret, selection, undo, find, clipboard, scrollback | grid renderer and Terminal source cutover complete; physical/editing work pending |
+| TextSurface | 7a-7b | shared UTF-8 model, grid/code/flow layout, runs, gutters, overlays, caret, selection, undo, find, clipboard, scrollback | grid renderer and Terminal source cutover physically accepted; editing work pending |
 | Input vocabulary | 6a-6b | keymap-selected Meta labels and immutable system/workspace/app shortcut tiers | pending |
 | Command model | 1e, 2a, 6b | stable IDs, typed arguments, state, metadata, asynchronous invocation; shared by menus, palette, toolbar, scripting | pending |
 | Menus and palette | 1e, 2a, 3a | persistent application strip, skeleton menus, command palette, system escape shortcuts | pending |
@@ -91,6 +91,14 @@ carets, and hardware-blit scrolling. Terminal now feeds its parser cells into
 that public component and contains no private text painter. Selection,
 scrollback, clipboard, find, wide-cell behavior, and code/flow layout remain
 unfinished and must land in TextSurface rather than Terminal.
+
+The fixed-grid source cutover is physically accepted at commit `b36a784` in
+immutable DE25 release
+`5b00754844ed0714b8ecce98fe8042a9d130031ba2014bfd1d49207818fecabb`.
+Terminal displayed and executed `echo textsurface-ok`; first output measured
+108.041 ms and the frame settled in 205.463 ms. The retained HDMI frame is
+`/private/tmp/astra-textsurface-terminal-5b007548.png`, SHA-256
+`30f43a3f234208ad570ce0b22cfefc647b293a7f8f85c9a2cfea44d883babf23`.
 
 ## Window composition cutover
 
