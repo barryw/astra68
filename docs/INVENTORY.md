@@ -226,19 +226,22 @@ emu/qemu/build.sh arty      # ARM, for the board
 ### Deploying to the board
 
 ```sh
-# from beast; creation accepts only explicitly named inputs and a new output
+# from beast; the publisher creates, deploys, and removes its temporary release
 ASTRA_DE25_QEMU=<qemu> ASTRA_DE25_ROM=<rom> \
 ASTRA_DE25_STORAGE=<clean-image> \
 ASTRA_DE25_QEMU_LIBDIR=<aarch64-library-directory> \
-  emu/qemu/create-de25-release.sh <release-directory>
-emu/qemu/deploy-de25-release.sh <release-directory>
+  emu/qemu/publish-de25-release.sh
 ```
 
 Release creation force-rebuilds the small AArch64 POST/panic renderer from the
 current mirrored source with all host cores; callers cannot substitute a stale
-copy. The deployer re-verifies after transfer, installs the content-addressed
-tree read-only, and atomically replaces `/var/lib/astra/current`. Verify the
-emulator actually has the storage model before blaming the ROM:
+copy. The publisher owns its temporary release and removes it on success,
+failure, or interruption, including its deliberately read-only files. The
+deployer re-verifies after transfer, installs the content-addressed tree
+read-only, and atomically replaces `/var/lib/astra/current`. The lower-level
+create/deploy scripts remain available when a retained release is explicitly
+needed. Verify the emulator actually has the storage model before blaming the
+ROM:
 
 ```sh
 strings <qemu> | grep -c "Astra68 storage image"   # 2 = present, 0 = too old
