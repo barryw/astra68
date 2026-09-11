@@ -226,7 +226,7 @@ int main(void)
         selection.anchor = (AstraTextGridPosition){0u, 1u};
         selection.focus = (AstraTextGridPosition){2u, 4u};
         assert(astra_text_surface_copy_grid_selection(
-                   &text, copy_cells, 5u, 3u, &selection,
+                   &text, copy_cells, 5u, 5u, 3u, &selection,
                    copied, sizeof(copied), &copied_bytes) == ASTRA_OK);
         assert(copied_bytes == sizeof(expected) - 1u);
         assert(memcmp(copied, expected, copied_bytes) == 0);
@@ -235,7 +235,7 @@ int main(void)
         selection.focus = (AstraTextGridPosition){0u, 1u};
         memcpy(copied, "unchanged", 10u);
         assert(astra_text_surface_copy_grid_selection(
-                   &text, copy_cells, 5u, 3u, &selection,
+                   &text, copy_cells, 5u, 5u, 3u, &selection,
                    copied, sizeof(expected) - 2u, &copied_bytes) ==
                ASTRA_ERROR_BUFFER_TOO_SMALL);
         assert(copied_bytes == sizeof(expected) - 1u);
@@ -244,28 +244,37 @@ int main(void)
         selection.anchor = (AstraTextGridPosition){0u, 0u};
         selection.focus = (AstraTextGridPosition){1u, 0u};
         assert(astra_text_surface_copy_grid_selection(
-                   &text, copy_cells, 5u, 3u, &selection,
+                   &text, copy_cells, 5u, 5u, 3u, &selection,
                    copied, sizeof(copied), &copied_bytes) == ASTRA_OK);
         assert(copied_bytes == 3u && memcmp(copied, "ab\n", 3u) == 0);
 
         selection.anchor = selection.focus;
         assert(astra_text_surface_copy_grid_selection(
-                   &text, copy_cells, 5u, 3u, &selection,
+                   &text, copy_cells, 5u, 5u, 3u, &selection,
                    NULL, 0u, &copied_bytes) == ASTRA_OK);
         assert(copied_bytes == 0u);
 
         selection.focus = (AstraTextGridPosition){4u, 0u};
         assert(astra_text_surface_copy_grid_selection(
-                   &text, copy_cells, 5u, 3u, &selection,
+                   &text, copy_cells, 5u, 5u, 3u, &selection,
                    copied, sizeof(copied), &copied_bytes) ==
                ASTRA_ERROR_INVALID_ARGUMENT);
         copy_cells[6].codepoint = 0xd800u;
         selection.anchor = (AstraTextGridPosition){1u, 0u};
         selection.focus = (AstraTextGridPosition){1u, 3u};
         assert(astra_text_surface_copy_grid_selection(
-                   &text, copy_cells, 5u, 3u, &selection,
+                   &text, copy_cells, 5u, 5u, 3u, &selection,
                    copied, sizeof(copied), &copied_bytes) ==
                ASTRA_ERROR_INVALID_ARGUMENT);
+
+        copy_cells[6].codepoint = 'c';
+        copy_cells[5].codepoint = '!';
+        selection.anchor = (AstraTextGridPosition){0u, 0u};
+        selection.focus = (AstraTextGridPosition){1u, 2u};
+        assert(astra_text_surface_copy_grid_selection(
+                   &text, copy_cells, 5u, 2u, 2u, &selection,
+                   copied, sizeof(copied), &copied_bytes) == ASTRA_OK);
+        assert(copied_bytes == 5u && memcmp(copied, "ab\n!c", 5u) == 0);
     }
 
     info.scratch_bytes = 3u;

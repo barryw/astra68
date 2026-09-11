@@ -4,6 +4,7 @@
 #include <astra/bytes.h>
 #include <astra/area.h>
 #include <astra/bundle.h>
+#include <astra/clipboard_service.h>
 #include <astra/event_control.h>
 #include <astra/gui.h>
 #include <astra/graphics_library.h>
@@ -58,6 +59,11 @@ typedef struct WindowTerminal {
     AstraTerminal *terminal;
     AstraTextSurface text_surface;
     AstraTextGridSelection selection;
+    AstraClipboardItem paste;
+    AstraHandle clipboard;
+    const uint8_t *paste_text;
+    uint32_t paste_length;
+    uint32_t paste_offset;
     char text_scratch[TERMINAL_TEXT_SCRATCH_BYTES];
     uint16_t width;
     uint16_t height;
@@ -478,11 +484,103 @@ static int window_select(WindowTerminal *window, int32_t x, int32_t y,
     return 1;
 }
 
+static void window_paste_close(WindowTerminal *window)
+{
+    if (window->paste._private_area.handle != ASTRA_INVALID_HANDLE) {
+        AstraResult ignored = interface_library->clipboard_item_close(
+            &window->paste);
+        (void)ignored;
+    }
+    window->paste_text = NULL;
+    window->paste_length = 0u;
+    window->paste_offset = 0u;
+}
+
+static void window_copy(WindowTerminal *window)
+{
+    AstraArea text = ASTRA_AREA_INIT;
+    AstraClipboardRepresentation representation =
+        ASTRA_CLIPBOARD_REPRESENTATION_INIT;
+    uint32_t bytes = 0u;
+    AstraResult result;
+
+    if (window->terminal == NULL ||
+        (window->selection.anchor.row == window->selection.focus.row &&
+         window->selection.anchor.column == window->selection.focus.column))
+        return;
+    result = interface_library->text_surface_copy_grid_selection(
+        &window->text_surface, window->terminal->cells,
+        window->terminal->capacity_columns, window->terminal->columns,
+        window->terminal->rows, &window->selection, NULL, 0u, &bytes);
+    if (result != ASTRA_ERROR_BUFFER_TOO_SMALL || bytes == 0u)
+        return;
+    result = astra_area_create(
+        bytes, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP, &text);
+    if (result == ASTRA_OK)
+        result = astra_area_map(&text,
+                                ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE);
+    if (result == ASTRA_OK)
+        result = interface_library->text_surface_copy_grid_selection(
+            &window->text_surface, window->terminal->cells,
+            window->terminal->capacity_columns, window->terminal->columns,
+            window->terminal->rows, &window->selection,
+            text.address, text.size, &bytes);
+    if (result == ASTRA_OK) {
+        representation.type = ASTRA_CLIPBOARD_TYPE_UTF8;
+        representation.type_length =
+            sizeof(ASTRA_CLIPBOARD_TYPE_UTF8) - 1u;
+        representation.data = text.address;
+        representation.data_length = bytes;
+        result = interface_library->clipboard_write(
+            window->clipboard, &representation, 1u, NULL);
+    }
+    if (result != ASTRA_OK)
+        (void)astra_log("Terminal copy failed");
+    if (text.handle != ASTRA_INVALID_HANDLE)
+        close_area(&text);
+}
+
+static void window_paste_begin(WindowTerminal *window)
+{
+    const void *text = NULL;
+    uint32_t length = 0u;
+    AstraResult result;
+
+    window_paste_close(window);
+    result = interface_library->clipboard_read(window->clipboard,
+                                                &window->paste);
+    if (result == ASTRA_ERROR_NOT_PRESENT)
+        return;
+    if (result == ASTRA_OK)
+        result = interface_library->clipboard_item_find(
+            &window->paste, ASTRA_CLIPBOARD_TYPE_UTF8,
+            sizeof(ASTRA_CLIPBOARD_TYPE_UTF8) - 1u, &text, &length);
+    if (result != ASTRA_OK) {
+        if (result != ASTRA_ERROR_NOT_PRESENT)
+            (void)astra_log("Terminal paste failed");
+        window_paste_close(window);
+        return;
+    }
+    window->paste_text = text;
+    window->paste_length = length;
+}
+
 static int window_next_key(void *context, uint32_t *key)
 {
     WindowTerminal *window = context;
 
     for (;;) {
+        if (window->paste_offset < window->paste_length) {
+            uint32_t consumed = 0u;
+
+            *key = astra_utf8_decode(
+                window->paste_text + window->paste_offset,
+                window->paste_length - window->paste_offset, &consumed);
+            window->paste_offset += consumed;
+            if (window->paste_offset == window->paste_length)
+                window_paste_close(window);
+            return CONSOLE_SESSION_INPUT_KEY;
+        }
         AstraWindowEvent event = {0};
         AstraResult result = astra_window_event_try(&window->window, &event);
 
@@ -539,6 +637,19 @@ static int window_next_key(void *context, uint32_t *key)
         if (event.type == ASTRA_WINDOW_EVENT_KEY &&
             (event.flags & ASTRA_WINDOW_EVENT_DOWN) != 0u) {
             uint32_t modifiers = event.data.key.modifiers;
+
+            if ((modifiers & ASTRA_INPUT_MOD_META) != 0u &&
+                (modifiers & ASTRA_INPUT_MOD_CTRL) == 0u &&
+                (event.flags & ASTRA_WINDOW_EVENT_REPEAT) == 0u) {
+                if (event.data.key.usage == 0x06u) {
+                    window_copy(window);
+                    continue;
+                }
+                if (event.data.key.usage == 0x19u) {
+                    window_paste_begin(window);
+                    continue;
+                }
+            }
             uint32_t translated = astra_keymap_translate(
                 event.data.key.usage, keymap_modifiers(modifiers));
             int chord = (modifiers & (ASTRA_INPUT_MOD_CTRL |
@@ -581,6 +692,7 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *gui;
     const AstraStartupCapability *control;
+    const AstraStartupCapability *clipboard;
     ConsoleSessionBackend backend;
     uint32_t status;
     uint32_t title_icon_length = 0u;
@@ -596,7 +708,10 @@ int astra_main(const AstraStartupInfo *startup)
     gui = astra_startup_capability(startup, ASTRA_CAPABILITY_GUI);
     control = astra_startup_capability(startup,
                                        ASTRA_CAPABILITY_EVENT_CONTROL);
-    if (bootstrap == NULL || gui == NULL || control == NULL)
+    clipboard = astra_startup_capability(startup,
+                                         ASTRA_CAPABILITY_CLIPBOARD);
+    if (bootstrap == NULL || gui == NULL || control == NULL ||
+        clipboard == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
 
     status = astra_process_filesystem_open(&process_filesystem, startup);
@@ -611,6 +726,8 @@ int astra_main(const AstraStartupInfo *startup)
         (AstraTextSurface)ASTRA_TEXT_SURFACE_INIT;
     window_terminal.selection =
         (AstraTextGridSelection)ASTRA_TEXT_GRID_SELECTION_INIT;
+    window_terminal.paste = (AstraClipboardItem)ASTRA_CLIPBOARD_ITEM_INIT;
+    window_terminal.clipboard = clipboard->handle;
     window_terminal.width = 840u;
     window_terminal.height = 460u;
     window_terminal.cell_width = ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH;
@@ -736,6 +853,7 @@ int astra_main(const AstraStartupInfo *startup)
     backend.process_filesystem = &process_filesystem;
     backend.startup = startup;
     status = console_session_run_backend(&backend);
+    window_paste_close(&window_terminal);
     if (window_terminal.live) {
         AstraResult close_result = astra_window_close(&window_terminal.window);
 

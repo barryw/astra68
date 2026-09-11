@@ -20,7 +20,7 @@ PIC_LIB := build/m68k/libastra-pic.a
 SOURCES := src/resource.c src/area.c src/port.c src/bulk_ring.c \
 	src/front_panel.c src/font.c src/graphics.c src/pointer.c src/window.c \
 	src/application.c src/fixed.c src/manifest.c src/bundle.c \
-	src/datetime.c src/display_mode.c src/keymap.c src/utf8.c
+	src/datetime.c src/display_mode.c src/keymap.c src/utf8.c src/clipboard.c
 TARGET_OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES))
 PIC_OBJECTS := $(patsubst build/m68k/%,build/m68k/pic/%,$(TARGET_OBJECTS))
 HOST_TESTS := build/host/test_front_panel build/host/test_font \
@@ -30,6 +30,7 @@ HOST_TESTS += build/host/test_pointer build/host/test_window
 HOST_TESTS += build/host/test_application
 HOST_TESTS += build/host/test_fixed build/host/test_bundle
 HOST_TESTS += build/host/test_utf8
+HOST_TESTS += build/host/test_clipboard
 
 SANITIZER_TESTS := build/host/test_front_panel_sanitize \
 	build/host/test_font_sanitize build/host/test_graphics_sanitize \
@@ -40,6 +41,7 @@ SANITIZER_TESTS += build/host/test_pointer_sanitize \
 	build/host/test_bundle_sanitize
 SANITIZER_TESTS += build/host/test_application_sanitize
 SANITIZER_TESTS += build/host/test_utf8_sanitize
+SANITIZER_TESTS += build/host/test_clipboard_sanitize
 EXAMPLE_OBJECTS := build/m68k/front_panel_example.o \
 	build/m68k/font_layout_example.o build/m68k/graphics_frame_example.o \
 	build/m68k/port_message_example.o build/m68k/bulk_ring_example.o
@@ -117,6 +119,15 @@ build/host/test_utf8: src/utf8.c tests/test_utf8.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
 
+build/host/utf8.o: src/utf8.c include/astra/utf8.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) -c $< -o $@
+
+build/host/test_clipboard: src/clipboard.c src/resource.c src/area.c \
+		src/port.c src/utf8.c tests/test_clipboard.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
+
 test: $(HOST_TESTS) header-contract
 	./build/host/test_front_panel
 	./build/host/test_font
@@ -130,6 +141,7 @@ test: $(HOST_TESTS) header-contract
 	./build/host/test_fixed
 	./build/host/test_bundle
 	./build/host/test_utf8
+	./build/host/test_clipboard
 
 build/host/test_front_panel_sanitize: src/front_panel.c tests/test_front_panel.c
 	@mkdir -p $(@D)
@@ -187,6 +199,11 @@ build/host/test_utf8_sanitize: src/utf8.c tests/test_utf8.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
 
+build/host/test_clipboard_sanitize: src/clipboard.c src/resource.c src/area.c \
+		src/port.c src/utf8.c tests/test_clipboard.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
+
 sanitize: $(SANITIZER_TESTS)
 	./build/host/test_front_panel_sanitize
 	./build/host/test_font_sanitize
@@ -200,6 +217,7 @@ sanitize: $(SANITIZER_TESTS)
 	./build/host/test_fixed_sanitize
 	./build/host/test_bundle_sanitize
 	./build/host/test_utf8_sanitize
+	./build/host/test_clipboard_sanitize
 
 check: test sanitize
 

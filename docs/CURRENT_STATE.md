@@ -225,8 +225,19 @@ TextSurface fixed-grid renderer, and Terminal now consumes it for styled runs,
 logical colors, carets, and hardware-blit scrolling instead of owning a private
 painter. The component now also performs grid hit testing and renders
 normalized, half-open selections without storing selection state in its ABI
-object; Terminal uses both for pointer-drag selection. Clipboard transfer,
-scrollback, find, wide cells, and code/flow layout remain pending. The current
+object; Terminal uses both for pointer-drag selection. Current source advances
+this to `interface.library` 2.4: capacity-padded grid rows use an explicit
+selection stride, typed multi-representation clipboard documents are immutable
+shared areas owned by a protected clipboard service, and Terminal maps the
+input service's normalized Meta-C/Meta-V to copy/paste without claiming
+Ctrl-C. Immutable release
+`07be64339b3bdb58eef906734ed3b857e701856d607f17e6804a4e26a6993ee8`
+booted that service graph on the physical DE25, reached stage 8 at 70.092 MHz
+effective, and remained active with zero service restarts. The end-to-end QEMU
+gate then selected a known Terminal row through pointer input, copied it with
+Meta-C, pasted it with Meta-V, executed it in zsh, and observed the exact
+`CLIPBOARD-PASTE-PASS` result. Scrollback, find, wide cells, and code/flow
+layout remain pending. The current
 AFNT bitmap/Amiga importer remains operational; the
 documented scalable TTF/OTF/WOFF pipeline and persistent synthetic-strike cache
 are not yet implemented.

@@ -181,6 +181,41 @@ static void test_replaceable_keymap(void)
     assert(sink.events[1].code == 0x03bbu);
 }
 
+static void test_meta_is_normalized_once(void)
+{
+    AstraInputService service = make_service();
+    TestSink sink = {0};
+    AstraInputEvent event;
+
+    focus(&service, &sink);
+    event = key(0xe2u, true, 10u, 1u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(((uint32_t)sink.events[0].value_x &
+            (ASTRA_INPUT_MOD_LEFT_ALT | ASTRA_INPUT_MOD_META)) ==
+           (ASTRA_INPUT_MOD_LEFT_ALT | ASTRA_INPUT_MOD_META));
+    event = key(0x06u, true, 11u, 1u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(sink.count == 2u);
+    assert(((uint32_t)sink.events[1].value_x & ASTRA_INPUT_MOD_META) != 0u);
+
+    event = key(0x06u, false, 12u, 1u);
+    astra_input_service_ingest(&service, &event, false);
+    event = key(0xe2u, false, 13u, 1u);
+    astra_input_service_ingest(&service, &event, false);
+    sink.count = 0u;
+    event = key(0xe6u, true, 14u, 1u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(((uint32_t)sink.events[0].value_x & ASTRA_INPUT_MOD_META) == 0u);
+
+    service.config.meta_modifier = ASTRA_INPUT_MOD_LEFT_GUI;
+    event = key(0xe6u, false, 15u, 1u);
+    astra_input_service_ingest(&service, &event, false);
+    event = key(0xe3u, true, 16u, 1u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(((uint32_t)sink.events[sink.count - 1u].value_x &
+            ASTRA_INPUT_MOD_META) != 0u);
+}
+
 static void test_caps_focus_and_repairs(void)
 {
     AstraInputService service = make_service();
@@ -473,6 +508,7 @@ int main(void)
 {
     test_keymap_modifiers_and_repeat();
     test_replaceable_keymap();
+    test_meta_is_normalized_once();
     test_caps_focus_and_repairs();
     test_focus_subscription_mask();
     test_pointer_acceleration_clipping_and_coalescing();

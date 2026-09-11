@@ -135,7 +135,7 @@ ASTRA_NODISCARD AstraResult astra_text_surface_grid_hit_test(
  */
 ASTRA_NODISCARD AstraResult astra_text_surface_copy_grid_selection(
     const AstraTextSurface *text_surface, const AstraTextCell *cells,
-    uint32_t columns, uint32_t rows,
+    uint32_t stride, uint32_t columns, uint32_t rows,
     const AstraTextGridSelection *selection, char *output,
     uint32_t capacity, uint32_t *bytes);
 ASTRA_NODISCARD AstraResult astra_text_surface_draw_caret(

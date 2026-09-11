@@ -356,7 +356,7 @@ AstraResult astra_text_surface_grid_hit_test(
 
 AstraResult astra_text_surface_copy_grid_selection(
     const AstraTextSurface *text, const AstraTextCell *cells,
-    uint32_t columns, uint32_t rows,
+    uint32_t stride, uint32_t columns, uint32_t rows,
     const AstraTextGridSelection *selection, char *output,
     uint32_t capacity, uint32_t *bytes)
 {
@@ -365,12 +365,13 @@ AstraResult astra_text_surface_copy_grid_selection(
     uint64_t required = 0u;
 
     if (!valid(text) || cells == NULL || columns == 0u || rows == 0u ||
+        stride < columns ||
         selection == NULL || selection->size < sizeof(*selection) ||
         !astra_words_zero(selection->reserved, 4u) || bytes == NULL ||
         (output == NULL && capacity != 0u) ||
         !grid_position_valid(selection->anchor, columns, rows) ||
         !grid_position_valid(selection->focus, columns, rows) ||
-        (uint64_t)columns * rows > UINT32_MAX)
+        (uint64_t)stride * rows > UINT32_MAX)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     normalize_selection(selection, &start, &end);
     for (uint32_t row = start.row; row <= end.row && row < rows; ++row) {
@@ -379,20 +380,20 @@ AstraResult astra_text_surface_copy_grid_selection(
 
         for (uint32_t column = first; column < last; ++column) {
             const AstraTextCell *cell =
-                &cells[(uint64_t)row * columns + column];
+                &cells[(uint64_t)row * stride + column];
 
             if (!astra_unicode_scalar_valid(cell->codepoint) ||
                 cell->width != 1u || cell->reserved != 0u)
                 return ASTRA_ERROR_INVALID_ARGUMENT;
         }
         while (last > first &&
-               cells[(uint64_t)row * columns + last - 1u].codepoint == ' ')
+               cells[(uint64_t)row * stride + last - 1u].codepoint == ' ')
             --last;
         for (uint32_t column = first; column < last; ++column) {
             char encoded[4];
 
             required += astra_utf8_encode(
-                cells[(uint64_t)row * columns + column].codepoint, encoded);
+                cells[(uint64_t)row * stride + column].codepoint, encoded);
         }
         if (row < end.row)
             ++required;
@@ -411,11 +412,11 @@ AstraResult astra_text_surface_copy_grid_selection(
         uint32_t last = row == end.row ? end.column : columns;
 
         while (last > first &&
-               cells[(uint64_t)row * columns + last - 1u].codepoint == ' ')
+               cells[(uint64_t)row * stride + last - 1u].codepoint == ' ')
             --last;
         for (uint32_t column = first; column < last; ++column)
             required += astra_utf8_encode(
-                cells[(uint64_t)row * columns + column].codepoint,
+                cells[(uint64_t)row * stride + column].codepoint,
                 output + required);
         if (row < end.row)
             output[required++] = '\n';

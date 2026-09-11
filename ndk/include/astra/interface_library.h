@@ -1,13 +1,14 @@
 #ifndef ASTRA_INTERFACE_LIBRARY_H
 #define ASTRA_INTERFACE_LIBRARY_H
 
+#include <astra/clipboard.h>
 #include <astra/control.h>
 #include <astra/interface.h>
 #include <astra/text_surface.h>
 #include <astra/window.h>
 
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 2u
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 3u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 4u
 
 typedef struct AstraInterfaceLibraryV2 {
     uint16_t abi_major;
@@ -86,7 +87,17 @@ typedef struct AstraInterfaceLibraryV2 {
         int32_t, int32_t, AstraTextGridPosition *);
     AstraResult (*text_surface_copy_grid_selection)(
         const AstraTextSurface *, const AstraTextCell *, uint32_t, uint32_t,
-        const AstraTextGridSelection *, char *, uint32_t, uint32_t *);
+        uint32_t, const AstraTextGridSelection *, char *, uint32_t,
+        uint32_t *);
+    AstraResult (*clipboard_write)(
+        AstraHandle, const AstraClipboardRepresentation *, uint32_t,
+        uint32_t *);
+    AstraResult (*clipboard_read)(AstraHandle, AstraClipboardItem *);
+    AstraResult (*clipboard_item_find)(
+        const AstraClipboardItem *, const char *, uint32_t,
+        const void **, uint32_t *);
+    AstraResult (*clipboard_item_close)(AstraClipboardItem *);
+    AstraResult (*clipboard_clear)(AstraHandle, uint32_t *);
 } AstraInterfaceLibraryV2;
 
 #endif

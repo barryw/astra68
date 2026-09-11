@@ -30,6 +30,8 @@ typedef struct AstraInputServiceConfig {
     uint32_t acceleration_threshold;
     uint32_t acceleration_numerator;
     uint32_t acceleration_denominator;
+    /** Physical modifier promoted to Meta; zero selects left Alt. */
+    uint32_t meta_modifier;
     AstraInputTranslate translate;
     void *translate_context;
 } AstraInputServiceConfig;

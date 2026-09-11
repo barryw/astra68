@@ -14,6 +14,8 @@
 #define ASTRA_INPUT_MOD_RIGHT_ALT   (UINT32_C(1) << 6)
 #define ASTRA_INPUT_MOD_RIGHT_GUI   (UINT32_C(1) << 7)
 #define ASTRA_INPUT_MOD_CAPS_LOCK   (UINT32_C(1) << 8)
+/** Input-service-selected primary command modifier. */
+#define ASTRA_INPUT_MOD_META        (UINT32_C(1) << 9)
 
 #define ASTRA_INPUT_MOD_CTRL \
     (ASTRA_INPUT_MOD_LEFT_CTRL | ASTRA_INPUT_MOD_RIGHT_CTRL)

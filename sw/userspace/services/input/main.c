@@ -231,6 +231,7 @@ int astra_main(const AstraStartupInfo *startup)
         .acceleration_threshold = 4u,
         .acceleration_numerator = 2u,
         .acceleration_denominator = 1u,
+        .meta_modifier = ASTRA_INPUT_MOD_LEFT_ALT,
     };
     AstraInputService service;
     const AstraStartupCapability *bootstrap;

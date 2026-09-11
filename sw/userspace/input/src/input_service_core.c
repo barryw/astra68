@@ -212,6 +212,15 @@ static uint32_t keymap_modifiers(uint32_t modifiers)
     return mapped;
 }
 
+static uint32_t logical_modifiers(const AstraInputService *service)
+{
+    uint32_t modifiers = service->modifiers;
+
+    if ((modifiers & service->config.meta_modifier) != 0u)
+        modifiers |= ASTRA_INPUT_MOD_META;
+    return modifiers;
+}
+
 static uint32_t default_key_codepoint(uint32_t usage, uint32_t modifiers)
 {
     uint32_t translated = astra_keymap_translate(
@@ -228,27 +237,28 @@ static void emit_key(AstraInputService *service, uint32_t usage, bool down,
     uint16_t flags = down ? ASTRA_INPUT_LOGICAL_DOWN : 0u;
     AstraLogicalInputEvent key;
     uint32_t codepoint;
+    uint32_t modifiers = logical_modifiers(service);
 
     if (repeat)
         flags |= ASTRA_INPUT_LOGICAL_REPEAT;
     key = make_event(service, ASTRA_INPUT_EVENT_KEY, flags, timestamp_ms);
     key.code = usage;
-    key.value_x = (int32_t)service->modifiers;
+    key.value_x = (int32_t)modifiers;
     deliver_critical(service, &key);
 
     codepoint = service->config.translate != NULL ?
         service->config.translate(service->config.translate_context, usage,
-                                  service->modifiers) :
-        default_key_codepoint(usage, service->modifiers);
+                                  modifiers) :
+        default_key_codepoint(usage, modifiers);
     if (down && codepoint != 0u &&
-        (service->modifiers & (ASTRA_INPUT_MOD_CTRL | ASTRA_INPUT_MOD_ALT |
-                               ASTRA_INPUT_MOD_GUI)) == 0u) {
+        (modifiers & (ASTRA_INPUT_MOD_CTRL | ASTRA_INPUT_MOD_ALT |
+                      ASTRA_INPUT_MOD_GUI)) == 0u) {
         AstraLogicalInputEvent text = make_event(
             service, ASTRA_INPUT_EVENT_TEXT,
             repeat ? ASTRA_INPUT_LOGICAL_REPEAT : 0u, timestamp_ms);
 
         text.code = codepoint;
-        text.value_x = (int32_t)service->modifiers;
+        text.value_x = (int32_t)modifiers;
         deliver_critical(service, &text);
         ++service->stats.text_events;
     }
@@ -300,10 +310,15 @@ bool astra_input_service_init(AstraInputService *service,
         config->pointer_height > INT32_MAX ||
         config->repeat_interval_ms == 0u ||
         config->acceleration_denominator == 0u ||
-        config->acceleration_numerator == 0u)
+        config->acceleration_numerator == 0u ||
+        (config->meta_modifier != 0u &&
+         config->meta_modifier != ASTRA_INPUT_MOD_LEFT_ALT &&
+         config->meta_modifier != ASTRA_INPUT_MOD_LEFT_GUI))
         return false;
     *service = (AstraInputService){0};
     service->config = *config;
+    if (service->config.meta_modifier == 0u)
+        service->config.meta_modifier = ASTRA_INPUT_MOD_LEFT_ALT;
     service->focus_generation = 1u;
     service->repeat_deadline_ms = ASTRA_INPUT_REPEAT_DISABLED;
     service->pointer_x = (int32_t)(config->pointer_width / 2u);

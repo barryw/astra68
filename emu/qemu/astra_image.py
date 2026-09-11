@@ -112,13 +112,14 @@ DISPLAY_STARTUP_MANIFEST = (
     "serves EVENTS:r EVENT_CONTROL required\n"
     "service SERVICES:input grants INPUT INPUT_IRQ "
     "serves INPUT_SERVICE required\n"
+    "service SERVICES:clipboard grants serves CLIPBOARD required\n"
     "service SERVICES:display grants DISPLAY DISPLAY_IRQ "
     "INPUT_SERVICE serves GUI required\n"
     "application SERVICES:desktop grants GUI APP_LAUNCH APPS:r LIBS:r "
     "NETWORK NETWORK_LISTEN NTP\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("storage", "posixd", "hostfs", "network", "ntpd", "events",
-                    "input", "display", "desktop")
+                    "input", "clipboard", "display", "desktop")
 HOSTBENCH_SERVICES = DISPLAY_SERVICES + ("hostbench",)
 HOSTBENCH_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
     "application SERVICES:hostbench grants HOST_DEVICE\n")

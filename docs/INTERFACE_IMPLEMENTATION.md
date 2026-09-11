@@ -31,8 +31,8 @@ order needed to finish the complete design without application-private UI.
 | Retained layout | all | nested row/column/wrap containers, intrinsic measurement, reflow, clipping | complete; physical ABI-2 gate passed |
 | Primitive controls | 1d, 4a | label, button, field, check, radio, switch, slider, stepper, popup, combo, segmented, tags, disclosure, progress | label/button/check/radio/switch/slider/progress complete |
 | Collection controls | 1d, 2b, 4a | scroll model, scrollbar, splitter, tabs, list, tree, table, grid, columns, toolbar, status, pagination | pending |
-| TextSurface | 7a-7b | shared UTF-8 model, grid/code/flow layout, runs, gutters, overlays, caret, selection, undo, find, clipboard, scrollback | grid renderer and Terminal source cutover physically accepted; grid selection paint/hit test, UTF-8 extraction, and Terminal drag interaction complete; clipboard/editing pending |
-| Input vocabulary | 6a-6b | keymap-selected Meta labels and immutable system/workspace/app shortcut tiers | pending |
+| TextSurface | 7a-7b | shared UTF-8 model, grid/code/flow layout, runs, gutters, overlays, caret, selection, undo, find, clipboard, scrollback | grid renderer, selection paint/hit test/extraction, typed clipboard, and Terminal copy/paste accepted; undo, find, scrollback, wide cells, and code/flow layout pending |
+| Input vocabulary | 6a-6b | keymap-selected Meta labels and immutable system/workspace/app shortcut tiers | input service emits one normalized Meta bit; detection, override, labels, and shortcut tiers pending |
 | Command model | 1e, 2a, 6b | stable IDs, typed arguments, state, metadata, asynchronous invocation; shared by menus, palette, toolbar, scripting | pending |
 | Menus and palette | 1e, 2a, 3a | persistent application strip, skeleton menus, command palette, system escape shortcuts | pending |
 | Telescope | 2a, 3a | Cmd-Space search/launch surface, filesystem change index, ranked results, keyboard selection and open | pending |
@@ -84,17 +84,29 @@ the DE25 without weakening the existing frame or layout budgets.
   surface, arrow keys select a result, and Enter invokes the shared open
   command.
 
-`interface.library` 2.3 owns the first TextSurface layer: validated fixed-grid
+`interface.library` 2.4 owns the first TextSurface layer: validated fixed-grid
 UTF-8 cells, logical color resolution, background/style runs, synthetic
 bold/italic, metric underline/strikeout, blink/hidden/faint/inverse state,
 carets, normalized half-open selection painting/hit testing, and hardware-blit
-scrolling. Grid selections are normalized and extracted as validated UTF-8,
+scrolling. Grid selections are normalized and extracted as validated UTF-8
+through an explicit source stride, so capacity-padded rows cannot leak into a
+visible selection,
 with selected row boundaries preserved and trailing grid padding removed;
 short destination buffers are left unchanged. Terminal now feeds its parser
 cells and pointer coordinates into that public component and contains no
-private text painter, hit-test, or selection-extraction math. Scrollback,
-clipboard, find, wide-cell behavior, and code/flow layout remain unfinished
-and must land in TextSurface rather than Terminal.
+private text painter, hit-test, or selection-extraction math.
+
+The same ABI exposes an immutable typed clipboard document rather than a
+Terminal-private text slot. Documents may carry multiple representations,
+plain text is validated as UTF-8, writes replace one service-owned generation
+atomically, and readers receive reduced read-only area capabilities. Terminal
+uses the input service's normalized Meta modifier for Meta-C and Meta-V while
+leaving Ctrl-C untouched for zsh. The physical DE25 boot and the full
+pointer-selection/Meta-C/Meta-V/zsh execution gate are accepted in release
+`07be64339b3bdb58eef906734ed3b857e701856d607f17e6804a4e26a6993ee8`.
+Scrollback, find, wide-cell behavior, and
+code/flow layout remain unfinished and must land in TextSurface rather than
+Terminal.
 
 The fixed-grid source cutover is physically accepted at commit `b36a784` in
 immutable DE25 release
