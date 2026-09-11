@@ -1,3 +1,4 @@
+/** @file vfs_assign.h @brief Per-process assign namespace. */
 #ifndef ASTRA_VFS_ASSIGN_H
 #define ASTRA_VFS_ASSIGN_H
 
@@ -25,6 +26,7 @@
  * set typed by people and a typo must not create a second namespace. What
  * follows the colon is byte-exact and is not this file's business.
  */
+/** Maximum namespace members, bounded by the startup capability table. */
 #define ASTRA_ASSIGN_MAX ASTRA_STARTUP_CAPABILITY_MAX
 
 /*
@@ -32,37 +34,50 @@
  * nothing else: two constants for one limit is the mistake that cost four
  * tasks the last time, so there is one.
  */
+/** Bytes reserved for a NUL-terminated mount-relative assign root. */
 #define ASTRA_ASSIGN_ROOT_MAX ASTRA_CAPABILITY_ROOT_MAX
 
+/** One namespace binding from an assign name to a rooted capability. */
 typedef struct AstraAssign {
-    char     name[ASTRA_CAPABILITY_NAME_MAX];  /* canonical uppercase */
+    char name[ASTRA_CAPABILITY_NAME_MAX]; /**< Canonical uppercase name. */
     /*
      * Normalised and mount-relative, with no leading separator: "work", or ""
      * for the mount's own root. Stored in the form it is joined in, so
      * resolution is a copy rather than a parse.
      */
-    char     root[ASTRA_ASSIGN_ROOT_MAX];
-    uint32_t handle;
-    uint32_t rights;
+    char root[ASTRA_ASSIGN_ROOT_MAX]; /**< Normalized mount-relative root. */
+    uint32_t handle; /**< Filesystem service capability. */
+    uint32_t rights; /**< Rights delegated with the capability. */
 } AstraAssign;
 
+/** Complete ordered namespace for one process. */
 typedef struct AstraAssignTable {
-    AstraAssign entries[ASTRA_ASSIGN_MAX];
-    uint32_t    count;
+    AstraAssign entries[ASTRA_ASSIGN_MAX]; /**< Bindings in union order. */
+    uint32_t count; /**< Used entries. */
 } AstraAssignTable;
 
+/**
+ * Initialize an empty assign table.
+ * @param table Table storage to initialize.
+ */
 void astra_assign_table_init(AstraAssignTable *table);
 
-/*
+/**
  * Binds a name, replacing any binding it already had: a name has one meaning
  * at a time. Refuses a handle of zero or rights of zero, because a binding
  * that confers nothing is a name that would resolve and then fail. `root` is
  * normalised on the way in and may be "" for the mount's own root.
+ * @param table Process namespace to modify.
+ * @param name Assign name, case-insensitive and optionally colon-terminated.
+ * @param handle Filesystem service capability.
+ * @param rights Rights delegated through the binding.
+ * @param root Mount-relative root, or an empty string for the mount root.
+ * @return ASTRA_VFS_* status.
  */
 uint32_t astra_assign_bind(AstraAssignTable *table, const char *name,
                            uint32_t handle, uint32_t rights, const char *root);
 
-/*
+/**
  * Appends one member to a name that already exists. Order is join order and
  * nothing else, and it is the order lookup tries.
  *
@@ -70,18 +85,28 @@ uint32_t astra_assign_bind(AstraAssignTable *table, const char *name,
  * create a binding, because a member joined to nothing would be a name whose
  * first member is an accident of ordering. Everything else it refuses,
  * `astra_assign_bind` refuses for the same reasons.
+ * @param table Process namespace to modify.
+ * @param name Existing assign name.
+ * @param handle Filesystem service capability for the appended member.
+ * @param rights Rights delegated through the member.
+ * @param root Mount-relative root, or an empty string for the mount root.
+ * @return ASTRA_VFS_* status.
  */
 uint32_t astra_assign_join(AstraAssignTable *table, const char *name,
                            uint32_t handle, uint32_t rights, const char *root);
 
-/*
+/**
  * The member'th binding of a name, or NULL once the index passes the last one
  * -- which is what ends a caller's loop. `astra_assign_lookup` is member zero.
+ * @param table Process namespace to search.
+ * @param name Assign name.
+ * @param member Zero-based union-member index.
+ * @return Borrowed binding, or NULL when no such member exists.
  */
 const AstraAssign *astra_assign_member(const AstraAssignTable *table,
                                        const char *name, uint32_t member);
 
-/*
+/**
  * Builds a namespace out of what a launch handed over.
  *
  * A launched program's capability table *is* its namespace: there is no
@@ -116,17 +141,33 @@ const AstraAssign *astra_assign_member(const AstraAssignTable *table,
  * COMMANDS: means the directory it was granted rather than the whole volume.
  * A name granted twice is a union: the first record binds and each later one
  * joins, in the order the launcher listed them.
+ * @param table Table replaced by the seeded namespace.
+ * @param capabilities Startup capability records.
+ * @param count Number of records in `capabilities`.
+ * @return ASTRA_VFS_* status.
  */
 uint32_t astra_assign_seed(AstraAssignTable *table,
                            const AstraStartupCapability *capabilities,
                            uint32_t count);
 
+/**
+ * Look up the first member of an assign.
+ * @param table Process namespace to search.
+ * @param name Assign name.
+ * @return Borrowed binding, or NULL when unbound.
+ */
 const AstraAssign *astra_assign_lookup(const AstraAssignTable *table,
                                        const char *name);
 
+/**
+ * Remove every member of an assign.
+ * @param table Process namespace to modify.
+ * @param name Assign name.
+ * @return ASTRA_VFS_* status.
+ */
 uint32_t astra_assign_unbind(AstraAssignTable *table, const char *name);
 
-/*
+/**
  * Turns NAME:rest into the path the storage protocol speaks, or refuses.
  *
  * This is the only place a name becomes a path, and that is why the rights
@@ -141,6 +182,14 @@ uint32_t astra_assign_unbind(AstraAssignTable *table, const char *name);
  * caller's loop ends. Resolution does no I/O and never will -- the tempting
  * implementation is to stat each member until one answers, and that drags the
  * disk into the one layer whose value is having none. The Kit does the trying.
+ * @param table Process namespace to resolve through.
+ * @param path Assign-qualified UTF-8 path.
+ * @param rights Rights required by the requested operation.
+ * @param member Zero-based union-member index.
+ * @param wire Receives the mount-relative wire path.
+ * @param capacity Bytes available in `wire`.
+ * @param assign Receives the borrowed binding when non-NULL.
+ * @return ASTRA_VFS_* status.
  */
 uint32_t astra_assign_resolve(const AstraAssignTable *table, const char *path,
                               uint32_t rights, uint32_t member, char *wire,

@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-09-10
+Status: active continuation map, 2026-09-11
 
 This file contains current facts only. Git history holds superseded board,
 processor, benchmark, and milestone records. The platform is **Astra 68**, its
@@ -241,6 +241,33 @@ layout remain pending. The current
 AFNT bitmap/Amiga importer remains operational; the
 documented scalable TTF/OTF/WOFF pipeline and persistent synthetic-strike cache
 are not yet implemented.
+
+`interface.library` is now ABI 2.5 and supplies the shared per-document
+undo/redo manager. It retains named, typed, serializable actions in a
+caller-owned growable arena, applies groups transactionally with compensation,
+tracks save-point dirty state, invalidates redo branches after a new edit, and
+rejects callback reentrancy. Normal, sanitizer, analyzer, and MC68040 builds
+pass. On the physical 69.874 MHz MC68040, 10,000 groups measured 7.546
+microseconds per apply-and-record, 3.958 per undo, and 3.292 per redo; the
+retained gate is 12.5 microseconds per phase.
+
+The Astra OS and NDK version are one authoritative value,
+`0.1.0-dev`, exported by `astra/version.h` and consumed by the kernel, boot
+image, manuals, metadata, and package name. Beast certification produced the
+deterministic relocatable archive
+`astra68-ndk-0.1.0-dev.tar.xz` (2.8 MiB, SHA-256
+`ef2ff330baf08f47b7c9c9742f26637ba0129d71a67994f9c83ff26dbb3e9a9e`).
+Its self-check rejects unsafe or nondeterministic tar entries, validates its
+internal checksums and shared version, extracts it, and links native C, POSIX
+C, and POSIX C++ consumers using only archive contents plus the cross compiler.
+The complete certification also runs every owned host, sanitizer, analyzer,
+shared-library ABI, and link contract against the OS library implementations.
+Every shipped public header must opt into the documentation gate; undocumented
+public declarations, structures, members, callbacks, parameters, return
+contracts, and unresolved references fail the build. The current strict
+Doxygen warning log is empty, and both the HTML manual and 175-page, 574 KiB
+PDF build successfully. Documentation artifacts are dependency-tracked so an
+unchanged archive build does not regenerate them.
 
 Commit `b36a784` is physically accepted for this fixed-grid cutover in immutable
 DE25 release

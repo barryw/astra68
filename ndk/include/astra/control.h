@@ -17,6 +17,7 @@
 
 ASTRA_EXTERN_C_BEGIN
 
+/** Default interval between indeterminate-control animation frames. */
 #define ASTRA_UI_ANIMATION_INTERVAL_NS UINT64_C(50000000)
 
 /** Control kinds implemented by Interface Kit ABI 2.0. */
@@ -86,28 +87,44 @@ enum {
 };
 
 enum {
+    /** Force this item onto a new flex line. */
     ASTRA_FLEX_BREAK_BEFORE = UINT32_C(1) << 0,
+    /** End the current flex line after this item. */
     ASTRA_FLEX_BREAK_AFTER = UINT32_C(1) << 1
 };
 
+/** Select intrinsic measurement instead of a fixed flex basis. */
 #define ASTRA_FLEX_AUTO UINT32_MAX
 
 /** Per-control sizing and flow constraints. */
 typedef struct AstraFlexItem {
+    /** Structure size for source-compatible extension. */
     uint32_t size;
+    /** Relative share of positive free space. */
     uint32_t grow;
+    /** Relative share of space removed when the line overflows. */
     uint32_t shrink;
+    /** Main-axis basis, or ::ASTRA_FLEX_AUTO for intrinsic size. */
     uint32_t basis;
+    /** Inclusive minimum width. */
     uint32_t minimum_width;
+    /** Inclusive minimum height. */
     uint32_t minimum_height;
+    /** Inclusive maximum width. */
     uint32_t maximum_width;
+    /** Inclusive maximum height. */
     uint32_t maximum_height;
+    /** Per-item cross-axis alignment, or `ASTRA_FLEX_ALIGN_AUTO`. */
     uint32_t align_self;
+    /** Combination of ASTRA_FLEX_BREAK_* flags. */
     uint32_t flags;
+    /** Parent container ID; zero places the control at the root. */
     uint32_t parent_id;
+    /** Must be zero. */
     uint32_t reserved[3];
 } AstraFlexItem;
 
+/** Default intrinsic flex-item constraints. */
 #define ASTRA_FLEX_ITEM_INIT { \
     sizeof(AstraFlexItem), 0, 1, ASTRA_FLEX_AUTO, 0, 0, \
     UINT32_MAX, UINT32_MAX, ASTRA_FLEX_ALIGN_AUTO, 0, 0, { 0, 0, 0 } \
@@ -115,20 +132,33 @@ typedef struct AstraFlexItem {
 
 /** One deterministic integer flex container filling its UI context. */
 typedef struct AstraFlexLayout {
+    /** Structure size for source-compatible extension. */
     uint32_t size;
+    /** `ASTRA_FLEX_ROW` or `ASTRA_FLEX_COLUMN`. */
     uint32_t direction;
+    /** Combination of layout flags such as `ASTRA_FLEX_WRAP`. */
     uint32_t flags;
+    /** ASTRA_FLEX_JUSTIFY_* main-axis policy. */
     uint32_t justify;
+    /** ASTRA_FLEX_ALIGN_* cross-axis policy. */
     uint32_t align_items;
+    /** Inner left padding in logical pixels. */
     uint32_t padding_left;
+    /** Inner top padding in logical pixels. */
     uint32_t padding_top;
+    /** Inner right padding in logical pixels. */
     uint32_t padding_right;
+    /** Inner bottom padding in logical pixels. */
     uint32_t padding_bottom;
+    /** Gap between items on the main axis. */
     uint32_t main_gap;
+    /** Gap between wrapped lines on the cross axis. */
     uint32_t cross_gap;
+    /** Must be zero. */
     uint32_t reserved[4];
 } AstraFlexLayout;
 
+/** Default row layout without padding, wrapping, or gaps. */
 #define ASTRA_FLEX_LAYOUT_INIT { \
     sizeof(AstraFlexLayout), ASTRA_FLEX_ROW, 0, \
     ASTRA_FLEX_JUSTIFY_START, ASTRA_FLEX_ALIGN_START, \
@@ -137,77 +167,113 @@ typedef struct AstraFlexLayout {
 
 /** Creation data copied into a nonvisual nested flex container. */
 typedef struct AstraContainerInfo {
+    /** Structure size for source-compatible extension. */
     uint32_t size;
+    /** Nonzero ID unique within the UI context. */
     uint32_t id;
+    /** Layout applied to this container's direct children. */
     AstraFlexLayout layout;
+    /** Must be zero. */
     uint32_t reserved[4];
 } AstraContainerInfo;
 
+/** Empty container creation data. */
 #define ASTRA_CONTAINER_INFO_INIT { \
     sizeof(AstraContainerInfo), 0, ASTRA_FLEX_LAYOUT_INIT, { 0, 0, 0, 0 } \
 }
 
 /** Signed client origin and nonnegative extent. */
 typedef struct AstraControlFrame {
+    /** Left edge in logical client coordinates. */
     int32_t x;
+    /** Top edge in logical client coordinates. */
     int32_t y;
+    /** Width in logical pixels. */
     uint32_t width;
+    /** Height in logical pixels. */
     uint32_t height;
 } AstraControlFrame;
 
 /** Preferred control extent produced by measurement. */
 typedef struct AstraControlSize {
+    /** Preferred width in logical pixels. */
     uint32_t width;
+    /** Preferred height in logical pixels. */
     uint32_t height;
 } AstraControlSize;
 
-/** Creation data copied into a retained label. */
+/** Label creation data; the retained UTF-8 text span remains caller-owned. */
 typedef struct AstraLabelInfo {
+    /** Structure size for source-compatible extension. */
     uint32_t size;
+    /** Nonzero ID unique within the UI context. */
     uint32_t id;
+    /** Borrowed validated UTF-8 bytes. */
     const char *text;
+    /** Counted bytes at @ref text, excluding any terminator. */
     uint32_t text_length;
+    /** ASTRA_TEXT_CLIENT_* hierarchy role. */
     uint32_t text_role;
+    /** Must be zero. */
     uint32_t reserved[4];
 } AstraLabelInfo;
 
+/** Empty primary-label creation data. */
 #define ASTRA_LABEL_INFO_INIT { \
     sizeof(AstraLabelInfo), 0, 0, 0, ASTRA_TEXT_CLIENT_PRIMARY, \
     { 0, 0, 0, 0 } \
 }
 
-/** Creation data copied into a retained button. */
+/** Button creation data; the retained UTF-8 text span remains caller-owned. */
 typedef struct AstraButtonInfo {
+    /** Structure size for source-compatible extension. */
     uint32_t size;
+    /** Nonzero ID unique within the UI context. */
     uint32_t id;
+    /** Borrowed validated UTF-8 bytes. */
     const char *text;
+    /** Counted bytes at @ref text, excluding any terminator. */
     uint32_t text_length;
+    /** ASTRA_BUTTON_* semantic variant. */
     uint32_t variant;
+    /** Application-owned ASTRA_CONTROL_* semantic state. */
     uint32_t state;
+    /** Optional preview state used by design and gallery tooling. */
     uint32_t preview_state;
+    /** Must be zero. */
     uint32_t reserved[4];
 } AstraButtonInfo;
 
+/** Empty standard-button creation data. */
 #define ASTRA_BUTTON_INFO_INIT { \
     sizeof(AstraButtonInfo), 0, 0, 0, ASTRA_BUTTON_STANDARD, 0, 0, \
     { 0, 0, 0, 0 } \
 }
 
-/** Creation data copied into a retained checkbox, radio, or switch. */
+/** Toggle creation data; the retained UTF-8 text span remains caller-owned. */
 typedef struct AstraToggleInfo {
+    /** Structure size for source-compatible extension. */
     uint32_t size;
+    /** Nonzero ID unique within the UI context. */
     uint32_t id;
+    /** Borrowed validated UTF-8 bytes. */
     const char *text;
+    /** Counted bytes at @ref text, excluding any terminator. */
     uint32_t text_length;
+    /** Application-owned ASTRA_CONTROL_* semantic state. */
     uint32_t state;
+    /** Nonzero mutual-exclusion group for radio controls. */
     uint32_t group_id;
+    /** Must be zero. */
     uint32_t reserved[4];
 } AstraToggleInfo;
 
+/** Empty toggle creation data. */
 #define ASTRA_TOGGLE_INFO_INIT { \
     sizeof(AstraToggleInfo), 0, 0, 0, 0, 0, { 0, 0, 0, 0 } \
 }
 
+/** Slider orientation. */
 enum {
     ASTRA_ORIENTATION_HORIZONTAL = 0u,
     ASTRA_ORIENTATION_VERTICAL = 1u
@@ -215,17 +281,27 @@ enum {
 
 /** Creation data copied into a retained slider. */
 typedef struct AstraRangeInfo {
+    /** Structure size for source-compatible extension. */
     uint32_t size;
+    /** Nonzero ID unique within the UI context. */
     uint32_t id;
+    /** Initial representable value. */
     int32_t value;
+    /** Inclusive minimum value. */
     int32_t minimum;
+    /** Inclusive maximum value. */
     int32_t maximum;
+    /** Positive snapping increment. */
     int32_t step;
+    /** ASTRA_ORIENTATION_* value. */
     uint32_t orientation;
+    /** Application-owned ASTRA_CONTROL_* semantic state. */
     uint32_t state;
+    /** Must be zero. */
     uint32_t reserved[4];
 } AstraRangeInfo;
 
+/** Empty horizontal slider spanning zero through one hundred. */
 #define ASTRA_RANGE_INFO_INIT { \
     sizeof(AstraRangeInfo), 0, 0, 0, 100, 1, \
     ASTRA_ORIENTATION_HORIZONTAL, 0, { 0, 0, 0, 0 } \
@@ -233,20 +309,28 @@ typedef struct AstraRangeInfo {
 
 /** Zero maximum selects indeterminate progress. */
 typedef struct AstraProgressInfo {
+    /** Structure size for source-compatible extension. */
     uint32_t size;
+    /** Nonzero ID unique within the UI context. */
     uint32_t id;
+    /** Completed units when @ref maximum is nonzero. */
     uint32_t value;
+    /** Total units, or zero for indeterminate progress. */
     uint32_t maximum;
+    /** Application-owned ASTRA_CONTROL_* semantic state. */
     uint32_t state;
+    /** Must be zero. */
     uint32_t reserved[4];
 } AstraProgressInfo;
 
+/** Empty indeterminate-progress creation data. */
 #define ASTRA_PROGRESS_INFO_INIT { \
     sizeof(AstraProgressInfo), 0, 0, 0, 0, { 0, 0, 0, 0 } \
 }
 
 /** Caller-owned retained control.  Private fields must not be modified. */
 typedef struct AstraControl {
+    /** @cond ASTRA_INTERNAL */
     uint32_t _private_structure_size;
     uint32_t _private_control_kind;
     uint32_t _private_id;
@@ -281,8 +365,10 @@ typedef struct AstraControl {
     uint32_t _private_next_sibling;
     AstraControlFrame _private_clip;
     AstraFlexLayout _private_child_layout;
+    /** @endcond */
 } AstraControl;
 
+/** Empty retained control state. */
 #define ASTRA_CONTROL_INIT { \
     sizeof(AstraControl), 0, 0, 0, 0, 0, 0, 0, 0, \
     { 0, 0, 0, 0 }, 0, 0, 0, 0, 1, ASTRA_FLEX_AUTO, 0, 0, \
@@ -293,6 +379,7 @@ typedef struct AstraControl {
 
 /** Caller-owned retained interaction and damage state. */
 typedef struct AstraUIContext {
+    /** @cond ASTRA_INTERNAL */
     uint32_t _private_structure_size;
     AstraControl *_private_controls;
     uint32_t _private_control_count;
@@ -312,14 +399,17 @@ typedef struct AstraUIContext {
     uint32_t _private_first_child;
     uint32_t _private_last_child;
     uint32_t _private_reserved;
+    /** @endcond */
 } AstraUIContext;
 
+/** Empty UI context state. */
 #define ASTRA_UI_CONTEXT_INIT { \
     sizeof(AstraUIContext), 0, 0, 0, 0, UINT32_MAX, UINT32_MAX, \
     UINT32_MAX, UINT32_MAX, { 0, 0, 0, 0 }, 0, ASTRA_FLEX_LAYOUT_INIT, 0, \
     0, 0, 0, UINT32_MAX, UINT32_MAX, 0 \
 }
 
+/** Semantic event results returned to application code. */
 enum {
     ASTRA_UI_ACTION_NONE = 0u,
     ASTRA_UI_ACTION_ACTIVATE = 1u,
@@ -328,13 +418,19 @@ enum {
 
 /** Semantic result emitted by a handled window event. */
 typedef struct AstraUIAction {
+    /** Structure size for source-compatible extension. */
     uint32_t size;
+    /** ASTRA_UI_ACTION_* result kind. */
     uint32_t type;
+    /** ID of the control that emitted the action. */
     uint32_t control_id;
+    /** Current value for `ASTRA_UI_ACTION_VALUE_CHANGED`. */
     int32_t value;
+    /** Must be zero. */
     uint32_t reserved[3];
 } AstraUIAction;
 
+/** Empty semantic action. */
 #define ASTRA_UI_ACTION_INIT { \
     sizeof(AstraUIAction), ASTRA_UI_ACTION_NONE, 0, 0, { 0, 0, 0 } \
 }

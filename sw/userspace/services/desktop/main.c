@@ -244,10 +244,9 @@ int astra_main(const AstraStartupInfo *startup)
         if (interface_handle == NULL) status = DESKTOP_FAIL_INTERFACE;
         else {
             interface_library = interface_handle->exports;
-            if (interface_library->abi_major !=
-                    ASTRA_INTERFACE_LIBRARY_ABI_MAJOR ||
-                interface_library->structure_size <
-                    sizeof(*interface_library))
+            if (!astra_interface_library_supports(
+                    interface_library, 0u,
+                    ASTRA_INTERFACE_LIBRARY_2_0_SIZE))
                 status = DESKTOP_FAIL_INTERFACE;
         }
     }

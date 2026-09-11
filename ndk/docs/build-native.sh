@@ -10,6 +10,14 @@ case "$target" in
         ;;
 esac
 
+ndk_version=$(sed -n \
+    's/^#define ASTRA_OS_VERSION_STRING "\([^"]*\)"/\1/p' \
+    include/astra/version.h)
+test -n "$ndk_version"
+export ASTRA_NDK_VERSION="$ndk_version"
+
+python3 tests/test_documentation.py
+
 mkdir -p build/docs
 mkdir -p "${XDG_CACHE_HOME:-/tmp/.cache}/fontconfig"
 rm -rf build/docs/doxygen

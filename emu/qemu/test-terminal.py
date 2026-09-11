@@ -80,6 +80,15 @@ INTERFACE_LAYOUT = re.compile(
     r"INTERFACE LAYOUT controls=([0-9a-f]{8}) "
     r"iterations=([0-9a-f]{8}) elapsed-ns=([0-9a-f]{16})")
 INTERFACE_LAYOUT_CASES = {12: 4096, 64: 1024, 256: 256}
+INTERFACE_UNDO = re.compile(
+    r"INTERFACE UNDO n=([0-9a-f]{8}) "
+    r"rec=([0-9a-f]{16}) undo=([0-9a-f]{16}) "
+    r"redo=([0-9a-f]{16}) bytes=([0-9a-f]{8})")
+INTERFACE_UNDO_OPERATIONS = 10000
+# The physical 69.874 MHz MC68040 baseline is 7.546 us/group for record,
+# 3.958 for undo, and 3.292 for redo.  The shared 12.5 us ceiling preserves
+# 39% headroom over the slowest phase while rejecting a material regression.
+INTERFACE_UNDO_MAX_NS_PER_OPERATION = 12_500
 # The physical 70 MHz MC68040 baseline is 6.90--7.55 us/control across the
 # three cases.  Ten microseconds preserves at least 32% scheduling headroom
 # while rejecting a material regression before layout becomes a visible part
@@ -624,7 +633,9 @@ def interface_layout_benchmark(machine, boot_deadline):
         print("FAIL: interface layout benchmark never reached the desktop")
         return False
     needles = tuple("INTERFACE LAYOUT controls=%08x" % count
-                    for count in INTERFACE_LAYOUT_CASES)
+                    for count in INTERFACE_LAYOUT_CASES) + (
+                        "INTERFACE UNDO n=%08x" %
+                        INTERFACE_UNDO_OPERATIONS,)
     lines, _ = machine.wait_for_text(needles, boot_deadline)
     if lines is None:
         print("FAIL: interface layout benchmark did not finish")
@@ -656,6 +667,33 @@ def interface_layout_benchmark(machine, boot_deadline):
         print("%3u controls  %5u reflows  %9.1f ns/reflow  %7.1f ns/control" %
               (count, iterations, elapsed / iterations,
                elapsed / (iterations * count)))
+    undo_results = []
+    for line in lines:
+        match = INTERFACE_UNDO.search(line)
+        if match is not None:
+            undo_results.append(tuple(int(value, 16)
+                                      for value in match.groups()))
+    if len(undo_results) != 1:
+        print("FAIL: missing or duplicate undo benchmark: %r" % undo_results)
+        for line in lines:
+            if "INTERFACE UNDO" in line:
+                print("    %s" % line)
+        return False
+    operations, record_ns, undo_ns, redo_ns, history_bytes = undo_results[0]
+    if operations != INTERFACE_UNDO_OPERATIONS or min(
+            record_ns, undo_ns, redo_ns, history_bytes) == 0:
+        print("FAIL: malformed undo benchmark: %r" % (undo_results[0],))
+        return False
+    if max(record_ns, undo_ns, redo_ns) > (
+            INTERFACE_UNDO_MAX_NS_PER_OPERATION * operations):
+        print("FAIL: undo exceeded %u ns/operation: %r" %
+              (INTERFACE_UNDO_MAX_NS_PER_OPERATION, undo_results[0]))
+        return False
+    print("%5u undo groups  record %7.1f ns/op  undo %7.1f ns/op  "
+          "redo %7.1f ns/op  %u bytes" %
+          (operations, record_ns / operations, undo_ns / operations,
+           redo_ns / operations, history_bytes))
+    print("ASTRA INTERFACE UNDO PASS")
     print("ASTRA INTERFACE LAYOUT PASS")
     return True
 

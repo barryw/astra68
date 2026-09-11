@@ -1,3 +1,4 @@
+/** @file result.h @brief Translation between syscall and NDK result codes. */
 #ifndef ASTRA_RESULT_H
 #define ASTRA_RESULT_H
 
@@ -5,6 +6,11 @@
 #include <astra/syscall.h>
 #include <astra/types.h>
 
+/**
+ * Translate a kernel syscall status into the stable NDK result vocabulary.
+ * @param status ASTRA_SYSCALL_* status.
+ * @return Corresponding AstraResult; unknown failures map to ASTRA_ERROR_IO.
+ */
 static inline AstraResult astra_result_from_syscall(uint32_t status)
 {
     switch (status) {
@@ -27,6 +33,11 @@ static inline AstraResult astra_result_from_syscall(uint32_t status)
     }
 }
 
+/**
+ * Translate a common service status into the stable NDK result vocabulary.
+ * @param status ASTRA_STATUS_* status.
+ * @return Corresponding AstraResult; unknown failures map to ASTRA_ERROR_IO.
+ */
 static inline AstraResult astra_result_from_service(uint32_t status)
 {
     switch (status) {

@@ -1,3 +1,4 @@
+/** @file vfs_union.h @brief Ordered union-assign filesystem operations. */
 #ifndef ASTRA_VFS_UNION_H
 #define ASTRA_VFS_UNION_H
 
@@ -14,82 +15,176 @@
  * process boundary rather than being a shell feature.
  */
 
-/*
+/**
  * Which client speaks for a member. A callback for the same reason the
  * transport is one: the supervisor maps an assign onto one of several clients
  * it owns, a launched program has one per handle it was granted, and neither
  * should be a special case inside the Kit.
+ * @param assign Borrowed namespace member.
+ * @param context Caller-owned resolver context.
+ * @return Borrowed connected client for `assign`, or NULL when unavailable.
  */
 typedef AstraVfsClient *(*AstraVfsAssignClientFn)(const AstraAssign *assign,
                                                   void *context);
 
+/** Directory traversal state spanning every member of a union assign. */
 typedef struct AstraVfsUnionDirectory {
-    const AstraAssignTable *table;
-    AstraVfsAssignClientFn client_for;
-    void *context;
-    char path[ASTRA_VFS_PATH_MAX];
-    uint64_t cursor;
-    AstraVfsClient *client;
-    AstraVfsFile file;
-    uint32_t member;
-    uint32_t worst;
-    uint8_t active;
-    uint8_t done;
+    const AstraAssignTable *table; /**< Borrowed process namespace. */
+    AstraVfsAssignClientFn client_for; /**< Member-to-client resolver. */
+    void *context; /**< Resolver context. */
+    char path[ASTRA_VFS_PATH_MAX]; /**< Assign-qualified UTF-8 path. */
+    uint64_t cursor; /**< Current member's directory cursor. */
+    AstraVfsClient *client; /**< Current member's borrowed client. */
+    AstraVfsFile file; /**< Current open directory handle. */
+    uint32_t member; /**< Current union member index. */
+    uint32_t worst; /**< Most informative error seen while scanning. */
+    uint8_t active; /**< Nonzero while one member is open. */
+    uint8_t done; /**< Nonzero after every member is exhausted. */
 } AstraVfsUnionDirectory;
 
+/** Static initializer for an unopened union-directory traversal. */
 #define ASTRA_VFS_UNION_DIRECTORY_INIT \
     { 0, 0, 0, { 0 }, 0, 0, ASTRA_VFS_FILE_INVALID, 0, \
       ASTRA_VFS_ERR_NOT_FOUND, 0, 0 }
 
+/**
+ * Resolve the first union member carrying the requested rights.
+ * @param table Process namespace.
+ * @param path Assign-qualified path.
+ * @param rights Required rights.
+ * @param client_for Member-to-client resolver.
+ * @param context Resolver context.
+ * @param wire Receives the mount-relative path.
+ * @param capacity Bytes available in `wire`.
+ * @param client Receives the borrowed member client.
+ * @param member Receives the union-member index.
+ * @return ASTRA_VFS_* status.
+ */
 uint32_t astra_vfs_assign_primary(
     const AstraAssignTable *table, const char *path, uint32_t rights,
     AstraVfsAssignClientFn client_for, void *context, char *wire,
     uint32_t capacity, AstraVfsClient **client, uint32_t *member);
 
+/**
+ * Read metadata through a union, following the final symbolic link.
+ * @param table Process namespace.
+ * @param path Assign-qualified path.
+ * @param rights Required rights.
+ * @param client_for Member-to-client resolver.
+ * @param context Resolver context.
+ * @param wire Receives the answering mount-relative path.
+ * @param capacity Bytes available in `wire`.
+ * @param entry Receives node metadata.
+ * @param client Receives the borrowed answering client.
+ * @param found_assign Receives the borrowed answering binding.
+ * @param member Receives the answering union-member index.
+ * @return ASTRA_VFS_* status.
+ */
 uint32_t astra_vfs_assign_stat(
     const AstraAssignTable *table, const char *path, uint32_t rights,
     AstraVfsAssignClientFn client_for, void *context, char *wire,
     uint32_t capacity, AstraVfsDirEntry *entry, AstraVfsClient **client,
     const AstraAssign **found_assign, uint32_t *member);
 
-/* Metadata for the named node itself; unlike stat, the final link is not followed. */
+/**
+ * Read metadata for a union node without following the final symbolic link.
+ * @param table Process namespace.
+ * @param path Assign-qualified path.
+ * @param rights Required rights.
+ * @param client_for Member-to-client resolver.
+ * @param context Resolver context.
+ * @param wire Receives the answering mount-relative path.
+ * @param capacity Bytes available in `wire`.
+ * @param entry Receives node metadata.
+ * @param client Receives the borrowed answering client.
+ * @param found_assign Receives the borrowed answering binding.
+ * @param member Receives the answering union-member index.
+ * @return ASTRA_VFS_* status.
+ */
 uint32_t astra_vfs_assign_lstat(
     const AstraAssignTable *table, const char *path, uint32_t rights,
     AstraVfsAssignClientFn client_for, void *context, char *wire,
     uint32_t capacity, AstraVfsDirEntry *entry, AstraVfsClient **client,
     const AstraAssign **found_assign, uint32_t *member);
 
-/* Resolve intermediate links and optionally the final component. */
+/**
+ * Resolve symbolic links while preserving the assign security boundary.
+ * @param table Process namespace.
+ * @param path Assign-qualified path.
+ * @param rights Required rights.
+ * @param follow_final Nonzero to follow the final component.
+ * @param allow_missing_final Nonzero to permit a missing final component.
+ * @param client_for Member-to-client resolver.
+ * @param context Resolver context.
+ * @param logical Receives the resolved assign-qualified path.
+ * @param capacity Bytes available in `logical`.
+ * @return ASTRA_VFS_* status.
+ */
 uint32_t astra_vfs_assign_resolve_links(
     const AstraAssignTable *table, const char *path, uint32_t rights,
     int follow_final, int allow_missing_final,
     AstraVfsAssignClientFn client_for, void *context, char *logical,
     uint32_t capacity);
 
-/* Resolve a create/rename destination once. An existing node returns its
- * serving union member; a missing final node returns the writable primary. */
+/**
+ * Resolve a create or rename destination exactly once.
+ * An existing node returns its serving member; a missing final node returns
+ * the writable primary.
+ * @param table Process namespace.
+ * @param path Assign-qualified destination.
+ * @param rights Required rights.
+ * @param follow_final Nonzero to follow an existing final link.
+ * @param client_for Member-to-client resolver.
+ * @param context Resolver context.
+ * @param logical Receives the resolved assign-qualified path.
+ * @param logical_capacity Bytes available in `logical`.
+ * @param wire Receives the mount-relative destination.
+ * @param wire_capacity Bytes available in `wire`.
+ * @param client Receives the borrowed destination client.
+ * @param member Receives the destination member index.
+ * @return ASTRA_VFS_* status.
+ */
 uint32_t astra_vfs_assign_destination(
     const AstraAssignTable *table, const char *path, uint32_t rights,
     int follow_final, AstraVfsAssignClientFn client_for, void *context,
     char *logical, uint32_t logical_capacity, char *wire,
     uint32_t wire_capacity, AstraVfsClient **client, uint32_t *member);
 
-/*
+/**
  * One directory walk for every caller. filesystem.library keeps its ABI by
  * adapting this state, while direct clients such as ls use it unchanged.
+ * @param table Process namespace.
+ * @param path Assign-qualified directory path.
+ * @param client_for Member-to-client resolver.
+ * @param context Resolver context.
+ * @param directory Traversal storage initialized on success.
+ * @return ASTRA_VFS_* status.
  */
 uint32_t astra_vfs_union_directory_open(
     const AstraAssignTable *table, const char *path,
     AstraVfsAssignClientFn client_for, void *context,
     AstraVfsUnionDirectory *directory);
 
+/**
+ * Read the next batch across union members in join order.
+ * @param directory Open traversal state.
+ * @param entries Receives at most `capacity` entries.
+ * @param capacity Number of entries available.
+ * @param count Receives entries written.
+ * @param member Receives the member that supplied the batch.
+ * @return ASTRA_VFS_* status; NOT_FOUND means traversal is complete.
+ */
 uint32_t astra_vfs_union_directory_read(
     AstraVfsUnionDirectory *directory, AstraVfsDirEntry *entries,
     uint32_t capacity, uint32_t *count, uint32_t *member);
 
+/**
+ * Close the active member and reset a union-directory traversal.
+ * @param directory Traversal state to close.
+ */
 void astra_vfs_union_directory_close(AstraVfsUnionDirectory *directory);
 
-/*
+/**
  * Tries each member in order and stops at the first that opens. `wire` receives
  * the path that answered and `*member` its index -- which is the answer to
  * "which one ran", held by the loop that found it rather than deduced
@@ -107,6 +202,20 @@ void astra_vfs_union_directory_close(AstraVfsUnionDirectory *directory);
  * something like ASTRA_VFS_ERR_IO -- a caller told "not found" when a device
  * actually failed has no reason to stop asking it. ASTRA_VFS_ERR_NOT_FOUND is
  * also what a name with no members at all returns.
+ * @param table Process namespace.
+ * @param path Assign-qualified path.
+ * @param rights Required rights.
+ * @param flags ASTRA_VFS_OPEN_* flags.
+ * @param client_for Member-to-client resolver.
+ * @param context Resolver context.
+ * @param wire Receives the answering mount-relative path.
+ * @param capacity Bytes available in `wire`.
+ * @param file Receives the open file token.
+ * @param size Receives byte length.
+ * @param kind Receives ASTRA_VFS_NODE_* kind.
+ * @param client Receives the borrowed answering client.
+ * @param member Receives the answering member index.
+ * @return ASTRA_VFS_* status.
  */
 uint32_t astra_vfs_assign_open(const AstraAssignTable *table, const char *path,
                                uint32_t rights, uint32_t flags,

@@ -450,6 +450,8 @@ def test_interface_library_objects_track_all_inputs():
     for target in (
         "build/m68k/interface_library.o",
         "build/m68k/control.o",
+        "build/m68k/text_surface.o",
+        "build/m68k/undo.o",
         "build/m68k/input_library.o",
     ):
         match = re.search(

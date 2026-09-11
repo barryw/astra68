@@ -74,6 +74,12 @@ files under `LIBS:`.
 its typed API provides high-level file/directory operations and the existing
 low-level VFS primitives without exposing storage-service internals.
 
+`astra/interface_kit.h` publishes the Interface Kit identity and append-only
+ABI table. Its controls, responsive layout, TextSurface, typed clipboard, and
+undo manager are documented in the generated Interface Kit guide. Checked
+examples cover the common control lifecycle, text copy/paste, and reversible
+document operations.
+
 ## Documentation
 
 Public API documentation is written with the declarations in `include/astra`.
@@ -92,12 +98,28 @@ documentation build uses a pinned container so developers and CI use the same
 Doxygen, Sphinx, Breathe, MyST, Furo, and LaTeX toolchain.
 
 Run `make -C ndk sdk` for the complete SDK gate: target library, host tests,
-sanitizers, static analysis, compiled example, HTML, and PDF. Documentation
-warnings are errors, including undocumented declarations and unresolved links.
+sanitizers, static analysis, compiled examples, OS-library contract tests, HTML,
+PDF, and a relocatable NDK archive. The archive is written as
+`ndk/build/dist/astra68-ndk-<astra-os-version>.tar.xz`; its NDK version is the
+Astra OS version by definition. `make -C ndk dist-check` also extracts that
+archive and links native C, POSIX C, and POSIX C++ programs using only its
+contents and the installed `m68k-astra` compiler.
+
+Documentation warnings are errors, including undocumented public structures,
+members, callbacks, declarations, parameters, return values, and unresolved
+links. Every shipped public header must explicitly participate in the gate.
+`make -C ndk docs-check`
+provides the focused documentation completeness gate; `make -C ndk certify`
+adds every existing host, sanitizer, analyzer, shared-library ABI, archive, and
+link contract owned by the NDK and its OS-library implementations.
 
 ## Compatibility policy
 
 - Public names and behavior are versioned NDK contracts.
+- The NDK and Astra OS always use the same SemVer from `astra/version.h`;
+  neither may be versioned independently.
+- Libraries follow semantic versioning: major breaks compatibility, minor adds
+  append-only features, and patch fixes behavior without changing the ABI.
 - Public structures use fixed-width fields and reserve room before incompatible
   growth is considered.
 - Hardware addresses, register offsets, and volatile register structures are

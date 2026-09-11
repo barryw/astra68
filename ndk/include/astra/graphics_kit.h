@@ -13,9 +13,13 @@
 #include <astra/shared_library.h>
 #include <astra/surface.h>
 
+/** Logical name of the Font Kit shared library. */
 #define ASTRA_FONT_LIBRARY_NAME "font.library"
+/** Minimum compatible Font Kit major version. */
 #define ASTRA_FONT_LIBRARY_VERSION 2u
+/** Logical name of the Graphics Kit shared library. */
 #define ASTRA_GRAPHICS_LIBRARY_NAME "graphics.library"
+/** Minimum compatible Graphics Kit major version. */
 #define ASTRA_GRAPHICS_LIBRARY_VERSION 2u
 
 #endif

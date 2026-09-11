@@ -21,7 +21,7 @@ LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
 	-T $(RUNTIME)/astra_library.ld
 INTERFACE_TARGET := build/m68k/libraries/interface.library
 INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
-	build/m68k/text_surface.o
+	build/m68k/text_surface.o build/m68k/undo.o
 INPUT_TARGET := build/m68k/libraries/input.library
 INPUT_OBJECTS := build/m68k/input_library.o
 GRAPHICS_PIC_LIB := $(GRAPHICS)/build/m68k/libastragraphics-pic.a
@@ -31,6 +31,7 @@ RUNTIME_PIC_LIB := $(RUNTIME)/build/m68k/libastrart-pic.a
 INTERFACE_HOST_TEST := build/host/test_interface
 INPUT_HOST_TEST := build/host/test_input_library
 TEXT_SURFACE_HOST_TEST := build/host/test_text_surface
+UNDO_HOST_TEST := build/host/test_undo
 
 all: $(INTERFACE_TARGET) $(INPUT_TARGET) library-contract
 
@@ -59,6 +60,11 @@ build/m68k/text_surface.o: src/text_surface.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated $(COMMON_FLAGS) \
 		$(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+build/m68k/undo.o: src/undo.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
 
 build/m68k/input_library.o: src/input_library.c
 	@mkdir -p $(@D)
@@ -94,7 +100,7 @@ $(INPUT_TARGET): $(INPUT_OBJECTS) $(NDK_PIC_LIB) $(RUNTIME_PIC_LIB) \
 
 library-contract: $(INTERFACE_TARGET) $(INPUT_TARGET)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library 2.4.0 ABI 2.4$$'
+		grep -q '^interface.library 2.5.0 ABI 2.5$$'
 	@python3 ../../../tools/library_info.py $(INPUT_TARGET) | \
 		grep -q '^input.library 1.0.0 ABI 1.0$$'
 	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET) $(INPUT_TARGET))
@@ -116,13 +122,20 @@ $(TEXT_SURFACE_HOST_TEST): src/text_surface.c tests/test_text_surface.c \
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/text_surface.c $(NDK_HOST_UTF8) tests/test_text_surface.c -o $@
 
+$(UNDO_HOST_TEST): src/undo.c tests/test_undo.c $(NDK_HOST_UTF8)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/undo.c $(NDK_HOST_UTF8) tests/test_undo.c -o $@
+
 $(NDK_HOST_UTF8):
 	$(MAKE) -C $(NDK) build/host/utf8.o
 
-test: $(INTERFACE_HOST_TEST) $(INPUT_HOST_TEST) $(TEXT_SURFACE_HOST_TEST)
+test: $(INTERFACE_HOST_TEST) $(INPUT_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
+		$(UNDO_HOST_TEST)
 	./$(INTERFACE_HOST_TEST)
 	./$(INPUT_HOST_TEST)
 	./$(TEXT_SURFACE_HOST_TEST)
+	./$(UNDO_HOST_TEST)
 
 sanitize: $(NDK_HOST_UTF8)
 	@mkdir -p build/host
@@ -141,6 +154,10 @@ sanitize: $(NDK_HOST_UTF8)
 		$(SANITIZER_FLAGS) src/text_surface.c $(NDK_HOST_UTF8) \
 		tests/test_text_surface.c -o build/host/test_text_surface_sanitize
 	./build/host/test_text_surface_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/undo.c $(NDK_HOST_UTF8) tests/test_undo.c \
+		-o build/host/test_undo_sanitize
+	./build/host/test_undo_sanitize
 
 analyze:
 	@mkdir -p build/analyzer
@@ -152,6 +169,8 @@ analyze:
 		-c src/text_surface.c -o build/analyzer/text_surface.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/input_library.c -o build/analyzer/input_library.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/undo.c -o build/analyzer/undo.o
 
 clean:
 	rm -rf build

@@ -11,6 +11,7 @@ case "$target" in
 esac
 
 ndk_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+repo_dir=$(dirname "$ndk_dir")
 
 if [ "${ASTRA_NDK_DOCS_NATIVE:-0}" = 1 ]; then
     cd "$ndk_dir"
@@ -25,6 +26,6 @@ exec docker run --rm \
     --user "$(id -u):$(id -g)" \
     --env HOME=/tmp \
     --env XDG_CACHE_HOME=/tmp/.cache \
-    --volume "$ndk_dir:/workspace" \
-    --workdir /workspace \
+    --volume "$repo_dir:/workspace" \
+    --workdir /workspace/ndk \
     "$image" sh docs/build-native.sh "$target"

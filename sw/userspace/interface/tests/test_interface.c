@@ -1,4 +1,5 @@
 #include <astra/interface.h>
+#include <astra/interface_library.h>
 #include <astra/control.h>
 #include <astra/draw_list.h>
 #include <astra/input_modifiers.h>
@@ -25,6 +26,28 @@ static uint32_t fill_height[32];
 static uint16_t render_pixels[320u * 200u];
 static uint32_t fill_calls;
 static uint32_t text_calls;
+
+static void test_interface_library_semver(void)
+{
+    AstraInterfaceLibraryV2 library = {0};
+
+    library.abi_major = 2u;
+    library.abi_minor = 4u;
+    library.structure_size = ASTRA_INTERFACE_LIBRARY_2_4_SIZE;
+    assert(astra_interface_library_supports(
+        &library, 4u, ASTRA_INTERFACE_LIBRARY_2_4_SIZE));
+    assert(!astra_interface_library_supports(
+        &library, 5u, ASTRA_INTERFACE_LIBRARY_2_5_SIZE));
+    library.abi_minor = 5u;
+    library.structure_size = ASTRA_INTERFACE_LIBRARY_2_5_SIZE;
+    assert(astra_interface_library_supports(
+        &library, 4u, ASTRA_INTERFACE_LIBRARY_2_4_SIZE));
+    assert(astra_interface_library_supports(
+        &library, 5u, ASTRA_INTERFACE_LIBRARY_2_5_SIZE));
+    library.abi_major = 3u;
+    assert(!astra_interface_library_supports(
+        &library, 5u, ASTRA_INTERFACE_LIBRARY_2_5_SIZE));
+}
 
 static uint16_t theme_color(AstraColorRGBA8 value)
 {
@@ -906,6 +929,7 @@ int main(void)
     static const char malformed_utf8[] = {(char)0xed, (char)0xa0, (char)0x80};
     AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
 
+    test_interface_library_semver();
     info.title = "Error";
     info.title_length = 5u;
     info.message = "Could not launch application.";

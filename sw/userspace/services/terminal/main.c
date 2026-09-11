@@ -160,9 +160,8 @@ static uint32_t load_interface_kits(void)
     if (interface_handle == NULL)
         return TERMINAL_FAIL_LIBRARY;
     interface_library = interface_handle->exports;
-    if (interface_library->abi_major != ASTRA_INTERFACE_LIBRARY_ABI_MAJOR ||
-        interface_library->abi_minor < ASTRA_INTERFACE_LIBRARY_ABI_MINOR ||
-        interface_library->structure_size < sizeof(*interface_library))
+    if (!astra_interface_library_supports(
+            interface_library, 4u, ASTRA_INTERFACE_LIBRARY_2_4_SIZE))
         return TERMINAL_FAIL_LIBRARY;
 
     graphics_handle = OpenLibrary(ASTRA_GRAPHICS_LIBRARY_NAME,

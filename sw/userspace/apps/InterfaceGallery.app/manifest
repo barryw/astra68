@@ -8,4 +8,4 @@ icon resources/InterfaceGallery.aicon
 capability GUI
 capability LIBS:r
 requires graphics.library 2 2.0.0
-requires interface.library 2 2.0.0
+requires interface.library 2 2.5.0

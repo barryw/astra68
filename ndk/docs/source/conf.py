@@ -1,13 +1,20 @@
 from pathlib import Path
+import re
 
 
 NDK_ROOT = Path(__file__).resolve().parents[2]
+VERSION_HEADER = (NDK_ROOT / "include/astra/version.h").read_text()
+VERSION_MATCH = re.search(
+    r'^#define ASTRA_OS_VERSION_STRING "([^"]+)"$',
+    VERSION_HEADER, re.MULTILINE)
+if VERSION_MATCH is None:
+    raise RuntimeError("missing Astra OS version")
 
 project = "Astra 68 NDK"
 author = "Astra 68 Project"
 copyright = "2026, Astra 68 Project"
-release = "0.1.0"
-version = "0.1"
+release = VERSION_MATCH.group(1)
+version = ".".join(release.split(".")[:2])
 
 extensions = [
     "breathe",

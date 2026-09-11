@@ -57,7 +57,10 @@ bool astra_datetime_now(AstraDateTime *out);
 size_t astra_datetime_format(const AstraCivilTime *civil, const char *format,
                              char *out, size_t capacity);
 
-/** Seconds since the epoch, for a program that wants the number. */
+/** Seconds since the epoch, for a program that wants the number.
+ * @param seconds Receives UTC seconds since the Unix epoch.
+ * @return true when the machine knows the date; false otherwise.
+ */
 bool astra_datetime_unix_seconds(uint64_t *seconds);
 
 #endif

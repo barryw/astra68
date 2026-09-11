@@ -17,6 +17,8 @@
 #define GALLERY_HEIGHT 400u
 #define GALLERY_CONTROL_COUNT 26u
 #define GALLERY_BENCHMARK_CONTROL_MAX 256u
+#define GALLERY_UNDO_BENCHMARK_OPERATIONS 10000u
+#define GALLERY_UNDO_ARENA_BYTES (1024u * 1024u)
 
 enum {
     GALLERY_LABEL = 1u,
@@ -66,6 +68,7 @@ static AstraSharedSurface surface;
 static AstraWindow window = ASTRA_WINDOW_INIT;
 static AstraControl controls[GALLERY_CONTROL_COUNT];
 static AstraControl benchmark_controls[GALLERY_BENCHMARK_CONTROL_MAX];
+static _Alignas(4) uint8_t undo_benchmark_arena[GALLERY_UNDO_ARENA_BYTES];
 static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
 static AstraProcessFilesystem process_filesystem =
     ASTRA_PROCESS_FILESYSTEM_INIT;
@@ -109,6 +112,26 @@ static void report_layout(uint32_t count, uint32_t iterations,
     at = append_hex32(line, at, iterations);
     at = append(line, at, " elapsed-ns=");
     at = append_hex64(line, at, elapsed);
+    line[at] = '\0';
+    (void)astra_log(line);
+}
+
+static void report_undo(uint64_t record_elapsed, uint64_t undo_elapsed,
+                        uint64_t redo_elapsed, uint32_t history_bytes)
+{
+    char line[176];
+    uint32_t at = 0u;
+
+    at = append(line, at, "INTERFACE UNDO n=");
+    at = append_hex32(line, at, GALLERY_UNDO_BENCHMARK_OPERATIONS);
+    at = append(line, at, " rec=");
+    at = append_hex64(line, at, record_elapsed);
+    at = append(line, at, " undo=");
+    at = append_hex64(line, at, undo_elapsed);
+    at = append(line, at, " redo=");
+    at = append_hex64(line, at, redo_elapsed);
+    at = append(line, at, " bytes=");
+    at = append_hex32(line, at, history_bytes);
     line[at] = '\0';
     (void)astra_log(line);
 }
@@ -420,6 +443,89 @@ static uint32_t benchmark_layouts(void)
     return status;
 }
 
+typedef struct GalleryUndoChange {
+    uint32_t before;
+    uint32_t after;
+} GalleryUndoChange;
+
+static uint32_t undo_benchmark_value;
+
+static AstraResult apply_undo_benchmark(void *context, uint32_t operation,
+                                        uint32_t direction,
+                                        const void *payload,
+                                        uint32_t payload_bytes)
+{
+    const GalleryUndoChange *change = payload;
+    uint32_t *value = context;
+
+    if (value == NULL || operation != 1u || change == NULL ||
+        payload_bytes != sizeof(*change) ||
+        (direction != ASTRA_UNDO_DIRECTION_UNDO &&
+         direction != ASTRA_UNDO_DIRECTION_REDO))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *value = direction == ASTRA_UNDO_DIRECTION_UNDO ?
+        change->before : change->after;
+    return ASTRA_OK;
+}
+
+static uint32_t benchmark_undo(void)
+{
+    AstraUndoManager manager = ASTRA_UNDO_MANAGER_INIT;
+    AstraUndoManagerInfo manager_info = ASTRA_UNDO_MANAGER_INFO_INIT;
+    AstraUndoState state = ASTRA_UNDO_STATE_INIT;
+    uint64_t started;
+    uint64_t record_elapsed;
+    uint64_t undo_elapsed;
+    uint64_t redo_elapsed;
+
+    manager_info.arena = undo_benchmark_arena;
+    manager_info.arena_bytes = sizeof(undo_benchmark_arena);
+    manager_info.apply = apply_undo_benchmark;
+    manager_info.context = &undo_benchmark_value;
+    if (interface_library->undo_init(&manager, &manager_info) != ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
+    started = astra_clock_monotonic();
+    for (uint32_t index = 0u;
+         index < GALLERY_UNDO_BENCHMARK_OPERATIONS; ++index) {
+        GalleryUndoChange change = {index, index + 1u};
+        AstraUndoAction action = ASTRA_UNDO_ACTION_INIT;
+        AstraUndoGroupInfo group = ASTRA_UNDO_GROUP_INFO_INIT;
+
+        action.operation = 1u;
+        action.payload = &change;
+        action.payload_bytes = sizeof(change);
+        group.actions = &action;
+        group.action_count = 1u;
+        if (interface_library->undo_perform_group(&manager, &group) !=
+            ASTRA_OK)
+            return GALLERY_FAIL_CONTROL;
+    }
+    record_elapsed = astra_clock_monotonic() - started;
+    if (undo_benchmark_value != GALLERY_UNDO_BENCHMARK_OPERATIONS)
+        return GALLERY_FAIL_CONTROL;
+    started = astra_clock_monotonic();
+    for (uint32_t index = 0u;
+         index < GALLERY_UNDO_BENCHMARK_OPERATIONS; ++index)
+        if (interface_library->undo_undo(&manager) != ASTRA_OK)
+            return GALLERY_FAIL_CONTROL;
+    undo_elapsed = astra_clock_monotonic() - started;
+    if (undo_benchmark_value != 0u)
+        return GALLERY_FAIL_CONTROL;
+    started = astra_clock_monotonic();
+    for (uint32_t index = 0u;
+         index < GALLERY_UNDO_BENCHMARK_OPERATIONS; ++index)
+        if (interface_library->undo_redo(&manager) != ASTRA_OK)
+            return GALLERY_FAIL_CONTROL;
+    redo_elapsed = astra_clock_monotonic() - started;
+    if (undo_benchmark_value != GALLERY_UNDO_BENCHMARK_OPERATIONS ||
+        interface_library->undo_get_state(&manager, &state) != ASTRA_OK ||
+        state.group_count != GALLERY_UNDO_BENCHMARK_OPERATIONS)
+        return GALLERY_FAIL_CONTROL;
+    report_undo(record_elapsed, undo_elapsed, redo_elapsed,
+                state.history_bytes);
+    return ASTRA_STATUS_OK;
+}
+
 static uint32_t paint(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -442,8 +548,8 @@ static uint32_t load_libraries(void)
     if (graphics_library == NULL || interface_library == NULL ||
         graphics_library->abi_major != ASTRA_GRAPHICS_LIBRARY_ABI_MAJOR ||
         graphics_library->structure_size < sizeof(*graphics_library) ||
-        interface_library->abi_major != ASTRA_INTERFACE_LIBRARY_ABI_MAJOR ||
-        interface_library->structure_size < sizeof(*interface_library))
+        !astra_interface_library_supports(
+            interface_library, 5u, ASTRA_INTERFACE_LIBRARY_2_5_SIZE))
         return GALLERY_FAIL_LIBRARY;
     return ASTRA_STATUS_OK;
 }
@@ -584,6 +690,8 @@ int astra_main(const AstraStartupInfo *startup)
         status = build_controls();
     if (status == ASTRA_STATUS_OK)
         status = benchmark_layouts();
+    if (status == ASTRA_STATUS_OK)
+        status = benchmark_undo();
     if (status == ASTRA_STATUS_OK)
         status = create_window(gui->handle);
     if (status == ASTRA_STATUS_OK)

@@ -1,11 +1,13 @@
 #ifndef ASTRA_EVENT_CATALOG_H
 #define ASTRA_EVENT_CATALOG_H
 
+/** @file event_catalog.h @brief Constant-time structured-event catalog. */
+
 #include <stdint.h>
 
 #include <astra/event_descriptor.h>
 
-/*
+/**
  * The catalog, on the machine.
  *
  * The file is the `.astra_events` section's bytes verbatim -- what
@@ -25,13 +27,14 @@
  * machine, where a byte swap costs nothing anybody notices.
  */
 
+/** Borrowed, constant-time view of an Astra event descriptor catalog. */
 typedef struct AstraEventCatalog {
-    const AstraEventDescriptor *records;
-    uint32_t count;
-    uint32_t base;   /* the message id of records[0] */
+    const AstraEventDescriptor *records; /**< Borrowed descriptor array. */
+    uint32_t count; /**< Descriptor count. */
+    uint32_t base; /**< Message identifier of records[0]. */
 } AstraEventCatalog;
 
-/*
+/**
  * Adopts `bytes` in place; nothing is copied and the caller keeps it alive.
  * Refuses a length that is not a whole number of descriptors, a buffer that
  * does not meet the descriptor's own alignment, or a first record whose magic
@@ -42,15 +45,24 @@ typedef struct AstraEventCatalog {
  * Returns 1 on success and 0 on refusal, leaving an empty catalog behind: a
  * reader with no catalog shows ids, which is honest, rather than text it made
  * up.
+ * @param catalog Catalog view to initialize.
+ * @param bytes Aligned serialized descriptor bytes retained by the caller.
+ * @param size Byte size of @p bytes.
+ * @param base Message identifier assigned to the first descriptor.
+ * @return Nonzero on success; zero when the catalog is invalid.
  */
 int astra_event_catalog_init(AstraEventCatalog *catalog, const void *bytes,
                              uint32_t size, uint32_t base);
 
-/* The descriptor for `message`, or NULL when the id is not this catalog's. */
+/** Find the descriptor for a message identifier.
+ * @param catalog Initialized catalog view.
+ * @param message Message identifier to find.
+ * @return Descriptor, or NULL when @p message is outside this catalog.
+ */
 const AstraEventDescriptor *
 astra_event_catalog_lookup(const AstraEventCatalog *catalog, uint32_t message);
 
-/*
+/**
  * Renders one occurrence into `out`, always NUL-terminated, and returns the
  * length written.
  *
@@ -62,6 +74,14 @@ astra_event_catalog_lookup(const AstraEventCatalog *catalog, uint32_t message);
  *
  * An unknown catalog, or an id it does not hold, renders as the id itself.
  * That is the honest answer and it is still enough to grep for.
+ * @param catalog Catalog used to resolve @p message.
+ * @param message Message identifier.
+ * @param flags Event record flags.
+ * @param payload Packed event payload.
+ * @param payload_length Bytes in @p payload.
+ * @param out Destination string buffer.
+ * @param capacity Bytes available at @p out.
+ * @return Characters written, excluding the terminating NUL.
  */
 uint32_t astra_event_catalog_render(const AstraEventCatalog *catalog,
                                     uint32_t message, uint16_t flags,

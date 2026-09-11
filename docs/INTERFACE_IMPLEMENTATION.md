@@ -31,7 +31,7 @@ order needed to finish the complete design without application-private UI.
 | Retained layout | all | nested row/column/wrap containers, intrinsic measurement, reflow, clipping | complete; physical ABI-2 gate passed |
 | Primitive controls | 1d, 4a | label, button, field, check, radio, switch, slider, stepper, popup, combo, segmented, tags, disclosure, progress | label/button/check/radio/switch/slider/progress complete |
 | Collection controls | 1d, 2b, 4a | scroll model, scrollbar, splitter, tabs, list, tree, table, grid, columns, toolbar, status, pagination | pending |
-| TextSurface | 7a-7b | shared UTF-8 model, grid/code/flow layout, runs, gutters, overlays, caret, selection, undo, find, clipboard, scrollback | grid renderer, selection paint/hit test/extraction, typed clipboard, and Terminal copy/paste accepted; undo, find, scrollback, wide cells, and code/flow layout pending |
+| TextSurface | 7a-7b | shared UTF-8 model, grid/code/flow layout, runs, gutters, overlays, caret, selection, undo, find, clipboard, scrollback | grid renderer, selection paint/hit test/extraction, typed clipboard, Terminal copy/paste, and shared undo/redo accepted; find, scrollback, wide cells, and code/flow layout pending |
 | Input vocabulary | 6a-6b | keymap-selected Meta labels and immutable system/workspace/app shortcut tiers | input service emits one normalized Meta bit; detection, override, labels, and shortcut tiers pending |
 | Command model | 1e, 2a, 6b | stable IDs, typed arguments, state, metadata, asynchronous invocation; shared by menus, palette, toolbar, scripting | pending |
 | Menus and palette | 1e, 2a, 3a | persistent application strip, skeleton menus, command palette, system escape shortcuts | pending |
@@ -84,7 +84,7 @@ the DE25 without weakening the existing frame or layout budgets.
   surface, arrow keys select a result, and Enter invokes the shared open
   command.
 
-`interface.library` 2.4 owns the first TextSurface layer: validated fixed-grid
+`interface.library` 2.5 owns the first TextSurface layer: validated fixed-grid
 UTF-8 cells, logical color resolution, background/style runs, synthetic
 bold/italic, metric underline/strikeout, blink/hidden/faint/inverse state,
 carets, normalized half-open selection painting/hit testing, and hardware-blit
@@ -107,6 +107,19 @@ pointer-selection/Meta-C/Meta-V/zsh execution gate are accepted in release
 Scrollback, find, wide-cell behavior, and
 code/flow layout remain unfinished and must land in TextSurface rather than
 Terminal.
+
+The same library now owns one reusable undo/redo implementation for every
+document-oriented application. A caller supplies an arena and serializable
+typed action payloads; there is no independent action, group, or transaction
+ceiling. Groups are applied transactionally, partially applied groups are
+compensated, a failed compensation poisons the history rather than claiming a
+false state, and a larger non-overlapping arena can replace the original
+without losing history. Named undo/redo menu state, save-point dirty tracking,
+redo-branch invalidation, bounded-time coalescing, payload wiping, and callback
+reentrancy rejection are covered by normal, sanitizer, analyzer, and MC68040
+build gates. The physical 69.874 MHz MC68040 measured 7.546 microseconds per
+apply-and-record group, 3.958 microseconds per undo, and 3.292 microseconds per
+redo across 10,000 groups, inside the retained 12.5-microsecond phase gate.
 
 The fixed-grid source cutover is physically accepted at commit `b36a784` in
 immutable DE25 release

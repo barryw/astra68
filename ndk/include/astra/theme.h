@@ -17,8 +17,11 @@ ASTRA_EXTERN_C_BEGIN
 
 /** Native strike sizes selected by the immutable Astra 0.1 theme. */
 #define ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT UINT16_C(11)
+/** Native system-title font height in pixels. */
 #define ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT UINT16_C(13)
+/** Native terminal/code font height in pixels. */
 #define ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT UINT16_C(16)
+/** Native terminal/code cell width in pixels. */
 #define ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH UINT16_C(8)
 
 /**
@@ -27,58 +30,58 @@ ASTRA_EXTERN_C_BEGIN
  * or control geometry in individual windows.
  */
 typedef struct AstraTheme {
-    uint32_t size;
-    uint32_t generation;
-    AstraColorRGBA8 canvas;
-    AstraColorRGBA8 system_bar;
-    AstraColorRGBA8 frame;
-    AstraColorRGBA8 title_active;
-    AstraColorRGBA8 title_inactive;
-    AstraColorRGBA8 client;
-    AstraColorRGBA8 control;
-    AstraColorRGBA8 control_hover;
-    AstraColorRGBA8 control_pressed;
-    AstraColorRGBA8 text_primary;
-    AstraColorRGBA8 text_secondary;
-    AstraColorRGBA8 text_tertiary;
-    AstraColorRGBA8 text_muted;
-    AstraColorRGBA8 client_text;
-    AstraColorRGBA8 client_text_secondary;
-    AstraColorRGBA8 surface_raised;
-    AstraColorRGBA8 surface_inset;
-    AstraColorRGBA8 border_soft;
-    AstraColorRGBA8 border_emphasis;
-    AstraColorRGBA8 client_border;
-    AstraColorRGBA8 accent;
-    AstraColorRGBA8 accent_text;
-    AstraColorRGBA8 warning;
-    AstraColorRGBA8 fault;
-    AstraColorRGBA8 control_disabled;
-    AstraColorRGBA8 control_selected;
-    AstraColorRGBA8 control_error;
-    AstraColorRGBA8 control_focus;
-    uint16_t scale;
-    uint16_t body_font_height;
-    uint16_t title_font_height;
-    uint16_t mono_font_height;
-    uint16_t mono_cell_width;
-    uint16_t control_font_height;
-    uint16_t spacing_unit;
-    uint16_t window_radius;
-    uint16_t frame_width;
-    uint16_t titlebar_height;
-    uint16_t utility_titlebar_height;
-    uint16_t signal_height;
-    uint16_t gadget_extent;
-    uint16_t gadget_glyph;
-    uint16_t control_radius;
-    uint16_t card_radius;
-    uint16_t resize_hit;
-    uint16_t control_height;
-    uint16_t control_padding_x;
-    uint16_t control_border_width;
-    uint16_t focus_width;
-    uint32_t reserved[4];
+    uint32_t size; /**< Caller-visible structure size. */
+    uint32_t generation; /**< Theme generation identifier. */
+    AstraColorRGBA8 canvas; /**< Desktop canvas. */
+    AstraColorRGBA8 system_bar; /**< System bar background. */
+    AstraColorRGBA8 frame; /**< Window frame. */
+    AstraColorRGBA8 title_active; /**< Active title bar. */
+    AstraColorRGBA8 title_inactive; /**< Inactive title bar. */
+    AstraColorRGBA8 client; /**< Window client background. */
+    AstraColorRGBA8 control; /**< Normal control surface. */
+    AstraColorRGBA8 control_hover; /**< Hovered control surface. */
+    AstraColorRGBA8 control_pressed; /**< Pressed control surface. */
+    AstraColorRGBA8 text_primary; /**< Primary text. */
+    AstraColorRGBA8 text_secondary; /**< Secondary text. */
+    AstraColorRGBA8 text_tertiary; /**< Tertiary text. */
+    AstraColorRGBA8 text_muted; /**< Muted text. */
+    AstraColorRGBA8 client_text; /**< Primary client-area text. */
+    AstraColorRGBA8 client_text_secondary; /**< Secondary client text. */
+    AstraColorRGBA8 surface_raised; /**< Raised surface. */
+    AstraColorRGBA8 surface_inset; /**< Inset surface. */
+    AstraColorRGBA8 border_soft; /**< Low-emphasis border. */
+    AstraColorRGBA8 border_emphasis; /**< High-emphasis border. */
+    AstraColorRGBA8 client_border; /**< Client-area border. */
+    AstraColorRGBA8 accent; /**< Accent and selection fill. */
+    AstraColorRGBA8 accent_text; /**< Text displayed over accent. */
+    AstraColorRGBA8 warning; /**< Warning state. */
+    AstraColorRGBA8 fault; /**< Fault state. */
+    AstraColorRGBA8 control_disabled; /**< Disabled control. */
+    AstraColorRGBA8 control_selected; /**< Selected control. */
+    AstraColorRGBA8 control_error; /**< Invalid control. */
+    AstraColorRGBA8 control_focus; /**< Keyboard focus indicator. */
+    uint16_t scale; /**< Logical UI scale. */
+    uint16_t body_font_height; /**< Body font pixel height. */
+    uint16_t title_font_height; /**< Window-title font pixel height. */
+    uint16_t mono_font_height; /**< Monospace font pixel height. */
+    uint16_t mono_cell_width; /**< Monospace cell pixel width. */
+    uint16_t control_font_height; /**< Control-label font pixel height. */
+    uint16_t spacing_unit; /**< Base layout spacing unit. */
+    uint16_t window_radius; /**< Window corner radius. */
+    uint16_t frame_width; /**< Window frame width. */
+    uint16_t titlebar_height; /**< Standard title-bar height. */
+    uint16_t utility_titlebar_height; /**< Utility title-bar height. */
+    uint16_t signal_height; /**< Active-window signal height. */
+    uint16_t gadget_extent; /**< Window gadget hit-box extent. */
+    uint16_t gadget_glyph; /**< Window gadget glyph extent. */
+    uint16_t control_radius; /**< Control corner radius. */
+    uint16_t card_radius; /**< Card corner radius. */
+    uint16_t resize_hit; /**< Resize-edge hit width. */
+    uint16_t control_height; /**< Standard control height. */
+    uint16_t control_padding_x; /**< Horizontal control padding. */
+    uint16_t control_border_width; /**< Control border width. */
+    uint16_t focus_width; /**< Keyboard focus-ring width. */
+    uint32_t reserved[4]; /**< Must be zero. */
 } AstraTheme;
 
 /** The sole Astra 0.1 theme. Runtime theme selection is not yet exposed. */

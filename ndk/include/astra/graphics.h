@@ -262,9 +262,11 @@ typedef struct AstraFence {
 #define ASTRA_PRESENT_OPTIONS_INIT \
     { sizeof(AstraPresentOptions), 0, 0, 0, 0, 0, \
       { 0, 0, 0, 0 } }
+/** Initializer for ::AstraDisplayMode. */
 #define ASTRA_DISPLAY_MODE_INIT \
     { sizeof(AstraDisplayMode), ASTRA_DISPLAY_SCALE_AUTO, 0, 0, \
       { 0, 0, 0, 0 } }
+/** Initializer for ::AstraHardwarePointerImage. */
 #define ASTRA_HARDWARE_POINTER_IMAGE_INIT \
     { sizeof(AstraHardwarePointerImage), 0, 0, 0, 0, { 0, 0 }, \
       { 0, 0, 0, 0 } }
@@ -334,16 +336,16 @@ typedef struct AstraDisplayMode {
 
 /** Exact crop and viewport generated for the hardware scaler. */
 typedef struct AstraDisplayLayout {
-    uint16_t source_width;
-    uint16_t source_height;
-    uint16_t crop_x;
-    uint16_t crop_y;
-    uint16_t crop_width;
-    uint16_t crop_height;
-    uint16_t viewport_x;
-    uint16_t viewport_y;
-    uint16_t viewport_width;
-    uint16_t viewport_height;
+    uint16_t source_width; /**< Logical source width. */
+    uint16_t source_height; /**< Logical source height. */
+    uint16_t crop_x; /**< Source crop x. */
+    uint16_t crop_y; /**< Source crop y. */
+    uint16_t crop_width; /**< Source crop width. */
+    uint16_t crop_height; /**< Source crop height. */
+    uint16_t viewport_x; /**< Physical viewport x. */
+    uint16_t viewport_y; /**< Physical viewport y. */
+    uint16_t viewport_width; /**< Physical viewport width. */
+    uint16_t viewport_height; /**< Physical viewport height. */
 } AstraDisplayLayout;
 
 /** Copied native-resolution hardware-pointer image. */
@@ -596,19 +598,24 @@ ASTRA_NODISCARD AstraResult astra_display_close(AstraDisplay *display);
  *
  * The physical timing never changes. Integer modes and fractional modes use
  * the same nearest-neighbor hardware path; letterbox pixels are black.
+ * @param mode Requested logical mode and scaling policy.
+ * @param output_width Physical output width.
+ * @param output_height Physical output height.
+ * @param layout Receives exact crop and viewport values.
+ * @return ASTRA_OK on success or an AstraResult error.
  */
 ASTRA_NODISCARD AstraResult astra_display_layout_calculate(
     const AstraDisplayMode *mode, uint16_t output_width,
     uint16_t output_height, AstraDisplayLayout *layout);
-/** Apply a logical mode atomically at vertical blank. */
+/** Apply a logical mode atomically at vertical blank. @param display Open display. @param mode Requested mode. @param fence Optional completion fence. @return ASTRA_OK or an error. */
 ASTRA_NODISCARD AstraResult astra_display_set_mode(
     const AstraDisplay *display, const AstraDisplayMode *mode,
     AstraFence *fence);
-/** Replace the copied 32 by 32 native hardware-pointer image at vertical blank. */
+/** Replace the copied native hardware-pointer image at vertical blank. @param display Open display. @param image Validated image. @param fence Optional completion fence. @return ASTRA_OK or an error. */
 ASTRA_NODISCARD AstraResult astra_display_set_pointer_image(
     const AstraDisplay *display, const AstraHardwarePointerImage *image,
     AstraFence *fence);
-/** Move and enable or disable the native hardware pointer at vertical blank. */
+/** Move and enable or disable the native hardware pointer at vertical blank. @param display Open display. @param position Physical screen position. @param enabled Nonzero to enable. @param fence Optional completion fence. @return ASTRA_OK or an error. */
 ASTRA_NODISCARD AstraResult astra_display_set_pointer_state(
     const AstraDisplay *display, AstraPointI32 position, int enabled,
     AstraFence *fence);

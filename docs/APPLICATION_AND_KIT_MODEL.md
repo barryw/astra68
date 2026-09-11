@@ -87,15 +87,15 @@ Implemented Kits are:
 - Filesystem: `filesystem.library`;
 - Interface: `interface.library` and `input.library`;
 - Events: `events.library`;
-- Messaging: `messaging.library`.
+- Messaging: `messaging.library`;
+- Network: `network.library`.
 
 The remaining planned Kits are:
 
 - Core: handles, errors, time, waits, memory and process operations;
 - Application: launch, lifecycle, commands and settings;
-- Interface extensions: remaining views and controls, clipboard and drag/drop;
+- Interface extensions: remaining views and controls, and drag/drop;
 - Media: audio streams, voices, clocks and synchronization;
-- Network: asynchronous endpoints and name resolution;
 - POSIX: libc, file descriptors, paths, PTYs, jobs and compatibility.
 
 The durable boundary remains a C-compatible ABI plus versioned service
@@ -113,7 +113,8 @@ real system service to own subscriptions, filtering, and backpressure.
 trace reader, and event catalog. It records observable system events; it does
 not replace interprocess messaging.
 
-`interface.library` ABI 2.0 exposes the retained control context through the
+`interface.library` ABI 2.5 exposes the retained control context, TextSurface,
+typed clipboard, and per-document undo/redo through the
 public NDK. Label, Button, and the other primitive controls share intrinsic
 measurement, deterministic nested flex layout, hit testing, focus/capture,
 interaction state, damage, clipping, and Graphics Kit rendering. Controls and

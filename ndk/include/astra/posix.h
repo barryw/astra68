@@ -1,3 +1,4 @@
+/** @file posix.h @brief POSIX compatibility process interface. */
 #ifndef ASTRA_POSIX_H
 #define ASTRA_POSIX_H
 
@@ -24,16 +25,27 @@
  * native `astra_main` entry call it explicitly; ordinary C programs get it
  * from the POSIX library's `main` adapter when that archive member is needed.
  */
+/**
+ * Initialize the POSIX compatibility state for the current process.
+ * @param startup Borrowed native startup record valid for process lifetime.
+ */
 void astra_posix_start(const AstraStartupInfo *startup);
 
-/* Native capabilities remain available to POSIX-entry Astra programs. */
+/** @return Borrowed native startup record, or NULL before initialization. */
 const AstraStartupInfo *astra_posix_startup(void);
 
-/* The process/session service granted at startup, or zero when unavailable. */
+/** @return Process/session service capability, or zero when unavailable. */
 uint32_t astra_posix_process_service(void);
+/** @return Current signal-state generation. */
 uint32_t astra_posix_signal_generation(void);
 
-/* Completes a POSIX write across short transfers and signal interruption. */
+/**
+ * Complete a POSIX write across short transfers and signal interruption.
+ * @param descriptor Open file descriptor.
+ * @param bytes Bytes to write; may be NULL only when `length` is zero.
+ * @param length Number of bytes to write.
+ * @return Zero on success, otherwise -1 with `errno` set.
+ */
 int astra_posix_write_all(int descriptor, const void *bytes, size_t length);
 
 #endif

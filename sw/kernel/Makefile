@@ -1,5 +1,6 @@
 # Astra 68 kernel bootstrap. Freestanding MC68040 image loaded by the system ROM.
 include ../../mk/m68k-cross.mk
+include ../../mk/astra-version.mk
 CC = $(CROSS)gcc
 OBJCOPY = $(CROSS)objcopy
 OBJDUMP = $(CROSS)objdump
@@ -7,7 +8,7 @@ HOST_CC ?= cc
 HOST_EXTRA_FLAGS ?=
 override HOST_EXTRA_FLAGS += -I../include -I../../ndk/include
 
-KERNEL_VERSION ?= 0.1.0-dev
+override KERNEL_VERSION := $(ASTRA_OS_VERSION)
 PANIC_SELFTEST ?= 0
 SCHED_TRACE ?= 0
 SOAK_SELFTEST ?= 0

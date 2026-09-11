@@ -36,15 +36,23 @@ valid = [
     "elapsed-ns=0000000000002000",
     "INTERFACE LAYOUT controls=00000100 iterations=00000100 "
     "elapsed-ns=0000000000003000",
+    "INTERFACE UNDO n=00002710 rec=0000000000004000 "
+    "undo=0000000000005000 redo=0000000000006000 bytes=0009c400",
     "stage 8",
 ]
 assert terminal.interface_layout_benchmark(Machine(valid), 1)
 with redirect_stdout(io.StringIO()):
     assert not terminal.interface_layout_benchmark(
-        Machine(valid[:-2] + ["stage 8"]), 1)
+        Machine(valid[:2] + valid[-2:]), 1)
 slow = valid.copy()
 slow[2] = ("INTERFACE LAYOUT controls=00000100 iterations=00000100 "
            "elapsed-ns=0000000027100001")
 with redirect_stdout(io.StringIO()):
     assert not terminal.interface_layout_benchmark(Machine(slow), 1)
+slow_undo = valid.copy()
+slow_undo[-2] = (
+    "INTERFACE UNDO n=00002710 rec=0000000007735941 "
+    "undo=0000000000005000 redo=0000000000006000 bytes=0009c400")
+with redirect_stdout(io.StringIO()):
+    assert not terminal.interface_layout_benchmark(Machine(slow_undo), 1)
 print("interface layout benchmark parser: PASS")

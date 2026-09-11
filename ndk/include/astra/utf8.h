@@ -12,6 +12,7 @@
 
 ASTRA_EXTERN_C_BEGIN
 
+/** Unicode replacement scalar used for malformed input. */
 #define ASTRA_UTF8_REPLACEMENT UINT32_C(0xfffd)
 
 enum {
@@ -19,25 +20,50 @@ enum {
     ASTRA_UTF8_ALLOW_NUL = UINT32_C(1) << 0
 };
 
-/** Nonzero for a Unicode scalar value (not a UTF-16 surrogate). */
+/**
+ * Test whether a code point is a Unicode scalar value.
+ * @param scalar Candidate code point.
+ * @return Nonzero when in U+0000..U+10FFFF and not a surrogate.
+ */
 static inline int astra_unicode_scalar_valid(uint32_t scalar)
 {
     return scalar <= UINT32_C(0x10ffff) &&
            !(scalar >= UINT32_C(0xd800) && scalar <= UINT32_C(0xdfff));
 }
 
-/** Validate one explicit UTF-8 byte span.  Empty spans are valid. */
+/** Validate one explicit UTF-8 byte span. Empty spans are valid.
+ * @param text Bytes to validate.
+ * @param length Byte length of @p text.
+ * @param flags ASTRA_UTF8_ALLOW_NUL or zero.
+ * @return Nonzero when the complete span is valid UTF-8.
+ */
 int astra_utf8_validate(const void *text, uint32_t length, uint32_t flags);
 
-/** Advance one valid Unicode scalar boundary without modifying on failure. */
+/** Advance one valid Unicode scalar boundary without modifying on failure.
+ * @param text UTF-8 bytes.
+ * @param length Byte length of @p text.
+ * @param offset In/out byte offset.
+ * @return Nonzero when @p offset advanced over one valid scalar.
+ */
 int astra_utf8_scalar_advance(const void *text, uint32_t length,
                               uint32_t *offset);
 
-/** Retreat one valid Unicode scalar boundary without modifying on failure. */
+/** Retreat one valid Unicode scalar boundary without modifying on failure.
+ * @param text UTF-8 bytes.
+ * @param length Byte length of @p text.
+ * @param offset In/out byte offset.
+ * @return Nonzero when @p offset retreated over one valid scalar.
+ */
 int astra_utf8_scalar_retreat(const void *text, uint32_t length,
                               uint32_t *offset);
 
-/* Decode one scalar. Invalid or incomplete input consumes one byte. */
+/**
+ * Decode one scalar; invalid or incomplete input consumes one byte.
+ * @param text UTF-8 bytes.
+ * @param length Available byte count.
+ * @param consumed Receives bytes consumed on nonempty valid input.
+ * @return Decoded scalar or ASTRA_UTF8_REPLACEMENT for malformed input.
+ */
 static inline uint32_t astra_utf8_decode(const void *text, uint32_t length,
                                          uint32_t *consumed)
 {
@@ -79,7 +105,12 @@ static inline uint32_t astra_utf8_decode(const void *text, uint32_t length,
     return ASTRA_UTF8_REPLACEMENT;
 }
 
-/* Encode one Unicode scalar. Invalid scalar values become U+FFFD. */
+/**
+ * Encode one Unicode scalar; invalid values become U+FFFD.
+ * @param scalar Scalar to encode.
+ * @param output Receives up to four bytes.
+ * @return Encoded byte count, or zero when `output` is NULL.
+ */
 static inline uint32_t astra_utf8_encode(uint32_t scalar, void *output)
 {
     uint8_t *bytes = output;

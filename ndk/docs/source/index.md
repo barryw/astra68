@@ -15,6 +15,7 @@ shared-memory
 graphics
 fonts
 filesystem
+interface-kit
 development
 ```
 

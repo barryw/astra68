@@ -1,5 +1,6 @@
 # Astra 68 — boot ROM build. Bare-metal m68k via freestanding GCC.
 include ../../mk/m68k-cross.mk
+include ../../mk/astra-version.mk
 CC       = $(CROSS)gcc
 OBJCOPY  = $(CROSS)objcopy
 OBJDUMP  = $(CROSS)objdump
@@ -25,7 +26,7 @@ BOOT_ELF = build/astra_boot.elf
 BOOT_BIN = build/astra_boot.bin
 BOOT_MAP = build/astra_boot.map
 LZ4_TEST = build/test_lz4_legacy
-KERNEL_VERSION ?= 0.1.0-dev
+override KERNEL_VERSION := $(ASTRA_OS_VERSION)
 KERNEL_PANIC_SELFTEST ?= 0
 KERNEL_SCHED_TRACE ?= 0
 KERNEL_SOAK_SELFTEST ?= 0

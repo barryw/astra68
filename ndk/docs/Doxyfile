@@ -1,5 +1,5 @@
 PROJECT_NAME           = "Astra 68 NDK"
-PROJECT_NUMBER         = 0.1.0
+PROJECT_NUMBER         = $(ASTRA_NDK_VERSION)
 PROJECT_BRIEF          = "Native Developer Kit for Astra 68"
 OUTPUT_DIRECTORY       = build/docs/doxygen
 CREATE_SUBDIRS         = NO
@@ -10,13 +10,14 @@ OPTIMIZE_OUTPUT_FOR_C  = YES
 TYPEDEF_HIDES_STRUCT   = YES
 EXTRACT_ALL            = NO
 EXTRACT_PRIVATE        = NO
-EXTRACT_STATIC         = NO
+EXTRACT_STATIC         = YES
 HIDE_UNDOC_MEMBERS     = NO
 HIDE_UNDOC_CLASSES     = NO
 HIDE_FRIEND_COMPOUNDS  = YES
 HIDE_IN_BODY_DOCS      = NO
 
-INPUT                  = include/astra
+INPUT                  = include/astra ../sw/include/astra/gui.h \
+                         ../sw/include/astra/message_abi.h
 FILE_PATTERNS          = *.h
 RECURSIVE              = YES
 EXCLUDE_PATTERNS       = */internal/*
