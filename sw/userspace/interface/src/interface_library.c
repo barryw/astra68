@@ -14,7 +14,7 @@
 #define ALERT_WIDTH 420u
 #define ALERT_HEIGHT 150u
 
-ASTRA_LIBRARY("interface.library", 2, 5, 0,
+ASTRA_LIBRARY("interface.library", 2, 6, 0,
               ASTRA_INTERFACE_LIBRARY_ABI_MAJOR,
               ASTRA_INTERFACE_LIBRARY_ABI_MINOR,
               "Barry Walker", "Copyright 2026 Barry Walker");
@@ -274,4 +274,20 @@ const AstraInterfaceLibraryV2 astra_library_exports ASTRA_LIBRARY_EXPORTS = {
     astra_undo_mark_clean,
     astra_undo_get_state,
     astra_undo_move_arena,
+    astra_text_model_init,
+    astra_text_model_validate,
+    astra_text_model_get_state,
+    astra_text_model_set_selection,
+    astra_text_model_replace_requirements,
+    astra_text_model_replace,
+    astra_text_model_copy,
+    astra_text_model_read,
+    astra_text_model_scalar_advance,
+    astra_text_model_scalar_retreat,
+    astra_text_model_get_line,
+    astra_text_model_move_arenas,
+    astra_text_model_dispose,
+    astra_interface_field_init,
+    astra_interface_field_refresh,
+    astra_interface_field_replace_selection,
 };

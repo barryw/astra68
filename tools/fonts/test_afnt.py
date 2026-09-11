@@ -18,7 +18,7 @@ generated = afnt.emit_cp437_hex(source_bytes)
 rows = generated.splitlines()
 
 assert source_bytes[:8] == b"AFNT\x00\x00\x00\x02"
-_, strikes, _, _ = afnt.unpack_afnt(source_bytes)
+cmap, strikes, glyphs, bitmap = afnt.unpack_afnt(source_bytes)
 assert len(strikes) == 1
 (strike_id, bitmap_format, pixel_width, pixel_height, ascent, descent,
  line_gap, cap_height, x_height, max_advance, underline_position,
@@ -32,6 +32,9 @@ assert underline_position > 0 and underline_thickness > 0
 assert strikeout_position > 0 and strikeout_thickness > 0
 assert glyph_first == 0 and glyph_count == 1002
 assert glyph_record_size == afnt.GLYPH.size and flags == reserved == 0
+replacement_id = dict(cmap)[0xfffd]
+replacement = glyphs[glyph_first + replacement_id]
+assert any(bitmap[replacement[1]:replacement[1] + replacement[2]])
 
 assert len(rows) == 256 * 16
 assert rows[ord("A") * 16:(ord("A") + 1) * 16] == [

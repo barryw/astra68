@@ -29,6 +29,10 @@
 :project: astra-ndk
 ```
 
+```{doxygenfile} text_model.h
+:project: astra-ndk
+```
+
 ```{doxygenfile} clipboard.h
 :project: astra-ndk
 ```

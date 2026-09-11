@@ -7,6 +7,7 @@
 #include <astra/clipboard.h>
 #include <astra/control.h>
 #include <astra/interface.h>
+#include <astra/text_model.h>
 #include <astra/text_surface.h>
 #include <astra/undo.h>
 #include <astra/window.h>
@@ -14,7 +15,7 @@
 /** Breaking Interface Kit ABI generation. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 2u
 /** Latest append-only Interface Kit ABI revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 5u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 6u
 
 /** Append-only Interface Kit 2.x export table. */
 typedef struct AstraInterfaceLibraryV2 {
@@ -187,6 +188,51 @@ typedef struct AstraInterfaceLibraryV2 {
     AstraResult (*undo_get_state)(const AstraUndoManager *, AstraUndoState *);
     /** Move retained history into replacement caller-owned storage. */
     AstraResult (*undo_move_arena)(AstraUndoManager *, void *, uint32_t);
+    /** Initialize a caller-owned UTF-8 piece-table document. */
+    AstraResult (*text_model_init)(AstraTextModel *,
+                                   const AstraTextModelInfo *);
+    /** Perform complete text-model invariant validation. */
+    AstraResult (*text_model_validate)(const AstraTextModel *);
+    /** Read text-model state and arena accounting. */
+    AstraResult (*text_model_get_state)(const AstraTextModel *,
+                                        AstraTextModelState *);
+    /** Replace the model's scalar-boundary selection. */
+    AstraResult (*text_model_set_selection)(AstraTextModel *,
+                                            const AstraTextSelection *);
+    /** Calculate exact post-replacement arena requirements. */
+    AstraResult (*text_model_replace_requirements)(
+        const AstraTextModel *, uint32_t, uint32_t, const char *, uint32_t,
+        AstraTextModelRequirements *);
+    /** Atomically replace one scalar-boundary UTF-8 range. */
+    AstraResult (*text_model_replace)(AstraTextModel *, uint32_t, uint32_t,
+                                      const char *, uint32_t);
+    /** Atomically copy one scalar-boundary UTF-8 range. */
+    AstraResult (*text_model_copy)(const AstraTextModel *, uint32_t,
+                                   uint32_t, char *, uint32_t, uint32_t *);
+    /** Borrow the contiguous piece at one document byte offset. */
+    AstraResult (*text_model_read)(const AstraTextModel *, uint32_t,
+                                   const char **, uint32_t *);
+    /** Advance one model position by a Unicode scalar. */
+    AstraResult (*text_model_scalar_advance)(const AstraTextModel *,
+                                             uint32_t *);
+    /** Retreat one model position by a Unicode scalar. */
+    AstraResult (*text_model_scalar_retreat)(const AstraTextModel *,
+                                             uint32_t *);
+    /** Resolve one indexed logical line. */
+    AstraResult (*text_model_get_line)(const AstraTextModel *, uint32_t,
+                                       AstraTextLine *);
+    /** Compact live text into replacement caller-owned arenas. */
+    AstraResult (*text_model_move_arenas)(AstraTextModel *, void *, uint32_t,
+                                          void *, uint32_t);
+    /** Wipe occupied arenas and dispose a caller-owned text model. */
+    void (*text_model_dispose)(AstraTextModel *);
+    /** Initialize a retained single-line UTF-8 field. */
+    AstraResult (*field_init)(AstraControl *, const AstraFieldInfo *);
+    /** Revalidate and damage a field after an external model mutation. */
+    AstraResult (*field_refresh)(AstraUIContext *, AstraControl *);
+    /** Replace a field selection while preserving single-line invariants. */
+    AstraResult (*field_replace_selection)(AstraUIContext *, AstraControl *,
+                                           const char *, uint32_t);
 } AstraInterfaceLibraryV2;
 
 /** Compute the export-table extent through one named member. */
@@ -212,6 +258,9 @@ typedef struct AstraInterfaceLibraryV2 {
 /** Interface Kit 2.5 export-table extent. */
 #define ASTRA_INTERFACE_LIBRARY_2_5_SIZE \
     ASTRA_INTERFACE_LIBRARY_SIZE_THROUGH(undo_move_arena)
+/** Interface Kit 2.6 export-table extent. */
+#define ASTRA_INTERFACE_LIBRARY_2_6_SIZE \
+    ASTRA_INTERFACE_LIBRARY_SIZE_THROUGH(field_replace_selection)
 
 /**
  * Verify one consumer's minimum compatible minor and table extent.

@@ -6,6 +6,7 @@ version 0.1.0
 executable bin/m68k-68040/InterfaceGallery
 icon resources/InterfaceGallery.aicon
 capability GUI
+capability CLIPBOARD
 capability LIBS:r
 requires graphics.library 2 2.0.0
-requires interface.library 2 2.5.0
+requires interface.library 2 2.6.0

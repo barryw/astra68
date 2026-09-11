@@ -69,6 +69,10 @@ def pack_bitmap(glyph) -> tuple[bytes, int]:
     return bytes(packed), pitch
 
 
+def glyph_has_ink(glyph) -> bool:
+    return any(pixel for row in glyph.as_matrix() for pixel in row)
+
+
 def load_bitmap(path: Path):
     try:
         import monobit
@@ -107,8 +111,12 @@ def build_afnt(args: argparse.Namespace) -> bytes:
         if source_codes is not None and codes != source_codes:
             raise ValueError("strike repertoires differ")
         source_codes = codes
-        fallback = encoded.get(0xFFFD if unicode_labels else ord("?"),
-                               font.get_default_glyph())
+        fallback = next((glyph for glyph in (
+            encoded.get(0xFFFD), encoded.get(ord("?")),
+            font.get_default_glyph())
+            if glyph is not None and glyph_has_ink(glyph)), None)
+        if fallback is None:
+            raise ValueError(f"{path}: no visible replacement glyph")
         glyph_sets.append((encoded, fallback))
 
     assert source_codes is not None

@@ -1,4 +1,5 @@
 #include <astra/control.h>
+#include <astra/clipboard_service.h>
 #include <astra/graphics_kit.h>
 #include <astra/graphics_library.h>
 #include <astra/interface_kit.h>
@@ -14,11 +15,12 @@
 #include <astra/window.h>
 
 #define GALLERY_WIDTH 1120u
-#define GALLERY_HEIGHT 400u
-#define GALLERY_CONTROL_COUNT 26u
+#define GALLERY_HEIGHT 640u
+#define GALLERY_CONTROL_COUNT 31u
 #define GALLERY_BENCHMARK_CONTROL_MAX 256u
 #define GALLERY_UNDO_BENCHMARK_OPERATIONS 10000u
 #define GALLERY_UNDO_ARENA_BYTES (1024u * 1024u)
+#define GALLERY_TEXT_BENCHMARK_OPERATIONS 4096u
 
 enum {
     GALLERY_LABEL = 1u,
@@ -46,7 +48,12 @@ enum {
     GALLERY_PROGRESS,
     GALLERY_PROGRESS_VALUE,
     GALLERY_PROGRESS_UNKNOWN,
-    GALLERY_PROGRESS_UNKNOWN_VALUE
+    GALLERY_PROGRESS_UNKNOWN_VALUE,
+    GALLERY_FIELD_LABEL,
+    GALLERY_FIELD,
+    GALLERY_FIELD_ERROR,
+    GALLERY_FIELD_ERROR_TEXT,
+    GALLERY_FIELD_READ_ONLY
 };
 
 enum {
@@ -69,10 +76,22 @@ static AstraWindow window = ASTRA_WINDOW_INIT;
 static AstraControl controls[GALLERY_CONTROL_COUNT];
 static AstraControl benchmark_controls[GALLERY_BENCHMARK_CONTROL_MAX];
 static _Alignas(4) uint8_t undo_benchmark_arena[GALLERY_UNDO_ARENA_BYTES];
+static uint8_t text_benchmark_content[16384];
+static _Alignas(4) uint8_t text_benchmark_metadata[131072];
 static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
 static AstraProcessFilesystem process_filesystem =
     ASTRA_PROCESS_FILESYSTEM_INIT;
 static char slider_value_text[5] = "62%";
+static uint8_t field_content[4096];
+static _Alignas(4) uint8_t field_metadata[8192];
+static AstraTextModel field_model = ASTRA_TEXT_MODEL_INIT;
+static uint8_t error_field_content[4096];
+static _Alignas(4) uint8_t error_field_metadata[8192];
+static AstraTextModel error_field_model = ASTRA_TEXT_MODEL_INIT;
+static uint8_t read_only_field_content[4096];
+static _Alignas(4) uint8_t read_only_field_metadata[8192];
+static AstraTextModel read_only_field_model = ASTRA_TEXT_MODEL_INIT;
+static char clipboard_scratch[4096];
 
 static uint16_t rgb565(AstraColorRGBA8 value)
 {
@@ -132,6 +151,24 @@ static void report_undo(uint64_t record_elapsed, uint64_t undo_elapsed,
     at = append_hex64(line, at, redo_elapsed);
     at = append(line, at, " bytes=");
     at = append_hex32(line, at, history_bytes);
+    line[at] = '\0';
+    (void)astra_log(line);
+}
+
+static void report_text(uint64_t append_elapsed, uint64_t fragmented_elapsed,
+                        uint32_t pieces)
+{
+    char line[144];
+    uint32_t at = 0u;
+
+    at = append(line, at, "INTERFACE TEXT n=");
+    at = append_hex32(line, at, GALLERY_TEXT_BENCHMARK_OPERATIONS);
+    at = append(line, at, " append-ns=");
+    at = append_hex64(line, at, append_elapsed);
+    at = append(line, at, " fragmented-ns=");
+    at = append_hex64(line, at, fragmented_elapsed);
+    at = append(line, at, " pieces=");
+    at = append_hex32(line, at, pieces);
     line[at] = '\0';
     (void)astra_log(line);
 }
@@ -208,6 +245,40 @@ static uint32_t add_progress(uint32_t index, uint32_t id,
             ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
+static uint32_t add_field(uint32_t index, uint32_t id,
+                          AstraTextModel *model, uint32_t columns,
+                          uint32_t flags, uint32_t state)
+{
+    AstraFieldInfo info = ASTRA_FIELD_INFO_INIT;
+
+    info.id = id;
+    info.model = model;
+    info.preferred_columns = columns;
+    info.flags = flags;
+    info.state = state;
+    return interface_library->field_init(&controls[index], &info) == ASTRA_OK ?
+        ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
+}
+
+static uint32_t init_field_model(AstraTextModel *model, const char *text,
+                                 uint32_t text_bytes, void *content,
+                                 uint32_t content_bytes, void *metadata,
+                                 uint32_t metadata_bytes)
+{
+    AstraTextModelInfo info = ASTRA_TEXT_MODEL_INFO_INIT;
+
+    info.text = text;
+    info.text_bytes = text_bytes;
+    info.content_arena = content;
+    info.content_arena_bytes = content_bytes;
+    info.metadata_arena = metadata;
+    info.metadata_arena_bytes = metadata_bytes;
+    info.selection.anchor = text_bytes;
+    info.selection.focus = text_bytes;
+    return interface_library->text_model_init(model, &info) == ASTRA_OK ?
+        ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
+}
+
 static uint32_t format_percent(char out[5], int32_t value)
 {
     uint32_t at = 0u;
@@ -218,6 +289,104 @@ static uint32_t format_percent(char out[5], int32_t value)
     out[at++] = '%';
     out[at] = '\0';
     return at;
+}
+
+static AstraControl *field_control(uint32_t id)
+{
+    if (id == GALLERY_FIELD) return &controls[27];
+    if (id == GALLERY_FIELD_ERROR) return &controls[28];
+    if (id == GALLERY_FIELD_READ_ONLY) return &controls[30];
+    return NULL;
+}
+
+static AstraTextModel *field_model_for_id(uint32_t id)
+{
+    if (id == GALLERY_FIELD) return &field_model;
+    if (id == GALLERY_FIELD_ERROR) return &error_field_model;
+    if (id == GALLERY_FIELD_READ_ONLY) return &read_only_field_model;
+    return NULL;
+}
+
+static uint32_t copy_field(AstraHandle clipboard, AstraControl *control,
+                           AstraTextModel *model, int cut)
+{
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    AstraClipboardRepresentation representation =
+        ASTRA_CLIPBOARD_REPRESENTATION_INIT;
+    uint32_t start;
+    uint32_t end;
+    uint32_t bytes;
+    AstraResult result;
+
+    result = interface_library->text_model_get_state(model, &state);
+    if (result != ASTRA_OK) return GALLERY_FAIL_CONTROL;
+    start = state.selection.anchor < state.selection.focus ?
+        state.selection.anchor : state.selection.focus;
+    end = state.selection.anchor > state.selection.focus ?
+        state.selection.anchor : state.selection.focus;
+    if (start == end) return ASTRA_STATUS_OK;
+    if (cut) {
+        AstraTextModelRequirements requirements =
+            ASTRA_TEXT_MODEL_REQUIREMENTS_INIT;
+
+        result = interface_library->text_model_replace_requirements(
+            model, start, end, NULL, 0u, &requirements);
+        if (result != ASTRA_OK ||
+            requirements.content_arena_bytes > state.content_arena_bytes ||
+            requirements.metadata_arena_bytes > state.metadata_arena_bytes)
+            return GALLERY_FAIL_CONTROL;
+    }
+    result = interface_library->text_model_copy(
+        model, start, end, clipboard_scratch, sizeof(clipboard_scratch),
+        &bytes);
+    if (result != ASTRA_OK) return GALLERY_FAIL_CONTROL;
+    representation.type = ASTRA_CLIPBOARD_TYPE_UTF8;
+    representation.type_length = sizeof(ASTRA_CLIPBOARD_TYPE_UTF8) - 1u;
+    representation.data = clipboard_scratch;
+    representation.data_length = bytes;
+    result = interface_library->clipboard_write(
+        clipboard, &representation, 1u, NULL);
+    if (result != ASTRA_OK) return GALLERY_FAIL_CONTROL;
+    if (cut && interface_library->field_replace_selection(
+                   &ui, control, NULL, 0u) != ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
+    return ASTRA_STATUS_OK;
+}
+
+static uint32_t paste_field(AstraHandle clipboard, AstraControl *control)
+{
+    AstraClipboardItem item = ASTRA_CLIPBOARD_ITEM_INIT;
+    const void *text;
+    uint32_t bytes;
+    AstraResult result = interface_library->clipboard_read(clipboard, &item);
+    AstraResult close_result;
+
+    if (result != ASTRA_OK) return GALLERY_FAIL_CONTROL;
+    result = interface_library->clipboard_item_find(
+        &item, ASTRA_CLIPBOARD_TYPE_UTF8,
+        sizeof(ASTRA_CLIPBOARD_TYPE_UTF8) - 1u, &text, &bytes);
+    if (result == ASTRA_OK)
+        result = interface_library->field_replace_selection(
+            &ui, control, text, bytes);
+    close_result = interface_library->clipboard_item_close(&item);
+    if (result == ASTRA_OK) result = close_result;
+    return result == ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
+}
+
+static uint32_t handle_field_action(AstraHandle clipboard,
+                                    const AstraUIAction *action)
+{
+    AstraControl *control = field_control(action->control_id);
+    AstraTextModel *model = field_model_for_id(action->control_id);
+
+    if (control == NULL || model == NULL) return ASTRA_STATUS_OK;
+    if (action->type == ASTRA_UI_ACTION_COPY)
+        return copy_field(clipboard, control, model, 0);
+    if (action->type == ASTRA_UI_ACTION_CUT)
+        return copy_field(clipboard, control, model, 1);
+    if (action->type == ASTRA_UI_ACTION_PASTE)
+        return paste_field(clipboard, control);
+    return ASTRA_STATUS_OK;
 }
 
 static uint32_t set_break_after(uint32_t index)
@@ -345,6 +514,43 @@ static uint32_t build_controls(void)
         status = add_label(25u, GALLERY_PROGRESS_UNKNOWN_VALUE, "Working",
                            sizeof("Working") - 1u,
                            ASTRA_TEXT_CLIENT_PRIMARY);
+    if (status == ASTRA_STATUS_OK)
+        status = init_field_model(
+            &field_model, "HOME:/projects/astra68",
+            sizeof("HOME:/projects/astra68") - 1u,
+            field_content, sizeof(field_content),
+            field_metadata, sizeof(field_metadata));
+    if (status == ASTRA_STATUS_OK)
+        status = init_field_model(
+            &error_field_model, "0x0000FFFG",
+            sizeof("0x0000FFFG") - 1u,
+            error_field_content, sizeof(error_field_content),
+            error_field_metadata, sizeof(error_field_metadata));
+    if (status == ASTRA_STATUS_OK)
+        status = init_field_model(
+            &read_only_field_model, "UTF-8: \xe4\xb8\x96\xe7\x95\x8c",
+            sizeof("UTF-8: \xe4\xb8\x96\xe7\x95\x8c") - 1u,
+            read_only_field_content, sizeof(read_only_field_content),
+            read_only_field_metadata, sizeof(read_only_field_metadata));
+    if (status == ASTRA_STATUS_OK)
+        status = add_label(26u, GALLERY_FIELD_LABEL,
+                           "FIELD / UTF-8 / SELECTION",
+                           sizeof("FIELD / UTF-8 / SELECTION") - 1u,
+                           ASTRA_TEXT_CLIENT_SECONDARY);
+    if (status == ASTRA_STATUS_OK)
+        status = add_field(27u, GALLERY_FIELD, &field_model, 28u, 0u, 0u);
+    if (status == ASTRA_STATUS_OK)
+        status = add_field(28u, GALLERY_FIELD_ERROR, &error_field_model,
+                           16u, 0u, ASTRA_CONTROL_ERROR);
+    if (status == ASTRA_STATUS_OK)
+        status = add_label(29u, GALLERY_FIELD_ERROR_TEXT,
+                           "not a valid 32-bit address",
+                           sizeof("not a valid 32-bit address") - 1u,
+                           ASTRA_TEXT_CLIENT_FAULT);
+    if (status == ASTRA_STATUS_OK)
+        status = add_field(30u, GALLERY_FIELD_READ_ONLY,
+                           &read_only_field_model, 18u,
+                           ASTRA_FIELD_READ_ONLY, 0u);
     if (status == ASTRA_STATUS_OK) status = set_break_after(0u);
     if (status == ASTRA_STATUS_OK) status = set_break_after(6u);
     if (status == ASTRA_STATUS_OK) status = set_break_after(10u);
@@ -355,6 +561,10 @@ static uint32_t build_controls(void)
     if (status == ASTRA_STATUS_OK) status = set_break_after(20u);
     if (status == ASTRA_STATUS_OK) status = set_break_after(21u);
     if (status == ASTRA_STATUS_OK) status = set_break_after(23u);
+    if (status == ASTRA_STATUS_OK) status = set_break_after(25u);
+    if (status == ASTRA_STATUS_OK) status = set_break_after(26u);
+    if (status == ASTRA_STATUS_OK) status = set_break_after(27u);
+    if (status == ASTRA_STATUS_OK) status = set_break_after(29u);
     if (status != ASTRA_STATUS_OK)
         return status;
     if (interface_library->ui_init(&ui, controls, GALLERY_CONTROL_COUNT,
@@ -526,6 +736,49 @@ static uint32_t benchmark_undo(void)
     return ASTRA_STATUS_OK;
 }
 
+static uint32_t benchmark_text_model(void)
+{
+    AstraTextModel model = ASTRA_TEXT_MODEL_INIT;
+    AstraTextModelInfo info = ASTRA_TEXT_MODEL_INFO_INIT;
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    uint64_t started;
+    uint64_t append_elapsed;
+    uint64_t fragmented_elapsed;
+
+    info.content_arena = text_benchmark_content;
+    info.content_arena_bytes = sizeof(text_benchmark_content);
+    info.metadata_arena = text_benchmark_metadata;
+    info.metadata_arena_bytes = sizeof(text_benchmark_metadata);
+    if (interface_library->text_model_init(&model, &info) != ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
+    started = astra_clock_monotonic();
+    for (uint32_t at = 0u; at < GALLERY_TEXT_BENCHMARK_OPERATIONS; ++at)
+        if (interface_library->text_model_replace(
+                &model, at, at, "x", 1u) != ASTRA_OK)
+            return GALLERY_FAIL_CONTROL;
+    append_elapsed = astra_clock_monotonic() - started;
+    interface_library->text_model_dispose(&model);
+
+    if (interface_library->text_model_init(&model, &info) != ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
+    started = astra_clock_monotonic();
+    for (uint32_t at = 0u; at < GALLERY_TEXT_BENCHMARK_OPERATIONS; ++at) {
+        uint32_t position = (at & 1u) == 0u ? 0u : at;
+
+        if (interface_library->text_model_replace(
+                &model, position, position, "x", 1u) != ASTRA_OK)
+            return GALLERY_FAIL_CONTROL;
+    }
+    fragmented_elapsed = astra_clock_monotonic() - started;
+    if (interface_library->text_model_get_state(&model, &state) != ASTRA_OK ||
+        interface_library->text_model_validate(&model) != ASTRA_OK ||
+        state.text_bytes != GALLERY_TEXT_BENCHMARK_OPERATIONS)
+        return GALLERY_FAIL_CONTROL;
+    report_text(append_elapsed, fragmented_elapsed, state.piece_count);
+    interface_library->text_model_dispose(&model);
+    return ASTRA_STATUS_OK;
+}
+
 static uint32_t paint(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -549,7 +802,7 @@ static uint32_t load_libraries(void)
         graphics_library->abi_major != ASTRA_GRAPHICS_LIBRARY_ABI_MAJOR ||
         graphics_library->structure_size < sizeof(*graphics_library) ||
         !astra_interface_library_supports(
-            interface_library, 5u, ASTRA_INTERFACE_LIBRARY_2_5_SIZE))
+            interface_library, 6u, ASTRA_INTERFACE_LIBRARY_2_6_SIZE))
         return GALLERY_FAIL_LIBRARY;
     return ASTRA_STATUS_OK;
 }
@@ -576,7 +829,8 @@ static uint32_t create_window(AstraHandle gui)
     info.event_mask = ASTRA_WINDOW_SUBSCRIBE_DEFAULT |
                       ASTRA_WINDOW_SUBSCRIBE_POINTER_MOTION |
                       ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON |
-                      ASTRA_WINDOW_SUBSCRIBE_KEY;
+                      ASTRA_WINDOW_SUBSCRIBE_KEY |
+                      ASTRA_WINDOW_SUBSCRIBE_TEXT;
     result = interface_library->window_create(gui, surface.area, &info,
                                                &window);
     if (result != ASTRA_OK) {
@@ -587,7 +841,7 @@ static uint32_t create_window(AstraHandle gui)
     return ASTRA_STATUS_OK;
 }
 
-static uint32_t run(void)
+static uint32_t run(AstraHandle clipboard)
 {
     for (;;) {
         AstraWindowEvent event = {0};
@@ -629,6 +883,8 @@ static uint32_t run(void)
                     &ui, &controls[20], slider_value_text, length) != ASTRA_OK)
                 return GALLERY_FAIL_CONTROL;
         }
+        if (handle_field_action(clipboard, &action) != ASTRA_STATUS_OK)
+            (void)astra_log("interface gallery clipboard action failed");
         if (event.type == ASTRA_WINDOW_EVENT_FRAME &&
             event.data.frame.frame.width != 0u &&
             event.data.frame.frame.height != 0u &&
@@ -672,6 +928,7 @@ int astra_main(const AstraStartupInfo *startup)
 {
     const AstraStartupCapability *gui;
     const AstraStartupCapability *bootstrap;
+    const AstraStartupCapability *clipboard;
     uint32_t status;
 
     if (!astra_startup_validate(startup) || startup->capabilities_address == 0u)
@@ -679,7 +936,9 @@ int astra_main(const AstraStartupInfo *startup)
     gui = astra_startup_capability(startup, ASTRA_CAPABILITY_GUI);
     bootstrap = astra_startup_capability(startup,
                                          ASTRA_CAPABILITY_SERVICE_READY);
-    if (gui == NULL)
+    clipboard = astra_startup_capability(startup,
+                                         ASTRA_CAPABILITY_CLIPBOARD);
+    if (gui == NULL || clipboard == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     status = astra_process_filesystem_open(&process_filesystem, startup);
     if (status != ASTRA_STATUS_OK)
@@ -693,6 +952,8 @@ int astra_main(const AstraStartupInfo *startup)
     if (status == ASTRA_STATUS_OK)
         status = benchmark_undo();
     if (status == ASTRA_STATUS_OK)
+        status = benchmark_text_model();
+    if (status == ASTRA_STATUS_OK)
         status = create_window(gui->handle);
     if (status == ASTRA_STATUS_OK)
         interface_library->ui_damage_clear(&ui);
@@ -701,7 +962,7 @@ int astra_main(const AstraStartupInfo *startup)
         (void)astra_close(bootstrap->handle);
     }
     if (status == ASTRA_STATUS_OK)
-        status = run();
+        status = run(clipboard->handle);
     if (window._private_control != ASTRA_INVALID_HANDLE)
         (void)interface_library->window_close(&window);
     if (surface.area != ASTRA_INVALID_HANDLE)

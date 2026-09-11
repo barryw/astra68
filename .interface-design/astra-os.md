@@ -87,6 +87,16 @@ Tab advances focus and either physical Shift key plus Tab reverses it. Input
 modifier bits come from the shared public NDK contract, never private service
 copies.
 
+### Field
+
+Fields use the shared caller-owned UTF-8 piece-table model rather than private
+text buffers. They provide scalar-aware caret motion and deletion, pointer and
+Shift selection, horizontal viewport tracking, immediate text actions,
+read-only and fault states, semantic clipboard actions, and a one-hertz caret.
+Programmatic and pasted text passes through the same single-line invariant
+boundary. Arena capacity is caller-owned and replaceable; it is not a control
+text limit.
+
 ## Text surfaces
 
 - `interface.library` owns reusable grid, code, and flow text presentation;
@@ -97,15 +107,21 @@ copies.
   installed glyph source; underline and strikeout use AFNT metrics instead of
   duplicate glyph images.
 - The current foundation implements grid runs, style resolution, caret,
-  half-open grid selection painting/hit testing, and hardware-blit scrolling;
-  Terminal uses the shared path for pointer-drag selection. Clipboard transfer,
-  wide cells, and the editing/code/flow layers remain pending and must extend
-  this component rather than fork it.
+  half-open grid selection painting/hit testing, hardware-blit scrolling,
+  typed clipboard transfer, a shared UTF-8 piece table, and the first editable
+  field. Terminal uses the shared grid path for pointer-drag selection and
+  clipboard transfer. Wide cells and the code/flow layers remain pending and
+  must extend this component rather than fork it.
 - TextSurface consumes the NDK's resolved `AstraFont` and `AstraTextLayout`
   contracts once the OS font backend is live; it must not grow a second face,
   strike, weight, or shaping API. The font service prefers designed styles,
   owns fallback/shaping and generated-strike caches, and emits positioned glyph
   runs. The FPGA expands glyphs; the MC68040 never scales or rasterizes them.
+- The default UI face is Atkinson Hyperlegible Next, terminal and code use
+  JetBrains Mono, and Noto supplies ordered fallback faces for installed
+  scripts. Spleen remains the independent ROM/POST rescue face. Applications
+  request semantic families and styles; they neither embed these assets nor
+  construct their own fallback chain.
 
 ## Validation pattern
 

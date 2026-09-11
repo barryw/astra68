@@ -12,6 +12,7 @@
 #include <stdint.h>
 
 #include <astra/surface.h>
+#include <astra/text_model.h>
 #include <astra/types.h>
 #include <astra/window.h>
 
@@ -29,7 +30,8 @@ enum {
     ASTRA_CONTROL_SWITCH = 5u,
     ASTRA_CONTROL_SLIDER = 6u,
     ASTRA_CONTROL_PROGRESS = 7u,
-    ASTRA_CONTROL_CONTAINER = 8u
+    ASTRA_CONTROL_CONTAINER = 8u,
+    ASTRA_CONTROL_FIELD = 9u
 };
 
 /** Semantic state owned by an application. */
@@ -59,7 +61,8 @@ enum {
     ASTRA_TEXT_CLIENT_PRIMARY = 1u,
     ASTRA_TEXT_CLIENT_SECONDARY = 2u,
     ASTRA_TEXT_CLIENT_TERTIARY = 3u,
-    ASTRA_TEXT_CLIENT_MUTED = 4u
+    ASTRA_TEXT_CLIENT_MUTED = 4u,
+    ASTRA_TEXT_CLIENT_FAULT = 5u
 };
 
 /** Main-axis direction and wrapping policy for a flex layout. */
@@ -328,6 +331,35 @@ typedef struct AstraProgressInfo {
     sizeof(AstraProgressInfo), 0, 0, 0, 0, { 0, 0, 0, 0 } \
 }
 
+enum {
+    /** Permit selection and copying but reject document mutations. */
+    ASTRA_FIELD_READ_ONLY = UINT32_C(1) << 0
+};
+
+/** Creation data copied into a retained single-line UTF-8 field. */
+typedef struct AstraFieldInfo {
+    /** Structure size for source-compatible extension. */
+    uint32_t size;
+    /** Nonzero ID unique within the UI context. */
+    uint32_t id;
+    /** Caller-owned piece-table model retained for the control lifetime. */
+    AstraTextModel *model;
+    /** Preferred visible columns used only for intrinsic layout width. */
+    uint32_t preferred_columns;
+    /** Combination of ASTRA_FIELD_* behavior flags. */
+    uint32_t flags;
+    /** Application-owned disabled or error semantic state. */
+    uint32_t state;
+    /** Must be zero. */
+    uint32_t reserved[4];
+} AstraFieldInfo;
+
+/** Empty editable field with a twenty-column intrinsic width. */
+#define ASTRA_FIELD_INFO_INIT {                                           \
+    sizeof(AstraFieldInfo), 0u, 0, 20u, 0u, 0u,                          \
+    { 0u, 0u, 0u, 0u }                                                   \
+}
+
 /** Caller-owned retained control.  Private fields must not be modified. */
 typedef struct AstraControl {
     /** @cond ASTRA_INTERNAL */
@@ -413,7 +445,12 @@ typedef struct AstraUIContext {
 enum {
     ASTRA_UI_ACTION_NONE = 0u,
     ASTRA_UI_ACTION_ACTIVATE = 1u,
-    ASTRA_UI_ACTION_VALUE_CHANGED = 2u
+    ASTRA_UI_ACTION_VALUE_CHANGED = 2u,
+    ASTRA_UI_ACTION_TEXT_CHANGED = 3u,
+    ASTRA_UI_ACTION_SELECTION_CHANGED = 4u,
+    ASTRA_UI_ACTION_COPY = 5u,
+    ASTRA_UI_ACTION_CUT = 6u,
+    ASTRA_UI_ACTION_PASTE = 7u
 };
 
 /** Semantic result emitted by a handled window event. */

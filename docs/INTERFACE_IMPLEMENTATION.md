@@ -29,9 +29,9 @@ order needed to finish the complete design without application-private UI.
 |---|---|---|---|
 | Theme, surfaces, font strikes | 1a-1d, 3b | semantic generation-5 tokens, integer UI scale, bitmap strikes | partial |
 | Retained layout | all | nested row/column/wrap containers, intrinsic measurement, reflow, clipping | complete; physical ABI-2 gate passed |
-| Primitive controls | 1d, 4a | label, button, field, check, radio, switch, slider, stepper, popup, combo, segmented, tags, disclosure, progress | label/button/check/radio/switch/slider/progress complete |
+| Primitive controls | 1d, 4a | label, button, field, check, radio, switch, slider, stepper, popup, combo, segmented, tags, disclosure, progress | label/button/check/radio/switch/slider/progress/field accepted |
 | Collection controls | 1d, 2b, 4a | scroll model, scrollbar, splitter, tabs, list, tree, table, grid, columns, toolbar, status, pagination | pending |
-| TextSurface | 7a-7b | shared UTF-8 model, grid/code/flow layout, runs, gutters, overlays, caret, selection, undo, find, clipboard, scrollback | grid renderer, selection paint/hit test/extraction, typed clipboard, Terminal copy/paste, and shared undo/redo accepted; find, scrollback, wide cells, and code/flow layout pending |
+| TextSurface | 7a-7b | shared UTF-8 model, grid/code/flow layout, runs, gutters, overlays, caret, selection, undo, find, clipboard, scrollback | grid renderer, selection paint/hit test/extraction, typed clipboard, Terminal copy/paste, shared undo/redo, piece-table model, and field accepted; find, scrollback, wide cells, and code/flow layout pending |
 | Input vocabulary | 6a-6b | keymap-selected Meta labels and immutable system/workspace/app shortcut tiers | input service emits one normalized Meta bit; detection, override, labels, and shortcut tiers pending |
 | Command model | 1e, 2a, 6b | stable IDs, typed arguments, state, metadata, asynchronous invocation; shared by menus, palette, toolbar, scripting | pending |
 | Menus and palette | 1e, 2a, 3a | persistent application strip, skeleton menus, command palette, system escape shortcuts | pending |
@@ -120,6 +120,38 @@ reentrancy rejection are covered by normal, sanitizer, analyzer, and MC68040
 build gates. The physical 69.874 MHz MC68040 measured 7.546 microseconds per
 apply-and-record group, 3.958 microseconds per undo, and 3.292 microseconds per
 redo across 10,000 groups, inside the retained 12.5-microsecond phase gate.
+
+Current source advances `interface.library` to ABI 2.6 with a shared,
+allocation-free UTF-8 piece table and a retained single-line field. The model
+stores immutable inserted chunks plus a reverse-grown line index in
+caller-owned, replaceable arenas; it has no independent document, piece, line,
+or edit-count ceiling. Replacement preflight reports exact content and
+metadata requirements, capacity failure is atomic, arena moves compact live
+text and wipe occupied old storage, and every selection boundary is validated
+as a Unicode-scalar boundary. Normal, sanitizer, analyzer, documentation, and
+MC68040 build gates pass. Physical release
+`ee84a8a336d68cc6469252690e3ac778790225bceda79ea7e7ecd1d425944ebc`
+booted the Gallery, rendered editable/error/read-only specimens without
+clipping, and remains active with zero restarts. On its 70.038 MHz MC68040,
+4,096 contiguous appends measured 7.320 microseconds each and the deliberately
+maximally fragmented workload measured 656.958 microseconds per insertion.
+The automated target gate rejects regressions above 10 and 800 microseconds
+respectively.
+
+The field consumes that public model, fixed AFNT metrics, retained layout,
+damage, focus, pointer capture, and normalized Meta events. It implements
+scalar-aware caret movement, drag and Shift selection, Home/End,
+Backspace/Delete, UTF-8 insertion, horizontal viewport tracking, read-only and
+fault states, selection tint, a one-hertz caret, and semantic copy/cut/paste
+actions. Programmatic and clipboard replacement use the shared
+`field_replace_selection` invariant boundary, so applications do not reparse
+single-line text. Interface Gallery is the first NDK consumer and includes
+editable, invalid, and read-only specimens.
+
+The shared AFNT import contract also rejects an invisible replacement glyph.
+This prevents an unsupported scalar from disappearing even before the planned
+Atkinson Hyperlegible Next, JetBrains Mono, and Noto system fallback stack is
+installed through the font service.
 
 The fixed-grid source cutover is physically accepted at commit `b36a784` in
 immutable DE25 release

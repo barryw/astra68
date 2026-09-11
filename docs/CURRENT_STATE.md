@@ -251,6 +251,46 @@ pass. On the physical 69.874 MHz MC68040, 10,000 groups measured 7.546
 microseconds per apply-and-record, 3.958 per undo, and 3.292 per redo; the
 retained gate is 12.5 microseconds per phase.
 
+Current source advances `interface.library` to ABI 2.6 with a shared,
+allocation-free UTF-8 piece-table model and retained single-line Field
+control. The model owns scalar-boundary selection, an indexed line map, exact
+capacity preflight, atomic replacement failure, arena relocation and
+compaction, and full invariant validation. Field adds caret and pointer/Shift
+selection, horizontal viewport tracking, UTF-8 editing, read-only and fault
+states, semantic copy/cut/paste actions, and one shared replacement boundary
+for typed, programmatic, and pasted text. Interface Gallery and the NDK example
+consume the public API rather than private text buffers.
+
+Immutable physical DE25 release
+`ee84a8a336d68cc6469252690e3ac778790225bceda79ea7e7ecd1d425944ebc`
+booted this slice at 70.038 MHz, reached stage 8 with the correct wall clock,
+and remains active with zero service restarts. Its storage image, Graphics
+library, Font library, Interface library, and Gallery SHA-256 values are
+respectively
+`51f0b89637c151b452feff64c1b8d5dcadfb58f005b990705cd033990f0efb05`,
+`f1ed71716748d288bc1972b1cd10f5733ee413344cf4ad779effccbe25a1e345`,
+`8381f37774653b834b7a83a12f627a411f5aa8b766399303ceb55d9742168859`,
+`8ef9ab735ad969749c1230217b2d8df2b41ee3fe0cd9fd0b322f5c30058e13b9`,
+and `851bf2c321e0b3321ab1db6d5ca35ebb33d0baa56096e8f14e941963e962ffed`.
+The target measured 7.320 microseconds per contiguous append and 656.958
+microseconds per deliberately maximally fragmented insertion across 4,096
+edits; automated ceilings are 10 and 800 microseconds respectively. The
+retained trace is `/tmp/astra-interface-ee84a8a3-ring.bin` on Beast, SHA-256
+`1428bfb135d319866e9666301f06f22a23bb35b20f4a96c221251ea5d792635b`.
+The Cam Link specimen is
+`/private/tmp/astra-interface-field-ee84a8a3.png`, SHA-256
+`6c9cf5236a4f3a20941b55d8727b3627990f75a11cb833a85a81ca160f73aafd`.
+
+The canonical rescue font's encoded U+FFFD glyph was blank. The shared AFNT
+importer now requires a visible replacement glyph and chooses visible U+FFFD,
+`?`, or the source default in that order; surface and importer tests retain
+that invariant. Unsupported scalars are therefore visible instead of silently
+disappearing. The rescue face remains Spleen. The intended system stack is
+Atkinson Hyperlegible Next for UI, JetBrains Mono for terminal and code, and
+Noto fallback faces for installed-script coverage; these require the shared
+A8 outline-import and font-service resource path rather than per-application
+font copies.
+
 The Astra OS and NDK version are one authoritative value,
 `0.1.0-dev`, exported by `astra/version.h` and consumed by the kernel, boot
 image, manuals, metadata, and package name. Beast certification produced the

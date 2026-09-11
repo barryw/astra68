@@ -20,7 +20,7 @@ assert astra_image.HOSTBENCH_STARTUP_MANIFEST == \
     "application SERVICES:hostbench grants HOST_DEVICE\n"
 assert astra_image.INTERFACE_GALLERY_STARTUP_MANIFEST == \
     astra_image.DISPLAY_STARTUP_MANIFEST + \
-    "application APPS:InterfaceGallery.app grants GUI LIBS:r\n"
+    "application APPS:InterfaceGallery.app grants GUI CLIPBOARD LIBS:r\n"
 assert not any(line.startswith("application ") and line.endswith(" required")
                for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines())
 assert astra_image.APPLICATION_BUNDLES == \

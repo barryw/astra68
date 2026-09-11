@@ -113,8 +113,9 @@ real system service to own subscriptions, filtering, and backpressure.
 trace reader, and event catalog. It records observable system events; it does
 not replace interprocess messaging.
 
-`interface.library` ABI 2.5 exposes the retained control context, TextSurface,
-typed clipboard, and per-document undo/redo through the
+`interface.library` ABI 2.6 exposes the retained control context, TextSurface,
+typed clipboard, per-document undo/redo, the shared UTF-8 piece-table model,
+and retained fields through the
 public NDK. Label, Button, and the other primitive controls share intrinsic
 measurement, deterministic nested flex layout, hit testing, focus/capture,
 interaction state, damage, clipping, and Graphics Kit rendering. Controls and

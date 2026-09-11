@@ -24,6 +24,13 @@ AstraResult astra_interface_control_get_value(const AstraControl *control,
                                               int32_t *value);
 AstraResult astra_interface_progress_init(AstraControl *control,
                                           const AstraProgressInfo *info);
+AstraResult astra_interface_field_init(AstraControl *control,
+                                       const AstraFieldInfo *info);
+AstraResult astra_interface_field_refresh(AstraUIContext *context,
+                                          AstraControl *control);
+AstraResult astra_interface_field_replace_selection(
+    AstraUIContext *context, AstraControl *control,
+    const char *replacement, uint32_t replacement_bytes);
 AstraResult astra_interface_progress_set(AstraUIContext *context,
                                          AstraControl *control,
                                          uint32_t value, uint32_t maximum);

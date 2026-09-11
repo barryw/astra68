@@ -84,7 +84,12 @@ INTERFACE_UNDO = re.compile(
     r"INTERFACE UNDO n=([0-9a-f]{8}) "
     r"rec=([0-9a-f]{16}) undo=([0-9a-f]{16}) "
     r"redo=([0-9a-f]{16}) bytes=([0-9a-f]{8})")
+INTERFACE_TEXT = re.compile(
+    r"INTERFACE TEXT n=([0-9a-f]{8}) "
+    r"append-ns=([0-9a-f]{16}) fragmented-ns=([0-9a-f]{16}) "
+    r"pieces=([0-9a-f]{8})")
 INTERFACE_UNDO_OPERATIONS = 10000
+INTERFACE_TEXT_OPERATIONS = 4096
 # The physical 69.874 MHz MC68040 baseline is 7.546 us/group for record,
 # 3.958 for undo, and 3.292 for redo.  The shared 12.5 us ceiling preserves
 # 39% headroom over the slowest phase while rejecting a material regression.
@@ -94,6 +99,11 @@ INTERFACE_UNDO_MAX_NS_PER_OPERATION = 12_500
 # while rejecting a material regression before layout becomes a visible part
 # of a 60 Hz frame.
 INTERFACE_LAYOUT_MAX_NS_PER_CONTROL = 10_000
+# The physical 70.038 MHz MC68040 baseline is 7.320 us for contiguous append
+# and 656.958 us for deliberately maximally fragmented insertion.  These
+# ceilings retain 26% and 17% scheduling headroom respectively.
+INTERFACE_TEXT_MAX_APPEND_NS_PER_OPERATION = 10_000
+INTERFACE_TEXT_MAX_FRAGMENTED_NS_PER_OPERATION = 800_000
 
 # The desktop's Terminal icon. A double click here is what starts a terminal;
 # there is no manifest entry that starts one directly, because a window client
@@ -635,7 +645,9 @@ def interface_layout_benchmark(machine, boot_deadline):
     needles = tuple("INTERFACE LAYOUT controls=%08x" % count
                     for count in INTERFACE_LAYOUT_CASES) + (
                         "INTERFACE UNDO n=%08x" %
-                        INTERFACE_UNDO_OPERATIONS,)
+                        INTERFACE_UNDO_OPERATIONS,
+                        "INTERFACE TEXT n=%08x" %
+                        INTERFACE_TEXT_OPERATIONS,)
     lines, _ = machine.wait_for_text(needles, boot_deadline)
     if lines is None:
         print("FAIL: interface layout benchmark did not finish")
@@ -693,6 +705,33 @@ def interface_layout_benchmark(machine, boot_deadline):
           "redo %7.1f ns/op  %u bytes" %
           (operations, record_ns / operations, undo_ns / operations,
            redo_ns / operations, history_bytes))
+    text_results = []
+    for line in lines:
+        match = INTERFACE_TEXT.search(line)
+        if match is not None:
+            text_results.append(tuple(int(value, 16)
+                                      for value in match.groups()))
+    if len(text_results) != 1:
+        print("FAIL: missing or duplicate text benchmark: %r" % text_results)
+        return False
+    operations, append_ns, fragmented_ns, pieces = text_results[0]
+    if (operations != INTERFACE_TEXT_OPERATIONS or
+            pieces != operations - 1 or min(append_ns, fragmented_ns) == 0):
+        print("FAIL: malformed text benchmark: %r" % (text_results[0],))
+        return False
+    if (append_ns > INTERFACE_TEXT_MAX_APPEND_NS_PER_OPERATION * operations or
+            fragmented_ns >
+            INTERFACE_TEXT_MAX_FRAGMENTED_NS_PER_OPERATION * operations):
+        print("FAIL: text benchmark exceeded %u/%u ns/operation: %r" %
+              (INTERFACE_TEXT_MAX_APPEND_NS_PER_OPERATION,
+               INTERFACE_TEXT_MAX_FRAGMENTED_NS_PER_OPERATION,
+               text_results[0]))
+        return False
+    print("%5u text edits   append %7.1f ns/op  fragmented %7.1f ns/op  "
+          "%u pieces" %
+          (operations, append_ns / operations, fragmented_ns / operations,
+           pieces))
+    print("ASTRA INTERFACE TEXT PASS")
     print("ASTRA INTERFACE UNDO PASS")
     print("ASTRA INTERFACE LAYOUT PASS")
     return True

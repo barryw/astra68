@@ -47,7 +47,8 @@ EXAMPLE_OBJECTS := build/m68k/front_panel_example.o \
 	build/m68k/font_layout_example.o build/m68k/graphics_frame_example.o \
 	build/m68k/port_message_example.o build/m68k/bulk_ring_example.o \
 	build/m68k/interface_controls_example.o \
-	build/m68k/text_clipboard_example.o build/m68k/undo_example.o
+	build/m68k/text_clipboard_example.o build/m68k/text_field_example.o \
+	build/m68k/undo_example.o
 ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(SOURCES))
 DIST_NAME := astra68-ndk-$(ASTRA_OS_VERSION)
 DIST_DIR := build/dist

@@ -21,7 +21,7 @@ LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
 	-T $(RUNTIME)/astra_library.ld
 INTERFACE_TARGET := build/m68k/libraries/interface.library
 INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
-	build/m68k/text_surface.o build/m68k/undo.o
+	build/m68k/text_surface.o build/m68k/undo.o build/m68k/text_model.o
 INPUT_TARGET := build/m68k/libraries/input.library
 INPUT_OBJECTS := build/m68k/input_library.o
 GRAPHICS_PIC_LIB := $(GRAPHICS)/build/m68k/libastragraphics-pic.a
@@ -32,6 +32,7 @@ INTERFACE_HOST_TEST := build/host/test_interface
 INPUT_HOST_TEST := build/host/test_input_library
 TEXT_SURFACE_HOST_TEST := build/host/test_text_surface
 UNDO_HOST_TEST := build/host/test_undo
+TEXT_MODEL_HOST_TEST := build/host/test_text_model
 
 all: $(INTERFACE_TARGET) $(INPUT_TARGET) library-contract
 
@@ -62,6 +63,11 @@ build/m68k/text_surface.o: src/text_surface.c
 		$(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
 build/m68k/undo.o: src/undo.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
+build/m68k/text_model.o: src/text_model.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
@@ -100,13 +106,14 @@ $(INPUT_TARGET): $(INPUT_OBJECTS) $(NDK_PIC_LIB) $(RUNTIME_PIC_LIB) \
 
 library-contract: $(INTERFACE_TARGET) $(INPUT_TARGET)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library 2.5.0 ABI 2.5$$'
+		grep -q '^interface.library 2.6.0 ABI 2.6$$'
 	@python3 ../../../tools/library_info.py $(INPUT_TARGET) | \
 		grep -q '^input.library 1.0.0 ABI 1.0$$'
 	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET) $(INPUT_TARGET))
 
 $(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/text_surface.c \
-		$(NDK_HOST_UTF8) tests/test_interface.c tests/test_layout.c
+		src/text_model.c $(NDK_HOST_UTF8) tests/test_interface.c \
+		tests/test_layout.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -DASTRA_INTERFACE_TEST \
 		-DASTRA_NDK_TEST \
@@ -127,22 +134,29 @@ $(UNDO_HOST_TEST): src/undo.c tests/test_undo.c $(NDK_HOST_UTF8)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/undo.c $(NDK_HOST_UTF8) tests/test_undo.c -o $@
 
+$(TEXT_MODEL_HOST_TEST): src/text_model.c tests/test_text_model.c \
+		$(NDK_HOST_UTF8)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/text_model.c $(NDK_HOST_UTF8) tests/test_text_model.c -o $@
+
 $(NDK_HOST_UTF8):
 	$(MAKE) -C $(NDK) build/host/utf8.o
 
 test: $(INTERFACE_HOST_TEST) $(INPUT_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
-		$(UNDO_HOST_TEST)
+		$(UNDO_HOST_TEST) $(TEXT_MODEL_HOST_TEST)
 	./$(INTERFACE_HOST_TEST)
 	./$(INPUT_HOST_TEST)
 	./$(TEXT_SURFACE_HOST_TEST)
 	./$(UNDO_HOST_TEST)
+	./$(TEXT_MODEL_HOST_TEST)
 
 sanitize: $(NDK_HOST_UTF8)
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -DASTRA_INTERFACE_TEST -DASTRA_NDK_TEST \
 		-ffunction-sections -Wl,--gc-sections src/interface_library.c \
-		src/control.c src/text_surface.c $(NDK_HOST_UTF8) \
+		src/control.c src/text_surface.c src/text_model.c $(NDK_HOST_UTF8) \
 		tests/test_interface.c tests/test_layout.c \
 		-o build/host/test_interface_sanitize
 	./build/host/test_interface_sanitize
@@ -158,6 +172,10 @@ sanitize: $(NDK_HOST_UTF8)
 		$(SANITIZER_FLAGS) src/undo.c $(NDK_HOST_UTF8) tests/test_undo.c \
 		-o build/host/test_undo_sanitize
 	./build/host/test_undo_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/text_model.c $(NDK_HOST_UTF8) \
+		tests/test_text_model.c -o build/host/test_text_model_sanitize
+	./build/host/test_text_model_sanitize
 
 analyze:
 	@mkdir -p build/analyzer
@@ -171,6 +189,8 @@ analyze:
 		-c src/input_library.c -o build/analyzer/input_library.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/undo.c -o build/analyzer/undo.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/text_model.c -o build/analyzer/text_model.o
 
 clean:
 	rm -rf build

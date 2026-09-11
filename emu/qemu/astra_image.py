@@ -124,7 +124,7 @@ HOSTBENCH_SERVICES = DISPLAY_SERVICES + ("hostbench",)
 HOSTBENCH_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
     "application SERVICES:hostbench grants HOST_DEVICE\n")
 INTERFACE_GALLERY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
-    "application APPS:InterfaceGallery.app grants GUI LIBS:r\n")
+    "application APPS:InterfaceGallery.app grants GUI CLIPBOARD LIBS:r\n")
 
 
 def _build_current_userspace():

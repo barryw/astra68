@@ -20,7 +20,7 @@ const AstraInterfaceLibraryV2 *interface =
     handle == NULL ? NULL : handle->exports;
 
 if (!astra_interface_library_supports(
-        interface, 5u, ASTRA_INTERFACE_LIBRARY_2_5_SIZE)) {
+        interface, 6u, ASTRA_INTERFACE_LIBRARY_2_6_SIZE)) {
     if (handle != NULL) CloseLibrary(handle);
     return ASTRA_ERROR_NOT_PRESENT;
 }
@@ -49,11 +49,44 @@ records. Render only after handling input, then use `ui_damage` and
 `window_present_region` to publish the changed rectangle.
 
 Labels, buttons, checkboxes, radios, switches, sliders, progress indicators,
-and containers share this lifecycle. Text spans are borrowed, not copied; keep
-their UTF-8 bytes alive until the control is replaced or `control_set_text`
-installs another span.
+fields, and containers share this lifecycle. Label, button, and toggle text
+spans are borrowed, not copied; keep their UTF-8 bytes alive until the control
+is replaced or `control_set_text` installs another span.
 
 ```{literalinclude} ../../examples/interface_controls.c
+:language: c
+:linenos:
+```
+
+## Text models and fields
+
+{c:type}`AstraTextModel` is the shared UTF-8 document core used by fields and
+future editors. It is an allocation-free piece table with an indexed line map;
+the caller owns its content and four-byte-aligned metadata arenas. Those arenas
+are capacity, not document-format limits. When an edit returns
+`ASTRA_ERROR_BUFFER_TOO_SMALL`, query `text_model_replace_requirements`, move
+the live document to suitably sized arenas with `text_model_move_arenas`, and
+replay the unchanged edit. Failed edits do not alter text, selection, or
+generation.
+
+Selections are half-open UTF-8 byte ranges whose anchor and focus must be
+Unicode-scalar boundaries. Fields render with the system monospace metrics,
+track a horizontal viewport, accept Unicode text events, and emit immediate
+text/selection plus semantic copy, cut, paste, and activate actions. Use
+`field_replace_selection` for programmatic or pasted text so the field's
+single-line invariant is checked in one place. Call `field_refresh` after any
+other external model mutation.
+
+One document-owning thread may mutate a model. Borrowed spans returned by
+`text_model_read` remain valid only until the next mutation or arena move.
+
+On the physical 70.038 MHz MC68040, 4,096 contiguous single-byte appends
+measured 7.320 microseconds per edit. A deliberately maximally fragmented
+workload that retained 4,095 pieces measured 656.958 microseconds per edit.
+The automated target gate uses measured ceilings of 10 and 800 microseconds
+respectively.
+
+```{literalinclude} ../../examples/text_field.c
 :language: c
 :linenos:
 ```

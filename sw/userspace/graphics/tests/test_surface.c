@@ -255,6 +255,23 @@ static void test_proportional_utf8_text(void)
     assert(!"UTF-8 UI text drew no pixels");
 }
 
+static void test_missing_mono_glyph_uses_replacement(void)
+{
+    const AstraUiStrike *strike = astra_mono_font_strike(
+        ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT);
+    const AstraUiGlyph *replacement;
+    const uint8_t *bitmap;
+    uint8_t ink = 0u;
+
+    assert(strike != NULL);
+    replacement = astra_mono_font_glyph(strike, 0xfffdu);
+    assert(astra_mono_font_glyph(strike, 0x4e16u) == replacement);
+    bitmap = astra_mono_font_bitmap(replacement);
+    for (uint32_t byte = 0u; byte < replacement->bitmap_length; ++byte)
+        ink |= bitmap[byte];
+    assert(ink != 0u);
+}
+
 static void test_font_advance_and_baseline(void)
 {
     static uint8_t batch[ASTRA_RENDER_BUILDER_BYTES];
@@ -649,6 +666,7 @@ int main(void)
     test_color_and_glyph();
     test_text();
     test_proportional_utf8_text();
+    test_missing_mono_glyph_uses_replacement();
     test_font_advance_and_baseline();
     test_hardware_draw_list_batch();
     test_scanout_source_is_explicit();
