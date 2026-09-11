@@ -200,6 +200,25 @@ uint32_t astra_render_builder_frame(const AstraRenderBuilder *builder)
            DESCRIPTOR_ARENA_OFFSET;
 }
 
+int astra_render_builder_cursor(AstraRenderBuilder *builder, uint32_t x,
+                                uint32_t y, uint32_t flags)
+{
+    if (builder == NULL || builder->bytes == NULL ||
+        x >= ASTRA_DISPLAY_WIDTH ||
+        y >= ASTRA_DISPLAY_HEIGHT ||
+        (flags & ~ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u) {
+        if (builder != NULL)
+            builder->failed = ASTRA_RENDER_BUILDER_FAILURE_PRESENTATION;
+        return 0;
+    }
+    astra_store_be32(builder->bytes + 32u,
+                     ASTRA_RENDER_BATCH_PRESENT_CURSOR);
+    astra_store_be32(builder->bytes + 36u, x);
+    astra_store_be32(builder->bytes + 40u, y);
+    astra_store_be32(builder->bytes + 44u, flags);
+    return 1;
+}
+
 uint32_t astra_render_builder_scanout(AstraRenderBuilder *builder,
                                       uint32_t scanout_offset)
 {
@@ -853,7 +872,7 @@ uint32_t astra_render_builder_finish(AstraRenderBuilder *builder)
         relative(DESCRIPTOR_ARENA_OFFSET) +
             builder->descriptor_count * ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES;
     astra_store_be32(builder->bytes + 0u, ASTRA_RENDER_BATCH_MAGIC);
-    astra_store_be32(builder->bytes + 4u, ASTRA_RENDER_BATCH_VERSION_1_0);
+    astra_store_be32(builder->bytes + 4u, ASTRA_RENDER_BATCH_VERSION_1_1);
     astra_store_be32(builder->bytes + 8u, bytes);
     astra_store_be32(builder->bytes + 12u, builder->command_count);
     astra_store_be32(builder->bytes + 16u, ASTRA_RENDER_BATCH_SUBMISSION_OFFSET);

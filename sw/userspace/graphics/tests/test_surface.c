@@ -42,6 +42,34 @@ static uint32_t finish_batch(AstraRenderBuilder *builder,
     return bytes;
 }
 
+static void test_batch_cursor_is_atomic_presentation_state(void)
+{
+    static uint8_t storage[ASTRA_RENDER_BUILDER_BYTES];
+    AstraRenderBuilder builder;
+    uint32_t frame;
+
+    assert(astra_render_builder_init(&builder, storage, sizeof(storage), 1u));
+    frame = astra_render_builder_frame(&builder);
+    assert(astra_render_builder_fill(&builder, frame, 0, 0, 1u, 1u, 0u));
+    assert(astra_render_builder_cursor(
+        &builder, ASTRA_DISPLAY_WIDTH - 1u, ASTRA_DISPLAY_HEIGHT - 1u,
+        ASTRA_DISPLAY_CURSOR_VISIBLE));
+    assert(finish_batch(&builder, storage) != 0u);
+    assert(be32(storage + 4u) == ASTRA_RENDER_BATCH_VERSION_1_1);
+    assert(be32(storage + 32u) == ASTRA_RENDER_BATCH_PRESENT_CURSOR);
+    assert(be32(storage + 36u) == ASTRA_DISPLAY_WIDTH - 1u);
+    assert(be32(storage + 40u) == ASTRA_DISPLAY_HEIGHT - 1u);
+    assert(be32(storage + 44u) == ASTRA_DISPLAY_CURSOR_VISIBLE);
+    for (uint32_t offset = 48u; offset < ASTRA_RENDER_BATCH_HEADER_BYTES;
+         offset += 4u)
+        assert(be32(storage + offset) == 0u);
+
+    assert(astra_render_builder_init(&builder, storage, sizeof(storage), 2u));
+    assert(!astra_render_builder_cursor(
+        &builder, ASTRA_DISPLAY_WIDTH, 0u, ASTRA_DISPLAY_CURSOR_VISIBLE));
+    assert(builder.failed == ASTRA_RENDER_BUILDER_FAILURE_PRESENTATION);
+}
+
 static void test_clipped_drawing_and_blit(void)
 {
     uint16_t destination_pixels[8u * 6u] = {0};
@@ -614,6 +642,7 @@ static void test_rounded_fill_has_no_overlap(void)
 
 int main(void)
 {
+    test_batch_cursor_is_atomic_presentation_state();
     test_clipped_drawing_and_blit();
     test_surface_clip_is_inherited();
     test_draw_list_clip_reaches_hardware();

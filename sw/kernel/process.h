@@ -187,7 +187,7 @@ typedef struct KernelProcessSnapshot {
     uint8_t priority_ceiling;
     uint8_t thread_count;
     uint8_t live_threads;
-    uint8_t user_stack_pages;
+    uint16_t user_stack_pages;
     uint8_t user_guard_pages;
     uint8_t supervisor_stack_pages;
     uint8_t supervisor_guard_pages;

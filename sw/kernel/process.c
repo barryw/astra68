@@ -151,7 +151,7 @@ typedef struct KernelProcess {
     uint8_t priority_ceiling;
     uint8_t thread_count;
     uint8_t live_threads;
-    uint8_t user_stack_pages;
+    uint16_t user_stack_pages;
     uint8_t user_guard_pages;
     uint8_t supervisor_stack_pages;
     uint8_t supervisor_guard_pages;
@@ -319,15 +319,14 @@ _Static_assert(KERNEL_THREAD_STACK_STRIDE >=
      KERNEL_PAGE_SIZE)
 
 /*
- * uint8_t counters hold the per-process totals, and a fully grown set of
- * stacks is the worst case they have to survive -- not the committed set,
- * which is what this bounded before growth existed.
+ * A fully grown set of stacks is the worst case the counters have to survive
+ * -- not the initially committed set.
  */
 _Static_assert(
-    KERNEL_PROCESS_THREAD_MAX * KERNEL_THREAD_STACK_PAGES_MAX <= 255u,
+    KERNEL_PROCESS_THREAD_MAX * KERNEL_THREAD_STACK_PAGES_MAX <= UINT16_MAX,
     "user_stack_pages cannot count this many stack pages");
-_Static_assert(KERNEL_THREAD_STACK_PAGES_MAX <= 255u,
-               "a thread's committed page count must fit its uint8_t");
+_Static_assert(KERNEL_THREAD_STACK_PAGES_MAX <= UINT16_MAX,
+               "a thread's committed page count must fit its uint16_t");
 _Static_assert(KERNEL_PROCESS_THREAD_MAX <= 64u,
                "stack slot bitmap exceeds its storage");
 _Static_assert(KERNEL_THREAD_MAX <= KERNEL_VM_HOST_CHANNEL_PAGE_COUNT,
@@ -1347,7 +1346,7 @@ static KernelProcessStatus finish_thread_reaps(void)
             thread->tls_pages = 0u;
             process->stack_slots &= ~stack_bit;
             process->user_stack_pages =
-                (uint8_t)(process->user_stack_pages - committed);
+                (uint16_t)(process->user_stack_pages - committed);
             --process->user_guard_pages;
         }
         if (kernel_thread_finish_reap(thread, &released) !=
@@ -2381,8 +2380,7 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
             if (request.source >= ASTRA_DISPLAY_WIDTH ||
                 request.pitch >= ASTRA_DISPLAY_HEIGHT ||
                 (request.byte_size &
-                 ~(ASTRA_DISPLAY_CURSOR_VISIBLE |
-                   ASTRA_DISPLAY_CURSOR_DEFER_COMMIT)) != 0u)
+                 ~ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u)
                 return ASTRA_SYSCALL_INVALID_ARGUMENT;
             platform_source = ASTRA_DISPLAY_HOST_CURSOR_PACK(
                 request.source, request.pitch,
@@ -2812,7 +2810,7 @@ static bool grow_user_stack(KernelProcess *process, KernelThread *thread,
     pages = (thread->user_stack_base - page) / KERNEL_PAGE_SIZE;
     if (pages == 0u ||
         (uint32_t)thread->stack_pages + pages > KERNEL_THREAD_STACK_PAGES_MAX ||
-        (uint32_t)process->user_stack_pages + pages > 255u)
+        (uint32_t)process->user_stack_pages + pages > UINT16_MAX)
         return false;
 
     while (mapped < pages) {
@@ -2867,9 +2865,9 @@ static bool grow_user_stack(KernelProcess *process, KernelThread *thread,
     }
 
     thread->user_stack_base = page;
-    thread->stack_pages = (uint8_t)(thread->stack_pages + pages);
+    thread->stack_pages = (uint16_t)(thread->stack_pages + pages);
     process->user_stack_pages =
-        (uint8_t)(process->user_stack_pages + pages);
+        (uint16_t)(process->user_stack_pages + pages);
     ++scheduler_stats.user_stack_growths;
     scheduler_stats.user_stack_pages_committed += pages;
     return true;
@@ -3135,7 +3133,7 @@ static KernelProcessStatus commit_thread(KernelPreparedThread *prepared,
     ++process->thread_count;
     ++process->live_threads;
     process->user_stack_pages =
-        (uint8_t)(process->user_stack_pages + thread->stack_pages);
+        (uint16_t)(process->user_stack_pages + thread->stack_pages);
     ++process->user_guard_pages;
     process->supervisor_stack_pages +=
         KERNEL_THREAD_SUPERVISOR_STACK_SIZE / KERNEL_PAGE_SIZE;

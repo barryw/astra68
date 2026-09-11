@@ -60,7 +60,13 @@
  * where a machine that reran the bus cycle instead would have to be handled.
  */
 #define KERNEL_THREAD_STACK_BASE 0x70000000u
-#define KERNEL_THREAD_STACK_STRIDE 0x00010000u
+/*
+ * Match the conventional POSIX thread reservation.  Pages remain committed
+ * on demand, so this consumes address space rather than 8 MiB of RAM per
+ * thread.  Sixteen reservations occupy 0x70000000..0x77ffffff and leave the
+ * upper half of the user range for per-thread TLS.
+ */
+#define KERNEL_THREAD_STACK_STRIDE 0x00800000u
 #define KERNEL_THREAD_STACK_GUARD_SIZE 0x00001000u
 #define KERNEL_THREAD_STACK_SIZE 0x00001000u
 
@@ -155,15 +161,15 @@ typedef struct KernelThread {
     uint32_t exit_status;
     uint32_t terminal_result;
     uint16_t handle_references;
-    uint8_t stack_released;
-    uint8_t reap_pending;
     /*
      * Pages committed to this thread's stack, always contiguous and always
      * ending at user_stack_top. Growth moves user_stack_base down and this up;
      * the reap path unmaps exactly this many, which is why it is counted here
      * rather than derived from a constant that is no longer fixed.
      */
-    uint8_t stack_pages;
+    uint16_t stack_pages;
+    uint8_t stack_released;
+    uint8_t reap_pending;
     uint8_t suspended;
 } KernelThread;
 
@@ -195,7 +201,7 @@ typedef struct KernelThreadSnapshot {
     uint8_t deadline_waiting;
     uint8_t stack_released;
     uint8_t reap_pending;
-    uint8_t stack_pages;
+    uint16_t stack_pages;
     uint8_t suspended;
     uint8_t reserved;
     uint32_t exit_status;

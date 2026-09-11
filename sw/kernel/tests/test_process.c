@@ -3150,8 +3150,7 @@ static void test_console_writes_through_a_display_lease(void)
         .fence = 10u,
         .source = 321u,
         .pitch = 123u,
-        .byte_size = ASTRA_DISPLAY_CURSOR_VISIBLE |
-                     ASTRA_DISPLAY_CURSOR_DEFER_COMMIT,
+        .byte_size = ASTRA_DISPLAY_CURSOR_VISIBLE,
     };
     assert(kernel_user_copy_to_asm(user_cells, &request, sizeof(request)) ==
            KERNEL_USER_COPY_OK);
@@ -3164,9 +3163,7 @@ static void test_console_writes_through_a_display_lease(void)
     assert(display_request.operation == ASTRA_DISPLAY_CURSOR_UPDATE);
     assert(display_request.source ==
            ASTRA_DISPLAY_HOST_CURSOR_PACK(321u, 123u, true));
-    assert(display_request.byte_size ==
-           (ASTRA_DISPLAY_CURSOR_VISIBLE |
-            ASTRA_DISPLAY_CURSOR_DEFER_COMMIT));
+    assert(display_request.byte_size == ASTRA_DISPLAY_CURSOR_VISIBLE);
 }
 
 static void test_input_batch_read_is_bounded_and_fault_atomic(void)
@@ -9390,6 +9387,40 @@ static void test_user_stack_grows_on_fault_and_guards_the_floor(void)
     assert(after_teardown.free_frames >= baseline.free_frames);
 }
 
+/*
+ * Real POSIX code uses frames larger than the old 60 KiB reservation.  In
+ * particular, ncurses' terminfo reader reserves 65,552 bytes before it reads
+ * the terminal description.  The reservation is virtual; only pages reached
+ * by the thread are committed, so accepting this frame does not preallocate
+ * the reservation from physical RAM.
+ */
+static void test_user_stack_accepts_a_large_posix_frame(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    const uint32_t frame_bottom = TEST_STACK_TOP(0) - (72u * 1024u);
+    KernelCpuContext *next;
+    KernelProcessSnapshot process;
+    KernelThreadSnapshot thread;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE, frame_bottom);
+    assert(kernel_process_on_fault(registers, frame_bottom, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_thread_snapshot(0u, &thread));
+    assert(thread.user_stack_base ==
+           (frame_bottom & ~(KERNEL_PAGE_SIZE - 1u)));
+    assert(thread.user_stack_top == TEST_STACK_TOP(0));
+    assert(kernel_process_snapshot(0u, &process));
+    assert(process.process_state == KERNEL_PROCESS_RUNNING);
+    assert(process.exit_reason == KERNEL_PROCESS_EXIT_NONE);
+}
+
 
 /*
  * The diagnostic channel. A process may write a bounded line about itself if
@@ -10490,6 +10521,7 @@ int main(void)
     test_no_debug_surface_closes_the_stream();
     test_a_program_cannot_forge_a_verdict();
     test_initial_image_exit_is_reported();
+    test_user_stack_accepts_a_large_posix_frame();
     test_user_stack_grows_on_fault_and_guards_the_floor();
     test_reserved_area_faults_in_through_the_exception_path();
     test_private_memory_faults_in_through_the_exception_path();

@@ -158,11 +158,6 @@ static int pointer_initialize(const struct astra_graphics_device *device)
     return wait_pointer_generation(device, generation);
 }
 
-static bool pointer_request_commits(uint32_t flags)
-{
-    return (flags & ASTRA_DISPLAY_CURSOR_DEFER_COMMIT) == 0u;
-}
-
 static int pointer_commit_begin(const struct astra_graphics_device *device,
                                 uint32_t *generation)
 {
@@ -289,11 +284,12 @@ static bool render_batch_valid(const volatile uint8_t *batch,
                                uint32_t bytes)
 {
     uint32_t command_count;
+    uint32_t presentation;
 
     if (bytes < ASTRA_RENDER_BATCH_MIN_BYTES ||
         bytes > ASTRA_RENDER_BATCH_MAX_BYTES ||
         load_be32(batch + 0u) != ASTRA_RENDER_BATCH_MAGIC ||
-        load_be32(batch + 4u) != ASTRA_RENDER_BATCH_VERSION_1_0 ||
+        load_be32(batch + 4u) != ASTRA_RENDER_BATCH_VERSION_1_1 ||
         load_be32(batch + 8u) != bytes ||
         load_be32(batch + 16u) != ASTRA_RENDER_BATCH_SUBMISSION_OFFSET ||
         load_be32(batch + 20u) != ASTRA_RENDER_BATCH_COMPLETION_OFFSET ||
@@ -301,10 +297,21 @@ static bool render_batch_valid(const volatile uint8_t *batch,
         (load_be32(batch + 28u) != ASTRA_RENDER_BATCH_SCANOUT0_OFFSET &&
          load_be32(batch + 28u) != ASTRA_RENDER_BATCH_SCANOUT1_OFFSET))
         return false;
+    presentation = load_be32(batch + 32u);
+    if ((presentation & ~ASTRA_RENDER_BATCH_PRESENT_CURSOR) != 0u ||
+        ((presentation & ASTRA_RENDER_BATCH_PRESENT_CURSOR) != 0u ?
+             (load_be32(batch + 36u) >= ASTRA_DISPLAY_WIDTH ||
+              load_be32(batch + 40u) >= ASTRA_DISPLAY_HEIGHT ||
+              (load_be32(batch + 44u) &
+               ~ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u) :
+             (load_be32(batch + 36u) != 0u ||
+              load_be32(batch + 40u) != 0u ||
+              load_be32(batch + 44u) != 0u)))
+        return false;
     command_count = load_be32(batch + 12u);
     if (command_count == 0u || command_count > ASTRA_RENDER_RING_ENTRIES)
         return false;
-    for (uint32_t offset = 32u; offset < ASTRA_RENDER_BATCH_HEADER_BYTES;
+    for (uint32_t offset = 48u; offset < ASTRA_RENDER_BATCH_HEADER_BYTES;
          offset += 4u)
         if (load_be32(batch + offset) != 0u)
             return false;
@@ -332,6 +339,17 @@ static bool render_batch_valid(const volatile uint8_t *batch,
                                   load_be32(batch + offset + 44u)))))
             return false;
     }
+    return true;
+}
+
+static bool render_batch_cursor(const volatile uint8_t *batch,
+                                uint32_t *packed)
+{
+    if ((load_be32(batch + 32u) & ASTRA_RENDER_BATCH_PRESENT_CURSOR) == 0u)
+        return false;
+    *packed = ASTRA_DISPLAY_HOST_CURSOR_PACK(
+        load_be32(batch + 36u), load_be32(batch + 40u),
+        (load_be32(batch + 44u) & ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u);
     return true;
 }
 
@@ -1223,11 +1241,6 @@ static int self_test(void)
     for (uint32_t y = 0u; y < POINTER_HEIGHT; ++y)
         if ((pointer_inner[y] & (uint16_t)~pointer_outer[y]) != 0u)
             return EXIT_FAILURE;
-    if (!pointer_request_commits(ASTRA_DISPLAY_CURSOR_VISIBLE) ||
-        pointer_request_commits(ASTRA_DISPLAY_CURSOR_VISIBLE |
-                                ASTRA_DISPLAY_CURSOR_DEFER_COMMIT))
-        return EXIT_FAILURE;
-
     (void)memset(plane, 0, sizeof(plane));
     plane[0] = 'A';
     plane[ASTRA_TEXT_CURSOR_SEQUENCE_OFFSET] = 2u;
@@ -1398,7 +1411,7 @@ static int self_test(void)
 
     (void)memset(validation_batch, 0, sizeof(validation_batch));
     store_be32(validation_batch + 0u, ASTRA_RENDER_BATCH_MAGIC);
-    store_be32(validation_batch + 4u, ASTRA_RENDER_BATCH_VERSION_1_0);
+    store_be32(validation_batch + 4u, ASTRA_RENDER_BATCH_VERSION_1_1);
     store_be32(validation_batch + 8u, sizeof(validation_batch));
     store_be32(validation_batch + 12u, 1u);
     store_be32(validation_batch + 16u,
@@ -1407,6 +1420,10 @@ static int self_test(void)
                ASTRA_RENDER_BATCH_COMPLETION_OFFSET);
     store_be32(validation_batch + 24u, 7u);
     store_be32(validation_batch + 28u, ASTRA_RENDER_BATCH_SCANOUT1_OFFSET);
+    store_be32(validation_batch + 32u, ASTRA_RENDER_BATCH_PRESENT_CURSOR);
+    store_be32(validation_batch + 36u, ASTRA_DISPLAY_WIDTH - 1u);
+    store_be32(validation_batch + 40u, ASTRA_DISPLAY_HEIGHT - 1u);
+    store_be32(validation_batch + 44u, ASTRA_DISPLAY_CURSOR_VISIBLE);
     store_be32(validation_batch +
                    ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
                    ASTRA_RENDER_BATCH_ARENA_OFFSET,
@@ -1430,6 +1447,18 @@ static int self_test(void)
                ASTRA_RENDER_BATCH_RESOURCE_OFFSET);
     if (!render_batch_valid(validation_batch, sizeof(validation_batch)))
         return EXIT_FAILURE;
+    {
+        uint32_t packed = 0u;
+
+        if (!render_batch_cursor(validation_batch, &packed) ||
+            packed != ASTRA_DISPLAY_HOST_CURSOR_PACK(
+                ASTRA_DISPLAY_WIDTH - 1u, ASTRA_DISPLAY_HEIGHT - 1u, true))
+            return EXIT_FAILURE;
+    }
+    store_be32(validation_batch + 36u, ASTRA_DISPLAY_WIDTH);
+    if (render_batch_valid(validation_batch, sizeof(validation_batch)))
+        return EXIT_FAILURE;
+    store_be32(validation_batch + 36u, ASTRA_DISPLAY_WIDTH - 1u);
     store_be32(validation_batch +
                    ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
                    ASTRA_RENDER_BATCH_ARENA_OFFSET + 32u,
@@ -1468,7 +1497,6 @@ int main(int argc, char **argv)
     uint32_t active_scanout;
     uint32_t mailbox_sequence = 0u;
     bool display_owned = false;
-    bool pointer_deferred = false;
 
     if (argc == 2 && strcmp(argv[1], "--self-test") == 0)
         return self_test();
@@ -1604,9 +1632,15 @@ int main(int argc, char **argv)
                 uint64_t profile_started = astra_monotonic_nanoseconds();
                 uint64_t profile_rendered;
                 uint64_t profile_presented;
+                uint32_t cursor_packed = 0u;
+                bool batch_cursor;
                 int render_status;
                 int present_status;
 
+                batch_cursor = render_batch_cursor(
+                    (const uint8_t *)(const void *)mailbox +
+                        ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
+                    &cursor_packed);
                 scanout_offset = load_be32(
                     (const uint8_t *)(const void *)mailbox +
                     ASTRA_DISPLAY_MAILBOX_HEADER_BYTES + 28u);
@@ -1620,9 +1654,12 @@ int main(int argc, char **argv)
                             ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
                         request.frame_bytes, &scanout_offset);
                 }
+                if (render_status == 0 && batch_cursor)
+                    render_status = pointer_update(
+                        &device, cursor_packed, false);
                 profile_rendered = astra_monotonic_nanoseconds();
                 present_status = render_status == 0 ?
-                    present(&device, scanout_offset, pointer_deferred) : -1;
+                    present(&device, scanout_offset, batch_cursor) : -1;
                 profile_presented = astra_monotonic_nanoseconds();
                 if (getenv("ASTRA_DISPLAY_PROFILE") != NULL)
                     fprintf(stderr,
@@ -1636,7 +1673,6 @@ int main(int argc, char **argv)
                             (unsigned long long)
                                 ((profile_presented - profile_rendered) / 1000u));
                 if (render_status == 0 && present_status == 0) {
-                    pointer_deferred = false;
                     active_scanout = scanout_offset;
                     generation = astra_mmio_read(&device,
                                                  ASTRA_REG_GENERATION);
@@ -1649,13 +1685,9 @@ int main(int argc, char **argv)
                        request.operation == ASTRA_DISPLAY_CURSOR_UPDATE &&
                        request.frame_pitch == 0u &&
                        (request.frame_bytes &
-                        ~(ASTRA_DISPLAY_CURSOR_VISIBLE |
-                          ASTRA_DISPLAY_CURSOR_DEFER_COMMIT)) == 0u) {
-                bool commit = pointer_request_commits(request.frame_bytes);
-
+                        ~ASTRA_DISPLAY_CURSOR_VISIBLE) == 0u) {
                 if (pointer_update(&device, request.color_rgb565,
-                                   commit) == 0) {
-                    pointer_deferred = !commit;
+                                   true) == 0) {
                     generation = astra_mmio_read(&device,
                                                  ASTRA_REG_GENERATION);
                     status = ASTRA_DISPLAY_COMPLETION_OK;

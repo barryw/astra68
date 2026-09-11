@@ -359,6 +359,7 @@ typedef struct AstraDisplayState {
     bool mailbox_enabled;
     bool busy;
     bool completion_valid;
+    bool cursor_inflight;
 } AstraDisplayState;
 
 typedef struct AstraNetworkEndpointState {
@@ -545,7 +546,7 @@ static uint32_t astra_display_queue(const AstraDisplayState *display)
                 ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID : 0u);
 }
 
-static void astra_display_count_batch(Astra68State *s, uint32_t source,
+static bool astra_display_count_batch(Astra68State *s, uint32_t source,
                                       uint32_t byte_size)
 {
     AstraDisplayState *display = &s->display;
@@ -555,12 +556,12 @@ static void astra_display_count_batch(Astra68State *s, uint32_t source,
                        ASTRA_RENDER_BATCH_ARENA_OFFSET;
 
     if (ldl_be_p(batch) != ASTRA_RENDER_BATCH_MAGIC ||
-        ldl_be_p(batch + 4u) != ASTRA_RENDER_BATCH_VERSION_1_0 ||
+        ldl_be_p(batch + 4u) != ASTRA_RENDER_BATCH_VERSION_1_1 ||
         ldl_be_p(batch + 8u) != byte_size ||
         ldl_be_p(batch + 16u) != ASTRA_RENDER_BATCH_SUBMISSION_OFFSET ||
         records > byte_size || count > ASTRA_RENDER_RING_ENTRIES ||
         count > (byte_size - records) / ASTRA_RENDER_COMMAND_BYTES)
-        return;
+        return false;
     ++display->batch_submissions;
     display->batch_commands += count;
     for (uint32_t index = 0; index < count; ++index) {
@@ -575,6 +576,17 @@ static void astra_display_count_batch(Astra68State *s, uint32_t source,
         else if (opcode == ASTRA_RENDER_OP_GLYPH_RUN)
             ++display->glyph_commands;
     }
+    if (ldl_be_p(batch + 32u) != ASTRA_RENDER_BATCH_PRESENT_CURSOR ||
+        ldl_be_p(batch + 36u) >= ASTRA_DISPLAY_WIDTH ||
+        ldl_be_p(batch + 40u) >= ASTRA_DISPLAY_HEIGHT ||
+        (ldl_be_p(batch + 44u) & ~ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u)
+        return false;
+    display->cursor_x = ldl_be_p(batch + 36u);
+    display->cursor_y = ldl_be_p(batch + 40u);
+    display->cursor_visible =
+        (ldl_be_p(batch + 44u) & ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u;
+    ++display->cursor_updates;
+    return true;
 }
 
 static void astra_display_complete(Astra68State *s, uint32_t status,
@@ -591,7 +603,7 @@ static void astra_display_complete(Astra68State *s, uint32_t status,
     display->completion_generation = generation;
     display->generation = generation;
     display->completion_cycle = astra_now_cycles(s);
-    if (display->operation == ASTRA_DISPLAY_CURSOR_UPDATE)
+    if (display->cursor_inflight)
         display->cursor_completion_cycle = display->completion_cycle;
     ++display->completions;
     s->astraea.irq_status |= ASTRAEA_IRQ_DRAW_DONE;
@@ -651,8 +663,7 @@ static void astra_display_submit(Astra68State *s)
           byte_size > ASTRA_RENDER_BATCH_MAX_BYTES)) ||
         (operation == ASTRA_DISPLAY_CURSOR_UPDATE &&
          ((byte_size &
-           ~(ASTRA_DISPLAY_CURSOR_VISIBLE |
-             ASTRA_DISPLAY_CURSOR_DEFER_COMMIT)) != 0u ||
+           ~ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u ||
           (display->request_source & ASTRA_DISPLAY_HOST_CURSOR_X_MASK) >=
               ASTRA_DISPLAY_WIDTH ||
           ((display->request_source & ASTRA_DISPLAY_HOST_CURSOR_Y_MASK) >>
@@ -664,8 +675,10 @@ static void astra_display_submit(Astra68State *s)
         return;
     display->busy = true;
     display->operation = operation;
+    display->cursor_inflight = false;
     if (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH)
-        astra_display_count_batch(s, display->request_source, byte_size);
+        display->cursor_inflight = astra_display_count_batch(
+            s, display->request_source, byte_size);
     if (operation == ASTRA_DISPLAY_CURSOR_UPDATE) {
         display->cursor_x = display->request_source &
                             ASTRA_DISPLAY_HOST_CURSOR_X_MASK;
@@ -675,9 +688,10 @@ static void astra_display_submit(Astra68State *s)
         display->cursor_visible =
             (display->request_source & ASTRA_DISPLAY_HOST_CURSOR_VISIBLE) != 0u;
         ++display->cursor_updates;
+        display->cursor_inflight = true;
     }
     display->submit_cycle = astra_now_cycles(s);
-    if (operation == ASTRA_DISPLAY_CURSOR_UPDATE)
+    if (display->cursor_inflight)
         display->cursor_submit_cycle = display->submit_cycle;
     ++display->submissions;
     if (display->mailbox_enabled) {
@@ -741,6 +755,7 @@ static void astra_display_reset(Astra68State *s)
     display->cursor_x = 0u;
     display->cursor_y = 0u;
     display->cursor_visible = 0u;
+    display->cursor_inflight = false;
     s->astraea.irq_status &= ~ASTRAEA_IRQ_DRAW_DONE;
     astra_update_irq(s);
 }
@@ -4209,7 +4224,7 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
             if (value & ASTRA_DISPLAY_HOST_POP) {
                 s->display.completion_valid = false;
                 s->display.collect_cycle = astra_now_cycles(s);
-                if (s->display.operation == ASTRA_DISPLAY_CURSOR_UPDATE)
+                if (s->display.cursor_inflight)
                     s->display.cursor_collect_cycle =
                         s->display.collect_cycle;
             }

@@ -467,8 +467,7 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 && byte_size != 0u) ||
         (operation == ASTRA_DISPLAY_CURSOR_UPDATE &&
          ((byte_size &
-           ~(ASTRA_DISPLAY_CURSOR_VISIBLE |
-             ASTRA_DISPLAY_CURSOR_DEFER_COMMIT)) != 0u ||
+           ~ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u ||
           (source & ASTRA_DISPLAY_HOST_CURSOR_X_MASK) >= ASTRA_DISPLAY_WIDTH ||
           ((source & ASTRA_DISPLAY_HOST_CURSOR_Y_MASK) >>
                ASTRA_DISPLAY_HOST_CURSOR_Y_SHIFT) >= ASTRA_DISPLAY_HEIGHT)) ||

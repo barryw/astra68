@@ -13,6 +13,11 @@ import tempfile
 MANIFEST = "artifacts.sha256"
 
 
+def _identity(text):
+    return (len(text) == 64 and
+            all(character in "0123456789abcdef" for character in text))
+
+
 def _relative_path(text):
     path = PurePosixPath(text)
     if (not text or text != path.as_posix() or path.is_absolute() or
@@ -170,6 +175,15 @@ def install(stage, store, activate=True):
             raise RuntimeError("release changed while being installed")
 
     if activate:
+        current = store / "current"
+        if current.is_symlink():
+            old_release = current.resolve()
+            if (old_release.parent != releases or
+                    not _identity(old_release.name) or
+                    verify(old_release, installed=True) != old_release.name):
+                raise RuntimeError("current release selector is invalid")
+            if old_release.name != identity:
+                select(store, "previous", old_release.name)
         temporary = store / (".current.%u" % os.getpid())
         try:
             temporary.symlink_to(Path("releases") / identity)
@@ -178,6 +192,61 @@ def install(stage, store, activate=True):
             if temporary.is_symlink():
                 temporary.unlink()
     return identity
+
+
+def _selected_identity(store, selector):
+    if not selector.is_symlink():
+        return None
+    release = selector.resolve()
+    releases = store / "releases"
+    if (release.parent != releases or not _identity(release.name) or
+            verify(release, installed=True) != release.name):
+        raise RuntimeError("invalid release selector: %s" % selector)
+    return release.name
+
+
+def _remove_tree(path):
+    for parent, _directories, _files in os.walk(path):
+        Path(parent).chmod(0o700)
+    shutil.rmtree(path)
+
+
+def prune(store):
+    store = Path(store).resolve()
+    releases = store / "releases"
+    retained = set()
+    for name in ("current", "previous"):
+        identity = _selected_identity(store, store / name)
+        if identity is not None:
+            retained.add(identity)
+    by_boot = store / "by-boot"
+    if by_boot.is_dir():
+        for parent, directories, files in os.walk(by_boot,
+                                                   followlinks=False):
+            for name in directories + files:
+                identity = _selected_identity(store, Path(parent) / name)
+                if identity is not None:
+                    retained.add(identity)
+    removed_releases = 0
+    if releases.is_dir():
+        for release in releases.iterdir():
+            if (release.is_symlink() or not release.is_dir() or
+                    not _identity(release.name)):
+                raise RuntimeError("invalid installed release: %s" % release)
+            if release.name not in retained:
+                _remove_tree(release)
+                removed_releases += 1
+    removed_states = 0
+    state = store / "state"
+    if state.is_dir():
+        for generation in state.iterdir():
+            if (generation.is_symlink() or not generation.is_dir() or
+                    not _identity(generation.name)):
+                continue
+            if generation.name not in retained:
+                _remove_tree(generation)
+                removed_states += 1
+    return removed_releases, removed_states
 
 
 def select(store, selector, identity):
@@ -223,6 +292,8 @@ def main():
     select_parser.add_argument("store")
     select_parser.add_argument("selector")
     select_parser.add_argument("identity")
+    prune_parser = commands.add_parser("prune")
+    prune_parser.add_argument("store")
     arguments = parser.parse_args()
     if arguments.command == "verify":
         identity = verify(arguments.root, arguments.installed)
@@ -231,9 +302,13 @@ def main():
     elif arguments.command == "install":
         identity = install(arguments.stage, arguments.store,
                            not arguments.no_activate)
-    else:
+    elif arguments.command == "select":
         identity = select(arguments.store, arguments.selector,
                           arguments.identity)
+    else:
+        releases, states = prune(arguments.store)
+        print("releases=%u state=%u" % (releases, states))
+        return
     print(identity)
 
 

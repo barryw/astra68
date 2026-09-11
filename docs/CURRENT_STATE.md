@@ -526,6 +526,36 @@ from 103--110 ms hardware repaints to roughly 19 ms hardware batches, with
 about 2.2 ms of transfer. A physical 121-line zsh scroll workload completed
 without corruption or a service restart.
 
+Immutable release
+`7a7abd27067563523838288cb8aeb00fcb6acd56acd50d97666d8243bae2daea`
+is the current byte-verified DE25 runtime. It reached stage 8 with zero service
+restarts. Its predecessor
+`2e05b83e3bb8feada63d017e473829ad011095b04ee94e4c52c356c3a71a25a8`
+is the automatic rollback release; these are the only unpinned release and
+state generations retained on the board. The root filesystem has 18 GiB free
+and is 35% used.
+
+The apparent recurrent zsh crash was an old capture predating the active
+release. The actual zsh failure was nevertheless fixed at its shared process
+boundary: ncurses reserves 65,552 bytes in `_nc_read_tic_entry`, exceeding the
+former 60 KiB usable stack ceiling. User threads now receive an 8 MiB virtual
+stack reservation with a guard page and demand-paged physical backing; stack
+page accounting is wide enough for the reservation. The unchanged zsh binary
+starts, executes `echo zsh-ok`, and returns to its prompt on the physical DE25.
+
+Render-batch ABI 1.1 carries the hardware-pointer state with the scene, so a
+window move submits and commits one scene-plus-pointer transaction at one
+vblank. A 60-sample physical drag produced 30 submissions, 30 render batches,
+and 29 completions while input was active, then 34/34/34 after settling; the
+former path submitted a separate cursor request for the same input sample.
+This removes split-frame state but does not yet meet the 60 Hz movement target.
+Cycle measurements identify the remaining limit without inference: a moved
+Terminal frame spends about 25--27 ms in three large hardware passes--a
+434,928-pixel background fill, a 434,928-pixel desktop restore, and a
+403,440-pixel Terminal blit. Hardware-managed window planes/z-order, or an
+equivalently measured compositor design, is the next display architecture
+work; cursor-path micro-optimization cannot solve this bottleneck.
+
 ## Build and artifact rules
 
 Build, QEMU, FPGA, and physical work run through Beast. Source transfer is an
@@ -537,3 +567,9 @@ is not evidence.
 Generated products never enter source control. Immutable releases are selected
 by verified content identity, and physical acceptance requires the exact ROM,
 QEMU, service configuration, storage base, and FPGA shell intended for release.
+Activation first validates the installed release and its `current` selector,
+then rotates the previous valid `current` release into `previous` atomically.
+Only after the newly selected `current` release verifies by content identity
+does deployment prune release and writable-state generations unreachable from
+`current`, `previous`, or explicit `by-boot` selectors. This is the permanent
+retention policy; an unbounded release archive on the board is not permitted.

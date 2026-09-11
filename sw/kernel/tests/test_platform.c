@@ -411,16 +411,20 @@ static void test_fenced_display_transport(void)
     assert(kernel_platform_display_submit(
         10u, ASTRA_DISPLAY_CURSOR_UPDATE,
         ASTRA_DISPLAY_HOST_CURSOR_PACK(321u, 123u, true),
-        ASTRA_DISPLAY_CURSOR_DEFER_COMMIT));
+        ASTRA_DISPLAY_CURSOR_VISIBLE));
     assert(registers->DISPLAY_REQ_OP ==
            (ASTRA_DISPLAY_CURSOR_UPDATE |
-            ASTRA_DISPLAY_CURSOR_DEFER_COMMIT <<
+            ASTRA_DISPLAY_CURSOR_VISIBLE <<
                 ASTRA_DISPLAY_HOST_BYTE_SIZE_SHIFT));
     assert(registers->DISPLAY_REQ_COLOR ==
            ASTRA_DISPLAY_HOST_CURSOR_PACK(321u, 123u, true));
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
     assert(!kernel_platform_display_submit(
         11u, ASTRA_DISPLAY_CURSOR_UPDATE,
+        ASTRA_DISPLAY_HOST_CURSOR_PACK(0u, 0u, true), 2u));
+    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
+    assert(!kernel_platform_display_submit(
+        12u, ASTRA_DISPLAY_CURSOR_UPDATE,
         ASTRA_DISPLAY_HOST_CURSOR_PACK(ASTRA_DISPLAY_WIDTH, 0u, true), 0u));
     assert((astraea->IRQ_EN & ASTRAEA_IRQ_DRAW_DONE) != 0u);
 

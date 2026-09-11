@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <astra/gui.h>
+#include <astra/input_service.h>
 #include <astra/render_batch.h>
 #include <astra/runtime.h>
 
@@ -17,6 +18,25 @@ static uint32_t delivered_count;
 static uint32_t send_would_block;
 static uint32_t wait_count;
 static uint32_t wait_poll_status = ASTRA_SYSCALL_OK;
+static AstraInputEventMessage input_messages[4];
+static uint32_t input_message_count;
+static uint32_t input_message_index;
+
+uint32_t astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
+                            uint32_t *handles, uint32_t handle_capacity,
+                            uint32_t *size, uint32_t *handle_count)
+{
+    assert(handle == 0x600u && message != NULL &&
+           capacity == sizeof(AstraInputEventMessage) && handles == NULL &&
+           handle_capacity == 0u && size != NULL && handle_count != NULL);
+    if (input_message_index == input_message_count)
+        return ASTRA_SYSCALL_WOULD_BLOCK;
+    memcpy(message, &input_messages[input_message_index++],
+           sizeof(AstraInputEventMessage));
+    *size = sizeof(AstraInputEventMessage);
+    *handle_count = 0u;
+    return ASTRA_SYSCALL_OK;
+}
 
 uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
                          const uint32_t *handles, uint32_t handle_count)
@@ -386,7 +406,7 @@ int main(void)
                                color(theme.accent));
         label(&desktop.windows[0].surface.view, 40, 104,
               "Terminal", 8u, color(theme.text_primary));
-        assert(valid_batch(compose(batch, 1u, &desktop, &error, NULL)) != 0u);
+        assert(valid_batch(compose(batch, 1u, &desktop, &error, NULL, 0)) != 0u);
         assert(error == ASTRA_STATUS_OK);
     }
 
@@ -432,19 +452,19 @@ int main(void)
 
     add_window(&state, 0u, ASTRA_WINDOW_POPOVER, 300u, 380u,
                250u, 125u, 0u, 0u);
-    assert(valid_batch(compose(batch, 1u, &state, &error, NULL)) != 0u);
+    assert(valid_batch(compose(batch, 1u, &state, &error, NULL, 0)) != 0u);
     rendered(&state.windows[0]);
     state.damage[1] = (DamageRect){0};
     add_window(&state, 1u, ASTRA_WINDOW_UTILITY, 600u, 80u,
                360u, 145u, 0u, ASTRA_WINDOW_GADGET_CLOSE);
     damage_window(&state, &theme, &state.windows[1]);
-    assert(valid_batch(compose(batch, 2u, &state, &error, NULL)) != 0u);
+    assert(valid_batch(compose(batch, 2u, &state, &error, NULL, 0)) != 0u);
     rendered(&state.windows[1]);
     state.damage[0] = (DamageRect){0};
     add_window(&state, 2u, ASTRA_WINDOW_DIALOG, 520u, 300u,
                400u, 190u, ASTRA_WINDOW_MODAL, ASTRA_WINDOW_GADGET_CLOSE);
     damage_window(&state, &theme, &state.windows[2]);
-    assert(valid_batch(compose(batch, 3u, &state, &error, NULL)) != 0u);
+    assert(valid_batch(compose(batch, 3u, &state, &error, NULL, 0)) != 0u);
     rendered(&state.windows[2]);
     state.damage[1] = (DamageRect){0};
     add_window(&state, 3u, ASTRA_WINDOW_STANDARD, 100u, 100u,
@@ -452,43 +472,54 @@ int main(void)
                ASTRA_WINDOW_GADGET_CLOSE | ASTRA_WINDOW_GADGET_MINIMIZE |
                    ASTRA_WINDOW_GADGET_MAXIMIZE);
     damage_window(&state, &theme, &state.windows[3]);
-    assert(valid_batch(compose(batch, 4u, &state, &error, NULL)) != 0u);
+    assert(valid_batch(compose(batch, 4u, &state, &error, NULL, 0)) != 0u);
     rendered(&state.windows[3]);
     state.damage[0] = (DamageRect){0};
     assert(apply_command(&state, &theme, &resize, &closed, &changed) ==
            ASTRA_STATUS_OK && changed);
-    assert(valid_batch(compose(batch, 5u, &state, &error, NULL)) != 0u);
+    assert(valid_batch(compose(batch, 5u, &state, &error, NULL, 0)) != 0u);
     assert(batch_has_surface_fill(580u, 300u, color(theme.client)));
     rendered(&state.windows[3]);
     assert(apply_command(&state, &theme, &move, &closed, &changed) ==
            ASTRA_STATUS_OK && changed);
-    assert(valid_batch(compose(batch, 6u, &state, &error, NULL)) != 0u);
+    state.pointer_x = 321;
+    state.pointer_y = 654;
+    assert(valid_batch(compose(batch, 6u, &state, &error, NULL, 1)) != 0u);
+    assert(read_be32(batch + 32u) == ASTRA_RENDER_BATCH_PRESENT_CURSOR);
+    assert(read_be32(batch + 36u) == 321u);
+    assert(read_be32(batch + 40u) == 654u);
+    assert(read_be32(batch + 44u) == ASTRA_DISPLAY_CURSOR_VISIBLE);
     state.capture_window = 4u;
     state.capture_region = HIT_TITLE;
     state.capture_dx = 10;
     state.capture_dy = 10;
-    assert(handle_pointer(&state, &motion, &effects, &frame_window,
-                          &frame_timestamp) == ASTRA_STATUS_OK);
+    motion.size = sizeof(motion);
+    motion.version = ASTRA_INPUT_SERVICE_VERSION;
+    astra_message_header_set(
+        &input_messages[0].header, sizeof(AstraInputEventMessage),
+        ASTRA_INPUT_SERVICE_PROTOCOL, ASTRA_INPUT_SERVICE_VERSION,
+        ASTRA_INPUT_OPERATION_EVENT, 1u);
+    input_messages[0].event = motion;
     motion.timestamp_ms = 100u;
     motion.value_x = 220;
     motion.value_y = 175;
-    assert(handle_pointer(&state, &motion, &effects, &frame_window,
-                          &frame_timestamp) == ASTRA_STATUS_OK);
+    astra_message_header_set(
+        &input_messages[1].header, sizeof(AstraInputEventMessage),
+        ASTRA_INPUT_SERVICE_PROTOCOL, ASTRA_INPUT_SERVICE_VERSION,
+        ASTRA_INPUT_OPERATION_EVENT, 2u);
+    input_messages[1].event = motion;
+    input_message_count = 2u;
+    input_message_index = 0u;
+    assert(drain_input(0x600u, &state, &effects, &frame_window,
+                       &frame_timestamp) == ASTRA_STATUS_OK);
+    assert(input_message_index == input_message_count);
     assert(state.windows[3].request.x == 210u &&
            state.windows[3].request.y == 165u);
     assert((effects & (DISPLAY_POINTER_CURSOR | DISPLAY_POINTER_RENDER |
                        DISPLAY_POINTER_FRAME)) ==
            (DISPLAY_POINTER_CURSOR | DISPLAY_POINTER_RENDER |
             DISPLAY_POINTER_FRAME));
-    assert(cursor_request_flags(DISPLAY_POINTER_CURSOR) ==
-           ASTRA_DISPLAY_CURSOR_VISIBLE);
-    assert(cursor_request_flags(DISPLAY_POINTER_CURSOR |
-                                DISPLAY_POINTER_RENDER) ==
-           (ASTRA_DISPLAY_CURSOR_VISIBLE |
-            ASTRA_DISPLAY_CURSOR_DEFER_COMMIT));
     assert(frame_window == 4u && frame_timestamp == 100u);
-    assert((ASTRA_DISPLAY_CURSOR_VISIBLE |
-            ASTRA_DISPLAY_CURSOR_DEFER_COMMIT) == 3u);
     state.capture_window = 0u;
     state.capture_region = HIT_NONE;
     pointer_event(&state.windows[3], &theme,
@@ -884,7 +915,7 @@ int main(void)
         add_window(&stack, 1u, ASTRA_WINDOW_FULLSCREEN, 100u, 100u,
                    200u, 200u, ASTRA_WINDOW_ACTIVE, 0u);
 
-        bytes = compose(batch, 2u, &stack, &error, NULL);
+        bytes = compose(batch, 2u, &stack, &error, NULL, 0);
         assert(bytes != 0u && error == ASTRA_STATUS_OK);
         assert(batch_has_fill(100, 100, 200u, 200u, color(theme.canvas)));
         assert(batch_fill_count(0, 0, 200u, 200u, color(theme.client)) == 1u);

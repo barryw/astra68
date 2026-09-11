@@ -101,6 +101,36 @@ with tempfile.TemporaryDirectory() as temporary_text:
     release.select(store, "by-boot/test", identity)
     assert (store / "by-boot/test").resolve() == installed.resolve()
 
+    second_source = store / "second-source"
+    second_identity = release.create(
+        second_source, ["second=%s" % (sources / "qemu")])
+    release.install(second_source, store)
+    assert (store / "current").resolve() == \
+        (store / "releases" / second_identity).resolve()
+    assert (store / "previous").resolve() == installed.resolve()
+
+    third_source = store / "third-source"
+    third_identity = release.create(
+        third_source, ["third=%s" % (sources / "image")])
+    release.install(third_source, store)
+    assert (store / "current").resolve() == \
+        (store / "releases" / third_identity).resolve()
+    assert (store / "previous").resolve() == \
+        (store / "releases" / second_identity).resolve()
+
+    state = store / "state"
+    for release_identity in (identity, old_identity, second_identity,
+                             third_identity):
+        (state / release_identity).mkdir(parents=True)
+        (state / release_identity / "storage.img").write_bytes(b"state")
+    assert release.prune(store) == (1, 1)
+    assert not (store / "releases" / old_identity).exists()
+    assert not (state / old_identity).exists()
+    for retained in (identity, second_identity, third_identity):
+        assert (store / "releases" / retained).is_dir()
+        assert (state / retained).is_dir()
+    assert (store / "by-boot/test").resolve() == installed.resolve()
+
     for path in [store] + list(store.rglob("*")):
         if not path.is_symlink():
             path.chmod(path.stat().st_mode | stat.S_IWUSR)

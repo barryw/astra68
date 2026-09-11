@@ -97,7 +97,7 @@ _Static_assert(offsetof(KernelThread, kernel_stack_top) ==
  * by KERNEL_THREAD_MAX and sits in kernel RAM, so growing it is a decision
  * rather than an accident.
  */
-_Static_assert(sizeof(KernelThread) == 192u,
+_Static_assert(sizeof(KernelThread) == 196u,
                "thread record size changed; update the memory budget");
 _Static_assert(sizeof(KernelThreadWaitRegistration) == 8u,
                "wait registration memory budget changed");
@@ -965,7 +965,7 @@ KernelThreadStatus kernel_thread_allocate(uint16_t process_slot,
     candidate->user_stack_top = user_stack;
     candidate->user_stack_base = user_stack - KERNEL_THREAD_STACK_SIZE;
     candidate->stack_pages =
-        (uint8_t)(KERNEL_THREAD_STACK_SIZE / KERNEL_PAGE_SIZE);
+        (uint16_t)(KERNEL_THREAD_STACK_SIZE / KERNEL_PAGE_SIZE);
     candidate->ready_previous = KERNEL_THREAD_SLOT_NONE;
     candidate->ready_next = KERNEL_THREAD_SLOT_NONE;
     /* Slot release validates the complete wait row before clearing occupied. */

@@ -111,15 +111,16 @@ class Qmp:
         self.button(False)
 
 
-def run(qemu, rom, image, catalog, deadline):
+def run(qemu, rom, image, catalog, deadline, prepared_image=False):
     with tempfile.TemporaryDirectory(prefix="astra-display-") as directory:
         socket_path = os.path.join(directory, "display-qmp.sock")
         scratch = os.path.join(directory, "card.img")
         shutil.copyfile(image, scratch)
-        astra_image.install(
-            scratch, catalog,
-            service_names=astra_image.DISPLAY_SERVICES,
-            manifest_text=astra_image.DISPLAY_STARTUP_MANIFEST)
+        if not prepared_image:
+            astra_image.install(
+                scratch, catalog,
+                service_names=astra_image.DISPLAY_SERVICES,
+                manifest_text=astra_image.DISPLAY_STARTUP_MANIFEST)
         environment = qemu_environment(
             qemu, hostfs_root=os.path.join(directory, "hostfs"))
         machine = subprocess.Popen(
@@ -230,7 +231,7 @@ def run(qemu, rom, image, catalog, deadline):
             cursor_y = qmp.property("astra-display-cursor-y")
             cursor_visible = qmp.property("astra-display-cursor-visible")
             if (cursor_updates, cursor_x, cursor_y, cursor_visible) != \
-                    (1, 640, 360, 1):
+                    (1, 960, 540, 1):
                 raise RuntimeError(
                     "initial cursor updates=%d position=%d,%d visible=%d" %
                     (cursor_updates, cursor_x, cursor_y, cursor_visible))
@@ -594,9 +595,12 @@ def main():
     parser.add_argument("--image", required=True)
     parser.add_argument("--catalog", default=astra_image.DEFAULT_CATALOG)
     parser.add_argument("--boot-deadline", type=float, default=90.0)
+    parser.add_argument("--prepared-image", action="store_true",
+                        help="use an already-published image without rebuilding")
     arguments = parser.parse_args()
     return run(arguments.qemu, arguments.rom, arguments.image,
-               arguments.catalog, arguments.boot_deadline)
+               arguments.catalog, arguments.boot_deadline,
+               arguments.prepared_image)
 
 
 if __name__ == "__main__":

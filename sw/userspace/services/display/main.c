@@ -126,13 +126,6 @@ enum {
     DISPLAY_POINTER_FRAME = 1u << 2,
 };
 
-static uint32_t cursor_request_flags(uint32_t effects)
-{
-    return ASTRA_DISPLAY_CURSOR_VISIBLE |
-        ((effects & DISPLAY_POINTER_RENDER) != 0u ?
-             ASTRA_DISPLAY_CURSOR_DEFER_COMMIT : 0u);
-}
-
 enum {
     DISPLAY_FAIL_ARM = ASTRA_STATUS_PROGRAM_FIRST,
     DISPLAY_FAIL_SUBMIT,
@@ -1245,7 +1238,7 @@ static uint32_t compose_failed(const AstraRenderBuilder *builder,
 
 static uint32_t compose(void *storage, uint32_t fence,
                         DisplayState *state, uint32_t *error,
-                        uint32_t *failure)
+                        uint32_t *failure, int include_cursor)
 {
     AstraRenderBuilder builder = {0};
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -1347,6 +1340,11 @@ static uint32_t compose(void *storage, uint32_t fence,
             return compose_failed(&builder, error, failure,
                                   ASTRA_STATUS_LIMIT);
     }
+    if (include_cursor && !astra_render_builder_cursor(
+            &builder, (uint32_t)state->pointer_x,
+            (uint32_t)state->pointer_y, ASTRA_DISPLAY_CURSOR_VISIBLE))
+        return compose_failed(&builder, error, failure,
+                              ASTRA_STATUS_INVALID);
     framebuffer = astra_render_builder_finish(&builder);
     if (framebuffer == 0u)
         return compose_failed(&builder, error, failure,
@@ -1364,6 +1362,7 @@ static void log_builder_failure(uint32_t failure)
         "display render command ring is full",
         "display render surface geometry is invalid",
         "display render glyph table is full",
+        "display render presentation state is invalid",
     };
 
     if (failure >= sizeof(messages) / sizeof(messages[0]))
@@ -1454,7 +1453,8 @@ static uint32_t update_cursor(uint32_t device, uint32_t irq,
 
 static uint32_t render(uint32_t device, uint32_t irq,
                        AstraDmaBufferInfo *framebuffer, DisplayState *state,
-                       uint32_t *next_fence, uint32_t *armed)
+                       uint32_t *next_fence, uint32_t *armed,
+                       int include_cursor)
 {
     uint32_t buffer = (*next_fence & 1u) != 0u ? 1u : 0u;
     uint32_t compose_status = ASTRA_STATUS_OK;
@@ -1462,7 +1462,7 @@ static uint32_t render(uint32_t device, uint32_t irq,
     last_builder_failure = ASTRA_RENDER_BUILDER_FAILURE_NONE;
     uint32_t bytes = compose((void *)(uintptr_t)framebuffer->virtual_base,
                              *next_fence, state, &compose_status,
-                             &last_builder_failure);
+                             &last_builder_failure, include_cursor);
     uint32_t status = bytes == 0u ? compose_status :
         present(device, irq, framebuffer, bytes, *next_fence, armed);
 
@@ -2212,7 +2212,7 @@ static void receive_open(uint32_t device, uint32_t irq,
             activate(state, &theme, state->windows[state->count - 1u].id,
                      1, 0u);
         status = render(device, irq, framebuffer, state,
-                        next_fence, armed);
+                        next_fence, armed, 0);
         if (status != ASTRA_STATUS_OK)
             log_render_failure("display window-open render failed", status);
     }
@@ -2239,7 +2239,7 @@ static void receive_open(uint32_t device, uint32_t irq,
         (void)apply_command(state, &theme, &close, &failed, &changed);
         if (changed) {
             status = render(device, irq, framebuffer, state,
-                            next_fence, armed);
+                            next_fence, armed, 0);
             if (status != ASTRA_STATUS_OK)
                 render_failure("display close render failed", status);
         }
@@ -2278,7 +2278,7 @@ static void receive_command(uint32_t device, uint32_t irq,
 
         (void)apply_command(state, &theme, &close, &closed, &changed);
         if (changed && render(device, irq, framebuffer, state,
-                              next_fence, armed) != ASTRA_STATUS_OK)
+                              next_fence, armed, 0) != ASTRA_STATUS_OK)
             astra_process_exit(DISPLAY_FAIL_COMPLETION);
         close_window(&closed);
         return;
@@ -2292,7 +2292,7 @@ static void receive_command(uint32_t device, uint32_t irq,
              DISPLAY_FAIL_PROTOCOL;
     if (status == ASTRA_STATUS_OK && changed) {
         status = render(device, irq, framebuffer, state,
-                        next_fence, armed);
+                        next_fence, armed, 0);
         if (status != ASTRA_STATUS_OK)
             render_failure("display window-command render failed", status);
     }
@@ -2424,6 +2424,28 @@ static uint32_t receive_input(uint32_t receive,
     return ASTRA_STATUS_OK;
 }
 
+/* Apply every input event already queued, then present the resulting state
+ * once.  Pointer motion is absolute, so replaying intermediate frames only
+ * adds latency; button, key, and text events still retain queue order. */
+static uint32_t drain_input(uint32_t receive, DisplayState *state,
+                            uint32_t *effects, uint32_t *frame_window,
+                            uint32_t *frame_timestamp)
+{
+    for (;;) {
+        AstraLogicalInputEvent event;
+        uint32_t status = receive_input(receive, &event);
+
+        if (status == ASTRA_SYSCALL_WOULD_BLOCK)
+            return ASTRA_STATUS_OK;
+        if (status != ASTRA_STATUS_OK)
+            return status;
+        status = handle_pointer(state, &event, effects, frame_window,
+                                frame_timestamp);
+        if (status != ASTRA_STATUS_OK)
+            return status;
+    }
+}
+
 static uint32_t display_wait_handles(const DisplayState *state,
                                      uint32_t gui_receive,
                                      uint32_t input_receive,
@@ -2487,21 +2509,20 @@ static void serve_windows(uint32_t device, uint32_t irq,
             uint32_t effects = 0u;
             uint32_t frame_window = 0u;
             uint32_t frame_timestamp = 0u;
-            AstraLogicalInputEvent event;
-
-            status = receive_input(input_receive, &event);
-            if (status != ASTRA_STATUS_OK ||
-                handle_pointer(&state, &event, &effects, &frame_window,
-                               &frame_timestamp) != ASTRA_STATUS_OK)
+            status = drain_input(input_receive, &state, &effects,
+                                 &frame_window, &frame_timestamp);
+            if (status != ASTRA_STATUS_OK)
                 astra_process_exit(DISPLAY_FAIL_PROTOCOL);
             if ((effects & DISPLAY_POINTER_CURSOR) != 0u &&
+                (effects & DISPLAY_POINTER_RENDER) == 0u &&
                 update_cursor(device, irq, state.pointer_x, state.pointer_y,
-                              cursor_request_flags(effects),
+                              ASTRA_DISPLAY_CURSOR_VISIBLE,
                               &cursor_fence, &armed) != ASTRA_STATUS_OK)
                 astra_process_exit(DISPLAY_FAIL_COMPLETION);
             if ((effects & DISPLAY_POINTER_RENDER) != 0u) {
                 status = render(device, irq, framebuffer, &state,
-                                &next_fence, &armed);
+                                &next_fence, &armed,
+                                (effects & DISPLAY_POINTER_CURSOR) != 0u);
                 if (status != ASTRA_STATUS_OK)
                     render_failure("display pointer render failed", status);
             }

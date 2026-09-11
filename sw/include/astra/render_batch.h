@@ -11,7 +11,8 @@
  * records; it never expands them into framebuffer pixels.
  */
 #define ASTRA_RENDER_BATCH_MAGIC UINT32_C(0x41524254) /* ARBT */
-#define ASTRA_RENDER_BATCH_VERSION_1_0 UINT32_C(0x00010000)
+#define ASTRA_RENDER_BATCH_VERSION_1_1 UINT32_C(0x00010001)
+#define ASTRA_RENDER_BATCH_PRESENT_CURSOR (UINT32_C(1) << 0)
 #define ASTRA_RENDER_BATCH_HEADER_BYTES 64u
 #define ASTRA_RENDER_BATCH_ARENA_OFFSET UINT32_C(0x00800000)
 #define ASTRA_RENDER_BATCH_SUBMISSION_OFFSET UINT32_C(0x00801000)
@@ -37,7 +38,11 @@ typedef struct AstraRenderBatchHeader {
     uint32_t completion_ring_offset;
     uint32_t resource_generation;
     uint32_t scanout_offset;
-    uint32_t reserved[8];
+    uint32_t presentation_flags;
+    uint32_t cursor_x;
+    uint32_t cursor_y;
+    uint32_t cursor_flags;
+    uint32_t reserved[4];
 } AstraRenderBatchHeader;
 
 _Static_assert(sizeof(AstraRenderBatchHeader) ==

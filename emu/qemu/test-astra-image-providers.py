@@ -217,6 +217,21 @@ with tempfile.TemporaryDirectory() as directory:
 
 astra_image.subprocess.run = original_run
 
+calls = []
+original_services = astra_image._services
+original_replace_volume_file = astra_image._replace_volume_file
+astra_image._services = lambda directory, names: \
+    calls.append((directory, names)) or [("display", "display-image")]
+astra_image._replace_volume_file = lambda image, source, target: \
+    calls.append((image, source, target))
+astra_image.install_service("system.img", "display", services="services")
+assert calls == [
+    ("services", ("display",)),
+    ("system.img", "display-image", "/services/display"),
+]
+astra_image._services = original_services
+astra_image._replace_volume_file = original_replace_volume_file
+
 with tempfile.TemporaryDirectory() as directory:
     for name in ("status", "stale-orphan"):
         with open(os.path.join(directory, name), "wb") as image:

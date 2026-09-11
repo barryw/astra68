@@ -51,5 +51,7 @@ if [ "$ACTIVE" != "$IDENTITY" ]; then
     echo "active Astra release identity changed" >&2
     exit 1
 fi
+$SSH "$BOARD" "PYTHONDONTWRITEBYTECODE=1 python3 \
+'$STORE/current/bin/astra-release.py' prune '$STORE'"
 INCOMING=
 echo "ASTRA_DE25_RELEASE PASS release=$IDENTITY"

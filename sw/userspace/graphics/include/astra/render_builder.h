@@ -17,6 +17,7 @@ typedef enum AstraRenderBuilderFailure {
     ASTRA_RENDER_BUILDER_FAILURE_COMMAND_CAPACITY,
     ASTRA_RENDER_BUILDER_FAILURE_SURFACE,
     ASTRA_RENDER_BUILDER_FAILURE_GLYPH,
+    ASTRA_RENDER_BUILDER_FAILURE_PRESENTATION,
 } AstraRenderBuilderFailure;
 
 typedef struct AstraRenderBuilder {
@@ -36,6 +37,8 @@ typedef struct AstraRenderBuilder {
 int astra_render_builder_init(AstraRenderBuilder *builder, void *storage,
                               uint32_t bytes, uint32_t generation);
 uint32_t astra_render_builder_frame(const AstraRenderBuilder *builder);
+int astra_render_builder_cursor(AstraRenderBuilder *builder, uint32_t x,
+                                uint32_t y, uint32_t flags);
 uint32_t astra_render_builder_scanout(AstraRenderBuilder *builder,
                                       uint32_t scanout_offset);
 uint32_t astra_render_builder_surface(AstraRenderBuilder *builder,

@@ -439,6 +439,39 @@ def _install_bundle(volume, source, destination):
             _debugfs(volume, "write %s %s" % (host, guest), "bundle file")
 
 
+def _replace_volume_file(image, source, target):
+    """Replace one file without rebuilding or republishing unrelated products."""
+    if not os.path.isfile(source) or not target.startswith("/"):
+        raise RuntimeError("invalid image file replacement")
+    offset, length = ext4_partition(image)
+    with tempfile.TemporaryDirectory(prefix="astra-volume-") as temporary:
+        volume = os.path.join(temporary, "volume.img")
+        _slice(image, offset, length, volume)
+        fsck = subprocess.run(["e2fsck", "-fy", volume],
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT)
+        if fsck.returncode > 2:
+            raise RuntimeError("e2fsck refused the volume: %s" %
+                               fsck.stdout.decode(
+                                   "utf-8", "replace").strip())
+        _debugfs(volume, "rm %s" % target, "the old image file",
+                 optional=True)
+        _debugfs(volume, "write %s %s" % (source, target),
+                 "the replacement image file")
+        _reset_journal(volume)
+        _splice(image, offset, volume)
+
+
+def install_service(image, name, services=DEFAULT_SERVICES):
+    """Install one verified current service without rebuilding the system."""
+    if not name or any(not (character.isalnum() or character in "_-")
+                       for character in name):
+        raise RuntimeError("invalid service name %r" % name)
+    service, path = _services(services, (name,))[0]
+    _replace_volume_file(image, path,
+                         "/%s/%s" % (SERVICES_DIRECTORY, service))
+
+
 def install(image, catalog=DEFAULT_CATALOG, commands=DEFAULT_COMMANDS,
             services=DEFAULT_SERVICES, kits=DEFAULT_KITS,
             apps=DEFAULT_APPS, terminfo=DEFAULT_TERMINFO,
@@ -641,8 +674,10 @@ if __name__ == "__main__":
         except ValueError as error:
             raise SystemExit("image size must be an integer MiB value") from error
         publish(sys.argv[2], size_mib * (1 << 20))
+    elif len(sys.argv) == 4 and sys.argv[1] == "--service":
+        install_service(sys.argv[3], sys.argv[2])
     else:
         raise SystemExit(
             "usage: astra_image.py "
             "[--display|--hostbench|--interface-gallery] IMAGE | "
-            "--create IMAGE SIZE_MIB")
+            "--create IMAGE SIZE_MIB | --service NAME IMAGE")
