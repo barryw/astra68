@@ -127,6 +127,17 @@ ASTRA_NODISCARD AstraResult astra_text_surface_grid_hit_test(
     const AstraTextSurface *text_surface, int32_t origin_x, int32_t origin_y,
     uint32_t columns, uint32_t rows, int32_t x, int32_t y,
     AstraTextGridPosition *position);
+/**
+ * Copy a half-open grid selection as UTF-8, trimming trailing spaces on each
+ * selected row. Newlines preserve selected row boundaries. The operation is
+ * atomic: a short output buffer is not modified and `bytes` receives the
+ * required size. `output` may be null only when `capacity` is zero.
+ */
+ASTRA_NODISCARD AstraResult astra_text_surface_copy_grid_selection(
+    const AstraTextSurface *text_surface, const AstraTextCell *cells,
+    uint32_t columns, uint32_t rows,
+    const AstraTextGridSelection *selection, char *output,
+    uint32_t capacity, uint32_t *bytes);
 ASTRA_NODISCARD AstraResult astra_text_surface_draw_caret(
     const AstraTextSurface *text_surface, AstraSurfaceView *target,
     int32_t origin_x, int32_t origin_y, uint32_t row, uint32_t column,

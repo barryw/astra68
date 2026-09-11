@@ -113,6 +113,27 @@ static int selection_columns(const AstraTextGridSelection *selection,
     return *first < *last;
 }
 
+static int grid_position_valid(AstraTextGridPosition position,
+                               uint32_t columns, uint32_t rows)
+{
+    return position.row < rows ? position.column <= columns :
+           position.row == rows && position.column == 0u;
+}
+
+static void normalize_selection(const AstraTextGridSelection *selection,
+                                AstraTextGridPosition *start,
+                                AstraTextGridPosition *end)
+{
+    *start = selection->anchor;
+    *end = selection->focus;
+    if (position_before(*end, *start)) {
+        AstraTextGridPosition swap = *start;
+
+        *start = *end;
+        *end = swap;
+    }
+}
+
 static AstraResult render_run(const AstraTextSurface *text,
                               AstraSurfaceView *target,
                               int32_t x, int32_t y,
@@ -330,6 +351,75 @@ AstraResult astra_text_surface_grid_hit_test(
         position->column = (uint32_t)(
             ((uint64_t)relative_x + text->_private_cell_width / 2u) /
             text->_private_cell_width);
+    return ASTRA_OK;
+}
+
+AstraResult astra_text_surface_copy_grid_selection(
+    const AstraTextSurface *text, const AstraTextCell *cells,
+    uint32_t columns, uint32_t rows,
+    const AstraTextGridSelection *selection, char *output,
+    uint32_t capacity, uint32_t *bytes)
+{
+    AstraTextGridPosition start;
+    AstraTextGridPosition end;
+    uint64_t required = 0u;
+
+    if (!valid(text) || cells == NULL || columns == 0u || rows == 0u ||
+        selection == NULL || selection->size < sizeof(*selection) ||
+        !astra_words_zero(selection->reserved, 4u) || bytes == NULL ||
+        (output == NULL && capacity != 0u) ||
+        !grid_position_valid(selection->anchor, columns, rows) ||
+        !grid_position_valid(selection->focus, columns, rows) ||
+        (uint64_t)columns * rows > UINT32_MAX)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    normalize_selection(selection, &start, &end);
+    for (uint32_t row = start.row; row <= end.row && row < rows; ++row) {
+        uint32_t first = row == start.row ? start.column : 0u;
+        uint32_t last = row == end.row ? end.column : columns;
+
+        for (uint32_t column = first; column < last; ++column) {
+            const AstraTextCell *cell =
+                &cells[(uint64_t)row * columns + column];
+
+            if (!astra_unicode_scalar_valid(cell->codepoint) ||
+                cell->width != 1u || cell->reserved != 0u)
+                return ASTRA_ERROR_INVALID_ARGUMENT;
+        }
+        while (last > first &&
+               cells[(uint64_t)row * columns + last - 1u].codepoint == ' ')
+            --last;
+        for (uint32_t column = first; column < last; ++column) {
+            char encoded[4];
+
+            required += astra_utf8_encode(
+                cells[(uint64_t)row * columns + column].codepoint, encoded);
+        }
+        if (row < end.row)
+            ++required;
+    }
+    if (required > UINT32_MAX)
+        return ASTRA_ERROR_NO_RESOURCES;
+    *bytes = (uint32_t)required;
+    if (required > capacity)
+        return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    if (required != 0u && output == NULL)
+        return ASTRA_ERROR_BUFFER_TOO_SMALL;
+
+    required = 0u;
+    for (uint32_t row = start.row; row <= end.row && row < rows; ++row) {
+        uint32_t first = row == start.row ? start.column : 0u;
+        uint32_t last = row == end.row ? end.column : columns;
+
+        while (last > first &&
+               cells[(uint64_t)row * columns + last - 1u].codepoint == ' ')
+            --last;
+        for (uint32_t column = first; column < last; ++column)
+            required += astra_utf8_encode(
+                cells[(uint64_t)row * columns + column].codepoint,
+                output + required);
+        if (row < end.row)
+            output[required++] = '\n';
+    }
     return ASTRA_OK;
 }
 

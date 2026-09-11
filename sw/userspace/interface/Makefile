@@ -93,7 +93,7 @@ $(INPUT_TARGET): $(INPUT_OBJECTS) $(NDK_PIC_LIB) $(RUNTIME_PIC_LIB) \
 
 library-contract: $(INTERFACE_TARGET) $(INPUT_TARGET)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library 2.2.0 ABI 2.2$$'
+		grep -q '^interface.library 2.3.0 ABI 2.3$$'
 	@python3 ../../../tools/library_info.py $(INPUT_TARGET) | \
 		grep -q '^input.library 1.0.0 ABI 1.0$$'
 	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET) $(INPUT_TARGET))
@@ -133,6 +133,10 @@ sanitize:
 		$(SANITIZER_FLAGS) src/input_library.c tests/test_input_library.c \
 		-o build/host/test_input_library_sanitize
 	./build/host/test_input_library_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/text_surface.c $(NDK)/src/utf8.c \
+		tests/test_text_surface.c -o build/host/test_text_surface_sanitize
+	./build/host/test_text_surface_sanitize
 
 analyze:
 	@mkdir -p build/analyzer

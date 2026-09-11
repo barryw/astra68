@@ -7,7 +7,7 @@
 #include <astra/window.h>
 
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 2u
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 2u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 3u
 
 typedef struct AstraInterfaceLibraryV2 {
     uint16_t abi_major;
@@ -84,6 +84,9 @@ typedef struct AstraInterfaceLibraryV2 {
     AstraResult (*text_surface_grid_hit_test)(
         const AstraTextSurface *, int32_t, int32_t, uint32_t, uint32_t,
         int32_t, int32_t, AstraTextGridPosition *);
+    AstraResult (*text_surface_copy_grid_selection)(
+        const AstraTextSurface *, const AstraTextCell *, uint32_t, uint32_t,
+        const AstraTextGridSelection *, char *, uint32_t, uint32_t *);
 } AstraInterfaceLibraryV2;
 
 #endif
