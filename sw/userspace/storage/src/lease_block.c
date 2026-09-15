@@ -720,8 +720,7 @@ astra_lease_block_attach(AstraLeaseBlock *lease, uint32_t device_handle,
         info.max_transfer_sectors > ASTRA_BLOCK_TRANSFER_SECTORS_MAX ||
         info.max_transfer_sectors > UINT32_MAX / info.sector_bytes ||
         info.queue_depth == 0u ||
-        info.queue_depth > ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE ||
-        info.queue_depth > ASTRA_DMA_MAX_BUFFERS_PER_SERVICE) {
+        info.queue_depth > ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE) {
         return ASTRA_BLOCK_CORRUPT;
     }
     if ((info.state_flags & ASTRA_BLOCK_STATE_MEDIA_PRESENT) == 0u) {

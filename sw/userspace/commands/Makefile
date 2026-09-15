@@ -23,6 +23,7 @@ POSIX := ../posix
 NTP := ../ntp
 NETWORK := ../network
 NDK := ../../../ndk
+NDK_LIB := $(NDK)/build/m68k/libastra.a
 LUA := ../../../third_party/lua/src
 VIM_SOURCE ?= $(HOME)/vim-astra-v9.2.1001/src
 VIM_TERMINFO_SOURCE ?= $(HOME)/ncurses-astra-6.6
@@ -70,7 +71,7 @@ PICOLIBC_LIB := $(PICOLIBC)/lib/libc.a
 PICOLIBC_MATH := $(PICOLIBC)/lib/libm.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0-hosted.o
 
-COMMANDS := status events devices which hello ls ps metrics cat mkdir rm posix \
+COMMANDS := status events devices which open hello ls ps metrics cat mkdir rm posix \
             heapbench fsstress date echo ntp ping lua cxx vim zsh
 SOURCE_COMMANDS := $(filter-out lua cxx vim zsh,$(COMMANDS))
 ANALYZER_OBJECTS := $(patsubst %,build/analyzer/%.o,$(SOURCE_COMMANDS)) \
@@ -80,7 +81,7 @@ ANALYZER_OBJECTS := $(patsubst %,build/analyzer/%.o,$(SOURCE_COMMANDS)) \
 # carries into ROM. The unstripped ELF stays beside it for a debugger.
 IMAGES := $(patsubst %,build/m68k/%,$(COMMANDS))
 COMMAND_MANIFEST := build/m68k/.commands
-ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(STREAMS) $(VFS) $(POSIX) $(NTP) \
+ASTRA_PROGRAM_OWNER_DIRS := $(NDK) $(RUNTIME) $(STREAMS) $(VFS) $(POSIX) $(NTP) \
 	$(NETWORK)
 ASTRA_PROGRAM_PREPARE_TARGETS := cxx-runtime
 ASTRA_PROGRAM_TARGETS := $(IMAGES) $(COMMAND_MANIFEST) size
@@ -289,12 +290,12 @@ build/m68k/zsh: $(ZSH_IMAGE)
 
 $(patsubst %,build/m68k/%,$(SOURCE_COMMANDS)): build/m68k/%: \
 		$$*/$$*.c $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
-		$(POSIX_LIB) $(NTP_LIB) $(NETWORK_LIB) $(RUNTIME_CRT0) \
+		$(POSIX_LIB) $(NTP_LIB) $(NETWORK_LIB) $(NDK_LIB) $(RUNTIME_CRT0) \
 		$(RUNTIME)/astra_user.ld
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
 		$(LINK_FLAGS) -o $@.elf $(RUNTIME_CRT0) $< \
-		-Wl,--start-group $(NTP_LIB) $(NETWORK_LIB) $(VFS_LIB) \
+		-Wl,--start-group $(NDK_LIB) $(NTP_LIB) $(NETWORK_LIB) $(VFS_LIB) \
 		$(STREAMS_LIB) $(POSIX_LIB) \
 		$(RUNTIME_LIB) $(PICOLIBC_LIB) -lgcc -Wl,--end-group
 	$(OBJCOPY) --strip-all --remove-section=.astra_events $@.elf $@

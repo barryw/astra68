@@ -253,6 +253,18 @@ KernelVmMapping kernel_vm_probe_current(uint32_t virtual_address,
     return probe_root(root_physical, virtual_address, physical_address);
 }
 
+KernelVmMapping kernel_vm_probe_address_space(
+    const KernelAddressSpace *space, uint32_t virtual_address,
+    uint32_t *physical_address)
+{
+    if (!initialized || space == NULL || space->initialized == 0u ||
+        virtual_address < KERNEL_VM_USER_MIN ||
+        virtual_address > KERNEL_VM_USER_MAX)
+        return KERNEL_VM_MAPPING_UNKNOWN;
+    return probe_root(space->root_physical, virtual_address,
+                      physical_address);
+}
+
 static KernelVmStatus copy_address_space(const KernelAddressSpace *space,
                                          uint32_t virtual_address,
                                          void *destination,

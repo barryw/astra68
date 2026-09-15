@@ -552,15 +552,26 @@ static bool astra_display_count_batch(Astra68State *s, uint32_t source,
     AstraDisplayState *display = &s->display;
     const uint8_t *batch = s->sdram + (source - ASTRA_SDRAM_BASE);
     uint32_t count = ldl_be_p(batch + 12u);
+    uint32_t version = ldl_be_p(batch + 4u);
+    uint32_t scene_offset = ldl_be_p(batch + 48u);
+    uint32_t scene_bytes = ldl_be_p(batch + 52u);
     uint32_t records = ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
                        ASTRA_RENDER_BATCH_ARENA_OFFSET;
 
     if (ldl_be_p(batch) != ASTRA_RENDER_BATCH_MAGIC ||
-        ldl_be_p(batch + 4u) != ASTRA_RENDER_BATCH_VERSION_1_1 ||
+        (version != ASTRA_RENDER_BATCH_VERSION_1_2 &&
+         version != ASTRA_RENDER_BATCH_VERSION_1_3) ||
         ldl_be_p(batch + 8u) != byte_size ||
         ldl_be_p(batch + 16u) != ASTRA_RENDER_BATCH_SUBMISSION_OFFSET ||
         records > byte_size || count > ASTRA_RENDER_RING_ENTRIES ||
-        count > (byte_size - records) / ASTRA_RENDER_COMMAND_BYTES)
+        count > (byte_size - records) / ASTRA_RENDER_COMMAND_BYTES ||
+        (version == ASTRA_RENDER_BATCH_VERSION_1_2 &&
+         (count == 0u || scene_offset != 0u || scene_bytes != 0u)) ||
+        (version == ASTRA_RENDER_BATCH_VERSION_1_3 &&
+         (scene_offset < ASTRA_RENDER_BATCH_DATA_OFFSET ||
+          scene_bytes < 64u || scene_offset < ASTRA_RENDER_BATCH_ARENA_OFFSET ||
+          (uint64_t)(scene_offset - ASTRA_RENDER_BATCH_ARENA_OFFSET) +
+              scene_bytes > byte_size)))
         return false;
     ++display->batch_submissions;
     display->batch_commands += count;
@@ -579,7 +590,9 @@ static bool astra_display_count_batch(Astra68State *s, uint32_t source,
     if (ldl_be_p(batch + 32u) != ASTRA_RENDER_BATCH_PRESENT_CURSOR ||
         ldl_be_p(batch + 36u) >= ASTRA_DISPLAY_WIDTH ||
         ldl_be_p(batch + 40u) >= ASTRA_DISPLAY_HEIGHT ||
-        (ldl_be_p(batch + 44u) & ~ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u)
+        (ldl_be_p(batch + 44u) & ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) != 0u ||
+        ((ldl_be_p(batch + 44u) & ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
+             ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT) >= ASTRA_POINTER_SHAPE_COUNT)
         return false;
     display->cursor_x = ldl_be_p(batch + 36u);
     display->cursor_y = ldl_be_p(batch + 40u);
@@ -655,7 +668,8 @@ static void astra_display_submit(Astra68State *s)
         (operation != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
          operation != ASTRA_DISPLAY_FRAME_PRESENT_RGB565 &&
          operation != ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
-         operation != ASTRA_DISPLAY_CURSOR_UPDATE) ||
+         operation != ASTRA_DISPLAY_CURSOR_UPDATE &&
+         operation != ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE) ||
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
          (display->request_source & 0xffff0000u) != 0u) ||
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
@@ -663,11 +677,16 @@ static void astra_display_submit(Astra68State *s)
           byte_size > ASTRA_RENDER_BATCH_MAX_BYTES)) ||
         (operation == ASTRA_DISPLAY_CURSOR_UPDATE &&
          ((byte_size &
-           ~ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u ||
+           ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) != 0u ||
+          ((byte_size & ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
+               ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT) >=
+              ASTRA_POINTER_SHAPE_COUNT ||
           (display->request_source & ASTRA_DISPLAY_HOST_CURSOR_X_MASK) >=
               ASTRA_DISPLAY_WIDTH ||
           ((display->request_source & ASTRA_DISPLAY_HOST_CURSOR_Y_MASK) >>
                ASTRA_DISPLAY_HOST_CURSOR_Y_SHIFT) >= ASTRA_DISPLAY_HEIGHT)) ||
+        (operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE &&
+         byte_size != ASTRA_DISPLAY_CURSOR_IMAGE_BYTES) ||
         (operation != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
          operation != ASTRA_DISPLAY_CURSOR_UPDATE &&
          (display->request_source < ASTRA_SDRAM_BASE ||
@@ -679,6 +698,8 @@ static void astra_display_submit(Astra68State *s)
     if (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH)
         display->cursor_inflight = astra_display_count_batch(
             s, display->request_source, byte_size);
+    if (operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE)
+        display->cursor_inflight = true;
     if (operation == ASTRA_DISPLAY_CURSOR_UPDATE) {
         display->cursor_x = display->request_source &
                             ASTRA_DISPLAY_HOST_CURSOR_X_MASK;
@@ -700,7 +721,7 @@ static void astra_display_submit(Astra68State *s)
         qatomic_set(&display->mailbox->magic, ASTRA_DISPLAY_MAILBOX_MAGIC);
         qatomic_set(&display->mailbox->version,
 #ifdef CONFIG_LINUX
-                    ASTRA_DISPLAY_MAILBOX_VERSION_1_4);
+                    ASTRA_DISPLAY_MAILBOX_VERSION_1_5);
 #else
                     ASTRA_DISPLAY_MAILBOX_VERSION_1_3);
 #endif
@@ -716,9 +737,12 @@ static void astra_display_submit(Astra68State *s)
                         ASTRA_DISPLAY_MAILBOX_FRAME_BYTES :
                     operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ?
                         byte_size :
-                    operation == ASTRA_DISPLAY_CURSOR_UPDATE ? byte_size : 0u);
+                    operation == ASTRA_DISPLAY_CURSOR_UPDATE ||
+                    operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE ?
+                        byte_size : 0u);
         if (operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ||
-            operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH) {
+            operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
+            operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE) {
             memcpy((uint8_t *)display->mailbox +
                        ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
                    s->sdram + (display->request_source - ASTRA_SDRAM_BASE),
@@ -770,7 +794,7 @@ static void astra_display_panic_text(Astra68State *s)
         ++display->mailbox_sequence;
     qatomic_set(&display->mailbox->magic, ASTRA_DISPLAY_MAILBOX_MAGIC);
     qatomic_set(&display->mailbox->version,
-                ASTRA_DISPLAY_MAILBOX_VERSION_1_4);
+                ASTRA_DISPLAY_MAILBOX_VERSION_1_5);
     qatomic_set(&display->mailbox->request_id, UINT32_MAX);
     qatomic_set(&display->mailbox->operation, ASTRA_DISPLAY_PANIC_TEXT);
     qatomic_set(&display->mailbox->color_rgb565, 0u);

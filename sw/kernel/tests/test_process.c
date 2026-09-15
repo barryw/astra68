@@ -1542,6 +1542,27 @@ static void test_process_global_nth_failure_matrix(void)
     assert(failed_stages >= 8u);
 }
 
+static void test_visible_process_ids_start_at_one_and_are_small(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    KernelProcessSnapshot first;
+    KernelProcessSnapshot second;
+    uint32_t first_id;
+    uint32_t second_id;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &first_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &second_id) == KERNEL_PROCESS_OK);
+    assert(first_id == 1u);
+    assert(second_id == 2u);
+    assert(kernel_process_snapshot(0u, &first));
+    assert(kernel_process_snapshot(1u, &second));
+    assert(first.id == first_id && second.id == second_id);
+    assert(first.owner != first.id && second.owner != second.id);
+}
+
 static void test_preemption_fault_containment_and_teardown(void)
 {
     static const uint8_t image[] = {0x70u, 0x01u, 0x4eu, 0x4fu,
@@ -3146,8 +3167,38 @@ static void test_console_writes_through_a_display_lease(void)
 
     request = (AstraDisplayFrameRequest) {
         .size = ASTRA_DISPLAY_FRAME_REQUEST_SIZE,
-        .operation = ASTRA_DISPLAY_CURSOR_UPDATE,
+        .operation = ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE,
         .fence = 10u,
+        .source = dma_handle,
+        .byte_size = ASTRA_DISPLAY_CURSOR_IMAGE_BYTES,
+    };
+    assert(kernel_user_copy_to_asm(user_cells, &request, sizeof(request)) ==
+           KERNEL_USER_COPY_OK);
+    registers[0] = ASTRA_SYSCALL_DISPLAY_SUBMIT;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(display_submissions == 4u);
+    assert(display_request.operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE);
+    assert(display_request.byte_size == ASTRA_DISPLAY_CURSOR_IMAGE_BYTES);
+    display_completion = (AstraDisplayFrameCompletion) {
+        .size = ASTRA_DISPLAY_FRAME_COMPLETION_SIZE,
+        .fence = 10u,
+        .status = ASTRA_DISPLAY_COMPLETION_OK,
+        .generation = 12u,
+    };
+    display_completion_ready = true;
+    registers[0] = ASTRA_SYSCALL_DISPLAY_COLLECT;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    request = (AstraDisplayFrameRequest) {
+        .size = ASTRA_DISPLAY_FRAME_REQUEST_SIZE,
+        .operation = ASTRA_DISPLAY_CURSOR_UPDATE,
+        .fence = 11u,
         .source = 321u,
         .pitch = 123u,
         .byte_size = ASTRA_DISPLAY_CURSOR_VISIBLE,
@@ -3159,7 +3210,7 @@ static void test_console_writes_through_a_display_lease(void)
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
-    assert(display_submissions == 4u);
+    assert(display_submissions == 5u);
     assert(display_request.operation == ASTRA_DISPLAY_CURSOR_UPDATE);
     assert(display_request.source ==
            ASTRA_DISPLAY_HOST_CURSOR_PACK(321u, 123u, true));
@@ -6923,6 +6974,7 @@ static void test_host_admission(void)
     AstraHostLeaseInfo info;
     AstraHostTransportRequest request;
     AstraHostChannelOpen channel;
+    KernelProcessSnapshot process;
     KernelThreadSnapshot thread;
     AstraStartupCapability table[3];
     uint32_t process_id = 0u;
@@ -6989,7 +7041,8 @@ static void test_host_admission(void)
            KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK && next->data[1] == 1u);
     assert(host_execute_calls == 1u);
-    assert(host_execute_owner == process_id);
+    assert(kernel_process_snapshot(0u, &process));
+    assert(host_execute_owner == process.owner);
     assert(host_physical_buffer != 0u &&
            host_physical_buffer != buffer.virtual_base);
     assert(host_byte_size == ASTRA_HOST_COMMAND_SIZE);
@@ -7361,7 +7414,7 @@ static void test_dma_transfer_memory(void)
     uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
     AstraDmaBufferInfo info;
     uint32_t process_id = 0u;
-    uint32_t handles[ASTRA_DMA_MAX_BUFFERS_PER_SERVICE];
+    uint32_t handles[KERNEL_VM_DMA_SLOT_COUNT];
     uint32_t index;
 
     loader_build_image();
@@ -7438,7 +7491,7 @@ static void test_dma_transfer_memory(void)
     assert(after.free_frames == before.free_frames);
 
     /* The buffer ceiling is a rejection, not a stall. */
-    for (index = 0u; index < ASTRA_DMA_MAX_BUFFERS_PER_SERVICE; ++index) {
+    for (index = 0u; index < KERNEL_VM_DMA_SLOT_COUNT; ++index) {
         memset(registers, 0, sizeof(registers));
         registers[0] = ASTRA_SYSCALL_DMA_CREATE;
         registers[1] = KERNEL_PAGE_SIZE;
@@ -9041,7 +9094,7 @@ static void test_process_info_syscall(void)
     assert(info.size == sizeof(info));
     assert(info.id == process_id);
     assert(info.generation != 0u);
-    assert(info.owner == process_id);
+    assert(info.owner != process_id);
     assert(info.live_threads == 1u && info.thread_count == 1u);
     assert(info.handle_references != 0u);
     assert(info.suspended == 0u && info.reserved[0] == 0u &&
@@ -9139,10 +9192,12 @@ static void test_initial_supervisor_can_snapshot_every_live_process(void)
     static const char child_arguments[] = "zsh\0-f\0";
     AstraLaunchArguments launch = {0};
     AstraProcSnapshot records[ASTRA_PROCESS_COUNT_MAX];
+    AstraProcLibrarySnapshot libraries[ASTRA_LIBRARY_SLOT_COUNT];
     KernelCpuContext *next;
     uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
     uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
     uint32_t user_records = KERNEL_PROCESS_STACK_TOP - sizeof(records);
+    uint32_t user_libraries = KERNEL_PROCESS_STACK_TOP - sizeof(libraries);
     uint32_t supervisor_id;
     uint32_t child_id;
     uint32_t supervisor_handle;
@@ -9180,6 +9235,35 @@ static void test_initial_supervisor_can_snapshot_every_live_process(void)
     assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
 
     kernel_process_register_initial_image(supervisor_id);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_LIBRARY_SNAPSHOT;
+    registers[1] = supervisor_handle;
+    registers[2] = user_libraries;
+    registers[3] = ASTRA_LIBRARY_SLOT_COUNT;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == 0u);
+    assert(kernel_user_copy_from_asm(libraries, user_libraries,
+                                     sizeof(libraries)) ==
+           KERNEL_USER_COPY_OK);
+    for (uint32_t slot = 0u; slot < ASTRA_LIBRARY_SLOT_COUNT; ++slot)
+        assert(libraries[slot].library.size == 0u);
+
+    registers[3] = ASTRA_LIBRARY_SLOT_COUNT - 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_BUFFER_TOO_SMALL);
+    assert(next->data[1] == ASTRA_LIBRARY_SLOT_COUNT);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_SNAPSHOT;
+    registers[1] = supervisor_handle;
+    registers[2] = user_records;
+    registers[3] = ASTRA_PROCESS_COUNT_MAX;
     assert(kernel_process_on_syscall(registers,
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
@@ -10466,8 +10550,10 @@ static void test_process_suspend_resume_preserves_execution(void)
 int main(void)
 {
     test_dead_process_cannot_pin_library_cache();
+    assert(kernel_process_test_library_snapshot());
     test_process_allocation_failure_matrix();
     test_process_global_nth_failure_matrix();
+    test_visible_process_ids_start_at_one_and_are_small();
     test_preemption_fault_containment_and_teardown();
     test_soak_relaunches_only_after_exact_teardown();
     test_soak_rejects_unexplained_frame_loss();

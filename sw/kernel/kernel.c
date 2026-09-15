@@ -1226,6 +1226,12 @@ static void start_initial_user_image(void)
         capabilities[capability_count].irq_source = IRQ_SRC_ASTRAEA;
         capabilities[capability_count].rights = KERNEL_IRQ_RIGHTS;
         ++capability_count;
+        capabilities[capability_count].name =
+            ASTRA_CAPABILITY_DISPLAY_VBLANK_IRQ;
+        capabilities[capability_count].kind = KERNEL_PROCESS_BOOTSTRAP_IRQ;
+        capabilities[capability_count].irq_source = IRQ_SRC_VEGA;
+        capabilities[capability_count].rights = KERNEL_IRQ_RIGHTS;
+        ++capability_count;
     }
     if (kernel_platform_network_present()) {
         capabilities[capability_count].name =

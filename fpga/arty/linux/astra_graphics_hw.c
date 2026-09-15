@@ -15,6 +15,11 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifndef ASTRA_DISPLAY_CAPTURE_LOCK_PATH
+#define ASTRA_DISPLAY_CAPTURE_LOCK_PATH \
+    "/run/lock/astra-display-capture.lock"
+#endif
+
 void astra_graphics_memory_barrier(void)
 {
 #if defined(__arm__) || defined(__aarch64__)
@@ -27,8 +32,68 @@ void astra_graphics_memory_barrier(void)
 void astra_graphics_device_init(struct astra_graphics_device *device)
 {
     device->memory_fd = -1;
+    device->capture_lock_fd = -1;
     device->registers = MAP_FAILED;
     device->framebuffer = MAP_FAILED;
+}
+
+int astra_display_capture_claim(struct astra_graphics_device *device)
+{
+    if (device == NULL || device->memory_fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    if (device->capture_lock_fd >= 0)
+        return 0;
+    device->capture_lock_fd = open(
+        ASTRA_DISPLAY_CAPTURE_LOCK_PATH,
+        O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (device->capture_lock_fd < 0) {
+        perror("open display capture lock");
+        return -1;
+    }
+    if (flock(device->capture_lock_fd, LOCK_EX | LOCK_NB) != 0) {
+        if (errno == EWOULDBLOCK)
+            fprintf(stderr, "Astra display capture is already owned\n");
+        else
+            perror("lock display capture");
+        astra_display_capture_release(device);
+        return -1;
+    }
+    return 0;
+}
+
+void astra_display_capture_release(struct astra_graphics_device *device)
+{
+    if (device != NULL && device->capture_lock_fd >= 0) {
+        (void)close(device->capture_lock_fd);
+        device->capture_lock_fd = -1;
+    }
+}
+
+int astra_display_capture_device_open(
+    struct astra_graphics_device *device)
+{
+    astra_graphics_device_init(device);
+    device->memory_fd = open("/dev/mem", O_RDWR | O_SYNC | O_CLOEXEC);
+    if (device->memory_fd < 0) {
+        perror("open /dev/mem");
+        return -1;
+    }
+    if (astra_display_capture_claim(device) != 0) {
+        astra_graphics_device_close(device);
+        return -1;
+    }
+    device->registers = mmap(NULL, ASTRA_CONTROL_BYTES,
+                             PROT_READ | PROT_WRITE, MAP_SHARED,
+                             device->memory_fd,
+                             (off_t)ASTRA_CONTROL_BASE);
+    if (device->registers == MAP_FAILED) {
+        perror("map display capture control");
+        astra_graphics_device_close(device);
+        return -1;
+    }
+    return 0;
 }
 
 int astra_graphics_device_open(struct astra_graphics_device *device,
@@ -83,6 +148,7 @@ void astra_graphics_device_close(struct astra_graphics_device *device)
         (void)munmap((void *)device->registers, ASTRA_CONTROL_BYTES);
         device->registers = MAP_FAILED;
     }
+    astra_display_capture_release(device);
     if (device->memory_fd >= 0) {
         (void)close(device->memory_fd);
         device->memory_fd = -1;
@@ -258,6 +324,166 @@ void astra_graphics_memory_copy_from(void *destination,
     }
     while (bytes-- != 0u)
         *out++ = *in++;
+}
+
+int astra_graphics_capture_rgb(
+    const struct astra_graphics_device *device, uint32_t physical_address,
+    const char *path, struct astra_display_capture_result *result)
+{
+    const struct timespec delay = { .tv_sec = 0, .tv_nsec = 1000000 };
+    const uint64_t timeout_ns = UINT64_C(2000000000);
+    struct astra_graphics_memory_map frame;
+    uint8_t *copy = NULL;
+    FILE *output = NULL;
+    uint64_t started;
+    uint64_t deadline;
+    int status = -1;
+
+    astra_graphics_memory_map_init(&frame);
+    if (path == NULL || device->capture_lock_fd < 0 ||
+        (physical_address & 255u) != 0u ||
+        astra_mmio_read(device, ASTRA_REG_CAPTURE_DEVICE_ID) !=
+            ASTRA_CAPTURE_DEVICE_ID ||
+        astra_mmio_read(device, ASTRA_REG_CAPTURE_VERSION) !=
+            ASTRA_CAPTURE_VERSION ||
+        astra_mmio_read(device, ASTRA_REG_CAPTURE_FRAME_BYTES) !=
+            ASTRA_CAPTURE_FRAME_BYTES) {
+        errno = ENODEV;
+        goto done;
+    }
+    if (astra_graphics_memory_map_open(device, &frame, physical_address,
+                                       ASTRA_CAPTURE_FRAME_BYTES) != 0)
+        goto done;
+
+    astra_mmio_write(device, ASTRA_REG_CAPTURE_CONTROL,
+                     ASTRA_CAPTURE_ENABLE | ASTRA_CAPTURE_CLEAR_COUNTERS);
+    astra_mmio_write(device, ASTRA_REG_CAPTURE_BUFFER_BASE,
+                     physical_address);
+    started = astra_monotonic_nanoseconds();
+    deadline = started + timeout_ns;
+    astra_mmio_write(device, ASTRA_REG_CAPTURE_CONTROL,
+                     ASTRA_CAPTURE_ENABLE | ASTRA_CAPTURE_ARM);
+    for (;;) {
+        uint32_t capture_status =
+            astra_mmio_read(device, ASTRA_REG_CAPTURE_STATUS);
+
+        if ((capture_status & ASTRA_CAPTURE_STATUS_COMPLETE) != 0u)
+            break;
+        if ((capture_status & ASTRA_CAPTURE_STATUS_LAST_DROPPED) != 0u) {
+            errno = EIO;
+            goto disable;
+        }
+        if (astra_monotonic_nanoseconds() >= deadline) {
+            errno = ETIMEDOUT;
+            goto disable;
+        }
+        while (nanosleep(&delay, NULL) != 0 && errno == EINTR) {
+        }
+    }
+    if (astra_mmio_read(device, ASTRA_REG_CAPTURE_COMPLETED_BASE) !=
+            physical_address ||
+        astra_mmio_read(device, ASTRA_REG_CAPTURE_COMPLETED_COUNT) != 1u ||
+        astra_mmio_read(device, ASTRA_REG_CAPTURE_DROPPED_COUNT) != 0u ||
+        astra_mmio_read(device, ASTRA_REG_CAPTURE_OVERFLOW_COUNT) != 0u ||
+        astra_mmio_read(device, ASTRA_REG_CAPTURE_AXI_ERROR_COUNT) != 0u ||
+        astra_mmio_read(device,
+                        ASTRA_REG_CAPTURE_COMMAND_ERROR_COUNT) != 0u) {
+        errno = EIO;
+        goto disable;
+    }
+
+    copy = malloc(ASTRA_CAPTURE_FRAME_BYTES);
+    if (copy == NULL)
+        goto disable;
+    astra_graphics_memory_copy_from(copy, frame.data,
+                                    ASTRA_CAPTURE_FRAME_BYTES);
+    output = fopen(path, "wb");
+    if (output == NULL)
+        goto disable;
+    if (fwrite(copy, 1u, ASTRA_CAPTURE_FRAME_BYTES, output) !=
+            ASTRA_CAPTURE_FRAME_BYTES) {
+        (void)fclose(output);
+        output = NULL;
+        goto disable;
+    }
+    if (fclose(output) != 0) {
+        output = NULL;
+        goto disable;
+    }
+    output = NULL;
+    if (result != NULL) {
+        result->generation = astra_mmio_read(
+            device, ASTRA_REG_CAPTURE_COMPLETED_GENERATION);
+        result->cycles = astra_mmio_read(
+            device, ASTRA_REG_CAPTURE_LAST_CYCLES);
+        result->elapsed_ns = astra_monotonic_nanoseconds() - started;
+    }
+    status = 0;
+
+disable:
+    astra_mmio_write(device, ASTRA_REG_CAPTURE_CONTROL,
+                     ASTRA_CAPTURE_ACKNOWLEDGE);
+done:
+    if (output != NULL)
+        (void)fclose(output);
+    free(copy);
+    astra_graphics_memory_map_close(&frame);
+    return status;
+}
+
+int astra_graphics_wait_register_mask(
+    const struct astra_graphics_device *device, unsigned offset,
+    uint32_t mask, uint32_t expected, uint64_t timeout_ns,
+    uint32_t *value_out)
+{
+    const struct timespec delay = { .tv_sec = 0, .tv_nsec = 1000000 };
+    uint64_t now = astra_monotonic_nanoseconds();
+    uint64_t deadline = timeout_ns > UINT64_MAX - now ?
+        UINT64_MAX : now + timeout_ns;
+
+    for (;;) {
+        uint32_t value = astra_mmio_read(device, offset);
+
+        if ((value & mask) == expected) {
+            if (value_out != NULL)
+                *value_out = value;
+            return 0;
+        }
+        if (astra_monotonic_nanoseconds() >= deadline) {
+            fprintf(stderr,
+                    "graphics register timeout offset=%04x value=%08x "
+                    "mask=%08x expected=%08x\n",
+                    offset, value, mask, expected);
+            errno = ETIMEDOUT;
+            return -1;
+        }
+        while (nanosleep(&delay, NULL) != 0 && errno == EINTR) {
+        }
+    }
+}
+
+void astra_graphics_copper_write_instruction(
+    const struct astra_graphics_device *device, unsigned index,
+    uint32_t word0, uint32_t word1)
+{
+    unsigned offset = ASTRA_REG_COPPER_PROGRAM + index * 8u;
+
+    astra_mmio_write(device, offset, word0);
+    astra_mmio_write(device, offset + 4u, word1);
+}
+
+void astra_graphics_scene_prepare_empty(
+    const struct astra_graphics_device *device)
+{
+    astra_mmio_write(device, ASTRA_REG_COPPER_CONTROL, 0u);
+    astra_mmio_write(device, ASTRA_REG_COPPER_IRQ_PENDING, 1u);
+    astra_mmio_write(device, ASTRA_REG_BACKDROP, 0u);
+    astra_mmio_write(device, ASTRA_REG_FB_CONTROL, 0u);
+    astra_mmio_write(device, ASTRA_REG_FB_WINDOW_SCENE_BYTES, 0u);
+    astra_mmio_write(device, ASTRA_REG_TILE0_CONTROL, 0u);
+    astra_mmio_write(device, ASTRA_REG_TILE1_CONTROL, 0u);
+    astra_mmio_write(device, ASTRA_REG_SPRITE_CONTROL, 0u);
+    astra_mmio_write(device, ASTRA_REG_GLOBAL_CONTROL, 1u);
 }
 
 int astra_graphics_scene_commit(

@@ -597,10 +597,12 @@ module astra_line_scheduler #(
                         held_slot_valid_pixel <= 1'b0;
                     end else begin
                         pixel_underruns <= pixel_underruns + 32'd1;
-                        if (pixel_line_available) begin
+                        if (pixel_line_available &&
+                            !held_slot_valid_pixel) begin
                             held_slot_valid_pixel <= 1'b1;
                             held_slot_pixel <= pixel_read_slot;
                         end else begin
+                            pixel_line_available <= 1'b0;
                             held_slot_valid_pixel <= 1'b0;
                         end
                     end

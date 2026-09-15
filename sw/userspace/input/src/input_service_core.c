@@ -7,6 +7,8 @@
 #define HID_LEFT_CTRL 0xe0u
 #define HID_RIGHT_GUI 0xe7u
 
+static uint32_t logical_modifiers(const AstraInputService *service);
+
 static AstraInputClient *find_client(AstraInputService *service,
                                      uint32_t client_id)
 {
@@ -41,6 +43,7 @@ static AstraLogicalInputEvent make_event(AstraInputService *service,
         .sequence = ++service->logical_sequence,
         .focus_generation = service->focus_generation,
         .code = 0u,
+        .modifiers = logical_modifiers(service),
         .value_x = 0,
         .value_y = 0,
     };
@@ -145,6 +148,7 @@ static void deliver_pointer(AstraInputService *service,
             if (event->type == ASTRA_INPUT_EVENT_POINTER_MOTION) {
                 client->pending_dx = event->value_x;
                 client->pending_dy = event->value_y;
+                client->pending_modifiers = event->modifiers;
                 client->motion_pending = 1u;
                 ++service->stats.coalesced_motion;
             } else {
@@ -157,12 +161,13 @@ static void deliver_pointer(AstraInputService *service,
 static void repair_state(AstraInputService *service, uint32_t timestamp_ms,
                          bool generation_change)
 {
-    AstraLogicalInputEvent reset = make_event(
+    AstraLogicalInputEvent reset;
+
+    clear_keys(service);
+    reset = make_event(
         service, ASTRA_INPUT_EVENT_STATE_RESET,
         ASTRA_INPUT_LOGICAL_SYNTHETIC | ASTRA_INPUT_LOGICAL_LOSS,
         timestamp_ms);
-
-    clear_keys(service);
     if (generation_change)
         ++service->stats.generation_repairs;
     else
@@ -243,7 +248,7 @@ static void emit_key(AstraInputService *service, uint32_t usage, bool down,
         flags |= ASTRA_INPUT_LOGICAL_REPEAT;
     key = make_event(service, ASTRA_INPUT_EVENT_KEY, flags, timestamp_ms);
     key.code = usage;
-    key.value_x = (int32_t)modifiers;
+    key.modifiers = modifiers;
     deliver_critical(service, &key);
 
     codepoint = service->config.translate != NULL ?
@@ -258,7 +263,7 @@ static void emit_key(AstraInputService *service, uint32_t usage, bool down,
             repeat ? ASTRA_INPUT_LOGICAL_REPEAT : 0u, timestamp_ms);
 
         text.code = codepoint;
-        text.value_x = (int32_t)modifiers;
+        text.modifiers = modifiers;
         deliver_critical(service, &text);
         ++service->stats.text_events;
     }
@@ -351,6 +356,7 @@ bool astra_input_service_attach(AstraInputService *service, uint32_t client_id,
     available->subscriptions = ASTRA_INPUT_SUBSCRIBE_ALL;
     available->pending_dx = 0;
     available->pending_dy = 0;
+    available->pending_modifiers = 0u;
     available->active = 1u;
     available->desynchronized = 0u;
     available->motion_pending = 0u;
@@ -380,6 +386,7 @@ bool astra_input_service_subscribe(AstraInputService *service,
         if (deliver(service, client, &motion) == ASTRA_INPUT_DELIVERY_FULL) {
             client->pending_dx = motion.value_x;
             client->pending_dy = motion.value_y;
+            client->pending_modifiers = motion.modifiers;
             client->motion_pending = 1u;
             ++service->stats.coalesced_motion;
         }
@@ -607,6 +614,7 @@ void astra_input_service_tick(AstraInputService *service,
 
             motion.value_x = client->pending_dx;
             motion.value_y = client->pending_dy;
+            motion.modifiers = client->pending_modifiers;
             if (deliver(service, client, &motion) == ASTRA_INPUT_DELIVERY_OK)
                 client->motion_pending = 0u;
         }

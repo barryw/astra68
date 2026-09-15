@@ -26,6 +26,14 @@
 /** Input-service-selected primary command modifier. */
 #define ASTRA_INPUT_MOD_META        (UINT32_C(1) << 9)
 
+/** Every modifier bit defined by the normalized input ABI. */
+#define ASTRA_INPUT_MOD_ALL \
+    (ASTRA_INPUT_MOD_LEFT_CTRL | ASTRA_INPUT_MOD_LEFT_SHIFT | \
+     ASTRA_INPUT_MOD_LEFT_ALT | ASTRA_INPUT_MOD_LEFT_GUI | \
+     ASTRA_INPUT_MOD_RIGHT_CTRL | ASTRA_INPUT_MOD_RIGHT_SHIFT | \
+     ASTRA_INPUT_MOD_RIGHT_ALT | ASTRA_INPUT_MOD_RIGHT_GUI | \
+     ASTRA_INPUT_MOD_CAPS_LOCK | ASTRA_INPUT_MOD_META)
+
 /** Either Control key. */
 #define ASTRA_INPUT_MOD_CTRL \
     (ASTRA_INPUT_MOD_LEFT_CTRL | ASTRA_INPUT_MOD_RIGHT_CTRL)

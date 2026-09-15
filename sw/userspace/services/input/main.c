@@ -29,20 +29,6 @@ static AstraInputPortSendResult send_event(void *context,
     return ASTRA_INPUT_PORT_SEND_ERROR;
 }
 
-static AstraInputPortSendResult wait_event(void *context,
-                                           uint32_t send_handle)
-{
-    uint32_t status;
-
-    (void)context;
-    status = astra_wait_one(send_handle, ASTRA_DEADLINE_FOREVER, NULL);
-    if (status == ASTRA_SYSCALL_OK)
-        return ASTRA_INPUT_PORT_SEND_OK;
-    if (status == ASTRA_SYSCALL_PEER_DEAD || status == ASTRA_SYSCALL_CLOSED)
-        return ASTRA_INPUT_PORT_SEND_PEER_DEAD;
-    return ASTRA_INPUT_PORT_SEND_ERROR;
-}
-
 static void connected_reply(uint32_t handle, uint32_t transaction,
                             uint32_t status, uint32_t client,
                             uint32_t generation)
@@ -138,7 +124,6 @@ static void accept_client(
 
         client_id = client_index + 1u;
         sink->send = send_event;
-        sink->wait = wait_event;
         sink->send_handle = handles[0];
         if (!astra_input_service_attach(service, client_id,
                                         astra_input_port_deliver, sink) ||
@@ -176,25 +161,36 @@ static void serve(uint32_t receive, uint32_t input, uint32_t irq,
     if (astra_irq_arm(irq) != ASTRA_SYSCALL_OK)
         astra_process_exit(ASTRA_STATUS_IO);
     for (;;) {
-        uint32_t waits[2] = { receive, irq };
+        uint32_t waits[ASTRA_INPUT_CLIENT_MAX + 2u] = { receive, irq };
+        uint32_t wait_count = 2u;
         uint64_t now = astra_clock_monotonic();
         uint32_t delay = astra_input_service_next_delay(service, now_ms(now));
         uint64_t deadline = delay == ASTRA_INPUT_REPEAT_DISABLED ?
             ASTRA_DEADLINE_FOREVER : now + (uint64_t)delay * UINT64_C(1000000);
         uint32_t selected = 0u;
-        uint32_t status = astra_wait_multiple(
-            waits, 2u, deadline, &selected, NULL);
+        uint32_t status;
+
+        for (uint32_t index = 0u; index < ASTRA_INPUT_CLIENT_MAX; ++index) {
+            const AstraInputClient *client = &service->clients[index];
+
+            if (sinks[index].send_handle != 0u && client->active != 0u &&
+                (client->desynchronized != 0u ||
+                 client->motion_pending != 0u))
+                waits[wait_count++] = sinks[index].send_handle;
+        }
+        status = astra_wait_multiple(waits, wait_count, deadline,
+                                     &selected, NULL);
 
         if (status == ASTRA_SYSCALL_TIMED_OUT) {
             astra_input_service_tick(
                 service, now_ms(astra_clock_monotonic()));
             continue;
         }
-        if (status != ASTRA_SYSCALL_OK || selected > 1u)
+        if (status != ASTRA_SYSCALL_OK || selected >= wait_count)
             astra_process_exit(ASTRA_STATUS_IO);
         if (selected == 0u) {
             accept_client(receive, service, sinks);
-        } else {
+        } else if (selected == 1u) {
             AstraInputEvent events[ASTRA_INPUT_READ_BATCH_MAX];
             AstraIrqRecord record;
 
@@ -217,6 +213,9 @@ static void serve(uint32_t receive, uint32_t input, uint32_t irq,
             }
             if (astra_irq_ack(irq, record.sequence) != ASTRA_SYSCALL_OK)
                 astra_process_exit(ASTRA_STATUS_IO);
+        } else {
+            astra_input_service_tick(
+                service, now_ms(astra_clock_monotonic()));
         }
     }
 }

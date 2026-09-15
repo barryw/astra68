@@ -5,12 +5,14 @@
 #include "astra_boot_text.h"
 #include "astra_graphics_hw.h"
 #include "astra_render_protocol.h"
+#include "astra_window_scene.h"
 
 #include <astra/display.h>
 #include <astra/display_mailbox.h>
 #include <astra/render_batch.h>
 #include <astra/render_builder.h>
 #include <astra/theme.h>
+#include <astra/window_scene.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -40,8 +42,6 @@ enum {
                      TEXT_ROWS * TEXT_CELL_HEIGHT) / 2u,
     TEXT_FONT_WIDTH = ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH,
     TEXT_FONT_HEIGHT = ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT,
-    TEXT_ROWS_PER_BATCH =
-        ASTRA_RENDER_BUILDER_GLYPH_MAX / TEXT_COLUMNS,
     CURSOR_HEIGHT = 3u,
     CURSOR_BLINK_POLLS = 32u,
     POINTER_WIDTH = 16u,
@@ -59,15 +59,15 @@ enum {
 _Static_assert(TEXT_PAGE_BYTES == ASTRA_TEXT_PLANE_BYTES,
                "guest and renderer text pages differ");
 _Static_assert(TEXT_COLUMNS * TEXT_CELL_WIDTH <= ASTRA_DISPLAY_WIDTH &&
-                   TEXT_ROWS * TEXT_CELL_HEIGHT <= ASTRA_DISPLAY_HEIGHT &&
-                   TEXT_ROWS_PER_BATCH != 0u,
-               "text grid must fit the hardware scanout and glyph arena");
+                   TEXT_ROWS * TEXT_CELL_HEIGHT <= ASTRA_DISPLAY_HEIGHT,
+               "text grid must fit the hardware scanout");
 _Static_assert(POINTER_WIDTH <= POINTER_IMAGE_WIDTH &&
                    POINTER_HEIGHT <= POINTER_IMAGE_HEIGHT,
                "pointer artwork must fit the hardware pointer plane");
 
 static volatile sig_atomic_t running = 1;
 static uint8_t terminal_batch[ASTRA_RENDER_BUILDER_BYTES];
+static uint32_t pointer_shape = ASTRA_POINTER_SHAPE_DEFAULT;
 
 #define RENDER_TIMEOUT_NS UINT64_C(2000000000)
 
@@ -84,6 +84,95 @@ static const uint16_t pointer_inner[POINTER_HEIGHT] = {
     0x0180u, 0x00c0u, 0x00c0u, 0x0000u, 0x0000u, 0x0000u,
     0x0000u, 0x0000u, 0x0000u, 0x0000u, 0x0000u, 0x0000u,
 };
+
+static uint32_t pointer_builtin_pixel(uint32_t shape, unsigned x, unsigned y)
+{
+    int dx = (int)x - 16;
+    int dy = (int)y - 16;
+    int ax = dx < 0 ? -dx : dx;
+    int ay = dy < 0 ? -dy : dy;
+    bool outer = false;
+    bool inner = false;
+
+    if (shape == ASTRA_POINTER_SHAPE_DEFAULT) {
+        if (x >= POINTER_WIDTH || y >= POINTER_HEIGHT)
+            return 0u;
+        {
+            uint16_t bit = (uint16_t)(UINT16_C(0x8000) >> x);
+
+            return (pointer_inner[y] & bit) != 0u ? UINT32_C(0xffffffff) :
+                   (pointer_outer[y] & bit) != 0u ? UINT32_C(0xff000000) : 0u;
+        }
+    }
+    if (shape == ASTRA_POINTER_SHAPE_RESIZE_HORIZONTAL) {
+        outer = (ay <= 2 && x >= 4u && x <= 28u) ||
+                (x >= 4u && x <= 11u &&
+                 (int)(x - 4u) - ay >= -1 &&
+                 (int)(x - 4u) - ay <= 1) ||
+                (x >= 21u && x <= 28u &&
+                 (int)(28u - x) - ay >= -1 &&
+                 (int)(28u - x) - ay <= 1);
+        inner = (ay == 0 && x >= 6u && x <= 26u) ||
+                (x >= 5u && x <= 10u && (int)(x - 4u) == ay) ||
+                (x >= 22u && x <= 27u && (int)(28u - x) == ay);
+    } else if (shape == ASTRA_POINTER_SHAPE_RESIZE_VERTICAL) {
+        outer = (ax <= 2 && y >= 4u && y <= 28u) ||
+                (y >= 4u && y <= 11u &&
+                 (int)(y - 4u) - ax >= -1 &&
+                 (int)(y - 4u) - ax <= 1) ||
+                (y >= 21u && y <= 28u &&
+                 (int)(28u - y) - ax >= -1 &&
+                 (int)(28u - y) - ax <= 1);
+        inner = (ax == 0 && y >= 6u && y <= 26u) ||
+                (y >= 5u && y <= 10u && (int)(y - 4u) == ax) ||
+                (y >= 22u && y <= 27u && (int)(28u - y) == ax);
+    } else if (shape == ASTRA_POINTER_SHAPE_TEXT) {
+        outer = (x >= 9u && x <= 23u &&
+                 ((y >= 5u && y <= 8u) || (y >= 24u && y <= 27u))) ||
+                (x >= 14u && x <= 18u && y >= 5u && y <= 27u);
+        inner = (x >= 11u && x <= 21u && (y == 6u || y == 26u)) ||
+                (x >= 15u && x <= 17u && y >= 6u && y <= 26u);
+    } else if (shape == ASTRA_POINTER_SHAPE_WAIT) {
+        outer = (x >= 8u && x <= 24u &&
+                 ((y >= 4u && y <= 7u) || (y >= 25u && y <= 28u))) ||
+                (y >= 7u && y <= 16u &&
+                 (ax - (int)(y - 7u) / 2 >= 6 &&
+                  ax - (int)(y - 7u) / 2 <= 8)) ||
+                (y >= 16u && y <= 25u &&
+                 (ax - (int)(25u - y) / 2 >= 6 &&
+                  ax - (int)(25u - y) / 2 <= 8));
+        inner = (x >= 10u && x <= 22u && (y == 6u || y == 26u)) ||
+                (y >= 9u && y <= 14u && ax <= (int)(14u - y) / 2) ||
+                (y >= 18u && y <= 23u && ax <= (int)(y - 18u) / 2);
+    }
+    return inner ? UINT32_C(0xffffffff) :
+           outer ? UINT32_C(0xff000000) : 0u;
+}
+
+static void pointer_builtin_hotspot(uint32_t shape, unsigned *x, unsigned *y)
+{
+    *x = shape == ASTRA_POINTER_SHAPE_DEFAULT ? POINTER_HOT_X : 16u;
+    *y = shape == ASTRA_POINTER_SHAPE_DEFAULT ? POINTER_HOT_Y : 16u;
+}
+
+static int pointer_write_builtin(const struct astra_graphics_device *device,
+                                 uint32_t shape)
+{
+    unsigned hot_x;
+    unsigned hot_y;
+
+    if (shape >= ASTRA_POINTER_SHAPE_CUSTOM)
+        return -1;
+    astra_mmio_write(device, ASTRA_REG_POINTER_IMAGE_SELECTOR, 0u);
+    for (unsigned y = 0u; y < POINTER_IMAGE_HEIGHT; ++y)
+        for (unsigned x = 0u; x < POINTER_IMAGE_WIDTH; ++x)
+            astra_mmio_write(device, ASTRA_REG_POINTER_IMAGE_DATA,
+                             pointer_builtin_pixel(shape, x, y));
+    pointer_builtin_hotspot(shape, &hot_x, &hot_y);
+    astra_mmio_write(device, ASTRA_REG_POINTER_HOTSPOT,
+                     (hot_y << 16) | hot_x);
+    return 0;
+}
 
 static void stop(int signal_number)
 {
@@ -133,61 +222,95 @@ static int pointer_initialize(const struct astra_graphics_device *device)
     if ((astra_mmio_read(device, ASTRA_REG_CAPABILITIES) &
          ASTRA_CAP_HARDWARE_POINTER) == 0u || wait_pointer_ready(device) != 0)
         return -1;
-    astra_mmio_write(device, ASTRA_REG_POINTER_IMAGE_SELECTOR, 0u);
-    for (unsigned y = 0u; y < POINTER_IMAGE_HEIGHT; ++y) {
-        for (unsigned x = 0u; x < POINTER_IMAGE_WIDTH; ++x) {
-            uint32_t argb = 0u;
-
-            if (x < POINTER_WIDTH && y < POINTER_HEIGHT) {
-                uint16_t bit = (uint16_t)(UINT16_C(0x8000) >> x);
-
-                argb = (pointer_inner[y] & bit) != 0u ?
-                    UINT32_C(0xffffffff) :
-                    (pointer_outer[y] & bit) != 0u ?
-                        UINT32_C(0xff000000) : 0u;
-            }
-            astra_mmio_write(device, ASTRA_REG_POINTER_IMAGE_DATA, argb);
-        }
-    }
+    if (pointer_write_builtin(device, ASTRA_POINTER_SHAPE_DEFAULT) != 0)
+        return -1;
     astra_mmio_write(device, ASTRA_REG_POINTER_CONTROL, 0u);
     astra_mmio_write(device, ASTRA_REG_POINTER_POSITION, 0u);
-    astra_mmio_write(device, ASTRA_REG_POINTER_HOTSPOT,
-                     (POINTER_HOT_Y << 16) | POINTER_HOT_X);
+    pointer_shape = ASTRA_POINTER_SHAPE_DEFAULT;
     generation = astra_mmio_read(device, ASTRA_REG_POINTER_GENERATION);
     astra_mmio_write(device, ASTRA_REG_POINTER_COMMIT, 3u);
     return wait_pointer_generation(device, generation);
 }
 
 static int pointer_commit_begin(const struct astra_graphics_device *device,
-                                uint32_t *generation)
+                                uint32_t *generation, bool swap_image)
 {
     if (wait_pointer_ready(device) != 0)
         return -1;
     *generation = astra_mmio_read(device, ASTRA_REG_POINTER_GENERATION);
-    astra_mmio_write(device, ASTRA_REG_POINTER_COMMIT, 1u);
+    astra_mmio_write(device, ASTRA_REG_POINTER_COMMIT,
+                     swap_image ? 3u : 1u);
     return 0;
 }
 
+static uint32_t load_be32(const volatile uint8_t *bytes);
+
 static int pointer_update(const struct astra_graphics_device *device,
-                          uint32_t packed, bool commit)
+                          uint32_t packed, uint32_t flags, bool commit)
 {
     uint32_t x = packed & ASTRA_DISPLAY_HOST_CURSOR_X_MASK;
     uint32_t y = (packed & ASTRA_DISPLAY_HOST_CURSOR_Y_MASK) >>
                  ASTRA_DISPLAY_HOST_CURSOR_Y_SHIFT;
     uint32_t generation;
+    uint32_t shape = (flags & ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
+                     ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT;
+    bool swap_image = false;
 
-    if (wait_pointer_ready(device) != 0)
+    if ((flags & ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) != 0u ||
+        shape >= ASTRA_POINTER_SHAPE_COUNT ||
+        wait_pointer_ready(device) != 0)
         return -1;
+    if (shape != pointer_shape) {
+        if (shape != ASTRA_POINTER_SHAPE_CUSTOM &&
+            pointer_write_builtin(device, shape) != 0)
+            return -1;
+        pointer_shape = shape;
+        swap_image = shape != ASTRA_POINTER_SHAPE_CUSTOM;
+    }
     if (x >= ASTRA_DISPLAY_WIDTH)
         x = ASTRA_DISPLAY_WIDTH - 1u;
     if (y >= ASTRA_DISPLAY_HEIGHT)
         y = ASTRA_DISPLAY_HEIGHT - 1u;
     astra_mmio_write(device, ASTRA_REG_POINTER_POSITION, (y << 16) | x);
     astra_mmio_write(device, ASTRA_REG_POINTER_CONTROL,
-                     (packed & ASTRA_DISPLAY_HOST_CURSOR_VISIBLE) != 0u);
+                     (flags & ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u);
     if (!commit)
         return 0;
-    return pointer_commit_begin(device, &generation) == 0 ?
+    return pointer_commit_begin(device, &generation, swap_image) == 0 ?
+        wait_pointer_generation(device, generation) : -1;
+}
+
+static bool pointer_image_valid(const volatile uint8_t *bytes,
+                                uint32_t byte_size)
+{
+    uint32_t hotspot;
+
+    if (bytes == NULL || byte_size != ASTRA_DISPLAY_CURSOR_IMAGE_BYTES ||
+        load_be32(bytes) != ASTRA_DISPLAY_CURSOR_IMAGE_MAGIC ||
+        load_be32(bytes + 4u) != ASTRA_DISPLAY_CURSOR_IMAGE_VERSION ||
+        load_be32(bytes + 12u) != 0u)
+        return false;
+    hotspot = load_be32(bytes + 8u);
+    return (hotspot & UINT32_C(0xffff)) <
+               ASTRA_DISPLAY_CURSOR_IMAGE_WIDTH &&
+           (hotspot >> 16) < ASTRA_DISPLAY_CURSOR_IMAGE_HEIGHT;
+}
+
+static int pointer_image_update(const struct astra_graphics_device *device,
+                                const volatile uint8_t *bytes)
+{
+    uint32_t generation;
+
+    if (wait_pointer_ready(device) != 0)
+        return -1;
+    astra_mmio_write(device, ASTRA_REG_POINTER_IMAGE_SELECTOR, 0u);
+    for (uint32_t at = 0u; at < ASTRA_DISPLAY_CURSOR_IMAGE_PIXELS; ++at)
+        astra_mmio_write(device, ASTRA_REG_POINTER_IMAGE_DATA,
+                         load_be32(bytes + 16u + at * 4u));
+    astra_mmio_write(device, ASTRA_REG_POINTER_HOTSPOT,
+                     load_be32(bytes + 8u));
+    pointer_shape = ASTRA_POINTER_SHAPE_CUSTOM;
+    return pointer_commit_begin(device, &generation, true) == 0 ?
         wait_pointer_generation(device, generation) : -1;
 }
 
@@ -237,14 +360,29 @@ static bool batch_contains(uint32_t bytes, uint32_t arena_offset,
     return offset <= bytes && length <= bytes - offset;
 }
 
-static bool batch_descriptor_valid(uint32_t bytes, uint32_t arena_offset)
+static bool arena_ranges_overlap(uint32_t left, uint32_t left_bytes,
+                                 uint32_t right, uint32_t right_bytes)
 {
-    return arena_offset >= ASTRA_RENDER_BATCH_RESOURCE_OFFSET &&
-           arena_offset < ASTRA_RENDER_BATCH_GLYPH_OFFSET &&
-           (arena_offset - ASTRA_RENDER_BATCH_RESOURCE_OFFSET) %
-                   ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES == 0u &&
-           batch_contains(bytes, arena_offset,
-                          ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES);
+    return left < (uint64_t)right + right_bytes &&
+           right < (uint64_t)left + left_bytes;
+}
+
+static bool batch_descriptor_valid(const volatile uint8_t *batch,
+                                   uint32_t bytes, uint32_t arena_offset)
+{
+    uint32_t record;
+
+    if (arena_offset < ASTRA_RENDER_BATCH_DATA_OFFSET ||
+        (arena_offset & (ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES - 1u)) != 0u ||
+        !batch_contains(bytes, arena_offset,
+                        ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES))
+        return false;
+    record = arena_offset - ASTRA_RENDER_BATCH_ARENA_OFFSET;
+    return load_be32(batch + record) ==
+               ((uint32_t)ASTRA_RENDER_ABI_VERSION << 16 |
+                ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES) &&
+           load_be32(batch + record + 4u) == load_be32(batch + 24u) &&
+           load_be32(batch + record + 20u) != 0u;
 }
 
 static bool batch_data_descriptor_valid(const volatile uint8_t *batch,
@@ -255,7 +393,7 @@ static bool batch_data_descriptor_valid(const volatile uint8_t *batch,
     uint32_t data;
     uint32_t data_bytes;
 
-    if (!batch_descriptor_valid(bytes, arena_offset))
+    if (!batch_descriptor_valid(batch, bytes, arena_offset))
         return false;
     record = arena_offset - ASTRA_RENDER_BATCH_ARENA_OFFSET;
     data = load_be32(batch + record + 8u);
@@ -267,15 +405,9 @@ static bool batch_data_descriptor_valid(const volatile uint8_t *batch,
 static bool batch_glyphs_valid(uint32_t bytes, uint32_t arena_offset,
                                uint32_t count)
 {
-    uint32_t capacity = (ASTRA_RENDER_BATCH_DATA_OFFSET -
-                         ASTRA_RENDER_BATCH_GLYPH_OFFSET) /
-                        ASTRA_RENDER_GLYPH_DESCRIPTOR_BYTES;
-
-    return count != 0u && count <= capacity &&
-           arena_offset >= ASTRA_RENDER_BATCH_GLYPH_OFFSET &&
-           arena_offset < ASTRA_RENDER_BATCH_DATA_OFFSET &&
-           (arena_offset - ASTRA_RENDER_BATCH_GLYPH_OFFSET) %
-                   ASTRA_RENDER_GLYPH_DESCRIPTOR_BYTES == 0u &&
+    return count != 0u && count <= ASTRA_RENDER_MAX_GLYPH_DESCRIPTORS &&
+           arena_offset >= ASTRA_RENDER_BATCH_DATA_OFFSET &&
+           (arena_offset & (ASTRA_RENDER_GLYPH_DESCRIPTOR_BYTES - 1u)) == 0u &&
            batch_contains(bytes, arena_offset,
                           count * ASTRA_RENDER_GLYPH_DESCRIPTOR_BYTES);
 }
@@ -285,11 +417,13 @@ static bool render_batch_valid(const volatile uint8_t *batch,
 {
     uint32_t command_count;
     uint32_t presentation;
+    uint32_t scene_offset;
+    uint32_t scene_bytes;
+    uint32_t version;
 
     if (bytes < ASTRA_RENDER_BATCH_MIN_BYTES ||
         bytes > ASTRA_RENDER_BATCH_MAX_BYTES ||
         load_be32(batch + 0u) != ASTRA_RENDER_BATCH_MAGIC ||
-        load_be32(batch + 4u) != ASTRA_RENDER_BATCH_VERSION_1_1 ||
         load_be32(batch + 8u) != bytes ||
         load_be32(batch + 16u) != ASTRA_RENDER_BATCH_SUBMISSION_OFFSET ||
         load_be32(batch + 20u) != ASTRA_RENDER_BATCH_COMPLETION_OFFSET ||
@@ -297,21 +431,39 @@ static bool render_batch_valid(const volatile uint8_t *batch,
         (load_be32(batch + 28u) != ASTRA_RENDER_BATCH_SCANOUT0_OFFSET &&
          load_be32(batch + 28u) != ASTRA_RENDER_BATCH_SCANOUT1_OFFSET))
         return false;
+    version = load_be32(batch + 4u);
+    scene_offset = load_be32(batch + 48u);
+    scene_bytes = load_be32(batch + 52u);
+    if ((version != ASTRA_RENDER_BATCH_VERSION_1_2 &&
+         version != ASTRA_RENDER_BATCH_VERSION_1_3) ||
+        (version == ASTRA_RENDER_BATCH_VERSION_1_2 &&
+         (scene_offset != 0u || scene_bytes != 0u)) ||
+        (version == ASTRA_RENDER_BATCH_VERSION_1_3 &&
+         (scene_offset < ASTRA_RENDER_BATCH_DATA_OFFSET ||
+          scene_bytes < ASTRA_WINDOW_SCENE_HEADER_BYTES ||
+          !batch_contains(bytes, scene_offset, scene_bytes))))
+        return false;
     presentation = load_be32(batch + 32u);
     if ((presentation & ~ASTRA_RENDER_BATCH_PRESENT_CURSOR) != 0u ||
         ((presentation & ASTRA_RENDER_BATCH_PRESENT_CURSOR) != 0u ?
              (load_be32(batch + 36u) >= ASTRA_DISPLAY_WIDTH ||
               load_be32(batch + 40u) >= ASTRA_DISPLAY_HEIGHT ||
               (load_be32(batch + 44u) &
-               ~ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u) :
+               ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) != 0u ||
+              ((load_be32(batch + 44u) &
+                ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
+                   ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT) >=
+                  ASTRA_POINTER_SHAPE_COUNT) :
              (load_be32(batch + 36u) != 0u ||
               load_be32(batch + 40u) != 0u ||
               load_be32(batch + 44u) != 0u)))
         return false;
     command_count = load_be32(batch + 12u);
-    if (command_count == 0u || command_count > ASTRA_RENDER_RING_ENTRIES)
+    if ((command_count == 0u &&
+         version != ASTRA_RENDER_BATCH_VERSION_1_3) ||
+        command_count > ASTRA_RENDER_RING_ENTRIES)
         return false;
-    for (uint32_t offset = 48u; offset < ASTRA_RENDER_BATCH_HEADER_BYTES;
+    for (uint32_t offset = 56u; offset < ASTRA_RENDER_BATCH_HEADER_BYTES;
          offset += 4u)
         if (load_be32(batch + offset) != 0u)
             return false;
@@ -327,11 +479,11 @@ static bool render_batch_valid(const volatile uint8_t *batch,
             load_be32(batch + offset + 8u) == 0u ||
             load_be32(batch + offset + 12u) != load_be32(batch + 24u) ||
             !batch_descriptor_valid(
-                bytes, load_be32(batch + offset + 32u)) ||
+                batch, bytes, load_be32(batch + offset + 32u)) ||
             ((operation == ASTRA_RENDER_OP_BLIT ||
               operation == ASTRA_RENDER_OP_GLYPH_RUN) &&
              !batch_descriptor_valid(
-                 bytes, load_be32(batch + offset + 36u))) ||
+                 batch, bytes, load_be32(batch + offset + 36u))) ||
             (operation == ASTRA_RENDER_OP_GLYPH_RUN &&
              (!batch_data_descriptor_valid(
                   batch, bytes, load_be32(batch + offset + 36u)) ||
@@ -343,13 +495,14 @@ static bool render_batch_valid(const volatile uint8_t *batch,
 }
 
 static bool render_batch_cursor(const volatile uint8_t *batch,
-                                uint32_t *packed)
+                                uint32_t *packed, uint32_t *flags)
 {
     if ((load_be32(batch + 32u) & ASTRA_RENDER_BATCH_PRESENT_CURSOR) == 0u)
         return false;
     *packed = ASTRA_DISPLAY_HOST_CURSOR_PACK(
         load_be32(batch + 36u), load_be32(batch + 40u),
         (load_be32(batch + 44u) & ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u);
+    *flags = load_be32(batch + 44u);
     return true;
 }
 
@@ -437,35 +590,39 @@ static int execute_render_batch(const struct astra_graphics_device *device,
     astra_graphics_memory_barrier();
     profile_copied = astra_monotonic_nanoseconds();
 
-    astra_mmio_write(device, ASTRA_REG_RENDER_CONTROL, 0u);
-    astra_mmio_write(device, ASTRA_REG_RENDER_SUBMISSION_PRODUCER, 0u);
-    astra_mmio_write(device, ASTRA_REG_RENDER_COMPLETION_CONSUMER, 0u);
-    astra_mmio_write(device, ASTRA_REG_RENDER_SUBMISSION_RING_OFFSET,
-                     ASTRA_RENDER_BATCH_SUBMISSION_OFFSET);
-    astra_mmio_write(device, ASTRA_REG_RENDER_COMPLETION_RING_OFFSET,
-                     ASTRA_RENDER_BATCH_COMPLETION_OFFSET);
-    astra_mmio_write(device, ASTRA_REG_RENDER_RESOURCE_GENERATION,
-                     generation);
-    astra_mmio_write(device, ASTRA_REG_RENDER_IRQ_PENDING, 1u);
-    astra_mmio_write(device, ASTRA_REG_RENDER_CONTROL,
-                     ASTRA_RENDER_CONTROL_REBASE);
-    if (astra_mmio_read(device, ASTRA_REG_RENDER_SUBMISSION_CONSUMER) != 0u ||
-        astra_mmio_read(device, ASTRA_REG_RENDER_COMPLETION_PRODUCER) != 0u) {
-        fprintf(stderr, "render batch rebase failed\n");
-        goto done;
-    }
-    astra_mmio_write(device, ASTRA_REG_RENDER_CONTROL,
-                     ASTRA_RENDER_CONTROL_ENABLE);
-    astra_mmio_write(device, ASTRA_REG_RENDER_SUBMISSION_PRODUCER,
-                     command_count);
-    if (wait_render(device, command_count) != 0) {
-        fprintf(stderr,
-                "render batch stalled: commands=%u completed=%u status=0x%08x\n",
-                command_count,
-                astra_mmio_read(device,
-                                ASTRA_REG_RENDER_COMPLETION_PRODUCER),
-                astra_mmio_read(device, ASTRA_REG_RENDER_STATUS));
-        goto done;
+    if (command_count != 0u) {
+        astra_mmio_write(device, ASTRA_REG_RENDER_CONTROL, 0u);
+        astra_mmio_write(device, ASTRA_REG_RENDER_SUBMISSION_PRODUCER, 0u);
+        astra_mmio_write(device, ASTRA_REG_RENDER_COMPLETION_CONSUMER, 0u);
+        astra_mmio_write(device, ASTRA_REG_RENDER_SUBMISSION_RING_OFFSET,
+                         ASTRA_RENDER_BATCH_SUBMISSION_OFFSET);
+        astra_mmio_write(device, ASTRA_REG_RENDER_COMPLETION_RING_OFFSET,
+                         ASTRA_RENDER_BATCH_COMPLETION_OFFSET);
+        astra_mmio_write(device, ASTRA_REG_RENDER_RESOURCE_GENERATION,
+                         generation);
+        astra_mmio_write(device, ASTRA_REG_RENDER_IRQ_PENDING, 1u);
+        astra_mmio_write(device, ASTRA_REG_RENDER_CONTROL,
+                         ASTRA_RENDER_CONTROL_REBASE);
+        if (astra_mmio_read(device,
+                           ASTRA_REG_RENDER_SUBMISSION_CONSUMER) != 0u ||
+            astra_mmio_read(device,
+                           ASTRA_REG_RENDER_COMPLETION_PRODUCER) != 0u) {
+            fprintf(stderr, "render batch rebase failed\n");
+            goto done;
+        }
+        astra_mmio_write(device, ASTRA_REG_RENDER_CONTROL,
+                         ASTRA_RENDER_CONTROL_ENABLE);
+        astra_mmio_write(device, ASTRA_REG_RENDER_SUBMISSION_PRODUCER,
+                         command_count);
+        if (wait_render(device, command_count) != 0) {
+            fprintf(stderr,
+                    "render batch stalled: commands=%u completed=%u status=0x%08x\n",
+                    command_count,
+                    astra_mmio_read(device,
+                                    ASTRA_REG_RENDER_COMPLETION_PRODUCER),
+                    astra_mmio_read(device, ASTRA_REG_RENDER_STATUS));
+            goto done;
+        }
     }
     profile_rendered = astra_monotonic_nanoseconds();
     if (getenv("ASTRA_DISPLAY_PROFILE") != NULL)
@@ -519,6 +676,42 @@ done:
     return result;
 }
 
+static int compile_window_scene(
+    const struct astra_graphics_device *device,
+    const volatile uint8_t *batch, uint32_t batch_bytes,
+    uint32_t *output_offset_out, uint32_t *output_bytes_out)
+{
+    struct astra_graphics_memory_map output;
+    uint32_t scene_offset = load_be32(batch + 48u);
+    uint32_t scene_bytes = load_be32(batch + 52u);
+    uint32_t scene_record = scene_offset - ASTRA_RENDER_BATCH_ARENA_OFFSET;
+    uint32_t output_offset = load_be32(batch + scene_record + 28u);
+    uint32_t output_capacity = load_be32(batch + scene_record + 32u);
+    uint32_t written = 0u;
+    int status;
+
+    if (!batch_contains(batch_bytes, scene_offset, scene_bytes))
+        return -1;
+    astra_graphics_memory_map_init(&output);
+    if (astra_graphics_memory_map_open(
+            device, &output, ASTRA_GRAPHICS_ARENA_BASE + output_offset,
+            output_capacity) != 0)
+        return -1;
+    status = astra_window_scene_compile(
+        (const uint8_t *)(const void *)batch + scene_record, scene_bytes,
+        output.data, output_capacity, ASTRA_GRAPHICS_ARENA_BYTES, &written);
+    if (status == ASTRA_WINDOW_SCENE_OK)
+        astra_graphics_memory_barrier();
+    astra_graphics_memory_map_close(&output);
+    if (status != ASTRA_WINDOW_SCENE_OK) {
+        fprintf(stderr, "window scene compile failed: %d\n", status);
+        return -1;
+    }
+    *output_offset_out = output_offset;
+    *output_bytes_out = written;
+    return 0;
+}
+
 static bool mailbox_take(volatile const AstraDisplayMailbox *mailbox,
                          uint32_t previous_sequence,
                          struct display_request *request)
@@ -530,7 +723,8 @@ static bool mailbox_take(volatile const AstraDisplayMailbox *mailbox,
         (mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_1 &&
          mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_2 &&
          mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_3 &&
-         mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_4) ||
+         mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_4 &&
+         mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_5) ||
         sequence == 0u || sequence == previous_sequence)
         return false;
     request->sequence = sequence;
@@ -701,7 +895,7 @@ static int present(const struct astra_graphics_device *device,
         fprintf(stderr, "graphics arena does not match the terminal\n");
         return -1;
     }
-    astra_mmio_write(device, ASTRA_REG_BACKDROP, 0u);
+    astra_graphics_scene_prepare_empty(device);
     astra_mmio_write(device, ASTRA_REG_FB_BASE,
                      ASTRA_FRAMEBUFFER_BASE + scanout_offset);
     astra_mmio_write(device, ASTRA_REG_FB_PITCH, ASTRA_FRAMEBUFFER_PITCH);
@@ -710,11 +904,42 @@ static int present(const struct astra_graphics_device *device,
     astra_mmio_write(device, ASTRA_REG_FB_VIEWPORT_Y, 0u);
     astra_mmio_write(device, ASTRA_REG_FB_CONTROL, 3u);
     astra_mmio_write(device, ASTRA_REG_FB_KEY, 0u);
-    astra_mmio_write(device, ASTRA_REG_TILE0_CONTROL, 0u);
-    astra_mmio_write(device, ASTRA_REG_TILE1_CONTROL, 0u);
-    astra_mmio_write(device, ASTRA_REG_GLOBAL_CONTROL, 1u);
     if (commit_pointer &&
-        pointer_commit_begin(device, &pointer_generation) != 0)
+        pointer_commit_begin(device, &pointer_generation, false) != 0)
+        return -1;
+    scene_status = astra_graphics_scene_commit(
+        device, UINT64_C(2000000000), NULL);
+    if (commit_pointer)
+        pointer_status = wait_pointer_generation(device, pointer_generation);
+    return scene_status == 0 && pointer_status == 0 ? 0 : -1;
+}
+
+static int present_window_scene(const struct astra_graphics_device *device,
+                                uint32_t scene_offset,
+                                uint32_t scene_bytes,
+                                bool commit_pointer)
+{
+    uint32_t size = (ASTRA_FRAMEBUFFER_HEIGHT << 16) |
+                    ASTRA_FRAMEBUFFER_WIDTH;
+    uint32_t pointer_generation = 0u;
+    int scene_status;
+    int pointer_status = 0;
+
+    astra_graphics_scene_prepare_empty(device);
+    astra_mmio_write(device, ASTRA_REG_FB_BASE,
+                     ASTRA_GRAPHICS_ARENA_BASE + scene_offset);
+    astra_mmio_write(device, ASTRA_REG_FB_PITCH, ASTRA_FRAMEBUFFER_PITCH);
+    astra_mmio_write(device, ASTRA_REG_FB_SIZE, size);
+    astra_mmio_write(device, ASTRA_REG_FB_VIEWPORT_X, 0u);
+    astra_mmio_write(device, ASTRA_REG_FB_VIEWPORT_Y, 0u);
+    astra_mmio_write(device, ASTRA_REG_FB_CONTROL,
+                     ASTRA_FRAMEBUFFER_ENABLE |
+                         ASTRA_FRAMEBUFFER_FORMAT_RGB565 |
+                         ASTRA_FRAMEBUFFER_WINDOW_SCENE);
+    astra_mmio_write(device, ASTRA_REG_FB_KEY, 0u);
+    astra_mmio_write(device, ASTRA_REG_FB_WINDOW_SCENE_BYTES, scene_bytes);
+    if (commit_pointer &&
+        pointer_commit_begin(device, &pointer_generation, false) != 0)
         return -1;
     scene_status = astra_graphics_scene_commit(
         device, UINT64_C(2000000000), NULL);
@@ -1090,31 +1315,24 @@ static int present_full_text(const struct astra_graphics_device *device,
     uint32_t frame_generation = next_generation(generation, *active_scanout);
     uint32_t target = scanout_for_generation(frame_generation);
 
-    for (uint32_t first = 0u; first < TEXT_ROWS;
-         first += TEXT_ROWS_PER_BATCH) {
-        uint32_t count = TEXT_ROWS - first;
+    {
         uint32_t destination;
         uint32_t scanout;
 
-        if (count > TEXT_ROWS_PER_BATCH)
-            count = TEXT_ROWS_PER_BATCH;
         if (!astra_render_builder_init(&builder, terminal_batch,
                                        sizeof(terminal_batch),
                                        frame_generation))
             return -1;
         destination = astra_render_builder_frame(&builder);
-        if (first == 0u &&
-            !astra_render_builder_fill(
+        if (!astra_render_builder_fill(
                 &builder, destination, 0, 0, ASTRA_DISPLAY_WIDTH,
                 ASTRA_DISPLAY_HEIGHT, 0u))
             return -1;
-        for (uint32_t row = first; row < first + count; ++row)
+        for (uint32_t row = 0u; row < TEXT_ROWS; ++row)
             if (!add_text_span(&builder, destination, cells, row, 0u,
                                TEXT_COLUMNS))
                 return -1;
-        if (cursor_drawn && cursor->cell / TEXT_COLUMNS >= first &&
-            cursor->cell / TEXT_COLUMNS < first + count &&
-            !add_cursor(&builder, destination, cursor, true))
+        if (cursor_drawn && !add_cursor(&builder, destination, cursor, true))
             return -1;
         if (execute_finished_batch(device, &builder, &scanout) != 0 ||
             scanout != target)
@@ -1224,6 +1442,7 @@ static int self_test(void)
     static uint8_t validation_batch[
         ASTRA_RENDER_BATCH_MIN_BYTES +
         ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES];
+    static uint8_t validation_cursor[ASTRA_DISPLAY_CURSOR_IMAGE_BYTES];
     volatile AstraDisplayMailbox *shared;
     uint64_t wait_started;
     pid_t child;
@@ -1241,6 +1460,18 @@ static int self_test(void)
     for (uint32_t y = 0u; y < POINTER_HEIGHT; ++y)
         if ((pointer_inner[y] & (uint16_t)~pointer_outer[y]) != 0u)
             return EXIT_FAILURE;
+    (void)memset(validation_cursor, 0, sizeof(validation_cursor));
+    store_be32(validation_cursor, ASTRA_DISPLAY_CURSOR_IMAGE_MAGIC);
+    store_be32(validation_cursor + 4u,
+               ASTRA_DISPLAY_CURSOR_IMAGE_VERSION);
+    store_be32(validation_cursor + 8u, (16u << 16) | 16u);
+    if (!pointer_image_valid(validation_cursor,
+                             sizeof(validation_cursor)))
+        return EXIT_FAILURE;
+    store_be32(validation_cursor + 8u,
+               ASTRA_DISPLAY_CURSOR_IMAGE_WIDTH);
+    if (pointer_image_valid(validation_cursor, sizeof(validation_cursor)))
+        return EXIT_FAILURE;
     (void)memset(plane, 0, sizeof(plane));
     plane[0] = 'A';
     plane[ASTRA_TEXT_CURSOR_SEQUENCE_OFFSET] = 2u;
@@ -1411,7 +1642,7 @@ static int self_test(void)
 
     (void)memset(validation_batch, 0, sizeof(validation_batch));
     store_be32(validation_batch + 0u, ASTRA_RENDER_BATCH_MAGIC);
-    store_be32(validation_batch + 4u, ASTRA_RENDER_BATCH_VERSION_1_1);
+    store_be32(validation_batch + 4u, ASTRA_RENDER_BATCH_VERSION_1_2);
     store_be32(validation_batch + 8u, sizeof(validation_batch));
     store_be32(validation_batch + 12u, 1u);
     store_be32(validation_batch + 16u,
@@ -1423,7 +1654,22 @@ static int self_test(void)
     store_be32(validation_batch + 32u, ASTRA_RENDER_BATCH_PRESENT_CURSOR);
     store_be32(validation_batch + 36u, ASTRA_DISPLAY_WIDTH - 1u);
     store_be32(validation_batch + 40u, ASTRA_DISPLAY_HEIGHT - 1u);
-    store_be32(validation_batch + 44u, ASTRA_DISPLAY_CURSOR_VISIBLE);
+    store_be32(validation_batch + 44u,
+               ASTRA_DISPLAY_CURSOR_VISIBLE |
+                   ASTRA_DISPLAY_CURSOR_SHAPE(ASTRA_POINTER_SHAPE_TEXT));
+    store_be32(validation_batch +
+                   ASTRA_RENDER_BATCH_RESOURCE_OFFSET -
+                   ASTRA_RENDER_BATCH_ARENA_OFFSET,
+               (uint32_t)ASTRA_RENDER_ABI_VERSION << 16 |
+                   ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES);
+    store_be32(validation_batch +
+                   ASTRA_RENDER_BATCH_RESOURCE_OFFSET -
+                   ASTRA_RENDER_BATCH_ARENA_OFFSET + 4u,
+               7u);
+    store_be32(validation_batch +
+                   ASTRA_RENDER_BATCH_RESOURCE_OFFSET -
+                   ASTRA_RENDER_BATCH_ARENA_OFFSET + 20u,
+               (uint32_t)ASTRA_DISPLAY_WIDTH << 16 | ASTRA_DISPLAY_HEIGHT);
     store_be32(validation_batch +
                    ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
                    ASTRA_RENDER_BATCH_ARENA_OFFSET,
@@ -1449,10 +1695,14 @@ static int self_test(void)
         return EXIT_FAILURE;
     {
         uint32_t packed = 0u;
+        uint32_t flags = 0u;
 
-        if (!render_batch_cursor(validation_batch, &packed) ||
+        if (!render_batch_cursor(validation_batch, &packed, &flags) ||
             packed != ASTRA_DISPLAY_HOST_CURSOR_PACK(
-                ASTRA_DISPLAY_WIDTH - 1u, ASTRA_DISPLAY_HEIGHT - 1u, true))
+                ASTRA_DISPLAY_WIDTH - 1u, ASTRA_DISPLAY_HEIGHT - 1u, true) ||
+            flags != (ASTRA_DISPLAY_CURSOR_VISIBLE |
+                      ASTRA_DISPLAY_CURSOR_SHAPE(
+                          ASTRA_POINTER_SHAPE_TEXT)))
             return EXIT_FAILURE;
     }
     store_be32(validation_batch + 36u, ASTRA_DISPLAY_WIDTH);
@@ -1462,7 +1712,13 @@ static int self_test(void)
     store_be32(validation_batch +
                    ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
                    ASTRA_RENDER_BATCH_ARENA_OFFSET + 32u,
-               ASTRA_RENDER_BATCH_DATA_OFFSET);
+               ASTRA_RENDER_BATCH_RESOURCE_OFFSET + 4u);
+    if (render_batch_valid(validation_batch, sizeof(validation_batch)))
+        return EXIT_FAILURE;
+    store_be32(validation_batch +
+                   ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
+                   ASTRA_RENDER_BATCH_ARENA_OFFSET + 32u,
+               ASTRA_RENDER_BATCH_RESOURCE_OFFSET + 1u);
     if (render_batch_valid(validation_batch, sizeof(validation_batch)))
         return EXIT_FAILURE;
     store_be32(validation_batch +
@@ -1495,6 +1751,8 @@ int main(int argc, char **argv)
     int result = EXIT_FAILURE;
     uint32_t text_generation = 0u;
     uint32_t active_scanout;
+    uint32_t active_window_scene_offset = 0u;
+    uint32_t active_window_scene_bytes = 0u;
     uint32_t mailbox_sequence = 0u;
     bool display_owned = false;
 
@@ -1546,11 +1804,15 @@ int main(int argc, char **argv)
         goto done;
     }
     mailbox->magic = ASTRA_DISPLAY_MAILBOX_MAGIC;
-    mailbox->version = ASTRA_DISPLAY_MAILBOX_VERSION_1_4;
+    mailbox->version = ASTRA_DISPLAY_MAILBOX_VERSION_1_5;
     mailbox->completion_sequence = 0u;
     astra_graphics_memory_barrier();
     if (astra_graphics_device_open(&device, false) != 0 ||
         astra_graphics_device_validate(&device, true) != 0)
+        goto done;
+    astra_graphics_scene_prepare_empty(&device);
+    if (astra_graphics_scene_commit(
+            &device, UINT64_C(2000000000), NULL) != 0)
         goto done;
     if (pointer_initialize(&device) != 0)
         goto done;
@@ -1598,6 +1860,8 @@ int main(int argc, char **argv)
                         &text_generation, &active_scanout) == 0) {
                     generation = astra_mmio_read(&device,
                                                  ASTRA_REG_GENERATION);
+                    active_window_scene_offset = 0u;
+                    active_window_scene_bytes = 0u;
                     status = ASTRA_DISPLAY_COMPLETION_OK;
                     display_owned = true;
                 } else {
@@ -1615,6 +1879,8 @@ int main(int argc, char **argv)
                     &text_generation, &active_scanout) == 0) {
                     generation = astra_mmio_read(&device,
                                                  ASTRA_REG_GENERATION);
+                    active_window_scene_offset = 0u;
+                    active_window_scene_bytes = 0u;
                     status = ASTRA_DISPLAY_COMPLETION_OK;
                     display_owned = true;
                 } else {
@@ -1629,37 +1895,63 @@ int main(int argc, char **argv)
                                ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
                            request.frame_bytes)) {
                 uint32_t scanout_offset;
+                uint32_t window_scene_offset = 0u;
+                uint32_t window_scene_bytes = 0u;
                 uint64_t profile_started = astra_monotonic_nanoseconds();
                 uint64_t profile_rendered;
                 uint64_t profile_presented;
                 uint32_t cursor_packed = 0u;
+                uint32_t cursor_flags = 0u;
                 bool batch_cursor;
+                bool window_scene_batch;
                 int render_status;
                 int present_status;
+                const volatile uint8_t *batch =
+                    (const uint8_t *)(const void *)mailbox +
+                    ASTRA_DISPLAY_MAILBOX_HEADER_BYTES;
 
+                window_scene_batch = load_be32(batch + 4u) ==
+                                     ASTRA_RENDER_BATCH_VERSION_1_3;
                 batch_cursor = render_batch_cursor(
-                    (const uint8_t *)(const void *)mailbox +
-                        ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
-                    &cursor_packed);
-                scanout_offset = load_be32(
-                    (const uint8_t *)(const void *)mailbox +
-                    ASTRA_DISPLAY_MAILBOX_HEADER_BYTES + 28u);
-                render_status = make_render_target_inactive(
-                    &device, scanout_offset, &text_generation,
-                    &active_scanout);
+                    batch, &cursor_packed, &cursor_flags);
+                scanout_offset = load_be32(batch + 28u);
+                render_status = 0;
+                if (window_scene_batch) {
+                    uint32_t scene_record = load_be32(batch + 48u) -
+                        ASTRA_RENDER_BATCH_ARENA_OFFSET;
+                    uint32_t target = load_be32(batch + scene_record + 28u);
+                    uint32_t capacity =
+                        load_be32(batch + scene_record + 32u);
+
+                    if (active_window_scene_bytes != 0u &&
+                        arena_ranges_overlap(
+                            target, capacity, active_window_scene_offset,
+                            active_window_scene_bytes))
+                        render_status = -1;
+                } else {
+                    render_status = make_render_target_inactive(
+                        &device, scanout_offset, &text_generation,
+                        &active_scanout);
+                }
                 if (render_status == 0) {
                     render_status = execute_render_batch(
-                        &device,
-                        (const uint8_t *)(const void *)mailbox +
-                            ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
-                        request.frame_bytes, &scanout_offset);
+                        &device, batch, request.frame_bytes, &scanout_offset);
+                }
+                if (render_status == 0 && window_scene_batch) {
+                    render_status = compile_window_scene(
+                        &device, batch, request.frame_bytes,
+                        &window_scene_offset, &window_scene_bytes);
                 }
                 if (render_status == 0 && batch_cursor)
                     render_status = pointer_update(
-                        &device, cursor_packed, false);
+                        &device, cursor_packed, cursor_flags, false);
                 profile_rendered = astra_monotonic_nanoseconds();
-                present_status = render_status == 0 ?
-                    present(&device, scanout_offset, batch_cursor) : -1;
+                present_status = render_status != 0 ? -1 :
+                    window_scene_batch ?
+                        present_window_scene(
+                            &device, window_scene_offset,
+                            window_scene_bytes, batch_cursor) :
+                        present(&device, scanout_offset, batch_cursor);
                 profile_presented = astra_monotonic_nanoseconds();
                 if (getenv("ASTRA_DISPLAY_PROFILE") != NULL)
                     fprintf(stderr,
@@ -1673,7 +1965,15 @@ int main(int argc, char **argv)
                             (unsigned long long)
                                 ((profile_presented - profile_rendered) / 1000u));
                 if (render_status == 0 && present_status == 0) {
-                    active_scanout = scanout_offset;
+                    if (window_scene_batch) {
+                        active_scanout = UINT32_MAX;
+                        active_window_scene_offset = window_scene_offset;
+                        active_window_scene_bytes = window_scene_bytes;
+                    } else {
+                        active_scanout = scanout_offset;
+                        active_window_scene_offset = 0u;
+                        active_window_scene_bytes = 0u;
+                    }
                     generation = astra_mmio_read(&device,
                                                  ASTRA_REG_GENERATION);
                     status = ASTRA_DISPLAY_COMPLETION_OK;
@@ -1682,12 +1982,34 @@ int main(int argc, char **argv)
                     status = ASTRA_DISPLAY_COMPLETION_IO_ERROR;
                 }
             } else if (request.id != 0u &&
+                       request.operation ==
+                           ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE &&
+                       request.frame_pitch == 0u &&
+                       pointer_image_valid(
+                           (const uint8_t *)(const void *)mailbox +
+                               ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
+                           request.frame_bytes)) {
+                if (pointer_image_update(
+                        &device,
+                        (const uint8_t *)(const void *)mailbox +
+                            ASTRA_DISPLAY_MAILBOX_HEADER_BYTES) == 0) {
+                    generation = astra_mmio_read(&device,
+                                                 ASTRA_REG_GENERATION);
+                    status = ASTRA_DISPLAY_COMPLETION_OK;
+                } else {
+                    status = ASTRA_DISPLAY_COMPLETION_IO_ERROR;
+                }
+            } else if (request.id != 0u &&
                        request.operation == ASTRA_DISPLAY_CURSOR_UPDATE &&
                        request.frame_pitch == 0u &&
                        (request.frame_bytes &
-                        ~ASTRA_DISPLAY_CURSOR_VISIBLE) == 0u) {
+                        ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) == 0u &&
+                       ((request.frame_bytes &
+                         ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
+                            ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT) <
+                           ASTRA_POINTER_SHAPE_COUNT) {
                 if (pointer_update(&device, request.color_rgb565,
-                                   true) == 0) {
+                                   request.frame_bytes, true) == 0) {
                     generation = astra_mmio_read(&device,
                                                  ASTRA_REG_GENERATION);
                     status = ASTRA_DISPLAY_COMPLETION_OK;
@@ -1701,7 +2023,10 @@ int main(int argc, char **argv)
                 const struct terminal_cursor panic_cursor = {0};
 
                 if (copy_cells(current, plane) &&
-                    pointer_update(&device, 0u, true) == 0 &&
+                    pointer_update(&device, 0u,
+                                   ASTRA_DISPLAY_CURSOR_SHAPE(
+                                       ASTRA_POINTER_SHAPE_DEFAULT),
+                                   true) == 0 &&
                     present_text_on_both_scanouts(
                         &device, current, &panic_cursor, false, text_states,
                         &text_generation, &active_scanout) == 0 &&
@@ -1709,6 +2034,8 @@ int main(int argc, char **argv)
                     cursor = panic_cursor;
                     generation = astra_mmio_read(&device,
                                                  ASTRA_REG_GENERATION);
+                    active_window_scene_offset = 0u;
+                    active_window_scene_bytes = 0u;
                     status = ASTRA_DISPLAY_COMPLETION_OK;
                     display_owned = false;
                 } else {
@@ -1742,7 +2069,7 @@ int main(int argc, char **argv)
             memcmp(current, target_state->cells, sizeof(current)) != 0;
         if (!target_state->valid) {
             damage_clear(&damage);
-            damage.glyphs = ASTRA_RENDER_BUILDER_GLYPH_MAX + 1u;
+            damage.glyphs = TEXT_CELLS;
             scroll_rows = 0u;
         } else {
             scroll_rows = select_scroll(&damage, current, target_state,
@@ -1750,9 +2077,7 @@ int main(int argc, char **argv)
         }
         if (cells_changed || target_state->cursor_drawn != cursor_drawn ||
             (cursor_drawn && target_state->cursor.cell != cursor.cell)) {
-            int update_status = !target_state->valid ||
-                                damage.glyphs >
-                                    ASTRA_RENDER_BUILDER_GLYPH_MAX ?
+            int update_status = !target_state->valid ?
                 present_full_text(&device, current, &cursor, cursor_drawn,
                                   &text_generation, &active_scanout) :
                 present_text_update(&device, current, &damage, scroll_rows,

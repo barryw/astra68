@@ -31,13 +31,13 @@ static AstraResult apply_document_change(
 
 /* Initialize one document with an application-chosen history allocation. */
 AstraResult astra_example_document_init(
-    const AstraInterfaceLibraryV2 *interface, ExampleDocument *document,
+    const AstraInterfaceLibrary *interface, ExampleDocument *document,
     void *arena, uint32_t arena_bytes)
 {
     AstraUndoManagerInfo info = ASTRA_UNDO_MANAGER_INFO_INIT;
 
     if (document == 0 || !astra_interface_library_supports(
-            interface, 5u, ASTRA_INTERFACE_LIBRARY_2_5_SIZE))
+            interface, 0u, ASTRA_INTERFACE_LIBRARY_5_0_SIZE))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     document->undo = (AstraUndoManager)ASTRA_UNDO_MANAGER_INIT;
     document->zoom_percent = 100u;
@@ -51,7 +51,7 @@ AstraResult astra_example_document_init(
 
 /* Apply and retain one named user transaction atomically. */
 AstraResult astra_example_set_zoom(
-    const AstraInterfaceLibraryV2 *interface, ExampleDocument *document,
+    const AstraInterfaceLibrary *interface, ExampleDocument *document,
     uint32_t percent, uint64_t timestamp_ns)
 {
     ExampleZoomChange change;

@@ -14,7 +14,7 @@
 #define ALERT_WIDTH 420u
 #define ALERT_HEIGHT 150u
 
-ASTRA_LIBRARY("interface.library", 2, 6, 0,
+ASTRA_LIBRARY("interface.library", 5, 1, 0,
               ASTRA_INTERFACE_LIBRARY_ABI_MAJOR,
               ASTRA_INTERFACE_LIBRARY_ABI_MINOR,
               "Barry Walker", "Copyright 2026 Barry Walker");
@@ -92,7 +92,7 @@ static AstraResult alert_controls(const AstraAlertInfo *info,
 }
 
 static AstraResult paint(AstraSurfaceView *surface, const AstraAlertInfo *info,
-                         const AstraUIContext *context)
+                         AstraUIContext *context)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     AstraColorRGBA8 signal = info->kind == ASTRA_ALERT_ERROR ? theme.fault :
@@ -124,6 +124,7 @@ static AstraResult show_alert(AstraHandle gui, const AstraAlertInfo *info)
     AstraWindowCreateInfo create = ASTRA_WINDOW_CREATE_INFO_INIT;
     AstraResult result;
     uint32_t status;
+    uint32_t applied_pointer_shape = UINT32_MAX;
 
     if (gui == ASTRA_INVALID_HANDLE || !valid(info))
         return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -167,6 +168,10 @@ static AstraResult show_alert(AstraHandle gui, const AstraAlertInfo *info)
                 break;
             result = astra_interface_ui_handle_event(
                 &context, &event, &action);
+            if (result == ASTRA_OK)
+                result = astra_interface_ui_update_pointer(
+                    &context, &window, ASTRA_POINTER_SHAPE_AUTOMATIC,
+                    &applied_pointer_shape);
             if (result != ASTRA_OK ||
                 action.type == ASTRA_UI_ACTION_ACTIVATE)
                 break;
@@ -204,10 +209,10 @@ static AstraResult show_alert(AstraHandle gui, const AstraAlertInfo *info)
     return result;
 }
 
-const AstraInterfaceLibraryV2 astra_library_exports ASTRA_LIBRARY_EXPORTS = {
+const AstraInterfaceLibrary astra_library_exports ASTRA_LIBRARY_EXPORTS = {
     ASTRA_INTERFACE_LIBRARY_ABI_MAJOR,
     ASTRA_INTERFACE_LIBRARY_ABI_MINOR,
-    sizeof(AstraInterfaceLibraryV2),
+    sizeof(AstraInterfaceLibrary),
     show_alert,
     astra_window_create,
     astra_window_get_info,
@@ -229,6 +234,7 @@ const AstraInterfaceLibraryV2 astra_library_exports ASTRA_LIBRARY_EXPORTS = {
     astra_window_event_try,
     astra_window_event_wait,
     astra_window_event_wait_handle,
+    astra_window_vblank_wait_handle,
     astra_interface_label_init,
     astra_interface_button_init,
     astra_interface_control_set_flex,
@@ -248,7 +254,6 @@ const AstraInterfaceLibraryV2 astra_library_exports ASTRA_LIBRARY_EXPORTS = {
     astra_interface_control_get_value,
     astra_interface_progress_init,
     astra_interface_progress_set,
-    astra_interface_ui_tick,
     astra_interface_control_set_text,
     astra_interface_container_init,
     astra_text_surface_init,
@@ -290,4 +295,23 @@ const AstraInterfaceLibraryV2 astra_library_exports ASTRA_LIBRARY_EXPORTS = {
     astra_interface_field_init,
     astra_interface_field_refresh,
     astra_interface_field_replace_selection,
+    astra_interface_ui_vblank,
+    astra_interface_ui_animations_active,
+    astra_interface_segmented_init,
+    astra_interface_stepper_init,
+    astra_interface_tab_init,
+    astra_scroll_init,
+    astra_scroll_get_state,
+    astra_scroll_set_extents,
+    astra_scroll_set_offset,
+    astra_scroll_by,
+    astra_scroll_set_marks,
+    astra_interface_scroll_view_init,
+    astra_interface_scrollbar_init,
+    astra_interface_splitter_init,
+    astra_window_set_pointer_shape,
+    astra_window_set_pointer_image,
+    astra_interface_ui_update_pointer,
+    astra_interface_dial_init,
+    astra_interface_disclosure_init,
 };

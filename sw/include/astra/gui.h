@@ -13,7 +13,7 @@
 /** GUI service wire protocol tag. */
 #define ASTRA_GUI_PROTOCOL UINT32_C(0x47554920) /* GUI  */
 /** Current GUI service wire protocol version. */
-#define ASTRA_GUI_VERSION 7u
+#define ASTRA_GUI_VERSION 10u
 
 /** Maximum counted UTF-8 bytes in a window title. */
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
@@ -79,7 +79,7 @@ typedef struct AstraWindowFrame {
 } AstraWindowFrame;
 
 /** Current serialized window-event version. */
-#define ASTRA_WINDOW_EVENT_VERSION 3u
+#define ASTRA_WINDOW_EVENT_VERSION 4u
 
 /** Window event kinds. */
 enum {
@@ -103,7 +103,9 @@ enum {
     ASTRA_WINDOW_SUBSCRIBE_FRAME = 1u << 4,
     ASTRA_WINDOW_SUBSCRIBE_CLOSE_REQUEST = 1u << 5,
     ASTRA_WINDOW_SUBSCRIBE_KEY = 1u << 6,
-    ASTRA_WINDOW_SUBSCRIBE_TEXT = 1u << 7
+    ASTRA_WINDOW_SUBSCRIBE_TEXT = 1u << 7,
+    /** Request a coalescing waitable pulse for each display vblank. */
+    ASTRA_WINDOW_SUBSCRIBE_VBLANK = 1u << 8
 };
 
 /** Events delivered to every ordinary application window. */
@@ -115,7 +117,8 @@ enum {
     (ASTRA_WINDOW_SUBSCRIBE_POINTER_MOTION | \
      ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON | \
      ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL | ASTRA_WINDOW_SUBSCRIBE_DEFAULT | \
-     ASTRA_WINDOW_SUBSCRIBE_KEY | ASTRA_WINDOW_SUBSCRIBE_TEXT)
+     ASTRA_WINDOW_SUBSCRIBE_KEY | ASTRA_WINDOW_SUBSCRIBE_TEXT | \
+     ASTRA_WINDOW_SUBSCRIBE_VBLANK)
 
 /** Flags that qualify one delivered window event. */
 enum {
@@ -141,6 +144,8 @@ typedef struct AstraWindowPointerEvent {
     uint32_t button;
     /** Click count supplied for button events. */
     uint32_t click_count;
+    /** Normalized modifier state at event generation. */
+    uint32_t modifiers;
 } AstraWindowPointerEvent;
 
 /** Pointer-wheel event payload. */
@@ -157,6 +162,8 @@ typedef struct AstraWindowWheelEvent {
     int32_t delta_x;
     /** Vertical wheel delta. */
     int32_t delta_y;
+    /** Normalized modifier state at event generation. */
+    uint32_t modifiers;
 } AstraWindowWheelEvent;
 
 /** Window placement or state-change event payload. */
@@ -204,7 +211,7 @@ typedef union AstraWindowEventData {
     /** Unicode text-input data. */
     AstraWindowTextEvent text;
     /** Reserved wire storage. */
-    uint32_t reserved[6];
+    uint32_t reserved[7];
 } AstraWindowEventData;
 
 /** One versioned event delivered by the protected GUI service. */
@@ -228,7 +235,7 @@ typedef struct AstraWindowEvent {
 } AstraWindowEvent;
 
 /** @cond ASTRA_INTERNAL */
-_Static_assert(sizeof(AstraWindowEvent) == 48u,
+_Static_assert(sizeof(AstraWindowEvent) == 52u,
                "window event ABI changed");
 
 #define ASTRA_GUI_OPEN_WINDOW   1u
@@ -253,6 +260,8 @@ enum {
     ASTRA_GUI_WINDOW_CLOSE = 13u,
     ASTRA_GUI_WINDOW_SET_EVENT_MASK = 14u,
     ASTRA_GUI_WINDOW_PRESENT = 15u,
+    ASTRA_GUI_WINDOW_SET_POINTER_SHAPE = 16u,
+    ASTRA_GUI_WINDOW_SET_POINTER_IMAGE = 17u,
 };
 
 typedef struct AstraGuiOpenWindow {
@@ -322,7 +331,7 @@ typedef struct AstraGuiWindowEvent {
 #define ASTRA_GUI_WINDOW_OPENED_SIZE 36u
 #define ASTRA_GUI_WINDOW_COMMAND_SIZE 104u
 #define ASTRA_GUI_WINDOW_STATE_SIZE   64u
-#define ASTRA_GUI_WINDOW_EVENT_SIZE   72u
+#define ASTRA_GUI_WINDOW_EVENT_SIZE   76u
 
 _Static_assert(sizeof(AstraGuiOpenWindow) == ASTRA_GUI_OPEN_WINDOW_SIZE,
                "GUI open-window message is an ABI");

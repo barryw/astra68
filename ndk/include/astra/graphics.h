@@ -147,6 +147,10 @@ enum {
     ASTRA_GRAPHICS_OUTPUT_HEIGHT = 1080,
     /** Number of hardware sprite descriptors. */
     ASTRA_GRAPHICS_SPRITE_COUNT = 64,
+    /** Native hardware-pointer image width. */
+    ASTRA_HARDWARE_POINTER_WIDTH = 32,
+    /** Native hardware-pointer image height. */
+    ASTRA_HARDWARE_POINTER_HEIGHT = 32,
     /** Maximum INDEX8 source width. */
     ASTRA_SPRITE_SOURCE_WIDTH_MAX = 128,
     /** Maximum INDEX8 source height. */
@@ -354,9 +358,9 @@ typedef struct AstraHardwarePointerImage {
     uint32_t size;
     /** Row-major RGBA pixels copied before return. */
     const AstraColorRGBA8 *pixels;
-    /** Image width from one through 32. */
+    /** Image width through ::ASTRA_HARDWARE_POINTER_WIDTH. */
     uint16_t width;
-    /** Image height from one through 32. */
+    /** Image height through ::ASTRA_HARDWARE_POINTER_HEIGHT. */
     uint16_t height;
     /** Source row pitch in bytes. */
     uint32_t pitch;

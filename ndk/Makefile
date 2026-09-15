@@ -47,6 +47,10 @@ EXAMPLE_OBJECTS := build/m68k/front_panel_example.o \
 	build/m68k/font_layout_example.o build/m68k/graphics_frame_example.o \
 	build/m68k/port_message_example.o build/m68k/bulk_ring_example.o \
 	build/m68k/interface_controls_example.o \
+	build/m68k/interface_tabs_example.o \
+	build/m68k/interface_scroll_example.o \
+	build/m68k/interface_splitter_example.o \
+	build/m68k/interface_disclosure_example.o \
 	build/m68k/text_clipboard_example.o build/m68k/text_field_example.o \
 	build/m68k/undo_example.o
 ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(SOURCES))
@@ -90,7 +94,7 @@ build/host/test_graphics: src/graphics.c src/display_mode.c tests/test_graphics.
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
 
-build/host/test_window: src/resource.c src/port.c src/window.c src/utf8.c \
+build/host/test_window: src/resource.c src/area.c src/port.c src/window.c src/utf8.c \
 		tests/test_window.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
@@ -169,7 +173,7 @@ build/host/test_graphics_sanitize: src/graphics.c src/display_mode.c \
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
 
-build/host/test_window_sanitize: src/resource.c src/port.c src/window.c \
+build/host/test_window_sanitize: src/resource.c src/area.c src/port.c src/window.c \
 		src/utf8.c \
 		tests/test_window.c
 	@mkdir -p $(@D)

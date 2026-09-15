@@ -8,6 +8,7 @@
 #include <astra/vfs_host_direct.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_process.h>
+#include <astra/vfs_provider_index.h>
 
 #include <astra/endian.h>
 
@@ -673,61 +674,14 @@ static int resolve_cached(const char *name, uint16_t minimum,
     return found;
 }
 
-#define PROVIDER_INDEX_MAGIC 0x41505256u /* "APRV" */
-#define PROVIDER_INDEX_HEADER 24u
-
-static int copy_index_path(const uint8_t *bytes, uint32_t length,
-                           const char *name, uint16_t abi, char *path,
-                           uint32_t capacity,
-                           AstraLibraryReference *reference)
-{
-    uint32_t start = 0u;
-    int valid;
-
-    *reference = (AstraLibraryReference){0};
-    if (length >= PROVIDER_INDEX_HEADER + 6u &&
-        astra_load_be32(bytes) == PROVIDER_INDEX_MAGIC &&
-        astra_load_be16(bytes + 4u) == 1u &&
-        astra_load_be16(bytes + 6u) == PROVIDER_INDEX_HEADER &&
-        astra_load_be16(bytes + 14u) == abi && astra_load_be16(bytes + 18u) == 0u) {
-        reference->size = ASTRA_LIBRARY_REFERENCE_SIZE;
-        reference->major = astra_load_be16(bytes + 8u);
-        reference->minor = astra_load_be16(bytes + 10u);
-        reference->patch = astra_load_be16(bytes + 12u);
-        reference->abi_major = abi;
-        reference->abi_minor = astra_load_be16(bytes + 16u);
-        reference->build_id = astra_load_be32(bytes + 20u);
-        (void)memset(reference->name, 0, sizeof(reference->name));
-        if (!append(reference->name, sizeof(reference->name), name))
-            return 0;
-        start = PROVIDER_INDEX_HEADER;
-    }
-    valid = length - start >= 6u && length - start < capacity &&
-            memcmp(bytes + start, "LIBS:", 5u) == 0;
-
-    for (uint32_t at = start; valid && at < length; ++at) {
-        uint8_t value = bytes[at];
-
-        valid = (value >= 'a' && value <= 'z') ||
-                (value >= 'A' && value <= 'Z') ||
-                (value >= '0' && value <= '9') ||
-                value == ':' || value == '/' || value == '.' ||
-                value == '_' || value == '-';
-        if (valid) path[at - start] = (char)value;
-    }
-    if (valid) path[length - start] = '\0';
-    else *reference = (AstraLibraryReference){0};
-    return valid;
-}
-
 #if defined(ASTRA_VFS_PROCESS_TEST)
 int astra_vfs_process_test_index(const uint8_t *bytes, uint32_t length,
                                  const char *name, uint16_t abi, char *path,
                                  uint32_t capacity,
                                  AstraLibraryReference *reference)
 {
-    return copy_index_path(bytes, length, name, abi, path, capacity,
-                           reference);
+    return astra_vfs_provider_index_parse(bytes, length, name, abi, path,
+                                          capacity, reference);
 }
 #endif
 
@@ -745,8 +699,8 @@ static int resolve_indexed(const char *name, uint16_t minimum,
         (read_inline_file(index, &image) != ASTRA_VFS_OK &&
          read_file(index, &image) != ASTRA_VFS_OK))
         return 0;
-    valid = copy_index_path(image.bytes, image.length, name, minimum, path,
-                            capacity, reference);
+    valid = astra_vfs_provider_index_parse(
+        image.bytes, image.length, name, minimum, path, capacity, reference);
     release_library_image(&image);
     return valid;
 }
@@ -1231,6 +1185,18 @@ void astra_process_filesystem_close(AstraProcessFilesystem *filesystem)
     *filesystem = (AstraProcessFilesystem)ASTRA_PROCESS_FILESYSTEM_INIT;
 }
 
+static AstraLibraryHandle *library_open_failure(const char *name,
+                                                const char *stage,
+                                                uint32_t status)
+{
+    char message[64] = "OpenLibrary ";
+
+    (void)append(message, sizeof(message), name != NULL ? name : "(null)");
+    (void)append(message, sizeof(message), stage);
+    (void)astra_log_failure(message, status);
+    return NULL;
+}
+
 AstraLibraryHandle *OpenLibrary(const char *name, uint16_t version)
 {
     const AstraLoadedLibrary *loaded;
@@ -1245,9 +1211,9 @@ AstraLibraryHandle *OpenLibrary(const char *name, uint16_t version)
         return handle;
     if (status != ASTRA_SYSCALL_WOULD_BLOCK &&
         status != ASTRA_SYSCALL_BAD_SYSCALL)
-        return NULL;
+        return library_open_failure(name, " cached attach", status);
     if (!resolve_library(name, version, path, sizeof(path), &reference)) {
-        return NULL;
+        return library_open_failure(name, " resolve", ASTRA_VFS_ERR_NOT_FOUND);
     }
     if (reference.size == ASTRA_LIBRARY_REFERENCE_SIZE) {
         status = astra_library_attach(&reference, &loaded);
@@ -1255,19 +1221,20 @@ AstraLibraryHandle *OpenLibrary(const char *name, uint16_t version)
             goto loaded;
         if (status != ASTRA_SYSCALL_WOULD_BLOCK &&
             status != ASTRA_SYSCALL_BAD_SYSCALL)
-            return NULL;
+            return library_open_failure(name, " exact attach", status);
     }
-    if (read_file(path, &image) != ASTRA_VFS_OK) {
-        return NULL;
-    }
+    status = read_file(path, &image);
+    if (status != ASTRA_VFS_OK)
+        return library_open_failure(name, " read", status);
     status = astra_library_load(image.bytes, image.length, name, version, 0u,
                                 &loaded);
 loaded:
     release_library_image(&image);
-    if (status != ASTRA_SYSCALL_OK) {
-        return NULL;
-    }
-    return register_library(loaded);
+    if (status != ASTRA_SYSCALL_OK)
+        return library_open_failure(name, " load", status);
+    handle = register_library(loaded);
+    return handle != NULL ? handle :
+        library_open_failure(name, " register", ASTRA_SYSCALL_RESOURCE_LIMIT);
 }
 
 void CloseLibrary(AstraLibraryHandle *library)

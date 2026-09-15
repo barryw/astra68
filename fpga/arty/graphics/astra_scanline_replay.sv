@@ -15,6 +15,7 @@ module astra_scanline_replay #(
     input  wire [11:0] pixel_x,
     input  wire        next_frame,
     input  wire        line_source_active,
+    input  wire        line_source_available,
     input  wire [10:0] line_source_y,
     input  wire        input_valid,
     input  wire [23:0] input_rgb,
@@ -41,14 +42,16 @@ module astra_scanline_replay #(
             replay_rgb_q <= line_memory[replay_read_x];
 
             if (pixel_x < OUTPUT_WIDTH && line_source_active &&
+                line_source_available &&
                 !repeat_line_q)
                 line_memory[pixel_x[10:0]] <= input_valid ? input_rgb : 24'd0;
 
             if (pixel_x == TOTAL_WIDTH - 1) begin
                 repeat_line_q <= !next_frame && line_source_active &&
+                    line_source_available &&
                     last_source_valid_q &&
                     line_source_y == last_source_y_q;
-                if (line_source_active) begin
+                if (line_source_active && line_source_available) begin
                     last_source_valid_q <= 1'b1;
                     last_source_y_q <= line_source_y;
                 end else begin
@@ -59,7 +62,8 @@ module astra_scanline_replay #(
     end
 
     assign replaying = repeat_line_q;
-    assign output_valid = repeat_line_q ? line_source_active : input_valid;
+    assign output_valid = repeat_line_q ?
+        line_source_active && line_source_available : input_valid;
     assign output_rgb = repeat_line_q ? replay_rgb_q : input_rgb;
 
 `ifndef SYNTHESIS

@@ -504,9 +504,10 @@ static uint32_t launch_number(char *out, uint32_t at, uint32_t capacity,
 }
 
 static void launch_report(const char *path, uint32_t bytes, uint32_t open_us,
-                          uint32_t load_us, uint32_t ready_us)
+                          uint32_t load_us, uint32_t ready_us,
+                          uint32_t status)
 {
-    char line[120];
+    char line[140];
     uint32_t at = 0u;
 
     at = launch_text(line, at, sizeof(line), "launch ");
@@ -519,7 +520,8 @@ static void launch_report(const char *path, uint32_t bytes, uint32_t open_us,
     at = launch_number(line, at, sizeof(line), load_us);
     at = launch_text(line, at, sizeof(line), " ready=");
     at = launch_number(line, at, sizeof(line), ready_us);
-    (void)launch_text(line, at, sizeof(line), "us");
+    at = launch_text(line, at, sizeof(line), "us status=");
+    (void)launch_number(line, at, sizeof(line), status);
     (void)astra_log(line);
 }
 
@@ -641,7 +643,8 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
     status = receive_ready(receive, child, expected_handles, published);
     launch_report(entry->path, image_length, open_us, load_us,
                   astra_elapsed_microseconds(ready_start,
-                                             astra_clock_monotonic()));
+                                             astra_clock_monotonic()),
+                  status);
     (void)astra_close(receive);
     if (status != ASTRA_STATUS_OK) {
         (void)astra_close(child);
@@ -963,14 +966,18 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
             return status;
     }
     proc_tree_start();
-    (void)astra_close(event_target_send);
-    event_target_send = 0u;
-    (void)astra_close(launch_send);
-    launch_send = 0u;
-    for (uint32_t index = 0u; index < 4u; ++index) {
+    /*
+     * These receivers are services implemented by this process, so their
+     * senders are provider-owned state.  Retaining them keeps idle services
+     * alive and lets later launches receive the same capabilities.  Tying an
+     * endpoint's lifetime to whichever startup client happened to receive it
+     * made that client's exit wake PID 1 with PEER_DEAD.
+     */
+    for (uint32_t index = 0u; index < 5u; ++index) {
         static const char *const names[] = {
             ASTRA_CAPABILITY_DISPLAY_DEVICE, ASTRA_CAPABILITY_INPUT_DEVICE,
-            ASTRA_CAPABILITY_INPUT_IRQ, ASTRA_CAPABILITY_DISPLAY_IRQ
+            ASTRA_CAPABILITY_INPUT_IRQ, ASTRA_CAPABILITY_DISPLAY_IRQ,
+            ASTRA_CAPABILITY_DISPLAY_VBLANK_IRQ
         };
         const AstraStartupCapability *held = astra_startup_capability(
             startup, names[index]);

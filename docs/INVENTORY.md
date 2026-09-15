@@ -226,22 +226,21 @@ emu/qemu/build.sh arty      # ARM, for the board
 ### Deploying to the board
 
 ```sh
-# from beast; the publisher creates, deploys, and removes its temporary release
-ASTRA_DE25_QEMU=<qemu> ASTRA_DE25_ROM=<rom> \
-ASTRA_DE25_STORAGE=<clean-image> \
-ASTRA_DE25_QEMU_LIBDIR=<aarch64-library-directory> \
-  emu/qemu/publish-de25-release.sh
+# from beast; the publisher builds, creates, deploys, and cleans the release
+emu/qemu/publish-de25-release.sh
 ```
 
-Release creation force-rebuilds the small AArch64 POST/panic renderer from the
-current mirrored source with all host cores; callers cannot substitute a stale
-copy. The publisher owns its temporary release and removes it on success,
-failure, or interruption, including its deliberately read-only files. The
-deployer re-verifies after transfer, installs the content-addressed tree
-read-only, and atomically replaces `/var/lib/astra/current`. The lower-level
-create/deploy scripts remain available when a retained release is explicitly
-needed. Verify the emulator actually has the storage model before blaming the
-ROM:
+The production publisher accepts no caller-supplied QEMU, ROM, storage, or host
+renderer. It cleans only the software outputs it owns, builds every software
+input from the current mirrored source, uses the content-addressed QEMU build,
+and records the exact source manifest in the release. It rejects the result if
+the source tree changes during the build. It preserves the independently
+qualified FPGA route. The publisher removes its temporary release on success,
+failure, or interruption, including deliberately read-only files. The deployer
+re-verifies after transfer, installs the content-addressed tree read-only, and
+atomically replaces `/var/lib/astra/current`. The lower-level create/deploy
+scripts are diagnostic tools; they are not the production publication path.
+Verify the emulator actually has the storage model before blaming the ROM:
 
 ```sh
 strings <qemu> | grep -c "Astra68 storage image"   # 2 = present, 0 = too old

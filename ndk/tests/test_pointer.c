@@ -77,6 +77,8 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
             message->event.sequence = 9u;
             message->event.focus_generation = 4u;
             message->event.code = ASTRA_INPUT_BUTTON_WHEEL_DOWN;
+            message->event.modifiers =
+                ASTRA_INPUT_MOD_LEFT_ALT | ASTRA_INPUT_MOD_META;
             message->event.value_x = 321;
             message->event.value_y = 123;
             *out_d1 = sizeof(*message);
@@ -103,7 +105,9 @@ int main(void)
     assert(astra_pointer_event_try(&observer, &event) == ASTRA_OK);
     assert(event.type == ASTRA_POINTER_EVENT_WHEEL &&
            event.screen_x == 321 && event.screen_y == 123 &&
-           event.wheel_x == 0 && event.wheel_y == -1);
+           event.wheel_x == 0 && event.wheel_y == -1 &&
+           event.modifiers ==
+               (ASTRA_INPUT_MOD_LEFT_ALT | ASTRA_INPUT_MOD_META));
     assert(astra_pointer_observer_close(&observer) == ASTRA_OK);
     assert(observer._private_events == 0u &&
            observer._private_client == 0u);

@@ -113,7 +113,7 @@ DISPLAY_STARTUP_MANIFEST = (
     "service SERVICES:input grants INPUT INPUT_IRQ "
     "serves INPUT_SERVICE required\n"
     "service SERVICES:clipboard grants serves CLIPBOARD required\n"
-    "service SERVICES:display grants DISPLAY DISPLAY_IRQ "
+    "service SERVICES:display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ "
     "INPUT_SERVICE serves GUI required\n"
     "application SERVICES:desktop grants GUI APP_LAUNCH APPS:r LIBS:r "
     "NETWORK NETWORK_LISTEN NTP\n")

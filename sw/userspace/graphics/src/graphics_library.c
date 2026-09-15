@@ -1,7 +1,7 @@
 #include <astra/graphics_library.h>
 #include <astra/library.h>
 
-ASTRA_LIBRARY("graphics.library", 2, 0, 0,
+ASTRA_LIBRARY("graphics.library", 2, 1, 0,
               ASTRA_GRAPHICS_LIBRARY_ABI_MAJOR,
               ASTRA_GRAPHICS_LIBRARY_ABI_MINOR,
               "Barry Walker", "Copyright 2026 Barry Walker");
@@ -25,4 +25,5 @@ const AstraGraphicsLibraryV2 astra_library_exports ASTRA_LIBRARY_EXPORTS = {
     astra_draw_list_copy,
     astra_text_box_scroll,
     astra_surface_clip,
+    astra_surface_line,
 };

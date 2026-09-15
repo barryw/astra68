@@ -92,7 +92,11 @@ Implemented Kits are:
 
 The remaining planned Kits are:
 
-- Core: handles, errors, time, waits, memory and process operations;
+- Core: handles, errors, time, waits, memory and process operations, plus a
+  structured `AstraTask` API for background work. Tasks use native threads and
+  Messaging Kit ports, support cooperative cancellation, completion results,
+  waiting, and owner-scoped cleanup, and deliver UI-facing progress or
+  completion back to the UI thread rather than mutating controls from workers;
 - Application: launch, lifecycle, commands and settings;
 - Interface extensions: remaining views and controls, and drag/drop;
 - Media: audio streams, voices, clocks and synchronization;
@@ -113,7 +117,7 @@ real system service to own subscriptions, filtering, and backpressure.
 trace reader, and event catalog. It records observable system events; it does
 not replace interprocess messaging.
 
-`interface.library` ABI 2.6 exposes the retained control context, TextSurface,
+`interface.library` ABI 4.1 exposes the retained control context, TextSurface,
 typed clipboard, per-document undo/redo, the shared UTF-8 piece-table model,
 and retained fields through the
 public NDK. Label, Button, and the other primitive controls share intrinsic
@@ -124,6 +128,19 @@ layout description and iteratively reflows every descendant when a parent
 extent changes. The alert implementation and `InterfaceGallery.app` consume
 that same code; applications do not own parallel widget painters, coordinate
 tables, resize handlers, or input state machines.
+
+The same retained hierarchy owns tab strips and conditional pages. Tabs reuse
+the shared choice/action model, while `ASTRA_CONTROL_COLLAPSED` removes a page
+container and all descendants from layout, rendering, hit testing, focus, and
+animation through one state transition.
+
+Animated controls retain their own state and active-list membership while
+sharing the display-refresh epoch. The
+display service supplies a coalescing per-window vblank wait handle, and the UI
+thread calls the Interface Kit once per pulse. Vblank and ordinary input return
+the same semantic action type, including pointer-held numeric-stepper repeats.
+Only active controls are visited; controls do not require application timers,
+polling, a second callback path, or background UI mutation.
 
 ## 5. Shared code direction
 

@@ -1,5 +1,6 @@
 #include <astra/window.h>
 
+#include <astra/area.h>
 #include <astra/bytes.h>
 #include <astra/gui.h>
 #include <astra/port.h>
@@ -18,6 +19,7 @@ static int window_live(const AstraWindow *window)
     return window != 0 &&
            window->_private_control != ASTRA_INVALID_HANDLE &&
            window->_private_events != ASTRA_INVALID_HANDLE &&
+           window->_private_vblank != ASTRA_INVALID_HANDLE &&
            window->_private_id != 0u && window->_private_generation != 0u;
 }
 
@@ -40,25 +42,31 @@ static AstraResult command(AstraWindow *window, uint32_t action,
                            const AstraWindowFrame *frame,
                            const char *title, uint16_t title_length,
                            uint32_t flags,
-                           AstraWindowInfo *info)
+                           AstraWindowInfo *info,
+                           AstraHandle *attachment)
 {
     AstraGuiWindowCommand request = {0};
     AstraGuiWindowState reply = {0};
     AstraPort reply_port = ASTRA_PORT_INIT;
-    AstraHandle transferred = ASTRA_INVALID_HANDLE;
+    AstraHandle transferred[2] = { ASTRA_INVALID_HANDLE,
+                                   ASTRA_INVALID_HANDLE };
+    uint32_t transfer_count = attachment == NULL ? 1u : 2u;
     uint32_t reply_size = 0u;
     uint32_t reply_handles = 0u;
     AstraResult result;
 
     if (!window_live(window) || action < ASTRA_GUI_WINDOW_QUERY ||
-        action > ASTRA_GUI_WINDOW_PRESENT ||
+        action > ASTRA_GUI_WINDOW_SET_POINTER_IMAGE ||
+        (attachment != NULL && *attachment == ASTRA_INVALID_HANDLE) ||
         !astra_utf8_validate(title, title_length, 0u) ||
         title_length > ASTRA_WINDOW_TITLE_MAX)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     result = astra_port_create(1u, sizeof(reply), &reply_port);
     if (result != ASTRA_OK)
         return result;
-    transferred = reply_port.send;
+    transferred[0] = reply_port.send;
+    if (attachment != NULL)
+        transferred[1] = *attachment;
     result = astra_message_header_init(
         &request.header, sizeof(request), ASTRA_GUI_PROTOCOL,
         ASTRA_GUI_VERSION, ASTRA_GUI_WINDOW_COMMAND,
@@ -79,9 +87,12 @@ static AstraResult command(AstraWindow *window, uint32_t action,
     for (uint32_t index = 0u; index < title_length; ++index)
         request.title[index] = title[index];
     result = astra_port_send_until(
-        window->_private_control, &request, sizeof(request), &transferred, 1u,
+        window->_private_control, &request, sizeof(request), transferred,
+        transfer_count,
         ASTRA_DEADLINE_INFINITE);
-    reply_port.send = transferred;
+    reply_port.send = transferred[0];
+    if (attachment != NULL)
+        *attachment = transferred[1];
     if (result != ASTRA_OK)
         goto done;
     result = astra_port_receive_until(
@@ -132,7 +143,8 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
                                    ASTRA_INVALID_HANDLE,
                                    ASTRA_INVALID_HANDLE,
                                    ASTRA_INVALID_HANDLE };
-    AstraHandle control = ASTRA_INVALID_HANDLE;
+    AstraHandle returned[2] = { ASTRA_INVALID_HANDLE,
+                                ASTRA_INVALID_HANDLE };
     uint32_t reply_size = 0u;
     uint32_t reply_handles = 0u;
     uint32_t known_flags = ASTRA_WINDOW_RESIZABLE | ASTRA_WINDOW_MODAL |
@@ -166,10 +178,12 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
         ((info->title_icon_area == ASTRA_INVALID_HANDLE) !=
          (info->title_icon_length == 0u)) ||
         info->title_icon_length > ASTRA_WINDOW_TITLE_ICON_BYTES_MAX ||
-        info->reserved != 0u || window_live(window) ||
+        info->reserved != 0u ||
+        window_live(window) ||
         window->_private_control != ASTRA_INVALID_HANDLE ||
         window->_private_events != ASTRA_INVALID_HANDLE ||
-        window->_private_id != 0u || window->_private_generation != 0u)
+        window->_private_id != 0u || window->_private_generation != 0u ||
+        window->_private_vblank != ASTRA_INVALID_HANDLE)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     result = astra_handle_duplicate(
         content_area,
@@ -225,7 +239,7 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
     if (result != ASTRA_OK)
         goto done;
     result = astra_port_receive_until(
-        reply_port.receive, &reply, sizeof(reply), &control, 1u,
+        reply_port.receive, &reply, sizeof(reply), returned, 2u,
         &reply_size, &reply_handles, ASTRA_DEADLINE_INFINITE);
     if (result != ASTRA_OK)
         goto done;
@@ -246,18 +260,24 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
     }
     result = astra_internal_service_result(reply.status);
     if (result == ASTRA_OK) {
-        if (reply_handles != 1u || reply.window == 0u ||
-            reply.generation == 0u || control == ASTRA_INVALID_HANDLE) {
+        if (reply_handles != 2u || reply.window == 0u ||
+            reply.generation == 0u ||
+            returned[0] == ASTRA_INVALID_HANDLE ||
+            returned[1] == ASTRA_INVALID_HANDLE) {
             result = ASTRA_ERROR_IO;
         } else {
-            window->_private_control = control;
+            window->_private_control = returned[0];
             window->_private_events = event_port.receive;
             window->_private_id = reply.window;
             window->_private_generation = reply.generation;
-            control = ASTRA_INVALID_HANDLE;
+            window->_private_vblank = returned[1];
+            returned[0] = ASTRA_INVALID_HANDLE;
+            returned[1] = ASTRA_INVALID_HANDLE;
             event_port.receive = ASTRA_INVALID_HANDLE;
         }
-    } else if (reply_handles != 0u || control != ASTRA_INVALID_HANDLE ||
+    } else if (reply_handles != 0u ||
+               returned[0] != ASTRA_INVALID_HANDLE ||
+               returned[1] != ASTRA_INVALID_HANDLE ||
                reply.window != 0u || reply.generation != 0u) {
         result = ASTRA_ERROR_IO;
     }
@@ -268,10 +288,11 @@ done:
             AstraResult ignored = astra_handle_close(&transferred[index]);
             (void)ignored;
         }
-    if (control != ASTRA_INVALID_HANDLE) {
-        AstraResult ignored = astra_handle_close(&control);
-        (void)ignored;
-    }
+    for (uint32_t index = 0u; index < 2u; ++index)
+        if (returned[index] != ASTRA_INVALID_HANDLE) {
+            AstraResult ignored = astra_handle_close(&returned[index]);
+            (void)ignored;
+        }
     if (event_port.send != ASTRA_INVALID_HANDLE ||
         event_port.receive != ASTRA_INVALID_HANDLE) {
         AstraResult close_result = astra_port_close(&event_port);
@@ -293,7 +314,8 @@ AstraResult astra_window_get_info(AstraWindow *window, AstraWindowInfo *info)
     if (info == 0 || info->size < sizeof(*info) ||
         !astra_words_zero(info->reserved, 4u))
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    return command(window, ASTRA_GUI_WINDOW_QUERY, 0, 0, 0u, 0u, info);
+    return command(window, ASTRA_GUI_WINDOW_QUERY, 0, 0, 0u, 0u, info,
+                   NULL);
 }
 
 AstraResult astra_window_set_frame(AstraWindow *window,
@@ -301,13 +323,15 @@ AstraResult astra_window_set_frame(AstraWindow *window,
 {
     if (frame == 0 || frame->width == 0u || frame->height == 0u)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    return command(window, ASTRA_GUI_WINDOW_SET_FRAME, frame, 0, 0u, 0u, 0);
+    return command(window, ASTRA_GUI_WINDOW_SET_FRAME, frame, 0, 0u, 0u, 0,
+                   NULL);
 }
 
 AstraResult astra_window_move(AstraWindow *window, uint16_t x, uint16_t y)
 {
     AstraWindowFrame frame = { x, y, 0u, 0u };
-    return command(window, ASTRA_GUI_WINDOW_MOVE, &frame, 0, 0u, 0u, 0);
+    return command(window, ASTRA_GUI_WINDOW_MOVE, &frame, 0, 0u, 0u, 0,
+                   NULL);
 }
 
 AstraResult astra_window_resize(AstraWindow *window,
@@ -317,13 +341,14 @@ AstraResult astra_window_resize(AstraWindow *window,
 
     if (width == 0u || height == 0u)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    return command(window, ASTRA_GUI_WINDOW_RESIZE, &frame, 0, 0u, 0u, 0);
+    return command(window, ASTRA_GUI_WINDOW_RESIZE, &frame, 0, 0u, 0u, 0,
+                   NULL);
 }
 
 #define WINDOW_ACTION(name, action) \
     AstraResult name(AstraWindow *window) \
     { \
-        return command(window, action, 0, 0, 0u, 0u, 0); \
+        return command(window, action, 0, 0, 0u, 0u, 0, NULL); \
     }
 
 WINDOW_ACTION(astra_window_raise, ASTRA_GUI_WINDOW_RAISE)
@@ -340,14 +365,15 @@ AstraResult astra_window_present_region(AstraWindow *window,
 {
     if (damage == 0 || damage->width == 0u || damage->height == 0u)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    return command(window, ASTRA_GUI_WINDOW_PRESENT, damage, 0, 0u, 0u, 0);
+    return command(window, ASTRA_GUI_WINDOW_PRESENT, damage, 0, 0u, 0u, 0,
+                   NULL);
 }
 
 AstraResult astra_window_set_title(AstraWindow *window, const char *title,
                                    uint16_t title_length)
 {
     return command(window, ASTRA_GUI_WINDOW_SET_TITLE, 0, title,
-                   title_length, 0u, 0);
+                   title_length, 0u, 0, NULL);
 }
 
 AstraResult astra_window_set_event_mask(AstraWindow *window,
@@ -356,7 +382,93 @@ AstraResult astra_window_set_event_mask(AstraWindow *window,
     if ((event_mask & ~ASTRA_WINDOW_SUBSCRIBE_ALL) != 0u)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return command(window, ASTRA_GUI_WINDOW_SET_EVENT_MASK, 0, 0, 0u,
-                   event_mask, 0);
+                   event_mask, 0, NULL);
+}
+
+AstraResult astra_window_set_pointer_shape(AstraWindow *window,
+                                           AstraPointerShape shape)
+{
+    if ((uint32_t)shape >= ASTRA_POINTER_SHAPE_COUNT)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return command(window, ASTRA_GUI_WINDOW_SET_POINTER_SHAPE, 0, 0, 0u,
+                   (uint32_t)shape, 0, NULL);
+}
+
+AstraResult astra_window_set_pointer_image(
+    AstraWindow *window, const AstraHardwarePointerImage *image)
+{
+    AstraArea area = ASTRA_AREA_INIT;
+    AstraHandle immutable = ASTRA_INVALID_HANDLE;
+    AstraWindowFrame metadata;
+    AstraResult result;
+
+    if (!window_live(window) || image == NULL ||
+        image->size < sizeof(*image) || image->pixels == NULL ||
+        image->width == 0u ||
+        image->width > ASTRA_HARDWARE_POINTER_WIDTH ||
+        image->height == 0u ||
+        image->height > ASTRA_HARDWARE_POINTER_HEIGHT ||
+        image->pitch < (uint32_t)image->width * sizeof(*image->pixels) ||
+        image->hotspot.x < 0 || image->hotspot.y < 0 ||
+        (uint32_t)image->hotspot.x >= image->width ||
+        (uint32_t)image->hotspot.y >= image->height ||
+        !astra_words_zero(image->reserved, 4u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_area_create(
+        ASTRA_HARDWARE_POINTER_WIDTH * ASTRA_HARDWARE_POINTER_HEIGHT *
+            sizeof(*image->pixels),
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+            ASTRA_RIGHT_TRANSFER,
+        &area);
+    if (result == ASTRA_OK)
+        result = astra_area_map(&area,
+                                ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE);
+    if (result == ASTRA_OK) {
+        AstraColorRGBA8 *destination = area.address;
+
+        for (uint32_t at = 0u;
+             at < ASTRA_HARDWARE_POINTER_WIDTH *
+                      ASTRA_HARDWARE_POINTER_HEIGHT; ++at)
+            destination[at] = (AstraColorRGBA8){0, 0, 0, 0};
+        for (uint32_t y = 0u; y < image->height; ++y) {
+            const AstraColorRGBA8 *source =
+                (const AstraColorRGBA8 *)(const void *)
+                    ((const uint8_t *)(const void *)image->pixels +
+                     y * image->pitch);
+
+            for (uint32_t x = 0u; x < image->width; ++x)
+                destination[y * ASTRA_HARDWARE_POINTER_WIDTH + x] =
+                    source[x];
+        }
+        result = astra_area_unmap(&area);
+    }
+    if (result == ASTRA_OK)
+        result = astra_handle_duplicate(
+            area.handle,
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
+            &immutable);
+    metadata = (AstraWindowFrame){
+        (uint16_t)image->hotspot.x, (uint16_t)image->hotspot.y,
+        image->width, image->height};
+    if (result == ASTRA_OK)
+        result = command(window, ASTRA_GUI_WINDOW_SET_POINTER_IMAGE,
+                         &metadata, NULL, 0u,
+                         ASTRA_HARDWARE_POINTER_WIDTH *
+                             sizeof(*image->pixels),
+                         NULL, &immutable);
+    if (immutable != ASTRA_INVALID_HANDLE) {
+        AstraResult close_result = astra_handle_close(&immutable);
+
+        if (result == ASTRA_OK && close_result != ASTRA_OK)
+            result = close_result;
+    }
+    {
+        AstraResult close_result = astra_area_close(&area);
+
+        if (result == ASTRA_OK && close_result != ASTRA_OK)
+            result = close_result;
+    }
+    return result;
 }
 
 AstraResult astra_window_close(AstraWindow *window)
@@ -382,10 +494,14 @@ AstraResult astra_window_close(AstraWindow *window)
     if (result == ASTRA_OK) {
         AstraResult event_result =
             astra_handle_close(&window->_private_events);
+        AstraResult vblank_result =
+            astra_handle_close(&window->_private_vblank);
 
         result = astra_handle_close(&window->_private_control);
         if (result == ASTRA_OK)
             result = event_result;
+        if (result == ASTRA_OK)
+            result = vblank_result;
         if (result == ASTRA_OK) {
             window->_private_id = 0u;
             window->_private_generation = 0u;
@@ -423,6 +539,19 @@ static AstraResult receive_event(AstraWindow *window, AstraWindowEvent *event,
         message.event.type > ASTRA_WINDOW_EVENT_TEXT ||
         (message.event.type == ASTRA_WINDOW_EVENT_TEXT &&
          !astra_unicode_scalar_valid(message.event.data.text.codepoint)) ||
+        ((message.event.type == ASTRA_WINDOW_EVENT_POINTER_MOTION ||
+          message.event.type == ASTRA_WINDOW_EVENT_POINTER_BUTTON) &&
+         (message.event.data.pointer.modifiers &
+          ~ASTRA_INPUT_MOD_ALL) != 0u) ||
+        (message.event.type == ASTRA_WINDOW_EVENT_POINTER_WHEEL &&
+         (message.event.data.wheel.modifiers &
+          ~ASTRA_INPUT_MOD_ALL) != 0u) ||
+        (message.event.type == ASTRA_WINDOW_EVENT_KEY &&
+         (message.event.data.key.modifiers &
+          ~ASTRA_INPUT_MOD_ALL) != 0u) ||
+        (message.event.type == ASTRA_WINDOW_EVENT_TEXT &&
+         (message.event.data.text.modifiers &
+          ~ASTRA_INPUT_MOD_ALL) != 0u) ||
         message.event.generation == 0u)
         return ASTRA_ERROR_IO;
     if (message.event.generation > window->_private_generation)
@@ -447,5 +576,11 @@ AstraResult astra_window_event_wait(AstraWindow *window,
 AstraHandle astra_window_event_wait_handle(const AstraWindow *window)
 {
     return window_live(window) ? window->_private_events :
+                                 ASTRA_INVALID_HANDLE;
+}
+
+AstraHandle astra_window_vblank_wait_handle(const AstraWindow *window)
+{
+    return window_live(window) ? window->_private_vblank :
                                  ASTRA_INVALID_HANDLE;
 }

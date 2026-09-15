@@ -19,6 +19,11 @@ GLYPH = struct.Struct(">IIIHHHHiii")
 CMAP = struct.Struct(">II")
 CHUNKS = (b"NAME", b"CMAP", b"STRK", b"GLYP", b"BITM")
 MASK1 = 1
+A4 = 2
+INDEX4 = 3
+INDEX8 = 4
+A8 = 5
+BITMAP_FORMATS = (MASK1, A4, INDEX4, INDEX8, A8)
 
 # CP437 bytes 1..31 are printable symbols, unlike the Unicode C0 controls.
 # Spleen uses the standard arrow/corner forms for the three pointer variants
@@ -71,6 +76,39 @@ def pack_bitmap(glyph) -> tuple[bytes, int]:
 
 def glyph_has_ink(glyph) -> bool:
     return any(pixel for row in glyph.as_matrix() for pixel in row)
+
+
+def serialize_afnt(metadata: dict, cmap: bytes, strike_records: list[bytes],
+                   glyph_records: list[bytes], bitmap: bytes) -> bytes:
+    chunks = {
+        b"NAME": json.dumps(metadata, sort_keys=True,
+                            separators=(",", ":")).encode(),
+        b"CMAP": cmap,
+        b"STRK": struct.pack(">I", len(strike_records)) +
+                 b"".join(strike_records),
+        b"GLYP": struct.pack(">I", len(glyph_records)) +
+                 b"".join(glyph_records),
+        b"BITM": bitmap,
+    }
+    directory_offset = HEADER.size
+    payload_offset = align4(directory_offset + len(CHUNKS) * DIRECTORY.size)
+    entries = []
+    payload = bytearray()
+    cursor = payload_offset
+    for kind in CHUNKS:
+        data = chunks[kind]
+        cursor = align4(cursor)
+        while payload_offset + len(payload) < cursor:
+            payload.append(0)
+        entries.append(DIRECTORY.pack(kind, 0, cursor, len(data), crc32(data)))
+        payload.extend(data)
+        cursor += len(data)
+    directory = b"".join(entries)
+    total = payload_offset + len(payload)
+    header = HEADER.pack(b"AFNT", 0, 2, HEADER.size, DIRECTORY.size,
+                         len(CHUNKS), total, crc32(directory), 0)
+    return (header + directory +
+            bytes(payload_offset - HEADER.size - len(directory)) + payload)
 
 
 def load_bitmap(path: Path):
@@ -182,31 +220,173 @@ def build_afnt(args: argparse.Namespace) -> bytes:
         ],
         "glyphs_per_strike": len(source_codes) + 1,
     }
-    chunks = {
-        b"NAME": json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode(),
-        b"CMAP": cmap,
-        b"STRK": struct.pack(">I", len(strike_records)) + b"".join(strike_records),
-        b"GLYP": struct.pack(">I", len(glyph_records)) + b"".join(glyph_records),
-        b"BITM": bytes(bitmap),
+    return serialize_afnt(metadata, cmap, strike_records, glyph_records,
+                          bytes(bitmap))
+
+
+def scale_metric(value: int, ppem: int, units_per_em: int) -> int:
+    product = value * ppem * 64
+    if product >= 0:
+        return (product + units_per_em // 2) // units_per_em
+    return -((-product + units_per_em // 2) // units_per_em)
+
+
+def parse_strike(value: str) -> tuple[int, int]:
+    try:
+        pixel_height_text, ppem_text = value.split(":", 1)
+        pixel_height = int(pixel_height_text)
+        ppem = int(ppem_text)
+    except (ValueError, TypeError) as error:
+        raise argparse.ArgumentTypeError(
+            "strike must be PIXEL_HEIGHT:PPEM") from error
+    if not 1 <= pixel_height <= 0xffff or not 1 <= ppem <= 0xffff:
+        raise argparse.ArgumentTypeError(
+            "strike dimensions must be from 1 through 65535")
+    return pixel_height, ppem
+
+
+def bitmap_pitch(bitmap_format: int, width: int) -> int:
+    if bitmap_format == MASK1:
+        return (width + 7) // 8
+    if bitmap_format in (A4, INDEX4):
+        return (width + 1) // 2
+    if bitmap_format in (A8, INDEX8):
+        return width
+    raise ValueError(f"unsupported AFNT bitmap format {bitmap_format}")
+
+
+def build_outline_afnt(args: argparse.Namespace) -> bytes:
+    try:
+        from fontTools.ttLib import TTFont
+        from PIL import ImageFont
+    except ImportError as error:
+        raise SystemExit(
+            "outline import needs fonttools 4.65 and Pillow 12.3; run with "
+            "`uv run --with fonttools==4.65.0 --with Pillow==12.3.0 ...`"
+        ) from error
+
+    path = args.input
+    face = TTFont(path, lazy=False)
+    try:
+        best_cmap = face.getBestCmap()
+        source_cmap = {
+            scalar: glyph_name
+            for scalar, glyph_name in (best_cmap or {}).items()
+            if scalar <= 0x10ffff and not 0xd800 <= scalar <= 0xdfff
+        }
+        if not source_cmap:
+            raise ValueError(f"{path}: no Unicode character map")
+        fallback_name = source_cmap.get(0xfffd) or source_cmap.get(ord("?"))
+        if fallback_name is None:
+            raise ValueError(f"{path}: no visible replacement glyph")
+        representatives = {}
+        for scalar, glyph_name in source_cmap.items():
+            representatives.setdefault(glyph_name, scalar)
+        ordered_names = sorted(representatives,
+                               key=lambda name: face.getGlyphID(name))
+        dense_ids = {name: index for index, name in enumerate(ordered_names)}
+        cmap_entries = [(scalar, dense_ids[name])
+                        for scalar, name in source_cmap.items()]
+        if 0xfffd not in source_cmap:
+            cmap_entries.append((0xfffd, dense_ids[fallback_name]))
+        cmap_entries.sort()
+        cmap = struct.pack(">I", len(cmap_entries)) + b"".join(
+            CMAP.pack(scalar, glyph_id)
+            for scalar, glyph_id in cmap_entries)
+
+        units_per_em = face["head"].unitsPerEm
+        os2 = face["OS/2"]
+        post = face["post"]
+        horizontal_metrics = face["hmtx"].metrics
+        if args.monospaced:
+            advances = {horizontal_metrics[name][0] for name in ordered_names
+                        if horizontal_metrics[name][0] != 0}
+            if len(advances) != 1:
+                raise ValueError(f"{path}: glyph advances are not monospaced")
+
+        bitmap = bytearray()
+        glyph_records = []
+        strike_records = []
+        glyph_first = 0
+        for pixel_height, ppem in args.strikes:
+            font = ImageFont.truetype(
+                str(path), ppem, layout_engine=ImageFont.Layout.BASIC)
+            ascent, descent = font.getmetrics()
+            strike_glyphs = []
+            max_advance = 0
+            fallback_has_ink = False
+            for glyph_id, glyph_name in enumerate(ordered_names):
+                scalar = representatives[glyph_name]
+                character = chr(scalar)
+                mask, offset = font.getmask2(character, mode="L", anchor="ls")
+                width, height = mask.size
+                advance = int(round(font.getlength(character) * 64))
+                if args.monospaced and advance != 0:
+                    advance = ((advance + 63) // 64) * 64
+                max_advance = max(max_advance, advance)
+                if width == 0 or height == 0:
+                    width = max(1, (advance + 63) // 64)
+                    height = 1
+                    pixels = bytes(width)
+                    bearing_x = 0
+                    bearing_y = 0
+                else:
+                    pixels = bytes(mask)
+                    bearing_x = offset[0] * 64
+                    bearing_y = -offset[1] * 64
+                if glyph_name == fallback_name:
+                    fallback_has_ink = any(pixels)
+                if width > 0xffff or height > 0xffff:
+                    raise ValueError(f"{path}: glyph bitmap exceeds AFNT limits")
+                bitmap_offset = len(bitmap)
+                bitmap.extend(pixels)
+                strike_glyphs.append(GLYPH.pack(
+                    glyph_id, bitmap_offset, len(pixels), width, height,
+                    width, 0, bearing_x, bearing_y, advance))
+            if max_advance <= 0:
+                raise ValueError(f"{path}: no positive glyph advance")
+            if not fallback_has_ink:
+                raise ValueError(f"{path}: replacement glyph has no ink")
+            glyph_records.extend(strike_glyphs)
+            pixel_width = (max_advance + 63) // 64 if args.monospaced else 0
+            if args.monospaced:
+                max_advance = pixel_width * 64
+            cap_height = scale_metric(getattr(os2, "sCapHeight", 0), ppem,
+                                      units_per_em)
+            x_height = scale_metric(getattr(os2, "sxHeight", 0), ppem,
+                                    units_per_em)
+            strike_records.append(STRIKE.pack(
+                len(strike_records), A8, pixel_width, pixel_height,
+                ascent * 64, descent * 64,
+                max(0, scale_metric(os2.sTypoLineGap, ppem, units_per_em)),
+                max(0, cap_height), max(0, x_height), max_advance,
+                -scale_metric(post.underlinePosition, ppem, units_per_em),
+                max(64, scale_metric(post.underlineThickness, ppem,
+                                     units_per_em)),
+                max(0, scale_metric(os2.yStrikeoutPosition, ppem,
+                                    units_per_em)),
+                max(64, scale_metric(os2.yStrikeoutSize, ppem,
+                                     units_per_em)),
+                glyph_first, len(ordered_names), GLYPH.size, 0, 0))
+            glyph_first += len(ordered_names)
+    finally:
+        face.close()
+
+    metadata = {
+        "family": args.family,
+        "style": args.style,
+        "license": args.license,
+        "source_encoding": "unicode",
+        "source_revision": args.source_revision,
+        "source_files": [{
+            "name": path.name,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }],
+        "outline_ppem": [ppem for _, ppem in args.strikes],
+        "glyphs_per_strike": len(ordered_names),
     }
-    directory_offset = HEADER.size
-    payload_offset = align4(directory_offset + len(CHUNKS) * DIRECTORY.size)
-    entries = []
-    payload = bytearray()
-    cursor = payload_offset
-    for kind in CHUNKS:
-        data = chunks[kind]
-        cursor = align4(cursor)
-        while payload_offset + len(payload) < cursor:
-            payload.append(0)
-        entries.append(DIRECTORY.pack(kind, 0, cursor, len(data), crc32(data)))
-        payload.extend(data)
-        cursor += len(data)
-    directory = b"".join(entries)
-    total = payload_offset + len(payload)
-    header = HEADER.pack(b"AFNT", 0, 2, HEADER.size, DIRECTORY.size,
-                         len(CHUNKS), total, crc32(directory), 0)
-    return header + directory + bytes(payload_offset - HEADER.size - len(directory)) + payload
+    return serialize_afnt(metadata, cmap, strike_records, glyph_records,
+                          bytes(bitmap))
 
 
 def parse_afnt(data: bytes) -> dict[bytes, bytes]:
@@ -270,19 +450,24 @@ def unpack_afnt(data: bytes):
                 ascent < 0 or descent < 0 or line_gap < 0 or
                 cap_height < 0 or x_height < 0 or max_advance <= 0 or
                 underline_thickness <= 0 or strikeout_thickness <= 0 or
-                bitmap_format != MASK1 or record_size != GLYPH.size or
+                bitmap_format not in BITMAP_FORMATS or
+                record_size != GLYPH.size or
                 first > glyph_count or count > glyph_count - first or
                 flags or reserved or (pixel_width and pixel_width * 64 != max_advance)):
             raise ValueError("invalid strike record")
         ids = [record[0] for record in glyphs[first:first + count]]
         if ids != list(range(count)):
             raise ValueError("glyph IDs are not dense")
+        for _, offset, length, width, height, pitch, glyph_flags, _, _, advance in glyphs[first:first + count]:
+            if (width == 0 or height == 0 or
+                    pitch != bitmap_pitch(bitmap_format, width) or
+                    glyph_flags != 0 or offset > len(chunks[b"BITM"]) or
+                    length != pitch * height or
+                    length > len(chunks[b"BITM"]) - offset or advance < 0):
+                raise ValueError("invalid glyph record")
+        if cmap and max(glyph_id for _, glyph_id in cmap) >= count:
+            raise ValueError("CMAP glyph ID exceeds strike repertoire")
     bitmap = chunks[b"BITM"]
-    for _, offset, length, width, height, pitch, flags, _, _, advance in glyphs:
-        if (width == 0 or height == 0 or pitch != (width + 7) // 8 or flags != 0 or
-                offset > len(bitmap) or length != pitch * height or
-                length > len(bitmap) - offset or advance <= 0):
-            raise ValueError("invalid glyph record")
     json.loads(chunks[b"NAME"])
     return cmap, strikes, glyphs, bitmap
 
@@ -297,12 +482,16 @@ def emit_array(out, name: str, values, ctype: str, width: int = 8) -> None:
 
 def emit_c(data: bytes, output: Path, prefix: str) -> None:
     cmap, strikes, glyphs, bitmap = unpack_afnt(data)
-    lines = []
     from io import StringIO
     out = StringIO()
     out.write("/* Generated by tools/fonts/afnt.py; do not edit. */\n")
+    replacement = dict(cmap).get(0xfffd)
+    if replacement is None:
+        raise ValueError("AFNT character map lacks U+FFFD")
+    out.write(f"static const uint32_t {prefix}_replacement_glyph = "
+              f"{replacement}u;\n\n")
     emit_array(out, f"{prefix}_cmap_codepoints", [entry[0] for entry in cmap], "uint32_t")
-    emit_array(out, f"{prefix}_cmap_glyphs", [entry[1] for entry in cmap], "uint16_t")
+    emit_array(out, f"{prefix}_cmap_glyphs", [entry[1] for entry in cmap], "uint32_t")
     out.write(f"static const AstraUiStrike {prefix}_strikes[] = {{\n")
     for (strike_id, bitmap_format, pixel_width, pixel_height, ascent,
          descent, line_gap, cap_height, x_height, max_advance,
@@ -374,6 +563,17 @@ def main() -> int:
     importer.add_argument("--monospaced", action="store_true")
     importer.add_argument("--output", type=Path, required=True)
     importer.add_argument("strikes", nargs="+", type=Path)
+    outline = commands.add_parser("import-outline")
+    outline.add_argument("--family", required=True)
+    outline.add_argument("--style", default="Regular")
+    outline.add_argument("--license", required=True)
+    outline.add_argument("--source-revision", required=True)
+    outline.add_argument("--monospaced", action="store_true")
+    outline.add_argument("--strike", dest="strikes", action="append",
+                         type=parse_strike, required=True,
+                         metavar="PIXEL_HEIGHT:PPEM")
+    outline.add_argument("--output", type=Path, required=True)
+    outline.add_argument("input", type=Path)
     validator = commands.add_parser("validate")
     validator.add_argument("input", type=Path)
     emitter = commands.add_parser("emit-c")
@@ -387,6 +587,11 @@ def main() -> int:
     try:
         if args.command in ("import-amiga", "import-bitmap"):
             data = build_afnt(args)
+            unpack_afnt(data)
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_bytes(data)
+        elif args.command == "import-outline":
+            data = build_outline_afnt(args)
             unpack_afnt(data)
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_bytes(data)

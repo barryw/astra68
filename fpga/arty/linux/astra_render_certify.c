@@ -90,6 +90,8 @@ enum {
     FEATURE_XRGB_PITCH = 32u,
     FEATURE_PIXEL_COUNT = 43u,
     FRAME_DATA_OFFSET = 0x00800000u,
+    CAPTURE_DATA_OFFSET =
+        ASTRA_GRAPHICS_ARENA_BYTES - ASTRA_CAPTURE_FRAME_BYTES,
     RESOURCE_GENERATION = 0x00000017u,
     BASIC_COMMAND_COUNT = 6u,
     COMMAND_SCALE_REFLECT = 6u,
@@ -177,6 +179,9 @@ _Static_assert(SCRATCH_DESCRIPTOR_OFFSET == COMPLETION_RING_OFFSET +
 _Static_assert(FRAME_DATA_OFFSET + ASTRA_FRAMEBUFFER_BYTES <=
                    ASTRA_GRAPHICS_ARENA_BYTES,
                "certification framebuffer exceeds the graphics arena");
+_Static_assert(CAPTURE_DATA_OFFSET + ASTRA_CAPTURE_FRAME_BYTES <=
+                   ASTRA_GRAPHICS_ARENA_BYTES,
+               "capture framebuffer exceeds the graphics arena");
 _Static_assert(ASTRA_FRAMEBUFFER_HEIGHT >= 100u,
                "clipping certification needs 100 visible rows");
 _Static_assert(SCRATCH_REGION_BYTES >=
@@ -2035,13 +2040,15 @@ static void write_scene(const struct astra_graphics_device *device,
 }
 
 static int present_result(const struct astra_graphics_device *device,
-                          unsigned milliseconds, bool scaled)
+                          unsigned milliseconds, bool scaled,
+                          const char *capture_path)
 {
     AstraDisplayMode mode = ASTRA_DISPLAY_MODE_INIT;
     AstraDisplayLayout layout;
     struct scene_state saved;
     struct scene_state certification;
     uint32_t generation;
+    struct astra_display_capture_result capture;
     int result = -1;
 
     save_scene(device, &saved);
@@ -2085,6 +2092,17 @@ static int present_result(const struct astra_graphics_device *device,
            generation, mode.width, mode.height, layout.viewport_x,
            layout.viewport_y, layout.viewport_width, layout.viewport_height,
            milliseconds);
+    if (capture_path != NULL) {
+        if (astra_graphics_capture_rgb(
+                device, ASTRA_GRAPHICS_ARENA_BASE + CAPTURE_DATA_OFFSET,
+                capture_path, &capture) != 0) {
+            perror("capture rendered scene");
+            goto restore;
+        }
+        printf("ASTRA_RENDER_CAPTURE generation=%" PRIu32
+               " cycles=%" PRIu32 " elapsed_ns=%" PRIu64 "\n",
+               capture.generation, capture.cycles, capture.elapsed_ns);
+    }
     if (sleep_milliseconds(milliseconds) != 0)
         goto restore;
     result = 0;
@@ -2101,19 +2119,26 @@ restore:
 }
 
 static int parse_present_milliseconds(int argc, char **argv,
-                                      unsigned *milliseconds, bool *scaled)
+                                      unsigned *milliseconds, bool *scaled,
+                                      const char **capture_path)
 {
     char *end = NULL;
     unsigned long parsed;
 
     *milliseconds = 0u;
     *scaled = false;
+    *capture_path = NULL;
     if (argc == 1)
         return 0;
+    if (argc == 3 && strcmp(argv[1], "--capture") == 0) {
+        *capture_path = argv[2];
+        return 0;
+    }
     if (argc != 3 || (strcmp(argv[1], "--present-ms") != 0 &&
                       strcmp(argv[1], "--present-scaled-ms") != 0)) {
         fprintf(stderr,
-                "usage: %s [--present-ms|--present-scaled-ms 1..60000]\n",
+                "usage: %s [--present-ms|--present-scaled-ms 1..60000"
+                "|--capture OUTPUT.rgb]\n",
                 argv[0]);
         return -1;
     }
@@ -2167,17 +2192,21 @@ int main(int argc, char **argv)
     uint32_t compositor_cycles;
     unsigned present_milliseconds;
     bool present_scaled;
+    const char *capture_path;
     uint32_t capabilities;
     uint32_t status;
     int result = EXIT_FAILURE;
 
     if (parse_present_milliseconds(
-            argc, argv, &present_milliseconds, &present_scaled) != 0)
+            argc, argv, &present_milliseconds, &present_scaled,
+            &capture_path) != 0)
         return EXIT_FAILURE;
     astra_graphics_device_init(&device);
     init_maps(&maps);
     if (astra_graphics_device_open(&device, false) != 0 ||
         astra_graphics_device_validate(&device, false) != 0)
+        goto done;
+    if (capture_path != NULL && astra_display_capture_claim(&device) != 0)
         goto done;
     capabilities = astra_mmio_read(&device, ASTRA_REG_CAPABILITIES);
     if ((capabilities & ASTRA_CAP_RENDER_ENGINE) == 0u) {
@@ -2516,8 +2545,9 @@ int main(int argc, char **argv)
            " cycles=%" PRIu32 "\n",
            ASTRA_FRAMEBUFFER_WIDTH, SCREEN_OFFSET_HEIGHT,
            SCREEN_OFFSET_SOURCE_Y, screen_offset_cycles);
-    if (present_milliseconds != 0u &&
-        present_result(&device, present_milliseconds, present_scaled) != 0)
+    if ((present_milliseconds != 0u || capture_path != NULL) &&
+        present_result(&device, present_milliseconds, present_scaled,
+                       capture_path) != 0)
         goto stop_engine;
     if (certify_lane_realignment(&device, &maps, &lane_cycles) != 0)
         goto stop_engine;

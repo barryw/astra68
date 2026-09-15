@@ -26,6 +26,8 @@
 #define ASTRA_STARTUP_CAPABILITY_MAX 32u
 /* Global process budget; Axiom has one address space for every entry. */
 #define ASTRA_PROCESS_COUNT_MAX 32u
+/* PID zero is reserved; visible process identifiers are unsigned 16-bit. */
+#define ASTRA_PROCESS_ID_MAX 65535u
 
 #define ASTRA_STARTUP_FLAG_SUPERVISOR (1u << 0)
 

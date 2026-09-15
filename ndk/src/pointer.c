@@ -139,7 +139,8 @@ static AstraResult receive_event(AstraPointerObserver *observer,
         message.event.version != ASTRA_INPUT_SERVICE_VERSION ||
         message.event.type < ASTRA_INPUT_EVENT_POINTER_MOTION ||
         message.event.type > ASTRA_INPUT_EVENT_STATE_RESET ||
-        message.event.type == ASTRA_INPUT_EVENT_FOCUS)
+        message.event.type == ASTRA_INPUT_EVENT_FOCUS ||
+        (message.event.modifiers & ~ASTRA_INPUT_MOD_ALL) != 0u)
         return ASTRA_ERROR_IO;
     *event = (AstraPointerEvent){
         .size = sizeof(*event),
@@ -163,6 +164,7 @@ static AstraResult receive_event(AstraPointerObserver *observer,
         .timestamp_ms = message.event.timestamp_ms,
         .sequence = message.event.sequence,
         .generation = message.event.focus_generation,
+        .modifiers = message.event.modifiers,
         .screen_x = message.event.value_x,
         .screen_y = message.event.value_y,
         .button = message.event.code,

@@ -29,6 +29,8 @@ module tb_astra_graphics_control;
     wire framebuffer_wrap_y;
     wire framebuffer_key_enable;
     wire [31:0] framebuffer_key;
+    wire framebuffer_window_scene;
+    wire [31:0] framebuffer_window_scene_bytes;
     wire [10:0] display_source_width;
     wire [10:0] display_source_height;
     wire [10:0] display_crop_x;
@@ -285,6 +287,8 @@ wire [31:0] sprite_scale_step_x;
         .framebuffer_wrap_y(framebuffer_wrap_y),
         .framebuffer_key_enable(framebuffer_key_enable),
         .framebuffer_key(framebuffer_key),
+        .framebuffer_window_scene(framebuffer_window_scene),
+        .framebuffer_window_scene_bytes(framebuffer_window_scene_bytes),
         .display_source_width(display_source_width),
         .display_source_height(display_source_height),
         .display_crop_x(display_crop_x),
@@ -657,7 +661,7 @@ wire [31:0] sprite_scale_step_x;
             end
             held_data = s_axi_rdata;
             held_response = s_axi_rresp;
-            if (held_data !== 32'h00010008 || held_response !== 2'b00)
+            if (held_data !== 32'h00010009 || held_response !== 2'b00)
                 $fatal(1, "backpressured AXI read returned bad data");
 
             // Present a second request while the first response is held.
@@ -724,7 +728,7 @@ wire [31:0] sprite_scale_step_x;
         reset = 1'b0;
 
         axi_read(32'h00000000, 32'h41535452, 2'b00);
-        axi_read(32'h00000004, 32'h00010008, 2'b00);
+        axi_read(32'h00000004, 32'h00010009, 2'b00);
         axi_read(32'h00000008, 32'h00000fff, 2'b00);
         axi_read(32'h0000005c, 32'h04380780, 2'b00);
         axi_read(32'h00000060, 32'd0, 2'b00);
@@ -1028,6 +1032,31 @@ wire [31:0] sprite_scale_step_x;
         if (scene_enable || active_generation != 32'd2)
             $fatal(1, "disable generation was not promoted");
         $display("single-pending backpressure pass");
+
+        // Retained-window scanout reuses the framebuffer client but has an
+        // explicit mode and bounded compiled-scene allocation.
+        axi_write(32'h00000040, 32'h19000000, 4'hf, 0, 2'b00);
+        axi_write(32'h00000054, 32'h00000043, 4'hf, 0, 2'b00);
+        axi_write(32'h00000070, 32'h00002000, 4'hf, 0, 2'b00);
+        axi_read(32'h00000070, 32'h00002000, 2'b00);
+        axi_write(32'h0000000c, 32'h00000001, 4'hf, 0, 2'b00);
+        axi_write(32'h00000010, 32'h00000001, 4'hf, 0, 2'b00);
+        if (!commit_pending_status ||
+            !render_protected1_valid ||
+            render_protected1_offset != 32'h01000000 ||
+            render_protected1_bytes != 32'h00002000)
+            $fatal(1, "compiled scene protection was not queued");
+        pulse_frame_and_wait_promotion();
+        if (!scene_enable || !framebuffer_window_scene ||
+            framebuffer_window_scene_bytes != 32'h00002000 ||
+            framebuffer_base != 32'h19000000)
+            $fatal(1, "compiled scene mode was not promoted");
+        axi_write(32'h0000000c, 32'd0, 4'hf, 0, 2'b00);
+        axi_write(32'h00000054, 32'h00000003, 4'hf, 0, 2'b00);
+        axi_write(32'h00000040, 32'h18000000, 4'hf, 0, 2'b00);
+        axi_write(32'h00000010, 32'd1, 4'hf, 0, 2'b00);
+        pulse_frame_and_wait_promotion();
+        $display("compiled window-scene control pass");
 
         // The shared framebuffer validator rejects an unaligned allocation.
         axi_write(32'h00000040, 32'h18000001, 4'hf, 0, 2'b00);

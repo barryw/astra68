@@ -4,7 +4,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <astra/block.h>
 #include <astra/host.h>
+#include <astra/render_batch.h>
 
 #define KERNEL_VM_USER_MIN 0x00010000u
 #define KERNEL_VM_USER_MAX 0x7fffffffu
@@ -38,8 +40,8 @@
  * the slot index is per address space rather than global.
  */
 #define KERNEL_VM_DMA_BASE 0x50000000u
-#define KERNEL_VM_DMA_SLOT_SIZE 0x00400000u
-#define KERNEL_VM_DMA_SLOT_COUNT 4u
+#define KERNEL_VM_DMA_SLOT_SIZE ASTRA_RENDER_BATCH_BUFFER_BYTES
+#define KERNEL_VM_DMA_SLOT_COUNT ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE
 
 /*
  * One process-private page per thread exposes only that thread's AstraHost
@@ -205,6 +207,9 @@ bool kernel_vm_control_state(KernelVmControlState *state);
 KernelVmMapping kernel_vm_probe_current(uint32_t virtual_address,
                                         bool supervisor,
                                         uint32_t *physical_address);
+KernelVmMapping kernel_vm_probe_address_space(
+    const KernelAddressSpace *space, uint32_t virtual_address,
+    uint32_t *physical_address);
 KernelVmStatus kernel_vm_read(const KernelAddressSpace *space,
                               uint32_t virtual_address,
                               void *destination, uint32_t byte_size);

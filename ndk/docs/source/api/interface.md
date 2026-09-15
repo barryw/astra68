@@ -8,6 +8,10 @@
 :project: astra-ndk
 ```
 
+```{doxygenfile} pointer_shapes.h
+:project: astra-ndk
+```
+
 ```{doxygenfile} window.h
 :project: astra-ndk
 ```
@@ -15,6 +19,10 @@
 ```{doxygenstruct} AstraSurfaceView
 :project: astra-ndk
 :members:
+```
+
+```{doxygenfile} scroll.h
+:project: astra-ndk
 ```
 
 ```{doxygenfile} interface_library.h

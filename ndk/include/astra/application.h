@@ -16,7 +16,7 @@ ASTRA_EXTERN_C_BEGIN
  * @param launcher Launcher service handle.
  * @param bundle_path UTF-8 bundle path.
  * @param path_length Bytes in @p bundle_path.
- * @param process_id Receives the new process identifier.
+ * @param process_id Receives the new process PID.
  * @return ASTRA_OK on success or an AstraResult error.
  */
 ASTRA_NODISCARD AstraResult astra_application_launch(
@@ -34,7 +34,7 @@ ASTRA_NODISCARD AstraResult astra_application_launch(
  * @param source Origin of the launch request.
  * @param arguments Argument strings following argv[0].
  * @param argument_count Entries in @p arguments.
- * @param process_id Receives the new process identifier.
+ * @param process_id Receives the new process PID.
  * @return ASTRA_OK on success or an AstraResult error.
  */
 ASTRA_NODISCARD AstraResult astra_application_launch_with_arguments(

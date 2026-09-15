@@ -6,12 +6,12 @@
 #include <astra/syscall.h>
 
 #define ASTRA_INPUT_SERVICE_PROTOCOL UINT32_C(0x494e5054) /* INPT */
-#define ASTRA_INPUT_SERVICE_VERSION  UINT16_C(1)
+#define ASTRA_INPUT_SERVICE_VERSION  UINT16_C(2)
 
 #define ASTRA_CAPABILITY_INPUT_SERVICE "INPUT_SERVICE"
 
 #define ASTRA_INPUT_CLIENT_MAX 8u
-#define ASTRA_INPUT_EVENT_SIZE 32u
+#define ASTRA_INPUT_EVENT_SIZE 36u
 
 #define ASTRA_INPUT_EVENT_KEY            UINT16_C(1)
 #define ASTRA_INPUT_EVENT_TEXT           UINT16_C(2)
@@ -53,6 +53,8 @@ typedef struct AstraLogicalInputEvent {
     uint32_t sequence;
     uint32_t focus_generation;
     uint32_t code;
+    /** Normalized modifier state at the time of every input event. */
+    uint32_t modifiers;
     int32_t value_x;
     int32_t value_y;
 } AstraLogicalInputEvent;

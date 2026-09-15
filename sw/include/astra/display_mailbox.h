@@ -14,6 +14,7 @@
 #define ASTRA_DISPLAY_MAILBOX_VERSION_1_2 UINT32_C(0x00010002)
 #define ASTRA_DISPLAY_MAILBOX_VERSION_1_3 UINT32_C(0x00010003)
 #define ASTRA_DISPLAY_MAILBOX_VERSION_1_4 UINT32_C(0x00010004)
+#define ASTRA_DISPLAY_MAILBOX_VERSION_1_5 UINT32_C(0x00010005)
 
 /* Host-native shared record between QEMU and the Arty Linux display helper. */
 typedef struct AstraDisplayMailbox {

@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 #include <astra/draw_list.h>
+#include <astra/render_batch.h>
 
-#define ASTRA_RENDER_BUILDER_BYTES 0x00040000u
-#define ASTRA_RENDER_BUILDER_GLYPH_MAX 2048u
+#define ASTRA_RENDER_BUILDER_BYTES ASTRA_RENDER_BATCH_BUFFER_BYTES
 
 typedef enum AstraRenderBuilderFailure {
     ASTRA_RENDER_BUILDER_FAILURE_NONE = 0u,
@@ -16,22 +16,21 @@ typedef enum AstraRenderBuilderFailure {
     ASTRA_RENDER_BUILDER_FAILURE_DESTINATION,
     ASTRA_RENDER_BUILDER_FAILURE_COMMAND_CAPACITY,
     ASTRA_RENDER_BUILDER_FAILURE_SURFACE,
-    ASTRA_RENDER_BUILDER_FAILURE_GLYPH,
     ASTRA_RENDER_BUILDER_FAILURE_PRESENTATION,
+    ASTRA_RENDER_BUILDER_FAILURE_SCENE,
 } AstraRenderBuilderFailure;
 
 typedef struct AstraRenderBuilder {
     uint8_t *bytes;
-    uint32_t capacity;
     uint32_t generation;
     uint32_t command_count;
-    uint32_t descriptor_count;
     uint32_t glyph_count;
     uint32_t data_cursor;
     uint32_t surface_cursor;
+    uint32_t scene_offset;
+    uint32_t scene_layer_count;
+    uint32_t scene_output_capacity;
     uint32_t failed; /* AstraRenderBuilderFailure */
-    uint16_t descriptor_width[128];
-    uint16_t descriptor_height[128];
 } AstraRenderBuilder;
 
 int astra_render_builder_init(AstraRenderBuilder *builder, void *storage,
@@ -39,6 +38,14 @@ int astra_render_builder_init(AstraRenderBuilder *builder, void *storage,
 uint32_t astra_render_builder_frame(const AstraRenderBuilder *builder);
 int astra_render_builder_cursor(AstraRenderBuilder *builder, uint32_t x,
                                 uint32_t y, uint32_t flags);
+int astra_render_builder_window_scene(AstraRenderBuilder *builder,
+                                      uint32_t output_offset,
+                                      uint32_t output_capacity,
+                                      uint16_t backdrop_rgb565);
+int astra_render_builder_window_scene_layer(AstraRenderBuilder *builder,
+                                            uint32_t surface,
+                                            int32_t x, int32_t y,
+                                            uint16_t radius, int visible);
 uint32_t astra_render_builder_scanout(AstraRenderBuilder *builder,
                                       uint32_t scanout_offset);
 uint32_t astra_render_builder_surface(AstraRenderBuilder *builder,

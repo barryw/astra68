@@ -1,11 +1,21 @@
 `timescale 1ns/1ps
 `default_nettype none
+`include "astra_window_scene_protocol.vh"
 
-module tb_astra_framebuffer_line_builder;
-    localparam integer OUTPUT_WIDTH = 257;
+module tb_astra_framebuffer_line_builder #(
+    parameter integer SCENE_PERF_MODE = 0,
+    parameter integer AXI_DATA_WIDTH = SCENE_PERF_MODE ? 128 : 64
+);
+    localparam integer OUTPUT_WIDTH = SCENE_PERF_MODE ? 1920 : 257;
     localparam integer OUTPUT_HEIGHT = 12;
     localparam integer AXI_ID_WIDTH = 4;
-    localparam integer MAX_BUILD_CYCLES = 1200;
+    localparam integer MAX_BUILD_CYCLES = SCENE_PERF_MODE ? 8000 : 1200;
+    localparam integer BEAT_BYTES = AXI_DATA_WIDTH / 8;
+    localparam integer BEAT_SHIFT = $clog2(BEAT_BYTES);
+    // Keep at least 38% of the physical 2,444-cycle line period available for
+    // real LPDDR latency and concurrent renderer traffic.
+    localparam integer NATIVE_LINE_BUILD_CYCLES = 1500;
+    localparam integer MAX_BURST_BEATS = SCENE_PERF_MODE ? 32 : 16;
 
     localparam [31:0] ARENA_BASE = 32'h00001000;
     localparam [31:0] ARENA_LIMIT = 32'h00040000;
@@ -13,9 +23,13 @@ module tb_astra_framebuffer_line_builder;
     localparam [31:0] RGB565_BASE = 32'h00010000;
     localparam [31:0] XRGB_BASE = 32'h00020000;
     localparam [31:0] EDGE_BASE = 32'h00031fc0;
+    localparam [31:0] SCENE_BASE = 32'h00003000;
+    localparam [31:0] SCENE_BYTES = 32'd1344;
 
     localparam [31:0] INDEX_PITCH = 32'd512;
     localparam [31:0] RGB565_PITCH = 32'd1024;
+    localparam [31:0] SCENE_SOURCE_PITCH =
+        SCENE_PERF_MODE ? OUTPUT_WIDTH * 2 : RGB565_PITCH;
     localparam [31:0] XRGB_PITCH = 32'd2048;
     localparam [31:0] EDGE_PITCH = 32'd512;
 
@@ -31,8 +45,11 @@ module tb_astra_framebuffer_line_builder;
     reg build_reset = 1'b1;
     reg pixel_reset = 1'b1;
     reg start = 1'b0;
+    reg scene_changed = 1'b0;
     reg [1:0] build_slot = 2'd0;
     reg [10:0] line_y = 11'd0;
+    reg window_scene = 1'b0;
+    reg [31:0] window_scene_bytes = 32'd0;
     reg [1:0] format = FORMAT_INDEX8;
     reg [31:0] framebuffer_base = INDEX_BASE;
     reg [31:0] pitch = INDEX_PITCH;
@@ -72,7 +89,7 @@ module tb_astra_framebuffer_line_builder;
     wire m_axi_arvalid;
     wire m_axi_arready;
     reg [AXI_ID_WIDTH-1:0] m_axi_rid = {AXI_ID_WIDTH{1'b0}};
-    reg [63:0] m_axi_rdata = 64'd0;
+    reg [AXI_DATA_WIDTH-1:0] m_axi_rdata = 0;
     reg [1:0] m_axi_rresp = 2'b00;
     reg m_axi_rlast = 1'b0;
     reg m_axi_rvalid = 1'b0;
@@ -87,13 +104,18 @@ module tb_astra_framebuffer_line_builder;
         .OUTPUT_WIDTH(OUTPUT_WIDTH),
         .OUTPUT_HEIGHT(OUTPUT_HEIGHT),
         .AXI_ID_WIDTH(AXI_ID_WIDTH),
-        .MAX_BUILD_CYCLES(MAX_BUILD_CYCLES)
+        .AXI_DATA_WIDTH(AXI_DATA_WIDTH),
+        .MAX_BUILD_CYCLES(MAX_BUILD_CYCLES),
+        .MAX_BURST_BEATS(MAX_BURST_BEATS)
     ) dut (
         .build_clk(build_clk),
         .build_reset(build_reset),
         .start(start),
+        .scene_changed(scene_changed),
         .build_slot(build_slot),
         .line_y(line_y),
+        .window_scene(window_scene),
+        .window_scene_bytes(window_scene_bytes),
         .format(format),
         .framebuffer_base(framebuffer_base),
         .pitch(pitch),
@@ -237,12 +259,82 @@ module tb_astra_framebuffer_line_builder;
         end
     endtask
 
-    function automatic [63:0] read64(input [31:0] address);
+    task automatic store_be32(input integer address, input [31:0] value);
+        begin
+            memory[address + 0] = value[31:24];
+            memory[address + 1] = value[23:16];
+            memory[address + 2] = value[15:8];
+            memory[address + 3] = value[7:0];
+        end
+    endtask
+
+    task automatic initialize_window_scene;
+        integer y;
+        integer line_address;
+        integer span_address;
+        begin
+            store_be32(SCENE_BASE + 0,
+                       `ASTRA_WINDOW_SCENE_COMPILED_MAGIC);
+            store_be32(SCENE_BASE + 4,
+                       `ASTRA_WINDOW_SCENE_COMPILED_VERSION);
+            store_be32(SCENE_BASE + 8, SCENE_BYTES);
+            store_be32(SCENE_BASE + 12, 32'd9);
+            store_be32(SCENE_BASE + 16,
+                       (OUTPUT_WIDTH << 16) | OUTPUT_HEIGHT);
+            store_be32(SCENE_BASE + 20, OUTPUT_HEIGHT);
+            store_be32(SCENE_BASE + 24, 32'd64);
+            store_be32(SCENE_BASE + 28, 32'd192);
+            store_be32(SCENE_BASE + 32, OUTPUT_HEIGHT * 3);
+            for (y = 36; y < 64; y = y + 4)
+                store_be32(SCENE_BASE + y, 32'd0);
+            for (y = 0; y < OUTPUT_HEIGHT; y = y + 1) begin
+                line_address = SCENE_BASE + 64 + y * 8;
+                store_be32(line_address, y * 3);
+                store_be32(line_address + 4, 32'd3);
+                span_address = SCENE_BASE + 192 + y * 96;
+                store_be32(span_address + 0, 32'd0);
+                store_be32(span_address + 4, 32'd0);
+                store_be32(span_address + 8, 32'd0);
+                store_be32(span_address + 12, 32'd0);
+                store_be32(span_address + 16, 32'd17);
+                store_be32(span_address + 20,
+                           `ASTRA_WINDOW_SCENE_SPAN_SOLID);
+                store_be32(span_address + 24, 32'h00001234);
+                store_be32(span_address + 28, 32'd0);
+                span_address = span_address + 32;
+                store_be32(span_address + 0, RGB565_BASE - ARENA_BASE);
+                store_be32(span_address + 4, SCENE_SOURCE_PITCH * 32);
+                store_be32(span_address + 8, SCENE_SOURCE_PITCH);
+                store_be32(span_address + 12,
+                           (32'd3 << 16) | (y + 2));
+                store_be32(span_address + 16,
+                           (32'd17 << 16) | (OUTPUT_WIDTH - 57));
+                store_be32(span_address + 20, 32'd0);
+                store_be32(span_address + 24, 32'd0);
+                store_be32(span_address + 28, 32'd0);
+                span_address = span_address + 32;
+                store_be32(span_address + 0, 32'd0);
+                store_be32(span_address + 4, 32'd0);
+                store_be32(span_address + 8, 32'd0);
+                store_be32(span_address + 12, 32'd0);
+                store_be32(span_address + 16,
+                           ((OUTPUT_WIDTH - 40) << 16) | 32'd40);
+                store_be32(span_address + 20,
+                           `ASTRA_WINDOW_SCENE_SPAN_SOLID);
+                store_be32(span_address + 24, 32'h0000abcd);
+                store_be32(span_address + 28, 32'd0);
+            end
+        end
+    endtask
+
+    function automatic [AXI_DATA_WIDTH-1:0] read_beat(
+        input [31:0] address
+    );
         integer lane;
         begin
-            read64 = 64'd0;
-            for (lane = 0; lane < 8; lane = lane + 1)
-                read64[lane * 8 +: 8] = memory[address + lane];
+            read_beat = 0;
+            for (lane = 0; lane < BEAT_BYTES; lane = lane + 1)
+                read_beat[lane * 8 +: 8] = memory[address + lane];
         end
     endfunction
 
@@ -273,6 +365,8 @@ module tb_astra_framebuffer_line_builder;
     reg fast_responses = 1'b0;
     reg force_simultaneous_turnover = 1'b0;
     reg turnover_armed = 1'b0;
+    integer state_cycles [0:63];
+    integer state_index;
 
     wire expected_model_last = response_index == response_length;
     wire response_final_accept = m_axi_rvalid && m_axi_rready &&
@@ -316,19 +410,25 @@ module tb_astra_framebuffer_line_builder;
 
             if (outstanding_count != 0 && !m_axi_rready)
                 $fatal(1, "accepted AXI read was backpressured");
-            if (dut.reserved_beats > 32)
-                $fatal(1, "AXI receive credits exceeded FIFO capacity: %0d",
-                       dut.reserved_beats);
+            if (dut.reserved_beats > MAX_BURST_BEATS * 2)
+                $fatal(1,
+                    "AXI receive credits exceeded FIFO capacity: %0d",
+                    dut.reserved_beats);
 
             if (m_axi_arvalid && m_axi_arready) begin
                 if (m_axi_arid != {AXI_ID_WIDTH{1'b0}} ||
-                    m_axi_arsize != 3'b011 || m_axi_arburst != 2'b01 ||
-                    m_axi_araddr[2:0] != 3'b000 || m_axi_arlen > 8'd15)
+                    m_axi_arsize != BEAT_SHIFT || m_axi_arburst != 2'b01 ||
+                    m_axi_araddr[2:0] != 3'b000 ||
+                    m_axi_arlen >= MAX_BURST_BEATS)
                     $fatal(1, "invalid AXI read request");
                 if ({1'b0, m_axi_araddr[11:0]} +
-                    (({5'd0, m_axi_arlen} + 13'd1) << 3) > 13'd4096)
+                    (({5'd0, m_axi_arlen} + 13'd1) << BEAT_SHIFT) >
+                        13'd4096)
                     $fatal(1, "AXI request crossed 4 KiB boundary");
-                if (m_axi_araddr[11:0] == 12'hfe0 && m_axi_arlen == 8'd3)
+                if ({1'b0, m_axi_araddr[11:0]} +
+                        (({5'd0, m_axi_arlen} + 13'd1) << BEAT_SHIFT) ==
+                            13'd4096 &&
+                    m_axi_arlen + 8'd1 < MAX_BURST_BEATS)
                     saw_4k_limited_burst <= 1;
                 command_address[command_write] <= m_axi_araddr;
                 command_length[command_write] <= m_axi_arlen;
@@ -355,7 +455,7 @@ module tb_astra_framebuffer_line_builder;
                     response_active <= 1'b0;
                 end else begin
                     response_index <= response_index + 8'd1;
-                    response_address <= response_address + 32'd8;
+                    response_address <= response_address + BEAT_BYTES;
                     response_delay <= fast_responses ? 0 :
                         1 + (model_cycle & 1);
                 end
@@ -375,7 +475,7 @@ module tb_astra_framebuffer_line_builder;
                 if (response_delay != 0) begin
                     response_delay <= response_delay - 1;
                 end else begin
-                    m_axi_rdata <= read64(response_address);
+                    m_axi_rdata <= read_beat(response_address);
                     m_axi_rresp <= inject_bad_resp ? 2'b10 : 2'b00;
                     m_axi_rid <= inject_bad_id ?
                         {{(AXI_ID_WIDTH-1){1'b0}}, 1'b1} :
@@ -388,6 +488,11 @@ module tb_astra_framebuffer_line_builder;
         end
     end
 
+    always @(posedge build_clk) begin
+        if (SCENE_PERF_MODE && busy)
+            state_cycles[dut.state] <= state_cycles[dut.state] + 1;
+    end
+
     task automatic pulse_build_reset;
         begin
             @(negedge build_clk);
@@ -395,6 +500,15 @@ module tb_astra_framebuffer_line_builder;
             repeat (3) @(posedge build_clk);
             @(negedge build_clk);
             build_reset = 1'b0;
+        end
+    endtask
+
+    task automatic pulse_scene_changed;
+        begin
+            @(negedge build_clk);
+            scene_changed = 1'b1;
+            @(negedge build_clk);
+            scene_changed = 1'b0;
         end
     endtask
 
@@ -414,7 +528,12 @@ module tb_astra_framebuffer_line_builder;
                 #1;
                 cycles = cycles + 1;
                 if (cycles > maximum_cycles)
-                    $fatal(1, "framebuffer line build timed out");
+                    $fatal(1,
+                        "framebuffer line build timed out state=%0d burst=%0d beats=%0d active=%0d remaining=%0d issue=%0d reserved=%0d ar=%0d r=%0d error=%0d deadline=%0d",
+                        dut.state, dut.burst_count, dut.beat_count,
+                        dut.beat_active, dut.segment_pixels_remaining,
+                        dut.issue_beats_remaining, dut.reserved_beats,
+                        ar_count, r_accept_count, fetch_error, deadline_error);
             end
             if (line_complete !== expected_complete[0])
                 $fatal(1, "line_complete=%0d expected=%0d",
@@ -504,6 +623,30 @@ module tb_astra_framebuffer_line_builder;
         end
     endtask
 
+    task automatic check_window_scene_line(input integer slot,
+                                            input integer test_line_y);
+        integer x;
+        reg [31:0] expected;
+        begin
+            pixel_read_slot = slot[1:0];
+            for (x = 0; x < OUTPUT_WIDTH; x = x + 1) begin
+                @(negedge pixel_clk);
+                pixel_read_x = x[10:0];
+                @(posedge pixel_clk);
+                #1;
+                expected = x < 17 ? 32'h00001234 :
+                           x < OUTPUT_WIDTH - 40 ?
+                               {16'd0, rgb565_value(x - 14,
+                                                    test_line_y + 2)} :
+                               32'h0000abcd;
+                if (!pixel_valid || pixel_value !== expected)
+                    $fatal(1,
+                        "scene pixel %0d got valid=%0d value=%08x expected=%08x",
+                        x, pixel_valid, pixel_value, expected);
+            end
+        end
+    endtask
+
     task automatic select_surface(
         input integer test_format,
         input integer test_base,
@@ -525,22 +668,68 @@ module tb_astra_framebuffer_line_builder;
 
     integer requests_before;
     initial begin
+        for (state_index = 0; state_index < 64;
+             state_index = state_index + 1)
+            state_cycles[state_index] = 0;
         for (memory_index = 0; memory_index < 262144;
              memory_index = memory_index + 1)
             memory[memory_index] = 8'd0;
         initialize_surface(INDEX_BASE, INDEX_PITCH, 512, 32,
                            FORMAT_INDEX8);
-        initialize_surface(RGB565_BASE, RGB565_PITCH, 512, 32,
+        initialize_surface(RGB565_BASE, SCENE_SOURCE_PITCH,
+                           SCENE_PERF_MODE ? OUTPUT_WIDTH : 512, 32,
                            FORMAT_RGB565);
         initialize_surface(XRGB_BASE, XRGB_PITCH, 512, 32,
                            FORMAT_XRGB8888);
         initialize_surface(EDGE_BASE, EDGE_PITCH, 512, 32,
                            FORMAT_INDEX8);
+        initialize_window_scene();
 
         repeat (5) @(posedge build_clk);
         build_reset = 1'b0;
         repeat (3) @(posedge pixel_clk);
         pixel_reset = 1'b0;
+
+        if (SCENE_PERF_MODE) begin
+            build_slot = 2'd0;
+            window_scene = 1'b1;
+            window_scene_bytes = SCENE_BYTES;
+            format = FORMAT_RGB565;
+            framebuffer_base = SCENE_BASE;
+            line_y = 11'd4;
+            launch_and_wait(1, MAX_BUILD_CYCLES);
+            if (config_error || fetch_error || deadline_error ||
+                !slot_valid[0])
+                $fatal(1, "native window scene status failed");
+            check_window_scene_line(0, 4);
+            $display("native window scene bootstrap cycles=%0d bytes=%0d requests=%0d",
+                     build_cycles, read_bytes, ar_count);
+            for (state_index = 0; state_index < 64;
+                 state_index = state_index + 1)
+                state_cycles[state_index] = 0;
+            build_slot = 2'd1;
+            line_y = 11'd5;
+            launch_and_wait(1, MAX_BUILD_CYCLES);
+            check_window_scene_line(1, 5);
+            for (state_index = 0; state_index < 64;
+                 state_index = state_index + 1)
+                if (state_cycles[state_index] != 0)
+                    $display("native window scene state=%0d cycles=%0d",
+                             state_index, state_cycles[state_index]);
+            $display("native window scene measured cycles=%0d budget=%0d bytes=%0d requests=%0d",
+                     build_cycles, NATIVE_LINE_BUILD_CYCLES, read_bytes,
+                     ar_count);
+            if (state_cycles[20] != 0 || state_cycles[21] != 0 ||
+                state_cycles[22] != 0)
+                $fatal(1, "native window scene reread cached header");
+            if (build_cycles > NATIVE_LINE_BUILD_CYCLES)
+                $fatal(1,
+                    "native window scene missed line budget: cycles=%0d budget=%0d",
+                    build_cycles, NATIVE_LINE_BUILD_CYCLES);
+            $display("native window scene pass cycles=%0d budget=%0d bytes=%0d",
+                     build_cycles, NATIVE_LINE_BUILD_CYCLES, read_bytes);
+            $finish;
+        end
 
         // Unaligned byte starts prove the explicit Astra byte order for all
         // three formats, independent of AXI lane order.
@@ -701,6 +890,33 @@ module tb_astra_framebuffer_line_builder;
         if (!config_error || ar_count != requests_before)
             $fatal(1, "arena overflow was accepted");
         $display("configuration containment pass");
+
+        // A compiled retained scene mixes solid and RGB565 spans while using
+        // the same AXI reader and line store as the ordinary framebuffer.
+        pulse_build_reset();
+        build_slot = 2'd0;
+        window_scene = 1'b1;
+        window_scene_bytes = SCENE_BYTES;
+        format = FORMAT_RGB565;
+        framebuffer_base = SCENE_BASE;
+        line_y = 11'd4;
+        launch_and_wait(1, MAX_BUILD_CYCLES);
+        if (config_error || fetch_error || deadline_error || !slot_valid[0])
+            $fatal(1, "window scene status failed");
+        check_window_scene_line(0, 4);
+        $display("compiled window scene pass cycles=%0d bytes=%0d",
+                 build_cycles, read_bytes);
+
+        store_be32(SCENE_BASE, 32'd0);
+        pulse_scene_changed();
+        build_slot = 2'd1;
+        launch_and_wait(0, MAX_BUILD_CYCLES);
+        if (!config_error || fetch_error || deadline_error || slot_valid[1])
+            $fatal(1, "invalid window scene header was accepted");
+        initialize_window_scene();
+        window_scene = 1'b0;
+        window_scene_bytes = 32'd0;
+        $display("window scene containment pass");
 
         // A deadline stops new requests but must drain every accepted AXI read
         // before reporting completion or allowing another line to start.

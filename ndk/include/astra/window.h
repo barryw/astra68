@@ -9,8 +9,10 @@
 #include <stdint.h>
 
 #include <astra/attributes.h>
+#include <astra/graphics.h>
 #include <astra/gui.h>
 #include <astra/input_modifiers.h>
+#include <astra/pointer.h>
 #include <astra/resource.h>
 #include <astra/theme.h>
 #include <astra/types.h>
@@ -24,11 +26,12 @@ typedef struct AstraWindow {
     uint32_t _private_events;
     uint32_t _private_id;
     uint32_t _private_generation;
+    uint32_t _private_vblank;
     /** @endcond */
 } AstraWindow;
 
 /** Empty window-handle initializer. */
-#define ASTRA_WINDOW_INIT { 0, 0, 0, 0 }
+#define ASTRA_WINDOW_INIT { 0, 0, 0, 0, 0 }
 
 /** Current server-owned placement and state. */
 typedef struct AstraWindowInfo {
@@ -137,6 +140,12 @@ ASTRA_NODISCARD AstraResult astra_window_set_title(
 /** Replace event subscriptions. @param window Open window. @param event_mask ASTRA_WINDOW_SUBSCRIBE_* mask. @return ASTRA_OK or an error. */
 ASTRA_NODISCARD AstraResult astra_window_set_event_mask(
     AstraWindow *window, uint32_t event_mask);
+/** Select one server-supplied pointer image for this window's content. @param window Open window. @param shape ASTRA_POINTER_SHAPE_* value other than CUSTOM unless a custom image is installed. @return ASTRA_OK or an error. */
+ASTRA_NODISCARD AstraResult astra_window_set_pointer_shape(
+    AstraWindow *window, AstraPointerShape shape);
+/** Copy, install, and select a window-owned custom pointer image. Pixels are normalized to the native 32 by 32 pointer plane and cannot be mutated after return. @param window Open window. @param image Valid RGBA image and hotspot. @return ASTRA_OK or an error. */
+ASTRA_NODISCARD AstraResult astra_window_set_pointer_image(
+    AstraWindow *window, const AstraHardwarePointerImage *image);
 /** Publish the draw-list or pixel content currently in the shared area.
  * @param window Open window.
  * @return ASTRA_OK on success or an AstraResult error.
@@ -164,7 +173,14 @@ ASTRA_NODISCARD AstraResult astra_window_event_wait(
  */
 ASTRA_NODISCARD AstraHandle astra_window_event_wait_handle(
     const AstraWindow *window);
-
+/** Borrow the coalescing display-vblank wait handle owned by this window.
+ * The handle becomes signaled only while the window subscribes to
+ * ASTRA_WINDOW_SUBSCRIBE_VBLANK.
+ * @param window Open window.
+ * @return Borrowed wait handle, or ASTRA_INVALID_HANDLE.
+ */
+ASTRA_NODISCARD AstraHandle astra_window_vblank_wait_handle(
+    const AstraWindow *window);
 ASTRA_EXTERN_C_END
 
 #endif

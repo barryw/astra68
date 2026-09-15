@@ -1,10 +1,11 @@
 // Copyright (c) 2026 Astra68 contributors
 //
-// Builds one complete framebuffer scanline from bounded, ordered 64-bit AXI
+// Builds one complete framebuffer scanline from bounded, ordered AXI
 // bursts. Surface bytes use Astra's explicit byte order, independent of the
 // little-endian ARM host and AXI byte lanes.
 `timescale 1ns/1ps
 `default_nettype none
+`include "astra_window_scene_protocol.vh"
 
 module astra_framebuffer_line_builder #(
     parameter integer OUTPUT_WIDTH = 1280,
@@ -12,14 +13,19 @@ module astra_framebuffer_line_builder #(
     parameter integer AXI_ID_WIDTH = 6,
     parameter [AXI_ID_WIDTH-1:0] AXI_ID = {AXI_ID_WIDTH{1'b0}},
     parameter integer MAX_BUILD_CYCLES = 20000,
+    parameter integer MAX_BURST_BEATS = 16,
+    parameter integer AXI_DATA_WIDTH = 64,
     parameter integer TRUSTED_CONFIG = 0
 ) (
     input  wire                         build_clk,
     input  wire                         build_reset,
 
     input  wire                         start,
+    input  wire                         scene_changed,
     input  wire [1:0]                   build_slot,
     input  wire [10:0]                  line_y,
+    input  wire                         window_scene,
+    input  wire [31:0]                  window_scene_bytes,
     input  wire [1:0]                   format,
     input  wire [31:0]                  framebuffer_base,
     input  wire [31:0]                  pitch,
@@ -59,7 +65,7 @@ module astra_framebuffer_line_builder #(
     output wire                         m_axi_arvalid,
     input  wire                         m_axi_arready,
     input  wire [AXI_ID_WIDTH-1:0]      m_axi_rid,
-    input  wire [63:0]                  m_axi_rdata,
+    input  wire [AXI_DATA_WIDTH-1:0]    m_axi_rdata,
     input  wire [1:0]                   m_axi_rresp,
     input  wire                         m_axi_rlast,
     input  wire                         m_axi_rvalid,
@@ -76,40 +82,74 @@ module astra_framebuffer_line_builder #(
     localparam [1:0] FORMAT_RGB565 = 2'd1;
     localparam [1:0] FORMAT_XRGB8888 = 2'd2;
 
-    localparam [4:0] ST_IDLE = 5'd0;
-    localparam [4:0] ST_VALIDATE = 5'd1;
-    localparam [4:0] ST_PLAN_Y = 5'd2;
-    localparam [4:0] ST_PLAN_Y_MULTIPLY = 5'd3;
-    localparam [4:0] ST_PLAN_Y_COMBINE = 5'd4;
-    localparam [4:0] ST_PLAN_Y_ADDRESS = 5'd5;
-    localparam [4:0] ST_PLAN_X_SIGN = 5'd6;
-    localparam [4:0] ST_PLAN_X_CLIP = 5'd7;
-    localparam [4:0] ST_PLAN_X_AVAILABLE = 5'd8;
-    localparam [4:0] ST_PLAN_X_COUNTS = 5'd9;
-    localparam [4:0] ST_PLAN_X_RIGHT = 5'd10;
-    localparam [4:0] ST_PLAN_X_DISPATCH = 5'd11;
-    localparam [4:0] ST_FILL_LEFT = 5'd12;
-    localparam [4:0] ST_SEGMENT_ADDRESS = 5'd13;
-    localparam [4:0] ST_SEGMENT = 5'd14;
-    localparam [4:0] ST_SEGMENT_DRAIN = 5'd15;
-    localparam [4:0] ST_FILL_RIGHT = 5'd16;
-    localparam [4:0] ST_FINISH = 5'd17;
-    localparam [4:0] ST_PLAN_Y_RESOLVE = 5'd18;
-    localparam [4:0] ST_SEGMENT_COUNTS = 5'd19;
+    localparam [5:0] ST_IDLE = 6'd0;
+    localparam [5:0] ST_VALIDATE = 6'd1;
+    localparam [5:0] ST_PLAN_Y = 6'd2;
+    localparam [5:0] ST_PLAN_Y_MULTIPLY = 6'd3;
+    localparam [5:0] ST_PLAN_Y_COMBINE = 6'd4;
+    localparam [5:0] ST_PLAN_Y_ADDRESS = 6'd5;
+    localparam [5:0] ST_PLAN_X_SIGN = 6'd6;
+    localparam [5:0] ST_PLAN_X_CLIP = 6'd7;
+    localparam [5:0] ST_PLAN_X_AVAILABLE = 6'd8;
+    localparam [5:0] ST_PLAN_X_COUNTS = 6'd9;
+    localparam [5:0] ST_PLAN_X_RIGHT = 6'd10;
+    localparam [5:0] ST_PLAN_X_DISPATCH = 6'd11;
+    localparam [5:0] ST_FILL_LEFT = 6'd12;
+    localparam [5:0] ST_SEGMENT_ADDRESS = 6'd13;
+    localparam [5:0] ST_SEGMENT = 6'd14;
+    localparam [5:0] ST_SEGMENT_DRAIN = 6'd15;
+    localparam [5:0] ST_FILL_RIGHT = 6'd16;
+    localparam [5:0] ST_FINISH = 6'd17;
+    localparam [5:0] ST_PLAN_Y_RESOLVE = 6'd18;
+    localparam [5:0] ST_SEGMENT_COUNTS = 6'd19;
+    localparam [5:0] ST_SCENE_HEADER_REQUEST = 6'd20;
+    localparam [5:0] ST_SCENE_HEADER_RESPONSE = 6'd21;
+    localparam [5:0] ST_SCENE_HEADER_CHECK = 6'd22;
+    localparam [5:0] ST_SCENE_LINE_REQUEST = 6'd23;
+    localparam [5:0] ST_SCENE_LINE_RESPONSE = 6'd24;
+    localparam [5:0] ST_SCENE_LINE_CHECK = 6'd25;
+    localparam [5:0] ST_SCENE_SPAN_REQUEST = 6'd26;
+    localparam [5:0] ST_SCENE_SPAN_RESPONSE = 6'd27;
+    localparam [5:0] ST_SCENE_SPAN_CHECK = 6'd28;
+    localparam [5:0] ST_SCENE_SOURCE_MULTIPLY = 6'd29;
+    localparam [5:0] ST_SCENE_SOURCE_COMBINE = 6'd30;
+    localparam [5:0] ST_SCENE_SOLID = 6'd31;
+    localparam [5:0] ST_SCENE_NEXT_SPAN = 6'd32;
+    localparam [5:0] ST_SCENE_SOURCE_CHECK = 6'd33;
 
     localparam integer BURST_FIFO_DEPTH = 8;
-    localparam integer BEAT_FIFO_DEPTH = 32;
+    localparam integer BEAT_BYTES = AXI_DATA_WIDTH / 8;
+    localparam integer BEAT_SHIFT = $clog2(BEAT_BYTES);
+    localparam integer BURST_BEAT_WIDTH = $clog2(MAX_BURST_BEATS + 1);
+    localparam integer BEAT_FIFO_DEPTH = MAX_BURST_BEATS * 2;
+    localparam integer BEAT_FIFO_ADDR_WIDTH = $clog2(BEAT_FIFO_DEPTH);
+    localparam integer BEAT_FIFO_COUNT_WIDTH =
+        $clog2(BEAT_FIFO_DEPTH + 1);
 
     function automatic [7:0] beat_byte(
-        input [63:0] beat,
-        input [2:0]  byte_index
+        input [AXI_DATA_WIDTH-1:0] beat,
+        input [BEAT_SHIFT-1:0]     byte_index
     );
         begin
             beat_byte = beat[byte_index * 8 +: 8];
         end
     endfunction
 
-    reg [4:0] state;
+    function automatic [31:0] beat_be32(
+        input [AXI_DATA_WIDTH-1:0] beat,
+        input [1:0]                word_index
+    );
+        begin
+            beat_be32 = {
+                beat[word_index * 32 +: 8],
+                beat[word_index * 32 + 8 +: 8],
+                beat[word_index * 32 + 16 +: 8],
+                beat[word_index * 32 + 24 +: 8]
+            };
+        end
+    endfunction
+
+    reg [5:0] state;
     reg [1:0] build_slot_q;
     reg [10:0] line_y_q;
     reg [1:0] format_q;
@@ -123,6 +163,8 @@ module astra_framebuffer_line_builder #(
     reg signed [31:0] viewport_y_q;
     reg wrap_x_q;
     reg wrap_y_q;
+    reg window_scene_q;
+    reg [31:0] window_scene_bytes_q;
 
     wire [2:0] config_bytes_per_pixel =
         format == FORMAT_INDEX8 ? 3'd1 :
@@ -199,7 +241,63 @@ module astra_framebuffer_line_builder #(
     reg [10:0] fill_pixels_q;
     reg [10:0] segment_pixels_remaining;
     reg segment_pixels_active_q;
-    reg segment_last_pixel_q;
+
+    reg [3:0] scene_metadata_beat_q;
+    reg [31:0] scene_total_bytes_q;
+    reg [31:0] scene_generation_q;
+    reg [31:0] scene_width_height_q;
+    reg [31:0] scene_line_count_q;
+    reg [31:0] scene_line_offset_q;
+    reg [31:0] scene_span_offset_q;
+    reg [31:0] scene_span_count_q;
+    reg [31:0] scene_flags_q;
+    reg scene_header_reserved_valid_q;
+    reg scene_header_valid_q;
+    reg [31:0] scene_header_base_q;
+    reg [31:0] scene_header_capacity_q;
+    reg [31:0] scene_first_span_q;
+    reg [31:0] scene_line_span_count_q;
+    reg [31:0] scene_line_span_index_q;
+    reg [31:0] scene_source_offset_q;
+    reg [31:0] scene_source_bytes_q;
+    reg [31:0] scene_source_pitch_q;
+    reg [31:0] scene_source_x_y_q;
+    reg [31:0] scene_destination_x_length_q;
+    reg [31:0] scene_span_flags_q;
+    reg [31:0] scene_span_value_q;
+    reg [31:0] scene_span_reserved_q;
+    reg [47:0] scene_source_row_product_q;
+    reg [31:0] scene_source_row_low_q;
+    reg [31:0] scene_source_row_high_q;
+
+    wire [36:0] scene_line_table_end =
+        {5'd0, scene_line_offset_q} +
+        ({5'd0, scene_line_count_q} << 3);
+    wire [37:0] scene_span_table_end =
+        {6'd0, scene_span_offset_q} +
+        ({6'd0, scene_span_count_q} << 5);
+    wire [32:0] scene_line_span_end =
+        {1'b0, scene_first_span_q} + {1'b0, scene_line_span_count_q};
+    wire [31:0] scene_span_number =
+        scene_first_span_q + scene_line_span_index_q;
+    wire [32:0] scene_destination_end =
+        {1'b0, scene_destination_x_length_q[31:16]} +
+        {17'd0, scene_destination_x_length_q[15:0]};
+    wire [32:0] scene_source_row_bytes =
+        {17'd0, scene_source_x_y_q[31:16]} +
+        {17'd0, scene_destination_x_length_q[15:0]};
+    wire [48:0] scene_source_required =
+        {1'b0, scene_source_row_product_q} +
+        ({16'd0, scene_source_row_bytes} << 1);
+    wire [47:0] scene_source_row_combined =
+        {scene_source_row_high_q, 16'd0} +
+        {16'd0, scene_source_row_low_q};
+    wire [32:0] scene_source_end =
+        {1'b0, scene_source_offset_q} + {1'b0, scene_source_bytes_q};
+    wire [32:0] scene_compiled_end =
+        {1'b0, framebuffer_base_q} + {1'b0, window_scene_bytes_q};
+    wire [31:0] scene_line_address = framebuffer_base_q +
+        scene_line_offset_q + ({21'd0, line_y_q} << 3);
 
     wire [31:0] segment_byte_address =
         row_address_q + ({19'd0, source_x_q} << bytes_shift_q);
@@ -208,32 +306,47 @@ module astra_framebuffer_line_builder #(
 
     reg [31:0] issue_address;
     reg [10:0] issue_beats_remaining;
-    reg [2:0] first_byte_offset;
+    reg [BEAT_SHIFT-1:0] first_byte_offset;
     reg [13:0] segment_payload_bytes_q;
     reg ar_request_valid;
     reg [31:0] ar_request_address;
-    reg [4:0] ar_request_beats;
+    reg [BURST_BEAT_WIDTH-1:0] ar_request_beats;
 
-    // Requests are always eight-byte aligned and no longer than 16 beats.
-    // Only the final 128 bytes of a 4 KiB page can shorten a request, so keep
-    // the boundary calculation to five bits instead of a 13-bit subtractor.
-    wire [4:0] issue_beats_to_4k_capped =
-        &issue_address[11:7] ?
-            5'd16 - {1'b0, issue_address[6:3]} : 5'd16;
-    wire [4:0] selected_burst_beats =
-        issue_beats_remaining < 11'd16 ? issue_beats_remaining[4:0] :
-        issue_beats_to_4k_capped;
+    // Requests are beat-aligned and no longer than the selected
+    // AXI port limit. Only the final maximum-burst region of a 4 KiB page can
+    // shorten a request, so avoid a full 13-bit boundary subtractor.
+    wire [BURST_BEAT_WIDTH-1:0] issue_beats_to_4k_capped =
+        MAX_BURST_BEATS == 32 ?
+            (BEAT_BYTES == 16 ?
+                (&issue_address[11:9] ?
+                    6'd32 - {1'b0, issue_address[8:4]} : 6'd32) :
+                (&issue_address[11:8] ?
+                    6'd32 - {1'b0, issue_address[7:3]} : 6'd32)) :
+            (BEAT_BYTES == 16 ?
+                (&issue_address[11:8] ?
+                    5'd16 - {1'b0, issue_address[7:4]} : 5'd16) :
+                (&issue_address[11:7] ?
+                    5'd16 - {1'b0, issue_address[6:3]} : 5'd16));
+    wire [BURST_BEAT_WIDTH-1:0] selected_burst_beats =
+        issue_beats_remaining < MAX_BURST_BEATS ?
+            issue_beats_remaining[BURST_BEAT_WIDTH-1:0] :
+            issue_beats_to_4k_capped;
 
-    reg [4:0] burst_fifo [0:BURST_FIFO_DEPTH-1];
-    reg [4:0] burst_head_beats;
+    reg [BURST_BEAT_WIDTH-1:0] burst_fifo [0:BURST_FIFO_DEPTH-1];
+    reg [BURST_BEAT_WIDTH-1:0] burst_head_beats;
     reg [2:0] burst_write_ptr;
     reg [2:0] burst_read_ptr;
     reg [3:0] burst_count;
-    reg [5:0] reserved_beats;
+    reg [BEAT_FIFO_COUNT_WIDTH-1:0] reserved_beats;
     reg response_active;
-    reg [4:0] response_beats_left;
+    reg [BURST_BEAT_WIDTH-1:0] response_beats_left;
 
-    wire [5:0] selected_burst_beats_wide = {1'b0, selected_burst_beats};
+    wire [BEAT_FIFO_COUNT_WIDTH-1:0] selected_burst_beats_wide =
+        {{(BEAT_FIFO_COUNT_WIDTH-BURST_BEAT_WIDTH){1'b0}},
+         selected_burst_beats};
+    wire [BEAT_FIFO_COUNT_WIDTH-1:0] ar_request_beats_wide =
+        {{(BEAT_FIFO_COUNT_WIDTH-BURST_BEAT_WIDTH){1'b0}},
+         ar_request_beats};
     wire issue_credit_available =
         reserved_beats + selected_burst_beats_wide <= BEAT_FIFO_DEPTH;
     wire ar_plan = state == ST_SEGMENT && !ar_request_valid &&
@@ -242,8 +355,8 @@ module astra_framebuffer_line_builder #(
     assign m_axi_arvalid = ar_request_valid;
     assign m_axi_arid = AXI_ID;
     assign m_axi_araddr = ar_request_address;
-    assign m_axi_arlen = {3'd0, ar_request_beats} - 8'd1;
-    assign m_axi_arsize = 3'b011;
+    assign m_axi_arlen = ar_request_beats - 1'b1;
+    assign m_axi_arsize = BEAT_SHIFT[2:0];
     assign m_axi_arburst = 2'b01;
     assign m_axi_arcache = 4'b0011;
     assign m_axi_arprot = 3'b000;
@@ -253,19 +366,24 @@ module astra_framebuffer_line_builder #(
     assign m_axi_arqos = 4'b0000;
     wire ar_accept = m_axi_arvalid && m_axi_arready;
 
-    reg [63:0] beat_fifo [0:BEAT_FIFO_DEPTH-1];
-    reg [4:0] beat_write_ptr;
-    reg [4:0] beat_read_ptr;
-    reg [5:0] beat_count;
+    reg [AXI_DATA_WIDTH-1:0] beat_fifo [0:BEAT_FIFO_DEPTH-1];
+    reg [BEAT_FIFO_ADDR_WIDTH-1:0] beat_write_ptr;
+    reg [BEAT_FIFO_ADDR_WIDTH-1:0] beat_read_ptr;
+    reg [BEAT_FIFO_COUNT_WIDTH-1:0] beat_count;
 
-    wire [4:0] expected_response_beats = response_active ?
+    wire [BURST_BEAT_WIDTH-1:0] expected_response_beats = response_active ?
         response_beats_left : burst_head_beats;
     wire expected_response_last = expected_response_beats == 5'd1;
     // AXI reads cannot be cancelled after AR acceptance.  A completed or
     // timed-out line therefore keeps RREADY asserted while discarding every
     // remaining response before the builder can be reused.
+    wire scene_metadata_response =
+        state == ST_SCENE_HEADER_RESPONSE ||
+        state == ST_SCENE_LINE_RESPONSE ||
+        state == ST_SCENE_SPAN_RESPONSE;
     assign m_axi_rready = burst_count != 4'd0 &&
-        (state == ST_SEGMENT || state == ST_SEGMENT_DRAIN);
+        (state == ST_SEGMENT || state == ST_SEGMENT_DRAIN ||
+         scene_metadata_response);
     wire response_accept = m_axi_rvalid && m_axi_rready;
     wire burst_pop = response_accept &&
         (m_axi_rlast || expected_response_last);
@@ -273,13 +391,16 @@ module astra_framebuffer_line_builder #(
 
     reg beat_active;
 
+    wire [5:0] beat_count_debug = beat_count > 63 ? 6'd63 : beat_count[5:0];
+    wire [5:0] reserved_beats_debug =
+        reserved_beats > 63 ? 6'd63 : reserved_beats[5:0];
     assign axi_debug_status = {
         issue_beats_remaining != 11'd0,
         beat_active,
         state == ST_SEGMENT_DRAIN,
         response_active,
-        beat_count,
-        reserved_beats,
+        beat_count_debug,
+        reserved_beats_debug,
         burst_count,
         m_axi_rready,
         m_axi_rvalid,
@@ -288,35 +409,58 @@ module astra_framebuffer_line_builder #(
         fetch_error,
         deadline_error,
         busy,
-        state
+        state[4:0]
     };
 
     reg first_beat;
     // Keep this register outside the BRAM output stage. The integrated route
     // otherwise absorbs it into DO_REG and leaves byte selection on the
     // BRAM's 2.45 ns clock-to-output path.
-    (* dont_touch = "yes" *) reg [63:0] active_beat;
-    reg [2:0] active_byte;
+    (* dont_touch = "yes" *) reg [AXI_DATA_WIDTH-1:0] active_beat;
+    reg [BEAT_SHIFT-1:0] active_byte;
+    wire mapped_write_two = state == ST_SEGMENT && beat_active &&
+        segment_pixels_active_q && segment_pixels_remaining >= 11'd2 &&
+        {1'b0, active_byte} + ({1'b0, bytes_per_pixel_q} << 1) <= BEAT_BYTES;
+    wire [1:0] mapped_write_count = mapped_write_two ? 2'd2 : 2'd1;
+    wire [BEAT_SHIFT:0] active_bytes_consumed = mapped_write_two ?
+        ({1'b0, bytes_per_pixel_q} << 1) : {1'b0, bytes_per_pixel_q};
+    wire [BEAT_SHIFT:0] active_byte_after_write =
+        {1'b0, active_byte} + active_bytes_consumed;
     wire active_beat_exhausted = beat_active &&
-        segment_pixels_active_q && !segment_last_pixel_q &&
-        ({1'b0, active_byte} + {1'b0, bytes_per_pixel_q} >= 4'd8);
-    wire beat_pop = state == ST_SEGMENT && beat_count != 6'd0 &&
+        segment_pixels_active_q &&
+        segment_pixels_remaining > mapped_write_count &&
+        active_byte_after_write >= BEAT_BYTES;
+    wire beat_pop = state == ST_SEGMENT && beat_count != 0 &&
                     (!beat_active || active_beat_exhausted);
 
     wire [7:0] active_byte0 = beat_byte(active_beat, active_byte);
     wire [7:0] active_byte1 = beat_byte(active_beat, active_byte + 3'd1);
     wire [7:0] active_byte2 = beat_byte(active_beat, active_byte + 3'd2);
     wire [7:0] active_byte3 = beat_byte(active_beat, active_byte + 3'd3);
+    wire [BEAT_SHIFT-1:0] second_active_byte =
+        active_byte + bytes_per_pixel_q;
+    wire [7:0] second_byte0 = beat_byte(active_beat, second_active_byte);
+    wire [7:0] second_byte1 = beat_byte(active_beat,
+                                        second_active_byte + 3'd1);
+    wire [7:0] second_byte2 = beat_byte(active_beat,
+                                        second_active_byte + 3'd2);
+    wire [7:0] second_byte3 = beat_byte(active_beat,
+                                        second_active_byte + 3'd3);
 
     wire mapped_write = state == ST_SEGMENT && beat_active &&
                         segment_pixels_active_q;
     wire invalid_write = (state == ST_FILL_LEFT ||
                           state == ST_FILL_RIGHT) && fill_pixels_q != 11'd0;
-    wire line_write = mapped_write || invalid_write;
+    wire scene_solid_write = state == ST_SCENE_SOLID &&
+                             fill_pixels_q != 11'd0;
+    wire line_write = mapped_write || invalid_write || scene_solid_write;
+    wire line_write_two = mapped_write ? mapped_write_two :
+                          fill_pixels_q >= 11'd2;
+    wire [1:0] fill_write_count = line_write_two ? 2'd2 : 2'd1;
 
     // Byte selection is the expensive half of source decoding. Register it
     // separately from the format mux so neither stage exceeds two LUT levels.
-    reg        line_write_valid_q;
+    reg [1:0]  line_write_enable_q;
     reg        line_write_mapped_q;
     reg [1:0]  line_write_slot_q;
     reg [10:0] line_write_x_q;
@@ -325,6 +469,10 @@ module astra_framebuffer_line_builder #(
     reg [7:0]  line_write_byte1_q;
     reg [7:0]  line_write_byte2_q;
     reg [7:0]  line_write_byte3_q;
+    reg [7:0]  line_write_second_byte0_q;
+    reg [7:0]  line_write_second_byte1_q;
+    reg [7:0]  line_write_second_byte2_q;
+    reg [7:0]  line_write_second_byte3_q;
 
     wire [31:0] line_write_decoded =
         line_write_format_q == FORMAT_INDEX8 ?
@@ -335,15 +483,26 @@ module astra_framebuffer_line_builder #(
              line_write_byte3_q};
     wire [32:0] line_write_pixel = line_write_mapped_q ?
         {1'b1, line_write_decoded} : 33'd0;
+    wire [31:0] line_write_second_decoded =
+        line_write_format_q == FORMAT_INDEX8 ?
+            {24'd0, line_write_second_byte0_q} :
+        line_write_format_q == FORMAT_RGB565 ?
+            {16'd0, line_write_second_byte0_q,
+             line_write_second_byte1_q} :
+            {8'hff, line_write_second_byte1_q,
+             line_write_second_byte2_q, line_write_second_byte3_q};
+    wire [32:0] line_write_second_pixel = line_write_mapped_q ?
+        {1'b1, line_write_second_decoded} : 33'd0;
 
     astra_framebuffer_line_store #(
         .OUTPUT_WIDTH(OUTPUT_WIDTH)
     ) line_store_i (
         .build_clk(build_clk),
-        .write_enable(line_write_valid_q),
+        .write_enable(line_write_enable_q),
         .write_slot(line_write_slot_q),
         .write_x(line_write_x_q),
-        .write_pixel(line_write_pixel),
+        .write_pixel0(line_write_pixel),
+        .write_pixel1(line_write_second_pixel),
         .pixel_clk(pixel_clk),
         .pixel_reset(pixel_reset),
         .read_slot(pixel_read_slot),
@@ -382,6 +541,8 @@ module astra_framebuffer_line_builder #(
             viewport_y_q <= 32'sd0;
             wrap_x_q <= 1'b0;
             wrap_y_q <= 1'b0;
+            window_scene_q <= 1'b0;
+            window_scene_bytes_q <= 32'd0;
             line_y_mapped_q <= 1'b0;
             planned_world_y_q <= 33'sd0;
             wrapped_y_sum_q <= 14'd0;
@@ -406,29 +567,55 @@ module astra_framebuffer_line_builder #(
             fill_pixels_q <= 11'd0;
             segment_pixels_remaining <= 11'd0;
             segment_pixels_active_q <= 1'b0;
-            segment_last_pixel_q <= 1'b0;
+            scene_metadata_beat_q <= 4'd0;
+            scene_total_bytes_q <= 32'd0;
+            scene_generation_q <= 32'd0;
+            scene_width_height_q <= 32'd0;
+            scene_line_count_q <= 32'd0;
+            scene_line_offset_q <= 32'd0;
+            scene_span_offset_q <= 32'd0;
+            scene_span_count_q <= 32'd0;
+            scene_flags_q <= 32'd0;
+            scene_header_reserved_valid_q <= 1'b0;
+            scene_header_valid_q <= 1'b0;
+            scene_header_base_q <= 32'd0;
+            scene_header_capacity_q <= 32'd0;
+            scene_first_span_q <= 32'd0;
+            scene_line_span_count_q <= 32'd0;
+            scene_line_span_index_q <= 32'd0;
+            scene_source_offset_q <= 32'd0;
+            scene_source_bytes_q <= 32'd0;
+            scene_source_pitch_q <= 32'd0;
+            scene_source_x_y_q <= 32'd0;
+            scene_destination_x_length_q <= 32'd0;
+            scene_span_flags_q <= 32'd0;
+            scene_span_value_q <= 32'd0;
+            scene_span_reserved_q <= 32'd0;
+            scene_source_row_product_q <= 48'd0;
+            scene_source_row_low_q <= 32'd0;
+            scene_source_row_high_q <= 32'd0;
             issue_address <= 32'd0;
             issue_beats_remaining <= 11'd0;
-            first_byte_offset <= 3'd0;
+            first_byte_offset <= 0;
             segment_payload_bytes_q <= 14'd0;
             ar_request_valid <= 1'b0;
             ar_request_address <= 32'd0;
-            ar_request_beats <= 5'd0;
-            burst_head_beats <= 5'd0;
+            ar_request_beats <= 0;
+            burst_head_beats <= 0;
             burst_write_ptr <= 3'd0;
             burst_read_ptr <= 3'd0;
             burst_count <= 4'd0;
-            reserved_beats <= 6'd0;
+            reserved_beats <= 0;
             response_active <= 1'b0;
-            response_beats_left <= 5'd0;
-            beat_write_ptr <= 5'd0;
-            beat_read_ptr <= 5'd0;
-            beat_count <= 6'd0;
+            response_beats_left <= 0;
+            beat_write_ptr <= 0;
+            beat_read_ptr <= 0;
+            beat_count <= 0;
             beat_active <= 1'b0;
             first_beat <= 1'b0;
-            active_beat <= 64'd0;
-            active_byte <= 3'd0;
-            line_write_valid_q <= 1'b0;
+            active_beat <= {AXI_DATA_WIDTH{1'b0}};
+            active_byte <= 0;
+            line_write_enable_q <= 2'b00;
             line_write_mapped_q <= 1'b0;
             line_write_slot_q <= 2'd0;
             line_write_x_q <= 11'd0;
@@ -437,20 +624,38 @@ module astra_framebuffer_line_builder #(
             line_write_byte1_q <= 8'd0;
             line_write_byte2_q <= 8'd0;
             line_write_byte3_q <= 8'd0;
+            line_write_second_byte0_q <= 8'd0;
+            line_write_second_byte1_q <= 8'd0;
+            line_write_second_byte2_q <= 8'd0;
+            line_write_second_byte3_q <= 8'd0;
         end else begin
+            if (scene_changed)
+                scene_header_valid_q <= 1'b0;
             done <= 1'b0;
             line_complete <= 1'b0;
 
-            line_write_valid_q <= line_write;
+            line_write_enable_q <= line_write ?
+                (line_write_two ? 2'b11 : 2'b01) : 2'b00;
             if (line_write) begin
-                line_write_mapped_q <= mapped_write;
+                line_write_mapped_q <= mapped_write || scene_solid_write;
                 line_write_slot_q <= build_slot_q;
                 line_write_x_q <= output_x_q;
-                line_write_format_q <= format_q;
-                line_write_byte0_q <= active_byte0;
-                line_write_byte1_q <= active_byte1;
-                line_write_byte2_q <= active_byte2;
-                line_write_byte3_q <= active_byte3;
+                line_write_format_q <= scene_solid_write ?
+                    FORMAT_RGB565 : format_q;
+                line_write_byte0_q <= scene_solid_write ?
+                    scene_span_value_q[15:8] : active_byte0;
+                line_write_byte1_q <= scene_solid_write ?
+                    scene_span_value_q[7:0] : active_byte1;
+                line_write_byte2_q <= scene_solid_write ? 8'd0 : active_byte2;
+                line_write_byte3_q <= scene_solid_write ? 8'd0 : active_byte3;
+                line_write_second_byte0_q <= scene_solid_write ?
+                    scene_span_value_q[15:8] : second_byte0;
+                line_write_second_byte1_q <= scene_solid_write ?
+                    scene_span_value_q[7:0] : second_byte1;
+                line_write_second_byte2_q <= scene_solid_write ?
+                    8'd0 : second_byte2;
+                line_write_second_byte3_q <= scene_solid_write ?
+                    8'd0 : second_byte3;
             end
 
             if (busy && !deadline_error)
@@ -474,7 +679,150 @@ module astra_framebuffer_line_builder #(
             if (response_accept) begin
                 if (state == ST_SEGMENT) begin
                     beat_fifo[beat_write_ptr] <= m_axi_rdata;
-                    beat_write_ptr <= beat_write_ptr + 5'd1;
+                    beat_write_ptr <= beat_write_ptr + 1'b1;
+                end
+                if (scene_metadata_response) begin
+                    scene_metadata_beat_q <= scene_metadata_beat_q + 4'd1;
+                    case (state)
+                        ST_SCENE_HEADER_RESPONSE: begin
+                            if (AXI_DATA_WIDTH == 128) begin
+                                case (scene_metadata_beat_q)
+                                    4'd0: begin
+                                        if (beat_be32(m_axi_rdata, 2'd0) !=
+                                                `ASTRA_WINDOW_SCENE_COMPILED_MAGIC ||
+                                            beat_be32(m_axi_rdata, 2'd1) !=
+                                                `ASTRA_WINDOW_SCENE_COMPILED_VERSION)
+                                            scene_header_reserved_valid_q <= 1'b0;
+                                        scene_total_bytes_q <=
+                                            beat_be32(m_axi_rdata, 2'd2);
+                                        scene_generation_q <=
+                                            beat_be32(m_axi_rdata, 2'd3);
+                                    end
+                                    4'd1: begin
+                                        scene_width_height_q <=
+                                            beat_be32(m_axi_rdata, 2'd0);
+                                        scene_line_count_q <=
+                                            beat_be32(m_axi_rdata, 2'd1);
+                                        scene_line_offset_q <=
+                                            beat_be32(m_axi_rdata, 2'd2);
+                                        scene_span_offset_q <=
+                                            beat_be32(m_axi_rdata, 2'd3);
+                                    end
+                                    4'd2: begin
+                                        scene_span_count_q <=
+                                            beat_be32(m_axi_rdata, 2'd0);
+                                        scene_flags_q <=
+                                            beat_be32(m_axi_rdata, 2'd1);
+                                        if ((m_axi_rdata >> 64) != 0)
+                                            scene_header_reserved_valid_q <= 1'b0;
+                                    end
+                                    default:
+                                        if (m_axi_rdata != 128'd0)
+                                            scene_header_reserved_valid_q <= 1'b0;
+                                endcase
+                            end else begin
+                                case (scene_metadata_beat_q)
+                                    4'd0: if (beat_be32(m_axi_rdata, 2'd0) !=
+                                            `ASTRA_WINDOW_SCENE_COMPILED_MAGIC ||
+                                        beat_be32(m_axi_rdata, 2'd1) !=
+                                            `ASTRA_WINDOW_SCENE_COMPILED_VERSION)
+                                        scene_header_reserved_valid_q <= 1'b0;
+                                    4'd1: begin
+                                        scene_total_bytes_q <=
+                                            beat_be32(m_axi_rdata, 2'd0);
+                                        scene_generation_q <=
+                                            beat_be32(m_axi_rdata, 2'd1);
+                                    end
+                                    4'd2: begin
+                                        scene_width_height_q <=
+                                            beat_be32(m_axi_rdata, 2'd0);
+                                        scene_line_count_q <=
+                                            beat_be32(m_axi_rdata, 2'd1);
+                                    end
+                                    4'd3: begin
+                                        scene_line_offset_q <=
+                                            beat_be32(m_axi_rdata, 2'd0);
+                                        scene_span_offset_q <=
+                                            beat_be32(m_axi_rdata, 2'd1);
+                                    end
+                                    4'd4: begin
+                                        scene_span_count_q <=
+                                            beat_be32(m_axi_rdata, 2'd0);
+                                        scene_flags_q <=
+                                            beat_be32(m_axi_rdata, 2'd1);
+                                    end
+                                    default: if (m_axi_rdata[63:0] != 64'd0)
+                                        scene_header_reserved_valid_q <= 1'b0;
+                                endcase
+                            end
+                        end
+                        ST_SCENE_LINE_RESPONSE: begin
+                            scene_first_span_q <=
+                                beat_be32(m_axi_rdata,
+                                    AXI_DATA_WIDTH == 128 &&
+                                    scene_line_address[3] ? 2'd2 : 2'd0);
+                            scene_line_span_count_q <=
+                                beat_be32(m_axi_rdata,
+                                    AXI_DATA_WIDTH == 128 &&
+                                    scene_line_address[3] ? 2'd3 : 2'd1);
+                        end
+                        ST_SCENE_SPAN_RESPONSE: begin
+                            if (AXI_DATA_WIDTH == 128) begin
+                                case (scene_metadata_beat_q)
+                                    4'd0: begin
+                                        scene_source_offset_q <=
+                                            beat_be32(m_axi_rdata, 2'd0);
+                                        scene_source_bytes_q <=
+                                            beat_be32(m_axi_rdata, 2'd1);
+                                        scene_source_pitch_q <=
+                                            beat_be32(m_axi_rdata, 2'd2);
+                                        scene_source_x_y_q <=
+                                            beat_be32(m_axi_rdata, 2'd3);
+                                    end
+                                    4'd1: begin
+                                        scene_destination_x_length_q <=
+                                            beat_be32(m_axi_rdata, 2'd0);
+                                        scene_span_flags_q <=
+                                            beat_be32(m_axi_rdata, 2'd1);
+                                        scene_span_value_q <=
+                                            beat_be32(m_axi_rdata, 2'd2);
+                                        scene_span_reserved_q <=
+                                            beat_be32(m_axi_rdata, 2'd3);
+                                    end
+                                    default: begin end
+                                endcase
+                            end else begin
+                                case (scene_metadata_beat_q)
+                                    4'd0: begin
+                                        scene_source_offset_q <=
+                                            beat_be32(m_axi_rdata, 2'd0);
+                                        scene_source_bytes_q <=
+                                            beat_be32(m_axi_rdata, 2'd1);
+                                    end
+                                    4'd1: begin
+                                        scene_source_pitch_q <=
+                                            beat_be32(m_axi_rdata, 2'd0);
+                                        scene_source_x_y_q <=
+                                            beat_be32(m_axi_rdata, 2'd1);
+                                    end
+                                    4'd2: begin
+                                        scene_destination_x_length_q <=
+                                            beat_be32(m_axi_rdata, 2'd0);
+                                        scene_span_flags_q <=
+                                            beat_be32(m_axi_rdata, 2'd1);
+                                    end
+                                    4'd3: begin
+                                        scene_span_value_q <=
+                                            beat_be32(m_axi_rdata, 2'd0);
+                                        scene_span_reserved_q <=
+                                            beat_be32(m_axi_rdata, 2'd1);
+                                    end
+                                    default: begin end
+                                endcase
+                            end
+                        end
+                        default: begin end
+                    endcase
                 end
                 if (m_axi_rid != AXI_ID || m_axi_rresp != 2'b00 ||
                     m_axi_rlast != expected_response_last)
@@ -482,10 +830,10 @@ module astra_framebuffer_line_builder #(
 
                 if (burst_pop) begin
                     response_active <= 1'b0;
-                    response_beats_left <= 5'd0;
+                    response_beats_left <= 0;
                 end else begin
                     response_active <= 1'b1;
-                    response_beats_left <= expected_response_beats - 5'd1;
+                    response_beats_left <= expected_response_beats - 1'b1;
                 end
             end
 
@@ -505,7 +853,7 @@ module astra_framebuffer_line_builder #(
                         burst_head_beats <= burst_fifo[burst_read_ptr];
                         burst_read_ptr <= burst_read_ptr + 3'd1;
                     end else begin
-                        burst_head_beats <= 5'd0;
+                        burst_head_beats <= 0;
                     end
                 end
                 2'b11: begin
@@ -523,10 +871,10 @@ module astra_framebuffer_line_builder #(
 
             case ({ar_accept, beat_pop})
                 2'b10: reserved_beats <=
-                    reserved_beats + {1'b0, ar_request_beats};
-                2'b01: reserved_beats <= reserved_beats - 6'd1;
+                    reserved_beats + ar_request_beats_wide;
+                2'b01: reserved_beats <= reserved_beats - 1'b1;
                 2'b11: reserved_beats <=
-                    reserved_beats + {1'b0, ar_request_beats} - 6'd1;
+                    reserved_beats + ar_request_beats_wide - 1'b1;
                 default: begin end
             endcase
 
@@ -540,18 +888,20 @@ module astra_framebuffer_line_builder #(
                 if (ar_accept) begin
                     ar_request_valid <= 1'b0;
                     issue_address <= issue_address +
-                        ({27'd0, ar_request_beats} << 3);
+                        ({{(32-BURST_BEAT_WIDTH){1'b0}},
+                          ar_request_beats} << BEAT_SHIFT);
                     issue_beats_remaining <= issue_beats_remaining -
                         ar_request_beats;
                     read_bytes <= read_bytes +
-                        ({27'd0, ar_request_beats} << 3);
+                        ({{(32-BURST_BEAT_WIDTH){1'b0}},
+                          ar_request_beats} << BEAT_SHIFT);
                 end
 
                 if (beat_pop)
-                    beat_read_ptr <= beat_read_ptr + 5'd1;
+                    beat_read_ptr <= beat_read_ptr + 1'b1;
                 case ({beat_push, beat_pop})
-                    2'b10: beat_count <= beat_count + 6'd1;
-                    2'b01: beat_count <= beat_count - 6'd1;
+                    2'b10: beat_count <= beat_count + 1'b1;
+                    2'b01: beat_count <= beat_count - 1'b1;
                     default: begin end
                 endcase
             end
@@ -579,9 +929,37 @@ module astra_framebuffer_line_builder #(
                         viewport_y_q <= viewport_y;
                         wrap_x_q <= wrap_x;
                         wrap_y_q <= wrap_y;
+                        window_scene_q <= window_scene;
+                        window_scene_bytes_q <= window_scene_bytes;
                         output_x_q <= 11'd0;
                         busy <= 1'b1;
-                        if (TRUSTED_CONFIG != 0)
+                        if (window_scene) begin
+                            format_q <= FORMAT_RGB565;
+                            bytes_shift_q <= 2'd1;
+                            bytes_per_pixel_q <= 3'd2;
+                            scene_header_reserved_valid_q <= 1'b1;
+                            if (format != FORMAT_RGB565 ||
+                                framebuffer_base[5:0] != 6'd0 ||
+                                window_scene_bytes <
+                                    `ASTRA_WINDOW_SCENE_COMPILED_HEADER_BYTES ||
+                                framebuffer_base < arena_base ||
+                                {1'b0, framebuffer_base} +
+                                    {1'b0, window_scene_bytes} >
+                                    {1'b0, arena_limit}) begin
+                                config_error <= 1'b1;
+                                busy <= 1'b0;
+                                done <= 1'b1;
+                            end else if (!scene_changed &&
+                                         scene_header_valid_q &&
+                                         scene_header_base_q ==
+                                             framebuffer_base &&
+                                         scene_header_capacity_q ==
+                                             window_scene_bytes) begin
+                                state <= ST_SCENE_LINE_REQUEST;
+                            end else begin
+                                state <= ST_SCENE_HEADER_REQUEST;
+                            end
+                        end else if (TRUSTED_CONFIG != 0)
                             state <= ST_PLAN_Y;
                         else
                             state <= ST_VALIDATE;
@@ -712,9 +1090,9 @@ module astra_framebuffer_line_builder #(
 
                 ST_FILL_LEFT: begin
                     if (fill_pixels_q != 11'd0) begin
-                        output_x_q <= output_x_q + 11'd1;
-                        fill_pixels_q <= fill_pixels_q - 11'd1;
-                        if (fill_pixels_q == 11'd1) begin
+                        output_x_q <= output_x_q + fill_write_count;
+                        fill_pixels_q <= fill_pixels_q - fill_write_count;
+                        if (fill_pixels_q <= fill_write_count) begin
                             if (mapped_pixels_q != 11'd0)
                                 state <= ST_SEGMENT_ADDRESS;
                             else if (right_pixels_q != 11'd0) begin
@@ -729,8 +1107,9 @@ module astra_framebuffer_line_builder #(
                 end
 
                 ST_SEGMENT_ADDRESS: begin
-                    issue_address <= {segment_byte_address[31:3], 3'b000};
-                    first_byte_offset <= segment_byte_address[2:0];
+                    issue_address <= segment_byte_address & ~(BEAT_BYTES - 1);
+                    first_byte_offset <=
+                        segment_byte_address[BEAT_SHIFT-1:0];
                     segment_payload_bytes_q <= segment_payload_bytes;
                     state <= ST_SEGMENT_COUNTS;
                 end
@@ -739,61 +1118,56 @@ module astra_framebuffer_line_builder #(
                     // Keep address generation and the rounded byte-to-beat
                     // conversion on separate 200 MHz cycles.
                     issue_beats_remaining <=
-                        ({1'b0, segment_payload_bytes_q} +
-                         {12'd0, first_byte_offset} + 15'd7) >> 3;
+                        ({1'b0, segment_payload_bytes_q} + first_byte_offset +
+                         BEAT_BYTES - 1) >> BEAT_SHIFT;
                     ar_request_valid <= 1'b0;
                     segment_pixels_remaining <= mapped_pixels_q;
                     segment_pixels_active_q <= mapped_pixels_q != 11'd0;
-                    segment_last_pixel_q <= mapped_pixels_q == 11'd1;
                     burst_write_ptr <= 3'd0;
                     burst_read_ptr <= 3'd0;
                     burst_count <= 4'd0;
-                    reserved_beats <= 6'd0;
-                    burst_head_beats <= 5'd0;
+                    reserved_beats <= 0;
+                    burst_head_beats <= 0;
                     response_active <= 1'b0;
-                    response_beats_left <= 5'd0;
-                    beat_write_ptr <= 5'd0;
-                    beat_read_ptr <= 5'd0;
-                    beat_count <= 6'd0;
+                    response_beats_left <= 0;
+                    beat_write_ptr <= 0;
+                    beat_read_ptr <= 0;
+                    beat_count <= 0;
                     beat_active <= 1'b0;
                     first_beat <= 1'b1;
-                    active_byte <= 3'd0;
+                    active_byte <= 0;
                     state <= ST_SEGMENT;
                 end
 
                 ST_SEGMENT: begin
-                    if (!beat_active && beat_count != 6'd0) begin
+                    if (!beat_active && beat_count != 0) begin
                         active_beat <= beat_fifo[beat_read_ptr];
-                        active_byte <= first_beat ? first_byte_offset : 3'd0;
+                        active_byte <= first_beat ? first_byte_offset : 0;
                         first_beat <= 1'b0;
                         beat_active <= 1'b1;
                     end else if (beat_active && segment_pixels_active_q) begin
-                        output_x_q <= output_x_q + 11'd1;
+                        output_x_q <= output_x_q + mapped_write_count;
                         segment_pixels_remaining <=
-                            segment_pixels_remaining - 11'd1;
-                        if (segment_last_pixel_q) begin
+                            segment_pixels_remaining - mapped_write_count;
+                        if (segment_pixels_remaining <= mapped_write_count) begin
                             segment_pixels_active_q <= 1'b0;
-                            segment_last_pixel_q <= 1'b0;
                             beat_active <= 1'b0;
                             ar_request_valid <= 1'b0;
                             issue_beats_remaining <= 11'd0;
-                            beat_count <= 6'd0;
+                            beat_count <= 0;
                             state <= ST_SEGMENT_DRAIN;
                         end else begin
-                            segment_last_pixel_q <=
-                                segment_pixels_remaining == 11'd2;
-                            if ({1'b0, active_byte} +
-                                {1'b0, bytes_per_pixel_q} >= 4'd8) begin
-                                if (beat_count != 6'd0) begin
+                            if (active_byte_after_write >= BEAT_BYTES) begin
+                                if (beat_count != 0) begin
                                     active_beat <= beat_fifo[beat_read_ptr];
-                                    active_byte <= 3'd0;
+                                    active_byte <= 0;
                                     beat_active <= 1'b1;
                                 end else begin
                                     beat_active <= 1'b0;
                                 end
                             end else begin
-                                active_byte <= active_byte +
-                                    bytes_per_pixel_q;
+                                active_byte <=
+                                    active_byte_after_write[BEAT_SHIFT-1:0];
                             end
                         end
                     end
@@ -805,6 +1179,8 @@ module astra_framebuffer_line_builder #(
                             busy <= 1'b0;
                             done <= 1'b1;
                             state <= ST_IDLE;
+                        end else if (window_scene_q) begin
+                            state <= ST_SCENE_NEXT_SPAN;
                         end else if (wrap_x_q && output_x_q < OUTPUT_WIDTH) begin
                             source_x_q <= 13'd0;
                             mapped_pixels_q <= OUTPUT_WIDTH - output_x_q;
@@ -820,12 +1196,210 @@ module astra_framebuffer_line_builder #(
 
                 ST_FILL_RIGHT: begin
                     if (fill_pixels_q != 11'd0) begin
-                        output_x_q <= output_x_q + 11'd1;
-                        fill_pixels_q <= fill_pixels_q - 11'd1;
-                        if (fill_pixels_q == 11'd1)
+                        output_x_q <= output_x_q + fill_write_count;
+                        fill_pixels_q <= fill_pixels_q - fill_write_count;
+                        if (fill_pixels_q <= fill_write_count)
                             state <= ST_FINISH;
                     end else begin
                         state <= ST_FINISH;
+                    end
+                end
+
+                ST_SCENE_HEADER_REQUEST: begin
+                    if (!ar_request_valid) begin
+                        ar_request_valid <= 1'b1;
+                        ar_request_address <= framebuffer_base_q;
+                        ar_request_beats <= 64 / BEAT_BYTES;
+                    end
+                    if (ar_accept) begin
+                        ar_request_valid <= 1'b0;
+                        read_bytes <= read_bytes + 32'd64;
+                        scene_metadata_beat_q <= 4'd0;
+                        state <= ST_SCENE_HEADER_RESPONSE;
+                    end
+                end
+
+                ST_SCENE_HEADER_RESPONSE: begin
+                    if (burst_count == 4'd0 && !response_active)
+                        state <= ST_SCENE_HEADER_CHECK;
+                end
+
+                ST_SCENE_HEADER_CHECK: begin
+                    if (fetch_error || !scene_header_reserved_valid_q ||
+                        scene_total_bytes_q <
+                            `ASTRA_WINDOW_SCENE_COMPILED_HEADER_BYTES ||
+                        scene_total_bytes_q > window_scene_bytes_q ||
+                        scene_generation_q == 32'd0 ||
+                        scene_width_height_q !=
+                            {OUTPUT_WIDTH[15:0], OUTPUT_HEIGHT[15:0]} ||
+                        scene_line_count_q != OUTPUT_HEIGHT ||
+                        scene_line_offset_q <
+                            `ASTRA_WINDOW_SCENE_COMPILED_HEADER_BYTES ||
+                        scene_line_offset_q[2:0] != 3'd0 ||
+                        scene_line_table_end >
+                            {5'd0, scene_total_bytes_q} ||
+                        scene_span_offset_q[5:0] != 6'd0 ||
+                        {1'b0, scene_span_offset_q} <
+                            scene_line_table_end ||
+                        scene_span_table_end >
+                            {6'd0, scene_total_bytes_q} ||
+                        scene_flags_q != 32'd0) begin
+                        config_error <= 1'b1;
+                        state <= ST_FINISH;
+                    end else begin
+                        scene_header_valid_q <= 1'b1;
+                        scene_header_base_q <= framebuffer_base_q;
+                        scene_header_capacity_q <= window_scene_bytes_q;
+                        state <= ST_SCENE_LINE_REQUEST;
+                    end
+                end
+
+                ST_SCENE_LINE_REQUEST: begin
+                    if (!ar_request_valid) begin
+                        ar_request_valid <= 1'b1;
+                        ar_request_address <=
+                            scene_line_address & ~(BEAT_BYTES - 1);
+                        ar_request_beats <= 5'd1;
+                    end
+                    if (ar_accept) begin
+                        ar_request_valid <= 1'b0;
+                        read_bytes <= read_bytes + BEAT_BYTES;
+                        scene_metadata_beat_q <= 4'd0;
+                        state <= ST_SCENE_LINE_RESPONSE;
+                    end
+                end
+
+                ST_SCENE_LINE_RESPONSE: begin
+                    if (burst_count == 4'd0 && !response_active)
+                        state <= ST_SCENE_LINE_CHECK;
+                end
+
+                ST_SCENE_LINE_CHECK: begin
+                    if (fetch_error || scene_line_span_count_q == 32'd0 ||
+                        scene_line_span_end >
+                            {1'b0, scene_span_count_q}) begin
+                        config_error <= 1'b1;
+                        state <= ST_FINISH;
+                    end else begin
+                        scene_line_span_index_q <= 32'd0;
+                        output_x_q <= 11'd0;
+                        state <= ST_SCENE_SPAN_REQUEST;
+                    end
+                end
+
+                ST_SCENE_SPAN_REQUEST: begin
+                    if (!ar_request_valid) begin
+                        ar_request_valid <= 1'b1;
+                        ar_request_address <= framebuffer_base_q +
+                            scene_span_offset_q + (scene_span_number << 5);
+                        ar_request_beats <= 32 / BEAT_BYTES;
+                    end
+                    if (ar_accept) begin
+                        ar_request_valid <= 1'b0;
+                        read_bytes <= read_bytes + 32'd32;
+                        scene_metadata_beat_q <= 4'd0;
+                        state <= ST_SCENE_SPAN_RESPONSE;
+                    end
+                end
+
+                ST_SCENE_SPAN_RESPONSE: begin
+                    if (burst_count == 4'd0 && !response_active)
+                        state <= ST_SCENE_SPAN_CHECK;
+                end
+
+                ST_SCENE_SPAN_CHECK: begin
+                    if (fetch_error || scene_span_reserved_q != 32'd0 ||
+                        scene_destination_x_length_q[31:16] != output_x_q ||
+                        scene_destination_x_length_q[15:0] == 16'd0 ||
+                        scene_destination_end > OUTPUT_WIDTH) begin
+                        config_error <= 1'b1;
+                        state <= ST_FINISH;
+                    end else if (scene_span_flags_q ==
+                                     `ASTRA_WINDOW_SCENE_SPAN_SOLID) begin
+                        if (scene_source_offset_q != 32'd0 ||
+                            scene_source_bytes_q != 32'd0 ||
+                            scene_source_pitch_q != 32'd0 ||
+                            scene_source_x_y_q != 32'd0 ||
+                            scene_span_value_q[31:16] != 16'd0) begin
+                            config_error <= 1'b1;
+                            state <= ST_FINISH;
+                        end else begin
+                            fill_pixels_q <=
+                                scene_destination_x_length_q[10:0];
+                            state <= ST_SCENE_SOLID;
+                        end
+                    end else if (scene_span_flags_q == 32'd0 &&
+                                 scene_span_value_q == 32'd0) begin
+                        scene_source_row_low_q <=
+                            scene_source_pitch_q[15:0] *
+                                scene_source_x_y_q[15:0];
+                        scene_source_row_high_q <=
+                            scene_source_pitch_q[31:16] *
+                                scene_source_x_y_q[15:0];
+                        state <= ST_SCENE_SOURCE_MULTIPLY;
+                    end else begin
+                        config_error <= 1'b1;
+                        state <= ST_FINISH;
+                    end
+                end
+
+                ST_SCENE_SOURCE_MULTIPLY: begin
+                    scene_source_row_product_q <=
+                        scene_source_row_combined;
+                    state <= ST_SCENE_SOURCE_CHECK;
+                end
+
+                ST_SCENE_SOURCE_CHECK: begin
+                    if (scene_source_offset_q[5:0] != 6'd0 ||
+                        scene_source_bytes_q == 32'd0 ||
+                        scene_source_pitch_q <
+                            (scene_source_row_bytes << 1) ||
+                        scene_source_required >
+                            {17'd0, scene_source_bytes_q} ||
+                        scene_source_end >
+                            {1'b0, arena_limit - arena_base} ||
+                        !(({1'b0, arena_base} + scene_source_end <=
+                               {1'b0, framebuffer_base_q}) ||
+                          ({1'b0, arena_base} +
+                               {1'b0, scene_source_offset_q} >=
+                           scene_compiled_end))) begin
+                        config_error <= 1'b1;
+                        state <= ST_FINISH;
+                    end else begin
+                        row_address_q <= arena_base + scene_source_offset_q +
+                            scene_source_row_product_q[31:0] +
+                            ({16'd0, scene_source_x_y_q[31:16]} << 1);
+                        source_x_q <= 13'd0;
+                        mapped_pixels_q <=
+                            scene_destination_x_length_q[10:0];
+                        right_pixels_q <= 11'd0;
+                        state <= ST_SEGMENT_ADDRESS;
+                    end
+                end
+
+                ST_SCENE_SOLID: begin
+                    if (fill_pixels_q != 11'd0) begin
+                        output_x_q <= output_x_q + fill_write_count;
+                        fill_pixels_q <= fill_pixels_q - fill_write_count;
+                        if (fill_pixels_q <= fill_write_count)
+                            state <= ST_SCENE_NEXT_SPAN;
+                    end else begin
+                        config_error <= 1'b1;
+                        state <= ST_FINISH;
+                    end
+                end
+
+                ST_SCENE_NEXT_SPAN: begin
+                    if (scene_line_span_index_q + 32'd1 >=
+                            scene_line_span_count_q) begin
+                        if (output_x_q != OUTPUT_WIDTH) begin
+                            config_error <= 1'b1;
+                        end
+                        state <= ST_FINISH;
+                    end else begin
+                        scene_line_span_index_q <=
+                            scene_line_span_index_q + 32'd1;
+                        state <= ST_SCENE_SPAN_REQUEST;
                     end
                 end
 
@@ -854,7 +1428,7 @@ module astra_framebuffer_line_builder #(
                 slot_valid[build_slot_q] <= 1'b0;
                 ar_request_valid <= 1'b0;
                 issue_beats_remaining <= 11'd0;
-                beat_count <= 6'd0;
+                beat_count <= 0;
                 beat_active <= 1'b0;
                 segment_pixels_active_q <= 1'b0;
                 state <= ST_SEGMENT_DRAIN;

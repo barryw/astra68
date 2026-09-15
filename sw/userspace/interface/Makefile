@@ -21,7 +21,8 @@ LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
 	-T $(RUNTIME)/astra_library.ld
 INTERFACE_TARGET := build/m68k/libraries/interface.library
 INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
-	build/m68k/text_surface.o build/m68k/undo.o build/m68k/text_model.o
+	build/m68k/text_surface.o build/m68k/undo.o build/m68k/text_model.o \
+	build/m68k/scroll.o
 INPUT_TARGET := build/m68k/libraries/input.library
 INPUT_OBJECTS := build/m68k/input_library.o
 GRAPHICS_PIC_LIB := $(GRAPHICS)/build/m68k/libastragraphics-pic.a
@@ -33,14 +34,9 @@ INPUT_HOST_TEST := build/host/test_input_library
 TEXT_SURFACE_HOST_TEST := build/host/test_text_surface
 UNDO_HOST_TEST := build/host/test_undo
 TEXT_MODEL_HOST_TEST := build/host/test_text_model
+SCROLL_HOST_TEST := build/host/test_scroll
 
 all: $(INTERFACE_TARGET) $(INPUT_TARGET) library-contract
-
-.PHONY: dependencies
-dependencies:
-	$(MAKE) -C $(GRAPHICS) pic
-	$(MAKE) -C $(NDK) pic
-	$(MAKE) -C $(RUNTIME) pic
 
 $(GRAPHICS)/build/generated/astra_font8x8.inc \
 $(GRAPHICS)/build/generated/astra_ui_font.inc \
@@ -72,6 +68,11 @@ build/m68k/text_model.o: src/text_model.c
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
 
+build/m68k/scroll.o: src/scroll.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
 build/m68k/input_library.o: src/input_library.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
@@ -89,10 +90,10 @@ $(RUNTIME_PIC_LIB):
 	$(MAKE) -C $(RUNTIME) pic
 
 $(INTERFACE_TARGET): $(INTERFACE_OBJECTS) $(GRAPHICS_PIC_LIB) \
-		$(NDK_PIC_LIB) $(RUNTIME_PIC_LIB) $(RUNTIME)/astra_library.ld | dependencies
+		$(NDK_PIC_LIB) $(RUNTIME_PIC_LIB) $(RUNTIME)/astra_library.ld
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(LIBRARY_LINK_FLAGS) \
-		-Wl,-soname,interface.library.2 -o $@ $(INTERFACE_OBJECTS) \
+		-Wl,-soname,interface.library.5 -o $@ $(INTERFACE_OBJECTS) \
 		-Wl,--start-group $(GRAPHICS_PIC_LIB) $(NDK_PIC_LIB) \
 		$(RUNTIME_PIC_LIB) -Wl,--end-group -lgcc
 
@@ -106,13 +107,13 @@ $(INPUT_TARGET): $(INPUT_OBJECTS) $(NDK_PIC_LIB) $(RUNTIME_PIC_LIB) \
 
 library-contract: $(INTERFACE_TARGET) $(INPUT_TARGET)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library 2.6.0 ABI 2.6$$'
+		grep -q '^interface.library 5.1.0 ABI 5.1$$'
 	@python3 ../../../tools/library_info.py $(INPUT_TARGET) | \
 		grep -q '^input.library 1.0.0 ABI 1.0$$'
 	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET) $(INPUT_TARGET))
 
 $(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/text_surface.c \
-		src/text_model.c $(NDK_HOST_UTF8) tests/test_interface.c \
+		src/text_model.c src/scroll.c $(NDK_HOST_UTF8) tests/test_interface.c \
 		tests/test_layout.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -DASTRA_INTERFACE_TEST \
@@ -140,23 +141,29 @@ $(TEXT_MODEL_HOST_TEST): src/text_model.c tests/test_text_model.c \
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/text_model.c $(NDK_HOST_UTF8) tests/test_text_model.c -o $@
 
+$(SCROLL_HOST_TEST): src/scroll.c tests/test_scroll.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
+
 $(NDK_HOST_UTF8):
 	$(MAKE) -C $(NDK) build/host/utf8.o
 
 test: $(INTERFACE_HOST_TEST) $(INPUT_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
-		$(UNDO_HOST_TEST) $(TEXT_MODEL_HOST_TEST)
+		$(UNDO_HOST_TEST) $(TEXT_MODEL_HOST_TEST) $(SCROLL_HOST_TEST)
 	./$(INTERFACE_HOST_TEST)
 	./$(INPUT_HOST_TEST)
 	./$(TEXT_SURFACE_HOST_TEST)
 	./$(UNDO_HOST_TEST)
 	./$(TEXT_MODEL_HOST_TEST)
+	./$(SCROLL_HOST_TEST)
 
 sanitize: $(NDK_HOST_UTF8)
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -DASTRA_INTERFACE_TEST -DASTRA_NDK_TEST \
 		-ffunction-sections -Wl,--gc-sections src/interface_library.c \
-		src/control.c src/text_surface.c src/text_model.c $(NDK_HOST_UTF8) \
+		src/control.c src/text_surface.c src/text_model.c src/scroll.c \
+		$(NDK_HOST_UTF8) \
 		tests/test_interface.c tests/test_layout.c \
 		-o build/host/test_interface_sanitize
 	./build/host/test_interface_sanitize
@@ -176,6 +183,10 @@ sanitize: $(NDK_HOST_UTF8)
 		$(SANITIZER_FLAGS) src/text_model.c $(NDK_HOST_UTF8) \
 		tests/test_text_model.c -o build/host/test_text_model_sanitize
 	./build/host/test_text_model_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/scroll.c tests/test_scroll.c \
+		-o build/host/test_scroll_sanitize
+	./build/host/test_scroll_sanitize
 
 analyze:
 	@mkdir -p build/analyzer
@@ -191,6 +202,8 @@ analyze:
 		-c src/undo.c -o build/analyzer/undo.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/text_model.c -o build/analyzer/text_model.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/scroll.c -o build/analyzer/scroll.o
 
 clean:
 	rm -rf build

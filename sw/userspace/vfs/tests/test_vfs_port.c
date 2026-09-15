@@ -1650,6 +1650,14 @@ test_lazy_bulk_path_read_binds_a_sized_area(void)
                                     &size) == ASTRA_VFS_OK);
     assert(moved == 8u && size == 8u && bytes != NULL);
     assert(host.area_sizes[0] != 0u);
+    bytes = NULL;
+    moved = 0u;
+    size = 0u;
+    assert(astra_vfs_port_read_path_inline(&remote, "/small", &bytes, &moved,
+                                           &size) == ASTRA_VFS_OK);
+    assert(moved == 8u && size == 8u && bytes != NULL);
+    for (uint32_t index = 0u; index < moved; ++index)
+        assert(bytes[index] == (uint8_t)index);
     assert(astra_vfs_disconnect(&remote) == ASTRA_VFS_OK);
     assert(mock_area_maps == 0u);
     served = NULL;

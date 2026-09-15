@@ -9,13 +9,15 @@
 #include <stdint.h>
 
 #include <astra/attributes.h>
+#include <astra/input_modifiers.h>
+#include <astra/pointer_shapes.h>
 #include <astra/resource.h>
 #include <astra/types.h>
 
 ASTRA_EXTERN_C_BEGIN
 
 /** Pointer event wire-format version. */
-#define ASTRA_POINTER_EVENT_VERSION UINT16_C(1)
+#define ASTRA_POINTER_EVENT_VERSION UINT16_C(2)
 
 enum {
     ASTRA_POINTER_SUBSCRIBE_MOTION = 1u << 0,
@@ -51,12 +53,13 @@ typedef struct AstraPointerEvent {
     int32_t screen_x; /**< Screen-relative x coordinate. */
     int32_t screen_y; /**< Screen-relative y coordinate. */
     uint32_t button; /**< Changed button identifier, or zero. */
+    uint32_t modifiers; /**< Normalized modifier state at event generation. */
     int32_t wheel_x; /**< Horizontal wheel delta. */
     int32_t wheel_y; /**< Vertical wheel delta. */
 } AstraPointerEvent;
 
 /** @cond ASTRA_INTERNAL */
-_Static_assert(sizeof(AstraPointerEvent) == 40u,
+_Static_assert(sizeof(AstraPointerEvent) == 44u,
                "pointer event ABI changed");
 /** @endcond */
 

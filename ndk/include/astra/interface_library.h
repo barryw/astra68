@@ -7,18 +7,19 @@
 #include <astra/clipboard.h>
 #include <astra/control.h>
 #include <astra/interface.h>
+#include <astra/scroll.h>
 #include <astra/text_model.h>
 #include <astra/text_surface.h>
 #include <astra/undo.h>
 #include <astra/window.h>
 
 /** Breaking Interface Kit ABI generation. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 2u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 5u
 /** Latest append-only Interface Kit ABI revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 6u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 1u
 
-/** Append-only Interface Kit 2.x export table. */
-typedef struct AstraInterfaceLibraryV2 {
+/** Interface Kit export table for the ABI declared by this header. */
+typedef struct AstraInterfaceLibrary {
     /** Export-table ABI major. */
     uint16_t abi_major;
     /** Export-table ABI minor. */
@@ -70,6 +71,8 @@ typedef struct AstraInterfaceLibraryV2 {
                                      AstraMonotonicDeadline);
     /** Return the handle usable in a multi-object wait. */
     AstraHandle (*window_event_wait_handle)(const AstraWindow *);
+    /** Return the window-owned coalescing display-vblank wait handle. */
+    AstraHandle (*window_vblank_wait_handle)(const AstraWindow *);
     /** Initialize a retained label. */
     AstraResult (*label_init)(AstraControl *, const AstraLabelInfo *);
     /** Initialize a retained button. */
@@ -87,7 +90,7 @@ typedef struct AstraInterfaceLibraryV2 {
     /** Replace application-owned semantic control state. */
     AstraResult (*ui_set_state)(AstraUIContext *, AstraControl *, uint32_t);
     /** Render damaged retained controls. */
-    AstraResult (*ui_render)(const AstraUIContext *, AstraSurfaceView *);
+    AstraResult (*ui_render)(AstraUIContext *, AstraSurfaceView *);
     /** Dispatch one window event and return its semantic action. */
     AstraResult (*ui_handle_event)(AstraUIContext *, const AstraWindowEvent *,
                                    AstraUIAction *);
@@ -105,16 +108,15 @@ typedef struct AstraInterfaceLibraryV2 {
     AstraResult (*slider_init)(AstraControl *, const AstraRangeInfo *);
     /** Set a value control and emit immediate damage. */
     AstraResult (*control_set_value)(AstraUIContext *, AstraControl *,
-                                     int32_t);
+                                     int64_t);
     /** Read a value control. */
-    AstraResult (*control_get_value)(const AstraControl *, int32_t *);
+    AstraResult (*control_get_value)(const AstraControl *, int64_t *,
+                                     uint32_t *);
     /** Initialize a retained progress indicator. */
     AstraResult (*progress_init)(AstraControl *, const AstraProgressInfo *);
     /** Set progress and indeterminate state. */
     AstraResult (*progress_set)(AstraUIContext *, AstraControl *, uint32_t,
                                 uint32_t);
-    /** Advance time-based control animation. */
-    AstraResult (*ui_tick)(AstraUIContext *, uint64_t);
     /** Replace one control's borrowed UTF-8 text span. */
     AstraResult (*control_set_text)(AstraUIContext *, AstraControl *,
                                     const char *, uint32_t);
@@ -233,44 +235,79 @@ typedef struct AstraInterfaceLibraryV2 {
     /** Replace a field selection while preserving single-line invariants. */
     AstraResult (*field_replace_selection)(AstraUIContext *, AstraControl *,
                                            const char *, uint32_t);
-} AstraInterfaceLibraryV2;
+    /** Advance every active control exactly once for one display vblank. */
+    AstraResult (*ui_vblank)(AstraUIContext *, uint64_t, AstraUIAction *);
+    /** Return nonzero while at least one control owns an animation. */
+    int (*ui_animations_active)(const AstraUIContext *);
+    /** Initialize a mutually exclusive segmented selector. */
+    AstraResult (*segmented_init)(AstraControl *,
+                                  const AstraChoiceInfo *);
+    /** Initialize a retained numeric stepper. */
+    AstraResult (*stepper_init)(AstraControl *, const AstraStepperInfo *);
+    /** Initialize an underline-style peer-navigation tab strip. */
+    AstraResult (*tab_init)(AstraControl *, const AstraChoiceInfo *);
+    /** Initialize a caller-owned shared scroll model. */
+    AstraResult (*scroll_init)(AstraScrollModel *,
+                               const AstraScrollModelInfo *);
+    /** Read one scroll-model snapshot. */
+    AstraResult (*scroll_get_state)(const AstraScrollModel *,
+                                    AstraScrollState *);
+    /** Replace content and viewport extents. */
+    AstraResult (*scroll_set_extents)(AstraScrollModel *, uint32_t, uint32_t,
+                                      uint32_t, uint32_t);
+    /** Set absolute scroll offsets. */
+    AstraResult (*scroll_set_offset)(AstraScrollModel *, uint32_t, uint32_t);
+    /** Add signed scroll deltas. */
+    AstraResult (*scroll_by)(AstraScrollModel *, int32_t, int32_t);
+    /** Replace the borrowed scrollbar-marker array. */
+    AstraResult (*scroll_set_marks)(AstraScrollModel *,
+                                    const AstraScrollMark *, uint32_t);
+    /** Initialize a viewport that clips and translates one direct child. */
+    AstraResult (*scroll_view_init)(AstraControl *,
+                                    const AstraScrollViewInfo *);
+    /** Initialize a scrollbar bound to a shared scroll model. */
+    AstraResult (*scrollbar_init)(AstraControl *,
+                                  const AstraScrollbarInfo *);
+    /** Initialize the divider in a flex-composed split view. */
+    AstraResult (*splitter_init)(AstraControl *,
+                                 const AstraSplitterInfo *);
+    /** Select a server-supplied pointer image for window content. */
+    AstraResult (*window_set_pointer_shape)(AstraWindow *,
+                                            AstraPointerShape);
+    /** Copy, install, and select a custom pointer image. */
+    AstraResult (*window_set_pointer_image)(
+        AstraWindow *, const AstraHardwarePointerImage *);
+    /** Synchronize an override or the image implied by UI hover/capture. */
+    AstraResult (*ui_update_pointer)(const AstraUIContext *, AstraWindow *,
+                                     uint32_t, uint32_t *);
+    /** Initialize a retained vertically-dragged dial. */
+    AstraResult (*dial_init)(AstraControl *, const AstraDialInfo *);
+    /** Initialize a disclosure header controlling a sibling container. */
+    AstraResult (*disclosure_init)(AstraControl *,
+                                   const AstraDisclosureInfo *);
+} AstraInterfaceLibrary;
 
 /** Compute the export-table extent through one named member. */
 #define ASTRA_INTERFACE_LIBRARY_SIZE_THROUGH(member)                       \
-    ((uint32_t)(offsetof(AstraInterfaceLibraryV2, member) +                 \
-                sizeof(((AstraInterfaceLibraryV2 *)0)->member)))
+    ((uint32_t)(offsetof(AstraInterfaceLibrary, member) +                   \
+                sizeof(((AstraInterfaceLibrary *)0)->member)))
 
-/** Interface Kit 2.0 export-table extent. */
-#define ASTRA_INTERFACE_LIBRARY_2_0_SIZE \
-    ASTRA_INTERFACE_LIBRARY_SIZE_THROUGH(container_init)
-/** Interface Kit 2.1 export-table extent. */
-#define ASTRA_INTERFACE_LIBRARY_2_1_SIZE \
-    ASTRA_INTERFACE_LIBRARY_SIZE_THROUGH(text_surface_set_blink)
-/** Interface Kit 2.2 export-table extent. */
-#define ASTRA_INTERFACE_LIBRARY_2_2_SIZE \
-    ASTRA_INTERFACE_LIBRARY_SIZE_THROUGH(text_surface_grid_hit_test)
-/** Interface Kit 2.3 export-table extent. */
-#define ASTRA_INTERFACE_LIBRARY_2_3_SIZE \
-    ASTRA_INTERFACE_LIBRARY_SIZE_THROUGH(text_surface_copy_grid_selection)
-/** Interface Kit 2.4 export-table extent. */
-#define ASTRA_INTERFACE_LIBRARY_2_4_SIZE \
-    ASTRA_INTERFACE_LIBRARY_SIZE_THROUGH(clipboard_clear)
-/** Interface Kit 2.5 export-table extent. */
-#define ASTRA_INTERFACE_LIBRARY_2_5_SIZE \
-    ASTRA_INTERFACE_LIBRARY_SIZE_THROUGH(undo_move_arena)
-/** Interface Kit 2.6 export-table extent. */
-#define ASTRA_INTERFACE_LIBRARY_2_6_SIZE \
-    ASTRA_INTERFACE_LIBRARY_SIZE_THROUGH(field_replace_selection)
+/** Interface Kit 5.0 export-table extent. */
+#define ASTRA_INTERFACE_LIBRARY_5_0_SIZE \
+    ASTRA_INTERFACE_LIBRARY_SIZE_THROUGH(dial_init)
+/** Interface Kit 5.1 export-table extent. */
+#define ASTRA_INTERFACE_LIBRARY_5_1_SIZE \
+    ASTRA_INTERFACE_LIBRARY_SIZE_THROUGH(disclosure_init)
 
 /**
  * Verify one consumer's minimum compatible minor and table extent.
  * @param library Open Interface Kit export table.
- * @param minimum_minor Oldest compatible 2.x minor required by the caller.
+ * @param minimum_minor Oldest compatible 5.x minor required by the caller.
  * @param minimum_structure_size Required append-only table extent.
  * @return Nonzero when the library satisfies both requirements.
  */
 static inline int astra_interface_library_supports(
-    const AstraInterfaceLibraryV2 *library, uint16_t minimum_minor,
+    const AstraInterfaceLibrary *library, uint16_t minimum_minor,
     uint32_t minimum_structure_size)
 {
     return library != NULL &&

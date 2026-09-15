@@ -216,18 +216,18 @@ failed release therefore has no partial effect.
 
 ## IPC ownership
 
-K7 ports have limits in messages, bytes, and attached handles. The development
-pool contains 16 ports, 32 message slots, 8,960 copied bytes, and 256 detached
-handle records. One owner may create four ports and may be charged at most 16
-messages, 4,480 bytes, and 128 detached handles across them. One port may
-configure 1-8 messages and 24-2,240 bytes; one message is 24-280 bytes and
-contains at most eight handles.
+K7 ports have limits in messages, bytes, and attached handles. The current
+object-table budget contains 128 ports and 256 message slots. One owner may
+create 24 ports and may be charged at most 64 messages across them. One port
+may configure 1-16 messages; one message has a 24-byte header, up to 1,024
+inline bytes, and at most eight handles. The corresponding byte budgets are
+derived from those counts and the maximum record size in `sw/kernel/port.h`.
 
-The current GUI source profile extends only those static count ceilings to 24
-ports, 72 messages, six ports per owner, and 40 messages per owner. The
-complete five-service/four-window composition reserves 18 ports and 64
-messages, leaving one maximum-size message queue uncommitted. Ownership,
-backpressure, byte limits, transfer rules, and teardown are unchanged.
+These are accountable kernel resource budgets, not UI policy. The display
+service has no separate four-window ceiling: each admitted window consumes its
+actual handles, ports, wait-set member, metadata, render records, and Media RAM
+extents. Ownership, backpressure, byte limits, transfer rules, and teardown
+apply identically regardless of the number of windows.
 
 The receive-endpoint creator owns every queue charge. A send reserves an
 unpublished message slot and detached records, validates the entire source

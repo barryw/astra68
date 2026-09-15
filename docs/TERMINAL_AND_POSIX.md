@@ -45,6 +45,13 @@ patches remain small, documented, and exercised against upstream tests.
 
 ## 2. Stack and ownership
 
+**LOCKED:** POSIX is a userspace API personality over Astra, not a second
+operating-system substrate. Every underlying mechanism is implemented once by
+Astra and reached through the native NDK or a versioned Astra service protocol.
+Compatibility libraries may export the symbols expected by unmodified ports,
+including `pthread_*`, while translating those calls to native Astra objects
+and operations.
+
 ```text
 terminal window/application
   escape parser -> shared TextSurface grid component
@@ -66,10 +73,36 @@ native Astra mechanisms and services
 The terminal emulator does not own shell policy. Zsh does not draw pixels. The
 POSIX personality does not own native Astra process or resource semantics.
 
+The following rules apply to every compatibility surface:
+
+- Astra has one scheduler and one thread object model; pthreads adapt to them.
+- Astra has one VFS and storage namespace; POSIX file descriptors and paths are
+  compatibility views of native handles and objects.
+- Astra has one process lifecycle, loader, IPC substrate, virtual-memory model,
+  clock implementation, and network stack.
+- POSIX-only metadata and policy, such as descriptor numbers, `errno`, pthread
+  attributes, signals, sessions, and process groups, remain in the userspace
+  personality unless a native primitive is independently required.
+- Native applications never route through the POSIX personality. POSIX
+  applications never bypass the canonical Astra substrate.
+- If a port exposes a missing capability, Astra implements the native facility
+  first; the compatibility library then adapts the POSIX interface to it. A
+  separate POSIX backend or port-specific workaround is forbidden.
+- Host helpers may implement Astra services behind versioned protocols, but no
+  application addresses Linux or a host-private mechanism directly.
+
+Compatibility can therefore provide two names for one operation, but it must
+never create two competing implementations of that operation.
+
 Terminal launches `COMMANDS:zsh` with `HOME=HOME:`, `PATH=/commands`,
 `SHELL=/commands/zsh`, and `TERM=astra-256color`. Its system zsh startup is
 scoped to `CONFIG:commands/zsh`; zsh therefore reads `CONFIG:/zshrc` without
 learning the host volume layout. Normal user startup remains `HOME:/.zshrc`.
+
+The shell launches an installed native GUI bundle with
+`open APPS:Name.app [argument ...]`. `open`, desktop icons, and the future
+Telescope search UI are front ends to the same application-launch service and
+NDK request; they do not load applications independently.
 
 The startup file sources the first script found at `HOME:/.motd.zsh` or
 `CONFIG:motd.zsh`. If neither exists, it prints the first plain file found at

@@ -13,6 +13,7 @@ module astra_de25_graphics (
     input  wire [3:0]  switches,
     output wire [7:0]  leds,
     output wire        render_interrupt,
+    output wire        capture_interrupt,
 
     output wire        hdmi_tx_clk,
     output reg         hdmi_tx_hs,
@@ -57,7 +58,7 @@ module astra_de25_graphics (
     output wire        fb_arvalid,
     input  wire        fb_arready,
     input  wire        fb_rid,
-    input  wire [63:0] fb_rdata,
+    input  wire [127:0] fb_rdata,
     input  wire [1:0]  fb_rresp,
     input  wire        fb_rlast,
     input  wire        fb_rvalid,
@@ -78,6 +79,25 @@ module astra_de25_graphics (
     input  wire        scene_rlast,
     input  wire        scene_rvalid,
     output wire        scene_rready,
+
+    output wire        capture_awid,
+    output wire [31:0] capture_awaddr,
+    output wire [7:0]  capture_awlen,
+    output wire [2:0]  capture_awsize,
+    output wire [1:0]  capture_awburst,
+    output wire [3:0]  capture_awcache,
+    output wire [2:0]  capture_awprot,
+    output wire        capture_awvalid,
+    input  wire        capture_awready,
+    output wire [63:0] capture_wdata,
+    output wire [7:0]  capture_wstrb,
+    output wire        capture_wlast,
+    output wire        capture_wvalid,
+    input  wire        capture_wready,
+    input  wire        capture_bid,
+    input  wire [1:0]  capture_bresp,
+    input  wire        capture_bvalid,
+    output wire        capture_bready,
 
     output wire [2:0]  render_awid,
     output wire [31:0] render_awaddr,
@@ -182,6 +202,7 @@ module astra_de25_graphics (
     reg [5:0] hsync_delay_q;
     reg [5:0] vsync_delay_q;
     reg [5:0] active_delay_q;
+    reg [5:0] frame_start_delay_q;
     // The ADV7513 captures each bundle on the following rising edge. Register
     // data and control together here so the source-synchronous interface gets
     // a full pixel period and the output registers can pack beside the pins.
@@ -190,6 +211,7 @@ module astra_de25_graphics (
             hsync_delay_q <= 6'd0;
             vsync_delay_q <= 6'd0;
             active_delay_q <= 6'd0;
+            frame_start_delay_q <= 6'd0;
             hdmi_tx_hs <= 1'b0;
             hdmi_tx_vs <= 1'b0;
             hdmi_tx_d <= 24'd0;
@@ -198,6 +220,8 @@ module astra_de25_graphics (
             hsync_delay_q <= {hsync_delay_q[4:0], hsync};
             vsync_delay_q <= {vsync_delay_q[4:0], vsync};
             active_delay_q <= {active_delay_q[4:0], video_active};
+            frame_start_delay_q <= {frame_start_delay_q[4:0],
+                                    pixel_x == 0 && pixel_y == 0};
             hdmi_tx_hs <= hsync_delay_q[5];
             hdmi_tx_vs <= vsync_delay_q[5];
             hdmi_tx_d <= pipeline_valid ? pipeline_rgb : 24'd0;
@@ -251,6 +275,30 @@ module astra_de25_graphics (
     wire [31:0] graphics_rdata;
     wire [1:0] graphics_rresp;
     wire graphics_rvalid, graphics_rready;
+    wire [31:0] graphics_tree_awaddr, graphics_tree_araddr;
+    wire [2:0] graphics_tree_awprot, graphics_tree_arprot;
+    wire graphics_tree_awvalid, graphics_tree_awready;
+    wire [31:0] graphics_tree_wdata;
+    wire [3:0] graphics_tree_wstrb;
+    wire graphics_tree_wvalid, graphics_tree_wready;
+    wire [1:0] graphics_tree_bresp;
+    wire graphics_tree_bvalid, graphics_tree_bready;
+    wire graphics_tree_arvalid, graphics_tree_arready;
+    wire [31:0] graphics_tree_rdata;
+    wire [1:0] graphics_tree_rresp;
+    wire graphics_tree_rvalid, graphics_tree_rready;
+    wire [31:0] capture_control_awaddr, capture_control_araddr;
+    wire [2:0] capture_control_awprot, capture_control_arprot;
+    wire capture_control_awvalid, capture_control_awready;
+    wire [31:0] capture_control_wdata;
+    wire [3:0] capture_control_wstrb;
+    wire capture_control_wvalid, capture_control_wready;
+    wire [1:0] capture_control_bresp;
+    wire capture_control_bvalid, capture_control_bready;
+    wire capture_control_arvalid, capture_control_arready;
+    wire [31:0] capture_control_rdata;
+    wire [1:0] capture_control_rresp;
+    wire capture_control_rvalid, capture_control_rready;
     wire [31:0] peripheral_awaddr, peripheral_araddr;
     wire [2:0] peripheral_awprot, peripheral_arprot;
     wire peripheral_awvalid, peripheral_awready;
@@ -303,16 +351,25 @@ module astra_de25_graphics (
         .s_arready(control_arready), .s_rdata(control_rdata),
         .s_rresp(control_rresp), .s_rvalid(control_rvalid),
         .s_rready(control_rready),
-        .m0_awaddr(graphics_awaddr), .m0_awprot(graphics_awprot),
-        .m0_awvalid(graphics_awvalid), .m0_awready(graphics_awready),
-        .m0_wdata(graphics_wdata), .m0_wstrb(graphics_wstrb),
-        .m0_wvalid(graphics_wvalid), .m0_wready(graphics_wready),
-        .m0_bresp(graphics_bresp), .m0_bvalid(graphics_bvalid),
-        .m0_bready(graphics_bready), .m0_araddr(graphics_araddr),
-        .m0_arprot(graphics_arprot), .m0_arvalid(graphics_arvalid),
-        .m0_arready(graphics_arready), .m0_rdata(graphics_rdata),
-        .m0_rresp(graphics_rresp), .m0_rvalid(graphics_rvalid),
-        .m0_rready(graphics_rready),
+        .m0_awaddr(graphics_tree_awaddr),
+        .m0_awprot(graphics_tree_awprot),
+        .m0_awvalid(graphics_tree_awvalid),
+        .m0_awready(graphics_tree_awready),
+        .m0_wdata(graphics_tree_wdata),
+        .m0_wstrb(graphics_tree_wstrb),
+        .m0_wvalid(graphics_tree_wvalid),
+        .m0_wready(graphics_tree_wready),
+        .m0_bresp(graphics_tree_bresp),
+        .m0_bvalid(graphics_tree_bvalid),
+        .m0_bready(graphics_tree_bready),
+        .m0_araddr(graphics_tree_araddr),
+        .m0_arprot(graphics_tree_arprot),
+        .m0_arvalid(graphics_tree_arvalid),
+        .m0_arready(graphics_tree_arready),
+        .m0_rdata(graphics_tree_rdata),
+        .m0_rresp(graphics_tree_rresp),
+        .m0_rvalid(graphics_tree_rvalid),
+        .m0_rready(graphics_tree_rready),
         .m1_awaddr(peripheral_awaddr), .m1_awprot(peripheral_awprot),
         .m1_awvalid(peripheral_awvalid), .m1_awready(peripheral_awready),
         .m1_wdata(peripheral_wdata), .m1_wstrb(peripheral_wstrb),
@@ -323,6 +380,91 @@ module astra_de25_graphics (
         .m1_arready(peripheral_arready), .m1_rdata(peripheral_rdata),
         .m1_rresp(peripheral_rresp), .m1_rvalid(peripheral_rvalid),
         .m1_rready(peripheral_rready)
+    );
+
+    astra_axi_lite_1to2 #(
+        .SLAVE1_MASK(32'h0000ff00), .SLAVE1_VALUE(32'h00005000),
+        .SLAVE1_ALT_MASK(32'hffffffff), .SLAVE1_ALT_VALUE(32'hffffffff)
+    ) graphics_capture_split_i (
+        .clk(build_clk), .reset(build_reset),
+        .s_awaddr(graphics_tree_awaddr), .s_awprot(graphics_tree_awprot),
+        .s_awvalid(graphics_tree_awvalid),
+        .s_awready(graphics_tree_awready),
+        .s_wdata(graphics_tree_wdata), .s_wstrb(graphics_tree_wstrb),
+        .s_wvalid(graphics_tree_wvalid), .s_wready(graphics_tree_wready),
+        .s_bresp(graphics_tree_bresp), .s_bvalid(graphics_tree_bvalid),
+        .s_bready(graphics_tree_bready), .s_araddr(graphics_tree_araddr),
+        .s_arprot(graphics_tree_arprot), .s_arvalid(graphics_tree_arvalid),
+        .s_arready(graphics_tree_arready), .s_rdata(graphics_tree_rdata),
+        .s_rresp(graphics_tree_rresp), .s_rvalid(graphics_tree_rvalid),
+        .s_rready(graphics_tree_rready),
+        .m0_awaddr(graphics_awaddr), .m0_awprot(graphics_awprot),
+        .m0_awvalid(graphics_awvalid), .m0_awready(graphics_awready),
+        .m0_wdata(graphics_wdata), .m0_wstrb(graphics_wstrb),
+        .m0_wvalid(graphics_wvalid), .m0_wready(graphics_wready),
+        .m0_bresp(graphics_bresp), .m0_bvalid(graphics_bvalid),
+        .m0_bready(graphics_bready), .m0_araddr(graphics_araddr),
+        .m0_arprot(graphics_arprot), .m0_arvalid(graphics_arvalid),
+        .m0_arready(graphics_arready), .m0_rdata(graphics_rdata),
+        .m0_rresp(graphics_rresp), .m0_rvalid(graphics_rvalid),
+        .m0_rready(graphics_rready),
+        .m1_awaddr(capture_control_awaddr),
+        .m1_awprot(capture_control_awprot),
+        .m1_awvalid(capture_control_awvalid),
+        .m1_awready(capture_control_awready),
+        .m1_wdata(capture_control_wdata),
+        .m1_wstrb(capture_control_wstrb),
+        .m1_wvalid(capture_control_wvalid),
+        .m1_wready(capture_control_wready),
+        .m1_bresp(capture_control_bresp),
+        .m1_bvalid(capture_control_bvalid),
+        .m1_bready(capture_control_bready),
+        .m1_araddr(capture_control_araddr),
+        .m1_arprot(capture_control_arprot),
+        .m1_arvalid(capture_control_arvalid),
+        .m1_arready(capture_control_arready),
+        .m1_rdata(capture_control_rdata),
+        .m1_rresp(capture_control_rresp),
+        .m1_rvalid(capture_control_rvalid),
+        .m1_rready(capture_control_rready)
+    );
+
+    wire [3:0] capture_awqos;
+    astra_display_capture capture_i (
+        .build_clk(build_clk), .build_reset(build_reset),
+        .pixel_clk(pixel_clk), .pixel_reset(pixel_reset),
+        .pixel_frame_start(frame_start_delay_q[5]),
+        .pixel_valid(pipeline_valid), .pixel_rgb(pipeline_rgb),
+        .interrupt(capture_interrupt),
+        .s_axi_awaddr(capture_control_awaddr),
+        .s_axi_awprot(capture_control_awprot),
+        .s_axi_awvalid(capture_control_awvalid),
+        .s_axi_awready(capture_control_awready),
+        .s_axi_wdata(capture_control_wdata),
+        .s_axi_wstrb(capture_control_wstrb),
+        .s_axi_wvalid(capture_control_wvalid),
+        .s_axi_wready(capture_control_wready),
+        .s_axi_bresp(capture_control_bresp),
+        .s_axi_bvalid(capture_control_bvalid),
+        .s_axi_bready(capture_control_bready),
+        .s_axi_araddr(capture_control_araddr),
+        .s_axi_arprot(capture_control_arprot),
+        .s_axi_arvalid(capture_control_arvalid),
+        .s_axi_arready(capture_control_arready),
+        .s_axi_rdata(capture_control_rdata),
+        .s_axi_rresp(capture_control_rresp),
+        .s_axi_rvalid(capture_control_rvalid),
+        .s_axi_rready(capture_control_rready),
+        .m_axi_awid(capture_awid), .m_axi_awaddr(capture_awaddr),
+        .m_axi_awlen(capture_awlen), .m_axi_awsize(capture_awsize),
+        .m_axi_awburst(capture_awburst), .m_axi_awcache(capture_awcache),
+        .m_axi_awprot(capture_awprot), .m_axi_awqos(capture_awqos),
+        .m_axi_awvalid(capture_awvalid), .m_axi_awready(capture_awready),
+        .m_axi_wdata(capture_wdata), .m_axi_wstrb(capture_wstrb),
+        .m_axi_wlast(capture_wlast), .m_axi_wvalid(capture_wvalid),
+        .m_axi_wready(capture_wready), .m_axi_bid(capture_bid),
+        .m_axi_bresp(capture_bresp), .m_axi_bvalid(capture_bvalid),
+        .m_axi_bready(capture_bready)
     );
 
     astra_axi_lite_1to2 #(
@@ -458,6 +600,8 @@ module astra_de25_graphics (
         .OUTPUT_WIDTH(1920), .OUTPUT_HEIGHT(1080),
         .TOTAL_WIDTH(2200), .TOTAL_HEIGHT(1125),
         .BUILD_CYCLES_PER_US(165),
+        .FRAMEBUFFER_AXI_DATA_WIDTH(128),
+        .FRAMEBUFFER_MAX_BURST_BEATS(32),
         .AXI_ID_WIDTH(3)
     ) pipeline_i (
         .build_clk(build_clk), .build_reset(build_reset),
@@ -559,7 +703,7 @@ module astra_de25_graphics (
 
     wire unused = &{1'b0, frame_width, frame_height, screen_width,
                     screen_height, fb_arid_full[2:1], scene_arid_full[2],
-                    fb_arqos, render_arqos, render_awqos,
+                    fb_arqos, render_arqos, render_awqos, capture_awqos,
                     active_generation, lines_built, lines_failed,
                     scheduler_overruns, pixel_underruns, commit_errors,
                     commit_deferrals, audio_i2s[3:1]};

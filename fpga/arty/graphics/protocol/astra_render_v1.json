@@ -173,5 +173,19 @@
     "END_CYCLE": 5,
     "FAULT_DETAIL": 6,
     "RESOURCE_GENERATION": 7
+  },
+  "window_scene": {
+    "MAGIC": 1096237902,
+    "VERSION": 1,
+    "HEADER_BYTES": 64,
+    "LAYER_BYTES": 32,
+    "LAYER_VISIBLE": 65536,
+    "LAYER_RADIUS_MASK": 65535,
+    "COMPILED_MAGIC": 1096241987,
+    "COMPILED_VERSION": 1,
+    "COMPILED_HEADER_BYTES": 64,
+    "LINE_BYTES": 8,
+    "SPAN_BYTES": 32,
+    "SPAN_SOLID": 1
   }
 }

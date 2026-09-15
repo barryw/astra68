@@ -3,6 +3,13 @@
 Status: active implementation ledger for the design in
 `~/Downloads/Astra68 Desktop Design/Astra Desktop.dc.html`.
 
+The current source package has SHA-256
+`1005463fc51826aac33def242c70d9f4122a616352680e93ae44e58f10960603`.
+Its written control list is authoritative by name; the adjacent total is not,
+because Scrollbar is specified in the ScrollView section but omitted from that
+numbered list. Implementation status in the design file is illustrative only;
+this ledger and the public ABI are authoritative for shipped state.
+
 The normative contracts remain `INTERFACE_SPECIFICATION.md`,
 `DESKTOP_AND_UI.md`, and the public NDK headers. This ledger prevents a design
 screen from being mistaken for an implementation and records the dependency
@@ -29,8 +36,8 @@ order needed to finish the complete design without application-private UI.
 |---|---|---|---|
 | Theme, surfaces, font strikes | 1a-1d, 3b | semantic generation-5 tokens, integer UI scale, bitmap strikes | partial |
 | Retained layout | all | nested row/column/wrap containers, intrinsic measurement, reflow, clipping | complete; physical ABI-2 gate passed |
-| Primitive controls | 1d, 4a | label, button, field, check, radio, switch, slider, stepper, popup, combo, segmented, tags, disclosure, progress | label/button/check/radio/switch/slider/progress/field accepted |
-| Collection controls | 1d, 2b, 4a | scroll model, scrollbar, splitter, tabs, list, tree, table, grid, columns, toolbar, status, pagination | pending |
+| Primitive controls | 1d, 4a | label, button, field, check, radio, switch, slider, dial, stepper, popup, combo, segmented, tags, disclosure, progress | label/button/check/radio/switch/slider/progress/field and tabs accepted; segmented, stepper, dial, and disclosure host-certified in current source |
+| Collection controls | 1d, 2b, 4a | scroll model, ScrollView, scrollbar, splitter, list, tree, table, grid, columns, toolbar, status, pagination | scroll model/view/bar and splitter accepted; list, tree, table, grid, columns, toolbar, status, and pagination pending |
 | TextSurface | 7a-7b | shared UTF-8 model, grid/code/flow layout, runs, gutters, overlays, caret, selection, undo, find, clipboard, scrollback | grid renderer, selection paint/hit test/extraction, typed clipboard, Terminal copy/paste, shared undo/redo, piece-table model, and field accepted; find, scrollback, wide cells, and code/flow layout pending |
 | Input vocabulary | 6a-6b | keymap-selected Meta labels and immutable system/workspace/app shortcut tiers | input service emits one normalized Meta bit; detection, override, labels, and shortcut tiers pending |
 | Command model | 1e, 2a, 6b | stable IDs, typed arguments, state, metadata, asynchronous invocation; shared by menus, palette, toolbar, scripting | pending |
@@ -53,12 +60,29 @@ the DE25 without weakening the existing frame or layout budgets.
 - Retained flex reflow remains at or below 10 microseconds per control on the
   physical 70 MHz MC68040. The released nested ABI-2 measurements are 7.704,
   5.091, and 5.783 microseconds per control for 12, 64, and 256 controls.
+- Segmented selection and numeric stepping share a 12.5-microsecond semantic
+  action gate. The physical 69.416 MHz baselines are 7.003 and 8.926
+  microseconds per action respectively.
 - Pointer presentation targets one frame; ordinary control, key, menu, and
   window feedback targets two frames.
 - Every new nested layout, text-layout, menu-search, and collection-view hot
   path gets a target workload and regression threshold before another layer
   depends on it.
 - No benchmark result from the Mac or Beast substitutes for a DE25 result.
+
+## Image presentation boundary
+
+IconView and ImageView depend on one missing Graphics Kit foundation: draw
+lists must reference immutable protected image resources. The existing desktop
+AICON painter expands indexed pixels into coalesced rectangle fills, consumes
+the fixed draw-command budget, and is not a reusable control boundary. It must
+not be promoted into Interface Kit.
+
+Once the resource reference exists, IconView owns compact icon presentation
+(AICON strike selection, intrinsic size, tint/state, baseline, and adjacent
+text composition) while ImageView owns content presentation (fit, fill, crop,
+and integer zoom). Buttons, menu items, tabs, fields, and toolbars use the same
+icon descriptor and painter as IconView; no control gets a private icon path.
 
 ## Artifact-specific behavior still to preserve
 
@@ -121,15 +145,151 @@ build gates. The physical 69.874 MHz MC68040 measured 7.546 microseconds per
 apply-and-record group, 3.958 microseconds per undo, and 3.292 microseconds per
 redo across 10,000 groups, inside the retained 12.5-microsecond phase gate.
 
-Current source advances `interface.library` to ABI 2.6 with a shared,
-allocation-free UTF-8 piece table and a retained single-line field. The model
-stores immutable inserted chunks plus a reverse-grown line index in
-caller-owned, replaceable arenas; it has no independent document, piece, line,
-or edit-count ceiling. Replacement preflight reports exact content and
-metadata requirements, capacity failure is atomic, arena moves compact live
+The ABI 3.0 release retained the 2.6
+allocation-free UTF-8 piece table and single-line field and adds vblank-driven,
+control-owned animation. Each animated control owns its state and active-list
+link while sharing the display-refresh epoch. A coalescing per-window event
+wakes the UI thread at most once per refresh, and the Interface Kit visits only
+active controls; applications do not create animation timers or mutate
+controls from worker threads. Normal,
+sanitizer, analyzer, documentation, and MC68040 build gates pass for the 2.6
+text slice. The model stores immutable inserted chunks plus a reverse-grown
+line index in caller-owned, replaceable arenas; it has no independent document,
+piece, line, or edit-count ceiling. Replacement preflight reports exact content
+and metadata requirements, capacity failure is atomic, arena moves compact live
 text and wipe occupied old storage, and every selection boundary is validated
-as a Unicode-scalar boundary. Normal, sanitizer, analyzer, documentation, and
-MC68040 build gates pass. Physical release
+as a Unicode-scalar boundary. ABI 3.0 deliberately enlarges the caller-owned
+`AstraControl` and `AstraWindow`: controls directly retain animation membership
+and phase, and windows directly own their coalescing vblank wait handle. The
+obsolete timer tick and separate vblank-window constructor do not exist in the
+3.0 table. GUI protocol version 8 returns both window handles atomically.
+
+The append-only ABI 3.1 release added the segmented selector. Its borrowed UTF-8
+item model has no widget-specific count ceiling; the available width is divided
+equally with integer geometry. Pointer selection commits on release inside,
+release outside cancels, and Arrow, Home, and End keys update selection through
+the same value-change action. Interface Gallery consumes only the public table
+and carries a 10,000-transition target benchmark. Normal, sanitizer, analyzer,
+MC68040, library-contract, example, header-contract, and documentation gates
+pass; physical DE25 acceptance remains pending.
+
+Current source deliberately advances `interface.library` to ABI 4.0 for the
+numeric stepper. Its signed 32-bit range has no UI-specific digit ceiling:
+the eleven-byte maximum follows from the value type. Values share the slider's
+snapping and semantic value-change machinery. Pointer increment/decrement is
+immediate, stays visibly muted at a bound, and repeats after 400 milliseconds;
+keyboard Arrow/Home/End and signed decimal entry use the same action. The UI
+context owns only the active draft and pointer parts, so controls do not grow a
+private text model. `ui_vblank` now returns `AstraUIAction`, allowing repeat to
+flow through the sole event/action path instead of polling or a second callback
+API. That signature and caller-owned context change require the ABI-major bump.
+Normal, sanitizer, analyzer, MC68040, shared-library, and SONAME gates pass.
+Diagnostic immutable DE25 release
+`1543f41e976943999bfc5447e26a9aa7f62a8f49e7966acaa6540515c44b4bff`
+reached stage 8 at 69.416 MHz with zero restarts, rendered the stepper through
+the production draw-list and FPGA path, and measured 10,000 public action
+transitions at 8.926 microseconds each. Its retained Cam Link specimen is
+`/private/tmp/astra-interface-v4-gallery.png`, SHA-256
+`2da4732dc0c5b42ed5763ab8e11b8f9d8df0b361199b3002e8325595c1a438d0`.
+Physical pointer and hold-repeat acceptance remains pending.
+
+That specimen also proves the current Field painter's embedded mono strike
+maps `世界` to replacement glyphs. UTF-8 decoding is intact; Interface Kit must
+consume `font.library`'s resolved layout and fallback chain instead of owning
+a second embedded-font path. The Gallery retains `世界` as the fallback
+regression specimen.
+
+Current source advances the append-only ABI to 4.1 with a shared tab strip and
+the generic `ASTRA_CONTROL_COLLAPSED` state. Tabs reuse the segmented
+selector's borrowed choice model, selection value, keyboard navigation,
+pointer commit, and semantic action path while retaining the design system's
+distinct natural-width underline treatment. A collapsed control and its
+descendants leave layout, rendering, hit testing, focus, and animation through
+the one retained-state transition. Interface Gallery now uses six real tabbed
+pages—Input, Choice, Value, Progress, Text, and Layout—instead of a flat widget
+pile or a private navigation implementation.
+
+Current source advances the append-only ABI through 4.3 with one caller-owned
+scroll model shared by ScrollView and Scrollbar controls. The model has no
+control-specific item ceiling and owns extents, integer offsets, line steps,
+and borrowed semantic marks. ScrollView clips and translates one direct child;
+nested wheel input chains only at an edge. Scrollbars implement proportional
+thumbs, paging, Option-jump, Shift fine dragging, marks, and an 800-millisecond
+vblank-owned overlay fade. An isolated draw-list scroll uses the existing
+overlap-safe hardware copy and repaints only exposed strips. Unrelated or
+ambiguous concurrent damage takes the normal repaint path rather than risking
+retained-pixel corruption. Host, sanitizer, analyzer, NDK header/example, and
+MC68040 shared-library gates pass; the physical acceptance record follows.
+
+Physical DE25 release
+`92aa26670bd04ed73c22dad072fb082d08fffccf5bfd8a185fd07df4aff33e43`
+accepts the retained path. One wheel notch in the Gallery ScrollView produced
+one completed presentation with 53 render commands, down from the 153-command
+normal repaint. Render command zero is the overlap-safe framebuffer copy from
+`(24,159)` to `(24,143)`, `260x104`; the remaining 16-pixel strip and the
+bound scrollbar were repainted. The physical thumb advanced six pixels with
+no visible corruption. The Cam Link specimen is
+`/private/tmp/astra-gallery-retained-scroll.png`, SHA-256
+`313ffb1e26c45b11c97b83c75ff3216da540e3a927f27899aad2d48af48787c7`;
+the captured render mailbox is
+`/private/tmp/astra-scroll-retained-mailbox.bin`, SHA-256
+`56600bba31a6910b4ad78be24b79cdf0f26c0d59e20722fb0539d05a76efeafa`.
+
+Current source advances Interface Kit to ABI 4.4 with one splitter primitive.
+A split view is composition, not a second layout system: an existing flex pane,
+the splitter, and another flex pane are direct siblings in a non-wrapping row
+or column. Existing flex minimum and maximum extents are the only movement
+bounds. Pointer capture provides live drag updates outside the divider;
+arrows, Shift-arrows, Home, and End provide the same operation from the
+keyboard; every retained change emits the shared value-changed action.
+
+The shared layout walk validates and synchronizes a splitter when it reaches
+the following sibling. UIs without splitters pay no additional control-array
+pass. Host, sanitizer, analyzer, MC68040, NDK header/example, and parser gates
+pass. Physical DE25 release
+`b83a032916fe6e0bf9fe6704fbc3855923f97e65fb12cb2143ef28e011456cce`
+measured 10,000 complete pane/divider/pane reflows in 269.528 milliseconds,
+or 26.953 microseconds per action, below the derived 30-microsecond gate. A
+20-step physical drag moved the divider and both flex panes without corruption;
+the retained Cam Link specimen is
+`/private/tmp/astra-splitter-final-dragged.png`, SHA-256
+`31ce41e37184a26c46090fd8b70706cf8c94b8803117cfa907a7fe9d9646eeb3`.
+The retained trace is `/tmp/astra-splitter-final.flSMgn/ring.bin` on Beast,
+SHA-256
+`34bf6843d15a8f470f93dd66e65eabc832fcf5e4b28e399597ee3cb3c55e6e0d`.
+
+Current source advances Interface Kit to ABI 4.5 and GUI protocol 10 with one
+canonical pointer-image path. Window clients select the server-supplied arrow,
+horizontal resize, vertical resize, I-beam, or wait image, or transfer a copied
+RGBA image and hotspot. Interface Kit derives field and splitter images from
+its existing hover/capture state and suppresses duplicate commands. The
+display service owns custom-image storage and commits image, hotspot, pointer
+state, and scene at vblank through the hardware pointer plane.
+
+Host contract tests cover built-in selection, capture stability, command
+coalescing, malformed image rejection, immutable two-handle transfer, and
+transactional replacement. The Linux renderer self-test covers every built-in
+and a custom image payload. Physical DE25 release
+`ab8de7c48ef6059ec25f89711cbfb6e5e42ef5e3acff4fe5556a174d2cc30f02`
+reached stage 8 with zero service restarts and rendered the I-beam, both resize
+directions, and the default arrow through the hardware plane. Retained Cam Link
+frames are `/private/tmp/astra-pointer-desktop.png`,
+`/private/tmp/astra-pointer-ibeam.png`,
+`/private/tmp/astra-pointer-splitter.png`, and
+`/private/tmp/astra-pointer-resize-vertical.png`.
+
+Immutable physical DE25 release
+`29b7d36f7687b4fdf577cc6e13a8fdf3064be2947905a190155edfef11d313ca`
+boots Interface Kit ABI 3.0 and GUI protocol 8, reaches stage 8 at 69.865 MHz
+effective, and remains active with zero service restarts. The published ext4
+volume passes read-only `e2fsck` and contains only the 3.0 Interface Kit
+provider. Twelve independent Cam Link samples of the indeterminate progress
+region produced ten distinct frames, proving control-owned phase advances on
+the physical vblank path. The retained specimen is
+`/private/tmp/astra-interface-v3.png`, SHA-256
+`e738c85fcd3f281b319f7e11daab32161dd0a928c9917b18683d60e691e24371`.
+
+The preceding ABI 2.6 physical release
 `ee84a8a336d68cc6469252690e3ac778790225bceda79ea7e7ecd1d425944ebc`
 booted the Gallery, rendered editable/error/read-only specimens without
 clipping, and remains active with zero restarts. On its 70.038 MHz MC68040,
@@ -152,6 +312,33 @@ The shared AFNT import contract also rejects an invisible replacement glyph.
 This prevents an unsupported scalar from disappearing even before the planned
 Atkinson Hyperlegible Next, JetBrains Mono, and Noto system fallback stack is
 installed through the font service.
+
+Current source advances Interface Kit to ABI 5.1 with a reusable Disclosure
+control. A disclosure owns only its UTF-8 header and the ID of one sibling
+container; that target container's existing collapsed bit remains the sole
+expanded-state authority. Pointer activation, Enter/Space, and Left/Right
+keyboard navigation use the shared event/action path, atomically reflow the
+target descendants, and emit the standard value-change action. Invalid,
+non-container, and non-sibling targets are rejected during UI initialization.
+Interface Gallery consumes the public 5.1 table and contains no private
+disclosure state or painter. Immutable physical DE25 release
+`321a882c34ac27f7bf287bc3129eaf1c1fae59aa0384e9c5a8fa8aafde84ae60`
+verifies that collapsed points right and expanded points down. Retained Cam
+Link captures are `/private/tmp/astra-v52-disclosure-collapsed-clear.png`
+(SHA-256
+`0631be6fb91731933d4c9dfede60c83c9c491535f953821b7eed4169bc90e362`)
+and `/private/tmp/astra-v52-disclosure-expanded.png` (SHA-256
+`f5ab52090861331a89ea178af6970a6d5f2a2b8dd3ebdb92681afcc26cf83dc2`).
+
+The same release keeps input delivery nonblocking when a client queue fills.
+The input core's existing state-reset and latest-motion recovery is retried by
+writable client handles in the service wait set; a slow display client cannot
+stall the seat. Gallery consumes all currently queued events before one damage
+render, preserving button, key, text, and action order. A 60-sample physical
+splitter drag produced nine batches during input and one catch-up batch,
+compared with three catch-up batches before this change. Its nine-frame/second
+steady-state ceiling and the large-window drag's 15-frame/second ceiling remain
+compositor work, not Interface control work.
 
 The fixed-grid source cutover is physically accepted at commit `b36a784` in
 immutable DE25 release
@@ -179,9 +366,13 @@ serializes that clip on every command, and replay validates it before lowering
 it into Astraea's clip registers. Host tests cover resize reflow, invalid
 hierarchies, clipped input, malformed draw lists, and a 256-level tree.
 
-The remaining cutover is structural rather than cosmetic: replace the fixed
-four-entry window table and fixed 4 MiB-per-slot media map with service-owned,
-resource-accounted window and surface allocations, then represent the ordered
-stack as a validated batched scene description. Admission must fail only when
-an accountable kernel, IPC, render-batch, or Media RAM resource is genuinely
-exhausted; no small UI-specific window ceiling is permitted.
+The fixed four-entry table and fixed 4 MiB-per-window media map are gone.
+Window metadata grows in committed kernel pages, while exact 64-byte-aligned
+content and chrome extents are allocated from the 16..512 MiB Media RAM arena
+and reused after close or resize. Tests cover growth beyond one metadata page,
+five-window composition, pairwise extent isolation, freed-range reuse, and
+physical-arena exhaustion. Admission now fails only when an accountable
+kernel, IPC, render-batch, or Media RAM resource is genuinely exhausted.
+
+The remaining compositor cutover is to represent the ordered stack as a
+validated batched hardware scene description.

@@ -354,11 +354,15 @@ module tb_astra_line_scheduler;
         if (start_count[0] != 1 || lines_built != built_before_hold)
             $fatal(1, "held repeat slot was overwritten");
 
-        // Line six is complete, so retiring repeated line five releases slot
-        // zero and allows the deferred line-zero request to run.
+        // A second unavailable line must end the bounded repeat and release
+        // slot zero. Otherwise the deferred line-zero request at the FIFO
+        // head can never run and scanout remains stuck forever.
+        @(negedge pixel_clk);
+        force dut.pixel_slot_valid[2] = 1'b0;
         drive_line_end(5);
-        if (pixel_read_slot != 2'd2)
-            $fatal(1, "line six did not release repeated slot");
+        if (pixel_line_available || dut.held_slot_valid_pixel)
+            $fatal(1, "consecutive underrun did not release repeated slot");
+        release dut.pixel_slot_valid[2];
         wait_for_counts(built_before_hold + 2, 1);
         wait_for_pixel_slot(0, 0, 1);
         if (scheduler_overruns != 32'd0)

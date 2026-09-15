@@ -9,6 +9,8 @@ static uint32_t reply_receive;
 static uint32_t transaction;
 static uint16_t expected_count;
 static uint16_t expected_source;
+static const char *expected_path;
+static const char *const *expected_arguments;
 
 uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
                                 uintptr_t d3, uintptr_t d4, uintptr_t d5,
@@ -33,14 +35,16 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         assert(request->arguments.count == expected_count);
         assert(request->arguments.source == expected_source);
         assert(request->arguments.flags == 0u);
-        assert(__builtin_strcmp(request->arguments.bytes,
-                                "APPS:Terminal.app") == 0);
-        if (expected_count == 3u) {
-            const char *first = request->arguments.bytes + 18u;
-            const char *second = first + __builtin_strlen(first) + 1u;
+        assert(__builtin_strcmp(request->arguments.bytes, expected_path) == 0);
+        {
+            const char *argument = request->arguments.bytes +
+                                   __builtin_strlen(expected_path) + 1u;
 
-            assert(__builtin_strcmp(first, "WORK:first.txt") == 0);
-            assert(__builtin_strcmp(second, "WORK:second.txt") == 0);
+            for (uint16_t index = 1u; index < expected_count; ++index) {
+                assert(__builtin_strcmp(argument,
+                                        expected_arguments[index - 1u]) == 0);
+                argument += __builtin_strlen(argument) + 1u;
+            }
         }
         transaction = request->header.transaction_id;
     } else if (number == ASTRA_SYSCALL_PORT_RECEIVE_TRY) {
@@ -68,6 +72,7 @@ int main(void)
     static const char *const dropped[] = {
         "WORK:first.txt", "WORK:second.txt"
     };
+    static const char *const shell_arguments[] = {"--tab", "Progress"};
     static const char malformed_path[] = {
         'A', 'P', 'P', 'S', ':', (char)0xc0, (char)0x80, '\0'
     };
@@ -91,15 +96,28 @@ int main(void)
                &process_id) == ASTRA_ERROR_INVALID_ARGUMENT);
     expected_count = 1u;
     expected_source = ASTRA_LAUNCH_SOURCE_DESKTOP;
+    expected_path = "APPS:Terminal.app";
+    expected_arguments = NULL;
     assert(astra_application_launch(7u, "APPS:Terminal.app", 17u,
                                     &process_id) == ASTRA_OK);
     assert(process_id == 42u);
     expected_count = 3u;
     expected_source = ASTRA_LAUNCH_SOURCE_DESKTOP;
+    expected_arguments = dropped;
     assert(astra_application_launch_with_arguments(
                7u, "APPS:Terminal.app", 17u,
                ASTRA_LAUNCH_SOURCE_DESKTOP, dropped, 2u, &process_id) ==
            ASTRA_OK);
+    assert(process_id == 42u);
+    expected_count = 3u;
+    expected_source = ASTRA_LAUNCH_SOURCE_SHELL;
+    expected_path = "APPS:InterfaceGallery.app";
+    expected_arguments = shell_arguments;
+    assert(astra_application_launch_with_arguments(
+               7u, expected_path,
+               (uint16_t)__builtin_strlen(expected_path),
+               ASTRA_LAUNCH_SOURCE_SHELL, shell_arguments, 2u,
+               &process_id) == ASTRA_OK);
     assert(process_id == 42u);
     puts("application launch contract tests passed");
     return 0;

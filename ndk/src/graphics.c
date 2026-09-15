@@ -117,8 +117,10 @@ AstraResult astra_display_set_pointer_image(
     AstraFence *fence)
 {
     if (display == 0 || image == 0 || image->size < sizeof(*image) ||
-        image->pixels == 0 || image->width == 0 || image->width > 32u ||
-        image->height == 0 || image->height > 32u ||
+        image->pixels == 0 || image->width == 0 ||
+        image->width > ASTRA_HARDWARE_POINTER_WIDTH ||
+        image->height == 0 ||
+        image->height > ASTRA_HARDWARE_POINTER_HEIGHT ||
         image->pitch < (uint32_t)image->width * sizeof(*image->pixels) ||
         image->hotspot.x < 0 || image->hotspot.y < 0 ||
         (uint32_t)image->hotspot.x >= image->width ||

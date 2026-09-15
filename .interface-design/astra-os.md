@@ -60,7 +60,7 @@ vocabulary does not imply shared component implementations or token values.
   ceiling. Parent extent changes trigger automatic descendant reflow;
   same-size frame notifications do nothing.
 - Descendants inherit ancestor clipping for damage, hit testing, and painting.
-  Graphics draw-list ABI 1.1 carries the clip to Astraea's hardware clip
+  Graphics draw-list ABI 1.2 carries the clip to Astraea's hardware clip
   registers.
 - Interaction state and capture survive reflow. A changed extent damages the
   new parent area once; presenting it must not create a frame/damage feedback
@@ -97,12 +97,69 @@ Programmatic and pasted text passes through the same single-line invariant
 boundary. Arena capacity is caller-owned and replaceable; it is not a control
 text limit.
 
+### Segmented selector
+
+Segmented selectors switch among a small peer set without opening another
+surface. Items share the available width; the selected segment is raised over
+an inset rail, hover uses the client surface, and separators remain soft.
+Selection commits on pointer release inside and supports Arrow, Home, and End
+keys. Item labels are borrowed validated UTF-8 and use the shared UI font.
+
+### Numeric stepper
+
+Numeric steppers share the range model and value-change action used by sliders.
+The value is right-aligned in the system monospace face; stacked increment and
+decrement affordances stay visible and become muted at their respective bounds.
+Signed decimal entry replaces the displayed draft, Arrow and Home/End keys
+operate the committed range, and holding a pointer affordance repeats after
+400 milliseconds through the control-owned vblank path. Vblank returns the
+same semantic action as direct input, so applications have one update path.
+
+### Dial
+
+Dials are compact scalar editors for angle, gain, pan, and similar values.
+They use vertical drag, either Alt/Option key for fine adjustment, a zero
+detent when the range is bipolar, double-click reset, and Arrow plus Home/End
+keyboard input. Values and units remain separate associated labels rather than
+being painted into the primitive. The indicator is a shared hardware line;
+the MC68040 does not rasterize it.
+
+### Icons and images
+
+- Immutable image resources are the sole draw-list reference for protected
+  image pixels. Controls never expand indexed icons into rectangle commands.
+- `IconView` presents compact semantic imagery: installed AICON strikes,
+  intrinsic sizing, state tint, baseline alignment, and optional adjacent
+  text. Buttons, menus, tabs, fields, and toolbars consume the same icon
+  descriptor and painter as the standalone view.
+- `ImageView` presents content imagery with fit, fill, crop, and integer zoom.
+  It shares image storage and submission with IconView but not presentation
+  policy.
+- An icon slot is part of a composite control's content layout, not a private
+  renderer. Icon-only, text-only, and icon-plus-text states therefore retain
+  identical focus, disabled, localization, and accessibility behavior.
+
+### Form composition and relationships
+
+Labels, descriptions, and validation messages remain ordinary retained text
+controls and participate in the same layout tree as every other control. A UI
+document records explicit `label-for`, `description-for`, and `validation-for`
+relationships between stable control IDs; those semantic relationships never
+encode geometry. The standard form-item container lays out a label above its
+control and supporting or validation text below it. Applications may replace
+that container's ordinary layout metadata without losing the relationships.
+Flex baseline alignment uses each text-bearing control's font baseline for
+horizontal forms. Per-control label or error coordinates are not an API.
+
 ## Text surfaces
 
 - `interface.library` owns reusable grid, code, and flow text presentation;
   Terminal is an escape-sequence producer for grid mode, not a painter.
 - All modes share UTF-8 validation, font metrics, styled glyph runs, logical
   colors, caret, selection, clipboard, scrolling, undo, and find behavior.
+- Shared layouts retain logical-to-visual mappings for bidirectional text, so
+  mixed LTR/RTL caret movement, selection, hit testing, punctuation mirroring,
+  and logical-order clipboard transfer never become control-private behavior.
 - Designed bold/italic faces are preferred. Synthetic bold and italic reuse the
   installed glyph source; underline and strikeout use AFNT metrics instead of
   duplicate glyph images.
@@ -123,11 +180,28 @@ text limit.
   request semantic families and styles; they neither embed these assets nor
   construct their own fallback chain.
 
+## Pointer images
+
+- The hardware pointer is a native, unscaled 32 by 32 RGBA plane owned by the
+  display service and committed at vblank with the scene.
+- The canonical built-ins are arrow, horizontal resize, vertical resize,
+  text I-beam, and wait. Vertical dividers use horizontal resize; horizontal
+  dividers use vertical resize.
+- Interface Kit derives ordinary control images from shared hover/capture
+  state. Applications select wait for temporarily unavailable interaction and
+  may install one immutable copied custom image plus hotspot through the same
+  window capability.
+- Application code never writes pointer MMIO or compositor-owned memory.
+
 ## Validation pattern
 
 - Exercise reusable controls in the native `InterfaceGallery.app` through the
   same NDK, Kits, window events, draw lists, and FPGA renderer used by other
   applications.
+- Once the shared tab control exists, organize the Gallery into intentional
+  input, choice, value, progress, text, and layout pages. Each page exercises
+  resizing, focus traversal, semantic states, and live actions; the Gallery
+  does not own a private tab or form implementation.
 - Cover layout arithmetic and edge cases with host tests, ASan/UBSan, GCC
   analysis, MC68040 builds, and a target-side benchmark.
 - Accept resize only when the physical renderer completes balanced submissions

@@ -333,10 +333,10 @@ int main(void)
     char path[128];
     AstraLibraryReference reference;
 
-    assert(astra_vfs_process_test_index(
+    assert(!astra_vfs_process_test_index(
         (const uint8_t *)"LIBS:Filesystem.kit/library", 27u,
         "filesystem.library", 1u, path, sizeof(path), &reference));
-    assert(strcmp(path, "LIBS:Filesystem.kit/library") == 0);
+    assert(path[0] == '\0');
     assert(reference.size == 0u);
     assert(astra_vfs_process_test_index(
         indexed, sizeof(indexed), "filesystem.library", 1u, path,

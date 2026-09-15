@@ -88,8 +88,32 @@ INTERFACE_TEXT = re.compile(
     r"INTERFACE TEXT n=([0-9a-f]{8}) "
     r"append-ns=([0-9a-f]{16}) fragmented-ns=([0-9a-f]{16}) "
     r"pieces=([0-9a-f]{8})")
+INTERFACE_SEGMENTED = re.compile(
+    r"INTERFACE SEGMENTED n=([0-9a-f]{8}) "
+    r"elapsed-ns=([0-9a-f]{16})")
+INTERFACE_TAB = re.compile(
+    r"INTERFACE TAB n=([0-9a-f]{8}) "
+    r"elapsed-ns=([0-9a-f]{16})")
+INTERFACE_STEPPER = re.compile(
+    r"INTERFACE STEPPER n=([0-9a-f]{8}) "
+    r"elapsed-ns=([0-9a-f]{16})")
+INTERFACE_DIAL = re.compile(
+    r"INTERFACE DIAL n=([0-9a-f]{8}) "
+    r"elapsed-ns=([0-9a-f]{16})")
+INTERFACE_DISCLOSURE = re.compile(
+    r"INTERFACE DISCLOSURE n=([0-9a-f]{8}) "
+    r"elapsed-ns=([0-9a-f]{16})")
+INTERFACE_SPLITTER = re.compile(
+    r"INTERFACE SPLITTER n=([0-9a-f]{8}) "
+    r"elapsed-ns=([0-9a-f]{16})")
 INTERFACE_UNDO_OPERATIONS = 10000
 INTERFACE_TEXT_OPERATIONS = 4096
+INTERFACE_SEGMENTED_OPERATIONS = 10000
+INTERFACE_TAB_OPERATIONS = 10000
+INTERFACE_STEPPER_OPERATIONS = 10000
+INTERFACE_DIAL_OPERATIONS = 10000
+INTERFACE_DISCLOSURE_OPERATIONS = 10000
+INTERFACE_SPLITTER_OPERATIONS = 10000
 # The physical 69.874 MHz MC68040 baseline is 7.546 us/group for record,
 # 3.958 for undo, and 3.292 for redo.  The shared 12.5 us ceiling preserves
 # 39% headroom over the slowest phase while rejecting a material regression.
@@ -104,6 +128,18 @@ INTERFACE_LAYOUT_MAX_NS_PER_CONTROL = 10_000
 # ceilings retain 26% and 17% scheduling headroom respectively.
 INTERFACE_TEXT_MAX_APPEND_NS_PER_OPERATION = 10_000
 INTERFACE_TEXT_MAX_FRAGMENTED_NS_PER_OPERATION = 800_000
+# The physical 69.416 MHz MC68040 baselines are 7.003 us for segmented
+# selection and 8.926 us for stepper changes.  One shared 12.5 us ceiling
+# retains 28% headroom over the slower path and keeps equivalent value-change
+# controls on one budget.
+INTERFACE_VALUE_CONTROL_MAX_NS_PER_ACTION = 12_500
+# One splitter action reflows the exact pane/divider/pane composition.  The
+# established 10 us/control physical layout budget therefore permits 30 us.
+INTERFACE_SPLITTER_MAX_NS_PER_ACTION = 30_000
+# The physical 69.485 MHz MC68040 baseline is 43.905 us for one Disclosure
+# state change plus reflow of its disclosure/body/child composition.  Sixty
+# microseconds retains 36.7% scheduling headroom.
+INTERFACE_DISCLOSURE_MAX_NS_PER_ACTION = 60_000
 
 # The desktop's Terminal icon. A double click here is what starts a terminal;
 # there is no manifest entry that starts one directly, because a window client
@@ -137,7 +173,7 @@ ZSH_SCRIPT = [
     ('print -r -- ZSH-PIPE-$(/commands/echo 42 | cat)',
      "ZSH-PIPE-42"),
     ('print -r -- ZSH-WHICH-$(/commands/which status | cat)',
-     "ZSH-WHICH-/commands/status"),
+     "ZSH-WHICH-/commands/status [1]"),
     ('print $((6*7)) > WORK:zsh.out; cat WORK:zsh.out; rm WORK:zsh.out',
      "42"),
     ('/commands/echo 42 > WORK:zsh-command.out; '
@@ -179,6 +215,15 @@ SCRIPT = [
     ("devices status", "/commands/status [1]"),
     ("ps", ("ROM:supervisor", "SERVICES:desktop", "APPS:Terminal.app",
             " ps", " zsh")),
+    ("ls PROC:", ("snapshot", "libraries/", "1/")),
+    ("cat PROC:1/status", ("name ROM:supervisor", "id 1")),
+    ("cat PROC:libraries/memory",
+     ("NAME VERSION ABI BUILD BASE SPAN CACHE RESIDENT MAPPED REFS PIDS",
+      "filesystem.library")),
+    ("cat PROC:libraries/disk",
+     ("NAME VERSION ABI BUILD SIZE PATH",
+      "filesystem.library 2.0.0 2.1",
+      "font.library 2.1.0 2.1")),
     ("metrics", ("host.channel.commands ", "hostfs.vfs.requests ",
                  "host.fs.open.calls ")),
     ("events --boot -1", "namespace bound"),
@@ -541,6 +586,9 @@ class Machine:
     def recent_faults(self):
         return [line for line in self.trace() if "fault" in line.lower()][-8:]
 
+    def recent_trace(self, limit=24):
+        return self.trace()[-limit:]
+
     def wait_for_text(self, text, deadline, after=0, exact=False):
         """Waits until every needle has been printed since `after`.
 
@@ -626,6 +674,9 @@ def open_terminal(machine, boot_deadline, command_deadline):
             print("    |%s|" % line)
         for line in machine.recent_faults():
             print("    %s" % line)
+        print("last trace records:")
+        for line in machine.recent_trace():
+            print("    %s" % line)
         print("last serial lines:")
         for line in machine.recent_serial():
             print("    %s" % line)
@@ -647,10 +698,33 @@ def interface_layout_benchmark(machine, boot_deadline):
                         "INTERFACE UNDO n=%08x" %
                         INTERFACE_UNDO_OPERATIONS,
                         "INTERFACE TEXT n=%08x" %
-                        INTERFACE_TEXT_OPERATIONS,)
+                        INTERFACE_TEXT_OPERATIONS,
+                        "INTERFACE SEGMENTED n=%08x" %
+                        INTERFACE_SEGMENTED_OPERATIONS,
+                        "INTERFACE TAB n=%08x" %
+                        INTERFACE_TAB_OPERATIONS,
+                        "INTERFACE STEPPER n=%08x" %
+                        INTERFACE_STEPPER_OPERATIONS,
+                        "INTERFACE DIAL n=%08x" %
+                        INTERFACE_DIAL_OPERATIONS,
+                        "INTERFACE DISCLOSURE n=%08x" %
+                        INTERFACE_DISCLOSURE_OPERATIONS,
+                        "INTERFACE SPLITTER n=%08x" %
+                        INTERFACE_SPLITTER_OPERATIONS,)
     lines, _ = machine.wait_for_text(needles, boot_deadline)
     if lines is None:
         print("FAIL: interface layout benchmark did not finish")
+        for line in machine.said()[0]:
+            if "INTERFACE " in line:
+                print("    |%s|" % line)
+        for line in machine.recent_faults():
+            print("    %s" % line)
+        print("last trace records:")
+        for line in machine.recent_trace():
+            print("    %s" % line)
+        print("last serial lines:")
+        for line in machine.recent_serial():
+            print("    %s" % line)
         return False
     results = {}
     for line in lines:
@@ -731,6 +805,40 @@ def interface_layout_benchmark(machine, boot_deadline):
           "%u pieces" %
           (operations, append_ns / operations, fragmented_ns / operations,
            pieces))
+    for name, pattern, expected, maximum in (
+            ("segmented", INTERFACE_SEGMENTED,
+             INTERFACE_SEGMENTED_OPERATIONS,
+             INTERFACE_VALUE_CONTROL_MAX_NS_PER_ACTION),
+            ("tab", INTERFACE_TAB, INTERFACE_TAB_OPERATIONS,
+             INTERFACE_VALUE_CONTROL_MAX_NS_PER_ACTION),
+            ("stepper", INTERFACE_STEPPER, INTERFACE_STEPPER_OPERATIONS,
+             INTERFACE_VALUE_CONTROL_MAX_NS_PER_ACTION),
+            ("dial", INTERFACE_DIAL, INTERFACE_DIAL_OPERATIONS,
+             INTERFACE_VALUE_CONTROL_MAX_NS_PER_ACTION),
+            ("disclosure", INTERFACE_DISCLOSURE,
+             INTERFACE_DISCLOSURE_OPERATIONS,
+             INTERFACE_DISCLOSURE_MAX_NS_PER_ACTION),
+            ("splitter", INTERFACE_SPLITTER, INTERFACE_SPLITTER_OPERATIONS,
+             INTERFACE_SPLITTER_MAX_NS_PER_ACTION)):
+        results = [tuple(int(value, 16) for value in match.groups())
+                   for line in lines
+                   for match in [pattern.search(line)] if match is not None]
+        if len(results) != 1 or results[0][0] != expected or results[0][1] == 0:
+            print("FAIL: malformed or duplicate %s benchmark: %r" %
+                  (name, results))
+            return False
+        if results[0][1] > maximum * expected:
+            print("FAIL: %s exceeded %u ns/action: %r" %
+                  (name, maximum, results[0]))
+            return False
+        print("%5u %-11s %7.1f ns/action" %
+              (expected, name, results[0][1] / expected))
+    print("ASTRA INTERFACE SPLITTER PASS")
+    print("ASTRA INTERFACE DISCLOSURE PASS")
+    print("ASTRA INTERFACE DIAL PASS")
+    print("ASTRA INTERFACE STEPPER PASS")
+    print("ASTRA INTERFACE TAB PASS")
+    print("ASTRA INTERFACE SEGMENTED PASS")
     print("ASTRA INTERFACE TEXT PASS")
     print("ASTRA INTERFACE UNDO PASS")
     print("ASTRA INTERFACE LAYOUT PASS")
@@ -747,22 +855,25 @@ def wait_for_command(machine, expected, deadline, before, exact=False):
 
 def zsh_interactive(machine, command_deadline, verbose=False):
     """Exercise the default zsh's own line editor on the terminal TTY."""
-    # Use a second terminal to prove the first terminal is already running
-    # zsh, rather than a session host which merely launches one on demand.
-    before = machine.sequence()
-    machine.qmp.double_click(*TERMINAL_ICON)
-    if machine.wait_for_text(BANNER, command_deadline, before)[0] is None:
-        print("FAIL: no observer terminal opened for interactive zsh")
-        return False
-    if not machine.wait_for_ready(command_deadline, before):
-        print("FAIL: observer zsh never became ready")
-        return False
+    # Five concurrent sessions crossed the old global queue-reservation wall:
+    # their configured but empty queues consumed all 256 message slots.  Open
+    # four observers beside the original terminal and require each shell to
+    # become ready before launching the next.
+    for observer in range(4):
+        before = machine.sequence()
+        machine.qmp.double_click(*TERMINAL_ICON)
+        if machine.wait_for_text(BANNER, command_deadline, before)[0] is None:
+            print("FAIL: observer terminal %u did not open" % (observer + 1))
+            return False
+        if not machine.wait_for_ready(command_deadline, before):
+            print("FAIL: observer zsh %u never became ready" % (observer + 1))
+            return False
     before = machine.sequence()
     machine.qmp.type_line("ps; print ASTRA-PS-DONE")
     observed = wait_for_command(machine, "ASTRA-PS-DONE", command_deadline,
                                 before, exact=True)
-    if observed is None or sum(" zsh" in line for line in observed) < 2:
-        print("FAIL: both terminal windows did not own zsh sessions")
+    if observed is None or sum(" zsh" in line for line in observed) < 5:
+        print("FAIL: five terminal windows did not own zsh sessions")
         for text in machine.said(before)[0][-80:]:
             print("    |%s|" % text)
         return False
@@ -1083,6 +1194,20 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
             if wait_for_command(machine, "ASTRA-STILL-PROMPTING",
                                 command_deadline, before, exact=True) is None:
                 print("FAIL: the shell stopped prompting")
+                return 1
+
+            # Icons and shell commands are front ends to the same application
+            # launcher. Run this last because the new window takes input focus.
+            before = machine.sequence()
+            machine.qmp.type_line(
+                "open APPS:InterfaceGallery.app --from-terminal; "
+                "print ASTRA-OPEN-$?; ps")
+            said = wait_for_command(machine,
+                                    ("ASTRA-OPEN-0",
+                                     "APPS:InterfaceGallery.app"),
+                                    command_deadline, before)
+            if said is None:
+                print("FAIL: Terminal could not launch Interface Gallery")
                 return 1
 
             if report_timings:

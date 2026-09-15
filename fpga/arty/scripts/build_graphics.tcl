@@ -568,7 +568,7 @@ add_files -norecurse [list \
 set boot_font [file join $repo_root build fpga post_fonts.hex]
 file mkdir [file dirname $boot_font]
 exec python3 [file join $repo_root tools fonts afnt.py] emit-cp437-hex \
-    [file join $repo_root sw userspace graphics fonts astra-mono.afnt] \
+    [file join $repo_root sw userspace graphics fonts astra-rescue-mono.afnt] \
     $boot_font
 add_files -norecurse $boot_font
 set_property FILE_TYPE {Memory Initialization Files} [get_files $boot_font]

@@ -3,6 +3,7 @@
 #include <console_session.h>
 #include <console_stream.h>
 
+#include <astra/application_service.h>
 #include <astra/config_document.h>
 #include <astra/event_control.h>
 #include <astra/network.h>
@@ -99,6 +100,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
         ASTRA_CAPABILITY_NETWORK_LISTEN,
         ASTRA_CAPABILITY_NTP,
         ASTRA_CAPABILITY_POSIX_PROCESS,
+        ASTRA_CAPABILITY_APPLICATION_LAUNCH,
     };
     const uint32_t streams[] = {
         console_stream_stdout(), console_stream_stderr(),

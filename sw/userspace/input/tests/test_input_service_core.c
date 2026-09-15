@@ -131,7 +131,7 @@ static void test_keymap_modifiers_and_repeat(void)
     event = key(0x04u, true, 3011u, 1u);
     astra_input_service_ingest(&service, &event, false);
     assert(sink.count == 2u); /* Ctrl and A key events, no text event. */
-    assert((uint32_t)sink.events[1].value_x & ASTRA_INPUT_MOD_LEFT_CTRL);
+    assert(sink.events[1].modifiers & ASTRA_INPUT_MOD_LEFT_CTRL);
 
     event = key(0x04u, false, 3012u, 1u);
     astra_input_service_ingest(&service, &event, false);
@@ -190,13 +190,13 @@ static void test_meta_is_normalized_once(void)
     focus(&service, &sink);
     event = key(0xe2u, true, 10u, 1u);
     astra_input_service_ingest(&service, &event, false);
-    assert(((uint32_t)sink.events[0].value_x &
+    assert((sink.events[0].modifiers &
             (ASTRA_INPUT_MOD_LEFT_ALT | ASTRA_INPUT_MOD_META)) ==
            (ASTRA_INPUT_MOD_LEFT_ALT | ASTRA_INPUT_MOD_META));
     event = key(0x06u, true, 11u, 1u);
     astra_input_service_ingest(&service, &event, false);
     assert(sink.count == 2u);
-    assert(((uint32_t)sink.events[1].value_x & ASTRA_INPUT_MOD_META) != 0u);
+    assert((sink.events[1].modifiers & ASTRA_INPUT_MOD_META) != 0u);
 
     event = key(0x06u, false, 12u, 1u);
     astra_input_service_ingest(&service, &event, false);
@@ -205,14 +205,14 @@ static void test_meta_is_normalized_once(void)
     sink.count = 0u;
     event = key(0xe6u, true, 14u, 1u);
     astra_input_service_ingest(&service, &event, false);
-    assert(((uint32_t)sink.events[0].value_x & ASTRA_INPUT_MOD_META) == 0u);
+    assert((sink.events[0].modifiers & ASTRA_INPUT_MOD_META) == 0u);
 
     service.config.meta_modifier = ASTRA_INPUT_MOD_LEFT_GUI;
     event = key(0xe6u, false, 15u, 1u);
     astra_input_service_ingest(&service, &event, false);
     event = key(0xe3u, true, 16u, 1u);
     astra_input_service_ingest(&service, &event, false);
-    assert(((uint32_t)sink.events[sink.count - 1u].value_x &
+    assert((sink.events[sink.count - 1u].modifiers &
             ASTRA_INPUT_MOD_META) != 0u);
 }
 
@@ -330,6 +330,35 @@ static void test_pointer_batch_emits_one_motion(void)
     assert(service.stats.logical_events == 2u); /* Focus plus one motion. */
 }
 
+static void test_pointer_events_retain_modifiers(void)
+{
+    AstraInputService service = make_service();
+    TestSink sink = {0};
+    AstraInputEvent event;
+
+    focus(&service, &sink);
+    event = key(0xe2u, true, 20u, 1u); /* left Alt, the default Meta key */
+    astra_input_service_ingest(&service, &event, false);
+    sink.count = 0u;
+
+    event = pointer(ASTRA_INPUT_POINTER_RELATIVE, 0u, 3, 21u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(sink.count == 1u);
+    assert(sink.events[0].type == ASTRA_INPUT_EVENT_POINTER_MOTION);
+    assert((sink.events[0].modifiers &
+            (ASTRA_INPUT_MOD_LEFT_ALT | ASTRA_INPUT_MOD_META)) ==
+           (ASTRA_INPUT_MOD_LEFT_ALT | ASTRA_INPUT_MOD_META));
+
+    event = pointer(ASTRA_INPUT_POINTER_BUTTON, ASTRA_INPUT_FLAG_DOWN,
+                    ASTRA_INPUT_BUTTON_WHEEL_UP, 22u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(sink.count == 2u);
+    assert(sink.events[1].type == ASTRA_INPUT_EVENT_POINTER_BUTTON);
+    assert((sink.events[1].modifiers &
+            (ASTRA_INPUT_MOD_LEFT_ALT | ASTRA_INPUT_MOD_META)) ==
+           (ASTRA_INPUT_MOD_LEFT_ALT | ASTRA_INPUT_MOD_META));
+}
+
 static void test_windowless_pointer_subscription(void)
 {
     AstraInputService service = make_service();
@@ -431,9 +460,7 @@ static void test_unfocused_client_gets_loss_retry(void)
 typedef struct TestPort {
     AstraInputEventMessage message;
     AstraInputPortSendResult result;
-    uint32_t full_before_ok;
     uint32_t sends;
-    uint32_t waits;
 } TestPort;
 
 static AstraInputPortSendResult port_send(void *context, uint32_t send_handle,
@@ -445,22 +472,8 @@ static AstraInputPortSendResult port_send(void *context, uint32_t send_handle,
     assert(send_handle == 42u);
     assert(message_size == sizeof(port->message));
     ++port->sends;
-    if (port->full_before_ok != 0u) {
-        --port->full_before_ok;
-        return ASTRA_INPUT_PORT_SEND_FULL;
-    }
     port->message = *(const AstraInputEventMessage *)message;
     return port->result;
-}
-
-static AstraInputPortSendResult port_wait(void *context,
-                                          uint32_t send_handle)
-{
-    TestPort *port = context;
-
-    assert(send_handle == 42u);
-    ++port->waits;
-    return ASTRA_INPUT_PORT_SEND_OK;
 }
 
 static void test_port_protocol_adapter(void)
@@ -476,7 +489,6 @@ static void test_port_protocol_adapter(void)
     TestPort port = {.result = ASTRA_INPUT_PORT_SEND_OK};
 
     sink.send = port_send;
-    sink.wait = port_wait;
     sink.context = &port;
     sink.send_handle = 42u;
     assert(astra_input_port_deliver(&sink, &event) ==
@@ -489,15 +501,14 @@ static void test_port_protocol_adapter(void)
     assert(port.message.header.operation == ASTRA_INPUT_OPERATION_EVENT);
     assert(port.message.header.transaction_id == 77u);
     assert(port.message.event.code == 'x');
-    port.full_before_ok = 2u;
-    assert(astra_input_port_deliver(&sink, &event) ==
-           ASTRA_INPUT_DELIVERY_OK);
-    assert(port.sends == 4u && port.waits == 2u);
-    event.type = ASTRA_INPUT_EVENT_POINTER_MOTION;
     port.result = ASTRA_INPUT_PORT_SEND_FULL;
     assert(astra_input_port_deliver(&sink, &event) ==
            ASTRA_INPUT_DELIVERY_FULL);
-    assert(port.waits == 2u);
+    assert(port.sends == 2u);
+    event.type = ASTRA_INPUT_EVENT_POINTER_MOTION;
+    assert(astra_input_port_deliver(&sink, &event) ==
+           ASTRA_INPUT_DELIVERY_FULL);
+    assert(port.sends == 3u);
     event.type = ASTRA_INPUT_EVENT_TEXT;
     port.result = ASTRA_INPUT_PORT_SEND_PEER_DEAD;
     assert(astra_input_port_deliver(&sink, &event) ==
@@ -513,6 +524,7 @@ int main(void)
     test_focus_subscription_mask();
     test_pointer_acceleration_clipping_and_coalescing();
     test_pointer_batch_emits_one_motion();
+    test_pointer_events_retain_modifiers();
     test_windowless_pointer_subscription();
     test_full_queue_forces_state_reset();
     test_client_limits_and_death();

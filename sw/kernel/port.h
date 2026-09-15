@@ -10,15 +10,15 @@
 /*
  * These are budgets, not guesses, and they are static on purpose: a process
  * that could make the kernel allocate could exhaust the kernel, and a kernel
- * out of memory is not a failed allocation, it is the machine. Every resource
- * below therefore comes in a pair -- a global budget and a per-owner quota --
- * so one process cannot spend another's share.
+ * out of memory is not a failed allocation, it is the machine. Port and queue
+ * configuration is limited per owner; copied messages consume the separate
+ * fixed global pool only while they are actually queued. Advertising unused
+ * queue capacity must not consume another process's ability to create a port.
  *
- * The numbers were sized for a GUI profile of 18 live ports and grew when a
- * protocol record reached the message ceiling with no headroom left. They are
- * now sized against the 2 MiB object-table region rather than against what
- * would fit beside the kernel image; the region is the thing to raise when
- * these are not enough, and the linker says so by name if they overflow it.
+ * The fixed pools are sized against the object-table region rather than
+ * against what would fit beside the kernel image; the region is the thing to
+ * raise when measured live occupancy reaches it, and the linker says so by
+ * name if it overflows.
  */
 #define KERNEL_PORT_MAX 128u
 #define KERNEL_PORT_OWNER_MAX 24u
@@ -103,7 +103,7 @@ typedef struct KernelPortSnapshot {
     uint16_t readable_waiters;
     uint16_t writable_waiters;
     uint8_t state;
-    uint8_t capacity_reserved;
+    uint8_t capacity_accounted;
     uint8_t reserved[2];
 } KernelPortSnapshot;
 
@@ -132,8 +132,8 @@ typedef struct KernelPortPoolStats {
     uint32_t max_queued_messages;
     uint32_t max_queued_bytes;
     uint32_t max_queued_handles;
-    uint32_t reserved_message_capacity;
-    uint32_t reserved_byte_capacity;
+    uint32_t configured_message_capacity;
+    uint32_t configured_byte_capacity;
 } KernelPortPoolStats;
 
 void kernel_port_pool_init(void);

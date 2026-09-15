@@ -703,7 +703,7 @@ static void test_device_service_death_quiesces_source(void)
     assert((registers->IRQ_ENABLE & IRQ_BIT(IRQ_SRC_VEGA)) == 0u);
     service_scheduled_device_reset();
     assert(vega->IRQ_EN == 0u);
-    assert(vega->IRQ_STAT == VEGA_IRQ_VBLANK);
+    assert(vega->IRQ_STAT == 0u);
     kernel_irq_handle_release(endpoint, NULL);
     assert(kernel_irq_pool_valid());
 

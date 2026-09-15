@@ -20,7 +20,8 @@ capability NETWORK
 capability NETWORK_LISTEN
 capability NTP
 capability POSIX_PROCESS
+capability APP_LAUNCH
 requires graphics.library 2 2.0.0
-requires interface.library 2 2.4.0
+requires interface.library 5 5.0.0
 requires filesystem.library 2 2.0.0
 requires network.library 1 1.0.0

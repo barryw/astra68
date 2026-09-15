@@ -92,6 +92,7 @@ typedef struct KernelHandleEntry {
 typedef struct KernelHandleTable {
     KernelHandleEntry entries[KERNEL_HANDLE_MAX_ENTRIES];
     uint32_t owner;
+    uint32_t process_id;
     uint32_t free_slots[KERNEL_HANDLE_BITMAP_WORDS];
 } KernelHandleTable;
 
@@ -126,7 +127,8 @@ typedef struct KernelHandleTransferStats {
 
 void kernel_handle_transfer_pool_init(void);
 void kernel_handle_table_init(KernelHandleTable *table);
-bool kernel_handle_table_set_owner(KernelHandleTable *table, uint32_t owner);
+bool kernel_handle_table_set_owner(KernelHandleTable *table, uint32_t owner,
+                                   uint32_t process_id);
 KernelHandleStatus kernel_handle_clone_table(
     const KernelHandleTable *source, KernelHandleTable *destination);
 KernelHandleStatus kernel_handle_install(KernelHandleTable *table,

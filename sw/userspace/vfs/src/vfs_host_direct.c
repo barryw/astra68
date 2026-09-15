@@ -476,6 +476,18 @@ uint32_t astra_vfs_host_direct_transport(
                 request->offset, request->length, reply->payload,
                 ASTRA_VFS_IO_MAX, &reply->count, &reply->cursor);
         break;
+    case ASTRA_VFS_OP_READ_PATH:
+        if (client->version < UINT16_C(7)) {
+            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
+        } else if (request->length == 0u ||
+                   request->length > ASTRA_VFS_IO_MAX) {
+            reply->status = ASTRA_VFS_ERR_INVALID;
+        } else {
+            reply->status = astra_vfs_backend_read_path(
+                &backend, (const char *)request->body.path, reply->payload,
+                request->length, &reply->count, &reply->node_size);
+        }
+        break;
     case ASTRA_VFS_OP_MKDIR:
         if (client->version >= UINT16_C(14) &&
             request->offset != ASTRA_VFS_MODE_DEFAULT &&

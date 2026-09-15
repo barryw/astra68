@@ -10,25 +10,33 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 enum {
-    COPPER_DEVICE_ID = 0x434f5052u,
-    COPPER_VERSION = 0x00010001u,
     COPPER_TIMEOUT_NS = 2000000000u,
     COPPER_IRQ_SOURCE = 0xcafeu,
     COPPER_LIST_COUNT = 8u,
     COPPER_FAULT_BAD_TARGET = 4u,
+    COPPER_CAPTURE_LIST_COUNT = 9u,
+    CAPTURE_STORAGE_BASE =
+        ASTRA_GRAPHICS_ARENA_LIMIT - ASTRA_CAPTURE_FRAME_BYTES,
     RENDER_SUBMISSION_OFFSET = 0x00400000u,
     RENDER_COMPLETION_OFFSET = 0x00410000u,
-    OP_END = 0u,
-    OP_MOVE = 1u,
-    OP_WAIT = 2u,
-    OP_SKIP = 3u,
-    OP_IRQ = 4u,
-    OP_JUMP = 5u,
-    OP_DISPATCH = 6u,
 };
+
+struct scene_controls {
+    uint32_t global;
+    uint32_t backdrop;
+    uint32_t framebuffer;
+    uint32_t tile0;
+    uint32_t tile1;
+    uint32_t sprites;
+};
+
+_Static_assert(CAPTURE_STORAGE_BASE + ASTRA_CAPTURE_FRAME_BYTES <=
+                   ASTRA_GRAPHICS_ARENA_LIMIT,
+               "copper capture exceeds the graphics arena");
 
 struct render_state {
     uint32_t control;
@@ -47,42 +55,6 @@ static uint32_t instruction0(unsigned opcode, uint16_t argument)
 static uint32_t beam_instruction0(unsigned opcode, uint16_t y)
 {
     return ((uint32_t)opcode << 29) | y;
-}
-
-static void write_instruction(const struct astra_graphics_device *device,
-                              unsigned index, uint32_t word0,
-                              uint32_t word1)
-{
-    unsigned offset = ASTRA_REG_COPPER_PROGRAM + index * 8u;
-
-    astra_mmio_write(device, offset, word0);
-    astra_mmio_write(device, offset + 4u, word1);
-}
-
-static int wait_for_mask(const struct astra_graphics_device *device,
-                         unsigned offset, uint32_t mask,
-                         uint32_t expected, uint32_t *value_out)
-{
-    const struct timespec delay = { .tv_sec = 0, .tv_nsec = 1000000 };
-    uint64_t deadline = astra_monotonic_nanoseconds() + COPPER_TIMEOUT_NS;
-
-    for (;;) {
-        uint32_t value = astra_mmio_read(device, offset);
-
-        if ((value & mask) == expected) {
-            if (value_out != NULL)
-                *value_out = value;
-            return 0;
-        }
-        if (astra_monotonic_nanoseconds() >= deadline) {
-            fprintf(stderr,
-                    "copper timeout offset=%04x value=%08" PRIx32
-                    " mask=%08" PRIx32 " expected=%08" PRIx32 "\n",
-                    offset, value, mask, expected);
-            return -1;
-        }
-        (void)nanosleep(&delay, NULL);
-    }
 }
 
 static void save_render_state(const struct astra_graphics_device *device,
@@ -161,10 +133,11 @@ static int validate_list(const struct astra_graphics_device *device,
                      (uint32_t)count << 16);
     astra_mmio_write(device, ASTRA_REG_COPPER_VALIDATE_START, 1u);
     if (expect_valid) {
-        if (wait_for_mask(device, ASTRA_REG_COPPER_STATUS,
-                          ASTRA_COPPER_STATUS_VALIDATE_VALID,
-                          ASTRA_COPPER_STATUS_VALIDATE_VALID,
-                          &value) != 0)
+        if (astra_graphics_wait_register_mask(
+                device, ASTRA_REG_COPPER_STATUS,
+                ASTRA_COPPER_STATUS_VALIDATE_VALID,
+                ASTRA_COPPER_STATUS_VALIDATE_VALID,
+                COPPER_TIMEOUT_NS, &value) != 0)
             return -1;
     } else {
         uint64_t deadline = astra_monotonic_nanoseconds() +
@@ -185,28 +158,47 @@ static int validate_list(const struct astra_graphics_device *device,
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     struct astra_graphics_device device;
     struct render_state saved;
+    struct scene_controls scene;
+    const char *capture_path = NULL;
     uint32_t status;
     uint32_t retired_before;
     int result = EXIT_FAILURE;
     bool renderer_changed = false;
+    bool scene_changed = false;
+
+    if (argc == 3 && strcmp(argv[1], "--capture") == 0)
+        capture_path = argv[2];
+    else if (argc != 1) {
+        fprintf(stderr, "usage: %s [--capture OUTPUT.rgb]\n", argv[0]);
+        return EXIT_FAILURE;
+    }
 
     astra_graphics_device_init(&device);
     if (astra_graphics_device_open(&device, false) != 0 ||
         astra_graphics_device_validate(&device, false) != 0)
         goto done;
+    if (capture_path != NULL && astra_display_capture_claim(&device) != 0)
+        goto done;
     if ((astra_mmio_read(&device, ASTRA_REG_CAPABILITIES) &
          ASTRA_CAP_COPPER) == 0u ||
         astra_mmio_read(&device, ASTRA_REG_COPPER_DEVICE_ID) !=
-            COPPER_DEVICE_ID ||
+            ASTRA_COPPER_DEVICE_ID ||
         astra_mmio_read(&device, ASTRA_REG_COPPER_VERSION) !=
-            COPPER_VERSION) {
+            ASTRA_COPPER_VERSION) {
         fprintf(stderr, "Astra copper identity is not present\n");
         goto done;
     }
+
+    scene.global = astra_mmio_read(&device, ASTRA_REG_GLOBAL_CONTROL);
+    scene.backdrop = astra_mmio_read(&device, ASTRA_REG_BACKDROP);
+    scene.framebuffer = astra_mmio_read(&device, ASTRA_REG_FB_CONTROL);
+    scene.tile0 = astra_mmio_read(&device, ASTRA_REG_TILE0_CONTROL);
+    scene.tile1 = astra_mmio_read(&device, ASTRA_REG_TILE1_CONTROL);
+    scene.sprites = astra_mmio_read(&device, ASTRA_REG_SPRITE_CONTROL);
 
     save_render_state(&device, &saved);
     if (configure_empty_renderer(&device, &saved) != 0)
@@ -220,27 +212,34 @@ int main(void)
     astra_mmio_write(&device, ASTRA_REG_COPPER_DISPATCH_ENDPOINT,
                      0x80000000u);
 
-    write_instruction(&device, 0u, beam_instruction0(OP_WAIT, 1u), 0u);
-    write_instruction(&device, 1u, beam_instruction0(OP_SKIP, 1u), 0u);
-    write_instruction(&device, 2u,
-                      instruction0(OP_MOVE, ASTRA_REG_BACKDROP),
+    astra_graphics_copper_write_instruction(
+        &device, 0u, beam_instruction0(ASTRA_COPPER_OP_WAIT, 1u), 0u);
+    astra_graphics_copper_write_instruction(
+        &device, 1u, beam_instruction0(ASTRA_COPPER_OP_SKIP, 1u), 0u);
+    astra_graphics_copper_write_instruction(&device, 2u,
+                      instruction0(ASTRA_COPPER_OP_MOVE, ASTRA_REG_BACKDROP),
                       0x00010203u);
-    write_instruction(&device, 3u,
-                      instruction0(OP_MOVE, ASTRA_REG_BACKDROP),
+    astra_graphics_copper_write_instruction(&device, 3u,
+                      instruction0(ASTRA_COPPER_OP_MOVE, ASTRA_REG_BACKDROP),
                       0x00040506u);
-    write_instruction(&device, 4u, instruction0(OP_DISPATCH, 3u), 0u);
-    write_instruction(&device, 5u,
-                      instruction0(OP_IRQ, COPPER_IRQ_SOURCE), 0u);
-    write_instruction(&device, 6u, instruction0(OP_JUMP, 7u), 0u);
-    write_instruction(&device, 7u, instruction0(OP_END, 0u), 0u);
+    astra_graphics_copper_write_instruction(
+        &device, 4u, instruction0(ASTRA_COPPER_OP_DISPATCH, 3u), 0u);
+    astra_graphics_copper_write_instruction(
+        &device, 5u,
+        instruction0(ASTRA_COPPER_OP_IRQ, COPPER_IRQ_SOURCE), 0u);
+    astra_graphics_copper_write_instruction(
+        &device, 6u, instruction0(ASTRA_COPPER_OP_JUMP, 7u), 0u);
+    astra_graphics_copper_write_instruction(
+        &device, 7u, instruction0(ASTRA_COPPER_OP_END, 0u), 0u);
     if (validate_list(&device, COPPER_LIST_COUNT, true) != 0)
         goto cleanup;
 
     retired_before = astra_mmio_read(&device, ASTRA_REG_COPPER_RETIRED);
     astra_mmio_write(&device, ASTRA_REG_COPPER_CONTROL,
                      ASTRA_COPPER_ENABLE | ASTRA_COPPER_PROMOTE);
-    if (wait_for_mask(&device, ASTRA_REG_COPPER_IRQ_PENDING, 1u, 1u,
-                      NULL) != 0)
+    if (astra_graphics_wait_register_mask(
+            &device, ASTRA_REG_COPPER_IRQ_PENDING, 1u, 1u,
+            COPPER_TIMEOUT_NS, NULL) != 0)
         goto cleanup;
     status = astra_mmio_read(&device, ASTRA_REG_COPPER_STATUS);
     if ((status & ASTRA_COPPER_STATUS_FAULT) != 0u ||
@@ -263,8 +262,78 @@ int main(void)
 
     astra_mmio_write(&device, ASTRA_REG_COPPER_CONTROL, 0u);
     astra_mmio_write(&device, ASTRA_REG_COPPER_IRQ_PENDING, 1u);
-    write_instruction(&device, 0u, instruction0(OP_MOVE, 0xfffcu), 0u);
-    write_instruction(&device, 1u, instruction0(OP_END, 0u), 0u);
+    if (capture_path != NULL) {
+        struct astra_display_capture_result capture;
+        uint32_t generation;
+
+        astra_mmio_write(&device, ASTRA_REG_FB_CONTROL, 0u);
+        astra_mmio_write(&device, ASTRA_REG_TILE0_CONTROL, 0u);
+        astra_mmio_write(&device, ASTRA_REG_TILE1_CONTROL, 0u);
+        astra_mmio_write(&device, ASTRA_REG_SPRITE_CONTROL, 0u);
+        astra_mmio_write(&device, ASTRA_REG_GLOBAL_CONTROL, 1u);
+        if (astra_graphics_scene_commit(&device, COPPER_TIMEOUT_NS,
+                                        &generation) != 0)
+            goto cleanup;
+        scene_changed = true;
+
+        astra_graphics_copper_write_instruction(
+            &device, 0u,
+                          instruction0(ASTRA_COPPER_OP_MOVE,
+                                       ASTRA_REG_BACKDROP),
+                          0x0011273bu);
+        astra_graphics_copper_write_instruction(
+            &device, 1u,
+            beam_instruction0(ASTRA_COPPER_OP_WAIT, 270u), 0u);
+        astra_graphics_copper_write_instruction(
+            &device, 2u,
+                          instruction0(ASTRA_COPPER_OP_MOVE,
+                                       ASTRA_REG_BACKDROP),
+                          0x001b5060u);
+        astra_graphics_copper_write_instruction(
+            &device, 3u,
+            beam_instruction0(ASTRA_COPPER_OP_WAIT, 540u), 0u);
+        astra_graphics_copper_write_instruction(
+            &device, 4u,
+                          instruction0(ASTRA_COPPER_OP_MOVE,
+                                       ASTRA_REG_BACKDROP),
+                          0x00513a6bu);
+        astra_graphics_copper_write_instruction(
+            &device, 5u,
+            beam_instruction0(ASTRA_COPPER_OP_WAIT, 810u), 0u);
+        astra_graphics_copper_write_instruction(
+            &device, 6u,
+                          instruction0(ASTRA_COPPER_OP_MOVE,
+                                       ASTRA_REG_BACKDROP),
+                          0x00722f4cu);
+        astra_graphics_copper_write_instruction(
+            &device, 7u,
+            instruction0(ASTRA_COPPER_OP_IRQ, COPPER_IRQ_SOURCE), 0u);
+        astra_graphics_copper_write_instruction(
+            &device, 8u, instruction0(ASTRA_COPPER_OP_END, 0u), 0u);
+        if (validate_list(&device, COPPER_CAPTURE_LIST_COUNT, true) != 0)
+            goto cleanup;
+        astra_mmio_write(&device, ASTRA_REG_COPPER_CONTROL,
+                         ASTRA_COPPER_ENABLE | ASTRA_COPPER_PROMOTE);
+        if (astra_graphics_wait_register_mask(
+                &device, ASTRA_REG_COPPER_IRQ_PENDING, 1u, 1u,
+                COPPER_TIMEOUT_NS, NULL) != 0)
+            goto cleanup;
+        if (astra_graphics_capture_rgb(&device, CAPTURE_STORAGE_BASE,
+                                       capture_path, &capture) != 0) {
+            perror("capture copper bands");
+            goto cleanup;
+        }
+        printf("ASTRA_COPPER_CAPTURE generation=%" PRIu32
+               " cycles=%" PRIu32 " elapsed_ns=%" PRIu64 "\n",
+               capture.generation, capture.cycles, capture.elapsed_ns);
+        astra_mmio_write(&device, ASTRA_REG_COPPER_CONTROL, 0u);
+        astra_mmio_write(&device, ASTRA_REG_COPPER_IRQ_PENDING, 1u);
+    }
+    astra_graphics_copper_write_instruction(
+        &device, 0u,
+        instruction0(ASTRA_COPPER_OP_MOVE, 0xfffcu), 0u);
+    astra_graphics_copper_write_instruction(
+        &device, 1u, instruction0(ASTRA_COPPER_OP_END, 0u), 0u);
     if (validate_list(&device, 2u, false) != 0)
         goto cleanup;
 
@@ -276,6 +345,19 @@ int main(void)
 cleanup:
     astra_mmio_write(&device, ASTRA_REG_COPPER_CONTROL, 0u);
     astra_mmio_write(&device, ASTRA_REG_COPPER_IRQ_PENDING, 1u);
+    if (scene_changed) {
+        uint32_t generation;
+
+        astra_mmio_write(&device, ASTRA_REG_BACKDROP, scene.backdrop);
+        astra_mmio_write(&device, ASTRA_REG_FB_CONTROL, scene.framebuffer);
+        astra_mmio_write(&device, ASTRA_REG_TILE0_CONTROL, scene.tile0);
+        astra_mmio_write(&device, ASTRA_REG_TILE1_CONTROL, scene.tile1);
+        astra_mmio_write(&device, ASTRA_REG_SPRITE_CONTROL, scene.sprites);
+        astra_mmio_write(&device, ASTRA_REG_GLOBAL_CONTROL, scene.global);
+        if (astra_graphics_scene_commit(&device, COPPER_TIMEOUT_NS,
+                                        &generation) != 0)
+            result = EXIT_FAILURE;
+    }
     if (renderer_changed)
         restore_renderer(&device, &saved);
 done:

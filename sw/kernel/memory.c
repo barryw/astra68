@@ -47,8 +47,8 @@ typedef struct KernelOwnerLedger {
 static KernelFrameInfo *frames;
 static uint32_t *owner_next;
 static uint32_t *owner_previous;
-static KernelOwnerLedger owner_ledgers[KERNEL_MAX_FRAME_OWNERS] KERNEL_NOINIT;
-static uint32_t protected_owners[KERNEL_MAX_FRAME_OWNERS] KERNEL_NOINIT;
+static KernelOwnerLedger owner_ledgers[KERNEL_MEMORY_OWNER_MAX] KERNEL_NOINIT;
+static uint32_t protected_owners[KERNEL_MEMORY_OWNER_MAX] KERNEL_NOINIT;
 static uint32_t *blocked_bitmap;
 static uint32_t *dynamic_bitmap;
 static uint32_t *classified_bitmap;
@@ -231,7 +231,7 @@ bool kernel_memory_owner_protected(uint32_t owner)
 {
     if (!initialized || owner == KERNEL_OWNER_NONE)
         return false;
-    for (uint32_t index = 0u; index < KERNEL_MAX_FRAME_OWNERS; ++index)
+    for (uint32_t index = 0u; index < KERNEL_MEMORY_OWNER_MAX; ++index)
         if (protected_owners[index] == owner)
             return true;
     return false;
@@ -239,18 +239,18 @@ bool kernel_memory_owner_protected(uint32_t owner)
 
 bool kernel_memory_protect_owner(uint32_t owner)
 {
-    uint32_t empty = KERNEL_MAX_FRAME_OWNERS;
+    uint32_t empty = KERNEL_MEMORY_OWNER_MAX;
 
     if (!initialized || owner == KERNEL_OWNER_NONE)
         return false;
-    for (uint32_t index = 0u; index < KERNEL_MAX_FRAME_OWNERS; ++index) {
+    for (uint32_t index = 0u; index < KERNEL_MEMORY_OWNER_MAX; ++index) {
         if (protected_owners[index] == owner)
             return true;
-        if (empty == KERNEL_MAX_FRAME_OWNERS &&
+        if (empty == KERNEL_MEMORY_OWNER_MAX &&
             protected_owners[index] == KERNEL_OWNER_NONE)
             empty = index;
     }
-    if (empty == KERNEL_MAX_FRAME_OWNERS)
+    if (empty == KERNEL_MEMORY_OWNER_MAX)
         return false;
     protected_owners[empty] = owner;
     ++stats.protected_owners;
@@ -261,7 +261,7 @@ bool kernel_memory_unprotect_owner(uint32_t owner)
 {
     if (!initialized || owner == KERNEL_OWNER_NONE)
         return false;
-    for (uint32_t index = 0u; index < KERNEL_MAX_FRAME_OWNERS; ++index) {
+    for (uint32_t index = 0u; index < KERNEL_MEMORY_OWNER_MAX; ++index) {
         if (protected_owners[index] != owner)
             continue;
         protected_owners[index] = KERNEL_OWNER_NONE;
@@ -302,7 +302,7 @@ static void bitmap_set(uint32_t *bitmap, uint32_t index, bool value)
 
 static bool find_owner_slot(uint32_t owner, uint32_t *slot)
 {
-    for (uint32_t index = 0u; index < KERNEL_MAX_FRAME_OWNERS; ++index) {
+    for (uint32_t index = 0u; index < KERNEL_MEMORY_OWNER_MAX; ++index) {
         if (owner_ledgers[index].owner == owner) {
             *slot = index;
             return true;
@@ -314,9 +314,9 @@ static bool find_owner_slot(uint32_t owner, uint32_t *slot)
 static bool owner_slot_for_allocation(uint32_t owner, uint32_t frame_count,
                                       uint32_t *slot)
 {
-    uint32_t empty = KERNEL_MAX_FRAME_OWNERS;
+    uint32_t empty = KERNEL_MEMORY_OWNER_MAX;
 
-    for (uint32_t index = 0u; index < KERNEL_MAX_FRAME_OWNERS; ++index) {
+    for (uint32_t index = 0u; index < KERNEL_MEMORY_OWNER_MAX; ++index) {
         if (owner_ledgers[index].owner == owner) {
             uint32_t available =
                 stats.total_frames - owner_ledgers[index].frame_count;
@@ -326,11 +326,11 @@ static bool owner_slot_for_allocation(uint32_t owner, uint32_t frame_count,
             *slot = index;
             return true;
         }
-        if (empty == KERNEL_MAX_FRAME_OWNERS &&
+        if (empty == KERNEL_MEMORY_OWNER_MAX &&
             owner_ledgers[index].owner == KERNEL_OWNER_NONE)
             empty = index;
     }
-    if (empty == KERNEL_MAX_FRAME_OWNERS)
+    if (empty == KERNEL_MEMORY_OWNER_MAX)
         return false;
     *slot = empty;
     return true;
@@ -665,7 +665,7 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
         owner_previous[index] = KERNEL_FRAME_INDEX_NONE;
         frame_allocation_sites[index] = KERNEL_ALLOCATION_SITE_INVALID;
     }
-    for (uint32_t index = 0u; index < KERNEL_MAX_FRAME_OWNERS; ++index) {
+    for (uint32_t index = 0u; index < KERNEL_MEMORY_OWNER_MAX; ++index) {
         owner_ledgers[index].owner = KERNEL_OWNER_NONE;
         owner_ledgers[index].head = KERNEL_FRAME_INDEX_NONE;
         owner_ledgers[index].frame_count = 0u;

@@ -41,6 +41,14 @@ def fixture(directory, delay, output="", status=0, mailbox_bytes=8193):
     write_executable(root / "bin/astra-terminal-display", f"""#!/bin/sh
 if [ "$1" = --mailbox-bytes ]; then echo {mailbox_bytes}; exit 0; fi
 python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))' >"{observed}/display.affinity"
+count=0
+test ! -r "{observed}/display.launches" || read count <"{observed}/display.launches"
+count=$((count + 1))
+printf '%s\n' "$count" >"{observed}/display.launches"
+if [ -e "{observed}/display.exit-once" ]; then
+    rm "{observed}/display.exit-once"
+    exit 42
+fi
 trap '' TERM
 while :; do sleep 1; done
 """)
@@ -133,6 +141,14 @@ def main():
         assert (observed / "hostfs.root").read_text().strip() == str(
             observed / "hostfs")
         assert (root / "storage-terminal.img").read_bytes() == b"disk"
+
+        (observed / "display.exit-once").touch()
+        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
+                                text=True, capture_output=True, check=False)
+        assert result.returncode == 0, result.stderr
+        assert int((observed / "display.launches").read_text()) >= 3
+        assert "display helper exited with status 42; restarting" in \
+            result.stderr
 
         (observed / "qemu.args").unlink()
         launch_environment["ASTRA_HOST_TIME_MIN"] = str(int(time.time()) + 60)

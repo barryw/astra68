@@ -13,15 +13,39 @@ supervisor_proc_path_is_root(const char *path)
 }
 
 static inline int
+supervisor_proc_path_equal(const char *path, const char *want)
+{
+    if (path == NULL || want == NULL) return 0;
+    if (*path == '/') ++path;
+    while (*path == *want && *want != '\0') {
+        ++path;
+        ++want;
+    }
+    return *path == '\0' && *want == '\0';
+}
+
+static inline int
 supervisor_proc_path_is_snapshot(const char *path)
 {
-    if (path == NULL)
-        return 0;
-    if (path[0] == '/')
-        ++path;
-    return path[0] == 's' && path[1] == 'n' && path[2] == 'a' &&
-           path[3] == 'p' && path[4] == 's' && path[5] == 'h' &&
-           path[6] == 'o' && path[7] == 't' && path[8] == '\0';
+    return supervisor_proc_path_equal(path, "snapshot");
+}
+
+static inline int
+supervisor_proc_path_is_libraries(const char *path)
+{
+    return supervisor_proc_path_equal(path, "libraries");
+}
+
+static inline int
+supervisor_proc_path_is_library_memory(const char *path)
+{
+    return supervisor_proc_path_equal(path, "libraries/memory");
+}
+
+static inline int
+supervisor_proc_path_is_library_disk(const char *path)
+{
+    return supervisor_proc_path_equal(path, "libraries/disk");
 }
 
 /*

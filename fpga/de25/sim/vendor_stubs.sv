@@ -1,6 +1,7 @@
 module sys_pll(input wire refclk, input wire rst, output wire outclk_0,
-               output wire locked);
+               output wire outclk_1, output wire locked);
     assign outclk_0 = refclk;
+    assign outclk_1 = refclk;
     assign locked = ~rst;
 endmodule
 

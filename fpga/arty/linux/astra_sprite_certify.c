@@ -9,10 +9,13 @@
 
 #include <errno.h>
 #include <inttypes.h>
+#include <limits.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 enum {
@@ -28,6 +31,9 @@ enum {
     SHAPE_STORAGE_BYTES = MAX_SHAPE_STORAGE_BYTES +
         VARIABLE_SHAPE_STORAGE_BYTES,
     SHAPE_STORAGE_BASE = ASTRA_GRAPHICS_ARENA_BASE + 0x01000000u,
+    CAPTURE_STORAGE_BASE =
+        ASTRA_GRAPHICS_ARENA_LIMIT - ASTRA_CAPTURE_FRAME_BYTES,
+    CAPTURE_BACKGROUND_BASE = ASTRA_GRAPHICS_ARENA_BASE + 0x00800000u,
     STRESS_DEST_WIDTH = 128u,
     STRESS_DEST_HEIGHT = 720u,
     CLIP_DEST_WIDTH = 96u,
@@ -38,6 +44,11 @@ enum {
     COMMIT_TIMEOUT_NS = 2000000000u,
     PHASE_TIMEOUT_NS = 3000000000u,
     PHASE_FRAMES = 3u,
+    SHOWCASE_SPRITE_COUNT = 16u,
+    SHOWCASE_COPPER_LIST_COUNT = 13u,
+    SHOWCASE_COPPER_IRQ_SOURCE = 0x51a7u,
+    SHOWCASE_SPRITE_PALETTE_1 = 0x6004u,
+    SHOWCASE_SPRITE_PALETTE_2 = 0x6008u,
 };
 
 _Static_assert(SHAPE_BYTES == 16u * 1024u,
@@ -55,6 +66,12 @@ _Static_assert(SHAPE_STORAGE_BASE + SHAPE_STORAGE_BYTES <=
 _Static_assert(ASTRA_SPRITES_PER_LINE * SOURCE_WIDTH ==
                    ASTRA_SPRITE_PIXELS_PER_LINE,
                "stress scene must saturate the published scanline limits");
+_Static_assert(CAPTURE_STORAGE_BASE + ASTRA_CAPTURE_FRAME_BYTES <=
+                   ASTRA_GRAPHICS_ARENA_LIMIT,
+               "sprite capture exceeds the graphics arena");
+_Static_assert(CAPTURE_BACKGROUND_BASE + ASTRA_FRAMEBUFFER_BYTES <=
+                   ASTRA_GRAPHICS_ARENA_LIMIT,
+               "sprite capture background exceeds the graphics arena");
 
 static const uint32_t palette_color[PALETTE_BANK_COUNT] = {
     0xffff3b5cu, 0xffff7a32u, 0xffffc43du, 0xffc8f04au,
@@ -94,6 +111,14 @@ struct sprite_shape {
     uint16_t pitch;
 };
 
+static volatile sig_atomic_t showcase_running = 1;
+
+static void stop_showcase(int signal_number)
+{
+    (void)signal_number;
+    showcase_running = 0;
+}
+
 static int sleep_nanoseconds(long nanoseconds)
 {
     struct timespec delay = { .tv_sec = 0, .tv_nsec = nanoseconds };
@@ -112,6 +137,54 @@ static uint64_t deadline_after(uint64_t interval)
     uint64_t now = astra_monotonic_nanoseconds();
 
     return interval > UINT64_MAX - now ? UINT64_MAX : now + interval;
+}
+
+static uint32_t copper_instruction(unsigned opcode, uint16_t argument)
+{
+    return ((uint32_t)opcode << 29) | argument;
+}
+
+static int load_background(
+    const struct astra_graphics_memory_map *mapping, const char *path)
+{
+    uint8_t *copy = malloc(ASTRA_FRAMEBUFFER_BYTES);
+    uint8_t *readback = malloc(ASTRA_FRAMEBUFFER_BYTES);
+    FILE *input = NULL;
+    int result = -1;
+
+    if (copy == NULL || readback == NULL) {
+        perror("allocate showcase background");
+        goto done;
+    }
+    input = fopen(path, "rb");
+    if (input == NULL) {
+        perror("open showcase background");
+        goto done;
+    }
+    if (fread(copy, 1u, ASTRA_FRAMEBUFFER_BYTES, input) !=
+            ASTRA_FRAMEBUFFER_BYTES || fgetc(input) != EOF) {
+        fprintf(stderr,
+                "showcase background must be exactly %u-byte RGB565BE\n",
+                ASTRA_FRAMEBUFFER_BYTES);
+        goto done;
+    }
+    astra_graphics_memory_copy_to(mapping->data, copy,
+                                  ASTRA_FRAMEBUFFER_BYTES);
+    astra_graphics_memory_barrier();
+    astra_graphics_memory_copy_from(readback, mapping->data,
+                                    ASTRA_FRAMEBUFFER_BYTES);
+    if (memcmp(readback, copy, ASTRA_FRAMEBUFFER_BYTES) != 0) {
+        fprintf(stderr, "showcase background Media RAM readback failed\n");
+        goto done;
+    }
+    result = 0;
+
+done:
+    if (input != NULL && fclose(input) != 0)
+        result = -1;
+    free(readback);
+    free(copy);
+    return result;
 }
 
 static int wait_for_sprite_write_ready(
@@ -475,6 +548,94 @@ static void program_grid_scene(const struct astra_graphics_device *device)
                               GRID_DEST_HEIGHT, true);
         write_descriptor(device, sprite, words);
     }
+}
+
+static void program_showcase_scene(
+    const struct astra_graphics_device *device)
+{
+    unsigned sprite;
+
+    for (sprite = 0; sprite < SPRITE_COUNT; ++sprite) {
+        uint32_t words[8];
+
+        if (sprite < SHOWCASE_SPRITE_COUNT) {
+            unsigned column = sprite & 3u;
+            unsigned row = sprite >> 2;
+
+            encode_max_descriptor(words, sprite,
+                                  1310 + (int)column * 145,
+                                  110 + (int)row * 250,
+                                  112u, 72u, true);
+            words[0] &= ~(0x0fu << 16);
+        } else {
+            encode_max_descriptor(words, sprite,
+                                  ASTRA_FRAMEBUFFER_WIDTH,
+                                  ASTRA_FRAMEBUFFER_HEIGHT,
+                                  1u, 1u, false);
+        }
+        write_descriptor(device, sprite, words);
+    }
+}
+
+static int program_showcase_copper(
+    const struct astra_graphics_device *device)
+{
+    static const uint16_t beam_y[3] = { 270u, 540u, 810u };
+    static const uint32_t color[4][2] = {
+        { 0xff32d9f5u, 0xffff7a32u },
+        { 0xff8d59ffu, 0xffc8f04au },
+        { 0xffffc43du, 0xff3697ffu },
+        { 0xffff50d8u, 0xff56e36du },
+    };
+    unsigned instruction = 0u;
+    unsigned band;
+
+    astra_mmio_write(device, ASTRA_REG_COPPER_CONTROL,
+                     ASTRA_COPPER_CLEAR_FAULT);
+    astra_mmio_write(device, ASTRA_REG_COPPER_IRQ_PENDING, 1u);
+    for (band = 0u; band < 4u; ++band) {
+        if (band != 0u) {
+            astra_graphics_copper_write_instruction(
+                device, instruction++,
+                copper_instruction(ASTRA_COPPER_OP_WAIT,
+                                   beam_y[band - 1u]), 0u);
+        }
+        astra_graphics_copper_write_instruction(
+            device, instruction++,
+            copper_instruction(ASTRA_COPPER_OP_MOVE,
+                               SHOWCASE_SPRITE_PALETTE_1),
+            color[band][0]);
+        astra_graphics_copper_write_instruction(
+            device, instruction++,
+            copper_instruction(ASTRA_COPPER_OP_MOVE,
+                               SHOWCASE_SPRITE_PALETTE_2),
+            color[band][1]);
+    }
+    astra_graphics_copper_write_instruction(
+        device, instruction++,
+        copper_instruction(ASTRA_COPPER_OP_IRQ,
+                           SHOWCASE_COPPER_IRQ_SOURCE), 0u);
+    astra_graphics_copper_write_instruction(
+        device, instruction++,
+        copper_instruction(ASTRA_COPPER_OP_END, 0u), 0u);
+    if (instruction != SHOWCASE_COPPER_LIST_COUNT) {
+        fprintf(stderr, "showcase copper instruction count mismatch\n");
+        return -1;
+    }
+    astra_mmio_write(device, ASTRA_REG_COPPER_VALIDATE_RANGE,
+                     instruction << 16);
+    astra_mmio_write(device, ASTRA_REG_COPPER_VALIDATE_START, 1u);
+    if (astra_graphics_wait_register_mask(
+            device, ASTRA_REG_COPPER_STATUS,
+            ASTRA_COPPER_STATUS_VALIDATE_VALID,
+            ASTRA_COPPER_STATUS_VALIDATE_VALID,
+            COMMIT_TIMEOUT_NS, NULL) != 0)
+        return -1;
+    astra_mmio_write(device, ASTRA_REG_COPPER_CONTROL,
+                     ASTRA_COPPER_ENABLE | ASTRA_COPPER_PROMOTE);
+    return astra_graphics_wait_register_mask(
+        device, ASTRA_REG_COPPER_IRQ_PENDING, 1u, 1u,
+        COMMIT_TIMEOUT_NS, NULL);
 }
 
 static uint32_t dimension_admitted_width_sum(
@@ -866,10 +1027,140 @@ static void print_phase(const char *name, uint32_t generation,
            metrics->axi_errors, metrics->deadline_errors);
 }
 
+static int present_capture_scene(
+    const struct astra_graphics_device *device, bool showcase,
+    const char *capture_path, unsigned milliseconds)
+{
+    struct astra_display_capture_result capture;
+    struct counter_snapshot before;
+    struct counter_snapshot after;
+    uint32_t generation;
+    int result = -1;
+
+    if (wait_for_sprite_write_ready(device, COMMIT_TIMEOUT_NS) != 0)
+        return -1;
+    capture_counters(device, &before);
+    program_palettes(device);
+    if (showcase)
+        program_showcase_scene(device);
+    else
+        program_grid_scene(device);
+    astra_mmio_write(device, ASTRA_REG_FB_BASE,
+                     CAPTURE_BACKGROUND_BASE);
+    astra_mmio_write(device, ASTRA_REG_FB_PITCH,
+                     ASTRA_FRAMEBUFFER_PITCH);
+    astra_mmio_write(device, ASTRA_REG_FB_SIZE,
+                     (ASTRA_FRAMEBUFFER_HEIGHT << 16) |
+                     ASTRA_FRAMEBUFFER_WIDTH);
+    astra_mmio_write(device, ASTRA_REG_FB_VIEWPORT_X, 0u);
+    astra_mmio_write(device, ASTRA_REG_FB_VIEWPORT_Y, 0u);
+    astra_mmio_write(device, ASTRA_REG_FB_CONTROL,
+                     ASTRA_FRAMEBUFFER_ENABLE |
+                     ASTRA_FRAMEBUFFER_FORMAT_RGB565);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_SOURCE_SIZE,
+                     (ASTRA_FRAMEBUFFER_HEIGHT << 16) |
+                     ASTRA_FRAMEBUFFER_WIDTH);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_CROP_ORIGIN, 0u);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_CROP_SIZE,
+                     (ASTRA_FRAMEBUFFER_HEIGHT << 16) |
+                     ASTRA_FRAMEBUFFER_WIDTH);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_VIEWPORT_ORIGIN, 0u);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_VIEWPORT_SIZE,
+                     (ASTRA_FRAMEBUFFER_HEIGHT << 16) |
+                     ASTRA_FRAMEBUFFER_WIDTH);
+    astra_mmio_write(device, ASTRA_REG_SPRITE_CONTROL, 1u);
+    astra_mmio_write(device, ASTRA_REG_GLOBAL_CONTROL, 1u);
+    if (showcase && program_showcase_copper(device) != 0)
+        goto cleanup;
+    if (astra_graphics_scene_commit(device, COMMIT_TIMEOUT_NS,
+                                    &generation) != 0)
+        goto cleanup;
+    if (astra_graphics_capture_rgb(device, CAPTURE_STORAGE_BASE,
+                                   capture_path, &capture) != 0) {
+        perror("capture sprite scene");
+        goto cleanup;
+    }
+    capture_counters(device, &after);
+    printf("ASTRA_SPRITE_CAPTURE generation=%" PRIu32
+           " cycles=%" PRIu32 " elapsed_ns=%" PRIu64
+           " showcase=%u fb_status=%08" PRIx32
+           " fb_ar=%" PRIu32 " fb_r=%" PRIu32
+           " fb_stall=%" PRIu32 " fb_last_ar=%08" PRIx32 "\n",
+           capture.generation, capture.cycles, capture.elapsed_ns,
+           showcase ? 1u : 0u,
+           astra_mmio_read(device, ASTRA_REG_FB_AXI_STATUS),
+           after.fb_ar_accepted - before.fb_ar_accepted,
+           after.fb_r_accepted - before.fb_r_accepted,
+           after.fb_stall_cycles - before.fb_stall_cycles,
+           astra_mmio_read(device, ASTRA_REG_FB_AXI_LAST_AR_ADDRESS));
+    if (milliseconds != 0u) {
+        struct timespec delay = {
+            .tv_sec = milliseconds / 1000u,
+            .tv_nsec = (long)(milliseconds % 1000u) * 1000000L,
+        };
+
+        while (showcase_running && nanosleep(&delay, &delay) != 0) {
+            if (errno != EINTR) {
+                perror("hold showcase");
+                goto cleanup;
+            }
+        }
+    }
+    result = 0;
+
+cleanup:
+    astra_mmio_write(device, ASTRA_REG_COPPER_CONTROL, 0u);
+    astra_mmio_write(device, ASTRA_REG_COPPER_IRQ_PENDING, 1u);
+    astra_mmio_write(device, ASTRA_REG_FB_CONTROL, 0u);
+    astra_mmio_write(device, ASTRA_REG_TILE0_CONTROL, 0u);
+    astra_mmio_write(device, ASTRA_REG_TILE1_CONTROL, 0u);
+    astra_mmio_write(device, ASTRA_REG_GLOBAL_CONTROL, 1u);
+    if (astra_graphics_scene_commit(device, COMMIT_TIMEOUT_NS,
+                                    &generation) != 0)
+        result = -1;
+    return result;
+}
+
+static int parse_arguments(int argc, char **argv,
+                           const char **background_path,
+                           const char **capture_path,
+                           unsigned *milliseconds)
+{
+    char *end = NULL;
+    unsigned long parsed;
+
+    *background_path = NULL;
+    *capture_path = NULL;
+    *milliseconds = 0u;
+    if (argc == 1)
+        return 0;
+    if (argc == 3 && strcmp(argv[1], "--capture-grid") == 0) {
+        *capture_path = argv[2];
+        return 0;
+    }
+    if (argc == 5 && strcmp(argv[1], "--showcase") == 0) {
+        errno = 0;
+        parsed = strtoul(argv[4], &end, 10);
+        if (errno == 0 && end != argv[4] && *end == '\0' &&
+            parsed <= UINT_MAX) {
+            *background_path = argv[2];
+            *capture_path = argv[3];
+            *milliseconds = (unsigned)parsed;
+            return 0;
+        }
+    }
+    fprintf(stderr,
+            "usage: %s [--capture-grid OUTPUT.rgb | "
+            "--showcase BACKGROUND.rgb565 OUTPUT.rgb MILLISECONDS]\n",
+            argv[0]);
+    return -1;
+}
+
 int main(int argc, char **argv)
 {
     struct astra_graphics_device device;
     struct astra_graphics_memory_map shape_map;
+    struct astra_graphics_memory_map capture_background;
     struct phase_metrics metrics;
     struct counter_snapshot counters;
     struct sprite_shape
@@ -881,25 +1172,45 @@ int main(int argc, char **argv)
     bool sprites_accessible = false;
     uint8_t *shape_image = NULL;
     uint8_t *shape_readback = NULL;
+    const char *background_path = NULL;
+    const char *capture_path = NULL;
+    unsigned showcase_milliseconds = 0u;
     int result = EXIT_FAILURE;
 
     astra_graphics_device_init(&device);
     astra_graphics_memory_map_init(&shape_map);
-    if (argc != 1) {
-        fprintf(stderr, "usage: %s\n", argv[0]);
+    astra_graphics_memory_map_init(&capture_background);
+    if (parse_arguments(argc, argv, &background_path, &capture_path,
+                        &showcase_milliseconds) != 0)
         return EXIT_FAILURE;
-    }
     if (setvbuf(stdout, NULL, _IOLBF, 0) != 0) {
         perror("configure sprite certification output");
+        return EXIT_FAILURE;
+    }
+    if (background_path != NULL &&
+        (signal(SIGTERM, stop_showcase) == SIG_ERR ||
+         signal(SIGINT, stop_showcase) == SIG_ERR)) {
+        perror("install showcase signal handler");
         return EXIT_FAILURE;
     }
 
     if (astra_graphics_device_open(&device, false) != 0 ||
         astra_graphics_device_validate(&device, true) != 0)
         goto done;
+    if (capture_path != NULL && astra_display_capture_claim(&device) != 0)
+        goto done;
     capabilities = astra_mmio_read(&device, ASTRA_REG_CAPABILITIES);
     if ((capabilities & ASTRA_CAP_SPRITE_ENGINE) == 0u) {
         fprintf(stderr, "Astra sprite engine is not present\n");
+        goto done;
+    }
+    if (background_path != NULL &&
+        ((capabilities & ASTRA_CAP_COPPER) == 0u ||
+         astra_mmio_read(&device, ASTRA_REG_COPPER_DEVICE_ID) !=
+             ASTRA_COPPER_DEVICE_ID ||
+         astra_mmio_read(&device, ASTRA_REG_COPPER_VERSION) !=
+             ASTRA_COPPER_VERSION)) {
+        fprintf(stderr, "Astra Copper is not present\n");
         goto done;
     }
     if (astra_mmio_read(&device, ASTRA_REG_ARENA_BASE) !=
@@ -910,12 +1221,14 @@ int main(int argc, char **argv)
         goto done;
     }
     sprites_accessible = true;
-    /* This tool owns the complete scene while certifying sprite throughput. */
-    astra_mmio_write(&device, ASTRA_REG_FB_CONTROL, 0u);
-    astra_mmio_write(&device, ASTRA_REG_TILE0_CONTROL, 0u);
-    astra_mmio_write(&device, ASTRA_REG_TILE1_CONTROL, 0u);
-    if (quiesce_sprites(&device, &generation) != 0)
-        goto done;
+    if (background_path == NULL) {
+        /* Throughput certification owns and replaces the complete scene. */
+        astra_mmio_write(&device, ASTRA_REG_FB_CONTROL, 0u);
+        astra_mmio_write(&device, ASTRA_REG_TILE0_CONTROL, 0u);
+        astra_mmio_write(&device, ASTRA_REG_TILE1_CONTROL, 0u);
+        if (quiesce_sprites(&device, &generation) != 0)
+            goto done;
+    }
     variable_end = prepare_variable_shapes(variable_shapes);
     if (variable_end > SHAPE_STORAGE_BYTES) {
         fprintf(stderr,
@@ -929,6 +1242,23 @@ int main(int argc, char **argv)
                                        SHAPE_STORAGE_BYTES) != 0) {
         perror("map sprite shape storage");
         goto done;
+    }
+    if (capture_path != NULL) {
+        if (astra_graphics_memory_map_open(
+                &device, &capture_background, CAPTURE_BACKGROUND_BASE,
+                ASTRA_FRAMEBUFFER_BYTES) != 0) {
+            perror("map sprite capture background");
+            goto done;
+        }
+        if (background_path != NULL) {
+            if (load_background(&capture_background,
+                                background_path) != 0)
+                goto done;
+        } else {
+            astra_graphics_memory_fill(capture_background.data, 0u,
+                                       ASTRA_FRAMEBUFFER_BYTES);
+            astra_graphics_memory_barrier();
+        }
     }
 
     shape_image = calloc(1u, variable_end);
@@ -957,6 +1287,14 @@ int main(int argc, char **argv)
            SHAPE_STORAGE_BASE + MAX_SHAPE_STORAGE_BYTES,
            variable_end - MAX_SHAPE_STORAGE_BYTES,
            VARIABLE_SCENE_COUNT);
+
+    if (background_path != NULL) {
+        if (present_capture_scene(&device, true, capture_path,
+                                  showcase_milliseconds) != 0)
+            goto done;
+        result = EXIT_SUCCESS;
+        goto done;
+    }
 
     printf("ASTRA_SPRITE_STRESS_BEGIN\n");
     if (wait_for_sprite_write_ready(&device, COMMIT_TIMEOUT_NS) != 0)
@@ -1048,6 +1386,11 @@ int main(int argc, char **argv)
            SPRITE_COUNT, SHAPE_BYTES,
            dimension_storage_sum(
                variable_shapes[VARIABLE_SCENE_COUNT - 1u]));
+    if (capture_path != NULL &&
+        present_capture_scene(&device, background_path != NULL,
+                              capture_path,
+                              showcase_milliseconds) != 0)
+        goto done;
     result = EXIT_SUCCESS;
 
 done:
@@ -1058,6 +1401,7 @@ done:
     free(shape_readback);
     free(shape_image);
     astra_graphics_memory_map_close(&shape_map);
+    astra_graphics_memory_map_close(&capture_background);
     astra_graphics_device_close(&device);
     return result;
 }

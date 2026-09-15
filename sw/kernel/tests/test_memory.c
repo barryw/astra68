@@ -304,23 +304,48 @@ static void test_owner_release_work_scales_with_owned_frames(void)
     assert(released == 1000u);
 }
 
+/*
+ * Five concurrent Terminal/zsh pairs need more than 64 distinct frame
+ * owners: processes, loadable libraries, and their shared areas all own
+ * frames independently.  Free RAM is not exhaustion, so the owner index must
+ * not turn it into one.
+ */
+static void test_owner_ledger_does_not_exhaust_at_legacy_sixty_four(void)
+{
+    AstraBootInfo info;
+    KernelMemoryStats stats;
+    uint32_t bases[65];
+
+    make_valid_info(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    for (uint32_t index = 0u; index < 65u; ++index)
+        assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS,
+                                   100u + index, &bases[index]) ==
+               KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&stats));
+    assert(stats.owner_slots_used == 65u);
+    for (uint32_t index = 0u; index < 65u; ++index)
+        assert(kernel_memory_release(bases[index], 1u, 100u + index) ==
+               KERNEL_MEMORY_OK);
+}
+
 static void test_owner_ledger_capacity_is_bounded_and_reusable(void)
 {
     AstraBootInfo info;
     KernelMemoryStats stats;
-    uint32_t bases[KERNEL_MAX_FRAME_OWNERS];
+    uint32_t bases[KERNEL_MEMORY_OWNER_MAX];
     uint32_t replacement;
     uint32_t released;
 
     make_valid_info(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
-    for (uint32_t index = 0u; index < KERNEL_MAX_FRAME_OWNERS; ++index) {
+    for (uint32_t index = 0u; index < KERNEL_MEMORY_OWNER_MAX; ++index) {
         assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS,
                                    100u + index, &bases[index]) ==
                KERNEL_MEMORY_OK);
     }
     assert(kernel_memory_stats(&stats));
-    assert(stats.owner_slots_used == KERNEL_MAX_FRAME_OWNERS);
+    assert(stats.owner_slots_used == KERNEL_MEMORY_OWNER_MAX);
     assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 1000u,
                                &replacement) == KERNEL_MEMORY_OUT_OF_MEMORY);
 
@@ -328,7 +353,7 @@ static void test_owner_ledger_capacity_is_bounded_and_reusable(void)
     assert(released == 1u);
     assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 1000u,
                                &replacement) == KERNEL_MEMORY_OK);
-    for (uint32_t index = 1u; index < KERNEL_MAX_FRAME_OWNERS; ++index) {
+    for (uint32_t index = 1u; index < KERNEL_MEMORY_OWNER_MAX; ++index) {
         assert(kernel_memory_release(bases[index], 1u, 100u + index) ==
                KERNEL_MEMORY_OK);
     }
@@ -729,12 +754,12 @@ static void test_retained_log_is_allocation_free_under_pressure(void)
  * buddy allocator, a reserved zone, and doing nothing.
  *
  * The whole kernel asks for exactly one contiguous multi-frame run: DMA. The
- * display's framebuffer is ASTRA_RENDER_BUILDER_BYTES, 256 KiB, which is 64
- * frames at alignment one, and a block transfer is two. Everything else --
+ * display's render batch is ASTRA_RENDER_BATCH_BUFFER_BYTES, and a block
+ * transfer is two frames. Everything else --
  * stacks, code pages, page tables, library pages, and every page of an area --
  * asks for one frame at a time and does not care where it lands.
  *
- * So this combs the frame map and then asks for the display's 64. If that can
+ * So this combs the frame map and then asks for the display buffer. If that can
  * fail, a display service restarting at hour six can fail, and the answer is
  * worth building. If it cannot, the whole item is theatre.
  */
@@ -783,7 +808,8 @@ static void test_contiguous_demand_survives_a_combed_frame_map(void)
     assert(after_comb.dma_zone_frames == KERNEL_DMA_ZONE_FRAMES);
     assert(kernel_memory_alloc(2u, 1u, KERNEL_FRAME_DMA, 71u, &transfer) ==
            KERNEL_MEMORY_OK);
-    assert(kernel_memory_alloc(64u, 1u, KERNEL_FRAME_DMA, 71u,
+    assert(kernel_memory_alloc(KERNEL_DISPLAY_DMA_FRAMES, 1u,
+                               KERNEL_FRAME_DMA, 71u,
                                &framebuffer) == KERNEL_MEMORY_OK);
     /* Both landed inside the zone rather than in the combed general pool. */
     {
@@ -898,6 +924,7 @@ int main(void)
     test_owner_teardown_is_atomic_while_dma_is_pinned();
     test_owner_frame_count_tracks_unique_frames();
     test_owner_release_work_scales_with_owned_frames();
+    test_owner_ledger_does_not_exhaust_at_legacy_sixty_four();
     test_owner_ledger_capacity_is_bounded_and_reusable();
     test_reinit_discards_stale_dynamic_metadata();
     test_scattered_page_allocation_is_atomic();

@@ -421,7 +421,15 @@ static void test_fenced_display_transport(void)
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
     assert(!kernel_platform_display_submit(
         11u, ASTRA_DISPLAY_CURSOR_UPDATE,
-        ASTRA_DISPLAY_HOST_CURSOR_PACK(0u, 0u, true), 2u));
+        ASTRA_DISPLAY_HOST_CURSOR_PACK(0u, 0u, true), UINT32_C(0x10)));
+    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
+    assert(kernel_platform_display_submit(
+        11u, ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE, 0x02002000u,
+        ASTRA_DISPLAY_CURSOR_IMAGE_BYTES));
+    assert(registers->DISPLAY_REQ_OP ==
+           (ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE |
+            ASTRA_DISPLAY_CURSOR_IMAGE_BYTES <<
+                ASTRA_DISPLAY_HOST_BYTE_SIZE_SHIFT));
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
     assert(!kernel_platform_display_submit(
         12u, ASTRA_DISPLAY_CURSOR_UPDATE,
@@ -500,6 +508,7 @@ static void test_production_irq_qualification_controls(void)
     video->IRQ_STAT = VEGA_IRQ_VBLANK;
     assert(kernel_platform_device_irq_capture(IRQ_SRC_VEGA, &status));
     assert(status == VEGA_IRQ_VBLANK);
+    assert(video->IRQ_STAT == 0u);
     assert(kernel_platform_qualification_irq_consume(IRQ_SRC_VEGA,
                                                        status));
     assert(video->IRQ_EN == 0u);

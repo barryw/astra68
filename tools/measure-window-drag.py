@@ -9,10 +9,15 @@ import time
 
 PROPERTIES = (
     "astra-display-render-batches",
+    "astra-display-render-commands",
+    "astra-display-fill-commands",
+    "astra-display-blit-commands",
+    "astra-display-glyph-commands",
     "astra-display-cursor-updates",
     "astra-display-submissions",
     "astra-display-completions",
 )
+POSITIONS = ("astra-display-cursor-x", "astra-display-cursor-y")
 
 
 class Qmp:
@@ -41,6 +46,10 @@ class Qmp:
         return {name: self.execute("qom-get", {
             "path": "/machine", "property": name}) for name in PROPERTIES}
 
+    def positions(self):
+        return {name: self.execute("qom-get", {
+            "path": "/machine", "property": name}) for name in POSITIONS}
+
     def move(self, x, y):
         self.execute("input-send-event", {"events": [
             {"type": "abs", "data": {"axis": "x", "value": x}},
@@ -55,6 +64,17 @@ class Qmp:
 
 def difference(after, before):
     return {name: after[name] - before[name] for name in PROPERTIES}
+
+
+def settled(qmp):
+    previous = None
+    while True:
+        current = qmp.counters()
+        if current == previous and current["astra-display-submissions"] == \
+                current["astra-display-completions"]:
+            return current
+        previous = current
+        time.sleep(0.01)
 
 
 def main():
@@ -72,8 +92,7 @@ def main():
 
     qmp = Qmp(args.qmp)
     qmp.move(args.start_x, args.start_y)
-    time.sleep(0.1)
-    before = qmp.counters()
+    before = settled(qmp)
     qmp.button(True)
     started = time.monotonic()
     for sample in range(1, args.samples + 1):
@@ -87,12 +106,13 @@ def main():
     during = qmp.counters()
     qmp.button(False)
     time.sleep(args.settle)
-    settled = qmp.counters()
+    after = settled(qmp)
     print(json.dumps({
         "requested_samples": args.samples,
         "send_milliseconds": round((sent_at - started) * 1000, 3),
         "at_send_end": difference(during, before),
-        "after_settle": difference(settled, before),
+        "after_settle": difference(after, before),
+        "final_cursor": qmp.positions(),
     }, sort_keys=True))
 
 

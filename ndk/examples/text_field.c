@@ -2,7 +2,7 @@
 
 /* Build one editable UTF-8 field over caller-owned, replaceable arenas. */
 AstraResult astra_example_build_text_field(
-    const AstraInterfaceLibraryV2 *interface, AstraTextModel *model,
+    const AstraInterfaceLibrary *interface, AstraTextModel *model,
     AstraControl *field, AstraUIContext *ui, void *content,
     uint32_t content_bytes, void *metadata, uint32_t metadata_bytes,
     uint16_t width, uint16_t height)
@@ -15,7 +15,7 @@ AstraResult astra_example_build_text_field(
 
     if (model == 0 || field == 0 || ui == 0 ||
         !astra_interface_library_supports(
-            interface, 6u, ASTRA_INTERFACE_LIBRARY_2_6_SIZE))
+            interface, 0u, ASTRA_INTERFACE_LIBRARY_5_0_SIZE))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *model = (AstraTextModel)ASTRA_TEXT_MODEL_INIT;
     model_info.text = initial;

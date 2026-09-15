@@ -4,7 +4,7 @@
 
 /* Copy a TextSurface grid selection as the system's canonical UTF-8 type. */
 AstraResult astra_example_copy_text(
-    const AstraInterfaceLibraryV2 *interface, AstraHandle clipboard,
+    const AstraInterfaceLibrary *interface, AstraHandle clipboard,
     const AstraTextSurface *text_surface, const AstraTextCell *cells,
     uint32_t stride, uint32_t columns, uint32_t rows,
     const AstraTextGridSelection *selection, char *scratch,
@@ -16,7 +16,7 @@ AstraResult astra_example_copy_text(
     AstraResult result;
 
     if (!astra_interface_library_supports(
-            interface, 4u, ASTRA_INTERFACE_LIBRARY_2_4_SIZE))
+            interface, 0u, ASTRA_INTERFACE_LIBRARY_5_0_SIZE))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     result = interface->text_surface_copy_grid_selection(
         text_surface, cells, stride, columns, rows, selection, scratch,
@@ -31,7 +31,7 @@ AstraResult astra_example_copy_text(
 
 /* Read a stable clipboard snapshot and copy its UTF-8 representation. */
 AstraResult astra_example_paste_text(
-    const AstraInterfaceLibraryV2 *interface, AstraHandle clipboard,
+    const AstraInterfaceLibrary *interface, AstraHandle clipboard,
     char *output, uint32_t capacity, uint32_t *bytes)
 {
     AstraClipboardItem item = ASTRA_CLIPBOARD_ITEM_INIT;
@@ -42,7 +42,7 @@ AstraResult astra_example_paste_text(
 
     if (bytes == 0 || (output == 0 && capacity != 0u) ||
         !astra_interface_library_supports(
-            interface, 4u, ASTRA_INTERFACE_LIBRARY_2_4_SIZE))
+            interface, 0u, ASTRA_INTERFACE_LIBRARY_5_0_SIZE))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     result = interface->clipboard_read(clipboard, &item);
     if (result != ASTRA_OK) return result;

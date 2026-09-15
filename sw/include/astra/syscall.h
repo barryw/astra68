@@ -6,7 +6,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x0001002cu
+#define ASTRA_SYSCALL_ABI_VERSION 0x0001002du
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -259,11 +259,17 @@
  * conferred by an ordinary process handle.
  */
 #define ASTRA_SYSCALL_PROCESS_SNAPSHOT          86
+/*
+ * Complete resident-library snapshot for the initial supervisor's PROC:
+ * service. Arguments and authority match PROCESS_SNAPSHOT; D3 is measured in
+ * AstraProcLibrarySnapshot records and D1 returns the resident count.
+ */
+#define ASTRA_SYSCALL_LIBRARY_SNAPSHOT          87
 
 #define ASTRA_VM_PRIVATE_READ  (1u << 0)
 #define ASTRA_VM_PRIVATE_WRITE (1u << 1)
 /* Complete anonymous window in the 32-bit Astra process address map. */
-#define ASTRA_VM_PRIVATE_ADDRESS_SPACE_MAX 0x1f000000u
+#define ASTRA_VM_PRIVATE_ADDRESS_SPACE_MAX 0x1e000000u
 
 /*
  * The most one call copies. Small on purpose: a drain is a bounded page and a

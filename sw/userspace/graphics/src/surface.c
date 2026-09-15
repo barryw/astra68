@@ -2,13 +2,14 @@
 #include <astra/utf8.h>
 
 #include <astra/draw_list.h>
+#include <astra/font.h>
 #include <astra/ui_font.h>
 
 #include <limits.h>
 #include <stddef.h>
 #include <string.h>
 
-#include "rounded.h"
+#include <astra/rounded.h>
 
 #include "astra_font8x8.inc"
 
@@ -19,23 +20,68 @@
 
 typedef struct AstraFontBank {
     const uint32_t *codepoints;
-    const uint16_t *glyph_ids;
+    const uint32_t *glyph_ids;
     uint32_t cmap_count;
+    uint32_t replacement_glyph;
     const AstraUiStrike *strikes;
     uint32_t strike_count;
     const AstraUiGlyph *glyphs;
     const uint8_t *bitmap;
 } AstraFontBank;
 
+static uint16_t *row(AstraSurfaceView *surface, uint32_t y);
+
+static uint16_t blend_rgb565(uint16_t foreground, uint16_t background,
+                             uint8_t coverage)
+{
+    uint32_t inverse = 255u - coverage;
+    uint32_t red = ((((foreground >> 11u) & 31u) * coverage) +
+                    (((background >> 11u) & 31u) * inverse) + 127u) / 255u;
+    uint32_t green = ((((foreground >> 5u) & 63u) * coverage) +
+                      (((background >> 5u) & 63u) * inverse) + 127u) / 255u;
+    uint32_t blue = (((foreground & 31u) * coverage) +
+                     ((background & 31u) * inverse) + 127u) / 255u;
+
+    return (uint16_t)((red << 11u) | (green << 5u) | blue);
+}
+
+static uint8_t glyph_coverage(const AstraUiStrike *strike,
+                              const AstraUiGlyph *glyph,
+                              const uint8_t *bitmap, uint32_t x, uint32_t y)
+{
+    const uint8_t *pixel = bitmap + y * glyph->pitch;
+
+    if (strike->bitmap_format == ASTRA_FONT_BITMAP_MASK1)
+        return (pixel[x / 8u] & (uint8_t)(0x80u >> (x & 7u))) != 0u ?
+               255u : 0u;
+    if (strike->bitmap_format == ASTRA_FONT_BITMAP_A8)
+        return pixel[x];
+    return 0u;
+}
+
+static void blend_glyph_pixel(AstraSurfaceView *surface, int32_t x,
+                              int32_t y, uint16_t color, uint8_t coverage)
+{
+    uint16_t *pixel;
+
+    if (coverage == 0u || x < surface->clip_left || x >= surface->clip_right ||
+        y < surface->clip_top || y >= surface->clip_bottom)
+        return;
+    pixel = row(surface, (uint32_t)y) + (uint32_t)x;
+    *pixel = coverage == 255u ? color : blend_rgb565(color, *pixel, coverage);
+}
+
 static const AstraFontBank ui_font = {
     astra_ui_cmap_codepoints, astra_ui_cmap_glyphs,
-    ARRAY_COUNT(astra_ui_cmap_codepoints), astra_ui_strikes,
+    ARRAY_COUNT(astra_ui_cmap_codepoints), astra_ui_replacement_glyph,
+    astra_ui_strikes,
     ARRAY_COUNT(astra_ui_strikes), astra_ui_glyphs, astra_ui_bitmap
 };
 
 static const AstraFontBank mono_font = {
     astra_mono_cmap_codepoints, astra_mono_cmap_glyphs,
-    ARRAY_COUNT(astra_mono_cmap_codepoints), astra_mono_strikes,
+    ARRAY_COUNT(astra_mono_cmap_codepoints), astra_mono_replacement_glyph,
+    astra_mono_strikes,
     ARRAY_COUNT(astra_mono_strikes), astra_mono_glyphs, astra_mono_bitmap
 };
 
@@ -150,7 +196,7 @@ int astra_draw_list_view_init(AstraSurfaceView *surface, void *storage,
     header = draw_header(surface);
     *header = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_1,
+        .version = ASTRA_DRAW_LIST_VERSION_1_2,
         .total_bytes = ASTRA_DRAW_LIST_AREA_BYTES,
         .width = width,
         .height = height,
@@ -167,7 +213,7 @@ int astra_draw_list_view_adopt(AstraSurfaceView *surface, void *storage,
     if (surface == NULL || storage == NULL ||
         byte_size < ASTRA_DRAW_LIST_AREA_BYTES ||
         header->magic != ASTRA_DRAW_LIST_MAGIC ||
-        header->version != ASTRA_DRAW_LIST_VERSION_1_1 ||
+        header->version != ASTRA_DRAW_LIST_VERSION_1_2 ||
         header->total_bytes != ASTRA_DRAW_LIST_AREA_BYTES ||
         header->width != width || header->height != height ||
         header->command_count > ASTRA_DRAW_LIST_COMMAND_MAX ||
@@ -260,6 +306,120 @@ void astra_surface_fill(AstraSurfaceView *surface, int32_t x, int32_t y,
         for (uint32_t at_x = first_x; at_x < last_x; ++at_x)
             pixels[at_x] = color;
     }
+}
+
+enum {
+    LINE_LEFT = 1u,
+    LINE_RIGHT = 2u,
+    LINE_TOP = 4u,
+    LINE_BOTTOM = 8u,
+};
+
+static uint32_t line_outcode(const AstraSurfaceView *surface,
+                             int64_t x, int64_t y)
+{
+    uint32_t code = 0u;
+
+    if (x < surface->clip_left) code |= LINE_LEFT;
+    else if (x >= surface->clip_right) code |= LINE_RIGHT;
+    if (y < surface->clip_top) code |= LINE_TOP;
+    else if (y >= surface->clip_bottom) code |= LINE_BOTTOM;
+    return code;
+}
+
+static int clip_line(const AstraSurfaceView *surface,
+                     int64_t *x0, int64_t *y0, int64_t *x1, int64_t *y1)
+{
+    uint32_t first = line_outcode(surface, *x0, *y0);
+    uint32_t last = line_outcode(surface, *x1, *y1);
+
+    while ((first | last) != 0u) {
+        uint32_t outside = first != 0u ? first : last;
+        int64_t x;
+        int64_t y;
+
+        if ((first & last) != 0u)
+            return 0;
+        if ((outside & LINE_TOP) != 0u) {
+            y = surface->clip_top;
+            x = *x0 + (*x1 - *x0) * (y - *y0) / (*y1 - *y0);
+        } else if ((outside & LINE_BOTTOM) != 0u) {
+            y = (int64_t)surface->clip_bottom - 1;
+            x = *x0 + (*x1 - *x0) * (y - *y0) / (*y1 - *y0);
+        } else if ((outside & LINE_RIGHT) != 0u) {
+            x = (int64_t)surface->clip_right - 1;
+            y = *y0 + (*y1 - *y0) * (x - *x0) / (*x1 - *x0);
+        } else {
+            x = surface->clip_left;
+            y = *y0 + (*y1 - *y0) * (x - *x0) / (*x1 - *x0);
+        }
+        if (outside == first) {
+            *x0 = x;
+            *y0 = y;
+            first = line_outcode(surface, x, y);
+        } else {
+            *x1 = x;
+            *y1 = y;
+            last = line_outcode(surface, x, y);
+        }
+    }
+    return 1;
+}
+
+int astra_surface_line(AstraSurfaceView *surface, int32_t x0, int32_t y0,
+                       int32_t x1, int32_t y1, uint16_t color)
+{
+    AstraDrawListCommand *command;
+    int64_t first_x = x0;
+    int64_t first_y = y0;
+    int64_t last_x = x1;
+    int64_t last_y = y1;
+
+    if (!clip_valid(surface))
+        return 0;
+    if (clip_empty(surface))
+        return 1;
+    if (surface->kind == ASTRA_SURFACE_VIEW_DRAW_LIST) {
+        if (x0 < INT16_MIN || x0 > INT16_MAX || y0 < INT16_MIN ||
+            y0 > INT16_MAX || x1 < INT16_MIN || x1 > INT16_MAX ||
+            y1 < INT16_MIN || y1 > INT16_MAX)
+            return 0;
+        command = append_command(surface, ASTRA_DRAW_LIST_LINE);
+        if (command == NULL)
+            return 0;
+        command->x = x0;
+        command->y = y0;
+        command->width = (uint32_t)x1;
+        command->height = (uint32_t)y1;
+        command->foreground = color;
+        return 1;
+    }
+    if (surface->kind != ASTRA_SURFACE_VIEW_RGB565 ||
+        !clip_line(surface, &first_x, &first_y, &last_x, &last_y))
+        return surface->kind == ASTRA_SURFACE_VIEW_RGB565;
+    {
+        int64_t dx = last_x >= first_x ? last_x - first_x : first_x - last_x;
+        int64_t sx = first_x < last_x ? 1 : -1;
+        int64_t dy = -(last_y >= first_y ? last_y - first_y :
+                                              first_y - last_y);
+        int64_t sy = first_y < last_y ? 1 : -1;
+        int64_t error = dx + dy;
+
+        for (;;) {
+            row(surface, (uint32_t)first_y)[(uint32_t)first_x] = color;
+            if (first_x == last_x && first_y == last_y)
+                break;
+            if (error * 2 >= dy) {
+                error += dy;
+                first_x += sx;
+            }
+            if (error * 2 <= dx) {
+                error += dx;
+                first_y += sy;
+            }
+        }
+    }
+    return 1;
 }
 
 void astra_surface_clear(AstraSurfaceView *surface, uint16_t color)
@@ -550,7 +710,7 @@ static uint32_t font_glyph_id(const AstraFontBank *font, uint32_t scalar)
     }
     if (low < font->cmap_count && font->codepoints[low] == scalar)
         return font->glyph_ids[low];
-    return font->glyph_ids[font->cmap_count - 1u];
+    return font->replacement_glyph;
 }
 
 static const AstraUiGlyph *font_glyph(const AstraFontBank *font,
@@ -713,7 +873,9 @@ static int font_text(AstraSurfaceView *surface, int32_t x, int32_t y,
             style_flags);
     }
     strike = font_strike(font, pixel_height);
-    if (strike == NULL)
+    if (strike == NULL ||
+        (strike->bitmap_format != ASTRA_FONT_BITMAP_MASK1 &&
+         strike->bitmap_format != ASTRA_FONT_BITMAP_A8))
         return 0;
     while (at < length) {
         uint32_t consumed;
@@ -724,19 +886,29 @@ static int font_text(AstraSurfaceView *surface, int32_t x, int32_t y,
         int32_t glyph_y = astra_ui_glyph_y(y * 64 + strike->ascent, glyph);
         const uint8_t *bitmap = &font->bitmap[glyph->bitmap_offset];
 
-        for (uint32_t row_index = 0u; row_index < glyph->height; ++row_index)
-            for (uint32_t column = 0u; column < glyph->width; ++column)
-                if ((bitmap[row_index * glyph->pitch + column / 8u] &
-                     (uint8_t)(0x80u >> (column & 7u))) != 0u) {
-                    int32_t shift =
-                        (style_flags & ASTRA_TEXT_STYLE_ITALIC) != 0u ?
-                            astra_ui_italic_shift(glyph, row_index) : 0;
+        for (uint32_t row_index = 0u; row_index < glyph->height; ++row_index) {
+            int32_t shift =
+                (style_flags & ASTRA_TEXT_STYLE_ITALIC) != 0u ?
+                    astra_ui_italic_shift(glyph, row_index) : 0;
 
-                    astra_surface_fill(
-                        surface, glyph_x + shift + (int32_t)column,
-                        glyph_y + (int32_t)row_index,
-                        embolden + 1u, 1u, color);
-                }
+            for (uint32_t column = 0u;
+                 column < (uint32_t)glyph->width + embolden; ++column) {
+                uint8_t coverage = 0u;
+
+                for (uint32_t weight = 0u; weight <= embolden; ++weight)
+                    if (column >= weight && column - weight < glyph->width) {
+                        uint8_t candidate = glyph_coverage(
+                            strike, glyph, bitmap, column - weight,
+                            row_index);
+
+                        if (candidate > coverage)
+                            coverage = candidate;
+                    }
+                blend_glyph_pixel(
+                    surface, glyph_x + shift + (int32_t)column,
+                    glyph_y + (int32_t)row_index, color, coverage);
+            }
+        }
         pen_26_6 += astra_ui_glyph_advance(glyph, cell_width);
         at += consumed;
     }

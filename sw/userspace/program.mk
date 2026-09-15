@@ -28,14 +28,24 @@ program: $(ASTRA_PROGRAM_TARGETS)
 ASTRA_PROGRAM_DIRECT_GOALS := $(filter $(ASTRA_PROGRAM_TARGETS),$(MAKECMDGOALS))
 ifeq ($(ASTRA_PROGRAM_OWNERS_READY),)
 ifneq ($(ASTRA_PROGRAM_DIRECT_GOALS),)
-$(ASTRA_PROGRAM_DIRECT_GOALS): | __astra_program_direct
 
-__astra_program_direct:
+# GNU Make expands a direct target's prerequisite graph in parallel.  A normal
+# target prerequisite is therefore too late to rebuild an archive: another
+# branch can inspect the old archive before its owner finishes.  Remake this
+# included gate first so Make restarts, then evaluates the program graph from a
+# fresh view of every owner product.
+ASTRA_PROGRAM_OWNER_GATE := build/.program-owners-ready.mk
+include $(ASTRA_PROGRAM_OWNER_GATE)
+
+ifeq ($(MAKE_RESTARTS),)
+$(ASTRA_PROGRAM_OWNER_GATE): __astra_program_owner_gate_force
 	$(MAKE) libraries
 	$(MAKE) prepare
-	$(MAKE) ASTRA_PROGRAM_OWNERS_READY=1 $(ASTRA_PROGRAM_DIRECT_GOALS)
+	@mkdir -p $(@D)
+	@touch $@
 
-.PHONY: __astra_program_direct
+.PHONY: __astra_program_owner_gate_force
+endif
 endif
 endif
 

@@ -78,10 +78,9 @@ extract_resource "$LPDDR4B_REFERENCE_QSF" \
 mkdir -p "$INCOMING/astra/graphics" "$INCOMING/astra/audio" \
     "$INCOMING/astra/common" "$INCOMING/vendor_hdmi"
 cp "$ROOT"/fpga/arty/graphics/*.sv "$INCOMING/astra/graphics/"
-cp "$ROOT/fpga/arty/graphics/astra_render_protocol.vh" \
-    "$INCOMING/astra/graphics/"
+cp "$ROOT"/fpga/arty/graphics/*.vh "$INCOMING/astra/graphics/"
 python3 "$ROOT/tools/fonts/afnt.py" emit-cp437-hex \
-    "$ROOT/sw/userspace/graphics/fonts/astra-mono.afnt" \
+    "$ROOT/sw/userspace/graphics/fonts/astra-rescue-mono.afnt" \
     "$INCOMING/astra/graphics/post_fonts.hex"
 cp "$ROOT/fpga/arty/audio/astra_hdmi_audio.sv" "$INCOMING/astra/audio/"
 cp "$ROOT/fpga/arty/common/astra_async_fifo.sv" \

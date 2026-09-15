@@ -11,10 +11,10 @@ GALLERY_STAMP := build/.InterfaceGallery.app.stamp
 
 all: $(TERMINAL_STAMP) $(GALLERY_STAMP)
 
-$(TERMINAL):
+$(TERMINAL): FORCE
 	$(MAKE) -C ../services/terminal all
 
-$(GALLERY):
+$(GALLERY): FORCE
 	$(MAKE) -C ../applications/interface-gallery all
 
 $(BUNDLE_TOOL): FORCE

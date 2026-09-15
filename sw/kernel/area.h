@@ -1,6 +1,7 @@
 #ifndef ASTRA_KERNEL_AREA_H
 #define ASTRA_KERNEL_AREA_H
 
+#include "capacity.h"
 #include "handle.h"
 #include "memory.h"
 #include "vm.h"
@@ -8,8 +9,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define KERNEL_AREA_MAX \
-    (KERNEL_VM_ADDRESS_SPACE_MAX * KERNEL_AREA_OWNER_MAX)
 /*
  * Four was one short of what a terminal in a window needs: its own surface,
  * and a transfer area for each mount it reads through. It ran out between
@@ -17,7 +16,6 @@
  * that was there. Kept at a quarter of the pool, so the quota still means
  * that no one process can spend everybody else's share.
  */
-#define KERNEL_AREA_OWNER_MAX 8u
 #define KERNEL_AREA_PAGE_MAX \
     (KERNEL_VM_AREA_SLOT_SIZE / KERNEL_PAGE_SIZE)
 /*

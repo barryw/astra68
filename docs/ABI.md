@@ -1,6 +1,6 @@
 # Axiom kernel and Astra service ABI
 
-Status: provisional ABI contract, revision 0.9 (2026-08-25)
+Status: provisional ABI contract, revision 0.10 (2026-09-12)
 
 The ABI is big-endian, 32-bit, naturally aligned, and independent of kernel C
 layouts. Only the user/kernel ABI and versioned service protocols are stable.
@@ -106,7 +106,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x0001001d`, `D2=process handle`, `D3=calling-thread handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x0001002d`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | K1 TEST ONLY | monotonic test progress, not a product ABI |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
@@ -167,6 +167,8 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 64 | `INTERVAL_TIMER` | CURRENT CANDIDATE | arms `ITIMER_REAL` from relative delay/interval nanoseconds in `D1:D2`/`D3:D4`, returning the previous remaining/interval values |
 | 65 | `SIGNAL_RETURN` | CURRENT CANDIDATE | restores the kernel-held context saved by the active signal upcall |
 | 66 | `PROCESS_EXEC` | CURRENT CANDIDATE | `D1=image`, `D2=image bytes`, `D3=32-byte AstraExecRequest`; atomically replaces the caller's image, startup vectors, private VM, and threads while preserving process identity and eligible handles; success resumes at the new entry and does not return |
+| 86 | `PROCESS_SNAPSHOT` | CURRENT CANDIDATE | Initial-supervisor-only fixed-slot `AstraProcSnapshot` capture; `D1=self process handle`, `D2=record array`, `D3=record capacity`, returning the live count in `D1` |
+| 87 | `LIBRARY_SNAPSHOT` | CURRENT CANDIDATE | Initial-supervisor-only fixed-slot `AstraProcLibrarySnapshot` capture of resident identities, process mappings, references, and memory; arguments match `PROCESS_SNAPSHOT`, returning the resident count in `D1` |
 
 Areas are at most 4 MiB. This is an address-map allocation unit, not an
 application-size policy; the VM publishes and rolls back every MC68040 table
@@ -174,7 +176,7 @@ touched by the mapping as one transaction. VFS bulk transfers use this same
 bound instead of imposing a smaller protocol limit.
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x0001001d`; a later revision may add
+not panic. `QUERY_ABI` reports revision `0x0001002d`; a later revision may add
 feature bits before additional calls freeze.
 
 Ordinary process priorities are 1 through 23, with 16 as normal; larger values
@@ -196,12 +198,12 @@ zero count. A copy fault does not consume its record or acknowledge overflow.
 
 ### Logical input service protocol
 
-`sw/include/astra/input_service.h` defines protocol `INPT`, version 1. A
-logical event is exactly 32 bytes with size/version, type/flags, millisecond
-timestamp, nonzero service sequence, focus generation, code, and two signed
-values. Event types are physical key, Unicode text, pointer motion, pointer
-button, focus, and state reset. No raw pointer or compiler-dependent enum
-crosses the boundary.
+`sw/include/astra/input_service.h` defines protocol `INPT`, version 2. A
+logical event is exactly 36 bytes with size/version, type/flags, millisecond
+timestamp, nonzero service sequence, focus generation, code, normalized
+modifier state, and two signed values. Event types are physical key, Unicode
+text, pointer motion, pointer button, focus, and state reset. No raw pointer or
+compiler-dependent enum crosses the boundary.
 
 Clients connect with `CONNECT=1`, receive `CONNECTED=2`, and select motion,
 button, wheel, key, text, and focus classes with an explicit bit mask. Only the
@@ -210,25 +212,40 @@ to pointer classes and require an explicitly delegated `INPUT_SERVICE`
 capability.
 
 Events use operation `EVENT=3` and are carried as a normal 24-byte
-`AstraMessageHeader` followed by one logical event. The complete message is 56
+`AstraMessageHeader` followed by one logical event. The complete message is 60
 bytes. `transaction_id` equals the logical event sequence. Keyboard `code` is
 a USB HID usage; text `code` is a Unicode scalar value; pointer-button `code`
 is an `ASTRA_INPUT_BUTTON_*` value. Pointer motion and pointer buttons carry
-the current clipped screen X/Y position. Key and text `value_x` carries the
-modifier mask.
+the current clipped screen X/Y position. Every event carries the normalized
+modifier state captured when that event was created; coalesced pointer motion
+retains that snapshot rather than substituting the state at delivery time.
 
-The GUI protocol is version 5. A successful window create transfers a bounded
-event sender in addition to content and reply capabilities. The create request
+The GUI protocol is version 10. A successful window create returns a private
+window-control handle and a coalescing vblank wait handle after accepting the
+bounded event sender, content area, and reply capability. The create request
 selects a window event mask; `SET_EVENT_MASK` changes it through the private
-window control capability. Each 48-byte pointer event carries both client-local
-and screen coordinates. Focus, frame, close-request, and loss-reset messages
-use the same per-window FIFO.
+window-control capability. The vblank handle is always present so subscription
+can change without rebuilding window state, but it is signaled only while the
+vblank bit is selected. Each 52-byte window event carries the normalized
+modifier snapshot in pointer and wheel payloads, and pointer events also carry
+client-local and screen coordinates. Focus, frame, close-request, and
+loss-reset messages use the same per-window FIFO.
 
 The flags distinguish down, repeat, synthetic, focused, and loss events.
 Clients must discard held-key/button state on `STATE_RESET`. A focus generation
 change also invalidates assumptions made under the prior focus owner. Queue
 full is bounded behavior, never implicit growth: pointer motion may coalesce,
 while loss of a critical event forces a reset before later delivery.
+
+Version 10 adds `SET_POINTER_SHAPE` and `SET_POINTER_IMAGE` to that same
+private window-control capability. Shapes are the canonical default,
+horizontal-resize, vertical-resize, text, wait, and custom values. A custom
+image command transfers a second, immutable area containing a normalized 32 by
+32 RGBA image and carries an in-bounds hotspot. The display service maps it
+read-only, uploads it through the display device, and commits image, hotspot,
+position, visibility, and scene state at vertical blank. Applications never
+receive the display-device capability or a writable mapping of the server's
+copy.
 
 The thread-entry register contract is `D2=initial argument`, `D4=process self
 handle`, and `D5=thread self handle`; all other general registers begin at
@@ -446,8 +463,8 @@ The events service attaches two endpoints to its successful `SRVC` ready
 message: `EVENTS:` first and `EVENT_CONTROL` second. Other current services
 attach only their manifest-declared endpoint.
 
-`sw/include/astra/gui.h` defines the userspace `GUI` protocol, version 5. A
-104-byte `OPEN_WINDOW` request transfers a read-only content area, a private
+`sw/include/astra/gui.h` defines the userspace `GUI` protocol, version 10. A
+108-byte `OPEN_WINDOW` request transfers a read-only content area, a private
 event sender, and a reply sender. It carries bounded frame, content format,
 chrome recipe, flags, gadgets, title, preview states, and an event mask, with
 no pointer. The 36-byte
@@ -456,12 +473,17 @@ transfers a private control sender. A 104-byte `WINDOW_COMMAND` sent through
 that capability performs query, frame, z-order, activation, minimize/maximize,
 restore, title, event-mask, or close operations. Its 64-byte `WINDOW_STATE`
 reply returns the resulting frame, state, flags, z-order, and generation. A
-72-byte `WINDOW_EVENT` carries motion, button, wheel, focus, frame, close,
+76-byte `WINDOW_EVENT` carries motion, button, wheel, focus, frame, close,
 reset, physical-key, or Unicode text state. Pointer records include both
-screen and content-relative coordinates. Each NDK window owns an eight-record
+screen and content-relative coordinates and the event-time normalized
+modifier snapshot. Each NDK window owns an eight-record
 bounded event port; overflow is explicit rather than unbounded allocation.
 The server maps content read-only while the client retains its writable
-handle. This protocol is userspace policy, not a kernel syscall ABI.
+handle. Pointer-shape commands carry a canonical built-in identifier. A
+pointer-image command additionally transfers one immutable area holding the
+server-owned normalized RGBA pixels; replacement is transactional, and the old
+image remains selected if hardware preparation fails. This protocol is
+userspace policy, not a kernel syscall ABI.
 
 `sw/include/astra/vfs_service.h` defines storage protocol `STOR`, version 8,
 with version 2 as the rolling-update floor. Version 3 transfers one reply send
@@ -476,7 +498,8 @@ payload and returns the next backend cursor. Version 2/3 peers retain the
 single-entry fallback. Directory offsets are backend cursors in every
 supported version, so a scan resumes rather than reopening at entry zero.
 Version 5 adds whole-file `READ_PATH`; version 6 adds full node metadata;
-version 7 permits small `READ_PATH` replies inline without a shared-area bind.
+version 7 keeps small `READ_PATH` replies inline even after a shared area is
+bound; larger requests explicitly use that bound area.
 Version 8 permits `HELLO` to carry the first path operation, removing one
 round trip for a short-lived process. Older services answer the ordinary
 `HELLO`, after which the client retries the operation under the negotiated

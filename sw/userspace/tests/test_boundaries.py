@@ -3,6 +3,8 @@
 
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 
 
 USERSPACE = Path(__file__).resolve().parents[1]
@@ -475,6 +477,19 @@ def test_interface_library_objects_track_all_inputs():
         )
 
 
+def test_supervisor_owns_local_service_endpoint_lifetimes():
+    source = (USERSPACE / "supervisor" / "src" / "loader.c").read_text()
+    start = source.index("uint32_t supervisor_loader_start(")
+    end = source.index("uint32_t supervisor_loader_process_handle(", start)
+    startup = source[start:end]
+
+    for handle in ("event_target_send", "launch_send"):
+        if f"astra_close({handle})" in startup or f"{handle} = 0u" in startup:
+            raise AssertionError(
+                f"supervisor closes its provider-owned {handle} after boot"
+            )
+
+
 def test_ndk_private_headers_stay_in_ndk():
     forbidden = re.compile(r'#\s*include\s*[<"]internal/')
     for path in production_sources(USERSPACE):
@@ -635,7 +650,8 @@ def test_program_build_order_is_shared():
     shared = (USERSPACE / "program.mk").read_text()
     if ("ASTRA_PROGRAM_DIRECT_GOALS" not in shared or
             "$(MAKE) libraries" not in shared or
-            "ASTRA_PROGRAM_OWNERS_READY=1 $(ASTRA_PROGRAM_DIRECT_GOALS)" not in shared or
+            "ASTRA_PROGRAM_OWNER_GATE" not in shared or
+            "$(MAKE_RESTARTS)" not in shared or
             "ASTRA_PROGRAM_OWNERS_READY=1 program" not in shared):
         raise AssertionError(
             "sw/userspace/program.mk: direct program targets bypass library owners"
@@ -667,6 +683,60 @@ def test_program_build_order_is_shared():
             raise AssertionError(
                 f"{relative(path)}: defines program build order locally"
             )
+
+
+def test_direct_parallel_build_cannot_observe_stale_owner_products():
+    version = subprocess.run(
+        ("make", "--version"), text=True, capture_output=True, check=True
+    ).stdout
+    match = re.search(r"GNU Make (\d+)\.(\d+)", version)
+    if match is None or tuple(map(int, match.groups())) < (4, 0):
+        return
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        owner = root / "owner"
+        owner.mkdir()
+        (root / "library").write_text("old\n")
+        (owner / "source").write_text("new\n")
+        (owner / "Makefile").write_text(
+            "all:\n"
+            "\t@sleep 0.25\n"
+            "\tcp source ../library\n"
+        )
+        (root / "Makefile").write_text(
+            "ASTRA_PROGRAM_OWNER_DIRS := owner\n"
+            "ASTRA_PROGRAM_TARGETS := image\n"
+            "TARGET := output\n"
+            "include " + str(USERSPACE / "program.mk") + "\n"
+            "image: output\n"
+            "output: library\n"
+            "\t@test \"$$(cat library)\" = new\n"
+            "\tcp library output\n"
+        )
+        result = subprocess.run(
+            ("make", "-j2", "image"),
+            cwd=root,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        output = root / "output"
+        if (result.returncode != 0 or not output.exists() or
+                output.read_text() != "new\n"):
+            raise AssertionError(
+                "sw/userspace/program.mk: parallel direct build observed a "
+                "stale owner product\n" + result.stdout + result.stderr
+            )
+
+
+def test_proc_text_views_are_streamed_without_aggregate_ceiling():
+    source = (USERSPACE / "supervisor" / "src" / "proc_tree.c").read_text()
+    if re.search(r"static\s+char\s+render\s*\[", source):
+        raise AssertionError(
+            "sw/userspace/supervisor/src/proc_tree.c: PROC text is capped by "
+            "an aggregate render buffer"
+        )
 
 
 def main():
@@ -701,6 +771,8 @@ def main():
         test_runtime_diagnostics_and_time_are_shared,
         test_identical_device_callbacks_are_not_duplicated,
         test_program_build_order_is_shared,
+        test_direct_parallel_build_cannot_observe_stale_owner_products,
+        test_proc_text_views_are_streamed_without_aggregate_ceiling,
     )
     failures = []
     for test in tests:

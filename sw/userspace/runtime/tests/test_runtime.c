@@ -111,6 +111,7 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_LIBRARY_MAP &&
         number != ASTRA_SYSCALL_PROCESS_PRIORITY &&
         number != ASTRA_SYSCALL_PROCESS_SNAPSHOT &&
+        number != ASTRA_SYSCALL_LIBRARY_SNAPSHOT &&
         number != ASTRA_SYSCALL_PROCESS_SIGNAL &&
         number != ASTRA_SYSCALL_PROCESS_TERMINATE &&
         number != ASTRA_SYSCALL_PROCESS_SUSPEND &&
@@ -375,6 +376,7 @@ static void
 test_syscall_wrappers(void)
 {
     AstraProcSnapshot process_records[ASTRA_PROCESS_COUNT_MAX];
+    AstraProcLibrarySnapshot library_records[ASTRA_LIBRARY_SLOT_COUNT];
     AstraDisplayFrameRequest request = {0};
     AstraDisplayFrameCompletion completion = {0};
     AstraHostLeaseInfo host_info = {0};
@@ -475,6 +477,17 @@ test_syscall_wrappers(void)
     assert(moved == ASTRA_SYSCALL_ABI_VERSION);
     assert(astra_process_snapshot(process, NULL,
                                   ASTRA_PROCESS_COUNT_MAX, &moved) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_library_snapshot(process, library_records,
+                                  ASTRA_LIBRARY_SLOT_COUNT, &moved) ==
+           ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_LIBRARY_SNAPSHOT);
+    assert(mock_argument0 == process);
+    assert(mock_argument1 == (uint32_t)(uintptr_t)library_records);
+    assert(mock_argument2 == ASTRA_LIBRARY_SLOT_COUNT);
+    assert(moved == ASTRA_SYSCALL_ABI_VERSION);
+    assert(astra_library_snapshot(process, NULL,
+                                  ASTRA_LIBRARY_SLOT_COUNT, &moved) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(astra_rt_ring_create(
                9u, 64u, 1u, 65536u,

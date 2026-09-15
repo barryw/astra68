@@ -2,6 +2,7 @@
 #ifndef ASTRA_GRAPHICS_HW_H
 #define ASTRA_GRAPHICS_HW_H
 
+#include <astra/display_capture.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -31,7 +32,12 @@ enum {
     ASTRA_CONTROL_BASE = ASTRA_CONTROL_BASE_VALUE,
     ASTRA_CONTROL_BYTES = 0x00010000u,
     ASTRA_GRAPHICS_DEVICE_ID = 0x41535452u,
-    ASTRA_GRAPHICS_VERSION = 0x00010008u,
+    ASTRA_GRAPHICS_VERSION = 0x00010009u,
+    ASTRA_CAPTURE_DEVICE_ID = ASTRA_DISPLAY_CAPTURE_DEVICE_ID,
+    ASTRA_CAPTURE_VERSION = ASTRA_DISPLAY_CAPTURE_VERSION,
+    ASTRA_COPPER_DEVICE_ID = 0x434f5052u,
+    ASTRA_COPPER_VERSION = 0x00010001u,
+    ASTRA_CAPTURE_FRAME_BYTES = ASTRA_DISPLAY_CAPTURE_FRAME_BYTES,
     ASTRA_CAP_BOOT_TEXT = 0x00000040u,
     ASTRA_CAP_SPRITE_ENGINE = 0x00000080u,
     ASTRA_CAP_RENDER_ENGINE = 0x00000100u,
@@ -73,6 +79,7 @@ enum astra_graphics_register {
     ASTRA_REG_DISPLAY_CROP_SIZE = 0x064,
     ASTRA_REG_DISPLAY_VIEWPORT_ORIGIN = 0x068,
     ASTRA_REG_DISPLAY_VIEWPORT_SIZE = 0x06c,
+    ASTRA_REG_FB_WINDOW_SCENE_BYTES = 0x070,
     ASTRA_REG_TILE0_CONTROL = 0x098,
     ASTRA_REG_TILE1_CONTROL = 0x0d8,
     ASTRA_REG_BOOT_TEXT_CONTROL = 0x140,
@@ -143,7 +150,47 @@ enum astra_graphics_register {
     ASTRA_REG_COPPER_IRQ_SOURCES = 0x402c,
     ASTRA_REG_COPPER_DISPATCH_SELECTOR = 0x4030,
     ASTRA_REG_COPPER_DISPATCH_ENDPOINT = 0x4034,
+    ASTRA_REG_CAPTURE_DEVICE_ID = 0x5000 + ASTRA_CAPTURE_REG_DEVICE_ID,
+    ASTRA_REG_CAPTURE_VERSION = 0x5000 + ASTRA_CAPTURE_REG_VERSION,
+    ASTRA_REG_CAPTURE_CAPABILITIES = 0x5000 + ASTRA_CAPTURE_REG_CAPABILITIES,
+    ASTRA_REG_CAPTURE_CONTROL = 0x5000 + ASTRA_CAPTURE_REG_CONTROL,
+    ASTRA_REG_CAPTURE_STATUS = 0x5000 + ASTRA_CAPTURE_REG_STATUS,
+    ASTRA_REG_CAPTURE_BUFFER_BASE = 0x5000 + ASTRA_CAPTURE_REG_BUFFER_BASE,
+    ASTRA_REG_CAPTURE_FRAME_BYTES = 0x5000 + ASTRA_CAPTURE_REG_FRAME_BYTES,
+    ASTRA_REG_CAPTURE_COMPLETED_BASE =
+        0x5000 + ASTRA_CAPTURE_REG_COMPLETED_BASE,
+    ASTRA_REG_CAPTURE_COMPLETED_GENERATION =
+        0x5000 + ASTRA_CAPTURE_REG_COMPLETED_GENERATION,
+    ASTRA_REG_CAPTURE_COMPLETED_COUNT =
+        0x5000 + ASTRA_CAPTURE_REG_COMPLETED_COUNT,
+    ASTRA_REG_CAPTURE_DROPPED_COUNT =
+        0x5000 + ASTRA_CAPTURE_REG_DROPPED_COUNT,
+    ASTRA_REG_CAPTURE_OVERFLOW_COUNT =
+        0x5000 + ASTRA_CAPTURE_REG_OVERFLOW_COUNT,
+    ASTRA_REG_CAPTURE_AXI_ERROR_COUNT =
+        0x5000 + ASTRA_CAPTURE_REG_AXI_ERROR_COUNT,
+    ASTRA_REG_CAPTURE_COMMAND_ERROR_COUNT =
+        0x5000 + ASTRA_CAPTURE_REG_COMMAND_ERROR_COUNT,
+    ASTRA_REG_CAPTURE_LAST_CYCLES =
+        0x5000 + ASTRA_CAPTURE_REG_LAST_CYCLES,
     ASTRA_REG_COPPER_PROGRAM = 0x8000,
+};
+
+enum astra_framebuffer_control {
+    ASTRA_FRAMEBUFFER_ENABLE = 1u << 0,
+    ASTRA_FRAMEBUFFER_FORMAT_RGB565 = 1u << 1,
+    ASTRA_FRAMEBUFFER_KEY_ENABLE = 1u << 5,
+    ASTRA_FRAMEBUFFER_WINDOW_SCENE = 1u << 6,
+};
+
+enum astra_copper_opcode {
+    ASTRA_COPPER_OP_END = 0u,
+    ASTRA_COPPER_OP_MOVE = 1u,
+    ASTRA_COPPER_OP_WAIT = 2u,
+    ASTRA_COPPER_OP_SKIP = 3u,
+    ASTRA_COPPER_OP_IRQ = 4u,
+    ASTRA_COPPER_OP_JUMP = 5u,
+    ASTRA_COPPER_OP_DISPATCH = 6u,
 };
 
 enum astra_copper_control {
@@ -210,13 +257,24 @@ struct astra_graphics_memory_map {
 
 struct astra_graphics_device {
     int memory_fd;
+    int capture_lock_fd;
     volatile uint32_t *registers;
     volatile uint8_t *framebuffer;
+};
+
+struct astra_display_capture_result {
+    uint32_t generation;
+    uint32_t cycles;
+    uint64_t elapsed_ns;
 };
 
 void astra_graphics_device_init(struct astra_graphics_device *device);
 int astra_graphics_device_open(struct astra_graphics_device *device,
                                bool map_framebuffer);
+int astra_display_capture_device_open(
+    struct astra_graphics_device *device);
+int astra_display_capture_claim(struct astra_graphics_device *device);
+void astra_display_capture_release(struct astra_graphics_device *device);
 void astra_graphics_device_close(struct astra_graphics_device *device);
 int astra_graphics_device_validate(const struct astra_graphics_device *device,
                                    bool require_boot_text);
@@ -237,6 +295,18 @@ void astra_graphics_memory_copy_from(void *destination,
 int astra_graphics_scene_commit(
     const struct astra_graphics_device *device, uint64_t timeout_ns,
     uint32_t *generation_out);
+int astra_graphics_capture_rgb(
+    const struct astra_graphics_device *device, uint32_t physical_address,
+    const char *path, struct astra_display_capture_result *result);
+int astra_graphics_wait_register_mask(
+    const struct astra_graphics_device *device, unsigned offset,
+    uint32_t mask, uint32_t expected, uint64_t timeout_ns,
+    uint32_t *value_out);
+void astra_graphics_copper_write_instruction(
+    const struct astra_graphics_device *device, unsigned index,
+    uint32_t word0, uint32_t word1);
+void astra_graphics_scene_prepare_empty(
+    const struct astra_graphics_device *device);
 uint32_t astra_mmio_read(const struct astra_graphics_device *device,
                          unsigned offset);
 void astra_mmio_write(const struct astra_graphics_device *device,

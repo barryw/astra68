@@ -109,6 +109,14 @@ start_helper()
     started_pid=$!
 }
 
+process_alive()
+{
+    process_pid=$1
+    [ -n "$process_pid" ] && kill -0 "$process_pid" 2>/dev/null &&
+        [ "$(sed -n 's/^State:[[:space:]]*\([^[:space:]]\).*/\1/p' \
+            "/proc/$process_pid/status" 2>/dev/null || true)" != "Z" ]
+}
+
 mkdir -p "$(dirname "$TEXT_PLANE")" "$(dirname "$QMP_SOCKET")" \
     "$(dirname "$PANIC_LOG")" "$HOSTFS_ROOT" "$STATE_ROOT"
 exec 9>"$(dirname "$QMP_SOCKET")/runtime.lock"
@@ -152,18 +160,13 @@ stop_process()
     fi
     kill "$pid" 2>/dev/null || true
     count=0
-    while kill -0 "$pid" 2>/dev/null && [ "$count" -lt 10 ]; do
+    while process_alive "$pid" && [ "$count" -lt 10 ]; do
         state=$(sed -n 's/^State:[[:space:]]*\([^[:space:]]\).*/\1/p' \
             "/proc/$pid/status" 2>/dev/null || true)
-        [ "$state" = "Z" ] && break
         count=$((count + 1))
         sleep 0.1
     done
-    if kill -0 "$pid" 2>/dev/null; then
-        state=$(sed -n 's/^State:[[:space:]]*\([^[:space:]]\).*/\1/p' \
-            "/proc/$pid/status" 2>/dev/null || true)
-        [ "$state" = "Z" ] || kill -KILL "$pid" 2>/dev/null || true
-    fi
+    process_alive "$pid" && kill -KILL "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
 }
 cleanup()
@@ -201,6 +204,24 @@ qemu_pid=$!
 start_helper "$AUX_CPU" python3 "$INPUT_HOTPLUG" --qmp "$QMP_SOCKET"
 input_pid=$started_pid
 set +e
+while process_alive "$qemu_pid"; do
+    if ! process_alive "$display_pid"; then
+        wait "$display_pid"
+        helper_status=$?
+        echo "Astra display helper exited with status $helper_status; restarting" >&2
+        start_helper "$DISPLAY_CPU" "$TERMINAL_DISPLAY" "$TEXT_PLANE" \
+            "$DISPLAY_MAILBOX"
+        display_pid=$started_pid
+    fi
+    if ! process_alive "$input_pid"; then
+        wait "$input_pid"
+        helper_status=$?
+        echo "Astra input helper exited with status $helper_status; restarting" >&2
+        start_helper "$AUX_CPU" python3 "$INPUT_HOTPLUG" --qmp "$QMP_SOCKET"
+        input_pid=$started_pid
+    fi
+    sleep 0.05
+done
 wait "$qemu_pid"
 status=$?
 set -e

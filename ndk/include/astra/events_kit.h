@@ -8,6 +8,6 @@
 /** Logical name resolved beneath `LIBS:` by OpenLibrary(). */
 #define ASTRA_EVENTS_LIBRARY_NAME "events.library"
 /** Minimum compatible Events Kit ABI major. */
-#define ASTRA_EVENTS_LIBRARY_VERSION 1u
+#define ASTRA_EVENTS_LIBRARY_VERSION ASTRA_EVENTS_LIBRARY_ABI_MAJOR
 
 #endif

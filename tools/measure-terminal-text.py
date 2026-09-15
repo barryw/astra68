@@ -96,6 +96,21 @@ class Qmp:
                     "down": down}}]})
                 time.sleep(0.05)
 
+    def drag(self, start_x, start_y, end_x, end_y, steps):
+        self.execute("input-send-event", {"events": [
+            {"type": "abs", "data": {"axis": "x", "value": start_x}},
+            {"type": "abs", "data": {"axis": "y", "value": start_y}},
+            {"type": "btn", "data": {"button": "left", "down": True}}]})
+        for step in range(1, steps + 1):
+            self.execute("input-send-event", {"events": [
+                {"type": "abs", "data": {"axis": "x", "value":
+                    start_x + (end_x - start_x) * step // steps}},
+                {"type": "abs", "data": {"axis": "y", "value":
+                    start_y + (end_y - start_y) * step // steps}}]})
+            time.sleep(0.02)
+        self.execute("input-send-event", {"events": [{
+            "type": "btn", "data": {"button": "left", "down": False}}]})
+
     def counters(self):
         return {name: self.property(name) for name in PROPERTIES}
 
@@ -150,11 +165,38 @@ def main():
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--quiet", type=float, default=0.75)
     parser.add_argument("--max-batches", type=float)
-    parser.add_argument("--open-terminal", action="store_true",
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--open-terminal", action="store_true",
                         help="open Terminal from a freshly booted desktop")
+    action.add_argument("--dump-trace-ring", metavar="PATH",
+                        help="dump Astra's 64 KiB trace ring and exit")
+    action.add_argument("--double-click", nargs=2, type=int,
+                        metavar=("X", "Y"),
+                        help="double-click a screen coordinate and exit")
+    action.add_argument("--drag", nargs=4, type=int,
+                        metavar=("X1", "Y1", "X2", "Y2"),
+                        help="drag between screen coordinates and exit")
+    parser.add_argument("--drag-steps", type=int, default=20)
     arguments = parser.parse_args()
     command = " ".join(arguments.command)
     qmp = Qmp(arguments.qmp)
+    if arguments.dump_trace_ring:
+        if any(character in arguments.dump_trace_ring
+               for character in '\"\r\n'):
+            raise SystemExit("trace-ring path contains an unsafe character")
+        reply = qmp.execute("human-monitor-command", {"command-line":
+            'pmemsave 0x020c4000 65536 "%s"' % arguments.dump_trace_ring})
+        if reply and reply.strip():
+            raise SystemExit("trace-ring dump failed: %s" % reply.strip())
+        return
+    if arguments.double_click:
+        qmp.double_click(*arguments.double_click)
+        return
+    if arguments.drag:
+        if arguments.drag_steps < 1:
+            raise SystemExit("drag steps must be positive")
+        qmp.drag(*arguments.drag, arguments.drag_steps)
+        return
     if arguments.open_terminal:
         time.sleep(2.0)
         qmp.double_click(70, 90)

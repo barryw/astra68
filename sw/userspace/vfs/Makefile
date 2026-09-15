@@ -34,7 +34,7 @@ LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
 CORE_SOURCES := src/vfs_service_core.c src/vfs_client.c \
 	src/vfs_local_transport.c src/vfs_port_transport.c src/vfs_assign.c \
 	src/vfs_path.c src/vfs_union.c src/vfs_process.c src/vfs_reader.c \
-	src/vfs_status.c
+	src/vfs_provider_index.c src/vfs_status.c
 EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
 	-DCONFIG_USE_DEFAULT_CFG=0 -I$(RUNTIME)/freestanding
 
@@ -46,6 +46,7 @@ HEADERS := include/astra/vfs_service_core.h include/astra/vfs_backend.h \
 	include/astra/vfs_host_backend.h include/astra/vfs_host_transport.h \
 	include/astra/vfs_host_direct.h \
 	$(NDK)/include/astra/shared_library.h \
+	include/astra/vfs_provider_index.h \
 	../../include/astra/vfs_service.h \
 	../../include/astra/syscall.h
 
@@ -59,7 +60,8 @@ TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/vfs_host_transport.o \
 	build/m68k/vfs_host_direct.o \
 	build/m68k/vfs_union.o \
-	build/m68k/vfs_process.o build/m68k/vfs_reader.o $(NDK_OBJECTS) \
+	build/m68k/vfs_process.o build/m68k/vfs_reader.o \
+	build/m68k/vfs_provider_index.o $(NDK_OBJECTS) \
 	build/m68k/vfs_status.o
 FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library
 FILESYSTEM_LIBRARY_OBJECTS := build/m68k/library/filesystem_library.o \
@@ -209,11 +211,13 @@ $(PATH_TEST): src/vfs_path.c $(UTF8_OBJECT) tests/test_vfs_path.c $(HEADERS)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/vfs_path.c $(UTF8_OBJECT) tests/test_vfs_path.c -o $@
 
-$(PROCESS_TEST): src/vfs_process.c tests/test_vfs_process.c $(HEADERS)
+$(PROCESS_TEST): src/vfs_process.c src/vfs_provider_index.c \
+		tests/test_vfs_process.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		-DASTRA_VFS_PROCESS_TEST -ffunction-sections -Wl,--gc-sections \
-		src/vfs_process.c tests/test_vfs_process.c -o $@
+		src/vfs_process.c src/vfs_provider_index.c \
+		tests/test_vfs_process.c -o $@
 
 $(READER_TEST): src/vfs_reader.c tests/test_vfs_reader.c $(HEADERS) \
 		include/astra/vfs_reader.h

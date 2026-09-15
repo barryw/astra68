@@ -8,7 +8,7 @@ BOOT_FONT="$ROOT/build/arty-graphics/post_fonts.hex"
 mkdir -p "$BUILD" "$(dirname "$BOOT_FONT")"
 python3 "$ROOT/tools/fonts/test_afnt.py"
 python3 "$ROOT/tools/fonts/afnt.py" emit-cp437-hex \
-    "$ROOT/sw/userspace/graphics/fonts/astra-mono.afnt" "$BOOT_FONT"
+    "$ROOT/sw/userspace/graphics/fonts/astra-rescue-mono.afnt" "$BOOT_FONT"
 python3 "$ROOT/fpga/arty/graphics/protocol/generate_protocol.py"
 python3 "$ROOT/fpga/arty/graphics/test_hdmi_source_contract.py"
 
@@ -70,6 +70,15 @@ iverilog -g2012 -Wall \
 vvp "$BUILD/tb_astra_axi_read_3to1"
 
 iverilog -g2012 -Wall \
+    -s tb_astra_display_capture \
+    -o "$BUILD/tb_astra_display_capture" \
+    "$ROOT/fpga/arty/common/astra_async_fifo.sv" \
+    "$ROOT/fpga/arty/graphics/astra_display_capture.sv" \
+    "$ROOT/fpga/arty/graphics/sim/tb_astra_display_capture.sv"
+
+vvp "$BUILD/tb_astra_display_capture"
+
+iverilog -g2012 -Wall \
     -s tb_astra_front_panel_axi \
     -o "$BUILD/tb_astra_front_panel_axi" \
     "$ROOT/fpga/arty/common/astra_front_panel.sv" \
@@ -116,7 +125,7 @@ iverilog -g2012 -Wall \
 
 vvp "$BUILD/tb_astra_tile_line_builder_perf"
 
-iverilog -g2012 -Wall \
+iverilog -g2012 -Wall -I "$ROOT/fpga/arty/graphics" \
     -s tb_astra_framebuffer_line_builder \
     -o "$BUILD/tb_astra_framebuffer_line_builder" \
     "$ROOT/fpga/arty/graphics/astra_framebuffer_config_validator.sv" \
@@ -125,6 +134,28 @@ iverilog -g2012 -Wall \
     "$ROOT/fpga/arty/graphics/sim/tb_astra_framebuffer_line_builder.sv"
 
 vvp "$BUILD/tb_astra_framebuffer_line_builder"
+
+iverilog -g2012 -Wall -I "$ROOT/fpga/arty/graphics" \
+    -Ptb_astra_framebuffer_line_builder.AXI_DATA_WIDTH=128 \
+    -s tb_astra_framebuffer_line_builder \
+    -o "$BUILD/tb_astra_framebuffer_line_builder_128" \
+    "$ROOT/fpga/arty/graphics/astra_framebuffer_config_validator.sv" \
+    "$ROOT/fpga/arty/graphics/astra_framebuffer_line_store.sv" \
+    "$ROOT/fpga/arty/graphics/astra_framebuffer_line_builder.sv" \
+    "$ROOT/fpga/arty/graphics/sim/tb_astra_framebuffer_line_builder.sv"
+
+vvp "$BUILD/tb_astra_framebuffer_line_builder_128"
+
+iverilog -g2012 -Wall -I "$ROOT/fpga/arty/graphics" \
+    -Ptb_astra_framebuffer_line_builder.SCENE_PERF_MODE=1 \
+    -s tb_astra_framebuffer_line_builder \
+    -o "$BUILD/tb_astra_framebuffer_scene_perf" \
+    "$ROOT/fpga/arty/graphics/astra_framebuffer_config_validator.sv" \
+    "$ROOT/fpga/arty/graphics/astra_framebuffer_line_store.sv" \
+    "$ROOT/fpga/arty/graphics/astra_framebuffer_line_builder.sv" \
+    "$ROOT/fpga/arty/graphics/sim/tb_astra_framebuffer_line_builder.sv"
+
+vvp "$BUILD/tb_astra_framebuffer_scene_perf"
 
 iverilog -g2012 -Wall \
     -s tb_astra_sprite_scene_store \
@@ -322,6 +353,7 @@ iverilog -g2012 -Wall -I "$ROOT/fpga/arty/graphics" \
     -s tb_astra_graphics_pipeline \
     -Ptb_astra_graphics_pipeline.OUTPUT_WIDTH=1920 \
     -Ptb_astra_graphics_pipeline.TOTAL_WIDTH=2200 \
+    -Ptb_astra_graphics_pipeline.FRAMEBUFFER_AXI_DATA_WIDTH=128 \
     -o "$BUILD/tb_astra_graphics_pipeline_screen_width" \
     "${PIPELINE_SOURCES[@]}"
 

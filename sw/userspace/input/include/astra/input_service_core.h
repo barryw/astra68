@@ -44,6 +44,7 @@ typedef struct AstraInputClient {
     uint32_t subscriptions;
     int32_t pending_dx;
     int32_t pending_dy;
+    uint32_t pending_modifiers;
     uint8_t active;
     uint8_t desynchronized;
     uint8_t motion_pending;

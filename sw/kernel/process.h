@@ -589,6 +589,7 @@ void kernel_process_test_fail_next_thread_create(
 uint32_t kernel_process_test_handle_count(uint32_t process_id);
 bool kernel_process_test_library_cache_reclaims_after_last_mapping(void);
 bool kernel_process_test_library_reference_selection(void);
+bool kernel_process_test_library_snapshot(void);
 #endif
 
 #endif

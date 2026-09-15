@@ -1,8 +1,9 @@
-#ifndef ASTRA_GRAPHICS_ROUNDED_H
-#define ASTRA_GRAPHICS_ROUNDED_H
+#ifndef ASTRA_ROUNDED_H
+#define ASTRA_ROUNDED_H
 
 #include <stdint.h>
 
+/* Shared integer coverage rule for rounded surfaces and scene clipping. */
 static inline uint32_t
 astra_graphics_rounded_inset(uint32_t row, uint32_t height, uint32_t radius)
 {

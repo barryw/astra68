@@ -1,5 +1,174 @@
 # DE25-Nano Timing Closure
 
+## 2026-09-14: native-width framebuffer deadline closure
+
+- The preceding 64-bit scene-reader route was not physically acceptable.
+  Its ideal three-span 1920-pixel row took 2,234 of the 2,444 available build
+  clocks, and Terminal exposed missed rows as a repeated striped line. A
+  focused regression also proved that scanline replay treated an unavailable
+  source row as valid scaling input. Requiring explicit source availability
+  removes that stale-row interpretation; a second consecutive miss now
+  produces an unavailable row rather than unbounded replay.
+- The remaining black band was a real construction deadline miss, not bad
+  source pixels, scene data, commit ordering, or Media RAM overlap. The DE25
+  LPDDR4B controller is natively 128-bit, but the framebuffer bridge narrowed
+  it to 64 bits while the builder and line store serialized one pixel per
+  165 MHz clock. The retained path uses a native 128-bit framebuffer AXI
+  manager and two parity-banked line-store writes per clock. Scene and render
+  managers remain 64-bit because they do not share this scanline deadline.
+- The target-clock regression requires the steady production-shaped row to
+  finish within 1,500 clocks, preserving 944 clocks (38.6%) of the physical
+  line for real LPDDR latency and concurrent traffic. The old implementation
+  failed at 2,234 clocks. The retained implementation passes at 1,164 clocks,
+  3,856 transferred bytes, and 12 physical AXI requests for the measured row.
+  Bootstrap takes 1,198 clocks. Both 64- and 128-bit suites pass exact pixel
+  checks for INDEX8, RGB565, XRGB8888, unaligned starts, clipping, wrapping,
+  4 KiB splits, malformed responses, scene validation, timeout drain/reuse,
+  and both halves of a 128-bit line-table beat. The 1920-wide integrated
+  pipeline, scheduler, replay, and DE25 shell-contract tests also pass.
+- A clean full production build on `beast` with Quartus Pro 26.1.1 Build 130
+  passed platform qualification, synthesis, fit, final multicorner timing,
+  Design Assistant, assembly, checksum verification, and atomic publication.
+  Every constrained clock has zero setup and hold failing endpoints. Worst
+  setup, hold, recovery, removal, and minimum-pulse slack are +0.076 ns,
+  0.000 ns, +2.518 ns, +0.006 ns, and +0.220 ns. Resources are 45,080 / 46,800
+  ALMs (96%); 82,135 registers; 4,189,680 / 7,331,840 block-memory bits (57%);
+  342 / 358 RAM blocks (96%); 60 / 376 DSP blocks (16%); and 5 / 11 PLLs
+  (45%).
+- Relevant source SHA-256 values are
+  `a40d0bd714e268ea56a55f423a616840a1eeeed2e85b3d12e6b9fd972b7de3cf`
+  (`add_lpddr4b.tcl`),
+  `27fd909096cf7ccf8a85da0837dbfba54d0c3c9bcf8d131afeffbeab3cf658fe`
+  (`astra_de25_graphics.sv`),
+  `1f1117b380239a09925845daa044dd8a1a44a90edabf2c79e06382a2b88f9f3f`
+  (`astra_graphics_pipeline.sv`),
+  `fe6059dd3ad304a0c3f4935f648439c837845ec5f71c135ef881d51de4c36108`
+  (`astra_framebuffer_line_builder.sv`),
+  `ec29e5b1a86838a29f4d54eaec179ad8df610497a125af723b4726740d74fa2e`
+  (`astra_framebuffer_line_store.sv`), and
+  `637dd9bf35c37ca33abb42c2b126eb00d32061597634e39120f77a5df88477a3`
+  (`astra_scanline_replay.sv`). Published artifact SHA-256 values are
+  `99c03a1487863bfe84b4f793a75bde2b8b6bfd3c1f3c3fd1e73023bec5204b62`
+  (`golden_top_boot.core.rbf`),
+  `b4488ef352786cbd7f974cd176d26e9d107eb2ea093d268950b51d171f77e995`
+  (`astra68.hps.jic`),
+  `87863a17edde9ddfec7f302b5f1f2dc9232ddedcc083dee86be36b96702dd276`
+  (`golden_top.sof`), and
+  `327df009545cc50f1533f1ca64a23055143534287e248d9e3ee7d0642b82702e`
+  (`golden_top_hps.sof`).
+- The checksum-qualified bundle was atomically installed and cold-booted.
+  POST, storage verification, kernel startup, required services, and stage 8
+  passed with zero service restart. Physical Cam Link evidence includes a
+  clean idle frame, a clean active Terminal frame, 901 frames across repeated
+  Terminal output/scrolling, and 481 frames during injected pointer/drag input.
+  Black-band detection over regions outside the moving window found zero
+  events, and both contact sheets contain no striped, repeated, or black
+  scanlines. The retained captures are
+  `/private/tmp/astra-terminal-activity-99c03a14.mp4` (SHA-256
+  `a28f2bd81ec6ad701182f247e18710a96f453710c1a649def66ea268e3a64576`)
+  and `/private/tmp/astra-terminal-drag-99c03a14.mp4` (SHA-256
+  `67ffeace60c555b4e1b0ab0d9fd86a39e2ac1f65c6e33d6feef82ef8db00750c`).
+  This is the retained production display checkpoint.
+
+## 2026-09-14: window-scene scanline deadline correction
+
+- The physical black band was localized to the scanline scheduler replaying
+  its previous valid slot after the compiled window-scene builder missed the
+  next native-line deadline. The existing scheduler counter and behavior
+  matched the observed stale rows; source surfaces and compiled spans were
+  independently dumped and were correct.
+- A target-clock regression now runs the production 1920-pixel, three-span
+  scene against the real 2,444-cycle native line budget derived from 2,200
+  pixel clocks at 148.500 MHz and a 165 MHz build clock. The unmodified path
+  failed at 2,464 cycles, 3,904 bytes, and 35 AXI requests per bootstrap row.
+- The retained correction caches the already validated immutable scene header
+  until the existing atomic `scene_changed` event and uses the DE25 HPS AXI4
+  bridge's supported 32-beat bursts. Header caching alone measured 2,412
+  cycles and was rejected as insufficient margin. Together, the bootstrap row
+  measures 2,284 cycles and the steady row measures 2,234 cycles, 3,840 bytes,
+  and 19 requests: 210 cycles (8.6%) of native-line headroom.
+- The default 16-beat builder contract remains covered for the Arty/shared
+  configuration. The complete graphics simulation suite and DE25 shell and
+  boot contract tests pass.
+- The exact full production route passed synthesis, fit, final multicorner
+  timing, Design Assistant, assembly, programming-file generation, checksum
+  verification, and atomic publication on `beast` with Quartus Pro 26.1.1.
+  Every constrained clock has zero setup and hold failing endpoints. Worst
+  setup, hold, recovery, removal, and minimum-pulse slack are +0.054 ns,
+  0.000 ns, +2.563 ns, +0.064 ns, and +0.220 ns. The external HDMI pixel
+  interface closes at +0.054 ns setup/+0.003 ns hold; the internal 148.500 MHz
+  pixel clock closes at +0.074 ns setup/+0.017 ns hold. Design Assistant has
+  zero unwaived high-severity violations.
+- Resources are 44,468 / 46,800 ALMs (95%); 81,747 registers; 4,185,592 /
+  7,331,840 block-memory bits (57%); 340 / 358 RAM blocks (95%); 60 / 376 DSP
+  blocks (16%); and 5 / 11 PLLs (45%). Relevant source SHA-256 identities are
+  `11fb776f5020f5447195dc83b3b6890f194b3132bc0cf04f6772f1498d431dbc`
+  (`astra_de25_graphics.sv`),
+  `770bebada6e929189398725032fdf49397f7cf0053ea9d80bb39b9c097f4708d`
+  (`astra_graphics_pipeline.sv`), and
+  `b858033439ea55c1f906bee6b1c0d0db2d7f0cefd5995fa4c6d4d9749b0836be`
+  (`astra_framebuffer_line_builder.sv`).
+- Published artifact SHA-256 values are
+  `7fa3f05f515df6ccd68c19acc33f65c1b6febc2cb08d88be5bff71f137817677`
+  (`golden_top_boot.core.rbf`),
+  `3942be2d781599bb1bbf70f1e143cbd55acb8fde712cb0267b91aa973964f0f6`
+  (`astra68.hps.jic`),
+  `c02e70cc8f6c01ca45c80c2d0413678107ec2567d313c08094963492d1c37a99`
+  (`golden_top.sof`), and
+  `bcd2130e03a0957ab553d411cb040546a5efe847f3a946dc017dcd7c626b2a9f`
+  (`golden_top_hps.sof`). Physical HDMI acceptance remains pending; no prior
+  bitstream is accepted for this correction.
+
+## 2026-09-14: retained-window-scene production route
+
+- Host/tool: `beast`, Quartus Pro 26.1.1 Build 130; exact mirrored source,
+  complete production feature set, and the pinned vendor inputs whose SHA-256
+  values are `554af27603855b37840e930bd075c34141c85d2f753cfa45df2eb5114f0f4c73`
+  for the DE25 resource package and
+  `5da65306fbb1689fb12c9d4bd3721e6be683192e899315df55718eb5df6083e5`
+  for the GHRD archive.
+- Architecture: the display service retains immutable window presentation
+  surfaces and submits an ordered scene instead of rebuilding a full-screen
+  scanout for pure movement. The host validates and compiles the scene into
+  bounded per-line span records in Media RAM. The existing hardware line
+  builder consumes those records without changing the VFS, application draw,
+  window ownership, or atomic-vblank presentation contracts.
+- Result: the complete graphics regression, synthesis, fit, route, final
+  multicorner timing, Design Assistant, assembly, programming-file generation,
+  staged checksum verification, and atomic publication all passed. Every
+  constrained clock has zero setup and hold failing endpoints. Worst setup,
+  hold, recovery, removal, and minimum-pulse slack are +0.046 ns, 0.000 ns,
+  +1.673 ns, +0.026 ns, and +0.220 ns. The external HDMI pixel interface closes
+  at +0.046 ns setup and +0.004 ns hold; its internal 148.500 MHz pixel clock
+  closes at +0.605 ns setup and +0.024 ns hold.
+- Design Assistant: zero unwaived high-severity violations.
+- Resources: 44,480 / 46,800 ALMs (95%); 81,591 registers; 4,183,544 /
+  7,331,840 block-memory bits (57%); 340 / 358 RAM blocks (95%); 60 / 376 DSP
+  blocks (16%); and 5 / 11 PLLs (45%).
+- Relevant source SHA-256 identities are
+  `dfb00375ac13cf341c843bc6da878ad25236cc6bcd0caf8e5a8b152cb21db341`
+  (`astra_de25_graphics.sv`),
+  `174c68a8d9fd642343171266bb39d92cfefe6b45dd54d5ad7bd978f3de84d22c`
+  (`astra_graphics_pipeline.sv`),
+  `f60da815b148c54983fcc3088ecbfcace9f0135fb21151a7336bbf315921e4cd`
+  (`astra_graphics_control.sv`),
+  `4eae13c7a1e6d7b1e4b33f2448240036d9903e81e6322f6745e1af612f9bcfea`
+  (`astra_framebuffer_line_builder.sv`), and
+  `c1c02f32c4599967cbc57bfb4e27a3ed3f9879d6632a146e40cf2334b2481dc0`
+  (`astra_window_scene_protocol.vh`).
+- Published artifact SHA-256 values are
+  `0b56b9ff5a05802697f3b5ba91eed26e3aae48b5b6938fe06d22d62a1ec525d7`
+  (`golden_top_boot.core.rbf`),
+  `b9414911d9c0aa07258c8c3f11035f3662b091c77e271c6b9491cf9778ed15e2`
+  (`astra68.hps.jic`),
+  `6715c9308fda511fa1609fba6c41679aba99dacaaa475dbb71f2b3a5e69c014b`
+  (`golden_top.sof`), and
+  `d4fe8930189ba3e2cd1e4c86744b3586f6fe3e0feff31544e93c8f2e94aff3a4`
+  (`golden_top_hps.sof`).
+- Disposition: retained as the routed production checkpoint. Physical HDMI,
+  drag-rate, pointer responsiveness, and immutable-release acceptance remain
+  required before it becomes the deployed production release.
+
 ## 2026-09-10: scene epoch route and compositor surface correction
 
 - The retained full production route adds an explicit pixel/build scene-epoch
@@ -24,6 +193,8 @@
   registrations. Its temporary surfaces also start after the 256 KiB render
   batch; a focused regression caught that latent overlap. Graphics and display
   tests pass normally and under ASan/UBSan.
+  This describes that retained release; the current builder supersedes the
+  fixed split with opposing allocators across the physical 8 MiB workspace.
 - Immutable release
   `b20178fb3f52a997bbcde9501fb435867d95cc3e25c232c51c764306a3f26066`
   verified before and after installation, reached stage 8, and remained active
@@ -644,3 +815,45 @@ platform. The next independently measured project is the MC68040 migration.
   mounted and verified storage, launched every service, and reached stage 8.
   The physical MC68040 measured 70.117 MHz effective; QEMU settled at 553,940
   KiB RSS and `astra.service` remained active with zero restarts.
+
+## 2026-09-15: final-stream capture route and DMA readback
+
+- Host/tool: exact-mirror source on `beast`, Quartus Pro 26.1.1 Build 130.
+  The complete production shell routes with capture connected to the final
+  physical RGB stream after all compositor layers and the native pointer.
+- Timing: setup +0.024 ns, hold 0.000 ns, recovery +2.645 ns, removal
+  +0.046 ns, and minimum pulse width +0.220 ns. Every production clock is
+  constrained and meets timing.
+- Resources: 45,797 / 46,800 ALMs and 354 / 358 RAM blocks. The retained SD
+  RBF SHA-256 is
+  `01d05c63af51d1d78acbfa3acb47292f0ba7848f0b05cdb1b9f4f693c2107524`.
+- A retained all-layer internal specimen contains desktop/window surfaces,
+  hardware glyph and line output, 16 sprites, four Copper-driven palette
+  bands, and the native pointer. Its raw RGB and PNG SHA-256 values are
+  `b418b7d37820b5d6cb88f1a0810e6a165ba1cef8a51e2728e92f75da68900784`
+  and
+  `72b3b41fdc6a3c09d2d774e250c1748bfc4c12a2b740c7e9c4ea27d5dc51208f`.
+- The normal runtime's internal RGB capture is byte-identical through direct
+  and four-channel DMA readback at SHA-256
+  `38e690b4f69e57fead7bdce21142d9f5f1420c7e95ce1d8dcd0fd0c4791de476`.
+  Its PNG SHA-256 is
+  `6636321c89dd50b0470bbfcdbde75ab29b115d6dbd53dfe0432ead9a4b9dff87`.
+  A direct Cam Link frame of the same normal desktop has SHA-256
+  `5093d751b893498d4b5eb0256c759b6f5feb9103c06c106aa0f1c700b157682b`.
+- The exact Linux 6.12.11 source driver binds both existing DesignWare AXI DMA
+  controllers. One channel verified 100 MiB at 156,206 KiB/s with zero data
+  failures. Four channels moved the real 6,220,800-byte frame in 15,081,176 ns
+  in the reachability probe; the retained production device completed it in
+  14,570,053 ns. No RTL change was required for DMA readback.
+- The first production DMA frame was black because the Media RAM resource had
+  been mapped before the external capture producer wrote it. Direct readback
+  proved acquisition was correct. Mapping only after capture completion and
+  unmapping immediately after DMA restored byte identity and enforces the
+  Linux DMA ownership contract. A second gate caught non-page-aligned mmap
+  accounting; the driver now allocates and maps exactly `PAGE_ALIGN(frame)`
+  while exposing only the meaningful RGB bytes. Writable mappings are rejected.
+- Keep `dw_axi_dmac_platform` loaded until shutdown. Its upstream remove path
+  does not unregister the DMA device, leaving stale channel-class objects and
+  causing `EEXIST` on reinsertion. The Astra capture module is independently
+  unload-safe while closed and owns its channels and coherent frame only for
+  the duration of an open remote-display session.

@@ -16,6 +16,8 @@ module astra_graphics_pipeline #(
     parameter integer BUILD_CYCLES_PER_US = 200,
     parameter integer OUTPUT_PREFETCH = 38,
     parameter integer AXI_ID_WIDTH = 6,
+    parameter integer FRAMEBUFFER_AXI_DATA_WIDTH = 64,
+    parameter integer FRAMEBUFFER_MAX_BURST_BEATS = 16,
     parameter BOOT_FONT_HEX = "post_fonts.hex",
     parameter integer BOOT_TEXT_COLS = 36,
     parameter integer BOOT_TEXT_ROWS = 4,
@@ -79,7 +81,7 @@ module astra_graphics_pipeline #(
     output wire                         fb_axi_arvalid,
     input  wire                         fb_axi_arready,
     input  wire [AXI_ID_WIDTH-1:0]      fb_axi_rid,
-    input  wire [63:0]                  fb_axi_rdata,
+    input  wire [FRAMEBUFFER_AXI_DATA_WIDTH-1:0] fb_axi_rdata,
     input  wire [1:0]                   fb_axi_rresp,
     input  wire                         fb_axi_rlast,
     input  wire                         fb_axi_rvalid,
@@ -247,6 +249,8 @@ module astra_graphics_pipeline #(
     wire framebuffer_wrap_y_baseline;
     wire framebuffer_key_enable_baseline;
     wire [31:0] framebuffer_key_baseline;
+    wire framebuffer_window_scene_baseline;
+    wire [31:0] framebuffer_window_scene_bytes_baseline;
     wire [10:0] display_source_width;
     wire [10:0] display_source_height;
     wire [10:0] display_crop_x;
@@ -934,6 +938,9 @@ module astra_graphics_pipeline #(
         .framebuffer_wrap_y(framebuffer_wrap_y_baseline),
         .framebuffer_key_enable(framebuffer_key_enable_baseline),
         .framebuffer_key(framebuffer_key_baseline),
+        .framebuffer_window_scene(framebuffer_window_scene_baseline),
+        .framebuffer_window_scene_bytes(
+            framebuffer_window_scene_bytes_baseline),
         .display_source_width(display_source_width),
         .display_source_height(display_source_height),
         .display_crop_x(display_crop_x),
@@ -1385,15 +1392,21 @@ module astra_graphics_pipeline #(
         .OUTPUT_HEIGHT(OUTPUT_HEIGHT),
         .AXI_ID_WIDTH(AXI_ID_WIDTH),
         .AXI_ID({AXI_ID_WIDTH{1'b0}}),
+        .AXI_DATA_WIDTH(FRAMEBUFFER_AXI_DATA_WIDTH),
+        .MAX_BURST_BEATS(FRAMEBUFFER_MAX_BURST_BEATS),
         .TRUSTED_CONFIG(1)
     ) framebuffer_builder_i (
         .build_clk(build_clk),
         .build_reset(build_reset),
         .start(scheduler_start && scheduler_client_enable[0]),
+        .scene_changed(scene_changed),
         .build_slot(scheduler_build_slot),
         .line_y(scheduler_source_y),
+        .window_scene(framebuffer_window_scene_baseline),
+        .window_scene_bytes(framebuffer_window_scene_bytes_baseline),
         .format(framebuffer_format_build),
-        .framebuffer_base(framebuffer_base_build),
+        .framebuffer_base(framebuffer_window_scene_baseline ?
+            framebuffer_base_baseline : framebuffer_base_build),
         .pitch(framebuffer_pitch_build),
         .virtual_width(framebuffer_width_build),
         .virtual_height(framebuffer_height_build),
@@ -2123,6 +2136,7 @@ module astra_graphics_pipeline #(
         .next_frame(pixel_x == TOTAL_WIDTH - 1 &&
                     pixel_y == TOTAL_HEIGHT - 1),
         .line_source_active(pixel_source_active),
+        .line_source_available(pixel_line_available),
         .line_source_y(pixel_source_y),
         .input_valid(boot_overlay_output_valid),
         .input_rgb(boot_overlay_output_rgb),

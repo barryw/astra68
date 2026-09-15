@@ -12,7 +12,9 @@ assert astra_image.HOME_DIRECTORY == "home"
 with open(os.path.join(astra_image.REPOSITORY,
                        "sw/userspace/apps/Terminal.app/manifest"),
           encoding="ascii") as manifest:
-    assert "capability HOME:rw\n" in manifest.read()
+    terminal_manifest = manifest.read()
+    assert "capability HOME:rw\n" in terminal_manifest
+    assert "capability APP_LAUNCH\n" in terminal_manifest
 assert astra_image.HOSTBENCH_SERVICES == \
     astra_image.DISPLAY_SERVICES + ("hostbench",)
 assert astra_image.HOSTBENCH_STARTUP_MANIFEST == \
@@ -25,6 +27,12 @@ assert not any(line.startswith("application ") and line.endswith(" required")
                for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines())
 assert astra_image.APPLICATION_BUNDLES == \
     ("Terminal.app", "InterfaceGallery.app")
+with open(os.path.join(astra_image.REPOSITORY,
+                       "sw/userspace/apps/Makefile"),
+          encoding="ascii") as makefile:
+    app_rules = makefile.read()
+    assert "$(TERMINAL): FORCE\n" in app_rules
+    assert "$(GALLERY): FORCE\n" in app_rules
 assert "commands/zsh/zshrc" in astra_image.CONFIGURATION
 assert "commands/zsh/motd" in astra_image.CONFIGURATION
 zshrc = astra_image.CONFIGURATION["commands/zsh/zshrc"]

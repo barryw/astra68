@@ -129,8 +129,12 @@ layout is generated at read time:
 ```text
 PROC:
   snapshot      fixed AstraProcSnapshot records for the bounded live table
+  libraries/
+    memory      resident identities, mappings, references, and memory
+    disk        installed provider identities, paths, and binary sizes
   42/
     status      identity, state, memory, CPU, handles, and exit information
+    libraries   resident libraries mapped into process 42
 ```
 
 `status` contains the live `AstraProcessInfo` fields, including resident frames
@@ -150,6 +154,17 @@ parsing one text leaf per process. This gives every granted observer one
 consistent view without retaining dead processes as zombies or making process
 visibility depend on launcher bookkeeping.
 
+`libraries/memory` is rendered from Axiom's resident library cache and actual
+process address-space mappings. It reports the exact semantic version, ABI,
+build identity, slot base and span, cache bytes, unique resident bytes,
+aggregate mapped bytes, logical references, and the PIDs using each identity.
+The per-process `libraries` leaf filters that same snapshot; it is not a second
+registry. `libraries/disk` reads the manifest-generated `LIBS:.providers`
+indexes and stats their selected binaries, so installed and resident views use
+the same identities the loader resolves. All text leaves stream directly into
+bounded offset reads; their total output is not capped by an aggregate render
+buffer.
+
 CPU time is measured, not inferred from schedule counts. Axiom timestamps the
 common user-resume and kernel-entry boundaries with the low cycle counter and
 accumulates a 64-bit runtime per process. Elapsed time starts at process
@@ -161,8 +176,10 @@ ledger frames times the 4 KiB page size.
 
 ### Identifiers are generation-checked
 
-`ps` and `kill` keep their familiar shape, but a numeric identifier alone must
-never name a process. Axiom already generation-tags processes and is tested on
+`ps` and `kill` keep their familiar shape. Visible PIDs are allocated from
+1 through 65535, with PID 1 reserved for the initial supervisor, and may be
+reused only after exit. A numeric identifier alone must never name a process.
+Axiom generation-tags processes and is tested on
 the invariant that a stale process handle cannot name a replacement process
 after reuse. A control operation therefore carries the generation the caller
 observed, and the kernel rejects it if the slot has been recycled.

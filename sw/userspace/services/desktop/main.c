@@ -57,7 +57,7 @@ static AstraProcessFilesystem process_filesystem =
 static AstraLibraryHandle *graphics_handle;
 static AstraLibraryHandle *interface_handle;
 static const AstraGraphicsLibraryV2 *graphics_library;
-static const AstraInterfaceLibraryV2 *interface_library;
+static const AstraInterfaceLibrary *interface_library;
 static char manifest_text[ASTRA_BUNDLE_MANIFEST_MAX + 1u];
 static uint8_t icon_bytes[ICON_BYTES_MAX];
 
@@ -246,7 +246,7 @@ int astra_main(const AstraStartupInfo *startup)
             interface_library = interface_handle->exports;
             if (!astra_interface_library_supports(
                     interface_library, 0u,
-                    ASTRA_INTERFACE_LIBRARY_2_0_SIZE))
+                    ASTRA_INTERFACE_LIBRARY_5_0_SIZE))
                 status = DESKTOP_FAIL_INTERFACE;
         }
     }
@@ -257,9 +257,9 @@ int astra_main(const AstraStartupInfo *startup)
             status = DESKTOP_FAIL_GRAPHICS;
         else {
             graphics_library = graphics_handle->exports;
-            if (graphics_library->abi_major !=
-                    ASTRA_GRAPHICS_LIBRARY_ABI_MAJOR ||
-                graphics_library->structure_size < sizeof(*graphics_library))
+            if (!astra_graphics_library_supports(
+                    graphics_library, 0u,
+                    ASTRA_GRAPHICS_LIBRARY_2_0_SIZE))
                 status = DESKTOP_FAIL_GRAPHICS;
         }
     }

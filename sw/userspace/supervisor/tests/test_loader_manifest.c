@@ -44,6 +44,7 @@ static void valid_manifest(void)
     {
         char display[] =
             "service SERVICES:display grants DISPLAY DISPLAY_IRQ "
+            "VBLANK_IRQ "
             "serves GUI required\n"
             "application SERVICES:terminal grants GUI WORK:rw COMMANDS:r "
             "LIBS:r EVENTS:r EVENT_CONTROL delegates\n";
@@ -51,7 +52,7 @@ static void valid_manifest(void)
         assert(supervisor_manifest_parse(display, sizeof(display) - 1u,
                                          &manifest));
         assert(manifest.count == 2u);
-        assert(manifest.entries[0].grant_count == 2u);
+        assert(manifest.entries[0].grant_count == 3u);
         assert(manifest.entries[0].resident == 1u);
         assert(strcmp(manifest.entries[0].grants[1].name,
                       "DISPLAY_IRQ") == 0);

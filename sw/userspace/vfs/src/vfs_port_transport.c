@@ -2439,12 +2439,19 @@ astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
                    slot >= 0) {
             uint64_t node_size = 0u;
             uint32_t got = 0u;
-            void *target = lease.area;
-            uint32_t capacity = lease.area_size;
+            void *target = NULL;
+            uint32_t capacity = 0u;
 
-            if (target == NULL && incoming->request.version >= UINT16_C(7)) {
+            if (incoming->request.version >= UINT16_C(7) &&
+                incoming->request.length != 0u &&
+                incoming->request.length <= ASTRA_VFS_IO_MAX) {
                 target = outgoing->reply.payload;
-                capacity = ASTRA_VFS_IO_MAX;
+                capacity = incoming->request.length;
+            } else if (lease.area != NULL &&
+                       incoming->request.length != 0u &&
+                       incoming->request.length <= lease.area_size) {
+                target = lease.area;
+                capacity = incoming->request.length;
             }
             if (target == NULL) {
                 outgoing->reply.status = ASTRA_VFS_ERR_INVALID;

@@ -20,7 +20,8 @@ The result is exactly 4,147,200 bytes at a 3,840-byte pitch, CRC32 `639de5a9`,
 and SHA-256
 `b61e792ce65f76dd60343c48f2b94b2c43f28dcba187be1f090f2b56a7c349b7`.
 The hardware boot text uses 36 columns by four rows. Its true 8x16 Spleen
-strike is generated from `sw/userspace/graphics/fonts/astra-mono.afnt`; each
+strike is generated from
+`sw/userspace/graphics/fonts/astra-rescue-mono.afnt`; each
 8-pixel advance and 12/4 ascent/descent line is enlarged 3x to a 24x48 physical
 cell. The ARM writes cells only; it never paints text pixels into the
 framebuffer.

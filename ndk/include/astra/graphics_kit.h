@@ -16,10 +16,10 @@
 /** Logical name of the Font Kit shared library. */
 #define ASTRA_FONT_LIBRARY_NAME "font.library"
 /** Minimum compatible Font Kit major version. */
-#define ASTRA_FONT_LIBRARY_VERSION 2u
+#define ASTRA_FONT_LIBRARY_VERSION ASTRA_FONT_LIBRARY_ABI_MAJOR
 /** Logical name of the Graphics Kit shared library. */
 #define ASTRA_GRAPHICS_LIBRARY_NAME "graphics.library"
 /** Minimum compatible Graphics Kit major version. */
-#define ASTRA_GRAPHICS_LIBRARY_VERSION 2u
+#define ASTRA_GRAPHICS_LIBRARY_VERSION ASTRA_GRAPHICS_LIBRARY_ABI_MAJOR
 
 #endif

@@ -358,6 +358,7 @@ void kernel_handle_table_init(KernelHandleTable *table)
         entry->reserved = 0u;
     }
     table->owner = 0u;
+    table->process_id = 0u;
     /*
      * Whole words, then the tail. Not a conditional inside the loop: the mask
      * is all ones when the entry count is a multiple of the word size, and the
@@ -370,16 +371,18 @@ void kernel_handle_table_init(KernelHandleTable *table)
         KERNEL_HANDLE_LAST_WORD_MASK;
 }
 
-bool kernel_handle_table_set_owner(KernelHandleTable *table, uint32_t owner)
+bool kernel_handle_table_set_owner(KernelHandleTable *table, uint32_t owner,
+                                   uint32_t process_id)
 {
-    if (table == NULL || owner == 0u || !kernel_handle_table_valid(table) ||
-        kernel_handle_count(table) != 0u)
+    if (table == NULL || owner == 0u || process_id == 0u ||
+        !kernel_handle_table_valid(table) || kernel_handle_count(table) != 0u)
         return false;
     for (uint32_t index = 0u; index < KERNEL_HANDLE_MAX_ENTRIES; ++index) {
         if (table->entries[index].reserved != 0u)
             return false;
     }
     table->owner = owner;
+    table->process_id = process_id;
     return true;
 }
 
@@ -778,7 +781,7 @@ bool kernel_handle_table_valid(const KernelHandleTable *table)
     uint32_t expected_free[KERNEL_HANDLE_BITMAP_WORDS];
 
     kernel_bytes_clear(expected_free, (uint32_t)sizeof(expected_free));
-    if (table == NULL ||
+    if (table == NULL || (table->owner == 0u) != (table->process_id == 0u) ||
         (table->free_slots[KERNEL_HANDLE_BITMAP_WORDS - 1u] &
          ~KERNEL_HANDLE_LAST_WORD_MASK) != 0u)
         return false;

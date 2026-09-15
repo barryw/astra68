@@ -46,10 +46,9 @@ _Static_assert(KERNEL_VM_DMA_SLOT_SIZE >=
                    ASTRA_DISPLAY_WIDTH * ASTRA_DISPLAY_HEIGHT *
                        sizeof(uint16_t),
                "one DMA slot must hold a native RGB565 frame");
-_Static_assert(ASTRA_DMA_MAX_PAGES_PER_SERVICE >=
-                   KERNEL_VM_DMA_SLOT_COUNT *
-                       (KERNEL_VM_DMA_SLOT_SIZE / KERNEL_PAGE_SIZE),
-               "the process DMA page budget must cover every slot");
+_Static_assert(KERNEL_VM_DMA_SLOT_COUNT *
+                   (KERNEL_VM_DMA_SLOT_SIZE / KERNEL_PAGE_SIZE) <= UINT16_MAX,
+               "process DMA page accounting is too narrow");
 
 /* Object tables live above the frame metadata; see kernel.ld. */
 #if defined(__m68k__)
@@ -59,11 +58,13 @@ _Static_assert(ASTRA_DMA_MAX_PAGES_PER_SERVICE >=
 #endif
 
 #define PROCESS_OWNER_PREFIX 0x10000000u
-#define PROCESS_ID_SLOT_BITS 5u
-#define PROCESS_ID_GENERATION_MASK \
-    ((PROCESS_OWNER_PREFIX - 1u) >> PROCESS_ID_SLOT_BITS)
-_Static_assert(KERNEL_PROCESS_MAX <= (1u << PROCESS_ID_SLOT_BITS),
-               "process id slot field is too narrow");
+#define PROCESS_OWNER_SLOT_BITS 5u
+#define PROCESS_OWNER_GENERATION_MASK \
+    ((PROCESS_OWNER_PREFIX - 1u) >> PROCESS_OWNER_SLOT_BITS)
+_Static_assert(KERNEL_PROCESS_MAX <= (1u << PROCESS_OWNER_SLOT_BITS),
+               "process owner slot field is too narrow");
+_Static_assert(KERNEL_PROCESS_MAX < ASTRA_PROCESS_ID_MAX,
+               "the live process pool must fit in the PID namespace");
 #define PROCESS_QUALIFICATION_CLIENT_MAX 2u
 #define KERNEL_PROCESS_LOAD_RIGHT (1u << 0)
 #define M68K_TLS_THREAD_POINTER_BIAS 0x7000u
@@ -144,6 +145,7 @@ typedef struct KernelProcess {
      * KERNEL_PROCESS_THREAD_MAX; sixty-four costs six bytes a process.
      */
     uint64_t stack_slots;
+    uint16_t library_slots;
     uint16_t handle_references;
     uint8_t process_state;
     uint8_t exit_reason;
@@ -274,6 +276,7 @@ static uint64_t interval_next_deadline;
  * distinguishes boots by the boot event rather than by the id.
  */
 static uint32_t next_activity;
+static uint32_t next_process_id;
 static uint32_t initial_image_process_id;
 static uint32_t initial_image_progress;
 static uint8_t initial_image_exited;
@@ -723,11 +726,37 @@ static KernelProcessStatus claim_process_record(KernelProcess **created,
     process->handles = &process_handle_tables[slot];
     kernel_thread_wait_queue_init(&process->death_waiters);
     process->generation = generation;
-    process->id = PROCESS_OWNER_PREFIX |
-                  ((generation & PROCESS_ID_GENERATION_MASK) <<
-                   PROCESS_ID_SLOT_BITS) |
-                  (uint32_t)slot;
-    process->owner = process->id;
+    for (uint32_t attempt = 0u; attempt < ASTRA_PROCESS_ID_MAX; ++attempt) {
+        bool used = false;
+        uint32_t candidate = next_process_id;
+
+        if (candidate == 0u || candidate > ASTRA_PROCESS_ID_MAX)
+            candidate = 1u;
+        next_process_id = candidate == ASTRA_PROCESS_ID_MAX ?
+            2u : candidate + 1u;
+        for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
+            if (processes[index].id == candidate &&
+                kernel_object_cache_slot_claimed(
+                    &process_cache, (uint16_t)index)) {
+                used = true;
+                break;
+            }
+        }
+        if (!used) {
+            process->id = candidate;
+            break;
+        }
+    }
+    if (process->id == 0u) {
+        if (kernel_object_cache_release(&process_cache, process) !=
+            KERNEL_OBJECT_CACHE_OK)
+            process_pool_corrupt = 1u;
+        return KERNEL_PROCESS_NO_SLOT;
+    }
+    process->owner = PROCESS_OWNER_PREFIX |
+                     ((generation & PROCESS_OWNER_GENERATION_MASK) <<
+                      PROCESS_OWNER_SLOT_BITS) |
+                     (uint32_t)slot;
     process->started_cycles = scheduler_cycles();
     process->default_priority = KERNEL_THREAD_PRIORITY_NORMAL;
     process->name[0] = '?';
@@ -1554,11 +1583,8 @@ static KernelProcessStatus create_dma_buffer(KernelProcess *process,
     if (byte_size == 0u || byte_size > KERNEL_VM_DMA_SLOT_SIZE)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     page_count = (byte_size + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE;
-    /* Hard ceilings: exceeding one is a rejection, never a stall. */
-    if (page_count == 0u ||
-        (uint32_t)process->dma_pages + page_count >
-            ASTRA_DMA_MAX_PAGES_PER_SERVICE)
-        return KERNEL_PROCESS_RESOURCE_LIMIT;
+    if (page_count == 0u)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
     for (slot = 0u; slot < KERNEL_VM_DMA_SLOT_COUNT; ++slot) {
         if (process->dma_buffers[slot].active == 0u) {
             buffer = &process->dma_buffers[slot];
@@ -2351,14 +2377,18 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
             display_dma_active = 1u;
             platform_source = display_dma_token.physical_address;
         } else if (request.operation ==
-                       ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH) {
+                       ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
+                   request.operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE) {
             KernelProcessDmaBuffer *buffer = NULL;
             KernelDmaBufferInfo info;
             KernelHandleStatus handle_status;
 
             if (display_dma_active != 0u || request.pitch != 0u ||
-                request.byte_size < ASTRA_RENDER_BATCH_MIN_BYTES ||
-                request.byte_size > ASTRA_RENDER_BATCH_MAX_BYTES)
+                (request.operation ==
+                         ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ?
+                     (request.byte_size < ASTRA_RENDER_BATCH_MIN_BYTES ||
+                      request.byte_size > ASTRA_RENDER_BATCH_MAX_BYTES) :
+                     request.byte_size != ASTRA_DISPLAY_CURSOR_IMAGE_BYTES))
                 return ASTRA_SYSCALL_INVALID_ARGUMENT;
             handle_status = kernel_handle_lookup(
                 process->handles, request.source, KERNEL_OBJECT_DMA,
@@ -2379,8 +2409,10 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
         } else if (request.operation == ASTRA_DISPLAY_CURSOR_UPDATE) {
             if (request.source >= ASTRA_DISPLAY_WIDTH ||
                 request.pitch >= ASTRA_DISPLAY_HEIGHT ||
-                (request.byte_size &
-                 ~ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u)
+                (request.byte_size & ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) != 0u ||
+                ((request.byte_size & ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
+                     ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT) >=
+                    ASTRA_POINTER_SHAPE_COUNT)
                 return ASTRA_SYSCALL_INVALID_ARGUMENT;
             platform_source = ASTRA_DISPLAY_HOST_CURSOR_PACK(
                 request.source, request.pitch,
@@ -2390,7 +2422,8 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
         }
         if (kernel_platform_display_submit(
                 request.fence, request.operation, platform_source,
-                request.operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ?
+                (request.operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
+                 request.operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE) ?
                     request.byte_size :
                 request.operation == ASTRA_DISPLAY_CURSOR_UPDATE ?
                     request.byte_size : 0u))
@@ -2637,6 +2670,7 @@ void kernel_process_init(void)
     kernel_bytes_clear(qualification_clients,
                        sizeof(qualification_clients));
     initial_image_process_id = 0u;
+    next_process_id = 1u;
     initial_image_progress = 0u;
     initial_image_exited = 0u;
     kernel_bytes_clear(&display_dma_token, sizeof(display_dma_token));
@@ -3266,8 +3300,10 @@ static KernelProcessStatus clone_current_process(
     child->signal_trampoline = source->signal_trampoline;
     child->signal_stack_top = source->signal_stack_top;
     child->signal_blocked = source->signal_blocked;
+    child->library_slots = source->library_slots;
     kernel_handle_table_init(child->handles);
-    if (!kernel_handle_table_set_owner(child->handles, child->owner))
+    if (!kernel_handle_table_set_owner(child->handles, child->owner,
+                                       child->id))
         goto failed;
     if (child->priority_ceiling == KERNEL_THREAD_PRIORITY_USER_MAX) {
         if (!kernel_memory_protect_owner(child->owner))
@@ -3410,7 +3446,8 @@ static KernelProcessStatus create_process(const void *image,
     process->entry_base = KERNEL_PROCESS_CODE_BASE;
     process->priority_ceiling = KERNEL_THREAD_PRIORITY_USER_MAX;
     kernel_handle_table_init(process->handles);
-    if (!kernel_handle_table_set_owner(process->handles, process->owner))
+    if (!kernel_handle_table_set_owner(process->handles, process->owner,
+                                       process->id))
         goto failed;
     if (!kernel_memory_protect_owner(process->owner))
         goto failed;
@@ -3848,6 +3885,7 @@ static KernelProcessStatus replace_process_image(
     thread->context.data[5] = thread->self_handle;
     process->entry_base = entry_base;
     process->image_size = entry_size;
+    process->library_slots = 0u;
     process_name_set(process, &request->arguments,
                      request->arguments.count != 0u ? syscall_data : NULL);
     kernel_bytes_clear(&process->tls, sizeof(process->tls));
@@ -4780,6 +4818,7 @@ static KernelProcessStatus map_cached_library(
     }
     *mapped_base = virtual_base;
     *mapped_span = cached->span;
+    process->library_slots |= (uint16_t)(1u << slot);
     return KERNEL_PROCESS_OK;
 
 failed:
@@ -5222,7 +5261,8 @@ static KernelProcessStatus prepare_executable_process(
     if (plan->has_tls != 0u)
         kernel_bytes_copy(&process->tls, &plan->tls, sizeof(process->tls));
     kernel_handle_table_init(process->handles);
-    if (!kernel_handle_table_set_owner(process->handles, process->owner))
+    if (!kernel_handle_table_set_owner(process->handles, process->owner,
+                                       process->id))
         goto failed;
     if (process->priority_ceiling == KERNEL_THREAD_PRIORITY_USER_MAX &&
         !kernel_memory_protect_owner(process->owner))
@@ -7077,6 +7117,179 @@ static void process_info_fill(const KernelProcess *process,
     info->fault_address = process->fault_address;
     info->fault_vector = process->fault_vector;
     info->fault_status = process->fault_status;
+}
+
+static bool library_snapshot_fill(uint32_t slot,
+                                  AstraProcLibrarySnapshot *record)
+{
+    const KernelLibraryCacheEntry *entry;
+    uint32_t cached_pages = 0u;
+    uint32_t mapped_pages = 0u;
+    uint32_t resident_pages = 0u;
+
+    if (slot >= ASTRA_LIBRARY_SLOT_COUNT || record == NULL)
+        return false;
+    kernel_bytes_clear(record, sizeof(*record));
+    entry = &library_cache[slot];
+    if (entry->used == 0u)
+        return true;
+    kernel_bytes_copy(&record->library, &entry->reference,
+                      sizeof(record->library));
+    record->base = ASTRA_LIBRARY_BASE + slot * ASTRA_LIBRARY_SLOT_SIZE;
+    record->image_span = entry->span;
+    for (uint32_t process_slot = 0u;
+         process_slot < KERNEL_PROCESS_MAX; ++process_slot) {
+        const KernelProcess *process = &processes[process_slot];
+
+        if ((process->process_state != KERNEL_PROCESS_CREATED &&
+             process->process_state != KERNEL_PROCESS_RUNNING) ||
+            (process->library_slots & (uint16_t)(1u << slot)) == 0u)
+            continue;
+        if (record->mapping_count >= ASTRA_PROCESS_COUNT_MAX ||
+            process->id == 0u || process->id > ASTRA_PROCESS_ID_MAX)
+            return false;
+        record->process_ids[record->mapping_count++] =
+            (uint16_t)process->id;
+    }
+    for (uint32_t segment_index = 0u;
+         segment_index < entry->plan.segment_count; ++segment_index) {
+        const KernelElfSegment *segment = &entry->plan.segment[segment_index];
+
+        for (uint32_t page = 0u; page < segment->page_count; ++page) {
+            uint32_t unique[KERNEL_PROCESS_MAX + 1u];
+            uint32_t unique_count = 1u;
+            uint32_t virtual_address = record->base +
+                segment->virtual_address + page * KERNEL_PAGE_SIZE;
+            uint32_t flattened = cached_pages + page;
+
+            if (flattened >= LIBRARY_PAGE_MAX ||
+                entry->physical_pages[flattened] == 0u)
+                return false;
+            unique[0] = entry->physical_pages[flattened];
+            for (uint32_t process_slot = 0u;
+                 process_slot < KERNEL_PROCESS_MAX; ++process_slot) {
+                const KernelProcess *process = &processes[process_slot];
+                uint32_t physical;
+                uint32_t seen = 0u;
+
+                if ((process->process_state != KERNEL_PROCESS_CREATED &&
+                     process->process_state != KERNEL_PROCESS_RUNNING) ||
+                    (process->library_slots &
+                     (uint16_t)(1u << slot)) == 0u)
+                    continue;
+                if (kernel_vm_probe_address_space(&process->address_space,
+                                                  virtual_address,
+                                                  &physical) <
+                    KERNEL_VM_MAPPING_READ_ONLY)
+                    return false;
+                physical &= ~(KERNEL_PAGE_SIZE - 1u);
+                while (seen < unique_count && unique[seen] != physical)
+                    ++seen;
+                if (seen == unique_count)
+                    unique[unique_count++] = physical;
+                ++mapped_pages;
+            }
+            resident_pages += unique_count;
+        }
+        cached_pages += segment->page_count;
+    }
+    record->cache_bytes = cached_pages * KERNEL_PAGE_SIZE;
+    record->resident_bytes = resident_pages * KERNEL_PAGE_SIZE;
+    record->mapped_bytes = mapped_pages * KERNEL_PAGE_SIZE;
+    record->reference_count = record->mapping_count + 1u;
+    return true;
+}
+
+#if defined(KERNEL_PROCESS_HOST_TEST)
+bool kernel_process_test_library_snapshot(void)
+{
+    KernelLibraryCacheEntry *entry = &library_cache[0];
+    KernelProcess *process = &processes[0];
+    AstraProcLibrarySnapshot record;
+    uint32_t physical = 0u;
+    bool passed = false;
+
+    process->id = 7u;
+    process->owner = 0x1234u;
+    process->process_state = KERNEL_PROCESS_RUNNING;
+    if (kernel_vm_create_address_space(process->owner,
+                                       &process->address_space) !=
+            KERNEL_VM_OK ||
+        kernel_memory_alloc_zeroed_tagged(
+            KERNEL_ALLOCATION_SITE_LIBRARY_PAGE, 1u, 1u,
+            KERNEL_FRAME_SHARED, LIBRARY_OWNER_PREFIX | 1u, &physical) !=
+            KERNEL_MEMORY_OK)
+        goto finished;
+    entry->used = 1u;
+    entry->owner = LIBRARY_OWNER_PREFIX | 1u;
+    entry->span = KERNEL_PAGE_SIZE;
+    entry->plan.segment_count = 1u;
+    entry->plan.segment[0].page_count = 1u;
+    entry->plan.segment[0].rights = KERNEL_ELF_SEGMENT_READ;
+    entry->physical_pages[0] = physical;
+    entry->reference.size = ASTRA_LIBRARY_REFERENCE_SIZE;
+    entry->reference.major = 2u;
+    entry->reference.minor = 3u;
+    entry->reference.patch = 4u;
+    entry->reference.abi_major = 2u;
+    kernel_bytes_copy(entry->reference.name, "font.library", 13u);
+    if (kernel_vm_map_shared_page(&process->address_space,
+                                  ASTRA_LIBRARY_BASE, physical,
+                                  entry->owner, KERNEL_VM_READ) !=
+        KERNEL_VM_OK)
+        goto finished;
+    process->library_slots = 1u;
+    passed = library_snapshot_fill(0u, &record) &&
+             record.library.size == ASTRA_LIBRARY_REFERENCE_SIZE &&
+             record.library.major == 2u && record.library.minor == 3u &&
+             record.library.patch == 4u &&
+             record.base == ASTRA_LIBRARY_BASE &&
+             record.image_span == KERNEL_PAGE_SIZE &&
+             record.cache_bytes == KERNEL_PAGE_SIZE &&
+             record.resident_bytes == KERNEL_PAGE_SIZE &&
+             record.mapped_bytes == KERNEL_PAGE_SIZE &&
+             record.mapping_count == 1u && record.reference_count == 2u &&
+             record.process_ids[0] == 7u;
+
+finished:
+    if (process->address_space.initialized != 0u)
+        (void)kernel_vm_destroy_address_space(&process->address_space);
+    if (physical != 0u)
+        (void)kernel_memory_release(physical, 1u,
+                                    LIBRARY_OWNER_PREFIX | 1u);
+    kernel_bytes_clear(entry, sizeof(*entry));
+    kernel_bytes_clear(process, sizeof(*process));
+    process->handles = &process_handle_tables[0];
+    kernel_handle_table_init(process->handles);
+    kernel_thread_wait_queue_init(&process->death_waiters);
+    return passed;
+}
+#endif
+
+static KernelProcessStatus snapshot_authorize(KernelProcess *current,
+                                              uint32_t handle,
+                                              uint32_t *result)
+{
+    KernelProcess *observer = NULL;
+    KernelHandleStatus handle_status;
+
+    handle_status = kernel_handle_lookup(
+        current->handles, handle, KERNEL_OBJECT_PROCESS,
+        KERNEL_PROCESS_RIGHT_QUERY, (void **)&observer);
+    if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+        handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+        *result = ASTRA_SYSCALL_INVALID_HANDLE;
+        return KERNEL_PROCESS_OK;
+    }
+    if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+        *result = ASTRA_SYSCALL_ACCESS_DENIED;
+        return KERNEL_PROCESS_OK;
+    }
+    if (handle_status != KERNEL_HANDLE_OK || observer == NULL)
+        return KERNEL_PROCESS_CORRUPT;
+    if (observer != current || current->id != initial_image_process_id)
+        *result = ASTRA_SYSCALL_ACCESS_DENIED;
+    return KERNEL_PROCESS_OK;
 }
 
 KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
@@ -9233,29 +9446,15 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
     }
     case ASTRA_SYSCALL_PROCESS_SNAPSHOT: {
         AstraProcSnapshot *records = (AstraProcSnapshot *)(void *)startup_page;
-        KernelProcess *observer = NULL;
-        KernelHandleStatus handle_status;
         uint32_t live = 0u;
         int copy_status;
 
-        handle_status = kernel_handle_lookup(
-            current->handles, thread->context.data[1], KERNEL_OBJECT_PROCESS,
-            KERNEL_PROCESS_RIGHT_QUERY, (void **)&observer);
-        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
-            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
-            result = ASTRA_SYSCALL_INVALID_HANDLE;
+        status = snapshot_authorize(current, thread->context.data[1],
+                                    &result);
+        if (status != KERNEL_PROCESS_OK)
+            return status;
+        if (result != ASTRA_SYSCALL_OK)
             break;
-        }
-        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
-            result = ASTRA_SYSCALL_ACCESS_DENIED;
-            break;
-        }
-        if (handle_status != KERNEL_HANDLE_OK || observer == NULL)
-            return KERNEL_PROCESS_CORRUPT;
-        if (observer != current || current->id != initial_image_process_id) {
-            result = ASTRA_SYSCALL_ACCESS_DENIED;
-            break;
-        }
         if (thread->context.data[3] < KERNEL_PROCESS_MAX) {
             thread->context.data[1] = KERNEL_PROCESS_MAX;
             result = ASTRA_SYSCALL_BUFFER_TOO_SMALL;
@@ -9285,6 +9484,46 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if (copy_status != KERNEL_USER_COPY_OK)
             return KERNEL_PROCESS_CORRUPT;
         thread->context.data[1] = live;
+        result = ASTRA_SYSCALL_OK;
+        break;
+    }
+    case ASTRA_SYSCALL_LIBRARY_SNAPSHOT: {
+        AstraProcLibrarySnapshot *records =
+            (AstraProcLibrarySnapshot *)(void *)startup_page;
+        uint32_t resident = 0u;
+        int copy_status;
+
+        status = snapshot_authorize(current, thread->context.data[1],
+                                    &result);
+        if (status != KERNEL_PROCESS_OK)
+            return status;
+        if (result != ASTRA_SYSCALL_OK)
+            break;
+        if (thread->context.data[3] < ASTRA_LIBRARY_SLOT_COUNT) {
+            thread->context.data[1] = ASTRA_LIBRARY_SLOT_COUNT;
+            result = ASTRA_SYSCALL_BUFFER_TOO_SMALL;
+            break;
+        }
+        kernel_bytes_clear(
+            records,
+            ASTRA_LIBRARY_SLOT_COUNT * (uint32_t)sizeof(records[0]));
+        for (uint32_t slot = 0u; slot < ASTRA_LIBRARY_SLOT_COUNT; ++slot) {
+            if (!library_snapshot_fill(slot, &records[slot]))
+                return KERNEL_PROCESS_CORRUPT;
+            if (records[slot].library.size != 0u)
+                ++resident;
+        }
+        copy_status = kernel_copy_to_user(
+            thread->context.data[2], records,
+            ASTRA_LIBRARY_SLOT_COUNT * (uint32_t)sizeof(records[0]));
+        if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+            copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
+            result = ASTRA_SYSCALL_BAD_ADDRESS;
+            break;
+        }
+        if (copy_status != KERNEL_USER_COPY_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        thread->context.data[1] = resident;
         result = ASTRA_SYSCALL_OK;
         break;
     }

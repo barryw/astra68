@@ -142,14 +142,15 @@ $(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(RUNTIME_PIC_LIB) $(LIBRARY_LD)
 
 library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@python3 ../../../tools/library_info.py $(GRAPHICS_LIBRARY) | \
-		grep -q '^graphics.library 2.0.0 ABI 2.0$$'
+		grep -q '^graphics.library 2.1.0 ABI 2.1$$'
 	@python3 ../../../tools/library_info.py $(FONT_LIBRARY) | \
 		grep -q '^font.library 2.1.0 ABI 2.1$$'
 	$(call ASTRA_CHECK_DSO,$(GRAPHICS_LIBRARY) $(FONT_LIBRARY))
 
 $(HOST_TEST): src/surface.c src/render_builder.c tests/test_surface.c \
 		../../../ndk/include/astra/surface.h include/astra/render_builder.h \
-		src/rounded.h $(FONT_HEADER)
+		../../include/astra/rounded.h ../../include/astra/window_scene.h \
+		$(FONT_HEADER)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/surface.c src/render_builder.c \

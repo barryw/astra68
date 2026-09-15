@@ -8,8 +8,13 @@ module tb_astra_graphics_pipeline #(
     parameter integer OUTPUT_HEIGHT = 4,
     parameter integer TOTAL_WIDTH = 128,
     parameter integer TOTAL_HEIGHT = 48,
+    parameter integer FRAMEBUFFER_AXI_DATA_WIDTH = 64,
     parameter [31:0] FRAMEBUFFER_PITCH = OUTPUT_WIDTH * 2
 );
+    localparam integer FRAMEBUFFER_BEAT_BYTES =
+        FRAMEBUFFER_AXI_DATA_WIDTH / 8;
+    localparam integer FRAMEBUFFER_BEAT_SHIFT =
+        $clog2(FRAMEBUFFER_BEAT_BYTES);
     localparam [2:0] COPPER_OP_END = 3'd0;
     localparam [2:0] COPPER_OP_MOVE = 3'd1;
     localparam [2:0] COPPER_OP_WAIT = 3'd2;
@@ -91,7 +96,7 @@ module tb_astra_graphics_pipeline #(
     wire fb_axi_arvalid;
     wire fb_axi_arready;
     reg [AXI_ID_WIDTH-1:0] fb_axi_rid = {AXI_ID_WIDTH{1'b0}};
-    reg [63:0] fb_axi_rdata = 64'd0;
+    reg [FRAMEBUFFER_AXI_DATA_WIDTH-1:0] fb_axi_rdata = 0;
     reg [1:0] fb_axi_rresp = 2'b00;
     reg fb_axi_rlast = 1'b0;
     reg fb_axi_rvalid = 1'b0;
@@ -199,6 +204,7 @@ module tb_astra_graphics_pipeline #(
         .TOTAL_HEIGHT(TOTAL_HEIGHT),
         .OUTPUT_PREFETCH(38),
         .AXI_ID_WIDTH(AXI_ID_WIDTH),
+        .FRAMEBUFFER_AXI_DATA_WIDTH(FRAMEBUFFER_AXI_DATA_WIDTH),
 .BOOT_FONT_HEX("build/arty-graphics/post_fonts.hex")
     ) dut (.*);
 
@@ -330,6 +336,17 @@ module tb_astra_graphics_pipeline #(
         end
     endfunction
 
+    function automatic [FRAMEBUFFER_AXI_DATA_WIDTH-1:0]
+        read_framebuffer_beat(input [31:0] address);
+        integer lane;
+        begin
+            read_framebuffer_beat = 0;
+            for (lane = 0; lane < FRAMEBUFFER_BEAT_BYTES; lane = lane + 1)
+                read_framebuffer_beat[lane * 8 +: 8] =
+                    memory[address - ARENA_BASE + lane];
+        end
+    endfunction
+
     assign sprite_axi_arready = !sprite_response_active;
     assign sprite_axi_rvalid = sprite_response_active;
     assign sprite_axi_rlast = sprite_response_beats == 5'd1;
@@ -389,18 +406,20 @@ module tb_astra_graphics_pipeline #(
             response_index <= 8'd0;
             response_delay <= 0;
             fb_axi_rid <= {AXI_ID_WIDTH{1'b0}};
-            fb_axi_rdata <= 64'd0;
+            fb_axi_rdata <= 0;
             fb_axi_rresp <= 2'b00;
             fb_axi_rlast <= 1'b0;
             fb_axi_rvalid <= 1'b0;
         end else begin
             if (command_push) begin
-                if (fb_axi_arsize != 3'b011 ||
+                if (fb_axi_arsize != FRAMEBUFFER_BEAT_SHIFT ||
                     fb_axi_arburst != 2'b01 ||
                     fb_axi_arlen > 8'd15 ||
-                    fb_axi_araddr[2:0] != 3'b000 ||
+                    fb_axi_araddr[FRAMEBUFFER_BEAT_SHIFT-1:0] != 0 ||
                     fb_axi_araddr < ARENA_BASE ||
-                    fb_axi_araddr + ((fb_axi_arlen + 1) << 3) > ARENA_LIMIT)
+                    fb_axi_araddr +
+                        ((fb_axi_arlen + 1) << FRAMEBUFFER_BEAT_SHIFT) >
+                            ARENA_LIMIT)
                     $fatal(1, "invalid integrated framebuffer AXI request");
                 command_address[command_write] <= fb_axi_araddr;
                 command_length[command_write] <= fb_axi_arlen;
@@ -419,7 +438,8 @@ module tb_astra_graphics_pipeline #(
                     response_active <= 1'b0;
                 end else begin
                     response_index <= response_index + 8'd1;
-                    response_address <= response_address + 32'd8;
+                    response_address <= response_address +
+                        FRAMEBUFFER_BEAT_BYTES;
                     response_delay <= 1;
                 end
             end
@@ -436,7 +456,7 @@ module tb_astra_graphics_pipeline #(
                     response_delay <= response_delay - 1;
                 end else begin
                     fb_axi_rid <= {AXI_ID_WIDTH{1'b0}};
-                    fb_axi_rdata <= read64(response_address);
+                    fb_axi_rdata <= read_framebuffer_beat(response_address);
                     fb_axi_rresp <= 2'b00;
                     fb_axi_rlast <= response_index == response_length;
                     fb_axi_rvalid <= 1'b1;

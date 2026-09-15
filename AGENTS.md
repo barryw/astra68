@@ -50,6 +50,36 @@
   when measurement proves a material improvement, while retaining a clear C
   contract and tests as the behavioral oracle.
 
+## Compatibility Discipline
+
+- Astra has no external legacy clients during pre-alpha. Prefer the correct,
+  coherent contract over preserving obsolete in-tree behavior.
+- When a better design requires a breaking change, bump the protocol or library
+  ABI major, update every in-tree producer, consumer, test, manifest, and
+  document together, and delete the superseded API and compatibility path.
+- Do not retain aliases, wrappers, fallback behavior, repurposed private fields,
+  or dual wire formats without a current external compatibility requirement.
+
+## Native Substrate and POSIX Personality
+
+- Implement each operating-system mechanism once as an Astra-native facility.
+  The scheduler and thread objects, VFS, process lifecycle, IPC, loader, virtual
+  memory, clocks, and network stack have no independent POSIX implementation.
+- POSIX libraries are compatibility adapters. They may expose standard symbols
+  such as `pthread_*`, file descriptors, `errno`, signals, and process groups,
+  but must translate them onto the canonical Astra mechanisms underneath.
+- Keep POSIX-only policy and bookkeeping in the userspace compatibility layer;
+  do not leak it into the kernel or native NDK contracts. Native applications
+  must not depend on the POSIX layer, and POSIX applications must not bypass the
+  native substrate.
+- When a port needs a missing capability, implement the correct Astra-native
+  capability first and then adapt the POSIX API to it. Do not add a separate
+  POSIX backend, fallback subsystem, or application-specific workaround.
+- Linux-side helpers are service providers behind versioned Astra protocols,
+  never an alternate API directly visible to applications. Two API spellings
+  are acceptable where compatibility requires them; two implementations are
+  not.
+
 ## FPGA Timing Closure
 
 - Read `docs/CURRENT_STATE.md` before project work. It is the current

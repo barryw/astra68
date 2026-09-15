@@ -122,6 +122,16 @@ OhciHcca *kernel_platform_test_ohci_hcca(void)
 static volatile uint32_t tick_count;
 static uint32_t quantum_cycles;
 
+static void vega_irq_clear(uint32_t pending)
+{
+#if defined(KERNEL_PLATFORM_HOST_TEST)
+    (void)pending;
+    VEGA_WRITE(IRQ_STAT, 0u);
+#else
+    VEGA_WRITE(IRQ_STAT, pending);
+#endif
+}
+
 /*
  * The HCCA sits at the base of the controller's own DMA pool, wherever the
  * block reports it rather than a fixed platform constant.
@@ -461,26 +471,33 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
         (operation != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
          operation != ASTRA_DISPLAY_FRAME_PRESENT_RGB565 &&
          operation != ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
-         operation != ASTRA_DISPLAY_CURSOR_UPDATE) ||
+         operation != ASTRA_DISPLAY_CURSOR_UPDATE &&
+         operation != ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE) ||
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
          ((source & UINT32_C(0xffff0000)) != 0u || byte_size != 0u)) ||
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 && byte_size != 0u) ||
         (operation == ASTRA_DISPLAY_CURSOR_UPDATE &&
          ((byte_size &
-           ~ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u ||
+           ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) != 0u ||
+          ((byte_size & ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
+               ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT) >=
+              ASTRA_POINTER_SHAPE_COUNT ||
           (source & ASTRA_DISPLAY_HOST_CURSOR_X_MASK) >= ASTRA_DISPLAY_WIDTH ||
           ((source & ASTRA_DISPLAY_HOST_CURSOR_Y_MASK) >>
                ASTRA_DISPLAY_HOST_CURSOR_Y_SHIFT) >= ASTRA_DISPLAY_HEIGHT)) ||
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
          (byte_size < ASTRA_RENDER_BATCH_MIN_BYTES ||
           byte_size > ASTRA_DISPLAY_HOST_BYTE_SIZE_MAX)) ||
+        (operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE &&
+         byte_size != ASTRA_DISPLAY_CURSOR_IMAGE_BYTES) ||
         (operation != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
          operation != ASTRA_DISPLAY_CURSOR_UPDATE &&
          (source == 0u || (source & 3u) != 0u)) ||
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
          (kernel_platform_display_capabilities() &
           ASTRA_DISPLAY_CAP_RENDER_BATCH) == 0u) ||
-        (operation == ASTRA_DISPLAY_CURSOR_UPDATE &&
+        ((operation == ASTRA_DISPLAY_CURSOR_UPDATE ||
+          operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE) &&
          (kernel_platform_display_capabilities() &
           ASTRA_DISPLAY_CAP_HARDWARE_CURSOR) == 0u) ||
         (kernel_platform_display_capabilities() &
@@ -496,7 +513,8 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
         return false;
     VESTA_WRITE(DISPLAY_REQ_ID, id);
     if (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
-        operation == ASTRA_DISPLAY_CURSOR_UPDATE)
+        operation == ASTRA_DISPLAY_CURSOR_UPDATE ||
+        operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE)
         host_operation |= byte_size << ASTRA_DISPLAY_HOST_BYTE_SIZE_SHIFT;
     VESTA_WRITE(DISPLAY_REQ_OP, host_operation);
     VESTA_WRITE(DISPLAY_REQ_COLOR, source);
@@ -730,6 +748,15 @@ bool kernel_platform_irq_mask(uint8_t source, void *context)
 bool kernel_platform_irq_enable(uint8_t source, void *context)
 {
     (void)context;
+    if (source == IRQ_SRC_VEGA &&
+        (VEGA_READ(IRQ_EN) & VEGA_IRQ_VBLANK) == 0u) {
+        uint32_t pending = VEGA_READ(IRQ_STAT);
+
+        if (pending != 0u)
+            vega_irq_clear(pending);
+        VEGA_WRITE(IRQ_EN, VEGA_IRQ_VBLANK);
+        kernel_mmio_cpu_sync();
+    }
     return irq_enable_update(source, true);
 }
 
@@ -795,6 +822,8 @@ bool kernel_platform_device_irq_capture(uint8_t source, uint32_t *status)
         pending = VEGA_READ(IRQ_STAT) & VEGA_READ(IRQ_EN);
         if (pending == 0u)
             return false;
+        vega_irq_clear(pending);
+        kernel_mmio_cpu_sync();
         break;
     case IRQ_SRC_USB: {
         uint32_t astra_status = OHCI_READ(ASTRA_STATUS);
@@ -823,6 +852,8 @@ bool kernel_platform_device_irq_capture(uint8_t source, uint32_t *status)
 bool kernel_platform_device_irq_complete(uint8_t source,
                                          uint32_t captured_status)
 {
+    uint32_t pending;
+
     switch (source) {
     case IRQ_SRC_STORAGE:
         /*
@@ -841,7 +872,11 @@ bool kernel_platform_device_irq_complete(uint8_t source,
         return (VESTA_READ(NETWORK_QUEUE) &
                 NETWORK_QUEUE_EVENT_PENDING) == 0u;
     case IRQ_SRC_VEGA:
-        return (VEGA_READ(IRQ_STAT) & VEGA_READ(IRQ_EN)) == 0u;
+        pending = VEGA_READ(IRQ_STAT) & VEGA_READ(IRQ_EN);
+        if (pending != 0u)
+            vega_irq_clear(pending);
+        kernel_mmio_cpu_sync();
+        return true;
     case IRQ_SRC_USB:
         return (OHCI_READ(ASTRA_STATUS) &
                 (OHCI_ASTRA_DMA_FAULT | OHCI_ASTRA_IRQ)) == 0u;
@@ -865,7 +900,7 @@ bool kernel_platform_device_irq_quiesce(uint8_t source)
         pending = VEGA_READ(IRQ_STAT);
         VEGA_WRITE(IRQ_EN, 0u);
         if (pending != 0u)
-            VEGA_WRITE(IRQ_STAT, pending);
+            vega_irq_clear(pending);
         kernel_mmio_cpu_sync();
         return true;
     case IRQ_SRC_USB: {
@@ -921,7 +956,7 @@ bool kernel_platform_qualification_irq_prepare(uint8_t source)
         pending = VEGA_READ(IRQ_STAT);
         VEGA_WRITE(IRQ_EN, 0u);
         if (pending != 0u)
-            VEGA_WRITE(IRQ_STAT, pending);
+            vega_irq_clear(pending);
         VEGA_WRITE(IRQ_EN, VEGA_IRQ_VBLANK);
         kernel_mmio_cpu_sync();
         (void)kernel_mmio_fence32(VEGA_ADDRESS(IRQ_EN));

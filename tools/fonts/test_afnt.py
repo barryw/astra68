@@ -12,7 +12,7 @@ assert spec is not None and spec.loader is not None
 afnt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(afnt)
 
-source = ROOT / "sw/userspace/graphics/fonts/astra-mono.afnt"
+source = ROOT / "sw/userspace/graphics/fonts/astra-rescue-mono.afnt"
 source_bytes = source.read_bytes()
 generated = afnt.emit_cp437_hex(source_bytes)
 rows = generated.splitlines()

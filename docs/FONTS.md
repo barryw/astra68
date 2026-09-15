@@ -45,8 +45,8 @@ system ROM image, or the font service has failed.
 - Exactly 256 glyphs x 16 bytes = 4096 bytes for the bitmap bank.
 - The source is the BSD-2-Clause Spleen 8x16 bitmap design, packaged as Astra
   Rescue Mono with its copyright and license retained.
-- POST uses the same validated AFNT strike as normal Astra Mono and generates
-  its 256-entry CP437 hardware image during the FPGA build. The cell contract
+- POST uses a dedicated validated `astra-rescue-mono.afnt` and generates its
+  256-entry CP437 hardware image during the FPGA build. The cell contract
   is an 8-pixel advance, 12-pixel ascent, and 4-pixel descent; integer hardware
   enlargement scales the bitmap and every metric together.
 
@@ -65,9 +65,8 @@ The immutable system ROM image contains AFNT resources for:
 
 - **Astra Sans**, derived from Atkinson Hyperlegible Next, as the proportional
   UI and reading face.
-- **Astra Mono**, initially the complete Spleen 8x16 bitmap repertoire, for
-  code, terminals, tables, and diagnostics. Atkinson Hyperlegible Mono remains
-  the planned coverage-font family when native A4 strikes land.
+- **Astra Mono**, derived from JetBrains Mono, for code, terminals, tables, and
+  diagnostics.
 
 Both upstream families use the SIL Open Font License 1.1. Rasterized AFNT data,
 the copyright notices, license, source revision, conversion command, and build
@@ -172,7 +171,7 @@ supported strike or converts it once into a protected cache.
 | `INDEX8` | Eight-bit color index with a transparent index |
 
 `MASK1` is mandatory for rescue and baseline hardware. `A4` is the normal
-compact anti-aliased UI-text path. `A8` is required by the Arty graphics
+compact anti-aliased UI-text path. `A8` is required by the DE25 graphics
 contract for full-coverage text into direct-color surfaces. Implementations may
 time-multiplex arithmetic only when measured command and scanout deadlines
 remain satisfied.
@@ -295,9 +294,12 @@ testing, and translate into bounded hardware runs. Glyph bitmap rectangles and
 DMA addresses remain in the referenced strike cache, not duplicated into every
 layout.
 
-The service imposes per-layout byte, line, run, and glyph limits. Editors and
-large documents retain paragraph or viewport layouts rather than constructing
-one unbounded object for an entire file.
+Layouts grow until allocation or the 32-bit arena representation is exhausted;
+there is no smaller product-policy cap on bytes, lines, runs, or glyphs.
+Editors may retain paragraph or viewport layouts to reduce reflow work, but
+that is an optimization rather than an acceptance limit. Hardware glyph-run
+records are emitted in consecutive commands when a layout exceeds the
+per-command protocol field.
 
 ### 6.2 Public C shape
 
@@ -402,6 +404,21 @@ UTF-8. APIs return boundaries only at validated scalar/grapheme positions. The
 layout retains its own immutable copy of text and style spans, so callers may
 release their source buffers immediately after successful creation.
 
+Direction is a layout property, never a request to reverse source bytes or
+Unicode scalars. The font service applies the Unicode bidirectional algorithm,
+script shaping, directional punctuation mirroring, and line breaking before it
+emits visual glyph runs. The immutable layout retains logical-to-visual and
+visual-to-logical mappings so hit testing, caret movement, selection, and
+clipboard extraction remain correct for right-to-left, left-to-right, and mixed
+text. Clipboard text is always returned in logical UTF-8 order. Controls consume
+this one mapping rather than implementing script-specific behavior.
+
+Text direction and application-layout mirroring are separate properties. A
+right-to-left field may live in a left-to-right interface, while an RTL locale
+may mirror container flow and alignment without changing stored text. Both are
+resolved when layout inputs change and cached; neither adds per-frame MC68040
+work.
+
 ### 6.4 API responsibilities
 
 The C API groups operations by object:
@@ -478,14 +495,58 @@ glyph bitmaps. The resolved `AstraFontInfo` reports synthetic weight/slant so a
 typographically exact application may refuse it.
 
 The current `font.library` 2.1 draw-list path implements the same fallback for
-resident MASK1 strikes: bold is a deterministic horizontal embolden, italic is
+resident MASK1 and A8 strikes: bold is a deterministic horizontal embolden,
+italic is
 a baseline-relative shear, and underline/strikeout use AFNT metrics. Plain and
 styled runs share one glyph source; styled command data is synthesized while
 the draw list is lowered, then glyph expansion remains hardware-rendered. A
 font-service cache is still required before scalable faces advertise synthetic
 matches through `AstraFontInfo`.
 
-### 7.1 Amiga import compatibility
+### 7.1 Settings drag-import transaction
+
+The Fonts pane in Settings is the system installation surface. A user may drag
+one or more font resources into it from Atlas, a local volume, removable media,
+or an SMB/NFS mount. The drop transfers read handles plus typed resource
+metadata; a pathname is descriptive and is not the authority used for import.
+
+One drop is one all-or-nothing transaction:
+
+1. identify each input by bounded content inspection rather than its suffix;
+2. expand collections into their individual faces and report the complete
+   candidate list in a progress sheet;
+3. run the selected format handler in an unprivileged, restartable host worker;
+4. convert every requested native strike and retain complete source provenance;
+5. validate every AFNT, name/style collision, bitmap range, and catalog entry;
+6. durably store immutable content-addressed font objects; and
+7. atomically publish one new catalog generation only after every item passes.
+
+Progress and actionable errors are reported per source and face while the seat,
+window server, and settings UI remain responsive. Cancellation before catalog
+publication discards the transaction. A failed source, worker crash, lost
+network mount, storage error, or duplicate-resolution rejection publishes
+nothing from the batch. Durable objects left by interruption are unreachable
+and may be collected later; they are never mistaken for installed faces.
+
+The catalog is the single commit point because a sequence of file renames
+cannot make a multi-font batch atomic. Existing `AstraFontFace` and
+`AstraFont` handles keep strong references to their old immutable objects;
+new opens observe the new generation. Importing never silently changes UI,
+title, terminal, table, or code roles. Those assignments remain separate
+Settings transactions.
+
+The Settings pane and reusable Fonts system panel are clients of the same font
+service transaction API. They do not parse formats, write AFNT files, or edit a
+private font registry. AFNT dropped directly follows the same full validator
+and transaction path without lossy reconversion.
+
+The build-time outline importer currently converts complete Unicode cmaps from
+TTF sources into A8 AFNT strikes using pinned fontTools and Pillow versions.
+It is the behavioral oracle for the service writer; wiring the host worker,
+collection/WOFF/bitmap handlers, progress protocol, and catalog publication is
+still required before Settings advertises drag installation.
+
+### 7.2 Amiga import compatibility
 
 Amiga fonts are useful content, not the Astra ABI. The importer accepts classic
 bitmap disk fonts without executing them and converts:
@@ -556,5 +617,4 @@ three parallel coverage channels.
 - Spleen bitmap fonts: <https://github.com/fcambus/spleen>
 - Atkinson Hyperlegible Next:
   <https://github.com/googlefonts/atkinson-hyperlegible-next>
-- Atkinson Hyperlegible Mono:
-  <https://github.com/googlefonts/atkinson-hyperlegible-next-mono>
+- JetBrains Mono: <https://github.com/JetBrains/JetBrainsMono>

@@ -85,11 +85,11 @@ set_connection_parameter_value \
 add_interface astra_control axi4lite start
 set_interface_property astra_control EXPORT_OF astra_control_bridge.m0
 
-proc add_memory_bridge {name exported read write id_width} {
+proc add_memory_bridge {name exported read write id_width data_width} {
     add_instance $name altera_axi_bridge
     set_instance_parameter_value $name AXI_VERSION AXI4
     set_instance_parameter_value $name ADDR_WIDTH 32
-    set_instance_parameter_value $name DATA_WIDTH 64
+    set_instance_parameter_value $name DATA_WIDTH $data_width
     set_instance_parameter_value $name S0_ID_WIDTH $id_width
     set_instance_parameter_value $name M0_ID_WIDTH $id_width
     set_instance_parameter_value $name ENABLE_AXI4_READ_ONLY_INTERFACE $read
@@ -106,9 +106,10 @@ proc add_memory_bridge {name exported read write id_width} {
     set_interface_property $exported EXPORT_OF $name.s0
 }
 
-add_memory_bridge astra_fb_bridge astra_fb 1 0 1
-add_memory_bridge astra_scene_bridge astra_scene 1 0 2
-add_memory_bridge astra_render_bridge astra_render 1 1 3
+add_memory_bridge astra_fb_bridge astra_fb 1 0 1 128
+add_memory_bridge astra_scene_bridge astra_scene 1 0 2 64
+add_memory_bridge astra_capture_bridge astra_capture 0 1 1 64
+add_memory_bridge astra_render_bridge astra_render 1 1 3 64
 
 foreach {name type role endpoint} {
     astra_lpddr4b_core_init_n reset end astra_lpddr4b.core_init_n

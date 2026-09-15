@@ -1,10 +1,12 @@
 #ifndef ASTRA_KERNEL_MEMORY_H
 #define ASTRA_KERNEL_MEMORY_H
 
+#include "capacity.h"
 #include "dma.h"
 
 #include <astra/boot.h>
 #include <astra/process.h>
+#include <astra/render_batch.h>
 #include <astra/syscall.h>
 
 #include "allocation.h"
@@ -33,7 +35,6 @@
  * `kernel_memory_metadata_bytes` is what that costs, and it is available for
  * anything that needs to reason about it.
  */
-#define KERNEL_MAX_FRAME_OWNERS 64u
 #define KERNEL_OWNER_NONE 0u
 #define KERNEL_EMERGENCY_RESERVE_FRAMES 32u
 /*
@@ -61,14 +62,17 @@
  * same test. It also has one customer: every other allocation in this kernel
  * asks for a single frame and does not care where it lands.
  *
- * So the answer is the cheap and predictable one: 64 frames for the display's
- * framebuffer -- ASTRA_RENDER_BUILDER_BYTES, the only large contiguous
- * request on the machine -- and two for every legal DMA buffer. DMA takes
+ * So the answer is the cheap and predictable one: enough frames for the
+ * display's render-batch DMA buffer -- the only large contiguous request on
+ * the machine -- and two for every legal DMA buffer. DMA takes
  * from here first and falls back to the general pool, so nothing that works
  * today stops working; what changes is that a display service restarting at
  * hour six finds its framebuffer where it left it.
  */
-#define KERNEL_DMA_ZONE_FRAMES (64u + 2u * KERNEL_DMA_MAX_BUFFERS)
+#define KERNEL_DISPLAY_DMA_FRAMES \
+    (ASTRA_RENDER_BATCH_BUFFER_BYTES / KERNEL_PAGE_SIZE)
+#define KERNEL_DMA_ZONE_FRAMES \
+    (KERNEL_DISPLAY_DMA_FRAMES + 2u * KERNEL_DMA_MAX_BUFFERS)
 
 /*
  * The supervisor identity-maps all of RAM, whatever the boot info says there

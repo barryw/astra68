@@ -78,6 +78,7 @@ axil_driver_calibration #(
 
 GRAPHICS = r'''wire [7:0] astra_leds;
 wire astra_render_interrupt;
+wire astra_capture_interrupt;
 wire astra_build_clk;
 wire astra_build_reset_n;
 wire [15:0] astra_control_awaddr;
@@ -101,7 +102,7 @@ wire [2:0] astra_fb_arsize, astra_fb_arprot;
 wire [1:0] astra_fb_arburst, astra_fb_rresp;
 wire [3:0] astra_fb_arcache;
 wire astra_fb_rid, astra_fb_rlast, astra_fb_rvalid, astra_fb_rready;
-wire [63:0] astra_fb_rdata;
+wire [127:0] astra_fb_rdata;
 wire [1:0] astra_scene_arid, astra_scene_arburst, astra_scene_rid;
 wire [31:0] astra_scene_araddr;
 wire [7:0] astra_scene_arlen;
@@ -111,6 +112,18 @@ wire astra_scene_arvalid, astra_scene_arready;
 wire [63:0] astra_scene_rdata;
 wire [1:0] astra_scene_rresp;
 wire astra_scene_rlast, astra_scene_rvalid, astra_scene_rready;
+wire astra_capture_awid;
+wire [31:0] astra_capture_awaddr;
+wire [7:0] astra_capture_awlen;
+wire [2:0] astra_capture_awsize, astra_capture_awprot;
+wire [1:0] astra_capture_awburst, astra_capture_bresp;
+wire [3:0] astra_capture_awcache;
+wire astra_capture_awvalid, astra_capture_awready;
+wire [63:0] astra_capture_wdata;
+wire [7:0] astra_capture_wstrb;
+wire astra_capture_wlast, astra_capture_wvalid, astra_capture_wready;
+wire astra_capture_bid;
+wire astra_capture_bvalid, astra_capture_bready;
 wire [2:0] astra_render_awid, astra_render_awsize;
 wire [31:0] astra_render_awaddr;
 wire [7:0] astra_render_awlen;
@@ -139,6 +152,7 @@ astra_de25_graphics graphics_i (
     .reset_n(system_reset_n), .buttons(~fpga_button_pio),
     .switches(fpga_dipsw_pio), .leds(astra_leds),
     .render_interrupt(astra_render_interrupt),
+    .capture_interrupt(astra_capture_interrupt),
     .hdmi_tx_clk(HDMI_TX_CLK), .hdmi_tx_hs(HDMI_TX_HS),
     .hdmi_tx_vs(HDMI_TX_VS), .hdmi_tx_d(HDMI_TX_D),
     .hdmi_tx_de(HDMI_TX_DE), .hdmi_lrclk(HDMI_LRCLK),
@@ -180,6 +194,24 @@ astra_de25_graphics graphics_i (
     .scene_rid(astra_scene_rid), .scene_rdata(astra_scene_rdata),
     .scene_rresp(astra_scene_rresp), .scene_rlast(astra_scene_rlast),
     .scene_rvalid(astra_scene_rvalid), .scene_rready(astra_scene_rready),
+    .capture_awid(astra_capture_awid),
+    .capture_awaddr(astra_capture_awaddr),
+    .capture_awlen(astra_capture_awlen),
+    .capture_awsize(astra_capture_awsize),
+    .capture_awburst(astra_capture_awburst),
+    .capture_awcache(astra_capture_awcache),
+    .capture_awprot(astra_capture_awprot),
+    .capture_awvalid(astra_capture_awvalid),
+    .capture_awready(astra_capture_awready),
+    .capture_wdata(astra_capture_wdata),
+    .capture_wstrb(astra_capture_wstrb),
+    .capture_wlast(astra_capture_wlast),
+    .capture_wvalid(astra_capture_wvalid),
+    .capture_wready(astra_capture_wready),
+    .capture_bid(astra_capture_bid),
+    .capture_bresp(astra_capture_bresp),
+    .capture_bvalid(astra_capture_bvalid),
+    .capture_bready(astra_capture_bready),
     .render_awid(astra_render_awid), .render_awaddr(astra_render_awaddr),
     .render_awlen(astra_render_awlen), .render_awsize(astra_render_awsize),
     .render_awburst(astra_render_awburst),
@@ -257,6 +289,25 @@ PORTS = r'''        .astra_build_clk_clk                    (astra_build_clk),
         .astra_scene_rlast                      (astra_scene_rlast),
         .astra_scene_rvalid                     (astra_scene_rvalid),
         .astra_scene_rready                     (astra_scene_rready),
+        .astra_capture_awid                     (astra_capture_awid),
+        .astra_capture_awaddr                   (astra_capture_awaddr),
+        .astra_capture_awlen                    (astra_capture_awlen),
+        .astra_capture_awsize                   (astra_capture_awsize),
+        .astra_capture_awburst                  (astra_capture_awburst),
+        .astra_capture_awlock                   (1'b0),
+        .astra_capture_awcache                  (astra_capture_awcache),
+        .astra_capture_awprot                   (astra_capture_awprot),
+        .astra_capture_awvalid                  (astra_capture_awvalid),
+        .astra_capture_awready                  (astra_capture_awready),
+        .astra_capture_wdata                    (astra_capture_wdata),
+        .astra_capture_wstrb                    (astra_capture_wstrb),
+        .astra_capture_wlast                    (astra_capture_wlast),
+        .astra_capture_wvalid                   (astra_capture_wvalid),
+        .astra_capture_wready                   (astra_capture_wready),
+        .astra_capture_bid                      (astra_capture_bid),
+        .astra_capture_bresp                    (astra_capture_bresp),
+        .astra_capture_bvalid                   (astra_capture_bvalid),
+        .astra_capture_bready                   (astra_capture_bready),
         .astra_render_awid                      (astra_render_awid),
         .astra_render_awaddr                    (astra_render_awaddr),
         .astra_render_awlen                     (astra_render_awlen),
@@ -359,7 +410,7 @@ def main() -> None:
                        "qsys port list")
     top = replace_once(
         top, ".f2h_irq1_in_irq                       (),",
-        ".f2h_irq1_in_irq                       ({31'd0, astra_render_interrupt}),",
+        ".f2h_irq1_in_irq                       ({30'd0, astra_capture_interrupt, astra_render_interrupt}),",
         "render interrupt",
     )
     top = replace_once(

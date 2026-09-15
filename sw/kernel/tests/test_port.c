@@ -215,7 +215,7 @@ static void test_allocation_injection_preserves_queue(void)
 
     assert(kernel_port_create(27u, 2u, 128u, &port) == KERNEL_PORT_OK);
     kernel_handle_table_init(&table);
-    assert(kernel_handle_table_set_owner(&table, 27u));
+    assert(kernel_handle_table_set_owner(&table, 27u, 3u));
     make_message(message, sizeof(message), 0x31u);
     assert(kernel_port_pool_stats(&before));
     kernel_allocation_test_fail_site(
@@ -566,11 +566,11 @@ static void test_owner_death_discards_queued_authority(void)
     assert(kernel_port_snapshot(0u, &snapshot));
     assert(snapshot.state == KERNEL_PORT_CLOSING);
     assert(snapshot.queued_messages == 0u);
-    assert(snapshot.capacity_reserved == 0u);
+    assert(snapshot.capacity_accounted == 0u);
     assert(kernel_port_pool_stats(&stats));
     assert(stats.discarded_messages == 1u);
     assert(stats.discarded_handles == 1u);
-    assert(stats.reserved_message_capacity == 0u);
+    assert(stats.configured_message_capacity == 0u);
     kernel_port_handle_release(
         port, (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND);
     kernel_port_handle_release(
@@ -743,6 +743,24 @@ static void test_pool_quotas_and_generation_reuse(void)
     assert(kernel_port_pool_valid());
 }
 
+static void test_owner_quotas_do_not_form_a_global_reservation_ceiling(void)
+{
+    enum { OWNER_COUNT = 5u, PORTS_PER_OWNER = 4u };
+    KernelPort *ports[OWNER_COUNT][PORTS_PER_OWNER];
+
+    initialize_test();
+    for (uint32_t owner = 0u; owner < OWNER_COUNT; ++owner)
+        for (uint32_t port = 0u; port < PORTS_PER_OWNER; ++port)
+            assert(kernel_port_create(
+                       owner + 1u, KERNEL_PORT_QUEUE_MESSAGES_MAX,
+                       KERNEL_PORT_QUEUE_BYTES_MAX, &ports[owner][port]) ==
+                   KERNEL_PORT_OK);
+    for (uint32_t owner = 0u; owner < OWNER_COUNT; ++owner)
+        for (uint32_t port = 0u; port < PORTS_PER_OWNER; ++port)
+            kernel_port_abandon_unpublished(ports[owner][port]);
+    assert(kernel_port_pool_valid());
+}
+
 int main(void)
 {
     test_allocation_injection_preserves_queue();
@@ -757,6 +775,7 @@ int main(void)
     test_readable_and_writable_wait_queues();
     test_failed_large_send_waits_for_queue_change();
     test_pool_quotas_and_generation_reuse();
+    test_owner_quotas_do_not_form_a_global_reservation_ceiling();
     puts("port tests passed");
     return 0;
 }

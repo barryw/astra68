@@ -2,6 +2,7 @@
 #ifndef ASTRA_GRAPHICS_LIBRARY_H
 #define ASTRA_GRAPHICS_LIBRARY_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <astra/bundle.h>
@@ -10,7 +11,7 @@
 /** Graphics Kit export-table ABI major version. */
 #define ASTRA_GRAPHICS_LIBRARY_ABI_MAJOR 2u
 /** Graphics Kit export-table ABI minor version. */
-#define ASTRA_GRAPHICS_LIBRARY_ABI_MINOR 0u
+#define ASTRA_GRAPHICS_LIBRARY_ABI_MINOR 1u
 
 /** Graphics Kit 2.x immutable export table. */
 typedef struct AstraGraphicsLibraryV2 {
@@ -56,6 +57,39 @@ typedef struct AstraGraphicsLibraryV2 {
     /** Replace a surface clipping rectangle. */
     int (*surface_clip)(AstraSurfaceView *, int32_t, int32_t,
                         uint32_t, uint32_t);
+    /** Draw one clipped line through both endpoints. */
+    int (*line)(AstraSurfaceView *, int32_t, int32_t, int32_t, int32_t,
+                uint16_t);
 } AstraGraphicsLibraryV2;
+
+/** Compute the export-table extent through one named member. */
+#define ASTRA_GRAPHICS_LIBRARY_SIZE_THROUGH(member)                        \
+    ((uint32_t)(offsetof(AstraGraphicsLibraryV2, member) +                  \
+                sizeof(((AstraGraphicsLibraryV2 *)0)->member)))
+
+/** Graphics Kit 2.0 export-table extent. */
+#define ASTRA_GRAPHICS_LIBRARY_2_0_SIZE \
+    ASTRA_GRAPHICS_LIBRARY_SIZE_THROUGH(surface_clip)
+
+/** Graphics Kit 2.1 export-table extent. */
+#define ASTRA_GRAPHICS_LIBRARY_2_1_SIZE \
+    ASTRA_GRAPHICS_LIBRARY_SIZE_THROUGH(line)
+
+/**
+ * Verify one consumer's minimum compatible minor and table extent.
+ * @param library Open Graphics Kit export table.
+ * @param minimum_minor Oldest compatible 2.x minor required by the caller.
+ * @param minimum_structure_size Required append-only table extent.
+ * @return Nonzero when the library satisfies both requirements.
+ */
+static inline int astra_graphics_library_supports(
+    const AstraGraphicsLibraryV2 *library, uint16_t minimum_minor,
+    uint32_t minimum_structure_size)
+{
+    return library != NULL &&
+           library->abi_major == ASTRA_GRAPHICS_LIBRARY_ABI_MAJOR &&
+           library->abi_minor >= minimum_minor &&
+           library->structure_size >= minimum_structure_size;
+}
 
 #endif

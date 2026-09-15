@@ -176,8 +176,8 @@ static void test_table_clone_preserves_handle_values(void)
 
     kernel_handle_table_init(&source_table);
     kernel_handle_table_init(&destination_table);
-    assert(kernel_handle_table_set_owner(&source_table, 71u));
-    assert(kernel_handle_table_set_owner(&destination_table, 72u));
+    assert(kernel_handle_table_set_owner(&source_table, 71u, 71u));
+    assert(kernel_handle_table_set_owner(&destination_table, 72u, 72u));
     assert(kernel_handle_install(
                &source_table, KERNEL_OBJECT_DEVICE, RIGHT_QUERY,
                (void *)(uintptr_t)0x1111u, release_object, &released,
@@ -221,7 +221,7 @@ static void test_allocation_injection_preserves_authority(void)
 
     kernel_handle_transfer_pool_init();
     kernel_handle_table_init(&table);
-    assert(kernel_handle_table_set_owner(&table, 51u));
+    assert(kernel_handle_table_set_owner(&table, 51u, 51u));
     kernel_allocation_test_fail_site(
         KERNEL_ALLOCATION_SITE_HANDLE_SLOT, 1u);
     assert(kernel_handle_install(

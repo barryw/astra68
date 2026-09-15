@@ -28,6 +28,18 @@ class Machine:
             return self.log, 1
         return None, 0
 
+    def said(self):
+        return self.log, 1
+
+    def recent_faults(self):
+        return []
+
+    def recent_trace(self, limit=24):
+        return []
+
+    def recent_serial(self):
+        return self.log[-20:]
+
 
 valid = [
     "INTERFACE LAYOUT controls=0000000c iterations=00001000 "
@@ -40,6 +52,12 @@ valid = [
     "undo=0000000000005000 redo=0000000000006000 bytes=0009c400",
     "INTERFACE TEXT n=00001000 append-ns=0000000000007000 "
     "fragmented-ns=0000000000008000 pieces=00000fff",
+    "INTERFACE SEGMENTED n=00002710 elapsed-ns=0000000000009000",
+    "INTERFACE TAB n=00002710 elapsed-ns=000000000000a000",
+    "INTERFACE STEPPER n=00002710 elapsed-ns=000000000000b000",
+    "INTERFACE DIAL n=00002710 elapsed-ns=000000000000b800",
+    "INTERFACE DISCLOSURE n=00002710 elapsed-ns=000000000000bc00",
+    "INTERFACE SPLITTER n=00002710 elapsed-ns=000000000000c000",
     "stage 8",
 ]
 assert terminal.interface_layout_benchmark(Machine(valid), 1)
@@ -52,15 +70,26 @@ slow[2] = ("INTERFACE LAYOUT controls=00000100 iterations=00000100 "
 with redirect_stdout(io.StringIO()):
     assert not terminal.interface_layout_benchmark(Machine(slow), 1)
 slow_undo = valid.copy()
-slow_undo[-3] = (
+slow_undo[3] = (
     "INTERFACE UNDO n=00002710 rec=0000000007735941 "
     "undo=0000000000005000 redo=0000000000006000 bytes=0009c400")
 with redirect_stdout(io.StringIO()):
     assert not terminal.interface_layout_benchmark(Machine(slow_undo), 1)
 slow_text = valid.copy()
-slow_text[-2] = (
+slow_text[4] = (
     "INTERFACE TEXT n=00001000 append-ns=0000000002710001 "
     "fragmented-ns=00000000c3500001 pieces=00000fff")
 with redirect_stdout(io.StringIO()):
     assert not terminal.interface_layout_benchmark(Machine(slow_text), 1)
+slow_splitter = valid.copy()
+slow_splitter[-2] = (
+    "INTERFACE SPLITTER n=00002710 elapsed-ns=0000000011e1a301")
+with redirect_stdout(io.StringIO()):
+    assert not terminal.interface_layout_benchmark(Machine(slow_splitter), 1)
+slow_disclosure = valid.copy()
+slow_disclosure[-3] = (
+    "INTERFACE DISCLOSURE n=00002710 elapsed-ns=0000000023c34601")
+with redirect_stdout(io.StringIO()):
+    assert not terminal.interface_layout_benchmark(
+        Machine(slow_disclosure), 1)
 print("interface layout benchmark parser: PASS")

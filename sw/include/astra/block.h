@@ -51,11 +51,8 @@
 #define ASTRA_BLOCK_REQUEST_SIZE    32u
 #define ASTRA_BLOCK_COMPLETION_SIZE 32u
 
-/* Hard per-service ceilings. Exceeding one is a rejection, never a stall. */
+/* Simultaneous requests the block transport can keep in flight. */
 #define ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE 4u
-#define ASTRA_DMA_MAX_BUFFERS_PER_SERVICE    4u
-/* Four complete 4 MiB transfer slots; physical allocation remains on demand. */
-#define ASTRA_DMA_MAX_PAGES_PER_SERVICE      4096u
 
 #ifndef __ASSEMBLER__
 

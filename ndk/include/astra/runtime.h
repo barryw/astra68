@@ -368,6 +368,18 @@ uint32_t astra_process_snapshot(uint32_t observer,
                                 uint32_t capacity,
                                 uint32_t *live_count);
 /**
+ * Capture the resident shared-library cache and its process mappings.
+ * @param observer Process capability authorizing observation.
+ * @param records Receives the fixed-slot library snapshot.
+ * @param capacity Number of records available.
+ * @param library_count Receives the number of resident libraries.
+ * @return ASTRA_SYSCALL_* status; BUFFER_TOO_SMALL reports required capacity.
+ */
+uint32_t astra_library_snapshot(uint32_t observer,
+                               AstraProcLibrarySnapshot *records,
+                               uint32_t capacity,
+                               uint32_t *library_count);
+/**
  * Replace a process base scheduler priority.
  * @param handle Process capability with priority-administration rights.
  * @param priority New scheduler priority.
@@ -769,7 +781,8 @@ void astra_thread_exit(uint32_t status) __attribute__((noreturn));
  * @param count Number of entries in `grants`.
  * @param arguments Packed arguments and environment, or NULL.
  * @param process_handle Receives waitable child-process capability.
- * @param process_id Receives stable child process identifier.
+ * @param process_id Receives the child PID. The returned handle is the stable
+ * process identity and control authority; PIDs may be reused after exit.
  * @return ASTRA_SYSCALL_* status.
  */
 uint32_t astra_launch(const void *image, uint32_t length,
@@ -812,7 +825,8 @@ typedef uint32_t (*AstraLaunchRelease)(void *context);
  * @param count Number of entries in `grants`.
  * @param arguments Packed arguments and environment, or NULL.
  * @param process_handle Receives waitable child-process capability.
- * @param process_id Receives stable child process identifier.
+ * @param process_id Receives the child PID. The returned handle is the stable
+ * process identity and control authority; PIDs may be reused after exit.
  * @return ASTRA_SYSCALL_* or callback failure status.
  */
 uint32_t astra_launch_stream(uint32_t length, AstraLaunchReadAt read_at,
@@ -897,7 +911,7 @@ uint32_t astra_process_resume(uint32_t process_handle);
  * Register an Astra process with the POSIX session service.
  * @param service POSIX process-service capability.
  * @param process_handle Registered process capability.
- * @param process_id Stable Astra process identifier.
+ * @param process_id Astra PID registered with the POSIX process service.
  * @param flags Registration flags.
  * @return ASTRA_SYSCALL_* or service status.
  */

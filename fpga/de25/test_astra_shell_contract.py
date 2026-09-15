@@ -57,9 +57,10 @@ for required in (
     "add_connection astra_build_reset.out_reset $name.clk_reset",
     "proc add_memory_bridge",
     "add_connection $name.m0 astra_lpddr4b.s0_axi4",
-    "add_memory_bridge astra_fb_bridge astra_fb 1 0 1",
-    "add_memory_bridge astra_scene_bridge astra_scene 1 0 2",
-    "add_memory_bridge astra_render_bridge astra_render 1 1 3",
+    "add_memory_bridge astra_fb_bridge astra_fb 1 0 1 128",
+    "add_memory_bridge astra_scene_bridge astra_scene 1 0 2 64",
+    "add_memory_bridge astra_capture_bridge astra_capture 0 1 1 64",
+    "add_memory_bridge astra_render_bridge astra_render 1 1 3 64",
 ):
     assert required in tcl, required
 assert tcl.count("qsys_mm.enableOutOfOrderSupport true") == 2
@@ -90,8 +91,9 @@ for required in (
     "require_zero_high_severity",
     "-o hps=1",
     "astra_de25_graphics.sv",
+    'graphics/*.vh',
     "emit-cp437-hex",
-    "sw/userspace/graphics/fonts/astra-mono.afnt",
+    "sw/userspace/graphics/fonts/astra-rescue-mono.afnt",
     "video_timing.sv",
     "I2C_HDMI_Config.v",
     "sys_pll.ip",
@@ -170,6 +172,8 @@ with tempfile.TemporaryDirectory() as report_dir_text:
     ).returncode != 0
 
 graphics = (HERE / "astra_de25_graphics.sv").read_text(encoding="utf-8")
+assert ".SLAVE1_VALUE(32'h00005000)" in graphics
+assert ".SLAVE1_VALUE(32'h00008000)" not in graphics
 for required in (
     "module astra_de25_graphics",
     "sys_pll pixel_pll_i",
@@ -180,6 +184,7 @@ for required in (
     ".ARENA_BASE(32'h40000000)",
     ".ARENA_LIMIT(32'h60000000)",
     ".AXI_ID_WIDTH(3)",
+    ".FRAMEBUFFER_AXI_DATA_WIDTH(128)",
     "astra_axi_read_3to1 #(",
     "astra_hdmi_audio audio_i",
     "astra_i2s_transmitter i2s_i",
@@ -203,6 +208,22 @@ for required in (
 
 assert "altsource_probe" not in graphics
 assert ".aresetn(reset_n)" not in graphics
+
+capture = (ROOT / "fpga/arty/graphics/astra_display_capture.sv").read_text(
+    encoding="utf-8"
+)
+for required in (
+    "always @(posedge build_clk or posedge build_reset)",
+    '(* ASYNC_REG = "TRUE" *) reg [BEAT_COUNT_WIDTH-1:0] done_beats_meta_q;',
+    '(* ASYNC_REG = "TRUE" *) reg [BEAT_COUNT_WIDTH-1:0] done_beats_sync_q;',
+    '(* ASYNC_REG = "TRUE" *) reg [1:0] overflow_build_sync_q;',
+    "request_pixel_sync_q <= {request_pixel_sync_q[0], arm_pending_q};",
+    "frame_target_beats_q <= done_beats_sync_q;",
+):
+    assert required in capture, required
+assert "wire capture_request_build" not in capture
+assert "s_axi_rdata <= {22'd0," in capture
+assert "overflow_build_sync_q[1]" in capture
 
 front_panel = (ROOT / "fpga/arty/common/astra_front_panel.sv").read_text(
     encoding="utf-8"
@@ -301,14 +322,16 @@ with tempfile.TemporaryDirectory() as temporary_text:
     assert "astra_de25_graphics graphics_i" in patched_top
     assert ".astra_control_awaddr" in patched_top
     assert ".astra_fb_araddr" in patched_top
+    assert "wire [127:0] astra_fb_rdata" in patched_top
     assert ".astra_build_clk" in patched_top
     assert ".astra_build_reset_n" in patched_top
     assert ".astra_scene_araddr" in patched_top
     assert ".astra_render_awaddr" in patched_top
+    assert ".astra_capture_awaddr" in patched_top
     assert ".buttons(~fpga_button_pio)" in patched_top
     assert ".hdmi_tx_d(HDMI_TX_D)" in patched_top
     assert "fpga_led_pio = astra_leds" in patched_top
-    assert "{31'd0, astra_render_interrupt}" in patched_top
+    assert "{30'd0, astra_capture_interrupt, astra_render_interrupt}" in patched_top
     assert patched_top.count("astra_lpddr4b_calibration_driver") == 1
     assert patched_qsf.count("SYSTEMVERILOG_FILE axil_driver_calibration.sv") == 1
     assert patched_qsf.count(

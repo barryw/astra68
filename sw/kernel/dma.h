@@ -4,12 +4,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include <astra/block.h>
 #include <astra/process.h>
+
+#include "vm.h"
 
 /* Every legal per-process DMA slot must have backing engine metadata. */
 #define KERNEL_DMA_MAX_BUFFERS \
-    (ASTRA_PROCESS_COUNT_MAX * ASTRA_DMA_MAX_BUFFERS_PER_SERVICE)
+    (ASTRA_PROCESS_COUNT_MAX * KERNEL_VM_DMA_SLOT_COUNT)
 #define KERNEL_DMA_HANDLE_INVALID 0u
 
 _Static_assert(KERNEL_DMA_MAX_BUFFERS <= UINT16_MAX,

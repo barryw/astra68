@@ -7,12 +7,12 @@
 
 /** Logical name of config.library. */
 #define ASTRA_CONFIG_LIBRARY_NAME "config.library"
-/** Minimum compatible config.library major version. */
-#define ASTRA_CONFIG_LIBRARY_VERSION 1u
 /** Config Kit export-table ABI major version. */
 #define ASTRA_CONFIG_LIBRARY_ABI_MAJOR 1u
 /** Config Kit export-table ABI minor version. */
 #define ASTRA_CONFIG_LIBRARY_ABI_MINOR 0u
+/** Minimum compatible config.library major version. */
+#define ASTRA_CONFIG_LIBRARY_VERSION ASTRA_CONFIG_LIBRARY_ABI_MAJOR
 /** Launch capability carrying the caller's private configuration root. */
 #define ASTRA_CONFIG_CAPABILITY "CONFIG"
 
