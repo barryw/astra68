@@ -67,6 +67,17 @@ if [ "$ACTIVE" != "$IDENTITY" ]; then
     echo "active Astra release identity changed" >&2
     exit 1
 fi
+$SSH "$BOARD" "
+set -eu
+unit_source='$STORE/current/systemd/astra-remote-desktop.service'
+unit_target=/etc/systemd/system/astra-remote-desktop.service
+unit_temporary=/etc/systemd/system/.astra-remote-desktop.service.\$\$
+trap 'rm -f \"\$unit_temporary\"' EXIT HUP INT TERM
+install -m 0644 \"\$unit_source\" \"\$unit_temporary\"
+mv -f \"\$unit_temporary\" \"\$unit_target\"
+trap - EXIT HUP INT TERM
+systemctl daemon-reload
+"
 $SSH "$BOARD" "systemctl restart '$SERVICE'"
 LIVE=$($SSH "$BOARD" "
 set -eu

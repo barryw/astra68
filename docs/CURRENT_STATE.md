@@ -1102,9 +1102,42 @@ Load `dw_axi_dmac_platform` once per boot and retain it until shutdown. The
 upstream 6.12.11 remove path omits `dma_async_device_unregister()`, so unloading
 it leaves stale DMA class registrations and reinsertion fails with `EEXIST`.
 The Astra capture module remains unload-safe while closed and consumes no DMA
-channels or coherent frame while unopened. The next remote-display layer is a
-standard RFB/VNC server over this device plus the existing QMP input path; no
-Astra input ABI or FPGA change is required.
+channels or coherent frame while unopened.
+
+Immutable release
+`2e2ba48d9dc8d902481e660d2cc28472736697447839e6005030917df42a7070`
+adds the standard RFB/VNC service over this device and QEMU's existing input
+interface without changing RTL or the Astra guest ABI. LibVNCServer listens
+only on `127.0.0.1:5900`; remote clients use an SSH tunnel for authentication
+and encryption. A dedicated
+`/run/astra/remote-desktop-qmp.sock` keeps input injection independent of the
+diagnostic `/run/astra/qmp.sock`. The physical RFB gate received the exact
+1920x1080 frame and native pointer position `[960, 540]`; its 6,220,800-byte
+RGB payload SHA-256 is
+`38e690b4f69e57fead7bdce21142d9f5f1420c7e95ce1d8dcd0fd0c4791de476`,
+byte-identical to the production capture above. With no client connected, the
+service used zero scheduler ticks over two seconds.
+
+LibVNCServer's default software cursor path attempted to paint into the
+capture device's intentionally read-only mapping and crashed on the first
+frame. The service now disables that redundant software cursor with
+`rfbSetCursor(screen, NULL)` because the final composed capture already
+contains Astra's native pointer. The service is packaged in the immutable
+release, installed atomically by the deployer, hardened to read only the
+capture device, and remains disabled by default. Explicit physical start and
+RFB input/frame tests passed with both `astra.service` and
+`astra-remote-desktop.service` at zero restarts.
+
+The matching `astra_display_capture.ko` and `dw-axi-dmac-platform.ko` are
+installed under the running kernel's `extra/` module directory with SHA-256
+values
+`1cc0eece7badb0aebc8c7690cfd341841356e36fc0358f03d0882ff9881d56e4`
+and
+`d254cdea3f4b5f0b57ac99cf6a1cebde41c2f4996c38bc2f0f69627355e42300`.
+`/etc/modules-load.d/astra-display-capture.conf` loads the capture module while
+its soft dependency orders the DesignWare provider first. A controlled cold
+boot loaded both automatically, created `/dev/astra-display-capture`, reached
+stage 8, and left the opt-in remote service inactive until explicitly started.
 
 ## Build and artifact rules
 

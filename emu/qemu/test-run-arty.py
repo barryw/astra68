@@ -120,7 +120,14 @@ def main():
                                 text=True, capture_output=True, check=False)
         assert result.returncode == 0, result.stderr
         qemu_args = (observed / "qemu.args").read_text().splitlines()
-        assert qemu_args.count("-qmp") == 1
+        assert qemu_args.count("-qmp") == 2
+        qmp_arguments = [qemu_args[index + 1] for index, value in
+                         enumerate(qemu_args) if value == "-qmp"]
+        assert qmp_arguments == [
+            "unix:%s,server=on,wait=off" % (observed / "run/qmp.sock"),
+            "unix:%s,server=on,wait=off" %
+            (observed / "run/remote-desktop-qmp.sock"),
+        ]
         assert "-no-reboot" not in qemu_args
         assert qemu_args[qemu_args.index("-display") + 1] == "none"
         assert qemu_args[qemu_args.index("-serial") + 1] == "stdio"

@@ -30,7 +30,7 @@ if [ ! -f "$BUILD/build.ninja" ]; then
                 --enable-system \
                 --enable-pixman \
                 --enable-fdt \
-                --disable-werror
+                --disable-werror >&2
             ;;
         desktop)
             if [ "$(uname -s)" = Darwin ]; then
@@ -42,7 +42,7 @@ if [ ! -f "$BUILD/build.ninja" ]; then
                     --enable-pixman \
                     --enable-fdt \
                     --enable-cocoa \
-                    --disable-werror
+                    --disable-werror >&2
             else
                 "$SOURCE/configure" \
                     --target-list=m68k-softmmu \
@@ -52,7 +52,7 @@ if [ ! -f "$BUILD/build.ninja" ]; then
                     --enable-pixman \
                     --enable-fdt \
                     --enable-sdl \
-                    --disable-werror
+                    --disable-werror >&2
             fi
             ;;
         arty|arty-profile|de25|de25-profile)
@@ -113,7 +113,7 @@ if [ ! -f "$BUILD/build.ninja" ]; then
                 --enable-fdt \
                 --disable-werror \
                 --extra-cflags="$EXTRA_CFLAGS" \
-                --extra-ldflags="$EXTRA_LDFLAGS"
+                --extra-ldflags="$EXTRA_LDFLAGS" >&2
             ;;
     esac
 fi

@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 build = Path(__file__).with_name("build.sh").read_text(encoding="utf-8")
+prepare = Path(__file__).with_name("prepare-source.sh").read_text(encoding="utf-8")
 
 for required in (
     "de25|de25-profile",
@@ -23,5 +24,11 @@ for required in (
 ):
     assert required in build, f"missing DE25 build contract: {required}"
 assert "-mcpu=cortex-a55" not in build
+assert build.count("--disable-werror >&2") == 3, \
+    "configure output must not contaminate build.sh's stdout artifact path"
+assert '--extra-ldflags="$EXTRA_LDFLAGS" >&2' in build
+assert 'PUBLIC_DISPLAY_CAPTURE="$REPOSITORY/sw/include/astra/display_capture.h"' in prepare
+assert '"sw/include/astra/display_capture.h"' in prepare
+assert '"$STAGED_SOURCE/include/astra/display_capture.h"' in prepare
 
 print("DE25 QEMU build profile test: PASS")

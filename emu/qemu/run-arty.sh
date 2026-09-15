@@ -39,6 +39,7 @@ TEXT_PLANE=${ASTRA_TEXT_PLANE_PATH:-$RUN_ROOT/post-text.bin}
 DISPLAY_MAILBOX=${ASTRA_DISPLAY_MAILBOX_PATH:-$RUN_ROOT/display.bin}
 HOSTFS_ROOT=${ASTRA_HOSTFS_ROOT:-$ASTRA_STORE/hostfs}
 QMP_SOCKET=${ASTRA_QMP_SOCKET:-$RUN_ROOT/qmp.sock}
+REMOTE_DESKTOP_QMP_SOCKET=${ASTRA_REMOTE_DESKTOP_QMP_SOCKET:-$RUN_ROOT/remote-desktop-qmp.sock}
 CONSOLE_LOG=${ASTRA_CONSOLE_LOG:-$LOG_ROOT/qemu-console.log}
 PANIC_LOG=${ASTRA_PANIC_LOG:-$LOG_ROOT/panic-latest.log}
 MEMORY=${ASTRA_MEMORY:-512M}
@@ -118,6 +119,7 @@ process_alive()
 }
 
 mkdir -p "$(dirname "$TEXT_PLANE")" "$(dirname "$QMP_SOCKET")" \
+    "$(dirname "$REMOTE_DESKTOP_QMP_SOCKET")" \
     "$(dirname "$PANIC_LOG")" "$HOSTFS_ROOT" "$STATE_ROOT"
 exec 9>"$(dirname "$QMP_SOCKET")/runtime.lock"
 if ! flock -n 9; then
@@ -141,7 +143,7 @@ if [ ! -f "$STORAGE" ] || [ -L "$STORAGE" ] || [ ! -w "$STORAGE" ]; then
     echo "Astra runtime storage is not a writable regular file: $STORAGE" >&2
     exit 1
 fi
-rm -f "$QMP_SOCKET"
+rm -f "$QMP_SOCKET" "$REMOTE_DESKTOP_QMP_SOCKET"
 dd if=/dev/zero of="$TEXT_PLANE" bs=4096 count=1 2>/dev/null
 dd if=/dev/zero of="$DISPLAY_MAILBOX" bs="$DISPLAY_MAILBOX_STORAGE_BYTES" \
     count=1 2>/dev/null
@@ -179,7 +181,7 @@ cleanup()
     log_pid=
     stop_process "$display_pid"
     display_pid=
-    rm -f "$QMP_SOCKET" "$console_pipe"
+    rm -f "$QMP_SOCKET" "$REMOTE_DESKTOP_QMP_SOCKET" "$console_pipe"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -198,7 +200,8 @@ env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
     -M astra68,memory-backend=astra-ram -m "$MEMORY" -bios "$ROM" \
     -drive if=none,format=raw,file="$STORAGE" \
     -display none -monitor none -serial stdio \
-    -qmp "unix:$QMP_SOCKET,server=on,wait=off" "$@" \
+    -qmp "unix:$QMP_SOCKET,server=on,wait=off" \
+    -qmp "unix:$REMOTE_DESKTOP_QMP_SOCKET,server=on,wait=off" "$@" \
     >"$console_pipe" 2>&1 &
 qemu_pid=$!
 start_helper "$AUX_CPU" python3 "$INPUT_HOTPLUG" --qmp "$QMP_SOCKET"

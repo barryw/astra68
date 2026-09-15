@@ -26,3 +26,27 @@ for release_policy in ("ASTRA_VCPU_CPU", "ASTRA_IO_CPU", "ASTRA_AUX_CPU",
     assert release_policy not in unit, release_policy
 
 print("DE25 runtime service contract: PASS")
+
+remote = (Path(__file__).with_name(
+    "astra-remote-desktop.service")).read_text()
+for required in (
+    "Requires=astra.service",
+    "After=astra.service",
+    "PartOf=astra.service",
+    "ConditionPathExists=/dev/astra-display-capture",
+    "ExecStart=/var/lib/astra/current/bin/astra-remote-desktop",
+    "Environment=ASTRA_QMP_SOCKET=/run/astra/remote-desktop-qmp.sock",
+    "NoNewPrivileges=true",
+    "ProtectSystem=strict",
+    "RestrictAddressFamilies=AF_UNIX AF_INET",
+    "DevicePolicy=closed",
+    "DeviceAllow=/dev/astra-display-capture r",
+):
+    assert required in remote, required
+
+print("DE25 remote desktop service contract: PASS")
+
+modules = (Path(__file__).with_name(
+    "astra-display-capture.conf")).read_text().splitlines()
+assert modules == ["astra_display_capture"]
+print("DE25 display capture module-load contract: PASS")

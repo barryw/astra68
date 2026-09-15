@@ -38,3 +38,28 @@ make -C fpga/de25/linux CROSS_COMPILE=aarch64-linux-gnu-
 
 The certifier rejects writable mappings, captures one frame through the ioctl,
 and writes exactly the meaningful RGB888 payload from the read-only mapping.
+
+`astra-remote-desktop` exposes that final frame through standard RFB/VNC. It
+binds only to `127.0.0.1:5900`; connect through an SSH tunnel so authentication
+and encryption remain SSH's responsibility rather than VNC password security.
+It is demand-driven: with no viewer attached it performs no captures. Keyboard
+and pointer events use QEMU's dedicated
+`/run/astra/remote-desktop-qmp.sock` monitor and existing `input-send-event`
+path, leaving the diagnostics monitor available. Per-client reference tracking
+releases held keys and buttons when a viewer disconnects.
+
+Build it against the same Ubuntu 22.04 AArch64 sysroot used for QEMU, with the
+target's `libvncserver-dev` package extracted into that sysroot:
+
+```sh
+make -C fpga/de25/linux CROSS_COMPILE=aarch64-linux-gnu- remote-desktop
+```
+
+The board needs Ubuntu's `libvncserver1` runtime and the qualified capture
+modules described above. Install `astra_display_capture.ko` and
+`dw-axi-dmac-platform.ko` under the running kernel's module tree, run
+`depmod`, and install `fpga/de25/astra-display-capture.conf` in
+`/etc/modules-load.d`; the capture module's soft dependency loads DesignWare
+DMA first and both remain resident until shutdown. The immutable Astra release
+contains `astra-remote-desktop.service`, and the release deployer installs the
+unit without enabling it; remote display is opt-in and starts only on request.

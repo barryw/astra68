@@ -13,6 +13,10 @@ assert "mkdir -p '$STORE/incoming'" in script
 assert "install '$INCOMING' '$STORE'" in script
 assert "'$STORE/current/bin/astra-release.py'" in script
 assert "'$STORE/current'" in script
+assert "'$STORE/current/systemd/astra-remote-desktop.service'" in script
+assert "unit_temporary=/etc/systemd/system/.astra-remote-desktop.service" in script
+assert "install -m 0644" in script
+assert "systemctl daemon-reload" in script
 assert "systemctl restart '$SERVICE'" in script
 assert "expected='$STORE/releases/$IDENTITY/qemu/bin/qemu-system-m68k-astra'" \
     in script
@@ -22,6 +26,7 @@ assert r'readlink -f \"/proc/\$process_id/exe\"' in script
 assert "[ -S '$QMP_SOCKET' ]" in script
 assert "prune '$STORE'" in script
 assert script.index("verify --installed") < \
+    script.index("systemctl daemon-reload") < \
     script.index("systemctl restart '$SERVICE'") < \
     script.index(r'readlink -f \"/proc/\$process_id/exe\"') < \
     script.index("prune '$STORE'")

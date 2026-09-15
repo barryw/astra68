@@ -14,6 +14,9 @@ STORAGE=${ASTRA_DE25_STORAGE:?set ASTRA_DE25_STORAGE}
 LIBDIR=${ASTRA_DE25_QEMU_LIBDIR:?set ASTRA_DE25_QEMU_LIBDIR}
 SOURCE_MANIFEST=${ASTRA_DE25_SOURCE_MANIFEST:?set ASTRA_DE25_SOURCE_MANIFEST}
 DISPLAY=$REPOSITORY/build/de25-graphics/linux/astra-terminal-display
+REMOTE_DESKTOP=$REPOSITORY/build/de25-capture/astra-remote-desktop
+REMOTE_DESKTOP_UNIT=$REPOSITORY/fpga/de25/astra-remote-desktop.service
+DE25_SYSROOT=${ASTRA_DE25_SYSROOT:?set ASTRA_DE25_SYSROOT}
 RELEASE_TOOL=$REPOSITORY/tools/astra_release.py
 JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1\n')
 
@@ -23,6 +26,9 @@ JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1\n')
 make -B -j "$JOBS" -C "$REPOSITORY/fpga/arty/linux" \
     PLATFORM=de25 CROSS_COMPILE=aarch64-linux-gnu- \
     ../../../build/de25-graphics/linux/astra-terminal-display
+make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux" \
+    CROSS_COMPILE=aarch64-linux-gnu- DE25_SYSROOT="$DE25_SYSROOT" \
+    remote-desktop
 
 PYTHONDONTWRITEBYTECODE=1 python3 "$RELEASE_TOOL" create "$OUTPUT" \
     "qemu/bin/qemu-system-m68k-astra=$QEMU" \
@@ -33,6 +39,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$RELEASE_TOOL" create "$OUTPUT" \
     "storage-terminal.img=$STORAGE" \
     "source/SOURCE_SHA256SUMS=$SOURCE_MANIFEST" \
     "bin/astra-terminal-display=$DISPLAY" \
+    "bin/astra-remote-desktop=$REMOTE_DESKTOP" \
+    "systemd/astra-remote-desktop.service=$REMOTE_DESKTOP_UNIT" \
     "bin/astra-input-hotplug.py=$SCRIPT_DIR/astra-input-hotplug.py" \
     "bin/run-arty.sh=$SCRIPT_DIR/run-arty.sh" \
     "bin/astra-release.py=$RELEASE_TOOL"

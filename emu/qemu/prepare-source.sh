@@ -11,6 +11,7 @@ REPOSITORY=$(CDPATH='' cd -- "$SCRIPT_DIR/../.." && pwd)
 OVERLAY="$SCRIPT_DIR/qemu-9.2"
 PUBLIC_INPUT="$REPOSITORY/sw/include/astra/input.h"
 PUBLIC_DISPLAY="$REPOSITORY/sw/include/astra/display.h"
+PUBLIC_DISPLAY_CAPTURE="$REPOSITORY/sw/include/astra/display_capture.h"
 PUBLIC_POINTER_SHAPES="$REPOSITORY/ndk/include/astra/pointer_shapes.h"
 PUBLIC_DISPLAY_MAILBOX="$REPOSITORY/sw/include/astra/display_mailbox.h"
 PUBLIC_RENDER_BATCH="$REPOSITORY/sw/include/astra/render_batch.h"
@@ -58,6 +59,8 @@ overlay_identity()
             "sw/include/astra/input.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_DISPLAY")" \
             "sw/include/astra/display.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_DISPLAY_CAPTURE")" \
+            "sw/include/astra/display_capture.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_POINTER_SHAPES")" \
             "ndk/include/astra/pointer_shapes.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_DISPLAY_MAILBOX")" \
@@ -157,6 +160,7 @@ cp "$PUBLIC_RENDER_PROTOCOL" \
     "$STAGED_SOURCE/include/hw/m68k/astra_render_protocol.h"
 mkdir -p "$STAGED_SOURCE/include/astra"
 cp "$PUBLIC_DISPLAY" "$STAGED_SOURCE/include/astra/display.h"
+cp "$PUBLIC_DISPLAY_CAPTURE" "$STAGED_SOURCE/include/astra/display_capture.h"
 cp "$PUBLIC_POINTER_SHAPES" \
     "$STAGED_SOURCE/include/astra/pointer_shapes.h"
 cp "$PUBLIC_SYSCALL" "$STAGED_SOURCE/include/astra/syscall.h"
