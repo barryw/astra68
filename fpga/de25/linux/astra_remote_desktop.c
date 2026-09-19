@@ -29,6 +29,7 @@
 #define ASTRA_CONTROL_DEFAULT "/run/astra/remote-desktop-control.sock"
 #define ASTRA_RFB_PORT 5900
 #define ASTRA_RFB_IDLE_US 100000L
+#define ASTRA_RFB_PASSWORD_MAX 8u
 
 struct astra_remote_key {
     const char *qcode;
@@ -62,6 +63,7 @@ struct astra_remote_server {
     struct astra_remote_desktop desktop;
     rfbScreenInfoPtr screen;
     const uint8_t *frame;
+    char *passwords[2];
     int capture;
     unsigned int generation;
 };
@@ -501,13 +503,90 @@ static enum rfbNewClientAction astra_remote_client_new(rfbClientPtr client)
     return RFB_CLIENT_ACCEPT;
 }
 
+static int astra_remote_network_config(const char *address_text,
+                                       const char *password,
+                                       in_addr_t *listen_interface)
+{
+    struct in_addr address;
+    const char *text = address_text != NULL && *address_text != '\0' ?
+        address_text : "127.0.0.1";
+    size_t password_length = password != NULL ? strlen(password) : 0u;
+
+    if (inet_pton(AF_INET, text, &address) != 1 ||
+        password_length > ASTRA_RFB_PASSWORD_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (address.s_addr != htonl(INADDR_LOOPBACK) && password_length == 0u) {
+        errno = EACCES;
+        return -1;
+    }
+    *listen_interface = address.s_addr;
+    return 0;
+}
+
+static int astra_remote_password_parse(
+    const char *input, char password[ASTRA_RFB_PASSWORD_MAX + 1u])
+{
+    size_t length = strcspn(input, "\r\n");
+
+    if (length == 0u || length > ASTRA_RFB_PASSWORD_MAX ||
+        (input[length] == '\0' &&
+         length == ASTRA_RFB_PASSWORD_MAX + 1u)) {
+        errno = EINVAL;
+        return -1;
+    }
+    memcpy(password, input, length);
+    password[length] = '\0';
+    return 0;
+}
+
+static int astra_remote_password_read(const char *path,
+                                      char password[ASTRA_RFB_PASSWORD_MAX + 1u])
+{
+    char input[ASTRA_RFB_PASSWORD_MAX + 2u];
+    FILE *file;
+
+    password[0] = '\0';
+    if (path == NULL || *path == '\0')
+        return 0;
+    file = fopen(path, "r");
+    if (file == NULL)
+        return -1;
+    if (fgets(input, sizeof(input), file) == NULL) {
+        (void)fclose(file);
+        return -1;
+    }
+    if (fclose(file) != 0)
+        return -1;
+    return astra_remote_password_parse(input, password);
+}
+
 static int astra_remote_self_test(void)
 {
+    in_addr_t listen_interface;
+    char password[ASTRA_RFB_PASSWORD_MAX + 1u];
+
     if (strcmp(astra_qcode_for_keysym(XK_A), "a") != 0 ||
         strcmp(astra_qcode_for_keysym(XK_exclam), "1") != 0 ||
         strcmp(astra_qcode_for_keysym(XK_F24), "f24") != 0 ||
         strcmp(astra_qcode_for_keysym(XK_KP_Enter), "kp_enter") != 0 ||
-        astra_qcode_for_keysym(0x0101f642u) != NULL)
+        astra_qcode_for_keysym(0x0101f642u) != NULL ||
+        astra_remote_network_config(NULL, NULL, &listen_interface) != 0 ||
+        listen_interface != htonl(INADDR_LOOPBACK) ||
+        astra_remote_network_config("0.0.0.0", "Astra68!",
+                                    &listen_interface) != 0 ||
+        listen_interface != htonl(INADDR_ANY) ||
+        astra_remote_network_config("0.0.0.0", NULL,
+                                    &listen_interface) == 0 ||
+        astra_remote_network_config("not-an-address", "Astra68!",
+                                    &listen_interface) == 0 ||
+        astra_remote_network_config("0.0.0.0", "123456789",
+                                    &listen_interface) == 0 ||
+        astra_remote_password_parse("Astra68!\n", password) != 0 ||
+        strcmp(password, "Astra68!") != 0 ||
+        astra_remote_password_parse("\n", password) == 0 ||
+        astra_remote_password_parse("123456789", password) == 0)
         return EXIT_FAILURE;
     puts("ASTRA_REMOTE_DESKTOP_SELF_TEST PASS");
     return EXIT_SUCCESS;
@@ -544,7 +623,9 @@ static void astra_remote_server_stop(struct astra_remote_server *server)
 
 static int astra_remote_server_start(struct astra_remote_server *server,
                                      const char *capture_path, int port,
-                                     const char *program)
+                                     in_addr_t listen_interface,
+                                     const char *listen_address,
+                                     const char *password, const char *program)
 {
     int rfb_argc = 1;
     char *rfb_argv[] = {(char *)(uintptr_t)program, NULL};
@@ -576,7 +657,13 @@ static int astra_remote_server_start(struct astra_remote_server *server,
     rfbSetCursor(server->screen, NULL);
     server->screen->port = port;
     server->screen->ipv6port = 0;
-    server->screen->listenInterface = htonl(INADDR_LOOPBACK);
+    server->screen->listenInterface = listen_interface;
+    if (password != NULL && *password != '\0') {
+        server->passwords[0] = (char *)(uintptr_t)password;
+        server->passwords[1] = NULL;
+        server->screen->authPasswdData = server->passwords;
+        server->screen->passwordCheck = rfbCheckPasswordByList;
+    }
     server->screen->alwaysShared = TRUE;
     server->screen->kbdAddEvent = astra_remote_key_event;
     server->screen->kbdReleaseAllKeys = astra_remote_release_keys;
@@ -601,8 +688,8 @@ static int astra_remote_server_start(struct astra_remote_server *server,
     if (++server->generation == 0u)
         ++server->generation;
     (void)fprintf(stderr,
-                  "Astra remote desktop: ready generation %u on "
-                  "127.0.0.1:%d\n", server->generation, port);
+                  "Astra remote desktop: ready generation %u on %s:%d\n",
+                  server->generation, listen_address, port);
     return 0;
 }
 
@@ -698,6 +785,13 @@ int main(int argc, char **argv)
     const char *capture_environment = getenv("ASTRA_CAPTURE_DEVICE");
     const char *control_environment = getenv(
         "ASTRA_REMOTE_DESKTOP_CONTROL_SOCKET");
+    const char *listen_environment = getenv("ASTRA_RFB_LISTEN_ADDRESS");
+    const char *password_path = getenv("ASTRA_RFB_PASSWORD_FILE");
+    char password_storage[ASTRA_RFB_PASSWORD_MAX + 1u] = {0};
+    const char *password;
+    const char *listen_address =
+        listen_environment != NULL && *listen_environment != '\0' ?
+            listen_environment : "127.0.0.1";
     const char *capture_path = capture_environment != NULL ?
         capture_environment : ASTRA_CAPTURE_DEVICE;
     const char *control_path = control_environment != NULL ?
@@ -714,6 +808,7 @@ int main(int argc, char **argv)
     int lease = -1;
     int port;
     int status = EXIT_FAILURE;
+    in_addr_t listen_interface;
 
     if (argc == 2 && strcmp(argv[1], "--self-test") == 0)
         return astra_remote_self_test();
@@ -723,6 +818,17 @@ int main(int argc, char **argv)
     }
     if (astra_port_from_environment(getenv("ASTRA_RFB_PORT"), &port) != 0) {
         fputs("Astra remote desktop: invalid ASTRA_RFB_PORT\n", stderr);
+        goto done;
+    }
+    if (astra_remote_password_read(password_path, password_storage) != 0) {
+        fputs("Astra remote desktop: invalid RFB password file\n", stderr);
+        goto done;
+    }
+    password = password_storage[0] != '\0' ? password_storage : NULL;
+    if (astra_remote_network_config(listen_environment, password,
+                                    &listen_interface) != 0) {
+        fputs("Astra remote desktop: invalid or insecure RFB network "
+              "configuration\n", stderr);
         goto done;
     }
     listener = astra_control_listen(control_path);
@@ -753,7 +859,8 @@ int main(int argc, char **argv)
                 continue;
             }
             if (astra_remote_server_start(&server, capture_path, port,
-                                          argv[0]) != 0) {
+                                          listen_interface, listen_address,
+                                          password, argv[0]) != 0) {
                 int failure = errno != 0 ? errno : EIO;
                 char reply[32];
                 int length = snprintf(reply, sizeof(reply), "ERROR %d\n",

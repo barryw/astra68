@@ -95,16 +95,16 @@ re-evaluated. The regression failed before this fix and passes the normal,
 ASan/UBSan, analyzer, and MC68040 display builds.
 
 Immutable software release
-`2d2932784cd0f4468a6cd8669228e66e6345a73d5ea8dc1086967344c2427aaf`
+`cad9f86d5d96230887d8eeff64c2da1c9bab54a29b254804f46dcffb186478a1`
 is selected, byte-verified, and running on the DE25. Its QEMU, ROM, storage
 seed, host display, remote-desktop, and source-manifest SHA-256 values are
 respectively
 `3a13dc695833a277f3048de3835cfdedfcacc46adb9e31e8937942d4d410605e`,
-`b60711fa19eda7da0d1d415b0dfd2e8e0f81f92427dc4be5601decb41b1cd5a4`,
-`aba271bbf82afd0b20f09cb54017d75b2f8f0629e2a0c4fc9cc16388da314ac4`,
+`2608cffec7bf2b6b5ac78d1ecea74b6ffef1d98de09538941b9b18d759f540e5`,
+`188924f391257be4fc317a4949fa120345d6e9251777dfe282f0b859d49222d5`,
 `9d86a327a113e2f5dd2ead97f49bab87b1aacf16f5037fa9c2991a7bc059d471`,
-`6740ea01dcb16e19cb3af89d8efd5ee855d1d72cb45090aa1fc8094232e6df66`,
-and `6e498c4ed3be3a06254a11c3ac86a208fdaffe9723b63c72ce51a93994cced97`.
+`6378147be96a469c8358ad16e9917b5f84cb6d01e31fb8a745ca755c2b7f5c5a`,
+and `594a4c33e6fc779f98b126ce5873a0fb32a77e72beb675854f2c26e7a771641a`.
 It reaches stage 8; `astra.service` and
 `astra-remote-desktop.service` are active with zero automatic restarts.
 
@@ -120,9 +120,13 @@ in the canonical startup record and is available through
 The QEMU terminal gate rebuilds its workspace ROM before every run and has a
 negative regression proving that it refuses to test when that refresh fails,
 so a stale boot image cannot masquerade as current source.
-The physical loopback RFB gate captured a 1920x1080 RGB frame, round-tripped
-pointer position `(700, 500)`, and produced frame SHA-256
-`59f1aaecaa1e0d1e0a2f0223f088095ce502c995ace9648312604a667ee23638`.
+The direct Mac-to-DE25 RFB gate authenticated at `192.168.1.52:5900`, captured
+a 1920x1080 RGB frame, opened Terminal with the pointer, and entered and ran
+`echo direct-keyboard-pass`; the confirming frame SHA-256 is
+`0cba29ae38139fc858d31e9def31567800c0c4e39b0011c5decfee0f00efd75c`.
+The final release's authenticated desktop capture is
+`bf530945d726f22e8c04fd0097438082ed3350638686403f9ba3e6ec80597345`;
+anonymous access and an incorrect password were both rejected.
 This release advances the GUI protocol to version 11. Every ordinary window
 receives one complete state snapshot for active, inactive, minimized,
 maximized, restored, and geometry transitions, plus a distinct resize event
@@ -1189,18 +1193,22 @@ The Astra capture module remains unload-safe while closed and consumes no DMA
 channels or coherent frame while unopened.
 
 Immutable release
-`2e2ba48d9dc8d902481e660d2cc28472736697447839e6005030917df42a7070`
-adds the standard RFB/VNC service over this device and QEMU's existing input
-interface without changing RTL or the Astra guest ABI. LibVNCServer listens
-only on `127.0.0.1:5900`; remote clients use an SSH tunnel for authentication
-and encryption. A dedicated
+`cad9f86d5d96230887d8eeff64c2da1c9bab54a29b254804f46dcffb186478a1`
+exposes the standard RFB/VNC service directly on the DE25 Linux host at
+`192.168.1.52:5900` and requires standard VNC password authentication. The
+broker refuses a non-loopback listener when the required password is absent
+or invalid. The Mac connects straight to that address; Beast is not part of
+the runtime path. A dedicated
 `/run/astra/remote-desktop-qmp.sock` keeps input injection independent of the
 diagnostic `/run/astra/qmp.sock`. The physical RFB gate received the exact
-1920x1080 frame and native pointer position `[960, 540]`; its 6,220,800-byte
-RGB payload SHA-256 is
-`38e690b4f69e57fead7bdce21142d9f5f1420c7e95ce1d8dcd0fd0c4791de476`,
-byte-identical to the production capture above. With no client connected, the
-service used zero scheduler ticks over two seconds.
+1920x1080 frame and delivered pointer and keyboard events into Astra. Its
+final-release 6,220,800-byte desktop RGB payload SHA-256 is
+`bf530945d726f22e8c04fd0097438082ed3350638686403f9ba3e6ec80597345`.
+Anonymous and wrong-password clients were rejected; the authenticated Mac
+also opened Terminal and executed `echo direct-keyboard-pass`, producing the
+evidence frame
+`0cba29ae38139fc858d31e9def31567800c0c4e39b0011c5decfee0f00efd75c`.
+Both runtime services remained active with zero restarts.
 
 LibVNCServer's default software cursor path attempted to paint into the
 capture device's intentionally read-only mapping and crashed on the first

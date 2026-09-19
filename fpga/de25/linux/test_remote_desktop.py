@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Capture one raw RGB frame from Astra's loopback RFB service."""
+"""Capture one raw RGB frame from Astra's RFB service."""
 
 import argparse
 import hashlib
 import json
 import socket
 import struct
+import subprocess
 import time
 
 
@@ -19,7 +20,26 @@ def receive_exact(connection, size):
     return bytes(result)
 
 
-def connect(host, port):
+def vnc_response(challenge, password):
+    try:
+        raw = password.encode("latin-1")
+    except UnicodeEncodeError as error:
+        raise RuntimeError("VNC password must contain Latin-1 characters") \
+            from error
+    if not 1 <= len(raw) <= 8:
+        raise RuntimeError("VNC password must contain 1 to 8 characters")
+    key = bytes(int(f"{byte:08b}"[::-1], 2) for byte in raw.ljust(8, b"\0"))
+    result = subprocess.run([
+        "openssl", "enc", "-des-ecb", "-provider", "legacy",
+        "-K", key.hex(), "-nopad"], input=challenge, capture_output=True,
+        check=False)
+    if result.returncode != 0 or len(result.stdout) != 16:
+        raise RuntimeError("OpenSSL DES failed: " +
+                           result.stderr.decode("utf-8").strip())
+    return result.stdout
+
+
+def connect(host, port, password=None):
     deadline = time.monotonic() + 10
     while True:
         try:
@@ -29,6 +49,7 @@ def connect(host, port):
             if time.monotonic() >= deadline:
                 raise
             time.sleep(0.1)
+    connection.settimeout(None)
     version = receive_exact(connection, 12)
     if not version.startswith(b"RFB 003."):
         raise RuntimeError(f"invalid RFB version {version!r}")
@@ -38,9 +59,14 @@ def connect(host, port):
         size = struct.unpack(">I", receive_exact(connection, 4))[0]
         raise RuntimeError(receive_exact(connection, size).decode("utf-8"))
     security = receive_exact(connection, security_count)
-    if 1 not in security:
-        raise RuntimeError(f"RFB None security unavailable: {security!r}")
-    connection.sendall(b"\x01")
+    wanted_security = 2 if password is not None else 1
+    if wanted_security not in security:
+        name = "VNC authentication" if password is not None else "None"
+        raise RuntimeError(f"RFB {name} security unavailable: {security!r}")
+    connection.sendall(bytes([wanted_security]))
+    if password is not None:
+        connection.sendall(vnc_response(receive_exact(connection, 16),
+                                        password))
     result = struct.unpack(">I", receive_exact(connection, 4))[0]
     if result != 0:
         raise RuntimeError(f"RFB security failed: {result}")
@@ -88,6 +114,29 @@ def capture(connection, width, height):
         return bytes(frame)
 
 
+def send_keys(connection, text):
+    for character in text:
+        if character == "\n":
+            symbol = 0xff0d
+        elif ord(character) <= 0xff:
+            symbol = ord(character)
+        else:
+            raise RuntimeError(f"unsupported RFB test character {character!r}")
+        for down in (1, 0):
+            connection.sendall(struct.pack(">BBHI", 4, down, 0, symbol))
+
+
+def send_pointer(connection, x, y, buttons=0):
+    connection.sendall(struct.pack(">BBHH", 5, buttons, x, y))
+
+
+def double_click(connection, x, y):
+    send_pointer(connection, x, y)
+    for _ in range(2):
+        send_pointer(connection, x, y, 1)
+        send_pointer(connection, x, y)
+
+
 def qmp_execute(stream, command, arguments=None):
     request = {"execute": command}
     if arguments is not None:
@@ -120,20 +169,38 @@ def main():
     parser.add_argument("output")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=5900, type=int)
-    parser.add_argument("--pointer", nargs=2, metavar=("X", "Y"), type=int)
+    parser.add_argument("--password-file")
+    parser.add_argument("--keys", help="type ASCII text after connecting")
+    pointer_action = parser.add_mutually_exclusive_group()
+    pointer_action.add_argument("--pointer", nargs=2, metavar=("X", "Y"),
+                                type=int)
+    pointer_action.add_argument("--double-click", nargs=2,
+                                metavar=("X", "Y"), type=int)
     parser.add_argument("--qmp", default="/run/astra/qmp.sock")
     arguments = parser.parse_args()
-    connection, width, height, name = connect(arguments.host, arguments.port)
+    password = None
+    if arguments.password_file is not None:
+        with open(arguments.password_file, encoding="latin-1") as source:
+            password = source.readline().rstrip("\r\n")
+    connection, width, height, name = connect(
+        arguments.host, arguments.port, password)
     try:
-        if arguments.pointer is not None:
-            x, y = arguments.pointer
+        coordinates = arguments.double_click or arguments.pointer
+        if coordinates is not None:
+            x, y = coordinates
             if not 0 <= x < width or not 0 <= y < height:
                 parser.error("pointer coordinates must be inside the display")
-            connection.sendall(struct.pack(">BBHH", 5, 0, x, y))
+            if arguments.double_click:
+                double_click(connection, x, y)
+                time.sleep(2)
+            else:
+                send_pointer(connection, x, y)
+        if arguments.keys is not None:
+            send_keys(connection, arguments.keys)
         frame = capture(connection, width, height)
     finally:
         connection.close()
-    if arguments.pointer is not None:
+    if arguments.pointer is not None and arguments.qmp:
         actual_pointer = qmp_pointer_position(arguments.qmp)
         if actual_pointer != tuple(arguments.pointer):
             raise RuntimeError(

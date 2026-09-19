@@ -38,6 +38,8 @@ for required in (
     "Environment=ASTRA_QMP_SOCKET=/run/astra/remote-desktop-qmp.sock",
     "Environment=ASTRA_REMOTE_DESKTOP_CONTROL_SOCKET="
     "/run/astra/remote-desktop-control.sock",
+    "Environment=ASTRA_RFB_LISTEN_ADDRESS=0.0.0.0",
+    "Environment=ASTRA_RFB_PASSWORD_FILE=/etc/astra/remote-desktop.password",
     "Restart=always",
     "NoNewPrivileges=true",
     "ProtectSystem=strict",
@@ -46,6 +48,8 @@ for required in (
     "DeviceAllow=/dev/astra-display-capture r",
 ):
     assert required in remote, required
+
+assert "Environment=ASTRA_RFB_PASSWORD=" not in remote
 
 print("DE25 remote desktop service contract: PASS")
 

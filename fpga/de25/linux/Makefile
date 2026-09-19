@@ -43,6 +43,7 @@ $(REMOTE_DESKTOP): astra_remote_desktop.c astra_display_capture_uapi.h \
 	$(QEMU_USER) -L $(DE25_SYSROOT) $@ --self-test
 
 test: $(REMOTE_DESKTOP)
+	python3 test_remote_desktop_client.py
 	python3 test_remote_desktop_lifecycle.py $(REMOTE_DESKTOP) \
 		--qemu-user $(QEMU_USER) --sysroot $(DE25_SYSROOT)
 

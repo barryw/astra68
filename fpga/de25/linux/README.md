@@ -39,9 +39,12 @@ make -C fpga/de25/linux CROSS_COMPILE=aarch64-linux-gnu-
 The certifier rejects writable mappings, captures one frame through the ioctl,
 and writes exactly the meaningful RGB888 payload from the read-only mapping.
 
-`astra-remote-desktop` exposes that final frame through standard RFB/VNC. It
-binds only to `127.0.0.1:5900`; connect through an SSH tunnel so authentication
-and encryption remain SSH's responsibility rather than VNC password security.
+`astra-remote-desktop` exposes that final frame through standard RFB/VNC. The
+production service listens on the Linux host's IPv4 interfaces at port 5900,
+so macOS Screen Sharing connects directly to `vnc://192.168.1.52:5900`. The
+required root-owned `/etc/astra/remote-desktop.password` contains the VNC
+password; standard VNC authentication uses at most eight password characters.
+The broker refuses any non-loopback listener without a valid password file.
 It is demand-driven: with no viewer attached it performs no captures. Keyboard
 and pointer events use QEMU's dedicated
 `/run/astra/remote-desktop-qmp.sock` monitor and existing `input-send-event`
@@ -62,4 +65,4 @@ modules described above. Install `astra_display_capture.ko` and
 `/etc/modules-load.d`; the capture module's soft dependency loads DesignWare
 DMA first and both remain resident until shutdown. The immutable Astra release
 contains `astra-remote-desktop.service`, and the release deployer installs the
-unit without enabling it; remote display is opt-in and starts only on request.
+unit without enabling it; Astra's remote-desktop lease starts it on request.
