@@ -20,6 +20,7 @@ valid_startup(void)
     memset(&startup, 0, sizeof(startup));
     startup.magic = ASTRA_STARTUP_MAGIC;
     startup.abi_version = ASTRA_STARTUP_ABI_VERSION;
+    startup.program_entry = 0x00100000u;
     startup.header_size = ASTRA_STARTUP_INFO_SIZE;
     startup.total_size = ASTRA_STARTUP_INFO_SIZE +
                          (2u * ASTRA_STARTUP_CAPABILITY_SIZE);

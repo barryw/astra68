@@ -55,11 +55,11 @@ class Qmp:
                                         "property": name})
 
     def key(self, qcode):
-        for down in (True, False):
-            self.execute("input-send-event", {"events": [{
-                "type": "key", "data": {"down": down,
-                "key": {"type": "qcode", "data": qcode}}}]})
-            time.sleep(0.02)
+        self.execute("input-send-event", {"events": [{
+            "type": "key", "data": {"down": down,
+            "key": {"type": "qcode", "data": qcode}}}
+            for down in (True, False)]})
+        time.sleep(0.02)
 
     def chord(self, modifier, qcode):
         self.send(True, modifier)
@@ -160,7 +160,7 @@ def run(qmp, command, quiet_seconds):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", nargs="*", default=["help"])
-    parser.add_argument("--qmp", default="/data/astra/run/qmp.sock")
+    parser.add_argument("--qmp", default="/run/astra/qmp.sock")
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--quiet", type=float, default=0.75)
@@ -179,6 +179,9 @@ def main():
     parser.add_argument("--drag-steps", type=int, default=20)
     arguments = parser.parse_args()
     command = " ".join(arguments.command)
+    if arguments.command and \
+            arguments.command[0].rsplit("/", 1)[-1] == "posix":
+        raise SystemExit("posix is interactive; use test-terminal.py")
     qmp = Qmp(arguments.qmp)
     if arguments.dump_trace_ring:
         if any(character in arguments.dump_trace_ring

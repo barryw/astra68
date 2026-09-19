@@ -6,7 +6,6 @@
 #include <astra/bytes.h>
 #include <astra/process.h>
 #include <astra/library.h>
-#include <astra/library_loader.h>
 #include <astra/event.h>
 #include <astra/event_catalog.h>
 #include <astra/event_emit.h>
@@ -32,13 +31,27 @@ static uint32_t mock_stream_write_calls;
 static uint32_t mock_stream_create_calls;
 static uint32_t mock_stream_commit_calls;
 static uint32_t mock_stream_closed_handle;
+static uint32_t mock_stream_dynamic;
 static uint32_t mock_thread_handle = 0x22222222u;
 static int mock_clone_child;
 static uint32_t mock_cancel_wait_once;
+static uint64_t mock_time_ns;
 
 #define MOCK_STREAM_FILE_OFFSET (5u * 1024u * 1024u)
 #define MOCK_STREAM_FILE_BYTES 17u
+#define MOCK_INTERPRETER_FILE_OFFSET (7u * 1024u * 1024u)
+#define MOCK_INTERPRETER_FILE_BYTES 23u
 #define MOCK_STREAM_LOAD_HANDLE 0x5151u
+
+void *astra_runtime_allocate(size_t size)
+{
+    return malloc(size);
+}
+
+void astra_runtime_deallocate(void *pointer)
+{
+    free(pointer);
+}
 
 static void dummy_signal(int signal_number)
 {
@@ -53,11 +66,6 @@ static void dummy_thread(uint32_t argument)
 void astra_thread_start_trampoline(void)
 {
 }
-
-uint32_t astra_library_test_prepare(
-    void *mapping, uint32_t logical_base, uint32_t span,
-    const char *expected_name, uint16_t abi_major,
-    uint16_t minimum_abi_minor, AstraLoadedLibrary *library);
 
 static void put_be16(uint8_t *bytes, uint32_t offset, uint16_t value)
 {
@@ -95,6 +103,7 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
     if (number != ASTRA_SYSCALL_LOG_WRITE &&
         number != ASTRA_SYSCALL_PROCESS_CREATE &&
         number != ASTRA_SYSCALL_PROCESS_LOAD_BEGIN &&
+        number != ASTRA_SYSCALL_PROCESS_LOAD_INTERPRETER &&
         number != ASTRA_SYSCALL_PROCESS_LOAD_WRITE &&
         number != ASTRA_SYSCALL_PROCESS_LOAD_CREATE &&
         number != ASTRA_SYSCALL_PROCESS_EXEC &&
@@ -108,8 +117,10 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_WAIT_MULTIPLE &&
         number != ASTRA_SYSCALL_DISPLAY_SUBMIT &&
         number != ASTRA_SYSCALL_DISPLAY_COLLECT &&
-        number != ASTRA_SYSCALL_LIBRARY_MAP &&
+        number != ASTRA_SYSCALL_PROCESS_DYNAMIC_COMMIT &&
         number != ASTRA_SYSCALL_PROCESS_PRIORITY &&
+        number != ASTRA_SYSCALL_PROCESS_INFO &&
+        number != ASTRA_SYSCALL_THREAD_INFO &&
         number != ASTRA_SYSCALL_PROCESS_SNAPSHOT &&
         number != ASTRA_SYSCALL_LIBRARY_SNAPSHOT &&
         number != ASTRA_SYSCALL_PROCESS_SIGNAL &&
@@ -133,6 +144,7 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         assert(argument3 == 0u);
     }
     if (number != ASTRA_SYSCALL_PROCESS_CREATE &&
+        number != ASTRA_SYSCALL_PROCESS_EXEC &&
         number != ASTRA_SYSCALL_RING_CREATE) {
         assert(argument4 == 0u);
     }
@@ -158,6 +170,11 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         }
     }
     result->value2 = mock_thread_handle;
+    if (number == ASTRA_SYSCALL_CLOCK_MONOTONIC) {
+        result->value0 = (uint32_t)(mock_time_ns >> 32);
+        result->value1 = (uint32_t)mock_time_ns;
+        mock_time_ns += 100u;
+    }
     if (number == ASTRA_SYSCALL_PROCESS_CLONE && mock_clone_child != 0) {
         result->value0 = 0u;
         result->value1 = 0u;
@@ -168,14 +185,24 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         result->value0 = MOCK_STREAM_LOAD_HANDLE;
         result->value1 = 52u;
         result->value2 = 32u;
+    } else if (number == ASTRA_SYSCALL_PROCESS_LOAD_INTERPRETER) {
+        mock_stream_dynamic = 1u;
+        result->value0 = 52u;
+        result->value1 = 32u;
     } else if (number == ASTRA_SYSCALL_PROCESS_LOAD_WRITE) {
         ++mock_stream_write_calls;
         result->value0 = 0u;
         result->value1 = 0u;
+        if (mock_stream_dynamic != 0u && mock_stream_write_calls == 3u) {
+            result->value0 = MOCK_INTERPRETER_FILE_OFFSET;
+            result->value1 = MOCK_INTERPRETER_FILE_BYTES;
+            result->value2 = ASTRA_PROCESS_LOAD_SOURCE_INTERPRETER;
+        }
     } else if (number == ASTRA_SYSCALL_PROCESS_LOAD_CREATE) {
         ++mock_stream_create_calls;
         result->value0 = MOCK_STREAM_FILE_OFFSET;
         result->value1 = MOCK_STREAM_FILE_BYTES;
+        result->value2 = ASTRA_PROCESS_LOAD_SOURCE_PROGRAM;
     } else if (number == ASTRA_SYSCALL_PROCESS_LOAD_COMMIT) {
         ++mock_stream_commit_calls;
     } else if (number == ASTRA_SYSCALL_CLOSE) {
@@ -193,6 +220,7 @@ valid_startup(void)
     startup.header_size = ASTRA_STARTUP_INFO_SIZE;
     startup.total_size = ASTRA_STARTUP_INFO_SIZE;
     startup.syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION;
+    startup.program_entry = 0x00100000u;
     return startup;
 }
 
@@ -225,6 +253,20 @@ test_startup_contract(void)
     startup.launch_source = ASTRA_LAUNCH_SOURCE_SYSTEM;
     assert(astra_startup_argument(&startup, 1u) == NULL);
     startup.handoff_size = 1u;
+    assert(!astra_startup_validate(&startup));
+    startup = valid_startup();
+    startup.flags = ASTRA_STARTUP_FLAG_INTERPRETED;
+    startup.interpreter_base = 0x20000000u;
+    startup.interpreter_span = 0x3000u;
+    startup.interpreter_entry = 0x20001100u;
+    assert(astra_startup_validate(&startup));
+    startup.interpreter_entry = 0x20003000u;
+    assert(!astra_startup_validate(&startup));
+    startup = valid_startup();
+    startup.interpreter_base = 0x20000000u;
+    assert(!astra_startup_validate(&startup));
+    startup = valid_startup();
+    startup.flags = UINT32_C(0x80000000);
     assert(!astra_startup_validate(&startup));
 }
 
@@ -375,8 +417,12 @@ test_qsort(void)
 static void
 test_syscall_wrappers(void)
 {
+    enum { SNAPSHOT_BATCH_RECORDS = 17 };
     AstraProcSnapshot process_records[ASTRA_PROCESS_COUNT_MAX];
-    AstraProcLibrarySnapshot library_records[ASTRA_LIBRARY_SLOT_COUNT];
+    AstraProcLibrarySnapshot library_records[SNAPSHOT_BATCH_RECORDS];
+    AstraProcessInfo process_info = {0};
+    AstraThreadInfo thread_info = {0};
+    uint32_t library_total = 0u;
     AstraDisplayFrameRequest request = {0};
     AstraDisplayFrameCompletion completion = {0};
     AstraHostLeaseInfo host_info = {0};
@@ -462,6 +508,20 @@ test_syscall_wrappers(void)
     assert(abi == ASTRA_SYSCALL_ABI_VERSION);
     assert(process == 0x11111111u);
     assert(thread == 0x22222222u);
+    assert(astra_process_info(process, &process_info) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_PROCESS_INFO);
+    assert(mock_argument0 == process);
+    assert(mock_argument1 == (uint32_t)(uintptr_t)&process_info);
+    assert(astra_thread_info(thread, &thread_info) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_THREAD_INFO);
+    assert(mock_argument0 == thread);
+    assert(mock_argument1 == (uint32_t)(uintptr_t)&thread_info);
+    calls = mock_calls;
+    assert(astra_process_info(process, NULL) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_thread_info(thread, NULL) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(mock_calls == calls);
     assert(astra_process_priority(process, 12u, &abi) == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_PROCESS_PRIORITY);
     assert(mock_argument0 == process);
@@ -478,16 +538,20 @@ test_syscall_wrappers(void)
     assert(astra_process_snapshot(process, NULL,
                                   ASTRA_PROCESS_COUNT_MAX, &moved) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);
-    assert(astra_library_snapshot(process, library_records,
-                                  ASTRA_LIBRARY_SLOT_COUNT, &moved) ==
+    assert(astra_library_snapshot(process, 3u, library_records,
+                                  SNAPSHOT_BATCH_RECORDS, &moved,
+                                  &library_total) ==
            ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_LIBRARY_SNAPSHOT);
     assert(mock_argument0 == process);
     assert(mock_argument1 == (uint32_t)(uintptr_t)library_records);
-    assert(mock_argument2 == ASTRA_LIBRARY_SLOT_COUNT);
+    assert(mock_argument2 == SNAPSHOT_BATCH_RECORDS);
+    assert(mock_argument3 == 3u);
     assert(moved == ASTRA_SYSCALL_ABI_VERSION);
-    assert(astra_library_snapshot(process, NULL,
-                                  ASTRA_LIBRARY_SLOT_COUNT, &moved) ==
+    assert(library_total == 0x11111111u);
+    assert(astra_library_snapshot(process, 0u, NULL,
+                                  SNAPSHOT_BATCH_RECORDS, &moved,
+                                  &library_total) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(astra_rt_ring_create(
                9u, 64u, 1u, 65536u,
@@ -521,6 +585,18 @@ test_syscall_wrappers(void)
     assert(mock_argument0 == 4097u);
     assert(mock_argument1 ==
            (ASTRA_VM_PRIVATE_READ | ASTRA_VM_PRIVATE_WRITE));
+    assert(mock_argument2 == ASTRA_VM_PRIVATE_RESERVE_EXACT);
+    assert(private_address ==
+           (void *)(uintptr_t)ASTRA_SYSCALL_ABI_VERSION);
+    assert(span == 0x11111111u);
+    assert(astra_rt_private_reserve_largest(
+               1u, ASTRA_VM_PRIVATE_READ | ASTRA_VM_PRIVATE_WRITE,
+               &private_address, &span) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_VM_PRIVATE_RESERVE);
+    assert(mock_argument0 == 1u);
+    assert(mock_argument1 ==
+           (ASTRA_VM_PRIVATE_READ | ASTRA_VM_PRIVATE_WRITE));
+    assert(mock_argument2 == ASTRA_VM_PRIVATE_RESERVE_LARGEST);
     assert(private_address ==
            (void *)(uintptr_t)ASTRA_SYSCALL_ABI_VERSION);
     assert(span == 0x11111111u);
@@ -620,100 +696,53 @@ test_syscall_wrappers(void)
            ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(mock_calls == calls);
 
-    assert(astra_rt_library_map(&request, sizeof(request), &abi, &span) ==
-           ASTRA_SYSCALL_OK);
-    assert(mock_number == ASTRA_SYSCALL_LIBRARY_MAP);
-    assert(mock_argument0 == (uint32_t)(uintptr_t)&request);
-    assert(mock_argument1 == sizeof(request));
-    assert(mock_argument2 == 0u);
-    assert(abi == ASTRA_SYSCALL_ABI_VERSION);
-    assert(span == 0x11111111u);
-    assert(astra_rt_library_attach(&reference, &abi, &span) ==
+    assert(astra_rt_library_attach(&reference, &abi, &span, &moved) ==
            ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_LIBRARY_ATTACH);
     assert(mock_argument0 == (uint32_t)(uintptr_t)&reference);
     assert(abi == ASTRA_SYSCALL_ABI_VERSION);
     assert(span == 0x11111111u);
-}
+    assert(moved == mock_thread_handle);
 
-static void test_library_relocation(void)
-{
-    const uint32_t span = ASTRA_LIBRARY_EXPORTS_OFFSET + 0x1000u;
-    uint8_t *mapping = calloc(1u, span);
-    AstraLoadedLibrary library;
-    uint32_t ph = 52u;
-    uint32_t dynamic = ASTRA_LIBRARY_EXPORTS_OFFSET + 0x80u;
-
-    assert(mapping != NULL);
-    mapping[0] = 0x7fu;
-    mapping[1] = 'E';
-    mapping[2] = 'L';
-    mapping[3] = 'F';
-    mapping[4] = 1u;
-    mapping[5] = 2u;
-    put_be16(mapping, 16u, 3u);
-    put_be16(mapping, 18u, 4u);
-    put_be32(mapping, 20u, 1u);
-    put_be32(mapping, 28u, ph);
-    put_be16(mapping, 42u, 32u);
-    put_be16(mapping, 44u, 4u);
-
-    put_be32(mapping, ph, 1u);
-    put_be32(mapping, ph + 20u, 0x1000u);
-    put_be32(mapping, ph + 24u, 4u);
-    put_be32(mapping, ph + 28u, 0x1000u);
-    ph += 32u;
-    put_be32(mapping, ph, 1u);
-    put_be32(mapping, ph + 8u, 0x1000u);
-    put_be32(mapping, ph + 20u, 0x1000u);
-    put_be32(mapping, ph + 24u, 5u);
-    put_be32(mapping, ph + 28u, 0x1000u);
-    ph += 32u;
-    put_be32(mapping, ph, 1u);
-    put_be32(mapping, ph + 8u, ASTRA_LIBRARY_EXPORTS_OFFSET);
-    put_be32(mapping, ph + 20u, 0x1000u);
-    put_be32(mapping, ph + 24u, 6u);
-    put_be32(mapping, ph + 28u, 0x1000u);
-    ph += 32u;
-    put_be32(mapping, ph, 2u);
-    put_be32(mapping, ph + 8u, dynamic);
-    put_be32(mapping, ph + 20u, 32u);
-    put_be32(mapping, ph + 24u, 6u);
-
-    put_be32(mapping, ASTRA_LIBRARY_FILE_OFFSET, ASTRA_LIBRARY_MAGIC);
-    put_be16(mapping, ASTRA_LIBRARY_FILE_OFFSET + 4u,
-             ASTRA_LIBRARY_RECORD_VERSION);
-    put_be16(mapping, ASTRA_LIBRARY_FILE_OFFSET + 6u, ASTRA_LIBRARY_SIZE);
-    put_be16(mapping, ASTRA_LIBRARY_FILE_OFFSET + 14u, 1u);
-    put_be16(mapping, ASTRA_LIBRARY_FILE_OFFSET + 16u, 0u);
-    put_be32(mapping, ASTRA_LIBRARY_FILE_OFFSET + 20u,
-             ASTRA_LIBRARY_TARGET_M68040);
-    put_be32(mapping, ASTRA_LIBRARY_FILE_OFFSET + 28u,
-             ASTRA_LIBRARY_EXPORTS_OFFSET);
-    memcpy(mapping + ASTRA_LIBRARY_FILE_OFFSET + 32u, "font.library", 13u);
-
-    put_be32(mapping, 0x300u, ASTRA_LIBRARY_EXPORTS_OFFSET + 8u);
-    put_be32(mapping, 0x304u, 22u);
-    put_be32(mapping, 0x308u, 0x1000u);
-    put_be32(mapping, dynamic, 7u);
-    put_be32(mapping, dynamic + 4u, 0x300u);
-    put_be32(mapping, dynamic + 8u, 8u);
-    put_be32(mapping, dynamic + 12u, 12u);
-    put_be32(mapping, dynamic + 16u, 9u);
-    put_be32(mapping, dynamic + 20u, 12u);
-
-    assert(astra_library_test_prepare(mapping, ASTRA_LIBRARY_BASE, span,
-                                      "font.library", 1u, 0u, &library) ==
+    assert(astra_rt_process_dynamic_commit(
+               (void *)(uintptr_t)ASTRA_PRIVATE_ADDRESS_START,
+               sizeof(reference), 4u, ASTRA_MEMORY_PAGE_SIZE) ==
            ASTRA_SYSCALL_OK);
-    assert(library.exports == mapping + ASTRA_LIBRARY_EXPORTS_OFFSET);
-    assert(mapping[ASTRA_LIBRARY_EXPORTS_OFFSET + 8u] == 0x20u);
-    assert(mapping[ASTRA_LIBRARY_EXPORTS_OFFSET + 9u] == 0x00u);
-    assert(mapping[ASTRA_LIBRARY_EXPORTS_OFFSET + 10u] == 0x10u);
-    assert(mapping[ASTRA_LIBRARY_EXPORTS_OFFSET + 11u] == 0x00u);
-    free(mapping);
+    assert(mock_number == ASTRA_SYSCALL_PROCESS_DYNAMIC_COMMIT);
+    assert(mock_argument0 == ASTRA_PRIVATE_ADDRESS_START);
+    assert(mock_argument1 == sizeof(reference));
+    assert(mock_argument2 == 4u);
+    assert(mock_argument3 == ASTRA_MEMORY_PAGE_SIZE);
+    calls = mock_calls;
+    assert(astra_rt_process_dynamic_commit(NULL, 1u, 1u,
+                                           ASTRA_MEMORY_PAGE_SIZE) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_rt_process_dynamic_commit(
+               (void *)(uintptr_t)ASTRA_PRIVATE_ADDRESS_START,
+               0u, 1u, ASTRA_MEMORY_PAGE_SIZE) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_rt_process_dynamic_commit(NULL, 0u, 2u, 0u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_rt_process_dynamic_commit(NULL, 0u, 1u,
+                                           ASTRA_MEMORY_PAGE_SIZE) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_rt_process_dynamic_commit(
+               (void *)(uintptr_t)(ASTRA_PRIVATE_ADDRESS_START + 1u),
+               sizeof(reference), 4u, ASTRA_MEMORY_PAGE_SIZE) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_rt_process_dynamic_commit(
+               (void *)(uintptr_t)ASTRA_PRIVATE_ADDRESS_START,
+               sizeof(reference), 3u, ASTRA_MEMORY_PAGE_SIZE) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_rt_process_dynamic_commit(
+               (void *)(uintptr_t)ASTRA_PRIVATE_ADDRESS_START,
+               ASTRA_MEMORY_PAGE_SIZE + 1u, 4u,
+               ASTRA_MEMORY_PAGE_SIZE) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(mock_calls == calls);
 }
 
-/*
+ /*
  * The launch, from the launcher's side. What is checked here is the marshalling
  * and nothing else: every rule about what a launch may hand over is the
  * kernel's, and a wrapper that re-decided any of it would be a second answer to
@@ -862,8 +891,8 @@ static void test_launch(void)
 }
 
 typedef struct MockLaunchReader {
-    uint32_t offset[3];
-    uint32_t length[3];
+    uint32_t offset[4];
+    uint32_t length[4];
     uint32_t calls;
     uint32_t fail_call;
     uint32_t releases;
@@ -887,7 +916,7 @@ static uint32_t mock_launch_read(void *context, uint32_t offset,
     MockLaunchReader *reader = context;
     uint32_t call = reader->calls++;
 
-    assert(call < 3u);
+    assert(call < 4u);
     reader->offset[call] = offset;
     reader->length[call] = length;
     *bytes = NULL;
@@ -903,6 +932,9 @@ static uint32_t mock_launch_read(void *context, uint32_t offset,
 static void test_streamed_launch(void)
 {
     MockLaunchReader reader = {0};
+    AstraProcessLoadProfile profile = {
+        .size = ASTRA_PROCESS_LOAD_PROFILE_SIZE,
+    };
     uint32_t handle = 0u;
     uint32_t id = 0u;
 
@@ -911,10 +943,11 @@ static void test_streamed_launch(void)
     mock_stream_create_calls = 0u;
     mock_stream_commit_calls = 0u;
     mock_stream_closed_handle = 0u;
+    mock_stream_dynamic = 0u;
     assert(astra_launch_stream(
                MOCK_STREAM_FILE_OFFSET + MOCK_STREAM_FILE_BYTES,
                mock_launch_read, mock_launch_release, &reader, NULL, 0u,
-               NULL, &handle, &id) ==
+               NULL, &profile, &handle, &id) ==
            ASTRA_SYSCALL_OK);
     assert(reader.calls == 3u);
     assert(reader.releases == 1u);
@@ -928,6 +961,17 @@ static void test_streamed_launch(void)
     assert(mock_stream_commit_calls == 1u);
     assert(mock_stream_closed_handle == 0u);
     assert(handle == ASTRA_SYSCALL_ABI_VERSION && id == 0x11111111u);
+    assert(profile.source_reads == 3u && profile.source_bytes == 101u);
+    assert(profile.kernel_writes == 2u &&
+           profile.kernel_write_bytes == 49u);
+    assert(profile.total_ns != 0u);
+    assert(profile.source_read_ns == 300u);
+    assert(profile.kernel_begin_ns == 100u);
+    assert(profile.kernel_interpreter_ns == 0u);
+    assert(profile.kernel_write_ns == 200u);
+    assert(profile.kernel_create_ns == 100u);
+    assert(profile.source_release_ns == 100u);
+    assert(profile.kernel_commit_ns == 100u);
 
     reader = (MockLaunchReader){.fail_call = 3u};
     handle = 0xdeadbeefu;
@@ -937,7 +981,7 @@ static void test_streamed_launch(void)
     assert(astra_launch_stream(
                MOCK_STREAM_FILE_OFFSET + MOCK_STREAM_FILE_BYTES,
                mock_launch_read, mock_launch_release, &reader, NULL, 0u,
-               NULL, &handle, &id) ==
+               NULL, NULL, &handle, &id) ==
            ASTRA_SYSCALL_IO_ERROR);
     assert(handle == 0u && id == 0u);
     assert(reader.releases == 1u);
@@ -949,10 +993,445 @@ static void test_streamed_launch(void)
     assert(astra_launch_stream(
                MOCK_STREAM_FILE_OFFSET + MOCK_STREAM_FILE_BYTES,
                mock_launch_read, mock_launch_release, &reader, NULL, 0u,
-               NULL, &handle, &id) == ASTRA_SYSCALL_IO_ERROR);
+               NULL, NULL, &handle, &id) == ASTRA_SYSCALL_IO_ERROR);
     assert(reader.releases == 1u);
     assert(mock_stream_commit_calls == 0u);
     assert(mock_stream_closed_handle == MOCK_STREAM_LOAD_HANDLE);
+}
+
+static void test_dynamic_streamed_launch(void)
+{
+    MockLaunchReader program = {0};
+    MockLaunchReader interpreter = {0};
+    AstraReadSource program_source = {
+        .length = MOCK_STREAM_FILE_OFFSET + MOCK_STREAM_FILE_BYTES,
+        .read_at = mock_launch_read,
+        .release = mock_launch_release,
+        .context = &program,
+    };
+    AstraReadSource interpreter_source = {
+        .length = MOCK_INTERPRETER_FILE_OFFSET + MOCK_INTERPRETER_FILE_BYTES,
+        .read_at = mock_launch_read,
+        .release = mock_launch_release,
+        .context = &interpreter,
+    };
+    uint32_t handle = 0u;
+    uint32_t id = 0u;
+
+    mock_stream_begin_calls = 0u;
+    mock_stream_write_calls = 0u;
+    mock_stream_create_calls = 0u;
+    mock_stream_commit_calls = 0u;
+    mock_stream_closed_handle = 0u;
+    mock_stream_dynamic = 0u;
+    assert(astra_launch_dynamic_stream(
+               &program_source, &interpreter_source, NULL, 0u, NULL,
+               NULL, &handle, &id) == ASTRA_SYSCALL_OK);
+    assert(program.calls == 3u && interpreter.calls == 3u);
+    assert(program.offset[0] == 0u && program.length[0] == 52u);
+    assert(program.offset[1] == 52u && program.length[1] == 32u);
+    assert(program.offset[2] == MOCK_STREAM_FILE_OFFSET &&
+           program.length[2] == MOCK_STREAM_FILE_BYTES);
+    assert(interpreter.offset[0] == 0u && interpreter.length[0] == 52u);
+    assert(interpreter.offset[1] == 52u && interpreter.length[1] == 32u);
+    assert(interpreter.offset[2] == MOCK_INTERPRETER_FILE_OFFSET &&
+           interpreter.length[2] == MOCK_INTERPRETER_FILE_BYTES);
+    assert(program.releases == 1u && interpreter.releases == 1u);
+    assert(mock_stream_write_calls == 4u);
+    assert(mock_stream_commit_calls == 1u);
+    assert(handle == ASTRA_SYSCALL_ABI_VERSION && id == 0x11111111u);
+
+    program = (MockLaunchReader){0};
+    interpreter = (MockLaunchReader){.fail_call = 2u};
+    program_source.context = &program;
+    interpreter_source.context = &interpreter;
+    handle = 0xdeadbeefu;
+    id = 0xdeadbeefu;
+    mock_stream_write_calls = 0u;
+    mock_stream_commit_calls = 0u;
+    mock_stream_closed_handle = 0u;
+    mock_stream_dynamic = 0u;
+    assert(astra_launch_dynamic_stream(
+               &program_source, &interpreter_source, NULL, 0u, NULL,
+               NULL, &handle, &id) == ASTRA_SYSCALL_IO_ERROR);
+    assert(handle == 0u && id == 0u);
+    assert(program.releases == 1u && interpreter.releases == 1u);
+    assert(mock_stream_commit_calls == 0u);
+    assert(mock_stream_closed_handle == MOCK_STREAM_LOAD_HANDLE);
+}
+
+typedef struct ExecutableProbeReader {
+    uint8_t bytes[256];
+    uint32_t length;
+    uint32_t calls;
+    uint32_t releases;
+    uint32_t fail_call;
+} ExecutableProbeReader;
+
+static uint32_t executable_probe_read(
+    void *context, uint32_t offset, uint32_t length,
+    const uint8_t **bytes, uint32_t *moved)
+{
+    ExecutableProbeReader *reader = context;
+
+    ++reader->calls;
+    *bytes = NULL;
+    *moved = 0u;
+    if (reader->calls == reader->fail_call || offset > reader->length ||
+        length > reader->length - offset)
+        return 1u;
+    *bytes = reader->bytes + offset;
+    *moved = length;
+    return 0u;
+}
+
+static uint32_t executable_probe_release(void *context)
+{
+    ExecutableProbeReader *reader = context;
+
+    ++reader->releases;
+    return 0u;
+}
+
+static void executable_probe_fixture(ExecutableProbeReader *reader,
+                                     uint16_t program_header_count)
+{
+    memset(reader, 0, sizeof(*reader));
+    reader->length = sizeof(reader->bytes);
+    reader->bytes[0] = 0x7fu;
+    reader->bytes[1] = 'E';
+    reader->bytes[2] = 'L';
+    reader->bytes[3] = 'F';
+    reader->bytes[4] = 1u;
+    reader->bytes[5] = 2u;
+    reader->bytes[6] = 1u;
+    put_be16(reader->bytes, 16u, 2u);
+    put_be16(reader->bytes, 18u, 4u);
+    put_be32(reader->bytes, 20u, 1u);
+    put_be32(reader->bytes, 28u, ASTRA_EXECUTABLE_HEADER_SIZE);
+    put_be16(reader->bytes, 40u, ASTRA_EXECUTABLE_HEADER_SIZE);
+    put_be16(reader->bytes, 42u, 32u);
+    put_be16(reader->bytes, 44u, program_header_count);
+}
+
+static void executable_probe_interpreter(ExecutableProbeReader *reader,
+                                         uint32_t index,
+                                         const char *identity)
+{
+    uint32_t header = ASTRA_EXECUTABLE_HEADER_SIZE + index * 32u;
+    uint32_t offset = 160u + index * 32u;
+    uint32_t size = (uint32_t)strlen(identity) + 1u;
+
+    put_be32(reader->bytes, header, 3u);
+    put_be32(reader->bytes, header + 4u, offset);
+    put_be32(reader->bytes, header + 16u, size);
+    put_be32(reader->bytes, header + 20u, size);
+    put_be32(reader->bytes, header + 24u, 4u);
+    memcpy(reader->bytes + offset, identity, size);
+}
+
+static void test_executable_interpreter_probe(void)
+{
+    ExecutableProbeReader reader;
+    AstraReadSource source;
+    char identity[32];
+    uint32_t length = UINT32_MAX;
+
+    executable_probe_fixture(&reader, 1u);
+    source = (AstraReadSource){
+        .length = reader.length,
+        .read_at = executable_probe_read,
+        .release = executable_probe_release,
+        .context = &reader,
+    };
+    assert(astra_executable_interpreter(
+               &source, identity, sizeof(identity), &length) ==
+           ASTRA_SYSCALL_OK);
+    assert(length == 0u && identity[0] == '\0');
+    assert(reader.calls == 2u && reader.releases == 0u);
+
+    executable_probe_fixture(&reader, 1u);
+    executable_probe_interpreter(&reader, 0u, "loader.library.1");
+    assert(astra_executable_interpreter(
+               &source, identity, sizeof(identity), &length) ==
+           ASTRA_SYSCALL_OK);
+    assert(length == strlen("loader.library.1"));
+    assert(strcmp(identity, "loader.library.1") == 0);
+    assert(reader.calls == 3u && reader.releases == 0u);
+
+    executable_probe_fixture(&reader, 2u);
+    executable_probe_interpreter(&reader, 0u, "loader.library.1");
+    executable_probe_interpreter(&reader, 1u, "other.library.1");
+    assert(astra_executable_interpreter(
+               &source, identity, sizeof(identity), &length) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(length == 0u && identity[0] == '\0');
+    assert(reader.releases == 0u);
+
+    executable_probe_fixture(&reader, 1u);
+    executable_probe_interpreter(&reader, 0u, "loader.library.1");
+    reader.bytes[160u + strlen("loader.library.1")] = 'x';
+    assert(astra_executable_interpreter(
+               &source, identity, sizeof(identity), &length) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    executable_probe_fixture(&reader, 1u);
+    executable_probe_interpreter(&reader, 0u, "loader.library.1");
+    assert(astra_executable_interpreter(
+               &source, identity, 4u, &length) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    executable_probe_fixture(&reader, 1u);
+    reader.fail_call = 2u;
+    assert(astra_executable_interpreter(
+               &source, identity, sizeof(identity), &length) ==
+           ASTRA_SYSCALL_IO_ERROR);
+    assert(reader.releases == 0u);
+}
+
+typedef struct ExecutableLaunchReader {
+    uint8_t header[256];
+    uint8_t scratch[64];
+    uint32_t length;
+    uint32_t releases;
+} ExecutableLaunchReader;
+
+typedef struct InterpreterResolver {
+    ExecutableLaunchReader *interpreter;
+    uint32_t calls;
+    uint32_t status;
+    char identity[32];
+} InterpreterResolver;
+
+static uint32_t executable_launch_read(
+    void *context, uint32_t offset, uint32_t length,
+    const uint8_t **bytes, uint32_t *moved)
+{
+    ExecutableLaunchReader *reader = context;
+
+    *bytes = NULL;
+    *moved = 0u;
+    if (offset > reader->length || length > reader->length - offset)
+        return ASTRA_SYSCALL_IO_ERROR;
+    if (offset < sizeof(reader->header) &&
+        length <= sizeof(reader->header) - offset)
+        *bytes = reader->header + offset;
+    else if (length <= sizeof(reader->scratch))
+        *bytes = reader->scratch;
+    else
+        return ASTRA_SYSCALL_IO_ERROR;
+    *moved = length;
+    return ASTRA_SYSCALL_OK;
+}
+
+static uint32_t executable_launch_release(void *context)
+{
+    ExecutableLaunchReader *reader = context;
+
+    ++reader->releases;
+    return ASTRA_SYSCALL_OK;
+}
+
+static void executable_launch_fixture(ExecutableLaunchReader *reader,
+                                      const char *interpreter)
+{
+    uint32_t count = 1u;
+
+    memset(reader, 0, sizeof(*reader));
+    reader->length = MOCK_INTERPRETER_FILE_OFFSET +
+                     MOCK_INTERPRETER_FILE_BYTES;
+    reader->header[0] = 0x7fu;
+    reader->header[1] = 'E';
+    reader->header[2] = 'L';
+    reader->header[3] = 'F';
+    reader->header[4] = 1u;
+    reader->header[5] = 2u;
+    reader->header[6] = 1u;
+    put_be16(reader->header, 16u, 2u);
+    put_be16(reader->header, 18u, 4u);
+    put_be32(reader->header, 20u, 1u);
+    put_be32(reader->header, 28u, ASTRA_EXECUTABLE_HEADER_SIZE);
+    put_be16(reader->header, 40u, ASTRA_EXECUTABLE_HEADER_SIZE);
+    put_be16(reader->header, 42u, 32u);
+    put_be16(reader->header, 44u, (uint16_t)count);
+    if (interpreter != NULL) {
+        uint32_t size = (uint32_t)strlen(interpreter) + 1u;
+
+        put_be32(reader->header, ASTRA_EXECUTABLE_HEADER_SIZE, 3u);
+        put_be32(reader->header, ASTRA_EXECUTABLE_HEADER_SIZE + 4u, 160u);
+        put_be32(reader->header, ASTRA_EXECUTABLE_HEADER_SIZE + 16u, size);
+        put_be32(reader->header, ASTRA_EXECUTABLE_HEADER_SIZE + 20u, size);
+        put_be32(reader->header, ASTRA_EXECUTABLE_HEADER_SIZE + 24u, 4u);
+        memcpy(reader->header + 160u, interpreter, size);
+    } else {
+        put_be32(reader->header, ASTRA_EXECUTABLE_HEADER_SIZE, 1u);
+        put_be32(reader->header, ASTRA_EXECUTABLE_HEADER_SIZE + 24u, 4u);
+    }
+}
+
+static uint32_t interpreter_open(void *context, const char *identity,
+                                 AstraReadSource *source)
+{
+    InterpreterResolver *resolver = context;
+
+    ++resolver->calls;
+    assert(strcmp(identity, resolver->identity) == 0);
+    if (resolver->status != ASTRA_SYSCALL_OK)
+        return resolver->status;
+    *source = (AstraReadSource){
+        .length = resolver->interpreter->length,
+        .read_at = executable_launch_read,
+        .release = executable_launch_release,
+        .context = resolver->interpreter,
+    };
+    return ASTRA_SYSCALL_OK;
+}
+
+typedef struct ExecPrepareFixture {
+    ExecutableLaunchReader *program;
+    ExecutableLaunchReader *interpreter;
+    uint32_t calls;
+} ExecPrepareFixture;
+
+static uint32_t exec_prepare(void *context, AstraExecRequest *request)
+{
+    ExecPrepareFixture *fixture = context;
+
+    assert(request != NULL);
+    assert(fixture->program->releases == 1u);
+    if (fixture->interpreter != NULL)
+        assert(fixture->interpreter->releases == 1u);
+    ++fixture->calls;
+    return ASTRA_SYSCALL_OK;
+}
+
+static void test_executable_streamed_launch(void)
+{
+    ExecutableLaunchReader program;
+    ExecutableLaunchReader interpreter;
+    InterpreterResolver resolver = {
+        .interpreter = &interpreter,
+        .status = ASTRA_SYSCALL_OK,
+        .identity = "loader.library.1",
+    };
+    AstraReadSource source;
+    uint32_t handle = 0u;
+    uint32_t id = 0u;
+
+    executable_launch_fixture(&program, NULL);
+    source = (AstraReadSource){
+        .length = program.length,
+        .read_at = executable_launch_read,
+        .release = executable_launch_release,
+        .context = &program,
+    };
+    mock_stream_dynamic = 0u;
+    mock_stream_write_calls = 0u;
+    mock_stream_commit_calls = 0u;
+    assert(astra_launch_executable_stream(
+               &source, interpreter_open, &resolver, NULL, 0u, NULL, NULL,
+               &handle, &id) == ASTRA_SYSCALL_OK);
+    assert(program.releases == 1u && resolver.calls == 0u);
+    assert(mock_stream_dynamic == 0u && mock_stream_commit_calls == 1u);
+
+    executable_launch_fixture(&program, "loader.library.1");
+    executable_launch_fixture(&interpreter, NULL);
+    source.context = &program;
+    resolver.calls = 0u;
+    mock_stream_dynamic = 0u;
+    mock_stream_write_calls = 0u;
+    mock_stream_commit_calls = 0u;
+    assert(astra_launch_executable_stream(
+               &source, interpreter_open, &resolver, NULL, 0u, NULL, NULL,
+               &handle, &id) == ASTRA_SYSCALL_OK);
+    assert(program.releases == 1u && interpreter.releases == 1u);
+    assert(resolver.calls == 1u && mock_stream_dynamic == 1u &&
+           mock_stream_commit_calls == 1u);
+
+    executable_launch_fixture(&program, "loader.library.1");
+    source.context = &program;
+    resolver.calls = 0u;
+    resolver.status = ASTRA_SYSCALL_IO_ERROR;
+    mock_stream_begin_calls = 0u;
+    assert(astra_launch_executable_stream(
+               &source, interpreter_open, &resolver, NULL, 0u, NULL, NULL,
+               &handle, &id) == ASTRA_SYSCALL_IO_ERROR);
+    assert(program.releases == 1u && resolver.calls == 1u);
+    assert(mock_stream_begin_calls == 0u);
+}
+
+static void test_executable_streamed_exec(void)
+{
+    ExecutableLaunchReader program;
+    ExecutableLaunchReader interpreter;
+    InterpreterResolver resolver = {
+        .interpreter = &interpreter,
+        .status = ASTRA_SYSCALL_OK,
+        .identity = "loader.library.1",
+    };
+    AstraReadSource source;
+    AstraExecRequest request = {
+        .size = ASTRA_EXEC_REQUEST_SIZE,
+    };
+    ExecPrepareFixture prepare = {
+        .program = &program,
+    };
+
+    executable_launch_fixture(&program, NULL);
+    program.length = sizeof(program.header);
+    source = (AstraReadSource){
+        .length = program.length,
+        .read_at = executable_launch_read,
+        .release = executable_launch_release,
+        .context = &program,
+    };
+    assert(astra_exec_executable_stream(
+               &source, interpreter_open, &resolver, exec_prepare, &prepare,
+               &request) ==
+           ASTRA_SYSCALL_OK);
+    assert(program.releases == 1u && resolver.calls == 0u);
+    assert(prepare.calls == 1u);
+    assert(mock_number == ASTRA_SYSCALL_PROCESS_EXEC);
+    assert(mock_argument0 != 0u && mock_argument1 == sizeof(program.header));
+    assert(mock_argument2 == (uint32_t)(uintptr_t)&request);
+    assert(mock_argument3 == 0u && mock_argument4 == 0u);
+
+    executable_launch_fixture(&program, "loader.library.1");
+    executable_launch_fixture(&interpreter, NULL);
+    program.length = sizeof(program.header);
+    interpreter.length = sizeof(interpreter.header);
+    source.context = &program;
+    source.length = program.length;
+    resolver.calls = 0u;
+    prepare.program = &program;
+    prepare.interpreter = &interpreter;
+    prepare.calls = 0u;
+    assert(astra_exec_executable_stream(
+               &source, interpreter_open, &resolver, exec_prepare, &prepare,
+               &request) ==
+           ASTRA_SYSCALL_OK);
+    assert(program.releases == 1u && interpreter.releases == 1u);
+    assert(resolver.calls == 1u);
+    assert(prepare.calls == 1u);
+    assert(mock_number == ASTRA_SYSCALL_PROCESS_EXEC);
+    assert(mock_argument0 != 0u && mock_argument1 == sizeof(program.header));
+    assert(mock_argument2 == (uint32_t)(uintptr_t)&request);
+    assert(mock_argument3 != 0u &&
+           mock_argument4 == sizeof(interpreter.header));
+
+    executable_launch_fixture(&program, "loader.library.1");
+    program.length = sizeof(program.header);
+    source.context = &program;
+    source.length = program.length;
+    resolver.calls = 0u;
+    resolver.status = ASTRA_SYSCALL_IO_ERROR;
+    prepare.calls = 0u;
+    assert(astra_exec_executable_stream(
+               &source, interpreter_open, &resolver, exec_prepare, &prepare,
+               &request) ==
+           ASTRA_SYSCALL_IO_ERROR);
+    assert(program.releases == 1u && resolver.calls == 1u);
+    assert(prepare.calls == 0u);
 }
 
 /*
@@ -1540,9 +2019,12 @@ main(void)
     test_memory_primitives();
     test_qsort();
     test_syscall_wrappers();
-    test_library_relocation();
     test_launch();
     test_streamed_launch();
+    test_dynamic_streamed_launch();
+    test_executable_interpreter_probe();
+    test_executable_streamed_launch();
+    test_executable_streamed_exec();
     test_exec();
     test_process_wait();
     test_current_thread_handle_cache();

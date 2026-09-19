@@ -123,7 +123,7 @@ snapshot_read(void *context, uint32_t offset, void *buffer, uint32_t length)
     while (done < length) {
         uint32_t moved = 0u;
 
-        if (process_filesystem.library->read_at(
+        if (astra_filesystem_read_at(
                 &snapshot->file, offset + done, out + done, length - done,
                 &moved) !=
                 ASTRA_VFS_OK || moved == 0u) {
@@ -158,7 +158,7 @@ snapshot_write(SnapshotFile *snapshot, const void *buffer, uint32_t length)
     while (done < length) {
         uint32_t moved = 0u;
 
-        if (process_filesystem.library->write_at(
+        if (astra_filesystem_write_at(
                 &snapshot->file, done, in + done, length - done, &moved) !=
                 ASTRA_VFS_OK || moved == 0u) {
             return 0;
@@ -175,21 +175,21 @@ probe_snapshot(uint32_t bank, AstraEventSnapshotInfo *info)
     AstraFileInfo file_info = ASTRA_FILE_INFO_INIT;
     uint32_t status;
 
-    status = process_filesystem.library->open(
+    status = astra_filesystem_open(
         &process_filesystem.filesystem, snapshot_path[bank],
         ASTRA_VFS_OPEN_READ, &snapshot.file);
     if (status != ASTRA_VFS_OK)
         return 0;
-    status = process_filesystem.library->file_info(&snapshot.file,
+    status = astra_filesystem_file_info(&snapshot.file,
                                                    &file_info);
     if (status != ASTRA_VFS_OK || file_info.byte_size > UINT32_MAX) {
-        (void)process_filesystem.library->close(&snapshot.file);
+        (void)astra_filesystem_close(&snapshot.file);
         return 0;
     }
     status = astra_event_snapshot_probe(snapshot_read, &snapshot,
                                         (uint32_t)file_info.byte_size, info) ?
         ASTRA_VFS_OK : ASTRA_VFS_ERR_INVALID;
-    (void)process_filesystem.library->close(&snapshot.file);
+    (void)astra_filesystem_close(&snapshot.file);
     return status == ASTRA_VFS_OK;
 }
 
@@ -200,19 +200,19 @@ load_snapshot(uint32_t bank, AstraEventSnapshotInfo *info)
     AstraFileInfo file_info = ASTRA_FILE_INFO_INIT;
     int loaded;
 
-    if (process_filesystem.library->open(
+    if (astra_filesystem_open(
             &process_filesystem.filesystem, snapshot_path[bank],
             ASTRA_VFS_OPEN_READ, &snapshot.file) != ASTRA_VFS_OK)
         return 0;
-    if (process_filesystem.library->file_info(&snapshot.file, &file_info) !=
+    if (astra_filesystem_file_info(&snapshot.file, &file_info) !=
             ASTRA_VFS_OK || file_info.byte_size > UINT32_MAX) {
-        (void)process_filesystem.library->close(&snapshot.file);
+        (void)astra_filesystem_close(&snapshot.file);
         return 0;
     }
     loaded = astra_event_snapshot_load(&previous_store, snapshot_read,
                                        &snapshot,
                                        (uint32_t)file_info.byte_size, info);
-    (void)process_filesystem.library->close(&snapshot.file);
+    (void)astra_filesystem_close(&snapshot.file);
     return loaded;
 }
 
@@ -228,7 +228,7 @@ start_persistence(void)
     AstraEventSnapshotInfo info[2];
     int valid[2] = {0, 0};
     uint32_t bank = 0u;
-    uint32_t status = process_filesystem.library->mkdir(
+    uint32_t status = astra_filesystem_mkdir(
         &process_filesystem.filesystem, "STORE:");
 
     if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_EXISTS) {
@@ -285,7 +285,7 @@ save_snapshot(void)
         snapshot_buffer.length < snapshot_length[bank]) {
         flags |= ASTRA_VFS_OPEN_TRUNCATE;
     }
-    if (process_filesystem.library->open(
+    if (astra_filesystem_open(
             &process_filesystem.filesystem, snapshot_path[bank], flags,
             &snapshot.file) != ASTRA_VFS_OK) {
         persistence_ready = 0;
@@ -293,11 +293,11 @@ save_snapshot(void)
     }
     saved = snapshot_write(&snapshot, snapshot_buffer.bytes,
                            snapshot_buffer.length);
-    if (saved && process_filesystem.library->sync(&snapshot.file) !=
+    if (saved && astra_filesystem_sync(&snapshot.file) !=
                      ASTRA_VFS_OK) {
         saved = 0;
     }
-    if (process_filesystem.library->close(&snapshot.file) != ASTRA_VFS_OK) {
+    if (astra_filesystem_close(&snapshot.file) != ASTRA_VFS_OK) {
         saved = 0;
     }
     if (saved) {
@@ -322,11 +322,11 @@ load_catalog(void)
     AstraFile file = ASTRA_FILE_INIT;
     uint32_t offset = 0u;
 
-    if (process_filesystem.library == NULL) {
+    if (process_filesystem.filesystem._private_assigns == NULL) {
         catalog_status = ASTRA_VFS_ERR_NOT_FOUND;
         return;
     }
-    catalog_status = process_filesystem.library->open(
+    catalog_status = astra_filesystem_open(
         &process_filesystem.filesystem, "SYS:astra_events.cat",
         ASTRA_VFS_OPEN_READ, &file);
     if (catalog_status != ASTRA_VFS_OK) {
@@ -334,7 +334,7 @@ load_catalog(void)
     }
     while (offset < sizeof(catalog_bytes)) {
         uint32_t moved = 0u;
-        uint32_t status = process_filesystem.library->read_at(
+        uint32_t status = astra_filesystem_read_at(
             &file, offset, (uint8_t *)catalog_bytes + offset,
             sizeof(catalog_bytes) - offset, &moved);
 
@@ -347,7 +347,7 @@ load_catalog(void)
         }
         offset += moved;
     }
-    (void)process_filesystem.library->close(&file);
+    (void)astra_filesystem_close(&file);
     if (!astra_event_catalog_init(&catalog, catalog_bytes, offset,
                                      ASTRA_EVENT_CATALOG_BASE)) {
         /* Read, but not this build's catalog: refused whole rather than half. */
@@ -363,7 +363,7 @@ events_start(uint32_t process_handle)
     if (events_ready) {
         return ASTRA_STATUS_OK;
     }
-    if (process_filesystem.library == NULL) {
+    if (process_filesystem.filesystem._private_assigns == NULL) {
         return ASTRA_STATUS_PROTOCOL;
     }
     load_catalog();
@@ -516,9 +516,7 @@ int astra_main(const AstraStartupInfo *startup)
     if (bootstrap == NULL || event_target == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     event_target_handle = event_target->handle;
-    /* First dynamic-library consumer on a cold boot seeds the kernel cache. */
-    status = astra_process_filesystem_open_bootstrap(&process_filesystem,
-                                                     startup);
+    status = astra_process_filesystem_open(&process_filesystem, startup);
     if (status == ASTRA_VFS_OK)
         status = events_start(startup->process_handle);
     published[0] = events_handle;

@@ -81,14 +81,22 @@ Astra Kits provide the small, coherent developer surface that
 Amiga libraries and well-designed application frameworks made possible, while
 keeping process boundaries and service protocols explicit.
 
-Implemented Kits are:
+Implemented Kit bundles are:
 
+- Runtime: `compiler.library`, `runtime.library`, `system.library`, and the
+  process interpreter `loader.library`;
+- Streams: `streams.library`;
 - Graphics: `graphics.library` and `font.library`;
 - Filesystem: `filesystem.library`;
-- Interface: `interface.library` and `input.library`;
-- Events: `events.library`;
-- Messaging: `messaging.library`;
-- Network: `network.library`.
+- Interface: `interface.library`;
+- Network: `network.library`;
+- Configuration: `config.library`;
+- C/POSIX: `libc.library` and `terminfo.library`.
+
+Messaging and event emission remain NDK API groups, not alias DSOs. Port and
+resource operations resolve through `system.library`; structured event, log,
+trace, and event-catalog operations resolve through `runtime.library`. There
+is one implementation and one eager-loader path for each operation.
 
 The remaining planned Kits are:
 
@@ -100,24 +108,25 @@ The remaining planned Kits are:
 - Application: launch, lifecycle, commands and settings;
 - Interface extensions: remaining views and controls, and drag/drop;
 - Media: audio streams, voices, clocks and synchronization;
-- POSIX: libc, file descriptors, paths, PTYs, jobs and compatibility.
+- POSIX extensions beyond the implemented libc, file-descriptor, path, signal,
+  threading, and terminal foundation.
 
 The durable boundary remains a C-compatible ABI plus versioned service
 messages. C++ and other language wrappers may provide move-only ownership,
 RAII, containers, and UI classes without exposing compiler object layouts,
 exceptions, RTTI, or name mangling across a process or Kit boundary.
 
-`messaging.library` ABI 1.0 exposes the existing bounded ports, timed send and
+The Messaging API group exposes the existing bounded ports, timed send and
 receive, handle duplication, and capability-transfer primitives. It is direct
 process messaging, not an in-process substitute for system event publication.
 A future event broker can build pub/sub on these primitives when there is a
 real system service to own subscriptions, filtering, and backpressure.
 
-`events.library` ABI 1.0 exposes the existing diagnostic event emitter, log,
-trace reader, and event catalog. It records observable system events; it does
-not replace interprocess messaging.
+The Events API group exposes the existing diagnostic event emitter, log, trace
+reader, and event catalog through `runtime.library`. It records observable
+system events; it does not replace interprocess messaging.
 
-`interface.library` ABI 4.1 exposes the retained control context, TextSurface,
+`interface.library` ABI 5.1 exposes the retained control context, TextSurface,
 typed clipboard, per-document undo/redo, the shared UTF-8 piece-table model,
 and retained fields through the
 public NDK. Label, Button, and the other primitive controls share intrinsic
@@ -168,17 +177,21 @@ process-local.
 
 **IMPLEMENTED:** the image builder validates `.kit` manifests and library
 identities, then writes the newest compatible provider for each `(name, ABI)`
-under `LIBS:.providers/`. `OpenLibrary(name, ABI)` first asks Axiom to attach a
-compatible resident identity; on a miss it reads that bounded provider record,
-with a manifest sweep retained for older images. `CloseLibrary()` releases the
-process reference. Axiom maps immutable pages at a common process-local address
-and shares their physical frames; writable pages are copied privately from the
-cached initial image. Libraries are constrained big-endian
-ELF32/m68k images with fixed metadata and export-table offsets, eager
-`R_68K_RELATIVE` relocation, and no PLT or lazy binding. Process teardown is the
-hard cleanup boundary, so a missed `CloseLibrary()` cannot pin mappings after
-the process dies. The bounded global cache reclaims entries with no process
-mapping.
+under `LIBS:.providers/`. Every normal executable names its direct dependencies
+with `DT_NEEDED`. The supervisor resolves only `PT_INTERP`; the one user-space
+loader resolves and maps the exact installed dependency closure, resolves
+versioned C symbols eagerly, establishes TLS, seals RELRO, and runs
+constructors. Both use the same provider-index resolver, and neither scans Kit
+directories at launch. There is no parallel library-open API and no typed
+function-table ABI.
+
+Axiom shares immutable physical frames for an exact library identity while
+keeping writable pages, TLS, and loader state process-local. A process owns one
+reference to each member of its resolved closure; process teardown releases the
+entire closure even after an abnormal exit. Libraries are constrained
+big-endian ELF32/m68k `ET_DYN` images with explicit SONAMEs, dependencies,
+symbol versions, and eager relocations. Lazy binding and unresolved imports are
+rejected.
 
 ### 5.1 Version identity and resolution
 

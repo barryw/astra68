@@ -91,13 +91,12 @@ _Static_assert(offsetof(KernelThread, kernel_stack_top) ==
                "assembly thread stack offset changed");
 #if defined(__m68k__)
 /*
- * 180 until the activity arrived; the four bytes it costs are 64 across the
- * whole pool of sixteen, which is what correlating a request across four
- * processes is worth. The assertion is deliberate: this record is multiplied
- * by KERNEL_THREAD_MAX and sits in kernel RAM, so growing it is a decision
- * rather than an accident.
+ * 196 until per-thread runtime accounting arrived; its eight bytes cost 256
+ * across the complete pool of 32. The assertion is deliberate: this record is
+ * multiplied by KERNEL_THREAD_MAX and sits in kernel RAM, so growing it is a
+ * decision rather than an accident.
  */
-_Static_assert(sizeof(KernelThread) == 196u,
+_Static_assert(sizeof(KernelThread) == 204u,
                "thread record size changed; update the memory budget");
 _Static_assert(sizeof(KernelThreadWaitRegistration) == 8u,
                "wait registration memory budget changed");
@@ -1991,6 +1990,7 @@ bool kernel_thread_snapshot(uint32_t slot, KernelThreadSnapshot *snapshot)
     snapshot->run_count = thread->run_count;
     snapshot->syscall_count = thread->syscall_count;
     snapshot->activity = thread->activity;
+    snapshot->runtime_cycles = thread->runtime_cycles;
     snapshot->self_handle = thread->self_handle;
     snapshot->process_slot = thread->process_slot;
     snapshot->stack_slot = thread->stack_slot;

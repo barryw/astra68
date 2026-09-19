@@ -4,8 +4,6 @@
 #include "pmmu.h"
 #include "thread.h"
 
-#include <astra/library.h>
-
 #include <stddef.h>
 
 /* Object tables live above the frame metadata; see kernel.ld. */
@@ -40,13 +38,15 @@
  * One entry per physical frame: the alias count above, the mapping class
  * below. It was a byte split four and four, which capped a shared frame at
  * fifteen aliases and therefore capped the whole machine at fifteen processes.
- * Sixteen bits split eight and eight costs one more byte per frame -- 32 KiB
- * across 128 MiB -- and takes the ceiling off.
+ * The low byte is the mapping class and the remaining 24 bits count aliases.
+ * That covers the complete 16-bit PID namespace; no deployment-sized process
+ * constant participates in VM admission.
  */
 #define VM_MAPPING_COUNT_SHIFT 8u
 #define VM_MAPPING_CLASS_MASK 0x00ffu
 #define VM_MAPPING_PRIVATE_CLASS 0x0fu
 #define VM_MAPPING_COW_CLASS 0x0eu
+#define VM_MAPPING_DYNAMIC_CLASS 0xfeu
 #define VM_MAPPING_AREA_CLASS 0xffu
 
 _Static_assert(KERNEL_VM_PRIVATE_END == KERNEL_THREAD_STACK_BASE,
@@ -59,6 +59,15 @@ _Static_assert((KERNEL_VM_PRIVATE_BASE & (KERNEL_VM_PRIVATE_SLOT_SIZE - 1u)) ==
                    (KERNEL_VM_PRIVATE_END &
                     (KERNEL_VM_PRIVATE_SLOT_SIZE - 1u)) == 0u,
                "private VM window must follow PMMU root slots");
+
+static KernelVmStatus map_owned_page(KernelAddressSpace *space,
+                                     uint32_t virtual_address,
+                                     uint32_t physical_address,
+                                     uint32_t permissions,
+                                     KernelFrameState required_state,
+                                     bool cache_inhibit,
+                                     uint32_t frame_owner,
+                                     uint32_t admitted_regions);
 
 #if defined(KERNEL_VM_HOST_TEST)
 #define VM_KERNEL_THREAD_STACKS_START \
@@ -102,7 +111,7 @@ static uint32_t current_user_root;
  * translation as the page tables, and casting that qualifier away to keep a
  * plain pointer would be lying about where the storage is.
  */
-static volatile uint16_t *mapped_user_frames;
+static volatile uint32_t *mapped_user_frames;
 static uint32_t mapped_user_frame_count;
 static KernelAddressSpace *address_space_head;
 static KernelVmStats vm_stats;
@@ -403,13 +412,15 @@ static bool shared_mapping_class(uint32_t virtual_address,
 
     if (mapping_class == NULL)
         return false;
-    if (virtual_address >= ASTRA_LIBRARY_BASE &&
-        virtual_address < ASTRA_LIBRARY_BASE +
-                              (ASTRA_LIBRARY_SLOT_COUNT *
-                               ASTRA_LIBRARY_SLOT_SIZE)) {
-        /* Library frames always keep one globally assigned virtual slot. */
-        *mapping_class = (uint8_t)((virtual_address - ASTRA_LIBRARY_BASE) /
-                                  ASTRA_LIBRARY_SLOT_SIZE);
+    if (virtual_address >= KERNEL_VM_DYNAMIC_BASE &&
+        virtual_address < KERNEL_VM_DYNAMIC_END) {
+        /*
+         * MC68040 caches are physically addressed. Immutable image pages may
+         * therefore be placed at whatever exact extent is free in each
+         * process; assigning a machine-wide virtual slot adds fragmentation
+         * and a count limit without preventing a hardware alias hazard.
+         */
+        *mapping_class = VM_MAPPING_DYNAMIC_CLASS;
         return true;
     }
     if (virtual_address < KERNEL_VM_AREA_BASE)
@@ -422,31 +433,29 @@ static bool shared_mapping_class(uint32_t virtual_address,
     return true;
 }
 
-static bool library_mapping_address(uint32_t virtual_address)
+static bool dynamic_mapping_address(uint32_t virtual_address)
 {
-    return virtual_address >= ASTRA_LIBRARY_BASE &&
-           virtual_address < ASTRA_LIBRARY_BASE +
-                                 (ASTRA_LIBRARY_SLOT_COUNT *
-                                  ASTRA_LIBRARY_SLOT_SIZE);
+    return virtual_address >= KERNEL_VM_DYNAMIC_BASE &&
+           virtual_address < KERNEL_VM_DYNAMIC_END;
 }
 
 static bool frame_mapping_can_add(uint32_t physical_address,
                                   KernelFrameState state,
                                   uint32_t virtual_address)
 {
-    uint16_t encoded = mapped_user_frames[frame_index(physical_address)];
-    uint16_t count = (uint16_t)(encoded >> VM_MAPPING_COUNT_SHIFT);
+    uint32_t encoded = mapped_user_frames[frame_index(physical_address)];
+    uint32_t count = encoded >> VM_MAPPING_COUNT_SHIFT;
     uint8_t mapping_class;
 
     if (private_mapping_state(state))
         return count == 0u;
     if (cow_mapping_state(state))
-        return count < KERNEL_VM_SHARED_ALIAS_MAX &&
+        return count < UINT16_MAX &&
                (count == 0u ||
                 (encoded & VM_MAPPING_CLASS_MASK) == VM_MAPPING_COW_CLASS);
     if (state != KERNEL_FRAME_SHARED ||
         !shared_mapping_class(virtual_address, &mapping_class) ||
-        count >= KERNEL_VM_SHARED_ALIAS_MAX)
+        count >= UINT16_MAX)
         return false;
     return count == 0u ||
            (encoded & VM_MAPPING_CLASS_MASK) == mapping_class;
@@ -457,28 +466,27 @@ static bool frame_mapping_add(uint32_t physical_address,
                               uint32_t virtual_address)
 {
     uint32_t index = frame_index(physical_address);
-    uint16_t encoded = mapped_user_frames[index];
-    uint16_t count = (uint16_t)(encoded >> VM_MAPPING_COUNT_SHIFT);
+    uint32_t encoded = mapped_user_frames[index];
+    uint32_t count = encoded >> VM_MAPPING_COUNT_SHIFT;
     uint8_t mapping_class;
 
     if (!frame_mapping_can_add(physical_address, state, virtual_address))
         return false;
     if (private_mapping_state(state)) {
         mapped_user_frames[index] =
-            (uint16_t)((1u << VM_MAPPING_COUNT_SHIFT) |
-                       VM_MAPPING_PRIVATE_CLASS);
+            (1u << VM_MAPPING_COUNT_SHIFT) | VM_MAPPING_PRIVATE_CLASS;
         return true;
     }
     if (cow_mapping_state(state)) {
         mapped_user_frames[index] =
-            (uint16_t)(((count + 1u) << VM_MAPPING_COUNT_SHIFT) |
-                       VM_MAPPING_COW_CLASS);
+            ((count + 1u) << VM_MAPPING_COUNT_SHIFT) |
+            VM_MAPPING_COW_CLASS;
         return true;
     }
     if (!shared_mapping_class(virtual_address, &mapping_class))
         return false;
     mapped_user_frames[index] =
-        (uint16_t)(((count + 1u) << VM_MAPPING_COUNT_SHIFT) | mapping_class);
+        ((count + 1u) << VM_MAPPING_COUNT_SHIFT) | mapping_class;
     return true;
 }
 
@@ -487,8 +495,8 @@ static bool frame_mapping_remove(uint32_t physical_address,
                                  uint32_t virtual_address)
 {
     uint32_t index = frame_index(physical_address);
-    uint16_t encoded = mapped_user_frames[index];
-    uint16_t count = (uint16_t)(encoded >> VM_MAPPING_COUNT_SHIFT);
+    uint32_t encoded = mapped_user_frames[index];
+    uint32_t count = encoded >> VM_MAPPING_COUNT_SHIFT;
     uint8_t mapping_class;
 
     if (private_mapping_state(state)) {
@@ -504,8 +512,7 @@ static bool frame_mapping_remove(uint32_t physical_address,
             return false;
         --count;
         mapped_user_frames[index] = count == 0u ? 0u :
-            (uint16_t)((count << VM_MAPPING_COUNT_SHIFT) |
-                       VM_MAPPING_COW_CLASS);
+            (count << VM_MAPPING_COUNT_SHIFT) | VM_MAPPING_COW_CLASS;
         return true;
     }
     if (state != KERNEL_FRAME_SHARED || count == 0u ||
@@ -514,7 +521,7 @@ static bool frame_mapping_remove(uint32_t physical_address,
         return false;
     --count;
     mapped_user_frames[index] = count == 0u ? 0u :
-        (uint16_t)((count << VM_MAPPING_COUNT_SHIFT) | mapping_class);
+        (count << VM_MAPPING_COUNT_SHIFT) | mapping_class;
     return true;
 }
 
@@ -933,6 +940,47 @@ static bool private_address_reserved(const KernelAddressSpace *space,
                                private_slot(virtual_address));
 }
 
+static KernelVmStatus private_slot_available(const KernelAddressSpace *space,
+                                             uint32_t slot,
+                                             bool *available)
+{
+    uint32_t base;
+
+    if (slot >= KERNEL_VM_PRIVATE_SLOT_COUNT || available == NULL)
+        return KERNEL_VM_INVALID_ARGUMENT;
+    *available = false;
+    if (private_slot_marked(space->private_reserved, slot))
+        return KERNEL_VM_OK;
+    base = KERNEL_VM_PRIVATE_BASE + slot * KERNEL_VM_PRIVATE_SLOT_SIZE;
+    for (uint32_t offset = 0u; offset < KERNEL_VM_PRIVATE_SLOT_SIZE;
+         offset += KERNEL_PAGE_SIZE) {
+        KernelVmMapping mapping = probe_root(space->root_physical,
+                                             base + offset, NULL);
+
+        if (mapping == KERNEL_VM_MAPPING_UNKNOWN)
+            return KERNEL_VM_CORRUPT;
+        if (mapping != KERNEL_VM_MAPPING_UNMAPPED)
+            return KERNEL_VM_OK;
+    }
+    *available = true;
+    return KERNEL_VM_OK;
+}
+
+static void private_reserve_slots(KernelAddressSpace *space, uint32_t first,
+                                  uint32_t slots, uint32_t permissions,
+                                  uint32_t *virtual_base,
+                                  uint32_t *mapped_span)
+{
+    for (uint32_t slot = first; slot < first + slots; ++slot) {
+        private_slot_set(space->private_reserved, slot);
+        if ((permissions & KERNEL_VM_WRITE) != 0u)
+            private_slot_set(space->private_writable, slot);
+    }
+    *virtual_base = KERNEL_VM_PRIVATE_BASE +
+                    first * KERNEL_VM_PRIVATE_SLOT_SIZE;
+    *mapped_span = slots * KERNEL_VM_PRIVATE_SLOT_SIZE;
+}
+
 KernelVmStatus kernel_vm_private_reserve(KernelAddressSpace *space,
                                          uint32_t byte_size,
                                          uint32_t permissions,
@@ -956,24 +1004,13 @@ KernelVmStatus kernel_vm_private_reserve(KernelAddressSpace *space,
     if (slots == 0u || slots > KERNEL_VM_PRIVATE_SLOT_COUNT)
         return KERNEL_VM_OUT_OF_MEMORY;
     for (uint32_t slot = 0u; slot < KERNEL_VM_PRIVATE_SLOT_COUNT; ++slot) {
-        uint32_t base = KERNEL_VM_PRIVATE_BASE +
-                        slot * KERNEL_VM_PRIVATE_SLOT_SIZE;
-        bool unmapped = true;
+        bool available;
+        KernelVmStatus status = private_slot_available(space, slot,
+                                                       &available);
 
-        for (uint32_t offset = 0u; offset < KERNEL_VM_PRIVATE_SLOT_SIZE;
-             offset += KERNEL_PAGE_SIZE) {
-            KernelVmMapping mapping = probe_root(
-                space->root_physical, base + offset, NULL);
-
-            if (mapping == KERNEL_VM_MAPPING_UNKNOWN)
-                return KERNEL_VM_CORRUPT;
-            if (mapping != KERNEL_VM_MAPPING_UNMAPPED) {
-                unmapped = false;
-                break;
-            }
-        }
-        if (unmapped &&
-            !private_slot_marked(space->private_reserved, slot)) {
+        if (status != KERNEL_VM_OK)
+            return status;
+        if (available) {
             if (run == 0u)
                 first = slot;
             if (++run == slots)
@@ -984,14 +1021,58 @@ KernelVmStatus kernel_vm_private_reserve(KernelAddressSpace *space,
     }
     if (run != slots)
         return KERNEL_VM_OUT_OF_MEMORY;
-    for (uint32_t slot = first; slot < first + slots; ++slot) {
-        private_slot_set(space->private_reserved, slot);
-        if ((permissions & KERNEL_VM_WRITE) != 0u)
-            private_slot_set(space->private_writable, slot);
+    private_reserve_slots(space, first, slots, permissions, virtual_base,
+                          mapped_span);
+    return KERNEL_VM_OK;
+}
+
+KernelVmStatus kernel_vm_private_reserve_largest(
+    KernelAddressSpace *space, uint32_t minimum_byte_size,
+    uint32_t permissions, uint32_t *virtual_base, uint32_t *mapped_span)
+{
+    uint32_t minimum_slots;
+    uint32_t run = 0u;
+    uint32_t run_first = 0u;
+    uint32_t best_run = 0u;
+    uint32_t best_first = 0u;
+
+    if (!initialized || space == NULL || space->initialized == 0u ||
+        minimum_byte_size == 0u || virtual_base == NULL ||
+        mapped_span == NULL || (permissions & KERNEL_VM_READ) == 0u ||
+        (permissions & KERNEL_VM_EXEC) != 0u ||
+        (permissions & ~(KERNEL_VM_READ | KERNEL_VM_WRITE)) != 0u)
+        return KERNEL_VM_INVALID_ARGUMENT;
+    *virtual_base = 0u;
+    *mapped_span = 0u;
+    minimum_slots = minimum_byte_size / KERNEL_VM_PRIVATE_SLOT_SIZE +
+                    (minimum_byte_size % KERNEL_VM_PRIVATE_SLOT_SIZE != 0u ?
+                         1u : 0u);
+    if (minimum_slots == 0u || minimum_slots > KERNEL_VM_PRIVATE_SLOT_COUNT)
+        return KERNEL_VM_OUT_OF_MEMORY;
+
+    for (uint32_t slot = 0u; slot < KERNEL_VM_PRIVATE_SLOT_COUNT; ++slot) {
+        bool available;
+        KernelVmStatus status = private_slot_available(space, slot,
+                                                       &available);
+
+        if (status != KERNEL_VM_OK)
+            return status;
+        if (available) {
+            if (run == 0u)
+                run_first = slot;
+            ++run;
+            if (run > best_run) {
+                best_run = run;
+                best_first = run_first;
+            }
+        } else {
+            run = 0u;
+        }
     }
-    *virtual_base = KERNEL_VM_PRIVATE_BASE +
-                    first * KERNEL_VM_PRIVATE_SLOT_SIZE;
-    *mapped_span = slots * KERNEL_VM_PRIVATE_SLOT_SIZE;
+    if (best_run < minimum_slots)
+        return KERNEL_VM_OUT_OF_MEMORY;
+    private_reserve_slots(space, best_first, best_run, permissions,
+                          virtual_base, mapped_span);
     return KERNEL_VM_OK;
 }
 
@@ -1027,11 +1108,15 @@ KernelVmStatus kernel_vm_private_fault(KernelAddressSpace *space,
     if (memory_status != KERNEL_MEMORY_OK)
         return memory_status == KERNEL_MEMORY_OUT_OF_MEMORY ?
             KERNEL_VM_OUT_OF_MEMORY : KERNEL_VM_CORRUPT;
-    status = kernel_vm_map_page(
+    /* Private pages enter only through this demand-fault path.  The generic
+     * process mapper deliberately cannot populate the private-memory ABI. */
+    status = map_owned_page(
         space, page, physical,
         KERNEL_VM_READ |
             (private_slot_marked(space->private_writable, slot) ?
-                 KERNEL_VM_WRITE : 0u));
+                 KERNEL_VM_WRITE : 0u),
+        KERNEL_FRAME_PROCESS, false, space->owner,
+        1u << ASTRA_ADDRESS_REGION_PRIVATE_MEMORY);
     if (status == KERNEL_VM_OK) {
         if (kernel_memory_release(physical, 1u, space->owner) !=
             KERNEL_MEMORY_OK)
@@ -1162,7 +1247,7 @@ KernelVmStatus kernel_vm_init(void)
         if (!kernel_memory_stats(&memory))
             return KERNEL_VM_CORRUPT;
         mapped_user_frame_count = memory.total_frames;
-        bytes = mapped_user_frame_count * (uint32_t)sizeof(uint16_t);
+        bytes = mapped_user_frame_count * (uint32_t)sizeof(uint32_t);
         table_frames = (bytes + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE;
         if (kernel_memory_alloc_zeroed_tagged(
                 KERNEL_ALLOCATION_SITE_VM_PAGE_TABLE, table_frames, 1u,
@@ -1175,7 +1260,7 @@ KernelVmStatus kernel_vm_init(void)
          * address, which on a host is somebody else's memory.
          */
         mapped_user_frames =
-            (volatile uint16_t *)(volatile void *)physical_words(physical);
+            (volatile uint32_t *)(volatile void *)physical_words(physical);
         if (mapped_user_frames == NULL) {
             (void)kernel_memory_release(physical, table_frames,
                                         VM_KERNEL_OWNER);
@@ -1251,6 +1336,14 @@ KernelVmStatus kernel_vm_create_address_space(uint32_t owner,
     space->owner = owner;
     space->table_pages = 1u;
     space->initialized = 1u;
+    /*
+     * One allocator state belongs to the process, not to whichever ELF image
+     * happens to be executing.  Reserving its stable control slot here lets
+     * the bootstrap loader and runtime.library attach to the same state.  No
+     * frame is consumed until the control page is first touched.
+     */
+    private_slot_set(space->private_reserved, 0u);
+    private_slot_set(space->private_writable, 0u);
     if (!register_address_space(space)) {
         (void)kernel_memory_release(space->root_physical, 1u, owner);
         clear_space(space);
@@ -1297,7 +1390,7 @@ static KernelVmStatus cow_rehome_before_unmap(KernelAddressSpace *space,
                                                uint32_t physical_address,
                                                KernelFrameInfo *frame)
 {
-    uint16_t encoded;
+    uint32_t encoded;
     KernelAddressSpace *survivor;
 
     if (!cow_mapping_state((KernelFrameState)frame->state) ||
@@ -1327,16 +1420,24 @@ static KernelVmStatus map_owned_page(KernelAddressSpace *space,
                                      uint32_t permissions,
                                      KernelFrameState required_state,
                                      bool cache_inhibit,
-                                     uint32_t frame_owner)
+                                     uint32_t frame_owner,
+                                     uint32_t admitted_regions)
 {
     VmPagePath path;
     KernelFrameInfo frame;
+    AstraAddressRegion region;
     uint32_t allocated_tables;
     uint32_t released_tables;
     KernelVmStatus status;
 
+    region = astra_address_region(virtual_address, KERNEL_PAGE_SIZE);
     if (!initialized || space == NULL || space->initialized == 0u ||
         !valid_user_page(virtual_address) ||
+        region == ASTRA_ADDRESS_REGION_INVALID ||
+        (admitted_regions & (1u << (uint32_t)region)) == 0u ||
+        (region == ASTRA_ADDRESS_REGION_PRIVATE_MEMORY &&
+         required_state == KERNEL_FRAME_PROCESS &&
+         !private_address_reserved(space, virtual_address)) ||
         (physical_address & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
         (permissions & KERNEL_VM_READ) == 0u ||
         (permissions & (KERNEL_VM_WRITE | KERNEL_VM_EXEC)) ==
@@ -1438,9 +1539,16 @@ KernelVmStatus kernel_vm_map_page(KernelAddressSpace *space,
                                   uint32_t physical_address,
                                   uint32_t permissions)
 {
+    const uint32_t process_regions =
+        (1u << ASTRA_ADDRESS_REGION_STARTUP) |
+        (1u << ASTRA_ADDRESS_REGION_EXECUTABLE) |
+        (1u << ASTRA_ADDRESS_REGION_DYNAMIC_IMAGES) |
+        (1u << ASTRA_ADDRESS_REGION_THREAD_STACKS) |
+        (1u << ASTRA_ADDRESS_REGION_THREAD_TLS);
+
     return map_owned_page(space, virtual_address, physical_address,
                           permissions, KERNEL_FRAME_PROCESS, false,
-                          space->owner);
+                          space->owner, process_regions);
 }
 
 KernelVmStatus kernel_vm_map_transfer_page(KernelAddressSpace *space,
@@ -1451,7 +1559,8 @@ KernelVmStatus kernel_vm_map_transfer_page(KernelAddressSpace *space,
     if ((permissions & KERNEL_VM_EXEC) != 0u)
         return KERNEL_VM_INVALID_ARGUMENT;
     return map_owned_page(space, virtual_address, physical_address,
-                          permissions, KERNEL_FRAME_DMA, true, space->owner);
+                          permissions, KERNEL_FRAME_DMA, true, space->owner,
+                          1u << ASTRA_ADDRESS_REGION_DMA);
 }
 
 KernelVmStatus kernel_vm_map_shared_page(KernelAddressSpace *space,
@@ -1464,7 +1573,9 @@ KernelVmStatus kernel_vm_map_shared_page(KernelAddressSpace *space,
         return KERNEL_VM_INVALID_ARGUMENT;
     return map_owned_page(space, virtual_address, physical_address,
                           permissions, KERNEL_FRAME_SHARED, false,
-                          frame_owner);
+                          frame_owner,
+                          (1u << ASTRA_ADDRESS_REGION_DYNAMIC_IMAGES) |
+                              (1u << ASTRA_ADDRESS_REGION_SHARED_AREAS));
 }
 
 KernelVmStatus kernel_vm_map_cow_page(KernelAddressSpace *space,
@@ -1479,7 +1590,13 @@ KernelVmStatus kernel_vm_map_cow_page(KernelAddressSpace *space,
                           KERNEL_VM_READ,
                           writable ? KERNEL_FRAME_COW_WRITE :
                                      KERNEL_FRAME_COW_READ_ONLY,
-                          false, frame_owner);
+                          false, frame_owner,
+                          (1u << ASTRA_ADDRESS_REGION_STARTUP) |
+                              (1u << ASTRA_ADDRESS_REGION_EXECUTABLE) |
+                              (1u << ASTRA_ADDRESS_REGION_DYNAMIC_IMAGES) |
+                              (1u << ASTRA_ADDRESS_REGION_PRIVATE_MEMORY) |
+                              (1u << ASTRA_ADDRESS_REGION_THREAD_STACKS) |
+                              (1u << ASTRA_ADDRESS_REGION_THREAD_TLS));
 }
 
 KernelVmStatus kernel_vm_promote_page_to_cow(KernelAddressSpace *space,
@@ -1582,7 +1699,7 @@ KernelVmStatus kernel_vm_cow_fault(KernelAddressSpace *space,
     uint32_t descriptor;
     uint32_t physical;
     uint32_t replacement = 0u;
-    uint16_t encoded;
+    uint32_t encoded;
     KernelFrameInfo frame;
 
     virtual_address &= ~(KERNEL_PAGE_SIZE - 1u);
@@ -1805,7 +1922,7 @@ KernelVmStatus kernel_vm_clone_address_space(
 
                     if ((descriptor & VM_DESC_WRITE_PROTECT) == 0u)
                         permissions |= KERNEL_VM_WRITE;
-                    else if (library_mapping_address(virtual_address))
+                    else if (dynamic_mapping_address(virtual_address))
                         permissions |= KERNEL_VM_EXEC;
                     result = kernel_vm_map_shared_page(
                         destination, virtual_address, physical, frame.owner,
@@ -1947,7 +2064,7 @@ KernelVmStatus kernel_vm_map_shared_range(
         ((permissions & KERNEL_VM_WRITE) != 0u &&
          (permissions & KERNEL_VM_EXEC) != 0u) ||
         ((permissions & KERNEL_VM_EXEC) != 0u &&
-         !library_mapping_address(virtual_address)) ||
+         !dynamic_mapping_address(virtual_address)) ||
         (permissions &
          ~(KERNEL_VM_READ | KERNEL_VM_WRITE | KERNEL_VM_EXEC)) != 0u)
         return KERNEL_VM_INVALID_ARGUMENT;
@@ -1984,7 +2101,9 @@ KernelVmStatus kernel_vm_map_shared_range(
         result = map_owned_page(
             space, virtual_address + mapped * KERNEL_PAGE_SIZE,
             physical_pages[mapped], permissions, KERNEL_FRAME_SHARED,
-            false, frame_owner);
+            false, frame_owner,
+            (1u << ASTRA_ADDRESS_REGION_DYNAMIC_IMAGES) |
+                (1u << ASTRA_ADDRESS_REGION_SHARED_AREAS));
         if (result != KERNEL_VM_OK)
             goto rollback;
 #if defined(KERNEL_VM_HOST_TEST)
@@ -2015,6 +2134,87 @@ rollback:
             return KERNEL_VM_CORRUPT;
     }
     return result;
+}
+
+static KernelVmStatus validate_read_only_range(
+    KernelAddressSpace *space, const KernelVmPageRange *range)
+{
+    if (!initialized || space == NULL || space->initialized == 0u ||
+        range == NULL || range->page_count == 0u ||
+        (range->virtual_address & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
+        !valid_user_page(range->virtual_address) ||
+        range->page_count - 1u >
+            (KERNEL_VM_USER_MAX - range->virtual_address) / KERNEL_PAGE_SIZE)
+        return KERNEL_VM_INVALID_ARGUMENT;
+    for (uint32_t page = 0u; page < range->page_count; ++page) {
+        uint32_t address = range->virtual_address + page * KERNEL_PAGE_SIZE;
+        VmPagePath path;
+        KernelFrameInfo frame;
+        uint32_t descriptor;
+        KernelVmStatus status = page_path(space->root_physical, address,
+                                          &path);
+
+        if (status != KERNEL_VM_OK)
+            return status;
+        descriptor = path.page_table[VM_PAGE_INDEX(address)];
+        if (descriptor == VM_DESC_INVALID)
+            return KERNEL_VM_NOT_MAPPED;
+        if ((descriptor & VM_DESC_TYPE_MASK) != VM_DESC_PAGE ||
+            !kernel_memory_frame_info(descriptor & VM_DESC_PAGE_ADDRESS,
+                                      &frame))
+            return KERNEL_VM_CORRUPT;
+        if (frame.owner != space->owner ||
+            frame.state != KERNEL_FRAME_PROCESS || frame.references == 0u)
+            return KERNEL_VM_NOT_OWNED;
+    }
+    return KERNEL_VM_OK;
+}
+
+KernelVmStatus kernel_vm_protect_read_only_ranges(
+    KernelAddressSpace *space, const KernelVmPageRange *ranges,
+    uint32_t range_count)
+{
+    if (ranges == NULL || range_count == 0u)
+        return KERNEL_VM_INVALID_ARGUMENT;
+
+    /* Validation is a separate pass: failure never leaves a partial seal. */
+    for (uint32_t range = 0u; range < range_count; ++range) {
+        KernelVmStatus status = validate_read_only_range(space,
+                                                         &ranges[range]);
+
+        if (status != KERNEL_VM_OK)
+            return status;
+    }
+
+    /* No address-space mutation can interleave on the single MC68040. */
+    for (uint32_t range = 0u; range < range_count; ++range) {
+        for (uint32_t page = 0u; page < ranges[range].page_count; ++page) {
+            uint32_t address = ranges[range].virtual_address +
+                               page * KERNEL_PAGE_SIZE;
+            VmPagePath path;
+            uint32_t index = VM_PAGE_INDEX(address);
+            KernelVmStatus status = page_path(space->root_physical, address,
+                                              &path);
+
+            if (status != KERNEL_VM_OK ||
+                (path.page_table[index] & VM_DESC_TYPE_MASK) != VM_DESC_PAGE)
+                return KERNEL_VM_CORRUPT;
+            if ((path.page_table[index] & VM_DESC_WRITE_PROTECT) != 0u)
+                continue;
+            path.page_table[index] |= VM_DESC_WRITE_PROTECT;
+            flush_page(address);
+        }
+    }
+    return KERNEL_VM_OK;
+}
+
+KernelVmStatus kernel_vm_protect_read_only(KernelAddressSpace *space,
+                                           uint32_t virtual_address,
+                                           uint32_t page_count)
+{
+    const KernelVmPageRange range = {virtual_address, page_count};
+
+    return kernel_vm_protect_read_only_ranges(space, &range, 1u);
 }
 
 KernelVmStatus kernel_vm_unmap_shared_range(

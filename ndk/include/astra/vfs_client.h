@@ -191,6 +191,16 @@ typedef struct AstraVfsClient {
 uint32_t astra_vfs_connect(AstraVfsClient *client, AstraVfsTransport transport,
                            void *context);
 /**
+ * Connect a client to a filesystem service capability using Astra's native
+ * transport. The Filesystem Kit owns the transport choice and its per-thread
+ * state; callers provide only the service capability granted at startup.
+ * @param client Unconnected client storage to initialize.
+ * @param service Filesystem service capability handle.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_vfs_client_connect_service(AstraVfsClient *client,
+                                          uint32_t service);
+/**
  * Disconnect a client and invalidate its negotiated session.
  * @param client Connected client.
  * @return ASTRA_VFS_* status.
@@ -225,6 +235,37 @@ uint32_t astra_vfs_open_mode(AstraVfsClient *client, const char *path,
                              uint32_t flags, uint16_t create_mode,
                              AstraVfsFile *file, uint64_t *size,
                              uint16_t *kind);
+/**
+ * Open a relative path beneath an already-open directory.
+ * @param client Connected client.
+ * @param directory Open directory token that anchors resolution.
+ * @param path Nonempty relative UTF-8 path.
+ * @param flags ASTRA_VFS_OPEN_* flags.
+ * @param file Receives an open file token.
+ * @param size Receives byte length.
+ * @param kind Receives ASTRA_VFS_NODE_* kind.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_vfs_open_at(AstraVfsClient *client, AstraVfsFile directory,
+                           const char *path, uint32_t flags,
+                           AstraVfsFile *file, uint64_t *size,
+                           uint16_t *kind);
+/**
+ * Open a relative path with explicit creation permissions.
+ * @param client Connected client.
+ * @param directory Open directory token that anchors resolution.
+ * @param path Nonempty relative UTF-8 path.
+ * @param flags ASTRA_VFS_OPEN_* flags.
+ * @param create_mode POSIX permission bits used only when creating.
+ * @param file Receives an open file token.
+ * @param size Receives byte length when non-NULL.
+ * @param kind Receives ASTRA_VFS_NODE_* kind when non-NULL.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_vfs_open_at_mode(
+    AstraVfsClient *client, AstraVfsFile directory, const char *path,
+    uint32_t flags, uint16_t create_mode, AstraVfsFile *file,
+    uint64_t *size, uint16_t *kind);
 /**
  * Close an open backend file token.
  * @param client Connected client.
@@ -267,7 +308,8 @@ uint32_t astra_vfs_write(AstraVfsClient *client, AstraVfsFile file,
  * Write bytes and return the backend-selected resulting position.
  * @param client Connected client.
  * @param file Open file token.
- * @param offset Byte offset or append sentinel defined by the wire ABI.
+ * @param offset Byte offset.
+ * @param flags ASTRA_VFS_WRITE_* operation flags.
  * @param buffer Source bytes.
  * @param length Requested byte count.
  * @param moved Receives bytes written.
@@ -275,9 +317,9 @@ uint32_t astra_vfs_write(AstraVfsClient *client, AstraVfsFile file,
  * @return ASTRA_VFS_* status.
  */
 uint32_t astra_vfs_write_position(AstraVfsClient *client, AstraVfsFile file,
-                                  uint64_t offset, const void *buffer,
-                                  uint32_t length, uint32_t *moved,
-                                  uint64_t *position);
+                                  uint64_t offset, uint32_t flags,
+                                  const void *buffer, uint32_t length,
+                                  uint32_t *moved, uint64_t *position);
 /**
  * Make an open file's completed writes durable.
  * @param client Connected client.
@@ -326,14 +368,20 @@ uint32_t astra_vfs_readdir(AstraVfsClient *client, const char *path,
 /** Directory entry and metadata returned by batched enumeration. */
 typedef struct AstraVfsDirEntry {
     char name[ASTRA_VFS_NAME_MAX]; /**< NUL-terminated UTF-8 leaf name. */
-    uint64_t size; /**< File length in bytes. */
+    union {
+        uint64_t size; /**< File length in bytes at the VFS layer. */
+        uint64_t byte_size; /**< File length spelling used by Filesystem Kit. */
+    };
     int64_t mtime; /**< Modification time in Unix seconds. */
     uint32_t uid; /**< Owning user identifier, or zero when unavailable. */
     uint32_t gid; /**< Owning group identifier, or zero when unavailable. */
     uint16_t kind; /**< ASTRA_VFS_NODE_* kind. */
     uint16_t mode; /**< POSIX permission and type bits. */
     uint16_t nlink; /**< Hard-link count, or zero when unavailable. */
-    uint16_t reserved; /**< Must be zero. */
+    union {
+        uint16_t reserved; /**< Must be zero in a low-level VFS result. */
+        uint16_t member; /**< Union member selected by Filesystem Kit. */
+    };
 } AstraVfsDirEntry;
 
 /**
@@ -350,6 +398,20 @@ typedef struct AstraVfsDirEntry {
  */
 uint32_t astra_vfs_stat_meta(AstraVfsClient *client, const char *path,
                              AstraVfsDirEntry *meta);
+
+/**
+ * Read no-follow metadata beneath an already-open directory.
+ * Symbolic-link traversal belongs to the Filesystem Kit, not this backend
+ * primitive.
+ * @param client Connected client.
+ * @param directory Open directory token that anchors resolution.
+ * @param path Nonempty relative UTF-8 path.
+ * @param meta Receives metadata.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_vfs_stat_at_meta(AstraVfsClient *client,
+                                AstraVfsFile directory, const char *path,
+                                AstraVfsDirEntry *meta);
 
 /**
  * Read a batch from a directory path.
@@ -406,6 +468,18 @@ uint32_t astra_vfs_mkdir_mode(AstraVfsClient *client, const char *path,
  */
 uint32_t astra_vfs_unlink(AstraVfsClient *client, const char *path);
 /**
+ * Remove a relative entry beneath an open directory.
+ * @param client Connected client.
+ * @param directory Open directory token that anchors resolution.
+ * @param path Nonempty relative UTF-8 path.
+ * @param flags Zero for a non-directory entry, or
+ * ASTRA_VFS_AT_REMOVE_DIRECTORY to remove a directory.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_vfs_unlink_at(AstraVfsClient *client,
+                             AstraVfsFile directory, const char *path,
+                             uint32_t flags);
+/**
  * Atomically rename one path within a mounted backend.
  * @param client Connected client.
  * @param from Existing mount-relative path.
@@ -423,6 +497,28 @@ uint32_t astra_vfs_rename(AstraVfsClient *client, const char *from,
  */
 uint32_t astra_vfs_chmod(AstraVfsClient *client, const char *path,
                          uint16_t mode);
+/**
+ * Change permissions on an already-open file token.
+ * @param client Connected client.
+ * @param file Open file token.
+ * @param mode New POSIX permission bits.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_vfs_chmod_file(AstraVfsClient *client, AstraVfsFile file,
+                              uint16_t mode);
+/**
+ * Change permissions on a relative entry beneath an open directory.
+ * @param client Connected client.
+ * @param directory Open directory token that anchors resolution.
+ * @param path Nonempty relative UTF-8 path.
+ * @param mode New POSIX permission bits.
+ * @param flags Zero to follow the final symbolic link, or
+ * ASTRA_VFS_AT_SYMLINK_NOFOLLOW to operate on the link itself.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_vfs_chmod_at(AstraVfsClient *client,
+                            AstraVfsFile directory, const char *path,
+                            uint16_t mode, uint32_t flags);
 /**
  * Read a symbolic link without following it.
  * @param client Connected client.
@@ -453,5 +549,26 @@ uint32_t astra_vfs_symlink(AstraVfsClient *client, const char *target,
  */
 uint32_t astra_vfs_link(AstraVfsClient *client, const char *from,
                         const char *to);
+
+/**
+ * Report capacity and naming limits for the filesystem containing a path.
+ * @param client Connected client.
+ * @param path Mount-relative UTF-8 path.
+ * @param info Receives a fully initialized filesystem-information record.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_vfs_filesystem_info_path(AstraVfsClient *client,
+                                        const char *path,
+                                        AstraVfsFilesystemInfo *info);
+/**
+ * Report capacity and naming limits for an already-open file token.
+ * @param client Connected client.
+ * @param file Open file token identifying the filesystem.
+ * @param info Receives a fully initialized filesystem-information record.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_vfs_filesystem_info_file(AstraVfsClient *client,
+                                        AstraVfsFile file,
+                                        AstraVfsFilesystemInfo *info);
 
 #endif

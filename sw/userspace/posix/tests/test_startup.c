@@ -7,8 +7,6 @@
 
 #include <astra/posix.h>
 
-extern int astra_main(const AstraStartupInfo *startup);
-
 void astra_posix_file_prepare(void)
 {
 }
@@ -17,7 +15,7 @@ void astra_posix_socket_prepare(void)
 {
 }
 
-char **environ;
+extern char **environ;
 static int entered;
 static int signal_prepared;
 static const AstraStartupInfo *seen_startup;
@@ -76,7 +74,7 @@ main(int argc, char **argv)
         };
 
         entered = 1;
-        assert(astra_main(&startup) == 73);
+        assert(astra_posix_enter(&startup, main) == 73);
         assert(seen_startup == &startup);
         assert(signal_prepared == 1);
     }

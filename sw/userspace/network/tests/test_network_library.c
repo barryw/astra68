@@ -6,8 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-extern const AstraNetworkLibraryV1 astra_library_exports;
-
 static void *mapped_area;
 static uint32_t mapped_size;
 static uint32_t logged_failure;
@@ -101,35 +99,31 @@ uint32_t astra_close(uint32_t handle)
 
 int main(void)
 {
-    const AstraNetworkLibraryV1 *library = &astra_library_exports;
     AstraNetworkSession session = ASTRA_NETWORK_SESSION_INIT;
     AstraNetworkEndpoint endpoint = ASTRA_NETWORK_ENDPOINT_INIT;
     AstraNetworkRequest request = ASTRA_NETWORK_REQUEST_INIT;
     AstraNetworkSessionState session_state;
     AstraNetworkEndpointState endpoint_state;
 
-    assert(library->abi_major == ASTRA_NETWORK_LIBRARY_ABI_MAJOR);
-    assert(library->abi_minor == ASTRA_NETWORK_LIBRARY_ABI_MINOR);
-    assert(library->structure_size == sizeof(*library));
-    assert(library->session_open(0u, &session) == ASTRA_NETWORK_INVALID);
-    assert(library->session_open(1u, &session) == ASTRA_NETWORK_UNSUPPORTED);
+    assert(astra_network_session_open(0u, &session) == ASTRA_NETWORK_INVALID);
+    assert(astra_network_session_open(1u, &session) == ASTRA_NETWORK_UNSUPPORTED);
     assert(logged_failure == ((1u << 16) | ASTRA_SYSCALL_UNSUPPORTED));
-    assert(library->endpoint_open(&session, ASTRA_NETWORK_FAMILY_IPV4,
+    assert(astra_network_endpoint_open(&session, ASTRA_NETWORK_FAMILY_IPV4,
                                   ASTRA_NETWORK_TYPE_STREAM,
                                   ASTRA_NETWORK_PROTOCOL_TCP, &endpoint) ==
            ASTRA_NETWORK_INVALID);
-    assert(library->request_try(&request, NULL, 0u, NULL) ==
+    assert(astra_network_request_try(&request, NULL, 0u, NULL) ==
            ASTRA_NETWORK_INVALID);
-    assert(library->readiness_handle(NULL) == 0u);
+    assert(astra_network_readiness_handle(NULL) == 0u);
     memset(&session_state, 0, sizeof(session_state));
     memset(&endpoint_state, 0, sizeof(endpoint_state));
-    assert(library->session_export(&session, &session_state) ==
+    assert(astra_network_session_export(&session, &session_state) ==
            ASTRA_NETWORK_INVALID);
-    assert(library->session_import(&session_state, &session) ==
+    assert(astra_network_session_import(&session_state, &session) ==
            ASTRA_NETWORK_INVALID);
-    assert(library->endpoint_export(&endpoint, &endpoint_state) ==
+    assert(astra_network_endpoint_export(&endpoint, &endpoint_state) ==
            ASTRA_NETWORK_INVALID);
-    assert(library->endpoint_import(&session, &endpoint_state, &endpoint) ==
+    assert(astra_network_endpoint_import(&session, &endpoint_state, &endpoint) ==
            ASTRA_NETWORK_INVALID);
 
     mapped_size = ASTRA_NETWORK_SHARED_METADATA_BYTES +
@@ -147,10 +141,10 @@ int main(void)
     session._private_id = 17u;
     session._private_generation = 19u;
     session._private_transaction = 23u;
-    assert(library->session_export(&session, &session_state) ==
+    assert(astra_network_session_export(&session, &session_state) ==
            ASTRA_NETWORK_OK);
     memset(&session, 0, sizeof(session));
-    assert(library->session_import(&session_state, &session) ==
+    assert(astra_network_session_import(&session_state, &session) ==
            ASTRA_NETWORK_OK);
     assert(session._private_shared == mapped_area &&
            session._private_transaction == 23u);
@@ -163,10 +157,10 @@ int main(void)
     endpoint._private_family = ASTRA_NETWORK_FAMILY_IPV6;
     endpoint._private_type = ASTRA_NETWORK_TYPE_DATAGRAM;
     endpoint._private_protocol = ASTRA_NETWORK_PROTOCOL_UDP;
-    assert(library->endpoint_export(&endpoint, &endpoint_state) ==
+    assert(astra_network_endpoint_export(&endpoint, &endpoint_state) ==
            ASTRA_NETWORK_OK);
     memset(&endpoint, 0, sizeof(endpoint));
-    assert(library->endpoint_import(&session, &endpoint_state, &endpoint) ==
+    assert(astra_network_endpoint_import(&session, &endpoint_state, &endpoint) ==
            ASTRA_NETWORK_OK);
     assert(endpoint._private_session == &session &&
            endpoint._private_control == 31u &&

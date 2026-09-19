@@ -73,8 +73,6 @@ typedef __pid_t pid_t; /* process id */
 #define _PID_T_DECLARED
 #endif
 
-#define _POSIX_VERSION 202405L
-
 __noreturn void _exit(int __status) __picolibc_export;
 
 int             access(const char *__path, int __amode) __picolibc_export;
@@ -259,7 +257,7 @@ int seteuid(uid_t __uid) __picolibc_export;
 #endif
 int setgid(gid_t __gid) __picolibc_export;
 #if __BSD_VISIBLE
-int setgroups(int ngroups, const gid_t *grouplist) __picolibc_export;
+int setgroups(size_t ngroups, const gid_t *grouplist) __picolibc_export;
 #endif
 #if __BSD_VISIBLE || (__XSI_VISIBLE && __XSI_VISIBLE < 500)
 int sethostname(const char *, size_t) __picolibc_export;

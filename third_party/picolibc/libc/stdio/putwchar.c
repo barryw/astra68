@@ -32,9 +32,16 @@
 #include "local-stdio.h"
 
 #undef putwchar
+#undef putwchar_unlocked
 
 wint_t
 putwchar(wchar_t c)
 {
     return putwc(c, stdout);
+}
+
+wint_t
+putwchar_unlocked(wchar_t c)
+{
+    return putwc_unlocked(c, stdout);
 }

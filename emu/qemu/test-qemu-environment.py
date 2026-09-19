@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 
-from qemu_runtime import qemu_environment
+from qemu_runtime import DEFAULT_MEMORY_BYTES, qemu_environment
 
 
 HERE = Path(__file__).resolve().parent
@@ -12,6 +12,20 @@ spec = importlib.util.spec_from_file_location(
     "astra_terminal_gate", HERE / "test-terminal.py")
 terminal = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(terminal)
+input_spec = importlib.util.spec_from_file_location(
+    "astra_input_gate", HERE / "test-input.py")
+input_gate = importlib.util.module_from_spec(input_spec)
+input_spec.loader.exec_module(input_gate)
+
+# Positive: the production memory profile is accepted.
+input_gate.require_default_memory(DEFAULT_MEMORY_BYTES)
+# Negative: the retired 128 MiB profile must not silently pass this gate.
+try:
+    input_gate.require_default_memory(128 * 1024 * 1024)
+    raise AssertionError("the stale 128 MiB profile was accepted")
+except AssertionError as error:
+    assert str(error) == \
+        "RAM size is 134217728 bytes, expected 536870912"
 
 with tempfile.TemporaryDirectory() as temporary:
     root = Path(temporary)
@@ -43,5 +57,6 @@ try:
     raise AssertionError("QMP waited for a process that had already exited")
 except RuntimeError as error:
     assert str(error) == "QEMU exited with status 17 before QMP was available"
+
 
 print("QEMU private library environment: PASS")

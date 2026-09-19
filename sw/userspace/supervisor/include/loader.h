@@ -5,6 +5,7 @@
 
 #include <astra/process.h>
 #include <astra/proc.h>
+#include <astra/status.h>
 #include <astra/syscall.h>
 #include <astra/vfs_service.h>
 
@@ -17,6 +18,21 @@
 #define SUPERVISOR_MANIFEST_GRANT_MAX ASTRA_LAUNCH_GRANT_MAX
 #define SUPERVISOR_MANIFEST_PUBLICATION_MAX ASTRA_MESSAGE_HANDLES_MAX
 #define SUPERVISOR_MANIFEST_PATH_MAX 128u
+
+/* Program-local boot-controller failures. They are never kernel verdicts. */
+#define SUPERVISOR_LOADER_FAIL_MANIFEST 32u
+#define SUPERVISOR_LOADER_FAIL_ORDER    33u
+#define SUPERVISOR_LOADER_FAIL_CHILD    34u
+#define SUPERVISOR_LOADER_FAIL_PUBLISH  35u
+
+static inline uint32_t
+supervisor_loader_child_status(uint32_t status)
+{
+    if (status == ASTRA_STATUS_OK)
+        return ASTRA_STATUS_PEER_DEAD;
+    return ASTRA_STATUS_IS_VERDICT(status) ?
+        SUPERVISOR_LOADER_FAIL_CHILD : status;
+}
 
 typedef struct SupervisorManifestGrant {
     char name[ASTRA_CAPABILITY_NAME_MAX];
@@ -50,7 +66,8 @@ typedef struct SupervisorManifest {
 int supervisor_manifest_parse(char *text, uint32_t length,
                               SupervisorManifest *manifest);
 int supervisor_manifest_grant(char *text, SupervisorManifestGrant *grant);
-
+int supervisor_manifest_authority(char *text, char *name, uint32_t *rights,
+                                  int allow_raw);
 /* Launches the shipped manifest from the temporary bootstrap mount. */
 uint32_t supervisor_loader_start(const AstraStartupInfo *startup);
 

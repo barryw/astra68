@@ -93,12 +93,11 @@ static KernelElfStatus segment_rights(uint32_t flags, uint32_t *rights)
  * executable means the toolchain produced something this profile has not
  * qualified.
  */
-static bool ignorable_segment(uint32_t type, bool library)
+static bool ignorable_segment(uint32_t type)
 {
     return type == ELF_PT_NULL || type == ELF_PT_NOTE ||
            type == ELF_PT_PHDR || type == ELF_PT_GNU_EH_FRAME ||
-           type == ELF_PT_GNU_RELRO || type == ELF_PT_GNU_PROPERTY ||
-           (library && type == ELF_PT_DYNAMIC);
+           type == ELF_PT_GNU_PROPERTY;
 }
 
 static KernelElfStatus accept_load_segment(const uint8_t *header,
@@ -197,8 +196,7 @@ static bool tls_covered_by_load(const KernelElfImage *plan)
         const KernelElfSegment *segment = &plan->segment[index];
         uint32_t segment_file_end;
 
-        if ((segment->rights &
-             (KERNEL_ELF_SEGMENT_WRITE | KERNEL_ELF_SEGMENT_EXEC)) != 0u ||
+        if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) != 0u ||
             !astra_u32_add_checked(segment->file_offset, segment->file_size,
                                    &segment_file_end) ||
             plan->tls.file_offset < segment->file_offset ||
@@ -207,6 +205,167 @@ static bool tls_covered_by_load(const KernelElfImage *plan)
             continue;
         if (plan->tls.file_offset - segment->file_offset ==
             plan->tls.virtual_address - segment->virtual_address)
+            return true;
+    }
+    return false;
+}
+
+static KernelElfStatus accept_dynamic_segment(
+    const uint8_t *header, uint32_t image_size, KernelElfDynamic *dynamic)
+{
+    uint32_t file_size = astra_load_be32(header + 16);
+    uint32_t memory_size = astra_load_be32(header + 20);
+
+    dynamic->file_offset = astra_load_be32(header + 4);
+    dynamic->virtual_address = astra_load_be32(header + 8);
+    dynamic->size = file_size;
+    if (astra_load_be32(header + 24) != (ELF_PF_R | ELF_PF_W) ||
+        file_size < 8u || file_size != memory_size ||
+        (file_size & 7u) != 0u ||
+        !range_within(dynamic->file_offset, file_size, image_size))
+        return KERNEL_ELF_BAD_DYNAMIC;
+    return KERNEL_ELF_OK;
+}
+
+static bool dynamic_covered_by_load(const KernelElfImage *plan)
+{
+    uint32_t file_end;
+    uint32_t memory_end;
+
+    if (!astra_u32_add_checked(plan->dynamic.file_offset,
+                               plan->dynamic.size, &file_end) ||
+        !astra_u32_add_checked(plan->dynamic.virtual_address,
+                               plan->dynamic.size, &memory_end))
+        return false;
+    for (uint32_t index = 0u; index < plan->segment_count; ++index) {
+        const KernelElfSegment *segment = &plan->segment[index];
+        uint32_t segment_file_end;
+        uint32_t segment_memory_end;
+
+        if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) == 0u ||
+            !astra_u32_add_checked(segment->file_offset, segment->file_size,
+                                   &segment_file_end) ||
+            !astra_u32_add_checked(segment->virtual_address,
+                                   segment->memory_size,
+                                   &segment_memory_end))
+            continue;
+        if (plan->dynamic.file_offset >= segment->file_offset &&
+            file_end <= segment_file_end &&
+            plan->dynamic.virtual_address >= segment->virtual_address &&
+            memory_end <= segment_memory_end &&
+            plan->dynamic.file_offset - segment->file_offset ==
+                plan->dynamic.virtual_address - segment->virtual_address)
+            return true;
+    }
+    return false;
+}
+
+static KernelElfStatus accept_interpreter_segment(
+    const uint8_t *header, uint32_t image_size,
+    KernelElfInterpreter *interpreter)
+{
+    uint32_t file_size = astra_load_be32(header + 16);
+    uint32_t memory_size = astra_load_be32(header + 20);
+
+    interpreter->file_offset = astra_load_be32(header + 4);
+    interpreter->virtual_address = astra_load_be32(header + 8);
+    interpreter->size = file_size;
+    if (astra_load_be32(header + 24) != ELF_PF_R || file_size < 2u ||
+        file_size != memory_size ||
+        !range_within(interpreter->file_offset, file_size, image_size))
+        return KERNEL_ELF_BAD_INTERPRETER;
+    return KERNEL_ELF_OK;
+}
+
+static bool interpreter_covered_by_load(const KernelElfImage *plan)
+{
+    uint32_t file_end;
+    uint32_t memory_end;
+
+    if (!astra_u32_add_checked(plan->interpreter.file_offset,
+                               plan->interpreter.size, &file_end) ||
+        !astra_u32_add_checked(plan->interpreter.virtual_address,
+                               plan->interpreter.size, &memory_end))
+        return false;
+    for (uint32_t index = 0u; index < plan->segment_count; ++index) {
+        const KernelElfSegment *segment = &plan->segment[index];
+        uint32_t segment_file_end;
+        uint32_t segment_memory_end;
+
+        if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) != 0u ||
+            !astra_u32_add_checked(segment->file_offset, segment->file_size,
+                                   &segment_file_end) ||
+            !astra_u32_add_checked(segment->virtual_address,
+                                   segment->memory_size,
+                                   &segment_memory_end))
+            continue;
+        if (plan->interpreter.file_offset >= segment->file_offset &&
+            file_end <= segment_file_end &&
+            plan->interpreter.virtual_address >= segment->virtual_address &&
+            memory_end <= segment_memory_end &&
+            plan->interpreter.file_offset - segment->file_offset ==
+                plan->interpreter.virtual_address - segment->virtual_address)
+            return true;
+    }
+    return false;
+}
+
+static KernelElfStatus accept_relro_segment(
+    const uint8_t *header, uint32_t image_size, KernelElfRelro *relro)
+{
+    relro->file_offset = astra_load_be32(header + 4);
+    relro->virtual_address = astra_load_be32(header + 8);
+    relro->file_size = astra_load_be32(header + 16);
+    relro->memory_size = astra_load_be32(header + 20);
+    if (astra_load_be32(header + 24) != ELF_PF_R ||
+        relro->memory_size == 0u ||
+        relro->file_size > relro->memory_size ||
+        !range_within(relro->file_offset, relro->file_size, image_size))
+        return KERNEL_ELF_BAD_RELRO;
+    return KERNEL_ELF_OK;
+}
+
+static bool relro_covered_by_load(const KernelElfImage *plan,
+                                  uint32_t page_size)
+{
+    uint32_t file_end;
+    uint32_t memory_end;
+
+    if (!astra_u32_add_checked(plan->relro.file_offset,
+                               plan->relro.file_size, &file_end) ||
+        !astra_u32_add_checked(plan->relro.virtual_address,
+                               plan->relro.memory_size, &memory_end))
+        return false;
+    for (uint32_t index = 0u; index < plan->segment_count; ++index) {
+        const KernelElfSegment *segment = &plan->segment[index];
+        uint32_t segment_file_end;
+        uint32_t segment_mapping_size;
+        uint32_t segment_mapping_end;
+        uint32_t segment_memory_end;
+
+        if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) == 0u ||
+            !astra_u32_add_checked(segment->file_offset,
+                                   segment->file_size,
+                                   &segment_file_end) ||
+            segment->page_count > UINT32_MAX / page_size)
+            continue;
+        segment_mapping_size = segment->page_count * page_size;
+        if (!astra_u32_add_checked(segment->virtual_address,
+                                   segment_mapping_size,
+                                   &segment_mapping_end) ||
+            !astra_u32_add_checked(segment->virtual_address,
+                                   segment->memory_size,
+                                   &segment_memory_end) ||
+            plan->relro.virtual_address < segment->virtual_address ||
+            segment_memory_end > segment_mapping_end ||
+            memory_end > segment_mapping_end)
+            continue;
+        if (plan->relro.file_size == 0u)
+            return true;
+        if (plan->relro.file_offset >= segment->file_offset &&
+            file_end <= segment_file_end &&
+            plan->relro.file_offset - segment->file_offset ==
+                plan->relro.virtual_address - segment->virtual_address)
             return true;
     }
     return false;
@@ -222,7 +381,8 @@ static KernelElfStatus stream_fail(KernelElfStream *stream,
 
 static KernelElfStatus stream_begin(const void *header, uint32_t image_size,
                                     const KernelElfLimits *limits,
-                                    uint16_t expected_type, bool library,
+                                    uint16_t expected_type,
+                                    KernelElfRole role,
                                     KernelElfStream *stream)
 {
     const uint8_t *bytes = header;
@@ -265,7 +425,7 @@ static KernelElfStatus stream_begin(const void *header, uint32_t image_size,
     kernel_bytes_copy(&stream->limits, limits, sizeof(stream->limits));
     stream->image_size = image_size;
     stream->entry = astra_load_be32(bytes + 24);
-    stream->library = library ? 1u : 0u;
+    stream->role = (uint8_t)role;
     return KERNEL_ELF_OK;
 }
 
@@ -274,8 +434,24 @@ KernelElfStatus kernel_elf_stream_begin(const void *header,
                                         const KernelElfLimits *limits,
                                         KernelElfStream *stream)
 {
-    return stream_begin(header, image_size, limits, ELF_TYPE_EXEC, false,
-                        stream);
+    return stream_begin(header, image_size, limits, ELF_TYPE_EXEC,
+                        KERNEL_ELF_EXECUTABLE, stream);
+}
+
+KernelElfStatus kernel_elf_stream_begin_interpreter(
+    const void *header, uint32_t image_size, const KernelElfLimits *limits,
+    KernelElfStream *stream)
+{
+    return stream_begin(header, image_size, limits, ELF_TYPE_DYN,
+                        KERNEL_ELF_INTERPRETER, stream);
+}
+
+KernelElfStatus kernel_elf_stream_begin_library(
+    const void *header, uint32_t image_size, const KernelElfLimits *limits,
+    KernelElfStream *stream)
+{
+    return stream_begin(header, image_size, limits, ELF_TYPE_DYN,
+                        KERNEL_ELF_SHARED_LIBRARY, stream);
 }
 
 KernelElfStatus kernel_elf_stream_next_header(const KernelElfStream *stream,
@@ -313,7 +489,7 @@ KernelElfStatus kernel_elf_stream_add_header(KernelElfStream *stream,
     if (type == ELF_PT_GNU_STACK) {
         if ((astra_load_be32(bytes + 24) & ELF_PF_X) != 0u)
             return stream_fail(stream, KERNEL_ELF_EXECUTABLE_STACK);
-    } else if (type == ELF_PT_TLS && stream->library == 0u) {
+    } else if (type == ELF_PT_TLS) {
         if (stream->tls_seen != 0u)
             return stream_fail(stream, KERNEL_ELF_BAD_TLS);
         status = accept_tls_segment(bytes, stream->image_size,
@@ -323,8 +499,36 @@ KernelElfStatus kernel_elf_stream_add_header(KernelElfStream *stream,
         stream->tls_seen = 1u;
         if (stream->plan.tls.memory_size != 0u)
             stream->plan.has_tls = 1u;
+    } else if (type == ELF_PT_DYNAMIC) {
+        if (stream->dynamic_seen != 0u)
+            return stream_fail(stream, KERNEL_ELF_BAD_DYNAMIC);
+        status = accept_dynamic_segment(bytes, stream->image_size,
+                                        &stream->plan.dynamic);
+        if (status != KERNEL_ELF_OK)
+            return stream_fail(stream, status);
+        stream->dynamic_seen = 1u;
+        stream->plan.has_dynamic = 1u;
+    } else if (type == ELF_PT_INTERP) {
+        if (stream->role != KERNEL_ELF_EXECUTABLE ||
+            stream->interpreter_seen != 0u)
+            return stream_fail(stream, KERNEL_ELF_BAD_INTERPRETER);
+        status = accept_interpreter_segment(bytes, stream->image_size,
+                                            &stream->plan.interpreter);
+        if (status != KERNEL_ELF_OK)
+            return stream_fail(stream, status);
+        stream->interpreter_seen = 1u;
+        stream->plan.has_interpreter = 1u;
+    } else if (type == ELF_PT_GNU_RELRO) {
+        if (stream->relro_seen != 0u)
+            return stream_fail(stream, KERNEL_ELF_BAD_RELRO);
+        status = accept_relro_segment(bytes, stream->image_size,
+                                      &stream->plan.relro);
+        if (status != KERNEL_ELF_OK)
+            return stream_fail(stream, status);
+        stream->relro_seen = 1u;
+        stream->plan.has_relro = 1u;
     } else if (type != ELF_PT_LOAD) {
-        if (!ignorable_segment(type, stream->library != 0u))
+        if (!ignorable_segment(type))
             return stream_fail(stream, KERNEL_ELF_UNSUPPORTED_SEGMENT);
     } else if (astra_load_be32(bytes + 20) == 0u) {
         if (astra_load_be32(bytes + 16) != 0u)
@@ -351,6 +555,11 @@ KernelElfStatus kernel_elf_stream_add_header(KernelElfStream *stream,
                                    &stream->total_pages) ||
             stream->total_pages > stream->limits.maximum_pages)
             return stream_fail(stream, KERNEL_ELF_TOO_LARGE);
+        if ((segment.rights & KERNEL_ELF_SEGMENT_WRITE) != 0u &&
+            !astra_u32_add_checked(stream->plan.writable_bytes,
+                                   segment.memory_size,
+                                   &stream->plan.writable_bytes))
+            return stream_fail(stream, KERNEL_ELF_TOO_LARGE);
         stream->plan.segment[stream->plan.segment_count] = segment;
         ++stream->plan.segment_count;
     }
@@ -358,10 +567,24 @@ KernelElfStatus kernel_elf_stream_add_header(KernelElfStream *stream,
     return KERNEL_ELF_OK;
 }
 
+static bool entry_inside_executable_segment(const KernelElfStream *stream)
+{
+    if ((stream->entry & 1u) != 0u)
+        return false;
+    for (uint32_t index = 0u; index < stream->plan.segment_count; ++index) {
+        const KernelElfSegment *segment = &stream->plan.segment[index];
+
+        if ((segment->rights & KERNEL_ELF_SEGMENT_EXEC) != 0u &&
+            stream->entry >= segment->virtual_address &&
+            stream->entry < segment->virtual_address + segment->memory_size)
+            return true;
+    }
+    return false;
+}
+
 KernelElfStatus kernel_elf_stream_finish(KernelElfStream *stream,
                                          KernelElfImage *plan)
 {
-    uint32_t index;
 
     if (plan != NULL)
         kernel_bytes_clear(plan, sizeof(*plan));
@@ -375,22 +598,35 @@ KernelElfStatus kernel_elf_stream_finish(KernelElfStream *stream,
     if (stream->plan.has_tls != 0u &&
         !tls_covered_by_load(&stream->plan))
         return stream_fail(stream, KERNEL_ELF_BAD_TLS);
-    if (stream->library != 0u) {
+    if (stream->plan.has_dynamic != 0u &&
+        !dynamic_covered_by_load(&stream->plan))
+        return stream_fail(stream, KERNEL_ELF_BAD_DYNAMIC);
+    if (stream->plan.has_interpreter != 0u &&
+        !interpreter_covered_by_load(&stream->plan))
+        return stream_fail(stream, KERNEL_ELF_BAD_INTERPRETER);
+    if (stream->plan.has_relro != 0u &&
+        !relro_covered_by_load(&stream->plan, stream->limits.page_size))
+        return stream_fail(stream, KERNEL_ELF_BAD_RELRO);
+    if (stream->role == KERNEL_ELF_SHARED_LIBRARY) {
+        if (stream->plan.has_interpreter != 0u)
+            return stream_fail(stream, KERNEL_ELF_BAD_INTERPRETER);
+        if (stream->plan.has_dynamic == 0u)
+            return stream_fail(stream, KERNEL_ELF_BAD_DYNAMIC);
         if (stream->entry != 0u)
             return stream_fail(stream, KERNEL_ELF_BAD_ENTRY);
-    } else {
-        if ((stream->entry & 1u) != 0u)
+    } else if (stream->role == KERNEL_ELF_INTERPRETER) {
+        if (stream->plan.has_interpreter != 0u)
+            return stream_fail(stream, KERNEL_ELF_BAD_INTERPRETER);
+        if (stream->plan.has_dynamic == 0u)
+            return stream_fail(stream, KERNEL_ELF_BAD_DYNAMIC);
+        if (stream->entry == 0u ||
+            !entry_inside_executable_segment(stream))
             return stream_fail(stream, KERNEL_ELF_BAD_ENTRY);
-        for (index = 0u; index < stream->plan.segment_count; ++index) {
-            const KernelElfSegment *segment = &stream->plan.segment[index];
-
-            if ((segment->rights & KERNEL_ELF_SEGMENT_EXEC) != 0u &&
-                stream->entry >= segment->virtual_address &&
-                stream->entry < segment->virtual_address +
-                                    segment->memory_size)
-                break;
-        }
-        if (index == stream->plan.segment_count)
+        stream->plan.entry = stream->entry;
+    } else {
+        if (stream->plan.has_dynamic != stream->plan.has_interpreter)
+            return stream_fail(stream, KERNEL_ELF_BAD_INTERPRETER);
+        if (!entry_inside_executable_segment(stream))
             return stream_fail(stream, KERNEL_ELF_BAD_ENTRY);
         stream->plan.entry = stream->entry;
     }
@@ -405,7 +641,7 @@ static KernelElfStatus accept_windowed(const void *image,
                                        uint32_t readable,
                                        const KernelElfLimits *limits,
                                        uint16_t expected_type,
-                                       bool library,
+                                       KernelElfRole role,
                                        KernelElfImage *plan)
 {
     const uint8_t *bytes = image;
@@ -420,7 +656,7 @@ static KernelElfStatus accept_windowed(const void *image,
         return KERNEL_ELF_INVALID_ARGUMENT;
     if (readable < KERNEL_ELF_HEADER_SIZE)
         return KERNEL_ELF_TRUNCATED;
-    status = stream_begin(image, image_size, limits, expected_type, library,
+    status = stream_begin(image, image_size, limits, expected_type, role,
                           &stream);
     while (status == KERNEL_ELF_OK) {
         status = kernel_elf_stream_next_header(&stream, &offset, &length);
@@ -460,7 +696,10 @@ const char *kernel_elf_status_text(KernelElfStatus status)
     case KERNEL_ELF_OVERLAP: return "segments overlap";
     case KERNEL_ELF_TOO_LARGE: return "image needs too many pages";
     case KERNEL_ELF_BAD_TLS: return "invalid TLS template";
+    case KERNEL_ELF_BAD_DYNAMIC: return "invalid dynamic table";
+    case KERNEL_ELF_BAD_INTERPRETER: return "invalid dynamic loader identity";
     case KERNEL_ELF_BAD_ENTRY: return "entry point outside executable code";
+    case KERNEL_ELF_BAD_RELRO: return "invalid GNU RELRO range";
     }
     return "unknown";
 }
@@ -481,7 +720,7 @@ KernelElfStatus kernel_elf_accept_windowed(const void *image,
                                            KernelElfImage *plan)
 {
     return accept_windowed(image, image_size, readable, limits,
-                           ELF_TYPE_EXEC, false, plan);
+                           ELF_TYPE_EXEC, KERNEL_ELF_EXECUTABLE, plan);
 }
 
 KernelElfStatus kernel_elf_accept_library_windowed(
@@ -489,7 +728,7 @@ KernelElfStatus kernel_elf_accept_library_windowed(
     const KernelElfLimits *limits, KernelElfImage *plan)
 {
     return accept_windowed(image, image_size, readable, limits,
-                           ELF_TYPE_DYN, true, plan);
+                           ELF_TYPE_DYN, KERNEL_ELF_SHARED_LIBRARY, plan);
 }
 
 KernelElfStatus kernel_elf_accept_library(const void *image,
@@ -499,4 +738,20 @@ KernelElfStatus kernel_elf_accept_library(const void *image,
 {
     return kernel_elf_accept_library_windowed(image, image_size, image_size,
                                               limits, plan);
+}
+
+KernelElfStatus kernel_elf_accept_interpreter_windowed(
+    const void *image, uint32_t image_size, uint32_t readable,
+    const KernelElfLimits *limits, KernelElfImage *plan)
+{
+    return accept_windowed(image, image_size, readable, limits,
+                           ELF_TYPE_DYN, KERNEL_ELF_INTERPRETER, plan);
+}
+
+KernelElfStatus kernel_elf_accept_interpreter(
+    const void *image, uint32_t image_size, const KernelElfLimits *limits,
+    KernelElfImage *plan)
+{
+    return kernel_elf_accept_interpreter_windowed(
+        image, image_size, image_size, limits, plan);
 }

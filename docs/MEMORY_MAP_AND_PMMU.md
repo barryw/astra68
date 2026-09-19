@@ -39,12 +39,31 @@ covered by the kernel and machine qualification suites.
 
 - Valid user range is `0x00010000..0x7FFFFFFF`; null and the first 64 KiB are
   always unmapped.
+- `sw/include/astra/address_space.h` is the executable source of truth for the
+  complete process-virtual map. Its ranges are ABI constants and do not move;
+  new facilities consume the named reserved window or require an explicit
+  breaking address-map revision. Kernel, loader, NDK, linker, and host tests
+  must derive from or verify against that header.
 - K1 maps one read/execute page at `0x00100000` and one read/write stack page at
   `0x70000000`; adjacent pages are unmapped guards.
 - User URP trees never map kernel, page-table, firmware, ROM-control, or MMIO
   frames. Privileged device mappings are a later explicit object type.
 - Threads in one process share a URP. Switching between them does not reload
   URP or flush the ATC.
+
+| Start | End (exclusive) | Owner |
+|---|---|---|
+| `0x00000000` | `0x00010000` | Null guard |
+| `0x00010000` | `0x00011000` | Kernel startup block |
+| `0x00011000` | `0x20000000` | Main executable image |
+| `0x20000000` | `0x40000000` | Eager loader and shared-library images |
+| `0x40000000` | `0x48000000` | Kernel shared-area mappings |
+| `0x48000000` | `0x4FF00000` | Reserved; no current owner |
+| `0x4FF00000` | `0x50000000` | Per-thread AstraHost channel pages |
+| `0x50000000` | `0x52000000` | Process-private DMA buffers |
+| `0x52000000` | `0x70000000` | Anonymous private VM |
+| `0x70000000` | `0x78000000` | Growable thread-stack reservations |
+| `0x78000000` | `0x80000000` | Per-thread TLS reservations |
 
 The current MMU configuration uses native MC68040 three-level descriptors with
 a `7/7/6/12` split and separate SRP/URP roots. A root covers 4 GiB, each pointer

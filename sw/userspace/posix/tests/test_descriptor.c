@@ -13,6 +13,9 @@
 #include <astra/stream.h>
 #include <astra/syscall.h>
 
+ssize_t pread(int fd, void *buffer, size_t length, off_t offset);
+ssize_t pwrite(int fd, const void *buffer, size_t length, off_t offset);
+
 static uint32_t file_closes;
 static char pipe_bytes[128];
 static uint32_t pipe_head;
@@ -29,6 +32,7 @@ static uint32_t stream_write_handle;
 static uint32_t stream_write_limit;
 static uint32_t stream_write_calls;
 static uint32_t stream_write_cancel_once;
+static off_t positioned_offset;
 
 uint32_t astra_log_failure(const char *operation, uint32_t status)
 {
@@ -79,7 +83,26 @@ file_close(uint32_t slot)
     return 0;
 }
 
+static ssize_t
+file_pread(uint32_t slot, void *bytes, size_t length, off_t offset)
+{
+    assert(slot == 99u && length == 1u);
+    positioned_offset = offset;
+    *(char *)bytes = 'R';
+    return 1;
+}
+
+static ssize_t
+file_pwrite(uint32_t slot, const void *bytes, size_t length, off_t offset)
+{
+    assert(slot == 99u && length == 1u && *(const char *)bytes == 'W');
+    positioned_offset = offset;
+    return 1;
+}
+
 static const AstraPosixFileOps file_ops = {
+    .pread = file_pread,
+    .pwrite = file_pwrite,
     .close = file_close,
     .exec_size = file_exec_size,
     .exec_export = file_exec_export,
@@ -321,6 +344,7 @@ main(void)
         AstraStartupInfo startup = {
             .magic = ASTRA_STARTUP_MAGIC,
             .abi_version = ASTRA_STARTUP_ABI_VERSION,
+            .program_entry = 0x00100000u,
             .header_size = ASTRA_STARTUP_INFO_SIZE,
             .total_size = ASTRA_STARTUP_INFO_SIZE,
             .syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION,
@@ -367,6 +391,9 @@ main(void)
     astra_posix_start(NULL);
     astra_posix_file_bind(&file_ops);
     assert(astra_posix_descriptor_file(99u, 0) == 0);
+    assert(pread(0, bytes, 1u, 37) == 1 && bytes[0] == 'R' &&
+           positioned_offset == 37);
+    assert(pwrite(0, "W", 1u, 41) == 1 && positioned_offset == 41);
     errno = 0;
     assert(dup2(0, INT_MAX) == -1 && errno == EMFILE);
     assert(dup(0) == 1);
@@ -393,6 +420,8 @@ main(void)
     assert(!isatty(fildes[0]) && errno == ENOTTY);
     errno = 0;
     assert(write_call(fildes[0], "x", 1u) == -1 && errno == EBADF);
+    errno = 0;
+    assert(pread(fildes[0], bytes, 1u, 0) == -1 && errno == ESPIPE);
     assert(write_call(fildes[1], "WORK:notes.txt", 14u) == 14);
     assert(read_call(fildes[0], bytes, 5u) == 5);
     assert(memcmp(bytes, "WORK:", 5u) == 0);

@@ -36,8 +36,6 @@ typedef struct PosixSocketExecState {
 
 static PosixSocket *sockets;
 static uint32_t socket_capacity;
-static AstraLibraryHandle *network_handle;
-static const AstraNetworkLibraryV1 *network_library;
 static AstraNetworkSession network_session = ASTRA_NETWORK_SESSION_INIT;
 
 const struct in6_addr in6addr_any = IN6ADDR_ANY_INIT;
@@ -84,28 +82,6 @@ static int network_gai_error(const char *operation, AstraNetworkStatus status)
     }
 }
 
-static int network_library_open(void)
-{
-    if (network_library != NULL)
-        return 1;
-    network_handle = OpenLibrary(ASTRA_NETWORK_LIBRARY_NAME,
-                                 ASTRA_NETWORK_LIBRARY_VERSION);
-    if (network_handle == NULL || network_handle->exports == NULL) {
-        errno = ENOSYS;
-        return 0;
-    }
-    network_library = network_handle->exports;
-    if (network_library->abi_major != ASTRA_NETWORK_LIBRARY_ABI_MAJOR ||
-        network_library->structure_size < sizeof(*network_library)) {
-        CloseLibrary(network_handle);
-        network_handle = NULL;
-        network_library = NULL;
-        errno = ENOSYS;
-        return 0;
-    }
-    return 1;
-}
-
 static int network_open(void)
 {
     const AstraStartupInfo *startup;
@@ -114,8 +90,6 @@ static int network_open(void)
 
     if (network_session._private_id != 0u)
         return 1;
-    if (!network_library_open())
-        return 0;
     startup = astra_posix_startup();
     capability = astra_startup_capability(
         startup, ASTRA_CAPABILITY_NETWORK_LISTEN);
@@ -126,13 +100,10 @@ static int network_open(void)
         errno = EACCES;
         return 0;
     }
-    status = network_library->session_open(capability->handle,
+    status = astra_network_session_open(capability->handle,
                                             &network_session);
     if (status != ASTRA_NETWORK_OK) {
         errno = network_errno(status);
-        CloseLibrary(network_handle);
-        network_handle = NULL;
-        network_library = NULL;
         return 0;
     }
     return 1;
@@ -203,7 +174,7 @@ static int flags_valid(int flags)
 static int wait_ready(PosixSocket *socket, uint32_t wanted)
 {
     for (;;) {
-        uint32_t ready = network_library->readiness(&socket->endpoint);
+        uint32_t ready = astra_network_readiness(&socket->endpoint);
 
         if ((ready & wanted) != 0u)
             return 0;
@@ -212,14 +183,14 @@ static int wait_ready(PosixSocket *socket, uint32_t wanted)
         if ((ready & ASTRA_NETWORK_READY_ERROR) != 0u) {
             uint32_t error = ASTRA_NETWORK_IO;
 
-            (void)network_library->get_option(
+            (void)astra_network_get_option(
                 &socket->endpoint, ASTRA_NETWORK_OPTION_ERROR, &error);
             errno = network_errno((AstraNetworkStatus)error);
             return -1;
         }
         {
             uint32_t status = astra_wait_one(
-                network_library->readiness_handle(&socket->endpoint),
+                astra_network_readiness_handle(&socket->endpoint),
                 ASTRA_DEADLINE_FOREVER, NULL);
 
             if (status != ASTRA_SYSCALL_OK) {
@@ -330,9 +301,9 @@ static ssize_t socket_send(PosixSocket *socket, const void *buffer,
     }
     for (;;) {
         status = address == NULL ?
-            network_library->send(&socket->endpoint, buffer, length,
+            astra_network_send(&socket->endpoint, buffer, length,
                                   network_message_flags(flags), &moved) :
-            network_library->send_to(&socket->endpoint, buffer, length,
+            astra_network_send_to(&socket->endpoint, buffer, length,
                                      network_message_flags(flags), address,
                                      &moved);
         if (status == ASTRA_NETWORK_OK)
@@ -367,9 +338,9 @@ static ssize_t socket_receive(PosixSocket *socket, void *buffer,
     }
     for (;;) {
         status = address == NULL ?
-            network_library->receive(&socket->endpoint, buffer, length,
+            astra_network_receive(&socket->endpoint, buffer, length,
                                      network_message_flags(flags), &moved) :
-            network_library->receive_from(
+            astra_network_receive_from(
                 &socket->endpoint, buffer, length, network_message_flags(flags),
                 address, &moved);
         if (status == ASTRA_NETWORK_OK)
@@ -425,7 +396,7 @@ static int descriptor_socket_close(uint32_t slot)
         errno = EBADF;
         return -1;
     }
-    status = network_library->endpoint_close(&sockets[slot].endpoint);
+    status = astra_network_endpoint_close(&sockets[slot].endpoint);
     (void)memset(&sockets[slot], 0, sizeof(sockets[slot]));
     if (status != ASTRA_NETWORK_OK) {
         errno = network_errno(status);
@@ -444,7 +415,7 @@ static int descriptor_socket_poll(uint32_t slot, short events,
         *revents = POLLNVAL;
         return 0;
     }
-    ready = network_library->readiness(&sockets[slot].endpoint);
+    ready = astra_network_readiness(&sockets[slot].endpoint);
     if ((events & POLLIN) != 0 &&
         (ready & (ASTRA_NETWORK_READY_READABLE |
                   ASTRA_NETWORK_READY_ACCEPTABLE)) != 0u)
@@ -458,7 +429,7 @@ static int descriptor_socket_poll(uint32_t slot, short events,
     if ((ready & ASTRA_NETWORK_READY_ERROR) != 0u)
         *revents |= POLLERR;
     if (*revents == 0) {
-        handles[0] = network_library->readiness_handle(&sockets[slot].endpoint);
+        handles[0] = astra_network_readiness_handle(&sockets[slot].endpoint);
         *count = 1u;
     }
     return 0;
@@ -490,7 +461,7 @@ static int descriptor_socket_exec_export(void *state, uint32_t capacity,
     wire->active = network_session._private_id != 0u;
     *used = sizeof(*wire);
     if (wire->active != 0u &&
-        network_library->session_export(&network_session, &wire->session) !=
+        astra_network_session_export(&network_session, &wire->session) !=
             ASTRA_NETWORK_OK) {
         errno = EIO;
         return -1;
@@ -511,10 +482,8 @@ static int descriptor_socket_exec_import(const void *state, uint32_t size)
     }
     if (wire->active == 0u)
         return 0;
-    if (!network_library_open())
-        return -1;
-    status = network_library->session_import(&wire->session,
-                                              &network_session);
+    status = astra_network_session_import(&wire->session,
+                                          &network_session);
     if (status != ASTRA_NETWORK_OK) {
         (void)astra_log_failure("POSIX socket exec session import", status);
         errno = network_errno(status);
@@ -533,7 +502,7 @@ static int descriptor_socket_state_export(uint32_t slot, void *state,
         errno = EBADF;
         return -1;
     }
-    status = network_library->endpoint_export(&sockets[slot].endpoint, state);
+    status = astra_network_endpoint_export(&sockets[slot].endpoint, state);
     if (status != ASTRA_NETWORK_OK) {
         errno = network_errno(status);
         return -1;
@@ -556,7 +525,7 @@ static int descriptor_socket_state_import(const void *state, uint32_t size,
     slot = claim_socket();
     if (slot < 0)
         return -1;
-    status = network_library->endpoint_import(
+    status = astra_network_endpoint_import(
         &network_session, wire, &sockets[slot].endpoint);
     if (status != ASTRA_NETWORK_OK) {
         (void)astra_log_failure("POSIX socket exec endpoint import", status);
@@ -584,12 +553,17 @@ void astra_posix_socket_prepare(void)
     astra_posix_socket_bind(&descriptor_socket_ops);
 }
 
-void astra_posix_socket_after_fork_child(void)
+int astra_posix_socket_after_fork_child(void)
 {
     if (network_session._private_id == 0u)
-        return;
-    (void)network_library->session_close(&network_session);
-    (void)network_open();
+        return 0;
+    (void)astra_network_session_close(&network_session);
+    if (!network_open())
+        return -1;
+    for (uint32_t slot = 0u; slot < socket_capacity; ++slot)
+        if (sockets[slot].active != 0u)
+            sockets[slot].endpoint._private_session = &network_session;
+    return 0;
 }
 
 int socket(int domain, int type, int protocol)
@@ -632,7 +606,7 @@ int socket(int domain, int type, int protocol)
     slot = claim_socket();
     if (slot < 0)
         return -1;
-    status = network_library->endpoint_open(
+    status = astra_network_endpoint_open(
         &network_session, family, network_type, network_protocol,
         &sockets[slot].endpoint);
     if (status != ASTRA_NETWORK_OK) {
@@ -667,7 +641,7 @@ int bind(int fd, const struct sockaddr *address, socklen_t length)
 
     if (socket == NULL || !to_network_address(address, length, &native))
         return -1;
-    status = network_library->bind(&socket->endpoint, &native);
+    status = astra_network_bind(&socket->endpoint, &native);
     if (status != ASTRA_NETWORK_OK) {
         errno = network_errno(status);
         return -1;
@@ -684,7 +658,7 @@ int connect(int fd, const struct sockaddr *address, socklen_t length)
 
     if (socket == NULL || !to_network_address(address, length, &native))
         return -1;
-    status = network_library->connect(&socket->endpoint, &native);
+    status = astra_network_connect(&socket->endpoint, &native);
     if (status == ASTRA_NETWORK_OK)
         return 0;
     if (status != ASTRA_NETWORK_IN_PROGRESS) {
@@ -701,7 +675,7 @@ int connect(int fd, const struct sockaddr *address, socklen_t length)
     {
         uint32_t error = ASTRA_NETWORK_OK;
 
-        status = network_library->get_option(
+        status = astra_network_get_option(
             &socket->endpoint, ASTRA_NETWORK_OPTION_ERROR, &error);
         if (status != ASTRA_NETWORK_OK || error != ASTRA_NETWORK_OK) {
             errno = status != ASTRA_NETWORK_OK ? network_errno(status) :
@@ -721,7 +695,7 @@ int listen(int fd, int backlog)
         return -1;
     if (backlog < 0)
         backlog = 0;
-    status = network_library->listen(&socket->endpoint, (uint32_t)backlog);
+    status = astra_network_listen(&socket->endpoint, (uint32_t)backlog);
     if (status != ASTRA_NETWORK_OK) {
         errno = network_errno(status);
         return -1;
@@ -745,7 +719,7 @@ int accept(int fd, struct sockaddr *address, socklen_t *length)
     }
     descriptor_flags = astra_posix_descriptor_flags(fd);
     for (;;) {
-        status = network_library->accept(&listener->endpoint, &accepted,
+        status = astra_network_accept(&listener->endpoint, &accepted,
                                          &native);
         if (status == ASTRA_NETWORK_OK)
             break;
@@ -762,7 +736,7 @@ int accept(int fd, struct sockaddr *address, socklen_t *length)
     }
     slot = claim_socket();
     if (slot < 0) {
-        (void)network_library->endpoint_close(&accepted);
+        (void)astra_network_endpoint_close(&accepted);
         return -1;
     }
     sockets[slot].active = 1u;
@@ -991,7 +965,7 @@ int shutdown(int fd, int how)
         errno = EINVAL;
         return -1;
     }
-    status = network_library->shutdown(&socket->endpoint, flags);
+    status = astra_network_shutdown(&socket->endpoint, flags);
     if (status != ASTRA_NETWORK_OK) {
         errno = network_errno(status);
         return -1;
@@ -1010,8 +984,8 @@ static int socket_name(int fd, struct sockaddr *address, socklen_t *length,
         if (socket != NULL) errno = EFAULT;
         return -1;
     }
-    status = peer ? network_library->peer_address(&socket->endpoint, &native) :
-                    network_library->local_address(&socket->endpoint, &native);
+    status = peer ? astra_network_peer_address(&socket->endpoint, &native) :
+                    astra_network_local_address(&socket->endpoint, &native);
     if (status != ASTRA_NETWORK_OK) {
         errno = network_errno(status);
         return -1;
@@ -1065,7 +1039,7 @@ int getsockopt(int fd, int level, int option, void *value,
         errno = EINVAL;
         return -1;
     }
-    status = network_library->get_option(&socket->endpoint, native_option,
+    status = astra_network_get_option(&socket->endpoint, native_option,
                                          &result);
     if (status != ASTRA_NETWORK_OK) {
         errno = network_errno(status);
@@ -1100,7 +1074,7 @@ int setsockopt(int fd, int level, int option, const void *value,
         return -1;
     }
     (void)memcpy(&input, value, sizeof(input));
-    status = network_library->set_option(&socket->endpoint, native_option,
+    status = astra_network_set_option(&socket->endpoint, native_option,
                                          (uint32_t)input);
     if (status != ASTRA_NETWORK_OK) {
         errno = network_errno(status);
@@ -1271,21 +1245,21 @@ int getaddrinfo(const char *node, const char *service,
 
         if (!network_open())
             return EAI_SYSTEM;
-        status = network_library->resolve_start(
+        status = astra_network_resolve_start(
             &network_session, node, port, native_family, native_type,
             native_protocol, &request);
         if (status != ASTRA_NETWORK_IN_PROGRESS)
             return network_gai_error("name resolution start", status);
-        status = network_library->request_wait(
+        status = astra_network_request_wait(
             &request, addresses, capacity, &count, ASTRA_DEADLINE_FOREVER);
         if (status == ASTRA_NETWORK_BUFFER_TOO_SMALL && count > capacity) {
             addresses = calloc(count, sizeof(*addresses));
             if (addresses == NULL) {
-                (void)network_library->request_cancel(&request);
+                (void)astra_network_request_cancel(&request);
                 return EAI_MEMORY;
             }
             capacity = count;
-            status = network_library->request_wait(
+            status = astra_network_request_wait(
                 &request, addresses, capacity, &count,
                 ASTRA_DEADLINE_FOREVER);
         }

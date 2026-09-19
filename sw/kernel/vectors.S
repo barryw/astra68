@@ -171,6 +171,10 @@ _kernel_restore_user_context:
 	move.w  KERNEL_CONTEXT_SR_OFFSET(%a0), -(%sp)
 	movem.l KERNEL_CONTEXT_D0_OFFSET(%a0), %d0-%d7/%a0-%a6
 	rte
+
+	.globl  kernel_enter_idle
+	.type   kernel_enter_idle, @function
+kernel_enter_idle:
 .Lkernel_idle:
 	jsr     kernel_dispatch_idle_enter
 	jsr     kernel_irqoff_latency_exit

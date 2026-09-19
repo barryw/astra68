@@ -26,6 +26,9 @@
 typedef struct AstraPosixFileOps {
     ssize_t (*read)(uint32_t slot, void *bytes, size_t length);
     ssize_t (*write)(uint32_t slot, const void *bytes, size_t length);
+    ssize_t (*pread)(uint32_t slot, void *bytes, size_t length, off_t offset);
+    ssize_t (*pwrite)(uint32_t slot, const void *bytes, size_t length,
+                      off_t offset);
     int (*close)(uint32_t slot);
     off_t (*seek)(uint32_t slot, off_t offset, int whence);
     uint32_t (*exec_size)(void);
@@ -90,6 +93,6 @@ void astra_posix_file_prepare(void);
 void astra_posix_socket_prepare(void);
 int astra_posix_file_fork_ready(void);
 int astra_posix_file_after_fork_child(void);
-void astra_posix_socket_after_fork_child(void);
+int astra_posix_socket_after_fork_child(void);
 
 #endif

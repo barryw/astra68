@@ -1,0 +1,9 @@
+/* Tracked linker input: this is source, not a generated link map. */
+ASTRA_1.0 {
+    global:
+        astra_dynamic_contract_read_tls;
+        astra_dynamic_contract_read_local_tls;
+        astra_dynamic_contract_tls;
+    local:
+        *;
+};

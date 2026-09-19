@@ -100,6 +100,9 @@ def environment(root, observed):
 
 
 def main():
+    launcher = RUN_ARTY.read_text()
+    assert "ASTRA_STORE=${ASTRA_STORE:-/var/lib/astra}" in launcher
+    assert "ASTRA_STORE=${ASTRA_STORE:-/data/astra}" not in launcher
     if shutil.which("flock") is None:
         print("Astra Arty launcher tests skipped: flock unavailable")
         return

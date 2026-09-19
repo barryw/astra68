@@ -4,19 +4,17 @@
 #include <astra/library.h>
 #include <astra/runtime.h>
 #include <astra/vfs_client.h>
-#include <astra/vfs_port_transport.h>
 
 #include <stddef.h>
 #include <string.h>
 
-ASTRA_LIBRARY("config.library", 1, 0, 0,
+ASTRA_DYNAMIC_LIBRARY("config.library.1", 1, 0, 0,
               ASTRA_CONFIG_LIBRARY_ABI_MAJOR,
               ASTRA_CONFIG_LIBRARY_ABI_MINOR,
               "Astra68 contributors", "Copyright 2026 Astra68 contributors");
 
 typedef struct ConfigState {
     AstraVfsClient client;
-    AstraVfsPortThreadState client_threads[ASTRA_PROCESS_THREAD_COUNT_MAX];
     uint32_t schema_version;
     uint32_t flags;
     uint32_t text_area;
@@ -189,7 +187,7 @@ static uint32_t load(ConfigState *state, AstraConfigError *error)
     while (status == ASTRA_CONFIG_OK && used < (uint32_t)size) {
         uint32_t moved = 0u;
 
-        status = astra_vfs_port_read_bulk(
+        status = astra_vfs_read(
             &state->client, file, used, text + used, (uint32_t)size - used,
             &moved);
         if (status == ASTRA_VFS_OK && moved == 0u)
@@ -229,7 +227,7 @@ static uint32_t load(ConfigState *state, AstraConfigError *error)
     return ASTRA_CONFIG_OK;
 }
 
-static uint32_t config_open(const AstraStartupInfo *startup,
+uint32_t astra_config_open(const AstraStartupInfo *startup,
                             uint32_t schema_version, uint32_t flags,
                             AstraConfig *config, AstraConfigError *error)
 {
@@ -253,12 +251,6 @@ static uint32_t config_open(const AstraStartupInfo *startup,
     if (status != ASTRA_CONFIG_OK)
         return status;
     (void)memset(state, 0, sizeof(*state));
-    if (!astra_vfs_port_set_thread_storage(
-            &state->client, state->client_threads,
-            ASTRA_PROCESS_THREAD_COUNT_MAX)) {
-        status = ASTRA_CONFIG_NO_MEMORY;
-        goto failed;
-    }
     state->schema_version = schema_version;
     state->flags = flags;
     if (!root_copy(state->root, capability->root) ||
@@ -267,7 +259,8 @@ static uint32_t config_open(const AstraStartupInfo *startup,
         status = ASTRA_CONFIG_INVALID;
         goto failed;
     }
-    status = astra_vfs_port_connect_lazy(&state->client, capability->handle);
+    status = astra_vfs_client_connect_service(&state->client,
+                                              capability->handle);
     if (status != ASTRA_VFS_OK) {
         status = map_status(status);
         goto failed;
@@ -295,7 +288,7 @@ failed:
     return status;
 }
 
-static void config_close(AstraConfig *config)
+void astra_config_close(AstraConfig *config)
 {
     ConfigState *state;
     uint32_t state_area;
@@ -317,14 +310,14 @@ static ConfigState *state_of(const AstraConfig *config)
            config->_private_area != 0u ? config->_private_state : NULL;
 }
 
-static uint32_t config_reload(AstraConfig *config, AstraConfigError *error)
+uint32_t astra_config_reload(AstraConfig *config, AstraConfigError *error)
 {
     ConfigState *state = state_of(config);
 
     return state != NULL ? load(state, error) : ASTRA_CONFIG_CLOSED;
 }
 
-static uint32_t config_count(const AstraConfig *config, const char *key,
+uint32_t astra_config_count(const AstraConfig *config, const char *key,
                              uint32_t *count)
 {
     const ConfigState *state = state_of(config);
@@ -333,7 +326,7 @@ static uint32_t config_count(const AstraConfig *config, const char *key,
         state->text, state->length, key, count) : ASTRA_CONFIG_CLOSED;
 }
 
-static uint32_t config_get_string(const AstraConfig *config, const char *key,
+uint32_t astra_config_get_string(const AstraConfig *config, const char *key,
                                   uint32_t index, char *out,
                                   uint32_t capacity, uint32_t *length)
 {
@@ -344,7 +337,7 @@ static uint32_t config_get_string(const AstraConfig *config, const char *key,
         ASTRA_CONFIG_CLOSED;
 }
 
-static uint32_t config_get_i64(const AstraConfig *config, const char *key,
+uint32_t astra_config_get_i64(const AstraConfig *config, const char *key,
                                uint32_t index, int64_t *value)
 {
     const ConfigState *state = state_of(config);
@@ -353,7 +346,7 @@ static uint32_t config_get_i64(const AstraConfig *config, const char *key,
         state->text, state->length, key, index, value) : ASTRA_CONFIG_CLOSED;
 }
 
-static uint32_t config_get_u64(const AstraConfig *config, const char *key,
+uint32_t astra_config_get_u64(const AstraConfig *config, const char *key,
                                uint32_t index, uint64_t *value)
 {
     const ConfigState *state = state_of(config);
@@ -362,7 +355,7 @@ static uint32_t config_get_u64(const AstraConfig *config, const char *key,
         state->text, state->length, key, index, value) : ASTRA_CONFIG_CLOSED;
 }
 
-static uint32_t config_get_bool(const AstraConfig *config, const char *key,
+uint32_t astra_config_get_bool(const AstraConfig *config, const char *key,
                                 uint32_t index, int *value)
 {
     const ConfigState *state = state_of(config);
@@ -392,7 +385,7 @@ static uint32_t commit(ConfigState *state, uint32_t text_area, char *text,
     while (status == ASTRA_VFS_OK && used < length) {
         uint32_t moved = 0u;
 
-        status = astra_vfs_port_write_bulk(
+        status = astra_vfs_write(
             &state->client, file, used, text + used, length - used, &moved);
         if (status == ASTRA_VFS_OK && moved == 0u)
             status = ASTRA_VFS_ERR_IO;
@@ -465,7 +458,7 @@ static uint32_t change(AstraConfig *config, const char *key, uint32_t index,
     return commit(state, text_area, text, required - 1u);
 }
 
-static uint32_t set_string(AstraConfig *config, const char *key,
+uint32_t astra_config_set_string(AstraConfig *config, const char *key,
                            uint32_t index, const char *value)
 {
     return value != NULL ? change(config, key, index, value, 0) :
@@ -484,88 +477,65 @@ static uint32_t signed_decimal(char *out, int64_t value)
     return 1u + decimal(out + 1u, magnitude);
 }
 
-static uint32_t set_i64(AstraConfig *config, const char *key, uint32_t index,
+uint32_t astra_config_set_i64(AstraConfig *config, const char *key, uint32_t index,
                         int64_t value)
 {
     char number[21];
 
     (void)signed_decimal(number, value);
-    return set_string(config, key, index, number);
+    return astra_config_set_string(config, key, index, number);
 }
 
-static uint32_t set_u64(AstraConfig *config, const char *key, uint32_t index,
+uint32_t astra_config_set_u64(AstraConfig *config, const char *key, uint32_t index,
                         uint64_t value)
 {
     char number[21];
 
     (void)decimal(number, value);
-    return set_string(config, key, index, number);
+    return astra_config_set_string(config, key, index, number);
 }
 
-static uint32_t set_bool(AstraConfig *config, const char *key, uint32_t index,
+uint32_t astra_config_set_bool(AstraConfig *config, const char *key, uint32_t index,
                          int value)
 {
-    return set_string(config, key, index, value != 0 ? "true" : "false");
+    return astra_config_set_string(config, key, index, value != 0 ? "true" : "false");
 }
 
-static uint32_t append_string(AstraConfig *config, const char *key,
+uint32_t astra_config_append_string(AstraConfig *config, const char *key,
                               const char *value)
 {
     uint32_t count = 0u;
-    uint32_t status = config_count(config, key, &count);
+    uint32_t status = astra_config_count(config, key, &count);
 
-    return status == ASTRA_CONFIG_OK ? set_string(config, key, count, value) :
+    return status == ASTRA_CONFIG_OK ? astra_config_set_string(config, key, count, value) :
                                       status;
 }
 
-static uint32_t append_i64(AstraConfig *config, const char *key,
+uint32_t astra_config_append_i64(AstraConfig *config, const char *key,
                            int64_t value)
 {
     char number[21];
 
     (void)signed_decimal(number, value);
-    return append_string(config, key, number);
+    return astra_config_append_string(config, key, number);
 }
 
-static uint32_t append_u64(AstraConfig *config, const char *key,
+uint32_t astra_config_append_u64(AstraConfig *config, const char *key,
                            uint64_t value)
 {
     char number[21];
 
     (void)decimal(number, value);
-    return append_string(config, key, number);
+    return astra_config_append_string(config, key, number);
 }
 
-static uint32_t append_bool(AstraConfig *config, const char *key, int value)
+uint32_t astra_config_append_bool(AstraConfig *config, const char *key, int value)
 {
-    return append_string(config, key, value != 0 ? "true" : "false");
+    return astra_config_append_string(config, key, value != 0 ? "true" : "false");
 }
 
-static uint32_t remove_value(AstraConfig *config, const char *key,
+uint32_t astra_config_remove(AstraConfig *config, const char *key,
                              uint32_t index)
 {
     return change(config, key, index, NULL, 1);
 }
-
-const AstraConfigLibraryV1 astra_library_exports ASTRA_LIBRARY_EXPORTS = {
-    ASTRA_CONFIG_LIBRARY_ABI_MAJOR,
-    ASTRA_CONFIG_LIBRARY_ABI_MINOR,
-    sizeof(AstraConfigLibraryV1),
-    config_open,
-    config_close,
-    config_reload,
-    config_count,
-    config_get_string,
-    config_get_i64,
-    config_get_u64,
-    config_get_bool,
-    set_string,
-    set_i64,
-    set_u64,
-    set_bool,
-    append_string,
-    append_i64,
-    append_u64,
-    append_bool,
-    remove_value,
-};

@@ -1,9 +1,9 @@
 # Filesystem Kit
 
-Include `astra/filesystem_kit.h` for the logical shared-library name and
-minimum ABI accepted by `OpenLibrary()`. Include
-`astra/filesystem_library.h` from the Filesystem Kit development package for
-the typed ABI 1.0 export table.
+Include `astra/filesystem_kit.h` for the complete API. Link against
+`filesystem.library.2` and declare the minimum compatible version in the
+bundle manifest. The process loader resolves that dependency before `main`;
+applications call the declared `astra_filesystem_*` functions directly.
 
 The library attaches to the process namespace already created from startup
 grants. It supports assign-aware files, explicit-offset I/O, 64-bit seeks,

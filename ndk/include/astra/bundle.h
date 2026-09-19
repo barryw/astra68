@@ -41,7 +41,7 @@ typedef struct AstraBundleVersion {
 /** One required or provided shared library. */
 typedef struct AstraBundleLibrary {
     char name[ASTRA_BUNDLE_LIBRARY_NAME_MAX]; /**< Logical library name. */
-    uint16_t abi; /**< Required export-table ABI major. */
+    uint16_t abi; /**< Required ELF ABI major. */
     AstraBundleVersion version; /**< Required/provided semantic version. */
 } AstraBundleLibrary;
 

@@ -58,29 +58,31 @@ must not infer them from linker symbols.
 |---|---|---:|---|---|
 | `0x01FF8000` | `0x01FFFFFF` | 32 KiB | Firmware scratch, `BootInfo`, stack | Firmware until handoff data is copied |
 | `0x02000000` | `0x02003FFF` | 16 KiB | Early ring log | Kernel diagnostics |
-| `0x02004000` | `0x02043FFF` | 256 KiB | Initial user image, then usable RAM | Firmware for the pages the image fills; allocator for the rest |
+| `0x02004000` | `0x02043FFF` | 256 KiB | Usable RAM | Physical-page allocator |
 | `0x02044000` | `0x020C3FFF` | 512 KiB | Kernel image, BSS, and guarded stacks | Kernel |
 | `0x020C4000` | `0x020D3FFF` | 64 KiB | Retained kernel trace | Kernel diagnostics |
 | `0x020D4000` | `0x02153FFF` | 512 KiB | Retained kernel ABI padding | Kernel |
 | `0x02154000` | `0x02353FFF` | 2 MiB | Kernel object and scheduler tables | Kernel |
-| `0x02354000` | `0x03EFFFFF` | 27.668 MiB | Usable RAM | Physical-page allocator |
+| `0x02354000` | image-dependent | page-rounded image size | Initial user image | Firmware until the kernel consumes it |
+| end of initial image | `0x03EFFFFF` | image-dependent | Usable RAM | Physical-page allocator |
 | `0x03F00000` | `0x03FFFFFF` | 1 MiB | OHCI DMA pool | Device-owned, uncached |
 | `0x04000000` | `0x0422FFFF` | 2.188 MiB | Dynamic frame/ownership metadata for the 512 MiB profile | Kernel |
 | `0x04230000` | `0x21FFFFFF` | 477.812 MiB | Usable RAM | Physical-page allocator |
 
 `AstraBootInfo` itself begins at `0x01FF8000` and is 268 bytes as of boot ABI
-0.6. The linker reserves the first 1 KiB of bootstrap BRAM for the handoff
+0.7. The linker reserves the first 1 KiB of bootstrap BRAM for the handoff
 structure and ABI growth. The canonical definitions are in
 `sw/include/astra/boot.h`.
 
-The 256 KiB below the kernel is split at boot. Firmware copies the one initial
-user image to `0x02004000`, publishes `user_image_base`/`user_image_size` in
+Firmware copies the one initial user image immediately after the fixed kernel
+reservation at `0x02354000`, publishes `user_image_base`/`user_image_size` in
 `AstraBootInfo`, and declares only the page-rounded span it fills as firmware
-memory; the remainder of the 256 KiB is handed to the physical allocator as
-usual. Firmware memory is the correct class because the kernel reads those
-bytes long after it has taken ownership of the map, and the allocator must
-never hand them out. The image is capped at `ASTRA_USER_IMAGE_MAX_SIZE`
-(256 KiB) and validation rejects any description that escapes a firmware range.
+memory. The rest of RAM up to the next physical reserved aperture is handed to
+the allocator. Firmware memory is the correct class because the kernel reads
+those bytes long after it has taken ownership of the map, and the allocator
+must never hand them out. There is no software size quota: validation requires
+alignment and containment in readable firmware-owned RAM, while firmware
+derives capacity from the actual memory map.
 
 The fixed trace and object-table addresses stay stable. Firmware accepts a
 page-aligned RAM map beginning at the early-log base and extending through the

@@ -12,8 +12,8 @@ enum {
 
 /* Build one resize-responsive control tree in caller-owned storage. */
 AstraResult astra_example_build_settings(
-    const AstraInterfaceLibrary *interface, AstraControl controls[7],
-    AstraUIContext *ui, uint16_t width, uint16_t height)
+    AstraControl controls[7], AstraUIContext *ui,
+    uint16_t width, uint16_t height)
 {
     static const AstraChoiceItem views[] = {
         {"Windows", sizeof("Windows") - 1u, {0u, 0u}},
@@ -31,40 +31,38 @@ AstraResult astra_example_build_settings(
     AstraFlexLayout root = ASTRA_FLEX_LAYOUT_INIT;
     AstraResult result;
 
-    if (controls == 0 || ui == 0 ||
-        !astra_interface_library_supports(
-            interface, 0u, ASTRA_INTERFACE_LIBRARY_5_0_SIZE))
+    if (controls == 0 || ui == 0)
         return ASTRA_ERROR_INVALID_ARGUMENT;
 
     container.id = SETTINGS_ROOT;
     container.layout.direction = ASTRA_FLEX_COLUMN;
     container.layout.main_gap = 12u;
     controls[0] = (AstraControl)ASTRA_CONTROL_INIT;
-    result = interface->container_init(&controls[0], &container);
+    result = astra_interface_container_init(&controls[0], &container);
     if (result != ASTRA_OK) return result;
     item.grow = 1u;
-    result = interface->control_set_flex(&controls[0], &item);
+    result = astra_interface_control_set_flex(&controls[0], &item);
     if (result != ASTRA_OK) return result;
 
     label.id = SETTINGS_TITLE;
     label.text = "Desktop settings";
     label.text_length = sizeof("Desktop settings") - 1u;
     controls[1] = (AstraControl)ASTRA_CONTROL_INIT;
-    result = interface->label_init(&controls[1], &label);
+    result = astra_interface_label_init(&controls[1], &label);
     if (result != ASTRA_OK) return result;
 
     toggle.id = SETTINGS_SNAP;
     toggle.text = "Snap to grid";
     toggle.text_length = sizeof("Snap to grid") - 1u;
     controls[2] = (AstraControl)ASTRA_CONTROL_INIT;
-    result = interface->checkbox_init(&controls[2], &toggle);
+    result = astra_interface_checkbox_init(&controls[2], &toggle);
     if (result != ASTRA_OK) return result;
 
     segmented.id = SETTINGS_VIEW;
     segmented.items = views;
     segmented.item_count = sizeof(views) / sizeof(views[0]);
     controls[3] = (AstraControl)ASTRA_CONTROL_INIT;
-    result = interface->segmented_init(&controls[3], &segmented);
+    result = astra_interface_segmented_init(&controls[3], &segmented);
     if (result != ASTRA_OK) return result;
 
     stepper.id = SETTINGS_SCALE;
@@ -73,7 +71,7 @@ AstraResult astra_example_build_settings(
     stepper.maximum = 200;
     stepper.step = 10;
     controls[4] = (AstraControl)ASTRA_CONTROL_INIT;
-    result = interface->stepper_init(&controls[4], &stepper);
+    result = astra_interface_stepper_init(&controls[4], &stepper);
     if (result != ASTRA_OK) return result;
 
     dial.id = SETTINGS_GAIN;
@@ -83,7 +81,7 @@ AstraResult astra_example_build_settings(
     dial.reset_value = 0;
     dial.decimal_places = 2u;
     controls[5] = (AstraControl)ASTRA_CONTROL_INIT;
-    result = interface->dial_init(&controls[5], &dial);
+    result = astra_interface_dial_init(&controls[5], &dial);
     if (result != ASTRA_OK) return result;
 
     button.id = SETTINGS_APPLY;
@@ -91,19 +89,19 @@ AstraResult astra_example_build_settings(
     button.text_length = sizeof("Apply") - 1u;
     button.variant = ASTRA_BUTTON_PRIMARY;
     controls[6] = (AstraControl)ASTRA_CONTROL_INIT;
-    result = interface->button_init(&controls[6], &button);
+    result = astra_interface_button_init(&controls[6], &button);
     if (result != ASTRA_OK) return result;
 
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
     item.parent_id = SETTINGS_ROOT;
     for (uint32_t index = 1u; index < 7u; ++index) {
-        result = interface->control_set_flex(&controls[index], &item);
+        result = astra_interface_control_set_flex(&controls[index], &item);
         if (result != ASTRA_OK) return result;
     }
-    result = interface->ui_init(ui, controls, 7u, width, height);
+    result = astra_interface_ui_init(ui, controls, 7u, width, height);
     if (result != ASTRA_OK) return result;
     root.align_items = ASTRA_FLEX_ALIGN_STRETCH;
     root.padding_left = root.padding_top = 24u;
     root.padding_right = root.padding_bottom = 24u;
-    return interface->ui_layout(ui, &root);
+    return astra_interface_ui_layout(ui, &root);
 }

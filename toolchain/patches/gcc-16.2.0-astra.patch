@@ -56,16 +56,23 @@ new file mode 100644
 +#undef TARGET_ASM_FILE_END
 +#define TARGET_ASM_FILE_END file_end_indicate_exec_stack
 +
-+/* Astra images are static ELF and use the system's own startup object.  */
++/* Astra executables use the system's own startup object.  A shared library
++   has constructors but no process entry point.  */
 +#undef STARTFILE_SPEC
-+#define STARTFILE_SPEC "crt0-hosted.o%s crtbegin.o%s"
++#define STARTFILE_SPEC "%{!shared:crt0-hosted.o%s} crtbegin.o%s"
 +
 +#undef ENDFILE_SPEC
 +#define ENDFILE_SPEC "crtend.o%s"
 +
-+/* Executables are static; Kit libraries must remain real ELF DSOs.  */
++/* A normal executable is interpreted by Astra's versioned loader.  Bootstrap
++   and recovery images request -static explicitly and receive the matching
++   no-interpreter profile.  The NDK selects the matching executable linker
++   script from its versioned archive; the compiler owns only the target-wide
++   interpreter default.  */
 +#undef LINK_SPEC
-+#define LINK_SPEC "%{shared:-shared} %{!shared:-static}"
++#define LINK_SPEC \
++  "%{shared:-shared} " \
++  "%{!shared:%{!static:--dynamic-linker=loader.library.1}}"
 +
 +#undef LIB_SPEC
 +#define LIB_SPEC \

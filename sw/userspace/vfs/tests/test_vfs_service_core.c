@@ -136,8 +136,12 @@ fake_open(void *context, const char *path, uint32_t flags,
     ++found->open_count;
     *node = (uintptr_t)found;
     info->size = found->size;
+    info->mtime = 1234567;
+    info->uid = 17u;
+    info->gid = 23u;
     info->kind = found->kind;
     info->mode = found->mode;
+    info->nlink = 3u;
     return ASTRA_VFS_OK;
 }
 
@@ -185,7 +189,7 @@ fake_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags,
     FakeNode *found = (FakeNode *)node;
 
     (void)context;
-    if ((flags & ASTRA_VFS_OPEN_APPEND) != 0u)
+    if ((flags & ASTRA_VFS_WRITE_APPEND) != 0u)
         offset = found->size;
     *moved = 0u;
     *position = offset;
@@ -232,8 +236,12 @@ fake_stat(void *context, const char *path, AstraVfsNodeInfo *info)
         return ASTRA_VFS_ERR_NOT_FOUND;
     }
     info->size = found->size;
+    info->mtime = 1234567;
+    info->uid = 17u;
+    info->gid = 23u;
     info->kind = found->kind;
     info->mode = found->mode;
+    info->nlink = 3u;
     return ASTRA_VFS_OK;
 }
 
@@ -243,6 +251,65 @@ fake_stat(void *context, const char *path, AstraVfsNodeInfo *info)
  * test sees that a listing costs one visit per entry rather than one walk.
  */
 static uint32_t fake_readdir_visits;
+
+static uint32_t terminal_readdir_calls;
+
+static uint32_t
+terminal_readdir(void *context, uintptr_t directory, const char *path,
+                 uint64_t cookie, char *name, uint32_t capacity,
+                 AstraVfsNodeInfo *info, uint64_t *next)
+{
+    const char *entry;
+
+    (void)context;
+    (void)directory;
+    (void)path;
+    ++terminal_readdir_calls;
+    if (cookie == 0u) {
+        entry = "first";
+        *next = 7u;
+    } else if (cookie == 7u) {
+        entry = "last";
+        *next = 0u;
+    } else {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    assert(strlen(entry) + 1u <= capacity);
+    strcpy(name, entry);
+    info->kind = ASTRA_VFS_KIND_FILE;
+    return ASTRA_VFS_OK;
+}
+
+static const AstraVfsBackendOps terminal_readdir_ops = {
+    .readdir = terminal_readdir,
+};
+
+static void
+test_terminal_readdir_cookie(void)
+{
+    const AstraVfsBackend backend = {&terminal_readdir_ops, NULL};
+    uint8_t buffer[128];
+    uint64_t next = 0u;
+    uint32_t used = 0u;
+
+    /* Negative: a nonterminal cookie must continue the scan. */
+    terminal_readdir_calls = 0u;
+    assert(astra_vfs_backend_readdir_into(
+               &backend, 0u, "/", 0u, 1u, buffer, sizeof(buffer), &used,
+               &next) == ASTRA_VFS_OK);
+    assert(terminal_readdir_calls == 1u);
+    assert(used == ASTRA_VFS_DIRENT_HEADER + 5u);
+    assert(next == 7u);
+
+    /* Positive: the terminal entry is returned once, never replayed. */
+    terminal_readdir_calls = 0u;
+    assert(astra_vfs_backend_readdir_into(
+               &backend, 0u, "/", 7u, 8u, buffer, sizeof(buffer), &used,
+               &next) == ASTRA_VFS_OK);
+    assert(terminal_readdir_calls == 1u);
+    assert(used == ASTRA_VFS_DIRENT_HEADER + 4u);
+    assert(next == 0u);
+}
 
 static uint32_t
 fake_readdir(void *context, uintptr_t directory, const char *path,
@@ -382,10 +449,108 @@ fake_link(void *context, const char *from, const char *to)
     return ASTRA_VFS_OK;
 }
 
+static int
+fake_relative_path(uintptr_t directory, const char *path, char *full,
+                   uint32_t capacity)
+{
+    const FakeNode *node = (const FakeNode *)directory;
+    int written;
+
+    if (node == NULL || !node->used ||
+        node->kind != ASTRA_VFS_KIND_DIRECTORY || path == NULL ||
+        path[0] == '\0' || path[0] == '/')
+        return 0;
+    written = snprintf(full, capacity, "%s/%s", node->path, path);
+    return written > 0 && (uint32_t)written < capacity;
+}
+
+static uint32_t
+fake_open_at(void *context, uintptr_t directory, const char *path,
+             uint32_t flags, uint16_t create_mode, uintptr_t *node,
+             AstraVfsNodeInfo *info)
+{
+    char full[ASTRA_VFS_PATH_MAX];
+
+    if (!fake_relative_path(directory, path, full, sizeof(full)))
+        return ASTRA_VFS_ERR_INVALID;
+    return fake_open(context, full, flags, create_mode, node, info);
+}
+
+static uint32_t
+fake_stat_at(void *context, uintptr_t directory, const char *path,
+             AstraVfsNodeInfo *info)
+{
+    char full[ASTRA_VFS_PATH_MAX];
+
+    if (!fake_relative_path(directory, path, full, sizeof(full)))
+        return ASTRA_VFS_ERR_INVALID;
+    return fake_stat(context, full, info);
+}
+
+static uint32_t
+fake_unlink_at(void *context, uintptr_t directory, const char *path,
+               uint32_t flags)
+{
+    char full[ASTRA_VFS_PATH_MAX];
+
+    if (flags != 0u ||
+        !fake_relative_path(directory, path, full, sizeof(full)))
+        return ASTRA_VFS_ERR_INVALID;
+    return fake_unlink(context, full);
+}
+
+static uint32_t
+fake_chmod_node(void *context, uintptr_t node, uint16_t mode)
+{
+    FakeNode *found = (FakeNode *)node;
+
+    (void)context;
+    if (found == NULL || !found->used)
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    found->mode = mode;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t
+fake_chmod_at(void *context, uintptr_t directory, const char *path,
+              uint16_t mode, uint32_t flags)
+{
+    char full[ASTRA_VFS_PATH_MAX];
+
+    if (flags != 0u ||
+        !fake_relative_path(directory, path, full, sizeof(full)))
+        return ASTRA_VFS_ERR_INVALID;
+    return fake_chmod(context, full, mode);
+}
+
+static uint32_t
+fake_filesystem_info(void *context, uintptr_t node, const char *path,
+                     AstraVfsFilesystemInfo *info)
+{
+    (void)context;
+    if (info == NULL || ((node == 0u) == (path == NULL)))
+        return ASTRA_VFS_ERR_INVALID;
+    if (node == 0u && fake_find(path) == NULL)
+        return ASTRA_VFS_ERR_NOT_FOUND;
+    memset(info, 0, sizeof(*info));
+    info->size = sizeof(*info);
+    info->block_size = 4096u;
+    info->fragment_size = 4096u;
+    info->blocks = 4096u;
+    info->blocks_free = 2048u;
+    info->blocks_available = 2000u;
+    info->files = 512u;
+    info->files_free = 480u;
+    info->name_max = ASTRA_VFS_NAME_MAX - 1u;
+    return ASTRA_VFS_OK;
+}
+
 static const AstraVfsBackendOps fake_ops = {
     fake_open, fake_close, fake_read, fake_write, fake_sync, fake_truncate,
     fake_stat, fake_readdir, fake_mkdir, fake_unlink, fake_rename,
-    fake_chmod, fake_readlink, fake_symlink, fake_link
+    fake_chmod, fake_readlink, fake_symlink, fake_link, fake_open_at,
+    fake_unlink_at, fake_chmod_node, fake_chmod_at, fake_filesystem_info,
+    fake_stat_at
 };
 
 static AstraVfsService service;
@@ -1412,6 +1577,59 @@ test_client_through_transport(void)
     assert(astra_vfs_mkdir_mode(&client, "/dir", 0710u) == ASTRA_VFS_OK);
     assert(call_acquires == 1u);
     assert(fake_find("/dir")->mode == 0710u);
+    {
+        AstraVfsFile directory;
+        AstraVfsFile relative;
+        AstraVfsDirEntry metadata;
+        AstraVfsFilesystemInfo info;
+
+        assert(astra_vfs_open(&client, "/dir",
+                              ASTRA_VFS_OPEN_READ |
+                                  ASTRA_VFS_OPEN_DIRECTORY,
+                              &directory, NULL, NULL) == ASTRA_VFS_OK);
+        assert(astra_vfs_open_at_mode(
+                   &client, directory, "relative.txt",
+                   ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE |
+                       ASTRA_VFS_OPEN_CREATE,
+                   0600u, &relative, NULL, NULL) == ASTRA_VFS_OK);
+        assert(fake_find("/dir/relative.txt") != NULL);
+        assert(astra_vfs_chmod_file(&client, relative, 0640u) ==
+               ASTRA_VFS_OK);
+        assert(fake_find("/dir/relative.txt")->mode == 0640u);
+        assert(astra_vfs_chmod_at(&client, directory, "relative.txt", 0620u,
+                                  0u) == ASTRA_VFS_OK);
+        assert(fake_find("/dir/relative.txt")->mode == 0620u);
+        assert(astra_vfs_stat_at_meta(&client, directory, "relative.txt",
+                                      &metadata) == ASTRA_VFS_OK);
+        assert(metadata.mode == 0620u && metadata.mtime == 1234567 &&
+               metadata.uid == 17u && metadata.gid == 23u &&
+               metadata.nlink == 3u);
+        assert(astra_vfs_stat_meta(&client, "/dir/relative.txt", &metadata) ==
+               ASTRA_VFS_OK);
+        assert(metadata.mode == 0620u && metadata.mtime == 1234567 &&
+               metadata.uid == 17u && metadata.gid == 23u &&
+               metadata.nlink == 3u);
+        assert(astra_vfs_filesystem_info_file(&client, relative, &info) ==
+               ASTRA_VFS_OK);
+        assert(info.block_size == 4096u && info.blocks == 4096u);
+        assert(astra_vfs_filesystem_info_path(&client,
+                                              "/dir/relative.txt", &info) ==
+               ASTRA_VFS_OK);
+        assert(info.files_free == 480u && info.name_max == 63u);
+        assert(astra_vfs_close(&client, relative) == ASTRA_VFS_OK);
+        assert(astra_vfs_unlink_at(&client, directory, "relative.txt", 0u) ==
+               ASTRA_VFS_OK);
+        assert(fake_find("/dir/relative.txt") == NULL);
+        assert(astra_vfs_close(&client, directory) == ASTRA_VFS_OK);
+
+        client.version = UINT16_C(22);
+        assert(astra_vfs_open_at(&client, directory, "old", ASTRA_VFS_OPEN_READ,
+                                 &relative, NULL, NULL) ==
+               ASTRA_VFS_ERR_UNSUPPORTED);
+        assert(astra_vfs_stat_at_meta(&client, directory, "old", &metadata) ==
+               ASTRA_VFS_ERR_UNSUPPORTED);
+        client.version = ASTRA_VFS_VERSION;
+    }
     call_acquires = 0u;
     assert(astra_vfs_open_mode(&client, "/dir/note.txt",
                                ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE |
@@ -1473,10 +1691,15 @@ test_client_through_transport(void)
         uint64_t position = 0u;
         static const char tail[] = "++";
 
-        assert(astra_vfs_write_position(&client, file, 0u, tail,
+        assert(astra_vfs_write_position(&client, file, 0u,
+                                        ASTRA_VFS_WRITE_APPEND, tail,
                                         sizeof(tail) - 1u, &moved,
                                         &position) == ASTRA_VFS_OK);
         assert(moved == sizeof(tail) - 1u && position == 6u);
+        assert(astra_vfs_write_position(&client, file, 0u, 0u, tail,
+                                        sizeof(tail) - 1u, &moved,
+                                        &position) == ASTRA_VFS_OK);
+        assert(moved == sizeof(tail) - 1u && position == 2u);
     }
     assert(astra_vfs_close(&client, file) == ASTRA_VFS_OK);
 
@@ -1635,6 +1858,7 @@ test_client_through_transport(void)
 int
 main(void)
 {
+    test_terminal_readdir_cookie();
     test_session_handshake();
     test_transport_owner_isolation_and_fair_file_share();
     test_file_round_trip();

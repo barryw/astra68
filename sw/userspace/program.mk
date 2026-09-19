@@ -1,5 +1,5 @@
-ifndef ASTRA_PROGRAM_OWNER_DIRS
-$(error ASTRA_PROGRAM_OWNER_DIRS must name every library owner)
+ifndef ASTRA_PROGRAM_OWNER_TARGETS
+$(error ASTRA_PROGRAM_OWNER_TARGETS must name each owner as directory:target)
 endif
 
 ASTRA_PROGRAM_TARGETS ?= $(IMAGE) size
@@ -11,15 +11,25 @@ ASTRA_PROGRAM_PRODUCTS := $(strip $(OBJECT) $(OBJECTS) $(TARGET) $(IMAGE))
 # created before the first compile, not by the following freshness check.
 $(ASTRA_PROGRAM_PRODUCTS): $(ASTRA_TOOLCHAIN_STAMP)
 
+define ASTRA_BUILD_PROGRAM_OWNERS
+for owner in $(ASTRA_PROGRAM_OWNER_TARGETS); do \
+		directory=$${owner%%:*}; \
+		target=$${owner#*:}; \
+		test "$$directory" != "$$owner" && test -n "$$target" || { \
+			printf 'invalid Astra program owner target: %s\n' "$$owner" >&2; \
+			exit 2; \
+		}; \
+		$(MAKE) -C "$$directory" "$$target" || exit $$?; \
+	done
+endef
+
 all:
-	$(MAKE) libraries
+	+@$(ASTRA_BUILD_PROGRAM_OWNERS)
 	$(MAKE) prepare
 	$(MAKE) ASTRA_PROGRAM_OWNERS_READY=1 program
 
 libraries:
-	@for directory in $(ASTRA_PROGRAM_OWNER_DIRS); do \
-		$(MAKE) -C $$directory all || exit $$?; \
-	done
+	+@$(ASTRA_BUILD_PROGRAM_OWNERS)
 
 prepare: $(ASTRA_PROGRAM_PREPARE_TARGETS)
 
@@ -39,7 +49,7 @@ include $(ASTRA_PROGRAM_OWNER_GATE)
 
 ifeq ($(MAKE_RESTARTS),)
 $(ASTRA_PROGRAM_OWNER_GATE): __astra_program_owner_gate_force
-	$(MAKE) libraries
+	+@$(ASTRA_BUILD_PROGRAM_OWNERS)
 	$(MAKE) prepare
 	@mkdir -p $(@D)
 	@touch $@

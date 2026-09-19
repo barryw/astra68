@@ -17,8 +17,8 @@ static int copy(char *out, uint32_t capacity, const char *text)
     return 1;
 }
 
-static int authority(char *token, char *name, uint32_t *rights,
-                     int allow_raw)
+int supervisor_manifest_authority(char *token, char *name, uint32_t *rights,
+                                  int allow_raw)
 {
     char *colon = token;
 
@@ -47,7 +47,7 @@ int supervisor_manifest_grant(char *text, SupervisorManifestGrant *grant)
     if (text == NULL || grant == NULL)
         return 0;
     (void)memset(grant, 0, sizeof(*grant));
-    if (!authority(text, grant->name, &grant->rights, 1))
+    if (!supervisor_manifest_authority(text, grant->name, &grant->rights, 1))
         return 0;
     grant->is_namespace = grant->rights != 0u;
     return 1;
@@ -106,8 +106,9 @@ static int parse_line(char *line, SupervisorManifestEntry *entry)
                     SUPERVISOR_MANIFEST_PUBLICATION_MAX)
                 return 0;
             publication = &entry->serves[entry->serves_count];
-            if (!authority(token[at++], publication->name,
-                           &publication->rights, 1))
+            if (!supervisor_manifest_authority(
+                    token[at++], publication->name,
+                    &publication->rights, 1))
                 return 0;
             ++entry->serves_count;
         }

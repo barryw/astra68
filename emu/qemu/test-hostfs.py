@@ -58,9 +58,17 @@ FS_RENAME = 11
 FS_READLINK = 13
 FS_SYMLINK = 14
 FS_LINK = 15
+FS_OPEN_AT = 16
+FS_UNLINK_AT = 17
+FS_CHMOD_FILE = 18
+FS_CHMOD_AT = 19
+FS_FILESYSTEM_INFO = 20
 SERVICE_METRICS = 2
 METRICS_SNAPSHOT = 1
-METRICS_SIZE = 368
+SERVICE_ENTROPY = 4
+ENTROPY_FILL = 1
+ENTROPY_MAX = 256
+METRICS_CAPACITY = COMMAND_SIZE
 METRIC_HOST_COMMANDS = 8
 
 OPEN_READ = 1 << 0
@@ -214,8 +222,8 @@ def configure_channel(qtest, generation, operation, slot=3, owner=0x1001,
 
 def run(qtest, root, outside):
     qtest.detect_endian()
-    assert qtest.read32(HACC_VERSION) == 0x00010006
-    assert qtest.read32(HACC_CAPS) == 63
+    assert qtest.read32(HACC_VERSION) == 0x00010009
+    assert qtest.read32(HACC_CAPS) == 255
     assert qtest.read32(HACC_STATE) == 1
     assert qtest.read32(HACC_MAX_TRANSFER) == 2 * 1024 * 1024
     assert qtest.read32(HACC_MAX_COMMANDS) == 4096
@@ -224,19 +232,36 @@ def run(qtest, root, outside):
 
     metrics = execute(qtest, [make_command(
         generation, METRICS_SNAPSHOT, data_offset=COMMAND_SIZE,
-        data_capacity=METRICS_SIZE, service=SERVICE_METRICS)],
-        b"\xA5" * METRICS_SIZE)[0]
+        data_capacity=METRICS_CAPACITY, service=SERVICE_METRICS)],
+        b"\xA5" * METRICS_CAPACITY)[0]
     assert status(metrics) == STATUS_OK
-    assert get32(metrics, 52) == METRICS_SIZE
-    snapshot = qtest.read(BUFFER + COMMAND_SIZE, METRICS_SIZE)
-    assert struct.unpack_from(">IHH", snapshot, 0) == (METRICS_SIZE, 1, 44)
+    metrics_size = get32(metrics, 52)
+    assert 16 < metrics_size <= METRICS_CAPACITY
+    snapshot = qtest.read(BUFFER + COMMAND_SIZE, metrics_size)
+    size, version, count = struct.unpack_from(">IHH", snapshot, 0)
+    assert size == metrics_size
+    assert version == 1
+    assert count == (metrics_size - 16) // 8
+    assert count > METRIC_HOST_COMMANDS
     assert get64(snapshot, 16) != 0
     assert get64(snapshot, 16 + METRIC_HOST_COMMANDS * 8) == 0
     too_small = execute(qtest, [make_command(
         generation, METRICS_SNAPSHOT, data_offset=COMMAND_SIZE,
-        data_capacity=METRICS_SIZE - 1, service=SERVICE_METRICS)],
-        b"\xA5" * (METRICS_SIZE - 1))[0]
+        data_capacity=metrics_size - 1, service=SERVICE_METRICS)],
+        b"\xA5" * (metrics_size - 1))[0]
     assert status(too_small) == STATUS_INVALID
+
+    entropy = execute(qtest, [make_command(
+        generation, ENTROPY_FILL, data_offset=COMMAND_SIZE,
+        data_capacity=32, service=SERVICE_ENTROPY)], b"\0" * 32)[0]
+    assert status(entropy) == STATUS_OK
+    assert get32(entropy, 52) == 32
+    assert qtest.read(BUFFER + COMMAND_SIZE, 32) != b"\0" * 32
+    entropy_too_large = execute(qtest, [make_command(
+        generation, ENTROPY_FILL, data_offset=COMMAND_SIZE,
+        data_capacity=ENTROPY_MAX + 1, service=SERVICE_ENTROPY)],
+        b"\0" * (ENTROPY_MAX + 1))[0]
+    assert status(entropy_too_large) == STATUS_INVALID
 
     assert configure_channel(qtest, generation, 1) == 0
     assert qtest.read32(CHANNEL_APERTURE + 3 * 4096) == 0x41484348
@@ -573,6 +598,42 @@ def run(qtest, root, outside):
     assert status(second) == STATUS_OK, status(second)
     second_name = qtest.read(BUFFER + COMMAND_SIZE, get32(second, 52))
     assert second_name not in (b".", b"..", first_name)
+
+    relative_open = execute(qtest, [make_command(
+        generation, FS_OPEN_AT, "relative-child", handle=directory,
+        flags=OPEN_READ | OPEN_WRITE | OPEN_CREATE | OPEN_EXCLUSIVE,
+        value=0o600)])[0]
+    assert status(relative_open) == STATUS_OK
+    relative_handle = get32(relative_open, 16)
+    assert relative_handle != 0
+    changed_file = execute(qtest, [make_command(
+        generation, FS_CHMOD_FILE, handle=relative_handle,
+        value=0o640)])[0]
+    assert status(changed_file) == STATUS_OK
+    assert (os.stat(os.path.join(root, "relative-child")).st_mode & 0o777) == \
+        0o640
+    changed_at = execute(qtest, [make_command(
+        generation, FS_CHMOD_AT, "relative-child", handle=directory,
+        value=0o600)])[0]
+    assert status(changed_at) == STATUS_OK
+    assert (os.stat(os.path.join(root, "relative-child")).st_mode & 0o777) == \
+        0o600
+    filesystem_info = execute(qtest, [make_command(
+        generation, FS_FILESYSTEM_INFO, "/", data_offset=COMMAND_SIZE,
+        data_capacity=64)], b"\xA5" * 64)[0]
+    assert status(filesystem_info) == STATUS_OK
+    assert get32(filesystem_info, 52) == 64
+    filesystem_payload = qtest.read(BUFFER + COMMAND_SIZE, 64)
+    assert struct.unpack_from(">I", filesystem_payload, 0)[0] == 64
+    assert struct.unpack_from(">I", filesystem_payload, 8)[0] > 0
+    assert struct.unpack_from(">Q", filesystem_payload, 16)[0] > 0
+    assert status(execute(qtest, [make_command(
+        generation, FS_CLOSE, handle=relative_handle)])[0]) == STATUS_OK
+    removed_at = execute(qtest, [make_command(
+        generation, FS_UNLINK_AT, "relative-child", handle=directory)])[0]
+    assert status(removed_at) == STATUS_OK
+    assert not os.path.exists(os.path.join(root, "relative-child"))
+
     closed_directory = execute(qtest, [make_command(
         generation, FS_CLOSE, handle=directory)])[0]
     assert status(closed_directory) == STATUS_OK

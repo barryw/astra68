@@ -16,6 +16,7 @@ PUBLIC_POINTER_SHAPES="$REPOSITORY/ndk/include/astra/pointer_shapes.h"
 PUBLIC_DISPLAY_MAILBOX="$REPOSITORY/sw/include/astra/display_mailbox.h"
 PUBLIC_RENDER_BATCH="$REPOSITORY/sw/include/astra/render_batch.h"
 PUBLIC_RENDER_PROTOCOL="$REPOSITORY/fpga/arty/linux/astra_render_protocol.h"
+PUBLIC_ADDRESS_SPACE="$REPOSITORY/sw/include/astra/address_space.h"
 PUBLIC_SYSCALL="$REPOSITORY/sw/include/astra/syscall.h"
 PUBLIC_MESSAGE_ABI="$REPOSITORY/sw/include/astra/message_abi.h"
 PUBLIC_LIMITS="$REPOSITORY/sw/include/astra/limits.h"
@@ -69,6 +70,8 @@ overlay_identity()
             "sw/include/astra/render_batch.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_RENDER_PROTOCOL")" \
             "fpga/arty/linux/astra_render_protocol.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_ADDRESS_SPACE")" \
+            "sw/include/astra/address_space.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_SYSCALL")" \
             "sw/include/astra/syscall.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_MESSAGE_ABI")" \
@@ -163,6 +166,7 @@ cp "$PUBLIC_DISPLAY" "$STAGED_SOURCE/include/astra/display.h"
 cp "$PUBLIC_DISPLAY_CAPTURE" "$STAGED_SOURCE/include/astra/display_capture.h"
 cp "$PUBLIC_POINTER_SHAPES" \
     "$STAGED_SOURCE/include/astra/pointer_shapes.h"
+cp "$PUBLIC_ADDRESS_SPACE" "$STAGED_SOURCE/include/astra/address_space.h"
 cp "$PUBLIC_SYSCALL" "$STAGED_SOURCE/include/astra/syscall.h"
 cp "$PUBLIC_MESSAGE_ABI" "$STAGED_SOURCE/include/astra/message_abi.h"
 cp "$PUBLIC_LIMITS" "$STAGED_SOURCE/include/astra/limits.h"

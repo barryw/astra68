@@ -85,3 +85,13 @@ fputwc(wchar_t c, FILE *stream)
     return putwc(c, stream);
 }
 #endif
+
+#ifdef __strong_reference
+__strong_reference(putwc_unlocked, fputwc_unlocked);
+#else
+wint_t
+fputwc_unlocked(wchar_t c, FILE *stream)
+{
+    return putwc_unlocked(c, stream);
+}
+#endif

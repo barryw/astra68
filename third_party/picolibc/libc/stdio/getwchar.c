@@ -30,10 +30,17 @@
 #include "local-stdio.h"
 
 #undef getwchar
+#undef getwchar_unlocked
 
 wint_t
 getwchar(void)
 {
 
     return getwc(stdin);
+}
+
+wint_t
+getwchar_unlocked(void)
+{
+    return getwc_unlocked(stdin);
 }

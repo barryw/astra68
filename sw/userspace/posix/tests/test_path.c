@@ -28,18 +28,41 @@ static void expect_native(const char *cwd, const char *path, int result,
     assert(strcmp(got, native) == 0);
 }
 
+static void expect_invalid(const char *cwd, const char *path)
+{
+    char normal[ASTRA_VFS_PATH_MAX];
+    char native[ASTRA_VFS_PATH_MAX];
+
+    assert(astra_posix_path_resolve(cwd, path, normal, sizeof(normal), native,
+                                    sizeof(native)) == -1);
+    assert(astra_posix_path_resolve_native(cwd, path, native,
+                                           sizeof(native)) == -1);
+}
+
 int main(void)
 {
     char target[ASTRA_VFS_PATH_MAX + 2u];
 
+    assert(astra_posix_path_is_absolute("/WORK/note"));
+    assert(astra_posix_path_is_absolute("WORK:note"));
+    assert(astra_posix_path_is_absolute("work:"));
+    assert(!astra_posix_path_is_absolute("note"));
+    assert(!astra_posix_path_is_absolute("directory/a:b"));
+    assert(!astra_posix_path_is_absolute(":note"));
+    assert(!astra_posix_path_is_absolute(NULL));
+
     expect("/WORK/project", "notes.txt", 1,
            "/WORK/project/notes.txt", "WORK:project/notes.txt");
+    expect_invalid("/WORK", "");
     expect("/WORK/project", "../notes.txt", 1,
            "/WORK/notes.txt", "WORK:notes.txt");
     expect("/WORK", "/SYS//lib/./../vim", 1,
            "/SYS/vim", "SYS:vim");
     expect("/WORK", "commands:vim", 1,
            "/commands/vim", "COMMANDS:vim");
+    expect("/WORK", "COMMANDS:bin/../hello", 1,
+           "/COMMANDS/hello", "COMMANDS:hello");
+    expect_invalid("/WORK", "COMMANDS:../hello");
     expect("/WORK", "HOME:/.zshrc", 1,
            "/HOME/.zshrc", "HOME:.zshrc");
     expect("/WORK", "../../..", 0, "/", "");
@@ -47,6 +70,9 @@ int main(void)
     expect("/A/B/C", "../../D", 1, "/A/D", "A:D");
     expect_native("/WORK/project", "notes.txt", 1,
                   "WORK:project/notes.txt");
+    /* exec PATH lookup: slash-absolute enters COMMANDS, relative stays in CWD. */
+    expect_native("/WORK", "/commands/hello", 1, "COMMANDS:hello");
+    expect_native("/WORK", "commands/hello", 1, "WORK:commands/hello");
     expect_native("/WORK", "commands:vim", 1, "COMMANDS:vim");
     expect_native("/WORK", "/SYS//lib/./../vim", 1, "SYS:vim");
     expect_native("/WORK", "../../..", 0, "");

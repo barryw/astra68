@@ -74,8 +74,6 @@ uint32_t astra_vfs_port_connect_with_accelerator(
     AstraVfsClient *client, uint32_t service,
     const AstraVfsPortAcceleratorOps *accelerator);
 /* Version 8: defer HELLO and fuse it with the first path operation. */
-uint32_t astra_vfs_port_connect_lazy(AstraVfsClient *client,
-                                     uint32_t service);
 uint32_t astra_vfs_port_connect_lazy_with_accelerator(
     AstraVfsClient *client, uint32_t service,
     const AstraVfsPortAcceleratorOps *accelerator);

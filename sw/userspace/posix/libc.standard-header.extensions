@@ -1,0 +1,12 @@
+# Non-ISO declarations that picolibc exposes unconditionally from headers
+# named by the C standard. They remain part of the full extension audit.
+
+ferror_unlocked
+infinityl
+j0l
+j1l
+jnl
+valloc
+y0l
+y1l
+ynl

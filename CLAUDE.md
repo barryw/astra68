@@ -50,13 +50,12 @@ There is no alternative CPU or emulator implementation in the repository.
   drive attached. Check with
   `strings <qemu> | grep -c "Astra68 storage image"` — zero means too old.
   Rebuild with `emu/qemu/build.sh arty` on `beast`.
-- **The initial user image ceiling is `ASTRA_USER_IMAGE_MAX_SIZE`**, the hole
-  between `0x02004000` and the kernel. It was 48 KiB and is **256 KiB since
-  boot ABI 0.4**; overrunning it is `POST FAIL: user image exceeds its
-  reservation`, which is a RAM-layout refusal and not a ROM budget one.
-  Firmware reserves only the pages the image fills, so the ceiling costs
-  nothing unused. Anything hardcoding the old layout is a latent bug — seven
-  kernel tests did.
+- **The initial user image has no software size quota.** Since boot ABI 0.7 it
+  begins after the fixed kernel reservation and may grow to the next physical
+  reserved aperture, or RAM end when no such aperture exists. Firmware reserves
+  only the page-rounded image and returns all remaining pages to the allocator.
+  Do not reintroduce a guessed maximum: the old 48 KiB and 256 KiB holes both
+  turned incidental layout into policy and eventually blocked a valid build.
 - **The board is BusyBox**: no `truncate`, `timeout`, `pkill`; `losetup` takes
   `-o OFS LOOPDEV FILE`. `/` is read-only, only `/data` is writable.
 - **QEMU's cycle counter is the guest monotonic timebase**, not a count of

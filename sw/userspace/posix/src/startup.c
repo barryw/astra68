@@ -10,12 +10,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-extern char **environ;
-extern int main(int argc, char **argv);
-
-/* Requiring this symbol forces the standard-main adapter into an image. */
-const uint32_t astra_posix_entry_contract = 1u;
-
+/* POSIX process state is owned here: startup installs the copied environment
+ * before user main runs, and exec replaces it atomically with the image. */
+char **environ;
 static char **
 copy_startup_vectors(const AstraStartupInfo *startup, char ***environment)
 {
@@ -74,14 +71,14 @@ copy_startup_vectors(const AstraStartupInfo *startup, char ***environment)
     return arguments;
 }
 
-/* Standard C/POSIX entry for unmodified applications. Native Astra programs
- * define astra_main themselves, so this archive member is not selected. */
 int
-astra_main(const AstraStartupInfo *startup)
+astra_posix_enter(const AstraStartupInfo *startup, AstraPosixMain program)
 {
     char **argv;
     char **environment;
 
+    if (program == NULL)
+        return 1;
     astra_posix_file_prepare();
     astra_posix_socket_prepare();
     astra_posix_start(startup);
@@ -95,5 +92,5 @@ astra_main(const AstraStartupInfo *startup)
     if (argv == NULL)
         return 1;
     environ = environment;
-    return main((int)startup->argc, argv);
+    return program((int)startup->argc, argv);
 }

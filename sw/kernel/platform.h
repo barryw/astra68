@@ -4,6 +4,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <astra/clock.h>
+#include <astra/process.h>
+
 struct AstraDisplayFrameCompletion;
 
 #if defined(__m68k__)
@@ -13,11 +16,13 @@ struct AstraDisplayFrameCompletion;
 #include <vesta.h>
 #endif
 
-#define KERNEL_PLATFORM_QUANTUM_MS 5u
+#define KERNEL_PLATFORM_QUANTUM_MS \
+    (ASTRA_PROCESS_QUANTUM_NS / UINT32_C(1000000))
 #define KERNEL_PLATFORM_QUANTUM_HZ \
     (1000u / KERNEL_PLATFORM_QUANTUM_MS)
 #define KERNEL_PLATFORM_CPU_HZ 12500000u
-#define KERNEL_PLATFORM_NS_PER_CPU_CYCLE 80u
+#define KERNEL_PLATFORM_NS_PER_CPU_CYCLE \
+    ASTRA_CLOCK_MONOTONIC_RESOLUTION_NS
 #define KERNEL_PLATFORM_STORAGE_IRQ_STATE_CHANGE (1u << 31)
 #define KERNEL_PLATFORM_USB_IRQ_DMA_FAULT         (1u << 31)
 #define KERNEL_PLATFORM_USB_IRQ_CONTROLLER        (1u << 29)

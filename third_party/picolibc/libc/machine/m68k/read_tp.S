@@ -40,13 +40,18 @@
 	.section .text.__m68k_read_tp,"ax",@progbits
 	.align 2
 	.globl 	__m68k_read_tp
-	.type	__m6k_read_tp, @function
+	.type	__m68k_read_tp, @function
 __m68k_read_tp:
 	.cfi_startproc
+#ifdef __astra__
+	move.l	%a4,%a0
+#else
 	move.l	__tls,%a0
+#endif
 	rts
 	.cfi_endproc
 	.size	__m68k_read_tp, . - __m68k_read_tp
 
 #endif
 
+	.section .note.GNU-stack,"",@progbits

@@ -56,12 +56,8 @@ static void make_valid_info(AstraBootInfo *info)
     add_range(info, ASTRA_EARLY_LOG_ADDRESS, ASTRA_EARLY_LOG_SIZE,
               ASTRA_MEMORY_RANGE_EARLY_LOG,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
-    /*
-     * The user image hole, expressed through the constants rather than
-     * literals: it moved when ABI 0.4 raised the ceiling, and a hardcoded
-     * range silently left a gap that only surfaced as a failed init.
-     */
-    add_range(info, ASTRA_USER_IMAGE_ADDRESS, ASTRA_USER_IMAGE_MAX_SIZE,
+    add_range(info, ASTRA_BOOT_LOW_USABLE_ADDRESS,
+              ASTRA_BOOT_LOW_USABLE_SIZE,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
@@ -69,7 +65,8 @@ static void make_valid_info(AstraBootInfo *info)
               ASTRA_MEMORY_RANGE_KERNEL,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_range(info, ASTRA_KERNEL_USABLE_ADDRESS, (OHCI_DMA_POOL_BASE - ASTRA_KERNEL_USABLE_ADDRESS),
+    add_range(info, ASTRA_USER_IMAGE_ADDRESS,
+              OHCI_DMA_POOL_BASE - ASTRA_USER_IMAGE_ADDRESS,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
@@ -91,12 +88,13 @@ static void test_initial_map(void)
     assert(stats.ram_base == 0x02000000u);
     assert(stats.total_frames == 8192u);
     assert(stats.free_frames ==
-           (ASTRA_USER_IMAGE_MAX_SIZE +
-            (OHCI_DMA_POOL_BASE - ASTRA_KERNEL_USABLE_ADDRESS)) /
+           (ASTRA_BOOT_LOW_USABLE_SIZE +
+            (OHCI_DMA_POOL_BASE - ASTRA_USER_IMAGE_ADDRESS)) /
                    KERNEL_PAGE_SIZE -
                KERNEL_EMERGENCY_RESERVE_FRAMES);
     assert(stats.high_water_frames == stats.total_frames - stats.free_frames);
     assert(stats.owner_slots_used == 0u);
+    assert(stats.owner_slot_capacity == stats.total_frames);
     assert(stats.owner_release_operations == 0u);
     assert(stats.owner_release_frame_visits == 0u);
     assert(stats.emergency_total_frames ==
@@ -106,7 +104,7 @@ static void test_initial_map(void)
     assert(stats.emergency_acquisitions == 0u);
     assert(stats.emergency_failures == 0u);
     assert(stats.protected_reserve_frames ==
-           stats.total_frames / ASTRA_PROCESS_COUNT_MAX);
+           KERNEL_PROTECTED_RESERVE_FRAME_MAX);
     assert(stats.protected_reserve_denials == 0u);
     assert(stats.protected_owners == 0u);
 
@@ -251,25 +249,31 @@ static void test_owner_frame_count_tracks_unique_frames(void)
     AstraBootInfo info;
     uint32_t base;
     uint32_t frame_count = UINT32_MAX;
+    uint32_t peak_frames = UINT32_MAX;
 
     make_valid_info(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
-    assert(!kernel_memory_owner_frames(KERNEL_OWNER_NONE, &frame_count));
-    assert(!kernel_memory_owner_frames(41u, NULL));
-    assert(kernel_memory_owner_frames(41u, &frame_count));
-    assert(frame_count == 0u);
+    assert(!kernel_memory_owner_usage(KERNEL_OWNER_NONE, &frame_count,
+                                      &peak_frames));
+    assert(!kernel_memory_owner_usage(41u, NULL, NULL));
+    assert(kernel_memory_owner_usage(41u, &frame_count, &peak_frames));
+    assert(frame_count == 0u && peak_frames == 0u);
 
+    assert(kernel_memory_protect_owner(41u));
     assert(kernel_memory_alloc(3u, 1u, KERNEL_FRAME_SHARED, 41u, &base) ==
            KERNEL_MEMORY_OK);
-    assert(kernel_memory_owner_frames(41u, &frame_count));
-    assert(frame_count == 3u);
+    assert(kernel_memory_owner_usage(41u, &frame_count, &peak_frames));
+    assert(frame_count == 3u && peak_frames == 3u);
     assert(kernel_memory_retain(base, 3u, 41u) == KERNEL_MEMORY_OK);
     assert(kernel_memory_release(base, 3u, 41u) == KERNEL_MEMORY_OK);
-    assert(kernel_memory_owner_frames(41u, &frame_count));
-    assert(frame_count == 3u);
+    assert(kernel_memory_owner_usage(41u, &frame_count, &peak_frames));
+    assert(frame_count == 3u && peak_frames == 3u);
     assert(kernel_memory_release(base, 3u, 41u) == KERNEL_MEMORY_OK);
-    assert(kernel_memory_owner_frames(41u, &frame_count));
-    assert(frame_count == 0u);
+    assert(kernel_memory_owner_usage(41u, &frame_count, &peak_frames));
+    assert(frame_count == 0u && peak_frames == 3u);
+    assert(kernel_memory_unprotect_owner(41u));
+    assert(kernel_memory_owner_usage(41u, &frame_count, &peak_frames));
+    assert(frame_count == 0u && peak_frames == 0u);
 }
 
 static void test_owner_release_work_scales_with_owned_frames(void)
@@ -329,35 +333,60 @@ static void test_owner_ledger_does_not_exhaust_at_legacy_sixty_four(void)
                KERNEL_MEMORY_OK);
 }
 
-static void test_owner_ledger_capacity_is_bounded_and_reusable(void)
+static void test_owner_ledger_collision_survives_removal(void)
 {
     AstraBootInfo info;
     KernelMemoryStats stats;
-    uint32_t bases[KERNEL_MEMORY_OWNER_MAX];
-    uint32_t replacement;
-    uint32_t released;
+    uint32_t first;
+    uint32_t second;
+    uint32_t frames;
 
     make_valid_info(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
-    for (uint32_t index = 0u; index < KERNEL_MEMORY_OWNER_MAX; ++index) {
+    assert(kernel_memory_stats(&stats));
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 1u, &first) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS,
+                               1u + stats.owner_slot_capacity, &second) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_release(first, 1u, 1u) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_owner_usage(1u + stats.owner_slot_capacity,
+                                     &frames, NULL));
+    assert(frames == 1u);
+    assert(kernel_memory_release(second, 1u,
+                                 1u + stats.owner_slot_capacity) ==
+           KERNEL_MEMORY_OK);
+}
+
+static void test_owner_ledger_capacity_follows_physical_resources(void)
+{
+    static uint32_t bases[TEST_MAX_FRAMES];
+    AstraBootInfo info;
+    KernelMemoryStats stats;
+    uint32_t owners;
+    uint32_t replacement;
+
+    make_valid_info(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&stats));
+    owners = stats.free_frames - stats.dma_zone_frames -
+             stats.protected_reserve_frames;
+    assert(owners > 304u);
+    for (uint32_t index = 0u; index < owners; ++index) {
         assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS,
                                    100u + index, &bases[index]) ==
                KERNEL_MEMORY_OK);
     }
     assert(kernel_memory_stats(&stats));
-    assert(stats.owner_slots_used == KERNEL_MEMORY_OWNER_MAX);
-    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 1000u,
+    assert(stats.owner_slot_capacity == stats.total_frames);
+    assert(stats.owner_slots_used == owners);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS,
+                               UINT32_MAX - 1u,
                                &replacement) == KERNEL_MEMORY_OUT_OF_MEMORY);
-
-    assert(kernel_memory_release_owner(100u, &released) == KERNEL_MEMORY_OK);
-    assert(released == 1u);
-    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 1000u,
-                               &replacement) == KERNEL_MEMORY_OK);
-    for (uint32_t index = 1u; index < KERNEL_MEMORY_OWNER_MAX; ++index) {
+    for (uint32_t index = 0u; index < owners; ++index) {
         assert(kernel_memory_release(bases[index], 1u, 100u + index) ==
                KERNEL_MEMORY_OK);
     }
-    assert(kernel_memory_release(replacement, 1u, 1000u) == KERNEL_MEMORY_OK);
     assert(kernel_memory_stats(&stats));
     assert(stats.owner_slots_used == 0u);
 }
@@ -433,21 +462,17 @@ static void test_exhaustion_and_checked_ranges(void)
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     assert(kernel_memory_protect_owner(1u));
     assert(kernel_memory_stats(&stats));
-    /*
-     * Drains the two usable regions exactly, so the sizes are derived from
-     * the layout rather than written out: ABI 0.4 moved 52 frames from the tail
-     * into the user image hole and literal counts stopped matching.
-     */
-    assert(kernel_memory_alloc(ASTRA_USER_IMAGE_MAX_SIZE / 0x1000u, 1u,
+    /* Drain both usable regions exactly from the published physical map. */
+    assert(kernel_memory_alloc(ASTRA_BOOT_LOW_USABLE_SIZE / 0x1000u, 1u,
                                KERNEL_FRAME_PROCESS, 1u, &first) ==
            KERNEL_MEMORY_OK);
     assert(kernel_memory_alloc(
-               (OHCI_DMA_POOL_BASE - ASTRA_KERNEL_USABLE_ADDRESS) / 0x1000u -
+               (OHCI_DMA_POOL_BASE - ASTRA_USER_IMAGE_ADDRESS) / 0x1000u -
                    KERNEL_EMERGENCY_RESERVE_FRAMES - stats.dma_zone_frames,
                1u, KERNEL_FRAME_PROCESS, 1u, &second) ==
            KERNEL_MEMORY_OK);
-    assert(first == ASTRA_USER_IMAGE_ADDRESS);
-    assert(second == ASTRA_KERNEL_USABLE_ADDRESS);
+    assert(first == ASTRA_BOOT_LOW_USABLE_ADDRESS);
+    assert(second == ASTRA_USER_IMAGE_ADDRESS);
     assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 1u, &extra) ==
            KERNEL_MEMORY_OUT_OF_MEMORY);
     assert(kernel_memory_stats(&stats));
@@ -489,11 +514,11 @@ static void test_emergency_reserve_isolated_and_replenished(void)
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     assert(kernel_memory_protect_owner(1u));
     assert(kernel_memory_stats(&baseline));
-    assert(kernel_memory_alloc(ASTRA_USER_IMAGE_MAX_SIZE / 0x1000u, 1u,
+    assert(kernel_memory_alloc(ASTRA_BOOT_LOW_USABLE_SIZE / 0x1000u, 1u,
                                KERNEL_FRAME_PROCESS, 1u, &first) ==
            KERNEL_MEMORY_OK);
     assert(kernel_memory_alloc(
-               (OHCI_DMA_POOL_BASE - ASTRA_KERNEL_USABLE_ADDRESS) / 0x1000u -
+               (OHCI_DMA_POOL_BASE - ASTRA_USER_IMAGE_ADDRESS) / 0x1000u -
                    KERNEL_EMERGENCY_RESERVE_FRAMES - baseline.dma_zone_frames,
                1u, KERNEL_FRAME_PROCESS, 1u, &second) == KERNEL_MEMORY_OK);
     assert(kernel_memory_stats(&exhausted));
@@ -899,14 +924,17 @@ static void test_cow_frame_changes_owner_without_changing_charge(void)
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 81u,
                                &physical) == KERNEL_MEMORY_OK);
-    assert(kernel_memory_owner_frames(81u, &old_frames) && old_frames == 1u);
+    assert(kernel_memory_owner_usage(81u, &old_frames, NULL) &&
+           old_frames == 1u);
     assert(kernel_memory_reclassify(physical, 81u, KERNEL_FRAME_PROCESS,
                                     KERNEL_FRAME_COW_WRITE) ==
            KERNEL_MEMORY_OK);
     assert(kernel_memory_transfer_owner(physical, 81u, 82u) ==
            KERNEL_MEMORY_OK);
-    assert(kernel_memory_owner_frames(81u, &old_frames) && old_frames == 0u);
-    assert(kernel_memory_owner_frames(82u, &new_frames) && new_frames == 1u);
+    assert(kernel_memory_owner_usage(81u, &old_frames, NULL) &&
+           old_frames == 0u);
+    assert(kernel_memory_owner_usage(82u, &new_frames, NULL) &&
+           new_frames == 1u);
     assert(kernel_memory_frame_info(physical, &frame));
     assert(frame.owner == 82u && frame.state == KERNEL_FRAME_COW_WRITE);
     assert(kernel_memory_reclassify(physical, 82u, KERNEL_FRAME_COW_WRITE,
@@ -925,7 +953,8 @@ int main(void)
     test_owner_frame_count_tracks_unique_frames();
     test_owner_release_work_scales_with_owned_frames();
     test_owner_ledger_does_not_exhaust_at_legacy_sixty_four();
-    test_owner_ledger_capacity_is_bounded_and_reusable();
+    test_owner_ledger_collision_survives_removal();
+    test_owner_ledger_capacity_follows_physical_resources();
     test_reinit_discards_stale_dynamic_metadata();
     test_scattered_page_allocation_is_atomic();
     test_exhaustion_and_checked_ranges();

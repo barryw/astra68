@@ -3524,6 +3524,11 @@ const ext4_direntry *ext4_dir_entry_next(ext4_dir *dir)
 		}
 		dir->iterator_open = 1;
 	}
+	if (!it->curr) {
+		dir->next_off = EXT4_DIR_ENTRY_OFFSET_TERM;
+		ext4_dir_iterator_release(dir);
+		goto Finish;
+	}
 
 	memset(&dir->de.name, 0, sizeof(dir->de.name));
 	name_length = ext4_dir_en_get_name_len(&dir->f.mp->fs.sb,

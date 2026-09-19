@@ -1,7 +1,12 @@
 /* The POSIX identity of Astra's single local owner. */
 
+#define _GNU_SOURCE 1
+
 #include <errno.h>
+#include <grp.h>
 #include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -30,6 +35,40 @@ getegid(void)
 }
 
 int
+issetugid(void)
+{
+    /* Astra has neither set-id executables nor a second local identity. */
+    return 0;
+}
+
+char *
+secure_getenv(const char *name)
+{
+    return issetugid() ? NULL : getenv(name);
+}
+
+#if defined(__GNUC__) && !defined(__clang__)
+/* The public ABI is nonnull; the implementation still rejects bad callers. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnonnull-compare"
+#endif
+int
+getlogin_r(char *name, size_t size)
+{
+    static const char owner[] = "root";
+
+    if (name == NULL)
+        return EFAULT;
+    if (size < sizeof(owner))
+        return ERANGE;
+    (void)memcpy(name, owner, sizeof(owner));
+    return 0;
+}
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
+
+int
 getgroups(int size, gid_t list[])
 {
     if (size < 0) {
@@ -44,6 +83,35 @@ getgroups(int size, gid_t list[])
         return 1;
     list[0] = getgid();
     return 1;
+}
+
+int
+setgroups(size_t size, const gid_t *groups)
+{
+    if (size != 0u && groups == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    for (size_t index = 0u; index < size; ++index)
+        if (groups[index] != (gid_t)0) {
+            errno = EPERM;
+            return -1;
+        }
+    return 0;
+}
+
+int
+initgroups(const char *user, gid_t group)
+{
+    if (user == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (strcmp(user, "root") != 0 || group != (gid_t)0) {
+        errno = EPERM;
+        return -1;
+    }
+    return 0;
 }
 
 static int
@@ -121,6 +189,10 @@ setresgid(gid_t real_gid, gid_t effective_gid, gid_t saved_gid)
     return -1;
 }
 
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnonnull-compare"
+#endif
 int
 gethostname(char *name, size_t length)
 {
@@ -139,3 +211,6 @@ gethostname(char *name, size_t length)
         name[index] = hostname[index];
     return 0;
 }
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif

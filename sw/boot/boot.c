@@ -1086,7 +1086,8 @@ static int benchmark_cpu(void)
  * ELF acceptance profile. Firmware only places it where the kernel can read it
  * and reserves exactly the pages it occupies.
  */
-static int load_user_image(uint32_t *image_size, uint32_t *reservation)
+static int load_user_image(uint32_t capacity, uint32_t *image_size,
+                           uint32_t *reservation)
 {
     uint32_t size = (uint32_t)_user_blob_end - (uint32_t)_user_blob_start;
     uint32_t raw = ASTRA_USER_PAYLOAD_RAW_BYTES;
@@ -1094,10 +1095,10 @@ static int load_user_image(uint32_t *image_size, uint32_t *reservation)
 
     if (size == 0u || size != ASTRA_USER_PAYLOAD_COMPRESSED_BYTES)
         return post_failure_text("invalid user payload size");
-    if (raw > ASTRA_USER_IMAGE_MAX_SIZE)
-        return post_failure_text("user image exceeds its reservation");
+    if (raw > capacity)
+        return post_failure_text("user image exceeds physical memory");
     if (!decode_payload(_user_blob_start, size, ASTRA_USER_IMAGE_ADDRESS,
-                        ASTRA_USER_IMAGE_MAX_SIZE, raw,
+                        capacity, raw,
                         ASTRA_USER_PAYLOAD_RAW_CRC32,
                         "user image decode", "user image CRC"))
         return 0;
@@ -1119,6 +1120,7 @@ static int prepare_kernel_handoff(void)
     int usb_dma_present = 0;
     uint32_t usb_pool_base = 0u;
     uint32_t usb_pool_size = 0u;
+    uint32_t user_image_capacity;
 
     /*
      * RAM is whatever the board reports, not one of two remembered boards.
@@ -1161,7 +1163,11 @@ static int prepare_kernel_handoff(void)
     if (!load_kernel_image(&image_size)) return 0;
     kernel_load_cycles = VESTA->CPU_CYCLES_LO - load_started;
     if (!benchmark_cpu()) return 0;
-    if (!load_user_image(&user_image_size, &user_image_reservation)) return 0;
+    user_image_capacity = (usb_dma_present ? usb_pool_base : ram_end) -
+                          ASTRA_USER_IMAGE_ADDRESS;
+    if (!load_user_image(user_image_capacity, &user_image_size,
+                         &user_image_reservation))
+        return 0;
 
     astra_early_log_init(log, ASTRA_EARLY_LOG_SIZE);
     astra_early_log_puts(log, "firmware: POST passed\n");
@@ -1204,14 +1210,8 @@ static int prepare_kernel_handoff(void)
     add_boot_range(ASTRA_EARLY_LOG_ADDRESS, ASTRA_EARLY_LOG_SIZE,
                    ASTRA_MEMORY_RANGE_EARLY_LOG,
                    ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
-    /*
-     * The user image keeps only the pages it fills; the rest of the hole below
-     * the kernel goes back to the physical allocator.
-     */
-    add_boot_range(ASTRA_USER_IMAGE_ADDRESS, user_image_reservation,
-                   ASTRA_MEMORY_RANGE_FIRMWARE, ASTRA_MEMORY_READ);
-    add_boot_range(ASTRA_USER_IMAGE_ADDRESS + user_image_reservation,
-                   ASTRA_USER_IMAGE_MAX_SIZE - user_image_reservation,
+    add_boot_range(ASTRA_BOOT_LOW_USABLE_ADDRESS,
+                   ASTRA_BOOT_LOW_USABLE_SIZE,
                    ASTRA_MEMORY_RANGE_USABLE,
                    ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                    ASTRA_MEMORY_CACHEABLE);
@@ -1219,12 +1219,14 @@ static int prepare_kernel_handoff(void)
                    ASTRA_MEMORY_RANGE_KERNEL,
                    ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                    ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_boot_range(ASTRA_KERNEL_USABLE_ADDRESS,
-                   (usb_dma_present ? usb_pool_base : ram_end) -
-                       ASTRA_KERNEL_USABLE_ADDRESS,
-                   ASTRA_MEMORY_RANGE_USABLE,
-                   ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
-                   ASTRA_MEMORY_CACHEABLE);
+    add_boot_range(ASTRA_USER_IMAGE_ADDRESS, user_image_reservation,
+                   ASTRA_MEMORY_RANGE_FIRMWARE, ASTRA_MEMORY_READ);
+    if (user_image_reservation < user_image_capacity)
+        add_boot_range(ASTRA_USER_IMAGE_ADDRESS + user_image_reservation,
+                       user_image_capacity - user_image_reservation,
+                       ASTRA_MEMORY_RANGE_USABLE,
+                       ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                       ASTRA_MEMORY_CACHEABLE);
     // The splash is retired before handoff. Keep the OHCI DMA arena reserved
     // and uncached when that engine is present; return the remainder to the
     // physical allocator.

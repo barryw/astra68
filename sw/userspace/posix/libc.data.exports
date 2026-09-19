@@ -1,0 +1,18 @@
+# Public data provided by picolibc. Functions come from installed headers.
+
+_ctype_b
+_ctype_wide
+_fe_dfl_env
+daylight
+errno
+getdate_err
+optarg
+opterr
+optind
+optopt
+stderr
+stdin
+stdout
+suboptarg
+timezone
+tzname

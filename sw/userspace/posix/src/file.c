@@ -18,6 +18,7 @@
 #include <astra/posix_descriptor.h>
 
 #include <astra/vfs_process.h>
+#include <astra/vfs_reader.h>
 #include <astra/runtime.h>
 
 #include <dirent.h>
@@ -33,6 +34,7 @@
 #include <sys/stat.h>
 #include <sys/resource.h>
 #include <sys/types.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 
 #include "path.h"
@@ -49,19 +51,6 @@ static uint32_t file_capacity;
 static char cwd[ASTRA_VFS_PATH_MAX];
 static int started;
 static mode_t creation_mask = 0022u;
-
-#define ABI_AT_LEAST(major, minor, required_major, required_minor)           \
-    ((major) > (required_major) ||                                           \
-     ((major) == (required_major) && (minor) >= (required_minor)))
-#define HAS_LIBRARY_FIELD(major, minor, field)                               \
-    (ABI_AT_LEAST(filesystem.library->abi_major,                             \
-                  filesystem.library->abi_minor, (major), (minor)) &&        \
-     filesystem.library->structure_size >=                                  \
-         offsetof(AstraFilesystemLibraryV2, field) +                         \
-             sizeof(filesystem.library->field))
-
-_Static_assert(ABI_AT_LEAST(2u, 0u, 1u, 5u),
-               "a new ABI major retains fields from older ABI minors");
 
 typedef struct PosixPath {
     char native[ASTRA_VFS_PATH_MAX];
@@ -100,6 +89,56 @@ posix_errno(uint32_t status)
     }
 }
 
+typedef struct PosixExecInterpreter {
+    AstraVfsReadSource source;
+    uint32_t failure;
+} PosixExecInterpreter;
+
+typedef struct PosixExecPrepare {
+    void **handoff;
+    uint32_t *handoff_size;
+    int failure_errno;
+} PosixExecPrepare;
+
+static uint32_t
+open_exec_interpreter(void *context, const char *identity,
+                      AstraReadSource *source)
+{
+    PosixExecInterpreter *interpreter = context;
+    AstraLibraryReference reference;
+    uint32_t status;
+
+    status = astra_process_library_source_open(
+        identity, &interpreter->source, &reference);
+    if (status != ASTRA_VFS_OK) {
+        interpreter->failure = status;
+        return ASTRA_SYSCALL_IO_ERROR;
+    }
+    *source = (AstraReadSource){
+        .length = interpreter->source.length,
+        .read_at = astra_vfs_read_source_read_at,
+        .release = astra_vfs_read_source_close,
+        .context = &interpreter->source,
+    };
+    return ASTRA_SYSCALL_OK;
+}
+
+static uint32_t
+prepare_posix_exec(void *context, AstraExecRequest *request)
+{
+    PosixExecPrepare *prepare = context;
+
+    if (astra_posix_exec_export(prepare->handoff,
+                                prepare->handoff_size) < 0) {
+        prepare->failure_errno = errno;
+        return ASTRA_SYSCALL_IO_ERROR;
+    }
+    request->handoff_address =
+        (uint32_t)(uintptr_t)*prepare->handoff;
+    request->handoff_size = *prepare->handoff_size;
+    return ASTRA_SYSCALL_OK;
+}
+
 static int
 fail(uint32_t status)
 {
@@ -113,6 +152,10 @@ static ssize_t
 file_read(uint32_t slot, void *bytes, size_t length);
 static ssize_t
 file_write(uint32_t slot, const void *bytes, size_t length);
+static ssize_t
+file_pread(uint32_t slot, void *bytes, size_t length, off_t offset);
+static ssize_t
+file_pwrite(uint32_t slot, const void *bytes, size_t length, off_t offset);
 static int
 file_close(uint32_t slot);
 static off_t
@@ -128,8 +171,17 @@ static int file_state_import(const void *state, uint32_t size,
 static int set_process_cwd(const char *normal);
 
 static const AstraPosixFileOps ops = {
-    file_read, file_write, file_close, file_seek, file_exec_size,
-    file_exec_export, file_exec_import, file_state_export, file_state_import
+    .read = file_read,
+    .write = file_write,
+    .pread = file_pread,
+    .pwrite = file_pwrite,
+    .close = file_close,
+    .seek = file_seek,
+    .exec_size = file_exec_size,
+    .exec_export = file_exec_export,
+    .exec_import = file_exec_import,
+    .file_export = file_state_export,
+    .file_import = file_state_import,
 };
 
 #define POSIX_FILE_EXEC_MAGIC 0x50464558u
@@ -319,9 +371,9 @@ start(void)
      */
     assigns = astra_process_vfs_assigns();
     (void)strcpy(cwd,
-                 filesystem.library->assign_lookup(assigns, "CWD") != NULL ?
+                 astra_assign_lookup(assigns, "CWD") != NULL ?
                      "/CWD" :
-                 filesystem.library->assign_lookup(assigns, "WORK") != NULL ?
+                 astra_assign_lookup(assigns, "WORK") != NULL ?
                      "/WORK" : "/");
     astra_posix_file_bind(&ops);
     started = 1;
@@ -336,6 +388,10 @@ resolve_path(const char *path, PosixPath *out, char *normal)
 
     if (path == NULL) {
         errno = EFAULT;
+        return 0;
+    }
+    if (path[0] == '\0') {
+        errno = ENOENT;
         return 0;
     }
     if (!start())
@@ -433,7 +489,7 @@ file_read(uint32_t slot, void *bytes, size_t length)
     }
     if (length > UINT32_MAX)
         length = UINT32_MAX;
-    status = filesystem.library->read(&file_slots[slot].file, bytes,
+    status = astra_filesystem_read(&file_slots[slot].file, bytes,
                                       (uint32_t)length,
                                       &moved);
     if (status != ASTRA_VFS_OK)
@@ -472,9 +528,79 @@ file_write(uint32_t slot, const void *bytes, size_t length)
         if ((uint64_t)length > remaining)
             length = (size_t)remaining;
     }
-    status = filesystem.library->write(&file_slots[slot].file, bytes,
+    status = astra_filesystem_write(&file_slots[slot].file, bytes,
                                        (uint32_t)length,
                                        &moved);
+    if (status != ASTRA_VFS_OK && moved == 0u)
+        return fail(status);
+    return (ssize_t)moved;
+}
+
+static ssize_t
+file_pread(uint32_t slot, void *bytes, size_t length, off_t offset)
+{
+    uint32_t moved = 0u;
+    uint32_t status;
+
+    if (slot >= file_capacity || file_slots[slot].used == 0u) {
+        errno = EBADF;
+        return -1;
+    }
+    if (offset < 0 || length > (size_t)SSIZE_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (length == 0u)
+        return 0;
+    if (bytes == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    status = astra_filesystem_read_at(
+        &file_slots[slot].file, (uint64_t)offset, bytes, (uint32_t)length,
+        &moved);
+    if (status != ASTRA_VFS_OK && moved == 0u)
+        return fail(status);
+    return (ssize_t)moved;
+}
+
+static ssize_t
+file_pwrite(uint32_t slot, const void *bytes, size_t length, off_t offset)
+{
+    rlim_t limit;
+    uint32_t moved = 0u;
+    uint32_t status;
+
+    if (slot >= file_capacity || file_slots[slot].used == 0u) {
+        errno = EBADF;
+        return -1;
+    }
+    if (offset < 0 || length > (size_t)SSIZE_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (length == 0u)
+        return 0;
+    if (bytes == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    limit = astra_posix_resource_file_size();
+    if (limit != RLIM_INFINITY) {
+        uint64_t remaining;
+
+        if ((uint64_t)offset >= limit) {
+            (void)kill(getpid(), SIGXFSZ);
+            errno = EFBIG;
+            return -1;
+        }
+        remaining = limit - (uint64_t)offset;
+        if ((uint64_t)length > remaining)
+            length = (size_t)remaining;
+    }
+    status = astra_filesystem_write_at(
+        &file_slots[slot].file, (uint64_t)offset, bytes, (uint32_t)length,
+        &moved);
     if (status != ASTRA_VFS_OK && moved == 0u)
         return fail(status);
     return (ssize_t)moved;
@@ -489,7 +615,7 @@ file_close(uint32_t slot)
         errno = EBADF;
         return -1;
     }
-    status = filesystem.library->close(&file_slots[slot].file);
+    status = astra_filesystem_close(&file_slots[slot].file);
     file_slots[slot].used = 0u;
     return status == ASTRA_VFS_OK ? 0 : fail(status);
 }
@@ -513,7 +639,7 @@ file_seek(uint32_t slot, off_t offset, int whence)
         errno = EINVAL;
         return -1;
     }
-    status = filesystem.library->seek(&file_slots[slot].file,
+    status = astra_filesystem_seek(&file_slots[slot].file,
                                       (int64_t)offset, origin,
                                       &result);
     if (status != ASTRA_VFS_OK)
@@ -521,67 +647,44 @@ file_seek(uint32_t slot, off_t offset, int whence)
     return (off_t)result;
 }
 
-int
-open(const char *path, int flags, ...)
+static int
+translate_open_flags(int flags, uint32_t *wanted)
 {
-    PosixPath resolved;
-    uint32_t wanted = 0u;
-    uint32_t status;
-    int slot;
-    int fd;
-    mode_t create_mode = ASTRA_VFS_MODE_DEFAULT;
-
-    if (path != NULL && strcmp(path, "/dev/tty") == 0) {
-        if ((flags & (O_CREAT | O_TRUNC | O_EXCL | O_APPEND)) != 0) {
-            errno = EINVAL;
-            return -1;
-        }
-        return astra_posix_descriptor_controlling_terminal(flags);
-    }
-    if ((flags & O_CREAT) != 0) {
-        va_list arguments;
-
-        va_start(arguments, flags);
-        create_mode = va_arg(arguments, mode_t);
-        va_end(arguments);
-        create_mode &= (mode_t)(ASTRA_VFS_MODE_MASK & ~creation_mask);
-    }
-
-    if (!resolve(path, &resolved))
-        return -1;
-    if (resolved.root) {
-        errno = EISDIR;
-        return -1;
-    }
+    *wanted = 0u;
     switch (flags & O_ACCMODE) {
-    case O_RDONLY: wanted = ASTRA_VFS_OPEN_READ; break;
-    case O_WRONLY: wanted = ASTRA_VFS_OPEN_WRITE; break;
-    case O_RDWR:   wanted = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE; break;
+    case O_RDONLY: *wanted = ASTRA_VFS_OPEN_READ; break;
+    case O_WRONLY: *wanted = ASTRA_VFS_OPEN_WRITE; break;
+    case O_RDWR:
+        *wanted = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE;
+        break;
     default:
         errno = EINVAL;
-        return -1;
+        return 0;
     }
     if ((flags & O_CREAT) != 0)
-        wanted |= ASTRA_VFS_OPEN_CREATE;
+        *wanted |= ASTRA_VFS_OPEN_CREATE;
     if ((flags & O_TRUNC) != 0)
-        wanted |= ASTRA_VFS_OPEN_TRUNCATE;
+        *wanted |= ASTRA_VFS_OPEN_TRUNCATE;
     if ((flags & O_EXCL) != 0)
-        wanted |= ASTRA_VFS_OPEN_EXCLUSIVE;
+        *wanted |= ASTRA_VFS_OPEN_EXCLUSIVE;
     if ((flags & O_APPEND) != 0)
-        wanted |= ASTRA_VFS_OPEN_APPEND;
-    if (!HAS_LIBRARY_FIELD(1u, 3u, open_mode)) {
-        errno = ENOSYS;
-        return -1;
-    }
-    slot = claim();
+        *wanted |= ASTRA_VFS_OPEN_APPEND;
+#ifdef O_DIRECTORY
+    if ((flags & O_DIRECTORY) != 0)
+        *wanted |= ASTRA_VFS_OPEN_DIRECTORY;
+#endif
+    return 1;
+}
+
+static int
+install_open_file(AstraFile *opened, int flags)
+{
+    int slot = claim();
+    int fd;
+
     if (slot < 0)
         return -1;
-    file_slots[slot].file = (AstraFile)ASTRA_FILE_INIT;
-    status = filesystem.library->open_mode(
-        &filesystem.filesystem, resolved.native, wanted,
-        (uint16_t)create_mode, &file_slots[slot].file);
-    if (status != ASTRA_VFS_OK)
-        return fail(status);
+    file_slots[slot].file = *opened;
     file_slots[slot].used = 1u;
     fd = astra_posix_descriptor_file((uint32_t)slot, flags);
     if (fd < 0) {
@@ -592,62 +695,155 @@ open(const char *path, int flags, ...)
     return fd;
 }
 
+static AstraFile *
+file_for_descriptor(int fd)
+{
+    int slot = astra_posix_descriptor_slot(fd);
+
+    if (slot < 0 || (uint32_t)slot >= file_capacity ||
+        file_slots[slot].used == 0u) {
+        errno = EBADF;
+        return NULL;
+    }
+    return &file_slots[slot].file;
+}
+
+static int
+open_path(const char *path, int flags, mode_t create_mode)
+{
+    AstraFile opened = ASTRA_FILE_INIT;
+    PosixPath resolved;
+    uint32_t wanted;
+    uint32_t status;
+
+    if (path != NULL && strcmp(path, "/dev/tty") == 0) {
+        if ((flags & (O_CREAT | O_TRUNC | O_EXCL | O_APPEND)) != 0) {
+            errno = EINVAL;
+            return -1;
+        }
+        return astra_posix_descriptor_controlling_terminal(flags);
+    }
+    if (!resolve(path, &resolved))
+        return -1;
+    if (resolved.root) {
+        errno = EISDIR;
+        return -1;
+    }
+    if (!translate_open_flags(flags, &wanted))
+        return -1;
+    status = astra_filesystem_open_mode(
+        &filesystem.filesystem, resolved.native, wanted,
+        (uint16_t)create_mode, &opened);
+    if (status != ASTRA_VFS_OK)
+        return fail(status);
+    return install_open_file(&opened, flags);
+}
+
+int
+open(const char *path, int flags, ...)
+{
+    mode_t create_mode = ASTRA_VFS_MODE_DEFAULT;
+
+    if ((flags & O_CREAT) != 0) {
+        va_list arguments;
+
+        va_start(arguments, flags);
+        create_mode = va_arg(arguments, mode_t);
+        va_end(arguments);
+        create_mode &= (mode_t)(ASTRA_VFS_MODE_MASK & ~creation_mask);
+    }
+    return open_path(path, flags, create_mode);
+}
+
+int
+openat(int dirfd, const char *path, int flags, ...)
+{
+    AstraFile opened = ASTRA_FILE_INIT;
+    AstraFile *directory;
+    uint32_t wanted;
+    uint32_t status;
+    mode_t create_mode = ASTRA_VFS_MODE_DEFAULT;
+
+    if ((flags & O_CREAT) != 0) {
+        va_list arguments;
+
+        va_start(arguments, flags);
+        create_mode = va_arg(arguments, mode_t);
+        va_end(arguments);
+        create_mode &= (mode_t)(ASTRA_VFS_MODE_MASK & ~creation_mask);
+    }
+    if (path == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (path[0] == '\0') {
+        errno = ENOENT;
+        return -1;
+    }
+    if (astra_posix_path_is_absolute(path) || dirfd == AT_FDCWD)
+        return open_path(path, flags, create_mode);
+    if (!start())
+        return -1;
+    if (!translate_open_flags(flags, &wanted))
+        return -1;
+    directory = file_for_descriptor(dirfd);
+    if (directory == NULL)
+        return -1;
+    status = astra_filesystem_open_at_mode(
+        directory, path, wanted, (uint16_t)create_mode, &opened);
+    if (status != ASTRA_VFS_OK)
+        return fail(status);
+    return install_open_file(&opened, flags);
+}
+
 int
 execve(const char *path, char *const argv[], char *const envp[])
 {
     AstraExecRequest request;
-    struct stat about;
-    uint8_t *image = NULL;
+    AstraVfsReadSource program_source = ASTRA_VFS_READ_SOURCE_INIT;
+    PosixExecInterpreter interpreter = {
+        .source = ASTRA_VFS_READ_SOURCE_INIT,
+    };
+    AstraReadSource program;
     char *vectors = NULL;
     void *handoff = NULL;
     uint32_t handoff_size = 0u;
+    PosixExecPrepare prepare = {
+        .handoff = &handoff,
+        .handoff_size = &handoff_size,
+    };
     uint32_t status;
     uint32_t failure_detail = 0u;
-    size_t received = 0u;
+    PosixPath resolved;
     const char *failure_operation = "execve open";
-    int fd = -1;
+    int program_open = 0;
 
     if (path == NULL || argv == NULL || argv[0] == NULL) {
         errno = EFAULT;
         return -1;
     }
-    fd = open(path, O_RDONLY);
-    if (fd < 0)
+    if (access(path, X_OK) != 0)
         goto failed;
-    failure_operation = "execve stat";
-    if (fstat(fd, &about) < 0)
+    if (!resolve(path, &resolved))
         goto failed;
-    if (about.st_size <= 0 || (uint64_t)about.st_size > UINT32_MAX) {
-        errno = ENOEXEC;
+    if (resolved.root) {
+        errno = EACCES;
         goto failed;
     }
-    image = malloc((size_t)about.st_size);
-    if (image == NULL) {
-        errno = ENOMEM;
+    status = astra_vfs_read_source_open(
+        &program_source, astra_process_vfs_assigns(), resolved.native,
+        astra_process_vfs_assign_client, NULL);
+    if (status != ASTRA_VFS_OK) {
+        errno = posix_errno(status);
         goto failed;
     }
-    failure_operation = "execve read";
-    while (received < (size_t)about.st_size) {
-        ssize_t part = read(fd, image + received,
-                            (size_t)about.st_size - received);
-
-        if (part < 0) {
-            if (errno == EINTR)
-                continue;
-            goto failed;
-        }
-        if (part == 0) {
-            errno = ENOEXEC;
-            goto failed;
-        }
-        received += (size_t)part;
-    }
-    failure_operation = "execve close";
-    if (close(fd) < 0) {
-        fd = -1;
-        goto failed;
-    }
-    fd = -1;
+    program_open = 1;
+    program = (AstraReadSource){
+        .length = program_source.length,
+        .read_at = astra_vfs_read_source_read_at,
+        .release = astra_vfs_read_source_close,
+        .context = &program_source,
+    };
     vectors = malloc(ASTRA_STARTUP_BLOCK_SIZE);
     if (vectors == NULL) {
         errno = ENOMEM;
@@ -661,15 +857,17 @@ execve(const char *path, char *const argv[], char *const envp[])
         errno = status == ASTRA_SYSCALL_RESOURCE_LIMIT ? E2BIG : EINVAL;
         goto failed;
     }
-    failure_operation = "execve descriptors";
-    if (astra_posix_exec_export(&handoff, &handoff_size) < 0)
-        goto failed;
-    request.handoff_address = (uint32_t)(uintptr_t)handoff;
-    request.handoff_size = handoff_size;
     failure_operation = "execve process replacement";
-    status = astra_process_exec(image, (uint32_t)about.st_size, &request);
+    status = astra_exec_executable_stream(
+        &program, open_exec_interpreter, &interpreter,
+        prepare_posix_exec, &prepare, &request);
+    program_open = 0;
     failure_detail = status;
-    if (status == ASTRA_SYSCALL_INVALID_ARGUMENT)
+    if (prepare.failure_errno != 0)
+        errno = prepare.failure_errno;
+    else if (interpreter.failure != 0u)
+        errno = posix_errno(interpreter.failure);
+    else if (status == ASTRA_SYSCALL_INVALID_ARGUMENT)
         errno = ENOEXEC;
     else if (status == ASTRA_SYSCALL_RESOURCE_LIMIT)
         errno = E2BIG;
@@ -685,11 +883,10 @@ failed:
         (void)astra_log_failure(failure_operation,
                                 failure_detail != 0u ? failure_detail :
                                                        (uint32_t)errno);
-    if (fd >= 0)
-        (void)close(fd);
+    if (program_open != 0)
+        (void)astra_vfs_read_source_close(&program_source);
     free(handoff);
     free(vectors);
-    free(image);
     return -1;
 }
 
@@ -704,11 +901,7 @@ fsync(int fd)
         errno = EBADF;
         return -1;
     }
-    if (!HAS_LIBRARY_FIELD(1u, 2u, sync)) {
-        errno = ENOSYS;
-        return -1;
-    }
-    status = filesystem.library->sync(&file_slots[slot].file);
+    status = astra_filesystem_sync(&file_slots[slot].file);
     return status == ASTRA_VFS_OK ? 0 : fail(status);
 }
 
@@ -733,11 +926,7 @@ ftruncate(int fd, off_t length)
         errno = EFBIG;
         return -1;
     }
-    if (!HAS_LIBRARY_FIELD(1u, 2u, truncate)) {
-        errno = ENOSYS;
-        return -1;
-    }
-    status = filesystem.library->truncate(&file_slots[slot].file,
+    status = astra_filesystem_truncate(&file_slots[slot].file,
                                           (uint64_t)length);
     return status == ASTRA_VFS_OK ? 0 : fail(status);
 }
@@ -804,14 +993,10 @@ stat_path(const char *path, struct stat *out, int literal)
         out->st_blksize = 512;
         return 0;
     }
-    if (literal && !HAS_LIBRARY_FIELD(1u, 5u, lstat)) {
-        errno = ENOSYS;
-        return -1;
-    }
     status = literal ?
-        filesystem.library->lstat(&filesystem.filesystem, resolved.native,
+        astra_filesystem_lstat(&filesystem.filesystem, resolved.native,
                                   &info) :
-        filesystem.library->stat(&filesystem.filesystem, resolved.native,
+        astra_filesystem_stat(&filesystem.filesystem, resolved.native,
                                   &info);
     if (status != ASTRA_VFS_OK)
         return fail(status);
@@ -842,9 +1027,11 @@ fstat(int fd, struct stat *out)
     }
     if (slot < 0 || (uint32_t)slot >= file_capacity ||
         file_slots[slot].used == 0u) {
+        if (astra_posix_descriptor_flags(fd) < 0)
+            return -1;
         /*
-         * Not a file. stdio calls this on its own three descriptors to decide
-         * how to buffer, and a character device is what a stream is.
+         * A valid non-file descriptor. stdio calls this on its streams to
+         * decide how to buffer, and a character device is what a stream is.
          */
         (void)memset(out, 0, sizeof(*out));
         out->st_mode = S_IFCHR | 0620;
@@ -852,10 +1039,72 @@ fstat(int fd, struct stat *out)
         out->st_blksize = 512;
         return 0;
     }
-    status = filesystem.library->file_info(&file_slots[slot].file, &info);
+    status = astra_filesystem_file_info(&file_slots[slot].file, &info);
     if (status != ASTRA_VFS_OK)
         return fail(status);
     fill(out, &info);
+    return 0;
+}
+
+static void
+fill_statvfs(struct statvfs *out, const AstraFilesystemInfo *info)
+{
+    (void)memset(out, 0, sizeof(*out));
+    out->f_bsize = info->block_size;
+    out->f_frsize = info->fragment_size;
+    out->f_blocks = (fsblkcnt_t)info->blocks;
+    out->f_bfree = (fsblkcnt_t)info->blocks_free;
+    out->f_bavail = (fsblkcnt_t)info->blocks_available;
+    out->f_files = (fsfilcnt_t)info->files;
+    out->f_ffree = (fsfilcnt_t)info->files_free;
+    out->f_favail = (fsfilcnt_t)info->files_free;
+    out->f_flag = info->flags & (ST_RDONLY | ST_NOSUID);
+    out->f_namemax = info->name_max;
+}
+
+int
+statvfs(const char *path, struct statvfs *out)
+{
+    AstraFilesystemInfo info = { .size = sizeof(info) };
+    PosixPath resolved;
+    uint32_t status;
+
+    if (out == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (!resolve(path, &resolved))
+        return -1;
+    if (resolved.root) {
+        errno = EXDEV;
+        return -1;
+    }
+    status = astra_filesystem_capacity_path(
+        &filesystem.filesystem, resolved.native, &info);
+    if (status != ASTRA_VFS_OK)
+        return fail(status);
+    fill_statvfs(out, &info);
+    return 0;
+}
+
+int
+fstatvfs(int fd, struct statvfs *out)
+{
+    AstraFilesystemInfo info = { .size = sizeof(info) };
+    AstraFile *file;
+    uint32_t status;
+
+    if (out == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    file = file_for_descriptor(fd);
+    if (file == NULL)
+        return -1;
+    status = astra_filesystem_capacity_file(file, &info);
+    if (status != ASTRA_VFS_OK)
+        return fail(status);
+    fill_statvfs(out, &info);
     return 0;
 }
 
@@ -864,14 +1113,24 @@ access(const char *path, int mode)
 {
     struct stat about;
 
-    (void)mode;
+    if ((mode & ~(R_OK | W_OK | X_OK)) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
     /*
-     * Existence, and nothing more. The rights a process holds are on the
-     * assign it holds them through, not on the file, so "may I write this"
-     * cannot be answered by looking at the node -- and answering it wrongly is
-     * worse than making the caller try the open and find out.
+     * Namespace rights still decide whether an open may read or write; inode
+     * bits cannot answer that capability question. Execute is different:
+     * command lookup must reject a regular file with no execute bit before it
+     * attempts execve.
      */
-    return stat(path, &about);
+    if (stat(path, &about) != 0)
+        return -1;
+    if ((mode & X_OK) != 0 &&
+        (about.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0) {
+        errno = EACCES;
+        return -1;
+    }
+    return 0;
 }
 
 int
@@ -886,30 +1145,98 @@ mkdir(const char *path, mode_t mode)
         errno = EEXIST;
         return -1;
     }
-    if (!HAS_LIBRARY_FIELD(1u, 3u, mkdir_mode)) {
-        errno = ENOSYS;
-        return -1;
-    }
-    status = filesystem.library->mkdir_mode(
+    status = astra_filesystem_mkdir_mode(
         &filesystem.filesystem, resolved.native,
         (uint16_t)(mode & (mode_t)(ASTRA_VFS_MODE_MASK & ~creation_mask)));
+    return status == ASTRA_VFS_OK ? 0 : fail(status);
+}
+
+static int
+remove_path(const char *path, uint32_t flags)
+{
+    AstraFile parent = ASTRA_FILE_INIT;
+    PosixPath resolved;
+    char parent_path[ASTRA_VFS_PATH_MAX];
+    const char *leaf;
+    const char *separator;
+    size_t parent_length;
+    uint32_t close_status;
+    uint32_t status;
+
+    if ((flags & ~ASTRA_VFS_AT_REMOVE_DIRECTORY) != 0u) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!resolve(path, &resolved))
+        return -1;
+    if (resolved.root) {
+        errno = flags == 0u ? EISDIR : EBUSY;
+        return -1;
+    }
+    separator = strrchr(resolved.native, '/');
+    if (separator == NULL)
+        separator = strchr(resolved.native, ':');
+    if (separator == NULL || separator[1] == '\0') {
+        errno = flags == 0u ? EISDIR : EBUSY;
+        return -1;
+    }
+    leaf = separator + 1u;
+    parent_length = (size_t)(separator - resolved.native) +
+                    (*separator == ':' ? 1u : 0u);
+    if (parent_length + 1u > sizeof(parent_path)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    (void)memcpy(parent_path, resolved.native, parent_length);
+    parent_path[parent_length] = '\0';
+    status = astra_filesystem_open_mode(
+        &filesystem.filesystem, parent_path,
+        ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY,
+        ASTRA_VFS_MODE_DEFAULT, &parent);
+    if (status != ASTRA_VFS_OK)
+        return fail(status);
+    status = astra_filesystem_unlink_at(&parent, leaf, flags);
+    close_status = astra_filesystem_close(&parent);
+    if (status == ASTRA_VFS_OK)
+        status = close_status;
     return status == ASTRA_VFS_OK ? 0 : fail(status);
 }
 
 int
 unlink(const char *path)
 {
-    PosixPath resolved;
+    return remove_path(path, 0u);
+}
+
+int
+unlinkat(int dirfd, const char *path, int flags)
+{
+    AstraFile *directory;
+    uint32_t astra_flags = 0u;
     uint32_t status;
 
-    if (!resolve(path, &resolved))
-        return -1;
-    if (resolved.root) {
-        errno = EISDIR;
+    if ((flags & ~AT_REMOVEDIR) != 0) {
+        errno = EINVAL;
         return -1;
     }
-    status = filesystem.library->unlink(&filesystem.filesystem,
-                                        resolved.native);
+    if ((flags & AT_REMOVEDIR) != 0)
+        astra_flags = ASTRA_VFS_AT_REMOVE_DIRECTORY;
+    if (path == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (path[0] == '\0') {
+        errno = ENOENT;
+        return -1;
+    }
+    if (astra_posix_path_is_absolute(path) || dirfd == AT_FDCWD)
+        return remove_path(path, astra_flags);
+    if (!start())
+        return -1;
+    directory = file_for_descriptor(dirfd);
+    if (directory == NULL)
+        return -1;
+    status = astra_filesystem_unlink_at(directory, path, astra_flags);
     return status == ASTRA_VFS_OK ? 0 : fail(status);
 }
 
@@ -926,11 +1253,7 @@ rename(const char *from, const char *to)
         errno = EBUSY;
         return -1;
     }
-    if (!HAS_LIBRARY_FIELD(1u, 1u, rename)) {
-        errno = ENOSYS;
-        return -1;
-    }
-    status = filesystem.library->rename(&filesystem.filesystem,
+    status = astra_filesystem_rename(&filesystem.filesystem,
                                         from_resolved.native,
                                         to_resolved.native);
     return status == ASTRA_VFS_OK ? 0 : fail(status);
@@ -949,11 +1272,7 @@ link(const char *from, const char *to)
         errno = from_resolved.root ? EPERM : EEXIST;
         return -1;
     }
-    if (!HAS_LIBRARY_FIELD(2u, 1u, link)) {
-        errno = ENOSYS;
-        return -1;
-    }
-    status = filesystem.library->link(&filesystem.filesystem,
+    status = astra_filesystem_link(&filesystem.filesystem,
                                       from_resolved.native,
                                       to_resolved.native);
     return status == ASTRA_VFS_OK ? 0 : fail(status);
@@ -980,13 +1299,60 @@ chmod(const char *path, mode_t mode)
         errno = EROFS;
         return -1;
     }
-    if (!HAS_LIBRARY_FIELD(1u, 3u, chmod)) {
-        errno = ENOSYS;
-        return -1;
-    }
-    status = filesystem.library->chmod(
+    status = astra_filesystem_chmod(
         &filesystem.filesystem, resolved.native,
         (uint16_t)(mode & ASTRA_VFS_MODE_MASK));
+    return status == ASTRA_VFS_OK ? 0 : fail(status);
+}
+
+int
+fchmod(int fd, mode_t mode)
+{
+    AstraFile *file = file_for_descriptor(fd);
+    uint32_t status;
+
+    if (file == NULL)
+        return -1;
+    status = astra_filesystem_chmod_file(
+        file, (uint16_t)(mode & ASTRA_VFS_MODE_MASK));
+    return status == ASTRA_VFS_OK ? 0 : fail(status);
+}
+
+int
+fchmodat(int dirfd, const char *path, mode_t mode, int flags)
+{
+    AstraFile *directory;
+    uint32_t astra_flags = 0u;
+    uint32_t status;
+
+    if ((flags & ~AT_SYMLINK_NOFOLLOW) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if ((flags & AT_SYMLINK_NOFOLLOW) != 0)
+        astra_flags = ASTRA_VFS_AT_SYMLINK_NOFOLLOW;
+    if (path == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (path[0] == '\0') {
+        errno = ENOENT;
+        return -1;
+    }
+    if (astra_posix_path_is_absolute(path) || dirfd == AT_FDCWD) {
+        if (astra_flags != 0u) {
+            errno = ENOTSUP;
+            return -1;
+        }
+        return chmod(path, mode);
+    }
+    if (!start())
+        return -1;
+    directory = file_for_descriptor(dirfd);
+    if (directory == NULL)
+        return -1;
+    status = astra_filesystem_chmod_at(
+        directory, path, (uint16_t)(mode & ASTRA_VFS_MODE_MASK), astra_flags);
     return status == ASTRA_VFS_OK ? 0 : fail(status);
 }
 
@@ -1014,11 +1380,7 @@ readlink(const char *path, char *buffer, size_t capacity)
         errno = EINVAL;
         return -1;
     }
-    if (!HAS_LIBRARY_FIELD(1u, 3u, readlink)) {
-        errno = ENOSYS;
-        return -1;
-    }
-    status = filesystem.library->readlink(
+    status = astra_filesystem_readlink(
         &filesystem.filesystem, resolved.native, native_target,
         ASTRA_VFS_PATH_MAX, &length);
     if (status != ASTRA_VFS_OK)
@@ -1061,29 +1423,20 @@ symlink(const char *target, const char *path)
         errno = EEXIST;
         return -1;
     }
-    if (!HAS_LIBRARY_FIELD(1u, 5u, symlink)) {
-        errno = ENOSYS;
-        return -1;
-    }
     if (astra_posix_link_target_to_native(target, native_target,
                                           sizeof(native_target)) != 0) {
         errno = ENAMETOOLONG;
         return -1;
     }
-    status = filesystem.library->symlink(
+    status = astra_filesystem_symlink(
         native_target, &filesystem.filesystem, resolved.native);
     return status == ASTRA_VFS_OK ? 0 : fail(status);
 }
 
-/*
- * One removal, and the filesystem decides whether the name was the right kind
- * for it. Refusing a directory here on POSIX's behalf would be this layer
- * inventing a rule and getting it wrong for a filesystem that allows it.
- */
 int
 rmdir(const char *path)
 {
-    return unlink(path);
+    return remove_path(path, ASTRA_VFS_AT_REMOVE_DIRECTORY);
 }
 
 int
@@ -1102,7 +1455,7 @@ chdir(const char *path)
         (void)strcpy(cwd, "/");
         return 0;
     }
-    status = filesystem.library->stat(&filesystem.filesystem, resolved.native,
+    status = astra_filesystem_stat(&filesystem.filesystem, resolved.native,
                                       &info);
     if (status != ASTRA_VFS_OK)
         return fail(status);
@@ -1154,6 +1507,7 @@ getcwd(char *buffer, size_t size)
 typedef struct PosixDir {
     AstraDirectory directory;
     AstraDirectoryEntry batch[2];
+    uint64_t position;
     uint32_t count;
     uint32_t next;
     uint32_t root_index;
@@ -1167,32 +1521,86 @@ DIR *
 opendir(const char *path)
 {
     PosixPath resolved;
-    PosixDir *state;
     DIR *dir;
-    uint32_t status;
+    int fd;
 
     if (!resolve(path, &resolved))
         return NULL;
+    if (resolved.root) {
+        PosixDir *state;
+
+        dir = calloc(1u, sizeof(*dir));
+        if (dir == NULL) {
+            errno = ENOMEM;
+            return NULL;
+        }
+        dir->fd = -1;
+        state = (PosixDir *)(void *)dir->buf;
+        state->root = 1u;
+        return dir;
+    }
+    fd = open(path, O_RDONLY | O_DIRECTORY);
+    if (fd < 0)
+        return NULL;
+    dir = fdopendir(fd);
+    if (dir == NULL)
+        (void)close(fd);
+    return dir;
+}
+
+DIR *
+fdopendir(int fd)
+{
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+    AstraFile *file;
+    PosixDir *state;
+    DIR *dir;
+    uint32_t status;
+    int flags;
+
+    file = file_for_descriptor(fd);
+    if (file == NULL)
+        return NULL;
+    flags = astra_posix_descriptor_flags(fd);
+    if (flags < 0)
+        return NULL;
+    if ((flags & O_ACCMODE) == O_WRONLY) {
+        errno = EINVAL;
+        return NULL;
+    }
+    status = astra_filesystem_file_info(file, &info);
+    if (status != ASTRA_VFS_OK) {
+        (void)fail(status);
+        return NULL;
+    }
+    if (info.kind != ASTRA_VFS_KIND_DIRECTORY) {
+        errno = ENOTDIR;
+        return NULL;
+    }
     dir = calloc(1u, sizeof(*dir));
     if (dir == NULL) {
         errno = ENOMEM;
         return NULL;
     }
-    dir->fd = -1;
+    dir->fd = fd;
     state = (PosixDir *)(void *)dir->buf;
-    if (resolved.root) {
-        state->root = 1u;
-        return dir;
-    }
-    status = filesystem.library->directory_open(&filesystem.filesystem,
-                                                 resolved.native,
-                                                 &state->directory);
+    status = astra_filesystem_directory_from_file(file, &state->directory);
     if (status != ASTRA_VFS_OK) {
-        errno = posix_errno(status);
         free(dir);
+        (void)fail(status);
         return NULL;
     }
     return dir;
+}
+
+int
+dirfd(DIR *dir)
+{
+    if (dir == NULL || dir->fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    return dir->fd;
 }
 
 struct dirent *
@@ -1226,12 +1634,13 @@ readdir(DIR *dir)
             dir->dirent.d_type = DT_DIR;
             (void)strncpy(dir->dirent.d_name, assign->name,
                           sizeof(dir->dirent.d_name) - 1u);
+            ++state->position;
             return &dir->dirent;
         }
         return NULL;
     }
     if (state->next >= state->count) {
-        uint32_t status = filesystem.library->directory_read(
+        uint32_t status = astra_filesystem_directory_read(
             &state->directory, state->batch,
             (uint32_t)(sizeof(state->batch) / sizeof(state->batch[0])),
             &state->count);
@@ -1254,13 +1663,102 @@ readdir(DIR *dir)
                      entry->name[index] != '\0'; ++index)
         dir->dirent.d_name[index] = entry->name[index];
     dir->dirent.d_name[index] = '\0';
+    ++state->position;
     return &dir->dirent;
+}
+
+static int
+directory_rewind(DIR *dir)
+{
+    PosixDir *state;
+    uint32_t status;
+
+    if (dir == NULL) {
+        errno = EBADF;
+        return -1;
+    }
+    state = (PosixDir *)(void *)dir->buf;
+    if (state->root != 0u) {
+        state->root_index = 0u;
+    } else {
+        status = astra_filesystem_directory_rewind(&state->directory);
+        if (status != ASTRA_VFS_OK) {
+            errno = posix_errno(status);
+            return -1;
+        }
+    }
+    state->position = 0u;
+    state->count = 0u;
+    state->next = 0u;
+    return 0;
+}
+
+void
+rewinddir(DIR *dir)
+{
+    (void)directory_rewind(dir);
+}
+
+long
+telldir(DIR *dir)
+{
+    const PosixDir *state;
+
+    if (dir == NULL) {
+        errno = EBADF;
+        return -1L;
+    }
+    state = (const PosixDir *)(const void *)dir->buf;
+    if (state->position > (uint64_t)LONG_MAX) {
+        errno = EOVERFLOW;
+        return -1L;
+    }
+    return (long)state->position;
+}
+
+void
+seekdir(DIR *dir, long location)
+{
+    PosixDir *state;
+
+    if (location < 0L || directory_rewind(dir) != 0) {
+        if (location < 0L)
+            errno = EINVAL;
+        return;
+    }
+    state = (PosixDir *)(void *)dir->buf;
+    while (state->position < (uint64_t)location) {
+        errno = 0;
+        if (readdir(dir) == NULL) {
+            if (errno == 0)
+                errno = EINVAL;
+            return;
+        }
+    }
+}
+
+int
+fdclosedir(DIR *dir)
+{
+    PosixDir *state;
+    int fd;
+
+    if (dir == NULL || dir->fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    fd = dir->fd;
+    state = (PosixDir *)(void *)dir->buf;
+    astra_filesystem_directory_close(&state->directory);
+    free(dir);
+    return fd;
 }
 
 int
 closedir(DIR *dir)
 {
     PosixDir *state;
+    int result = 0;
 
     if (dir == NULL) {
         errno = EBADF;
@@ -1268,7 +1766,9 @@ closedir(DIR *dir)
     }
     state = (PosixDir *)(void *)dir->buf;
     if (state->root == 0u)
-        filesystem.library->directory_close(&state->directory);
+        astra_filesystem_directory_close(&state->directory);
+    if (dir->fd >= 0)
+        result = close(dir->fd);
     free(dir);
-    return 0;
+    return result;
 }

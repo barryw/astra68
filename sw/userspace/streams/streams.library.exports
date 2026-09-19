@@ -1,0 +1,32 @@
+/* Tracked ABI source; generated linker maps remain ignored build products. */
+ASTRA_STREAMS_1.0 {
+    global:
+        astra_print;
+        astra_print_u32;
+        astra_stream_identity;
+        astra_stream_read;
+        astra_stream_read_ex;
+        astra_stream_read_wait;
+        astra_stream_sink_init;
+        astra_stream_sink_pump;
+        astra_stream_sink_size;
+        astra_stream_size;
+        astra_stream_source_destroy;
+        astra_stream_source_init;
+        astra_stream_source_init_storage;
+        astra_stream_source_offer;
+        astra_stream_source_pump;
+        astra_stream_source_ready;
+        astra_stream_source_space;
+        astra_stream_tty_bind;
+        astra_stream_tty_get;
+        astra_stream_tty_input;
+        astra_stream_tty_set;
+        astra_stream_tty_signal;
+        astra_stream_tty_state_init;
+        astra_stream_write;
+        astra_stream_write_all;
+        astra_stream_write_one;
+    local:
+        *;
+};

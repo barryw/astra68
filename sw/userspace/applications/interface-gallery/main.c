@@ -7,7 +7,6 @@
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
-#include <astra/shared_library.h>
 #include <astra/status.h>
 #include <astra/surface.h>
 #include <astra/theme.h>
@@ -103,10 +102,6 @@ enum {
 ASTRA_PROGRAM("interface-gallery", 0, 2, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
-static AstraLibraryHandle *graphics_handle;
-static AstraLibraryHandle *interface_handle;
-static const AstraGraphicsLibraryV2 *graphics_library;
-static const AstraInterfaceLibrary *interface_library;
 static AstraSharedSurface surface;
 static AstraWindow window = ASTRA_WINDOW_INIT;
 static AstraControl controls[GALLERY_CONTROL_COUNT];
@@ -149,7 +144,7 @@ static const AstraChoiceItem gallery_choices[] = {
 
 static uint16_t rgb565(AstraColorRGBA8 value)
 {
-    return graphics_library->rgb565(value.red, value.green, value.blue);
+    return astra_surface_rgb565(value.red, value.green, value.blue);
 }
 
 static uint32_t append(char *out, uint32_t at, const char *text)
@@ -251,7 +246,7 @@ static uint32_t add_label(uint32_t index, uint32_t id, const char *text,
     info.text = text;
     info.text_length = length;
     info.text_role = role;
-    return interface_library->label_init(&controls[index], &info) == ASTRA_OK ?
+    return astra_interface_label_init(&controls[index], &info) == ASTRA_OK ?
         ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -267,7 +262,7 @@ static uint32_t add_button(uint32_t index, uint32_t id, const char *text,
     info.variant = variant;
     info.state = state;
     info.preview_state = preview;
-    return interface_library->button_init(&controls[index], &info) == ASTRA_OK ?
+    return astra_interface_button_init(&controls[index], &info) == ASTRA_OK ?
         ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -281,7 +276,7 @@ static uint32_t add_disclosure(uint32_t index, uint32_t id,
     info.target_id = target_id;
     info.text = text;
     info.text_length = length;
-    return interface_library->disclosure_init(&controls[index], &info) ==
+    return astra_interface_disclosure_init(&controls[index], &info) ==
             ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -298,11 +293,11 @@ static uint32_t add_toggle(uint32_t index, uint32_t id, const char *text,
     info.group_id = group;
     info.state = state;
     if (kind == ASTRA_CONTROL_CHECKBOX)
-        result = interface_library->checkbox_init(&controls[index], &info);
+        result = astra_interface_checkbox_init(&controls[index], &info);
     else if (kind == ASTRA_CONTROL_RADIO)
-        result = interface_library->radio_init(&controls[index], &info);
+        result = astra_interface_radio_init(&controls[index], &info);
     else
-        result = interface_library->switch_init(&controls[index], &info);
+        result = astra_interface_switch_init(&controls[index], &info);
     return result == ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -312,7 +307,7 @@ static uint32_t add_slider(uint32_t index, uint32_t id, int32_t value)
 
     info.id = id;
     info.value = value;
-    return interface_library->slider_init(&controls[index], &info) == ASTRA_OK ?
+    return astra_interface_slider_init(&controls[index], &info) == ASTRA_OK ?
         ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -326,7 +321,7 @@ static uint32_t add_dial(uint32_t index, uint32_t id, int32_t value)
     info.maximum = 100;
     info.step = 5;
     info.reset_value = 0;
-    return interface_library->dial_init(&controls[index], &info) == ASTRA_OK ?
+    return astra_interface_dial_init(&controls[index], &info) == ASTRA_OK ?
         ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -338,7 +333,7 @@ static uint32_t add_progress(uint32_t index, uint32_t id,
     info.id = id;
     info.value = value;
     info.maximum = maximum;
-    return interface_library->progress_init(&controls[index], &info) ==
+    return astra_interface_progress_init(&controls[index], &info) ==
             ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -353,7 +348,7 @@ static uint32_t add_field(uint32_t index, uint32_t id,
     info.preferred_columns = columns;
     info.flags = flags;
     info.state = state;
-    return interface_library->field_init(&controls[index], &info) == ASTRA_OK ?
+    return astra_interface_field_init(&controls[index], &info) == ASTRA_OK ?
         ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -366,7 +361,7 @@ static uint32_t add_segmented(uint32_t index, uint32_t id,
     info.items = gallery_choices;
     info.item_count = sizeof(gallery_choices) / sizeof(gallery_choices[0]);
     info.selected = selected;
-    return interface_library->segmented_init(&controls[index], &info) ==
+    return astra_interface_segmented_init(&controls[index], &info) ==
             ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -377,7 +372,7 @@ static uint32_t add_tabs(uint32_t index, uint32_t id)
     info.id = id;
     info.items = gallery_tabs;
     info.item_count = sizeof(gallery_tabs) / sizeof(gallery_tabs[0]);
-    return interface_library->tab_init(&controls[index], &info) == ASTRA_OK ?
+    return astra_interface_tab_init(&controls[index], &info) == ASTRA_OK ?
         ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -395,7 +390,7 @@ static uint32_t add_page(uint32_t index, uint32_t id, uint32_t state)
     info.layout.padding_bottom = 8u;
     info.layout.main_gap = 12u;
     info.layout.cross_gap = 20u;
-    return interface_library->container_init(&controls[index], &info) ==
+    return astra_interface_container_init(&controls[index], &info) ==
             ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -409,7 +404,7 @@ static uint32_t add_stepper(uint32_t index, uint32_t id, int32_t value,
     info.minimum = minimum;
     info.maximum = maximum;
     info.step = step;
-    return interface_library->stepper_init(&controls[index], &info) ==
+    return astra_interface_stepper_init(&controls[index], &info) ==
             ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -421,7 +416,7 @@ static uint32_t add_scroll_view(uint32_t index, uint32_t id)
     info.model = &gallery_scroll_model;
     info.preferred_width = 260u;
     info.preferred_height = 120u;
-    return interface_library->scroll_view_init(&controls[index], &info) ==
+    return astra_interface_scroll_view_init(&controls[index], &info) ==
             ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -432,7 +427,7 @@ static uint32_t add_scrollbar(uint32_t index, uint32_t id)
     info.id = id;
     info.model = &gallery_scroll_model;
     info.orientation = ASTRA_ORIENTATION_VERTICAL;
-    return interface_library->scrollbar_init(&controls[index], &info) ==
+    return astra_interface_scrollbar_init(&controls[index], &info) ==
             ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -441,7 +436,7 @@ static uint32_t add_splitter(uint32_t index, uint32_t id)
     AstraSplitterInfo info = ASTRA_SPLITTER_INFO_INIT;
 
     info.id = id;
-    return interface_library->splitter_init(&controls[index], &info) ==
+    return astra_interface_splitter_init(&controls[index], &info) ==
             ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -452,7 +447,7 @@ static uint32_t add_split_row(uint32_t index, uint32_t id)
     info.id = id;
     info.layout.direction = ASTRA_FLEX_ROW;
     info.layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
-    return interface_library->container_init(&controls[index], &info) ==
+    return astra_interface_container_init(&controls[index], &info) ==
             ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -471,7 +466,7 @@ static uint32_t init_field_model(AstraTextModel *model, const char *text,
     info.metadata_arena_bytes = metadata_bytes;
     info.selection.anchor = text_bytes;
     info.selection.focus = text_bytes;
-    return interface_library->text_model_init(model, &info) == ASTRA_OK ?
+    return astra_text_model_init(model, &info) == ASTRA_OK ?
         ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -534,7 +529,7 @@ static uint32_t copy_field(AstraHandle clipboard, AstraControl *control,
     uint32_t bytes;
     AstraResult result;
 
-    result = interface_library->text_model_get_state(model, &state);
+    result = astra_text_model_get_state(model, &state);
     if (result != ASTRA_OK) return GALLERY_FAIL_CONTROL;
     start = state.selection.anchor < state.selection.focus ?
         state.selection.anchor : state.selection.focus;
@@ -545,14 +540,14 @@ static uint32_t copy_field(AstraHandle clipboard, AstraControl *control,
         AstraTextModelRequirements requirements =
             ASTRA_TEXT_MODEL_REQUIREMENTS_INIT;
 
-        result = interface_library->text_model_replace_requirements(
+        result = astra_text_model_replace_requirements(
             model, start, end, NULL, 0u, &requirements);
         if (result != ASTRA_OK ||
             requirements.content_arena_bytes > state.content_arena_bytes ||
             requirements.metadata_arena_bytes > state.metadata_arena_bytes)
             return GALLERY_FAIL_CONTROL;
     }
-    result = interface_library->text_model_copy(
+    result = astra_text_model_copy(
         model, start, end, clipboard_scratch, sizeof(clipboard_scratch),
         &bytes);
     if (result != ASTRA_OK) return GALLERY_FAIL_CONTROL;
@@ -560,10 +555,10 @@ static uint32_t copy_field(AstraHandle clipboard, AstraControl *control,
     representation.type_length = sizeof(ASTRA_CLIPBOARD_TYPE_UTF8) - 1u;
     representation.data = clipboard_scratch;
     representation.data_length = bytes;
-    result = interface_library->clipboard_write(
+    result = astra_clipboard_write(
         clipboard, &representation, 1u, NULL);
     if (result != ASTRA_OK) return GALLERY_FAIL_CONTROL;
-    if (cut && interface_library->field_replace_selection(
+    if (cut && astra_interface_field_replace_selection(
                    &ui, control, NULL, 0u) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     return ASTRA_STATUS_OK;
@@ -574,17 +569,17 @@ static uint32_t paste_field(AstraHandle clipboard, AstraControl *control)
     AstraClipboardItem item = ASTRA_CLIPBOARD_ITEM_INIT;
     const void *text;
     uint32_t bytes;
-    AstraResult result = interface_library->clipboard_read(clipboard, &item);
+    AstraResult result = astra_clipboard_read(clipboard, &item);
     AstraResult close_result;
 
     if (result != ASTRA_OK) return GALLERY_FAIL_CONTROL;
-    result = interface_library->clipboard_item_find(
+    result = astra_clipboard_item_find(
         &item, ASTRA_CLIPBOARD_TYPE_UTF8,
         sizeof(ASTRA_CLIPBOARD_TYPE_UTF8) - 1u, &text, &bytes);
     if (result == ASTRA_OK)
-        result = interface_library->field_replace_selection(
+        result = astra_interface_field_replace_selection(
             &ui, control, text, bytes);
-    close_result = interface_library->clipboard_item_close(&item);
+    close_result = astra_clipboard_item_close(&item);
     if (result == ASTRA_OK) result = close_result;
     return result == ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
@@ -613,7 +608,7 @@ static uint32_t set_item(uint32_t id, uint32_t parent, uint32_t flags,
     item.parent_id = parent;
     item.flags = flags;
     item.grow = grow;
-    return interface_library->control_set_flex(GALLERY_CONTROL(id), &item) ==
+    return astra_interface_control_set_flex(GALLERY_CONTROL(id), &item) ==
             ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -628,7 +623,7 @@ static uint32_t layout_controls(void)
     layout.padding_right = 16u;
     layout.padding_bottom = 16u;
     layout.main_gap = 12u;
-    return interface_library->ui_layout(&ui, &layout) == ASTRA_OK ?
+    return astra_interface_ui_layout(&ui, &layout) == ASTRA_OK ?
         ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -641,13 +636,13 @@ static uint32_t select_page(int32_t selected)
         return GALLERY_FAIL_CONTROL;
     next = GALLERY_PAGE_INPUT + (uint32_t)selected;
     if (next == active_page) return ASTRA_STATUS_OK;
-    if (interface_library->ui_set_state(
+    if (astra_interface_ui_set_state(
             &ui, GALLERY_CONTROL(next), 0u) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
-    if (interface_library->ui_set_state(
+    if (astra_interface_ui_set_state(
             &ui, GALLERY_CONTROL(active_page),
             ASTRA_CONTROL_COLLAPSED) != ASTRA_OK) {
-        (void)interface_library->ui_set_state(
+        (void)astra_interface_ui_set_state(
             &ui, GALLERY_CONTROL(next), ASTRA_CONTROL_COLLAPSED);
         return GALLERY_FAIL_CONTROL;
     }
@@ -663,7 +658,7 @@ static uint32_t build_controls(void)
     scroll.line_width = 8u;
     scroll.line_height = 16u;
     if (status == ASTRA_STATUS_OK &&
-        interface_library->scroll_init(&gallery_scroll_model, &scroll) !=
+        astra_scroll_init(&gallery_scroll_model, &scroll) !=
             ASTRA_OK)
         status = GALLERY_FAIL_CONTROL;
 
@@ -1011,7 +1006,7 @@ static uint32_t build_controls(void)
         item.parent_id = GALLERY_SCROLL_VIEW;
         item.minimum_width = 260u;
         item.minimum_height = 320u;
-        status = interface_library->control_set_flex(
+        status = astra_interface_control_set_flex(
             GALLERY_CONTROL(GALLERY_SCROLL_CONTENT), &item) == ASTRA_OK ?
             ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
         item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
@@ -1022,7 +1017,7 @@ static uint32_t build_controls(void)
         item.minimum_height = 120u;
         item.maximum_height = 120u;
         if (status == ASTRA_STATUS_OK)
-            status = interface_library->control_set_flex(
+            status = astra_interface_control_set_flex(
                 GALLERY_CONTROL(GALLERY_SCROLLBAR), &item) == ASTRA_OK ?
                 ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
         item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
@@ -1032,7 +1027,7 @@ static uint32_t build_controls(void)
         item.minimum_height = 160u;
         item.grow = 1u;
         if (status == ASTRA_STATUS_OK)
-            status = interface_library->control_set_flex(
+            status = astra_interface_control_set_flex(
                 GALLERY_CONTROL(GALLERY_SPLIT_ROW), &item) == ASTRA_OK ?
                 ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
         item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
@@ -1042,7 +1037,7 @@ static uint32_t build_controls(void)
         item.maximum_width = 700u;
         item.grow = 1u;
         if (status == ASTRA_STATUS_OK)
-            status = interface_library->control_set_flex(
+            status = astra_interface_control_set_flex(
                 GALLERY_CONTROL(GALLERY_SPLIT_LEFT), &item) == ASTRA_OK ?
                 ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
         item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
@@ -1050,7 +1045,7 @@ static uint32_t build_controls(void)
         item.minimum_width = 8u;
         item.maximum_width = 8u;
         if (status == ASTRA_STATUS_OK)
-            status = interface_library->control_set_flex(
+            status = astra_interface_control_set_flex(
                 GALLERY_CONTROL(GALLERY_SPLITTER), &item) == ASTRA_OK ?
                 ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
         item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
@@ -1058,13 +1053,13 @@ static uint32_t build_controls(void)
         item.minimum_width = 160u;
         item.grow = 2u;
         if (status == ASTRA_STATUS_OK)
-            status = interface_library->control_set_flex(
+            status = astra_interface_control_set_flex(
                 GALLERY_CONTROL(GALLERY_SPLIT_RIGHT), &item) == ASTRA_OK ?
                 ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
     }
     if (status != ASTRA_STATUS_OK)
         return status;
-    if (interface_library->ui_init(&ui, controls, GALLERY_CONTROL_COUNT,
+    if (astra_interface_ui_init(&ui, controls, GALLERY_CONTROL_COUNT,
                                    GALLERY_WIDTH, GALLERY_HEIGHT) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     return layout_controls();
@@ -1092,11 +1087,11 @@ static uint32_t benchmark_layout(uint32_t count, uint32_t iterations)
         info.id = 1u;
         info.layout = content;
         benchmark_controls[0] = (AstraControl)ASTRA_CONTROL_INIT;
-        if (interface_library->container_init(&benchmark_controls[0], &info) !=
+        if (astra_interface_container_init(&benchmark_controls[0], &info) !=
             ASTRA_OK)
             return GALLERY_FAIL_CONTROL;
         item.grow = 1u;
-        if (interface_library->control_set_flex(
+        if (astra_interface_control_set_flex(
                 &benchmark_controls[0], &item) != ASTRA_OK)
             return GALLERY_FAIL_CONTROL;
     }
@@ -1108,20 +1103,20 @@ static uint32_t benchmark_layout(uint32_t count, uint32_t iterations)
         info.text = "Layout";
         info.text_length = 6u;
         benchmark_controls[at] = (AstraControl)ASTRA_CONTROL_INIT;
-        if (interface_library->button_init(&benchmark_controls[at], &info) !=
+        if (astra_interface_button_init(&benchmark_controls[at], &info) !=
             ASTRA_OK)
             return GALLERY_FAIL_CONTROL;
         item.parent_id = 1u;
         item.grow = at % 3u + 1u;
-        if (interface_library->control_set_flex(
+        if (astra_interface_control_set_flex(
                 &benchmark_controls[at], &item) != ASTRA_OK)
             return GALLERY_FAIL_CONTROL;
     }
-    if (interface_library->ui_init(&context, benchmark_controls, count,
+    if (astra_interface_ui_init(&context, benchmark_controls, count,
                                    1120u, 800u) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     root.align_items = ASTRA_FLEX_ALIGN_STRETCH;
-    if (interface_library->ui_layout(&context, &root) != ASTRA_OK)
+    if (astra_interface_ui_layout(&context, &root) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     started = astra_clock_monotonic();
     for (uint32_t iteration = 0u; iteration < iterations; ++iteration) {
@@ -1133,7 +1128,7 @@ static uint32_t benchmark_layout(uint32_t count, uint32_t iterations)
         event.data.frame.frame.width =
             (iteration & 1u) != 0u ? 960u : 1120u;
         event.data.frame.frame.height = 800u;
-        if (interface_library->ui_handle_event(
+        if (astra_interface_ui_handle_event(
                 &context, &event, &action) != ASTRA_OK)
             return GALLERY_FAIL_CONTROL;
     }
@@ -1163,10 +1158,10 @@ static uint32_t benchmark_segmented(void)
     info.id = 1u;
     info.items = gallery_choices;
     info.item_count = sizeof(gallery_choices) / sizeof(gallery_choices[0]);
-    if (interface_library->segmented_init(&control, &info) != ASTRA_OK ||
-        interface_library->ui_init(&context, &control, 1u, 240u, 40u) !=
+    if (astra_interface_segmented_init(&control, &info) != ASTRA_OK ||
+        astra_interface_ui_init(&context, &control, 1u, 240u, 40u) !=
             ASTRA_OK ||
-        interface_library->ui_layout(&context, &layout) != ASTRA_OK)
+        astra_interface_ui_layout(&context, &layout) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.size = sizeof(event);
     event.version = ASTRA_WINDOW_EVENT_VERSION;
@@ -1175,11 +1170,11 @@ static uint32_t benchmark_segmented(void)
     event.data.pointer.x = 1;
     event.data.pointer.y = 1;
     event.data.pointer.button = ASTRA_INPUT_BUTTON_LEFT;
-    if (interface_library->ui_handle_event(
+    if (astra_interface_ui_handle_event(
             &context, &event, &action) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.flags = 0u;
-    if (interface_library->ui_handle_event(
+    if (astra_interface_ui_handle_event(
             &context, &event, &action) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.type = ASTRA_WINDOW_EVENT_KEY;
@@ -1188,7 +1183,7 @@ static uint32_t benchmark_segmented(void)
     for (uint32_t at = 0u;
          at < GALLERY_SEGMENTED_BENCHMARK_OPERATIONS; ++at) {
         event.data.key.usage = (at & 1u) == 0u ? 0x4fu : 0x50u;
-        if (interface_library->ui_handle_event(&context, &event, &action) !=
+        if (astra_interface_ui_handle_event(&context, &event, &action) !=
                 ASTRA_OK ||
             action.type != ASTRA_UI_ACTION_VALUE_CHANGED)
             return GALLERY_FAIL_CONTROL;
@@ -1211,10 +1206,10 @@ static uint32_t benchmark_tab(void)
     info.id = 1u;
     info.items = gallery_tabs;
     info.item_count = sizeof(gallery_tabs) / sizeof(gallery_tabs[0]);
-    if (interface_library->tab_init(&control, &info) != ASTRA_OK ||
-        interface_library->ui_init(&context, &control, 1u, 480u, 40u) !=
+    if (astra_interface_tab_init(&control, &info) != ASTRA_OK ||
+        astra_interface_ui_init(&context, &control, 1u, 480u, 40u) !=
             ASTRA_OK ||
-        interface_library->ui_layout(&context, &layout) != ASTRA_OK)
+        astra_interface_ui_layout(&context, &layout) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.size = sizeof(event);
     event.version = ASTRA_WINDOW_EVENT_VERSION;
@@ -1223,11 +1218,11 @@ static uint32_t benchmark_tab(void)
     event.data.pointer.x = 1;
     event.data.pointer.y = 1;
     event.data.pointer.button = ASTRA_INPUT_BUTTON_LEFT;
-    if (interface_library->ui_handle_event(
+    if (astra_interface_ui_handle_event(
             &context, &event, &action) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.flags = 0u;
-    if (interface_library->ui_handle_event(
+    if (astra_interface_ui_handle_event(
             &context, &event, &action) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.type = ASTRA_WINDOW_EVENT_KEY;
@@ -1235,7 +1230,7 @@ static uint32_t benchmark_tab(void)
     started = astra_clock_monotonic();
     for (uint32_t at = 0u; at < GALLERY_TAB_BENCHMARK_OPERATIONS; ++at) {
         event.data.key.usage = (at & 1u) == 0u ? 0x4fu : 0x50u;
-        if (interface_library->ui_handle_event(&context, &event, &action) !=
+        if (astra_interface_ui_handle_event(&context, &event, &action) !=
                 ASTRA_OK ||
             action.type != ASTRA_UI_ACTION_VALUE_CHANGED)
             return GALLERY_FAIL_CONTROL;
@@ -1259,10 +1254,10 @@ static uint32_t benchmark_stepper(void)
     info.value = 0;
     info.minimum = -1;
     info.maximum = 1;
-    if (interface_library->stepper_init(&control, &info) != ASTRA_OK ||
-        interface_library->ui_init(&context, &control, 1u, 100u, 40u) !=
+    if (astra_interface_stepper_init(&control, &info) != ASTRA_OK ||
+        astra_interface_ui_init(&context, &control, 1u, 100u, 40u) !=
             ASTRA_OK ||
-        interface_library->ui_layout(&context, &layout) != ASTRA_OK)
+        astra_interface_ui_layout(&context, &layout) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.size = sizeof(event);
     event.version = ASTRA_WINDOW_EVENT_VERSION;
@@ -1271,11 +1266,11 @@ static uint32_t benchmark_stepper(void)
     event.data.pointer.x = 1;
     event.data.pointer.y = 1;
     event.data.pointer.button = ASTRA_INPUT_BUTTON_LEFT;
-    if (interface_library->ui_handle_event(
+    if (astra_interface_ui_handle_event(
             &context, &event, &action) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.flags = 0u;
-    if (interface_library->ui_handle_event(
+    if (astra_interface_ui_handle_event(
             &context, &event, &action) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.type = ASTRA_WINDOW_EVENT_KEY;
@@ -1284,7 +1279,7 @@ static uint32_t benchmark_stepper(void)
     for (uint32_t at = 0u;
          at < GALLERY_STEPPER_BENCHMARK_OPERATIONS; ++at) {
         event.data.key.usage = (at & 1u) == 0u ? 0x4fu : 0x50u;
-        if (interface_library->ui_handle_event(&context, &event, &action) !=
+        if (astra_interface_ui_handle_event(&context, &event, &action) !=
                 ASTRA_OK ||
             action.type != ASTRA_UI_ACTION_VALUE_CHANGED)
             return GALLERY_FAIL_CONTROL;
@@ -1308,10 +1303,10 @@ static uint32_t benchmark_dial(void)
     info.minimum = -1;
     info.maximum = 1;
     info.reset_value = 0;
-    if (interface_library->dial_init(&control, &info) != ASTRA_OK ||
-        interface_library->ui_init(&context, &control, 1u, 56u, 56u) !=
+    if (astra_interface_dial_init(&control, &info) != ASTRA_OK ||
+        astra_interface_ui_init(&context, &control, 1u, 56u, 56u) !=
             ASTRA_OK ||
-        interface_library->ui_layout(&context, &layout) != ASTRA_OK)
+        astra_interface_ui_layout(&context, &layout) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.size = sizeof(event);
     event.version = ASTRA_WINDOW_EVENT_VERSION;
@@ -1320,11 +1315,11 @@ static uint32_t benchmark_dial(void)
     event.data.pointer.x = 28;
     event.data.pointer.y = 28;
     event.data.pointer.button = ASTRA_INPUT_BUTTON_LEFT;
-    if (interface_library->ui_handle_event(&context, &event, &action) !=
+    if (astra_interface_ui_handle_event(&context, &event, &action) !=
             ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.flags = 0u;
-    if (interface_library->ui_handle_event(&context, &event, &action) !=
+    if (astra_interface_ui_handle_event(&context, &event, &action) !=
             ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.type = ASTRA_WINDOW_EVENT_KEY;
@@ -1332,7 +1327,7 @@ static uint32_t benchmark_dial(void)
     started = astra_clock_monotonic();
     for (uint32_t at = 0u; at < GALLERY_DIAL_BENCHMARK_OPERATIONS; ++at) {
         event.data.key.usage = (at & 1u) == 0u ? 0x52u : 0x51u;
-        if (interface_library->ui_handle_event(&context, &event, &action) !=
+        if (astra_interface_ui_handle_event(&context, &event, &action) !=
                 ASTRA_OK || action.type != ASTRA_UI_ACTION_VALUE_CHANGED)
             return GALLERY_FAIL_CONTROL;
     }
@@ -1366,17 +1361,17 @@ static uint32_t benchmark_disclosure(void)
     option.text = "Option";
     option.text_length = 6u;
     item.parent_id = 2u;
-    if (interface_library->disclosure_init(&benchmark[0], &disclosure) !=
+    if (astra_interface_disclosure_init(&benchmark[0], &disclosure) !=
             ASTRA_OK ||
-        interface_library->container_init(&benchmark[1], &body) != ASTRA_OK ||
-        interface_library->checkbox_init(&benchmark[2], &option) != ASTRA_OK ||
-        interface_library->control_set_flex(&benchmark[2], &item) != ASTRA_OK ||
-        interface_library->ui_init(&context, benchmark, 3u, 240u, 100u) !=
+        astra_interface_container_init(&benchmark[1], &body) != ASTRA_OK ||
+        astra_interface_checkbox_init(&benchmark[2], &option) != ASTRA_OK ||
+        astra_interface_control_set_flex(&benchmark[2], &item) != ASTRA_OK ||
+        astra_interface_ui_init(&context, benchmark, 3u, 240u, 100u) !=
             ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     layout.direction = ASTRA_FLEX_COLUMN;
     layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
-    if (interface_library->ui_layout(&context, &layout) != ASTRA_OK)
+    if (astra_interface_ui_layout(&context, &layout) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.size = sizeof(event);
     event.version = ASTRA_WINDOW_EVENT_VERSION;
@@ -1385,11 +1380,11 @@ static uint32_t benchmark_disclosure(void)
     event.data.pointer.x = 1;
     event.data.pointer.y = 1;
     event.data.pointer.button = ASTRA_INPUT_BUTTON_LEFT;
-    if (interface_library->ui_handle_event(&context, &event, &action) !=
+    if (astra_interface_ui_handle_event(&context, &event, &action) !=
             ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.flags = 0u;
-    if (interface_library->ui_handle_event(&context, &event, &action) !=
+    if (astra_interface_ui_handle_event(&context, &event, &action) !=
             ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.type = ASTRA_WINDOW_EVENT_KEY;
@@ -1398,7 +1393,7 @@ static uint32_t benchmark_disclosure(void)
     for (uint32_t at = 0u;
          at < GALLERY_DISCLOSURE_BENCHMARK_OPERATIONS; ++at) {
         event.data.key.usage = (at & 1u) == 0u ? 0x50u : 0x4fu;
-        if (interface_library->ui_handle_event(&context, &event, &action) !=
+        if (astra_interface_ui_handle_event(&context, &event, &action) !=
                 ASTRA_OK ||
             action.type != ASTRA_UI_ACTION_VALUE_CHANGED)
             return GALLERY_FAIL_CONTROL;
@@ -1424,36 +1419,36 @@ static uint32_t benchmark_splitter(void)
     label.id = 1u;
     label.text = "L";
     label.text_length = 1u;
-    if (interface_library->label_init(&benchmark[0], &label) != ASTRA_OK)
+    if (astra_interface_label_init(&benchmark[0], &label) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     item.basis = 96u;
     item.minimum_width = 32u;
     item.maximum_width = 160u;
-    if (interface_library->control_set_flex(&benchmark[0], &item) != ASTRA_OK)
+    if (astra_interface_control_set_flex(&benchmark[0], &item) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     splitter.id = 2u;
-    if (interface_library->splitter_init(&benchmark[1], &splitter) != ASTRA_OK)
+    if (astra_interface_splitter_init(&benchmark[1], &splitter) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
     item.minimum_width = 8u;
     item.maximum_width = 8u;
-    if (interface_library->control_set_flex(&benchmark[1], &item) != ASTRA_OK)
+    if (astra_interface_control_set_flex(&benchmark[1], &item) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     label.id = 3u;
     label.text = "R";
-    if (interface_library->label_init(&benchmark[2], &label) != ASTRA_OK)
+    if (astra_interface_label_init(&benchmark[2], &label) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
     item.basis = 96u;
     item.minimum_width = 32u;
     item.maximum_width = 160u;
-    if (interface_library->control_set_flex(&benchmark[2], &item) != ASTRA_OK ||
-        interface_library->ui_init(&context, benchmark, 3u, 200u, 40u) !=
+    if (astra_interface_control_set_flex(&benchmark[2], &item) != ASTRA_OK ||
+        astra_interface_ui_init(&context, benchmark, 3u, 200u, 40u) !=
             ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     layout.direction = ASTRA_FLEX_ROW;
     layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
-    if (interface_library->ui_layout(&context, &layout) != ASTRA_OK)
+    if (astra_interface_ui_layout(&context, &layout) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.size = sizeof(event);
     event.version = ASTRA_WINDOW_EVENT_VERSION;
@@ -1462,11 +1457,11 @@ static uint32_t benchmark_splitter(void)
     event.data.pointer.x = 100;
     event.data.pointer.y = 20;
     event.data.pointer.button = ASTRA_INPUT_BUTTON_LEFT;
-    if (interface_library->ui_handle_event(&context, &event, &action) !=
+    if (astra_interface_ui_handle_event(&context, &event, &action) !=
             ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.flags = 0u;
-    if (interface_library->ui_handle_event(&context, &event, &action) !=
+    if (astra_interface_ui_handle_event(&context, &event, &action) !=
             ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     event.type = ASTRA_WINDOW_EVENT_KEY;
@@ -1475,7 +1470,7 @@ static uint32_t benchmark_splitter(void)
     for (uint32_t at = 0u;
          at < GALLERY_SPLITTER_BENCHMARK_OPERATIONS; ++at) {
         event.data.key.usage = (at & 1u) == 0u ? 0x4fu : 0x50u;
-        if (interface_library->ui_handle_event(&context, &event, &action) !=
+        if (astra_interface_ui_handle_event(&context, &event, &action) !=
                 ASTRA_OK ||
             action.type != ASTRA_UI_ACTION_VALUE_CHANGED)
             return GALLERY_FAIL_CONTROL;
@@ -1524,7 +1519,7 @@ static uint32_t benchmark_undo(void)
     manager_info.arena_bytes = sizeof(undo_benchmark_arena);
     manager_info.apply = apply_undo_benchmark;
     manager_info.context = &undo_benchmark_value;
-    if (interface_library->undo_init(&manager, &manager_info) != ASTRA_OK)
+    if (astra_undo_init(&manager, &manager_info) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     started = astra_clock_monotonic();
     for (uint32_t index = 0u;
@@ -1538,7 +1533,7 @@ static uint32_t benchmark_undo(void)
         action.payload_bytes = sizeof(change);
         group.actions = &action;
         group.action_count = 1u;
-        if (interface_library->undo_perform_group(&manager, &group) !=
+        if (astra_undo_perform_group(&manager, &group) !=
             ASTRA_OK)
             return GALLERY_FAIL_CONTROL;
     }
@@ -1548,7 +1543,7 @@ static uint32_t benchmark_undo(void)
     started = astra_clock_monotonic();
     for (uint32_t index = 0u;
          index < GALLERY_UNDO_BENCHMARK_OPERATIONS; ++index)
-        if (interface_library->undo_undo(&manager) != ASTRA_OK)
+        if (astra_undo_undo(&manager) != ASTRA_OK)
             return GALLERY_FAIL_CONTROL;
     undo_elapsed = astra_clock_monotonic() - started;
     if (undo_benchmark_value != 0u)
@@ -1556,11 +1551,11 @@ static uint32_t benchmark_undo(void)
     started = astra_clock_monotonic();
     for (uint32_t index = 0u;
          index < GALLERY_UNDO_BENCHMARK_OPERATIONS; ++index)
-        if (interface_library->undo_redo(&manager) != ASTRA_OK)
+        if (astra_undo_redo(&manager) != ASTRA_OK)
             return GALLERY_FAIL_CONTROL;
     redo_elapsed = astra_clock_monotonic() - started;
     if (undo_benchmark_value != GALLERY_UNDO_BENCHMARK_OPERATIONS ||
-        interface_library->undo_get_state(&manager, &state) != ASTRA_OK ||
+        astra_undo_get_state(&manager, &state) != ASTRA_OK ||
         state.group_count != GALLERY_UNDO_BENCHMARK_OPERATIONS)
         return GALLERY_FAIL_CONTROL;
     report_undo(record_elapsed, undo_elapsed, redo_elapsed,
@@ -1581,33 +1576,33 @@ static uint32_t benchmark_text_model(void)
     info.content_arena_bytes = sizeof(text_benchmark_content);
     info.metadata_arena = text_benchmark_metadata;
     info.metadata_arena_bytes = sizeof(text_benchmark_metadata);
-    if (interface_library->text_model_init(&model, &info) != ASTRA_OK)
+    if (astra_text_model_init(&model, &info) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     started = astra_clock_monotonic();
     for (uint32_t at = 0u; at < GALLERY_TEXT_BENCHMARK_OPERATIONS; ++at)
-        if (interface_library->text_model_replace(
+        if (astra_text_model_replace(
                 &model, at, at, "x", 1u) != ASTRA_OK)
             return GALLERY_FAIL_CONTROL;
     append_elapsed = astra_clock_monotonic() - started;
-    interface_library->text_model_dispose(&model);
+    astra_text_model_dispose(&model);
 
-    if (interface_library->text_model_init(&model, &info) != ASTRA_OK)
+    if (astra_text_model_init(&model, &info) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     started = astra_clock_monotonic();
     for (uint32_t at = 0u; at < GALLERY_TEXT_BENCHMARK_OPERATIONS; ++at) {
         uint32_t position = (at & 1u) == 0u ? 0u : at;
 
-        if (interface_library->text_model_replace(
+        if (astra_text_model_replace(
                 &model, position, position, "x", 1u) != ASTRA_OK)
             return GALLERY_FAIL_CONTROL;
     }
     fragmented_elapsed = astra_clock_monotonic() - started;
-    if (interface_library->text_model_get_state(&model, &state) != ASTRA_OK ||
-        interface_library->text_model_validate(&model) != ASTRA_OK ||
+    if (astra_text_model_get_state(&model, &state) != ASTRA_OK ||
+        astra_text_model_validate(&model) != ASTRA_OK ||
         state.text_bytes != GALLERY_TEXT_BENCHMARK_OPERATIONS)
         return GALLERY_FAIL_CONTROL;
     report_text(append_elapsed, fragmented_elapsed, state.piece_count);
-    interface_library->text_model_dispose(&model);
+    astra_text_model_dispose(&model);
     return ASTRA_STATUS_OK;
 }
 
@@ -1616,28 +1611,9 @@ static uint32_t paint(uint32_t clear)
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
 
     if (clear != 0u)
-        graphics_library->clear(&surface.view, rgb565(theme.client));
-    return interface_library->ui_render(&ui, &surface.view) == ASTRA_OK ?
+        astra_surface_clear(&surface.view, rgb565(theme.client));
+    return astra_interface_ui_render(&ui, &surface.view) == ASTRA_OK ?
         ASTRA_STATUS_OK : GALLERY_FAIL_RENDER;
-}
-
-static uint32_t load_libraries(void)
-{
-    graphics_handle = OpenLibrary(ASTRA_GRAPHICS_LIBRARY_NAME,
-                                  ASTRA_GRAPHICS_LIBRARY_VERSION);
-    interface_handle = OpenLibrary(ASTRA_INTERFACE_LIBRARY_NAME,
-                                   ASTRA_INTERFACE_LIBRARY_VERSION);
-    if (graphics_handle == NULL || interface_handle == NULL)
-        return GALLERY_FAIL_LIBRARY;
-    graphics_library = graphics_handle->exports;
-    interface_library = interface_handle->exports;
-    if (graphics_library == NULL || interface_library == NULL ||
-        !astra_graphics_library_supports(
-            graphics_library, 0u, ASTRA_GRAPHICS_LIBRARY_2_0_SIZE) ||
-        !astra_interface_library_supports(
-            interface_library, 1u, ASTRA_INTERFACE_LIBRARY_5_1_SIZE))
-        return GALLERY_FAIL_LIBRARY;
-    return ASTRA_STATUS_OK;
 }
 
 static uint32_t create_window(AstraHandle gui)
@@ -1645,7 +1621,7 @@ static uint32_t create_window(AstraHandle gui)
     AstraWindowCreateInfo info = ASTRA_WINDOW_CREATE_INFO_INIT;
     AstraResult result;
 
-    if (graphics_library->shared_draw_list_create(
+    if (astra_shared_draw_list_create(
             &surface, GALLERY_WIDTH, GALLERY_HEIGHT) != ASTRA_SYSCALL_OK)
         return GALLERY_FAIL_SURFACE;
     if (paint(1u) != ASTRA_STATUS_OK)
@@ -1666,7 +1642,7 @@ static uint32_t create_window(AstraHandle gui)
                       ASTRA_WINDOW_SUBSCRIBE_KEY |
                       ASTRA_WINDOW_SUBSCRIBE_TEXT |
                       ASTRA_WINDOW_SUBSCRIBE_VBLANK;
-    result = interface_library->window_create(
+    result = astra_window_create(
         gui, surface.area, &info, &window);
     if (result != ASTRA_OK) {
         (void)astra_log_failure("gallery window create",
@@ -1687,7 +1663,7 @@ static uint32_t handle_action(AstraHandle clipboard,
         action->control_id == GALLERY_SLIDER) {
         uint32_t length = format_percent(slider_value_text, action->value);
 
-        if (interface_library->control_set_text(
+        if (astra_interface_control_set_text(
                 &ui, GALLERY_CONTROL(GALLERY_SLIDER_VALUE),
                 slider_value_text, length) != ASTRA_OK)
             return GALLERY_FAIL_CONTROL;
@@ -1696,7 +1672,7 @@ static uint32_t handle_action(AstraHandle clipboard,
         action->control_id == GALLERY_DIAL) {
         uint32_t length = format_integer(dial_value_text, action->value);
 
-        if (interface_library->control_set_text(
+        if (astra_interface_control_set_text(
                 &ui, GALLERY_CONTROL(GALLERY_DIAL_VALUE),
                 dial_value_text, length) != ASTRA_OK)
             return GALLERY_FAIL_CONTROL;
@@ -1716,7 +1692,7 @@ static uint32_t run(AstraHandle clipboard)
         AstraUIAction action = ASTRA_UI_ACTION_INIT;
         AstraControlFrame damage;
         uint32_t animated =
-            interface_library->ui_animations_active(&ui) != 0;
+            astra_interface_ui_animations_active(&ui) != 0;
         uint32_t waits[2];
         uint32_t selected = 0u;
         uint32_t scroll_only = 1u;
@@ -1732,41 +1708,41 @@ static uint32_t run(AstraHandle clipboard)
 
             if (animated != 0u)
                 mask |= ASTRA_WINDOW_SUBSCRIBE_VBLANK;
-            if (interface_library->window_set_event_mask(&window, mask) !=
+            if (astra_window_set_event_mask(&window, mask) !=
                 ASTRA_OK)
                 return GALLERY_FAIL_WINDOW;
             vblank_subscribed = animated;
         }
         if (animated != 0u) {
-            waits[0] = interface_library->window_event_wait_handle(&window);
+            waits[0] = astra_window_event_wait_handle(&window);
             waits[1] =
-                interface_library->window_vblank_wait_handle(&window);
+                astra_window_vblank_wait_handle(&window);
         } else {
-            waits[0] = interface_library->window_event_wait_handle(&window);
+            waits[0] = astra_window_event_wait_handle(&window);
         }
         if (astra_wait_multiple(waits, animated != 0u ? 2u : 1u,
                                 ASTRA_DEADLINE_FOREVER, &selected, NULL) !=
             ASTRA_SYSCALL_OK)
             return GALLERY_FAIL_WINDOW;
         if (animated != 0u && selected == 1u) {
-            if (interface_library->ui_vblank(
+            if (astra_interface_ui_vblank(
                     &ui, astra_clock_monotonic(), &action) != ASTRA_OK)
                 return GALLERY_FAIL_CONTROL;
             if (handle_action(clipboard, &action) != ASTRA_STATUS_OK)
                 return GALLERY_FAIL_CONTROL;
             scroll_only = 0u;
-            result = interface_library->window_event_try(&window, &event);
+            result = astra_window_event_try(&window, &event);
         } else {
-            result = interface_library->window_event_try(&window, &event);
+            result = astra_window_event_try(&window, &event);
         }
         while (result == ASTRA_OK) {
             action = (AstraUIAction)ASTRA_UI_ACTION_INIT;
             if (event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST)
                 return ASTRA_STATUS_OK;
-            if (interface_library->ui_handle_event(
+            if (astra_interface_ui_handle_event(
                     &ui, &event, &action) != ASTRA_OK)
                 return GALLERY_FAIL_CONTROL;
-            if (interface_library->ui_update_pointer(
+            if (astra_interface_ui_update_pointer(
                     &ui, &window, ASTRA_POINTER_SHAPE_AUTOMATIC,
                     &applied_pointer_shape) != ASTRA_OK)
                 return GALLERY_FAIL_WINDOW;
@@ -1779,21 +1755,21 @@ static uint32_t run(AstraHandle clipboard)
                 event.data.frame.frame.height != 0u &&
                 (surface.view.width != event.data.frame.frame.width ||
                  surface.view.height != event.data.frame.frame.height) &&
-                !graphics_library->draw_list_view_init(
+                !astra_draw_list_view_init(
                     &surface.view, surface.view.pixels, surface.view.byte_size,
                     event.data.frame.frame.width,
                     event.data.frame.frame.height))
                 return GALLERY_FAIL_RENDER;
-            result = interface_library->window_event_try(&window, &event);
+            result = astra_window_event_try(&window, &event);
         }
         if (result != ASTRA_ERROR_WOULD_BLOCK) {
             (void)astra_log_failure("gallery window event wait",
                                     (uint32_t)(-result));
             return GALLERY_FAIL_WINDOW;
         }
-        if (interface_library->ui_damage(&ui, &damage) != ASTRA_OK)
+        if (astra_interface_ui_damage(&ui, &damage) != ASTRA_OK)
             continue;
-        if (!graphics_library->draw_list_view_init(
+        if (!astra_draw_list_view_init(
                 &surface.view, surface.view.pixels, surface.view.byte_size,
                 surface.view.width, surface.view.height) ||
             paint(scroll_only == 0u) != ASTRA_STATUS_OK)
@@ -1803,7 +1779,7 @@ static uint32_t run(AstraHandle clipboard)
                 (uint16_t)damage.x, (uint16_t)damage.y,
                 (uint16_t)damage.width, (uint16_t)damage.height};
 
-            result = interface_library->window_present_region(&window,
+            result = astra_window_present_region(&window,
                                                                 &region);
             if (result != ASTRA_OK) {
                 (void)astra_log_failure("gallery window present",
@@ -1811,7 +1787,7 @@ static uint32_t run(AstraHandle clipboard)
                 return GALLERY_FAIL_WINDOW;
             }
         }
-        interface_library->ui_damage_clear(&ui);
+        astra_interface_ui_damage_clear(&ui);
     }
 }
 
@@ -1835,8 +1811,6 @@ int astra_main(const AstraStartupInfo *startup)
     if (status != ASTRA_STATUS_OK)
         status = GALLERY_FAIL_LIBRARY;
     if (status == ASTRA_STATUS_OK)
-        status = load_libraries();
-    if (status == ASTRA_STATUS_OK)
         status = build_controls();
     if (status == ASTRA_STATUS_OK)
         status = benchmark_layouts();
@@ -1859,19 +1833,19 @@ int astra_main(const AstraStartupInfo *startup)
     if (status == ASTRA_STATUS_OK)
         status = create_window(gui->handle);
     if (status == ASTRA_STATUS_OK)
-        interface_library->ui_damage_clear(&ui);
+        astra_interface_ui_damage_clear(&ui);
     if (bootstrap != NULL) {
         (void)astra_service_ready(bootstrap->handle, status, NULL, 0u);
         (void)astra_close(bootstrap->handle);
     }
     if (status == ASTRA_STATUS_OK)
         status = run(clipboard->handle);
-    if (window._private_control != ASTRA_INVALID_HANDLE)
-        (void)interface_library->window_close(&window);
+    if (window._private_control != ASTRA_INVALID_HANDLE) {
+        AstraResult close_result = astra_window_close(&window);
+        (void)close_result;
+    }
     if (surface.area != ASTRA_INVALID_HANDLE)
-        (void)graphics_library->shared_surface_close(&surface);
-    if (interface_handle != NULL) CloseLibrary(interface_handle);
-    if (graphics_handle != NULL) CloseLibrary(graphics_handle);
+        (void)astra_shared_surface_close(&surface);
     astra_process_filesystem_close(&process_filesystem);
     return (int)status;
 }

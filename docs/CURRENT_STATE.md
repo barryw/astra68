@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-09-15
+Status: active continuation map, 2026-09-18
 
 This file contains current facts only. Git history holds superseded board,
 processor, benchmark, and milestone records. The platform is **Astra 68**, its
@@ -102,6 +102,26 @@ results all send the NDK application-launch request to the supervisor loader.
 The 71-command QEMU terminal gate passed, including shell launch and process
 discovery, and a physical Terminal launch displayed Interface Gallery on the
 DE25.
+
+The library-loading audit is cleared in immutable DE25 release
+`354a01b26f2458642761ad24658841b4525c8d31cb102cb965702e8ed14613e5`.
+The screenshot showing `filesystem.library.2` and `config.library` load
+failures was the board still executing stale release `62db2ee8...`, not the
+fresh Beast/QEMU candidate. The production selector and live QEMU process now
+both identify release `354a01b2...`; `astra.service` is active with zero
+restarts, every boot service including `ntpd` reports status 0, and the initial
+image reaches stage 8. A physical Terminal run reports `POSIX RAW PASS: /CWD`,
+and bare `which status` resolves `/commands/status`. The release ROM, writable
+storage seed, and QEMU executable SHA-256 values are respectively
+`ad733d4d830c179f479971391b9ba42ace15718e0cf6aef35ccd2ddf8255c6c2`,
+`8e38f96b5732d3305e522d49ccccd98b47fc8401f069e15b6c76a70e3f44bdc7`, and
+`3553fca8f5d13f0cb6bb931ef5c301928cdbbf65a9710e2aa76bbce1e25f3e35`.
+The launcher and physical-terminal probe now use the production
+`/var/lib/astra` and `/run/astra/qmp.sock` defaults; positive assertions and
+negative stale-path regressions cover both defaults. The probe also submits
+each key's press and release atomically and rejects the interactive `posix`
+command before opening QMP, preventing duplicate characters and repeated raw
+mode failures from contaminating a live Terminal.
 
 The release gate previously advanced the verified `current` selector without
 restarting `astra.service`; the board therefore kept executing the preceding
@@ -598,6 +618,21 @@ contracts, and unresolved references fail the build. The current strict
 Doxygen warning log is empty, and both the HTML manual and 175-page, 574 KiB
 PDF build successfully. Documentation artifacts are dependency-tracked so an
 unchanged archive build does not regenerate them.
+
+The shared-library architecture has been reduced to one policy path. Package
+construction is the sole compatible-version selector and emits one canonical
+provider record for every registered shared-library product. The VFS owns the
+single exact provider resolver used by both supervisor bootstrap and the
+process interpreter; the former Kit-directory fallback, its fixed scan tables,
+and the kernel's unused "latest compatible" selection policy are gone. The
+runtime loader alone owns `DT_NEEDED` traversal, symbols, relocations, TLS,
+RELRO, and initializer order. The kernel accepts an exact library identity and
+only validates, maps, shares, accounts, and reclaims pages. This boundary was
+cross-checked against Haiku's user runtime-loader/kernel image split while
+retaining Astra's narrower streamed-image cache because Astra VFS is a user
+service rather than a kernel file cache. VFS, supervisor, kernel process, image
+provider, and Kit provider-coverage tests pass on Beast; full image boot
+validation remains the release gate for this uncommitted cut.
 
 Commit `b36a784` is physically accepted for this fixed-grid cutover in immutable
 DE25 release
@@ -1139,6 +1174,111 @@ its soft dependency orders the DesignWare provider first. A controlled cold
 boot loaded both automatically, created `/dev/astra-display-capture`, reached
 stage 8, and left the opt-in remote service inactive until explicitly started.
 
+## Active dynamic-linking work
+
+The executable/startup ABI is version 5. A streamed process-load transaction
+can now validate and map one `ET_EXEC` program plus its supervisor-resolved
+`loader.library.1` interpreter atomically. The child starts at the relocated
+interpreter entry while its startup block preserves the program entry and the
+exact interpreter base, span, and entry. Direct execution of a dynamic program
+without that interpreter is rejected. Focused kernel and runtime tests prove
+both images' bytes, entry selection, source routing, release-once behavior,
+rollback, and unchanged static launch behavior.
+
+The source-tree conversion is complete for all 24 programs installed in
+`COMMANDS:`. Every shipped artifact is an `ET_EXEC` dynamic executable with
+`loader.library.1` as its interpreter, exact ordered direct dependencies,
+immediate binding, GNU RELRO, and no text relocations. Independent validation
+passes for both unstripped and shipped images. Small commands are 9,144..26,588
+bytes; Vim and zsh are 4,351,768 and 1,637,232 bytes. A stable all-command
+no-op takes 3.18 seconds with zero compile, configure, link, ABI-generation, or
+audit commands; the stable zsh-only no-op takes 1.55 seconds. This source state
+is published as physical DE25 release `354a01b2...` described above.
+
+Shared libraries use one page-streamed kernel load transaction and a growable
+resident cache packed into the dynamic arena; the old whole-image syscall,
+fifteen-entry cache, fixed 16 MiB slots, and 4 MiB VFS staging ceiling are gone.
+The eager process loader uses the same positioned immutable source contract for
+every dependency, so a sparse library consumes pages for its mapped extent
+rather than a second contiguous copy of its file.
+
+Library publication is now a reversible map/relocate/commit transaction.
+Aborting before commit unmaps every segment and reclaims idle cache pages.
+Commit validates and seals the kernel-retained GNU RELRO range with an
+all-or-nothing VM rights reduction before dropping rollback authority. Every
+cached dependency attach uses the same transaction and cannot bypass RELRO or
+rollback. The complete kernel, VM, ELF, runtime, streams, and VFS host gates
+pass this contract.
+
+`loader.library.1` owns exact dependency resolution, combined per-thread TLS,
+eager versioned relocation, main-program finalization, constructor/destructor
+order, and loader-channel teardown. The kernel validates and maps bytes;
+filesystem and symbol policy remain in the one user loader. There is no second
+mapper or fixed dependency count.
+
+The versioned NDK archive is now dynamic by default and carries the dynamic
+CRT, all 16 registry-owned versioned `.library` files, the closed
+`loader.library.1` interpreter, static self-contained archives, and the
+executable-contract checker. All library owners, including the interpreter,
+pass their full ABI contracts before packaging. The NDK make fragments are the
+sole executable ABI and dynamic-link policy owner for archive consumers,
+source-tree ports, all 24 commands, and the generated Vim and zsh vendor
+builds. The source-tree
+POSIX kit now supplies locations only, and a regression rejects duplicated
+ABI, sysroot, PIE, binding, RELRO, or garbage-collection policy in either
+adapter or command build. The 10,601,784-byte `0.1.0-dev` archive passed its
+relocatability, normalized-metadata, and checksum gate. Using only its
+extracted contents, native C, POSIX C, and POSIX C++ smoke programs linked to
+9,684, 10,288, and 23,808 bytes and passed their exact dynamic contracts. It
+also builds static smoke images of 13,792, 841,632, and 2,328,660 bytes,
+proving the explicit self-contained mode from the extracted NDK. Its SHA-256 is
+`28a80605da706bd1bdb048e6c7c4b8fb7588cabde2317a5df18b747ea0c3905a`.
+The NDK's HTML documentation and generated PDF also pass the
+warnings-as-errors public-API documentation gate. Static linking remains an
+explicitly named, self-contained developer choice; dynamic linking is the
+default, and Astra's production tree selects static mode only for Supervisor
+and Storage because they bootstrap the loader and system volume.
+
+Runtime, shared-library-loader, VFS-library-record, and POSIX allocations now
+share one process heap. The previous loader/VFS side reservations and fixed
+record slabs are gone, so POSIX cannot consume the process address space while
+leaving unusable free memory outside its heap. A fresh 128 MiB filesystem image
+passed the complete QEMU zsh integration gate with cached library attachment;
+the former `filesystem.library cached attach:11` failure did not recur.
+
+An initial supervisor exit is now a contained userspace failure rather than a
+kernel panic. Process teardown records one retained `PROCESS_EXIT` event with
+the PID, normalized status, exit reason, and initial-image flag, revokes the
+owner's resources through the normal path, and presents a degraded boot-control
+diagnosis. A QEMU fault-injection boot with `/startup/system` removed reported
+PID 1 status `2`, reason `1`, and initial flag `1`; all five IRQ leases and all
+owned devices were then revoked/reset, QEMU remained alive, and no panic was
+raised. Panic remains reserved for corrupted kernel state or an invariant whose
+violation makes safe continuation impossible.
+
+The boot tail now applies that same boundary before userspace starts. A missing
+or rejected initial image enters the existing interrupt-driven kernel idle
+state; an unavailable AstraHost block controller, storage link, or input
+controller removes only that capability and records one retained
+`SYSTEM_DEGRADED` event. None of those external failures calls panic. A normal
+prepared-image zsh boot passed, and a current-ROM QEMU fault injection with
+`/startup/system` removed reported the supervisor failure and remained alive.
+The MC68040 kernel host suite and `all verify` pass; the current kernel payload
+is 181,612 bytes.
+
+The current simplification audit has two completed consolidations and two
+explicit structural follow-ups. General runtime, POSIX, dynamic-loader, and
+VFS record allocation now share one process heap instead of competing virtual
+reservations and private slabs. Recoverable boot failures now share one report
+and one idle path instead of several panic exits. The remaining high-value
+complexity is (1) the coupled fixed process/thread/address-space tables and
+(2) the supervisor loader's parallel per-process bookkeeping arrays. The
+correct fixes are boot-sized protected kernel metadata and one tested
+per-process supervisor record respectively; merely raising constants or
+moving the same parallel state behind helpers would preserve the underlying
+problem. The storage/ext4 fixed arena remains intentionally separate because
+it provides precharged, deterministic allocation failure during recovery.
+
 ## Build and artifact rules
 
 Build, QEMU, FPGA, and physical work run through Beast. Source transfer is an
@@ -1156,3 +1296,9 @@ Only after the newly selected `current` release verifies by content identity
 does deployment prune release and writable-state generations unreachable from
 `current`, `previous`, or explicit `by-boot` selectors. This is the permanent
 retention policy; an unbounded release archive on the board is not permitted.
+
+Linker export/version definitions are source and use the tracked `.exports`
+suffix. Generated linker reports may use `.map`; the repository does not
+globally ignore that suffix, because doing so previously allowed an essential
+ABI input to exist only as an untracked stale file. Shared-library builds and
+their documentation gates depend directly on the tracked export definition.

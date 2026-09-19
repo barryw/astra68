@@ -36,7 +36,6 @@ static AstraBootValidation validate_user_image(const AstraBootInfo *info)
     if (info->user_image_base == 0u && info->user_image_size == 0u)
         return ASTRA_BOOT_VALID;
     if (!range_end(info->user_image_base, info->user_image_size, &image_end) ||
-        info->user_image_size > ASTRA_USER_IMAGE_MAX_SIZE ||
         (info->user_image_base & (ASTRA_USER_IMAGE_ALIGNMENT - 1u)) != 0u)
         return ASTRA_BOOT_BAD_USER_IMAGE;
 

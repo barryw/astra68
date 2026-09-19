@@ -255,10 +255,7 @@ def test_kernel_byte_comparison_is_shared():
 
 def test_analyzer_targets_do_real_work():
     roots = (USERSPACE / "commands", USERSPACE / "services")
-    owners = (
-        USERSPACE / "interface" / "Makefile",
-        USERSPACE / "messaging" / "Makefile",
-    )
+    owners = (USERSPACE / "interface" / "Makefile",)
     empty = re.compile(
         r"^[^\n:]*\banalyze\b[^\n:]*:\s*\n\s*@(?:true|:)\s*$",
         re.MULTILINE,
@@ -351,14 +348,10 @@ def test_owner_analyzers_cover_production_sources():
             "every Astra-owned storage source list"
         )
     events_makefile = (USERSPACE / "events" / "Makefile").read_text()
-    if not re.search(
-        r"ANALYZER_SOURCES\s*:=\s*\$\(SOURCES\)\s+"
-        r"src/events_library\.c",
-        events_makefile,
-    ) or "build/analyzer/common_crc32.o" not in events_makefile:
+    if ("ANALYZER_SOURCES := $(SOURCES)" not in events_makefile or
+            "build/analyzer/common_crc32.o" not in events_makefile):
         raise AssertionError(
-            "sw/userspace/events/Makefile: analyzer omits Events-owned "
-            "library or common code"
+            "sw/userspace/events/Makefile: analyzer omits Events-owned code"
         )
 
 
@@ -366,7 +359,6 @@ def test_loadable_libraries_use_owner_built_archives():
     checks = {
         USERSPACE / "vfs" / "Makefile": (
             r"build/m68k/library/runtime_",
-            r"\$\(NDK\)/src/",
         ),
         USERSPACE / "graphics" / "Makefile": (
             r"build/m68k/library/runtime_",
@@ -378,9 +370,6 @@ def test_loadable_libraries_use_owner_built_archives():
         USERSPACE / "interface" / "Makefile": (
             r"\$\((?:RUNTIME|GRAPHICS|NDK)\)/src/",
         ),
-        USERSPACE / "messaging" / "Makefile": (
-            r"\$\((?:RUNTIME|NDK)\)/src/",
-        ),
     }
     for path, patterns in checks.items():
         require_absent(
@@ -389,18 +378,415 @@ def test_loadable_libraries_use_owner_built_archives():
                   for pattern in patterns),
         )
 
+    vfs_makefile = (USERSPACE / "vfs" / "Makefile").read_text()
+    filesystem_objects = re.search(
+        r"^FILESYSTEM_LIBRARY_OBJECTS\s*:=.*?(?=^\S|\Z)",
+        vfs_makefile,
+        re.MULTILINE | re.DOTALL,
+    )
+    if filesystem_objects is None:
+        raise AssertionError(
+            "sw/userspace/vfs/Makefile: missing filesystem library object set"
+        )
+    if re.search(r"(?:\$\(NDK\)/src/|/ndk_|runtime_)", filesystem_objects.group()):
+        raise AssertionError(
+            "sw/userspace/vfs/Makefile: filesystem library recompiles "
+            "implementation owned by another library"
+        )
+
+
+def test_shared_library_products_have_one_registry():
+    registry = USERSPACE / "libraries.mk"
+    if not registry.is_file():
+        raise AssertionError(
+            "sw/userspace/libraries.mk: missing canonical shared-library "
+            "product registry"
+        )
+    registry_text = registry.read_text()
+    required = (
+        "ASTRA_SYSTEM_LIBRARY",
+        "ASTRA_COMPILER_LIBRARY",
+        "ASTRA_RUNTIME_LIBRARY",
+        "ASTRA_FILESYSTEM_LIBRARY",
+        "ASTRA_LIBC_LIBRARY",
+        "ASTRA_CXX_LIBRARY",
+        "ASTRA_NETWORK_LIBRARY",
+        "ASTRA_SHARED_LIBRARIES",
+        "ASTRA_SHARED_LIBRARY_SEARCH_FLAGS",
+    )
+    for variable in required:
+        if not re.search(rf"^{variable}\s*:?=", registry_text, re.MULTILINE):
+            raise AssertionError(
+                f"sw/userspace/libraries.mk: missing {variable}"
+            )
+
+    consumers = (
+        USERSPACE / "Makefile",
+        USERSPACE / "kits" / "Makefile",
+        USERSPACE / "commands" / "Makefile",
+    )
+    for path in consumers:
+        text = path.read_text()
+        if "libraries.mk" not in text:
+            raise AssertionError(
+                f"{relative(path)}: bypasses the shared-library registry"
+            )
+
+    kits = (USERSPACE / "kits" / "Makefile").read_text()
+    if re.search(r"build/m68k/libraries/[^\s]+\.library", kits):
+        raise AssertionError(
+            "sw/userspace/kits/Makefile: duplicates a library product path"
+        )
+    if "OWNER_DIRS" in kits or re.search(r"\|\s*owners\b", kits):
+        raise AssertionError(
+            "sw/userspace/kits/Makefile: a Kit build walks unrelated library "
+            "owners"
+        )
+    if not re.search(
+        r"^\$\(NETWORK_LIBRARY\):\s+FORCE\s*$.*?"
+        r"\$\(MAKE\)\s+-C\s+\.\./network\s+library-contract",
+        kits,
+        re.MULTILINE | re.DOTALL,
+    ):
+        raise AssertionError(
+            "sw/userspace/kits/Makefile: Network Kit lacks an exact owner "
+            "dependency"
+        )
+
+
+def test_link_products_depend_on_their_build_contracts():
+    policy = (REPOSITORY / "mk" / "astra-shared-library.mk").read_text()
+    for token in (
+        "ASTRA_SHARED_OWNER_MAKEFILE",
+        "ASTRA_SHARED_POLICY_MAKEFILE",
+        "ASTRA_SHARED_LINK_INPUTS",
+    ):
+        if token not in policy:
+            raise AssertionError(
+                "mk/astra-shared-library.mk: shared objects can survive a "
+                f"changed link contract ({token})"
+            )
+
+    owners = [REPOSITORY / "ndk" / "Makefile"]
+    owners.extend(USERSPACE.rglob("Makefile"))
+    for path in owners:
+        text = path.read_text()
+        if "astra-shared-library.mk" not in text:
+            continue
+        if "ASTRA_SHARED_LINK_INPUTS" not in text:
+            raise AssertionError(
+                f"{relative(path)}: shared-library target omits the common "
+                "link-input contract"
+            )
+        if "$(ASTRA_SHARED_LIBRARY_LD)" in text:
+            raise AssertionError(
+                f"{relative(path)}: shared-library target bypasses owner "
+                "Makefile freshness"
+            )
+
+    dynamic = (USERSPACE / "dynamic-program.mk").read_text()
+    for dependency in (
+        "Makefile",
+        "$(ASTRA_USERSPACE_ROOT)/dynamic-program.mk",
+        "$(ASTRA_USERSPACE_ROOT)/program.mk",
+        "$(ASTRA_USERSPACE_ROOT)/libraries.mk",
+    ):
+        if dependency not in dynamic:
+            raise AssertionError(
+                "sw/userspace/dynamic-program.mk: executable can survive a "
+                f"changed link contract ({dependency})"
+            )
+    definition = dynamic.find("$(ASTRA_PROGRAM_LINK_SCRIPT_FLAGS)")
+    script = dynamic.find("$(ASTRA_DYNAMIC_LINK_SCRIPT_FLAGS)")
+    if definition < 0 or script < 0 or definition > script:
+        raise AssertionError(
+            "sw/userspace/dynamic-program.mk: program-specific linker "
+            "definitions do not precede the canonical linker script"
+        )
+    terminal = (USERSPACE / "services" / "terminal" / "Makefile").read_text()
+    if "ASTRA_PROGRAM_LINK_SCRIPT_FLAGS := -T $(EVENT_BASE_LD)" not in terminal:
+        raise AssertionError(
+            "sw/userspace/services/terminal/Makefile: event catalog base does "
+            "not use the canonical pre-script definition contract"
+        )
+    if "ASTRA_PROGRAM_EXTRA_LINK_FLAGS" in dynamic or \
+            "ASTRA_PROGRAM_EXTRA_LINK_FLAGS" in terminal:
+        raise AssertionError(
+            "dynamic program link retains the order-unsafe post-script hook"
+        )
+
+
+def test_services_do_not_compile_private_ndk_or_config_copies():
+    for relative_makefile in (
+        ("input", "Makefile"),
+        ("terminal", "Makefile"),
+        ("services", "terminal", "Makefile"),
+    ):
+        path = USERSPACE.joinpath(*relative_makefile)
+        require_absent(
+            path,
+            (
+                (r"build/m68k/ndk_keymap\.o",
+                 "compiles a private copy of the NDK keymap"),
+                (r"\$\(CONFIG\)/src/config_document\.c",
+                 "compiles a private copy of the configuration parser"),
+            ),
+        )
+    input_service = (USERSPACE / "services" / "input" / "Makefile").read_text()
+    if "$(ASTRA_SYSTEM_LIBRARY)" not in input_service or \
+            "libastra.a" in input_service:
+        raise AssertionError(
+            "sw/userspace/services/input/Makefile: does not consume the "
+            "canonical dynamic system library"
+        )
+
+
+def test_cxx_command_uses_the_shared_runtime():
+    commands = (USERSPACE / "commands" / "Makefile").read_text()
+    if "CXX_IMAGE" in commands:
+        raise AssertionError(
+            "sw/userspace/commands/Makefile: packages the static C++ link "
+            "contract as a command"
+        )
+    for token in (
+        "cxx_LIBRARIES :=",
+        "$(CXX_LIBRARY)",
+        "$(UNWIND_LIBRARY)",
+        "$(ASTRA_DYNAMIC_EXECUTABLE_CHECK)",
+    ):
+        if token not in commands:
+            raise AssertionError(
+                "sw/userspace/commands/Makefile: C++ command is not an "
+                f"audited dynamic executable ({token})"
+            )
+
+
+def test_ntpd_uses_a_required_dynamic_config_dependency():
+    makefile = (USERSPACE / "services" / "ntpd" / "Makefile").read_text()
+    source = (USERSPACE / "services" / "ntpd" / "main.c").read_text()
+    header = (REPOSITORY / "ndk" / "include" / "astra" /
+              "config_library.h").read_text()
+
+    for token in (
+        "dynamic-program.mk",
+        "$(CONFIG_LIBRARY)",
+    ):
+        if token not in makefile:
+            raise AssertionError(
+                "sw/userspace/services/ntpd/Makefile: required config "
+                f"dependency is not an audited dynamic link ({token})"
+            )
+    if "-static" in makefile:
+        raise AssertionError(
+            "sw/userspace/services/ntpd/Makefile: required libraries are "
+            "copied into ntpd"
+        )
+    if "OpenLibrary(" in source or "CloseLibrary(" in source:
+        raise AssertionError(
+            "sw/userspace/services/ntpd/main.c: required config dependency "
+            "is discovered after initial-exec TLS is committed"
+        )
+    if ("astra_config_open(" not in header or
+            "AstraConfigLibraryV1" in header or
+            "astra_config_library(void)" in header):
+        raise AssertionError(
+            "ndk/include/astra/config_library.h: linked clients lack the "
+            "canonical direct-symbol Config Kit API"
+        )
+
+
+def test_native_gui_programs_use_the_eager_dynamic_loader():
+    programs = (
+        USERSPACE / "services" / "terminal" / "Makefile",
+        USERSPACE / "services" / "desktop" / "Makefile",
+        USERSPACE / "applications" / "interface-gallery" / "Makefile",
+    )
+    required = (
+        "dynamic-program.mk",
+        "$(ASTRA_INTERFACE_LIBRARY)",
+        "$(ASTRA_SYSTEM_LIBRARY)",
+    )
+    forbidden = ("-static", "libastrart.a", "libastra.a", "libastravfs.a")
+    for path in programs:
+        text = path.read_text()
+        for token in required:
+            if token not in text:
+                raise AssertionError(
+                    f"{relative(path)}: native GUI program bypasses the "
+                    f"canonical eager dynamic link ({token})"
+                )
+        for token in forbidden:
+            if token in text:
+                raise AssertionError(
+                    f"{relative(path)}: ordinary program retains a static "
+                    f"copy of shared system code ({token})"
+                )
+
+
+def test_ordinary_native_programs_share_the_dynamic_link_contract():
+    bootstrap_exceptions = {
+        USERSPACE / "services" / "storage" / "Makefile",
+    }
+    service_makefiles = set((USERSPACE / "services").glob("*/Makefile"))
+    application_makefiles = set(
+        (USERSPACE / "applications").glob("*/Makefile")
+    )
+    programs = sorted(
+        (service_makefiles - bootstrap_exceptions) | application_makefiles
+    )
+    if not programs or not bootstrap_exceptions.issubset(service_makefiles):
+        raise AssertionError(
+            "ordinary native program discovery lost a production Makefile"
+        )
+    forbidden = (
+        "-static",
+        "libastrart.a",
+        "libastra.a",
+        "libastravfs.a",
+        "libastragraphics.a",
+        "libastranetwork.a",
+        "crt0.o",
+    )
+    for path in programs:
+        text = path.read_text()
+        if "dynamic-program.mk" not in text:
+            raise AssertionError(
+                f"{relative(path)}: bypasses the one native dynamic-program "
+                "link contract"
+            )
+        for token in forbidden:
+            if token in text:
+                raise AssertionError(
+                    f"{relative(path)}: ordinary program copies shared "
+                    f"system code ({token})"
+                )
+
+    bootstrap_images = bootstrap_exceptions | {
+        USERSPACE / "supervisor" / "Makefile",
+    }
+    for path in bootstrap_images:
+        text = path.read_text()
+        if "-static" not in text or "ASTRA_STATIC_LINK_SCRIPT_FLAGS" not in text:
+            raise AssertionError(
+                f"{relative(path)}: bootstrap image is not an explicit "
+                "static-link contract"
+            )
+
+
+def test_shared_libraries_have_one_loader_and_one_symbol_abi():
+    removed = (
+        USERSPACE / "runtime" / "src" / "library.c",
+        USERSPACE / "runtime" / "include" / "astra" /
+        "library_loader.h",
+        REPOSITORY / "ndk" / "include" / "astra" / "shared_library.h",
+        REPOSITORY / "ndk" / "include" / "astra" / "events_library.h",
+        REPOSITORY / "ndk" / "include" / "astra" / "input_library.h",
+        REPOSITORY / "ndk" / "include" / "astra" / "messaging_library.h",
+        USERSPACE / "events" / "src" / "events_library.c",
+        USERSPACE / "interface" / "src" / "input_library.c",
+        USERSPACE / "messaging" / "Makefile",
+    )
+    for path in removed:
+        if path.exists():
+            raise AssertionError(
+                f"{relative(path)}: duplicate runtime library loader remains"
+            )
+
+    forbidden = re.compile(
+        r"\b(?:OpenLibrary|CloseLibrary|astra_library_cleanup)\s*\(|"
+        r"\b[a-zA-Z0-9_]+_library_(?:open|close)\s*\(|"
+        r"\bASTRA_LIBRARY_EXPORTS\b|\bASTRA_LIBRARY\s*\("
+    )
+    roots = (USERSPACE, REPOSITORY / "ndk")
+    for root in roots:
+        for path in list(root.rglob("*.c")) + list(root.rglob("*.h")):
+            if "build" in path.parts or "tests" in path.parts:
+                continue
+            if forbidden.search(path.read_text()):
+                raise AssertionError(
+                    f"{relative(path)}: bypasses the one eager ELF loader or "
+                    "retains the displaced export-table ABI"
+                )
+
+
+def test_shared_libraries_have_one_provider_resolver():
+    reader_header = USERSPACE / "vfs" / "include" / "astra" / "vfs_reader.h"
+    reader_source = USERSPACE / "vfs" / "src" / "vfs_reader.c"
+    consumers = (
+        USERSPACE / "vfs" / "src" / "vfs_process.c",
+        USERSPACE / "supervisor" / "src" / "loader.c",
+        USERSPACE / "loader" / "main.c",
+    )
+    if "astra_vfs_library_source_open" not in reader_header.read_text() or \
+            "astra_vfs_library_source_open" not in reader_source.read_text():
+        raise AssertionError(
+            "sw/userspace/vfs: canonical provider resolver is missing"
+        )
+    for path in consumers:
+        text = path.read_text()
+        if "astra_vfs_provider_index_parse" in text or \
+                ":.providers/" in text:
+            raise AssertionError(
+                f"{relative(path)}: duplicates provider-index resolution"
+            )
+    if "astra_vfs_library_source_open" not in \
+            (USERSPACE / "vfs" / "src" / "vfs_process.c").read_text() or \
+            "astra_vfs_library_source_open" not in \
+            (USERSPACE / "supervisor" / "src" / "loader.c").read_text():
+        raise AssertionError(
+            "process and bootstrap loading do not share the canonical "
+            "provider resolver"
+        )
+
+
+def test_terminal_programs_share_terminfo():
+    registry = (USERSPACE / "libraries.mk").read_text()
+    if "ASTRA_TERMINFO_LIBRARY" not in registry:
+        raise AssertionError(
+            "sw/userspace/libraries.mk: missing the shared terminfo product"
+        )
+    if not (USERSPACE / "terminfo" / "Makefile").is_file():
+        raise AssertionError(
+            "sw/userspace/terminfo: missing canonical terminfo library owner"
+        )
+    manifest = (USERSPACE / "kits" / "Posix.kit" / "manifest").read_text()
+    if "provides terminfo.library 6 6.6.0" not in manifest:
+        raise AssertionError(
+            "sw/userspace/kits/Posix.kit: does not publish terminfo.library"
+        )
+    commands = (USERSPACE / "commands" / "Makefile").read_text()
+    if re.search(r"(?:VIM|ZSH)[^\n]*LDFLAGS[^\n]*-static", commands):
+        raise AssertionError(
+            "sw/userspace/commands/Makefile: Vim or Zsh is statically linked"
+        )
+    for variable in ("vim_LIBRARIES", "zsh_LIBRARIES"):
+        declaration = re.search(
+            rf"^{variable}\s*:=.*?(?=^\S|\Z)",
+            commands,
+            re.MULTILINE | re.DOTALL,
+        )
+        if declaration is None or "$(TERMINFO_LIBRARY)" not in declaration.group():
+            raise AssertionError(
+                f"sw/userspace/commands/Makefile: {variable} does not use "
+                "terminfo.library"
+            )
+
 
 def test_static_archives_are_exact_replacements():
     shared = (REPOSITORY / "mk" / "m68k-cross.mk").read_text()
     for required in (
         "rm -f $@.tmp",
-        "$(AR) rcs $@.tmp $^",
+        "$(AR) rcs $@.tmp $(filter %.o,$^)",
         "mv $@.tmp $@",
     ):
         if required not in shared:
             raise AssertionError(
                 "mk/m68k-cross.mk: archive replacement is not atomic and exact"
             )
+    if "$(AR) rcs $@.tmp $^" in shared:
+        raise AssertionError(
+            "mk/m68k-cross.mk: archive replacement admits non-object prerequisites"
+        )
     makefiles = list(USERSPACE.rglob("Makefile")) + [
         REPOSITORY / "ndk" / "Makefile"
     ]
@@ -412,7 +798,85 @@ def test_static_archives_are_exact_replacements():
         if direct_update.search(path.read_text()):
             raise AssertionError(
                 f"{relative(path)}: updates an archive without removing stale members"
+        )
+
+
+def test_posix_exec_uses_the_posix_namespace_converter():
+    path = USERSPACE / "posix" / "src" / "file.c"
+    text = path.read_text()
+    start = text.index("\nexecve(const char *path")
+    end = text.index("\nint\nfsync(", start)
+    body = text[start:end]
+
+    if "access(path, X_OK)" not in body or \
+            "resolve(path, &resolved)" not in body:
+        raise AssertionError(
+            f"{relative(path)}: execve bypasses executable or slash-path checks"
+        )
+    if "astra_process_path(" in body:
+        raise AssertionError(
+            f"{relative(path)}: execve treats POSIX slash paths as native-relative"
+        )
+
+
+def test_posix_dependencies_have_one_recursive_build_barrier():
+    text = (USERSPACE / "posix" / "Makefile").read_text()
+    dynamic_targets = {
+        "RUNTIME": "library",
+        "STREAMS": "library",
+        "VFS": "library",
+        "NETWORK": "library",
+    }
+    static_targets = {
+        "RUNTIME": "build/m68k/libastrart.a",
+        "STREAMS": "build/m68k/libastrastreams.a",
+        "VFS": "build/m68k/libastravfs.a",
+        "NETWORK": "build/m68k/libastranetwork.a",
+    }
+    for owner, target in dynamic_targets.items():
+        invocation = f"$(MAKE) -C $({owner}) {target}"
+        if text.count(invocation) != 1:
+            raise AssertionError(
+                "sw/userspace/posix/Makefile: dependency owner can be built "
+                f"concurrently outside the dynamic barrier ({owner})"
             )
+    for owner, target in static_targets.items():
+        invocation = f"$(MAKE) -C $({owner}) {target}"
+        if text.count(invocation) != 1:
+            raise AssertionError(
+                "sw/userspace/posix/Makefile: dependency owner can be built "
+                f"concurrently outside the static barrier ({owner})"
+            )
+    for artifact in ("RUNTIME_LIB", "RUNTIME_CRT0", "ASTRA_POSIX_CRT0",
+                     "STREAMS_LIB", "VFS_LIB", "NETWORK_LIB"):
+        if not re.search(
+            rf"^.*\$\({artifact}\).*:\s*\|\s*static-libraries-ready\s*$",
+            text,
+            re.MULTILINE,
+        ):
+            raise AssertionError(
+                "sw/userspace/posix/Makefile: dependency artifact bypasses "
+                f"the single recursive build barrier ({artifact})"
+            )
+
+    vfs = (USERSPACE / "vfs" / "Makefile").read_text()
+    if vfs.count("$(MAKE) -C $(RUNTIME)") != 1 or \
+            vfs.count("$(MAKE) -C $(NDK) build/m68k/manifest.o") != 1:
+        raise AssertionError(
+            "sw/userspace/vfs/Makefile: loadable-library dependencies can be "
+            "built concurrently through multiple recursive makes"
+        )
+    if not re.search(
+        r"^\$\(NDK_OBJECTS\):\s*\|\s*libraries-ready\s*$", vfs, re.MULTILINE
+    ) or not re.search(
+        r"^\$\(FILESYSTEM_LIBRARY\):.*?\|\s*libraries-ready\s*$",
+        vfs,
+        re.MULTILINE | re.DOTALL,
+    ):
+        raise AssertionError(
+            "sw/userspace/vfs/Makefile: NDK artifacts bypass the single "
+            "recursive build barrier"
+        )
 
 
 def test_graphics_library_objects_track_all_inputs():
@@ -454,7 +918,6 @@ def test_interface_library_objects_track_all_inputs():
         "build/m68k/control.o",
         "build/m68k/text_surface.o",
         "build/m68k/undo.o",
-        "build/m68k/input_library.o",
     ):
         match = re.search(
             rf"^{re.escape(target)}:.*?(?=^\S|\Z)",
@@ -466,7 +929,7 @@ def test_interface_library_objects_track_all_inputs():
                 f"sw/userspace/interface/Makefile: {target} can remain stale "
                 "after an included header changes"
             )
-    if "$(INTERFACE_OBJECTS) $(INPUT_OBJECTS): Makefile" not in text:
+    if "$(INTERFACE_OBJECTS): Makefile" not in text:
         raise AssertionError(
             "sw/userspace/interface/Makefile: library objects do not rebuild "
             "when their dependency recipe changes"
@@ -488,6 +951,16 @@ def test_supervisor_owns_local_service_endpoint_lifetimes():
             raise AssertionError(
                 f"supervisor closes its provider-owned {handle} after boot"
             )
+
+
+def test_userspace_orchestration_does_not_overlap_shared_producers():
+    text = (USERSPACE / "Makefile").read_text()
+
+    if not re.search(r"^\.NOTPARALLEL:\s*$", text, re.MULTILINE):
+        raise AssertionError(
+            "sw/userspace/Makefile: parallel top-level goals can concurrently "
+            "configure or replace the same shared producer"
+        )
 
 
 def test_ndk_private_headers_stay_in_ndk():
@@ -649,7 +1122,7 @@ def test_identical_device_callbacks_are_not_duplicated():
 def test_program_build_order_is_shared():
     shared = (USERSPACE / "program.mk").read_text()
     if ("ASTRA_PROGRAM_DIRECT_GOALS" not in shared or
-            "$(MAKE) libraries" not in shared or
+            "ASTRA_BUILD_PROGRAM_OWNERS" not in shared or
             "ASTRA_PROGRAM_OWNER_GATE" not in shared or
             "$(MAKE_RESTARTS)" not in shared or
             "ASTRA_PROGRAM_OWNERS_READY=1 program" not in shared):
@@ -675,9 +1148,10 @@ def test_program_build_order_is_shared():
             raise AssertionError(
                 f"{relative(path)}: duplicates or omits shared program build order"
             )
-        if "ASTRA_PROGRAM_OWNER_DIRS" not in text:
+        if ("dynamic-program.mk" not in text and
+                "ASTRA_PROGRAM_OWNER_TARGETS" not in text):
             raise AssertionError(
-                f"{relative(path)}: does not declare its library owners"
+                f"{relative(path)}: does not declare exact owner targets"
             )
         if re.search(r"^all\s*:", text, re.MULTILINE):
             raise AssertionError(
@@ -699,12 +1173,12 @@ def test_direct_parallel_build_cannot_observe_stale_owner_products():
         (root / "library").write_text("old\n")
         (owner / "source").write_text("new\n")
         (owner / "Makefile").write_text(
-            "all:\n"
+            "refresh:\n"
             "\t@sleep 0.25\n"
             "\tcp source ../library\n"
         )
         (root / "Makefile").write_text(
-            "ASTRA_PROGRAM_OWNER_DIRS := owner\n"
+            "ASTRA_PROGRAM_OWNER_TARGETS := owner:refresh\n"
             "ASTRA_PROGRAM_TARGETS := image\n"
             "TARGET := output\n"
             "include " + str(USERSPACE / "program.mk") + "\n"
@@ -739,6 +1213,34 @@ def test_proc_text_views_are_streamed_without_aggregate_ceiling():
         )
 
 
+def test_linker_uses_the_canonical_address_map():
+    header = (REPOSITORY / "sw" / "include" / "astra" /
+              "address_space.h").read_text()
+    linker = (USERSPACE / "runtime" / "astra_user_contract.ld").read_text()
+
+    def hex_constant(text, name):
+        match = re.search(
+            rf"^\s*(?:#define\s+)?{name}\s*(?:=\s*)?(0x[0-9a-fA-F]+)",
+            text,
+            re.MULTILINE,
+        )
+        if match is None:
+            raise AssertionError(f"missing address constant {name}")
+        return int(match.group(1), 16)
+
+    if hex_constant(linker, "ASTRA_TEXT_BASE") != hex_constant(
+            header, "ASTRA_EXECUTABLE_LINK_ADDRESS"):
+        raise AssertionError(
+            "runtime linker text base disagrees with astra/address_space.h"
+        )
+    if hex_constant(linker, "ASTRA_EXECUTABLE_ADDRESS_END") != hex_constant(
+            header, "ASTRA_EXECUTABLE_ADDRESS_END"):
+        raise AssertionError(
+            "runtime linker image ceiling disagrees with "
+            "astra/address_space.h"
+        )
+
+
 def main():
     tests = (
         test_kernel_private_headers_do_not_cross_into_userspace,
@@ -756,9 +1258,22 @@ def main():
         test_analyzer_targets_do_real_work,
         test_owner_analyzers_cover_production_sources,
         test_loadable_libraries_use_owner_built_archives,
+        test_shared_library_products_have_one_registry,
+        test_link_products_depend_on_their_build_contracts,
+        test_services_do_not_compile_private_ndk_or_config_copies,
         test_static_archives_are_exact_replacements,
+        test_posix_dependencies_have_one_recursive_build_barrier,
+        test_cxx_command_uses_the_shared_runtime,
+        test_ntpd_uses_a_required_dynamic_config_dependency,
+        test_native_gui_programs_use_the_eager_dynamic_loader,
+        test_ordinary_native_programs_share_the_dynamic_link_contract,
+        test_shared_libraries_have_one_loader_and_one_symbol_abi,
+        test_shared_libraries_have_one_provider_resolver,
+        test_terminal_programs_share_terminfo,
         test_graphics_library_objects_track_all_inputs,
         test_interface_library_objects_track_all_inputs,
+        test_supervisor_owns_local_service_endpoint_lifetimes,
+        test_userspace_orchestration_does_not_overlap_shared_producers,
         test_ndk_private_headers_stay_in_ndk,
         test_public_headers_are_imported_by_namespace,
         test_ndk_owns_user_facing_headers,
@@ -773,6 +1288,7 @@ def main():
         test_program_build_order_is_shared,
         test_direct_parallel_build_cannot_observe_stale_owner_products,
         test_proc_text_views_are_streamed_without_aggregate_ceiling,
+        test_linker_uses_the_canonical_address_map,
     )
     failures = []
     for test in tests:

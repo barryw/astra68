@@ -24,8 +24,6 @@ ASTRA_PROGRAM("ntpd", 0, 1, 0, "Astra68 contributors",
 
 static uint32_t control_receive;
 static uint32_t control_send;
-static AstraLibraryHandle *config_handle;
-static const AstraConfigLibraryV1 *config_library;
 static AstraConfig config = ASTRA_CONFIG_INIT;
 
 static AstraNtpStatus set_from(const char *server, AstraNtpSample *sample)
@@ -51,14 +49,14 @@ static AstraNtpStatus synchronize(const char *override, AstraNtpSample *sample)
     for (uint32_t key = 0u; key < 2u; ++key) {
         uint32_t count = 0u;
 
-        if (config_library->count(&config, keys[key], &count) !=
+        if (astra_config_count(&config, keys[key], &count) !=
             ASTRA_CONFIG_OK)
             return ASTRA_NTP_CONFIG;
         for (uint32_t index = 0u; index < count; ++index) {
             char source[ASTRA_NETWORK_NAME_MAX + 1u];
             uint32_t length = 0u;
 
-            if (config_library->get_string(
+            if (astra_config_get_string(
                     &config, keys[key], index, source, sizeof(source),
                     &length) != ASTRA_CONFIG_OK || length == 0u)
                 return ASTRA_NTP_CONFIG;
@@ -92,7 +90,7 @@ static void control(void)
         request.server[ASTRA_NETWORK_NAME_MAX] == '\0')
         status = request.server[0] != '\0' ?
             synchronize(request.server, &sample) :
-            (config_library->reload(&config, NULL) == ASTRA_CONFIG_OK ?
+            (astra_config_reload(&config, NULL) == ASTRA_CONFIG_OK ?
                  synchronize(NULL, &sample) : ASTRA_NTP_CONFIG);
     astra_message_header_set(&reply.header, sizeof(reply),
                              ASTRA_NTP_CONTROL_PROTOCOL,
@@ -135,16 +133,8 @@ int astra_main(const AstraStartupInfo *startup)
     astra_posix_start(startup);
     if (astra_process_vfs_init(startup) != ASTRA_VFS_OK)
         return ASTRA_STATUS_NOT_FOUND;
-    config_handle = OpenLibrary(ASTRA_CONFIG_LIBRARY_NAME,
-                                ASTRA_CONFIG_LIBRARY_VERSION);
-    if (config_handle == NULL)
-        return ASTRA_STATUS_NOT_FOUND;
-    config_library = config_handle->exports;
-    if (config_library->abi_major != ASTRA_CONFIG_LIBRARY_ABI_MAJOR ||
-        config_library->structure_size < sizeof(*config_library))
-        return ASTRA_STATUS_PROTOCOL;
-    if (config_library->open(startup, 1u, ASTRA_CONFIG_OPEN_READ,
-                             &config, &config_error) != ASTRA_CONFIG_OK)
+    if (astra_config_open(startup, 1u, ASTRA_CONFIG_OPEN_READ,
+                          &config, &config_error) != ASTRA_CONFIG_OK)
         return ASTRA_STATUS_INVALID;
     if (astra_rt_port_create(4u, 4u * sizeof(AstraNtpControlRequest),
                              &control_receive, &control_send) !=
@@ -176,7 +166,7 @@ int astra_main(const AstraStartupInfo *startup)
         if (status == ASTRA_SYSCALL_OK)
             control();
         else if (status == ASTRA_SYSCALL_TIMED_OUT) {
-            if (config_library->reload(&config, NULL) == ASTRA_CONFIG_OK)
+            if (astra_config_reload(&config, NULL) == ASTRA_CONFIG_OK)
                 (void)synchronize(NULL, &sample);
         }
         else

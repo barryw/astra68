@@ -201,6 +201,12 @@ static const AstraVfsBackendOps operations = {
     .readlink = astra_vfs_backend_no_readlink,
     .symlink = astra_vfs_backend_deny_symlink,
     .link = astra_vfs_backend_deny_link,
+    .open_at = astra_vfs_backend_no_open_at,
+    .unlink_at = astra_vfs_backend_no_unlink_at,
+    .chmod_node = astra_vfs_backend_no_chmod_node,
+    .chmod_at = astra_vfs_backend_no_chmod_at,
+    .filesystem_info = astra_vfs_backend_no_filesystem_info,
+    .stat_at = astra_vfs_backend_no_stat_at,
 };
 
 int astra_metric_vfs_init(AstraMetricVfs *metrics,

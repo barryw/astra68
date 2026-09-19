@@ -95,6 +95,25 @@ typedef struct AstraVfsBackendOps {
                          uint32_t capacity, uint32_t *length);
     uint32_t (*symlink)(void *context, const char *target, const char *path);
     uint32_t (*link)(void *context, const char *from, const char *to);
+    /** Open `path` beneath an already-open directory node. */
+    uint32_t (*open_at)(void *context, uintptr_t directory, const char *path,
+                        uint32_t flags, uint16_t create_mode,
+                        uintptr_t *node, AstraVfsNodeInfo *info);
+    /** Remove `path` beneath an open directory node. */
+    uint32_t (*unlink_at)(void *context, uintptr_t directory,
+                          const char *path, uint32_t flags);
+    /** Change permissions on an already-open node. */
+    uint32_t (*chmod_node)(void *context, uintptr_t node, uint16_t mode);
+    /** Change permissions beneath an open directory node. */
+    uint32_t (*chmod_at)(void *context, uintptr_t directory,
+                         const char *path, uint16_t mode, uint32_t flags);
+    /** Report capacity for either `node` or `path`; one must be supplied. */
+    uint32_t (*filesystem_info)(void *context, uintptr_t node,
+                                const char *path,
+                                AstraVfsFilesystemInfo *info);
+    /** Read no-follow metadata beneath an already-open directory node. */
+    uint32_t (*stat_at)(void *context, uintptr_t directory,
+                        const char *path, AstraVfsNodeInfo *info);
 } AstraVfsBackendOps;
 
 struct AstraVfsBackend {
@@ -110,6 +129,9 @@ uint32_t astra_vfs_backend_readdir_into(
 uint32_t astra_vfs_backend_read_path(
     const AstraVfsBackend *backend, const char *path, void *buffer,
     uint32_t capacity, uint32_t *moved, uint64_t *node_size);
+uint32_t astra_vfs_backend_filesystem_info_into(
+    const AstraVfsBackend *backend, uintptr_t node, const char *path,
+    void *buffer, uint32_t capacity);
 
 /* Shared operation table entries for immutable synthetic filesystems. */
 static inline uint32_t
@@ -210,6 +232,78 @@ astra_vfs_backend_deny_link(void *context, const char *from, const char *to)
     (void)from;
     (void)to;
     return ASTRA_VFS_ERR_ACCESS;
+}
+
+static inline uint32_t
+astra_vfs_backend_no_open_at(void *context, uintptr_t directory,
+                             const char *path, uint32_t flags,
+                             uint16_t create_mode, uintptr_t *node,
+                             AstraVfsNodeInfo *info)
+{
+    (void)context;
+    (void)directory;
+    (void)path;
+    (void)flags;
+    (void)create_mode;
+    (void)node;
+    (void)info;
+    return ASTRA_VFS_ERR_UNSUPPORTED;
+}
+
+static inline uint32_t
+astra_vfs_backend_no_unlink_at(void *context, uintptr_t directory,
+                               const char *path, uint32_t flags)
+{
+    (void)context;
+    (void)directory;
+    (void)path;
+    (void)flags;
+    return ASTRA_VFS_ERR_UNSUPPORTED;
+}
+
+static inline uint32_t
+astra_vfs_backend_no_chmod_node(void *context, uintptr_t node, uint16_t mode)
+{
+    (void)context;
+    (void)node;
+    (void)mode;
+    return ASTRA_VFS_ERR_UNSUPPORTED;
+}
+
+static inline uint32_t
+astra_vfs_backend_no_chmod_at(void *context, uintptr_t directory,
+                              const char *path, uint16_t mode,
+                              uint32_t flags)
+{
+    (void)context;
+    (void)directory;
+    (void)path;
+    (void)mode;
+    (void)flags;
+    return ASTRA_VFS_ERR_UNSUPPORTED;
+}
+
+static inline uint32_t
+astra_vfs_backend_no_filesystem_info(void *context, uintptr_t node,
+                                     const char *path,
+                                     AstraVfsFilesystemInfo *info)
+{
+    (void)context;
+    (void)node;
+    (void)path;
+    (void)info;
+    return ASTRA_VFS_ERR_UNSUPPORTED;
+}
+
+static inline uint32_t
+astra_vfs_backend_no_stat_at(void *context, uintptr_t directory,
+                             const char *path, AstraVfsNodeInfo *info)
+{
+    (void)context;
+    (void)directory;
+    (void)path;
+    (void)info;
+    return ASTRA_VFS_ERR_UNSUPPORTED;
 }
 
 #endif

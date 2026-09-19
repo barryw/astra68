@@ -1,20 +1,30 @@
 #ifndef ASTRA_CONFIG_LIBRARY_H
 #define ASTRA_CONFIG_LIBRARY_H
 
-/** @file config_library.h @brief Typed, location-independent configuration. */
+/** @file config_library.h @brief Location-independent configuration API. */
 
 #include <stdint.h>
 
 /** Logical name of config.library. */
 #define ASTRA_CONFIG_LIBRARY_NAME "config.library"
-/** Config Kit export-table ABI major version. */
+/** Config Kit ELF ABI major version. */
 #define ASTRA_CONFIG_LIBRARY_ABI_MAJOR 1u
-/** Config Kit export-table ABI minor version. */
+/** Config Kit backward-compatible ABI revision. */
 #define ASTRA_CONFIG_LIBRARY_ABI_MINOR 0u
 /** Minimum compatible config.library major version. */
 #define ASTRA_CONFIG_LIBRARY_VERSION ASTRA_CONFIG_LIBRARY_ABI_MAJOR
 /** Launch capability carrying the caller's private configuration root. */
 #define ASTRA_CONFIG_CAPABILITY "CONFIG"
+/** Launch capability carrying the configuration root for commands. */
+#define ASTRA_CONFIG_COMMANDS_CAPABILITY "CONFIG_COMMANDS"
+
+/** Canonical configuration namespace owner classes. */
+enum {
+    ASTRA_CONFIG_OWNER_SYSTEM = 1,
+    ASTRA_CONFIG_OWNER_SERVICE = 2,
+    ASTRA_CONFIG_OWNER_COMMAND = 3,
+    ASTRA_CONFIG_OWNER_APPLICATION = 4
+};
 
 /** Request read access when opening configuration. */
 #define ASTRA_CONFIG_OPEN_READ  (1u << 0)
@@ -47,66 +57,101 @@ typedef struct AstraConfig {
 /** Empty configuration-handle initializer. */
 #define ASTRA_CONFIG_INIT { 0, 0 }
 
+/**
+ * Derive the canonical directory for an owner class below @p parent.
+ * @param parent Nonempty NUL-terminated capability-relative parent path.
+ * @param owner_kind One ASTRA_CONFIG_OWNER_* value.
+ * @param out Receives the canonical NUL-terminated path.
+ * @param capacity Bytes available at @p out, including its terminator.
+ * @return ASTRA_CONFIG_OK, ASTRA_CONFIG_INVALID for invalid input, or
+ * ASTRA_CONFIG_BUFFER_TOO_SMALL when @p out cannot hold the complete path.
+ */
+uint32_t astra_config_scope_root(const char *parent, uint32_t owner_kind,
+                                 char *out, uint32_t capacity);
+/**
+ * Derive one owner's root below an already scoped @p parent.
+ * @param parent Nonempty NUL-terminated scoped parent path.
+ * @param owner Nonempty owner name containing only portable path-component
+ * characters and not beginning with a period.
+ * @param out Receives the canonical NUL-terminated path.
+ * @param capacity Bytes available at @p out, including its terminator.
+ * @return ASTRA_CONFIG_OK, ASTRA_CONFIG_INVALID for invalid input, or
+ * ASTRA_CONFIG_BUFFER_TOO_SMALL when @p out cannot hold the complete path.
+ */
+uint32_t astra_config_owner_root(const char *parent, const char *owner,
+                                 char *out, uint32_t capacity);
+/**
+ * Derive the canonical private capability root for one configuration owner.
+ * @param parent Nonempty NUL-terminated capability-relative parent path.
+ * @param owner_kind One ASTRA_CONFIG_OWNER_* value.
+ * @param owner Nonempty owner name containing only portable path-component
+ * characters and not beginning with a period.
+ * @param out Receives the canonical NUL-terminated path.
+ * @param capacity Bytes available at @p out, including its terminator.
+ * @return ASTRA_CONFIG_OK, ASTRA_CONFIG_INVALID for invalid input, or
+ * ASTRA_CONFIG_BUFFER_TOO_SMALL when @p out cannot hold the complete path.
+ */
+uint32_t astra_config_capability_root(const char *parent,
+                                      uint32_t owner_kind,
+                                      const char *owner, char *out,
+                                      uint32_t capacity);
+
 /** Actionable configuration parse or schema error. */
 typedef struct AstraConfigError {
     uint32_t line; /**< One-based malformed line, or zero. */
     uint32_t version; /**< Unsupported schema version, or zero. */
 } AstraConfigError;
 
-/**
- * A key owns an ordered sequence of typed values.  A scalar is the common
- * one-value case and uses index zero; repeating a key creates a list without
- * introducing a second data model.  count() reports zero for a missing key.
- * get_string() returns the value length even when the supplied buffer is too
- * small, so callers can allocate exactly what the stored value requires.
- *
- * Programs never name a file or parse a format.  open() resolves the caller's
- * private CONFIG capability and schema through the library.
- */
-typedef struct AstraConfigLibraryV1 {
-    uint16_t abi_major; /**< ASTRA_CONFIG_LIBRARY_ABI_MAJOR. */
-    uint16_t abi_minor; /**< ASTRA_CONFIG_LIBRARY_ABI_MINOR. */
-    uint32_t structure_size; /**< Bytes available in this table. */
-
-    /** Open the calling program's configuration. */
-    uint32_t (*open)(const AstraStartupInfo *, uint32_t schema_version,
-                     uint32_t flags, AstraConfig *, AstraConfigError *);
-    /** Close an open configuration. */
-    void (*close)(AstraConfig *);
-    /** Reload committed values from storage. */
-    uint32_t (*reload)(AstraConfig *, AstraConfigError *);
-    /** Count values stored under one key. */
-    uint32_t (*count)(const AstraConfig *, const char *, uint32_t *);
-    /** Read a string value by key and index. */
-    uint32_t (*get_string)(const AstraConfig *, const char *, uint32_t,
-                           char *, uint32_t, uint32_t *);
-    /** Read a signed integer value by key and index. */
-    uint32_t (*get_i64)(const AstraConfig *, const char *, uint32_t,
-                        int64_t *);
-    /** Read an unsigned integer value by key and index. */
-    uint32_t (*get_u64)(const AstraConfig *, const char *, uint32_t,
-                        uint64_t *);
-    /** Read a Boolean value by key and index. */
-    uint32_t (*get_bool)(const AstraConfig *, const char *, uint32_t, int *);
-    /** Replace or create a string value. */
-    uint32_t (*set_string)(AstraConfig *, const char *, uint32_t,
-                           const char *);
-    /** Replace or create a signed integer value. */
-    uint32_t (*set_i64)(AstraConfig *, const char *, uint32_t, int64_t);
-    /** Replace or create an unsigned integer value. */
-    uint32_t (*set_u64)(AstraConfig *, const char *, uint32_t, uint64_t);
-    /** Replace or create a Boolean value. */
-    uint32_t (*set_bool)(AstraConfig *, const char *, uint32_t, int);
-    /** Append a string to a key's value list. */
-    uint32_t (*append_string)(AstraConfig *, const char *, const char *);
-    /** Append a signed integer to a key's value list. */
-    uint32_t (*append_i64)(AstraConfig *, const char *, int64_t);
-    /** Append an unsigned integer to a key's value list. */
-    uint32_t (*append_u64)(AstraConfig *, const char *, uint64_t);
-    /** Append a Boolean to a key's value list. */
-    uint32_t (*append_bool)(AstraConfig *, const char *, int);
-    /** Remove one indexed value. */
-    uint32_t (*remove)(AstraConfig *, const char *, uint32_t);
-} AstraConfigLibraryV1;
+/** Open the caller's configuration through its private CONFIG capability. @param startup Valid startup record. @param schema_version Caller schema version. @param flags ASTRA_CONFIG_OPEN_* flags. @param config Receives the handle. @param error Optional parse error. @return ASTRA_CONFIG_* status. */
+uint32_t astra_config_open(const AstraStartupInfo *startup,
+                           uint32_t schema_version, uint32_t flags,
+                           AstraConfig *config, AstraConfigError *error);
+/** Close an open configuration. @param config Configuration to close. */
+void astra_config_close(AstraConfig *config);
+/** Reload committed values. @param config Open configuration. @param error Optional parse error. @return ASTRA_CONFIG_* status. */
+uint32_t astra_config_reload(AstraConfig *config, AstraConfigError *error);
+/** Count values under a key. @param config Open configuration. @param key UTF-8 key. @param count Receives count. @return ASTRA_CONFIG_* status. */
+uint32_t astra_config_count(const AstraConfig *config, const char *key,
+                            uint32_t *count);
+/** Read a string. @param config Open configuration. @param key Key. @param index Value index. @param value Receives text. @param capacity Buffer bytes. @param length Receives required bytes. @return ASTRA_CONFIG_* status. */
+uint32_t astra_config_get_string(const AstraConfig *config, const char *key,
+                                 uint32_t index, char *value,
+                                 uint32_t capacity, uint32_t *length);
+/** Read a signed integer. @param config Open configuration. @param key Key. @param index Value index. @param value Receives value. @return ASTRA_CONFIG_* status. */
+uint32_t astra_config_get_i64(const AstraConfig *config, const char *key,
+                              uint32_t index, int64_t *value);
+/** Read an unsigned integer. @param config Open configuration. @param key Key. @param index Value index. @param value Receives value. @return ASTRA_CONFIG_* status. */
+uint32_t astra_config_get_u64(const AstraConfig *config, const char *key,
+                              uint32_t index, uint64_t *value);
+/** Read a Boolean. @param config Open configuration. @param key Key. @param index Value index. @param value Receives zero or one. @return ASTRA_CONFIG_* status. */
+uint32_t astra_config_get_bool(const AstraConfig *config, const char *key,
+                               uint32_t index, int *value);
+/** Set a string. @param config Open writable configuration. @param key Key. @param index Value index. @param value UTF-8 value. @return ASTRA_CONFIG_* status. */
+uint32_t astra_config_set_string(AstraConfig *config, const char *key,
+                                 uint32_t index, const char *value);
+/** Set a signed integer. @param config Open writable configuration. @param key Key. @param index Value index. @param value Value. @return ASTRA_CONFIG_* status. */
+uint32_t astra_config_set_i64(AstraConfig *config, const char *key,
+                              uint32_t index, int64_t value);
+/** Set an unsigned integer. @param config Open writable configuration. @param key Key. @param index Value index. @param value Value. @return ASTRA_CONFIG_* status. */
+uint32_t astra_config_set_u64(AstraConfig *config, const char *key,
+                              uint32_t index, uint64_t value);
+/** Set a Boolean. @param config Open writable configuration. @param key Key. @param index Value index. @param value Boolean. @return ASTRA_CONFIG_* status. */
+uint32_t astra_config_set_bool(AstraConfig *config, const char *key,
+                               uint32_t index, int value);
+/** Append a string. @param config Open writable configuration. @param key Key. @param value UTF-8 value. @return ASTRA_CONFIG_* status. */
+uint32_t astra_config_append_string(AstraConfig *config, const char *key,
+                                    const char *value);
+/** Append a signed integer. @param config Open writable configuration. @param key Key. @param value Value. @return ASTRA_CONFIG_* status. */
+uint32_t astra_config_append_i64(AstraConfig *config, const char *key,
+                                 int64_t value);
+/** Append an unsigned integer. @param config Open writable configuration. @param key Key. @param value Value. @return ASTRA_CONFIG_* status. */
+uint32_t astra_config_append_u64(AstraConfig *config, const char *key,
+                                 uint64_t value);
+/** Append a Boolean. @param config Open writable configuration. @param key Key. @param value Boolean. @return ASTRA_CONFIG_* status. */
+uint32_t astra_config_append_bool(AstraConfig *config, const char *key,
+                                  int value);
+/** Remove one value. @param config Open writable configuration. @param key Key. @param index Value index. @return ASTRA_CONFIG_* status. */
+uint32_t astra_config_remove(AstraConfig *config, const char *key,
+                             uint32_t index);
 
 #endif

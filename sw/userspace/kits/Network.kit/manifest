@@ -2,5 +2,9 @@ astra-bundle 1
 kind kit
 id org.astra.network
 name "Astra Network Kit"
-version 1.0.0
+version 1.1.0
 provides network.library 1 1.0.0
+provides ntp.library 1 1.0.0
+requires compiler.library 1 1.0.0
+requires runtime.library 1 1.5.0
+requires libc.library 1 1.0.0

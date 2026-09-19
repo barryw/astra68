@@ -5,13 +5,22 @@
 #include <stdint.h>
 
 #include <astra/block.h>
+#include <astra/address_space.h>
 #include <astra/host.h>
+#include <astra/library.h>
 #include <astra/render_batch.h>
 
-#define KERNEL_VM_USER_MIN 0x00010000u
-#define KERNEL_VM_USER_MAX 0x7fffffffu
-#define KERNEL_VM_AREA_BASE 0x40000000u
-#define KERNEL_VM_AREA_SLOT_SIZE 0x00400000u
+#define KERNEL_VM_USER_MIN ASTRA_NULL_GUARD_END
+#define KERNEL_VM_USER_MAX (ASTRA_USER_ADDRESS_END - 1u)
+/*
+ * Relocatable executable images are packed into this address-space arena by
+ * their validated extent. It is an address-map boundary, not a library-count
+ * or per-image-size quota; committed pages remain limited by physical RAM.
+ */
+#define KERNEL_VM_DYNAMIC_BASE ASTRA_DYNAMIC_IMAGE_BASE
+#define KERNEL_VM_DYNAMIC_END  ASTRA_DYNAMIC_IMAGE_END
+#define KERNEL_VM_AREA_BASE ASTRA_SHARED_AREA_ADDRESS_START
+#define KERNEL_VM_AREA_SLOT_SIZE ASTRA_SHARED_AREA_SLOT_SIZE
 /*
  * Sixteen was a machine whose graphical half was one program. A desktop is
  * seven: every window is a surface its client created, and every mount a
@@ -19,7 +28,7 @@
  * sixteen MC68040 page tables; the VM transaction owns their publication and
  * rollback. Reserved areas commit no RAM until touched.
  */
-#define KERNEL_VM_AREA_SLOT_COUNT 32u
+#define KERNEL_VM_AREA_SLOT_COUNT ASTRA_SHARED_AREA_SLOT_COUNT
 /*
  * How many address spaces exist at once. It lives here rather than beside
  * KERNEL_PROCESS_MAX because the VM is what is sized from it -- the area
@@ -28,18 +37,10 @@
  */
 #define KERNEL_VM_ADDRESS_SPACE_MAX 32u
 /*
- * How many address spaces may alias one shared frame: all of them, and no
- * more, because an alias is an address space that has it mapped. This was 15
- * because the per-frame ledger gave the count four bits and the process count
- * was cut to fit; the ledger is sixteen bits now and the count follows the
- * address spaces instead of the field.
- */
-#define KERNEL_VM_SHARED_ALIAS_MAX KERNEL_VM_ADDRESS_SPACE_MAX
-/*
  * Transfer memory lands in its own window. Each buffer is process-private, so
  * the slot index is per address space rather than global.
  */
-#define KERNEL_VM_DMA_BASE 0x50000000u
+#define KERNEL_VM_DMA_BASE ASTRA_DMA_ADDRESS_START
 #define KERNEL_VM_DMA_SLOT_SIZE ASTRA_RENDER_BATCH_BUFFER_BYTES
 #define KERNEL_VM_DMA_SLOT_COUNT ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE
 
@@ -49,7 +50,7 @@
  * another. The virtual window and physical aperture both cover the system's
  * complete thread pool.
  */
-#define KERNEL_VM_HOST_CHANNEL_BASE 0x4ff00000u
+#define KERNEL_VM_HOST_CHANNEL_BASE ASTRA_HOST_CHANNEL_ADDRESS_START
 #define KERNEL_VM_HOST_CHANNEL_PHYSICAL_BASE ASTRA_HOST_CHANNEL_PHYSICAL_BASE
 #define KERNEL_VM_HOST_CHANNEL_PAGE_COUNT ASTRA_HOST_CHANNEL_COUNT
 
@@ -59,15 +60,39 @@
  * frame; first touch commits ordinary process-owned pages through the normal
  * quota. The extent is therefore the address-map boundary, not a heap limit.
  */
-#define KERNEL_VM_PRIVATE_BASE \
-    (KERNEL_VM_DMA_BASE + KERNEL_VM_DMA_SLOT_SIZE * KERNEL_VM_DMA_SLOT_COUNT)
-#define KERNEL_VM_PRIVATE_END 0x70000000u
+#define KERNEL_VM_PRIVATE_BASE ASTRA_PRIVATE_ADDRESS_START
+#define KERNEL_VM_PRIVATE_END ASTRA_PRIVATE_ADDRESS_END
 #define KERNEL_VM_PRIVATE_SLOT_SIZE 0x00400000u
 #define KERNEL_VM_PRIVATE_SLOT_COUNT \
     ((KERNEL_VM_PRIVATE_END - KERNEL_VM_PRIVATE_BASE) / \
      KERNEL_VM_PRIVATE_SLOT_SIZE)
 #define KERNEL_VM_PRIVATE_BITMAP_WORDS \
     ((KERNEL_VM_PRIVATE_SLOT_COUNT + 31u) / 32u)
+#define KERNEL_VM_PROCESS_HEAP_CONTROL_BASE \
+    ASTRA_PROCESS_HEAP_CONTROL_START
+#define KERNEL_VM_PROCESS_HEAP_CONTROL_END \
+    ASTRA_PROCESS_HEAP_CONTROL_END
+
+_Static_assert(KERNEL_VM_PROCESS_HEAP_CONTROL_BASE == KERNEL_VM_PRIVATE_BASE,
+               "process heap control must begin the private VM window");
+_Static_assert(KERNEL_VM_PROCESS_HEAP_CONTROL_END -
+                   KERNEL_VM_PROCESS_HEAP_CONTROL_BASE ==
+                   KERNEL_VM_PRIVATE_SLOT_SIZE,
+               "process heap control must occupy exactly one root slot");
+
+_Static_assert(KERNEL_VM_AREA_BASE +
+                   KERNEL_VM_AREA_SLOT_SIZE * KERNEL_VM_AREA_SLOT_COUNT ==
+                   ASTRA_SHARED_AREA_ADDRESS_END,
+               "shared-area implementation disagrees with address ABI");
+_Static_assert(KERNEL_VM_HOST_CHANNEL_BASE +
+                   ASTRA_HOST_CHANNEL_COUNT *
+                       ASTRA_HOST_CHANNEL_PAGE_SIZE ==
+                   ASTRA_HOST_CHANNEL_ADDRESS_END,
+               "host-channel implementation disagrees with address ABI");
+_Static_assert(KERNEL_VM_DMA_BASE +
+                   KERNEL_VM_DMA_SLOT_SIZE * KERNEL_VM_DMA_SLOT_COUNT ==
+                   ASTRA_DMA_ADDRESS_END,
+               "DMA implementation disagrees with address ABI");
 
 #define KERNEL_VM_READ  (1u << 0)
 #define KERNEL_VM_WRITE (1u << 1)
@@ -91,6 +116,12 @@ typedef enum KernelVmMapping {
     KERNEL_VM_MAPPING_READ_ONLY,
     KERNEL_VM_MAPPING_READ_WRITE
 } KernelVmMapping;
+
+/** One page-aligned range used by an atomic VM rights transition. */
+typedef struct KernelVmPageRange {
+    uint32_t virtual_address;
+    uint32_t page_count;
+} KernelVmPageRange;
 
 typedef struct KernelAddressSpace {
     struct KernelAddressSpace *registry_next;
@@ -168,6 +199,9 @@ KernelVmStatus kernel_vm_private_reserve(KernelAddressSpace *space,
                                          uint32_t permissions,
                                          uint32_t *virtual_base,
                                          uint32_t *mapped_span);
+KernelVmStatus kernel_vm_private_reserve_largest(
+    KernelAddressSpace *space, uint32_t minimum_byte_size,
+    uint32_t permissions, uint32_t *virtual_base, uint32_t *mapped_span);
 KernelVmStatus kernel_vm_private_fault(KernelAddressSpace *space,
                                        uint32_t virtual_address,
                                        bool write);
@@ -194,6 +228,22 @@ KernelVmStatus kernel_vm_map_shared_range(
     KernelAddressSpace *space, uint32_t virtual_address,
     const uint32_t *physical_pages, uint32_t page_count,
     uint32_t frame_owner, uint32_t permissions);
+/*
+ * Permanently remove write access from process-owned pages. The complete
+ * range is validated before any descriptor changes, so an unmapped, shared,
+ * device, or foreign page leaves every earlier page unchanged.
+ */
+KernelVmStatus kernel_vm_protect_read_only(KernelAddressSpace *space,
+                                           uint32_t virtual_address,
+                                           uint32_t page_count);
+/*
+ * The multi-range form validates every page in every range before changing
+ * any descriptor. It is used when one logical commit seals disjoint metadata
+ * regions and partial success would leave a process in an unusable state.
+ */
+KernelVmStatus kernel_vm_protect_read_only_ranges(
+    KernelAddressSpace *space, const KernelVmPageRange *ranges,
+    uint32_t range_count);
 KernelVmStatus kernel_vm_unmap_shared_range(
     KernelAddressSpace *space, uint32_t virtual_address,
     const uint32_t *physical_pages, uint32_t page_count,

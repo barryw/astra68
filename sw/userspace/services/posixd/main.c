@@ -21,6 +21,13 @@ static PosixProcessTable table;
 static uint32_t control_receive;
 static uint32_t control_send;
 
+static int
+service_failure(const char *operation, uint32_t status)
+{
+    (void)astra_log_failure(operation, status);
+    return (int)status;
+}
+
 static uint32_t
 status_from_syscall(uint32_t status)
 {
@@ -288,11 +295,11 @@ astra_main(const AstraStartupInfo *startup)
                    "process service wait set exceeds the kernel wait set");
 
     if (!astra_startup_validate(startup))
-        return ASTRA_STATUS_INVALID;
+        return service_failure("posixd startup", ASTRA_STATUS_INVALID);
     bootstrap = astra_startup_capability(startup,
                                          ASTRA_CAPABILITY_SERVICE_READY);
     if (bootstrap == NULL)
-        return ASTRA_STATUS_BAD_HANDLE;
+        return service_failure("posixd bootstrap", ASTRA_STATUS_BAD_HANDLE);
     status = posix_process_table_init(&table, entries, sessions,
                                       ASTRA_PROCESS_COUNT_MAX);
     if (status == ASTRA_STATUS_OK &&
@@ -303,12 +310,20 @@ astra_main(const AstraStartupInfo *startup)
             ASTRA_SYSCALL_OK)
         status = ASTRA_STATUS_LIMIT;
     published = control_send;
-    (void)astra_service_ready(bootstrap->handle, status,
-                              status == ASTRA_STATUS_OK ? &published : NULL,
-                              status == ASTRA_STATUS_OK ? 1u : 0u);
+    {
+        uint32_t ready_status = astra_service_ready(
+            bootstrap->handle, status,
+            status == ASTRA_STATUS_OK ? &published : NULL,
+            status == ASTRA_STATUS_OK ? 1u : 0u);
+
+        if (ready_status != ASTRA_SYSCALL_OK) {
+            (void)astra_close(bootstrap->handle);
+            return service_failure("posixd ready", ready_status);
+        }
+    }
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_STATUS_OK)
-        return (int)status;
+        return service_failure("posixd initialize", status);
     for (;;) {
         uint32_t waits[ASTRA_PROCESS_COUNT_MAX + 1u];
         uint32_t count = 1u;
@@ -326,7 +341,9 @@ astra_main(const AstraStartupInfo *startup)
         else if (status == ASTRA_SYSCALL_OK ||
                  status == ASTRA_SYSCALL_PEER_DEAD)
             remove_dead();
-        else
+        else {
+            (void)astra_log_failure("posixd wait", status);
             return ASTRA_STATUS_PEER_DEAD;
+        }
     }
 }

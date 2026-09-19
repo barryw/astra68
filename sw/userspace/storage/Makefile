@@ -6,8 +6,10 @@ SIZE := $(CROSS)size
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
 RUNTIME := ../runtime
+include $(RUNTIME)/astra-link.mk
 NDK := ../../../ndk
 LWEXT4 := ../../../third_party/lwext4
+VFS := ../vfs
 MKE2FS ?= mke2fs
 E2FSCK ?= e2fsck
 CPPFLAGS := -I$(NDK)/include -Iinclude -I../../include -I$(RUNTIME)/include
@@ -28,6 +30,7 @@ HOST_FLAGS := -O2 -fno-builtin
 HOST_HEADERS := $(wildcard include/astra/*.h ../../include/astra/*.h \
 	$(NDK)/include/astra/*.h \
 	$(RUNTIME)/include/astra/*.h $(ALLOC)/include/astra/*.h \
+	$(VFS)/include/astra/*.h \
 	port/include/generated/*.h tests/*.h)
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 THREAD_SANITIZER_FLAGS := -fsanitize=thread -fno-omit-frame-pointer -g
@@ -54,6 +57,7 @@ LWEXT4_OBJECTS := $(patsubst $(LWEXT4)/src/%.c,build/m68k/lwext4/%.o, \
 # CONFIG_USE_DEFAULT_CFG is 0. The name is CFG, not CONFIG; spelling it wrong
 # still works by accident because the guard reads an undefined macro as 0.
 EXT4_CPPFLAGS := -I$(LWEXT4)/include -Iport/include -DCONFIG_USE_DEFAULT_CFG=0
+VFS_CPPFLAGS := -I$(VFS)/include
 # Vendored code is not held to the Astra warning contract. Turning -Werror
 # -pedantic on third-party sources converts an upstream bump into an editing
 # job and pressures the next porter to patch upstream for style.
@@ -169,24 +173,24 @@ test: $(HOST_TEST) build/host/test_lease_block build/host/test_ext4_port \
 EXT4_MOUNT_TEST_SOURCES := src/block_device.c src/memory_block.c src/mbr.c \
 	src/ext4_port.c src/ext4_alloc.c src/ext4_xattr_stub.c src/ext4_time.c \
 	$(ALLOC)/src/alloc.c $(LWEXT4_SOURCES) tests/test_ext4_mount.c \
-	tests/file_block.c
+	tests/file_block.c $(VFS)/src/vfs_ext4_backend.c
 
 build/host/test_ext4_mount: $(EXT4_MOUNT_TEST_SOURCES) $(HOST_HEADERS)
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(ALLOC_CPPFLAGS) $(EXT4_CPPFLAGS) \
+	$(HOST_CC) $(CPPFLAGS) $(ALLOC_CPPFLAGS) $(EXT4_CPPFLAGS) $(VFS_CPPFLAGS) \
 		$(EXT4_VENDOR_FLAGS) $(HOST_FLAGS) -pthread \
 		$(EXT4_MOUNT_TEST_SOURCES) \
 		-o $@
 
 build/host/test_ext4_mount_sanitize: $(EXT4_MOUNT_TEST_SOURCES) $(HOST_HEADERS)
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(ALLOC_CPPFLAGS) $(EXT4_CPPFLAGS) \
+	$(HOST_CC) $(CPPFLAGS) $(ALLOC_CPPFLAGS) $(EXT4_CPPFLAGS) $(VFS_CPPFLAGS) \
 		$(EXT4_VENDOR_FLAGS) $(SANITIZER_FLAGS) -pthread \
 		$(EXT4_MOUNT_TEST_SOURCES) -o $@
 
 build/host/test_ext4_mount_tsan: $(EXT4_MOUNT_TEST_SOURCES) $(HOST_HEADERS)
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(ALLOC_CPPFLAGS) $(EXT4_CPPFLAGS) \
+	$(HOST_CC) $(CPPFLAGS) $(ALLOC_CPPFLAGS) $(EXT4_CPPFLAGS) $(VFS_CPPFLAGS) \
 		$(EXT4_VENDOR_FLAGS) $(THREAD_SANITIZER_FLAGS) -pthread \
 		$(EXT4_MOUNT_TEST_SOURCES) -o $@
 
@@ -356,7 +360,7 @@ build/analyzer/%.o: src/%.c
 # vendored source or a port shim is an error here rather than a discovery made
 # while bringing up hardware.
 LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
-	-Wl,--build-id=none -T $(RUNTIME)/astra_user.ld
+	-Wl,--build-id=none $(ASTRA_STATIC_LINK_SCRIPT_FLAGS)
 
 linkcheck: $(EXT4_TARGET) $(TARGET)
 	$(MAKE) -C $(RUNTIME) all

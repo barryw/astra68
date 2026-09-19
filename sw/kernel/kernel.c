@@ -65,6 +65,7 @@ extern uint8_t _k1_offender_image_end[];
 
 uint32_t kernel_read_vbr(void);
 void kernel_enter_user(KernelCpuContext *context) __attribute__((noreturn));
+void kernel_enter_idle(void) __attribute__((noreturn));
 
 static AstraBootInfo boot_info;
 static AstraEarlyLog *early_log;
@@ -352,6 +353,18 @@ static void console_putc(char value)
 static void console_puts(const char *text)
 {
     while (*text != '\0') console_putc(*text++);
+}
+
+static void report_degraded(KernelTraceDegradedReason reason,
+                            uint32_t detail0, uint32_t detail1,
+                            const char *message)
+{
+    KERNEL_TRACE(KERNEL_TRACE_LEVEL_WARNING,
+                 KERNEL_TRACE_EVENT_SYSTEM_DEGRADED, 0u,
+                 (uint32_t)reason, detail0, detail1, 0u);
+    console_puts("System degraded: ");
+    console_puts(message);
+    console_putc('\n');
 }
 
 static void console_puts_limit(const char *text, uint32_t limit)
@@ -1155,6 +1168,15 @@ static void report_kernel_performance_failure(
  * the ELF acceptance profile the loader already enforces.
  */
 #if !ASTRA_KERNEL_K1_QUALIFICATION
+static bool block_service_available(void)
+{
+    if (!kernel_platform_block_present())
+        return false;
+    if ((kernel_platform_system_status() & SYS_ASTRA_HOST) == 0u)
+        return true;
+    return (kernel_platform_block_state_flags() & BLOCK_STATE_LINK_UP) != 0u;
+}
+
 static void start_initial_user_image(void)
 {
     KernelProcessBootstrapCapability capabilities[
@@ -1166,6 +1188,8 @@ static void start_initial_user_image(void)
     console_puts("Initial image ....... ");
     if (boot_info.user_image_size == 0u) {
         console_puts("not supplied\n");
+        report_degraded(KERNEL_TRACE_DEGRADED_INITIAL_IMAGE_MISSING, 0u, 0u,
+                        "no initial userspace image");
         return;
     }
 
@@ -1175,7 +1199,7 @@ static void start_initial_user_image(void)
      * as part of the load, so a grant failure unwinds the whole launch.
      */
     kernel_bytes_clear(capabilities, sizeof(capabilities));
-    if (kernel_platform_block_present()) {
+    if (block_service_available()) {
         capabilities[capability_count].name = ASTRA_CAPABILITY_BLOCK_DEVICE;
         capabilities[capability_count].kind =
             KERNEL_PROCESS_BOOTSTRAP_DEVICE;
@@ -1276,7 +1300,13 @@ static void start_initial_user_image(void)
         console_puts("rejected, status ");
         console_dec32((uint32_t)status);
         console_putc('\n');
-        kernel_panic("initial user image rejected");
+        if (status == KERNEL_PROCESS_CORRUPT ||
+            (status == KERNEL_PROCESS_OK && process_id == 0u))
+            kernel_panic("initial user image creation corrupted kernel state");
+        report_degraded(KERNEL_TRACE_DEGRADED_INITIAL_IMAGE_REJECTED,
+                        (uint32_t)status, boot_info.user_image_size,
+                        "initial userspace image unavailable");
+        return;
     }
     kernel_process_register_initial_image(process_id);
     console_puts("loaded, ");
@@ -1290,9 +1320,11 @@ static void start_initial_user_image(void)
 #endif
 
 /*
- * The initial image is a resident service. Any exit is a boot failure: it is
- * the only thing running, and nothing else can start what it was going to.
- * Its status names the check that failed.
+ * The initial image is userspace. Its exit degrades boot control, but it does
+ * not prove that kernel state is corrupt: services already started may keep
+ * running and process teardown can still revoke every owned resource. Panic
+ * is reserved for a kernel invariant whose violation makes continuation
+ * unsafe.
  */
 void kernel_process_initial_image_exited(uint32_t exit_status,
                                          uint32_t exit_reason)
@@ -1302,7 +1334,9 @@ void kernel_process_initial_image_exited(uint32_t exit_status,
     console_puts(" status 0x");
     console_hex32(exit_status);
     console_putc('\n');
-    kernel_panic("initial user image exited");
+    report_degraded(KERNEL_TRACE_DEGRADED_INITIAL_IMAGE_EXITED,
+                    exit_status, exit_reason,
+                    "userspace boot control is unavailable");
 }
 
 /*
@@ -1775,7 +1809,8 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     AstraBootValidation validation;
     KernelMemoryStats memory_stats;
     KernelVmStats vm_stats;
-    KernelCpuContext *first_context;
+    KernelCpuContext *first_context = NULL;
+    KernelProcessStatus process_status;
     uint32_t process_bootstrap_started;
     uint32_t trace_started;
 #if ASTRA_KERNEL_K1_QUALIFICATION
@@ -1927,22 +1962,39 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     console_puts("Vesta timer ........ OK, one-shot 5 ms\n");
 
     if ((kernel_platform_system_status() & SYS_ASTRA_HOST) != 0u) {
-        if (!kernel_platform_block_present())
-            kernel_panic("AstraHost block controller missing");
-        uint32_t host_start = kernel_platform_cpu_cycles_low();
-        while ((kernel_platform_block_state_flags() &
-                BLOCK_STATE_LINK_UP) == 0u) {
-            if ((uint32_t)(kernel_platform_cpu_cycles_low() - host_start) >
-                boot_info.cpu_hz)
-                kernel_panic("AstraHost runtime handshake timeout");
+        if (!kernel_platform_block_present()) {
+            console_puts("AstraHost runtime ... block controller unavailable\n");
+            report_degraded(KERNEL_TRACE_DEGRADED_HOST_BLOCK_MISSING, 0u, 0u,
+                            "host storage controller unavailable");
+        } else {
+            uint32_t host_start = kernel_platform_cpu_cycles_low();
+
+            while ((kernel_platform_block_state_flags() &
+                    BLOCK_STATE_LINK_UP) == 0u &&
+                   (uint32_t)(kernel_platform_cpu_cycles_low() - host_start) <=
+                       boot_info.cpu_hz) {
+            }
+            if ((kernel_platform_block_state_flags() &
+                 BLOCK_STATE_LINK_UP) == 0u) {
+                console_puts("AstraHost runtime ... handshake timed out; "
+                             "storage unavailable\n");
+                report_degraded(KERNEL_TRACE_DEGRADED_HOST_LINK_TIMEOUT,
+                                kernel_platform_block_state_flags(), 0u,
+                                "host storage link unavailable");
+            } else {
+                console_puts("AstraHost runtime ... OK, media ");
+                console_puts((kernel_platform_block_state_flags() &
+                              BLOCK_STATE_MEDIA_PRESENT) != 0u ?
+                             "present\n" : "not provisioned\n");
+            }
         }
-        console_puts("AstraHost runtime ... OK, media ");
-        console_puts((kernel_platform_block_state_flags() &
-                      BLOCK_STATE_MEDIA_PRESENT) != 0u ?
-                     "present\n" : "not provisioned\n");
-        if (!kernel_platform_input_present())
-            kernel_panic("AstraHost input controller missing");
-        console_puts("Input queue ......... OK\n");
+        if (kernel_platform_input_present()) {
+            console_puts("Input queue ......... OK\n");
+        } else {
+            console_puts("Input queue ......... unavailable\n");
+            report_degraded(KERNEL_TRACE_DEGRADED_HOST_INPUT_MISSING, 0u, 0u,
+                            "host input controller unavailable");
+        }
     } else {
         console_puts("AstraHost runtime ... not present\n");
     }
@@ -2032,8 +2084,16 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
 #endif
     process_bootstrap_started = kernel_platform_cpu_cycles_low();
     kernel_disable_interrupts();
-    if (kernel_process_start(&first_context) != KERNEL_PROCESS_OK ||
-        first_context == NULL)
+    process_status = kernel_process_start(&first_context);
+    if (process_status == KERNEL_PROCESS_NO_RUNNABLE &&
+        first_context == NULL) {
+        process_bootstrap_irqoff_cycles =
+            kernel_platform_cpu_cycles_low() - process_bootstrap_started;
+        console_puts("Recovery ............ idle; interrupts and diagnostics "
+                     "remain available\n");
+        kernel_enter_idle();
+    }
+    if (process_status != KERNEL_PROCESS_OK || first_context == NULL)
         kernel_panic("initial process scheduling failed");
     process_bootstrap_irqoff_cycles =
         kernel_platform_cpu_cycles_low() - process_bootstrap_started;

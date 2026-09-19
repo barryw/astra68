@@ -135,7 +135,7 @@ print_from(AstraFile *file, uint64_t offset)
     for (;;) {
         uint32_t moved = 0u;
 
-        if (process_filesystem.library->read_at(
+        if (astra_filesystem_read_at(
                 file, offset, chunk, sizeof(chunk), &moved) !=
                 ASTRA_VFS_OK || moved == 0u) {
             break;
@@ -171,7 +171,7 @@ tail_from(AstraFile *file, uint32_t lines)
     for (;;) {
         uint32_t moved = 0u;
 
-        if (process_filesystem.library->read_at(
+        if (astra_filesystem_read_at(
                 file, offset, chunk, sizeof(chunk), &moved) !=
                 ASTRA_VFS_OK || moved == 0u) {
             break;
@@ -408,7 +408,7 @@ main(int argc, char **argv)
         at = append(path, sizeof(path), at, level);
     }
 
-    status = process_filesystem.library->open(
+    status = astra_filesystem_open(
         &process_filesystem.filesystem, path, ASTRA_VFS_OPEN_READ, &file);
     if (status != ASTRA_VFS_OK) {
         say(previous_boot ? "events: no previous boot is stored" :
@@ -436,6 +436,6 @@ main(int argc, char **argv)
     if (following) {
         follow(&file, offset);
     }
-    (void)process_filesystem.library->close(&file);
+    (void)astra_filesystem_close(&file);
     return close_with(ASTRA_STATUS_OK);
 }

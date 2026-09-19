@@ -1,0 +1,12 @@
+ASTRA_NTP_1.0 {
+    global:
+        astra_ntp_query;
+        astra_ntp_request;
+        astra_ntp_response;
+        astra_ntp_status_text;
+        astra_ntp_sync;
+        astra_ntp_timestamp_to_unix_ns;
+        astra_ntp_unix_ns_to_timestamp;
+    local:
+        *;
+};

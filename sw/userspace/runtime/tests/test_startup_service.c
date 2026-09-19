@@ -38,6 +38,7 @@ startup_info(void)
     startup.header_size = ASTRA_STARTUP_INFO_SIZE;
     startup.total_size = ASTRA_STARTUP_INFO_SIZE;
     startup.syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION;
+    startup.program_entry = 0x00100000u;
     startup.capability_count = 2u;
     startup.capabilities_address = (uint32_t)(uintptr_t)capabilities;
     return startup;

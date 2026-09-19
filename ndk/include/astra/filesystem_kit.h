@@ -6,7 +6,6 @@
  * @brief Public Filesystem Kit shared-library identity.
  */
 
-#include <astra/shared_library.h>
 
 #include <astra/filesystem_library.h>
 

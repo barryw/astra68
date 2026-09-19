@@ -5,9 +5,7 @@
 #include <string.h>
 #include "local.h"
 
-int __xpg_strerror_r(int errnum, char *buffer, size_t n);
-
-int
+int __picolibc_export
 __xpg_strerror_r(int errnum, char *buffer, size_t n)
 {
     char *error;

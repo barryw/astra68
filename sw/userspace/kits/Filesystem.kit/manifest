@@ -2,5 +2,7 @@ astra-bundle 1
 kind kit
 id org.astra.filesystem
 name "Astra Filesystem Kit"
-version 2.0.0
-provides filesystem.library 2 2.0.0
+version 2.4.0
+provides filesystem.library 2 2.4.0
+requires runtime.library 1 1.5.0
+requires system.library 1 1.1.0

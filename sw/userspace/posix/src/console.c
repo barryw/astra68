@@ -35,6 +35,7 @@
 #include <unistd.h>
 
 #include "resource_internal.h"
+#include "heap_internal.h"
 
 enum {
     POSIX_STDIN = 0,
@@ -982,6 +983,8 @@ astra_posix_start(const AstraStartupInfo *startup)
     (void)memset(initial_descriptions, 0, sizeof(initial_descriptions));
     startup_block = startup;
     astra_posix_resource_reset();
+    astra_posix_heap_prepare(startup != NULL ?
+                             startup->program_writable_bytes : 0u);
     environ = empty_environment;
     if (startup != NULL && startup->environment_count != 0u &&
         startup->environment_address != 0u)
@@ -1296,6 +1299,46 @@ read(int fd, void *bytes, size_t length)
                            status == ASTRA_SYSCALL_CLOSED ? 0 : -1;
         }
     }
+}
+
+ssize_t
+pread(int fd, void *bytes, size_t length, off_t offset)
+{
+    PosixOpenDescription *slot = entry(fd);
+
+    if (slot == NULL) {
+        errno = EBADF;
+        return -1;
+    }
+    if (slot->kind != POSIX_DESCRIPTOR_FILE) {
+        errno = ESPIPE;
+        return -1;
+    }
+    if (file_ops == NULL || file_ops->pread == NULL) {
+        errno = EBADF;
+        return -1;
+    }
+    return file_ops->pread(slot->value, bytes, length, offset);
+}
+
+ssize_t
+pwrite(int fd, const void *bytes, size_t length, off_t offset)
+{
+    PosixOpenDescription *slot = entry(fd);
+
+    if (slot == NULL) {
+        errno = EBADF;
+        return -1;
+    }
+    if (slot->kind != POSIX_DESCRIPTOR_FILE) {
+        errno = ESPIPE;
+        return -1;
+    }
+    if (file_ops == NULL || file_ops->pwrite == NULL) {
+        errno = EBADF;
+        return -1;
+    }
+    return file_ops->pwrite(slot->value, bytes, length, offset);
 }
 
 int

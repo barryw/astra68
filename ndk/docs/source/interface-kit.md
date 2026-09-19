@@ -1,36 +1,25 @@
 # Interface Kit
 
-`interface.library` is the shared implementation for native window controls,
+`interface.library.5` is the shared implementation for native window controls,
 integer flex layout, TextSurface presentation, the typed system clipboard, and
-per-document undo histories. Applications call the exported table from
-{c:type}`AstraInterfaceLibrary`; they do not compile private Interface Kit
-sources or speak directly to the display and clipboard services.
+per-document undo histories. Applications call its versioned ELF symbols
+directly; they do not compile private Interface Kit sources or speak directly
+to the display and clipboard services.
 
 ## Opening a compatible library
 
 The library follows semantic versioning. The ABI major is the breaking-change
-boundary, a minor adds fields to the end of the export table, and a patch fixes
-behavior without changing the table. A consumer records the oldest minor and
-table extent it actually uses:
+boundary, a minor adds backward-compatible functions or behavior, and a patch
+fixes behavior without breaking the ABI. A consumer links directly and records
+the oldest compatible version in its bundle manifest:
 
 ```c
-AstraLibraryHandle *handle = OpenLibrary(
-    ASTRA_INTERFACE_LIBRARY_NAME, ASTRA_INTERFACE_LIBRARY_VERSION);
-const AstraInterfaceLibrary *interface =
-    handle == NULL ? NULL : handle->exports;
-
-if (!astra_interface_library_supports(
-        interface, 0u, ASTRA_INTERFACE_LIBRARY_5_0_SIZE)) {
-    if (handle != NULL) CloseLibrary(handle);
-    return ASTRA_ERROR_NOT_PRESENT;
-}
+requires interface.library 5 5.0.0
 ```
 
-Do not compare `structure_size` with `sizeof(AstraInterfaceLibrary)` unless
-the program truly uses every API in the newest header. An application built
-against a newer NDK can continue to run with an older compatible 5.x library
-when it uses only that older extent. Its bundle manifest must declare the same
-minimum semantic version.
+The linker records the ABI-major SONAME and required symbol versions. The
+process loader rejects a missing or incompatible dependency before application
+code runs, so applications need no second discovery path or runtime API table.
 
 ## Controls and responsive layout
 
@@ -73,8 +62,7 @@ repeat after 400 ms; unavailable arrows remain visible but muted at a bound.
 All value changes return the same `ASTRA_UI_ACTION_VALUE_CHANGED` action.
 Numeric actions carry a signed 64-bit value; `decimal_places` is zero for
 integer controls and gives the Dial's fixed-point scale. The controls in the
-following example require Interface Kit ABI 5.0 and
-`ASTRA_INTERFACE_LIBRARY_5_0_SIZE`.
+following example require `interface.library.5` version 5.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_controls.c
 :language: c
@@ -93,8 +81,7 @@ of its descendants leave layout, rendering, hit testing, focus traversal, and
 animation together; applications do not maintain separate hidden states in
 each subsystem. `ui_set_state` reflows after a collapse change and clears any
 interaction owned by a descendant that left the active page. Tabs and
-collapsed containers require Interface Kit ABI 5.0 and
-`ASTRA_INTERFACE_LIBRARY_5_0_SIZE`.
+collapsed containers require `interface.library.5` version 5.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_tabs.c
 :language: c
@@ -114,8 +101,8 @@ Use a disclosure for optional settings that should reflow in place. The target
 must be an ordinary sibling container, which keeps the header reachable while
 its body is closed and prevents ambiguous ownership. State remains
 application-owned and can be restored by setting the target container before
-or after UI initialization. Disclosures require Interface Kit ABI 5.1 and
-`ASTRA_INTERFACE_LIBRARY_5_1_SIZE`.
+or after UI initialization. Disclosures require `interface.library.5` version
+5.1.0 or newer.
 
 ```{literalinclude} ../../examples/interface_disclosure.c
 :language: c
@@ -145,8 +132,8 @@ source pixels is unknown. Any unrelated damage or multiple view mutation in
 the same transaction also selects the normal path. These are correctness
 fallbacks, not different application APIs.
 
-Scroll models and their bound views require Interface Kit ABI 5.0; scrollbars
-require ABI 5.0 and `ASTRA_INTERFACE_LIBRARY_5_0_SIZE`.
+Scroll models, their bound views, and scrollbars require
+`interface.library.5` version 5.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_scroll.c
 :language: c
@@ -163,8 +150,7 @@ moves one logical pixel; Home and End move to the permitted extremes. The same
 live change is reported as `ASTRA_UI_ACTION_VALUE_CHANGED`, and
 `control_set_value` restores a saved first-pane extent.
 
-Splitters require Interface Kit ABI 5.0 and
-`ASTRA_INTERFACE_LIBRARY_5_0_SIZE`.
+Splitters require `interface.library.5` version 5.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_splitter.c
 :language: c
@@ -189,8 +175,8 @@ MC68040. The indicator's angular position is normalized internally; 0 through
 100 is not part of the public value contract. `control_get_value` and every
 value-change action return both the exact integer and its scale.
 
-Dials require Interface Kit ABI 5.0 and
-`ASTRA_INTERFACE_LIBRARY_5_0_SIZE`. Their indicator uses Graphics Kit's shared
+Dials require `interface.library.5` version 5.0.0 or newer. Their indicator
+uses Graphics Kit's shared
 clipped line primitive, which replays as a hardware line on draw-list surfaces.
 
 ## Pointer images
@@ -222,8 +208,8 @@ Pointer pixels, hotspot, position, visibility, and scene state become visible
 together at vertical blank; the MC68040 does not paint or composite the
 pointer.
 
-Pointer-image APIs and automatic Interface Kit selection require ABI 5.0 and
-`ASTRA_INTERFACE_LIBRARY_5_0_SIZE`.
+Pointer-image APIs and automatic Interface Kit selection require
+`interface.library.5` version 5.0.0 or newer.
 
 ## Text models and fields
 

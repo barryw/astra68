@@ -27,6 +27,9 @@ assert "-mcpu=cortex-a55" not in build
 assert build.count("--disable-werror >&2") == 3, \
     "configure output must not contaminate build.sh's stdout artifact path"
 assert '--extra-ldflags="$EXTRA_LDFLAGS" >&2' in build
+assert 'PUBLIC_ADDRESS_SPACE="$REPOSITORY/sw/include/astra/address_space.h"' in prepare
+assert '"sw/include/astra/address_space.h"' in prepare
+assert '"$STAGED_SOURCE/include/astra/address_space.h"' in prepare
 assert 'PUBLIC_DISPLAY_CAPTURE="$REPOSITORY/sw/include/astra/display_capture.h"' in prepare
 assert '"sw/include/astra/display_capture.h"' in prepare
 assert '"$STAGED_SOURCE/include/astra/display_capture.h"' in prepare

@@ -106,7 +106,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x0001002d`, `D2=process handle`, `D3=calling-thread handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010034`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | K1 TEST ONLY | monotonic test progress, not a product ABI |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
@@ -153,15 +153,15 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 50 | `CONSOLE_CURSOR` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=row`, `D3=column`, `D4=visible`; publishes the terminal cursor, accepting `column=columns` as pending wrap |
 | 51 | `DISPLAY_SUBMIT` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=aligned AstraDisplayFrameRequest`; submits one nonzero fenced solid, RGB565 DMA-frame, or bounded native Astraea render-batch request |
 | 52 | `DISPLAY_COLLECT` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=aligned AstraDisplayFrameCompletion`; returns `WOULD_BLOCK` until the submitted fence completes |
-| 53 | `LIBRARY_MAP` | CURRENT CANDIDATE | `D1=library image`, `D2=image bytes`, `D3:D4=base/span outputs`; validates the constrained ELF image and maps shared R/RX plus process-private RW pages into one versioned library slot |
+| 53 | `LIBRARY_MAP` | RETIRED | retired whole-image mapping interface; returns `BAD_SYSCALL` |
 | 54 | `AREA_DECOMMIT` | CURRENT CANDIDATE | `D1=address`, `D2=length`; releases the committed pages inside a reservation and returns how many went |
 | 55 | `CLOCK_REALTIME` | CURRENT CANDIDATE | returns the date as nanoseconds since the Unix epoch in `D1:D2` (high:low); `UNSUPPORTED` when the machine's wall clock is not valid, never zero |
-| 56 | `LIBRARY_ATTACH` | CURRENT CANDIDATE | `D1=aligned 44-byte AstraLibraryReference`, `D2:D3=AstraLoadedLibrary output`; maps an exact resident identity, or the newest resident compatible ABI when `LATEST` is requested; returns `WOULD_BLOCK` on a cache miss |
+| 56 | `LIBRARY_ATTACH` | CURRENT CANDIDATE | `D1=aligned 44-byte AstraLibraryReference`; maps an exact resident identity, or the newest resident compatible ABI when `LATEST` is requested; returns base/span/transaction handle in `D1:D2:D3`, and `WOULD_BLOCK` on a cache miss |
 | 57 | `PROCESS_PRIORITY` | CURRENT CANDIDATE | `D1=process handle with ADMINISTER right`, `D2=priority 1-23`; atomically changes the process default and requeues every live thread, returning the previous priority in `D1` |
 | 58 | `PROCESS_CLONE` | CURRENT CANDIDATE | atomically clones the caller with COW private pages and exact clone-safe handles; parent gets child handle/id in `D1:D2`, child gets zero/zero |
 | 59 | `RING_READ_TRY` | CURRENT CANDIDATE | `D1=kernel-copy consumer`, `D2=user output`, `D3=capacity` (at most 4 KiB); returns copied bytes in `D1` |
 | 60 | `RING_WRITE_TRY` | CURRENT CANDIDATE | `D1=kernel-copy producer`, `D2=user input`, `D3=length` (at most 4 KiB), `D4=flags`; returns copied bytes in `D1` |
-| 61 | `VM_PRIVATE_RESERVE` | CURRENT CANDIDATE | `D1=requested bytes`, `D2=R/RW permissions`; reserves clone-private anonymous root slots without committing frames and returns base/span in `D1:D2` |
+| 61 | `VM_PRIVATE_RESERVE` | CURRENT CANDIDATE | `D1=requested/minimum bytes`, `D2=R/RW permissions`, `D3=EXACT/LARGEST`; reserves clone-private anonymous root slots without committing frames and returns base/actual span in `D1:D2` |
 | 62 | `VM_PRIVATE_DECOMMIT` | CURRENT CANDIDATE | `D1=address`, `D2=length`; releases whole committed pages inside the anonymous reservation and returns the page count in `D1` |
 | 63 | `SIGNAL_CONFIGURE` | CURRENT CANDIDATE | registers the calling process's POSIX signal trampoline, dedicated writable stack, and blocked mask; returns pending and previous blocked masks |
 | 64 | `INTERVAL_TIMER` | CURRENT CANDIDATE | arms `ITIMER_REAL` from relative delay/interval nanoseconds in `D1:D2`/`D3:D4`, returning the previous remaining/interval values |
@@ -169,6 +169,13 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 66 | `PROCESS_EXEC` | CURRENT CANDIDATE | `D1=image`, `D2=image bytes`, `D3=32-byte AstraExecRequest`; atomically replaces the caller's image, startup vectors, private VM, and threads while preserving process identity and eligible handles; success resumes at the new entry and does not return |
 | 86 | `PROCESS_SNAPSHOT` | CURRENT CANDIDATE | Initial-supervisor-only fixed-slot `AstraProcSnapshot` capture; `D1=self process handle`, `D2=record array`, `D3=record capacity`, returning the live count in `D1` |
 | 87 | `LIBRARY_SNAPSHOT` | CURRENT CANDIDATE | Initial-supervisor-only fixed-slot `AstraProcLibrarySnapshot` capture of resident identities, process mappings, references, and memory; arguments match `PROCESS_SNAPSHOT`, returning the resident count in `D1` |
+| 88 | `PROCESS_LOAD_INTERPRETER` | CURRENT CANDIDATE | appends the supervisor-resolved interpreter image to the active streamed process-load transaction |
+| 89 | `LIBRARY_LOAD_BEGIN` | CURRENT CANDIDATE | begins one streamed exact-identity library-load transaction and returns its move-only handle |
+| 90 | `LIBRARY_LOAD_WRITE` | CURRENT CANDIDATE | writes one positioned immutable source chunk into the active library-load transaction |
+| 91 | `LIBRARY_LOAD_MAP` | CURRENT CANDIDATE | validates and maps the completed image, returns base/span, and retains the handle so close can roll the mapping back |
+| 92 | `LIBRARY_LOAD_COMMIT` | CURRENT CANDIDATE | seals the validated GNU RELRO range read-only and atomically drops rollback authority |
+| 93 | `PROCESS_DYNAMIC_COMMIT` | CURRENT CANDIDATE | `D1=page-aligned combined TLS template`, `D2=exact template bytes`, `D3=power-of-two TLS alignment`, `D4=exclusive page-rounded storage span`; while the interpreted process still has only its initial thread, atomically installs current/future-thread TLS and seals program, interpreter, and template RELRO pages; success transfers the immutable storage interval to the process until exit |
+| 94 | `THREAD_INFO` | CURRENT CANDIDATE | `D1=thread handle with QUERY right`, `D2=AstraThreadInfo`; copies one 48-byte record including identity, scheduler state, activity, priorities, counters, and runtime nanoseconds |
 
 Areas are at most 4 MiB. This is an address-map allocation unit, not an
 application-size policy; the VM publishes and rolls back every MC68040 table
@@ -176,7 +183,7 @@ touched by the mapping as one transaction. VFS bulk transfers use this same
 bound instead of imposing a smaller protocol limit.
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x0001002d`; a later revision may add
+not panic. `QUERY_ABI` reports revision `0x00010034`; a later revision may add
 feature bits before additional calls freeze.
 
 Ordinary process priorities are 1 through 23, with 16 as normal; larger values

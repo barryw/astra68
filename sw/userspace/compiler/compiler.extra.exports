@@ -1,0 +1,2 @@
+# No hand-written callable ABI. The GCC target archive is the source of truth
+# for the compiler helpers that the matching toolchain may emit.

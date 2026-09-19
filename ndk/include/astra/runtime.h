@@ -225,6 +225,24 @@ uint32_t astra_rt_area_unmap(void *address);
 uint32_t astra_rt_private_reserve(uint32_t byte_size, uint32_t permissions,
                                  void **address, uint32_t *mapped_span);
 /**
+ * Reserve the largest currently available contiguous private VM extent.
+ *
+ * This is intended for growable arenas such as a contiguous POSIX heap. The
+ * kernel returns the largest run that is at least @p minimum_byte_size; pages
+ * remain demand committed, so the reservation consumes address space rather
+ * than physical memory until touched.
+ *
+ * @param minimum_byte_size Smallest useful reservation, rounded to a VM slot.
+ * @param permissions Requested access permissions.
+ * @param address Receives reservation base.
+ * @param mapped_span Receives the actual reserved byte span.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_rt_private_reserve_largest(uint32_t minimum_byte_size,
+                                         uint32_t permissions,
+                                         void **address,
+                                         uint32_t *mapped_span);
+/**
  * Decommit pages in a private reservation.
  * @param address Page-aligned address within the reservation.
  * @param byte_size Page-aligned span.
@@ -233,6 +251,85 @@ uint32_t astra_rt_private_reserve(uint32_t byte_size, uint32_t permissions,
  */
 uint32_t astra_rt_private_decommit(void *address, uint32_t byte_size,
                                   uint32_t *released_pages);
+
+/**
+ * Decide whether the process allocator may grow.
+ *
+ * A compatibility layer such as POSIX may install one policy callback to
+ * enforce its resource contract.  The runtime remains the sole owner of the
+ * process heap and calls the policy before extending it.
+ *
+ * @param current_bytes Current allocator high-water span.
+ * @param growth_bytes Requested additional aligned bytes.
+ * @param context Opaque context supplied with the callback.
+ * @return Nonzero to permit the growth, zero to reject it.
+ */
+typedef int (*AstraRuntimeGrowthPolicy)(uint32_t current_bytes,
+                                        uint32_t growth_bytes,
+                                        void *context);
+
+/**
+ * Install or clear the process allocator's growth policy.
+ * @param policy Policy callback, or NULL to allow all address-space growth.
+ * @param context Opaque callback context.
+ */
+void astra_runtime_set_growth_policy(AstraRuntimeGrowthPolicy policy,
+                                     void *context);
+/** @return Bytes currently spanned by the process allocator. */
+uint32_t astra_runtime_allocation_span(void);
+/**
+ * Adjust the process allocator break for C-runtime compatibility.
+ *
+ * This is the canonical low-level growth primitive used by POSIX `sbrk`.
+ * General Astra code should use its C allocator instead.
+ *
+ * @param increment Signed byte adjustment.
+ * @return Previous break on growth, new break on shrink, or NULL on failure.
+ */
+void *astra_runtime_sbrk(intptr_t increment);
+/**
+ * Allocate storage from the runtime-owned process heap.
+ * @param size Minimum usable byte count; zero requests one byte.
+ * @return Suitably aligned storage, or NULL when the heap cannot grow.
+ */
+void *astra_runtime_allocate(size_t size);
+/**
+ * Allocate at least @p size bytes at a power-of-two address alignment.
+ *
+ * The returned block belongs to the same allocator as ordinary runtime
+ * allocations and must be released with astra_runtime_deallocate().
+ *
+ * @param alignment Required nonzero power-of-two alignment.
+ * @param size Minimum usable byte count; zero requests one byte.
+ * @return Aligned storage, or NULL for invalid alignment or exhaustion.
+ */
+void *astra_runtime_allocate_aligned(size_t alignment, size_t size);
+/**
+ * Release runtime-owned storage.
+ * @param pointer Storage returned by a runtime allocation function, or NULL.
+ */
+void astra_runtime_deallocate(void *pointer);
+/**
+ * Allocate a zero-filled array, rejecting size overflow.
+ * @param count Number of elements.
+ * @param size Bytes per element.
+ * @return Zero-filled storage, or NULL on overflow or exhaustion.
+ */
+void *astra_runtime_callocate(size_t count, size_t size);
+/**
+ * Resize runtime-owned storage while preserving the common byte prefix.
+ * @param pointer Existing runtime allocation, or NULL to allocate.
+ * @param size Requested byte count; zero releases @p pointer.
+ * @return Resized storage, or NULL for a zero-size request or exhaustion. On
+ * exhaustion the original allocation remains valid.
+ */
+void *astra_runtime_reallocate(void *pointer, size_t size);
+/**
+ * Report the usable size of runtime-owned storage.
+ * @param pointer Runtime allocation to inspect.
+ * @return Usable byte size, or zero when @p pointer is not an allocation.
+ */
+size_t astra_runtime_allocation_size(void *pointer);
 /**
  * Configure current-thread POSIX signal delivery.
  * @param trampoline Signal trampoline, or NULL to disable delivery.
@@ -315,24 +412,40 @@ uint32_t astra_rt_ring_write_try(uint32_t producer, const void *bytes,
                                 uint32_t length, uint32_t flags,
                                 uint32_t *written);
 /**
- * Validate and map a shared-library ELF image.
- * @param image Complete immutable ELF image.
- * @param length Image byte length.
- * @param base Receives mapped base address.
- * @param span Receives mapped byte span.
- * @return ASTRA_SYSCALL_* status.
- */
-uint32_t astra_rt_library_map(const void *image, uint32_t length,
-                              uint32_t *base, uint32_t *span);
-/**
- * Attach a previously registered shared-library mapping.
+ * Attach a previously registered shared-library mapping transaction.
+ * The caller must relocate the mapping and then commit `load_handle`; closing
+ * that handle instead rolls the mapping back.
  * @param reference Validated library reference.
  * @param base Receives mapped base address.
  * @param span Receives mapped byte span.
+ * @param load_handle Receives the transaction capability.
  * @return ASTRA_SYSCALL_* status.
  */
 uint32_t astra_rt_library_attach(const AstraLibraryReference *reference,
-                                 uint32_t *base, uint32_t *span);
+                                 uint32_t *base, uint32_t *span,
+                                 uint32_t *load_handle);
+/**
+ * Finalize an interpreted process after eager relocation.
+ *
+ * This one-way call installs the combined initial-exec TLS template for the
+ * current and all future threads and seals every kernel-retained RELRO range.
+ * It must run after all dependency relocation and before constructors or
+ * application-created threads. On success ownership of the template storage
+ * transfers to the process: its pages become immutable, must not be freed or
+ * reused, and are released with the process address space. On failure the
+ * caller retains ownership.
+ *
+ * @param tls_template Page-aligned, exclusively owned initialized TLS storage,
+ *                     or NULL when empty.
+ * @param tls_size Exact initialized-plus-zero-fill template size.
+ * @param tls_alignment Required power-of-two base alignment; one when empty.
+ * @param storage_size Page-rounded exclusive storage span; zero when empty.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_rt_process_dynamic_commit(const void *tls_template,
+                                         uint32_t tls_size,
+                                         uint32_t tls_alignment,
+                                         uint32_t storage_size);
 /**
  * Query the runtime ABI and current kernel-owned handles.
  * @param abi_version Receives runtime ABI version.
@@ -356,6 +469,13 @@ uint32_t astra_current_thread_handle(uint32_t *thread_handle);
  */
 uint32_t astra_process_info(uint32_t handle, AstraProcessInfo *info);
 /**
+ * Query one thread visible through a capability.
+ * @param handle Thread capability carrying the QUERY right.
+ * @param info ABI-sized structure receiving thread information.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_thread_info(uint32_t handle, AstraThreadInfo *info);
+/**
  * Capture a consistent process-table snapshot.
  * @param observer Process capability authorizing observation.
  * @param records Receives at most `capacity` records.
@@ -368,16 +488,21 @@ uint32_t astra_process_snapshot(uint32_t observer,
                                 uint32_t capacity,
                                 uint32_t *live_count);
 /**
- * Capture the resident shared-library cache and its process mappings.
+ * Read a page of the resident shared-library cache and process mappings.
  * @param observer Process capability authorizing observation.
- * @param records Receives the fixed-slot library snapshot.
+ * @param start Zero-based resident-library ordinal to read first.
+ * @param records Receives records, or NULL when `capacity` is zero.
  * @param capacity Number of records available.
- * @param library_count Receives the number of resident libraries.
- * @return ASTRA_SYSCALL_* status; BUFFER_TOO_SMALL reports required capacity.
+ * @param moved Receives records written in this page when non-NULL.
+ * @param library_count Receives the current total resident-library count.
+ * @return ASTRA_SYSCALL_* status. Repeat at `start + moved` until the returned
+ * total is reached; the transfer size never limits system residency.
  */
 uint32_t astra_library_snapshot(uint32_t observer,
+                               uint32_t start,
                                AstraProcLibrarySnapshot *records,
                                uint32_t capacity,
+                               uint32_t *moved,
                                uint32_t *library_count);
 /**
  * Replace a process base scheduler priority.
@@ -796,25 +921,159 @@ uint32_t astra_launch(const void *image, uint32_t length,
  *
  * Once the callbacks and output pointers have been accepted, this function
  * owns the source and invokes `release` exactly once on every return path,
- * including an invalid or truncated image. Release happens before the child
+ * including an invalid or truncated image. Release happens before the object
  * is committed, so a source that pins storage or DMA can relinquish it before
- * the child becomes runnable. A release failure aborts the prepared child.
- * @param context Caller-owned launch source.
+ * publication. A release failure aborts the transaction.
+ * @param context Caller-owned immutable source.
  * @param offset Requested byte offset.
  * @param length Maximum requested byte count.
  * @param bytes Receives borrowed bytes valid until the next callback.
  * @param moved Receives supplied byte count.
  * @return ASTRA_SYSCALL_* or source-specific failure status.
  */
-typedef uint32_t (*AstraLaunchReadAt)(void *context, uint32_t offset,
-                                     uint32_t length, const uint8_t **bytes,
-                                     uint32_t *moved);
+typedef uint32_t (*AstraReadAt)(void *context, uint32_t offset,
+                               uint32_t length, const uint8_t **bytes,
+                               uint32_t *moved);
 /**
- * Release a streamed launch source exactly once.
- * @param context Caller-owned launch source.
+ * Release a streamed immutable source exactly once.
+ * @param context Caller-owned source.
  * @return ASTRA_SYSCALL_* or source-specific failure status.
  */
-typedef uint32_t (*AstraLaunchRelease)(void *context);
+typedef uint32_t (*AstraSourceRelease)(void *context);
+/**
+ * One immutable input to a streamed kernel transaction.
+ *
+ * The kernel requests exact ranges and never learns a path or filesystem
+ * protocol. `release` is invoked exactly once after this source has been
+ * accepted or the enclosing transaction aborts.
+ */
+typedef struct AstraReadSource {
+    /** Complete ELF image byte length. */
+    uint32_t length;
+    /** Positioned reader for exact kernel-requested ranges. */
+    AstraReadAt read_at;
+    /** Mandatory source-release callback. */
+    AstraSourceRelease release;
+    /** Opaque value supplied to `read_at` and `release`. */
+    void *context;
+} AstraReadSource;
+
+/**
+ * Open the exact interpreter named by a program's PT_INTERP record.
+ *
+ * The callback owns provider policy. On success it initializes @p source with
+ * an immutable source whose release callback is valid; the executable launcher
+ * then owns that source and releases it exactly once.
+ *
+ * @param context Resolver-owned state.
+ * @param identity Exact NUL-terminated interpreter identity.
+ * @param source Receives the opened interpreter source.
+ * @return ASTRA_SYSCALL_* status.
+ */
+typedef uint32_t (*AstraInterpreterOpen)(void *context,
+                                         const char *identity,
+                                         AstraReadSource *source);
+/**
+ * Prepare personality handoff after executable I/O has completely stopped.
+ *
+ * Filesystem-backed personalities use this point to snapshot transport state:
+ * every program and interpreter read and close has completed, while the old
+ * image is still intact. The callback may update @p request but must not retain
+ * it past the call.
+ *
+ * @param context Caller-owned preparation state.
+ * @param request Mutable exec request supplied to the kernel next.
+ * @return ASTRA_SYSCALL_* status.
+ */
+typedef uint32_t (*AstraExecPrepare)(void *context,
+                                     AstraExecRequest *request);
+
+/** ABI size of AstraProcessLoadProfile. */
+#define ASTRA_PROCESS_LOAD_PROFILE_SIZE 104u
+
+/**
+ * Measured stages of one streamed process-load transaction.
+ *
+ * All durations are monotonic nanoseconds measured by the launching thread.
+ * Source time covers only positioned-read callbacks; kernel time is split by
+ * the transaction operation that consumed it. Counts and byte totals make a
+ * timing sample comparable across different ELF layouts.
+ */
+typedef struct AstraProcessLoadProfile {
+    /** Must be ASTRA_PROCESS_LOAD_PROFILE_SIZE on input. */
+    uint32_t size;
+    /** Reserved; must be zero. */
+    uint32_t reserved;
+    /** Positioned source callbacks completed or attempted. */
+    uint64_t source_reads;
+    /** Bytes requested from all executable sources. */
+    uint64_t source_bytes;
+    /** Kernel image-write calls completed or attempted. */
+    uint64_t kernel_writes;
+    /** Bytes submitted through kernel image-write calls. */
+    uint64_t kernel_write_bytes;
+    /** Complete measured transaction duration. */
+    uint64_t total_ns;
+    /** Time spent in positioned source callbacks. */
+    uint64_t source_read_ns;
+    /** Time spent beginning and validating the program image. */
+    uint64_t kernel_begin_ns;
+    /** Time spent registering and validating the interpreter image. */
+    uint64_t kernel_interpreter_ns;
+    /** Time spent submitting requested image ranges to the kernel. */
+    uint64_t kernel_write_ns;
+    /** Time spent creating the process, mappings, handles, and first thread. */
+    uint64_t kernel_create_ns;
+    /** Time spent releasing immutable executable sources. */
+    uint64_t source_release_ns;
+    /** Time spent committing and making the child runnable. */
+    uint64_t kernel_commit_ns;
+} AstraProcessLoadProfile;
+
+/** ABI size of AstraExecutableLoadProfile. */
+#define ASTRA_EXECUTABLE_LOAD_PROFILE_SIZE 128u
+
+/** Complete profile for the canonical executable-launch path. */
+typedef struct AstraExecutableLoadProfile {
+    /** Must be ASTRA_EXECUTABLE_LOAD_PROFILE_SIZE on input. */
+    uint32_t size;
+    /** Reserved; must be zero. */
+    uint32_t reserved;
+    /** Time spent validating and reading PT_INTERP. */
+    uint64_t executable_probe_ns;
+    /** Time spent opening the exact interpreter provider. */
+    uint64_t interpreter_open_ns;
+    /** Atomic kernel load transaction and source-I/O measurements. */
+    AstraProcessLoadProfile transaction;
+} AstraExecutableLoadProfile;
+
+/** @cond ASTRA_INTERNAL */
+_Static_assert(sizeof(AstraProcessLoadProfile) ==
+                   ASTRA_PROCESS_LOAD_PROFILE_SIZE,
+               "process-load profile ABI size changed");
+_Static_assert(sizeof(AstraExecutableLoadProfile) ==
+                   ASTRA_EXECUTABLE_LOAD_PROFILE_SIZE,
+               "executable-load profile ABI size changed");
+/** @endcond */
+/**
+ * Discover the exact interpreter identity carried by an executable.
+ *
+ * This is a non-owning probe: it performs positioned reads but never invokes
+ * `source->release`.  An empty result identifies a static executable.  The
+ * kernel remains the executable-format authority and validates the complete
+ * image during the subsequent launch transaction.
+ *
+ * @param source Open immutable executable source retained by the caller.
+ * @param identity Receives a NUL-terminated PT_INTERP identity.
+ * @param capacity Bytes available at `identity`, including its terminator.
+ * @param identity_length Receives the identity length excluding its NUL, or
+ * zero for a static executable.
+ * @return ASTRA_SYSCALL_OK, ASTRA_SYSCALL_INVALID_ARGUMENT for an invalid
+ * executable or output buffer, or ASTRA_SYSCALL_IO_ERROR for a failed read.
+ */
+uint32_t astra_executable_interpreter(
+    const AstraReadSource *source, char *identity, uint32_t capacity,
+    uint32_t *identity_length);
 /**
  * Launch an ELF image supplied incrementally by positioned reads.
  * @param length Complete image byte length.
@@ -824,16 +1083,93 @@ typedef uint32_t (*AstraLaunchRelease)(void *context);
  * @param grants Capabilities and subset rights transferred to the child.
  * @param count Number of entries in `grants`.
  * @param arguments Packed arguments and environment, or NULL.
+ * @param profile Optional initialized profile receiving resolution and load
+ * measurements.
  * @param process_handle Receives waitable child-process capability.
  * @param process_id Receives the child PID. The returned handle is the stable
  * process identity and control authority; PIDs may be reused after exit.
  * @return ASTRA_SYSCALL_* or callback failure status.
  */
-uint32_t astra_launch_stream(uint32_t length, AstraLaunchReadAt read_at,
-                             AstraLaunchRelease release, void *context,
+uint32_t astra_launch_stream(uint32_t length, AstraReadAt read_at,
+                             AstraSourceRelease release, void *context,
                              const AstraLaunchGrant *grants, uint32_t count,
                              const AstraLaunchArguments *arguments,
+                             AstraProcessLoadProfile *profile,
                              uint32_t *process_handle, uint32_t *process_id);
+/**
+ * Launch a dynamically linked program with its exact resolved interpreter.
+ *
+ * Filesystem lookup and version selection remain in the supervisor. This
+ * function only streams the two already-open images into one atomic kernel
+ * transaction. Both sources are released exactly once before the child can
+ * become runnable, including every failure path.
+ *
+ * @param program Dynamically linked ET_EXEC image carrying PT_INTERP.
+ * @param interpreter Exact ET_DYN interpreter selected for that identity.
+ * @param grants Capabilities and subset rights transferred to the child.
+ * @param count Number of entries in `grants`.
+ * @param arguments Packed arguments and environment, or NULL.
+ * @param profile Optional initialized profile receiving measured stages.
+ * @param process_handle Receives waitable child-process capability.
+ * @param process_id Receives the child PID.
+ * @return ASTRA_SYSCALL_* or callback failure status.
+ */
+uint32_t astra_launch_dynamic_stream(
+    const AstraReadSource *program,
+    const AstraReadSource *interpreter,
+    const AstraLaunchGrant *grants, uint32_t count,
+    const AstraLaunchArguments *arguments, AstraProcessLoadProfile *profile,
+    uint32_t *process_handle, uint32_t *process_id);
+
+/**
+ * Launch one executable through the canonical static-or-dynamic path.
+ *
+ * The executable's PT_INTERP record is the only selector. Static images are
+ * streamed directly; dynamic images are paired atomically with the exact
+ * interpreter returned by @p open_interpreter. The function owns @p program
+ * on entry and releases every successfully opened source exactly once on all
+ * return paths.
+ *
+ * @param program Open immutable executable source.
+ * @param open_interpreter Exact-provider resolver for dynamic images.
+ * @param interpreter_context Context passed to @p open_interpreter.
+ * @param grants Capabilities and subset rights transferred to the child.
+ * @param count Number of entries in @p grants.
+ * @param arguments Packed arguments and environment, or NULL.
+ * @param profile Optional initialized profile receiving measured stages.
+ * @param process_handle Receives waitable child-process capability.
+ * @param process_id Receives the child PID.
+ * @return ASTRA_SYSCALL_* or source/resolver failure status.
+ */
+uint32_t astra_launch_executable_stream(
+    const AstraReadSource *program,
+    AstraInterpreterOpen open_interpreter, void *interpreter_context,
+    const AstraLaunchGrant *grants, uint32_t count,
+    const AstraLaunchArguments *arguments,
+    AstraExecutableLoadProfile *profile,
+    uint32_t *process_handle, uint32_t *process_id);
+/**
+ * Atomically replace the current image through the canonical executable path.
+ *
+ * The executable's PT_INTERP record is the only selector. Static images are
+ * installed directly; dynamic images are paired with the exact interpreter
+ * returned by @p open_interpreter. The function owns @p program on entry and
+ * releases every successfully opened source exactly once on every failure
+ * path. Success does not return to the old image.
+ *
+ * @param program Open immutable executable source.
+ * @param open_interpreter Exact-provider resolver for dynamic images.
+ * @param interpreter_context Context passed to @p open_interpreter.
+ * @param prepare Optional handoff preparation after all source I/O completes.
+ * @param prepare_context Context passed to @p prepare.
+ * @param request Packed argv, environment, and personality handoff state.
+ * @return ASTRA_SYSCALL_* or source/resolver failure status.
+ */
+uint32_t astra_exec_executable_stream(
+    const AstraReadSource *program,
+    AstraInterpreterOpen open_interpreter, void *interpreter_context,
+    AstraExecPrepare prepare, void *prepare_context,
+    AstraExecRequest *request);
 /**
  * Pack argv-style values into a launch argument block.
  * @param arguments Header and offsets initialized on success.

@@ -1,0 +1,10 @@
+astra-bundle 1
+kind kit
+id org.astra.cxx
+name "Astra C++ Runtime Kit"
+version 1.0.0
+provides unwind.library 1 1.0.0
+provides cxx.library 1 1.0.0
+requires compiler.library 1 1.0.0
+requires runtime.library 1 1.5.0
+requires libc.library 1 1.0.0

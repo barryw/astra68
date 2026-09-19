@@ -1,11 +1,15 @@
 include ../../../mk/m68k-cross.mk
+include ../../../mk/astra-shared-library.mk
 
 CC := $(CROSS)gcc
 AR := $(CROSS)ar
 READELF := $(CROSS)readelf
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
-CPPFLAGS := -I../../../ndk/include -Iinclude -I../runtime/include \
+RUNTIME := ../runtime
+COMPILER := ../compiler
+NDK := ../../../ndk
+CPPFLAGS := -I$(NDK)/include -Iinclude -I$(RUNTIME)/include \
 	-I../../include -I../../../fpga/arty/linux
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
@@ -22,33 +26,45 @@ MONO_FONT_SOURCE := fonts/astra-mono.afnt
 MONO_FONT_HEADER := build/generated/astra_mono_font.inc
 SOURCES := src/surface.c src/shared_surface.c src/render_builder.c
 TARGET := build/m68k/libastragraphics.a
+RENDERER_TARGET := build/m68k/libastragraphics-renderer.a
 TARGET_OBJECTS := build/m68k/surface.o build/m68k/shared_surface.o \
 	build/m68k/render_builder.o
+RENDERER_OBJECTS := build/m68k/pic/render_builder.o
 PIC_TARGET := build/m68k/libastragraphics-pic.a
 PIC_OBJECTS := build/m68k/pic/surface.o build/m68k/pic/shared_surface.o \
 	build/m68k/pic/render_builder.o
 HOST_TEST := build/host/test_surface
-LIBRARY_LD := ../runtime/astra_library.ld
 LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
-	-ffunction-sections -fdata-sections -fPIC -fvisibility=hidden
-LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
-	-Wl,--no-undefined -Wl,--build-id=none -Wl,--gc-sections \
-	-Wl,--hash-style=sysv -Wl,-z,max-page-size=0x1000 -T $(LIBRARY_LD)
-GRAPHICS_LIBRARY := build/m68k/libraries/graphics.library
-FONT_LIBRARY := build/m68k/libraries/font.library
+	-ffunction-sections -fdata-sections $(ASTRA_SHARED_PIC_FLAGS)
+GRAPHICS_LIBRARY := build/m68k/libraries/graphics.library.2
+FONT_LIBRARY := build/m68k/libraries/font.library.2
+GRAPHICS_LIBRARY_MAP := graphics.library.exports
+FONT_LIBRARY_MAP := font.library.exports
 GRAPHICS_LIBRARY_OBJECTS := build/m68k/library/graphics_library.o \
 	build/m68k/library/graphics_surface.o \
 	build/m68k/library/graphics_shared_surface.o
 FONT_LIBRARY_OBJECTS := build/m68k/library/font_library.o \
 	build/m68k/library/font_surface.o
-NDK_PIC_LIB := ../../../ndk/build/m68k/libastra-pic.a
-RUNTIME_PIC_LIB := ../runtime/build/m68k/libastrart-pic.a
+SYSTEM_LIBRARY := $(NDK)/build/m68k/libraries/system.library.1
+RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
+COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.1
+SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 
-all: $(TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) library-contract
+all: $(TARGET) $(RENDERER_TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) \
+	library-contract
+
+graphics-library: $(GRAPHICS_LIBRARY)
+
+font-library: $(FONT_LIBRARY)
 
 pic: $(PIC_TARGET)
 
+renderer: $(RENDERER_TARGET)
+
 $(TARGET): $(TARGET_OBJECTS)
+	$(ASTRA_REPLACE_ARCHIVE)
+
+$(RENDERER_TARGET): $(RENDERER_OBJECTS)
 	$(ASTRA_REPLACE_ARCHIVE)
 
 $(PIC_TARGET): $(PIC_OBJECTS)
@@ -100,17 +116,16 @@ build/m68k/library/font_library.o: src/font_library.c \
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) -Ibuild/generated \
 		$(DEPFLAGS) -c $< -o $@
 
-build/m68k/library/graphics_surface.o: src/surface.c $(FONT_HEADER) \
-		$(UI_FONT_HEADER) $(MONO_FONT_HEADER)
+build/m68k/library/graphics_surface.o: src/surface.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(LIBRARY_FLAGS) \
-		$(DEPFLAGS) -c $< -o $@
+		-DASTRA_SURFACE_CORE=1 $(DEPFLAGS) -c $< -o $@
 
 build/m68k/library/font_surface.o: src/surface.c $(FONT_HEADER) \
 		$(UI_FONT_HEADER) $(MONO_FONT_HEADER)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(LIBRARY_FLAGS) \
-		$(DEPFLAGS) -c $< -o $@
+		-DASTRA_SURFACE_FONT=1 $(DEPFLAGS) -c $< -o $@
 
 build/m68k/library/graphics_shared_surface.o: src/shared_surface.c
 	@mkdir -p $(@D)
@@ -120,31 +135,71 @@ build/m68k/library/graphics_shared_surface.o: src/shared_surface.c
 $(TARGET_OBJECTS) $(PIC_OBJECTS): Makefile
 $(GRAPHICS_LIBRARY_OBJECTS) $(FONT_LIBRARY_OBJECTS): Makefile
 
-$(NDK_PIC_LIB):
-	$(MAKE) -C ../../../ndk pic
+shared-libraries-ready:
+	$(MAKE) -C $(NDK) library
+	$(MAKE) -C $(COMPILER) library
 
-$(RUNTIME_PIC_LIB):
-	$(MAKE) -C ../runtime pic
-
-$(GRAPHICS_LIBRARY): $(GRAPHICS_LIBRARY_OBJECTS) $(NDK_PIC_LIB) \
-		$(RUNTIME_PIC_LIB) $(LIBRARY_LD)
+$(GRAPHICS_LIBRARY): $(GRAPHICS_LIBRARY_OBJECTS) $(GRAPHICS_LIBRARY_MAP) \
+		$(ASTRA_SHARED_LINK_INPUTS) | shared-libraries-ready
 	@mkdir -p $(@D)
-	$(CC) $(LIBRARY_FLAGS) $(LIBRARY_LINK_FLAGS) \
+	$(CC) $(LIBRARY_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
 		-Wl,-soname,graphics.library.2 -o $@ \
-		$(GRAPHICS_LIBRARY_OBJECTS) -Wl,--start-group $(NDK_PIC_LIB) \
-		$(RUNTIME_PIC_LIB) -Wl,--end-group -lgcc
+		-Wl,--version-script=$(GRAPHICS_LIBRARY_MAP) \
+		$(GRAPHICS_LIBRARY_OBJECTS) \
+		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
+		-L$(dir $(COMPILER_LIBRARY)) -Wl,--no-as-needed \
+		-Wl,-l:system.library.1 -Wl,-l:runtime.library.1 \
+		-Wl,-l:compiler.library.1
 
-$(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(RUNTIME_PIC_LIB) $(LIBRARY_LD)
+$(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(FONT_LIBRARY_MAP) \
+		$(GRAPHICS_LIBRARY) \
+		$(ASTRA_SHARED_LINK_INPUTS) | shared-libraries-ready
 	@mkdir -p $(@D)
-	$(CC) $(LIBRARY_FLAGS) $(LIBRARY_LINK_FLAGS) \
+	$(CC) $(LIBRARY_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
 		-Wl,-soname,font.library.2 -o $@ $(FONT_LIBRARY_OBJECTS) \
-		$(RUNTIME_PIC_LIB) -lgcc
+		-Wl,--version-script=$(FONT_LIBRARY_MAP) \
+		-L$(dir $(GRAPHICS_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
+		-L$(dir $(COMPILER_LIBRARY)) -Wl,--no-as-needed \
+		-Wl,-l:graphics.library.2 -Wl,-l:runtime.library.1 \
+		-Wl,-l:compiler.library.1
 
 library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
+	@python3 ../../../tools/check_shared_library_layout.py \
+		$(GRAPHICS_LIBRARY)
+	@python3 ../../../tools/check_shared_library_layout.py \
+		$(FONT_LIBRARY)
+	@python3 $(SYMBOL_OWNERSHIP_CHECK) --readelf $(READELF) \
+		$(GRAPHICS_LIBRARY) $(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY) \
+		$(COMPILER_LIBRARY)
+	@python3 $(SYMBOL_OWNERSHIP_CHECK) --readelf $(READELF) \
+		$(FONT_LIBRARY) $(GRAPHICS_LIBRARY) $(RUNTIME_LIBRARY) \
+		$(COMPILER_LIBRARY)
+	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
+		$(GRAPHICS_LIBRARY_MAP) $(GRAPHICS_LIBRARY)
+	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
+		$(FONT_LIBRARY_MAP) $(FONT_LIBRARY)
+	@python3 ../../../tools/check_library_exports.py $(FONT_LIBRARY_MAP) \
+		$(NDK)/include/astra/font_library.h $(NDK)/include/astra/surface.h
 	@python3 ../../../tools/library_info.py $(GRAPHICS_LIBRARY) | \
-		grep -q '^graphics.library 2.1.0 ABI 2.1$$'
+		grep -q '^graphics.library.2 2.1.0 ABI 2.1$$'
 	@python3 ../../../tools/library_info.py $(FONT_LIBRARY) | \
-		grep -q '^font.library 2.1.0 ABI 2.1$$'
+		grep -q '^font.library.2 2.2.0 ABI 2.2$$'
+	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
+		grep -c 'NEEDED.*system.library.1')" = 1
+	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
+		grep -c 'NEEDED.*runtime.library.1')" = 1
+	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
+		grep -c 'NEEDED.*compiler.library.1')" = 1
+	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
+		awk '/NEEDED/{n++} END{print n+0}')" = 3
+	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
+		grep -c 'NEEDED.*graphics.library.2')" = 1
+	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
+		grep -c 'NEEDED.*runtime.library.1')" = 1
+	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
+		grep -c 'NEEDED.*compiler.library.1')" = 1
+	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
+		awk '/NEEDED/{n++} END{print n+0}')" = 3
 	$(call ASTRA_CHECK_DSO,$(GRAPHICS_LIBRARY) $(FONT_LIBRARY))
 
 $(HOST_TEST): src/surface.c src/render_builder.c tests/test_surface.c \
@@ -186,4 +241,5 @@ clean:
 
 -include $(wildcard build/m68k/*.d build/m68k/*/*.d)
 
-.PHONY: all pic test sanitize analyze library-contract clean
+.PHONY: all graphics-library font-library renderer pic test sanitize analyze \
+	library-contract clean shared-libraries-ready

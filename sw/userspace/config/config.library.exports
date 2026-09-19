@@ -1,0 +1,22 @@
+ASTRA_CONFIG_1.0 {
+    global:
+        astra_config_append_bool;
+        astra_config_append_i64;
+        astra_config_append_string;
+        astra_config_append_u64;
+        astra_config_close;
+        astra_config_count;
+        astra_config_get_bool;
+        astra_config_get_i64;
+        astra_config_get_string;
+        astra_config_get_u64;
+        astra_config_open;
+        astra_config_reload;
+        astra_config_remove;
+        astra_config_set_bool;
+        astra_config_set_i64;
+        astra_config_set_string;
+        astra_config_set_u64;
+    local:
+        *;
+};

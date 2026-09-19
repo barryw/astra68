@@ -14,6 +14,16 @@ static uint32_t read_moved;
 static uint32_t read_offset;
 static uint32_t read_length;
 static uint8_t read_bytes[4096];
+static uint8_t provider_record[] = {
+    'A', 'P', 'R', 'V', 0, 2, 0, 24,
+    0, 1, 0, 2, 0, 3, 0, 1, 0, 4, 0, 0,
+    0x12, 0x34, 0x56, 0x78,
+    'R', 'u', 'n', 't', 'i', 'm', 'e', '.', 'k', 'i', 't', '/',
+    'r', 'u', 'n', 't', 'i', 'm', 'e', '.', 'l', 'i', 'b', 'r',
+    'a', 'r', 'y'
+};
+static uint32_t library_mode;
+static uint32_t open_count;
 
 uint32_t astra_vfs_assign_open(
     const AstraAssignTable *table, const char *path, uint32_t rights,
@@ -25,14 +35,29 @@ uint32_t astra_vfs_assign_open(
     (void)client_for;
     (void)context;
     (void)member;
-    assert(strcmp(path, "COMMANDS:large") == 0);
     assert(rights == ASTRA_RIGHT_READ);
     assert(flags == ASTRA_VFS_OPEN_READ);
     assert(wire != NULL && capacity >= ASTRA_VFS_PATH_MAX);
     if (open_status != ASTRA_VFS_OK)
         return open_status;
-    *file = 9u;
-    *size = open_size;
+    if (library_mode != 0u) {
+        if (open_count == 0u) {
+            assert(strcmp(path,
+                          "LIBS:.providers/runtime.library.abi-1") == 0);
+            *file = 9u;
+            *size = sizeof(provider_record);
+        } else {
+            assert(open_count == 1u);
+            assert(strcmp(path, "LIBS:Runtime.kit/runtime.library") == 0);
+            *file = 10u;
+            *size = 77u;
+        }
+        ++open_count;
+    } else {
+        assert(strcmp(path, "COMMANDS:large") == 0);
+        *file = 9u;
+        *size = open_size;
+    }
     *kind = open_kind;
     *client = &mock_client;
     return ASTRA_VFS_OK;
@@ -47,15 +72,21 @@ uint32_t astra_vfs_port_read_borrow(AstraVfsClient *client,
     read_offset = (uint32_t)offset;
     read_length = length;
     if (read_status == ASTRA_VFS_OK) {
-        *bytes = read_bytes;
-        *moved = read_moved;
+        if (library_mode != 0u) {
+            assert(length == sizeof(provider_record));
+            *bytes = provider_record;
+            *moved = sizeof(provider_record);
+        } else {
+            *bytes = read_bytes;
+            *moved = read_moved;
+        }
     }
     return read_status;
 }
 
 uint32_t astra_vfs_close(AstraVfsClient *client, AstraVfsFile file)
 {
-    assert(client == &mock_client && file == 9u);
+    assert(client == &mock_client && (file == 9u || file == 10u));
     ++close_count;
     return ASTRA_VFS_OK;
 }
@@ -71,6 +102,7 @@ int main(void)
 {
     AstraAssignTable table = {0};
     AstraVfsReadSource source = ASTRA_VFS_READ_SOURCE_INIT;
+    AstraLibraryReference reference;
     const uint8_t *bytes = NULL;
     uint32_t moved = 0u;
 
@@ -116,5 +148,37 @@ int main(void)
                &source, &table, "COMMANDS:large", client_for, NULL) ==
            ASTRA_VFS_ERR_NOT_FOUND);
     assert(source.file == ASTRA_VFS_FILE_INVALID);
+
+    library_mode = 1u;
+    open_count = 0u;
+    open_status = ASTRA_VFS_OK;
+    open_kind = ASTRA_VFS_KIND_FILE;
+    read_status = ASTRA_VFS_OK;
+    assert(astra_vfs_library_source_open(
+               &source, &table, "LIBS", "runtime.library.1", client_for,
+               NULL, &reference) == ASTRA_VFS_OK);
+    assert(open_count == 2u && source.file == 10u && source.length == 77u);
+    assert(reference.size == ASTRA_LIBRARY_REFERENCE_SIZE);
+    assert(strcmp(reference.name, "runtime.library.1") == 0);
+    assert(reference.major == 1u && reference.minor == 2u &&
+           reference.patch == 3u && reference.abi_major == 1u &&
+           reference.abi_minor == 4u &&
+           reference.build_id == UINT32_C(0x12345678));
+    assert(astra_vfs_read_source_close(&source) == ASTRA_VFS_OK);
+
+    open_count = 0u;
+    provider_record[0] = 'X';
+    assert(astra_vfs_library_source_open(
+               &source, &table, "LIBS", "runtime.library.1", client_for,
+               NULL, &reference) == ASTRA_VFS_ERR_PROTOCOL);
+    assert(open_count == 1u && source.file == ASTRA_VFS_FILE_INVALID &&
+           reference.size == 0u);
+    provider_record[0] = 'A';
+
+    open_count = 0u;
+    assert(astra_vfs_library_source_open(
+               &source, &table, "LIBS", "runtime.library.01", client_for,
+               NULL, &reference) == ASTRA_VFS_ERR_INVALID);
+    assert(open_count == 0u && reference.size == 0u);
     return 0;
 }

@@ -38,11 +38,11 @@ typedef struct FakeDevice {
 } FakeDevice;
 
 static KernelHandle next_test_handle;
-static uint32_t trace_event_count[KERNEL_TRACE_EVENT_MONITOR_DROP + 1u];
+static uint32_t trace_event_count[KERNEL_TRACE_EVENT_COUNT];
 
 static bool record_trace(KernelTraceEvent event)
 {
-    assert(event > 0 && event <= KERNEL_TRACE_EVENT_MONITOR_DROP);
+    assert(event > 0 && event < KERNEL_TRACE_EVENT_COUNT);
     ++trace_event_count[event];
     return true;
 }

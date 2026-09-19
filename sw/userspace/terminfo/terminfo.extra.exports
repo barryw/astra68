@@ -1,0 +1,2 @@
+# Library identity lives in the fixed .astra_library record. It is metadata,
+# not a dynamic symbol or callable ABI.

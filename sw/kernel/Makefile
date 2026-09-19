@@ -328,7 +328,8 @@ verify: $(KERNEL_ELF) $(KERNEL_BIN)
 	  test $$bytes -le $$((0x80000)); \
 	  printf 'kernel payload: %s bytes\n' "$$bytes"
 
-test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_civil \
+test: $(BUILD_DIR)/test_address_space \
+      $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_civil \
       $(BUILD_DIR)/test_divide $(BUILD_DIR)/test_generation \
       $(BUILD_DIR)/test_format \
       $(BUILD_DIR)/test_allocation \
@@ -347,6 +348,7 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_civil \
       $(BUILD_DIR)/test_port $(BUILD_DIR)/test_area $(BUILD_DIR)/test_ring \
       $(BUILD_DIR)/test_process $(BUILD_DIR)/test_worker \
       $(BUILD_DIR)/test_dispatch $(BUILD_DIR)/test_elf
+	./$(BUILD_DIR)/test_address_space
 	./$(BUILD_DIR)/test_boot_contract
 	./$(BUILD_DIR)/test_civil
 	./$(BUILD_DIR)/test_divide
@@ -381,6 +383,11 @@ test: $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_civil \
 	./$(BUILD_DIR)/test_worker
 	./$(BUILD_DIR)/test_dispatch
 	./$(BUILD_DIR)/test_elf
+
+$(BUILD_DIR)/test_address_space: tests/test_address_space.c \
+                                  ../include/astra/address_space.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
+		-I../include tests/test_address_space.c -o $@
 
 $(BUILD_DIR)/test_elf: tests/test_elf.c elf.c elf.h bytes.c bytes.h \
                        memory.h process.h vm.h | $(BUILD_DIR)

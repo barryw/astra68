@@ -14,7 +14,7 @@
 #define ALERT_WIDTH 420u
 #define ALERT_HEIGHT 150u
 
-ASTRA_LIBRARY("interface.library", 5, 1, 0,
+ASTRA_DYNAMIC_LIBRARY("interface.library.5", 5, 1, 0,
               ASTRA_INTERFACE_LIBRARY_ABI_MAJOR,
               ASTRA_INTERFACE_LIBRARY_ABI_MINOR,
               "Barry Walker", "Copyright 2026 Barry Walker");
@@ -35,7 +35,6 @@ static int valid(const AstraAlertInfo *info)
            info->reserved16_2 == 0u && info->reserved16_3 == 0u &&
            astra_words_zero(info->reserved, 4u);
 }
-
 #if defined(ASTRA_INTERFACE_TEST)
 int astra_interface_test_valid(const AstraAlertInfo *info)
 {
@@ -115,7 +114,8 @@ void astra_interface_test_paint(AstraSurfaceView *surface,
 }
 #endif
 
-static AstraResult show_alert(AstraHandle gui, const AstraAlertInfo *info)
+AstraResult astra_interface_show_alert(AstraHandle gui,
+                                       const AstraAlertInfo *info)
 {
     AstraSharedSurface surface = {0};
     AstraWindow window = ASTRA_WINDOW_INIT;
@@ -208,110 +208,3 @@ static AstraResult show_alert(AstraHandle gui, const AstraAlertInfo *info)
         result = astra_result_from_syscall(status);
     return result;
 }
-
-const AstraInterfaceLibrary astra_library_exports ASTRA_LIBRARY_EXPORTS = {
-    ASTRA_INTERFACE_LIBRARY_ABI_MAJOR,
-    ASTRA_INTERFACE_LIBRARY_ABI_MINOR,
-    sizeof(AstraInterfaceLibrary),
-    show_alert,
-    astra_window_create,
-    astra_window_get_info,
-    astra_window_set_frame,
-    astra_window_move,
-    astra_window_resize,
-    astra_window_raise,
-    astra_window_lower,
-    astra_window_activate,
-    astra_window_deactivate,
-    astra_window_minimize,
-    astra_window_maximize,
-    astra_window_restore,
-    astra_window_set_title,
-    astra_window_set_event_mask,
-    astra_window_present,
-    astra_window_present_region,
-    astra_window_close,
-    astra_window_event_try,
-    astra_window_event_wait,
-    astra_window_event_wait_handle,
-    astra_window_vblank_wait_handle,
-    astra_interface_label_init,
-    astra_interface_button_init,
-    astra_interface_control_set_flex,
-    astra_interface_ui_init,
-    astra_interface_ui_measure,
-    astra_interface_ui_layout,
-    astra_interface_ui_set_state,
-    astra_interface_ui_render,
-    astra_interface_ui_handle_event,
-    astra_interface_ui_damage,
-    astra_interface_ui_damage_clear,
-    astra_interface_checkbox_init,
-    astra_interface_radio_init,
-    astra_interface_switch_init,
-    astra_interface_slider_init,
-    astra_interface_control_set_value,
-    astra_interface_control_get_value,
-    astra_interface_progress_init,
-    astra_interface_progress_set,
-    astra_interface_control_set_text,
-    astra_interface_container_init,
-    astra_text_surface_init,
-    astra_text_surface_render_cells,
-    astra_text_surface_draw_caret,
-    astra_text_surface_scroll,
-    astra_text_surface_set_blink,
-    astra_text_surface_render_grid,
-    astra_text_surface_grid_hit_test,
-    astra_text_surface_copy_grid_selection,
-    astra_clipboard_write,
-    astra_clipboard_read,
-    astra_clipboard_item_find,
-    astra_clipboard_item_close,
-    astra_clipboard_clear,
-    astra_undo_init,
-    astra_undo_group_size,
-    astra_undo_record_group,
-    astra_undo_perform_group,
-    astra_undo_undo,
-    astra_undo_redo,
-    astra_undo_clear,
-    astra_undo_mark_clean,
-    astra_undo_get_state,
-    astra_undo_move_arena,
-    astra_text_model_init,
-    astra_text_model_validate,
-    astra_text_model_get_state,
-    astra_text_model_set_selection,
-    astra_text_model_replace_requirements,
-    astra_text_model_replace,
-    astra_text_model_copy,
-    astra_text_model_read,
-    astra_text_model_scalar_advance,
-    astra_text_model_scalar_retreat,
-    astra_text_model_get_line,
-    astra_text_model_move_arenas,
-    astra_text_model_dispose,
-    astra_interface_field_init,
-    astra_interface_field_refresh,
-    astra_interface_field_replace_selection,
-    astra_interface_ui_vblank,
-    astra_interface_ui_animations_active,
-    astra_interface_segmented_init,
-    astra_interface_stepper_init,
-    astra_interface_tab_init,
-    astra_scroll_init,
-    astra_scroll_get_state,
-    astra_scroll_set_extents,
-    astra_scroll_set_offset,
-    astra_scroll_by,
-    astra_scroll_set_marks,
-    astra_interface_scroll_view_init,
-    astra_interface_scrollbar_init,
-    astra_interface_splitter_init,
-    astra_window_set_pointer_shape,
-    astra_window_set_pointer_image,
-    astra_interface_ui_update_pointer,
-    astra_interface_dial_init,
-    astra_interface_disclosure_init,
-};

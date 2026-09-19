@@ -4,18 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <astra/bundle.h>
 #include <astra/library.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_process.h>
-
-int astra_vfs_process_test_provider(const AstraBundleManifest *manifest,
-                                    const char *name, uint16_t abi,
-                                    uint16_t version[3]);
-int astra_vfs_process_test_index(const uint8_t *bytes, uint32_t length,
-                                 const char *name, uint16_t abi, char *path,
-                                 uint32_t capacity,
-                                 AstraLibraryReference *reference);
+#include <astra/vfs_provider_index.h>
 
 static uint32_t closes;
 static uint32_t connects;
@@ -222,12 +214,6 @@ uint32_t astra_vfs_port_connect(AstraVfsClient *client, uint32_t service)
     return ASTRA_VFS_OK;
 }
 
-uint32_t astra_vfs_port_connect_lazy(AstraVfsClient *client,
-                                     uint32_t service)
-{
-    return astra_vfs_port_connect(client, service);
-}
-
 uint32_t astra_vfs_host_port_connect_lazy(AstraVfsClient *client,
                                           uint32_t service)
 {
@@ -284,8 +270,8 @@ uint32_t astra_vfs_disconnect(AstraVfsClient *client)
     return ASTRA_VFS_OK;
 }
 
-static uint32_t file_open(AstraFilesystem *filesystem, const char *path,
-                          uint32_t flags, AstraFile *file)
+uint32_t astra_filesystem_open(AstraFilesystem *filesystem, const char *path,
+                               uint32_t flags, AstraFile *file)
 {
     (void)filesystem;
     assert(strcmp(path, "APP:test") == 0 && flags == ASTRA_VFS_OPEN_READ);
@@ -293,15 +279,16 @@ static uint32_t file_open(AstraFilesystem *filesystem, const char *path,
     return ASTRA_VFS_OK;
 }
 
-static uint32_t file_info(const AstraFile *file, AstraFileInfo *info)
+uint32_t astra_filesystem_file_info(const AstraFile *file,
+                                    AstraFileInfo *info)
 {
     assert(file->_private_file == 1u);
     info->byte_size = 5u;
     return ASTRA_VFS_OK;
 }
 
-static uint32_t file_read(AstraFile *file, void *bytes, uint32_t capacity,
-                          uint32_t *moved)
+uint32_t astra_filesystem_read(AstraFile *file, void *bytes,
+                               uint32_t capacity, uint32_t *moved)
 {
     static const char content[] = "hello";
     uint32_t offset = (uint32_t)file->_private_offset;
@@ -314,7 +301,7 @@ static uint32_t file_read(AstraFile *file, void *bytes, uint32_t capacity,
     return ASTRA_VFS_OK;
 }
 
-static uint32_t file_close(AstraFile *file)
+uint32_t astra_filesystem_close(AstraFile *file)
 {
     ++closes;
     file->_private_file = ASTRA_VFS_FILE_INVALID;
@@ -324,35 +311,81 @@ static uint32_t file_close(AstraFile *file)
 int main(void)
 {
     static const uint8_t indexed[] = {
+        'A', 'P', 'R', 'V', 0, 2, 0, 24,
+        0, 1, 0, 2, 0, 3, 0, 1, 0, 4, 0, 0,
+        0x12, 0x34, 0x56, 0x78,
+        'F', 'i', 'l', 'e'
+    };
+    static const uint8_t legacy_absolute[] = {
         'A', 'P', 'R', 'V', 0, 1, 0, 24,
         0, 1, 0, 2, 0, 3, 0, 1, 0, 4, 0, 0,
         0x12, 0x34, 0x56, 0x78,
         'L', 'I', 'B', 'S', ':', 'F', 'i', 'l', 'e'
     };
-    uint16_t version[3];
+    static const uint8_t absolute[] = {
+        'A', 'P', 'R', 'V', 0, 2, 0, 24,
+        0, 1, 0, 2, 0, 3, 0, 1, 0, 4, 0, 0,
+        0x12, 0x34, 0x56, 0x78,
+        'L', 'I', 'B', 'S', ':', 'F', 'i', 'l', 'e'
+    };
+    static const uint8_t traversal[] = {
+        'A', 'P', 'R', 'V', 0, 2, 0, 24,
+        0, 1, 0, 2, 0, 3, 0, 1, 0, 4, 0, 0,
+        0x12, 0x34, 0x56, 0x78,
+        '.', '.', '/', 'F', 'i', 'l', 'e'
+    };
     char path[128];
     AstraLibraryReference reference;
+    uint16_t abi = 0u;
 
-    assert(!astra_vfs_process_test_index(
+    assert(astra_vfs_provider_identity_parse(
+        "loader.library.1", path, sizeof(path), &abi));
+    assert(strcmp(path, "loader.library") == 0 && abi == 1u);
+    assert(astra_vfs_provider_identity_parse(
+        "runtime.library.65535", path, sizeof(path), &abi));
+    assert(strcmp(path, "runtime.library") == 0 && abi == 65535u);
+    assert(!astra_vfs_provider_identity_parse(
+        "loader.library", path, sizeof(path), &abi));
+    assert(!astra_vfs_provider_identity_parse(
+        "loader.library.01", path, sizeof(path), &abi));
+    assert(!astra_vfs_provider_identity_parse(
+        "loader.library.65536", path, sizeof(path), &abi));
+    assert(!astra_vfs_provider_identity_parse(
+        "loader/library.1", path, sizeof(path), &abi));
+
+    assert(!astra_vfs_provider_index_parse(
         (const uint8_t *)"LIBS:Filesystem.kit/library", 27u,
-        "filesystem.library", 1u, path, sizeof(path), &reference));
+        "LIBS", "filesystem.library", 1u, path, sizeof(path), &reference));
     assert(path[0] == '\0');
     assert(reference.size == 0u);
-    assert(astra_vfs_process_test_index(
-        indexed, sizeof(indexed), "filesystem.library", 1u, path,
+    assert(astra_vfs_provider_index_parse(
+        indexed, sizeof(indexed), "LIBS", "filesystem.library", 1u, path,
         sizeof(path), &reference));
     assert(strcmp(path, "LIBS:File") == 0);
     assert(reference.size == ASTRA_LIBRARY_REFERENCE_SIZE);
+    assert(strcmp(reference.name, "filesystem.library.1") == 0);
     assert(reference.major == 1u && reference.minor == 2u &&
            reference.patch == 3u && reference.abi_major == 1u &&
            reference.abi_minor == 4u &&
            reference.build_id == 0x12345678u);
-    assert(!astra_vfs_process_test_index(
+    assert(!astra_vfs_provider_index_parse(
         (const uint8_t *)"SYS:Filesystem.kit/library", 26u,
-        "filesystem.library", 1u, path, sizeof(path), &reference));
-    assert(!astra_vfs_process_test_index(
+        "LIBS", "filesystem.library", 1u, path, sizeof(path), &reference));
+    assert(!astra_vfs_provider_index_parse(
         (const uint8_t *)"LIBS:Filesystem kit/library", 27u,
+        "LIBS", "filesystem.library", 1u, path, sizeof(path), &reference));
+    assert(!astra_vfs_provider_index_parse(
+        legacy_absolute, sizeof(legacy_absolute), "LIBS",
         "filesystem.library", 1u, path, sizeof(path), &reference));
+    assert(!astra_vfs_provider_index_parse(
+        absolute, sizeof(absolute), "LIBS", "filesystem.library", 1u,
+        path, sizeof(path), &reference));
+    assert(!astra_vfs_provider_index_parse(
+        traversal, sizeof(traversal), "LIBS", "filesystem.library", 1u,
+        path, sizeof(path), &reference));
+    assert(!astra_vfs_provider_index_parse(
+        indexed, sizeof(indexed), "BAD:ASSIGN", "filesystem.library", 1u,
+        path, sizeof(path), &reference));
 
     {
         AstraStartupInfo startup = { .capabilities_address = 1u };
@@ -546,17 +579,11 @@ int main(void)
     }
 
     {
-        AstraFilesystemLibraryV2 library = {
-            .open = file_open,
-            .close = file_close,
-            .read = file_read,
-            .file_info = file_info,
-        };
-        AstraProcessFilesystem filesystem = {
-            .library = &library,
-        };
+        AstraProcessFilesystem filesystem = ASTRA_PROCESS_FILESYSTEM_INIT;
         char bytes[5];
         uint32_t length = 0u;
+
+        filesystem.filesystem._private_assigns = (const void *)1u;
 
         assert(astra_process_read_file(&filesystem, "APP:test", bytes,
                                        sizeof(bytes), &length) ==
@@ -568,26 +595,6 @@ int main(void)
         assert(closes == 2u);
     }
 
-    {
-        AstraBundleManifest manifest = {0};
-
-        manifest.kind = ASTRA_BUNDLE_KIT;
-        manifest.provide_count = 2u;
-        strcpy(manifest.provides[0].name, "graphics.library");
-        manifest.provides[0].abi = 1u;
-        manifest.provides[0].version = (AstraBundleVersion){1u, 1u, 0u};
-        strcpy(manifest.provides[1].name, "font.library");
-        manifest.provides[1].abi = 1u;
-        manifest.provides[1].version = (AstraBundleVersion){1u, 0u, 0u};
-        assert(astra_vfs_process_test_provider(
-            &manifest, "graphics.library", 1u, version));
-        assert(version[0] == 1u && version[1] == 1u && version[2] == 0u);
-        assert(!astra_vfs_process_test_provider(
-            &manifest, "graphics.library", 2u, version));
-        manifest.provides[0].version = (AstraBundleVersion){0u, 9u, 0u};
-        assert(astra_vfs_process_test_provider(
-            &manifest, "graphics.library", 1u, version));
-    }
     puts("astra process library resolver: PASS");
     return 0;
 }

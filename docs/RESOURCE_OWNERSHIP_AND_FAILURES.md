@@ -1,6 +1,6 @@
 # Axiom resource ownership and failures
 
-Status: normative lifetime contract, revision 0.4 (2026-08-04)
+Status: normative lifetime contract, revision 0.5 (2026-09-16)
 
 Every resource has one accountable owner, finite capacity, explicit rights,
 and a terminal failure path. C cleanup helpers improve normal code but kernel
@@ -315,11 +315,33 @@ permanent filesystem or block policy. Those protocols move to a user service.
 | timeout races completion | one terminal state wins; loser observes it |
 | stale handle/completion | return stale/invalid and increment diagnostic count |
 | physical bus failure | fail request; reset/mask device when required |
-| registered initial resident image exits | panic with its exit reason/status; boot control no longer exists |
+| optional host controller/link unavailable at boot | omit its capability, retain a `SYSTEM_DEGRADED` trace record, and continue with the remaining devices |
+| initial userspace image absent or rejected | retain a `SYSTEM_DEGRADED` trace record and enter the kernel's interrupt-driven diagnostic idle state |
+| registered initial resident image exits | complete normal teardown, retain a `PROCESS_EXIT` trace record, and report degraded userspace boot control |
 | internal impossible state | panic with retained object/owner trace |
 
 No recoverable external failure returns success, grows a queue, or spins
 indefinitely.
+
+`SYSTEM_DEGRADED` is the single retained kernel event for boot/runtime
+capability loss. Its arguments are the reason, two reason-specific details,
+and zero. The same reporting path emits the human-readable serial diagnosis,
+so the durable trace and console cannot silently classify one failure
+differently. Missing host storage, a host-link timeout, missing host input,
+and a missing, rejected, or exited initial userspace image are degraded
+conditions. They are not evidence of kernel corruption.
+Reason values are the `KernelTraceDegradedReason` constants in `trace.h`, in
+that order: initial image missing, rejected, or exited; host block missing;
+host link timeout; host input missing. Tools must decode those constants rather
+than maintaining another private reason table.
+
+Panic is reserved for a condition where continued execution cannot be shown
+safe: an invalid firmware/kernel memory contract, failed MMU or interrupt
+foundation, allocator or ownership corruption, failed mandatory teardown, or
+an impossible scheduler/worker state. When no process is runnable after an
+otherwise valid boot, the kernel reuses the same interrupt-driven idle entry
+used after normal process exhaustion. It does not introduce a second recovery
+loop or disable diagnostics.
 
 ## Low-memory ownership
 

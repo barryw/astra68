@@ -6,6 +6,7 @@ OBJCOPY := $(CROSS)objcopy
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
 RUNTIME := ../runtime
+include $(RUNTIME)/astra-link.mk
 STORAGE := ../storage
 ALLOC := ../alloc
 VFS := ../vfs
@@ -33,9 +34,11 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 # 70,304 with BSS unchanged. It is the initial user image, so that is ROM the
 # firmware carries and pages the loader maps on every boot.
 LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
-	-Wl,--build-id=none -Wl,--gc-sections -T $(RUNTIME)/astra_user.ld
+	-Wl,--build-id=none -Wl,--gc-sections \
+	$(ASTRA_STATIC_LINK_SCRIPT_FLAGS)
 SOURCES := src/supervisor.c src/main.c src/volume.c src/loader.c \
-	src/loader_manifest.c src/vfs_host.c src/vfs_read.c src/proc_tree.c
+	src/loader_manifest.c src/service_definition_store.c src/vfs_host.c \
+	src/vfs_read.c src/proc_tree.c
 OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES))
 CONFIG_OBJECT := build/m68k/config_document.o
 ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(SOURCES))
@@ -59,12 +62,14 @@ CATALOG := build/m68k/astra_events.cat
 HOST_TEST := build/host/test_supervisor
 LOADER_TEST := build/host/test_loader_manifest
 PROC_TREE_ROOT_TEST := build/host/test_proc_tree_root
+SERVICE_DEFINITION_TEST := build/host/test_service_definition_store
+LOADER_STATUS_TEST := build/host/test_loader_status
 # log.c comes along because validating a startup block is what binds the
 # diagnostic channel, so the two cannot be linked apart.
 TEST_SOURCES := src/supervisor.c $(RUNTIME)/src/startup.c \
 	$(RUNTIME)/src/log.c tests/test_supervisor.c
-ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(ALLOC) $(STORAGE) $(VFS) \
-	../graphics $(NDK)
+ASTRA_PROGRAM_OWNER_TARGETS := $(RUNTIME):all $(ALLOC):all $(STORAGE):all \
+	$(VFS):all ../graphics:all $(NDK):all
 ASTRA_PROGRAM_TARGETS := image
 include ../program.mk
 
@@ -73,7 +78,7 @@ image: $(IMAGE) $(CATALOG) size
 # The image is the deliverable, so the link contract is part of the build:
 # astra_user.ld produces exactly the shape kernel_elf_accept() takes. The
 # archives are named as prerequisites so a rebuilt library relinks the image.
-$(TARGET): $(OBJECTS) $(CONFIG_OBJECT) $(RUNTIME)/astra_user.ld $(RUNTIME_CRT0) $(EXT4_LIB) \
+$(TARGET): $(OBJECTS) $(CONFIG_OBJECT) $(ASTRA_STATIC_USER_LD_INPUTS) $(RUNTIME_CRT0) $(EXT4_LIB) \
 		$(STORAGE_LIB) $(ALLOC_LIB) $(RUNTIME_LIB) $(VFS_LIB) $(NDK_LIB)
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(RUNTIME_CRT0) $(OBJECTS) \
@@ -133,10 +138,27 @@ $(PROC_TREE_ROOT_TEST): tests/test_proc_tree_root.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $< -o $@
 
-test: $(HOST_TEST) $(LOADER_TEST) $(PROC_TREE_ROOT_TEST)
+$(SERVICE_DEFINITION_TEST): src/service_definition_store.c \
+		src/loader_manifest.c $(CONFIG)/src/config_document.c \
+		$(NDK)/src/config_scope.c \
+		$(NDK)/src/manifest.c $(NDK)/src/utf8.c \
+		$(NDK)/src/service_definition.c \
+		tests/test_service_definition_store.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
+
+$(LOADER_STATUS_TEST): tests/test_loader_status.c include/loader.h \
+		../../include/astra/status.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $< -o $@
+
+test: $(HOST_TEST) $(LOADER_TEST) $(PROC_TREE_ROOT_TEST) \
+		$(SERVICE_DEFINITION_TEST) $(LOADER_STATUS_TEST)
 	./$(HOST_TEST)
 	./$(LOADER_TEST)
 	./$(PROC_TREE_ROOT_TEST)
+	./$(SERVICE_DEFINITION_TEST)
+	./$(LOADER_STATUS_TEST)
 
 sanitize:
 	@mkdir -p build/host

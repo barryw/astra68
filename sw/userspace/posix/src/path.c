@@ -36,6 +36,14 @@ static int native_spelling(const char *path, uint32_t *colon)
     return 1;
 }
 
+int astra_posix_path_is_absolute(const char *path)
+{
+    uint32_t colon;
+
+    return path != NULL &&
+           (path[0] == '/' || native_spelling(path, &colon));
+}
+
 static int simple_native(const char *path, uint32_t colon, char *normal,
                          uint32_t normal_capacity, char *native,
                          uint32_t native_capacity)
@@ -119,6 +127,34 @@ static int input_path(const char *cwd, const char *path, char *out,
     return 1;
 }
 
+static int native_escapes_root(const char *path)
+{
+    uint32_t depth = 0u;
+    uint32_t at = 0u;
+
+    while (path[at] != '\0') {
+        uint32_t start;
+        uint32_t count;
+
+        while (path[at] == '/')
+            ++at;
+        start = at;
+        while (path[at] != '\0' && path[at] != '/')
+            ++at;
+        count = at - start;
+        if (count == 0u || (count == 1u && path[start] == '.'))
+            continue;
+        if (count == 2u && path[start] == '.' && path[start + 1u] == '.') {
+            if (depth == 0u)
+                return 1;
+            --depth;
+        } else {
+            ++depth;
+        }
+    }
+    return 0;
+}
+
 static int normalise(const char *input, char *out, uint32_t capacity)
 {
     uint32_t length = 0u;
@@ -168,13 +204,16 @@ int astra_posix_path_resolve(const char *cwd, const char *path,
     uint32_t at = 1u;
     uint32_t out = 0u;
 
-    if (cwd == NULL || path == NULL || normal == NULL || native == NULL ||
-        cwd[0] != '/')
+    if (cwd == NULL || path == NULL || path[0] == '\0' || normal == NULL ||
+        native == NULL || cwd[0] != '/')
         return -1;
-    if (native_spelling(path, &at) &&
-        simple_native(path, at, normal, normal_capacity, native,
-                      native_capacity))
-        return 1;
+    if (native_spelling(path, &at)) {
+        if (simple_native(path, at, normal, normal_capacity, native,
+                          native_capacity))
+            return 1;
+        if (native_escapes_root(path + at + 1u))
+            return -1;
+    }
     at = 1u;
     if (!input_path(cwd, path, input, sizeof(input)) ||
         !normalise(input, normal, normal_capacity))
@@ -208,7 +247,8 @@ int astra_posix_path_resolve_native(const char *cwd, const char *path,
     char normal[ASTRA_VFS_PATH_MAX];
     uint32_t colon = 0u;
 
-    if (cwd == NULL || path == NULL || native == NULL || cwd[0] != '/')
+    if (cwd == NULL || path == NULL || path[0] == '\0' || native == NULL ||
+        cwd[0] != '/')
         return -1;
     if (native_spelling(path, &colon) &&
         simple_native(path, colon, NULL, 0u, native, native_capacity))

@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <rfb/keysym.h>
 #include <rfb/rfb.h>
 #include <signal.h>
@@ -19,11 +20,13 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 
 #define ASTRA_CAPTURE_DEVICE "/dev/astra-display-capture"
 #define ASTRA_QMP_DEFAULT "/run/astra/remote-desktop-qmp.sock"
+#define ASTRA_CONTROL_DEFAULT "/run/astra/remote-desktop-control.sock"
 #define ASTRA_RFB_PORT 5900
 #define ASTRA_RFB_IDLE_US 100000L
 
@@ -53,6 +56,14 @@ struct astra_remote_desktop {
     int pointer_x;
     int pointer_y;
     bool pointer_dirty;
+};
+
+struct astra_remote_server {
+    struct astra_remote_desktop desktop;
+    rfbScreenInfoPtr screen;
+    const uint8_t *frame;
+    int capture;
+    unsigned int generation;
 };
 
 static volatile sig_atomic_t astra_remote_running = 1;
@@ -502,18 +513,206 @@ static int astra_remote_self_test(void)
     return EXIT_SUCCESS;
 }
 
+static void astra_remote_server_stop(struct astra_remote_server *server)
+{
+    if (server->screen != NULL) {
+        rfbShutdownServer(server->screen, TRUE);
+        rfbScreenCleanup(server->screen);
+        server->screen = NULL;
+    }
+    astra_qmp_close(&server->desktop);
+    while (server->desktop.keys != NULL) {
+        struct astra_remote_key *next = server->desktop.keys->next;
+
+        free(server->desktop.keys);
+        server->desktop.keys = next;
+    }
+    memset(server->desktop.button_references, 0,
+           sizeof(server->desktop.button_references));
+    server->desktop.sent_buttons = 0u;
+    server->desktop.pointer_dirty = false;
+    if (server->frame != MAP_FAILED) {
+        (void)munmap((void *)(uintptr_t)server->frame,
+                     ASTRA_DISPLAY_CAPTURE_FRAME_BYTES);
+        server->frame = MAP_FAILED;
+    }
+    if (server->capture >= 0) {
+        (void)close(server->capture);
+        server->capture = -1;
+    }
+}
+
+static int astra_remote_server_start(struct astra_remote_server *server,
+                                     const char *capture_path, int port,
+                                     const char *program)
+{
+    int rfb_argc = 1;
+    char *rfb_argv[] = {(char *)(uintptr_t)program, NULL};
+
+    server->capture = open(capture_path, O_RDONLY | O_CLOEXEC);
+    if (server->capture < 0) {
+        perror("open Astra display capture");
+        return -1;
+    }
+    server->frame = mmap(NULL, ASTRA_DISPLAY_CAPTURE_FRAME_BYTES, PROT_READ,
+                         MAP_SHARED, server->capture, 0);
+    if (server->frame == MAP_FAILED) {
+        perror("map Astra display capture");
+        astra_remote_server_stop(server);
+        return -1;
+    }
+    server->screen = rfbGetScreen(&rfb_argc, rfb_argv,
+                                  ASTRA_DISPLAY_CAPTURE_WIDTH,
+                                  ASTRA_DISPLAY_CAPTURE_HEIGHT, 8, 3, 3);
+    if (server->screen == NULL) {
+        fputs("Astra remote desktop: cannot create RFB server\n", stderr);
+        astra_remote_server_stop(server);
+        return -1;
+    }
+    server->screen->screenData = &server->desktop;
+    server->screen->frameBuffer = (char *)(uintptr_t)server->frame;
+    server->screen->desktopName = "Astra 68";
+    /* The captured frame already contains Astra's hardware pointer. */
+    rfbSetCursor(server->screen, NULL);
+    server->screen->port = port;
+    server->screen->ipv6port = 0;
+    server->screen->listenInterface = htonl(INADDR_LOOPBACK);
+    server->screen->alwaysShared = TRUE;
+    server->screen->kbdAddEvent = astra_remote_key_event;
+    server->screen->kbdReleaseAllKeys = astra_remote_release_keys;
+    server->screen->ptrAddEvent = astra_remote_pointer_event;
+    server->screen->newClientHook = astra_remote_client_new;
+    server->screen->serverFormat.bitsPerPixel = 24;
+    server->screen->serverFormat.depth = 24;
+    server->screen->serverFormat.bigEndian = 1u;
+    server->screen->serverFormat.trueColour = 1u;
+    server->screen->serverFormat.redMax = 255;
+    server->screen->serverFormat.greenMax = 255;
+    server->screen->serverFormat.blueMax = 255;
+    server->screen->serverFormat.redShift = 16;
+    server->screen->serverFormat.greenShift = 8;
+    server->screen->serverFormat.blueShift = 0;
+    rfbInitServer(server->screen);
+    if (!rfbIsActive(server->screen)) {
+        fputs("Astra remote desktop: cannot start RFB server\n", stderr);
+        astra_remote_server_stop(server);
+        return -1;
+    }
+    if (++server->generation == 0u)
+        ++server->generation;
+    (void)fprintf(stderr,
+                  "Astra remote desktop: ready generation %u on "
+                  "127.0.0.1:%d\n", server->generation, port);
+    return 0;
+}
+
+static int astra_control_listen(const char *path)
+{
+    struct sockaddr_un address = {.sun_family = AF_UNIX};
+    struct stat status;
+    int descriptor;
+
+    if (strlen(path) >= sizeof(address.sun_path)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    if (lstat(path, &status) == 0) {
+        if (!S_ISSOCK(status.st_mode)) {
+            errno = EEXIST;
+            return -1;
+        }
+        if (unlink(path) != 0)
+            return -1;
+    } else if (errno != ENOENT) {
+        return -1;
+    }
+    descriptor = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+    if (descriptor < 0)
+        return -1;
+    memcpy(address.sun_path, path, strlen(path) + 1u);
+    if (bind(descriptor, (struct sockaddr *)&address, sizeof(address)) != 0 ||
+        chmod(path, 0600) != 0 || listen(descriptor, 1) != 0) {
+        int saved = errno;
+
+        (void)close(descriptor);
+        (void)unlink(path);
+        errno = saved;
+        return -1;
+    }
+    return descriptor;
+}
+
+static int astra_control_accept(int listener)
+{
+    int descriptor = accept(listener, NULL, NULL);
+
+    if (descriptor >= 0 && fcntl(descriptor, F_SETFD, FD_CLOEXEC) != 0) {
+        int saved = errno;
+
+        (void)close(descriptor);
+        errno = saved;
+        return -1;
+    }
+    return descriptor;
+}
+
+static int astra_control_closed(int descriptor)
+{
+    struct pollfd event = {.fd = descriptor, .events = POLLIN | POLLHUP};
+    char byte;
+    int ready = poll(&event, 1u, 0);
+
+    if (ready < 0)
+        return errno != EINTR;
+    if (ready == 0)
+        return 0;
+    if ((event.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
+        return 1;
+    return (event.revents & POLLIN) != 0 &&
+           recv(descriptor, &byte, sizeof(byte), MSG_PEEK) != -1;
+}
+
+static int astra_port_from_environment(const char *text, int *port)
+{
+    char *end = NULL;
+    long value;
+
+    if (text == NULL || *text == '\0') {
+        *port = ASTRA_RFB_PORT;
+        return 0;
+    }
+    errno = 0;
+    value = strtol(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' ||
+        value < 1 || value > 65535) {
+        errno = EINVAL;
+        return -1;
+    }
+    *port = (int)value;
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
-    struct astra_display_capture_info info;
     const char *qmp_environment = getenv("ASTRA_QMP_SOCKET");
-    struct astra_remote_desktop desktop = {
-        .qmp_path = qmp_environment != NULL ? qmp_environment : ASTRA_QMP_DEFAULT,
+    const char *capture_environment = getenv("ASTRA_CAPTURE_DEVICE");
+    const char *control_environment = getenv(
+        "ASTRA_REMOTE_DESKTOP_CONTROL_SOCKET");
+    const char *capture_path = capture_environment != NULL ?
+        capture_environment : ASTRA_CAPTURE_DEVICE;
+    const char *control_path = control_environment != NULL ?
+        control_environment : ASTRA_CONTROL_DEFAULT;
+    struct astra_remote_server server = {
+        .desktop = {
+            .qmp_path = qmp_environment != NULL ? qmp_environment :
+                                                       ASTRA_QMP_DEFAULT,
+        },
+        .frame = MAP_FAILED,
+        .capture = -1,
     };
-    rfbScreenInfoPtr screen = NULL;
-    const uint8_t *frame = MAP_FAILED;
-    int capture = -1;
-    int rfb_argc = 1;
-    char *rfb_argv[] = { argv[0], NULL };
+    int listener = -1;
+    int lease = -1;
+    int port;
     int status = EXIT_FAILURE;
 
     if (argc == 2 && strcmp(argv[1], "--self-test") == 0)
@@ -522,90 +721,117 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: %s [--self-test]\n", argv[0]);
         return EXIT_FAILURE;
     }
-    capture = open(ASTRA_CAPTURE_DEVICE, O_RDONLY | O_CLOEXEC);
-    if (capture < 0) {
-        perror("open Astra display capture");
+    if (astra_port_from_environment(getenv("ASTRA_RFB_PORT"), &port) != 0) {
+        fputs("Astra remote desktop: invalid ASTRA_RFB_PORT\n", stderr);
         goto done;
     }
-    frame = mmap(NULL, ASTRA_DISPLAY_CAPTURE_FRAME_BYTES, PROT_READ,
-                 MAP_SHARED, capture, 0);
-    if (frame == MAP_FAILED) {
-        perror("map Astra display capture");
+    listener = astra_control_listen(control_path);
+    if (listener < 0) {
+        perror("listen for Astra remote desktop control");
         goto done;
     }
-    screen = rfbGetScreen(&rfb_argc, rfb_argv,
-                          ASTRA_DISPLAY_CAPTURE_WIDTH,
-                          ASTRA_DISPLAY_CAPTURE_HEIGHT, 8, 3, 3);
-    if (screen == NULL) {
-        fputs("Astra remote desktop: cannot create RFB server\n", stderr);
-        goto done;
-    }
-    screen->screenData = &desktop;
-    screen->frameBuffer = (char *)(uintptr_t)frame;
-    screen->desktopName = "Astra 68";
-    /* The captured frame already contains Astra's hardware pointer. */
-    rfbSetCursor(screen, NULL);
-    screen->port = ASTRA_RFB_PORT;
-    screen->ipv6port = 0;
-    screen->listenInterface = htonl(INADDR_LOOPBACK);
-    screen->alwaysShared = TRUE;
-    screen->kbdAddEvent = astra_remote_key_event;
-    screen->kbdReleaseAllKeys = astra_remote_release_keys;
-    screen->ptrAddEvent = astra_remote_pointer_event;
-    screen->newClientHook = astra_remote_client_new;
-    screen->serverFormat.bitsPerPixel = 24;
-    screen->serverFormat.depth = 24;
-    screen->serverFormat.bigEndian = 1u;
-    screen->serverFormat.trueColour = 1u;
-    screen->serverFormat.redMax = 255;
-    screen->serverFormat.greenMax = 255;
-    screen->serverFormat.blueMax = 255;
-    screen->serverFormat.redShift = 16;
-    screen->serverFormat.greenShift = 8;
-    screen->serverFormat.blueShift = 0;
     signal(SIGINT, astra_remote_stop);
     signal(SIGTERM, astra_remote_stop);
     signal(SIGPIPE, SIG_IGN);
-    rfbInitServer(screen);
-    while (astra_remote_running && rfbIsActive(screen)) {
-        rfbProcessEvents(screen,
-                         screen->clientHead == NULL ? ASTRA_RFB_IDLE_US : 0);
-        astra_remote_reconcile_keys(&desktop);
-        if (desktop.pointer_dirty)
-            (void)astra_qmp_pointer(
-                &desktop, astra_remote_wanted_buttons(&desktop));
-        if (screen->clientHead == NULL)
-            continue;
-        if (ioctl(capture, ASTRA_DISPLAY_CAPTURE_IOC_CAPTURE, &info) != 0) {
-            perror("capture Astra display");
-            goto done;
-        }
-        if (info.width != ASTRA_DISPLAY_CAPTURE_WIDTH ||
-            info.height != ASTRA_DISPLAY_CAPTURE_HEIGHT ||
-            info.frame_bytes != ASTRA_DISPLAY_CAPTURE_FRAME_BYTES) {
-            fputs("Astra remote desktop: invalid capture contract\n", stderr);
-            goto done;
-        }
-        rfbMarkRectAsModified(screen, 0, 0, info.width, info.height);
-    }
     status = EXIT_SUCCESS;
+    while (astra_remote_running) {
+        if (lease < 0) {
+            struct pollfd event = {.fd = listener, .events = POLLIN};
+            int ready = poll(&event, 1u, -1);
+
+            if (ready < 0) {
+                if (errno == EINTR)
+                    continue;
+                perror("wait for Astra remote desktop control");
+                status = EXIT_FAILURE;
+                break;
+            }
+            lease = astra_control_accept(listener);
+            if (lease < 0) {
+                if (errno != EINTR)
+                    perror("accept Astra remote desktop control");
+                continue;
+            }
+            if (astra_remote_server_start(&server, capture_path, port,
+                                          argv[0]) != 0) {
+                int failure = errno != 0 ? errno : EIO;
+                char reply[32];
+                int length = snprintf(reply, sizeof(reply), "ERROR %d\n",
+                                      failure);
+
+                if (length > 0)
+                    (void)send(lease, reply, (size_t)length, MSG_NOSIGNAL);
+                (void)close(lease);
+                lease = -1;
+                continue;
+            }
+            {
+                char reply[32];
+                int length = snprintf(reply, sizeof(reply), "READY %u\n",
+                                      server.generation);
+
+                if (length <= 0 ||
+                    send(lease, reply, (size_t)length, MSG_NOSIGNAL) !=
+                        length) {
+                    astra_remote_server_stop(&server);
+                    (void)close(lease);
+                    lease = -1;
+                    continue;
+                }
+            }
+        }
+        rfbProcessEvents(
+            server.screen,
+            server.screen->clientHead == NULL ? ASTRA_RFB_IDLE_US : 0);
+        astra_remote_reconcile_keys(&server.desktop);
+        if (server.desktop.pointer_dirty)
+            (void)astra_qmp_pointer(
+                &server.desktop,
+                astra_remote_wanted_buttons(&server.desktop));
+        if (astra_control_closed(lease)) {
+            (void)fprintf(stderr,
+                          "Astra remote desktop: lease released generation "
+                          "%u\n", server.generation);
+            astra_remote_server_stop(&server);
+            (void)close(lease);
+            lease = -1;
+            continue;
+        }
+        if (server.screen->clientHead == NULL)
+            continue;
+        {
+            struct astra_display_capture_info info;
+
+            if (ioctl(server.capture, ASTRA_DISPLAY_CAPTURE_IOC_CAPTURE,
+                      &info) != 0) {
+            perror("capture Astra display");
+                astra_remote_server_stop(&server);
+                (void)close(lease);
+                lease = -1;
+                continue;
+            }
+            if (info.width != ASTRA_DISPLAY_CAPTURE_WIDTH ||
+                info.height != ASTRA_DISPLAY_CAPTURE_HEIGHT ||
+                info.frame_bytes != ASTRA_DISPLAY_CAPTURE_FRAME_BYTES) {
+                fputs("Astra remote desktop: invalid capture contract\n",
+                      stderr);
+                astra_remote_server_stop(&server);
+                (void)close(lease);
+                lease = -1;
+                continue;
+            }
+            rfbMarkRectAsModified(server.screen, 0, 0, info.width,
+                                  info.height);
+        }
+    }
 
 done:
-    if (screen != NULL) {
-        rfbShutdownServer(screen, TRUE);
-        rfbScreenCleanup(screen);
+    astra_remote_server_stop(&server);
+    if (lease >= 0)
+        (void)close(lease);
+    if (listener >= 0) {
+        (void)close(listener);
+        (void)unlink(control_path);
     }
-    astra_qmp_close(&desktop);
-    while (desktop.keys != NULL) {
-        struct astra_remote_key *next = desktop.keys->next;
-
-        free(desktop.keys);
-        desktop.keys = next;
-    }
-    if (frame != MAP_FAILED)
-        (void)munmap((void *)(uintptr_t)frame,
-                     ASTRA_DISPLAY_CAPTURE_FRAME_BYTES);
-    if (capture >= 0)
-        (void)close(capture);
     return status;
 }

@@ -173,9 +173,9 @@ enum {
 };
 
 _BEGIN_STD_C
-char *nl_langinfo(nl_item);
+char *nl_langinfo(nl_item) __picolibc_export;
 #if __POSIX_VISIBLE >= 200809
-char *nl_langinfo_l(nl_item, locale_t);
+char *nl_langinfo_l(nl_item, locale_t) __picolibc_export;
 #endif
 _END_STD_C
 

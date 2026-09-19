@@ -1,35 +1,25 @@
 include ../../../../mk/m68k-cross.mk
 
+RUNTIME := ../../runtime
+include $(RUNTIME)/astra-link.mk
+include ../../libraries.mk
+
 CC := $(CROSS)gcc
 OBJCOPY := $(CROSS)objcopy
 SIZE := $(CROSS)size
+READELF := $(CROSS)readelf
 HOST_CC ?= cc
 NDK := ../../../../ndk
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
-	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
-LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
-	-Wl,--build-id=none -Wl,--gc-sections -T ../../runtime/astra_user.ld
+	-ffunction-sections -fdata-sections -fPIC $(ASTRA_DEBUG_FLAGS)
 CPPFLAGS := -I$(NDK)/include -I../../../include -I../../runtime/include
 TARGET := build/m68k/posixd.elf
 IMAGE := build/m68k/posixd
 OBJECTS := build/m68k/main.o build/m68k/process_table.o
-RUNTIME_LIB := ../../runtime/build/m68k/libastrart.a
-CRT0 := ../../runtime/build/m68k/crt0.o
-ASTRA_PROGRAM_OWNER_DIRS := ../../runtime $(NDK)
-include ../../program.mk
+LIBRARIES := $(ASTRA_RUNTIME_LIBRARY) $(ASTRA_COMPILER_LIBRARY)
+include ../../dynamic-program.mk
 TEST := build/host/test_process_table
-
-$(TARGET): $(OBJECTS) $(CRT0) $(RUNTIME_LIB) ../../runtime/astra_user.ld
-	@mkdir -p $(@D)
-	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(CRT0) $(OBJECTS) \
-		$(RUNTIME_LIB) -lgcc
-
-$(IMAGE): $(TARGET)
-	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@
-
-size: $(IMAGE)
-	$(SIZE) $(IMAGE)
 
 build/m68k/%.o: %.c process_table.h
 	@mkdir -p $(@D)
@@ -42,8 +32,6 @@ $(TEST): process_table.c process_table.h tests/test_process_table.c
 
 test: $(TEST)
 	./$(TEST)
-
-all: $(IMAGE)
 
 sanitize:
 	@true

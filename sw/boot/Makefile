@@ -47,7 +47,9 @@ USER_IMAGE_ID_SRCS = $(USER_IMAGE_DIR)/Makefile \
                      $(sort $(wildcard $(USER_IMAGE_DIR)/src/*.c \
                              $(USER_IMAGE_DIR)/include/*.h)) \
                      ../userspace/runtime/Makefile \
-                     ../userspace/runtime/astra_user.ld \
+                     ../userspace/runtime/astra_static_user.ld \
+                     ../userspace/runtime/astra_user_contract.ld \
+                     ../userspace/runtime/astra_user_sections.ld \
                      $(sort $(wildcard ../userspace/runtime/src/*.c \
                              ../userspace/runtime/src/m68k/*.S \
                              ../userspace/runtime/include/astra/*.h))

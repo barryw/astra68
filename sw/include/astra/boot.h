@@ -7,7 +7,7 @@
 #define ASTRA_BOOT_HANDOFF_MAGIC 0x4136384bu /* "A68K" */
 #define ASTRA_BOOT_INFO_MAGIC    0x41363842u /* "A68B" */
 #define ASTRA_BOOT_ABI_MAJOR     0u
-#define ASTRA_BOOT_ABI_MINOR     6u
+#define ASTRA_BOOT_ABI_MINOR     7u
 
 #define ASTRA_BOOT_INFO_ADDRESS       0x01ff8000u
 #define ASTRA_BOOT_SCRATCH_ADDRESS    0x01ff8000u
@@ -16,22 +16,8 @@
 #define ASTRA_ROM_SIZE                0x00080000u
 #define ASTRA_EARLY_LOG_ADDRESS       0x02000000u
 #define ASTRA_EARLY_LOG_SIZE          0x00004000u
-/*
- * The one firmware-supplied user image lands between the early log and the
- * kernel. Firmware reserves only the pages the image occupies and returns the
- * rest of the hole to the physical allocator, so MAX_SIZE is a ceiling on what
- * may be loaded rather than memory committed to it.
- *
- * ABI 0.4 raised that ceiling from 48 KiB to 256 KiB and moved the kernel up to
- * make room. 48 KiB was not a policy number — it was whatever fitted between
- * the early log and the kernel — and it was small enough that an initial image
- * carrying a filesystem was refused by POST while still fitting in ROM. Since
- * the unused remainder goes back to the allocator, the larger ceiling costs
- * nothing at run time.
- */
-#define ASTRA_USER_IMAGE_ADDRESS      0x02004000u
-#define ASTRA_USER_IMAGE_MAX_SIZE     0x00040000u
-#define ASTRA_USER_IMAGE_ALIGNMENT    0x00001000u
+#define ASTRA_BOOT_LOW_USABLE_ADDRESS \
+    (ASTRA_EARLY_LOG_ADDRESS + ASTRA_EARLY_LOG_SIZE)
 #define ASTRA_KERNEL_LOAD_ADDRESS     0x02044000u
 #define ASTRA_KERNEL_TRACE_ADDRESS    0x020c4000u
 #define ASTRA_KERNEL_TRACE_SIZE       0x00010000u
@@ -44,7 +30,18 @@
 #define ASTRA_KERNEL_TABLES_ADDRESS   0x02154000u
 #define ASTRA_KERNEL_TABLES_SIZE      0x00200000u
 #define ASTRA_KERNEL_RESERVED_SIZE    0x00310000u
-#define ASTRA_KERNEL_USABLE_ADDRESS   0x02354000u
+#define ASTRA_KERNEL_RESERVED_END     0x02354000u
+#define ASTRA_BOOT_LOW_USABLE_SIZE \
+    (ASTRA_KERNEL_LOAD_ADDRESS - ASTRA_BOOT_LOW_USABLE_ADDRESS)
+/*
+ * The firmware-supplied initial user image follows the kernel's fixed
+ * reservation. Firmware bounds it by the next actual reserved aperture (or
+ * RAM end), reserves only its page-rounded extent, and returns every other
+ * page to the allocator. Its limit is therefore the physical memory map, not
+ * a guessed software quota.
+ */
+#define ASTRA_USER_IMAGE_ADDRESS      ASTRA_KERNEL_RESERVED_END
+#define ASTRA_USER_IMAGE_ALIGNMENT    0x00001000u
 
 #define ASTRA_BOOT_FLAG_INTERRUPTS_MASKED (1u << 0)
 #define ASTRA_BOOT_FLAG_PMMU_DISABLED     (1u << 1)

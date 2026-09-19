@@ -4,49 +4,37 @@ CC := $(CROSS)gcc
 HOST_CC ?= cc
 SIZE := $(CROSS)size
 OBJCOPY := $(CROSS)objcopy
+READELF := $(CROSS)readelf
 RUNTIME := ../../runtime
+include $(RUNTIME)/astra-link.mk
+include ../../libraries.mk
 GRAPHICS := ../../graphics
 NDK := ../../../../ndk
 CPPFLAGS := -I../../../../ndk/include -I../../../include -I$(RUNTIME)/include \
 	-I$(GRAPHICS)/include -I../../../../fpga/arty/linux
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
-	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
-LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
-	-Wl,--build-id=none -Wl,--gc-sections -T $(RUNTIME)/astra_user.ld
+	-ffunction-sections -fdata-sections -fPIC $(ASTRA_DEBUG_FLAGS)
 TARGET := build/m68k/display.elf
 IMAGE := build/m68k/display
 OBJECT := build/m68k/main.o
-RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
-GRAPHICS_LIB := $(GRAPHICS)/build/m68k/libastragraphics.a
-NDK_LIB := $(NDK)/build/m68k/libastra.a
+GRAPHICS_RENDERER_LIB := \
+	$(GRAPHICS)/build/m68k/libastragraphics-renderer.a
 GRAPHICS_FONT_HEADERS := $(GRAPHICS)/build/generated/astra_font8x8.inc \
 	$(GRAPHICS)/build/generated/astra_ui_font.inc \
 	$(GRAPHICS)/build/generated/astra_mono_font.inc
 HOST_TEST := build/host/test_display
 HOST_TEST_SANITIZE := build/host/test_display_sanitize
-CRT0 := $(RUNTIME)/build/m68k/crt0.o
-ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(GRAPHICS) $(NDK)
-include ../../program.mk
-
-$(TARGET): $(OBJECT) $(CRT0) $(GRAPHICS_LIB) $(NDK_LIB) $(RUNTIME_LIB) \
-	$(RUNTIME)/astra_user.ld
-	@mkdir -p $(@D)
-	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(CRT0) $(OBJECT) \
-		$(GRAPHICS_LIB) $(NDK_LIB) $(RUNTIME_LIB) -lgcc
-
-$(NDK_LIB):
-	$(MAKE) -C $(NDK) all
-
-$(IMAGE): $(TARGET)
-	$(OBJCOPY) --strip-all $< $@
+LIBRARIES := $(ASTRA_GRAPHICS_LIBRARY) $(ASTRA_FONT_LIBRARY) \
+	$(ASTRA_SYSTEM_LIBRARY) $(ASTRA_RUNTIME_LIBRARY) \
+	$(ASTRA_COMPILER_LIBRARY)
+ASTRA_PROGRAM_PRIVATE_INPUTS := $(GRAPHICS_RENDERER_LIB)
+ASTRA_PROGRAM_PRIVATE_OWNER_TARGETS := $(GRAPHICS):renderer
+include ../../dynamic-program.mk
 
 $(OBJECT): main.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
-
-size: $(IMAGE)
-	$(SIZE) $(IMAGE)
 
 $(GRAPHICS_FONT_HEADERS):
 	$(MAKE) -C $(GRAPHICS) $(@:$(GRAPHICS)/%=%)

@@ -63,10 +63,13 @@ image's writable segment, where the loader maps every page of it at launch: a
 megabyte of heap would be a megabyte of frames committed by `status`, which
 allocates nothing. Pay for what you ask for.
 
-The heap reserves the complete anonymous window and spends no frames for the
-reservation. Each data or allocator-metadata page arrives on first touch,
-charged to this process. The address-map boundary is 496 MiB; installed RAM,
-the owner quota, and the kernel reserve are the physical limits.
+The heap reserves the largest contiguous extent still available in the
+anonymous window and spends no frames for the reservation. Runtime-loader
+bookkeeping may already occupy slots before libc first allocates; it therefore
+cannot require the entire window to be untouched. Each data or
+allocator-metadata page arrives on first touch, charged to this process. The
+address map, installed RAM, owner quota, and kernel reserve are the real
+limits.
 
 There is no `astra_heap_bytes` any more. A knob whose only correct setting is
 "as much as I turn out to need" is not a knob, and the ceiling that finally
@@ -119,14 +122,19 @@ out of tree with its Astra cross file. Git holds the source, not the generated
 library. Point `PICOLIBC` at the install prefix if it is not
 `~/picolibc-astra`.
 
-`kit/astra-posix.mk` is the startup kit for external POSIX source trees. It
-publishes the target flags, shared CRT0, linker script, libraries, and the
-program-record source. Compile that source once with the six
+The versioned NDK archive's `make/astra-posix.mk` is the supported startup kit
+for external POSIX source trees. It publishes the target flags, dynamic CRT0,
+linker script, versioned libraries, executable checker, and program-record
+source without requiring a source checkout. Compile that source once with the six
 `ASTRA_POSIX_PROGRAM_*` metadata definitions, then link it with
 `$(ASTRA_POSIX_CRT0)`, the application's objects, and `$(ASTRA_POSIX_LIBS)`.
 The same CRT0 starts native Astra programs through their own `astra_main`; the
-POSIX archive supplies the bridge to ordinary `main(argc, argv, envp)` only
-when a program needs it.
+POSIX library supplies the bridge to ordinary `main(argc, argv, envp)` only
+when a program needs it. The source-tree `kit/astra-posix.mk` follows the same
+contract for in-tree ports. Static startup and archives are an explicit
+self-contained opt-in rather than the application default. Astra's own
+production tree selects it for Supervisor and Storage; the NDK permits any
+developer to make the same deliberate self-containment tradeoff.
 
 ## The gate
 

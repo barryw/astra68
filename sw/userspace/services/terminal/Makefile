@@ -3,7 +3,10 @@ include ../../../../mk/m68k-cross.mk
 CC := $(CROSS)gcc
 SIZE := $(CROSS)size
 OBJCOPY := $(CROSS)objcopy
+READELF := $(CROSS)readelf
 RUNTIME := ../../runtime
+include $(RUNTIME)/astra-link.mk
+include ../../libraries.mk
 STORAGE := ../../storage
 VFS := ../../vfs
 STREAMS := ../../streams
@@ -19,45 +22,29 @@ CPPFLAGS := -Iinclude -I$(NDK)/include -I../../../include -I$(RUNTIME)/include \
 	-I$(GRAPHICS)/include -I$(CONFIG)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
-	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
-LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
-	-Wl,--build-id=none -Wl,--gc-sections
+	-ffunction-sections -fdata-sections -fPIC $(ASTRA_DEBUG_FLAGS)
 TARGET := build/m68k/terminal.elf
 IMAGE := build/m68k/terminal
 CATALOG := build/m68k/astra_events.cat
 OBJECTS := build/m68k/main.o build/m68k/console_session.o \
-	build/m68k/console_stream.o build/m68k/config_document.o
-RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
-VFS_LIB := $(VFS)/build/m68k/libastravfs.a
-STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
+	build/m68k/console_stream.o
 TERMINAL_LIB := $(TERMINAL)/build/m68k/libastraterminal.a
-NDK_LIB := $(NDK)/build/m68k/libastra.a
-CRT0 := $(RUNTIME)/build/m68k/crt0.o
+LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_GRAPHICS_LIBRARY) \
+	$(ASTRA_STREAMS_LIBRARY) $(ASTRA_FILESYSTEM_LIBRARY) \
+	$(ASTRA_SYSTEM_LIBRARY) $(ASTRA_RUNTIME_LIBRARY) \
+	$(ASTRA_COMPILER_LIBRARY)
 SUPERVISOR_CATALOG := $(SUPERVISOR)/build/m68k/astra_events.cat
 EVENT_BASE_LD := build/m68k/event_base.ld
 CATALOG_TOOL := ../../../../tools/system_event_catalog.py
-ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(VFS) $(STREAMS) \
-	$(TERMINAL) $(NDK) $(SUPERVISOR)
 ASTRA_PROGRAM_TARGETS := $(IMAGE) catalog-contract size
-include ../../program.mk
-
-$(TARGET): $(OBJECTS) $(EVENT_BASE_LD) $(CRT0) $(STREAMS_LIB) $(VFS_LIB) $(TERMINAL_LIB) \
-		$(NDK_LIB) $(RUNTIME_LIB) \
-		$(RUNTIME)/astra_user.ld
-	@mkdir -p $(@D)
-	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -T $(EVENT_BASE_LD) \
-		-T $(RUNTIME)/astra_user.ld -o $@ $(CRT0) $(OBJECTS) \
-		$(STREAMS_LIB) $(VFS_LIB) $(TERMINAL_LIB) \
-		$(NDK_LIB) $(RUNTIME_LIB) -lgcc
-
-$(NDK_LIB):
-	$(MAKE) -C $(NDK) all
+ASTRA_PROGRAM_PRIVATE_INPUTS := $(TERMINAL_LIB)
+ASTRA_PROGRAM_PRIVATE_OWNER_TARGETS := $(TERMINAL):all $(SUPERVISOR):all
+ASTRA_PROGRAM_LINK_PREREQUISITES := $(EVENT_BASE_LD)
+ASTRA_PROGRAM_LINK_SCRIPT_FLAGS := -T $(EVENT_BASE_LD)
+include ../../dynamic-program.mk
 
 $(SUPERVISOR_CATALOG):
 	$(MAKE) -C $(SUPERVISOR) all
-
-$(IMAGE): $(TARGET)
-	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@
 
 $(CATALOG): $(TARGET)
 	$(OBJCOPY) -O binary --only-section=.astra_events \
@@ -81,14 +68,6 @@ build/m68k/console_session.o: console_session.c include/console_session.h
 build/m68k/console_stream.o: console_stream.c include/console_stream.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
-
-build/m68k/config_document.o: $(CONFIG)/src/config_document.c \
-		$(CONFIG)/include/astra/config_document.h
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
-
-size: $(IMAGE)
-	$(SIZE) $(IMAGE)
 
 test sanitize:
 	@true

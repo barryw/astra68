@@ -59,7 +59,13 @@ _Static_assert(ASTRA_PROCESS_COUNT_MAX < (1u << PROC_NODE_SLOT_BITS),
                "PROC node slot field is too narrow");
 
 static AstraProcSnapshot snapshot[ASTRA_PROCESS_COUNT_MAX];
-static AstraProcLibrarySnapshot libraries[ASTRA_LIBRARY_SLOT_COUNT];
+#define PROC_LIBRARY_SNAPSHOT_BYTES 4096u
+#define PROC_LIBRARY_SNAPSHOT_BATCH \
+    (PROC_LIBRARY_SNAPSHOT_BYTES / sizeof(AstraProcLibrarySnapshot))
+static AstraProcLibrarySnapshot libraries[PROC_LIBRARY_SNAPSHOT_BATCH];
+
+_Static_assert(PROC_LIBRARY_SNAPSHOT_BATCH != 0u,
+               "PROC library transfer page holds no records");
 
 static uintptr_t
 process_node(uint32_t index, uint32_t generation, enum ProcProcessLeaf leaf)
@@ -79,22 +85,6 @@ refresh_snapshot(void)
         ASTRA_PROCESS_COUNT_MAX, &live);
 
     (void)live;
-    if (status == ASTRA_SYSCALL_OK)
-        return ASTRA_VFS_OK;
-    if (status == ASTRA_SYSCALL_ACCESS_DENIED)
-        return ASTRA_VFS_ERR_ACCESS;
-    return ASTRA_VFS_ERR_IO;
-}
-
-static uint32_t
-refresh_libraries(void)
-{
-    uint32_t count = 0u;
-    uint32_t status = astra_library_snapshot(
-        supervisor_loader_process_handle(), libraries,
-        ASTRA_LIBRARY_SLOT_COUNT, &count);
-
-    (void)count;
     if (status == ASTRA_SYSCALL_OK)
         return ASTRA_VFS_OK;
     if (status == ASTRA_SYSCALL_ACCESS_DENIED)
@@ -197,54 +187,70 @@ library_maps_process(const AstraProcLibrarySnapshot *library, uint32_t pid)
     return 0;
 }
 
-static void
+static uint32_t
 render_library_text(uint32_t pid, ProcText *text)
 {
+    uint32_t start = 0u;
+    uint32_t total = 0u;
+
     proc_text_string(text,
         "NAME VERSION ABI BUILD BASE SPAN CACHE RESIDENT MAPPED REFS PIDS\n",
         UINT32_MAX);
-    for (uint32_t slot = 0u; slot < ASTRA_LIBRARY_SLOT_COUNT; ++slot) {
-        const AstraProcLibrarySnapshot *library = &libraries[slot];
+    do {
+        uint32_t moved = 0u;
+        uint32_t status = astra_library_snapshot(
+            supervisor_loader_process_handle(), start, libraries,
+            PROC_LIBRARY_SNAPSHOT_BATCH, &moved, &total);
 
-        if (library->library.size == 0u ||
-            (pid != 0u && !library_maps_process(library, pid)))
-            continue;
-        proc_text_string(text, library->library.name,
-                         sizeof(library->library.name));
-        proc_text_byte(text, ' ');
-        proc_text_number(text, library->library.major);
-        proc_text_byte(text, '.');
-        proc_text_number(text, library->library.minor);
-        proc_text_byte(text, '.');
-        proc_text_number(text, library->library.patch);
-        proc_text_byte(text, ' ');
-        proc_text_number(text, library->library.abi_major);
-        proc_text_byte(text, '.');
-        proc_text_number(text, library->library.abi_minor);
-        proc_text_byte(text, ' ');
-        proc_text_hex(text, library->library.build_id);
-        proc_text_byte(text, ' ');
-        proc_text_hex(text, library->base);
-        proc_text_byte(text, ' ');
-        proc_text_number(text, library->image_span);
-        proc_text_byte(text, ' ');
-        proc_text_number(text, library->cache_bytes);
-        proc_text_byte(text, ' ');
-        proc_text_number(text, library->resident_bytes);
-        proc_text_byte(text, ' ');
-        proc_text_number(text, library->mapped_bytes);
-        proc_text_byte(text, ' ');
-        proc_text_number(text, library->reference_count);
-        proc_text_byte(text, ' ');
-        if (library->mapping_count == 0u)
-            proc_text_byte(text, '-');
-        for (uint32_t at = 0u; at < library->mapping_count; ++at) {
-            if (at != 0u)
-                proc_text_byte(text, ',');
-            proc_text_number(text, library->process_ids[at]);
+        if (status == ASTRA_SYSCALL_ACCESS_DENIED)
+            return ASTRA_VFS_ERR_ACCESS;
+        if (status != ASTRA_SYSCALL_OK || moved > total - start ||
+            (moved == 0u && start != total))
+            return ASTRA_VFS_ERR_IO;
+        for (uint32_t slot = 0u; slot < moved; ++slot) {
+            const AstraProcLibrarySnapshot *library = &libraries[slot];
+
+            if (pid != 0u && !library_maps_process(library, pid))
+                continue;
+            proc_text_string(text, library->library.name,
+                             sizeof(library->library.name));
+            proc_text_byte(text, ' ');
+            proc_text_number(text, library->library.major);
+            proc_text_byte(text, '.');
+            proc_text_number(text, library->library.minor);
+            proc_text_byte(text, '.');
+            proc_text_number(text, library->library.patch);
+            proc_text_byte(text, ' ');
+            proc_text_number(text, library->library.abi_major);
+            proc_text_byte(text, '.');
+            proc_text_number(text, library->library.abi_minor);
+            proc_text_byte(text, ' ');
+            proc_text_hex(text, library->library.build_id);
+            proc_text_byte(text, ' ');
+            proc_text_hex(text, library->base);
+            proc_text_byte(text, ' ');
+            proc_text_number(text, library->image_span);
+            proc_text_byte(text, ' ');
+            proc_text_number(text, library->cache_bytes);
+            proc_text_byte(text, ' ');
+            proc_text_number(text, library->resident_bytes);
+            proc_text_byte(text, ' ');
+            proc_text_number(text, library->mapped_bytes);
+            proc_text_byte(text, ' ');
+            proc_text_number(text, library->reference_count);
+            proc_text_byte(text, ' ');
+            if (library->mapping_count == 0u)
+                proc_text_byte(text, '-');
+            for (uint32_t at = 0u; at < library->mapping_count; ++at) {
+                if (at != 0u)
+                    proc_text_byte(text, ',');
+                proc_text_number(text, library->process_ids[at]);
+            }
+            proc_text_byte(text, '\n');
         }
-        proc_text_byte(text, '\n');
-    }
+        start += moved;
+    } while (start < total);
+    return ASTRA_VFS_OK;
 }
 
 static int
@@ -429,7 +435,7 @@ render_disk_libraries(ProcText *text)
                 break;
             }
             if (!astra_vfs_provider_index_parse(
-                    bytes, moved, name, abi, target, sizeof(target),
+                    bytes, moved, "LIBS", name, abi, target, sizeof(target),
                     &library)) {
                 failure = "PROC library provider parse";
                 status = ASTRA_VFS_ERR_PROTOCOL;
@@ -595,9 +601,8 @@ proc_open(void *context, const char *path, uint32_t flags,
     if (supervisor_proc_path_is_library_memory(path)) {
         ProcText text = {0};
 
-        if (refresh_libraries() != ASTRA_VFS_OK)
+        if (render_library_text(0u, &text) != ASTRA_VFS_OK)
             return ASTRA_VFS_ERR_IO;
-        render_library_text(0u, &text);
         *node = PROC_NODE_LIBRARY_MEMORY;
         info->size = text.length;
         info->kind = ASTRA_VFS_KIND_FILE;
@@ -640,9 +645,9 @@ proc_open(void *context, const char *path, uint32_t flags,
     } else {
         ProcText text = {0};
 
-        if (refresh_libraries() != ASTRA_VFS_OK)
+        if (render_library_text(snapshot[index].process.id, &text) !=
+            ASTRA_VFS_OK)
             return ASTRA_VFS_ERR_IO;
-        render_library_text(snapshot[index].process.id, &text);
         length = (uint32_t)text.length;
     }
     *node = process_node(index, snapshot[index].process.generation, leaf);
@@ -679,9 +684,8 @@ proc_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
             .capacity = length,
         };
 
-        if (refresh_libraries() != ASTRA_VFS_OK)
+        if (render_library_text(0u, &text) != ASTRA_VFS_OK)
             return ASTRA_VFS_ERR_IO;
-        render_library_text(0u, &text);
         *moved = text.moved;
         return ASTRA_VFS_OK;
     }
@@ -721,9 +725,9 @@ proc_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
                 .capacity = length,
             };
 
-            if (refresh_libraries() != ASTRA_VFS_OK)
+            if (render_library_text(snapshot[index].process.id, &text) !=
+                ASTRA_VFS_OK)
                 return ASTRA_VFS_ERR_IO;
-            render_library_text(snapshot[index].process.id, &text);
             *moved = text.moved;
             return ASTRA_VFS_OK;
         }
@@ -878,6 +882,12 @@ static const AstraVfsBackendOps proc_ops = {
     .readlink = astra_vfs_backend_no_readlink,
     .symlink = astra_vfs_backend_deny_symlink,
     .link = astra_vfs_backend_deny_link,
+    .open_at = astra_vfs_backend_no_open_at,
+    .unlink_at = astra_vfs_backend_no_unlink_at,
+    .chmod_node = astra_vfs_backend_no_chmod_node,
+    .chmod_at = astra_vfs_backend_no_chmod_at,
+    .filesystem_info = astra_vfs_backend_no_filesystem_info,
+    .stat_at = astra_vfs_backend_no_stat_at,
 };
 
 const AstraVfsBackendOps *

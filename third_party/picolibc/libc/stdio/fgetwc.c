@@ -92,3 +92,13 @@ fgetwc(FILE *stream)
     return getwc(stream);
 }
 #endif
+
+#ifdef __strong_reference
+__strong_reference(getwc_unlocked, fgetwc_unlocked);
+#else
+wint_t
+fgetwc_unlocked(FILE *stream)
+{
+    return getwc_unlocked(stream);
+}
+#endif

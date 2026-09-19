@@ -10,6 +10,10 @@ int astra_posix_path_resolve(const char *cwd, const char *path,
 int astra_posix_path_resolve_native(const char *cwd, const char *path,
                                     char *native, uint32_t native_capacity);
 
+/* True for slash-rooted paths and valid ASSIGN: paths, never for a colon in
+ * an ordinary relative component. */
+int astra_posix_path_is_absolute(const char *path);
+
 int astra_posix_link_target_to_native(const char *target, char *native,
                                        uint32_t capacity);
 int astra_posix_link_target_to_posix(const char *target, char *posix,

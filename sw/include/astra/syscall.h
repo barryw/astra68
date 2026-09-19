@@ -1,12 +1,13 @@
 #ifndef ASTRA_SYSCALL_H
 #define ASTRA_SYSCALL_H
 
+#include <astra/address_space.h>
 #include <astra/message_abi.h>
 #include <astra/limits.h>
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x0001002du
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010034u
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -123,7 +124,7 @@
 #define ASTRA_SYSCALL_CONSOLE_CURSOR   50
 #define ASTRA_SYSCALL_DISPLAY_SUBMIT   51
 #define ASTRA_SYSCALL_DISPLAY_COLLECT  52
-#define ASTRA_SYSCALL_LIBRARY_MAP      53
+/* 53 retired: whole-image shared-library mapping was replaced by 89-91. */
 /*
  * Hands the committed pages of a reserved area back, keeping the reservation.
  * data[1] is the address and data[2] the length; it answers with the number of
@@ -265,11 +266,52 @@
  * AstraProcLibrarySnapshot records and D1 returns the resident count.
  */
 #define ASTRA_SYSCALL_LIBRARY_SNAPSHOT          87
+/*
+ * Adds the supervisor-resolved PT_INTERP image to an unfinished load.
+ * D1 is the load handle, D2 points at its fixed ELF header, and D3 is its
+ * complete byte length. The exact next interpreter-header range is returned
+ * in D1:D2. Segment range replies identify their source in D3 using the
+ * ASTRA_PROCESS_LOAD_SOURCE_* values below.
+ */
+#define ASTRA_SYSCALL_PROCESS_LOAD_INTERPRETER 88
+#define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
+#define ASTRA_PROCESS_LOAD_SOURCE_INTERPRETER 1u
+/*
+ * Transactional shared-library loading from an immutable positioned reader.
+ * BEGIN consumes the fixed ELF header and complete file length and returns a
+ * load handle plus the exact next range in D2:D3. WRITE accepts only that
+ * range and returns the next. MAP publishes a reversible mapping in the
+ * calling process and returns its base and page-rounded span. COMMIT seals
+ * GNU RELRO and makes the mapping permanent.
+ *
+ * Closing an uncommitted handle aborts and unmaps it. The kernel may retain
+ * validated immutable cache pages only while another mapping references them.
+ * The kernel never opens paths or interprets a filesystem protocol.
+ */
+#define ASTRA_SYSCALL_LIBRARY_LOAD_BEGIN  89
+#define ASTRA_SYSCALL_LIBRARY_LOAD_WRITE  90
+#define ASTRA_SYSCALL_LIBRARY_LOAD_MAP    91
+#define ASTRA_SYSCALL_LIBRARY_LOAD_COMMIT 92
+/*
+ * Completes interpreter bootstrap for the calling process. D1 names the
+ * loader-built combined TLS template, D2 its exact byte size, D3 its
+ * power-of-two alignment, and D4 the exclusive page-rounded storage span.
+ * A zero address/size/span with alignment one declares no TLS. The kernel
+ * atomically installs current/future-thread TLS and seals the program,
+ * interpreter, and template RELRO pages. The call is accepted once, while the
+ * interpreted process still has only its initial thread.
+ */
+#define ASTRA_SYSCALL_PROCESS_DYNAMIC_COMMIT 93
+/* D1=thread handle with QUERY right, D2=AstraThreadInfo output. */
+#define ASTRA_SYSCALL_THREAD_INFO 94
 
 #define ASTRA_VM_PRIVATE_READ  (1u << 0)
 #define ASTRA_VM_PRIVATE_WRITE (1u << 1)
+#define ASTRA_VM_PRIVATE_RESERVE_EXACT   0u
+#define ASTRA_VM_PRIVATE_RESERVE_LARGEST 1u
 /* Complete anonymous window in the 32-bit Astra process address map. */
-#define ASTRA_VM_PRIVATE_ADDRESS_SPACE_MAX 0x1e000000u
+#define ASTRA_VM_PRIVATE_ADDRESS_SPACE_MAX \
+    (ASTRA_PRIVATE_ADDRESS_END - ASTRA_PRIVATE_ADDRESS_START)
 
 /*
  * The most one call copies. Small on purpose: a drain is a bounded page and a
@@ -395,7 +437,7 @@
 
 #ifndef ASTRA_AREA_ABI_CONSTANTS_DEFINED
 #define ASTRA_AREA_ABI_CONSTANTS_DEFINED 1
-#define ASTRA_AREA_SIZE_MAX 0x00400000u
+#define ASTRA_AREA_SIZE_MAX ASTRA_SHARED_AREA_SLOT_SIZE
 #define ASTRA_AREA_MAP_READ  (1u << 0)
 #define ASTRA_AREA_MAP_WRITE (1u << 1)
 /*

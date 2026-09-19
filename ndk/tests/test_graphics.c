@@ -86,29 +86,6 @@ static void test_initializers(void)
     CHECK(pointer.size == sizeof(pointer) && pointer.pixels == 0);
 }
 
-static void test_graphics_library_semver(void)
-{
-    AstraGraphicsLibraryV2 library = {0};
-
-    library.abi_major = 2u;
-    library.abi_minor = 1u;
-    library.structure_size = ASTRA_GRAPHICS_LIBRARY_2_1_SIZE;
-    CHECK(astra_graphics_library_supports(
-        &library, 1u, ASTRA_GRAPHICS_LIBRARY_2_1_SIZE));
-    --library.structure_size;
-    CHECK(!astra_graphics_library_supports(
-        &library, 1u, ASTRA_GRAPHICS_LIBRARY_2_1_SIZE));
-    library.structure_size = ASTRA_GRAPHICS_LIBRARY_2_0_SIZE;
-    library.abi_minor = 0u;
-    CHECK(astra_graphics_library_supports(
-        &library, 0u, ASTRA_GRAPHICS_LIBRARY_2_0_SIZE));
-    CHECK(!astra_graphics_library_supports(
-        &library, 1u, ASTRA_GRAPHICS_LIBRARY_2_1_SIZE));
-    library.abi_major = 1u;
-    CHECK(!astra_graphics_library_supports(
-        &library, 0u, ASTRA_GRAPHICS_LIBRARY_2_0_SIZE));
-}
-
 static void test_display_layouts(void)
 {
     AstraDisplayMode mode = ASTRA_DISPLAY_MODE_INIT;
@@ -418,7 +395,6 @@ static void test_empty_cleanup(void)
 int main(void)
 {
     test_initializers();
-    test_graphics_library_semver();
     test_display_layouts();
     test_unavailable_objects();
     test_sprite_and_raster_validation();

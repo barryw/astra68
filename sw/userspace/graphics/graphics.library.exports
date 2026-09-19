@@ -1,0 +1,24 @@
+ASTRA_GRAPHICS_2.1 {
+    global:
+        astra_draw_list_copy;
+        astra_draw_list_view_adopt;
+        astra_draw_list_view_init;
+        astra_shared_draw_list_adopt;
+        astra_shared_draw_list_create;
+        astra_shared_surface_adopt;
+        astra_shared_surface_close;
+        astra_shared_surface_create;
+        astra_surface_blit;
+        astra_surface_blit_round;
+        astra_surface_blit_round_bottom;
+        astra_surface_clear;
+        astra_surface_clip;
+        astra_surface_fill;
+        astra_surface_fill_round;
+        astra_surface_line;
+        astra_surface_rgb565;
+        astra_surface_view_init;
+        astra_text_box_scroll;
+    local:
+        *;
+};

@@ -1,5 +1,8 @@
 ifndef ASTRA_M68K_CROSS_MK
 ASTRA_M68K_CROSS_MK := 1
+ASTRA_M68K_CROSS_FILE := $(abspath $(lastword $(MAKEFILE_LIST)))
+ASTRA_M68K_CROSS_DIR := $(dir $(ASTRA_M68K_CROSS_FILE))
+ASTRA_REPOSITORY_BUILD_ROOT := $(abspath $(ASTRA_M68K_CROSS_DIR)/..)
 
 # Select an installed freestanding m68k toolchain while preserving CROSS=...
 # supplied by callers and release automation.
@@ -53,7 +56,9 @@ ASTRA_TOOLCHAIN_CONTENT_ID := $(shell \
 		printf '%s=%s\n' "$$name" "$$path"; \
 		test ! -f "$$path" || cksum "$$path"; \
 	  done; \
-	  for archive in libc.a libm.a libgcc.a libstdc++.a libsupc++.a; do \
+	  for archive in libc.a libm.a libgcc.a libgcc_builtins_shared.a \
+		libgcc_unwind_shared.a libstdc++.a libstdc++_shared.a \
+		libsupc++.a crtbegin.o crtend.o crtbeginS.o crtendS.o; do \
 		path=$$("$$cc" -print-file-name=$$archive 2>/dev/null); \
 		test ! -f "$$path" || cksum "$$path"; \
 	  done; \
@@ -65,13 +70,31 @@ ASTRA_TOOLCHAIN_CONTENT_ID := $(shell \
 export ASTRA_TOOLCHAIN_CONTENT_ID
 endif
 
-ASTRA_TOOLCHAIN_ID = $(shell \
-	printf '%s\n' '$(ASTRA_TOOLCHAIN_CONTENT_ID)' '$(ASTRA_DEBUG_FLAGS)' \
+# Build identity is immutable within one Make invocation.  A recursive value
+# used to recalculate after every generated .d include, both forking hundreds
+# of checksum processes and allowing one invocation to name multiple identity
+# stamps.  Hash source policy files once; generated dependency files remain
+# normal prerequisites and must never redefine the toolchain.
+ASTRA_BUILD_POLICY_INPUTS := $(sort \
+	$(filter-out %.d,$(MAKEFILE_LIST)) \
+	$(wildcard $(ASTRA_M68K_CROSS_DIR)*.mk \
+		$(ASTRA_M68K_CROSS_DIR)*.ld \
+		$(ASTRA_REPOSITORY_BUILD_ROOT)/sw/userspace/program.mk \
+		$(ASTRA_REPOSITORY_BUILD_ROOT)/sw/userspace/libraries.mk \
+		$(ASTRA_REPOSITORY_BUILD_ROOT)/sw/userspace/runtime/*.mk \
+		$(ASTRA_REPOSITORY_BUILD_ROOT)/sw/userspace/runtime/*.ld))
+ASTRA_TOOLCHAIN_ID := $(shell \
+	{ printf '%s\n' '$(ASTRA_TOOLCHAIN_CONTENT_ID)' '$(ASTRA_DEBUG_FLAGS)' \
 		'$(ASTRA_TARGET_ABI_FLAGS)' '$(CPPFLAGS)' '$(CFLAGS)' \
-		'$(CXXFLAGS)' '$(TARGET_FLAGS)' '$(CXX_TARGET_FLAGS)' \
-		'$(LDFLAGS)' '$(LINK_FLAGS)' | \
+		'$(CXXFLAGS)' '$(COMMON_FLAGS)' '$(TARGET_FLAGS)' \
+		'$(CXX_TARGET_FLAGS)' '$(LIBRARY_FLAGS)' \
+		'$(ASTRA_SHARED_PIC_FLAGS)' '$(ASTRA_SHARED_LINK_FLAGS)' \
+		'$(LDFLAGS)' '$(LINK_FLAGS)'; \
+	  for makefile in $(ASTRA_BUILD_POLICY_INPUTS); do \
+		cksum "$$makefile"; \
+	  done; } | \
 	cksum | awk '{print $$1 "-" $$2}')
-ASTRA_TOOLCHAIN_STAMP = build/.toolchain/$(ASTRA_TOOLCHAIN_ID)
+ASTRA_TOOLCHAIN_STAMP := build/.toolchain/$(ASTRA_TOOLCHAIN_ID)
 
 ASTRA_EXISTING_PRODUCTS := $(shell test ! -d build || \
 	find build -type f ! -path 'build/.toolchain/*')
@@ -88,20 +111,41 @@ build/.toolchain/%:
 define ASTRA_REPLACE_ARCHIVE
 	@mkdir -p $(@D)
 	rm -f $@.tmp
-	$(AR) rcs $@.tmp $^
+	$(AR) rcs $@.tmp $(filter %.o,$^)
 	mv $@.tmp $@
 endef
 
-# Astra's loader accepts only base-relative relocations into writable segments.
-# Keep that contract in one place so every Kit rejects non-PIC inputs at build
-# time instead of failing later during system startup.
+# Keep the loader's supported m68k relocation set in one build-time gate so a
+# Kit cannot reach startup with a relocation the eager dynamic loader rejects.
+# Symbol relocations are required for real shared dependencies; text
+# relocations remain forbidden.
 define ASTRA_CHECK_DSO
 	@set -e; for library in $(1); do \
+		header=$$($(READELF) -hW "$$library"); \
+		program=$$($(READELF) -lW "$$library"); \
 		dynamic=$$($(READELF) -dW "$$library"); \
+		printf '%s\n' "$$header" | grep -q 'Type:.*DYN'; \
+		printf '%s\n' "$$program" | grep -q ' DYNAMIC '; \
+		printf '%s\n' "$$program" | grep -q ' GNU_RELRO '; \
+		! printf '%s\n' "$$program" | grep -q ' INTERP '; \
+		printf '%s\n' "$$dynamic" | grep -q SONAME; \
+		printf '%s\n' "$$dynamic" | grep -q BIND_NOW; \
 		! printf '%s\n' "$$dynamic" | grep -q TEXTREL; \
-		relocations=$$($(READELF) -rW "$$library"); \
-		! printf '%s\n' "$$relocations" | \
-			grep -E 'R_68K_(GLOB_DAT|JMP_SLOT|32|PC32)'; \
+		leaked=$$($(READELF) --wide --dyn-syms "$$library" | awk \
+			'$$7 != "UND" && $$8 ~ /^(astra_library|ASTRA_(PAGE_SIZE|LIBRARY_(METADATA|SIZE|EXPORTS_ADDRESS))|__astra_library_(start|end))(@@?.*)?$$/ {print $$8}'); \
+		test -z "$$leaked" || { \
+			printf '%s: leaked shared-library layout symbols:\n%s\n' \
+				"$$library" "$$leaked" >&2; \
+			exit 1; \
+		}; \
+		unsupported=$$($(READELF) -rW "$$library" | awk \
+			'$$3 ~ /^R_68K_/ && $$3 !~ /^R_68K_(NONE|32|PC32|GLOB_DAT|JMP_SLOT|RELATIVE|TLS_DTPMOD32|TLS_DTPREL32|TLS_TPREL32)$$/ {print $$3}' | \
+			sort -u); \
+		test -z "$$unsupported" || { \
+			printf '%s: unsupported dynamic relocations:\n%s\n' \
+				"$$library" "$$unsupported" >&2; \
+			exit 1; \
+		}; \
 	done
 endef
 

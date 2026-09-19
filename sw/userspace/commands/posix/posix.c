@@ -1,3 +1,4 @@
+#define _DEFAULT_SOURCE 1
 #define _XOPEN_SOURCE 700
 
 /*
@@ -135,6 +136,16 @@ enum {
     FAIL_SYMLINK_OPEN = 86,
     FAIL_SYMLINK_UNLINK = 87,
     FAIL_DURABILITY = 88,
+    FAIL_DIRECTORY_POSITION = 89,
+    FAIL_FDCLOSEDIR = 90,
+    FAIL_ACCESS_EXEC_DENIED = 91,
+    FAIL_ACCESS_EXEC_ALLOWED = 92,
+    FAIL_EXEC_NONEXECUTABLE = 93,
+    FAIL_EXEC_SLASH_PATH = 94,
+    FAIL_EMPTY_PATH = 95,
+    FAIL_AT_PATHS = 96,
+    FAIL_FSTAT_STREAM = 97,
+    FAIL_FSTAT_BAD_DESCRIPTOR = 98,
 };
 
 #define DIRECTORY "posixcheck"
@@ -333,6 +344,7 @@ main(int argc, char **argv)
     struct stat about;
     DIR *directory;
     struct dirent *entry;
+    char first_directory_entry[sizeof(entry->d_name)];
     int found = 0;
     int fd;
 
@@ -531,6 +543,11 @@ main(int argc, char **argv)
     if (fstat(fd, &about) != 0 || !S_ISREG(about.st_mode) ||
         about.st_size != (off_t)(sizeof(BODY) - 1u))
         return complain(FAIL_FSTAT, "fstat");
+    if (fstat(STDOUT_FILENO, &about) != 0 || !S_ISCHR(about.st_mode))
+        return complain(FAIL_FSTAT_STREAM, "fstat stream");
+    errno = 0;
+    if (fstat(-1, &about) != -1 || errno != EBADF)
+        return FAIL_FSTAT_BAD_DESCRIPTOR;
     (void)memset(buffer, 0, sizeof(buffer));
     if (read(fd, buffer, sizeof(buffer) - 1u) !=
         (ssize_t)(sizeof(BODY) - 1u))
@@ -553,9 +570,46 @@ main(int argc, char **argv)
 
     if (stat(DIRECTORY "/" NAME, &about) != 0)
         return complain(FAIL_STAT, "stat");
+    errno = 0;
+    if (stat("", &about) == 0 || errno != ENOENT)
+        return FAIL_EMPTY_PATH;
     if (about.st_size != (off_t)(sizeof(BODY) - 1u) ||
         !S_ISREG(about.st_mode))
         return FAIL_STAT_SIZE;
+    errno = 0;
+    if (access(DIRECTORY "/" NAME, X_OK) == 0 || errno != EACCES)
+        return FAIL_ACCESS_EXEC_DENIED;
+    {
+        char *arguments[] = {NAME, NULL};
+
+        errno = 0;
+        if (execve(DIRECTORY "/" NAME, arguments, environ) != -1 ||
+            errno != EACCES)
+            return FAIL_EXEC_NONEXECUTABLE;
+    }
+    if (chmod(DIRECTORY "/" NAME, 0755) != 0 ||
+        access(DIRECTORY "/" NAME, X_OK) != 0)
+        return complain(FAIL_ACCESS_EXEC_ALLOWED, "executable access");
+    fd = open(DIRECTORY, O_RDONLY | O_DIRECTORY);
+    if (fd < 0)
+        return complain(FAIL_AT_PATHS, "openat directory");
+    {
+        int child = openat(fd, NAME, O_RDONLY);
+
+        if (child < 0 || close(child) != 0)
+            return complain(FAIL_AT_PATHS, "openat relative");
+    }
+    errno = 0;
+    if (openat(fd, "", O_RDONLY) != -1 || errno != ENOENT)
+        return FAIL_AT_PATHS;
+    errno = 0;
+    if (fchmodat(fd, "", 0600, 0) != -1 || errno != ENOENT)
+        return FAIL_AT_PATHS;
+    errno = 0;
+    if (unlinkat(fd, "", 0) != -1 || errno != ENOENT)
+        return FAIL_AT_PATHS;
+    if (close(fd) != 0)
+        return complain(FAIL_AT_PATHS, "openat directory close");
 
     if (symlink(NAME, DIRECTORY "/" LINK) != 0)
         return complain(FAIL_SYMLINK_CREATE, "symlink");
@@ -602,12 +656,33 @@ main(int argc, char **argv)
     directory = opendir(DIRECTORY);
     if (directory == NULL)
         return complain(FAIL_OPENDIR, "opendir");
+    if (telldir(directory) != 0L || (entry = readdir(directory)) == NULL)
+        return complain(FAIL_DIRECTORY_POSITION, "initial directory position");
+    (void)strncpy(first_directory_entry, entry->d_name,
+                  sizeof(first_directory_entry) - 1u);
+    first_directory_entry[sizeof(first_directory_entry) - 1u] = '\0';
+    if (telldir(directory) != 1L)
+        return complain(FAIL_DIRECTORY_POSITION, "advanced directory position");
+    rewinddir(directory);
+    if (telldir(directory) != 0L || (entry = readdir(directory)) == NULL ||
+        strcmp(entry->d_name, first_directory_entry) != 0)
+        return complain(FAIL_DIRECTORY_POSITION, "rewinddir");
+    seekdir(directory, 1L);
+    if (telldir(directory) != 1L)
+        return complain(FAIL_DIRECTORY_POSITION, "seekdir");
+    seekdir(directory, 0L);
     while ((entry = readdir(directory)) != NULL)
         if (strcmp(entry->d_name, NAME) == 0)
             found = 1;
     (void)closedir(directory);
     if (!found)
         return FAIL_READDIR;
+    fd = open(DIRECTORY, O_RDONLY | O_DIRECTORY);
+    if (fd < 0 || (directory = fdopendir(fd)) == NULL)
+        return complain(FAIL_FDCLOSEDIR, "fdopendir");
+    if (fdclosedir(directory) != fd || fstat(fd, &about) != 0 ||
+        !S_ISDIR(about.st_mode) || close(fd) != 0)
+        return complain(FAIL_FDCLOSEDIR, "fdclosedir ownership");
     if (rename(DIRECTORY "/" NAME, DIRECTORY "/" RENAMED) != 0)
         return complain(FAIL_RENAME, "rename");
     if (stat(DIRECTORY "/" NAME, &about) == 0 || errno != ENOENT)
@@ -705,6 +780,23 @@ main(int argc, char **argv)
                 return FAIL_SBRK_USABLE;
         if (sbrk(-(intptr_t)span) == (void *)-1)
             return complain(FAIL_SBRK_SHRINK, "sbrk shrink again");
+    }
+
+    {
+        pid_t child = fork();
+        int child_status;
+
+        if (child < 0)
+            return complain(FAIL_EXEC_SLASH_PATH, "slash-path fork");
+        if (child == 0) {
+            char *arguments[] = {"status", "23", NULL};
+
+            execve("/commands/status", arguments, environ);
+            _exit(FAIL_EXEC_SLASH_PATH);
+        }
+        if (waitpid(child, &child_status, 0) != child ||
+            !WIFEXITED(child_status) || WEXITSTATUS(child_status) != 23)
+            return complain(FAIL_EXEC_SLASH_PATH, "slash-path execve");
     }
 
     if (system(NULL) == 0)

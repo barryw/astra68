@@ -10,12 +10,13 @@ NDK := ../../../ndk
 CPPFLAGS := -I$(NDK)/include -I../../include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror
 DEPFLAGS := -MMD -MP
-TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin $(ASTRA_DEBUG_FLAGS)
+TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
+	-fPIC -ftls-model=initial-exec $(ASTRA_DEBUG_FLAGS)
 HOST_FLAGS := -O2
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 
 TARGET := build/m68k/libastraterminal.a
-TARGET_OBJECTS := build/m68k/terminal.o build/m68k/ndk_keymap.o
+TARGET_OBJECTS := build/m68k/terminal.o
 HOST_TEST := build/host/test_terminal
 HOST_KEYMAP_TEST := build/host/test_keymap
 TERMINFO_SOURCE := terminfo/astra-256color.terminfo
@@ -36,9 +37,7 @@ build/m68k/%.o: src/%.c $(NDK)/include/astra/terminal.h \
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
 
-build/m68k/ndk_keymap.o: $(NDK)/src/keymap.c $(NDK)/include/astra/keymap.h
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
+$(TARGET_OBJECTS): Makefile
 
 $(HOST_TEST): src/terminal.c tests/test_terminal.c \
 		$(NDK)/include/astra/terminal.h

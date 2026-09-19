@@ -15,7 +15,6 @@
 #include <astra/types.h>
 #include <astra/fixed.h>
 #include <astra/resource.h>
-#include <astra/shared_library.h>
 #include <astra/application.h>
 #include <astra/area.h>
 #include <astra/datetime.h>

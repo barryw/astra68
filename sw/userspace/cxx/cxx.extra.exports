@@ -1,0 +1,2 @@
+# No hand-written runtime exports. C++ symbols come from libstdc++; exception
+# unwinding is owned by unwind.library so every DSO shares one implementation.

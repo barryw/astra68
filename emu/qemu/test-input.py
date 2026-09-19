@@ -10,6 +10,8 @@ import subprocess
 import tempfile
 import time
 
+from qemu_runtime import DEFAULT_MEMORY, DEFAULT_MEMORY_BYTES
+
 
 VESTA = 0xFFF00000
 IRQ_RAW = VESTA + 0x300
@@ -25,6 +27,13 @@ INPUT_OVERFLOW = 1 << 9
 INPUT_POP = 1 << 0
 INPUT_ACK_OVERFLOW = 1 << 1
 INPUT_IRQ = 1 << 5
+
+
+def require_default_memory(actual):
+    if actual != DEFAULT_MEMORY_BYTES:
+        raise AssertionError(
+            "RAM size is %d bytes, expected %d" %
+            (actual, DEFAULT_MEMORY_BYTES))
 
 
 class LineSocket:
@@ -115,7 +124,7 @@ class AstraInputTest:
         self.detect_endian()
         assert self.read32(VESTA + 0x01C) == 0x00068040
         assert self.read32(VESTA + 0x020) == 0x51454D55  # QEMU
-        assert self.read32(VESTA + 0x030) == 128 * 1024 * 1024
+        require_default_memory(self.read32(VESTA + 0x030))
         assert self.read32(VESTA + 0x704) == 0x00010001
         assert self.read32(VESTA + 0x708) == 0x00000003
         assert self.read32(INPUT_STATUS) == 0
@@ -185,7 +194,8 @@ def main():
 
         command = [
             args.qemu, "-machine", "astra68,accel=qtest",
-            "-bios", rom, "-S", "-display", "none", "-nodefaults",
+            "-m", DEFAULT_MEMORY, "-bios", rom, "-S", "-display", "none",
+            "-nodefaults",
             "-qtest", f"unix:{qtest_path},server=on,wait=off",
             "-qmp", f"unix:{qmp_path},server=on,wait=off",
         ]

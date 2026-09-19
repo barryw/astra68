@@ -7,8 +7,8 @@
 #endif
 
 #define ASTRA_STARTUP_MAGIC 0x41535452u
-#define ASTRA_STARTUP_ABI_VERSION 4u
-#define ASTRA_STARTUP_INFO_SIZE 64u
+#define ASTRA_STARTUP_ABI_VERSION 6u
+#define ASTRA_STARTUP_INFO_SIZE 84u
 #define ASTRA_STARTUP_CAPABILITY_SIZE 92u
 /* The kernel publishes startup state in the machine's one 4 KiB VM page. */
 #define ASTRA_STARTUP_BLOCK_SIZE 4096u
@@ -30,13 +30,20 @@
 #define ASTRA_PROCESS_ID_MAX 65535u
 
 #define ASTRA_STARTUP_FLAG_SUPERVISOR (1u << 0)
+/* The initial PC belongs to the mapped interpreter, not the program. */
+#define ASTRA_STARTUP_FLAG_INTERPRETED (1u << 1)
+#define ASTRA_STARTUP_FLAG_MASK \
+    (ASTRA_STARTUP_FLAG_SUPERVISOR | ASTRA_STARTUP_FLAG_INTERPRETED)
 
 #define ASTRA_PROCESS_INFO_SIZE 80u
+#define ASTRA_THREAD_INFO_SIZE 48u
 
 /* The scheduler's complete ordinary-user band. Larger values run first. */
 #define ASTRA_PROCESS_PRIORITY_MIN 1u
 #define ASTRA_PROCESS_PRIORITY_NORMAL 16u
 #define ASTRA_PROCESS_PRIORITY_MAX 23u
+/* Equal-priority runnable threads rotate at this scheduler quantum. */
+#define ASTRA_PROCESS_QUANTUM_NS UINT32_C(5000000)
 #define ASTRA_PROCESS_NICE_MIN \
     ((int)ASTRA_PROCESS_PRIORITY_NORMAL - (int)ASTRA_PROCESS_PRIORITY_MAX)
 #define ASTRA_PROCESS_NICE_MAX \
@@ -213,6 +220,7 @@ _Static_assert(sizeof(AstraExecRequest) == ASTRA_EXEC_REQUEST_SIZE,
 
 #define ASTRA_CAPABILITY_PROCESS "PROCESS"
 #define ASTRA_CAPABILITY_THREAD  "THREAD"
+/* Read-only library namespace consumed and closed by loader.library. */
 
 #ifndef __ASSEMBLER__
 
@@ -235,6 +243,16 @@ typedef struct AstraStartupInfo {
     uint32_t launch_source;
     uint32_t handoff_address;
     uint32_t handoff_size;
+    /* Original executable entry retained while the interpreter bootstraps. */
+    uint32_t program_entry;
+    /* Load bias added to every interpreter virtual address. */
+    uint32_t interpreter_base;
+    /* Exact mapped interpreter span, including holes between segments. */
+    uint32_t interpreter_span;
+    /* Interpreter entry after applying `interpreter_base`. */
+    uint32_t interpreter_entry;
+    /* Exact PT_LOAD memory bytes writable by the original executable. */
+    uint32_t program_writable_bytes;
 } AstraStartupInfo;
 
 /*
@@ -269,8 +287,32 @@ typedef struct AstraProcessInfo {
     uint32_t fault_address;
     uint16_t fault_vector;
     uint16_t fault_status;
-    uint32_t fault_reserved;
+    /* Lifetime high-water mark of owner-charged resident memory, in frames. */
+    uint32_t peak_resident_frames;
 } AstraProcessInfo;
+
+/*
+ * What a process may learn about a thread it holds a QUERY capability to.
+ * Runtime uses the scheduler's own accounting interval, so a caller querying
+ * itself receives all execution completed before the query entered Axiom.
+ */
+typedef struct AstraThreadInfo {
+    uint32_t size;
+    uint32_t id;
+    uint32_t generation;
+    uint32_t process_id;
+    uint32_t run_count;
+    uint32_t timer_ticks;
+    uint32_t syscall_count;
+    uint32_t activity;
+    uint64_t runtime_ns;
+    uint16_t handle_references;
+    uint8_t state;
+    uint8_t base_priority;
+    uint8_t effective_priority;
+    uint8_t suspended;
+    uint8_t reserved[2];
+} AstraThreadInfo;
 
 typedef struct AstraStartupCapability {
     char     name[ASTRA_CAPABILITY_NAME_MAX];
@@ -285,6 +327,8 @@ _Static_assert(sizeof(AstraStartupInfo) == ASTRA_STARTUP_INFO_SIZE,
                "startup-info ABI size changed");
 _Static_assert(sizeof(AstraProcessInfo) == ASTRA_PROCESS_INFO_SIZE,
                "process-info ABI size changed");
+_Static_assert(sizeof(AstraThreadInfo) == ASTRA_THREAD_INFO_SIZE,
+               "thread-info ABI size changed");
 
 /*
  * Compares two capability names. Bounded on both sides: a field with no NUL in

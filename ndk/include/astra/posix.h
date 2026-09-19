@@ -7,6 +7,9 @@
 
 #include <astra/process.h>
 
+/** Standard C program entry accepted by the POSIX startup adapter. */
+typedef int (*AstraPosixMain)(int argc, char **argv);
+
 /*
  * The POSIX layer, and what it is for.
  *
@@ -47,5 +50,19 @@ uint32_t astra_posix_signal_generation(void);
  * @return Zero on success, otherwise -1 with `errno` set.
  */
 int astra_posix_write_all(int descriptor, const void *bytes, size_t length);
+
+/**
+ * Enter a standard C program through Astra's shared POSIX initialization.
+ *
+ * The NDK's per-program adapter passes that executable's `main` here. Keeping
+ * the callback at the executable boundary lets `libc.library` own all common
+ * startup work without an unresolved dependency on one particular program.
+ *
+ * @param startup Valid native process startup record.
+ * @param program Executable's standard C entry point.
+ * @return Program exit status, or a nonzero startup failure status.
+ */
+int astra_posix_enter(const AstraStartupInfo *startup,
+                      AstraPosixMain program);
 
 #endif

@@ -1,4 +1,4 @@
-include ../../../mk/m68k-cross.mk
+include ../posix/kit/astra-posix.mk
 
 # The programs that live in COMMANDS:.
 #
@@ -12,68 +12,87 @@ include ../../../mk/m68k-cross.mk
 # and what is not is proved by the terminal gate running them on the machine.
 
 CC := $(CROSS)gcc
-AR := $(CROSS)gcc-ar
-RANLIB := $(CROSS)gcc-ranlib
+CXX := $(CROSS)g++
 SIZE := $(CROSS)size
 OBJCOPY := $(CROSS)objcopy
-RUNTIME := ../runtime
-STREAMS := ../streams
-VFS := ../vfs
-POSIX := ../posix
+READELF := $(CROSS)readelf
+RUNTIME := $(ASTRA_POSIX_RUNTIME)
+STREAMS := $(ASTRA_POSIX_STREAMS)
+VFS := $(ASTRA_POSIX_VFS)
+POSIX := $(ASTRA_POSIX_LAYER)
 NTP := ../ntp
 NETWORK := ../network
-NDK := ../../../ndk
-NDK_LIB := $(NDK)/build/m68k/libastra.a
+LUA_RUNTIME := ../lua
+COMPILER := ../compiler
+CXX_RUNTIME := ../cxx
+TERMINFO := ../terminfo
+NDK := $(ASTRA_POSIX_NDK)
 LUA := ../../../third_party/lua/src
 VIM_SOURCE ?= $(HOME)/vim-astra-v9.2.1001/src
-VIM_TERMINFO_SOURCE ?= $(HOME)/ncurses-astra-6.6
-VIM_TERMINFO ?= $(HOME)/ncurses-astra
-VIM_TERMINFO_BUILD ?= $(HOME)/ncurses-astra-build
+NCURSES_PREFIX ?= $(HOME)/ncurses-astra
 VIM_IMAGE := $(VIM_SOURCE)/vim
 ZSH_SOURCE ?= $(HOME)/zsh-astra-v5.9.2
 ZSH_BUILD ?= $(HOME)/zsh-astra-build
 ZSH_IMAGE := $(ZSH_BUILD)/Src/zsh
 ZSH_CONFIG_SITE := $(CURDIR)/zsh/config.site
-# picolibc, built out of tree: see third_party/picolibc/ASTRA_VENDOR.md.
-PICOLIBC ?= $(HOME)/picolibc-astra
-CPPFLAGS := -I../../include -I$(RUNTIME)/include -I$(STREAMS)/include \
-	-I$(VFS)/include -I$(POSIX)/include -I$(NDK)/include \
-	-I$(NTP)/include \
-	-I$(NETWORK)/include \
-	-isystem $(PICOLIBC)/include
+CPPFLAGS := $(ASTRA_POSIX_CPPFLAGS) -I$(NTP)/include \
+	-I$(NETWORK)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
+CXX_FLAGS := -std=c++17 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
-TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -flto -ffreestanding -fno-builtin \
-	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
-LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
-	-Wl,--build-id=none -Wl,--gc-sections \
-	-Wl,--undefined=astra_posix_entry_contract -T $(RUNTIME)/astra_user.ld
+TARGET_FLAGS := $(filter-out -Os,$(ASTRA_POSIX_CFLAGS)) -O3 -flto \
+	$(ASTRA_DEBUG_FLAGS)
+CXX_TARGET_FLAGS := $(filter-out -Os,$(ASTRA_POSIX_CXXFLAGS)) -O3 -flto \
+	$(ASTRA_DEBUG_FLAGS)
 VENDOR_INCLUDE_FLAGS := -I$(abspath ../../include) \
 	-I$(abspath $(RUNTIME)/include) -I$(abspath $(STREAMS)/include) \
 	-I$(abspath $(VFS)/include) -I$(abspath $(POSIX)/include) \
-	-I$(abspath $(NDK)/include) -I$(VIM_TERMINFO)/include \
-	-I$(VIM_TERMINFO)/include/ncursesw \
+	-I$(abspath $(NDK)/include) -I$(NCURSES_PREFIX)/include \
+	-I$(NCURSES_PREFIX)/include/ncursesw \
 	-isystem $(PICOLIBC)/include \
 	-isystem $(shell $(CC) -print-file-name=include) \
 	-D_GNU_SOURCE -D_DEFAULT_SOURCE -DNDEBUG
-# Ncurses deliberately exposes an opaque public TERMINAL while compiling a
-# larger internal definition.  Cross-unit LTO treats those as incompatible;
-# keep LTO on the applications, but not on this ABI boundary.
-VIM_TERMINFO_CFLAGS := $(filter-out -flto,$(TARGET_FLAGS))
+RUNTIME_LIBRARY := $(ASTRA_RUNTIME_LIBRARY)
+SYSTEM_LIBRARY := $(ASTRA_SYSTEM_LIBRARY)
+FILESYSTEM_LIBRARY := $(ASTRA_FILESYSTEM_LIBRARY)
+LIBC_LIBRARY := $(ASTRA_LIBC_LIBRARY)
+NTP_LIBRARY := $(ASTRA_NTP_LIBRARY)
+NETWORK_LIBRARY := $(ASTRA_NETWORK_LIBRARY)
+LUA_SHARED_LIBRARY := $(ASTRA_LUA_LIBRARY)
+COMPILER_LIBRARY := $(ASTRA_COMPILER_LIBRARY)
+CXX_LIBRARY := $(ASTRA_CXX_LIBRARY)
+UNWIND_LIBRARY := $(ASTRA_UNWIND_LIBRARY)
+TERMINFO_LIBRARY := $(ASTRA_TERMINFO_LIBRARY)
 
-RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
-STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
-VFS_LIB := $(VFS)/build/m68k/libastravfs.a
-POSIX_LIB := $(POSIX)/build/m68k/libastraposix.a
-NTP_LIB := $(NTP)/build/m68k/libastrantp.a
-NETWORK_LIB := $(NETWORK)/build/m68k/libastranetwork.a
-PICOLIBC_LIB := $(PICOLIBC)/lib/libc.a
-PICOLIBC_MATH := $(PICOLIBC)/lib/libm.a
-RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0-hosted.o
-
-COMMANDS := status events devices which open hello ls ps metrics cat mkdir rm posix \
+COMMANDS := status events devices which open service hello ls ps metrics cat mkdir rm posix \
             heapbench fsstress date echo ntp ping lua cxx vim zsh
 SOURCE_COMMANDS := $(filter-out lua cxx vim zsh,$(COMMANDS))
+SOURCE_IMAGES := $(patsubst %,build/m68k/%,$(SOURCE_COMMANDS))
+
+# A command names only the libraries whose symbols it calls.  The executable
+# contract below compares this source-of-truth list with DT_NEEDED, so a new
+# dependency cannot silently become part of every command or hide behind a
+# transitive library.
+status_LIBRARIES := $(LIBC_LIBRARY)
+events_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+devices_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+which_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+open_LIBRARIES := $(LIBC_LIBRARY) $(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY)
+service_LIBRARIES := $(LIBC_LIBRARY) $(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY)
+hello_LIBRARIES := $(LIBC_LIBRARY)
+ls_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+ps_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+metrics_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+cat_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+mkdir_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+rm_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+posix_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+heapbench_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+fsstress_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+date_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+echo_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+ntp_LIBRARIES := $(LIBC_LIBRARY) $(NTP_LIBRARY) $(RUNTIME_LIBRARY)
+ping_LIBRARIES := $(LIBC_LIBRARY) $(NETWORK_LIBRARY) $(RUNTIME_LIBRARY)
 ANALYZER_OBJECTS := $(patsubst %,build/analyzer/%.o,$(SOURCE_COMMANDS)) \
 	build/analyzer/lua-adapter.o
 # What the gate installs on the volume: stripped, the way the ROM's own image
@@ -81,63 +100,78 @@ ANALYZER_OBJECTS := $(patsubst %,build/analyzer/%.o,$(SOURCE_COMMANDS)) \
 # carries into ROM. The unstripped ELF stays beside it for a debugger.
 IMAGES := $(patsubst %,build/m68k/%,$(COMMANDS))
 COMMAND_MANIFEST := build/m68k/.commands
-ASTRA_PROGRAM_OWNER_DIRS := $(NDK) $(RUNTIME) $(STREAMS) $(VFS) $(POSIX) $(NTP) \
-	$(NETWORK)
-ASTRA_PROGRAM_PREPARE_TARGETS := cxx-runtime
-ASTRA_PROGRAM_TARGETS := $(IMAGES) $(COMMAND_MANIFEST) size
-include ../program.mk
 
 # .SECONDEXPANSION so a command's source is <name>/<name>.c rather than a
 # second list to keep in step with the first.
 .SECONDEXPANSION:
-# Picolibc's own archive also defines this symbol. Make the shared POSIX
-# integer formatter unresolved before archive scanning so date selects the
-# small implementation without carrying a command-private copy.
-build/m68k/date: LINK_FLAGS += -Wl,--undefined=__d_snprintf
-LUA_SOURCES := $(filter-out $(LUA)/lua.c $(LUA)/luac.c,$(wildcard $(LUA)/*.c))
-LUA_OBJECTS := $(patsubst $(LUA)/%.c,build/m68k/lua-obj/%.o,$(LUA_SOURCES))
-LUA_LIBRARY := build/m68k/liblua.a
 LUA_CPPFLAGS := -I$(LUA) \
 	-DLUA_PATH_DEFAULT='"?.lua;?/init.lua;LIBS:Lua.kit/share/lua/5.5/?.lua;LIBS:Lua.kit/share/lua/5.5/?/init.lua"' \
 	-DLUA_CPATH_DEFAULT='""'
 LUA_FLAGS := -std=gnu11 -Wall -Wextra -Werror
 
-$(LUA_LIBRARY): $(LUA_OBJECTS)
-	$(ASTRA_REPLACE_ARCHIVE)
-
-build/m68k/lua-obj/%.o: $(LUA)/%.c
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(LUA_CPPFLAGS) $(LUA_FLAGS) $(TARGET_FLAGS) \
-		$(DEPFLAGS) -c $< -o $@
-
-build/m68k/lua-obj/interpreter.o: $(LUA)/lua.c
+build/m68k/lua-obj/interpreter.o: $(LUA)/lua.c $(ASTRA_POSIX_POLICY_INPUTS)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(LUA_CPPFLAGS) $(LUA_FLAGS) $(TARGET_FLAGS) \
 		$(DEPFLAGS) -Dmain=astra_lua_main -c $< -o $@
 
-build/m68k/lua: lua/lua.c $(LUA_LIBRARY) build/m68k/lua-obj/interpreter.o \
-		$(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) $(POSIX_LIB) $(RUNTIME_CRT0) \
-		$(RUNTIME)/astra_user.ld
+lua_LIBRARIES := $(LIBC_LIBRARY) $(LUA_SHARED_LIBRARY) $(RUNTIME_LIBRARY)
+
+build/m68k/lua: lua/lua.c build/m68k/lua-obj/interpreter.o \
+		$(ASTRA_POSIX_PROGRAM_SOURCE) $(lua_LIBRARIES) $(COMPILER_LIBRARY) \
+		$(ASTRA_POSIX_CRT0) $(ASTRA_DYNAMIC_USER_LD_INPUTS) \
+		$(ASTRA_DYNAMIC_EXECUTABLE_CHECK) $(ASTRA_POSIX_POLICY_INPUTS)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(LUA_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) \
-		$(DEPFLAGS) $(LINK_FLAGS) -o $@.elf $(RUNTIME_CRT0) $< \
-		build/m68k/lua-obj/interpreter.o \
-		-Wl,--start-group $(LUA_LIBRARY) $(VFS_LIB) $(STREAMS_LIB) \
-		$(POSIX_LIB) $(RUNTIME_LIB) $(PICOLIBC_LIB) \
-		$(PICOLIBC)/lib/libm.a -lgcc -Wl,--end-group
+		$(DEPFLAGS) -DASTRA_POSIX_EXTERNAL_PROGRAM_IDENTITY=1 \
+		$(ASTRA_POSIX_LDFLAGS) \
+		-o $@.elf $(ASTRA_POSIX_CRT0) $< build/m68k/lua-obj/interpreter.o \
+		$(ASTRA_POSIX_PROGRAM_SOURCE) \
+		$(foreach library,$(lua_LIBRARIES),\
+			-Wl,-l:$(notdir $(library))) \
+		-Wl,-l:$(notdir $(COMPILER_LIBRARY))
+	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
+		$(foreach library,$(lua_LIBRARIES),\
+			--needed $(notdir $(library))) \
+		--needed $(notdir $(COMPILER_LIBRARY)) $@.elf
 	$(OBJCOPY) --strip-all --remove-section=.astra_events $@.elf $@
+	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
+		$(foreach library,$(lua_LIBRARIES),\
+			--needed $(notdir $(library))) \
+		--needed $(notdir $(COMPILER_LIBRARY)) $@
 
-CXX_IMAGE := $(POSIX)/build/m68k/cxx-runtime-test.elf
+CXX_PROGRAM := build/m68k/cxx-program.o
+CXX_PROGRAM_DEFINES := -DASTRA_POSIX_PROGRAM_NAME='"cxx-runtime-test"' \
+	-DASTRA_POSIX_PROGRAM_MAJOR=1 -DASTRA_POSIX_PROGRAM_MINOR=0 \
+	-DASTRA_POSIX_PROGRAM_PATCH=0 \
+	-DASTRA_POSIX_PROGRAM_AUTHOR='"Astra68"' \
+	-DASTRA_POSIX_PROGRAM_COPYRIGHT='"Copyright 2026 Astra68 contributors"'
+CXX_CPPFLAGS := $(ASTRA_POSIX_CXXCPPFLAGS)
+cxx_LIBRARIES := $(CXX_LIBRARY) $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) \
+	$(UNWIND_LIBRARY) $(COMPILER_LIBRARY)
 
-cxx-runtime:
-	$(MAKE) -C $(POSIX) build/m68k/cxx-runtime-test.elf
+$(CXX_PROGRAM): $(ASTRA_POSIX_PROGRAM_SOURCE) Makefile \
+		$(ASTRA_POSIX_POLICY_INPUTS)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
+		$(CXX_PROGRAM_DEFINES) -c $< -o $@
 
-build/m68k/cxx: $(CXX_IMAGE) $(POSIX)/tests/cxx_runtime.cpp \
-		$(POSIX)/kit/program.c \
-		$(POSIX_LIB) $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
-		$(PICOLIBC_LIB) $(PICOLIBC_MATH) $(RUNTIME_CRT0) \
-		$(RUNTIME)/astra_user.ld $(ASTRA_TOOLCHAIN_STAMP)
-	$(OBJCOPY) --strip-all --remove-section=.astra_events $(CXX_IMAGE) $@
+build/m68k/cxx: $(POSIX)/tests/cxx_runtime.cpp $(CXX_PROGRAM) \
+		$(cxx_LIBRARIES) $(ASTRA_POSIX_CRT0) $(ASTRA_CXX_CRTBEGIN) \
+		$(ASTRA_CXX_CRTEND) $(ASTRA_DYNAMIC_USER_LD_INPUTS) \
+		$(ASTRA_DYNAMIC_EXECUTABLE_CHECK) $(ASTRA_POSIX_POLICY_INPUTS)
+	@mkdir -p $(@D)
+	$(CXX) $(CXX_CPPFLAGS) $(CXX_FLAGS) $(CXX_TARGET_FLAGS) \
+		$(ASTRA_POSIX_LDFLAGS) \
+		-o $@.elf $(ASTRA_POSIX_CRT0) $(ASTRA_CXX_CRTBEGIN) $< $(CXX_PROGRAM) \
+		$(foreach library,$(cxx_LIBRARIES),\
+			-Wl,-l:$(notdir $(library))) $(ASTRA_CXX_CRTEND)
+	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
+		$(foreach library,$(cxx_LIBRARIES),\
+			--needed $(notdir $(library))) $@.elf
+	$(OBJCOPY) --strip-all --remove-section=.astra_events $@.elf $@
+	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
+		$(foreach library,$(cxx_LIBRARIES),\
+			--needed $(notdir $(library))) $@
 
 VIM_PROGRAM := build/m68k/vim-program.o
 VIM_PROGRAM_DEFINES := -DASTRA_POSIX_PROGRAM_NAME='"vim"' \
@@ -149,84 +183,51 @@ VIM_PROGRAM_CONFIG_ID := $(shell printf '%s\n' vim 9 2 1001 \
 	'Vim contributors' 'Copyright Vim contributors' | cksum | awk '{print $$1 "-" $$2}')
 VIM_PROGRAM_CONFIG := build/.program-config/vim-$(VIM_PROGRAM_CONFIG_ID)
 VIM_BUILD_CONFIG := build/.vendor-config/vim-$(ASTRA_TOOLCHAIN_ID)
-VIM_TERMINFO_LDFLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
-	-Wl,--build-id=none -Wl,--gc-sections \
-	-Wl,--undefined=astra_posix_entry_contract \
-	-T $(abspath $(RUNTIME)/astra_user.ld) $(abspath $(RUNTIME_CRT0)) \
-	$(abspath $(VIM_PROGRAM))
-VIM_TERMINFO_LIBS := -Wl,--start-group $(abspath $(VFS_LIB)) \
-	$(abspath $(STREAMS_LIB)) $(abspath $(POSIX_LIB)) \
-	$(abspath $(RUNTIME_LIB)) $(abspath $(PICOLIBC_LIB)) \
-	$(abspath $(PICOLIBC_MATH)) -lgcc -Wl,--end-group
-VIM_LIBS := -Wl,--start-group -ltinfow $(abspath $(VFS_LIB)) \
-	$(abspath $(STREAMS_LIB)) $(abspath $(POSIX_LIB)) \
-	$(abspath $(RUNTIME_LIB)) $(abspath $(PICOLIBC_LIB)) \
-	$(abspath $(PICOLIBC_MATH)) -lgcc -Wl,--end-group
+vim_LIBRARIES := $(TERMINFO_LIBRARY) $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) \
+	$(COMPILER_LIBRARY)
+VIM_LIBS := $(foreach library,$(vim_LIBRARIES),\
+	-Wl,-l:$(notdir $(library)))
 
-$(VIM_PROGRAM): $(POSIX)/kit/program.c $(VIM_PROGRAM_CONFIG)
+$(VIM_PROGRAM): $(ASTRA_POSIX_PROGRAM_SOURCE) $(VIM_PROGRAM_CONFIG) \
+		$(ASTRA_POSIX_POLICY_INPUTS)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
 		$(VIM_PROGRAM_DEFINES) \
 		-c $< -o $@
 
-# Ncurses' generated dependencies do not include installed system headers.
-# Rebuild its archive when the public terminal ABI changes; otherwise an old
-# four-byte winsize object accepts an eight-byte TIOCGWINSZ write.
-$(VIM_TERMINFO)/lib/libtinfow.a: $(PICOLIBC)/include/sys/termios.h \
-		$(PICOLIBC)/include/sys/ioctl.h $(POSIX_LIB) \
-		$(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) $(RUNTIME_CRT0) \
-		$(ASTRA_TOOLCHAIN_STAMP) | $(VIM_PROGRAM)
-	rm -rf $(VIM_TERMINFO_BUILD)
-	mkdir -p $(VIM_TERMINFO_BUILD)
-	cd $(VIM_TERMINFO_BUILD) && \
-		CC='$(CC)' AR='$(AR)' RANLIB='$(RANLIB)' \
-		CFLAGS='$(VIM_TERMINFO_CFLAGS)' \
-		CPPFLAGS='-nostdinc $(VENDOR_INCLUDE_FLAGS)' \
-		LDFLAGS='$(VIM_TERMINFO_LDFLAGS)' \
-		LIBS='$(VIM_TERMINFO_LIBS)' \
-		$(VIM_TERMINFO_SOURCE)/configure \
-		--build=x86_64-pc-linux-gnu --host=m68k-unknown-elf \
-		--prefix=$(VIM_TERMINFO) \
-		--with-default-terminfo-dir=/LIBS/terminfo \
-		--with-terminfo-dirs=/LIBS/terminfo --with-termlib \
-		--enable-widec --without-shared --with-normal --without-cxx \
-		--without-cxx-binding --without-ada --without-progs \
-		--without-tests --without-manpages --without-debug \
-		--without-profile --disable-db-install --disable-home-terminfo
-	$(MAKE) -j1 -C $(VIM_TERMINFO_BUILD) install.libs
-
-# Vim's generated Makefile does not name external static archives as target
-# prerequisites. Relink its unchanged objects whenever Astra's shared POSIX
-# implementation changes, instead of silently packaging a stale executable.
-$(VIM_BUILD_CONFIG): $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) $(POSIX_LIB) \
-		$(PICOLIBC_LIB) $(PICOLIBC_MATH) $(VIM_TERMINFO)/lib/libtinfow.a \
-		$(ASTRA_TOOLCHAIN_STAMP)
+# Vim's generated Makefile does not know Astra's library products. Reconfigure
+# and relink when its direct ABI set changes instead of packaging a stale
+# executable that names an old SONAME.
+$(VIM_BUILD_CONFIG): $(vim_LIBRARIES) $(ASTRA_POSIX_CRT0) \
+		$(ASTRA_DYNAMIC_USER_LD_INPUTS) \
+		$(ASTRA_TOOLCHAIN_STAMP) $(ASTRA_POSIX_POLICY_INPUTS)
 	$(MAKE) -C $(VIM_SOURCE) clean
 	@mkdir -p $(@D)
 	@rm -f build/.vendor-config/vim-*
 	@touch $@
 
 $(VIM_IMAGE): Makefile $(VIM_BUILD_CONFIG) $(VIM_PROGRAM) \
-		$(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
-		$(POSIX_LIB) $(PICOLIBC_LIB) $(PICOLIBC_MATH) \
-		$(VIM_TERMINFO)/lib/libtinfow.a $(ASTRA_TOOLCHAIN_STAMP)
+		$(vim_LIBRARIES) $(ASTRA_POSIX_CRT0) $(ASTRA_DYNAMIC_USER_LD_INPUTS) \
+		$(ASTRA_DYNAMIC_EXECUTABLE_CHECK) $(ASTRA_TOOLCHAIN_STAMP)
 	@rm -f $(VIM_IMAGE)
 	$(MAKE) -C $(VIM_SOURCE) vim \
 		CC='$(CC)' \
 		CPPFLAGS='$(VENDOR_INCLUDE_FLAGS)' \
 		CFLAGS='$(TARGET_FLAGS) -D_REENTRANT \
 		-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1' \
-		LDFLAGS='-nostdlib -static -L$(VIM_TERMINFO)/lib \
-		-Wl,-z,max-page-size=0x1000 -Wl,--build-id=none \
-		-Wl,--gc-sections -Wl,--undefined=astra_posix_entry_contract \
-		-T $(abspath $(RUNTIME)/astra_user.ld) \
-		$(abspath $(RUNTIME_CRT0)) $(abspath $(VIM_PROGRAM)) \
-		-Wl,--as-needed' \
+		LDFLAGS='$(ASTRA_POSIX_LDFLAGS) \
+		$(abspath $(ASTRA_POSIX_CRT0)) $(abspath $(VIM_PROGRAM))' \
 		LIBS='$(VIM_LIBS)'
+	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
+		$(foreach library,$(vim_LIBRARIES),\
+			--needed $(notdir $(library))) $(VIM_IMAGE)
 
 build/m68k/vim: $(VIM_IMAGE)
 	@mkdir -p $(@D)
 	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@
+	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
+		$(foreach library,$(vim_LIBRARIES),\
+			--needed $(notdir $(library))) $@
 
 ZSH_PROGRAM := build/m68k/zsh-program.o
 ZSH_PROGRAM_DEFINES := -DASTRA_POSIX_PROGRAM_NAME='"zsh"' \
@@ -239,17 +240,39 @@ ZSH_PROGRAM_CONFIG_ID := $(shell printf '%s\n' zsh 5 9 2 \
 ZSH_PROGRAM_CONFIG := build/.program-config/zsh-$(ZSH_PROGRAM_CONFIG_ID)
 ZSH_BUILD_CONFIG := build/.vendor-config/zsh-$(ASTRA_TOOLCHAIN_ID)
 ZSH_SOURCES := $(shell find $(ZSH_SOURCE) -type f 2>/dev/null)
-ZSH_LDFLAGS := $(abspath $(RUNTIME_CRT0)) -nostdlib -static \
-	-Wl,-z,max-page-size=0x1000 -Wl,--build-id=none -Wl,--gc-sections \
-	-Wl,--undefined=astra_posix_entry_contract \
-	-T $(abspath $(RUNTIME)/astra_user.ld)
-ZSH_LIBS := $(abspath $(ZSH_PROGRAM)) -Wl,--start-group \
-	$(abspath $(VIM_TERMINFO)/lib/libtinfow.a) $(abspath $(POSIX_LIB)) \
-	$(abspath $(STREAMS_LIB)) $(abspath $(VFS_LIB)) \
-	$(abspath $(RUNTIME_LIB)) $(abspath $(PICOLIBC_LIB)) \
-	$(abspath $(PICOLIBC_MATH)) -lgcc -Wl,--end-group
+zsh_LIBRARIES := $(TERMINFO_LIBRARY) $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) \
+	$(COMPILER_LIBRARY)
+ZSH_LDFLAGS := $(ASTRA_POSIX_LDFLAGS) $(abspath $(ASTRA_POSIX_CRT0))
+ZSH_LIBS := $(abspath $(ZSH_PROGRAM)) \
+	$(foreach library,$(zsh_LIBRARIES),-Wl,-l:$(notdir $(library)))
 
-$(ZSH_PROGRAM): $(POSIX)/kit/program.c $(ZSH_PROGRAM_CONFIG)
+# A direct command build validates only the owners of the DSOs that command
+# names.  Keep this after every *_LIBRARIES declaration: evaluating a vendor
+# program before its declaration would silently omit its dependencies.
+# Owner contracts recursively validate transitive dependencies, so unrelated
+# libraries must not turn a one-command build into a userspace rebuild.  The
+# full suite naturally selects every owner below.
+REQUESTED_COMMANDS := $(filter $(COMMANDS),\
+	$(notdir $(filter build/m68k/%,$(MAKECMDGOALS))))
+SELECTED_COMMANDS := $(if $(REQUESTED_COMMANDS),$(REQUESTED_COMMANDS),$(COMMANDS))
+MISSING_LIBRARY_DECLARATIONS := $(foreach command,$(SELECTED_COMMANDS),\
+	$(if $($(command)_LIBRARIES),,$(command)))
+ifneq ($(strip $(MISSING_LIBRARY_DECLARATIONS)),)
+$(error commands lack a direct shared-library declaration: $(MISSING_LIBRARY_DECLARATIONS))
+endif
+SELECTED_LIBRARIES := $(sort $(COMPILER_LIBRARY) \
+	$(foreach command,$(SELECTED_COMMANDS),$($(command)_LIBRARIES)))
+SELECTED_LIBRARY_KEYS := $(call astra_library_keys,$(SELECTED_LIBRARIES))
+ifneq ($(words $(SELECTED_LIBRARY_KEYS)),$(words $(SELECTED_LIBRARIES)))
+$(error selected command library is absent from libraries.mk: $(SELECTED_LIBRARIES))
+endif
+ASTRA_PROGRAM_OWNER_TARGETS := $(call astra_library_owner_targets,\
+	$(SELECTED_LIBRARY_KEYS))
+ASTRA_PROGRAM_TARGETS := $(IMAGES) $(COMMAND_MANIFEST) size
+include ../program.mk
+
+$(ZSH_PROGRAM): $(ASTRA_POSIX_PROGRAM_SOURCE) $(ZSH_PROGRAM_CONFIG) \
+		$(ASTRA_POSIX_POLICY_INPUTS)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
 		$(ZSH_PROGRAM_DEFINES) \
@@ -260,9 +283,8 @@ build/.program-config/%:
 	@touch $@
 
 $(ZSH_BUILD_CONFIG): $(ZSH_CONFIG_SITE) $(ZSH_SOURCE)/configure \
-		$(POSIX_LIB) $(RUNTIME_LIB) \
-		$(STREAMS_LIB) $(VFS_LIB) $(PICOLIBC_LIB) $(PICOLIBC_MATH) \
-		$(VIM_TERMINFO)/lib/libtinfow.a $(ASTRA_TOOLCHAIN_STAMP)
+		$(zsh_LIBRARIES) $(ASTRA_POSIX_CRT0) $(ASTRA_DYNAMIC_USER_LD_INPUTS) \
+		$(ASTRA_TOOLCHAIN_STAMP) $(ASTRA_POSIX_POLICY_INPUTS) $(ZSH_PROGRAM)
 	rm -rf $(ZSH_BUILD)
 	mkdir -p $(ZSH_BUILD)
 	cd $(ZSH_BUILD) && \
@@ -280,25 +302,50 @@ $(ZSH_BUILD_CONFIG): $(ZSH_CONFIG_SITE) $(ZSH_SOURCE)/configure \
 	@rm -f build/.vendor-config/zsh-*
 	@touch $@
 
-$(ZSH_IMAGE): $(ZSH_SOURCES) $(ZSH_BUILD_CONFIG) $(ZSH_PROGRAM)
+$(ZSH_IMAGE): $(ZSH_SOURCES) $(ZSH_BUILD_CONFIG) $(ZSH_PROGRAM) \
+		$(zsh_LIBRARIES) $(ASTRA_POSIX_CRT0) $(ASTRA_DYNAMIC_USER_LD_INPUTS) \
+		$(ASTRA_DYNAMIC_EXECUTABLE_CHECK)
 	@rm -f $(ZSH_IMAGE)
 	$(MAKE) -C $(ZSH_BUILD)
+	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
+		$(foreach library,$(zsh_LIBRARIES),\
+			--needed $(notdir $(library))) $(ZSH_IMAGE)
 
 build/m68k/zsh: $(ZSH_IMAGE)
 	@mkdir -p $(@D)
 	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@
+	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
+		$(foreach library,$(zsh_LIBRARIES),\
+			--needed $(notdir $(library))) $@
 
-$(patsubst %,build/m68k/%,$(SOURCE_COMMANDS)): build/m68k/%: \
-		$$*/$$*.c $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) \
-		$(POSIX_LIB) $(NTP_LIB) $(NETWORK_LIB) $(NDK_LIB) $(RUNTIME_CRT0) \
-		$(RUNTIME)/astra_user.ld
-	@mkdir -p $(@D)
+define ASTRA_SOURCE_COMMAND
+build/m68k/$(1): $(1)/$(1).c $(ASTRA_POSIX_PROGRAM_SOURCE) \
+		$$($(1)_LIBRARIES) $(COMPILER_LIBRARY) $(ASTRA_POSIX_CRT0) \
+		$(ASTRA_DYNAMIC_USER_LD_INPUTS) $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) \
+		$(ASTRA_POSIX_POLICY_INPUTS)
+	@mkdir -p $$(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
-		$(LINK_FLAGS) -o $@.elf $(RUNTIME_CRT0) $< \
-		-Wl,--start-group $(NDK_LIB) $(NTP_LIB) $(NETWORK_LIB) $(VFS_LIB) \
-		$(STREAMS_LIB) $(POSIX_LIB) \
-		$(RUNTIME_LIB) $(PICOLIBC_LIB) -lgcc -Wl,--end-group
-	$(OBJCOPY) --strip-all --remove-section=.astra_events $@.elf $@
+		-DASTRA_POSIX_EXTERNAL_PROGRAM_IDENTITY=1 \
+		$(ASTRA_POSIX_LDFLAGS) \
+		-o $$@.elf $(ASTRA_POSIX_CRT0) $$< $(ASTRA_POSIX_PROGRAM_SOURCE) \
+		$$(foreach library,$$($(1)_LIBRARIES),\
+			-Wl,-l:$$(notdir $$(library))) \
+		-Wl,-l:$$(notdir $$(COMPILER_LIBRARY))
+	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
+		$$(foreach library,$$($(1)_LIBRARIES),\
+			--needed $$(notdir $$(library))) \
+		--needed $$(notdir $$(COMPILER_LIBRARY)) $$@.elf
+	$(OBJCOPY) --strip-all --remove-section=.astra_events $$@.elf $$@
+	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
+		$$(foreach library,$$($(1)_LIBRARIES),\
+			--needed $$(notdir $$(library))) \
+		--needed $$(notdir $$(COMPILER_LIBRARY)) $$@
+endef
+
+$(foreach command,$(SOURCE_COMMANDS),\
+	$(eval $(call ASTRA_SOURCE_COMMAND,$(command))))
+
+dynamic-source-commands: $(SOURCE_IMAGES)
 
 size: $(IMAGES)
 	$(SIZE) $(IMAGES)
@@ -329,4 +376,5 @@ build/analyzer/%.o: $$*/$$*.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer -c $< -o $@
 
-.PHONY: all libraries cxx-runtime size test sanitize analyze clean
+.PHONY: all libraries dynamic-source-commands size test sanitize \
+	analyze clean

@@ -1,0 +1,27 @@
+ASTRA_FONT_2.1 {
+    global:
+        astra_draw_list_mono_text;
+        astra_draw_list_mono_text_styled;
+        astra_surface_glyph8x8;
+        astra_surface_mono_cell_width;
+        astra_surface_mono_text;
+        astra_surface_mono_text_styled;
+        astra_surface_text8x8;
+        astra_surface_ui_text;
+        astra_surface_ui_text_fit;
+        astra_surface_ui_text_styled;
+        astra_surface_ui_text_width;
+    local:
+        *;
+};
+
+ASTRA_FONT_2.2 {
+    global:
+        astra_mono_font_bitmap;
+        astra_mono_font_glyph;
+        astra_mono_font_strike;
+        astra_ui_font_bitmap;
+        astra_ui_font_glyph;
+        astra_ui_font_scalar;
+        astra_ui_font_strike;
+} ASTRA_FONT_2.1;

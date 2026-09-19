@@ -17,8 +17,12 @@ REQUIRED = {
     "include/astra/version.h",
     "include/posix/unistd.h",
     "lib/m68040/astra_library.ld",
+    "lib/m68040/astra_static_user.ld",
     "lib/m68040/astra_user.ld",
+    "lib/m68040/astra_user_contract.ld",
+    "lib/m68040/astra_user_sections.ld",
     "lib/m68040/crt0-hosted.o",
+    "lib/m68040/crt0-dynamic.o",
     "lib/m68040/crt0.o",
     "lib/m68040/libastra.a",
     "lib/m68040/libastra-pic.a",
@@ -34,6 +38,8 @@ REQUIRED = {
     "make/astra-native.mk",
     "make/astra-posix.mk",
     "src/astra-posix-program.c",
+    "tools/check_dynamic_executable.py",
+    "tools/check_dynamic_relocations.py",
     "examples/undo.c",
     "docs/html/index.html",
     "docs/astra68-ndk.pdf",
@@ -52,6 +58,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive")
     parser.add_argument("version")
+    parser.add_argument(
+        "--library", action="append", default=[], metavar="SONAME",
+        help="exact versioned shared-library product required in the archive")
     arguments = parser.parse_args()
     root = f"astra68-ndk-{arguments.version}"
 
@@ -73,6 +82,20 @@ def main():
         }
         missing = REQUIRED - files.keys()
         assert not missing, f"missing NDK files: {sorted(missing)}"
+
+        expected_libraries = set(arguments.library)
+        assert len(expected_libraries) == len(arguments.library), \
+            "duplicate required library"
+        packaged_libraries = {
+            PurePosixPath(path).name
+            for path in files
+            if PurePosixPath(path).parent == PurePosixPath("lib/m68040")
+            and ".library." in PurePosixPath(path).name
+        }
+        assert packaged_libraries == expected_libraries, (
+            "NDK library inventory mismatch: missing %s; stale %s" % (
+                sorted(expected_libraries - packaged_libraries),
+                sorted(packaged_libraries - expected_libraries)))
 
         metadata = payload(archive, files["METADATA"]).decode("ascii")
         assert metadata == (

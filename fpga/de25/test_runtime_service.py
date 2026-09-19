@@ -36,6 +36,9 @@ for required in (
     "ConditionPathExists=/dev/astra-display-capture",
     "ExecStart=/var/lib/astra/current/bin/astra-remote-desktop",
     "Environment=ASTRA_QMP_SOCKET=/run/astra/remote-desktop-qmp.sock",
+    "Environment=ASTRA_REMOTE_DESKTOP_CONTROL_SOCKET="
+    "/run/astra/remote-desktop-control.sock",
+    "Restart=always",
     "NoNewPrivileges=true",
     "ProtectSystem=strict",
     "RestrictAddressFamilies=AF_UNIX AF_INET",

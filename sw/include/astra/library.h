@@ -1,6 +1,7 @@
 #ifndef ASTRA_LIBRARY_H
 #define ASTRA_LIBRARY_H
 
+#include <astra/address_space.h>
 #include <astra/syscall.h>
 
 /*
@@ -13,24 +14,20 @@
  */
 
 #define ASTRA_LIBRARY_MAGIC 0x414c4942u /* "ALIB" */
-#define ASTRA_LIBRARY_RECORD_VERSION 1u
+#define ASTRA_LIBRARY_RECORD_VERSION 2u
 #define ASTRA_LIBRARY_SIZE 128u
 #define ASTRA_LIBRARY_FILE_OFFSET 0x00000200u
 #define ASTRA_LIBRARY_NAME_MAX 24u
 #define ASTRA_LIBRARY_AUTHOR_MAX 32u
 #define ASTRA_LIBRARY_COPYRIGHT_MAX 40u
 #define ASTRA_LIBRARY_TARGET_M68040 0x4d303430u /* "M040" */
-#define ASTRA_LIBRARY_EXPORTS_OFFSET 0x00f00000u
 
-/* Runtime mapping window: fifteen independent 16 MiB slots. */
-#define ASTRA_LIBRARY_BASE 0x20000000u
-#define ASTRA_LIBRARY_SLOT_SIZE 0x01000000u
-#define ASTRA_LIBRARY_SLOT_COUNT 15u
-/* One library image is transferred through one VM area slot. */
-#define ASTRA_LIBRARY_IMAGE_MAX ASTRA_AREA_SIZE_MAX
+/*
+ * Relocatable ELF images share this process-virtual arena. Images consume
+ * their exact page-rounded extent; these addresses define the machine map,
+ * not a count or per-image quota.
+ */
 #define ASTRA_LIBRARY_REFERENCE_SIZE 44u
-#define ASTRA_LIBRARY_REFERENCE_EXACT 0u
-#define ASTRA_LIBRARY_REFERENCE_LATEST 1u
 
 #ifndef __ASSEMBLER__
 
@@ -45,10 +42,10 @@ typedef struct AstraLibrary {
     uint16_t patch;
     uint16_t abi_major;
     uint16_t abi_minor;
-    uint16_t flags;
+    uint16_t reserved_flags;
     uint32_t target;
     uint32_t build_id;
-    uint32_t exports_offset;
+    uint32_t reserved;
     char name[ASTRA_LIBRARY_NAME_MAX];
     char author[ASTRA_LIBRARY_AUTHOR_MAX];
     char copyright[ASTRA_LIBRARY_COPYRIGHT_MAX];
@@ -64,7 +61,7 @@ typedef struct AstraLibraryReference {
     uint16_t patch;
     uint16_t abi_major;
     uint16_t abi_minor;
-    uint16_t flags;
+    uint16_t reserved;
 } AstraLibraryReference;
 
 _Static_assert(sizeof(AstraLibrary) == ASTRA_LIBRARY_SIZE,
@@ -74,7 +71,8 @@ _Static_assert(sizeof(AstraLibraryReference) == ASTRA_LIBRARY_REFERENCE_SIZE,
 
 #if defined(__ELF__)
 #define ASTRA_LIBRARY_SECTION \
-    __attribute__((section(".astra_library"), used, aligned(4)))
+    __attribute__((section(".astra_library"), used, aligned(4), \
+                   visibility("hidden")))
 #else
 #define ASTRA_LIBRARY_SECTION __attribute__((used, aligned(4)))
 #endif
@@ -83,7 +81,8 @@ _Static_assert(sizeof(AstraLibraryReference) == ASTRA_LIBRARY_REFERENCE_SIZE,
 #define ASTRA_BUILD_ID 0u
 #endif
 
-#define ASTRA_LIBRARY(library_name, library_major, library_minor,            \
+#define ASTRA_DYNAMIC_LIBRARY(                                                \
+                      library_name, library_major, library_minor,            \
                       library_patch, library_abi_major, library_abi_minor,   \
                       library_author, library_copyright)                    \
     _Static_assert(sizeof(library_name) <= ASTRA_LIBRARY_NAME_MAX,           \
@@ -96,18 +95,11 @@ _Static_assert(sizeof(AstraLibraryReference) == ASTRA_LIBRARY_REFERENCE_SIZE,
     const AstraLibrary astra_library ASTRA_LIBRARY_SECTION = {              \
         ASTRA_LIBRARY_MAGIC, ASTRA_LIBRARY_RECORD_VERSION,                  \
         ASTRA_LIBRARY_SIZE, library_major, library_minor, library_patch,    \
-        library_abi_major, library_abi_minor, 0u,                           \
+        library_abi_major, library_abi_minor, 0u,                            \
         ASTRA_LIBRARY_TARGET_M68040, ASTRA_BUILD_ID,                       \
-        ASTRA_LIBRARY_EXPORTS_OFFSET, library_name,                        \
+        0u, library_name,                                                   \
         library_author, library_copyright                                   \
     }
-
-#if defined(__ELF__)
-#define ASTRA_LIBRARY_EXPORTS \
-    __attribute__((section(".astra_exports"), used, aligned(4)))
-#else
-#define ASTRA_LIBRARY_EXPORTS __attribute__((used, aligned(4)))
-#endif
 
 #endif
 

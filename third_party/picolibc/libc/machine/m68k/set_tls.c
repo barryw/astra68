@@ -39,12 +39,23 @@
 
 #include "tls-local.h"
 
+#ifdef __astra__
+#include <astra/tls.h>
+#define TP_OFFSET ASTRA_M68K_TLS_THREAD_POINTER_BIAS
+#else
 #define TP_OFFSET 0x7000
+#endif
 
 void
 _set_tls(void *tls)
 {
+#ifdef __astra__
+    void *thread_pointer = (uint8_t *)tls + TP_OFFSET;
+
+    __asm__ volatile ("move.l %0,%%a4" : : "a" (thread_pointer) : "a4");
+#else
     __tls = (uint8_t *)tls + TP_OFFSET;
+#endif
 }
 
 #endif

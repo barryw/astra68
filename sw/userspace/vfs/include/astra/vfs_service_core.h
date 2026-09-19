@@ -197,8 +197,8 @@ uint32_t astra_vfs_service_write_from(AstraVfsService *service,
                                       uint32_t length, uint32_t *moved);
 uint32_t astra_vfs_service_write_position_from(
     AstraVfsService *service, uint32_t session, AstraVfsFile file,
-    uint64_t offset, const void *buffer, uint32_t length, uint32_t *moved,
-    uint64_t *position);
+    uint64_t offset, uint32_t flags, const void *buffer, uint32_t length,
+    uint32_t *moved, uint64_t *position);
 
 /* Packs directory records into an arbitrary bounded buffer. */
 uint32_t astra_vfs_service_readdir_into(

@@ -10,7 +10,8 @@ CPPFLAGS := -I../../include -I../alloc/include -I../storage/include \
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
-	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
+	-ffunction-sections -fdata-sections -fPIC -ftls-model=initial-exec \
+	$(ASTRA_DEBUG_FLAGS)
 HOST_FLAGS := -O2 -fno-builtin
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 SOURCES := src/metrics.c src/metrics_vfs.c
@@ -32,6 +33,8 @@ $(TARGET): $(OBJECTS)
 build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(OBJECTS): Makefile
 
 $(HOST_TEST): $(TEST_SOURCES)
 	@mkdir -p $(@D)

@@ -4,7 +4,6 @@
 #include <astra/posix.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
-#include <astra/vfs_port_transport.h>
 #include <astra/vfs_process.h>
 #include <astra/vfs_union.h>
 
@@ -15,6 +14,9 @@ ASTRA_PROGRAM("metrics", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
 #define METRIC_READ_RECORDS 8u
+
+_Static_assert(sizeof(AstraMetricRecord) <= ASTRA_VFS_IO_MAX,
+               "one metric record must fit one public VFS read");
 
 static int emit_record(const AstraMetricRecord *record)
 {
@@ -69,8 +71,13 @@ static int show_metrics(void)
     while (offset < size) {
         uint32_t moved = 0u;
 
-        status = astra_vfs_port_read_bulk(client, file, offset, records,
-                                          sizeof(records), &moved);
+        uint32_t wanted = ASTRA_VFS_IO_MAX -
+                          ASTRA_VFS_IO_MAX % sizeof(records[0]);
+
+        if ((uint64_t)wanted > size - offset)
+            wanted = (uint32_t)(size - offset);
+        status = astra_vfs_read(client, file, offset, records, wanted,
+                                &moved);
         if (status != ASTRA_VFS_OK || moved == 0u ||
             moved % sizeof(records[0]) != 0u) {
             status = status != ASTRA_VFS_OK ? status : ASTRA_VFS_ERR_PROTOCOL;

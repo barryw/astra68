@@ -8,14 +8,14 @@
 #include <astra/vfs_client.h>
 #include <astra/vfs_union.h>
 
-/** Logical name resolved beneath `LIBS:` by OpenLibrary(). */
+/** Package provider name resolved by the eager ELF loader. */
 #define ASTRA_FILESYSTEM_LIBRARY_NAME "filesystem.library"
 /** Minimum compatible Filesystem Kit ABI major requested by applications. */
 #define ASTRA_FILESYSTEM_LIBRARY_VERSION 2u
 /** Current Filesystem Kit ABI major. */
 #define ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR ASTRA_FILESYSTEM_LIBRARY_VERSION
 /** Current backward-compatible Filesystem Kit ABI revision. */
-#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 1u
+#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 4u
 /** Maximum entries carried by one directory batch in the current wire ABI. */
 #define ASTRA_FILESYSTEM_DIRECTORY_BATCH_MAX 32u
 
@@ -43,8 +43,8 @@ typedef uint32_t (*AstraFilesystemReadAtFn)(AstraVfsClient *client,
  * Filesystem backend positioned-write callback.
  * @param client Connected transport client.
  * @param file Open backend file token.
- * @param offset Byte offset, or backend-defined append offset when flagged.
- * @param flags Write-operation flags.
+ * @param offset Byte offset.
+ * @param flags ASTRA_VFS_WRITE_* operation flags.
  * @param buffer Source bytes.
  * @param length Requested byte count.
  * @param moved Receives bytes written.
@@ -104,24 +104,17 @@ typedef struct AstraFileInfo {
     uint16_t nlink; /**< Hard-link count, or zero when unavailable. */
 } AstraFileInfo;
 
+/** Filesystem capacity and naming limits, independent of backend format. */
+typedef AstraVfsFilesystemInfo AstraFilesystemInfo;
+
 /*
  * A directory entry carries the same metadata as a stat, and it carries it
  * because the alternative is a stat per entry. A cross-process round trip is
  * about 7.5 ms on this machine, so a forty-entry `ls -l` that stats each name
  * costs a third of a second doing nothing but switching address spaces.
  */
-/** One directory entry and the metadata returned in the same exchange. */
-typedef struct AstraDirectoryEntry {
-    char name[ASTRA_VFS_NAME_MAX]; /**< NUL-terminated UTF-8 leaf name. */
-    uint64_t byte_size; /**< File length in bytes. */
-    int64_t mtime; /**< Modification time in Unix seconds. */
-    uint32_t uid; /**< Owning user identifier, or zero when unavailable. */
-    uint32_t gid; /**< Owning group identifier, or zero when unavailable. */
-    uint16_t kind; /**< ASTRA_VFS_NODE_* kind. */
-    uint16_t member; /**< Union-assign member that supplied the node. */
-    uint16_t mode; /**< POSIX permission and type bits. */
-    uint16_t nlink; /**< Hard-link count, or zero when unavailable. */
-} AstraDirectoryEntry;
+/** One directory entry shared with the low-level VFS client representation. */
+typedef AstraVfsDirEntry AstraDirectoryEntry;
 
 /** Streaming directory enumeration state owned by one caller. */
 typedef struct AstraDirectory {
@@ -151,145 +144,219 @@ typedef struct AstraDirectory {
     { 0, { 0 }, 0, 0, ASTRA_VFS_FILE_INVALID, 0, \
       ASTRA_VFS_ERR_NOT_FOUND, 0, 0, 0 }
 
-/** Filesystem Kit 2.x immutable export table. */
-typedef struct AstraFilesystemLibraryV2 {
-    uint16_t abi_major; /**< ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR. */
-    uint16_t abi_minor; /**< ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR. */
-    uint32_t structure_size; /**< Bytes available in this table. */
+/**
+ * Attach a filesystem with read-only accelerated I/O.
+ * @param filesystem Detached filesystem state.
+ * @param assigns Borrowed assign table retained until detach.
+ * @param client_for Callback resolving an assign to its VFS client.
+ * @param read_at Optional accelerated positioned-read callback.
+ * @param context Borrowed callback context retained until detach.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_attach(AstraFilesystem *filesystem,
+    const AstraAssignTable *assigns, AstraVfsAssignClientFn client_for,
+    AstraFilesystemReadAtFn read_at, void *context);
+/**
+ * Attach a filesystem with accelerated read and write I/O.
+ * @param filesystem Detached filesystem state.
+ * @param assigns Borrowed assign table retained until detach.
+ * @param client_for Callback resolving an assign to its VFS client.
+ * @param read_at Optional accelerated positioned-read callback.
+ * @param write_at Optional accelerated positioned-write callback.
+ * @param context Borrowed callback context retained until detach.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_attach_io(AstraFilesystem *filesystem,
+    const AstraAssignTable *assigns, AstraVfsAssignClientFn client_for,
+    AstraFilesystemReadAtFn read_at, AstraFilesystemWriteAtFn write_at,
+    void *context);
+/** Detach a filesystem and invalidate its borrowed context. @param filesystem Attached state. */
+void astra_filesystem_detach(AstraFilesystem *filesystem);
 
-    /** Attach a filesystem with read-only low-level I/O. */
-    uint32_t (*attach)(AstraFilesystem *, const AstraAssignTable *,
-                       AstraVfsAssignClientFn, AstraFilesystemReadAtFn,
-                       void *);
-    /** Detach a filesystem and invalidate its borrowed context. */
-    void (*detach)(AstraFilesystem *);
-    /** Build a qualified path from assign, directory, and leaf parts. */
-    uint32_t (*qualify)(const char *, const char *, const char *, char *,
-                        uint32_t);
-    /** Split a qualified path into assign and relative portions. */
-    uint32_t (*path_split)(const char *, char *, uint32_t, char *, uint32_t);
-    /** Normalize separators and dot components in a path. */
-    uint32_t (*path_normalise)(const char *, char *, uint32_t);
-    /** Open a file with default creation permissions. */
-    uint32_t (*open)(AstraFilesystem *, const char *, uint32_t, AstraFile *);
-    /** Close an open file. */
-    uint32_t (*close)(AstraFile *);
-    /** Read at the file's current offset and advance it. */
-    uint32_t (*read)(AstraFile *, void *, uint32_t, uint32_t *);
-    /** Write at the file's current offset and advance it. */
-    uint32_t (*write)(AstraFile *, const void *, uint32_t, uint32_t *);
-    /** Read at an explicit offset without changing the current offset. */
-    uint32_t (*read_at)(AstraFile *, uint64_t, void *, uint32_t, uint32_t *);
-    /** Write at an explicit offset without changing the current offset. */
-    uint32_t (*write_at)(AstraFile *, uint64_t, const void *, uint32_t,
-                         uint32_t *);
-    /** Reposition an open file. */
-    uint32_t (*seek)(AstraFile *, int64_t, uint32_t, uint64_t *);
-    /** Read metadata for an open file. */
-    uint32_t (*file_info)(const AstraFile *, AstraFileInfo *);
-    /** Read metadata while following a final symbolic link. */
-    uint32_t (*stat)(AstraFilesystem *, const char *, AstraFileInfo *);
-    /** Create a directory with default permissions. */
-    uint32_t (*mkdir)(AstraFilesystem *, const char *);
-    /** Remove a non-directory path. */
-    uint32_t (*unlink)(AstraFilesystem *, const char *);
-    /** Begin a directory enumeration. */
-    uint32_t (*directory_open)(AstraFilesystem *, const char *,
-                               AstraDirectory *);
-    /** Read a batch of directory entries. */
-    uint32_t (*directory_read)(AstraDirectory *, AstraDirectoryEntry *,
-                               uint32_t, uint32_t *);
-    /** End a directory enumeration. */
-    void (*directory_close)(AstraDirectory *);
+/**
+ * Open a file with default creation permissions.
+ * @param filesystem Attached filesystem.
+ * @param path Assign-qualified UTF-8 path.
+ * @param flags ASTRA_VFS_OPEN_* flags.
+ * @param file Receives open-file state.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_open(AstraFilesystem *filesystem, const char *path,
+                               uint32_t flags, AstraFile *file);
+/**
+ * Open a file with explicit creation permissions.
+ * @param filesystem Attached filesystem.
+ * @param path Assign-qualified UTF-8 path.
+ * @param flags ASTRA_VFS_OPEN_* flags.
+ * @param create_mode POSIX permission bits used only when creating.
+ * @param file Receives open-file state.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_open_mode(AstraFilesystem *filesystem,
+    const char *path, uint32_t flags, uint16_t create_mode, AstraFile *file);
+/**
+ * Open a relative path beneath an open directory.
+ * @param directory Open directory that anchors resolution.
+ * @param path Nonempty relative UTF-8 path.
+ * @param flags ASTRA_VFS_OPEN_* flags.
+ * @param file Receives open-file state.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_open_at(const AstraFile *directory,
+                                  const char *path, uint32_t flags,
+                                  AstraFile *file);
+/**
+ * Open a relative path with explicit creation permissions.
+ * @param directory Open directory that anchors resolution.
+ * @param path Nonempty relative UTF-8 path.
+ * @param flags ASTRA_VFS_OPEN_* flags.
+ * @param create_mode POSIX permission bits used only when creating.
+ * @param file Receives open-file state.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_open_at_mode(
+    const AstraFile *directory, const char *path, uint32_t flags,
+    uint16_t create_mode, AstraFile *file);
+/** Close an open file. @param file Open state. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_close(AstraFile *file);
+/** Make an open file durable. @param file Open state. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_sync(AstraFile *file);
+/** Set an open file's length. @param file Open state. @param size New byte length. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_truncate(AstraFile *file, uint64_t size);
+/**
+ * Read and advance the current file position.
+ * @param file Open state.
+ * @param buffer Receives bytes.
+ * @param length Requested byte count.
+ * @param moved Receives bytes read.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_read(AstraFile *file, void *buffer,
+                               uint32_t length, uint32_t *moved);
+/**
+ * Write and advance the current file position.
+ * @param file Open state.
+ * @param buffer Source bytes.
+ * @param length Requested byte count.
+ * @param moved Receives bytes written.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_write(AstraFile *file, const void *buffer,
+                                uint32_t length, uint32_t *moved);
+/**
+ * Read without changing the current file position.
+ * @param file Open state.
+ * @param offset Byte offset.
+ * @param buffer Receives bytes.
+ * @param length Requested byte count.
+ * @param moved Receives bytes read.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_read_at(AstraFile *file, uint64_t offset,
+                                  void *buffer, uint32_t length,
+                                  uint32_t *moved);
+/**
+ * Write without changing the current file position.
+ * @param file Open state.
+ * @param offset Byte offset.
+ * @param buffer Source bytes.
+ * @param length Requested byte count.
+ * @param moved Receives bytes written.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_write_at(AstraFile *file, uint64_t offset,
+                                   const void *buffer, uint32_t length,
+                                   uint32_t *moved);
+/**
+ * Reposition an open file.
+ * @param file Open state.
+ * @param delta Signed offset from the selected origin.
+ * @param origin ASTRA_FILE_SEEK_* origin.
+ * @param offset Receives the resulting byte offset.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_seek(AstraFile *file, int64_t delta,
+                               uint32_t origin, uint64_t *offset);
+/**
+ * Read metadata for an open file.
+ * @param file Open state.
+ * @param info Receives metadata.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_file_info(const AstraFile *file,
+                                    AstraFileInfo *info);
+/**
+ * Read path metadata while following the final symbolic link.
+ * @param filesystem Attached filesystem.
+ * @param path Assign-qualified UTF-8 path.
+ * @param info Receives metadata.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_stat(AstraFilesystem *filesystem, const char *path,
+                               AstraFileInfo *info);
+/**
+ * Read path metadata without following the final symbolic link.
+ * @param filesystem Attached filesystem.
+ * @param path Assign-qualified UTF-8 path.
+ * @param info Receives metadata.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_lstat(AstraFilesystem *filesystem,
+                                const char *path, AstraFileInfo *info);
+/** Create a directory with default permissions. @param filesystem Attached filesystem. @param path Assign-qualified UTF-8 path. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_mkdir(AstraFilesystem *filesystem,
+                                const char *path);
+/** Create a directory with explicit permissions. @param filesystem Attached filesystem. @param path Assign-qualified UTF-8 path. @param create_mode POSIX permission bits. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_mkdir_mode(AstraFilesystem *filesystem,
+                                     const char *path, uint16_t create_mode);
+/** Remove a non-directory path. @param filesystem Attached filesystem. @param path Assign-qualified UTF-8 path. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_unlink(AstraFilesystem *filesystem,
+                                 const char *path);
+/** Remove a relative entry beneath an open directory. @param directory Open directory. @param path Relative UTF-8 path. @param flags ASTRA_VFS_AT_* flags. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_unlink_at(const AstraFile *directory,
+                                    const char *path, uint32_t flags);
+/** Atomically rename within one backing filesystem. @param filesystem Attached filesystem. @param from Existing path. @param to Destination path. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_rename(AstraFilesystem *filesystem,
+                                 const char *from, const char *to);
+/** Create a hard link within one backing filesystem. @param filesystem Attached filesystem. @param from Existing path. @param to New path. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_link(AstraFilesystem *filesystem,
+                               const char *from, const char *to);
+/** Change path permissions. @param filesystem Attached filesystem. @param path Assign-qualified UTF-8 path. @param mode POSIX permission bits. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_chmod(AstraFilesystem *filesystem,
+                                const char *path, uint16_t mode);
+/** Change permissions on an open node. @param file Open node. @param mode POSIX permission bits. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_chmod_file(AstraFile *file, uint16_t mode);
+/** Change permissions beneath an open directory. @param directory Open directory. @param path Relative UTF-8 path. @param mode POSIX permission bits. @param flags ASTRA_VFS_AT_* flags. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_chmod_at(const AstraFile *directory,
+                                   const char *path, uint16_t mode,
+                                   uint32_t flags);
+/** Report capacity for the filesystem containing a path. @param filesystem Attached filesystem. @param path Assign-qualified path. @param info Receives capacity. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_capacity_path(AstraFilesystem *filesystem,
+                                        const char *path,
+                                        AstraFilesystemInfo *info);
+/** Report capacity for the filesystem containing an open node. @param file Open node. @param info Receives capacity. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_capacity_file(const AstraFile *file,
+                                        AstraFilesystemInfo *info);
+/** Read a symbolic-link target. @param filesystem Attached filesystem. @param path Link path. @param buffer Receives target bytes. @param capacity Buffer capacity. @param length Receives target length. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_readlink(AstraFilesystem *filesystem,
+    const char *path, void *buffer, uint32_t capacity, uint32_t *length);
+/** Create a symbolic link. @param target Link target text. @param filesystem Attached filesystem. @param path New link path. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_symlink(const char *target,
+                                  AstraFilesystem *filesystem,
+                                  const char *path);
+/** Begin directory enumeration. @param filesystem Attached filesystem. @param path Directory path. @param directory Receives enumeration state. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_directory_open(AstraFilesystem *filesystem,
+    const char *path, AstraDirectory *directory);
+/** Begin enumeration through an already-open directory without taking ownership. @param file Open directory retained by the caller. @param directory Receives enumeration state. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_directory_from_file(const AstraFile *file,
+                                              AstraDirectory *directory);
+/** Read a directory batch. @param directory Active enumeration. @param entries Receives entries. @param capacity Entry capacity. @param count Receives entries written. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_directory_read(AstraDirectory *directory,
+    AstraDirectoryEntry *entries, uint32_t capacity, uint32_t *count);
+/** Rewind an active directory enumeration to its first entry. @param directory Active enumeration. @return ASTRA_VFS_* status. */
+uint32_t astra_filesystem_directory_rewind(AstraDirectory *directory);
+/** End directory enumeration. @param directory Active enumeration. */
+void astra_filesystem_directory_close(AstraDirectory *directory);
 
-    /** Connect a low-level VFS client. */
-    uint32_t (*client_connect)(AstraVfsClient *, AstraVfsTransport, void *);
-    /** Disconnect a low-level VFS client. */
-    uint32_t (*client_disconnect)(AstraVfsClient *);
-    /** Open through a low-level VFS client. */
-    uint32_t (*client_open)(AstraVfsClient *, const char *, uint32_t,
-                            AstraVfsFile *, uint64_t *, uint16_t *);
-    /** Close through a low-level VFS client. */
-    uint32_t (*client_close)(AstraVfsClient *, AstraVfsFile);
-    /** Read at an offset through a low-level VFS client. */
-    uint32_t (*client_read_at)(AstraVfsClient *, AstraVfsFile, uint64_t,
-                               void *, uint32_t, uint32_t *);
-    /** Write at an offset through a low-level VFS client. */
-    uint32_t (*client_write_at)(AstraVfsClient *, AstraVfsFile, uint64_t,
-                                const void *, uint32_t, uint32_t *);
-    /** Read basic metadata through a low-level VFS client. */
-    uint32_t (*client_stat)(AstraVfsClient *, const char *, uint64_t *,
-                            uint16_t *);
-    /** Read a directory batch through a low-level VFS client. */
-    uint32_t (*client_readdir_batch)(AstraVfsClient *, const char *, uint64_t,
-                                     AstraVfsDirEntry *, uint32_t, uint32_t *,
-                                     uint64_t *);
-    /** Create a directory through a low-level VFS client. */
-    uint32_t (*client_mkdir)(AstraVfsClient *, const char *);
-    /** Remove a path through a low-level VFS client. */
-    uint32_t (*client_unlink)(AstraVfsClient *, const char *);
-    /** Resolve an assign-qualified path. */
-    uint32_t (*assign_resolve)(const AstraAssignTable *, const char *,
-                               uint32_t, uint32_t, char *, uint32_t,
-                               const AstraAssign **);
-    /** Look up the first member of a named assign. */
-    const AstraAssign *(*assign_lookup)(const AstraAssignTable *,
-                                        const char *);
-    /** Look up one member of a named union assign. */
-    const AstraAssign *(*assign_member)(const AstraAssignTable *,
-                                        const char *, uint32_t);
-    /** Resolve and open a path across assign members. */
-    uint32_t (*assign_open)(const AstraAssignTable *, const char *, uint32_t,
-                            uint32_t, AstraVfsAssignClientFn, void *, char *,
-                            uint32_t, AstraVfsFile *, uint64_t *, uint16_t *,
-                            AstraVfsClient **, uint32_t *);
-    /** Atomically rename a path within one filesystem. */
-    uint32_t (*rename)(AstraFilesystem *, const char *, const char *);
-    /** Atomically rename through a low-level VFS client. */
-    uint32_t (*client_rename)(AstraVfsClient *, const char *, const char *);
-    /** Make one open file durable. */
-    uint32_t (*sync)(AstraFile *);
-    /** Set one open file's length. */
-    uint32_t (*truncate)(AstraFile *, uint64_t);
-    /** Make one low-level open file durable. */
-    uint32_t (*client_sync)(AstraVfsClient *, AstraVfsFile);
-    /** Set a low-level open file's length. */
-    uint32_t (*client_truncate)(AstraVfsClient *, AstraVfsFile, uint64_t);
-    /** Open a file with explicit creation permissions. */
-    uint32_t (*open_mode)(AstraFilesystem *, const char *, uint32_t, uint16_t,
-                          AstraFile *);
-    /** Create a directory with explicit permissions. */
-    uint32_t (*mkdir_mode)(AstraFilesystem *, const char *, uint16_t);
-    /** Change path permissions. */
-    uint32_t (*chmod)(AstraFilesystem *, const char *, uint16_t);
-    /** Read a symbolic-link target. */
-    uint32_t (*readlink)(AstraFilesystem *, const char *, void *, uint32_t,
-                         uint32_t *);
-    /** Low-level open with explicit creation permissions. */
-    uint32_t (*client_open_mode)(AstraVfsClient *, const char *, uint32_t,
-                                 uint16_t, AstraVfsFile *, uint64_t *,
-                                 uint16_t *);
-    /** Low-level directory creation with explicit permissions. */
-    uint32_t (*client_mkdir_mode)(AstraVfsClient *, const char *, uint16_t);
-    /** Change permissions through a low-level VFS client. */
-    uint32_t (*client_chmod)(AstraVfsClient *, const char *, uint16_t);
-    /** Read a link target through a low-level VFS client. */
-    uint32_t (*client_readlink)(AstraVfsClient *, const char *, void *,
-                                uint32_t, uint32_t *);
-    /** Attach a filesystem with read and write low-level I/O. */
-    uint32_t (*attach_io)(AstraFilesystem *, const AstraAssignTable *,
-                          AstraVfsAssignClientFn, AstraFilesystemReadAtFn,
-                          AstraFilesystemWriteAtFn, void *);
-    /** Read metadata without following the final symbolic link. */
-    uint32_t (*lstat)(AstraFilesystem *, const char *, AstraFileInfo *);
-    /** Create a symbolic link. */
-    uint32_t (*symlink)(const char *, AstraFilesystem *, const char *);
-    /** Create a symbolic link through a low-level VFS client. */
-    uint32_t (*client_symlink)(AstraVfsClient *, const char *, const char *);
-    /** Create an atomic hard link; cross-filesystem links are refused. */
-    uint32_t (*link)(AstraFilesystem *, const char *, const char *);
-    /** Create a hard link through a low-level VFS client. */
-    uint32_t (*client_link)(AstraVfsClient *, const char *, const char *);
-} AstraFilesystemLibraryV2;
 
 #endif

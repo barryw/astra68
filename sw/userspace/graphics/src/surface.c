@@ -1,23 +1,35 @@
 #include <astra/surface.h>
-#include <astra/utf8.h>
 
-#include <astra/draw_list.h>
+#if !defined(ASTRA_SURFACE_CORE) && !defined(ASTRA_SURFACE_FONT)
+#define ASTRA_SURFACE_CORE 1
+#define ASTRA_SURFACE_FONT 1
+#endif
+
+#if defined(ASTRA_SURFACE_FONT)
+#include <astra/utf8.h>
 #include <astra/font.h>
 #include <astra/ui_font.h>
+#endif
+
+#include <astra/draw_list.h>
 
 #include <limits.h>
 #include <stddef.h>
 #include <string.h>
 
+#if defined(ASTRA_SURFACE_CORE)
 #include <astra/rounded.h>
+#endif
 
+#if defined(ASTRA_SURFACE_FONT)
 #include "astra_font8x8.inc"
-
 #include "astra_ui_font.inc"
 #include "astra_mono_font.inc"
+#endif
 
 #define ARRAY_COUNT(values) (sizeof(values) / sizeof((values)[0]))
 
+#if defined(ASTRA_SURFACE_FONT)
 typedef struct AstraFontBank {
     const uint32_t *codepoints;
     const uint32_t *glyph_ids;
@@ -28,9 +40,11 @@ typedef struct AstraFontBank {
     const AstraUiGlyph *glyphs;
     const uint8_t *bitmap;
 } AstraFontBank;
+#endif
 
 static uint16_t *row(AstraSurfaceView *surface, uint32_t y);
 
+#if defined(ASTRA_SURFACE_FONT)
 static uint16_t blend_rgb565(uint16_t foreground, uint16_t background,
                              uint8_t coverage)
 {
@@ -84,6 +98,7 @@ static const AstraFontBank mono_font = {
     astra_mono_strikes,
     ARRAY_COUNT(astra_mono_strikes), astra_mono_glyphs, astra_mono_bitmap
 };
+#endif
 
 static uint16_t *row(AstraSurfaceView *surface, uint32_t y)
 {
@@ -126,6 +141,7 @@ static AstraDrawListCommand *append_command(AstraSurfaceView *surface,
     return command;
 }
 
+#if defined(ASTRA_SURFACE_CORE)
 static const uint16_t *const_row(const AstraSurfaceView *surface, uint32_t y)
 {
     return (const uint16_t *)((const uint8_t *)surface->pixels +
@@ -139,6 +155,7 @@ static void full_clip(AstraSurfaceView *surface)
     surface->clip_right = surface->width;
     surface->clip_bottom = surface->height;
 }
+#endif
 
 static int clip_valid(const AstraSurfaceView *surface)
 {
@@ -155,6 +172,7 @@ static int clip_empty(const AstraSurfaceView *surface)
            surface->clip_top == surface->clip_bottom;
 }
 
+#if defined(ASTRA_SURFACE_CORE)
 int astra_surface_view_init(AstraSurfaceView *surface, void *pixels,
                             uint32_t byte_size, uint16_t width,
                             uint16_t height, uint32_t pitch)
@@ -632,7 +650,9 @@ void astra_surface_blit_round_bottom(AstraSurfaceView *destination, int32_t x,
         }
     }
 }
+#endif
 
+#if defined(ASTRA_SURFACE_FONT)
 void astra_surface_glyph8x8(AstraSurfaceView *surface, int32_t x, int32_t y,
                             const uint8_t rows[8], uint16_t color)
 {
@@ -988,3 +1008,4 @@ int astra_draw_list_mono_text_styled(AstraSurfaceView *surface, int32_t x,
                           cell_width, color, ASTRA_DRAW_LIST_MONO_TEXT,
                           style_flags);
 }
+#endif

@@ -9,12 +9,16 @@
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 static uint32_t clone_handle = 7u;
 static uint32_t clone_pid = 123u;
 static uint32_t clone_result = ASTRA_SYSCALL_OK;
+static uint32_t clone_calls;
+static int file_fork_ready = 1;
+static uint32_t obsolete_descriptor_gate_calls;
 static uint32_t logged_status;
 static uint32_t wait_result = ASTRA_SYSCALL_TIMED_OUT;
 static uint32_t child_status;
@@ -30,7 +34,10 @@ static uint32_t operation_order;
 static int32_t signalled_selector;
 static int32_t signalled_group;
 static uint32_t signalled_number;
-static AstraPosixProcessReply process_reply;
+AstraPosixProcessReply process_reply;
+static const AstraStartupInfo startup = {
+    .process_handle = 5u,
+};
 static const AstraStartupCapability posix_capability = {
     .handle = 6u,
 };
@@ -38,7 +45,7 @@ static const AstraStartupCapability posix_capability = {
 const AstraStartupInfo *
 astra_posix_startup(void)
 {
-    return (const AstraStartupInfo *)(uintptr_t)1u;
+    return &startup;
 }
 
 const AstraStartupCapability *
@@ -125,7 +132,14 @@ astra_process_resume(uint32_t handle)
 int
 astra_posix_file_fork_ready(void)
 {
-    return 1;
+    return file_fork_ready;
+}
+
+int
+astra_posix_descriptor_fork_ready(void)
+{
+    ++obsolete_descriptor_gate_calls;
+    return 0;
 }
 
 int
@@ -135,15 +149,17 @@ astra_posix_file_after_fork_child(void)
     return 0;
 }
 
-void
+int
 astra_posix_socket_after_fork_child(void)
 {
     ++after_fork_child_calls;
+    return 0;
 }
 
 uint32_t
 astra_process_clone(uint32_t *handle, uint32_t *pid)
 {
+    ++clone_calls;
     *handle = clone_handle;
     *pid = clone_pid;
     return clone_result;
@@ -167,6 +183,32 @@ astra_process_wait(uint32_t handle, uint64_t deadline, uint32_t *status)
 }
 
 uint32_t
+astra_process_info(uint32_t handle, AstraProcessInfo *info)
+{
+    assert(info != NULL && info->size == sizeof(*info));
+    info->runtime_ns = handle == 5u ? UINT64_C(1234567890) :
+                                     (uint64_t)handle * UINT64_C(1000000);
+    info->peak_resident_frames = handle == 5u ? 12u : handle + 1u;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_current_thread_handle(uint32_t *handle)
+{
+    assert(handle != NULL);
+    *handle = 10u;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
+astra_thread_info(uint32_t handle, AstraThreadInfo *info)
+{
+    assert(handle == 10u && info != NULL && info->size == sizeof(*info));
+    info->runtime_ns = UINT64_C(987654321);
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t
 astra_close(uint32_t handle)
 {
     closed_handle = handle;
@@ -182,10 +224,19 @@ astra_yield(void)
 int
 main(void)
 {
+    struct rusage usage;
     int status;
     pid_t pid;
 
+    file_fork_ready = 0;
+    assert(fork() == (pid_t)-1 && errno == ENOTSUP);
+    assert(clone_calls == 0u);
+    file_fork_ready = 1;
+    logged_status = UINT32_MAX;
     assert(fork() == (pid_t)123);
+    assert(clone_calls == 1u);
+    assert(obsolete_descriptor_gate_calls == 0u);
+    assert(logged_status == UINT32_MAX);
     assert(registered_handle == 7u && registered_pid == 123u);
     assert(resumed_handle == 7u && registration_order < resume_order);
     assert(kill((pid_t)-123, SIGTERM) == 0);
@@ -194,6 +245,8 @@ main(void)
     assert(signalled_group == 1 && signalled_number == SIGTERM);
     assert(setpgid(123, 123) == 0);
     assert(process_reply.process == 123 && process_reply.group == 123);
+    assert(setpgrp() == 0);
+    assert(process_reply.process == 0 && process_reply.group == 0);
     process_reply = (AstraPosixProcessReply){
         .process = 100, .parent = 50, .group = 100, .session = 100,
     };
@@ -206,9 +259,20 @@ main(void)
                    WNOHANG | WUNTRACED | WCONTINUED) == 0);
     wait_result = ASTRA_SYSCALL_OK;
     child_status = 42u;
-    assert(waitpid((pid_t)123, &status, 0) == (pid_t)123);
+    assert(wait3(&status, 0, &usage) == (pid_t)123);
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 42);
+    assert(usage.ru_utime.tv_sec == 0 && usage.ru_utime.tv_usec == 7000);
+    assert(usage.ru_maxrss == 32);
     assert(closed_handle == 7u);
+    assert(getrusage(RUSAGE_CHILDREN, &usage) == 0);
+    assert(usage.ru_utime.tv_sec == 0 && usage.ru_utime.tv_usec == 7000);
+    assert(usage.ru_maxrss == 32);
+    assert(getrusage(RUSAGE_SELF, &usage) == 0);
+    assert(usage.ru_utime.tv_sec == 1 && usage.ru_utime.tv_usec == 234567);
+    assert(usage.ru_maxrss == 48);
+    assert(getrusage(RUSAGE_THREAD, &usage) == 0);
+    assert(usage.ru_utime.tv_sec == 0 && usage.ru_utime.tv_usec == 987654);
+    assert(usage.ru_maxrss == 48);
 
     clone_pid = 124u;
     clone_handle = 8u;
@@ -232,12 +296,16 @@ main(void)
     assert(fork() == 0);
     assert(file_after_fork_child_calls == 1u);
     assert(after_fork_child_calls == 1u);
+    assert(getrusage(RUSAGE_CHILDREN, &usage) == 0);
+    assert(usage.ru_utime.tv_sec == 0 && usage.ru_utime.tv_usec == 0);
     assert(wait(NULL) == (pid_t)-1 && errno == ECHILD);
     assert(waitpid((pid_t)-2, NULL, 0) == (pid_t)-1 && errno == EINVAL);
 
     clone_result = ASTRA_SYSCALL_RESOURCE_LIMIT;
     assert(fork() == (pid_t)-1 && errno == ENOMEM);
     assert(logged_status == ASTRA_SYSCALL_RESOURCE_LIMIT);
+    clone_result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+    assert(fork() == (pid_t)-1 && errno == ENOTSUP);
     puts("ASTRA POSIX PROCESS PASS");
     return 0;
 }

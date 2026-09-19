@@ -77,6 +77,7 @@ install -m 0644 \"\$unit_source\" \"\$unit_temporary\"
 mv -f \"\$unit_temporary\" \"\$unit_target\"
 trap - EXIT HUP INT TERM
 systemctl daemon-reload
+systemctl enable --now astra-remote-desktop.service
 "
 $SSH "$BOARD" "systemctl restart '$SERVICE'"
 LIVE=$($SSH "$BOARD" "

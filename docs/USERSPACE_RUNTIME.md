@@ -10,10 +10,11 @@ Kits and any later C library. It owns only:
 - validation of the versioned initial-process startup block;
 - the MC68040 `TRAP #15` calling veneer and typed syscall wrappers;
 - process entry and terminal process/thread exit;
+- the one process heap used by runtime metadata and C/POSIX allocation;
 - freestanding byte primitives required by C code and compiler output.
 
-It does not own allocation, paths, files, streams, locales, environment
-policy, ELF parsing, service discovery, or POSIX behavior. Those facilities
+It does not own paths, files, streams, locales, environment policy, ELF
+parsing, service discovery, or POSIX behavior. Those facilities
 belong to a real libc, Kits, and protected services. Code must not fill a
 missing layer with fixed addresses, global shared memory, unbounded polling,
 or boot-only APIs.
@@ -24,7 +25,11 @@ pull process startup into their images.
 
 ## Initial process entry
 
-The loader enters `_start` with:
+For a static image Axiom enters the program's validated ELF entry. For a
+dynamic image the supervisor supplies the exact interpreter it resolved from
+`PT_INTERP`; Axiom validates and maps both images in one transaction, enters
+the interpreter, and preserves the original program entry in startup state.
+In both cases the initial entry receives:
 
 | Register | Value |
 |---|---|
@@ -33,11 +38,13 @@ The loader enters `_start` with:
 | `D5` | initial thread self handle |
 | `USP` | top of the writable initial user stack |
 
-`AstraStartupInfo` is 64 bytes, naturally four-byte aligned, and defined in
+`AstraStartupInfo` is 80 bytes, naturally four-byte aligned, and defined in
 `sw/include/astra/process.h`. It records its magic, size, startup ABI, syscall
 ABI, process/thread handles, argument and environment vector addresses, and a
-bounded capability table. Counts are explicit; absent vectors use a zero count
-and zero address. Reserved words must be zero.
+bounded capability table. Version 5 also records the program entry and, for an
+interpreted image, the interpreter load bias, exact mapped span, and relocated
+entry. Counts are explicit; absent vectors use a zero count and zero address.
+Reserved words must be zero.
 
 The loader validates every mapped range, string bound, handle right, and
 entry/stack permission before making the thread runnable. The runtime performs
@@ -81,21 +88,37 @@ application / protected service
   Axiom trap ABI
 ```
 
-The project will port and configure an established C library after process
-loading, virtual-memory growth, VFS calls, clocks, and terminal primitives have
-real contracts. Astra will not grow a partial home-made libc opportunistically.
-The byte primitives in `libastrart` are the freestanding compiler substrate and
-may satisfy the corresponding libc symbols without changing behavior.
+Picolibc is Astra's standards C library. The Astra POSIX layer supplies the
+kernel-facing descriptor, path, process, clock, and terminal operations that
+picolibc intentionally does not own. Both become universal `.library` images;
+they are not copied into each ordinary executable. `libastrart` remains the
+small bootstrap substrate beneath them. Its byte primitives may satisfy the
+corresponding libc symbols without changing behavior.
 
-## Bounded allocator
+## Process heap
 
-`sw/userspace/alloc` builds `libastraalloc.a`, a separate library because
-`libastrart` does not own allocation. It is not a heap. The caller supplies an
-arena and a table of at most eight size classes, each with a hard block count,
-so a service publishes an exact memory budget and exhaustion is a reported
-status rather than a growth event. A request is served from the smallest class
-that fits; a full class fails rather than spilling into a larger one, because
-spilling would make the published budget meaningless.
+Runtime metadata, the shared-library loader, VFS library records, and POSIX
+`malloc` use one runtime-owned process heap. A growth policy supplies more
+private VM when the current heap cannot satisfy a request; the POSIX adapter
+installs the policy that enforces `RLIMIT_DATA` and translates its failures.
+The loader and VFS never reserve private side arenas, so a large POSIX heap
+cannot strand free process address space where later library attachment cannot
+use it. Free blocks are shared and reusable across all of these consumers.
+
+`astra_runtime_allocate()`, `astra_runtime_callocate()`,
+`astra_runtime_reallocate()`, and `astra_runtime_deallocate()` are the native
+allocation boundary. `astra_runtime_sbrk()` exists for the POSIX compatibility
+surface; new native code does not build a second heap on top of it.
+
+## Explicit fixed-arena allocator
+
+`sw/userspace/alloc` builds `libastraalloc.a`, a specialized fixed-arena
+allocator retained for storage paths that require deterministic failure
+injection and exact precharged memory. It is not the general process heap. The
+caller supplies an arena and size classes with hard block counts, so exhaustion
+is a reported status rather than an implicit growth event. A request is served
+from the smallest class that fits; a full class fails rather than spilling into
+a larger one, because spilling would make the published budget meaningless.
 
 The arena's origin is deliberately outside this contract: static storage today,
 a mapped region once VM growth exists. Nothing above the allocator changes when
@@ -183,24 +206,35 @@ is the loader. The profile allocates nothing, touches no address space, and
 knows nothing about page tables: it turns an untrusted byte range into a
 bounded placement plan that the loader executes or discards.
 
-Astra accepts exactly one shape of executable: ELF32, big-endian, current
-version, System V ABI version 0, `ET_EXEC` for `EM_68K` with zero processor
-flags, `PT_LOAD` segments only, each page-aligned in both file and memory,
-ascending, non-overlapping, readable, and never both writable and executable,
-with an entry point at an even address inside an executable segment. Dynamic
-linking of any kind, shared objects, thread-local storage, an executable
-stack, and any unlisted program header type are rejected outright. A linker's
-empty `PT_LOAD` is skipped rather than rejected; there is nothing to map, and
-an empty segment claiming file content is still malformed.
+Astra executable images are ELF32, big-endian, System V ABI version 0,
+`ET_EXEC` for `EM_68K` with zero processor flags. `PT_LOAD` segments are
+page-aligned in file and memory, ascending, non-overlapping, readable, and
+never both writable and executable. The even entry address must be inside
+executable code. One read-only `PT_TLS` template and one writable
+`PT_DYNAMIC` table are accepted only when wholly covered by matching load
+segments. An executable stack and every unlisted program-header type remain
+forbidden. Empty load segments carry no bytes and are ignored.
 
 Page alignment is stricter than the format requires. The looser congruence
 rule lets two segments share a page, which would force that page to carry the
 union of two permission sets; Astra refuses the image instead.
 
-`astra_user.ld` is the matching link contract and produces exactly that shape:
-read-execute text, read-only rodata, and read-write data with its BSS tail,
-each on its own page, plus a non-executable `PT_GNU_STACK`. Verified against
-real `m68k-elf` output at three segments and three pages.
+Shared-library loading uses the same ownership rule with an additional
+relocation phase. `LIBRARY_LOAD_MAP` returns a reversible mapping and retains a
+move-only transaction handle. The runtime relocates that mapping while the
+handle remains live; `LIBRARY_LOAD_COMMIT` then seals the ELF-validated GNU
+RELRO pages and makes the mapping permanent. Closing the handle before commit
+unmaps every segment. Attaching an already resident library returns the same
+kind of handle, so cached and newly streamed libraries have one finalization
+path.
+
+`astra_user.ld` is the normal eager-dynamic contract.
+`astra_static_user.ld` is selected explicitly by bootstrap and recovery images
+that must run before or without the loader. Both thin wrappers reuse
+`astra_user_contract.ld` and `astra_user_sections.ld`, so permissions, layout,
+TLS, constructors, program identity, and event-catalog policy cannot drift.
+The build rejects dynamic metadata under the static profile, and automatically
+checks real MC68040 static and dynamic links.
 
 The loader maps each segment page by page, zero-filling beyond the file size,
 publishes a read-only startup block at the bottom of the user range, installs
@@ -234,9 +268,10 @@ that names what it checked.
 The status is tagged (`ASTRA_SUPERVISOR_STATUS_TAG`, `sw/include/astra/supervisor.h`)
 with one bit per failed check in the low byte. The tag matters: a process that
 never reached user mode exits zero, so an untagged zero cannot be mistaken for
-success. The kernel prints the outcome the moment the process ends and panics
-on anything but the expected value, because the process record is reclaimed
-with its last handle and no later poll could recover it.
+success. The kernel prints the outcome the moment the process ends, retains a
+`PROCESS_EXIT` trace record after the process record is reclaimed, completes
+normal owner teardown, and reports degraded userspace boot control. A userspace
+exit is never itself a kernel panic condition.
 
 Gathering is separated from judging. `supervisor_validate()` takes what was
 observed and returns the verdict, so the whole judgement runs on the host under
@@ -245,13 +280,14 @@ image is 1,306 bytes of text with no data or BSS.
 
 ## The boot path for the first image
 
-Boot ABI 0.3 adds `user_image_base` and `user_image_size` to `AstraBootInfo`.
-Firmware embeds the linked ELF in the ROM file, copies it to
-`ASTRA_USER_IMAGE_ADDRESS`, verifies the copy, and reserves exactly the pages
-it fills as firmware memory. The contract rejects any description that is
-unaligned, larger than `ASTRA_USER_IMAGE_MAX_SIZE`, or not contained in a
-readable firmware range — memory the allocator could hand out cannot hold an
-image the kernel reads later.
+Boot ABI 0.3 added `user_image_base` and `user_image_size` to `AstraBootInfo`.
+Since boot ABI 0.7, firmware embeds the linked ELF in the ROM file, copies it
+immediately after the fixed kernel reservation, verifies the copy, and reserves
+exactly the pages it fills as firmware memory. The contract rejects any
+description that is unaligned or not contained in a readable firmware range —
+memory the allocator could hand out cannot hold an image the kernel reads
+later. There is no software size quota; firmware derives capacity from the next
+physical reserved aperture or RAM end.
 
 The kernel loads it with `kernel_process_create_executable()` and registers it
 as the initial image. No filesystem lookup, no path, no policy beyond the ELF

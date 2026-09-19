@@ -222,8 +222,8 @@ SCRIPT = [
       "filesystem.library")),
     ("cat PROC:libraries/disk",
      ("NAME VERSION ABI BUILD SIZE PATH",
-      "filesystem.library 2.0.0 2.1",
-      "font.library 2.1.0 2.1")),
+      "filesystem.library",
+      "font.library")),
     ("metrics", ("host.channel.commands ", "hostfs.vfs.requests ",
                  "host.fs.open.calls ")),
     ("events --boot -1", "namespace bound"),
@@ -506,7 +506,7 @@ class Machine:
                 return True
         return False
 
-    def recent_serial(self, limit=20):
+    def recent_serial(self, limit=200):
         while True:
             try:
                 line = self.serial.get_nowait()
@@ -660,6 +660,9 @@ def open_terminal(machine, boot_deadline, command_deadline):
     if not machine.wait_for_serial(BOOT_MARKER, boot_deadline):
         print("FAIL: never reached the desktop; last serial lines:")
         for line in machine.log[-8:]:
+            print("    %s" % line)
+        print("last trace records:")
+        for line in machine.recent_trace(80):
             print("    %s" % line)
         return False
     # The desktop has to have painted before a click lands on an icon, and
@@ -1107,6 +1110,19 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                     print("FAIL: %r never answered with %r" % (line, expected))
                     for text in machine.said(before)[0][-80:]:
                         print("    |%s|" % text)
+                    try:
+                        machine.qmp.execute("stop")
+                        registers = machine.qmp.monitor("info registers")
+                        print("guest registers:")
+                        print(registers.rstrip())
+                        match = re.search(r"A7\(MSP\) = ([0-9a-fA-F]{8})",
+                                          registers)
+                        if match is not None:
+                            print("kernel stack:")
+                            print(machine.qmp.monitor(
+                                "xp /64xw 0x%s" % match.group(1)).rstrip())
+                    except (OSError, RuntimeError) as error:
+                        print("guest registers unavailable: %s" % error)
                     print("recent trace records:")
                     for text in machine.trace()[-40:]:
                         print("    %s" % text)

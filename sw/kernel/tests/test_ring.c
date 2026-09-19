@@ -81,7 +81,8 @@ static void initialize_test(void)
     add_range(&info, ASTRA_EARLY_LOG_ADDRESS, ASTRA_EARLY_LOG_SIZE,
               ASTRA_MEMORY_RANGE_EARLY_LOG,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
-    add_range(&info, ASTRA_USER_IMAGE_ADDRESS, ASTRA_USER_IMAGE_MAX_SIZE,
+    add_range(&info, ASTRA_BOOT_LOW_USABLE_ADDRESS,
+              ASTRA_BOOT_LOW_USABLE_SIZE,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
@@ -89,7 +90,8 @@ static void initialize_test(void)
               ASTRA_MEMORY_RANGE_KERNEL,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, ASTRA_KERNEL_USABLE_ADDRESS, (OHCI_DMA_POOL_BASE - ASTRA_KERNEL_USABLE_ADDRESS),
+    add_range(&info, ASTRA_USER_IMAGE_ADDRESS,
+              OHCI_DMA_POOL_BASE - ASTRA_USER_IMAGE_ADDRESS,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);

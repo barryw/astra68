@@ -55,6 +55,18 @@ CONFIGURATION = {
         "astra-config 1\n"
         "schema 1\n"
         "pool pool.ntp.org\n"),
+    "services/remote-desktop/service.conf": (
+        "astra-config 1\n"
+        "schema 1\n"
+        "name \"remote-desktop\"\n"
+        "executable \"SERVICES:remote-desktop\"\n"
+        "runs paired\n"
+        "enabled true\n"
+        "delegates false\n"
+        "start manual\n"
+        "restart on-fault\n"
+        "argument \"SERVICES:remote-desktop\"\n"
+        "grant HOST_DEVICE\n"),
     "commands/zsh/zshrc": (
         "# User startup remains zsh's normal HOME:/.zshrc.\n"
         "if [[ -r HOME:/.motd.zsh ]]; then\n"
@@ -81,13 +93,13 @@ DEFAULT_APPS = os.path.join(REPOSITORY, "sw/userspace/apps/build")
 DEFAULT_TERMINFO = os.path.join(
     REPOSITORY,
     "sw/userspace/terminal/build/terminfo/a/astra-256color")
-KIT_BUNDLES = ("Graphics.kit", "Filesystem.kit", "Interface.kit",
-               "Events.kit", "Messaging.kit", "Network.kit",
-               "Configuration.kit")
 APPLICATION_BUNDLES = ("Terminal.app", "InterfaceGallery.app")
 PROVIDER_INDEX_MAGIC = 0x41505256  # "APRV"
 PROVIDER_INDEX_HEADER = struct.Struct(">IHHHHHHHHI")
+PROVIDER_INDEX_VERSION = 2
 LIBRARY_IDENTITY_HEADER = struct.Struct(">IHHHHHHHHIII")
+LIBRARY_RECORD_VERSION = 2
+LIBRARY_RECORD_SIZE = 128
 PROVIDER_INDEX_MAX = 192
 # One startup profile, not two. The terminal stopped being a program that owns
 # the screen and the keyboard when the window runtime landed: it is a window
@@ -104,6 +116,8 @@ DISPLAY_STARTUP_MANIFEST = (
     "service SERVICES:posixd grants serves POSIX_PROCESS required\n"
     "service SERVICES:hostfs grants HOST_DEVICE "
     "serves WORK:rw METRICS:r required\n"
+    "service SERVICES:entropy grants HOST_DEVICE "
+    "serves ENTROPY required\n"
     "service SERVICES:network grants NETWORK_DEVICE NETWORK_IRQ "
     "serves NETWORK NETWORK_LISTEN required\n"
     "service SERVICES:ntpd grants CLOCK CONFIG:r LIBS:r NETWORK "
@@ -118,8 +132,9 @@ DISPLAY_STARTUP_MANIFEST = (
     "application SERVICES:desktop grants GUI APP_LAUNCH APPS:r LIBS:r "
     "NETWORK NETWORK_LISTEN NTP\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
-DISPLAY_SERVICES = ("storage", "posixd", "hostfs", "network", "ntpd", "events",
-                    "input", "clipboard", "display", "desktop")
+DISPLAY_SERVICES = ("storage", "posixd", "hostfs", "entropy", "network", "ntpd", "events",
+                    "input", "clipboard", "display", "desktop",
+                    "remote-desktop")
 HOSTBENCH_SERVICES = DISPLAY_SERVICES + ("hostbench",)
 HOSTBENCH_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
     "application SERVICES:hostbench grants HOST_DEVICE\n")
@@ -333,6 +348,8 @@ def _commands(directory):
         path = os.path.join(directory, name)
         if not os.path.isfile(path):
             raise RuntimeError("command manifest names missing image %s" % path)
+        if os.stat(path).st_mode & 0o111 == 0:
+            raise RuntimeError("command image is not executable: %s" % path)
         found.append((name, path))
     return found
 
@@ -361,7 +378,19 @@ def _services(directory, names):
     return found
 
 
-def _bundles(directory, names):
+def _bundles(directory, names=None):
+    if names is None:
+        inventory = os.path.join(directory, ".kits")
+        try:
+            with open(inventory, "r", encoding="ascii") as handle:
+                names = tuple(line.rstrip("\n") for line in handle)
+        except OSError as error:
+            raise RuntimeError("no Kit inventory at %s -- build Kits first" %
+                               inventory) from error
+        if (not names or len(set(names)) != len(names) or
+                any(not name.endswith(".kit") or "/" in name or
+                    name in (".", "..") for name in names)):
+            raise RuntimeError("invalid Kit inventory at %s" % inventory)
     found = []
     for name in names:
         path = os.path.join(directory, name)
@@ -407,19 +436,25 @@ def _providers(bundles):
                     with open(image, "rb") as library:
                         library.seek(0x200)
                         identity = library.read(128)
-                    if len(identity) != 128:
+                    if len(identity) != LIBRARY_RECORD_SIZE:
                         raise RuntimeError("short library identity: %s" % image)
                     header = LIBRARY_IDENTITY_HEADER.unpack_from(identity)
                     actual_name = identity[32:56].split(b"\0", 1)[0].decode(
                         "ascii")
-                    if (header[0] != 0x414c4942 or header[1:3] != (1, 128) or
+                    flags = header[8]
+                    exports_offset = header[11]
+                    expected_identity = "%s.%u" % (name, abi)
+                    if (header[0] != 0x414c4942 or
+                            header[1:3] != (LIBRARY_RECORD_VERSION,
+                                           LIBRARY_RECORD_SIZE) or
                             header[3:6] != version or header[6] != abi or
-                            header[8] != 0 or header[9] != 0x4d303430 or
-                            header[11] != 0x00f00000 or actual_name != name):
+                            flags != 0 or exports_offset != 0 or
+                            header[9] != 0x4d303430 or
+                            actual_name != expected_identity):
                         raise RuntimeError("library identity disagrees with %s" %
                                            manifest)
                     found[key] = (version, header[7], header[10],
-                        "LIBS:%s/%s" % (os.path.basename(bundle), relative))
+                        "%s/%s" % (os.path.basename(bundle), relative))
     return found
 
 
@@ -511,7 +546,7 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
                            "terminal first" % terminfo)
     built = [] if commands is None else _commands(commands)
     service_images = _services(services, service_names)
-    kit_bundles = [] if kits is None else _bundles(kits, KIT_BUNDLES)
+    kit_bundles = [] if kits is None else _bundles(kits)
     application_bundles = [] if apps is None else \
         _bundles(apps, APPLICATION_BUNDLES)
     offset, length = ext4_partition(image)
@@ -578,7 +613,8 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
             host = os.path.join(temporary, "%s.abi-%u" % (name, abi))
             encoded = path.encode("ascii")
             record = PROVIDER_INDEX_HEADER.pack(
-                PROVIDER_INDEX_MAGIC, 1, PROVIDER_INDEX_HEADER.size,
+                PROVIDER_INDEX_MAGIC, PROVIDER_INDEX_VERSION,
+                PROVIDER_INDEX_HEADER.size,
                 version[0], version[1], version[2], abi, abi_minor, 0,
                 build_id) + \
                 encoded

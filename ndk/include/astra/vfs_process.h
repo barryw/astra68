@@ -6,19 +6,16 @@
 
 #include <astra/process.h>
 #include <astra/filesystem_library.h>
-#include <astra/shared_library.h>
 #include <astra/vfs_assign.h>
 #include <astra/vfs_client.h>
 
 /** Process-global Filesystem Kit binding. */
 typedef struct AstraProcessFilesystem {
     AstraFilesystem filesystem; /**< Attached high-level filesystem context. */
-    AstraLibraryHandle *handle; /**< Open filesystem.library handle. */
-    const AstraFilesystemLibraryV2 *library; /**< Validated export table. */
 } AstraProcessFilesystem;
 
 /** Static initializer for a closed process Filesystem Kit binding. */
-#define ASTRA_PROCESS_FILESYSTEM_INIT { ASTRA_FILESYSTEM_INIT, 0, 0 }
+#define ASTRA_PROCESS_FILESYSTEM_INIT { ASTRA_FILESYSTEM_INIT }
 
 /** Native file state transferred across an in-place personality exec. */
 typedef struct AstraProcessFileState {
@@ -86,21 +83,13 @@ AstraVfsClient *astra_process_vfs_assign_client(const AstraAssign *assign,
  */
 void astra_process_vfs_set_activity(uint32_t activity);
 /**
- * Open and attach filesystem.library using normal runtime loading.
+ * Attach the process filesystem using the required Filesystem Kit dependency.
  * @param filesystem Binding storage initialized on success.
  * @param startup Borrowed process startup record.
  * @return ASTRA_VFS_* status.
  */
 uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
                                        const AstraStartupInfo *startup);
-/**
- * Open and attach filesystem.library through its bootstrap entry.
- * @param filesystem Binding storage initialized on success.
- * @param startup Borrowed process startup record.
- * @return ASTRA_VFS_* status.
- */
-uint32_t astra_process_filesystem_open_bootstrap(
-    AstraProcessFilesystem *filesystem, const AstraStartupInfo *startup);
 /**
  * Qualify a user path against the current process directory.
  * @param typed Qualified or relative UTF-8 path.

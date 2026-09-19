@@ -3,7 +3,9 @@
 
 extern void astra_thread_start_trampoline(void);
 
+#if !defined(ASTRA_RUNTIME_DYNAMIC_LIBRARY)
 static _Thread_local uint32_t current_thread_handle;
+#endif
 
 static AstraSyscallResult
 invoke(uint32_t number, uint32_t argument0)
@@ -215,7 +217,31 @@ astra_rt_private_reserve(uint32_t byte_size, uint32_t permissions,
     *address = NULL;
     *mapped_span = 0u;
     astra_syscall5(ASTRA_SYSCALL_VM_PRIVATE_RESERVE, byte_size, permissions,
-                   0u, 0u, 0u, &result);
+                   ASTRA_VM_PRIVATE_RESERVE_EXACT, 0u, 0u, &result);
+    if (result.status == ASTRA_SYSCALL_OK) {
+        *address = (void *)(uintptr_t)result.value0;
+        *mapped_span = result.value1;
+    }
+    return result.status;
+}
+
+uint32_t
+astra_rt_private_reserve_largest(uint32_t minimum_byte_size,
+                                 uint32_t permissions, void **address,
+                                 uint32_t *mapped_span)
+{
+    AstraSyscallResult result;
+
+    if (minimum_byte_size == 0u || address == NULL || mapped_span == NULL ||
+        (permissions & ASTRA_VM_PRIVATE_READ) == 0u ||
+        (permissions & ~(ASTRA_VM_PRIVATE_READ |
+                         ASTRA_VM_PRIVATE_WRITE)) != 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    *address = NULL;
+    *mapped_span = 0u;
+    astra_syscall5(ASTRA_SYSCALL_VM_PRIVATE_RESERVE, minimum_byte_size,
+                   permissions, ASTRA_VM_PRIVATE_RESERVE_LARGEST,
+                   0u, 0u, &result);
     if (result.status == ASTRA_SYSCALL_OK) {
         *address = (void *)(uintptr_t)result.value0;
         *mapped_span = result.value1;
@@ -370,40 +396,48 @@ astra_rt_ring_write_try(uint32_t producer, const void *bytes, uint32_t length,
 }
 
 uint32_t
-astra_rt_library_map(const void *image, uint32_t length, uint32_t *base,
-                     uint32_t *span)
-{
-    AstraSyscallResult result;
-
-    if (image == NULL || length == 0u || base == NULL || span == NULL)
-        return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    *base = 0u;
-    *span = 0u;
-    astra_syscall5(ASTRA_SYSCALL_LIBRARY_MAP, (uint32_t)(uintptr_t)image,
-                   length, 0u, 0u, 0u, &result);
-    if (result.status == ASTRA_SYSCALL_OK) {
-        *base = result.value0;
-        *span = result.value1;
-    }
-    return result.status;
-}
-
-uint32_t
 astra_rt_library_attach(const AstraLibraryReference *reference,
-                        uint32_t *base, uint32_t *span)
+                        uint32_t *base, uint32_t *span,
+                        uint32_t *load_handle)
 {
     AstraSyscallResult result;
 
-    if (reference == NULL || base == NULL || span == NULL)
+    if (reference == NULL || base == NULL || span == NULL ||
+        load_handle == NULL)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     *base = 0u;
     *span = 0u;
+    *load_handle = 0u;
     astra_syscall5(ASTRA_SYSCALL_LIBRARY_ATTACH,
                    (uint32_t)(uintptr_t)reference, 0u, 0u, 0u, 0u, &result);
     if (result.status == ASTRA_SYSCALL_OK) {
         *base = result.value0;
         *span = result.value1;
+        *load_handle = result.value2;
     }
+    return result.status;
+}
+
+uint32_t
+astra_rt_process_dynamic_commit(const void *tls_template, uint32_t tls_size,
+                                uint32_t tls_alignment,
+                                uint32_t storage_size)
+{
+    AstraSyscallResult result;
+
+    if ((tls_template == NULL) != (tls_size == 0u) ||
+        tls_alignment == 0u ||
+        (tls_alignment & (tls_alignment - 1u)) != 0u ||
+        (tls_size == 0u &&
+         (tls_alignment != 1u || storage_size != 0u)) ||
+        (tls_size != 0u &&
+         (((uintptr_t)tls_template & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u ||
+          storage_size < tls_size ||
+          (storage_size & (ASTRA_MEMORY_PAGE_SIZE - 1u)) != 0u)))
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_DYNAMIC_COMMIT,
+                   (uint32_t)(uintptr_t)tls_template, tls_size,
+                   tls_alignment, storage_size, 0u, &result);
     return result.status;
 }
 
@@ -751,6 +785,19 @@ astra_process_info(uint32_t handle, AstraProcessInfo *info)
 }
 
 uint32_t
+astra_thread_info(uint32_t handle, AstraThreadInfo *info)
+{
+    AstraSyscallResult result;
+
+    if (info == NULL) {
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
+    astra_syscall5(ASTRA_SYSCALL_THREAD_INFO, handle,
+                   (uint32_t)(uintptr_t)info, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
 astra_process_snapshot(uint32_t observer, AstraProcSnapshot *records,
                        uint32_t capacity, uint32_t *live_count)
 {
@@ -766,17 +813,23 @@ astra_process_snapshot(uint32_t observer, AstraProcSnapshot *records,
 }
 
 uint32_t
-astra_library_snapshot(uint32_t observer, AstraProcLibrarySnapshot *records,
-                       uint32_t capacity, uint32_t *library_count)
+astra_library_snapshot(uint32_t observer, uint32_t start,
+                       AstraProcLibrarySnapshot *records, uint32_t capacity,
+                       uint32_t *moved, uint32_t *library_count)
 {
     AstraSyscallResult result;
 
-    if (records == NULL)
+    if (records == NULL && capacity != 0u)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     astra_syscall5(ASTRA_SYSCALL_LIBRARY_SNAPSHOT, observer,
-                   (uint32_t)(uintptr_t)records, capacity, 0u, 0u, &result);
-    if (result.status == ASTRA_SYSCALL_OK && library_count != NULL)
-        *library_count = result.value0;
+                   (uint32_t)(uintptr_t)records, capacity, start, 0u,
+                   &result);
+    if (result.status == ASTRA_SYSCALL_OK) {
+        if (moved != NULL)
+            *moved = result.value0;
+        if (library_count != NULL)
+            *library_count = result.value1;
+    }
     return result.status;
 }
 
@@ -828,6 +881,9 @@ astra_query_abi(uint32_t *abi_version, uint32_t *process_handle,
 uint32_t
 astra_current_thread_handle(uint32_t *thread_handle)
 {
+#if defined(ASTRA_RUNTIME_DYNAMIC_LIBRARY)
+    return astra_query_abi(NULL, NULL, thread_handle);
+#else
     uint32_t handle;
     uint32_t status;
 
@@ -842,12 +898,15 @@ astra_current_thread_handle(uint32_t *thread_handle)
     }
     *thread_handle = handle;
     return ASTRA_SYSCALL_OK;
+#endif
 }
 
 void
 astra_runtime_forget_current_thread_handle(void)
 {
+#if !defined(ASTRA_RUNTIME_DYNAMIC_LIBRARY)
     current_thread_handle = 0u;
+#endif
 }
 
 void

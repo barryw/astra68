@@ -11,9 +11,9 @@
 
 /** Logical name of the Network Kit shared library. */
 #define ASTRA_NETWORK_LIBRARY_NAME "network.library"
-/** Network Kit export-table ABI major version. */
+/** Network Kit ELF ABI major version. */
 #define ASTRA_NETWORK_LIBRARY_ABI_MAJOR 1u
-/** Network Kit export-table ABI minor version. */
+/** Network Kit backward-compatible ABI revision. */
 #define ASTRA_NETWORK_LIBRARY_ABI_MINOR 1u
 
 /** Open network-service session. */
@@ -105,93 +105,59 @@ _Static_assert(sizeof(AstraNetworkEndpointState) ==
 /** Static initializer for an idle AstraNetworkRequest. */
 #define ASTRA_NETWORK_REQUEST_INIT { 0, 0, 0, 0, 0 }
 
-/** Network Kit 1.x immutable export table. */
-typedef struct AstraNetworkLibraryV1 {
-    uint16_t abi_major; /**< ASTRA_NETWORK_LIBRARY_ABI_MAJOR. */
-    uint16_t abi_minor; /**< ASTRA_NETWORK_LIBRARY_ABI_MINOR. */
-    uint32_t structure_size; /**< Bytes available in this table. */
-
-    /** Open a session using a network-service factory capability. */
-    AstraNetworkStatus (*session_open)(AstraHandle, AstraNetworkSession *);
-    /** Close a session and all session-owned transport resources. */
-    AstraNetworkStatus (*session_close)(AstraNetworkSession *);
-    /** Create an endpoint in a session. */
-    AstraNetworkStatus (*endpoint_open)(AstraNetworkSession *, uint16_t,
-                                         uint8_t, uint8_t,
-                                         AstraNetworkEndpoint *);
-    /** Close an endpoint. */
-    AstraNetworkStatus (*endpoint_close)(AstraNetworkEndpoint *);
-    /** Bind an endpoint to a local address. */
-    AstraNetworkStatus (*bind)(AstraNetworkEndpoint *,
-                                const AstraNetworkAddress *);
-    /** Connect an endpoint to a peer. */
-    AstraNetworkStatus (*connect)(AstraNetworkEndpoint *,
-                                   const AstraNetworkAddress *);
-    /** Begin listening for incoming connections. */
-    AstraNetworkStatus (*listen)(AstraNetworkEndpoint *, uint32_t);
-    /** Accept one incoming connection. */
-    AstraNetworkStatus (*accept)(AstraNetworkEndpoint *,
-                                  AstraNetworkEndpoint *,
-                                  AstraNetworkAddress *);
-    /** Send bytes on a connected endpoint. */
-    AstraNetworkStatus (*send)(AstraNetworkEndpoint *, const void *, size_t,
-                                uint32_t, size_t *);
-    /** Send a datagram to an explicit address. */
-    AstraNetworkStatus (*send_to)(AstraNetworkEndpoint *, const void *,
-                                   size_t, uint32_t,
-                                   const AstraNetworkAddress *, size_t *);
-    /** Receive bytes from a connected endpoint. */
-    AstraNetworkStatus (*receive)(AstraNetworkEndpoint *, void *, size_t,
-                                   uint32_t, size_t *);
-    /** Receive a datagram and its source address. */
-    AstraNetworkStatus (*receive_from)(AstraNetworkEndpoint *, void *, size_t,
-                                        uint32_t, AstraNetworkAddress *,
-                                        size_t *);
-    /** Shut down endpoint directions selected by flags. */
-    AstraNetworkStatus (*shutdown)(AstraNetworkEndpoint *, uint32_t);
-    /** Read the bound local address. */
-    AstraNetworkStatus (*local_address)(AstraNetworkEndpoint *,
-                                         AstraNetworkAddress *);
-    /** Read the connected peer address. */
-    AstraNetworkStatus (*peer_address)(AstraNetworkEndpoint *,
-                                        AstraNetworkAddress *);
-    /** Read an endpoint option. */
-    AstraNetworkStatus (*get_option)(AstraNetworkEndpoint *, uint32_t,
-                                      uint32_t *);
-    /** Set an endpoint option. */
-    AstraNetworkStatus (*set_option)(AstraNetworkEndpoint *, uint32_t,
-                                      uint32_t);
-    /** Start asynchronous hostname resolution. */
-    AstraNetworkStatus (*resolve_start)(AstraNetworkSession *, const char *,
-                                         uint32_t, uint16_t, uint8_t, uint8_t,
-                                         AstraNetworkRequest *);
-    /** Poll an asynchronous request without waiting. */
-    AstraNetworkStatus (*request_try)(AstraNetworkRequest *,
-                                       AstraNetworkAddress *, uint32_t,
-                                       uint32_t *);
-    /** Wait for an asynchronous request until an absolute deadline. */
-    AstraNetworkStatus (*request_wait)(AstraNetworkRequest *,
-                                        AstraNetworkAddress *, uint32_t,
-                                        uint32_t *, uint64_t);
-    /** Cancel and release an asynchronous request. */
-    AstraNetworkStatus (*request_cancel)(AstraNetworkRequest *);
-    /** Borrow the endpoint readiness wait handle. */
-    AstraHandle (*readiness_handle)(const AstraNetworkEndpoint *);
-    /** Read current endpoint readiness flags. */
-    uint32_t (*readiness)(const AstraNetworkEndpoint *);
-    /** Export session capabilities for atomic exec. */
-    AstraNetworkStatus (*session_export)(const AstraNetworkSession *,
-                                         AstraNetworkSessionState *);
-    /** Import session capabilities after atomic exec. */
-    AstraNetworkStatus (*session_import)(const AstraNetworkSessionState *,
-                                         AstraNetworkSession *);
-    /** Export endpoint capabilities for atomic exec. */
-    AstraNetworkStatus (*endpoint_export)(const AstraNetworkEndpoint *,
-                                          AstraNetworkEndpointState *);
-    /** Import endpoint capabilities after atomic exec. */
-    AstraNetworkStatus (*endpoint_import)(AstraNetworkSession *,
-                                          const AstraNetworkEndpointState *,
-                                          AstraNetworkEndpoint *);
-} AstraNetworkLibraryV1;
+/** Open a session. @param factory Network factory capability. @param session Receives session. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_session_open(AstraHandle factory, AstraNetworkSession *session);
+/** Close a session. @param session Open session. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_session_close(AstraNetworkSession *session);
+/** Create an endpoint. @param session Session. @param family Family. @param type Type. @param protocol Protocol. @param endpoint Receives endpoint. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_endpoint_open(AstraNetworkSession *session, uint16_t family, uint8_t type, uint8_t protocol, AstraNetworkEndpoint *endpoint);
+/** Close an endpoint. @param endpoint Endpoint. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_endpoint_close(AstraNetworkEndpoint *endpoint);
+/** Bind an endpoint. @param endpoint Endpoint. @param address Address. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_bind(AstraNetworkEndpoint *endpoint, const AstraNetworkAddress *address);
+/** Connect an endpoint. @param endpoint Endpoint. @param address Address. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_connect(AstraNetworkEndpoint *endpoint, const AstraNetworkAddress *address);
+/** Listen for connections. @param endpoint Endpoint. @param backlog Backlog. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_listen(AstraNetworkEndpoint *endpoint, uint32_t backlog);
+/** Accept a connection. @param listener Listener. @param endpoint Receives endpoint. @param address Receives peer address. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_accept(AstraNetworkEndpoint *listener, AstraNetworkEndpoint *endpoint, AstraNetworkAddress *address);
+/** Send bytes. @param endpoint Endpoint. @param bytes Source. @param length Bytes. @param flags Flags. @param moved Receives count. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_send(AstraNetworkEndpoint *endpoint, const void *bytes, size_t length, uint32_t flags, size_t *moved);
+/** Send a datagram. @param endpoint Endpoint. @param bytes Source. @param length Bytes. @param flags Flags. @param address Destination. @param moved Receives count. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_send_to(AstraNetworkEndpoint *endpoint, const void *bytes, size_t length, uint32_t flags, const AstraNetworkAddress *address, size_t *moved);
+/** Receive bytes. @param endpoint Endpoint. @param bytes Destination. @param capacity Bytes. @param flags Flags. @param moved Receives count. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_receive(AstraNetworkEndpoint *endpoint, void *bytes, size_t capacity, uint32_t flags, size_t *moved);
+/** Receive a datagram. @param endpoint Endpoint. @param bytes Destination. @param capacity Bytes. @param flags Flags. @param address Receives source. @param moved Receives count. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_receive_from(AstraNetworkEndpoint *endpoint, void *bytes, size_t capacity, uint32_t flags, AstraNetworkAddress *address, size_t *moved);
+/** Shut down directions. @param endpoint Endpoint. @param flags Directions. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_shutdown(AstraNetworkEndpoint *endpoint, uint32_t flags);
+/** Read local address. @param endpoint Endpoint. @param address Receives address. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_local_address(AstraNetworkEndpoint *endpoint, AstraNetworkAddress *address);
+/** Read peer address. @param endpoint Endpoint. @param address Receives address. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_peer_address(AstraNetworkEndpoint *endpoint, AstraNetworkAddress *address);
+/** Read an option. @param endpoint Endpoint. @param option Option. @param value Receives value. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_get_option(AstraNetworkEndpoint *endpoint, uint32_t option, uint32_t *value);
+/** Set an option. @param endpoint Endpoint. @param option Option. @param value Value. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_set_option(AstraNetworkEndpoint *endpoint, uint32_t option, uint32_t value);
+/** Start name resolution. @param session Session. @param name Name. @param length Name bytes. @param family Family. @param type Type. @param protocol Protocol. @param request Receives request. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_resolve_start(AstraNetworkSession *session, const char *name, uint32_t length, uint16_t family, uint8_t type, uint8_t protocol, AstraNetworkRequest *request);
+/** Poll resolution. @param request Request. @param addresses Receives addresses. @param capacity Capacity. @param count Receives count. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_request_try(AstraNetworkRequest *request, AstraNetworkAddress *addresses, uint32_t capacity, uint32_t *count);
+/** Wait for resolution. @param request Request. @param addresses Receives addresses. @param capacity Capacity. @param count Receives count. @param deadline Deadline. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_request_wait(AstraNetworkRequest *request, AstraNetworkAddress *addresses, uint32_t capacity, uint32_t *count, uint64_t deadline);
+/** Cancel resolution. @param request Request. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_request_cancel(AstraNetworkRequest *request);
+/** Borrow readiness handle. @param endpoint Endpoint. @return Wait handle. */
+AstraHandle astra_network_readiness_handle(const AstraNetworkEndpoint *endpoint);
+/** Read readiness flags. @param endpoint Endpoint. @return Flags. */
+uint32_t astra_network_readiness(const AstraNetworkEndpoint *endpoint);
+/** Export a session. @param session Session. @param state Receives state. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_session_export(const AstraNetworkSession *session, AstraNetworkSessionState *state);
+/** Import a session. @param state State. @param session Receives session. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_session_import(const AstraNetworkSessionState *state, AstraNetworkSession *session);
+/** Export an endpoint. @param endpoint Endpoint. @param state Receives state. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_endpoint_export(const AstraNetworkEndpoint *endpoint, AstraNetworkEndpointState *state);
+/** Import an endpoint. @param session Session. @param state State. @param endpoint Receives endpoint. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_endpoint_import(AstraNetworkSession *session, const AstraNetworkEndpointState *state, AstraNetworkEndpoint *endpoint);
 
 #endif

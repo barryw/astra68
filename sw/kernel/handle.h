@@ -58,7 +58,8 @@ typedef enum KernelObjectType {
     KERNEL_OBJECT_RING_CONSUMER = 10,
     KERNEL_OBJECT_IRQ = 11,
     KERNEL_OBJECT_DMA = 12,
-    KERNEL_OBJECT_PROCESS_LOAD = 13
+    KERNEL_OBJECT_PROCESS_LOAD = 13,
+    KERNEL_OBJECT_LIBRARY_LOAD = 14
 } KernelObjectType;
 
 typedef enum KernelHandleStatus {

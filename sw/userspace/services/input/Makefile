@@ -3,40 +3,30 @@ include ../../../../mk/m68k-cross.mk
 CC := $(CROSS)gcc
 SIZE := $(CROSS)size
 OBJCOPY := $(CROSS)objcopy
+READELF := $(CROSS)readelf
 RUNTIME := ../../runtime
+include $(RUNTIME)/astra-link.mk
+include ../../libraries.mk
 INPUT := ../../input
 NDK := ../../../../ndk
 CPPFLAGS := -I$(NDK)/include -I../../../include -I$(RUNTIME)/include \
 	-I$(INPUT)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
-	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
-LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
-	-Wl,--build-id=none -Wl,--gc-sections -T $(RUNTIME)/astra_user.ld
+	-ffunction-sections -fdata-sections -fPIC $(ASTRA_DEBUG_FLAGS)
 TARGET := build/m68k/input.elf
 IMAGE := build/m68k/input
 OBJECT := build/m68k/main.o
-RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 INPUT_LIB := $(INPUT)/build/m68k/libastrainput.a
-CRT0 := $(RUNTIME)/build/m68k/crt0.o
-ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(INPUT) $(NDK)
-include ../../program.mk
-
-$(TARGET): $(OBJECT) $(CRT0) $(INPUT_LIB) $(RUNTIME_LIB) \
-		$(RUNTIME)/astra_user.ld
-	@mkdir -p $(@D)
-	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(CRT0) $(OBJECT) \
-		$(INPUT_LIB) $(RUNTIME_LIB) -lgcc
-
-$(IMAGE): $(TARGET)
-	$(OBJCOPY) --strip-all $< $@
+LIBRARIES := $(ASTRA_SYSTEM_LIBRARY) $(ASTRA_RUNTIME_LIBRARY) \
+	$(ASTRA_COMPILER_LIBRARY)
+ASTRA_PROGRAM_PRIVATE_INPUTS := $(INPUT_LIB)
+ASTRA_PROGRAM_PRIVATE_OWNER_TARGETS := $(INPUT):all
+include ../../dynamic-program.mk
 
 $(OBJECT): main.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
-
-size: $(IMAGE)
-	$(SIZE) $(IMAGE)
 
 test sanitize:
 	@true

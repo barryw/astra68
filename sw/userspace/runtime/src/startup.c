@@ -9,8 +9,10 @@ astra_startup_validate(const AstraStartupInfo *startup)
         startup->header_size != ASTRA_STARTUP_INFO_SIZE ||
         startup->total_size < ASTRA_STARTUP_INFO_SIZE ||
         startup->syscall_abi_version != ASTRA_SYSCALL_ABI_VERSION ||
+        (startup->flags & ~ASTRA_STARTUP_FLAG_MASK) != 0u ||
         startup->capability_count > ASTRA_STARTUP_CAPABILITY_MAX ||
-        startup->launch_source > ASTRA_LAUNCH_SOURCE_DESKTOP) {
+        startup->launch_source > ASTRA_LAUNCH_SOURCE_DESKTOP ||
+        startup->program_entry == 0u) {
         return 0;
     }
     if ((startup->argc != 0u && startup->argv_address == 0u) ||
@@ -23,6 +25,18 @@ astra_startup_validate(const AstraStartupInfo *startup)
 
     if ((startup->handoff_address == 0u) !=
         (startup->handoff_size == 0u)) {
+        return 0;
+    }
+    if ((startup->flags & ASTRA_STARTUP_FLAG_INTERPRETED) == 0u) {
+        if (startup->interpreter_base != 0u ||
+            startup->interpreter_span != 0u ||
+            startup->interpreter_entry != 0u)
+            return 0;
+    } else if (startup->interpreter_base == 0u ||
+               startup->interpreter_span == 0u ||
+               startup->interpreter_entry < startup->interpreter_base ||
+               startup->interpreter_entry - startup->interpreter_base >=
+                   startup->interpreter_span) {
         return 0;
     }
     /*

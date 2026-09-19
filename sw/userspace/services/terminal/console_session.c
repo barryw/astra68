@@ -4,11 +4,13 @@
 #include <console_stream.h>
 
 #include <astra/application_service.h>
-#include <astra/config_document.h>
+#include <astra/config_library.h>
+#include <astra/entropy.h>
 #include <astra/event_control.h>
 #include <astra/network.h>
 #include <astra/ntp.h>
 #include <astra/runtime.h>
+#include <astra/service_manager_abi.h>
 #include <astra/status.h>
 #include <astra/syscall.h>
 
@@ -35,11 +37,6 @@ typedef struct ConsoleSession {
 } ConsoleSession;
 
 static ConsoleSession session;
-
-static const AstraFilesystemLibraryV2 *filesystem_library(void)
-{
-    return session.backend.process_filesystem->library;
-}
 
 static void echo_line(void *context, const char *line, uint32_t length)
 {
@@ -101,6 +98,8 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
         ASTRA_CAPABILITY_NTP,
         ASTRA_CAPABILITY_POSIX_PROCESS,
         ASTRA_CAPABILITY_APPLICATION_LAUNCH,
+        ASTRA_CAPABILITY_SERVICE_MANAGER,
+        ASTRA_CAPABILITY_ENTROPY,
     };
     const uint32_t streams[] = {
         console_stream_stdout(), console_stream_stderr(),
@@ -123,7 +122,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
                                   ASTRA_CONFIG_COMMANDS_CAPABILITY) == 0;
 
         for (uint32_t member = 0u; ; ++member) {
-            const AstraAssign *assign = filesystem_library()->assign_member(
+            const AstraAssign *assign = astra_assign_member(
                 astra_process_vfs_assigns(), mount_names[index], member);
             uint32_t namespace_rights;
 
@@ -158,7 +157,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
         }
     }
     {
-        const AstraAssign *work = filesystem_library()->assign_lookup(
+        const AstraAssign *work = astra_assign_lookup(
             astra_process_vfs_assigns(), "WORK");
 
         if (work != NULL) {
@@ -313,6 +312,25 @@ static void hangup_session(void)
         (void)astra_process_terminate(session.child, ASTRA_SIGNAL_HANGUP);
 }
 
+static uint32_t open_process_interpreter(
+    void *context, const char *identity, AstraReadSource *source)
+{
+    AstraVfsReadSource *vfs_source = context;
+    AstraLibraryReference reference;
+    uint32_t status = astra_process_library_source_open(
+        identity, vfs_source, &reference);
+
+    if (status != ASTRA_VFS_OK)
+        return status;
+    *source = (AstraReadSource){
+        .length = vfs_source->length,
+        .read_at = astra_vfs_read_source_read_at,
+        .release = astra_vfs_read_source_close,
+        .context = vfs_source,
+    };
+    return ASTRA_SYSCALL_OK;
+}
+
 static uint32_t run_zsh(void)
 {
     static const char *const argv[] = {"zsh"};
@@ -325,6 +343,7 @@ static uint32_t run_zsh(void)
     AstraLaunchGrant grants[ASTRA_LAUNCH_GRANT_MAX] = {0};
     AstraLaunchArguments arguments;
     AstraVfsReadSource source = ASTRA_VFS_READ_SOURCE_INIT;
+    AstraVfsReadSource interpreter_source = ASTRA_VFS_READ_SOURCE_INIT;
     char argument_storage[16];
     char environment_storage[96];
     AstraProcessInfo crash = {0};
@@ -354,10 +373,19 @@ static uint32_t run_zsh(void)
     }
     ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
                  "launching zsh, %u bytes of image", source.length);
-    status = astra_launch_stream(
-        source.length, astra_vfs_read_source_read_at,
-        astra_vfs_read_source_close, &source, grants, grant_count,
-        &arguments, &session.child, &session.child_id);
+    {
+        AstraReadSource program = {
+            .length = source.length,
+            .read_at = astra_vfs_read_source_read_at,
+            .release = astra_vfs_read_source_close,
+            .context = &source,
+        };
+
+        status = astra_launch_executable_stream(
+            &program, open_process_interpreter, &interpreter_source,
+            grants, grant_count, &arguments, NULL,
+            &session.child, &session.child_id);
+    }
     if (status != ASTRA_SYSCALL_OK) {
         ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_WARNING,
                      "zsh launch refused, status %u", status);
@@ -422,9 +450,7 @@ uint32_t console_session_run_backend(const ConsoleSessionBackend *backend)
     if (backend == NULL || backend->columns == 0u || backend->rows == 0u ||
         backend->terminal_storage == NULL ||
         backend->terminal_storage_size == 0u || backend->render == NULL ||
-        backend->startup == NULL ||
-        backend->process_filesystem == NULL ||
-        backend->process_filesystem->library == NULL)
+        backend->startup == NULL || backend->process_filesystem == NULL)
         return SESSION_NOT_RUN;
     (void)memset(&session, 0, sizeof(session));
     session.backend = *backend;

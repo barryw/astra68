@@ -31,6 +31,7 @@
 #include <astra/ext4_time.h>
 #include <astra/mbr.h>
 #include <astra/memory_block.h>
+#include <astra/vfs_ext4_backend.h>
 
 #include <ext4.h>
 #include <ext4_crc32.h>
@@ -1045,6 +1046,57 @@ many_path(char *out, size_t capacity, unsigned index)
 }
 
 static int
+check_vfs_directory_handle(void)
+{
+    AstraVfsExt4File files[4];
+    AstraVfsExt4Backend backend;
+    AstraVfsNodeInfo info = {0};
+    const AstraVfsBackendOps *ops = astra_vfs_ext4_ops();
+    uintptr_t directory = 0u;
+    uint64_t cursor = 0u;
+    int found_nested = 0;
+    int leaked_root = 0;
+    uint32_t status;
+
+    memset(files, 0, sizeof(files));
+    if (!astra_vfs_ext4_init(&backend, MOUNT_POINT, files, 4u))
+        return fail("VFS ext4 init", 0);
+    status = ops->open(&backend, "/dir",
+                       ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY,
+                       ASTRA_VFS_MODE_DEFAULT, &directory, &info);
+    if (status != ASTRA_VFS_OK || directory == 0u ||
+        info.kind != ASTRA_VFS_KIND_DIRECTORY)
+        return fail("VFS open directory handle", (int)status);
+    for (;;) {
+        char name[ASTRA_VFS_NAME_MAX];
+        uint64_t next = 0u;
+
+        status = ops->readdir(&backend, directory, "", cursor, name,
+                              sizeof(name), &info, &next);
+        if (status != ASTRA_VFS_OK) {
+            (void)ops->close(&backend, directory);
+            return fail("VFS read directory handle", (int)status);
+        }
+        if (strcmp(name, "nested") == 0)
+            found_nested = 1;
+        if (strcmp(name, "many") == 0)
+            leaked_root = 1;
+        cursor = next;
+        if (cursor == 0u)
+            break;
+    }
+    status = ops->close(&backend, directory);
+    if (status != ASTRA_VFS_OK)
+        return fail("VFS close directory handle", (int)status);
+    if (!found_nested)
+        return fail("VFS directory handle missed child", 0);
+    if (leaked_root)
+        return fail("VFS directory handle leaked root", 0);
+    puts("VFS directory handle: child present, root entry absent");
+    return 0;
+}
+
+static int
 populate(void)
 {
     char path[64];
@@ -1489,6 +1541,18 @@ verify(void)
         ++failures;
         return 1;
     }
+    rc = ext4_dir_open(&dir, MOUNT_POINT "many");
+    if (rc != EOK)
+        return fail("ext4_dir_open(eof resume)", rc);
+    dir.next_off = dir.f.fsize;
+    entry = ext4_dir_entry_next(&dir);
+    if (entry != NULL) {
+        printf("FAIL directory EOF resume returned an entry\n");
+        ++failures;
+        ext4_dir_close(&dir);
+        return 1;
+    }
+    ext4_dir_close(&dir);
     return 0;
 }
 
@@ -2173,7 +2237,7 @@ main(int argc, char **argv)
     } else if (full_volume) {
         (void)check_full_volume_reports_enospc();
     } else if (populate() == 0) {
-        if (verify() == 0 && !on_file &&
+        if (check_vfs_directory_handle() == 0 && verify() == 0 && !on_file &&
             check_coalesced_read_cache() == 0 &&
             check_concurrent_read_oracle() == 0 &&
             check_concurrent_disjoint_writes() == 0)

@@ -11,7 +11,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-static uint32_t trace_event_count[KERNEL_TRACE_EVENT_MONITOR_DROP + 1u];
+static uint32_t trace_event_count[KERNEL_TRACE_EVENT_COUNT];
 static uint32_t monitor_irq_services;
 static uint32_t monitor_spi_irq_services;
 static uint32_t host_irq_services;
@@ -115,7 +115,7 @@ bool kernel_monitor_spi_binding(KernelIrqInternalBinding *binding)
 
 static bool record_trace(KernelTraceEvent event)
 {
-    assert(event > 0 && event <= KERNEL_TRACE_EVENT_MONITOR_DROP);
+    assert(event > 0 && event < KERNEL_TRACE_EVENT_COUNT);
     ++trace_event_count[event];
     return true;
 }
@@ -196,8 +196,7 @@ KernelWorkerStatus kernel_worker_signal(uint32_t work)
 
 static void clear_trace(void)
 {
-    for (uint32_t event = 0u;
-         event <= KERNEL_TRACE_EVENT_MONITOR_DROP; ++event)
+    for (uint32_t event = 0u; event < KERNEL_TRACE_EVENT_COUNT; ++event)
         trace_event_count[event] = 0u;
     staged_trace_pending = false;
     trace_worker_signals = 0u;

@@ -9,7 +9,7 @@ from event_catalog import CatalogError, read_section
 
 RECORD_SIZE = 128
 RECORD_MAGIC = 0x414C4942
-RECORD_VERSION = 1
+RECORD_VERSION = 2
 TARGET_M68040 = 0x4D303430
 NAME_MAX = 24
 AUTHOR_MAX = 32
@@ -46,6 +46,11 @@ def parse(blob):
                            (header_size, RECORD_SIZE))
     if target != TARGET_M68040:
         raise LibraryError("unsupported target 0x%08x" % target)
+    if flags:
+        raise LibraryError("record has nonzero reserved flags 0x%04x" % flags)
+    if exports_offset:
+        raise LibraryError("record has nonzero reserved field 0x%08x" %
+                           exports_offset)
     at = _HEAD_SIZE
     return {
         "name": _text(blob[at:at + NAME_MAX]),

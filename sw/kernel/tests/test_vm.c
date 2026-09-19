@@ -177,7 +177,8 @@ static void fill_info(AstraBootInfo *info)
     add_range(info, ASTRA_EARLY_LOG_ADDRESS, ASTRA_EARLY_LOG_SIZE,
               ASTRA_MEMORY_RANGE_EARLY_LOG,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
-    add_range(info, ASTRA_USER_IMAGE_ADDRESS, ASTRA_USER_IMAGE_MAX_SIZE,
+    add_range(info, ASTRA_BOOT_LOW_USABLE_ADDRESS,
+              ASTRA_BOOT_LOW_USABLE_SIZE,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
@@ -185,7 +186,8 @@ static void fill_info(AstraBootInfo *info)
               ASTRA_MEMORY_RANGE_KERNEL,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_range(info, ASTRA_KERNEL_USABLE_ADDRESS, (OHCI_DMA_POOL_BASE - ASTRA_KERNEL_USABLE_ADDRESS),
+    add_range(info, ASTRA_USER_IMAGE_ADDRESS,
+              OHCI_DMA_POOL_BASE - ASTRA_USER_IMAGE_ADDRESS,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
@@ -240,7 +242,7 @@ static void test_private_reservation_fault_and_decommit(void)
     assert(kernel_vm_private_reserve(
                &space, 1u, KERNEL_VM_READ | KERNEL_VM_WRITE,
                &base, &span) == KERNEL_VM_OK);
-    assert(base == KERNEL_VM_PRIVATE_BASE);
+    assert(base == KERNEL_VM_PROCESS_HEAP_CONTROL_END);
     assert(span == KERNEL_VM_PRIVATE_SLOT_SIZE);
     assert(kernel_vm_private_reserve(
                &space, KERNEL_VM_PRIVATE_SLOT_SIZE + 1u, KERNEL_VM_READ,
@@ -301,6 +303,42 @@ static void test_private_reservation_fault_and_decommit(void)
     assert(kernel_memory_release_owner(93u, NULL) == KERNEL_MEMORY_OK);
     assert(kernel_memory_stats(&decommitted));
     assert(decommitted.free_frames == before.free_frames + 1u);
+}
+
+static void test_private_largest_reservation_uses_remaining_extent(void)
+{
+    KernelAddressSpace space = {0};
+    uint32_t loader_base;
+    uint32_t loader_span;
+    uint32_t heap_base;
+    uint32_t heap_span;
+
+    initialize_test();
+    assert(kernel_vm_enable() == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(94u, &space) == KERNEL_VM_OK);
+
+    /* Runtime-loader bookkeeping may exist before libc starts its heap. */
+    assert(kernel_vm_private_reserve(
+               &space, 1u, KERNEL_VM_READ | KERNEL_VM_WRITE,
+               &loader_base, &loader_span) == KERNEL_VM_OK);
+    assert(loader_base == KERNEL_VM_PROCESS_HEAP_CONTROL_END);
+    assert(loader_span == KERNEL_VM_PRIVATE_SLOT_SIZE);
+
+    assert(kernel_vm_private_reserve_largest(
+               &space, 1u, KERNEL_VM_READ | KERNEL_VM_WRITE,
+               &heap_base, &heap_span) == KERNEL_VM_OK);
+    assert(heap_base == loader_base + loader_span);
+    assert(heap_span == KERNEL_VM_PRIVATE_END - heap_base);
+
+    /* There is no second extent and failure must not alter the outputs. */
+    heap_base = 0xaaaaaaaau;
+    heap_span = 0xbbbbbbbbu;
+    assert(kernel_vm_private_reserve_largest(
+               &space, 1u, KERNEL_VM_READ | KERNEL_VM_WRITE,
+               &heap_base, &heap_span) == KERNEL_VM_OUT_OF_MEMORY);
+    assert(heap_base == 0u && heap_span == 0u);
+
+    assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
 }
 
 static void test_address_space_copy_crosses_pages_and_checks_rights(void)
@@ -520,6 +558,22 @@ static void test_map_switch_unmap_and_stale_guards(void)
     assert(kernel_vm_create_address_space(42u, &space) == KERNEL_VM_OK);
     assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 42u,
                                &physical) == KERNEL_MEMORY_OK);
+    /* No generic process mapping may trespass into another subsystem's ABI. */
+    assert(kernel_vm_map_page(&space, ASTRA_SHARED_AREA_ADDRESS_START,
+                              physical, KERNEL_VM_READ) ==
+           KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_map_page(&space, ASTRA_RESERVED_ADDRESS_START,
+                              physical, KERNEL_VM_READ) ==
+           KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_map_page(&space, ASTRA_HOST_CHANNEL_ADDRESS_START,
+                              physical, KERNEL_VM_READ) ==
+           KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_map_page(&space, ASTRA_DMA_ADDRESS_START,
+                              physical, KERNEL_VM_READ) ==
+           KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_map_page(&space, ASTRA_PRIVATE_ADDRESS_START,
+                              physical, KERNEL_VM_READ) ==
+           KERNEL_VM_INVALID_ARGUMENT);
     assert(kernel_vm_map_page(&space, 0x10000000u, physical,
                               KERNEL_VM_READ | KERNEL_VM_WRITE) ==
            KERNEL_VM_OK);
@@ -655,6 +709,85 @@ static void test_destroy_releases_read_only_mapping(void)
     assert(kernel_memory_frame_info(physical, &frame));
     assert(frame.references == 1u);
     assert(kernel_memory_release_owner(77u, NULL) == KERNEL_MEMORY_OK);
+}
+
+static void test_protect_read_only_is_atomic_and_idempotent(void)
+{
+    KernelAddressSpace space = {0};
+    const uint32_t base = 0x21000000u;
+    uint32_t physical[3];
+    uint32_t flushes_before;
+
+    initialize_test();
+    assert(kernel_vm_enable() == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(78u, &space) == KERNEL_VM_OK);
+    for (uint32_t page = 0u; page < 3u; ++page) {
+        assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 78u,
+                                   &physical[page]) == KERNEL_MEMORY_OK);
+        assert(kernel_vm_map_page(
+                   &space, base + page * KERNEL_PAGE_SIZE, physical[page],
+                   page == 2u ? KERNEL_VM_READ :
+                                KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+               KERNEL_VM_OK);
+    }
+
+    assert(kernel_vm_protect_read_only(&space, base + 1u, 1u) ==
+           KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_protect_read_only(&space, base, 0u) ==
+           KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_protect_read_only(
+               &space, KERNEL_VM_USER_MAX & ~(KERNEL_PAGE_SIZE - 1u), 2u) ==
+           KERNEL_VM_INVALID_ARGUMENT);
+
+    assert(kernel_vm_unmap_page(&space, base + KERNEL_PAGE_SIZE) ==
+           KERNEL_VM_OK);
+    flushes_before = flush_page_count;
+    assert(kernel_vm_protect_read_only(&space, base, 3u) ==
+           KERNEL_VM_NOT_MAPPED);
+    assert(kernel_vm_probe_address_space(&space, base, NULL) ==
+           KERNEL_VM_MAPPING_READ_WRITE);
+    assert(kernel_vm_probe_address_space(
+               &space, base + 2u * KERNEL_PAGE_SIZE, NULL) ==
+           KERNEL_VM_MAPPING_READ_ONLY);
+    assert(flush_page_count == flushes_before);
+
+    assert(kernel_vm_map_page(&space, base + KERNEL_PAGE_SIZE, physical[1],
+                              KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+           KERNEL_VM_OK);
+    {
+        KernelVmPageRange ranges[2] = {
+            {base, 1u},
+            {base + 3u * KERNEL_PAGE_SIZE, 1u},
+        };
+
+        flushes_before = flush_page_count;
+        assert(kernel_vm_protect_read_only_ranges(&space, ranges, 2u) ==
+               KERNEL_VM_NOT_MAPPED);
+        assert(kernel_vm_probe_address_space(&space, base, NULL) ==
+               KERNEL_VM_MAPPING_READ_WRITE);
+        assert(flush_page_count == flushes_before);
+        ranges[1].virtual_address = base + KERNEL_PAGE_SIZE;
+        assert(kernel_vm_protect_read_only_ranges(&space, ranges, 2u) ==
+               KERNEL_VM_OK);
+        assert(kernel_vm_probe_address_space(&space, base, NULL) ==
+               KERNEL_VM_MAPPING_READ_ONLY);
+        assert(kernel_vm_probe_address_space(
+                   &space, base + KERNEL_PAGE_SIZE, NULL) ==
+               KERNEL_VM_MAPPING_READ_ONLY);
+        assert(flush_page_count == flushes_before + 2u);
+    }
+    flushes_before = flush_page_count;
+    assert(kernel_vm_protect_read_only(&space, base, 3u) == KERNEL_VM_OK);
+    for (uint32_t page = 0u; page < 3u; ++page)
+        assert(kernel_vm_probe_address_space(
+                   &space, base + page * KERNEL_PAGE_SIZE, NULL) ==
+               KERNEL_VM_MAPPING_READ_ONLY);
+    assert(flush_page_count == flushes_before);
+    assert(kernel_vm_protect_read_only(&space, base, 3u) == KERNEL_VM_OK);
+    assert(flush_page_count == flushes_before);
+
+    assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
+    assert(kernel_memory_release_owner(78u, NULL) == KERNEL_MEMORY_OK);
 }
 
 static void test_cow_alias_can_change_owner_and_become_private(void)
@@ -854,7 +987,7 @@ static void test_shared_map_existing_leaf_rollback_and_alias_guards(void)
     KernelVmStats baseline_vm;
     KernelFrameInfo frame;
     uint32_t physical_pages[2];
-    uint32_t private_page;
+    uint32_t existing_page;
     uint32_t root_descriptor;
     uint32_t *table;
 
@@ -862,10 +995,11 @@ static void test_shared_map_existing_leaf_rollback_and_alias_guards(void)
     assert(kernel_memory_stats(&initial_memory));
     assert(kernel_vm_create_address_space(51u, &first) == KERNEL_VM_OK);
     assert(kernel_vm_create_address_space(52u, &second) == KERNEL_VM_OK);
-    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 51u,
-                               &private_page) == KERNEL_MEMORY_OK);
-    assert(kernel_vm_map_page(&first, 0x40008000u, private_page,
-                              KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_SHARED, frame_owner,
+                               &existing_page) == KERNEL_MEMORY_OK);
+    assert(kernel_vm_map_shared_page(&first, 0x40008000u, existing_page,
+                                     frame_owner,
+                                     KERNEL_VM_READ | KERNEL_VM_WRITE) ==
            KERNEL_VM_OK);
     assert(kernel_memory_alloc_pages_zeroed(
                2u, KERNEL_FRAME_SHARED, frame_owner, physical_pages) ==
@@ -946,17 +1080,47 @@ static void test_shared_map_existing_leaf_rollback_and_alias_guards(void)
     assert(kernel_memory_release(physical_pages[1], 1u, frame_owner) ==
            KERNEL_MEMORY_OK);
     assert(kernel_vm_unmap_page(&first, 0x40008000u) == KERNEL_VM_OK);
-    assert(kernel_memory_release(private_page, 1u, 51u) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_release(existing_page, 1u, frame_owner) ==
+           KERNEL_MEMORY_OK);
     assert(kernel_vm_destroy_address_space(&first) == KERNEL_VM_OK);
     assert(kernel_vm_destroy_address_space(&second) == KERNEL_VM_OK);
     assert(kernel_memory_stats(&final_memory));
     assert(final_memory.free_frames == initial_memory.free_frames);
 }
 
-static void test_library_code_range_is_shared_and_executable(void)
+static void test_shared_aliases_are_not_limited_by_process_table_size(void)
+{
+    KernelAddressSpace spaces[33] = {{0}};
+    const uint32_t frame_owner = 0x40000014u;
+    uint32_t physical;
+
+    initialize_test();
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_SHARED, frame_owner,
+                               &physical) == KERNEL_MEMORY_OK);
+    for (uint32_t index = 0u; index < 33u; ++index) {
+        assert(kernel_vm_create_address_space(1000u + index,
+                                              &spaces[index]) ==
+               KERNEL_VM_OK);
+        assert(kernel_vm_map_shared_page(
+                   &spaces[index], KERNEL_VM_AREA_BASE, physical,
+                   frame_owner, KERNEL_VM_READ) == KERNEL_VM_OK);
+    }
+    for (uint32_t index = 0u; index < 33u; ++index) {
+        assert(kernel_vm_unmap_shared_range(
+                   &spaces[index], KERNEL_VM_AREA_BASE, &physical, 1u,
+                   frame_owner) == KERNEL_VM_OK);
+        assert(kernel_vm_destroy_address_space(&spaces[index]) ==
+               KERNEL_VM_OK);
+    }
+    assert(kernel_memory_release(physical, 1u, frame_owner) ==
+           KERNEL_MEMORY_OK);
+}
+
+static void test_dynamic_code_range_is_shared_and_executable(void)
 {
     const uint32_t frame_owner = 0x30000001u;
-    const uint32_t address = ASTRA_LIBRARY_BASE + 0x1000u;
+    const uint32_t first_address = KERNEL_VM_DYNAMIC_BASE + 0x1000u;
+    const uint32_t second_address = KERNEL_VM_DYNAMIC_BASE + 0x02001000u;
     KernelAddressSpace first = {0};
     KernelAddressSpace second = {0};
     KernelFrameInfo frame;
@@ -974,23 +1138,20 @@ static void test_library_code_range_is_shared_and_executable(void)
     flush_pages_before = flush_page_count;
     invalidations_before = cache_invalidation_count;
     assert(kernel_vm_map_shared_range(
-               &first, address, physical_pages, 2u, frame_owner,
+               &first, first_address, physical_pages, 2u, frame_owner,
                KERNEL_VM_READ | KERNEL_VM_EXEC) == KERNEL_VM_OK);
     assert(flush_page_count == flush_pages_before + 2u);
     assert(cache_invalidation_count == invalidations_before + 2u);
     assert(kernel_vm_map_shared_range(
-               &second, address, physical_pages, 2u, frame_owner,
+               &second, second_address, physical_pages, 2u, frame_owner,
                KERNEL_VM_READ | KERNEL_VM_EXEC) == KERNEL_VM_OK);
     assert(kernel_memory_frame_info(physical_pages[0], &frame));
     assert(frame.references == 3u); /* cache plus two address spaces */
     assert(kernel_memory_frame_info(physical_pages[1], &frame));
     assert(frame.references == 3u);
     assert(kernel_vm_map_shared_range(
-               &second, address + ASTRA_LIBRARY_SLOT_SIZE, physical_pages,
-               2u, frame_owner, KERNEL_VM_READ | KERNEL_VM_EXEC) ==
-           KERNEL_VM_CACHE_ALIAS);
-    assert(kernel_vm_map_shared_range(
-               &second, address + 0x2000u, physical_pages, 2u, frame_owner,
+               &second, second_address + 0x2000u, physical_pages, 2u,
+               frame_owner,
                KERNEL_VM_READ | KERNEL_VM_WRITE | KERNEL_VM_EXEC) ==
            KERNEL_VM_INVALID_ARGUMENT);
     assert(kernel_vm_map_shared_range(
@@ -998,10 +1159,10 @@ static void test_library_code_range_is_shared_and_executable(void)
                frame_owner, KERNEL_VM_READ | KERNEL_VM_EXEC) ==
            KERNEL_VM_INVALID_ARGUMENT);
     assert(kernel_vm_unmap_shared_range(
-               &first, address, physical_pages, 2u, frame_owner) ==
+               &first, first_address, physical_pages, 2u, frame_owner) ==
            KERNEL_VM_OK);
     assert(kernel_vm_unmap_shared_range(
-               &second, address, physical_pages, 2u, frame_owner) ==
+               &second, second_address, physical_pages, 2u, frame_owner) ==
            KERNEL_VM_OK);
     assert(kernel_memory_frame_info(physical_pages[0], &frame));
     assert(frame.references == 1u);
@@ -1070,13 +1231,16 @@ int main(void)
     test_map_switch_unmap_and_stale_guards();
     test_host_channel_mapping_is_private_and_uncached();
     test_destroy_releases_read_only_mapping();
+    test_protect_read_only_is_atomic_and_idempotent();
     test_cow_alias_can_change_owner_and_become_private();
     test_clone_is_lazy_and_write_fault_copies_one_page();
     test_shared_map_transaction_rolls_back_every_stage();
     test_shared_map_existing_leaf_rollback_and_alias_guards();
-    test_library_code_range_is_shared_and_executable();
+    test_shared_aliases_are_not_limited_by_process_table_size();
+    test_dynamic_code_range_is_shared_and_executable();
     test_device_aperture_above_the_low_region_is_uncached();
     test_private_reservation_fault_and_decommit();
+    test_private_largest_reservation_uses_remaining_extent();
     test_address_space_copy_crosses_pages_and_checks_rights();
     puts("KERNEL VM PASS");
     return 0;

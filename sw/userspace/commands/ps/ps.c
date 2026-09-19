@@ -24,7 +24,6 @@
 #include <astra/proc.h>
 #include <astra/divide.h>
 #include <astra/runtime.h>
-#include <astra/vfs_port_transport.h>
 #include <astra/vfs_process.h>
 
 #include <stdio.h>
@@ -48,8 +47,10 @@ read_snapshot(AstraProcSnapshot *records, uint32_t capacity, uint32_t *moved)
 {
     const AstraAssign *assign = NULL;
     AstraVfsClient *client;
-    const uint8_t *bytes = NULL;
+    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
     uint64_t size = 0u;
+    uint64_t offset = 0u;
+    uint16_t kind = 0u;
     char path[ASTRA_VFS_PATH_MAX];
     uint32_t status;
 
@@ -62,13 +63,35 @@ read_snapshot(AstraProcSnapshot *records, uint32_t capacity, uint32_t *moved)
     client = astra_process_vfs_client_for(assign);
     if (client == NULL)
         return ASTRA_VFS_ERR_NOT_FOUND;
-    status = astra_vfs_port_read_path(client, path, &bytes, moved, &size);
-    if (status != ASTRA_VFS_OK || *moved != size || *moved > capacity ||
-        (*moved != 0u && bytes == NULL))
-        return status != ASTRA_VFS_OK ? status : ASTRA_VFS_ERR_PROTOCOL;
-    for (uint32_t index = 0u; index < *moved; ++index)
-        ((uint8_t *)records)[index] = bytes[index];
-    return ASTRA_VFS_OK;
+    status = astra_vfs_open(client, path, ASTRA_VFS_OPEN_READ, &file, &size,
+                            &kind);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (size > capacity || size > UINT32_MAX) {
+        (void)astra_vfs_close(client, file);
+        return ASTRA_VFS_ERR_PROTOCOL;
+    }
+    while (offset < size) {
+        uint32_t chunk = (uint32_t)(size - offset);
+        uint32_t got = 0u;
+
+        if (chunk > ASTRA_VFS_IO_MAX)
+            chunk = ASTRA_VFS_IO_MAX;
+        status = astra_vfs_read(client, file, offset,
+                                (uint8_t *)records + (uint32_t)offset,
+                                chunk, &got);
+        if (status != ASTRA_VFS_OK || got == 0u) {
+            status = status != ASTRA_VFS_OK ? status : ASTRA_VFS_ERR_PROTOCOL;
+            break;
+        }
+        offset += got;
+    }
+    if (astra_vfs_close(client, file) != ASTRA_VFS_OK &&
+        status == ASTRA_VFS_OK)
+        status = ASTRA_VFS_ERR_PROTOCOL;
+    *moved = (uint32_t)offset;
+    return status == ASTRA_VFS_OK && offset == size
+               ? ASTRA_VFS_OK : status;
 }
 
 static void

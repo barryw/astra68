@@ -1,10 +1,12 @@
 include ../../../mk/m68k-cross.mk
+include ../../../mk/astra-shared-library.mk
 
 CC := $(CROSS)gcc
 READELF := $(CROSS)readelf
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
 RUNTIME := ../runtime
+COMPILER := ../compiler
 GRAPHICS := ../graphics
 NDK := ../../../ndk
 CPPFLAGS := -Iinclude -I$(GRAPHICS)/include -I$(RUNTIME)/include \
@@ -14,29 +16,28 @@ DEPFLAGS := -MMD -MP
 HOST_FLAGS := -O2
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
-	-ffunction-sections -fdata-sections -fPIC -fvisibility=hidden
-LIBRARY_LINK_FLAGS := -nostdlib -shared -Wl,-Bsymbolic \
-	-Wl,--no-undefined -Wl,--build-id=none -Wl,--gc-sections \
-	-Wl,--hash-style=sysv -Wl,-z,max-page-size=0x1000 \
-	-T $(RUNTIME)/astra_library.ld
-INTERFACE_TARGET := build/m68k/libraries/interface.library
+	-ffunction-sections -fdata-sections $(ASTRA_SHARED_PIC_FLAGS)
+INTERFACE_TARGET := build/m68k/libraries/interface.library.5
 INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
 	build/m68k/text_surface.o build/m68k/undo.o build/m68k/text_model.o \
 	build/m68k/scroll.o
-INPUT_TARGET := build/m68k/libraries/input.library
-INPUT_OBJECTS := build/m68k/input_library.o
-GRAPHICS_PIC_LIB := $(GRAPHICS)/build/m68k/libastragraphics-pic.a
-NDK_PIC_LIB := $(NDK)/build/m68k/libastra-pic.a
+INTERFACE_LIBRARY_MAP := interface.library.exports
 NDK_HOST_UTF8 := $(NDK)/build/host/utf8.o
-RUNTIME_PIC_LIB := $(RUNTIME)/build/m68k/libastrart-pic.a
+GRAPHICS_LIBRARY := $(GRAPHICS)/build/m68k/libraries/graphics.library.2
+FONT_LIBRARY := $(GRAPHICS)/build/m68k/libraries/font.library.2
+SYSTEM_LIBRARY := $(NDK)/build/m68k/libraries/system.library.1
+RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
+COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.1
+SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 INTERFACE_HOST_TEST := build/host/test_interface
-INPUT_HOST_TEST := build/host/test_input_library
 TEXT_SURFACE_HOST_TEST := build/host/test_text_surface
 UNDO_HOST_TEST := build/host/test_undo
 TEXT_MODEL_HOST_TEST := build/host/test_text_model
 SCROLL_HOST_TEST := build/host/test_scroll
 
-all: $(INTERFACE_TARGET) $(INPUT_TARGET) library-contract
+all: $(INTERFACE_TARGET) library-contract
+
+interface-library: $(INTERFACE_TARGET)
 
 $(GRAPHICS)/build/generated/astra_font8x8.inc \
 $(GRAPHICS)/build/generated/astra_ui_font.inc \
@@ -73,44 +74,49 @@ build/m68k/scroll.o: src/scroll.c
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
 
-build/m68k/input_library.o: src/input_library.c
+$(INTERFACE_OBJECTS): Makefile
+
+shared-libraries-ready:
+	$(MAKE) -C $(GRAPHICS) graphics-library font-library
+	$(MAKE) -C $(NDK) library
+	$(MAKE) -C $(COMPILER) library
+
+$(INTERFACE_TARGET): $(INTERFACE_OBJECTS) $(INTERFACE_LIBRARY_MAP) \
+		$(ASTRA_SHARED_LINK_INPUTS) \
+		| shared-libraries-ready
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
-		-c $< -o $@
+	$(CC) $(LIBRARY_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
+		-Wl,-soname,interface.library.5 \
+		-Wl,--version-script=$(INTERFACE_LIBRARY_MAP) \
+		-o $@ $(INTERFACE_OBJECTS) \
+		-L$(dir $(GRAPHICS_LIBRARY)) -L$(dir $(SYSTEM_LIBRARY)) \
+		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
+		-Wl,--no-as-needed -Wl,-l:graphics.library.2 \
+		-Wl,-l:font.library.2 -Wl,-l:system.library.1 \
+		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1
 
-$(INTERFACE_OBJECTS) $(INPUT_OBJECTS): Makefile
-
-$(GRAPHICS_PIC_LIB):
-	$(MAKE) -C $(GRAPHICS) pic
-
-$(NDK_PIC_LIB):
-	$(MAKE) -C $(NDK) pic
-
-$(RUNTIME_PIC_LIB):
-	$(MAKE) -C $(RUNTIME) pic
-
-$(INTERFACE_TARGET): $(INTERFACE_OBJECTS) $(GRAPHICS_PIC_LIB) \
-		$(NDK_PIC_LIB) $(RUNTIME_PIC_LIB) $(RUNTIME)/astra_library.ld
-	@mkdir -p $(@D)
-	$(CC) $(LIBRARY_FLAGS) $(LIBRARY_LINK_FLAGS) \
-		-Wl,-soname,interface.library.5 -o $@ $(INTERFACE_OBJECTS) \
-		-Wl,--start-group $(GRAPHICS_PIC_LIB) $(NDK_PIC_LIB) \
-		$(RUNTIME_PIC_LIB) -Wl,--end-group -lgcc
-
-$(INPUT_TARGET): $(INPUT_OBJECTS) $(NDK_PIC_LIB) $(RUNTIME_PIC_LIB) \
-		$(RUNTIME)/astra_library.ld
-	@mkdir -p $(@D)
-	$(CC) $(LIBRARY_FLAGS) $(LIBRARY_LINK_FLAGS) \
-		-Wl,-soname,input.library.1 -o $@ $(INPUT_OBJECTS) \
-		-Wl,--start-group $(NDK_PIC_LIB) $(RUNTIME_PIC_LIB) \
-		-Wl,--end-group -lgcc
-
-library-contract: $(INTERFACE_TARGET) $(INPUT_TARGET)
+library-contract: $(INTERFACE_TARGET)
+	@python3 ../../../tools/check_shared_library_layout.py $(INTERFACE_TARGET)
+	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
+		$(INTERFACE_LIBRARY_MAP) $(INTERFACE_TARGET)
+	@python3 $(SYMBOL_OWNERSHIP_CHECK) --readelf $(READELF) \
+		$(INTERFACE_TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) \
+		$(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library 5.1.0 ABI 5.1$$'
-	@python3 ../../../tools/library_info.py $(INPUT_TARGET) | \
-		grep -q '^input.library 1.0.0 ABI 1.0$$'
-	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET) $(INPUT_TARGET))
+		grep -q '^interface.library.5 5.1.0 ABI 5.1$$'
+	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
+		grep -c 'NEEDED.*graphics.library.2')" = 1
+	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
+		grep -c 'NEEDED.*font.library.2')" = 1
+	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
+		grep -c 'NEEDED.*system.library.1')" = 1
+	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
+		grep -c 'NEEDED.*runtime.library.1')" = 1
+	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
+		grep -c 'NEEDED.*compiler.library.1')" = 1
+	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
+		awk '/NEEDED/{n++} END{print n+0}')" = 5
+	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET))
 
 $(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/text_surface.c \
 		src/text_model.c src/scroll.c $(NDK_HOST_UTF8) tests/test_interface.c \
@@ -119,10 +125,6 @@ $(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/text_surface.c
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -DASTRA_INTERFACE_TEST \
 		-DASTRA_NDK_TEST \
 		-ffunction-sections -Wl,--gc-sections $^ -o $@
-
-$(INPUT_HOST_TEST): src/input_library.c tests/test_input_library.c
-	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
 $(TEXT_SURFACE_HOST_TEST): src/text_surface.c tests/test_text_surface.c \
 		$(NDK_HOST_UTF8)
@@ -148,10 +150,9 @@ $(SCROLL_HOST_TEST): src/scroll.c tests/test_scroll.c
 $(NDK_HOST_UTF8):
 	$(MAKE) -C $(NDK) build/host/utf8.o
 
-test: $(INTERFACE_HOST_TEST) $(INPUT_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
+test: $(INTERFACE_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
 		$(UNDO_HOST_TEST) $(TEXT_MODEL_HOST_TEST) $(SCROLL_HOST_TEST)
 	./$(INTERFACE_HOST_TEST)
-	./$(INPUT_HOST_TEST)
 	./$(TEXT_SURFACE_HOST_TEST)
 	./$(UNDO_HOST_TEST)
 	./$(TEXT_MODEL_HOST_TEST)
@@ -167,10 +168,6 @@ sanitize: $(NDK_HOST_UTF8)
 		tests/test_interface.c tests/test_layout.c \
 		-o build/host/test_interface_sanitize
 	./build/host/test_interface_sanitize
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		$(SANITIZER_FLAGS) src/input_library.c tests/test_input_library.c \
-		-o build/host/test_input_library_sanitize
-	./build/host/test_input_library_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) src/text_surface.c $(NDK_HOST_UTF8) \
 		tests/test_text_surface.c -o build/host/test_text_surface_sanitize
@@ -197,8 +194,6 @@ analyze:
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/text_surface.c -o build/analyzer/text_surface.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
-		-c src/input_library.c -o build/analyzer/input_library.o
-	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/undo.c -o build/analyzer/undo.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/text_model.c -o build/analyzer/text_model.o
@@ -210,4 +205,5 @@ clean:
 
 -include $(wildcard build/m68k/*.d)
 
-.PHONY: all test sanitize analyze library-contract clean
+.PHONY: all interface-library test sanitize analyze library-contract clean \
+	shared-libraries-ready

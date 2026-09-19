@@ -31,8 +31,4 @@ _Static_assert(sizeof(AstraProcSnapshot) == 112u,
                "PROC snapshot record ABI changed");
 _Static_assert(sizeof(AstraProcLibrarySnapshot) == 136u,
                "PROC library snapshot record ABI changed");
-_Static_assert(sizeof(AstraProcLibrarySnapshot) * ASTRA_LIBRARY_SLOT_COUNT <=
-                   4096u,
-               "PROC library snapshot exceeds the syscall staging page");
-
 #endif

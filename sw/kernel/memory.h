@@ -5,6 +5,7 @@
 #include "dma.h"
 
 #include <astra/boot.h>
+#include <astra/limits.h>
 #include <astra/process.h>
 #include <astra/render_batch.h>
 #include <astra/syscall.h>
@@ -14,8 +15,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define KERNEL_PAGE_SHIFT 12u
-#define KERNEL_PAGE_SIZE  (1u << KERNEL_PAGE_SHIFT)
+#define KERNEL_PAGE_SHIFT ASTRA_MEMORY_PAGE_SHIFT
+#define KERNEL_PAGE_SIZE  ASTRA_MEMORY_PAGE_SIZE
 /*
  * There is no maximum frame count, and that is deliberate.
  *
@@ -38,11 +39,12 @@
 #define KERNEL_OWNER_NONE 0u
 #define KERNEL_EMERGENCY_RESERVE_FRAMES 32u
 /*
- * Ordinary owners may not consume the last equal process share of RAM, capped
- * at one complete shared area. The reserve therefore scales with the machine
- * instead of being another board-sized constant. Firmware-selected essential
- * processes and their areas may use it; the kernel's separate emergency pool
- * remains unavailable to every normal allocation.
+ * Ordinary owners cannot consume the last complete shared-area commitment.
+ * That is the largest recovery allocation the service boundary can request,
+ * so the reserve is derived from the VM contract rather than a process count.
+ * Firmware-selected essential processes and their areas may use it; the
+ * kernel's separate emergency pool remains unavailable to every normal
+ * allocation.
  */
 #define KERNEL_PROTECTED_RESERVE_FRAME_MAX \
     (ASTRA_AREA_SIZE_MAX / KERNEL_PAGE_SIZE)
@@ -122,6 +124,7 @@ typedef struct KernelMemoryStats {
     uint32_t free_frames;
     uint32_t high_water_frames;
     uint32_t allocation_failures;
+    uint32_t owner_slot_capacity;
     uint32_t owner_slots_used;
     uint32_t owner_release_operations;
     uint32_t owner_release_frame_visits;
@@ -195,12 +198,21 @@ bool kernel_memory_frame_info(uint32_t physical_address,
                               KernelFrameInfo *info);
 bool kernel_memory_frame_allocation_site(uint32_t physical_address,
                                          KernelAllocationSite *site);
-bool kernel_memory_owner_frames(uint32_t owner, uint32_t *frame_count);
+/* Current and lifetime-peak charged frames for one resource owner. */
+bool kernel_memory_owner_usage(uint32_t owner, uint32_t *frame_count,
+                               uint32_t *peak_frame_count);
 /* What the per-frame bookkeeping costs for a machine of this many frames. */
 uint32_t kernel_memory_metadata_bytes(uint32_t frame_count);
 /* Whether a physical span overlaps any device aperture. */
 bool kernel_memory_span_has_device(uint32_t base, uint32_t size);
 bool kernel_memory_stats(KernelMemoryStats *stats);
+
+/*
+ * Returns the supervisor's direct view of an owned RAM span. Kernel
+ * subsystems use this instead of each inventing a second physical-address
+ * translation path; callers must still establish ownership and lifetime.
+ */
+void *kernel_memory_access(uint32_t physical_address, uint32_t byte_count);
 
 #if defined(KERNEL_MEMORY_HOST_TEST)
 void kernel_memory_test_bind_physical_memory(uint8_t *memory, uint32_t base,

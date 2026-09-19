@@ -9,8 +9,9 @@ ConditionFileIsExecutable=/var/lib/astra/current/bin/astra-remote-desktop
 [Service]
 Type=simple
 Environment=ASTRA_QMP_SOCKET=/run/astra/remote-desktop-qmp.sock
+Environment=ASTRA_REMOTE_DESKTOP_CONTROL_SOCKET=/run/astra/remote-desktop-control.sock
 ExecStart=/var/lib/astra/current/bin/astra-remote-desktop
-Restart=on-failure
+Restart=always
 RestartSec=1
 Nice=-5
 UMask=0077

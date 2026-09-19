@@ -377,21 +377,20 @@ Volumes and assigns such as `SYS:` and `WORK:` belong to the storage namespace.
 Arbitrary devices do not masquerade as filesystems. A compatibility `/dev`
 entry maps to a typed adapter handle and never exposes raw MMIO.
 
-### 9.1 One open call, not two
+### 9.1 One service-session open call
 
-**LOCKED:** Astra has a single open operation. There is no separate
-`OpenLibrary` and `OpenDevice`.
+**LOCKED:** Astra has one operation for opening a service or device session.
+Shared libraries are eager executable dependencies and are not opened as
+sessions.
 
-Exec needed two because they were two different mechanisms. A library was a
-jump table in the *caller's* address space: `OpenLibrary` returned a base
-pointer and the caller `JSR`ed through negative offsets off it. A device was a
-message port reached with `IORequest`. The version argument to `OpenLibrary`
-therefore bound the version of the code you were about to jump into, which is
-why an interface could not move independently of its implementation, and why a
-defect in a library was a defect in every caller.
+Exec needed distinct library and device calls because they were different
+mechanisms. A library was a jump table in the caller's address space, while a
+device was a message port reached with an I/O request. The library call bound
+the implementation version to the interface, so the two could not evolve
+independently.
 
-Astra has protected address spaces and no in-process jump table, so that first
-case does not exist. What remains is one operation:
+Astra's versioned direct symbols and eager loader handle process-local code.
+What remains for services and devices is one operation:
 
 ```text
 open(name, minimum protocol version) -> typed session handle
@@ -405,8 +404,8 @@ damage is not: a session handle is a capability with rights and a generation,
 not a pointer into another component's code, and a service that dies wakes its
 clients with peer-dead instead of taking them with it.
 
-`ASTRA_SYSCALL_CLOSE` over a generation-checked handle is already the whole of
-`CloseLibrary`. No new mechanism is required.
+`ASTRA_SYSCALL_CLOSE` over a generation-checked handle is the sole session
+close operation. No library-specific lifetime mechanism is involved.
 
 ### 9.2 Two version axes, deliberately
 

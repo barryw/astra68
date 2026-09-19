@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-ASTRA_STORE=${ASTRA_STORE:-/data/astra}
+ASTRA_STORE=${ASTRA_STORE:-/var/lib/astra}
 ASTRA_ROOT=${ASTRA_ROOT:-$ASTRA_STORE/current}
 if ! ASTRA_ROOT=$(readlink -f "$ASTRA_ROOT"); then
     echo "Astra release is not selected: $ASTRA_ROOT" >&2

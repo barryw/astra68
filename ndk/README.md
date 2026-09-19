@@ -1,12 +1,14 @@
 # Astra 68 Native Developer Kit
 
 The Astra NDK is the supported C interface to Astra 68 hardware and operating
-system services. During bring-up applications include public headers from
-`include/astra` and link `libastra.a`; they do not include raw chipset register
-structures. The permanent ABI keeps the same headers behind a small import
-veneer while the loader caches immutable, versioned Kit code and maps its
-read-only pages into each client process. Writable state and service handles
-remain process-local.
+system services. Applications include public headers from `include/astra` and
+link the versioned `.library` files shipped in `lib/m68040`; they do not include
+raw chipset register structures. The loader caches immutable, versioned Kit
+code and maps its read-only pages into each client process. Writable state and
+service handles remain process-local. Static archives remain available as an
+explicit developer choice for deliberately self-contained images. Astra uses
+them for Supervisor and Storage because those images bootstrap the loader and
+system volume.
 Bounded message ports, absolute-deadline waits, atomic handle movement,
 explicit shared areas, and bounded bulk rings are the native protected-process
 communication plane.
@@ -55,6 +57,18 @@ make -C ndk example
 `sanitize` runs the host API tests under ASan/UBSan. `analyze` runs GCC's
 path-sensitive static analyzer and is intended for the Linux build hosts.
 
+Include `make/astra-native.mk` or `make/astra-posix.mk` from an application
+Makefile. Their normal compile and link variables produce position-independent,
+dynamically linked executables using `crt0-dynamic.o`; the archive's
+`tools/check_dynamic_executable.py` validates the interpreter, exact direct
+dependencies, immediate binding, RELRO, and absence of text relocations.
+The deliberately named `ASTRA_STATIC_*` variables provide the explicit
+self-contained link mode. Dynamic linking is the normal default because it
+shares resident code and library updates; a developer may still choose static
+linking when self-containment is the stronger requirement. Astra's production
+tree uses that choice for Supervisor and Storage, which bootstrap the loader
+and system volume.
+
 Override `CROSS` or `CPU_FLAGS` for another compatible toolchain. Published
 components include message ports in `astra/port.h`, shared areas in
 `astra/area.h`, batched bulk IPC in `astra/bulk_ring.h`, managed front-panel
@@ -65,17 +79,17 @@ through owned surfaces, palettes, tile/sprite sets, raster programs, command
 lists, and fences rather than raw MMIO. The direct backend currently provides
 the contract and validation boundary; services which require the operating
 system return `ASTRA_ERR_UNAVAILABLE` until their resource manager lands.
-`astra/graphics_kit.h` is the umbrella include for graphics and fonts and
-publishes the logical names and minimum ABI versions accepted by
-`OpenLibrary()`. The loader, not the application, resolves their versioned
-files under `LIBS:`.
+`astra/graphics_kit.h` is the umbrella include for graphics and fonts. Native
+programs call ordinary versioned ELF symbols; their manifest and link metadata
+declare the required libraries, and the process loader resolves the complete
+dependency closure under `LIBS:` before `main` runs.
 
 `astra/filesystem_kit.h` publishes the corresponding Filesystem Kit identity;
-its typed API provides high-level file/directory operations and the existing
+its direct API provides high-level file/directory operations and the existing
 low-level VFS primitives without exposing storage-service internals.
 
-`astra/interface_kit.h` publishes the Interface Kit identity and append-only
-ABI table. Its controls, responsive layout, TextSurface, typed clipboard, and
+`astra/interface_kit.h` publishes the Interface Kit identity and direct API.
+Its controls, responsive layout, TextSurface, typed clipboard, and
 undo manager are documented in the generated Interface Kit guide. Checked
 examples cover the common control lifecycle, text copy/paste, and reversible
 document operations.
@@ -102,8 +116,9 @@ sanitizers, static analysis, compiled examples, OS-library contract tests, HTML,
 PDF, and a relocatable NDK archive. The archive is written as
 `ndk/build/dist/astra68-ndk-<astra-os-version>.tar.xz`; its NDK version is the
 Astra OS version by definition. `make -C ndk dist-check` also extracts that
-archive and links native C, POSIX C, and POSIX C++ programs using only its
-contents and the installed `m68k-astra` compiler.
+archive and dynamically links native C, POSIX C, and POSIX C++ programs using
+only its contents and the installed `m68k-astra` compiler. Each smoke program
+also passes the packaged dynamic-executable contract checker.
 
 Documentation warnings are errors, including undocumented public structures,
 members, callbacks, declarations, parameters, return values, and unresolved

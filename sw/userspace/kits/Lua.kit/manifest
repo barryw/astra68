@@ -1,0 +1,9 @@
+astra-bundle 1
+kind kit
+id org.astra.lua
+name "Astra Lua Runtime Kit"
+version 5.5.1
+provides lua.library 5 5.5.1
+requires compiler.library 1 1.0.0
+requires runtime.library 1 1.5.0
+requires libc.library 1 1.0.0

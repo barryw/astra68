@@ -79,6 +79,8 @@
 #define ASTRA_STATUS_FAULTED     0x80000001  /* killed by its own fault */
 #define ASTRA_STATUS_NO_STARTUP  0x80000002  /* its startup block was refused */
 #define ASTRA_STATUS_BAD_EXIT    0x80000003  /* it returned a negative status */
+#define ASTRA_STATUS_IS_VERDICT(status) \
+    (((status) & ASTRA_STATUS_VERDICT) != 0)
 /* Forced process termination with the exact nonzero 1..31 reason attached. */
 #define ASTRA_STATUS_SIGNALLED_BASE 0x80000100
 #define ASTRA_STATUS_SIGNALLED(reason) \

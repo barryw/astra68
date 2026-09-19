@@ -68,22 +68,27 @@ static uint32_t submit(AstraVfsHostBackend *backend,
         output_capacity);
 }
 
-static uint32_t host_open(void *context, const char *path, uint32_t flags,
-                          uint16_t create_mode, uintptr_t *node,
-                          AstraVfsNodeInfo *info)
+static uint32_t host_open_common(void *context, uintptr_t directory,
+                                 const char *path, uint32_t flags,
+                                 uint16_t create_mode, uintptr_t *node,
+                                 AstraVfsNodeInfo *info)
 {
     AstraVfsHostBackend *backend = context;
     AstraVfsHostRequest request;
     AstraHostCommand *command;
     uint32_t status;
 
-    status = command_begin(backend, &request, ASTRA_HOST_FS_OPEN, 0u);
+    status = command_begin(backend, &request,
+                           directory == 0u ? ASTRA_HOST_FS_OPEN :
+                                             ASTRA_HOST_FS_OPEN_AT,
+                           0u);
     if (status != ASTRA_VFS_OK)
         return status;
     command = request.command;
     if (copy_path(command->path, path) != ASTRA_VFS_OK)
         return ASTRA_VFS_ERR_INVALID;
     command->flags = (uint16_t)flags;
+    command->handle = (uint32_t)directory;
     command->value_lo = create_mode == ASTRA_VFS_MODE_DEFAULT ? 0666u :
                         create_mode;
     status = submit(backend, &request, NULL, 0u, NULL, 0u);
@@ -94,6 +99,25 @@ static uint32_t host_open(void *context, const char *path, uint32_t flags,
     *node = command->handle;
     publish_info(command, info);
     return ASTRA_VFS_OK;
+}
+
+static uint32_t host_open(void *context, const char *path, uint32_t flags,
+                          uint16_t create_mode, uintptr_t *node,
+                          AstraVfsNodeInfo *info)
+{
+    return host_open_common(context, 0u, path, flags, create_mode, node,
+                            info);
+}
+
+static uint32_t host_open_at(void *context, uintptr_t directory,
+                             const char *path, uint32_t flags,
+                             uint16_t create_mode, uintptr_t *node,
+                             AstraVfsNodeInfo *info)
+{
+    if (directory == 0u || directory > UINT32_MAX)
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    return host_open_common(context, directory, path, flags, create_mode,
+                            node, info);
 }
 
 static uint32_t host_close(void *context, uintptr_t node)
@@ -152,7 +176,7 @@ static uint32_t host_write(void *context, uintptr_t node, uint64_t offset,
     command->handle = (uint32_t)node;
     command->offset_hi = (uint32_t)(offset >> 32);
     command->offset_lo = (uint32_t)offset;
-    if ((flags & ASTRA_VFS_OPEN_APPEND) != 0u)
+    if ((flags & ASTRA_VFS_WRITE_APPEND) != 0u)
         command->flags = ASTRA_HOST_FS_WRITE_APPEND;
     status = submit(backend, &request, buffer, length, NULL, 0u);
     if (status != ASTRA_VFS_OK)
@@ -201,6 +225,27 @@ static uint32_t host_stat(void *context, const char *path,
         return status;
     if (copy_path(request.command->path, path) != ASTRA_VFS_OK)
         return ASTRA_VFS_ERR_INVALID;
+    status = submit(backend, &request, NULL, 0u, NULL, 0u);
+    if (status == ASTRA_VFS_OK)
+        publish_info(request.command, info);
+    return status;
+}
+
+static uint32_t host_stat_at(void *context, uintptr_t directory,
+                             const char *path, AstraVfsNodeInfo *info)
+{
+    AstraVfsHostBackend *backend = context;
+    AstraVfsHostRequest request;
+    uint32_t status;
+
+    if (directory == 0u || directory > UINT32_MAX || info == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    status = command_begin(backend, &request, ASTRA_HOST_FS_STAT_AT, 0u);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (copy_path(request.command->path, path) != ASTRA_VFS_OK)
+        return ASTRA_VFS_ERR_INVALID;
+    request.command->handle = (uint32_t)directory;
     status = submit(backend, &request, NULL, 0u, NULL, 0u);
     if (status == ASTRA_VFS_OK)
         publish_info(request.command, info);
@@ -270,6 +315,107 @@ static uint32_t host_chmod(void *context, const char *path, uint16_t mode)
     return host_path_mode(context, path, ASTRA_HOST_FS_CHMOD, mode);
 }
 
+static uint32_t host_unlink_at(void *context, uintptr_t directory,
+                               const char *path, uint32_t flags)
+{
+    AstraVfsHostBackend *backend = context;
+    AstraVfsHostRequest request;
+    uint32_t status;
+
+    if (directory == 0u || directory > UINT32_MAX ||
+        (flags & ~ASTRA_VFS_AT_REMOVE_DIRECTORY) != 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    status = command_begin(backend, &request, ASTRA_HOST_FS_UNLINK_AT, 0u);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (copy_path(request.command->path, path) != ASTRA_VFS_OK)
+        return ASTRA_VFS_ERR_INVALID;
+    request.command->handle = (uint32_t)directory;
+    request.command->flags = (uint16_t)flags;
+    return submit(backend, &request, NULL, 0u, NULL, 0u);
+}
+
+static uint32_t host_chmod_node(void *context, uintptr_t node, uint16_t mode)
+{
+    if (node == 0u || node > UINT32_MAX ||
+        (mode & (uint16_t)~ASTRA_VFS_MODE_MASK) != 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    return host_handle_u64(context, node, ASTRA_HOST_FS_CHMOD_FILE, mode);
+}
+
+static uint32_t host_chmod_at(void *context, uintptr_t directory,
+                              const char *path, uint16_t mode,
+                              uint32_t flags)
+{
+    AstraVfsHostBackend *backend = context;
+    AstraVfsHostRequest request;
+    uint32_t status;
+
+    if (directory == 0u || directory > UINT32_MAX ||
+        (mode & (uint16_t)~ASTRA_VFS_MODE_MASK) != 0u ||
+        (flags & ~ASTRA_VFS_AT_SYMLINK_NOFOLLOW) != 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    status = command_begin(backend, &request, ASTRA_HOST_FS_CHMOD_AT, 0u);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (copy_path(request.command->path, path) != ASTRA_VFS_OK)
+        return ASTRA_VFS_ERR_INVALID;
+    request.command->handle = (uint32_t)directory;
+    request.command->flags = (uint16_t)flags;
+    request.command->value_lo = mode;
+    return submit(backend, &request, NULL, 0u, NULL, 0u);
+}
+
+static uint64_t host_info_u64(uint32_t high, uint32_t low)
+{
+    return ((uint64_t)high << 32) | low;
+}
+
+static uint32_t host_filesystem_info(void *context, uintptr_t node,
+                                     const char *path,
+                                     AstraVfsFilesystemInfo *info)
+{
+    AstraVfsHostBackend *backend = context;
+    AstraVfsHostRequest request;
+    AstraHostFilesystemInfo host_info;
+    uint32_t status;
+
+    if (info == NULL || node > UINT32_MAX ||
+        ((node == 0u) == (path == NULL)))
+        return ASTRA_VFS_ERR_INVALID;
+    status = command_begin(backend, &request,
+                           ASTRA_HOST_FS_FILESYSTEM_INFO,
+                           sizeof(host_info));
+    if (status != ASTRA_VFS_OK)
+        return status;
+    request.command->handle = (uint32_t)node;
+    if (path != NULL &&
+        copy_path(request.command->path, path) != ASTRA_VFS_OK)
+        return ASTRA_VFS_ERR_INVALID;
+    status = submit(backend, &request, NULL, 0u, &host_info,
+                    sizeof(host_info));
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (request.command->result_length != sizeof(host_info) ||
+        host_info.size != sizeof(host_info) || host_info.reserved != 0u)
+        return ASTRA_VFS_ERR_PROTOCOL;
+    memset(info, 0, sizeof(*info));
+    info->size = sizeof(*info);
+    info->flags = host_info.flags;
+    info->block_size = host_info.block_size;
+    info->fragment_size = host_info.fragment_size;
+    info->blocks = host_info_u64(host_info.blocks_hi, host_info.blocks_lo);
+    info->blocks_free = host_info_u64(host_info.blocks_free_hi,
+                                      host_info.blocks_free_lo);
+    info->blocks_available = host_info_u64(host_info.blocks_available_hi,
+                                           host_info.blocks_available_lo);
+    info->files = host_info_u64(host_info.files_hi, host_info.files_lo);
+    info->files_free = host_info_u64(host_info.files_free_hi,
+                                     host_info.files_free_lo);
+    info->name_max = host_info.name_max;
+    return ASTRA_VFS_OK;
+}
+
 static uint32_t host_two_paths(void *context, const char *left,
                                const char *right, uint16_t operation)
 {
@@ -328,7 +474,8 @@ static uint32_t host_link(void *context, const char *from, const char *to)
 static const AstraVfsBackendOps host_ops = {
     host_open, host_close, host_read, host_write, host_sync, host_truncate,
     host_stat, host_readdir, host_mkdir, host_unlink, host_rename, host_chmod,
-    host_readlink, host_symlink, host_link
+    host_readlink, host_symlink, host_link, host_open_at, host_unlink_at,
+    host_chmod_node, host_chmod_at, host_filesystem_info, host_stat_at
 };
 
 int astra_vfs_host_init(AstraVfsHostBackend *backend,

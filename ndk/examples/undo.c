@@ -31,13 +31,11 @@ static AstraResult apply_document_change(
 
 /* Initialize one document with an application-chosen history allocation. */
 AstraResult astra_example_document_init(
-    const AstraInterfaceLibrary *interface, ExampleDocument *document,
-    void *arena, uint32_t arena_bytes)
+    ExampleDocument *document, void *arena, uint32_t arena_bytes)
 {
     AstraUndoManagerInfo info = ASTRA_UNDO_MANAGER_INFO_INIT;
 
-    if (document == 0 || !astra_interface_library_supports(
-            interface, 0u, ASTRA_INTERFACE_LIBRARY_5_0_SIZE))
+    if (document == 0)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     document->undo = (AstraUndoManager)ASTRA_UNDO_MANAGER_INIT;
     document->zoom_percent = 100u;
@@ -46,19 +44,18 @@ AstraResult astra_example_document_init(
     info.coalesce_interval_ns = UINT64_C(500000000);
     info.apply = apply_document_change;
     info.context = document;
-    return interface->undo_init(&document->undo, &info);
+    return astra_undo_init(&document->undo, &info);
 }
 
 /* Apply and retain one named user transaction atomically. */
 AstraResult astra_example_set_zoom(
-    const AstraInterfaceLibrary *interface, ExampleDocument *document,
-    uint32_t percent, uint64_t timestamp_ns)
+    ExampleDocument *document, uint32_t percent, uint64_t timestamp_ns)
 {
     ExampleZoomChange change;
     AstraUndoAction action = ASTRA_UNDO_ACTION_INIT;
     AstraUndoGroupInfo group = ASTRA_UNDO_GROUP_INFO_INIT;
 
-    if (interface == 0 || document == 0)
+    if (document == 0)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     change.before = document->zoom_percent;
     change.after = percent;
@@ -71,5 +68,5 @@ AstraResult astra_example_set_zoom(
     group.action_count = 1u;
     group.coalesce_id = EXAMPLE_SET_ZOOM;
     group.timestamp_ns = timestamp_ns;
-    return interface->undo_perform_group(&document->undo, &group);
+    return astra_undo_perform_group(&document->undo, &group);
 }

@@ -42,10 +42,11 @@ libraries/NAME/abi-ABI/VERSION/m68k-68040/NAME
 
 The image builder validates providers against their embedded library identity
 and derives `LIBS:.providers/NAME.abi-ABI`, a bounded exact-identity record for
-the newest compatible payload. `OpenLibrary()` reads that record and opens the
-canonical bundle-relative payload; older images fall back to scanning the same
-authoritative manifests. There are no flattened compatibility copies beside
-the Kit and no installation records outside the filesystem.
+the newest compatible payload. The supervisor uses that record while resolving
+an executable's eager `DT_NEEDED` closure and gives the process loader only the
+validated, exact library identities selected for that launch. There are no
+flattened compatibility copies beside the Kit, no current-directory search,
+and no installation records outside the filesystem.
 
 ## 2. Manifest grammar
 

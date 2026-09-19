@@ -28,7 +28,7 @@
  */
 
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
-#define ASTRA_VFS_VERSION  UINT16_C(22)
+#define ASTRA_VFS_VERSION  UINT16_C(25)
 
 /*
  * The oldest version this build can still speak. A client asks for a minimum
@@ -74,6 +74,17 @@
  * append writes to use the bulk path without guessing a concurrently changing
  * end-of-file offset.
  * Version 22 adds atomic hard links using the existing two-path request.
+ * Version 23 adds operations relative to an open directory, handle-based
+ * chmod, and filesystem-capacity reporting. Relative operations carry both
+ * `file` and `body.path`; the open handle is the authority and the path is
+ * interpreted beneath it by the backend.
+ * Version 24 makes append a property of each write request rather than an
+ * implicit property of the open handle. This preserves atomic append for
+ * ordinary writes while allowing positioned writes to honor their explicit
+ * offset on a descriptor opened with append enabled.
+ * Version 25 adds no-follow metadata lookup beneath an open directory. The
+ * backend stays responsible only for its own namespace; the Filesystem Kit
+ * remains the one authority for logical symbolic-link traversal.
  */
 #define ASTRA_VFS_VERSION_MIN UINT16_C(2)
 
@@ -154,7 +165,13 @@
 #define ASTRA_VFS_OP_SYMLINK     UINT32_C(26)
 #define ASTRA_VFS_OP_BIND_LANE   UINT32_C(27)
 #define ASTRA_VFS_OP_LINK        UINT32_C(28)
-#define ASTRA_VFS_OP_MAX         ASTRA_VFS_OP_LINK
+#define ASTRA_VFS_OP_OPEN_AT     UINT32_C(29)
+#define ASTRA_VFS_OP_UNLINK_AT   UINT32_C(30)
+#define ASTRA_VFS_OP_CHMOD_FILE  UINT32_C(31)
+#define ASTRA_VFS_OP_CHMOD_AT    UINT32_C(32)
+#define ASTRA_VFS_OP_FILESYSTEM_INFO UINT32_C(33)
+#define ASTRA_VFS_OP_STAT_AT     UINT32_C(34)
+#define ASTRA_VFS_OP_MAX         ASTRA_VFS_OP_STAT_AT
 
 /*
  * One shared-area transfer, and the unit the whole read path is sized around.
@@ -172,6 +189,13 @@
 #define ASTRA_VFS_OPEN_DIRECTORY (UINT32_C(1) << 4)
 #define ASTRA_VFS_OPEN_EXCLUSIVE (UINT32_C(1) << 5)
 #define ASTRA_VFS_OPEN_APPEND    (UINT32_C(1) << 6)
+
+/* Per-write behavior. These are deliberately distinct from open flags. */
+#define ASTRA_VFS_WRITE_APPEND   (UINT32_C(1) << 0)
+
+/* Flags for directory-relative namespace operations. */
+#define ASTRA_VFS_AT_REMOVE_DIRECTORY (UINT32_C(1) << 0)
+#define ASTRA_VFS_AT_SYMLINK_NOFOLLOW (UINT32_C(1) << 1)
 
 /* No caller-supplied creation mode. Every real mode is confined to 07777. */
 #define ASTRA_VFS_MODE_DEFAULT UINT16_C(0xffff)
@@ -243,6 +267,26 @@ typedef uint32_t AstraVfsFile;
 typedef uint32_t AstraVfsSession;
 #define ASTRA_VFS_SESSION_INVALID UINT32_C(0)
 
+/** Backend-neutral filesystem capacity and naming limits. */
+#define ASTRA_VFS_FILESYSTEM_INFO_SIZE 64u
+typedef struct AstraVfsFilesystemInfo {
+    uint32_t size;
+    uint32_t flags;
+    uint32_t block_size;
+    uint32_t fragment_size;
+    uint64_t blocks;
+    uint64_t blocks_free;
+    uint64_t blocks_available;
+    uint64_t files;
+    uint64_t files_free;
+    uint32_t name_max;
+    uint32_t reserved;
+} AstraVfsFilesystemInfo;
+
+_Static_assert(sizeof(AstraVfsFilesystemInfo) ==
+                   ASTRA_VFS_FILESYSTEM_INFO_SIZE,
+               "VFS filesystem-info ABI size changed");
+
 #define ASTRA_VFS_REQUEST_SIZE 224u
 #define ASTRA_VFS_REPLY_SIZE   256u
 
@@ -252,9 +296,10 @@ typedef uint32_t AstraVfsSession;
  * right for every operation forever; a fixed record is checked once.
  */
 /*
- * The trailing bytes are a path or a payload, never both: every operation is
- * addressed either by path or by an already-open handle, and no operation is
- * addressed by both. Spelling that as a union rather than reusing one array
+ * The trailing bytes are a path or a payload. Most operations are addressed
+ * by either a path or an open handle. Version 23 directory-relative
+ * operations deliberately carry a directory handle and a relative path.
+ * Spelling the body as a union rather than reusing one array
  * keeps the two validation rules apart -- a path must be NUL-terminated inside
  * the record, and payload bytes must not be required to contain a NUL at all,
  * which is what a binary write of exactly ASTRA_VFS_IO_MAX bytes looks like.

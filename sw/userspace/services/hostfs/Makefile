@@ -3,7 +3,10 @@ include ../../../../mk/m68k-cross.mk
 CC := $(CROSS)gcc
 SIZE := $(CROSS)size
 OBJCOPY := $(CROSS)objcopy
+READELF := $(CROSS)readelf
 RUNTIME := ../../runtime
+include $(RUNTIME)/astra-link.mk
+include ../../libraries.mk
 VFS := ../../vfs
 METRICS := ../../metrics
 NDK := ../../../../ndk
@@ -12,30 +15,17 @@ CPPFLAGS := -I$(NDK)/include -I../../include -I../../../include \
 	-I$(VFS)/include -I$(METRICS)/include -I$(RUNTIME)/freestanding
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O2 -flto -ffreestanding \
-	-fno-builtin -ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
-LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
-	-Wl,--build-id=none -Wl,--gc-sections -T $(RUNTIME)/astra_user.ld
+	-fno-builtin -ffunction-sections -fdata-sections -fPIC \
+	$(ASTRA_DEBUG_FLAGS)
 TARGET := build/m68k/hostfs.elf
 IMAGE := build/m68k/hostfs
 OBJECT := build/m68k/main.o
-RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
-VFS_LIB := $(VFS)/build/m68k/libastravfs.a
+VFS_SERVICE_LIB := $(VFS)/build/m68k/libastravfs-service.a
 METRICS_LIB := $(METRICS)/build/m68k/libastrametric.a
-CRT0 := $(RUNTIME)/build/m68k/crt0.o
-ASTRA_PROGRAM_OWNER_DIRS := $(RUNTIME) $(VFS) $(METRICS) $(NDK)
-include ../../program.mk
-
-$(TARGET): $(OBJECT) $(CRT0) $(METRICS_LIB) $(VFS_LIB) $(RUNTIME_LIB) \
-		$(RUNTIME)/astra_user.ld
-	@mkdir -p $(@D)
-	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(CRT0) $(OBJECT) \
-		$(METRICS_LIB) $(VFS_LIB) $(RUNTIME_LIB) -lgcc
-
-$(IMAGE): $(TARGET)
-	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@
-
-size: $(IMAGE)
-	$(SIZE) $(IMAGE)
+LIBRARIES := $(ASTRA_RUNTIME_LIBRARY) $(ASTRA_COMPILER_LIBRARY)
+ASTRA_PROGRAM_PRIVATE_INPUTS := $(METRICS_LIB) $(VFS_SERVICE_LIB)
+ASTRA_PROGRAM_PRIVATE_OWNER_TARGETS := $(METRICS):all $(VFS):service
+include ../../dynamic-program.mk
 
 $(OBJECT): main.c
 	@mkdir -p $(@D)

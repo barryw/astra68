@@ -14,7 +14,8 @@ typedef void (*_sig_func_ptr)(int);
 #define SIGINT 2
 #define SIGQUIT 3
 #define SIGKILL 9
-#define SIGUSR1 10
+#define SIGUSR1 30
+#define SIGUSR2 31
 #define SIGALRM 14
 #define SIGURG 16
 #define SIGSTOP 17
@@ -48,9 +49,22 @@ struct sigaction {
 
 int sigaction(int signal_number, const struct sigaction *restrict action,
               struct sigaction *restrict previous);
+int sigaddset(sigset_t *set, int signal_number);
+int sigdelset(sigset_t *set, int signal_number);
+int sigemptyset(sigset_t *set);
+int sigfillset(sigset_t *set);
+int sigismember(const sigset_t *set, int signal_number);
+int sigandset(sigset_t *destination, const sigset_t *left,
+              const sigset_t *right);
+int sigorset(sigset_t *destination, const sigset_t *left,
+             const sigset_t *right);
+int signotset(sigset_t *destination, const sigset_t *source);
+int sigisemptyset(const sigset_t *set);
 int sigprocmask(int how, const sigset_t *restrict set,
                 sigset_t *restrict previous);
 int sigsuspend(const sigset_t *mask);
+int pause(void);
+int raise(int signal_number);
 _sig_func_ptr signal(int signal_number, _sig_func_ptr handler);
 
 #endif

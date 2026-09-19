@@ -32,18 +32,30 @@
 #include "local-stdio.h"
 
 int
-fputws(const wchar_t *str, FILE *stream)
+__STDIO_UNLOCKED(fputws)(const wchar_t *str, FILE *stream)
 {
     wchar_t c;
     int     rv = 0;
 
-    __flockfile(stream);
     if ((stream->flags & __SWR) == 0)
-        __funlock_return(stream, EOF);
+        return EOF;
 
     while ((c = *str++) != L'\0')
         if (putwc_unlocked(c, stream) == WEOF)
             rv = EOF;
 
-    __funlock_return(stream, rv);
+    return rv;
 }
+
+#ifdef __STDIO_LOCKING
+int
+fputws(const wchar_t *str, FILE *stream)
+{
+    int rv;
+
+    __flockfile(stream);
+    rv = fputws_unlocked(str, stream);
+    __funlockfile(stream);
+    return rv;
+}
+#endif

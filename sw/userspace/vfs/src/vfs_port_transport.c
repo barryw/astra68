@@ -690,7 +690,7 @@ astra_vfs_port_connect_with_accelerator(
 }
 
 uint32_t
-astra_vfs_port_connect_lazy(AstraVfsClient *client, uint32_t service)
+astra_vfs_client_connect_service(AstraVfsClient *client, uint32_t service)
 {
     return astra_vfs_port_connect_lazy_with_accelerator(client, service,
                                                         NULL);
@@ -973,12 +973,12 @@ astra_vfs_port_transport(void *context, uint32_t operation,
             AstraVfsRequest *retry;
 
             if (request->size == ASTRA_VFS_RENAME_REQUEST_SIZE) {
-                port_call.outgoing.rename.request =
+                port_call.client_call.rename_request =
                     *(const AstraVfsRenameRequest *)request;
-                retry = &port_call.outgoing.rename.request.request;
+                retry = &port_call.client_call.rename_request.request;
             } else {
-                port_call.outgoing.standard.request = *request;
-                retry = &port_call.outgoing.standard.request;
+                port_call.client_call.request = *request;
+                retry = &port_call.client_call.request;
             }
             retry->session = port_client_session(client);
             retry->version = client->version;
@@ -1032,12 +1032,12 @@ vfs_port_transport_call(void *context, uint32_t operation,
         if (status != ASTRA_VFS_OK)
             return status;
         if (request->size == ASTRA_VFS_RENAME_REQUEST_SIZE) {
-            port_call.outgoing.rename.request =
+            port_call.client_call.rename_request =
                 *(const AstraVfsRenameRequest *)request;
-            retry = &port_call.outgoing.rename.request.request;
+            retry = &port_call.client_call.rename_request.request;
         } else {
-            port_call.outgoing.standard.request = *request;
-            retry = &port_call.outgoing.standard.request;
+            port_call.client_call.request = *request;
+            retry = &port_call.client_call.request;
         }
         retry->session = port_client_session(client);
         retry->version = client->version;
@@ -1063,12 +1063,12 @@ vfs_port_transport_call(void *context, uint32_t operation,
             return status;
         client->port_area_capable = 1u;
         if (request->size == ASTRA_VFS_RENAME_REQUEST_SIZE) {
-            outgoing->rename.request =
+            port_call.client_call.rename_request =
                 *(const AstraVfsRenameRequest *)request;
-            retry = &outgoing->rename.request.request;
+            retry = &port_call.client_call.rename_request.request;
         } else {
-            outgoing->standard.request = *request;
-            retry = &outgoing->standard.request;
+            port_call.client_call.request = *request;
+            retry = &port_call.client_call.request;
         }
         retry->session = port_client_session(client);
         retry->version = client->version;
@@ -1153,6 +1153,10 @@ vfs_port_transport_call(void *context, uint32_t operation,
         outgoing->standard.request = *request;
         wire_header = &outgoing->standard.header;
         wire_request = &outgoing->standard.request;
+    }
+    if (!fused_hello && operation != ASTRA_VFS_OP_HELLO) {
+        wire_request->session = port_client_session(client);
+        wire_request->version = client->version;
     }
     fill_header(wire_header, wire_operation, message_size,
                 client->version >= UINT16_C(20) ? lane->owner_thread :
@@ -1722,20 +1726,20 @@ port_write_bulk_call(AstraVfsClient *client, AstraVfsFile file,
 
     if (client == NULL || buffer == NULL || moved == NULL ||
         position == NULL || length == 0u ||
-        (flags & ~ASTRA_VFS_OPEN_APPEND) != 0u)
+        (flags & ~ASTRA_VFS_WRITE_APPEND) != 0u)
         return ASTRA_VFS_ERR_INVALID;
     *moved = 0u;
     *position = offset;
-    if ((flags & ASTRA_VFS_OPEN_APPEND) != 0u &&
+    if ((flags & ASTRA_VFS_WRITE_APPEND) != 0u &&
         client->version < UINT16_C(21))
         return astra_vfs_write_position(
-            client, file, offset, buffer,
+            client, file, offset, flags, buffer,
             length < ASTRA_VFS_IO_MAX ? length : ASTRA_VFS_IO_MAX,
             moved, position);
     if (client->transport != astra_vfs_port_transport ||
         client->version < UINT16_C(9))
         return astra_vfs_write_position(
-            client, file, offset, buffer,
+            client, file, offset, flags, buffer,
             length < ASTRA_VFS_IO_MAX ? length : ASTRA_VFS_IO_MAX,
             moved, position);
     if (client->direct_backend_ops != NULL) {
@@ -2510,7 +2514,7 @@ astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
                     astra_vfs_service_write_position_from(
                     host->service, incoming->request.session,
                     incoming->request.file, incoming->request.offset,
-                    lease.area,
+                    incoming->request.flags, lease.area,
                     incoming->request.length, &total, &position);
                 outgoing->reply.count =
                     outgoing->reply.status == ASTRA_VFS_OK ? total : 0u;

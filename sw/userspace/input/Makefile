@@ -8,7 +8,8 @@ CPPFLAGS := -Iinclude -I../../include -I../../../ndk/include
 NDK := ../../../ndk
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
-TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin $(ASTRA_DEBUG_FLAGS)
+TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
+	-fPIC -ftls-model=initial-exec $(ASTRA_DEBUG_FLAGS)
 HOST_FLAGS := -O2
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 SOURCES := src/input_service_core.c src/input_port_sink.c
@@ -19,7 +20,7 @@ HEADERS := include/astra/input_service_core.h \
 	../../../ndk/include/astra/keymap.h
 TARGET := build/m68k/libastrainput.a
 TARGET_OBJECTS := build/m68k/input_service_core.o \
-	build/m68k/input_port_sink.o build/m68k/ndk_keymap.o
+	build/m68k/input_port_sink.o
 HOST_TEST := build/host/test_input_service_core
 
 all: $(TARGET)
@@ -31,9 +32,7 @@ build/m68k/%.o: src/%.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
 
-build/m68k/ndk_keymap.o: $(NDK)/src/keymap.c $(NDK)/include/astra/keymap.h
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
+$(TARGET_OBJECTS): Makefile
 
 $(HOST_TEST): $(SOURCES) $(NDK)/src/keymap.c \
 		tests/test_input_service_core.c $(HEADERS)

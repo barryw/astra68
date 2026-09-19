@@ -2,15 +2,37 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <grp.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+int issetugid(void);
 
 int
 main(void)
 {
     char hostname[8];
+    char login[5];
     gid_t groups[1];
+
+    assert(issetugid() == 0);
+    assert(getlogin_r(login, sizeof(login)) == 0);
+    assert(strcmp(login, "root") == 0);
+    assert(getlogin_r(login, sizeof(login) - 1u) == ERANGE);
+    assert(setgroups(0u, NULL) == 0);
+    groups[0] = (gid_t)0;
+    assert(setgroups(1u, groups) == 0);
+    groups[0] = (gid_t)1;
+    errno = 0;
+    assert(setgroups(1u, groups) == -1 && errno == EPERM);
+    assert(initgroups("root", (gid_t)0) == 0);
+    errno = 0;
+    assert(initgroups("other", (gid_t)0) == -1 && errno == EPERM);
+
+    assert(setenv("ASTRA_SECURE_ENV_TEST", "present", 1) == 0);
+    assert(strcmp(secure_getenv("ASTRA_SECURE_ENV_TEST"), "present") == 0);
 
     assert(getuid() == (uid_t)0 && geteuid() == (uid_t)0);
     assert(getgid() == (gid_t)0 && getegid() == (gid_t)0);

@@ -15,6 +15,7 @@ with open(os.path.join(astra_image.REPOSITORY,
     terminal_manifest = manifest.read()
     assert "capability HOME:rw\n" in terminal_manifest
     assert "capability APP_LAUNCH\n" in terminal_manifest
+    assert "capability ENTROPY\n" in terminal_manifest
 assert astra_image.HOSTBENCH_SERVICES == \
     astra_image.DISPLAY_SERVICES + ("hostbench",)
 assert astra_image.HOSTBENCH_STARTUP_MANIFEST == \
@@ -28,6 +29,14 @@ assert not any(line.startswith("application ") and line.endswith(" required")
 assert astra_image.APPLICATION_BUNDLES == \
     ("Terminal.app", "InterfaceGallery.app")
 with open(os.path.join(astra_image.REPOSITORY,
+                       "sw/userspace/kits/Runtime.kit/manifest"),
+          encoding="ascii") as manifest:
+    runtime_manifest = manifest.read()
+    assert "version 1.7.0\n" in runtime_manifest
+    assert "provides runtime.library 1 1.7.0\n" in runtime_manifest
+    assert "version 1.6.0\n" not in runtime_manifest
+    assert "provides runtime.library 1 1.6.0\n" not in runtime_manifest
+with open(os.path.join(astra_image.REPOSITORY,
                        "sw/userspace/apps/Makefile"),
           encoding="ascii") as makefile:
     app_rules = makefile.read()
@@ -35,6 +44,13 @@ with open(os.path.join(astra_image.REPOSITORY,
     assert "$(GALLERY): FORCE\n" in app_rules
 assert "commands/zsh/zshrc" in astra_image.CONFIGURATION
 assert "commands/zsh/motd" in astra_image.CONFIGURATION
+assert "remote-desktop" in astra_image.DISPLAY_SERVICES
+assert "entropy" in astra_image.DISPLAY_SERVICES
+remote_service = astra_image.CONFIGURATION[
+    "services/remote-desktop/service.conf"]
+for required in ("runs paired\n", "start manual\n", "restart on-fault\n",
+                 "grant HOST_DEVICE\n"):
+    assert required in remote_service
 zshrc = astra_image.CONFIGURATION["commands/zsh/zshrc"]
 assert "HOME:/.motd.zsh" in zshrc
 assert "CONFIG:motd.zsh" in zshrc
@@ -49,6 +65,8 @@ assert startup[1] == \
 assert startup[2] == \
     "service SERVICES:hostfs grants HOST_DEVICE " \
     "serves WORK:rw METRICS:r required"
+assert startup[3] == \
+    "service SERVICES:entropy grants HOST_DEVICE serves ENTROPY required"
 
 
 class Result:
@@ -244,11 +262,18 @@ with tempfile.TemporaryDirectory() as directory:
     for name in ("status", "stale-orphan"):
         with open(os.path.join(directory, name), "wb") as image:
             image.write(name.encode("ascii"))
+    os.chmod(os.path.join(directory, "status"), 0o755)
     with open(os.path.join(directory, ".commands"), "w",
               encoding="ascii") as manifest:
         manifest.write("status\n")
     assert astra_image._commands(directory) == [
         ("status", os.path.join(directory, "status"))]
+    os.chmod(os.path.join(directory, "status"), 0o644)
+    try:
+        astra_image._commands(directory)
+        raise AssertionError("non-executable command was accepted")
+    except RuntimeError as error:
+        assert "not executable" in str(error)
 
 
 with tempfile.TemporaryDirectory() as directory:
@@ -263,10 +288,11 @@ with tempfile.TemporaryDirectory() as directory:
         os.makedirs(library)
         with open(os.path.join(library, "filesystem.library"), "wb") as image:
             identity = struct.pack(
-                ">IHHHHHHHHIII24s32s40s", 0x414c4942, 1, 128,
-                *(int(part) for part in version.split(".")), 1, 0, 0,
-                0x4d303430, 0x12345678, 0x00f00000,
-                b"filesystem.library", b"test", b"test")
+                ">IHHHHHHHHIII24s32s40s", 0x414c4942, 2, 128,
+                *(int(part) for part in version.split(".")), 1, 0,
+                0, 0x4d303430, 0x12345678, 0,
+                b"filesystem.library.1",
+                b"test", b"test")
             image.write(bytes(0x200))
             image.write(identity)
         bundles.append(bundle)
@@ -274,7 +300,36 @@ with tempfile.TemporaryDirectory() as directory:
     providers = astra_image._providers(bundles)
     assert providers[("filesystem.library", 1)] == (
         (1, 10, 0), 0, 0x12345678,
-        "LIBS:New.kit/libraries/filesystem.library/abi-1/1.10.0/"
+        "New.kit/libraries/filesystem.library/abi-1/1.10.0/"
         "m68k-68040/filesystem.library")
+
+with tempfile.TemporaryDirectory() as directory:
+    bundle = os.path.join(directory, "Broken.kit")
+    os.mkdir(bundle)
+    with open(os.path.join(bundle, "manifest"), "w", encoding="ascii") as manifest:
+        manifest.write("kind kit\nprovides broken.library 1 1.0.0\n")
+    library = os.path.join(bundle, "libraries", "broken.library",
+                           "abi-1", "1.0.0", "m68k-68040")
+    os.makedirs(library)
+    with open(os.path.join(library, "broken.library"), "wb") as image:
+        image.write(bytes(0x200 + astra_image.LIBRARY_RECORD_SIZE))
+    try:
+        astra_image._providers([bundle])
+        raise AssertionError("invalid installed provider was accepted")
+    except RuntimeError as error:
+        assert "library identity disagrees" in str(error)
+
+with tempfile.TemporaryDirectory() as directory:
+    for name in ("Zeta.kit", "Alpha.kit"):
+        os.mkdir(os.path.join(directory, name))
+        with open(os.path.join(directory, name, "manifest"), "w",
+                  encoding="ascii") as manifest:
+            manifest.write("kind kit\n")
+    os.mkdir(os.path.join(directory, "ignored.app"))
+    with open(os.path.join(directory, ".kits"), "w",
+              encoding="ascii") as inventory:
+        inventory.write("Alpha.kit\nZeta.kit\n")
+    assert [os.path.basename(path) for path in astra_image._bundles(directory)] == \
+        ["Alpha.kit", "Zeta.kit"]
 
 print("astra image provider index: PASS")

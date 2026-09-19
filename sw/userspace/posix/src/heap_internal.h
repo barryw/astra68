@@ -3,14 +3,7 @@
 
 #include <stdint.h>
 
-typedef struct AstraPosixHeapLayout {
-    uint8_t *base;
-    uint32_t page_count;
-    uint32_t *page_run;
-    uint32_t *extent_next;
-    uint32_t *extent_pages;
-} AstraPosixHeapLayout;
-
-int astra_posix_heap_layout(AstraPosixHeapLayout *layout);
+/* Bind POSIX resource policy to the runtime-owned process allocator. */
+void astra_posix_heap_prepare(uint32_t program_writable_bytes);
 
 #endif

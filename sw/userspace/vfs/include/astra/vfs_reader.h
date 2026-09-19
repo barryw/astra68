@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+#include <astra/library.h>
 #include <astra/vfs_union.h>
 
 /*
@@ -27,5 +28,30 @@ uint32_t astra_vfs_read_source_read_at(
     const uint8_t **bytes, uint32_t *moved);
 
 uint32_t astra_vfs_read_source_close(void *context);
+
+/**
+ * Resolve and open one exact installed provider for a DT_NEEDED identity.
+ *
+ * This is the sole provider-resolution path. It reads the canonical provider
+ * index through the supplied namespace, validates the exact provider record,
+ * and opens the selected binary. Package discovery and version selection happen
+ * when that index is built; runtime consumers do not scan Kits or select a
+ * different version.
+ */
+uint32_t astra_vfs_library_source_open(
+    AstraVfsReadSource *source, const AstraAssignTable *table,
+    const char *assign, const char *identity,
+    AstraVfsAssignClientFn client_for, void *context,
+    AstraLibraryReference *reference);
+
+/**
+ * Open a provider through the current process namespace.
+ *
+ * The process namespace must already be initialized. This is a convenience
+ * wrapper over astra_vfs_library_source_open(), not a second resolver.
+ */
+uint32_t astra_process_library_source_open(
+    const char *identity, AstraVfsReadSource *source,
+    AstraLibraryReference *reference);
 
 #endif

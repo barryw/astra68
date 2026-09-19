@@ -6,6 +6,19 @@
 	.globl _start
 	.type _start, @function
 _start:
+#if ASTRA_DYNAMIC_STARTUP
+	| The interpreter has validated the startup block and run the complete
+	| dependency lifecycle.  Return the program verdict to it so one owner can
+	| run finalizers for both an ordinary return and the surrounding process.
+	move.l  %d2, -(%sp)
+	bsr.l   astra_main@PLTPC
+	addq.l  #4, %sp
+	tst.l   %d0
+	bpl     .Ldynamic_return
+	move.l  #ASTRA_STATUS_BAD_EXIT, %d0
+.Ldynamic_return:
+	rts
+#else
 	move.l  %d2, -(%sp)
 	jsr     astra_startup_validate
 	addq.l  #4, %sp
@@ -47,6 +60,7 @@ _start:
 
 .Lhalt:
 	bra     .Lhalt
+#endif
 	.size _start, .-_start
 
 	.section .note.GNU-stack, "", @progbits

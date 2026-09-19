@@ -56,18 +56,19 @@ static void make_valid_info(AstraBootInfo *info)
               ASTRA_MEMORY_RANGE_FIRMWARE, ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
     add_range(info, ASTRA_EARLY_LOG_ADDRESS, ASTRA_EARLY_LOG_SIZE,
               ASTRA_MEMORY_RANGE_EARLY_LOG, ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
-    add_range(info, ASTRA_USER_IMAGE_ADDRESS, USER_IMAGE_RESERVATION,
-              ASTRA_MEMORY_RANGE_FIRMWARE, ASTRA_MEMORY_READ);
-    add_range(info, ASTRA_USER_IMAGE_ADDRESS + USER_IMAGE_RESERVATION,
-              ASTRA_USER_IMAGE_MAX_SIZE - USER_IMAGE_RESERVATION,
+    add_range(info, ASTRA_BOOT_LOW_USABLE_ADDRESS,
+              ASTRA_BOOT_LOW_USABLE_SIZE,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE | ASTRA_MEMORY_CACHEABLE);
     add_range(info, ASTRA_KERNEL_LOAD_ADDRESS, ASTRA_KERNEL_RESERVED_SIZE,
               ASTRA_MEMORY_RANGE_KERNEL,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
               ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_range(info, ASTRA_KERNEL_USABLE_ADDRESS,
-              OHCI_DMA_POOL_BASE - ASTRA_KERNEL_USABLE_ADDRESS,
+    add_range(info, ASTRA_USER_IMAGE_ADDRESS, USER_IMAGE_RESERVATION,
+              ASTRA_MEMORY_RANGE_FIRMWARE, ASTRA_MEMORY_READ);
+    add_range(info, ASTRA_USER_IMAGE_ADDRESS + USER_IMAGE_RESERVATION,
+              OHCI_DMA_POOL_BASE -
+                  (ASTRA_USER_IMAGE_ADDRESS + USER_IMAGE_RESERVATION),
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE | ASTRA_MEMORY_CACHEABLE);
     add_range(info, OHCI_DMA_POOL_BASE, OHCI_DMA_POOL_SIZE,
@@ -120,10 +121,15 @@ static void test_user_image(void)
     astra_boot_info_finalize(&info);
     assert(astra_boot_info_validate(&info) == ASTRA_BOOT_VALID);
 
+    /* Image size follows firmware-owned physical memory, not a fixed quota. */
     make_valid_info(&info);
-    info.user_image_size = ASTRA_USER_IMAGE_MAX_SIZE + 1u;
+    info.user_image_size = 0x00050000u;
+    info.memory_ranges[4].size = 0x00050000u;
+    info.memory_ranges[5].base = ASTRA_USER_IMAGE_ADDRESS + 0x00050000u;
+    info.memory_ranges[5].size =
+        OHCI_DMA_POOL_BASE - info.memory_ranges[5].base;
     astra_boot_info_finalize(&info);
-    assert(astra_boot_info_validate(&info) == ASTRA_BOOT_BAD_USER_IMAGE);
+    assert(astra_boot_info_validate(&info) == ASTRA_BOOT_VALID);
 
     make_valid_info(&info);
     info.user_image_base += 4u;

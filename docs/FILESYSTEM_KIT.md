@@ -1,15 +1,17 @@
 # Filesystem Kit
 
-Status: `filesystem.library` ABI 1.5 is the shared, backend-neutral client layer
+Status: `filesystem.library` ABI 2.4 is the shared, backend-neutral client layer
 over Astra's VFS protocol, assign namespaces, and union policy. It does not
 create a second filesystem stack.
 
 ## Native application contract
 
-Applications open `filesystem.library` through `OpenLibrary()` and use its
-typed `AstraFilesystemLibraryV1` export table. An `AstraFilesystem` attaches to
-the process namespace already built from its startup grants; it borrows those
-assign and client objects and cannot expand their rights.
+Applications link the direct symbols declared by the NDK. Their executable has
+an eager `DT_NEEDED` dependency on `filesystem.library.2`; launch fails before
+`main()` with a precise diagnostic when the required ABI is unavailable. An
+`AstraFilesystem` attaches to the process namespace already built from its
+startup grants; it borrows those assign and client objects and cannot expand
+their rights.
 
 The API provides assign-aware open/close, sequential and positioned I/O,
 64-bit seek, sync, truncate, stat and lstat, chmod, mkdir, unlink, atomic
@@ -17,10 +19,10 @@ rename, readlink, symlink, bounded directory batches, and path qualification.
 Creation modes are explicit. Directory entries carry metadata in the listing
 response so `ls -l` does not pay another service round trip per entry.
 
-The low-level portion of the same export table exposes the VFS client and
-assign primitives needed by filesystem services, diagnostic tools, and
-compatibility runtimes. Applications never see ext4 objects, backend errno
-values, block sizes, mount internals, or on-disk formats.
+The same versioned library exports the VFS client and assign primitives needed
+by filesystem services, diagnostic tools, and compatibility runtimes.
+Applications never see ext4 objects, backend errno values, block sizes, mount
+internals, or on-disk formats.
 
 ## Name and link semantics
 
@@ -83,12 +85,13 @@ needed for plug-in filesystems without freezing unfinished SMB/NFS policy now.
 The image builder installs the MC68040 library at:
 
 ```text
-LIBS:Filesystem.kit/libraries/filesystem.library/abi-1/1.5.0/m68k-68040/filesystem.library
+LIBS:Filesystem.kit/libraries/filesystem.library/abi-2/2.4.0/m68k-68040/filesystem.library
 ```
 
-The Kit is version 1.4.0 and provides `filesystem.library` 1.5.0. Other ABI
-majors and versions live beside it. Programs request a minimum compatible ABI
-through `OpenLibrary()`; they never construct provider paths.
+The Kit is version 2.4.0 and provides `filesystem.library` 2.4.0. Other ABI
+majors and versions live beside it. Programs name the SONAME at link time and
+package metadata records the compatible minimum; programs never construct
+provider paths.
 
 The image builder derives `LIBS:.providers/filesystem.library.abi-1` from the
 authoritative manifest and the library's embedded identity. Kit builds start

@@ -202,6 +202,7 @@ main(void)
     AstraStartupInfo startup = {
         .magic = ASTRA_STARTUP_MAGIC,
         .abi_version = ASTRA_STARTUP_ABI_VERSION,
+        .program_entry = 0x00100000u,
         .header_size = ASTRA_STARTUP_INFO_SIZE,
         .total_size = ASTRA_STARTUP_INFO_SIZE,
         .syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION,

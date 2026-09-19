@@ -54,21 +54,17 @@ ASTRA_PROGRAM("desktop", 0, 3, 0, "Barry Walker",
 
 static AstraProcessFilesystem process_filesystem =
     ASTRA_PROCESS_FILESYSTEM_INIT;
-static AstraLibraryHandle *graphics_handle;
-static AstraLibraryHandle *interface_handle;
-static const AstraGraphicsLibraryV2 *graphics_library;
-static const AstraInterfaceLibrary *interface_library;
 static char manifest_text[ASTRA_BUNDLE_MANIFEST_MAX + 1u];
 static uint8_t icon_bytes[ICON_BYTES_MAX];
 
 static void launch_error(uint32_t gui, AstraResult failure)
 {
     AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
+    AstraResult alert_result;
     const char *message = failure == ASTRA_ERROR_NO_RESOURCES ?
         "There are not enough resources to start Terminal." :
         "Terminal could not be started.";
 
-    if (interface_library == NULL) return;
     (void)astra_log(failure == ASTRA_ERROR_NO_RESOURCES ?
                     "Terminal launch: no resources" :
                     "Terminal launch: request failed");
@@ -79,14 +75,15 @@ static void launch_error(uint32_t gui, AstraResult failure)
     info.message_length = (uint16_t)strlen(message);
     info.button = "OK";
     info.button_length = 2u;
-    (void)interface_library->show_alert(gui, &info);
+    alert_result = astra_interface_show_alert(gui, &info);
+    (void)alert_result;
 }
 
 static uint16_t icon_color(const AstraAicon *icon, uint16_t index)
 {
     uint8_t rgba[4];
 
-    if (graphics_library->aicon_palette(icon, index, rgba) != ASTRA_BUNDLE_OK)
+    if (astra_aicon_palette(icon, index, rgba) != ASTRA_BUNDLE_OK)
         return 0u;
     return astra_surface_rgb565(rgba[0], rgba[1], rgba[2]);
 }
@@ -194,7 +191,7 @@ static uint32_t paint(AstraSurfaceView *surface)
         (void)astra_log_failure("desktop manifest line", line);
         return 0x444d0000u | line; /* "DM" and the failing line */
     }
-    status = process_filesystem.library->qualify(
+    status = astra_path_qualify(
         "APPS", TERMINAL_BUNDLE_DIRECTORY, manifest.icon, icon_path,
         sizeof(icon_path));
     if (status != ASTRA_VFS_OK) {
@@ -203,9 +200,9 @@ static uint32_t paint(AstraSurfaceView *surface)
     }
     if (astra_process_read_file(&process_filesystem, icon_path, icon_bytes,
                                 sizeof(icon_bytes), &length) !=
-            ASTRA_VFS_OK || graphics_library->aicon_open(
+            ASTRA_VFS_OK || astra_aicon_open(
                 icon_bytes, length, &icon) != ASTRA_BUNDLE_OK ||
-            graphics_library->aicon_strike(&icon, 64u, &strike) !=
+            astra_aicon_strike(&icon, 64u, &strike) !=
                 ASTRA_BUNDLE_OK)
         return DESKTOP_FAIL_ICON;
     if (!draw_strike(surface, &icon, &strike)) return DESKTOP_FAIL_ICON;
@@ -238,31 +235,6 @@ int astra_main(const AstraStartupInfo *startup)
         return ASTRA_STATUS_BAD_HANDLE;
     status = astra_process_filesystem_open(&process_filesystem, startup);
     if (status != ASTRA_STATUS_OK) status = DESKTOP_FAIL_FILESYSTEM;
-    if (status == ASTRA_STATUS_OK) {
-        interface_handle = OpenLibrary(ASTRA_INTERFACE_LIBRARY_NAME,
-                                       ASTRA_INTERFACE_LIBRARY_VERSION);
-        if (interface_handle == NULL) status = DESKTOP_FAIL_INTERFACE;
-        else {
-            interface_library = interface_handle->exports;
-            if (!astra_interface_library_supports(
-                    interface_library, 0u,
-                    ASTRA_INTERFACE_LIBRARY_5_0_SIZE))
-                status = DESKTOP_FAIL_INTERFACE;
-        }
-    }
-    if (status == ASTRA_STATUS_OK) {
-        graphics_handle = OpenLibrary(ASTRA_GRAPHICS_LIBRARY_NAME,
-                                      ASTRA_GRAPHICS_LIBRARY_VERSION);
-        if (graphics_handle == NULL)
-            status = DESKTOP_FAIL_GRAPHICS;
-        else {
-            graphics_library = graphics_handle->exports;
-            if (!astra_graphics_library_supports(
-                    graphics_library, 0u,
-                    ASTRA_GRAPHICS_LIBRARY_2_0_SIZE))
-                status = DESKTOP_FAIL_GRAPHICS;
-        }
-    }
     if (status == ASTRA_STATUS_OK &&
         astra_shared_draw_list_create(&surface, DESKTOP_WIDTH,
                                       DESKTOP_HEIGHT) != ASTRA_SYSCALL_OK)

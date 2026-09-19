@@ -259,6 +259,7 @@ int sigaction(int, const struct sigaction * __restrict,
 
 int sigaddset(sigset_t *, const int) __picolibc_export;
 
+#ifndef __astra__
 static __inline int
 __sigaddset(sigset_t *what, int sig)
 {
@@ -267,6 +268,7 @@ __sigaddset(sigset_t *what, int sig)
 }
 
 #define sigaddset(what, sig) __sigaddset(what, sig)
+#endif
 
 #endif
 #if __BSD_VISIBLE || __XSI_VISIBLE >= 4 || __POSIX_VISIBLE >= 200809
@@ -274,8 +276,13 @@ int sigaltstack(const stack_t * __restrict, stack_t * __restrict) __picolibc_exp
 #endif
 #if __POSIX_VISIBLE
 
-int sigdelset(sigset_t *, const int) __nonnull((1)) __picolibc_export;
+int sigdelset(sigset_t *, const int)
+#ifndef __astra__
+    __nonnull((1))
+#endif
+    __picolibc_export;
 
+#ifndef __astra__
 static __inline int
 __sigdelset(sigset_t *what, int sig)
 {
@@ -284,9 +291,15 @@ __sigdelset(sigset_t *what, int sig)
 }
 
 #define sigdelset(what, sig) __sigdelset(what, sig)
+#endif
 
-int sigemptyset(sigset_t *) __nonnull((1)) __picolibc_export;
+int sigemptyset(sigset_t *)
+#ifndef __astra__
+    __nonnull((1))
+#endif
+    __picolibc_export;
 
+#ifndef __astra__
 static __inline int
 __sigemptyset(sigset_t *what)
 {
@@ -295,9 +308,15 @@ __sigemptyset(sigset_t *what)
 }
 
 #define sigemptyset(what) __sigemptyset(what)
+#endif
 
-int sigfillset(sigset_t *) __nonnull((1)) __picolibc_export;
+int sigfillset(sigset_t *)
+#ifndef __astra__
+    __nonnull((1))
+#endif
+    __picolibc_export;
 
+#ifndef __astra__
 static __inline int
 __sigfillset(sigset_t *what)
 {
@@ -306,9 +325,15 @@ __sigfillset(sigset_t *what)
 }
 
 #define sigfillset(what) __sigfillset(what)
+#endif
 
-int sigismember(const sigset_t *, int) __nonnull((1)) __picolibc_export;
+int sigismember(const sigset_t *, int)
+#ifndef __astra__
+    __nonnull((1))
+#endif
+    __picolibc_export;
 
+#ifndef __astra__
 static __inline int
 __sigismember(const sigset_t *what, int sig)
 {
@@ -316,6 +341,7 @@ __sigismember(const sigset_t *what, int sig)
 }
 
 #define sigismember(what, sig) __sigismember(what, sig)
+#endif
 
 #endif
 _sig_func_ptr signal(int, _sig_func_ptr) __picolibc_export;
@@ -347,8 +373,13 @@ int str2sig(const char * __restrict, int * __restrict) __picolibc_export;
 #if __GNU_VISIBLE
 
 int sigandset(sigset_t *dest, const sigset_t *left, const sigset_t *right)
+#ifndef __astra__
     __nonnull((1, 2, 3)) __picolibc_export;
+#else
+    __picolibc_export;
+#endif
 
+#ifndef __astra__
 static __inline int
 __sigandset(sigset_t *dest, const sigset_t *left, const sigset_t *right)
 {
@@ -357,10 +388,16 @@ __sigandset(sigset_t *dest, const sigset_t *left, const sigset_t *right)
 }
 
 #define sigandset(d, l, r) __sigandset(d, l, r)
+#endif
 
 int sigorset(sigset_t *dest, const sigset_t *left, const sigset_t *right)
+#ifndef __astra__
     __nonnull((1, 2, 3)) __picolibc_export;
+#else
+    __picolibc_export;
+#endif
 
+#ifndef __astra__
 static __inline int
 __sigorset(sigset_t *dest, const sigset_t *left, const sigset_t *right)
 {
@@ -369,9 +406,15 @@ __sigorset(sigset_t *dest, const sigset_t *left, const sigset_t *right)
 }
 
 #define sigorset(d, l, r) __sigorset(d, l, r)
+#endif
 
-int signotset(sigset_t *dest, const sigset_t *left) __nonnull((1, 2)) __picolibc_export;
+int signotset(sigset_t *dest, const sigset_t *left)
+#ifndef __astra__
+    __nonnull((1, 2))
+#endif
+    __picolibc_export;
 
+#ifndef __astra__
 static __inline int
 __signotset(sigset_t *dest, const sigset_t *left)
 {
@@ -380,9 +423,15 @@ __signotset(sigset_t *dest, const sigset_t *left)
 }
 
 #define signotset(d, l) __signotset(d, l)
+#endif
 
-int sigisemptyset(const sigset_t *set) __nonnull((1)) __picolibc_export;
+int sigisemptyset(const sigset_t *set)
+#ifndef __astra__
+    __nonnull((1))
+#endif
+    __picolibc_export;
 
+#ifndef __astra__
 static __inline int
 __sigisemptyset(const sigset_t *set)
 {
@@ -390,6 +439,7 @@ __sigisemptyset(const sigset_t *set)
 }
 
 #define sigisemptyset(s) __sigisemptyset(s)
+#endif
 
 #endif
 

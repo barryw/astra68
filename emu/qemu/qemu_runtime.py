@@ -2,7 +2,8 @@
 
 import os
 
-DEFAULT_MEMORY = "512M"
+DEFAULT_MEMORY_BYTES = 512 * 1024 * 1024
+DEFAULT_MEMORY = "%dM" % (DEFAULT_MEMORY_BYTES // (1024 * 1024))
 
 
 def qemu_environment(qemu, environment=None, hostfs_root=None):

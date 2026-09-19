@@ -26,6 +26,12 @@ enum {
     EXT4_FILE_CLOSING
 };
 
+enum {
+    EXT4_HANDLE_NONE = 0,
+    EXT4_HANDLE_FILE,
+    EXT4_HANDLE_DIRECTORY
+};
+
 static int
 table_lock(AstraVfsExt4Backend *backend)
 {
@@ -224,26 +230,6 @@ ext4_backend_open(void *context, const char *path, uint32_t flags,
         scan_unlock(backend);
     }
 
-    if ((flags & ASTRA_VFS_OPEN_DIRECTORY) != 0u) {
-        /*
-         * A directory handle exists only so the core can answer "is this a
-         * directory" and refuse reads against it. lwext4's directory cursor is
-         * not this handle: readdir owns its own resumable scan below.
-         */
-        ext4_dir directory;
-
-        rc = ext4_dir_open(&directory, full);
-        if (rc != EOK) {
-            return status_of(rc);
-        }
-        (void)ext4_dir_close(&directory);
-        *node = 0u;
-        info->size = 0u;
-        info->kind = ASTRA_VFS_KIND_DIRECTORY;
-        fill_metadata(full, info, 0);
-        return ASTRA_VFS_OK;
-    }
-
     if (!table_lock(backend))
         return ASTRA_VFS_ERR_IO;
     for (index = 0u; index < backend->file_high_water; ++index) {
@@ -260,7 +246,30 @@ ext4_backend_open(void *context, const char *path, uint32_t flags,
         backend->open_files[index].state = EXT4_FILE_FREE;
     }
     backend->open_files[index].state = EXT4_FILE_OPENING;
+    backend->open_files[index].kind = EXT4_HANDLE_NONE;
     table_unlock(backend);
+    if ((flags & ASTRA_VFS_OPEN_DIRECTORY) != 0u) {
+        rc = ext4_dir_open(&backend->open_files[index].node.directory, full);
+        if (rc != EOK) {
+            if (table_lock(backend)) {
+                backend->open_files[index].state = EXT4_FILE_FREE;
+                table_unlock(backend);
+            }
+            return status_of(rc);
+        }
+        if (!table_lock(backend)) {
+            (void)ext4_dir_close(&backend->open_files[index].node.directory);
+            return ASTRA_VFS_ERR_IO;
+        }
+        backend->open_files[index].kind = EXT4_HANDLE_DIRECTORY;
+        backend->open_files[index].state = EXT4_FILE_OPEN;
+        table_unlock(backend);
+        *node = (uintptr_t)(index + 1u);
+        info->size = 0u;
+        info->kind = ASTRA_VFS_KIND_DIRECTORY;
+        fill_metadata(full, info, 0);
+        return ASTRA_VFS_OK;
+    }
     native_flags = (flags & ASTRA_VFS_OPEN_WRITE) == 0u ? O_RDONLY :
                    (flags & ASTRA_VFS_OPEN_READ) != 0u ? O_RDWR : O_WRONLY;
     if ((flags & ASTRA_VFS_OPEN_CREATE) != 0u)
@@ -271,7 +280,7 @@ ext4_backend_open(void *context, const char *path, uint32_t flags,
         native_flags |= O_EXCL;
     if ((flags & ASTRA_VFS_OPEN_APPEND) != 0u)
         native_flags |= O_APPEND;
-    rc = ext4_fopen2_mode(&backend->open_files[index].file, full,
+    rc = ext4_fopen2_mode(&backend->open_files[index].node.file, full,
                           native_flags,
                           create_mode == ASTRA_VFS_MODE_DEFAULT ?
                               UINT32_MAX : create_mode);
@@ -283,9 +292,10 @@ ext4_backend_open(void *context, const char *path, uint32_t flags,
         return status_of(rc);
     }
     if (!table_lock(backend)) {
-        (void)ext4_fclose(&backend->open_files[index].file);
+        (void)ext4_fclose(&backend->open_files[index].node.file);
         return ASTRA_VFS_ERR_IO;
     }
+    backend->open_files[index].kind = EXT4_HANDLE_FILE;
     backend->open_files[index].state = EXT4_FILE_OPEN;
     table_unlock(backend);
     /*
@@ -294,7 +304,7 @@ ext4_backend_open(void *context, const char *path, uint32_t flags,
      * turned into a wild pointer by a bug above this layer.
      */
     *node = (uintptr_t)(index + 1u);
-    info->size = ext4_fsize(&backend->open_files[index].file);
+    info->size = ext4_fsize(&backend->open_files[index].node.file);
     info->kind = ASTRA_VFS_KIND_FILE;
     fill_metadata(full, info, 0);
     return ASTRA_VFS_OK;
@@ -312,31 +322,66 @@ file_of(AstraVfsExt4Backend *backend, uintptr_t node)
     if (index >= backend->file_capacity || !table_lock(backend))
         return NULL;
     if (index >= backend->file_high_water ||
-        backend->open_files[index].state != EXT4_FILE_OPEN) {
+        backend->open_files[index].state != EXT4_FILE_OPEN ||
+        backend->open_files[index].kind != EXT4_HANDLE_FILE) {
         table_unlock(backend);
         return NULL;
     }
     table_unlock(backend);
-    return &backend->open_files[index].file;
+    return &backend->open_files[index].node.file;
+}
+
+static ext4_dir *
+directory_of(AstraVfsExt4Backend *backend, uintptr_t node)
+{
+    uint32_t index;
+
+    if (node == 0u)
+        return NULL;
+    index = (uint32_t)node - 1u;
+    if (index >= backend->file_capacity || !table_lock(backend))
+        return NULL;
+    if (index >= backend->file_high_water ||
+        backend->open_files[index].state != EXT4_FILE_OPEN ||
+        backend->open_files[index].kind != EXT4_HANDLE_DIRECTORY) {
+        table_unlock(backend);
+        return NULL;
+    }
+    table_unlock(backend);
+    return &backend->open_files[index].node.directory;
 }
 
 static uint32_t
 ext4_backend_close(void *context, uintptr_t node)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
-    ext4_file *file = file_of(backend, node);
+    AstraVfsExt4File *slot;
+    uint32_t index;
+    uint8_t kind;
 
-    if (file == NULL) {
-        return ASTRA_VFS_OK; /* directory handles have nothing to release */
+    if (node == 0u)
+        return ASTRA_VFS_OK;
+    index = (uint32_t)node - 1u;
+    if (index >= backend->file_capacity || !table_lock(backend))
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    slot = &backend->open_files[index];
+    if (index >= backend->file_high_water || slot->state != EXT4_FILE_OPEN) {
+        table_unlock(backend);
+        return ASTRA_VFS_ERR_BAD_HANDLE;
     }
-    if (!table_lock(backend))
-        return ASTRA_VFS_ERR_IO;
-    backend->open_files[(uint32_t)node - 1u].state = EXT4_FILE_CLOSING;
+    kind = slot->kind;
+    slot->state = EXT4_FILE_CLOSING;
     table_unlock(backend);
-    (void)ext4_fclose(file);
+    if (kind == EXT4_HANDLE_DIRECTORY)
+        (void)ext4_dir_close(&slot->node.directory);
+    else if (kind == EXT4_HANDLE_FILE)
+        (void)ext4_fclose(&slot->node.file);
+    else
+        return ASTRA_VFS_ERR_IO;
     if (!table_lock(backend))
         return ASTRA_VFS_ERR_IO;
-    backend->open_files[(uint32_t)node - 1u].state = EXT4_FILE_FREE;
+    slot->kind = EXT4_HANDLE_NONE;
+    slot->state = EXT4_FILE_FREE;
     table_unlock(backend);
     return ASTRA_VFS_OK;
 }
@@ -381,7 +426,7 @@ ext4_backend_write(void *context, uintptr_t node, uint64_t offset,
     if (file == NULL) {
         return ASTRA_VFS_ERR_BAD_HANDLE;
     }
-    if ((flags & ASTRA_VFS_OPEN_APPEND) == 0u) {
+    if ((flags & ASTRA_VFS_WRITE_APPEND) == 0u) {
         rc = ext4_fseek(file, (int64_t)offset, SEEK_SET);
         if (rc != EOK)
             return status_of(rc);
@@ -470,33 +515,41 @@ ext4_backend_readdir(void *context, uintptr_t directory, const char *path,
                      AstraVfsNodeInfo *info, uint64_t *next)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
+    ext4_dir *scan = NULL;
     char full[ASTRA_VFS_EXT4_PATH_MAX];
     const ext4_direntry *entry;
     uint32_t copied;
     int rc;
 
     (void)directory;
-    if (!build_path(backend, path, full, sizeof(full))) {
+    if (directory != 0u)
+        scan = directory_of(backend, directory);
+    else if (!build_path(backend, path, full, sizeof(full)))
         return ASTRA_VFS_ERR_INVALID;
-    }
+    if (directory != 0u && scan == NULL)
+        return ASTRA_VFS_ERR_BAD_HANDLE;
     if (!scan_lock(backend))
         return ASTRA_VFS_ERR_IO;
-    if (!backend->scan_open || backend->scan_next != cookie ||
-        !same_path(backend->scan_path, full)) {
-        close_scan(backend);
-        rc = ext4_dir_open(&backend->scan, full);
-        if (rc != EOK) {
-            scan_unlock(backend);
-            return status_of(rc);
-        }
-        backend->scan_open = 1;
-        remember_path(backend, full);
-    }
-    backend->scan.next_off = cookie;
-    for (;;) {
-        entry = ext4_dir_entry_next(&backend->scan);
-        if (entry == NULL) {
+    if (scan == NULL) {
+        if (!backend->scan_open || backend->scan_next != cookie ||
+            !same_path(backend->scan_path, full)) {
             close_scan(backend);
+            rc = ext4_dir_open(&backend->scan, full);
+            if (rc != EOK) {
+                scan_unlock(backend);
+                return status_of(rc);
+            }
+            backend->scan_open = 1;
+            remember_path(backend, full);
+        }
+        scan = &backend->scan;
+    }
+    scan->next_off = cookie;
+    for (;;) {
+        entry = ext4_dir_entry_next(scan);
+        if (entry == NULL) {
+            if (directory == 0u)
+                close_scan(backend);
             scan_unlock(backend);
             return ASTRA_VFS_ERR_NOT_FOUND; /* past the last entry */
         }
@@ -532,7 +585,7 @@ ext4_backend_readdir(void *context, uintptr_t directory, const char *path,
         uint32_t nlink = 0u;
         uint64_t size = 0u;
 
-        if (ext4_dir_entry_meta(&backend->scan, entry, &mode, &uid, &gid,
+        if (ext4_dir_entry_meta(scan, entry, &mode, &uid, &gid,
                                 &mtime, &nlink, &size) == EOK) {
             info->mode = (uint16_t)mode;
             info->uid = uid;
@@ -542,8 +595,9 @@ ext4_backend_readdir(void *context, uintptr_t directory, const char *path,
             info->size = size;
         }
     }
-    *next = backend->scan.next_off;
-    backend->scan_next = *next;
+    *next = scan->next_off == UINT64_MAX ? 0u : scan->next_off;
+    if (directory == 0u)
+        backend->scan_next = *next;
     scan_unlock(backend);
     return ASTRA_VFS_OK;
 }
@@ -675,21 +729,27 @@ ext4_backend_link(void *context, const char *from, const char *to)
 }
 
 static const AstraVfsBackendOps ext4_ops = {
-    ext4_backend_open,
-    ext4_backend_close,
-    ext4_backend_read,
-    ext4_backend_write,
-    ext4_backend_sync,
-    ext4_backend_truncate,
-    ext4_backend_stat,
-    ext4_backend_readdir,
-    ext4_backend_mkdir,
-    ext4_backend_unlink,
-    ext4_backend_rename,
-    ext4_backend_chmod,
-    ext4_backend_readlink,
-    ext4_backend_symlink,
-    ext4_backend_link
+    .open = ext4_backend_open,
+    .close = ext4_backend_close,
+    .read = ext4_backend_read,
+    .write = ext4_backend_write,
+    .sync = ext4_backend_sync,
+    .truncate = ext4_backend_truncate,
+    .stat = ext4_backend_stat,
+    .readdir = ext4_backend_readdir,
+    .mkdir = ext4_backend_mkdir,
+    .unlink = ext4_backend_unlink,
+    .rename = ext4_backend_rename,
+    .chmod = ext4_backend_chmod,
+    .readlink = ext4_backend_readlink,
+    .symlink = ext4_backend_symlink,
+    .link = ext4_backend_link,
+    .open_at = astra_vfs_backend_no_open_at,
+    .unlink_at = astra_vfs_backend_no_unlink_at,
+    .chmod_node = astra_vfs_backend_no_chmod_node,
+    .chmod_at = astra_vfs_backend_no_chmod_at,
+    .filesystem_info = astra_vfs_backend_no_filesystem_info,
+    .stat_at = astra_vfs_backend_no_stat_at,
 };
 
 const AstraVfsBackendOps *

@@ -22,8 +22,12 @@
 #define ASTRA_VFS_EXT4_PATH_MAX (ASTRA_VFS_PATH_MAX + ASTRA_VFS_EXT4_MOUNT_MAX)
 
 typedef struct AstraVfsExt4File {
-    ext4_file file;
+    union {
+        ext4_file file;
+        ext4_dir directory;
+    } node;
     uint8_t state;
+    uint8_t kind;
 } AstraVfsExt4File;
 
 typedef int (*AstraVfsExt4Lock)(void *context);

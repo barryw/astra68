@@ -36,7 +36,6 @@ static AstraAssignTable shared_assigns;
 static AstraFilesystem shared_filesystem = ASTRA_FILESYSTEM_INIT;
 static uint32_t filesystem_client_calls;
 
-extern const AstraFilesystemLibraryV2 astra_library_exports;
 static uint8_t memory_source[HOSTBENCH_MEMORY_BYTES + 8u]
     __attribute__((aligned(4)));
 static uint8_t memory_destination[HOSTBENCH_MEMORY_BYTES + 8u]
@@ -500,12 +499,12 @@ static uint32_t filesystem_loop(uint64_t *elapsed)
     AstraFileInfo info = ASTRA_FILE_INFO_INIT;
     uint64_t started;
 
-    if (astra_library_exports.stat(&shared_filesystem, "WORK:", &info) !=
+    if (astra_filesystem_stat(&shared_filesystem, "WORK:", &info) !=
             ASTRA_VFS_OK)
         return 0u;
     started = astra_clock_monotonic();
     for (uint32_t index = 0u; index < HOSTBENCH_LAYER_ITERATIONS; ++index)
-        if (astra_library_exports.stat(&shared_filesystem, "WORK:", &info) !=
+        if (astra_filesystem_stat(&shared_filesystem, "WORK:", &info) !=
                 ASTRA_VFS_OK)
             return 0u;
     *elapsed = astra_clock_monotonic() - started;
@@ -575,10 +574,10 @@ static uint32_t filesystem_open_batch(uint32_t iterations, uint64_t *elapsed)
 
     started = astra_clock_monotonic();
     for (uint32_t index = 0u; index < iterations; ++index) {
-        if (astra_library_exports.open_mode(
-                &shared_filesystem, "WORK:hostbench", flags,
-                ASTRA_VFS_MODE_DEFAULT, &file) != ASTRA_VFS_OK ||
-            astra_library_exports.close(&file) != ASTRA_VFS_OK)
+        if (astra_filesystem_open_mode(&shared_filesystem, "WORK:hostbench",
+                                       flags, ASTRA_VFS_MODE_DEFAULT,
+                                       &file) != ASTRA_VFS_OK ||
+            astra_filesystem_close(&file) != ASTRA_VFS_OK)
             return 0u;
     }
     *elapsed += astra_clock_monotonic() - started;
@@ -607,10 +606,10 @@ static uint32_t paired_open_loops(uint64_t *backend_elapsed,
                             ASTRA_VFS_MODE_DEFAULT, &local_file, &size,
                             &kind) != ASTRA_VFS_OK ||
         astra_vfs_close(&shared_direct_client, local_file) != ASTRA_VFS_OK ||
-        astra_library_exports.open_mode(
-            &shared_filesystem, "WORK:hostbench", flags,
-            ASTRA_VFS_MODE_DEFAULT, &filesystem_file) != ASTRA_VFS_OK ||
-        astra_library_exports.close(&filesystem_file) != ASTRA_VFS_OK)
+        astra_filesystem_open_mode(&shared_filesystem, "WORK:hostbench", flags,
+                                   ASTRA_VFS_MODE_DEFAULT,
+                                   &filesystem_file) != ASTRA_VFS_OK ||
+        astra_filesystem_close(&filesystem_file) != ASTRA_VFS_OK)
         return 0u;
     *backend_elapsed = 0u;
     *direct_elapsed = 0u;
@@ -697,16 +696,16 @@ static uint32_t filesystem_write_batch(uint32_t iterations,
         AstraFile file = ASTRA_FILE_INIT;
         uint32_t moved = 0u;
 
-        if (astra_library_exports.open_mode(
-                &shared_filesystem, "WORK:hostbench", flags,
-                ASTRA_VFS_MODE_DEFAULT, &file) != ASTRA_VFS_OK ||
-            astra_library_exports.write(&file, memory_source,
-                                        HOSTBENCH_WRITE_BYTES, &moved) !=
+        if (astra_filesystem_open_mode(&shared_filesystem, "WORK:hostbench",
+                                       flags, ASTRA_VFS_MODE_DEFAULT,
+                                       &file) != ASTRA_VFS_OK ||
+            astra_filesystem_write(&file, memory_source,
+                                   HOSTBENCH_WRITE_BYTES, &moved) !=
                 ASTRA_VFS_OK ||
             moved != HOSTBENCH_WRITE_BYTES ||
             (sync_data != 0u &&
-             astra_library_exports.sync(&file) != ASTRA_VFS_OK) ||
-            astra_library_exports.close(&file) != ASTRA_VFS_OK)
+             astra_filesystem_sync(&file) != ASTRA_VFS_OK) ||
+            astra_filesystem_close(&file) != ASTRA_VFS_OK)
             return 0u;
     }
     *elapsed += astra_clock_monotonic() - started;
@@ -811,9 +810,9 @@ static uint32_t run_layers(uint32_t device)
     if (astra_assign_bind(&shared_assigns, "WORK", 1u,
                           ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "") !=
             ASTRA_VFS_OK ||
-        astra_library_exports.attach(&shared_filesystem, &shared_assigns,
-                                     filesystem_client, NULL,
-                                     &shared_direct_client) !=
+        astra_filesystem_attach(&shared_filesystem, &shared_assigns,
+                                filesystem_client, NULL,
+                                &shared_direct_client) !=
             ASTRA_VFS_OK)
         return 0u;
     if (!path_normalise_loop(&elapsed))
@@ -862,7 +861,7 @@ static uint32_t run_layers(uint32_t device)
     report_layer("direct-backend-open-write192-sync-close", elapsed);
     report_layer("direct-vfs-open-write192-sync-close", paired_elapsed);
     report_layer("filesystem-direct-open-write192-sync-close", open_elapsed);
-    astra_library_exports.detach(&shared_filesystem);
+    astra_filesystem_detach(&shared_filesystem);
     astra_vfs_host_direct_disconnect(&shared_direct_client);
     return 1u;
 }

@@ -1,14 +1,8 @@
 #include <astra/network_library.h>
 
 #include <astra/bytes.h>
-#include <astra/library.h>
 #include <astra/network_core.h>
 #include <astra/runtime.h>
-
-ASTRA_LIBRARY("network.library", 1, 0, 0,
-              ASTRA_NETWORK_LIBRARY_ABI_MAJOR,
-              ASTRA_NETWORK_LIBRARY_ABI_MINOR,
-              "Barry Walker", "Copyright 2026 Barry Walker");
 
 static void clear_bytes(void *memory, uint32_t size)
 {
@@ -154,7 +148,7 @@ static void session_release(AstraNetworkSession *session)
     clear_bytes(session, sizeof(*session));
 }
 
-static AstraNetworkStatus network_session_open(AstraHandle factory,
+AstraNetworkStatus astra_network_session_open(AstraHandle factory,
                                                 AstraNetworkSession *session)
 {
     AstraNetworkRequestMessage request;
@@ -282,7 +276,7 @@ fail:
     return astra_network_status_from_syscall(status);
 }
 
-static AstraNetworkStatus network_session_close(AstraNetworkSession *session)
+AstraNetworkStatus astra_network_session_close(AstraNetworkSession *session)
 {
     if (session == NULL || session->_private_id == 0u)
         return ASTRA_NETWORK_INVALID;
@@ -290,7 +284,7 @@ static AstraNetworkStatus network_session_close(AstraNetworkSession *session)
     return ASTRA_NETWORK_OK;
 }
 
-static AstraNetworkStatus network_endpoint_open(
+AstraNetworkStatus astra_network_endpoint_open(
     AstraNetworkSession *session, uint16_t family, uint8_t type,
     uint8_t protocol, AstraNetworkEndpoint *endpoint)
 {
@@ -362,7 +356,7 @@ static AstraNetworkStatus endpoint_simple(AstraNetworkEndpoint *endpoint,
                     &request, reply, NULL, 0u, NULL);
 }
 
-static AstraNetworkStatus network_endpoint_close(AstraNetworkEndpoint *endpoint)
+AstraNetworkStatus astra_network_endpoint_close(AstraNetworkEndpoint *endpoint)
 {
     if (endpoint == NULL || endpoint->_private_id == 0u)
         return ASTRA_NETWORK_INVALID;
@@ -374,7 +368,7 @@ static AstraNetworkStatus network_endpoint_close(AstraNetworkEndpoint *endpoint)
     return ASTRA_NETWORK_OK;
 }
 
-static AstraNetworkStatus network_bind(AstraNetworkEndpoint *endpoint,
+AstraNetworkStatus astra_network_bind(AstraNetworkEndpoint *endpoint,
                                        const AstraNetworkAddress *address)
 {
     AstraNetworkReplyMessage reply;
@@ -382,7 +376,7 @@ static AstraNetworkStatus network_bind(AstraNetworkEndpoint *endpoint,
                            &reply);
 }
 
-static AstraNetworkStatus network_connect(AstraNetworkEndpoint *endpoint,
+AstraNetworkStatus astra_network_connect(AstraNetworkEndpoint *endpoint,
                                           const AstraNetworkAddress *address)
 {
     AstraNetworkReplyMessage reply;
@@ -390,7 +384,7 @@ static AstraNetworkStatus network_connect(AstraNetworkEndpoint *endpoint,
                            &reply);
 }
 
-static AstraNetworkStatus network_listen(AstraNetworkEndpoint *endpoint,
+AstraNetworkStatus astra_network_listen(AstraNetworkEndpoint *endpoint,
                                          uint32_t backlog)
 {
     AstraNetworkReplyMessage reply;
@@ -398,7 +392,7 @@ static AstraNetworkStatus network_listen(AstraNetworkEndpoint *endpoint,
                            &reply);
 }
 
-static AstraNetworkStatus network_accept(AstraNetworkEndpoint *listener,
+AstraNetworkStatus astra_network_accept(AstraNetworkEndpoint *listener,
                                          AstraNetworkEndpoint *accepted,
                                          AstraNetworkAddress *address)
 {
@@ -513,7 +507,7 @@ static AstraNetworkStatus network_transfer(
     return status;
 }
 
-static AstraNetworkStatus network_send(AstraNetworkEndpoint *endpoint,
+AstraNetworkStatus astra_network_send(AstraNetworkEndpoint *endpoint,
                                        const void *buffer, size_t length,
                                        uint32_t flags, size_t *transferred)
 {
@@ -522,7 +516,7 @@ static AstraNetworkStatus network_send(AstraNetworkEndpoint *endpoint,
                             NULL, transferred);
 }
 
-static AstraNetworkStatus network_send_to(
+AstraNetworkStatus astra_network_send_to(
     AstraNetworkEndpoint *endpoint, const void *buffer, size_t length,
     uint32_t flags, const AstraNetworkAddress *address, size_t *transferred)
 {
@@ -533,7 +527,7 @@ static AstraNetworkStatus network_send_to(
                             NULL, transferred);
 }
 
-static AstraNetworkStatus network_receive(AstraNetworkEndpoint *endpoint,
+AstraNetworkStatus astra_network_receive(AstraNetworkEndpoint *endpoint,
                                           void *buffer, size_t capacity,
                                           uint32_t flags,
                                           size_t *transferred)
@@ -542,7 +536,7 @@ static AstraNetworkStatus network_receive(AstraNetworkEndpoint *endpoint,
                             flags, NULL, NULL, transferred);
 }
 
-static AstraNetworkStatus network_receive_from(
+AstraNetworkStatus astra_network_receive_from(
     AstraNetworkEndpoint *endpoint, void *buffer, size_t capacity,
     uint32_t flags, AstraNetworkAddress *address, size_t *transferred)
 {
@@ -550,7 +544,7 @@ static AstraNetworkStatus network_receive_from(
                             flags, NULL, address, transferred);
 }
 
-static AstraNetworkStatus network_shutdown(AstraNetworkEndpoint *endpoint,
+AstraNetworkStatus astra_network_shutdown(AstraNetworkEndpoint *endpoint,
                                            uint32_t flags)
 {
     AstraNetworkReplyMessage reply;
@@ -573,20 +567,20 @@ static AstraNetworkStatus endpoint_address(AstraNetworkEndpoint *endpoint,
     return status;
 }
 
-static AstraNetworkStatus network_local_address(AstraNetworkEndpoint *endpoint,
+AstraNetworkStatus astra_network_local_address(AstraNetworkEndpoint *endpoint,
                                                 AstraNetworkAddress *address)
 {
     return endpoint_address(endpoint, ASTRA_NETWORK_GET_LOCAL_ADDRESS,
                             address);
 }
 
-static AstraNetworkStatus network_peer_address(AstraNetworkEndpoint *endpoint,
+AstraNetworkStatus astra_network_peer_address(AstraNetworkEndpoint *endpoint,
                                                AstraNetworkAddress *address)
 {
     return endpoint_address(endpoint, ASTRA_NETWORK_GET_PEER_ADDRESS, address);
 }
 
-static AstraNetworkStatus network_get_option(AstraNetworkEndpoint *endpoint,
+AstraNetworkStatus astra_network_get_option(AstraNetworkEndpoint *endpoint,
                                              uint32_t option,
                                              uint32_t *value)
 {
@@ -602,7 +596,7 @@ static AstraNetworkStatus network_get_option(AstraNetworkEndpoint *endpoint,
     return status;
 }
 
-static AstraNetworkStatus network_set_option(AstraNetworkEndpoint *endpoint,
+AstraNetworkStatus astra_network_set_option(AstraNetworkEndpoint *endpoint,
                                              uint32_t option,
                                              uint32_t value)
 {
@@ -622,7 +616,7 @@ static uint32_t bounded_length(const char *text, uint32_t limit)
     return length;
 }
 
-static AstraNetworkStatus network_resolve_start(
+AstraNetworkStatus astra_network_resolve_start(
     AstraNetworkSession *session, const char *name, uint32_t port,
     uint16_t family, uint8_t type, uint8_t protocol,
     AstraNetworkRequest *pending)
@@ -673,7 +667,7 @@ static AstraNetworkStatus network_resolve_start(
     return ASTRA_NETWORK_IN_PROGRESS;
 }
 
-static AstraNetworkStatus network_request_try(
+AstraNetworkStatus astra_network_request_try(
     AstraNetworkRequest *pending, AstraNetworkAddress *addresses,
     uint32_t capacity, uint32_t *count)
 {
@@ -734,14 +728,14 @@ static AstraNetworkStatus network_request_try(
     return status;
 }
 
-static AstraNetworkStatus network_request_wait(
+AstraNetworkStatus astra_network_request_wait(
     AstraNetworkRequest *pending, AstraNetworkAddress *addresses,
     uint32_t capacity, uint32_t *count, uint64_t deadline)
 {
     AstraNetworkStatus status;
 
     for (;;) {
-        status = network_request_try(pending, addresses, capacity, count);
+        status = astra_network_request_try(pending, addresses, capacity, count);
         if (status != ASTRA_NETWORK_WOULD_BLOCK)
             return status;
         status = astra_network_status_from_syscall(
@@ -752,7 +746,7 @@ static AstraNetworkStatus network_request_wait(
     }
 }
 
-static AstraNetworkStatus network_request_cancel(AstraNetworkRequest *pending)
+AstraNetworkStatus astra_network_request_cancel(AstraNetworkRequest *pending)
 {
     AstraNetworkRequestMessage request;
     AstraNetworkReplyMessage reply;
@@ -769,12 +763,12 @@ static AstraNetworkStatus network_request_cancel(AstraNetworkRequest *pending)
     return status;
 }
 
-static AstraHandle network_readiness_handle(const AstraNetworkEndpoint *endpoint)
+AstraHandle astra_network_readiness_handle(const AstraNetworkEndpoint *endpoint)
 {
     return endpoint == NULL ? 0u : endpoint->_private_readiness;
 }
 
-static uint32_t network_readiness(const AstraNetworkEndpoint *constant_endpoint)
+uint32_t astra_network_readiness(const AstraNetworkEndpoint *constant_endpoint)
 {
     AstraNetworkEndpoint *endpoint = (AstraNetworkEndpoint *)constant_endpoint;
     AstraNetworkReplyMessage reply;
@@ -788,7 +782,7 @@ static uint32_t network_readiness(const AstraNetworkEndpoint *constant_endpoint)
     return status == ASTRA_NETWORK_OK ? reply.readiness : 0u;
 }
 
-static AstraNetworkStatus network_session_export(
+AstraNetworkStatus astra_network_session_export(
     const AstraNetworkSession *session, AstraNetworkSessionState *state)
 {
     if (session == NULL || state == NULL || session->_private_id == 0u ||
@@ -813,7 +807,7 @@ static AstraNetworkStatus network_session_export(
     return ASTRA_NETWORK_OK;
 }
 
-static AstraNetworkStatus network_session_import(
+AstraNetworkStatus astra_network_session_import(
     const AstraNetworkSessionState *state, AstraNetworkSession *session)
 {
     uint32_t mapped = 0u;
@@ -850,7 +844,7 @@ static AstraNetworkStatus network_session_import(
     return ASTRA_NETWORK_OK;
 }
 
-static AstraNetworkStatus network_endpoint_export(
+AstraNetworkStatus astra_network_endpoint_export(
     const AstraNetworkEndpoint *endpoint, AstraNetworkEndpointState *state)
 {
     if (endpoint == NULL || state == NULL ||
@@ -870,7 +864,7 @@ static AstraNetworkStatus network_endpoint_export(
     return ASTRA_NETWORK_OK;
 }
 
-static AstraNetworkStatus network_endpoint_import(
+AstraNetworkStatus astra_network_endpoint_import(
     AstraNetworkSession *session, const AstraNetworkEndpointState *state,
     AstraNetworkEndpoint *endpoint)
 {
@@ -894,36 +888,3 @@ static AstraNetworkStatus network_endpoint_import(
     endpoint->_private_protocol = state->protocol;
     return ASTRA_NETWORK_OK;
 }
-
-const AstraNetworkLibraryV1 astra_library_exports ASTRA_LIBRARY_EXPORTS = {
-    ASTRA_NETWORK_LIBRARY_ABI_MAJOR,
-    ASTRA_NETWORK_LIBRARY_ABI_MINOR,
-    sizeof(AstraNetworkLibraryV1),
-    network_session_open,
-    network_session_close,
-    network_endpoint_open,
-    network_endpoint_close,
-    network_bind,
-    network_connect,
-    network_listen,
-    network_accept,
-    network_send,
-    network_send_to,
-    network_receive,
-    network_receive_from,
-    network_shutdown,
-    network_local_address,
-    network_peer_address,
-    network_get_option,
-    network_set_option,
-    network_resolve_start,
-    network_request_try,
-    network_request_wait,
-    network_request_cancel,
-    network_readiness_handle,
-    network_readiness,
-    network_session_export,
-    network_session_import,
-    network_endpoint_export,
-    network_endpoint_import,
-};

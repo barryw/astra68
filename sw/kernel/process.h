@@ -45,7 +45,7 @@
 #define KERNEL_PROCESS_MAX ASTRA_PROCESS_COUNT_MAX
 _Static_assert(KERNEL_PROCESS_MAX == KERNEL_VM_ADDRESS_SPACE_MAX,
                "process budget and address-space budget differ");
-#define KERNEL_PROCESS_CODE_BASE 0x00100000u
+#define KERNEL_PROCESS_CODE_BASE ASTRA_EXECUTABLE_LINK_ADDRESS
 /*
  * A raw image is read-execute pages at the code base and one writable page
  * here. The page exists because a program needs somewhere to put a word that
@@ -71,10 +71,8 @@ _Static_assert(KERNEL_PROCESS_MAX == KERNEL_VM_ADDRESS_SPACE_MAX,
 /* The top of the first slot's reservation: where its stack pointer starts. */
 #define KERNEL_PROCESS_STACK_TOP \
     (KERNEL_PROCESS_STACK_BASE + KERNEL_THREAD_STACK_STRIDE)
-#define KERNEL_PROCESS_TLS_BASE \
-    (KERNEL_THREAD_STACK_BASE + \
-     KERNEL_PROCESS_THREAD_MAX * KERNEL_THREAD_STACK_STRIDE)
-#define KERNEL_PROCESS_TLS_END (KERNEL_VM_USER_MAX + 1u)
+#define KERNEL_PROCESS_TLS_BASE ASTRA_THREAD_TLS_ADDRESS_START
+#define KERNEL_PROCESS_TLS_END ASTRA_THREAD_TLS_ADDRESS_END
 #define KERNEL_PROCESS_PROGRESS_GOAL 64u
 #define KERNEL_PROCESS_THREAD_MAX ASTRA_PROCESS_THREAD_COUNT_MAX
 
@@ -84,7 +82,14 @@ _Static_assert(KERNEL_PROCESS_MAX == KERNEL_VM_ADDRESS_SPACE_MAX,
  * resident-image limit instead of a smaller policy number.
  */
 #define KERNEL_PROCESS_IMAGE_PAGES_MAX \
-    ((KERNEL_VM_AREA_BASE - KERNEL_VM_USER_MIN) / KERNEL_PAGE_SIZE)
+    ((ASTRA_EXECUTABLE_ADDRESS_END - ASTRA_EXECUTABLE_ADDRESS_START) / \
+     KERNEL_PAGE_SIZE)
+
+_Static_assert(KERNEL_PROCESS_TLS_BASE ==
+                   KERNEL_THREAD_STACK_BASE +
+                       KERNEL_PROCESS_THREAD_MAX *
+                           KERNEL_THREAD_STACK_STRIDE,
+               "process TLS implementation disagrees with address ABI");
 
 #define KERNEL_PROCESS_RIGHT_QUERY     (1u << 0)
 #define KERNEL_PROCESS_RIGHT_TERMINATE (1u << 1)
@@ -513,8 +518,9 @@ bool kernel_process_stats(KernelSchedulerStats *stats);
 
 void kernel_process_milestone_reached(const KernelSchedulerStats *stats);
 /*
- * Reported the moment the firmware-supplied image ends, because its record is
- * reclaimed with its last handle and no later poll can recover the outcome.
+ * Reported the moment the firmware-supplied image ends. This presents a
+ * degraded-userspace diagnosis; it must not panic unless kernel state itself
+ * is no longer safe to continue.
  */
 void kernel_process_initial_image_exited(uint32_t exit_status,
                                          uint32_t exit_reason);
@@ -588,6 +594,7 @@ void kernel_process_test_fail_next_thread_create(
     KernelProcessThreadCreateFault fault);
 uint32_t kernel_process_test_handle_count(uint32_t process_id);
 bool kernel_process_test_library_cache_reclaims_after_last_mapping(void);
+bool kernel_process_test_library_cache_exceeds_legacy_slot_count(void);
 bool kernel_process_test_library_reference_selection(void);
 bool kernel_process_test_library_snapshot(void);
 #endif

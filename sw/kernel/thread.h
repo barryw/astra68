@@ -1,6 +1,9 @@
 #ifndef ASTRA_KERNEL_THREAD_H
 #define ASTRA_KERNEL_THREAD_H
 
+#include <astra/address_space.h>
+#include <astra/limits.h>
+
 #define KERNEL_THREAD_KERNEL_STACK_TOP_OFFSET 76
 
 #define KERNEL_THREAD_MAX 32
@@ -59,7 +62,7 @@
  * That is what the emulator does -- see the resume note in process.c, which is
  * where a machine that reran the bus cycle instead would have to be handled.
  */
-#define KERNEL_THREAD_STACK_BASE 0x70000000u
+#define KERNEL_THREAD_STACK_BASE ASTRA_THREAD_STACK_ADDRESS_START
 /*
  * Match the conventional POSIX thread reservation.  Pages remain committed
  * on demand, so this consumes address space rather than 8 MiB of RAM per
@@ -69,6 +72,12 @@
 #define KERNEL_THREAD_STACK_STRIDE 0x00800000u
 #define KERNEL_THREAD_STACK_GUARD_SIZE 0x00001000u
 #define KERNEL_THREAD_STACK_SIZE 0x00001000u
+
+_Static_assert(KERNEL_THREAD_STACK_BASE +
+                   ASTRA_PROCESS_THREAD_COUNT_MAX *
+                       KERNEL_THREAD_STACK_STRIDE ==
+                   ASTRA_THREAD_STACK_ADDRESS_END,
+               "thread-stack implementation disagrees with address ABI");
 
 #define KERNEL_THREAD_RIGHT_QUERY       (1u << 0)
 #define KERNEL_THREAD_RIGHT_WAIT        (1u << 4)
@@ -134,6 +143,7 @@ typedef struct KernelThread {
     uint32_t timer_ticks;
     uint32_t run_count;
     uint32_t syscall_count;
+    uint64_t runtime_cycles;
     /*
      * What this thread is doing, for correlation. Set by the thread itself
      * through ASTRA_SYSCALL_ACTIVITY and stamped on every event it emits, so
@@ -189,6 +199,7 @@ typedef struct KernelThreadSnapshot {
     uint32_t run_count;
     uint32_t syscall_count;
     uint32_t activity;
+    uint64_t runtime_cycles;
     KernelHandle self_handle;
     uint16_t process_slot;
     uint16_t stack_slot;

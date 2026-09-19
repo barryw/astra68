@@ -22,7 +22,7 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 	-Wl,-rpath-link,$(DE25_SYSROOT)/usr/lib/aarch64-linux-gnu \
 	-lvncserver
 
-.PHONY: all remote-desktop clean
+.PHONY: all remote-desktop test clean
 
 all: $(CERTIFIER)
 
@@ -41,6 +41,10 @@ $(REMOTE_DESKTOP): astra_remote_desktop.c astra_display_capture_uapi.h \
 	mkdir -p $(OUT)
 	$(CC) $(REMOTE_CFLAGS) $< -o $@ $(REMOTE_LDFLAGS)
 	$(QEMU_USER) -L $(DE25_SYSROOT) $@ --self-test
+
+test: $(REMOTE_DESKTOP)
+	python3 test_remote_desktop_lifecycle.py $(REMOTE_DESKTOP) \
+		--qemu-user $(QEMU_USER) --sysroot $(DE25_SYSROOT)
 
 clean:
 	rm -f $(CERTIFIER) $(REMOTE_DESKTOP)

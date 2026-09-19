@@ -76,7 +76,8 @@ static void initialize_test(void)
     add_range(&info, ASTRA_EARLY_LOG_ADDRESS, ASTRA_EARLY_LOG_SIZE,
               ASTRA_MEMORY_RANGE_EARLY_LOG,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
-    add_range(&info, ASTRA_USER_IMAGE_ADDRESS, ASTRA_USER_IMAGE_MAX_SIZE,
+    add_range(&info, ASTRA_BOOT_LOW_USABLE_ADDRESS,
+              ASTRA_BOOT_LOW_USABLE_SIZE,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
@@ -84,7 +85,8 @@ static void initialize_test(void)
               ASTRA_MEMORY_RANGE_KERNEL,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_EXECUTE | ASTRA_MEMORY_CACHEABLE);
-    add_range(&info, ASTRA_KERNEL_USABLE_ADDRESS, (OHCI_DMA_POOL_BASE - ASTRA_KERNEL_USABLE_ADDRESS),
+    add_range(&info, ASTRA_USER_IMAGE_ADDRESS,
+              OHCI_DMA_POOL_BASE - ASTRA_USER_IMAGE_ADDRESS,
               ASTRA_MEMORY_RANGE_USABLE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
                   ASTRA_MEMORY_CACHEABLE);
@@ -161,13 +163,11 @@ static void test_same_address_aliases_survive_creator_death(void)
                            KERNEL_VM_READ | KERNEL_VM_WRITE,
                            &bases[KERNEL_VM_ADDRESS_SPACE_MAX],
                            &sizes[KERNEL_VM_ADDRESS_SPACE_MAX]) ==
-           KERNEL_AREA_ACCESS_DENIED);
+           KERNEL_AREA_OK);
     assert(kernel_area_unmap(101u, &spaces[1], bases[1]) == KERNEL_AREA_OK);
-    assert(kernel_area_map(area, 100u + KERNEL_VM_ADDRESS_SPACE_MAX,
-                           &spaces[KERNEL_VM_ADDRESS_SPACE_MAX],
+    assert(kernel_area_map(area, 101u, &spaces[1],
                            KERNEL_VM_READ | KERNEL_VM_WRITE,
-                           &bases[KERNEL_VM_ADDRESS_SPACE_MAX],
-                           &sizes[KERNEL_VM_ADDRESS_SPACE_MAX]) ==
+                           &bases[1], &sizes[1]) ==
            KERNEL_AREA_OK);
 
     bytes[0] = 0x5au;
@@ -179,20 +179,19 @@ static void test_same_address_aliases_survive_creator_death(void)
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.creator == 7u);
     assert(snapshot.terminal_result == 0u);
-    assert(snapshot.mapping_references == KERNEL_VM_ADDRESS_SPACE_MAX);
+    assert(snapshot.mapping_references == KERNEL_VM_ADDRESS_SPACE_MAX + 1u);
     assert(snapshot.frames_released == 0u);
     assert(kernel_area_map(area, 100u, &spaces[0], KERNEL_VM_READ,
                            &rejected_base, &rejected_size) ==
            KERNEL_AREA_ACCESS_DENIED);
     assert(kernel_area_pool_stats(&stats));
     assert(stats.active_areas == 1u && stats.closing_areas == 0u);
-    assert(stats.active_mappings == KERNEL_VM_ADDRESS_SPACE_MAX);
+    assert(stats.active_mappings == KERNEL_VM_ADDRESS_SPACE_MAX + 1u);
     kernel_area_handle_release(area, NULL);
     assert(kernel_area_live(area));
     for (uint32_t index = 0u; index < KERNEL_VM_ADDRESS_SPACE_MAX; ++index)
-        if (index != 1u)
-            assert(kernel_area_unmap(100u + index, &spaces[index],
-                                     bases[index]) == KERNEL_AREA_OK);
+        assert(kernel_area_unmap(100u + index, &spaces[index], bases[index]) ==
+               KERNEL_AREA_OK);
     assert(kernel_area_unmap(100u + KERNEL_VM_ADDRESS_SPACE_MAX,
                              &spaces[KERNEL_VM_ADDRESS_SPACE_MAX],
                              bases[KERNEL_VM_ADDRESS_SPACE_MAX]) ==

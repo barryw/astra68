@@ -262,6 +262,29 @@ clock_gettime(clockid_t clock, struct timespec *value)
 }
 
 int
+clock_getres(clockid_t clock, struct timespec *value)
+{
+    uint32_t nanoseconds;
+
+    switch (clock) {
+    case CLOCK_REALTIME:
+        nanoseconds = ASTRA_CLOCK_REALTIME_RESOLUTION_NS;
+        break;
+    case CLOCK_MONOTONIC:
+        nanoseconds = ASTRA_CLOCK_MONOTONIC_RESOLUTION_NS;
+        break;
+    default:
+        errno = EINVAL;
+        return -1;
+    }
+    if (value != NULL) {
+        value->tv_sec = 0;
+        value->tv_nsec = (long)nanoseconds;
+    }
+    return 0;
+}
+
+int
 clock_settime(clockid_t clock, const struct timespec *value)
 {
     const AstraStartupCapability *capability;

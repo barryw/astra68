@@ -133,22 +133,23 @@ Arty Z7 Linux (ARM Cortex-A9)
            -> initial user image (supervisor)
 ```
 
-### Boot memory layout (`sw/include/astra/boot.h`, ABI 0.6)
+### Boot memory layout (`sw/include/astra/boot.h`, ABI 0.7)
 
 | Symbol | Address | Size |
 |---|---|---|
 | `ASTRA_BOOT_INFO/SCRATCH_ADDRESS` | `0x01ff8000` | 32 KiB |
 | `ASTRA_EARLY_LOG_ADDRESS` | `0x02000000` | 16 KiB |
-| `ASTRA_USER_IMAGE_ADDRESS` | `0x02004000` | **`MAX_SIZE` 256 KiB** (48 KiB before ABI 0.4) |
+| `ASTRA_BOOT_LOW_USABLE_ADDRESS` | `0x02004000` | 256 KiB usable RAM below the kernel |
 | `ASTRA_KERNEL_LOAD_ADDRESS` | `0x02044000` | |
 | `ASTRA_KERNEL_TRACE_ADDRESS` | `0x020c4000` | 64 KiB |
-| `ASTRA_KERNEL_USABLE_ADDRESS` | `0x02354000` | usable RAM begins here |
+| `ASTRA_KERNEL_RESERVED_END` | `0x02354000` | fixed kernel reservation ends here |
+| `ASTRA_USER_IMAGE_ADDRESS` | `0x02354000` | initial image begins here; capacity ends at the next reserved aperture or RAM end |
 
-**The user image ceiling is the hole between `0x02004000` and the kernel.** It
-was 48 KiB, which was not a policy number but whatever happened to fit; boot ABI
-0.4 moved the kernel up and made it 256 KiB. Firmware reserves only the pages
-the image fills and returns the remainder to the allocator, so the ceiling costs
-nothing when unused — free frames were 7939/8192 before and after.
+**The initial user image has no guessed software ceiling.** Boot ABI 0.7 places
+it after the fixed kernel reservation. Firmware derives its capacity from the
+next physical reserved aperture, or RAM end, reserves only the page-rounded
+image, and returns every remaining page to the allocator. The old 48 KiB and
+256 KiB ceilings were incidental holes in the layout and are deliberately gone.
 
 ### ROM
 

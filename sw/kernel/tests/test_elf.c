@@ -140,6 +140,56 @@ static void add_empty_tls(void)
     put32(header + 28u, 4u);
 }
 
+static void add_valid_dynamic(void)
+{
+    const uint32_t header = PHOFF + PHNUM * KERNEL_ELF_PHENTSIZE;
+
+    put16(44u, PHNUM + 1u);
+    put32(header + 0u, 2u); /* PT_DYNAMIC */
+    put32(header + 4u, PAGE + 0x100u);
+    put32(header + 8u, DATA_VADDR + 0x100u);
+    put32(header + 12u, DATA_VADDR + 0x100u);
+    put32(header + 16u, 0x40u);
+    put32(header + 20u, 0x40u);
+    put32(header + 24u, 6u); /* PF_R | PF_W */
+    put32(header + 28u, 4u);
+}
+
+static void add_valid_interpreter(void)
+{
+    static const char name[] = "loader.library.1";
+    const uint32_t header = PHOFF +
+        (PHNUM + 1u) * KERNEL_ELF_PHENTSIZE;
+    const uint32_t offset = 0x300u;
+
+    put16(44u, PHNUM + 2u);
+    put32(header + 0u, 3u); /* PT_INTERP */
+    put32(header + 4u, offset);
+    put32(header + 8u, TEXT_VADDR + offset);
+    put32(header + 12u, TEXT_VADDR + offset);
+    put32(header + 16u, sizeof(name));
+    put32(header + 20u, sizeof(name));
+    put32(header + 24u, 4u); /* PF_R */
+    put32(header + 28u, 1u);
+    memcpy(image + offset, name, sizeof(name));
+}
+
+static void add_valid_relro(void)
+{
+    const uint32_t header = PHOFF +
+        (PHNUM + 2u) * KERNEL_ELF_PHENTSIZE;
+
+    put16(44u, PHNUM + 3u);
+    put32(header + 0u, 0x6474e552u); /* PT_GNU_RELRO */
+    put32(header + 4u, PAGE);
+    put32(header + 8u, DATA_VADDR);
+    put32(header + 12u, DATA_VADDR);
+    put32(header + 16u, 0x400u);
+    put32(header + 20u, 0x400u);
+    put32(header + 24u, 4u); /* PF_R after relocation */
+    put32(header + 28u, 1u);
+}
+
 static void expect(KernelElfStatus want, const char *what)
 {
     KernelElfStatus got = accept();
@@ -161,6 +211,7 @@ static void test_valid_plan(void)
     assert(plan.segment_count == 2u);
     assert(plan.entry == TEXT_VADDR + 0x10u);
     assert(plan.total_pages == 3u);
+    assert(plan.writable_bytes == PAGE + 0x400u);
 
     assert(plan.segment[0].virtual_address == TEXT_VADDR);
     assert(plan.segment[0].file_offset == 0u);
@@ -192,6 +243,113 @@ static void test_valid_tls_plan(void)
     assert(plan.tls.memory_size == 0x40u);
     assert(plan.tls.alignment == 16u);
     assert(plan.total_pages == 3u);
+}
+
+static void test_dynamic_plan(void)
+{
+    KernelElfImage plan;
+    uint32_t header = PHOFF + PHNUM * KERNEL_ELF_PHENTSIZE;
+
+    build_valid();
+    add_valid_dynamic();
+    expect(KERNEL_ELF_BAD_INTERPRETER,
+           "dynamic executable without interpreter");
+    add_valid_interpreter();
+    assert(kernel_elf_accept(image, image_size, &limits, &plan) ==
+           KERNEL_ELF_OK);
+    assert(plan.has_dynamic == 1u);
+    assert(plan.has_interpreter == 1u);
+    assert(plan.dynamic.file_offset == PAGE + 0x100u);
+    assert(plan.dynamic.virtual_address == DATA_VADDR + 0x100u);
+    assert(plan.dynamic.size == 0x40u);
+    assert(plan.interpreter.file_offset == 0x300u);
+    assert(plan.interpreter.virtual_address == TEXT_VADDR + 0x300u);
+    assert(plan.interpreter.size == sizeof("loader.library.1"));
+
+    memcpy(image + header + 2u * KERNEL_ELF_PHENTSIZE, image + header,
+           KERNEL_ELF_PHENTSIZE);
+    put16(44u, PHNUM + 3u);
+    expect(KERNEL_ELF_BAD_DYNAMIC, "duplicate dynamic tables");
+
+    build_valid();
+    add_valid_dynamic();
+    add_valid_interpreter();
+    put32(header + 24u, 4u);
+    expect(KERNEL_ELF_BAD_DYNAMIC, "read-only dynamic table");
+
+    build_valid();
+    add_valid_dynamic();
+    add_valid_interpreter();
+    put32(header + 8u, TEXT_VADDR + 0x100u);
+    expect(KERNEL_ELF_BAD_DYNAMIC, "dynamic table outside writable load");
+
+    build_valid();
+    add_valid_dynamic();
+    add_valid_interpreter();
+    put32(header + KERNEL_ELF_PHENTSIZE + 24u, 6u);
+    expect(KERNEL_ELF_BAD_INTERPRETER, "writable interpreter identity");
+}
+
+static void test_relro_plan(void)
+{
+    KernelElfImage plan;
+    const uint32_t header = PHOFF +
+        (PHNUM + 2u) * KERNEL_ELF_PHENTSIZE;
+
+    build_valid();
+    add_valid_dynamic();
+    add_valid_interpreter();
+    add_valid_relro();
+    assert(kernel_elf_accept(image, image_size, &limits, &plan) ==
+           KERNEL_ELF_OK);
+    assert(plan.has_relro == 1u);
+    assert(plan.relro.virtual_address == DATA_VADDR);
+    assert(plan.relro.memory_size == 0x400u);
+
+    /* GNU ld extends RELRO protection through the mapped page padding. */
+    put32(header + 20u, 2u * PAGE);
+    assert(kernel_elf_accept(image, image_size, &limits, &plan) ==
+           KERNEL_ELF_OK);
+    assert(plan.relro.memory_size == 2u * PAGE);
+    put32(header + 20u, 2u * PAGE + 1u);
+    expect(KERNEL_ELF_BAD_RELRO, "GNU RELRO past writable mapping");
+
+    build_valid();
+    add_valid_dynamic();
+    add_valid_interpreter();
+    add_valid_relro();
+    put32(header + 16u, 0x801u);
+    expect(KERNEL_ELF_BAD_RELRO, "GNU RELRO file bytes outside load");
+
+    build_valid();
+    add_valid_dynamic();
+    add_valid_interpreter();
+    add_valid_relro();
+    put16(44u, PHNUM + 4u);
+    memcpy(image + header + KERNEL_ELF_PHENTSIZE, image + header,
+           KERNEL_ELF_PHENTSIZE);
+    expect(KERNEL_ELF_BAD_RELRO, "duplicate GNU RELRO ranges");
+
+    build_valid();
+    add_valid_dynamic();
+    add_valid_interpreter();
+    add_valid_relro();
+    put32(header + 8u, TEXT_VADDR);
+    expect(KERNEL_ELF_BAD_RELRO, "GNU RELRO outside writable load");
+
+    build_valid();
+    add_valid_dynamic();
+    add_valid_interpreter();
+    add_valid_relro();
+    put32(header + 20u, 0u);
+    expect(KERNEL_ELF_BAD_RELRO, "empty GNU RELRO range");
+
+    build_valid();
+    add_valid_dynamic();
+    add_valid_interpreter();
+    add_valid_relro();
+    put32(header + 24u, 6u);
+    expect(KERNEL_ELF_BAD_RELRO, "writable GNU RELRO header");
 }
 
 static void test_empty_tls_is_not_a_template(void)
@@ -377,11 +535,11 @@ static void test_segment_rejections(void)
 {
     build_valid();
     put32(PHOFF + 0u, 2u); /* PT_DYNAMIC */
-    expect(KERNEL_ELF_UNSUPPORTED_SEGMENT, "PT_DYNAMIC");
+    expect(KERNEL_ELF_BAD_DYNAMIC, "malformed PT_DYNAMIC");
 
     build_valid();
     put32(PHOFF + 0u, 3u); /* PT_INTERP */
-    expect(KERNEL_ELF_UNSUPPORTED_SEGMENT, "PT_INTERP");
+    expect(KERNEL_ELF_BAD_INTERPRETER, "malformed PT_INTERP");
 
     build_valid();
     put32(PHOFF + 0u, 0x70000000u);
@@ -604,12 +762,35 @@ static void build_valid_library(void)
 {
     build_valid();
     put16(16u, 3u); /* ET_DYN */
-    put32(24u, 0u); /* libraries are opened through their export table */
+    put32(24u, 0u); /* no entry point: dependencies are resolved eagerly */
     put32(PHOFF + 8u, 0u);
     put32(PHOFF + 12u, 0u);
     put32(PHOFF + 32u + 8u, 0x2000u);
     put32(PHOFF + 32u + 12u, 0x2000u);
     put32(PHOFF + 64u + 0u, 2u); /* PT_DYNAMIC inside the RW load */
+    put32(PHOFF + 64u + 4u, PAGE + 0x100u);
+    put32(PHOFF + 64u + 8u, 0x2100u);
+    put32(PHOFF + 64u + 12u, 0x2100u);
+    put32(PHOFF + 64u + 16u, 0x40u);
+    put32(PHOFF + 64u + 20u, 0x40u);
+    put32(PHOFF + 64u + 24u, 6u);
+    put32(PHOFF + 64u + 28u, 4u);
+}
+
+static void add_valid_library_tls(void)
+{
+    const uint32_t header = PHOFF + PHNUM * KERNEL_ELF_PHENTSIZE;
+
+    put16(44u, PHNUM + 1u);
+    put32(header + 0u, 7u); /* PT_TLS */
+    put32(header + 4u, 0x200u);
+    put32(header + 8u, 0x200u);
+    put32(header + 12u, 0x200u);
+    put32(header + 16u, 0x20u);
+    put32(header + 20u, 0x40u);
+    put32(header + 24u, 4u); /* PF_R */
+    put32(header + 28u, 16u);
+    /* The read/execute load is still immutable and safe as a template. */
 }
 
 static void test_library_profile(void)
@@ -639,7 +820,85 @@ static void test_library_profile(void)
     put32(PHOFF + 64u, 3u); /* PT_INTERP remains forbidden */
     assert(kernel_elf_accept_library(image, image_size, &library_limits,
                                      &plan) ==
-           KERNEL_ELF_UNSUPPORTED_SEGMENT);
+           KERNEL_ELF_BAD_INTERPRETER);
+
+    build_valid_library();
+    put32(PHOFF + 64u, 0x6474e551u); /* no PT_DYNAMIC */
+    assert(kernel_elf_accept_library(image, image_size, &library_limits,
+                                     &plan) == KERNEL_ELF_BAD_DYNAMIC);
+
+    build_valid_library();
+    add_valid_library_tls();
+    assert(kernel_elf_accept_library(image, image_size, &library_limits,
+                                     &plan) == KERNEL_ELF_OK);
+    assert(plan.has_tls == 1u);
+    assert(plan.tls.memory_size == 0x40u);
+}
+
+static void test_streamed_library_headers(void)
+{
+    uint8_t headers[PHNUM][KERNEL_ELF_PHENTSIZE];
+    KernelElfStream stream;
+    KernelElfImage plan;
+    uint32_t offset = 0u;
+    uint32_t length = 0u;
+
+    build_valid_library();
+    memcpy(headers, image + PHOFF, sizeof(headers));
+    put32(28u, 8u * PAGE);
+    image_size = 10u * PAGE;
+
+    assert(kernel_elf_stream_begin_library(image, image_size,
+                                           &library_limits, &stream) ==
+           KERNEL_ELF_OK);
+    for (uint32_t index = 0u; index < PHNUM; ++index) {
+        assert(kernel_elf_stream_next_header(&stream, &offset, &length) ==
+               KERNEL_ELF_OK);
+        assert(offset == 8u * PAGE + index * KERNEL_ELF_PHENTSIZE);
+        assert(length == KERNEL_ELF_PHENTSIZE);
+        assert(kernel_elf_stream_add_header(&stream, headers[index]) ==
+               KERNEL_ELF_OK);
+    }
+    assert(kernel_elf_stream_next_header(&stream, &offset, &length) ==
+           KERNEL_ELF_OK);
+    assert(offset == 0u && length == 0u);
+    assert(kernel_elf_stream_finish(&stream, &plan) == KERNEL_ELF_OK);
+    assert(plan.segment_count == 2u);
+    assert(plan.total_pages == 3u);
+    assert(plan.entry == 0u);
+    assert(plan.has_dynamic == 1u);
+}
+
+static void test_interpreter_profile(void)
+{
+    KernelElfImage plan;
+
+    build_valid_library();
+    put32(24u, 0x10u);
+    assert(kernel_elf_accept_interpreter(image, image_size, &library_limits,
+                                         &plan) == KERNEL_ELF_OK);
+    assert(plan.entry == 0x10u);
+    assert(plan.has_dynamic == 1u);
+    assert(plan.has_interpreter == 0u);
+
+    build_valid_library();
+    assert(kernel_elf_accept_interpreter(image, image_size, &library_limits,
+                                         &plan) == KERNEL_ELF_BAD_ENTRY);
+
+    build_valid_library();
+    put32(24u, 0x10u);
+    add_valid_library_tls();
+    assert(kernel_elf_accept_interpreter(image, image_size, &library_limits,
+                                         &plan) == KERNEL_ELF_OK);
+    assert(plan.has_tls == 1u);
+    assert(plan.tls.memory_size == 0x40u);
+
+    build_valid_library();
+    put32(24u, 0x10u);
+    put32(PHOFF + 64u, 3u);
+    assert(kernel_elf_accept_interpreter(image, image_size, &library_limits,
+                                         &plan) ==
+           KERNEL_ELF_BAD_INTERPRETER);
 }
 
 /*
@@ -764,10 +1023,46 @@ static void test_real_image(void)
            (unsigned)plan.entry);
 }
 
+/* The same production parser must accept the actual ET_DYN emitted by the
+ * shared-library linker script. Keeping this beside the executable fixture
+ * prevents a readelf-shaped approximation from drifting away from Axiom. */
+static void test_real_library(void)
+{
+    const char *path = getenv("ASTRA_LIBRARY_FIXTURE");
+    KernelElfImage plan;
+    KernelElfStatus status;
+    static uint8_t fixture[512u * 1024u];
+    size_t length;
+    FILE *file;
+
+    if (path == NULL)
+        return;
+    file = fopen(path, "rb");
+    if (file == NULL) {
+        printf("FAIL library fixture %s: cannot open\n", path);
+        fflush(stdout);
+        abort();
+    }
+    length = fread(fixture, 1u, sizeof(fixture), file);
+    fclose(file);
+    status = kernel_elf_accept_library(fixture, (uint32_t)length,
+                                       &library_limits, &plan);
+    if (status != KERNEL_ELF_OK) {
+        printf("FAIL library fixture %s: %s\n", path,
+               kernel_elf_status_text(status));
+        fflush(stdout);
+        abort();
+    }
+    printf("library fixture %s: %u segments, %u pages\n", path,
+           (unsigned)plan.segment_count, (unsigned)plan.total_pages);
+}
+
 int main(void)
 {
     test_valid_plan();
     test_valid_tls_plan();
+    test_dynamic_plan();
+    test_relro_plan();
     test_empty_tls_is_not_a_template();
     test_streamed_program_headers();
     test_streamed_image_has_no_whole_file_ceiling();
@@ -781,9 +1076,12 @@ int main(void)
     test_entry_rejections();
     test_plan_cleared_on_failure();
     test_library_profile();
+    test_streamed_library_headers();
+    test_interpreter_profile();
     test_truncation_sweep();
     test_single_byte_corruption();
     test_real_image();
+    test_real_library();
     puts("astra elf acceptance: PASS");
     return 0;
 }

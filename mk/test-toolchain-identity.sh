@@ -31,7 +31,9 @@ test "$("$WORK/fake-gcc" -print-sysroot)" = "$WORK/sysroot"
 cat >"$WORK/Makefile" <<EOF
 CROSS := $WORK/fake-
 include $ROOT/mk/m68k-cross.mk
+-include build/generated.d
 
+.DEFAULT_GOAL := all
 all: build/test.o
 .PHONY: all identity sysroot
 
@@ -42,7 +44,7 @@ sysroot:
 	@printf '%s|%s|%s\n' '\$(ASTRA_TOOLCHAIN_TRIPLE)' \
 		'\$(origin PICOLIBC)' '\$(PICOLIBC)'
 
-build/test.o:
+build/test.o: \$(ASTRA_TOOLCHAIN_STAMP)
 	@mkdir -p \$(@D)
 	@date +%s >\$@
 EOF
@@ -51,6 +53,10 @@ EOF
 test "$("$MAKE" -s -C "$WORK" sysroot)" = \
     "m68k-astra|file|$WORK/sysroot"
 first_identity=$("$MAKE" -s -C "$WORK" identity)
+test "$("$MAKE" -s -C "$WORK" ASTRA_PROGRAM_OWNERS_READY=1 identity)" = \
+    "$first_identity"
+printf '%s\n' 'generated:' >"$WORK/build/generated.d"
+test "$("$MAKE" -s -C "$WORK" identity)" = "$first_identity"
 "$MAKE" -s -C "$WORK"
 first=$(cat "$WORK/build/test.o")
 "$MAKE" -s -C "$WORK"

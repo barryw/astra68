@@ -63,34 +63,6 @@ AstraResult astra_window_set_pointer_image(
     return ASTRA_ERROR_UNSUPPORTED;
 }
 
-static void test_interface_library_semver(void)
-{
-    AstraInterfaceLibrary library = {0};
-
-    library.abi_major = 5u;
-    library.abi_minor = 0u;
-    library.structure_size = ASTRA_INTERFACE_LIBRARY_5_0_SIZE;
-    assert(astra_interface_library_supports(
-        &library, 0u, ASTRA_INTERFACE_LIBRARY_5_0_SIZE));
-    --library.structure_size;
-    assert(!astra_interface_library_supports(
-        &library, 0u, ASTRA_INTERFACE_LIBRARY_5_0_SIZE));
-    library.structure_size = ASTRA_INTERFACE_LIBRARY_5_0_SIZE;
-    assert(!astra_interface_library_supports(
-        &library, 1u, ASTRA_INTERFACE_LIBRARY_5_0_SIZE));
-    library.abi_minor = 1u;
-    library.structure_size = ASTRA_INTERFACE_LIBRARY_5_1_SIZE;
-    assert(astra_interface_library_supports(
-        &library, 1u, ASTRA_INTERFACE_LIBRARY_5_1_SIZE));
-    --library.structure_size;
-    assert(!astra_interface_library_supports(
-        &library, 1u, ASTRA_INTERFACE_LIBRARY_5_1_SIZE));
-    library.structure_size = ASTRA_INTERFACE_LIBRARY_5_1_SIZE;
-    library.abi_major = 3u;
-    assert(!astra_interface_library_supports(
-        &library, 0u, ASTRA_INTERFACE_LIBRARY_5_0_SIZE));
-}
-
 static uint16_t theme_color(AstraColorRGBA8 value)
 {
     return astra_surface_rgb565(value.red, value.green, value.blue);
@@ -2591,7 +2563,6 @@ int main(void)
     static const char malformed_utf8[] = {(char)0xed, (char)0xa0, (char)0x80};
     AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
 
-    test_interface_library_semver();
     info.title = "Error";
     info.title_length = 5u;
     info.message = "Could not launch application.";

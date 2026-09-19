@@ -29,6 +29,28 @@ static _Alignas(16) unsigned char signal_stack[ASTRA_POSIX_SIGNAL_STACK_BYTES];
 
 static void astra_posix_signal_trampoline(int signal_number);
 
+static sigset_t
+valid_signal_mask(void)
+{
+    return ~(sigset_t)1u;
+}
+
+static int
+signal_number_valid(int signal_number)
+{
+    return signal_number > 0 &&
+           signal_number < (int)ASTRA_POSIX_SIGNAL_COUNT;
+}
+
+static int
+signal_set_pointer_valid(const sigset_t *set)
+{
+    if (set != NULL)
+        return 1;
+    errno = EFAULT;
+    return 0;
+}
+
 static void
 terminate_by_signal(int signal_number)
 {
@@ -133,6 +155,104 @@ astra_posix_signal_generation(void)
 }
 
 int
+sigaddset(sigset_t *set, int signal_number)
+{
+    if (!signal_set_pointer_valid(set))
+        return -1;
+    if (!signal_number_valid(signal_number)) {
+        errno = EINVAL;
+        return -1;
+    }
+    *set |= (sigset_t)1u << signal_number;
+    return 0;
+}
+
+int
+sigdelset(sigset_t *set, int signal_number)
+{
+    if (!signal_set_pointer_valid(set))
+        return -1;
+    if (!signal_number_valid(signal_number)) {
+        errno = EINVAL;
+        return -1;
+    }
+    *set &= ~((sigset_t)1u << signal_number);
+    return 0;
+}
+
+int
+sigemptyset(sigset_t *set)
+{
+    if (!signal_set_pointer_valid(set))
+        return -1;
+    *set = 0;
+    return 0;
+}
+
+int
+sigfillset(sigset_t *set)
+{
+    if (!signal_set_pointer_valid(set))
+        return -1;
+    *set = valid_signal_mask();
+    return 0;
+}
+
+int
+sigismember(const sigset_t *set, int signal_number)
+{
+    if (!signal_set_pointer_valid(set))
+        return -1;
+    if (!signal_number_valid(signal_number)) {
+        errno = EINVAL;
+        return -1;
+    }
+    return ((*set >> signal_number) & (sigset_t)1u) != 0u;
+}
+
+int
+sigandset(sigset_t *destination, const sigset_t *left,
+          const sigset_t *right)
+{
+    if (!signal_set_pointer_valid(destination) ||
+        !signal_set_pointer_valid(left) ||
+        !signal_set_pointer_valid(right))
+        return -1;
+    *destination = (*left & *right) & valid_signal_mask();
+    return 0;
+}
+
+int
+sigorset(sigset_t *destination, const sigset_t *left,
+         const sigset_t *right)
+{
+    if (!signal_set_pointer_valid(destination) ||
+        !signal_set_pointer_valid(left) ||
+        !signal_set_pointer_valid(right))
+        return -1;
+    *destination = (*left | *right) & valid_signal_mask();
+    return 0;
+}
+
+int
+signotset(sigset_t *destination, const sigset_t *source)
+{
+    if (!signal_set_pointer_valid(destination) ||
+        !signal_set_pointer_valid(source))
+        return -1;
+    *destination = ~*source & valid_signal_mask();
+    return 0;
+}
+
+int
+sigisemptyset(const sigset_t *set)
+{
+    if (!signal_set_pointer_valid(set))
+        return -1;
+    return (*set & valid_signal_mask()) == 0u;
+}
+
+int
 sigaction(int signal_number, const struct sigaction *restrict action,
           struct sigaction *restrict previous)
 {
@@ -220,6 +340,39 @@ sigsuspend(const sigset_t *mask)
             return -1;
         }
     }
+}
+
+int
+pause(void)
+{
+    sigset_t mask;
+
+    if (sigprocmask(SIG_SETMASK, NULL, &mask) != 0)
+        return -1;
+    return sigsuspend(&mask);
+}
+
+int
+raise(int signal_number)
+{
+    const AstraStartupInfo *startup = astra_posix_startup();
+    uint32_t status;
+
+    if (signal_number <= 0 ||
+        signal_number >= (int)ASTRA_POSIX_SIGNAL_COUNT) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (startup == NULL || startup->process_handle == 0u) {
+        errno = EIO;
+        return -1;
+    }
+    status = astra_process_signal(startup->process_handle,
+                                  (uint32_t)signal_number);
+    if (status == ASTRA_SYSCALL_OK)
+        return 0;
+    errno = status == ASTRA_SYSCALL_ACCESS_DENIED ? EPERM : EIO;
+    return -1;
 }
 
 _sig_func_ptr

@@ -1,6 +1,40 @@
 #include <astra/vfs_reader.h>
 
 #include <astra/vfs_port_transport.h>
+#include <astra/vfs_provider_index.h>
+
+static int path_append(char *path, uint32_t capacity, const char *text)
+{
+    uint32_t at = 0u;
+
+    while (at < capacity && path[at] != '\0')
+        ++at;
+    while (*text != '\0') {
+        if (at + 1u >= capacity)
+            return 0;
+        path[at++] = *text++;
+    }
+    path[at] = '\0';
+    return 1;
+}
+
+static int path_append_number(char *path, uint32_t capacity, uint16_t value)
+{
+    char digits[5];
+    uint32_t count = 0u;
+
+    do {
+        digits[count++] = (char)('0' + value % 10u);
+        value /= 10u;
+    } while (value != 0u);
+    while (count != 0u) {
+        char digit[2] = {digits[--count], '\0'};
+
+        if (!path_append(path, capacity, digit))
+            return 0;
+    }
+    return 1;
+}
 
 uint32_t
 astra_vfs_read_source_open(AstraVfsReadSource *source,
@@ -64,4 +98,61 @@ astra_vfs_read_source_close(void *context)
     file = source->file;
     *source = (AstraVfsReadSource)ASTRA_VFS_READ_SOURCE_INIT;
     return astra_vfs_close(client, file);
+}
+
+uint32_t astra_vfs_library_source_open(
+    AstraVfsReadSource *source, const AstraAssignTable *table,
+    const char *assign, const char *identity,
+    AstraVfsAssignClientFn client_for, void *context,
+    AstraLibraryReference *reference)
+{
+    AstraVfsReadSource index_source = ASTRA_VFS_READ_SOURCE_INIT;
+    const uint8_t *record = NULL;
+    uint32_t moved = 0u;
+    uint32_t status;
+    uint32_t close_status;
+    uint16_t abi = 0u;
+    char name[ASTRA_LIBRARY_NAME_MAX];
+    char index_path[ASTRA_VFS_PATH_MAX] = {0};
+    char binary_path[ASTRA_VFS_PATH_MAX];
+
+    if (source == NULL || table == NULL || assign == NULL ||
+        identity == NULL || client_for == NULL || reference == NULL ||
+        source->file != ASTRA_VFS_FILE_INVALID)
+        return ASTRA_VFS_ERR_INVALID;
+    *reference = (AstraLibraryReference){0};
+    if (!astra_vfs_provider_identity_parse(identity, name, sizeof(name),
+                                            &abi) ||
+        !path_append(index_path, sizeof(index_path), assign) ||
+        !path_append(index_path, sizeof(index_path), ":.providers/") ||
+        !path_append(index_path, sizeof(index_path), name) ||
+        !path_append(index_path, sizeof(index_path), ".abi-") ||
+        !path_append_number(index_path, sizeof(index_path), abi))
+        return ASTRA_VFS_ERR_INVALID;
+    status = astra_vfs_read_source_open(
+        &index_source, table, index_path, client_for, context);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    status = astra_vfs_read_source_read_at(
+        &index_source, 0u, index_source.length, &record, &moved);
+    if (status == ASTRA_VFS_OK &&
+        (moved != index_source.length || record == NULL))
+        status = ASTRA_VFS_ERR_IO;
+    if (status == ASTRA_VFS_OK &&
+        !astra_vfs_provider_index_parse(
+            record, moved, assign, name, abi, binary_path,
+            sizeof(binary_path), reference))
+        status = ASTRA_VFS_ERR_PROTOCOL;
+    close_status = astra_vfs_read_source_close(&index_source);
+    if (status == ASTRA_VFS_OK && close_status != ASTRA_VFS_OK)
+        status = close_status;
+    if (status != ASTRA_VFS_OK) {
+        *reference = (AstraLibraryReference){0};
+        return status;
+    }
+    status = astra_vfs_read_source_open(
+        source, table, binary_path, client_for, context);
+    if (status != ASTRA_VFS_OK)
+        *reference = (AstraLibraryReference){0};
+    return status;
 }
