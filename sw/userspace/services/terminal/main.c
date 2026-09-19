@@ -1,5 +1,6 @@
 #include <console_session.h>
 #include <console_stream.h>
+#include <terminal_cursor.h>
 
 #include <astra/bytes.h>
 #include <astra/area.h>
@@ -68,11 +69,10 @@ typedef struct WindowTerminal {
     uint8_t dirty;
     uint8_t force_present;
     uint8_t live;
-    uint8_t cursor_visible;
     uint8_t selecting;
     uint32_t cursor_row;
     uint32_t cursor_column;
-    uint64_t cursor_deadline;
+    TerminalCursorState cursor;
     AstraWindowFrame damage;
     uint8_t damage_valid;
 } WindowTerminal;
@@ -357,7 +357,8 @@ static int draw_cursor(WindowTerminal *window, uint32_t row, uint32_t column,
                        uint16_t color)
 {
     uint32_t x = TERMINAL_MARGIN_X + column * window->cell_width;
-    uint32_t y = TERMINAL_MARGIN_Y + (row + 1u) * TERMINAL_LINE_HEIGHT - 2u;
+    uint32_t y = TERMINAL_MARGIN_Y + row * TERMINAL_LINE_HEIGHT +
+                 TERMINAL_FONT_HEIGHT - 2u;
 
     if (astra_text_surface_draw_caret(
             &window->text_surface, &window->surface.view,
@@ -377,8 +378,8 @@ static int window_present(void *context, const AstraTerminal *terminal)
     uint64_t now = astra_clock_monotonic();
     int cursor_moved = window->cursor_row != terminal->cursor_row ||
                        window->cursor_column != terminal->cursor_column;
-    int blink = window->cursor_deadline != 0u &&
-                now >= window->cursor_deadline;
+    int blink = terminal_cursor_blink_due(&window->cursor, now);
+    int reset_cursor = window->dirty || window->force_present || cursor_moved;
 
     window->terminal = (AstraTerminal *)(uintptr_t)terminal;
     if (!window->dirty && !window->force_present && !cursor_moved && !blink)
@@ -415,15 +416,12 @@ static int window_present(void *context, const AstraTerminal *terminal)
                          background))
             return 0;
     }
-    if (window->dirty || window->force_present || cursor_moved)
-        window->cursor_visible = 1u;
-    else if (blink)
-        window->cursor_visible ^= 1u;
-    if (window->cursor_visible && terminal->cursor_visible &&
+    terminal_cursor_presented(&window->cursor, now,
+                              TERMINAL_CURSOR_BLINK_NS, reset_cursor);
+    if (window->cursor.visible && terminal->cursor_visible &&
         !draw_cursor(window, terminal->cursor_row, terminal->cursor_column,
                      cursor))
         return 0;
-    window->cursor_deadline = now + TERMINAL_CURSOR_BLINK_NS;
     if (!window->damage_valid ||
         astra_window_present_region(&window->window, &window->damage) !=
             ASTRA_OK)
@@ -579,9 +577,9 @@ static int window_next_key(void *context, uint32_t *key)
             window->live = 0u;
             return CONSOLE_SESSION_INPUT_STOP;
         }
-        if (event.type == ASTRA_WINDOW_EVENT_FRAME) {
-            uint16_t width = event.data.frame.frame.width;
-            uint16_t height = event.data.frame.frame.height;
+        if (event.type == ASTRA_WINDOW_EVENT_RESIZE) {
+            uint16_t width = (uint16_t)event.data.resize.width;
+            uint16_t height = (uint16_t)event.data.resize.height;
 
             if (width != 0u && height != 0u &&
                 (width != window->width || height != window->height)) {
@@ -613,10 +611,21 @@ static int window_next_key(void *context, uint32_t *key)
                 return CONSOLE_SESSION_INPUT_ERROR;
             continue;
         }
-        if (event.type == ASTRA_WINDOW_EVENT_STATE_RESET ||
-            (event.type == ASTRA_WINDOW_EVENT_FOCUS &&
-             (event.flags & ASTRA_WINDOW_EVENT_FOCUSED) == 0u)) {
+        if (event.type == ASTRA_WINDOW_EVENT_STATE_RESET) {
             window->selecting = 0u;
+            continue;
+        }
+        if (event.type == ASTRA_WINDOW_EVENT_STATE) {
+            int focused =
+                (event.data.state.flags & ASTRA_WINDOW_ACTIVE) != 0u &&
+                event.data.state.state != ASTRA_WINDOW_STATE_MINIMIZED;
+
+            if ((window->cursor.active != 0u) != focused) {
+                terminal_cursor_set_focus(&window->cursor, focused);
+                if (!focused)
+                    window->selecting = 0u;
+                window->force_present = 1u;
+            }
             continue;
         }
         if (event.type == ASTRA_WINDOW_EVENT_KEY &&
@@ -716,7 +725,7 @@ int astra_main(const AstraStartupInfo *startup)
     window_terminal.cell_width = ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH;
     window_terminal.cursor_row = UINT32_MAX;
     window_terminal.cursor_column = UINT32_MAX;
-    window_terminal.cursor_visible = 1u;
+    terminal_cursor_set_focus(&window_terminal.cursor, 1);
     window_terminal.force_present = 1u;
     if (status == ASTRA_STATUS_OK && window_terminal.cell_width == 0u)
         status = TERMINAL_FAIL_FONT;

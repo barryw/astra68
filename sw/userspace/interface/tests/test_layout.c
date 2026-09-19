@@ -36,15 +36,15 @@ static void set_item(AstraControl *control, uint32_t grow, uint32_t shrink,
     assert(astra_interface_control_set_flex(control, &item) == ASTRA_OK);
 }
 
-static AstraWindowEvent frame_event(uint16_t width, uint16_t height)
+static AstraWindowEvent resize_event(uint16_t width, uint16_t height)
 {
     AstraWindowEvent event = {0};
 
     event.size = sizeof(event);
     event.version = ASTRA_WINDOW_EVENT_VERSION;
-    event.type = ASTRA_WINDOW_EVENT_FRAME;
-    event.data.frame.frame.width = width;
-    event.data.frame.frame.height = height;
+    event.type = ASTRA_WINDOW_EVENT_RESIZE;
+    event.data.resize.width = width;
+    event.data.resize.height = height;
     return event;
 }
 
@@ -192,7 +192,7 @@ static void test_wrap_and_reflow(void)
            controls[2]._private_frame.y == 33);
 
     astra_interface_ui_damage_clear(&context);
-    event = frame_event(30u, 100u);
+    event = resize_event(30u, 100u);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
            ASTRA_OK);
     assert(controls[0]._private_frame.y == 0);
@@ -210,7 +210,7 @@ static void test_wrap_and_reflow(void)
     assert(astra_interface_ui_damage(&context, &damage) ==
            ASTRA_ERROR_WOULD_BLOCK);
 
-    event = frame_event(100u, 100u);
+    event = resize_event(100u, 100u);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
            ASTRA_OK);
     assert(controls[0]._private_frame.x == 0 &&
@@ -414,7 +414,7 @@ static void test_nested_layout_and_reflow(void)
            controls[3]._private_clip.width == 55u &&
            controls[3]._private_clip.height == 70u);
 
-    event = frame_event(160u, 80u);
+    event = resize_event(160u, 80u);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
            ASTRA_OK);
     assert(controls[1]._private_frame.width == 71u &&

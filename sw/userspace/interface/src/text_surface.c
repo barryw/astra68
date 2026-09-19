@@ -451,8 +451,8 @@ AstraResult astra_text_surface_draw_caret(
         height = text->_private_line_height;
     } else {
         width = text->_private_cell_width;
-        height = text->_private_line_height < 2u ? 1u : 2u;
-        y += text->_private_line_height - height;
+        height = text->_private_font_height < 2u ? 1u : 2u;
+        y += text->_private_font_height - height;
     }
     astra_surface_fill(target, origin_x + (int32_t)x,
                        origin_y + (int32_t)y, width, height, color_value);

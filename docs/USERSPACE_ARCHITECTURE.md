@@ -235,7 +235,9 @@ for both alternating scanouts, and repairs rounded overlap with clipped masked
   blits. The protected input service publishes normalized events to the display
   service, which owns hit testing, focus, capture, titlebar dragging, gadget
   transitions, and per-window event masks. Window events carry screen and
-  client-relative coordinates; explicitly delegated windowless observers use
+  client-relative coordinates. Every ordinary window receives complete
+  active/minimized/maximized/restored state snapshots and distinct resize
+  events by default; explicitly delegated windowless observers use
   the NDK pointer API and receive screen coordinates only. These remain
   userspace policy, not kernel ABI.
 

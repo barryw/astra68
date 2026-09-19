@@ -153,7 +153,7 @@ AstraResult astra_interface_show_alert(AstraHandle gui,
     create.event_mask = ASTRA_WINDOW_SUBSCRIBE_CLOSE_REQUEST |
                         ASTRA_WINDOW_SUBSCRIBE_POINTER_MOTION |
                         ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON |
-                        ASTRA_WINDOW_SUBSCRIBE_FOCUS |
+                        ASTRA_WINDOW_SUBSCRIBE_STATE |
                         ASTRA_WINDOW_SUBSCRIBE_KEY;
     result = astra_window_create(gui, surface.area, &create, &window);
     if (result == ASTRA_OK) {

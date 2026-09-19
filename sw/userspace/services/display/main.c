@@ -165,6 +165,7 @@ enum {
     DISPLAY_POINTER_CURSOR = 1u << 0,
     DISPLAY_POINTER_RENDER = 1u << 1,
     DISPLAY_POINTER_FRAME = 1u << 2,
+    DISPLAY_POINTER_RESIZE = 1u << 3,
 };
 
 enum {
@@ -578,10 +579,10 @@ static uint32_t send_event(DisplayWindow *window, AstraWindowEvent *event)
             ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON :
         event->type == ASTRA_WINDOW_EVENT_POINTER_WHEEL ?
             ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL :
-        event->type == ASTRA_WINDOW_EVENT_FOCUS ?
-            ASTRA_WINDOW_SUBSCRIBE_FOCUS :
-        event->type == ASTRA_WINDOW_EVENT_FRAME ?
-            ASTRA_WINDOW_SUBSCRIBE_FRAME :
+        event->type == ASTRA_WINDOW_EVENT_STATE ?
+            ASTRA_WINDOW_SUBSCRIBE_STATE :
+        event->type == ASTRA_WINDOW_EVENT_RESIZE ?
+            ASTRA_WINDOW_SUBSCRIBE_RESIZE :
         event->type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST ?
             ASTRA_WINDOW_SUBSCRIBE_CLOSE_REQUEST :
         event->type == ASTRA_WINDOW_EVENT_KEY ?
@@ -620,32 +621,33 @@ static uint32_t send_event(DisplayWindow *window, AstraWindowEvent *event)
     return status;
 }
 
-static void focus_event(DisplayWindow *window, uint32_t timestamp_ms,
-                        uint32_t focused)
-{
-    AstraWindowEvent event = {
-        .type = ASTRA_WINDOW_EVENT_FOCUS,
-        .flags = focused != 0u ? ASTRA_WINDOW_EVENT_FOCUSED : 0u,
-        .timestamp_ms = timestamp_ms,
-    };
-
-    (void)send_event(window, &event);
-}
-
-static void frame_event(DisplayWindow *window, uint32_t timestamp_ms,
+static void state_event(DisplayWindow *window, uint32_t timestamp_ms,
                         uint32_t z_order)
 {
     AstraWindowEvent event = {
-        .type = ASTRA_WINDOW_EVENT_FRAME,
+        .type = ASTRA_WINDOW_EVENT_STATE,
         .timestamp_ms = timestamp_ms,
     };
 
-    event.data.frame.frame = (AstraWindowFrame){
+    event.data.state.frame = (AstraWindowFrame){
         window->request.x, window->request.y,
         window->request.width, window->request.height
     };
-    event.data.frame.state = window->state;
-    event.data.frame.z_order = z_order;
+    event.data.state.state = window->state;
+    event.data.state.flags = window->request.flags;
+    event.data.state.z_order = z_order;
+    (void)send_event(window, &event);
+}
+
+static void resize_event(DisplayWindow *window, uint32_t timestamp_ms)
+{
+    AstraWindowEvent event = {
+        .type = ASTRA_WINDOW_EVENT_RESIZE,
+        .timestamp_ms = timestamp_ms,
+    };
+
+    event.data.resize.width = window->request.width;
+    event.data.resize.height = window->request.height;
     (void)send_event(window, &event);
 }
 
@@ -727,7 +729,7 @@ static int activate(DisplayState *state, const AstraTheme *theme,
         else
             window->request.flags &= ~ASTRA_WINDOW_ACTIVE;
         next_generation(window);
-        focus_event(window, timestamp_ms, active);
+        state_event(window, timestamp_ms, at);
         if (decorated(window))
             damage_window(state, theme, window);
         changed = 1;
@@ -2352,6 +2354,8 @@ static uint32_t handle_pointer(DisplayState *state,
                 changed = resize_captured_window(
                     state, &theme, window,
                     state->pointer_x, state->pointer_y);
+                if (changed)
+                    *effects |= DISPLAY_POINTER_RESIZE;
             } else if (state->capture_region >= HIT_MINIMIZE &&
                        state->capture_region <= HIT_CLOSE) {
                 uint32_t under = hit_region(
@@ -2752,6 +2756,8 @@ static void receive_command(uint32_t device, uint32_t irq,
     uint32_t old_loaded_shape = state->loaded_pointer_shape;
     uint32_t old_loaded_window = state->loaded_pointer_window;
     uint32_t old_loaded_generation = state->loaded_pointer_generation;
+    uint16_t old_width = state->windows[window_index].request.width;
+    uint16_t old_height = state->windows[window_index].request.height;
     int pointer_image_pending = 0;
     uint32_t status = astra_port_receive(
         receive, &command, sizeof(command), handles,
@@ -2865,7 +2871,11 @@ static void receive_command(uint32_t device, uint32_t irq,
         uint32_t current = find_id(state, id);
 
         if (current != state->count)
-            frame_event(&state->windows[current], 0u, current);
+            state_event(&state->windows[current], 0u, current);
+        if (current != state->count &&
+            (state->windows[current].request.width != old_width ||
+             state->windows[current].request.height != old_height))
+            resize_event(&state->windows[current], 0u);
     }
     if (closed.id != 0u)
         state_reply(&reply, command.header.transaction_id, status,
@@ -3161,8 +3171,11 @@ static void serve_windows(uint32_t device, uint32_t irq,
                 uint32_t index = find_id(&state, frame_window);
 
                 if (index != state.count)
-                    frame_event(&state.windows[index], frame_timestamp,
+                    state_event(&state.windows[index], frame_timestamp,
                                 index);
+                if (index != state.count &&
+                    (effects & DISPLAY_POINTER_RESIZE) != 0u)
+                    resize_event(&state.windows[index], frame_timestamp);
             }
         } else if (selected == 2u) {
             if (dispatch_vblank(vblank_irq, &state) != ASTRA_STATUS_OK)

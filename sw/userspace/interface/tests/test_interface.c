@@ -307,15 +307,15 @@ static AstraWindowEvent wheel_event(int32_t x, int32_t y,
     return event;
 }
 
-static AstraWindowEvent frame_event(uint16_t width, uint16_t height)
+static AstraWindowEvent resize_event(uint16_t width, uint16_t height)
 {
     AstraWindowEvent event = {0};
 
     event.size = sizeof(event);
     event.version = ASTRA_WINDOW_EVENT_VERSION;
-    event.type = ASTRA_WINDOW_EVENT_FRAME;
-    event.data.frame.frame.width = width;
-    event.data.frame.frame.height = height;
+    event.type = ASTRA_WINDOW_EVENT_RESIZE;
+    event.data.resize.width = width;
+    event.data.resize.height = height;
     return event;
 }
 
@@ -646,7 +646,7 @@ static void test_flex_growth(void)
            controls[1]._private_frame.width == 38u &&
            controls[1]._private_frame.height == 40u);
     astra_interface_ui_damage_clear(&context);
-    event = frame_event(120u, 80u);
+    event = resize_event(120u, 80u);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
            ASTRA_OK);
     assert(controls[0]._private_frame.x == 10 &&

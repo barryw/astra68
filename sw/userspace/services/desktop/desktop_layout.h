@@ -1,0 +1,28 @@
+#ifndef ASTRA_DESKTOP_LAYOUT_H
+#define ASTRA_DESKTOP_LAYOUT_H
+
+#include <astra/theme.h>
+
+#include <stdint.h>
+
+#define ASTRA_DESKTOP_ICON_CELL_LEFT 32u
+#define ASTRA_DESKTOP_ICON_CELL_WIDTH 80u
+#define ASTRA_DESKTOP_ICON_SIZE 64u
+#define ASTRA_DESKTOP_ICON_X \
+    (ASTRA_DESKTOP_ICON_CELL_LEFT + \
+     (ASTRA_DESKTOP_ICON_CELL_WIDTH - ASTRA_DESKTOP_ICON_SIZE) / 2u)
+#define ASTRA_DESKTOP_ICON_Y 34u
+#define ASTRA_DESKTOP_LABEL_Y \
+    (ASTRA_DESKTOP_ICON_Y + ASTRA_DESKTOP_ICON_SIZE + 8u)
+#define ASTRA_DESKTOP_LABEL_FONT_HEIGHT \
+    ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT
+
+static inline int32_t astra_desktop_centered_label_x(uint32_t text_width)
+{
+    if (text_width >= ASTRA_DESKTOP_ICON_CELL_WIDTH)
+        return (int32_t)ASTRA_DESKTOP_ICON_CELL_LEFT;
+    return (int32_t)(ASTRA_DESKTOP_ICON_CELL_LEFT +
+        (ASTRA_DESKTOP_ICON_CELL_WIDTH - text_width) / 2u);
+}
+
+#endif

@@ -227,7 +227,7 @@ the current clipped screen X/Y position. Every event carries the normalized
 modifier state captured when that event was created; coalesced pointer motion
 retains that snapshot rather than substituting the state at delivery time.
 
-The GUI protocol is version 10. A successful window create returns a private
+The GUI protocol is version 11. A successful window create returns a private
 window-control handle and a coalescing vblank wait handle after accepting the
 bounded event sender, content area, and reply capability. The create request
 selects a window event mask; `SET_EVENT_MASK` changes it through the private
@@ -235,16 +235,19 @@ window-control capability. The vblank handle is always present so subscription
 can change without rebuilding window state, but it is signaled only while the
 vblank bit is selected. Each 52-byte window event carries the normalized
 modifier snapshot in pointer and wheel payloads, and pointer events also carry
-client-local and screen coordinates. Focus, frame, close-request, and
+client-local and screen coordinates. Every ordinary window subscribes by
+default to a complete state snapshot after active, inactive, minimized,
+maximized, restored, moved, or resized transitions. A separate resize event is
+emitted only when the client extent changes. State, resize, close-request, and
 loss-reset messages use the same per-window FIFO.
 
-The flags distinguish down, repeat, synthetic, focused, and loss events.
+The flags distinguish down, captured, repeat, synthetic, and loss events.
 Clients must discard held-key/button state on `STATE_RESET`. A focus generation
 change also invalidates assumptions made under the prior focus owner. Queue
 full is bounded behavior, never implicit growth: pointer motion may coalesce,
 while loss of a critical event forces a reset before later delivery.
 
-Version 10 adds `SET_POINTER_SHAPE` and `SET_POINTER_IMAGE` to that same
+Version 10 added `SET_POINTER_SHAPE` and `SET_POINTER_IMAGE` to that same
 private window-control capability. Shapes are the canonical default,
 horizontal-resize, vertical-resize, text, wait, and custom values. A custom
 image command transfers a second, immutable area containing a normalized 32 by
@@ -470,7 +473,7 @@ The events service attaches two endpoints to its successful `SRVC` ready
 message: `EVENTS:` first and `EVENT_CONTROL` second. Other current services
 attach only their manifest-declared endpoint.
 
-`sw/include/astra/gui.h` defines the userspace `GUI` protocol, version 10. A
+`sw/include/astra/gui.h` defines the userspace `GUI` protocol, version 11. A
 108-byte `OPEN_WINDOW` request transfers a read-only content area, a private
 event sender, and a reply sender. It carries bounded frame, content format,
 chrome recipe, flags, gadgets, title, preview states, and an event mask, with
@@ -480,8 +483,8 @@ transfers a private control sender. A 104-byte `WINDOW_COMMAND` sent through
 that capability performs query, frame, z-order, activation, minimize/maximize,
 restore, title, event-mask, or close operations. Its 64-byte `WINDOW_STATE`
 reply returns the resulting frame, state, flags, z-order, and generation. A
-76-byte `WINDOW_EVENT` carries motion, button, wheel, focus, frame, close,
-reset, physical-key, or Unicode text state. Pointer records include both
+76-byte `WINDOW_EVENT` carries motion, button, wheel, full window state,
+resize, close, reset, physical-key, or Unicode text state. Pointer records include both
 screen and content-relative coordinates and the event-time normalized
 modifier snapshot. Each NDK window owns an eight-record
 bounded event port; overflow is explicit rather than unbounded allocation.

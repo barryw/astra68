@@ -1,6 +1,7 @@
 include ../../../../mk/m68k-cross.mk
 
 CC := $(CROSS)gcc
+HOST_CC ?= cc
 SIZE := $(CROSS)size
 OBJCOPY := $(CROSS)objcopy
 READELF := $(CROSS)readelf
@@ -27,7 +28,9 @@ TARGET := build/m68k/terminal.elf
 IMAGE := build/m68k/terminal
 CATALOG := build/m68k/astra_events.cat
 OBJECTS := build/m68k/main.o build/m68k/console_session.o \
-	build/m68k/console_stream.o
+	build/m68k/console_stream.o build/m68k/terminal_cursor.o
+HOST_TEST := build/host/test_terminal_cursor
+HOST_TEST_SANITIZE := build/host/test_terminal_cursor_sanitize
 TERMINAL_LIB := $(TERMINAL)/build/m68k/libastraterminal.a
 LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_GRAPHICS_LIBRARY) \
 	$(ASTRA_STREAMS_LIBRARY) $(ASTRA_FILESYSTEM_LIBRARY) \
@@ -69,8 +72,28 @@ build/m68k/console_stream.o: console_stream.c include/console_stream.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
-test sanitize:
-	@true
+build/m68k/terminal_cursor.o: terminal_cursor.c include/terminal_cursor.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
+$(HOST_TEST): terminal_cursor.c include/terminal_cursor.h \
+		tests/test_terminal_cursor.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 terminal_cursor.c \
+		tests/test_terminal_cursor.c -o $@
+
+test: $(HOST_TEST)
+	./$(HOST_TEST)
+
+$(HOST_TEST_SANITIZE): terminal_cursor.c include/terminal_cursor.h \
+		tests/test_terminal_cursor.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O1 \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		terminal_cursor.c tests/test_terminal_cursor.c -o $@
+
+sanitize: $(HOST_TEST_SANITIZE)
+	./$(HOST_TEST_SANITIZE)
 
 analyze:
 	@mkdir -p build/analyzer
@@ -80,6 +103,8 @@ analyze:
 		-c console_session.c -o build/analyzer/console_session.o
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
 		-c console_stream.c -o build/analyzer/console_stream.o
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
+		-c terminal_cursor.c -o build/analyzer/terminal_cursor.o
 
 clean:
 	rm -rf build

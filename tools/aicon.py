@@ -28,56 +28,52 @@ GALLERY_PALETTE = (
 
 
 def terminal_strike(size):
-    """A designed strike, not a scaled source image."""
+    """A simple terminal symbol with no window toolbar."""
     pixels = bytearray(size * size)
     border = max(1, size // 32)
-    radius = max(2, size // 8)
-    title = max(3, size // 5)
+    left = size // 8
+    right = size - left - 1
+    top = size // 6
+    bottom = size - top - 1
+    radius = max(2, size // 12)
+
+    def inside(x, y, inset=0):
+        x0, x1 = left + inset, right - inset
+        y0, y1 = top + inset, bottom - inset
+        r = max(0, radius - inset)
+
+        if x < x0 or x > x1 or y < y0 or y > y1:
+            return False
+        if r == 0:
+            return True
+        cx = x0 + r if x < x0 + r else x1 - r if x > x1 - r else x
+        cy = y0 + r if y < y0 + r else y1 - r if y > y1 - r else y
+        return (x - cx) ** 2 + (y - cy) ** 2 <= r ** 2
 
     for y in range(size):
         for x in range(size):
-            corner = ((x < radius and y < radius and
-                       (x - radius) ** 2 + (y - radius) ** 2 > radius ** 2) or
-                      (x >= size - radius and y < radius and
-                       (x - (size - radius - 1)) ** 2 +
-                       (y - radius) ** 2 > radius ** 2) or
-                      (x < radius and y >= size - radius and
-                       (x - radius) ** 2 +
-                       (y - (size - radius - 1)) ** 2 > radius ** 2) or
-                      (x >= size - radius and y >= size - radius and
-                       (x - (size - radius - 1)) ** 2 +
-                       (y - (size - radius - 1)) ** 2 > radius ** 2))
-            if corner:
-                value = 0
-            elif (x < border or y < border or x >= size - border or
-                  y >= size - border):
-                value = 1
-            elif y < title:
-                value = 2
-            else:
-                value = 3
-            pixels[y * size + x] = value
+            if inside(x, y):
+                pixels[y * size + x] = 3 if inside(x, y, border) else 5
 
-    # Astra signal rail under the titlebar.
-    for y in range(title, min(size - border, title + border)):
-        for x in range(border, size - border):
-            pixels[y * size + x] = 4
+    def line(x0, y0, x1, y1, color):
+        steps = max(abs(x1 - x0), abs(y1 - y0), 1)
+        thick = max(1, size // 32)
 
-    # Prompt chevron and underline cursor; thickness is strike-specific.
-    thick = max(1, size // 32)
-    x0 = max(3, size // 5)
-    y0 = title + max(3, size // 5)
-    glyph = max(3, size // 6)
-    for at in range(glyph):
-        for step in range(thick):
-            for y in (y0 + at, y0 + glyph * 2 - 2 - at):
-                if 0 <= y < size:
-                    pixels[y * size + x0 + at // 2 + step] = 5
-    cursor_x = x0 + glyph
-    cursor_y = min(size - border - thick - 1, y0 + glyph * 2)
-    for y in range(cursor_y, cursor_y + thick):
-        for x in range(cursor_x, min(size - border, cursor_x + glyph * 2)):
-            pixels[y * size + x] = 4
+        for step in range(steps + 1):
+            x = round(x0 + (x1 - x0) * step / steps)
+            y = round(y0 + (y1 - y0) * step / steps)
+            for dy in range(thick):
+                for dx in range(thick):
+                    pixels[(y + dy) * size + x + dx] = color
+
+    x0 = 3 * size // 10
+    point = 17 * size // 40
+    y0 = 2 * size // 5
+    middle = size // 2
+    baseline = 5 * size // 8
+    line(x0, y0, point, middle, 4)
+    line(point, middle, x0, baseline, 4)
+    line(21 * size // 40, baseline, 29 * size // 40, baseline, 4)
     return bytes(pixels)
 
 

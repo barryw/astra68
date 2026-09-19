@@ -13,7 +13,7 @@
 /** GUI service wire protocol tag. */
 #define ASTRA_GUI_PROTOCOL UINT32_C(0x47554920) /* GUI  */
 /** Current GUI service wire protocol version. */
-#define ASTRA_GUI_VERSION 10u
+#define ASTRA_GUI_VERSION 11u
 
 /** Maximum counted UTF-8 bytes in a window title. */
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
@@ -79,15 +79,17 @@ typedef struct AstraWindowFrame {
 } AstraWindowFrame;
 
 /** Current serialized window-event version. */
-#define ASTRA_WINDOW_EVENT_VERSION 4u
+#define ASTRA_WINDOW_EVENT_VERSION 5u
 
 /** Window event kinds. */
 enum {
     ASTRA_WINDOW_EVENT_POINTER_MOTION = 1,
     ASTRA_WINDOW_EVENT_POINTER_BUTTON = 2,
     ASTRA_WINDOW_EVENT_POINTER_WHEEL = 3,
-    ASTRA_WINDOW_EVENT_FOCUS = 4,
-    ASTRA_WINDOW_EVENT_FRAME = 5,
+    /** Active, placement, size, minimization, or maximization changed. */
+    ASTRA_WINDOW_EVENT_STATE = 4,
+    /** Client content extent changed. */
+    ASTRA_WINDOW_EVENT_RESIZE = 5,
     ASTRA_WINDOW_EVENT_CLOSE_REQUEST = 6,
     ASTRA_WINDOW_EVENT_STATE_RESET = 7,
     ASTRA_WINDOW_EVENT_KEY = 8,
@@ -99,8 +101,8 @@ enum {
     ASTRA_WINDOW_SUBSCRIBE_POINTER_MOTION = 1u << 0,
     ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON = 1u << 1,
     ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL = 1u << 2,
-    ASTRA_WINDOW_SUBSCRIBE_FOCUS = 1u << 3,
-    ASTRA_WINDOW_SUBSCRIBE_FRAME = 1u << 4,
+    ASTRA_WINDOW_SUBSCRIBE_STATE = 1u << 3,
+    ASTRA_WINDOW_SUBSCRIBE_RESIZE = 1u << 4,
     ASTRA_WINDOW_SUBSCRIBE_CLOSE_REQUEST = 1u << 5,
     ASTRA_WINDOW_SUBSCRIBE_KEY = 1u << 6,
     ASTRA_WINDOW_SUBSCRIBE_TEXT = 1u << 7,
@@ -110,7 +112,7 @@ enum {
 
 /** Events delivered to every ordinary application window. */
 #define ASTRA_WINDOW_SUBSCRIBE_DEFAULT \
-    (ASTRA_WINDOW_SUBSCRIBE_FOCUS | ASTRA_WINDOW_SUBSCRIBE_FRAME | \
+    (ASTRA_WINDOW_SUBSCRIBE_STATE | ASTRA_WINDOW_SUBSCRIBE_RESIZE | \
      ASTRA_WINDOW_SUBSCRIBE_CLOSE_REQUEST)
 /** Complete public window event subscription mask. */
 #define ASTRA_WINDOW_SUBSCRIBE_ALL \
@@ -123,11 +125,10 @@ enum {
 /** Flags that qualify one delivered window event. */
 enum {
     ASTRA_WINDOW_EVENT_DOWN = 1u << 0,
-    ASTRA_WINDOW_EVENT_FOCUSED = 1u << 1,
-    ASTRA_WINDOW_EVENT_CAPTURED = 1u << 2,
-    ASTRA_WINDOW_EVENT_LOSS = 1u << 3,
-    ASTRA_WINDOW_EVENT_REPEAT = 1u << 4,
-    ASTRA_WINDOW_EVENT_SYNTHETIC = 1u << 5
+    ASTRA_WINDOW_EVENT_CAPTURED = 1u << 1,
+    ASTRA_WINDOW_EVENT_LOSS = 1u << 2,
+    ASTRA_WINDOW_EVENT_REPEAT = 1u << 3,
+    ASTRA_WINDOW_EVENT_SYNTHETIC = 1u << 4
 };
 
 /** Pointer motion or button event payload. */
@@ -166,17 +167,27 @@ typedef struct AstraWindowWheelEvent {
     uint32_t modifiers;
 } AstraWindowWheelEvent;
 
-/** Window placement or state-change event payload. */
-typedef struct AstraWindowFrameEvent {
+/** Complete server-owned window state delivered after every transition. */
+typedef struct AstraWindowStateEvent {
     /** Current logical frame. */
     AstraWindowFrame frame;
     /** ASTRA_WINDOW_STATE_* value. */
     uint32_t state;
+    /** Current ASTRA_WINDOW_* flags, including ASTRA_WINDOW_ACTIVE. */
+    uint32_t flags;
     /** Current compositor z-order. */
     uint32_t z_order;
     /** Must be zero. */
-    uint32_t reserved[2];
-} AstraWindowFrameEvent;
+    uint32_t reserved[1];
+} AstraWindowStateEvent;
+
+/** New client extent after a resize transition. */
+typedef struct AstraWindowResizeEvent {
+    uint32_t width;
+    uint32_t height;
+    /** Must be zero. */
+    uint32_t reserved[5];
+} AstraWindowResizeEvent;
 
 /** Physical-key event payload. */
 typedef struct AstraWindowKeyEvent {
@@ -204,8 +215,10 @@ typedef union AstraWindowEventData {
     AstraWindowPointerEvent pointer;
     /** Pointer-wheel data. */
     AstraWindowWheelEvent wheel;
-    /** Placement or state-change data. */
-    AstraWindowFrameEvent frame;
+    /** Complete state after an active/geometry/presentation transition. */
+    AstraWindowStateEvent state;
+    /** New client extent. */
+    AstraWindowResizeEvent resize;
     /** Physical-key data. */
     AstraWindowKeyEvent key;
     /** Unicode text-input data. */

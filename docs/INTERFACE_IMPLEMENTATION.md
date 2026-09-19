@@ -258,7 +258,7 @@ The retained trace is `/tmp/astra-splitter-final.flSMgn/ring.bin` on Beast,
 SHA-256
 `34bf6843d15a8f470f93dd66e65eabc832fcf5e4b28e399597ee3cb3c55e6e0d`.
 
-Current source advances Interface Kit to ABI 4.5 and GUI protocol 10 with one
+Current source uses Interface Kit ABI 4.5 and GUI protocol 11 with one
 canonical pointer-image path. Window clients select the server-supplied arrow,
 horizontal resize, vertical resize, I-beam, or wait image, or transfer a copied
 RGBA image and hotspot. Interface Kit derives field and splitter images from

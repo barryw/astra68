@@ -176,7 +176,9 @@ according to its protocol.
   Explicitly authorized windowless observers receive screen coordinates only.
 - Pointer location and system shortcuts remain responsive at ordinary CPU
   saturation.
-- Focus changes are explicit ordered events.
+- Active, inactive, minimized, maximized, restored, and geometry changes are
+  explicit ordered state events. Client-extent changes also produce a distinct
+  resize event; moves do not.
 - Pointer capture is a revocable lease and is released on process death.
 - Global shortcuts are owned by workspace policy, not intercepted by arbitrary
   applications.

@@ -95,17 +95,17 @@ re-evaluated. The regression failed before this fix and passes the normal,
 ASan/UBSan, analyzer, and MC68040 display builds.
 
 Immutable software release
-`6c7f364df31b71b19caf495fc371d480d4f2a06a759e9d0877aacbbcee9c542e`
+`2d2932784cd0f4468a6cd8669228e66e6345a73d5ea8dc1086967344c2427aaf`
 is selected, byte-verified, and running on the DE25. Its QEMU, ROM, storage
 seed, host display, remote-desktop, and source-manifest SHA-256 values are
 respectively
 `3a13dc695833a277f3048de3835cfdedfcacc46adb9e31e8937942d4d410605e`,
-`e47b98934a3714f25234cd12b3366ae7bb6ef1f96dd02144b8b580052ed394ff`,
-`ae91f3779b176d2b1288e0189dea6122a6a3eaa128f266824d9f6d905a447dac`,
+`b60711fa19eda7da0d1d415b0dfd2e8e0f81f92427dc4be5601decb41b1cd5a4`,
+`aba271bbf82afd0b20f09cb54017d75b2f8f0629e2a0c4fc9cc16388da314ac4`,
 `9d86a327a113e2f5dd2ead97f49bab87b1aacf16f5037fa9c2991a7bc059d471`,
 `6740ea01dcb16e19cb3af89d8efd5ee855d1d72cb45090aa1fc8094232e6df66`,
-and `2da63888d24bfcd615ae01a5210c1ecdc213903d315821c4f19f009d0a8f7ce5`.
-It reaches stage 8 at 66.279 MHz effective; `astra.service` and
+and `6e498c4ed3be3a06254a11c3ac86a208fdaffe9723b63c72ce51a93994cced97`.
+It reaches stage 8; `astra.service` and
 `astra-remote-desktop.service` are active with zero automatic restarts.
 
 This release completed the library, CLI, storage, and remote-desktop audit.
@@ -122,7 +122,25 @@ negative regression proving that it refuses to test when that refresh fails,
 so a stale boot image cannot masquerade as current source.
 The physical loopback RFB gate captured a 1920x1080 RGB frame, round-tripped
 pointer position `(700, 500)`, and produced frame SHA-256
-`75e1453455545a0d8fc1afeebcb8063b92a28fcbf4e8f1b98e1afc79ed479eef`.
+`59f1aaecaa1e0d1e0a2f0223f088095ce502c995ace9648312604a667ee23638`.
+This release advances the GUI protocol to version 11. Every ordinary window
+receives one complete state snapshot for active, inactive, minimized,
+maximized, restored, and geometry transitions, plus a distinct resize event
+only when its client extent changes. Terminal consumes that state directly:
+its cursor blinks only while active, remains visible while inactive, and its
+underline is aligned to the font box rather than the inter-line gap. The
+desktop uses the 13-pixel title face for a measured, centered application label
+and the Terminal bundle now generates the toolbar-free icon from the approved
+desktop design. Physical captures 600 ms apart were byte-identical while the
+Terminal was inactive
+(`ca9d8919a34be268bbae5ec8fad5bd77f9e22565a35d48db7565725108f83290`)
+and alternated between
+`cd4e8278a46c1837fe27e8aba294d477131e4ef1ae321238af7c3b52044b1443`
+and `6a71a7e7b7597acda363adf74b652d2dd772f6c362a64920b11b79e6de8fbffd`
+after activating it. Maximizing Interface Gallery produced a full-screen,
+correctly reflowed frame
+(`eb93ccf209bf77a959a6983e4c59a1c23afe6201cf55e5a1e5e2fa2d480cd582`),
+exercising both its state and resize notifications on the DE25.
 The complete remote-desktop lifecycle also passes dynamic definition
 create/enable/disable/delete, automatic and manual activation, restart,
 broker loss/recovery, events, and shutdown. The storage allocator derives its
@@ -1030,7 +1048,7 @@ restarts, the renderer returned ready, and the last accepted display pair
 remained complete at 2/2. The launcher regression also forces one renderer
 exit with status 42 and proves that its replacement runs before QEMU exits.
 
-Interface Kit ABI 4.5, GUI protocol 10, render-batch ABI 1.2, and display
+Interface Kit ABI 4.5, GUI protocol 11, render-batch ABI 1.2, and display
 mailbox 1.5 now carry semantic and custom pointer images end to end. The shared
 NDK window API selects the built-in arrow, horizontal resize, vertical resize,
 text I-beam, or wait image and copies application RGBA pixels plus hotspot into

@@ -22,6 +22,10 @@ static uint32_t expected_icon_length;
 static uint8_t expected_type = ASTRA_WINDOW_STANDARD;
 static uint16_t next_event_type = ASTRA_WINDOW_EVENT_POINTER_MOTION;
 static uint32_t next_text_codepoint;
+static uint32_t next_state = ASTRA_WINDOW_STATE_NORMAL;
+static uint32_t next_state_flags = ASTRA_WINDOW_ACTIVE;
+static uint32_t next_resize_width = 500u;
+static uint32_t next_resize_height = 240u;
 static AstraGuiWindowCommand last_command;
 static uint8_t *pointer_area;
 
@@ -134,6 +138,12 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
             message->event.generation = 9u;
             if (next_event_type == ASTRA_WINDOW_EVENT_TEXT) {
                 message->event.data.text.codepoint = next_text_codepoint;
+            } else if (next_event_type == ASTRA_WINDOW_EVENT_STATE) {
+                message->event.data.state.state = next_state;
+                message->event.data.state.flags = next_state_flags;
+            } else if (next_event_type == ASTRA_WINDOW_EVENT_RESIZE) {
+                message->event.data.resize.width = next_resize_width;
+                message->event.data.resize.height = next_resize_height;
             } else {
                 message->event.data.pointer.x = 12;
                 message->event.data.pointer.y = 18;
@@ -371,6 +381,20 @@ int main(void)
         assert(astra_window_event_try(&window, &event) == ASTRA_OK);
         assert(event.type == ASTRA_WINDOW_EVENT_TEXT &&
                event.data.text.codepoint == 0x1f600u);
+        next_event_type = ASTRA_WINDOW_EVENT_STATE;
+        assert(astra_window_event_try(&window, &event) == ASTRA_OK);
+        assert(event.data.state.state == ASTRA_WINDOW_STATE_NORMAL &&
+               (event.data.state.flags & ASTRA_WINDOW_ACTIVE) != 0u);
+        next_state = ASTRA_WINDOW_STATE_MAXIMIZED + 1u;
+        assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
+        next_state = ASTRA_WINDOW_STATE_NORMAL;
+        next_event_type = ASTRA_WINDOW_EVENT_RESIZE;
+        assert(astra_window_event_try(&window, &event) == ASTRA_OK);
+        assert(event.data.resize.width == 500u &&
+               event.data.resize.height == 240u);
+        next_resize_width = 0u;
+        assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
+        next_resize_width = 500u;
         next_event_type = ASTRA_WINDOW_EVENT_POINTER_MOTION;
     }
     before = call_count;

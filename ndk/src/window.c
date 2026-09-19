@@ -537,6 +537,18 @@ static AstraResult receive_event(AstraWindow *window, AstraWindowEvent *event,
         message.event.version != ASTRA_WINDOW_EVENT_VERSION ||
         message.event.type < ASTRA_WINDOW_EVENT_POINTER_MOTION ||
         message.event.type > ASTRA_WINDOW_EVENT_TEXT ||
+        (message.event.type == ASTRA_WINDOW_EVENT_STATE &&
+         (message.event.data.state.state > ASTRA_WINDOW_STATE_MAXIMIZED ||
+          (message.event.data.state.flags &
+           ~(ASTRA_WINDOW_RESIZABLE | ASTRA_WINDOW_MODAL |
+             ASTRA_WINDOW_ACTIVE)) != 0u ||
+          !astra_words_zero(message.event.data.state.reserved, 1u))) ||
+        (message.event.type == ASTRA_WINDOW_EVENT_RESIZE &&
+         (message.event.data.resize.width == 0u ||
+          message.event.data.resize.width > UINT16_MAX ||
+          message.event.data.resize.height == 0u ||
+          message.event.data.resize.height > UINT16_MAX ||
+          !astra_words_zero(message.event.data.resize.reserved, 5u))) ||
         (message.event.type == ASTRA_WINDOW_EVENT_TEXT &&
          !astra_unicode_scalar_valid(message.event.data.text.codepoint)) ||
         ((message.event.type == ASTRA_WINDOW_EVENT_POINTER_MOTION ||

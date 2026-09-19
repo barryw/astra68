@@ -1124,10 +1124,10 @@ static uint32_t benchmark_layout(uint32_t count, uint32_t iterations)
 
         event.size = sizeof(event);
         event.version = ASTRA_WINDOW_EVENT_VERSION;
-        event.type = ASTRA_WINDOW_EVENT_FRAME;
-        event.data.frame.frame.width =
+        event.type = ASTRA_WINDOW_EVENT_RESIZE;
+        event.data.resize.width =
             (iteration & 1u) != 0u ? 960u : 1120u;
-        event.data.frame.frame.height = 800u;
+        event.data.resize.height = 800u;
         if (astra_interface_ui_handle_event(
                 &context, &event, &action) != ASTRA_OK)
             return GALLERY_FAIL_CONTROL;
@@ -1750,15 +1750,15 @@ static uint32_t run(AstraHandle clipboard)
                 return GALLERY_FAIL_CONTROL;
             if (action.type != ASTRA_UI_ACTION_SCROLL_CHANGED)
                 scroll_only = 0u;
-            if (event.type == ASTRA_WINDOW_EVENT_FRAME &&
-                event.data.frame.frame.width != 0u &&
-                event.data.frame.frame.height != 0u &&
-                (surface.view.width != event.data.frame.frame.width ||
-                 surface.view.height != event.data.frame.frame.height) &&
+            if (event.type == ASTRA_WINDOW_EVENT_RESIZE &&
+                event.data.resize.width != 0u &&
+                event.data.resize.height != 0u &&
+                (surface.view.width != event.data.resize.width ||
+                 surface.view.height != event.data.resize.height) &&
                 !astra_draw_list_view_init(
                     &surface.view, surface.view.pixels, surface.view.byte_size,
-                    event.data.frame.frame.width,
-                    event.data.frame.frame.height))
+                    event.data.resize.width,
+                    event.data.resize.height))
                 return GALLERY_FAIL_RENDER;
             result = astra_window_event_try(&window, &event);
         }

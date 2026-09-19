@@ -15,6 +15,10 @@ static uint32_t scroll_count;
 static uint32_t last_style;
 static uint16_t last_foreground;
 static uint16_t last_fill_color;
+static int32_t last_fill_x;
+static int32_t last_fill_y;
+static uint32_t last_fill_width;
+static uint32_t last_fill_height;
 static uint32_t last_text_length;
 static char last_text[8];
 static uint16_t fill_colors[8];
@@ -24,11 +28,11 @@ void astra_surface_fill(AstraSurfaceView *surface, int32_t x, int32_t y,
                         uint32_t width, uint32_t height, uint16_t color)
 {
     (void)surface;
-    (void)x;
-    (void)y;
-    (void)width;
-    (void)height;
     ++fill_count;
+    last_fill_x = x;
+    last_fill_y = y;
+    last_fill_width = width;
+    last_fill_height = height;
     last_fill_color = color;
     if (fill_count <= sizeof(fill_colors) / sizeof(fill_colors[0]))
         fill_colors[fill_count - 1u] = color;
@@ -73,6 +77,8 @@ static void reset_calls(void)
     fill_count = text_count = scroll_count = 0u;
     last_style = last_text_length = 0u;
     last_foreground = last_fill_color = 0u;
+    last_fill_x = last_fill_y = 0;
+    last_fill_width = last_fill_height = 0u;
     memset(last_text, 0, sizeof(last_text));
     memset(fill_colors, 0, sizeof(fill_colors));
     memset(text_colors, 0, sizeof(text_colors));
@@ -179,6 +185,9 @@ int main(void)
                &text, &target, 10, 8, 1u, 2u,
                ASTRA_TEXT_CARET_UNDERLINE, 0x1234u) == ASTRA_OK);
     assert(fill_count == 1u && last_fill_color == 0x1234u);
+    assert(last_fill_x == 26 && last_fill_y == 42);
+    assert(last_fill_width == 8u && last_fill_height == 2u);
+    assert(last_fill_y != 46); /* Never place it in the inter-line gap. */
     assert(astra_text_surface_scroll(&text, &target, 10u, 8u, 20u, 6u,
                                      1u, 5u) == ASTRA_OK);
     assert(scroll_count == 1u);

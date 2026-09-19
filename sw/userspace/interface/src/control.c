@@ -5353,14 +5353,14 @@ AstraResult astra_interface_ui_handle_event(AstraUIContext *context,
             stepper_text(context, index, event->data.text.codepoint, action);
         }
     }
-    else if (event->type == ASTRA_WINDOW_EVENT_FRAME &&
-             event->data.frame.frame.width != 0u &&
-             event->data.frame.frame.height != 0u) {
-        if (context->_private_width == event->data.frame.frame.width &&
-            context->_private_height == event->data.frame.frame.height)
+    else if (event->type == ASTRA_WINDOW_EVENT_RESIZE &&
+             event->data.resize.width != 0u &&
+             event->data.resize.height != 0u) {
+        if (context->_private_width == event->data.resize.width &&
+            context->_private_height == event->data.resize.height)
             return ASTRA_OK;
-        context->_private_width = event->data.frame.frame.width;
-        context->_private_height = event->data.frame.frame.height;
+        context->_private_width = event->data.resize.width;
+        context->_private_height = event->data.resize.height;
         context->_private_damage = (AstraControlFrame){
             0, 0, context->_private_width, context->_private_height};
         context->_private_has_damage = 1u;
@@ -5370,8 +5370,8 @@ AstraResult astra_interface_ui_handle_event(AstraUIContext *context,
     }
     else if (event->type == ASTRA_WINDOW_EVENT_STATE_RESET)
         reset_interaction(context, 1);
-    else if (event->type == ASTRA_WINDOW_EVENT_FOCUS &&
-             ((event->flags & ASTRA_WINDOW_EVENT_FOCUSED) == 0u ||
+    else if (event->type == ASTRA_WINDOW_EVENT_STATE &&
+             (((event->data.state.flags & ASTRA_WINDOW_ACTIVE) == 0u) ||
               (event->flags & ASTRA_WINDOW_EVENT_LOSS) != 0u))
         reset_interaction(context, 1);
     return ASTRA_OK;

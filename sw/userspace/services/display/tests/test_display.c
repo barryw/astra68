@@ -14,6 +14,7 @@
 #pragma GCC diagnostic pop
 
 static AstraGuiWindowEvent delivered;
+static AstraGuiWindowEvent previous_delivered;
 static uint32_t delivered_count;
 static uint32_t send_would_block;
 static uint32_t wait_count;
@@ -118,6 +119,7 @@ uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
         --send_would_block;
         return ASTRA_SYSCALL_WOULD_BLOCK;
     }
+    previous_delivered = delivered;
     memcpy(&delivered, message, sizeof(delivered));
     ++delivered_count;
     return ASTRA_SYSCALL_OK;
@@ -880,6 +882,7 @@ int main(void)
                        DISPLAY_POINTER_FRAME)) ==
            (DISPLAY_POINTER_CURSOR | DISPLAY_POINTER_RENDER |
             DISPLAY_POINTER_FRAME));
+    assert((effects & DISPLAY_POINTER_RESIZE) == 0u);
     assert(frame_window == 4u && frame_timestamp == 100u);
     state.capture_window = 0u;
     state.capture_region = HIT_NONE;
@@ -929,6 +932,7 @@ int main(void)
         uint16_t old_width = window->request.width;
         uint16_t old_height = window->request.height;
 
+        effects = 0u;
         state.pointer_x = window->request.x +
                           (int32_t)outer_width(&theme, window) -
                           theme.resize_hit;
@@ -947,6 +951,7 @@ int main(void)
                               &frame_timestamp) == ASTRA_STATUS_OK);
         assert(window->request.width == old_width + 12u &&
                window->request.height == old_height + 7u);
+        assert((effects & DISPLAY_POINTER_RESIZE) != 0u);
         assert(handle_pointer(&state, &resize_up, &effects, &frame_window,
                               &frame_timestamp) == ASTRA_STATUS_OK);
         assert(state.capture_window == 0u);
@@ -1297,9 +1302,25 @@ int main(void)
                    200u, 120u, 0u, 0u);
         activate(&focus, &theme, focus.windows[1].id, 1, 108u);
         assert(delivered_count == before + 2u &&
-               delivered.event.type == ASTRA_WINDOW_EVENT_FOCUS &&
-               (delivered.event.flags & ASTRA_WINDOW_EVENT_FOCUSED) != 0u &&
+               previous_delivered.event.type == ASTRA_WINDOW_EVENT_STATE &&
+               (previous_delivered.event.data.state.flags &
+                ASTRA_WINDOW_ACTIVE) == 0u &&
+               delivered.event.type == ASTRA_WINDOW_EVENT_STATE &&
+               (delivered.event.data.state.flags &
+                ASTRA_WINDOW_ACTIVE) != 0u &&
+               delivered.event.data.state.state ==
+                   ASTRA_WINDOW_STATE_NORMAL &&
                (focus.windows[1].request.flags & ASTRA_WINDOW_ACTIVE) != 0u);
+        before = delivered_count;
+        resize_event(&focus.windows[1], 109u);
+        assert(delivered_count == before + 1u &&
+               delivered.event.type == ASTRA_WINDOW_EVENT_RESIZE &&
+               delivered.event.data.resize.width == 200u &&
+               delivered.event.data.resize.height == 120u);
+        focus.windows[1].request.event_mask &=
+            ~ASTRA_WINDOW_SUBSCRIBE_RESIZE;
+        resize_event(&focus.windows[1], 110u);
+        assert(delivered_count == before + 1u);
     }
     {
         /* The retained scene preserves bottom-to-top order; the host compiler

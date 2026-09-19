@@ -12,6 +12,7 @@ build/astra-bundle: bundle_tool.c ../ndk/src/manifest.c ../ndk/src/bundle.c \
 		../ndk/src/bundle.c ../ndk/src/utf8.c -o $@
 
 test: build/astra-bundle
+	python3 ./tests/test_aicon.py
 	python3 ./tests/test_bundle_tool.py ./build/astra-bundle
 
 clean:

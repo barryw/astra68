@@ -17,6 +17,7 @@
 #include <astra/vfs_process.h>
 #include <astra/window.h>
 
+#include "desktop_layout.h"
 
 #define DESKTOP_WIDTH ASTRA_DISPLAY_WIDTH
 #define DESKTOP_TOP 34u
@@ -95,7 +96,8 @@ static uint16_t icon_color(const AstraAicon *icon, uint16_t index)
 static void flush_run(AstraSurfaceView *surface, const AstraAicon *icon,
                       uint16_t color_index, const IconRun *run)
 {
-    astra_surface_fill(surface, 38 + run->x, 34 + run->y,
+    astra_surface_fill(surface, ASTRA_DESKTOP_ICON_X + run->x,
+                       ASTRA_DESKTOP_ICON_Y + run->y,
                        run->width, run->height,
                        icon_color(icon, color_index));
 }
@@ -215,9 +217,15 @@ static uint32_t paint(AstraSurfaceView *surface)
         return DESKTOP_FAIL_ICON;
     }
     astra_runtime_deallocate(icon_bytes);
-    astra_surface_ui_text(surface, 40, 104, manifest.name,
-                          (uint32_t)strlen(manifest.name),
-                          ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT,
+    length = (uint32_t)strlen(manifest.name);
+    astra_surface_ui_text(
+                          surface,
+                          astra_desktop_centered_label_x(
+                              astra_surface_ui_text_width(
+                                  manifest.name, length,
+                                  ASTRA_DESKTOP_LABEL_FONT_HEIGHT)),
+                          ASTRA_DESKTOP_LABEL_Y, manifest.name, length,
+                          ASTRA_DESKTOP_LABEL_FONT_HEIGHT,
                           astra_surface_rgb565(theme.text_primary.red,
                                                theme.text_primary.green,
                                                theme.text_primary.blue));
