@@ -29,6 +29,17 @@ class Connection:
         self.data.extend(data)
 
 
+class ReceiveConnection(Connection):
+    def __init__(self, incoming):
+        super().__init__()
+        self.incoming = bytearray(incoming)
+
+    def recv(self, size):
+        result = self.incoming[:size]
+        del self.incoming[:size]
+        return bytes(result)
+
+
 connection = Connection()
 client.send_keys(connection, "a\n")
 assert connection.data == b"".join(
@@ -47,5 +58,25 @@ client.double_click(connection, 70, 90)
 assert connection.data == b"".join(
     struct.pack(">BBHH", 5, buttons, 70, 90)
     for buttons in (0, 1, 0, 1, 0))
+
+previous = b"abcdef"
+update = struct.pack(">BBH", 0, 0, 2) + \
+    struct.pack(">HHHHi", 0, 0, 0, 0, -239) + \
+    struct.pack(">HHHHi", 1, 0, 0, 0, -232)
+connection = ReceiveConnection(update)
+frame, pointer = client.capture(connection, 2, 1, 3, previous, True)
+assert frame == previous
+assert pointer == (1, 0)
+assert connection.data == struct.pack(">BBHHHH", 3, 1, 0, 0, 2, 1)
+
+connection = ReceiveConnection(
+    struct.pack(">BBH", 0, 0, 1) +
+    struct.pack(">HHHHi", 0, 0, 0, 0, -999))
+try:
+    client.capture(connection, 2, 1, 3)
+except RuntimeError as error:
+    assert "unexpected RFB encoding" in str(error)
+else:
+    raise AssertionError("unknown RFB encoding was accepted")
 
 print("ASTRA_REMOTE_DESKTOP_CLIENT PASS")

@@ -63,9 +63,18 @@ struct astra_remote_server {
     struct astra_remote_desktop desktop;
     rfbScreenInfoPtr screen;
     const uint8_t *frame;
+    uint8_t *previous_frame;
     char *passwords[2];
     int capture;
+    bool have_frame;
     unsigned int generation;
+};
+
+struct astra_remote_damage {
+    unsigned int x1;
+    unsigned int y1;
+    unsigned int x2;
+    unsigned int y2;
 };
 
 static volatile sig_atomic_t astra_remote_running = 1;
@@ -432,6 +441,12 @@ static unsigned int astra_remote_wanted_buttons(
     return buttons;
 }
 
+static bool astra_remote_button_transition(unsigned int previous,
+                                            unsigned int current)
+{
+    return ((previous ^ current) & 7u) != 0u;
+}
+
 static void astra_remote_pointer_event(int mask, int x, int y,
                                        rfbClientPtr client)
 {
@@ -440,6 +455,8 @@ static void astra_remote_pointer_event(int mask, int x, int y,
     unsigned int current = (unsigned int)mask;
     unsigned int buttons = current & 7u;
     unsigned int changed = buttons ^ (state->buttons & 7u);
+    bool button_transition = astra_remote_button_transition(state->buttons,
+                                                            current);
     unsigned int index;
 
     desktop->pointer_x = x < 0 ? 0 :
@@ -464,7 +481,11 @@ static void astra_remote_pointer_event(int mask, int x, int y,
     if ((current & 16u) != 0u && (state->buttons & 16u) == 0u)
         astra_qmp_wheel(desktop, "wheel-down");
     state->buttons = current;
-    (void)astra_qmp_pointer(desktop, astra_remote_wanted_buttons(desktop));
+    if (button_transition)
+        (void)astra_qmp_pointer(desktop,
+                                astra_remote_wanted_buttons(desktop));
+    rfbDefaultPtrAddEvent(mask, desktop->pointer_x, desktop->pointer_y,
+                          client);
 }
 
 static void astra_remote_client_gone(rfbClientPtr client)
@@ -562,10 +583,70 @@ static int astra_remote_password_read(const char *path,
     return astra_remote_password_parse(input, password);
 }
 
+static void astra_remote_pixel_format(rfbPixelFormat *format)
+{
+    format->bitsPerPixel = 24;
+    format->depth = 24;
+    format->bigEndian = 0u;
+    format->trueColour = 1u;
+    format->redMax = 255;
+    format->greenMax = 255;
+    format->blueMax = 255;
+    format->redShift = 0;
+    format->greenShift = 8;
+    format->blueShift = 16;
+}
+
+static bool astra_remote_damage_find(const uint8_t *current,
+                                     const uint8_t *previous,
+                                     unsigned int width,
+                                     unsigned int height,
+                                     struct astra_remote_damage *damage)
+{
+    bool changed = false;
+    unsigned int x;
+    unsigned int y;
+
+    for (y = 0; y < height; ++y) {
+        for (x = 0; x < width; ++x) {
+            size_t offset = ((size_t)y * width + x) * 3u;
+
+            if (current[offset] == previous[offset] &&
+                current[offset + 1u] == previous[offset + 1u] &&
+                current[offset + 2u] == previous[offset + 2u])
+                continue;
+            if (!changed) {
+                damage->x1 = x;
+                damage->y1 = y;
+                damage->x2 = x + 1u;
+                damage->y2 = y + 1u;
+                changed = true;
+            } else {
+                if (x < damage->x1)
+                    damage->x1 = x;
+                if (y < damage->y1)
+                    damage->y1 = y;
+                if (x >= damage->x2)
+                    damage->x2 = x + 1u;
+                if (y >= damage->y2)
+                    damage->y2 = y + 1u;
+            }
+        }
+    }
+    return changed;
+}
+
 static int astra_remote_self_test(void)
 {
     in_addr_t listen_interface;
     char password[ASTRA_RFB_PASSWORD_MAX + 1u];
+    rfbPixelFormat format = {0};
+    struct astra_remote_damage damage;
+    uint8_t previous[18] = {0};
+    uint8_t current[18] = {0};
+
+    astra_remote_pixel_format(&format);
+    current[(1u * 3u + 2u) * 3u] = 1u;
 
     if (strcmp(astra_qcode_for_keysym(XK_A), "a") != 0 ||
         strcmp(astra_qcode_for_keysym(XK_exclam), "1") != 0 ||
@@ -586,7 +667,21 @@ static int astra_remote_self_test(void)
         astra_remote_password_parse("Astra68!\n", password) != 0 ||
         strcmp(password, "Astra68!") != 0 ||
         astra_remote_password_parse("\n", password) == 0 ||
-        astra_remote_password_parse("123456789", password) == 0)
+        astra_remote_password_parse("123456789", password) == 0 ||
+        format.bitsPerPixel != 24 || format.depth != 24 ||
+        format.bigEndian != 0u || format.trueColour != 1u ||
+        format.redMax != 255 || format.greenMax != 255 ||
+        format.blueMax != 255 || format.redShift != 0 ||
+        format.greenShift != 8 || format.blueShift != 16 ||
+        astra_remote_button_transition(0u, 0u) ||
+        astra_remote_button_transition(0u, 8u) ||
+        !astra_remote_button_transition(0u, 1u) ||
+        !astra_remote_button_transition(1u, 0u) ||
+        astra_remote_damage_find(previous, previous, 3u, 2u,
+                                 &damage) ||
+        !astra_remote_damage_find(current, previous, 3u, 2u, &damage) ||
+        damage.x1 != 2u || damage.y1 != 1u ||
+        damage.x2 != 3u || damage.y2 != 2u)
         return EXIT_FAILURE;
     puts("ASTRA_REMOTE_DESKTOP_SELF_TEST PASS");
     return EXIT_SUCCESS;
@@ -610,6 +705,9 @@ static void astra_remote_server_stop(struct astra_remote_server *server)
            sizeof(server->desktop.button_references));
     server->desktop.sent_buttons = 0u;
     server->desktop.pointer_dirty = false;
+    free(server->previous_frame);
+    server->previous_frame = NULL;
+    server->have_frame = false;
     if (server->frame != MAP_FAILED) {
         (void)munmap((void *)(uintptr_t)server->frame,
                      ASTRA_DISPLAY_CAPTURE_FRAME_BYTES);
@@ -642,6 +740,11 @@ static int astra_remote_server_start(struct astra_remote_server *server,
         astra_remote_server_stop(server);
         return -1;
     }
+    server->previous_frame = malloc(ASTRA_DISPLAY_CAPTURE_FRAME_BYTES);
+    if (server->previous_frame == NULL) {
+        astra_remote_server_stop(server);
+        return -1;
+    }
     server->screen = rfbGetScreen(&rfb_argc, rfb_argv,
                                   ASTRA_DISPLAY_CAPTURE_WIDTH,
                                   ASTRA_DISPLAY_CAPTURE_HEIGHT, 8, 3, 3);
@@ -665,20 +768,12 @@ static int astra_remote_server_start(struct astra_remote_server *server,
         server->screen->passwordCheck = rfbCheckPasswordByList;
     }
     server->screen->alwaysShared = TRUE;
+    server->screen->handleEventsEagerly = TRUE;
     server->screen->kbdAddEvent = astra_remote_key_event;
     server->screen->kbdReleaseAllKeys = astra_remote_release_keys;
     server->screen->ptrAddEvent = astra_remote_pointer_event;
     server->screen->newClientHook = astra_remote_client_new;
-    server->screen->serverFormat.bitsPerPixel = 24;
-    server->screen->serverFormat.depth = 24;
-    server->screen->serverFormat.bigEndian = 1u;
-    server->screen->serverFormat.trueColour = 1u;
-    server->screen->serverFormat.redMax = 255;
-    server->screen->serverFormat.greenMax = 255;
-    server->screen->serverFormat.blueMax = 255;
-    server->screen->serverFormat.redShift = 16;
-    server->screen->serverFormat.greenShift = 8;
-    server->screen->serverFormat.blueShift = 0;
+    astra_remote_pixel_format(&server->screen->serverFormat);
     rfbInitServer(server->screen);
     if (!rfbIsActive(server->screen)) {
         fputs("Astra remote desktop: cannot start RFB server\n", stderr);
@@ -908,6 +1003,7 @@ int main(int argc, char **argv)
             continue;
         {
             struct astra_display_capture_info info;
+            struct astra_remote_damage damage;
 
             if (ioctl(server.capture, ASTRA_DISPLAY_CAPTURE_IOC_CAPTURE,
                       &info) != 0) {
@@ -927,8 +1023,20 @@ int main(int argc, char **argv)
                 lease = -1;
                 continue;
             }
-            rfbMarkRectAsModified(server.screen, 0, 0, info.width,
-                                  info.height);
+            if (!server.have_frame) {
+                damage.x1 = 0u;
+                damage.y1 = 0u;
+                damage.x2 = info.width;
+                damage.y2 = info.height;
+            } else if (!astra_remote_damage_find(
+                           server.frame, server.previous_frame,
+                           info.width, info.height, &damage)) {
+                continue;
+            }
+            memcpy(server.previous_frame, server.frame, info.frame_bytes);
+            server.have_frame = true;
+            rfbMarkRectAsModified(server.screen, damage.x1, damage.y1,
+                                  damage.x2, damage.y2);
         }
     }
 

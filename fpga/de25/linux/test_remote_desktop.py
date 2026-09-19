@@ -39,7 +39,8 @@ def vnc_response(challenge, password):
     return result.stdout
 
 
-def connect(host, port, password=None):
+def connect(host, port, password=None, macos_format=False,
+            pointer_position=False):
     deadline = time.monotonic() + 10
     while True:
         try:
@@ -78,17 +79,29 @@ def connect(host, port, password=None):
     maxima = values[6:9]
     shifts = values[9:12]
     name = receive_exact(connection, values[12]).decode("utf-8")
-    expected = (24, 24, 1, 1, (255, 255, 255), (16, 8, 0))
+    expected = (24, 24, 0, 1, (255, 255, 255), (0, 8, 16))
     actual = (bits, depth, big_endian, true_colour, maxima, shifts)
     if actual != expected:
         raise RuntimeError(f"unexpected RFB pixel format: {actual}")
-    connection.sendall(struct.pack(">BBHi", 2, 0, 1, 0))
-    return connection, width, height, name
+    bytes_per_pixel = 3
+    if macos_format:
+        connection.sendall(struct.pack(">B3xBBBBHHHBBB3x", 0,
+                                       32, 32, 0, 1,
+                                       255, 255, 255, 16, 8, 0))
+        bytes_per_pixel = 4
+    encodings = [-239, -232, 0] if pointer_position else [0]
+    connection.sendall(struct.pack(">BBH", 2, 0, len(encodings)) +
+                       b"".join(struct.pack(">i", value)
+                                for value in encodings))
+    return connection, width, height, name, bytes_per_pixel
 
 
-def capture(connection, width, height):
-    frame = bytearray(width * height * 3)
-    connection.sendall(struct.pack(">BBHHHH", 3, 0, 0, 0, width, height))
+def capture(connection, width, height, bytes_per_pixel, previous=None,
+            incremental=False):
+    frame = bytearray(previous or bytes(width * height * 3))
+    pointer = None
+    connection.sendall(struct.pack(">BBHHHH", 3, incremental,
+                                   0, 0, width, height))
     while True:
         message = receive_exact(connection, 1)[0]
         if message == 2:
@@ -103,15 +116,27 @@ def capture(connection, width, height):
         for _ in range(rectangle_count):
             x, y, rect_width, rect_height, encoding = struct.unpack(
                 ">HHHHi", receive_exact(connection, 12))
+            if encoding == -232:
+                pointer = (x, y)
+                continue
+            if encoding == -239 and rect_width == 0 and rect_height == 0:
+                continue
             if encoding != 0:
                 raise RuntimeError(f"unexpected RFB encoding {encoding}")
-            pixels = receive_exact(connection, rect_width * rect_height * 3)
+            pixels = receive_exact(
+                connection, rect_width * rect_height * bytes_per_pixel)
+            if bytes_per_pixel == 4:
+                rgb = bytearray(rect_width * rect_height * 3)
+                rgb[0::3] = pixels[2::4]
+                rgb[1::3] = pixels[1::4]
+                rgb[2::3] = pixels[0::4]
+                pixels = rgb
             for row in range(rect_height):
                 source = row * rect_width * 3
                 target = ((y + row) * width + x) * 3
                 frame[target:target + rect_width * 3] = \
                     pixels[source:source + rect_width * 3]
-        return bytes(frame)
+        return bytes(frame), pointer
 
 
 def send_keys(connection, text):
@@ -170,6 +195,8 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=5900, type=int)
     parser.add_argument("--password-file")
+    parser.add_argument("--macos-format", action="store_true")
+    parser.add_argument("--verify-rfb-pointer", action="store_true")
     parser.add_argument("--keys", help="type ASCII text after connecting")
     pointer_action = parser.add_mutually_exclusive_group()
     pointer_action.add_argument("--pointer", nargs=2, metavar=("X", "Y"),
@@ -178,33 +205,50 @@ def main():
                                 metavar=("X", "Y"), type=int)
     parser.add_argument("--qmp", default="/run/astra/qmp.sock")
     arguments = parser.parse_args()
+    if arguments.verify_rfb_pointer and arguments.pointer is None:
+        parser.error("--verify-rfb-pointer requires --pointer")
     password = None
     if arguments.password_file is not None:
         with open(arguments.password_file, encoding="latin-1") as source:
             password = source.readline().rstrip("\r\n")
-    connection, width, height, name = connect(
-        arguments.host, arguments.port, password)
+    connection, width, height, name, bytes_per_pixel = connect(
+        arguments.host, arguments.port, password, arguments.macos_format,
+        arguments.verify_rfb_pointer)
+    mover = None
     try:
         coordinates = arguments.double_click or arguments.pointer
+        frame = None
         if coordinates is not None:
             x, y = coordinates
             if not 0 <= x < width or not 0 <= y < height:
                 parser.error("pointer coordinates must be inside the display")
-            if arguments.double_click:
+            if arguments.verify_rfb_pointer:
+                frame, _ = capture(connection, width, height,
+                                   bytes_per_pixel)
+                mover = connect(arguments.host, arguments.port, password)[0]
+                send_pointer(mover, x, y)
+            elif arguments.double_click:
                 double_click(connection, x, y)
                 time.sleep(2)
             else:
                 send_pointer(connection, x, y)
         if arguments.keys is not None:
             send_keys(connection, arguments.keys)
-        frame = capture(connection, width, height)
+        frame, rfb_pointer = capture(
+            connection, width, height, bytes_per_pixel, frame,
+            frame is not None)
     finally:
+        if mover is not None:
+            mover.close()
         connection.close()
     if arguments.pointer is not None and arguments.qmp:
         actual_pointer = qmp_pointer_position(arguments.qmp)
         if actual_pointer != tuple(arguments.pointer):
             raise RuntimeError(
                 f"remote pointer mismatch: {actual_pointer!r}")
+    if arguments.verify_rfb_pointer and \
+            rfb_pointer != tuple(arguments.pointer or ()):
+        raise RuntimeError(f"RFB pointer mismatch: {rfb_pointer!r}")
     with open(arguments.output, "wb") as output:
         output.write(frame)
     print(f"ASTRA_REMOTE_DESKTOP_RFB PASS name={name!r} "

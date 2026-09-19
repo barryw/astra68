@@ -95,16 +95,16 @@ re-evaluated. The regression failed before this fix and passes the normal,
 ASan/UBSan, analyzer, and MC68040 display builds.
 
 Immutable software release
-`cad9f86d5d96230887d8eeff64c2da1c9bab54a29b254804f46dcffb186478a1`
+`a796b95f0839e141160b24cc2812683a11b1533a2cdb54be11b43118f73987a0`
 is selected, byte-verified, and running on the DE25. Its QEMU, ROM, storage
 seed, host display, remote-desktop, and source-manifest SHA-256 values are
 respectively
 `3a13dc695833a277f3048de3835cfdedfcacc46adb9e31e8937942d4d410605e`,
-`2608cffec7bf2b6b5ac78d1ecea74b6ffef1d98de09538941b9b18d759f540e5`,
-`188924f391257be4fc317a4949fa120345d6e9251777dfe282f0b859d49222d5`,
+`89785c7410b2773db035fa837d432185eb3f38268ab7052bc109d0ab4c369987`,
+`51cfe694c8f7a522f5170d7d2641b4ae696e045ec4a84b0a17a9ec6783aabb18`,
 `9d86a327a113e2f5dd2ead97f49bab87b1aacf16f5037fa9c2991a7bc059d471`,
-`6378147be96a469c8358ad16e9917b5f84cb6d01e31fb8a745ca755c2b7f5c5a`,
-and `594a4c33e6fc779f98b126ce5873a0fb32a77e72beb675854f2c26e7a771641a`.
+`357e1db892268ddfe79b3abb2cc6b0b77c300d9d8843e290401ef0e7c1b6af91`,
+and `839ae8805385c15238dde947227bbdb44f90329072d6e6da8c048d638c7e787d`.
 It reaches stage 8; `astra.service` and
 `astra-remote-desktop.service` are active with zero automatic restarts.
 
@@ -127,6 +127,14 @@ a 1920x1080 RGB frame, opened Terminal with the pointer, and entered and ran
 The final release's authenticated desktop capture is
 `bf530945d726f22e8c04fd0097438082ed3350638686403f9ba3e6ec80597345`;
 anonymous access and an incorrect password were both rejected.
+The server now describes its captured RGB24 bytes with the correct
+little-endian R/G/B shifts, so the native and exact macOS 32-bit client
+formats normalize to that same frame hash. It tracks changed pixels and sends
+only their bounding rectangle instead of recompressing every 1920x1080 frame.
+Pointer input uses LibVNCServer's eager event draining, coalesces motion before
+the synchronous QMP handoff, and still sends every button edge immediately.
+The physical gate delivered an exact `(700,500)` PointerPos update and drained
+1,000 queued motion events to `(1099,399)` in 0.120 seconds.
 This release advances the GUI protocol to version 11. Every ordinary window
 receives one complete state snapshot for active, inactive, minimized,
 maximized, restored, and geometry transitions, plus a distinct resize event
@@ -1193,7 +1201,7 @@ The Astra capture module remains unload-safe while closed and consumes no DMA
 channels or coherent frame while unopened.
 
 Immutable release
-`cad9f86d5d96230887d8eeff64c2da1c9bab54a29b254804f46dcffb186478a1`
+`a796b95f0839e141160b24cc2812683a11b1533a2cdb54be11b43118f73987a0`
 exposes the standard RFB/VNC service directly on the DE25 Linux host at
 `192.168.1.52:5900` and requires standard VNC password authentication. The
 broker refuses a non-loopback listener when the required password is absent
