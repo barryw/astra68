@@ -5,26 +5,25 @@
 
 #include <stdint.h>
 
+#include <astra/library.h>
 #include <astra/process.h>
+#include <astra/vfs_service.h>
 
 /** Supported manifest format version. */
 #define ASTRA_BUNDLE_MANIFEST_VERSION 1u
-/** Maximum manifest file bytes. */
-#define ASTRA_BUNDLE_MANIFEST_MAX 4096u
 /** Maximum bundle identifier bytes including NUL. */
-#define ASTRA_BUNDLE_ID_MAX 64u
+#define ASTRA_BUNDLE_ID_MAX ASTRA_VFS_NAME_MAX
 /** Maximum display-name bytes including NUL. */
-#define ASTRA_BUNDLE_NAME_MAX 64u
+#define ASTRA_BUNDLE_NAME_MAX ASTRA_VFS_NAME_MAX
 /** Maximum bundle-relative path bytes including NUL. */
-#define ASTRA_BUNDLE_PATH_MAX 160u
-/** Maximum required or provided libraries. */
-#define ASTRA_BUNDLE_LIBRARY_MAX 8u
+#define ASTRA_BUNDLE_PATH_MAX ASTRA_VFS_PATH_MAX
 /* An application cannot use more manifest capabilities than can fit in the
  * launch namespace; keep the parser and launch ABI on the same authority. */
 /** Maximum requested launch capabilities. */
 #define ASTRA_BUNDLE_CAPABILITY_MAX ASTRA_LAUNCH_GRANT_MAX
+#define ASTRA_BUNDLE_CAPABILITY_NAME_MAX (ASTRA_CAPABILITY_NAME_MAX + 3u)
 /** Maximum logical library-name bytes including NUL. */
-#define ASTRA_BUNDLE_LIBRARY_NAME_MAX 48u
+#define ASTRA_BUNDLE_LIBRARY_NAME_MAX ASTRA_LIBRARY_NAME_MAX
 
 enum {
     ASTRA_BUNDLE_APPLICATION = 1,
@@ -45,7 +44,8 @@ typedef struct AstraBundleLibrary {
     AstraBundleVersion version; /**< Required/provided semantic version. */
 } AstraBundleLibrary;
 
-/** Parsed bundle manifest. */
+/** Parsed bundle manifest. Initialize with ASTRA_BUNDLE_MANIFEST_INIT before
+ * first use and release it with astra_bundle_manifest_destroy(). */
 typedef struct AstraBundleManifest {
     uint16_t format_version; /**< ASTRA_BUNDLE_MANIFEST_VERSION. */
     uint16_t kind; /**< ASTRA_BUNDLE_APPLICATION or ASTRA_BUNDLE_KIT. */
@@ -54,13 +54,18 @@ typedef struct AstraBundleManifest {
     char name[ASTRA_BUNDLE_NAME_MAX]; /**< Human-readable UTF-8 name. */
     char executable[ASTRA_BUNDLE_PATH_MAX]; /**< Bundle-relative executable. */
     char icon[ASTRA_BUNDLE_PATH_MAX]; /**< Bundle-relative AICON path. */
-    AstraBundleLibrary requirements[ASTRA_BUNDLE_LIBRARY_MAX]; /**< Required libraries. */
-    AstraBundleLibrary provides[ASTRA_BUNDLE_LIBRARY_MAX]; /**< Provided libraries. */
-    char capabilities[ASTRA_BUNDLE_CAPABILITY_MAX][ASTRA_BUNDLE_NAME_MAX]; /**< Requested launch capabilities. */
-    uint16_t require_count; /**< Used entries in requirements. */
-    uint16_t provide_count; /**< Used entries in provides. */
+    AstraBundleLibrary *requirements; /**< Heap-owned required libraries. */
+    AstraBundleLibrary *provides; /**< Heap-owned provided libraries. */
+    char capabilities[ASTRA_BUNDLE_CAPABILITY_MAX]
+                     [ASTRA_BUNDLE_CAPABILITY_NAME_MAX]; /**< Requested launch capabilities. */
+    uint32_t require_count; /**< Used entries in requirements. */
+    uint32_t provide_count; /**< Used entries in provides. */
+    uint32_t require_capacity; /**< Private allocation capacity. */
+    uint32_t provide_capacity; /**< Private allocation capacity. */
     uint16_t capability_count; /**< Used entries in capabilities. */
 } AstraBundleManifest;
+
+#define ASTRA_BUNDLE_MANIFEST_INIT {0}
 
 enum {
     ASTRA_BUNDLE_OK = 0,
@@ -70,15 +75,18 @@ enum {
 };
 
 /** Parse a mutable UTF-8 bundle manifest.
- * @param text Manifest bytes; may be modified while parsing.
+ * @param text Manifest bytes; may be modified while parsing. File size is
+ * bounded by available memory; individual fields retain their ABI bounds.
  * @param length Byte length of @p text.
- * @param manifest Receives the parsed manifest.
+ * @param manifest Initialized manifest that receives the parsed manifest.
  * @param error_line Receives the one-based malformed line, or zero.
  * @return ASTRA_BUNDLE_OK or an ASTRA_BUNDLE_* error.
  */
 uint32_t astra_bundle_manifest_parse(char *text, uint32_t length,
                                      AstraBundleManifest *manifest,
                                      uint32_t *error_line);
+/** Release library arrays owned by a parsed manifest. */
+void astra_bundle_manifest_destroy(AstraBundleManifest *manifest);
 
 /** Big-endian `AICO` file magic. */
 #define ASTRA_AICON_MAGIC UINT32_C(0x4149434f) /* AICO */
@@ -90,6 +98,8 @@ uint32_t astra_bundle_manifest_parse(char *text, uint32_t length,
 #define ASTRA_AICON_STRIKE_SIZE 16u
 /** Required standard strike count. */
 #define ASTRA_AICON_REQUIRED_STRIKES 3u
+/** Largest required square strike extent. */
+#define ASTRA_AICON_STRIKE_WIDTH_MAX 64u
 
 /** Validated zero-copy view of an AICON file. */
 typedef struct AstraAicon {

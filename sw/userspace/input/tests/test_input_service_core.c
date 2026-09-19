@@ -423,12 +423,14 @@ static void test_client_limits_and_death(void)
     TestSink extra = {0};
     AstraInputEvent event;
 
+    assert(ASTRA_INPUT_CLIENT_MAX > 8u);
     for (uint32_t index = 0u; index < ASTRA_INPUT_CLIENT_MAX; ++index) {
         sinks[index].limit = TEST_EVENT_CAPACITY;
         assert(astra_input_service_attach(&service, index + 1u,
                                           sink_deliver, &sinks[index]));
     }
-    assert(!astra_input_service_attach(&service, 99u, sink_deliver, &extra));
+    assert(!astra_input_service_attach(&service, UINT32_MAX,
+                                       sink_deliver, &extra));
     assert(astra_input_service_set_focus(&service, 1u, 1u));
     sinks[0].dead = 1u;
     event = key(0x04u, true, 2u, 1u);
@@ -436,7 +438,8 @@ static void test_client_limits_and_death(void)
     assert(service.focus_id == 0u);
     assert(service.stats.dead_clients == 1u);
     assert(astra_input_service_detach(&service, 2u));
-    assert(astra_input_service_attach(&service, 99u, sink_deliver, &extra));
+    assert(astra_input_service_attach(&service, UINT32_MAX,
+                                      sink_deliver, &extra));
 }
 
 static void test_unfocused_client_gets_loss_retry(void)

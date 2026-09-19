@@ -33,11 +33,11 @@ static int capability_name_valid(const char name[ASTRA_CAPABILITY_NAME_MAX])
     return length != 0u && length < ASTRA_CAPABILITY_NAME_MAX;
 }
 
-static int terminated(const char *text, uint32_t capacity)
+static int terminated_utf8(const char *text, uint32_t capacity)
 {
     for (uint32_t index = 0u; index < capacity; ++index)
         if (text[index] == '\0')
-            return index != 0u;
+            return index != 0u && astra_utf8_validate(text, index, 0u);
     return 0;
 }
 
@@ -84,7 +84,9 @@ AstraResult astra_service_definition_add_argument(
     uint32_t length;
 
     if (definition == NULL || argument == NULL ||
-        definition->argument_count == UINT16_MAX)
+        definition->structure_size != sizeof(*definition) ||
+        definition->argument_count == UINT16_MAX ||
+        definition->argument_length > sizeof(definition->arguments))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     length = (uint32_t)strlen(argument);
     if (!astra_utf8_validate(argument, length, 0u))
@@ -118,7 +120,8 @@ AstraResult astra_service_definition_add_grant(
     AstraResult result;
 
     if (definition == NULL ||
-        definition->grant_count == ASTRA_LAUNCH_GRANT_MAX ||
+        definition->structure_size != sizeof(*definition) ||
+        definition->grant_count >= ASTRA_LAUNCH_GRANT_MAX ||
         (rights & ~(ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE)) != 0u ||
         (is_namespace != 0) != (rights != 0u))
         return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -139,7 +142,8 @@ AstraResult astra_service_definition_add_publication(
     AstraResult result;
 
     if (definition == NULL ||
-        definition->publication_count == ASTRA_MESSAGE_HANDLES_MAX ||
+        definition->structure_size != sizeof(*definition) ||
+        definition->publication_count >= ASTRA_MESSAGE_HANDLES_MAX ||
         (rights & ~(ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE)) != 0u)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     result = add_authority(
@@ -157,7 +161,8 @@ AstraResult astra_service_definition_add_dependency(
     AstraResult result;
 
     if (definition == NULL ||
-        definition->dependency_count == ASTRA_LAUNCH_GRANT_MAX)
+        definition->structure_size != sizeof(*definition) ||
+        definition->dependency_count >= ASTRA_LAUNCH_GRANT_MAX)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     result = add_authority(
         definition->dependencies[definition->dependency_count], name);
@@ -174,8 +179,8 @@ AstraResult astra_service_definition_validate(
     if (definition == NULL ||
         definition->structure_size != sizeof(*definition) ||
         !astra_service_name_valid(definition->name) ||
-        !terminated(definition->executable,
-                    sizeof(definition->executable)) ||
+        !terminated_utf8(definition->executable,
+                         sizeof(definition->executable)) ||
         (definition->flags & ~ASTRA_SERVICE_FLAG_MASK) != 0u ||
         (definition->flags &
          (ASTRA_SERVICE_RUNS_ASTRA | ASTRA_SERVICE_RUNS_PAIRED)) == 0u ||
@@ -207,10 +212,17 @@ AstraResult astra_service_definition_validate(
     if (at != definition->argument_length)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t index = 0u; index < definition->grant_count; ++index)
-        if (!capability_name_valid(definition->grants[index].name))
+        if (!capability_name_valid(definition->grants[index].name) ||
+            (definition->grants[index].rights &
+             ~(ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE)) != 0u ||
+            definition->grants[index].is_namespace > 1u ||
+            (definition->grants[index].is_namespace != 0u) !=
+                (definition->grants[index].rights != 0u))
             return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t index = 0u; index < definition->publication_count; ++index)
-        if (!capability_name_valid(definition->publications[index].name))
+        if (!capability_name_valid(definition->publications[index].name) ||
+            (definition->publications[index].rights &
+             ~(ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE)) != 0u)
             return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t index = 0u; index < definition->dependency_count; ++index)
         if (!capability_name_valid(definition->dependencies[index]))

@@ -232,6 +232,8 @@ AstraeaRegs *kernel_platform_test_astraea_registers(void);
 VegaRegs *kernel_platform_test_vega_registers(void);
 OhciRegs *kernel_platform_test_ohci_registers(void);
 OhciHcca *kernel_platform_test_ohci_hcca(void);
+bool kernel_platform_test_host_channel_size(uint32_t byte_size,
+                                            uint32_t command_capacity);
 #endif
 
 #endif

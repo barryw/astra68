@@ -320,9 +320,10 @@ workload is small; 4 MiB is many transactions' worth.
 The class table is deliberately **not** shrunk to match. Sized for the plateau,
 any volume up to 1 TiB mounts whatever journal it was formatted with, so a card
 formatted on Linux with defaults still works. The production profile now adds
-a 1,024-entry, 4 KiB coherent block/file-data cache. Its allocator layout is
-4,476,168 bytes inside one fixed 5 MiB arena; both the bootstrap mount and the
-protected storage service use that same definition. `make bigvolume` is the
+a 1,024-entry, 4 KiB coherent block/file-data cache plus 128 independent 4 KiB
+transaction buffers, so a full cache cannot starve directory and journal work.
+Both the bootstrap mount and the protected storage service use that same
+definition. `make bigvolume` is the
 gate for the journal case and deliberately does not pin the journal.
 
 Upstream lwext4 bypassed its block cache for file data. Astra patch 0005 routes

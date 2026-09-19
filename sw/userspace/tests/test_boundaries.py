@@ -159,6 +159,48 @@ def test_native_commands_use_runtime_argument_access():
         )
 
 
+def test_posix_command_uses_the_vfs_path_authority():
+    path = USERSPACE / "commands" / "posix" / "posix.c"
+    text = path.read_text()
+
+    for name in ("before", "after"):
+        if not re.search(
+            rf"char\s+{name}\s*\[ASTRA_VFS_PATH_MAX\]", text
+        ):
+            raise AssertionError(
+                f"{relative(path)}: {name} has a private current-directory "
+                "limit instead of the VFS path authority"
+            )
+    if re.search(r"char\s+(?:before|after)\s*\[[0-9]+\]", text):
+        raise AssertionError(
+            f"{relative(path)}: numeric current-directory limit returned"
+        )
+
+
+def test_commands_do_not_restore_private_formatting_caps():
+    posix = USERSPACE / "commands" / "posix" / "posix.c"
+    devices = USERSPACE / "commands" / "devices" / "devices.c"
+
+    require_absent(
+        posix,
+        ((r"char\s+report\s*\[[^]]+\]",
+          "clips failure diagnostics into a private report buffer"),),
+    )
+    if posix.read_text().count("(void)astra_log(reason);") != 1:
+        raise AssertionError(
+            f"{relative(posix)}: complete resolver failure reason is not logged"
+        )
+    require_absent(
+        devices,
+        ((r"char\s+(?:digits|text)\s*\[[^]]+\]",
+          "formats integers through a private numeric ceiling"),),
+    )
+    if 'printf("%*u"' not in devices.read_text():
+        raise AssertionError(
+            f"{relative(devices)}: libc does not own numeric field formatting"
+        )
+
+
 def test_commands_use_shared_stream_writes():
     for path in production_sources(USERSPACE / "commands"):
         require_absent(
@@ -431,7 +473,6 @@ def test_shared_library_products_have_one_registry():
             raise AssertionError(
                 f"{relative(path)}: bypasses the shared-library registry"
             )
-
     kits = (USERSPACE / "kits" / "Makefile").read_text()
     if re.search(r"build/m68k/libraries/[^\s]+\.library", kits):
         raise AssertionError(
@@ -452,6 +493,31 @@ def test_shared_library_products_have_one_registry():
             "sw/userspace/kits/Makefile: Network Kit lacks an exact owner "
             "dependency"
         )
+
+
+def test_library_contracts_match_exact_readelf_fields():
+    makefiles = tuple(USERSPACE.rglob("Makefile")) + (
+        REPOSITORY / "ndk" / "Makefile",
+    )
+    for path in makefiles:
+        text = path.read_text()
+        if "NEEDED.*" in text or "SONAME.*" in text:
+            raise AssertionError(
+                f"{relative(path)}: fuzzy readelf match can confuse "
+                "overlapping library names"
+            )
+
+    config = (USERSPACE / "config" / "Makefile").read_text()
+    required = (
+        "grep -Fc 'Shared library: [system.library.2]'",
+        "grep -Fc 'Shared library: [filesystem.library.2]'",
+    )
+    for contract in required:
+        if contract not in config:
+            raise AssertionError(
+                "sw/userspace/config/Makefile: missing exact dependency "
+                f"contract {contract}"
+            )
 
 
 def test_link_products_depend_on_their_build_contracts():
@@ -953,6 +1019,23 @@ def test_supervisor_owns_local_service_endpoint_lifetimes():
             )
 
 
+def test_service_definitions_use_inline_vfs_writes():
+    source = (USERSPACE / "supervisor" / "src" / "loader.c").read_text()
+    start = source.index("static uint32_t dynamic_definition_write(")
+    end = source.index("static uint32_t startup_definition(", start)
+    writer = source[start:end]
+
+    if "astra_vfs_write(" not in writer:
+        raise AssertionError(
+            "dynamic service definitions do not use the ordinary VFS write path"
+        )
+    if "astra_vfs_port_write_bulk(" in writer:
+        raise AssertionError(
+            "dynamic service definitions allocate a bulk transfer area for a "
+            "small control record"
+        )
+
+
 def test_userspace_orchestration_does_not_overlap_shared_producers():
     text = (USERSPACE / "Makefile").read_text()
 
@@ -1249,6 +1332,8 @@ def main():
         test_service_startup_protocol_is_shared,
         test_program_startup_capability_lookup_is_shared,
         test_native_commands_use_runtime_argument_access,
+        test_posix_command_uses_the_vfs_path_authority,
+        test_commands_do_not_restore_private_formatting_caps,
         test_commands_use_shared_stream_writes,
         test_endian_primitives_are_shared,
         test_checked_integer_primitives_are_shared,
@@ -1259,6 +1344,7 @@ def main():
         test_owner_analyzers_cover_production_sources,
         test_loadable_libraries_use_owner_built_archives,
         test_shared_library_products_have_one_registry,
+        test_library_contracts_match_exact_readelf_fields,
         test_link_products_depend_on_their_build_contracts,
         test_services_do_not_compile_private_ndk_or_config_copies,
         test_static_archives_are_exact_replacements,

@@ -538,6 +538,71 @@ static void test_handle_budget_admits_a_full_transfer(void)
     assert(kernel_port_pool_valid());
 }
 
+static void test_owner_may_use_the_complete_transfer_pool(void)
+{
+    KernelHandleTable source;
+    KernelPort *ports[3];
+    TestObject objects[KERNEL_HANDLE_DETACHED_MAX +
+                       KERNEL_HANDLE_TRANSFER_MAX] = {{0u, 0u}};
+    uint8_t message[KERNEL_PORT_MESSAGE_SIZE_MIN];
+    uint32_t object = 0u;
+    uint32_t woken;
+
+    initialize_test();
+    kernel_handle_table_init(&source);
+    make_message(message, sizeof(message), 0x71u);
+    assert(kernel_port_create(0x2200u, KERNEL_PORT_QUEUE_MESSAGES_MAX,
+                              KERNEL_PORT_QUEUE_MESSAGES_MAX *
+                                  sizeof(message),
+                              &ports[0]) == KERNEL_PORT_OK);
+    assert(kernel_port_create(0x2200u, KERNEL_PORT_QUEUE_MESSAGES_MAX,
+                              KERNEL_PORT_QUEUE_MESSAGES_MAX *
+                                  sizeof(message),
+                              &ports[1]) == KERNEL_PORT_OK);
+    assert(kernel_port_create(0x2200u, 1u, sizeof(message), &ports[2]) ==
+           KERNEL_PORT_OK);
+    for (uint32_t sent = 0u;
+         sent < KERNEL_HANDLE_DETACHED_MAX / KERNEL_HANDLE_TRANSFER_MAX;
+         ++sent) {
+        KernelHandle handles[KERNEL_HANDLE_TRANSFER_MAX];
+
+        for (uint32_t at = 0u; at < KERNEL_HANDLE_TRANSFER_MAX;
+             ++at, ++object) {
+            objects[object].value = object;
+            handles[at] = install_transfer_handle(
+                &source, &objects[object],
+                ASTRA_RIGHT_READ | ASTRA_RIGHT_TRANSFER);
+        }
+        assert(kernel_port_send(
+                   ports[sent / KERNEL_PORT_QUEUE_MESSAGES_MAX], &source,
+                   message, sizeof(message), handles,
+                   KERNEL_HANDLE_TRANSFER_MAX, &woken) == KERNEL_PORT_OK);
+        if (sent == 16u)
+            assert(kernel_port_pool_valid());
+    }
+    {
+        KernelHandle handles[KERNEL_HANDLE_TRANSFER_MAX];
+
+        for (uint32_t at = 0u; at < KERNEL_HANDLE_TRANSFER_MAX;
+             ++at, ++object) {
+            objects[object].value = object;
+            handles[at] = install_transfer_handle(
+                &source, &objects[object],
+                ASTRA_RIGHT_READ | ASTRA_RIGHT_TRANSFER);
+        }
+        assert(kernel_port_send(ports[2], &source, message, sizeof(message),
+                                handles, KERNEL_HANDLE_TRANSFER_MAX,
+                                &woken) == KERNEL_PORT_TRANSFER_POOL_FULL);
+        assert(kernel_handle_close_all(&source) ==
+               KERNEL_HANDLE_TRANSFER_MAX);
+    }
+    assert(kernel_port_pool_valid());
+    release_port(ports[0]);
+    release_port(ports[1]);
+    release_port(ports[2]);
+    assert(kernel_port_pool_valid() && kernel_handle_transfer_pool_valid());
+}
+
 static void test_owner_death_discards_queued_authority(void)
 {
     KernelHandleTable source;
@@ -770,6 +835,7 @@ int main(void)
     test_failed_send_leaves_source_authority();
     test_receive_capacity_and_destination_full();
     test_handle_budget_admits_a_full_transfer();
+    test_owner_may_use_the_complete_transfer_pool();
     test_owner_death_discards_queued_authority();
     test_self_send_teardown_is_reentrant_safe();
     test_readable_and_writable_wait_queues();

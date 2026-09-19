@@ -21,6 +21,8 @@
 
 #define ASTRA_EXT4_ALLOC_CLASS_COUNT 4u
 #define ASTRA_EXT4_ARENA_BYTES (5u * 1024u * 1024u)
+/* Cache buffers cannot consume the journal transaction's working set. */
+#define ASTRA_EXT4_TRANSIENT_BLOCKS 128u
 
 /*
  * The measured shape of lwext4's demand, not a guess. The evaluation workload

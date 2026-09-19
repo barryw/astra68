@@ -43,23 +43,13 @@ ASTRA_PROGRAM("events-service", 0, 2, 0, "Barry Walker",
  */
 #define EVENTS_RECORD_MAX 256u
 
-/*
- * Room for 64 descriptors. The catalog is the .astra_events section verbatim,
- * so this is a ceiling on call sites in the image rather than on events, and
- * the supervisor has four today. A catalog that does not fit is refused whole:
- * half a catalog renders the wrong message under the right id.
- */
-#define EVENTS_CATALOG_MAX (64u * ASTRA_EVENT_DESCRIPTOR_SIZE)
-
 static AstraEventStored event_records[EVENTS_RECORD_MAX];
 static AstraEventStored previous_records[EVENTS_RECORD_MAX];
 static struct {
     uint8_t bytes[ASTRA_EVENT_SNAPSHOT_HEADER_SIZE + sizeof(event_records)];
     uint32_t length;
 } snapshot_buffer;
-/* Aligned by being descriptors: the catalog reader indexes them in place. */
-static AstraEventDescriptor catalog_bytes[EVENTS_CATALOG_MAX /
-                                          ASTRA_EVENT_DESCRIPTOR_SIZE];
+static void *catalog_bytes;
 static AstraEventCatalog catalog;
 static AstraEventStore store;
 static AstraEventStore previous_store;
@@ -319,37 +309,23 @@ save_snapshot(void)
 static void
 load_catalog(void)
 {
-    AstraFile file = ASTRA_FILE_INIT;
-    uint32_t offset = 0u;
+    uint32_t length = 0u;
+
+    astra_runtime_deallocate(catalog_bytes);
+    catalog_bytes = NULL;
+    catalog = (AstraEventCatalog){0};
 
     if (process_filesystem.filesystem._private_assigns == NULL) {
         catalog_status = ASTRA_VFS_ERR_NOT_FOUND;
         return;
     }
-    catalog_status = astra_filesystem_open(
-        &process_filesystem.filesystem, "SYS:astra_events.cat",
-        ASTRA_VFS_OPEN_READ, &file);
+    catalog_status = astra_process_read_file_alloc(
+        &process_filesystem, "SYS:astra_events.cat", &catalog_bytes, &length);
     if (catalog_status != ASTRA_VFS_OK) {
         return;
     }
-    while (offset < sizeof(catalog_bytes)) {
-        uint32_t moved = 0u;
-        uint32_t status = astra_filesystem_read_at(
-            &file, offset, (uint8_t *)catalog_bytes + offset,
-            sizeof(catalog_bytes) - offset, &moved);
-
-        if (status != ASTRA_VFS_OK) {
-            catalog_status = status;
-            break;
-        }
-        if (moved == 0u) {
-            break;
-        }
-        offset += moved;
-    }
-    (void)astra_filesystem_close(&file);
-    if (!astra_event_catalog_init(&catalog, catalog_bytes, offset,
-                                     ASTRA_EVENT_CATALOG_BASE)) {
+    if (!astra_event_catalog_init(&catalog, catalog_bytes, length,
+                                  ASTRA_EVENT_CATALOG_BASE)) {
         /* Read, but not this build's catalog: refused whole rather than half. */
         catalog_status = ASTRA_VFS_ERR_INVALID;
     }

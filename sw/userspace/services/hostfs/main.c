@@ -92,8 +92,8 @@ static uint32_t sample_host_group(void *context, AstraMetricSample *out,
 {
     const HostMetricGroup *group = context;
 
-    if (capacity < group->count)
-        return 0u;
+    if (out == NULL || capacity < group->count)
+        return group->count;
     for (uint32_t index = 0u; index < group->count; ++index) {
         out[index].name = group->names[index];
         out[index].value = astra_host_metric_value(
@@ -107,8 +107,8 @@ static uint32_t sample_host_fs(void *context, AstraMetricSample *out,
 {
     const HostFsMetricGroup *group = context;
 
-    if (capacity < 2u)
-        return 0u;
+    if (out == NULL || capacity < 2u)
+        return 2u;
     out[0].name = "calls";
     out[0].value = astra_host_metric_value(
         &host_metrics, ASTRA_HOST_METRIC_FS_COUNT_BASE + group->operation);
@@ -136,8 +136,10 @@ static uint32_t sample_vfs(void *context, AstraMetricSample *out,
     _Static_assert(sizeof(AstraVfsServiceStats) ==
                        sizeof(names) / sizeof(names[0]) * sizeof(uint32_t),
                    "VFS metric names no longer match the stats record");
-    if (stats == NULL || capacity < count)
+    if (stats == NULL)
         return 0u;
+    if (out == NULL || capacity < count)
+        return count;
     values[0] = stats->requests;
     values[1] = stats->replies_failed;
     values[2] = stats->protocol_rejects;

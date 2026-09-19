@@ -21,8 +21,17 @@ static int path_join(char out[PATH_MAX], const char *left, const char *right)
     return count > 0 && count < PATH_MAX;
 }
 
-static int read_file(const char *path, uint8_t **bytes, uint32_t *length,
-                     uint32_t limit)
+void *astra_runtime_reallocate(void *pointer, size_t size)
+{
+    return realloc(pointer, size);
+}
+
+void astra_runtime_deallocate(void *pointer)
+{
+    free(pointer);
+}
+
+static int read_file(const char *path, uint8_t **bytes, uint32_t *length)
 {
     struct stat info;
     FILE *file;
@@ -30,7 +39,7 @@ static int read_file(const char *path, uint8_t **bytes, uint32_t *length,
     *bytes = NULL;
     *length = 0u;
     if (stat(path, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size <= 0 ||
-        (uint64_t)info.st_size > limit) return 0;
+        (uint64_t)info.st_size >= UINT32_MAX) return 0;
     file = fopen(path, "rb");
     if (file == NULL) return 0;
     *bytes = malloc((size_t)info.st_size + 1u);
@@ -84,7 +93,7 @@ static int validate(const char *path, AstraBundleManifest *manifest,
     uint32_t status;
 
     if (!path_join(child, path, "manifest") ||
-        !read_file(child, &text, &length, ASTRA_BUNDLE_MANIFEST_MAX)) {
+        !read_file(child, &text, &length)) {
         if (!quiet) fprintf(stderr, "%s: missing readable manifest\n", path);
         return 0;
     }
@@ -98,6 +107,7 @@ static int validate(const char *path, AstraBundleManifest *manifest,
     if ((manifest->kind == ASTRA_BUNDLE_APPLICATION && !suffix(path, ".app")) ||
         (manifest->kind == ASTRA_BUNDLE_KIT && !suffix(path, ".kit"))) {
         if (!quiet) fprintf(stderr, "%s: suffix does not match manifest kind\n", path);
+        astra_bundle_manifest_destroy(manifest);
         return 0;
     }
     if (manifest->kind == ASTRA_BUNDLE_KIT) {
@@ -110,6 +120,7 @@ static int validate(const char *path, AstraBundleManifest *manifest,
                             manifest->provides[at].version.major,
                             manifest->provides[at].version.minor,
                             manifest->provides[at].version.patch);
+                astra_bundle_manifest_destroy(manifest);
                 return 0;
             }
         return 1;
@@ -117,17 +128,20 @@ static int validate(const char *path, AstraBundleManifest *manifest,
     if (!path_join(child, path, manifest->executable) || stat(child, &info) != 0 ||
         !S_ISREG(info.st_mode)) {
         if (!quiet) fprintf(stderr, "%s: executable is missing\n", path);
+        astra_bundle_manifest_destroy(manifest);
         return 0;
     }
     if (!path_join(child, path, manifest->icon) ||
-        !read_file(child, &icon_bytes, &length, UINT32_C(1048576))) {
+        !read_file(child, &icon_bytes, &length)) {
         if (!quiet) fprintf(stderr, "%s: icon is missing\n", path);
+        astra_bundle_manifest_destroy(manifest);
         return 0;
     }
     status = astra_aicon_open(icon_bytes, length, &icon);
     free(icon_bytes);
     if (status != ASTRA_BUNDLE_OK) {
         if (!quiet) fprintf(stderr, "%s: invalid .aicon (status %u)\n", path, status);
+        astra_bundle_manifest_destroy(manifest);
         return 0;
     }
     return 1;
@@ -217,24 +231,29 @@ static int remove_tree(const char *path)
 
 static int copy_bundle(const char *source, const char *destination)
 {
-    AstraBundleManifest manifest;
+    AstraBundleManifest manifest = ASTRA_BUNDLE_MANIFEST_INIT;
     struct stat info;
+    int result = 0;
 
     if (!validate(source, &manifest, 0) || lstat(destination, &info) == 0 ||
-        errno != ENOENT) return 0;
+        errno != ENOENT) goto done;
     if (!copy_tree(source, destination) ||
         !validate(destination, &manifest, 0)) {
         (void)remove_tree(destination);
-        return 0;
+        goto done;
     }
-    return 1;
+    result = 1;
+done:
+    astra_bundle_manifest_destroy(&manifest);
+    return result;
 }
 
 static int move_bundle(const char *source, const char *destination)
 {
-    AstraBundleManifest manifest;
+    AstraBundleManifest manifest = ASTRA_BUNDLE_MANIFEST_INIT;
 
     if (!validate(source, &manifest, 0)) return 0;
+    astra_bundle_manifest_destroy(&manifest);
     if (renameat2(AT_FDCWD, source, AT_FDCWD, destination,
                   RENAME_NOREPLACE) == 0) return 1;
     if (errno != EXDEV || !copy_bundle(source, destination)) return 0;
@@ -255,6 +274,13 @@ typedef struct ScannedBundle {
     char path[PATH_MAX];
     AstraBundleManifest manifest;
 } ScannedBundle;
+
+static void scanned_bundles_destroy(ScannedBundle *bundles, size_t count)
+{
+    for (size_t at = 0u; at < count; ++at)
+        astra_bundle_manifest_destroy(&bundles[at].manifest);
+    free(bundles);
+}
 
 static int version_at_least(AstraBundleVersion have, AstraBundleVersion need)
 {
@@ -281,11 +307,11 @@ static int scan_roots(char **roots, int root_count, ScannedBundle **out,
         DIR *directory = opendir(roots[root]);
         struct dirent *entry;
         if (directory == NULL) {
-            free(found);
+            scanned_bundles_destroy(found, count);
             return 0;
         }
         while ((entry = readdir(directory)) != NULL) {
-            ScannedBundle candidate;
+            ScannedBundle candidate = { .manifest = ASTRA_BUNDLE_MANIFEST_INIT };
             ScannedBundle *grown;
             if (entry->d_name[0] == '.' ||
                 (!suffix(entry->d_name, ".app") &&
@@ -296,7 +322,8 @@ static int scan_roots(char **roots, int root_count, ScannedBundle **out,
             grown = realloc(found, (count + 1u) * sizeof(*found));
             if (grown == NULL) {
                 closedir(directory);
-                free(found);
+                astra_bundle_manifest_destroy(&candidate.manifest);
+                scanned_bundles_destroy(found, count);
                 return 0;
             }
             found = grown;
@@ -364,7 +391,7 @@ static int has_dependents(const char *target,
             }
         }
     }
-    free(bundles);
+    scanned_bundles_destroy(bundles, count);
     return blocked;
 }
 
@@ -379,13 +406,14 @@ static void usage(void)
 
 int main(int argc, char **argv)
 {
-    AstraBundleManifest manifest;
+    AstraBundleManifest manifest = ASTRA_BUNDLE_MANIFEST_INIT;
 
     if (argc == 3 && strcmp(argv[1], "check") == 0) {
         if (!validate(argv[2], &manifest, 0)) return 1;
         printf("%s %s %u.%u.%u\n", manifest.kind == ASTRA_BUNDLE_APPLICATION ?
                "application" : "kit", manifest.id, manifest.version.major,
                manifest.version.minor, manifest.version.patch);
+        astra_bundle_manifest_destroy(&manifest);
         return 0;
     }
     if (argc == 4 && strcmp(argv[1], "copy") == 0)
@@ -398,10 +426,14 @@ int main(int argc, char **argv)
         if (argc > 4) {
             int dependents = has_dependents(argv[2], &manifest,
                                             argv + 4, argc - 4);
-            if (dependents < 0) return 1;
+            if (dependents < 0) {
+                astra_bundle_manifest_destroy(&manifest);
+                return 1;
+            }
             if (dependents > 0)
                 fprintf(stderr, "warning: moved to Trash with dependents\n");
         }
+        astra_bundle_manifest_destroy(&manifest);
         if (mkdir(argv[3], 0755) != 0 && errno != EEXIST) return 1;
         if (!path_join(destination, argv[3], base_name(argv[2]))) return 1;
         return move_bundle(argv[2], destination) ? 0 : 1;
@@ -413,8 +445,10 @@ int main(int argc, char **argv)
         if (dependents != 0) {
             if (dependents > 0)
                 fprintf(stderr, "refusing permanent deletion: dependencies remain\n");
+            astra_bundle_manifest_destroy(&manifest);
             return 1;
         }
+        astra_bundle_manifest_destroy(&manifest);
         return remove_tree(argv[2]) ? 0 : 1;
     }
     usage();

@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-09-18
+Status: active continuation map, 2026-09-19
 
 This file contains current facts only. Git history holds superseded board,
 processor, benchmark, and milestone records. The platform is **Astra 68**, its
@@ -95,13 +95,44 @@ re-evaluated. The regression failed before this fix and passes the normal,
 ASan/UBSan, analyzer, and MC68040 display builds.
 
 Immutable software release
-`21669fc83d219bf400d2188b689d40eeaa5c95611fed823e85e3f5c9634954c9`
-is selected and running on the DE25. Native GUI applications have one launch
-path: desktop icons, `open APPS:Name.app [argument ...]`, and future Telescope
-results all send the NDK application-launch request to the supervisor loader.
-The 71-command QEMU terminal gate passed, including shell launch and process
-discovery, and a physical Terminal launch displayed Interface Gallery on the
-DE25.
+`6c7f364df31b71b19caf495fc371d480d4f2a06a759e9d0877aacbbcee9c542e`
+is selected, byte-verified, and running on the DE25. Its QEMU, ROM, storage
+seed, host display, remote-desktop, and source-manifest SHA-256 values are
+respectively
+`3a13dc695833a277f3048de3835cfdedfcacc46adb9e31e8937942d4d410605e`,
+`e47b98934a3714f25234cd12b3366ae7bb6ef1f96dd02144b8b580052ed394ff`,
+`ae91f3779b176d2b1288e0189dea6122a6a3eaa128f266824d9f6d905a447dac`,
+`9d86a327a113e2f5dd2ead97f49bab87b1aacf16f5037fa9c2991a7bc059d471`,
+`6740ea01dcb16e19cb3af89d8efd5ee855d1d72cb45090aa1fc8094232e6df66`,
+and `2da63888d24bfcd615ae01a5210c1ecdc213903d315821c4f19f009d0a8f7ce5`.
+It reaches stage 8 at 66.279 MHz effective; `astra.service` and
+`astra-remote-desktop.service` are active with zero automatic restarts.
+
+This release completed the library, CLI, storage, and remote-desktop audit.
+The QEMU gate passes all 71 terminal commands. The `open` command returns 0
+after confirmed startup without waiting for application exit, returns exactly
+1 when startup fails, and `--wait` returns the application's exit status.
+Positive and negative NDK, command, supervisor, QEMU, and physical-DE25 tests
+cover those contracts. On the board, a missing application returned 1 while
+`InterfaceGallery.app` returned 0 and remained alive. Launch origin is carried
+in the canonical startup record and is available through
+`astra_startup_launch_source()`; applications require no launch-origin switch.
+The QEMU terminal gate rebuilds its workspace ROM before every run and has a
+negative regression proving that it refuses to test when that refresh fails,
+so a stale boot image cannot masquerade as current source.
+The physical loopback RFB gate captured a 1920x1080 RGB frame, round-tripped
+pointer position `(700, 500)`, and produced frame SHA-256
+`75e1453455545a0d8fc1afeebcb8063b92a28fcbf4e8f1b98e1afc79ed479eef`.
+The complete remote-desktop lifecycle also passes dynamic definition
+create/enable/disable/delete, automatic and manual activation, restart,
+broker loss/recovery, events, and shutdown. The storage allocator derives its
+production arena from cache classes plus measured transient filesystem demand.
+lwext4 rename atomically replaces compatible destinations, preserves both
+operands on every refusal, rejects cross-mount moves and directory-descendant
+cycles, and passes raw, partitioned, full-volume, power-cut, journal-failure,
+ASan/UBSan, TSan, analyzer, and independent `e2fsck` gates. Kernel, NDK, tools,
+every userspace suite, shared-library contracts, analyzers, and sanitizers pass
+on Beast.
 
 The library-loading audit is cleared in immutable DE25 release
 `354a01b26f2458642761ad24658841b4525c8d31cb102cb965702e8ed14613e5`.

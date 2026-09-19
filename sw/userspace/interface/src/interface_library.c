@@ -31,7 +31,7 @@ static int valid(const AstraAlertInfo *info)
            astra_utf8_validate(info->message, info->message_length, 0u) &&
            info->button_length != 0u &&
            astra_utf8_validate(info->button, info->button_length, 0u) &&
-           info->button_length <= 16u && info->reserved16 == 0u &&
+           info->reserved16 == 0u &&
            info->reserved16_2 == 0u && info->reserved16_3 == 0u &&
            astra_words_zero(info->reserved, 4u);
 }

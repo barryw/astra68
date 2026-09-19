@@ -63,7 +63,7 @@ CONFIGURATION = {
         "runs paired\n"
         "enabled true\n"
         "delegates false\n"
-        "start manual\n"
+        "start boot\n"
         "restart on-fault\n"
         "argument \"SERVICES:remote-desktop\"\n"
         "grant HOST_DEVICE\n"),
@@ -100,7 +100,12 @@ PROVIDER_INDEX_VERSION = 2
 LIBRARY_IDENTITY_HEADER = struct.Struct(">IHHHHHHHHIII")
 LIBRARY_RECORD_VERSION = 2
 LIBRARY_RECORD_SIZE = 128
-PROVIDER_INDEX_MAX = 192
+# The reader qualifies the payload through LIBS: into the VFS path buffer.
+# The serialized header is outside that path and must not consume its budget.
+VFS_PATH_MAX = 192
+PROVIDER_ASSIGN = "LIBS"
+PROVIDER_INDEX_MAX = (PROVIDER_INDEX_HEADER.size + VFS_PATH_MAX -
+                      len(PROVIDER_ASSIGN) - 2)
 # One startup profile, not two. The terminal stopped being a program that owns
 # the screen and the keyboard when the window runtime landed: it is a window
 # client now, so a profile that runs it has to run the display service that
@@ -531,6 +536,18 @@ def install(image, catalog=DEFAULT_CATALOG, commands=DEFAULT_COMMANDS,
                    service_names, manifest_text)
 
 
+def _provider_index_record(path, version, abi, abi_minor, build_id):
+    encoded = path.encode("ascii")
+    record = PROVIDER_INDEX_HEADER.pack(
+        PROVIDER_INDEX_MAGIC, PROVIDER_INDEX_VERSION,
+        PROVIDER_INDEX_HEADER.size,
+        version[0], version[1], version[2], abi, abi_minor, 0,
+        build_id) + encoded
+    if len(record) > PROVIDER_INDEX_MAX:
+        raise RuntimeError("provider index path is too long: %s" % path)
+    return record
+
+
 def _install_built(image, catalog=DEFAULT_CATALOG,
                    commands=DEFAULT_COMMANDS,
                    services=DEFAULT_SERVICES, kits=DEFAULT_KITS,
@@ -611,15 +628,8 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
         for (name, abi), (version, abi_minor, build_id, path) in sorted(
                 _providers(kit_bundles).items()):
             host = os.path.join(temporary, "%s.abi-%u" % (name, abi))
-            encoded = path.encode("ascii")
-            record = PROVIDER_INDEX_HEADER.pack(
-                PROVIDER_INDEX_MAGIC, PROVIDER_INDEX_VERSION,
-                PROVIDER_INDEX_HEADER.size,
-                version[0], version[1], version[2], abi, abi_minor, 0,
-                build_id) + \
-                encoded
-            if len(record) > PROVIDER_INDEX_MAX:
-                raise RuntimeError("provider index path is too long: %s" % path)
+            record = _provider_index_record(
+                path, version, abi, abi_minor, build_id)
             with open(host, "wb") as handle:
                 handle.write(record)
             target = "%s/%s.abi-%u" % (provider_directory, name, abi)

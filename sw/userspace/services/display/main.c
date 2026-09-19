@@ -58,6 +58,8 @@ typedef struct TitleIconRun {
     uint8_t matched;
 } TitleIconRun;
 
+#define TITLE_ICON_RUN_MAX ((ASTRA_AICON_STRIKE_WIDTH_MAX + 1u) / 2u)
+
 typedef struct DisplayWindow {
     AstraGuiOpenWindow request;
     AstraSharedSurface surface;
@@ -1241,9 +1243,11 @@ static int draw_title_icon(AstraRenderBuilder *builder, uint32_t destination,
 {
     const AstraAiconStrike *strike = &window->title_icon_strike;
 
+    if (strike->width > ASTRA_AICON_STRIKE_WIDTH_MAX)
+        return 0;
     for (uint16_t color_index = 1u;
          color_index < window->title_icon.palette_count; ++color_index) {
-        TitleIconRun active[8];
+        TitleIconRun active[TITLE_ICON_RUN_MAX];
         uint32_t active_count = 0u;
         uint8_t rgba[4];
         uint16_t pixel;
@@ -1253,7 +1257,7 @@ static int draw_title_icon(AstraRenderBuilder *builder, uint32_t destination,
             continue;
         pixel = astra_surface_rgb565(rgba[0], rgba[1], rgba[2]);
         for (uint16_t row = 0u; row < strike->height; ++row) {
-            TitleIconRun current[8];
+            TitleIconRun current[TITLE_ICON_RUN_MAX];
             uint32_t current_count = 0u;
             uint16_t column = 0u;
 

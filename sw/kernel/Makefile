@@ -1,6 +1,10 @@
 # Astra 68 kernel bootstrap. Freestanding MC68040 image loaded by the system ROM.
 include ../../mk/m68k-cross.mk
 include ../../mk/astra-version.mk
+
+# coverage cleans the shared build tree; never overlap it with test or verify.
+.NOTPARALLEL:
+
 CC = $(CROSS)gcc
 OBJCOPY = $(CROSS)objcopy
 OBJDUMP = $(CROSS)objdump
@@ -383,6 +387,7 @@ test: $(BUILD_DIR)/test_address_space \
 	./$(BUILD_DIR)/test_worker
 	./$(BUILD_DIR)/test_dispatch
 	./$(BUILD_DIR)/test_elf
+	python3 tests/test_make_parallel.py Makefile
 
 $(BUILD_DIR)/test_address_space: tests/test_address_space.c \
                                   ../include/astra/address_space.h | $(BUILD_DIR)

@@ -17,8 +17,7 @@
 #define SUPERVISOR_PROC_PORT_BUDGET 8u
 #define SUPERVISOR_MANIFEST_GRANT_MAX ASTRA_LAUNCH_GRANT_MAX
 #define SUPERVISOR_MANIFEST_PUBLICATION_MAX ASTRA_MESSAGE_HANDLES_MAX
-#define SUPERVISOR_MANIFEST_PATH_MAX 128u
-
+#define SUPERVISOR_MANIFEST_PATH_MAX ASTRA_VFS_PATH_MAX
 /* Program-local boot-controller failures. They are never kernel verdicts. */
 #define SUPERVISOR_LOADER_FAIL_MANIFEST 32u
 #define SUPERVISOR_LOADER_FAIL_ORDER    33u
@@ -62,7 +61,7 @@ typedef struct SupervisorManifest {
     uint32_t count;
 } SupervisorManifest;
 
-/* Parses a mutable, NUL-terminated file whole. Zero retains no entry. */
+/* Parses a mutable byte span. Zero retains no entry. */
 int supervisor_manifest_parse(char *text, uint32_t length,
                               SupervisorManifest *manifest);
 int supervisor_manifest_grant(char *text, SupervisorManifestGrant *grant);

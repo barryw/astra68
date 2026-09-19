@@ -25,6 +25,79 @@
 #include <astra/status.h>
 #include <astra/syscall.h>
 
+#include <string.h>
+
+#include "log_internal.h"
+
+typedef struct LogPart {
+    const char *text;
+    uint32_t length;
+} LogPart;
+
+static uint32_t
+decimal(char out[10], uint32_t value)
+{
+    char reverse[10];
+    uint32_t count = 0u;
+
+    do {
+        reverse[count++] = (char)('0' + value % 10u);
+        value /= 10u;
+    } while (value != 0u);
+    for (uint32_t index = 0u; index < count; ++index)
+        out[index] = reverse[count - index - 1u];
+    return count;
+}
+
+static uint32_t
+log_parts(const LogPart *parts, uint32_t part_count)
+{
+    uint64_t total = 0u;
+    uint64_t sent = 0u;
+    uint32_t part = 0u;
+    uint32_t part_offset = 0u;
+
+    for (uint32_t index = 0u; index < part_count; ++index) {
+        if (parts[index].text == NULL && parts[index].length != 0u)
+            return ASTRA_SYSCALL_INVALID_ARGUMENT;
+        total += parts[index].length;
+    }
+    if (total == 0u || total > UINT32_MAX)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    while (sent < total) {
+        uint8_t payload[ASTRA_EVENT_ARGUMENT_MAX];
+        uint32_t length = 0u;
+        uint32_t flags = ASTRA_EVENT_LEVEL_NOTICE |
+                         ASTRA_EVENT_FLAG_INLINE_STRING;
+        uint32_t status;
+
+        while (length < sizeof(payload) && part < part_count) {
+            uint32_t available = parts[part].length - part_offset;
+            uint32_t copied = sizeof(payload) - length;
+
+            if (copied > available)
+                copied = available;
+            for (uint32_t index = 0u; index < copied; ++index)
+                payload[length + index] =
+                    (uint8_t)parts[part].text[part_offset + index];
+            length += copied;
+            part_offset += copied;
+            if (part_offset == parts[part].length) {
+                ++part;
+                part_offset = 0u;
+            }
+        }
+        if (sent + length < total)
+            flags |= ASTRA_EVENT_FLAG_CONTINUED;
+        status = astra_event_emit(ASTRA_EVENT_MESSAGE_UNSTRUCTURED, flags,
+                                  payload, length);
+        if (status != ASTRA_SYSCALL_OK)
+            return status;
+        sent += length;
+    }
+    return ASTRA_SYSCALL_OK;
+}
+
 uint32_t
 astra_event_emit(uint32_t message, uint32_t flags, const void *payload,
                  uint32_t length)
@@ -88,7 +161,7 @@ log_write_level(const void *bytes, uint32_t length, uint32_t level)
     const uint8_t *text = bytes;
     uint32_t sent = 0u;
 
-    if (bytes == NULL || length == 0u || length > ASTRA_LOG_MAX_BYTES) {
+    if (bytes == NULL || length == 0u) {
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     }
     while (sent < length) {
@@ -139,28 +212,58 @@ astra_log_debug(const void *bytes, uint32_t length)
 uint32_t
 astra_log(const char *text)
 {
-    uint32_t length = 0u;
+    size_t length;
 
-    if (text == NULL) {
+    if (text == NULL)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    }
-    while (text[length] != '\0' && length < ASTRA_LOG_MAX_BYTES) {
-        ++length;
-    }
-    if (length == 0u) {
+    length = strlen(text);
+    if (length == 0u || length > UINT32_MAX)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    }
-    return astra_log_write(text, length);
+    return astra_log_write(text, (uint32_t)length);
 }
 
 uint32_t
 astra_log_failure(const char *operation, uint32_t status)
 {
-    char message[64];
-    uint32_t length = astra_assert_message(
-        message, sizeof(message), operation, status, "failed");
+    static const char suffix[] = ": failed";
+    char digits[10];
+    LogPart parts[4];
+    size_t operation_length;
 
-    return astra_log_write(message, length);
+    if (operation == NULL)
+        operation = "?";
+    operation_length = strlen(operation);
+    if (operation_length > UINT32_MAX)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    parts[0] = (LogPart){operation, (uint32_t)operation_length};
+    parts[1] = (LogPart){":", 1u};
+    parts[2] = (LogPart){digits, decimal(digits, status)};
+    parts[3] = (LogPart){suffix, sizeof(suffix) - 1u};
+    return log_parts(parts, 4u);
+}
+
+uint32_t
+astra_log_assertion(const char *file, uint32_t line, const char *expression)
+{
+    char digits[10];
+    LogPart parts[5];
+    size_t file_length;
+    size_t expression_length;
+
+    if (file == NULL)
+        file = "?";
+    if (expression == NULL)
+        expression = "?";
+    file_length = strlen(file);
+    expression_length = strlen(expression);
+    if (file_length > UINT32_MAX || expression_length > UINT32_MAX)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    parts[0] = (LogPart){file, (uint32_t)file_length};
+    parts[1] = (LogPart){":", 1u};
+    parts[2] = (LogPart){digits, decimal(digits, line)};
+    parts[3] = (LogPart){": ", 2u};
+    parts[4] = (LogPart){expression, (uint32_t)expression_length};
+    return log_parts(parts, 5u);
 }
 
 static uint32_t

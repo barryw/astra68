@@ -17,7 +17,7 @@
  * containment checkable rather than merely intended.
  */
 
-#define ASTRA_VFS_EXT4_MOUNT_MAX 32u
+#define ASTRA_VFS_EXT4_MOUNT_MAX ASTRA_VFS_PATH_MAX
 /* The protocol's path plus the mount point prefix, with room for a separator. */
 #define ASTRA_VFS_EXT4_PATH_MAX (ASTRA_VFS_PATH_MAX + ASTRA_VFS_EXT4_MOUNT_MAX)
 

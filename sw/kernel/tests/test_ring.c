@@ -344,22 +344,16 @@ static void test_validation_no_advance_and_consumer_death(void)
            KERNEL_RING_INVALID_ARGUMENT);
     assert(kernel_ring_create(61u, area, 0u, 3u, 4u, &ring) ==
            KERNEL_RING_INVALID_ARGUMENT);
-    assert(kernel_ring_create(
-               61u, area, 0u, KERNEL_RING_ELEMENT_SIZE_MAX + 4u, 4u,
-               &ring) == KERNEL_RING_INVALID_ARGUMENT);
     assert(kernel_ring_create(61u, area, 0u, 16u, 3u, &ring) ==
            KERNEL_RING_INVALID_ARGUMENT);
     assert(kernel_ring_create(
-               61u, area, 0u, 16u, KERNEL_RING_CAPACITY_MAX + 1u,
-               &ring) == KERNEL_RING_INVALID_ARGUMENT);
-    assert(kernel_ring_create(
                61u, area, UINT32_MAX &
                    ~(KERNEL_RING_OFFSET_ALIGNMENT - 1u),
-               KERNEL_RING_ELEMENT_SIZE_MAX, KERNEL_RING_CAPACITY_MAX,
+               4096u, 1024u,
                &ring) == KERNEL_RING_INVALID_ARGUMENT);
     assert(kernel_ring_create(
                61u, area, KERNEL_PAGE_SIZE,
-               KERNEL_RING_ELEMENT_SIZE_MAX, 2u, &ring) ==
+               8192u, 2u, &ring) ==
            KERNEL_RING_INVALID_ARGUMENT);
     assert(ring == NULL);
 
@@ -391,6 +385,32 @@ static void test_validation_no_advance_and_consumer_death(void)
            KERNEL_RING_PEER_DEAD);
     kernel_ring_handle_release(
         ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_PRODUCER);
+    kernel_area_handle_release(area, NULL);
+    assert(kernel_ring_pool_valid() && kernel_area_pool_valid());
+}
+
+static void test_ring_shape_is_bounded_by_backing_area(void)
+{
+    KernelArea *area;
+    KernelRing *ring;
+
+    initialize_test();
+    assert(kernel_area_create(91u, 8u * KERNEL_PAGE_SIZE, 0u, &area) ==
+           KERNEL_AREA_OK);
+    assert(kernel_ring_create(91u, area, 0u, 4u, 2048u, &ring) ==
+           KERNEL_RING_OK);
+    kernel_ring_handle_release(
+        ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_PRODUCER);
+    kernel_ring_handle_release(
+        ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_CONSUMER);
+    assert(kernel_ring_create(91u, area, 0u, 8192u, 2u, &ring) ==
+           KERNEL_RING_OK);
+    kernel_ring_handle_release(
+        ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_PRODUCER);
+    kernel_ring_handle_release(
+        ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_CONSUMER);
+    assert(kernel_ring_create(91u, area, 0u, 16384u, 2u, &ring) ==
+           KERNEL_RING_INVALID_ARGUMENT);
     kernel_area_handle_release(area, NULL);
     assert(kernel_ring_pool_valid() && kernel_area_pool_valid());
 }
@@ -658,6 +678,7 @@ int main(void)
     test_header_batching_waits_and_wrap();
     test_overlap_corruption_and_creator_death_survival();
     test_validation_no_advance_and_consumer_death();
+    test_ring_shape_is_bounded_by_backing_area();
     test_missed_wakeup_and_wait_multiple();
     test_owner_death_wakes_waiters();
     test_clone_safe_kernel_copy_byte_ring();

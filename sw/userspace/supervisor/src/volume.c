@@ -157,39 +157,60 @@ supervisor_volume_is_mounted(void)
 }
 
 uint32_t
-supervisor_volume_read(const char *path, void *buffer, uint32_t capacity,
-                       uint32_t *length)
+supervisor_volume_read_alloc(const char *path, void **buffer,
+                             uint32_t *length)
 {
     ext4_file file;
-    uint8_t *out = buffer;
+    uint8_t *out = NULL;
+    uint64_t size;
     size_t moved = 0u;
     uint32_t done = 0u;
+    uint32_t status = ASTRA_VFS_OK;
 
     if (!volume_mounted || path == NULL || buffer == NULL || length == NULL) {
         return ASTRA_VFS_ERR_INVALID;
     }
+    *buffer = NULL;
     *length = 0u;
     if (ext4_fopen(&file, path, "rb") != EOK)
         return ASTRA_VFS_ERR_NOT_FOUND;
-    if (ext4_fsize(&file) > capacity) {
-        (void)ext4_fclose(&file);
-        return ASTRA_VFS_ERR_LIMIT;
+    size = ext4_fsize(&file);
+    if (size >= UINT32_MAX) {
+        status = ASTRA_VFS_ERR_LIMIT;
+    } else {
+        out = astra_runtime_allocate((size_t)size + 1u);
+        if (out == NULL)
+            status = ASTRA_VFS_ERR_LIMIT;
     }
-    while (done < capacity) {
+    while (status == ASTRA_VFS_OK && done < (uint32_t)size) {
         moved = 0u;
-        if (ext4_fread(&file, out + done, capacity - done, &moved) != EOK) {
-            (void)ext4_fclose(&file);
-            return ASTRA_VFS_ERR_IO;
-        }
-        if (moved == 0u)
+        if (ext4_fread(&file, out + done, (uint32_t)size - done,
+                       &moved) != EOK || moved == 0u ||
+            moved > (uint32_t)size - done) {
+            status = ASTRA_VFS_ERR_IO;
             break;
+        }
         done += (uint32_t)moved;
     }
-    if (ext4_fclose(&file) != EOK)
-        return ASTRA_VFS_ERR_IO;
+    if (ext4_fclose(&file) != EOK && status == ASTRA_VFS_OK)
+        status = ASTRA_VFS_ERR_IO;
+    if (status != ASTRA_VFS_OK || done != (uint32_t)size) {
+        astra_runtime_deallocate(out);
+        return status == ASTRA_VFS_OK ? ASTRA_VFS_ERR_IO : status;
+    }
+    out[done] = '\0';
+    *buffer = out;
     *length = done;
     return ASTRA_VFS_OK;
 }
+
+#ifdef ASTRA_SUPERVISOR_TEST
+void
+supervisor_volume_test_set_mounted(int mounted)
+{
+    volume_mounted = mounted;
+}
+#endif
 
 uint32_t
 supervisor_volume_source_open(const char *path, uint32_t *length)

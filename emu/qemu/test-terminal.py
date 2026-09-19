@@ -1061,10 +1061,27 @@ def warm_the_store(qemu, rom, image, temporary, boot_deadline,
         machine.close()
 
 
+def refresh_workspace_rom(rom):
+    workspace_rom = os.path.join(ROOT, "sw", "boot", "build",
+                                 "astra_boot.bin")
+
+    if os.path.realpath(rom) != os.path.realpath(workspace_rom):
+        return True
+    result = subprocess.run(
+        ["make", "-C", os.path.join(ROOT, "sw", "boot"),
+         "build/astra_boot.bin"], check=False)
+    if result.returncode != 0:
+        print("FAIL: could not refresh the workspace boot ROM")
+        return False
+    return True
+
+
 def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         report_timings, prepared_image, performance_only, vim_gate,
         network_only, vim_only, cxx_only, zsh_only, interface_layout_only):
     timings = []
+    if not refresh_workspace_rom(rom):
+        return 1
     with tempfile.TemporaryDirectory(prefix="astra-terminal-") as temporary:
         scratch = os.path.join(temporary, "card.img")
         shutil.copyfile(image, scratch)
@@ -1216,14 +1233,23 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
             # launcher. Run this last because the new window takes input focus.
             before = machine.sequence()
             machine.qmp.type_line(
-                "open APPS:InterfaceGallery.app --from-terminal; "
-                "print ASTRA-OPEN-$?; ps")
+                "open APPS:Missing.app; print ASTRA-OPEN-MISSING-$?")
             said = wait_for_command(machine,
-                                    ("ASTRA-OPEN-0",
-                                     "APPS:InterfaceGallery.app"),
+                                    ("open: application launch failed",
+                                     "ASTRA-OPEN-MISSING-1"),
                                     command_deadline, before)
             if said is None:
-                print("FAIL: Terminal could not launch Interface Gallery")
+                print("FAIL: missing application launch did not return 1")
+                return 1
+            before = machine.sequence()
+            machine.qmp.type_line(
+                "open APPS:InterfaceGallery.app; "
+                "print ASTRA-OPEN-$?; ps")
+            said = wait_for_command(
+                machine, ("ASTRA-OPEN-0", "APPS:InterfaceGallery.app"),
+                command_deadline, before)
+            if said is None:
+                print("FAIL: open did not start and release Interface Gallery")
                 return 1
 
             if report_timings:

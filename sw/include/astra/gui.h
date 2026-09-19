@@ -17,8 +17,8 @@
 
 /** Maximum counted UTF-8 bytes in a window title. */
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
-/** Maximum encoded bytes accepted for a title icon. */
-#define ASTRA_WINDOW_TITLE_ICON_BYTES_MAX UINT32_C(8192)
+/** Maximum encoded title-icon bytes carried by one shared area. */
+#define ASTRA_WINDOW_TITLE_ICON_BYTES_MAX ASTRA_AREA_SIZE_MAX
 
 /** Window roles used by compositor policy. */
 enum {

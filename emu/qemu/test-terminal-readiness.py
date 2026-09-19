@@ -2,6 +2,8 @@
 """The terminal gate must wait for command completion, not output silence."""
 
 import importlib.util
+import contextlib
+import io
 from pathlib import Path
 
 
@@ -61,5 +63,29 @@ assert keyboard.keys == [
     ("shift", "bracket_left"), ("shift", "bracket_right"),
     ("shift", "grave_accent"), ("shift", "2"), ("shift", "3"),
     ("shift", "6"), ("shift", "7")]
+
+
+class Result:
+    def __init__(self, returncode):
+        self.returncode = returncode
+
+
+commands = []
+original_run = terminal.subprocess.run
+terminal.subprocess.run = lambda command, **_kwargs: (
+    commands.append(command) or Result(0))
+workspace_rom = terminal.os.path.join(
+    terminal.ROOT, "sw", "boot", "build", "astra_boot.bin")
+assert terminal.refresh_workspace_rom(workspace_rom)
+assert commands == [["make", "-C",
+                     terminal.os.path.join(terminal.ROOT, "sw", "boot"),
+                     "build/astra_boot.bin"]]
+
+terminal.subprocess.run = lambda *_args, **_kwargs: Result(2)
+failure = io.StringIO()
+with contextlib.redirect_stdout(failure):
+    assert not terminal.refresh_workspace_rom(workspace_rom)
+assert "could not refresh the workspace boot ROM" in failure.getvalue()
+terminal.subprocess.run = original_run
 
 print("terminal command readiness test: PASS")

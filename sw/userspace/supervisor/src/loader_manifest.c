@@ -2,6 +2,7 @@
 
 #include <astra/bytes.h>
 #include <astra/manifest.h>
+#include <astra/runtime.h>
 
 static int copy(char *out, uint32_t capacity, const char *text)
 {
@@ -137,18 +138,39 @@ int supervisor_manifest_parse(char *text, uint32_t length,
     if (text == NULL || manifest == NULL || length == 0u)
         return 0;
     (void)memset(manifest, 0, sizeof(*manifest));
-    for (uint32_t at = 0u; at <= length; ++at) {
+    while (start < length) {
+        uint32_t at = start;
+        char *line;
+        char *owned = NULL;
         int result;
-        char separator;
 
-        if (at != length && text[at] != '\n' && text[at] != '\r')
-            continue;
-        separator = text[at];
-        text[at] = '\0';
-        result = parse_line(&text[start],
+        while (at < length && text[at] != '\n' && text[at] != '\r')
+            ++at;
+        if (at < length) {
+            char separator = text[at];
+
+            text[at] = '\0';
+            line = &text[start];
+            if (separator == '\r' && at + 1u < length &&
+                text[at + 1u] == '\n')
+                ++at;
+        } else {
+            uint32_t tail = length - start;
+
+            owned = astra_runtime_reallocate(NULL, (size_t)tail + 1u);
+            if (owned == NULL) {
+                (void)memset(manifest, 0, sizeof(*manifest));
+                return 0;
+            }
+            (void)memcpy(owned, &text[start], tail);
+            owned[tail] = '\0';
+            line = owned;
+        }
+        result = parse_line(line,
                             manifest->count < SUPERVISOR_MANIFEST_ENTRY_MAX ?
                                 &manifest->entries[manifest->count] :
                                 &discard);
+        astra_runtime_deallocate(owned);
         if (result == 0) {
             (void)memset(manifest, 0, sizeof(*manifest));
             return 0;
@@ -160,9 +182,7 @@ int supervisor_manifest_parse(char *text, uint32_t length,
         }
         if (result == 1)
             ++manifest->count;
-        if (separator == '\r' && at < length && text[at + 1u] == '\n')
-            ++at;
-        start = at + 1u;
+        start = at + (at < length ? 1u : 0u);
     }
     return manifest->count != 0u;
 }

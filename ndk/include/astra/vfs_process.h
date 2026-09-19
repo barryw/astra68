@@ -111,6 +111,14 @@ uint32_t astra_process_read_file(AstraProcessFilesystem *filesystem,
                                  const char *path, void *bytes,
                                  uint32_t capacity, uint32_t *length);
 /**
+ * Read an entire file into heap storage, with one trailing NUL byte excluded
+ * from `length`. The caller owns `*bytes` and releases it with
+ * astra_runtime_deallocate().
+ */
+uint32_t astra_process_read_file_alloc(AstraProcessFilesystem *filesystem,
+                                       const char *path, void **bytes,
+                                       uint32_t *length);
+/**
  * Detach and close a process Filesystem Kit binding.
  * @param filesystem Open binding to close.
  */

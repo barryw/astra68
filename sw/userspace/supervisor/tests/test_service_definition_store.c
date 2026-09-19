@@ -4,7 +4,18 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+void *astra_runtime_reallocate(void *pointer, size_t size)
+{
+    return realloc(pointer, size);
+}
+
+void astra_runtime_deallocate(void *pointer)
+{
+    free(pointer);
+}
 
 int main(void)
 {

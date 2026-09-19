@@ -171,10 +171,10 @@ runtime-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 	@python3 ../../../tools/library_info.py $< | \
 		grep -q '^runtime.library.1 1.7.0 ABI 1.7$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
-	@$(READELF) -dW $< | grep 'SONAME.*runtime.library.1' >/dev/null
+	@$(READELF) -dW $< | grep -F 'Library soname: [runtime.library.1]' >/dev/null
 	@$(READELF) -dW $< | grep 'BIND_NOW' >/dev/null
 	@test "$$($(READELF) -dW $< | \
-		grep -c 'NEEDED.*compiler.library.1')" = 1
+		grep -Fc 'Shared library: [compiler.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 1
 	@test "$$($(READELF) -dW $< | awk '/TEXTREL/{n++} END{print n+0}')" = 0
 	@test "$$($(READELF) -SW $< | \
@@ -384,7 +384,7 @@ dynamic-link-contract: $(DYNAMIC_CONTRACT_PROGRAM)
 	@$(READELF) -lW $< | grep -q ' DYNAMIC '
 	@$(READELF) -lW $< | grep -q ' INTERP '
 	@$(READELF) -p .interp $< | grep -q 'loader.library.1'
-	@$(READELF) -dW $< | grep -q 'NEEDED.*dynamic.library.1'
+	@$(READELF) -dW $< | grep -Fq 'Shared library: [dynamic.library.1]'
 	@$(READELF) -dW $(DYNAMIC_CONTRACT_LIBRARY) | grep -q 'SYMBOLIC'
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'
 	@$(READELF) -rW $< | grep -Eq 'R_68K_(JMP_SLOT|GLOB_DAT)'

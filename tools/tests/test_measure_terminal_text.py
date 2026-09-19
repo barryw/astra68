@@ -39,19 +39,35 @@ def test_production_qmp_default(monkeypatch):
 def test_key_edges_are_atomic(monkeypatch):
     observed = []
     qmp = object.__new__(module.Qmp)
-    qmp.execute = lambda command, arguments=None: observed.append(
-        (command, arguments))
-    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    qmp.input_events = lambda events: observed.append(events)
 
     qmp.key("a")
 
-    assert observed == [("input-send-event", {"events": [
+    assert observed == [[
         {"type": "key", "data": {"down": True,
          "key": {"type": "qcode", "data": "a"}}},
         {"type": "key", "data": {"down": False,
          "key": {"type": "qcode", "data": "a"}}},
-    ]})]
+    ]]
     assert len(observed) != 2
+
+
+def test_input_waits_for_capacity_and_drain(monkeypatch):
+    observed = []
+    statuses = iter((30, 28, 30, 28))
+    qmp = object.__new__(module.Qmp)
+    qmp.word = lambda address: observed.append(("status", address)) or \
+        next(statuses)
+    qmp.execute = lambda command, arguments=None: observed.append(
+        (command, arguments))
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    events = [{"type": "key"}, {"type": "key"}]
+
+    qmp.input_events(events)
+
+    assert observed[0:2] == [("status", module.INPUT_STATUS)] * 2
+    assert observed[2] == ("input-send-event", {"events": events})
+    assert observed[3:] == [("status", module.INPUT_STATUS)] * 2
 
 
 def test_interactive_command_is_rejected_before_input(monkeypatch):

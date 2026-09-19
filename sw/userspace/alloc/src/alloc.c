@@ -16,16 +16,23 @@ fill_zero(void *destination, size_t count)
     }
 }
 
-static size_t
-align_up(size_t value, size_t alignment)
+static int
+align_up(size_t value, size_t alignment, size_t *out)
 {
-    return (value + (alignment - 1u)) & ~(alignment - 1u);
+    if (value > (size_t)-1 - (alignment - 1u))
+        return 0;
+    *out = (value + (alignment - 1u)) & ~(alignment - 1u);
+    return 1;
 }
 
 static uint32_t
 class_stride(uint32_t size)
 {
-    size_t stride = align_up(size, ASTRA_ALLOC_ALIGNMENT);
+    size_t stride;
+
+    if (!align_up(size, ASTRA_ALLOC_ALIGNMENT, &stride) ||
+        stride > UINT32_MAX)
+        return 0u;
 
     /* A free slot carries the next free index in its first bytes. */
     if (stride < sizeof(uint32_t)) {
@@ -37,26 +44,24 @@ class_stride(uint32_t size)
 static uint32_t
 bitmap_words(uint32_t count)
 {
-    return (count + 31u) / 32u;
+    return count / 32u + (count % 32u != 0u);
 }
 
 static int
-classes_valid(const AstraAllocClass *classes, uint32_t class_count)
+reserve(size_t *cursor, size_t count, size_t bytes, size_t alignment,
+        size_t *offset)
 {
-    uint32_t index;
+    size_t start;
+    size_t span;
 
-    if (classes == NULL || class_count == 0u ||
-        class_count > ASTRA_ALLOC_CLASS_MAX) {
+    if (!align_up(*cursor, alignment, &start) ||
+        (count != 0u && bytes > (size_t)-1 / count))
         return 0;
-    }
-    for (index = 0u; index < class_count; ++index) {
-        if (classes[index].size == 0u || classes[index].count == 0u) {
-            return 0;
-        }
-        if (index != 0u && classes[index].size <= classes[index - 1u].size) {
-            return 0;
-        }
-    }
+    span = count * bytes;
+    if (start > (size_t)-1 - span)
+        return 0;
+    *offset = start;
+    *cursor = start + span;
     return 1;
 }
 
@@ -69,15 +74,40 @@ layout(AstraAllocator *allocator, const AstraAllocClass *classes,
        uint32_t class_count, uint8_t *arena)
 {
     size_t cursor = 0u;
+    size_t pool_offset;
+    size_t metrics_offset;
+    size_t names_offset;
     uint32_t index;
 
+    if (classes == NULL || class_count == 0u ||
+        !reserve(&cursor, class_count, sizeof(AstraAllocPool),
+                 _Alignof(AstraAllocPool), &pool_offset) ||
+        !reserve(&cursor, class_count, sizeof(AstraAllocClassMetrics),
+                 _Alignof(AstraAllocClassMetrics), &metrics_offset) ||
+        !reserve(&cursor, class_count, sizeof(AstraAllocClassMetricNames),
+                 _Alignof(AstraAllocClassMetricNames), &names_offset))
+        return 0u;
+    if (allocator != NULL) {
+        allocator->pool = (AstraAllocPool *)(void *)(arena + pool_offset);
+        allocator->metrics.per_class =
+            (AstraAllocClassMetrics *)(void *)(arena + metrics_offset);
+        allocator->metric_names =
+            (AstraAllocClassMetricNames *)(void *)(arena + names_offset);
+    }
     for (index = 0u; index < class_count; ++index) {
         uint32_t count = classes[index].count;
         uint32_t stride = class_stride(classes[index].size);
-        size_t bitmap_offset = align_up(cursor, _Alignof(uint32_t));
-        size_t blocks_offset =
-            align_up(bitmap_offset + (size_t)bitmap_words(count) * 4u,
-                     ASTRA_ALLOC_ALIGNMENT);
+        size_t bitmap_offset;
+        size_t blocks_offset;
+
+        if (classes[index].size == 0u || count == 0u || stride == 0u ||
+            (index != 0u &&
+             classes[index].size <= classes[index - 1u].size) ||
+            !reserve(&cursor, bitmap_words(count), sizeof(uint32_t),
+                     _Alignof(uint32_t), &bitmap_offset) ||
+            !reserve(&cursor, count, stride, ASTRA_ALLOC_ALIGNMENT,
+                     &blocks_offset))
+            return 0u;
 
         if (allocator != NULL) {
             AstraAllocPool *pool = &allocator->pool[index];
@@ -88,7 +118,6 @@ layout(AstraAllocator *allocator, const AstraAllocClass *classes,
             pool->count = count;
             pool->usable = classes[index].size;
         }
-        cursor = blocks_offset + (size_t)stride * count;
     }
     return cursor;
 }
@@ -96,10 +125,29 @@ layout(AstraAllocator *allocator, const AstraAllocClass *classes,
 size_t
 astra_alloc_arena_bytes(const AstraAllocClass *classes, uint32_t class_count)
 {
-    if (!classes_valid(classes, class_count)) {
-        return 0u;
-    }
     return layout(NULL, classes, class_count, NULL);
+}
+
+static void
+metric_name(char out[ASTRA_METRIC_NAME_MAX], uint32_t index,
+            const char *suffix)
+{
+    char digits[10];
+    uint32_t count = 0u;
+    uint32_t at = 0u;
+
+    do {
+        digits[count++] = (char)('0' + index % 10u);
+        index /= 10u;
+    } while (index != 0u);
+    out[at++] = 'c'; out[at++] = 'l'; out[at++] = 'a'; out[at++] = 's';
+    out[at++] = 's';
+    while (count != 0u)
+        out[at++] = digits[--count];
+    out[at++] = '.';
+    while (*suffix != '\0')
+        out[at++] = *suffix++;
+    out[at] = '\0';
 }
 
 AstraAllocStatus
@@ -115,11 +163,10 @@ astra_alloc_init(AstraAllocator *allocator, const AstraAllocClass *classes,
     if (((uintptr_t)arena & (ASTRA_ALLOC_ALIGNMENT - 1u)) != 0u) {
         return ASTRA_ALLOC_INVALID_ARGUMENT;
     }
-    if (!classes_valid(classes, class_count)) {
+    required = layout(NULL, classes, class_count, NULL);
+    if (required == 0u) {
         return ASTRA_ALLOC_CLASS_INVALID;
     }
-
-    required = layout(NULL, classes, class_count, NULL);
     if (required > arena_bytes) {
         return ASTRA_ALLOC_ARENA_TOO_SMALL;
     }
@@ -132,6 +179,12 @@ astra_alloc_init(AstraAllocator *allocator, const AstraAllocClass *classes,
     for (index = 0u; index < class_count; ++index) {
         AstraAllocPool *pool = &allocator->pool[index];
         uint32_t slot = pool->count;
+
+        metric_name(allocator->metric_names[index].live, index, "live");
+        metric_name(allocator->metric_names[index].peak_live, index,
+                    "peak_live");
+        metric_name(allocator->metric_names[index].failures, index,
+                    "failures");
 
         pool->free_head = ASTRA_ALLOC_END;
         while (slot-- != 0u) {
@@ -367,7 +420,8 @@ astra_alloc_valid(const AstraAllocator *allocator)
     uint32_t live_total = 0u;
 
     if (allocator == NULL || allocator->pool_count == 0u ||
-        allocator->pool_count > ASTRA_ALLOC_CLASS_MAX) {
+        allocator->pool == NULL || allocator->metrics.per_class == NULL ||
+        allocator->metric_names == NULL) {
         return 0;
     }
 
@@ -417,39 +471,21 @@ astra_alloc_valid(const AstraAllocator *allocator)
     return live_total == allocator->metrics.live_blocks;
 }
 
-/*
- * Per-class rows are named by index rather than by size: a service's class
- * table is part of its published budget, and the sizes are already reported by
- * whoever configured it.
- */
-static const char *const class_live_names[ASTRA_ALLOC_CLASS_MAX] = {
-    "class0.live", "class1.live", "class2.live", "class3.live",
-    "class4.live", "class5.live", "class6.live", "class7.live",
-};
-
-static const char *const class_peak_names[ASTRA_ALLOC_CLASS_MAX] = {
-    "class0.peak_live", "class1.peak_live", "class2.peak_live",
-    "class3.peak_live", "class4.peak_live", "class5.peak_live",
-    "class6.peak_live", "class7.peak_live",
-};
-
-static const char *const class_failure_names[ASTRA_ALLOC_CLASS_MAX] = {
-    "class0.failures", "class1.failures", "class2.failures",
-    "class3.failures", "class4.failures", "class5.failures",
-    "class6.failures", "class7.failures",
-};
-
 uint32_t
 astra_alloc_sampler(void *context, AstraMetricSample *out, uint32_t capacity)
 {
     const AstraAllocator *allocator = context;
     const AstraAllocMetrics *metrics;
+    uint32_t required;
     uint32_t written = 0u;
     uint32_t index;
 
-    if (allocator == NULL || out == NULL || capacity < 10u) {
+    if (allocator == NULL ||
+        allocator->pool_count > (UINT32_MAX - 10u) / 3u)
         return 0u;
-    }
+    required = 10u + allocator->pool_count * 3u;
+    if (out == NULL || capacity < required)
+        return required;
     metrics = &allocator->metrics;
 
     out[written].name = "allocations";
@@ -474,14 +510,11 @@ astra_alloc_sampler(void *context, AstraMetricSample *out, uint32_t capacity)
     out[written++].value = allocator->pool_count;
 
     for (index = 0u; index < allocator->pool_count; ++index) {
-        if (capacity - written < 3u) {
-            return written;
-        }
-        out[written].name = class_live_names[index];
+        out[written].name = allocator->metric_names[index].live;
         out[written++].value = metrics->per_class[index].live;
-        out[written].name = class_peak_names[index];
+        out[written].name = allocator->metric_names[index].peak_live;
         out[written++].value = metrics->per_class[index].peak_live;
-        out[written].name = class_failure_names[index];
+        out[written].name = allocator->metric_names[index].failures;
         out[written++].value = metrics->per_class[index].failures;
     }
     return written;

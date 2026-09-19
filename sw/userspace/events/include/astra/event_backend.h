@@ -38,8 +38,6 @@
  * depends on one check has one check to get wrong.
  */
 
-#define ASTRA_EVENTS_NODE_MAX 8u
-
 typedef struct AstraEventsNode {
     uint8_t  used;
     uint8_t  kind;
@@ -61,8 +59,11 @@ typedef struct AstraEventsBackend {
     const AstraEventStore *store;
     const AstraEventStore *previous;
     const AstraEventCatalog *catalog;
-    AstraEventsNode nodes[ASTRA_EVENTS_NODE_MAX];
+    AstraEventsNode *nodes;
+    uint32_t node_capacity;
 } AstraEventsBackend;
+
+#define ASTRA_EVENTS_BACKEND_INIT {0}
 
 int astra_events_backend_init(AstraEventsBackend *backend,
                               const AstraEventStore *store,

@@ -22,6 +22,20 @@ static uint32_t direct_forks;
 static uint32_t port_fork_rebinds;
 static uint32_t next_semaphore = 100u;
 static uint32_t seeds;
+static int fail_allocate;
+static int whole_file_enabled;
+static uint32_t whole_file_moved;
+static uint64_t whole_file_node_size;
+static const uint8_t *whole_file_bytes;
+static const uint8_t default_file_content[] = "hello";
+static const uint8_t *mock_file_content = default_file_content;
+static uint32_t mock_file_length = 5u;
+
+void *astra_runtime_allocate(size_t size)
+{
+    return fail_allocate ? NULL : malloc(size);
+}
+void astra_runtime_deallocate(void *pointer) { free(pointer); }
 
 uint32_t astra_log_failure(const char *operation, uint32_t status)
 {
@@ -113,13 +127,16 @@ uint32_t astra_assign_resolve(const AstraAssignTable *table,
                               uint32_t rights, uint32_t member, char *wire,
                               uint32_t capacity, const AstraAssign **assign)
 {
-    (void)table;
     (void)path;
     (void)rights;
     (void)member;
-    (void)wire;
-    (void)capacity;
-    (void)assign;
+    if (whole_file_enabled != 0 && table != NULL && table->count != 0u &&
+        wire != NULL && capacity >= 2u && assign != NULL) {
+        wire[0] = '/';
+        wire[1] = '\0';
+        *assign = &table->entries[0];
+        return ASTRA_VFS_OK;
+    }
     return ASTRA_VFS_ERR_NOT_FOUND;
 }
 
@@ -129,9 +146,13 @@ uint32_t astra_vfs_port_read_path(AstraVfsClient *client, const char *path,
 {
     (void)client;
     (void)path;
-    (void)bytes;
-    (void)moved;
-    (void)node_size;
+    if (whole_file_enabled != 0 && bytes != NULL && moved != NULL &&
+        node_size != NULL) {
+        *bytes = whole_file_bytes;
+        *moved = whole_file_moved;
+        *node_size = whole_file_node_size;
+        return ASTRA_VFS_OK;
+    }
     return ASTRA_VFS_ERR_UNSUPPORTED;
 }
 
@@ -283,19 +304,18 @@ uint32_t astra_filesystem_file_info(const AstraFile *file,
                                     AstraFileInfo *info)
 {
     assert(file->_private_file == 1u);
-    info->byte_size = 5u;
+    info->byte_size = mock_file_length;
     return ASTRA_VFS_OK;
 }
 
 uint32_t astra_filesystem_read(AstraFile *file, void *bytes,
                                uint32_t capacity, uint32_t *moved)
 {
-    static const char content[] = "hello";
     uint32_t offset = (uint32_t)file->_private_offset;
     uint32_t count = capacity < 2u ? capacity : 2u;
 
-    if (count > 5u - offset) count = 5u - offset;
-    memcpy(bytes, content + offset, count);
+    if (count > mock_file_length - offset) count = mock_file_length - offset;
+    memcpy(bytes, mock_file_content + offset, count);
     file->_private_offset += count;
     *moved = count;
     return ASTRA_VFS_OK;
@@ -593,6 +613,64 @@ int main(void)
         assert(astra_process_read_file(&filesystem, "APP:test", bytes, 4u,
                                        &length) == ASTRA_VFS_ERR_LIMIT);
         assert(closes == 2u);
+        {
+            void *allocated = NULL;
+            static uint8_t large[65u * 128u];
+
+            assert(astra_process_read_file_alloc(
+                       &filesystem, "APP:test", &allocated, &length) ==
+                   ASTRA_VFS_OK);
+            assert(length == 5u && memcmp(allocated, "hello\0", 6u) == 0);
+            astra_runtime_deallocate(allocated);
+            memset(large, 0xa5, sizeof(large));
+            mock_file_content = large;
+            mock_file_length = sizeof(large);
+            assert(astra_process_read_file_alloc(
+                       &filesystem, "APP:test", &allocated, &length) ==
+                   ASTRA_VFS_OK);
+            assert(length == sizeof(large));
+            assert(memcmp(allocated, large, sizeof(large)) == 0);
+            assert(((uint8_t *)allocated)[length] == '\0');
+            astra_runtime_deallocate(allocated);
+            fail_allocate = 1;
+            assert(astra_process_read_file_alloc(
+                       &filesystem, "APP:test", &allocated, &length) ==
+                   ASTRA_VFS_ERR_LIMIT);
+            fail_allocate = 0;
+            assert(allocated == NULL && length == 0u);
+            mock_file_content = default_file_content;
+            mock_file_length = 5u;
+            assert(astra_process_read_file_alloc(
+                       &filesystem, "APP:test", NULL, &length) ==
+                   ASTRA_VFS_ERR_INVALID);
+        }
+    }
+
+    {
+        AstraStartupInfo startup = { .capabilities_address = 1u };
+        AstraProcessFilesystem filesystem = ASTRA_PROCESS_FILESYSTEM_INIT;
+        char bytes[5];
+        uint32_t length = 0u;
+
+        filesystem.filesystem._private_assigns = (const void *)1u;
+        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        whole_file_enabled = 1;
+        whole_file_bytes = (const uint8_t *)"fast";
+        whole_file_moved = 4u;
+        whole_file_node_size = 4u;
+        assert(astra_process_read_file(&filesystem, "APP:test", bytes,
+                                       sizeof(bytes), &length) ==
+               ASTRA_VFS_OK);
+        assert(length == 4u && memcmp(bytes, "fast", 4u) == 0);
+
+        whole_file_bytes = (const uint8_t *)"evil";
+        whole_file_node_size = UINT64_C(0x100000004);
+        assert(astra_process_read_file(&filesystem, "APP:test", bytes,
+                                       sizeof(bytes), &length) ==
+               ASTRA_VFS_OK);
+        assert(length == 5u && memcmp(bytes, "hello", 5u) == 0);
+        whole_file_enabled = 0;
+        astra_process_vfs_close();
     }
 
     puts("astra process library resolver: PASS");

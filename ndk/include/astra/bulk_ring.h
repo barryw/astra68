@@ -33,12 +33,8 @@ ASTRA_EXTERN_C_BEGIN
 #define ASTRA_BULK_RING_OFFSET_ALIGNMENT 64u
 /** Smallest fixed element size. */
 #define ASTRA_BULK_RING_ELEMENT_SIZE_MIN 4u
-/** Largest fixed element size before area-size validation. */
-#define ASTRA_BULK_RING_ELEMENT_SIZE_MAX 4096u
 /** Smallest power-of-two element capacity. */
 #define ASTRA_BULK_RING_CAPACITY_MIN 2u
-/** Largest power-of-two element capacity before area-size validation. */
-#define ASTRA_BULK_RING_CAPACITY_MAX 1024u
 /** Notification flag that closes a ring after detected shared corruption. */
 #define ASTRA_BULK_RING_NOTIFY_CORRUPT (1u << 0)
 /** Producer endpoint role supplied to attach and notification operations. */
@@ -145,8 +141,10 @@ typedef struct AstraBulkRing {
  *
  * @param area Area handle with administer rights.
  * @param offset 64-byte-aligned ring offset within the area.
- * @param element_size Fixed four-byte-aligned element size from 4 to 4096.
- * @param capacity Power-of-two element count from 2 to 1024.
+ * @param element_size Fixed four-byte-aligned element size. The header and
+ * payload must fit in the backing area and the 32-bit ABI size field.
+ * @param capacity Power-of-two element count. The complete ring must fit in
+ * the backing area and the 32-bit ABI size field.
  * @param[out] endpoints Empty pair receiving both move-only endpoints.
  * @return ::ASTRA_OK or a validation, permission, peer-death, overlap, or
  *         resource-limit error.

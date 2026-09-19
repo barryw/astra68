@@ -217,17 +217,17 @@ libc-library-contract: $(LIBC_LIBRARY)
 	@python3 ../../../tools/library_info.py $(LIBC_LIBRARY) | \
 		grep -q '^libc.library.1 1.0.0 ABI 1.0$$'
 	@$(READELF) -hW $(LIBC_LIBRARY) | grep -q 'Type:.*DYN'
-	@$(READELF) -dW $(LIBC_LIBRARY) | grep -q 'SONAME.*libc.library.1'
+	@$(READELF) -dW $(LIBC_LIBRARY) | grep -Fq 'Library soname: [libc.library.1]'
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
-		grep -c 'NEEDED.*runtime.library.1')" = 1
+		grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
-		grep -c 'NEEDED.*streams.library.1')" = 1
+		grep -Fc 'Shared library: [streams.library.1]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
-		grep -c 'NEEDED.*filesystem.library.2')" = 1
+		grep -Fc 'Shared library: [filesystem.library.2]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
-		grep -c 'NEEDED.*compiler.library.1')" = 1
+		grep -Fc 'Shared library: [compiler.library.1]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
-		grep -c 'NEEDED.*network.library.1')" = 1
+		grep -Fc 'Shared library: [network.library.1]')" = 1
 	@$(READELF) -dW $(LIBC_LIBRARY) | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $(LIBC_LIBRARY) | grep -q 'TEXTREL'
 	@$(READELF) -lW $(LIBC_LIBRARY) | grep -q ' GNU_RELRO '
@@ -318,7 +318,8 @@ $(PTHREAD_TEST): src/pthread.c tests/test_pthread.c
 
 $(RESOURCE_TEST): src/resource.c tests/test_resource.c
 	@mkdir -p $(@D)
-	$(HOST_CC) $(COMMON_FLAGS) $(HOST_RESOURCE_DEFINES) -O2 $^ -o $@
+	$(HOST_CC) -I../../include $(COMMON_FLAGS) $(HOST_RESOURCE_DEFINES) -O2 \
+		$^ -o $@
 
 $(SCHEDULING_TEST): src/scheduling.c tests/test_scheduling.c
 	@mkdir -p $(@D)

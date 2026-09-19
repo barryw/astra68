@@ -1,9 +1,11 @@
 #include <vfs_host.h>
 
 #include <astra/syscall.h>
+#include <astra/runtime.h>
 #include <astra/vfs_path.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_union.h>
+
 
 uint32_t supervisor_vfs_read(const char *path, void *buffer,
                              uint32_t capacity, uint32_t *length)
@@ -56,4 +58,57 @@ uint32_t supervisor_vfs_read(const char *path, void *buffer,
         return status == ASTRA_VFS_OK && *length == (uint32_t)size ?
             ASTRA_VFS_OK : ASTRA_VFS_ERR_IO;
     }
+}
+
+uint32_t supervisor_vfs_read_alloc(const char *path, void **buffer,
+                                   uint32_t *length)
+{
+    AstraVfsClient *client = NULL;
+    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
+    uint64_t size = 0u;
+    uint16_t kind = 0u;
+    uint8_t *bytes = NULL;
+    uint32_t status;
+    char wire[ASTRA_VFS_PATH_MAX];
+
+    if (path == NULL || buffer == NULL || length == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    *buffer = NULL;
+    *length = 0u;
+    status = astra_vfs_assign_open(
+        supervisor_assigns(), path, ASTRA_RIGHT_READ, ASTRA_VFS_OPEN_READ,
+        supervisor_vfs_assign_client, NULL, wire, sizeof(wire), &file, &size,
+        &kind, &client, NULL);
+    if (status == ASTRA_VFS_OK &&
+        (kind != ASTRA_VFS_KIND_FILE || size >= UINT32_MAX))
+        status = ASTRA_VFS_ERR_LIMIT;
+    if (status == ASTRA_VFS_OK) {
+        bytes = astra_runtime_allocate((size_t)size + 1u);
+        if (bytes == NULL)
+            status = ASTRA_VFS_ERR_LIMIT;
+    }
+    while (status == ASTRA_VFS_OK && *length < size) {
+        uint32_t moved = 0u;
+
+        status = astra_vfs_port_read_bulk(
+            client, file, *length, bytes + *length,
+            (uint32_t)size - *length, &moved);
+        if (status != ASTRA_VFS_OK || moved == 0u)
+            break;
+        *length += moved;
+    }
+    if (file != ASTRA_VFS_FILE_INVALID &&
+        astra_vfs_close(client, file) != ASTRA_VFS_OK &&
+        status == ASTRA_VFS_OK)
+        status = ASTRA_VFS_ERR_IO;
+    if (status == ASTRA_VFS_OK && *length != size)
+        status = ASTRA_VFS_ERR_IO;
+    if (status != ASTRA_VFS_OK) {
+        astra_runtime_deallocate(bytes);
+        *length = 0u;
+        return status;
+    }
+    bytes[*length] = '\0';
+    *buffer = bytes;
+    return ASTRA_VFS_OK;
 }

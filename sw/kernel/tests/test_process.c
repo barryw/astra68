@@ -842,6 +842,7 @@ static uint32_t host_command_count;
 static uint32_t host_channel_open_calls;
 static uint32_t host_channel_close_calls;
 static uint32_t host_channel_physical;
+static uint32_t host_channel_byte_size;
 static uint32_t host_channel_slot;
 static uint32_t host_channel_kick_calls;
 static uint32_t host_channel_kick_slot;
@@ -887,8 +888,11 @@ uint32_t kernel_platform_host_channel_open(
 {
     assert(owner != 0u && host_generation == host_state.host_generation);
     assert(channel_generation != 0u && slot < KERNEL_THREAD_MAX);
-    assert(byte_size == KERNEL_PAGE_SIZE && command_capacity == 1u);
+    assert(byte_size >= ASTRA_HOST_CHANNEL_HEADER_SIZE +
+                        ASTRA_HOST_COMMAND_SIZE &&
+           byte_size <= KERNEL_PAGE_SIZE && command_capacity == 1u);
     host_channel_physical = physical_buffer;
+    host_channel_byte_size = byte_size;
     host_channel_slot = slot;
     host_channel_states[slot].state_flags = ASTRA_HOST_STATE_READY;
     host_channel_states[slot].generation = channel_generation;
@@ -943,7 +947,7 @@ bool kernel_platform_host_channel_completion(
 
     if (state == NULL || slot >= KERNEL_THREAD_MAX ||
         physical_buffer != host_channel_physical ||
-        byte_size != KERNEL_PAGE_SIZE || command_capacity != 1u ||
+        byte_size != host_channel_byte_size || command_capacity != 1u ||
         host_channel_states[slot].generation == 0u)
         return false;
     *state = host_channel_states[slot];
@@ -991,6 +995,7 @@ static void reset_host_device(void)
     host_channel_open_calls = 0u;
     host_channel_close_calls = 0u;
     host_channel_physical = 0u;
+    host_channel_byte_size = 0u;
     host_channel_slot = UINT32_MAX;
     host_channel_kick_calls = 0u;
     host_channel_kick_slot = UINT32_MAX;
@@ -1047,7 +1052,7 @@ void kernel_process_fault_report(uint32_t process_id, uint32_t thread_id,
 
 static uint32_t diagnostic_log_reports;
 static uint32_t last_diagnostic_process;
-static char last_diagnostic_text[ASTRA_LOG_MAX_BYTES + 1u];
+static char last_diagnostic_text[ASTRA_EVENT_ARGUMENT_MAX + 1u];
 static uint32_t last_diagnostic_length;
 
 static uint16_t last_diagnostic_flags;
@@ -7062,13 +7067,22 @@ static void test_host_admission(void)
     memset(&channel, 0, sizeof(channel));
     channel.size = sizeof(channel);
     channel.buffer = buffer.handle;
-    channel.byte_size = KERNEL_PAGE_SIZE;
+    channel.byte_size = ASTRA_HOST_CHANNEL_HEADER_SIZE +
+                        ASTRA_HOST_COMMAND_SIZE - 1u;
     channel.command_capacity = 1u;
     assert(kernel_user_copy_to_asm(user_request, &channel, sizeof(channel)) ==
            KERNEL_USER_COPY_OK);
     registers[0] = ASTRA_SYSCALL_HOST_CHANNEL_OPEN;
     registers[1] = lease_handle;
     registers[2] = user_request;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(host_channel_open_calls == 0u);
+    channel.byte_size = ASTRA_HOST_CHANNEL_HEADER_SIZE +
+                        ASTRA_HOST_COMMAND_SIZE;
+    assert(kernel_user_copy_to_asm(user_request, &channel, sizeof(channel)) ==
+           KERNEL_USER_COPY_OK);
     assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
            KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);

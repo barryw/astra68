@@ -204,6 +204,7 @@ python3 emu/qemu/test-block.py "$(./emu/qemu/build.sh host)"
 python3 emu/qemu/test-input.py "$(./emu/qemu/build.sh host)"
 
 # the terminal end to end: types over QMP, judges the character plane   (beast)
+# The gate refreshes this workspace ROM before it boots.
 python3 emu/qemu/test-terminal.py /tmp/qemu-final-build/qemu-system-m68k \
     sw/boot/build/astra_boot.bin --image /tmp/part.img
 

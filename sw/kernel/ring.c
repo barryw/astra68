@@ -82,6 +82,28 @@ static bool valid_ring(const KernelRing *ring)
            ring->state >= KERNEL_RING_OPEN && ring->state <= KERNEL_RING_CLOSING;
 }
 
+static bool ring_shape_valid(bool kernel_copy, uint32_t area_size,
+                             uint32_t offset, uint32_t element_size,
+                             uint32_t capacity, uint32_t *total)
+{
+    uint64_t bytes;
+
+    if (total == NULL ||
+        (offset & (KERNEL_RING_OFFSET_ALIGNMENT - 1u)) != 0u ||
+        (kernel_copy ? element_size != 1u :
+                       (element_size < KERNEL_RING_ELEMENT_SIZE_MIN ||
+                        (element_size & 3u) != 0u)) ||
+        capacity < KERNEL_RING_CAPACITY_MIN || capacity >= 0x80000000u ||
+        !astra_u32_is_power_of_two(capacity))
+        return false;
+    bytes = (uint64_t)KERNEL_RING_HEADER_SIZE +
+            (uint64_t)element_size * capacity;
+    if (bytes > UINT32_MAX || offset > area_size || bytes > area_size - offset)
+        return false;
+    *total = (uint32_t)bytes;
+    return true;
+}
+
 static void reset_ring(KernelRing *ring, uint8_t slot)
 {
     uint32_t generation = ring->generation;
@@ -250,28 +272,17 @@ KernelRingStatus kernel_ring_create_flagged(
     uint16_t ring_slot;
     KernelObjectCacheStatus cache_status;
     AstraBulkRingHeader header;
-    uint64_t total_size;
+    uint32_t total_size;
     bool kernel_copy =
         (flags & KERNEL_RING_CREATE_KERNEL_COPY) != 0u;
 
     if (owner == 0u || area == NULL || result == NULL ||
         !kernel_area_live(area) ||
-        (flags & ~ASTRA_BULK_RING_CREATE_FLAG_MASK) != 0u ||
-        (offset & (KERNEL_RING_OFFSET_ALIGNMENT - 1u)) != 0u ||
-        (kernel_copy ? element_size != 1u :
-                       (element_size < KERNEL_RING_ELEMENT_SIZE_MIN ||
-                        element_size > KERNEL_RING_ELEMENT_SIZE_MAX ||
-                        (element_size & 3u) != 0u)) ||
-        capacity < KERNEL_RING_CAPACITY_MIN ||
-        (!kernel_copy && capacity > KERNEL_RING_CAPACITY_MAX) ||
-        capacity >= 0x80000000u ||
-        !astra_u32_is_power_of_two(capacity))
+        (flags & ~ASTRA_BULK_RING_CREATE_FLAG_MASK) != 0u)
         return KERNEL_RING_INVALID_ARGUMENT;
     *result = NULL;
-    total_size = (uint64_t)KERNEL_RING_HEADER_SIZE +
-                 (uint64_t)element_size * capacity;
-    if (total_size > UINT32_MAX || offset > kernel_area_size(area) ||
-        total_size > kernel_area_size(area) - offset)
+    if (!ring_shape_valid(kernel_copy, kernel_area_size(area), offset,
+                          element_size, capacity, &total_size))
         return KERNEL_RING_INVALID_ARGUMENT;
     if (owner_ring_count(owner) >= KERNEL_RING_OWNER_MAX ||
         area_ring_count(area) >= KERNEL_RING_AREA_MAX) {
@@ -281,7 +292,7 @@ KernelRingStatus kernel_ring_create_flagged(
     for (uint32_t slot = 0u; slot < KERNEL_RING_MAX; ++slot) {
         if (rings[slot].state != KERNEL_RING_FREE &&
             rings[slot].area == area &&
-            ranges_overlap(offset, (uint32_t)total_size, rings[slot].offset,
+            ranges_overlap(offset, total_size, rings[slot].offset,
                            rings[slot].total_size)) {
             ++pool_stats.overlap_failures;
             return KERNEL_RING_OVERLAP;
@@ -316,7 +327,7 @@ KernelRingStatus kernel_ring_create_flagged(
     ring->owner = owner;
     ring->area_generation = kernel_area_generation(area);
     ring->offset = offset;
-    ring->total_size = (uint32_t)total_size;
+    ring->total_size = total_size;
     ring->element_size = element_size;
     ring->capacity = capacity;
     ring->producer_position = 0u;
@@ -339,7 +350,7 @@ KernelRingStatus kernel_ring_create_flagged(
     header.element_size = element_size;
     header.capacity = capacity;
     header.data_offset = KERNEL_RING_HEADER_SIZE;
-    header.total_size = (uint32_t)total_size;
+    header.total_size = total_size;
     header.generation = ring->generation;
     if (kernel_vm_sync_shared_aliases() != KERNEL_VM_OK ||
         kernel_area_write(area, offset, &header, sizeof(header)) !=
@@ -851,6 +862,7 @@ bool kernel_ring_pool_valid(void)
             kernel_thread_wait_queue_count(&ring->producer_waiters);
         uint32_t consumer_waiters =
             kernel_thread_wait_queue_count(&ring->consumer_waiters);
+        uint32_t expected_total = 0u;
         bool claimed = kernel_object_cache_slot_claimed(
             &ring_cache, (uint16_t)slot);
 
@@ -872,14 +884,11 @@ bool kernel_ring_pool_valid(void)
             return false;
         if (!valid_ring(ring) || ring->area == NULL || ring->owner == 0u ||
             ring->area_generation == 0u || ring->capacity == 0u ||
-            ((ring->flags & KERNEL_RING_CREATE_KERNEL_COPY) != 0u ?
-                 ring->element_size != 1u :
-                 (ring->element_size < KERNEL_RING_ELEMENT_SIZE_MIN ||
-                  ring->element_size > KERNEL_RING_ELEMENT_SIZE_MAX ||
-                  (ring->element_size & 3u) != 0u ||
-                  ring->capacity > KERNEL_RING_CAPACITY_MAX)) ||
-            ring->total_size != KERNEL_RING_HEADER_SIZE +
-                                    ring->element_size * ring->capacity ||
+            !ring_shape_valid(
+                (ring->flags & KERNEL_RING_CREATE_KERNEL_COPY) != 0u,
+                kernel_area_size(ring->area), ring->offset,
+                ring->element_size, ring->capacity, &expected_total) ||
+            ring->total_size != expected_total ||
             ring_used(ring) > ring->capacity)
             return false;
         ++active;

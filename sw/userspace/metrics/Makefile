@@ -6,7 +6,7 @@ SIZE := $(CROSS)size
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
 CPPFLAGS := -I../../include -I../alloc/include -I../storage/include \
-	-I../vfs/include -Iinclude
+	-I../vfs/include -I../../../ndk/include -Iinclude
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \

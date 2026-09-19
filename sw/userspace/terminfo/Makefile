@@ -170,10 +170,10 @@ library-contract: $(LIBRARY)
 		$(LIBRARY_MAP) $(LIBRARY)
 	@python3 ../../../tools/library_info.py $(LIBRARY) | \
 		grep -q '^terminfo.library.6 6.6.0 ABI 6.0$$'
-	@$(READELF) -dW $(LIBRARY) | grep -q 'SONAME.*terminfo.library.6'
-	@test "$$($(READELF) -dW $(LIBRARY) | grep -c 'NEEDED.*libc.library.1')" = 1
-	@test "$$($(READELF) -dW $(LIBRARY) | grep -c 'NEEDED.*runtime.library.1')" = 1
-	@test "$$($(READELF) -dW $(LIBRARY) | grep -c 'NEEDED.*compiler.library.1')" = 1
+	@$(READELF) -dW $(LIBRARY) | grep -Fq 'Library soname: [terminfo.library.6]'
+	@test "$$($(READELF) -dW $(LIBRARY) | grep -Fc 'Shared library: [libc.library.1]')" = 1
+	@test "$$($(READELF) -dW $(LIBRARY) | grep -Fc 'Shared library: [runtime.library.1]')" = 1
+	@test "$$($(READELF) -dW $(LIBRARY) | grep -Fc 'Shared library: [compiler.library.1]')" = 1
 	@! $(READELF) -dW $(LIBRARY) | grep -q 'TEXTREL'
 	@$(READELF) -lW $(LIBRARY) | grep -q ' GNU_RELRO '
 	@echo "Astra terminfo shared library: PASS"

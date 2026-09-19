@@ -1321,7 +1321,7 @@ bool kernel_port_pool_valid(void)
             }
         }
         if (owner_queued_messages > KERNEL_PORT_OWNER_MESSAGE_MAX ||
-            owner_queued_handles > 128u)
+            owner_queued_handles > KERNEL_HANDLE_DETACHED_MAX)
             return false;
     }
     if (active > KERNEL_PORT_MAX ||

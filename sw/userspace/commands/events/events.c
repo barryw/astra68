@@ -24,6 +24,8 @@
 #include <astra/event_control.h>
 #include <astra/vfs_process.h>
 
+#include "events_support.h"
+
 #include <errno.h>
 #include <sys/types.h>
 #include <poll.h>
@@ -40,9 +42,7 @@ ASTRA_PROGRAM("events", 1, 1, 0, "Barry Walker",
  * ring is of offsets rather than of text, because re-reading is cheaper than
  * holding a copy of something the store is still appending to.
  */
-#define EVENTS_TAIL_MAX 64u
 #define EVENTS_READ_CHUNK 128u
-#define EVENTS_PATH_MAX 128u
 
 /* Statically allocated, because a user thread gets one 4 KiB stack. */
 static AstraProcessFilesystem process_filesystem =
@@ -68,17 +68,6 @@ equal(const char *left, const char *right)
         ++index;
     }
     return left[index] == right[index] ? 1u : 0u;
-}
-
-/* Appends at `at`, and returns where the next append starts. */
-static uint32_t
-append(char *out_path, uint32_t capacity, uint32_t at, const char *text)
-{
-    while (*text != '\0' && at + 1u < capacity) {
-        out_path[at++] = *text++;
-    }
-    out_path[at] = '\0';
-    return at;
 }
 
 static void
@@ -156,43 +145,6 @@ print_from(AstraFile *file, uint64_t offset)
  * many, and the file is read twice rather than held once, because the store is
  * still appending to it while this runs.
  */
-static uint64_t
-tail_from(AstraFile *file, uint32_t lines)
-{
-    uint64_t starts[EVENTS_TAIL_MAX];
-    uint64_t offset = 0u;
-    uint32_t count = 1u;
-    uint32_t oldest = 0u;
-
-    if (lines == 0u || lines > EVENTS_TAIL_MAX) {
-        lines = EVENTS_TAIL_MAX;
-    }
-    starts[0] = 0u;
-    for (;;) {
-        uint32_t moved = 0u;
-
-        if (astra_filesystem_read_at(
-                file, offset, chunk, sizeof(chunk), &moved) !=
-                ASTRA_VFS_OK || moved == 0u) {
-            break;
-        }
-        for (uint32_t index = 0u; index < moved; ++index) {
-            if (chunk[index] != '\n') {
-                continue;
-            }
-            /* A line begins after the newline that ended the one before. */
-            if (count == lines) {
-                starts[oldest] = offset + index + 1u;
-                oldest = (oldest + 1u) % lines;
-            } else {
-                starts[count++] = offset + index + 1u;
-            }
-        }
-        offset += moved;
-    }
-    return count == lines ? starts[oldest] : starts[0];
-}
-
 /*
  * Live, until a line is entered. It was "press any key" as a builtin, when the
  * shell owned the keyboard and could see a keystroke; a program sees STDIN,
@@ -244,7 +196,7 @@ main(int argc, char **argv)
         "input", "display"
     };
     const AstraStartupCapability *capability;
-    char path[EVENTS_PATH_MAX];
+    char path[ASTRA_VFS_PATH_MAX];
     char activity[9];
     const char *level = "notice";
     const char *subsystem = NULL;
@@ -252,7 +204,6 @@ main(int argc, char **argv)
     uint32_t control_handle = 0u;
     uint32_t rows = 0u;
     uint64_t offset;
-    uint32_t at = 0u;
     uint32_t status;
     int following = 0;
     int by_activity = 0;
@@ -393,19 +344,10 @@ main(int argc, char **argv)
         return (int)status;
     }
 
-    at = append(path, sizeof(path), at, "EVENTS:");
-    if (by_activity) {
-        at = append(path, sizeof(path), at, "activity/");
-        at = append(path, sizeof(path), at, activity);
-    } else if (subsystem != NULL) {
-        at = append(path, sizeof(path), at, "subsystem/");
-        at = append(path, sizeof(path), at, subsystem);
-        at = append(path, sizeof(path), at, "/");
-        at = append(path, sizeof(path), at, level);
-    } else {
-        at = append(path, sizeof(path), at,
-                    previous_boot ? "boot/-1/" : "boot/current/");
-        at = append(path, sizeof(path), at, level);
+    if (!events_build_path(path, sizeof(path), by_activity, activity,
+                           subsystem, level, previous_boot)) {
+        say("events: requested view path is too long");
+        return close_with(ASTRA_STATUS_INVALID);
     }
 
     status = astra_filesystem_open(
@@ -427,8 +369,15 @@ main(int argc, char **argv)
         if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &window) == 0)
             rows = window.ws_row;
     }
-    offset = previous_boot ? 0u :
-        (rows > 1u ? tail_from(&file, rows - 1u) : 0u);
+    offset = 0u;
+    if (!previous_boot && rows > 1u) {
+        status = events_tail_from(&file, rows - 1u, &offset);
+        if (status != ASTRA_STATUS_OK) {
+            say("events: could not find the visible tail");
+            (void)astra_filesystem_close(&file);
+            return close_with(status);
+        }
+    }
     offset = print_from(&file, offset);
     if (offset == 0u) {
         say("(nothing at that level)");

@@ -5,5 +5,5 @@ name "Astra Runtime Kit"
 version 1.7.0
 provides compiler.library 1 1.0.0
 provides runtime.library 1 1.7.0
-provides system.library 1 1.2.0
+provides system.library 2 2.1.0
 provides loader.library 1 1.0.0

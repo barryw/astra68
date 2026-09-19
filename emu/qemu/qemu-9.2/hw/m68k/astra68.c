@@ -3933,7 +3933,7 @@ static void astra_host_channel_configure(Astra68State *s, uint32_t physical)
     }
     data_offset = ASTRA_HOST_CHANNEL_HEADER_SIZE +
                   command_capacity * ASTRA_HOST_COMMAND_SIZE;
-    if (byte_size <= data_offset) {
+    if (byte_size < data_offset) {
         return;
     }
     header = astra_dma_data(s, physical_buffer, byte_size, 0,

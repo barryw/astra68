@@ -52,5 +52,8 @@ void supervisor_vfs_set_activity(uint32_t activity);
 /* Reads one resolved regular file completely into a caller-owned buffer. */
 uint32_t supervisor_vfs_read(const char *path, void *buffer,
                              uint32_t capacity, uint32_t *length);
+/* As above, allocating exact heap storage plus a trailing NUL for parsers. */
+uint32_t supervisor_vfs_read_alloc(const char *path, void **buffer,
+                                   uint32_t *length);
 
 #endif

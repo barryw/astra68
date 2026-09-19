@@ -25,6 +25,8 @@
 #include <astra/vfs_process.h>
 #include <astra/window.h>
 
+#include <string.h>
+
 #define TERMINAL_MARGIN_X 10u
 #define TERMINAL_MARGIN_Y 8u
 #define TERMINAL_FONT_HEIGHT ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT
@@ -76,8 +78,6 @@ typedef struct WindowTerminal {
 } WindowTerminal;
 
 static WindowTerminal window_terminal;
-static char bundle_manifest_text[ASTRA_BUNDLE_MANIFEST_MAX + 1u];
-
 static int draw_cursor(WindowTerminal *window, uint32_t row, uint32_t column,
                        uint16_t color);
 
@@ -90,61 +90,69 @@ static void close_area(AstraArea *area)
 
 static uint32_t load_title_icon(AstraArea *area, uint32_t *length)
 {
-    AstraBundleManifest manifest;
+    AstraBundleManifest manifest = ASTRA_BUNDLE_MANIFEST_INIT;
+    AstraAicon icon;
+    char *bundle_manifest_text = NULL;
+    void *icon_bytes = NULL;
     char path[ASTRA_VFS_PATH_MAX];
     uint32_t manifest_length = 0u;
     uint32_t line = 0u;
     uint32_t status;
     AstraResult result;
 
-    status = astra_process_read_file(&process_filesystem, "APP:manifest",
-                                     bundle_manifest_text,
-                                     ASTRA_BUNDLE_MANIFEST_MAX,
-                                     &manifest_length);
+    status = astra_process_read_file_alloc(
+        &process_filesystem, "APP:manifest", (void **)&bundle_manifest_text,
+        &manifest_length);
     if (status != ASTRA_VFS_OK) {
         (void)astra_log("Terminal icon manifest read failed");
         (void)astra_log(astra_vfs_status_text(status));
         return TERMINAL_FAIL_ICON;
     }
-    bundle_manifest_text[manifest_length] = '\0';
     if (astra_bundle_manifest_parse(bundle_manifest_text, manifest_length,
                                     &manifest, &line) != ASTRA_BUNDLE_OK) {
+        astra_runtime_deallocate(bundle_manifest_text);
         (void)astra_log("Terminal icon manifest parse failed");
         return TERMINAL_FAIL_ICON;
     }
+    astra_runtime_deallocate(bundle_manifest_text);
     if (astra_path_qualify(
             "APP", "", manifest.icon, path, sizeof(path)) != ASTRA_VFS_OK) {
+        astra_bundle_manifest_destroy(&manifest);
         (void)astra_log("Terminal icon path failed");
         return TERMINAL_FAIL_ICON;
     }
+    astra_bundle_manifest_destroy(&manifest);
+    status = astra_process_read_file_alloc(
+        &process_filesystem, path, &icon_bytes, length);
+    if (status != ASTRA_VFS_OK || *length == 0u ||
+        *length > ASTRA_WINDOW_TITLE_ICON_BYTES_MAX ||
+        astra_aicon_open(icon_bytes, *length, &icon) != ASTRA_BUNDLE_OK) {
+        astra_runtime_deallocate(icon_bytes);
+        (void)astra_log("Terminal icon resource read failed");
+        if (status != ASTRA_VFS_OK)
+            (void)astra_log(astra_vfs_status_text(status));
+        return TERMINAL_FAIL_ICON;
+    }
     result = astra_area_create(
-        ASTRA_WINDOW_TITLE_ICON_BYTES_MAX,
+        *length,
         ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
             ASTRA_RIGHT_TRANSFER,
         area);
     if (result != ASTRA_OK) {
+        astra_runtime_deallocate(icon_bytes);
         (void)astra_log("Terminal icon area create failed");
         return TERMINAL_FAIL_ICON;
     }
     result = astra_area_map(area,
                             ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE);
     if (result != ASTRA_OK) {
+        astra_runtime_deallocate(icon_bytes);
         (void)astra_log("Terminal icon area map failed");
         close_area(area);
         return TERMINAL_FAIL_ICON;
     }
-    status = astra_process_read_file(&process_filesystem, path, area->address,
-                                     area->size, length);
-    if (status != ASTRA_VFS_OK || *length == 0u) {
-        (void)astra_log(status != ASTRA_VFS_OK ?
-            "Terminal icon resource read failed" :
-            "Terminal icon resource is empty");
-        if (status != ASTRA_VFS_OK)
-            (void)astra_log(astra_vfs_status_text(status));
-        if (area->handle != ASTRA_INVALID_HANDLE)
-            close_area(area);
-        return TERMINAL_FAIL_ICON;
-    }
+    memcpy(area->address, icon_bytes, *length);
+    astra_runtime_deallocate(icon_bytes);
     return ASTRA_STATUS_OK;
 }
 

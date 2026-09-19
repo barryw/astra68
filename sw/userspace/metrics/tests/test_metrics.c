@@ -2,6 +2,7 @@
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <astra/alloc.h>
@@ -10,14 +11,27 @@
 #include <astra/metrics.h>
 #include <astra/metrics_vfs.h>
 
+#define TEST_LARGE_SAMPLE_COUNT 65u
+
+static int fail_allocate;
+
+void *astra_runtime_allocate(size_t size)
+{
+    return fail_allocate ? NULL : malloc(size);
+}
+void *astra_runtime_reallocate(void *pointer, size_t size)
+{
+    return realloc(pointer, size);
+}
+void astra_runtime_deallocate(void *pointer) { free(pointer); }
+
 static uint32_t
 two_samples(void *context, AstraMetricSample *out, uint32_t capacity)
 {
     uint64_t base = *(const uint64_t *)context;
 
-    if (capacity < 2u) {
-        return 0u;
-    }
+    if (out == NULL || capacity < 2u)
+        return 2u;
     out[0].name = "alpha";
     out[0].value = base;
     out[1].name = "beta";
@@ -76,21 +90,18 @@ static void
 test_registry_bounds(void)
 {
     static uint64_t value = 1;
-    static char names[ASTRA_METRIC_GROUP_MAX + 1u][8];
+    static char names[40u][8];
     uint32_t index;
 
     astra_metric_reset_registry();
-    for (index = 0u; index <= ASTRA_METRIC_GROUP_MAX; ++index) {
+    for (index = 0u; index < 40u; ++index) {
         snprintf(names[index], sizeof(names[index]), "g%u", index);
-        if (index < ASTRA_METRIC_GROUP_MAX) {
-            assert(astra_metric_register(names[index], two_samples, &value) ==
-                   ASTRA_METRIC_OK);
-        } else {
-            assert(astra_metric_register(names[index], two_samples, &value) ==
-                   ASTRA_METRIC_FULL);
-        }
+        assert(astra_metric_register(names[index], two_samples, &value) ==
+               ASTRA_METRIC_OK);
     }
-    assert(astra_metric_group_count() == ASTRA_METRIC_GROUP_MAX);
+    assert(astra_metric_group_count() == 40u);
+    assert(astra_metric_register(names[39], two_samples, &value) ==
+           ASTRA_METRIC_DUPLICATE);
 }
 
 static void
@@ -131,6 +142,22 @@ test_op_metrics(void)
 }
 
 static uint32_t refreshes;
+
+static uint32_t
+large_samples(void *context, AstraMetricSample *out, uint32_t capacity)
+{
+    static char names[TEST_LARGE_SAMPLE_COUNT][8];
+
+    (void)context;
+    if (out == NULL || capacity < TEST_LARGE_SAMPLE_COUNT)
+        return TEST_LARGE_SAMPLE_COUNT;
+    for (uint32_t index = 0u; index < TEST_LARGE_SAMPLE_COUNT; ++index) {
+        snprintf(names[index], sizeof(names[index]), "s%u", index);
+        out[index].name = names[index];
+        out[index].value = index;
+    }
+    return TEST_LARGE_SAMPLE_COUNT;
+}
 
 static uint32_t
 refresh_metrics(void *context)
@@ -182,6 +209,65 @@ test_vfs_snapshot(void)
            ASTRA_VFS_ERR_NOT_FOUND);
 }
 
+static void
+test_vfs_snapshot_has_no_sample_ceiling(void)
+{
+    AstraMetricVfs metrics;
+    const AstraVfsBackendOps *ops = astra_metric_vfs_ops();
+    AstraVfsNodeInfo info = {0};
+    AstraMetricRecord records[TEST_LARGE_SAMPLE_COUNT];
+    uintptr_t node = 0u;
+    uint32_t moved = 0u;
+
+    astra_metric_reset_registry();
+    assert(astra_metric_register("large", large_samples, NULL) ==
+           ASTRA_METRIC_OK);
+    assert(astra_metric_vfs_init(&metrics, NULL, NULL));
+    assert(ops->open(&metrics, "snapshot", ASTRA_VFS_OPEN_READ,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) == ASTRA_VFS_OK);
+    assert(info.size == sizeof(records));
+    assert(ops->read(&metrics, node, 0u, records, sizeof(records), &moved) ==
+           ASTRA_VFS_OK);
+    assert(moved == sizeof(records));
+    assert(strcmp(records[64].name, "s64") == 0);
+    assert(astra_metric_record_value(&records[64]) == 64u);
+}
+
+static void
+test_vfs_snapshot_refuses_incomplete_groups(void)
+{
+    AstraMetricVfs metrics;
+    const AstraVfsBackendOps *ops = astra_metric_vfs_ops();
+    AstraVfsNodeInfo info = {0};
+    AstraMetricRecord records[TEST_LARGE_SAMPLE_COUNT];
+    uintptr_t node = 0u;
+    uint32_t moved = 0u;
+
+    astra_metric_reset_registry();
+    assert(astra_metric_register("large", large_samples, NULL) ==
+           ASTRA_METRIC_OK);
+    assert(astra_metric_vfs_init(&metrics, NULL, NULL));
+    fail_allocate = 1;
+    assert(ops->open(&metrics, "snapshot", ASTRA_VFS_OPEN_READ,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+           ASTRA_VFS_ERR_LIMIT);
+    fail_allocate = 0;
+    assert(ops->open(&metrics, "snapshot", ASTRA_VFS_OPEN_READ,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) == ASTRA_VFS_OK);
+    fail_allocate = 1;
+    assert(ops->read(&metrics, node, 0u, records, sizeof(records), &moved) ==
+           ASTRA_VFS_ERR_LIMIT);
+    assert(moved == 0u);
+    fail_allocate = 0;
+
+    astra_metric_reset_registry();
+    assert(astra_metric_register("liar", overrunning_sampler, NULL) ==
+           ASTRA_METRIC_OK);
+    assert(ops->open(&metrics, "snapshot", ASTRA_VFS_OPEN_READ,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+           ASTRA_VFS_ERR_PROTOCOL);
+}
+
 /*
  * The contract is only real if unrelated modules with unrelated accounting
  * shapes can both publish through it without changing their own structures.
@@ -197,7 +283,7 @@ test_real_modules(void)
     AstraBlockDevice device;
     AstraAllocator allocator;
     AstraBlockGeometry geometry;
-    AstraMetricSample samples[ASTRA_METRIC_SAMPLE_MAX];
+    AstraMetricSample samples[64u];
     uint8_t transfer[512];
     uint32_t count;
     uint32_t block_count;
@@ -225,7 +311,7 @@ test_real_modules(void)
     assert(astra_metric_group_count() == 2u);
 
     block_count = astra_metric_sample(astra_metric_find("storage.image"),
-                                      samples, ASTRA_METRIC_SAMPLE_MAX);
+                                      samples, 64u);
     count = block_count;
     assert(count >= 20u);
     for (index = 0u; index < count; ++index) {
@@ -237,7 +323,7 @@ test_real_modules(void)
     assert(saw_read_calls);
 
     count = astra_metric_sample(astra_metric_find("alloc.service"), samples,
-                                ASTRA_METRIC_SAMPLE_MAX);
+                                64u);
     assert(count != 0u);
     for (index = 0u; index < count; ++index) {
         if (strcmp(samples[index].name, "live_blocks") == 0) {
@@ -260,6 +346,8 @@ main(void)
     test_overrun_rejected();
     test_op_metrics();
     test_vfs_snapshot();
+    test_vfs_snapshot_has_no_sample_ceiling();
+    test_vfs_snapshot_refuses_incomplete_groups();
     test_real_modules();
     puts("astra metrics: PASS");
     return 0;

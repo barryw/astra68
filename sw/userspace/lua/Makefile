@@ -86,10 +86,10 @@ lua-library-contract: $(LIBRARY)
 		$(LIBRARY_MAP) $(LIBRARY)
 	@python3 ../../../tools/library_info.py $< | \
 		grep -q '^lua.library.5 5.5.1 ABI 5.5$$'
-	@$(READELF) -dW $< | grep -q 'SONAME.*lua.library.5'
-	@test "$$($(READELF) -dW $< | grep -c 'NEEDED.*libc.library.1')" = 1
-	@test "$$($(READELF) -dW $< | grep -c 'NEEDED.*runtime.library.1')" = 1
-	@test "$$($(READELF) -dW $< | grep -c 'NEEDED.*compiler.library.1')" = 1
+	@$(READELF) -dW $< | grep -Fq 'Library soname: [lua.library.5]'
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [libc.library.1]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 3
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'

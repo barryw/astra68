@@ -10,8 +10,11 @@
  */
 
 #include <astra/event_backend.h>
+#include <astra/runtime.h>
 
 #include <stddef.h>
+#include <stdint.h>
+#include <string.h>
 
 #include <astra/bytes.h>
 #include <astra/event_descriptor.h>
@@ -25,7 +28,16 @@
 #define KIND_EARLIEST    7u   /* a leaf over the boot ring */
 #define KIND_SUBSYSTEM_ONE 8u /* one subsystem, and the levels under it */
 
-#define LINE_MAX 160u
+/* Longest line representable by the event ABI: fixed prefix, worst-case
+ * expansion of four 32-bit conversions, source location, and newline. */
+#define LINE_PREFIX_MAX \
+    ((sizeof("seq ") - 1u) + 10u + (sizeof("  warning  ") - 1u) + 8u + 1u + \
+     5u + (sizeof(" act ") - 1u) + 8u + 2u)
+#define LINE_MESSAGE_MAX \
+    ((ASTRA_EVENT_FORMAT_MAX - 1u) + ASTRA_EVENT_ARGUMENT_COUNT_MAX * 11u)
+#define LINE_SOURCE_MAX \
+    ((sizeof(" (") - 1u) + (ASTRA_EVENT_FILE_MAX - 1u) + 1u + 5u + 1u)
+#define LINE_MAX (LINE_PREFIX_MAX + LINE_MESSAGE_MAX + LINE_SOURCE_MAX + 1u)
 
 static const char *const subsystem_name[ASTRA_EVENT_SUBSYSTEM_MAX] = {
     "kernel", "runtime", "supervisor", "storage", "vfs", "shell", "input",
@@ -263,7 +275,7 @@ claim(AstraEventsBackend *backend, uintptr_t *token)
 {
     uint32_t index;
 
-    for (index = 0u; index < ASTRA_EVENTS_NODE_MAX; ++index) {
+    for (index = 0u; index < backend->node_capacity; ++index) {
         if (backend->nodes[index].used == 0u) {
             AstraEventsNode *node = &backend->nodes[index];
 
@@ -281,13 +293,35 @@ claim(AstraEventsBackend *backend, uintptr_t *token)
             return node;
         }
     }
-    return NULL;
+    {
+        uint32_t capacity = backend->node_capacity == 0u ? 1u :
+            backend->node_capacity * 2u;
+        AstraEventsNode *grown;
+
+        if (capacity <= backend->node_capacity ||
+            capacity > UINT32_MAX / sizeof(*backend->nodes))
+            return NULL;
+        grown = astra_runtime_reallocate(
+            backend->nodes, (size_t)capacity * sizeof(*backend->nodes));
+        if (grown == NULL)
+            return NULL;
+        memset(grown + backend->node_capacity, 0,
+               (size_t)(capacity - backend->node_capacity) * sizeof(*grown));
+        backend->nodes = grown;
+        index = backend->node_capacity;
+        backend->node_capacity = capacity;
+    }
+    backend->nodes[index].used = 1u;
+    backend->nodes[index].level_min = ASTRA_EVENT_LEVEL_DEBUG;
+    backend->nodes[index].subsystem = ASTRA_EVENT_SUBSYSTEM_MAX;
+    *token = (uintptr_t)(index + 1u);
+    return &backend->nodes[index];
 }
 
 static AstraEventsNode *
 resolve_token(AstraEventsBackend *backend, uintptr_t token)
 {
-    if (token == 0u || token > ASTRA_EVENTS_NODE_MAX) {
+    if (token == 0u || token > backend->node_capacity) {
         return NULL;
     }
     return backend->nodes[token - 1u].used != 0u ?
@@ -771,7 +805,7 @@ astra_events_backend_init(AstraEventsBackend *backend,
     backend->store = store;
     backend->previous = previous;
     backend->catalog = catalog;
-    for (index = 0u; index < ASTRA_EVENTS_NODE_MAX; ++index) {
+    for (index = 0u; index < backend->node_capacity; ++index) {
         backend->nodes[index].used = 0u;
     }
     return 1;

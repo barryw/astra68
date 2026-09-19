@@ -81,16 +81,28 @@ class Broker:
                                "\n".join(self.output))
 
 
-def command(machine, text, expected, timeout, number):
+def command_status(machine, text, timeout, number):
     marker = "RD-COMMAND-%u-" % number
 
     machine.settle()
     before = machine.sequence()
     machine.qmp.type_line(text + "; print -r -- " + marker + "$?")
-    lines, _ = machine.wait_for_text(marker + "0", timeout, before)
-    if lines is None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        lines, _ = machine.said(before)
+        for line in lines:
+            if line.startswith(marker) and line[len(marker):].isdigit():
+                return lines, int(line[len(marker):])
+        time.sleep(0.05)
+    raise RuntimeError("command hung: %s\n%s" %
+                       (text, "\n".join(machine.said(before)[0])))
+
+
+def command(machine, text, expected, timeout, number):
+    lines, status = command_status(machine, text, timeout, number)
+    if status != 0:
         raise RuntimeError("command hung or failed: %s\n%s" % (
-            text, "\n".join(machine.said(before)[0])))
+            text, "\n".join(lines)))
     if expected is not None and not any(expected in line for line in lines):
         raise RuntimeError("command omitted %r: %s\n%s" % (
             expected, text, "\n".join(lines)))
@@ -99,6 +111,7 @@ def command(machine, text, expected, timeout, number):
 
 def wait_state(machine, state, timeout, number):
     deadline = time.monotonic() + timeout
+    lines = []
     while time.monotonic() < deadline:
         lines = command(machine, "service inspect remote-desktop", None,
                         timeout, number[0])
@@ -106,7 +119,37 @@ def wait_state(machine, state, timeout, number):
         if any("state: " + state in line for line in lines):
             return lines
         time.sleep(0.1)
-    raise RuntimeError("remote-desktop never reached state " + state)
+    trace = machine.trace()
+    relevant = []
+    for index, line in enumerate(trace):
+        if "launch SERVICES:remote-d" in line:
+            relevant = trace[max(0, index - 20):index + 80]
+            break
+    raise RuntimeError("remote-desktop never reached state %s:\n%s\n%s\n%s" %
+                       (state, "\n".join(lines), "\n".join(relevant[-80:]),
+                        "\n".join(trace[-80:])))
+
+
+def service_pid(lines):
+    matches = [line for line in lines if "pid: " in line]
+    if len(matches) != 1:
+        raise RuntimeError("service inspection did not contain one PID")
+    return int(matches[0].split("pid: ", 1)[1].split()[0])
+
+
+def restarted_service_pid(lines, previous):
+    current = service_pid(lines)
+    if current == previous:
+        raise RuntimeError("service restart retained stale PID %u" % current)
+    return current
+
+
+def stable_service_pid(lines, expected):
+    current = service_pid(lines)
+    if current != expected:
+        raise RuntimeError("service PID changed from %u to %u" %
+                           (expected, current))
+    return current
 
 
 def main():
@@ -161,22 +204,32 @@ def main():
                 raise RuntimeError("Astra terminal did not start")
             command(machine, "service list", "remote-desktop", 30.0,
                     number[0]); number[0] += 1
+            try:
+                wait_state(machine, "running", 30.0, number)
+            except RuntimeError as error:
+                raise RuntimeError("%s\nbroker output:\n%s" %
+                                   (error, "\n".join(broker.output))) from error
+            wait_for(lambda: not port_available(port),
+                     "automatic VNC activation", 10.0)
+            command(machine, "service stop remote-desktop", None, 30.0,
+                    number[0]); number[0] += 1
+            wait_for(lambda: port_available(port), "VNC stop", 10.0)
             wait_state(machine, "stopped", 30.0, number)
-            command(machine, "service disable remote-desktop", None, 30.0,
-                    number[0]); number[0] += 1
-            command(machine, "service inspect remote-desktop", "enabled: no",
-                    30.0, number[0]); number[0] += 1
-            command(machine, "service enable remote-desktop", None, 30.0,
-                    number[0]); number[0] += 1
-            command(machine, "service inspect remote-desktop", "enabled: yes",
-                    30.0, number[0]); number[0] += 1
-
-            command(machine,
-                    "service add remote-probe SERVICES:remote-desktop "
-                    "--paired --disabled --manual --restart=never "
-                    "--grant=HOST_DEVICE", None, 30.0, number[0])
+            command(
+                machine,
+                "service add remote-probe SERVICES:remote-desktop "
+                "--paired --disabled --manual --restart=never "
+                "--grant=HOST_DEVICE", None, 30.0, number[0])
             number[0] += 1
             command(machine, "service inspect remote-probe", "runs: paired",
+                    30.0, number[0]); number[0] += 1
+            command(machine, "service enable remote-probe", None, 30.0,
+                    number[0]); number[0] += 1
+            command(machine, "service inspect remote-probe", "enabled: yes",
+                    30.0, number[0]); number[0] += 1
+            command(machine, "service disable remote-probe", None, 30.0,
+                    number[0]); number[0] += 1
+            command(machine, "service inspect remote-probe", "enabled: no",
                     30.0, number[0]); number[0] += 1
             command(machine, "service delete remote-probe", None, 30.0,
                     number[0]); number[0] += 1
@@ -198,20 +251,19 @@ def main():
             running = wait_state(machine, "running", 30.0, number)
 
             generation = broker.generations()
-            pid_line = next(line for line in running if "pid: " in line)
-            pid = int(pid_line.split("pid: ", 1)[1].split()[0])
+            pid = service_pid(running)
             command(machine, "service restart remote-desktop", None, 30.0,
                     number[0]); number[0] += 1
             wait_for(lambda: broker.generations() > generation,
                      "VNC restart", 10.0)
-            wait_state(machine, "running", 30.0, number)
-
+            running = wait_state(machine, "running", 30.0, number)
+            pid = restarted_service_pid(running, pid)
             generation = broker.generations()
-            command(machine, "kill -9 %u" % pid, None, 30.0, number[0])
-            number[0] += 1
-            wait_for(lambda: broker.generations() > generation,
-                     "wrapper fault recovery", 10.0)
-            wait_state(machine, "running", 30.0, number)
+            time.sleep(0.5)
+            running = wait_state(machine, "running", 30.0, number)
+            stable_service_pid(running, pid)
+            if broker.generations() != generation:
+                raise RuntimeError("stable service reacquired its host lease")
 
             broker.close()
             wait_for(lambda: port_available(port), "broker failure", 10.0)

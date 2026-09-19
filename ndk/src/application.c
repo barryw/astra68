@@ -16,22 +16,25 @@ AstraResult astra_application_launch(AstraHandle launcher,
         NULL, 0u, process_id);
 }
 
-AstraResult astra_application_launch_with_arguments(
+static AstraResult application_launch(
     AstraHandle launcher, const char *bundle_path, uint16_t path_length,
     AstraLaunchSource source, const char *const *arguments,
-    uint16_t argument_count, uint32_t *process_id)
+    uint16_t argument_count, AstraHandle *process_handle,
+    uint32_t *process_id)
 {
     AstraApplicationLaunchRequest request = {0};
     AstraApplicationLaunchReply reply = {0};
     AstraPort reply_port = ASTRA_PORT_INIT;
     char path[ASTRA_APPLICATION_PATH_MAX];
-    AstraHandle transferred;
+    AstraHandle transferred = ASTRA_INVALID_HANDLE;
     uint32_t reply_size = 0u;
     uint32_t reply_handles = 0u;
     AstraResult result;
 
     if (launcher == ASTRA_INVALID_HANDLE || bundle_path == 0 ||
-        process_id == 0 || path_length == 0u ||
+        process_id == 0 ||
+        (process_handle != 0 && *process_handle != ASTRA_INVALID_HANDLE) ||
+        path_length == 0u ||
         path_length >= ASTRA_APPLICATION_PATH_MAX ||
         argument_count + 1u > ASTRA_APPLICATION_ARGUMENT_MAX ||
         (argument_count != 0u && arguments == NULL) ||
@@ -41,6 +44,8 @@ AstraResult astra_application_launch_with_arguments(
     if (!astra_utf8_validate(bundle_path, path_length, 0u))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *process_id = 0u;
+    if (process_handle != 0)
+        *process_handle = ASTRA_INVALID_HANDLE;
     for (uint32_t at = 0u; at < path_length; ++at)
         path[at] = bundle_path[at];
     path[path_length] = '\0';
@@ -81,12 +86,13 @@ AstraResult astra_application_launch_with_arguments(
     reply_port.send = transferred;
     if (result != ASTRA_OK)
         goto done;
+    transferred = ASTRA_INVALID_HANDLE;
     result = astra_port_receive_until(
-        reply_port.receive, &reply, sizeof(reply), 0, 0, &reply_size,
+        reply_port.receive, &reply, sizeof(reply), &transferred, 1u, &reply_size,
         &reply_handles, ASTRA_DEADLINE_INFINITE);
     if (result != ASTRA_OK)
         goto done;
-    if (reply_size != sizeof(reply) || reply_handles != 0u ||
+    if (reply_size != sizeof(reply) ||
         reply.header.total_size != sizeof(reply) ||
         reply.header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
         reply.header.flags != 0u || reply.header.reserved != 0u ||
@@ -98,15 +104,55 @@ AstraResult astra_application_launch_with_arguments(
         goto done;
     }
     result = astra_internal_service_result(reply.status);
-    if (result == ASTRA_OK)
+    if ((result == ASTRA_OK &&
+         (reply_handles != 1u || transferred == ASTRA_INVALID_HANDLE)) ||
+        (result != ASTRA_OK && reply_handles != 0u)) {
+        result = ASTRA_ERROR_IO;
+        goto done;
+    }
+    if (result == ASTRA_OK) {
         *process_id = reply.process_id;
+        if (process_handle != 0) {
+            *process_handle = transferred;
+            transferred = ASTRA_INVALID_HANDLE;
+        }
+    }
 
 done:
     {
-        AstraResult close_result = astra_port_close(&reply_port);
+        AstraResult close_result;
+
+        if (transferred != ASTRA_INVALID_HANDLE) {
+            close_result = astra_handle_close(&transferred);
+            if (result == ASTRA_OK && close_result != ASTRA_OK)
+                result = close_result;
+        }
+        close_result = astra_port_close(&reply_port);
 
         if (result == ASTRA_OK && close_result != ASTRA_OK)
             result = close_result;
     }
     return result;
+}
+
+AstraResult astra_application_launch_with_arguments(
+    AstraHandle launcher, const char *bundle_path, uint16_t path_length,
+    AstraLaunchSource source, const char *const *arguments,
+    uint16_t argument_count, uint32_t *process_id)
+{
+    return application_launch(launcher, bundle_path, path_length, source,
+                              arguments, argument_count, 0, process_id);
+}
+
+AstraResult astra_application_launch_waitable(
+    AstraHandle launcher, const char *bundle_path, uint16_t path_length,
+    AstraLaunchSource source, const char *const *arguments,
+    uint16_t argument_count, AstraHandle *process_handle,
+    uint32_t *process_id)
+{
+    if (process_handle == 0)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return application_launch(launcher, bundle_path, path_length, source,
+                              arguments, argument_count, process_handle,
+                              process_id);
 }

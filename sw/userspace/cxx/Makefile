@@ -97,11 +97,11 @@ cxx-library-contract: $(LIBRARY)
 		$(LIBRARY_MAP) $(LIBRARY)
 	@python3 ../../../tools/library_info.py $< | \
 		grep -q '^cxx.library.1 1.0.0 ABI 1.0$$'
-	@$(READELF) -dW $< | grep -q 'SONAME.*cxx.library.1'
-	@test "$$($(READELF) -dW $< | grep -c 'NEEDED.*libc.library.1')" = 1
-	@test "$$($(READELF) -dW $< | grep -c 'NEEDED.*runtime.library.1')" = 1
-	@test "$$($(READELF) -dW $< | grep -c 'NEEDED.*compiler.library.1')" = 1
-	@test "$$($(READELF) -dW $< | grep -c 'NEEDED.*unwind.library.1')" = 1
+	@$(READELF) -dW $< | grep -Fq 'Library soname: [cxx.library.1]'
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [libc.library.1]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.1]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [unwind.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 4
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'

@@ -1050,6 +1050,8 @@ check_vfs_directory_handle(void)
 {
     AstraVfsExt4File files[4];
     AstraVfsExt4Backend backend;
+    char longest_mount[ASTRA_VFS_EXT4_MOUNT_MAX];
+    char oversized_mount[ASTRA_VFS_EXT4_MOUNT_MAX + 1u];
     AstraVfsNodeInfo info = {0};
     const AstraVfsBackendOps *ops = astra_vfs_ext4_ops();
     uintptr_t directory = 0u;
@@ -1059,6 +1061,14 @@ check_vfs_directory_handle(void)
     uint32_t status;
 
     memset(files, 0, sizeof(files));
+    memset(longest_mount, 'm', sizeof(longest_mount) - 1u);
+    longest_mount[sizeof(longest_mount) - 1u] = '\0';
+    memset(oversized_mount, 'm', sizeof(oversized_mount) - 1u);
+    oversized_mount[sizeof(oversized_mount) - 1u] = '\0';
+    if (!astra_vfs_ext4_init(&backend, longest_mount, files, 4u))
+        return fail("VFS longest protocol mount", 0);
+    if (astra_vfs_ext4_init(&backend, oversized_mount, files, 4u))
+        return fail("VFS oversized protocol mount", 0);
     if (!astra_vfs_ext4_init(&backend, MOUNT_POINT, files, 4u))
         return fail("VFS ext4 init", 0);
     status = ops->open(&backend, "/dir",
@@ -1181,6 +1191,86 @@ populate(void)
     if (rc != EOK) {
         return fail("ext4_frename", rc);
     }
+    if (write_file(MOUNT_POINT "replace-source.bin", 6u, 83u) ||
+        write_file(MOUNT_POINT "replace-target.bin", 7u, 121u))
+        return 1;
+    rc = ext4_frename(MOUNT_POINT "replace-source.bin",
+                      MOUNT_POINT "replace-target.bin");
+    if (rc != EOK ||
+        read_verify(MOUNT_POINT "replace-target.bin", 6u, 83u))
+        return fail("ext4_frename replace file", rc);
+    rc = ext4_fopen(&exclusive, MOUNT_POINT "replace-source.bin", "rb");
+    if (rc != ENOENT) {
+        if (rc == EOK)
+            (void)ext4_fclose(&exclusive);
+        return fail("ext4_frename left replaced source", rc);
+    }
+
+    rc = ext4_dir_mk(MOUNT_POINT "replace-source-dir");
+    if (rc != EOK)
+        return fail("mkdir replace source", rc);
+    rc = ext4_dir_mk(MOUNT_POINT "replace-target-dir");
+    if (rc != EOK)
+        return fail("mkdir replace target", rc);
+    if (write_file(MOUNT_POINT "replace-source-dir/kept.bin", 8u, 97u))
+        return 1;
+    rc = ext4_frename(MOUNT_POINT "replace-source-dir",
+                      MOUNT_POINT "replace-target-dir");
+    if (rc != EOK ||
+        read_verify(MOUNT_POINT "replace-target-dir/kept.bin", 8u, 97u))
+        return fail("ext4_frename replace directory", rc);
+
+    rc = ext4_dir_mk(MOUNT_POINT "replace-nonempty-source");
+    if (rc != EOK)
+        return fail("mkdir nonempty replacement source", rc);
+    rc = ext4_dir_mk(MOUNT_POINT "replace-nonempty-target");
+    if (rc != EOK)
+        return fail("mkdir nonempty replacement target", rc);
+    if (write_file(MOUNT_POINT "replace-nonempty-source/source.bin",
+                   11u, 61u) ||
+        write_file(MOUNT_POINT "replace-nonempty-target/target.bin",
+                   12u, 67u))
+        return 1;
+    rc = ext4_frename(MOUNT_POINT "replace-nonempty-source",
+                      MOUNT_POINT "replace-nonempty-target");
+    if (rc != ENOTEMPTY ||
+        read_verify(MOUNT_POINT "replace-nonempty-source/source.bin",
+                    11u, 61u) ||
+        read_verify(MOUNT_POINT "replace-nonempty-target/target.bin",
+                    12u, 67u))
+        return fail("ext4_frename nonempty refusal", rc);
+
+    rc = ext4_dir_mk(MOUNT_POINT "rename-cycle");
+    if (rc != EOK)
+        return fail("mkdir rename cycle", rc);
+    rc = ext4_dir_mk(MOUNT_POINT "rename-cycle/child");
+    if (rc != EOK)
+        return fail("mkdir rename cycle child", rc);
+    if (write_file(MOUNT_POINT "rename-cycle/kept.bin", 13u, 71u))
+        return 1;
+    rc = ext4_frename(MOUNT_POINT "rename-cycle",
+                      MOUNT_POINT "rename-cycle/child/moved");
+    if (rc != EINVAL ||
+        read_verify(MOUNT_POINT "rename-cycle/kept.bin", 13u, 71u))
+        return fail("ext4_frename descendant refusal", rc);
+
+    rc = ext4_dir_mk(MOUNT_POINT "replace-refused-dir");
+    if (rc != EOK)
+        return fail("mkdir refused target", rc);
+    if (write_file(MOUNT_POINT "replace-refused-source.bin", 9u, 41u) ||
+        write_file(MOUNT_POINT "replace-refused-dir/child.bin", 10u, 53u))
+        return 1;
+    rc = ext4_frename(MOUNT_POINT "replace-refused-source.bin",
+                      MOUNT_POINT "replace-refused-dir");
+    if (rc != EISDIR ||
+        read_verify(MOUNT_POINT "replace-refused-source.bin", 9u, 41u) ||
+        read_verify(MOUNT_POINT "replace-refused-dir/child.bin", 10u, 53u))
+        return fail("ext4_frename destructive refusal", rc);
+    rc = ext4_frename(MOUNT_POINT "replace-refused-source.bin",
+                      "/unmounted/replace-refused-source.bin");
+    if (rc != EINVAL ||
+        read_verify(MOUNT_POINT "replace-refused-source.bin", 9u, 41u))
+        return fail("ext4_frename cross-mount refusal", rc);
     rc = ext4_fsymlink("renamed.txt", MOUNT_POINT "dir/renamed-link");
     if (rc != EOK)
         return fail("ext4_fsymlink", rc);

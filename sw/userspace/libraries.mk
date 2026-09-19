@@ -8,7 +8,7 @@ ASTRA_USERSPACE_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 ASTRA_REPOSITORY_ROOT := $(abspath $(ASTRA_USERSPACE_ROOT)/../..)
 
 ASTRA_SYSTEM_LIBRARY := \
-	$(ASTRA_REPOSITORY_ROOT)/ndk/build/m68k/libraries/system.library.1
+	$(ASTRA_REPOSITORY_ROOT)/ndk/build/m68k/libraries/system.library.2
 ASTRA_COMPILER_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/compiler/build/m68k/libraries/compiler.library.1
 ASTRA_UNWIND_LIBRARY := \

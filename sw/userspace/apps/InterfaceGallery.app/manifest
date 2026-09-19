@@ -13,4 +13,4 @@ requires filesystem.library 2 2.4.0
 requires graphics.library 2 2.1.0
 requires interface.library 5 5.1.0
 requires runtime.library 1 1.5.0
-requires system.library 1 1.2.0
+requires system.library 2 2.0.0

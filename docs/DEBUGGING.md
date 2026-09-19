@@ -61,9 +61,8 @@ diagnostics are turned off is a program with a bug in it.
 
 Rules worth knowing before they surprise you:
 
-- At most `ASTRA_LOG_MAX_BYTES` (128) per line. `astra_log()` cuts a longer
-  string rather than splitting it, because half a line arriving under another
-  process's prefix is worse than a line that ends early.
+- Lines are split into fixed event payloads and rejoined by the event reader;
+  their length is bounded only by the caller's address space.
 - Bytes that are not printable arrive as dots. The console is shared with the
   kernel's own output; a program that could write escape sequences could clear
   the screen or dress its next line up as a panic.
@@ -147,7 +146,7 @@ because both use addresses beginning at `0x00100000`.
 |---|---|
 | What every process is consuming | `ps` or `cat PROC:<pid>/status` |
 | Where host I/O is bottlenecked | `metrics` (fixed records are also at `METRICS:snapshot`) |
-| Does the terminal still work end to end | `python3 emu/qemu/test-terminal.py <qemu> sw/boot/build/astra_boot.bin --image /tmp/part.img` |
+| Does the terminal still work end to end | `python3 emu/qemu/test-terminal.py <qemu> sw/boot/build/astra_boot.bin --image /tmp/part.img` (refreshes the workspace ROM first) |
 | Where the boot time went | `python3 emu/qemu/time-boot.py ... --budget 1.0` |
 | What the kernel suites actually cover | `cd sw/kernel && make coverage` |
 | Memory errors in userspace, on the host | `cd sw/userspace && make sanitize` |

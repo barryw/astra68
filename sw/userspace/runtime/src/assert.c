@@ -16,17 +16,12 @@
 
 #include <astra/runtime.h>
 
+#include "log_internal.h"
+
 void
 astra_assert_failed(const char *file, unsigned int line,
                     const char *expression)
 {
-    char message[ASTRA_LOG_MAX_BYTES];
-    uint32_t length;
-
-    length = astra_assert_message(message, sizeof(message), file, line,
-                                  expression);
-    if (length != 0u) {
-        (void)astra_log_write(message, length);
-    }
+    (void)astra_log_assertion(file, line, expression);
     astra_process_exit(ASTRA_ASSERT_STATUS_TAG | (line & 0xffffu));
 }

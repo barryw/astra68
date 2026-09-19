@@ -1,7 +1,9 @@
 #include <astra/metrics.h>
 #include <astra/metrics_vfs.h>
+#include <astra/runtime.h>
 
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 enum {
@@ -34,16 +36,44 @@ static int name_copy(char out[ASTRA_METRIC_NAME_MAX], const char *in)
     return 1;
 }
 
-static uint32_t valid_sample_count(void)
+static uint32_t group_samples(const AstraMetricGroup *group,
+                              AstraMetricSample **out, uint32_t *count)
 {
-    AstraMetricSample samples[ASTRA_METRIC_SAMPLE_MAX];
-    uint32_t total = 0u;
+    AstraMetricSample *samples;
+    uint32_t required;
+
+    *out = NULL;
+    *count = 0u;
+    required = astra_metric_sample_count(group);
+    if (required == 0u)
+        return ASTRA_VFS_OK;
+    if (required > UINT32_MAX / sizeof(*samples))
+        return ASTRA_VFS_ERR_LIMIT;
+    samples = astra_runtime_allocate((size_t)required * sizeof(*samples));
+    if (samples == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    if (astra_metric_sample(group, samples, required) != required) {
+        astra_runtime_deallocate(samples);
+        return ASTRA_VFS_ERR_PROTOCOL;
+    }
+    *out = samples;
+    *count = required;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t valid_sample_count(uint64_t *result)
+{
+    uint64_t total = 0u;
 
     for (uint32_t group_index = 0u;
          group_index < astra_metric_group_count(); ++group_index) {
         const AstraMetricGroup *group = astra_metric_group(group_index);
-        uint32_t count = astra_metric_sample(
-            group, samples, ASTRA_METRIC_SAMPLE_MAX);
+        AstraMetricSample *samples;
+        uint32_t count;
+        uint32_t status = group_samples(group, &samples, &count);
+
+        if (status != ASTRA_VFS_OK)
+            return status;
 
         for (uint32_t index = 0u; index < count; ++index) {
             char ignored[ASTRA_METRIC_NAME_MAX];
@@ -52,8 +82,10 @@ static uint32_t valid_sample_count(void)
                 name_copy(ignored, samples[index].name))
                 ++total;
         }
+        astra_runtime_deallocate(samples);
     }
-    return total;
+    *result = total;
+    return ASTRA_VFS_OK;
 }
 
 static void record_set(AstraMetricRecord *record, const char *group,
@@ -95,8 +127,17 @@ static uint32_t metrics_open(void *context, const char *path, uint32_t flags,
         if (status != ASTRA_VFS_OK)
             return status;
     }
+    {
+        uint64_t count;
+        uint32_t status = valid_sample_count(&count);
+
+        if (status != ASTRA_VFS_OK)
+            return status;
+        if (count > UINT64_MAX / sizeof(AstraMetricRecord))
+            return ASTRA_VFS_ERR_LIMIT;
+        info->size = count * sizeof(AstraMetricRecord);
+    }
     *node = METRIC_NODE_SNAPSHOT;
-    info->size = (uint64_t)valid_sample_count() * sizeof(AstraMetricRecord);
     info->kind = ASTRA_VFS_KIND_FILE;
     info->mode = 0400u;
     info->nlink = 1u;
@@ -113,7 +154,6 @@ static uint32_t metrics_close(void *context, uintptr_t node)
 static uint32_t metrics_read(void *context, uintptr_t node, uint64_t offset,
                              void *buffer, uint32_t length, uint32_t *moved)
 {
-    AstraMetricSample samples[ASTRA_METRIC_SAMPLE_MAX];
     uint8_t *out = buffer;
     uint64_t position = 0u;
 
@@ -126,10 +166,14 @@ static uint32_t metrics_read(void *context, uintptr_t node, uint64_t offset,
     if (node != METRIC_NODE_SNAPSHOT)
         return ASTRA_VFS_ERR_NOT_FOUND;
     for (uint32_t group_index = 0u;
-         group_index < astra_metric_group_count(); ++group_index) {
+        group_index < astra_metric_group_count(); ++group_index) {
         const AstraMetricGroup *group = astra_metric_group(group_index);
-        uint32_t count = astra_metric_sample(
-            group, samples, ASTRA_METRIC_SAMPLE_MAX);
+        AstraMetricSample *samples;
+        uint32_t count;
+        uint32_t status = group_samples(group, &samples, &count);
+
+        if (status != ASTRA_VFS_OK)
+            return status;
 
         for (uint32_t index = 0u; index < count; ++index) {
             AstraMetricRecord record;
@@ -143,11 +187,14 @@ static uint32_t metrics_read(void *context, uintptr_t node, uint64_t offset,
             for (uint32_t at = 0u; at < sizeof(record); ++at, ++position) {
                 if (position < offset)
                     continue;
-                if (*moved == length)
+                if (*moved == length) {
+                    astra_runtime_deallocate(samples);
                     return ASTRA_VFS_OK;
+                }
                 out[(*moved)++] = bytes[at];
             }
         }
+        astra_runtime_deallocate(samples);
     }
     return ASTRA_VFS_OK;
 }

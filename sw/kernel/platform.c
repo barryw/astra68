@@ -1419,6 +1419,20 @@ void kernel_platform_host_channel_disarm(uint32_t slot)
         1u);
 }
 
+static bool host_channel_size_valid(uint32_t byte_size,
+                                    uint32_t command_capacity,
+                                    uint32_t *data_offset)
+{
+    if (command_capacity == 0u || data_offset == NULL ||
+        command_capacity >
+            (UINT32_MAX - ASTRA_HOST_CHANNEL_HEADER_SIZE) /
+                ASTRA_HOST_COMMAND_SIZE)
+        return false;
+    *data_offset = ASTRA_HOST_CHANNEL_HEADER_SIZE +
+                   command_capacity * ASTRA_HOST_COMMAND_SIZE;
+    return byte_size >= *data_offset;
+}
+
 bool kernel_platform_host_channel_completion(
     uint32_t physical_buffer, uint32_t byte_size, uint32_t command_capacity,
     KernelPlatformHostChannelState *state)
@@ -1428,14 +1442,7 @@ bool kernel_platform_host_channel_completion(
 
     if (state == NULL || physical_buffer == 0u ||
         (physical_buffer & (ASTRA_ABI_ALIGNMENT - 1u)) != 0u ||
-        command_capacity == 0u ||
-        command_capacity >
-            (UINT32_MAX - ASTRA_HOST_CHANNEL_HEADER_SIZE) /
-                ASTRA_HOST_COMMAND_SIZE)
-        return false;
-    data_offset = ASTRA_HOST_CHANNEL_HEADER_SIZE +
-                  command_capacity * ASTRA_HOST_COMMAND_SIZE;
-    if (byte_size <= data_offset)
+        !host_channel_size_valid(byte_size, command_capacity, &data_offset))
         return false;
     header = (volatile const AstraHostChannelHeader *)(uintptr_t)
         physical_buffer;
@@ -1457,6 +1464,17 @@ bool kernel_platform_host_channel_completion(
     kernel_mmio_cpu_sync();
     return true;
 }
+
+#if defined(KERNEL_PLATFORM_HOST_TEST)
+bool kernel_platform_test_host_channel_size(uint32_t byte_size,
+                                            uint32_t command_capacity)
+{
+    uint32_t data_offset;
+
+    return host_channel_size_valid(byte_size, command_capacity,
+                                   &data_offset);
+}
+#endif
 
 void kernel_platform_host_channel_ack(void)
 {

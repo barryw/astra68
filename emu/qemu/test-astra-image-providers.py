@@ -48,9 +48,22 @@ assert "remote-desktop" in astra_image.DISPLAY_SERVICES
 assert "entropy" in astra_image.DISPLAY_SERVICES
 remote_service = astra_image.CONFIGURATION[
     "services/remote-desktop/service.conf"]
-for required in ("runs paired\n", "start manual\n", "restart on-fault\n",
+for required in ("runs paired\n", "start boot\n", "restart on-fault\n",
                  "grant HOST_DEVICE\n"):
     assert required in remote_service
+assert "start manual\n" not in remote_service
+
+provider_path_max = (astra_image.PROVIDER_INDEX_MAX -
+                     astra_image.PROVIDER_INDEX_HEADER.size)
+record = astra_image._provider_index_record(
+    "p" * provider_path_max, (1, 2, 3), 1, 0, 7)
+assert len(record) == astra_image.PROVIDER_INDEX_MAX
+try:
+    astra_image._provider_index_record(
+        "p" * (provider_path_max + 1), (1, 2, 3), 1, 0, 7)
+    raise AssertionError("provider path beyond the VFS ABI was accepted")
+except RuntimeError as error:
+    assert "provider index path is too long" in str(error)
 zshrc = astra_image.CONFIGURATION["commands/zsh/zshrc"]
 assert "HOME:/.motd.zsh" in zshrc
 assert "CONFIG:motd.zsh" in zshrc

@@ -2570,6 +2570,14 @@ int main(void)
     info.button = "OK";
     info.button_length = 2u;
     assert(astra_interface_test_valid(&info));
+    info.button = "Continue with this operation";
+    info.button_length = 28u;
+    assert(astra_interface_test_valid(&info));
+    info.button = malformed_utf8;
+    info.button_length = sizeof(malformed_utf8);
+    assert(!astra_interface_test_valid(&info));
+    info.button = "OK";
+    info.button_length = 2u;
     info.kind = 0u;
     assert(!astra_interface_test_valid(&info));
     info.kind = ASTRA_ALERT_ERROR;

@@ -1,7 +1,23 @@
 #include <loader.h>
 
 #include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+static int fail_reallocation;
+
+void *astra_runtime_reallocate(void *pointer, size_t size)
+{
+    if (fail_reallocation)
+        return NULL;
+    return realloc(pointer, size);
+}
+
+void astra_runtime_deallocate(void *pointer)
+{
+    free(pointer);
+}
 
 static void valid_manifest(void)
 {
@@ -123,10 +139,70 @@ static void parses_bundle_grants(void)
     assert(grant.rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE));
 }
 
+static void accepts_large_commented_manifest(void)
+{
+    char text[262144u];
+    SupervisorManifest manifest;
+    const char service[] = "\nservice SERVICES:storage grants BLOCK_DEVICE\n";
+
+    text[0] = '#';
+    memset(text + 1u, 'x', sizeof(text) - sizeof(service) - 1u);
+    memcpy(text + sizeof(text) - sizeof(service), service, sizeof(service));
+    assert(supervisor_manifest_parse(text, sizeof(text) - 1u, &manifest));
+    assert(manifest.count == 1u);
+}
+
+static void path_uses_vfs_authority(void)
+{
+    char path[ASTRA_VFS_PATH_MAX + 1u];
+    char text[ASTRA_VFS_PATH_MAX + 64u];
+    SupervisorManifest manifest;
+
+    memcpy(path, "SERVICES:", sizeof("SERVICES:") - 1u);
+    memset(path + sizeof("SERVICES:") - 1u, 'p',
+           150u - (sizeof("SERVICES:") - 1u));
+    path[150] = '\0';
+    (void)snprintf(text, sizeof(text), "service %s grants SYS:r\n", path);
+    assert(supervisor_manifest_parse(text, strlen(text), &manifest));
+    assert(strlen(manifest.entries[0].path) == 150u);
+    memset(path + sizeof("SERVICES:") - 1u, 'p',
+           ASTRA_VFS_PATH_MAX - (sizeof("SERVICES:") - 1u));
+    path[ASTRA_VFS_PATH_MAX] = '\0';
+    (void)snprintf(text, sizeof(text), "service %s grants SYS:r\n", path);
+    assert(!supervisor_manifest_parse(text, strlen(text), &manifest));
+}
+
+static void parses_exact_span_without_terminator(void)
+{
+    const char source[] = "service SERVICES:test grants SYS:r";
+    size_t length = sizeof(source) - 1u;
+    char *text = malloc(length);
+    SupervisorManifest manifest;
+
+    assert(text != NULL);
+    memcpy(text, source, length);
+    assert(supervisor_manifest_parse(text, (uint32_t)length, &manifest));
+    assert(manifest.count == 1u);
+    assert(strcmp(manifest.entries[0].path, "SERVICES:test") == 0);
+    free(text);
+
+    text = malloc(length);
+    assert(text != NULL);
+    memcpy(text, source, length);
+    fail_reallocation = 1;
+    assert(!supervisor_manifest_parse(text, (uint32_t)length, &manifest));
+    fail_reallocation = 0;
+    assert(manifest.count == 0u);
+    free(text);
+}
+
 int main(void)
 {
     valid_manifest();
     refuses_whole_file();
     parses_bundle_grants();
+    accepts_large_commented_manifest();
+    path_uses_vfs_authority();
+    parses_exact_span_without_terminator();
     return 0;
 }

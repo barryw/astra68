@@ -45,7 +45,7 @@ test_init_contract(void)
     static const AstraAllocClass duplicate[] = {{64u, 4u}, {64u, 4u}};
     static const AstraAllocClass zero_size[] = {{0u, 4u}};
     static const AstraAllocClass zero_count[] = {{32u, 0u}};
-    static const AstraAllocClass too_many[ASTRA_ALLOC_CLASS_MAX + 1u] = {
+    static const AstraAllocClass many[] = {
         {8u, 1u},  {16u, 1u},  {32u, 1u},  {64u, 1u}, {128u, 1u},
         {256u, 1u}, {512u, 1u}, {1024u, 1u}, {2048u, 1u}};
     AstraAllocator allocator;
@@ -56,7 +56,8 @@ test_init_contract(void)
     assert(astra_alloc_arena_bytes(zero_size, 1u) == 0u);
     assert(astra_alloc_arena_bytes(zero_count, 1u) == 0u);
     assert(astra_alloc_arena_bytes(profile, 0u) == 0u);
-    assert(astra_alloc_arena_bytes(too_many, ASTRA_ALLOC_CLASS_MAX + 1u) == 0u);
+    assert(astra_alloc_arena_bytes(many,
+                                   sizeof(many) / sizeof(many[0])) != 0u);
     assert(astra_alloc_arena_bytes(NULL, 1u) == 0u);
 
     assert(astra_alloc_init(NULL, profile, PROFILE_CLASSES, arena_storage,
@@ -75,6 +76,16 @@ test_init_contract(void)
            ASTRA_ALLOC_ARENA_TOO_SMALL);
     assert(astra_alloc_init(&allocator, profile, PROFILE_CLASSES,
                             arena_storage, required) == ASTRA_ALLOC_OK);
+    required = astra_alloc_arena_bytes(many,
+                                       sizeof(many) / sizeof(many[0]));
+    assert(required <= sizeof(arena_storage));
+    assert(astra_alloc_init(&allocator, many,
+                            sizeof(many) / sizeof(many[0]), arena_storage,
+                            required) == ASTRA_ALLOC_OK);
+    assert(allocator.pool_count == 9u);
+    assert(astra_alloc(&allocator, 2048u) != NULL);
+    assert(astra_alloc(&allocator, 2048u) == NULL);
+    assert(astra_alloc_last_status(&allocator) == ASTRA_ALLOC_EXHAUSTED);
 
     /* A misaligned arena is refused rather than silently realigned. */
     assert(astra_alloc_init(&allocator, profile, PROFILE_CLASSES,
@@ -222,6 +233,26 @@ test_injection(void)
     assert(astra_alloc_last_status(&allocator) == ASTRA_ALLOC_INJECTED);
     assert(astra_alloc(&allocator, 200u) != NULL);
     assert(astra_alloc_valid(&allocator));
+}
+
+static void
+test_sampler_contract(void)
+{
+    AstraAllocator allocator;
+    AstraMetricSample samples[10u + PROFILE_CLASSES * 3u];
+    uint32_t required;
+
+    init_ok(&allocator);
+    required = (uint32_t)(sizeof(samples) / sizeof(samples[0]));
+    assert(astra_alloc_sampler(&allocator, NULL, 0u) == required);
+    assert(astra_alloc_sampler(&allocator, samples, required - 1u) ==
+           required);
+    assert(astra_alloc_sampler(&allocator, samples, required) == required);
+    assert(strcmp(samples[10u].name, "class0.live") == 0);
+    assert(strcmp(samples[required - 1u].name, "class3.failures") == 0);
+
+    allocator.pool_count = (UINT32_MAX - 10u) / 3u + 1u;
+    assert(astra_alloc_sampler(&allocator, NULL, 0u) == 0u);
 }
 
 /*
@@ -412,6 +443,7 @@ main(void)
     test_exhaustion_does_not_spill();
     test_free_rejections();
     test_injection();
+    test_sampler_contract();
     test_injection_matrix();
     test_stress();
     report_profile();

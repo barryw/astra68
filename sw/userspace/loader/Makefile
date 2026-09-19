@@ -56,7 +56,7 @@ contract: $(TARGET)
 	@python3 ../../../tools/check_shared_library_layout.py $(TARGET)
 	@$(READELF) -hW $(TARGET) | grep -q 'Type:.*DYN'
 	@$(READELF) -hW $(TARGET) | grep -Eq 'Entry point address:.*0x[1-9a-f]'
-	@$(READELF) -dW $(TARGET) | grep -q 'SONAME.*loader.library.1'
+	@$(READELF) -dW $(TARGET) | grep -Fq 'Library soname: [loader.library.1]'
 	@$(READELF) -dW $(TARGET) | grep -q '(RELA).*0x[1-9a-f]'
 	@$(READELF) -dW $(TARGET) | grep -q '(RELASZ).*[1-9][0-9]* (bytes)'
 	@$(READELF) -dW $(TARGET) | grep -q '(RELAENT).*12 (bytes)'

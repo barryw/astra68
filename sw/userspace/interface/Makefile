@@ -25,7 +25,7 @@ INTERFACE_LIBRARY_MAP := interface.library.exports
 NDK_HOST_UTF8 := $(NDK)/build/host/utf8.o
 GRAPHICS_LIBRARY := $(GRAPHICS)/build/m68k/libraries/graphics.library.2
 FONT_LIBRARY := $(GRAPHICS)/build/m68k/libraries/font.library.2
-SYSTEM_LIBRARY := $(NDK)/build/m68k/libraries/system.library.1
+SYSTEM_LIBRARY := $(NDK)/build/m68k/libraries/system.library.2
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.1
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
@@ -92,7 +92,7 @@ $(INTERFACE_TARGET): $(INTERFACE_OBJECTS) $(INTERFACE_LIBRARY_MAP) \
 		-L$(dir $(GRAPHICS_LIBRARY)) -L$(dir $(SYSTEM_LIBRARY)) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
 		-Wl,--no-as-needed -Wl,-l:graphics.library.2 \
-		-Wl,-l:font.library.2 -Wl,-l:system.library.1 \
+		-Wl,-l:font.library.2 -Wl,-l:system.library.2 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1
 
 library-contract: $(INTERFACE_TARGET)
@@ -105,15 +105,15 @@ library-contract: $(INTERFACE_TARGET)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
 		grep -q '^interface.library.5 5.1.0 ABI 5.1$$'
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
-		grep -c 'NEEDED.*graphics.library.2')" = 1
+		grep -Fc 'Shared library: [graphics.library.2]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
-		grep -c 'NEEDED.*font.library.2')" = 1
+		grep -Fc 'Shared library: [font.library.2]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
-		grep -c 'NEEDED.*system.library.1')" = 1
+		grep -Fc 'Shared library: [system.library.2]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
-		grep -c 'NEEDED.*runtime.library.1')" = 1
+		grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
-		grep -c 'NEEDED.*compiler.library.1')" = 1
+		grep -Fc 'Shared library: [compiler.library.1]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		awk '/NEEDED/{n++} END{print n+0}')" = 5
 	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET))

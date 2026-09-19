@@ -17,13 +17,13 @@
 #include <astra/vfs_process.h>
 #include <astra/window.h>
 
+
 #define DESKTOP_WIDTH ASTRA_DISPLAY_WIDTH
 #define DESKTOP_TOP 34u
 #define DESKTOP_BOTTOM (ASTRA_DISPLAY_HEIGHT - 42u)
 #define DESKTOP_HEIGHT (DESKTOP_BOTTOM - DESKTOP_TOP)
 #define TERMINAL_BUNDLE_DIRECTORY "Terminal.app"
 #define TERMINAL_BUNDLE "APPS:" TERMINAL_BUNDLE_DIRECTORY
-#define ICON_BYTES_MAX 8192u
 #define TERMINAL_ICON_LEFT 32
 #define TERMINAL_ICON_TOP 28
 #define TERMINAL_ICON_RIGHT 112
@@ -54,8 +54,6 @@ ASTRA_PROGRAM("desktop", 0, 3, 0, "Barry Walker",
 
 static AstraProcessFilesystem process_filesystem =
     ASTRA_PROCESS_FILESYSTEM_INIT;
-static char manifest_text[ASTRA_BUNDLE_MANIFEST_MAX + 1u];
-static uint8_t icon_bytes[ICON_BYTES_MAX];
 
 static void launch_error(uint32_t gui, AstraResult failure)
 {
@@ -107,11 +105,11 @@ static int draw_strike(AstraSurfaceView *surface, const AstraAicon *icon,
                        const AstraAiconStrike *strike)
 {
     for (uint16_t color = 1u; color < icon->palette_count; ++color) {
-        IconRun active[32];
+        IconRun active[ASTRA_AICON_STRIKE_WIDTH_MAX / 2u];
         uint32_t active_count = 0u;
 
         for (uint16_t y = 0u; y < strike->height; ++y) {
-            IconRun current[32];
+            IconRun current[ASTRA_AICON_STRIKE_WIDTH_MAX / 2u];
             uint32_t current_count = 0u;
             uint16_t x = 0u;
 
@@ -166,26 +164,28 @@ static int draw_strike(AstraSurfaceView *surface, const AstraAicon *icon,
 static uint32_t paint(AstraSurfaceView *surface)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
-    AstraBundleManifest manifest;
+    AstraBundleManifest manifest = ASTRA_BUNDLE_MANIFEST_INIT;
     AstraAicon icon;
     AstraAiconStrike strike;
     char icon_path[ASTRA_VFS_PATH_MAX];
+    char *manifest_text = NULL;
+    uint8_t *icon_bytes = NULL;
     uint32_t length = 0u;
     uint32_t line = 0u;
     uint32_t status;
 
     astra_surface_clear(surface, astra_surface_rgb565(
         theme.canvas.red, theme.canvas.green, theme.canvas.blue));
-    status = astra_process_read_file(
-        &process_filesystem, TERMINAL_BUNDLE "/manifest", manifest_text,
-        ASTRA_BUNDLE_MANIFEST_MAX, &length);
+    status = astra_process_read_file_alloc(
+        &process_filesystem, TERMINAL_BUNDLE "/manifest",
+        (void **)&manifest_text, &length);
     if (status != ASTRA_VFS_OK) {
         (void)astra_log_failure("desktop manifest read", status);
         return DESKTOP_FAIL_MANIFEST_READ;
     }
-    manifest_text[length] = '\0';
     status = astra_bundle_manifest_parse(manifest_text, length, &manifest,
                                          &line);
+    astra_runtime_deallocate(manifest_text);
     if (status != ASTRA_BUNDLE_OK) {
         (void)astra_log_failure("desktop manifest parse", status);
         (void)astra_log_failure("desktop manifest line", line);
@@ -195,23 +195,33 @@ static uint32_t paint(AstraSurfaceView *surface)
         "APPS", TERMINAL_BUNDLE_DIRECTORY, manifest.icon, icon_path,
         sizeof(icon_path));
     if (status != ASTRA_VFS_OK) {
+        astra_bundle_manifest_destroy(&manifest);
         (void)astra_log_failure("desktop icon path", status);
         return DESKTOP_FAIL_ICON_PATH;
     }
-    if (astra_process_read_file(&process_filesystem, icon_path, icon_bytes,
-                                sizeof(icon_bytes), &length) !=
+    if (astra_process_read_file_alloc(
+            &process_filesystem, icon_path, (void **)&icon_bytes, &length) !=
             ASTRA_VFS_OK || astra_aicon_open(
                 icon_bytes, length, &icon) != ASTRA_BUNDLE_OK ||
             astra_aicon_strike(&icon, 64u, &strike) !=
-                ASTRA_BUNDLE_OK)
+                ASTRA_BUNDLE_OK) {
+        astra_runtime_deallocate(icon_bytes);
+        astra_bundle_manifest_destroy(&manifest);
         return DESKTOP_FAIL_ICON;
-    if (!draw_strike(surface, &icon, &strike)) return DESKTOP_FAIL_ICON;
+    }
+    if (!draw_strike(surface, &icon, &strike)) {
+        astra_runtime_deallocate(icon_bytes);
+        astra_bundle_manifest_destroy(&manifest);
+        return DESKTOP_FAIL_ICON;
+    }
+    astra_runtime_deallocate(icon_bytes);
     astra_surface_ui_text(surface, 40, 104, manifest.name,
                           (uint32_t)strlen(manifest.name),
                           ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT,
                           astra_surface_rgb565(theme.text_primary.red,
                                                theme.text_primary.green,
                                                theme.text_primary.blue));
+    astra_bundle_manifest_destroy(&manifest);
     return ASTRA_STATUS_OK;
 }
 

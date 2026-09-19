@@ -625,6 +625,43 @@ int main(void)
         assert(draw_title_icon(&builder, destination, &icon_window, 13, 7));
         assert(astra_render_builder_finish(&builder) != 0u);
         assert(batch_has_fill(13, 7, 16u, 16u, icon_color));
+
+        {
+            uint8_t maximum[ASTRA_AICON_STRIKE_WIDTH_MAX *
+                            ASTRA_AICON_STRIKE_WIDTH_MAX];
+
+            for (uint32_t at = 0u; at < sizeof(maximum); ++at)
+                maximum[at] = (uint8_t)((at %
+                    ASTRA_AICON_STRIKE_WIDTH_MAX) % 2u == 0u);
+            icon_window.title_icon_strike = (AstraAiconStrike){
+                ASTRA_AICON_STRIKE_WIDTH_MAX,
+                ASTRA_AICON_STRIKE_WIDTH_MAX, maximum, sizeof(maximum)};
+            assert(astra_render_builder_init(
+                &builder, batch, sizeof(batch), 2u));
+            destination = astra_render_builder_surface_at(
+                &builder, DISPLAY_MEDIA_BASE, 64u * 64u * 2u, 64u, 64u);
+            assert(destination != 0u);
+            assert(draw_title_icon(
+                &builder, destination, &icon_window, 13, 7));
+            assert(astra_render_builder_finish(&builder) != 0u);
+            assert(batch_has_fill(13, 7, 1u,
+                                  ASTRA_AICON_STRIKE_WIDTH_MAX, icon_color));
+        }
+
+        {
+            uint8_t too_wide[ASTRA_AICON_STRIKE_WIDTH_MAX + 1u] = {0};
+
+            icon_window.title_icon_strike = (AstraAiconStrike){
+                ASTRA_AICON_STRIKE_WIDTH_MAX + 1u, 1u,
+                too_wide, sizeof(too_wide)};
+            assert(astra_render_builder_init(
+                &builder, batch, sizeof(batch), 3u));
+            destination = astra_render_builder_surface_at(
+                &builder, DISPLAY_MEDIA_BASE, 64u * 64u * 2u, 64u, 64u);
+            assert(destination != 0u);
+            assert(!draw_title_icon(
+                &builder, destination, &icon_window, 13, 7));
+        }
     }
 
     {

@@ -287,6 +287,8 @@ static void test_block_reset_contract(void)
 static void test_owner_scoped_host_transport(void)
 {
     VestaRegs *registers = kernel_platform_test_registers();
+    uint32_t command_bytes = ASTRA_HOST_CHANNEL_HEADER_SIZE +
+                             ASTRA_HOST_COMMAND_SIZE;
     uint32_t completed = 0u;
 
     clear_registers(registers);
@@ -313,6 +315,8 @@ static void test_owner_scoped_host_transport(void)
     assert(registers->HOST_ACCEL_CHANNEL_ACK == 1u);
     kernel_platform_host_release_owner(0x10000021u);
     assert(registers->HOST_ACCEL_RELEASE_OWNER == 0x10000021u);
+    assert(!kernel_platform_test_host_channel_size(command_bytes - 1u, 1u));
+    assert(kernel_platform_test_host_channel_size(command_bytes, 1u));
 }
 
 /*

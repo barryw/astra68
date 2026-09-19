@@ -28,6 +28,8 @@
 
 #include <stdio.h>
 
+#include "ps_support.h"
+
 ASTRA_PROGRAM("ps", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
@@ -119,182 +121,20 @@ append_output(const char *text, uint32_t length)
     return 1;
 }
 
-static uint32_t
-append_text(char *out, uint32_t at, const char *text)
+static int append_row(const AstraProcSnapshot *record)
 {
-    while (*text != '\0')
-        out[at++] = *text++;
-    return at;
-}
+    uint32_t length = astra_ps_format_row(NULL, 0u, record);
 
-static uint32_t
-append_number(char *out, uint32_t at, uint32_t value, uint32_t width)
-{
-    char digits[10];
-    uint32_t count = 0u;
-
-    do {
-        uint32_t quotient = value / 10u;
-
-        digits[count++] = (char)('0' + value - quotient * 10u);
-        value = quotient;
-    } while (value != 0u);
-    while (width > count) {
-        out[at++] = ' ';
-        --width;
-    }
-    while (count != 0u)
-        out[at++] = digits[--count];
-    return at;
-}
-
-static uint32_t
-append_number64(char *out, uint32_t at, uint64_t value, uint32_t width)
-{
-    char digits[20];
-    uint32_t count = 0u;
-
-    do {
-        uint32_t remainder;
-
-        value = astra_divide_u64(value, 10u, &remainder);
-        digits[count++] = (char)('0' + remainder);
-    } while (value != 0u);
-    while (width > count) {
-        out[at++] = ' ';
-        --width;
-    }
-    while (count != 0u)
-        out[at++] = digits[--count];
-    return at;
-}
-
-static uint32_t
-append_signed(char *out, uint32_t at, int32_t value, uint32_t width)
-{
-    uint32_t magnitude = value < 0 ? (uint32_t)(-value) : (uint32_t)value;
-    uint32_t digits = 1u;
-
-    for (uint32_t rest = magnitude; rest >= 10u; rest /= 10u)
-        ++digits;
-    while (width > digits + (value < 0 ? 1u : 0u)) {
-        out[at++] = ' ';
-        --width;
-    }
-    if (value < 0)
-        out[at++] = '-';
-    return append_number(out, at, magnitude, digits);
-}
-
-static uint32_t
-append_two_digits(char *out, uint32_t at, uint32_t value)
-{
-    out[at++] = (char)('0' + (value / 10u) % 10u);
-    out[at++] = (char)('0' + value % 10u);
-    return at;
-}
-
-/* The states AstraProcessInfo reports, in the order the kernel numbers them. */
-static const char *
-state_name(uint32_t value)
-{
-    static const char *const names[] = {
-        "unused", "new", "ready", "run", "wait", "dead"
-    };
-
-    return value < sizeof(names) / sizeof(names[0]) ? names[value] : "?";
-}
-
-static const char *
-process_state_name(const AstraProcessInfo *process)
-{
-    return process->suspended != 0u ? "stop" :
-                                      state_name(process->thread_state);
-}
-
-static uint32_t
-append_cpu(char *out, uint32_t at, uint64_t runtime, uint64_t elapsed)
-{
-    uint32_t tenths;
-
-    while (elapsed > UINT32_MAX) {
-        runtime >>= 1u;
-        elapsed >>= 1u;
-    }
-    tenths = elapsed == 0u ? 0u : (uint32_t)astra_divide_u64(
-        runtime * 1000u, (uint32_t)elapsed, NULL);
-    if (tenths > 1000u)
-        tenths = 1000u;
-    at = append_number(out, at, tenths / 10u, 3u);
-    out[at++] = '.';
-    return append_number(out, at, tenths % 10u, 1u);
-}
-
-static uint32_t
-append_time(char *out, uint32_t at, uint64_t runtime)
-{
-    uint32_t hundredths;
-    uint32_t within_hour;
-    uint64_t seconds = astra_divide_u64(runtime, 10000000u, NULL);
-    uint64_t hours;
-
-    seconds = astra_divide_u64(seconds, 100u, &hundredths);
-    hours = astra_divide_u64(seconds, 3600u, &within_hour);
-    at = hours < 100u ? append_two_digits(out, at, (uint32_t)hours) :
-        append_number64(out, at, hours, 2u);
-    out[at++] = ':';
-    at = append_two_digits(out, at, within_hour / 60u);
-    out[at++] = ':';
-    at = append_two_digits(out, at, within_hour % 60u);
-    out[at++] = '.';
-    return append_two_digits(out, at, hundredths);
-}
-
-static int
-append_row(uint32_t id, uint32_t generation, const char *state,
-           uint32_t priority, uint32_t live,
-           uint32_t frames, uint64_t runtime, uint64_t elapsed,
-           uint32_t runs, uint32_t syscalls, uint32_t handles,
-           const char *name)
-{
-    char line[112];
-    uint32_t at = 0u;
-    uint32_t state_length = 0u;
-
-    at = append_number(line, at, id, 10u);
-    line[at++] = ' ';
-    at = append_number(line, at, generation, 5u);
-    line[at++] = ' ';
-    while (state[state_length] != '\0')
-        ++state_length;
-    at = append_text(line, at, state);
-    while (state_length++ < 6u)
-        line[at++] = ' ';
-    line[at++] = ' ';
-    at = append_number(line, at, priority, 3u);
-    line[at++] = ' ';
-    at = append_signed(line, at,
-                       (int32_t)ASTRA_PROCESS_PRIORITY_NORMAL -
-                           (int32_t)priority,
-                       3u);
-    line[at++] = ' ';
-    at = append_number(line, at, live, 3u);
-    line[at++] = ' ';
-    at = append_number(line, at, frames * 4u, 6u);
-    line[at++] = ' ';
-    at = append_cpu(line, at, runtime, elapsed);
-    line[at++] = ' ';
-    at = append_time(line, at, runtime);
-    line[at++] = ' ';
-    at = append_number(line, at, runs, 7u);
-    line[at++] = ' ';
-    at = append_number(line, at, syscalls, 7u);
-    line[at++] = ' ';
-    at = append_number(line, at, handles, 3u);
-    line[at++] = ' ';
-    at = append_text(line, at, name);
-    line[at++] = '\n';
-    return append_output(line, at);
+    if (length == 0u || length > sizeof(output))
+        return 0;
+    if (length > sizeof(output) - output_used && !flush_output())
+        return 0;
+    if (astra_ps_format_row(output + output_used,
+                            (uint32_t)sizeof(output) - output_used,
+                            record) != length)
+        return 0;
+    output_used += length;
+    return 1;
 }
 
 int
@@ -337,14 +177,7 @@ main(int argc, char **argv)
                 status = ASTRA_VFS_ERR_PROTOCOL;
                 break;
             }
-            if (!append_row(process->id, process->generation,
-                            process_state_name(process),
-                            process->default_priority, process->live_threads,
-                            process->resident_frames,
-                            process->runtime_ns, process->elapsed_ns,
-                            process->run_count, process->syscall_count,
-                            process->handle_references,
-                            records[index].name))
+            if (!append_row(&records[index]))
                 status = ASTRA_VFS_ERR_IO;
             else
                 ++listed;

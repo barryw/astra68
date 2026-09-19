@@ -23,7 +23,7 @@ LIB := build/m68k/libastra.a
 PIC_LIB := build/m68k/libastra-pic.a
 RUNTIME := ../sw/userspace/runtime
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
-SYSTEM_LIBRARY := build/m68k/libraries/system.library.1
+SYSTEM_LIBRARY := build/m68k/libraries/system.library.2
 SYSTEM_IDENTITY := build/m68k/dynamic/system_library.o
 SYSTEM_OBJECTS := build/m68k/dynamic/resource.o build/m68k/dynamic/area.o \
 	build/m68k/dynamic/port.o build/m68k/dynamic/application.o \
@@ -59,6 +59,7 @@ HOST_TESTS += build/host/test_service_manager
 HOST_TESTS += build/host/test_fixed build/host/test_bundle
 HOST_TESTS += build/host/test_utf8
 HOST_TESTS += build/host/test_clipboard
+HOST_TESTS += build/host/test_datetime
 
 SANITIZER_TESTS := build/host/test_front_panel_sanitize \
 	build/host/test_font_sanitize build/host/test_graphics_sanitize \
@@ -125,7 +126,7 @@ $(SYSTEM_LIBRARY): $(SYSTEM_IDENTITY) $(SYSTEM_OBJECTS) $(SYSTEM_MAP) \
 		$(ASTRA_SHARED_LINK_INPUTS) | runtime-library-ready
 	@mkdir -p $(@D)
 	$(CC) $(CPU_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,system.library.1 \
+		-Wl,-soname,system.library.2 \
 		-Wl,--version-script=$(SYSTEM_MAP) -o $@ \
 		$(SYSTEM_IDENTITY) $(SYSTEM_OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -Wl,--no-as-needed \
@@ -139,17 +140,15 @@ system-library-contract: $(SYSTEM_LIBRARY)
 	@python3 ../tools/check_elf_exports.py --readelf $(READELF) \
 		$(SYSTEM_MAP) $(SYSTEM_LIBRARY)
 	@python3 ../tools/library_info.py $< | \
-		grep -q '^system.library.1 1.2.0 ABI 1.2$$'
+		grep -q '^system.library.2 2.1.0 ABI 2.1$$'
 	@$(READELF) -hW $< | grep -q 'Type:.*DYN'
-	@$(READELF) -dW $< | grep -q 'SONAME.*system.library.1'
-	@test "$$($(READELF) -dW $< | grep -c 'NEEDED.*runtime.library.1')" = 1
+	@$(READELF) -dW $< | grep -Fq 'Library soname: [system.library.2]'
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 1
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'
 	@$(READELF) -lW $< | grep -q ' GNU_RELRO '
-	@$(READELF) -VW $< | grep -q 'ASTRA_SYSTEM_1.0'
-	@$(READELF) -VW $< | grep -q 'ASTRA_SYSTEM_1.1'
-	@$(READELF) -VW $< | grep -q 'ASTRA_SYSTEM_1.2'
+	@$(READELF) -VW $< | grep -q 'ASTRA_SYSTEM_2.1'
 	@echo "astra system shared library: PASS"
 
 build/m68k/%.o: src/%.c
@@ -225,6 +224,11 @@ build/host/test_clipboard: src/clipboard.c src/resource.c src/area.c \
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
 
+build/host/test_datetime: src/datetime.c ../sw/common/civil.c \
+		../sw/common/divide.c tests/test_datetime.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
+
 test: $(HOST_TESTS) header-contract
 	./build/host/test_front_panel
 	./build/host/test_font
@@ -240,6 +244,7 @@ test: $(HOST_TESTS) header-contract
 	./build/host/test_bundle
 	./build/host/test_utf8
 	./build/host/test_clipboard
+	./build/host/test_datetime
 
 build/host/test_front_panel_sanitize: src/front_panel.c tests/test_front_panel.c
 	@mkdir -p $(@D)

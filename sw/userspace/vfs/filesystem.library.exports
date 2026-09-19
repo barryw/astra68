@@ -128,3 +128,8 @@ ASTRA_FILESYSTEM_2.4 {
     global:
         astra_filesystem_directory_rewind;
 } ASTRA_FILESYSTEM_2.3;
+
+ASTRA_FILESYSTEM_2.5 {
+    global:
+        astra_process_read_file_alloc;
+} ASTRA_FILESYSTEM_2.4;

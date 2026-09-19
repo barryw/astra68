@@ -5,19 +5,20 @@
 
 #include <astra/process.h>
 #include <astra/syscall.h>
+#include <astra/vfs_service.h>
 
 #define ASTRA_CAPABILITY_APPLICATION_LAUNCH "APP_LAUNCH"
 
 #define ASTRA_APPLICATION_PROTOCOL UINT32_C(0x4150504c) /* APPL */
-#define ASTRA_APPLICATION_VERSION 2u
+#define ASTRA_APPLICATION_VERSION 4u
 
 #define ASTRA_APPLICATION_LAUNCH 1u
 #define ASTRA_APPLICATION_LAUNCHED 2u
-#define ASTRA_APPLICATION_PATH_MAX 128u
 
-/* Inline application-launch transport.  The syscall itself accepts the full
- * startup page; this service record is bounded by its existing port budget. */
-#define ASTRA_APPLICATION_ARGUMENT_BYTES 192u
+/* The request uses the complete message payload: 16 bytes of argument
+ * metadata surround the packed strings. */
+#define ASTRA_APPLICATION_ARGUMENT_BYTES (ASTRA_MESSAGE_INLINE_MAX - 16u)
+#define ASTRA_APPLICATION_PATH_MAX ASTRA_VFS_PATH_MAX
 #define ASTRA_APPLICATION_ARGUMENT_MAX \
     (ASTRA_APPLICATION_ARGUMENT_BYTES / 2u)
 
@@ -43,7 +44,7 @@ typedef struct AstraApplicationLaunchReply {
     uint32_t process_id;
 } AstraApplicationLaunchReply;
 
-#define ASTRA_APPLICATION_LAUNCH_REQUEST_SIZE 232u
+#define ASTRA_APPLICATION_LAUNCH_REQUEST_SIZE ASTRA_MESSAGE_SIZE_MAX
 #define ASTRA_APPLICATION_LAUNCH_REPLY_SIZE 32u
 
 _Static_assert(sizeof(AstraApplicationLaunchRequest) ==

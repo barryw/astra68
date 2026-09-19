@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include <astra/limits.h>
+#include <astra/message_abi.h>
 
 #define KERNEL_HANDLE_INVALID 0u
 /*
@@ -38,7 +39,7 @@
 #define KERNEL_HANDLE_MAX_ENTRIES ASTRA_HANDLE_COUNT_MAX
 #define KERNEL_HANDLE_BITMAP_WORDS \
     ((KERNEL_HANDLE_MAX_ENTRIES + 31u) / 32u)
-#define KERNEL_HANDLE_TRANSFER_MAX 8u
+#define KERNEL_HANDLE_TRANSFER_MAX ASTRA_MESSAGE_HANDLES_MAX
 #define KERNEL_HANDLE_DETACHED_MAX 256u
 
 typedef uint32_t KernelHandle;

@@ -2,6 +2,8 @@
 
 #include "../src/resource_internal.h"
 
+#include <astra/address_space.h>
+
 #include <assert.h>
 #include <errno.h>
 #include <limits.h>
@@ -41,7 +43,9 @@ main(void)
            astra_posix_resource_file_size() == 4096u);
 
     assert(getrlimit(RLIMIT_STACK, &limit) == 0 &&
-           limit.rlim_cur == 4096u && limit.rlim_max == 4096u);
+           limit.rlim_cur == ASTRA_THREAD_STACK_BYTES_MAX &&
+           limit.rlim_max == ASTRA_THREAD_STACK_BYTES_MAX &&
+           limit.rlim_cur > 4096u);
     limit.rlim_cur = 2048u;
     errno = 0;
     assert(setrlimit(RLIMIT_STACK, &limit) == -1 && errno == ENOTSUP);

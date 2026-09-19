@@ -35,9 +35,13 @@ uint32_t supervisor_verify_volume(AstraBlockDevice *block,
  */
 int supervisor_volume_is_mounted(void);
 
-/* Reads one bootstrap file while the supervisor temporarily owns the mount. */
-uint32_t supervisor_volume_read(const char *path, void *buffer,
-                                uint32_t capacity, uint32_t *length);
+/* Reads one allocated bootstrap file while the supervisor owns the mount. */
+uint32_t supervisor_volume_read_alloc(const char *path, void **buffer,
+                                      uint32_t *length);
+
+#ifdef ASTRA_SUPERVISOR_TEST
+void supervisor_volume_test_set_mounted(int mounted);
+#endif
 
 /* One bootstrap file streamed through the runtime executable loader. */
 uint32_t supervisor_volume_source_open(const char *path, uint32_t *length);

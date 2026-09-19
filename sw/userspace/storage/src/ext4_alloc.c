@@ -4,6 +4,9 @@
 #include <string.h>
 #include <generated/ext4_config.h>
 
+_Static_assert(CONFIG_BLOCK_DEV_CACHE_SIZE >= 16,
+               "ext4 allocator profile assumes at least 16 cache blocks");
+
 /*
  * Measured on big-endian MC68040 under qemu-m68k, running the storage suite's
  * own mount test against mke2fs volumes.
@@ -20,10 +23,11 @@
  * rather than by the journal file. The other three classes do not move at all:
  * 16, 1 and 17 respectively, at every size tested.
  *
- * Sized for the plateau so that any volume up to 1 TiB mounts whatever journal
- * it was formatted with. That costs about 64 KiB of arena over sizing for a
- * pinned 4 MiB journal — a lever worth remembering if RAM ever gets tight,
- * since it halves this class.
+ * Those measurements used a 16-block cache. Each additional cached block owns
+ * one class-64 descriptor, so the production 1024-block cache needs its 1008
+ * additional descriptors on top of the measured 1900-slot budget. Keeping the
+ * original 133-slot headroom while scaling the cache prevents a full cache
+ * from making unrelated directory lookups fail with ENOMEM.
  *
  * These are LP32 numbers and they are the ones that matter, because LP32 is
  * what ships. The same workload on an LP64 host produces a different shape
@@ -31,10 +35,11 @@
  * next class up — so a host measurement must not be used to size this.
  */
 const AstraAllocClass astra_ext4_alloc_classes[ASTRA_EXT4_ALLOC_CLASS_COUNT] = {
-    {64u, 1900u},  /* inode refs, directory contexts, journal descriptors */
+    {64u, 1900u + CONFIG_BLOCK_DEV_CACHE_SIZE - 16u},
+                    /* cache, inode, directory, and journal descriptors */
     {128u, CONFIG_BLOCK_DEV_CACHE_SIZE + 32u}, /* buffers plus workers */
     {2048u, 4u},   /* the superblock copy */
-    {4096u, CONFIG_BLOCK_DEV_CACHE_SIZE + 4u},
+    {4096u, CONFIG_BLOCK_DEV_CACHE_SIZE + ASTRA_EXT4_TRANSIENT_BLOCKS},
 };
 
 static AstraAllocator *bound_allocator;

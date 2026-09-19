@@ -453,6 +453,19 @@ def run(qtest, root, outside):
     time.sleep(0.05)
     assert qtest.read32(last_status) == 0xFEEDFACE
 
+    command_only_bytes = CHANNEL_HEADER_SIZE + COMMAND_SIZE
+    assert configure_channel(qtest, generation, 1, slot=6,
+                             channel_generation=12,
+                             byte_size=command_only_bytes) == 0
+    assert get32(qtest.read(BUFFER, CHANNEL_HEADER_SIZE), 28) == \
+        command_only_bytes
+    assert configure_channel(qtest, generation, 2, slot=6,
+                             channel_generation=12) == 0
+    assert configure_channel(qtest, generation, 1, slot=6,
+                             channel_generation=13,
+                             byte_size=command_only_bytes - 1) == \
+        SYSCALL_INVALID_ARGUMENT
+
     rejected = bytearray(SUBMISSION_SIZE)
     struct.pack_into(">IHHIIIII", rejected, 0, SUBMISSION_SIZE, 1, 0,
                      0x1001, generation + 1, BUFFER, COMMAND_SIZE, 1)

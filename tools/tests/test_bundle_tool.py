@@ -53,6 +53,18 @@ def main():
         kits.mkdir()
         bundle(source)
         run(tool, "check", source)
+        large = root / "Large.app"
+        bundle(large)
+        with (large / "manifest").open("a", encoding="utf-8") as handle:
+            handle.write("requires runtime.library 1 1.0.0\n" * 300)
+        assert (large / "manifest").stat().st_size > 4096
+        run(tool, "check", large)
+        with (large / "manifest").open("a", encoding="utf-8") as handle:
+            handle.write("requires broken\n")
+        invalid = subprocess.run([tool, "check", str(large)],
+                                 stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE)
+        assert invalid.returncode != 0
         run(tool, "copy", source, copied)
         occupied = root / "Occupied.app"
         bundle(occupied)

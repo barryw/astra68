@@ -18,13 +18,12 @@
  * command, a log drain, and a test harness are all just readers walking this
  * registry. None of them is a special case wired into the modules themselves.
  *
- * The registry is fixed-size and allocation-free. Registration happens once
- * during module initialisation and is never undone: a group's storage must
- * outlive the process, which in practice means static storage.
+ * Registration happens once during module initialisation and is never undone:
+ * a group's storage must outlive the process, which in practice means static
+ * storage.  The registry itself grows with the process heap, so observability
+ * does not impose a second module-count quota.
  */
 
-#define ASTRA_METRIC_GROUP_MAX 32u
-#define ASTRA_METRIC_SAMPLE_MAX 64u
 #define ASTRA_METRIC_NAME_MAX 64u
 
 /* Fixed big-endian records carried by METRICS:snapshot. */
@@ -56,10 +55,11 @@ typedef struct AstraMetricSample {
 } AstraMetricSample;
 
 /*
- * Fill up to `capacity` samples and return how many were written. A sampler
- * must not allocate, must not block, and must be safe to call at any time,
- * including while the module it reports on is running. Truncation to capacity
- * is the sampler's responsibility and is not an error.
+ * Return the number of samples available. Write them only when `out` is not
+ * NULL and `capacity` is large enough; this lets readers allocate exactly the
+ * required scratch space instead of imposing a sample-count ceiling. A
+ * sampler must not allocate, must not block, and must be safe to call at any
+ * time, including while the module it reports on is running.
  */
 typedef uint32_t (*AstraMetricSampler)(void *context, AstraMetricSample *out,
                                        uint32_t capacity);
@@ -83,6 +83,7 @@ AstraMetricStatus astra_metric_register(const char *name,
 uint32_t astra_metric_group_count(void);
 const AstraMetricGroup *astra_metric_group(uint32_t index);
 const AstraMetricGroup *astra_metric_find(const char *name);
+uint32_t astra_metric_sample_count(const AstraMetricGroup *group);
 
 /*
  * Sample one group into a caller-supplied array. Returns the number of samples

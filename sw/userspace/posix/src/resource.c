@@ -2,12 +2,12 @@
 
 #include "resource_internal.h"
 
+#include <astra/address_space.h>
+
 #include <errno.h>
 #include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
-
-#define ASTRA_POSIX_STACK_BYTES 4096u
 
 enum {
     POSIX_RESOURCE_CPU,
@@ -22,11 +22,11 @@ enum {
 static const AstraPosixResourceState defaults = {
     .current = {
         RLIM_INFINITY, RLIM_INFINITY, RLIM_INFINITY,
-        ASTRA_POSIX_STACK_BYTES, 0u, RLIM_INFINITY, RLIM_INFINITY
+        ASTRA_THREAD_STACK_BYTES_MAX, 0u, RLIM_INFINITY, RLIM_INFINITY
     },
     .maximum = {
         RLIM_INFINITY, RLIM_INFINITY, RLIM_INFINITY,
-        ASTRA_POSIX_STACK_BYTES, 0u, RLIM_INFINITY, RLIM_INFINITY
+        ASTRA_THREAD_STACK_BYTES_MAX, 0u, RLIM_INFINITY, RLIM_INFINITY
     }
 };
 static AstraPosixResourceState limits;
@@ -70,8 +70,10 @@ astra_posix_resource_validate(const AstraPosixResourceState *state)
             return 0;
     return state->current[POSIX_RESOURCE_CPU] == RLIM_INFINITY &&
            state->maximum[POSIX_RESOURCE_CPU] == RLIM_INFINITY &&
-           state->current[POSIX_RESOURCE_STACK] == ASTRA_POSIX_STACK_BYTES &&
-           state->maximum[POSIX_RESOURCE_STACK] == ASTRA_POSIX_STACK_BYTES &&
+           state->current[POSIX_RESOURCE_STACK] ==
+               ASTRA_THREAD_STACK_BYTES_MAX &&
+           state->maximum[POSIX_RESOURCE_STACK] ==
+               ASTRA_THREAD_STACK_BYTES_MAX &&
            state->current[POSIX_RESOURCE_CORE] == 0u &&
            state->maximum[POSIX_RESOURCE_CORE] == 0u &&
            state->current[POSIX_RESOURCE_AS] == RLIM_INFINITY &&

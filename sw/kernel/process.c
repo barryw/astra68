@@ -2089,7 +2089,7 @@ static uint32_t host_channel_open(
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     command_bytes = ASTRA_HOST_CHANNEL_HEADER_SIZE +
                     channel->command_capacity * ASTRA_HOST_COMMAND_SIZE;
-    if (channel->byte_size <= command_bytes)
+    if (channel->byte_size < command_bytes)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     handle_status = kernel_handle_lookup(
         process->handles, channel->buffer, KERNEL_OBJECT_DMA,

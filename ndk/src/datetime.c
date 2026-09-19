@@ -52,6 +52,10 @@ bool astra_datetime_unix_seconds(uint64_t *seconds)
 size_t astra_datetime_format(const AstraCivilTime *civil, const char *format,
                              char *out, size_t capacity)
 {
+    const char *chosen = format != NULL ? format : DEFAULT_FORMAT;
+    char *expanded;
+    size_t chosen_length;
+    size_t result;
     struct tm rendered;
 
     if (civil == NULL || out == NULL || capacity == 0u)
@@ -72,13 +76,20 @@ size_t astra_datetime_format(const AstraCivilTime *civil, const char *format,
 #ifdef __TM_ZONE
     rendered.__TM_ZONE = civil->zone;
 #endif
-    {
-        char expanded[128];
-
-        /* %Z and %z come from the instant, not from a TZ nobody set. */
-        if (astra_civil_expand_zone(format != NULL ? format : DEFAULT_FORMAT,
-                                    civil, expanded, sizeof(expanded)) == 0u)
-            return 0u;
-        return strftime(out, capacity, expanded, &rendered);
+    chosen_length = strlen(chosen);
+    if (chosen_length > (UINT32_MAX - 1u) / 3u)
+        return 0u;
+    expanded = astra_runtime_allocate(chosen_length * 3u + 1u);
+    if (expanded == NULL)
+        return 0u;
+    /* Three bytes per input byte covers the exact worst case: `%z` becomes
+     * five output bytes and `%Z` becomes at most four. */
+    if (astra_civil_expand_zone(chosen, civil, expanded,
+                                (uint32_t)(chosen_length * 3u + 1u)) == 0u) {
+        astra_runtime_deallocate(expanded);
+        return 0u;
     }
+    result = strftime(out, capacity, expanded, &rendered);
+    astra_runtime_deallocate(expanded);
+    return result;
 }

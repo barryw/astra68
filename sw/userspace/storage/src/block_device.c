@@ -240,19 +240,18 @@ uint32_t
 astra_block_sampler(void *context, AstraMetricSample *out, uint32_t capacity)
 {
     const AstraBlockDevice *device = context;
+    const uint32_t required = ASTRA_BLOCK_OPERATION_COUNT * 5u + 3u;
     uint32_t written = 0u;
     uint32_t operation;
 
-    if (device == NULL || out == NULL) {
+    if (device == NULL)
         return 0u;
-    }
+    if (out == NULL || capacity < required)
+        return required;
     for (operation = 0u; operation < ASTRA_BLOCK_OPERATION_COUNT;
          ++operation) {
         uint32_t emitted;
 
-        if (capacity - written < 5u) {
-            return written;
-        }
         emitted = astra_op_samples(&device->metrics.operation[operation],
                                    block_sample_names[operation],
                                    out + written, capacity - written);
@@ -262,13 +261,11 @@ astra_block_sampler(void *context, AstraMetricSample *out, uint32_t capacity)
         written += emitted;
     }
 
-    if (capacity - written >= 3u) {
-        out[written].name = "media.sector_count";
-        out[written++].value = device->geometry.sector_count;
-        out[written].name = "media.sector_size";
-        out[written++].value = device->geometry.sector_size;
-        out[written].name = "media.generation";
-        out[written++].value = device->geometry.media_generation;
-    }
+    out[written].name = "media.sector_count";
+    out[written++].value = device->geometry.sector_count;
+    out[written].name = "media.sector_size";
+    out[written++].value = device->geometry.sector_size;
+    out[written].name = "media.generation";
+    out[written++].value = device->geometry.media_generation;
     return written;
 }

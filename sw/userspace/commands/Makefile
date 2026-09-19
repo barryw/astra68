@@ -68,6 +68,9 @@ COMMANDS := status events devices which open service hello ls ps metrics cat mkd
             heapbench fsstress date echo ntp ping lua cxx vim zsh
 SOURCE_COMMANDS := $(filter-out lua cxx vim zsh,$(COMMANDS))
 SOURCE_IMAGES := $(patsubst %,build/m68k/%,$(SOURCE_COMMANDS))
+events_EXTRA_SOURCES := events/events_support.c
+date_EXTRA_SOURCES := date/date_support.c
+ps_EXTRA_SOURCES := ps/ps_support.c
 
 # A command names only the libraries whose symbols it calls.  The executable
 # contract below compares this source-of-truth list with DT_NEEDED, so a new
@@ -319,7 +322,8 @@ build/m68k/zsh: $(ZSH_IMAGE)
 			--needed $(notdir $(library))) $@
 
 define ASTRA_SOURCE_COMMAND
-build/m68k/$(1): $(1)/$(1).c $(ASTRA_POSIX_PROGRAM_SOURCE) \
+build/m68k/$(1): $(1)/$(1).c $$($(1)_EXTRA_SOURCES) \
+		$(ASTRA_POSIX_PROGRAM_SOURCE) \
 		$$($(1)_LIBRARIES) $(COMPILER_LIBRARY) $(ASTRA_POSIX_CRT0) \
 		$(ASTRA_DYNAMIC_USER_LD_INPUTS) $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) \
 		$(ASTRA_POSIX_POLICY_INPUTS)
@@ -327,7 +331,8 @@ build/m68k/$(1): $(1)/$(1).c $(ASTRA_POSIX_PROGRAM_SOURCE) \
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
 		-DASTRA_POSIX_EXTERNAL_PROGRAM_IDENTITY=1 \
 		$(ASTRA_POSIX_LDFLAGS) \
-		-o $$@.elf $(ASTRA_POSIX_CRT0) $$< $(ASTRA_POSIX_PROGRAM_SOURCE) \
+		-o $$@.elf $(ASTRA_POSIX_CRT0) $$< $$($(1)_EXTRA_SOURCES) \
+		$(ASTRA_POSIX_PROGRAM_SOURCE) \
 		$$(foreach library,$$($(1)_LIBRARIES),\
 			-Wl,-l:$$(notdir $$(library))) \
 		-Wl,-l:$$(notdir $$(COMPILER_LIBRARY))
@@ -361,10 +366,38 @@ $(COMMAND_MANIFEST): Makefile $(IMAGES)
 clean:
 	rm -rf build
 
-# Nothing to run on this host, and the targets have to exist so the userspace
-# Makefile's loop does not stop here.
-test sanitize:
-	@:
+HOST_CC ?= cc
+HOST_CPPFLAGS := -I../../include -I../../../ndk/include -I../runtime/include \
+	-I../vfs/include
+HOST_CFLAGS := -std=c11 -Wall -Wextra -Werror -pedantic -O2
+
+build/host/test_events_support: events/events_support.c \
+		tests/test_events_support.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) $^ -o $@
+
+build/host/test_date_support: date/date_support.c tests/test_date_support.c \
+		../../common/civil.c ../../common/divide.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) $^ -o $@
+
+build/host/test_ps_support: ps/ps_support.c tests/test_ps_support.c \
+		../../common/divide.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) -D_GNU_SOURCE $^ -o $@
+
+build/host/test_open: tests/test_open.c open/open.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) $< -o $@
+
+test: build/host/test_events_support build/host/test_date_support \
+		build/host/test_ps_support build/host/test_open
+	./build/host/test_events_support
+	./build/host/test_date_support
+	./build/host/test_ps_support
+	./build/host/test_open
+
+sanitize: test
 
 analyze: $(ANALYZER_OBJECTS)
 

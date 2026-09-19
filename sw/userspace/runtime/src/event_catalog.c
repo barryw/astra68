@@ -56,6 +56,15 @@ append_signed(char *out, uint32_t capacity, uint32_t at, uint32_t value)
     return append_unsigned(out, capacity, at, value, 10u);
 }
 
+static int
+terminated(const char *text, uint32_t capacity)
+{
+    for (uint32_t index = 0u; index < capacity; ++index)
+        if (text[index] == '\0')
+            return 1;
+    return 0;
+}
+
 /* The argument at `index`, big-endian as astra_event_pack wrote it. */
 static int
 argument(const uint8_t *payload, uint32_t payload_length, uint32_t index,
@@ -92,9 +101,18 @@ astra_event_catalog_init(AstraEventCatalog *catalog, const void *bytes,
      */
     if (bytes == NULL || size == 0u ||
         size % ASTRA_EVENT_DESCRIPTOR_SIZE != 0u ||
-        ((uintptr_t)bytes % _Alignof(AstraEventDescriptor)) != 0u ||
-        records[0].magic != ASTRA_EVENT_DESCRIPTOR_MAGIC) {
+        ((uintptr_t)bytes % _Alignof(AstraEventDescriptor)) != 0u) {
         return 0;
+    }
+    for (uint32_t index = 0u;
+         index < size / ASTRA_EVENT_DESCRIPTOR_SIZE; ++index) {
+        if (records[index].magic != ASTRA_EVENT_DESCRIPTOR_MAGIC ||
+            records[index].subsystem >= ASTRA_EVENT_SUBSYSTEM_MAX ||
+            records[index].level > ASTRA_EVENT_LEVEL_ERROR ||
+            records[index].argument_count > ASTRA_EVENT_ARGUMENT_COUNT_MAX ||
+            !terminated(records[index].file, ASTRA_EVENT_FILE_MAX) ||
+            !terminated(records[index].format, ASTRA_EVENT_FORMAT_MAX))
+            return 0;
     }
     catalog->records = records;
     catalog->count = size / ASTRA_EVENT_DESCRIPTOR_SIZE;

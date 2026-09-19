@@ -92,7 +92,7 @@ FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/vfs_provider_index.o \
 	build/m68k/library/vfs_status.o
 FILESYSTEM_LIBRARY_MAP := filesystem.library.exports
-SYSTEM_LIBRARY := $(NDK)/build/m68k/libraries/system.library.1
+SYSTEM_LIBRARY := $(NDK)/build/m68k/libraries/system.library.2
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 KERNEL_ELF_TEST := ../../kernel/build/test_elf
@@ -194,7 +194,7 @@ $(FILESYSTEM_LIBRARY): $(FILESYSTEM_LIBRARY_OBJECTS) \
 		-Wl,--version-script=$(FILESYSTEM_LIBRARY_MAP) -o $@ \
 		$(FILESYSTEM_LIBRARY_OBJECTS) \
 		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
-		-Wl,--no-as-needed -Wl,-l:system.library.1 \
+		-Wl,--no-as-needed -Wl,-l:system.library.2 \
 		-Wl,-l:runtime.library.1
 
 library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
@@ -214,11 +214,11 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
 		grep -q '^filesystem.library.2 2.4.0 ABI 2.4$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
-	@$(READELF) -dW $< | grep 'SONAME.*filesystem.library.2' >/dev/null
+	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.2]' >/dev/null
 	@test "$$($(READELF) -dW $< | \
-		grep -c 'NEEDED.*system.library.1')" = 1
+		grep -Fc 'Shared library: [system.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | \
-		grep -c 'NEEDED.*runtime.library.1')" = 1
+		grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 2
 	@$(READELF) -dW $< | grep 'BIND_NOW' >/dev/null
 	@test "$$($(READELF) -dW $< | awk '/TEXTREL/{n++} END{print n+0}')" = 0

@@ -29,4 +29,4 @@ requires graphics.library 2 2.1.0
 requires interface.library 5 5.1.0
 requires runtime.library 1 1.6.0
 requires streams.library 1 1.0.0
-requires system.library 1 1.2.0
+requires system.library 2 2.0.0

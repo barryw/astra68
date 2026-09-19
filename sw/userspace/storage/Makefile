@@ -147,6 +147,13 @@ build/host/test_ext4_port: $(PORT_TEST_SOURCES) $(HOST_HEADERS)
 	$(HOST_CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(PORT_TEST_SOURCES) -o $@
 
+build/host/test_ext4_alloc_profile: src/ext4_alloc.c $(ALLOC)/src/alloc.c \
+		tests/test_ext4_alloc_profile.c $(HOST_HEADERS)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(ALLOC_CPPFLAGS) $(EXT4_CPPFLAGS) \
+		$(COMMON_FLAGS) $(HOST_FLAGS) src/ext4_alloc.c \
+		$(ALLOC)/src/alloc.c tests/test_ext4_alloc_profile.c -o $@
+
 # The partition table reader, which decides which window a volume is confined
 # to. It touches no lwext4 header: a partition table is not a filesystem.
 MBR_TEST_SOURCES := src/block_device.c src/memory_block.c src/mbr.c \
@@ -158,10 +165,11 @@ build/host/test_mbr: $(MBR_TEST_SOURCES) $(HOST_HEADERS)
 		$(MBR_TEST_SOURCES) -o $@
 
 test: $(HOST_TEST) build/host/test_lease_block build/host/test_ext4_port \
-		build/host/test_mbr
+		build/host/test_ext4_alloc_profile build/host/test_mbr
 	./$(HOST_TEST)
 	./build/host/test_lease_block
 	./build/host/test_ext4_port
+	./build/host/test_ext4_alloc_profile
 	./build/host/test_mbr
 
 # ---------------------------------------------------------------------------

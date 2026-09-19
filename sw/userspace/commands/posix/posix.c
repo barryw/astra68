@@ -162,28 +162,23 @@ enum {
 static int
 complain(int code, const char *what)
 {
-    char report[160];
-
     (void)fprintf(stderr, "posix: %s failed: %s\n", what, strerror(errno));
     (void)fflush(stderr);
-    (void)snprintf(report, sizeof(report), "posix: %s failed: %s",
-                   what, strerror(errno));
-    (void)astra_log(report);
+    (void)astra_log(what);
+    (void)astra_log(strerror(errno));
     return code;
 }
 
 static int
 complain_gai(int code, const char *what, int error)
 {
-    char report[160];
     const char *reason = error == EAI_SYSTEM ? strerror(errno) :
                          gai_strerror(error);
 
     (void)fprintf(stderr, "posix: %s failed: %s\n", what, reason);
     (void)fflush(stderr);
-    (void)snprintf(report, sizeof(report), "posix: %s failed: %s",
-                   what, reason);
-    (void)astra_log(report);
+    (void)astra_log(what);
+    (void)astra_log(reason);
     return code;
 }
 
@@ -338,8 +333,8 @@ main(int argc, char **argv)
         "posix", "-R", "+42", "--cmd", "set number", "--",
         "WORK:notes.txt"
     };
-    char before[128];
-    char after[128];
+    char before[ASTRA_VFS_PATH_MAX];
+    char after[ASTRA_VFS_PATH_MAX];
     char buffer[64];
     struct stat about;
     DIR *directory;

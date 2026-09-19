@@ -14,6 +14,8 @@
 #include <astra/status.h>
 #include <astra/syscall.h>
 
+#include "../src/log_internal.h"
+
 _Static_assert(ASTRA_LAUNCH_GRANT_MAX == ASTRA_STARTUP_CAPABILITY_MAX - 2u,
                "launch grants use every capability slot left after self");
 
@@ -1650,7 +1652,7 @@ static void test_wait_multiple(void)
 static void test_event_channel(void)
 {
     static const char line[] = "volume mounted";
-    char oversized[ASTRA_LOG_MAX_BYTES + 32u];
+    char oversized[ASTRA_EVENT_ARGUMENT_MAX * 6u + 16u];
     uint32_t calls;
 
     /*
@@ -1675,8 +1677,6 @@ static void test_event_channel(void)
     calls = mock_calls;
     assert(astra_log_write(NULL, 4u) == ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(astra_log_write(line, 0u) == ASTRA_SYSCALL_INVALID_ARGUMENT);
-    assert(astra_log_write(line, ASTRA_LOG_MAX_BYTES + 1u) ==
-           ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(astra_log(NULL) == ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(astra_log("") == ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(mock_calls == calls);
@@ -1711,11 +1711,56 @@ static void test_event_channel(void)
     assert(mock_argument3 == 5u);
     memset(oversized, 'x', sizeof(oversized));
     oversized[sizeof(oversized) - 1u] = '\0';
+    calls = mock_calls;
     assert(astra_log(oversized) == ASTRA_SYSCALL_OK);
+    assert(mock_calls == calls +
+           (sizeof(oversized) - 1u + ASTRA_EVENT_ARGUMENT_MAX - 1u) /
+               ASTRA_EVENT_ARGUMENT_MAX);
 
     assert(astra_log_failure("storage", 5u) == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_LOG_WRITE);
     assert(mock_argument3 == sizeof("storage:5: failed") - 1u);
+    {
+        char operation[81];
+
+        memset(operation, 'o', sizeof(operation) - 1u);
+        operation[sizeof(operation) - 1u] = '\0';
+        calls = mock_calls;
+        assert(astra_log_failure(operation, UINT32_MAX) == ASTRA_SYSCALL_OK);
+        assert(mock_calls == calls + 5u);
+        mock_status = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        assert(astra_log_failure(operation, 1u) ==
+               ASTRA_SYSCALL_INVALID_ARGUMENT);
+        mock_status = ASTRA_SYSCALL_OK;
+    }
+
+    {
+        char file[181];
+        char expression[221];
+        char expected[sizeof(file) + sizeof(expression) + 16u];
+        uint32_t expected_length;
+
+        memset(file, 'f', sizeof(file) - 1u);
+        file[sizeof(file) - 1u] = '\0';
+        memset(expression, 'x', sizeof(expression) - 1u);
+        expression[sizeof(expression) - 1u] = '\0';
+        expected_length = astra_assert_message(
+            expected, sizeof(expected), file, UINT32_MAX, expression);
+        assert(expected_length > 128);
+        calls = mock_calls;
+        assert(astra_log_assertion(file, UINT32_MAX, expression) ==
+               ASTRA_SYSCALL_OK);
+        assert(mock_calls == calls +
+               (expected_length + ASTRA_EVENT_ARGUMENT_MAX - 1u) /
+                   ASTRA_EVENT_ARGUMENT_MAX);
+
+        mock_status = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        calls = mock_calls;
+        assert(astra_log_assertion(file, 1u, expression) ==
+               ASTRA_SYSCALL_INVALID_ARGUMENT);
+        assert(mock_calls == calls + 1u);
+        mock_status = ASTRA_SYSCALL_OK;
+    }
 }
 
 static void test_elapsed_time(void)
@@ -1972,6 +2017,10 @@ static void test_event_catalog(void)
     records[0].magic = 0u;
     assert(!astra_event_catalog_init(&catalog, records, sizeof(records), base));
     assert(astra_event_catalog_lookup(&catalog, base) == NULL);
+    records[0].magic = ASTRA_EVENT_DESCRIPTOR_MAGIC;
+    memset(records[1].file, 'x', sizeof(records[1].file));
+    assert(!astra_event_catalog_init(&catalog, records, sizeof(records), base));
+    assert(catalog.records == NULL);
 }
 
 /* The assertion message: the half that survives when the channel is refused. */

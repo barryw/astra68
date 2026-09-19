@@ -9,6 +9,7 @@
  */
 
 #include <astra/filesystem_library.h>
+#include <astra/runtime.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_process.h>
 
@@ -75,6 +76,7 @@ uint32_t astra_process_read_file(AstraProcessFilesystem *filesystem,
             if (client != NULL &&
                 astra_vfs_port_read_path(client, wire, &whole, &moved,
                                          &node_size) == ASTRA_VFS_OK &&
+                node_size <= UINT32_MAX &&
                 moved == (uint32_t)node_size && moved <= capacity) {
                 memcpy(bytes, whole, moved);
                 *length = moved;
@@ -103,6 +105,58 @@ uint32_t astra_process_read_file(AstraProcessFilesystem *filesystem,
         (void)astra_filesystem_close(&file);
     return status == ASTRA_VFS_OK && *length == info.byte_size ?
         ASTRA_VFS_OK : (status == ASTRA_VFS_OK ? ASTRA_VFS_ERR_IO : status);
+}
+
+uint32_t astra_process_read_file_alloc(AstraProcessFilesystem *filesystem,
+                                       const char *path, void **bytes,
+                                       uint32_t *length)
+{
+    AstraFile file = ASTRA_FILE_INIT;
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+    uint8_t *storage = NULL;
+    uint32_t status;
+
+    if (filesystem == NULL ||
+        filesystem->filesystem._private_assigns == NULL || path == NULL ||
+        bytes == NULL || length == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    *bytes = NULL;
+    *length = 0u;
+    status = astra_filesystem_open(&filesystem->filesystem, path,
+                                   ASTRA_VFS_OPEN_READ, &file);
+    if (status == ASTRA_VFS_OK)
+        status = astra_filesystem_file_info(&file, &info);
+    if (status == ASTRA_VFS_OK && info.byte_size >= UINT32_MAX)
+        status = ASTRA_VFS_ERR_LIMIT;
+    if (status == ASTRA_VFS_OK) {
+        storage = astra_runtime_allocate((size_t)info.byte_size + 1u);
+        if (storage == NULL)
+            status = ASTRA_VFS_ERR_LIMIT;
+    }
+    while (status == ASTRA_VFS_OK && *length < info.byte_size) {
+        uint32_t moved = 0u;
+
+        status = astra_filesystem_read(
+            &file, storage + *length, (uint32_t)info.byte_size - *length,
+            &moved);
+        if (status != ASTRA_VFS_OK || moved == 0u)
+            break;
+        *length += moved;
+    }
+    if (file._private_file != ASTRA_VFS_FILE_INVALID &&
+        astra_filesystem_close(&file) != ASTRA_VFS_OK &&
+        status == ASTRA_VFS_OK)
+        status = ASTRA_VFS_ERR_IO;
+    if (status == ASTRA_VFS_OK && *length != info.byte_size)
+        status = ASTRA_VFS_ERR_IO;
+    if (status != ASTRA_VFS_OK) {
+        astra_runtime_deallocate(storage);
+        *length = 0u;
+        return status;
+    }
+    storage[*length] = '\0';
+    *bytes = storage;
+    return ASTRA_VFS_OK;
 }
 
 void astra_process_filesystem_close(AstraProcessFilesystem *filesystem)

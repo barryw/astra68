@@ -50,8 +50,8 @@ and no installation records outside the filesystem.
 
 ## 2. Manifest grammar
 
-The `manifest` file is UTF-8, at most 4096 bytes, with LF or CRLF line endings.
-It is line-oriented. Tokens are separated by spaces or tabs. `#` begins a
+The `manifest` file is UTF-8 with LF or CRLF line endings. It is line-oriented.
+Tokens are separated by spaces or tabs. `#` begins a
 comment outside a quoted token. A quoted token may contain spaces and uses
 `\\`, `\"`, `\n`, `\r`, and `\t` escapes. Unknown directives, malformed
 lines, duplicate singleton directives, and missing required directives are

@@ -25,6 +25,8 @@ QCODES = {" ": "spc", "-": "minus", ".": "dot", "/": "slash",
 SHIFTED = {":": "semicolon", "+": "equal", "%": "5", "_": "minus",
            "?": "slash", "\"": "apostrophe", ">": "dot", "<": "comma",
            "$": "4", "(": "9", ")": "0", "*": "8", "!": "1"}
+INPUT_STATUS = 0xFFF0070C
+INPUT_COUNT_MASK = 0x1F
 
 
 class Qmp:
@@ -54,12 +56,28 @@ class Qmp:
         return self.execute("qom-get", {"path": "/machine",
                                         "property": name})
 
+    def word(self, address):
+        reply = self.execute("human-monitor-command", {
+            "command-line": "xp /1xw 0x%x" % address})
+        for token in reply.split():
+            if token.startswith("0x") and len(token) == 10:
+                return int(token, 16)
+        raise RuntimeError("no word read back from 0x%x" % address)
+
+    def input_events(self, events):
+        queued = self.word(INPUT_STATUS) & INPUT_COUNT_MASK
+        while queued > INPUT_COUNT_MASK - len(events):
+            time.sleep(0.001)
+            queued = self.word(INPUT_STATUS) & INPUT_COUNT_MASK
+        self.execute("input-send-event", {"events": events})
+        while (self.word(INPUT_STATUS) & INPUT_COUNT_MASK) > queued:
+            time.sleep(0.001)
+
     def key(self, qcode):
-        self.execute("input-send-event", {"events": [{
+        self.input_events([{
             "type": "key", "data": {"down": down,
             "key": {"type": "qcode", "data": qcode}}}
-            for down in (True, False)]})
-        time.sleep(0.02)
+            for down in (True, False)])
 
     def chord(self, modifier, qcode):
         self.send(True, modifier)
@@ -67,10 +85,9 @@ class Qmp:
         self.send(False, modifier)
 
     def send(self, down, qcode):
-        self.execute("input-send-event", {"events": [{
+        self.input_events([{
             "type": "key", "data": {"down": down,
-            "key": {"type": "qcode", "data": qcode}}}]})
-        time.sleep(0.02)
+            "key": {"type": "qcode", "data": qcode}}}])
 
     def type_without_enter(self, text):
         for character in text:
@@ -86,30 +103,30 @@ class Qmp:
                 raise RuntimeError("no qcode for %r" % character)
 
     def double_click(self, x, y):
-        self.execute("input-send-event", {"events": [
+        self.input_events([
             {"type": "abs", "data": {"axis": "x", "value": x}},
-            {"type": "abs", "data": {"axis": "y", "value": y}}]})
+            {"type": "abs", "data": {"axis": "y", "value": y}}])
         for _ in range(2):
             for down in (True, False):
-                self.execute("input-send-event", {"events": [{
+                self.input_events([{
                     "type": "btn", "data": {"button": "left",
-                    "down": down}}]})
+                    "down": down}}])
                 time.sleep(0.05)
 
     def drag(self, start_x, start_y, end_x, end_y, steps):
-        self.execute("input-send-event", {"events": [
+        self.input_events([
             {"type": "abs", "data": {"axis": "x", "value": start_x}},
             {"type": "abs", "data": {"axis": "y", "value": start_y}},
-            {"type": "btn", "data": {"button": "left", "down": True}}]})
+            {"type": "btn", "data": {"button": "left", "down": True}}])
         for step in range(1, steps + 1):
-            self.execute("input-send-event", {"events": [
+            self.input_events([
                 {"type": "abs", "data": {"axis": "x", "value":
                     start_x + (end_x - start_x) * step // steps}},
                 {"type": "abs", "data": {"axis": "y", "value":
-                    start_y + (end_y - start_y) * step // steps}}]})
+                    start_y + (end_y - start_y) * step // steps}}])
             time.sleep(0.02)
-        self.execute("input-send-event", {"events": [{
-            "type": "btn", "data": {"button": "left", "down": False}}]})
+        self.input_events([{
+            "type": "btn", "data": {"button": "left", "down": False}}])
 
     def counters(self):
         return {name: self.property(name) for name in PROPERTIES}

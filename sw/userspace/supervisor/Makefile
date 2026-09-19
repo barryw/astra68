@@ -37,6 +37,7 @@ LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	-Wl,--build-id=none -Wl,--gc-sections \
 	$(ASTRA_STATIC_LINK_SCRIPT_FLAGS)
 SOURCES := src/supervisor.c src/main.c src/volume.c src/loader.c \
+	src/launch_report.c \
 	src/loader_manifest.c src/service_definition_store.c src/vfs_host.c \
 	src/vfs_read.c src/proc_tree.c
 OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES))
@@ -64,6 +65,8 @@ LOADER_TEST := build/host/test_loader_manifest
 PROC_TREE_ROOT_TEST := build/host/test_proc_tree_root
 SERVICE_DEFINITION_TEST := build/host/test_service_definition_store
 LOADER_STATUS_TEST := build/host/test_loader_status
+LAUNCH_REPORT_TEST := build/host/test_launch_report
+VOLUME_READ_TEST := build/host/test_volume_read
 # log.c comes along because validating a startup block is what binds the
 # diagnostic channel, so the two cannot be linked apart.
 TEST_SOURCES := src/supervisor.c $(RUNTIME)/src/startup.c \
@@ -152,13 +155,29 @@ $(LOADER_STATUS_TEST): tests/test_loader_status.c include/loader.h \
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $< -o $@
 
+$(LAUNCH_REPORT_TEST): src/launch_report.c tests/test_launch_report.c \
+		include/launch_report.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/launch_report.c tests/test_launch_report.c -o $@
+
+$(VOLUME_READ_TEST): src/volume.c tests/test_volume_read.c include/volume.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) -I$(LWEXT4)/include -I$(STORAGE)/port/include \
+		-DCONFIG_USE_DEFAULT_CFG=0 $(COMMON_FLAGS) $(HOST_FLAGS) \
+		-DASTRA_SUPERVISOR_TEST -ffunction-sections -fdata-sections \
+		-Wl,--gc-sections src/volume.c tests/test_volume_read.c -o $@
+
 test: $(HOST_TEST) $(LOADER_TEST) $(PROC_TREE_ROOT_TEST) \
-		$(SERVICE_DEFINITION_TEST) $(LOADER_STATUS_TEST)
+		$(SERVICE_DEFINITION_TEST) $(LOADER_STATUS_TEST) $(LAUNCH_REPORT_TEST) \
+		$(VOLUME_READ_TEST)
 	./$(HOST_TEST)
 	./$(LOADER_TEST)
 	./$(PROC_TREE_ROOT_TEST)
 	./$(SERVICE_DEFINITION_TEST)
 	./$(LOADER_STATUS_TEST)
+	./$(LAUNCH_REPORT_TEST)
+	./$(VOLUME_READ_TEST)
 
 sanitize:
 	@mkdir -p build/host
@@ -172,6 +191,12 @@ sanitize:
 		$(NDK)/src/bundle.c \
 		tests/test_loader_manifest.c -o build/host/test_loader_manifest_sanitize
 	./build/host/test_loader_manifest_sanitize
+	$(HOST_CC) $(CPPFLAGS) -I$(LWEXT4)/include -I$(STORAGE)/port/include \
+		-DCONFIG_USE_DEFAULT_CFG=0 $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) -DASTRA_SUPERVISOR_TEST -ffunction-sections \
+		-fdata-sections -Wl,--gc-sections src/volume.c \
+		tests/test_volume_read.c -o build/host/test_volume_read_sanitize
+	./build/host/test_volume_read_sanitize
 
 analyze: $(ANALYZER_OBJECTS)
 

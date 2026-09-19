@@ -94,8 +94,29 @@ int main(void)
     assert(astra_service_definition_add_dependency(
                &definition, "NETWORK") == ASTRA_OK);
 
+    definition.argument_length = UINT16_MAX;
+    assert(astra_service_definition_add_argument(&definition, "x") ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    definition = valid_definition();
+    definition.grant_count = ASTRA_LAUNCH_GRANT_MAX + 1u;
+    assert(astra_service_definition_add_grant(
+               &definition, "NETWORK", 0u, 0) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    definition = valid_definition();
+    definition.publication_count = ASTRA_MESSAGE_HANDLES_MAX + 1u;
+    assert(astra_service_definition_add_publication(
+               &definition, "REMOTE", 0u) == ASTRA_ERROR_INVALID_ARGUMENT);
+    definition = valid_definition();
+    definition.dependency_count = ASTRA_LAUNCH_GRANT_MAX + 1u;
+    assert(astra_service_definition_add_dependency(
+               &definition, "NETWORK") == ASTRA_ERROR_INVALID_ARGUMENT);
+
     definition = valid_definition();
     assert(astra_service_definition_validate(&definition) == ASTRA_OK);
+    definition.executable[0] = (char)0xc0;
+    assert(astra_service_definition_validate(&definition) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    definition = valid_definition();
     definition.argument_length--;
     assert(astra_service_definition_validate(&definition) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
@@ -105,6 +126,22 @@ int main(void)
            ASTRA_ERROR_INVALID_ARGUMENT);
     definition = valid_definition();
     (void)strcpy(definition.name, "../escape");
+    assert(astra_service_definition_validate(&definition) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    definition = valid_definition();
+    (void)strcpy(definition.grants[0].name, "NETWORK");
+    definition.grant_count = 1u;
+    definition.grants[0].rights = ASTRA_RIGHT_SIGNAL;
+    assert(astra_service_definition_validate(&definition) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    definition.grants[0].rights = ASTRA_RIGHT_READ;
+    definition.grants[0].is_namespace = 0u;
+    assert(astra_service_definition_validate(&definition) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    definition = valid_definition();
+    (void)strcpy(definition.publications[0].name, "REMOTE");
+    definition.publication_count = 1u;
+    definition.publications[0].rights = ASTRA_RIGHT_SIGNAL;
     assert(astra_service_definition_validate(&definition) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
 

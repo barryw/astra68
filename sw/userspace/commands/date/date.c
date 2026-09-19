@@ -37,6 +37,8 @@
 #include <astra/status.h>
 #include <astra/syscall.h>
 
+#include "date_support.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -45,7 +47,6 @@ ASTRA_PROGRAM("date", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
 #define NANOSECONDS_PER_SECOND 1000000000u
-#define OUTPUT_MAX 256u
 
 /* The default, and it is GNU date's: `Thu Aug 20 00:24:03 EDT 2026`. */
 #define DEFAULT_FORMAT "%a %b %e %H:%M:%S %Z %Y"
@@ -162,8 +163,7 @@ main(int argc, char **argv)
     AstraTimeZone zone = ASTRA_TIME_ZONE_UTC;
     AstraTimeZone utc = ASTRA_TIME_ZONE_UTC;
     struct tm rendered;
-    char output[OUTPUT_MAX];
-    char expanded[OUTPUT_MAX];
+    char output[32];
     char offset[12];
     uint64_t nanoseconds = 0u;
     const char *format = NULL;
@@ -275,6 +275,7 @@ main(int argc, char **argv)
     case DATE_FORM_DEFAULT:
     case DATE_FORM_CUSTOM: {
         const char *chosen = format;
+        char *formatted = NULL;
         size_t length;
 
         if (form == DATE_FORM_RFC_2822)
@@ -284,26 +285,15 @@ main(int argc, char **argv)
         if (chosen[0] == '\0') {
             return emit_line(output, 0u);
         }
-        if (astra_civil_expand_zone(chosen, &civil, expanded,
-                                    sizeof(expanded)) == 0u) {
-            say_error("date: the format does not fit in ");
-            (void)fprintf(stderr, "%lu", (unsigned long)sizeof(expanded));
-            say_error(" bytes\n");
-            return ASTRA_STATUS_INVALID;
+        status = date_format_alloc(&civil, &rendered, chosen, &formatted,
+                                   &length);
+        if (status != ASTRA_STATUS_OK) {
+            say_error("date: could not format the result\n");
+            return (int)status;
         }
-        length = strftime(output, sizeof(output), expanded, &rendered);
-        if (length == 0u) {
-            /*
-             * strftime answers zero for "did not fit" and for "produced
-             * nothing", and a format that legitimately produces nothing is a
-             * format nobody typed by accident.
-             */
-            say_error("date: the result does not fit in ");
-            (void)fprintf(stderr, "%lu", (unsigned long)sizeof(output));
-            say_error(" bytes\n");
-            return ASTRA_STATUS_INVALID;
-        }
-        return emit_line(output, (uint32_t)length);
+        status = (uint32_t)emit_line(formatted, (uint32_t)length);
+        astra_runtime_deallocate(formatted);
+        return (int)status;
     }
     case DATE_FORM_EPOCH:
         break;

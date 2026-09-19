@@ -1,8 +1,12 @@
 #include <astra/bytes.h>
 #include <astra/metrics.h>
+#include <astra/runtime.h>
 
-static AstraMetricGroup registry[ASTRA_METRIC_GROUP_MAX];
+#include <stdint.h>
+
+static AstraMetricGroup *registry;
 static uint32_t registry_count;
+static uint32_t registry_capacity;
 
 AstraMetricStatus
 astra_metric_register(const char *name, AstraMetricSampler sample,
@@ -18,8 +22,20 @@ astra_metric_register(const char *name, AstraMetricSampler sample,
             return ASTRA_METRIC_DUPLICATE;
         }
     }
-    if (registry_count == ASTRA_METRIC_GROUP_MAX) {
-        return ASTRA_METRIC_FULL;
+    if (registry_count == registry_capacity) {
+        uint32_t capacity = registry_capacity == 0u ? 1u :
+            registry_capacity * 2u;
+        AstraMetricGroup *grown;
+
+        if (capacity <= registry_capacity ||
+            capacity > UINT32_MAX / sizeof(*registry))
+            return ASTRA_METRIC_FULL;
+        grown = astra_runtime_reallocate(
+            registry, (size_t)capacity * sizeof(*registry));
+        if (grown == NULL)
+            return ASTRA_METRIC_FULL;
+        registry = grown;
+        registry_capacity = capacity;
     }
 
     registry[registry_count].name = name;
@@ -58,6 +74,13 @@ astra_metric_find(const char *name)
 }
 
 uint32_t
+astra_metric_sample_count(const AstraMetricGroup *group)
+{
+    return group != NULL && group->sample != NULL ?
+        group->sample(group->context, NULL, 0u) : 0u;
+}
+
+uint32_t
 astra_metric_sample(const AstraMetricGroup *group, AstraMetricSample *out,
                     uint32_t capacity)
 {
@@ -78,5 +101,8 @@ astra_metric_sample(const AstraMetricGroup *group, AstraMetricSample *out,
 void
 astra_metric_reset_registry(void)
 {
+    astra_runtime_deallocate(registry);
+    registry = NULL;
     registry_count = 0u;
+    registry_capacity = 0u;
 }

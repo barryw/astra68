@@ -94,6 +94,12 @@ The following rules apply to every compatibility surface:
 Compatibility can therefore provide two names for one operation, but it must
 never create two competing implementations of that operation.
 
+`open APPS:Name.app` returns after the application reports successful startup
+and does not wait for process exit. `open --wait APPS:Name.app` waits after
+successful startup and returns the application's exit status. Startup failure
+returns status 1 in either mode. Launch origin is carried in the startup record,
+so applications do not need a terminal-specific argument.
+
 Terminal launches `COMMANDS:zsh` with `HOME=HOME:`, `PATH=/commands`,
 `SHELL=/commands/zsh`, and `TERM=astra-256color`. Its system zsh startup is
 scoped to `CONFIG:commands/zsh`; zsh therefore reads `CONFIG:/zshrc` without
@@ -102,7 +108,10 @@ learning the host volume layout. Normal user startup remains `HOME:/.zshrc`.
 The shell launches an installed native GUI bundle with
 `open APPS:Name.app [argument ...]`. `open`, desktop icons, and the future
 Telescope search UI are front ends to the same application-launch service and
-NDK request; they do not load applications independently.
+NDK request; they do not load applications independently. `open` returns as
+soon as startup succeeds unless `--wait` is requested. Window creation remains
+asynchronous, and launch origin is available to the application through
+`astra_startup_launch_source()` rather than a command-line switch.
 
 The startup file sources the first script found at `HOME:/.motd.zsh` or
 `CONFIG:motd.zsh`. If neither exists, it prints the first plain file found at

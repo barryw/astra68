@@ -52,26 +52,8 @@ say_line(const char *text)
 static void
 say_number(uint32_t value, uint32_t width)
 {
-    char digits[12];
-    char text[16];
-    uint32_t count = 0u;
-    uint32_t at = 0u;
-
-    if (value == 0u) {
-        digits[count++] = '0';
-    }
-    while (value != 0u && count < sizeof(digits)) {
-        digits[count++] = (char)('0' + (value % 10u));
-        value /= 10u;
-    }
-    while (count + at < width && at + 1u < sizeof(text)) {
-        text[at++] = ' ';
-    }
-    while (count != 0u && at + 1u < sizeof(text)) {
-        text[at++] = digits[--count];
-    }
-    text[at] = '\0';
-    say(text);
+    if (printf("%*u", (int)width, value) < 0)
+        output_failed = 1;
 }
 
 static void

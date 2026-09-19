@@ -18,6 +18,7 @@ static uint32_t pending_transaction;
 static uint32_t pending_action;
 static uint32_t next_open_status;
 static uint32_t expected_icon_area;
+static uint32_t expected_icon_length;
 static uint8_t expected_type = ASTRA_WINDOW_STANDARD;
 static uint16_t next_event_type = ASTRA_WINDOW_EVENT_POINTER_MOTION;
 static uint32_t next_text_codepoint;
@@ -86,7 +87,7 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
             assert(d3 == sizeof(*request) && handles[0] == 0x101u &&
                    handles[1] == event_receive + 1u);
             assert(request->title_icon_length ==
-                   (expected_icon_area != 0u ? 64u : 0u));
+                   (expected_icon_area != 0u ? expected_icon_length : 0u));
             if (expected_icon_area != 0u)
                 assert(handles[3] == 0x102u);
             assert(request->type == expected_type);
@@ -388,10 +389,16 @@ int main(void)
 
     window = (AstraWindow)ASTRA_WINDOW_INIT;
     create.title_icon_area = 9u;
-    create.title_icon_length = 64u;
+    create.title_icon_length = 8193u;
     expected_icon_area = 9u;
+    expected_icon_length = create.title_icon_length;
     assert(astra_window_create(1u, 2u, &create, &window) == ASTRA_OK);
     assert(astra_window_close(&window) == ASTRA_OK);
+    create.title_icon_length = ASTRA_WINDOW_TITLE_ICON_BYTES_MAX + 1u;
+    before = call_count;
+    assert(astra_window_create(1u, 2u, &create, &window) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(call_count == before);
     create.title_icon_area = ASTRA_INVALID_HANDLE;
     create.title_icon_length = 0u;
     expected_icon_area = 0u;

@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <astra/input_modifiers.h>
+#include <astra/limits.h>
 #include <astra/syscall.h>
 
 #define ASTRA_INPUT_SERVICE_PROTOCOL UINT32_C(0x494e5054) /* INPT */
@@ -10,7 +11,14 @@
 
 #define ASTRA_CAPABILITY_INPUT_SERVICE "INPUT_SERVICE"
 
-#define ASTRA_INPUT_CLIENT_MAX 8u
+/*
+ * The service keeps four permanent handles (its process, receive port, input
+ * device and IRQ). Accepting a client temporarily receives two more handles;
+ * after the reply handle closes, the new client's event handle remains.  This
+ * is therefore the largest client set the process handle table can represent,
+ * rather than a second, guessed client quota.
+ */
+#define ASTRA_INPUT_CLIENT_MAX (ASTRA_HANDLE_COUNT_MAX - 5u)
 #define ASTRA_INPUT_EVENT_SIZE 36u
 
 #define ASTRA_INPUT_EVENT_KEY            UINT16_C(1)

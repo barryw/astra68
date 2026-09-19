@@ -23,8 +23,6 @@
  * budget unpredictable and hide the exhaustion the budget exists to expose.
  */
 
-#define ASTRA_ALLOC_CLASS_MAX 8u
-
 /* Widest scalar an allocation may hold; fixes slot alignment per target. */
 typedef union AstraAllocScalar {
     void *pointer;
@@ -75,7 +73,7 @@ typedef struct AstraAllocMetrics {
      */
     size_t charged_bytes;
     size_t peak_charged_bytes;
-    AstraAllocClassMetrics per_class[ASTRA_ALLOC_CLASS_MAX];
+    AstraAllocClassMetrics *per_class; /* caller-arena class metrics */
 } AstraAllocMetrics;
 
 typedef struct AstraAllocPool {
@@ -89,8 +87,15 @@ typedef struct AstraAllocPool {
     uint32_t injection_nth;
 } AstraAllocPool;
 
+typedef struct AstraAllocClassMetricNames {
+    char live[ASTRA_METRIC_NAME_MAX];
+    char peak_live[ASTRA_METRIC_NAME_MAX];
+    char failures[ASTRA_METRIC_NAME_MAX];
+} AstraAllocClassMetricNames;
+
 typedef struct AstraAllocator {
-    AstraAllocPool pool[ASTRA_ALLOC_CLASS_MAX];
+    AstraAllocPool *pool; /* caller-arena pool metadata */
+    AstraAllocClassMetricNames *metric_names; /* caller-arena stable names */
     uint32_t pool_count;
     uint32_t injection_nth;
     AstraAllocMetrics metrics;

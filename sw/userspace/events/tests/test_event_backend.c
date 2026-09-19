@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <astra/event_backend.h>
@@ -9,13 +10,18 @@
 
 #define RECORD_COUNT 64u
 
+void *astra_runtime_reallocate(void *pointer, size_t size)
+{
+    return realloc(pointer, size);
+}
+
 static AstraEventStored records[RECORD_COUNT];
 static AstraEventStored previous_records[RECORD_COUNT];
 static AstraEventStore store;
 static AstraEventStore previous;
 static AstraEventDescriptor catalog_records[2];
 static AstraEventCatalog catalog;
-static AstraEventsBackend backend;
+static AstraEventsBackend backend = ASTRA_EVENTS_BACKEND_INIT;
 static const uint32_t base = 0xE0000000u;
 
 static void
@@ -154,6 +160,36 @@ static void test_a_leaf_renders_its_events(void)
         assert(memcmp(second, &text[sizeof(first)], sizeof(second)) == 0);
         assert(ops->close(&backend, node) == ASTRA_VFS_OK);
     }
+}
+
+static void test_a_maximum_abi_line_is_not_truncated(void)
+{
+    AstraEventDrained event = {0};
+    char text[512];
+    uint32_t length;
+
+    reset();
+    memset(catalog_records[0].file, 'f', ASTRA_EVENT_FILE_MAX - 1u);
+    catalog_records[0].file[ASTRA_EVENT_FILE_MAX - 1u] = '\0';
+    memset(catalog_records[0].format, 'x', ASTRA_EVENT_FORMAT_MAX - 1u);
+    memcpy(catalog_records[0].format, "%q%q%q%q", 8u);
+    catalog_records[0].format[ASTRA_EVENT_FORMAT_MAX - 1u] = '\0';
+    catalog_records[0].line = UINT16_MAX;
+    catalog_records[0].argument_count = ASTRA_EVENT_ARGUMENT_COUNT_MAX;
+    memset(event.payload, 0xff, 16u);
+    event.sequence = UINT32_MAX;
+    event.process = UINT32_MAX;
+    event.thread = UINT16_MAX;
+    event.activity = UINT32_MAX;
+    event.flags = ASTRA_EVENT_LEVEL_WARNING;
+    event.message = base;
+    event.payload_length = 16u;
+    astra_event_store_append(&store, &event);
+
+    length = read_all("/boot/current/all", text, sizeof(text));
+    assert(length > 160u);
+    assert(text[length - 1u] == '\n');
+    assert(strstr(text, ":65535)\n") != NULL);
 }
 
 /*
@@ -387,6 +423,24 @@ static void test_every_write_verb_is_refused(void)
     assert(ops->close(&backend, node) == ASTRA_VFS_OK);
 }
 
+static void test_open_nodes_grow_past_old_ceiling(void)
+{
+    const AstraVfsBackendOps *ops = astra_events_backend_ops();
+    AstraVfsNodeInfo info;
+    uintptr_t nodes[9u] = {0};
+
+    reset();
+    for (uint32_t index = 0u; index < 9u; ++index)
+        assert(ops->open(&backend, "/boot/current/all", ASTRA_VFS_OPEN_READ,
+                         ASTRA_VFS_MODE_DEFAULT, &nodes[index], &info) ==
+               ASTRA_VFS_OK);
+    assert(backend.node_capacity >= 9u);
+    assert(ops->close(&backend, backend.node_capacity + 1u) ==
+           ASTRA_VFS_ERR_INVALID);
+    for (uint32_t index = 0u; index < 9u; ++index)
+        assert(ops->close(&backend, nodes[index]) == ASTRA_VFS_OK);
+}
+
 /* The boot ring is a leaf of its own: the earliest events, after eviction. */
 static void test_the_earliest_events_survive(void)
 {
@@ -412,11 +466,13 @@ static void test_the_earliest_events_survive(void)
 int main(void)
 {
     test_a_leaf_renders_its_events();
+    test_a_maximum_abi_line_is_not_truncated();
     test_every_page_size_reads_the_same_file();
     test_a_path_is_the_filter();
     test_the_tree_lists_itself();
     test_the_previous_boot_is_real_or_absent();
     test_every_write_verb_is_refused();
+    test_open_nodes_grow_past_old_ceiling();
     test_the_earliest_events_survive();
     puts("astra events backend: PASS");
     return 0;

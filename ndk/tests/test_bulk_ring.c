@@ -10,7 +10,7 @@
 #include <string.h>
 
 enum {
-    TEST_STORAGE_SIZE = 4096,
+    TEST_STORAGE_SIZE = 32768,
     TEST_ELEMENT_SIZE = 16,
     TEST_CAPACITY = 4
 };
@@ -200,6 +200,63 @@ static void test_batched_publication_and_backpressure(void)
     astra_ndk_syscall_script_done();
 }
 
+static void test_shape_is_bounded_by_area_and_abi_size(void)
+{
+    AstraArea area = mapped_area();
+    AstraBulkRing ring = ASTRA_BULK_RING_INIT;
+    AstraBulkRingEndpoints endpoints = ASTRA_BULK_RING_ENDPOINTS_INIT;
+    AstraHandle handle = 0x501u;
+
+    astra_ndk_syscall_script_reset();
+    astra_ndk_expect_syscall(ASTRA_SYSCALL_RING_CREATE, 0x100u, 0u,
+                             8192u, 2u, 0, ASTRA_SYSCALL_RESOURCE_LIMIT,
+                             0, 0);
+    assert(astra_bulk_ring_create(0x100u, 0u, 8192u, 2u, &endpoints) ==
+           ASTRA_ERROR_NO_RESOURCES);
+    astra_ndk_expect_syscall(ASTRA_SYSCALL_RING_CREATE, 0x100u, 0u,
+                             4u, 2048u, 0, ASTRA_SYSCALL_RESOURCE_LIMIT,
+                             0, 0);
+    assert(astra_bulk_ring_create(0x100u, 0u, 4u, 2048u, &endpoints) ==
+           ASTRA_ERROR_NO_RESOURCES);
+    assert(astra_bulk_ring_create(0x100u, 0u, UINT32_MAX - 3u, 2u,
+                                  &endpoints) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    astra_ndk_syscall_script_done();
+
+    format_ring(0u, 8192u, 2u, 12u, 0u, 0u);
+    astra_ndk_syscall_script_reset();
+    expect_notify(handle, 0u, 0u, ASTRA_BULK_RING_PRODUCER,
+                  ASTRA_SYSCALL_OK, 0u, 0u);
+    assert(astra_bulk_ring_attach(&ring, &handle, &area, 0u,
+                                  ASTRA_BULK_RING_PRODUCER) == ASTRA_OK);
+    astra_ndk_expect_syscall(ASTRA_SYSCALL_CLOSE, 0x501u,
+                             0, 0, 0, 0, ASTRA_SYSCALL_OK, 0, 0);
+    assert(astra_bulk_ring_close(&ring) == ASTRA_OK);
+    astra_ndk_syscall_script_done();
+
+    handle = 0x502u;
+    format_ring(0u, 4u, 2048u, 13u, 0u, 0u);
+    astra_ndk_syscall_script_reset();
+    expect_notify(handle, 0u, 0u, ASTRA_BULK_RING_PRODUCER,
+                  ASTRA_SYSCALL_OK, 0u, 0u);
+    assert(astra_bulk_ring_attach(&ring, &handle, &area, 0u,
+                                  ASTRA_BULK_RING_PRODUCER) == ASTRA_OK);
+    astra_ndk_expect_syscall(ASTRA_SYSCALL_CLOSE, 0x502u,
+                             0, 0, 0, 0, ASTRA_SYSCALL_OK, 0, 0);
+    assert(astra_bulk_ring_close(&ring) == ASTRA_OK);
+    astra_ndk_syscall_script_done();
+
+    handle = 0x503u;
+    format_ring(0u, UINT32_MAX - 3u, 2u, 14u, 0u, 0u);
+    astra_ndk_syscall_script_reset();
+    expect_notify(handle, 0u, ASTRA_BULK_RING_NOTIFY_CORRUPT,
+                  ASTRA_BULK_RING_PRODUCER, ASTRA_SYSCALL_IO_ERROR, 0, 0);
+    assert(astra_bulk_ring_attach(&ring, &handle, &area, 0u,
+                                  ASTRA_BULK_RING_PRODUCER) ==
+           ASTRA_ERROR_IO);
+    astra_ndk_syscall_script_done();
+}
+
 static void test_wait_wrap_role_and_corruption(void)
 {
     AstraArea area = mapped_area();
@@ -308,6 +365,7 @@ int main(void)
 {
     test_header_abi_and_endpoint_creation();
     test_batched_publication_and_backpressure();
+    test_shape_is_bounded_by_area_and_abi_size();
     test_wait_wrap_role_and_corruption();
     puts("NDK bulk-ring tests passed");
     return 0;

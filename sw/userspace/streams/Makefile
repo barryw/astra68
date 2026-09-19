@@ -81,8 +81,8 @@ streams-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 	@python3 ../../../tools/library_info.py $< | \
 		grep -q '^streams.library.1 1.0.0 ABI 1.0$$'
 	@$(READELF) -hW $< | grep -q 'Type:.*DYN'
-	@$(READELF) -dW $< | grep -q 'SONAME.*streams.library.1'
-	@test "$$($(READELF) -dW $< | grep -c 'NEEDED.*runtime.library.1')" = 1
+	@$(READELF) -dW $< | grep -Fq 'Library soname: [streams.library.1]'
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'
 	@$(READELF) -lW $< | grep -q ' GNU_RELRO '

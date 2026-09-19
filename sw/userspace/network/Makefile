@@ -93,9 +93,9 @@ library-contract: $(NETWORK_LIBRARY)
 		$(NETWORK_LIBRARY_MAP) $(NETWORK_LIBRARY)
 	@python3 ../../../tools/library_info.py $(NETWORK_LIBRARY) | \
 		grep -q '^network.library.1 1.0.0 ABI 1.1$$'
-	@$(READELF) -dW $< | grep -q 'SONAME.*network.library.1'
-	@test "$$($(READELF) -dW $< | grep -c 'NEEDED.*runtime.library.1')" = 1
-	@test "$$($(READELF) -dW $< | grep -c 'NEEDED.*compiler.library.1')" = 1
+	@$(READELF) -dW $< | grep -Fq 'Library soname: [network.library.1]'
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 2
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'
