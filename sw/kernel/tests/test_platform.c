@@ -440,6 +440,27 @@ static void test_fenced_display_transport(void)
         ASTRA_DISPLAY_HOST_CURSOR_PACK(ASTRA_DISPLAY_WIDTH, 0u, true), 0u));
     assert((astraea->IRQ_EN & ASTRAEA_IRQ_DRAW_DONE) != 0u);
 
+    /* A fast device may complete between SUBMIT and the acceptance read. */
+    kernel_platform_test_display_submit_result(
+        ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID, 13u);
+    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
+    assert(kernel_platform_display_submit(
+        13u, ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x2468u, 0u));
+
+    /* A completion for another fence, or no accepted request, is not ours. */
+    kernel_platform_test_display_submit_result(
+        ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID, 99u);
+    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
+    assert(!kernel_platform_display_submit(
+        14u, ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x2468u, 0u));
+    kernel_platform_test_display_submit_result(
+        ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY, 0u);
+    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
+    assert(!kernel_platform_display_submit(
+        15u, ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x2468u, 0u));
+    kernel_platform_test_display_submit_result(
+        ASTRA_DISPLAY_HOST_QUEUE_BUSY, 0u);
+
     assert(!kernel_platform_display_collect(NULL));
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID;
     registers->DISPLAY_CPL_ID = 7u;

@@ -34,14 +34,18 @@ TEXT_SURFACE_HOST_TEST := build/host/test_text_surface
 UNDO_HOST_TEST := build/host/test_undo
 TEXT_MODEL_HOST_TEST := build/host/test_text_model
 SCROLL_HOST_TEST := build/host/test_scroll
+GRAPHICS_FONT_HEADERS := $(GRAPHICS)/build/generated/astra_font8x8.inc \
+	$(GRAPHICS)/build/generated/astra_ui_font.inc \
+	$(GRAPHICS)/build/generated/astra_mono_font.inc
+GRAPHICS_FONT_INPUTS := $(GRAPHICS)/fonts/astra-workbench.afnt \
+	$(GRAPHICS)/fonts/astra-mono.afnt ../../../assets/fonts/astra_8x16.hex \
+	../../../tools/fonts/afnt.py $(NDK)/include/astra/font_library.h
 
 all: $(INTERFACE_TARGET) library-contract
 
 interface-library: $(INTERFACE_TARGET)
 
-$(GRAPHICS)/build/generated/astra_font8x8.inc \
-$(GRAPHICS)/build/generated/astra_ui_font.inc \
-$(GRAPHICS)/build/generated/astra_mono_font.inc:
+$(GRAPHICS_FONT_HEADERS): $(GRAPHICS_FONT_INPUTS)
 	$(MAKE) -C $(GRAPHICS) all
 
 build/m68k/interface_library.o: src/interface_library.c
@@ -93,7 +97,8 @@ $(INTERFACE_TARGET): $(INTERFACE_OBJECTS) $(INTERFACE_LIBRARY_MAP) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
 		-Wl,--no-as-needed -Wl,-l:graphics.library.2 \
 		-Wl,-l:font.library.2 -Wl,-l:system.library.2 \
-		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1
+		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1 \
+		$(ASTRA_SHARED_LINK_END)
 
 library-contract: $(INTERFACE_TARGET)
 	@python3 ../../../tools/check_shared_library_layout.py $(INTERFACE_TARGET)

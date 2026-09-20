@@ -10,6 +10,11 @@ ASTRA_SHARED_OWNER_MAKEFILE := $(firstword $(MAKEFILE_LIST))
 ASTRA_SHARED_POLICY_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 ASTRA_SHARED_LINK_INPUTS := $(ASTRA_SHARED_LIBRARY_LD) \
 	$(ASTRA_SHARED_OWNER_MAKEFILE) $(ASTRA_SHARED_POLICY_MAKEFILE)
+ifneq ($(ASTRA_SHARED_NO_CRT),1)
+ASTRA_SHARED_CRT_BEGIN := $(shell $(CROSS)gcc -print-file-name=crtbeginS.o)
+ASTRA_SHARED_CRT_END := $(shell $(CROSS)gcc -print-file-name=crtendS.o)
+ASTRA_SHARED_LINK_INPUTS += $(ASTRA_SHARED_CRT_BEGIN) $(ASTRA_SHARED_CRT_END)
+endif
 # Compile products as well as the final DSO must become stale when their owner
 # flags or this shared policy changes.
 override .EXTRA_PREREQS += $(ASTRA_SHARED_OWNER_MAKEFILE) \
@@ -20,7 +25,9 @@ ASTRA_SHARED_PIC_FLAGS := -fPIC -ftls-model=initial-exec
 ASTRA_SHARED_LINK_FLAGS := -nostdlib -shared \
 	-Wl,--no-undefined -Wl,-Bsymbolic -Wl,--build-id=none \
 	-Wl,--gc-sections -Wl,--hash-style=sysv -Wl,-z,now -Wl,-z,relro \
-	-Wl,-z,max-page-size=0x1000 -T $(ASTRA_SHARED_LIBRARY_LD)
+	-Wl,-z,max-page-size=0x1000 -T $(ASTRA_SHARED_LIBRARY_LD) \
+	$(ASTRA_SHARED_CRT_BEGIN)
+ASTRA_SHARED_LINK_END := $(ASTRA_SHARED_CRT_END)
 
 # Record the exact bytes used to derive an ABI map.  The content-addressed
 # toolchain prerequisite detects installs whose mtimes move backwards; normal

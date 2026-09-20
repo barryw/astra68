@@ -95,16 +95,16 @@ re-evaluated. The regression failed before this fix and passes the normal,
 ASan/UBSan, analyzer, and MC68040 display builds.
 
 Immutable software release
-`a796b95f0839e141160b24cc2812683a11b1533a2cdb54be11b43118f73987a0`
+`6205137ad1289716295af463f04e266dc96e7eec3e4c4f50c50b9c4e2f1b73ee`
 is selected, byte-verified, and running on the DE25. Its QEMU, ROM, storage
 seed, host display, remote-desktop, and source-manifest SHA-256 values are
 respectively
-`3a13dc695833a277f3048de3835cfdedfcacc46adb9e31e8937942d4d410605e`,
-`89785c7410b2773db035fa837d432185eb3f38268ab7052bc109d0ab4c369987`,
-`51cfe694c8f7a522f5170d7d2641b4ae696e045ec4a84b0a17a9ec6783aabb18`,
-`9d86a327a113e2f5dd2ead97f49bab87b1aacf16f5037fa9c2991a7bc059d471`,
-`357e1db892268ddfe79b3abb2cc6b0b77c300d9d8843e290401ef0e7c1b6af91`,
-and `839ae8805385c15238dde947227bbdb44f90329072d6e6da8c048d638c7e787d`.
+`6ff7dcc3f11ab4fae062afb102420c154d4823e86c640dd5e87216b38bddd977`,
+`ab7b1d29e43a9e5c7c5a970b6321a1c7d137f965449a01948de1fc64e46a9f35`,
+`ef9f88bbe17ad941e0a0e16460ecebbd5e3f81d82f8f4350bf17a02aa18d55b9`,
+`d7138bb4bd2e22f93d8692e0e3ee26290a18228d5ac1f13997fc1c08a85054fe`,
+`3421caf2be0729c223988103ebcf18f1cc017d355f4d0edcaa906b7b42322f3a`,
+and `22dc39d83ba802af3594c77d2df1b6de9649bfbd10e9313df7a561450e394401`.
 It reaches stage 8; `astra.service` and
 `astra-remote-desktop.service` are active with zero automatic restarts.
 
@@ -114,18 +114,25 @@ after confirmed startup without waiting for application exit, returns exactly
 1 when startup fails, and `--wait` returns the application's exit status.
 Positive and negative NDK, command, supervisor, QEMU, and physical-DE25 tests
 cover those contracts. On the board, a missing application returned 1 while
-`InterfaceGallery.app` returned 0 and remained alive. Launch origin is carried
+`InterfaceGallery.app` returned 0 and remained alive; the latter's direct RFB
+evidence frame is
+`635dfc703072e2ad4d5cd56a4748d8b49d8699ac0d8fb1cf5da1083faee917cb`.
+Launch origin is carried
 in the canonical startup record and is available through
 `astra_startup_launch_source()`; applications require no launch-origin switch.
 The QEMU terminal gate rebuilds its workspace ROM before every run and has a
 negative regression proving that it refuses to test when that refresh fails,
 so a stale boot image cannot masquerade as current source.
+The production `COMMANDS:` surface contains exactly 21 single-purpose
+programs; `posix`, `hello`, and `cxx` remain test fixtures and are absent from
+the installed command namespace.
 The direct Mac-to-DE25 RFB gate authenticated at `192.168.1.52:5900`, captured
-a 1920x1080 RGB frame, opened Terminal with the pointer, and entered and ran
-`echo direct-keyboard-pass`; the confirming frame SHA-256 is
-`0cba29ae38139fc858d31e9def31567800c0c4e39b0011c5decfee0f00efd75c`.
+a 1920x1080 RGB frame, opened Terminal with the pointer, and preserved a fast
+mixed-case and shifted-punctuation burst exactly. The confirming CLI frame
+SHA-256 is
+`a86a4ce4204e90efb2935a1ed446fcc174cefd6147b2b3d931f99cdf828446a3`.
 The final release's authenticated desktop capture is
-`bf530945d726f22e8c04fd0097438082ed3350638686403f9ba3e6ec80597345`;
+`59f1aaecaa1e0d1e0a2f0223f088095ce502c995ace9648312604a667ee23638`;
 anonymous access and an incorrect password were both rejected.
 The server now describes its captured RGB24 bytes with the correct
 little-endian R/G/B shifts, so the native and exact macOS 32-bit client
@@ -135,10 +142,16 @@ Pointer input uses LibVNCServer's eager event draining, coalesces motion before
 the synchronous QMP handoff, and still sends every button edge immediately.
 The physical gate delivered an exact `(700,500)` PointerPos update and drained
 1,000 queued motion events to `(1099,399)` in 0.120 seconds.
-This release advances the GUI protocol to version 11. Every ordinary window
+Shifted RFB keysyms now hold the synthetic Shift key before the base key enters
+the reconciliation pass; positive shifted-symbol and negative unshifted-symbol
+tests prevent the prior base-key use-after-free ordering from recurring.
+This release advances the GUI protocol to version 12. Every ordinary window
 receives one complete state snapshot for active, inactive, minimized,
 maximized, restored, and geometry transitions, plus a distinct resize event
-only when its client extent changes. Terminal consumes that state directly:
+only when its client extent changes. All four edges and four corners resize;
+the hardware pointer selects horizontal, vertical, or diagonal feedback, and
+interactive resize notification is committed once on button release. Terminal
+consumes that state directly:
 its cursor blinks only while active, remains visible while inactive, and its
 underline is aligned to the font box rather than the inter-line gap. The
 desktop uses the 13-pixel title face for a measured, centered application label
@@ -1060,7 +1073,7 @@ restarts, the renderer returned ready, and the last accepted display pair
 remained complete at 2/2. The launcher regression also forces one renderer
 exit with status 42 and proves that its replacement runs before QEMU exits.
 
-Interface Kit ABI 4.5, GUI protocol 11, render-batch ABI 1.2, and display
+Interface Kit ABI 4.5, GUI protocol 12, render-batch ABI 1.2, and display
 mailbox 1.5 now carry semantic and custom pointer images end to end. The shared
 NDK window API selects the built-in arrow, horizontal resize, vertical resize,
 text I-beam, or wait image and copies application RGBA pixels plus hotspot into
@@ -1250,7 +1263,7 @@ without that interpreter is rejected. Focused kernel and runtime tests prove
 both images' bytes, entry selection, source routing, release-once behavior,
 rollback, and unchanged static launch behavior.
 
-The source-tree conversion is complete for all 24 programs installed in
+The source-tree conversion is complete for all 21 programs installed in
 `COMMANDS:`. Every shipped artifact is an `ET_EXEC` dynamic executable with
 `loader.library.1` as its interpreter, exact ordered direct dependencies,
 immediate binding, GNU RELRO, and no text relocations. Independent validation
@@ -1287,7 +1300,7 @@ CRT, all 16 registry-owned versioned `.library` files, the closed
 executable-contract checker. All library owners, including the interpreter,
 pass their full ABI contracts before packaging. The NDK make fragments are the
 sole executable ABI and dynamic-link policy owner for archive consumers,
-source-tree ports, all 24 commands, and the generated Vim and zsh vendor
+source-tree ports, all 21 commands, and the generated Vim and zsh vendor
 builds. The source-tree
 POSIX kit now supplies locations only, and a regression rejects duplicated
 ABI, sysroot, PIE, binding, RELRO, or garbage-collection policy in either

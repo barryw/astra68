@@ -139,19 +139,32 @@ astra_stream_sink_init(AstraStreamSink *sink, uint32_t receive,
     return 1;
 }
 
-void
+int
 astra_stream_sink_size(AstraStreamSink *sink, uint32_t columns, uint32_t rows,
                        uint32_t pixel_width, uint32_t pixel_height)
 {
+    uint16_t next_columns;
+    uint16_t next_rows;
+    uint16_t next_pixel_width;
+    uint16_t next_pixel_height;
+    int changed;
+
     if (sink == NULL) {
-        return;
+        return 0;
     }
-    sink->columns = columns > 0xFFFFu ? 0xFFFFu : (uint16_t)columns;
-    sink->rows = rows > 0xFFFFu ? 0xFFFFu : (uint16_t)rows;
-    sink->pixel_width = pixel_width > 0xFFFFu ?
+    next_columns = columns > 0xFFFFu ? 0xFFFFu : (uint16_t)columns;
+    next_rows = rows > 0xFFFFu ? 0xFFFFu : (uint16_t)rows;
+    next_pixel_width = pixel_width > 0xFFFFu ?
         0xFFFFu : (uint16_t)pixel_width;
-    sink->pixel_height = pixel_height > 0xFFFFu ?
+    next_pixel_height = pixel_height > 0xFFFFu ?
         0xFFFFu : (uint16_t)pixel_height;
+    changed = sink->columns != next_columns || sink->rows != next_rows ||
+              sink->pixel_width != next_pixel_width ||
+              sink->pixel_height != next_pixel_height;
+    sink->columns = next_columns;
+    sink->rows = next_rows;
+    sink->pixel_width = next_pixel_width;
+    sink->pixel_height = next_pixel_height;
     if (sink->tty != NULL &&
         (sink->tty->columns != sink->columns ||
          sink->tty->rows != sink->rows ||
@@ -163,7 +176,9 @@ astra_stream_sink_size(AstraStreamSink *sink, uint32_t columns, uint32_t rows,
         sink->tty->pixel_height = sink->pixel_height;
         if (++sink->tty->generation == 0u)
             sink->tty->generation = 1u;
+        changed = 1;
     }
+    return changed;
 }
 
 static void

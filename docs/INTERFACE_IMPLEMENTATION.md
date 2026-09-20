@@ -258,13 +258,15 @@ The retained trace is `/tmp/astra-splitter-final.flSMgn/ring.bin` on Beast,
 SHA-256
 `34bf6843d15a8f470f93dd66e65eabc832fcf5e4b28e399597ee3cb3c55e6e0d`.
 
-Current source uses Interface Kit ABI 4.5 and GUI protocol 11 with one
+Current source uses Interface Kit ABI 4.5 and GUI protocol 12 with one
 canonical pointer-image path. Window clients select the server-supplied arrow,
-horizontal resize, vertical resize, I-beam, or wait image, or transfer a copied
-RGBA image and hotspot. Interface Kit derives field and splitter images from
-its existing hover/capture state and suppresses duplicate commands. The
-display service owns custom-image storage and commits image, hotspot, pointer
-state, and scene at vblank through the hardware pointer plane.
+horizontal resize, vertical resize, either diagonal resize, I-beam, or wait
+image, or transfer a copied RGBA image and hotspot. Interface Kit derives field
+and splitter images from its existing hover/capture state and suppresses
+duplicate commands. The display service owns custom-image storage and commits
+image, hotspot, pointer state, and scene at vblank through the hardware pointer
+plane. Window-frame drags update compositor geometry live but defer the client
+state and resize events until button release.
 
 Host contract tests cover built-in selection, capture stability, command
 coalescing, malformed image rejection, immutable two-handle transfer, and

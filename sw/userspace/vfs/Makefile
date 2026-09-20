@@ -195,7 +195,7 @@ $(FILESYSTEM_LIBRARY): $(FILESYSTEM_LIBRARY_OBJECTS) \
 		$(FILESYSTEM_LIBRARY_OBJECTS) \
 		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-Wl,--no-as-needed -Wl,-l:system.library.2 \
-		-Wl,-l:runtime.library.1
+		-Wl,-l:runtime.library.1 $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 	@python3 ../../../tools/check_shared_library_layout.py \

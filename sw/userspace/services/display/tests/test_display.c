@@ -951,10 +951,32 @@ int main(void)
                               &frame_timestamp) == ASTRA_STATUS_OK);
         assert(window->request.width == old_width + 12u &&
                window->request.height == old_height + 7u);
-        assert((effects & DISPLAY_POINTER_RESIZE) != 0u);
+        assert((effects & (DISPLAY_POINTER_FRAME |
+                           DISPLAY_POINTER_RESIZE)) == 0u);
         assert(handle_pointer(&state, &resize_up, &effects, &frame_window,
                               &frame_timestamp) == ASTRA_STATUS_OK);
-        assert(state.capture_window == 0u);
+        assert(state.capture_window == 0u &&
+               (effects & (DISPLAY_POINTER_FRAME |
+                           DISPLAY_POINTER_RESIZE)) ==
+                   (DISPLAY_POINTER_FRAME | DISPLAY_POINTER_RESIZE) &&
+               frame_window == window->id && frame_timestamp == 103u);
+
+        effects = 0u;
+        state.pointer_x = window->request.x +
+                          (int32_t)outer_width(&theme, window) -
+                          theme.resize_hit;
+        state.pointer_y = window->request.y +
+                          (int32_t)outer_height(&theme, window) -
+                          theme.resize_hit;
+        assert(hit_region(&theme, window, state.pointer_x,
+                          state.pointer_y) == HIT_RESIZE_SE);
+        assert(handle_pointer(&state, &resize_down, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK);
+        effects = 0u;
+        assert(handle_pointer(&state, &resize_up, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK);
+        assert((effects & (DISPLAY_POINTER_FRAME |
+                           DISPLAY_POINTER_RESIZE)) == 0u);
     }
 
     {
@@ -980,11 +1002,32 @@ int main(void)
         };
 
         for (uint32_t index = 0u;
-             index < sizeof(edges) / sizeof(edges[0]); ++index)
+             index < sizeof(edges) / sizeof(edges[0]); ++index) {
             assert(hit_region(&theme, window,
                               window->request.x + edges[index].x,
                               window->request.y + edges[index].y) ==
                    edges[index].region);
+            state.pointer_x = window->request.x + edges[index].x;
+            state.pointer_y = window->request.y + edges[index].y;
+            assert(display_pointer_shape(&state, &theme) ==
+                   (edges[index].region == HIT_RESIZE_E ||
+                    edges[index].region == HIT_RESIZE_W ?
+                        ASTRA_POINTER_SHAPE_RESIZE_HORIZONTAL :
+                    edges[index].region == HIT_RESIZE_N ||
+                    edges[index].region == HIT_RESIZE_S ?
+                        ASTRA_POINTER_SHAPE_RESIZE_VERTICAL :
+                    edges[index].region == HIT_RESIZE_NW ||
+                    edges[index].region == HIT_RESIZE_SE ?
+                        ASTRA_POINTER_SHAPE_RESIZE_NW_SE :
+                        ASTRA_POINTER_SHAPE_RESIZE_NE_SW));
+        }
+
+        window->request.flags &= ~ASTRA_WINDOW_RESIZABLE;
+        state.pointer_x = window->request.x + (int32_t)width - 1;
+        state.pointer_y = window->request.y + (int32_t)height / 2;
+        assert(display_pointer_shape(&state, &theme) ==
+               ASTRA_POINTER_SHAPE_DEFAULT);
+        window->request.flags |= ASTRA_WINDOW_RESIZABLE;
     }
 
     {
@@ -1049,6 +1092,19 @@ int main(void)
         assert(handle_pointer(&state, &text_event, &effects, &frame_window,
                               &frame_timestamp) == ASTRA_STATUS_INVALID);
         assert(delivered_count == before + 2u);
+
+        send_would_block = 1u;
+        wait_count = 0u;
+        assert(handle_pointer(&state, &key, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(delivered_count == before + 2u && wait_count == 0u &&
+               state.pending_input_valid != 0u &&
+               state.pending_input_window == state.windows[3].id &&
+               state.windows[3].event_lost == 0u);
+        retry_pending_input(&state);
+        assert(delivered_count == before + 3u &&
+               state.pending_input_valid == 0u &&
+               state.windows[3].event_lost == 0u);
     }
     {
         DisplayWindow *window = &state.windows[3];

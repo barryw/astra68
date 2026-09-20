@@ -335,17 +335,18 @@ static uint32_t run_zsh(void)
 {
     static const char *const argv[] = {"zsh"};
     static const char *const environment_names[] = {
-        "HOME", "PATH", "SHELL", "TERM"
+        "HOME", "PATH", "SHELL", "TERM", "VIMRUNTIME"
     };
     static const char *const environment_values[] = {
-        "HOME:", "/commands", "/commands/zsh", "astra-256color"
+        "HOME:", "/commands", "/commands/zsh", "astra-256color",
+        "LIBS:vim/runtime"
     };
     AstraLaunchGrant grants[ASTRA_LAUNCH_GRANT_MAX] = {0};
     AstraLaunchArguments arguments;
     AstraVfsReadSource source = ASTRA_VFS_READ_SOURCE_INIT;
     AstraVfsReadSource interpreter_source = ASTRA_VFS_READ_SOURCE_INIT;
     char argument_storage[16];
-    char environment_storage[96];
+    char environment_storage[128];
     AstraProcessInfo crash = {0};
     uint32_t grant_count;
     uint32_t exit_status = SESSION_NOT_RUN;
@@ -356,7 +357,7 @@ static uint32_t run_zsh(void)
             ASTRA_LAUNCH_SOURCE_SHELL, 1u, argv) != ASTRA_SYSCALL_OK ||
         astra_launch_environment_pack(
             &arguments, environment_storage, sizeof(environment_storage),
-            4u, environment_names, environment_values) != ASTRA_SYSCALL_OK)
+            5u, environment_names, environment_values) != ASTRA_SYSCALL_OK)
         return SESSION_NOT_RUN;
     status = astra_vfs_read_source_open(
         &source, astra_process_vfs_assigns(), "COMMANDS:zsh",

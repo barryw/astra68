@@ -30,6 +30,8 @@
 #define ASTRA_RFB_PORT 5900
 #define ASTRA_RFB_IDLE_US 100000L
 #define ASTRA_RFB_PASSWORD_MAX 8u
+#define ASTRA_INPUT_STATUS_ADDRESS UINT32_C(0xfff0070c)
+#define ASTRA_INPUT_LEVEL_MASK UINT32_C(0x1f)
 
 struct astra_remote_key {
     const char *qcode;
@@ -39,7 +41,9 @@ struct astra_remote_key {
 };
 
 struct astra_remote_client_key {
+    rfbKeySym symbol;
     struct astra_remote_key *key;
+    struct astra_remote_key *modifier;
     struct astra_remote_client_key *next;
 };
 
@@ -195,6 +199,38 @@ static const char *astra_qcode_for_keysym(rfbKeySym symbol)
     }
 }
 
+static bool astra_keysym_requires_shift(rfbKeySym symbol)
+{
+    if (symbol >= XK_A && symbol <= XK_Z)
+        return true;
+    switch (symbol) {
+    case XK_exclam:
+    case XK_quotedbl:
+    case XK_numbersign:
+    case XK_dollar:
+    case XK_percent:
+    case XK_ampersand:
+    case XK_parenleft:
+    case XK_parenright:
+    case XK_asterisk:
+    case XK_plus:
+    case XK_colon:
+    case XK_less:
+    case XK_greater:
+    case XK_question:
+    case XK_at:
+    case XK_asciicircum:
+    case XK_underscore:
+    case XK_braceleft:
+    case XK_bar:
+    case XK_braceright:
+    case XK_asciitilde:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static void astra_qmp_close(struct astra_remote_desktop *desktop)
 {
     if (desktop->qmp != NULL) {
@@ -262,10 +298,91 @@ static int astra_qmp_connect(struct astra_remote_desktop *desktop)
     return 0;
 }
 
+static int astra_qmp_word_parse(const char *line, uint32_t *value)
+{
+    const char *marker;
+    char *end;
+    unsigned long parsed;
+
+    if (line == NULL || value == NULL ||
+        (marker = strstr(line, ": 0x")) == NULL)
+        return -1;
+    errno = 0;
+    parsed = strtoul(marker + 2, &end, 16);
+    if (errno != 0 || end == marker + 2 || parsed > UINT32_MAX)
+        return -1;
+    *value = (uint32_t)parsed;
+    return 0;
+}
+
+static int astra_qmp_input_level(struct astra_remote_desktop *desktop,
+                                 unsigned int *level)
+{
+    char *line = NULL;
+    size_t capacity = 0u;
+    uint32_t status;
+    int result = -1;
+
+    if (astra_qmp_connect(desktop) != 0 ||
+        fprintf(desktop->qmp,
+                "{\"execute\":\"human-monitor-command\",\"arguments\":"
+                "{\"command-line\":\"xp /1xw 0x%08x\"}}\n",
+                ASTRA_INPUT_STATUS_ADDRESS) < 0 ||
+        fflush(desktop->qmp) != 0)
+        goto failed;
+    while (getline(&line, &capacity, desktop->qmp) >= 0) {
+        if (strstr(line, "\"event\"") != NULL)
+            continue;
+        if (strstr(line, "\"return\"") != NULL &&
+            astra_qmp_word_parse(line, &status) == 0) {
+            *level = status & ASTRA_INPUT_LEVEL_MASK;
+            result = 0;
+        } else if (strstr(line, "\"error\"") != NULL) {
+            fprintf(stderr, "Astra remote desktop: QMP error: %s", line);
+        }
+        break;
+    }
+    if (result == 0) {
+        free(line);
+        return 0;
+    }
+
+failed:
+    free(line);
+    astra_qmp_close(desktop);
+    return -1;
+}
+
+static bool astra_remote_input_has_room(unsigned int level,
+                                        unsigned int events)
+{
+    return events <= ASTRA_INPUT_LEVEL_MASK &&
+           level <= ASTRA_INPUT_LEVEL_MASK - events;
+}
+
+static int astra_qmp_wait_input(struct astra_remote_desktop *desktop,
+                                unsigned int events, bool empty)
+{
+    unsigned int level;
+
+    while (astra_remote_running) {
+        if (astra_qmp_input_level(desktop, &level) != 0)
+            return -1;
+        if ((empty && level == 0u) ||
+            (!empty && astra_remote_input_has_room(level, events)))
+            return 0;
+        if (poll(NULL, 0u, 1) < 0 && errno != EINTR)
+            return -1;
+    }
+    errno = EINTR;
+    return -1;
+}
+
 static int astra_qmp_key(struct astra_remote_desktop *desktop,
                          const char *qcode, bool down)
 {
-    if (astra_qmp_connect(desktop) != 0)
+    if (astra_qmp_connect(desktop) != 0 ||
+        astra_qmp_wait_input(desktop, 1u, false) != 0)
         return -1;
     if (fprintf(desktop->qmp,
                 "{\"execute\":\"input-send-event\",\"arguments\":"
@@ -274,7 +391,8 @@ static int astra_qmp_key(struct astra_remote_desktop *desktop,
                 "\"data\":\"%s\"}}}]}}\n",
                 down ? "true" : "false", qcode) < 0 ||
         fflush(desktop->qmp) != 0 ||
-        astra_qmp_response(desktop, "\"return\"") != 0) {
+        astra_qmp_response(desktop, "\"return\"") != 0 ||
+        astra_qmp_wait_input(desktop, 0u, true) != 0) {
         astra_qmp_close(desktop);
         return -1;
     }
@@ -291,6 +409,22 @@ static struct astra_remote_key *astra_remote_key_find(
             return key;
     }
     return NULL;
+}
+
+static struct astra_remote_key *astra_remote_key_get(
+    struct astra_remote_desktop *desktop, const char *qcode)
+{
+    struct astra_remote_key *key = astra_remote_key_find(desktop, qcode);
+
+    if (key != NULL)
+        return key;
+    key = calloc(1u, sizeof(*key));
+    if (key != NULL) {
+        key->qcode = qcode;
+        key->next = desktop->keys;
+        desktop->keys = key;
+    }
+    return key;
 }
 
 static void astra_remote_reconcile_keys(struct astra_remote_desktop *desktop)
@@ -321,6 +455,7 @@ static void astra_remote_key_event(rfbBool down, rfbKeySym symbol,
     struct astra_remote_client_key **link;
     struct astra_remote_client_key *held;
     struct astra_remote_key *key;
+    struct astra_remote_key *modifier = NULL;
     const char *qcode = astra_qcode_for_keysym(symbol);
 
     if (qcode == NULL) {
@@ -329,31 +464,37 @@ static void astra_remote_key_event(rfbBool down, rfbKeySym symbol,
         return;
     }
     link = &state->keys;
-    while (*link != NULL && strcmp((*link)->key->qcode, qcode) != 0)
+    while (*link != NULL && (*link)->symbol != symbol)
         link = &(*link)->next;
     if (down) {
         if (*link != NULL)
             return;
-        key = astra_remote_key_find(desktop, qcode);
-        if (key == NULL) {
-            key = calloc(1u, sizeof(*key));
-            if (key == NULL)
-                return;
-            key->qcode = qcode;
-            key->next = desktop->keys;
-            desktop->keys = key;
-        }
+        key = astra_remote_key_get(desktop, qcode);
+        if (astra_keysym_requires_shift(symbol))
+            modifier = astra_remote_key_get(desktop, "shift");
         held = malloc(sizeof(*held));
-        if (held == NULL)
+        if (key == NULL ||
+            (astra_keysym_requires_shift(symbol) && modifier == NULL) ||
+            held == NULL) {
+            free(held);
+            astra_remote_reconcile_keys(desktop);
             return;
+        }
+        held->symbol = symbol;
         held->key = key;
+        held->modifier = modifier;
         held->next = state->keys;
         state->keys = held;
+        if (modifier != NULL)
+            ++modifier->references;
         ++key->references;
     } else if (*link != NULL) {
         held = *link;
         *link = held->next;
         --held->key->references;
+        astra_remote_reconcile_keys(desktop);
+        if (held->modifier != NULL)
+            --held->modifier->references;
         free(held);
     }
     astra_remote_reconcile_keys(desktop);
@@ -369,9 +510,12 @@ static void astra_remote_release_keys(rfbClientPtr client)
 
         state->keys = held->next;
         --held->key->references;
+        astra_remote_reconcile_keys(desktop);
+        if (held->modifier != NULL)
+            --held->modifier->references;
         free(held);
+        astra_remote_reconcile_keys(desktop);
     }
-    astra_remote_reconcile_keys(desktop);
 }
 
 static int astra_qmp_pointer(struct astra_remote_desktop *desktop,
@@ -380,8 +524,14 @@ static int astra_qmp_pointer(struct astra_remote_desktop *desktop,
     static const char *const button_names[] = { "left", "middle", "right" };
     unsigned int changed = wanted_buttons ^ desktop->sent_buttons;
     unsigned int index;
+    unsigned int events = 2u;
 
-    if (astra_qmp_connect(desktop) != 0)
+    for (index = 0u; index < 3u; ++index)
+        if ((changed & (1u << index)) != 0u)
+            ++events;
+
+    if (astra_qmp_connect(desktop) != 0 ||
+        astra_qmp_wait_input(desktop, events, false) != 0)
         return -1;
     if (fprintf(desktop->qmp,
                 "{\"execute\":\"input-send-event\",\"arguments\":{"
@@ -402,7 +552,8 @@ static int astra_qmp_pointer(struct astra_remote_desktop *desktop,
             goto failed;
     }
     if (fprintf(desktop->qmp, "]}}\n") < 0 || fflush(desktop->qmp) != 0 ||
-        astra_qmp_response(desktop, "\"return\"") != 0)
+        astra_qmp_response(desktop, "\"return\"") != 0 ||
+        astra_qmp_wait_input(desktop, 0u, true) != 0)
         goto failed;
     desktop->sent_buttons = wanted_buttons;
     desktop->pointer_dirty = false;
@@ -416,7 +567,8 @@ failed:
 static void astra_qmp_wheel(struct astra_remote_desktop *desktop,
                             const char *button)
 {
-    if (astra_qmp_connect(desktop) != 0)
+    if (astra_qmp_connect(desktop) != 0 ||
+        astra_qmp_wait_input(desktop, 2u, false) != 0)
         return;
     if (fprintf(desktop->qmp,
                 "{\"execute\":\"input-send-event\",\"arguments\":{"
@@ -424,7 +576,8 @@ static void astra_qmp_wheel(struct astra_remote_desktop *desktop,
                 "\"button\":\"%s\",\"down\":true}},{\"type\":\"btn\","
                 "\"data\":{\"button\":\"%s\",\"down\":false}}]}}\n",
                 button, button) < 0 || fflush(desktop->qmp) != 0 ||
-        astra_qmp_response(desktop, "\"return\"") != 0)
+        astra_qmp_response(desktop, "\"return\"") != 0 ||
+        astra_qmp_wait_input(desktop, 0u, true) != 0)
         astra_qmp_close(desktop);
 }
 
@@ -644,15 +797,29 @@ static int astra_remote_self_test(void)
     struct astra_remote_damage damage;
     uint8_t previous[18] = {0};
     uint8_t current[18] = {0};
+    uint32_t input_status;
 
     astra_remote_pixel_format(&format);
     current[(1u * 3u + 2u) * 3u] = 1u;
 
     if (strcmp(astra_qcode_for_keysym(XK_A), "a") != 0 ||
         strcmp(astra_qcode_for_keysym(XK_exclam), "1") != 0 ||
+        !astra_keysym_requires_shift(XK_A) ||
+        !astra_keysym_requires_shift(XK_exclam) ||
+        astra_keysym_requires_shift(XK_a) ||
+        astra_keysym_requires_shift(XK_1) ||
         strcmp(astra_qcode_for_keysym(XK_F24), "f24") != 0 ||
         strcmp(astra_qcode_for_keysym(XK_KP_Enter), "kp_enter") != 0 ||
         astra_qcode_for_keysym(0x0101f642u) != NULL ||
+        astra_qmp_word_parse(
+            "{\"return\":\"00000000fff0070c: 0x0000001f\\r\\n\"}",
+            &input_status) != 0 || input_status != 31u ||
+        astra_qmp_word_parse("{\"return\":\"not a word\"}",
+                            &input_status) == 0 ||
+        !astra_remote_input_has_room(30u, 1u) ||
+        astra_remote_input_has_room(31u, 1u) ||
+        !astra_remote_input_has_room(29u, 2u) ||
+        astra_remote_input_has_room(30u, 2u) ||
         astra_remote_network_config(NULL, NULL, &listen_interface) != 0 ||
         listen_interface != htonl(INADDR_LOOPBACK) ||
         astra_remote_network_config("0.0.0.0", "Astra68!",

@@ -463,7 +463,10 @@ static void test_unfocused_client_gets_loss_retry(void)
 typedef struct TestPort {
     AstraInputEventMessage message;
     AstraInputPortSendResult result;
+    AstraInputPortSendResult wait_result;
     uint32_t sends;
+    uint32_t waits;
+    uint32_t ready_after_wait;
 } TestPort;
 
 static AstraInputPortSendResult port_send(void *context, uint32_t send_handle,
@@ -476,7 +479,19 @@ static AstraInputPortSendResult port_send(void *context, uint32_t send_handle,
     assert(message_size == sizeof(port->message));
     ++port->sends;
     port->message = *(const AstraInputEventMessage *)message;
+    if (port->ready_after_wait != 0u && port->waits != 0u)
+        return ASTRA_INPUT_PORT_SEND_OK;
     return port->result;
+}
+
+static AstraInputPortSendResult port_wait(void *context,
+                                          uint32_t send_handle)
+{
+    TestPort *port = context;
+
+    assert(send_handle == 42u);
+    ++port->waits;
+    return port->wait_result;
 }
 
 static void test_port_protocol_adapter(void)
@@ -489,11 +504,17 @@ static void test_port_protocol_adapter(void)
         .sequence = 77u,
         .code = 'x',
     };
-    TestPort port = {.result = ASTRA_INPUT_PORT_SEND_OK};
+    TestPort port = {
+        .result = ASTRA_INPUT_PORT_SEND_OK,
+        .wait_result = ASTRA_INPUT_PORT_SEND_OK,
+    };
 
-    sink.send = port_send;
-    sink.context = &port;
-    sink.send_handle = 42u;
+    sink = (AstraInputPortSink){
+        .send = port_send,
+        .wait = port_wait,
+        .context = &port,
+        .send_handle = 42u,
+    };
     assert(astra_input_port_deliver(&sink, &event) ==
            ASTRA_INPUT_DELIVERY_OK);
     assert(port.sends == 1u);
@@ -508,11 +529,30 @@ static void test_port_protocol_adapter(void)
     assert(astra_input_port_deliver(&sink, &event) ==
            ASTRA_INPUT_DELIVERY_FULL);
     assert(port.sends == 2u);
+    assert(port.waits == 0u);
+
+    sink.lossless = 1u;
+    port.ready_after_wait = 1u;
+    assert(astra_input_port_deliver(&sink, &event) ==
+           ASTRA_INPUT_DELIVERY_OK);
+    assert(port.sends == 4u);
+    assert(port.waits == 1u);
+
     event.type = ASTRA_INPUT_EVENT_POINTER_MOTION;
+    port.ready_after_wait = 0u;
     assert(astra_input_port_deliver(&sink, &event) ==
            ASTRA_INPUT_DELIVERY_FULL);
-    assert(port.sends == 3u);
+    assert(port.sends == 5u);
+    assert(port.waits == 1u);
+
     event.type = ASTRA_INPUT_EVENT_TEXT;
+    port.wait_result = ASTRA_INPUT_PORT_SEND_PEER_DEAD;
+    assert(astra_input_port_deliver(&sink, &event) ==
+           ASTRA_INPUT_DELIVERY_DEAD);
+    assert(port.sends == 6u);
+    assert(port.waits == 2u);
+
+    sink.lossless = 0u;
     port.result = ASTRA_INPUT_PORT_SEND_PEER_DEAD;
     assert(astra_input_port_deliver(&sink, &event) ==
            ASTRA_INPUT_DELIVERY_DEAD);

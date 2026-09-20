@@ -67,7 +67,8 @@ $(LIBRARY): $(LIBRARY_IDENTITY) $(LIBRARY_OBJECTS) $(LIBRARY_MAP) \
 		-Wl,-rpath-link,$(abspath $(STREAMS)/build/m68k/libraries) \
 		-Wl,-rpath-link,$(abspath $(VFS)/build/m68k/libraries) \
 		-Wl,--no-as-needed -Wl,-l:libc.library.1 \
-		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1
+		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1 \
+		$(ASTRA_SHARED_LINK_END)
 
 ntp-library-contract: $(LIBRARY)
 	@python3 ../../../tools/check_shared_library_layout.py $(LIBRARY)

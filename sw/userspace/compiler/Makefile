@@ -73,7 +73,7 @@ $(LIBRARY): $(IDENTITY) $(EXPORTS) $(UNDEFINED) $(BUILTINS_ARCHIVE) \
 	$(CC) $(ASTRA_TARGET_ABI_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
 		-Wl,-soname,compiler.library.1 \
 		-Wl,--version-script=$(EXPORTS) -Wl,@$(UNDEFINED) \
-		-o $@ $(IDENTITY) $(BUILTINS_ARCHIVE)
+		-o $@ $(IDENTITY) $(BUILTINS_ARCHIVE) $(ASTRA_SHARED_LINK_END)
 
 compiler-library-contract: $(LIBRARY)
 	@python3 ../../../tools/check_shared_library_layout.py $(LIBRARY)
@@ -122,7 +122,7 @@ $(UNWIND_LIBRARY): $(UNWIND_IDENTITY) $(UNWIND_EXPORTS) \
 		-L$(dir $(LIBRARY)) \
 		-Wl,--no-as-needed -Wl,-l:libc.library.1 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1 \
-		$(UNWIND_ARCHIVE)
+		$(UNWIND_ARCHIVE) $(ASTRA_SHARED_LINK_END)
 
 unwind-library-contract: $(UNWIND_LIBRARY)
 	@python3 ../../../tools/check_shared_library_layout.py $(UNWIND_LIBRARY)

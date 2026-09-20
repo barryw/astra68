@@ -197,9 +197,12 @@ void
 console_stream_resize(uint32_t columns, uint32_t rows,
                       uint32_t pixel_width, uint32_t pixel_height)
 {
-    if (stream_ready)
+    if (stream_ready &&
         astra_stream_sink_size(&sink, columns, rows,
-                               pixel_width, pixel_height);
+                               pixel_width, pixel_height) &&
+        posix_process_service != 0u)
+        (void)astra_posix_process_tty_signal(
+            posix_process_service, ASTRA_POSIX_SIGNAL_WINDOW);
 }
 
 void

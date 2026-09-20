@@ -227,7 +227,7 @@ the current clipped screen X/Y position. Every event carries the normalized
 modifier state captured when that event was created; coalesced pointer motion
 retains that snapshot rather than substituting the state at delivery time.
 
-The GUI protocol is version 11. A successful window create returns a private
+The GUI protocol is version 12. A successful window create returns a private
 window-control handle and a coalescing vblank wait handle after accepting the
 bounded event sender, content area, and reply capability. The create request
 selects a window event mask; `SET_EVENT_MASK` changes it through the private
@@ -249,7 +249,10 @@ while loss of a critical event forces a reset before later delivery.
 
 Version 10 added `SET_POINTER_SHAPE` and `SET_POINTER_IMAGE` to that same
 private window-control capability. Shapes are the canonical default,
-horizontal-resize, vertical-resize, text, wait, and custom values. A custom
+horizontal-resize, vertical-resize, northwest/southeast-resize,
+northeast/southwest-resize, text, wait, and custom values. Version 12 added
+the diagonal shapes and commits interactive frame-resize state and resize
+events when the captured button is released rather than on pointer motion. A custom
 image command transfers a second, immutable area containing a normalized 32 by
 32 RGBA image and carries an in-bounds hotspot. The display service maps it
 read-only, uploads it through the display device, and commits image, hotspot,
@@ -473,7 +476,7 @@ The events service attaches two endpoints to its successful `SRVC` ready
 message: `EVENTS:` first and `EVENT_CONTROL` second. Other current services
 attach only their manifest-declared endpoint.
 
-`sw/include/astra/gui.h` defines the userspace `GUI` protocol, version 11. A
+`sw/include/astra/gui.h` defines the userspace `GUI` protocol, version 12. A
 108-byte `OPEN_WINDOW` request transfers a read-only content area, a private
 event sender, and a reply sender. It carries bounded frame, content format,
 chrome recipe, flags, gadgets, title, preview states, and an event mask, with

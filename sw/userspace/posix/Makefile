@@ -137,7 +137,8 @@ $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY) $(STREAMS_LIBRARY) \
 
 static-libraries-ready:
 	$(MAKE) -C $(RUNTIME) build/m68k/libastrart.a \
-		build/m68k/crt0.o build/m68k/crt0-hosted.o
+		build/m68k/crt0.o build/m68k/crt0-hosted.o \
+		build/m68k/crt0-dynamic.o
 	$(MAKE) -C $(STREAMS) build/m68k/libastrastreams.a
 	$(MAKE) -C $(VFS) build/m68k/libastravfs.a
 	$(MAKE) -C $(NETWORK) build/m68k/libastranetwork.a
@@ -205,7 +206,7 @@ $(LIBC_LIBRARY): $(LIBC_IDENTITY) $(LIBRARY_OBJECTS) \
 		-Wl,-l:network.library.1 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1 \
 		-Wl,--start-group $(PICOLIBC_LIB) $(PICOLIBC_MATH) \
-		-Wl,--end-group
+		-Wl,--end-group $(ASTRA_SHARED_LINK_END)
 
 libc-library-contract: $(LIBC_LIBRARY)
 	@python3 ../../../tools/check_shared_library_layout.py $(LIBC_LIBRARY)

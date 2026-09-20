@@ -1,4 +1,5 @@
 include ../../../mk/m68k-cross.mk
+ASTRA_SHARED_NO_CRT := 1
 include ../../../mk/astra-shared-library.mk
 
 CC := $(CROSS)gcc
@@ -50,10 +51,11 @@ $(TARGET): $(OBJECTS) $(RUNTIME_LIB) $(VFS_LIB) \
 	$(CC) $(TARGET_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) -Wl,-e,_start \
 		-Wl,-soname,loader.library.1 -o $@ $(OBJECTS) \
 		-Wl,--start-group $(VFS_LIB) $(RUNTIME_LIB) \
-		$(PICOLIBC_LIB) -lgcc -Wl,--end-group
+		$(PICOLIBC_LIB) -lgcc -Wl,--end-group $(ASTRA_SHARED_LINK_END)
 
 contract: $(TARGET)
-	@python3 ../../../tools/check_shared_library_layout.py $(TARGET)
+	@python3 ../../../tools/check_shared_library_layout.py \
+		--no-frame-registration $(TARGET)
 	@$(READELF) -hW $(TARGET) | grep -q 'Type:.*DYN'
 	@$(READELF) -hW $(TARGET) | grep -Eq 'Entry point address:.*0x[1-9a-f]'
 	@$(READELF) -dW $(TARGET) | grep -Fq 'Library soname: [loader.library.1]'

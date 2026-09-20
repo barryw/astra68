@@ -160,7 +160,8 @@ $(LIBRARY): $(LIBRARY_IDENTITY) $(LIBRARY_MAP) $(LIBRARY_UNDEFINED) \
 		-Wl,-rpath-link,$(abspath $(NDK)/build/m68k/libraries) \
 		-Wl,--no-as-needed -Wl,-l:libc.library.1 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1 \
-		-Wl,--start-group $(ARCHIVE) -Wl,--end-group
+		-Wl,--start-group $(ARCHIVE) -Wl,--end-group \
+		$(ASTRA_SHARED_LINK_END)
 
 library-contract: $(LIBRARY)
 	@python3 ../../../tools/check_shared_library_layout.py $(LIBRARY)

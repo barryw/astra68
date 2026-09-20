@@ -23,6 +23,9 @@ GRAPHICS_RENDERER_LIB := \
 GRAPHICS_FONT_HEADERS := $(GRAPHICS)/build/generated/astra_font8x8.inc \
 	$(GRAPHICS)/build/generated/astra_ui_font.inc \
 	$(GRAPHICS)/build/generated/astra_mono_font.inc
+GRAPHICS_FONT_INPUTS := $(GRAPHICS)/fonts/astra-workbench.afnt \
+	$(GRAPHICS)/fonts/astra-mono.afnt ../../../../assets/fonts/astra_8x16.hex \
+	../../../../tools/fonts/afnt.py $(NDK)/include/astra/font_library.h
 HOST_TEST := build/host/test_display
 HOST_TEST_SANITIZE := build/host/test_display_sanitize
 LIBRARIES := $(ASTRA_GRAPHICS_LIBRARY) $(ASTRA_FONT_LIBRARY) \
@@ -36,7 +39,7 @@ $(OBJECT): main.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
-$(GRAPHICS_FONT_HEADERS):
+$(GRAPHICS_FONT_HEADERS): $(GRAPHICS_FONT_INPUTS)
 	$(MAKE) -C $(GRAPHICS) $(@:$(GRAPHICS)/%=%)
 
 $(HOST_TEST): main.c tests/test_display.c $(GRAPHICS_FONT_HEADERS) \

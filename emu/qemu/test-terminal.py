@@ -1088,6 +1088,26 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         # Into the copy, so the image this gate was pointed at is untouched.
         if not prepared_image:
             astra_image.install(scratch, catalog)
+        full_gate = not (performance_only or network_only or vim_only or
+                         cxx_only or zsh_only or interface_layout_only)
+        test_commands = []
+        if full_gate or network_only:
+            test_commands.append("posix")
+        if full_gate or performance_only:
+            test_commands.append("hello")
+        if cxx_only:
+            test_commands.append("cxx")
+        if test_commands:
+            result = subprocess.run(
+                ["make", "-C", os.path.join(ROOT, "sw", "userspace",
+                                              "commands")] +
+                ["build/m68k/" + name for name in test_commands],
+                check=False)
+            if result.returncode != 0:
+                print("FAIL: could not build integration test commands")
+                return 1
+            for name in test_commands:
+                astra_image.install_test_command(scratch, name)
         needs_warm_store = not (performance_only or network_only or vim_only or
                                 cxx_only or zsh_only or interface_layout_only)
         if needs_warm_store and not warm_the_store(
@@ -1104,7 +1124,8 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
             if not open_terminal(machine, boot_deadline, command_deadline):
                 return 1
             script = (ZSH_SCRIPT if zsh_only else
-                      [('cxx', 'ASTRA C++ PASS')] if cxx_only else
+                      [('cxx; cat PROC:libraries/memory',
+                        'ASTRA C++ PASS')] if cxx_only else
                       [] if vim_only else
                       [(POSIX_COMMAND, "POSIX RAW PASS")] if network_only else
                       PERFORMANCE_SCRIPT if performance_only else SCRIPT)

@@ -650,10 +650,13 @@ test_terminal_control_is_shared_and_flushes_input(void)
     output = mock_open(MOCK_QUEUE_MAX);
     input = mock_open(MOCK_QUEUE_MAX);
     assert(astra_stream_sink_init(&sink, output, to_terminal, NULL));
+    assert(astra_stream_sink_size(&sink, 100u, 40u, 800u, 640u));
+    assert(!astra_stream_sink_size(&sink, 100u, 40u, 800u, 640u));
     assert(astra_stream_source_init(&source, input));
     astra_stream_tty_state_init(&state);
     astra_stream_tty_bind(&sink, &source, &state, 42u);
-    astra_stream_sink_size(&sink, 100u, 40u, 800u, 640u);
+    /* Binding publishes the existing sink size into the shared TTY state. */
+    assert(astra_stream_sink_size(&sink, 100u, 40u, 800u, 640u));
 
     served_source = &source;
     assert(astra_stream_tty_get(input, &observed) == ASTRA_SYSCALL_OK);
@@ -661,6 +664,15 @@ test_terminal_control_is_shared_and_flushes_input(void)
     assert(observed.pixel_width == 800u && observed.pixel_height == 640u);
     assert((observed.local_flags & ASTRA_TTY_LFLAG_ICANON) != 0u);
     generation = observed.generation;
+
+    /* Re-publishing a size is not a resize and must not wake applications. */
+    assert(!astra_stream_sink_size(&sink, 100u, 40u, 800u, 640u));
+    assert(state.generation == generation);
+    assert(astra_stream_sink_size(&sink, 120u, 50u, 960u, 800u));
+    assert(state.columns == 120u && state.rows == 50u);
+    assert(state.pixel_width == 960u && state.pixel_height == 800u);
+    assert(state.generation == generation + 1u);
+    generation = state.generation;
 
     assert(astra_stream_source_offer(&source, (const uint8_t *)"pending",
                                      7u) == 7u);
@@ -678,7 +690,7 @@ test_terminal_control_is_shared_and_flushes_input(void)
            ASTRA_SYSCALL_OK);
     assert(sink.idle && sink.messages == 1u && sink.bytes == 5u);
     assert(!astra_stream_source_ready(&source));
-    assert(state.columns == 100u && state.rows == 40u);
+    assert(state.columns == 120u && state.rows == 50u);
     assert(state.local_flags == 0u && state.generation != generation);
 
     generation = state.generation;
@@ -692,9 +704,9 @@ test_terminal_control_is_shared_and_flushes_input(void)
     served_source = NULL;
     served_sink = &sink;
     assert(astra_stream_tty_get(output, &observed) == ASTRA_SYSCALL_OK);
-    assert(observed.local_flags == 0u && observed.columns == 100u &&
-           observed.rows == 40u && observed.pixel_width == 800u &&
-           observed.pixel_height == 640u);
+    assert(observed.local_flags == 0u && observed.columns == 120u &&
+           observed.rows == 50u && observed.pixel_width == 960u &&
+           observed.pixel_height == 800u);
     served_sink = NULL;
 
     served_source = &source;

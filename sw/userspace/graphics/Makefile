@@ -21,6 +21,7 @@ FONT_SOURCE := ../../../assets/fonts/astra_8x16.hex
 FONT_HEADER := build/generated/astra_font8x8.inc
 UI_FONT_SOURCE := fonts/astra-workbench.afnt
 UI_FONT_TOOL := ../../../tools/fonts/afnt.py
+FONT_ABI := $(NDK)/include/astra/font_library.h
 UI_FONT_HEADER := build/generated/astra_ui_font.inc
 MONO_FONT_SOURCE := fonts/astra-mono.afnt
 MONO_FONT_HEADER := build/generated/astra_mono_font.inc
@@ -81,11 +82,11 @@ $(FONT_HEADER): $(FONT_SOURCE)
 	  awk '{ printf "0x%s,\n", $$1 }' $<; \
 	  printf '};\n'; } > $@
 
-$(UI_FONT_HEADER): $(UI_FONT_SOURCE) $(UI_FONT_TOOL)
+$(UI_FONT_HEADER): $(UI_FONT_SOURCE) $(UI_FONT_TOOL) $(FONT_ABI)
 	@mkdir -p $(@D)
 	python3 $(UI_FONT_TOOL) emit-c $< $@
 
-$(MONO_FONT_HEADER): $(MONO_FONT_SOURCE) $(UI_FONT_TOOL)
+$(MONO_FONT_HEADER): $(MONO_FONT_SOURCE) $(UI_FONT_TOOL) $(FONT_ABI)
 	@mkdir -p $(@D)
 	python3 $(UI_FONT_TOOL) emit-c --prefix astra_mono $< $@
 
@@ -149,7 +150,7 @@ $(GRAPHICS_LIBRARY): $(GRAPHICS_LIBRARY_OBJECTS) $(GRAPHICS_LIBRARY_MAP) \
 		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(COMPILER_LIBRARY)) -Wl,--no-as-needed \
 		-Wl,-l:system.library.2 -Wl,-l:runtime.library.1 \
-		-Wl,-l:compiler.library.1
+		-Wl,-l:compiler.library.1 $(ASTRA_SHARED_LINK_END)
 
 $(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(FONT_LIBRARY_MAP) \
 		$(GRAPHICS_LIBRARY) \
@@ -161,7 +162,7 @@ $(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(FONT_LIBRARY_MAP) \
 		-L$(dir $(GRAPHICS_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(COMPILER_LIBRARY)) -Wl,--no-as-needed \
 		-Wl,-l:graphics.library.2 -Wl,-l:runtime.library.1 \
-		-Wl,-l:compiler.library.1
+		-Wl,-l:compiler.library.1 $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@python3 ../../../tools/check_shared_library_layout.py \

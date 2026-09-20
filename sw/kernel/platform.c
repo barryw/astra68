@@ -78,6 +78,9 @@ static void host_state_copy(KernelPlatformHostState *destination,
     ((OHCI_BASE - VESTA_BASE) + (uint32_t)sizeof(OhciRegs))
 static _Alignas(4) uint8_t platform_test_mmio[PLATFORM_TEST_MMIO_SIZE];
 static _Alignas(256) OhciHcca platform_test_ohci_hcca;
+static uint32_t platform_test_display_submit_queue =
+    ASTRA_DISPLAY_HOST_QUEUE_BUSY;
+static uint32_t platform_test_display_submit_fence;
 
 VestaRegs *kernel_platform_test_registers(void)
 {
@@ -116,6 +119,13 @@ OhciRegs *kernel_platform_test_ohci_registers(void)
 OhciHcca *kernel_platform_test_ohci_hcca(void)
 {
     return &platform_test_ohci_hcca;
+}
+
+void kernel_platform_test_display_submit_result(uint32_t queue,
+                                                uint32_t fence)
+{
+    platform_test_display_submit_queue = queue;
+    platform_test_display_submit_fence = fence;
 }
 #endif
 
@@ -523,11 +533,14 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
                   ASTRAEA_READ(IRQ_EN) | ASTRAEA_IRQ_DRAW_DONE);
     VESTA_WRITE(DISPLAY_REQ_SUBMIT, ASTRA_DISPLAY_HOST_SUBMIT);
 #if defined(KERNEL_PLATFORM_HOST_TEST)
-    VESTA_WRITE(DISPLAY_QUEUE, ASTRA_DISPLAY_HOST_QUEUE_BUSY);
+    VESTA_WRITE(DISPLAY_QUEUE, platform_test_display_submit_queue);
+    VESTA_WRITE(DISPLAY_CPL_ID, platform_test_display_submit_fence);
 #endif
     kernel_mmio_cpu_sync();
-    return (VESTA_READ(DISPLAY_QUEUE) &
-            ASTRA_DISPLAY_HOST_QUEUE_BUSY) != 0u;
+    queue = VESTA_READ(DISPLAY_QUEUE);
+    return (queue & ASTRA_DISPLAY_HOST_QUEUE_BUSY) != 0u ||
+           ((queue & ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID) != 0u &&
+            VESTA_READ(DISPLAY_CPL_ID) == id);
 }
 
 bool kernel_platform_display_collect(AstraDisplayFrameCompletion *completion)

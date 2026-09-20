@@ -153,7 +153,7 @@ $(DYNAMIC_LIBRARY): $(DYNAMIC_IDENTITY) $(DYNAMIC_PIC_OBJECTS) \
 		-o $@ \
 		$(DYNAMIC_IDENTITY) $(DYNAMIC_PIC_OBJECTS) \
 		-L$(dir $(COMPILER_LIBRARY)) -Wl,--no-as-needed \
-		-Wl,-l:compiler.library.1
+		-Wl,-l:compiler.library.1 $(ASTRA_SHARED_LINK_END)
 
 $(KERNEL_ELF_TEST):
 	$(MAKE) -C ../../kernel build/test_elf

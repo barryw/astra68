@@ -142,6 +142,9 @@ typedef struct DisplayState {
     uint8_t scene_valid;
     uint8_t system_initialized;
     uint8_t system_pending;
+    uint8_t pending_input_valid;
+    uint32_t pending_input_window;
+    AstraGuiWindowEvent pending_input;
 } DisplayState;
 
 enum {
@@ -568,31 +571,32 @@ static void next_generation(DisplayWindow *window)
         window->generation = 1u;
 }
 
-static uint32_t send_event(DisplayWindow *window, AstraWindowEvent *event)
+static uint32_t event_subscription(uint16_t type)
 {
-    AstraGuiWindowEvent message = {0};
-    uint32_t status;
-    uint32_t subscription =
-        event->type == ASTRA_WINDOW_EVENT_POINTER_MOTION ?
-            ASTRA_WINDOW_SUBSCRIBE_POINTER_MOTION :
-        event->type == ASTRA_WINDOW_EVENT_POINTER_BUTTON ?
-            ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON :
-        event->type == ASTRA_WINDOW_EVENT_POINTER_WHEEL ?
-            ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL :
-        event->type == ASTRA_WINDOW_EVENT_STATE ?
-            ASTRA_WINDOW_SUBSCRIBE_STATE :
-        event->type == ASTRA_WINDOW_EVENT_RESIZE ?
-            ASTRA_WINDOW_SUBSCRIBE_RESIZE :
-        event->type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST ?
-            ASTRA_WINDOW_SUBSCRIBE_CLOSE_REQUEST :
-        event->type == ASTRA_WINDOW_EVENT_KEY ?
-            ASTRA_WINDOW_SUBSCRIBE_KEY :
-        event->type == ASTRA_WINDOW_EVENT_TEXT ?
-            ASTRA_WINDOW_SUBSCRIBE_TEXT : 0u;
+    return type == ASTRA_WINDOW_EVENT_POINTER_MOTION ?
+               ASTRA_WINDOW_SUBSCRIBE_POINTER_MOTION :
+           type == ASTRA_WINDOW_EVENT_POINTER_BUTTON ?
+               ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON :
+           type == ASTRA_WINDOW_EVENT_POINTER_WHEEL ?
+               ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL :
+           type == ASTRA_WINDOW_EVENT_STATE ?
+               ASTRA_WINDOW_SUBSCRIBE_STATE :
+           type == ASTRA_WINDOW_EVENT_RESIZE ?
+               ASTRA_WINDOW_SUBSCRIBE_RESIZE :
+           type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST ?
+               ASTRA_WINDOW_SUBSCRIBE_CLOSE_REQUEST :
+           type == ASTRA_WINDOW_EVENT_KEY ? ASTRA_WINDOW_SUBSCRIBE_KEY :
+           type == ASTRA_WINDOW_EVENT_TEXT ? ASTRA_WINDOW_SUBSCRIBE_TEXT : 0u;
+}
+
+static int prepare_event(DisplayWindow *window, AstraWindowEvent *event,
+                         AstraGuiWindowEvent *message)
+{
+    uint32_t subscription = event_subscription(event->type);
 
     if (subscription != 0u &&
         (window->request.event_mask & subscription) == 0u)
-        return ASTRA_SYSCALL_OK;
+        return 0;
     if (++window->event_sequence == 0u)
         ++window->event_sequence;
     event->size = sizeof(*event);
@@ -601,24 +605,42 @@ static uint32_t send_event(DisplayWindow *window, AstraWindowEvent *event)
     event->generation = window->generation;
     if (window->event_lost != 0u)
         event->flags |= ASTRA_WINDOW_EVENT_LOSS;
-    astra_message_header_set(&message.header, sizeof(message),
+    *message = (AstraGuiWindowEvent){0};
+    astra_message_header_set(&message->header, sizeof(*message),
                              ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
                              ASTRA_GUI_WINDOW_EVENT, event->sequence);
-    message.event = *event;
-    status = astra_port_send(window->event_send, &message, sizeof(message),
-                             NULL, 0u);
+    message->event = *event;
+    return 1;
+}
+
+static uint32_t deliver_event(DisplayWindow *window,
+                              const AstraGuiWindowEvent *message,
+                              int record_loss)
+{
+    uint32_t status = astra_port_send(
+        window->event_send, message, sizeof(*message), NULL, 0u);
+
     if (status == ASTRA_SYSCALL_OK) {
         window->event_lost = 0u;
-        if (event->type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST)
+        if (message->event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST)
             window->pending_close = 0u;
-    } else {
+    } else if (record_loss) {
         window->event_lost = 1u;
-        if (event->type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST) {
+        if (message->event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST) {
             window->pending_close = 1u;
-            window->pending_close_timestamp_ms = event->timestamp_ms;
+            window->pending_close_timestamp_ms =
+                message->event.timestamp_ms;
         }
     }
     return status;
+}
+
+static uint32_t send_event(DisplayWindow *window, AstraWindowEvent *event)
+{
+    AstraGuiWindowEvent message;
+
+    return prepare_event(window, event, &message) ?
+        deliver_event(window, &message, 1) : ASTRA_SYSCALL_OK;
 }
 
 static void state_event(DisplayWindow *window, uint32_t timestamp_ms,
@@ -1150,7 +1172,7 @@ static uint32_t active_window(const DisplayState *state)
     return state->count;
 }
 
-static void key_event(DisplayWindow *window,
+static void key_event(DisplayState *state, DisplayWindow *window,
                       const AstraLogicalInputEvent *input)
 {
     uint32_t flags =
@@ -1174,7 +1196,17 @@ static void key_event(DisplayWindow *window,
         event.data.text.codepoint = input->code;
         event.data.text.modifiers = input->modifiers;
     }
-    (void)send_event(window, &event);
+    if (prepare_event(window, &event, &state->pending_input)) {
+        uint32_t status = deliver_event(
+            window, &state->pending_input, 0);
+
+        if (status == ASTRA_SYSCALL_WOULD_BLOCK) {
+            state->pending_input_window = window->id;
+            state->pending_input_valid = 1u;
+        } else if (status != ASTRA_SYSCALL_OK) {
+            window->event_lost = 1u;
+        }
+    }
 }
 
 static void gadget_glyph(AstraRenderBuilder *builder, uint32_t destination,
@@ -1673,8 +1705,11 @@ static uint32_t submit_request(uint32_t device, uint32_t irq,
             return DISPLAY_FAIL_ARM;
         *armed = 1u;
     }
-    if (astra_display_submit(device, request) != ASTRA_SYSCALL_OK)
+    status = astra_display_submit(device, request);
+    if (status != ASTRA_SYSCALL_OK) {
+        (void)astra_log_failure("display submit syscall", status);
         return DISPLAY_FAIL_SUBMIT;
+    }
     for (;;) {
         if (astra_wait_one(irq, ASTRA_DEADLINE_FOREVER, NULL) !=
             ASTRA_SYSCALL_OK)
@@ -1840,7 +1875,7 @@ static void log_render_failure(const char *phase, uint32_t status)
     else if (status == ASTRA_STATUS_INVALID)
         (void)astra_log("display render had no valid damage or batch");
     else
-        (void)astra_log("display hardware submission or completion failed");
+        (void)astra_log_failure("display hardware render", status);
 }
 
 static void render_failure(const char *phase, uint32_t status)
@@ -2252,6 +2287,10 @@ static uint32_t display_pointer_shape(DisplayState *state,
         return ASTRA_POINTER_SHAPE_RESIZE_HORIZONTAL;
     if (region == HIT_RESIZE_N || region == HIT_RESIZE_S)
         return ASTRA_POINTER_SHAPE_RESIZE_VERTICAL;
+    if (region == HIT_RESIZE_NW || region == HIT_RESIZE_SE)
+        return ASTRA_POINTER_SHAPE_RESIZE_NW_SE;
+    if (region == HIT_RESIZE_NE || region == HIT_RESIZE_SW)
+        return ASTRA_POINTER_SHAPE_RESIZE_NE_SW;
     return ASTRA_POINTER_SHAPE_DEFAULT;
 }
 
@@ -2317,7 +2356,7 @@ static uint32_t handle_pointer(DisplayState *state,
             return ASTRA_STATUS_INVALID;
         index = active_window(state);
         if (index != state->count)
-            key_event(&state->windows[index], input);
+            key_event(state, &state->windows[index], input);
         return ASTRA_STATUS_OK;
     }
     if (input->type == ASTRA_INPUT_EVENT_STATE_RESET) {
@@ -2354,8 +2393,6 @@ static uint32_t handle_pointer(DisplayState *state,
                 changed = resize_captured_window(
                     state, &theme, window,
                     state->pointer_x, state->pointer_y);
-                if (changed)
-                    *effects |= DISPLAY_POINTER_RESIZE;
             } else if (state->capture_region >= HIT_MINIMIZE &&
                        state->capture_region <= HIT_CLOSE) {
                 uint32_t under = hit_region(
@@ -2383,8 +2420,7 @@ static uint32_t handle_pointer(DisplayState *state,
         if (changed) {
             *effects |= DISPLAY_POINTER_RENDER;
             index = find_id(state, state->capture_window);
-            if ((state->capture_region == HIT_TITLE ||
-                 resize_region(state->capture_region)) &&
+            if (state->capture_region == HIT_TITLE &&
                 index != state->count) {
                 *effects |= DISPLAY_POINTER_FRAME;
                 *frame_window = state->windows[index].id;
@@ -2469,6 +2505,7 @@ static uint32_t handle_pointer(DisplayState *state,
         index = find_id(state, captured_id);
         state->capture_window = 0u;
         state->capture_region = HIT_NONE;
+        *effects |= DISPLAY_POINTER_CURSOR;
         if (index == state->count)
             return ASTRA_STATUS_OK;
         under = hit_region(&theme, &state->windows[index],
@@ -2517,6 +2554,17 @@ static uint32_t handle_pointer(DisplayState *state,
                     changed |= update_hover(state, &theme, captured_id,
                                             under);
                 }
+            }
+        } else if (resize_region(captured_region)) {
+            DisplayWindow *window = &state->windows[index];
+
+            if (window->request.x != state->capture_x ||
+                window->request.y != state->capture_y ||
+                window->request.width != state->capture_width ||
+                window->request.height != state->capture_height) {
+                *effects |= DISPLAY_POINTER_FRAME | DISPLAY_POINTER_RESIZE;
+                *frame_window = captured_id;
+                *frame_timestamp = input->timestamp_ms;
             }
         } else if (captured_region == HIT_CONTENT) {
             pointer_event(
@@ -3021,6 +3069,29 @@ static uint32_t drain_input(uint32_t receive, DisplayState *state,
                                 frame_timestamp);
         if (status != ASTRA_STATUS_OK)
             return status;
+        if (state->pending_input_valid != 0u)
+            return ASTRA_STATUS_OK;
+    }
+}
+
+static void retry_pending_input(DisplayState *state)
+{
+    uint32_t index;
+    uint32_t status;
+
+    if (state->pending_input_valid == 0u)
+        return;
+    index = find_id(state, state->pending_input_window);
+    if (index == state->count) {
+        state->pending_input_valid = 0u;
+        return;
+    }
+    status = deliver_event(&state->windows[index], &state->pending_input, 0);
+    if (status == ASTRA_SYSCALL_OK) {
+        state->pending_input_valid = 0u;
+    } else if (status != ASTRA_SYSCALL_WOULD_BLOCK) {
+        state->windows[index].event_lost = 1u;
+        state->pending_input_valid = 0u;
     }
 }
 
@@ -3033,6 +3104,8 @@ static uint32_t display_wait_handles(const DisplayState *state,
                                      uint32_t *sources)
 {
     uint32_t count;
+    uint32_t pending = state != NULL && state->pending_input_valid != 0u ?
+        find_id(state, state->pending_input_window) : 0u;
 
     if (state == NULL || waits == NULL || sources == NULL ||
         state->count > ASTRA_WAIT_MULTIPLE_MAX - 3u)
@@ -3047,6 +3120,9 @@ static uint32_t display_wait_handles(const DisplayState *state,
             source -= count;
         sources[slot] = source;
         waits[slot] = source == 0u ? gui_receive :
+                      source == 1u && state->pending_input_valid != 0u &&
+                                      pending != state->count ?
+                          state->windows[pending].event_send :
                       source == 1u ? input_receive :
                       source == 2u ? vblank_irq :
                       state->windows[source - 3u].control_receive;
@@ -3134,7 +3210,9 @@ static void serve_windows(uint32_t device, uint32_t irq,
         if (selected == 0u)
             receive_open(device, irq, framebuffer, &state, gui_receive,
                          &next_fence, &armed);
-        else if (selected == 1u) {
+        else if (selected == 1u && state.pending_input_valid != 0u) {
+            retry_pending_input(&state);
+        } else if (selected == 1u) {
             uint32_t effects = 0u;
             uint32_t frame_window = 0u;
             uint32_t frame_timestamp = 0u;

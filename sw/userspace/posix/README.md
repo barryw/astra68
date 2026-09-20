@@ -138,17 +138,19 @@ developer to make the same deliberate self-containment tradeoff.
 
 ## The gate
 
-`COMMANDS:hello` proves stdio reaches a stream capability: it formats with
+The internal `hello` test binary proves stdio reaches a stream capability: it formats with
 `snprintf`, checks the result byte by byte, prints with `printf`, and returns
 non-zero if any of it is wrong.
 
-`COMMANDS:posix` enters through ordinary `main(argc, argv, envp)`, verifies a
-Vim-shaped argument vector, then proves the rest. It exercises a real native
-pipe including duplicated-writer lifetime and EOF, writes a file, reads it
-back, seeks into it, stats it by descriptor and by name, lists the directory it
-is in, walks into that directory and opens the same file by a bare name,
-removes everything it made, and allocates. Each check has its own exit code,
-so a failure names the step. Both run in `emu/qemu/test-terminal.py`.
+The internal `posix` integration binary enters through ordinary
+`main(argc, argv, envp)`, verifies a Vim-shaped argument vector, then proves
+the rest. It exercises a real native pipe including duplicated-writer lifetime
+and EOF, writes a file, reads it back, seeks into it, stats it by descriptor
+and by name, lists the directory it is in, walks into that directory and opens
+the same file by a bare name, removes everything it made, and allocates. The
+QEMU gate injects both test binaries into its private image copy; production
+command manifests and releases do not contain them. Each check has its own exit
+code, so a failure names the step. Both run in `emu/qemu/test-terminal.py`.
 
 The verdict is the exit status rather than the text, because the text lands on a
 screen and the status lands in the trace ring.

@@ -322,8 +322,7 @@ static int window_resize_model(WindowTerminal *window, uint32_t columns,
 
     if (terminal_status == ASTRA_TERMINAL_OK) {
         console_stream_resize(columns, rows,
-                              columns * window->cell_width,
-                              rows * TERMINAL_LINE_HEIGHT);
+                              window->width, window->height);
         return 1;
     }
     if (terminal_status != ASTRA_TERMINAL_STORAGE_TOO_SMALL ||
@@ -348,8 +347,7 @@ static int window_resize_model(WindowTerminal *window, uint32_t columns,
     }
     close_area(&window->model_area);
     window->model_area = grown;
-    console_stream_resize(columns, rows, columns * window->cell_width,
-                          rows * TERMINAL_LINE_HEIGHT);
+    console_stream_resize(columns, rows, window->width, window->height);
     return 1;
 }
 
@@ -826,8 +824,8 @@ int astra_main(const AstraStartupInfo *startup)
     }
     backend.columns = terminal_columns(&window_terminal);
     backend.rows = terminal_rows(&window_terminal);
-    backend.pixel_width = backend.columns * window_terminal.cell_width;
-    backend.pixel_height = backend.rows * TERMINAL_LINE_HEIGHT;
+    backend.pixel_width = window_terminal.width;
+    backend.pixel_height = window_terminal.height;
     backend.terminal_capacity_columns = terminal_capacity_columns;
     backend.terminal_capacity_rows = terminal_capacity_rows;
     backend.terminal_storage = window_terminal.model_area.address;

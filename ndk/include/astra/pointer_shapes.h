@@ -17,12 +17,16 @@ typedef enum AstraPointerShape {
     ASTRA_POINTER_SHAPE_TEXT = 3,
     /** Interaction is temporarily unavailable. */
     ASTRA_POINTER_SHAPE_WAIT = 4,
+    /** Northwest/southeast diagonal resize pointer. */
+    ASTRA_POINTER_SHAPE_RESIZE_NW_SE = 5,
+    /** Northeast/southwest diagonal resize pointer. */
+    ASTRA_POINTER_SHAPE_RESIZE_NE_SW = 6,
     /** Window-owned image installed through the window API. */
-    ASTRA_POINTER_SHAPE_CUSTOM = 5
+    ASTRA_POINTER_SHAPE_CUSTOM = 7
 } AstraPointerShape;
 
 /** Number of valid ::AstraPointerShape values. */
-#define ASTRA_POINTER_SHAPE_COUNT 6u
+#define ASTRA_POINTER_SHAPE_COUNT 8u
 
 /** Ask Interface Kit to derive the shape from current hover/capture state. */
 #define ASTRA_POINTER_SHAPE_AUTOMATIC UINT32_MAX

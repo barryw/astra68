@@ -19,7 +19,8 @@ _Static_assert(SIGINT == ASTRA_SIGNAL_INTERRUPT &&
                SIGSTOP == ASTRA_SIGNAL_STOP &&
                SIGTSTP == ASTRA_SIGNAL_TTY_STOP &&
                SIGCONT == ASTRA_SIGNAL_CONTINUE &&
-               SIGCHLD == ASTRA_SIGNAL_CHILD,
+               SIGCHLD == ASTRA_SIGNAL_CHILD &&
+               SIGWINCH == ASTRA_SIGNAL_WINDOW,
                "C library and Astra signal ABIs differ");
 
 static struct sigaction actions[ASTRA_POSIX_SIGNAL_COUNT];

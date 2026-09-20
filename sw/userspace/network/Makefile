@@ -80,7 +80,7 @@ $(NETWORK_LIBRARY): $(NETWORK_LIBRARY_OBJECTS) $(NETWORK_LIBRARY_MAP) \
 		$(NETWORK_LIBRARY_OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
 		-Wl,--no-as-needed -Wl,-l:runtime.library.1 \
-		-Wl,-l:compiler.library.1
+		-Wl,-l:compiler.library.1 $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(NETWORK_LIBRARY)
 	@python3 ../../../tools/check_shared_library_layout.py $(NETWORK_LIBRARY)

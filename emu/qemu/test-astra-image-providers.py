@@ -52,6 +52,28 @@ for required in ("runs paired\n", "start boot\n", "restart on-fault\n",
                  "grant HOST_DEVICE\n"):
     assert required in remote_service
 assert "start manual\n" not in remote_service
+assert astra_image._debugfs_quote('/runtime/menu(foo).vim') == \
+    '"/runtime/menu(foo).vim"'
+commands_make = open(os.path.join(astra_image.REPOSITORY,
+                                  "sw/userspace/commands/Makefile"),
+                     encoding="ascii").read()
+shipped_commands = commands_make.split("COMMANDS :=", 1)[1].split(
+    "TEST_COMMANDS :=", 1)[0]
+for test_command in ("posix", "hello", "cxx"):
+    assert " " + test_command + " " not in \
+        " " + " ".join(shipped_commands.split()) + " "
+assert "TEST_COMMANDS := posix hello cxx" in commands_make
+
+with tempfile.TemporaryDirectory() as directory:
+    try:
+        astra_image._vim_runtime(directory)
+        raise AssertionError("Vim runtime without defaults.vim was accepted")
+    except RuntimeError as error:
+        assert "no complete Vim runtime" in str(error)
+    with open(os.path.join(directory, "defaults.vim"), "w",
+              encoding="ascii") as handle:
+        handle.write('set nocompatible\n')
+    assert astra_image._vim_runtime(directory) == directory
 
 provider_path_max = (astra_image.PROVIDER_INDEX_MAX -
                      astra_image.PROVIDER_INDEX_HEADER.size)
@@ -154,14 +176,38 @@ astra_image.subprocess.run = original_run
 
 commands.clear()
 
+with tempfile.TemporaryDirectory() as directory:
+    with open(os.path.join(directory, "defaults.vim"), "w",
+              encoding="ascii") as handle:
+        handle.write("set nocompatible\n")
+    astra_image.subprocess.run = missing_run
+    astra_image._install_tree("volume", directory, "/libs/vim/runtime")
+    requests = [command[2] if command[2] != "-R" else command[3]
+                for command in commands]
+    for parent in ('"/libs"', '"/libs/vim"', '"/libs/vim/runtime"'):
+        assert "mkdir %s" % parent in requests
+    assert any(request.startswith("write ") and
+               request.endswith(' "/libs/vim/runtime/defaults.vim"')
+               for request in requests)
+    commands.clear()
+    try:
+        astra_image._install_tree("volume", directory, "libs/vim/runtime")
+        raise AssertionError("relative image tree destination was accepted")
+    except RuntimeError as error:
+        assert "invalid image tree destination" in str(error)
+    assert not commands
+astra_image.subprocess.run = original_run
+
+commands.clear()
+
 
 def directory_run(command, **_kwargs):
     commands.append(command)
-    if command[2] == "ls -p /libs":
+    if command[2] == 'ls -p "/libs"':
         return Result(b"/2/040755/0/0/.//\n/2/040755/0/0/..//\n"
-                      b"/12/100644/0/0/stale.library/4/\n"
+                      b"/12/100644/0/0/menu chinese(taiwan).vim/4/\n"
                       b"/13/040755/0/0/Old.kit//\n")
-    if command[2] == "ls -p /libs/Old.kit":
+    if command[2] == 'ls -p "/libs/Old.kit"':
         return Result(b"/13/040755/0/0/.//\n/2/040755/0/0/..//\n"
                       b"/14/100644/0/0/manifest/4/\n")
     return Result()
@@ -171,11 +217,11 @@ astra_image.subprocess.run = directory_run
 astra_image._clear_directory("volume", "/libs")
 assert [command[2] if command[2] != "-R" else command[3]
         for command in commands] == [
-            "ls -p /libs", "rm /libs/stale.library",
-            "ls -p /libs/Old.kit", "rm /libs/Old.kit/manifest",
-            "rmdir /libs/Old.kit"]
+            'ls -p "/libs"', 'rm "/libs/menu chinese(taiwan).vim"',
+            'ls -p "/libs/Old.kit"', 'rm "/libs/Old.kit/manifest"',
+            'rmdir "/libs/Old.kit"']
 astra_image.subprocess.run = lambda *_args, **_kwargs: Result(
-    b"/12/100644/0/0/not safe/4/\n")
+    b"/12/100644/0/0/not\x00safe/4/\n")
 try:
     astra_image._clear_directory("volume", "/libs")
     raise AssertionError("unsafe stale image name was accepted")
@@ -216,7 +262,8 @@ astra_image.ext4_partition = lambda _image: (_ for _ in ()).throw(
 try:
     astra_image._install_built(
         "image", catalog=__file__, commands=None, services="services",
-        kits=None, apps=None, terminfo=None, service_names=("hostbench",))
+        kits=None, apps=None, terminfo=None, vim_runtime=None,
+        service_names=("hostbench",))
     raise AssertionError("selection check reached the image")
 except SelectionComplete:
     pass
@@ -269,6 +316,39 @@ assert calls == [
     ("system.img", "display-image", "/services/display"),
 ]
 astra_image._services = original_services
+astra_image._replace_volume_file = original_replace_volume_file
+
+with tempfile.TemporaryDirectory() as directory:
+    command_root = os.path.join(directory, "commands")
+    command_build = os.path.join(command_root, "build", "m68k")
+    os.makedirs(command_build)
+    command = os.path.join(command_build, "posix")
+    with open(command, "wb") as handle:
+        handle.write(b"test")
+    os.chmod(command, 0o755)
+    calls = []
+    checks = []
+    astra_image.subprocess.run = lambda command, **_kwargs: \
+        checks.append(command) or Result(b"", 0)
+    astra_image._replace_volume_file = lambda image, source, target: \
+        calls.append((image, source, target))
+    astra_image.install_test_command("system.img", "posix", command_build)
+    assert calls == [("system.img", command, "/commands/posix")]
+    assert checks == [["make", "-q", "-C", command_root,
+                       "ASTRA_PROGRAM_OWNERS_READY=1", "build/m68k/posix"]]
+    astra_image.subprocess.run = lambda *_args, **_kwargs: Result(b"stale", 1)
+    try:
+        astra_image.install_test_command("system.img", "posix", command_build)
+        raise AssertionError("stale test command was accepted")
+    except RuntimeError as error:
+        assert "stale test command" in str(error)
+    try:
+        astra_image.install_test_command("system.img", "../posix",
+                                         command_build)
+        raise AssertionError("unsafe test command name was accepted")
+    except RuntimeError as error:
+        assert "invalid test command name" in str(error)
+astra_image.subprocess.run = original_run
 astra_image._replace_volume_file = original_replace_volume_file
 
 with tempfile.TemporaryDirectory() as directory:

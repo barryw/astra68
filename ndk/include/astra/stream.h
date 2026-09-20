@@ -73,10 +73,10 @@ int astra_stream_sink_init(AstraStreamSink *sink, uint32_t receive,
                            AstraStreamRender render, void *context);
 
 /* What this sink tells a program that asks. Zero and zero until it is set. */
-/** Publish sink geometry. @param sink Initialized sink. @param columns Character columns. @param rows Character rows. @param pixel_width Pixel width. @param pixel_height Pixel height. */
-void astra_stream_sink_size(AstraStreamSink *sink, uint32_t columns,
-                            uint32_t rows, uint32_t pixel_width,
-                            uint32_t pixel_height);
+/** Publish sink geometry. @param sink Initialized sink. @param columns Character columns. @param rows Character rows. @param pixel_width Pixel width. @param pixel_height Pixel height. @return Nonzero only when the published geometry changed. */
+int astra_stream_sink_size(AstraStreamSink *sink, uint32_t columns,
+                           uint32_t rows, uint32_t pixel_width,
+                           uint32_t pixel_height);
 
 /*
  * Drains at most `budget` messages and returns how many it rendered. Bounded

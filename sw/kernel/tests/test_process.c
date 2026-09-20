@@ -9375,6 +9375,25 @@ static void test_streamed_library_is_sparse_atomic_and_reclaimable(void)
                    mapped_base + KERNEL_PAGE_SIZE, "X", 1u) !=
                KERNEL_USER_COPY_OK);
     }
+    /* Thread entry accepts mapped library text, but never library data. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_THREAD_CREATE;
+    registers[1] = mapped_base + KERNEL_PAGE_SIZE;
+    registers[3] = KERNEL_THREAD_PRIORITY_NORMAL;
+    registers[4] = KERNEL_THREAD_RIGHTS;
+    assert(kernel_process_on_syscall(
+               registers, KERNEL_PROCESS_STACK_TOP - 8u, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_THREAD_CREATE;
+    registers[1] = mapped_base + 2u;
+    registers[3] = KERNEL_THREAD_PRIORITY_NORMAL;
+    registers[4] = KERNEL_THREAD_RIGHTS;
+    assert(kernel_process_on_syscall(
+               registers, KERNEL_PROCESS_STACK_TOP - 8u, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
     {
         uint8_t bytes[4];
 
@@ -9396,6 +9415,16 @@ static void test_streamed_library_is_sparse_atomic_and_reclaimable(void)
     assert(kernel_process_on_syscall(
                registers, KERNEL_PROCESS_STACK_TOP - 8u, frame, &next) ==
            KERNEL_PROCESS_OK);
+    /* A resident cache entry is not executable until this process maps it. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_THREAD_CREATE;
+    registers[1] = mapped_base + 2u;
+    registers[3] = KERNEL_THREAD_PRIORITY_NORMAL;
+    registers[4] = KERNEL_THREAD_RIGHTS;
+    assert(kernel_process_on_syscall(
+               registers, KERNEL_PROCESS_STACK_TOP - 8u, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(kernel_user_copy_to_asm(user_bytes, &reference,
                                    sizeof(reference)) ==
            KERNEL_USER_COPY_OK);

@@ -41,6 +41,7 @@ SECTIONS
     .rela.dyn : { *(.rela.dyn) } :ro
     .rela.plt : { *(.rela.plt) } :ro
     .rodata : { *(.rodata .rodata.*) } :ro
+    .eh_frame : { KEEP(*(.eh_frame)) } :ro
 
     /* TLS is an immutable template copied into each thread's writable TLS
      * allocation. It deliberately belongs to the read-only load segment. */
@@ -117,7 +118,7 @@ SECTIONS
         *(.comment)
         *(.note.GNU-stack)
         *(.gnu.attributes)
-        *(.eh_frame .eh_frame_hdr)
+        *(.eh_frame_hdr)
     }
 }
 

@@ -12,6 +12,9 @@ def test_product_artifacts_stay_in_sync_excluded_build_directories():
     converter = (ROOT / "sw/boot/bin2hex.py").read_text()
     arty = (ROOT / "fpga/arty/linux/Makefile").read_text()
     graphics_build = (ROOT / "fpga/arty/scripts/build_graphics.tcl").read_text()
+    graphics_make = (ROOT / "sw/userspace/graphics/Makefile").read_text()
+    display_make = (ROOT / "sw/userspace/services/display/Makefile").read_text()
+    interface_make = (ROOT / "sw/userspace/interface/Makefile").read_text()
     boot_font = ROOT / "fpga/arty/graphics/post_fonts.hex"
     agent_rules = (ROOT / "AGENTS.md").read_text()
     blank_splash = ROOT / "sw/boot/assets/astra_boot_splash_1920x1080_blank.png"
@@ -37,6 +40,13 @@ def test_product_artifacts_stay_in_sync_excluded_build_directories():
     assert "tools fonts afnt.py" in graphics_build
     assert "emit-cp437-hex" in graphics_build
     assert "build fpga post_fonts.hex" in graphics_build
+    assert "$(UI_FONT_HEADER): $(UI_FONT_SOURCE) $(UI_FONT_TOOL) $(FONT_ABI)" \
+           in graphics_make
+    assert "$(MONO_FONT_HEADER): $(MONO_FONT_SOURCE) $(UI_FONT_TOOL) " \
+           "$(FONT_ABI)" in graphics_make
+    for consumer in (display_make, interface_make):
+        assert "$(GRAPHICS_FONT_HEADERS): $(GRAPHICS_FONT_INPUTS)" in consumer
+        assert "$(GRAPHICS_FONT_HEADERS):\n" not in consumer
     assert not boot_font.exists()
     assert "--checksum --no-times" in agent_rules
     assert "--exclude '*/build'" in agent_rules

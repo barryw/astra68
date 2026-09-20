@@ -181,13 +181,15 @@ clipped line primitive, which replays as a hardware line on draw-list surfaces.
 
 ## Pointer images
 
-The window server supplies five native hardware-pointer images:
+The window server supplies seven native hardware-pointer images:
 `ASTRA_POINTER_SHAPE_DEFAULT`, `ASTRA_POINTER_SHAPE_RESIZE_HORIZONTAL`,
-`ASTRA_POINTER_SHAPE_RESIZE_VERTICAL`, `ASTRA_POINTER_SHAPE_TEXT`, and
-`ASTRA_POINTER_SHAPE_WAIT`. Use `window_set_pointer_shape` to select one for a
-window's content. Interface Kit's `ui_update_pointer` selects the I-beam for
-fields and the matching resize pointer for splitters while preserving pointer
-capture, so the image does not change in the middle of a drag. Pass
+`ASTRA_POINTER_SHAPE_RESIZE_VERTICAL`,
+`ASTRA_POINTER_SHAPE_RESIZE_NW_SE`, `ASTRA_POINTER_SHAPE_RESIZE_NE_SW`,
+`ASTRA_POINTER_SHAPE_TEXT`, and `ASTRA_POINTER_SHAPE_WAIT`. Use
+`window_set_pointer_shape` to select one for a window's content. Interface
+Kit's `ui_update_pointer` selects the I-beam for fields and the matching resize
+pointer for splitters while preserving pointer capture, so the image does not
+change in the middle of a drag. Pass
 `ASTRA_POINTER_SHAPE_AUTOMATIC` for that behavior, or pass a concrete shape as
 a window-wide override.
 

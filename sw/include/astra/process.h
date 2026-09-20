@@ -59,6 +59,7 @@
 #define ASTRA_SIGNAL_TTY_STOP  18u
 #define ASTRA_SIGNAL_CONTINUE  19u
 #define ASTRA_SIGNAL_CHILD     20u
+#define ASTRA_SIGNAL_WINDOW    28u
 
 /*
  * Capability names a process always receives: itself and its first thread.

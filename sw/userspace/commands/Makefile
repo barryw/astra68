@@ -29,8 +29,10 @@ TERMINFO := ../terminfo
 NDK := $(ASTRA_POSIX_NDK)
 LUA := ../../../third_party/lua/src
 VIM_SOURCE ?= $(HOME)/vim-astra-v9.2.1001/src
+VIM_RUNTIME_SOURCE ?= $(abspath $(VIM_SOURCE)/../runtime)
 NCURSES_PREFIX ?= $(HOME)/ncurses-astra
 VIM_IMAGE := $(VIM_SOURCE)/vim
+VIM_RUNTIME_IMAGE := build/m68k/vim-runtime
 ZSH_SOURCE ?= $(HOME)/zsh-astra-v5.9.2
 ZSH_BUILD ?= $(HOME)/zsh-astra-build
 ZSH_IMAGE := $(ZSH_BUILD)/Src/zsh
@@ -64,10 +66,12 @@ CXX_LIBRARY := $(ASTRA_CXX_LIBRARY)
 UNWIND_LIBRARY := $(ASTRA_UNWIND_LIBRARY)
 TERMINFO_LIBRARY := $(ASTRA_TERMINFO_LIBRARY)
 
-COMMANDS := status events devices which open service hello ls ps metrics cat mkdir rm posix \
-            heapbench fsstress date echo ntp ping lua cxx vim zsh
-SOURCE_COMMANDS := $(filter-out lua cxx vim zsh,$(COMMANDS))
+COMMANDS := status events devices which open service ls ps metrics cat mkdir rm \
+	    heapbench fsstress date echo ntp ping lua vim zsh
+TEST_COMMANDS := posix hello cxx
+SOURCE_COMMANDS := $(filter-out lua cxx vim zsh,$(COMMANDS) $(TEST_COMMANDS))
 SOURCE_IMAGES := $(patsubst %,build/m68k/%,$(SOURCE_COMMANDS))
+TEST_IMAGES := $(patsubst %,build/m68k/%,$(TEST_COMMANDS))
 events_EXTRA_SOURCES := events/events_support.c
 date_EXTRA_SOURCES := date/date_support.c
 ps_EXTRA_SOURCES := ps/ps_support.c
@@ -255,9 +259,12 @@ ZSH_LIBS := $(abspath $(ZSH_PROGRAM)) \
 # Owner contracts recursively validate transitive dependencies, so unrelated
 # libraries must not turn a one-command build into a userspace rebuild.  The
 # full suite naturally selects every owner below.
-REQUESTED_COMMANDS := $(filter $(COMMANDS),\
+REQUESTED_COMMANDS := $(filter $(COMMANDS) $(TEST_COMMANDS),\
 	$(notdir $(filter build/m68k/%,$(MAKECMDGOALS))))
-SELECTED_COMMANDS := $(if $(REQUESTED_COMMANDS),$(REQUESTED_COMMANDS),$(COMMANDS))
+FULL_PROGRAM_GOALS := $(filter $(COMMAND_MANIFEST) size,$(MAKECMDGOALS))
+SELECTED_COMMANDS := $(if $(FULL_PROGRAM_GOALS),\
+	$(COMMANDS) $(REQUESTED_COMMANDS),\
+	$(if $(REQUESTED_COMMANDS),$(REQUESTED_COMMANDS),$(COMMANDS)))
 MISSING_LIBRARY_DECLARATIONS := $(foreach command,$(SELECTED_COMMANDS),\
 	$(if $($(command)_LIBRARIES),,$(command)))
 ifneq ($(strip $(MISSING_LIBRARY_DECLARATIONS)),)
@@ -271,8 +278,19 @@ $(error selected command library is absent from libraries.mk: $(SELECTED_LIBRARI
 endif
 ASTRA_PROGRAM_OWNER_TARGETS := $(call astra_library_owner_targets,\
 	$(SELECTED_LIBRARY_KEYS))
-ASTRA_PROGRAM_TARGETS := $(IMAGES) $(COMMAND_MANIFEST) size
+ASTRA_PROGRAM_TARGETS := $(IMAGES) $(VIM_RUNTIME_IMAGE) $(COMMAND_MANIFEST) size
+ASTRA_PROGRAM_DIRECT_TARGETS := $(ASTRA_PROGRAM_TARGETS) $(TEST_IMAGES)
 include ../program.mk
+
+$(VIM_RUNTIME_IMAGE): __vim_runtime_force
+	@test -f $(VIM_RUNTIME_SOURCE)/defaults.vim || { \
+		echo "Vim runtime missing defaults.vim: $(VIM_RUNTIME_SOURCE)" >&2; \
+		exit 1; \
+	}
+	@mkdir -p $@
+	rsync -a --delete $(VIM_RUNTIME_SOURCE)/ $@/
+
+.PHONY: __vim_runtime_force
 
 $(ZSH_PROGRAM): $(ASTRA_POSIX_PROGRAM_SOURCE) $(ZSH_PROGRAM_CONFIG) \
 		$(ASTRA_POSIX_POLICY_INPUTS)

@@ -74,7 +74,7 @@ $(LIBRARY): $(LIBRARY_IDENTITY) $(LIBRARY_OBJECTS) $(LIBRARY_MAP) \
 		-Wl,-rpath-link,$(abspath $(RUNTIME)/build/m68k/libraries) \
 		-L$(dir $(RUNTIME_LIBRARY)) -Wl,--no-as-needed \
 		-Wl,-l:libc.library.1 -Wl,-l:runtime.library.1 \
-		-Wl,-l:compiler.library.1
+		-Wl,-l:compiler.library.1 $(ASTRA_SHARED_LINK_END)
 
 lua-library-contract: $(LIBRARY)
 	@python3 ../../../tools/check_shared_library_layout.py $(LIBRARY)

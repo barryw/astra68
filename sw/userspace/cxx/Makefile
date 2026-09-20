@@ -86,7 +86,7 @@ $(LIBRARY): $(LIBRARY_IDENTITY) $(LIBRARY_MAP) $(LIBRARY_UNDEFINED) \
 		-Wl,--no-as-needed -Wl,-l:libc.library.1 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1 \
 		-Wl,-l:unwind.library.1 -Wl,--start-group \
-		$(LIBSTDCPP) -Wl,--end-group
+		$(LIBSTDCPP) -Wl,--end-group $(ASTRA_SHARED_LINK_END)
 
 cxx-library-contract: $(LIBRARY)
 	@python3 ../../../tools/check_shared_library_layout.py $(LIBRARY)

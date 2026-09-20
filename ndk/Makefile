@@ -130,7 +130,7 @@ $(SYSTEM_LIBRARY): $(SYSTEM_IDENTITY) $(SYSTEM_OBJECTS) $(SYSTEM_MAP) \
 		-Wl,--version-script=$(SYSTEM_MAP) -o $@ \
 		$(SYSTEM_IDENTITY) $(SYSTEM_OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -Wl,--no-as-needed \
-		-Wl,-l:runtime.library.1
+		-Wl,-l:runtime.library.1 $(ASTRA_SHARED_LINK_END)
 
 system-library-contract: $(SYSTEM_LIBRARY)
 	@python3 ../tools/check_shared_library_layout.py $(SYSTEM_LIBRARY)

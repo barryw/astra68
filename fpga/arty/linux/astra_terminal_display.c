@@ -126,6 +126,31 @@ static uint32_t pointer_builtin_pixel(uint32_t shape, unsigned x, unsigned y)
         inner = (ax == 0 && y >= 6u && y <= 26u) ||
                 (y >= 5u && y <= 10u && (int)(y - 4u) == ax) ||
                 (y >= 22u && y <= 27u && (int)(28u - y) == ax);
+    } else if (shape == ASTRA_POINTER_SHAPE_RESIZE_NW_SE) {
+        outer = (x >= 5u && x <= 27u && y >= 5u && y <= 27u &&
+                 dx - dy >= -2 && dx - dy <= 2) ||
+                (x >= 5u && x <= 13u && y >= 5u && y <= 13u &&
+                 (x <= 8u || y <= 8u)) ||
+                (x >= 19u && x <= 27u && y >= 19u && y <= 27u &&
+                 (x >= 24u || y >= 24u));
+        inner = (x >= 7u && x <= 25u && y >= 7u && y <= 25u && dx == dy) ||
+                (x >= 7u && x <= 11u && y >= 7u && y <= 11u &&
+                 (x == 7u || y == 7u)) ||
+                (x >= 21u && x <= 25u && y >= 21u && y <= 25u &&
+                 (x == 25u || y == 25u));
+    } else if (shape == ASTRA_POINTER_SHAPE_RESIZE_NE_SW) {
+        outer = (x >= 5u && x <= 27u && y >= 5u && y <= 27u &&
+                 dx + dy >= -2 && dx + dy <= 2) ||
+                (x >= 19u && x <= 27u && y >= 5u && y <= 13u &&
+                 (x >= 24u || y <= 8u)) ||
+                (x >= 5u && x <= 13u && y >= 19u && y <= 27u &&
+                 (x <= 8u || y >= 24u));
+        inner = (x >= 7u && x <= 25u && y >= 7u && y <= 25u &&
+                 dx == -dy) ||
+                (x >= 21u && x <= 25u && y >= 7u && y <= 11u &&
+                 (x == 25u || y == 7u)) ||
+                (x >= 7u && x <= 11u && y >= 21u && y <= 25u &&
+                 (x == 7u || y == 25u));
     } else if (shape == ASTRA_POINTER_SHAPE_TEXT) {
         outer = (x >= 9u && x <= 23u &&
                  ((y >= 5u && y <= 8u) || (y >= 24u && y <= 27u))) ||
@@ -1460,6 +1485,16 @@ static int self_test(void)
     for (uint32_t y = 0u; y < POINTER_HEIGHT; ++y)
         if ((pointer_inner[y] & (uint16_t)~pointer_outer[y]) != 0u)
             return EXIT_FAILURE;
+    if (pointer_builtin_pixel(ASTRA_POINTER_SHAPE_RESIZE_NW_SE, 16u, 16u) !=
+            UINT32_C(0xffffffff) ||
+        pointer_builtin_pixel(ASTRA_POINTER_SHAPE_RESIZE_NE_SW, 16u, 16u) !=
+            UINT32_C(0xffffffff) ||
+        pointer_builtin_pixel(ASTRA_POINTER_SHAPE_RESIZE_NW_SE, 0u, 31u) !=
+            0u ||
+        pointer_builtin_pixel(ASTRA_POINTER_SHAPE_RESIZE_NE_SW, 0u, 0u) !=
+            0u ||
+        pointer_builtin_pixel(ASTRA_POINTER_SHAPE_CUSTOM, 16u, 16u) != 0u)
+        return EXIT_FAILURE;
     (void)memset(validation_cursor, 0, sizeof(validation_cursor));
     store_be32(validation_cursor, ASTRA_DISPLAY_CURSOR_IMAGE_MAGIC);
     store_be32(validation_cursor + 4u,

@@ -20,7 +20,9 @@ budget on the retained Beast run.
 The stream service now owns one shared line discipline for canonical and raw
 input, echo, erase/kill/EOF, terminal state, geometry, and readable readiness.
 `tcgetattr`, `tcsetattr`, `TIOCGWINSZ`, `read`, `poll`, and `select` use that
-contract. A standard-main target diagnostic verifies a Vim-shaped seven-word
+contract. A resize publishes the new character and pixel geometry and sends
+`SIGWINCH` to the foreground process group only when that geometry changes.
+A standard-main target diagnostic verifies a Vim-shaped seven-word
 argument vector and raw cursor input in the complete QEMU terminal gate.
 
 Pinned, unchanged upstream Vim 9.2.1001 compiles and links with no unresolved

@@ -38,6 +38,7 @@ COMMANDS_DIRECTORY = "commands"
 # union is for and what nothing else on the volume can demonstrate.
 LOCAL_COMMANDS_DIRECTORY = "local/commands"
 DEFAULT_COMMANDS = os.path.join(REPOSITORY, "sw/userspace/commands/build/m68k")
+DEFAULT_VIM_RUNTIME = os.path.join(DEFAULT_COMMANDS, "vim-runtime")
 SERVICES_DIRECTORY = "services"
 LIBS_DIRECTORY = "libs"
 TERMINFO_DIRECTORY = "terminfo"
@@ -272,7 +273,8 @@ def _mkdir(volume, path, what):
 
 
 def _directory_entries(volume, path):
-    result = subprocess.run(["debugfs", "-R", "ls -p %s" % path, volume],
+    result = subprocess.run(["debugfs", "-R",
+                             "ls -p %s" % _debugfs_quote(path), volume],
                             stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT)
     output = result.stdout.decode("utf-8", "replace")
@@ -289,10 +291,7 @@ def _directory_entries(volume, path):
         name = fields[5]
         if name in (".", ".."):
             continue
-        if (not name or any(character not in
-                            "abcdefghijklmnopqrstuvwxyz"
-                            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                            "0123456789._+-" for character in name)):
+        if (not name or any(character in "/\0\n\r" for character in name)):
             raise RuntimeError("unsafe image directory entry %r in %s" %
                                (name, path))
         try:
@@ -310,9 +309,11 @@ def _clear_directory(volume, path):
         target = "%s/%s" % (path, name)
         if directory:
             _clear_directory(volume, target)
-            _debugfs(volume, "rmdir %s" % target, "old image directory")
+            _debugfs(volume, "rmdir %s" % _debugfs_quote(target),
+                     "old image directory")
         else:
-            _debugfs(volume, "rm %s" % target, "old image file")
+            _debugfs(volume, "rm %s" % _debugfs_quote(target),
+                     "old image file")
 
 
 def _reset_journal(volume):
@@ -381,6 +382,14 @@ def _services(directory, names):
                                (path, output or "make -q failed"))
         found.append((name, path))
     return found
+
+
+def _vim_runtime(directory):
+    if not os.path.isdir(directory) or not os.path.isfile(
+            os.path.join(directory, "defaults.vim")):
+        raise RuntimeError("no complete Vim runtime at %s -- build commands "
+                           "first" % directory)
+    return directory
 
 
 def _bundles(directory, names=None):
@@ -480,6 +489,38 @@ def _install_bundle(volume, source, destination):
             _debugfs(volume, "write %s %s" % (host, guest), "bundle file")
 
 
+def _debugfs_quote(path):
+    if "\0" in path or "\n" in path or "\r" in path:
+        raise RuntimeError("invalid image path %r" % path)
+    return '"%s"' % path.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _install_tree(volume, source, destination):
+    parts = destination.split("/")[1:]
+    if not destination.startswith("/") or not parts or any(
+            part in ("", ".", "..") for part in parts):
+        raise RuntimeError("invalid image tree destination: %s" % destination)
+    target = ""
+    for part in parts:
+        target += "/" + part
+        _mkdir(volume, _debugfs_quote(target), "image tree directory")
+    for root, directories, files in os.walk(source):
+        if any(os.path.islink(os.path.join(root, name))
+               for name in directories + files):
+            raise RuntimeError("image tree contains a symbolic link: %s" %
+                               source)
+        relative = os.path.relpath(root, source)
+        target = destination if relative == "." else \
+            destination + "/" + relative
+        _mkdir(volume, _debugfs_quote(target), "image tree directory")
+        for name in files:
+            host = os.path.join(root, name)
+            guest = target + "/" + name
+            _debugfs(volume, "write %s %s" % (
+                _debugfs_quote(host), _debugfs_quote(guest)),
+                "image tree file")
+
+
 def _replace_volume_file(image, source, target):
     """Replace one file without rebuilding or republishing unrelated products."""
     if not os.path.isfile(source) or not target.startswith("/"):
@@ -513,9 +554,30 @@ def install_service(image, name, services=DEFAULT_SERVICES):
                          "/%s/%s" % (SERVICES_DIRECTORY, service))
 
 
+def install_test_command(image, name, commands=DEFAULT_COMMANDS):
+    """Install one current integration-test command outside the release set."""
+    if not name or any(not (character.isalnum() or character in "_-")
+                       for character in name):
+        raise RuntimeError("invalid test command name %r" % name)
+    path = os.path.join(commands, name)
+    root = os.path.dirname(os.path.dirname(commands))
+    target = os.path.relpath(path, root)
+    if not os.path.isfile(path) or os.stat(path).st_mode & 0o111 == 0:
+        raise RuntimeError("no executable test command at %s" % path)
+    current = subprocess.run(
+        ["make", "-q", "-C", root, "ASTRA_PROGRAM_OWNERS_READY=1", target],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT)
+    if current.returncode != 0:
+        raise RuntimeError("stale test command at %s -- build it first" % path)
+    _replace_volume_file(image, path,
+                         "/%s/%s" % (COMMANDS_DIRECTORY, name))
+
+
 def install(image, catalog=DEFAULT_CATALOG, commands=DEFAULT_COMMANDS,
             services=DEFAULT_SERVICES, kits=DEFAULT_KITS,
             apps=DEFAULT_APPS, terminfo=DEFAULT_TERMINFO,
+            vim_runtime=DEFAULT_VIM_RUNTIME,
             service_names=DISPLAY_SERVICES,
             manifest_text=STARTUP_MANIFEST):
     """Writes this build's catalog and commands into the image's volume.
@@ -533,7 +595,7 @@ def install(image, catalog=DEFAULT_CATALOG, commands=DEFAULT_COMMANDS,
     """
     _build_current_userspace()
     _install_built(image, catalog, commands, services, kits, apps, terminfo,
-                   service_names, manifest_text)
+                   vim_runtime, service_names, manifest_text)
 
 
 def _provider_index_record(path, version, abi, abi_minor, build_id):
@@ -552,6 +614,7 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
                    commands=DEFAULT_COMMANDS,
                    services=DEFAULT_SERVICES, kits=DEFAULT_KITS,
                    apps=DEFAULT_APPS, terminfo=DEFAULT_TERMINFO,
+                   vim_runtime=DEFAULT_VIM_RUNTIME,
                    service_names=DISPLAY_SERVICES,
                    manifest_text=STARTUP_MANIFEST):
     """Install built products; private seam for isolated host tests."""
@@ -566,6 +629,8 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
     kit_bundles = [] if kits is None else _bundles(kits)
     application_bundles = [] if apps is None else \
         _bundles(apps, APPLICATION_BUNDLES)
+    vim_runtime_tree = None if vim_runtime is None else \
+        _vim_runtime(vim_runtime)
     offset, length = ext4_partition(image)
     with tempfile.TemporaryDirectory(prefix="astra-volume-") as temporary:
         volume = os.path.join(temporary, "volume.img")
@@ -619,6 +684,9 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
             _install_bundle(volume, bundle,
                             "/%s/%s" % (LIBS_DIRECTORY,
                                          os.path.basename(bundle)))
+        if vim_runtime_tree is not None:
+            _install_tree(volume, vim_runtime_tree,
+                          "/%s/vim/runtime" % LIBS_DIRECTORY)
 
         # One tiny lookup replaces a directory sweep and every Kit manifest
         # read in each new process. The manifests remain authoritative; these

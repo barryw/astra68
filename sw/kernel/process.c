@@ -520,18 +520,44 @@ static KernelProcessStatus maintenance_failed(
     return status;
 }
 
-/*
- * A thread entry must be even and inside the process's executable span. The
- * span is recorded per process rather than assumed to start at a fixed code
- * base, because a loaded executable places its own segments.
- */
+/* A thread may begin in either the program or an attached shared library. */
 static bool entry_within_code(const KernelProcess *process, uint32_t entry)
 {
+    uint32_t mapped_physical;
+    uint32_t physical;
+
     if (process == NULL || (entry & 1u) != 0u)
         return false;
-    if (entry < process->entry_base)
+    if (entry >= process->entry_base &&
+        entry - process->entry_base < process->image_size)
+        return true;
+    if (entry < KERNEL_VM_DYNAMIC_BASE || entry >= KERNEL_VM_DYNAMIC_END ||
+        kernel_vm_probe_address_space(&process->address_space, entry,
+                                      &mapped_physical) !=
+            KERNEL_VM_MAPPING_READ_ONLY)
         return false;
-    return entry - process->entry_base < process->image_size;
+    physical = library_cache_head;
+    while (physical != 0u) {
+        const KernelLibraryCacheEntry *library = kernel_memory_access(
+            physical, sizeof(KernelLibraryCacheEntry));
+
+        if (library == NULL)
+            return false;
+        for (uint32_t index = 0u; index < library->plan.segment_count;
+             ++index) {
+            const KernelElfSegment *segment = &library->plan.segment[index];
+            uint32_t base;
+
+            if ((segment->rights & KERNEL_ELF_SEGMENT_EXEC) == 0u ||
+                !astra_u32_add_checked(library->base,
+                                       segment->virtual_address, &base))
+                continue;
+            if (entry >= base && entry - base < segment->memory_size)
+                return true;
+        }
+        physical = library->next_physical;
+    }
+    return false;
 }
 
 static uint8_t *physical_bytes(uint32_t physical, uint32_t size)

@@ -72,7 +72,7 @@ $(DYNAMIC_LIBRARY): $(DYNAMIC_IDENTITY) $(DYNAMIC_OBJECTS) \
 		-Wl,--version-script=$(DYNAMIC_MAP) -o $@ \
 		$(DYNAMIC_IDENTITY) $(DYNAMIC_OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -Wl,--no-as-needed \
-		-Wl,-l:runtime.library.1
+		-Wl,-l:runtime.library.1 $(ASTRA_SHARED_LINK_END)
 
 streams-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 	@python3 ../../../tools/check_shared_library_layout.py $(DYNAMIC_LIBRARY)
