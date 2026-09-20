@@ -18,6 +18,11 @@
 #include <string.h>
 
 #define RAM_BASE 0x02000000u
+#define kernel_thread_allocate(process_slot, process_id, stack_slot, pc,      \
+                               stack, argument, priority, result)             \
+    kernel_thread_allocate((process_slot), (process_id), KERNEL_OWNER_CORE,   \
+                           (stack_slot), (pc), (stack), (argument),           \
+                           (priority), (result))
 
 static uint8_t physical_memory[32u * 1024u * 1024u];
 static KernelHandle next_thread_handle;
@@ -52,6 +57,7 @@ static void initialize_test(void)
 {
     AstraBootInfo info;
 
+    kernel_thread_pool_init();
     memset(&info, 0, sizeof(info));
     info.magic = ASTRA_BOOT_INFO_MAGIC;
     info.abi_major = ASTRA_BOOT_ABI_MAJOR;
@@ -108,7 +114,6 @@ static void initialize_test(void)
     assert(kernel_vm_init() == KERNEL_VM_OK);
     assert(kernel_vm_enable() == KERNEL_VM_OK);
     kernel_performance_init();
-    kernel_thread_pool_init();
     kernel_area_pool_init();
     kernel_area_test_bind_physical_memory(physical_memory, RAM_BASE,
                                           sizeof(physical_memory));

@@ -194,6 +194,9 @@ KernelVmStatus kernel_vm_cow_fault(KernelAddressSpace *space,
                                    uint32_t virtual_address);
 KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,
                                     uint32_t virtual_address);
+KernelVmStatus kernel_vm_map_supervisor_stack(uint16_t slot,
+                                              uint32_t physical_address);
+KernelVmStatus kernel_vm_unmap_supervisor_stack(uint16_t slot);
 KernelVmStatus kernel_vm_private_reserve(KernelAddressSpace *space,
                                          uint32_t byte_size,
                                          uint32_t permissions,

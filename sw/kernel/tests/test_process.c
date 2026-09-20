@@ -853,7 +853,7 @@ static uint32_t host_channel_arm_slot;
 static uint32_t host_channel_arm_consumer;
 static uint32_t host_channel_disarm_calls;
 static KernelPlatformHostChannelState
-    host_channel_states[KERNEL_THREAD_MAX];
+    host_channel_states[KERNEL_VM_HOST_CHANNEL_PAGE_COUNT];
 static uint32_t host_channel_ack_calls;
 
 bool kernel_platform_host_state(KernelPlatformHostState *state)
@@ -887,7 +887,8 @@ uint32_t kernel_platform_host_channel_open(
     uint32_t command_capacity)
 {
     assert(owner != 0u && host_generation == host_state.host_generation);
-    assert(channel_generation != 0u && slot < KERNEL_THREAD_MAX);
+    assert(channel_generation != 0u &&
+           slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT);
     assert(byte_size >= ASTRA_HOST_CHANNEL_HEADER_SIZE +
                         ASTRA_HOST_COMMAND_SIZE &&
            byte_size <= KERNEL_PAGE_SIZE && command_capacity == 1u);
@@ -906,7 +907,8 @@ uint32_t kernel_platform_host_channel_close(
     uint32_t slot)
 {
     assert(owner != 0u && host_generation == host_state.host_generation);
-    assert(channel_generation != 0u && slot < KERNEL_THREAD_MAX);
+    assert(channel_generation != 0u &&
+           slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT);
     memset(&host_channel_states[slot], 0,
            sizeof(host_channel_states[slot]));
     ++host_channel_close_calls;
@@ -916,7 +918,7 @@ uint32_t kernel_platform_host_channel_close(
 void kernel_platform_host_channel_kick(uint32_t slot,
                                        uint32_t producer_position)
 {
-    assert(slot < KERNEL_THREAD_MAX);
+    assert(slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT);
     ++host_channel_kick_calls;
     host_channel_kick_slot = slot;
     host_channel_kick_producer = producer_position;
@@ -927,7 +929,7 @@ void kernel_platform_host_channel_kick(uint32_t slot,
 void kernel_platform_host_channel_arm(uint32_t slot,
                                       uint32_t consumer_position)
 {
-    assert(slot < KERNEL_THREAD_MAX);
+    assert(slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT);
     ++host_channel_arm_calls;
     host_channel_arm_slot = slot;
     host_channel_arm_consumer = consumer_position;
@@ -935,7 +937,7 @@ void kernel_platform_host_channel_arm(uint32_t slot,
 
 void kernel_platform_host_channel_disarm(uint32_t slot)
 {
-    assert(slot < KERNEL_THREAD_MAX);
+    assert(slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT);
     ++host_channel_disarm_calls;
 }
 
@@ -945,7 +947,7 @@ bool kernel_platform_host_channel_completion(
 {
     uint32_t slot = host_channel_slot;
 
-    if (state == NULL || slot >= KERNEL_THREAD_MAX ||
+    if (state == NULL || slot >= KERNEL_VM_HOST_CHANNEL_PAGE_COUNT ||
         physical_buffer != host_channel_physical ||
         byte_size != host_channel_byte_size || command_capacity != 1u ||
         host_channel_states[slot].generation == 0u)
@@ -1114,15 +1116,17 @@ static void select_process(uint32_t process_id, uint32_t *registers,
 {
     KernelSchedulerStats stats;
 
-    for (uint32_t attempt = 0u; attempt < KERNEL_THREAD_MAX; ++attempt) {
+    for (uint32_t attempt = 0u;
+         attempt < kernel_thread_slot_limit() + 1u; ++attempt) {
         KernelThreadSnapshot current;
         bool found = false;
 
         assert(kernel_process_stats(&stats));
         if (stats.current_process_id == process_id)
             return;
-        for (uint32_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
-            assert(kernel_thread_snapshot(slot, &current));
+        for (uint32_t slot = 0u; slot < kernel_thread_slot_limit(); ++slot) {
+            if (!kernel_thread_snapshot(slot, &current))
+                continue;
             if (current.id == stats.current_thread_id &&
                 current.state == KERNEL_THREAD_RUNNING) {
                 found = true;
@@ -1165,6 +1169,7 @@ static void initialize_test(void)
         .context = NULL,
     };
 
+    kernel_thread_pool_init();
     memset(&info, 0, sizeof(info));
     info.magic = ASTRA_BOOT_INFO_MAGIC;
     info.abi_major = ASTRA_BOOT_ABI_MAJOR;
@@ -1471,13 +1476,18 @@ static void test_process_allocation_failure_matrix(void)
         KernelAllocationSite site;
         KernelProcessStatus status;
     } cases[] = {
-        {KERNEL_ALLOCATION_SITE_PROCESS_RECORD, KERNEL_PROCESS_NO_SLOT},
+        {KERNEL_ALLOCATION_SITE_PROCESS_RECORD,
+         KERNEL_PROCESS_OUT_OF_MEMORY},
+        {KERNEL_ALLOCATION_SITE_PROCESS_HANDLE_TABLE,
+         KERNEL_PROCESS_OUT_OF_MEMORY},
         {KERNEL_ALLOCATION_SITE_VM_PAGE_TABLE,
          KERNEL_PROCESS_OUT_OF_MEMORY},
         {KERNEL_ALLOCATION_SITE_PROCESS_CODE_PAGE,
          KERNEL_PROCESS_OUT_OF_MEMORY},
         {KERNEL_ALLOCATION_SITE_THREAD_RECORD,
-         KERNEL_PROCESS_RESOURCE_LIMIT},
+         KERNEL_PROCESS_OUT_OF_MEMORY},
+        {KERNEL_ALLOCATION_SITE_THREAD_KERNEL_STACK,
+         KERNEL_PROCESS_OUT_OF_MEMORY},
         {KERNEL_ALLOCATION_SITE_THREAD_STACK_PAGE,
          KERNEL_PROCESS_OUT_OF_MEMORY},
         {KERNEL_ALLOCATION_SITE_HANDLE_SLOT,
@@ -1514,7 +1524,7 @@ static void test_process_global_nth_failure_matrix(void)
     bool reached_success = false;
     uint32_t failed_stages = 0u;
 
-    for (uint32_t target = 1u; target <= 16u; ++target) {
+    for (uint32_t target = 1u; target <= 64u; ++target) {
         TestAllocationBaseline allocation_baseline;
         KernelMemoryStats memory_baseline;
         KernelMemoryStats final;
@@ -1885,8 +1895,7 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(kernel_dma_complete(&dma_token) == KERNEL_DMA_OK);
     assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
     assert(!kernel_process_maintenance_pending());
-    assert(kernel_process_snapshot(1u, &offender));
-    assert(offender.process_state == KERNEL_PROCESS_DEAD);
+    assert(!kernel_process_snapshot(1u, &offender));
 
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_PROGRESS;
@@ -3952,12 +3961,7 @@ static void test_public_thread_lifecycle_and_exact_charges(void)
     assert(next == NULL);
     assert(kernel_process_maintenance_pending());
     assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
-    assert(kernel_process_snapshot(0u, &process));
-    assert(process.process_state == KERNEL_PROCESS_DEAD);
-    assert(process.thread_count == 0u);
-    assert(process.live_threads == 0u);
-    assert(process.user_stack_pages == 0u);
-    assert(process.supervisor_stack_pages == 0u);
+    assert(!kernel_process_snapshot(0u, &process));
     assert(kernel_memory_stats(&final));
     assert(final.free_frames == baseline.free_frames);
 }
@@ -4357,7 +4361,8 @@ static void test_real_stack_oom_rolls_back_thread_create(void)
      * device buffers and a scattered process allocation can never enter it,
      * so "exhausted" means the general pool rather than the machine.
      */
-    assert(exhausted.free_frames == exhausted.dma_zone_frames);
+    assert(exhausted.free_frames == exhausted.dma_zone_frames +
+                                      exhausted.core_reserve_frames);
 
     registers[0] = ASTRA_SYSCALL_THREAD_CREATE;
     registers[1] = KERNEL_PROCESS_CODE_BASE + 2u;
@@ -4380,7 +4385,8 @@ static void test_real_stack_oom_rolls_back_thread_create(void)
     assert(after_process.supervisor_guard_pages ==
            before_process.supervisor_guard_pages);
     assert(kernel_memory_stats(&after_failure));
-    assert(after_failure.free_frames == after_failure.dma_zone_frames);
+    assert(after_failure.free_frames == after_failure.dma_zone_frames +
+                                          after_failure.core_reserve_frames);
     assert(kernel_vm_stats(&after_vm));
     assert(after_vm.user_mappings == before_vm.user_mappings);
     assert(after_vm.user_table_pages == before_vm.user_table_pages);
@@ -4389,7 +4395,7 @@ static void test_real_stack_oom_rolls_back_thread_create(void)
     assert(after_threads.live_threads == before_threads.live_threads);
     assert(after_threads.ready_threads == before_threads.ready_threads);
     assert(after_threads.creation_rollbacks ==
-           before_threads.creation_rollbacks + 1u);
+           before_threads.creation_rollbacks);
 
     attempts_before_fault = allocation_attempt_total();
     memset(registers, 0, sizeof(registers));
@@ -6642,7 +6648,7 @@ static void test_executable_threads_receive_independent_tls(void)
                process_id, 0u, 0u, KERNEL_THREAD_PRIORITY_NORMAL,
                &thread_id) == KERNEL_PROCESS_OK);
     assert(thread_id != 0u);
-    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+    for (uint32_t slot = 0u; slot < kernel_thread_slot_limit(); ++slot) {
         KernelThreadSnapshot snapshot;
 
         if (!kernel_thread_snapshot(slot, &snapshot) ||
@@ -6694,7 +6700,7 @@ static void test_executable_loading(void)
         uint32_t slot;
         bool found = false;
 
-        for (slot = 0u; slot < KERNEL_PROCESS_MAX; ++slot) {
+        for (slot = 0u; slot < kernel_process_slot_limit(); ++slot) {
             if (!kernel_process_snapshot(slot, &snapshot) ||
                 snapshot.id != process_id)
                 continue;
@@ -6705,9 +6711,12 @@ static void test_executable_loading(void)
     }
     assert(snapshot.live_threads == 1u);
     assert(snapshot.thread_count == 1u);
+    assert(snapshot.default_priority == KERNEL_THREAD_PRIORITY_SYSTEM);
+    assert(snapshot.priority_ceiling == KERNEL_THREAD_PRIORITY_USER_MAX);
 
     /* Text, data, and the startup block are all charged to the process. */
-    assert(kernel_memory_owner_usage(process_id, &frames, NULL));
+    assert(process_id != snapshot.owner);
+    assert(kernel_memory_owner_usage(snapshot.owner, &frames, NULL));
     assert(frames >= 3u);
     assert(kernel_memory_stats(&after));
     assert(after.free_frames < before.free_frames);
@@ -7107,7 +7116,7 @@ static void test_host_admission(void)
         assert(physical != host_channel_physical);
         slot = (physical - KERNEL_VM_HOST_CHANNEL_PHYSICAL_BASE) /
                KERNEL_PAGE_SIZE;
-        assert(slot < KERNEL_THREAD_MAX);
+        assert(slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT);
         /* A completion cursor may pass this ticket while several requests
          * from the same thread are in flight. */
         host_channel_states[slot].consumer_position = 19u;
@@ -8512,7 +8521,8 @@ static void test_a_program_can_launch_a_program(void)
         uint32_t granted_id = next->data[2];
         int found = 0;
 
-        for (uint32_t slot = 0u; slot < KERNEL_PROCESS_MAX; ++slot) {
+        for (uint32_t slot = 0u;
+             slot < kernel_process_slot_limit(); ++slot) {
             if (!kernel_process_snapshot(slot, &child) ||
                 child.id != granted_id)
                 continue;
@@ -8527,6 +8537,142 @@ static void test_a_program_can_launch_a_program(void)
         assert(found);
         assert(child.live_threads == 1u);
     }
+}
+
+static void test_system_control_preempts_and_terminates_runaway(void)
+{
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
+    KernelMemoryStats baseline;
+    KernelMemoryStats exhausted;
+    KernelMemoryStats final;
+    KernelProcessSnapshot controller = {0};
+    KernelProcessSnapshot runaway = {0};
+    KernelSchedulerStats stats;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t controller_id;
+    uint32_t runaway_handle;
+    uint32_t runaway_id;
+    uint32_t physical;
+    uint32_t pressure_frames = 0u;
+    uint64_t delay_ns = 1000u * KERNEL_PLATFORM_NS_PER_CPU_CYCLE;
+
+    loader_build_image();
+    launch_build_image();
+    initialize_test();
+    assert(kernel_memory_stats(&baseline));
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &controller_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(next != NULL && next->program_counter == LOADER_TEXT_VADDR);
+    assert(kernel_user_copy_to_asm(LOADER_DATA_VADDR, launch_image,
+                                   sizeof(launch_image)) ==
+           KERNEL_USER_COPY_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+
+    registers[0] = ASTRA_SYSCALL_PROCESS_CREATE;
+    registers[1] = LOADER_DATA_VADDR;
+    registers[2] = sizeof(launch_image);
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    runaway_handle = next->data[1];
+    runaway_id = next->data[2];
+    assert(runaway_handle != KERNEL_HANDLE_INVALID);
+    assert(runaway_id != 0u && runaway_id != controller_id);
+    for (uint32_t slot = 0u; slot < kernel_process_slot_limit(); ++slot) {
+        KernelProcessSnapshot snapshot;
+
+        if (!kernel_process_snapshot(slot, &snapshot))
+            continue;
+        if (snapshot.id == controller_id)
+            controller = snapshot;
+        else if (snapshot.id == runaway_id)
+            runaway = snapshot;
+    }
+    assert(controller.id == controller_id);
+    assert(runaway.id == runaway_id);
+    assert(kernel_memory_owner_protected(controller.owner));
+    assert(!kernel_memory_owner_protected(runaway.owner));
+    assert(runaway.priority_ceiling == KERNEL_THREAD_PRIORITY_NORMAL);
+
+    /* An ordinary task cannot promote itself into the control tier. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_PRIORITY;
+    registers[1] = runaway_handle;
+    registers[2] = KERNEL_THREAD_PRIORITY_SYSTEM;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+
+    for (;;) {
+        KernelMemoryStatus status = kernel_memory_alloc(
+            1u, 1u, KERNEL_FRAME_PROCESS, runaway.owner, &physical);
+
+        if (status == KERNEL_MEMORY_OUT_OF_MEMORY)
+            break;
+        assert(status == KERNEL_MEMORY_OK);
+        ++pressure_frames;
+    }
+    assert(pressure_frames != 0u);
+    assert(kernel_memory_stats(&exhausted));
+    assert(exhausted.free_frames == exhausted.dma_zone_frames +
+                                      exhausted.core_reserve_frames +
+                                      exhausted.protected_reserve_frames);
+
+    /* While the ordinary task runs forever, the timed control task must win. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_THREAD_SLEEP;
+    registers[1] = (uint32_t)(delay_ns >> 32);
+    registers[2] = (uint32_t)delay_ns;
+    registers[3] = ASTRA_THREAD_SLEEP_RELATIVE;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next != NULL && next->program_counter == LAUNCH_VADDR + 0x100u);
+
+    scheduler_test_cycles += 1000u;
+    memset(registers, 0, sizeof(registers));
+    make_frame(frame, 0u, 80u, LAUNCH_VADDR + 0x100u, 0u);
+    assert(kernel_process_on_timer(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next != NULL && next->program_counter == LOADER_TEXT_VADDR);
+    assert(next->data[0] == ASTRA_SYSCALL_TIMED_OUT);
+    assert(kernel_process_stats(&stats));
+    assert(stats.deadline_expirations == 1u);
+    assert(stats.deadline_preemptions == 1u);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_TERMINATE;
+    registers[1] = runaway_handle;
+    registers[2] = ASTRA_SIGNAL_KILL;
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_WAIT_ONE;
+    registers[1] = runaway_handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+    assert(next->data[1] == ASTRA_STATUS_SIGNALLED(ASTRA_SIGNAL_KILL));
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_CLOSE;
+    registers[1] = runaway_handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_EXIT;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(kernel_memory_stats(&final));
+    assert(final.free_frames == baseline.free_frames);
 }
 
 #define STREAM_FILE_OFFSET (5u * 1024u * 1024u)
@@ -10278,12 +10424,12 @@ static void test_initial_supervisor_can_snapshot_every_live_process(void)
     registers[0] = ASTRA_SYSCALL_PROCESS_SNAPSHOT;
     registers[1] = supervisor_handle;
     registers[2] = user_records;
-    registers[3] = ASTRA_PROCESS_COUNT_MAX - 1u;
+    registers[3] = 1u;
     assert(kernel_process_on_syscall(registers,
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_BUFFER_TOO_SMALL);
-    assert(next->data[1] == ASTRA_PROCESS_COUNT_MAX);
+    assert(next->data[1] == 2u);
 
     /* The same call remains forbidden after scheduling the ordinary child. */
     memset(registers, 0, sizeof(registers));
@@ -10324,10 +10470,9 @@ static void test_initial_supervisor_can_snapshot_every_live_process(void)
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(next->data[1] == 1u);
     assert(kernel_user_copy_from_asm(records, user_records,
-                                     sizeof(records)) ==
+                                     sizeof(records[0])) ==
            KERNEL_USER_COPY_OK);
     assert(records[0].process.id == supervisor_id);
-    assert(records[1].process.id == 0u);
 }
 
 
@@ -11031,8 +11176,10 @@ static void test_process_clone_returns_twice_and_is_waitable(void)
            child_id != parent_id);
     assert(kernel_process_stats(&stats));
     assert(stats.live_processes == 2u && stats.live_threads == 2u);
-    for (uint32_t slot = 0u; slot < KERNEL_PROCESS_MAX; ++slot) {
-        assert(kernel_process_snapshot(slot, &child_snapshot));
+    for (uint32_t slot = 0u;
+         slot < kernel_process_slot_limit(); ++slot) {
+        if (!kernel_process_snapshot(slot, &child_snapshot))
+            continue;
         if (child_snapshot.id == child_id) {
             found_child = true;
             break;
@@ -11165,38 +11312,28 @@ static void test_process_clone_rejects_multithreaded_source(void)
     assert(stats.live_processes == 1u && stats.live_threads == 2u);
 }
 
-static void test_process_clone_exhaustion_is_reported(void)
+static void test_process_growth_is_resource_backed(void)
 {
     static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
-    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
-    KernelCpuContext *next;
-    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
-    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
-    uint32_t parent_id;
-    KernelProcessStatus status;
+    KernelSchedulerStats stats;
+    uint32_t process_id;
 
     initialize_test();
-    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
-                                 &parent_id) == KERNEL_PROCESS_OK);
-    assert(parent_id != 0u);
-    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
-    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
-               KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    for (uint32_t process = 0u; process < 40u; ++process)
+        assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                     &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_stats(&stats));
+    assert(stats.live_processes == 40u &&
+           kernel_process_slot_limit() >= 40u);
 
-    for (uint32_t child = 1u; child < KERNEL_PROCESS_MAX; ++child) {
-        memset(registers, 0, sizeof(registers));
-        registers[0] = ASTRA_SYSCALL_PROCESS_CLONE;
-        status = kernel_process_on_syscall(registers, user_stack, frame,
-                                           &next);
-        assert(status == KERNEL_PROCESS_OK);
-        assert(next != NULL && next->data[0] == ASTRA_SYSCALL_OK);
-    }
-    memset(registers, 0, sizeof(registers));
-    registers[0] = ASTRA_SYSCALL_PROCESS_CLONE;
-    assert(kernel_process_on_syscall(registers, user_stack, frame,
-                                     &next) == KERNEL_PROCESS_OK);
-    assert(next != NULL &&
-           next->data[0] == ASTRA_SYSCALL_RESOURCE_LIMIT);
+    kernel_allocation_test_fail_site(KERNEL_ALLOCATION_SITE_PROCESS_RECORD,
+                                     1u);
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) ==
+           KERNEL_PROCESS_OUT_OF_MEMORY);
+    kernel_allocation_test_clear_failure();
+    assert(kernel_process_stats(&stats));
+    assert(stats.live_processes == 40u);
 }
 
 static void test_interval_timer_delivers_and_sigreturn_restores_context(void)
@@ -11529,8 +11666,10 @@ static void test_process_suspend_resume_preserves_execution(void)
     registers[1] = control_handle;
     assert(kernel_process_on_syscall(registers, user_stack, frame,
                                      &next) == KERNEL_PROCESS_OK);
-    for (uint32_t slot = 0u; slot < KERNEL_PROCESS_MAX; ++slot) {
-        assert(kernel_process_snapshot(slot, &snapshot));
+    for (uint32_t slot = 0u;
+         slot < kernel_process_slot_limit(); ++slot) {
+        if (!kernel_process_snapshot(slot, &snapshot))
+            continue;
         if (snapshot.id == target_id) {
             found = true;
             break;
@@ -11642,6 +11781,7 @@ int main(void)
     test_capability_roots_are_bounded();
     test_an_activity_is_the_threads_own();
     test_a_program_can_launch_a_program();
+    test_system_control_preempts_and_terminates_runaway();
     test_streamed_launch_is_large_and_transactional();
     test_dynamic_stream_enters_interpreter_atomically();
     test_streamed_library_is_sparse_atomic_and_reclaimable();
@@ -11658,7 +11798,7 @@ int main(void)
     test_process_clone_returns_twice_and_is_waitable();
     test_process_clone_rebinds_startup_identity();
     test_process_clone_rejects_multithreaded_source();
-    test_process_clone_exhaustion_is_reported();
+    test_process_growth_is_resource_backed();
     test_interval_timer_delivers_and_sigreturn_restores_context();
     test_thread_sleep_is_timed_and_signal_atomic();
     test_process_signal_is_capability_checked_and_delivered();

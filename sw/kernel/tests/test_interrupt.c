@@ -11,6 +11,12 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#define kernel_thread_allocate(process_slot, process_id, stack_slot, pc,      \
+                               stack, argument, priority, result)             \
+    kernel_thread_allocate((process_slot), (process_id), (process_id),        \
+                           (stack_slot), (pc), (stack), (argument),           \
+                           (priority), (result))
+
 static uint32_t trace_event_count[KERNEL_TRACE_EVENT_COUNT];
 static uint32_t monitor_irq_services;
 static uint32_t monitor_spi_irq_services;

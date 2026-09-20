@@ -59,13 +59,9 @@ _Static_assert(KERNEL_VM_DMA_SLOT_COUNT *
 #endif
 
 #define PROCESS_OWNER_PREFIX 0x10000000u
-#define PROCESS_OWNER_SLOT_BITS 5u
-#define PROCESS_OWNER_GENERATION_MASK \
-    ((PROCESS_OWNER_PREFIX - 1u) >> PROCESS_OWNER_SLOT_BITS)
-_Static_assert(KERNEL_PROCESS_MAX <= (1u << PROCESS_OWNER_SLOT_BITS),
-               "process owner slot field is too narrow");
-_Static_assert(KERNEL_PROCESS_MAX < ASTRA_PROCESS_ID_MAX,
-               "the live process pool must fit in the PID namespace");
+#define PROCESS_OWNER_VALUE_MASK (PROCESS_OWNER_PREFIX - 1u)
+#define PROCESS_SLOT_COUNT UINT16_MAX
+#define PROCESS_SLOT_NONE UINT16_MAX
 #define PROCESS_QUALIFICATION_CLIENT_MAX 2u
 #define KERNEL_PROCESS_LOAD_RIGHT (1u << 0)
 
@@ -103,6 +99,7 @@ typedef struct KernelHostChannel {
     KernelDmaToken token;
     KernelThreadWaitQueue waiters;
     uint32_t process_id;
+    uint32_t thread_id;
     uint32_t host_generation;
     uint32_t channel_generation;
     uint32_t virtual_address;
@@ -147,7 +144,12 @@ typedef struct KernelProcess {
     uint32_t signal_target_thread;
     uint32_t dynamic_tls_template_base;
     uint32_t dynamic_tls_template_span;
+    uint32_t record_physical;
+    uint32_t handles_physical;
     KernelHandle self_handle;
+    uint16_t slot;
+    uint16_t record_frames;
+    uint16_t handles_frames;
     uint16_t fault_vector;
     uint16_t fault_status;
     /*
@@ -190,10 +192,13 @@ typedef struct KernelExecutableLoad {
     KernelProcess *process;
     KernelThread *prepared_thread;
     uint32_t owner;
+    uint32_t resource_owner;
     uint32_t interpreter_base;
     uint32_t interpreter_span;
     KernelHandle prepared_handle;
-    uint16_t slot;
+    struct KernelExecutableLoad *next;
+    uint32_t self_physical;
+    uint16_t self_frames;
     uint16_t prepared_stack_slot;
     uint16_t segment;
     uint16_t page;
@@ -272,27 +277,11 @@ _Static_assert(sizeof(KernelLibraryPageBlock) == KERNEL_PAGE_SIZE,
 _Static_assert(sizeof(KernelProcess) <= 4608u,
                "process record grew past its memory budget");
 #endif
-_Static_assert(KERNEL_PROCESS_MAX <= 32u,
-               "process maintenance bitmap is too narrow");
-
-
-static KernelProcess processes[KERNEL_PROCESS_MAX] KERNEL_TABLES;
-static KernelHostChannel host_channels[KERNEL_THREAD_MAX] KERNEL_TABLES;
-static KernelHandleTable process_handle_tables[KERNEL_PROCESS_MAX]
-    KERNEL_TABLES;
-#if defined(__m68k__)
-_Static_assert((sizeof(processes) + sizeof(process_handle_tables)) <=
-                   256u * 1024u,
-               "process records and handle tables exceed their TABLES share");
-#endif
+static KernelProcess *processes[PROCESS_SLOT_COUNT] KERNEL_TABLES;
+static KernelHostChannel
+    host_channels[KERNEL_VM_HOST_CHANNEL_PAGE_COUNT] KERNEL_TABLES;
 static uint32_t library_cache_head;
-static KernelObjectCache process_cache;
-static uint32_t process_cache_bitmap[
-    KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_PROCESS_MAX)];
-static KernelExecutableLoad executable_loads[KERNEL_PROCESS_MAX] KERNEL_TABLES;
-static KernelObjectCache executable_load_cache;
-static uint32_t executable_load_cache_bitmap[
-    KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_PROCESS_MAX)];
+static KernelExecutableLoad *executable_loads;
 static KernelSchedulerStats scheduler_stats;
 static KernelThreadWaitQueue sleep_waiters;
 /*
@@ -326,12 +315,9 @@ static uint8_t scheduler_started;
 static uint8_t quantum_active;
 static uint8_t quantum_preempt_pending;
 static uint8_t deadline_preempt_pending;
-static KernelCpuContext signal_saved_context[KERNEL_THREAD_MAX];
-static uint8_t signal_context_active[KERNEL_THREAD_MAX];
 static uint8_t worker_active;
 static uint8_t milestone_progress_ready;
 static uint8_t process_pool_corrupt;
-static uint32_t process_exit_pending_bitmap;
 static uint64_t interval_next_deadline;
 /*
  * One counter for the whole machine, so an activity id is unique across every
@@ -340,6 +326,10 @@ static uint64_t interval_next_deadline;
  */
 static uint32_t next_activity;
 static uint32_t next_process_id;
+static uint32_t next_process_owner;
+static uint32_t next_process_generation;
+static uint16_t next_process_slot;
+static uint32_t process_slots;
 static uint32_t initial_image_process_id;
 static uint32_t initial_image_progress;
 static uint8_t initial_image_exited;
@@ -395,8 +385,6 @@ _Static_assert(KERNEL_THREAD_STACK_PAGES_MAX <= UINT16_MAX,
                "a thread's committed page count must fit its uint16_t");
 _Static_assert(KERNEL_PROCESS_THREAD_MAX <= 64u,
                "stack slot bitmap exceeds its storage");
-_Static_assert(KERNEL_THREAD_MAX <= KERNEL_VM_HOST_CHANNEL_PAGE_COUNT,
-               "host doorbell aperture must cover every kernel thread");
 _Static_assert(ASTRA_EVENT_MANUAL_RESET ==
                    KERNEL_SYNC_EVENT_MANUAL_RESET,
                "event flag ABI mismatch");
@@ -565,13 +553,68 @@ static uint8_t *physical_bytes(uint32_t physical, uint32_t size)
     return kernel_memory_access(physical, size);
 }
 
+static KernelProcess *process_at_slot(uint16_t slot)
+{
+    return slot != PROCESS_SLOT_NONE ? processes[slot] : NULL;
+}
+
+static bool process_owner_allocate(uint32_t *owner)
+{
+    if (owner == NULL)
+        return false;
+    for (uint32_t attempt = 0u; attempt < PROCESS_OWNER_VALUE_MASK;
+         ++attempt) {
+        bool used = false;
+
+        next_process_owner =
+            (next_process_owner % PROCESS_OWNER_VALUE_MASK) + 1u;
+        *owner = PROCESS_OWNER_PREFIX | next_process_owner;
+        for (uint32_t slot = 0u; slot < process_slots; ++slot) {
+            KernelProcess *process = process_at_slot((uint16_t)slot);
+
+            if (process != NULL && process->owner == *owner) {
+                used = true;
+                break;
+            }
+        }
+        if (!used)
+            return true;
+    }
+    return false;
+}
+
+static bool metadata_transfer_to_core(uint32_t physical, uint16_t frames,
+                                      uint32_t owner)
+{
+    uint16_t transferred = 0u;
+
+    while (transferred < frames) {
+        if (kernel_memory_transfer_owner(
+                physical + (uint32_t)transferred * KERNEL_PAGE_SIZE,
+                owner, KERNEL_OWNER_CORE) != KERNEL_MEMORY_OK) {
+            while (transferred != 0u) {
+                --transferred;
+                if (kernel_memory_transfer_owner(
+                        physical + (uint32_t)transferred * KERNEL_PAGE_SIZE,
+                        KERNEL_OWNER_CORE, owner) != KERNEL_MEMORY_OK)
+                    process_pool_corrupt = 1u;
+            }
+            return false;
+        }
+        ++transferred;
+    }
+    return true;
+}
+
 static KernelProcess *process_for_thread(const KernelThread *thread)
 {
     KernelProcess *process;
 
-    if (thread == NULL || thread->process_slot >= KERNEL_PROCESS_MAX)
+    if (thread == NULL)
         return NULL;
-    process = &processes[thread->process_slot];
+    process = process_at_slot(thread->process_slot);
+    if (process == NULL)
+        return NULL;
     if (process->id != thread->process_id ||
         (process->process_state != KERNEL_PROCESS_CREATED &&
          process->process_state != KERNEL_PROCESS_RUNNING))
@@ -581,12 +624,8 @@ static KernelProcess *process_for_thread(const KernelThread *thread)
 
 static bool valid_process_pointer(const KernelProcess *process)
 {
-    uintptr_t address = (uintptr_t)process;
-    uintptr_t first = (uintptr_t)&processes[0];
-    uintptr_t limit = (uintptr_t)&processes[KERNEL_PROCESS_MAX];
-
-    return process != NULL && address >= first && address < limit &&
-           (address - first) % sizeof(processes[0]) == 0u;
+    return process != NULL && process->slot != PROCESS_SLOT_NONE &&
+           process_at_slot(process->slot) == process;
 }
 
 static bool valid_process_handle_object(const KernelProcess *process)
@@ -595,8 +634,8 @@ static bool valid_process_handle_object(const KernelProcess *process)
            process->generation != 0u &&
            process->process_state >= KERNEL_PROCESS_CREATED &&
            process->process_state <= KERNEL_PROCESS_DEAD &&
-           kernel_thread_wait_queue_count(&process->death_waiters) <=
-               KERNEL_THREAD_MAX;
+           kernel_thread_wait_queue_count(&process->death_waiters) !=
+               UINT32_MAX;
 }
 
 static KernelProcessStatus retain_process_handle(KernelProcess *process)
@@ -617,14 +656,32 @@ static bool process_handle_retain(void *object, void *context)
 
 static void maybe_release_process_record(KernelProcess *process)
 {
+    uint32_t record_physical;
+    uint32_t handles_physical;
+    uint16_t record_frames;
+    uint16_t handles_frames;
+    uint16_t slot;
+
     if (!valid_process_pointer(process) ||
         process->process_state != KERNEL_PROCESS_DEAD ||
         process->handle_references != 0u ||
-        kernel_thread_wait_queue_count(&process->death_waiters) != 0u ||
-        !kernel_object_cache_is_claimed(&process_cache, process))
+        kernel_thread_wait_queue_count(&process->death_waiters) != 0u)
         return;
-    if (kernel_object_cache_release(&process_cache, process) !=
-        KERNEL_OBJECT_CACHE_OK)
+    slot = process->slot;
+    record_physical = process->record_physical;
+    record_frames = process->record_frames;
+    handles_physical = process->handles_physical;
+    handles_frames = process->handles_frames;
+    processes[slot] = NULL;
+    if (slot < next_process_slot)
+        next_process_slot = slot;
+    while (process_slots != 0u &&
+           process_at_slot((uint16_t)(process_slots - 1u)) == NULL)
+        --process_slots;
+    if (kernel_memory_release(handles_physical, handles_frames,
+                              KERNEL_OWNER_CORE) != KERNEL_MEMORY_OK ||
+        kernel_memory_release(record_physical, record_frames,
+                              KERNEL_OWNER_CORE) != KERNEL_MEMORY_OK)
         process_pool_corrupt = 1u;
 }
 
@@ -658,44 +715,30 @@ static bool process_pool_healthy(void)
 
 static bool process_pool_valid(void)
 {
-    uint32_t observed_exit_pending = 0u;
     uint64_t observed_interval_next = KERNEL_THREAD_DEADLINE_NEVER;
 
     if (!process_pool_healthy() ||
         !kernel_allocation_valid() || !kernel_dma_valid() ||
         !kernel_block_valid() ||
-        !kernel_object_cache_valid(&process_cache) ||
-        !kernel_object_cache_valid(&executable_load_cache) ||
         !kernel_handle_transfer_pool_valid() ||
         !kernel_port_pool_valid() || !kernel_area_pool_valid() ||
         !kernel_ring_pool_valid() || !kernel_irq_pool_valid())
         return false;
-    for (uint32_t owner = 0u; owner < KERNEL_PROCESS_MAX; ++owner) {
-        if (processes[owner].handles != &process_handle_tables[owner] ||
-            !kernel_handle_table_valid(processes[owner].handles))
-            return false;
-    }
-    for (uint32_t slot = 0u; slot < KERNEL_PROCESS_MAX; ++slot) {
-        const KernelExecutableLoad *load = &executable_loads[slot];
-        bool claimed = kernel_object_cache_slot_claimed(
-            &executable_load_cache, (uint16_t)slot);
+    for (const KernelExecutableLoad *load = executable_loads;
+         load != NULL; load = load->next) {
         bool owner_found = false;
 
-        if (!claimed) {
-            if (load->stage != KERNEL_EXECUTABLE_LOAD_FREE ||
-                load->process != NULL || load->prepared_thread != NULL)
-                return false;
-            continue;
-        }
-        for (uint32_t owner = 0u; owner < KERNEL_PROCESS_MAX; ++owner) {
-            if (processes[owner].id == load->owner &&
-                processes[owner].process_state != KERNEL_PROCESS_UNUSED &&
-                processes[owner].process_state != KERNEL_PROCESS_DEAD) {
+        for (uint32_t slot = 0u; slot < process_slots; ++slot) {
+            const KernelProcess *owner = process_at_slot((uint16_t)slot);
+
+            if (owner != NULL && owner->id == load->owner &&
+                owner->process_state != KERNEL_PROCESS_DEAD) {
                 owner_found = true;
                 break;
             }
         }
-        if (!owner_found || load->slot != slot ||
+        if (!owner_found || load->self_physical == 0u ||
+            load->self_frames == 0u ||
             load->stage < KERNEL_EXECUTABLE_LOAD_PROGRAM_HEADERS ||
             load->stage > KERNEL_EXECUTABLE_LOAD_SEGMENTS)
             return false;
@@ -721,26 +764,34 @@ static bool process_pool_valid(void)
             load->process->process_state != KERNEL_PROCESS_CREATED)
             return false;
     }
-    for (uint32_t slot = 0u; slot < KERNEL_PROCESS_MAX; ++slot) {
-        const KernelProcess *process = &processes[slot];
+    for (uint32_t slot = 0u; slot < process_slots; ++slot) {
+        const KernelProcess *process = process_at_slot((uint16_t)slot);
         uint32_t references = 0u;
-        uint32_t waiters =
-            kernel_thread_wait_queue_count(&process->death_waiters);
-        bool claimed = kernel_object_cache_slot_claimed(
-            &process_cache, (uint16_t)slot);
+        uint32_t waiters;
 
-        if (process->process_state == KERNEL_PROCESS_EXITING)
-            observed_exit_pending |= UINT32_C(1) << slot;
+        if (process == NULL)
+            continue;
+        waiters = kernel_thread_wait_queue_count(&process->death_waiters);
+
         if ((process->process_state == KERNEL_PROCESS_CREATED ||
              process->process_state == KERNEL_PROCESS_RUNNING) &&
             process->interval_deadline != 0u &&
             process->interval_deadline < observed_interval_next)
             observed_interval_next = process->interval_deadline;
 
-        if (waiters > KERNEL_THREAD_MAX)
+        if (waiters == UINT32_MAX)
             return false;
-        for (uint32_t owner = 0u; owner < KERNEL_PROCESS_MAX; ++owner) {
-            const KernelHandleTable *table = processes[owner].handles;
+        for (uint32_t owner_slot = 0u; owner_slot < process_slots;
+             ++owner_slot) {
+            const KernelProcess *owner =
+                process_at_slot((uint16_t)owner_slot);
+            const KernelHandleTable *table;
+
+            if (owner == NULL)
+                continue;
+            table = owner->handles;
+            if (!kernel_handle_table_valid(table))
+                return false;
 
             for (uint32_t entry = 0u;
                  entry < KERNEL_HANDLE_MAX_ENTRIES; ++entry) {
@@ -757,22 +808,19 @@ static bool process_pool_valid(void)
              process->process_state != KERNEL_PROCESS_CREATED &&
              process->process_state != KERNEL_PROCESS_RUNNING))
             return false;
-        if (process->process_state == KERNEL_PROCESS_UNUSED) {
-            if (claimed || process->id != 0u || references != 0u ||
-                waiters != 0u)
-                return false;
-        } else if (process->process_state == KERNEL_PROCESS_DEAD) {
-            if (process->id == 0u || waiters != 0u ||
-                claimed != (references != 0u))
+        if (process->slot != slot || process->id == 0u ||
+            process->owner == 0u || process->record_frames == 0u ||
+            process->handles_frames == 0u || process->handles == NULL)
+            return false;
+        if (process->process_state == KERNEL_PROCESS_DEAD) {
+            if (waiters != 0u || references == 0u)
                 return false;
         } else if (process->process_state < KERNEL_PROCESS_CREATED ||
-                   process->process_state > KERNEL_PROCESS_EXITING ||
-                   process->id == 0u || !claimed) {
+                   process->process_state > KERNEL_PROCESS_EXITING) {
             return false;
         }
     }
-    return observed_exit_pending == process_exit_pending_bitmap &&
-           observed_interval_next == interval_next_deadline;
+    return observed_interval_next == interval_next_deadline;
 }
 
 static uint64_t scheduler_cycles(void)
@@ -786,34 +834,81 @@ static uint64_t scheduler_cycles(void)
 static KernelProcessStatus claim_process_record(KernelProcess **created,
                                                 uint16_t *created_slot)
 {
-    KernelObjectCacheStatus cache_status;
     KernelProcess *process;
-    void *raw_process;
+    KernelHandleTable *handles;
+    uint32_t owner;
+    uint32_t record_physical;
+    uint32_t handles_physical;
+    uint16_t record_frames =
+        (uint16_t)((sizeof(*process) + KERNEL_PAGE_SIZE - 1u) /
+                   KERNEL_PAGE_SIZE);
+    uint16_t handles_frames =
+        (uint16_t)((sizeof(*handles) + KERNEL_PAGE_SIZE - 1u) /
+                   KERNEL_PAGE_SIZE);
     uint32_t generation;
-    uint16_t slot;
+    uint16_t slot = PROCESS_SLOT_NONE;
 
     if (created == NULL || created_slot == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     *created = NULL;
-    *created_slot = UINT16_MAX;
-    cache_status = kernel_object_cache_claim(&process_cache, 0u, &raw_process,
-                                             &slot);
-    if (cache_status == KERNEL_OBJECT_CACHE_UNAVAILABLE)
-        return KERNEL_PROCESS_NO_SLOT;
-    if (cache_status != KERNEL_OBJECT_CACHE_OK || slot >= KERNEL_PROCESS_MAX) {
-        process_pool_corrupt = 1u;
-        return KERNEL_PROCESS_CORRUPT;
-    }
-    process = raw_process;
-    if (process->process_state != KERNEL_PROCESS_UNUSED &&
-        process->process_state != KERNEL_PROCESS_DEAD) {
-        process_pool_corrupt = 1u;
-        return KERNEL_PROCESS_CORRUPT;
-    }
+    *created_slot = PROCESS_SLOT_NONE;
+    for (uint32_t attempt = 0u; attempt < PROCESS_SLOT_COUNT; ++attempt) {
+        uint16_t candidate = next_process_slot;
 
-    generation = kernel_generation_next(process->generation);
+        ++next_process_slot;
+        if (next_process_slot == PROCESS_SLOT_NONE)
+            next_process_slot = 0u;
+        if (process_at_slot(candidate) == NULL) {
+            slot = candidate;
+            break;
+        }
+    }
+    if (slot == PROCESS_SLOT_NONE)
+        return KERNEL_PROCESS_NO_SLOT;
+    if (!process_owner_allocate(&owner))
+        return KERNEL_PROCESS_NO_SLOT;
+    if (kernel_memory_alloc_zeroed_tagged(
+            KERNEL_ALLOCATION_SITE_PROCESS_RECORD, record_frames, 1u,
+            KERNEL_FRAME_KERNEL, owner, &record_physical) != KERNEL_MEMORY_OK)
+        return KERNEL_PROCESS_OUT_OF_MEMORY;
+    if (kernel_memory_alloc_zeroed_tagged(
+            KERNEL_ALLOCATION_SITE_PROCESS_HANDLE_TABLE, handles_frames, 1u,
+            KERNEL_FRAME_KERNEL, owner, &handles_physical) !=
+        KERNEL_MEMORY_OK) {
+        (void)kernel_memory_release(record_physical, record_frames, owner);
+        return KERNEL_PROCESS_OUT_OF_MEMORY;
+    }
+    if (!metadata_transfer_to_core(record_physical, record_frames, owner)) {
+        (void)kernel_memory_release_owner(owner, NULL);
+        return KERNEL_PROCESS_CORRUPT;
+    }
+    if (!metadata_transfer_to_core(handles_physical, handles_frames, owner)) {
+        (void)kernel_memory_release_owner(owner, NULL);
+        (void)kernel_memory_release(record_physical, record_frames,
+                                    KERNEL_OWNER_CORE);
+        return KERNEL_PROCESS_CORRUPT;
+    }
+    process = kernel_memory_access(record_physical,
+                                   record_frames * KERNEL_PAGE_SIZE);
+    handles = kernel_memory_access(handles_physical,
+                                   handles_frames * KERNEL_PAGE_SIZE);
+    if (process == NULL || handles == NULL) {
+        (void)kernel_memory_release(handles_physical, handles_frames,
+                                    KERNEL_OWNER_CORE);
+        (void)kernel_memory_release(record_physical, record_frames,
+                                    KERNEL_OWNER_CORE);
+        return KERNEL_PROCESS_CORRUPT;
+    }
+    generation = kernel_generation_next(next_process_generation);
+    next_process_generation = generation;
     kernel_bytes_clear(process, sizeof(*process));
-    process->handles = &process_handle_tables[slot];
+    process->handles = handles;
+    process->slot = slot;
+    process->record_physical = record_physical;
+    process->record_frames = record_frames;
+    process->handles_physical = handles_physical;
+    process->handles_frames = handles_frames;
+    process->owner = owner;
     kernel_thread_wait_queue_init(&process->death_waiters);
     process->generation = generation;
     for (uint32_t attempt = 0u; attempt < ASTRA_PROCESS_ID_MAX; ++attempt) {
@@ -824,10 +919,10 @@ static KernelProcessStatus claim_process_record(KernelProcess **created,
             candidate = 1u;
         next_process_id = candidate == ASTRA_PROCESS_ID_MAX ?
             2u : candidate + 1u;
-        for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
-            if (processes[index].id == candidate &&
-                kernel_object_cache_slot_claimed(
-                    &process_cache, (uint16_t)index)) {
+        for (uint32_t index = 0u; index < process_slots; ++index) {
+            KernelProcess *other = process_at_slot((uint16_t)index);
+
+            if (other != NULL && other->id == candidate) {
                 used = true;
                 break;
             }
@@ -838,15 +933,16 @@ static KernelProcessStatus claim_process_record(KernelProcess **created,
         }
     }
     if (process->id == 0u) {
-        if (kernel_object_cache_release(&process_cache, process) !=
-            KERNEL_OBJECT_CACHE_OK)
-            process_pool_corrupt = 1u;
+        (void)kernel_memory_release(handles_physical, handles_frames,
+                                    KERNEL_OWNER_CORE);
+        (void)kernel_memory_release(record_physical, record_frames,
+                                    KERNEL_OWNER_CORE);
         return KERNEL_PROCESS_NO_SLOT;
     }
-    process->owner = PROCESS_OWNER_PREFIX |
-                     ((generation & PROCESS_OWNER_GENERATION_MASK) <<
-                      PROCESS_OWNER_SLOT_BITS) |
-                     (uint32_t)slot;
+    kernel_handle_table_init(process->handles);
+    processes[slot] = process;
+    if ((uint32_t)slot + 1u > process_slots)
+        process_slots = (uint32_t)slot + 1u;
     process->started_cycles = scheduler_cycles();
     process->default_priority = KERNEL_THREAD_PRIORITY_NORMAL;
     process->name[0] = '?';
@@ -882,10 +978,11 @@ static uint64_t interval_timer_earliest(void)
 {
     uint64_t earliest = KERNEL_THREAD_DEADLINE_NEVER;
 
-    for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
-        const KernelProcess *process = &processes[index];
+    for (uint32_t index = 0u; index < process_slots; ++index) {
+        const KernelProcess *process = process_at_slot((uint16_t)index);
 
-        if ((process->process_state == KERNEL_PROCESS_CREATED ||
+        if (process != NULL &&
+            (process->process_state == KERNEL_PROCESS_CREATED ||
              process->process_state == KERNEL_PROCESS_RUNNING) &&
             process->interval_deadline != 0u &&
             process->interval_deadline < earliest)
@@ -916,8 +1013,8 @@ static void signal_deliver(KernelThread *thread)
     uint32_t frame[2];
     uint32_t stack;
 
-    if (process == NULL || thread->slot >= KERNEL_THREAD_MAX ||
-        signal_context_active[thread->slot] != 0u ||
+    if (process == NULL || thread == NULL ||
+        thread->signal_context_active != 0u ||
         process->signal_trampoline == 0u ||
         process->signal_stack_top < 8u)
         return;
@@ -931,9 +1028,9 @@ static void signal_deliver(KernelThread *thread)
     if (kernel_copy_to_user(stack, frame, sizeof(frame)) !=
         KERNEL_USER_COPY_OK)
         return;
-    kernel_bytes_copy(&signal_saved_context[thread->slot], &thread->context,
+    kernel_bytes_copy(&thread->signal_saved_context, &thread->context,
                       sizeof(thread->context));
-    signal_context_active[thread->slot] = 1u;
+    thread->signal_context_active = 1u;
     process->signal_pending &= ~(1u << signal);
     thread->context.usp = stack;
     thread->context.program_counter = process->signal_trampoline;
@@ -961,7 +1058,7 @@ static KernelProcessStatus queue_process_signal(KernelProcess *process,
     process->signal_pending |= bit;
     if ((process->signal_blocked & bit) != 0u)
         return KERNEL_PROCESS_OK;
-    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+    for (uint32_t slot = 0u; slot < kernel_thread_slot_limit(); ++slot) {
         KernelThread *candidate = kernel_thread_at(slot);
 
         if (candidate != NULL && candidate->process_id == process->id &&
@@ -1079,11 +1176,12 @@ static KernelProcessStatus scheduler_expire_due(
         expired += timer_wakeups;
     }
     if (interval_next_deadline <= now) {
-        for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
-            KernelProcess *process = &processes[index];
+        for (uint32_t index = 0u; index < process_slots; ++index) {
+            KernelProcess *process = process_at_slot((uint16_t)index);
             bool woke = false;
 
-            if ((process->process_state != KERNEL_PROCESS_CREATED &&
+            if (process == NULL ||
+                (process->process_state != KERNEL_PROCESS_CREATED &&
                  process->process_state != KERNEL_PROCESS_RUNNING) ||
                 process->interval_deadline == 0u ||
                 process->interval_deadline > now)
@@ -1368,6 +1466,8 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
         if (peak_frames > process->peak_resident_frames)
             process->peak_resident_frames = peak_frames;
     }
+    if (kernel_thread_release_process(process->slot) != KERNEL_THREAD_OK)
+        return KERNEL_PROCESS_CORRUPT;
     switch (kernel_memory_release_owner(process->owner, &released_frames)) {
     case KERNEL_MEMORY_OK:
         break;
@@ -1379,12 +1479,7 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
     if (!kernel_memory_unprotect_owner(process->owner))
         return KERNEL_PROCESS_CORRUPT;
     scheduler_stats.forced_frame_releases += released_frames;
-    if (kernel_thread_release_process(
-            (uint16_t)(process - processes)) != KERNEL_THREAD_OK)
-        return KERNEL_PROCESS_CORRUPT;
     process->process_state = KERNEL_PROCESS_DEAD;
-    process_exit_pending_bitmap &=
-        ~(UINT32_C(1) << (uint32_t)(process - processes));
     process->live_threads = 0u;
     process->thread_count = 0u;
     process->stack_slots = 0u;
@@ -1404,23 +1499,20 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
 
 static KernelProcessStatus finish_thread_reaps(void)
 {
-    uint64_t pending = kernel_thread_reap_slots();
-
-    for (uint16_t slot = 0u; pending != 0u; ++slot, pending >>= 1u) {
+    for (uint32_t slot = 0u; slot < kernel_thread_slot_limit(); ++slot) {
         KernelThread *thread = kernel_thread_at(slot);
         KernelProcess *process;
         uint64_t stack_bit;
         bool released = false;
         KernelPerformanceToken performance;
 
-        if ((pending & 1u) == 0u)
+        if (thread == NULL || thread->reap_pending == 0u)
             continue;
-        if (thread == NULL || thread->state != KERNEL_THREAD_DEAD ||
-            thread->reap_pending == 0u)
+        if (thread->state != KERNEL_THREAD_DEAD)
             return KERNEL_PROCESS_CORRUPT;
-        if (thread->process_slot >= KERNEL_PROCESS_MAX)
+        process = process_at_slot(thread->process_slot);
+        if (process == NULL)
             return KERNEL_PROCESS_CORRUPT;
-        process = &processes[thread->process_slot];
         if (process->process_state == KERNEL_PROCESS_EXITING)
             continue;
         if (process->process_state != KERNEL_PROCESS_CREATED &&
@@ -1581,12 +1673,15 @@ static void check_milestone(void)
         stats.user_faults == 0u ||
         stats.completed_user_fault_teardowns == 0u)
         return;
-    for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
-        const KernelProcess *process = &processes[index];
+    for (uint32_t index = 0u; index < process_slots; ++index) {
+        const KernelProcess *process = process_at_slot((uint16_t)index);
         bool all_started = true;
         uint32_t live_threads = 0u;
 
-        for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        if (process == NULL)
+            continue;
+
+        for (uint32_t slot = 0u; slot < kernel_thread_slot_limit(); ++slot) {
             const KernelThread *thread = kernel_thread_at(slot);
 
             if (thread == NULL || thread->process_slot != index ||
@@ -1999,7 +2094,7 @@ static uint32_t host_channel_close_slot(KernelProcess *process,
     KernelHostChannel *channel;
     uint32_t result = ASTRA_SYSCALL_OK;
 
-    if (process == NULL || slot >= KERNEL_THREAD_MAX)
+    if (process == NULL || slot >= KERNEL_VM_HOST_CHANNEL_PAGE_COUNT)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     channel = &host_channels[slot];
     if (channel->active == 0u)
@@ -2033,10 +2128,16 @@ static uint32_t host_channel_close(KernelProcess *process,
                                    const KernelThread *thread)
 {
     if (process == NULL || thread == NULL ||
-        thread->slot >= KERNEL_THREAD_MAX ||
         thread->process_id != process->id)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    return host_channel_close_slot(process, thread->slot);
+    for (uint32_t slot = 0u; slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
+         ++slot) {
+        if (host_channels[slot].active != 0u &&
+            host_channels[slot].process_id == process->id &&
+            host_channels[slot].thread_id == thread->id)
+            return host_channel_close_slot(process, slot);
+    }
+    return ASTRA_SYSCALL_OK;
 }
 
 static uint32_t host_channels_close_process(KernelProcess *process)
@@ -2045,7 +2146,8 @@ static uint32_t host_channels_close_process(KernelProcess *process)
 
     if (process == NULL)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    for (uint32_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+    for (uint32_t slot = 0u; slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
+         ++slot) {
         if (host_channels[slot].active == 0u ||
             host_channels[slot].process_id != process->id)
             continue;
@@ -2062,7 +2164,8 @@ static uint32_t host_channels_close_buffer(KernelProcess *process,
 
     if (process == NULL || buffer == NULL)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    for (uint32_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+    for (uint32_t slot = 0u; slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
+         ++slot) {
         if (host_channels[slot].active == 0u ||
             host_channels[slot].process_id != process->id ||
             host_channels[slot].buffer != buffer)
@@ -2088,10 +2191,9 @@ static uint32_t host_channel_open(
     int copy_status;
 
     if (process == NULL || channel == NULL || state == NULL ||
-        thread == NULL || thread->slot >= KERNEL_THREAD_MAX ||
+        thread == NULL ||
         thread->stack_slot >= KERNEL_PROCESS_THREAD_MAX ||
         thread->process_id != process->id ||
-        host_channels[thread->slot].active != 0u ||
         (state->capabilities & (ASTRA_HOST_CAP_CHANNEL |
                                 ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ)) !=
             (ASTRA_HOST_CAP_CHANNEL | ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ) ||
@@ -2136,15 +2238,29 @@ static uint32_t host_channel_open(
                          device_generation, &token) != KERNEL_DMA_OK)
         return ASTRA_SYSCALL_WOULD_BLOCK;
 
-    slot = thread->slot;
-    if (slot >= KERNEL_VM_HOST_CHANNEL_PAGE_COUNT ||
-        kernel_platform_host_channel_open(
+    slot = KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
+    for (uint32_t index = 0u; index < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
+         ++index) {
+        if (host_channels[index].active != 0u &&
+            host_channels[index].process_id == process->id &&
+            host_channels[index].thread_id == thread->id) {
+            (void)kernel_dma_abort(&token);
+            return ASTRA_SYSCALL_INVALID_ARGUMENT;
+        }
+        if (slot == KERNEL_VM_HOST_CHANNEL_PAGE_COUNT &&
+            host_channels[index].active == 0u)
+            slot = index;
+    }
+    if (slot == KERNEL_VM_HOST_CHANNEL_PAGE_COUNT) {
+        (void)kernel_dma_abort(&token);
+        return ASTRA_SYSCALL_RESOURCE_LIMIT;
+    }
+    if (kernel_platform_host_channel_open(
             process->owner, state->host_generation, thread->generation,
             slot, token.physical_address, channel->byte_size,
             channel->command_capacity) != ASTRA_SYSCALL_OK) {
         (void)kernel_dma_abort(&token);
-        return slot >= KERNEL_VM_HOST_CHANNEL_PAGE_COUNT ?
-            ASTRA_SYSCALL_RESOURCE_LIMIT : ASTRA_SYSCALL_IO_ERROR;
+        return ASTRA_SYSCALL_IO_ERROR;
     }
     physical_doorbell = KERNEL_VM_HOST_CHANNEL_PHYSICAL_BASE +
                         slot * KERNEL_PAGE_SIZE;
@@ -2163,6 +2279,7 @@ static uint32_t host_channel_open(
     host_channels[slot].buffer = buffer;
     kernel_bytes_copy(&host_channels[slot].token, &token, sizeof(token));
     host_channels[slot].process_id = process->id;
+    host_channels[slot].thread_id = thread->id;
     host_channels[slot].host_generation = state->host_generation;
     host_channels[slot].channel_generation = thread->generation;
     host_channels[slot].virtual_address = channel->channel_address;
@@ -2213,14 +2330,27 @@ static KernelProcessStatus host_channel_wait(
     KernelHostChannel *channel;
     KernelThreadStatus wait_status;
     uint32_t sequence;
+    uint32_t channel_slot = KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
 
     if (process == NULL || thread == NULL || blocked == NULL ||
-        result == NULL || thread->slot >= KERNEL_THREAD_MAX)
+        result == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     *blocked = false;
-    channel = &host_channels[thread->slot];
-    if (channel->active == 0u || channel->process_id != process->id ||
-        channel->channel_generation != thread->generation) {
+    for (uint32_t slot = 0u; slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
+         ++slot) {
+        if (host_channels[slot].active != 0u &&
+            host_channels[slot].process_id == process->id &&
+            host_channels[slot].thread_id == thread->id) {
+            channel_slot = slot;
+            break;
+        }
+    }
+    if (channel_slot == KERNEL_VM_HOST_CHANNEL_PAGE_COUNT) {
+        *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        return KERNEL_PROCESS_OK;
+    }
+    channel = &host_channels[channel_slot];
+    if (channel->channel_generation != thread->generation) {
         *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
         return KERNEL_PROCESS_OK;
     }
@@ -2235,11 +2365,11 @@ static KernelProcessStatus host_channel_wait(
     channel->expected_consumer = consumer_position;
     channel->waiting = 1u;
     sequence = kernel_thread_wait_queue_sequence(&channel->waiters);
-    kernel_platform_host_channel_kick(thread->slot, consumer_position);
-    kernel_platform_host_channel_arm(thread->slot, consumer_position);
+    kernel_platform_host_channel_kick(channel_slot, consumer_position);
+    kernel_platform_host_channel_arm(channel_slot, consumer_position);
     if (host_channel_result(channel, consumer_position, result)) {
         channel->waiting = 0u;
-        kernel_platform_host_channel_disarm(thread->slot);
+        kernel_platform_host_channel_disarm(channel_slot);
         return KERNEL_PROCESS_OK;
     }
     wait_status = kernel_thread_block_until(
@@ -2250,7 +2380,7 @@ static KernelProcessStatus host_channel_wait(
         return KERNEL_PROCESS_OK;
     }
     channel->waiting = 0u;
-    kernel_platform_host_channel_disarm(thread->slot);
+    kernel_platform_host_channel_disarm(channel_slot);
     if (wait_status == KERNEL_THREAD_CONDITION_CHANGED &&
         host_channel_result(channel, consumer_position, result))
         return KERNEL_PROCESS_OK;
@@ -2276,7 +2406,8 @@ bool kernel_process_host_channel_irq_service(uint8_t source,
     if (woken_threads == NULL)
         return false;
     *woken_threads = 0u;
-    for (uint32_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+    for (uint32_t slot = 0u; slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
+         ++slot) {
         KernelHostChannel *channel = &host_channels[slot];
         uint32_t result;
         uint32_t woken;
@@ -2577,15 +2708,14 @@ static KernelProcessStatus retire_process(KernelProcess *retiring,
 
     if (retiring == NULL || next_context == NULL || current_thread == NULL)
         return KERNEL_PROCESS_INVALID_STATE;
-    retiring_slot = (uint16_t)(retiring - processes);
-    if (retiring_slot >= KERNEL_PROCESS_MAX ||
+    retiring_slot = retiring->slot;
+    if (process_at_slot(retiring_slot) != retiring ||
         (retiring->process_state != KERNEL_PROCESS_CREATED &&
          retiring->process_state != KERNEL_PROCESS_RUNNING))
         return KERNEL_PROCESS_CORRUPT;
     retires_current = current_thread->process_slot == retiring_slot;
     retiring->process_state = KERNEL_PROCESS_EXITING;
     retiring->suspended = 0u;
-    process_exit_pending_bitmap |= UINT32_C(1) << retiring_slot;
     interval_next_deadline = interval_timer_earliest();
     retiring->exit_reason = (uint8_t)reason;
     /*
@@ -2696,9 +2826,9 @@ static KernelProcessStatus retire_current(KernelProcessExitReason reason,
                                           KernelCpuContext **next_context)
 {
     if (current_thread == NULL ||
-        current_thread->process_slot >= KERNEL_PROCESS_MAX)
+        process_at_slot(current_thread->process_slot) == NULL)
         return KERNEL_PROCESS_INVALID_STATE;
-    return retire_process(&processes[current_thread->process_slot], reason,
+    return retire_process(process_at_slot(current_thread->process_slot), reason,
                           exit_status, next_context);
 }
 
@@ -2750,35 +2880,13 @@ void kernel_process_init(void)
         process_pool_corrupt = 1u;
         return;
     }
-    if (!kernel_object_cache_init(
-            &process_cache, processes, sizeof(processes[0]),
-            KERNEL_PROCESS_MAX, process_cache_bitmap,
-            KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_PROCESS_MAX),
-            KERNEL_ALLOCATION_SITE_PROCESS_RECORD) ||
-        !kernel_object_cache_init(
-            &executable_load_cache, executable_loads,
-            sizeof(executable_loads[0]), KERNEL_PROCESS_MAX,
-            executable_load_cache_bitmap,
-            KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_PROCESS_MAX),
-            KERNEL_ALLOCATION_SITE_PROCESS_LOAD_RECORD)) {
-        process_pool_corrupt = 1u;
-        return;
-    }
-    for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
-        kernel_bytes_clear(&processes[index], sizeof(processes[index]));
-        processes[index].handles = &process_handle_tables[index];
-        kernel_handle_table_init(processes[index].handles);
-        kernel_thread_wait_queue_init(&processes[index].death_waiters);
-        kernel_bytes_clear(&executable_loads[index],
-                           sizeof(executable_loads[index]));
-        executable_loads[index].slot = (uint16_t)index;
-    }
+    kernel_bytes_clear(processes, sizeof(processes));
+    executable_loads = NULL;
     kernel_bytes_clear(&scheduler_stats, sizeof(scheduler_stats));
-    kernel_bytes_clear(signal_saved_context, sizeof(signal_saved_context));
-    kernel_bytes_clear(signal_context_active, sizeof(signal_context_active));
     kernel_thread_wait_queue_init(&sleep_waiters);
     kernel_bytes_clear(host_channels, sizeof(host_channels));
-    for (uint32_t index = 0u; index < KERNEL_THREAD_MAX; ++index)
+    for (uint32_t index = 0u;
+         index < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT; ++index)
         kernel_thread_wait_queue_init(&host_channels[index].waiters);
     library_cache_head = 0u;
     kernel_bytes_clear(&maintenance_diagnostics,
@@ -2787,6 +2895,10 @@ void kernel_process_init(void)
                        sizeof(qualification_clients));
     initial_image_process_id = 0u;
     next_process_id = 1u;
+    next_process_owner = 0u;
+    next_process_generation = 0u;
+    next_process_slot = 0u;
+    process_slots = 0u;
     initial_image_progress = 0u;
     initial_image_exited = 0u;
     kernel_bytes_clear(&display_dma_token, sizeof(display_dma_token));
@@ -2818,7 +2930,6 @@ void kernel_process_init(void)
     deadline_preempt_pending = 0u;
     worker_active = 0u;
     milestone_progress_ready = 0u;
-    process_exit_pending_bitmap = 0u;
     interval_next_deadline = KERNEL_THREAD_DEADLINE_NEVER;
     process_pool_corrupt = 0u;
     scheduler_initialized = 1u;
@@ -2827,10 +2938,10 @@ void kernel_process_init(void)
 
 static KernelProcess *find_process_by_id(uint32_t process_id)
 {
-    for (uint32_t slot = 0u; slot < KERNEL_PROCESS_MAX; ++slot) {
-        KernelProcess *process = &processes[slot];
+    for (uint32_t slot = 0u; slot < process_slots; ++slot) {
+        KernelProcess *process = process_at_slot((uint16_t)slot);
 
-        if (process->id == process_id &&
+        if (process != NULL && process->id == process_id &&
             (process->process_state == KERNEL_PROCESS_CREATED ||
              process->process_state == KERNEL_PROCESS_RUNNING))
             return process;
@@ -3082,14 +3193,15 @@ static KernelProcessStatus prepare_thread_internal(
     stack_base = stack_top - KERNEL_THREAD_STACK_SIZE;
 
     thread_status = kernel_thread_allocate(
-        (uint16_t)(process - processes), process->id,
+        process->slot, process->id, process->owner,
         (uint16_t)stack_slot, entry,
         stack_top, initial_argument, priority, &thread);
     if (thread_status == KERNEL_THREAD_NO_SLOT)
         return KERNEL_PROCESS_RESOURCE_LIMIT;
+    if (thread_status == KERNEL_THREAD_OUT_OF_MEMORY)
+        return KERNEL_PROCESS_OUT_OF_MEMORY;
     if (thread_status != KERNEL_THREAD_OK)
         return KERNEL_PROCESS_CORRUPT;
-    signal_context_active[thread->slot] = 0u;
 
 #if defined(KERNEL_PROCESS_HOST_TEST)
     if (consume_thread_create_fault(
@@ -3280,7 +3392,7 @@ static KernelProcessStatus commit_thread(KernelPreparedThread *prepared,
         process->thread_count >= KERNEL_PROCESS_THREAD_MAX ||
         (process->stack_slots & astra_u64_bit(prepared->stack_slot)) != 0u ||
         thread->process_id != process->id ||
-        thread->process_slot != (uint16_t)(process - processes) ||
+        thread->process_slot != process->slot ||
         thread->stack_slot != prepared->stack_slot ||
         thread->self_handle != prepared->handle ||
         (process->tls.memory_size != 0u) != (thread->tls_pages != 0u))
@@ -3326,20 +3438,23 @@ static KernelProcessStatus prepare_cloned_thread(
     prepared->handle = KERNEL_HANDLE_INVALID;
     prepared->stack_slot = 0u;
     thread_status = kernel_thread_allocate(
-        (uint16_t)(process - processes), process->id, source->stack_slot,
+        process->slot, process->id, process->owner,
+        source->stack_slot,
         source->context.program_counter, source->user_stack_top, 0u,
         source->base_priority, &thread);
     if (thread_status == KERNEL_THREAD_NO_SLOT)
         return KERNEL_PROCESS_RESOURCE_LIMIT;
+    if (thread_status == KERNEL_THREAD_OUT_OF_MEMORY)
+        return KERNEL_PROCESS_OUT_OF_MEMORY;
     if (thread_status != KERNEL_THREAD_OK || thread == NULL)
         return KERNEL_PROCESS_CORRUPT;
-    if (signal_context_active[source->slot] != 0u) {
-        kernel_bytes_copy(&signal_saved_context[thread->slot],
-                          &signal_saved_context[source->slot],
-                          sizeof(signal_saved_context[thread->slot]));
-        signal_context_active[thread->slot] = 1u;
+    if (source->signal_context_active != 0u) {
+        kernel_bytes_copy(&thread->signal_saved_context,
+                          &source->signal_saved_context,
+                          sizeof(thread->signal_saved_context));
+        thread->signal_context_active = 1u;
     } else {
-        signal_context_active[thread->slot] = 0u;
+        thread->signal_context_active = 0u;
     }
     thread->user_stack_base = source->user_stack_base;
     thread->stack_pages = source->stack_pages;
@@ -3382,7 +3497,6 @@ static KernelProcessStatus abort_cloned_thread(KernelPreparedThread *prepared)
         failed = true;
     if (kernel_thread_abort(prepared->thread) != KERNEL_THREAD_OK)
         failed = true;
-    signal_context_active[prepared->thread->slot] = 0u;
     prepared->process = NULL;
     prepared->thread = NULL;
     prepared->handle = KERNEL_HANDLE_INVALID;
@@ -3582,9 +3696,6 @@ static KernelProcessStatus create_process(const void *image,
     if (!kernel_handle_table_set_owner(process->handles, process->owner,
                                        process->id))
         goto failed;
-    if (!kernel_memory_protect_owner(process->owner))
-        goto failed;
-
     vm_status = kernel_vm_create_address_space(process->owner,
                                                &process->address_space);
     if (vm_status != KERNEL_VM_OK) {
@@ -3709,9 +3820,6 @@ static uint8_t launch_header[KERNEL_PROCESS_LAUNCH_HEADER_BYTES];
  * enter the syscall path. Keep its page and launch metadata here instead of
  * consuming most of a guarded 8 KiB supervisor stack on every syscall. */
 static _Alignas(4) uint8_t startup_page[ASTRA_STARTUP_BLOCK_SIZE];
-_Static_assert(ASTRA_PROCESS_COUNT_MAX * sizeof(AstraProcSnapshot) <=
-                   sizeof(startup_page),
-               "process snapshot must fit the serialized syscall page");
 static char syscall_data[ASTRA_STARTUP_BLOCK_SIZE];
 static AstraLaunchGrant launch_grants[ASTRA_LAUNCH_GRANT_MAX];
 static KernelProcessBootstrapCapability
@@ -4031,7 +4139,7 @@ static KernelProcessStatus replace_process_image(
     }
     {
         KernelThreadStatus thread_status = kernel_thread_exec_retire_others(
-            (uint16_t)(process - processes), thread,
+            process->slot, thread,
             ASTRA_SYSCALL_PEER_DEAD, &retired);
 
         if (thread_status != KERNEL_THREAD_OK) {
@@ -4042,13 +4150,13 @@ static KernelProcessStatus replace_process_image(
     }
     (void)released_buffers;
     (void)unmapped_areas;
-    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+    for (uint32_t slot = 0u; slot < kernel_thread_slot_limit(); ++slot) {
         KernelThread *other = kernel_thread_at(slot);
 
         if (other == NULL || other == thread ||
-            other->process_slot != (uint16_t)(process - processes))
+            other->process_slot != process->slot)
             continue;
-        signal_context_active[slot] = 0u;
+        other->signal_context_active = 0u;
         if (other->self_handle != KERNEL_HANDLE_INVALID &&
             kernel_handle_close(process->handles, other->self_handle) !=
                 KERNEL_HANDLE_OK) {
@@ -4134,7 +4242,7 @@ static KernelProcessStatus replace_process_image(
     process->interval_deadline = 0u;
     process->interval_period = 0u;
     interval_next_deadline = interval_timer_earliest();
-    signal_context_active[thread->slot] = 0u;
+    thread->signal_context_active = 0u;
     scheduler_timer_rearm();
     *next_context = runtime_resume(thread);
     return KERNEL_PROCESS_OK;
@@ -4293,12 +4401,12 @@ static bool tls_base_find(const KernelProcess *process, uint32_t span,
             *base = candidate;
             return true;
         }
-        for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+        for (uint32_t slot = 0u; slot < kernel_thread_slot_limit(); ++slot) {
             const KernelThread *thread = kernel_thread_at(slot);
             uint32_t existing_end;
 
             if (thread == NULL ||
-                thread->process_slot != (uint16_t)(process - processes) ||
+                thread->process_slot != process->slot ||
                 thread->tls_pages == 0u ||
                 !astra_u32_add_checked(
                     thread->tls_base,
@@ -6194,7 +6302,6 @@ static void destroy_prepared_executable(KernelProcess *process,
     if (process->address_space.initialized != 0u)
         (void)kernel_vm_destroy_address_space(&process->address_space);
     (void)kernel_memory_release_owner(process->owner, NULL);
-    (void)kernel_memory_unprotect_owner(process->owner);
     process->process_state = KERNEL_PROCESS_DEAD;
     maybe_release_process_record(process);
 }
@@ -6239,6 +6346,7 @@ static KernelProcessStatus prepare_executable_process(
     if (source_table == NULL ||
         (arguments != NULL &&
          (arguments->flags & ASTRA_LAUNCH_FLAG_ESSENTIAL) != 0u)) {
+        process->default_priority = KERNEL_THREAD_PRIORITY_SYSTEM;
         process->priority_ceiling = KERNEL_THREAD_PRIORITY_USER_MAX;
     } else {
         process->priority_ceiling = KERNEL_THREAD_PRIORITY_NORMAL;
@@ -6364,25 +6472,32 @@ static KernelProcessStatus commit_executable_process(
 
 static bool executable_load_valid(const KernelExecutableLoad *load)
 {
-    return load != NULL && load >= &executable_loads[0] &&
-           load < &executable_loads[KERNEL_PROCESS_MAX] &&
-           load->slot == (uint16_t)(load - executable_loads) &&
-           load->stage >= KERNEL_EXECUTABLE_LOAD_PROGRAM_HEADERS &&
-           load->stage <= KERNEL_EXECUTABLE_LOAD_SEGMENTS &&
-           kernel_object_cache_is_claimed(&executable_load_cache, load);
+    for (const KernelExecutableLoad *candidate = executable_loads;
+         candidate != NULL; candidate = candidate->next) {
+        if (candidate == load)
+            return load->stage >= KERNEL_EXECUTABLE_LOAD_PROGRAM_HEADERS &&
+                   load->stage <= KERNEL_EXECUTABLE_LOAD_SEGMENTS &&
+                   load->self_physical != 0u && load->self_frames != 0u;
+    }
+    return false;
 }
 
 static void executable_load_release(void *object, void *context)
 {
     KernelExecutableLoad *load = object;
-    uint16_t slot;
+    KernelExecutableLoad **link;
+    uint32_t self_physical;
+    uint32_t resource_owner;
+    uint16_t self_frames;
 
     (void)context;
     if (!executable_load_valid(load)) {
         process_pool_corrupt = 1u;
         return;
     }
-    slot = load->slot;
+    self_physical = load->self_physical;
+    self_frames = load->self_frames;
+    resource_owner = load->resource_owner;
     if (load->process != NULL) {
         KernelPreparedThread prepared = {
             .process = load->process,
@@ -6393,10 +6508,16 @@ static void executable_load_release(void *object, void *context)
 
         destroy_prepared_executable(load->process, &prepared);
     }
-    kernel_bytes_clear(load, sizeof(*load));
-    load->slot = slot;
-    if (kernel_object_cache_release(&executable_load_cache, load) !=
-        KERNEL_OBJECT_CACHE_OK)
+    link = &executable_loads;
+    while (*link != NULL && *link != load)
+        link = &(*link)->next;
+    if (*link != load) {
+        process_pool_corrupt = 1u;
+        return;
+    }
+    *link = load->next;
+    if (kernel_memory_release(self_physical, self_frames,
+                              resource_owner) != KERNEL_MEMORY_OK)
         process_pool_corrupt = 1u;
 }
 
@@ -6405,40 +6526,51 @@ static KernelProcessStatus executable_load_begin(
     KernelExecutableLoad **created)
 {
     KernelExecutableLoad *load;
-    KernelObjectCacheStatus cache_status;
     KernelElfStatus elf_status;
-    void *raw_load;
-    uint16_t slot;
+    KernelProcess *launcher;
+    uint32_t physical;
+    uint16_t frames =
+        (uint16_t)((sizeof(*load) + KERNEL_PAGE_SIZE - 1u) /
+                   KERNEL_PAGE_SIZE);
 
     if (owner == 0u || user_header == 0u || image_size == 0u ||
         created == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     *created = NULL;
+    launcher = find_process_by_id(owner);
+    if (launcher == NULL)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
     kernel_bytes_clear(launch_header, sizeof(launch_header));
     if (kernel_copy_from_user(launch_header, user_header,
                               KERNEL_ELF_HEADER_SIZE) != KERNEL_USER_COPY_OK)
         return KERNEL_PROCESS_BAD_ADDRESS;
-    cache_status = kernel_object_cache_claim(
-        &executable_load_cache, owner, &raw_load, &slot);
-    if (cache_status == KERNEL_OBJECT_CACHE_UNAVAILABLE)
-        return KERNEL_PROCESS_NO_SLOT;
-    if (cache_status != KERNEL_OBJECT_CACHE_OK || slot >= KERNEL_PROCESS_MAX)
+    if (kernel_memory_alloc_zeroed_tagged(
+            KERNEL_ALLOCATION_SITE_PROCESS_LOAD_RECORD, frames, 1u,
+            KERNEL_FRAME_KERNEL, launcher->owner, &physical) !=
+        KERNEL_MEMORY_OK)
+        return KERNEL_PROCESS_OUT_OF_MEMORY;
+    load = kernel_memory_access(physical, frames * KERNEL_PAGE_SIZE);
+    if (load == NULL) {
+        (void)kernel_memory_release(physical, frames, launcher->owner);
         return KERNEL_PROCESS_CORRUPT;
-    load = raw_load;
+    }
     kernel_bytes_clear(load, sizeof(*load));
     load->owner = owner;
-    load->slot = slot;
+    load->resource_owner = launcher->owner;
+    load->self_physical = physical;
+    load->self_frames = frames;
     load->stage = KERNEL_EXECUTABLE_LOAD_PROGRAM_HEADERS;
     load->source = ASTRA_PROCESS_LOAD_SOURCE_PROGRAM;
     elf_status = kernel_elf_stream_begin(
         launch_header, image_size, &executable_limits, &load->elf);
     if (elf_status != KERNEL_ELF_OK) {
-        load->stage = KERNEL_EXECUTABLE_LOAD_FREE;
-        if (kernel_object_cache_release(&executable_load_cache, load) !=
-            KERNEL_OBJECT_CACHE_OK)
+        if (kernel_memory_release(physical, frames, launcher->owner) !=
+            KERNEL_MEMORY_OK)
             process_pool_corrupt = 1u;
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     }
+    load->next = executable_loads;
+    executable_loads = load;
     *created = load;
     return KERNEL_PROCESS_OK;
 }
@@ -6863,7 +6995,7 @@ KernelProcessStatus kernel_process_set_thread_bootstrap_argument(
 
     if (process == NULL || thread_id == 0u || current_thread != NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
-    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
+    for (uint32_t slot = 0u; slot < kernel_thread_slot_limit(); ++slot) {
         KernelThread *thread = kernel_thread_at(slot);
 
         if (thread == NULL || thread->id != thread_id ||
@@ -7429,7 +7561,7 @@ static KernelProcessStatus commit_process_death_wait(KernelProcess *target)
     if (!valid_process_handle_object(target))
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     waiters = kernel_thread_wait_queue_count(&target->death_waiters);
-    return waiters != 0u && waiters <= KERNEL_THREAD_MAX ?
+    return waiters != 0u && waiters != UINT32_MAX ?
         KERNEL_PROCESS_OK : KERNEL_PROCESS_INVALID_STATE;
 }
 
@@ -8199,7 +8331,7 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
 static void process_info_fill(const KernelProcess *process,
                               AstraProcessInfo *info)
 {
-    uint16_t slot = (uint16_t)(process - processes);
+    uint16_t slot = process->slot;
     uint32_t frames = 0u;
     uint32_t peak_frames = process->peak_resident_frames;
     uint32_t live_peak_frames = 0u;
@@ -8293,7 +8425,6 @@ static bool library_snapshot_fill(const KernelLibraryCacheEntry *entry,
                                   AstraProcLibrarySnapshot *record)
 {
     KernelLibraryPageIterator iterator;
-    uint8_t mapped_process[KERNEL_PROCESS_MAX] = {0};
     uint32_t mapped_pages = 0u;
     uint32_t resident_pages = 0u;
 
@@ -8305,10 +8436,12 @@ static bool library_snapshot_fill(const KernelLibraryCacheEntry *entry,
     record->base = entry->base;
     record->image_span = entry->span;
     for (uint32_t process_slot = 0u;
-         process_slot < KERNEL_PROCESS_MAX; ++process_slot) {
-        const KernelProcess *process = &processes[process_slot];
+         process_slot < process_slots; ++process_slot) {
+        const KernelProcess *process =
+            process_at_slot((uint16_t)process_slot);
 
-        if ((process->process_state != KERNEL_PROCESS_CREATED &&
+        if (process == NULL ||
+            (process->process_state != KERNEL_PROCESS_CREATED &&
              process->process_state != KERNEL_PROCESS_RUNNING) ||
             !process_maps_library(process, entry))
             continue;
@@ -8317,7 +8450,6 @@ static bool library_snapshot_fill(const KernelLibraryCacheEntry *entry,
             return false;
         record->process_ids[record->mapping_count++] =
             (uint16_t)process->id;
-        mapped_process[process_slot] = 1u;
     }
     if (!library_page_iterator_begin(entry, &iterator))
         return false;
@@ -8326,22 +8458,23 @@ static bool library_snapshot_fill(const KernelLibraryCacheEntry *entry,
         const KernelElfSegment *segment = &entry->plan.segment[segment_index];
 
         for (uint32_t page = 0u; page < segment->page_count; ++page) {
-            uint32_t unique[KERNEL_PROCESS_MAX + 1u];
-            uint32_t unique_count = 1u;
             uint32_t virtual_address = record->base +
                 segment->virtual_address + page * KERNEL_PAGE_SIZE;
             uint32_t cached_physical;
 
             if (!library_page_iterator_next(&iterator, &cached_physical))
                 return false;
-            unique[0] = cached_physical;
             for (uint32_t process_slot = 0u;
-                 process_slot < KERNEL_PROCESS_MAX; ++process_slot) {
-                const KernelProcess *process = &processes[process_slot];
+                 process_slot < process_slots; ++process_slot) {
+                const KernelProcess *process =
+                    process_at_slot((uint16_t)process_slot);
                 uint32_t physical;
-                uint32_t seen = 0u;
+                bool unique;
 
-                if (mapped_process[process_slot] == 0u)
+                if (process == NULL ||
+                    (process->process_state != KERNEL_PROCESS_CREATED &&
+                     process->process_state != KERNEL_PROCESS_RUNNING) ||
+                    !process_maps_library(process, entry))
                     continue;
                 if (kernel_vm_probe_address_space(&process->address_space,
                                                   virtual_address,
@@ -8349,13 +8482,30 @@ static bool library_snapshot_fill(const KernelLibraryCacheEntry *entry,
                     KERNEL_VM_MAPPING_READ_ONLY)
                     return false;
                 physical &= ~(KERNEL_PAGE_SIZE - 1u);
-                while (seen < unique_count && unique[seen] != physical)
-                    ++seen;
-                if (seen == unique_count)
-                    unique[unique_count++] = physical;
+                unique = physical != cached_physical;
+                for (uint32_t prior_slot = 0u;
+                     unique && prior_slot < process_slot; ++prior_slot) {
+                    const KernelProcess *prior =
+                        process_at_slot((uint16_t)prior_slot);
+                    uint32_t prior_physical;
+
+                    if (prior == NULL ||
+                        (prior->process_state != KERNEL_PROCESS_CREATED &&
+                         prior->process_state != KERNEL_PROCESS_RUNNING) ||
+                        !process_maps_library(prior, entry))
+                        continue;
+                    if (kernel_vm_probe_address_space(
+                            &prior->address_space, virtual_address,
+                            &prior_physical) < KERNEL_VM_MAPPING_READ_ONLY)
+                        return false;
+                    unique = (prior_physical & ~(KERNEL_PAGE_SIZE - 1u)) !=
+                             physical;
+                }
+                if (unique)
+                    ++resident_pages;
                 ++mapped_pages;
             }
-            resident_pages += unique_count;
+            ++resident_pages;
         }
     }
     record->cache_bytes = entry->page_count * KERNEL_PAGE_SIZE;
@@ -8370,15 +8520,17 @@ bool kernel_process_test_library_snapshot(void)
 {
     KernelLibraryCacheEntry *entry = NULL;
     KernelLibraryPageBlock *block = NULL;
-    KernelProcess *process = &processes[0];
+    KernelProcess *process = NULL;
     AstraProcLibrarySnapshot record;
     uint32_t block_physical = 0u;
     uint32_t entry_physical = 0u;
     uint32_t physical = 0u;
     bool passed = false;
+    uint16_t slot;
 
+    if (claim_process_record(&process, &slot) != KERNEL_PROCESS_OK)
+        return false;
     process->id = 7u;
-    process->owner = 0x1234u;
     process->process_state = KERNEL_PROCESS_RUNNING;
     if (kernel_vm_create_address_space(process->owner,
                                        &process->address_space) !=
@@ -8430,10 +8582,9 @@ finished:
         (void)kernel_vm_destroy_address_space(&process->address_space);
     if (entry != NULL && entry->self_physical != 0u)
         (void)library_cache_release_entry(entry);
-    kernel_bytes_clear(process, sizeof(*process));
-    process->handles = &process_handle_tables[0];
-    kernel_handle_table_init(process->handles);
-    kernel_thread_wait_queue_init(&process->death_waiters);
+    (void)kernel_memory_release_owner(process->owner, NULL);
+    process->process_state = KERNEL_PROCESS_DEAD;
+    maybe_release_process_record(process);
     return passed;
 }
 #endif
@@ -10121,15 +10272,14 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         break;
     }
     case ASTRA_SYSCALL_SIGNAL_RETURN:
-        if (thread->slot >= KERNEL_THREAD_MAX ||
-            signal_context_active[thread->slot] == 0u) {
+        if (thread->signal_context_active == 0u) {
             result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             break;
         }
         kernel_bytes_copy(&thread->context,
-                          &signal_saved_context[thread->slot],
+                          &thread->signal_saved_context,
                           sizeof(thread->context));
-        signal_context_active[thread->slot] = 0u;
+        thread->signal_context_active = 0u;
         *next_context = runtime_resume(thread);
         return KERNEL_PROCESS_OK;
     case ASTRA_SYSCALL_THREAD_SLEEP: {
@@ -10913,9 +11063,9 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         break;
     }
     case ASTRA_SYSCALL_PROCESS_SNAPSHOT: {
-        AstraProcSnapshot *records = (AstraProcSnapshot *)(void *)startup_page;
+        AstraProcSnapshot record;
         uint32_t live = 0u;
-        int copy_status;
+        uint32_t moved = 0u;
 
         status = snapshot_authorize(current, thread->context.data[1],
                                     &result);
@@ -10923,34 +11073,56 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             return status;
         if (result != ASTRA_SYSCALL_OK)
             break;
-        if (thread->context.data[3] < KERNEL_PROCESS_MAX) {
-            thread->context.data[1] = KERNEL_PROCESS_MAX;
+        for (uint32_t slot = 0u; slot < process_slots; ++slot) {
+            const KernelProcess *process = process_at_slot((uint16_t)slot);
+
+            if (process != NULL &&
+                (process->process_state == KERNEL_PROCESS_CREATED ||
+                 process->process_state == KERNEL_PROCESS_RUNNING))
+                ++live;
+        }
+        if (thread->context.data[3] < live) {
+            thread->context.data[1] = live;
             result = ASTRA_SYSCALL_BUFFER_TOO_SMALL;
             break;
         }
-        kernel_bytes_clear(records,
-                           KERNEL_PROCESS_MAX * sizeof(records[0]));
-        for (uint32_t slot = 0u; slot < KERNEL_PROCESS_MAX; ++slot) {
-            const KernelProcess *process = &processes[slot];
+        for (uint32_t slot = 0u; slot < process_slots; ++slot) {
+            const KernelProcess *process = process_at_slot((uint16_t)slot);
+            uint32_t offset;
+            uint32_t destination;
+            int copy_status;
 
-            if (process->process_state != KERNEL_PROCESS_CREATED &&
-                process->process_state != KERNEL_PROCESS_RUNNING)
+            if (process == NULL ||
+                (process->process_state != KERNEL_PROCESS_CREATED &&
+                 process->process_state != KERNEL_PROCESS_RUNNING))
                 continue;
-            process_info_fill(process, &records[slot].process);
-            kernel_bytes_copy(records[slot].name, process->name,
-                              sizeof(records[slot].name));
-            ++live;
+            if (moved > UINT32_MAX / (uint32_t)sizeof(record)) {
+                result = ASTRA_SYSCALL_BAD_ADDRESS;
+                break;
+            }
+            offset = moved * (uint32_t)sizeof(record);
+            if (!astra_u32_add_checked(thread->context.data[2], offset,
+                                       &destination)) {
+                result = ASTRA_SYSCALL_BAD_ADDRESS;
+                break;
+            }
+
+            process_info_fill(process, &record.process);
+            kernel_bytes_copy(record.name, process->name,
+                              sizeof(record.name));
+            copy_status = kernel_copy_to_user(destination, &record,
+                                              sizeof(record));
+            if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+                copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
+                result = ASTRA_SYSCALL_BAD_ADDRESS;
+                break;
+            }
+            if (copy_status != KERNEL_USER_COPY_OK)
+                return KERNEL_PROCESS_CORRUPT;
+            ++moved;
         }
-        copy_status = kernel_copy_to_user(
-            thread->context.data[2], records,
-            KERNEL_PROCESS_MAX * (uint32_t)sizeof(records[0]));
-        if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
-            copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
-            result = ASTRA_SYSCALL_BAD_ADDRESS;
+        if (result == ASTRA_SYSCALL_BAD_ADDRESS)
             break;
-        }
-        if (copy_status != KERNEL_USER_COPY_OK)
-            return KERNEL_PROCESS_CORRUPT;
         thread->context.data[1] = live;
         result = ASTRA_SYSCALL_OK;
         break;
@@ -11084,7 +11256,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             if (target->suspended != 0u)
                 break;
             thread_status = kernel_thread_suspend_process(
-                (uint16_t)(target - processes));
+                target->slot);
             if (thread_status != KERNEL_THREAD_OK)
                 return thread_status == KERNEL_THREAD_INVALID_STATE ?
                     KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
@@ -11102,7 +11274,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             if (target->suspended == 0u)
                 break;
             thread_status = kernel_thread_resume_process(
-                (uint16_t)(target - processes));
+                target->slot);
             if (thread_status != KERNEL_THREAD_OK)
                 return thread_status == KERNEL_THREAD_INVALID_STATE ?
                     KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
@@ -11147,7 +11319,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         }
         previous = target->default_priority;
         if (kernel_thread_set_process_priority(
-                (uint16_t)(target - processes), (uint8_t)priority) !=
+                target->slot, (uint8_t)priority) !=
             KERNEL_THREAD_OK)
             return KERNEL_PROCESS_CORRUPT;
         target->default_priority = (uint8_t)priority;
@@ -11349,7 +11521,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         }
         now = scheduler_cycles();
         futex_status = kernel_futex_wait(
-            current->id, address, thread, now, deadline_cycles,
+            current->id, current->owner, address, thread, now,
+            deadline_cycles,
             ASTRA_SYSCALL_TIMED_OUT);
         if (futex_status == KERNEL_FUTEX_TIMED_OUT) {
             result = ASTRA_SYSCALL_TIMED_OUT;
@@ -11928,7 +12101,14 @@ bool kernel_process_maintenance_pending(void)
         return true;
     if (kernel_thread_reap_pending())
         return true;
-    return process_exit_pending_bitmap != 0u;
+    for (uint32_t slot = 0u; slot < process_slots; ++slot) {
+        KernelProcess *process = process_at_slot((uint16_t)slot);
+
+        if (process != NULL &&
+            process->process_state == KERNEL_PROCESS_EXITING)
+            return true;
+    }
+    return false;
 }
 
 KernelProcessStatus kernel_process_reap_deferred(void)
@@ -11939,12 +12119,14 @@ KernelProcessStatus kernel_process_reap_deferred(void)
     if (thread_status != KERNEL_PROCESS_OK)
         return thread_status;
 
-    for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
+    for (uint32_t index = 0u; index < process_slots; ++index) {
+        KernelProcess *process = process_at_slot((uint16_t)index);
         KernelProcessStatus status;
 
-        if (processes[index].process_state != KERNEL_PROCESS_EXITING)
+        if (process == NULL ||
+            process->process_state != KERNEL_PROCESS_EXITING)
             continue;
-        status = finish_reap(&processes[index]);
+        status = finish_reap(process);
         if (status == KERNEL_PROCESS_DEFERRED)
             deferred = true;
         else if (status != KERNEL_PROCESS_OK)
@@ -11959,9 +12141,11 @@ bool kernel_process_snapshot(uint32_t slot, KernelProcessSnapshot *snapshot)
     const KernelProcess *process;
     uint32_t death_waiters;
 
-    if (slot >= KERNEL_PROCESS_MAX || snapshot == NULL)
+    if (slot >= process_slots || snapshot == NULL)
         return false;
-    process = &processes[slot];
+    process = process_at_slot((uint16_t)slot);
+    if (process == NULL)
+        return false;
     death_waiters = kernel_thread_wait_queue_count(&process->death_waiters);
     if (death_waiters > UINT16_MAX)
         return false;
@@ -11998,6 +12182,11 @@ bool kernel_process_snapshot(uint32_t slot, KernelProcessSnapshot *snapshot)
     snapshot->suspended = process->suspended;
     snapshot->reserved = 0u;
     return true;
+}
+
+uint32_t kernel_process_slot_limit(void)
+{
+    return process_slots;
 }
 
 bool kernel_process_stats(KernelSchedulerStats *stats)
@@ -12165,10 +12354,11 @@ KernelProcessStatus kernel_process_soak_configure(
         scheduler_stats.completed_teardowns != 0u)
         return KERNEL_PROCESS_INVALID_STATE;
 
-    for (uint32_t index = 0u; index < KERNEL_PROCESS_MAX; ++index) {
-        KernelProcess *candidate = &processes[index];
+    for (uint32_t index = 0u; index < process_slots; ++index) {
+        KernelProcess *candidate = process_at_slot((uint16_t)index);
 
-        if ((candidate->process_state != KERNEL_PROCESS_CREATED &&
+        if (candidate == NULL ||
+            (candidate->process_state != KERNEL_PROCESS_CREATED &&
              candidate->process_state != KERNEL_PROCESS_RUNNING) ||
             candidate->live_threads < 2u)
             continue;

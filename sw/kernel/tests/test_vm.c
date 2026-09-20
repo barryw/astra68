@@ -13,13 +13,13 @@
 #include <string.h>
 
 /*
- * The guards sit just above the thread-stack arena and move with it, so the
- * test derives them the way vm.c does. They used to be written out, and
- * raising KERNEL_THREAD_MAX moved the arena over the literals.
+ * The supervisor stack arena spans the complete private 16-bit slot
+ * namespace. Physical pages are mapped into it only while a thread exists.
  */
 #define TEST_THREAD_ARENA_END \
-    (KERNEL_THREAD_SUPERVISOR_HOST_ARENA_BASE + \
-     KERNEL_THREAD_MAX * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE)
+    (KERNEL_THREAD_SUPERVISOR_ARENA_BASE + \
+     (uint32_t)KERNEL_THREAD_SLOT_NONE * \
+         KERNEL_THREAD_SUPERVISOR_SLOT_SIZE)
 #define TEST_KERNEL_STACK_GUARD TEST_THREAD_ARENA_END
 #define TEST_WORKER_STACK_GUARD (TEST_THREAD_ARENA_END + KERNEL_PAGE_SIZE)
 
@@ -410,22 +410,10 @@ static void test_kernel_root_and_enable_sequence(void)
                            TEST_KERNEL_STACK_GUARD) == 0u);
     assert(page_descriptor(stats.kernel_root_physical,
                            TEST_WORKER_STACK_GUARD) == 0u);
-    for (uint32_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot) {
-        uint32_t guard = KERNEL_THREAD_SUPERVISOR_HOST_ARENA_BASE +
-                         slot * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE;
-
-        assert(page_descriptor(stats.kernel_root_physical, guard) == 0u);
-        assert(page_descriptor(
-                   stats.kernel_root_physical,
-                   guard + KERNEL_THREAD_SUPERVISOR_GUARD_SIZE) ==
-               ((guard + KERNEL_THREAD_SUPERVISOR_GUARD_SIZE) | 0x481u));
-        assert(page_descriptor(
-                   stats.kernel_root_physical,
-                   guard + KERNEL_THREAD_SUPERVISOR_GUARD_SIZE +
-                       KERNEL_PAGE_SIZE) ==
-               ((guard + KERNEL_THREAD_SUPERVISOR_GUARD_SIZE +
-                  KERNEL_PAGE_SIZE) | 0x481u));
-    }
+    assert(page_descriptor(stats.kernel_root_physical,
+                           KERNEL_THREAD_SUPERVISOR_ARENA_BASE) == 0u);
+    assert(page_descriptor(stats.kernel_root_physical,
+                           TEST_THREAD_ARENA_END - KERNEL_PAGE_SIZE) == 0u);
     assert(page_descriptor(stats.kernel_root_physical, 0x023ff000u) ==
            0x023ff481u);
     assert(page_descriptor(stats.kernel_root_physical, 0x03c00000u) ==
@@ -437,11 +425,10 @@ static void test_kernel_root_and_enable_sequence(void)
     assert(stats.kernel_stack_guard == TEST_KERNEL_STACK_GUARD);
     assert(stats.kernel_worker_stack_guard == TEST_WORKER_STACK_GUARD);
     assert(stats.kernel_thread_stack_arena ==
-           KERNEL_THREAD_SUPERVISOR_HOST_ARENA_BASE);
+           KERNEL_THREAD_SUPERVISOR_ARENA_BASE);
     assert(stats.kernel_thread_stack_arena_end ==
-           KERNEL_THREAD_SUPERVISOR_HOST_ARENA_BASE +
-               KERNEL_THREAD_MAX * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE);
-    assert(stats.kernel_thread_stack_guards == KERNEL_THREAD_MAX);
+           TEST_THREAD_ARENA_END);
+    assert(stats.kernel_thread_stack_guards == 0u);
     assert(stats.supervisor_table_pages == 137u);
     assert((root[127] & 0x63u) == 0x62u);
     assert(page_descriptor(stats.kernel_root_physical, 0xfff00000u) ==
@@ -847,6 +834,44 @@ static void test_cow_alias_can_change_owner_and_become_private(void)
     assert(kernel_vm_destroy_address_space(&child) == KERNEL_VM_OK);
 }
 
+static void test_private_cow_mapping_requires_reservation(void)
+{
+    KernelAddressSpace parent = {0};
+    KernelAddressSpace child = {0};
+    uint32_t parent_base;
+    uint32_t parent_span;
+    uint32_t child_base;
+    uint32_t child_span;
+    uint32_t physical;
+
+    initialize_test();
+    assert(kernel_vm_create_address_space(103u, &parent) == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(104u, &child) == KERNEL_VM_OK);
+    assert(kernel_vm_private_reserve(
+               &parent, KERNEL_VM_PRIVATE_SLOT_SIZE,
+               KERNEL_VM_READ | KERNEL_VM_WRITE,
+               &parent_base, &parent_span) == KERNEL_VM_OK);
+    assert(kernel_vm_private_fault(&parent, parent_base, true) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_probe_address_space(&parent, parent_base, &physical) ==
+           KERNEL_VM_MAPPING_READ_WRITE);
+    assert(kernel_vm_promote_page_to_cow(&parent, parent_base) ==
+           KERNEL_VM_OK);
+
+    assert(kernel_vm_map_cow_page(&child, parent_base, physical, 103u,
+                                  true) == KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_private_reserve(
+               &child, KERNEL_VM_PRIVATE_SLOT_SIZE,
+               KERNEL_VM_READ | KERNEL_VM_WRITE,
+               &child_base, &child_span) == KERNEL_VM_OK);
+    assert(child_base == parent_base && child_span == parent_span);
+    assert(kernel_vm_map_cow_page(&child, child_base, physical, 103u,
+                                  true) == KERNEL_VM_OK);
+
+    assert(kernel_vm_destroy_address_space(&parent) == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&child) == KERNEL_VM_OK);
+}
+
 static void test_clone_is_lazy_and_write_fault_copies_one_page(void)
 {
     KernelAddressSpace parent = {0};
@@ -875,6 +900,8 @@ static void test_clone_is_lazy_and_write_fault_copies_one_page(void)
     assert(kernel_vm_private_reserve(&parent, KERNEL_VM_PRIVATE_SLOT_SIZE,
                                      KERNEL_VM_READ | KERNEL_VM_WRITE,
                                      &private_base, &private_span) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_private_fault(&parent, private_base, true) ==
            KERNEL_VM_OK);
     assert(kernel_vm_clone_address_space(&parent, 202u, &child) ==
            KERNEL_VM_OK);
@@ -1253,15 +1280,136 @@ static void test_device_aperture_above_the_low_region_is_uncached(void)
            0x04000481u);
 }
 
+static void test_supervisor_thread_stack_maps_on_demand(void)
+{
+    KernelVmStats stats;
+    uint32_t physical;
+    uint32_t guard = KERNEL_THREAD_SUPERVISOR_ARENA_BASE;
+    uint32_t stack = guard + KERNEL_THREAD_SUPERVISOR_GUARD_SIZE;
+
+    initialize_test();
+    assert(kernel_vm_stats(&stats));
+    assert(kernel_memory_alloc_zeroed_tagged(
+               KERNEL_ALLOCATION_SITE_THREAD_KERNEL_STACK, 2u, 2u,
+               KERNEL_FRAME_KERNEL, 95u, &physical) == KERNEL_MEMORY_OK);
+    assert(kernel_vm_map_supervisor_stack(KERNEL_THREAD_SLOT_NONE,
+                                          physical) ==
+           KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_map_supervisor_stack(0u, physical) == KERNEL_VM_OK);
+    assert(page_descriptor(stats.kernel_root_physical, guard) == 0u);
+    assert(page_descriptor(stats.kernel_root_physical, stack) ==
+           (physical | 0x481u));
+    assert(page_descriptor(stats.kernel_root_physical,
+                           stack + KERNEL_PAGE_SIZE) ==
+           ((physical + KERNEL_PAGE_SIZE) | 0x481u));
+    assert(kernel_vm_map_supervisor_stack(0u, physical) ==
+           KERNEL_VM_ALREADY_MAPPED);
+    assert(kernel_vm_stats(&stats));
+    assert(stats.kernel_thread_stack_guards == 1u);
+    assert(kernel_vm_unmap_supervisor_stack(0u) == KERNEL_VM_OK);
+    assert(page_descriptor(stats.kernel_root_physical, stack) == 0u);
+    assert(kernel_vm_unmap_supervisor_stack(0u) == KERNEL_VM_NOT_MAPPED);
+    assert(kernel_vm_stats(&stats));
+    assert(stats.kernel_thread_stack_guards == 0u);
+    assert(kernel_memory_release(physical, 2u, 95u) == KERNEL_MEMORY_OK);
+}
+
+static void test_supervisor_page_tables_outlive_stack_owner(void)
+{
+    KernelVmStats stats;
+    uint32_t first_physical;
+    uint32_t second_physical;
+    const uint16_t second_slot = 1u;
+    const uint32_t first_stack = KERNEL_THREAD_SUPERVISOR_ARENA_BASE +
+        KERNEL_THREAD_SUPERVISOR_GUARD_SIZE;
+    const uint32_t second_stack = KERNEL_THREAD_SUPERVISOR_ARENA_BASE +
+        (uint32_t)second_slot * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE +
+        KERNEL_THREAD_SUPERVISOR_GUARD_SIZE;
+
+    initialize_test();
+    assert(kernel_vm_stats(&stats));
+    assert(kernel_memory_alloc_zeroed_tagged(
+               KERNEL_ALLOCATION_SITE_THREAD_KERNEL_STACK, 2u, 2u,
+               KERNEL_FRAME_KERNEL, 95u, &first_physical) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc_zeroed_tagged(
+               KERNEL_ALLOCATION_SITE_THREAD_KERNEL_STACK, 2u, 2u,
+               KERNEL_FRAME_KERNEL, 96u, &second_physical) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_vm_map_supervisor_stack(0u, first_physical) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_map_supervisor_stack(second_slot, second_physical) ==
+           KERNEL_VM_OK);
+
+    assert(kernel_vm_unmap_supervisor_stack(0u) == KERNEL_VM_OK);
+    assert(kernel_memory_release(first_physical, 2u, 95u) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_release_owner(95u, NULL) == KERNEL_MEMORY_OK);
+    assert(page_descriptor(stats.kernel_root_physical, first_stack) == 0u);
+    assert(page_descriptor(stats.kernel_root_physical, second_stack) ==
+           (second_physical | 0x481u));
+
+    assert(kernel_vm_unmap_supervisor_stack(second_slot) == KERNEL_VM_OK);
+    assert(kernel_memory_release(second_physical, 2u, 96u) ==
+           KERNEL_MEMORY_OK);
+}
+
+static void test_supervisor_stack_oom_rolls_back(void)
+{
+    const uint16_t boundary_slot = 42u;
+    const uint32_t guard = KERNEL_THREAD_SUPERVISOR_ARENA_BASE +
+        (uint32_t)boundary_slot * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE;
+    const uint32_t stack = guard + KERNEL_THREAD_SUPERVISOR_GUARD_SIZE;
+    bool reached_success = false;
+    bool saw_failure = false;
+
+    for (uint32_t attempt = 1u; attempt <= 4u; ++attempt) {
+        KernelVmStats stats;
+        KernelVmStatus status;
+        uint32_t physical;
+
+        initialize_test();
+        assert(kernel_memory_alloc_zeroed_tagged(
+                   KERNEL_ALLOCATION_SITE_THREAD_KERNEL_STACK, 2u, 2u,
+                   KERNEL_FRAME_KERNEL, 96u, &physical) == KERNEL_MEMORY_OK);
+        kernel_allocation_test_fail_site(
+            KERNEL_ALLOCATION_SITE_VM_PAGE_TABLE, attempt);
+        status = kernel_vm_map_supervisor_stack(boundary_slot, physical);
+        if (status == KERNEL_VM_OK) {
+            kernel_allocation_test_clear_failure();
+            assert(kernel_vm_unmap_supervisor_stack(boundary_slot) ==
+                   KERNEL_VM_OK);
+            assert(kernel_memory_release(physical, 2u, 96u) ==
+                   KERNEL_MEMORY_OK);
+            reached_success = true;
+            break;
+        }
+        kernel_allocation_test_clear_failure();
+        assert(status == KERNEL_VM_OUT_OF_MEMORY);
+        saw_failure = true;
+        assert(kernel_vm_stats(&stats));
+        assert(page_descriptor(stats.kernel_root_physical, stack) == 0u);
+        assert(page_descriptor(stats.kernel_root_physical,
+                               stack + KERNEL_PAGE_SIZE) == 0u);
+        assert(stats.kernel_thread_stack_guards == 0u);
+        assert(kernel_memory_release(physical, 2u, 96u) == KERNEL_MEMORY_OK);
+    }
+    assert(saw_failure && reached_success);
+}
+
 int main(void)
 {
     test_kernel_root_and_enable_sequence();
+    test_supervisor_thread_stack_maps_on_demand();
+    test_supervisor_page_tables_outlive_stack_owner();
+    test_supervisor_stack_oom_rolls_back();
     test_page_table_injection_preserves_baseline();
     test_map_switch_unmap_and_stale_guards();
     test_host_channel_mapping_is_private_and_uncached();
     test_destroy_releases_read_only_mapping();
     test_protect_read_only_is_atomic_and_idempotent();
     test_cow_alias_can_change_owner_and_become_private();
+    test_private_cow_mapping_requires_reservation();
     test_clone_is_lazy_and_write_fault_copies_one_page();
     test_shared_map_transaction_rolls_back_every_stage();
     test_shared_map_existing_leaf_rollback_and_alias_guards();

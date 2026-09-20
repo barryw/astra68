@@ -6,11 +6,11 @@
 
 #define KERNEL_THREAD_KERNEL_STACK_TOP_OFFSET 76
 
-#define KERNEL_THREAD_MAX 32
 #define KERNEL_THREAD_PRIORITY_LEVELS 32
 #define KERNEL_THREAD_PRIORITY_IDLE 0
 #define KERNEL_THREAD_PRIORITY_USER_MIN 1
 #define KERNEL_THREAD_PRIORITY_NORMAL 16
+#define KERNEL_THREAD_PRIORITY_SYSTEM 20
 #define KERNEL_THREAD_PRIORITY_USER_MAX 23
 
 #define KERNEL_THREAD_SUPERVISOR_GUARD_SIZE 0x00001000
@@ -27,7 +27,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define KERNEL_THREAD_SUPERVISOR_HOST_ARENA_BASE 0x02050000u
+#define KERNEL_THREAD_SUPERVISOR_ARENA_BASE 0x80000000u
 
 #define KERNEL_THREAD_SLOT_NONE UINT16_MAX
 
@@ -105,16 +105,24 @@ typedef enum KernelThreadStatus {
     KERNEL_THREAD_NO_RUNNABLE,
     KERNEL_THREAD_CONDITION_CHANGED,
     KERNEL_THREAD_DEADLINE_EXPIRED,
-    KERNEL_THREAD_CORRUPT
+    KERNEL_THREAD_CORRUPT,
+    KERNEL_THREAD_OUT_OF_MEMORY
 } KernelThreadStatus;
 
 typedef struct KernelThreadWaitQueue {
     uint32_t sequence;
-    uint16_t head;
-    uint16_t tail;
-    uint16_t count;
-    uint16_t reserved;
+    uint32_t head;
+    uint32_t tail;
+    uint32_t count;
 } KernelThreadWaitQueue;
+
+typedef struct KernelThreadWaitRegistration {
+    KernelThreadWaitQueue *queue;
+    uint32_t previous;
+    uint32_t next;
+    uint16_t thread_slot;
+    uint16_t member;
+} KernelThreadWaitRegistration;
 
 typedef struct KernelThreadWaitSpec {
     KernelThreadWaitQueue *queue;
@@ -166,11 +174,20 @@ typedef struct KernelThread {
     uint8_t occupied;
     uint8_t wait_member_count;
     uint8_t wait_mode;
-    uint16_t wait_reserved;
+    uint16_t wait_registration_count;
     KernelThreadWaitQueue death_waiters;
     uint32_t exit_status;
     uint32_t terminal_result;
+    uint64_t deadline_cycles;
+    uint32_t deadline_result;
+    uint32_t resource_owner;
+    uint32_t record_physical;
+    uint32_t stack_physical;
+    void *stack_storage;
+    uint32_t irq_wake_cycles;
     uint16_t handle_references;
+    uint16_t deadline_position;
+    uint16_t record_frames;
     /*
      * Pages committed to this thread's stack, always contiguous and always
      * ending at user_stack_top. Growth moves user_stack_base down and this up;
@@ -181,6 +198,11 @@ typedef struct KernelThread {
     uint8_t stack_released;
     uint8_t reap_pending;
     uint8_t suspended;
+    uint8_t irq_wake_pending;
+    uint8_t signal_context_active;
+    KernelCpuContext signal_saved_context;
+    KernelThreadWaitRegistration
+        wait_registrations[KERNEL_THREAD_WAIT_MEMBER_MAX];
 } KernelThread;
 
 typedef struct KernelThreadSnapshot {
@@ -255,8 +277,10 @@ typedef struct KernelThreadPoolStats {
 } KernelThreadPoolStats;
 
 void kernel_thread_pool_init(void);
+uint32_t kernel_thread_slot_limit(void);
 KernelThreadStatus kernel_thread_allocate(uint16_t process_slot,
                                           uint32_t process_id,
+                                          uint32_t resource_owner,
                                           uint16_t stack_slot,
                                           uint32_t program_counter,
                                           uint32_t user_stack,
@@ -283,7 +307,6 @@ KernelThreadStatus kernel_thread_commit_death_wait(KernelThread *target);
 KernelThreadStatus kernel_thread_finish_reap(KernelThread *thread,
                                               bool *released);
 bool kernel_thread_reap_pending(void);
-uint64_t kernel_thread_reap_slots(void);
 KernelThreadStatus kernel_thread_make_ready(KernelThread *thread);
 KernelThreadStatus kernel_thread_take_next(KernelThread **thread);
 KernelThreadStatus kernel_thread_set_process_priority(uint16_t process_slot,

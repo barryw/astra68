@@ -518,8 +518,8 @@ static uint32_t materialize_source(const AstraReadSource *source,
         uint32_t length = source->length - offset;
         uint32_t status;
 
-        if (length > 4096u)
-            length = 4096u;
+        if (length > ASTRA_AREA_SIZE_MAX)
+            length = ASTRA_AREA_SIZE_MAX;
         status = astra_stream_read_exact(
             source->read_at, source->context, source->length, offset,
             length, &bytes, NULL);

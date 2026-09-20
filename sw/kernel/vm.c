@@ -32,7 +32,6 @@
 #define VM_DESC_PAGE_ADDRESS 0xfffff000u
 #define VM_DESC_TABLE_ADDRESS 0xfffff000u
 
-#define VM_KERNEL_OWNER 1u
 #define VM_SDRAM_BASE 0x02000000u
 /*
  * One entry per physical frame: the alias count above, the mapping class
@@ -70,12 +69,12 @@ static KernelVmStatus map_owned_page(KernelAddressSpace *space,
                                      uint32_t admitted_regions,
                                      bool synchronize);
 
-#if defined(KERNEL_VM_HOST_TEST)
-#define VM_KERNEL_THREAD_STACKS_START \
-    KERNEL_THREAD_SUPERVISOR_HOST_ARENA_BASE
+#define VM_KERNEL_THREAD_STACKS_START KERNEL_THREAD_SUPERVISOR_ARENA_BASE
 #define VM_KERNEL_THREAD_STACKS_END \
     (VM_KERNEL_THREAD_STACKS_START + \
-     KERNEL_THREAD_MAX * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE)
+     (uint32_t)KERNEL_THREAD_SLOT_NONE * \
+         KERNEL_THREAD_SUPERVISOR_SLOT_SIZE)
+#if defined(KERNEL_VM_HOST_TEST)
 /*
  * Above the arena, and derived from its end rather than written out. They were
  * fixed addresses that happened to sit just past sixteen slots; raising the
@@ -88,15 +87,9 @@ static KernelVmStatus map_owned_page(KernelAddressSpace *space,
 #else
 extern uint8_t _kernel_stack_guard[];
 extern uint8_t _kernel_worker_stack_guard[];
-extern uint8_t _kernel_thread_stacks_start[];
-extern uint8_t _kernel_thread_stacks_end[];
 #define VM_KERNEL_STACK_GUARD ((uint32_t)(uintptr_t)_kernel_stack_guard)
 #define VM_KERNEL_WORKER_STACK_GUARD \
     ((uint32_t)(uintptr_t)_kernel_worker_stack_guard)
-#define VM_KERNEL_THREAD_STACKS_START \
-    ((uint32_t)(uintptr_t)_kernel_thread_stacks_start)
-#define VM_KERNEL_THREAD_STACKS_END \
-    ((uint32_t)(uintptr_t)_kernel_thread_stacks_end)
 #endif
 
 static uint32_t kernel_root_physical;
@@ -795,7 +788,7 @@ static KernelVmStatus map_supervisor_identity_page(uint32_t address,
     VmPagePath path;
     uint32_t allocated;
     KernelVmStatus status = ensure_page_path(
-        kernel_root_physical, address, VM_KERNEL_OWNER, &path, &allocated);
+        kernel_root_physical, address, KERNEL_OWNER_CORE, &path, &allocated);
 
     if (status != KERNEL_VM_OK)
         return status;
@@ -806,6 +799,139 @@ static KernelVmStatus map_supervisor_identity_page(uint32_t address,
         VM_DESC_SUPERVISOR_ONLY | VM_DESC_GLOBAL |
         (cache_inhibit ? VM_DESC_CACHE_INHIBIT : 0u);
     vm_stats.supervisor_table_pages += allocated;
+    return KERNEL_VM_OK;
+}
+
+KernelVmStatus kernel_vm_map_supervisor_stack(uint16_t slot,
+                                              uint32_t physical_address)
+{
+    uint32_t virtual_base;
+    uint32_t owner = KERNEL_OWNER_NONE;
+    uint32_t mapped = 0u;
+    uint32_t allocated = 0u;
+    KernelVmStatus failure = KERNEL_VM_ALREADY_MAPPED;
+
+    if (!initialized || slot == KERNEL_THREAD_SLOT_NONE ||
+        (physical_address & (KERNEL_PAGE_SIZE - 1u)) != 0u)
+        return KERNEL_VM_INVALID_ARGUMENT;
+    virtual_base = VM_KERNEL_THREAD_STACKS_START +
+                   (uint32_t)slot * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE +
+                   KERNEL_THREAD_SUPERVISOR_GUARD_SIZE;
+    for (uint32_t page = 0u;
+         page < KERNEL_THREAD_SUPERVISOR_STACK_SIZE / KERNEL_PAGE_SIZE;
+         ++page) {
+        KernelFrameInfo frame;
+
+        if (!kernel_memory_frame_info(physical_address +
+                                          page * KERNEL_PAGE_SIZE,
+                                      &frame) ||
+            frame.state != KERNEL_FRAME_KERNEL ||
+            (page != 0u && frame.owner != owner))
+            return KERNEL_VM_INVALID_ARGUMENT;
+        owner = frame.owner;
+    }
+    for (; mapped < KERNEL_THREAD_SUPERVISOR_STACK_SIZE / KERNEL_PAGE_SIZE;
+         ++mapped) {
+        VmPagePath path;
+        uint32_t path_allocated;
+        uint32_t address = virtual_base + mapped * KERNEL_PAGE_SIZE;
+        KernelVmStatus status = ensure_page_path(
+            kernel_root_physical, address, KERNEL_OWNER_CORE, &path,
+            &path_allocated);
+
+        if (status != KERNEL_VM_OK) {
+            failure = status;
+            goto rollback;
+        }
+        allocated += path_allocated;
+        if (path.page_table[VM_PAGE_INDEX(address)] != VM_DESC_INVALID) {
+            failure = KERNEL_VM_ALREADY_MAPPED;
+            goto rollback;
+        }
+        path.page_table[VM_PAGE_INDEX(address)] =
+            ((physical_address + mapped * KERNEL_PAGE_SIZE) &
+             VM_DESC_PAGE_ADDRESS) |
+            VM_DESC_PAGE | VM_DESC_SUPERVISOR_ONLY | VM_DESC_GLOBAL;
+    }
+    vm_stats.supervisor_table_pages += allocated;
+    ++vm_stats.kernel_thread_stack_guards;
+    if (enabled) {
+        invalidate_caches();
+        for (uint32_t page = 0u; page < mapped; ++page)
+            flush_page(virtual_base + page * KERNEL_PAGE_SIZE);
+    }
+    return KERNEL_VM_OK;
+
+rollback:
+    while (mapped != 0u) {
+        VmPagePath path;
+        uint32_t released;
+        uint32_t address = virtual_base + (--mapped) * KERNEL_PAGE_SIZE;
+
+        if (page_path(kernel_root_physical, address, &path) != KERNEL_VM_OK)
+            return KERNEL_VM_CORRUPT;
+        path.page_table[VM_PAGE_INDEX(address)] = VM_DESC_INVALID;
+        if (release_empty_path(kernel_root_physical, address,
+                               KERNEL_OWNER_CORE,
+                               &released) != KERNEL_VM_OK ||
+            released > allocated)
+            return KERNEL_VM_CORRUPT;
+        allocated -= released;
+    }
+    return allocated == 0u ? failure : KERNEL_VM_CORRUPT;
+}
+
+KernelVmStatus kernel_vm_unmap_supervisor_stack(uint16_t slot)
+{
+    uint32_t virtual_base;
+    uint32_t owner = KERNEL_OWNER_NONE;
+    uint32_t released_total = 0u;
+    const uint32_t pages =
+        KERNEL_THREAD_SUPERVISOR_STACK_SIZE / KERNEL_PAGE_SIZE;
+
+    if (!initialized || slot == KERNEL_THREAD_SLOT_NONE)
+        return KERNEL_VM_INVALID_ARGUMENT;
+    virtual_base = VM_KERNEL_THREAD_STACKS_START +
+                   (uint32_t)slot * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE +
+                   KERNEL_THREAD_SUPERVISOR_GUARD_SIZE;
+    for (uint32_t page = 0u; page < pages; ++page) {
+        VmPagePath path;
+        uint32_t descriptor;
+        KernelFrameInfo frame;
+        uint32_t address = virtual_base + page * KERNEL_PAGE_SIZE;
+
+        if (page_path(kernel_root_physical, address, &path) != KERNEL_VM_OK)
+            return KERNEL_VM_NOT_MAPPED;
+        descriptor = path.page_table[VM_PAGE_INDEX(address)];
+        if ((descriptor & VM_DESC_TYPE_MASK) != VM_DESC_PAGE ||
+            !kernel_memory_frame_info(descriptor & VM_DESC_PAGE_ADDRESS,
+                                      &frame) ||
+            frame.state != KERNEL_FRAME_KERNEL ||
+            (page != 0u && frame.owner != owner))
+            return KERNEL_VM_CORRUPT;
+        owner = frame.owner;
+    }
+    for (uint32_t page = pages; page-- != 0u;) {
+        VmPagePath path;
+        uint32_t released;
+        uint32_t address = virtual_base + page * KERNEL_PAGE_SIZE;
+
+        if (page_path(kernel_root_physical, address, &path) != KERNEL_VM_OK)
+            return KERNEL_VM_CORRUPT;
+        path.page_table[VM_PAGE_INDEX(address)] = VM_DESC_INVALID;
+        if (release_empty_path(kernel_root_physical, address,
+                               KERNEL_OWNER_CORE,
+                               &released) != KERNEL_VM_OK)
+            return KERNEL_VM_CORRUPT;
+        released_total += released;
+        if (enabled)
+            flush_page(address);
+    }
+    if (released_total > vm_stats.supervisor_table_pages ||
+        vm_stats.kernel_thread_stack_guards == 0u)
+        return KERNEL_VM_CORRUPT;
+    vm_stats.supervisor_table_pages -= released_total;
+    --vm_stats.kernel_thread_stack_guards;
     return KERNEL_VM_OK;
 }
 
@@ -833,12 +959,13 @@ static KernelVmStatus build_supervisor_root(void)
         (VM_KERNEL_THREAD_STACKS_START & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
         (VM_KERNEL_THREAD_STACKS_END & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
         VM_KERNEL_THREAD_STACKS_END - VM_KERNEL_THREAD_STACKS_START !=
-            KERNEL_THREAD_MAX * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE ||
+            (uint32_t)KERNEL_THREAD_SLOT_NONE *
+                KERNEL_THREAD_SUPERVISOR_SLOT_SIZE ||
         VM_KERNEL_STACK_GUARD == VM_KERNEL_WORKER_STACK_GUARD ||
         is_thread_stack_guard(VM_KERNEL_STACK_GUARD) ||
         is_thread_stack_guard(VM_KERNEL_WORKER_STACK_GUARD))
         return KERNEL_VM_CORRUPT;
-    status = allocate_table(VM_KERNEL_OWNER, &kernel_root_physical);
+    status = allocate_table(KERNEL_OWNER_CORE, &kernel_root_physical);
     if (status != KERNEL_VM_OK)
         return status;
     vm_stats.supervisor_table_pages = 1u;
@@ -883,7 +1010,7 @@ static KernelVmStatus build_supervisor_root(void)
     return KERNEL_VM_OK;
 
 fail:
-    (void)release_table_tree(kernel_root_physical, VM_KERNEL_OWNER);
+    (void)release_table_tree(kernel_root_physical, KERNEL_OWNER_CORE);
     kernel_root_physical = 0u;
     vm_stats.supervisor_table_pages = 0u;
     return status;
@@ -951,25 +1078,9 @@ static KernelVmStatus private_slot_available(const KernelAddressSpace *space,
                                              uint32_t slot,
                                              bool *available)
 {
-    uint32_t base;
-
     if (slot >= KERNEL_VM_PRIVATE_SLOT_COUNT || available == NULL)
         return KERNEL_VM_INVALID_ARGUMENT;
-    *available = false;
-    if (private_slot_marked(space->private_reserved, slot))
-        return KERNEL_VM_OK;
-    base = KERNEL_VM_PRIVATE_BASE + slot * KERNEL_VM_PRIVATE_SLOT_SIZE;
-    for (uint32_t offset = 0u; offset < KERNEL_VM_PRIVATE_SLOT_SIZE;
-         offset += KERNEL_PAGE_SIZE) {
-        KernelVmMapping mapping = probe_root(space->root_physical,
-                                             base + offset, NULL);
-
-        if (mapping == KERNEL_VM_MAPPING_UNKNOWN)
-            return KERNEL_VM_CORRUPT;
-        if (mapping != KERNEL_VM_MAPPING_UNMAPPED)
-            return KERNEL_VM_OK;
-    }
-    *available = true;
+    *available = !private_slot_marked(space->private_reserved, slot);
     return KERNEL_VM_OK;
 }
 
@@ -1258,7 +1369,7 @@ KernelVmStatus kernel_vm_init(void)
         table_frames = (bytes + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE;
         if (kernel_memory_alloc_zeroed_tagged(
                 KERNEL_ALLOCATION_SITE_VM_PAGE_TABLE, table_frames, 1u,
-                KERNEL_FRAME_PAGE_TABLE, VM_KERNEL_OWNER, &physical) !=
+                KERNEL_FRAME_PAGE_TABLE, KERNEL_OWNER_CORE, &physical) !=
             KERNEL_MEMORY_OK)
             return KERNEL_VM_OUT_OF_MEMORY;
         /*
@@ -1270,7 +1381,7 @@ KernelVmStatus kernel_vm_init(void)
             (volatile uint32_t *)(volatile void *)physical_words(physical);
         if (mapped_user_frames == NULL) {
             (void)kernel_memory_release(physical, table_frames,
-                                        VM_KERNEL_OWNER);
+                                        KERNEL_OWNER_CORE);
             return KERNEL_VM_CORRUPT;
         }
         for (uint32_t index = 0u; index < mapped_user_frame_count; ++index)
@@ -1281,9 +1392,9 @@ KernelVmStatus kernel_vm_init(void)
     status = build_supervisor_root();
     if (status != KERNEL_VM_OK)
         return status;
-    status = allocate_table(VM_KERNEL_OWNER, &empty_root_physical);
+    status = allocate_table(KERNEL_OWNER_CORE, &empty_root_physical);
     if (status != KERNEL_VM_OK) {
-        (void)release_table_tree(kernel_root_physical, VM_KERNEL_OWNER);
+        (void)release_table_tree(kernel_root_physical, KERNEL_OWNER_CORE);
         kernel_root_physical = 0u;
         return status;
     }
@@ -1297,7 +1408,7 @@ KernelVmStatus kernel_vm_init(void)
     vm_stats.kernel_worker_stack_guard = VM_KERNEL_WORKER_STACK_GUARD;
     vm_stats.kernel_thread_stack_arena = VM_KERNEL_THREAD_STACKS_START;
     vm_stats.kernel_thread_stack_arena_end = VM_KERNEL_THREAD_STACKS_END;
-    vm_stats.kernel_thread_stack_guards = KERNEL_THREAD_MAX;
+    vm_stats.kernel_thread_stack_guards = 0u;
     initialized = true;
     return KERNEL_VM_OK;
 }
@@ -1333,7 +1444,7 @@ KernelVmStatus kernel_vm_create_address_space(uint32_t owner,
 {
     KernelVmStatus status;
 
-    if (!initialized || owner == 0u || owner == VM_KERNEL_OWNER ||
+    if (!initialized || owner == 0u || owner == KERNEL_OWNER_CORE ||
         space == NULL || space->initialized != 0u)
         return KERNEL_VM_INVALID_ARGUMENT;
     clear_space(space);
@@ -1444,7 +1555,6 @@ static KernelVmStatus map_owned_page(KernelAddressSpace *space,
         region == ASTRA_ADDRESS_REGION_INVALID ||
         (admitted_regions & (1u << (uint32_t)region)) == 0u ||
         (region == ASTRA_ADDRESS_REGION_PRIVATE_MEMORY &&
-         required_state == KERNEL_FRAME_PROCESS &&
          !private_address_reserved(space, virtual_address)) ||
         (physical_address & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
         (permissions & KERNEL_VM_READ) == 0u ||
@@ -1861,6 +1971,13 @@ KernelVmStatus kernel_vm_clone_address_space(
     result = kernel_vm_create_address_space(owner, destination);
     if (result != KERNEL_VM_OK)
         return result;
+    for (uint32_t index = 0u; index < KERNEL_VM_PRIVATE_BITMAP_WORDS;
+         ++index) {
+        destination->private_reserved[index] =
+            source->private_reserved[index];
+        destination->private_writable[index] =
+            source->private_writable[index];
+    }
     root = physical_words(source->root_physical);
     if (root == NULL) {
         result = KERNEL_VM_CORRUPT;
@@ -1952,13 +2069,6 @@ KernelVmStatus kernel_vm_clone_address_space(
                     goto failed;
             }
         }
-    }
-    for (uint32_t index = 0u; index < KERNEL_VM_PRIVATE_BITMAP_WORDS;
-         ++index) {
-        destination->private_reserved[index] =
-            source->private_reserved[index];
-        destination->private_writable[index] =
-            source->private_writable[index];
     }
     return KERNEL_VM_OK;
 

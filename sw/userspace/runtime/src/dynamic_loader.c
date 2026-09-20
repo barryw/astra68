@@ -153,9 +153,10 @@ static const uint8_t *program_header(const AstraDynamicImage *image,
     return mapped(image, offset, ELF_PROGRAM_HEADER_SIZE);
 }
 
-static int load_contains(const AstraDynamicImage *image, uint32_t address,
-                         uint32_t size, uint32_t required_flags,
-                         int file_backed)
+static int load_range(const AstraDynamicImage *image, uint32_t address,
+                      uint32_t size, uint32_t required_flags,
+                      int file_backed, uint32_t *range_start,
+                      uint32_t *range_end)
 {
     uint32_t end;
 
@@ -173,10 +174,23 @@ static int load_contains(const AstraDynamicImage *image, uint32_t address,
         start = astra_load_be32(header + 8u);
         span = astra_load_be32(header + (file_backed ? 16u : 20u));
         if (checked_add(start, span, &load_end) && address >= start &&
-            end <= load_end)
+            end <= load_end) {
+            if (range_start != NULL)
+                *range_start = start;
+            if (range_end != NULL)
+                *range_end = load_end;
             return 1;
+        }
     }
     return 0;
+}
+
+static int load_contains(const AstraDynamicImage *image, uint32_t address,
+                         uint32_t size, uint32_t required_flags,
+                         int file_backed)
+{
+    return load_range(image, address, size, required_flags, file_backed,
+                      NULL, NULL);
 }
 
 static int relro_covered_by_load(const AstraDynamicImage *image,
@@ -1025,6 +1039,9 @@ static AstraDynamicStatus relocate_table(
     AstraDynamicImage *image, uint32_t address, uint32_t size,
     AstraDynamicResolver resolver, void *context)
 {
+    uint32_t writable_start = 0u;
+    uint32_t writable_end = 0u;
+
     for (uint32_t offset = 0u; offset < size; offset += ELF_RELA_SIZE) {
         uint32_t rela_address;
         const uint8_t *rela;
@@ -1051,8 +1068,12 @@ static AstraDynamicStatus relocate_table(
             continue;
         target_address = astra_load_be32(rela);
         addend = (int32_t)astra_load_be32(rela + 8u);
-        if (!load_contains(image, target_address, 4u, ELF_PF_W, 0))
-            return ASTRA_DYNAMIC_BAD_RELOCATION;
+        if (writable_end < 4u || target_address < writable_start ||
+            target_address > writable_end - 4u) {
+            if (!load_range(image, target_address, 4u, ELF_PF_W, 0,
+                            &writable_start, &writable_end))
+                return ASTRA_DYNAMIC_BAD_RELOCATION;
+        }
         target = mapped(image, target_address, 4u);
         if (target == NULL)
             return ASTRA_DYNAMIC_BAD_RELOCATION;

@@ -218,7 +218,7 @@ _Static_assert(sizeof(KernelOwnerLedger) == 16u,
 
 static bool is_dynamic_state(KernelFrameState state)
 {
-    return state >= KERNEL_FRAME_PAGE_TABLE &&
+    return state >= KERNEL_FRAME_KERNEL &&
            state <= KERNEL_FRAME_DEVICE;
 }
 
@@ -263,6 +263,7 @@ static void reset_stats(void)
     stats.emergency_available_frames = 0u;
     stats.emergency_acquisitions = 0u;
     stats.emergency_failures = 0u;
+    stats.core_reserve_frames = 0u;
     stats.protected_reserve_frames = 0u;
     stats.protected_reserve_denials = 0u;
     stats.protected_owners = 0u;
@@ -323,10 +324,12 @@ static bool protected_reserve_admits(uint32_t owner, uint32_t frame_count,
 {
     uint32_t floor;
 
-    if (kernel_memory_owner_protected(owner) || uses_dma_zone)
+    if (owner == KERNEL_OWNER_CORE || uses_dma_zone)
         return true;
     /* The DMA zone is never available to an ordinary scattered allocation. */
-    floor = stats.protected_reserve_frames + dma_zone_frames;
+    floor = stats.core_reserve_frames + dma_zone_frames;
+    if (!kernel_memory_owner_protected(owner))
+        floor += stats.protected_reserve_frames;
     return stats.free_frames >= floor &&
            frame_count <= stats.free_frames - floor;
 }
@@ -722,9 +725,14 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
 
     stats.ram_base = info->ram_base;
     stats.total_frames = info->ram_size / KERNEL_PAGE_SIZE;
+    stats.core_reserve_frames = KERNEL_CORE_RESERVE_FRAME_MAX;
+    if (stats.core_reserve_frames > stats.total_frames)
+        stats.core_reserve_frames = stats.total_frames;
     stats.protected_reserve_frames = KERNEL_PROTECTED_RESERVE_FRAME_MAX;
-    if (stats.protected_reserve_frames > stats.total_frames)
-        stats.protected_reserve_frames = stats.total_frames;
+    if (stats.protected_reserve_frames >
+        stats.total_frames - stats.core_reserve_frames)
+        stats.protected_reserve_frames =
+            stats.total_frames - stats.core_reserve_frames;
     /*
      * The arena comes first, because everything below writes into it -- the
      * bitmaps the classifier sets are themselves part of it. It cannot come
@@ -1638,6 +1646,7 @@ bool kernel_memory_stats(KernelMemoryStats *result)
     result->emergency_available_frames = stats.emergency_available_frames;
     result->emergency_acquisitions = stats.emergency_acquisitions;
     result->emergency_failures = stats.emergency_failures;
+    result->core_reserve_frames = stats.core_reserve_frames;
     result->protected_reserve_frames = stats.protected_reserve_frames;
     result->protected_reserve_denials = stats.protected_reserve_denials;
     result->protected_owners = stats.protected_owners;

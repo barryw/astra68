@@ -8,7 +8,6 @@
 
 #define KERNEL_SYNC_OBJECT_MAX 128u
 #define KERNEL_SYNC_OWNER_MAX 32u
-#define KERNEL_SYNC_WAITER_MAX KERNEL_THREAD_MAX
 #define KERNEL_SYNC_REFERENCE_MAX UINT16_MAX
 #define KERNEL_SYNC_SEMAPHORE_COUNT_MAX 0x7fffffffu
 
@@ -61,8 +60,8 @@ typedef enum KernelSyncStatus {
 
 /*
  * Address waits are the kernel half of pthread mutexes and condition
- * variables.  Storage is bounded by the physical thread pool: there cannot
- * be more distinct live wait addresses than blocked threads.
+ * variables. Each live wait address owns memory on demand; an empty address
+ * record is returned immediately.
  */
 typedef enum KernelFutexStatus {
     KERNEL_FUTEX_OK = 0,
@@ -157,7 +156,9 @@ KernelSyncStatus kernel_sync_owner_died(uint32_t owner,
                                        uint32_t wake_result,
                                        uint32_t *closed_objects,
                                        uint32_t *woken_threads);
-KernelFutexStatus kernel_futex_wait(uint32_t process_id, uint32_t address,
+KernelFutexStatus kernel_futex_wait(uint32_t process_id,
+                                    uint32_t resource_owner,
+                                    uint32_t address,
                                     KernelThread *thread, uint64_t now,
                                     uint64_t deadline,
                                     uint32_t timeout_result);

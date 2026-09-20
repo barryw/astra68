@@ -1342,20 +1342,32 @@ controller removes only that capability and records one retained
 prepared-image zsh boot passed, and a current-ROM QEMU fault injection with
 `/startup/system` removed reported the supervisor failure and remained alive.
 The MC68040 kernel host suite and `all verify` pass; the current kernel payload
-is 181,612 bytes.
+is 186,352 bytes.
 
-The current simplification audit has two completed consolidations and two
-explicit structural follow-ups. General runtime, POSIX, dynamic-loader, and
-VFS record allocation now share one process heap instead of competing virtual
-reservations and private slabs. Recoverable boot failures now share one report
-and one idle path instead of several panic exits. The remaining high-value
-complexity is (1) the coupled fixed process/thread/address-space tables and
-(2) the supervisor loader's parallel per-process bookkeeping arrays. The
-correct fixes are boot-sized protected kernel metadata and one tested
-per-process supervisor record respectively; merely raising constants or
-moving the same parallel state behind helpers would preserve the underlying
-problem. The storage/ext4 fixed arena remains intentionally separate because
-it provides precharged, deterministic allocation failure during recovery.
+The current simplification audit has removed the coupled fixed global process
+and thread pools. Process records, handle tables, executable-load records,
+thread records, supervisor stacks, futex records, and the
+deadline heap now consume memory on demand. Visible PID and thread identity are
+limited only by their 16-bit ABI namespaces; allocation failure reports real
+memory exhaustion rather than a deployment-sized slot ceiling. A target
+MC68040 build and the complete kernel host suite pass with 40 simultaneous
+processes and with allocation-failure rollback at each new metadata boundary.
+The remaining high-value userspace consolidation is the supervisor loader's
+parallel per-process bookkeeping arrays; the correct fix is one growable,
+tested per-process record rather than another raised constant.
+
+Kernel memory admission now has three explicit resource tiers. Ordinary
+owners cannot consume the protected service-recovery reserve, protected
+firmware-selected owners cannot consume the core cleanup reserve, and only
+kernel-owned metadata may enter the latter. The scheduler gives protected
+system processes priority over ordinary applications. An end-to-end regression
+fills every ordinary page with a runaway child, proves that the child cannot
+promote itself, wakes the sleeping controller at its deadline, immediately
+preempts the spinning child, terminates it, and returns every frame to the
+baseline. The negative reserve tests prove both ordinary process and ordinary
+kernel-frame allocations are denied before either recovery tier is consumed.
+The storage/ext4 fixed arena remains intentionally separate because it provides
+precharged, deterministic allocation failure during recovery.
 
 ## Build and artifact rules
 

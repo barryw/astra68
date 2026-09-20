@@ -30,11 +30,10 @@
  * headroom, while retaining the existing two-word bitmap.
  */
 /*
- * Every process embeds one of these, so this multiplies by KERNEL_PROCESS_MAX
- * and is the largest single term in a process record. Sized against
- * KERNEL_PROCESS_HANDLE_DEMAND, which is 99 for 32 processes and 24 ports per
- * owner -- generous, not arbitrary, and the assert beside that macro fails at
- * compile time if a new grant outgrows it.
+ * A process's table is allocated with its process record rather than reserved
+ * for every possible PID. The entry count remains the handle-value ABI's
+ * eight-bit slot field; removing that representational ceiling requires a
+ * handle ABI change, not another deployment-sized process constant.
  */
 #define KERNEL_HANDLE_MAX_ENTRIES ASTRA_HANDLE_COUNT_MAX
 #define KERNEL_HANDLE_BITMAP_WORDS \

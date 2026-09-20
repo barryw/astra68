@@ -240,6 +240,12 @@ configures it is `sw/userspace/storage/port/include/generated/ext4_config.h`.
 The material that follows records how that decision was reached and what
 constrains it.
 
+A separate future native filesystem is specified in [ASTRAFS.md](ASTRAFS.md).
+It retains ext4 as the qualified writable backend while proposing optional VFS
+capabilities for typed attributes, volume indices, structured queries, and
+live queries. That document is deferred architecture, not current storage
+status or an authorization to replace the adopted ext4 path.
+
 `sw/userspace/storage/lwext4-eval` now measures both of the recorded risks on
 2026-08-04 instead of assuming them. Big-endian is not merely untested: lwext4
 never derives `CONFIG_BIG_ENDIAN` itself, no upstream build sets it, and on a

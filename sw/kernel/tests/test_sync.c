@@ -9,6 +9,16 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#define kernel_thread_allocate(process_slot, process_id, stack_slot, pc,      \
+                               stack, argument, priority, result)             \
+    kernel_thread_allocate((process_slot), (process_id), (process_id),        \
+                           (stack_slot), (pc), (stack), (argument),           \
+                           (priority), (result))
+#define kernel_futex_wait(process_id, address, thread, now, deadline, result) \
+    kernel_futex_wait((process_id), (process_id), (address), (thread), (now), \
+                      (deadline), (result))
+#define TEST_WAITER_LOAD 40u
+
 static void initialize_test(void)
 {
     kernel_performance_init();
@@ -317,9 +327,9 @@ static void test_pool_owner_and_waiter_limits(void)
 
     kernel_thread_pool_init();
     assert(kernel_sync_create_event(2u, 0u, &extra) == KERNEL_SYNC_OK);
-    for (uint16_t slot = 0u; slot < KERNEL_THREAD_MAX; ++slot)
+    for (uint16_t slot = 0u; slot < TEST_WAITER_LOAD; ++slot)
         (void)allocate_thread(0u, slot, KERNEL_THREAD_PRIORITY_NORMAL);
-    for (uint32_t index = 0u; index < KERNEL_THREAD_MAX; ++index) {
+    for (uint32_t index = 0u; index < TEST_WAITER_LOAD; ++index) {
         thread = take_thread();
         assert(kernel_sync_wait(extra, thread, 0u,
                                 KERNEL_THREAD_DEADLINE_NEVER,
@@ -327,14 +337,14 @@ static void test_pool_owner_and_waiter_limits(void)
                KERNEL_SYNC_BLOCKED);
     }
     assert(kernel_sync_snapshot(0u, &after));
-    assert(after.waiters == KERNEL_SYNC_WAITER_MAX);
+    assert(after.waiters == TEST_WAITER_LOAD);
     kernel_sync_handle_release(extra, NULL);
     assert(kernel_sync_pool_stats(&stats));
     assert(stats.max_live_objects == KERNEL_SYNC_OBJECT_MAX);
     assert(stats.quota_failures == 1u);
     assert(stats.allocation_failures == 1u);
     assert(stats.publication_rollbacks == 1u);
-    assert(stats.max_waiters == KERNEL_SYNC_WAITER_MAX);
+    assert(stats.max_waiters == TEST_WAITER_LOAD);
     assert(stats.live_objects == 0u);
     assert(stats.closing_objects == 0u);
 }

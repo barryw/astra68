@@ -25,6 +25,9 @@ static const KernelAllocationSiteInfo site_info[KERNEL_ALLOCATION_SITE_COUNT] = 
     [KERNEL_ALLOCATION_SITE_PROCESS_RECORD] = {
         "process-record", KERNEL_ALLOCATION_TAG_PROCESS, 0u, 1u, 0u
     },
+    [KERNEL_ALLOCATION_SITE_PROCESS_HANDLE_TABLE] = {
+        "process-handle-table", KERNEL_ALLOCATION_TAG_HANDLE, 0u, 1u, 0u
+    },
     [KERNEL_ALLOCATION_SITE_PROCESS_CODE_PAGE] = {
         "process-code-page", KERNEL_ALLOCATION_TAG_PROCESS, 0u, 1u, 0u
     },
@@ -33,6 +36,9 @@ static const KernelAllocationSiteInfo site_info[KERNEL_ALLOCATION_SITE_COUNT] = 
     },
     [KERNEL_ALLOCATION_SITE_THREAD_STACK_PAGE] = {
         "thread-stack-page", KERNEL_ALLOCATION_TAG_THREAD, 0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_THREAD_KERNEL_STACK] = {
+        "thread-kernel-stack", KERNEL_ALLOCATION_TAG_THREAD, 0u, 1u, 0u
     },
     [KERNEL_ALLOCATION_SITE_HANDLE_SLOT] = {
         "handle-slot", KERNEL_ALLOCATION_TAG_HANDLE, 0u, 1u, 0u

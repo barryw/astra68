@@ -1211,9 +1211,12 @@ static void test_executable_interpreter_probe(void)
 
 typedef struct ExecutableLaunchReader {
     uint8_t header[256];
-    uint8_t scratch[64];
+    uint8_t scratch[8192];
     uint32_t length;
     uint32_t releases;
+    uint32_t calls;
+    uint32_t maximum_length;
+    uint32_t short_large;
 } ExecutableLaunchReader;
 
 typedef struct InterpreterResolver {
@@ -1229,6 +1232,9 @@ static uint32_t executable_launch_read(
 {
     ExecutableLaunchReader *reader = context;
 
+    ++reader->calls;
+    if (length > reader->maximum_length)
+        reader->maximum_length = length;
     *bytes = NULL;
     *moved = 0u;
     if (offset > reader->length || length > reader->length - offset)
@@ -1241,6 +1247,8 @@ static uint32_t executable_launch_read(
     else
         return ASTRA_SYSCALL_IO_ERROR;
     *moved = length;
+    if (reader->short_large != 0u && length > 4096u)
+        --*moved;
     return ASTRA_SYSCALL_OK;
 }
 
@@ -1444,6 +1452,39 @@ static void test_executable_streamed_exec(void)
     assert(mock_argument2 == (uint32_t)(uintptr_t)&request);
     assert(mock_argument3 != 0u &&
            mock_argument4 == sizeof(interpreter.header));
+
+    executable_launch_fixture(&program, "loader.library.1");
+    executable_launch_fixture(&interpreter, NULL);
+    program.length = sizeof(program.scratch);
+    interpreter.length = sizeof(interpreter.scratch);
+    source.context = &program;
+    source.length = program.length;
+    resolver.calls = 0u;
+    prepare.program = &program;
+    prepare.interpreter = &interpreter;
+    prepare.calls = 0u;
+    assert(astra_exec_executable_stream(
+               &source, interpreter_open, &resolver, exec_prepare, &prepare,
+               &request) == ASTRA_SYSCALL_OK);
+    assert(program.calls == 4u && interpreter.calls == 1u);
+    assert(program.maximum_length == sizeof(program.scratch));
+    assert(interpreter.maximum_length == sizeof(interpreter.scratch));
+    assert(program.releases == 1u && interpreter.releases == 1u);
+
+    executable_launch_fixture(&program, "loader.library.1");
+    executable_launch_fixture(&interpreter, NULL);
+    program.length = sizeof(program.scratch);
+    interpreter.length = sizeof(interpreter.scratch);
+    interpreter.short_large = 1u;
+    source.context = &program;
+    source.length = program.length;
+    resolver.calls = 0u;
+    prepare.calls = 0u;
+    assert(astra_exec_executable_stream(
+               &source, interpreter_open, &resolver, exec_prepare, &prepare,
+               &request) == ASTRA_SYSCALL_IO_ERROR);
+    assert(program.releases == 1u && interpreter.releases == 1u);
+    assert(prepare.calls == 0u);
 
     executable_launch_fixture(&program, "loader.library.1");
     program.length = sizeof(program.header);

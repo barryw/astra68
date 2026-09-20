@@ -1878,10 +1878,11 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         kernel_panic("physical memory stats unavailable");
     if (!kernel_vm_stats(&vm_stats))
         kernel_panic("virtual memory stats unavailable");
-    if (vm_stats.kernel_thread_stack_guards != KERNEL_THREAD_MAX ||
+    if (vm_stats.kernel_thread_stack_guards != 0u ||
         vm_stats.kernel_thread_stack_arena_end -
                 vm_stats.kernel_thread_stack_arena !=
-            KERNEL_THREAD_MAX * KERNEL_THREAD_SUPERVISOR_SLOT_SIZE)
+            (uint32_t)KERNEL_THREAD_SLOT_NONE *
+                KERNEL_THREAD_SUPERVISOR_SLOT_SIZE)
         kernel_panic("thread ISP arena contract mismatch");
     kernel_dma_init();
     kernel_block_init();

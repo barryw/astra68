@@ -37,6 +37,8 @@
  * anything that needs to reason about it.
  */
 #define KERNEL_OWNER_NONE 0u
+/* Reserved namespace owner for kernel control structures and page tables. */
+#define KERNEL_OWNER_CORE 0x4b45524eu /* "KERN" */
 #define KERNEL_EMERGENCY_RESERVE_FRAMES 32u
 /*
  * Ordinary owners cannot consume the last complete shared-area commitment.
@@ -48,6 +50,8 @@
  */
 #define KERNEL_PROTECTED_RESERVE_FRAME_MAX \
     (ASTRA_AREA_SIZE_MAX / KERNEL_PAGE_SIZE)
+/* Kernel control/cleanup retains a separate full recovery transaction. */
+#define KERNEL_CORE_RESERVE_FRAME_MAX KERNEL_PROTECTED_RESERVE_FRAME_MAX
 /*
  * Frames set aside at boot that only DMA may take.
  *
@@ -132,6 +136,7 @@ typedef struct KernelMemoryStats {
     uint32_t emergency_available_frames;
     uint32_t emergency_acquisitions;
     uint32_t emergency_failures;
+    uint32_t core_reserve_frames;
     uint32_t protected_reserve_frames;
     uint32_t protected_reserve_denials;
     uint32_t protected_owners;

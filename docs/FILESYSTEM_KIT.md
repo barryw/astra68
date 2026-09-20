@@ -102,3 +102,13 @@ Only the supervisor bootstrap loader talks directly to VFS before it can load
 `filesystem.library`; filesystem services and the library implementation use
 the protocol directly by definition. All other application-facing filesystem
 behavior belongs in the shared library.
+
+## Deferred AstraFS extension
+
+The future native AstraFS design extends this same Kit and protocol with
+per-filesystem optional capabilities for typed attributes, volume indices,
+structured queries, and live queries. ext4 remains a conforming backend by
+advertising none of those capabilities and returning unsupported for their
+operations. The proposed semantics, disk architecture, recovery contract, and
+qualification gates are recorded in [ASTRAFS.md](ASTRAFS.md). No part of that
+deferred design is implemented or included in the current Kit ABI.

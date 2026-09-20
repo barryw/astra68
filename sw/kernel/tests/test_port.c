@@ -12,6 +12,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#define kernel_thread_allocate(process_slot, process_id, stack_slot, pc,      \
+                               stack, argument, priority, result)             \
+    kernel_thread_allocate((process_slot), (process_id), (process_id),        \
+                           (stack_slot), (pc), (stack), (argument),           \
+                           (priority), (result))
+
 typedef struct TestObject {
     uint32_t releases;
     uint32_t value;

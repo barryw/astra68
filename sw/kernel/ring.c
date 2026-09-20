@@ -55,7 +55,7 @@ struct KernelRing {
 };
 
 #if defined(__m68k__)
-_Static_assert(sizeof(KernelRing) == 80u,
+_Static_assert(sizeof(KernelRing) == 88u,
                "ring record size changed; update the memory budget");
 #endif
 
@@ -591,8 +591,8 @@ KernelRingStatus kernel_ring_commit_wait(KernelRing *ring,
     queue = endpoint == KERNEL_RING_ENDPOINT_PRODUCER ?
         &ring->producer_waiters : &ring->consumer_waiters;
     waiters = kernel_thread_wait_queue_count(queue);
-    return waiters != 0u && waiters <= KERNEL_THREAD_MAX ? KERNEL_RING_OK :
-                                                           KERNEL_RING_INVALID_STATE;
+    return waiters != 0u && waiters != UINT32_MAX ? KERNEL_RING_OK :
+                                                    KERNEL_RING_INVALID_STATE;
 }
 
 static KernelRingStatus copy_range(KernelRing *ring, uint32_t position,
@@ -868,8 +868,8 @@ bool kernel_ring_pool_valid(void)
 
         if (ring->slot != slot || ring->generation == 0u ||
             ring->generation > RING_GENERATION_MASK ||
-            producer_waiters > KERNEL_THREAD_MAX ||
-            consumer_waiters > KERNEL_THREAD_MAX)
+            producer_waiters == UINT32_MAX ||
+            consumer_waiters == UINT32_MAX)
             return false;
         if (ring->state == KERNEL_RING_FREE) {
             if (claimed || ring->area != NULL || ring->owner != 0u ||

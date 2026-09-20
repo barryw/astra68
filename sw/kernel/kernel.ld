@@ -71,26 +71,8 @@ SECTIONS {
     _kernel_worker_stack_top = .;
   } > KERNEL :data
 
-  /*
-   * Taken here, before the thread stacks, because those now live in TABLES:
-   * the location counter follows them out of this region, and a bootstrap end
-   * measured after them would be an address in a different region entirely.
-   */
   . = ALIGN(4096);
   _kernel_bootstrap_end = .;
-
-  /*
-   * 32 fixed slots: one unmapped 4 KiB guard and one 8 KiB ISP each, 384 KiB
-   * in all. They moved out of the kernel region when the slot count rose --
-   * they had been 192 KiB of a 512 KiB reservation, and raising the thread
-   * ceiling with them still inside would have meant moving the trace ring.
-   */
-  .kernel_thread_stacks ORIGIN(TABLES) (NOLOAD) : {
-    . = ALIGN(4096);
-    _kernel_thread_stacks_start = .;
-    . += 393216;
-    _kernel_thread_stacks_end = .;
-  } > TABLES :data
 
   .kernel_trace ORIGIN(TRACE) (NOLOAD) : {
     . = ALIGN(16);
@@ -129,10 +111,6 @@ ASSERT((_kernel_worker_stack_guard & 4095) == 0,
        "kernel worker stack guard must remain page aligned")
 ASSERT(_kernel_worker_stack_top - _kernel_worker_stack_bottom == 8192,
        "kernel worker stack size changed")
-ASSERT((_kernel_thread_stacks_start & 4095) == 0,
-       "kernel thread stack arena must remain page aligned")
-ASSERT(_kernel_thread_stacks_end - _kernel_thread_stacks_start == 393216,
-       "kernel thread stack arena size changed")
 ASSERT(_kernel_bootstrap_end <= ORIGIN(KERNEL) + LENGTH(KERNEL),
        "kernel exceeds its reserved bootstrap region")
 ASSERT(ORIGIN(TRACE) == ORIGIN(KERNEL) + LENGTH(KERNEL),

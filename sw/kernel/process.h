@@ -36,15 +36,6 @@
 #define ASTRA_KERNEL_DEBUG_SURFACE 1
 #endif
 
-/*
- * A dozen services and a dozen programs at once, with room over. This was
- * fifteen because a shared frame's alias count had four bits; the ledger is
- * sixteen bits wide now and the number is chosen for the workload instead of
- * for a field width.
- */
-#define KERNEL_PROCESS_MAX ASTRA_PROCESS_COUNT_MAX
-_Static_assert(KERNEL_PROCESS_MAX == KERNEL_VM_ADDRESS_SPACE_MAX,
-               "process budget and address-space budget differ");
 #define KERNEL_PROCESS_CODE_BASE ASTRA_EXECUTABLE_LINK_ADDRESS
 /*
  * A raw image is read-execute pages at the code base and one writable page
@@ -375,8 +366,7 @@ KernelProcessStatus kernel_process_create(const void *image,
  */
 #define KERNEL_PROCESS_HANDLE_DEMAND                                          \
     (KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX + 2u +                           \
-     (2u * KERNEL_PORT_OWNER_MAX) + (KERNEL_PROCESS_MAX - 1u) +               \
-     KERNEL_HANDLE_TRANSFER_MAX)
+     (2u * KERNEL_PORT_OWNER_MAX) + KERNEL_HANDLE_TRANSFER_MAX)
 
 _Static_assert(KERNEL_PROCESS_HANDLE_DEMAND <= KERNEL_HANDLE_MAX_ENTRIES,
                "handle table is smaller than one process can be holding: see "
@@ -514,6 +504,7 @@ bool kernel_process_maintenance_diagnostics(
 KernelProcessStatus kernel_process_reap_deferred(void);
 bool kernel_process_maintenance_pending(void);
 bool kernel_process_snapshot(uint32_t slot, KernelProcessSnapshot *snapshot);
+uint32_t kernel_process_slot_limit(void);
 bool kernel_process_stats(KernelSchedulerStats *stats);
 
 void kernel_process_milestone_reached(const KernelSchedulerStats *stats);

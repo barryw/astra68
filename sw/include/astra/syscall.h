@@ -255,9 +255,9 @@
 /*
  * Complete live-process snapshot for the initial supervisor's PROC: service.
  * D1 is its own PROCESS handle, D2 an AstraProcSnapshot array, and D3 its
- * record capacity. The fixed-slot array is always written in full and D1
- * returns its number of live records. This authority is deliberately not
- * conferred by an ordinary process handle.
+ * record capacity. On success D1 returns the live record count. When the
+ * capacity is too small, nothing is copied and D1 returns the required count.
+ * This authority is deliberately not conferred by an ordinary process handle.
  */
 #define ASTRA_SYSCALL_PROCESS_SNAPSHOT          86
 /*

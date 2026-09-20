@@ -10,6 +10,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#define kernel_thread_allocate(process_slot, process_id, stack_slot, pc,      \
+                               stack, argument, priority, result)             \
+    kernel_thread_allocate((process_slot), (process_id), (process_id),        \
+                           (stack_slot), (pc), (stack), (argument),           \
+                           (priority), (result))
+
 typedef struct FakeController {
     char log[1024];
     uint32_t log_count;

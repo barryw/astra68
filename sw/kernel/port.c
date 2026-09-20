@@ -76,7 +76,7 @@ static uint32_t message_cache_bitmap[
 static KernelPortPoolStats pool_stats;
 static uint8_t pool_corrupt;
 
-_Static_assert(sizeof(KernelPort) == 64u,
+_Static_assert(sizeof(KernelPort) == 72u,
                "message-port object memory budget changed");
 /*
  * A record is the largest message it can hold plus its bookkeeping, so an exact
@@ -990,8 +990,6 @@ KernelPortStatus kernel_port_prepare_wait(KernelPort *port,
             return KERNEL_PORT_PEER_DEAD;
         queue = &port->readable;
     }
-    if (kernel_thread_wait_queue_count(queue) >= KERNEL_PORT_WAITER_MAX)
-        return KERNEL_PORT_QUOTA_EXCEEDED;
     spec->queue = queue;
     spec->sequence = kernel_thread_wait_queue_sequence(queue);
     return spec->sequence == 0u ? KERNEL_PORT_CORRUPT :
@@ -1031,8 +1029,6 @@ KernelPortStatus kernel_port_prepare_wait_after(
         return KERNEL_PORT_CORRUPT;
     if (sequence != expected_sequence)
         return KERNEL_PORT_OK;
-    if (kernel_thread_wait_queue_count(queue) >= KERNEL_PORT_WAITER_MAX)
-        return KERNEL_PORT_QUOTA_EXCEEDED;
     spec->queue = queue;
     spec->sequence = sequence;
     return KERNEL_PORT_WOULD_BLOCK;
@@ -1065,7 +1061,7 @@ KernelPortStatus kernel_port_commit_wait(KernelPort *port,
     queue = endpoint == KERNEL_PORT_ENDPOINT_SEND ?
         &port->writable : &port->readable;
     waiters = kernel_thread_wait_queue_count(queue);
-    return waiters != 0u && waiters <= KERNEL_PORT_WAITER_MAX ?
+    return waiters != 0u && waiters != UINT32_MAX ?
         KERNEL_PORT_OK : KERNEL_PORT_INVALID_STATE;
 }
 
@@ -1169,8 +1165,7 @@ bool kernel_port_pool_valid(void)
         bool claimed = kernel_object_cache_slot_claimed(
             &port_cache, (uint16_t)port_index);
 
-        if (readable > KERNEL_PORT_WAITER_MAX ||
-            writable > KERNEL_PORT_WAITER_MAX)
+        if (readable == UINT32_MAX || writable == UINT32_MAX)
             return false;
         if (port->state == KERNEL_PORT_FREE) {
             if (claimed || port->owner != 0u || port->references != 0u ||

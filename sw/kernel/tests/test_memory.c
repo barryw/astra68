@@ -103,6 +103,7 @@ static void test_initial_map(void)
            KERNEL_EMERGENCY_RESERVE_FRAMES);
     assert(stats.emergency_acquisitions == 0u);
     assert(stats.emergency_failures == 0u);
+    assert(stats.core_reserve_frames == KERNEL_CORE_RESERVE_FRAME_MAX);
     assert(stats.protected_reserve_frames ==
            KERNEL_PROTECTED_RESERVE_FRAME_MAX);
     assert(stats.protected_reserve_denials == 0u);
@@ -370,7 +371,7 @@ static void test_owner_ledger_capacity_follows_physical_resources(void)
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     assert(kernel_memory_stats(&stats));
     owners = stats.free_frames - stats.dma_zone_frames -
-             stats.protected_reserve_frames;
+             stats.core_reserve_frames - stats.protected_reserve_frames;
     assert(owners > 304u);
     for (uint32_t index = 0u; index < owners; ++index) {
         assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS,
@@ -468,7 +469,8 @@ static void test_exhaustion_and_checked_ranges(void)
            KERNEL_MEMORY_OK);
     assert(kernel_memory_alloc(
                (OHCI_DMA_POOL_BASE - ASTRA_USER_IMAGE_ADDRESS) / 0x1000u -
-                   KERNEL_EMERGENCY_RESERVE_FRAMES - stats.dma_zone_frames,
+                   KERNEL_EMERGENCY_RESERVE_FRAMES - stats.dma_zone_frames -
+                   stats.core_reserve_frames,
                1u, KERNEL_FRAME_PROCESS, 1u, &second) ==
            KERNEL_MEMORY_OK);
     assert(first == ASTRA_BOOT_LOW_USABLE_ADDRESS);
@@ -481,7 +483,8 @@ static void test_exhaustion_and_checked_ranges(void)
      * they are simply not free to *this* kind of allocation, which is the
      * whole of what reserving them means.
      */
-    assert(stats.free_frames == stats.dma_zone_frames);
+    assert(stats.free_frames == stats.dma_zone_frames +
+                                      stats.core_reserve_frames);
     assert(stats.allocation_failures == 1u);
     assert(kernel_memory_alloc(1u, 3u, KERNEL_FRAME_PROCESS, 1u, &extra) ==
            KERNEL_MEMORY_INVALID_ARGUMENT);
@@ -491,7 +494,8 @@ static void test_exhaustion_and_checked_ranges(void)
     assert(kernel_memory_protect_owner(2u));
     assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 2u, &extra) ==
            KERNEL_MEMORY_OK);
-    assert(extra == first);
+    assert(kernel_memory_range_owned(extra, KERNEL_PAGE_SIZE, 2u,
+                                     KERNEL_FRAME_PROCESS, false));
 }
 
 static void test_emergency_reserve_isolated_and_replenished(void)
@@ -519,10 +523,12 @@ static void test_emergency_reserve_isolated_and_replenished(void)
            KERNEL_MEMORY_OK);
     assert(kernel_memory_alloc(
                (OHCI_DMA_POOL_BASE - ASTRA_USER_IMAGE_ADDRESS) / 0x1000u -
-                   KERNEL_EMERGENCY_RESERVE_FRAMES - baseline.dma_zone_frames,
+                   KERNEL_EMERGENCY_RESERVE_FRAMES -
+                   baseline.dma_zone_frames - baseline.core_reserve_frames,
                1u, KERNEL_FRAME_PROCESS, 1u, &second) == KERNEL_MEMORY_OK);
     assert(kernel_memory_stats(&exhausted));
-    assert(exhausted.free_frames == baseline.dma_zone_frames);
+    assert(exhausted.free_frames == baseline.dma_zone_frames +
+                                      baseline.core_reserve_frames);
     assert(exhausted.emergency_available_frames ==
            KERNEL_EMERGENCY_RESERVE_FRAMES);
 
@@ -545,7 +551,8 @@ static void test_emergency_reserve_isolated_and_replenished(void)
            KERNEL_MEMORY_OUT_OF_MEMORY);
     assert(kernel_memory_stats(&borrowed));
     /* The DMA zone is untouched by any of this; it is not general memory. */
-    assert(borrowed.free_frames == baseline.dma_zone_frames);
+    assert(borrowed.free_frames == baseline.dma_zone_frames +
+                                     baseline.core_reserve_frames);
     assert(borrowed.emergency_available_frames == 0u);
     assert(borrowed.emergency_acquisitions ==
            KERNEL_EMERGENCY_RESERVE_FRAMES);
@@ -560,7 +567,8 @@ static void test_emergency_reserve_isolated_and_replenished(void)
     assert(kernel_memory_release_owner(2u, &released) == KERNEL_MEMORY_OK);
     assert(released == KERNEL_EMERGENCY_RESERVE_FRAMES);
     assert(kernel_memory_stats(&restored));
-    assert(restored.free_frames == baseline.dma_zone_frames);
+    assert(restored.free_frames == baseline.dma_zone_frames +
+                                     baseline.core_reserve_frames);
     assert(restored.emergency_available_frames ==
            KERNEL_EMERGENCY_RESERVE_FRAMES);
     assert(kernel_allocation_site_stats(
@@ -572,7 +580,8 @@ static void test_emergency_reserve_isolated_and_replenished(void)
 
     assert(kernel_memory_release_owner(1u, &released) == KERNEL_MEMORY_OK);
     /* Owner 1 never held the zone, so it cannot give it back. */
-    assert(released == baseline.free_frames - baseline.dma_zone_frames);
+    assert(released == baseline.free_frames - baseline.dma_zone_frames -
+                           baseline.core_reserve_frames);
     assert(kernel_memory_stats(&restored));
     assert(restored.free_frames == baseline.free_frames);
     assert(restored.emergency_available_frames ==
@@ -588,7 +597,8 @@ static void test_protected_reserve_survives_ordinary_exhaustion(void)
     KernelMemoryStats baseline;
     KernelMemoryStats exhausted;
     uint32_t pages[TEST_MAX_FRAMES];
-    uint32_t protected_page = 0u;
+    uint32_t protected_pages = 0u;
+    uint32_t core_page = 0u;
     uint32_t extra = 0u;
     uint32_t ordinary;
 
@@ -596,25 +606,36 @@ static void test_protected_reserve_survives_ordinary_exhaustion(void)
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
     assert(kernel_memory_stats(&baseline));
     ordinary = baseline.free_frames - baseline.dma_zone_frames -
+               baseline.core_reserve_frames -
                baseline.protected_reserve_frames;
     assert(kernel_memory_alloc_pages_zeroed(
                ordinary, KERNEL_FRAME_PROCESS, 10u, pages) ==
            KERNEL_MEMORY_OK);
     assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 10u, &extra) ==
            KERNEL_MEMORY_OUT_OF_MEMORY);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_KERNEL, 10u, &extra) ==
+           KERNEL_MEMORY_OUT_OF_MEMORY);
     assert(kernel_memory_stats(&exhausted));
     assert(exhausted.free_frames == baseline.dma_zone_frames +
+                                      baseline.core_reserve_frames +
                                       baseline.protected_reserve_frames);
-    assert(exhausted.protected_reserve_denials == 1u);
+    assert(exhausted.protected_reserve_denials == 2u);
 
     assert(kernel_memory_protect_owner(11u));
-    assert(kernel_memory_owner_protected(11u));
-    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 11u,
-                               &protected_page) == KERNEL_MEMORY_OK);
-    assert(kernel_memory_release(protected_page, 1u, 11u) ==
+    assert(kernel_memory_alloc(baseline.protected_reserve_frames, 1u,
+                               KERNEL_FRAME_PROCESS, 11u,
+                               &protected_pages) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 11u, &extra) ==
+           KERNEL_MEMORY_OUT_OF_MEMORY);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_KERNEL,
+                               KERNEL_OWNER_CORE,
+                               &core_page) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_release(core_page, 1u, KERNEL_OWNER_CORE) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_release(protected_pages,
+                                 baseline.protected_reserve_frames, 11u) ==
            KERNEL_MEMORY_OK);
     assert(kernel_memory_unprotect_owner(11u));
-    assert(!kernel_memory_owner_protected(11u));
     assert(kernel_memory_release_owner(10u, NULL) == KERNEL_MEMORY_OK);
 }
 
@@ -805,7 +826,8 @@ static void test_contiguous_demand_survives_a_combed_frame_map(void)
     assert(kernel_memory_stats(&before));
     assert(kernel_memory_stats(&stats));
     /* Everything the general pool can reach -- the zone is not part of it. */
-    taken = before.free_frames - before.dma_zone_frames;
+    taken = before.free_frames - before.dma_zone_frames -
+            before.core_reserve_frames;
     /*
      * Every free frame, one at a time, the way every non-DMA allocation on
      * this machine takes them.

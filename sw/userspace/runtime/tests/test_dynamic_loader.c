@@ -24,6 +24,7 @@
 #define ELF_DT_FLAGS_1 0x6ffffffbu
 #define ELF_DT_IGNORED_PROCESSOR 0x70000000u
 #define ELF_R_68K_NONE 0u
+#define ELF_R_68K_RELATIVE 22u
 #define ELF_R_68K_TLS_TPREL32 42u
 
 typedef struct Fixture {
@@ -307,6 +308,53 @@ static void test_none_relocation_has_no_target(const char *program_path)
     assert(astra_dynamic_relocate(&program.image, NULL, NULL) ==
            ASTRA_DYNAMIC_OK);
     unload_fixture(&program);
+}
+
+static void test_relocation_writable_range_cache(const char *library_path)
+{
+    Fixture library = load_fixture(library_path, 0x24000000u);
+    uint8_t *load = fixture_program_header(&library, ELF_PT_LOAD, ELF_PF_W);
+    uint8_t *rela = library.mapping + library.image.rela_address;
+    uint32_t load_address;
+    uint32_t load_size;
+    uint32_t target;
+
+    assert(load != NULL && library.image.rela_size >= 24u);
+    load_address = astra_load_be32(load + 8u);
+    load_size = astra_load_be32(load + 20u);
+    assert(load_size >= 8u);
+    target = load_address + load_size - 8u;
+    astra_store_be32(rela, target);
+    astra_store_be32(rela + 4u, ELF_R_68K_RELATIVE);
+    astra_store_be32(rela + 8u, 0x111u);
+    astra_store_be32(rela + 12u, target + 4u);
+    astra_store_be32(rela + 16u, ELF_R_68K_RELATIVE);
+    astra_store_be32(rela + 20u, 0x222u);
+    library.image.rela_size = 24u;
+    library.image.jump_rela_size = 0u;
+    assert(astra_dynamic_relocate(&library.image, NULL, NULL) ==
+           ASTRA_DYNAMIC_OK);
+    assert(astra_load_be32(library.mapping + target) == 0x24000111u);
+    assert(astra_load_be32(library.mapping + target + 4u) == 0x24000222u);
+    unload_fixture(&library);
+
+    library = load_fixture(library_path, 0x24000000u);
+    load = fixture_program_header(&library, ELF_PT_LOAD, ELF_PF_W);
+    rela = library.mapping + library.image.rela_address;
+    load_address = astra_load_be32(load + 8u);
+    load_size = astra_load_be32(load + 20u);
+    target = load_address + load_size - 8u;
+    astra_store_be32(rela, target);
+    astra_store_be32(rela + 4u, ELF_R_68K_RELATIVE);
+    astra_store_be32(rela + 8u, 0u);
+    astra_store_be32(rela + 12u, library.header_address);
+    astra_store_be32(rela + 16u, ELF_R_68K_RELATIVE);
+    astra_store_be32(rela + 20u, 0u);
+    library.image.rela_size = 24u;
+    library.image.jump_rela_size = 0u;
+    assert(astra_dynamic_relocate(&library.image, NULL, NULL) ==
+           ASTRA_DYNAMIC_BAD_RELOCATION);
+    unload_fixture(&library);
 }
 
 typedef struct ProcessFixtureContext {
@@ -599,6 +647,7 @@ int main(int argc, char **argv)
     test_real_dynamic_pair(argv[1], argv[2]);
     test_dynamic_singleton_tags(argv[1]);
     test_none_relocation_has_no_target(argv[1]);
+    test_relocation_writable_range_cache(argv[2]);
     test_relro_page_padding(argv[2]);
     test_process_dependency_graph(argv[1], argv[2]);
     test_real_tls_library(argv[3]);

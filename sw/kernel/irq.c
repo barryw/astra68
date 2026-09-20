@@ -71,7 +71,7 @@ static uint8_t pool_initialized;
 static uint8_t pool_corrupt;
 
 #if UINTPTR_MAX == UINT32_MAX
-_Static_assert(sizeof(KernelIrqEndpoint) == 128u,
+_Static_assert(sizeof(KernelIrqEndpoint) == 132u,
                "IRQ endpoint memory budget changed");
 #endif
 _Static_assert(sizeof(KernelIrqRecord) == 16u,
@@ -196,7 +196,7 @@ static bool valid_active_endpoint(const KernelIrqEndpoint *endpoint)
         endpoint->next_sequence == 0u || !route_matches(endpoint))
         return false;
     waiters = kernel_thread_wait_queue_count(&endpoint->waiters);
-    return waiters != UINT32_MAX && waiters <= KERNEL_IRQ_WAITER_MAX;
+    return waiters != UINT32_MAX;
 }
 
 static uint32_t endpoint_live_count(void)
@@ -1216,8 +1216,6 @@ KernelIrqStatus kernel_irq_prepare_wait(KernelIrqEndpoint *endpoint,
     waiters = kernel_thread_wait_queue_count(&endpoint->waiters);
     if (waiters == UINT32_MAX)
         return KERNEL_IRQ_CORRUPT;
-    if (waiters >= KERNEL_IRQ_WAITER_MAX)
-        return KERNEL_IRQ_QUOTA_EXCEEDED;
     spec->queue = &endpoint->waiters;
     spec->sequence = kernel_thread_wait_queue_sequence(spec->queue);
     return spec->sequence == 0u ? KERNEL_IRQ_CORRUPT :
@@ -1231,7 +1229,7 @@ KernelIrqStatus kernel_irq_commit_wait(KernelIrqEndpoint *endpoint)
     if (!valid_active_endpoint(endpoint))
         return KERNEL_IRQ_INVALID_ARGUMENT;
     waiters = kernel_thread_wait_queue_count(&endpoint->waiters);
-    return waiters != 0u && waiters <= KERNEL_IRQ_WAITER_MAX ?
+    return waiters != 0u && waiters != UINT32_MAX ?
         KERNEL_IRQ_OK : KERNEL_IRQ_INVALID_STATE;
 }
 
