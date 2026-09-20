@@ -29,6 +29,12 @@ uint32_t astra_vfs_read_source_read_at(
 
 uint32_t astra_vfs_read_source_close(void *context);
 
+/* Resolve an installed provider without opening its binary. */
+uint32_t astra_vfs_library_resolve(
+    const AstraAssignTable *table, const char *assign, const char *identity,
+    AstraVfsAssignClientFn client_for, void *context,
+    char *path, uint32_t path_capacity, AstraLibraryReference *reference);
+
 /**
  * Resolve and open one exact installed provider for a DT_NEEDED identity.
  *

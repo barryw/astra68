@@ -106,7 +106,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010034`, `D2=process handle`, `D3=calling-thread handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010035`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | K1 TEST ONLY | monotonic test progress, not a product ABI |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
@@ -176,6 +176,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 92 | `LIBRARY_LOAD_COMMIT` | CURRENT CANDIDATE | seals the validated GNU RELRO range read-only and atomically drops rollback authority |
 | 93 | `PROCESS_DYNAMIC_COMMIT` | CURRENT CANDIDATE | `D1=page-aligned combined TLS template`, `D2=exact template bytes`, `D3=power-of-two TLS alignment`, `D4=exclusive page-rounded storage span`; while the interpreted process still has only its initial thread, atomically installs current/future-thread TLS and seals program, interpreter, and template RELRO pages; success transfers the immutable storage interval to the process until exit |
 | 94 | `THREAD_INFO` | CURRENT CANDIDATE | `D1=thread handle with QUERY right`, `D2=AstraThreadInfo`; copies one 48-byte record including identity, scheduler state, activity, priorities, counters, and runtime nanoseconds |
+| 95 | `LIBRARY_ATTACH_RESIDENT` | CURRENT CANDIDATE | `D1=pointer to fixed-size zero-padded ABI identity`; maps the sole matching resident library, returning `WOULD_BLOCK` when absent or ambiguous so userspace resolves an exact provider and retries with `LIBRARY_ATTACH` |
 
 Areas are at most 4 MiB. This is an address-map allocation unit, not an
 application-size policy; the VM publishes and rolls back every MC68040 table
@@ -183,7 +184,7 @@ touched by the mapping as one transaction. VFS bulk transfers use this same
 bound instead of imposing a smaller protocol limit.
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x00010034`; a later revision may add
+not panic. `QUERY_ABI` reports revision `0x00010035`; a later revision may add
 feature bits before additional calls freeze.
 
 Ordinary process priorities are 1 through 23, with 16 as normal; larger values

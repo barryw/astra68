@@ -7,7 +7,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010034u
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010035u
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -304,6 +304,12 @@
 #define ASTRA_SYSCALL_PROCESS_DYNAMIC_COMMIT 93
 /* D1=thread handle with QUERY right, D2=AstraThreadInfo output. */
 #define ASTRA_SYSCALL_THREAD_INFO 94
+/*
+ * Maps the sole resident library whose ABI identity matches the fixed-size,
+ * zero-padded name at D1. Ambiguous or absent identities return WOULD_BLOCK
+ * so userspace can resolve the exact provider and use LIBRARY_ATTACH.
+ */
+#define ASTRA_SYSCALL_LIBRARY_ATTACH_RESIDENT 95
 
 #define ASTRA_VM_PRIVATE_READ  (1u << 0)
 #define ASTRA_VM_PRIVATE_WRITE (1u << 1)

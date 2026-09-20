@@ -718,6 +718,7 @@ astra_wait_one(uint32_t handle, uint64_t deadline_ns, uint32_t *detail)
  */
 static uint32_t backend_activity;
 static uintptr_t backend_readdir_directory;
+static uint32_t backend_read_calls;
 
 static uint32_t
 backend_open(void *context, const char *path, uint32_t flags,
@@ -755,6 +756,7 @@ backend_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
 
     (void)context;
     (void)node;
+    ++backend_read_calls;
     backend_activity = astra_activity_current();
     *moved = length < 8u ? length : 8u;
     for (uint32_t index = 0u; index < *moved; ++index) {
@@ -1465,6 +1467,125 @@ test_bulk_read_crosses_once_through_a_shared_area(void)
 }
 
 static void
+test_borrowed_read_reuses_only_an_undisturbed_area(void)
+{
+    AstraVfsPortService host;
+    AstraVfsClient remote;
+    AstraVfsClient second;
+    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
+    AstraVfsFile other = ASTRA_VFS_FILE_INVALID;
+    AstraVfsFile second_file = ASTRA_VFS_FILE_INVALID;
+    const uint8_t *bytes = NULL;
+    uint32_t service_handle;
+    uint32_t moved = 0u;
+
+    mock_reset();
+    backend_read_calls = 0u;
+    service_start();
+    service_handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_vfs_port_service_init(&host, service_handle, &service));
+    served = &host;
+    assert(astra_vfs_port_connect(&remote, service_handle) == ASTRA_VFS_OK);
+    assert(astra_vfs_port_connect(&second, service_handle) == ASTRA_VFS_OK);
+    assert(astra_vfs_open(&remote, "/small", ASTRA_VFS_OPEN_READ, &file,
+                          NULL, NULL) == ASTRA_VFS_OK);
+    assert(astra_vfs_open(&second, "/small", ASTRA_VFS_OPEN_READ,
+                          &second_file, NULL, NULL) == ASTRA_VFS_OK);
+    assert(astra_vfs_port_read_borrow(&remote, file, 0u, 8u, &bytes,
+                                      &moved) == ASTRA_VFS_OK);
+    assert(moved == 8u && bytes[0] == 0u && bytes[7] == 7u);
+    {
+        uint32_t lookups = port_lane_lookups;
+
+        assert(astra_vfs_port_read_borrow(&remote, file, 4u, 4u, &bytes,
+                                          &moved) == ASTRA_VFS_OK);
+        assert(moved == 4u && bytes[0] == 4u && bytes[3] == 7u);
+        assert(backend_read_calls == 1u);
+        assert(port_lane_lookups == lookups);
+    }
+
+    assert(astra_vfs_port_read_borrow(&second, second_file, 0u, 8u, &bytes,
+                                      &moved) == ASTRA_VFS_OK);
+    assert(astra_vfs_port_read_borrow(&remote, file, 4u, 4u, &bytes,
+                                      &moved) == ASTRA_VFS_OK);
+    assert(backend_read_calls == 3u);
+
+    assert(astra_vfs_open(&remote, "/other", ASTRA_VFS_OPEN_READ, &other,
+                          NULL, NULL) == ASTRA_VFS_OK);
+    {
+        uint32_t lookups = port_lane_lookups;
+
+        assert(astra_vfs_port_read_borrow(&remote, file, 4u, 4u, &bytes,
+                                          &moved) == ASTRA_VFS_OK);
+        assert(moved == 4u && bytes[0] == 4u && bytes[3] == 7u);
+        assert(backend_read_calls == 4u);
+        assert(port_lane_lookups > lookups);
+    }
+    assert(astra_vfs_close(&remote, other) == ASTRA_VFS_OK);
+    assert(astra_vfs_close(&second, second_file) == ASTRA_VFS_OK);
+    assert(astra_vfs_port_read_borrow(&remote, file, 0u, 8u, &bytes,
+                                      &moved) == ASTRA_VFS_OK);
+    assert(backend_read_calls == 5u);
+    assert(astra_vfs_disconnect(&second) == ASTRA_VFS_OK);
+    assert(astra_vfs_disconnect(&remote) == ASTRA_VFS_OK);
+    bytes = NULL;
+    moved = 0u;
+    assert(astra_vfs_port_read_borrow(&remote, file, 4u, 4u, &bytes,
+                                      &moved) == ASTRA_VFS_ERR_PEER);
+    assert(bytes == NULL && moved == 0u && backend_read_calls == 5u);
+    served = NULL;
+}
+
+static void
+test_direct_borrowed_read_reuses_only_an_undisturbed_area(void)
+{
+    AstraVfsPortService host;
+    AstraVfsClient client;
+    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
+    AstraVfsFile other = ASTRA_VFS_FILE_INVALID;
+    const uint8_t *bytes = NULL;
+    uint32_t service_handle;
+    uint32_t moved = 0u;
+
+    mock_reset();
+    backend_read_calls = 0u;
+    service_start();
+    service_handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_vfs_port_service_init(&host, service_handle, &service));
+    served = &host;
+    assert(astra_vfs_port_connect(&client, service_handle) == ASTRA_VFS_OK);
+    client.direct_backend_ops = &backend_ops;
+    client.direct_backend_context = &service;
+    client.direct_backend_enter = astra_vfs_port_client_enter;
+    client.direct_backend_leave = astra_vfs_port_client_leave;
+    assert(astra_vfs_open(&client, "/small", ASTRA_VFS_OPEN_READ, &file,
+                          NULL, NULL) == ASTRA_VFS_OK);
+    assert(astra_vfs_port_read_borrow(&client, file, 0u, 8u, &bytes,
+                                      &moved) == ASTRA_VFS_OK);
+    assert(moved == 8u && bytes[0] == 0u && bytes[7] == 7u);
+    {
+        uint32_t lookups = port_lane_lookups;
+
+        assert(astra_vfs_port_read_borrow(&client, file, 4u, 4u, &bytes,
+                                          &moved) == ASTRA_VFS_OK);
+        assert(moved == 4u && bytes[0] == 4u && bytes[3] == 7u);
+        assert(backend_read_calls == 1u);
+        assert(port_lane_lookups == lookups);
+    }
+
+    assert(astra_vfs_open(&client, "/other", ASTRA_VFS_OPEN_READ, &other,
+                          NULL, NULL) == ASTRA_VFS_OK);
+    assert(astra_vfs_port_read_borrow(&client, file, 4u, 4u, &bytes,
+                                      &moved) == ASTRA_VFS_OK);
+    assert(moved == 4u && bytes[0] == 4u && bytes[3] == 7u);
+    assert(backend_read_calls == 2u);
+    assert(astra_vfs_close(&client, other) == ASTRA_VFS_OK);
+    assert(astra_vfs_close(&client, file) == ASTRA_VFS_OK);
+    assert(astra_vfs_disconnect(&client) == ASTRA_VFS_OK);
+    served = NULL;
+}
+
+static void
 test_bulk_write_crosses_once_through_a_shared_area(void)
 {
     AstraVfsPortService host;
@@ -2042,6 +2163,8 @@ main(void)
     test_two_path_operations_cross_atomically();
     test_version_two_keeps_per_request_reply_ports();
     test_bulk_read_crosses_once_through_a_shared_area();
+    test_borrowed_read_reuses_only_an_undisturbed_area();
+    test_direct_borrowed_read_reuses_only_an_undisturbed_area();
     test_bulk_write_crosses_once_through_a_shared_area();
     test_bulk_append_returns_the_atomic_backend_position();
     test_accelerated_bulk_append_returns_the_atomic_backend_position();

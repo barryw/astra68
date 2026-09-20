@@ -577,6 +577,8 @@ static void test_map_switch_unmap_and_stale_guards(void)
     assert(kernel_vm_map_page(&space, 0x10000000u, physical,
                               KERNEL_VM_READ | KERNEL_VM_WRITE) ==
            KERNEL_VM_OK);
+    /* An inactive address space is synchronized once when it becomes active. */
+    assert(cache_invalidation_count == 1u && flush_page_count == 0u);
     root = physical_words(space.root_physical);
     assert((root[8u] & 3u) == 2u);
     assert(page_descriptor(space.root_physical, 0x10000000u) ==
@@ -602,13 +604,13 @@ static void test_map_switch_unmap_and_stale_guards(void)
     assert(loaded_urp == space.root_physical);
     assert(flush_count == flushes_before_switch);
     assert(non_global_flush_count == 1u);
-    assert(cache_invalidation_count == 3u);
+    assert(cache_invalidation_count == 2u);
     assert(kernel_vm_probe_current(0x10000000u, false, &translated) ==
            KERNEL_VM_MAPPING_READ_WRITE);
     assert(translated == physical);
     assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_BUSY);
     assert(kernel_vm_unmap_page(&space, 0x10000000u) == KERNEL_VM_OK);
-    assert(cache_invalidation_count == 4u);
+    assert(cache_invalidation_count == 3u);
     assert(root[8u] == 0u);
     assert(kernel_memory_frame_info(physical, &frame));
     assert(frame.references == 1u);
@@ -616,18 +618,20 @@ static void test_map_switch_unmap_and_stale_guards(void)
            KERNEL_VM_NOT_MAPPED);
     assert(kernel_vm_map_page(&space, 0x10001000u, physical,
                               KERNEL_VM_READ) == KERNEL_VM_OK);
+    /* A mapping added to the active address space is visible immediately. */
+    assert(cache_invalidation_count == 4u && flush_page_count == 2u);
     assert(kernel_vm_probe_current(0x10001004u, false, &translated) ==
            KERNEL_VM_MAPPING_READ_ONLY);
     assert(translated == physical + 4u);
     assert(kernel_vm_unmap_page(&space, 0x10001000u) == KERNEL_VM_OK);
     assert(kernel_vm_probe_current(0x10001000u, false, &translated) ==
            KERNEL_VM_MAPPING_UNMAPPED);
-    assert(cache_invalidation_count == 6u);
+    assert(cache_invalidation_count == 5u);
     flushes_before_switch = flush_count;
     assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
     assert(flush_count == flushes_before_switch);
     assert(non_global_flush_count == 2u);
-    assert(cache_invalidation_count == 7u);
+    assert(cache_invalidation_count == 6u);
     assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
     assert(kernel_memory_release_owner(42u, NULL) == KERNEL_MEMORY_OK);
     assert(kernel_vm_stats(&stats));
@@ -660,6 +664,7 @@ static void test_host_channel_mapping_is_private_and_uncached(void)
                &parent, KERNEL_VM_HOST_CHANNEL_BASE, physical) == KERNEL_VM_OK);
     assert(kernel_vm_map_host_channel_page(
                &parent, second_virtual, second_physical) == KERNEL_VM_OK);
+    assert(cache_invalidation_count == 1u && flush_page_count == 0u);
     assert(page_descriptor(parent.root_physical,
                            KERNEL_VM_HOST_CHANNEL_BASE) ==
            (physical | 0x61u));
@@ -703,9 +708,9 @@ static void test_destroy_releases_read_only_mapping(void)
            KERNEL_VM_OK);
     assert(page_descriptor(space.root_physical, 0x20000000u) ==
            (physical | 5u));
-    assert(cache_invalidation_count == 2u);
+    assert(cache_invalidation_count == 1u);
     assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
-    assert(cache_invalidation_count == 3u);
+    assert(cache_invalidation_count == 2u);
     assert(kernel_memory_frame_info(physical, &frame));
     assert(frame.references == 1u);
     assert(kernel_memory_release_owner(77u, NULL) == KERNEL_MEMORY_OK);
@@ -717,6 +722,7 @@ static void test_protect_read_only_is_atomic_and_idempotent(void)
     const uint32_t base = 0x21000000u;
     uint32_t physical[3];
     uint32_t flushes_before;
+    uint32_t flush_pages_before;
 
     initialize_test();
     assert(kernel_vm_enable() == KERNEL_VM_OK);
@@ -767,6 +773,9 @@ static void test_protect_read_only_is_atomic_and_idempotent(void)
                KERNEL_VM_MAPPING_READ_WRITE);
         assert(flush_page_count == flushes_before);
         ranges[1].virtual_address = base + KERNEL_PAGE_SIZE;
+        assert(kernel_vm_switch(&space) == KERNEL_VM_OK);
+        flushes_before = flush_count;
+        flush_pages_before = flush_page_count;
         assert(kernel_vm_protect_read_only_ranges(&space, ranges, 2u) ==
                KERNEL_VM_OK);
         assert(kernel_vm_probe_address_space(&space, base, NULL) ==
@@ -774,18 +783,24 @@ static void test_protect_read_only_is_atomic_and_idempotent(void)
         assert(kernel_vm_probe_address_space(
                    &space, base + KERNEL_PAGE_SIZE, NULL) ==
                KERNEL_VM_MAPPING_READ_ONLY);
-        assert(flush_page_count == flushes_before + 2u);
+        assert(flush_count == flushes_before + 1u);
+        assert(flush_page_count == flush_pages_before);
     }
-    flushes_before = flush_page_count;
+    flushes_before = flush_count;
+    flush_pages_before = flush_page_count;
     assert(kernel_vm_protect_read_only(&space, base, 3u) == KERNEL_VM_OK);
     for (uint32_t page = 0u; page < 3u; ++page)
         assert(kernel_vm_probe_address_space(
                    &space, base + page * KERNEL_PAGE_SIZE, NULL) ==
                KERNEL_VM_MAPPING_READ_ONLY);
-    assert(flush_page_count == flushes_before);
+    assert(flush_count == flushes_before);
+    assert(flush_page_count == flush_pages_before);
+    flushes_before = flush_count;
     assert(kernel_vm_protect_read_only(&space, base, 3u) == KERNEL_VM_OK);
-    assert(flush_page_count == flushes_before);
+    assert(flush_count == flushes_before);
+    assert(flush_page_count == flush_pages_before);
 
+    assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
     assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
     assert(kernel_memory_release_owner(78u, NULL) == KERNEL_MEMORY_OK);
 }
@@ -1125,6 +1140,7 @@ static void test_dynamic_code_range_is_shared_and_executable(void)
     KernelAddressSpace second = {0};
     KernelFrameInfo frame;
     uint32_t physical_pages[2];
+    uint32_t flushes_before;
     uint32_t flush_pages_before;
     uint32_t invalidations_before;
 
@@ -1135,20 +1151,29 @@ static void test_dynamic_code_range_is_shared_and_executable(void)
     assert(kernel_memory_alloc_pages_zeroed(
                2u, KERNEL_FRAME_SHARED, frame_owner, physical_pages) ==
            KERNEL_MEMORY_OK);
+    assert(kernel_vm_switch(&first) == KERNEL_VM_OK);
+    flushes_before = flush_count;
     flush_pages_before = flush_page_count;
     invalidations_before = cache_invalidation_count;
     assert(kernel_vm_map_shared_range(
                &first, first_address, physical_pages, 2u, frame_owner,
                KERNEL_VM_READ | KERNEL_VM_EXEC) == KERNEL_VM_OK);
-    assert(flush_page_count == flush_pages_before + 2u);
-    assert(cache_invalidation_count == invalidations_before + 2u);
+    assert(flush_count == flushes_before + 1u);
+    assert(flush_page_count == flush_pages_before);
+    assert(cache_invalidation_count == invalidations_before + 1u);
     assert(kernel_vm_map_shared_range(
                &second, second_address, physical_pages, 2u, frame_owner,
                KERNEL_VM_READ | KERNEL_VM_EXEC) == KERNEL_VM_OK);
+    assert(flush_count == flushes_before + 1u);
+    assert(flush_page_count == flush_pages_before);
+    assert(cache_invalidation_count == invalidations_before + 1u);
     assert(kernel_memory_frame_info(physical_pages[0], &frame));
     assert(frame.references == 3u); /* cache plus two address spaces */
     assert(kernel_memory_frame_info(physical_pages[1], &frame));
     assert(frame.references == 3u);
+    flushes_before = flush_count;
+    flush_pages_before = flush_page_count;
+    invalidations_before = cache_invalidation_count;
     assert(kernel_vm_map_shared_range(
                &second, second_address + 0x2000u, physical_pages, 2u,
                frame_owner,
@@ -1158,12 +1183,16 @@ static void test_dynamic_code_range_is_shared_and_executable(void)
                &second, KERNEL_VM_AREA_BASE + 0x2000u, physical_pages, 2u,
                frame_owner, KERNEL_VM_READ | KERNEL_VM_EXEC) ==
            KERNEL_VM_INVALID_ARGUMENT);
+    assert(flush_count == flushes_before);
+    assert(flush_page_count == flush_pages_before);
+    assert(cache_invalidation_count == invalidations_before);
     assert(kernel_vm_unmap_shared_range(
                &first, first_address, physical_pages, 2u, frame_owner) ==
            KERNEL_VM_OK);
     assert(kernel_vm_unmap_shared_range(
                &second, second_address, physical_pages, 2u, frame_owner) ==
            KERNEL_VM_OK);
+    assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
     assert(kernel_memory_frame_info(physical_pages[0], &frame));
     assert(frame.references == 1u);
     assert(kernel_memory_frame_info(physical_pages[1], &frame));

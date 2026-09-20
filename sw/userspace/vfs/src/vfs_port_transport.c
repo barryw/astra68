@@ -489,8 +489,10 @@ astra_vfs_port_client_enter(AstraVfsClient *client)
     }
     (void)__atomic_add_fetch(&client->port_inflight, 1u, __ATOMIC_ACQ_REL);
     if (__atomic_load_n(&client->port_lifecycle, __ATOMIC_ACQUIRE) ==
-        PORT_CLIENT_OPEN)
+        PORT_CLIENT_OPEN) {
+        port_state(client)->borrow_valid = 0u;
         return ASTRA_VFS_OK;
+    }
     if (__atomic_sub_fetch(&client->port_inflight, 1u, __ATOMIC_ACQ_REL) == 0u &&
         __atomic_load_n(&client->port_inflight_waiters,
                         __ATOMIC_ACQUIRE) != 0u)
@@ -938,12 +940,14 @@ astra_vfs_port_transport(void *context, uint32_t operation,
             client->port_accelerator_ops != NULL) {
             status = client->port_accelerator_ops->transport(
                 client, operation, request, reply);
+            port_call.request.flags = 0u;
             port_client_finish(client, 0);
             return status;
         }
         lane = port_session_lane(client);
         status = lane == NULL ? ASTRA_VFS_ERR_BAD_HANDLE :
             vfs_port_transport_call(context, operation, request, reply, lane);
+        port_call.request.flags = 0u;
         port_client_finish(client, 0);
         return status;
     }
@@ -992,6 +996,7 @@ done:
         __atomic_store_n(&client->port_connecting, 0u, __ATOMIC_RELEASE);
         (void)astra_futex_wake(&client->port_connecting, UINT32_MAX, NULL);
     }
+    port_call.request.flags = 0u;
     astra_vfs_port_client_leave(client);
     return status;
 }
@@ -1580,36 +1585,66 @@ port_read_borrow_call(AstraVfsClient *client, AstraVfsFile file,
         if (*moved > length)
             return ASTRA_VFS_ERR_PROTOCOL;
         *bytes = direct_lane->direct_address;
-        return ASTRA_VFS_OK;
+    } else {
+        status = direct_accelerated(client) ?
+            ensure_direct_area(client, length) :
+            ensure_area_size(client, length);
+        if (status != ASTRA_VFS_OK)
+            return status;
+        lane = port_lane(client);
+        if (length > (direct_accelerated(client) ? lane->direct_size :
+                                                   lane->area_size))
+            return ASTRA_VFS_ERR_LIMIT;
+        prepare_request(client, ASTRA_VFS_OP_READ_AREA);
+        port_call.request.file = file;
+        port_call.request.offset = offset;
+        port_call.request.length = length;
+        status = direct_accelerated(client) ?
+            client->port_accelerator_ops->bulk(
+                client, ASTRA_VFS_OP_READ_AREA, &port_call.request,
+                lane->direct_address, lane->direct_size,
+                &port_call.reply) :
+            astra_vfs_port_transport(client, ASTRA_VFS_OP_READ_AREA,
+                                     &port_call.request, &port_call.reply);
+        if (status != ASTRA_VFS_OK)
+            return status;
+        if (port_call.reply.status != ASTRA_VFS_OK)
+            return port_call.reply.status;
+        if (port_call.reply.count > length)
+            return ASTRA_VFS_ERR_PROTOCOL;
+        *bytes = astra_vfs_port_call_area(client, NULL);
+        *moved = port_call.reply.count;
     }
-    status = direct_accelerated(client) ? ensure_direct_area(client, length) :
-                                          ensure_area_size(client, length);
-    if (status != ASTRA_VFS_OK)
-        return status;
-    lane = port_lane(client);
-    if (length > (direct_accelerated(client) ? lane->direct_size :
-                                               lane->area_size))
-        return ASTRA_VFS_ERR_LIMIT;
-    prepare_request(client, ASTRA_VFS_OP_READ_AREA);
+    port_call.borrow_valid = 1u;
     port_call.request.file = file;
     port_call.request.offset = offset;
-    port_call.request.length = length;
-    status = direct_accelerated(client) ?
-        client->port_accelerator_ops->bulk(
-            client, ASTRA_VFS_OP_READ_AREA, &port_call.request,
-            lane->direct_address, lane->direct_size,
-            &port_call.reply) :
-        astra_vfs_port_transport(client, ASTRA_VFS_OP_READ_AREA,
-                                 &port_call.request, &port_call.reply);
-    if (status != ASTRA_VFS_OK)
-        return status;
-    if (port_call.reply.status != ASTRA_VFS_OK)
-        return port_call.reply.status;
-    if (port_call.reply.count > length)
-        return ASTRA_VFS_ERR_PROTOCOL;
-    *bytes = astra_vfs_port_call_area(client, NULL);
-    *moved = port_call.reply.count;
+    port_call.request.length = *moved;
+    port_call.borrow_client = client;
+    port_call.borrow_base = *bytes;
     return ASTRA_VFS_OK;
+}
+
+static int
+port_read_borrow_cached(AstraVfsClient *client, AstraVfsFile file,
+                        uint64_t offset, uint32_t length,
+                        const uint8_t **bytes, uint32_t *moved)
+{
+    AstraVfsPortCallState *state = port_state(client);
+    uint64_t within;
+
+    if (__atomic_load_n(&client->port_lifecycle, __ATOMIC_ACQUIRE) !=
+            PORT_CLIENT_OPEN ||
+        state->borrow_valid == 0u ||
+        state->borrow_client != client || state->request.file != file ||
+        offset < state->request.offset)
+        return 0;
+    within = offset - state->request.offset;
+    if (within > state->request.length ||
+        length > state->request.length - (uint32_t)within)
+        return 0;
+    *bytes = state->borrow_base + within;
+    *moved = length;
+    return 1;
 }
 
 uint32_t
@@ -1621,6 +1656,10 @@ astra_vfs_port_read_borrow(AstraVfsClient *client, AstraVfsFile file,
 
     if (client == NULL || bytes == NULL || moved == NULL || length == 0u)
         return ASTRA_VFS_ERR_INVALID;
+    *bytes = NULL;
+    *moved = 0u;
+    if (port_read_borrow_cached(client, file, offset, length, bytes, moved))
+        return ASTRA_VFS_OK;
     status = astra_vfs_port_client_enter(client);
     if (status == ASTRA_VFS_OK) {
         status = port_read_borrow_call(client, file, offset, length, bytes,

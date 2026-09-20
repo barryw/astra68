@@ -419,6 +419,37 @@ astra_rt_library_attach(const AstraLibraryReference *reference,
 }
 
 uint32_t
+astra_rt_library_attach_resident(const char *identity,
+                                 uint32_t *base, uint32_t *span,
+                                 uint32_t *load_handle)
+{
+    AstraSyscallResult result;
+    char name[ASTRA_LIBRARY_NAME_MAX] = {0};
+    uint32_t length = 0u;
+
+    if (identity == NULL || base == NULL || span == NULL ||
+        load_handle == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    *base = 0u;
+    *span = 0u;
+    *load_handle = 0u;
+    while (length < sizeof(name) && identity[length] != '\0') {
+        name[length] = identity[length];
+        ++length;
+    }
+    if (length == 0u || length == sizeof(name))
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_LIBRARY_ATTACH_RESIDENT,
+                   (uint32_t)(uintptr_t)name, 0u, 0u, 0u, 0u, &result);
+    if (result.status == ASTRA_SYSCALL_OK) {
+        *base = result.value0;
+        *span = result.value1;
+        *load_handle = result.value2;
+    }
+    return result.status;
+}
+
+uint32_t
 astra_rt_process_dynamic_commit(const void *tls_template, uint32_t tls_size,
                                 uint32_t tls_alignment,
                                 uint32_t storage_size)

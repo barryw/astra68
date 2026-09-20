@@ -38,6 +38,7 @@ static uint32_t mock_thread_handle = 0x22222222u;
 static int mock_clone_child;
 static uint32_t mock_cancel_wait_once;
 static uint64_t mock_time_ns;
+static uint32_t mock_clock_calls;
 
 #define MOCK_STREAM_FILE_OFFSET (5u * 1024u * 1024u)
 #define MOCK_STREAM_FILE_BYTES 17u
@@ -173,6 +174,7 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
     }
     result->value2 = mock_thread_handle;
     if (number == ASTRA_SYSCALL_CLOCK_MONOTONIC) {
+        ++mock_clock_calls;
         result->value0 = (uint32_t)(mock_time_ns >> 32);
         result->value1 = (uint32_t)mock_time_ns;
         mock_time_ns += 100u;
@@ -455,6 +457,7 @@ test_syscall_wrappers(void)
     uint64_t old_interval;
     void *private_address;
     char ring_bytes[8];
+    char long_library_identity[ASTRA_LIBRARY_NAME_MAX + 1u];
     AstraLibraryReference reference = {
         .size = ASTRA_LIBRARY_REFERENCE_SIZE,
         .name = "filesystem.library",
@@ -705,6 +708,21 @@ test_syscall_wrappers(void)
     assert(abi == ASTRA_SYSCALL_ABI_VERSION);
     assert(span == 0x11111111u);
     assert(moved == mock_thread_handle);
+    assert(astra_rt_library_attach_resident(
+               "filesystem.library.1", &abi, &span, &moved) ==
+           ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_LIBRARY_ATTACH_RESIDENT);
+    assert(mock_argument0 != 0u);
+    assert(abi == ASTRA_SYSCALL_ABI_VERSION);
+    assert(span == 0x11111111u);
+    assert(moved == mock_thread_handle);
+    memset(long_library_identity, 'x', sizeof(long_library_identity));
+    long_library_identity[sizeof(long_library_identity) - 1u] = '\0';
+    calls = mock_calls;
+    assert(astra_rt_library_attach_resident(
+               long_library_identity, &abi, &span, &moved) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(mock_calls == calls && abi == 0u && span == 0u && moved == 0u);
 
     assert(astra_rt_process_dynamic_commit(
                (void *)(uintptr_t)ASTRA_PRIVATE_ADDRESS_START,
@@ -1330,11 +1348,13 @@ static void test_executable_streamed_launch(void)
     mock_stream_dynamic = 0u;
     mock_stream_write_calls = 0u;
     mock_stream_commit_calls = 0u;
+    mock_clock_calls = 0u;
     assert(astra_launch_executable_stream(
                &source, interpreter_open, &resolver, NULL, 0u, NULL, NULL,
                &handle, &id) == ASTRA_SYSCALL_OK);
     assert(program.releases == 1u && resolver.calls == 0u);
     assert(mock_stream_dynamic == 0u && mock_stream_commit_calls == 1u);
+    assert(mock_clock_calls == 0u);
 
     executable_launch_fixture(&program, "loader.library.1");
     executable_launch_fixture(&interpreter, NULL);
@@ -1343,23 +1363,27 @@ static void test_executable_streamed_launch(void)
     mock_stream_dynamic = 0u;
     mock_stream_write_calls = 0u;
     mock_stream_commit_calls = 0u;
+    mock_clock_calls = 0u;
     assert(astra_launch_executable_stream(
                &source, interpreter_open, &resolver, NULL, 0u, NULL, NULL,
                &handle, &id) == ASTRA_SYSCALL_OK);
     assert(program.releases == 1u && interpreter.releases == 1u);
     assert(resolver.calls == 1u && mock_stream_dynamic == 1u &&
            mock_stream_commit_calls == 1u);
+    assert(mock_clock_calls == 0u);
 
     executable_launch_fixture(&program, "loader.library.1");
     source.context = &program;
     resolver.calls = 0u;
     resolver.status = ASTRA_SYSCALL_IO_ERROR;
     mock_stream_begin_calls = 0u;
+    mock_clock_calls = 0u;
     assert(astra_launch_executable_stream(
                &source, interpreter_open, &resolver, NULL, 0u, NULL, NULL,
                &handle, &id) == ASTRA_SYSCALL_IO_ERROR);
     assert(program.releases == 1u && resolver.calls == 1u);
     assert(mock_stream_begin_calls == 0u);
+    assert(mock_clock_calls == 0u);
 }
 
 static void test_executable_streamed_exec(void)

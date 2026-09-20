@@ -67,7 +67,8 @@ static KernelVmStatus map_owned_page(KernelAddressSpace *space,
                                      KernelFrameState required_state,
                                      bool cache_inhibit,
                                      uint32_t frame_owner,
-                                     uint32_t admitted_regions);
+                                     uint32_t admitted_regions,
+                                     bool synchronize);
 
 #if defined(KERNEL_VM_HOST_TEST)
 #define VM_KERNEL_THREAD_STACKS_START \
@@ -570,6 +571,12 @@ static void invalidate_caches(void)
         kernel_cache_invalidate_all();
         ++vm_stats.cache_invalidations;
     }
+}
+
+static bool active_user_space(const KernelAddressSpace *space)
+{
+    return enabled && space != NULL &&
+           space->root_physical == current_user_root;
 }
 
 static KernelVmStatus allocate_table(uint32_t owner, uint32_t *physical)
@@ -1116,7 +1123,7 @@ KernelVmStatus kernel_vm_private_fault(KernelAddressSpace *space,
             (private_slot_marked(space->private_writable, slot) ?
                  KERNEL_VM_WRITE : 0u),
         KERNEL_FRAME_PROCESS, false, space->owner,
-        1u << ASTRA_ADDRESS_REGION_PRIVATE_MEMORY);
+        1u << ASTRA_ADDRESS_REGION_PRIVATE_MEMORY, true);
     if (status == KERNEL_VM_OK) {
         if (kernel_memory_release(physical, 1u, space->owner) !=
             KERNEL_MEMORY_OK)
@@ -1421,7 +1428,8 @@ static KernelVmStatus map_owned_page(KernelAddressSpace *space,
                                      KernelFrameState required_state,
                                      bool cache_inhibit,
                                      uint32_t frame_owner,
-                                     uint32_t admitted_regions)
+                                     uint32_t admitted_regions,
+                                     bool synchronize)
 {
     VmPagePath path;
     KernelFrameInfo frame;
@@ -1480,8 +1488,10 @@ static KernelVmStatus map_owned_page(KernelAddressSpace *space,
         ((permissions & KERNEL_VM_WRITE) != 0u ? 0u :
          VM_DESC_WRITE_PROTECT) |
         (cache_inhibit ? VM_DESC_CACHE_INHIBIT : 0u);
-    invalidate_caches();
-    flush_page(virtual_address);
+    if (synchronize && active_user_space(space)) {
+        invalidate_caches();
+        flush_page(virtual_address);
+    }
     ++space->mapped_pages;
     ++vm_stats.user_mappings;
     space->table_pages += allocated_tables;
@@ -1525,8 +1535,10 @@ KernelVmStatus kernel_vm_map_host_channel_page(
     }
     path.page_table[VM_PAGE_INDEX(virtual_address)] =
         physical_address | VM_DESC_CACHE_INHIBIT | VM_DESC_PAGE;
-    invalidate_caches();
-    flush_page(virtual_address);
+    if (active_user_space(space)) {
+        invalidate_caches();
+        flush_page(virtual_address);
+    }
     ++space->mapped_pages;
     ++vm_stats.user_mappings;
     space->table_pages += allocated_tables;
@@ -1548,7 +1560,7 @@ KernelVmStatus kernel_vm_map_page(KernelAddressSpace *space,
 
     return map_owned_page(space, virtual_address, physical_address,
                           permissions, KERNEL_FRAME_PROCESS, false,
-                          space->owner, process_regions);
+                          space->owner, process_regions, true);
 }
 
 KernelVmStatus kernel_vm_map_transfer_page(KernelAddressSpace *space,
@@ -1560,7 +1572,7 @@ KernelVmStatus kernel_vm_map_transfer_page(KernelAddressSpace *space,
         return KERNEL_VM_INVALID_ARGUMENT;
     return map_owned_page(space, virtual_address, physical_address,
                           permissions, KERNEL_FRAME_DMA, true, space->owner,
-                          1u << ASTRA_ADDRESS_REGION_DMA);
+                          1u << ASTRA_ADDRESS_REGION_DMA, true);
 }
 
 KernelVmStatus kernel_vm_map_shared_page(KernelAddressSpace *space,
@@ -1575,7 +1587,8 @@ KernelVmStatus kernel_vm_map_shared_page(KernelAddressSpace *space,
                           permissions, KERNEL_FRAME_SHARED, false,
                           frame_owner,
                           (1u << ASTRA_ADDRESS_REGION_DYNAMIC_IMAGES) |
-                              (1u << ASTRA_ADDRESS_REGION_SHARED_AREAS));
+                              (1u << ASTRA_ADDRESS_REGION_SHARED_AREAS),
+                          true);
 }
 
 KernelVmStatus kernel_vm_map_cow_page(KernelAddressSpace *space,
@@ -1596,7 +1609,8 @@ KernelVmStatus kernel_vm_map_cow_page(KernelAddressSpace *space,
                               (1u << ASTRA_ADDRESS_REGION_DYNAMIC_IMAGES) |
                               (1u << ASTRA_ADDRESS_REGION_PRIVATE_MEMORY) |
                               (1u << ASTRA_ADDRESS_REGION_THREAD_STACKS) |
-                              (1u << ASTRA_ADDRESS_REGION_THREAD_TLS));
+                              (1u << ASTRA_ADDRESS_REGION_THREAD_TLS),
+                          true);
 }
 
 KernelVmStatus kernel_vm_promote_page_to_cow(KernelAddressSpace *space,
@@ -1640,7 +1654,8 @@ KernelVmStatus kernel_vm_promote_page_to_cow(KernelAddressSpace *space,
         (1u << VM_MAPPING_COUNT_SHIFT) | VM_MAPPING_COW_CLASS;
     path.page_table[VM_PAGE_INDEX(virtual_address)] =
         descriptor | VM_DESC_WRITE_PROTECT;
-    flush_page(virtual_address);
+    if (active_user_space(space))
+        flush_page(virtual_address);
     return KERNEL_VM_OK;
 }
 
@@ -1686,7 +1701,8 @@ KernelVmStatus kernel_vm_cow_make_private(KernelAddressSpace *space,
         frame.state == KERNEL_FRAME_COW_WRITE ?
             descriptor & ~VM_DESC_WRITE_PROTECT :
             descriptor | VM_DESC_WRITE_PROTECT;
-    flush_page(virtual_address);
+    if (active_user_space(space))
+        flush_page(virtual_address);
     return KERNEL_VM_OK;
 }
 
@@ -1761,8 +1777,10 @@ KernelVmStatus kernel_vm_cow_fault(KernelAddressSpace *space,
     }
     path.page_table[VM_PAGE_INDEX(virtual_address)] =
         replacement | VM_DESC_PAGE;
-    invalidate_caches();
-    flush_page(virtual_address);
+    if (active_user_space(space)) {
+        invalidate_caches();
+        flush_page(virtual_address);
+    }
     if (kernel_memory_release(physical, 1u, frame.owner) != KERNEL_MEMORY_OK)
         return KERNEL_VM_CORRUPT;
     return KERNEL_VM_OK;
@@ -2020,8 +2038,10 @@ KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,
         return KERNEL_VM_CORRUPT;
     frame_owner = host_channel ? 0u : frame.owner;
     path.page_table[VM_PAGE_INDEX(virtual_address)] = VM_DESC_INVALID;
-    invalidate_caches();
-    flush_page(virtual_address);
+    if (active_user_space(space)) {
+        invalidate_caches();
+        flush_page(virtual_address);
+    }
     if (!host_channel &&
         (!frame_mapping_remove(page_physical,
                                (KernelFrameState)frame.state,
@@ -2036,7 +2056,8 @@ KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,
                            space->owner, &released_tables) != KERNEL_VM_OK)
         return KERNEL_VM_CORRUPT;
     if (released_tables != 0u) {
-        flush_all();
+        if (active_user_space(space))
+            flush_all();
         space->table_pages -= released_tables;
         vm_stats.user_table_pages -= released_tables;
     }
@@ -2103,7 +2124,8 @@ KernelVmStatus kernel_vm_map_shared_range(
             physical_pages[mapped], permissions, KERNEL_FRAME_SHARED,
             false, frame_owner,
             (1u << ASTRA_ADDRESS_REGION_DYNAMIC_IMAGES) |
-                (1u << ASTRA_ADDRESS_REGION_SHARED_AREAS));
+                (1u << ASTRA_ADDRESS_REGION_SHARED_AREAS),
+            false);
         if (result != KERNEL_VM_OK)
             goto rollback;
 #if defined(KERNEL_VM_HOST_TEST)
@@ -2122,6 +2144,10 @@ KernelVmStatus kernel_vm_map_shared_range(
             goto rollback;
         }
 #endif
+    }
+    if (active_user_space(space)) {
+        invalidate_caches();
+        flush_all();
     }
     return KERNEL_VM_OK;
 
@@ -2174,6 +2200,8 @@ KernelVmStatus kernel_vm_protect_read_only_ranges(
     KernelAddressSpace *space, const KernelVmPageRange *ranges,
     uint32_t range_count)
 {
+    bool changed = false;
+
     if (ranges == NULL || range_count == 0u)
         return KERNEL_VM_INVALID_ARGUMENT;
 
@@ -2202,9 +2230,11 @@ KernelVmStatus kernel_vm_protect_read_only_ranges(
             if ((path.page_table[index] & VM_DESC_WRITE_PROTECT) != 0u)
                 continue;
             path.page_table[index] |= VM_DESC_WRITE_PROTECT;
-            flush_page(address);
+            changed = true;
         }
     }
+    if (changed && active_user_space(space))
+        flush_all();
     return KERNEL_VM_OK;
 }
 

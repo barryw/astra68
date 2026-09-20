@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <astra/address_space.h>
 #include <astra/vfs_reader.h>
 
 static AstraVfsClient mock_client;
@@ -13,6 +14,7 @@ static uint32_t read_status;
 static uint32_t read_moved;
 static uint32_t read_offset;
 static uint32_t read_length;
+static uint32_t read_count;
 static uint8_t read_bytes[4096];
 static uint8_t provider_record[] = {
     'A', 'P', 'R', 'V', 0, 2, 0, 24,
@@ -69,6 +71,7 @@ uint32_t astra_vfs_port_read_borrow(AstraVfsClient *client,
                                     uint32_t *moved)
 {
     assert(client == &mock_client && file == 9u);
+    ++read_count;
     read_offset = (uint32_t)offset;
     read_length = length;
     if (read_status == ASTRA_VFS_OK) {
@@ -122,6 +125,29 @@ int main(void)
     assert(bytes == read_bytes && moved == 17u);
     assert(read_offset == 5u * 1024u * 1024u && read_length == 17u);
 
+    read_moved = ASTRA_EXECUTABLE_HEADER_SIZE;
+    assert(astra_vfs_read_source_read_at(
+               &source, 0u, ASTRA_EXECUTABLE_HEADER_SIZE, &bytes, &moved) ==
+           ASTRA_VFS_OK);
+    assert(bytes == read_bytes && moved == ASTRA_EXECUTABLE_HEADER_SIZE);
+    assert(read_offset == 0u &&
+           read_length == ASTRA_EXECUTABLE_HEADER_SIZE);
+
+    read_moved = ASTRA_VFS_BULK_MAX;
+    assert(astra_vfs_read_source_read_at(
+               &source, 0u, ASTRA_MEMORY_PAGE_SIZE, &bytes, &moved) ==
+           ASTRA_VFS_OK);
+    assert(bytes == read_bytes && moved == ASTRA_MEMORY_PAGE_SIZE);
+    assert(read_offset == 0u && read_length == ASTRA_VFS_BULK_MAX);
+
+    read_moved = ASTRA_MEMORY_PAGE_SIZE - 1u;
+    bytes = read_bytes;
+    moved = UINT32_MAX;
+    assert(astra_vfs_read_source_read_at(
+               &source, 0u, ASTRA_MEMORY_PAGE_SIZE, &bytes, &moved) ==
+           ASTRA_VFS_ERR_IO);
+    assert(bytes == NULL && moved == 0u && read_count == 4u);
+
     assert(astra_vfs_read_source_read_at(
                &source, source.length - 1u, 2u, &bytes, &moved) ==
            ASTRA_VFS_ERR_INVALID);
@@ -154,6 +180,17 @@ int main(void)
     open_status = ASTRA_VFS_OK;
     open_kind = ASTRA_VFS_KIND_FILE;
     read_status = ASTRA_VFS_OK;
+    {
+        char path[ASTRA_VFS_PATH_MAX];
+
+        assert(astra_vfs_library_resolve(
+                   &table, "LIBS", "runtime.library.1", client_for, NULL,
+                   path, sizeof(path), &reference) == ASTRA_VFS_OK);
+        assert(open_count == 1u);
+        assert(strcmp(path, "LIBS:Runtime.kit/runtime.library") == 0);
+        assert(reference.size == ASTRA_LIBRARY_REFERENCE_SIZE);
+    }
+    open_count = 0u;
     assert(astra_vfs_library_source_open(
                &source, &table, "LIBS", "runtime.library.1", client_for,
                NULL, &reference) == ASTRA_VFS_OK);
@@ -168,6 +205,16 @@ int main(void)
 
     open_count = 0u;
     provider_record[0] = 'X';
+    {
+        char path[ASTRA_VFS_PATH_MAX] = "stale";
+
+        assert(astra_vfs_library_resolve(
+                   &table, "LIBS", "runtime.library.1", client_for, NULL,
+                   path, sizeof(path), &reference) ==
+               ASTRA_VFS_ERR_PROTOCOL);
+        assert(open_count == 1u && path[0] == '\0' && reference.size == 0u);
+    }
+    open_count = 0u;
     assert(astra_vfs_library_source_open(
                &source, &table, "LIBS", "runtime.library.1", client_for,
                NULL, &reference) == ASTRA_VFS_ERR_PROTOCOL);

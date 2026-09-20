@@ -113,6 +113,7 @@ ASTRA_RUNTIME_1.0 {
         astra_rt_interval_timer;
         astra_rt_interval_timer_get;
         astra_rt_library_attach;
+        astra_rt_library_attach_resident;
         astra_rt_port_create;
         astra_rt_process_dynamic_commit;
         astra_rt_private_decommit;

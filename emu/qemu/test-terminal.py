@@ -864,9 +864,17 @@ def zsh_interactive(machine, command_deadline, verbose=False):
     # become ready before launching the next.
     for observer in range(4):
         before = machine.sequence()
-        machine.qmp.double_click(*TERMINAL_ICON)
+        machine.qmp.type_line("open APPS:Terminal.app")
         if machine.wait_for_text(BANNER, command_deadline, before)[0] is None:
             print("FAIL: observer terminal %u did not open" % (observer + 1))
+            for text in machine.said(before)[0][-80:]:
+                print("    |%s|" % text)
+            print("recent trace lines:")
+            for text in machine.trace()[-120:]:
+                print("    %s" % text)
+            print("recent serial lines:")
+            for text in machine.recent_serial(80):
+                print("    %s" % text)
             return False
         if not machine.wait_for_ready(command_deadline, before):
             print("FAIL: observer zsh %u never became ready" % (observer + 1))

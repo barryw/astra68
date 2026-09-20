@@ -413,6 +413,7 @@ KernelDispatchTarget syscall_entry_dispatch_profiled(
             metric = KERNEL_PERFORMANCE_RING_NOTIFY;
             break;
         case ASTRA_SYSCALL_LIBRARY_ATTACH:
+        case ASTRA_SYSCALL_LIBRARY_ATTACH_RESIDENT:
             metric = KERNEL_PERFORMANCE_LIBRARY_ATTACH;
             break;
         default:

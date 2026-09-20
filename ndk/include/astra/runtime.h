@@ -425,6 +425,15 @@ uint32_t astra_rt_library_attach(const AstraLibraryReference *reference,
                                  uint32_t *base, uint32_t *span,
                                  uint32_t *load_handle);
 /**
+ * Attach the sole resident library matching an ABI identity.
+ * Returns WOULD_BLOCK when no unique resident match exists, allowing the
+ * caller to resolve an exact provider reference and retry with
+ * astra_rt_library_attach().
+ */
+uint32_t astra_rt_library_attach_resident(const char *identity,
+                                          uint32_t *base, uint32_t *span,
+                                          uint32_t *load_handle);
+/**
  * Finalize an interpreted process after eager relocation.
  *
  * This one-way call installs the combined initial-exec TLS template for the

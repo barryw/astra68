@@ -9425,15 +9425,34 @@ static void test_streamed_library_is_sparse_atomic_and_reclaimable(void)
                registers, KERNEL_PROCESS_STACK_TOP - 8u, frame, &next) ==
            KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
-    assert(kernel_user_copy_to_asm(user_bytes, &reference,
-                                   sizeof(reference)) ==
-           KERNEL_USER_COPY_OK);
+    {
+        char missing[ASTRA_LIBRARY_NAME_MAX] = "missing.library.1";
+
+        assert(kernel_user_copy_to_asm(user_bytes, missing,
+                                       sizeof(missing)) ==
+               KERNEL_USER_COPY_OK);
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_LIBRARY_ATTACH_RESIDENT;
+        registers[1] = user_bytes;
+        assert(kernel_process_on_syscall(
+                   registers, KERNEL_PROCESS_STACK_TOP - 8u, frame, &next) ==
+               KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_WOULD_BLOCK);
+    }
     for (uint32_t attempt = 0u; attempt < 2u; ++attempt) {
         uint32_t attach_handle;
         uint32_t attach_base;
 
+        assert(kernel_user_copy_to_asm(
+                   user_bytes,
+                   attempt == 0u ? (const void *)reference.name :
+                                   (const void *)&reference,
+                   attempt == 0u ? sizeof(reference.name) :
+                                   sizeof(reference)) == KERNEL_USER_COPY_OK);
         memset(registers, 0, sizeof(registers));
-        registers[0] = ASTRA_SYSCALL_LIBRARY_ATTACH;
+        registers[0] = attempt == 0u ?
+            ASTRA_SYSCALL_LIBRARY_ATTACH_RESIDENT :
+            ASTRA_SYSCALL_LIBRARY_ATTACH;
         registers[1] = user_bytes;
         assert(kernel_process_on_syscall(
                    registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,

@@ -4912,6 +4912,27 @@ static bool library_page_iterator_next(KernelLibraryPageIterator *iterator,
     return true;
 }
 
+static bool library_page_iterator_chunk(KernelLibraryPageIterator *iterator,
+                                        const uint32_t **pages,
+                                        uint32_t *count)
+{
+    if (iterator == NULL || pages == NULL || count == NULL ||
+        iterator->block == NULL)
+        return false;
+    if (iterator->index == iterator->block->count) {
+        iterator->block_physical = iterator->block->next_physical;
+        if (iterator->block_physical == 0u)
+            return false;
+        iterator->block = library_page_block(iterator->block_physical);
+        iterator->index = 0u;
+        if (iterator->block == NULL || iterator->block->count == 0u)
+            return false;
+    }
+    *pages = &iterator->block->pages[iterator->index];
+    *count = iterator->block->count - iterator->index;
+    return true;
+}
+
 static KernelProcessStatus library_metadata_allocate(uint32_t *physical,
                                                      void **metadata)
 {
@@ -5173,16 +5194,22 @@ static KernelProcessStatus map_cached_library(
         const KernelElfSegment *segment = &plan->segment[index];
         uint32_t rights = segment_vm_rights(segment->rights);
 
-        for (uint32_t page = 0u; page < segment->page_count; ++page) {
+        for (uint32_t page = 0u; page < segment->page_count;) {
             uint32_t address = virtual_base + segment->virtual_address +
                                (page * KERNEL_PAGE_SIZE);
             uint32_t physical;
 
-            if (!library_page_iterator_next(&iterator, &physical))
-                goto failed;
             if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) == 0u) {
-                KernelVmStatus vm_status = kernel_vm_map_shared_page(
-                    &process->address_space, address, physical,
+                const uint32_t *pages;
+                uint32_t count;
+                KernelVmStatus vm_status;
+
+                if (!library_page_iterator_chunk(&iterator, &pages, &count))
+                    goto failed;
+                if (count > segment->page_count - page)
+                    count = segment->page_count - page;
+                vm_status = kernel_vm_map_shared_range(
+                    &process->address_space, address, pages, count,
                     LIBRARY_CACHE_OWNER, rights);
 
                 if (vm_status == KERNEL_VM_OUT_OF_MEMORY)
@@ -5193,9 +5220,13 @@ static KernelProcessStatus map_cached_library(
                     failure = KERNEL_PROCESS_CORRUPT;
                 if (vm_status != KERNEL_VM_OK)
                     goto failed;
-                ++mapped;
+                iterator.index += count;
+                mapped += count;
+                page += count;
                 continue;
             }
+            if (!library_page_iterator_next(&iterator, &physical))
+                goto failed;
             {
                 const uint8_t *source = physical_bytes(
                     physical, KERNEL_PAGE_SIZE);
@@ -5209,6 +5240,7 @@ static KernelProcessStatus map_cached_library(
                     goto failed;
             }
             ++mapped;
+            ++page;
         }
     }
     *mapped_base = virtual_base;
@@ -5232,6 +5264,48 @@ failed:
         }
     }
     return failure;
+}
+
+static void library_load_release(void *object, void *context);
+
+static KernelProcessStatus attach_cached_library(
+    KernelProcess *process, KernelLibraryCacheEntry *cached,
+    uint32_t *base, uint32_t *span, KernelHandle *handle)
+{
+    KernelLibraryLoad *load = NULL;
+    uint32_t load_physical = 0u;
+    KernelProcessStatus status;
+
+    if (process == NULL || cached == NULL || base == NULL || span == NULL ||
+        handle == NULL)
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
+    *base = 0u;
+    *span = 0u;
+    *handle = KERNEL_HANDLE_INVALID;
+    if (kernel_handle_available(process->handles) == 0u)
+        return KERNEL_PROCESS_RESOURCE_LIMIT;
+    status = library_metadata_allocate(&load_physical, (void **)&load);
+    if (status != KERNEL_PROCESS_OK)
+        return status;
+    load->owner = process->id;
+    load->self_physical = load_physical;
+    load->magic = KERNEL_LIBRARY_LOAD_MAGIC;
+    load->stage = KERNEL_LIBRARY_LOAD_MAPPED;
+    status = map_cached_library(process, cached, base, span);
+    if (status == KERNEL_PROCESS_OK) {
+        load->mapped_entry = cached;
+        load->process = process;
+        load->mapped_base = *base;
+        load->mapped_span = *span;
+        if (kernel_handle_install(
+                process->handles, KERNEL_OBJECT_LIBRARY_LOAD,
+                KERNEL_LIBRARY_LOAD_RIGHT, load, library_load_release,
+                NULL, handle) != KERNEL_HANDLE_OK)
+            status = KERNEL_PROCESS_RESOURCE_LIMIT;
+    }
+    if (status != KERNEL_PROCESS_OK && *handle == KERNEL_HANDLE_INVALID)
+        library_load_release(load, NULL);
+    return status;
 }
 
 static bool library_load_valid(const KernelLibraryLoad *load)
@@ -8432,7 +8506,6 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
     case ASTRA_SYSCALL_LIBRARY_ATTACH: {
         AstraLibraryReference reference;
         KernelLibraryCacheEntry *cached = NULL;
-        KernelLibraryLoad *load = NULL;
         KernelHandle load_handle = KERNEL_HANDLE_INVALID;
         uint32_t physical;
         uint32_t base = 0u;
@@ -8462,52 +8535,59 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             result = ASTRA_SYSCALL_WOULD_BLOCK;
             break;
         }
-        if (kernel_handle_available(current->handles) == 0u) {
-            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+        library_status = attach_cached_library(
+            current, cached, &base, &span, &load_handle);
+        if (!library_status_to_syscall(library_status, &result))
+            return KERNEL_PROCESS_CORRUPT;
+        if (library_status != KERNEL_PROCESS_OK)
             break;
-        }
-        {
-            uint32_t load_physical = 0u;
+        thread->context.data[1] = base;
+        thread->context.data[2] = span;
+        thread->context.data[3] = load_handle;
+        break;
+    }
+    case ASTRA_SYSCALL_LIBRARY_ATTACH_RESIDENT: {
+        char identity[ASTRA_LIBRARY_NAME_MAX];
+        KernelLibraryCacheEntry *cached = NULL;
+        KernelHandle load_handle = KERNEL_HANDLE_INVALID;
+        uint32_t physical;
+        uint32_t base = 0u;
+        uint32_t span = 0u;
+        KernelProcessStatus library_status;
 
-            library_status = library_metadata_allocate(
-                &load_physical, (void **)&load);
-            if (library_status == KERNEL_PROCESS_OK) {
-                load->owner = current->id;
-                load->self_physical = load_physical;
-                load->magic = KERNEL_LIBRARY_LOAD_MAGIC;
-                load->stage = KERNEL_LIBRARY_LOAD_MAPPED;
-            }
-        }
-        if (library_status != KERNEL_PROCESS_OK) {
-            if (!library_status_to_syscall(library_status, &result))
-                return KERNEL_PROCESS_CORRUPT;
-            break;
-        }
-        library_status = map_cached_library(current, cached, &base, &span);
-        if (library_status == KERNEL_PROCESS_OK) {
-            load->mapped_entry = cached;
-            load->process = current;
-            load->mapped_base = base;
-            load->mapped_span = span;
-            if (kernel_handle_install(
-                    current->handles, KERNEL_OBJECT_LIBRARY_LOAD,
-                    KERNEL_LIBRARY_LOAD_RIGHT, load, library_load_release,
-                    NULL, &load_handle) != KERNEL_HANDLE_OK)
-                library_status = KERNEL_PROCESS_RESOURCE_LIMIT;
-        }
-        if (library_status != KERNEL_PROCESS_OK &&
-            load_handle == KERNEL_HANDLE_INVALID)
-            library_load_release(load, NULL);
-        if (library_status == KERNEL_PROCESS_INVALID_ARGUMENT) {
+        if (kernel_copy_from_user(identity, thread->context.data[1],
+                                  sizeof(identity)) != KERNEL_USER_COPY_OK ||
+            !library_name_valid(identity)) {
             result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             break;
         }
-        if (library_status == KERNEL_PROCESS_OUT_OF_MEMORY) {
-            result = ASTRA_SYSCALL_OUT_OF_MEMORY;
+        physical = library_cache_head;
+        while (physical != 0u) {
+            KernelLibraryCacheEntry *candidate =
+                library_cache_entry(physical);
+
+            if (candidate == NULL)
+                return KERNEL_PROCESS_CORRUPT;
+            physical = candidate->next_physical;
+            if (!kernel_bytes_equal(candidate->reference.name, identity,
+                                    sizeof(identity)))
+                continue;
+            if (cached != NULL) {
+                cached = NULL;
+                break;
+            }
+            cached = candidate;
+        }
+        if (cached == NULL) {
+            result = ASTRA_SYSCALL_WOULD_BLOCK;
             break;
         }
+        library_status = attach_cached_library(
+            current, cached, &base, &span, &load_handle);
+        if (!library_status_to_syscall(library_status, &result))
+            return KERNEL_PROCESS_CORRUPT;
         if (library_status != KERNEL_PROCESS_OK)
-            return library_status;
+            break;
         thread->context.data[1] = base;
         thread->context.data[2] = span;
         thread->context.data[3] = load_handle;

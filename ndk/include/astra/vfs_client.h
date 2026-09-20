@@ -84,6 +84,9 @@ typedef struct AstraVfsPortThreadState {
     AstraVfsRequest area_request;
     AstraVfsRequest request;
     AstraVfsReply reply;
+    uint32_t borrow_valid;
+    const struct AstraVfsClient *borrow_client;
+    const uint8_t *borrow_base;
     /** @endcond */
 } AstraVfsPortThreadState;
 

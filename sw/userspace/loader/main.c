@@ -56,24 +56,31 @@ static int text_equal(const char *left, const char *right, uint32_t capacity)
     return 0;
 }
 
-static int reference_matches(const AstraLibraryReference *reference,
-                             const AstraLibrary *identity,
-                             const char *soname)
+static int identity_matches(const char *expected,
+                            const AstraLibrary *identity,
+                            const char *soname)
 {
-    return reference != NULL && identity != NULL && soname != NULL &&
+    return expected != NULL && identity != NULL && soname != NULL &&
            identity->magic == ASTRA_LIBRARY_MAGIC &&
            identity->record_version == ASTRA_LIBRARY_RECORD_VERSION &&
            identity->header_size == ASTRA_LIBRARY_SIZE &&
            identity->target == ASTRA_LIBRARY_TARGET_M68040 &&
+           text_equal(identity->name, expected, ASTRA_LIBRARY_NAME_MAX) &&
+           text_equal(identity->name, soname, ASTRA_LIBRARY_NAME_MAX);
+}
+
+static int reference_matches(const AstraLibraryReference *reference,
+                             const AstraLibrary *identity,
+                             const char *soname)
+{
+    return reference != NULL &&
+           identity_matches(reference->name, identity, soname) &&
            identity->major == reference->major &&
            identity->minor == reference->minor &&
            identity->patch == reference->patch &&
            identity->abi_major == reference->abi_major &&
            identity->abi_minor == reference->abi_minor &&
-           identity->build_id == reference->build_id &&
-           text_equal(identity->name, reference->name,
-                      ASTRA_LIBRARY_NAME_MAX) &&
-           text_equal(identity->name, soname, ASTRA_LIBRARY_NAME_MAX);
+           identity->build_id == reference->build_id;
 }
 
 static uint32_t source_status(uint32_t status)
@@ -87,13 +94,15 @@ static uint32_t dependency_open(void *opaque, const char *identity,
                                 AstraDynamicImage *image, void **out_token)
 {
     LoaderDependency *dependency;
-    AstraLibraryReference reference;
+    AstraLibraryReference reference = {0};
     AstraSyscallResult result;
     const uint8_t *header = NULL;
     const char *soname = NULL;
+    char path[ASTRA_VFS_PATH_MAX];
     uint32_t base = 0u;
     uint32_t span = 0u;
     uint32_t status;
+    int resident = 0;
 
     (void)opaque;
     *out_token = NULL;
@@ -101,19 +110,32 @@ static uint32_t dependency_open(void *opaque, const char *identity,
     if (dependency == NULL)
         return ASTRA_SYSCALL_OUT_OF_MEMORY;
     dependency->source = (AstraVfsReadSource)ASTRA_VFS_READ_SOURCE_INIT;
-    status = astra_process_library_source_open(
-        identity, &dependency->source, &reference);
-    if (status != ASTRA_VFS_OK) {
-        status = source_status(status);
-        (void)astra_log_failure(identity, status);
-        astra_runtime_deallocate(dependency);
-        return status;
-    }
-
-    status = astra_rt_library_attach(
-        &reference, &base, &span, &dependency->load_handle);
+    status = astra_rt_library_attach_resident(
+        identity, &base, &span, &dependency->load_handle);
+    if (status == ASTRA_SYSCALL_OK)
+        resident = 1;
     if (status == ASTRA_SYSCALL_WOULD_BLOCK ||
         status == ASTRA_SYSCALL_BAD_SYSCALL) {
+        status = astra_vfs_library_resolve(
+            astra_process_vfs_assigns(), "LIBS", identity,
+            astra_process_vfs_assign_client, NULL,
+            path, sizeof(path), &reference);
+        if (status != ASTRA_VFS_OK)
+            status = source_status(status);
+        if (status == ASTRA_SYSCALL_OK)
+            status = astra_rt_library_attach(
+                &reference, &base, &span, &dependency->load_handle);
+        if (status == ASTRA_SYSCALL_WOULD_BLOCK ||
+            status == ASTRA_SYSCALL_BAD_SYSCALL) {
+            status = astra_vfs_read_source_open(
+                &dependency->source, astra_process_vfs_assigns(), path,
+                astra_process_vfs_assign_client, NULL);
+            if (status != ASTRA_VFS_OK)
+                status = source_status(status);
+        }
+    }
+    if (status == ASTRA_SYSCALL_OK &&
+        dependency->source.file != ASTRA_VFS_FILE_INVALID) {
         status = astra_stream_read_exact(
             astra_vfs_read_source_read_at, &dependency->source,
             dependency->source.length, 0u, ASTRA_EXECUTABLE_HEADER_SIZE,
@@ -147,11 +169,17 @@ static uint32_t dependency_open(void *opaque, const char *identity,
             ASTRA_DYNAMIC_OK ||
         astra_dynamic_soname(image, &soname) != ASTRA_DYNAMIC_OK ||
         span <= ASTRA_LIBRARY_FILE_OFFSET + ASTRA_LIBRARY_SIZE ||
-        !reference_matches(
-            &reference,
-            (const AstraLibrary *)(uintptr_t)
-                (base + ASTRA_LIBRARY_FILE_OFFSET),
-            soname)) {
+        !(resident != 0 ?
+            identity_matches(
+                identity,
+                (const AstraLibrary *)(uintptr_t)
+                    (base + ASTRA_LIBRARY_FILE_OFFSET),
+                soname) :
+            reference_matches(
+                &reference,
+                (const AstraLibrary *)(uintptr_t)
+                    (base + ASTRA_LIBRARY_FILE_OFFSET),
+                soname))) {
         uint32_t failure = status == ASTRA_SYSCALL_OUT_OF_MEMORY ? status :
                                                                   ASTRA_SYSCALL_INVALID_ARGUMENT;
 
