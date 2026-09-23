@@ -61,7 +61,7 @@ astra_vfs_port_set_thread_storage(AstraVfsClient *client,
                                   uint32_t capacity)
 {
     if (client == NULL || states == NULL ||
-        capacity != ASTRA_PROCESS_THREAD_COUNT_MAX ||
+        capacity != ASTRA_PROCESS_THREAD_SLOT_COUNT ||
         client->transport != NULL)
         return 0;
     memset(states, 0, capacity * sizeof(*states));
@@ -88,13 +88,13 @@ port_state(AstraVfsClient *client)
 {
     AstraVfsPortCallState *states;
     uint32_t capacity;
-    uint32_t owners[ASTRA_PROCESS_THREAD_COUNT_MAX];
+    uint32_t owners[ASTRA_PROCESS_THREAD_SLOT_COUNT];
     uint32_t thread = 0u;
 
     if (client == NULL ||
         astra_query_abi(NULL, NULL, &thread) != ASTRA_SYSCALL_OK ||
         thread == 0u || client->port_thread_states == NULL ||
-        client->port_thread_capacity != ASTRA_PROCESS_THREAD_COUNT_MAX)
+        client->port_thread_capacity != ASTRA_PROCESS_THREAD_SLOT_COUNT)
         astra_assert_failed(__FILE__, __LINE__,
                             "VFS per-thread call storage unavailable");
     states = client->port_thread_states;
@@ -184,7 +184,7 @@ lane_resources_close(AstraVfsPortLane *lane)
 static AstraVfsPortLane *
 port_lane(AstraVfsClient *client)
 {
-    uint32_t owners[ASTRA_PROCESS_THREAD_COUNT_MAX];
+    uint32_t owners[ASTRA_PROCESS_THREAD_SLOT_COUNT];
     uint32_t thread = port_state(client)->owner_thread;
 
     test_port_lane_lookup(client);
@@ -193,14 +193,14 @@ port_lane(AstraVfsClient *client)
         if (astra_mutex_lock(&client->port_lane_lock) != ASTRA_SYSCALL_OK)
             astra_assert_failed(__FILE__, __LINE__,
                                 "VFS lane lock failed");
-        for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_COUNT_MAX;
+        for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_SLOT_COUNT;
              ++index) {
             if (client->port_lanes[index].owner_thread == thread) {
                 (void)astra_mutex_unlock(&client->port_lane_lock);
                 return &client->port_lanes[index];
             }
         }
-        for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_COUNT_MAX;
+        for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_SLOT_COUNT;
              ++index) {
             if (client->port_lanes[index].owner_thread == 0u) {
                 client->port_lanes[index].owner_thread = thread;
@@ -210,12 +210,12 @@ port_lane(AstraVfsClient *client)
                 return &client->port_lanes[index];
             }
         }
-        for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_COUNT_MAX;
+        for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_SLOT_COUNT;
              ++index)
             owners[index] = client->port_lanes[index].owner_thread;
         (void)astra_mutex_unlock(&client->port_lane_lock);
 
-        for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_COUNT_MAX;
+        for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_SLOT_COUNT;
              ++index) {
             AstraVfsPortLane detached;
 
@@ -360,16 +360,22 @@ astra_vfs_port_quota_storage(uint32_t element_size, void **storage,
                              uint32_t *capacity)
 {
     uint32_t handle = 0u;
+    uint32_t bytes;
     uint32_t span = 0u;
     uint32_t count;
     void *address = NULL;
 
-    if (element_size == 0u || storage == NULL || capacity == NULL)
+    if (storage == NULL || capacity == NULL)
         return 0;
     *storage = NULL;
     *capacity = 0u;
+    if (element_size == 0u)
+        return 0;
+    bytes = element_size >
+                    ASTRA_AREA_SIZE_MAX / ASTRA_VFS_FILE_HANDLE_MAX ?
+        ASTRA_AREA_SIZE_MAX : element_size * ASTRA_VFS_FILE_HANDLE_MAX;
     if (astra_rt_area_create_flagged(
-            ASTRA_AREA_SIZE_MAX,
+            bytes,
             ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP,
             ASTRA_AREA_CREATE_RESERVED, &handle) != ASTRA_SYSCALL_OK)
         return 0;
@@ -416,7 +422,7 @@ clear_service_reply(AstraVfsReply *reply, uint16_t version, uint32_t session)
 static void
 port_client_handles_reset(AstraVfsClient *client)
 {
-    for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_COUNT_MAX;
+    for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_SLOT_COUNT;
          ++index)
         lane_resources_close(&client->port_lanes[index]);
     if (client->port_connect_lock != 0u)
@@ -562,7 +568,7 @@ port_client_fail(AstraVfsClient *client)
         return;
     /* Closing receive capabilities wakes every lane blocked on a dead peer.
      * Mappings remain valid until the last in-flight caller leaves. */
-    for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_COUNT_MAX;
+    for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_SLOT_COUNT;
          ++index)
         if (client->port_lanes[index].reply_receive != 0u)
             (void)astra_close(client->port_lanes[index].reply_receive);
@@ -909,7 +915,7 @@ port_session_lane(AstraVfsClient *client)
 
     if (astra_mutex_lock(&client->port_lane_lock) != ASTRA_SYSCALL_OK)
         return NULL;
-    for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_COUNT_MAX;
+    for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_SLOT_COUNT;
          ++index)
         if (client->port_lanes[index].session ==
                 port_client_session(client) &&

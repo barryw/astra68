@@ -40,14 +40,10 @@
 
 #include <stdint.h>
 
-#define PROC_NODE_SLOT_BITS 6u
-#define PROC_NODE_SLOT_MASK ((1u << PROC_NODE_SLOT_BITS) - 1u)
-#define PROC_NODE_LEAF_SHIFT PROC_NODE_SLOT_BITS
-#define PROC_NODE_GENERATION_SHIFT (PROC_NODE_SLOT_BITS + 1u)
-#define PROC_NODE_GENERATION_MASK (UINT32_MAX >> PROC_NODE_GENERATION_SHIFT)
-#define PROC_NODE_SNAPSHOT 33u
-#define PROC_NODE_LIBRARY_MEMORY 34u
-#define PROC_NODE_LIBRARY_DISK 35u
+#define PROC_NODE_SNAPSHOT 1u
+#define PROC_NODE_LIBRARY_MEMORY 2u
+#define PROC_NODE_LIBRARY_DISK 3u
+#define PROC_OPEN_NODE_MAGIC 0x50524f43u
 
 enum ProcProcessLeaf {
     PROC_PROCESS_DIRECTORY = 0,
@@ -55,10 +51,17 @@ enum ProcProcessLeaf {
     PROC_PROCESS_LIBRARIES
 };
 
-_Static_assert(ASTRA_PROCESS_COUNT_MAX < (1u << PROC_NODE_SLOT_BITS),
-               "PROC node slot field is too narrow");
+typedef struct ProcOpenNode {
+    uint32_t magic;
+    uint32_t process_id;
+    uint32_t generation;
+    uint32_t leaf;
+} ProcOpenNode;
 
-static AstraProcSnapshot snapshot[ASTRA_PROCESS_COUNT_MAX];
+static SupervisorProcSnapshotStore snapshot_store;
+#define snapshot (snapshot_store.records)
+#define snapshot_count (snapshot_store.count)
+#define snapshot_capacity (snapshot_store.capacity)
 #define PROC_LIBRARY_SNAPSHOT_BYTES 4096u
 #define PROC_LIBRARY_SNAPSHOT_BATCH \
     (PROC_LIBRARY_SNAPSHOT_BYTES / sizeof(AstraProcLibrarySnapshot))
@@ -67,24 +70,24 @@ static AstraProcLibrarySnapshot libraries[PROC_LIBRARY_SNAPSHOT_BATCH];
 _Static_assert(PROC_LIBRARY_SNAPSHOT_BATCH != 0u,
                "PROC library transfer page holds no records");
 
-static uintptr_t
-process_node(uint32_t index, uint32_t generation, enum ProcProcessLeaf leaf)
-{
-    return (uintptr_t)(((generation & PROC_NODE_GENERATION_MASK) <<
-                        PROC_NODE_GENERATION_SHIFT) |
-                       ((uint32_t)(leaf == PROC_PROCESS_LIBRARIES) <<
-                        PROC_NODE_LEAF_SHIFT) | (index + 1u));
-}
-
 static uint32_t
 refresh_snapshot(void)
 {
     uint32_t live = 0u;
-    uint32_t status = astra_process_snapshot(
-        supervisor_loader_process_handle(), snapshot,
-        ASTRA_PROCESS_COUNT_MAX, &live);
+    uint32_t status;
 
-    (void)live;
+    status = astra_process_snapshot(supervisor_loader_process_handle(),
+                                    snapshot, snapshot_capacity, &live);
+    if (status == ASTRA_SYSCALL_BUFFER_TOO_SMALL) {
+        if (!supervisor_proc_snapshot_reserve(
+                &snapshot_store, live, astra_runtime_reallocate))
+            return ASTRA_VFS_ERR_LIMIT;
+        status = astra_process_snapshot(
+            supervisor_loader_process_handle(), snapshot,
+            snapshot_capacity, &live);
+    }
+    if (status == ASTRA_SYSCALL_OK)
+        snapshot_count = live;
     if (status == ASTRA_SYSCALL_OK)
         return ASTRA_VFS_OK;
     if (status == ASTRA_SYSCALL_ACCESS_DENIED)
@@ -178,15 +181,6 @@ proc_text_hex(ProcText *text, uint32_t value)
     }
 }
 
-static int
-library_maps_process(const AstraProcLibrarySnapshot *library, uint32_t pid)
-{
-    for (uint32_t at = 0u; at < library->mapping_count; ++at)
-        if (library->process_ids[at] == pid)
-            return 1;
-    return 0;
-}
-
 static uint32_t
 render_library_text(uint32_t pid, ProcText *text)
 {
@@ -194,7 +188,7 @@ render_library_text(uint32_t pid, ProcText *text)
     uint32_t total = 0u;
 
     proc_text_string(text,
-        "NAME VERSION ABI BUILD BASE SPAN CACHE RESIDENT MAPPED REFS PIDS\n",
+        "NAME VERSION ABI BUILD BASE SPAN CACHE RESIDENT MAPPED REFS PID\n",
         UINT32_MAX);
     do {
         uint32_t moved = 0u;
@@ -210,7 +204,7 @@ render_library_text(uint32_t pid, ProcText *text)
         for (uint32_t slot = 0u; slot < moved; ++slot) {
             const AstraProcLibrarySnapshot *library = &libraries[slot];
 
-            if (pid != 0u && !library_maps_process(library, pid))
+            if (pid != 0u && library->process_id != pid)
                 continue;
             proc_text_string(text, library->library.name,
                              sizeof(library->library.name));
@@ -239,13 +233,10 @@ render_library_text(uint32_t pid, ProcText *text)
             proc_text_byte(text, ' ');
             proc_text_number(text, library->reference_count);
             proc_text_byte(text, ' ');
-            if (library->mapping_count == 0u)
+            if (library->process_id == 0u)
                 proc_text_byte(text, '-');
-            for (uint32_t at = 0u; at < library->mapping_count; ++at) {
-                if (at != 0u)
-                    proc_text_byte(text, ',');
-                proc_text_number(text, library->process_ids[at]);
-            }
+            else
+                proc_text_number(text, library->process_id);
             proc_text_byte(text, '\n');
         }
         start += moved;
@@ -459,7 +450,7 @@ render_disk_libraries(ProcText *text)
 /*
  * A path is "", "<id>" or "<id>/status", with an optional leading slash so a
  * caller that built one by joining is not punished for the join. Returns the
- * kernel slot, or the physical process count when no process matches.
+ * snapshot index, or UINT32_MAX when no process matches.
  */
 static uint32_t
 parse_path(const char *path, enum ProcProcessLeaf *leaf)
@@ -470,20 +461,20 @@ parse_path(const char *path, enum ProcProcessLeaf *leaf)
 
     *leaf = PROC_PROCESS_DIRECTORY;
     if (path == NULL)
-        return ASTRA_PROCESS_COUNT_MAX;
+        return UINT32_MAX;
     while (path[at] == '/')
         ++at;
     while (path[at] >= '0' && path[at] <= '9' && digits < 10u) {
         uint32_t digit = (uint32_t)(path[at] - '0');
 
         if (id > (ASTRA_PROCESS_ID_MAX - digit) / 10u)
-            return ASTRA_PROCESS_COUNT_MAX;
+            return UINT32_MAX;
         id = (id * 10u) + digit;
         ++at;
         ++digits;
     }
     if (digits == 0u)
-        return ASTRA_PROCESS_COUNT_MAX;
+        return UINT32_MAX;
     while (path[at] == '/')
         ++at;
     if (path[at] != '\0') {
@@ -492,13 +483,13 @@ parse_path(const char *path, enum ProcProcessLeaf *leaf)
         else if (supervisor_proc_path_equal(path + at, "libraries"))
             *leaf = PROC_PROCESS_LIBRARIES;
         else
-            return ASTRA_PROCESS_COUNT_MAX;
+            return UINT32_MAX;
     }
-    for (uint32_t index = 0u; index < ASTRA_PROCESS_COUNT_MAX; ++index) {
+    for (uint32_t index = 0u; index < snapshot_count; ++index) {
         if (snapshot[index].process.id == id)
             return index;
     }
-    return ASTRA_PROCESS_COUNT_MAX;
+    return UINT32_MAX;
 }
 
 static uint32_t
@@ -506,7 +497,7 @@ render_status(uint32_t index, ProcText *text)
 {
     const AstraProcessInfo *info;
 
-    if (index >= ASTRA_PROCESS_COUNT_MAX || snapshot[index].process.id == 0u)
+    if (index >= snapshot_count || snapshot[index].process.id == 0u)
         return ASTRA_VFS_ERR_NOT_FOUND;
     info = &snapshot[index].process;
     proc_text_string(text, "name ", UINT32_MAX);
@@ -542,14 +533,29 @@ render_status(uint32_t index, ProcText *text)
 }
 
 static uint32_t
+find_snapshot_process(uint32_t process_id, uint32_t generation)
+{
+    for (uint32_t index = 0u; index < snapshot_count; ++index) {
+        if (snapshot[index].process.id == process_id &&
+            snapshot[index].process.generation == generation)
+            return index;
+    }
+    return UINT32_MAX;
+}
+
+static uint32_t
 read_snapshot(uint64_t offset, uint8_t *out, uint32_t length, uint32_t *moved)
 {
-    const uint8_t *bytes = (const uint8_t *)snapshot;
-    uint32_t total = sizeof(snapshot);
+    const uint8_t *bytes;
+    uint32_t total;
 
     *moved = 0u;
     if (refresh_snapshot() != ASTRA_VFS_OK)
         return ASTRA_VFS_ERR_IO;
+    if (snapshot_count > UINT32_MAX / sizeof(*snapshot))
+        return ASTRA_VFS_ERR_LIMIT;
+    bytes = (const uint8_t *)snapshot;
+    total = snapshot_count * (uint32_t)sizeof(*snapshot);
     if (offset >= total)
         return ASTRA_VFS_OK;
     total -= (uint32_t)offset;
@@ -583,8 +589,10 @@ proc_open(void *context, const char *path, uint32_t flags,
         return ASTRA_VFS_OK;
     }
     if (supervisor_proc_path_is_snapshot(path)) {
+        if (refresh_snapshot() != ASTRA_VFS_OK)
+            return ASTRA_VFS_ERR_IO;
         *node = PROC_NODE_SNAPSHOT;
-        info->size = sizeof(snapshot);
+        info->size = (uint64_t)snapshot_count * sizeof(*snapshot);
         info->kind = ASTRA_VFS_KIND_FILE;
         info->mode = 0400u;
         info->nlink = 1u;
@@ -626,7 +634,7 @@ proc_open(void *context, const char *path, uint32_t flags,
     if (refresh_snapshot() != ASTRA_VFS_OK)
         return ASTRA_VFS_ERR_IO;
     index = parse_path(path, &leaf);
-    if (index >= ASTRA_PROCESS_COUNT_MAX)
+    if (index >= snapshot_count)
         return ASTRA_VFS_ERR_NOT_FOUND;
     if (leaf == PROC_PROCESS_DIRECTORY) {
         *node = 0u;
@@ -650,7 +658,18 @@ proc_open(void *context, const char *path, uint32_t flags,
             return ASTRA_VFS_ERR_IO;
         length = (uint32_t)text.length;
     }
-    *node = process_node(index, snapshot[index].process.generation, leaf);
+    {
+        ProcOpenNode *opened = astra_runtime_reallocate(NULL,
+                                                        sizeof(*opened));
+
+        if (opened == NULL)
+            return ASTRA_VFS_ERR_LIMIT;
+        opened->magic = PROC_OPEN_NODE_MAGIC;
+        opened->process_id = snapshot[index].process.id;
+        opened->generation = snapshot[index].process.generation;
+        opened->leaf = leaf;
+        *node = (uintptr_t)opened;
+    }
     info->size = length;
     info->kind = ASTRA_VFS_KIND_FILE;
     info->mode = 0400u;
@@ -661,8 +680,15 @@ proc_open(void *context, const char *path, uint32_t flags,
 static uint32_t
 proc_close(void *context, uintptr_t node)
 {
+    ProcOpenNode *opened = (ProcOpenNode *)node;
+
     (void)context;
-    (void)node;
+    if (node > PROC_NODE_LIBRARY_DISK) {
+        if (opened->magic != PROC_OPEN_NODE_MAGIC)
+            return ASTRA_VFS_ERR_INVALID;
+        opened->magic = 0u;
+        (void)astra_runtime_reallocate(opened, 0u);
+    }
     return ASTRA_VFS_OK;
 }
 
@@ -670,6 +696,7 @@ static uint32_t
 proc_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
           uint32_t length, uint32_t *moved)
 {
+    ProcOpenNode *opened;
     uint32_t index;
     uint8_t *out = buffer;
 
@@ -704,33 +731,28 @@ proc_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
     }
     if (node == 0u)
         return ASTRA_VFS_ERR_IS_DIR;
+    opened = (ProcOpenNode *)node;
+    if (opened->magic != PROC_OPEN_NODE_MAGIC ||
+        (opened->leaf != PROC_PROCESS_STATUS &&
+         opened->leaf != PROC_PROCESS_LIBRARIES))
+        return ASTRA_VFS_ERR_INVALID;
     if (refresh_snapshot() != ASTRA_VFS_OK)
         return ASTRA_VFS_ERR_IO;
-    index = ((uint32_t)node & PROC_NODE_SLOT_MASK);
-    if (index == 0u || index > ASTRA_PROCESS_COUNT_MAX)
+    index = find_snapshot_process(opened->process_id, opened->generation);
+    if (index == UINT32_MAX)
         return ASTRA_VFS_OK;
-    --index;
-    {
-        enum ProcProcessLeaf leaf =
-            ((uint32_t)node & (1u << PROC_NODE_LEAF_SHIFT)) != 0u ?
-                PROC_PROCESS_LIBRARIES : PROC_PROCESS_STATUS;
+    if (opened->leaf == PROC_PROCESS_LIBRARIES) {
+        ProcText text = {
+            .out = out,
+            .offset = offset,
+            .capacity = length,
+        };
 
-        if (process_node(index, snapshot[index].process.generation, leaf) !=
-                node || snapshot[index].process.id == 0u)
-            return ASTRA_VFS_OK;
-        if (leaf == PROC_PROCESS_LIBRARIES) {
-            ProcText text = {
-                .out = out,
-                .offset = offset,
-                .capacity = length,
-            };
-
-            if (render_library_text(snapshot[index].process.id, &text) !=
-                ASTRA_VFS_OK)
-                return ASTRA_VFS_ERR_IO;
-            *moved = text.moved;
-            return ASTRA_VFS_OK;
-        }
+        if (render_library_text(snapshot[index].process.id, &text) !=
+            ASTRA_VFS_OK)
+            return ASTRA_VFS_ERR_IO;
+        *moved = text.moved;
+        return ASTRA_VFS_OK;
     }
     {
         ProcText text = {
@@ -794,7 +816,7 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
         uint32_t index = parse_path(path, &leaf);
 
         if (leaf != PROC_PROCESS_DIRECTORY ||
-            index >= ASTRA_PROCESS_COUNT_MAX)
+            index >= snapshot_count)
             return ASTRA_VFS_ERR_NOT_FOUND;
         if (cookie >= 2u)
             return ASTRA_VFS_ERR_NOT_FOUND;
@@ -842,7 +864,7 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
     if (refresh_snapshot() != ASTRA_VFS_OK)
         return ASTRA_VFS_ERR_IO;
     for (uint32_t index = (uint32_t)cookie - 2u;
-         index < ASTRA_PROCESS_COUNT_MAX; ++index) {
+         index < snapshot_count; ++index) {
         const AstraProcessInfo *process = &snapshot[index].process;
         ProcText text = {
             .out = (uint8_t *)(void *)name,

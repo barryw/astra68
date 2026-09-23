@@ -1,8 +1,21 @@
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <astra/vfs_assign.h>
+
+static int fail_reallocate;
+
+void *astra_runtime_reallocate(void *pointer, size_t size)
+{
+    return fail_reallocate ? NULL : realloc(pointer, size);
+}
+
+void astra_runtime_deallocate(void *pointer)
+{
+    free(pointer);
+}
 
 static void
 test_bind_and_look_up(void)
@@ -25,6 +38,7 @@ test_bind_and_look_up(void)
 
     /* A name nobody bound is not a name this process has. */
     assert(astra_assign_lookup(&table, "SYS") == NULL);
+    astra_assign_table_destroy(&table);
 }
 
 static void
@@ -60,6 +74,7 @@ test_refusals(void)
     assert(astra_assign_lookup(&table, "WORK") == NULL);
     assert(astra_assign_lookup(&table, NULL) == NULL);
     assert(astra_assign_lookup(NULL, "WORK") == NULL);
+    astra_assign_table_destroy(&table);
 }
 
 static void
@@ -100,6 +115,7 @@ test_roots_are_normalised(void)
     assert(astra_assign_bind(&table, "E", 1u, 1u, NULL) ==
            ASTRA_VFS_ERR_INVALID);
     assert(astra_assign_lookup(&table, "E") == NULL);
+    astra_assign_table_destroy(&table);
 }
 
 static void
@@ -122,17 +138,22 @@ test_rebinding_and_capacity(void)
     assert(astra_assign_lookup(&table, "WORK") == NULL);
     assert(astra_assign_unbind(&table, "WORK") == ASTRA_VFS_ERR_NOT_FOUND);
 
-    for (index = 0u; index < ASTRA_ASSIGN_MAX; ++index) {
+    for (index = 0u; index < 64u; ++index) {
         snprintf(name, sizeof(name), "N%u", index);
         assert(astra_assign_bind(&table, name, index + 1u, 1u, "") ==
                ASTRA_VFS_OK);
     }
+    assert(table.count > ASTRA_STARTUP_CAPABILITY_MAX);
+    fail_reallocate = 1;
     assert(astra_assign_bind(&table, "ONEMORE", 1u, 1u, "") ==
            ASTRA_VFS_ERR_LIMIT);
+    fail_reallocate = 0;
 
-    /* A full table still answers for what it holds. */
+    /* Failed growth changes nothing already held. */
+    assert(table.count == 64u);
     assert(astra_assign_lookup(&table, "N0") != NULL);
-    assert(astra_assign_lookup(&table, "N15") != NULL);
+    assert(astra_assign_lookup(&table, "N63") != NULL);
+    astra_assign_table_destroy(&table);
 }
 
 static void
@@ -158,6 +179,7 @@ test_unbinding_keeps_the_rest_reachable(void)
     assert(strcmp(astra_assign_lookup(&table, "WORK")->root, "work") == 0);
     assert(astra_assign_lookup(&table, "TEMP")->handle == 3u);
     assert(strcmp(astra_assign_lookup(&table, "TEMP")->root, "temp") == 0);
+    astra_assign_table_destroy(&table);
 }
 
 static void
@@ -207,6 +229,7 @@ test_resolving(void)
     assert(astra_assign_resolve(&table, "SYS:.", ASTRA_RIGHT_READ, 0u, wire,
                                 sizeof(wire), NULL) == ASTRA_VFS_OK);
     assert(strcmp(wire, "/") == 0);
+    astra_assign_table_destroy(&table);
 }
 
 static void
@@ -267,6 +290,7 @@ test_resolution_refusals(void)
            ASTRA_VFS_ERR_INVALID);
     assert(astra_assign_resolve(&table, "WORK:x", ASTRA_RIGHT_READ, 0u, wire,
                                 1u, NULL) == ASTRA_VFS_ERR_INVALID);
+    astra_assign_table_destroy(&table);
 }
 
 /*
@@ -326,6 +350,7 @@ test_seeding_from_a_capability_table(void)
     AstraAssignTable table;
     const AstraAssign *found;
 
+    astra_assign_table_init(&table);
     /* The shape the kernel publishes: its own two first, then the grants. */
     capability_unnamed(&capabilities[0], ASTRA_CAPABILITY_PROCESS, 1u,
                        ASTRA_RIGHT_READ);
@@ -362,6 +387,14 @@ test_seeding_from_a_capability_table(void)
     assert(found->handle == 11u);
     assert(found->rights == ASTRA_RIGHT_READ);
 
+    /* A failed replacement leaves the live namespace intact. */
+    fail_reallocate = 1;
+    assert(astra_assign_seed(&table, capabilities + 2u, 1u) ==
+           ASTRA_VFS_ERR_LIMIT);
+    fail_reallocate = 0;
+    assert(astra_assign_lookup(&table, "WORK") != NULL);
+    assert(astra_assign_lookup(&table, "EVENTS") != NULL);
+
     /* A name is canonical however the grant spelled it. */
     capability(&capabilities[2], "work", 9u, ASTRA_RIGHT_READ);
     assert(astra_assign_seed(&table, capabilities, 3u) == ASTRA_VFS_OK);
@@ -370,6 +403,7 @@ test_seeding_from_a_capability_table(void)
     /* Seeding replaces a namespace rather than adding to one. */
     assert(astra_assign_seed(&table, capabilities, 2u) == ASTRA_VFS_OK);
     assert(table.count == 0u);
+    astra_assign_table_destroy(&table);
 }
 
 static void
@@ -379,6 +413,7 @@ test_seeding_builds_a_union(void)
     AstraStartupCapability capabilities[3];
     char wire[ASTRA_VFS_PATH_MAX];
 
+    astra_assign_table_init(&table);
     capability_rooted(&capabilities[0], "WORK", 4u,
                       ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "work");
     capability_rooted(&capabilities[1], "COMMANDS", 5u,
@@ -406,6 +441,7 @@ test_seeding_builds_a_union(void)
     assert(strcmp(wire, "/commands/status") == 0);
     assert(astra_assign_member(&table, "COMMANDS", 1u)->rights ==
            ASTRA_RIGHT_READ);
+    astra_assign_table_destroy(&table);
 }
 
 static void
@@ -414,6 +450,7 @@ test_seeding_refusals(void)
     AstraStartupCapability capabilities[3];
     AstraAssignTable table;
 
+    astra_assign_table_init(&table);
     capability(&capabilities[0], "WORK", 9u, ASTRA_RIGHT_READ);
     /*
      * A grant that is not a namespace name is skipped, not fatal. The
@@ -444,6 +481,7 @@ test_seeding_refusals(void)
     assert(astra_assign_seed(&table, capabilities,
                              ASTRA_STARTUP_CAPABILITY_MAX + 1u) ==
            ASTRA_VFS_ERR_INVALID);
+    astra_assign_table_destroy(&table);
 }
 
 /*
@@ -460,6 +498,7 @@ test_seeding_skipped_first_record_still_binds(void)
     AstraAssignTable table;
     const AstraAssign *found;
 
+    astra_assign_table_init(&table);
     /* No rights: skipped, the same as test_seeding_refusals's EVENTS. */
     capability(&capabilities[0], "EVENTS", 10u, 0u);
     capability_rooted(&capabilities[1], "EVENTS", 11u, ASTRA_RIGHT_READ,
@@ -474,17 +513,19 @@ test_seeding_skipped_first_record_still_binds(void)
     assert(strcmp(found->root, "activity") == 0);
     /* Bound, not joined: there is no member ahead of it. */
     assert(astra_assign_member(&table, "EVENTS", 1u) == NULL);
+    astra_assign_table_destroy(&table);
 }
 
 /* Every namespace record that physically fits in the startup table fits here. */
 static void
 test_seeding_at_capacity(void)
 {
-    AstraStartupCapability capabilities[ASTRA_ASSIGN_MAX];
+    AstraStartupCapability capabilities[ASTRA_STARTUP_CAPABILITY_MAX];
     AstraAssignTable table;
     uint32_t index;
 
-    for (index = 0u; index < ASTRA_ASSIGN_MAX; ++index) {
+    astra_assign_table_init(&table);
+    for (index = 0u; index < ASTRA_STARTUP_CAPABILITY_MAX; ++index) {
         char name[ASTRA_CAPABILITY_NAME_MAX];
 
         name[0] = 'N';
@@ -493,9 +534,11 @@ test_seeding_at_capacity(void)
         name[3] = '\0';
         capability(&capabilities[index], name, index + 1u, ASTRA_RIGHT_READ);
     }
-    assert(astra_assign_seed(&table, capabilities, ASTRA_ASSIGN_MAX) ==
+    assert(astra_assign_seed(&table, capabilities,
+                             ASTRA_STARTUP_CAPABILITY_MAX) ==
            ASTRA_VFS_OK);
-    assert(table.count == ASTRA_ASSIGN_MAX);
+    assert(table.count == ASTRA_STARTUP_CAPABILITY_MAX);
+    astra_assign_table_destroy(&table);
 }
 
 static void
@@ -544,6 +587,7 @@ test_joining_makes_members(void)
     assert(astra_assign_resolve(&table, "COMMANDS:new", ASTRA_RIGHT_WRITE, 1u,
                                 wire, sizeof(wire), NULL) ==
            ASTRA_VFS_ERR_ACCESS);
+    astra_assign_table_destroy(&table);
 }
 
 static void
@@ -576,6 +620,7 @@ test_joining_refusals(void)
     assert(table.count == 1u);
     assert(astra_assign_member(&table, "COMMANDS", 1u) == NULL);
     assert(astra_assign_lookup(&table, "COMMANDS")->handle == 3u);
+    astra_assign_table_destroy(&table);
 }
 
 static void
@@ -614,6 +659,7 @@ test_unbinding_a_union_keeps_the_order_of_the_rest(void)
     assert(table.count == 1u);
     assert(astra_assign_lookup(&table, "COMMANDS") == NULL);
     assert(astra_assign_lookup(&table, "SYS")->handle == 4u);
+    astra_assign_table_destroy(&table);
 }
 
 int

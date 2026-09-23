@@ -69,9 +69,10 @@ must not infer them from linker symbols.
 | `0x04000000` | `0x0422FFFF` | 2.188 MiB | Dynamic frame/ownership metadata for the 512 MiB profile | Kernel |
 | `0x04230000` | `0x21FFFFFF` | 477.812 MiB | Usable RAM | Physical-page allocator |
 
-`AstraBootInfo` itself begins at `0x01FF8000` and is 268 bytes as of boot ABI
-0.7. The linker reserves the first 1 KiB of bootstrap BRAM for the handoff
-structure and ABI growth. The canonical definitions are in
+`AstraBootInfo` itself begins at `0x01FF8000` and is 1,020 bytes as of boot ABI
+1.0. Its 57 memory-range slots consume every complete record that fits in the
+linker-reserved 1 KiB handoff storage; the bound is the storage resource, not
+an independently chosen range count. The canonical definitions are in
 `sw/include/astra/boot.h`.
 
 Firmware copies the one initial user image immediately after the fixed kernel

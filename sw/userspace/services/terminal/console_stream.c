@@ -22,6 +22,7 @@
 #include <astra/utf8.h>
 
 #include <stddef.h>
+#include <stdint.h>
 
 /*
  * Four messages of depth on the sink. It is the back pressure a writer sees, so
@@ -54,9 +55,7 @@ static uint32_t sink_send;
 static uint32_t sink_receive;
 static uint32_t source_send;
 static uint32_t source_receive;
-static uint32_t source_area;
 static uint8_t *source_storage;
-static uint32_t source_storage_size;
 static int stream_ready;
 static uint32_t posix_process_service;
 /*
@@ -68,6 +67,33 @@ static uint32_t posix_process_service;
 static AstraStreamSink redirect_sink;
 static uint32_t redirect_send;
 static uint32_t redirect_receive;
+
+static int
+source_reserve(uint32_t additional)
+{
+    uint32_t needed;
+    uint32_t capacity;
+    uint8_t *replacement;
+
+    if (additional > UINT32_MAX - source.length)
+        return 0;
+    needed = source.length + additional;
+    if (needed <= source.capacity)
+        return 1;
+    capacity = source.capacity;
+    while (capacity < needed) {
+        capacity = capacity > UINT32_MAX / 2u ? needed : capacity * 2u;
+    }
+    replacement = astra_runtime_allocate(capacity);
+    if (replacement == NULL ||
+        !astra_stream_source_rebind_storage(&source, replacement, capacity)) {
+        astra_runtime_deallocate(replacement);
+        return 0;
+    }
+    astra_runtime_deallocate(source_storage);
+    source_storage = replacement;
+    return 1;
+}
 
 /*
  * Straight into the cell model, which is where the shell's own output goes.
@@ -140,17 +166,8 @@ console_stream_start(AstraTerminal *terminal, uint32_t process_service)
         sink_receive = 0u;
         return 0;
     }
-    if (astra_rt_area_create_flagged(
-            ASTRA_AREA_SIZE_MAX,
-            ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP,
-            ASTRA_AREA_CREATE_RESERVED, &source_area) != ASTRA_SYSCALL_OK ||
-        astra_rt_area_map(source_area,
-                          ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
-                          (void **)&source_storage,
-                          &source_storage_size) != ASTRA_SYSCALL_OK) {
-        if (source_area != 0u)
-            (void)astra_close(source_area);
-        source_area = 0u;
+    source_storage = astra_runtime_allocate(ASTRA_STREAM_WRITE_MAX);
+    if (source_storage == NULL) {
         (void)astra_close(source_send);
         (void)astra_close(source_receive);
         (void)astra_close(sink_send);
@@ -161,12 +178,9 @@ console_stream_start(AstraTerminal *terminal, uint32_t process_service)
     if (!astra_stream_sink_init(&sink, sink_receive, render, sink_terminal) ||
         !astra_stream_source_init_storage(&source, source_receive,
                                           source_storage,
-                                          source_storage_size)) {
-        (void)astra_rt_area_unmap(source_storage);
+                                          ASTRA_STREAM_WRITE_MAX)) {
+        astra_runtime_deallocate(source_storage);
         source_storage = NULL;
-        source_storage_size = 0u;
-        (void)astra_close(source_area);
-        source_area = 0u;
         (void)astra_close(source_send);
         (void)astra_close(source_receive);
         (void)astra_close(sink_send);
@@ -281,7 +295,8 @@ console_stream_key(uint32_t key)
         default: return 1;
         }
     }
-    if (astra_stream_tty_input(&source, bytes, length) != length)
+    if (!source_reserve(length) ||
+        astra_stream_tty_input(&source, bytes, length) != length)
         return 0;
     return 1;
 }
@@ -291,7 +306,7 @@ console_stream_terminal_reply(void *context, const uint8_t *bytes,
                               uint32_t length)
 {
     (void)context;
-    return stream_ready && length != 0u &&
+    return stream_ready && length != 0u && source_reserve(length) &&
            astra_stream_source_offer(&source, bytes, length) == length;
 }
 

@@ -16,19 +16,15 @@
  * process was handed, so a name it does not hold cannot be reached by spelling
  * it correctly -- which is the property the whole namespace design rests on.
  *
- * The startup capability table is the physical limit: a namespace larger
- * than the table that seeds it cannot arise. It counts
- * *members* rather than names -- a member is a binding, and a union is two
- * bindings that share a name.
+ * The startup capability table seeds the namespace; later aliases and mounts
+ * grow it from process memory. It counts *members* rather than names -- a
+ * member is a binding, and a union is two bindings that share a name.
  *
  * Names are canonicalised to uppercase here and compared exactly afterwards.
  * `work:` and `WORK:` are one binding, because assign names are a small closed
  * set typed by people and a typo must not create a second namespace. What
  * follows the colon is byte-exact and is not this file's business.
  */
-/** Maximum namespace members, bounded by the startup capability table. */
-#define ASTRA_ASSIGN_MAX ASTRA_STARTUP_CAPABILITY_MAX
-
 /*
  * Where an assign begins inside its mount. This is the grant's root field and
  * nothing else: two constants for one limit is the mistake that cost four
@@ -52,15 +48,20 @@ typedef struct AstraAssign {
 
 /** Complete ordered namespace for one process. */
 typedef struct AstraAssignTable {
-    AstraAssign entries[ASTRA_ASSIGN_MAX]; /**< Bindings in union order. */
+    AstraAssign *entries; /**< Growable bindings in union order. */
     uint32_t count; /**< Used entries. */
+    uint32_t capacity; /**< Allocated entries. */
 } AstraAssignTable;
+
+#define ASTRA_ASSIGN_TABLE_INIT { 0 }
 
 /**
  * Initialize an empty assign table.
  * @param table Table storage to initialize.
  */
 void astra_assign_table_init(AstraAssignTable *table);
+/** Release a table initialized by astra_assign_table_init(). */
+void astra_assign_table_destroy(AstraAssignTable *table);
 
 /**
  * Binds a name, replacing any binding it already had: a name has one meaning
@@ -141,7 +142,7 @@ const AstraAssign *astra_assign_member(const AstraAssignTable *table,
  * COMMANDS: means the directory it was granted rather than the whole volume.
  * A name granted twice is a union: the first record binds and each later one
  * joins, in the order the launcher listed them.
- * @param table Table replaced by the seeded namespace.
+ * @param table Initialized table replaced by the seeded namespace.
  * @param capabilities Startup capability records.
  * @param count Number of records in `capabilities`.
  * @return ASTRA_VFS_* status.

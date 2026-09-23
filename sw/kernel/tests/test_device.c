@@ -90,15 +90,13 @@ static void test_lifecycle(void)
 
 static void test_all_devices_and_owner_death(void)
 {
-    FakeDevice fake[KERNEL_DEVICE_MAX];
-    KernelDeviceLease *lease[KERNEL_DEVICE_MAX];
+    enum { device_count = 96u };
+    FakeDevice fake[device_count];
+    KernelDeviceLease *lease[device_count];
     uint32_t revoked = 0u;
 
-    assert(KERNEL_DEVICE_LEASE_OWNER_MAX == KERNEL_DEVICE_MAX);
-    assert(KERNEL_DEVICE_MAX <= KERNEL_DEVICE_LEASE_MAX);
-
     initialize();
-    for (uint32_t index = 0u; index < KERNEL_DEVICE_MAX; ++index) {
+    for (uint32_t index = 0u; index < device_count; ++index) {
         KernelDeviceDefinition value;
 
         fake[index].quiesces = 0u;
@@ -110,13 +108,13 @@ static void test_all_devices_and_owner_death(void)
         assert(kernel_device_register(&value) == KERNEL_DEVICE_OK);
     }
     assert(kernel_device_seal_registry());
-    for (uint32_t index = 0u; index < KERNEL_DEVICE_MAX; ++index) {
+    for (uint32_t index = 0u; index < device_count; ++index) {
         assert(kernel_device_acquire(4u, index + 1u, &lease[index]) ==
                KERNEL_DEVICE_OK);
     }
     assert(kernel_device_owner_died(4u, &revoked) == KERNEL_DEVICE_OK);
-    assert(revoked == KERNEL_DEVICE_MAX);
-    for (uint32_t index = 0u; index < KERNEL_DEVICE_MAX; ++index) {
+    assert(revoked == device_count);
+    for (uint32_t index = 0u; index < device_count; ++index) {
         assert(fake[index].quiesces == 1u && fake[index].resets == 1u);
         kernel_device_handle_release(lease[index], NULL);
     }
@@ -160,6 +158,12 @@ static void test_failures(void)
     KernelDeviceStats stats;
 
     initialize();
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_DEVICE_METADATA, 1u);
+    assert(kernel_device_register(&definition) == KERNEL_DEVICE_NO_SLOT);
+    assert(kernel_device_stats(&stats));
+    assert(stats.registered_devices == 0u && stats.allocation_failures == 1u);
+    kernel_allocation_test_clear_failure();
     assert(kernel_device_register(&definition) == KERNEL_DEVICE_OK);
     assert(kernel_device_seal_registry());
     kernel_allocation_test_fail_site(KERNEL_ALLOCATION_SITE_DEVICE_LEASE, 1u);
@@ -171,7 +175,7 @@ static void test_failures(void)
     kernel_device_handle_release(lease, NULL);
     assert(kernel_device_acquire(10u, 1u, &lease) == KERNEL_DEVICE_BUSY);
     assert(kernel_device_stats(&stats));
-    assert(stats.allocation_failures == 1u);
+    assert(stats.allocation_failures == 2u);
     assert(stats.quiesce_failures == 1u && stats.revocations == 1u);
     assert(kernel_device_pool_valid());
 }

@@ -62,7 +62,7 @@ static int volume_mounted;
 static ext4_file volume_source;
 static uint32_t volume_source_size;
 static int volume_source_open;
-static uint8_t volume_source_bytes[ASTRA_EXECUTABLE_TRANSFER_MAX];
+static uint8_t volume_source_bytes[ASTRA_MEMORY_PAGE_SIZE];
 static uint8_t volume_sector[ASTRA_BLOCK_SECTOR_BYTES];
 static uint8_t volume_pattern[VOLUME_CHECK_BYTES];
 
@@ -238,18 +238,22 @@ supervisor_volume_source_read_at(void *context, uint32_t offset,
                                  uint32_t length, const uint8_t **bytes,
                                  uint32_t *moved)
 {
+    uint32_t read_length = length;
     size_t read = 0u;
 
     (void)context;
     if (!volume_source_open || bytes == NULL || moved == NULL ||
-        length > sizeof(volume_source_bytes) || offset > volume_source_size ||
+        length == 0u || offset > volume_source_size ||
         length > volume_source_size - offset)
         return ASTRA_VFS_ERR_INVALID;
     *bytes = NULL;
     *moved = 0u;
+    if (read_length > sizeof(volume_source_bytes))
+        read_length = sizeof(volume_source_bytes);
     if (ext4_fseek(&volume_source, offset, SEEK_SET) != EOK ||
-        ext4_fread(&volume_source, volume_source_bytes, length, &read) != EOK ||
-        read != length)
+        ext4_fread(&volume_source, volume_source_bytes, read_length, &read) !=
+            EOK ||
+        read != read_length)
         return ASTRA_VFS_ERR_IO;
     *bytes = volume_source_bytes;
     *moved = (uint32_t)read;

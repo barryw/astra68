@@ -6,14 +6,14 @@
  * closed set typed by people, and a typo must not create a second namespace.
  * Everything after the colon is byte-exact and is not this file's business.
  *
- * Nothing here allocates and nothing here resolves. A table is a caller-owned
- * array of names and the authority each one stands for; turning a name into a
- * file is the client Kit's job, and it cannot start until this answers.
+ * The table grows from the process heap. Turning a name into a file is the
+ * client Kit's job, and it cannot start until this answers.
  */
 
 #include <astra/vfs_assign.h>
 
 #include <astra/ascii.h>
+#include <astra/runtime.h>
 
 #include <stddef.h>
 
@@ -90,18 +90,44 @@ copy(char *out, const char *in, uint32_t capacity)
 void
 astra_assign_table_init(AstraAssignTable *table)
 {
-    uint32_t index;
-
-    if (table == NULL) {
+    if (table == NULL)
         return;
-    }
-    for (index = 0u; index < ASTRA_ASSIGN_MAX; ++index) {
-        table->entries[index].name[0] = '\0';
-        table->entries[index].root[0] = '\0';
-        table->entries[index].handle = 0u;
-        table->entries[index].rights = 0u;
-    }
+    table->entries = NULL;
     table->count = 0u;
+    table->capacity = 0u;
+}
+
+void
+astra_assign_table_destroy(AstraAssignTable *table)
+{
+    if (table == NULL)
+        return;
+    astra_runtime_deallocate(table->entries);
+    astra_assign_table_init(table);
+}
+
+static uint32_t reserve(AstraAssignTable *table, uint32_t minimum)
+{
+    AstraAssign *grown;
+    uint32_t capacity;
+
+    if (minimum <= table->capacity)
+        return ASTRA_VFS_OK;
+    capacity = table->capacity == 0u ? 8u : table->capacity;
+    while (capacity < minimum) {
+        if (capacity > UINT32_MAX / 2u)
+            return ASTRA_VFS_ERR_LIMIT;
+        capacity *= 2u;
+    }
+    if (capacity > UINT32_MAX / sizeof(*table->entries))
+        return ASTRA_VFS_ERR_LIMIT;
+    grown = astra_runtime_reallocate(
+        table->entries, (size_t)capacity * sizeof(*table->entries));
+    if (grown == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    table->entries = grown;
+    table->capacity = capacity;
+    return ASTRA_VFS_OK;
 }
 
 uint32_t
@@ -139,10 +165,11 @@ astra_assign_bind(AstraAssignTable *table, const char *name, uint32_t handle,
      * whose head a caller replaced and whose tail it never mentioned.
      * NOT_FOUND just means the name had nothing to drop.
      */
-    (void)astra_assign_unbind(table, canonical_name);
-    if (table->count >= ASTRA_ASSIGN_MAX) {
+    if (astra_assign_lookup(table, canonical_name) == NULL &&
+        (table->count == UINT32_MAX ||
+         reserve(table, table->count + 1u) != ASTRA_VFS_OK))
         return ASTRA_VFS_ERR_LIMIT;
-    }
+    (void)astra_assign_unbind(table, canonical_name);
     copy(table->entries[table->count].name, canonical_name,
          ASTRA_CAPABILITY_NAME_MAX);
     copy(table->entries[table->count].root, canonical_root,
@@ -171,7 +198,8 @@ astra_assign_join(AstraAssignTable *table, const char *name, uint32_t handle,
     if (astra_assign_member(table, canonical_name, 0u) == NULL) {
         return ASTRA_VFS_ERR_NOT_FOUND;
     }
-    if (table->count >= ASTRA_ASSIGN_MAX) {
+    if (table->count == UINT32_MAX ||
+        reserve(table, table->count + 1u) != ASTRA_VFS_OK) {
         return ASTRA_VFS_ERR_LIMIT;
     }
     copy(table->entries[table->count].name, canonical_name,
@@ -219,13 +247,13 @@ uint32_t
 astra_assign_seed(AstraAssignTable *table,
                   const AstraStartupCapability *capabilities, uint32_t count)
 {
+    AstraAssignTable replacement = ASTRA_ASSIGN_TABLE_INIT;
     uint32_t index;
 
     if (table == NULL || (count != 0u && capabilities == NULL) ||
         count > ASTRA_STARTUP_CAPABILITY_MAX) {
         return ASTRA_VFS_ERR_INVALID;
     }
-    astra_assign_table_init(table);
     for (index = 0u; index < count; ++index) {
         /*
          * The name is copied out and terminated here: the published field is
@@ -271,17 +299,22 @@ astra_assign_seed(AstraAssignTable *table,
          * then the authority manifest for the child's search order as well as
          * for its authority: one list, read once, meaning one thing.
          */
-        if (astra_assign_lookup(table, name) == NULL) {
-            status = astra_assign_bind(table, name, capabilities[index].handle,
-                                       rights, root);
+        if (astra_assign_lookup(&replacement, name) == NULL) {
+            status = astra_assign_bind(&replacement, name,
+                                       capabilities[index].handle, rights,
+                                       root);
         } else {
-            status = astra_assign_join(table, name, capabilities[index].handle,
-                                       rights, root);
+            status = astra_assign_join(&replacement, name,
+                                       capabilities[index].handle, rights,
+                                       root);
         }
         if (status == ASTRA_VFS_ERR_LIMIT) {
+            astra_assign_table_destroy(&replacement);
             return ASTRA_VFS_ERR_LIMIT;
         }
     }
+    astra_assign_table_destroy(table);
+    *table = replacement;
     return ASTRA_VFS_OK;
 }
 

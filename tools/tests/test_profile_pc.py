@@ -22,6 +22,13 @@ except argparse.ArgumentTypeError:
     pass
 else:
     raise AssertionError("malformed image was accepted")
+assert profile_pc.parse_stack_word("0x3fffd2ce+20") == (0x3fffd2ce, 20)
+try:
+    profile_pc.parse_stack_word("0x3fffd2ce")
+except argparse.ArgumentTypeError:
+    pass
+else:
+    raise AssertionError("stack word without an offset was accepted")
 
 terminal = profile_pc.parse_image("terminal@0+0x109000=/tmp/terminal")
 samples = [
@@ -62,6 +69,52 @@ else:
 assert profile_pc.entering_loader(0x20000100, 0x00101000)
 assert not profile_pc.entering_loader(0x20000104, 0x20000100)
 assert not profile_pc.entering_loader(0x3ff42000, 0x00101000)
+
+
+class StackMemory:
+    def __init__(self, failure=False):
+        self.failure = failure
+
+    def virtual_memory(self, address, size):
+        assert address == 0x707fec94
+        assert size == 4
+        if self.failure:
+            raise RuntimeError("unmapped")
+        return bytes.fromhex("0000005c")
+
+
+assert profile_pc.read_stack_word(StackMemory(), 0x707fec80, 20) == 0x5c
+assert profile_pc.read_stack_word(
+    StackMemory(failure=True), 0x707fec80, 20) is None
+
+
+class SampleQmp(StackMemory):
+    def __init__(self, pc):
+        super().__init__()
+        self.pc = pc
+        self.commands = []
+
+    def registers(self):
+        return self.pc, 0, 0x2000, 0x9000, 0, 0x707fec80
+
+    def execute(self, command):
+        self.commands.append(command)
+
+
+ordinary_qmp = SampleQmp(0x00101000)
+ordinary_samples = []
+profile_pc.capture_sample(
+    ordinary_qmp, ordinary_samples, {"8192": "target"}, 0x00100134,
+    {0x2000: 0x00101000}, (0x3fffd2ce, 20))
+assert ordinary_qmp.commands == []
+assert "stack_word" not in ordinary_samples[0]
+stack_qmp = SampleQmp(0x3fffd2ce)
+stack_samples = []
+profile_pc.capture_sample(
+    stack_qmp, stack_samples, {"8192": "target"}, 0x00100134,
+    {0x2000: 0x3fffd2ce}, (0x3fffd2ce, 20))
+assert stack_qmp.commands == ["stop", "cont"]
+assert stack_samples[0]["stack_word"] == 0x5c
 
 symbols = [(0x1000, "first"), (0x1100, "second")]
 assert profile_pc.resolve(symbols, 0x10ff) == "first"
@@ -109,14 +162,19 @@ assert not profile_pc.sample_matches_new(kernel_sample, {0x1000}, False)
 assert profile_pc.sample_matches_new(kernel_sample, {0x1000}, True)
 
 registers = """
+D0 = 0000005c   A0 = 00000000
+D7 = 707fed60   A7 = 707fec80
 PC = 00123456   SR = 0000 T:0 I:0 UI -----
 SSW 00000441 TCR 00008000 URP 03d25000 SRP 02419000
 """
 match = profile_pc.REGISTER_PATTERN.search(registers)
 assert match is not None
 assert tuple(int(value, 16) for value in match.groups()) == (
-    0x00123456, 0, 0x03d25000, 0x02419000)
+    0x5c, 0x707fec80, 0x00123456, 0, 0x03d25000, 0x02419000)
 assert profile_pc.REGISTER_PATTERN.search("PC missing") is None
+assert profile_pc.REGISTER_PATTERN.search(
+    "D0 = 0000005c PC = 00123456 SR = 0000 "
+    "URP 03d25000 SRP 02419000") is None
 
 mmu = """
 URP: 0x0481d000

@@ -600,6 +600,12 @@ static bool astra_remote_button_transition(unsigned int previous,
     return ((previous ^ current) & 7u) != 0u;
 }
 
+static unsigned int astra_remote_wheel_transitions(unsigned int previous,
+                                                    unsigned int current)
+{
+    return (~previous & current) & (8u | 16u | 32u | 64u);
+}
+
 static void astra_remote_pointer_event(int mask, int x, int y,
                                        rfbClientPtr client)
 {
@@ -610,7 +616,18 @@ static void astra_remote_pointer_event(int mask, int x, int y,
     unsigned int changed = buttons ^ (state->buttons & 7u);
     bool button_transition = astra_remote_button_transition(state->buttons,
                                                             current);
+    unsigned int wheel_transitions = astra_remote_wheel_transitions(
+        state->buttons, current);
     unsigned int index;
+    static const struct {
+        unsigned int bit;
+        const char *button;
+    } wheels[] = {
+        {8u, "wheel-up"},
+        {16u, "wheel-down"},
+        {32u, "wheel-left"},
+        {64u, "wheel-right"},
+    };
 
     desktop->pointer_x = x < 0 ? 0 :
         (x >= (int)ASTRA_DISPLAY_CAPTURE_WIDTH ?
@@ -629,14 +646,13 @@ static void astra_remote_pointer_event(int mask, int x, int y,
         else
             --desktop->button_references[index];
     }
-    if ((current & 8u) != 0u && (state->buttons & 8u) == 0u)
-        astra_qmp_wheel(desktop, "wheel-up");
-    if ((current & 16u) != 0u && (state->buttons & 16u) == 0u)
-        astra_qmp_wheel(desktop, "wheel-down");
-    state->buttons = current;
-    if (button_transition)
+    if (button_transition || wheel_transitions != 0u)
         (void)astra_qmp_pointer(desktop,
                                 astra_remote_wanted_buttons(desktop));
+    for (index = 0u; index < sizeof(wheels) / sizeof(wheels[0]); ++index)
+        if ((wheel_transitions & wheels[index].bit) != 0u)
+            astra_qmp_wheel(desktop, wheels[index].button);
+    state->buttons = current;
     rfbDefaultPtrAddEvent(mask, desktop->pointer_x, desktop->pointer_y,
                           client);
 }
@@ -842,8 +858,13 @@ static int astra_remote_self_test(void)
         format.greenShift != 8 || format.blueShift != 16 ||
         astra_remote_button_transition(0u, 0u) ||
         astra_remote_button_transition(0u, 8u) ||
+        astra_remote_button_transition(0u, 64u) ||
         !astra_remote_button_transition(0u, 1u) ||
         !astra_remote_button_transition(1u, 0u) ||
+        astra_remote_wheel_transitions(0u, 8u) != 8u ||
+        astra_remote_wheel_transitions(8u, 8u) != 0u ||
+        astra_remote_wheel_transitions(8u, 0u) != 0u ||
+        astra_remote_wheel_transitions(0u, 32u | 64u) != (32u | 64u) ||
         astra_remote_damage_find(previous, previous, 3u, 2u,
                                  &damage) ||
         !astra_remote_damage_find(current, previous, 3u, 2u, &damage) ||

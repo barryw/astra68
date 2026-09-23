@@ -7,7 +7,7 @@
 #endif
 
 #define ASTRA_STARTUP_MAGIC 0x41535452u
-#define ASTRA_STARTUP_ABI_VERSION 6u
+#define ASTRA_STARTUP_ABI_VERSION 7u
 #define ASTRA_STARTUP_INFO_SIZE 84u
 #define ASTRA_STARTUP_CAPABILITY_SIZE 92u
 /* The kernel publishes startup state in the machine's one 4 KiB VM page. */
@@ -23,9 +23,9 @@
  */
 #define ASTRA_CAPABILITY_ROOT_MAX 64u
 #define ASTRA_CAPABILITY_NAME_MAX 16u
-#define ASTRA_STARTUP_CAPABILITY_MAX 32u
-/* Global process budget; Axiom has one address space for every entry. */
-#define ASTRA_PROCESS_COUNT_MAX 32u
+#define ASTRA_STARTUP_CAPABILITY_MAX \
+    ((ASTRA_STARTUP_BLOCK_SIZE - ASTRA_STARTUP_INFO_SIZE) / \
+     ASTRA_STARTUP_CAPABILITY_SIZE)
 /* PID zero is reserved; visible process identifiers are unsigned 16-bit. */
 #define ASTRA_PROCESS_ID_MAX 65535u
 
@@ -99,8 +99,6 @@
 #define ASTRA_LAUNCH_FLAG_MASK ASTRA_LAUNCH_FLAG_ESSENTIAL
 /* Fixed ELF32 header; streaming loaders never need a larger initial window. */
 #define ASTRA_EXECUTABLE_HEADER_SIZE 52u
-/* Largest source range the page-oriented kernel loader will request. */
-#define ASTRA_EXECUTABLE_TRANSFER_MAX 4096u
 /*
  * Environment space is the startup page, not a smaller policy quota. The
  * kernel accepts the combination of capabilities, argv, pointers and strings
@@ -326,6 +324,17 @@ typedef struct AstraStartupCapability {
 
 _Static_assert(sizeof(AstraStartupInfo) == ASTRA_STARTUP_INFO_SIZE,
                "startup-info ABI size changed");
+_Static_assert(ASTRA_STARTUP_INFO_SIZE +
+                       ASTRA_STARTUP_CAPABILITY_MAX *
+                           ASTRA_STARTUP_CAPABILITY_SIZE <=
+                   ASTRA_STARTUP_BLOCK_SIZE,
+               "startup capabilities exceed their page");
+_Static_assert(ASTRA_STARTUP_BLOCK_SIZE -
+                       (ASTRA_STARTUP_INFO_SIZE +
+                        ASTRA_STARTUP_CAPABILITY_MAX *
+                            ASTRA_STARTUP_CAPABILITY_SIZE) <
+                   ASTRA_STARTUP_CAPABILITY_SIZE,
+               "startup page has room for another capability");
 _Static_assert(sizeof(AstraProcessInfo) == ASTRA_PROCESS_INFO_SIZE,
                "process-info ABI size changed");
 _Static_assert(sizeof(AstraThreadInfo) == ASTRA_THREAD_INFO_SIZE,

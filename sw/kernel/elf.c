@@ -4,6 +4,14 @@
 
 #include <astra/endian.h>
 #include <astra/integer.h>
+#include <astra/limits.h>
+
+#if defined(__m68k__)
+#include "allocation.h"
+#include "memory.h"
+#else
+#include <stdlib.h>
+#endif
 
 /* e_ident */
 #define ELF_IDENT_SIZE 16u
@@ -32,6 +40,189 @@
 #define ELF_PF_X 1u
 #define ELF_PF_W 2u
 #define ELF_PF_R 4u
+
+struct KernelElfSegmentBlock {
+    struct KernelElfSegmentBlock *next;
+    uint32_t physical;
+    uint16_t count;
+    uint16_t reserved;
+    KernelElfSegment segment[
+        (ASTRA_MEMORY_PAGE_SIZE - sizeof(void *) - sizeof(uint32_t) -
+         (2u * sizeof(uint16_t))) / sizeof(KernelElfSegment)];
+};
+
+_Static_assert(sizeof(KernelElfSegmentBlock) <= ASTRA_MEMORY_PAGE_SIZE,
+               "ELF segment metadata must fit one page");
+
+#if defined(KERNEL_ELF_HOST_TEST)
+static uint32_t segment_allocation_successes_before_failure = UINT32_MAX;
+
+void kernel_elf_test_fail_segment_allocation_after(uint32_t successes)
+{
+    segment_allocation_successes_before_failure = successes;
+}
+
+void kernel_elf_test_clear_segment_allocation_failure(void)
+{
+    segment_allocation_successes_before_failure = UINT32_MAX;
+}
+#endif
+
+static KernelElfSegmentBlock *segment_block_allocate(void)
+{
+#if defined(KERNEL_ELF_HOST_TEST)
+    if (segment_allocation_successes_before_failure == 0u)
+        return NULL;
+    if (segment_allocation_successes_before_failure != UINT32_MAX)
+        --segment_allocation_successes_before_failure;
+#endif
+#if defined(__m68k__)
+    uint32_t physical;
+    KernelElfSegmentBlock *block;
+
+    if (kernel_memory_alloc_zeroed_tagged(
+            KERNEL_ALLOCATION_SITE_ELF_METADATA, 1u, 1u,
+            KERNEL_FRAME_KERNEL, KERNEL_OWNER_CORE, &physical) !=
+        KERNEL_MEMORY_OK)
+        return NULL;
+    block = kernel_memory_access(physical, ASTRA_MEMORY_PAGE_SIZE);
+    if (block == NULL) {
+        (void)kernel_memory_release(physical, 1u, KERNEL_OWNER_CORE);
+        return NULL;
+    }
+    block->physical = physical;
+    return block;
+#else
+    return calloc(1u, sizeof(KernelElfSegmentBlock));
+#endif
+}
+
+static bool segment_block_release(KernelElfSegmentBlock *block)
+{
+#if defined(__m68k__)
+    return block != NULL && block->physical != 0u &&
+           kernel_memory_release(block->physical, 1u, KERNEL_OWNER_CORE) ==
+               KERNEL_MEMORY_OK;
+#else
+    free(block);
+    return true;
+#endif
+}
+
+const KernelElfSegment *kernel_elf_image_segment(
+    const KernelElfImage *plan, uint32_t index)
+{
+    KernelElfSegmentBlock *block;
+
+    if (plan == NULL || index >= plan->segment_count)
+        return NULL;
+    if (index < KERNEL_ELF_SEGMENT_INLINE)
+        return &plan->segment[index];
+    index -= KERNEL_ELF_SEGMENT_INLINE;
+    for (block = plan->segment_blocks; block != NULL; block = block->next) {
+        if (index < block->count)
+            return &block->segment[index];
+        index -= block->count;
+    }
+    return NULL;
+}
+
+static KernelElfSegment *append_segment(KernelElfImage *plan)
+{
+    KernelElfSegmentBlock *block;
+
+    if (plan->segment_count < KERNEL_ELF_SEGMENT_INLINE)
+        return &plan->segment[plan->segment_count];
+    block = plan->segment_blocks_tail;
+    if (block == NULL ||
+        block->count == sizeof(block->segment) / sizeof(block->segment[0])) {
+        KernelElfSegmentBlock *created = segment_block_allocate();
+
+        if (created == NULL)
+            return NULL;
+        if (block == NULL)
+            plan->segment_blocks = created;
+        else
+            block->next = created;
+        plan->segment_blocks_tail = created;
+        block = created;
+    }
+    return &block->segment[block->count++];
+}
+
+bool kernel_elf_image_discard(KernelElfImage *plan)
+{
+    KernelElfSegmentBlock *block;
+    bool released = true;
+
+    if (plan == NULL)
+        return false;
+    block = plan->segment_blocks;
+    if (plan->owns_segment_blocks != 0u) {
+        while (block != NULL) {
+            KernelElfSegmentBlock *next = block->next;
+
+            if (!segment_block_release(block)) {
+                released = false;
+                break;
+            }
+            block = next;
+        }
+    }
+    kernel_bytes_clear(plan, sizeof(*plan));
+    return released;
+}
+
+void kernel_elf_image_move(KernelElfImage *destination,
+                           KernelElfImage *source)
+{
+    if (destination == NULL || source == NULL || destination == source)
+        return;
+    kernel_bytes_copy(destination, source, sizeof(*destination));
+    source->segment_blocks = NULL;
+    source->segment_blocks_tail = NULL;
+    source->segment_count = 0u;
+    source->owns_segment_blocks = 0u;
+}
+
+bool kernel_elf_image_equal(const KernelElfImage *left,
+                            const KernelElfImage *right)
+{
+    if (left == NULL || right == NULL ||
+        left->segment_count != right->segment_count ||
+        left->entry != right->entry ||
+        left->total_pages != right->total_pages ||
+        left->writable_bytes != right->writable_bytes ||
+        left->has_tls != right->has_tls ||
+        left->has_dynamic != right->has_dynamic ||
+        left->has_interpreter != right->has_interpreter ||
+        left->has_relro != right->has_relro ||
+        !kernel_bytes_equal(&left->tls, &right->tls, sizeof(left->tls)) ||
+        !kernel_bytes_equal(&left->dynamic, &right->dynamic,
+                            sizeof(left->dynamic)) ||
+        !kernel_bytes_equal(&left->interpreter, &right->interpreter,
+                            sizeof(left->interpreter)) ||
+        !kernel_bytes_equal(&left->relro, &right->relro,
+                            sizeof(left->relro)))
+        return false;
+    for (uint32_t index = 0u; index < left->segment_count; ++index) {
+        const KernelElfSegment *left_segment =
+            kernel_elf_image_segment(left, index);
+        const KernelElfSegment *right_segment =
+            kernel_elf_image_segment(right, index);
+
+        if (left_segment == NULL || right_segment == NULL ||
+            !kernel_bytes_equal(left_segment, right_segment,
+                                sizeof(*left_segment)))
+            return false;
+    }
+    return true;
+}
+
+bool kernel_elf_stream_discard(KernelElfStream *stream)
+{
+    return stream != NULL && kernel_elf_image_discard(&stream->plan);
+}
 
 /*
  * All header fields are read byte by byte. The image is untrusted and may be
@@ -193,10 +384,12 @@ static bool tls_covered_by_load(const KernelElfImage *plan)
                                &tls_file_end))
         return false;
     for (uint32_t index = 0u; index < plan->segment_count; ++index) {
-        const KernelElfSegment *segment = &plan->segment[index];
+        const KernelElfSegment *segment =
+            kernel_elf_image_segment(plan, index);
         uint32_t segment_file_end;
 
-        if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) != 0u ||
+        if (segment == NULL ||
+            (segment->rights & KERNEL_ELF_SEGMENT_WRITE) != 0u ||
             !astra_u32_add_checked(segment->file_offset, segment->file_size,
                                    &segment_file_end) ||
             plan->tls.file_offset < segment->file_offset ||
@@ -238,11 +431,13 @@ static bool dynamic_covered_by_load(const KernelElfImage *plan)
                                plan->dynamic.size, &memory_end))
         return false;
     for (uint32_t index = 0u; index < plan->segment_count; ++index) {
-        const KernelElfSegment *segment = &plan->segment[index];
+        const KernelElfSegment *segment =
+            kernel_elf_image_segment(plan, index);
         uint32_t segment_file_end;
         uint32_t segment_memory_end;
 
-        if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) == 0u ||
+        if (segment == NULL ||
+            (segment->rights & KERNEL_ELF_SEGMENT_WRITE) == 0u ||
             !astra_u32_add_checked(segment->file_offset, segment->file_size,
                                    &segment_file_end) ||
             !astra_u32_add_checked(segment->virtual_address,
@@ -288,11 +483,13 @@ static bool interpreter_covered_by_load(const KernelElfImage *plan)
                                plan->interpreter.size, &memory_end))
         return false;
     for (uint32_t index = 0u; index < plan->segment_count; ++index) {
-        const KernelElfSegment *segment = &plan->segment[index];
+        const KernelElfSegment *segment =
+            kernel_elf_image_segment(plan, index);
         uint32_t segment_file_end;
         uint32_t segment_memory_end;
 
-        if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) != 0u ||
+        if (segment == NULL ||
+            (segment->rights & KERNEL_ELF_SEGMENT_WRITE) != 0u ||
             !astra_u32_add_checked(segment->file_offset, segment->file_size,
                                    &segment_file_end) ||
             !astra_u32_add_checked(segment->virtual_address,
@@ -337,13 +534,15 @@ static bool relro_covered_by_load(const KernelElfImage *plan,
                                plan->relro.memory_size, &memory_end))
         return false;
     for (uint32_t index = 0u; index < plan->segment_count; ++index) {
-        const KernelElfSegment *segment = &plan->segment[index];
+        const KernelElfSegment *segment =
+            kernel_elf_image_segment(plan, index);
         uint32_t segment_file_end;
         uint32_t segment_mapping_size;
         uint32_t segment_mapping_end;
         uint32_t segment_memory_end;
 
-        if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) == 0u ||
+        if (segment == NULL ||
+            (segment->rights & KERNEL_ELF_SEGMENT_WRITE) == 0u ||
             !astra_u32_add_checked(segment->file_offset,
                                    segment->file_size,
                                    &segment_file_end) ||
@@ -374,7 +573,7 @@ static bool relro_covered_by_load(const KernelElfImage *plan,
 static KernelElfStatus stream_fail(KernelElfStream *stream,
                                    KernelElfStatus status)
 {
-    kernel_bytes_clear(&stream->plan, sizeof(stream->plan));
+    kernel_elf_image_discard(&stream->plan);
     stream->failed = 1u;
     return status;
 }
@@ -395,6 +594,7 @@ static KernelElfStatus stream_begin(const void *header, uint32_t image_size,
         limits->minimum_address > limits->maximum_address)
         return KERNEL_ELF_INVALID_ARGUMENT;
     kernel_bytes_clear(stream, sizeof(*stream));
+    stream->plan.owns_segment_blocks = 1u;
     if (image_size < KERNEL_ELF_HEADER_SIZE)
         return stream_fail(stream, KERNEL_ELF_TRUNCATED);
     status = check_identity(bytes);
@@ -534,17 +734,20 @@ KernelElfStatus kernel_elf_stream_add_header(KernelElfStream *stream,
         if (astra_load_be32(bytes + 16) != 0u)
             return stream_fail(stream, KERNEL_ELF_BAD_RANGE);
     } else {
-        if (stream->plan.segment_count == KERNEL_ELF_SEGMENT_MAX)
-            return stream_fail(stream, KERNEL_ELF_TOO_MANY_SEGMENTS);
         status = accept_load_segment(bytes, &stream->limits,
                                      stream->image_size, &segment);
         if (status != KERNEL_ELF_OK)
             return stream_fail(stream, status);
         if (stream->plan.segment_count != 0u) {
             const KernelElfSegment *previous =
-                &stream->plan.segment[stream->plan.segment_count - 1u];
-            uint32_t previous_end = previous->virtual_address +
-                previous->page_count * stream->limits.page_size;
+                kernel_elf_image_segment(
+                    &stream->plan, stream->plan.segment_count - 1u);
+            uint32_t previous_end;
+
+            if (previous == NULL)
+                return stream_fail(stream, KERNEL_ELF_INVALID_ARGUMENT);
+            previous_end = previous->virtual_address +
+                           previous->page_count * stream->limits.page_size;
 
             if (segment.virtual_address < previous->virtual_address)
                 return stream_fail(stream, KERNEL_ELF_UNORDERED);
@@ -560,7 +763,11 @@ KernelElfStatus kernel_elf_stream_add_header(KernelElfStream *stream,
                                    segment.memory_size,
                                    &stream->plan.writable_bytes))
             return stream_fail(stream, KERNEL_ELF_TOO_LARGE);
-        stream->plan.segment[stream->plan.segment_count] = segment;
+        KernelElfSegment *published = append_segment(&stream->plan);
+
+        if (published == NULL)
+            return stream_fail(stream, KERNEL_ELF_OUT_OF_MEMORY);
+        *published = segment;
         ++stream->plan.segment_count;
     }
     ++stream->header_index;
@@ -572,9 +779,11 @@ static bool entry_inside_executable_segment(const KernelElfStream *stream)
     if ((stream->entry & 1u) != 0u)
         return false;
     for (uint32_t index = 0u; index < stream->plan.segment_count; ++index) {
-        const KernelElfSegment *segment = &stream->plan.segment[index];
+        const KernelElfSegment *segment =
+            kernel_elf_image_segment(&stream->plan, index);
 
-        if ((segment->rights & KERNEL_ELF_SEGMENT_EXEC) != 0u &&
+        if (segment != NULL &&
+            (segment->rights & KERNEL_ELF_SEGMENT_EXEC) != 0u &&
             stream->entry >= segment->virtual_address &&
             stream->entry < segment->virtual_address + segment->memory_size)
             return true;
@@ -632,6 +841,7 @@ KernelElfStatus kernel_elf_stream_finish(KernelElfStream *stream,
     }
     stream->plan.total_pages = stream->total_pages;
     kernel_bytes_copy(plan, &stream->plan, sizeof(*plan));
+    plan->owns_segment_blocks = 0u;
     stream->complete = 1u;
     return KERNEL_ELF_OK;
 }
@@ -662,12 +872,19 @@ static KernelElfStatus accept_windowed(const void *image,
         status = kernel_elf_stream_next_header(&stream, &offset, &length);
         if (status != KERNEL_ELF_OK || length == 0u)
             break;
-        if (!range_within(offset, length, readable))
+        if (!range_within(offset, length, readable)) {
+            kernel_elf_stream_discard(&stream);
             return KERNEL_ELF_BAD_HEADER_TABLE;
+        }
         status = kernel_elf_stream_add_header(&stream, bytes + offset);
     }
-    return status == KERNEL_ELF_OK ? kernel_elf_stream_finish(&stream, plan) :
-                                     status;
+    if (status == KERNEL_ELF_OK)
+        status = kernel_elf_stream_finish(&stream, plan);
+    if (status == KERNEL_ELF_OK)
+        kernel_elf_image_move(plan, &stream.plan);
+    else
+        kernel_elf_stream_discard(&stream);
+    return status;
 }
 
 const char *kernel_elf_status_text(KernelElfStatus status)
@@ -686,7 +903,7 @@ const char *kernel_elf_status_text(KernelElfStatus status)
     case KERNEL_ELF_BAD_FLAGS: return "non-zero processor flags";
     case KERNEL_ELF_BAD_HEADER_TABLE: return "bad program header table";
     case KERNEL_ELF_NO_SEGMENTS: return "no loadable segments";
-    case KERNEL_ELF_TOO_MANY_SEGMENTS: return "too many loadable segments";
+    case KERNEL_ELF_OUT_OF_MEMORY: return "out of memory";
     case KERNEL_ELF_UNSUPPORTED_SEGMENT: return "unsupported segment type";
     case KERNEL_ELF_EXECUTABLE_STACK: return "executable stack";
     case KERNEL_ELF_BAD_PERMISSIONS: return "bad segment permissions";

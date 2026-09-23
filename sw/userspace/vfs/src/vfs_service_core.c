@@ -548,9 +548,6 @@ handle_hello(AstraVfsService *service, uint32_t owner,
              AstraVfsReply *reply)
 {
     uint32_t index;
-    uint32_t owner_sessions = 0u;
-    uint32_t owner_limit = service->session_capacity /
-                           ASTRA_PROCESS_COUNT_MAX;
 
     /*
      * The client sends the newest version it can speak. Agreeing on the lower
@@ -565,20 +562,6 @@ handle_hello(AstraVfsService *service, uint32_t owner,
     }
     reply->version = request->version < ASTRA_VFS_VERSION ?
         request->version : ASTRA_VFS_VERSION;
-
-    if (owner_limit == 0u)
-        owner_limit = 1u;
-    if (owner != 0u) {
-        for (index = 0u; index < service->session_capacity; ++index)
-            if (service->sessions[index].id != 0u &&
-                service->sessions[index].owner == owner)
-                ++owner_sessions;
-        if (owner_sessions >= owner_limit) {
-            ++service->stats.owner_session_quota_denied;
-            reply->status = ASTRA_VFS_ERR_LIMIT;
-            return;
-        }
-    }
 
     for (index = 0u; index < service->session_capacity; ++index) {
         if (service->sessions[index].id == 0u) {
@@ -739,27 +722,11 @@ handle_open(AstraVfsService *service, uint32_t session,
     uintptr_t node = 0u;
     uint32_t index;
     uint32_t status;
-    uint32_t owner_files = 0u;
-    uint32_t owner_limit = service->file_capacity / ASTRA_PROCESS_COUNT_MAX;
 
     if (session_slot == NULL) {
         reply->status = ASTRA_VFS_ERR_BAD_HANDLE;
         return;
     }
-    if (owner_limit == 0u)
-        owner_limit = 1u;
-    if (session_slot->owner == 0u)
-        owner_limit = service->file_capacity;
-    for (uint32_t slot = 0u; slot < service->session_capacity; ++slot)
-        if (service->sessions[slot].id != 0u &&
-            service->sessions[slot].owner == session_slot->owner)
-            owner_files += service->sessions[slot].open_files;
-    if (owner_files >= owner_limit) {
-        ++service->stats.owner_quota_denied;
-        reply->status = ASTRA_VFS_ERR_LIMIT;
-        return;
-    }
-
     if ((request->flags & ~(ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE |
                             ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_TRUNCATE |
                             ASTRA_VFS_OPEN_DIRECTORY |
@@ -1647,6 +1614,9 @@ done:
     test_transition(service, ASTRA_VFS_TEST_BEFORE_REPLY);
     if (reply->status != ASTRA_VFS_OK) {
         ++service->stats.replies_failed;
+        service->stats.last_failed_operation = operation;
+        service->stats.last_failed_status = reply->status;
+        service->stats.last_failed_owner = owner;
     }
     if (reserved) {
         finish_session_request(service, slot);

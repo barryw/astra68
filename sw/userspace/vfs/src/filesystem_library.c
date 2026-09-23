@@ -776,7 +776,8 @@ uint32_t astra_filesystem_readlink(AstraFilesystem *filesystem,
     if (status != ASTRA_VFS_OK)
         return status;
     status = ASTRA_VFS_ERR_NOT_FOUND;
-    for (uint32_t member = 0u; member < ASTRA_ASSIGN_MAX; ++member) {
+    for (uint32_t member = 0u;
+         member < filesystem->_private_assigns->count; ++member) {
         const AstraAssign *assign = NULL;
         AstraVfsClient *client;
         char wire[ASTRA_VFS_PATH_MAX];
@@ -880,8 +881,6 @@ uint32_t astra_filesystem_directory_read(AstraDirectory *directory,
     if (directory == NULL || entries == NULL || capacity == 0u ||
         count == NULL || directory->_private_active == 0u)
         return ASTRA_VFS_ERR_INVALID;
-    if (capacity > ASTRA_FILESYSTEM_DIRECTORY_BATCH_MAX)
-        capacity = ASTRA_FILESYSTEM_DIRECTORY_BATCH_MAX;
     if ((directory->_private_reserved & DIRECTORY_SINGLE_BACKEND) != 0u) {
         if (directory->_private_done != 0u) {
             *count = 0u;

@@ -30,7 +30,7 @@ struct AstraVfsHostTransport {
     AstraVfsStateAcquire acquire;
     AstraVfsStateRelease release;
     void *lock_context;
-    AstraVfsHostLane lanes[ASTRA_PROCESS_THREAD_COUNT_MAX];
+    AstraVfsHostLane lanes[ASTRA_PROCESS_THREAD_SLOT_COUNT];
 };
 
 typedef struct AstraVfsHostTransfer {

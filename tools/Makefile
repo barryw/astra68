@@ -14,6 +14,9 @@ build/astra-bundle: bundle_tool.c ../ndk/src/manifest.c ../ndk/src/bundle.c \
 test: build/astra-bundle
 	python3 ./tests/test_aicon.py
 	python3 ./tests/test_bundle_tool.py ./build/astra-bundle
+	python3 ./tests/test_check_bundle_dependencies.py
+	python3 ./tests/test_check_stack_usage.py
+	python3 ./tests/test_astra_prof.py
 
 clean:
 	rm -rf build

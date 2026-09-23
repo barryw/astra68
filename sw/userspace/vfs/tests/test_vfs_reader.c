@@ -133,12 +133,18 @@ int main(void)
     assert(read_offset == 0u &&
            read_length == ASTRA_EXECUTABLE_HEADER_SIZE);
 
-    read_moved = ASTRA_VFS_BULK_MAX;
+    read_moved = source.length;
     assert(astra_vfs_read_source_read_at(
                &source, 0u, ASTRA_MEMORY_PAGE_SIZE, &bytes, &moved) ==
            ASTRA_VFS_OK);
     assert(bytes == read_bytes && moved == ASTRA_MEMORY_PAGE_SIZE);
-    assert(read_offset == 0u && read_length == ASTRA_VFS_BULK_MAX);
+    assert(read_offset == 0u && read_length == source.length);
+
+    read_moved = source.length;
+    assert(astra_vfs_read_source_read_at(
+               &source, 0u, source.length, &bytes, &moved) == ASTRA_VFS_OK);
+    assert(bytes == read_bytes && moved == source.length);
+    assert(read_offset == 0u && read_length == source.length);
 
     read_moved = ASTRA_MEMORY_PAGE_SIZE - 1u;
     bytes = read_bytes;
@@ -146,7 +152,7 @@ int main(void)
     assert(astra_vfs_read_source_read_at(
                &source, 0u, ASTRA_MEMORY_PAGE_SIZE, &bytes, &moved) ==
            ASTRA_VFS_ERR_IO);
-    assert(bytes == NULL && moved == 0u && read_count == 4u);
+    assert(bytes == NULL && moved == 0u && read_count == 5u);
 
     assert(astra_vfs_read_source_read_at(
                &source, source.length - 1u, 2u, &bytes, &moved) ==

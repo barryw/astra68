@@ -22,8 +22,9 @@ ASTRA_EXTERN_C_BEGIN
  *
  * A port has one nontransferable receive endpoint and one transferable send
  * endpoint. Messages are FIFO and contain a fixed header, up to 1024 inline
- * payload bytes, and up to eight transferred capabilities. Bulk data belongs
- * in shared areas rather than copied messages.
+ * payload bytes, and up to the receiver's complete handle namespace in
+ * transferred capabilities. Bulk data belongs in shared areas rather than
+ * copied messages.
  *
  * Every queue has fixed message and byte limits. A full queue returns
  * ::ASTRA_ERROR_WOULD_BLOCK or blocks only until its unchanged absolute
@@ -74,10 +75,11 @@ ASTRA_NODISCARD AstraResult astra_message_header_init(
 /**
  * Create a receiver-owned bounded message port.
  *
- * Capacity is reserved at creation, so later sends never allocate queue
- * storage. The caller must pass an empty ::AstraPort.
+ * Queue storage is allocated as messages arrive. The caller must pass an
+ * empty ::AstraPort.
  *
- * @param maximum_messages Queue limit from 1 through 16 datagrams.
+ * @param maximum_messages Queue limit from 1 through
+ *        ::ASTRA_PORT_MESSAGES_MAX datagrams.
  * @param maximum_bytes Queue byte limit from 24 through
  *        ::ASTRA_PORT_BYTES_MAX bytes.
  * @param[out] port Receives both owned endpoints atomically.
@@ -169,9 +171,11 @@ ASTRA_NODISCARD AstraResult astra_port_send_until(
  * @param receive_endpoint Receive capability with read rights.
  * @param[out] message Naturally aligned output bytes, or NULL when capacity is
  *        zero.
- * @param message_capacity Available output bytes, at most 1048.
+ * @param message_capacity Available output bytes, at most
+ *        ::ASTRA_MESSAGE_SIZE_MAX.
  * @param[out] handles Capability output, or NULL when capacity is zero.
- * @param handle_capacity Available handle entries, at most 8.
+ * @param handle_capacity Available handle entries, at most
+ *        ::ASTRA_MESSAGE_HANDLES_MAX.
  * @param[out] message_size Actual or required complete message size.
  * @param[out] handle_count Actual or required transferred-handle count.
  * @return ::ASTRA_OK, ::ASTRA_ERROR_WOULD_BLOCK,

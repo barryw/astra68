@@ -14,6 +14,7 @@
 #include <astra/event_persist.h>
 #include <astra/event_store.h>
 #include <astra/bytes.h>
+#include <astra/limits.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
@@ -423,12 +424,11 @@ events_pump(void)
                                              event_target_handle, 1u);
         (void)astra_vfs_port_service_pump(&events_port, EVENTS_PORT_BUDGET);
     }
-    /*
-     * Static, not automatic: a user thread gets one 4 KiB stack and a batch of
-     * eight drained records is 448 bytes of it. The same reason the shell's
-     * input batch lives outside its frame.
-     */
-    static AstraEventDrained drained[ASTRA_TRACE_READ_BATCH_MAX];
+    /* Static, not automatic: keep one page of transfer storage off the stack. */
+    static AstraEventDrained drained[ASTRA_MEMORY_PAGE_SIZE /
+                                      sizeof(AstraEventDrained)];
+    const uint32_t drain_capacity =
+        (uint32_t)(sizeof(drained) / sizeof(drained[0]));
     uint32_t passes = 0u;
     int changed = 0;
 
@@ -445,8 +445,8 @@ events_pump(void)
         uint32_t lost = 0u;
 
         if (astra_trace_read(debug_handle, &drain_cursor, drained,
-                             ASTRA_TRACE_READ_BATCH_MAX, &copied,
-                             &lost) != ASTRA_SYSCALL_OK) {
+                             drain_capacity, &copied, &lost) !=
+                ASTRA_SYSCALL_OK) {
             /*
              * No authority, or no ring. Stop trying: a pump that retries a
              * refusal every pass would spend the machine's time saying
@@ -465,7 +465,7 @@ events_pump(void)
             astra_event_store_append(&store, &drained[index]);
         }
         changed |= copied != 0u;
-        if (copied < ASTRA_TRACE_READ_BATCH_MAX) {
+        if (copied < drain_capacity) {
             break;
         }
         ++passes;

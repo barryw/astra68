@@ -28,7 +28,7 @@ static void valid_manifest(void)
             "service SERVICES:hostfs grants HOST_DEVICE "
             "serves WORK:rw METRICS:r required\n"
         "service SERVICES:events grants SYS:r STORE:rw serves EVENTS:r\n";
-    SupervisorManifest manifest;
+    SupervisorManifest manifest = SUPERVISOR_MANIFEST_INIT;
 
     assert(supervisor_manifest_parse(text, sizeof(text) - 1u, &manifest));
     assert(manifest.count == 3u);
@@ -94,6 +94,7 @@ static void valid_manifest(void)
                       "NETWORK_LISTEN") == 0);
         assert(manifest.entries[0].serves[1].rights == 0u);
     }
+    supervisor_manifest_destroy(&manifest);
 }
 
 static void refuses_whole_file(void)
@@ -107,7 +108,7 @@ static void refuses_whole_file(void)
     char required_application[] =
         "application APPS:Broken.app grants GUI required\n";
     char too_many[4096] = "";
-    SupervisorManifest manifest;
+    SupervisorManifest manifest = SUPERVISOR_MANIFEST_INIT;
 
     assert(!supervisor_manifest_parse(bad_right, sizeof(bad_right) - 1u,
                                       &manifest));
@@ -119,11 +120,16 @@ static void refuses_whole_file(void)
     assert(!supervisor_manifest_parse(required_application,
                                       sizeof(required_application) - 1u,
                                       &manifest));
-    for (uint32_t index = 0u; index < ASTRA_PROCESS_COUNT_MAX; ++index)
+    for (uint32_t index = 0u; index < 40u; ++index)
         (void)strcat(too_many, "service SERVICES:extra grants SYS:r\n");
+    assert(supervisor_manifest_parse(too_many, strlen(too_many), &manifest));
+    assert(manifest.count == 40u);
+    fail_reallocation = 1;
     assert(!supervisor_manifest_parse(too_many, strlen(too_many),
                                       &manifest));
-    assert(manifest.count == 0u);
+    fail_reallocation = 0;
+    assert(manifest.count == 0u && manifest.entries == NULL);
+    supervisor_manifest_destroy(&manifest);
 }
 
 static void parses_bundle_grants(void)
@@ -142,7 +148,7 @@ static void parses_bundle_grants(void)
 static void accepts_large_commented_manifest(void)
 {
     char text[262144u];
-    SupervisorManifest manifest;
+    SupervisorManifest manifest = SUPERVISOR_MANIFEST_INIT;
     const char service[] = "\nservice SERVICES:storage grants BLOCK_DEVICE\n";
 
     text[0] = '#';
@@ -150,13 +156,14 @@ static void accepts_large_commented_manifest(void)
     memcpy(text + sizeof(text) - sizeof(service), service, sizeof(service));
     assert(supervisor_manifest_parse(text, sizeof(text) - 1u, &manifest));
     assert(manifest.count == 1u);
+    supervisor_manifest_destroy(&manifest);
 }
 
 static void path_uses_vfs_authority(void)
 {
     char path[ASTRA_VFS_PATH_MAX + 1u];
     char text[ASTRA_VFS_PATH_MAX + 64u];
-    SupervisorManifest manifest;
+    SupervisorManifest manifest = SUPERVISOR_MANIFEST_INIT;
 
     memcpy(path, "SERVICES:", sizeof("SERVICES:") - 1u);
     memset(path + sizeof("SERVICES:") - 1u, 'p',
@@ -170,6 +177,7 @@ static void path_uses_vfs_authority(void)
     path[ASTRA_VFS_PATH_MAX] = '\0';
     (void)snprintf(text, sizeof(text), "service %s grants SYS:r\n", path);
     assert(!supervisor_manifest_parse(text, strlen(text), &manifest));
+    supervisor_manifest_destroy(&manifest);
 }
 
 static void parses_exact_span_without_terminator(void)
@@ -177,7 +185,7 @@ static void parses_exact_span_without_terminator(void)
     const char source[] = "service SERVICES:test grants SYS:r";
     size_t length = sizeof(source) - 1u;
     char *text = malloc(length);
-    SupervisorManifest manifest;
+    SupervisorManifest manifest = SUPERVISOR_MANIFEST_INIT;
 
     assert(text != NULL);
     memcpy(text, source, length);
@@ -194,6 +202,7 @@ static void parses_exact_span_without_terminator(void)
     fail_reallocation = 0;
     assert(manifest.count == 0u);
     free(text);
+    supervisor_manifest_destroy(&manifest);
 }
 
 int main(void)

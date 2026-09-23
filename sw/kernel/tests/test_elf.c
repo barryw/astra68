@@ -204,6 +204,8 @@ static void expect(KernelElfStatus want, const char *what)
 static void test_valid_plan(void)
 {
     KernelElfImage plan;
+    const KernelElfSegment *text;
+    const KernelElfSegment *data;
 
     build_valid();
     assert(kernel_elf_accept(image, image_size, &limits, &plan) ==
@@ -213,19 +215,23 @@ static void test_valid_plan(void)
     assert(plan.total_pages == 3u);
     assert(plan.writable_bytes == PAGE + 0x400u);
 
-    assert(plan.segment[0].virtual_address == TEXT_VADDR);
-    assert(plan.segment[0].file_offset == 0u);
-    assert(plan.segment[0].file_size == PAGE);
-    assert(plan.segment[0].page_count == 1u);
-    assert(plan.segment[0].rights ==
+    text = kernel_elf_image_segment(&plan, 0u);
+    data = kernel_elf_image_segment(&plan, 1u);
+    assert(text != NULL && data != NULL);
+    assert(text->virtual_address == TEXT_VADDR);
+    assert(text->file_offset == 0u);
+    assert(text->file_size == PAGE);
+    assert(text->page_count == 1u);
+    assert(text->rights ==
            (KERNEL_ELF_SEGMENT_READ | KERNEL_ELF_SEGMENT_EXEC));
 
-    assert(plan.segment[1].virtual_address == DATA_VADDR);
-    assert(plan.segment[1].file_size == 0x800u);
-    assert(plan.segment[1].memory_size == PAGE + 0x400u);
-    assert(plan.segment[1].page_count == 2u);
-    assert(plan.segment[1].rights ==
+    assert(data->virtual_address == DATA_VADDR);
+    assert(data->file_size == 0x800u);
+    assert(data->memory_size == PAGE + 0x400u);
+    assert(data->page_count == 2u);
+    assert(data->rights ==
            (KERNEL_ELF_SEGMENT_READ | KERNEL_ELF_SEGMENT_WRITE));
+    assert(kernel_elf_image_discard(&plan));
 }
 
 static void test_valid_tls_plan(void)
@@ -414,8 +420,10 @@ static void test_streamed_image_has_no_whole_file_ceiling(void)
     assert(kernel_elf_stream_add_header(&stream, header) == KERNEL_ELF_OK);
     assert(kernel_elf_stream_finish(&stream, &plan) == KERNEL_ELF_OK);
     assert(plan.segment_count == 1u);
-    assert(plan.segment[0].file_offset == SEGMENT_OFFSET);
-    assert(plan.segment[0].file_size == PAGE);
+    assert(kernel_elf_image_segment(&plan, 0u)->file_offset ==
+           SEGMENT_OFFSET);
+    assert(kernel_elf_image_segment(&plan, 0u)->file_size == PAGE);
+    assert(kernel_elf_image_discard(&plan));
 }
 
 static void test_arguments(void)
@@ -689,11 +697,12 @@ static void test_ordering_and_limits(void)
            KERNEL_ELF_OK);
 }
 
-static void test_segment_capacity(void)
+static void test_segment_storage_growth(void)
 {
+    KernelElfImage plan;
     uint32_t index;
 
-    /* Five loadable segments, one more than the profile accepts. */
+    /* Five loadable segments exercise the first page-backed spill. */
     build_valid();
     image_size = 8u * PAGE;
     put16(44u, 5u);
@@ -709,7 +718,36 @@ static void test_segment_capacity(void)
         put32(header + 24u, index == 0u ? 5u : 6u);
         put32(header + 28u, PAGE);
     }
-    expect(KERNEL_ELF_TOO_MANY_SEGMENTS, "five loadable segments");
+    assert(kernel_elf_accept(image, image_size, &limits, &plan) ==
+           KERNEL_ELF_OK);
+    assert(plan.segment_count == 5u);
+    assert(kernel_elf_image_segment(&plan, 4u) != NULL);
+    assert(kernel_elf_image_segment(&plan, 4u)->virtual_address ==
+           TEXT_VADDR + (4u * PAGE));
+    assert(kernel_elf_image_discard(&plan));
+
+    /* Metadata exhaustion rejects the image and publishes no partial plan. */
+    build_valid();
+    image_size = 8u * PAGE;
+    put16(44u, 5u);
+    for (index = 0u; index < 5u; ++index) {
+        uint32_t header = PHOFF + (index * 32u);
+
+        put32(header + 0u, 1u);
+        put32(header + 4u, index * PAGE);
+        put32(header + 8u, TEXT_VADDR + (index * PAGE));
+        put32(header + 12u, TEXT_VADDR + (index * PAGE));
+        put32(header + 16u, PAGE);
+        put32(header + 20u, PAGE);
+        put32(header + 24u, index == 0u ? 5u : 6u);
+        put32(header + 28u, PAGE);
+    }
+    kernel_elf_test_fail_segment_allocation_after(0u);
+    assert(kernel_elf_accept(image, image_size, &limits, &plan) ==
+           KERNEL_ELF_OUT_OF_MEMORY);
+    assert(plan.segment_count == 0u);
+    assert(plan.segment_blocks == NULL);
+    kernel_elf_test_clear_segment_allocation_failure();
 
     /* Only ignorable headers: nothing to load. */
     build_valid();
@@ -919,8 +957,12 @@ static void test_truncation_sweep(void)
             continue;
         }
         for (uint32_t index = 0u; index < plan.segment_count; ++index) {
-            assert((uint64_t)plan.segment[index].file_offset +
-                       plan.segment[index].file_size <= length);
+            const KernelElfSegment *segment =
+                kernel_elf_image_segment(&plan, index);
+
+            assert(segment != NULL);
+            assert((uint64_t)segment->file_offset +
+                       segment->file_size <= length);
         }
     }
 }
@@ -949,12 +991,12 @@ static void test_single_byte_corruption(void)
                 KERNEL_ELF_OK) {
                 continue;
             }
-            assert(plan.segment_count != 0u &&
-                   plan.segment_count <= KERNEL_ELF_SEGMENT_MAX);
+            assert(plan.segment_count != 0u);
             assert(plan.total_pages != 0u &&
                    plan.total_pages <= limits.maximum_pages);
             for (index = 0u; index < plan.segment_count; ++index) {
-                const KernelElfSegment *segment = &plan.segment[index];
+                const KernelElfSegment *segment =
+                    kernel_elf_image_segment(&plan, index);
                 uint64_t file_end = (uint64_t)segment->file_offset +
                                     segment->file_size;
                 uint64_t memory_end = (uint64_t)segment->virtual_address +
@@ -1072,7 +1114,7 @@ int main(void)
     test_segment_rejections();
     test_tls_rejections();
     test_ordering_and_limits();
-    test_segment_capacity();
+    test_segment_storage_growth();
     test_entry_rejections();
     test_plan_cleared_on_failure();
     test_library_profile();

@@ -56,7 +56,6 @@
 #define PAGE_SHIFT 12u
 /* Above this a request takes whole pages of its own. */
 #define LARGE_THRESHOLD 2048u
-#define RUN_PAGES_MAX 8u
 /* Blocks a run should hold before it is worth dedicating pages to the class. */
 #define RUN_MIN_CAPACITY 6u
 
@@ -84,6 +83,7 @@ typedef struct AstraRun {
     uint16_t class_index;
     uint16_t capacity;
     uint16_t free_count;
+    uint16_t next_unused;
     uint32_t pages;
 } AstraRun;
 
@@ -230,16 +230,13 @@ static AstraRun *
 new_run(AstraAllocatorControl *control, uint32_t class_index)
 {
     uint32_t size = class_bytes[class_index];
-    uint32_t pages = 1u;
+    uint32_t pages;
     uint32_t capacity;
     AstraRun *run;
     uint32_t page;
-    uint8_t *block;
 
-    while (((pages * PAGE_BYTES) - RUN_HEADER_BYTES) / size <
-               RUN_MIN_CAPACITY &&
-           pages < RUN_PAGES_MAX)
-        pages <<= 1;
+    pages = (RUN_HEADER_BYTES + size * RUN_MIN_CAPACITY + PAGE_BYTES - 1u) /
+            PAGE_BYTES;
     run = take_pages(control, pages);
     if (run == NULL)
         return NULL;
@@ -247,19 +244,9 @@ new_run(AstraAllocatorControl *control, uint32_t class_index)
     run->class_index = (uint16_t)class_index;
     run->capacity = (uint16_t)capacity;
     run->free_count = (uint16_t)capacity;
+    run->next_unused = 0u;
     run->pages = pages;
     run->free_head = NULL;
-    /*
-     * Threaded back to front so the list hands out ascending addresses, which
-     * keeps a run's early allocations on its first page and lets a run that is
-     * barely used stay barely committed.
-     */
-    block = (uint8_t *)run + RUN_HEADER_BYTES + ((capacity - 1u) * size);
-    for (uint32_t index = 0u; index < capacity; ++index) {
-        *(void **)(void *)block = run->free_head;
-        run->free_head = block;
-        block -= size;
-    }
     page = (uint32_t)(((uint8_t *)run - control->layout.base) >> PAGE_SHIFT);
     for (uint32_t index = 0u; index < pages; ++index)
         control->layout.page_run[page + index] = page + 1u;
@@ -345,6 +332,7 @@ allocate_large(AstraAllocatorControl *control, size_t size, size_t alignment)
     run->class_index = CLASS_LARGE;
     run->capacity = 0u;
     run->free_count = 0u;
+    run->next_unused = 0u;
     run->pages = pages;
     run->free_head = (void *)aligned;
     run->next = NULL;
@@ -373,10 +361,16 @@ allocate(AstraAllocatorControl *control, size_t size)
         if (run == NULL)
             return NULL;
     }
-    block = run->free_head;
-    if (block == NULL)
-        return NULL;
-    run->free_head = *(void **)block;
+    if (run->free_head != NULL) {
+        block = run->free_head;
+        run->free_head = *(void **)block;
+    } else {
+        if (run->next_unused >= run->capacity)
+            return NULL;
+        block = (uint8_t *)run + RUN_HEADER_BYTES +
+                (uint32_t)run->next_unused * class_bytes[class_index];
+        ++run->next_unused;
+    }
     --run->free_count;
     /* A run with nothing left is not a run worth walking to next time. */
     if (run->free_count == 0u)

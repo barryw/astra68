@@ -44,10 +44,12 @@ static uint32_t deadline_heap_frames;
 static uint32_t deadline_capacity;
 static uint32_t deadline_count;
 static uint32_t wait_registration_count;
+static uint32_t reap_pending_count;
 static KernelThreadPoolStats pool_stats;
 static uint8_t pool_corrupt;
 
-static bool valid_thread(const KernelThread *thread);
+static inline __attribute__((always_inline))
+bool valid_thread(const KernelThread *thread);
 
 static KernelThread *thread_at_slot(uint16_t slot)
 {
@@ -78,12 +80,20 @@ static void clear_irq_wake(uint16_t slot)
 
 static void mark_reap_pending(KernelThread *thread)
 {
-    thread->reap_pending = 1u;
+    if (thread->reap_pending == 0u) {
+        thread->reap_pending = 1u;
+        ++reap_pending_count;
+    }
 }
 
 static void clear_reap_pending(KernelThread *thread)
 {
+    if (thread->reap_pending == 0u || reap_pending_count == 0u) {
+        pool_corrupt = 1u;
+        return;
+    }
     thread->reap_pending = 0u;
+    --reap_pending_count;
 }
 
 static bool ensure_thread_leaf(uint16_t slot)
@@ -207,9 +217,36 @@ static KernelThread *allocate_thread_record(uint32_t owner)
     return thread;
 }
 
+static bool release_wait_registrations(KernelThread *thread)
+{
+    if (thread->wait_registrations == NULL)
+        return true;
+#if defined(KERNEL_THREAD_STANDALONE_HOST)
+    if (!kernel_allocation_release(
+            KERNEL_ALLOCATION_SITE_THREAD_WAIT_REGISTRATIONS, 1u,
+            KERNEL_THREAD_WAIT_MEMBER_MAX *
+                sizeof(KernelThreadWaitRegistration)))
+        return false;
+    free(thread->wait_registrations);
+#else
+    if (thread->wait_registrations_frames == 0u ||
+        kernel_memory_release(thread->wait_registrations_physical,
+                              thread->wait_registrations_frames,
+                              thread->resource_owner) != KERNEL_MEMORY_OK)
+        return false;
+#endif
+    thread->wait_registrations = NULL;
+    thread->wait_registrations_physical = 0u;
+    thread->wait_registrations_frames = 0u;
+    thread->wait_registrations_capacity = 0u;
+    return true;
+}
+
 static bool release_thread_record(KernelThread *thread)
 {
     if (thread == NULL)
+        return false;
+    if (!release_wait_registrations(thread))
         return false;
 #if defined(KERNEL_THREAD_STANDALONE_HOST)
     if (!kernel_allocation_release(KERNEL_ALLOCATION_SITE_THREAD_RECORD,
@@ -411,7 +448,8 @@ static uint32_t kernel_stack_poison_used(const KernelThread *thread)
     return poisoned_used > observed_used ? poisoned_used : observed_used;
 }
 
-static bool valid_thread(const KernelThread *thread)
+static inline __attribute__((always_inline))
+bool valid_thread(const KernelThread *thread)
 {
     return thread != NULL && thread_at_slot(thread->slot) == thread &&
            thread->occupied != 0u;
@@ -776,7 +814,9 @@ static KernelThreadWaitRegistration *registration_at(uint32_t identifier)
     if (thread_slot >= KERNEL_THREAD_SLOT_NONE)
         return NULL;
     thread = thread_at_slot((uint16_t)thread_slot);
-    return valid_thread(thread) ? &thread->wait_registrations[member] : NULL;
+    return valid_thread(thread) && thread->wait_registrations != NULL &&
+           member < thread->wait_registrations_capacity ?
+        &thread->wait_registrations[member] : NULL;
 }
 
 static KernelThread *registration_thread_at(uint32_t identifier)
@@ -804,7 +844,8 @@ static uint32_t registration_identifier(
         registration->member >= KERNEL_THREAD_WAIT_MEMBER_MAX)
         return THREAD_WAIT_REGISTRATION_NONE;
     thread = thread_at_slot(registration->thread_slot);
-    if (!valid_thread(thread) ||
+    if (!valid_thread(thread) || thread->wait_registrations == NULL ||
+        registration->member >= thread->wait_registrations_capacity ||
         &thread->wait_registrations[registration->member] != registration)
         return THREAD_WAIT_REGISTRATION_NONE;
     return (uint32_t)registration->thread_slot *
@@ -892,7 +933,14 @@ static bool wait_row_valid(uint16_t thread_slot)
 
     if (!valid_thread(thread))
         return false;
-    for (uint16_t member = 0u; member < KERNEL_THREAD_WAIT_MEMBER_MAX;
+    if (thread->wait_registrations == NULL)
+        return thread->wait_registration_count == 0u &&
+               thread->wait_registrations_capacity == 0u;
+    if (thread->wait_registrations_capacity !=
+        KERNEL_THREAD_WAIT_MEMBER_MAX)
+        return false;
+    for (uint16_t member = 0u;
+         member < thread->wait_registrations_capacity;
          ++member) {
         const KernelThreadWaitRegistration *registration =
             &thread->wait_registrations[member];
@@ -911,7 +959,8 @@ static bool wait_row_valid(uint16_t thread_slot)
 static void reset_wait_row(KernelThread *thread)
 {
     thread->wait_registration_count = 0u;
-    for (uint16_t member = 0u; member < KERNEL_THREAD_WAIT_MEMBER_MAX;
+    for (uint16_t member = 0u;
+         member < thread->wait_registrations_capacity;
          ++member) {
         KernelThreadWaitRegistration *registration =
             &thread->wait_registrations[member];
@@ -922,6 +971,64 @@ static void reset_wait_row(KernelThread *thread)
         registration->thread_slot = thread->slot;
         registration->member = member;
     }
+}
+
+static bool ensure_wait_registrations(KernelThread *thread)
+{
+    KernelThreadWaitRegistration *registrations;
+
+    if (thread->wait_registrations != NULL)
+        return thread->wait_registrations_capacity ==
+               KERNEL_THREAD_WAIT_MEMBER_MAX;
+#if defined(KERNEL_THREAD_STANDALONE_HOST)
+    uint32_t bytes = KERNEL_THREAD_WAIT_MEMBER_MAX *
+                     sizeof(*registrations);
+
+    if (!kernel_allocation_attempt(
+            KERNEL_ALLOCATION_SITE_THREAD_WAIT_REGISTRATIONS,
+            thread->resource_owner))
+        return false;
+    registrations = calloc(KERNEL_THREAD_WAIT_MEMBER_MAX,
+                           sizeof(*registrations));
+    if (registrations == NULL) {
+        kernel_allocation_fail(
+            KERNEL_ALLOCATION_SITE_THREAD_WAIT_REGISTRATIONS,
+            thread->resource_owner);
+        return false;
+    }
+    if (!kernel_allocation_commit(
+            KERNEL_ALLOCATION_SITE_THREAD_WAIT_REGISTRATIONS, 1u, bytes,
+            thread->resource_owner)) {
+        free(registrations);
+        return false;
+    }
+    thread->wait_registrations_physical = 0u;
+    thread->wait_registrations_frames = 0u;
+#else
+    uint32_t bytes = KERNEL_THREAD_WAIT_MEMBER_MAX *
+                     sizeof(*registrations);
+    uint32_t frames = (bytes + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE;
+    uint32_t physical;
+
+    if (kernel_memory_alloc_zeroed_tagged(
+            KERNEL_ALLOCATION_SITE_THREAD_WAIT_REGISTRATIONS, frames, 1u,
+            KERNEL_FRAME_KERNEL, thread->resource_owner, &physical) !=
+        KERNEL_MEMORY_OK)
+        return false;
+    registrations = kernel_memory_access(physical,
+                                         frames * KERNEL_PAGE_SIZE);
+    if (registrations == NULL) {
+        (void)kernel_memory_release(physical, frames,
+                                    thread->resource_owner);
+        return false;
+    }
+    thread->wait_registrations_physical = physical;
+    thread->wait_registrations_frames = (uint16_t)frames;
+#endif
+    thread->wait_registrations = registrations;
+    thread->wait_registrations_capacity = KERNEL_THREAD_WAIT_MEMBER_MAX;
+    reset_wait_row(thread);
+    return true;
 }
 
 static KernelThreadStatus enqueue_wait_registration(
@@ -936,7 +1043,9 @@ static KernelThreadStatus enqueue_wait_registration(
         thread->state != KERNEL_THREAD_BLOCKED ||
         member >= thread->wait_member_count ||
         queue->count == UINT32_MAX ||
-        thread->wait_registration_count >= KERNEL_THREAD_WAIT_MEMBER_MAX)
+        thread->wait_registrations == NULL ||
+        thread->wait_registration_count >=
+            thread->wait_registrations_capacity)
         return KERNEL_THREAD_INVALID_STATE;
     registration = &thread->wait_registrations[member];
     identifier = registration_identifier(registration);
@@ -1053,7 +1162,7 @@ static KernelThreadStatus withdraw_wait_set(
 
     if (thread == NULL || thread->state != KERNEL_THREAD_BLOCKED ||
         thread->wait_member_count == 0u ||
-        thread->wait_member_count > KERNEL_THREAD_WAIT_MEMBER_MAX)
+        thread->wait_registrations == NULL)
         return KERNEL_THREAD_INVALID_STATE;
     member_count = thread->wait_member_count;
     for (uint16_t member = 0u; member < member_count; ++member) {
@@ -1223,6 +1332,7 @@ void kernel_thread_pool_init(void)
     deadline_heap_owner = 0u;
     deadline_heap_frames = 0u;
     wait_registration_count = 0u;
+    reap_pending_count = 0u;
     thread_slots = 0u;
     next_thread_slot = 0u;
     next_thread_id = 0u;
@@ -1582,13 +1692,7 @@ KernelThreadStatus kernel_thread_finish_reap(KernelThread *thread,
 
 bool kernel_thread_reap_pending(void)
 {
-    for (uint32_t slot = 0u; slot < thread_slots; ++slot) {
-        KernelThread *thread = thread_at_slot((uint16_t)slot);
-
-        if (thread != NULL && thread->reap_pending != 0u)
-            return true;
-    }
-    return false;
+    return reap_pending_count != 0u;
 }
 
 KernelThreadStatus kernel_thread_make_ready(KernelThread *thread)
@@ -1880,6 +1984,8 @@ KernelThreadStatus block_wait_set_fast(
         if (specs[member].queue->count > UINT32_MAX - additions)
             return KERNEL_THREAD_NO_SLOT;
     }
+    if (!ensure_wait_registrations(thread))
+        return KERNEL_THREAD_OUT_OF_MEMORY;
     thread->state = KERNEL_THREAD_BLOCKED;
     thread->wait_member_count = (uint8_t)member_count;
     thread->wait_mode = (uint8_t)mode;
@@ -2475,7 +2581,7 @@ bool kernel_thread_pool_stats(KernelThreadPoolStats *stats)
             return false;
         if (thread->state == KERNEL_THREAD_BLOCKED) {
             if (thread->wait_member_count == 0u ||
-                thread->wait_member_count > KERNEL_THREAD_WAIT_MEMBER_MAX ||
+                thread->wait_registrations == NULL ||
                 (thread->wait_mode != KERNEL_THREAD_WAIT_ONE &&
                  thread->wait_mode != KERNEL_THREAD_WAIT_MULTIPLE))
                 return false;
@@ -2490,7 +2596,7 @@ bool kernel_thread_pool_stats(KernelThreadPoolStats *stats)
                 ++observed_registrations;
             }
             for (uint16_t member = thread->wait_member_count;
-                 member < KERNEL_THREAD_WAIT_MEMBER_MAX; ++member) {
+                 member < thread->wait_registrations_capacity; ++member) {
                 if (thread->wait_registrations[member].queue != NULL)
                     return false;
             }

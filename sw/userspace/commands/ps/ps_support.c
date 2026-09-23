@@ -2,8 +2,24 @@
 
 #include <astra/divide.h>
 #include <astra/process.h>
+#include <astra/vfs_service.h>
 
 #include <stddef.h>
+
+uint32_t
+astra_ps_snapshot_allocate(uint64_t bytes, AstraPsReallocate reallocate,
+                           AstraProcSnapshot **records)
+{
+    if (reallocate == NULL || records == NULL)
+        return ASTRA_VFS_ERR_PROTOCOL;
+    *records = NULL;
+    if (bytes > SIZE_MAX || bytes % sizeof(**records) != 0u)
+        return ASTRA_VFS_ERR_PROTOCOL;
+    if (bytes == 0u)
+        return ASTRA_VFS_OK;
+    *records = reallocate(NULL, (size_t)bytes);
+    return *records != NULL ? ASTRA_VFS_OK : ASTRA_VFS_ERR_LIMIT;
+}
 
 typedef struct RowWriter {
     char *out;

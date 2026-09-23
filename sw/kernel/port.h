@@ -7,33 +7,16 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/*
- * These are budgets, not guesses, and they are static on purpose: a process
- * that could make the kernel allocate could exhaust the kernel, and a kernel
- * out of memory is not a failed allocation, it is the machine. Port and queue
- * configuration is limited per owner; copied messages consume the separate
- * fixed global pool only while they are actually queued. Advertising unused
- * queue capacity must not consume another process's ability to create a port.
- *
- * The fixed pools are sized against the object-table region rather than
- * against what would fit beside the kernel image; the region is the thing to
- * raise when measured live occupancy reaches it, and the linker says so by
- * name if it overflows.
- */
-#define KERNEL_PORT_MAX 128u
-#define KERNEL_PORT_OWNER_MAX 24u
-#define KERNEL_PORT_MESSAGE_MAX 256u
-#define KERNEL_PORT_OWNER_MESSAGE_MAX 64u
+#define KERNEL_PORT_MAX UINT16_MAX
+#define KERNEL_PORT_MESSAGE_MAX UINT16_MAX
 #define KERNEL_PORT_MESSAGE_SIZE_MIN 24u
 #define KERNEL_PORT_INLINE_SIZE_MAX 1024u
 #define KERNEL_PORT_MESSAGE_SIZE_MAX \
     (KERNEL_PORT_MESSAGE_SIZE_MIN + KERNEL_PORT_INLINE_SIZE_MAX)
 #define KERNEL_PORT_MESSAGE_BYTES_MAX \
     (KERNEL_PORT_MESSAGE_MAX * KERNEL_PORT_MESSAGE_SIZE_MAX)
-#define KERNEL_PORT_OWNER_BYTES_MAX \
-    (KERNEL_PORT_OWNER_MESSAGE_MAX * KERNEL_PORT_MESSAGE_SIZE_MAX)
 #define KERNEL_PORT_MESSAGE_HANDLE_MAX KERNEL_HANDLE_TRANSFER_MAX
-#define KERNEL_PORT_QUEUE_MESSAGES_MAX 16u
+#define KERNEL_PORT_QUEUE_MESSAGES_MAX ASTRA_PORT_MESSAGES_MAX
 #define KERNEL_PORT_QUEUE_BYTES_MAX \
     (KERNEL_PORT_QUEUE_MESSAGES_MAX * KERNEL_PORT_MESSAGE_SIZE_MAX)
 #define KERNEL_PORT_SEND_RIGHTS \
@@ -62,7 +45,6 @@ typedef enum KernelPortStatus {
     KERNEL_PORT_INVALID_ARGUMENT,
     KERNEL_PORT_INVALID_STATE,
     KERNEL_PORT_NO_SLOT,
-    KERNEL_PORT_QUOTA_EXCEEDED,
     KERNEL_PORT_INVALID_HANDLE,
     KERNEL_PORT_ACCESS_DENIED,
     KERNEL_PORT_DUPLICATE_HANDLE,
@@ -97,12 +79,11 @@ typedef struct KernelPortSnapshot {
     uint16_t receive_references;
     uint16_t queued_messages;
     uint16_t maximum_messages;
-    uint16_t maximum_bytes;
+    uint32_t maximum_bytes;
     uint16_t readable_waiters;
     uint16_t writable_waiters;
     uint8_t state;
-    uint8_t capacity_accounted;
-    uint8_t reserved[2];
+    uint8_t reserved[3];
 } KernelPortSnapshot;
 
 typedef struct KernelPortPoolStats {
@@ -111,7 +92,6 @@ typedef struct KernelPortPoolStats {
     uint32_t closing_ports;
     uint32_t max_active_ports;
     uint32_t allocation_failures;
-    uint32_t quota_failures;
     uint32_t publication_rollbacks;
     uint32_t sends;
     uint32_t receives;
@@ -130,8 +110,6 @@ typedef struct KernelPortPoolStats {
     uint32_t max_queued_messages;
     uint32_t max_queued_bytes;
     uint32_t max_queued_handles;
-    uint32_t configured_message_capacity;
-    uint32_t configured_byte_capacity;
 } KernelPortPoolStats;
 
 void kernel_port_pool_init(void);

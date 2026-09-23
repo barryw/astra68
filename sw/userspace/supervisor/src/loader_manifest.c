@@ -129,17 +129,48 @@ static int parse_line(char *line, SupervisorManifestEntry *entry)
     return at == count;
 }
 
+void supervisor_manifest_destroy(SupervisorManifest *manifest)
+{
+    if (manifest == NULL)
+        return;
+    astra_runtime_deallocate(manifest->entries);
+    manifest->entries = NULL;
+    manifest->count = 0u;
+    manifest->capacity = 0u;
+}
+
+static int manifest_reserve(SupervisorManifest *manifest)
+{
+    SupervisorManifestEntry *grown;
+    uint32_t capacity = manifest->capacity == 0u ? 8u :
+                        manifest->capacity * 2u;
+
+    if (capacity <= manifest->capacity)
+        return 0;
+#if SIZE_MAX < UINT32_MAX
+    if (capacity > SIZE_MAX / sizeof(*manifest->entries))
+        return 0;
+#endif
+    grown = astra_runtime_reallocate(
+        manifest->entries, (size_t)capacity * sizeof(*manifest->entries));
+    if (grown == NULL)
+        return 0;
+    manifest->entries = grown;
+    manifest->capacity = capacity;
+    return 1;
+}
+
 int supervisor_manifest_parse(char *text, uint32_t length,
                               SupervisorManifest *manifest)
 {
-    SupervisorManifestEntry discard;
     uint32_t start = 0u;
 
     if (text == NULL || manifest == NULL || length == 0u)
         return 0;
-    (void)memset(manifest, 0, sizeof(*manifest));
+    supervisor_manifest_destroy(manifest);
     while (start < length) {
         uint32_t at = start;
+        SupervisorManifestEntry entry;
         char *line;
         char *owned = NULL;
         int result;
@@ -159,29 +190,28 @@ int supervisor_manifest_parse(char *text, uint32_t length,
 
             owned = astra_runtime_reallocate(NULL, (size_t)tail + 1u);
             if (owned == NULL) {
-                (void)memset(manifest, 0, sizeof(*manifest));
+                supervisor_manifest_destroy(manifest);
                 return 0;
             }
             (void)memcpy(owned, &text[start], tail);
             owned[tail] = '\0';
             line = owned;
         }
-        result = parse_line(line,
-                            manifest->count < SUPERVISOR_MANIFEST_ENTRY_MAX ?
-                                &manifest->entries[manifest->count] :
-                                &discard);
+        result = parse_line(line, &entry);
         astra_runtime_deallocate(owned);
         if (result == 0) {
-            (void)memset(manifest, 0, sizeof(*manifest));
+            supervisor_manifest_destroy(manifest);
             return 0;
         }
-        if (result == 1 &&
-            manifest->count == SUPERVISOR_MANIFEST_ENTRY_MAX) {
-            (void)memset(manifest, 0, sizeof(*manifest));
-            return 0;
-        }
-        if (result == 1)
+        if (result == 1) {
+            if (manifest->count == manifest->capacity &&
+                !manifest_reserve(manifest)) {
+                supervisor_manifest_destroy(manifest);
+                return 0;
+            }
+            manifest->entries[manifest->count] = entry;
             ++manifest->count;
+        }
         start = at + (at < length ? 1u : 0u);
     }
     return manifest->count != 0u;

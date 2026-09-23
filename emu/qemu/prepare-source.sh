@@ -154,6 +154,8 @@ for required in configure meson.build hw/m68k/meson.build target/m68k/cpu.c; do
 done
 
 cp "$OVERLAY/hw/m68k/astra68.c" "$STAGED_SOURCE/hw/m68k/astra68.c"
+cp "$OVERLAY/contrib/plugins/astra_profile.c" \
+    "$STAGED_SOURCE/contrib/plugins/astra_profile.c"
 cp "$PUBLIC_INPUT" "$STAGED_SOURCE/include/hw/m68k/astra_input.h"
 cp "$PUBLIC_DISPLAY_MAILBOX" \
     "$STAGED_SOURCE/include/hw/m68k/astra_display_mailbox.h"

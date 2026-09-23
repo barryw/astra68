@@ -576,6 +576,8 @@ static void test_map_switch_unmap_and_stale_guards(void)
                               KERNEL_VM_READ) == KERNEL_VM_ALREADY_MAPPED);
     assert(kernel_vm_map_page(&space, 0x10001000u, physical,
                               KERNEL_VM_READ) == KERNEL_VM_CACHE_ALIAS);
+    assert(kernel_memory_frame_info(physical, &frame));
+    assert(frame.references == 2u);
     assert(kernel_vm_map_page(&space, 0u, physical, KERNEL_VM_READ) ==
            KERNEL_VM_INVALID_ARGUMENT);
     assert(kernel_vm_map_page(&space, 0x10001000u, physical,
@@ -624,6 +626,72 @@ static void test_map_switch_unmap_and_stale_guards(void)
     assert(kernel_vm_stats(&stats));
     assert(stats.address_spaces == 0u && stats.user_mappings == 0u);
     assert(stats.user_table_pages == 0u);
+}
+
+static void test_adopt_page_transfers_reference_only_on_success(void)
+{
+    KernelAddressSpace space = {0};
+    KernelFrameInfo frame;
+    uint32_t adopted;
+    uint32_t rejected;
+
+    initialize_test();
+    assert(kernel_vm_enable() == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(43u, &space) == KERNEL_VM_OK);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 43u,
+                               &adopted) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 43u,
+                               &rejected) == KERNEL_MEMORY_OK);
+    assert(kernel_vm_adopt_page(&space, 0x10000000u, adopted,
+                                KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+           KERNEL_VM_OK);
+    assert(kernel_memory_frame_info(adopted, &frame));
+    assert(frame.references == 1u && frame.owner == 43u);
+
+    assert(kernel_vm_adopt_page(&space, 0x10000000u, rejected,
+                                KERNEL_VM_READ) ==
+           KERNEL_VM_ALREADY_MAPPED);
+    assert(kernel_memory_frame_info(rejected, &frame));
+    assert(frame.references == 1u && frame.owner == 43u);
+    assert(kernel_memory_release(rejected, 1u, 43u) == KERNEL_MEMORY_OK);
+
+    assert(kernel_vm_unmap_page(&space, 0x10000000u) == KERNEL_VM_OK);
+    assert(kernel_memory_frame_info(adopted, &frame));
+    assert(frame.references == 0u && frame.owner == KERNEL_OWNER_NONE);
+    assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
+}
+
+static void test_unmap_preserves_siblings_around_cleared_entry(void)
+{
+    KernelAddressSpace space = {0};
+    const uint32_t base = 0x11000000u;
+    const uint32_t middle = base + 31u * KERNEL_PAGE_SIZE;
+    const uint32_t last = base + 63u * KERNEL_PAGE_SIZE;
+    uint32_t physical;
+
+    initialize_test();
+    assert(kernel_vm_create_address_space(44u, &space) == KERNEL_VM_OK);
+    assert(kernel_memory_alloc(3u, 1u, KERNEL_FRAME_PROCESS, 44u,
+                               &physical) == KERNEL_MEMORY_OK);
+    assert(kernel_vm_map_page(&space, base, physical, KERNEL_VM_READ) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_map_page(&space, middle, physical + KERNEL_PAGE_SIZE,
+                              KERNEL_VM_READ) == KERNEL_VM_OK);
+    assert(kernel_vm_map_page(&space, last,
+                              physical + 2u * KERNEL_PAGE_SIZE,
+                              KERNEL_VM_READ) == KERNEL_VM_OK);
+
+    assert(kernel_vm_unmap_page(&space, middle) == KERNEL_VM_OK);
+    assert(page_descriptor(space.root_physical, base) != 0u);
+    assert(page_descriptor(space.root_physical, middle) == 0u);
+    assert(page_descriptor(space.root_physical, last) != 0u);
+    assert(kernel_vm_unmap_page(&space, last) == KERNEL_VM_OK);
+    assert(page_descriptor(space.root_physical, base) != 0u);
+    assert(kernel_vm_unmap_page(&space, base) == KERNEL_VM_OK);
+    assert(page_descriptor(space.root_physical, base) == 0u);
+
+    assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
+    assert(kernel_memory_release(physical, 3u, 44u) == KERNEL_MEMORY_OK);
 }
 
 static void test_host_channel_mapping_is_private_and_uncached(void)
@@ -1130,6 +1198,91 @@ static void test_shared_map_existing_leaf_rollback_and_alias_guards(void)
     assert(final_memory.free_frames == initial_memory.free_frames);
 }
 
+static void test_shared_range_uses_the_architectural_window(void)
+{
+    enum {
+        legacy_page_limit = ASTRA_SHARED_AREA_SLOT_SIZE / KERNEL_PAGE_SIZE,
+        page_count = legacy_page_limit + 1u
+    };
+    static uint32_t physical_pages[page_count];
+    const uint32_t frame_owner = 0x40000015u;
+    const uint32_t crossing_base =
+        ASTRA_SHARED_AREA_ADDRESS_END -
+        legacy_page_limit * KERNEL_PAGE_SIZE;
+    KernelAddressSpace space = {0};
+    uint32_t physical;
+
+    initialize_test();
+    assert(kernel_vm_enable() == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(54u, &space) == KERNEL_VM_OK);
+    assert(kernel_memory_alloc_pages_zeroed(
+               page_count, KERNEL_FRAME_SHARED, frame_owner,
+               physical_pages) == KERNEL_MEMORY_OK);
+
+    /* More than the old 4 MiB ceiling is valid inside the 128 MiB window. */
+    assert(kernel_vm_map_shared_range(
+               &space, KERNEL_VM_AREA_BASE, physical_pages, page_count,
+               frame_owner, KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_switch(&space) == KERNEL_VM_OK);
+    assert(kernel_vm_test_translate_current(KERNEL_VM_AREA_BASE, true,
+                                            &physical));
+    assert(physical == physical_pages[0]);
+    assert(kernel_vm_test_translate_current(
+        KERNEL_VM_AREA_BASE + (page_count - 1u) * KERNEL_PAGE_SIZE,
+        true, &physical));
+    assert(physical == physical_pages[page_count - 1u]);
+    assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
+    assert(kernel_vm_unmap_shared_range(
+               &space, KERNEL_VM_AREA_BASE, physical_pages, page_count,
+               frame_owner) == KERNEL_VM_OK);
+
+    /* The same span is rejected when its last page is outside that window. */
+    assert(kernel_vm_map_shared_range(
+               &space, crossing_base, physical_pages, page_count,
+               frame_owner, KERNEL_VM_READ) == KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_map_shared_range(
+               &space, crossing_base, physical_pages, legacy_page_limit,
+               frame_owner, KERNEL_VM_READ) == KERNEL_VM_OK);
+    assert(kernel_vm_unmap_shared_range(
+               &space, crossing_base, physical_pages, page_count,
+               frame_owner) == KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_unmap_shared_range(
+               &space, crossing_base, physical_pages, legacy_page_limit,
+               frame_owner) == KERNEL_VM_OK);
+
+    assert(kernel_memory_release_owner(frame_owner, NULL) == KERNEL_MEMORY_OK);
+    assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
+}
+
+static void test_shared_range_duplicate_validation_is_atomic(void)
+{
+    const uint32_t frame_owner = 0x40000016u;
+    KernelAddressSpace space = {0};
+    uint32_t physical_pages[2];
+    uint32_t duplicate_pages[2];
+
+    initialize_test();
+    assert(kernel_vm_enable() == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(55u, &space) == KERNEL_VM_OK);
+    assert(kernel_memory_alloc_pages_zeroed(
+               2u, KERNEL_FRAME_SHARED, frame_owner, physical_pages) ==
+           KERNEL_MEMORY_OK);
+    duplicate_pages[0] = physical_pages[0];
+    duplicate_pages[1] = physical_pages[0];
+    assert(kernel_vm_map_shared_range(
+               &space, KERNEL_VM_AREA_BASE, duplicate_pages, 2u,
+               frame_owner, KERNEL_VM_READ) == KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_map_shared_range(
+               &space, KERNEL_VM_AREA_BASE, physical_pages, 2u,
+               frame_owner, KERNEL_VM_READ) == KERNEL_VM_OK);
+    assert(kernel_vm_unmap_shared_range(
+               &space, KERNEL_VM_AREA_BASE, physical_pages, 2u,
+               frame_owner) == KERNEL_VM_OK);
+    assert(kernel_memory_release_owner(frame_owner, NULL) == KERNEL_MEMORY_OK);
+    assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
+}
+
 static void test_shared_aliases_are_not_limited_by_process_table_size(void)
 {
     KernelAddressSpace spaces[33] = {{0}};
@@ -1405,6 +1558,8 @@ int main(void)
     test_supervisor_stack_oom_rolls_back();
     test_page_table_injection_preserves_baseline();
     test_map_switch_unmap_and_stale_guards();
+    test_adopt_page_transfers_reference_only_on_success();
+    test_unmap_preserves_siblings_around_cleared_entry();
     test_host_channel_mapping_is_private_and_uncached();
     test_destroy_releases_read_only_mapping();
     test_protect_read_only_is_atomic_and_idempotent();
@@ -1413,6 +1568,8 @@ int main(void)
     test_clone_is_lazy_and_write_fault_copies_one_page();
     test_shared_map_transaction_rolls_back_every_stage();
     test_shared_map_existing_leaf_rollback_and_alias_guards();
+    test_shared_range_uses_the_architectural_window();
+    test_shared_range_duplicate_validation_is_atomic();
     test_shared_aliases_are_not_limited_by_process_table_size();
     test_dynamic_code_range_is_shared_and_executable();
     test_device_aperture_above_the_low_region_is_uncached();

@@ -14,6 +14,7 @@
 #include <string.h>
 
 #define RAM_BASE 0x02000000u
+#define TEST_ADDRESS_SPACE_COUNT 40u
 
 static uint8_t physical_memory[32u * 1024u * 1024u];
 
@@ -109,7 +110,9 @@ static void initialize_test(void)
 
 static void test_same_address_aliases_survive_creator_death(void)
 {
-    KernelAddressSpace spaces[KERNEL_VM_ADDRESS_SPACE_MAX + 1u] = {{0}};
+    KernelAddressSpace spaces[TEST_ADDRESS_SPACE_COUNT] = {{0}};
+    KernelAllocationStats mapping_metadata;
+    KernelAllocationStats area_metadata;
     KernelAreaPoolStats stats;
     KernelAreaSnapshot snapshot;
     uint32_t rejected_base;
@@ -117,15 +120,15 @@ static void test_same_address_aliases_survive_creator_death(void)
     KernelMemoryStats baseline;
     KernelMemoryStats after;
     KernelArea *area;
-    uint32_t bases[KERNEL_VM_ADDRESS_SPACE_MAX + 1u];
-    uint32_t sizes[KERNEL_VM_ADDRESS_SPACE_MAX + 1u];
-    uint32_t physical[KERNEL_VM_ADDRESS_SPACE_MAX];
+    uint32_t bases[TEST_ADDRESS_SPACE_COUNT];
+    uint32_t sizes[TEST_ADDRESS_SPACE_COUNT];
+    uint32_t physical[TEST_ADDRESS_SPACE_COUNT - 1u];
     uint8_t bytes[2u * KERNEL_PAGE_SIZE];
 
     initialize_test();
     assert(kernel_memory_stats(&baseline));
     for (uint32_t index = 0u;
-         index < KERNEL_VM_ADDRESS_SPACE_MAX + 1u; ++index)
+         index < TEST_ADDRESS_SPACE_COUNT; ++index)
         assert(kernel_vm_create_address_space(100u + index, &spaces[index]) ==
                KERNEL_VM_OK);
     assert(kernel_area_create(7u, sizeof(bytes), 0u, &area) == KERNEL_AREA_OK);
@@ -135,7 +138,8 @@ static void test_same_address_aliases_survive_creator_death(void)
     for (uint32_t index = 0u; index < sizeof(bytes); ++index)
         assert(bytes[index] == 0u);
 
-    for (uint32_t index = 0u; index < KERNEL_VM_ADDRESS_SPACE_MAX; ++index) {
+    for (uint32_t index = 0u; index < TEST_ADDRESS_SPACE_COUNT - 1u;
+         ++index) {
         assert(kernel_area_map(area, 100u + index, &spaces[index],
                                KERNEL_VM_READ | KERNEL_VM_WRITE,
                                &bases[index], &sizes[index]) == KERNEL_AREA_OK);
@@ -149,20 +153,20 @@ static void test_same_address_aliases_survive_creator_death(void)
     }
     assert(kernel_area_map(area, 100u, &spaces[0],
                            KERNEL_VM_READ | KERNEL_VM_WRITE,
-                           &bases[KERNEL_VM_ADDRESS_SPACE_MAX],
-                           &sizes[KERNEL_VM_ADDRESS_SPACE_MAX]) ==
+                           &bases[TEST_ADDRESS_SPACE_COUNT - 1u],
+                           &sizes[TEST_ADDRESS_SPACE_COUNT - 1u]) ==
            KERNEL_AREA_OK);
-    assert(bases[KERNEL_VM_ADDRESS_SPACE_MAX] == bases[0] &&
-           sizes[KERNEL_VM_ADDRESS_SPACE_MAX] == sizes[0]);
+    assert(bases[TEST_ADDRESS_SPACE_COUNT - 1u] == bases[0] &&
+           sizes[TEST_ADDRESS_SPACE_COUNT - 1u] == sizes[0]);
     assert(kernel_area_map(area, 100u, &spaces[0], KERNEL_VM_READ,
-                           &bases[KERNEL_VM_ADDRESS_SPACE_MAX],
-                           &sizes[KERNEL_VM_ADDRESS_SPACE_MAX]) ==
+                           &bases[TEST_ADDRESS_SPACE_COUNT - 1u],
+                           &sizes[TEST_ADDRESS_SPACE_COUNT - 1u]) ==
            KERNEL_AREA_ACCESS_DENIED);
-    assert(kernel_area_map(area, 100u + KERNEL_VM_ADDRESS_SPACE_MAX,
-                           &spaces[KERNEL_VM_ADDRESS_SPACE_MAX],
+    assert(kernel_area_map(area, 100u + TEST_ADDRESS_SPACE_COUNT - 1u,
+                           &spaces[TEST_ADDRESS_SPACE_COUNT - 1u],
                            KERNEL_VM_READ | KERNEL_VM_WRITE,
-                           &bases[KERNEL_VM_ADDRESS_SPACE_MAX],
-                           &sizes[KERNEL_VM_ADDRESS_SPACE_MAX]) ==
+                           &bases[TEST_ADDRESS_SPACE_COUNT - 1u],
+                           &sizes[TEST_ADDRESS_SPACE_COUNT - 1u]) ==
            KERNEL_AREA_OK);
     assert(kernel_area_unmap(101u, &spaces[1], bases[1]) == KERNEL_AREA_OK);
     assert(kernel_area_map(area, 101u, &spaces[1],
@@ -179,22 +183,22 @@ static void test_same_address_aliases_survive_creator_death(void)
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.creator == 7u);
     assert(snapshot.terminal_result == 0u);
-    assert(snapshot.mapping_references == KERNEL_VM_ADDRESS_SPACE_MAX + 1u);
+    assert(snapshot.mapping_references == TEST_ADDRESS_SPACE_COUNT);
     assert(snapshot.frames_released == 0u);
     assert(kernel_area_map(area, 100u, &spaces[0], KERNEL_VM_READ,
                            &rejected_base, &rejected_size) ==
            KERNEL_AREA_ACCESS_DENIED);
     assert(kernel_area_pool_stats(&stats));
     assert(stats.active_areas == 1u && stats.closing_areas == 0u);
-    assert(stats.active_mappings == KERNEL_VM_ADDRESS_SPACE_MAX + 1u);
+    assert(stats.active_mappings == TEST_ADDRESS_SPACE_COUNT);
     kernel_area_handle_release(area, NULL);
     assert(kernel_area_live(area));
-    for (uint32_t index = 0u; index < KERNEL_VM_ADDRESS_SPACE_MAX; ++index)
+    for (uint32_t index = 0u; index < TEST_ADDRESS_SPACE_COUNT - 1u; ++index)
         assert(kernel_area_unmap(100u + index, &spaces[index], bases[index]) ==
                KERNEL_AREA_OK);
-    assert(kernel_area_unmap(100u + KERNEL_VM_ADDRESS_SPACE_MAX,
-                             &spaces[KERNEL_VM_ADDRESS_SPACE_MAX],
-                             bases[KERNEL_VM_ADDRESS_SPACE_MAX]) ==
+    assert(kernel_area_unmap(100u + TEST_ADDRESS_SPACE_COUNT - 1u,
+                             &spaces[TEST_ADDRESS_SPACE_COUNT - 1u],
+                             bases[TEST_ADDRESS_SPACE_COUNT - 1u]) ==
            KERNEL_AREA_OK);
     kernel_area_handle_release(area, NULL);
     assert(kernel_area_pool_stats(&stats));
@@ -202,13 +206,19 @@ static void test_same_address_aliases_survive_creator_death(void)
 
     assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
     for (uint32_t index = 0u;
-         index < KERNEL_VM_ADDRESS_SPACE_MAX + 1u; ++index) {
+         index < TEST_ADDRESS_SPACE_COUNT; ++index) {
         assert(kernel_vm_destroy_address_space(&spaces[index]) == KERNEL_VM_OK);
         assert(kernel_memory_release_owner(100u + index, NULL) ==
                KERNEL_MEMORY_OK);
     }
     assert(kernel_memory_stats(&after));
-    assert(after.free_frames == baseline.free_frames);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_AREA_MAPPING_METADATA, &mapping_metadata));
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_AREA_OBJECT_METADATA, &area_metadata));
+    assert(after.free_frames + mapping_metadata.current_units +
+               area_metadata.current_units ==
+           baseline.free_frames);
     assert(kernel_area_pool_valid());
 }
 
@@ -216,8 +226,11 @@ static void test_allocation_injection_preserves_mapping_baseline(void)
 {
     KernelAddressSpace space = {0};
     KernelAllocationStats area_allocation;
+    KernelAllocationStats area_metadata_allocation;
     KernelAllocationStats mapping_allocation;
+    KernelAllocationStats mapping_metadata_allocation;
     KernelAllocationStats page_allocation;
+    KernelAllocationStats page_metadata_allocation;
     KernelArea *area = (KernelArea *)(uintptr_t)1u;
     KernelAreaPoolStats pool_stats;
     KernelAreaSnapshot snapshot;
@@ -234,22 +247,36 @@ static void test_allocation_injection_preserves_mapping_baseline(void)
            KERNEL_AREA_NO_SLOT);
     assert(area == NULL);
     area = (KernelArea *)(uintptr_t)1u;
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_AREA_OBJECT_METADATA, 1u);
+    assert(kernel_area_create(31u, KERNEL_PAGE_SIZE, 0u, &area) ==
+           KERNEL_AREA_NO_SLOT);
+    assert(area == NULL);
+    area = (KernelArea *)(uintptr_t)1u;
     kernel_allocation_test_fail_global(1u);
     assert(kernel_area_create(31u, KERNEL_PAGE_SIZE, 0u, &area) ==
            KERNEL_AREA_NO_SLOT);
     assert(area == NULL);
+    area = (KernelArea *)(uintptr_t)1u;
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_AREA_PAGE_METADATA, 1u);
+    assert(kernel_area_create(31u, KERNEL_PAGE_SIZE, 0u, &area) ==
+           KERNEL_AREA_OUT_OF_MEMORY);
+    assert(area == NULL);
+    assert(kernel_area_pool_valid());
+    area = (KernelArea *)(uintptr_t)1u;
     kernel_allocation_test_fail_site(
         KERNEL_ALLOCATION_SITE_AREA_PAGES, 1u);
     assert(kernel_area_create(31u, KERNEL_PAGE_SIZE, 0u, &area) ==
            KERNEL_AREA_OUT_OF_MEMORY);
     assert(area == NULL);
-    area = (KernelArea *)(uintptr_t)1u;
-    kernel_allocation_test_fail_global(2u);
-    assert(kernel_area_create(31u, KERNEL_PAGE_SIZE, 0u, &area) ==
-           KERNEL_AREA_OUT_OF_MEMORY);
-    assert(area == NULL);
+    assert(kernel_area_pool_valid());
     assert(kernel_memory_stats(&after));
-    assert(after.free_frames == baseline.free_frames);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_AREA_OBJECT_METADATA,
+        &area_metadata_allocation));
+    assert(after.free_frames + area_metadata_allocation.current_units ==
+           baseline.free_frames);
 
     assert(kernel_area_create(31u, KERNEL_PAGE_SIZE, 0u, &area) ==
            KERNEL_AREA_OK);
@@ -260,6 +287,18 @@ static void test_allocation_injection_preserves_mapping_baseline(void)
                            KERNEL_VM_READ | KERNEL_VM_WRITE,
                            &virtual_base, &byte_size) ==
            KERNEL_AREA_NO_SLOT);
+    assert(virtual_base == 0u && byte_size == 0u);
+    assert(kernel_area_snapshot(0u, &snapshot));
+    assert(snapshot.mapping_references == 0u);
+
+    virtual_base = UINT32_MAX;
+    byte_size = UINT32_MAX;
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_AREA_MAPPING_METADATA, 1u);
+    assert(kernel_area_map(area, 32u, &space,
+                           KERNEL_VM_READ | KERNEL_VM_WRITE,
+                           &virtual_base, &byte_size) ==
+           KERNEL_AREA_OUT_OF_MEMORY);
     assert(virtual_base == 0u && byte_size == 0u);
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.mapping_references == 0u);
@@ -281,63 +320,115 @@ static void test_allocation_injection_preserves_mapping_baseline(void)
     assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
     assert(kernel_memory_release_owner(32u, NULL) == KERNEL_MEMORY_OK);
     assert(kernel_memory_stats(&after));
-    assert(after.free_frames == baseline.free_frames);
+    assert(after.free_frames + area_metadata_allocation.current_units ==
+           baseline.free_frames);
     assert(kernel_allocation_site_stats(
         KERNEL_ALLOCATION_SITE_AREA_OBJECT, &area_allocation));
     assert(kernel_allocation_site_stats(
         KERNEL_ALLOCATION_SITE_AREA_PAGES, &page_allocation));
     assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_AREA_PAGE_METADATA,
+        &page_metadata_allocation));
+    assert(kernel_allocation_site_stats(
         KERNEL_ALLOCATION_SITE_AREA_MAPPING, &mapping_allocation));
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_AREA_MAPPING_METADATA,
+        &mapping_metadata_allocation));
     assert(area_allocation.current_units == 0u);
     assert(page_allocation.current_units == 0u);
     assert(mapping_allocation.current_units == 0u);
+    assert(mapping_metadata_allocation.current_units == 0u);
     assert(area_allocation.injected_failures == 2u);
-    assert(page_allocation.injected_failures == 2u);
+    assert(area_metadata_allocation.injected_failures == 1u);
+    assert(page_allocation.injected_failures == 1u);
+    assert(page_metadata_allocation.current_units == 0u);
+    assert(page_metadata_allocation.injected_failures == 1u);
     assert(mapping_allocation.injected_failures == 2u);
+    assert(mapping_metadata_allocation.injected_failures == 1u);
     assert(kernel_area_pool_valid());
     assert(kernel_allocation_valid());
 }
 
-static void test_child_lifetime_and_quotas(void)
+static void test_mapping_table_grows_past_process_derived_limit(void)
 {
+    enum {
+        LEGACY_MAPPING_CAPACITY = 32u * 32u,
+        PROCESS_COUNT = 33u,
+        AREA_COUNT = KERNEL_VM_AREA_SLOT_COUNT
+    };
+    static KernelAddressSpace spaces[PROCESS_COUNT];
+    KernelArea *areas[AREA_COUNT];
     KernelAreaPoolStats stats;
-    KernelArea *areas[KERNEL_AREA_OWNER_MAX];
-    KernelArea *extra = NULL;
+    uint32_t base;
+    uint32_t size;
 
     initialize_test();
-    for (uint32_t index = 0u; index < KERNEL_AREA_OWNER_MAX; ++index)
-        assert(kernel_area_create(9u, KERNEL_PAGE_SIZE, 0u, &areas[index]) ==
-               KERNEL_AREA_OK);
-    assert(kernel_area_create(9u, KERNEL_PAGE_SIZE, 0u, &extra) ==
-           KERNEL_AREA_QUOTA_EXCEEDED);
-    assert(extra == NULL);
-    assert(kernel_area_child_retain(areas[0]) == KERNEL_AREA_OK);
-    kernel_area_handle_release(areas[0], NULL);
-    assert(kernel_area_live(areas[0]));
-    assert(kernel_area_child_release(areas[0]) == KERNEL_AREA_OK);
-    for (uint32_t index = 1u; index < KERNEL_AREA_OWNER_MAX; ++index)
-        kernel_area_handle_release(areas[index], NULL);
+    memset(spaces, 0, sizeof(spaces));
+    for (uint32_t process = 0u; process < PROCESS_COUNT; ++process)
+        assert(kernel_vm_create_address_space(500u + process,
+                                              &spaces[process]) ==
+               KERNEL_VM_OK);
+    for (uint32_t area = 0u; area < AREA_COUNT; ++area)
+        assert(kernel_area_create(99u, KERNEL_PAGE_SIZE,
+                                  KERNEL_AREA_CREATE_RESERVED,
+                                  &areas[area]) == KERNEL_AREA_OK);
+    for (uint32_t process = 0u; process < PROCESS_COUNT; ++process) {
+        for (uint32_t area = 0u; area < AREA_COUNT; ++area)
+            assert(kernel_area_map(areas[area], 500u + process,
+                                   &spaces[process], KERNEL_VM_READ,
+                                   &base, &size) == KERNEL_AREA_OK);
+    }
+    assert(PROCESS_COUNT * AREA_COUNT > LEGACY_MAPPING_CAPACITY);
     assert(kernel_area_pool_stats(&stats));
-    assert(stats.active_areas == 0u && stats.committed_pages == 0u);
-    assert(stats.quota_failures == 1u);
+    assert(stats.active_mappings == PROCESS_COUNT * AREA_COUNT);
+
+    for (uint32_t process = 0u; process < PROCESS_COUNT; ++process) {
+        uint32_t unmapped = 0u;
+
+        assert(kernel_area_unmap_process(500u + process, &unmapped) ==
+               KERNEL_AREA_OK);
+        assert(unmapped == AREA_COUNT);
+        assert(kernel_vm_destroy_address_space(&spaces[process]) ==
+               KERNEL_VM_OK);
+        assert(kernel_memory_release_owner(500u + process, NULL) ==
+               KERNEL_MEMORY_OK);
+    }
+    for (uint32_t area = 0u; area < AREA_COUNT; ++area)
+        kernel_area_handle_release(areas[area], NULL);
+    assert(kernel_area_pool_stats(&stats));
+    assert(stats.active_areas == 0u && stats.active_mappings == 0u);
     assert(kernel_area_pool_valid());
 }
 
-static void test_global_area_objects_match_the_process_contract(void)
+static void test_child_lifetime(void)
 {
-    enum {
-        area_count = KERNEL_VM_ADDRESS_SPACE_MAX * KERNEL_AREA_OWNER_MAX
-    };
+    KernelAreaPoolStats stats;
+    KernelArea *area = NULL;
+
+    initialize_test();
+    assert(kernel_area_create(9u, KERNEL_PAGE_SIZE, 0u, &area) ==
+           KERNEL_AREA_OK);
+    assert(kernel_area_child_retain(area) == KERNEL_AREA_OK);
+    kernel_area_handle_release(area, NULL);
+    assert(kernel_area_live(area));
+    assert(kernel_area_child_release(area) == KERNEL_AREA_OK);
+    assert(kernel_area_pool_stats(&stats));
+    assert(stats.active_areas == 0u && stats.committed_pages == 0u);
+    assert(stats.quota_failures == 0u);
+    assert(kernel_area_pool_valid());
+}
+
+static void test_area_objects_grow_past_legacy_limits(void)
+{
+    enum { area_count = 257u };
     KernelArea *areas[area_count];
-    KernelArea *extra = NULL;
     uint32_t frame_owners[area_count];
 
     initialize_test();
     for (uint32_t index = 0u; index < area_count; ++index) {
-        uint32_t owner = 1000u + index / KERNEL_AREA_OWNER_MAX;
         KernelAreaSnapshot snapshot;
 
-        assert(kernel_area_create(owner, KERNEL_PAGE_SIZE,
+        assert(kernel_area_create(1000u, KERNEL_PAGE_SIZE,
                                   KERNEL_AREA_CREATE_RESERVED,
                                   &areas[index]) == KERNEL_AREA_OK);
         assert(kernel_area_snapshot(index, &snapshot));
@@ -345,10 +436,6 @@ static void test_global_area_objects_match_the_process_contract(void)
         for (uint32_t prior = 0u; prior < index; ++prior)
             assert(frame_owners[prior] != frame_owners[index]);
     }
-    assert(kernel_area_create(2000u, KERNEL_PAGE_SIZE,
-                              KERNEL_AREA_CREATE_RESERVED,
-                              &extra) == KERNEL_AREA_NO_SLOT);
-    assert(extra == NULL);
     for (uint32_t index = 0u; index < area_count; ++index)
         kernel_area_handle_release(areas[index], NULL);
     assert(kernel_area_pool_valid());
@@ -384,7 +471,7 @@ static void test_area_slots_belong_to_address_spaces(void)
     assert(local_base == KERNEL_VM_AREA_BASE);
     assert(kernel_area_map(shared, 1201u, &second, KERNEL_VM_READ,
                            &second_base, &size) == KERNEL_AREA_OK);
-    assert(second_base == KERNEL_VM_AREA_BASE + KERNEL_VM_AREA_SLOT_SIZE);
+    assert(second_base == KERNEL_VM_AREA_BASE + KERNEL_PAGE_SIZE);
     assert(kernel_vm_switch(&first) == KERNEL_VM_OK);
     assert(kernel_vm_test_translate_current(first_base, true,
                                             &first_physical));
@@ -442,42 +529,71 @@ static void test_process_clone_inherits_area_mappings(void)
     assert(kernel_area_pool_valid());
 }
 
-static void test_service_can_map_every_area_slot(void)
+static void test_service_maps_more_than_thirty_two_small_areas(void)
 {
+    enum { mapping_count = ASTRA_SHARED_AREA_SLOT_COUNT + 8u };
     KernelAddressSpace service = {0};
-    KernelArea *areas[KERNEL_AREA_PROCESS_MAPPING_MAX];
-    uint32_t bases[KERNEL_AREA_PROCESS_MAPPING_MAX];
-    uint32_t sizes[KERNEL_AREA_PROCESS_MAPPING_MAX];
+    KernelArea *areas[mapping_count];
+    uint32_t bases[mapping_count];
+    uint32_t sizes[mapping_count];
 
     initialize_test();
     assert(kernel_vm_create_address_space(200u, &service) == KERNEL_VM_OK);
-    for (uint32_t index = 0u; index < KERNEL_AREA_PROCESS_MAPPING_MAX;
-         ++index) {
-        uint32_t owner = 201u + index / KERNEL_AREA_OWNER_MAX;
-
-        assert(kernel_area_create(owner, KERNEL_PAGE_SIZE, 0u, &areas[index]) ==
-               KERNEL_AREA_OK);
+    for (uint32_t index = 0u; index < mapping_count; ++index) {
+        assert(kernel_area_create(201u, KERNEL_PAGE_SIZE,
+                                  KERNEL_AREA_CREATE_RESERVED,
+                                  &areas[index]) == KERNEL_AREA_OK);
         assert(kernel_area_map(areas[index], 200u, &service,
                                KERNEL_VM_READ | KERNEL_VM_WRITE,
                                &bases[index], &sizes[index]) ==
                KERNEL_AREA_OK);
         assert(bases[index] == KERNEL_VM_AREA_BASE +
-               index * KERNEL_VM_AREA_SLOT_SIZE);
+               index * KERNEL_PAGE_SIZE);
         assert(sizes[index] == KERNEL_PAGE_SIZE);
     }
-    for (uint32_t index = 0u; index < KERNEL_AREA_PROCESS_MAPPING_MAX;
-         ++index) {
-        uint32_t owner = 201u + index / KERNEL_AREA_OWNER_MAX;
-
+    for (uint32_t index = 0u; index < mapping_count; ++index) {
         assert(kernel_area_unmap(200u, &service, bases[index]) ==
                KERNEL_AREA_OK);
         kernel_area_handle_release(areas[index], NULL);
-        if ((index + 1u) % KERNEL_AREA_OWNER_MAX == 0u)
-            assert(kernel_memory_release_owner(owner, NULL) ==
-                   KERNEL_MEMORY_OK);
     }
+    assert(kernel_memory_release_owner(201u, NULL) == KERNEL_MEMORY_OK);
     assert(kernel_vm_destroy_address_space(&service) == KERNEL_VM_OK);
     assert(kernel_memory_release_owner(200u, NULL) == KERNEL_MEMORY_OK);
+    assert(kernel_area_pool_valid());
+}
+
+static void test_area_mapping_stops_at_virtual_window_exhaustion(void)
+{
+    KernelAddressSpace service = {0};
+    KernelArea *area;
+    KernelArea *extra;
+    uint32_t base;
+    uint32_t extra_base;
+    uint32_t size;
+
+    initialize_test();
+    assert(kernel_vm_create_address_space(220u, &service) == KERNEL_VM_OK);
+    assert(kernel_area_create(221u, ASTRA_AREA_SIZE_MAX,
+                              KERNEL_AREA_CREATE_RESERVED,
+                              &area) == KERNEL_AREA_OK);
+    assert(ASTRA_AREA_SIZE_MAX > ASTRA_SHARED_AREA_SLOT_SIZE);
+    assert(kernel_area_map(area, 220u, &service,
+                           KERNEL_VM_READ | KERNEL_VM_WRITE,
+                           &base, &size) == KERNEL_AREA_OK);
+    assert(base == KERNEL_VM_AREA_BASE && size == ASTRA_AREA_SIZE_MAX);
+    assert(kernel_area_create(230u, KERNEL_PAGE_SIZE,
+                              KERNEL_AREA_CREATE_RESERVED,
+                              &extra) == KERNEL_AREA_OK);
+    assert(kernel_area_map(extra, 220u, &service,
+                           KERNEL_VM_READ | KERNEL_VM_WRITE,
+                           &extra_base, &size) ==
+           KERNEL_AREA_QUOTA_EXCEEDED);
+    assert(extra_base == 0u && size == 0u);
+    kernel_area_handle_release(extra, NULL);
+    assert(kernel_area_unmap(220u, &service, base) == KERNEL_AREA_OK);
+    kernel_area_handle_release(area, NULL);
+    assert(kernel_vm_destroy_address_space(&service) == KERNEL_VM_OK);
+    assert(kernel_memory_release_owner(220u, NULL) == KERNEL_MEMORY_OK);
     assert(kernel_area_pool_valid());
 }
 
@@ -529,6 +645,7 @@ static void test_create_transaction_rolls_back_every_stage(void)
          index < sizeof(faults) / sizeof(faults[0]); ++index) {
         KernelAreaPoolStats baseline_pool;
         KernelAreaPoolStats after_pool;
+        KernelAllocationStats area_metadata;
         KernelMemoryStats baseline_memory;
         KernelMemoryStats after_memory;
         KernelArea *area = (KernelArea *)(uintptr_t)1u;
@@ -548,7 +665,10 @@ static void test_create_transaction_rolls_back_every_stage(void)
         assert(after_pool.allocation_failures ==
                baseline_pool.allocation_failures + 1u);
         assert(kernel_memory_stats(&after_memory));
-        assert(after_memory.free_frames == baseline_memory.free_frames);
+        assert(kernel_allocation_site_stats(
+            KERNEL_ALLOCATION_SITE_AREA_OBJECT_METADATA, &area_metadata));
+        assert(after_memory.free_frames + area_metadata.current_units ==
+               baseline_memory.free_frames);
         assert(after_memory.owner_slots_used ==
                baseline_memory.owner_slots_used);
         assert(kernel_area_pool_valid());
@@ -557,7 +677,8 @@ static void test_create_transaction_rolls_back_every_stage(void)
                KERNEL_AREA_OK);
         kernel_area_handle_release(area, NULL);
         assert(kernel_memory_stats(&after_memory));
-        assert(after_memory.free_frames == baseline_memory.free_frames);
+        assert(after_memory.free_frames + area_metadata.current_units ==
+               baseline_memory.free_frames);
         assert(kernel_area_pool_valid());
     }
 }
@@ -568,13 +689,17 @@ static void assert_failed_map_baseline(
     const KernelVmStats *baseline_vm,
     const KernelAreaPoolStats *baseline_pool)
 {
+    KernelAllocationStats mapping_metadata;
     KernelAreaPoolStats area_stats;
     KernelMemoryStats memory;
     KernelVmStats vm;
 
     assert(memcmp(space, baseline_space, sizeof(*space)) == 0);
     assert(kernel_memory_stats(&memory));
-    assert(memory.free_frames == baseline_memory->free_frames);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_AREA_MAPPING_METADATA, &mapping_metadata));
+    assert(memory.free_frames + mapping_metadata.current_units ==
+           baseline_memory->free_frames);
     assert(memory.owner_slots_used == baseline_memory->owner_slots_used);
     assert(kernel_vm_stats(&vm));
     assert(vm.address_spaces == baseline_vm->address_spaces);
@@ -603,6 +728,8 @@ static void test_map_transaction_rolls_back_every_stage(void)
 
     for (uint32_t index = 0u; index < fault_count; ++index) {
         KernelAddressSpace space = {0};
+        KernelAllocationStats mapping_metadata;
+        KernelAllocationStats area_metadata;
         KernelAddressSpace baseline_space;
         KernelAreaPoolStats baseline_pool;
         KernelAreaSnapshot snapshot;
@@ -653,7 +780,14 @@ static void test_map_transaction_rolls_back_every_stage(void)
         assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
         assert(kernel_memory_release_owner(81u, NULL) == KERNEL_MEMORY_OK);
         assert(kernel_memory_stats(&final_memory));
-        assert(final_memory.free_frames == initial_memory.free_frames);
+        assert(kernel_allocation_site_stats(
+            KERNEL_ALLOCATION_SITE_AREA_MAPPING_METADATA,
+            &mapping_metadata));
+        assert(kernel_allocation_site_stats(
+            KERNEL_ALLOCATION_SITE_AREA_OBJECT_METADATA, &area_metadata));
+        assert(final_memory.free_frames + mapping_metadata.current_units +
+                   area_metadata.current_units ==
+               initial_memory.free_frames);
         assert(kernel_area_pool_valid());
     }
 }
@@ -668,6 +802,8 @@ static void test_map_transaction_rolls_back_every_stage(void)
 static void test_reserved_area_commits_only_what_is_touched(void)
 {
     KernelAddressSpace space = {0};
+    KernelAllocationStats area_metadata;
+    KernelAllocationStats page_metadata;
     KernelAreaSnapshot snapshot;
     KernelMemoryStats before;
     KernelMemoryStats after;
@@ -686,8 +822,14 @@ static void test_reserved_area_commits_only_what_is_touched(void)
                               KERNEL_AREA_CREATE_RESERVED,
                               &area) == KERNEL_AREA_OK);
     assert(kernel_memory_stats(&after));
-    /* A 2 MiB reservation, and not one frame spent on it. */
-    assert(after.free_frames == before.free_frames);
+    /* A complete-window reservation, and not one frame spent on its data. */
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_AREA_OBJECT_METADATA, &area_metadata));
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_AREA_PAGE_METADATA, &page_metadata));
+    assert(before.free_frames - after.free_frames ==
+           area_metadata.current_units);
+    assert(page_metadata.current_units == 0u);
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.page_count == KERNEL_AREA_PAGE_MAX);
     assert(snapshot.committed_pages == 0u);
@@ -706,11 +848,12 @@ static void test_reserved_area_commits_only_what_is_touched(void)
     assert(kernel_area_fault(300u, &space, base + touched * KERNEL_PAGE_SIZE));
     assert(kernel_memory_stats(&after));
     /*
-     * The cluster, plus the 68040 pointer and page tables it is published through: mapping an
-     * area with nothing committed publishes no descriptors, so the table for
-     * the slot is bought by the first commit rather than by the map.
+     * The cluster, its page-vector leaf, plus the 68040 pointer and page tables
+     * it is published through: mapping an area with nothing committed
+     * publishes no descriptors, so all three metadata frames arrive with the
+     * first commit rather than with the reservation.
      */
-    assert(before.free_frames - after.free_frames == cluster + 2u);
+    assert(before.free_frames - after.free_frames == cluster + 3u);
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.committed_pages == cluster);
 
@@ -924,11 +1067,12 @@ static void test_reserved_area_decommit_returns_frames(void)
     uint32_t released;
     uint32_t physical;
     const uint32_t cluster = KERNEL_AREA_COMMIT_CLUSTER_PAGES;
+    const uint32_t reserved_pages = 256u;
 
     initialize_test();
     assert(kernel_vm_create_address_space(340u, &owner) == KERNEL_VM_OK);
     assert(kernel_vm_create_address_space(341u, &peer) == KERNEL_VM_OK);
-    assert(kernel_area_create(340u, KERNEL_AREA_PAGE_MAX * KERNEL_PAGE_SIZE,
+    assert(kernel_area_create(340u, reserved_pages * KERNEL_PAGE_SIZE,
                               KERNEL_AREA_CREATE_RESERVED,
                               &area) == KERNEL_AREA_OK);
     assert(kernel_area_map(area, 340u, &owner,
@@ -953,8 +1097,8 @@ static void test_reserved_area_decommit_returns_frames(void)
     assert(after.free_frames - before.free_frames == cluster + 4u);
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.committed_pages == 0u);
-    assert(snapshot.page_count == KERNEL_AREA_PAGE_MAX);
-    assert(snapshot.byte_size == KERNEL_AREA_PAGE_MAX * KERNEL_PAGE_SIZE);
+    assert(snapshot.page_count == reserved_pages);
+    assert(snapshot.byte_size == reserved_pages * KERNEL_PAGE_SIZE);
 
     /* Gone from every holder, not merely from the one that asked. */
     assert(kernel_vm_switch(&owner) == KERNEL_VM_OK);
@@ -1094,12 +1238,11 @@ static void test_reserved_area_commits_holes_and_short_tails(void)
 }
 
 /*
- * The quota is charged at commit, not at creation, which is the whole point of
- * reserving. So a reservation larger than the owner's page budget is allowed
- * to exist, and it is the commit that eventually refuses -- leaving the area
- * intact and every page already committed still committed.
+ * A reservation is address space, not promised RAM. Commit until physical
+ * memory's protected reserve refuses the unprotected owner, and prove that
+ * the failed commit leaves the reservation and prior pages intact.
  */
-static void test_reserved_area_commit_meets_the_owner_quota(void)
+static void test_reserved_area_commit_stops_at_physical_memory(void)
 {
     KernelAddressSpace owner = {0};
     KernelAreaSnapshot snapshot;
@@ -1118,7 +1261,7 @@ static void test_reserved_area_commit_meets_the_owner_quota(void)
                            KERNEL_VM_READ | KERNEL_VM_WRITE, &base,
                            &size) == KERNEL_AREA_OK);
 
-    /* Commit until the owner's page budget says no. */
+    /* Commit until actual memory policy says no. */
     while (page < KERNEL_AREA_PAGE_MAX) {
         if (!kernel_area_fault(360u, &owner,
                                base + page * KERNEL_PAGE_SIZE))
@@ -1128,7 +1271,7 @@ static void test_reserved_area_commit_meets_the_owner_quota(void)
     }
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.committed_pages == committed);
-    assert(committed <= KERNEL_AREA_OWNER_PAGE_MAX);
+    assert(committed < KERNEL_AREA_PAGE_MAX);
     /* Refusing leaves the reservation and everything already there alone. */
     assert(snapshot.page_count == KERNEL_AREA_PAGE_MAX);
     assert(kernel_area_pool_valid());
@@ -1143,11 +1286,13 @@ int main(void)
 {
     test_allocation_injection_preserves_mapping_baseline();
     test_same_address_aliases_survive_creator_death();
-    test_child_lifetime_and_quotas();
-    test_global_area_objects_match_the_process_contract();
+    test_mapping_table_grows_past_process_derived_limit();
+    test_child_lifetime();
+    test_area_objects_grow_past_legacy_limits();
     test_area_slots_belong_to_address_spaces();
     test_process_clone_inherits_area_mappings();
-    test_service_can_map_every_area_slot();
+    test_service_maps_more_than_thirty_two_small_areas();
+    test_area_mapping_stops_at_virtual_window_exhaustion();
     test_screen_sized_area_reaches_its_last_pixel();
     test_create_transaction_rolls_back_every_stage();
     test_map_transaction_rolls_back_every_stage();
@@ -1157,7 +1302,7 @@ int main(void)
     test_reserved_area_kernel_access_commits_only_on_write();
     test_reserved_area_decommit_returns_frames();
     test_reserved_area_commits_holes_and_short_tails();
-    test_reserved_area_commit_meets_the_owner_quota();
+    test_reserved_area_commit_stops_at_physical_memory();
     puts("area tests passed");
     return 0;
 }

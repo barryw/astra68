@@ -38,14 +38,13 @@ enum {
 };
 
 static char output[PS_OUTPUT_MAX];
-static AstraProcSnapshot records[ASTRA_PROCESS_COUNT_MAX];
 static const char header[] =
     "       PID   GEN STATE  PRI  NI THR MEM(K)  CPU%        TIME    RUNS "
     "  CALLS HND COMMAND\n";
 static uint32_t output_used;
 
 static uint32_t
-read_snapshot(AstraProcSnapshot *records, uint32_t capacity, uint32_t *moved)
+read_snapshot(AstraProcSnapshot **records, uint32_t *moved)
 {
     const AstraAssign *assign = NULL;
     AstraVfsClient *client;
@@ -57,6 +56,7 @@ read_snapshot(AstraProcSnapshot *records, uint32_t capacity, uint32_t *moved)
     uint32_t status;
 
     *moved = 0u;
+    *records = NULL;
     status = astra_assign_resolve(astra_process_vfs_assigns(),
                                   "PROC:snapshot", ASTRA_RIGHT_READ, 0u,
                                   path, sizeof(path), &assign);
@@ -69,9 +69,11 @@ read_snapshot(AstraProcSnapshot *records, uint32_t capacity, uint32_t *moved)
                             &kind);
     if (status != ASTRA_VFS_OK)
         return status;
-    if (size > capacity || size > UINT32_MAX) {
+    status = astra_ps_snapshot_allocate(size, astra_runtime_reallocate,
+                                        records);
+    if (status != ASTRA_VFS_OK) {
         (void)astra_vfs_close(client, file);
-        return ASTRA_VFS_ERR_PROTOCOL;
+        return status;
     }
     while (offset < size) {
         uint32_t chunk = (uint32_t)(size - offset);
@@ -80,7 +82,7 @@ read_snapshot(AstraProcSnapshot *records, uint32_t capacity, uint32_t *moved)
         if (chunk > ASTRA_VFS_IO_MAX)
             chunk = ASTRA_VFS_IO_MAX;
         status = astra_vfs_read(client, file, offset,
-                                (uint8_t *)records + (uint32_t)offset,
+                                (uint8_t *)*records + (uint32_t)offset,
                                 chunk, &got);
         if (status != ASTRA_VFS_OK || got == 0u) {
             status = status != ASTRA_VFS_OK ? status : ASTRA_VFS_ERR_PROTOCOL;
@@ -141,6 +143,7 @@ int
 main(int argc, char **argv)
 {
     const AstraStartupInfo *startup = astra_posix_startup();
+    AstraProcSnapshot *records = NULL;
     uint32_t listed = 0u;
     uint32_t moved = 0u;
     uint32_t status;
@@ -154,9 +157,10 @@ main(int argc, char **argv)
         say_error("ps: filesystem unavailable\n");
         return (int)status;
     }
-    status = read_snapshot(records, sizeof(records), &moved);
+    status = read_snapshot(&records, &moved);
     if (status != ASTRA_VFS_OK) {
         say_error("ps: PROC: not granted to this program\n");
+        (void)astra_runtime_reallocate(records, 0u);
         astra_process_vfs_close();
         return (int)status;
     }
@@ -184,6 +188,7 @@ main(int argc, char **argv)
         }
     }
     astra_process_vfs_close();
+    (void)astra_runtime_reallocate(records, 0u);
     if (status == ASTRA_VFS_OK && !flush_output())
         status = ASTRA_VFS_ERR_IO;
     if (status == ASTRA_VFS_ERR_IO)

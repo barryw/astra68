@@ -30,3 +30,8 @@ ASTRA_STREAMS_1.0 {
     local:
         *;
 };
+
+ASTRA_STREAMS_1.1 {
+    global:
+        astra_stream_source_rebind_storage;
+} ASTRA_STREAMS_1.0;

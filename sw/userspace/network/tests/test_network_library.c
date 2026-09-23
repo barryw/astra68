@@ -9,6 +9,8 @@
 static void *mapped_area;
 static uint32_t mapped_size;
 static uint32_t logged_failure;
+static uint32_t open_until_area;
+static uint32_t created_area_bytes;
 
 uint32_t astra_log_failure(const char *operation, uint32_t status)
 {
@@ -20,6 +22,12 @@ uint32_t astra_log_failure(const char *operation, uint32_t status)
 uint32_t astra_rt_port_create(uint32_t messages, uint32_t bytes,
                               uint32_t *receive, uint32_t *send)
 {
+    if (open_until_area != 0u) {
+        assert(messages == 1u && bytes == sizeof(AstraNetworkReplyMessage));
+        *receive = 10u;
+        *send = 11u;
+        return ASTRA_SYSCALL_OK;
+    }
     (void)messages; (void)bytes; (void)receive; (void)send;
     return ASTRA_SYSCALL_UNSUPPORTED;
 }
@@ -27,6 +35,11 @@ uint32_t astra_rt_port_create(uint32_t messages, uint32_t bytes,
 uint32_t astra_rt_handle_duplicate(uint32_t handle, uint32_t rights,
                                    uint32_t *duplicate)
 {
+    if (open_until_area != 0u) {
+        assert(handle == 11u);
+        *duplicate = 16u;
+        return ASTRA_SYSCALL_OK;
+    }
     (void)handle; (void)rights; (void)duplicate;
     return ASTRA_SYSCALL_UNSUPPORTED;
 }
@@ -34,8 +47,10 @@ uint32_t astra_rt_handle_duplicate(uint32_t handle, uint32_t rights,
 uint32_t astra_rt_area_create_flagged(uint32_t bytes, uint32_t rights,
                                       uint32_t flags, uint32_t *handle)
 {
-    (void)bytes; (void)rights; (void)flags; (void)handle;
-    return ASTRA_SYSCALL_UNSUPPORTED;
+    assert(open_until_area != 0u);
+    created_area_bytes = bytes;
+    (void)rights; (void)flags; (void)handle;
+    return ASTRA_SYSCALL_RESOURCE_LIMIT;
 }
 
 uint32_t astra_rt_area_map(uint32_t handle, uint32_t permissions,
@@ -108,6 +123,14 @@ int main(void)
     assert(astra_network_session_open(0u, &session) == ASTRA_NETWORK_INVALID);
     assert(astra_network_session_open(1u, &session) == ASTRA_NETWORK_UNSUPPORTED);
     assert(logged_failure == ((1u << 16) | ASTRA_SYSCALL_UNSUPPORTED));
+    open_until_area = 1u;
+    assert(astra_network_session_open(1u, &session) ==
+           ASTRA_NETWORK_RESOURCE_LIMIT);
+    assert(created_area_bytes == ASTRA_NETWORK_SHARED_BYTES_MAX);
+    assert(logged_failure ==
+           ((3u << 16) | ASTRA_SYSCALL_RESOURCE_LIMIT));
+    assert(session._private_area == 0u && session._private_shared == NULL);
+    open_until_area = 0u;
     assert(astra_network_endpoint_open(&session, ASTRA_NETWORK_FAMILY_IPV4,
                                   ASTRA_NETWORK_TYPE_STREAM,
                                   ASTRA_NETWORK_PROTOCOL_TCP, &endpoint) ==

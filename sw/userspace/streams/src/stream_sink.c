@@ -444,6 +444,28 @@ astra_stream_source_init_storage(AstraStreamSource *source, uint32_t receive,
     return 1;
 }
 
+int
+astra_stream_source_rebind_storage(AstraStreamSource *source, void *storage,
+                                   uint32_t capacity)
+{
+    uint32_t first;
+
+    if (source == NULL || storage == NULL || storage == source->buffer ||
+        source->buffer == NULL || source->capacity == 0u ||
+        source->head >= source->capacity ||
+        source->length > source->capacity || capacity < source->length)
+        return 0;
+    first = source->length < source->capacity - source->head ?
+        source->length : source->capacity - source->head;
+    copy_bytes(storage, source->buffer + source->head, first);
+    copy_bytes((uint8_t *)storage + first, source->buffer,
+               source->length - first);
+    source->buffer = storage;
+    source->capacity = capacity;
+    source->head = 0u;
+    return 1;
+}
+
 void
 astra_stream_source_destroy(AstraStreamSource *source)
 {

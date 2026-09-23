@@ -116,6 +116,7 @@ ASTRA_RUNTIME_1.0 {
         astra_rt_library_attach_resident;
         astra_rt_port_create;
         astra_rt_process_dynamic_commit;
+        astra_rt_private_commit;
         astra_rt_private_decommit;
         astra_rt_private_reserve;
         astra_rt_private_reserve_largest;

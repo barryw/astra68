@@ -250,6 +250,19 @@ astra_rt_private_reserve_largest(uint32_t minimum_byte_size,
 }
 
 uint32_t
+astra_rt_private_commit(void *address, uint32_t byte_size)
+{
+    AstraSyscallResult result;
+
+    if (address == NULL || byte_size == 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_VM_PRIVATE_COMMIT,
+                   (uint32_t)(uintptr_t)address, byte_size, 0u, 0u, 0u,
+                   &result);
+    return result.status;
+}
+
+uint32_t
 astra_rt_private_decommit(void *address, uint32_t byte_size,
                           uint32_t *released_pages)
 {
@@ -366,8 +379,7 @@ astra_rt_ring_read_try(uint32_t consumer, void *bytes, uint32_t capacity,
 {
     AstraSyscallResult result;
 
-    if (bytes == NULL || copied == NULL || capacity == 0u ||
-        capacity > ASTRA_BULK_RING_TRANSFER_MAX)
+    if (bytes == NULL || copied == NULL || capacity == 0u)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     *copied = 0u;
     astra_syscall5(ASTRA_SYSCALL_RING_READ_TRY, consumer,
@@ -384,7 +396,6 @@ astra_rt_ring_write_try(uint32_t producer, const void *bytes, uint32_t length,
     AstraSyscallResult result;
 
     if (bytes == NULL || written == NULL || length == 0u ||
-        length > ASTRA_BULK_RING_TRANSFER_MAX ||
         (flags & ~ASTRA_BULK_RING_WRITE_FLAG_MASK) != 0u)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     *written = 0u;
@@ -834,11 +845,13 @@ astra_process_snapshot(uint32_t observer, AstraProcSnapshot *records,
 {
     AstraSyscallResult result;
 
-    if (records == NULL)
+    if (records == NULL && capacity != 0u)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     astra_syscall5(ASTRA_SYSCALL_PROCESS_SNAPSHOT, observer,
                    (uint32_t)(uintptr_t)records, capacity, 0u, 0u, &result);
-    if (result.status == ASTRA_SYSCALL_OK && live_count != NULL)
+    if ((result.status == ASTRA_SYSCALL_OK ||
+         result.status == ASTRA_SYSCALL_BUFFER_TOO_SMALL) &&
+        live_count != NULL)
         *live_count = result.value0;
     return result.status;
 }

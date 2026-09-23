@@ -58,10 +58,12 @@ Returning from `astra_main` terminates the process with its 32-bit return
 value. Invalid startup data terminates it with status 127. A process must not
 return to the loader.
 
-Each `AstraStartupCapability` is 16 bytes: a protocol-defined four-character
-name, process-local handle, exact granted rights, and zero flags in version 1.
-The table has at most 32 entries. Handles are transferred into the new process
-exactly once before launch; startup-block destruction does not close them.
+Each `AstraStartupCapability` is 92 bytes: a counted capability name,
+process-local handle, exact granted rights and namespace flags, plus its
+mount-relative root. ABI 7 derives the current 43-entry capacity from the
+complete records that fit in the startup page rather than imposing a second
+count. Handles are transferred into the new process exactly once before launch;
+startup-block destruction does not close them.
 Closing or process termination releases them through normal handle lifetime
 rules.
 
@@ -281,7 +283,8 @@ image is 1,306 bytes of text with no data or BSS.
 ## The boot path for the first image
 
 Boot ABI 0.3 added `user_image_base` and `user_image_size` to `AstraBootInfo`.
-Since boot ABI 0.7, firmware embeds the linked ELF in the ROM file, copies it
+Boot ABI 0.7 introduced the embedded linked ELF; ABI 1.0 retains it. Firmware
+copies it
 immediately after the fixed kernel reservation, verifies the copy, and reserves
 exactly the pages it fills as firmware memory. The contract rejects any
 description that is unaligned or not contained in a readable firmware range —

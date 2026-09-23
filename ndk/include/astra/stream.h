@@ -120,6 +120,16 @@ int astra_stream_source_init(AstraStreamSource *source, uint32_t receive);
 int astra_stream_source_init_storage(AstraStreamSource *source,
                                      uint32_t receive, void *storage,
                                      uint32_t capacity);
+/**
+ * Move unread bytes into replacement caller-owned storage. Failure preserves
+ * the source and both buffers.
+ * @param source Initialized source.
+ * @param storage Distinct replacement storage.
+ * @param capacity Replacement capacity, at least the unread byte count.
+ * @return Nonzero on success.
+ */
+int astra_stream_source_rebind_storage(AstraStreamSource *source,
+                                       void *storage, uint32_t capacity);
 
 /*
  * Offers bytes to whoever reads next, and returns how many fit. Unread bytes

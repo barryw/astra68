@@ -79,7 +79,7 @@ streams-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 	@python3 ../../../tools/check_library_exports.py $(DYNAMIC_MAP) \
 		$(NDK)/include/astra/stream.h
 	@python3 ../../../tools/library_info.py $< | \
-		grep -q '^streams.library.1 1.0.0 ABI 1.0$$'
+		grep -q '^streams.library.1 1.1.0 ABI 1.1$$'
 	@$(READELF) -hW $< | grep -q 'Type:.*DYN'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [streams.library.1]'
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
@@ -87,6 +87,7 @@ streams-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'
 	@$(READELF) -lW $< | grep -q ' GNU_RELRO '
 	@$(READELF) -VW $< | grep -q 'ASTRA_STREAMS_1.0'
+	@$(READELF) -VW $< | grep -q 'ASTRA_STREAMS_1.1'
 	@ASTRA_LIBRARY_FIXTURE=$(abspath $<) $(KERNEL_ELF_TEST) >/dev/null
 	@echo "astra streams shared library: PASS"
 

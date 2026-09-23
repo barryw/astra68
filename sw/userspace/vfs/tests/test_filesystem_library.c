@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <astra/filesystem_library.h>
@@ -15,6 +16,7 @@ static uint32_t open_calls;
 static uint32_t stat_calls;
 static uint32_t readdir_file_calls;
 static uint32_t readdir_file_mode;
+static uint32_t last_readdir_capacity;
 static uint32_t write_calls;
 static uint32_t bulk_write_calls;
 static uint32_t last_write_flags;
@@ -36,6 +38,16 @@ static char last_link_to[ASTRA_VFS_PATH_MAX];
 static int same(const char *left, const char *right)
 {
     return strcmp(left, right) == 0;
+}
+
+void *astra_runtime_reallocate(void *pointer, size_t size)
+{
+    return realloc(pointer, size);
+}
+
+void astra_runtime_deallocate(void *pointer)
+{
+    free(pointer);
 }
 
 uint32_t astra_vfs_connect(AstraVfsClient *value, AstraVfsTransport transport,
@@ -337,6 +349,7 @@ uint32_t astra_vfs_readdir_file_batch(
     if (directory != 2u)
         return ASTRA_VFS_ERR_BAD_HANDLE;
     ++readdir_file_calls;
+    last_readdir_capacity = capacity;
     if (path[0] == '\0' && readdir_file_mode != 0u) {
         if (cursor == 0u) {
             strcpy(entries[0].name,
@@ -558,7 +571,7 @@ int main(void)
     AstraFile file = ASTRA_FILE_INIT;
     AstraFileInfo info = ASTRA_FILE_INFO_INIT;
     AstraDirectory directory = ASTRA_DIRECTORY_INIT;
-    AstraDirectoryEntry entries[2];
+    AstraDirectoryEntry entries[33];
     uint8_t written[300];
     uint8_t read[300];
     char path[ASTRA_VFS_PATH_MAX];
@@ -621,9 +634,13 @@ int main(void)
            ASTRA_VFS_OK);
     readdir_file_mode = 1u;
     readdir_file_calls = 0u;
-    assert(astra_filesystem_directory_read(&directory, entries, 2u, &count) ==
+    assert(astra_filesystem_directory_read(&directory, entries, 0u, &count) ==
+           ASTRA_VFS_ERR_INVALID);
+    assert(readdir_file_calls == 0u);
+    assert(astra_filesystem_directory_read(&directory, entries, 33u, &count) ==
                ASTRA_VFS_OK &&
-           count == 1u && same(entries[0].name, "terminal"));
+           count == 1u && same(entries[0].name, "terminal") &&
+           last_readdir_capacity == 33u);
     assert(astra_filesystem_directory_read(&directory, entries, 2u, &count) ==
                ASTRA_VFS_OK &&
            count == 0u && readdir_file_calls == 1u);
@@ -643,6 +660,7 @@ int main(void)
     assert(astra_filesystem_close(&file) == ASTRA_VFS_OK);
     readdir_file_mode = 0u;
     astra_filesystem_detach(&single_filesystem);
+    astra_assign_table_destroy(&single_assigns);
 
     astra_assign_table_init(&assigns);
     assert(astra_assign_bind(&assigns, "WORK", 7u,
@@ -815,6 +833,7 @@ int main(void)
     assert(astra_filesystem_unlink(&filesystem, "WORK:note") == ASTRA_VFS_OK &&
            removed_file != 0u);
     astra_filesystem_detach(&filesystem);
+    astra_assign_table_destroy(&assigns);
     puts("filesystem.library tests passed");
     return 0;
 }

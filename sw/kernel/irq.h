@@ -10,7 +10,6 @@
 
 #define KERNEL_IRQ_SOURCE_COUNT 32u
 #define KERNEL_IRQ_ENDPOINT_MAX 32u
-#define KERNEL_IRQ_OWNER_MAX 8u
 #define KERNEL_IRQ_RECORD_DEPTH 4u
 #define KERNEL_IRQ_STORM_BUDGET 64u
 #define KERNEL_IRQ_STORM_WINDOW_CYCLES 125000u
@@ -57,7 +56,6 @@ typedef enum KernelIrqStatus {
     KERNEL_IRQ_INVALID_ARGUMENT,
     KERNEL_IRQ_INVALID_STATE,
     KERNEL_IRQ_NO_SLOT,
-    KERNEL_IRQ_QUOTA_EXCEEDED,
     KERNEL_IRQ_SOURCE_BUSY,
     KERNEL_IRQ_SEQUENCE_MISMATCH,
     KERNEL_IRQ_OVERFLOW,
@@ -155,7 +153,6 @@ typedef struct KernelIrqPoolStats {
     uint32_t revoking_endpoints;
     uint32_t max_live_endpoints;
     uint32_t allocation_failures;
-    uint32_t quota_failures;
     uint32_t source_busy_failures;
     uint32_t internal_routes;
     uint32_t internal_deliveries;

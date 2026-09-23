@@ -882,6 +882,46 @@ static void test_wait_set_boundary_winner_and_exact_withdrawal(void)
     assert(kernel_thread_pool_valid());
 }
 
+static void test_wait_registration_allocation_failure_is_atomic(void)
+{
+    KernelAllocationStats allocation_stats;
+    KernelThreadWaitQueue queue;
+    KernelThreadWaitSpec spec;
+    KernelThread *selected;
+    KernelThread *thread;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    kernel_thread_wait_queue_init(&queue);
+    spec.queue = &queue;
+    spec.sequence = kernel_thread_wait_queue_sequence(&queue);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u,
+                                  KERNEL_THREAD_PRIORITY_NORMAL,
+                                  &thread) == KERNEL_THREAD_OK);
+    publish_thread(thread);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == thread);
+
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_THREAD_WAIT_REGISTRATIONS, 1u);
+    assert(kernel_thread_block_wait_set(
+               thread, &spec, 1u, 0u, KERNEL_THREAD_DEADLINE_NEVER,
+               ASTRA_SYSCALL_TIMED_OUT) == KERNEL_THREAD_OUT_OF_MEMORY);
+    assert(thread->state == KERNEL_THREAD_RUNNING);
+    assert(thread->wait_member_count == 0u);
+    assert(thread->wait_registration_count == 0u);
+    assert(thread->wait_registrations == NULL);
+    assert(kernel_thread_wait_queue_count(&queue) == 0u);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_THREAD_WAIT_REGISTRATIONS,
+        &allocation_stats));
+    assert(allocation_stats.current_units == 0u);
+    assert(allocation_stats.injected_failures == 1u);
+    assert(kernel_thread_pool_valid());
+    assert(kernel_allocation_valid());
+}
+
 static void test_wait_set_duplicate_member_is_deterministic(void)
 {
     KernelThreadWaitQueue duplicate;
@@ -1049,6 +1089,7 @@ int main(void)
     test_final_handle_close_wins_without_killing_target();
     test_death_wait_timeout_close_and_teardown_races();
     test_wait_set_boundary_winner_and_exact_withdrawal();
+    test_wait_registration_allocation_failure_is_atomic();
     test_wait_set_duplicate_member_is_deterministic();
     test_wait_set_timeout_cancel_and_atomic_admission();
     puts("thread tests passed");

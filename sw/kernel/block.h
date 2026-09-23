@@ -6,7 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define KERNEL_BLOCK_MAX_REQUESTS 4u
+#define KERNEL_BLOCK_MAX_REQUESTS ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE
 #define KERNEL_BLOCK_HANDLE_INVALID 0u
 /*
  * Synthetic completion statuses the engine produces itself. They sit above the

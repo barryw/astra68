@@ -13,6 +13,7 @@ from pathlib import Path
 
 
 REGISTER_PATTERN = re.compile(
+    r"D0 = ([0-9a-fA-F]{8}).*?A7 = ([0-9a-fA-F]{8}).*?"
     r"PC = ([0-9a-fA-F]{8}).*?SR = ([0-9a-fA-F]{4}).*?"
     r"URP ([0-9a-fA-F]{8}) SRP ([0-9a-fA-F]{8})", re.DOTALL)
 MMU_RANGE_PATTERN = re.compile(
@@ -50,7 +51,9 @@ class Qmp:
         match = REGISTER_PATTERN.search(text)
         if match is None:
             raise RuntimeError("QEMU returned no MC68040 PC/SR/URP registers")
-        return tuple(int(value, 16) for value in match.groups())
+        d0, a7, pc, sr, urp, srp = (
+            int(value, 16) for value in match.groups())
+        return pc, sr, urp, srp, d0, a7
 
     def double_click(self, x, y):
         self.execute("input-send-event", {"events": [
@@ -93,6 +96,14 @@ def parse_image(value):
     if span == 0:
         raise argparse.ArgumentTypeError("image span must be nonzero")
     return {"name": name, "base": base, "span": span, "path": path}
+
+
+def parse_stack_word(value):
+    match = re.fullmatch(
+        r"(0x[0-9a-fA-F]+|[0-9]+)\+(0x[0-9a-fA-F]+|[0-9]+)", value)
+    if match is None:
+        raise argparse.ArgumentTypeError("stack word must be PC+OFFSET")
+    return tuple(int(part, 0) for part in match.groups())
 
 
 def translate_mmu_address(text, address, size):
@@ -209,21 +220,43 @@ def entering_loader(pc, previous_pc):
         previous_pc is not None and LOADER_START <= previous_pc < LOADER_END)
 
 
-def capture_sample(qmp, samples, signatures, signature_address, previous):
-    pc, sr, urp, srp = qmp.registers()
-    if str(urp) not in signatures or entering_loader(pc, previous.get(urp)):
-        qmp.execute("stop")
-        try:
-            pc, sr, urp, srp = qmp.registers()
-            if str(urp) not in signatures or \
-                    entering_loader(pc, previous.get(urp)):
-                signatures[str(urp)] = qmp.virtual_memory(
-                    signature_address, 16).hex()
-        finally:
+def read_stack_word(qmp, stack_pointer, offset):
+    try:
+        return int.from_bytes(qmp.virtual_memory(stack_pointer + offset, 4),
+                              "big")
+    except RuntimeError:
+        return None
+
+
+def capture_sample(qmp, samples, signatures, signature_address, previous,
+                   stack_word_at=None):
+    stopped = False
+    try:
+        pc, sr, urp, srp, d0, a7 = qmp.registers()
+        needs_signature = str(urp) not in signatures or \
+            entering_loader(pc, previous.get(urp))
+        needs_stack_word = stack_word_at is not None and \
+            pc == stack_word_at[0]
+        if needs_signature or needs_stack_word:
+            qmp.execute("stop")
+            stopped = True
+            pc, sr, urp, srp, d0, a7 = qmp.registers()
+            needs_signature = str(urp) not in signatures or \
+                entering_loader(pc, previous.get(urp))
+        if needs_signature:
+            signatures[str(urp)] = qmp.virtual_memory(
+                signature_address, 16).hex()
+        sample = {"pc": pc, "sr": sr, "urp": urp, "srp": srp,
+                  "d0": d0, "signature": signatures[str(urp)]}
+        if stack_word_at is not None and pc == stack_word_at[0]:
+            stack_word = read_stack_word(qmp, a7, stack_word_at[1])
+            if stack_word is not None:
+                sample["stack_word"] = stack_word
+    finally:
+        if stopped:
             qmp.execute("cont")
     previous[urp] = pc
-    samples.append({"pc": pc, "sr": sr, "urp": urp, "srp": srp,
-                    "signature": signatures[str(urp)]})
+    samples.append(sample)
     return urp
 
 
@@ -238,7 +271,7 @@ def capture(arguments):
         while time.monotonic() < deadline:
             baseline_roots.add(capture_sample(
                 qmp, samples, signatures, arguments.signature_address,
-                previous))
+                previous, arguments.stack_word_at))
             if arguments.interval != 0:
                 time.sleep(arguments.interval / 1000.0)
     if arguments.double_click is not None:
@@ -247,7 +280,7 @@ def capture(arguments):
     deadline = started + arguments.duration
     while time.monotonic() < deadline:
         capture_sample(qmp, samples, signatures, arguments.signature_address,
-                       previous)
+                       previous, arguments.stack_word_at)
         if arguments.interval != 0:
             time.sleep(arguments.interval / 1000.0)
     elapsed = time.monotonic() - started
@@ -329,6 +362,9 @@ def main():
                                 metavar=("X", "Y"))
     capture_parser.add_argument("--signature-address", type=lambda value:
                                 int(value, 0), default=0x00100134)
+    capture_parser.add_argument("--stack-word-at", type=parse_stack_word,
+                                metavar="PC+OFFSET",
+                                help="record one user-stack word at an exact PC")
     capture_parser.set_defaults(action=capture)
 
     report_parser = subparsers.add_parser("report")

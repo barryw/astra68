@@ -179,7 +179,7 @@ AstraNetworkStatus astra_network_session_open(AstraHandle factory,
         goto fail;
     stage = 3u;
     status = astra_rt_area_create_flagged(
-        ASTRA_AREA_SIZE_MAX,
+        ASTRA_NETWORK_SHARED_BYTES_MAX,
         ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
             ASTRA_RIGHT_TRANSFER | ASTRA_RIGHT_ADMINISTER,
         ASTRA_AREA_CREATE_RESERVED, &session->_private_area);

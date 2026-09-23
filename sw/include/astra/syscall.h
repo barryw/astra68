@@ -7,7 +7,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010035u
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010036u
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -76,7 +76,8 @@
  * data[1] is a process handle carrying ASTRA_RIGHT_DEBUG that names the caller;
  * data[2] is the cursor -- the sequence already seen, zero for everything the
  * ring still holds; data[3] is where to put them and data[4] is how many
- * AstraEventDrained records will fit, clamped to ASTRA_TRACE_READ_BATCH_MAX.
+ * AstraEventDrained records will fit. The kernel copies in page-sized chunks;
+ * the trace contents and caller's buffer are the only bounds.
  *
  * It returns how many were copied in data[1], the cursor to pass next time in
  * data[2], and in data[3] how many records the caller will never see because
@@ -263,7 +264,8 @@
 /*
  * Complete resident-library snapshot for the initial supervisor's PROC:
  * service. Arguments and authority match PROCESS_SNAPSHOT; D3 is measured in
- * AstraProcLibrarySnapshot records and D1 returns the resident count.
+ * AstraProcLibrarySnapshot records and D1 returns the record count. A library
+ * mapped by several processes contributes one record per mapping.
  */
 #define ASTRA_SYSCALL_LIBRARY_SNAPSHOT          87
 /*
@@ -310,6 +312,8 @@
  * so userspace can resolve the exact provider and use LIBRARY_ATTACH.
  */
 #define ASTRA_SYSCALL_LIBRARY_ATTACH_RESIDENT 95
+/* Commits every page touched by D1=address, D2=length in a private reservation. */
+#define ASTRA_SYSCALL_VM_PRIVATE_COMMIT       96
 
 #define ASTRA_VM_PRIVATE_READ  (1u << 0)
 #define ASTRA_VM_PRIVATE_WRITE (1u << 1)
@@ -318,13 +322,6 @@
 /* Complete anonymous window in the 32-bit Astra process address map. */
 #define ASTRA_VM_PRIVATE_ADDRESS_SPACE_MAX \
     (ASTRA_PRIVATE_ADDRESS_END - ASTRA_PRIVATE_ADDRESS_START)
-
-/*
- * The most one call copies. Small on purpose: a drain is a bounded page and a
- * cursor like every other enumeration here, and the batch is what a kernel
- * stack can hold without asking anyone's permission -- 8 * 56 bytes.
- */
-#define ASTRA_TRACE_READ_BATCH_MAX 8u
 
 /*
  * The event channel. A process that is not holding the display lease has no
@@ -349,7 +346,6 @@
  */
 #define ASTRA_DMA_BUFFER_INFO_SIZE 20u
 
-#define ASTRA_INPUT_READ_BATCH_MAX 16u
 #define ASTRA_INPUT_READ_OVERFLOW  (1u << 0)
 
 
@@ -441,7 +437,8 @@
 
 #ifndef ASTRA_AREA_ABI_CONSTANTS_DEFINED
 #define ASTRA_AREA_ABI_CONSTANTS_DEFINED 1
-#define ASTRA_AREA_SIZE_MAX ASTRA_SHARED_AREA_SLOT_SIZE
+#define ASTRA_AREA_SIZE_MAX \
+    (ASTRA_SHARED_AREA_ADDRESS_END - ASTRA_SHARED_AREA_ADDRESS_START)
 #define ASTRA_AREA_MAP_READ  (1u << 0)
 #define ASTRA_AREA_MAP_WRITE (1u << 1)
 /*
@@ -463,7 +460,6 @@
 #define ASTRA_BULK_RING_NOTIFY_CORRUPT (1u << 0)
 #define ASTRA_BULK_RING_CREATE_KERNEL_COPY (1u << 0)
 #define ASTRA_BULK_RING_CREATE_FLAG_MASK ASTRA_BULK_RING_CREATE_KERNEL_COPY
-#define ASTRA_BULK_RING_TRANSFER_MAX 4096u
 #define ASTRA_BULK_RING_WRITE_ATOMIC (1u << 0)
 #define ASTRA_BULK_RING_WRITE_FLAG_MASK ASTRA_BULK_RING_WRITE_ATOMIC
 #define ASTRA_BULK_RING_PRODUCER 1u

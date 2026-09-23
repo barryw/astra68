@@ -26,7 +26,7 @@ typedef struct pthread_condattr_t {
 } pthread_condattr_t;
 
 typedef struct pthread_mutex_t {
-    volatile uint32_t state;
+    volatile uint32_t state __attribute__((aligned(4)));
     uint32_t owner;
     uint32_t depth;
     uint8_t type;
@@ -34,7 +34,7 @@ typedef struct pthread_mutex_t {
 } pthread_mutex_t;
 
 typedef struct pthread_cond_t {
-    volatile uint32_t sequence;
+    volatile uint32_t sequence __attribute__((aligned(4)));
     volatile uint32_t waiters;
     int clock_id;
 } pthread_cond_t;
@@ -52,7 +52,7 @@ typedef struct pthread_rwlockattr_t {
     int process_shared;
 } pthread_rwlockattr_t;
 
-typedef volatile uint32_t pthread_once_t;
+typedef volatile uint32_t pthread_once_t __attribute__((aligned(4)));
 
 #define PTHREAD_CREATE_JOINABLE 0
 #define PTHREAD_CREATE_DETACHED 1

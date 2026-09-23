@@ -70,10 +70,11 @@ Exact order:
 9. release all remaining owned frames and quota charges;
 10. mark `DEAD` and make the diagnostic death record observable.
 
-Device leases use fixed pools: 8 devices, 8 leases, and 2 leases per owner.
-Each lease is exclusive and generation tagged. Owner death revokes before
-handle close, so duplicate or transferred references cannot retain authority.
-Failed quiesce or reset contains the target in `FAILED`; it is not rebound.
+Device records and leases grow in kernel-owned metadata pages and have no
+per-owner quota. Each lease is exclusive and generation tagged. Owner death
+revokes before handle close, so duplicate or transferred references cannot
+retain authority. Failed quiesce or reset contains the target in `FAILED`; it
+is not rebound.
 
 The process may remain `EXITING` while a device owns pinned memory. This is not
 a leak: the request has a finite deadline/reset path and an inspectable owner.
@@ -94,16 +95,17 @@ generation-safe reuse. A fault in one process therefore cannot leave a runnable
 sibling thread or recycle a thread record while a stale process-private handle
 still exists.
 
-K1's physical allocator has 64 fixed owner ledgers. Every dynamically allocated
-frame is linked into exactly one owner's intrusive list using 16-bit previous
-and next indexes; no teardown metadata is allocated dynamically. Owner release
-first walks only that owner's frames to validate that none are pinned, then
-walks the same list to poison and release them. A pinned frame returns `BUSY`
-without releasing any frame. Corrupt links return `INVALID_MAP`; exhausting all
-64 ledgers fails allocation before publication. An empty ledger is immediately
-reusable. Release work is therefore O(frames owned), never O(all 8,192 physical
+K1's physical allocator reserves one owner-ledger slot per physical frame.
+Every dynamically allocated frame is linked into exactly one owner's intrusive
+list; no teardown metadata is allocated dynamically. Owner release first walks
+only that owner's frames to validate that none are pinned, then walks the same
+list to release them. A pinned frame returns `BUSY` without releasing any
+frame. Corrupt links return `INVALID_MAP`, and an empty ledger is immediately
+reusable. Release work is therefore O(frames owned), never O(all physical
 frames), and diagnostics expose owner slots, release operations, and exact
-frame visits.
+frame visits. Allocation still overwrites every page with zeroes or the
+allocation poison before publication; release does not redundantly overwrite a
+page that cannot be observed through a live mapping.
 
 ## Thread creation and death
 
@@ -163,12 +165,11 @@ rights. Administer and direct device mapping are never inherited implicitly.
 
 ## Event, semaphore, and timer ownership
 
-The initial production synchronization pool has 32 fixed slots, an eight-object
-creator quota, and at most 16 waiters on one object. Events, semaphores, and
-timers share this pool, one lifecycle implementation, and the scheduler's
-existing intrusive wait/deadline links. Armed timers use parallel fixed
-32-entry heap/position/deadline arrays. No wait, signal, set, cancel, close,
-timeout, expiry, or owner-death path allocates memory.
+Events, semaphores, and timers share one lifecycle implementation and a
+page-backed 16-bit object namespace without a creator quota. Armed-timer heap
+metadata and per-thread wait registrations grow on demand; a wait set can use
+the thread's complete 255-handle namespace. Signal, set, cancel, close,
+timeout, expiry, and owner-death paths use the already-published metadata.
 
 A live handle contributes one object reference. The final handle close changes
 `LIVE -> CLOSING`, records `CLOSED`, withdraws future operations, removes every

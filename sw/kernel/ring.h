@@ -9,9 +9,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define KERNEL_RING_MAX 64u
-#define KERNEL_RING_OWNER_MAX 16u
-#define KERNEL_RING_AREA_MAX 4u
+/* UINT16_MAX is reserved as the invalid ring slot. */
+#define KERNEL_RING_MAX UINT16_MAX
 #define KERNEL_RING_HEADER_SIZE ASTRA_BULK_RING_HEADER_SIZE
 #define KERNEL_RING_OFFSET_ALIGNMENT ASTRA_BULK_RING_OFFSET_ALIGNMENT
 #define KERNEL_RING_ELEMENT_SIZE_MIN ASTRA_BULK_RING_ELEMENT_SIZE_MIN
@@ -44,7 +43,6 @@ typedef enum KernelRingStatus {
     KERNEL_RING_INVALID_ARGUMENT,
     KERNEL_RING_INVALID_STATE,
     KERNEL_RING_NO_SLOT,
-    KERNEL_RING_QUOTA_EXCEEDED,
     KERNEL_RING_OVERLAP,
     KERNEL_RING_CORRUPT
 } KernelRingStatus;
@@ -78,7 +76,6 @@ typedef struct KernelRingPoolStats {
     uint32_t closing_rings;
     uint32_t max_active_rings;
     uint32_t allocation_failures;
-    uint32_t quota_failures;
     uint32_t overlap_failures;
     uint32_t producer_notifications;
     uint32_t consumer_notifications;
@@ -118,11 +115,20 @@ KernelRingStatus kernel_ring_prepare_wait(KernelRing *ring,
                                           KernelThreadWaitSpec *spec);
 KernelRingStatus kernel_ring_commit_wait(KernelRing *ring,
                                          KernelRingEndpoint endpoint);
-KernelRingStatus kernel_ring_copy_peek(KernelRing *ring, void *bytes,
-                                       uint32_t capacity,
+KernelRingStatus kernel_ring_copy_peek(KernelRing *ring, uint32_t offset,
+                                       void *bytes, uint32_t capacity,
                                        uint32_t *copied);
 KernelRingStatus kernel_ring_copy_consume(KernelRing *ring, uint32_t count,
                                           uint32_t *woken_threads);
+KernelRingStatus kernel_ring_copy_write_prepare(KernelRing *ring,
+                                                uint32_t length, bool atomic,
+                                                uint32_t *writable);
+KernelRingStatus kernel_ring_copy_write_at(KernelRing *ring, uint32_t offset,
+                                           const void *bytes,
+                                           uint32_t length);
+KernelRingStatus kernel_ring_copy_write_commit(KernelRing *ring,
+                                               uint32_t count,
+                                               uint32_t *woken_threads);
 KernelRingStatus kernel_ring_copy_write(KernelRing *ring, const void *bytes,
                                         uint32_t length, bool atomic,
                                         uint32_t *written,

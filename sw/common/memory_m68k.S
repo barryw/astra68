@@ -8,59 +8,70 @@
 	.weak memcpy
 	.type memcpy, @function
 memcpy:
-	move.l  %d2, -(%sp)
-	move.l  8(%sp), %d0
+	movem.l %d2-%d7/%a2, -(%sp)
+	move.l  32(%sp), %d0
 	movea.l %d0, %a1
-	movea.l 12(%sp), %a0
-	move.l  16(%sp), %d1
+	movea.l 36(%sp), %a0
+	move.l  40(%sp), %d7
 	beq     .Lmemcpy_done
-	cmpi.l  #4, %d1
+	cmpi.l  #4, %d7
 	bcs     .Lmemcpy_bytes
-	move.l  %a0, %d2
-	eor.l   %d0, %d2
-	andi.l  #3, %d2
-	bne     .Lmemcpy_bytes
 .Lmemcpy_align:
 	move.l  %a1, %d2
 	andi.l  #3, %d2
 	beq     .Lmemcpy_32_test
 	move.b  (%a0)+, (%a1)+
-	subq.l  #1, %d1
+	subq.l  #1, %d7
 	bne     .Lmemcpy_align
 	bra     .Lmemcpy_done
 .Lmemcpy_32_test:
-	cmpi.l  #32, %d1
+	cmpi.l  #32, %d7
 	bcs     .Lmemcpy_4_test
+	move.l  %a0, %d2
+	andi.l  #3, %d2
+	bne     .Lmemcpy_32_unaligned
+	subi.l  #32, %d7
 .Lmemcpy_32:
-	move.l  (%a0)+, (%a1)+
-	move.l  (%a0)+, (%a1)+
-	move.l  (%a0)+, (%a1)+
-	move.l  (%a0)+, (%a1)+
-	move.l  (%a0)+, (%a1)+
-	move.l  (%a0)+, (%a1)+
-	move.l  (%a0)+, (%a1)+
-	move.l  (%a0)+, (%a1)+
-	subi.l  #32, %d1
-	cmpi.l  #32, %d1
+	movem.l (%a0)+, %d0-%d6/%a2
+	movem.l %d0-%d6/%a2, (%a1)
+	lea     32(%a1), %a1
+	subi.l  #32, %d7
 	bcc     .Lmemcpy_32
+	addi.l  #32, %d7
+	bra     .Lmemcpy_4_test
+.Lmemcpy_32_unaligned:
+	subi.l  #32, %d7
+.Lmemcpy_32_unaligned_loop:
+	move.l  (%a0)+, (%a1)+
+	move.l  (%a0)+, (%a1)+
+	move.l  (%a0)+, (%a1)+
+	move.l  (%a0)+, (%a1)+
+	move.l  (%a0)+, (%a1)+
+	move.l  (%a0)+, (%a1)+
+	move.l  (%a0)+, (%a1)+
+	move.l  (%a0)+, (%a1)+
+	subi.l  #32, %d7
+	bcc     .Lmemcpy_32_unaligned_loop
+	addi.l  #32, %d7
 .Lmemcpy_4_test:
-	cmpi.l  #4, %d1
+	cmpi.l  #4, %d7
 	bcs     .Lmemcpy_bytes
+	subq.l  #4, %d7
 .Lmemcpy_4:
 	move.l  (%a0)+, (%a1)+
-	subq.l  #4, %d1
-	cmpi.l  #4, %d1
+	subq.l  #4, %d7
 	bcc     .Lmemcpy_4
+	addq.l  #4, %d7
 .Lmemcpy_bytes:
-	tst.l   %d1
+	tst.l   %d7
 	beq     .Lmemcpy_done
 .Lmemcpy_byte:
 	move.b  (%a0)+, (%a1)+
-	subq.l  #1, %d1
+	subq.l  #1, %d7
 	bne     .Lmemcpy_byte
 .Lmemcpy_done:
-	move.l  8(%sp), %d0
-	move.l  (%sp)+, %d2
+	move.l  32(%sp), %d0
+	movem.l (%sp)+, %d2-%d7/%a2
 	rts
 	.size memcpy, .-memcpy
 	.globl kernel_bytes_copy
@@ -150,12 +161,49 @@ kernel_bytes_clear:
 	.globl kernel_words_fill
 	.type kernel_words_fill, @function
 kernel_words_fill:
-	move.l  %d2, -(%sp)
-	movea.l 8(%sp), %a0
-	move.l  12(%sp), %d2
-	move.l  16(%sp), %d1
-	lsl.l   #2, %d2
-	bra     .Lmemset_32_test
+	movem.l %d2-%d7, -(%sp)
+	movea.l 28(%sp), %a0
+	move.l  32(%sp), %d7
+	movea.l 36(%sp), %a1
+	move.l  %a1, %d0
+	move.l  %a1, %d1
+	move.l  %a1, %d2
+	move.l  %a1, %d3
+	move.l  %a1, %d4
+	move.l  %a1, %d5
+	move.l  %a1, %d6
+	cmpi.l  #32, %d7
+	bcs     .Lkernel_words_fill_32_test
+	subi.l  #32, %d7
+.Lkernel_words_fill_128:
+	movem.l %d0-%d6/%a1, (%a0)
+	movem.l %d0-%d6/%a1, 32(%a0)
+	movem.l %d0-%d6/%a1, 64(%a0)
+	movem.l %d0-%d6/%a1, 96(%a0)
+	lea     128(%a0), %a0
+	subi.l  #32, %d7
+	bcc     .Lkernel_words_fill_128
+	addi.l  #32, %d7
+.Lkernel_words_fill_32_test:
+	cmpi.l  #8, %d7
+	bcs     .Lkernel_words_fill_tail
+	subq.l  #8, %d7
+.Lkernel_words_fill_32:
+	movem.l %d0-%d6/%a1, (%a0)
+	lea     32(%a0), %a0
+	subq.l  #8, %d7
+	bcc     .Lkernel_words_fill_32
+	addq.l  #8, %d7
+.Lkernel_words_fill_tail:
+	tst.l   %d7
+	beq     .Lkernel_words_fill_done
+.Lkernel_words_fill_word:
+	move.l  %d1, (%a0)+
+	subq.l  #1, %d7
+	bne     .Lkernel_words_fill_word
+.Lkernel_words_fill_done:
+	movem.l (%sp)+, %d2-%d7
+	rts
 	.size kernel_words_fill, .-kernel_words_fill
 
 	.section .text.memcmp, "ax", @progbits
@@ -268,10 +316,6 @@ memmove:
 	adda.l  %d1, %a1
 	cmpi.l  #4, %d1
 	bcs     .Lmemmove_bytes
-	move.l  %a0, %d2
-	eor.l   %d0, %d2
-	andi.l  #3, %d2
-	bne     .Lmemmove_bytes
 .Lmemmove_align:
 	move.l  %a1, %d2
 	andi.l  #3, %d2

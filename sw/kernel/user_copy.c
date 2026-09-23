@@ -36,11 +36,16 @@ static bool checked_user_range(uint32_t address, uint32_t size,
     return true;
 }
 
+bool kernel_user_copy_range_valid(uint32_t address, uint32_t size)
+{
+    uint32_t end;
+
+    return checked_user_range(address, size, &end);
+}
+
 static int begin_copy(uint32_t address, uint32_t size, uint32_t direction,
                       uint32_t *end)
 {
-    if (size > KERNEL_USER_COPY_MAX_BYTES)
-        return KERNEL_USER_COPY_TOO_LARGE;
     if (!checked_user_range(address, size, end))
         return KERNEL_USER_COPY_BAD_ADDRESS;
     if (active_scope.active != 0u)

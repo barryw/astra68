@@ -12,6 +12,11 @@ static uint8_t live[64];
 static pthread_mutex_t gate_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t gate_changed = PTHREAD_COND_INITIALIZER;
 static uint32_t gate_arrived;
+static _Alignas(4) volatile uint32_t contention_lock;
+static pthread_mutex_t futex_gate = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t futex_changed = PTHREAD_COND_INITIALIZER;
+static uint32_t futex_waiters;
+static uint32_t contention_acquired;
 
 uint32_t astra_log_failure(const char *operation, uint32_t status)
 {
@@ -41,17 +46,32 @@ uint32_t astra_wait_one(uint32_t handle, uint64_t deadline, uint32_t *detail)
 uint32_t astra_futex_wait(volatile uint32_t *address, uint32_t expected,
                           uint64_t deadline)
 {
-    (void)address;
-    (void)expected;
     (void)deadline;
+    if (address == &contention_lock) {
+        assert(pthread_mutex_lock(&futex_gate) == 0);
+        if (__atomic_load_n(address, __ATOMIC_ACQUIRE) != expected) {
+            assert(pthread_mutex_unlock(&futex_gate) == 0);
+            return ASTRA_SYSCALL_WOULD_BLOCK;
+        }
+        ++futex_waiters;
+        assert(pthread_cond_broadcast(&futex_changed) == 0);
+        while (__atomic_load_n(address, __ATOMIC_ACQUIRE) == expected)
+            assert(pthread_cond_wait(&futex_changed, &futex_gate) == 0);
+        assert(pthread_mutex_unlock(&futex_gate) == 0);
+        return ASTRA_SYSCALL_OK;
+    }
     return ASTRA_SYSCALL_WOULD_BLOCK;
 }
 
 uint32_t astra_futex_wake(volatile uint32_t *address, uint32_t count,
                           uint32_t *woken)
 {
-    (void)address;
     (void)count;
+    if (address == &contention_lock) {
+        assert(pthread_mutex_lock(&futex_gate) == 0);
+        assert(pthread_cond_broadcast(&futex_changed) == 0);
+        assert(pthread_mutex_unlock(&futex_gate) == 0);
+    }
     if (woken != NULL)
         *woken = 0u;
     return ASTRA_SYSCALL_OK;
@@ -74,6 +94,15 @@ void astra_assert_failed(const char *file, unsigned int line,
 {
     fprintf(stderr, "%s:%u: %s\n", file, line, expression);
     abort();
+}
+
+static void *contended_state_lock(void *unused)
+{
+    (void)unused;
+    assert(astra_vfs_state_lock_acquire((void *)&contention_lock));
+    contention_acquired = 1u;
+    astra_vfs_state_lock_release((void *)&contention_lock);
+    return NULL;
 }
 
 typedef struct ThreadCall {
@@ -103,15 +132,44 @@ static void *call_thread(void *context)
 
 int main(void)
 {
+    volatile uint32_t state_lock = 0u;
+    volatile uint32_t sequence = 0u;
     AstraVfsClient client = {0};
-    AstraVfsPortThreadState states[ASTRA_PROCESS_THREAD_COUNT_MAX];
+    AstraVfsPortThreadState states[ASTRA_PROCESS_THREAD_SLOT_COUNT];
     ThreadCall first = {.client = &client, .thread = 1u, .value = 0x1111u};
     ThreadCall second = {.client = &client, .thread = 2u, .value = 0x2222u};
     pthread_t first_thread;
     pthread_t second_thread;
+    pthread_t contender;
+
+    assert(astra_vfs_state_lock_acquire((void *)&state_lock));
+    assert(state_lock == 1u);
+    assert(astra_vfs_state_futex_wait((void *)&state_lock, &sequence, 0u));
+    assert(state_lock == 1u);
+    astra_vfs_state_lock_release((void *)&state_lock);
+    assert(state_lock == 0u);
+    assert(!astra_vfs_state_lock_acquire(NULL));
+    assert(!astra_vfs_state_futex_wait(NULL, &sequence, 0u));
+    assert(!astra_vfs_state_futex_wait((void *)&state_lock, NULL, 0u));
+    assert(astra_mutex_lock(
+               (volatile uint32_t *)((uintptr_t)&state_lock + 2u)) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_mutex_unlock(
+               (volatile uint32_t *)((uintptr_t)&state_lock + 2u)) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_vfs_state_lock_acquire((void *)&contention_lock));
+    assert(pthread_create(&contender, NULL, contended_state_lock, NULL) == 0);
+    assert(pthread_mutex_lock(&futex_gate) == 0);
+    while (futex_waiters == 0u)
+        assert(pthread_cond_wait(&futex_changed, &futex_gate) == 0);
+    assert(pthread_mutex_unlock(&futex_gate) == 0);
+    assert(contention_lock == 2u && contention_acquired == 0u);
+    astra_vfs_state_lock_release((void *)&contention_lock);
+    assert(pthread_join(contender, NULL) == 0);
+    assert(contention_acquired == 1u && contention_lock == 0u);
 
     assert(astra_vfs_port_set_thread_storage(
-        &client, states, ASTRA_PROCESS_THREAD_COUNT_MAX));
+        &client, states, ASTRA_PROCESS_THREAD_SLOT_COUNT));
     assert(pthread_create(&first_thread, NULL, call_thread, &first) == 0);
     assert(pthread_create(&second_thread, NULL, call_thread, &second) == 0);
     assert(pthread_join(first_thread, NULL) == 0);
@@ -119,13 +177,13 @@ int main(void)
     assert(first.state != second.state);
 
     for (uint32_t thread = 3u;
-         thread <= ASTRA_PROCESS_THREAD_COUNT_MAX; ++thread) {
+         thread <= ASTRA_PROCESS_THREAD_SLOT_COUNT; ++thread) {
         current_thread = thread;
         live[thread] = 1u;
         assert(astra_vfs_port_call_acquire(&client) != NULL);
     }
     live[1] = 0u;
-    current_thread = ASTRA_PROCESS_THREAD_COUNT_MAX + 1u;
+    current_thread = ASTRA_PROCESS_THREAD_SLOT_COUNT + 1u;
     live[current_thread] = 1u;
     assert(astra_vfs_port_call_acquire(&client) == first.state);
     puts("VFS embedded per-thread state tests passed");

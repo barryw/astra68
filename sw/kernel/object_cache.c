@@ -2,7 +2,8 @@
 
 #include <stddef.h>
 
-static bool bit_test(const KernelObjectCache *cache, uint16_t slot)
+static inline __attribute__((always_inline))
+bool bit_test(const KernelObjectCache *cache, uint16_t slot)
 {
     return (cache->bitmap[slot >> 5] &
             (1u << (slot & 31u))) != 0u;

@@ -15,8 +15,6 @@
 ASTRA_PROGRAM("posixd", 0, 1, 0, "Astra68 contributors",
               "Copyright 2026 Astra68 contributors");
 
-static PosixProcessEntry entries[ASTRA_PROCESS_COUNT_MAX];
-static PosixSessionEntry sessions[ASTRA_PROCESS_COUNT_MAX];
 static PosixProcessTable table;
 static uint32_t control_receive;
 static uint32_t control_send;
@@ -291,17 +289,13 @@ astra_main(const AstraStartupInfo *startup)
     uint32_t published;
     uint32_t status;
 
-    _Static_assert(ASTRA_PROCESS_COUNT_MAX + 1u <= ASTRA_WAIT_MULTIPLE_MAX,
-                   "process service wait set exceeds the kernel wait set");
-
     if (!astra_startup_validate(startup))
         return service_failure("posixd startup", ASTRA_STATUS_INVALID);
     bootstrap = astra_startup_capability(startup,
                                          ASTRA_CAPABILITY_SERVICE_READY);
     if (bootstrap == NULL)
         return service_failure("posixd bootstrap", ASTRA_STATUS_BAD_HANDLE);
-    status = posix_process_table_init(&table, entries, sessions,
-                                      ASTRA_PROCESS_COUNT_MAX);
+    status = posix_process_table_init(&table, astra_runtime_reallocate);
     if (status == ASTRA_STATUS_OK &&
         astra_rt_port_create(ASTRA_PORT_MESSAGES_MAX,
                              ASTRA_PORT_MESSAGES_MAX *
@@ -325,14 +319,15 @@ astra_main(const AstraStartupInfo *startup)
     if (status != ASTRA_STATUS_OK)
         return service_failure("posixd initialize", status);
     for (;;) {
-        uint32_t waits[ASTRA_PROCESS_COUNT_MAX + 1u];
+        uint32_t waits[ASTRA_WAIT_MULTIPLE_MAX];
         uint32_t count = 1u;
         uint32_t index = ASTRA_WAIT_INDEX_NONE;
 
         remove_dead();
         waits[0] = control_receive;
         for (uint32_t slot = 0u; slot < table.capacity; ++slot)
-            if (table.entries[slot].process != 0)
+            if (table.entries[slot].process != 0 &&
+                count < ASTRA_WAIT_MULTIPLE_MAX)
                 waits[count++] = table.entries[slot].handle;
         status = astra_wait_multiple(waits, count, ASTRA_DEADLINE_FOREVER,
                                      &index, NULL);

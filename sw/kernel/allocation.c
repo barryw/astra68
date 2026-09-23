@@ -40,6 +40,10 @@ static const KernelAllocationSiteInfo site_info[KERNEL_ALLOCATION_SITE_COUNT] = 
     [KERNEL_ALLOCATION_SITE_THREAD_KERNEL_STACK] = {
         "thread-kernel-stack", KERNEL_ALLOCATION_TAG_THREAD, 0u, 1u, 0u
     },
+    [KERNEL_ALLOCATION_SITE_THREAD_WAIT_REGISTRATIONS] = {
+        "thread-wait-registrations", KERNEL_ALLOCATION_TAG_THREAD,
+        0u, 1u, 0u
+    },
     [KERNEL_ALLOCATION_SITE_HANDLE_SLOT] = {
         "handle-slot", KERNEL_ALLOCATION_TAG_HANDLE, 0u, 1u, 0u
     },
@@ -72,6 +76,40 @@ static const KernelAllocationSiteInfo site_info[KERNEL_ALLOCATION_SITE_COUNT] = 
     },
     [KERNEL_ALLOCATION_SITE_DMA_PAGES] = {
         "dma-pages", KERNEL_ALLOCATION_TAG_DMA, 0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_DMA_METADATA] = {
+        "dma-metadata", KERNEL_ALLOCATION_TAG_DMA, 0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_AREA_MAPPING_METADATA] = {
+        "area-mapping-metadata", KERNEL_ALLOCATION_TAG_AREA, 0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_DEVICE_METADATA] = {
+        "device-metadata", KERNEL_ALLOCATION_TAG_DEVICE, 0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_PORT_METADATA] = {
+        "port-metadata", KERNEL_ALLOCATION_TAG_IPC, 0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_PORT_MESSAGE_METADATA] = {
+        "port-message-metadata", KERNEL_ALLOCATION_TAG_IPC, 0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_DETACHED_HANDLE_METADATA] = {
+        "detached-handle-metadata", KERNEL_ALLOCATION_TAG_HANDLE,
+        0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_RING_METADATA] = {
+        "ring-metadata", KERNEL_ALLOCATION_TAG_RING, 0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_SYNC_METADATA] = {
+        "sync-metadata", KERNEL_ALLOCATION_TAG_SYNC, 0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_ELF_METADATA] = {
+        "elf-metadata", KERNEL_ALLOCATION_TAG_PROCESS, 0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_AREA_OBJECT_METADATA] = {
+        "area-object-metadata", KERNEL_ALLOCATION_TAG_AREA, 0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_AREA_PAGE_METADATA] = {
+        "area-page-metadata", KERNEL_ALLOCATION_TAG_AREA, 0u, 1u, 0u
     },
     [KERNEL_ALLOCATION_SITE_BLOCK_REQUEST] = {
         "block-request", KERNEL_ALLOCATION_TAG_BLOCK, 0u, 1u, 0u

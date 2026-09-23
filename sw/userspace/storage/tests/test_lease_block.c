@@ -63,6 +63,8 @@ static uint32_t mock_semaphore_maximum[MOCK_SEMAPHORE_COUNT];
 static uint32_t mock_queue_depth;
 static uint32_t mock_dma_creates;
 static uint32_t mock_maximum_active;
+static uint32_t mock_sector_bytes;
+static uint32_t mock_max_transfer_sectors;
 static AstraLeaseBlock *mock_reentrant_lease;
 static AstraBlockStatus mock_reentrant_status;
 static int mock_reentrant_started;
@@ -96,6 +98,8 @@ mock_reset(void)
     mock_queue_depth = 1u;
     mock_dma_creates = 0u;
     mock_maximum_active = 0u;
+    mock_sector_bytes = ASTRA_BLOCK_SECTOR_BYTES;
+    mock_max_transfer_sectors = 8u;
     mock_reentrant_lease = NULL;
     mock_reentrant_status = ASTRA_BLOCK_CORRUPT;
     mock_reentrant_started = 0;
@@ -108,8 +112,8 @@ fill_lease_info(AstraBlockLeaseInfo *info)
 {
     memset(info, 0, sizeof(*info));
     info->size = ASTRA_BLOCK_LEASE_INFO_SIZE;
-    info->sector_bytes = ASTRA_BLOCK_SECTOR_BYTES;
-    info->max_transfer_sectors = 8u;
+    info->sector_bytes = mock_sector_bytes;
+    info->max_transfer_sectors = mock_max_transfer_sectors;
     info->queue_depth = mock_queue_depth;
     info->capabilities = ASTRA_BLOCK_CAP_READ | ASTRA_BLOCK_CAP_WRITE |
                          ASTRA_BLOCK_CAP_FLUSH;
@@ -137,18 +141,17 @@ astra_block_lease_query(uint32_t device, AstraBlockLeaseInfo *info)
 uint32_t
 astra_dma_create(uint32_t byte_size, AstraDmaBufferInfo *info)
 {
-    static uint8_t transfer_memory[MOCK_LANE_MAX]
-                                  [8u * ASTRA_BLOCK_SECTOR_BYTES];
     uint32_t slot = mock_dma_creates++;
 
     assert(slot < MOCK_LANE_MAX);
-    assert(byte_size <= sizeof(transfer_memory[slot]));
+    assert(byte_size <= ASTRA_DMA_SLOT_SIZE);
     memset(info, 0, sizeof(*info));
     info->size = ASTRA_DMA_BUFFER_INFO_SIZE;
     info->handle = MOCK_BUFFER + slot;
     info->virtual_base = 0x50000000u + slot * 0x10000u;
-    info->byte_size = (uint32_t)sizeof(transfer_memory[slot]);
-    info->page_count = 2u;
+    info->byte_size = byte_size;
+    info->page_count = (byte_size + ASTRA_MEMORY_PAGE_SIZE - 1u) /
+                       ASTRA_MEMORY_PAGE_SIZE;
     return ASTRA_SYSCALL_OK;
 }
 
@@ -493,6 +496,26 @@ test_attach_claims_advertised_lanes(void)
 }
 
 static void
+test_attach_uses_the_dma_resource_boundary(void)
+{
+    AstraLeaseBlock lease;
+
+    mock_reset();
+    mock_max_transfer_sectors = 129u;
+    assert(astra_lease_block_attach(&lease, MOCK_DEVICE, MOCK_IRQ) ==
+           ASTRA_BLOCK_OK);
+    assert(lease.max_transfer_sectors == 129u && mock_dma_creates == 1u);
+    astra_lease_block_detach(&lease);
+
+    mock_reset();
+    mock_sector_bytes = 4096u;
+    mock_max_transfer_sectors = ASTRA_DMA_SLOT_SIZE / 4096u + 1u;
+    assert(astra_lease_block_attach(&lease, MOCK_DEVICE, MOCK_IRQ) ==
+           ASTRA_BLOCK_CORRUPT);
+    assert(mock_dma_creates == 0u);
+}
+
+static void
 test_two_callers_keep_two_requests_in_flight(void)
 {
     AstraLeaseBlock lease;
@@ -746,6 +769,7 @@ test_geometry_translation(void)
     AstraBlockLeaseInfo info;
     AstraBlockGeometry geometry;
 
+    mock_reset();
     fill_lease_info(&info);
     astra_lease_block_geometry(&info, &geometry);
     assert(geometry.sector_count == 1024u);
@@ -784,6 +808,7 @@ main(void)
     test_status_translation();
     test_geometry_translation();
     test_attach_claims_advertised_lanes();
+    test_attach_uses_the_dma_resource_boundary();
     test_two_callers_keep_two_requests_in_flight();
     test_attach_rejections();
     test_request_order();

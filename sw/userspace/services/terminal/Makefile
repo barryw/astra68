@@ -15,6 +15,7 @@ TERMINAL := ../../terminal
 SUPERVISOR := ../../supervisor
 GRAPHICS := ../../graphics
 CONFIG := ../../config
+INTERFACE := ../../interface
 NDK := ../../../../ndk
 CPPFLAGS := -Iinclude -I$(NDK)/include -I../../../include -I$(RUNTIME)/include \
 	-I$(STORAGE)/include \
@@ -28,9 +29,11 @@ TARGET := build/m68k/terminal.elf
 IMAGE := build/m68k/terminal
 CATALOG := build/m68k/astra_events.cat
 OBJECTS := build/m68k/main.o build/m68k/console_session.o \
-	build/m68k/console_stream.o build/m68k/terminal_cursor.o
-HOST_TEST := build/host/test_terminal_cursor
-HOST_TEST_SANITIZE := build/host/test_terminal_cursor_sanitize
+	build/m68k/console_stream.o build/m68k/terminal_cursor.o \
+	build/m68k/terminal_scrollback.o
+HOST_TEST := build/host/test_terminal_cursor build/host/test_terminal_scrollback
+HOST_TEST_SANITIZE := build/host/test_terminal_cursor_sanitize \
+	build/host/test_terminal_scrollback_sanitize
 TERMINAL_LIB := $(TERMINAL)/build/m68k/libastraterminal.a
 LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_GRAPHICS_LIBRARY) \
 	$(ASTRA_STREAMS_LIBRARY) $(ASTRA_FILESYSTEM_LIBRARY) \
@@ -76,16 +79,31 @@ build/m68k/terminal_cursor.o: terminal_cursor.c include/terminal_cursor.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
-$(HOST_TEST): terminal_cursor.c include/terminal_cursor.h \
+build/m68k/terminal_scrollback.o: terminal_scrollback.c \
+		include/terminal_scrollback.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
+build/host/test_terminal_cursor: terminal_cursor.c include/terminal_cursor.h \
 		tests/test_terminal_cursor.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 terminal_cursor.c \
 		tests/test_terminal_cursor.c -o $@
 
 test: $(HOST_TEST)
-	./$(HOST_TEST)
+	./build/host/test_terminal_cursor
+	./build/host/test_terminal_scrollback
 
-$(HOST_TEST_SANITIZE): terminal_cursor.c include/terminal_cursor.h \
+build/host/test_terminal_scrollback: terminal_scrollback.c \
+		include/terminal_scrollback.h tests/test_terminal_scrollback.c \
+		$(INTERFACE)/src/scroll.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 terminal_scrollback.c \
+		$(INTERFACE)/src/scroll.c tests/test_terminal_scrollback.c \
+		-o $@
+
+build/host/test_terminal_cursor_sanitize: terminal_cursor.c \
+		include/terminal_cursor.h \
 		tests/test_terminal_cursor.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O1 \
@@ -93,7 +111,17 @@ $(HOST_TEST_SANITIZE): terminal_cursor.c include/terminal_cursor.h \
 		terminal_cursor.c tests/test_terminal_cursor.c -o $@
 
 sanitize: $(HOST_TEST_SANITIZE)
-	./$(HOST_TEST_SANITIZE)
+	./build/host/test_terminal_cursor_sanitize
+	./build/host/test_terminal_scrollback_sanitize
+
+build/host/test_terminal_scrollback_sanitize: terminal_scrollback.c \
+		include/terminal_scrollback.h tests/test_terminal_scrollback.c \
+		$(INTERFACE)/src/scroll.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O1 \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		terminal_scrollback.c $(INTERFACE)/src/scroll.c \
+		tests/test_terminal_scrollback.c -o $@
 
 analyze:
 	@mkdir -p build/analyzer
@@ -105,6 +133,8 @@ analyze:
 		-c console_stream.c -o build/analyzer/console_stream.o
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
 		-c terminal_cursor.c -o build/analyzer/terminal_cursor.o
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
+		-c terminal_scrollback.c -o build/analyzer/terminal_scrollback.o
 
 clean:
 	rm -rf build

@@ -910,9 +910,10 @@ static void test_revocation_service_is_batch_bounded(void)
 
 static void test_limits_failures_and_diagnostics(void)
 {
+    enum { endpoint_count = 9u };
     FakeController controller;
-    FakeDevice devices[KERNEL_IRQ_OWNER_MAX];
-    KernelIrqEndpoint *endpoints_for_owner[KERNEL_IRQ_OWNER_MAX];
+    FakeDevice devices[endpoint_count];
+    KernelIrqEndpoint *endpoints_for_owner[endpoint_count];
     KernelIrqEndpoint *endpoint = (KernelIrqEndpoint *)(uintptr_t)1u;
     KernelIrqBinding binding;
     KernelIrqPoolStats stats;
@@ -934,14 +935,11 @@ static void test_limits_failures_and_diagnostics(void)
     assert(allocation.current_units == 0u &&
            allocation.injected_failures == 1u);
 
-    for (uint32_t index = 0u; index < KERNEL_IRQ_OWNER_MAX; ++index) {
+    for (uint32_t index = 0u; index < endpoint_count; ++index) {
         endpoints_for_owner[index] = bind_endpoint(
             &controller, &devices[index], 8u, (uint8_t)(8u + index),
             KERNEL_IRQ_TRIGGER_EDGE);
     }
-    binding.source = 20u;
-    assert(kernel_irq_bind(8u, &binding, &endpoint) ==
-           KERNEL_IRQ_QUOTA_EXCEEDED);
     binding.source = 8u;
     assert(kernel_irq_bind(9u, &binding, &endpoint) ==
            KERNEL_IRQ_SOURCE_BUSY);
@@ -957,14 +955,13 @@ static void test_limits_failures_and_diagnostics(void)
     expect_log(&controller, "MA");
     assert(kernel_irq_pool_stats(&stats));
     assert(stats.allocation_failures == 1u);
-    assert(stats.quota_failures == 1u);
     assert(stats.source_busy_failures == 1u);
     assert(stats.unclaimed_interrupts == 1u);
     assert(stats.bad_vector_interrupts == 1u);
 
-    for (uint32_t index = 0u; index < KERNEL_IRQ_OWNER_MAX; ++index)
+    for (uint32_t index = 0u; index < endpoint_count; ++index)
         kernel_irq_handle_release(endpoints_for_owner[index], NULL);
-    assert(service_all_revocations() == KERNEL_IRQ_OWNER_MAX);
+    assert(service_all_revocations() == endpoint_count);
     assert(kernel_irq_pool_valid());
 
     initialize_test(&controller);

@@ -9,37 +9,16 @@
 
 #define KERNEL_HANDLE_INVALID 0u
 /*
- * How many objects one process may hold at once.
- *
- * It was 16, which was generous when a process held its own two, a device or
- * three, and nothing else. The supervisor now hosts services, and a service is
- * a port: two endpoints each for the stream sink, the stream source, the
- * storage service and the events service is eight handles before anything else
- * -- and then a launch adds the child's process handle, and receiving a
- * request adds the reply handle that came with it.
- *
- * At 16 the table filled exactly one slot short of that last one. The symptom
- * was a launched program's first request sitting in a port nobody could take
- * it out of: `astra_port_receive` answered RESOURCE_LIMIT because it could not
- * install the attached reply handle, the message stayed queued, and the child
- * waited for an answer that could not be produced. Nothing was broken and
- * nothing said so.
- *
- * Concurrent application launches increase the supervisor's live process and
- * reply handles. Forty-eight keeps that measured demand bounded, with explicit
- * headroom, while retaining the existing two-word bitmap.
- */
-/*
  * A process's table is allocated with its process record rather than reserved
- * for every possible PID. The entry count remains the handle-value ABI's
- * eight-bit slot field; removing that representational ceiling requires a
- * handle ABI change, not another deployment-sized process constant.
+ * for every possible PID. Its capacity is the complete handle-value ABI's
+ * eight-bit slot field (zero is invalid), not a smaller deployment estimate.
  */
 #define KERNEL_HANDLE_MAX_ENTRIES ASTRA_HANDLE_COUNT_MAX
 #define KERNEL_HANDLE_BITMAP_WORDS \
     ((KERNEL_HANDLE_MAX_ENTRIES + 31u) / 32u)
 #define KERNEL_HANDLE_TRANSFER_MAX ASTRA_MESSAGE_HANDLES_MAX
-#define KERNEL_HANDLE_DETACHED_MAX 256u
+/* The complete uint16 slot namespace; zero encoding remains invalid. */
+#define KERNEL_HANDLE_DETACHED_MAX UINT32_C(65535)
 
 typedef uint32_t KernelHandle;
 typedef uint32_t KernelDetachedHandle;
@@ -172,6 +151,10 @@ uint32_t kernel_handle_close_type(KernelHandleTable *table,
 uint32_t kernel_handle_count(const KernelHandleTable *table);
 uint32_t kernel_handle_available(const KernelHandleTable *table);
 bool kernel_handle_table_valid(const KernelHandleTable *table);
+KernelHandleStatus kernel_handle_transfer_validate(
+    const KernelHandleTable *source_table,
+    const KernelHandle *source_handles, uint32_t count,
+    uint32_t required_rights);
 KernelHandleStatus kernel_handle_transfer_prepare(
     const KernelHandleTable *source_table, const KernelHandle *source_handles,
     uint32_t count, uint32_t required_rights,

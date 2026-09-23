@@ -21,9 +21,10 @@
  * did not use; without it the compiler is free to assume no overlap with the
  * caller's own object and reorder around it.
  *
- * The unaligned case still goes a byte at a time. Aligning two pointers that
- * disagree about phase needs a shift-and-merge loop, and every caller here --
- * page copies, sector copies, message payloads -- shares alignment already.
+ * The host reference uses bytes when the pointers disagree about phase. The
+ * MC68040 implementation uses its supported unaligned longword accesses;
+ * physical profiles found multi-megabyte filesystem transfers reaching this
+ * case during every zsh launch.
  */
 typedef uint32_t AstraWord __attribute__((may_alias));
 

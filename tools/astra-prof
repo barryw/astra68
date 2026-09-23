@@ -1,0 +1,861 @@
+#!/usr/bin/env python3
+"""Record, symbolize, annotate, and compare Astra MC68040 profiles."""
+
+import argparse
+import bisect
+import hashlib
+import json
+import os
+import shutil
+import shlex
+import signal
+import socket
+import statistics
+import struct
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import event_catalog
+
+
+def parse_profile(path):
+    intervals = []
+    current = None
+    for number, raw in enumerate(Path(path).read_text().splitlines(), 1):
+        fields = raw.split("\t")
+        if fields[0] == "interval" and len(fields) == 4 and current is None:
+            current = {"label": fields[1], "start_ns": int(fields[2]),
+                       "end_ns": int(fields[3]), "blocks": [], "callers": [],
+                       "values": []}
+        elif fields[0] == "block" and len(fields) == 11 and current is not None:
+            current["blocks"].append({
+                "vaddr": int(fields[1], 0), "paddr": int(fields[2], 0),
+                "insns": int(fields[3]), "bytes": int(fields[4]),
+                "executions": int(fields[5]), "loads": int(fields[6]),
+                "stores": int(fields[7]), "load_bytes": int(fields[8]),
+                "store_bytes": int(fields[9]), "signature": fields[10],
+            })
+        elif fields[0] == "caller" and len(fields) == 4 and current is not None:
+            current["callers"].append({
+                "probe": int(fields[1], 0), "return": int(fields[2], 0),
+                "count": int(fields[3]),
+            })
+        elif fields[0] == "value" and len(fields) == 5 and current is not None:
+            current["values"].append({
+                "probe": int(fields[1], 0), "register": fields[2],
+                "value": int(fields[3], 0), "count": int(fields[4]),
+            })
+        elif fields == ["end"] and current is not None:
+            intervals.append(current)
+            current = None
+        else:
+            raise ValueError(f"{path}:{number}: invalid profile record")
+    if current is not None or not intervals:
+        raise ValueError(f"{path}: incomplete or empty profile")
+    return intervals
+
+
+def interval_totals(interval):
+    blocks = interval["blocks"]
+    return {
+        "elapsed_ns": interval["end_ns"] - interval["start_ns"],
+        "instructions": sum(row["insns"] * row["executions"] for row in blocks),
+        "blocks": sum(row["executions"] for row in blocks),
+        "loads": sum(row["loads"] for row in blocks),
+        "stores": sum(row["stores"] for row in blocks),
+        "load_bytes": sum(row["load_bytes"] for row in blocks),
+        "store_bytes": sum(row["store_bytes"] for row in blocks),
+    }
+
+
+def median_totals(intervals):
+    totals = [interval_totals(interval) for interval in intervals]
+    return {key: statistics.median(row[key] for row in totals)
+            for key in totals[0]}
+
+
+def parse_image(value):
+    try:
+        name_at, path = value.split("=", 1)
+        name, separator, base = name_at.partition("@")
+        if not name or not path:
+            raise ValueError
+        return {"name": name, "path": path,
+                "base": int(base, 0) if separator else None}
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("expected NAME[@BASE]=ELF") from error
+
+
+def parse_address(value):
+    try:
+        address = int(value, 0)
+        if not 0 <= address <= 0xffffffff:
+            raise ValueError
+        return address
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("expected a 32-bit address") from error
+
+
+def parse_register(value):
+    if not value or len(value) >= 65 or not all(
+            character.isalnum() or character in "-_." for character in value):
+        raise argparse.ArgumentTypeError("expected a register name")
+    return value
+
+
+def is_target_elf(path):
+    try:
+        with path.open("rb") as source:
+            return source.read(6) == b"\x7fELF\x01\x02"
+    except OSError:
+        return False
+
+
+def load_symbols(image, nm):
+    result = subprocess.run([nm, "-n", "-S", "--defined-only", image["path"]],
+                            text=True, capture_output=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"nm failed: {image['path']}")
+    symbols = []
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) >= 4 and fields[-2] in "TtWw" and all(
+                character in "0123456789abcdefABCDEF" for character in fields[0]):
+            symbols.append((int(fields[0], 16), int(fields[1], 16), fields[-1]))
+    if not symbols:
+        raise RuntimeError(f"no text symbols in {image['path']}")
+    link_base = symbols[0][0]
+    bias = 0 if image["base"] is None else image["base"] - link_base
+    image["bias"] = bias
+    image["elf_type"], image["segments"], image["executable_segments"] = \
+        elf_segments(image["path"])
+    image["relocatable"] = image["base"] is None and image["elf_type"] == 3
+    image["symbols"] = [(address + bias, size, name)
+                        for address, size, name in symbols]
+    image["addresses"] = [row[0] for row in image["symbols"]]
+    return image
+
+
+def elf_segments(path):
+    data = Path(path).read_bytes()
+    if data[:6] != b"\x7fELF\x01\x02":
+        raise RuntimeError(f"{path} is not a big-endian ELF32 image")
+    elf_type, = struct.unpack_from(">H", data, 16)
+    program_offset, = struct.unpack_from(">I", data, 28)
+    program_size, program_count = struct.unpack_from(">HH", data, 42)
+    segments = []
+    executable = []
+    for index in range(program_count):
+        entry = struct.unpack_from(">IIIIIIII", data,
+                                   program_offset + index * program_size)
+        if entry[0] == 1:
+            _, offset, address, _, file_size = entry[:5]
+            segment = (address, data[offset:offset + file_size])
+            segments.append(segment)
+            if entry[6] & 1:
+                executable.append(segment)
+    if not segments:
+        raise RuntimeError(f"{path} has no loadable segments")
+    return elf_type, segments, executable
+
+
+def unique_signature_address(image, signature):
+    needle = bytes.fromhex(signature)
+    if len(needle) != 16:
+        return None
+    matches = []
+    for start, data in image.get("executable_segments", ()):
+        offset = data.find(needle)
+        while offset >= 0:
+            matches.append(start + offset)
+            if len(matches) > 1:
+                return None
+            offset = data.find(needle, offset + 1)
+    return matches[0] if matches else None
+
+
+def relocate_images(intervals, images):
+    relocated = []
+    for image in images:
+        if not image.get("relocatable", False):
+            relocated.append(image)
+            continue
+        evidence = {}
+        for interval in intervals:
+            for block in interval["blocks"]:
+                address = unique_signature_address(image, block["signature"])
+                if address is None or block["vaddr"] < address:
+                    continue
+                bias = block["vaddr"] - address
+                if bias & 0xfff:
+                    continue
+                evidence.setdefault(bias, set()).add(
+                    (block["vaddr"], block["paddr"], block["signature"]))
+        if not evidence:
+            continue
+        best = max(len(blocks) for blocks in evidence.values())
+        winners = [bias for bias, blocks in evidence.items()
+                   if len(blocks) == best]
+        if len(winners) != 1:
+            continue
+        bias = winners[0]
+        shifted = dict(image)
+        shifted["bias"] = bias
+        shifted["symbols"] = [(address + bias, size, name)
+                              for address, size, name in image["symbols"]]
+        shifted["addresses"] = [row[0] for row in shifted["symbols"]]
+        shifted["relocatable"] = False
+        relocated.append(shifted)
+    return relocated
+
+
+def image_signature_matches(image, address, signature):
+    expected = bytes.fromhex(signature)
+    link_address = address - image.get("bias", 0)
+    for start, data in image.get("segments", ()):
+        offset = link_address - start
+        if 0 <= offset and offset + len(expected) <= len(data):
+            return data[offset:offset + len(expected)] == expected
+    return False
+
+
+def link_address(image, runtime_address):
+    return runtime_address - image.get("bias", 0)
+
+
+def annotated_blocks(intervals, image):
+    blocks = {}
+    for interval in intervals:
+        for block in interval["blocks"]:
+            if resolve_image([image], block["vaddr"],
+                             block["signature"])[0] == "unknown":
+                continue
+            key = (block["vaddr"], block["bytes"], block["insns"],
+                   block["signature"])
+            blocks.setdefault(key, {**block, "executions": 0})["executions"] += \
+                block["executions"]
+    return sorted(blocks.values(),
+                  key=lambda row: row["insns"] * row["executions"],
+                  reverse=True)
+
+
+def resolve_image(images, address, signature=None):
+    matches = []
+    for image in images:
+        index = bisect.bisect_right(image["addresses"], address) - 1
+        if index >= 0:
+            start, size, name = image["symbols"][index]
+            if start <= address < start + max(size, 1) and \
+                    (signature is None or
+                     image_signature_matches(image, address, signature)):
+                matches.append((image["name"], name, start))
+    if len(matches) == 1:
+        return matches[0]
+    if matches and len({match[1] for match in matches}) == 1:
+        return f"shared({len(matches)})", matches[0][1], matches[0][2]
+    return "unknown", f"0x{address:08x}", address
+
+
+def aggregate(intervals, images):
+    functions = {}
+    for interval in intervals:
+        for block in interval["blocks"]:
+            image, function, start = resolve_image(
+                images, block["vaddr"], block["signature"])
+            key = image, function, start
+            row = functions.setdefault(key, {"instructions": 0, "executions": 0,
+                                              "loads": 0, "stores": 0})
+            row["instructions"] += block["insns"] * block["executions"]
+            row["executions"] += block["executions"]
+            row["loads"] += block["loads"]
+            row["stores"] += block["stores"]
+    return functions
+
+
+def aggregate_callers(intervals, images):
+    callers = {}
+    for interval in intervals:
+        for row in interval["callers"]:
+            probe = resolve_image(images, row["probe"])
+            caller = resolve_image(images, row["return"])
+            key = probe[:2], caller[:2], row["return"] - caller[2]
+            callers[key] = callers.get(key, 0) + row["count"]
+    return callers
+
+
+def aggregate_values(intervals, images):
+    values = {}
+    for interval in intervals:
+        for row in interval["values"]:
+            probe = resolve_image(images, row["probe"])
+            key = probe[:2], row["register"], row["value"]
+            values[key] = values.get(key, 0) + row["count"]
+    return values
+
+
+def command_report(args):
+    intervals = parse_profile(args.profile)
+    image_specs = list(args.image)
+    if getattr(args, "userspace_root", None):
+        image_specs += target_images(Path(args.userspace_root).resolve())
+    images = relocate_images(
+        intervals, [load_symbols(image, args.nm) for image in image_specs])
+    functions = aggregate(intervals, images)
+    total = sum(row["instructions"] for row in functions.values())
+    totals = median_totals(intervals)
+    print(f"intervals: {len(intervals)}  median: {totals['elapsed_ns'] / 1e6:.3f} ms"
+          f"  guest instructions: {int(totals['instructions']):,}")
+    print("   share    instructions       calls  image     function")
+    ordered = sorted(functions.items(), key=lambda item: item[1]["instructions"],
+                     reverse=True)
+    for (image, function, _), row in ordered[:args.limit]:
+        share = 100.0 * row["instructions"] / total if total else 0.0
+        print(f"{share:7.2f}% {row['instructions']:15,} {row['executions']:11,}  "
+              f"{image:<9} {function}")
+    callers = aggregate_callers(intervals, images)
+    if callers:
+        print("\n       calls  probe                    caller")
+        ordered_callers = sorted(callers.items(), key=lambda item: item[1],
+                                 reverse=True)
+        for ((probe_image, probe_function),
+             (caller_image, caller_function), return_offset), count in \
+                ordered_callers[:args.limit]:
+            print(f"{count:12,}  {probe_image}:{probe_function:<20} "
+                  f"{caller_image}:{caller_function}+0x{return_offset:x}")
+    values = aggregate_values(intervals, images)
+    if values:
+        print("\n       calls  probe                    register       value")
+        ordered_values = sorted(values.items(), key=lambda item: item[1],
+                                reverse=True)
+        for (((probe_image, probe_function), register, value), count) in \
+                ordered_values[:args.limit]:
+            print(f"{count:12,}  {probe_image}:{probe_function:<20} "
+                  f"{register:<10} 0x{value:08x}")
+    return 0
+
+
+def command_compare(args):
+    baseline = median_totals(parse_profile(args.baseline))
+    candidate = median_totals(parse_profile(args.candidate))
+    print("metric               baseline       candidate       change")
+    for metric in baseline:
+        old, new = baseline[metric], candidate[metric]
+        if old == 0:
+            rendered = "    0.00%" if new == 0 else "      n/a"
+        else:
+            rendered = f"{(new - old) * 100.0 / old:+9.2f}%"
+        print(f"{metric:<18} {old:14,.1f} {new:15,.1f} {rendered}")
+    return 0
+
+
+def load_latency_rows(paths):
+    rows = []
+    for supplied in paths:
+        path = Path(supplied)
+        if path.is_dir():
+            path /= "command-metrics.jsonl"
+        artifact_rows = []
+        declared_runs = None
+        for number, raw in enumerate(path.read_text().splitlines(), 1):
+            try:
+                row = json.loads(raw)
+            except json.JSONDecodeError as error:
+                raise ValueError(f"{path}:{number}: invalid JSON") from error
+            if "run" not in row:
+                if "runs" in row:
+                    if declared_runs is not None or \
+                            not isinstance(row["runs"], int):
+                        raise ValueError(
+                            f"{path}:{number}: invalid latency summary")
+                    declared_runs = row["runs"]
+                continue
+            milliseconds = row.get("milliseconds")
+            cycles = row.get("guest-cycles")
+            if not isinstance(milliseconds, (int, float)) or \
+                    milliseconds <= 0 or not isinstance(cycles, int) or \
+                    cycles <= 0:
+                raise ValueError(f"{path}:{number}: invalid latency row")
+            artifact_rows.append((float(milliseconds), cycles))
+        if declared_runs != len(artifact_rows) or not artifact_rows:
+            raise ValueError(f"{path}: incomplete latency artifact")
+        rows.extend(artifact_rows)
+    if not rows:
+        raise ValueError("latency artifacts contain no runs")
+    return rows
+
+
+def command_compare_latency(args):
+    baseline = load_latency_rows(args.baseline)
+    candidate = load_latency_rows(args.candidate)
+    print("metric               baseline       candidate       change")
+    for label, column, suffix in (("milliseconds", 0, " ms"),
+                                  ("guest cycles", 1, "")):
+        old = statistics.median(row[column] for row in baseline)
+        new = statistics.median(row[column] for row in candidate)
+        change = 100.0 * (new - old) / old
+        print(f"{label:<20} {old:12,.3f}{suffix:<3} "
+              f"{new:12,.3f}{suffix:<3} {change:+9.2f}%")
+    print(f"runs                 {len(baseline):12,d}    "
+          f"{len(candidate):12,d}")
+    return 0
+
+
+def command_control(args):
+    command = args.action
+    if args.action == "start":
+        command += " " + args.label
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(args.timeout)
+        connection.connect(args.socket)
+        connection.sendall((command + "\n").encode())
+        response = connection.recv(4096).decode().strip()
+    print(response)
+    return 0 if response in ("OK", "active", "idle") else 1
+
+
+def find_plugin(qemu):
+    candidate = Path(qemu).parent / "contrib/plugins/libastra_profile.so"
+    if candidate.is_file():
+        return str(candidate)
+    raise RuntimeError(f"profiler plugin not found beside {qemu}; run build")
+
+
+def command_build(args):
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run([str(root / "emu/qemu/build.sh"), args.target + "-profile"],
+                            text=True, capture_output=True)
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr)
+        return result.returncode
+    qemu = result.stdout.strip().splitlines()[-1]
+    print(json.dumps({"qemu": qemu, "plugin": find_plugin(qemu)}, indent=2))
+    return 0
+
+
+def command_record(args):
+    command = list(args.command)
+    if command[:1] == ["--"]:
+        command.pop(0)
+    if not command:
+        raise RuntimeError("record requires a command after --")
+    plugin = args.plugin or find_plugin(args.qemu or command[0])
+    output = str(Path(args.output).resolve())
+    Path(output).unlink(missing_ok=True)
+    option = f"{plugin},output={output},autostart=true,label={args.label}"
+    option += f",memory={'true' if args.memory else 'false'}"
+    option += "".join(f",probe=0x{probe:x}" for probe in args.probe)
+    if args.probe_register:
+        option += f",register={args.probe_register}"
+    command += ["-plugin", option]
+    if args.perf_data:
+        perf = args.perf or shutil.which("perf")
+        if not perf:
+            raise RuntimeError("perf not found")
+        command += ["-perfmap"]
+        command = [perf, "record", "-F", str(args.frequency), "-g", "-o",
+                   args.perf_data, "--"] + command
+    process = subprocess.Popen(command)
+    try:
+        process.wait(timeout=args.timeout)
+    except subprocess.TimeoutExpired:
+        process.send_signal(signal.SIGTERM)
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+    if not Path(output).is_file():
+        raise RuntimeError("QEMU exited without writing a profile")
+    print(output)
+    return 0 if process.returncode in (0, -signal.SIGTERM, 128 + signal.SIGTERM) else process.returncode
+
+
+def run_checked(command, **kwargs):
+    result = subprocess.run(command, **kwargs)
+    if result.returncode != 0:
+        detail = ""
+        if kwargs.get("capture_output"):
+            detail = (result.stderr or result.stdout or "").strip()
+        message = f"command failed ({result.returncode}): {shlex.join(command)}"
+        raise RuntimeError(message + (f"\n{detail}" if detail else ""))
+    return result
+
+
+def timed_checked(label, command, **kwargs):
+    started = time.monotonic()
+    print(f"astra-prof: {label}...", file=sys.stderr, flush=True)
+    result = run_checked(command, **kwargs)
+    print(f"astra-prof: {label} done in {time.monotonic() - started:.1f}s",
+          file=sys.stderr, flush=True)
+    return result
+
+
+def storage_fingerprint(root):
+    root = root.resolve()
+    digest = hashlib.sha256()
+    inputs = [root / "emu/qemu/astra_image.py",
+              root / "sw/userspace/storage/Makefile"]
+    for pattern in ("sw/userspace/build/m68k/astra_events.cat",
+                    "sw/userspace/commands/build/m68k/**/*",
+                    "sw/userspace/services/*/build/m68k/**/*",
+                    "sw/userspace/kits/build/**/*",
+                    "sw/userspace/apps/build/**/*",
+                    "sw/userspace/terminal/build/terminfo/**/*"):
+        inputs.extend(root.glob(pattern))
+    files = sorted({path.resolve() for path in inputs if path.is_file()})
+    if len(files) < 2:
+        raise RuntimeError("cannot fingerprint missing userspace image inputs")
+    for path in files:
+        digest.update(str(path.relative_to(root)).encode("utf-8") + b"\0")
+        with path.open("rb") as source:
+            for block in iter(lambda: source.read(1 << 20), b""):
+                digest.update(block)
+    return digest.hexdigest()
+
+
+def custom_software_artifacts(args):
+    values = [args.rom, args.storage, args.kernel, args.rom_elf]
+    if any(values) and not all(values):
+        raise RuntimeError(
+            "custom software requires --rom, --storage, --kernel, and --rom-elf")
+    return all(values)
+
+
+def find_event_message(catalog, text):
+    matches = [int(message, 0) for message, entry in catalog.items()
+               if entry["format"] == text]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"event {text!r} has {len(matches)} matching descriptors")
+    return matches[0]
+
+
+def event_message_id(elf, text):
+    base, blob = event_catalog.read_section(elf)
+    return find_event_message(event_catalog.parse(base, blob), text)
+
+
+def target_images(root):
+    trees = (root / "sw/userspace", root / "ndk")
+    paths = {path for tree in trees
+             for pattern in ("**/build/m68k/**/*.elf",
+                             "**/build/m68k/**/*.library.*")
+             for path in tree.glob(pattern)}
+    return [parse_image(f"{path.relative_to(root)}={path}")
+            for path in sorted(paths)
+            if not path.name.endswith(".image.elf") and is_target_elf(path)]
+
+
+def command_de25_boot(args):
+    root = Path(__file__).resolve().parents[1]
+    mode = getattr(args, "profile_mode", "boot")
+    profiling = mode != "latency"
+    command_text = " ".join(getattr(args, "profile_command", ()))
+    cleanup = getattr(args, "cleanup", None)
+    destination = Path(args.output).resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    qemu = args.qemu
+    if qemu is None:
+        build = timed_checked(
+            "profiling QEMU" if profiling else "production QEMU",
+            [str(root / "emu/qemu/build.sh"),
+             "de25-profile" if profiling else "de25"],
+            text=True, capture_output=True)
+        qemu = build.stdout.strip().splitlines()[-1]
+    plugin = args.plugin or find_plugin(qemu) if profiling else None
+    if custom_software_artifacts(args):
+        rom, storage, kernel, rom_elf = (
+            args.rom, args.storage, args.kernel, args.rom_elf)
+    else:
+        jobs = str(os.cpu_count() or 1)
+        timed_checked("userspace", ["make", "-j", jobs, "-C",
+                      str(root / "sw/userspace"), "all"],
+                      text=True, capture_output=True)
+        timed_checked("boot ROM", ["make", "-j", jobs, "-C",
+                      str(root / "sw/boot"), "build/astra_boot.bin"],
+                      text=True, capture_output=True)
+        rom = str(root / "sw/boot/build/astra_boot.bin")
+        kernel = str(root / "sw/kernel/build/astra_kernel.elf")
+        rom_elf = str(root / "sw/boot/build/astra_boot.elf")
+        storage = str(destination / "base-storage.img")
+        fingerprint = storage_fingerprint(root)
+        cache = Path(os.environ.get(
+            "ASTRA_PROF_CACHE", Path.home() / ".cache/astra68/astra-prof"))
+        cache.mkdir(parents=True, exist_ok=True)
+        cached_storage = cache / f"storage-{fingerprint}-128.img"
+        expected_size = 128 * (1 << 20)
+        if not cached_storage.is_file() or \
+                cached_storage.stat().st_size != expected_size:
+            cached_storage.unlink(missing_ok=True)
+            temporary_storage = str(cached_storage) + f".tmp-{os.getpid()}"
+            Path(temporary_storage).unlink(missing_ok=True)
+            try:
+                timed_checked(
+                    "coherent storage image",
+                    [sys.executable, str(root / "emu/qemu/astra_image.py"),
+                     "--create", temporary_storage, "128"],
+                    text=True, capture_output=True)
+                os.replace(temporary_storage, cached_storage)
+            finally:
+                Path(temporary_storage).unlink(missing_ok=True)
+        else:
+            print(f"astra-prof: coherent storage cache {fingerprint[:12]}",
+                  file=sys.stderr, flush=True)
+        shutil.copyfile(cached_storage, storage)
+    terminal_elf = str(root / "sw/userspace/services/terminal/build/m68k/terminal.elf")
+    desktop_elf = str(root / "sw/userspace/services/desktop/build/m68k/desktop.elf")
+    ready_message = event_message_id(terminal_elf, "shell ready") \
+        if mode in ("command", "latency") else 0
+    desktop_ready_message = event_message_id(desktop_elf, "desktop ready") \
+        if mode in ("command", "latency") else 0
+    required = [qemu, rom, storage, kernel, rom_elf,
+                str(root / "tools/astra-prof-de25-boot.sh"),
+                str(root / "tools/measure-terminal-text.py"),
+                str(root / "tools/qemu-perf-wrapper.sh")]
+    if profiling:
+        required.append(plugin)
+    if mode in ("command", "latency"):
+        required += [terminal_elf, desktop_elf]
+    missing = [path for path in required if not Path(path).is_file()]
+    if missing:
+        raise RuntimeError("missing artifact: " + ", ".join(missing))
+
+    remote = f"/var/tmp/astra-prof-{os.getpid()}"
+    board = args.board
+    run_checked(["ssh", board, "mkdir", "-p", remote])
+    filenames = [qemu, rom, storage,
+                 str(root / "tools/astra-prof-de25-boot.sh"),
+                 str(root / "tools/measure-terminal-text.py"),
+                 str(root / "tools/qemu-perf-wrapper.sh")]
+    if profiling:
+        filenames.append(plugin)
+    try:
+        timed_checked("artifact transfer",
+                      ["scp", *filenames, f"{board}:{remote}/"])
+        remote_command = [
+            "sh", f"{remote}/astra-prof-de25-boot.sh", remote,
+            f"{remote}/{Path(qemu).name}",
+            f"{remote}/{Path(plugin).name}" if profiling else "-",
+            f"{remote}/{Path(rom).name}", f"{remote}/{Path(storage).name}",
+            args.stop_marker,
+            str(args.timeout), "true" if args.memory else "false",
+            "true" if args.host_perf else "false",
+            mode, str(getattr(args, "runs", 1)),
+            str(getattr(args, "warmups", 0)), command_text,
+            cleanup or "", hex(ready_message) if ready_message else "",
+            hex(desktop_ready_message) if desktop_ready_message else "",
+            ",".join([*(f"probe=0x{probe:x}" for probe in args.probe),
+                      *([f"register={args.probe_register}"]
+                        if args.probe_register else [])]),
+            str(getattr(args, "max_milliseconds", 0) or 0),
+        ]
+        started = time.monotonic()
+        print("astra-prof: physical capture...", file=sys.stderr, flush=True)
+        result = subprocess.run(["ssh", board, shlex.join(remote_command)])
+        print(f"astra-prof: physical capture done in "
+              f"{time.monotonic() - started:.1f}s",
+              file=sys.stderr, flush=True)
+        artifacts = ["console.log", "metadata.txt", "trace.bin"]
+        if profiling:
+            artifacts.append("profile.aprof")
+        if args.host_perf:
+            artifacts += ["host-perf.data", "host-perf.txt"]
+        if mode in ("command", "latency"):
+            artifacts.append("command-metrics.jsonl")
+        for name in artifacts:
+            subprocess.run(["scp", f"{board}:{remote}/{name}",
+                            str(destination / name)], check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"DE25 profile failed; artifacts retained in {destination}")
+    finally:
+        subprocess.run(["ssh", board, "rm", "-rf", "--", remote], check=False)
+    if not profiling:
+        print(destination / "command-metrics.jsonl")
+        return 0
+    print(destination / "profile.aprof")
+    trace = subprocess.run([sys.executable, str(root / "tools/trace_decode.py"),
+                            str(destination / "trace.bin")],
+                           text=True, capture_output=True)
+    if trace.returncode == 0:
+        (destination / "trace.txt").write_text(trace.stdout)
+    else:
+        print(trace.stderr.strip(), file=sys.stderr)
+    images = [parse_image(f"kernel={kernel}"), parse_image(f"rom={rom_elf}")]
+    images += target_images(root)
+    images += getattr(args, "image", [])
+    report_args = argparse.Namespace(profile=str(destination / "profile.aprof"),
+                                     image=images,
+                                     nm=args.nm, limit=args.limit)
+    return command_report(report_args)
+
+
+def command_annotate(args):
+    intervals = parse_profile(args.profile)
+    images = relocate_images(intervals, [load_symbols(args.image, args.nm)])
+    if len(images) != 1:
+        raise RuntimeError("profile cannot uniquely relocate image")
+    image = images[0]
+    for block in annotated_blocks(intervals, image)[:args.limit]:
+        start = link_address(image, block["vaddr"])
+        end = start + block["bytes"]
+        print(f"\n# {block['executions']:,} executions, "
+              f"{block['executions'] * block['insns']:,} instructions",
+              flush=True)
+        subprocess.run([args.objdump, "-d", "-S", f"--start-address={start}",
+                        f"--stop-address={end}", image["path"]], check=True)
+    return 0
+
+
+def command_doctor(args):
+    checks = {
+        "nm": shutil.which(args.nm),
+        "objdump": shutil.which(args.objdump),
+        "perf": args.perf or shutil.which("perf"),
+    }
+    if args.qemu:
+        checks["qemu"] = args.qemu if Path(args.qemu).is_file() else None
+        try:
+            checks["plugin"] = find_plugin(args.qemu)
+        except RuntimeError:
+            checks["plugin"] = None
+    failed = False
+    for name, value in checks.items():
+        print(f"{name:<8} {value or 'MISSING'}")
+        failed |= value is None
+    return 1 if failed else 0
+
+
+def parser():
+    result = argparse.ArgumentParser(prog="astra-prof")
+    commands = result.add_subparsers(dest="subcommand", required=True)
+
+    def add_de25_arguments(command, host_perf):
+        command.add_argument("--output", required=True)
+        command.add_argument("--board", default="root@192.168.1.52")
+        command.add_argument("--qemu")
+        command.add_argument("--plugin")
+        command.add_argument("--rom")
+        command.add_argument("--storage")
+        command.add_argument("--kernel")
+        command.add_argument("--rom-elf")
+        command.add_argument("--stop-marker", default="stage 8")
+        command.add_argument("--timeout", type=int, default=120)
+        command.add_argument("--memory", action="store_true")
+        command.add_argument("--probe", action="append", type=parse_address,
+                             default=[])
+        command.add_argument("--probe-register", type=parse_register)
+        command.add_argument("--host-perf", action=argparse.BooleanOptionalAction,
+                             default=host_perf)
+        command.add_argument("--nm", default="m68k-astra-nm")
+        command.add_argument("--limit", type=int, default=30)
+    build = commands.add_parser("build", help="build profiled QEMU and plugin")
+    build.add_argument("--target", choices=("de25", "arty"), default="de25")
+    build.set_defaults(run=command_build)
+
+    report = commands.add_parser("report", help="rank hot guest functions")
+    report.add_argument("profile")
+    report.add_argument("--image", action="append", type=parse_image, default=[])
+    report.add_argument("--userspace-root",
+                        help="add every built userspace debug ELF below ROOT")
+    report.add_argument("--nm", default="m68k-astra-nm")
+    report.add_argument("--limit", type=int, default=30)
+    report.set_defaults(run=command_report)
+
+    compare = commands.add_parser("compare", help="compare repeated profiles")
+    compare.add_argument("baseline")
+    compare.add_argument("candidate")
+    compare.set_defaults(run=command_compare)
+
+    compare_latency = commands.add_parser(
+        "compare-latency", help="compare pooled physical latency artifacts")
+    compare_latency.add_argument("--baseline", action="append", required=True)
+    compare_latency.add_argument("--candidate", action="append", required=True)
+    compare_latency.set_defaults(run=command_compare_latency)
+
+    control = commands.add_parser("control", help="control a live interval")
+    control.add_argument("socket")
+    control.add_argument("action", choices=("start", "stop", "status"))
+    control.add_argument("label", nargs="?", default="profile")
+    control.add_argument("--timeout", type=float, default=2)
+    control.set_defaults(run=command_control)
+
+    record = commands.add_parser("record", help="run QEMU and write a profile")
+    record.add_argument("--output", required=True)
+    record.add_argument("--label", default="profile")
+    record.add_argument("--plugin")
+    record.add_argument("--qemu")
+    record.add_argument("--memory", action="store_true")
+    record.add_argument("--probe", action="append", type=parse_address,
+                        default=[])
+    record.add_argument("--probe-register", type=parse_register)
+    record.add_argument("--timeout", type=float)
+    record.add_argument("--perf-data")
+    record.add_argument("--perf")
+    record.add_argument("--frequency", type=int, default=999)
+    record.add_argument("command", nargs=argparse.REMAINDER)
+    record.set_defaults(run=command_record)
+
+    annotate = commands.add_parser("annotate", help="disassemble hot blocks")
+    annotate.add_argument("profile")
+    annotate.add_argument("--image", required=True, type=parse_image)
+    annotate.add_argument("--nm", default="m68k-astra-nm")
+    annotate.add_argument("--objdump", default="m68k-astra-objdump")
+    annotate.add_argument("--limit", type=int, default=10)
+    annotate.set_defaults(run=command_annotate)
+
+    de25 = commands.add_parser("de25-boot", help="record and report one physical boot")
+    add_de25_arguments(de25, True)
+    de25.set_defaults(run=command_de25_boot, profile_mode="boot")
+
+    de25_command = commands.add_parser(
+        "de25-command", help="record and report repeated physical commands")
+    add_de25_arguments(de25_command, False)
+    de25_command.add_argument("--runs", type=int, default=5)
+    de25_command.add_argument("--warmups", type=int, default=2)
+    de25_command.add_argument("--cleanup")
+    de25_command.add_argument("--image", action="append", type=parse_image,
+                              default=[])
+    de25_command.add_argument("profile_command", nargs="+")
+    de25_command.set_defaults(run=command_de25_boot, profile_mode="command")
+
+    de25_latency = commands.add_parser(
+        "de25-latency", help="gate uninstrumented physical command latency")
+    add_de25_arguments(de25_latency, False)
+    de25_latency.add_argument("--runs", type=int, default=5)
+    de25_latency.add_argument("--warmups", type=int, default=2)
+    de25_latency.add_argument("--cleanup")
+    de25_latency.add_argument("--max-milliseconds", type=float, default=500.0)
+    de25_latency.add_argument("profile_command", nargs="+")
+    de25_latency.set_defaults(run=command_de25_boot, profile_mode="latency")
+
+    doctor = commands.add_parser("doctor", help="check profiling dependencies")
+    doctor.add_argument("--qemu")
+    doctor.add_argument("--nm", default="m68k-astra-nm")
+    doctor.add_argument("--objdump", default="m68k-astra-objdump")
+    doctor.add_argument("--perf")
+    doctor.set_defaults(run=command_doctor)
+    return result
+
+
+def main(argv=None):
+    args = parser().parse_args(argv)
+    if hasattr(args, "limit") and args.limit < 1:
+        raise SystemExit("limit must be positive")
+    if hasattr(args, "runs") and args.runs < 1:
+        raise SystemExit("runs must be positive")
+    if hasattr(args, "warmups") and args.warmups < 0:
+        raise SystemExit("warmups cannot be negative")
+    if hasattr(args, "max_milliseconds") and args.max_milliseconds <= 0:
+        raise SystemExit("maximum milliseconds must be positive")
+    try:
+        return args.run(args)
+    except (OSError, RuntimeError, ValueError) as error:
+        print(f"astra-prof: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

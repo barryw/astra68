@@ -56,98 +56,102 @@ static AstraVfsPortWorker workers[STORAGE_WORKER_MAX];
 static uint32_t worker_handles[STORAGE_WORKER_MAX - 1u];
 static AstraThreadStart worker_starts[STORAGE_WORKER_MAX - 1u];
 static uint32_t worker_count = 2u;
-static uint32_t state_lock;
-static uint32_t mount_lock;
-static uint32_t mount_reader_lock;
-static uint32_t cache_lock;
-static uint32_t fill_lock;
-static uint32_t backend_table_lock;
-static uint32_t backend_scan_lock;
+static _Alignas(4) uint32_t state_lock;
+static _Alignas(4) uint32_t mount_lock;
+static _Alignas(4) uint32_t mount_reader_lock;
+static _Alignas(4) uint32_t cache_lock;
+static _Alignas(4) uint32_t fill_lock;
+static _Alignas(4) uint32_t backend_table_lock;
+static _Alignas(4) uint32_t backend_scan_lock;
 static uint32_t journal_timer;
 static uint32_t journal_thread_handle;
 static AstraThreadStart journal_thread_start;
 static uint32_t mount_readers;
 
-static int vfs_state_acquire(void *context)
+static void storage_lock_failure(const char *operation, uint32_t status)
 {
-    uint32_t handle = *(const uint32_t *)context;
-
-    return astra_wait_one(handle, ASTRA_DEADLINE_FOREVER, NULL) ==
-           ASTRA_SYSCALL_OK;
-}
-
-static void vfs_state_release(void *context)
-{
-    uint32_t handle = *(const uint32_t *)context;
-
-    if (astra_rt_signal(handle, 1u, NULL) != ASTRA_SYSCALL_OK)
-        astra_process_exit(STORAGE_FAIL_LOCK);
+    (void)astra_log_failure(operation, status);
+    astra_process_exit(STORAGE_FAIL_LOCK);
 }
 
 static void ext4_lock(void)
 {
-    if (astra_wait_one(mount_lock, ASTRA_DEADLINE_FOREVER, NULL) !=
-        ASTRA_SYSCALL_OK)
-        astra_process_exit(STORAGE_FAIL_LOCK);
+    uint32_t status = astra_mutex_lock(&mount_lock);
+
+    if (status != ASTRA_SYSCALL_OK)
+        storage_lock_failure("storage mount lock", status);
 }
 
 static void ext4_unlock(void)
 {
-    if (astra_rt_signal(mount_lock, 1u, NULL) != ASTRA_SYSCALL_OK)
-        astra_process_exit(STORAGE_FAIL_LOCK);
+    uint32_t status = astra_mutex_unlock(&mount_lock);
+
+    if (status != ASTRA_SYSCALL_OK)
+        storage_lock_failure("storage mount unlock", status);
 }
 
 static void ext4_read_lock(void)
 {
-    if (astra_wait_one(mount_reader_lock, ASTRA_DEADLINE_FOREVER, NULL) !=
-        ASTRA_SYSCALL_OK)
-        astra_process_exit(STORAGE_FAIL_LOCK);
+    uint32_t status = astra_mutex_lock(&mount_reader_lock);
+
+    if (status != ASTRA_SYSCALL_OK)
+        storage_lock_failure("storage reader lock", status);
     if (mount_readers == 0u &&
-        astra_wait_one(mount_lock, ASTRA_DEADLINE_FOREVER, NULL) !=
-            ASTRA_SYSCALL_OK)
-        astra_process_exit(STORAGE_FAIL_LOCK);
+        (status = astra_mutex_lock(&mount_lock)) != ASTRA_SYSCALL_OK)
+        storage_lock_failure("storage first reader", status);
     ++mount_readers;
-    if (astra_rt_signal(mount_reader_lock, 1u, NULL) != ASTRA_SYSCALL_OK)
-        astra_process_exit(STORAGE_FAIL_LOCK);
+    status = astra_mutex_unlock(&mount_reader_lock);
+    if (status != ASTRA_SYSCALL_OK)
+        storage_lock_failure("storage reader unlock", status);
 }
 
 static void ext4_read_unlock(void)
 {
-    if (astra_wait_one(mount_reader_lock, ASTRA_DEADLINE_FOREVER, NULL) !=
-        ASTRA_SYSCALL_OK || mount_readers == 0u)
-        astra_process_exit(STORAGE_FAIL_LOCK);
+    uint32_t status = astra_mutex_lock(&mount_reader_lock);
+
+    if (status != ASTRA_SYSCALL_OK)
+        storage_lock_failure("storage reader release lock", status);
+    if (mount_readers == 0u)
+        storage_lock_failure("storage reader underflow", 0u);
     --mount_readers;
     if (mount_readers == 0u &&
-        astra_rt_signal(mount_lock, 1u, NULL) != ASTRA_SYSCALL_OK)
-        astra_process_exit(STORAGE_FAIL_LOCK);
-    if (astra_rt_signal(mount_reader_lock, 1u, NULL) != ASTRA_SYSCALL_OK)
-        astra_process_exit(STORAGE_FAIL_LOCK);
+        (status = astra_mutex_unlock(&mount_lock)) != ASTRA_SYSCALL_OK)
+        storage_lock_failure("storage last reader", status);
+    status = astra_mutex_unlock(&mount_reader_lock);
+    if (status != ASTRA_SYSCALL_OK)
+        storage_lock_failure("storage reader release unlock", status);
 }
 
 static void ext4_cache_lock(void)
 {
-    if (astra_wait_one(cache_lock, ASTRA_DEADLINE_FOREVER, NULL) !=
-        ASTRA_SYSCALL_OK)
-        astra_process_exit(STORAGE_FAIL_LOCK);
+    uint32_t status = astra_mutex_lock(&cache_lock);
+
+    if (status != ASTRA_SYSCALL_OK)
+        storage_lock_failure("storage cache lock", status);
 }
 
 static void ext4_cache_unlock(void)
 {
-    if (astra_rt_signal(cache_lock, 1u, NULL) != ASTRA_SYSCALL_OK)
-        astra_process_exit(STORAGE_FAIL_LOCK);
+    uint32_t status = astra_mutex_unlock(&cache_lock);
+
+    if (status != ASTRA_SYSCALL_OK)
+        storage_lock_failure("storage cache unlock", status);
 }
 
 static void ext4_fill_lock(void)
 {
-    if (astra_wait_one(fill_lock, ASTRA_DEADLINE_FOREVER, NULL) !=
-        ASTRA_SYSCALL_OK)
-        astra_process_exit(STORAGE_FAIL_LOCK);
+    uint32_t status = astra_mutex_lock(&fill_lock);
+
+    if (status != ASTRA_SYSCALL_OK)
+        storage_lock_failure("storage fill lock", status);
 }
 
 static void ext4_fill_unlock(void)
 {
-    if (astra_rt_signal(fill_lock, 1u, NULL) != ASTRA_SYSCALL_OK)
-        astra_process_exit(STORAGE_FAIL_LOCK);
+    uint32_t status = astra_mutex_unlock(&fill_lock);
+
+    if (status != ASTRA_SYSCALL_OK)
+        storage_lock_failure("storage fill unlock", status);
 }
 
 static const struct ext4_lock ext4_locks = {
@@ -284,29 +288,7 @@ int astra_main(const AstraStartupInfo *startup)
     if (device == NULL || irq == NULL || bootstrap == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
 
-    if (astra_rt_semaphore_create(
-            1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL, &state_lock) !=
-            ASTRA_SYSCALL_OK ||
-        astra_rt_semaphore_create(
-            1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL, &mount_lock) !=
-            ASTRA_SYSCALL_OK ||
-        astra_rt_semaphore_create(
-            1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
-            &mount_reader_lock) != ASTRA_SYSCALL_OK ||
-        astra_rt_semaphore_create(
-            1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL, &cache_lock) !=
-            ASTRA_SYSCALL_OK ||
-        astra_rt_semaphore_create(
-            1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL, &fill_lock) !=
-            ASTRA_SYSCALL_OK ||
-        astra_rt_semaphore_create(
-            1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
-            &backend_table_lock) != ASTRA_SYSCALL_OK ||
-        astra_rt_semaphore_create(
-            1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
-            &backend_scan_lock) !=
-            ASTRA_SYSCALL_OK ||
-        astra_rt_semaphore_create(0u, 1u, ASTRA_RIGHT_WAIT,
+    if (astra_rt_semaphore_create(0u, 1u, ASTRA_RIGHT_WAIT,
                                   &journal_timer) != ASTRA_SYSCALL_OK)
         status = STORAGE_FAIL_LOCK;
     else
@@ -327,9 +309,10 @@ int astra_main(const AstraStartupInfo *startup)
         } else if (!astra_vfs_ext4_init(&backend, MOUNT_POINT,
                                         backend_storage, backend_capacity) ||
                    !astra_vfs_ext4_set_locks(
-                       &backend, vfs_state_acquire, vfs_state_release,
-                       &backend_table_lock, vfs_state_acquire,
-                       vfs_state_release, &backend_scan_lock) ||
+                       &backend, astra_vfs_state_lock_acquire,
+                       astra_vfs_state_lock_release, &backend_table_lock,
+                       astra_vfs_state_lock_acquire,
+                       astra_vfs_state_lock_release, &backend_scan_lock) ||
                    !astra_vfs_service_init(
                        &service, astra_vfs_ext4_ops(), &backend,
                        service_sessions, ASTRA_VFS_SESSION_MAX,
@@ -339,7 +322,8 @@ int astra_main(const AstraStartupInfo *startup)
     }
     if (status == ASTRA_STATUS_OK &&
         !astra_vfs_service_set_state_lock(
-             &service, vfs_state_acquire, vfs_state_release, &state_lock))
+             &service, astra_vfs_state_lock_acquire,
+             astra_vfs_state_lock_release, &state_lock))
         status = STORAGE_FAIL_LOCK;
     if (status == ASTRA_STATUS_OK &&
         !astra_vfs_service_set_state_wait(
@@ -355,7 +339,8 @@ int astra_main(const AstraStartupInfo *startup)
         status = ASTRA_STATUS_LIMIT;
     if (status == ASTRA_STATUS_OK &&
         !astra_vfs_port_service_set_state_lock(
-            &port, vfs_state_acquire, vfs_state_release, &state_lock))
+            &port, astra_vfs_state_lock_acquire,
+            astra_vfs_state_lock_release, &state_lock))
         status = STORAGE_FAIL_LOCK;
 
     if (status == ASTRA_STATUS_OK) {

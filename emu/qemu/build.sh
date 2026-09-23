@@ -118,9 +118,13 @@ if [ ! -f "$BUILD/build.ninja" ]; then
     esac
 fi
 
+TARGETS=qemu-system-m68k
+case "$PROFILE" in
+    *-profile) TARGETS="$TARGETS contrib-plugins" ;;
+esac
 if [ -n "${ASTRA_QEMU_JOBS:-}" ]; then
-    ninja -C "$BUILD" -j "$ASTRA_QEMU_JOBS" qemu-system-m68k >&2
+    ninja -C "$BUILD" -j "$ASTRA_QEMU_JOBS" $TARGETS >&2
 else
-    ninja -C "$BUILD" qemu-system-m68k >&2
+    ninja -C "$BUILD" $TARGETS >&2
 fi
 printf '%s\n' "$BUILD/qemu-system-m68k"

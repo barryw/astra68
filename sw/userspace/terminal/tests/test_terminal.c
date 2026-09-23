@@ -25,6 +25,20 @@ static int render_should_fail;
 static uint32_t scroll_calls;
 static uint32_t scrolled_rows;
 static uint32_t preserved_rows;
+static AstraTextCell history_rows[TEST_ROWS][TEST_COLUMNS];
+static uint32_t history_columns;
+static uint32_t history_calls;
+
+static void record_history(void *context, const AstraTextCell *cells,
+                           uint32_t columns)
+{
+    (void)context;
+    assert(columns <= TEST_COLUMNS);
+    assert(history_calls < TEST_ROWS);
+    memcpy(history_rows[history_calls], cells, columns * sizeof(*cells));
+    history_columns = columns;
+    ++history_calls;
+}
 
 static int record(void *context, uint32_t row, uint32_t column,
                   const AstraTextCell *cells, uint32_t count)
@@ -72,12 +86,42 @@ static void reset(AstraTerminal *terminal)
     scroll_calls = 0u;
     scrolled_rows = 0u;
     preserved_rows = 0u;
+    history_columns = 0u;
+    history_calls = 0u;
     assert(astra_terminal_init(terminal, TEST_COLUMNS, TEST_ROWS,
                                terminal_storage, sizeof(terminal_storage),
                                record, NULL) == ASTRA_TERMINAL_OK);
     assert(astra_terminal_flush(terminal) == ASTRA_TERMINAL_OK);
     render_calls = 0u;
     rendered_cells = 0u;
+}
+
+static void test_history_observes_only_primary_full_screen_scrolls(void)
+{
+    AstraTerminal terminal;
+
+    reset(&terminal);
+    astra_terminal_set_history(&terminal, record_history, NULL);
+    astra_terminal_write(&terminal,
+                         "\x1b[31mfirst\x1b[0m\nsecond\nthird\nfourth\n");
+    assert(history_calls == 1u && history_columns == TEST_COLUMNS);
+    assert(history_rows[0][0].codepoint == 'f' &&
+           history_rows[0][0].foreground == 1u);
+
+    reset(&terminal);
+    astra_terminal_set_history(&terminal, record_history, NULL);
+    astra_terminal_write(&terminal, "one\ntwo\nthree\nfour\x1b[2S");
+    assert(history_calls == 2u &&
+           history_rows[0][0].codepoint == 'o' &&
+           history_rows[1][0].codepoint == 't');
+
+    reset(&terminal);
+    astra_terminal_set_history(&terminal, record_history, NULL);
+    astra_terminal_write(&terminal,
+                         "\x1b[?1049halt\none\ntwo\nthree\nfour\n");
+    assert(history_calls == 0u);
+    astra_terminal_write(&terminal, "\x1b[?1049l\x1b[2;3r\x1b[3;1H\n");
+    assert(history_calls == 0u);
 }
 
 /* The renderer's grid must equal the model's, cell for cell. */
@@ -569,6 +613,7 @@ int main(void)
     test_scroll_region_and_osc_are_bounded();
     test_flush_reports_only_changes();
     test_scroll_moves_rendered_rows_once();
+    test_history_observes_only_primary_full_screen_scrolls();
     test_render_failure_is_reported();
     test_model_works_without_a_renderer();
     test_resize_preserves_cells_and_clamps_cursor();

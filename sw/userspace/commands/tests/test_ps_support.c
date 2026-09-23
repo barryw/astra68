@@ -3,12 +3,26 @@
 #include <string.h>
 
 #include <astra/process.h>
+#include <astra/vfs_service.h>
 
 #include "../ps/ps_support.h"
+
+static AstraProcSnapshot snapshot_storage[40];
+static int fail_allocation;
+
+static void *
+test_reallocate(void *pointer, size_t size)
+{
+    (void)pointer;
+    if (fail_allocation || size > sizeof(snapshot_storage))
+        return NULL;
+    return snapshot_storage;
+}
 
 int main(void)
 {
     AstraProcSnapshot record = {0};
+    AstraProcSnapshot *records = NULL;
     char output[512];
     uint32_t length;
 
@@ -37,5 +51,20 @@ int main(void)
     assert(output[0] == 'z');
     memset(record.name, 'x', sizeof(record.name));
     assert(astra_ps_format_row(output, sizeof(output), &record) == 0u);
+    assert(astra_ps_snapshot_allocate(sizeof(snapshot_storage),
+                                      test_reallocate, &records) ==
+           ASTRA_VFS_OK);
+    assert(records == snapshot_storage);
+    fail_allocation = 1;
+    records = (AstraProcSnapshot *)(uintptr_t)1u;
+    assert(astra_ps_snapshot_allocate(sizeof(AstraProcSnapshot),
+                                      test_reallocate, &records) ==
+           ASTRA_VFS_ERR_LIMIT);
+    assert(records == NULL);
+    fail_allocation = 0;
+    assert(astra_ps_snapshot_allocate(sizeof(AstraProcSnapshot) + 1u,
+                                      test_reallocate, &records) ==
+           ASTRA_VFS_ERR_PROTOCOL);
+    assert(records == NULL);
     return 0;
 }

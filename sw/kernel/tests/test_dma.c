@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <string.h>
 
+static uint8_t physical_memory[0x02000000u];
+
 static void add_range(AstraBootInfo *info, uint32_t base, uint32_t size,
                       uint32_t type, uint32_t flags)
 {
@@ -72,6 +74,8 @@ static void initialize_memory(void)
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
     astra_boot_info_finalize(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    kernel_memory_test_bind_physical_memory(physical_memory, info.ram_base,
+                                            sizeof(physical_memory));
     kernel_dma_init();
 }
 
@@ -188,23 +192,54 @@ static void test_owner_revoke_defers_in_flight_memory(void)
     assert(stats.stale_completions == 1u);
 }
 
-static void test_bounded_table(void)
+static void test_table_grows_past_old_process_derived_limit(void)
 {
-    KernelDmaHandle handles[KERNEL_DMA_MAX_BUFFERS];
-    KernelDmaHandle extra = KERNEL_DMA_HANDLE_INVALID;
+    enum {
+        LEGACY_DMA_CAPACITY = 128u,
+        TEST_DMA_CAPACITY = LEGACY_DMA_CAPACITY + 8u
+    };
+    KernelDmaHandle handles[TEST_DMA_CAPACITY];
     KernelDmaStats stats;
 
     initialize_memory();
-    for (uint32_t index = 0u; index < KERNEL_DMA_MAX_BUFFERS; ++index)
+    for (uint32_t index = 0u; index < TEST_DMA_CAPACITY; ++index)
         assert(kernel_dma_create(1u, 1u, 1u, &handles[index]) ==
                KERNEL_DMA_OK);
-    assert(kernel_dma_create(1u, 1u, 1u, &extra) ==
-           KERNEL_DMA_NO_RESOURCES);
     assert(kernel_dma_stats(&stats));
-    assert(stats.live_buffers == KERNEL_DMA_MAX_BUFFERS);
-    assert(stats.create_failures == 1u);
-    for (uint32_t index = 0u; index < KERNEL_DMA_MAX_BUFFERS; ++index)
+    assert(stats.live_buffers == TEST_DMA_CAPACITY);
+    assert(stats.create_failures == 0u);
+    for (uint32_t index = 0u; index < TEST_DMA_CAPACITY; ++index)
         assert(kernel_dma_close(handles[index], 1u) == KERNEL_DMA_OK);
+    assert(kernel_dma_valid());
+}
+
+static void test_metadata_allocation_failure_is_atomic(void)
+{
+    KernelAllocationStats metadata;
+    KernelAllocationStats objects;
+    KernelDmaHandle handle = 0xdeadbeefu;
+    KernelMemoryStats baseline;
+    KernelMemoryStats after;
+
+    initialize_memory();
+    assert(kernel_memory_stats(&baseline));
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_DMA_METADATA, 1u);
+    assert(kernel_dma_create(23u, KERNEL_PAGE_SIZE, 1u, &handle) ==
+           KERNEL_DMA_OUT_OF_MEMORY);
+    assert(handle == KERNEL_DMA_HANDLE_INVALID);
+    assert(kernel_memory_stats(&after));
+    assert(after.free_frames == baseline.free_frames);
+    assert(after.owner_slots_used == baseline.owner_slots_used);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_DMA_METADATA, &metadata));
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_DMA_OBJECT, &objects));
+    assert(metadata.current_units == 0u);
+    assert(metadata.injected_failures == 1u);
+    assert(objects.current_units == 0u);
+    assert(kernel_dma_valid());
+    assert(kernel_allocation_valid());
 }
 
 static void test_allocation_injection_is_atomic(void)
@@ -217,6 +252,9 @@ static void test_allocation_injection_is_atomic(void)
     KernelMemoryStats after;
 
     initialize_memory();
+    assert(kernel_dma_create(23u, KERNEL_PAGE_SIZE, 1u, &handle) ==
+           KERNEL_DMA_OK);
+    assert(kernel_dma_close(handle, 23u) == KERNEL_DMA_OK);
     assert(kernel_memory_stats(&baseline));
 
     kernel_allocation_test_fail_site(
@@ -270,7 +308,8 @@ int main(void)
     test_create_transfer_complete_and_stale_handle();
     test_checked_ranges_and_ownership();
     test_owner_revoke_defers_in_flight_memory();
-    test_bounded_table();
+    test_table_grows_past_old_process_derived_limit();
+    test_metadata_allocation_failure_is_atomic();
     test_allocation_injection_is_atomic();
     puts("KERNEL DMA PASS");
     return 0;

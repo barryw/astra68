@@ -89,6 +89,10 @@ typedef int (*AstraTerminalReply)(void *context, const uint8_t *bytes,
                                   uint32_t length);
 /** Observe a semantic prompt boundary. @param context Observer context. */
 typedef void (*AstraTerminalPrompt)(void *context);
+/** Receives a primary-screen row immediately before it scrolls out of view. */
+typedef void (*AstraTerminalHistory)(void *context,
+                                     const AstraTextCell *cells,
+                                     uint32_t columns);
 
 /** Caller-owned terminal model and rendering callbacks. */
 typedef struct AstraTerminal {
@@ -138,6 +142,8 @@ typedef struct AstraTerminal {
     void *reply_context; /**< Context passed to reply. */
     AstraTerminalPrompt prompt; /**< Semantic prompt observer. */
     void *prompt_context; /**< Context passed to prompt. */
+    AstraTerminalHistory history; /**< Primary-screen scrollback observer. */
+    void *history_context; /**< Context passed to history. */
     /* One line being assembled for `echo`; never read by the model itself. */
     uint32_t echo_length; /**< Bytes assembled in echo_line. */
     uint32_t echo_columns; /**< Display columns assembled in echo_line. */
@@ -193,6 +199,9 @@ void astra_terminal_set_reply(AstraTerminal *terminal,
 /** Observe OSC 133;B prompt-end markers. @param terminal Initialized model. @param prompt Observer callback, or NULL. @param context Observer context. */
 void astra_terminal_set_prompt(AstraTerminal *terminal,
                                AstraTerminalPrompt prompt, void *context);
+/** Observe rows leaving the primary full-screen scroll region. @param terminal Initialized model. @param history Observer callback, or NULL. @param context Observer context. */
+void astra_terminal_set_history(AstraTerminal *terminal,
+                                AstraTerminalHistory history, void *context);
 /** Install accelerated scroll delivery. @param terminal Initialized model. @param scroll Scroll callback, or NULL. */
 void astra_terminal_set_scroll(AstraTerminal *terminal,
                                AstraTerminalScroll scroll);

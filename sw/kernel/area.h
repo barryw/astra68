@@ -9,49 +9,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/*
- * Four was one short of what a terminal in a window needs: its own surface,
- * and a transfer area for each mount it reads through. It ran out between
- * WORK: and EVENTS:, and what a person saw was `cat: limit reached` on a file
- * that was there. Kept at a quarter of the pool, so the quota still means
- * that no one process can spend everybody else's share.
- */
 #define KERNEL_AREA_PAGE_MAX \
-    (KERNEL_VM_AREA_SLOT_SIZE / KERNEL_PAGE_SIZE)
-/*
- * What one owner may have *committed* across all of its areas.
- *
- * This was one slot's worth -- 512 pages -- from when creating an area
- * committed it, so reserving and spending were the same act and one number
- * could bound both. They are different acts now, and the number that bounds
- * reservations is KERNEL_AREA_OWNER_MAX: eight slots of address space, which
- * is free. So this bounds only frames, and it is the owner's whole allowance
- * rather than one slot of it, because a program with a large heap should not
- * thereby lose its ability to hold a surface.
- *
- * Sized against a measurement rather than a feeling. `heapbench` runs
- * editor-shaped churn -- many small objects, mixed lifetimes, occasional
- * large buffers -- and its peak footprint is 169 pages, 688 KiB, for 403 KiB
- * live. At the old 512 that left 343 pages for everything else a program
- * holds, and a 640x480 surface is 75 of them; two windows and a couple of
- * transfer areas and an editor is refused a buffer it should have had. At
- * 4096 the owner's frames are bounded by the address space it was already
- * allowed to name, and what actually refuses is
- * KERNEL_AREA_SYSTEM_PAGE_MAX and then the free frame count, which are the
- * honest limits.
- */
-#define KERNEL_AREA_OWNER_PAGE_MAX \
-    (KERNEL_AREA_OWNER_MAX * KERNEL_AREA_PAGE_MAX)
-#define KERNEL_AREA_SYSTEM_PAGE_MAX (KERNEL_AREA_MAX * KERNEL_AREA_PAGE_MAX)
-/*
- * Every address space may fill every process-local area slot. The mapping
- * table records those independent placements; the frame ledger separately
- * bounds how many address spaces may alias one committed page.
- */
-#define KERNEL_AREA_MAPPING_MAX \
-    (KERNEL_VM_AREA_SLOT_COUNT * KERNEL_VM_ADDRESS_SPACE_MAX)
-/* One address space can use every area slot; the VM layout is the quota. */
-#define KERNEL_AREA_PROCESS_MAPPING_MAX KERNEL_VM_AREA_SLOT_COUNT
+    ((ASTRA_SHARED_AREA_ADDRESS_END - ASTRA_SHARED_AREA_ADDRESS_START) / \
+     KERNEL_PAGE_SIZE)
 
 #define KERNEL_AREA_RIGHTS \
     ((1u << 0) | (1u << 1) | (1u << 2) | (1u << 5) | (1u << 6))
@@ -107,8 +67,8 @@ typedef struct KernelAreaSnapshot {
     uint16_t handle_references;
     uint16_t child_references;
     uint16_t mapping_references;
-    uint16_t page_count;
-    uint16_t committed_pages;
+    uint32_t page_count;
+    uint32_t committed_pages;
     uint8_t state;
     uint8_t frames_released;
     uint8_t reserved_form;

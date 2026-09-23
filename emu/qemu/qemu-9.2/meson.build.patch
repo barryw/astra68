@@ -9,3 +9,15 @@ index 84bc68f..3bc0be5 100644
 +m68k_ss.add(files('astra68.c'))
  
  hw_arch += {'m68k': m68k_ss}
+diff --git a/contrib/plugins/meson.build b/contrib/plugins/meson.build
+index 310ca3f..06d00e1 100644
+--- a/contrib/plugins/meson.build
++++ b/contrib/plugins/meson.build
+@@ -1,5 +1,5 @@
+-contrib_plugins = ['bbv', 'cache', 'cflow', 'drcov', 'execlog', 'hotblocks',
++contrib_plugins = ['astra_profile', 'bbv', 'cache', 'cflow', 'drcov', 'execlog', 'hotblocks',
+                    'hotpages', 'howvec', 'hwprofile', 'ips', 'stoptrigger']
+ if host_os != 'windows'
+   # lockstep uses socket.h
+   contrib_plugins += 'lockstep'
+ endif

@@ -12,6 +12,7 @@
 
 #define FAKE_COMPLETIONS 16u
 
+static uint8_t physical_memory[0x02000000u];
 static KernelPlatformBlockState fake_state;
 static KernelPlatformBlockCompletion fake_completions[FAKE_COMPLETIONS];
 static uint32_t fake_completion_read;
@@ -170,6 +171,8 @@ static void initialize_test(void)
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
     astra_boot_info_finalize(&info);
     assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    kernel_memory_test_bind_physical_memory(physical_memory, info.ram_base,
+                                            sizeof(physical_memory));
     kernel_dma_init();
 
     memset(&fake_state, 0, sizeof(fake_state));

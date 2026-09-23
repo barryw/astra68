@@ -24,7 +24,8 @@ ASTRA_EXTERN_C_BEGIN
 /** Internal one-definition guard shared with the raw trap ABI header. */
 #define ASTRA_AREA_ABI_CONSTANTS_DEFINED 1
 /** Maximum size of one shared or reserved area. */
-#define ASTRA_AREA_SIZE_MAX ASTRA_SHARED_AREA_SLOT_SIZE
+#define ASTRA_AREA_SIZE_MAX \
+    (ASTRA_SHARED_AREA_ADDRESS_END - ASTRA_SHARED_AREA_ADDRESS_START)
 /** Map readable pages. Every mapping must include this flag. */
 #define ASTRA_AREA_MAP_READ (1u << 0)
 /** Map writable pages; requires write rights on the area handle. */

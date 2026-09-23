@@ -247,6 +247,8 @@ static void test_header_batching_waits_and_wrap(void)
 static void test_ring_injection_releases_child_authority(void)
 {
     KernelAllocationStats allocation_stats;
+    KernelAllocationStats area_metadata_stats;
+    KernelAllocationStats metadata_stats;
     KernelArea *area;
     KernelAreaSnapshot snapshot;
     KernelMemoryStats baseline;
@@ -264,6 +266,12 @@ static void test_ring_injection_releases_child_authority(void)
            KERNEL_RING_NO_SLOT);
     assert(ring == NULL);
     ring = (KernelRing *)(uintptr_t)1u;
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_RING_METADATA, 1u);
+    assert(kernel_ring_create(41u, area, 0u, 16u, 4u, &ring) ==
+           KERNEL_RING_NO_SLOT);
+    assert(ring == NULL);
+    ring = (KernelRing *)(uintptr_t)1u;
     kernel_allocation_test_fail_global(1u);
     assert(kernel_ring_create(41u, area, 0u, 16u, 4u, &ring) ==
            KERNEL_RING_NO_SLOT);
@@ -274,14 +282,83 @@ static void test_ring_injection_releases_child_authority(void)
     assert(pool_stats.active_rings == 0u);
     kernel_area_handle_release(area, NULL);
     assert(kernel_memory_stats(&after));
-    assert(after.free_frames == baseline.free_frames);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_AREA_OBJECT_METADATA,
+        &area_metadata_stats));
+    assert(after.free_frames + area_metadata_stats.current_units ==
+           baseline.free_frames);
     assert(kernel_allocation_site_stats(
         KERNEL_ALLOCATION_SITE_RING_OBJECT, &allocation_stats));
     assert(allocation_stats.current_units == 0u);
     assert(allocation_stats.injected_failures == 2u);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_RING_METADATA, &metadata_stats));
+    assert(metadata_stats.current_units == 0u &&
+           metadata_stats.current_bytes == 0u &&
+           metadata_stats.injected_failures == 1u);
     assert(kernel_ring_pool_valid());
     assert(kernel_area_pool_valid());
     assert(kernel_allocation_valid());
+}
+
+static void test_ring_pool_grows_past_former_table(void)
+{
+    enum {
+        ring_bytes = KERNEL_RING_HEADER_SIZE + 16u * 4u,
+        ring_count = 257u
+    };
+    KernelRing *rings[ring_count];
+    KernelRingPoolStats stats;
+    KernelArea *area;
+
+    initialize_test();
+    assert(kernel_area_create(42u, 9u * KERNEL_PAGE_SIZE, 0u, &area) ==
+           KERNEL_AREA_OK);
+    for (uint32_t slot = 0u; slot < ring_count; ++slot) {
+        assert(kernel_ring_create(42u, area, slot * ring_bytes, 16u, 4u,
+                                  &rings[slot]) == KERNEL_RING_OK);
+    }
+    for (uint32_t slot = 0u; slot < ring_count; ++slot) {
+        kernel_ring_handle_release(
+            rings[slot], (void *)(uintptr_t)KERNEL_RING_ENDPOINT_PRODUCER);
+        kernel_ring_handle_release(
+            rings[slot], (void *)(uintptr_t)KERNEL_RING_ENDPOINT_CONSUMER);
+    }
+    kernel_area_handle_release(area, NULL);
+    assert(kernel_ring_pool_stats(&stats));
+    assert(stats.max_active_rings == ring_count);
+    assert(stats.allocation_failures == 0u);
+    assert(stats.active_rings == 0u);
+    assert(kernel_ring_pool_valid() && kernel_area_pool_valid());
+}
+
+static void test_ring_metadata_reset_discards_stale_pages(void)
+{
+    KernelAllocationStats metadata;
+    KernelArea *area;
+    KernelRing *ring;
+
+    initialize_test();
+    assert(kernel_area_create(43u, KERNEL_PAGE_SIZE, 0u, &area) ==
+           KERNEL_AREA_OK);
+    assert(kernel_ring_create(43u, area, 0u, 16u, 4u, &ring) ==
+           KERNEL_RING_OK);
+    kernel_ring_handle_release(
+        ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_PRODUCER);
+    kernel_ring_handle_release(
+        ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_CONSUMER);
+    kernel_area_handle_release(area, NULL);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_RING_METADATA, &metadata));
+    assert(metadata.current_units != 0u);
+
+    kernel_allocation_init();
+    assert(!kernel_ring_pool_valid());
+    kernel_ring_pool_init();
+    assert(kernel_ring_pool_valid());
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_RING_METADATA, &metadata));
+    assert(metadata.current_units == 0u && metadata.current_bytes == 0u);
 }
 
 static void test_overlap_corruption_and_creator_death_survival(void)
@@ -533,6 +610,8 @@ static void test_owner_death_wakes_waiters(void)
 static void test_repeated_lifecycle_returns_exact_baseline(void)
 {
     KernelAddressSpace space = {0};
+    KernelAllocationStats area_metadata;
+    KernelAllocationStats mapping_metadata;
     KernelAreaPoolStats area_stats;
     KernelRingPoolStats ring_stats;
     KernelMemoryStats initial_memory;
@@ -567,7 +646,14 @@ static void test_repeated_lifecycle_returns_exact_baseline(void)
                KERNEL_AREA_OK);
         kernel_area_handle_release(area, NULL);
         assert(kernel_memory_stats(&memory));
-        assert(memory.free_frames == baseline_memory.free_frames);
+        assert(kernel_allocation_site_stats(
+            KERNEL_ALLOCATION_SITE_AREA_MAPPING_METADATA,
+            &mapping_metadata));
+        assert(kernel_allocation_site_stats(
+            KERNEL_ALLOCATION_SITE_AREA_OBJECT_METADATA, &area_metadata));
+        assert(memory.free_frames + mapping_metadata.current_units +
+                   area_metadata.current_units ==
+               baseline_memory.free_frames);
         assert(kernel_area_pool_stats(&area_stats));
         assert(area_stats.active_areas == 0u);
         assert(area_stats.active_mappings == 0u);
@@ -579,7 +665,9 @@ static void test_repeated_lifecycle_returns_exact_baseline(void)
     assert(kernel_vm_destroy_address_space(&space) == KERNEL_VM_OK);
     assert(kernel_memory_release_owner(65u, NULL) == KERNEL_MEMORY_OK);
     assert(kernel_memory_stats(&memory));
-    assert(memory.free_frames == initial_memory.free_frames);
+    assert(memory.free_frames + mapping_metadata.current_units +
+               area_metadata.current_units ==
+           initial_memory.free_frames);
     assert(kernel_area_pool_stats(&area_stats));
     assert(area_stats.created_areas == 1000u);
     assert(area_stats.map_operations == 1000u);
@@ -590,29 +678,30 @@ static void test_repeated_lifecycle_returns_exact_baseline(void)
 
 static void test_clone_safe_kernel_copy_byte_ring(void)
 {
+    enum { TRANSFER_SIZE = 8192u };
     AstraBulkRingHeader header;
     KernelArea *area;
     KernelRing *ring;
     KernelRingPoolStats stats;
-    char input[ASTRA_BULK_RING_TRANSFER_MAX];
-    char output[ASTRA_BULK_RING_TRANSFER_MAX];
+    char input[TRANSFER_SIZE];
+    char output[TRANSFER_SIZE];
     uint32_t copied;
     uint32_t closed;
     uint32_t woken;
     uint32_t written;
 
     initialize_test();
-    assert(kernel_area_create(90u, 2u * KERNEL_PAGE_SIZE, 0u, &area) ==
+    assert(kernel_area_create(90u, 3u * KERNEL_PAGE_SIZE, 0u, &area) ==
            KERNEL_AREA_OK);
     assert(kernel_ring_create(90u, area, 0u, 1u, 2048u, &ring) ==
            KERNEL_RING_INVALID_ARGUMENT);
     assert(kernel_ring_create_flagged(
-               90u, area, 0u, 1u, 2048u,
+               90u, area, 0u, 1u, TRANSFER_SIZE,
                KERNEL_RING_CREATE_KERNEL_COPY, &ring) == KERNEL_RING_OK);
     assert(kernel_area_read(area, 0u, &header, sizeof(header)) ==
            KERNEL_AREA_OK);
     assert(header.flags == ASTRA_BULK_RING_CREATE_KERNEL_COPY);
-    assert(header.element_size == 1u && header.capacity == 2048u);
+    assert(header.element_size == 1u && header.capacity == TRANSFER_SIZE);
     assert(kernel_ring_handle_retain(
         ring, (void *)(uintptr_t)KERNEL_RING_ENDPOINT_PRODUCER));
     assert(kernel_ring_handle_retain(
@@ -621,20 +710,28 @@ static void test_clone_safe_kernel_copy_byte_ring(void)
     assert(kernel_ring_copy_write(ring, "abcdef", 6u, true, &written,
                                   &woken) == KERNEL_RING_OK);
     assert(written == 6u);
-    assert(kernel_ring_copy_peek(ring, output, 4u, &copied) ==
+    assert(kernel_ring_copy_peek(ring, 0u, output, 4u, &copied) ==
            KERNEL_RING_OK);
     assert(copied == 4u && memcmp(output, "abcd", 4u) == 0);
+    assert(kernel_ring_copy_peek(ring, 4u, output, 4u, &copied) ==
+           KERNEL_RING_OK);
+    assert(copied == 2u && memcmp(output, "ef", 2u) == 0);
+    assert(kernel_ring_copy_peek(ring, 6u, output, 4u, &copied) ==
+           KERNEL_RING_OK && copied == 0u);
+    assert(kernel_ring_copy_peek(ring, 7u, output, 4u, &copied) ==
+           KERNEL_RING_INVALID_ARGUMENT);
+    copied = 4u;
     assert(kernel_ring_copy_consume(ring, copied, &woken) == KERNEL_RING_OK);
 
     memset(input, 'x', sizeof(input));
-    assert(kernel_ring_copy_write(ring, input, 2048u, true, &written,
+    assert(kernel_ring_copy_write(ring, input, TRANSFER_SIZE, true, &written,
                                   &woken) == KERNEL_RING_WOULD_BLOCK);
-    assert(kernel_ring_copy_write(ring, input, 2048u, false, &written,
+    assert(kernel_ring_copy_write(ring, input, TRANSFER_SIZE, false, &written,
                                   &woken) == KERNEL_RING_OK);
-    assert(written == 2046u);
-    assert(kernel_ring_copy_peek(ring, output, sizeof(output), &copied) ==
+    assert(written == TRANSFER_SIZE - 2u);
+    assert(kernel_ring_copy_peek(ring, 0u, output, sizeof(output), &copied) ==
            KERNEL_RING_OK);
-    assert(copied == 2048u && output[0] == 'e' && output[1] == 'f');
+    assert(copied == TRANSFER_SIZE && output[0] == 'e' && output[1] == 'f');
     assert(kernel_ring_copy_consume(ring, copied, &woken) == KERNEL_RING_OK);
 
     assert(kernel_ring_process_died(90u, &closed, &woken) == KERNEL_RING_OK);
@@ -650,8 +747,10 @@ static void test_clone_safe_kernel_copy_byte_ring(void)
     kernel_area_handle_release(area, NULL);
     assert(kernel_ring_pool_stats(&stats));
     assert(stats.active_rings == 0u && stats.owner_deaths == 0u);
-    assert(stats.copied_writes == 2u && stats.copied_write_bytes == 2052u);
-    assert(stats.copied_reads == 2u && stats.copied_read_bytes == 2052u);
+    assert(stats.copied_writes == 2u &&
+           stats.copied_write_bytes == TRANSFER_SIZE + 4u);
+    assert(stats.copied_reads == 2u &&
+           stats.copied_read_bytes == TRANSFER_SIZE + 4u);
     assert(stats.copied_would_blocks == 1u);
     assert(kernel_ring_pool_valid() && kernel_area_pool_valid());
 }
@@ -669,6 +768,10 @@ static void test_kernel_copy_cycle_budget(void)
     assert(kernel_ring_pool_stats(&stats));
     assert(stats.copied_max_cycles == 30401u);
     assert(stats.copied_cycle_overruns == 1u);
+    kernel_ring_record_copy_cycles(UINT32_MAX, UINT32_MAX);
+    assert(kernel_ring_pool_stats(&stats));
+    assert(stats.copied_max_cycles == UINT32_MAX);
+    assert(stats.copied_cycle_overruns == 1u);
 }
 
 int main(void)
@@ -680,6 +783,8 @@ int main(void)
     _Static_assert(offsetof(AstraBulkRingHeader, consumer_position) == 0x30u,
                    "bulk-ring consumer offset");
     test_ring_injection_releases_child_authority();
+    test_ring_pool_grows_past_former_table();
+    test_ring_metadata_reset_discards_stale_pages();
     test_header_batching_waits_and_wrap();
     test_overlap_corruption_and_creator_death_survival();
     test_validation_no_advance_and_consumer_death();

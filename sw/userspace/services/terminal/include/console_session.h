@@ -17,6 +17,7 @@ typedef struct ConsoleSessionBackend {
     uint32_t terminal_storage_size;
     AstraTerminalRender render;
     AstraTerminalScroll scroll;
+    AstraTerminalHistory history;
     void *context;
     int (*present)(void *context, const AstraTerminal *terminal);
     int (*next_key)(void *context, uint32_t *key);

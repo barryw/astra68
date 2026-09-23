@@ -7,6 +7,50 @@
 #include <stddef.h>
 #include <string.h>
 
+enum { POSIX_PROCESS_TABLE_INITIAL = 8u };
+
+static uint32_t
+grow(PosixProcessTable *table)
+{
+    uint32_t old_capacity;
+    uint32_t capacity;
+    size_t bytes;
+    size_t record_bytes = sizeof(PosixProcessEntry) +
+                          sizeof(PosixSessionEntry);
+    uint8_t *storage;
+    PosixSessionEntry *old_sessions;
+    PosixSessionEntry *sessions;
+
+    if (table == NULL || table->reallocate == NULL)
+        return ASTRA_STATUS_INVALID;
+    old_capacity = table->capacity;
+    capacity = old_capacity == 0u ? POSIX_PROCESS_TABLE_INITIAL :
+                                   old_capacity * 2u;
+    if (capacity < old_capacity)
+        return ASTRA_STATUS_LIMIT;
+    bytes = (size_t)capacity * record_bytes;
+    if (capacity != 0u && bytes / capacity != record_bytes)
+        return ASTRA_STATUS_LIMIT;
+    storage = table->reallocate(table->storage, bytes);
+    if (storage == NULL)
+        return ASTRA_STATUS_LIMIT;
+    old_sessions = (PosixSessionEntry *)(storage +
+        (size_t)old_capacity * sizeof(PosixProcessEntry));
+    sessions = (PosixSessionEntry *)(storage +
+        (size_t)capacity * sizeof(PosixProcessEntry));
+    memmove(sessions, old_sessions,
+            (size_t)old_capacity * sizeof(*sessions));
+    memset((PosixProcessEntry *)storage + old_capacity, 0,
+           (size_t)(capacity - old_capacity) * sizeof(PosixProcessEntry));
+    memset(sessions + old_capacity, 0,
+           (size_t)(capacity - old_capacity) * sizeof(*sessions));
+    table->storage = storage;
+    table->entries = (PosixProcessEntry *)storage;
+    table->sessions = sessions;
+    table->capacity = capacity;
+    return ASTRA_STATUS_OK;
+}
+
 static PosixProcessEntry *
 find(const PosixProcessTable *table, int32_t process)
 {
@@ -32,12 +76,28 @@ find_session(const PosixProcessTable *table, int32_t session)
 static PosixSessionEntry *
 new_session(PosixProcessTable *table, int32_t session)
 {
-    for (uint32_t index = 0u; index < table->capacity; ++index)
-        if (table->sessions[index].session == 0) {
-            table->sessions[index].session = session;
-            return &table->sessions[index];
+    for (;;) {
+        for (uint32_t index = 0u; index < table->capacity; ++index)
+            if (table->sessions[index].session == 0) {
+                table->sessions[index].session = session;
+                return &table->sessions[index];
+            }
+        if (grow(table) != ASTRA_STATUS_OK)
+            return NULL;
+    }
+}
+
+static PosixProcessEntry *
+new_process(PosixProcessTable *table)
+{
+    for (;;) {
+        for (uint32_t index = 0u; index < table->capacity; ++index) {
+            if (table->entries[index].process == 0)
+                return &table->entries[index];
         }
-    return NULL;
+        if (grow(table) != ASTRA_STATUS_OK)
+            return NULL;
+    }
 }
 
 static void
@@ -68,17 +128,23 @@ group_in_session(const PosixProcessTable *table, int32_t session,
 
 uint32_t
 posix_process_table_init(PosixProcessTable *table,
-                         PosixProcessEntry *entries,
-                         PosixSessionEntry *sessions, uint32_t capacity)
+                         void *(*reallocate)(void *storage, size_t size))
 {
-    if (table == NULL || entries == NULL || sessions == NULL || capacity == 0u)
+    if (table == NULL || reallocate == NULL)
         return ASTRA_STATUS_INVALID;
-    memset(entries, 0, capacity * sizeof(*entries));
-    memset(sessions, 0, capacity * sizeof(*sessions));
-    table->entries = entries;
-    table->sessions = sessions;
-    table->capacity = capacity;
+    memset(table, 0, sizeof(*table));
+    table->reallocate = reallocate;
     return ASTRA_STATUS_OK;
+}
+
+void
+posix_process_table_destroy(PosixProcessTable *table)
+{
+    if (table == NULL || table->reallocate == NULL)
+        return;
+    if (table->storage != NULL)
+        (void)table->reallocate(table->storage, 0u);
+    memset(table, 0, sizeof(*table));
 }
 
 uint32_t
@@ -89,12 +155,14 @@ posix_process_register(PosixProcessTable *table, int32_t sender,
     PosixProcessEntry *slot = NULL;
     PosixSessionEntry *session = NULL;
 
-    if (table == NULL || table->entries == NULL || sender <= 0 ||
+    if (table == NULL || table->reallocate == NULL || sender <= 0 ||
         process <= 0 || sender == process || handle == 0u ||
         (flags & ~ASTRA_POSIX_PROCESS_FLAG_MASK) != 0u)
         return ASTRA_STATUS_INVALID;
     if (find(table, process) != NULL)
         return ASTRA_STATUS_EXISTS;
+    if (new_process(table) == NULL)
+        return ASTRA_STATUS_LIMIT;
     if ((flags & ASTRA_POSIX_PROCESS_NEW_SESSION) == 0u) {
         parent = find(table, sender);
         if (parent == NULL)
@@ -103,18 +171,14 @@ posix_process_register(PosixProcessTable *table, int32_t sender,
         if (session == NULL)
             return ASTRA_STATUS_INVALID;
     }
-    for (uint32_t index = 0u; index < table->capacity; ++index)
-        if (table->entries[index].process == 0) {
-            slot = &table->entries[index];
-            break;
-        }
-    if (slot == NULL)
-        return ASTRA_STATUS_LIMIT;
     if (parent == NULL) {
         session = new_session(table, process);
         if (session == NULL)
             return ASTRA_STATUS_LIMIT;
     }
+    slot = new_process(table);
+    if (slot == NULL)
+        return ASTRA_STATUS_LIMIT;
     slot->handle = handle;
     slot->process = process;
     if (parent == NULL) {
@@ -216,10 +280,13 @@ posix_process_setsid(PosixProcessTable *table, int32_t sender,
         if (table->entries[index].process != 0 &&
             table->entries[index].group == sender)
             return ASTRA_STATUS_BUSY;
+    old_session = caller->session;
     session = new_session(table, sender);
     if (session == NULL)
         return ASTRA_STATUS_LIMIT;
-    old_session = caller->session;
+    caller = find(table, sender);
+    if (caller == NULL)
+        return ASTRA_STATUS_INVALID;
     caller->group = sender;
     caller->session = sender;
     remove_empty_session(table, old_session);

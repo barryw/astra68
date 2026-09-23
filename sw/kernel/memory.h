@@ -41,17 +41,32 @@
 #define KERNEL_OWNER_CORE 0x4b45524eu /* "KERN" */
 #define KERNEL_EMERGENCY_RESERVE_FRAMES 32u
 /*
- * Ordinary owners cannot consume the last complete shared-area commitment.
- * That is the largest recovery allocation the service boundary can request,
- * so the reserve is derived from the VM contract rather than a process count.
- * Firmware-selected essential processes and their areas may use it; the
- * kernel's separate emergency pool remains unavailable to every normal
- * allocation.
+ * Reserve the control memory needed to describe the largest legal shared-area
+ * mapping, not a copy of its user data. The 68040 tree maps 64 pages per leaf
+ * table and 128 leaf tables per pointer table. Add one root, the area's exact
+ * frame-vector storage, and one object and mapping metadata page. These are
+ * all allocations a recovery launch can require before it can take control;
+ * ordinary data frames are not kernel control memory.
  */
-#define KERNEL_PROTECTED_RESERVE_FRAME_MAX \
-    (ASTRA_AREA_SIZE_MAX / KERNEL_PAGE_SIZE)
-/* Kernel control/cleanup retains a separate full recovery transaction. */
-#define KERNEL_CORE_RESERVE_FRAME_MAX KERNEL_PROTECTED_RESERVE_FRAME_MAX
+#define KERNEL_PMMU_PAGE_TABLE_ADDRESS_BYTES (64u * KERNEL_PAGE_SIZE)
+#define KERNEL_PMMU_POINTER_TABLE_ADDRESS_BYTES \
+    (128u * KERNEL_PMMU_PAGE_TABLE_ADDRESS_BYTES)
+#define KERNEL_RECOVERY_PAGE_TABLE_FRAMES \
+    ((ASTRA_AREA_SIZE_MAX + KERNEL_PMMU_PAGE_TABLE_ADDRESS_BYTES - 1u) / \
+     KERNEL_PMMU_PAGE_TABLE_ADDRESS_BYTES)
+#define KERNEL_RECOVERY_POINTER_TABLE_FRAMES \
+    ((ASTRA_AREA_SIZE_MAX + KERNEL_PMMU_POINTER_TABLE_ADDRESS_BYTES - 1u) / \
+     KERNEL_PMMU_POINTER_TABLE_ADDRESS_BYTES)
+#define KERNEL_RECOVERY_AREA_METADATA_FRAMES \
+    (((ASTRA_AREA_SIZE_MAX / KERNEL_PAGE_SIZE) * sizeof(uint32_t) + \
+      KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE)
+#define KERNEL_CONTROL_RECOVERY_FRAME_MAX \
+    (1u + KERNEL_RECOVERY_POINTER_TABLE_FRAMES + \
+     KERNEL_RECOVERY_PAGE_TABLE_FRAMES + \
+     KERNEL_RECOVERY_AREA_METADATA_FRAMES + 2u)
+/* Essential userspace and kernel control each retain one recovery transaction. */
+#define KERNEL_PROTECTED_RESERVE_FRAME_MAX KERNEL_CONTROL_RECOVERY_FRAME_MAX
+#define KERNEL_CORE_RESERVE_FRAME_MAX KERNEL_CONTROL_RECOVERY_FRAME_MAX
 /*
  * Frames set aside at boot that only DMA may take.
  *
@@ -70,7 +85,7 @@
  *
  * So the answer is the cheap and predictable one: enough frames for the
  * display's render-batch DMA buffer -- the only large contiguous request on
- * the machine -- and two for every legal DMA buffer. DMA takes
+ * the machine -- plus one two-page control transfer. DMA takes
  * from here first and falls back to the general pool, so nothing that works
  * today stops working; what changes is that a display service restarting at
  * hour six finds its framebuffer where it left it.
@@ -78,7 +93,7 @@
 #define KERNEL_DISPLAY_DMA_FRAMES \
     (ASTRA_RENDER_BATCH_BUFFER_BYTES / KERNEL_PAGE_SIZE)
 #define KERNEL_DMA_ZONE_FRAMES \
-    (KERNEL_DISPLAY_DMA_FRAMES + 2u * KERNEL_DMA_MAX_BUFFERS)
+    (KERNEL_DISPLAY_DMA_FRAMES + 2u)
 
 /*
  * The supervisor identity-maps all of RAM, whatever the boot info says there

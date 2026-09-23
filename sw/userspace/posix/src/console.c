@@ -56,6 +56,7 @@ typedef enum PosixDescriptorKind {
 /* A default allocation, not a ceiling. The containing charged area is the
  * actual bound, and the kernel accepts any fitting power-of-two capacity. */
 #define POSIX_PIPE_CAPACITY 65536u
+#define POSIX_PIPE_ATOMIC_WRITE_MAX 4096u
 
 typedef struct PosixOpenDescription {
     uint8_t kind;
@@ -1089,9 +1090,8 @@ write(int fd, const void *bytes, size_t length)
         return -1;
     }
     if (slot->kind == POSIX_DESCRIPTOR_PIPE_WRITE) {
-        uint32_t request = length > ASTRA_BULK_RING_TRANSFER_MAX ?
-            ASTRA_BULK_RING_TRANSFER_MAX : (uint32_t)length;
-        uint32_t flags = length <= ASTRA_BULK_RING_TRANSFER_MAX ?
+        uint32_t request = (uint32_t)length;
+        uint32_t flags = length <= POSIX_PIPE_ATOMIC_WRITE_MAX ?
             ASTRA_BULK_RING_WRITE_ATOMIC : 0u;
 
         for (;;) {
@@ -1214,8 +1214,7 @@ read(int fd, void *bytes, size_t length)
         return -1;
     }
     if (slot->kind == POSIX_DESCRIPTOR_PIPE_READ) {
-        uint32_t request = length > ASTRA_BULK_RING_TRANSFER_MAX ?
-            ASTRA_BULK_RING_TRANSFER_MAX : (uint32_t)length;
+        uint32_t request = (uint32_t)length;
 
         for (;;) {
             status = astra_rt_ring_read_try(slot->value, bytes, request,

@@ -6,11 +6,42 @@
 
 #include <astra/vfs_union.h>
 #include <astra/vfs_path.h>
+#include <astra/runtime.h>
 
 #include <stddef.h>
+#include <string.h>
 
-/* POSIX requires ELOOP; 40 matches the established Unix traversal ceiling. */
-#define ASTRA_VFS_SYMLINK_FOLLOW_MAX 40u
+typedef struct AstraVfsPathHistory {
+    char *paths;
+    uint32_t count;
+    uint32_t capacity;
+} AstraVfsPathHistory;
+
+static uint32_t path_visit(AstraVfsPathHistory *history, const char *path)
+{
+    char *grown;
+
+    for (uint32_t index = 0u; index < history->count; ++index)
+        if (strcmp(history->paths + index * ASTRA_VFS_PATH_MAX, path) == 0)
+            return ASTRA_VFS_ERR_LOOP;
+    if (history->count == history->capacity) {
+        uint32_t capacity = history->capacity == 0u ? 8u :
+                            history->capacity * 2u;
+
+        if (capacity <= history->capacity ||
+            capacity > UINT32_MAX / ASTRA_VFS_PATH_MAX)
+            return ASTRA_VFS_ERR_LIMIT;
+        grown = astra_runtime_reallocate(
+            history->paths, (size_t)capacity * ASTRA_VFS_PATH_MAX);
+        if (grown == NULL)
+            return ASTRA_VFS_ERR_LIMIT;
+        history->paths = grown;
+        history->capacity = capacity;
+    }
+    (void)strcpy(history->paths + history->count * ASTRA_VFS_PATH_MAX, path);
+    ++history->count;
+    return ASTRA_VFS_OK;
+}
 
 static void remember(uint32_t *status, uint32_t candidate)
 {
@@ -30,7 +61,7 @@ astra_vfs_assign_primary(const AstraAssignTable *table, const char *path,
     if (table == NULL || path == NULL || client_for == NULL || wire == NULL ||
         client == NULL)
         return ASTRA_VFS_ERR_INVALID;
-    for (uint32_t index = 0u; index < ASTRA_ASSIGN_MAX; ++index) {
+    for (uint32_t index = 0u; index < table->count; ++index) {
         const AstraAssign *assign = NULL;
         AstraVfsClient *serving;
         uint32_t resolved = astra_assign_resolve(
@@ -64,7 +95,7 @@ assign_raw_lstat(const AstraAssignTable *table, const char *path,
 
     if (table == NULL || path == NULL || client_for == NULL || wire == NULL)
         return ASTRA_VFS_ERR_INVALID;
-    for (uint32_t index = 0u; index < ASTRA_ASSIGN_MAX; ++index) {
+    for (uint32_t index = 0u; index < table->count; ++index) {
         const AstraAssign *assign = NULL;
         AstraVfsClient *serving;
         AstraVfsDirEntry found = {0};
@@ -156,19 +187,20 @@ static uint32_t canonical_path(const char *path, char *out,
  * Every absolute hop therefore has to name an assign held by this process,
  * and normalisation rejects a relative hop above that assign's root.
  */
-static uint32_t follow_path(const AstraAssignTable *table, const char *path,
-                            uint32_t rights,
-                            AstraVfsAssignClientFn client_for, void *context,
-                            int follow_final, int allow_missing_final,
-                            char *logical, uint32_t logical_capacity,
-                            AstraVfsDirEntry *entry, AstraVfsClient **client,
-                            const AstraAssign **found_assign,
-                            uint32_t *member, char *wire, uint32_t capacity)
+static uint32_t follow_path_inner(
+    const AstraAssignTable *table, const char *path, uint32_t rights,
+    AstraVfsAssignClientFn client_for, void *context, int follow_final,
+    int allow_missing_final, char *logical, uint32_t logical_capacity,
+    AstraVfsDirEntry *entry, AstraVfsClient **client,
+    const AstraAssign **found_assign, uint32_t *member, char *wire,
+    uint32_t capacity, AstraVfsPathHistory *history)
 {
     char current[ASTRA_VFS_PATH_MAX];
-    uint32_t followed = 0u;
     uint32_t status = canonical_path(path, current, sizeof(current));
 
+    if (status != ASTRA_VFS_OK)
+        return status;
+    status = path_visit(history, current);
     if (status != ASTRA_VFS_OK)
         return status;
     for (;;) {
@@ -269,8 +301,6 @@ static uint32_t follow_path(const AstraAssignTable *table, const char *path,
                 uint32_t length = 0u;
                 uint32_t parent_length = start == 0u ? 0u : start - 1u;
 
-                if (++followed > ASTRA_VFS_SYMLINK_FOLLOW_MAX)
-                    return ASTRA_VFS_ERR_LOOP;
                 status = astra_vfs_readlink(serving, prefix_wire, target,
                                             ASTRA_VFS_PATH_MAX, &length);
                 if (status != ASTRA_VFS_OK)
@@ -291,6 +321,9 @@ static uint32_t follow_path(const AstraAssignTable *table, const char *path,
                 if (status != ASTRA_VFS_OK)
                     return status;
                 status = canonical_path(combined, current, sizeof(current));
+                if (status != ASTRA_VFS_OK)
+                    return status;
+                status = path_visit(history, current);
                 if (status != ASTRA_VFS_OK)
                     return status;
                 break;                  /* restart after replacing this hop */
@@ -314,6 +347,25 @@ static uint32_t follow_path(const AstraAssignTable *table, const char *path,
             start = end + 1u;
         } while (start <= rest_length);
     }
+}
+
+static uint32_t follow_path(const AstraAssignTable *table, const char *path,
+                            uint32_t rights,
+                            AstraVfsAssignClientFn client_for, void *context,
+                            int follow_final, int allow_missing_final,
+                            char *logical, uint32_t logical_capacity,
+                            AstraVfsDirEntry *entry, AstraVfsClient **client,
+                            const AstraAssign **found_assign,
+                            uint32_t *member, char *wire, uint32_t capacity)
+{
+    AstraVfsPathHistory history = {0};
+    uint32_t status = follow_path_inner(
+        table, path, rights, client_for, context, follow_final,
+        allow_missing_final, logical, logical_capacity, entry, client,
+        found_assign, member, wire, capacity, &history);
+
+    astra_runtime_deallocate(history.paths);
+    return status;
 }
 
 uint32_t
@@ -550,7 +602,7 @@ static uint32_t assign_raw_open(
 {
     uint32_t status = ASTRA_VFS_ERR_NOT_FOUND;
 
-    for (uint32_t index = 0u; index < ASTRA_ASSIGN_MAX; ++index) {
+    for (uint32_t index = 0u; index < table->count; ++index) {
         const AstraAssign *assign = NULL;
         AstraVfsClient *serving;
         uint32_t resolved = astra_assign_resolve(

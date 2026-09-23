@@ -189,7 +189,7 @@ void astra_vfs_host_transport_destroy(AstraVfsHostTransport *transport)
         return;
     if (lane_cache.transport == transport)
         memset(&lane_cache, 0, sizeof(lane_cache));
-    for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_COUNT_MAX;
+    for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_SLOT_COUNT;
          ++index)
         if (transport->lanes[index].dma != 0u)
             (void)astra_close(transport->lanes[index].dma);
@@ -317,7 +317,7 @@ static uint32_t ensure_lane(AstraVfsHostTransport *transport,
     *result = NULL;
     if (!lane_layout(transport, command_capacity, data_bytes, &needed))
         return ASTRA_VFS_ERR_LIMIT;
-    for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_COUNT_MAX;
+    for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_SLOT_COUNT;
          ++index) {
         AstraVfsHostLane *lane = &transport->lanes[index];
 
@@ -342,7 +342,7 @@ static uint32_t ensure_lane(AstraVfsHostTransport *transport,
     }
     /* A dead thread's kernel channel is already closed; reclaim its DMA lane. */
     if (transport->channel_supported != 0u) {
-        for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_COUNT_MAX;
+        for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_SLOT_COUNT;
              ++index) {
             AstraVfsHostLane *lane = &transport->lanes[index];
 
@@ -461,7 +461,7 @@ uint32_t astra_vfs_host_transport_submit(
     if (transport == NULL || request == NULL || request->command == NULL ||
         request->private_lane < (uintptr_t)&transport->lanes[0] ||
         request->private_lane >
-            (uintptr_t)&transport->lanes[ASTRA_PROCESS_THREAD_COUNT_MAX - 1u] ||
+            (uintptr_t)&transport->lanes[ASTRA_PROCESS_THREAD_SLOT_COUNT - 1u] ||
         (input_size != 0u && input == NULL) ||
         (output_capacity != 0u && output == NULL))
         return ASTRA_VFS_ERR_INVALID;

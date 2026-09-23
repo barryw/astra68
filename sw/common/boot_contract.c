@@ -89,7 +89,7 @@ AstraBootValidation astra_boot_info_validate(const AstraBootInfo *info)
           info->early_log_base >= kernel_memory_end))
         return ASTRA_BOOT_BAD_LOG;
     if (info->memory_range_count == 0u ||
-        info->memory_range_count > ASTRA_BOOT_MAX_MEMORY_RANGES ||
+        info->memory_range_count > ASTRA_BOOT_MEMORY_RANGE_CAPACITY ||
         info->memory_range_entry_size != sizeof(AstraBootMemoryRange))
         return ASTRA_BOOT_BAD_MEMORY_MAP;
 

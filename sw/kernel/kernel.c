@@ -788,10 +788,9 @@ static void kernel_user_copy_selftest(void)
         expected[index] = (uint8_t)(0x31u + index * 7u);
         ((volatile uint8_t *)(uintptr_t)physical)[index] = expected[index];
     }
-    if (kernel_vm_map_page(space, KERNEL_SELFTEST_USER_ADDRESS, physical,
-                           KERNEL_VM_READ | KERNEL_VM_WRITE) != KERNEL_VM_OK ||
-        kernel_memory_release(physical, 1u, KERNEL_SELFTEST_OWNER) !=
-            KERNEL_MEMORY_OK ||
+    if (kernel_vm_adopt_page(space, KERNEL_SELFTEST_USER_ADDRESS, physical,
+                             KERNEL_VM_READ | KERNEL_VM_WRITE) !=
+            KERNEL_VM_OK ||
         kernel_vm_switch(space) != KERNEL_VM_OK)
         kernel_panic("user-copy self-test mapping failed");
 

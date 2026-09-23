@@ -1,6 +1,7 @@
 #include <console_session.h>
 #include <console_stream.h>
 #include <terminal_cursor.h>
+#include <terminal_scrollback.h>
 
 #include <astra/bytes.h>
 #include <astra/area.h>
@@ -55,6 +56,7 @@ typedef struct WindowTerminal {
     AstraArea model_area;
     AstraWindow window;
     AstraTerminal *terminal;
+    TerminalScrollback scrollback;
     AstraTextSurface text_surface;
     AstraTextGridSelection selection;
     AstraClipboardItem paste;
@@ -70,6 +72,7 @@ typedef struct WindowTerminal {
     uint8_t force_present;
     uint8_t live;
     uint8_t selecting;
+    uint8_t history_exhausted;
     uint32_t cursor_row;
     uint32_t cursor_column;
     TerminalCursorState cursor;
@@ -229,6 +232,56 @@ static uint32_t terminal_rows(const WindowTerminal *window)
     return rows;
 }
 
+static const AstraTextCell *window_view_row(
+    const WindowTerminal *window, const AstraTerminal *terminal,
+    uint32_t viewport_row, uint32_t *columns)
+{
+    AstraScrollState state = ASTRA_SCROLL_STATE_INIT;
+    uint32_t row;
+
+    if (columns == NULL || astra_scroll_get_state(
+            &window->scrollback.scroll, &state) != ASTRA_OK)
+        return NULL;
+    row = state.offset_y / TERMINAL_LINE_HEIGHT + viewport_row;
+    if (row < window->scrollback.row_count)
+        return terminal_scrollback_row(&window->scrollback, row, columns);
+    row -= window->scrollback.row_count;
+    if (row >= terminal->rows)
+        return NULL;
+    *columns = terminal->columns;
+    return terminal->cells + (size_t)row * terminal->capacity_columns;
+}
+
+static void window_clear_selection(WindowTerminal *window)
+{
+    window->selection.focus = window->selection.anchor;
+    window->selecting = 0u;
+}
+
+static int window_to_bottom(WindowTerminal *window)
+{
+    if (terminal_scrollback_at_bottom(&window->scrollback))
+        return 1;
+    if (!terminal_scrollback_to_bottom(&window->scrollback))
+        return 0;
+    window_clear_selection(window);
+    window->force_present = 1u;
+    return 1;
+}
+
+static void window_history(void *context, const AstraTextCell *cells,
+                           uint32_t columns)
+{
+    WindowTerminal *window = context;
+
+    if (!terminal_scrollback_append(&window->scrollback, cells, columns)) {
+        if (!window->history_exhausted)
+            (void)astra_log("Terminal scrollback exhausted");
+        window->history_exhausted = 1u;
+    } else
+        window->history_exhausted = 0u;
+}
+
 static void window_damage(WindowTerminal *window, uint32_t x, uint32_t y,
                           uint32_t width, uint32_t height)
 {
@@ -262,6 +315,10 @@ static int window_render(void *context, uint32_t row, uint32_t column,
     uint32_t y = TERMINAL_MARGIN_Y + row * TERMINAL_LINE_HEIGHT;
     uint32_t width = count * window->cell_width;
 
+    if (!terminal_scrollback_at_bottom(&window->scrollback)) {
+        window->force_present = 1u;
+        return 1;
+    }
     if (!window->dirty && !astra_draw_list_view_init(
             &window->surface.view, window->surface.mapping,
             window->surface.view.byte_size, window->width, window->height))
@@ -283,6 +340,11 @@ static int window_scroll(void *context, uint32_t rows,
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     uint32_t width = terminal_columns(window) * window->cell_width;
 
+    if (!terminal_scrollback_at_bottom(&window->scrollback)) {
+        window_clear_selection(window);
+        window->force_present = 1u;
+        return 1;
+    }
     if (window->selection.anchor.row != window->selection.focus.row ||
         window->selection.anchor.column != window->selection.focus.column) {
         window->selection.focus = window->selection.anchor;
@@ -321,6 +383,10 @@ static int window_resize_model(WindowTerminal *window, uint32_t columns,
     size_t bytes;
 
     if (terminal_status == ASTRA_TERMINAL_OK) {
+        if (!terminal_scrollback_resize(&window->scrollback, window->width,
+                                        rows))
+            return 0;
+        window->history_exhausted = 0u;
         console_stream_resize(columns, rows,
                               window->width, window->height);
         return 1;
@@ -347,6 +413,10 @@ static int window_resize_model(WindowTerminal *window, uint32_t columns,
     }
     close_area(&window->model_area);
     window->model_area = grown;
+    if (!terminal_scrollback_resize(&window->scrollback, window->width,
+                                    rows))
+        return 0;
+    window->history_exhausted = 0u;
     console_stream_resize(columns, rows, window->width, window->height);
     return 1;
 }
@@ -374,9 +444,11 @@ static int window_present(void *context, const AstraTerminal *terminal)
     uint16_t background = rgb565(theme.system_bar);
     uint16_t cursor = rgb565(theme.accent);
     uint64_t now = astra_clock_monotonic();
-    int cursor_moved = window->cursor_row != terminal->cursor_row ||
-                       window->cursor_column != terminal->cursor_column;
-    int blink = terminal_cursor_blink_due(&window->cursor, now);
+    int at_bottom = terminal_scrollback_at_bottom(&window->scrollback);
+    int cursor_moved = at_bottom &&
+        (window->cursor_row != terminal->cursor_row ||
+         window->cursor_column != terminal->cursor_column);
+    int blink = at_bottom && terminal_cursor_blink_due(&window->cursor, now);
     int reset_cursor = window->dirty || window->force_present || cursor_moved;
 
     window->terminal = (AstraTerminal *)(uintptr_t)terminal;
@@ -393,13 +465,16 @@ static int window_present(void *context, const AstraTerminal *terminal)
                                              window->height};
         window->damage_valid = 1u;
         for (uint32_t row = 0u; row < terminal->rows; ++row) {
-            const AstraTextCell *cells = terminal->cells +
-                (size_t)row * terminal->capacity_columns;
+            uint32_t columns = 0u;
+            const AstraTextCell *cells = window_view_row(
+                window, terminal, row, &columns);
 
-            if (astra_text_surface_render_grid(
+            if (cells != NULL && columns > terminal->columns)
+                columns = terminal->columns;
+            if (cells != NULL && astra_text_surface_render_grid(
                     &window->text_surface, &window->surface.view,
                     TERMINAL_MARGIN_X, TERMINAL_MARGIN_Y,
-                    row, 0u, cells, terminal->columns,
+                    row, 0u, cells, columns,
                     &window->selection) != ASTRA_OK)
                 return 0;
         }
@@ -414,9 +489,10 @@ static int window_present(void *context, const AstraTerminal *terminal)
                          background))
             return 0;
     }
-    terminal_cursor_presented(&window->cursor, now,
-                              TERMINAL_CURSOR_BLINK_NS, reset_cursor);
-    if (window->cursor.visible && terminal->cursor_visible &&
+    if (at_bottom)
+        terminal_cursor_presented(&window->cursor, now,
+                                  TERMINAL_CURSOR_BLINK_NS, reset_cursor);
+    if (at_bottom && window->cursor.visible && terminal->cursor_visible &&
         !draw_cursor(window, terminal->cursor_row, terminal->cursor_column,
                      cursor))
         return 0;
@@ -483,18 +559,43 @@ static void window_copy(WindowTerminal *window)
     AstraClipboardRepresentation representation =
         ASTRA_CLIPBOARD_REPRESENTATION_INIT;
     uint32_t bytes = 0u;
+    AstraTextCell *grid = NULL;
+    uint32_t columns;
+    uint32_t rows;
     AstraResult result;
 
     if (window->terminal == NULL ||
         (window->selection.anchor.row == window->selection.focus.row &&
          window->selection.anchor.column == window->selection.focus.column))
         return;
-    result = astra_text_surface_copy_grid_selection(
-        &window->text_surface, window->terminal->cells,
-        window->terminal->capacity_columns, window->terminal->columns,
-        window->terminal->rows, &window->selection, NULL, 0u, &bytes);
-    if (result != ASTRA_ERROR_BUFFER_TOO_SMALL || bytes == 0u)
+    columns = window->terminal->columns;
+    rows = window->terminal->rows;
+    if (columns > SIZE_MAX / sizeof(*grid) / rows)
         return;
+    grid = astra_runtime_allocate(
+        (size_t)columns * rows * sizeof(*grid));
+    if (grid == NULL)
+        return;
+    for (uint32_t row = 0u; row < rows; ++row) {
+        uint32_t source_columns = 0u;
+        const AstraTextCell *source = window_view_row(
+            window, window->terminal, row, &source_columns);
+
+        for (uint32_t column = 0u; column < columns; ++column)
+            grid[(size_t)row * columns + column] =
+                (AstraTextCell){' ', ASTRA_TEXT_COLOR_DEFAULT,
+                    ASTRA_TEXT_COLOR_DEFAULT, 0u, 1u, 0u};
+        if (source_columns > columns)
+            source_columns = columns;
+        if (source != NULL)
+            (void)memcpy(grid + (size_t)row * columns, source,
+                         (size_t)source_columns * sizeof(*source));
+    }
+    result = astra_text_surface_copy_grid_selection(
+        &window->text_surface, grid, columns, columns, rows,
+        &window->selection, NULL, 0u, &bytes);
+    if (result != ASTRA_ERROR_BUFFER_TOO_SMALL || bytes == 0u)
+        goto done;
     result = astra_area_create(
         bytes, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP, &text);
     if (result == ASTRA_OK)
@@ -502,9 +603,8 @@ static void window_copy(WindowTerminal *window)
                                 ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE);
     if (result == ASTRA_OK)
         result = astra_text_surface_copy_grid_selection(
-            &window->text_surface, window->terminal->cells,
-            window->terminal->capacity_columns, window->terminal->columns,
-            window->terminal->rows, &window->selection,
+            &window->text_surface, grid, columns, columns, rows,
+            &window->selection,
             text.address, text.size, &bytes);
     if (result == ASTRA_OK) {
         representation.type = ASTRA_CLIPBOARD_TYPE_UTF8;
@@ -519,6 +619,8 @@ static void window_copy(WindowTerminal *window)
         (void)astra_log("Terminal copy failed");
     if (text.handle != ASTRA_INVALID_HANDLE)
         close_area(&text);
+done:
+    astra_runtime_deallocate(grid);
 }
 
 static void window_paste_begin(WindowTerminal *window)
@@ -554,6 +656,8 @@ static int window_next_key(void *context, uint32_t *key)
         if (window->paste_offset < window->paste_length) {
             uint32_t consumed = 0u;
 
+            if (!window_to_bottom(window))
+                return CONSOLE_SESSION_INPUT_ERROR;
             *key = astra_utf8_decode(
                 window->paste_text + window->paste_offset,
                 window->paste_length - window->paste_offset, &consumed);
@@ -609,6 +713,25 @@ static int window_next_key(void *context, uint32_t *key)
                 return CONSOLE_SESSION_INPUT_ERROR;
             continue;
         }
+        if (event.type == ASTRA_WINDOW_EVENT_POINTER_WHEEL) {
+            AstraScrollState before = ASTRA_SCROLL_STATE_INIT;
+            AstraScrollState after = ASTRA_SCROLL_STATE_INIT;
+
+            if (astra_scroll_get_state(&window->scrollback.scroll,
+                                       &before) != ASTRA_OK ||
+                !terminal_scrollback_wheel(
+                    &window->scrollback, event.data.wheel.delta_x,
+                    event.data.wheel.delta_y) ||
+                astra_scroll_get_state(&window->scrollback.scroll,
+                                       &after) != ASTRA_OK)
+                return CONSOLE_SESSION_INPUT_ERROR;
+            if (before.offset_x != after.offset_x ||
+                before.offset_y != after.offset_y) {
+                window_clear_selection(window);
+                window->force_present = 1u;
+            }
+            continue;
+        }
         if (event.type == ASTRA_WINDOW_EVENT_STATE_RESET) {
             window->selecting = 0u;
             continue;
@@ -658,6 +781,8 @@ static int window_next_key(void *context, uint32_t *key)
                 translated == ASTRA_KEYMAP_HOME ||
                 translated == ASTRA_KEYMAP_END ||
                 (chord && translated != ASTRA_KEYMAP_NONE)) {
+                if (!window_to_bottom(window))
+                    return CONSOLE_SESSION_INPUT_ERROR;
                 *key = translated;
                 return CONSOLE_SESSION_INPUT_KEY;
             }
@@ -673,6 +798,8 @@ static int window_next_key(void *context, uint32_t *key)
                 *key = codepoint;
             else
                 continue;
+            if (!window_to_bottom(window))
+                return CONSOLE_SESSION_INPUT_ERROR;
             return CONSOLE_SESSION_INPUT_KEY;
         }
     }
@@ -754,6 +881,12 @@ int astra_main(const AstraStartupInfo *startup)
             TERMINAL_LINE_HEIGHT;
     }
     if (status == ASTRA_STATUS_OK &&
+        !terminal_scrollback_init(
+            &window_terminal.scrollback, window_terminal.width,
+            terminal_rows(&window_terminal), TERMINAL_LINE_HEIGHT,
+            astra_runtime_reallocate))
+        status = TERMINAL_FAIL_STORAGE;
+    if (status == ASTRA_STATUS_OK &&
         (astra_terminal_storage_size(terminal_capacity_columns,
                                      terminal_capacity_rows,
                                      &terminal_storage_bytes) !=
@@ -798,6 +931,7 @@ int astra_main(const AstraStartupInfo *startup)
         info.event_mask = ASTRA_WINDOW_SUBSCRIBE_DEFAULT |
                           ASTRA_WINDOW_SUBSCRIBE_POINTER_MOTION |
                           ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON |
+                          ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL |
                           ASTRA_WINDOW_SUBSCRIBE_KEY |
                           ASTRA_WINDOW_SUBSCRIBE_TEXT;
         info.title_icon_area = title_icon.handle;
@@ -819,6 +953,7 @@ int astra_main(const AstraStartupInfo *startup)
     if (status != ASTRA_STATUS_OK) {
         if (window_terminal.model_area.handle != ASTRA_INVALID_HANDLE)
             close_area(&window_terminal.model_area);
+        terminal_scrollback_destroy(&window_terminal.scrollback);
         astra_process_filesystem_close(&process_filesystem);
         return (int)status;
     }
@@ -832,6 +967,7 @@ int astra_main(const AstraStartupInfo *startup)
     backend.terminal_storage_size = window_terminal.model_area.size;
     backend.render = window_render;
     backend.scroll = window_scroll;
+    backend.history = window_history;
     backend.context = &window_terminal;
     backend.present = window_present;
     backend.next_key = window_next_key;
@@ -848,6 +984,7 @@ int astra_main(const AstraStartupInfo *startup)
         (void)close_result;
     }
     (void)astra_shared_surface_close(&window_terminal.surface);
+    terminal_scrollback_destroy(&window_terminal.scrollback);
     close_area(&window_terminal.model_area);
     astra_process_filesystem_close(&process_filesystem);
     return (int)status;

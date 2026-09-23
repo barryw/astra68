@@ -1,6 +1,7 @@
 #ifndef ASTRA_SUPERVISOR_LOADER_H
 #define ASTRA_SUPERVISOR_LOADER_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <astra/process.h>
@@ -9,9 +10,6 @@
 #include <astra/syscall.h>
 #include <astra/vfs_service.h>
 
-#define SUPERVISOR_MANIFEST_ENTRY_MAX (ASTRA_PROCESS_COUNT_MAX - 1u)
-/* Every process slot can be represented; the wait set has separate room. */
-#define SUPERVISOR_PROCESS_MAX ASTRA_PROCESS_COUNT_MAX
 /* One reader at a time is the shape of `ps`; a queue of one is enough. */
 #define SUPERVISOR_PROC_PORT_MESSAGES 4u
 #define SUPERVISOR_PROC_PORT_BUDGET 8u
@@ -57,13 +55,69 @@ typedef struct SupervisorManifestEntry {
 } SupervisorManifestEntry;
 
 typedef struct SupervisorManifest {
-    SupervisorManifestEntry entries[SUPERVISOR_MANIFEST_ENTRY_MAX];
+    SupervisorManifestEntry *entries;
     uint32_t count;
+    uint32_t capacity;
 } SupervisorManifest;
+
+#define SUPERVISOR_MANIFEST_INIT {0}
+
+typedef struct SupervisorProcessRecord {
+    uint32_t handle;
+    uint32_t resident;
+    uint32_t id;
+    uint32_t paused;
+    uint32_t service_flags;
+    uint32_t restart_policy;
+    uint32_t action;
+    char service_name[ASTRA_VFS_NAME_MAX];
+} SupervisorProcessRecord;
+
+typedef struct SupervisorProcessTable {
+    SupervisorProcessRecord *records;
+    uint32_t count;
+    uint32_t capacity;
+} SupervisorProcessTable;
+
+typedef void *(*SupervisorReallocate)(void *pointer, size_t size);
+
+static inline int
+supervisor_process_table_reserve(SupervisorProcessTable *table,
+                                 uint32_t required,
+                                 SupervisorReallocate reallocate)
+{
+    SupervisorProcessRecord *grown;
+    uint32_t capacity;
+
+    if (table == NULL || reallocate == NULL)
+        return 0;
+    if (required <= table->capacity)
+        return 1;
+    capacity = table->capacity == 0u ? 8u : table->capacity;
+    while (capacity < required) {
+        if (capacity > UINT32_MAX / 2u) {
+            capacity = required;
+            break;
+        }
+        capacity *= 2u;
+    }
+#if SIZE_MAX < UINT32_MAX
+    if (capacity > SIZE_MAX / sizeof(*table->records))
+        return 0;
+#endif
+    grown = reallocate(table->records,
+                       (size_t)capacity * sizeof(*table->records));
+    if (grown == NULL)
+        return 0;
+    table->records = grown;
+    table->capacity = capacity;
+    return 1;
+}
 
 /* Parses a mutable byte span. Zero retains no entry. */
 int supervisor_manifest_parse(char *text, uint32_t length,
                               SupervisorManifest *manifest);
+void supervisor_manifest_destroy(SupervisorManifest *manifest);
 int supervisor_manifest_grant(char *text, SupervisorManifestGrant *grant);
 int supervisor_manifest_authority(char *text, char *name, uint32_t *rights,
                                   int allow_raw);

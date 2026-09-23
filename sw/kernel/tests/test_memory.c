@@ -12,6 +12,9 @@
  * scratch array per frame states the size of its own synthetic machine.
  */
 #define TEST_MAX_FRAMES (ASTRA_RAM_SIZE_DE25_GUEST / KERNEL_PAGE_SIZE)
+#define TEST_PHYSICAL_MEMORY_SIZE 0x02000000u
+
+static uint8_t physical_memory[TEST_PHYSICAL_MEMORY_SIZE];
 
 static void add_range(AstraBootInfo *info, uint32_t base, uint32_t size,
                       uint32_t type, uint32_t flags)
@@ -49,6 +52,8 @@ static void make_valid_info(AstraBootInfo *info)
     info->early_log_base = ASTRA_EARLY_LOG_ADDRESS;
     info->early_log_size = ASTRA_EARLY_LOG_SIZE;
     info->memory_range_entry_size = sizeof(AstraBootMemoryRange);
+    kernel_memory_test_bind_physical_memory(
+        physical_memory, info->ram_base, sizeof(physical_memory));
 
     add_range(info, ASTRA_BOOT_SCRATCH_ADDRESS, ASTRA_BOOT_SCRATCH_SIZE,
               ASTRA_MEMORY_RANGE_FIRMWARE,
@@ -74,6 +79,25 @@ static void make_valid_info(AstraBootInfo *info)
               ASTRA_MEMORY_RANGE_DEVICE,
               ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE);
     astra_boot_info_finalize(info);
+}
+
+static void test_zeroed_allocation_initializes_physical_memory(void)
+{
+    AstraBootInfo info;
+    uint8_t *bytes;
+    uint32_t physical;
+
+    memset(physical_memory, 0x5au, sizeof(physical_memory));
+    make_valid_info(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc_zeroed(
+               1u, 1u, KERNEL_FRAME_PROCESS, 1u, &physical) ==
+           KERNEL_MEMORY_OK);
+    bytes = kernel_memory_access(physical, KERNEL_PAGE_SIZE);
+    assert(bytes != NULL);
+    for (uint32_t index = 0u; index < KERNEL_PAGE_SIZE; ++index)
+        assert(bytes[index] == 0u);
+    assert(kernel_memory_release(physical, 1u, 1u) == KERNEL_MEMORY_OK);
 }
 
 static void test_initial_map(void)
@@ -117,6 +141,9 @@ static void test_initial_map(void)
     assert(frame.state == KERNEL_FRAME_KERNEL);
     assert(kernel_memory_frame_info(0x03e00000u, &frame));
     assert(frame.state == KERNEL_FRAME_FREE);
+    assert(kernel_memory_frame_info(0x03e0007bu, &frame));
+    assert(frame.state == KERNEL_FRAME_FREE);
+    assert(!kernel_memory_frame_info(info.ram_base + info.ram_size, &frame));
     assert(kernel_memory_frame_info(0x02004000u, &frame));
     assert(frame.state == KERNEL_FRAME_FREE);
     assert(kernel_memory_frame_info(0x03eff000u, &frame));
@@ -359,6 +386,37 @@ static void test_owner_ledger_collision_survives_removal(void)
            KERNEL_MEMORY_OK);
 }
 
+static void test_owner_ledger_non_power_of_two_capacity(void)
+{
+    const uint32_t extra_memory = 4u * 1024u * 1024u;
+    AstraBootInfo info;
+    KernelMemoryStats stats;
+    uint32_t first;
+    uint32_t second;
+
+    make_valid_info(&info);
+    info.ram_size += extra_memory;
+    add_range(&info, 0x04000000u, extra_memory,
+              ASTRA_MEMORY_RANGE_USABLE,
+              ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                  ASTRA_MEMORY_CACHEABLE);
+    astra_boot_info_finalize(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&stats));
+    assert((stats.owner_slot_capacity &
+            (stats.owner_slot_capacity - 1u)) != 0u);
+
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 1u,
+                               &first) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS,
+                               1u + stats.owner_slot_capacity,
+                               &second) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_release(first, 1u, 1u) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_release(second, 1u,
+                                 1u + stats.owner_slot_capacity) ==
+           KERNEL_MEMORY_OK);
+}
+
 static void test_owner_ledger_capacity_follows_physical_resources(void)
 {
     static uint32_t bases[TEST_MAX_FRAMES];
@@ -449,6 +507,34 @@ static void test_scattered_page_allocation_is_atomic(void)
     assert(after_failure.owner_slots_used == before_failure.owner_slots_used);
     for (uint32_t index = 0u; index < before_failure.free_frames; ++index)
         assert(impossible[index] == 0u);
+}
+
+static void test_scattered_search_advances_and_wraps(void)
+{
+    static uint32_t pages[TEST_MAX_FRAMES];
+    AstraBootInfo info;
+    KernelMemoryStats stats;
+    uint32_t replacement[1];
+    uint32_t count;
+
+    make_valid_info(&info);
+    assert(kernel_memory_init(&info) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_stats(&stats));
+    count = stats.free_frames - stats.dma_zone_frames;
+    assert(kernel_memory_alloc_pages_zeroed(
+               count, KERNEL_FRAME_PROCESS, KERNEL_OWNER_CORE, pages) ==
+           KERNEL_MEMORY_OK);
+    for (uint32_t index = 1u; index < count; ++index)
+        assert(pages[index] > pages[index - 1u]);
+
+    assert(kernel_memory_release(pages[0], 1u, KERNEL_OWNER_CORE) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_memory_alloc_pages_zeroed(
+               1u, KERNEL_FRAME_PROCESS, KERNEL_OWNER_CORE, replacement) ==
+           KERNEL_MEMORY_OK);
+    assert(replacement[0] == pages[0]);
+    assert(kernel_memory_release_owner(KERNEL_OWNER_CORE, NULL) ==
+           KERNEL_MEMORY_OK);
 }
 
 static void test_exhaustion_and_checked_ranges(void)
@@ -967,6 +1053,7 @@ static void test_cow_frame_changes_owner_without_changing_charge(void)
 
 int main(void)
 {
+    test_zeroed_allocation_initializes_physical_memory();
     test_initial_map();
     test_de25_guest_map();
     test_rejects_unclassified_and_unaligned_ram();
@@ -976,9 +1063,11 @@ int main(void)
     test_owner_release_work_scales_with_owned_frames();
     test_owner_ledger_does_not_exhaust_at_legacy_sixty_four();
     test_owner_ledger_collision_survives_removal();
+    test_owner_ledger_non_power_of_two_capacity();
     test_owner_ledger_capacity_follows_physical_resources();
     test_reinit_discards_stale_dynamic_metadata();
     test_scattered_page_allocation_is_atomic();
+    test_scattered_search_advances_and_wraps();
     test_exhaustion_and_checked_ranges();
     test_emergency_reserve_isolated_and_replenished();
     test_protected_reserve_survives_ordinary_exhaustion();

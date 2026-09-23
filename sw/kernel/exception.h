@@ -33,6 +33,20 @@ typedef struct KernelExceptionFrame {
     uint8_t access_transfer_mode;
 } KernelExceptionFrame;
 
+typedef struct KernelExceptionBaseFrame {
+    uint32_t program_counter;
+    uint16_t status_register;
+    uint16_t format_vector;
+    uint16_t vector_offset;
+    uint16_t frame_size;
+    uint8_t format;
+    uint8_t from_user;
+} KernelExceptionBaseFrame;
+
+KernelExceptionStatus kernel_exception_decode_base(
+    const void *raw_frame, uint32_t available,
+    KernelExceptionBaseFrame *frame);
+
 KernelExceptionStatus kernel_exception_decode(const void *raw_frame,
                                               uint32_t available,
                                               KernelExceptionFrame *frame);

@@ -37,12 +37,11 @@ static int
 geometry_valid(const AstraBlockGeometry *geometry)
 {
     return geometry->sector_count != 0u &&
-           geometry->sector_size >= ASTRA_BLOCK_SECTOR_SIZE_MIN &&
-           geometry->sector_size <= ASTRA_BLOCK_SECTOR_SIZE_MAX &&
+           geometry->sector_size != 0u &&
            (geometry->sector_size & (geometry->sector_size - 1u)) == 0u &&
            geometry->max_transfer_sectors != 0u &&
            geometry->max_transfer_sectors <=
-               ASTRA_BLOCK_TRANSFER_SECTORS_MAX &&
+               UINT32_MAX / geometry->sector_size &&
            geometry->media_generation != 0u;
 }
 

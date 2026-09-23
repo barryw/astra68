@@ -466,6 +466,8 @@ uint32_t console_session_run_backend(const ConsoleSessionBackend *backend)
             backend->render, backend->context) != ASTRA_TERMINAL_OK)
         return SESSION_NOT_RUN;
     astra_terminal_set_scroll(&session.terminal, backend->scroll);
+    astra_terminal_set_history(&session.terminal, backend->history,
+                               backend->context);
     astra_terminal_set_echo(&session.terminal, echo_line, NULL);
     astra_terminal_set_prompt(&session.terminal, prompt_ready, NULL);
     posix = astra_startup_capability(backend->startup,

@@ -34,28 +34,20 @@
 
 /* Sized by the process table, not by the number of services in one image. */
 static SupervisorManifest startup_manifest;
-static uint32_t process_handles[SUPERVISOR_PROCESS_MAX];
-static uint32_t process_resident[SUPERVISOR_PROCESS_MAX];
-static uint32_t process_ids[SUPERVISOR_PROCESS_MAX];
-static uint32_t process_paused[SUPERVISOR_PROCESS_MAX];
-static uint32_t process_service_flags[SUPERVISOR_PROCESS_MAX];
-static uint32_t process_restart_policy[SUPERVISOR_PROCESS_MAX];
+static SupervisorProcessTable process_table;
+#define process_count (process_table.count)
 enum SupervisorProcessAction {
     SUPERVISOR_PROCESS_ACTION_NONE = 0u,
     SUPERVISOR_PROCESS_ACTION_STOP,
     SUPERVISOR_PROCESS_ACTION_RESTART,
     SUPERVISOR_PROCESS_ACTION_PAUSE
 };
-static uint32_t process_action[SUPERVISOR_PROCESS_MAX];
-static char process_service_names[SUPERVISOR_PROCESS_MAX]
-                                 [ASTRA_VFS_NAME_MAX];
 static uint32_t service_handles[ASTRA_HANDLE_COUNT_MAX];
 static char service_names[ASTRA_HANDLE_COUNT_MAX]
                          [ASTRA_CAPABILITY_NAME_MAX];
 static AstraVfsClient service_clients[ASTRA_HANDLE_COUNT_MAX];
 static uint32_t service_is_vfs[ASTRA_HANDLE_COUNT_MAX];
 static char service_owner_names[ASTRA_HANDLE_COUNT_MAX][ASTRA_VFS_NAME_MAX];
-static uint32_t process_count;
 static uint32_t supervisor_process_handle;
 static uint32_t service_count;
 static uint32_t event_target_receive;
@@ -76,8 +68,8 @@ static uint32_t launch_send;
 static uint32_t manager_receive;
 static uint32_t manager_send;
 static AstraServiceDefinition definition_scratch[2];
-static char paused_service_names[SUPERVISOR_PROCESS_MAX][ASTRA_VFS_NAME_MAX];
-static uint32_t paused_service_count;
+static SupervisorProcessTable paused_services;
+#define paused_service_count (paused_services.count)
 
 static int append(char *out, uint32_t capacity, const char *text)
 {
@@ -365,18 +357,18 @@ static uint32_t configured_definition(const char *name,
 static uint32_t service_process_slot(const char *name)
 {
     for (uint32_t index = 0u; index < process_count; ++index)
-        if (process_service_names[index][0] != '\0' &&
-            strcmp(process_service_names[index], name) == 0)
+        if (process_table.records[index].service_name[0] != '\0' &&
+            strcmp(process_table.records[index].service_name, name) == 0)
             return index;
-    return SUPERVISOR_PROCESS_MAX;
+    return UINT32_MAX;
 }
 
 static uint32_t paused_service_slot(const char *name)
 {
     for (uint32_t index = 0u; index < paused_service_count; ++index)
-        if (strcmp(paused_service_names[index], name) == 0)
+        if (strcmp(paused_services.records[index].service_name, name) == 0)
             return index;
-    return SUPERVISOR_PROCESS_MAX;
+    return UINT32_MAX;
 }
 
 static void service_info(const AstraServiceDefinition *definition,
@@ -390,14 +382,15 @@ static void service_info(const AstraServiceDefinition *definition,
     info->flags = definition->flags;
     info->start_policy = definition->start_policy;
     info->restart_policy = definition->restart_policy;
-    if (slot != SUPERVISOR_PROCESS_MAX) {
-        info->state = process_action[slot] !=
+    if (slot != UINT32_MAX) {
+        info->state = process_table.records[slot].action !=
                           SUPERVISOR_PROCESS_ACTION_NONE ?
-            ASTRA_SERVICE_STATE_STOPPING : process_paused[slot] != 0u ?
+            ASTRA_SERVICE_STATE_STOPPING :
+            process_table.records[slot].paused != 0u ?
                 ASTRA_SERVICE_STATE_PAUSED : ASTRA_SERVICE_STATE_READY;
-        info->process_id = process_ids[slot];
+        info->process_id = process_table.records[slot].id;
     } else if (paused_service_slot(definition->name) !=
-               SUPERVISOR_PROCESS_MAX) {
+               UINT32_MAX) {
         info->state = ASTRA_SERVICE_STATE_PAUSED;
     } else {
         info->state = ASTRA_SERVICE_STATE_STOPPED;
@@ -917,7 +910,9 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
         launch_arguments = &essential_arguments;
     }
 
-    if (process_count == SUPERVISOR_PROCESS_MAX) {
+    if (!supervisor_process_table_reserve(
+            &process_table, process_count + 1u,
+            astra_runtime_reallocate)) {
         (void)release(source);
         return ASTRA_STATUS_LIMIT;
     }
@@ -1016,21 +1011,22 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
         (void)astra_close(child);
         return status;
     }
-    process_resident[process_count] = entry->resident;
-    process_ids[process_count] = child_id;
-    process_paused[process_count] = 0u;
-    process_service_flags[process_count] =
+    process_table.records[process_count].resident = entry->resident;
+    process_table.records[process_count].id = child_id;
+    process_table.records[process_count].paused = 0u;
+    process_table.records[process_count].service_flags =
         service != NULL ? service->flags : 0u;
-    process_restart_policy[process_count] =
+    process_table.records[process_count].restart_policy =
         service != NULL ? service->restart_policy :
                           ASTRA_SERVICE_RESTART_NEVER;
-    process_action[process_count] = SUPERVISOR_PROCESS_ACTION_NONE;
-    process_service_names[process_count][0] = '\0';
+    process_table.records[process_count].action =
+        SUPERVISOR_PROCESS_ACTION_NONE;
+    process_table.records[process_count].service_name[0] = '\0';
     if (service != NULL)
-        (void)append(process_service_names[process_count],
-                     sizeof(process_service_names[process_count]),
+        (void)append(process_table.records[process_count].service_name,
+                     sizeof(process_table.records[process_count].service_name),
                      service->name);
-    process_handles[process_count++] = child;
+    process_table.records[process_count++].handle = child;
     if (process_id != NULL)
         *process_id = child_id;
     if (process_wait_handle != NULL)
@@ -1069,35 +1065,27 @@ static void unpublish_owner(const char *owner)
 
 static void remove_process_slot(uint32_t slot)
 {
-    (void)astra_close(process_handles[slot]);
+    (void)astra_close(process_table.records[slot].handle);
     --process_count;
-    process_handles[slot] = process_handles[process_count];
-    process_resident[slot] = process_resident[process_count];
-    process_ids[slot] = process_ids[process_count];
-    process_paused[slot] = process_paused[process_count];
-    process_service_flags[slot] = process_service_flags[process_count];
-    process_restart_policy[slot] = process_restart_policy[process_count];
-    process_action[slot] = process_action[process_count];
-    (void)memcpy(process_service_names[slot],
-                 process_service_names[process_count],
-                 sizeof(process_service_names[slot]));
+    process_table.records[slot] = process_table.records[process_count];
 }
 
 static uint32_t stop_process_slot(uint32_t slot, uint32_t action)
 {
     uint32_t status;
 
-    if (process_action[slot] != SUPERVISOR_PROCESS_ACTION_NONE) {
+    if (process_table.records[slot].action !=
+        SUPERVISOR_PROCESS_ACTION_NONE) {
         if (action == SUPERVISOR_PROCESS_ACTION_STOP)
-            process_action[slot] = action;
+            process_table.records[slot].action = action;
         return ASTRA_STATUS_OK;
     }
-    unpublish_owner(process_service_names[slot]);
-    process_action[slot] = action;
-    status = astra_process_terminate(process_handles[slot],
+    unpublish_owner(process_table.records[slot].service_name);
+    process_table.records[slot].action = action;
+    status = astra_process_terminate(process_table.records[slot].handle,
                                      ASTRA_SIGNAL_KILL);
     if (status != ASTRA_SYSCALL_OK) {
-        process_action[slot] = SUPERVISOR_PROCESS_ACTION_NONE;
+        process_table.records[slot].action = SUPERVISOR_PROCESS_ACTION_NONE;
         return status;
     }
     return ASTRA_STATUS_OK;
@@ -1106,9 +1094,8 @@ static uint32_t stop_process_slot(uint32_t slot, uint32_t action)
 static void remove_paused_name(uint32_t slot)
 {
     --paused_service_count;
-    (void)memcpy(paused_service_names[slot],
-                 paused_service_names[paused_service_count],
-                 sizeof(paused_service_names[slot]));
+    paused_services.records[slot] =
+        paused_services.records[paused_service_count];
 }
 
 static uint32_t launch_definition(const AstraStartupInfo *startup,
@@ -1122,7 +1109,7 @@ static uint32_t launch_definition(const AstraStartupInfo *startup,
     uint32_t open_us = 0u;
     uint32_t status;
 
-    if (service_process_slot(definition->name) != SUPERVISOR_PROCESS_MAX)
+    if (service_process_slot(definition->name) != UINT32_MAX)
         return ASTRA_STATUS_BUSY;
     for (uint32_t index = 0u; index < definition->dependency_count; ++index)
         if (named_service(definition->dependencies[index]) == 0u)
@@ -1156,7 +1143,7 @@ static uint32_t launch_definition(const AstraStartupInfo *startup,
     if (status == ASTRA_STATUS_OK) {
         uint32_t paused = paused_service_slot(definition->name);
 
-        if (paused != SUPERVISOR_PROCESS_MAX)
+        if (paused != UINT32_MAX)
             remove_paused_name(paused);
     }
     return status;
@@ -1197,23 +1184,24 @@ static uint32_t service_control(const AstraStartupInfo *startup,
         return status;
     slot = service_process_slot(name);
     if (operation == ASTRA_SERVICE_MANAGER_START) {
-        status = slot == SUPERVISOR_PROCESS_MAX ?
+        status = slot == UINT32_MAX ?
             launch_definition(startup, definition) :
-            process_action[slot] == SUPERVISOR_PROCESS_ACTION_NONE ?
+            process_table.records[slot].action ==
+                    SUPERVISOR_PROCESS_ACTION_NONE ?
                 ASTRA_STATUS_OK : ASTRA_STATUS_BUSY;
     } else if (operation == ASTRA_SERVICE_MANAGER_STOP) {
         if ((definition->flags & ASTRA_SERVICE_PROTECTED) != 0u)
             return ASTRA_STATUS_ACCESS;
-        if (slot != SUPERVISOR_PROCESS_MAX)
+        if (slot != UINT32_MAX)
             status = stop_process_slot(slot, SUPERVISOR_PROCESS_ACTION_STOP);
         if (status == ASTRA_STATUS_OK) {
             uint32_t paused = paused_service_slot(name);
 
-            if (paused != SUPERVISOR_PROCESS_MAX)
+            if (paused != UINT32_MAX)
                 remove_paused_name(paused);
         }
     } else if (operation == ASTRA_SERVICE_MANAGER_RESTART) {
-        if (slot != SUPERVISOR_PROCESS_MAX) {
+        if (slot != UINT32_MAX) {
             status = stop_process_slot(
                 slot, SUPERVISOR_PROCESS_ACTION_RESTART);
             if (status != ASTRA_STATUS_OK)
@@ -1223,28 +1211,29 @@ static uint32_t service_control(const AstraStartupInfo *startup,
     } else if (operation == ASTRA_SERVICE_MANAGER_PAUSE) {
         if ((definition->flags & ASTRA_SERVICE_PROTECTED) != 0u)
             return ASTRA_STATUS_ACCESS;
-        if (slot == SUPERVISOR_PROCESS_MAX)
+        if (slot == UINT32_MAX)
             status = ASTRA_STATUS_OK;
         else if ((definition->flags & ASTRA_SERVICE_RUNS_PAIRED) != 0u) {
             status = stop_process_slot(
                 slot, SUPERVISOR_PROCESS_ACTION_PAUSE);
         } else {
-            status = astra_process_suspend(process_handles[slot]);
+            status = astra_process_suspend(process_table.records[slot].handle);
             if (status == ASTRA_SYSCALL_OK)
-                process_paused[slot] = 1u;
+                process_table.records[slot].paused = 1u;
         }
     } else if (operation == ASTRA_SERVICE_MANAGER_RESUME) {
         uint32_t paused = paused_service_slot(name);
 
-        if (slot != SUPERVISOR_PROCESS_MAX &&
-            process_action[slot] != SUPERVISOR_PROCESS_ACTION_NONE) {
+        if (slot != UINT32_MAX &&
+            process_table.records[slot].action !=
+                SUPERVISOR_PROCESS_ACTION_NONE) {
             status = ASTRA_STATUS_BUSY;
-        } else if (slot != SUPERVISOR_PROCESS_MAX &&
-                   process_paused[slot] != 0u) {
-            status = astra_process_resume(process_handles[slot]);
+        } else if (slot != UINT32_MAX &&
+                   process_table.records[slot].paused != 0u) {
+            status = astra_process_resume(process_table.records[slot].handle);
             if (status == ASTRA_SYSCALL_OK)
-                process_paused[slot] = 0u;
-        } else if (paused != SUPERVISOR_PROCESS_MAX) {
+                process_table.records[slot].paused = 0u;
+        } else if (paused != UINT32_MAX) {
             status = launch_definition(startup, definition);
         } else {
             status = ASTRA_STATUS_OK;
@@ -1261,8 +1250,8 @@ static uint32_t service_control(const AstraStartupInfo *startup,
     } else if (operation == ASTRA_SERVICE_MANAGER_REMOVE) {
         if (!dynamic || (definition->flags & ASTRA_SERVICE_PROTECTED) != 0u)
             return ASTRA_STATUS_ACCESS;
-        if (slot != SUPERVISOR_PROCESS_MAX ||
-            paused_service_slot(name) != SUPERVISOR_PROCESS_MAX)
+        if (slot != UINT32_MAX ||
+            paused_service_slot(name) != UINT32_MAX)
             return ASTRA_STATUS_BUSY;
         status = dynamic_definition_remove(name);
     } else {
@@ -1911,7 +1900,7 @@ void supervisor_loader_pump_event_control(void)
 
 uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
 {
-    uint32_t waits[SUPERVISOR_PROCESS_MAX + 4u];
+    uint32_t waits[ASTRA_WAIT_MULTIPLE_MAX];
 
     for (;;) {
         uint32_t index = ASTRA_WAIT_INDEX_NONE;
@@ -1921,8 +1910,10 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
         waits[1] = launch_receive;
         waits[2] = proc_receive;
         waits[3] = manager_receive;
+        if (process_count > ASTRA_WAIT_MULTIPLE_MAX - 4u)
+            return ASTRA_STATUS_LIMIT;
         for (uint32_t at = 0u; at < process_count; ++at)
-            waits[at + 4u] = process_handles[at];
+            waits[at + 4u] = process_table.records[at].handle;
         status = astra_wait_multiple(waits, process_count + 4u,
                                      ASTRA_DEADLINE_FOREVER, &index, NULL);
 
@@ -1953,17 +1944,19 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
         if (index > 3u && index <= process_count + 3u) {
             uint32_t exit_status = 0u;
             uint32_t slot = index - 4u;
-            uint32_t wait_status = astra_process_wait(process_handles[slot],
-                                                      0u, &exit_status);
+            uint32_t wait_status = astra_process_wait(
+                process_table.records[slot].handle, 0u, &exit_status);
 
             if (wait_status != ASTRA_SYSCALL_TIMED_OUT) {
                 char service_name[ASTRA_VFS_NAME_MAX];
-                uint32_t restart = process_restart_policy[slot];
-                uint32_t action = process_action[slot];
+                uint32_t restart =
+                    process_table.records[slot].restart_policy;
+                uint32_t action = process_table.records[slot].action;
 
-                (void)memcpy(service_name, process_service_names[slot],
+                (void)memcpy(service_name,
+                             process_table.records[slot].service_name,
                              sizeof(service_name));
-                if (process_resident[slot] != 0u &&
+                if (process_table.records[slot].resident != 0u &&
                     action == SUPERVISOR_PROCESS_ACTION_NONE)
                     (void)astra_log_failure(
                         "resident process exited",
@@ -1975,13 +1968,16 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
                 if (action == SUPERVISOR_PROCESS_ACTION_PAUSE &&
                     service_name[0] != '\0' &&
                     paused_service_slot(service_name) ==
-                        SUPERVISOR_PROCESS_MAX) {
-                    if (paused_service_count == SUPERVISOR_PROCESS_MAX) {
+                        UINT32_MAX) {
+                    if (!supervisor_process_table_reserve(
+                            &paused_services, paused_service_count + 1u,
+                            astra_runtime_reallocate)) {
                         (void)astra_log_failure("service pause",
                                                 ASTRA_STATUS_LIMIT);
                     } else {
                         (void)strcpy(
-                            paused_service_names[paused_service_count++],
+                            paused_services.records[
+                                paused_service_count++].service_name,
                             service_name);
                     }
                 } else if (action == SUPERVISOR_PROCESS_ACTION_RESTART &&

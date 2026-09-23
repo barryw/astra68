@@ -2,17 +2,14 @@
 
 #include "bytes.h"
 #include "generation.h"
-#include "object_cache.h"
+#include "memory.h"
 
 #include <stddef.h>
+#if !defined(__m68k__)
+#include <stdlib.h>
+#endif
 
-typedef struct KernelDeviceRecord {
-    KernelDeviceDefinition definition;
-    KernelDeviceLease *lease;
-    uint32_t generation;
-    uint8_t state;
-    uint8_t reserved[3];
-} KernelDeviceRecord;
+typedef struct KernelDeviceRecord KernelDeviceRecord;
 
 struct KernelDeviceLease {
     KernelDeviceRecord *device;
@@ -23,18 +20,31 @@ struct KernelDeviceLease {
     uint8_t reserved;
 };
 
+struct KernelDeviceRecord {
+    KernelDeviceDefinition definition;
+    KernelDeviceLease lease;
+    uint32_t generation;
+    uint8_t state;
+    uint8_t reserved[3];
+};
+
+typedef struct KernelDeviceBlock {
+    struct KernelDeviceBlock *next;
+    uint32_t physical;
+    uint16_t used;
+    uint16_t capacity;
+    KernelDeviceRecord records[];
+} KernelDeviceBlock;
+
 #if defined(__m68k__)
-_Static_assert(sizeof(KernelDeviceRecord) == 36u,
+_Static_assert(sizeof(KernelDeviceRecord) == 48u,
                "device record size changed; update the memory budget");
 _Static_assert(sizeof(KernelDeviceLease) == 16u,
                "device lease size changed; update the memory budget");
 #endif
 
-static KernelDeviceRecord devices[KERNEL_DEVICE_MAX];
-static KernelDeviceLease leases[KERNEL_DEVICE_LEASE_MAX];
-static KernelObjectCache lease_cache;
-static uint32_t lease_cache_bitmap[
-    KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_DEVICE_LEASE_MAX)];
+static KernelDeviceBlock *device_blocks;
+static KernelDeviceBlock *device_blocks_tail;
 static KernelDeviceStats device_stats;
 static uint8_t registry_sealed;
 static uint8_t initialized;
@@ -42,35 +52,30 @@ static uint8_t corrupt;
 
 static KernelDeviceRecord *find_device(uint32_t device_id)
 {
-    for (uint32_t index = 0u; index < KERNEL_DEVICE_MAX; ++index) {
-        if (devices[index].state != KERNEL_DEVICE_UNREGISTERED &&
-            devices[index].definition.device_id == device_id)
-            return &devices[index];
+    for (KernelDeviceBlock *block = device_blocks; block != NULL;
+         block = block->next) {
+        for (uint32_t index = 0u; index < block->used; ++index) {
+            if (block->records[index].state != KERNEL_DEVICE_UNREGISTERED &&
+                block->records[index].definition.device_id == device_id)
+                return &block->records[index];
+        }
     }
     return NULL;
 }
 
 static bool valid_lease(const KernelDeviceLease *lease)
 {
-    if (lease == NULL || lease < leases ||
-        lease >= leases + KERNEL_DEVICE_LEASE_MAX ||
-        lease->state == KERNEL_DEVICE_LEASE_FREE || lease->device == NULL)
+    if (lease == NULL || lease->state == KERNEL_DEVICE_LEASE_FREE ||
+        lease->device == NULL || &lease->device->lease != lease)
         return false;
-    return lease->device >= devices &&
-           lease->device < devices + KERNEL_DEVICE_MAX &&
-           lease->device->lease == lease;
-}
-
-static uint32_t owner_lease_count(uint32_t owner)
-{
-    uint32_t count = 0u;
-
-    for (uint32_t index = 0u; index < KERNEL_DEVICE_LEASE_MAX; ++index) {
-        if (leases[index].state != KERNEL_DEVICE_LEASE_FREE &&
-            leases[index].owner == owner)
-            ++count;
+    for (const KernelDeviceBlock *block = device_blocks; block != NULL;
+         block = block->next) {
+        for (uint32_t index = 0u; index < block->used; ++index) {
+            if (&block->records[index] == lease->device)
+                return true;
+        }
     }
-    return count;
+    return false;
 }
 
 static bool release_lease(KernelDeviceLease *lease)
@@ -84,8 +89,8 @@ static bool release_lease(KernelDeviceLease *lease)
     if (device_stats.live_leases == 0u)
         return false;
     --device_stats.live_leases;
-    return kernel_object_cache_release(&lease_cache, lease) ==
-           KERNEL_OBJECT_CACHE_OK;
+    return kernel_allocation_release(KERNEL_ALLOCATION_SITE_DEVICE_LEASE,
+                                     1u, sizeof(*lease));
 }
 
 static KernelDeviceStatus revoke_lease(KernelDeviceLease *lease)
@@ -129,29 +134,99 @@ static KernelDeviceStatus revoke_lease(KernelDeviceLease *lease)
     return KERNEL_DEVICE_OK;
 }
 
+static bool discard_device_blocks(void)
+{
+#if defined(__m68k__)
+    while (device_blocks != NULL) {
+        KernelDeviceBlock *block = device_blocks;
+
+        device_blocks = block->next;
+        if (kernel_memory_release(block->physical, 1u,
+                                  KERNEL_OWNER_CORE) != KERNEL_MEMORY_OK)
+            return false;
+    }
+#else
+    uint32_t blocks = 0u;
+    KernelAllocationStats stats;
+
+    while (device_blocks != NULL) {
+        KernelDeviceBlock *block = device_blocks;
+
+        device_blocks = block->next;
+        free(block);
+        ++blocks;
+    }
+    if (blocks != 0u &&
+        kernel_allocation_site_stats(
+            KERNEL_ALLOCATION_SITE_DEVICE_METADATA, &stats) &&
+        stats.current_units != 0u &&
+        !kernel_allocation_release(KERNEL_ALLOCATION_SITE_DEVICE_METADATA,
+                                   blocks, blocks * KERNEL_PAGE_SIZE))
+        return false;
+#endif
+    device_blocks_tail = NULL;
+    return true;
+}
+
+static KernelDeviceBlock *allocate_device_block(void)
+{
+    KernelDeviceBlock *block;
+
+#if defined(__m68k__)
+    uint32_t physical;
+
+    if (kernel_memory_alloc_zeroed_tagged(
+            KERNEL_ALLOCATION_SITE_DEVICE_METADATA, 1u, 1u,
+            KERNEL_FRAME_KERNEL, KERNEL_OWNER_CORE, &physical) !=
+        KERNEL_MEMORY_OK)
+        return NULL;
+    block = kernel_memory_access(physical, KERNEL_PAGE_SIZE);
+    if (block == NULL) {
+        (void)kernel_memory_release(physical, 1u, KERNEL_OWNER_CORE);
+        return NULL;
+    }
+    block->physical = physical;
+#else
+    if (!kernel_allocation_attempt(KERNEL_ALLOCATION_SITE_DEVICE_METADATA,
+                                   KERNEL_OWNER_CORE))
+        return NULL;
+    block = calloc(1u, KERNEL_PAGE_SIZE);
+    if (block == NULL ||
+        !kernel_allocation_commit(KERNEL_ALLOCATION_SITE_DEVICE_METADATA,
+                                  1u, KERNEL_PAGE_SIZE,
+                                  KERNEL_OWNER_CORE)) {
+        free(block);
+        return NULL;
+    }
+#endif
+    block->capacity = (uint16_t)((KERNEL_PAGE_SIZE - sizeof(*block)) /
+                                 sizeof(block->records[0]));
+    if (block->capacity == 0u) {
+#if defined(__m68k__)
+        (void)kernel_memory_release(block->physical, 1u, KERNEL_OWNER_CORE);
+#else
+        (void)kernel_allocation_release(
+            KERNEL_ALLOCATION_SITE_DEVICE_METADATA, 1u, KERNEL_PAGE_SIZE);
+        free(block);
+#endif
+        return NULL;
+    }
+    if (device_blocks_tail != NULL)
+        device_blocks_tail->next = block;
+    else
+        device_blocks = block;
+    device_blocks_tail = block;
+    return block;
+}
+
 bool kernel_device_init(void)
 {
     initialized = 0u;
     registry_sealed = 0u;
     corrupt = 0u;
-    for (uint32_t index = 0u; index < KERNEL_DEVICE_MAX; ++index) {
-        kernel_bytes_clear(&devices[index], sizeof(devices[index]));
-    }
-    for (uint32_t index = 0u; index < KERNEL_DEVICE_LEASE_MAX; ++index) {
-        leases[index].device = NULL;
-        leases[index].owner = 0u;
-        leases[index].device_generation = 0u;
-        leases[index].references = 0u;
-        leases[index].state = KERNEL_DEVICE_LEASE_FREE;
-        leases[index].reserved = 0u;
-    }
-    kernel_bytes_clear(&device_stats, sizeof(device_stats));
-    if (!kernel_object_cache_init(
-            &lease_cache, leases, sizeof(leases[0]), KERNEL_DEVICE_LEASE_MAX,
-            lease_cache_bitmap,
-            KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_DEVICE_LEASE_MAX),
-            KERNEL_ALLOCATION_SITE_DEVICE_LEASE))
+    if (!discard_device_blocks())
         return false;
+    kernel_bytes_clear(&device_stats, sizeof(device_stats));
     initialized = 1u;
     return true;
 }
@@ -159,7 +234,8 @@ bool kernel_device_init(void)
 KernelDeviceStatus kernel_device_register(
     const KernelDeviceDefinition *definition)
 {
-    KernelDeviceRecord *available = NULL;
+    KernelDeviceBlock *block;
+    KernelDeviceRecord *available;
 
     if (!initialized || registry_sealed != 0u || definition == NULL ||
         definition->device_id == 0u || definition->class_id == 0u ||
@@ -167,16 +243,18 @@ KernelDeviceStatus kernel_device_register(
         return KERNEL_DEVICE_INVALID_ARGUMENT;
     if (find_device(definition->device_id) != NULL)
         return KERNEL_DEVICE_BUSY;
-    for (uint32_t index = 0u; index < KERNEL_DEVICE_MAX; ++index) {
-        if (devices[index].state == KERNEL_DEVICE_UNREGISTERED) {
-            available = &devices[index];
-            break;
-        }
-    }
-    if (available == NULL)
+    block = device_blocks_tail;
+    if (block == NULL || block->used == block->capacity)
+        block = allocate_device_block();
+    if (block == NULL) {
+        ++device_stats.allocation_failures;
         return KERNEL_DEVICE_NO_SLOT;
+    }
+    available = &block->records[block->used++];
     kernel_bytes_copy(&available->definition, definition,
                       sizeof(available->definition));
+    available->lease.device = NULL;
+    available->lease.state = KERNEL_DEVICE_LEASE_FREE;
     available->generation = 1u;
     available->state = KERNEL_DEVICE_READY;
     ++device_stats.registered_devices;
@@ -196,9 +274,6 @@ KernelDeviceStatus kernel_device_acquire(uint32_t owner, uint32_t device_id,
 {
     KernelDeviceRecord *device;
     KernelDeviceLease *claimed;
-    void *raw;
-    uint16_t slot;
-    KernelObjectCacheStatus status;
 
     if (!initialized || registry_sealed == 0u || owner == 0u ||
         device_id == 0u || lease == NULL)
@@ -207,32 +282,28 @@ KernelDeviceStatus kernel_device_acquire(uint32_t owner, uint32_t device_id,
     device = find_device(device_id);
     if (device == NULL)
         return KERNEL_DEVICE_NOT_FOUND;
-    if (device->state != KERNEL_DEVICE_READY || device->lease != NULL) {
+    if (device->state != KERNEL_DEVICE_READY ||
+        device->lease.state != KERNEL_DEVICE_LEASE_FREE) {
         ++device_stats.busy_failures;
         return KERNEL_DEVICE_BUSY;
     }
-    if (owner_lease_count(owner) >= KERNEL_DEVICE_LEASE_OWNER_MAX) {
-        ++device_stats.quota_failures;
-        return KERNEL_DEVICE_QUOTA_EXCEEDED;
-    }
-    status = kernel_object_cache_claim(&lease_cache, owner, &raw, &slot);
-    if (status == KERNEL_OBJECT_CACHE_UNAVAILABLE) {
+    if (!kernel_allocation_attempt(KERNEL_ALLOCATION_SITE_DEVICE_LEASE,
+                                   owner)) {
         ++device_stats.allocation_failures;
         return KERNEL_DEVICE_NO_SLOT;
     }
-    if (status != KERNEL_OBJECT_CACHE_OK || raw == NULL ||
-        slot >= KERNEL_DEVICE_LEASE_MAX) {
+    if (!kernel_allocation_commit(KERNEL_ALLOCATION_SITE_DEVICE_LEASE,
+                                  1u, sizeof(device->lease), owner)) {
         corrupt = 1u;
         return KERNEL_DEVICE_CORRUPT;
     }
-    claimed = raw;
+    claimed = &device->lease;
     claimed->device = device;
     claimed->owner = owner;
     claimed->device_generation = device->generation;
     claimed->references = 1u;
     claimed->state = KERNEL_DEVICE_LEASE_ACTIVE;
     claimed->reserved = 0u;
-    device->lease = claimed;
     device->state = KERNEL_DEVICE_LEASED;
     ++device_stats.acquisitions;
     ++device_stats.live_leases;
@@ -256,7 +327,6 @@ bool kernel_device_handle_retain(void *object, void *context)
 void kernel_device_handle_release(void *object, void *context)
 {
     KernelDeviceLease *lease = object;
-    KernelDeviceRecord *device;
     KernelDeviceStatus status;
 
     (void)context;
@@ -274,8 +344,6 @@ void kernel_device_handle_release(void *object, void *context)
             return;
         }
     }
-    device = lease->device;
-    device->lease = NULL;
     if (!release_lease(lease))
         corrupt = 1u;
 }
@@ -339,20 +407,23 @@ KernelDeviceStatus kernel_device_owner_died(uint32_t owner,
 
     if (owner == 0u)
         return KERNEL_DEVICE_INVALID_ARGUMENT;
-    for (uint32_t index = 0u; index < KERNEL_DEVICE_LEASE_MAX; ++index) {
-        KernelDeviceLease *lease = &leases[index];
-        KernelDeviceStatus status;
+    for (KernelDeviceBlock *block = device_blocks; block != NULL;
+         block = block->next) {
+        for (uint32_t index = 0u; index < block->used; ++index) {
+            KernelDeviceLease *lease = &block->records[index].lease;
+            KernelDeviceStatus status;
 
-        if (lease->state != KERNEL_DEVICE_LEASE_ACTIVE ||
-            lease->owner != owner)
-            continue;
-        owned = true;
-        if (lease->references != 1u)
-            continue;
-        status = revoke_lease(lease);
-        if (status != KERNEL_DEVICE_OK && result == KERNEL_DEVICE_OK)
-            result = status;
-        ++revoked;
+            if (lease->state != KERNEL_DEVICE_LEASE_ACTIVE ||
+                lease->owner != owner)
+                continue;
+            owned = true;
+            if (lease->references != 1u)
+                continue;
+            status = revoke_lease(lease);
+            if (status != KERNEL_DEVICE_OK && result == KERNEL_DEVICE_OK)
+                result = status;
+            ++revoked;
+        }
     }
     if (owned)
         ++device_stats.owner_deaths;
@@ -371,38 +442,53 @@ bool kernel_device_stats(KernelDeviceStats *stats)
 
 bool kernel_device_pool_valid(void)
 {
+    KernelAllocationStats metadata;
+    KernelAllocationStats leases;
+    uint32_t blocks = 0u;
     uint32_t registered = 0u;
     uint32_t live = 0u;
 
-    if (!initialized || corrupt != 0u ||
-        !kernel_object_cache_valid(&lease_cache))
+    if (!initialized || corrupt != 0u)
         return false;
-    for (uint32_t index = 0u; index < KERNEL_DEVICE_MAX; ++index) {
-        KernelDeviceRecord *device = &devices[index];
+    for (KernelDeviceBlock *block = device_blocks; block != NULL;
+         block = block->next) {
+        ++blocks;
+        if (block->capacity == 0u || block->used > block->capacity ||
+            (block->next == NULL) != (block == device_blocks_tail))
+            return false;
+        for (uint32_t index = 0u; index < block->used; ++index) {
+            KernelDeviceRecord *device = &block->records[index];
+            KernelDeviceLease *lease = &device->lease;
 
-        if (device->state == KERNEL_DEVICE_UNREGISTERED)
-            continue;
-        ++registered;
-        if (device->definition.device_id == 0u ||
-            device->definition.class_id == 0u ||
-            device->definition.quiesce == NULL ||
-            device->definition.reset == NULL)
-            return false;
-        if (device->state == KERNEL_DEVICE_READY && device->lease != NULL)
-            return false;
-        if ((device->state == KERNEL_DEVICE_LEASED ||
-             device->state == KERNEL_DEVICE_QUIESCING ||
-             device->state == KERNEL_DEVICE_RESETTING) &&
-            device->lease == NULL)
-            return false;
-    }
-    for (uint32_t index = 0u; index < KERNEL_DEVICE_LEASE_MAX; ++index) {
-        if (leases[index].state == KERNEL_DEVICE_LEASE_FREE)
-            continue;
-        if (!valid_lease(&leases[index]) || leases[index].references == 0u)
-            return false;
-        ++live;
+            ++registered;
+            if (device->state == KERNEL_DEVICE_UNREGISTERED ||
+                device->definition.device_id == 0u ||
+                device->definition.class_id == 0u ||
+                device->definition.quiesce == NULL ||
+                device->definition.reset == NULL)
+                return false;
+            if (lease->state == KERNEL_DEVICE_LEASE_FREE) {
+                if (lease->device != NULL || lease->owner != 0u ||
+                    lease->references != 0u ||
+                    device->state == KERNEL_DEVICE_LEASED ||
+                    device->state == KERNEL_DEVICE_QUIESCING ||
+                    device->state == KERNEL_DEVICE_RESETTING)
+                    return false;
+                continue;
+            }
+            if (!valid_lease(lease) || lease->references == 0u)
+                return false;
+            ++live;
+        }
     }
     return registered == device_stats.registered_devices &&
-           live == device_stats.live_leases;
+           live == device_stats.live_leases &&
+           kernel_allocation_site_stats(
+               KERNEL_ALLOCATION_SITE_DEVICE_METADATA, &metadata) &&
+           metadata.current_units == blocks &&
+           metadata.current_bytes == blocks * KERNEL_PAGE_SIZE &&
+           kernel_allocation_site_stats(
+               KERNEL_ALLOCATION_SITE_DEVICE_LEASE, &leases) &&
+           leases.current_units == live &&
+           leases.current_bytes == live * sizeof(KernelDeviceLease);
 }

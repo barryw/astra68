@@ -1,4 +1,5 @@
 #include <astra/dynamic_loader.h>
+#include <astra/bytes.h>
 #include <astra/endian.h>
 #include <astra/limits.h>
 #include <astra/tls.h>
@@ -250,17 +251,11 @@ static int string_at(const AstraDynamicImage *image, uint32_t offset,
 
     if (offset >= image->string_size)
         return 0;
-    text = mapped_offset(image, image->string_address, offset,
-                         image->string_size - offset);
+    text = mapped_offset(image, image->string_address, offset, 1u);
     if (text == NULL)
         return 0;
-    for (uint32_t index = 0u; index < image->string_size - offset; ++index) {
-        if (text[index] == 0u) {
-            *result = (const char *)(const void *)text;
-            return 1;
-        }
-    }
-    return 0;
+    *result = (const char *)(const void *)text;
+    return 1;
 }
 
 static int text_equal(const char *left, const char *right)
@@ -599,6 +594,14 @@ AstraDynamicStatus astra_dynamic_open(uintptr_t mapping_origin,
         !table_range(image, image->hash_address, 8u) ||
         !table_range(image, image->string_address, image->string_size))
         return ASTRA_DYNAMIC_BAD_TABLE;
+    {
+        const uint8_t *strings = mapped(
+            image, image->string_address, image->string_size);
+
+        if (strings == NULL || strings[0] != 0u ||
+            strings[image->string_size - 1u] != 0u)
+            return ASTRA_DYNAMIC_BAD_STRING;
+    }
     hash = mapped(image, image->hash_address, 8u);
     if (hash == NULL || astra_load_be32(hash) == 0u)
         return ASTRA_DYNAMIC_BAD_TABLE;
@@ -742,19 +745,45 @@ AstraDynamicStatus astra_dynamic_soname(const AstraDynamicImage *image,
     return ASTRA_DYNAMIC_BAD_TABLE;
 }
 
-static uint32_t elf_hash(const char *name)
+static uint32_t elf_hash(const char *name, uint32_t *length)
 {
     uint32_t hash = 0u;
+    const char *start = name;
 
-    while (*name != '\0') {
-        uint32_t high;
+#if defined(__m68k__)
+    uint32_t character;
+    uint32_t high;
 
-        hash = (hash << 4) + (uint8_t)*name++;
-        high = hash & 0xf0000000u;
-        if (high != 0u)
-            hash ^= high >> 24;
-        hash &= ~high;
+    __asm__ volatile(
+        "moveq #0,%0\n\t"
+        "moveq #0,%1\n"
+        "1:\n\t"
+        "move.b (%3)+,%1\n\t"
+        "beq.s 2f\n\t"
+        "lsl.l #4,%0\n\t"
+        "add.l %1,%0\n\t"
+        "move.l %0,%2\n\t"
+        "rol.l #8,%2\n\t"
+        "and.l #0xf0,%2\n\t"
+        "eor.l %2,%0\n\t"
+        "and.l #0x0fffffff,%0\n\t"
+        "bra.s 1b\n"
+        "2:"
+        : "=&d"(hash), "=&d"(character), "=&d"(high), "+a"(name)
+        :
+        : "cc", "memory");
+#else
+    for (;;) {
+        uint8_t character = (uint8_t)*name++;
+
+        if (character == 0u)
+            break;
+        hash = (hash << 4) + character;
+        hash ^= (hash >> 24) & 0xf0u;
+        hash &= 0x0fffffffu;
     }
+#endif
+    *length = (uint32_t)(name - start) - 1u;
     return hash;
 }
 
@@ -863,26 +892,38 @@ static AstraDynamicStatus symbol_at(const AstraDynamicImage *image,
         !checked_add(image->symbol_address, address, &address))
         return ASTRA_DYNAMIC_BAD_SYMBOL;
     *symbol = mapped(image, address, ELF_SYMBOL_SIZE);
-    if (*symbol == NULL ||
-        !string_at(image, astra_load_be32(*symbol), name))
+    if (*symbol == NULL || !string_at(image, astra_load_be32(*symbol), name))
         return ASTRA_DYNAMIC_BAD_SYMBOL;
     return ASTRA_DYNAMIC_OK;
 }
 
-AstraDynamicStatus astra_dynamic_lookup(
+static int symbol_name_equal(const AstraDynamicImage *image,
+                             const uint8_t *symbol, const char *candidate,
+                             const char *name, uint32_t name_length)
+{
+    uint32_t offset = astra_load_be32(symbol);
+
+    return name_length < image->string_size - offset &&
+           candidate[name_length] == '\0' &&
+           memcmp(name, candidate, name_length) == 0;
+}
+
+static AstraDynamicStatus dynamic_lookup_hashed(
     const AstraDynamicImage *image, const char *name, const char *version,
+    uint32_t name_hash, uint32_t name_length,
     AstraDynamicResolution *resolution)
 {
+    const uint8_t *chains;
     const uint8_t *hash;
     uint32_t bucket_count;
     uint32_t index;
 
-    if (image == NULL || name == NULL || *name == '\0' || resolution == NULL)
-        return ASTRA_DYNAMIC_INVALID_ARGUMENT;
     hash = mapped(image, image->hash_address, 8u);
     if (hash == NULL)
         return ASTRA_DYNAMIC_BAD_TABLE;
     bucket_count = astra_load_be32(hash);
+    if (bucket_count == 0u)
+        return ASTRA_DYNAMIC_BAD_TABLE;
     {
         uint32_t words;
         uint32_t bytes;
@@ -897,43 +938,46 @@ AstraDynamicStatus astra_dynamic_lookup(
     }
     {
         uint32_t bucket_offset;
+        uint32_t bucket_bytes = bucket_count * 4u;
 
-        if (!checked_multiply(elf_hash(name) % bucket_count, 4u,
-                              &bucket_offset) ||
-            !checked_add(bucket_offset, 8u, &bucket_offset))
-            return ASTRA_DYNAMIC_BAD_TABLE;
-        index = astra_load_be32(hash + bucket_offset);
+        bucket_offset = (name_hash % bucket_count) * 4u;
+        index = astra_load_be32(hash + 8u + bucket_offset);
+        chains = hash + 8u + bucket_bytes;
     }
     for (uint32_t visited = 0u; index != 0u && visited < image->symbol_count;
          ++visited) {
         const uint8_t *symbol;
         const char *candidate;
         const char *provided_version;
-        uint32_t chain_address;
         uint8_t bind;
         uint8_t visibility;
         uint16_t section;
         int hidden;
-        AstraDynamicStatus status = symbol_at(image, index, &symbol,
-                                              &candidate);
+        AstraDynamicStatus status = symbol_at(
+            image, index, &symbol, &candidate);
 
         if (status != ASTRA_DYNAMIC_OK)
             return status;
         bind = symbol[12u] >> 4;
         visibility = symbol[13u] & 3u;
         section = astra_load_be16(symbol + 14u);
-        status = symbol_version(image, index, 1, &provided_version, &hidden);
-        if (status != ASTRA_DYNAMIC_OK &&
-            status != ASTRA_DYNAMIC_VERSION_MISMATCH)
-            return status;
-        if (text_equal(name, candidate) && section != ELF_SHN_UNDEF &&
+        if (symbol_name_equal(image, symbol, candidate, name, name_length) &&
+            section != ELF_SHN_UNDEF &&
             (bind == ELF_STB_GLOBAL || bind == ELF_STB_WEAK) &&
-            visibility != ELF_STV_INTERNAL && visibility != ELF_STV_HIDDEN &&
-            status == ASTRA_DYNAMIC_OK &&
-            ((version != NULL && text_equal(version, provided_version)) ||
-             (version == NULL && hidden == 0))) {
-            uint32_t value = astra_load_be32(symbol + 4u);
+            visibility != ELF_STV_INTERNAL && visibility != ELF_STV_HIDDEN) {
+            uint32_t value;
 
+            status = symbol_version(image, index, 1, &provided_version,
+                                    &hidden);
+            if (status != ASTRA_DYNAMIC_OK &&
+                status != ASTRA_DYNAMIC_VERSION_MISMATCH)
+                return status;
+            if (status != ASTRA_DYNAMIC_OK ||
+                (version != NULL &&
+                 !text_equal(version, provided_version)) ||
+                (version == NULL && hidden != 0))
+                goto next_symbol;
+            value = astra_load_be32(symbol + 4u);
             *resolution = (AstraDynamicResolution){0};
             resolution->symbol_type = symbol[12u] & 0x0fu;
             if (resolution->symbol_type == ELF_STT_TLS) {
@@ -948,25 +992,26 @@ AstraDynamicStatus astra_dynamic_lookup(
             }
             return ASTRA_DYNAMIC_OK;
         }
-        {
-            uint32_t chain_base;
-            uint32_t bucket_bytes;
-
-            if (!checked_multiply(bucket_count, 4u, &bucket_bytes) ||
-                !checked_add(image->hash_address, 8u, &chain_base) ||
-                !checked_add(chain_base, bucket_bytes, &chain_base) ||
-                !checked_multiply(index, 4u, &chain_address) ||
-                !checked_add(chain_base, chain_address, &chain_address))
-                return ASTRA_DYNAMIC_BAD_TABLE;
-        }
-        hash = mapped(image, chain_address, 4u);
-        if (hash == NULL)
-            return ASTRA_DYNAMIC_BAD_TABLE;
-        index = astra_load_be32(hash);
+next_symbol:
+        index = astra_load_be32(chains + index * 4u);
         if (index >= image->symbol_count)
             return ASTRA_DYNAMIC_BAD_TABLE;
     }
     return ASTRA_DYNAMIC_UNRESOLVED_SYMBOL;
+}
+
+AstraDynamicStatus astra_dynamic_lookup(
+    const AstraDynamicImage *image, const char *name, const char *version,
+    AstraDynamicResolution *resolution)
+{
+    uint32_t name_length;
+    uint32_t name_hash;
+
+    if (image == NULL || name == NULL || *name == '\0' || resolution == NULL)
+        return ASTRA_DYNAMIC_INVALID_ARGUMENT;
+    name_hash = elf_hash(name, &name_length);
+    return dynamic_lookup_hashed(image, name, version, name_hash, name_length,
+                                 resolution);
 }
 
 AstraDynamicStatus astra_dynamic_resolve_closure(
@@ -974,12 +1019,20 @@ AstraDynamicStatus astra_dynamic_resolve_closure(
     AstraDynamicResolution *resolution)
 {
     const AstraDynamicClosure *closure = context;
+    uint32_t name_length;
+    uint32_t name_hash;
 
     if (closure == NULL || (closure->count != 0u && closure->images == NULL))
         return ASTRA_DYNAMIC_INVALID_ARGUMENT;
+    if (closure->count == 0u)
+        return ASTRA_DYNAMIC_UNRESOLVED_SYMBOL;
+    if (name == NULL || *name == '\0' || resolution == NULL)
+        return ASTRA_DYNAMIC_INVALID_ARGUMENT;
+    name_hash = elf_hash(name, &name_length);
     for (uint32_t index = 0u; index < closure->count; ++index) {
-        AstraDynamicStatus status = astra_dynamic_lookup(
-            &closure->images[index], name, version, resolution);
+        AstraDynamicStatus status = dynamic_lookup_hashed(
+            &closure->images[index], name, version, name_hash, name_length,
+            resolution);
 
         if (status == ASTRA_DYNAMIC_OK)
             return status;
@@ -1039,28 +1092,58 @@ static AstraDynamicStatus relocate_table(
     AstraDynamicImage *image, uint32_t address, uint32_t size,
     AstraDynamicResolver resolver, void *context)
 {
+    const uint8_t *table;
+    uint8_t *writable_mapping = NULL;
     uint32_t writable_start = 0u;
     uint32_t writable_end = 0u;
+    uint32_t offset = 0u;
 
-    for (uint32_t offset = 0u; offset < size; offset += ELF_RELA_SIZE) {
-        uint32_t rela_address;
-        const uint8_t *rela;
+    if (size == 0u)
+        return ASTRA_DYNAMIC_OK;
+    table = mapped(image, address, size);
+    if (table == NULL)
+        return ASTRA_DYNAMIC_BAD_RELOCATION;
+
+    /* GNU ld places the cheap relative relocations first. Handle that run in
+     * a compact loop; later or unsorted relative records remain valid and use
+     * the complete path below. */
+    while (offset < size) {
+        const uint8_t *rela = table + offset;
+        uint32_t info = astra_load_be32(rela + 4u);
+        uint32_t target_address;
+        int32_t addend;
+        uint8_t *target;
+
+        if ((info & 0xffu) != ELF_R_68K_RELATIVE)
+            break;
+        if ((info >> 8) != 0u)
+            return ASTRA_DYNAMIC_BAD_RELOCATION;
+        target_address = astra_load_be32(rela);
+        addend = (int32_t)astra_load_be32(rela + 8u);
+        if (writable_end < 4u || target_address < writable_start ||
+            target_address > writable_end - 4u) {
+            if (!load_range(image, target_address, 4u, ELF_PF_W, 0,
+                            &writable_start, &writable_end))
+                return ASTRA_DYNAMIC_BAD_RELOCATION;
+            writable_mapping = mapped(image, writable_start,
+                                      writable_end - writable_start);
+            if (writable_mapping == NULL)
+                return ASTRA_DYNAMIC_BAD_RELOCATION;
+        }
+        target = writable_mapping + target_address - writable_start;
+        astra_store_be32(target, image->load_bias + (uint32_t)addend);
+        offset += ELF_RELA_SIZE;
+    }
+
+    for (; offset < size; offset += ELF_RELA_SIZE) {
+        const uint8_t *rela = table + offset;
         uint32_t target_address;
         uint32_t info;
         uint32_t symbol_index;
         uint32_t type;
         int32_t addend;
         uint8_t *target;
-        AstraDynamicResolution resolution = {0};
-        AstraDynamicStatus status;
-        int weak = 0;
-        uint32_t value;
 
-        if (!checked_add(address, offset, &rela_address))
-            return ASTRA_DYNAMIC_BAD_RELOCATION;
-        rela = mapped(image, rela_address, ELF_RELA_SIZE);
-        if (rela == NULL)
-            return ASTRA_DYNAMIC_BAD_RELOCATION;
         info = astra_load_be32(rela + 4u);
         symbol_index = info >> 8;
         type = info & 0xffu;
@@ -1073,10 +1156,12 @@ static AstraDynamicStatus relocate_table(
             if (!load_range(image, target_address, 4u, ELF_PF_W, 0,
                             &writable_start, &writable_end))
                 return ASTRA_DYNAMIC_BAD_RELOCATION;
+            writable_mapping = mapped(image, writable_start,
+                                      writable_end - writable_start);
+            if (writable_mapping == NULL)
+                return ASTRA_DYNAMIC_BAD_RELOCATION;
         }
-        target = mapped(image, target_address, 4u);
-        if (target == NULL)
-            return ASTRA_DYNAMIC_BAD_RELOCATION;
+        target = writable_mapping + target_address - writable_start;
         if (type == ELF_R_68K_RELATIVE) {
             if (symbol_index != 0u)
                 return ASTRA_DYNAMIC_BAD_RELOCATION;
@@ -1085,47 +1170,54 @@ static AstraDynamicStatus relocate_table(
         }
         if (type == ELF_R_68K_COPY)
             return ASTRA_DYNAMIC_UNSUPPORTED;
-        if ((type == ELF_R_68K_TLS_DTPMOD32 ||
-             type == ELF_R_68K_TLS_DTPREL32 ||
-             type == ELF_R_68K_TLS_TPREL32) && symbol_index == 0u) {
-            if (image->tls_module == 0u)
-                return ASTRA_DYNAMIC_TLS_UNAVAILABLE;
-            resolution.symbol_type = ELF_STT_TLS;
-            resolution.tls_module = image->tls_module;
-            resolution.tls_tp_offset = image->tls_tp_offset;
-        } else {
-            status = resolve_symbol(image, symbol_index, resolver, context,
-                                    &resolution, &weak);
-            if (status != ASTRA_DYNAMIC_OK)
-                return status;
-        }
-        if (type == ELF_R_68K_TLS_DTPMOD32) {
-            if (resolution.tls_module == 0u)
-                return ASTRA_DYNAMIC_TLS_UNAVAILABLE;
-            value = resolution.tls_module;
-        } else if (type == ELF_R_68K_TLS_DTPREL32) {
-            if (resolution.symbol_type != ELF_STT_TLS)
-                return ASTRA_DYNAMIC_BAD_RELOCATION;
-            value = resolution.tls_offset + (uint32_t)addend;
-        } else if (type == ELF_R_68K_TLS_TPREL32) {
-            if (resolution.symbol_type != ELF_STT_TLS)
-                return ASTRA_DYNAMIC_BAD_RELOCATION;
-            value = (uint32_t)(resolution.tls_tp_offset +
-                               (int32_t)resolution.tls_offset + addend);
-        } else {
-            if (resolution.symbol_type == ELF_STT_TLS)
-                return ASTRA_DYNAMIC_BAD_RELOCATION;
-            if (type == ELF_R_68K_32 || type == ELF_R_68K_GLOB_DAT ||
-                type == ELF_R_68K_JMP_SLOT) {
-                value = resolution.address + (uint32_t)addend;
-            } else if (type == ELF_R_68K_PC32) {
-                value = resolution.address + (uint32_t)addend -
-                        (image->load_bias + target_address);
+        {
+            AstraDynamicResolution resolution = {0};
+            AstraDynamicStatus status;
+            int weak = 0;
+            uint32_t value;
+
+            if ((type == ELF_R_68K_TLS_DTPMOD32 ||
+                 type == ELF_R_68K_TLS_DTPREL32 ||
+                 type == ELF_R_68K_TLS_TPREL32) && symbol_index == 0u) {
+                if (image->tls_module == 0u)
+                    return ASTRA_DYNAMIC_TLS_UNAVAILABLE;
+                resolution.symbol_type = ELF_STT_TLS;
+                resolution.tls_module = image->tls_module;
+                resolution.tls_tp_offset = image->tls_tp_offset;
             } else {
-                return ASTRA_DYNAMIC_UNSUPPORTED;
+                status = resolve_symbol(image, symbol_index, resolver,
+                                        context, &resolution, &weak);
+                if (status != ASTRA_DYNAMIC_OK)
+                    return status;
             }
+            if (type == ELF_R_68K_TLS_DTPMOD32) {
+                if (resolution.tls_module == 0u)
+                    return ASTRA_DYNAMIC_TLS_UNAVAILABLE;
+                value = resolution.tls_module;
+            } else if (type == ELF_R_68K_TLS_DTPREL32) {
+                if (resolution.symbol_type != ELF_STT_TLS)
+                    return ASTRA_DYNAMIC_BAD_RELOCATION;
+                value = resolution.tls_offset + (uint32_t)addend;
+            } else if (type == ELF_R_68K_TLS_TPREL32) {
+                if (resolution.symbol_type != ELF_STT_TLS)
+                    return ASTRA_DYNAMIC_BAD_RELOCATION;
+                value = (uint32_t)(resolution.tls_tp_offset +
+                                   (int32_t)resolution.tls_offset + addend);
+            } else {
+                if (resolution.symbol_type == ELF_STT_TLS)
+                    return ASTRA_DYNAMIC_BAD_RELOCATION;
+                if (type == ELF_R_68K_32 || type == ELF_R_68K_GLOB_DAT ||
+                    type == ELF_R_68K_JMP_SLOT) {
+                    value = resolution.address + (uint32_t)addend;
+                } else if (type == ELF_R_68K_PC32) {
+                    value = resolution.address + (uint32_t)addend -
+                            (image->load_bias + target_address);
+                } else {
+                    return ASTRA_DYNAMIC_UNSUPPORTED;
+                }
+            }
+            astra_store_be32(target, value);
         }
-        astra_store_be32(target, value);
     }
     return ASTRA_DYNAMIC_OK;
 }

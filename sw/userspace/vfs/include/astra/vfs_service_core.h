@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include <astra/process.h>
+#include <astra/limits.h>
 #include <astra/vfs_backend.h>
 #include <astra/vfs_service.h>
 
@@ -29,15 +29,14 @@
  *    read another's file by guessing a number.
  */
 
-/* One service session for every grant a full process table can legally hold. */
-#define ASTRA_VFS_SESSION_MAX \
-    (ASTRA_PROCESS_COUNT_MAX * ASTRA_LAUNCH_GRANT_MAX)
+/* A transported session owns kernel handles; the 8-bit handle ABI is final. */
+#define ASTRA_VFS_SESSION_MAX ASTRA_HANDLE_COUNT_MAX
 
 typedef struct AstraVfsOpenFile {
     uintptr_t node;
     uint32_t session;       /* the owning session id, 0 when the slot is free */
     uint32_t flags;
-    volatile uint32_t sequence;
+    volatile uint32_t sequence __attribute__((aligned(4)));
     uint16_t generation;
     uint16_t kind;
     uint16_t waiters;
@@ -85,6 +84,9 @@ typedef struct AstraVfsServiceStats {
     uint32_t owner_quota_denied;
     uint32_t peak_open_files;
     uint32_t peak_sessions;
+    uint32_t last_failed_operation;
+    uint32_t last_failed_status;
+    uint32_t last_failed_owner;
 } AstraVfsServiceStats;
 
 typedef int (*AstraVfsStateAcquire)(void *context);

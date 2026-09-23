@@ -2,9 +2,13 @@
 
 #include "bytes.h"
 #include "generation.h"
+#include "memory.h"
 #include "object_cache.h"
 
 #include <stddef.h>
+#if !defined(__m68k__)
+#include <stdlib.h>
+#endif
 
 /*
  * Object tables live in their own region above the frame metadata, not beside
@@ -28,10 +32,10 @@
 #define KERNEL_HANDLE_LAST_WORD_MASK \
     (UINT32_MAX >> (KERNEL_HANDLE_BITMAP_BITS - \
                     KERNEL_HANDLE_LAST_WORD_BITS))
-#define KERNEL_DETACHED_SLOT_BITS 9u
+#define KERNEL_DETACHED_SLOT_BITS 16u
 #define KERNEL_DETACHED_SLOT_MASK \
     ((1u << KERNEL_DETACHED_SLOT_BITS) - 1u)
-#define KERNEL_DETACHED_GENERATION_MASK 0x007fffffu
+#define KERNEL_DETACHED_GENERATION_MASK 0x0000ffffu
 
 #define KERNEL_HANDLE_BATCH_EMPTY 0u
 #define KERNEL_HANDLE_BATCH_PREPARED 1u
@@ -138,15 +142,28 @@ typedef struct KernelDetachedEntry {
     void *release_context;
     uint32_t rights;
     uint32_t generation;
-    uint16_t type;
+    uint8_t type;
     uint8_t state;
-    uint8_t reserved;
+    uint16_t slot;
 } KernelDetachedEntry;
 
-static KernelDetachedEntry detached_entries[KERNEL_HANDLE_DETACHED_MAX] KERNEL_TABLES;
-static KernelObjectCache detached_cache;
-static uint32_t detached_cache_bitmap[
-    KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_HANDLE_DETACHED_MAX)];
+#define DETACHED_LEAF_BITS 6u
+#define DETACHED_LEAF_ENTRIES (1u << DETACHED_LEAF_BITS)
+#define DETACHED_LEAF_COUNT \
+    ((KERNEL_HANDLE_DETACHED_MAX + DETACHED_LEAF_ENTRIES - 1u) / \
+     DETACHED_LEAF_ENTRIES)
+#define DETACHED_LEAF_BYTES \
+    (DETACHED_LEAF_ENTRIES * sizeof(KernelDetachedEntry))
+#define DETACHED_LEAF_FRAMES \
+    ((DETACHED_LEAF_BYTES + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE)
+static KernelDetachedEntry *detached_directory[DETACHED_LEAF_COUNT]
+    KERNEL_TABLES;
+#if defined(__m68k__)
+static uint32_t detached_directory_physical[DETACHED_LEAF_COUNT]
+    KERNEL_TABLES;
+#endif
+static uint16_t detached_backed_limit;
+static uint16_t detached_next_slot;
 static KernelHandleTransferStats transfer_stats;
 
 #if defined(__m68k__)
@@ -170,6 +187,7 @@ static KernelDetachedHandle make_detached_handle(uint32_t index,
 static void clear_detached_entry(KernelDetachedEntry *entry)
 {
     uint32_t generation = entry->generation;
+    uint16_t slot = entry->slot;
 
     entry->object = NULL;
     entry->retain = NULL;
@@ -179,7 +197,156 @@ static void clear_detached_entry(KernelDetachedEntry *entry)
     entry->generation = generation;
     entry->type = KERNEL_OBJECT_NONE;
     entry->state = KERNEL_DETACHED_FREE;
-    entry->reserved = 0u;
+    entry->slot = slot;
+}
+
+static KernelDetachedEntry *detached_entry_at(uint32_t slot)
+{
+    KernelDetachedEntry *leaf;
+
+    if (slot >= KERNEL_HANDLE_DETACHED_MAX)
+        return NULL;
+    leaf = detached_directory[slot >> DETACHED_LEAF_BITS];
+    return leaf != NULL ? &leaf[slot & (DETACHED_LEAF_ENTRIES - 1u)] : NULL;
+}
+
+static bool ensure_detached_leaf(uint32_t slot)
+{
+    uint32_t leaf_index = slot >> DETACHED_LEAF_BITS;
+    KernelDetachedEntry *leaf;
+
+    if (detached_directory[leaf_index] != NULL)
+        return true;
+#if defined(__m68k__)
+    uint32_t physical;
+    if (kernel_memory_alloc_zeroed_tagged(
+            KERNEL_ALLOCATION_SITE_DETACHED_HANDLE_METADATA,
+            DETACHED_LEAF_FRAMES, 1u,
+            KERNEL_FRAME_KERNEL, KERNEL_OWNER_CORE, &physical) !=
+        KERNEL_MEMORY_OK)
+        return false;
+    leaf = kernel_memory_access(
+        physical, DETACHED_LEAF_FRAMES * KERNEL_PAGE_SIZE);
+    if (leaf == NULL) {
+        (void)kernel_memory_release(
+            physical, DETACHED_LEAF_FRAMES, KERNEL_OWNER_CORE);
+        return false;
+    }
+    detached_directory_physical[leaf_index] = physical;
+#else
+    if (!kernel_allocation_attempt(
+            KERNEL_ALLOCATION_SITE_DETACHED_HANDLE_METADATA,
+            KERNEL_OWNER_CORE))
+        return false;
+    leaf = calloc(DETACHED_LEAF_FRAMES, KERNEL_PAGE_SIZE);
+    if (leaf == NULL) {
+        kernel_allocation_fail(
+            KERNEL_ALLOCATION_SITE_DETACHED_HANDLE_METADATA,
+            KERNEL_OWNER_CORE);
+        return false;
+    }
+    if (!kernel_allocation_commit(
+            KERNEL_ALLOCATION_SITE_DETACHED_HANDLE_METADATA,
+            DETACHED_LEAF_FRAMES,
+            DETACHED_LEAF_FRAMES * KERNEL_PAGE_SIZE, KERNEL_OWNER_CORE)) {
+        free(leaf);
+        return false;
+    }
+#endif
+    detached_directory[leaf_index] = leaf;
+    for (uint32_t index = 0u; index < DETACHED_LEAF_ENTRIES; ++index) {
+        uint32_t entry_slot = leaf_index * DETACHED_LEAF_ENTRIES + index;
+
+        leaf[index].slot = entry_slot < KERNEL_HANDLE_DETACHED_MAX ?
+            (uint16_t)entry_slot : UINT16_MAX;
+        leaf[index].generation = 1u;
+        clear_detached_entry(&leaf[index]);
+    }
+    uint32_t limit = (leaf_index + 1u) * DETACHED_LEAF_ENTRIES;
+    if (limit > KERNEL_HANDLE_DETACHED_MAX)
+        limit = KERNEL_HANDLE_DETACHED_MAX;
+    if (limit > detached_backed_limit)
+        detached_backed_limit = (uint16_t)limit;
+    return true;
+}
+
+static bool discard_detached_leaves(void)
+{
+    KernelAllocationStats metadata;
+    uint32_t leaves = 0u;
+
+    if (!kernel_allocation_site_stats(
+            KERNEL_ALLOCATION_SITE_DETACHED_HANDLE_METADATA, &metadata))
+        return false;
+    for (uint32_t leaf = 0u; leaf < DETACHED_LEAF_COUNT; ++leaf) {
+        if (detached_directory[leaf] == NULL)
+            continue;
+        if (leaf != leaves)
+            return false;
+        ++leaves;
+    }
+    if ((metadata.current_units != 0u || metadata.current_bytes != 0u) &&
+        (metadata.current_units != leaves * DETACHED_LEAF_FRAMES ||
+         metadata.current_bytes !=
+             leaves * DETACHED_LEAF_FRAMES * KERNEL_PAGE_SIZE))
+        return false;
+    for (uint32_t leaf = 0u; leaf < leaves; ++leaf) {
+#if defined(__m68k__)
+        if (metadata.current_units != 0u &&
+            kernel_memory_release(
+                detached_directory_physical[leaf], DETACHED_LEAF_FRAMES,
+                KERNEL_OWNER_CORE) != KERNEL_MEMORY_OK)
+            return false;
+        detached_directory_physical[leaf] = 0u;
+#else
+        free(detached_directory[leaf]);
+#endif
+        detached_directory[leaf] = NULL;
+    }
+#if !defined(__m68k__)
+    if (metadata.current_units != 0u &&
+        !kernel_allocation_release(
+            KERNEL_ALLOCATION_SITE_DETACHED_HANDLE_METADATA,
+            metadata.current_units, metadata.current_bytes))
+        return false;
+#endif
+    detached_backed_limit = 0u;
+    detached_next_slot = 0u;
+    return true;
+}
+
+static KernelObjectCacheStatus claim_detached_entry(
+    KernelDetachedEntry **entry, uint16_t *slot)
+{
+    if (entry == NULL || slot == NULL)
+        return KERNEL_OBJECT_CACHE_INVALID_ARGUMENT;
+    *entry = NULL;
+    *slot = UINT16_MAX;
+    if (!kernel_allocation_attempt(KERNEL_ALLOCATION_SITE_DETACHED_HANDLE,
+                                   KERNEL_OWNER_CORE))
+        return KERNEL_OBJECT_CACHE_UNAVAILABLE;
+    for (uint32_t offset = 0u; offset < KERNEL_HANDLE_DETACHED_MAX; ++offset) {
+        uint32_t candidate = (uint32_t)detached_next_slot + offset;
+        if (candidate >= KERNEL_HANDLE_DETACHED_MAX)
+            candidate -= KERNEL_HANDLE_DETACHED_MAX;
+        if (!ensure_detached_leaf(candidate))
+            break;
+        KernelDetachedEntry *available = detached_entry_at(candidate);
+        if (available->state == KERNEL_DETACHED_FREE) {
+            detached_next_slot = candidate + 1u == KERNEL_HANDLE_DETACHED_MAX ?
+                0u : (uint16_t)(candidate + 1u);
+            if (!kernel_allocation_commit(
+                    KERNEL_ALLOCATION_SITE_DETACHED_HANDLE, 1u,
+                    sizeof(*available), KERNEL_OWNER_CORE))
+                return KERNEL_OBJECT_CACHE_CORRUPT;
+            *entry = available;
+            *slot = (uint16_t)candidate;
+            return KERNEL_OBJECT_CACHE_OK;
+        }
+    }
+    kernel_allocation_fail(KERNEL_ALLOCATION_SITE_DETACHED_HANDLE,
+                           KERNEL_OWNER_CORE);
+    return KERNEL_OBJECT_CACHE_UNAVAILABLE;
 }
 
 static void free_detached_entry(KernelDetachedEntry *entry)
@@ -187,8 +354,10 @@ static void free_detached_entry(KernelDetachedEntry *entry)
     entry->generation = kernel_generation_next_masked(
         entry->generation, KERNEL_DETACHED_GENERATION_MASK);
     clear_detached_entry(entry);
-    if (kernel_object_cache_release(&detached_cache, entry) !=
-        KERNEL_OBJECT_CACHE_OK)
+    if (entry->slot < detached_next_slot)
+        detached_next_slot = entry->slot;
+    if (!kernel_allocation_release(KERNEL_ALLOCATION_SITE_DETACHED_HANDLE,
+                                   1u, sizeof(*entry)))
         transfer_pool_corrupt = 1u;
 }
 
@@ -205,10 +374,11 @@ static KernelHandleStatus find_detached_entry(
     if (slot == 0u || slot > KERNEL_HANDLE_DETACHED_MAX || generation == 0u)
         return KERNEL_HANDLE_INVALID_HANDLE;
     --slot;
-    if (detached_entries[slot].generation != generation ||
-        detached_entries[slot].state != required_state)
+    KernelDetachedEntry *candidate = detached_entry_at(slot);
+    if (candidate == NULL || candidate->generation != generation ||
+        candidate->state != required_state)
         return KERNEL_HANDLE_INVALID_HANDLE;
-    *entry = &detached_entries[slot];
+    *entry = candidate;
     return KERNEL_HANDLE_OK;
 }
 
@@ -216,8 +386,8 @@ static uint32_t detached_live_count(void)
 {
     uint32_t count = 0u;
 
-    for (uint32_t index = 0u; index < KERNEL_HANDLE_DETACHED_MAX; ++index) {
-        if (detached_entries[index].state == KERNEL_DETACHED_LIVE)
+    for (uint32_t index = 0u; index < detached_backed_limit; ++index) {
+        if (detached_entry_at(index)->state == KERNEL_DETACHED_LIVE)
             ++count;
     }
     return count;
@@ -227,8 +397,8 @@ static uint32_t detached_reserved_count(void)
 {
     uint32_t count = 0u;
 
-    for (uint32_t index = 0u; index < KERNEL_HANDLE_DETACHED_MAX; ++index) {
-        if (detached_entries[index].state == KERNEL_DETACHED_RESERVED)
+    for (uint32_t index = 0u; index < detached_backed_limit; ++index) {
+        if (detached_entry_at(index)->state == KERNEL_DETACHED_RESERVED)
             ++count;
     }
     return count;
@@ -321,20 +491,24 @@ static void invalidate_entry(KernelHandleTable *table,
 
 void kernel_handle_transfer_pool_init(void)
 {
-    if (!kernel_object_cache_init(
-            &detached_cache, detached_entries,
-            sizeof(detached_entries[0]), KERNEL_HANDLE_DETACHED_MAX,
-            detached_cache_bitmap,
-            KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_HANDLE_DETACHED_MAX),
-            KERNEL_ALLOCATION_SITE_DETACHED_HANDLE)) {
+    KernelAllocationStats allocations;
+
+    if (!kernel_allocation_initialized())
+        kernel_allocation_init();
+    if (!kernel_allocation_site_stats(
+            KERNEL_ALLOCATION_SITE_DETACHED_HANDLE, &allocations) ||
+        allocations.current_bytes !=
+            allocations.current_units * sizeof(KernelDetachedEntry) ||
+        (allocations.current_units != 0u &&
+         !kernel_allocation_release(
+             KERNEL_ALLOCATION_SITE_DETACHED_HANDLE,
+             allocations.current_units, allocations.current_bytes))) {
         transfer_pool_corrupt = 1u;
         return;
     }
-    for (uint32_t index = 0u; index < KERNEL_HANDLE_DETACHED_MAX; ++index) {
-        uint32_t generation = detached_entries[index].generation;
-
-        clear_detached_entry(&detached_entries[index]);
-        detached_entries[index].generation = generation == 0u ? 1u : generation;
+    if (!discard_detached_leaves()) {
+        transfer_pool_corrupt = 1u;
+        return;
     }
     kernel_bytes_clear(&transfer_stats, sizeof(transfer_stats));
     transfer_pool_corrupt = 0u;
@@ -811,43 +985,65 @@ static void reset_transfer_batch(KernelHandleTransferBatch *batch)
     batch->reserved[1] = 0u;
 }
 
+static KernelHandleStatus validate_transfer_sources(
+    const KernelHandleTable *source_table,
+    const KernelHandle *source_handles, uint32_t count,
+    uint32_t required_rights, const KernelHandleEntry **sources)
+{
+    if (source_table == NULL || source_handles == NULL || count == 0u ||
+        count > KERNEL_HANDLE_TRANSFER_MAX || required_rights == 0u)
+        return KERNEL_HANDLE_INVALID_ARGUMENT;
+    for (uint32_t index = 0u; index < count; ++index) {
+        const KernelHandleEntry *source;
+        KernelHandleStatus status = find_entry(
+            source_table, source_handles[index], &source);
+
+        if (status != KERNEL_HANDLE_OK)
+            return status;
+        if ((source->rights & required_rights) != required_rights)
+            return KERNEL_HANDLE_ACCESS_DENIED;
+        if (source->object == NULL || source->release == NULL ||
+            source->type == KERNEL_OBJECT_NONE)
+            return KERNEL_HANDLE_CORRUPT;
+        for (uint32_t prior = 0u; prior < index; ++prior)
+            if (source_handles[prior] == source_handles[index])
+                return KERNEL_HANDLE_DUPLICATE;
+        if (sources != NULL)
+            sources[index] = source;
+    }
+    return KERNEL_HANDLE_OK;
+}
+
+KernelHandleStatus kernel_handle_transfer_validate(
+    const KernelHandleTable *source_table,
+    const KernelHandle *source_handles, uint32_t count,
+    uint32_t required_rights)
+{
+    return validate_transfer_sources(
+        source_table, source_handles, count, required_rights, NULL);
+}
+
 KernelHandleStatus kernel_handle_transfer_prepare(
     const KernelHandleTable *source_table, const KernelHandle *source_handles,
     uint32_t count, uint32_t required_rights,
     KernelHandleTransferBatch *batch)
 {
-    const KernelHandleEntry *sources[KERNEL_HANDLE_TRANSFER_MAX];
+    KernelHandleStatus status;
     uint32_t allocated = 0u;
 
-    if (source_table == NULL || source_handles == NULL || batch == NULL ||
-        count == 0u || count > KERNEL_HANDLE_TRANSFER_MAX ||
-        required_rights == 0u)
+    if (batch == NULL)
         return KERNEL_HANDLE_INVALID_ARGUMENT;
     reset_transfer_batch(batch);
-
-    for (uint32_t index = 0u; index < count; ++index) {
-        KernelHandleStatus status = find_entry(
-            source_table, source_handles[index], &sources[index]);
-
-        if (status != KERNEL_HANDLE_OK)
-            return status;
-        if ((sources[index]->rights & required_rights) != required_rights)
-            return KERNEL_HANDLE_ACCESS_DENIED;
-        if (sources[index]->object == NULL || sources[index]->release == NULL ||
-            sources[index]->type == KERNEL_OBJECT_NONE)
-            return KERNEL_HANDLE_CORRUPT;
-        for (uint32_t prior = 0u; prior < index; ++prior) {
-            if (source_handles[prior] == source_handles[index])
-                return KERNEL_HANDLE_DUPLICATE;
-        }
-    }
+    status = validate_transfer_sources(
+        source_table, source_handles, count, required_rights, NULL);
+    if (status != KERNEL_HANDLE_OK)
+        return status;
 
     while (allocated < count) {
-        void *raw_destination;
         uint16_t slot;
-        KernelObjectCacheStatus cache_status = kernel_object_cache_claim(
-            &detached_cache, 0u, &raw_destination, &slot);
         KernelDetachedEntry *destination;
+        KernelObjectCacheStatus cache_status = claim_detached_entry(
+            &destination, &slot);
         const KernelHandleEntry *source;
 
         if (cache_status == KERNEL_OBJECT_CACHE_UNAVAILABLE)
@@ -857,7 +1053,6 @@ KernelHandleStatus kernel_handle_transfer_prepare(
             transfer_pool_corrupt = 1u;
             return KERNEL_HANDLE_CORRUPT;
         }
-        destination = raw_destination;
         if (destination->state != KERNEL_DETACHED_FREE) {
             transfer_pool_corrupt = 1u;
             return KERNEL_HANDLE_CORRUPT;
@@ -865,7 +1060,11 @@ KernelHandleStatus kernel_handle_transfer_prepare(
         if (destination->generation == 0u ||
             destination->generation > KERNEL_DETACHED_GENERATION_MASK)
             destination->generation = 1u;
-        source = sources[allocated];
+        if (find_entry(source_table, source_handles[allocated], &source) !=
+            KERNEL_HANDLE_OK) {
+            transfer_pool_corrupt = 1u;
+            return KERNEL_HANDLE_CORRUPT;
+        }
         destination->object = source->object;
         destination->retain = source->retain;
         destination->release = source->release;
@@ -873,7 +1072,6 @@ KernelHandleStatus kernel_handle_transfer_prepare(
         destination->rights = source->rights;
         destination->type = source->type;
         destination->state = KERNEL_DETACHED_RESERVED;
-        destination->reserved = 0u;
         batch->detached[allocated] = make_detached_handle(
             slot, destination->generation);
         batch->source[allocated] = source_handles[allocated];
@@ -910,12 +1108,8 @@ KernelHandleStatus kernel_handle_transfer_prepare(
 KernelHandleStatus kernel_handle_transfer_commit_export(
     KernelHandleTable *source_table, KernelHandleTransferBatch *batch)
 {
-    KernelHandleEntry *sources[KERNEL_HANDLE_TRANSFER_MAX];
-    KernelDetachedEntry *destinations[KERNEL_HANDLE_TRANSFER_MAX];
-
     if (source_table == NULL || batch == NULL ||
-        batch->state != KERNEL_HANDLE_BATCH_PREPARED || batch->count == 0u ||
-        batch->count > KERNEL_HANDLE_TRANSFER_MAX)
+        batch->state != KERNEL_HANDLE_BATCH_PREPARED || batch->count == 0u)
         return KERNEL_HANDLE_INVALID_ARGUMENT;
 
     for (uint32_t index = 0u; index < batch->count; ++index) {
@@ -936,8 +1130,6 @@ KernelHandleStatus kernel_handle_transfer_commit_export(
             source->rights != destination->rights ||
             source->type != destination->type)
             return KERNEL_HANDLE_INVALID_STATE;
-        sources[index] = source;
-        destinations[index] = destination;
     }
     if (transfer_stats.reserved_detached < batch->count ||
         transfer_stats.live_detached >
@@ -947,8 +1139,19 @@ KernelHandleStatus kernel_handle_transfer_commit_export(
     }
 
     for (uint32_t index = 0u; index < batch->count; ++index) {
-        invalidate_entry(source_table, sources[index], NULL);
-        destinations[index]->state = KERNEL_DETACHED_LIVE;
+        KernelHandleEntry *source = NULL;
+        KernelDetachedEntry *destination = NULL;
+
+        if (find_entry_mutable(source_table, batch->source[index], &source) !=
+                KERNEL_HANDLE_OK ||
+            find_detached_entry(batch->detached[index],
+                                KERNEL_DETACHED_RESERVED,
+                                &destination) != KERNEL_HANDLE_OK) {
+            transfer_pool_corrupt = 1u;
+            return KERNEL_HANDLE_CORRUPT;
+        }
+        invalidate_entry(source_table, source, NULL);
+        destination->state = KERNEL_DETACHED_LIVE;
     }
     transfer_stats.reserved_detached -= batch->count;
     transfer_stats.live_detached += batch->count;
@@ -962,23 +1165,32 @@ KernelHandleStatus kernel_handle_transfer_commit_export(
 KernelHandleStatus kernel_handle_transfer_rollback(
     KernelHandleTransferBatch *batch)
 {
-    KernelDetachedEntry *entries[KERNEL_HANDLE_TRANSFER_MAX];
-
     if (batch == NULL || batch->state != KERNEL_HANDLE_BATCH_PREPARED ||
-        batch->count == 0u || batch->count > KERNEL_HANDLE_TRANSFER_MAX)
+        batch->count == 0u)
         return KERNEL_HANDLE_INVALID_ARGUMENT;
     for (uint32_t index = 0u; index < batch->count; ++index) {
+        KernelDetachedEntry *entry = NULL;
+
         if (find_detached_entry(batch->detached[index],
                                 KERNEL_DETACHED_RESERVED,
-                                &entries[index]) != KERNEL_HANDLE_OK)
+                                &entry) != KERNEL_HANDLE_OK)
             return KERNEL_HANDLE_INVALID_STATE;
     }
     if (transfer_stats.reserved_detached < batch->count) {
         transfer_pool_corrupt = 1u;
         return KERNEL_HANDLE_CORRUPT;
     }
-    for (uint32_t index = 0u; index < batch->count; ++index)
-        free_detached_entry(entries[index]);
+    for (uint32_t index = 0u; index < batch->count; ++index) {
+        KernelDetachedEntry *entry = NULL;
+
+        if (find_detached_entry(batch->detached[index],
+                                KERNEL_DETACHED_RESERVED,
+                                &entry) != KERNEL_HANDLE_OK) {
+            transfer_pool_corrupt = 1u;
+            return KERNEL_HANDLE_CORRUPT;
+        }
+        free_detached_entry(entry);
+    }
     transfer_stats.reserved_detached -= batch->count;
     reset_transfer_batch(batch);
     ++transfer_stats.export_rollbacks;
@@ -988,10 +1200,6 @@ KernelHandleStatus kernel_handle_transfer_rollback(
 static void reset_import_reservation(
     KernelHandleImportReservation *reservation)
 {
-    for (uint32_t index = 0u; index < KERNEL_HANDLE_TRANSFER_MAX; ++index) {
-        reservation->handles[index] = KERNEL_HANDLE_INVALID;
-        reservation->slots[index] = UINT8_MAX;
-    }
     reservation->count = 0u;
     reservation->active = 0u;
     reservation->reserved[0] = 0u;
@@ -1098,16 +1306,14 @@ KernelHandleStatus kernel_handle_import_commit(
     KernelHandleImportReservation *reservation,
     const KernelDetachedHandle *detached)
 {
-    KernelDetachedEntry *sources[KERNEL_HANDLE_TRANSFER_MAX];
-
     if (destination_table == NULL || reservation == NULL ||
         reservation->active == 0u ||
-        reservation->count > KERNEL_HANDLE_TRANSFER_MAX ||
         (reservation->count != 0u && detached == NULL))
         return KERNEL_HANDLE_INVALID_ARGUMENT;
     for (uint32_t index = 0u; index < reservation->count; ++index) {
         uint32_t slot = reservation->slots[index];
         KernelHandleEntry *destination;
+        KernelDetachedEntry *source = NULL;
 
         if (slot >= KERNEL_HANDLE_MAX_ENTRIES)
             return KERNEL_HANDLE_INVALID_STATE;
@@ -1118,7 +1324,7 @@ KernelHandleStatus kernel_handle_import_commit(
             reservation->handles[index] !=
                 make_handle(slot, destination->generation) ||
             find_detached_entry(detached[index], KERNEL_DETACHED_LIVE,
-                                &sources[index]) != KERNEL_HANDLE_OK)
+                                &source) != KERNEL_HANDLE_OK)
             return KERNEL_HANDLE_INVALID_STATE;
     }
     if (transfer_stats.live_detached < reservation->count) {
@@ -1129,7 +1335,13 @@ KernelHandleStatus kernel_handle_import_commit(
     for (uint32_t index = 0u; index < reservation->count; ++index) {
         KernelHandleEntry *destination =
             &destination_table->entries[reservation->slots[index]];
-        KernelDetachedEntry *source = sources[index];
+        KernelDetachedEntry *source = NULL;
+
+        if (find_detached_entry(detached[index], KERNEL_DETACHED_LIVE,
+                                &source) != KERNEL_HANDLE_OK) {
+            transfer_pool_corrupt = 1u;
+            return KERNEL_HANDLE_CORRUPT;
+        }
 
         destination->object = source->object;
         destination->retain = source->retain;
@@ -1152,8 +1364,7 @@ KernelHandleStatus kernel_handle_import_cancel(
     KernelHandleImportReservation *reservation)
 {
     if (destination_table == NULL || reservation == NULL ||
-        reservation->active == 0u ||
-        reservation->count > KERNEL_HANDLE_TRANSFER_MAX)
+        reservation->active == 0u)
         return KERNEL_HANDLE_INVALID_ARGUMENT;
     for (uint32_t index = 0u; index < reservation->count; ++index) {
         uint32_t slot = reservation->slots[index];
@@ -1189,7 +1400,6 @@ KernelHandleStatus kernel_handle_detached_release(
     const KernelDetachedHandle *detached, uint32_t count)
 {
     KernelDetachedEntry *entries[KERNEL_HANDLE_TRANSFER_MAX];
-    KernelHandleReleaseRecord releases[KERNEL_HANDLE_TRANSFER_MAX];
 
     if ((count != 0u && detached == NULL) ||
         count > KERNEL_HANDLE_TRANSFER_MAX)
@@ -1207,17 +1417,18 @@ KernelHandleStatus kernel_handle_detached_release(
         transfer_pool_corrupt = 1u;
         return KERNEL_HANDLE_CORRUPT;
     }
-    for (uint32_t index = 0u; index < count; ++index) {
-        releases[index].object = entries[index]->object;
-        releases[index].release = entries[index]->release;
-        releases[index].context = entries[index]->release_context;
-        free_detached_entry(entries[index]);
-    }
     transfer_stats.live_detached -= count;
     transfer_stats.released_detached += count;
-    for (uint32_t index = 0u; index < count; ++index)
-        releases[index].release(releases[index].object,
-                                releases[index].context);
+    for (uint32_t index = 0u; index < count; ++index) {
+        KernelHandleReleaseRecord release = {
+            .object = entries[index]->object,
+            .release = entries[index]->release,
+            .context = entries[index]->release_context,
+        };
+
+        free_detached_entry(entries[index]);
+        release.release(release.object, release.context);
+    }
     return KERNEL_HANDLE_OK;
 }
 
@@ -1244,31 +1455,42 @@ bool kernel_handle_transfer_pool_healthy(void)
 
 bool kernel_handle_transfer_pool_valid(void)
 {
+    KernelAllocationStats allocations;
+    KernelAllocationStats metadata;
+    uint32_t allocated_leaves = 0u;
     uint32_t live;
     uint32_t reserved;
 
-    if (!kernel_handle_transfer_pool_healthy() ||
-        !kernel_object_cache_valid(&detached_cache))
+    if (!kernel_handle_transfer_pool_healthy())
         return false;
-    for (uint32_t index = 0u; index < KERNEL_HANDLE_DETACHED_MAX; ++index) {
-        const KernelDetachedEntry *entry = &detached_entries[index];
-        bool claimed = kernel_object_cache_slot_claimed(
-            &detached_cache, (uint16_t)index);
+    while (allocated_leaves < DETACHED_LEAF_COUNT &&
+           detached_directory[allocated_leaves] != NULL)
+        ++allocated_leaves;
+    for (uint32_t leaf = allocated_leaves; leaf < DETACHED_LEAF_COUNT; ++leaf)
+        if (detached_directory[leaf] != NULL)
+            return false;
+    uint32_t expected_limit = allocated_leaves * DETACHED_LEAF_ENTRIES;
+    if (expected_limit > KERNEL_HANDLE_DETACHED_MAX)
+        expected_limit = KERNEL_HANDLE_DETACHED_MAX;
+    if (detached_backed_limit != expected_limit)
+        return false;
+    for (uint32_t index = 0u; index < detached_backed_limit; ++index) {
+        const KernelDetachedEntry *entry = detached_entry_at(index);
 
-        if (entry->generation == 0u ||
+        if (entry == NULL || entry->slot != index ||
+            entry->generation == 0u ||
             entry->generation > KERNEL_DETACHED_GENERATION_MASK)
             return false;
         if (entry->state == KERNEL_DETACHED_FREE) {
-            if (claimed || entry->object != NULL || entry->release != NULL ||
+            if (entry->object != NULL || entry->release != NULL ||
                 entry->retain != NULL || entry->release_context != NULL ||
                 entry->rights != 0u ||
-                entry->type != KERNEL_OBJECT_NONE || entry->reserved != 0u)
+                entry->type != KERNEL_OBJECT_NONE)
                 return false;
         } else if (entry->state == KERNEL_DETACHED_RESERVED ||
                    entry->state == KERNEL_DETACHED_LIVE) {
-            if (!claimed || entry->object == NULL || entry->release == NULL ||
-                entry->rights == 0u || entry->type == KERNEL_OBJECT_NONE ||
-                entry->reserved != 0u)
+            if (entry->object == NULL || entry->release == NULL ||
+                entry->rights == 0u || entry->type == KERNEL_OBJECT_NONE)
                 return false;
         } else {
             return false;
@@ -1276,7 +1498,18 @@ bool kernel_handle_transfer_pool_valid(void)
     }
     live = detached_live_count();
     reserved = detached_reserved_count();
-    return live == transfer_stats.live_detached &&
+    return kernel_allocation_site_stats(
+               KERNEL_ALLOCATION_SITE_DETACHED_HANDLE, &allocations) &&
+           allocations.current_units == live + reserved &&
+           allocations.current_bytes ==
+               (live + reserved) * sizeof(KernelDetachedEntry) &&
+           kernel_allocation_site_stats(
+               KERNEL_ALLOCATION_SITE_DETACHED_HANDLE_METADATA, &metadata) &&
+           metadata.current_units ==
+               allocated_leaves * DETACHED_LEAF_FRAMES &&
+           metadata.current_bytes ==
+               allocated_leaves * DETACHED_LEAF_FRAMES * KERNEL_PAGE_SIZE &&
+           live == transfer_stats.live_detached &&
            reserved == transfer_stats.reserved_detached &&
            live <= KERNEL_HANDLE_DETACHED_MAX &&
            reserved <= KERNEL_HANDLE_DETACHED_MAX - live &&

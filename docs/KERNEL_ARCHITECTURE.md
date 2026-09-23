@@ -156,7 +156,9 @@ comes from a process-private generation handle carrying explicit rights.
 ### Boot
 
 1. Assembly installs the 8 KiB interrupt stack (ISP) and VBR.
-2. C validates and copies the fixed 256-byte `AstraBootInfo`.
+2. C validates and copies `AstraBootInfo`; boot ABI 1.0 fills every complete
+   memory-range slot in its linker-reserved 1 KiB handoff storage rather than
+   imposing the old ten-range ceiling.
 3. The frame allocator classifies every physical page.
 4. VM constructs wired SRP and empty URP trees, then enables translation.
 5. The guarded 8 KiB master stack (MSP), deferred worker, interrupts,
@@ -335,18 +337,19 @@ is diagnostic only. Waiting on self is rejected. Thread and normal process
 death preserve the complete 32-bit exit detail and remain ready while a handle
 is open. Abnormal process death reports its terminal result with zero detail.
 
-Timers share the existing 32-object pool and creator quota. A parallel fixed
-32-entry binary min-heap stores absolute timer deadlines with slot-number
-tie-breaking. Set replaces an existing arm and clears fired state; expiry is
-level-triggered and wakes every registered waiter; cancel withdraws the heap
-entry, clears readiness, and wakes waiters with `CANCELLED`. Set, cancel,
-expiry, close, and owner death allocate nothing and compete through the same
-wait-set completion owner.
+Timers share the page-backed 16-bit synchronization-object namespace. The
+binary min-heap for armed deadlines grows in metadata pages and retains
+slot-number tie-breaking. Set replaces an existing arm and clears fired state;
+expiry is level-triggered and wakes every registered waiter; cancel withdraws
+the heap entry, clears readiness, and wakes waiters with `CANCELLED`. Set,
+cancel, expiry, close, and owner death compete through the same wait-set
+completion owner.
 
 ## K4 synchronization-object contract
 
-K4 replaces the singleton qualification event with one fixed pool shared by
-events and semaphores. The implementation limits are deliberately explicit:
+K4 originally replaced the singleton qualification event with one fixed pool
+shared by events and semaphores. These are historical K4 limits, not the
+current resource contract:
 
 | Resource | K4 limit |
 |---|---:|
@@ -357,11 +360,17 @@ events and semaphores. The implementation limits are deliberately explicit:
 | event retained signals | 0 or 1 |
 | semaphore count | 0 through 2,147,483,647, bounded by its creation maximum |
 
-Each 36-byte slot owns a wait queue, nonzero generation, creator process ID,
-reference count, object subtype, state, current/maximum count, and terminal
-close result. Its state machine is `FREE -> LIVE -> CLOSING -> FREE`; generation
-advances before reuse. Creation reserves a slot and quota before publishing a
-handle. Failed handle publication closes and returns the unpublished slot.
+Current synchronization objects and timer-heap entries are page-backed and use
+the complete 16-bit encoded namespace. There is no creator quota or separate
+waiter quota; a thread's lazily allocated wait registrations are bounded by its
+complete 255-handle namespace.
+
+Each historical 36-byte slot owned a wait queue, nonzero generation, creator
+process ID, reference count, object subtype, state, current/maximum count, and
+terminal close result. Its state machine was `FREE -> LIVE -> CLOSING -> FREE`;
+generation advanced before reuse. Creation reserved a slot and quota before
+publishing a handle. Failed handle publication closed and returned the
+unpublished slot.
 
 The existing per-process handle table remains the only public lookup path.
 Events and semaphores install as typed synchronization handles with explicit

@@ -106,7 +106,8 @@ typedef struct AstraDynamicTlsLayout {
  * @param mapping_span Bytes accessible from `mapping_origin`.
  * @param header_address Target ELF-header address within the mapping.
  * @param load_bias Runtime address bias applied to dynamic symbols.
- * @param image Receives validated metadata.
+ * @param image Receives validated metadata. The mapped ELF metadata must
+ * remain unchanged while this image is used.
  * @return Detailed dynamic-loader status.
  */
 AstraDynamicStatus astra_dynamic_open(uintptr_t mapping_origin,

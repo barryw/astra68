@@ -74,7 +74,7 @@
 #define KERNEL_THREAD_STACK_SIZE 0x00001000u
 
 _Static_assert(KERNEL_THREAD_STACK_BASE +
-                   ASTRA_PROCESS_THREAD_COUNT_MAX *
+                   ASTRA_PROCESS_THREAD_SLOT_COUNT *
                        KERNEL_THREAD_STACK_STRIDE ==
                    ASTRA_THREAD_STACK_ADDRESS_END,
                "thread-stack implementation disagrees with address ABI");
@@ -184,10 +184,14 @@ typedef struct KernelThread {
     uint32_t record_physical;
     uint32_t stack_physical;
     void *stack_storage;
+    KernelThreadWaitRegistration *wait_registrations;
+    uint32_t wait_registrations_physical;
     uint32_t irq_wake_cycles;
     uint16_t handle_references;
     uint16_t deadline_position;
     uint16_t record_frames;
+    uint16_t wait_registrations_frames;
+    uint16_t wait_registrations_capacity;
     /*
      * Pages committed to this thread's stack, always contiguous and always
      * ending at user_stack_top. Growth moves user_stack_base down and this up;
@@ -201,8 +205,6 @@ typedef struct KernelThread {
     uint8_t irq_wake_pending;
     uint8_t signal_context_active;
     KernelCpuContext signal_saved_context;
-    KernelThreadWaitRegistration
-        wait_registrations[KERNEL_THREAD_WAIT_MEMBER_MAX];
 } KernelThread;
 
 typedef struct KernelThreadSnapshot {

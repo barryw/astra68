@@ -245,12 +245,7 @@ supervisor_assigns(void)
  * The table maps that authority back to the already-connected remote client;
  * storage and synthetic trees each have their own session.
  */
-#define VFS_CLIENT_MAX SUPERVISOR_MANIFEST_ENTRY_MAX
-
-static struct {
-    AstraVfsClient *client;
-    uint32_t handle;      /* the service's port send handle */
-} vfs_clients[VFS_CLIENT_MAX];
+static SupervisorVfsClientTable vfs_clients;
 
 uint32_t
 supervisor_vfs_register(AstraVfsClient *client, uint32_t port_handle)
@@ -258,23 +253,27 @@ supervisor_vfs_register(AstraVfsClient *client, uint32_t port_handle)
     if (client == NULL || port_handle == 0u) {
         return 0u;
     }
-    for (uint32_t index = 0u; index < VFS_CLIENT_MAX; ++index) {
-        if (vfs_clients[index].client == NULL ||
-            vfs_clients[index].client == client) {
-            vfs_clients[index].client = client;
-            vfs_clients[index].handle = port_handle;
+    for (uint32_t index = 0u; index < vfs_clients.count; ++index) {
+        if (vfs_clients.entries[index].client == client) {
+            vfs_clients.entries[index].handle = port_handle;
             return port_handle;
         }
     }
-    return 0u;
+    if (!supervisor_vfs_client_table_reserve(
+            &vfs_clients, vfs_clients.count + 1u,
+            astra_runtime_reallocate))
+        return 0u;
+    vfs_clients.entries[vfs_clients.count].client = client;
+    vfs_clients.entries[vfs_clients.count++].handle = port_handle;
+    return port_handle;
 }
 
 void
 supervisor_vfs_set_activity(uint32_t activity)
 {
-    for (uint32_t index = 0u; index < VFS_CLIENT_MAX; ++index) {
-        if (vfs_clients[index].client != NULL) {
-            vfs_clients[index].client->activity = activity;
+    for (uint32_t index = 0u; index < vfs_clients.count; ++index) {
+        if (vfs_clients.entries[index].client != NULL) {
+            vfs_clients.entries[index].client->activity = activity;
         }
     }
 }
@@ -285,10 +284,10 @@ supervisor_vfs_client_for(const AstraAssign *assign)
     if (assign == NULL) {
         return supervisor_vfs_client();
     }
-    for (uint32_t index = 0u; index < VFS_CLIENT_MAX; ++index) {
-        if (vfs_clients[index].client != NULL &&
-            vfs_clients[index].handle == assign->handle) {
-            return vfs_clients[index].client;
+    for (uint32_t index = 0u; index < vfs_clients.count; ++index) {
+        if (vfs_clients.entries[index].client != NULL &&
+            vfs_clients.entries[index].handle == assign->handle) {
+            return vfs_clients.entries[index].client;
         }
     }
     /*

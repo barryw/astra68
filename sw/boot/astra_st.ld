@@ -63,6 +63,6 @@ SECTIONS {
   /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) }
 }
 
-ASSERT(SIZEOF(.boot_info) <= 0x400, "BootInfo exceeds its 1 KiB reservation")
+ASSERT(SIZEOF(.boot_info) <= 0x400, "BootInfo exceeds its handoff storage")
 ASSERT(_bss_end <= ORIGIN(RAM) + LENGTH(RAM),
        "system ROM exceeds bootstrap scratch RAM")

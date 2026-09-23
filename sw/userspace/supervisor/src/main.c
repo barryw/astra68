@@ -25,8 +25,8 @@
  * it started. Services publish one port back to this loader and no registrar
  * exists.
  *
- * This process is resident. It never returns: an exit is a boot failure the
- * kernel turns into a panic, because nothing else can start the manifest.
+ * This process is resident after a successful startup. A startup failure
+ * returns an exit status to the kernel's degraded-boot path.
  */
 
 /*
@@ -67,7 +67,6 @@ claim_block_lease(const AstraStartupInfo *startup, uint32_t *irq_handle)
     irq = astra_startup_capability(startup, ASTRA_CAPABILITY_BLOCK_IRQ);
     if (device == NULL || irq == NULL || device->handle == 0u ||
         irq->handle == 0u) {
-        /* A machine without media boots without a block service. */
         return 0u;
     }
 
@@ -175,14 +174,6 @@ verify_block_round_trip(uint32_t device, uint32_t irq)
     return failure;
 }
 
-static void
-park(void)
-{
-    for (;;) {
-        (void)astra_yield();
-    }
-}
-
 int
 astra_main(const AstraStartupInfo *startup)
 {
@@ -218,13 +209,9 @@ astra_main(const AstraStartupInfo *startup)
     (void)astra_progress(ASTRA_SUPERVISOR_STAGE_SELF_VERIFIED);
 
     block_device = claim_block_lease(startup, &block_irq);
-    if (block_device == 0u) {
-        /*
-         * Not a failure: without media the kernel grants nothing and there is
-         * no block service to run. The service still stays resident.
-         */
-        park();
-    }
+    if (block_device == 0u)
+        return (int)(ASTRA_SUPERVISOR_STATUS_TAG |
+                     ASTRA_SUPERVISOR_FAIL_BLOCK_LEASE);
     (void)astra_progress(ASTRA_SUPERVISOR_STAGE_BLOCK_LEASED);
 
     status = verify_block_round_trip(block_device, block_irq);

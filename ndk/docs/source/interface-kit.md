@@ -254,6 +254,11 @@ application. Grid selections are normalized half-open ranges. The extraction
 call measures or copies UTF-8 atomically and preserves row boundaries while
 trimming selected trailing spaces.
 
+Scrollable text uses composition: ScrollView owns clipping, wheel and keyboard
+movement, offsets, and scrollbars; the text control owns its document, layout,
+selection, caret, and content extent. Terminal uses the same scroll model over
+packed styled grid rows because terminal history is not an editable document.
+
 The system clipboard stores immutable documents with one or more named
 representations. Use `text/plain;charset=utf-8` for text and add richer types
 to the same write when an application has them. A read returns a stable mapped

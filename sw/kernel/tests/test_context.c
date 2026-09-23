@@ -89,11 +89,43 @@ static void test_rejections(void)
     assert(!kernel_context_valid(&context));
 }
 
+static void test_format0_capture_checks_entry_contract(void)
+{
+    KernelCpuContext context;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT];
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+
+    for (uint32_t index = 0u; index < KERNEL_CONTEXT_REGISTER_COUNT; ++index)
+        registers[index] = 0x22220000u + index;
+    make_frame(frame, 0x001fu, 0x00104560u, 0u, 47u);
+    assert(kernel_context_capture_format0(
+               &context, registers, 0x70002000u, frame, 47u) ==
+           KERNEL_CONTEXT_OK);
+    assert(context.data[0] == registers[0]);
+    assert(context.address[6] == registers[14]);
+    assert(context.program_counter == 0x00104560u);
+    assert(context.status_register == 0x001fu);
+    assert(context.vector == 47u && context.frame_format == 0u);
+
+    assert(kernel_context_capture_format0(
+               &context, registers, 0x70002000u, frame, 46u) ==
+           KERNEL_CONTEXT_INVALID_FRAME);
+    make_frame(frame, 0u, 0x00104560u, 2u, 47u);
+    assert(kernel_context_capture_format0(
+               &context, registers, 0x70002000u, frame, 47u) ==
+           KERNEL_CONTEXT_INVALID_FRAME);
+    make_frame(frame, 0x2000u, 0x00104560u, 0u, 47u);
+    assert(kernel_context_capture_format0(
+               &context, registers, 0x70002000u, frame, 47u) ==
+           KERNEL_CONTEXT_NOT_USER);
+}
+
 int main(void)
 {
     test_initialize();
     test_capture_and_sanitize();
     test_rejections();
+    test_format0_capture_checks_entry_contract();
     puts("context tests passed");
     return 0;
 }

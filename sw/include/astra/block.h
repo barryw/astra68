@@ -1,6 +1,8 @@
 #ifndef ASTRA_BLOCK_H
 #define ASTRA_BLOCK_H
 
+#include <astra/address_space.h>
+
 /*
  * The block admission ABI: what a protected block service may ask of Axiom.
  *
@@ -51,8 +53,8 @@
 #define ASTRA_BLOCK_REQUEST_SIZE    32u
 #define ASTRA_BLOCK_COMPLETION_SIZE 32u
 
-/* Simultaneous requests the block transport can keep in flight. */
-#define ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE 4u
+/* One in-flight request per process DMA slot; no separate block quota. */
+#define ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE ASTRA_DMA_SLOT_COUNT
 
 #ifndef __ASSEMBLER__
 

@@ -43,6 +43,7 @@ typedef struct MockPort {
     uint32_t target;
     uint32_t rights;
     uint32_t semaphore_count;
+    uint32_t area_size;
     uint8_t semaphore;
 } MockPort;
 
@@ -57,6 +58,10 @@ static uint32_t dead_reply_handle;
 static uint32_t mock_empty_receives;
 static uint32_t mock_receive_resource_limits;
 static uint32_t mock_area_maps;
+static uint32_t mock_area_create_size;
+static uint32_t mock_close_count;
+static int mock_fail_area_create;
+static int mock_fail_area_map;
 static atomic_uint mock_futex_wakes;
 static atomic_uint backend_bad_stat_paths;
 static uint32_t mock_sender;
@@ -129,7 +134,7 @@ current_lane(AstraVfsClient *client)
     uint32_t thread = 0u;
 
     assert(astra_query_abi(NULL, NULL, &thread) == ASTRA_SYSCALL_OK);
-    for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_COUNT_MAX;
+    for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_SLOT_COUNT;
          ++index)
         if (client->port_lanes[index].owner_thread == thread)
             return &client->port_lanes[index];
@@ -139,7 +144,7 @@ current_lane(AstraVfsClient *client)
 static int
 lanes_have_no_areas(const AstraVfsClient *client)
 {
-    for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_COUNT_MAX;
+    for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_SLOT_COUNT;
          ++index)
         if (client->port_lanes[index].area != 0u ||
             client->port_lanes[index].area_address != NULL)
@@ -159,6 +164,10 @@ mock_reset(void)
     mock_empty_receives = 0u;
     mock_receive_resource_limits = 0u;
     mock_area_maps = 0u;
+    mock_area_create_size = 0u;
+    mock_close_count = 0u;
+    mock_fail_area_create = 0;
+    mock_fail_area_map = 0;
     atomic_store_explicit(&mock_futex_wakes, 0u, memory_order_relaxed);
     atomic_store_explicit(&backend_bad_stat_paths, 0u,
                           memory_order_relaxed);
@@ -388,6 +397,7 @@ astra_rt_handle_duplicate(uint32_t handle, uint32_t rights, uint32_t *duplicate)
         copy = mock_open_unlocked(1u);
         ports[copy].target = ports[handle].target;
         ports[copy].rights = rights;
+        ports[copy].area_size = ports[handle].area_size;
         *duplicate = copy;
     }
     assert(pthread_mutex_unlock(&mock_port_mutex) == 0);
@@ -398,9 +408,12 @@ uint32_t
 astra_rt_area_create(uint32_t byte_size, uint32_t rights, uint32_t *handle)
 {
     (void)rights;
-    if (handle == NULL || byte_size > sizeof(mock_area))
+    if (mock_fail_area_create != 0 || handle == NULL || byte_size == 0u ||
+        byte_size > sizeof(mock_area))
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     *handle = mock_open(1u);
+    ports[*handle].area_size = byte_size;
+    mock_area_create_size = byte_size;
     return ASTRA_SYSCALL_OK;
 }
 
@@ -417,11 +430,13 @@ astra_rt_area_map(uint32_t handle, uint32_t permissions, void **address,
                uint32_t *byte_size)
 {
     (void)permissions;
-    if (address == NULL || byte_size == NULL || handle == 0u ||
+    if (mock_fail_area_map != 0 || address == NULL || byte_size == NULL ||
+        handle == 0u ||
         handle >= MOCK_PORT_MAX || !ports[handle].open)
         return ASTRA_SYSCALL_INVALID_HANDLE;
     *address = mock_area;
-    *byte_size = sizeof(mock_area);
+    *byte_size = (ports[handle].area_size + ASTRA_MEMORY_PAGE_SIZE - 1u) &
+                 ~(ASTRA_MEMORY_PAGE_SIZE - 1u);
     ++mock_area_maps;
     return ASTRA_SYSCALL_OK;
 }
@@ -621,6 +636,7 @@ uint32_t
 astra_close(uint32_t handle)
 {
     (void)handle;
+    ++mock_close_count;
     return ASTRA_SYSCALL_OK;
 }
 
@@ -2148,9 +2164,45 @@ test_fork_child_rebinds_lane_owner(void)
     astra_vfs_port_abandon(&client);
 }
 
+static void
+test_quota_storage_reserves_only_the_representable_table(void)
+{
+    void *storage = (void *)(uintptr_t)1u;
+    uint32_t capacity = UINT32_MAX;
+    uint32_t expected =
+        (uint32_t)sizeof(AstraVfsOpenFile) * ASTRA_VFS_FILE_HANDLE_MAX;
+    uint32_t closes;
+
+    mock_reset();
+    assert(expected < ASTRA_AREA_SIZE_MAX);
+    assert(astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile), &storage,
+                                        &capacity));
+    assert(mock_area_create_size == expected);
+    assert(storage == mock_area && capacity == ASTRA_VFS_FILE_HANDLE_MAX);
+
+    storage = (void *)(uintptr_t)1u;
+    capacity = UINT32_MAX;
+    assert(!astra_vfs_port_quota_storage(0u, &storage, &capacity));
+    assert(storage == NULL && capacity == 0u);
+
+    mock_fail_area_create = 1;
+    assert(!astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile), &storage,
+                                         &capacity));
+    assert(storage == NULL && capacity == 0u);
+    mock_fail_area_create = 0;
+
+    closes = mock_close_count;
+    mock_fail_area_map = 1;
+    assert(!astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile), &storage,
+                                         &capacity));
+    assert(storage == NULL && capacity == 0u &&
+           mock_close_count == closes + 1u);
+}
+
 int
 main(void)
 {
+    test_quota_storage_reserves_only_the_representable_table();
     test_a_request_crosses_and_the_reply_is_the_same();
     test_a_dead_peer_is_reported_and_not_waited_on();
     test_clients_own_independent_reply_channels();

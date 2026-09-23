@@ -243,6 +243,17 @@ uint32_t astra_rt_private_reserve_largest(uint32_t minimum_byte_size,
                                          void **address,
                                          uint32_t *mapped_span);
 /**
+ * Commit every page touched by a range in a writable private reservation.
+ *
+ * This is useful when the caller is certain it will immediately fill the
+ * complete range. Ordinary allocations remain demand committed.
+ *
+ * @param address First byte that will be written.
+ * @param byte_size Number of bytes that will be written.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_rt_private_commit(void *address, uint32_t byte_size);
+/**
  * Decommit pages in a private reservation.
  * @param address Page-aligned address within the reservation.
  * @param byte_size Page-aligned span.
@@ -497,13 +508,13 @@ uint32_t astra_process_snapshot(uint32_t observer,
                                 uint32_t capacity,
                                 uint32_t *live_count);
 /**
- * Read a page of the resident shared-library cache and process mappings.
+ * Read a page of resident shared-library/process mapping records.
  * @param observer Process capability authorizing observation.
  * @param start Zero-based resident-library ordinal to read first.
  * @param records Receives records, or NULL when `capacity` is zero.
  * @param capacity Number of records available.
  * @param moved Receives records written in this page when non-NULL.
- * @param library_count Receives the current total resident-library count.
+ * @param library_count Receives the current total record count.
  * @return ASTRA_SYSCALL_* status. Repeat at `start + moved` until the returned
  * total is reached; the transfer size never limits system residency.
  */
@@ -648,7 +659,7 @@ static inline uint32_t astra_mutex_lock(volatile uint32_t *state)
 {
     uint32_t expected = 0u;
 
-    if (state == NULL)
+    if (state == NULL || ((uintptr_t)state & (sizeof(*state) - 1u)) != 0u)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     if (__atomic_compare_exchange_n(state, &expected, 1u, 0,
                                     __ATOMIC_ACQUIRE,
@@ -682,7 +693,7 @@ static inline uint32_t astra_mutex_unlock(volatile uint32_t *state)
 {
     uint32_t previous;
 
-    if (state == NULL)
+    if (state == NULL || ((uintptr_t)state & (sizeof(*state) - 1u)) != 0u)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     previous = __atomic_exchange_n(state, 0u, __ATOMIC_RELEASE);
     if (previous == 0u)
@@ -935,7 +946,9 @@ uint32_t astra_launch(const void *image, uint32_t length,
  * publication. A release failure aborts the transaction.
  * @param context Caller-owned immutable source.
  * @param offset Requested byte offset.
- * @param length Maximum requested byte count.
+ * @param length Maximum requested byte count. A source may return a shorter
+ * nonempty prefix in `moved`; executable segment prefixes end on a VM-page
+ * boundary unless they complete the requested range.
  * @param bytes Receives borrowed bytes valid until the next callback.
  * @param moved Receives supplied byte count.
  * @return ASTRA_SYSCALL_* or source-specific failure status.

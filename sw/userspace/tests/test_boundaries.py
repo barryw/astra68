@@ -108,6 +108,114 @@ def test_service_startup_protocol_is_shared():
         )
 
 
+def require_vfs_mutex_contract(source: str):
+    if re.search(r"astra_rt_semaphore_create\(\s*1u,\s*1u", source):
+        raise AssertionError("VFS lock is still a syscall semaphore")
+    if not re.search(
+        r"astra_vfs_service_set_state_lock\(.*?"
+        r"astra_vfs_state_lock_acquire\s*,\s*"
+        r"astra_vfs_state_lock_release",
+        source,
+        re.DOTALL,
+    ):
+        raise AssertionError("VFS state wait requires mutex callbacks")
+
+
+def require_aligned_service_locks(source: str, names):
+    for name in names:
+        if not re.search(
+            rf"static\s+_Alignas\(4\)\s+uint32_t\s+{name}\s*;", source
+        ):
+            raise AssertionError(f"{name} is not futex-aligned")
+
+
+def test_vfs_services_use_the_mutex_expected_by_state_wait():
+    locks = {
+        "storage": ("state_lock", "mount_lock", "mount_reader_lock",
+                    "cache_lock", "fill_lock", "backend_table_lock",
+                    "backend_scan_lock"),
+        "hostfs": ("transport_lock", "state_lock"),
+    }
+    for name, words in locks.items():
+        source = (USERSPACE / "services" / name / "main.c").read_text()
+        require_vfs_mutex_contract(source)
+        require_aligned_service_locks(source, words)
+        assert "astra_vfs_state_futex_wait" in source
+    storage = (USERSPACE / "services" / "storage" / "main.c").read_text()
+    assert "astra_mutex_lock(&cache_lock)" in storage
+    assert "astra_mutex_unlock(&cache_lock)" in storage
+
+    # The previous semaphore callback and semaphore creation must both fail.
+    for invalid in (
+        storage.replace("astra_vfs_state_lock_acquire",
+                        "vfs_state_acquire"),
+        storage + "\nastra_rt_semaphore_create(1u, 1u, 0u, &state_lock);\n",
+    ):
+        try:
+            require_vfs_mutex_contract(invalid)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("VFS mutex regression was accepted")
+    try:
+        require_aligned_service_locks(
+            storage.replace("_Alignas(4) uint32_t mount_lock",
+                            "uint32_t mount_lock"), locks["storage"]
+        )
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("misaligned storage mutex was accepted")
+
+
+def require_storage_boot_gate(source: str):
+    if not re.search(
+        r"if\s*\(block_device\s*==\s*0u\)\s*"
+        r"return\s*\(int\)\(ASTRA_SUPERVISOR_STATUS_TAG\s*\|\s*"
+        r"ASTRA_SUPERVISOR_FAIL_BLOCK_LEASE\)", source
+    ):
+        raise AssertionError("boot must fail when no storage lease exists")
+    if re.search(r"\bpark\s*\(", source):
+        raise AssertionError("missing storage must not park silently")
+
+
+def test_missing_storage_stops_normal_boot():
+    source = (USERSPACE / "supervisor" / "src" / "main.c").read_text()
+    require_storage_boot_gate(source)
+    try:
+        require_storage_boot_gate(source.replace(
+            "ASTRA_SUPERVISOR_FAIL_BLOCK_LEASE", "ASTRA_STATUS_OK"
+        ))
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("storage-free boot was accepted")
+
+
+def require_storage_service_boot_gate(source: str):
+    startup = source.split("uint32_t supervisor_loader_start(", 1)[1]
+    storage = startup.split("supervisor_bootstrap_block_close();", 1)[0]
+    gate = "if (status != ASTRA_STATUS_OK)\n        return status;\n    supervisor_bootstrap_block_close();"
+
+    assert "launch_entry(startup, &manifest->entries[0]" in storage
+    assert gate in startup
+
+
+def test_failed_storage_service_stops_normal_boot():
+    source = (USERSPACE / "supervisor" / "src" / "loader.c").read_text()
+    require_storage_service_boot_gate(source)
+    broken = source.replace(
+        "if (status != ASTRA_STATUS_OK)\n        return status;\n    supervisor_bootstrap_block_close();",
+        "supervisor_bootstrap_block_close();",
+    )
+    try:
+        require_storage_service_boot_gate(broken)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("storage launch failure was allowed to continue")
+
+
 def test_program_startup_capability_lookup_is_shared():
     for path in production_sources(USERSPACE / "commands"):
         require_absent(
@@ -510,7 +618,7 @@ def test_library_contracts_match_exact_readelf_fields():
     config = (USERSPACE / "config" / "Makefile").read_text()
     required = (
         "grep -Fc 'Shared library: [system.library.2]'",
-        "grep -Fc 'Shared library: [filesystem.library.2]'",
+        "grep -Fc 'Shared library: [filesystem.library.3]'",
     )
     for contract in required:
         if contract not in config:

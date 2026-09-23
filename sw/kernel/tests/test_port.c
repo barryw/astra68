@@ -4,7 +4,6 @@
 
 #include "allocation.h"
 #include "performance.h"
-/* For KERNEL_PROCESS_HANDLE_DEMAND: the budget the table is sized against. */
 #include "process.h"
 
 #include <assert.h>
@@ -199,7 +198,9 @@ static void test_reused_message_slot_exposes_only_new_payload(void)
 static void test_allocation_injection_preserves_queue(void)
 {
     KernelAllocationStats message_allocation;
+    KernelAllocationStats message_metadata;
     KernelAllocationStats port_allocation;
+    KernelAllocationStats port_metadata;
     KernelHandleTable table;
     KernelPort *port = (KernelPort *)(uintptr_t)1u;
     KernelPortPoolStats before;
@@ -218,12 +219,23 @@ static void test_allocation_injection_preserves_queue(void)
     assert(kernel_port_create(27u, 2u, 128u, &port) ==
            KERNEL_PORT_NO_SLOT);
     assert(port == NULL);
+    port = (KernelPort *)(uintptr_t)1u;
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_PORT_METADATA, 1u);
+    assert(kernel_port_create(27u, 2u, 128u, &port) ==
+           KERNEL_PORT_NO_SLOT);
+    assert(port == NULL);
 
     assert(kernel_port_create(27u, 2u, 128u, &port) == KERNEL_PORT_OK);
     kernel_handle_table_init(&table);
     assert(kernel_handle_table_set_owner(&table, 27u, 3u));
     make_message(message, sizeof(message), 0x31u);
     assert(kernel_port_pool_stats(&before));
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_PORT_MESSAGE_METADATA, 1u);
+    assert(kernel_port_send(port, &table, message, sizeof(message), NULL,
+                            0u, &woken) == KERNEL_PORT_NO_SLOT);
+    assert(woken == 0u);
     kernel_allocation_test_fail_site(
         KERNEL_ALLOCATION_SITE_PORT_MESSAGE, 1u);
     assert(kernel_port_send(port, &table, message, sizeof(message), NULL,
@@ -248,13 +260,103 @@ static void test_allocation_injection_preserves_queue(void)
         KERNEL_ALLOCATION_SITE_PORT_OBJECT, &port_allocation));
     assert(kernel_allocation_site_stats(
         KERNEL_ALLOCATION_SITE_PORT_MESSAGE, &message_allocation));
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_PORT_METADATA, &port_metadata));
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_PORT_MESSAGE_METADATA, &message_metadata));
     assert(port_allocation.current_units == 0u);
     assert(message_allocation.current_units == 0u);
     assert(port_allocation.injected_failures == 2u);
     assert(message_allocation.injected_failures == 2u);
+    assert(port_metadata.injected_failures == 1u);
+    assert(message_metadata.injected_failures == 1u);
     assert(kernel_port_pool_valid());
     assert(kernel_handle_transfer_pool_valid());
     assert(kernel_allocation_valid());
+}
+
+static void test_metadata_reset_discards_stale_pages(void)
+{
+    KernelAllocationStats message_metadata;
+    KernelAllocationStats port_metadata;
+    KernelHandleTable source;
+    KernelPort *port;
+    uint8_t message[KERNEL_PORT_MESSAGE_SIZE_MIN];
+    uint32_t woken;
+
+    initialize_test();
+    kernel_handle_table_init(&source);
+    make_message(message, sizeof(message), 0x42u);
+    assert(kernel_port_create(1u, 1u, sizeof(message), &port) ==
+           KERNEL_PORT_OK);
+    assert(kernel_port_send(port, &source, message, sizeof(message), NULL,
+                            0u, &woken) == KERNEL_PORT_OK);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_PORT_METADATA, &port_metadata));
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_PORT_MESSAGE_METADATA, &message_metadata));
+    assert(port_metadata.current_units != 0u &&
+           message_metadata.current_units != 0u);
+
+    kernel_allocation_init();
+    assert(!kernel_port_pool_valid());
+    kernel_handle_transfer_pool_init();
+    kernel_port_pool_init();
+    assert(kernel_port_pool_valid());
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_PORT_METADATA, &port_metadata));
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_PORT_MESSAGE_METADATA, &message_metadata));
+    assert(port_metadata.current_units == 0u &&
+           port_metadata.current_bytes == 0u &&
+           message_metadata.current_units == 0u &&
+           message_metadata.current_bytes == 0u);
+}
+
+static void test_invalid_handle_does_not_allocate_message_metadata(void)
+{
+    KernelAllocationStats after;
+    KernelAllocationStats before;
+    KernelHandleTable source;
+    KernelPort *port;
+    TestObject denied = {0u, 1u};
+    TestObject transferred = {0u, 2u};
+    KernelHandle denied_handle;
+    KernelHandle transferred_handle;
+    uint8_t message[KERNEL_PORT_MESSAGE_SIZE_MIN];
+    uint32_t woken;
+
+    initialize_test();
+    kernel_handle_table_init(&source);
+    make_message(message, sizeof(message), 0x43u);
+    assert(kernel_port_create(1u, 1u, sizeof(message), &port) ==
+           KERNEL_PORT_OK);
+    denied_handle = install_transfer_handle(
+        &source, &denied, ASTRA_RIGHT_READ);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_PORT_MESSAGE_METADATA, &before));
+    assert(before.current_units == 0u && before.current_bytes == 0u);
+    assert(kernel_port_send(port, &source, message, sizeof(message),
+                            &denied_handle, 1u, &woken) ==
+           KERNEL_PORT_ACCESS_DENIED);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_PORT_MESSAGE_METADATA, &after));
+    assert(after.current_units == before.current_units &&
+           after.current_bytes == before.current_bytes);
+
+    transferred_handle = install_transfer_handle(
+        &source, &transferred,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_TRANSFER);
+    assert(kernel_port_send(port, &source, message, sizeof(message),
+                            &transferred_handle, 1u, &woken) ==
+           KERNEL_PORT_OK);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_PORT_MESSAGE_METADATA, &after));
+    assert(after.current_units != 0u && after.current_bytes != 0u);
+    assert(kernel_handle_close_all(&source) == 1u);
+    release_port(port);
+    assert(denied.releases == 1u && transferred.releases == 1u);
+    assert(kernel_port_pool_valid());
 }
 
 static void test_atomic_handle_move_cancel_and_commit(void)
@@ -438,18 +540,9 @@ static void test_receive_capacity_and_destination_full(void)
 /*
  * The handle budget, exercised rather than only asserted.
  *
- * KERNEL_PROCESS_HANDLE_DEMAND says what one process can be holding at once. A
- * supervisor hosting services reaches it: its launch grants, its own process
- * and thread, both endpoints of every port it owns, and a handle to each child
- * it started. Then a child sends a request carrying a reply channel, and the
- * receive must install that handle before it can hand it over.
- *
- * When the table was sixteen entries this did not fit. The receive answered
- * RESOURCE_LIMIT, the message stayed queued, the child waited for an answer
- * nobody could produce, and nothing anywhere said why. The positive half of
- * this test is that the resident load still leaves room for a full transfer;
- * the negative half is that when it does not, the refusal is loud, the message
- * survives it, and closing one handle is enough to let it through.
+ * Fill the complete process-handle namespace except for one full transfer.
+ * The positive half proves that transfer fits; the negative half proves a full
+ * table refuses atomically and the queued message survives until room exists.
  */
 static void test_handle_budget_admits_a_full_transfer(void)
 {
@@ -467,7 +560,7 @@ static void test_handle_budget_admits_a_full_transfer(void)
     uint32_t required_handles;
     uint32_t woken;
     /* Everything the budget covers except the room a receive imports into. */
-    const uint32_t load = KERNEL_PROCESS_HANDLE_DEMAND -
+    const uint32_t load = KERNEL_HANDLE_MAX_ENTRIES -
                           KERNEL_HANDLE_TRANSFER_MAX;
 
     initialize_test();
@@ -547,9 +640,8 @@ static void test_handle_budget_admits_a_full_transfer(void)
 static void test_owner_may_use_the_complete_transfer_pool(void)
 {
     KernelHandleTable source;
-    KernelPort *ports[3];
-    TestObject objects[KERNEL_HANDLE_DETACHED_MAX +
-                       KERNEL_HANDLE_TRANSFER_MAX] = {{0u, 0u}};
+    KernelPort *ports[5];
+    TestObject objects[KERNEL_HANDLE_DETACHED_MAX + 1u] = {{0u, 0u}};
     uint8_t message[KERNEL_PORT_MESSAGE_SIZE_MIN];
     uint32_t object = 0u;
     uint32_t woken;
@@ -565,7 +657,15 @@ static void test_owner_may_use_the_complete_transfer_pool(void)
                               KERNEL_PORT_QUEUE_MESSAGES_MAX *
                                   sizeof(message),
                               &ports[1]) == KERNEL_PORT_OK);
-    assert(kernel_port_create(0x2200u, 1u, sizeof(message), &ports[2]) ==
+    assert(kernel_port_create(0x2200u, KERNEL_PORT_QUEUE_MESSAGES_MAX,
+                              KERNEL_PORT_QUEUE_MESSAGES_MAX *
+                                  sizeof(message),
+                              &ports[2]) == KERNEL_PORT_OK);
+    assert(kernel_port_create(0x2200u, KERNEL_PORT_QUEUE_MESSAGES_MAX,
+                              KERNEL_PORT_QUEUE_MESSAGES_MAX *
+                                  sizeof(message),
+                              &ports[3]) == KERNEL_PORT_OK);
+    assert(kernel_port_create(0x2200u, 1u, sizeof(message), &ports[4]) ==
            KERNEL_PORT_OK);
     for (uint32_t sent = 0u;
          sent < KERNEL_HANDLE_DETACHED_MAX / KERNEL_HANDLE_TRANSFER_MAX;
@@ -588,24 +688,35 @@ static void test_owner_may_use_the_complete_transfer_pool(void)
     }
     {
         KernelHandle handles[KERNEL_HANDLE_TRANSFER_MAX];
+        uint32_t count = KERNEL_HANDLE_DETACHED_MAX %
+                         KERNEL_HANDLE_TRANSFER_MAX;
 
-        for (uint32_t at = 0u; at < KERNEL_HANDLE_TRANSFER_MAX;
+        for (uint32_t at = 0u; at < count;
              ++at, ++object) {
             objects[object].value = object;
             handles[at] = install_transfer_handle(
                 &source, &objects[object],
                 ASTRA_RIGHT_READ | ASTRA_RIGHT_TRANSFER);
         }
-        assert(kernel_port_send(ports[2], &source, message, sizeof(message),
-                                handles, KERNEL_HANDLE_TRANSFER_MAX,
+        assert(kernel_port_send(ports[3], &source, message, sizeof(message),
+                                handles, count,
+                                &woken) == KERNEL_PORT_OK);
+        assert(object == KERNEL_HANDLE_DETACHED_MAX);
+        objects[object].value = object;
+        handles[0] = install_transfer_handle(
+            &source, &objects[object],
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_TRANSFER);
+        assert(kernel_port_send(ports[4], &source, message, sizeof(message),
+                                handles, 1u,
                                 &woken) == KERNEL_PORT_TRANSFER_POOL_FULL);
-        assert(kernel_handle_close_all(&source) ==
-               KERNEL_HANDLE_TRANSFER_MAX);
+        assert(kernel_handle_close_all(&source) == 1u);
     }
     assert(kernel_port_pool_valid());
     release_port(ports[0]);
     release_port(ports[1]);
     release_port(ports[2]);
+    release_port(ports[3]);
+    release_port(ports[4]);
     assert(kernel_port_pool_valid() && kernel_handle_transfer_pool_valid());
 }
 
@@ -637,11 +748,9 @@ static void test_owner_death_discards_queued_authority(void)
     assert(kernel_port_snapshot(0u, &snapshot));
     assert(snapshot.state == KERNEL_PORT_CLOSING);
     assert(snapshot.queued_messages == 0u);
-    assert(snapshot.capacity_accounted == 0u);
     assert(kernel_port_pool_stats(&stats));
     assert(stats.discarded_messages == 1u);
     assert(stats.discarded_handles == 1u);
-    assert(stats.configured_message_capacity == 0u);
     kernel_port_handle_release(
         port, (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND);
     kernel_port_handle_release(
@@ -778,28 +887,20 @@ static void test_failed_large_send_waits_for_queue_change(void)
     assert(kernel_port_pool_valid());
 }
 
-static void test_pool_quotas_and_generation_reuse(void)
+static void test_complete_port_pool_and_generation_reuse(void)
 {
-    KernelPort *owned[KERNEL_PORT_OWNER_MAX];
-    KernelPort *peer;
+    enum { port_count = 129u };
+    KernelPort *owned[port_count];
     KernelPort *extra;
     KernelPortSnapshot before;
     KernelPortSnapshot after;
 
     initialize_test();
-    for (uint32_t index = 0u; index < KERNEL_PORT_OWNER_MAX; ++index) {
-        assert(kernel_port_create(
-                   1u,
-                   KERNEL_PORT_OWNER_MESSAGE_MAX / KERNEL_PORT_OWNER_MAX,
-                   KERNEL_PORT_OWNER_BYTES_MAX / KERNEL_PORT_OWNER_MAX,
-                   &owned[index]) == KERNEL_PORT_OK);
-    }
-    assert(kernel_port_create(1u, 1u, 24u, &extra) ==
-           KERNEL_PORT_QUOTA_EXCEEDED);
-    assert(kernel_port_create(2u, 1u, 24u, &peer) == KERNEL_PORT_OK);
-    kernel_port_abandon_unpublished(peer);
+    for (uint32_t index = 0u; index < port_count; ++index)
+        assert(kernel_port_create(1u, 1u, 24u, &owned[index]) ==
+               KERNEL_PORT_OK);
     assert(kernel_port_snapshot(0u, &before));
-    for (uint32_t index = 0u; index < KERNEL_PORT_OWNER_MAX; ++index)
+    for (uint32_t index = 0u; index < port_count; ++index)
         kernel_port_abandon_unpublished(owned[index]);
     assert(kernel_port_create(1u, 1u, 24u, &extra) == KERNEL_PORT_OK);
     assert(kernel_port_snapshot(0u, &after));
@@ -835,6 +936,8 @@ static void test_owner_quotas_do_not_form_a_global_reservation_ceiling(void)
 int main(void)
 {
     test_allocation_injection_preserves_queue();
+    test_metadata_reset_discards_stale_pages();
+    test_invalid_handle_does_not_allocate_message_metadata();
     test_fifo_capacity_and_peer_drain();
     test_reused_message_slot_exposes_only_new_payload();
     test_atomic_handle_move_cancel_and_commit();
@@ -846,7 +949,7 @@ int main(void)
     test_self_send_teardown_is_reentrant_safe();
     test_readable_and_writable_wait_queues();
     test_failed_large_send_waits_for_queue_change();
-    test_pool_quotas_and_generation_reuse();
+    test_complete_port_pool_and_generation_reuse();
     test_owner_quotas_do_not_form_a_global_reservation_ceiling();
     puts("port tests passed");
     return 0;

@@ -112,14 +112,17 @@ The kernel implementation in `sw/kernel/device.c` is the narrow privileged
 foundation for this lifecycle. It does not implement driver requests or device
 class policy.
 
-- Boot may register at most 8 physical devices, then seals the registry.
-- At most 8 exclusive leases exist system-wide and 2 per process.
+- Boot registration grows page-backed device metadata until memory is
+  exhausted, then seals the registry.
+- Each registered physical device has one exclusive lease. There is no
+  separate system-wide or per-process lease quota.
 - Acquisition is a trusted bootstrap operation, not a public syscall.
 - Device handles carry explicit read/query, transfer, and administer rights.
 - Reset advances generation; revoked leases report peer-dead.
 - Process death revokes owned leases, quiesces and resets each target, then
   closes handles. Failed recovery contains the target as `FAILED`.
-- Storage is fixed; no heap, physical pages, or duplicate I/O queue is added.
+- Device metadata uses tagged kernel pages; lease state remains embedded in
+  its device record and adds no duplicate I/O queue.
 
 The provisional trap ABI is `DEVICE_QUERY=33`, `DEVICE_RESET=34`, and
 `DEVICE_REVOKE=35` at revision `0x00010007`. Requests reuse existing ports,

@@ -25,7 +25,7 @@ typedef struct AstraAllocatorLayout {
  * ordinary static record.
  */
 typedef struct AstraAllocatorControl {
-    volatile uint32_t lock;
+    _Alignas(4) volatile uint32_t lock;
     uint32_t magic;
     uint16_t version;
     uint16_t size;

@@ -76,6 +76,7 @@ astra_vfs_read_source_read_at(void *context, uint32_t offset,
     AstraVfsReadSource *source = context;
     uint32_t available = 0u;
     uint32_t read_length;
+    uint32_t supplied;
     uint32_t status;
 
     if (source == NULL || source->client == NULL ||
@@ -95,11 +96,12 @@ astra_vfs_read_source_read_at(void *context, uint32_t offset,
                                         read_length, bytes, &available);
     if (status != ASTRA_VFS_OK)
         return status;
-    if (*bytes == NULL || available < length) {
+    supplied = length < read_length ? length : read_length;
+    if (*bytes == NULL || available < supplied) {
         *bytes = NULL;
         return ASTRA_VFS_ERR_IO;
     }
-    *moved = length;
+    *moved = supplied;
     return ASTRA_VFS_OK;
 }
 

@@ -1,11 +1,13 @@
 #ifndef ASTRA_MESSAGE_ABI_H
 #define ASTRA_MESSAGE_ABI_H
 
+#include <astra/limits.h>
+
 /** @file message_abi.h
  *  @brief Message wire format shared by Axiom, the runtime, and the NDK.
  */
-/** Maximum queued messages per port. */
-#define ASTRA_PORT_MESSAGES_MAX 16u
+/** Complete queued-message count representable by the port ABI. */
+#define ASTRA_PORT_MESSAGES_MAX 65535u
 /** Wire size of AstraMessageHeader. */
 #define ASTRA_MESSAGE_HEADER_SIZE 24u
 /** Maximum bytes stored inline after a message header. */
@@ -17,8 +19,8 @@
 /** Maximum wire size of one message. */
 #define ASTRA_MESSAGE_SIZE_MAX \
     (ASTRA_MESSAGE_HEADER_SIZE + ASTRA_MESSAGE_INLINE_MAX)
-/** Maximum transferred handles in one message. */
-#define ASTRA_MESSAGE_HANDLES_MAX 8u
+/** Complete per-process handle namespace; no message can attach more. */
+#define ASTRA_MESSAGE_HANDLES_MAX ASTRA_HANDLE_COUNT_MAX
 
 #ifndef __ASSEMBLER__
 #include <stdint.h>

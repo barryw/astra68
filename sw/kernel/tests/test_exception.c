@@ -109,6 +109,31 @@ static void test_rejects_malformed_frames(void)
            KERNEL_EXCEPTION_INVALID_VECTOR);
 }
 
+static void test_base_decode(void)
+{
+    uint8_t raw[KERNEL_EXCEPTION_FRAME_MAX_SIZE] = {0};
+    KernelExceptionBaseFrame frame;
+
+    astra_store_be16(raw, 0x001fu);
+    astra_store_be32(raw + 2u, 0x12345678u);
+    astra_store_be16(raw + 6u, 0x0080u);
+    assert(kernel_exception_decode_base(raw, 8u, &frame) ==
+           KERNEL_EXCEPTION_OK);
+    assert(frame.program_counter == 0x12345678u);
+    assert(frame.status_register == 0x001fu);
+    assert(frame.vector_offset == 0x0080u);
+    assert(frame.frame_size == 8u && frame.format == 0u);
+    assert(frame.from_user == 1u);
+
+    assert(kernel_exception_decode_base(raw, 7u, &frame) ==
+           KERNEL_EXCEPTION_TRUNCATED);
+    astra_store_be16(raw + 6u, 0x4008u);
+    assert(kernel_exception_decode_base(raw, sizeof(raw), &frame) ==
+           KERNEL_EXCEPTION_UNSUPPORTED_FORMAT);
+    assert(kernel_exception_decode_base(NULL, sizeof(raw), &frame) ==
+           KERNEL_EXCEPTION_INVALID_ARGUMENT);
+}
+
 static void test_access_fault_fixup_changes_only_pc(void)
 {
     uint8_t raw[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
@@ -141,6 +166,7 @@ int main(void)
 {
     test_all_motorola_formats();
     test_rejects_malformed_frames();
+    test_base_decode();
     test_access_fault_fixup_changes_only_pc();
     test_mc68040_access_semantics();
     puts("KERNEL EXCEPTION FRAME PASS");

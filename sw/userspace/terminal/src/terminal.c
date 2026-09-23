@@ -122,6 +122,12 @@ static void scroll_up(AstraTerminal *terminal, uint32_t top, uint32_t bottom,
 
     if (count > height)
         count = height;
+    if (!terminal->alternate_screen && top == 0u &&
+        bottom + 1u == terminal->rows && terminal->history != NULL)
+        for (uint32_t row = 0u; row < count; ++row)
+            terminal->history(terminal->history_context,
+                              const_cell(terminal, row, 0u),
+                              terminal->columns);
     if (top == 0u && bottom + 1u == terminal->rows && count == 1u) {
         scroll_full_one(terminal);
         return;
@@ -268,6 +274,8 @@ AstraTerminalStatus astra_terminal_init_capacity(
     terminal->reply_context = NULL;
     terminal->prompt = NULL;
     terminal->prompt_context = NULL;
+    terminal->history = NULL;
+    terminal->history_context = NULL;
     terminal->echo_length = 0u;
     terminal->echo_columns = 0u;
     terminal->echo_carriage_return = 0u;
@@ -819,6 +827,15 @@ void astra_terminal_set_prompt(AstraTerminal *terminal,
         return;
     terminal->prompt = prompt;
     terminal->prompt_context = context;
+}
+
+void astra_terminal_set_history(AstraTerminal *terminal,
+                                AstraTerminalHistory history, void *context)
+{
+    if (terminal == NULL)
+        return;
+    terminal->history = history;
+    terminal->history_context = context;
 }
 
 void astra_terminal_set_scroll(AstraTerminal *terminal,

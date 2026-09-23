@@ -29,12 +29,9 @@
 #define ASTRA_STREAM_SERVICE_PROTOCOL UINT32_C(0x5354524d) /* STRM */
 #define ASTRA_STREAM_SERVICE_VERSION  UINT16_C(4)
 
-/*
- * One message of text. Sized so the whole message stays inside the port's
- * inline limit with room to spare: 24 bytes of header, 8 of its own, and this.
- * A longer line is several messages, which the client does without being asked.
- */
-#define ASTRA_STREAM_WRITE_MAX 192u
+/* Fill the complete port message after the common and stream headers. */
+#define ASTRA_STREAM_WRITE_MAX \
+    (ASTRA_MESSAGE_SIZE_MAX - ASTRA_MESSAGE_HEADER_SIZE - 8u)
 
 #define ASTRA_STREAM_OPERATION_WRITE UINT32_C(1)
 #define ASTRA_STREAM_OPERATION_READ  UINT32_C(2)

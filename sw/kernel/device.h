@@ -4,18 +4,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define KERNEL_DEVICE_MAX 16u
-#define KERNEL_DEVICE_LEASE_MAX 16u
-/*
- * Leases one process may hold at once. Two was enough while a service owned a
- * single device; the initial image holds the block device, the keyboard and
- * the screen until those are separate services, which is three. Four bounds it
- * at the number of device classes that exist rather than at what today needs,
- * and costs nothing: leases come from the shared pool above, so this is a
- * policy ceiling and not an array size.
- */
-#define KERNEL_DEVICE_LEASE_OWNER_MAX KERNEL_DEVICE_MAX
-
 #define KERNEL_DEVICE_RIGHT_QUERY      (1u << 0)
 #define KERNEL_DEVICE_RIGHT_EXECUTE    (1u << 1)
 #define KERNEL_DEVICE_RIGHT_TRANSFER   (1u << 5)
@@ -47,7 +35,6 @@ typedef enum KernelDeviceStatus {
     KERNEL_DEVICE_NOT_FOUND,
     KERNEL_DEVICE_BUSY,
     KERNEL_DEVICE_NO_SLOT,
-    KERNEL_DEVICE_QUOTA_EXCEEDED,
     KERNEL_DEVICE_REVOKED,
     KERNEL_DEVICE_QUIESCE_FAILED,
     KERNEL_DEVICE_RESET_FAILED,
@@ -87,7 +74,6 @@ typedef struct KernelDeviceStats {
     uint32_t max_live_leases;
     uint32_t acquisitions;
     uint32_t busy_failures;
-    uint32_t quota_failures;
     uint32_t allocation_failures;
     uint32_t revocations;
     uint32_t owner_deaths;

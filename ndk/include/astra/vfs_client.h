@@ -148,22 +148,22 @@ typedef struct AstraVfsClient {
     uint32_t port_direct_area;
     uint32_t port_direct_device;
     uint32_t port_direct_session;
-    uint32_t port_direct_lock;
+    uint32_t port_direct_lock __attribute__((aligned(4)));
     const struct AstraVfsBackendOps *direct_backend_ops;
     void *direct_backend_context;
     uint32_t (*direct_backend_enter)(struct AstraVfsClient *client);
     void (*direct_backend_leave)(struct AstraVfsClient *client);
     uint32_t port_connect_lock;
-    volatile uint32_t port_connecting;
-    volatile uint32_t port_inflight;
+    volatile uint32_t port_connecting __attribute__((aligned(4)));
+    volatile uint32_t port_inflight __attribute__((aligned(4)));
     volatile uint32_t port_inflight_waiters;
-    volatile uint32_t port_lifecycle;
-    volatile uint32_t port_thread_lock;
-    volatile uint32_t port_lane_lock;
+    volatile uint32_t port_lifecycle __attribute__((aligned(4)));
+    volatile uint32_t port_thread_lock __attribute__((aligned(4)));
+    volatile uint32_t port_lane_lock __attribute__((aligned(4)));
     const AstraVfsPortAcceleratorOps *port_accelerator_ops;
     AstraVfsPortThreadState *port_thread_states;
     uint32_t port_thread_capacity;
-    AstraVfsPortLane port_lanes[ASTRA_PROCESS_THREAD_COUNT_MAX];
+    AstraVfsPortLane port_lanes[ASTRA_PROCESS_THREAD_SLOT_COUNT];
     /*
      * The in-flight records live here rather than on the caller's stack, and
      * that is a requirement rather than a preference: a user thread gets one

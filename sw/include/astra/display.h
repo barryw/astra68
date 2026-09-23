@@ -108,9 +108,6 @@ _Static_assert(sizeof(AstraDisplayCursorImage) ==
 #define ASTRA_DISPLAY_HOST_POP    UINT32_C(2)
 #define ASTRA_DISPLAY_HOST_RESET  UINT32_C(4)
 
-/* Cells accepted by one console write. */
-#define ASTRA_CONSOLE_WRITE_MAX 256u
-
 /*
  * The file-backed QEMU text page keeps renderer-only state at its end. The
  * sequence is odd while the guest updates a multi-cell text operation or the

@@ -2,6 +2,7 @@
 #include <astra/bundle.h>
 #include <astra/bytes.h>
 #include <astra/display.h>
+#include <astra/event_emit.h>
 #include <astra/gui.h>
 #include <astra/graphics_kit.h>
 #include <astra/graphics_library.h>
@@ -278,6 +279,8 @@ int astra_main(const AstraStartupInfo *startup)
     (void)astra_service_ready(bootstrap->handle, status, NULL, 0u);
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_STATUS_OK) return (int)status;
+    ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_DISPLAY, ASTRA_EVENT_LEVEL_INFO,
+                 "desktop ready");
     for (;;) {
         AstraWindowEvent event = {0};
         AstraResult result = astra_window_event_wait(

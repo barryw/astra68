@@ -231,6 +231,7 @@ static void test_real_dynamic_pair(const char *program_path,
     AstraDynamicClosure closure;
     AstraDynamicResolution symbol;
     uint32_t symbol_address;
+    uint32_t bucket_count;
     const char *needed;
     const char *interpreter;
     const char *soname;
@@ -278,6 +279,29 @@ static void test_real_dynamic_pair(const char *program_path,
     assert(astra_dynamic_lookup(&library.image,
                                 "astra_dynamic_contract_add", "ASTRA_2.0",
                                 &symbol) == ASTRA_DYNAMIC_UNRESOLVED_SYMBOL);
+    assert(astra_dynamic_lookup(&library.image,
+                                "astra_dynamic_contract_missing", NULL,
+                                &symbol) == ASTRA_DYNAMIC_UNRESOLVED_SYMBOL);
+    bucket_count = astra_load_be32(library.mapping +
+                                   library.image.hash_address);
+    astra_store_be32(library.mapping + library.image.hash_address, 0u);
+    assert(astra_dynamic_lookup(&library.image,
+                                "astra_dynamic_contract_add", "ASTRA_1.0",
+                                &symbol) == ASTRA_DYNAMIC_BAD_TABLE);
+    astra_store_be32(library.mapping + library.image.hash_address,
+                     bucket_count);
+    for (uint32_t bucket = 0u; bucket < bucket_count; ++bucket)
+        astra_store_be32(library.mapping + library.image.hash_address + 8u +
+                         bucket * 4u, 1u);
+    astra_store_be32(library.mapping + library.image.hash_address + 8u +
+                     bucket_count * 4u + 4u,
+                     library.image.symbol_count);
+    assert(astra_dynamic_lookup(&library.image,
+                                "astra_dynamic_contract_missing", NULL,
+                                &symbol) == ASTRA_DYNAMIC_BAD_TABLE);
+    unload_fixture(&library);
+    library = load_fixture(library_path, 0x24000000u);
+    closure.images = &library.image;
 
     assert(program.image.jump_rela_size == 12u);
     relocation_target = astra_load_be32(
@@ -293,6 +317,13 @@ static void test_real_dynamic_pair(const char *program_path,
     assert(astra_dynamic_relocate(&program.image, NULL, NULL) ==
            ASTRA_DYNAMIC_UNRESOLVED_SYMBOL);
     unload_fixture(&program);
+
+    for (uint32_t index = 0u; index < library.image.symbol_count; ++index)
+        astra_store_be32(library.mapping + library.image.symbol_address +
+                         index * 16u, library.image.string_size);
+    assert(astra_dynamic_lookup(&library.image,
+                                "astra_dynamic_contract_add", "ASTRA_1.0",
+                                &symbol) == ASTRA_DYNAMIC_BAD_SYMBOL);
     unload_fixture(&library);
 }
 
@@ -351,6 +382,28 @@ static void test_relocation_writable_range_cache(const char *library_path)
     astra_store_be32(rela + 16u, ELF_R_68K_RELATIVE);
     astra_store_be32(rela + 20u, 0u);
     library.image.rela_size = 24u;
+    library.image.jump_rela_size = 0u;
+    assert(astra_dynamic_relocate(&library.image, NULL, NULL) ==
+           ASTRA_DYNAMIC_BAD_RELOCATION);
+    unload_fixture(&library);
+
+    library = load_fixture(library_path, 0x24000000u);
+    load = fixture_program_header(&library, ELF_PT_LOAD, ELF_PF_W);
+    rela = library.mapping + library.image.rela_address;
+    load_address = astra_load_be32(load + 8u);
+    astra_store_be32(rela, load_address);
+    astra_store_be32(rela + 4u, (1u << 8) | ELF_R_68K_RELATIVE);
+    astra_store_be32(rela + 8u, 0u);
+    library.image.rela_size = 12u;
+    library.image.jump_rela_size = 0u;
+    assert(astra_dynamic_relocate(&library.image, NULL, NULL) ==
+           ASTRA_DYNAMIC_BAD_RELOCATION);
+    unload_fixture(&library);
+
+    library = load_fixture(library_path, 0x24000000u);
+    assert(library.image.rela_size != 0u);
+    library.image.mapping_span = library.image.rela_address +
+                                 library.image.rela_size - 1u;
     library.image.jump_rela_size = 0u;
     assert(astra_dynamic_relocate(&library.image, NULL, NULL) ==
            ASTRA_DYNAMIC_BAD_RELOCATION);
@@ -587,6 +640,17 @@ static void test_rejections(const char *program_path)
     astra_store_be32(rela, program.header_address);
     assert(astra_dynamic_relocate(&program.image, resolve_tls_runtime, NULL) ==
            ASTRA_DYNAMIC_BAD_RELOCATION);
+    unload_fixture(&program);
+
+    program = load_fixture(program_path, 0u);
+    assert(program.mapping[program.image.string_address] == 0u);
+    assert(program.mapping[program.image.string_address +
+                           program.image.string_size - 1u] == 0u);
+    program.mapping[program.image.string_address +
+                    program.image.string_size - 1u] = 'x';
+    assert(astra_dynamic_open((uintptr_t)program.mapping, program.span,
+                              program.header_address, 0u, &program.image) ==
+           ASTRA_DYNAMIC_BAD_STRING);
     unload_fixture(&program);
 
     program = load_fixture(program_path, 0u);

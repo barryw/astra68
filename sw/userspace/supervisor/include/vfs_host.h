@@ -1,8 +1,57 @@
 #ifndef ASTRA_SUPERVISOR_VFS_HOST_H
 #define ASTRA_SUPERVISOR_VFS_HOST_H
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <astra/vfs_assign.h>
 #include <astra/vfs_client.h>
+
+typedef struct SupervisorVfsClientEntry {
+    AstraVfsClient *client;
+    uint32_t handle;
+} SupervisorVfsClientEntry;
+
+typedef struct SupervisorVfsClientTable {
+    SupervisorVfsClientEntry *entries;
+    uint32_t count;
+    uint32_t capacity;
+} SupervisorVfsClientTable;
+
+typedef void *(*SupervisorVfsReallocate)(void *pointer, size_t size);
+
+static inline int
+supervisor_vfs_client_table_reserve(SupervisorVfsClientTable *table,
+                                    uint32_t required,
+                                    SupervisorVfsReallocate reallocate)
+{
+    SupervisorVfsClientEntry *grown;
+    uint32_t capacity;
+
+    if (table == NULL || reallocate == NULL)
+        return 0;
+    if (required <= table->capacity)
+        return 1;
+    capacity = table->capacity == 0u ? 8u : table->capacity;
+    while (capacity < required) {
+        if (capacity > UINT32_MAX / 2u) {
+            capacity = required;
+            break;
+        }
+        capacity *= 2u;
+    }
+#if SIZE_MAX < UINT32_MAX
+    if (capacity > SIZE_MAX / sizeof(*table->entries))
+        return 0;
+#endif
+    grown = reallocate(table->entries,
+                       (size_t)capacity * sizeof(*table->entries));
+    if (grown == NULL)
+        return 0;
+    table->entries = grown;
+    table->capacity = capacity;
+    return 1;
+}
 
 /*
  * Connects the protected storage service's published port, opens the

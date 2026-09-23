@@ -13,8 +13,6 @@
 #include <stdlib.h>
 #endif
 
-#define PROCESS_VFS_CLIENT_MAX ASTRA_ASSIGN_MAX
-
 static AstraAssignTable assigns;
 static char current_assign[ASTRA_CAPABILITY_NAME_MAX];
 static char current_directory[ASTRA_VFS_PATH_MAX];
@@ -32,14 +30,41 @@ static char current_directory[ASTRA_VFS_PATH_MAX];
  * Lazy costs one branch per lookup and nothing else: the handle is known at
  * seeding, and only the two round trips move.
  */
-static struct {
+typedef struct ProcessVfsClient {
     AstraVfsClient client;
     uint32_t handle;
     uint8_t connected;
-} clients[PROCESS_VFS_CLIENT_MAX];
+} ProcessVfsClient;
+
+static ProcessVfsClient *clients;
 static uint32_t client_count;
+static uint32_t client_capacity;
 static uint8_t vfs_initialized;
 static AstraVfsClient *client_ready(uint32_t slot);
+
+static uint32_t reserve_clients(uint32_t minimum)
+{
+    ProcessVfsClient *grown;
+    uint32_t capacity;
+
+    if (minimum <= client_capacity)
+        return ASTRA_VFS_OK;
+    capacity = client_capacity == 0u ? 8u : client_capacity;
+    while (capacity < minimum) {
+        if (capacity > UINT32_MAX / 2u)
+            return ASTRA_VFS_ERR_LIMIT;
+        capacity *= 2u;
+    }
+    if (capacity > UINT32_MAX / sizeof(*clients))
+        return ASTRA_VFS_ERR_LIMIT;
+    grown = astra_runtime_reallocate(
+        clients, (size_t)capacity * sizeof(*clients));
+    if (grown == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    clients = grown;
+    client_capacity = capacity;
+    return ASTRA_VFS_OK;
+}
 
 #define PROCESS_VFS_EXEC_MAGIC 0x56465345u
 #define PROCESS_VFS_EXEC_VERSION 4u
@@ -207,7 +232,6 @@ uint32_t astra_process_vfs_import(const AstraStartupInfo *startup,
         header->magic != PROCESS_VFS_EXEC_MAGIC ||
         header->version != PROCESS_VFS_EXEC_VERSION ||
         header->size != size ||
-        header->client_count > PROCESS_VFS_CLIENT_MAX ||
         header->client_count >
             (size - (uint32_t)sizeof(*header)) /
                 (uint32_t)sizeof(ProcessVfsExecClient) ||
@@ -316,6 +340,7 @@ static uint32_t seed_process_vfs(const AstraStartupInfo *startup,
 {
     const AstraStartupCapability *capabilities;
     uint32_t previous_client_count = client_count;
+    uint32_t status;
 
     if (!astra_startup_validate(startup) ||
         startup->capabilities_address == 0u)
@@ -343,9 +368,10 @@ static uint32_t seed_process_vfs(const AstraStartupInfo *startup,
     capabilities = (const AstraStartupCapability *)(uintptr_t)
         startup->capabilities_address;
     astra_process_vfs_close();
-    if (astra_assign_seed(&assigns, capabilities,
-                          startup->capability_count) != ASTRA_VFS_OK)
-        return ASTRA_VFS_ERR_INVALID;
+    status = astra_assign_seed(&assigns, capabilities,
+                               startup->capability_count);
+    if (status != ASTRA_VFS_OK)
+        return status;
     /*
      * Only records below client_count have ever held state.  Clearing the
      * entire namespace-sized array in a COW child needlessly faults and copies
@@ -362,12 +388,14 @@ static uint32_t seed_process_vfs(const AstraStartupInfo *startup,
                 break;
         if (slot != client_count)
             continue;
-        if (client_count == PROCESS_VFS_CLIENT_MAX) {
+        if (client_count == UINT32_MAX ||
+            reserve_clients(client_count + 1u) != ASTRA_VFS_OK) {
             astra_process_vfs_close();
             return ASTRA_VFS_ERR_LIMIT;
         }
-        clients[client_count].handle = assigns.entries[index].handle;
-        clients[client_count].connected = 0u;
+        clients[client_count] = (ProcessVfsClient){
+            .handle = assigns.entries[index].handle,
+        };
         ++client_count;
     }
     vfs_initialized = client_count != 0u;
@@ -437,7 +465,15 @@ AstraVfsClient *astra_process_vfs_client_for(const AstraAssign *assign)
     for (uint32_t index = 0u; index < client_count; ++index)
         if (clients[index].handle == assign->handle)
             return client_ready(index);
-    return NULL;
+    if (client_count == UINT32_MAX ||
+        reserve_clients(client_count + 1u) != ASTRA_VFS_OK) {
+        (void)astra_log_failure("VFS client allocation", ASTRA_VFS_ERR_LIMIT);
+        return NULL;
+    }
+    clients[client_count] = (ProcessVfsClient){
+        .handle = assign->handle,
+    };
+    return client_ready(client_count++);
 }
 
 AstraVfsClient *astra_process_vfs_assign_client(const AstraAssign *assign,

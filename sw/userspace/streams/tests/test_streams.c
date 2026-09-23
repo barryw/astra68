@@ -602,6 +602,47 @@ test_a_source_with_nothing_answers_with_nothing(void)
 }
 
 static void
+test_a_source_can_grow_without_losing_wrapped_input(void)
+{
+    AstraStreamSource source;
+    uint8_t storage[8];
+    uint8_t replacement[16];
+    uint8_t too_small[5];
+    uint8_t read_back[8];
+    uint32_t handle;
+    uint32_t length = 0u;
+
+    mock_reset();
+    handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_stream_source_init_storage(
+        &source, handle, storage, sizeof(storage)));
+    assert(astra_stream_source_offer(
+        &source, (const uint8_t *)"abcdef", 6u) == 6u);
+    served_source = &source;
+    assert(astra_stream_read(handle, read_back, 4u, &length) ==
+           ASTRA_SYSCALL_OK);
+    assert(length == 4u && memcmp(read_back, "abcd", 4u) == 0);
+    assert(astra_stream_source_offer(
+        &source, (const uint8_t *)"WXYZ", 4u) == 4u);
+
+    assert(!astra_stream_source_rebind_storage(
+        &source, too_small, sizeof(too_small)));
+    assert(source.buffer == storage && source.capacity == sizeof(storage) &&
+           source.head == 4u && source.length == 6u);
+
+    assert(astra_stream_source_rebind_storage(
+        &source, replacement, sizeof(replacement)));
+    assert(source.buffer == replacement && source.head == 0u &&
+           source.length == 6u && source.capacity == sizeof(replacement));
+    length = 0u;
+    assert(astra_stream_read(handle, read_back, sizeof(read_back), &length) ==
+           ASTRA_SYSCALL_OK);
+    assert(length == 6u && memcmp(read_back, "efWXYZ", 6u) == 0);
+    served_source = NULL;
+    astra_stream_source_destroy(&source);
+}
+
+static void
 test_read_wait_tracks_the_source_without_consuming(void)
 {
     AstraStreamSource source;
@@ -928,6 +969,7 @@ main(void)
     test_a_stream_nobody_granted_is_a_handle_nobody_has();
     test_a_read_gets_what_there_is();
     test_a_source_with_nothing_answers_with_nothing();
+    test_a_source_can_grow_without_losing_wrapped_input();
     test_read_wait_tracks_the_source_without_consuming();
     test_terminal_control_is_shared_and_flushes_input();
     test_terminal_line_discipline();

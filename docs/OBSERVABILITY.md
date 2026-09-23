@@ -9,6 +9,81 @@ pieces underneath them are built first and the requirement is added afterwards,
 the result is a bolted-on subsystem with its own parallel conventions. The
 rules below constrain every piece built from here on.
 
+## Whole-system profiling
+
+`tools/astra-prof` is the entry point for performance work. A physical boot
+capture builds the pinned profiling QEMU, runs it in isolated DE25 state,
+records exact MC68040 translated-block counts, Linux PMU samples, and the
+kernel trace ring, restores production, then symbolizes the hot kernel and ROM
+functions:
+
+```sh
+rtk proxy ssh beast "cd /home/barry/astra68 && \
+  ./tools/astra-prof de25-boot --output /tmp/astra-profile"
+```
+
+Targeted command profiling is the same one-step operation. This example opens
+Terminal normally, performs two unmeasured warmups, records five `which status`
+commands, and stops each interval on Terminal's actual OSC-133 shell-ready
+event:
+
+```sh
+rtk proxy ssh beast "cd /home/barry/astra68 && \
+  ./tools/astra-prof de25-command --output /tmp/which-profile which status"
+```
+
+Commands that stay interactive take an explicit cleanup command and external
+programs take an explicit debug ELF; neither is inferred from the command name:
+
+```sh
+rtk proxy ssh beast "cd /home/barry/astra68 && \
+  ./tools/astra-prof de25-command --output /tmp/shell-profile \
+  --cleanup exit --image shell=/path/to/shell.elf shell"
+```
+
+QEMU is paused while each interval counter is started and stopped. The plugin
+uses inline per-vCPU counters in both whole-boot and controlled modes, so the
+profiler does not insert one host callback per translated block. Reports verify
+each block's code signature against the supplied ELF before naming it; an
+address shared by several processes is never attributed by address alone.
+The one-step DE25 commands discover unstripped application, service, NDK, and
+shared/system-library ELFs from the current build and add the kernel and ROM;
+`--image NAME[@BASE]=ELF` adds an external program or an explicitly relocated
+image without teaching the profiler its command name.
+
+Use `--stop-marker` to bound another boot phase, `--memory` for exact guest
+load/store counts, `report` to re-symbolize an existing `.aprof`, `compare` for
+median before/after deltas, and `annotate` for source-interleaved MC68040
+disassembly. Every capture includes artifact hashes in `metadata.txt`;
+performance claims require repeated physical captures of the same workload.
+The default path incrementally builds userspace and the ROM and creates a fresh
+disk image from those same outputs. Supplying custom software is all-or-nothing:
+`--rom`, `--storage`, `--kernel`, and `--rom-elf` must identify one coherent
+candidate, so a current ROM cannot silently run an older filesystem image.
+Fresh filesystem images are cached by a SHA-256 identity over every published
+userspace build input and the image recipe. A cache hit therefore avoids the
+measured 107-second format/install step without accepting an image built from
+different bytes. Concise stage timings remain visible; complete compiler output
+is printed only on failure.
+
+Uninstrumented latency controls must bracket the candidate closely; an older
+artifact is not a control because board/runtime drift can exceed a small code
+change. Run candidate, unchanged control, then candidate again and pool the two
+candidate legs explicitly:
+
+```sh
+rtk proxy ssh beast "cd /home/barry/astra68 && \
+  ./tools/astra-prof compare-latency \
+  --baseline /tmp/control \
+  --candidate /tmp/candidate-before \
+  --candidate /tmp/candidate-after"
+```
+
+The command accepts artifact directories or their `command-metrics.jsonl`
+files and reports medians for both wall milliseconds and guest cycles. Profile
+instruction deltas and the bracketed latency result must agree before a hot-path
+change is retained.
+
 ## Metrics
 
 `sw/include/astra/metrics.h` and `sw/userspace/metrics` implement the contract.
@@ -165,14 +240,16 @@ the same identities the loader resolves. All text leaves stream directly into
 bounded offset reads; their total output is not capped by an aggregate render
 buffer.
 
-CPU time is measured, not inferred from schedule counts. Axiom timestamps the
-common user-resume and kernel-entry boundaries with the low cycle counter and
-accumulates a 64-bit runtime per process. Elapsed time starts at process
-creation; both values are converted through the platform cycle-to-nanosecond
-contract. The physical regression gate compares complete rendered output and
-records presentation counts as well as wall time. `ps` reports lifetime CPU
-percentage as runtime divided by elapsed time and reports resident memory as
-ledger frames times the 4 KiB page size.
+CPU time is measured, not inferred from schedule counts. Axiom timestamps
+actual CPU-ownership changes with the low cycle counter and accumulates a
+64-bit scheduled runtime per process, including kernel work performed for that
+process. Reading a running process includes its current interval without
+ending it. Elapsed time starts at process creation; both values are converted
+through the platform cycle-to-nanosecond contract. The physical regression
+gate compares complete rendered output and records presentation counts as well
+as wall time. `ps` reports lifetime CPU percentage as runtime divided by
+elapsed time and reports resident memory as ledger frames times the 4 KiB page
+size.
 
 ### Identifiers are generation-checked
 

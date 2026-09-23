@@ -54,26 +54,29 @@ static void decode_access(KernelExceptionFrame *frame)
     frame->access_transfer_mode = transfer_mode;
 }
 
+static __attribute__((always_inline)) inline uint16_t
+exception_format_size(uint8_t format)
+{
+    switch (format) {
+    case 0x0u:
+    case 0x1u:
+        return 8u;
+    case 0x2u:
+    case 0x3u:
+        return 12u;
+    case 0x7u:
+        return 60u;
+    default:
+        return 0u;
+    }
+}
+
 bool kernel_exception_format_size(uint8_t format, uint16_t *size)
 {
     if (size == NULL)
         return false;
-    switch (format) {
-    case 0x0u:
-    case 0x1u:
-        *size = 8u;
-        return true;
-    case 0x2u:
-    case 0x3u:
-        *size = 12u;
-        return true;
-    case 0x7u:
-        *size = 60u;
-        return true;
-    default:
-        *size = 0u;
-        return false;
-    }
+    *size = exception_format_size(format);
+    return *size != 0u;
 }
 
 KernelExceptionStatus kernel_exception_decode(const void *raw_frame,
@@ -81,29 +84,23 @@ KernelExceptionStatus kernel_exception_decode(const void *raw_frame,
                                               KernelExceptionFrame *frame)
 {
     const uint8_t *bytes = raw_frame;
-    uint16_t frame_size;
+    KernelExceptionBaseFrame base;
+    KernelExceptionStatus status;
 
     if (bytes == NULL || frame == NULL)
         return KERNEL_EXCEPTION_INVALID_ARGUMENT;
     clear_frame(frame);
-    if (available < 8u)
-        return KERNEL_EXCEPTION_TRUNCATED;
+    status = kernel_exception_decode_base(raw_frame, available, &base);
+    if (status != KERNEL_EXCEPTION_OK)
+        return status;
 
-    frame->status_register = astra_load_be16(bytes);
-    frame->program_counter = astra_load_be32(bytes + 2u);
-    frame->format_vector = astra_load_be16(bytes + 6u);
-    frame->format = (uint8_t)(frame->format_vector >> 12);
-    frame->vector_offset = frame->format_vector & 0x0fffu;
-    frame->from_user =
-        (frame->status_register & M68K_SR_SUPERVISOR) == 0u ? 1u : 0u;
-
-    if ((frame->vector_offset & 3u) != 0u)
-        return KERNEL_EXCEPTION_INVALID_VECTOR;
-    if (!kernel_exception_format_size(frame->format, &frame_size))
-        return KERNEL_EXCEPTION_UNSUPPORTED_FORMAT;
-    frame->frame_size = frame_size;
-    if (available < frame_size)
-        return KERNEL_EXCEPTION_TRUNCATED;
+    frame->program_counter = base.program_counter;
+    frame->status_register = base.status_register;
+    frame->format_vector = base.format_vector;
+    frame->vector_offset = base.vector_offset;
+    frame->frame_size = base.frame_size;
+    frame->format = base.format;
+    frame->from_user = base.from_user;
 
     if (frame->format == 0x2u)
         frame->instruction_address = astra_load_be32(bytes + 8u);
@@ -113,6 +110,40 @@ KernelExceptionStatus kernel_exception_decode(const void *raw_frame,
         frame->fault_address = astra_load_be32(bytes + 20u);
         decode_access(frame);
     }
+    return KERNEL_EXCEPTION_OK;
+}
+
+KernelExceptionStatus kernel_exception_decode_base(
+    const void *raw_frame, uint32_t available, KernelExceptionBaseFrame *frame)
+{
+    const uint8_t *bytes = raw_frame;
+    uint16_t format_vector;
+    uint16_t frame_size;
+    uint8_t format;
+
+    if (bytes == NULL || frame == NULL)
+        return KERNEL_EXCEPTION_INVALID_ARGUMENT;
+    if (available < 8u)
+        return KERNEL_EXCEPTION_TRUNCATED;
+
+    format_vector = astra_load_be16(bytes + 6u);
+    format = (uint8_t)(format_vector >> 12);
+    if ((format_vector & 3u) != 0u)
+        return KERNEL_EXCEPTION_INVALID_VECTOR;
+    frame_size = exception_format_size(format);
+    if (frame_size == 0u)
+        return KERNEL_EXCEPTION_UNSUPPORTED_FORMAT;
+    if (available < frame_size)
+        return KERNEL_EXCEPTION_TRUNCATED;
+
+    frame->program_counter = astra_load_be32(bytes + 2u);
+    frame->status_register = astra_load_be16(bytes);
+    frame->format_vector = format_vector;
+    frame->vector_offset = format_vector & 0x0fffu;
+    frame->frame_size = frame_size;
+    frame->format = format;
+    frame->from_user =
+        (frame->status_register & M68K_SR_SUPERVISOR) == 0u ? 1u : 0u;
     return KERNEL_EXCEPTION_OK;
 }
 

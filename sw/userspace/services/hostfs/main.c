@@ -21,8 +21,8 @@ enum {
 };
 
 static uint32_t device_handle;
-static uint32_t transport_lock;
-static uint32_t state_lock;
+static _Alignas(4) uint32_t transport_lock;
+static _Alignas(4) uint32_t state_lock;
 static AstraVfsHostTransport transport;
 static AstraVfsHostBackend backend;
 static AstraVfsService service;
@@ -127,7 +127,8 @@ static uint32_t sample_vfs(void *context, AstraMetricSample *out,
         "sessions_closed", "files_opened", "files_closed", "stale_handles",
         "cross_session_denied", "cross_owner_denied",
         "owner_session_quota_denied", "owner_quota_denied",
-        "peak_open_files", "peak_sessions"
+        "peak_open_files", "peak_sessions", "last_failed_operation",
+        "last_failed_status", "last_failed_owner"
     };
     const AstraVfsServiceStats *stats = astra_vfs_service_stats(context);
     uint32_t values[sizeof(names) / sizeof(names[0])];
@@ -154,6 +155,9 @@ static uint32_t sample_vfs(void *context, AstraMetricSample *out,
     values[11] = stats->owner_quota_denied;
     values[12] = stats->peak_open_files;
     values[13] = stats->peak_sessions;
+    values[14] = stats->last_failed_operation;
+    values[15] = stats->last_failed_status;
+    values[16] = stats->last_failed_owner;
     for (uint32_t index = 0u; index < count; ++index) {
         out[index].name = names[index];
         out[index].value = values[index];
@@ -189,18 +193,6 @@ static int register_metrics(void)
                                  &transport);
 }
 
-static int acquire(void *context)
-{
-    return astra_wait_one(*(uint32_t *)context, ASTRA_DEADLINE_FOREVER,
-                          NULL) == ASTRA_SYSCALL_OK;
-}
-
-static void release(void *context)
-{
-    if (astra_rt_signal(*(uint32_t *)context, 1u, NULL) != ASTRA_SYSCALL_OK)
-        astra_process_exit(HOSTFS_FAIL_LOCK);
-}
-
 int astra_main(const AstraStartupInfo *startup)
 {
     const AstraStartupCapability *device;
@@ -225,16 +217,9 @@ int astra_main(const AstraStartupInfo *startup)
         return ASTRA_STATUS_BAD_HANDLE;
     device_handle = device->handle;
     if (status == ASTRA_STATUS_OK &&
-        (astra_rt_semaphore_create(
-             1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
-             &transport_lock) != ASTRA_SYSCALL_OK ||
-         astra_rt_semaphore_create(
-             1u, 1u, ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
-             &state_lock) != ASTRA_SYSCALL_OK))
-        status = HOSTFS_FAIL_LOCK;
-    if (status == ASTRA_STATUS_OK &&
-        !astra_vfs_host_transport_init(&transport, device_handle, acquire,
-                                       release, &transport_lock))
+        !astra_vfs_host_transport_init(
+            &transport, device_handle, astra_vfs_state_lock_acquire,
+            astra_vfs_state_lock_release, &transport_lock))
         status = HOSTFS_FAIL_DEVICE;
     if (status == ASTRA_STATUS_OK &&
         (!astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile),
@@ -244,8 +229,9 @@ int astra_main(const AstraStartupInfo *startup)
          !astra_vfs_service_init(
              &service, astra_vfs_host_ops(), &backend, service_sessions,
              ASTRA_VFS_SESSION_MAX, service_storage, service_capacity) ||
-         !astra_vfs_service_set_state_lock(&service, acquire, release,
-                                           &state_lock) ||
+         !astra_vfs_service_set_state_lock(
+             &service, astra_vfs_state_lock_acquire,
+             astra_vfs_state_lock_release, &state_lock) ||
          !astra_vfs_service_set_state_wait(
              &service, astra_vfs_state_futex_wait,
              astra_vfs_state_futex_wake)))
@@ -267,8 +253,9 @@ int astra_main(const AstraStartupInfo *startup)
                  (uint32_t)sizeof(AstraVfsRenameRequestMessage),
              &receive, &send) != ASTRA_SYSCALL_OK ||
          !astra_vfs_port_service_init(&port, receive, &service) ||
-         !astra_vfs_port_service_set_state_lock(&port, acquire, release,
-                                                &state_lock) ||
+         !astra_vfs_port_service_set_state_lock(
+             &port, astra_vfs_state_lock_acquire,
+             astra_vfs_state_lock_release, &state_lock) ||
          !astra_vfs_port_service_set_accelerator(&port, device_handle)))
         status = HOSTFS_FAIL_PORT;
     if (status == ASTRA_STATUS_OK &&

@@ -27,27 +27,43 @@ static void address_contract(void)
 
 static void shared_layout(void)
 {
-    uint8_t *memory = calloc(1u, ASTRA_AREA_SIZE_MAX);
+    uint8_t *memory = calloc(1u, ASTRA_NETWORK_SHARED_BYTES_MAX +
+                                 ASTRA_NETWORK_SLOT_BYTES);
     AstraNetworkSharedHeader *header = (void *)memory;
     AstraNetworkSharedSlot *slots;
 
     assert(memory != NULL);
-    assert(astra_network_shared_initialize(memory, ASTRA_AREA_SIZE_MAX, 7u));
-    assert(astra_network_shared_valid(memory, ASTRA_AREA_SIZE_MAX, 7u));
-    assert(header->slot_count == 63u);
+    assert(astra_network_shared_initialize(
+        memory, ASTRA_NETWORK_SHARED_BYTES_MAX, 7u));
+    assert(astra_network_shared_valid(
+        memory, ASTRA_NETWORK_SHARED_BYTES_MAX, 7u));
+    assert(header->slot_count == ASTRA_NETWORK_SHARED_SLOT_MAX);
     assert(header->tx_slot_count + header->rx_slot_count ==
            header->slot_count);
     slots = astra_network_shared_slots(memory);
-    assert(slots != NULL && slots[62].state == ASTRA_NETWORK_SLOT_FREE);
+    assert(slots != NULL &&
+           slots[ASTRA_NETWORK_SHARED_SLOT_MAX - 1u].state ==
+               ASTRA_NETWORK_SLOT_FREE);
     assert(astra_network_shared_slot_bytes(memory, 0u) == memory + 4096u);
-    assert(astra_network_shared_slot_bytes(memory, 62u) +
-               ASTRA_NETWORK_SLOT_BYTES <= memory + ASTRA_AREA_SIZE_MAX);
-    assert(astra_network_shared_slot_bytes(memory, 63u) == NULL);
-    header->slot_count = 64u;
-    assert(!astra_network_shared_valid(memory, ASTRA_AREA_SIZE_MAX, 7u));
-    header->slot_count = 63u;
+    assert(astra_network_shared_slot_bytes(
+               memory, ASTRA_NETWORK_SHARED_SLOT_MAX - 1u) +
+               ASTRA_NETWORK_SLOT_BYTES <=
+           memory + ASTRA_NETWORK_SHARED_BYTES_MAX);
+    assert(astra_network_shared_slot_bytes(
+               memory, ASTRA_NETWORK_SHARED_SLOT_MAX) == NULL);
+
+    /* One more packet slot has no metadata descriptor and must be rejected. */
+    assert(!astra_network_shared_initialize(
+        memory, ASTRA_NETWORK_SHARED_BYTES_MAX + ASTRA_NETWORK_SLOT_BYTES,
+        8u));
+
+    header->slot_count = ASTRA_NETWORK_SHARED_SLOT_MAX + 1u;
+    assert(!astra_network_shared_valid(
+        memory, ASTRA_NETWORK_SHARED_BYTES_MAX, 7u));
+    header->slot_count = ASTRA_NETWORK_SHARED_SLOT_MAX;
     header->tx_slot_count = 0u;
-    assert(!astra_network_shared_valid(memory, ASTRA_AREA_SIZE_MAX, 7u));
+    assert(!astra_network_shared_valid(
+        memory, ASTRA_NETWORK_SHARED_BYTES_MAX, 7u));
     free(memory);
 }
 

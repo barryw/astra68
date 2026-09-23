@@ -1,13 +1,13 @@
 # Filesystem Kit
 
-Status: `filesystem.library` ABI 2.4 is the shared, backend-neutral client layer
+Status: `filesystem.library` ABI 3.0 is the shared, backend-neutral client layer
 over Astra's VFS protocol, assign namespaces, and union policy. It does not
 create a second filesystem stack.
 
 ## Native application contract
 
 Applications link the direct symbols declared by the NDK. Their executable has
-an eager `DT_NEEDED` dependency on `filesystem.library.2`; launch fails before
+an eager `DT_NEEDED` dependency on `filesystem.library.3`; launch fails before
 `main()` with a precise diagnostic when the required ABI is unavailable. An
 `AstraFilesystem` attaches to the process namespace already built from its
 startup grants; it borrows those assign and client objects and cannot expand
@@ -37,9 +37,8 @@ caller:
   process actually holds;
 - normalization rejects attempts to escape above an assign root;
 - rights are checked again after traversal, against the resolved assign; and
-- cycles or more than 40 traversals return `ASTRA_VFS_ERR_LOOP` (`ELOOP` in
-  POSIX). Forty is the established Unix traversal ceiling, not a storage-size
-  limit.
+- cycles return `ASTRA_VFS_ERR_LOOP` (`ELOOP` in POSIX); traversal depth is
+  constrained only by the memory needed to retain visited paths.
 
 Backends expose no-follow `stat`/`readlink`/`symlink` primitives. They do not
 interpret assigns, follow cross-filesystem targets, or make capability

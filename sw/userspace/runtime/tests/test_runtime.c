@@ -34,6 +34,7 @@ static uint32_t mock_stream_create_calls;
 static uint32_t mock_stream_commit_calls;
 static uint32_t mock_stream_closed_handle;
 static uint32_t mock_stream_dynamic;
+static uint32_t mock_stream_partial;
 static uint32_t mock_thread_handle = 0x22222222u;
 static int mock_clone_child;
 static uint32_t mock_cancel_wait_once;
@@ -134,6 +135,7 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_SIGNAL_CONFIGURE &&
         number != ASTRA_SYSCALL_INTERVAL_TIMER &&
         number != ASTRA_SYSCALL_VM_PRIVATE_RESERVE &&
+        number != ASTRA_SYSCALL_VM_PRIVATE_COMMIT &&
         number != ASTRA_SYSCALL_VM_PRIVATE_DECOMMIT &&
         number != ASTRA_SYSCALL_RING_CREATE &&
         number != ASTRA_SYSCALL_RING_READ_TRY &&
@@ -197,6 +199,14 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         ++mock_stream_write_calls;
         result->value0 = 0u;
         result->value1 = 0u;
+        if (mock_stream_partial != 0u && mock_stream_dynamic == 0u &&
+            argument1 >= MOCK_STREAM_FILE_OFFSET &&
+            argument1 + argument3 <
+                MOCK_STREAM_FILE_OFFSET + MOCK_STREAM_FILE_BYTES) {
+            result->value0 = argument1 + argument3;
+            result->value1 = MOCK_STREAM_FILE_OFFSET +
+                             MOCK_STREAM_FILE_BYTES - result->value0;
+        }
         if (mock_stream_dynamic != 0u && mock_stream_write_calls == 3u) {
             result->value0 = MOCK_INTERPRETER_FILE_OFFSET;
             result->value1 = MOCK_INTERPRETER_FILE_BYTES;
@@ -238,6 +248,14 @@ test_startup_contract(void)
     assert(!astra_startup_validate(NULL));
     startup.magic = 0u;
     assert(!astra_startup_validate(&startup));
+    startup = valid_startup();
+    startup.capability_count = ASTRA_STARTUP_CAPABILITY_MAX;
+    startup.capabilities_address = 1u;
+    startup.total_size = ASTRA_STARTUP_INFO_SIZE +
+                         ASTRA_STARTUP_CAPABILITY_MAX *
+                             ASTRA_STARTUP_CAPABILITY_SIZE;
+    assert(startup.total_size <= ASTRA_STARTUP_BLOCK_SIZE);
+    assert(astra_startup_validate(&startup));
     startup = valid_startup();
     startup.capability_count = ASTRA_STARTUP_CAPABILITY_MAX + 1u;
     assert(!astra_startup_validate(&startup));
@@ -422,7 +440,7 @@ static void
 test_syscall_wrappers(void)
 {
     enum { SNAPSHOT_BATCH_RECORDS = 17 };
-    AstraProcSnapshot process_records[ASTRA_PROCESS_COUNT_MAX];
+    AstraProcSnapshot process_records[40u];
     AstraProcLibrarySnapshot library_records[SNAPSHOT_BATCH_RECORDS];
     AstraProcessInfo process_info = {0};
     AstraThreadInfo thread_info = {0};
@@ -496,6 +514,11 @@ test_syscall_wrappers(void)
     assert(mock_argument0 == (uint32_t)(uintptr_t)&futex_word);
     assert(mock_argument1 == 7u && mock_argument2 == 0x12345678u &&
            mock_argument3 == 0x9abcdef0u);
+    calls = mock_calls;
+    assert(astra_futex_wait(
+               (volatile uint32_t *)((uintptr_t)&futex_word + 2u), 7u,
+               ASTRA_DEADLINE_FOREVER) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(mock_calls == calls);
     assert(astra_futex_wake(&futex_word, 3u, &woken) == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_FUTEX_WAKE);
     assert(mock_argument0 == (uint32_t)(uintptr_t)&futex_word);
@@ -533,15 +556,17 @@ test_syscall_wrappers(void)
     assert(mock_argument1 == 12u);
     assert(abi == ASTRA_SYSCALL_ABI_VERSION);
     assert(astra_process_snapshot(process, process_records,
-                                  ASTRA_PROCESS_COUNT_MAX, &moved) ==
+                                  40u, &moved) ==
            ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_PROCESS_SNAPSHOT);
     assert(mock_argument0 == process);
     assert(mock_argument1 == (uint32_t)(uintptr_t)process_records);
-    assert(mock_argument2 == ASTRA_PROCESS_COUNT_MAX);
+    assert(mock_argument2 == 40u);
     assert(moved == ASTRA_SYSCALL_ABI_VERSION);
-    assert(astra_process_snapshot(process, NULL,
-                                  ASTRA_PROCESS_COUNT_MAX, &moved) ==
+    assert(astra_process_snapshot(process, NULL, 0u, &moved) ==
+           ASTRA_SYSCALL_OK);
+    assert(mock_argument1 == 0u && mock_argument2 == 0u);
+    assert(astra_process_snapshot(process, NULL, 1u, &moved) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(astra_library_snapshot(process, 3u, library_records,
                                   SNAPSHOT_BATCH_RECORDS, &moved,
@@ -605,6 +630,17 @@ test_syscall_wrappers(void)
     assert(private_address ==
            (void *)(uintptr_t)ASTRA_SYSCALL_ABI_VERSION);
     assert(span == 0x11111111u);
+    calls = mock_calls;
+    assert(astra_rt_private_commit(NULL, 4096u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_rt_private_commit(private_address, 0u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(mock_calls == calls);
+    assert(astra_rt_private_commit(private_address, 4096u) ==
+           ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_VM_PRIVATE_COMMIT);
+    assert(mock_argument0 == (uint32_t)(uintptr_t)private_address);
+    assert(mock_argument1 == 4096u);
     assert(astra_rt_private_decommit(private_address, 4096u, &released) ==
            ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_VM_PRIVATE_DECOMMIT);
@@ -911,10 +947,12 @@ static void test_launch(void)
 }
 
 typedef struct MockLaunchReader {
-    uint32_t offset[4];
-    uint32_t length[4];
+    uint32_t offset[8];
+    uint32_t length[8];
     uint32_t calls;
     uint32_t fail_call;
+    uint32_t empty_call;
+    uint32_t maximum_move;
     uint32_t releases;
     uint32_t fail_release;
     uint8_t bytes[64];
@@ -936,7 +974,7 @@ static uint32_t mock_launch_read(void *context, uint32_t offset,
     MockLaunchReader *reader = context;
     uint32_t call = reader->calls++;
 
-    assert(call < 4u);
+    assert(call < 8u);
     reader->offset[call] = offset;
     reader->length[call] = length;
     *bytes = NULL;
@@ -945,7 +983,12 @@ static uint32_t mock_launch_read(void *context, uint32_t offset,
         return 1u;
     assert(length <= sizeof(reader->bytes));
     *bytes = reader->bytes;
-    *moved = length;
+    *moved = reader->maximum_move != 0u &&
+                     offset >= MOCK_STREAM_FILE_OFFSET &&
+                     length > reader->maximum_move ?
+        reader->maximum_move : length;
+    if (reader->empty_call == call + 1u)
+        *moved = 0u;
     return 0u;
 }
 
@@ -992,6 +1035,37 @@ static void test_streamed_launch(void)
     assert(profile.kernel_create_ns == 100u);
     assert(profile.source_release_ns == 100u);
     assert(profile.kernel_commit_ns == 100u);
+
+    reader = (MockLaunchReader){.maximum_move = 8u};
+    mock_stream_write_calls = 0u;
+    mock_stream_commit_calls = 0u;
+    mock_stream_closed_handle = 0u;
+    mock_stream_partial = 1u;
+    assert(astra_launch_stream(
+               MOCK_STREAM_FILE_OFFSET + MOCK_STREAM_FILE_BYTES,
+               mock_launch_read, mock_launch_release, &reader, NULL, 0u,
+               NULL, NULL, &handle, &id) == ASTRA_SYSCALL_OK);
+    assert(reader.calls == 5u);
+    assert(reader.offset[2] == MOCK_STREAM_FILE_OFFSET &&
+           reader.length[2] == 17u);
+    assert(reader.offset[3] == MOCK_STREAM_FILE_OFFSET + 8u &&
+           reader.length[3] == 9u);
+    assert(reader.offset[4] == MOCK_STREAM_FILE_OFFSET + 16u &&
+           reader.length[4] == 1u);
+    assert(mock_stream_write_calls == 4u);
+    mock_stream_partial = 0u;
+
+    reader = (MockLaunchReader){.empty_call = 3u};
+    mock_stream_write_calls = 0u;
+    mock_stream_commit_calls = 0u;
+    mock_stream_closed_handle = 0u;
+    assert(astra_launch_stream(
+               MOCK_STREAM_FILE_OFFSET + MOCK_STREAM_FILE_BYTES,
+               mock_launch_read, mock_launch_release, &reader, NULL, 0u,
+               NULL, NULL, &handle, &id) == ASTRA_SYSCALL_IO_ERROR);
+    assert(reader.releases == 1u && mock_stream_write_calls == 1u);
+    assert(mock_stream_commit_calls == 0u);
+    assert(mock_stream_closed_handle == MOCK_STREAM_LOAD_HANDLE);
 
     reader = (MockLaunchReader){.fail_call = 3u};
     handle = 0xdeadbeefu;

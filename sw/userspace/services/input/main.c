@@ -208,7 +208,7 @@ static void serve(uint32_t receive, uint32_t input, uint32_t irq,
         if (selected == 0u) {
             accept_client(receive, service, sinks);
         } else if (selected == 1u) {
-            AstraInputEvent events[ASTRA_INPUT_READ_BATCH_MAX];
+            AstraInputEvent events[ASTRA_INPUT_FIFO_CAPACITY];
             AstraIrqRecord record;
 
             status = astra_irq_read(irq, &record, NULL);
@@ -219,7 +219,7 @@ static void serve(uint32_t receive, uint32_t input, uint32_t irq,
                 uint32_t flags = 0u;
 
                 status = astra_input_read(
-                    input, events, ASTRA_INPUT_READ_BATCH_MAX, &count, &flags);
+                    input, events, ASTRA_INPUT_FIFO_CAPACITY, &count, &flags);
                 if (status == ASTRA_SYSCALL_WOULD_BLOCK)
                     break;
                 if (status != ASTRA_SYSCALL_OK)

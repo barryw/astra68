@@ -69,6 +69,23 @@ static void test_copy(void)
     }
 }
 
+static void test_copy_mismatched_alignment(void)
+{
+    uint8_t source[73];
+    uint8_t destination[75];
+
+    for (uint32_t index = 0u; index < sizeof(source); ++index)
+        source[index] = (uint8_t)(index * 19u + 7u);
+    fill(destination, sizeof(destination), 0xa5u);
+    kernel_bytes_copy(&destination[3], &source[1], 68u);
+    for (uint32_t index = 0u; index < 68u; ++index)
+        assert(destination[3u + index] == source[1u + index]);
+    assert(destination[0] == 0xa5u && destination[1] == 0xa5u &&
+           destination[2] == 0xa5u);
+    assert(destination[71] == 0xa5u && destination[72] == 0xa5u &&
+           destination[73] == 0xa5u && destination[74] == 0xa5u);
+}
+
 static void test_equal(void)
 {
     uint8_t left[TEST_MAX_SIZE + 3u];
@@ -99,41 +116,76 @@ static void test_equal(void)
 
 static void test_word_fill(void)
 {
-    uint32_t storage[24];
+    uint32_t storage[80];
 
-    for (uint32_t count = 0u; count <= 16u; ++count) {
-        for (uint32_t index = 0u; index < 24u; ++index)
+    for (uint32_t count = 0u; count <= 65u; ++count) {
+        for (uint32_t index = 0u; index < 80u; ++index)
             storage[index] = 0x11223344u;
         kernel_words_fill(&storage[4], count, 0xa5a55a5au);
         for (uint32_t index = 0u; index < 4u; ++index)
             assert(storage[index] == 0x11223344u);
         for (uint32_t index = 4u; index < 4u + count; ++index)
             assert(storage[index] == 0xa5a55a5au);
-        for (uint32_t index = 4u + count; index < 24u; ++index)
+        for (uint32_t index = 4u + count; index < 80u; ++index)
             assert(storage[index] == 0x11223344u);
     }
 }
 
+static void test_page_word_fill(void)
+{
+    uint32_t storage[1032];
+
+    for (uint32_t index = 0u; index < 1032u; ++index)
+        storage[index] = 0x11223344u;
+    kernel_words_fill(&storage[4], 1024u, 0xa5a55a5au);
+    for (uint32_t index = 0u; index < 4u; ++index)
+        assert(storage[index] == 0x11223344u);
+    for (uint32_t index = 4u; index < 1028u; ++index)
+        assert(storage[index] == 0xa5a55a5au);
+    for (uint32_t index = 1028u; index < 1032u; ++index)
+        assert(storage[index] == 0x11223344u);
+}
+
 static void test_unaligned_big_endian(void)
 {
-    uint8_t storage[12] = {0xa5u};
+    uint8_t storage[20];
 
-    astra_store_be16(&storage[1], 0x1234u);
-    astra_store_be32(&storage[3], 0x89abcdefu);
-    astra_store_be64(&storage[2], UINT64_C(0x0123456789abcdef));
-    assert(astra_load_be64(&storage[2]) == UINT64_C(0x0123456789abcdef));
-    astra_store_be16(&storage[1], 0x1234u);
-    astra_store_be32(&storage[3], 0x89abcdefu);
-    assert(astra_load_be16(&storage[1]) == 0x1234u);
-    assert(astra_load_be32(&storage[3]) == 0x89abcdefu);
-    assert(storage[0] == 0xa5u && storage[10] == 0u && storage[11] == 0u);
+    for (uint32_t offset = 0u; offset < 4u; ++offset) {
+        fill(storage, sizeof(storage), 0xa5u);
+        astra_store_be16(&storage[4u + offset], 0x1234u);
+        assert(astra_load_be16(&storage[4u + offset]) == 0x1234u);
+        for (uint32_t index = 0u; index < 4u + offset; ++index)
+            assert(storage[index] == 0xa5u);
+        for (uint32_t index = 6u + offset; index < sizeof(storage); ++index)
+            assert(storage[index] == 0xa5u);
+
+        fill(storage, sizeof(storage), 0xa5u);
+        astra_store_be32(&storage[4u + offset], 0x89abcdefu);
+        assert(astra_load_be32(&storage[4u + offset]) == 0x89abcdefu);
+        for (uint32_t index = 0u; index < 4u + offset; ++index)
+            assert(storage[index] == 0xa5u);
+        for (uint32_t index = 8u + offset; index < sizeof(storage); ++index)
+            assert(storage[index] == 0xa5u);
+
+        fill(storage, sizeof(storage), 0xa5u);
+        astra_store_be64(&storage[4u + offset],
+                         UINT64_C(0x0123456789abcdef));
+        assert(astra_load_be64(&storage[4u + offset]) ==
+               UINT64_C(0x0123456789abcdef));
+        for (uint32_t index = 0u; index < 4u + offset; ++index)
+            assert(storage[index] == 0xa5u);
+        for (uint32_t index = 12u + offset; index < sizeof(storage); ++index)
+            assert(storage[index] == 0xa5u);
+    }
 }
 
 int main(void)
 {
     test_clear();
     test_word_fill();
+    test_page_word_fill();
     test_copy();
+    test_copy_mismatched_alignment();
     test_equal();
     test_unaligned_big_endian();
     puts("byte primitive tests passed");

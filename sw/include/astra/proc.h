@@ -12,8 +12,10 @@ typedef struct AstraProcSnapshot {
 } AstraProcSnapshot;
 
 /*
- * One resident library and every live process mapping it. The cache itself
- * owns one logical reference; each process in process_ids owns one more.
+ * One resident library/process mapping. Libraries with no process mappings
+ * still produce one record with process_id zero. A library mapped by several
+ * processes produces consecutive records, so pagination is bounded only by
+ * the caller's transfer buffer and live system resources.
  */
 typedef struct AstraProcLibrarySnapshot {
     AstraLibraryReference library;
@@ -24,11 +26,11 @@ typedef struct AstraProcLibrarySnapshot {
     uint32_t mapped_bytes;
     uint32_t mapping_count;
     uint32_t reference_count;
-    uint16_t process_ids[ASTRA_PROCESS_COUNT_MAX];
+    uint32_t process_id;
 } AstraProcLibrarySnapshot;
 
 _Static_assert(sizeof(AstraProcSnapshot) == 112u,
                "PROC snapshot record ABI changed");
-_Static_assert(sizeof(AstraProcLibrarySnapshot) == 136u,
+_Static_assert(sizeof(AstraProcLibrarySnapshot) == 76u,
                "PROC library snapshot record ABI changed");
 #endif

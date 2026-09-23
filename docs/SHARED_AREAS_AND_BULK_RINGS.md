@@ -13,9 +13,10 @@ should not be copied through the kernel. A ring notification is a doorbell,
 not a payload transfer: applications may commit an arbitrary bounded batch
 before issuing one notification.
 
-## Fixed limits and charges
+## Historical K8 limits and charges
 
-The K8 development profile uses these exact limits:
+The K8 development profile used these exact limits; they are retained here as
+the milestone record, not as the current resource contract:
 
 | Resource | System | Per creator | Per object/process |
 |---|---:|---:|---:|
@@ -34,9 +35,9 @@ owner ID rather than by either mapping process. There is no overcommit. Page
 tables remain charged to the process whose CRP contains them. Ring payload
 storage is part of its area charge; a ring allocates no second payload queue.
 
-All object records, mapping records, wait queues, and ring records come from
-fixed pools. Create, map, unmap, notify, wait, close, timeout, cancellation,
-peer death, and process death use no general heap.
+Current area mappings, wait registrations, and ring records use page-backed
+metadata. Creation fails only when physical resources or the encoded namespace
+is exhausted, and injected allocation failures roll back atomically.
 
 ## Logical mapping contract
 

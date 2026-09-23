@@ -133,7 +133,7 @@ Arty Z7 Linux (ARM Cortex-A9)
            -> initial user image (supervisor)
 ```
 
-### Boot memory layout (`sw/include/astra/boot.h`, ABI 0.7)
+### Boot memory layout (`sw/include/astra/boot.h`, ABI 1.0)
 
 | Symbol | Address | Size |
 |---|---|---|
@@ -145,7 +145,7 @@ Arty Z7 Linux (ARM Cortex-A9)
 | `ASTRA_KERNEL_RESERVED_END` | `0x02354000` | fixed kernel reservation ends here |
 | `ASTRA_USER_IMAGE_ADDRESS` | `0x02354000` | initial image begins here; capacity ends at the next reserved aperture or RAM end |
 
-**The initial user image has no guessed software ceiling.** Boot ABI 0.7 places
+**The initial user image has no guessed software ceiling.** Boot ABI 1.0 places
 it after the fixed kernel reservation. Firmware derives its capacity from the
 next physical reserved aperture, or RAM end, reserves only the page-rounded
 image, and returns every remaining page to the allocator. The old 48 KiB and

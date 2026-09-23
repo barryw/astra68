@@ -1,8 +1,8 @@
 #include "dma.h"
 
+#include "allocation.h"
 #include "generation.h"
 #include "memory.h"
-#include "object_cache.h"
 
 #include <stddef.h>
 
@@ -20,12 +20,55 @@ typedef struct KernelDmaSlot {
     uint8_t direction;
 } KernelDmaSlot;
 
-static KernelDmaSlot slots[KERNEL_DMA_MAX_BUFFERS];
-static KernelObjectCache dma_cache;
-static uint32_t dma_cache_bitmap[
-    KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_DMA_MAX_BUFFERS)];
+#define DMA_SLOT_LEAF_BITS 7u
+#define DMA_SLOT_LEAF_ENTRIES (1u << DMA_SLOT_LEAF_BITS)
+#define DMA_SLOT_DIRECTORY_ENTRIES \
+    ((KERNEL_DMA_MAX_BUFFERS + DMA_SLOT_LEAF_ENTRIES - 1u) / \
+     DMA_SLOT_LEAF_ENTRIES)
+
+static KernelDmaSlot *slot_directory[DMA_SLOT_DIRECTORY_ENTRIES];
+static uint32_t slot_directory_physical[DMA_SLOT_DIRECTORY_ENTRIES];
+static uint16_t slot_directory_frames[DMA_SLOT_DIRECTORY_ENTRIES];
+static uint16_t next_slot;
 static KernelDmaStats dma_stats;
 static bool initialized;
+
+static KernelDmaSlot *slot_at(uint32_t index)
+{
+    KernelDmaSlot *leaf;
+
+    if (index >= KERNEL_DMA_MAX_BUFFERS)
+        return NULL;
+    leaf = slot_directory[index >> DMA_SLOT_LEAF_BITS];
+    return leaf != NULL ? &leaf[index & (DMA_SLOT_LEAF_ENTRIES - 1u)] :
+                          NULL;
+}
+
+static bool ensure_slot_leaf(uint32_t index)
+{
+    uint32_t directory = index >> DMA_SLOT_LEAF_BITS;
+    uint32_t bytes = DMA_SLOT_LEAF_ENTRIES * sizeof(KernelDmaSlot);
+    uint32_t frames = (bytes + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE;
+    uint32_t physical;
+    KernelDmaSlot *leaf;
+
+    if (slot_directory[directory] != NULL)
+        return true;
+    if (kernel_memory_alloc_zeroed_tagged(
+            KERNEL_ALLOCATION_SITE_DMA_METADATA, frames, 1u,
+            KERNEL_FRAME_KERNEL, KERNEL_OWNER_CORE, &physical) !=
+        KERNEL_MEMORY_OK)
+        return false;
+    leaf = kernel_memory_access(physical, frames * KERNEL_PAGE_SIZE);
+    if (leaf == NULL) {
+        (void)kernel_memory_release(physical, frames, KERNEL_OWNER_CORE);
+        return false;
+    }
+    slot_directory[directory] = leaf;
+    slot_directory_physical[directory] = physical;
+    slot_directory_frames[directory] = (uint16_t)frames;
+    return true;
+}
 
 static void reset_stats(void)
 {
@@ -64,7 +107,9 @@ static KernelDmaSlot *lookup_slot(KernelDmaHandle handle, uint32_t *index)
         !kernel_handle16_decode(handle, KERNEL_DMA_MAX_BUFFERS,
                                 &slot_index, &generation))
         return NULL;
-    slot = &slots[slot_index];
+    slot = slot_at(slot_index);
+    if (slot == NULL)
+        return NULL;
     if (slot->state == KERNEL_DMA_FREE || slot->generation != generation)
         return NULL;
     if (index != NULL)
@@ -80,8 +125,8 @@ static KernelDmaStatus release_slot(KernelDmaSlot *slot)
     if (status != KERNEL_MEMORY_OK)
         return KERNEL_DMA_CORRUPT;
     clear_slot(slot);
-    if (kernel_object_cache_release(&dma_cache, slot) !=
-        KERNEL_OBJECT_CACHE_OK)
+    if (!kernel_allocation_release(KERNEL_ALLOCATION_SITE_DMA_OBJECT, 1u,
+                                   sizeof(*slot)))
         return KERNEL_DMA_CORRUPT;
     --dma_stats.live_buffers;
     return KERNEL_DMA_OK;
@@ -146,16 +191,12 @@ void kernel_dma_init(void)
 {
     initialized = false;
     reset_stats();
-    if (!kernel_object_cache_init(
-            &dma_cache, slots, sizeof(slots[0]), KERNEL_DMA_MAX_BUFFERS,
-            dma_cache_bitmap,
-            KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_DMA_MAX_BUFFERS),
-            KERNEL_ALLOCATION_SITE_DMA_OBJECT))
-        return;
-    for (uint32_t index = 0u; index < KERNEL_DMA_MAX_BUFFERS; ++index) {
-        slots[index].generation = 0u;
-        clear_slot(&slots[index]);
+    for (uint32_t index = 0u; index < DMA_SLOT_DIRECTORY_ENTRIES; ++index) {
+        slot_directory[index] = NULL;
+        slot_directory_physical[index] = 0u;
+        slot_directory_frames[index] = 0u;
     }
+    next_slot = 0u;
     initialized = true;
 }
 
@@ -168,9 +209,8 @@ KernelDmaStatus kernel_dma_create(uint32_t owner, uint32_t byte_size,
     uint32_t frame_count;
     uint32_t physical_base;
     KernelMemoryStatus memory_status;
-    void *raw_slot;
-    uint16_t slot_index;
-    KernelObjectCacheStatus cache_status;
+    uint32_t slot_index = KERNEL_DMA_MAX_BUFFERS;
+    uint32_t unbacked = KERNEL_DMA_MAX_BUFFERS;
 
     if (!initialized || owner == KERNEL_OWNER_NONE || byte_size == 0u ||
         alignment_frames == 0u || handle == NULL)
@@ -190,25 +230,77 @@ KernelDmaStatus kernel_dma_create(uint32_t owner, uint32_t byte_size,
             return KERNEL_DMA_INVALID_ARGUMENT;
     }
 
-    cache_status = kernel_object_cache_claim(
-        &dma_cache, owner, &raw_slot, &slot_index);
-    if (cache_status == KERNEL_OBJECT_CACHE_UNAVAILABLE) {
+    if (!kernel_allocation_attempt(KERNEL_ALLOCATION_SITE_DMA_OBJECT,
+                                   owner)) {
         ++dma_stats.create_failures;
         return KERNEL_DMA_NO_RESOURCES;
     }
-    if (cache_status != KERNEL_OBJECT_CACHE_OK ||
-        slot_index >= KERNEL_DMA_MAX_BUFFERS)
-        return KERNEL_DMA_CORRUPT;
-    slot = raw_slot;
-    if (slot->state != KERNEL_DMA_FREE)
+    for (uint32_t attempt = 0u; attempt < KERNEL_DMA_MAX_BUFFERS; ++attempt) {
+        uint32_t candidate = next_slot;
+
+        ++next_slot;
+        if (next_slot == KERNEL_DMA_MAX_BUFFERS)
+            next_slot = 0u;
+        slot = slot_at(candidate);
+        if (slot == NULL) {
+            unbacked = candidate;
+            break;
+        } else if (slot->state == KERNEL_DMA_FREE) {
+            slot_index = candidate;
+            break;
+        }
+    }
+    if (slot_index == KERNEL_DMA_MAX_BUFFERS &&
+        unbacked != KERNEL_DMA_MAX_BUFFERS) {
+        if (!ensure_slot_leaf(unbacked)) {
+            for (uint32_t directory = 0u;
+                 directory < DMA_SLOT_DIRECTORY_ENTRIES; ++directory) {
+                KernelDmaSlot *leaf = slot_directory[directory];
+
+                if (leaf == NULL)
+                    continue;
+                for (uint32_t member = 0u;
+                     member < DMA_SLOT_LEAF_ENTRIES; ++member) {
+                    uint32_t candidate =
+                        directory * DMA_SLOT_LEAF_ENTRIES + member;
+
+                    if (candidate >= KERNEL_DMA_MAX_BUFFERS)
+                        break;
+                    if (leaf[member].state == KERNEL_DMA_FREE) {
+                        slot = &leaf[member];
+                        slot_index = candidate;
+                        break;
+                    }
+                }
+                if (slot_index != KERNEL_DMA_MAX_BUFFERS)
+                    break;
+            }
+            if (slot_index == KERNEL_DMA_MAX_BUFFERS) {
+                kernel_allocation_fail(KERNEL_ALLOCATION_SITE_DMA_OBJECT,
+                                       owner);
+                ++dma_stats.create_failures;
+                return KERNEL_DMA_OUT_OF_MEMORY;
+            }
+        } else {
+            slot = slot_at(unbacked);
+            slot_index = unbacked;
+        }
+    }
+    if (slot_index == KERNEL_DMA_MAX_BUFFERS) {
+        kernel_allocation_fail(KERNEL_ALLOCATION_SITE_DMA_OBJECT, owner);
+        ++dma_stats.create_failures;
+        return KERNEL_DMA_NO_RESOURCES;
+    }
+    if (!kernel_allocation_commit(KERNEL_ALLOCATION_SITE_DMA_OBJECT, 1u,
+                                  sizeof(*slot), owner))
         return KERNEL_DMA_CORRUPT;
 
     memory_status = kernel_memory_alloc_tagged(
         KERNEL_ALLOCATION_SITE_DMA_PAGES, frame_count, alignment_frames,
         KERNEL_FRAME_DMA, owner, &physical_base);
     if (memory_status != KERNEL_MEMORY_OK) {
-        if (kernel_object_cache_release(&dma_cache, slot) !=
-            KERNEL_OBJECT_CACHE_OK)
+        if (!kernel_allocation_release(KERNEL_ALLOCATION_SITE_DMA_OBJECT,
+                                       1u, sizeof(*slot)))
             return KERNEL_DMA_CORRUPT;
         ++dma_stats.create_failures;
         return memory_status == KERNEL_MEMORY_OUT_OF_MEMORY ?
@@ -227,8 +319,7 @@ KernelDmaStatus kernel_dma_create(uint32_t owner, uint32_t byte_size,
     slot->transfer_bytes = 0u;
     slot->state = KERNEL_DMA_CPU_OWNED;
     slot->direction = 0u;
-    *handle = kernel_handle16_make((uint32_t)(slot - slots),
-                                   slot->generation);
+    *handle = kernel_handle16_make(slot_index, slot->generation);
     ++dma_stats.buffers_created;
     ++dma_stats.live_buffers;
     return KERNEL_DMA_OK;
@@ -354,22 +445,35 @@ KernelDmaStatus kernel_dma_revoke_owner(uint32_t owner,
     if (!initialized || owner == KERNEL_OWNER_NONE)
         return KERNEL_DMA_INVALID_ARGUMENT;
 
-    for (uint32_t index = 0u; index < KERNEL_DMA_MAX_BUFFERS; ++index) {
-        KernelDmaSlot *slot = &slots[index];
-        if (slot->owner != owner)
+    for (uint32_t directory = 0u;
+         directory < DMA_SLOT_DIRECTORY_ENTRIES; ++directory) {
+        KernelDmaSlot *leaf = slot_directory[directory];
+
+        if (leaf == NULL)
             continue;
-        if (slot->state == KERNEL_DMA_CPU_OWNED) {
-            if (release_slot(slot) != KERNEL_DMA_OK)
+        for (uint32_t member = 0u;
+             member < DMA_SLOT_LEAF_ENTRIES; ++member) {
+            uint32_t index = directory * DMA_SLOT_LEAF_ENTRIES + member;
+            KernelDmaSlot *slot;
+
+            if (index >= KERNEL_DMA_MAX_BUFFERS)
+                break;
+            slot = &leaf[member];
+            if (slot->owner != owner)
+                continue;
+            if (slot->state == KERNEL_DMA_CPU_OWNED) {
+                if (release_slot(slot) != KERNEL_DMA_OK)
+                    return KERNEL_DMA_CORRUPT;
+                ++released;
+            } else if (slot->state == KERNEL_DMA_DEVICE_OWNED) {
+                slot->state = KERNEL_DMA_REVOKING;
+                ++dma_stats.deferred_reclaims;
+                ++deferred;
+            } else if (slot->state == KERNEL_DMA_REVOKING) {
+                ++deferred;
+            } else {
                 return KERNEL_DMA_CORRUPT;
-            ++released;
-        } else if (slot->state == KERNEL_DMA_DEVICE_OWNED) {
-            slot->state = KERNEL_DMA_REVOKING;
-            ++dma_stats.deferred_reclaims;
-            ++deferred;
-        } else if (slot->state == KERNEL_DMA_REVOKING) {
-            ++deferred;
-        } else {
-            return KERNEL_DMA_CORRUPT;
+            }
         }
     }
 
@@ -396,16 +500,59 @@ bool kernel_dma_stats(KernelDmaStats *result)
 bool kernel_dma_valid(void)
 {
     uint32_t live = 0u;
+    uint32_t in_flight = 0u;
+    uint32_t deferred = 0u;
+    KernelAllocationStats objects;
 
-    if (!initialized || !kernel_object_cache_valid(&dma_cache))
+    if (!initialized || !kernel_allocation_site_stats(
+                            KERNEL_ALLOCATION_SITE_DMA_OBJECT, &objects))
         return false;
-    for (uint16_t index = 0u; index < KERNEL_DMA_MAX_BUFFERS; ++index) {
-        bool claimed = kernel_object_cache_slot_claimed(&dma_cache, index);
+    for (uint32_t directory = 0u;
+         directory < DMA_SLOT_DIRECTORY_ENTRIES; ++directory) {
+        KernelDmaSlot *leaf = slot_directory[directory];
 
-        if (claimed != (slots[index].state != KERNEL_DMA_FREE))
+        if (leaf == NULL) {
+            if (slot_directory_physical[directory] != 0u ||
+                slot_directory_frames[directory] != 0u)
+                return false;
+            continue;
+        }
+        if (slot_directory_physical[directory] == 0u ||
+            slot_directory_frames[directory] == 0u)
             return false;
-        if (claimed)
+        for (uint32_t member = 0u;
+             member < DMA_SLOT_LEAF_ENTRIES; ++member) {
+            uint32_t index = directory * DMA_SLOT_LEAF_ENTRIES + member;
+            KernelDmaSlot *slot = &leaf[member];
+
+            if (index >= KERNEL_DMA_MAX_BUFFERS)
+                break;
+            if (slot->state == KERNEL_DMA_FREE) {
+                if (slot->owner != 0u || slot->physical_base != 0u ||
+                    slot->byte_size != 0u || slot->frame_count != 0u ||
+                    slot->transfer_generation != 0u ||
+                    slot->device_generation != 0u ||
+                    slot->transfer_physical != 0u ||
+                    slot->transfer_bytes != 0u || slot->direction != 0u)
+                    return false;
+                continue;
+            }
+            if (slot->owner == KERNEL_OWNER_NONE ||
+                slot->physical_base == 0u || slot->byte_size == 0u ||
+                slot->frame_count == 0u || slot->generation == 0u ||
+                slot->state > KERNEL_DMA_REVOKING)
+                return false;
             ++live;
+            if (slot->state == KERNEL_DMA_DEVICE_OWNED ||
+                slot->state == KERNEL_DMA_REVOKING)
+                ++in_flight;
+            if (slot->state == KERNEL_DMA_REVOKING)
+                ++deferred;
+        }
     }
-    return live == dma_stats.live_buffers;
+    return live == dma_stats.live_buffers &&
+           in_flight == dma_stats.in_flight_buffers &&
+           deferred == dma_stats.deferred_reclaims &&
+           objects.current_units == live &&
+           objects.current_bytes == live * sizeof(KernelDmaSlot);
 }

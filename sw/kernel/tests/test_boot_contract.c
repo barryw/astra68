@@ -159,6 +159,31 @@ static void test_user_image(void)
     assert(astra_boot_info_validate(&info) == ASTRA_BOOT_BAD_USER_IMAGE);
 }
 
+static void test_memory_range_storage_capacity(void)
+{
+    AstraBootInfo info;
+
+    make_valid_info(&info);
+    info.memory_range_count = 5u;
+    for (uint32_t index = info.memory_range_count;
+         index < ASTRA_BOOT_MEMORY_RANGE_CAPACITY; ++index) {
+        add_range(&info,
+                  ASTRA_USER_IMAGE_ADDRESS + USER_IMAGE_RESERVATION +
+                      (index - 5u) * 0x1000u,
+                  0x1000u, ASTRA_MEMORY_RANGE_USABLE,
+                  ASTRA_MEMORY_READ | ASTRA_MEMORY_WRITE |
+                      ASTRA_MEMORY_CACHEABLE);
+    }
+    astra_boot_info_finalize(&info);
+    assert(info.memory_range_count == ASTRA_BOOT_MEMORY_RANGE_CAPACITY);
+    assert(astra_boot_info_validate(&info) == ASTRA_BOOT_VALID);
+
+    make_valid_info(&info);
+    info.memory_range_count = ASTRA_BOOT_MEMORY_RANGE_CAPACITY + 1u;
+    astra_boot_info_finalize(&info);
+    assert(astra_boot_info_validate(&info) == ASTRA_BOOT_BAD_MEMORY_MAP);
+}
+
 static void test_early_log(void)
 {
     union {
@@ -188,6 +213,7 @@ int main(void)
 {
     test_boot_info();
     test_user_image();
+    test_memory_range_storage_capacity();
     test_early_log();
     puts("BOOT CONTRACT PASS");
     return 0;

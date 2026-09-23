@@ -10,7 +10,6 @@
 #endif
 
 #define KERNEL_ALLOC_POISON 0xa110ca7eu
-#define KERNEL_FREE_POISON  0xfee1deadu
 #define KERNEL_FRAME_INDEX_NONE UINT32_MAX
 #define KERNEL_OWNER_PROTECTED UINT32_C(0x80000000)
 #define KERNEL_OWNER_PEAK_MASK UINT32_C(0x7fffffff)
@@ -63,10 +62,11 @@ static uint32_t metadata_frames;
 #if !defined(__m68k__)
 static uint8_t *host_arena;
 #endif
-static KernelSavedRange saved_ranges[ASTRA_BOOT_MAX_MEMORY_RANGES]
+static KernelSavedRange saved_ranges[ASTRA_BOOT_MEMORY_RANGE_CAPACITY]
     KERNEL_NOINIT;
 static uint32_t saved_range_count;
 static uint32_t contiguous_search_hint;
+static uint32_t scattered_search_hint;
 /*
  * The DMA zone: a contiguous run reserved at boot that only DMA allocations
  * may search. See KERNEL_DMA_ZONE_FRAMES in memory.h for why it exists and
@@ -319,7 +319,8 @@ bool kernel_memory_unprotect_owner(uint32_t owner)
     return true;
 }
 
-static bool protected_reserve_admits(uint32_t owner, uint32_t frame_count,
+static bool protected_reserve_admits(uint32_t owner, bool owner_protected,
+                                     uint32_t frame_count,
                                      bool uses_dma_zone)
 {
     uint32_t floor;
@@ -328,13 +329,14 @@ static bool protected_reserve_admits(uint32_t owner, uint32_t frame_count,
         return true;
     /* The DMA zone is never available to an ordinary scattered allocation. */
     floor = stats.core_reserve_frames + dma_zone_frames;
-    if (!kernel_memory_owner_protected(owner))
+    if (!owner_protected)
         floor += stats.protected_reserve_frames;
     return stats.free_frames >= floor &&
            frame_count <= stats.free_frames - floor;
 }
 
-static bool bitmap_test(const uint32_t *bitmap, uint32_t index)
+static inline __attribute__((always_inline)) bool
+bitmap_test(const uint32_t *bitmap, uint32_t index)
 {
     return (bitmap[index >> 5] & (1u << (index & 31u))) != 0u;
 }
@@ -349,13 +351,21 @@ static void bitmap_set(uint32_t *bitmap, uint32_t index, bool value)
         bitmap[index >> 5] &= ~mask;
 }
 
+static uint32_t owner_slot_start(uint32_t owner)
+{
+    uint32_t capacity = stats.owner_slot_capacity;
+
+    return (capacity & (capacity - 1u)) == 0u ?
+        owner & (capacity - 1u) : owner % capacity;
+}
+
 static bool find_owner_slot(uint32_t owner, uint32_t *slot)
 {
     uint32_t index;
 
     if (stats.owner_slot_capacity == 0u)
         return false;
-    index = owner % stats.owner_slot_capacity;
+    index = owner_slot_start(owner);
     for (uint32_t probe = 0u; probe < stats.owner_slot_capacity; ++probe) {
         if (owner_ledgers[index].owner == KERNEL_OWNER_NONE)
             return false;
@@ -376,7 +386,7 @@ static bool owner_slot_for_allocation(uint32_t owner, uint32_t frame_count,
 
     if (stats.owner_slot_capacity == 0u)
         return false;
-    index = owner % stats.owner_slot_capacity;
+    index = owner_slot_start(owner);
     for (uint32_t probe = 0u; probe < stats.owner_slot_capacity; ++probe) {
         if (owner_ledgers[index].owner == owner) {
             uint32_t available =
@@ -711,6 +721,7 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
     initialized = false;
     saved_range_count = 0u;
     contiguous_search_hint = 0u;
+    scattered_search_hint = 0u;
     dma_zone_first = 0u;
     dma_zone_frames = 0u;
     reset_stats();
@@ -811,7 +822,7 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
             (range->base & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
             (range->size & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
             !byte_range(range->base, range->size, &first, &count) ||
-            saved_range_count >= ASTRA_BOOT_MAX_MEMORY_RANGES ||
+            saved_range_count >= ASTRA_BOOT_MEMORY_RANGE_CAPACITY ||
             !classify_range(first, count, state == KERNEL_FRAME_FREE)) {
             initialized = false;
             return KERNEL_MEMORY_INVALID_MAP;
@@ -1043,7 +1054,9 @@ static KernelMemoryStatus allocate_frames(uint32_t frame_count,
                                            alignment_frames, &first);
     }
     if (available && !protected_reserve_admits(
-                         owner, frame_count,
+                         owner,
+                         owner_ledger_protected(&owner_ledgers[owner_slot]),
+                         frame_count,
                          dma_zone_frames != 0u && first >= dma_zone_first &&
                              first + frame_count <=
                                  dma_zone_first + dma_zone_frames)) {
@@ -1153,34 +1166,43 @@ KernelMemoryStatus kernel_memory_alloc_pages_zeroed_tagged(
         ++stats.allocation_failures;
         return KERNEL_MEMORY_OUT_OF_MEMORY;
     }
-    if (!protected_reserve_admits(owner, frame_count, false)) {
-        ++stats.allocation_failures;
-        ++stats.protected_reserve_denials;
-        kernel_allocation_fail(site, owner);
-        return KERNEL_MEMORY_OUT_OF_MEMORY;
-    }
     if (!owner_slot_for_allocation(owner, frame_count, &owner_slot)) {
         ++stats.allocation_failures;
         kernel_allocation_fail(site, owner);
         return KERNEL_MEMORY_OUT_OF_MEMORY;
     }
+    if (!protected_reserve_admits(
+            owner, owner_ledger_protected(&owner_ledgers[owner_slot]),
+            frame_count, false)) {
+        ++stats.allocation_failures;
+        ++stats.protected_reserve_denials;
+        kernel_allocation_fail(site, owner);
+        return KERNEL_MEMORY_OUT_OF_MEMORY;
+    }
 
-    for (uint32_t index = 0u;
-         index < stats.total_frames && found < frame_count; ++index) {
-        if (bitmap_test(blocked_bitmap, index))
-            continue;
-        /*
-         * Never the DMA zone. This is the scattered path -- every area page,
-         * every stack page, every code page -- and it is precisely what combs
-         * the frame map. Letting it in here would leave the zone reserved in
-         * name only, which is worse than not having one, because it would
-         * look like the contiguous case was handled.
-         */
-        if (dma_zone_frames != 0u && index >= dma_zone_first &&
-            index < dma_zone_first + dma_zone_frames)
-            continue;
-        physical_pages[found] = stats.ram_base + index * KERNEL_PAGE_SIZE;
-        ++found;
+    for (uint32_t pass = 0u; pass < 2u && found < frame_count; ++pass) {
+        uint32_t begin = pass == 0u ? scattered_search_hint : 0u;
+        uint32_t end = pass == 0u ? stats.total_frames :
+                                    scattered_search_hint;
+
+        for (uint32_t index = begin; index < end && found < frame_count;
+             ++index) {
+            if (bitmap_test(blocked_bitmap, index))
+                continue;
+            /*
+             * Never the DMA zone. This is the scattered path -- every area
+             * page, every stack page, every code page -- and it is precisely
+             * what combs the frame map. Letting it in here would leave the
+             * zone reserved in name only, which is worse than not having one,
+             * because it would look like the contiguous case was handled.
+             */
+            if (dma_zone_frames != 0u && index >= dma_zone_first &&
+                index < dma_zone_first + dma_zone_frames)
+                continue;
+            physical_pages[found] =
+                stats.ram_base + index * KERNEL_PAGE_SIZE;
+            ++found;
+        }
     }
     if (found != frame_count) {
         for (uint32_t index = 0u; index < found; ++index)
@@ -1212,6 +1234,11 @@ KernelMemoryStatus kernel_memory_alloc_pages_zeroed_tagged(
     allocated = stats.total_frames - stats.free_frames;
     if (allocated > stats.high_water_frames)
         stats.high_water_frames = allocated;
+    scattered_search_hint =
+        (physical_pages[frame_count - 1u] - stats.ram_base) /
+            KERNEL_PAGE_SIZE + 1u;
+    if (scattered_search_hint >= stats.total_frames)
+        scattered_search_hint = 0u;
     return KERNEL_MEMORY_OK;
 }
 
@@ -1321,7 +1348,6 @@ static KernelMemoryStatus release_final_frame(uint32_t index)
                 KERNEL_PAGE_SIZE);
             return KERNEL_MEMORY_INVALID_MAP;
         }
-        poison(index, 1u, KERNEL_FREE_POISON);
         reset_frame(&frames[index], KERNEL_FRAME_EMERGENCY_RESERVED);
         frame_allocation_sites[index] =
             KERNEL_ALLOCATION_SITE_EMERGENCY_RESERVE;
@@ -1330,7 +1356,6 @@ static KernelMemoryStatus release_final_frame(uint32_t index)
     }
     if (!kernel_allocation_release(site, 1u, KERNEL_PAGE_SIZE))
         return KERNEL_MEMORY_INVALID_MAP;
-    poison(index, 1u, KERNEL_FREE_POISON);
     reset_frame(&frames[index], KERNEL_FRAME_FREE);
     frame_allocation_sites[index] = KERNEL_ALLOCATION_SITE_INVALID;
     bitmap_set(dynamic_bitmap, index, false);
@@ -1555,7 +1580,10 @@ bool kernel_memory_frame_info(uint32_t physical_address,
     uint32_t index;
     uint32_t aligned = physical_address & ~(KERNEL_PAGE_SIZE - 1u);
 
-    if (info == NULL || !address_to_index(aligned, &index))
+    if (info == NULL || !initialized || aligned < stats.ram_base)
+        return false;
+    index = (aligned - stats.ram_base) >> KERNEL_PAGE_SHIFT;
+    if (index >= stats.total_frames)
         return false;
     if (!bitmap_test(dynamic_bitmap, index)) {
         reset_frame(info, frame_state(index));

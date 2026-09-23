@@ -11,14 +11,11 @@
 /** Package provider name resolved by the eager ELF loader. */
 #define ASTRA_FILESYSTEM_LIBRARY_NAME "filesystem.library"
 /** Minimum compatible Filesystem Kit ABI major requested by applications. */
-#define ASTRA_FILESYSTEM_LIBRARY_VERSION 2u
+#define ASTRA_FILESYSTEM_LIBRARY_VERSION 3u
 /** Current Filesystem Kit ABI major. */
 #define ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR ASTRA_FILESYSTEM_LIBRARY_VERSION
 /** Current backward-compatible Filesystem Kit ABI revision. */
-#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 4u
-/** Maximum entries carried by one directory batch in the current wire ABI. */
-#define ASTRA_FILESYSTEM_DIRECTORY_BATCH_MAX 32u
-
+#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 0u
 enum {
     ASTRA_FILE_SEEK_BEGIN = 0,
     ASTRA_FILE_SEEK_CURRENT = 1,

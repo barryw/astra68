@@ -1,9 +1,11 @@
 #include "allocation.h"
 #include "handle.h"
+#include "memory.h"
 
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #define RIGHT_QUERY   (1u << 0)
 #define RIGHT_CONTROL (1u << 1)
@@ -73,6 +75,85 @@ static void release_during_close_all(void *object, void *context)
                state->table, KERNEL_OBJECT_SYNC, RIGHT_QUERY,
                (void *)(uintptr_t)3u, NULL, NULL,
                &state->replacement) == KERNEL_HANDLE_OK);
+}
+
+static void test_detached_metadata_allocation_failure(void)
+{
+    KernelAllocationStats detached;
+    KernelAllocationStats metadata;
+    KernelHandleTable table;
+    KernelHandleTransferBatch batch;
+    ReleaseState released = {0u, 0u};
+    KernelHandle handle;
+    void *object;
+
+    kernel_handle_table_init(&table);
+    assert(kernel_handle_install(
+               &table, KERNEL_OBJECT_DEVICE,
+               RIGHT_QUERY | RIGHT_TRANSFER,
+               (void *)(uintptr_t)0x1234u, release_object, &released,
+               &handle) == KERNEL_HANDLE_OK);
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_DETACHED_HANDLE_METADATA, 1u);
+    assert(kernel_handle_transfer_prepare(
+               &table, &handle, 1u, RIGHT_TRANSFER, &batch) ==
+           KERNEL_HANDLE_TRANSFER_POOL_FULL);
+    assert(kernel_handle_lookup(&table, handle, KERNEL_OBJECT_DEVICE,
+                                RIGHT_QUERY, &object) == KERNEL_HANDLE_OK);
+    assert((uintptr_t)object == 0x1234u);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_DETACHED_HANDLE, &detached));
+    assert(detached.current_units == 0u && detached.current_bytes == 0u);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_DETACHED_HANDLE_METADATA, &metadata));
+    assert(metadata.current_units == 0u && metadata.current_bytes == 0u &&
+           metadata.injected_failures == 1u);
+
+    assert(kernel_handle_transfer_prepare(
+               &table, &handle, 1u, RIGHT_TRANSFER, &batch) ==
+           KERNEL_HANDLE_OK);
+    assert(kernel_handle_transfer_rollback(&batch) == KERNEL_HANDLE_OK);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_DETACHED_HANDLE_METADATA, &metadata));
+    assert(metadata.current_units == 1u &&
+           metadata.current_bytes == KERNEL_PAGE_SIZE);
+    assert(kernel_handle_close(&table, handle) == KERNEL_HANDLE_OK);
+    assert(released.calls == 1u && released.object_sum == 0x1234u);
+    assert(kernel_handle_transfer_pool_valid());
+}
+
+static void test_detached_metadata_reset_discards_stale_pages(void)
+{
+    KernelAllocationStats metadata;
+    KernelHandleTable table;
+    KernelHandleTransferBatch batch;
+    ReleaseState released = {0u, 0u};
+    KernelHandle handle;
+
+    kernel_handle_transfer_pool_init();
+    kernel_handle_table_init(&table);
+    assert(kernel_handle_install(
+               &table, KERNEL_OBJECT_DEVICE,
+               RIGHT_QUERY | RIGHT_TRANSFER,
+               (void *)(uintptr_t)0x5678u, release_object, &released,
+               &handle) == KERNEL_HANDLE_OK);
+    assert(kernel_handle_transfer_prepare(
+               &table, &handle, 1u, RIGHT_TRANSFER, &batch) ==
+           KERNEL_HANDLE_OK);
+    assert(kernel_handle_transfer_rollback(&batch) == KERNEL_HANDLE_OK);
+    assert(kernel_handle_close(&table, handle) == KERNEL_HANDLE_OK);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_DETACHED_HANDLE_METADATA, &metadata));
+    assert(metadata.current_units != 0u);
+
+    kernel_allocation_init();
+    assert(!kernel_handle_transfer_pool_valid());
+    kernel_handle_transfer_pool_init();
+    assert(kernel_handle_transfer_pool_valid());
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_DETACHED_HANDLE_METADATA, &metadata));
+    assert(metadata.current_units == 0u && metadata.current_bytes == 0u);
+    assert(released.calls == 1u && released.object_sum == 0x5678u);
 }
 
 static void test_free_slot_bitmap_invariants(void)
@@ -476,8 +557,11 @@ static void test_atomic_export_import_and_cancel(void)
                KERNEL_HANDLE_INVALID_HANDLE);
     }
 
+    memset(&reservation, 0xa5, sizeof(reservation));
     assert(kernel_handle_import_reserve(
                &destination, detached, 2u, &reservation) == KERNEL_HANDLE_OK);
+    assert(reservation.handles[2] == UINT32_C(0xa5a5a5a5));
+    assert(reservation.slots[2] == UINT8_C(0xa5));
     assert(kernel_handle_available(&destination) ==
            KERNEL_HANDLE_MAX_ENTRIES - 2u);
     for (uint32_t index = 0u; index < 2u; ++index) {
@@ -487,6 +571,9 @@ static void test_atomic_export_import_and_cancel(void)
     }
     assert(kernel_handle_import_cancel(&destination, &reservation) ==
            KERNEL_HANDLE_OK);
+    assert(reservation.count == 0u && reservation.active == 0u);
+    assert(reservation.handles[2] == UINT32_C(0xa5a5a5a5));
+    assert(reservation.slots[2] == UINT8_C(0xa5));
     assert(kernel_handle_available(&destination) ==
            KERNEL_HANDLE_MAX_ENTRIES);
     assert(kernel_handle_transfer_stats(&stats));
@@ -540,12 +627,21 @@ static void test_export_validation_and_rollback(void)
 
     duplicate[0] = transferable;
     duplicate[1] = transferable;
+    assert(kernel_handle_transfer_validate(
+               &table, duplicate, 2u, RIGHT_TRANSFER) ==
+           KERNEL_HANDLE_DUPLICATE);
     assert(kernel_handle_transfer_prepare(
                &table, duplicate, 2u, RIGHT_TRANSFER, &batch) ==
            KERNEL_HANDLE_DUPLICATE);
+    assert(kernel_handle_transfer_validate(
+               &table, &fixed, 1u, RIGHT_TRANSFER) ==
+           KERNEL_HANDLE_ACCESS_DENIED);
     assert(kernel_handle_transfer_prepare(
                &table, &fixed, 1u, RIGHT_TRANSFER, &batch) ==
            KERNEL_HANDLE_ACCESS_DENIED);
+    assert(kernel_handle_transfer_validate(
+               &table, &transferable, 1u, RIGHT_TRANSFER) ==
+           KERNEL_HANDLE_OK);
     assert(kernel_handle_transfer_prepare(
                &table, &transferable, 1u, RIGHT_TRANSFER,
                &batch) == KERNEL_HANDLE_OK);
@@ -557,8 +653,12 @@ static void test_export_validation_and_rollback(void)
     assert(kernel_handle_import_reserve(&table, &stale, 1u, NULL) ==
            KERNEL_HANDLE_INVALID_ARGUMENT);
     KernelHandleImportReservation reservation;
+    memset(&reservation, 0xa5, sizeof(reservation));
     assert(kernel_handle_import_reserve(&table, &stale, 1u, &reservation) ==
            KERNEL_HANDLE_INVALID_HANDLE);
+    assert(reservation.count == 0u && reservation.active == 0u);
+    assert(reservation.handles[1] == UINT32_C(0xa5a5a5a5));
+    assert(reservation.slots[1] == UINT8_C(0xa5));
     assert(kernel_handle_transfer_stats(&stats));
     assert(stats.export_rollbacks == 1u);
     assert(stats.live_detached == 0u);
@@ -626,12 +726,14 @@ static void test_detached_pool_exhaustion_and_reuse(void)
 
     kernel_handle_transfer_pool_init();
     kernel_handle_table_init(&table);
-    for (uint32_t group = 0u;
-         group < KERNEL_HANDLE_DETACHED_MAX / KERNEL_HANDLE_TRANSFER_MAX;
-         ++group) {
+    while (detached_count < KERNEL_HANDLE_DETACHED_MAX) {
         KernelHandle handles[KERNEL_HANDLE_TRANSFER_MAX];
+        uint32_t count = KERNEL_HANDLE_DETACHED_MAX - detached_count;
 
-        for (uint32_t index = 0u; index < KERNEL_HANDLE_TRANSFER_MAX; ++index) {
+        if (count > KERNEL_HANDLE_TRANSFER_MAX)
+            count = KERNEL_HANDLE_TRANSFER_MAX;
+
+        for (uint32_t index = 0u; index < count; ++index) {
             uintptr_t value = 1u + detached_count + index;
 
             assert(kernel_handle_install(
@@ -641,11 +743,11 @@ static void test_detached_pool_exhaustion_and_reuse(void)
                    KERNEL_HANDLE_OK);
         }
         assert(kernel_handle_transfer_prepare(
-                   &table, handles, KERNEL_HANDLE_TRANSFER_MAX,
+                   &table, handles, count,
                    RIGHT_TRANSFER, &batch) == KERNEL_HANDLE_OK);
         assert(kernel_handle_transfer_commit_export(&table, &batch) ==
                KERNEL_HANDLE_OK);
-        for (uint32_t index = 0u; index < KERNEL_HANDLE_TRANSFER_MAX; ++index)
+        for (uint32_t index = 0u; index < count; ++index)
             detached[detached_count++] = batch.detached[index];
     }
     assert(detached_count == KERNEL_HANDLE_DETACHED_MAX);
@@ -717,6 +819,8 @@ int main(void)
 {
     kernel_handle_transfer_pool_init();
     assert(kernel_handle_transfer_pool_healthy());
+    test_detached_metadata_allocation_failure();
+    test_detached_metadata_reset_discards_stale_pages();
     test_free_slot_bitmap_invariants();
     test_allocation_injection_preserves_authority();
     test_lookup_rights_type_and_stale_reuse();

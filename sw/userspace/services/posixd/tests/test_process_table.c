@@ -6,6 +6,17 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
+
+static uint8_t fail_allocation;
+
+static void *
+table_reallocate(void *storage, size_t size)
+{
+    if (size != 0u && fail_allocation != 0u)
+        return NULL;
+    return realloc(storage, size);
+}
 
 typedef struct VisitLog {
     uint32_t count;
@@ -27,15 +38,13 @@ visit(void *context, uint32_t handle, int32_t process)
 int
 main(void)
 {
-    PosixProcessEntry entries[4];
-    PosixSessionEntry sessions[4];
     PosixProcessEntry entry;
     PosixProcessTable table;
     VisitLog log = {0};
     uint32_t handle = 0u;
     uint32_t matched = 0u;
 
-    assert(posix_process_table_init(&table, entries, sessions, 4u) ==
+    assert(posix_process_table_init(&table, table_reallocate) ==
            ASTRA_STATUS_OK);
     assert(posix_process_register(
                &table, 100, 200, 7u,
@@ -88,5 +97,33 @@ main(void)
            ASTRA_STATUS_NOT_FOUND);
     assert(posix_process_remove(&table, 999, &handle) ==
            ASTRA_STATUS_NOT_FOUND);
+    posix_process_table_destroy(&table);
+
+    assert(posix_process_table_init(&table, table_reallocate) ==
+           ASTRA_STATUS_OK);
+    for (int32_t process = 1000; process < 1040; ++process)
+        assert(posix_process_register(
+                   &table, 1, process, (uint32_t)process,
+                   ASTRA_POSIX_PROCESS_NEW_SESSION) == ASTRA_STATUS_OK);
+    assert(table.capacity >= 40u);
+    assert(posix_process_query(&table, 1039, &entry) == ASTRA_STATUS_OK);
+    posix_process_table_destroy(&table);
+
+    assert(posix_process_table_init(&table, table_reallocate) ==
+           ASTRA_STATUS_OK);
+    for (int32_t process = 2000; process < 2008; ++process)
+        assert(posix_process_register(
+                   &table, 1, process, (uint32_t)process,
+                   ASTRA_POSIX_PROCESS_NEW_SESSION) == ASTRA_STATUS_OK);
+    fail_allocation = 1u;
+    assert(posix_process_register(
+               &table, 1, 2008, 2008u,
+               ASTRA_POSIX_PROCESS_NEW_SESSION) == ASTRA_STATUS_LIMIT);
+    fail_allocation = 0u;
+    assert(table.capacity == 8u);
+    assert(posix_process_query(&table, 2007, &entry) == ASTRA_STATUS_OK);
+    assert(posix_process_query(&table, 2008, &entry) ==
+           ASTRA_STATUS_NOT_FOUND);
+    posix_process_table_destroy(&table);
     return 0;
 }

@@ -346,12 +346,11 @@ uint32_t astra_launch_dynamic_stream(
             status = ASTRA_SYSCALL_INVALID_ARGUMENT;
             goto failed;
         }
-        status = astra_stream_read_exact(
+        status = astra_stream_read_up_to(
             source->read_at, source->context, source->length,
-            result.value0, result.value1, &bytes, profile);
+            result.value0, result.value1, &bytes, &moved, profile);
         if (status != ASTRA_SYSCALL_OK)
             goto failed;
-        moved = result.value1;
         {
             uint64_t start = load_profile_start(profile);
 
@@ -505,6 +504,7 @@ static uint32_t materialize_source(const AstraReadSource *source,
 {
     uint8_t *storage;
     uint32_t offset = 0u;
+    uint32_t status;
 
     if (source == NULL || image == NULL || source->length == 0u ||
         source->read_at == NULL)
@@ -513,10 +513,14 @@ static uint32_t materialize_source(const AstraReadSource *source,
     storage = astra_runtime_allocate(source->length);
     if (storage == NULL)
         return ASTRA_SYSCALL_OUT_OF_MEMORY;
+    status = astra_rt_private_commit(storage, source->length);
+    if (status != ASTRA_SYSCALL_OK) {
+        astra_runtime_deallocate(storage);
+        return status;
+    }
     while (offset != source->length) {
         const uint8_t *bytes;
         uint32_t length = source->length - offset;
-        uint32_t status;
 
         if (length > ASTRA_AREA_SIZE_MAX)
             length = ASTRA_AREA_SIZE_MAX;

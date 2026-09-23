@@ -8,7 +8,7 @@
 #include <string.h>
 #include <time.h>
 
-#define DMA_SLOT_COUNT (ASTRA_PROCESS_THREAD_COUNT_MAX + 4u)
+#define DMA_SLOT_COUNT (ASTRA_PROCESS_THREAD_SLOT_COUNT + 4u)
 static uint8_t dma_storage[DMA_SLOT_COUNT][16384];
 static uint32_t dma_slot_count;
 static uint32_t channel_thread[DMA_SLOT_COUNT];

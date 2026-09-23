@@ -503,7 +503,7 @@ Every finite resource is derived and accounted; none is silently unbounded.
 
 | Resource | Source of capacity |
 |---|---|
-| receive queue | shared `ASTRA_PORT_MESSAGES_MAX` and port owner budget |
+| receive queue | caller-selected depth through `ASTRA_PORT_MESSAGES_MAX` |
 | filesystem workers | advertised block depth plus one CPU/cache lane |
 | block lanes | device geometry, capped by kernel request/buffer/page budgets |
 | request scratch | one caller-owned record per worker |

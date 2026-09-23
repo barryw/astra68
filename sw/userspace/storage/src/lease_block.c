@@ -714,11 +714,11 @@ astra_lease_block_attach(AstraLeaseBlock *lease, uint32_t device_handle,
         info.size != ASTRA_BLOCK_LEASE_INFO_SIZE) {
         return ASTRA_BLOCK_IO_ERROR;
     }
-    if (info.sector_bytes < ASTRA_BLOCK_SECTOR_SIZE_MIN ||
-        info.sector_bytes > ASTRA_BLOCK_SECTOR_SIZE_MAX ||
+    if (info.sector_bytes == 0u ||
+        (info.sector_bytes & (info.sector_bytes - 1u)) != 0u ||
         info.max_transfer_sectors == 0u ||
-        info.max_transfer_sectors > ASTRA_BLOCK_TRANSFER_SECTORS_MAX ||
         info.max_transfer_sectors > UINT32_MAX / info.sector_bytes ||
+        info.max_transfer_sectors * info.sector_bytes > ASTRA_DMA_SLOT_SIZE ||
         info.queue_depth == 0u ||
         info.queue_depth > ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE) {
         return ASTRA_BLOCK_CORRUPT;

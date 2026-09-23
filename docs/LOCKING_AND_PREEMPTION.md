@@ -87,13 +87,12 @@ thread is blocked, the scheduler installs the empty CRP, clears the active
 quantum, retains the one-shot deadline, and lets the guarded supervisor worker
 idle. Expiry can make a thread ready from that state.
 
-The wait-deadline queue is one fixed 16-entry binary min-heap, exactly one
-entry per global thread slot. Deadlines are unsigned 64-bit absolute CPU-cycle
-values. Equal deadlines are ordered by thread slot for deterministic behavior.
-Four parallel arrays plus one count consume 258 bytes; insertion and removal
-are `O(log 16)`, expiration is `O(expired * log 16)`, and no path allocates.
-The implementation rejects an already-expired deadline before blocking and
-cannot exceed the global thread limit.
+The wait-deadline queue is a page-backed binary min-heap with at most one entry
+per live thread. Deadlines are unsigned 64-bit absolute CPU-cycle values. Equal
+deadlines are ordered by thread slot for deterministic behavior. Capacity grows
+before a thread is published, so insertion and expiration remain allocation-free
+on the scheduling path. The implementation rejects an already-expired deadline
+before blocking; memory and the encoded thread namespace are its only bounds.
 
 **PLANNED stable scheduler work:**
 
@@ -162,9 +161,9 @@ instrumentation.
   priority/FIFO wait and close/wake-all.
 - `Semaphore`: CURRENT K4 handle-backed counted object with bounded direct
   waiter handoff and overflow rejection.
-- `Timer`: CURRENT K7 handle-backed one-shot, level-triggered object with a
-  fixed 32-entry deadline heap and deterministic slot tie-break.
-- `WaitMultiple`: CURRENT K7 fixed 1-16 member registration set covering
+- `Timer`: CURRENT handle-backed one-shot, level-triggered object with a
+  page-backed deadline heap and deterministic slot tie-break.
+- `WaitMultiple`: CURRENT 1-255 member registration set covering
   events, semaphores, timers, thread death, and process death.
 - `Port`: CURRENT K7 bounded datagram endpoint with readable/writable queues,
   exact message/byte backpressure, peer-death wakeup, and atomic handle move.

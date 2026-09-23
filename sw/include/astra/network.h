@@ -305,4 +305,18 @@ typedef struct AstraNetworkSharedSlot {
 _Static_assert(sizeof(AstraNetworkSharedSlot) == 60u,
                "network shared slot changed");
 
+/* The metadata page, rather than a policy constant, bounds describable slots. */
+#define ASTRA_NETWORK_SHARED_SLOT_MAX \
+    ((ASTRA_NETWORK_SHARED_METADATA_BYTES - \
+      (uint32_t)sizeof(AstraNetworkSharedHeader)) / \
+     (uint32_t)sizeof(AstraNetworkSharedSlot))
+#define ASTRA_NETWORK_SHARED_BYTES_MAX \
+    (ASTRA_NETWORK_SHARED_METADATA_BYTES + \
+     ASTRA_NETWORK_SHARED_SLOT_MAX * ASTRA_NETWORK_SLOT_BYTES)
+
+_Static_assert(ASTRA_NETWORK_SHARED_SLOT_MAX >= 2u,
+               "network shared area needs transmit and receive slots");
+_Static_assert(ASTRA_NETWORK_SHARED_BYTES_MAX <= ASTRA_AREA_SIZE_MAX,
+               "network shared area exceeds one area mapping");
+
 #endif

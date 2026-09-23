@@ -602,6 +602,37 @@ reset(void)
         (uint32_t)(sizeof(service_files) / sizeof(service_files[0]))));
 }
 
+static void
+test_last_failed_request_diagnostics(void)
+{
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    uint32_t session;
+
+    reset();
+    begin_request(&request, ASTRA_VFS_SESSION_INVALID, NULL);
+    astra_vfs_service_dispatch_from(
+        &service, 41u, ASTRA_VFS_OP_HELLO, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    session = reply.session;
+    begin_request(&request, session, "/missing");
+    astra_vfs_service_dispatch_from(
+        &service, 41u, ASTRA_VFS_OP_STAT, &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(service.stats.last_failed_operation == ASTRA_VFS_OP_STAT);
+    assert(service.stats.last_failed_status == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(service.stats.last_failed_owner == 41u);
+
+    assert(fake_create("/present", ASTRA_VFS_KIND_FILE) != NULL);
+    begin_request(&request, session, "/present");
+    astra_vfs_service_dispatch_from(
+        &service, 41u, ASTRA_VFS_OP_STAT, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    assert(service.stats.last_failed_operation == ASTRA_VFS_OP_STAT);
+    assert(service.stats.last_failed_status == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(service.stats.last_failed_owner == 41u);
+}
+
 static int
 test_lock_acquire(void *context)
 {
@@ -1187,14 +1218,13 @@ test_session_handshake(void)
 }
 
 static void
-test_transport_owner_isolation_and_fair_file_share(void)
+test_transport_owner_isolation_and_resource_exhaustion(void)
 {
     AstraVfsRequest request;
     AstraVfsReply reply;
     const uint32_t owner = 0x10000001u;
-    uint32_t owner_sessions[ASTRA_LAUNCH_GRANT_MAX];
+    uint32_t owner_sessions[ASTRA_VFS_SESSION_MAX];
     uint32_t session;
-    uint32_t peer_session;
 
     reset();
     begin_request(&request, ASTRA_VFS_SESSION_INVALID, NULL);
@@ -1206,7 +1236,7 @@ test_transport_owner_isolation_and_fair_file_share(void)
     assert(astra_vfs_service_session_owned(&service, session, owner));
     assert(!astra_vfs_service_session_owned(&service, session, owner + 1u));
 
-    for (uint32_t index = 1u; index < ASTRA_LAUNCH_GRANT_MAX; ++index) {
+    for (uint32_t index = 1u; index < ASTRA_VFS_SESSION_MAX; ++index) {
         begin_request(&request, ASTRA_VFS_SESSION_INVALID, NULL);
         astra_vfs_service_dispatch_from(&service, owner, ASTRA_VFS_OP_HELLO,
                                         &request, &reply);
@@ -1217,12 +1247,7 @@ test_transport_owner_isolation_and_fair_file_share(void)
     astra_vfs_service_dispatch_from(&service, owner, ASTRA_VFS_OP_HELLO,
                                     &request, &reply);
     assert(reply.status == ASTRA_VFS_ERR_LIMIT);
-    assert(service.stats.owner_session_quota_denied == 1u);
-    astra_vfs_service_dispatch_from(&service, owner + 1u,
-                                    ASTRA_VFS_OP_HELLO, &request, &reply);
-    assert(reply.status == ASTRA_VFS_OK);
-    peer_session = reply.session;
-
+    assert(service.stats.owner_session_quota_denied == 0u);
     begin_request(&request, session, "/owned.txt");
     astra_vfs_service_dispatch_from(&service, owner + 1u, ASTRA_VFS_OP_STAT,
                                     &request, &reply);
@@ -1231,8 +1256,7 @@ test_transport_owner_isolation_and_fair_file_share(void)
     request.flags = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_CREATE;
     for (uint32_t index = 0u;
          index < (uint32_t)(sizeof(service_files) /
-                            sizeof(service_files[0])) /
-                     ASTRA_PROCESS_COUNT_MAX;
+                            sizeof(service_files[0]));
          ++index) {
         astra_vfs_service_dispatch_from(&service, owner, ASTRA_VFS_OP_OPEN,
                                         &request, &reply);
@@ -1241,9 +1265,8 @@ test_transport_owner_isolation_and_fair_file_share(void)
     astra_vfs_service_dispatch_from(&service, owner, ASTRA_VFS_OP_OPEN,
                                     &request, &reply);
     assert(reply.status == ASTRA_VFS_ERR_LIMIT);
-    assert(astra_vfs_service_stats(&service)->owner_quota_denied == 1u);
-    astra_vfs_service_release_session(&service, peer_session);
-    for (uint32_t index = 0u; index < ASTRA_LAUNCH_GRANT_MAX; ++index)
+    assert(astra_vfs_service_stats(&service)->owner_quota_denied == 0u);
+    for (uint32_t index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index)
         astra_vfs_service_release_session(&service, owner_sessions[index]);
 }
 
@@ -1858,9 +1881,10 @@ test_client_through_transport(void)
 int
 main(void)
 {
+    test_last_failed_request_diagnostics();
     test_terminal_readdir_cookie();
     test_session_handshake();
-    test_transport_owner_isolation_and_fair_file_share();
+    test_transport_owner_isolation_and_resource_exhaustion();
     test_file_round_trip();
     test_handle_discipline();
     test_session_release_frees_files();

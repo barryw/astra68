@@ -70,6 +70,9 @@ KernelContextStatus kernel_context_capture(KernelCpuContext *context,
                                            const uint32_t *registers,
                                            uint32_t user_stack,
                                            const void *raw_frame);
+KernelContextStatus kernel_context_capture_format0(
+    KernelCpuContext *context, const uint32_t *registers,
+    uint32_t user_stack, const void *raw_frame, uint16_t expected_vector);
 bool kernel_context_valid(const KernelCpuContext *context);
 
 #endif

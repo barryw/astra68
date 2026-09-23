@@ -30,10 +30,15 @@ static const uint8_t *whole_file_bytes;
 static const uint8_t default_file_content[] = "hello";
 static const uint8_t *mock_file_content = default_file_content;
 static uint32_t mock_file_length = 5u;
+static AstraAssign mock_assigns[ASTRA_STARTUP_CAPABILITY_MAX + 16u];
 
 void *astra_runtime_allocate(size_t size)
 {
     return fail_allocate ? NULL : malloc(size);
+}
+void *astra_runtime_reallocate(void *pointer, size_t size)
+{
+    return fail_allocate ? NULL : realloc(pointer, size);
 }
 void astra_runtime_deallocate(void *pointer) { free(pointer); }
 
@@ -68,8 +73,11 @@ uint32_t astra_assign_seed(AstraAssignTable *table,
     (void)count;
     ++seeds;
     memset(table, 0, sizeof(*table));
+    memset(mock_assigns, 0, sizeof(mock_assigns));
+    table->entries = mock_assigns;
+    table->capacity = (uint32_t)(sizeof(mock_assigns) / sizeof(mock_assigns[0]));
     if (seed_distinct != 0u) {
-        table->count = ASTRA_ASSIGN_MAX;
+        table->count = ASTRA_STARTUP_CAPABILITY_MAX;
         for (uint32_t index = 0u; index < table->count; ++index)
             table->entries[index].handle = index + 1u;
         return ASTRA_VFS_OK;
@@ -587,13 +595,41 @@ int main(void)
         astra_process_vfs_close();
         assert(disconnects == 1u);
 
-        /* Distinct mounts are bounded by the namespace itself, not by a
-         * smaller client-array policy ceiling. */
+        /* Allocation failure refuses only the new cache entry. */
+        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        for (uint32_t index = 3u; index < 9u; ++index) {
+            AstraAssignTable *table = astra_process_vfs_assigns();
+
+            table->entries[index].handle = index + 100u;
+            table->count = index + 1u;
+            assert(astra_process_vfs_client_for(&table->entries[index]) !=
+                   NULL);
+        }
+        {
+            AstraAssignTable *table = astra_process_vfs_assigns();
+
+            table->entries[9].handle = 109u;
+            table->count = 10u;
+            fail_allocate = 1;
+            assert(astra_process_vfs_client_for(&table->entries[9]) == NULL);
+            fail_allocate = 0;
+            assert(astra_process_vfs_client_for(&table->entries[0]) != NULL);
+            assert(astra_process_vfs_client_for(&table->entries[9]) != NULL);
+        }
+        astra_process_vfs_close();
+
+        /* Every startup mount fits, and a later mount grows the cache. */
         seed_distinct = 1u;
         assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
         assert(astra_process_vfs_client_for(
                    &astra_process_vfs_assigns()->entries[
-                       ASTRA_ASSIGN_MAX - 1u]) != NULL);
+                       ASTRA_STARTUP_CAPABILITY_MAX - 1u]) != NULL);
+        astra_process_vfs_assigns()->entries[
+            ASTRA_STARTUP_CAPABILITY_MAX].handle = 1000u;
+        ++astra_process_vfs_assigns()->count;
+        assert(astra_process_vfs_client_for(
+                   &astra_process_vfs_assigns()->entries[
+                       ASTRA_STARTUP_CAPABILITY_MAX]) != NULL);
         astra_process_vfs_close();
         seed_distinct = 0u;
     }

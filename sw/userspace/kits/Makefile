@@ -17,6 +17,7 @@ INTERFACE_LIBRARY := $(ASTRA_INTERFACE_LIBRARY)
 NETWORK_LIBRARY := $(ASTRA_NETWORK_LIBRARY)
 CONFIG_LIBRARY := $(ASTRA_CONFIG_LIBRARY)
 BUNDLE_TOOL := ../../../tools/build/astra-bundle
+BUNDLE_DEPENDENCY_TOOL := ../../../tools/check_bundle_dependencies.py
 RUNTIME := build/Runtime.kit
 STREAMS := build/Streams.kit
 POSIX := build/Posix.kit
@@ -107,6 +108,7 @@ CONFIG_LIBRARY_ABI := $(word 1,$(CONFIG_LIBRARY_PROVIDES))
 CONFIG_LIBRARY_VERSION := $(word 2,$(CONFIG_LIBRARY_PROVIDES))
 LIBRARIES := $(ASTRA_SHARED_LIBRARIES) $(LOADER_LIBRARY)
 PROVIDER_MANIFESTS := $(wildcard *.kit/manifest)
+DEPENDENCY_MANIFESTS := $(PROVIDER_MANIFESTS) $(wildcard ../apps/*.app/manifest)
 KIT_NAMES := $(sort $(patsubst %/manifest,%,$(PROVIDER_MANIFESTS)))
 KIT_INVENTORY := build/.kits
 
@@ -286,20 +288,11 @@ $(CONFIGURATION_STAMP): Configuration.kit/manifest $(CONFIG_LIBRARY) \
 	$(BUNDLE_TOOL) check $(CONFIGURATION)
 	@touch $@
 
-provider-coverage: $(LIBRARIES) $(PROVIDER_MANIFESTS)
-	@set -eu; \
-	for library in $(LIBRARIES); do \
-		set -- $$(python3 ../../../tools/library_info.py "$$library"); \
-		soname="$$1"; version="$$2"; abi="$${4%%.*}"; \
-		name="$${soname%.$$abi}"; \
-		expected="provides $$name $$abi $$version"; \
-		count=$$(awk -v expected="$$expected" '$$0 == expected { count++ } END { print count + 0 }' $(PROVIDER_MANIFESTS)); \
-		if test "$$count" -ne 1; then \
-			echo "library provider coverage: $$soname appears $$count times; expected exactly one" >&2; \
-			exit 1; \
-		fi; \
-	done
-	@echo "astra library provider coverage: PASS"
+provider-coverage: $(LIBRARIES) $(DEPENDENCY_MANIFESTS) \
+		$(BUNDLE_DEPENDENCY_TOOL)
+	python3 $(BUNDLE_DEPENDENCY_TOOL) \
+		$(foreach library,$(LIBRARIES),--library $(library)) \
+		$(foreach manifest,$(DEPENDENCY_MANIFESTS),--manifest $(manifest))
 
 $(KIT_INVENTORY): FORCE $(PROVIDER_MANIFESTS)
 	@mkdir -p $(@D)

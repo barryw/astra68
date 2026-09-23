@@ -6,8 +6,8 @@
 
 #define ASTRA_BOOT_HANDOFF_MAGIC 0x4136384bu /* "A68K" */
 #define ASTRA_BOOT_INFO_MAGIC    0x41363842u /* "A68B" */
-#define ASTRA_BOOT_ABI_MAJOR     0u
-#define ASTRA_BOOT_ABI_MINOR     7u
+#define ASTRA_BOOT_ABI_MAJOR     1u
+#define ASTRA_BOOT_ABI_MINOR     0u
 
 #define ASTRA_BOOT_INFO_ADDRESS       0x01ff8000u
 #define ASTRA_BOOT_SCRATCH_ADDRESS    0x01ff8000u
@@ -72,7 +72,8 @@
 #define ASTRA_KERNEL_STATUS_K1_SOAK 0x4b31534bu /* "K1SK" */
 #define ASTRA_KERNEL_STATUS_PANIC   0x4b50414eu /* "KPAN" */
 
-#define ASTRA_BOOT_MAX_MEMORY_RANGES 10u
+#define ASTRA_BOOT_INFO_STORAGE_SIZE 0x400u
+#define ASTRA_BOOT_INFO_HEADER_SIZE  108u
 
 typedef enum {
     ASTRA_MEMORY_RANGE_USABLE = 1,
@@ -88,6 +89,11 @@ typedef struct {
     uint32_t type;
     uint32_t flags;
 } AstraBootMemoryRange;
+
+/* Use every complete range record in the handoff's linker-reserved storage. */
+#define ASTRA_BOOT_MEMORY_RANGE_CAPACITY \
+    ((ASTRA_BOOT_INFO_STORAGE_SIZE - ASTRA_BOOT_INFO_HEADER_SIZE) / \
+     sizeof(AstraBootMemoryRange))
 
 typedef struct {
     uint32_t magic;
@@ -123,7 +129,7 @@ typedef struct {
     uint32_t user_image_size;
     uint32_t memory_range_count;
     uint32_t memory_range_entry_size;
-    AstraBootMemoryRange memory_ranges[ASTRA_BOOT_MAX_MEMORY_RANGES];
+    AstraBootMemoryRange memory_ranges[ASTRA_BOOT_MEMORY_RANGE_CAPACITY];
 } AstraBootInfo;
 
 typedef struct {
@@ -165,7 +171,14 @@ void astra_early_log_puts(AstraEarlyLog *log, const char *text);
 
 _Static_assert(sizeof(AstraBootMemoryRange) == 16u,
                "AstraBootMemoryRange ABI size");
-_Static_assert(sizeof(AstraBootInfo) == 268u, "AstraBootInfo ABI size");
+_Static_assert(offsetof(AstraBootInfo, memory_ranges) ==
+                   ASTRA_BOOT_INFO_HEADER_SIZE,
+               "AstraBootInfo header ABI size");
+_Static_assert(sizeof(AstraBootInfo) <= ASTRA_BOOT_INFO_STORAGE_SIZE,
+               "AstraBootInfo exceeds handoff storage");
+_Static_assert(ASTRA_BOOT_INFO_STORAGE_SIZE - sizeof(AstraBootInfo) <
+                   sizeof(AstraBootMemoryRange),
+               "AstraBootInfo leaves room for another range");
 _Static_assert(sizeof(AstraEarlyLog) == 32u, "AstraEarlyLog ABI size");
 
 #endif

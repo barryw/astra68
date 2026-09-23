@@ -30,19 +30,15 @@
  */
 #define KERNEL_VM_AREA_SLOT_COUNT ASTRA_SHARED_AREA_SLOT_COUNT
 /*
- * How many address spaces exist at once. It lives here rather than beside
- * KERNEL_PROCESS_MAX because the VM is what is sized from it -- the area
- * mapping table and the alias accounting both -- and area.h must be able to
- * read it without depending on the whole process header.
- */
-#define KERNEL_VM_ADDRESS_SPACE_MAX 32u
-/*
  * Transfer memory lands in its own window. Each buffer is process-private, so
  * the slot index is per address space rather than global.
  */
 #define KERNEL_VM_DMA_BASE ASTRA_DMA_ADDRESS_START
-#define KERNEL_VM_DMA_SLOT_SIZE ASTRA_RENDER_BATCH_BUFFER_BYTES
-#define KERNEL_VM_DMA_SLOT_COUNT ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE
+#define KERNEL_VM_DMA_SLOT_SIZE ASTRA_DMA_SLOT_SIZE
+#define KERNEL_VM_DMA_SLOT_COUNT ASTRA_DMA_SLOT_COUNT
+
+_Static_assert(ASTRA_RENDER_BATCH_BUFFER_BYTES <= KERNEL_VM_DMA_SLOT_SIZE,
+               "largest DMA client exceeds a process DMA slot");
 
 /*
  * One process-private page per thread exposes only that thread's AstraHost
@@ -176,6 +172,14 @@ KernelVmStatus kernel_vm_map_page(KernelAddressSpace *space,
                                   uint32_t virtual_address,
                                   uint32_t physical_address,
                                   uint32_t permissions);
+/*
+ * Maps a newly allocated process page by transferring the caller's existing
+ * frame reference to the mapping. Failure leaves that reference untouched.
+ */
+KernelVmStatus kernel_vm_adopt_page(KernelAddressSpace *space,
+                                    uint32_t virtual_address,
+                                    uint32_t physical_address,
+                                    uint32_t permissions);
 KernelVmStatus kernel_vm_map_shared_page(KernelAddressSpace *space,
                                          uint32_t virtual_address,
                                          uint32_t physical_address,

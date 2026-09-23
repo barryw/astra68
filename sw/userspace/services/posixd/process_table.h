@@ -1,6 +1,7 @@
 #ifndef ASTRA_POSIX_PROCESS_TABLE_H
 #define ASTRA_POSIX_PROCESS_TABLE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct PosixProcessEntry {
@@ -19,18 +20,20 @@ typedef struct PosixSessionEntry {
 } PosixSessionEntry;
 
 typedef struct PosixProcessTable {
+    void *storage;
     PosixProcessEntry *entries;
     PosixSessionEntry *sessions;
     uint32_t capacity;
+    void *(*reallocate)(void *storage, size_t size);
 } PosixProcessTable;
 
 typedef uint32_t (*PosixProcessVisit)(void *context, uint32_t handle,
                                       int32_t process);
 
 uint32_t posix_process_table_init(PosixProcessTable *table,
-                                  PosixProcessEntry *entries,
-                                  PosixSessionEntry *sessions,
-                                  uint32_t capacity);
+                                  void *(*reallocate)(void *storage,
+                                                      size_t size));
+void posix_process_table_destroy(PosixProcessTable *table);
 uint32_t posix_process_register(PosixProcessTable *table, int32_t sender,
                                 int32_t process, uint32_t handle,
                                 uint32_t flags);

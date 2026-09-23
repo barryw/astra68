@@ -123,6 +123,7 @@ static void test_auto_and_manual_event_semantics(void)
 static void test_object_injection_preserves_pool(void)
 {
     KernelAllocationStats allocation_stats;
+    KernelAllocationStats metadata_stats;
     KernelSyncObject *object = (KernelSyncObject *)(uintptr_t)1u;
     KernelSyncPoolStats pool_stats;
 
@@ -133,17 +134,28 @@ static void test_object_injection_preserves_pool(void)
            KERNEL_SYNC_NO_SLOT);
     assert(object == NULL);
     object = (KernelSyncObject *)(uintptr_t)1u;
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_SYNC_METADATA, 1u);
+    assert(kernel_sync_create_event(17u, 0u, &object) ==
+           KERNEL_SYNC_NO_SLOT);
+    assert(object == NULL);
+    object = (KernelSyncObject *)(uintptr_t)1u;
     kernel_allocation_test_fail_global(1u);
     assert(kernel_sync_create_event(17u, 0u, &object) ==
            KERNEL_SYNC_NO_SLOT);
     assert(object == NULL);
     assert(kernel_sync_pool_stats(&pool_stats));
     assert(pool_stats.live_objects == 0u);
-    assert(pool_stats.allocation_failures == 2u);
+    assert(pool_stats.allocation_failures == 3u);
     assert(kernel_allocation_site_stats(
         KERNEL_ALLOCATION_SITE_SYNC_OBJECT, &allocation_stats));
     assert(allocation_stats.current_units == 0u);
     assert(allocation_stats.injected_failures == 2u);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_SYNC_METADATA, &metadata_stats));
+    assert(metadata_stats.current_units == 0u &&
+           metadata_stats.current_bytes == 0u &&
+           metadata_stats.injected_failures == 1u);
     assert(kernel_sync_pool_valid());
     assert(kernel_allocation_valid());
 }
@@ -293,9 +305,10 @@ static void test_owner_death_closes_external_reference(void)
     assert(kernel_sync_pool_valid());
 }
 
-static void test_pool_owner_and_waiter_limits(void)
+static void test_pool_grows_past_former_table_and_waiter_limits(void)
 {
-    KernelSyncObject *objects[KERNEL_SYNC_OBJECT_MAX];
+    enum { object_count = 257u };
+    KernelSyncObject *objects[object_count];
     KernelSyncObject *extra;
     KernelSyncPoolStats stats;
     KernelSyncSnapshot before;
@@ -303,22 +316,11 @@ static void test_pool_owner_and_waiter_limits(void)
     KernelThread *thread;
 
     initialize_test();
-    for (uint32_t slot = 0u; slot < KERNEL_SYNC_OWNER_MAX; ++slot)
+    for (uint32_t slot = 0u; slot < object_count; ++slot)
         assert(kernel_sync_create_event(1u, 0u, &objects[slot]) ==
                KERNEL_SYNC_OK);
-    assert(kernel_sync_create_event(1u, 0u, &extra) ==
-           KERNEL_SYNC_QUOTA_EXCEEDED);
-    for (uint32_t owner = 2u; owner <= 4u; ++owner) {
-        for (uint32_t index = 0u; index < KERNEL_SYNC_OWNER_MAX; ++index) {
-            uint32_t slot = (owner - 1u) * KERNEL_SYNC_OWNER_MAX + index;
-
-            assert(kernel_sync_create_event(owner, 0u, &objects[slot]) ==
-                   KERNEL_SYNC_OK);
-        }
-    }
-    assert(kernel_sync_create_event(5u, 0u, &extra) == KERNEL_SYNC_NO_SLOT);
     assert(kernel_sync_snapshot(0u, &before));
-    for (uint32_t slot = 0u; slot < KERNEL_SYNC_OBJECT_MAX; ++slot)
+    for (uint32_t slot = 0u; slot < object_count; ++slot)
         kernel_sync_handle_release(objects[slot], NULL);
     assert(kernel_sync_create_event(1u, 0u, &extra) == KERNEL_SYNC_OK);
     assert(kernel_sync_snapshot(0u, &after));
@@ -340,9 +342,8 @@ static void test_pool_owner_and_waiter_limits(void)
     assert(after.waiters == TEST_WAITER_LOAD);
     kernel_sync_handle_release(extra, NULL);
     assert(kernel_sync_pool_stats(&stats));
-    assert(stats.max_live_objects == KERNEL_SYNC_OBJECT_MAX);
-    assert(stats.quota_failures == 1u);
-    assert(stats.allocation_failures == 1u);
+    assert(stats.max_live_objects == object_count);
+    assert(stats.allocation_failures == 0u);
     assert(stats.publication_rollbacks == 1u);
     assert(stats.max_waiters == TEST_WAITER_LOAD);
     assert(stats.live_objects == 0u);
@@ -561,6 +562,79 @@ static void test_timer_heap_order_rearm_and_level_readiness(void)
     assert(kernel_sync_pool_valid());
 }
 
+static void test_timer_heap_grows_past_former_table(void)
+{
+    enum { timer_count = 257u };
+    KernelSyncObject *timers[timer_count];
+    KernelSyncPoolStats stats;
+    uint32_t expired;
+    uint32_t woken;
+
+    initialize_test();
+    for (uint32_t slot = 0u; slot < timer_count; ++slot) {
+        assert(kernel_sync_create_timer(1u, &timers[slot]) ==
+               KERNEL_SYNC_OK);
+        assert(kernel_sync_timer_set(timers[slot], 0u,
+                                     timer_count - slot,
+                                     &woken) == KERNEL_SYNC_OK);
+        assert(woken == 0u);
+    }
+    assert(kernel_sync_pool_stats(&stats));
+    assert(stats.max_live_objects == timer_count);
+    assert(stats.max_armed_timers == timer_count);
+    assert(kernel_sync_expire_timers(timer_count, &expired,
+                                     &woken) == KERNEL_SYNC_OK);
+    assert(expired == timer_count && woken == 0u);
+    for (uint32_t slot = 0u; slot < timer_count; ++slot)
+        kernel_sync_handle_release(timers[slot], NULL);
+    assert(kernel_sync_pool_valid());
+}
+
+static void test_timer_metadata_failure_is_atomic(void)
+{
+    KernelSyncObject *timer;
+    KernelSyncPoolStats stats;
+    KernelSyncSnapshot snapshot;
+    uint32_t woken;
+
+    initialize_test();
+    assert(kernel_sync_create_timer(1u, &timer) == KERNEL_SYNC_OK);
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_SYNC_METADATA, 1u);
+    assert(kernel_sync_timer_set(timer, 0u, 100u, &woken) ==
+           KERNEL_SYNC_NO_SLOT);
+    assert(kernel_sync_snapshot(0u, &snapshot));
+    assert(snapshot.deadline_high == 0u && snapshot.deadline_low == 0u);
+    assert(kernel_sync_pool_stats(&stats));
+    assert(stats.armed_timers == 0u);
+    assert(kernel_sync_timer_set(timer, 0u, 100u, &woken) ==
+           KERNEL_SYNC_OK);
+    assert(kernel_sync_timer_cancel(timer, ASTRA_SYSCALL_CANCELLED,
+                                    &woken) == KERNEL_SYNC_OK);
+    kernel_sync_handle_release(timer, NULL);
+    assert(kernel_sync_pool_valid());
+}
+
+static void test_sync_metadata_reset_discards_stale_pages(void)
+{
+    KernelAllocationStats metadata;
+    KernelSyncObject *event;
+
+    initialize_test();
+    assert(kernel_sync_create_event(1u, 0u, &event) == KERNEL_SYNC_OK);
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_SYNC_METADATA, &metadata));
+    assert(metadata.current_units != 0u);
+
+    kernel_allocation_init();
+    assert(!kernel_sync_pool_valid());
+    kernel_sync_pool_init();
+    assert(kernel_sync_pool_valid());
+    assert(kernel_allocation_site_stats(
+        KERNEL_ALLOCATION_SITE_SYNC_METADATA, &metadata));
+    assert(metadata.current_units == 0u && metadata.current_bytes == 0u);
+}
+
 static void test_timer_wait_set_cancel_duplicate_and_close(void)
 {
     KernelSyncObject *event;
@@ -682,10 +756,13 @@ int main(void)
     test_semaphore_atomic_handoff_and_overflow();
     test_terminal_races_remove_wait_once();
     test_owner_death_closes_external_reference();
-    test_pool_owner_and_waiter_limits();
+    test_pool_grows_past_former_table_and_waiter_limits();
+    test_sync_metadata_reset_discards_stale_pages();
     test_invalid_creation_and_operations();
     test_wait_set_sync_integration_and_duplicate_handoff();
     test_wait_set_owner_death_reports_winning_member();
+    test_timer_heap_grows_past_former_table();
+    test_timer_metadata_failure_is_atomic();
     test_timer_heap_order_rearm_and_level_readiness();
     test_timer_wait_set_cancel_duplicate_and_close();
     test_futex_waits_are_process_scoped_and_priority_ordered();

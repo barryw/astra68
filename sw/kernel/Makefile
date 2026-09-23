@@ -11,6 +11,8 @@ OBJDUMP = $(CROSS)objdump
 HOST_CC ?= cc
 HOST_EXTRA_FLAGS ?=
 override HOST_EXTRA_FLAGS += -I../include -I../../ndk/include
+M68K_LINUX_CC ?= m68k-linux-gnu-gcc
+QEMU_M68K ?= qemu-m68k
 
 override KERNEL_VERSION := $(ASTRA_OS_VERSION)
 PANIC_SELFTEST ?= 0
@@ -55,6 +57,23 @@ BUILD_INFO = $(BUILD_DIR)/kernel_build_info.h
 KERNEL_ELF = $(BUILD_DIR)/astra_kernel.elf
 KERNEL_BIN = $(BUILD_DIR)/astra_kernel.bin
 KERNEL_MAP = $(BUILD_DIR)/astra_kernel.map
+KERNEL_HOST_TESTS = \
+	$(BUILD_DIR)/test_address_space $(BUILD_DIR)/test_boot_contract \
+	$(BUILD_DIR)/test_civil $(BUILD_DIR)/test_divide \
+	$(BUILD_DIR)/test_generation $(BUILD_DIR)/test_format \
+	$(BUILD_DIR)/test_allocation $(BUILD_DIR)/test_memory \
+	$(BUILD_DIR)/test_mmio $(BUILD_DIR)/test_trace $(BUILD_DIR)/test_irq \
+	$(BUILD_DIR)/test_platform $(BUILD_DIR)/test_interrupt \
+	$(BUILD_DIR)/test_monitor $(BUILD_DIR)/test_dma $(BUILD_DIR)/test_block \
+	$(BUILD_DIR)/test_device $(BUILD_DIR)/test_vm \
+	$(BUILD_DIR)/test_exception $(BUILD_DIR)/test_fault \
+	$(BUILD_DIR)/test_user_copy $(BUILD_DIR)/test_handle \
+	$(BUILD_DIR)/test_bytes $(BUILD_DIR)/test_context \
+	$(BUILD_DIR)/test_performance $(BUILD_DIR)/test_irq_latency \
+	$(BUILD_DIR)/test_thread $(BUILD_DIR)/test_sync $(BUILD_DIR)/test_port \
+	$(BUILD_DIR)/test_area $(BUILD_DIR)/test_ring $(BUILD_DIR)/test_process \
+	$(BUILD_DIR)/test_worker $(BUILD_DIR)/test_dispatch \
+	$(BUILD_DIR)/test_elf
 
 CPPFLAGS = -I../include -I../../ndk/include -I$(BUILD_DIR) -include $(BUILD_INFO) \
            -DKERNEL_TRACE_BUILD_LEVEL=$(KERNEL_TRACE_BUILD_LEVEL) \
@@ -240,7 +259,8 @@ $(BUILD_DIR)/area.o: area.c area.h handle.h memory.h vm.h bytes.h \
                      generation.h ../include/astra/syscall.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/elf.o: elf.c elf.h bytes.h ../include/astra/endian.h \
+$(BUILD_DIR)/elf.o: elf.c elf.h bytes.h allocation.h memory.h \
+                    ../include/astra/endian.h \
                     ../include/astra/integer.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
@@ -319,7 +339,11 @@ $(KERNEL_ELF): $(OBJECTS) kernel.ld
 $(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
 
-verify: $(KERNEL_ELF) $(KERNEL_BIN)
+verify: $(KERNEL_ELF) $(KERNEL_BIN) $(BUILD_DIR)/test_bytes_m68k \
+        $(BUILD_DIR)/test_context_m68k
+	$(QEMU_M68K) $(BUILD_DIR)/test_bytes_m68k
+	$(QEMU_M68K) $(BUILD_DIR)/test_context_m68k
+	@python3 ../../tools/check_stack_usage.py --max 3072 $(BUILD_DIR)/*.su
 	@if $(OBJDUMP) -t $(BUILD_DIR)/irq.o | \
 		grep -q 'astra_u32_increment_saturating'; then \
 		echo "IRQ saturating counter was not inlined"; exit 1; \
@@ -332,26 +356,7 @@ verify: $(KERNEL_ELF) $(KERNEL_BIN)
 	  test $$bytes -le $$((0x80000)); \
 	  printf 'kernel payload: %s bytes\n' "$$bytes"
 
-test: $(BUILD_DIR)/test_address_space \
-      $(BUILD_DIR)/test_boot_contract $(BUILD_DIR)/test_civil \
-      $(BUILD_DIR)/test_divide $(BUILD_DIR)/test_generation \
-      $(BUILD_DIR)/test_format \
-      $(BUILD_DIR)/test_allocation \
-      $(BUILD_DIR)/test_memory \
-      $(BUILD_DIR)/test_mmio $(BUILD_DIR)/test_trace $(BUILD_DIR)/test_irq \
-      $(BUILD_DIR)/test_platform $(BUILD_DIR)/test_interrupt \
-      $(BUILD_DIR)/test_monitor \
-      $(BUILD_DIR)/test_dma $(BUILD_DIR)/test_block $(BUILD_DIR)/test_device \
-      $(BUILD_DIR)/test_vm \
-      $(BUILD_DIR)/test_exception $(BUILD_DIR)/test_fault \
-      $(BUILD_DIR)/test_user_copy \
-      $(BUILD_DIR)/test_handle $(BUILD_DIR)/test_bytes \
-      $(BUILD_DIR)/test_context \
-      $(BUILD_DIR)/test_performance $(BUILD_DIR)/test_irq_latency \
-      $(BUILD_DIR)/test_thread $(BUILD_DIR)/test_sync \
-      $(BUILD_DIR)/test_port $(BUILD_DIR)/test_area $(BUILD_DIR)/test_ring \
-      $(BUILD_DIR)/test_process $(BUILD_DIR)/test_worker \
-      $(BUILD_DIR)/test_dispatch $(BUILD_DIR)/test_elf
+test: $(KERNEL_HOST_TESTS)
 	./$(BUILD_DIR)/test_address_space
 	./$(BUILD_DIR)/test_boot_contract
 	./$(BUILD_DIR)/test_civil
@@ -389,6 +394,11 @@ test: $(BUILD_DIR)/test_address_space \
 	./$(BUILD_DIR)/test_elf
 	python3 tests/test_make_parallel.py Makefile
 
+# Host suites link many sources in one compiler invocation, so compiler
+# dependency files cannot describe them reliably. Always rebuild a requested
+# host suite; this makes header edits and exact source mirrors deterministic.
+$(KERNEL_HOST_TESTS): FORCE
+
 $(BUILD_DIR)/test_address_space: tests/test_address_space.c \
                                   ../include/astra/address_space.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
@@ -397,7 +407,8 @@ $(BUILD_DIR)/test_address_space: tests/test_address_space.c \
 $(BUILD_DIR)/test_elf: tests/test_elf.c elf.c elf.h bytes.c bytes.h \
                        memory.h process.h vm.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) -I. \
-		-I../include bytes.c elf.c tests/test_elf.c -o $@
+		-DKERNEL_ELF_HOST_TEST=1 -I../include \
+		bytes.c elf.c tests/test_elf.c -o $@
 
 $(BUILD_DIR)/test_civil: tests/test_civil.c ../common/civil.c \
                          ../common/divide.c ../include/astra/civil.h \
@@ -434,12 +445,13 @@ $(BUILD_DIR)/test_allocation: tests/test_allocation.c allocation.c \
 
 $(BUILD_DIR)/test_memory: tests/test_memory.c memory.c memory.h \
                           allocation.c allocation.h \
+                          bytes.c bytes.h \
                           ../common/boot_contract.c \
                           ../include/astra/boot.h \
                           ../include/ohci.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
-		-DKERNEL_MEMORY_NO_POISON=1 -I. -I../include \
-		../common/boot_contract.c allocation.c memory.c \
+		-DKERNEL_MEMORY_HOST_TEST=1 -I. -I../include \
+		../common/boot_contract.c allocation.c bytes.c memory.c \
 		tests/test_memory.c -o $@
 
 $(BUILD_DIR)/test_mmio: tests/test_mmio.c mmio.c mmio.h | $(BUILD_DIR)
@@ -500,25 +512,27 @@ $(BUILD_DIR)/test_monitor: tests/test_monitor.c monitor.c monitor.h bytes.c byte
 
 $(BUILD_DIR)/test_dma: tests/test_dma.c dma.c dma.h generation.h \
                        allocation.c allocation.h object_cache.c object_cache.h \
-                       memory.c memory.h \
+                       bytes.c bytes.h memory.c memory.h \
                        ../common/boot_contract.c \
                        ../include/astra/boot.h \
                        ../include/ohci.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
-		-DKERNEL_MEMORY_NO_POISON=1 -I. -I../include \
-		../common/boot_contract.c allocation.c object_cache.c memory.c \
+		-DKERNEL_MEMORY_NO_POISON=1 -DKERNEL_MEMORY_HOST_TEST=1 \
+		-I. -I../include \
+		../common/boot_contract.c allocation.c object_cache.c bytes.c memory.c \
 		dma.c tests/test_dma.c -o $@
 
 $(BUILD_DIR)/test_block: tests/test_block.c block.c block.h dma.c dma.h \
                          generation.h allocation.c allocation.h \
                          object_cache.c object_cache.h \
-                         memory.c memory.h platform.h \
+                         bytes.c bytes.h memory.c memory.h platform.h \
                          ../common/boot_contract.c \
                          ../include/astra/boot.h ../include/ohci.h \
                          ../include/vesta.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
-		-DKERNEL_MEMORY_NO_POISON=1 -I. -I../include \
-		../common/boot_contract.c allocation.c object_cache.c memory.c \
+		-DKERNEL_MEMORY_NO_POISON=1 -DKERNEL_MEMORY_HOST_TEST=1 \
+		-I. -I../include \
+		../common/boot_contract.c allocation.c object_cache.c bytes.c memory.c \
 		dma.c block.c \
 		tests/test_block.c -o $@
 
@@ -566,12 +580,24 @@ $(BUILD_DIR)/test_bytes: tests/test_bytes.c bytes.c bytes.h \
 		-I../include \
 		bytes.c tests/test_bytes.c -o $@
 
+$(BUILD_DIR)/test_bytes_m68k: tests/test_bytes_m68k.c bytes.h \
+                              ../common/memory_m68k.S | $(BUILD_DIR)
+	$(M68K_LINUX_CC) -m68040 -O2 -Wall -Wextra -Werror -static \
+		-I. ../common/memory_m68k.S tests/test_bytes_m68k.c -o $@
+
 $(BUILD_DIR)/test_context: tests/test_context.c context.c context.h \
                              bytes.c bytes.h \
                              exception.c exception.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-I. -I../include \
 		bytes.c exception.c context.c tests/test_context.c -o $@
+
+$(BUILD_DIR)/test_context_m68k: tests/test_context.c context.c context.h \
+                               exception.c exception.h bytes.h \
+                               ../common/memory_m68k.S | $(BUILD_DIR)
+	$(M68K_LINUX_CC) -m68040 -Os -Wall -Wextra -Werror -static \
+		-I. -I../include ../common/memory_m68k.S exception.c context.c \
+		tests/test_context.c -o $@
 
 $(BUILD_DIR)/test_performance: tests/test_performance.c performance.c \
                                 performance.h bytes.c bytes.h generation.h \

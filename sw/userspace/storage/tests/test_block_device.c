@@ -77,6 +77,28 @@ test_contract(AstraBlockDevice *device, AstraMemoryBlock *memory)
 }
 
 static void
+test_geometry_is_bounded_by_resources_not_policy_numbers(void)
+{
+    AstraMemoryBlock memory;
+    AstraBlockDevice device;
+    AstraBlockGeometry geometry;
+
+    astra_memory_block_init(&memory, storage, sizeof(storage), 8192u, 129u,
+                            ASTRA_BLOCK_FLAG_PRESENT);
+    astra_block_device_init(&device, &astra_memory_block_backend, &memory,
+                            nanoseconds, NULL);
+    assert(astra_block_query(&device, &geometry) == ASTRA_BLOCK_OK);
+    assert(geometry.sector_size == 8192u &&
+           geometry.max_transfer_sectors == 129u);
+
+    memory.max_transfer_sectors = UINT32_MAX;
+    assert(astra_block_query(&device, &geometry) == ASTRA_BLOCK_CORRUPT);
+    memory.max_transfer_sectors = 1u;
+    memory.sector_size = 768u;
+    assert(astra_block_query(&device, &geometry) == ASTRA_BLOCK_CORRUPT);
+}
+
+static void
 test_scatter_write(AstraBlockDevice *device, AstraMemoryBlock *memory)
 {
     uint8_t first[2u * 512u];
@@ -190,6 +212,7 @@ main(void)
     astra_block_device_init(&device, &astra_memory_block_backend, &memory,
                             nanoseconds, NULL);
     test_contract(&device, &memory);
+    test_geometry_is_bounded_by_resources_not_policy_numbers();
     test_scatter_write(&device, &memory);
     stress(&device);
     report(&device);

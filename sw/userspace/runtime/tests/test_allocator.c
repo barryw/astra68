@@ -117,6 +117,9 @@ main(void)
     void *large = astra_runtime_allocate(5000u);
     void *aligned64 = astra_runtime_allocate_aligned(64u, 129u);
     void *aligned4096 = astra_runtime_allocate_aligned(4096u, 4097u);
+    uint8_t *lazy_first = astra_runtime_allocate(1536u);
+    uint8_t *lazy_second;
+    void *lazy_reused;
     uint32_t before;
     pthread_t first_thread;
     pthread_t second_thread;
@@ -129,6 +132,14 @@ main(void)
     assert(aligned64 != NULL && ((uintptr_t)aligned64 & 63u) == 0u);
     assert(aligned4096 != NULL &&
            ((uintptr_t)aligned4096 & 4095u) == 0u);
+    assert(lazy_first != NULL);
+    for (uint32_t index = 0u; index < sizeof(void *); ++index)
+        assert(lazy_first[1536u + index] == 0u);
+    lazy_second = astra_runtime_allocate(1536u);
+    assert(lazy_second == lazy_first + 1536u);
+    astra_runtime_deallocate(lazy_first);
+    lazy_reused = astra_runtime_allocate(1536u);
+    assert(lazy_reused == lazy_first);
     assert(astra_runtime_allocation_size(aligned64) >= 129u);
     assert(astra_runtime_allocation_size(aligned4096) >= 4097u);
     assert(astra_runtime_allocate_aligned(0u, 1u) == NULL);
@@ -170,6 +181,8 @@ main(void)
     astra_runtime_deallocate(large);
     astra_runtime_deallocate(aligned64);
     astra_runtime_deallocate(aligned4096);
+    astra_runtime_deallocate(lazy_second);
+    astra_runtime_deallocate(lazy_reused);
     assert(decommit_calls != 0u);
     assert(astra_runtime_callocate((size_t)-1, 2u) == NULL);
     puts("ASTRA RUNTIME ALLOCATOR PASS");

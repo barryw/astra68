@@ -51,13 +51,12 @@
  */
 #define KERNEL_PROCESS_DATA_BASE 0x00200000u
 /*
- * How far a raw image may run. It is not an ELF and has no segments, so the
- * whole blob is mapped read-execute from the code base; the ceiling is here
- * so that a blob which outgrows it is refused with a reason rather than
- * truncated. The qualification harness, the only raw image, is one page over
- * four thousand bytes.
+ * A raw image may occupy the complete mapped span before its fixed data page.
+ * It is not an ELF and has no segments, so the address map is its only real
+ * boundary; resident pages are charged normally to the creating process.
  */
-#define KERNEL_PROCESS_RAW_IMAGE_MAX (4u * KERNEL_PAGE_SIZE)
+#define KERNEL_PROCESS_RAW_IMAGE_MAX \
+    (KERNEL_PROCESS_DATA_BASE - KERNEL_PROCESS_CODE_BASE)
 #define KERNEL_PROCESS_STACK_BASE KERNEL_THREAD_STACK_BASE
 /* The top of the first slot's reservation: where its stack pointer starts. */
 #define KERNEL_PROCESS_STACK_TOP \
@@ -65,7 +64,7 @@
 #define KERNEL_PROCESS_TLS_BASE ASTRA_THREAD_TLS_ADDRESS_START
 #define KERNEL_PROCESS_TLS_END ASTRA_THREAD_TLS_ADDRESS_END
 #define KERNEL_PROCESS_PROGRESS_GOAL 64u
-#define KERNEL_PROCESS_THREAD_MAX ASTRA_PROCESS_THREAD_COUNT_MAX
+#define KERNEL_PROCESS_THREAD_SLOT_COUNT ASTRA_PROCESS_THREAD_SLOT_COUNT
 
 /*
  * ELF acceptance is bounded by the process virtual-address region. Mapping is
@@ -78,9 +77,12 @@
 
 _Static_assert(KERNEL_PROCESS_TLS_BASE ==
                    KERNEL_THREAD_STACK_BASE +
-                       KERNEL_PROCESS_THREAD_MAX *
+                       KERNEL_PROCESS_THREAD_SLOT_COUNT *
                            KERNEL_THREAD_STACK_STRIDE,
                "process TLS implementation disagrees with address ABI");
+_Static_assert(KERNEL_PROCESS_DATA_BASE > KERNEL_PROCESS_CODE_BASE &&
+                   KERNEL_PROCESS_RAW_IMAGE_MAX % KERNEL_PAGE_SIZE == 0u,
+               "raw image span must end on its fixed data-page boundary");
 
 #define KERNEL_PROCESS_RIGHT_QUERY     (1u << 0)
 #define KERNEL_PROCESS_RIGHT_TERMINATE (1u << 1)
@@ -341,36 +343,6 @@ KernelProcessStatus kernel_process_create(const void *image,
  * to check.
  */
 #define KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX ASTRA_LAUNCH_GRANT_MAX
-
-/*
- * What one process can be holding at once, and why the handle table is the
- * size it is.
- *
- * This is the budget that was never written down, and its absence cost a whole
- * task. A supervisor hosting services holds: everything it was granted at
- * launch, its own process and thread, both endpoints of every port it may own,
- * a handle to each child it may have started, and -- the term nobody counted
- * -- room to *import* the handles one arriving message carries, because a
- * receive installs them before it can hand them over.
- *
- * When the table was sixteen entries the sum below came to 27 and the machine
- * was four short. Nothing said so: the receive that could not import a child's
- * reply channel answered RESOURCE_LIMIT, the message stayed queued, and the
- * child waited for an answer that could not be produced. The table was widened
- * and the demand still was not written down, so nothing would have caught it
- * happening again.
- *
- * Adding a port, a bootstrap grant or a transfer slot now fails here, at
- * compile time, naming the budget -- rather than in a service that mysteriously
- * stops answering.
- */
-#define KERNEL_PROCESS_HANDLE_DEMAND                                          \
-    (KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX + 2u +                           \
-     (2u * KERNEL_PORT_OWNER_MAX) + KERNEL_HANDLE_TRANSFER_MAX)
-
-_Static_assert(KERNEL_PROCESS_HANDLE_DEMAND <= KERNEL_HANDLE_MAX_ENTRIES,
-               "handle table is smaller than one process can be holding: see "
-               "KERNEL_PROCESS_HANDLE_DEMAND");
 
 typedef enum KernelProcessBootstrapKind {
     KERNEL_PROCESS_BOOTSTRAP_DEVICE = 1,

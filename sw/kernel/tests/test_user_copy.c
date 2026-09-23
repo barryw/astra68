@@ -45,6 +45,9 @@ static void test_checked_wrappers(void)
 {
     uint8_t buffer[16];
 
+    assert(kernel_user_copy_range_valid(0x00010000u, 8192u));
+    assert(!kernel_user_copy_range_valid(0x0000ffffu, 1u));
+    assert(!kernel_user_copy_range_valid(0x7ffff000u, 8192u));
     low_level_status = KERNEL_USER_COPY_OK;
     assert(kernel_copy_from_user(buffer, 0x00010000u, sizeof(buffer)) ==
            KERNEL_USER_COPY_OK);
@@ -63,9 +66,12 @@ static void test_checked_wrappers(void)
            KERNEL_USER_COPY_BAD_ADDRESS);
     assert(kernel_copy_to_user(0x7ffffff0u, buffer, sizeof(buffer) + 1u) ==
            KERNEL_USER_COPY_BAD_ADDRESS);
-    assert(kernel_copy_from_user(buffer, 0x00010000u,
-                                 KERNEL_USER_COPY_MAX_BYTES + 1u) ==
-           KERNEL_USER_COPY_TOO_LARGE);
+    low_level_status = KERNEL_USER_COPY_OK;
+    assert(kernel_copy_from_user(buffer, 0x00010000u, 8192u) ==
+           KERNEL_USER_COPY_OK);
+    assert(low_level_address == 0x00010000u && low_level_size == 8192u);
+    assert(kernel_copy_from_user(buffer, 0x7ffff000u, 8192u) ==
+           KERNEL_USER_COPY_BAD_ADDRESS);
     assert(kernel_copy_from_user(NULL, 0u, 0u) == KERNEL_USER_COPY_OK);
 }
 

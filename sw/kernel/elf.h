@@ -38,7 +38,12 @@
  * interpreter. Lazy binding is not accepted by any profile.
  */
 
-#define KERNEL_ELF_SEGMENT_MAX 4u
+/*
+ * The current toolchain emits three PT_LOAD records. Keep four inline so the
+ * measured common path allocates nothing; additional records spill into
+ * resource-backed pages and are not an acceptance limit.
+ */
+#define KERNEL_ELF_SEGMENT_INLINE 4u
 #define KERNEL_ELF_HEADER_SIZE 52u
 #define KERNEL_ELF_PHENTSIZE 32u
 
@@ -60,7 +65,7 @@ typedef enum KernelElfStatus {
     KERNEL_ELF_BAD_FLAGS,
     KERNEL_ELF_BAD_HEADER_TABLE,
     KERNEL_ELF_NO_SEGMENTS,
-    KERNEL_ELF_TOO_MANY_SEGMENTS,
+    KERNEL_ELF_OUT_OF_MEMORY,
     KERNEL_ELF_UNSUPPORTED_SEGMENT,
     KERNEL_ELF_EXECUTABLE_STACK,
     KERNEL_ELF_BAD_PERMISSIONS,
@@ -119,8 +124,12 @@ typedef struct KernelElfRelro {
     uint32_t memory_size;
 } KernelElfRelro;
 
+typedef struct KernelElfSegmentBlock KernelElfSegmentBlock;
+
 typedef struct KernelElfImage {
-    KernelElfSegment segment[KERNEL_ELF_SEGMENT_MAX];
+    KernelElfSegment segment[KERNEL_ELF_SEGMENT_INLINE];
+    KernelElfSegmentBlock *segment_blocks;
+    KernelElfSegmentBlock *segment_blocks_tail;
     KernelElfTls tls;
     KernelElfDynamic dynamic;
     KernelElfInterpreter interpreter;
@@ -133,6 +142,7 @@ typedef struct KernelElfImage {
     uint8_t has_dynamic;
     uint8_t has_interpreter;
     uint8_t has_relro;
+    uint8_t owns_segment_blocks;
 } KernelElfImage;
 
 typedef enum KernelElfRole {
@@ -182,6 +192,19 @@ KernelElfStatus kernel_elf_stream_add_header(KernelElfStream *stream,
                                              const void *header);
 KernelElfStatus kernel_elf_stream_finish(KernelElfStream *stream,
                                          KernelElfImage *plan);
+bool kernel_elf_stream_discard(KernelElfStream *stream);
+bool kernel_elf_image_discard(KernelElfImage *plan);
+void kernel_elf_image_move(KernelElfImage *destination,
+                           KernelElfImage *source);
+const KernelElfSegment *kernel_elf_image_segment(
+    const KernelElfImage *plan, uint32_t index);
+bool kernel_elf_image_equal(const KernelElfImage *left,
+                            const KernelElfImage *right);
+
+#if defined(KERNEL_ELF_HOST_TEST)
+void kernel_elf_test_fail_segment_allocation_after(uint32_t successes);
+void kernel_elf_test_clear_segment_allocation_failure(void);
+#endif
 
 /*
  * Validates the whole image before reporting anything. On any failure `plan`

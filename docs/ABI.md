@@ -6,10 +6,10 @@ The ABI is big-endian, 32-bit, naturally aligned, and independent of kernel C
 layouts. Only the user/kernel ABI and versioned service protocols are stable.
 Kernel-internal structures and function calls may change at any time.
 
-## Process startup ABI 4
+## Process startup ABI 7
 
-`sw/include/astra/process.h` defines the 64-byte `AstraStartupInfo` and
-92-byte `AstraStartupCapability` records (`ASTRA_STARTUP_ABI_VERSION` 4). ABI
+`sw/include/astra/process.h` defines the 84-byte `AstraStartupInfo` and
+92-byte `AstraStartupCapability` records (`ASTRA_STARTUP_ABI_VERSION` 7). ABI
 3 added the conventional null-terminated environment vector; ABI 4 replaces
 the final reserved words with an optional read-only personality handoff address
 and size used by atomic image replacement. The initial thread
@@ -18,7 +18,9 @@ process self handle in `D4`, and its thread self handle in `D5`. The block
 carries explicit bounded argument, environment, and initial-capability
 tables. Arguments, environment pointers, strings, and capabilities must fit
 the actual 4 KiB startup page; there is no smaller environment quota. Counts
-are independent of addresses and the capability count is at most 32. A handoff
+are independent of addresses. ABI 7 derives the maximum capability count from
+the records that actually fit in the 4 KiB page (43 currently), rather than an
+independent 32-entry ceiling. A handoff
 is either absent or a complete mapped range; its bytes are opaque to Axiom.
 `docs/USERSPACE_RUNTIME.md` defines
 validation, ownership, and exit.
@@ -26,6 +28,22 @@ validation, ownership, and exit.
 The boot-supplied supervisor and every later protected loader use this same
 contract. General ELF parsing remains userspace policy; Axiom validates the
 final mappings, entry, stack, handles, and startup block before publication.
+
+## Filesystem Kit ABI 3.0
+
+`filesystem.library.3` replaces the fixed startup-sized `AstraAssignTable`
+array with a growable pointer/count/capacity table and adds
+`astra_assign_table_destroy`. The startup page bounds only the namespace
+records delivered at launch; aliases, union members, and mounts added later
+grow until allocation fails. All in-tree consumers require ABI 3, and the
+obsolete ABI 2 symbol versions and compatibility path are removed.
+
+## Streams Kit ABI 1.1
+
+`streams.library.1` ABI 1.1 adds
+`astra_stream_source_rebind_storage`, which moves unread circular-buffer data
+into larger caller-owned storage without imposing a library growth policy.
+Failure preserves the source and both buffers.
 
 `AstraStartupCapability` grew from 28 to 92 bytes to add
 `char root[ASTRA_CAPABILITY_ROOT_MAX]` as its last field.
@@ -106,7 +124,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010035`, `D2=process handle`, `D3=calling-thread handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010036`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | K1 TEST ONLY | monotonic test progress, not a product ABI |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
@@ -144,7 +162,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 40 | `BLOCK_SUBMIT` | CURRENT CANDIDATE | `D1=block lease with TRANSFER right`, `D2=aligned AstraBlockRequest`; returns the request handle in `D1` |
 | 41 | `BLOCK_COLLECT` | CURRENT CANDIDATE | `D1=block lease with TRANSFER right`, `D2=aligned AstraBlockCompletion`, `D3=request handle`; `WOULD_BLOCK` until the device answers |
 | 42 | `CONSOLE_INFO` | CURRENT CANDIDATE | `D1=display lease with QUERY right`; returns character-plane `D1=columns`, `D2=rows` |
-| 43 | `CONSOLE_WRITE` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=first cell index`, `D3=cell bytes`, `D4=count` (at most `ASTRA_CONSOLE_WRITE_MAX`); writes one run of character cells |
+| 43 | `CONSOLE_WRITE` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=first cell index`, `D3=cell bytes`, `D4=count`; writes any run that fits in the character plane |
 | 44 | `LOG_WRITE` | CURRENT CANDIDATE | emits one bounded typed event into the kernel ring |
 | 45 | `ACTIVITY` | CURRENT CANDIDATE | `D1=0` allocates a new activity, a nonzero value adopts it, and `D1=0xffffffff` clears it; returns the current activity in `D1` |
 | 46 | `TRACE_READ` | CURRENT CANDIDATE | drains the caller-authorized kernel event stream with explicit cursor and loss accounting |
@@ -177,6 +195,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 93 | `PROCESS_DYNAMIC_COMMIT` | CURRENT CANDIDATE | `D1=page-aligned combined TLS template`, `D2=exact template bytes`, `D3=power-of-two TLS alignment`, `D4=exclusive page-rounded storage span`; while the interpreted process still has only its initial thread, atomically installs current/future-thread TLS and seals program, interpreter, and template RELRO pages; success transfers the immutable storage interval to the process until exit |
 | 94 | `THREAD_INFO` | CURRENT CANDIDATE | `D1=thread handle with QUERY right`, `D2=AstraThreadInfo`; copies one 48-byte record including identity, scheduler state, activity, priorities, counters, and runtime nanoseconds |
 | 95 | `LIBRARY_ATTACH_RESIDENT` | CURRENT CANDIDATE | `D1=pointer to fixed-size zero-padded ABI identity`; maps the sole matching resident library, returning `WOULD_BLOCK` when absent or ambiguous so userspace resolves an exact provider and retries with `LIBRARY_ATTACH` |
+| 96 | `VM_PRIVATE_COMMIT` | CURRENT CANDIDATE | `D1=address`, `D2=length`; commits every touched page in an existing writable private reservation, with allocation bounded only by available charged frames |
 
 Areas are at most 4 MiB. This is an address-map allocation unit, not an
 application-size policy; the VM publishes and rolls back every MC68040 table
@@ -184,7 +203,7 @@ touched by the mapping as one transaction. VFS bulk transfers use this same
 bound instead of imposing a smaller protocol limit.
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x00010035`; a later revision may add
+not panic. `QUERY_ABI` reports revision `0x00010036`; a later revision may add
 feature bits before additional calls freeze.
 
 Ordinary process priorities are 1 through 23, with 16 as normal; larger values
@@ -303,8 +322,10 @@ calling process is rejected. Thread and normal process death return the exact
 path returns its terminal result and zero detail. Process death is
 level-triggered while a handle remains open, exactly like thread death.
 
-Timers are one-shot, level-triggered objects from the same fixed 32-slot pool
-and eight-object creator quota as events and semaphores. Timer rights are a
+Timers are one-shot, level-triggered objects from the same page-backed 16-bit
+namespace as events and semaphores. There is no creator quota; object and timer
+heap metadata grows on demand until memory or the encoded namespace is
+exhausted. Timer rights are a
 nonzero subset of `read`, `wait`, and `administer`; setting or cancelling
 requires `administer`. `TIMER_SET` replaces any prior arm and clears a prior
 fired state. A deadline at or before the current time fires immediately.
@@ -593,9 +614,9 @@ acknowledges that IRQ before invoking code which may re-enter its event loop.
 - The 12.5 MHz clock advances in exact 80 ns units. Conversion to a timer
   deadline rounds upward, so a wait never expires before the requested time.
 - Every blocking call documents cancellation and peer-death results.
-- ABI 0.2 wait-multiple accepts 1 through 16 handles and returns the lowest
-  input index among simultaneously ready objects. Sixteen is a hard current
-  limit, not an allocation-dependent suggestion.
+- Wait-multiple accepts 1 through 255 handles, the complete per-process handle
+  namespace, and returns the lowest input index among simultaneously ready
+  objects.
 - Port sends support blocking, nonblocking, and absolute-deadline modes. Full
   queues provide backpressure or `WOULD_BLOCK`; they never grow.
 - K7 implements blocking port calls in the NDK by retrying the bounded raw

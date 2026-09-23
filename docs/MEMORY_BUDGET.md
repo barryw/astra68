@@ -195,7 +195,7 @@ The 2026-07-24 K4 handle-synchronization build reports:
 The exact hardware-qualified K4 binary SHA-256 is
 `11c2ed31ca5caf07dcfbd87cf354f6ce7be3eb1873cef412b65a6821940fb91c`.
 K4 adds 3,720 flat-binary bytes and 1,256 BSS bytes over K3. The image leaves
-143,360 bytes in the fixed 512 KiB reservation. The fixed synchronization pool
+143,360 bytes in the fixed 512 KiB reservation. K4's fixed synchronization pool
 accounts for 32 x 36-byte objects (1,152 bytes); the remaining BSS delta is
 bounded pool state and diagnostics. Waiting reuses each thread's existing wait
 link and deadline slot, so no synchronization or timeout path allocates memory.
@@ -348,8 +348,8 @@ The complete BSS delta is accounted as follows:
 Area payload pages are real physical commit rather than static kernel state.
 The development profile caps them at 128 pages system-wide, 64 pages per
 creator, and 16 pages per area. Page tables are charged to the mapping address
-space. Rings allocate no payload storage beyond their owning area and reuse
-the existing fixed wait-registration pool.
+space. At that K8 checkpoint, rings allocated no payload storage beyond their
+owning area and reused the then-fixed wait-registration pool.
 
 The exact flat-binary SHA-256 is
 `ea879e760c48342f535ee9aee65bf1bab97e855c2e576579c2ab80ef615ba55b`.

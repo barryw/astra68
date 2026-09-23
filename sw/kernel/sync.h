@@ -6,8 +6,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define KERNEL_SYNC_OBJECT_MAX 128u
-#define KERNEL_SYNC_OWNER_MAX 32u
+/* UINT16_MAX is reserved as the invalid object/timer slot. */
+#define KERNEL_SYNC_OBJECT_MAX UINT16_MAX
 #define KERNEL_SYNC_REFERENCE_MAX UINT16_MAX
 #define KERNEL_SYNC_SEMAPHORE_COUNT_MAX 0x7fffffffu
 
@@ -52,7 +52,6 @@ typedef enum KernelSyncStatus {
     KERNEL_SYNC_INVALID_ARGUMENT,
     KERNEL_SYNC_INVALID_STATE,
     KERNEL_SYNC_NO_SLOT,
-    KERNEL_SYNC_QUOTA_EXCEEDED,
     KERNEL_SYNC_WAITER_LIMIT,
     KERNEL_SYNC_COUNT_LIMIT,
     KERNEL_SYNC_CORRUPT
@@ -97,7 +96,6 @@ typedef struct KernelSyncPoolStats {
     uint32_t closing_objects;
     uint32_t max_live_objects;
     uint32_t allocation_failures;
-    uint32_t quota_failures;
     uint32_t publication_rollbacks;
     uint32_t wait_calls;
     uint32_t immediate_waits;

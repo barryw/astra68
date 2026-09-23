@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-09-19
+Status: active continuation map, 2026-09-21
 
 This file contains current facts only. Git history holds superseded board,
 processor, benchmark, and milestone records. The platform is **Astra 68**, its
@@ -75,14 +75,88 @@ handles or an already-open `PROC:` node. Physical `ps` output on the current
 release shows the supervisor as PID 1 and subsequent services and applications
 as compact sequential IDs.
 
-The owner ledger is sized from the process, library, and area capacities rather
-than a 64-owner constant. A measured fifth-Terminal failure had 115,809 free
-pages but all 64 old owner slots occupied; the derived 304-entry ledger removes
-that false out-of-memory condition. A second measured ceiling was the port
-pool's reservation of every port's advertised queue capacity. Five owners could
-configure more than the 256-message physical pool even though peak live use was
-only 13 messages. Port configuration is now limited per owner, while the fixed
-global message pool is charged only when messages are actually queued.
+The owner ledger is no longer sized from a process guess. Memory initialization
+allocates one possible owner record per physical frame, so every owner that can
+hold a frame can also be accounted. This removes the measured fifth-Terminal
+failure where 115,809 pages were free but all 64 old owner slots were occupied.
+Ports and messages likewise consume page-backed metadata only when created or
+queued. There is no per-owner port quota or fixed global message pool; queue
+depth is limited by its 16-bit ABI field and available memory.
+
+The current resource-limit audit reproduced the tenth-Terminal failure at the
+VFS bind-area reply: allocation, mapping, duplication, and transport all
+succeeded, but the kernel rejected the server mapping because each address
+space had only 32 fixed 4 MiB shared-area slots. Shared areas now occupy their
+actual page-rounded spans in the 128 MiB architectural window; 40 page-sized
+mappings pass, while exhaustion of the real window fails atomically. The full
+8-bit handle namespace is available, and per-thread wait registrations are
+allocated on first use instead of embedded behind the former 128-entry guess.
+The maximum 255-member wait set and injected-allocation rollback both pass.
+
+The inherited 32-process constant has been deleted. POSIXD, kernel library
+mapping snapshots, PROC, `ps`, startup manifests, Supervisor process/VFS
+bookkeeping, and DMA metadata now grow from runtime memory, preserve prior
+state on allocation failure, and have positive tests above their old limits
+plus negative allocation tests. VFS sessions use the complete 8-bit kernel
+handle namespace rather than a process-derived quota; DMA records grow in
+page-backed leaves through the complete 16-bit DMA-handle namespace. The full
+kernel host suite and MC68040 target build pass. Shared-area mapping metadata
+also grows in page-backed blocks: 1,056 simultaneous mappings pass, exceeding
+the former 1,024-entry table, and injected metadata exhaustion rolls back
+without publishing a mapping or leaking user resources. The obsolete
+`KERNEL_VM_ADDRESS_SPACE_MAX` has been deleted. The audit is not yet closed:
+device registration now grows in kernel-owned metadata pages, exclusive leases
+have no per-owner quota, and positive coverage registers and leases 96 devices
+while injected metadata and lease failures publish no partial state. Ports and
+queued messages likewise grow in page-backed leaves through their complete
+16-bit slot namespaces; one owner passes the former 24-port quota and the old
+128-port global table, while injected port and message metadata failures leave
+all prior queues and authority intact. Synchronization objects and their timer
+heap, rings, and detached handle transfers now also allocate page-backed
+metadata through their complete encoded namespaces. Positive tests exceed the
+former 32-object, 16-ring, and 256-transfer limits; negative allocation tests
+prove failure rolls back without publishing partial authority. The former
+16-message per-port policy and its fake configured-capacity accounting are
+gone; callers may select any queue depth representable by the 16-bit port ABI,
+while actual queued records consume memory only when messages arrive.
+
+The complete kernel host suite, MC68040 target build, NDK suite, and full
+userspace suite pass with these changes. No QEMU or DE25 release attempt has
+been made yet: the source audit is still checking the remaining fixed values
+and separating real hardware, wire-format, and address-map boundaries from
+deployment guesses.
+
+Boot ABI 1.0 removes the independent ten-entry memory-map ceiling. Its 57
+entries are derived from the complete records that fit in the linker-reserved
+1 KiB handoff storage; the full resource-backed capacity validates, while an
+over-count is rejected before any range access.
+
+Startup ABI 7 likewise derives its 43-capability capacity from the complete
+92-byte records that fit beside the 84-byte header in the actual 4 KiB startup
+page. The old independent 32-entry ceiling is gone; tests accept the full page
+capacity and reject one record beyond it.
+
+The ELF acceptance profile no longer rejects a fifth loadable segment. The
+measured compiler output for zsh, vim, Lua, Terminal, and Interface Gallery is
+three `PT_LOAD` records, so four remain inline and allocation-free on the
+current path; additional records spill into kernel metadata pages. A positive
+test accepts and resolves five segments, while an injected first-overflow-page
+failure returns out-of-memory with no partial plan. Executable launch, `exec`,
+streamed loading, library publication, abort, and cache eviction all release
+the overflow metadata. The complete kernel host suite and MC68040 target build
+pass after this removal.
+
+Direct process creation no longer assumes the complete ELF program-header
+table lives in a 1 KiB prefix. It copies the fixed ELF header, then uses the
+existing streaming parser to fetch every 32-byte program header from its
+declared file offset. A header beyond the former window launches successfully;
+an offset into an unmapped user page fails without publishing a process.
+
+The shared fault-safe user-copy primitive no longer rejects spans above 4 KiB.
+Its existing MC68040 loop and fault scope cover the complete validated user
+range; tests pass an 8 KiB span and still reject the same span when it crosses
+the user-address boundary. Individual syscalls continue to validate their own
+destination buffers and protocol lengths.
 
 The five-window physical gate also exposed an independent display-service
 underflow. When an active client's event queue was temporarily backpressured,
@@ -1254,7 +1328,7 @@ stage 8, and left the opt-in remote service inactive until explicitly started.
 
 ## Active dynamic-linking work
 
-The executable/startup ABI is version 5. A streamed process-load transaction
+The executable/startup ABI is version 7. A streamed process-load transaction
 can now validate and map one `ET_EXEC` program plus its supervisor-resolved
 `loader.library.1` interpreter atomically. The child starts at the relocated
 interpreter entry while its startup block preserves the program entry and the
@@ -1279,6 +1353,157 @@ fifteen-entry cache, fixed 16 MiB slots, and 4 MiB VFS staging ceiling are gone.
 The eager process loader uses the same positioned immutable source contract for
 every dependency, so a sparse library consumes pages for its mapped extent
 rather than a second contiguous copy of its file.
+
+Executable source transfers are no longer artificially split into one syscall
+per page. The kernel requests the remaining contiguous file-backed part of a
+segment, each source returns the largest prefix it can lend, and the kernel
+still validates, copies, and publishes that prefix page by page. A shorter
+non-final prefix must be page aligned; zero-length progress and malformed
+partial transfers are rejected. Positive tests cover multi-page requests and
+the VFS bulk-area path, while negative tests cover zero progress and unaligned
+partial replies. On physical DE25 release
+`b2b8ab98fffb7b956e3ebef6f8a146cd7fd1bb198a9df9cc4a69a87bfcd5d812`, five
+zsh launches measured 33,350,048, 16,812,737, 17,101,010, 19,093,552, and
+17,694,696 guest cycles from Terminal's launch event to shell-ready. The warm
+median is 17,397,853 cycles, down 38.5% from the preceding 28,291,172-cycle
+baseline. The warm launch-to-loader-entry median fell from 12,540,509 to
+6,895,199 cycles. Three physical `printf BATCH-OK` checks completed with zero
+block reads and a 152.646 ms median visible completion time.
+
+The executable publisher now copies each page directly from the validated user
+source into its newly allocated destination frame instead of bouncing it
+through the kernel scratch page. A negative process test supplies an invalid
+user address and proves both `BAD_ADDRESS` and complete frame rollback; the
+existing positive multi-page test verifies the published bytes. Generated
+MC68040 code calls `kernel_copy_from_user` directly on the destination frame.
+On physical DE25 release
+`225bbf6ecd874c2172196e81387fdab70742c3029f509850ce065068fad09c5b`, three
+cold boots supplied ten warm zsh launches with a 17,188,700-cycle aggregate
+median. That is a repeatable 1.2% end-to-end improvement over the batched-copy
+release, while the launch-to-loader-entry phase improved 4.0%, from 6,895,199
+to 6,620,005 cycles.
+
+Shared-library segment transfers now use that same batched contract instead of
+one load-write syscall per 4 KiB page. The kernel requests the remaining
+contiguous file-backed segment, accepts page-aligned prefixes from smaller
+sources, and copies each supplied page directly into its cache frame. Tests
+prove multi-page progress and valid publication, reject unaligned prefixes and
+bad userspace addresses, and verify that rejected header and segment copies
+leak no frames. Three controlled physical boots of candidate release
+`0a0dadf871759671553c7df86f1f1d4201e22cb13ac15dc41d858bc41b1d6ca6`
+measured a 27,020,544-cycle cold zsh median, 17.1% below the preceding
+32,608,877-cycle baseline. Twelve equivalent warm launches measured a
+17,023,010-cycle median, 1.0% below the 17,188,700-cycle baseline. Corrected
+release `db67d323dd12f4a6cf6d9fee5e9968f90633abf5eaecd19ab75ecffe7571f559`
+is selected and byte-verified on the DE25 with `astra.service` active and zero
+restarts; its final one-cold/four-warm check measured 26,702,800 cold cycles and
+a 16,994,464.5-cycle warm median.
+
+Inactive applications are not consuming the recovered launch time. Two
+physical `ps` snapshots 15 seconds apart with five Terminal/zsh pairs showed
+each inactive zsh advancing by less than the 10 ms reporting resolution and
+each inactive Terminal by no more than 10 ms. The active Terminal advanced by
+70 ms while rendering both snapshots, as expected.
+
+The PC sampler now records D0 and A7, can read a selected user-stack word only
+at an exact PC, and retains the existing MMU-root and executable-signature
+checks so samples cannot be attributed to the wrong process. Positive parser,
+register, stack-read, and exact-PC tests pass, as do negative malformed-register
+and absent-mapping tests. A physical launch profile places the remaining warm
+time in two broad regions: about 6.87 million cycles before the dynamic loader
+enters and about 8.93 million cycles from program handoff to the ready shell.
+The post-entry loader stages are individually small; startup allocation,
+syscall, scheduling, and page materialization are the remaining shared costs.
+
+The next shared-path profile identified storage's ext4 block-cache semaphore
+as the largest syscall source during zsh launch: 19,556 lock waits and 19,556
+signals across five launches. Storage and hostfs now use the existing
+userspace-fast-path Astra mutex for VFS and ext4 locks; the journal timer
+remains a semaphore. The VFS state-wait callback now receives the mutex word it
+actually expects instead of a semaphore handle. MC68040 globals and the VFS,
+allocator, and POSIX futex-bearing types require four-byte alignment: an
+initial physical run caught a contended storage lock at `0x0063bb5a` failing
+with `INVALID_ARGUMENT`, and a subsequent guarded run exposed the overlooked
+host-direct VFS client lock. The public mutex rejects misaligned addresses
+immediately. Positive lock/wait and two-thread contention tests, negative
+misalignment and callback-wiring tests, target layout checks, the complete
+userspace suite, and a final five-launch DE25 capture pass. Syscall probes
+measured `WAIT_ONE` falling from 23,696 to 1,021 and `SIGNAL` from 22,922 to
+253 per five launches; guest instructions fell from 28,727,948 to 18,928,224
+per launch. The final five-launch DE25 capture measured a 732.597 ms profiler
+interval median and a 686.963 ms command-completion median for `zsh -fc exit`.
+This is a shared ext4/VFS change, not a zsh patch.
+
+`tools/astra-prof` replaces manual QMP sampling for whole-system hotspot work.
+One command builds the pinned DE25 profiling QEMU, runs an isolated physical
+capture, records exact MC68040 translated-block and optional memory-access
+counts, samples Cortex-A76 cycles with Linux perf, dumps the Axiom trace ring,
+restores the production services, and symbolizes the kernel, ROM, and matching
+userspace debug ELFs. `de25-command` opens Terminal through the desktop, uses
+the real OSC-133 shell-ready event for exact controlled interval boundaries,
+performs requested warmups/repetitions, and optionally runs a caller-supplied
+cleanup command. It also
+compares repeated captures and emits source-interleaved MC68040 disassembly.
+The retained physical gate captured 131,662,389 guest instructions, 2,000+
+host cycle samples with zero losses, and 81 trace events with zero wraps or
+drops. Replacing the plugin's execution callback with QEMU's inline per-vCPU
+counter removed a measured 17.11% profiler hotspot; the retained plugin
+translation work is 0.13% of host samples. An earlier mixed-artifact attempt
+paired the current ROM with an older production storage image and degraded in
+the storage service. The tool now requires a coherent ROM/kernel/storage/ELF
+set, and its default path builds all four together. The retained coherent
+physical gate reached stage 8 with every service at status 0 and captured
+516,027,520 guest instructions, 14,173 host samples, and the complete trace.
+Production `astra.service` and remote desktop were restored active with zero
+restarts after every capture.
+Host `perf` capture now requests a clean QMP exit and waits for its recorder to
+flush before reading the data file; an empty report is rejected rather than
+treated as a successful profile. The corrected physical capture returned
+21,000+ cycle samples with zero losses. Its largest named QEMU host symbols
+were translation-block hash lookup (4.08%) and lookup helper (3.26%); the
+profiling counter itself accounted for 3.50%. These samples cover the whole
+boot, not only the command intervals, so they are not a basis for claiming a
+command-specific host hotspot.
+
+The first exact targeted profile also paid for itself. Five current-image zsh
+launches had a 79,722,189-instruction median and showed 38,485,713 aggregate
+instructions in the storage executable's byte tail of `memcpy`: multi-megabyte
+filesystem transfers had source and destination pointers with different
+alignment phases. The MC68040 primitive now aligns the destination and uses
+the processor's unaligned longword support for the bulk. Generated target code
+contains the longword loop for this path; exhaustive source/destination-offset,
+length, and guard-byte tests pass. Three independent candidate boots measured
+70,844,943, 70,908,116, and 70,745,751 median instructions, a 0.23% candidate
+spread and an 11.1% reduction against the matched baseline. The matched first
+boot's profiler-observed interval fell 8.22%, while visible median completion
+fell from 2707.353 to 2523.117 ms; host elapsed time is secondary evidence
+because profiling deliberately changes execution speed.
+
+Stage timing then proved that rebuilding the coherent 128 MiB filesystem cost
+107.4 seconds. The profiler now caches it by SHA-256 over every published build
+input and the image recipe. A subsequent unchanged physical capture hit cache
+identity `46fd49e7ab91`, eliminating that entire step while retaining the
+current-build and artifact-coherence checks. A transient display queue during
+the third boot also exposed and fixed a profiler settle bug: it now waits for
+submitted work to complete instead of rejecting a temporarily busy queue, with
+positive drained and negative pending regression tests.
+
+QEMU exception logging provides an independent materialization count. After a
+10-second post-boot settle, three unchanged launches each produced exactly 98
+access faults; the idle control produced none. The allocator formerly threaded
+every future block into a free list when it created a run, touching pages before
+an allocation needed them. Release
+`b0161bcd40c04b87b640cd0c5ef11e7c55e2371ea8d9feec047d9ec37d3099b2`
+hands out untouched blocks incrementally and keeps the free list only for
+returned blocks. The same settled physical launch now produces 85 faults.
+Focused tests prove both untouched sequential allocation and reuse of a freed
+block; the full runtime suite, generated MC68040-code inspection, immutable
+publisher, installed-release verification, and a physical `heapbench` run pass.
+Equivalent repeated warm sequences measured 17,426,464 and 17,399,895-cycle
+medians, a noise-level 0.15% difference, so no end-to-end warm-speed claim is
+made. Four cold candidate launches measured a 27,161,305.5-cycle median, also
+within the established cold-start variance. The retained gains are the exact
+13-fault reduction and avoiding commitment of unused run pages.
 
 Library publication is now a reversible map/relocate/commit transaction.
 Aborting before commit unmaps every segment and reclaims idle cache pages.
@@ -1343,6 +1568,11 @@ prepared-image zsh boot passed, and a current-ROM QEMU fault injection with
 `/startup/system` removed reported the supervisor failure and remained alive.
 The MC68040 kernel host suite and `all verify` pass; the current kernel payload
 is 186,352 bytes.
+
+The supervisor now returns its existing block-lease failure status when no
+usable block capability is granted instead of silently yielding forever.
+The kernel's degraded-boot path remains the owner of the failure display;
+normal manifest and desktop startup do not proceed without the system volume.
 
 The current simplification audit has removed the coupled fixed global process
 and thread pools. Process records, handle tables, executable-load records,

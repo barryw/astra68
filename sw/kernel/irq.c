@@ -210,18 +210,6 @@ static uint32_t endpoint_live_count(void)
     return count;
 }
 
-static uint32_t owner_endpoint_count(uint32_t owner)
-{
-    uint32_t count = 0u;
-
-    for (uint32_t slot = 0u; slot < KERNEL_IRQ_ENDPOINT_MAX; ++slot) {
-        if (endpoints[slot].state != KERNEL_IRQ_FREE &&
-            endpoints[slot].owner == owner)
-            ++count;
-    }
-    return count;
-}
-
 static inline __attribute__((always_inline)) bool
 controller_mask(uint8_t source)
 {
@@ -484,10 +472,6 @@ KernelIrqStatus kernel_irq_bind(uint32_t owner,
     if (route_in_use(binding->source)) {
         astra_u32_increment_saturating(&pool_stats.source_busy_failures);
         return KERNEL_IRQ_SOURCE_BUSY;
-    }
-    if (owner_endpoint_count(owner) >= KERNEL_IRQ_OWNER_MAX) {
-        astra_u32_increment_saturating(&pool_stats.quota_failures);
-        return KERNEL_IRQ_QUOTA_EXCEEDED;
     }
     cache_status = kernel_object_cache_claim(
         &endpoint_cache, owner, &raw_endpoint, &slot);
