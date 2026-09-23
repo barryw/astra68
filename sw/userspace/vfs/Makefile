@@ -43,6 +43,7 @@ HEADERS := include/astra/vfs_service_core.h include/astra/vfs_backend.h \
 	$(NDK)/include/astra/vfs_process.h include/astra/vfs_reader.h \
 	include/astra/vfs_host_backend.h include/astra/vfs_host_transport.h \
 	include/astra/vfs_host_direct.h \
+	include/astra/vfs_ram_backend.h \
 	include/astra/vfs_provider_index.h \
 	../../include/astra/vfs_service.h \
 	../../include/astra/syscall.h
@@ -55,7 +56,7 @@ TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/filesystem_library.o \
 	build/m68k/vfs_assign.o build/m68k/vfs_path.o \
 	build/m68k/vfs_local_transport.o build/m68k/vfs_port_transport.o \
-	build/m68k/vfs_ext4_backend.o build/m68k/vfs_host_backend.o \
+	build/m68k/backends/ext4.o build/m68k/backends/host.o \
 	build/m68k/vfs_host_transport.o \
 	build/m68k/vfs_host_direct.o \
 	build/m68k/vfs_union.o \
@@ -65,17 +66,18 @@ TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/vfs_status.o
 SERVICE_OBJECTS := build/m68k/library/vfs_service_core.o \
 	build/m68k/library/vfs_port_transport.o \
-	build/m68k/library/vfs_host_backend.o \
+	build/m68k/library/backends/host.o \
 	build/m68k/library/vfs_host_transport.o \
 	build/m68k/library/vfs_host_direct.o
 LOADER_PIC_TARGET := build/m68k/libastravfs-loader-pic.a
 LOADER_PIC_SOURCES := vfs_service_core vfs_client vfs_assign vfs_path vfs_local_transport \
 	vfs_port_transport vfs_host_transport vfs_host_direct vfs_union \
-	vfs_host_backend vfs_process vfs_reader vfs_provider_index vfs_status
+	vfs_process vfs_reader vfs_provider_index vfs_status
 LOADER_PIC_OBJECTS := $(patsubst %,build/m68k/loader/%.o,$(LOADER_PIC_SOURCES)) \
+	build/m68k/loader/backends/host.o \
 	build/m68k/loader/ndk_manifest.o build/m68k/loader/ndk_bundle.o \
 	build/m68k/loader/ndk_utf8.o
-FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library.3
+FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library.4
 FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/filesystem_library_identity.o \
 	build/m68k/library/filesystem_library.o \
@@ -85,7 +87,7 @@ FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/vfs_port_transport.o \
 	build/m68k/library/vfs_host_transport.o \
 	build/m68k/library/vfs_host_direct.o \
-	build/m68k/library/vfs_host_backend.o \
+	build/m68k/library/backends/host.o \
 	build/m68k/library/vfs_process.o \
 	build/m68k/library/process_filesystem.o \
 	build/m68k/library/vfs_reader.o \
@@ -107,6 +109,8 @@ loader-pic: $(LOADER_PIC_TARGET)
 
 service: $(SERVICE_TARGET)
 
+ram-backend: build/m68k/library/backends/ram.o
+
 $(TARGET): $(TARGET_OBJECTS)
 	$(ASTRA_REPLACE_ARCHIVE)
 
@@ -121,12 +125,21 @@ build/m68k/loader/%.o: src/%.c $(HEADERS)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
 
+build/m68k/loader/backends/host.o: src/backends/host.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
 build/m68k/loader/ndk_%.o: $(NDK)/src/%.c
 	@mkdir -p $(@D)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
 
 build/m68k/%.o: src/%.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+build/m68k/backends/host.o: src/backends/host.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
 
@@ -175,6 +188,16 @@ build/m68k/library/%.o: src/%.c $(HEADERS) \
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
 
+build/m68k/library/backends/host.o: src/backends/host.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
+build/m68k/library/backends/ram.o: src/backends/ram.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
 build/m68k/library/ndk_%.o: $(NDK)/src/%.c
 	@mkdir -p $(@D)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
@@ -190,7 +213,7 @@ $(FILESYSTEM_LIBRARY): $(FILESYSTEM_LIBRARY_OBJECTS) \
 		| libraries-ready
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,filesystem.library.3 \
+		-Wl,-soname,filesystem.library.4 \
 		-Wl,--version-script=$(FILESYSTEM_LIBRARY_MAP) -o $@ \
 		$(FILESYSTEM_LIBRARY_OBJECTS) \
 		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
@@ -212,9 +235,9 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 		include/astra/vfs_reader.h include/astra/vfs_port_transport.h \
 		../../include/astra/vfs_service.h
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
-		grep -q '^filesystem.library.3 3.0.0 ABI 3.0$$'
+		grep -q '^filesystem.library.4 4.0.0 ABI 4.0$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
-	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.3]' >/dev/null
+	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.4]' >/dev/null
 	@test "$$($(READELF) -dW $< | \
 		grep -Fc 'Shared library: [system.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | \
@@ -228,7 +251,7 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 	@echo "astra filesystem shared library: PASS"
 
 # The one translation unit that is allowed to know what lwext4 is.
-build/m68k/vfs_ext4_backend.o: src/vfs_ext4_backend.c $(HEADERS)
+build/m68k/backends/ext4.o: src/backends/ext4.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) \
 		$(DEPFLAGS) -c $< -o $@
@@ -290,6 +313,7 @@ PROCESS_TEST := build/host/test_vfs_process
 READER_TEST := build/host/test_vfs_reader
 FILESYSTEM_LIBRARY_TEST := build/host/test_filesystem_library
 HOST_BACKEND_TEST := build/host/test_vfs_host_backend
+RAM_BACKEND_TEST := build/host/test_vfs_ram_backend
 HOST_TRANSPORT_TEST := build/host/test_vfs_host_transport
 
 $(PATH_TEST): src/vfs_path.c $(UTF8_OBJECT) tests/test_vfs_path.c $(HEADERS)
@@ -298,12 +322,13 @@ $(PATH_TEST): src/vfs_path.c $(UTF8_OBJECT) tests/test_vfs_path.c $(HEADERS)
 		src/vfs_path.c $(UTF8_OBJECT) tests/test_vfs_path.c -o $@
 
 $(PROCESS_TEST): src/vfs_process.c src/process_filesystem.c \
-		src/vfs_provider_index.c \
+		src/vfs_provider_index.c src/vfs_path.c $(UTF8_OBJECT) \
 		tests/test_vfs_process.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		-DASTRA_VFS_PROCESS_TEST -ffunction-sections -Wl,--gc-sections \
 		src/vfs_process.c src/process_filesystem.c src/vfs_provider_index.c \
+		src/vfs_path.c $(UTF8_OBJECT) \
 		tests/test_vfs_process.c -o $@
 
 $(READER_TEST): src/vfs_reader.c src/vfs_provider_index.c \
@@ -323,11 +348,17 @@ $(FILESYSTEM_LIBRARY_TEST): src/filesystem_library.c src/vfs_union.c \
 		src/filesystem_library.c src/vfs_union.c src/vfs_assign.c \
 		src/vfs_path.c $(UTF8_OBJECT) tests/test_filesystem_library.c -o $@
 
-$(HOST_BACKEND_TEST): src/vfs_host_backend.c \
+$(HOST_BACKEND_TEST): src/backends/host.c \
 		tests/test_vfs_host_backend.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		src/vfs_host_backend.c tests/test_vfs_host_backend.c -o $@
+		src/backends/host.c tests/test_vfs_host_backend.c -o $@
+
+$(RAM_BACKEND_TEST): src/backends/ram.c \
+		tests/test_vfs_ram_backend.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/backends/ram.c tests/test_vfs_ram_backend.c -o $@
 
 $(HOST_TRANSPORT_TEST): src/vfs_host_transport.c \
 		tests/test_vfs_host_transport.c $(HEADERS)
@@ -339,7 +370,7 @@ $(HOST_TRANSPORT_TEST): src/vfs_host_transport.c \
 test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 		$(PORT_THREAD_TEST) \
 		$(PROCESS_TEST) $(READER_TEST) $(FILESYSTEM_LIBRARY_TEST) \
-		$(HOST_BACKEND_TEST) $(HOST_TRANSPORT_TEST)
+		$(HOST_BACKEND_TEST) $(RAM_BACKEND_TEST) $(HOST_TRANSPORT_TEST)
 	./$(HOST_TEST)
 	./$(ASSIGN_TEST)
 	./$(UNION_TEST)
@@ -350,6 +381,7 @@ test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 	./$(READER_TEST)
 	./$(FILESYSTEM_LIBRARY_TEST)
 	./$(HOST_BACKEND_TEST)
+	./$(RAM_BACKEND_TEST)
 	./$(HOST_TRANSPORT_TEST)
 
 # The path parser is nothing but bounds arithmetic over caller buffers, so it
@@ -396,10 +428,15 @@ sanitize:
 		-o build/host/test_filesystem_library_sanitize
 	./build/host/test_filesystem_library_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		$(SANITIZER_FLAGS) src/vfs_host_backend.c \
+		$(SANITIZER_FLAGS) src/backends/host.c \
 		tests/test_vfs_host_backend.c \
 		-o build/host/test_vfs_host_backend_sanitize
 	./build/host/test_vfs_host_backend_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/backends/ram.c \
+		tests/test_vfs_ram_backend.c \
+		-o build/host/test_vfs_ram_backend_sanitize
+	./build/host/test_vfs_ram_backend_sanitize
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -fno-pie -no-pie src/vfs_host_transport.c \
 		tests/test_vfs_host_transport.c \
@@ -450,19 +487,23 @@ analyze:
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/vfs_status.c -o build/analyzer/vfs_status.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		-fanalyzer -c src/vfs_ext4_backend.c \
+		-fanalyzer -c src/backends/ext4.c \
 		-o build/analyzer/vfs_ext4_backend.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
-		-c src/vfs_host_backend.c -o build/analyzer/vfs_host_backend.o
+		-c src/backends/host.c -o build/analyzer/vfs_host_backend.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/backends/ram.c -o build/analyzer/vfs_ram_backend.o
 	$(ANALYZER_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/filesystem_library.c -o build/analyzer/filesystem_library.o
 
 # Header dependencies: a stale object compiled against an older ABI
 # constant is indistinguishable from a working one until it runs.
--include $(wildcard build/m68k/*.d build/m68k/*/*.d)
+-include $(TARGET_OBJECTS:.o=.d) $(SERVICE_OBJECTS:.o=.d) \
+	$(LOADER_PIC_OBJECTS:.o=.d) $(FILESYSTEM_LIBRARY_OBJECTS:.o=.d) \
+	build/m68k/library/backends/ram.d
 
 clean:
 	rm -rf build
 
-.PHONY: all library service loader-pic test sanitize tsan analyze \
+.PHONY: all library service ram-backend loader-pic test sanitize tsan analyze \
 	library-contract clean libraries-ready

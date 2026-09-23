@@ -14,16 +14,17 @@ with open(os.path.join(astra_image.REPOSITORY,
           encoding="ascii") as manifest:
     terminal_manifest = manifest.read()
     assert "capability HOME:rw\n" in terminal_manifest
+    assert "capability RAM:rw\n" in terminal_manifest
     assert "capability APP_LAUNCH\n" in terminal_manifest
     assert "capability ENTROPY\n" in terminal_manifest
 assert astra_image.HOSTBENCH_SERVICES == \
     astra_image.DISPLAY_SERVICES + ("hostbench",)
 assert astra_image.HOSTBENCH_STARTUP_MANIFEST == \
     astra_image.DISPLAY_STARTUP_MANIFEST + \
-    "application SERVICES:hostbench grants HOST_DEVICE\n"
+    "application /services/hostbench grants HOST_DEVICE\n"
 assert astra_image.INTERFACE_GALLERY_STARTUP_MANIFEST == \
     astra_image.DISPLAY_STARTUP_MANIFEST + \
-    "application APPS:InterfaceGallery.app grants GUI CLIPBOARD LIBS:r\n"
+    "application /apps/InterfaceGallery.app grants GUI CLIPBOARD LIBS:r\n"
 assert not any(line.startswith("application ") and line.endswith(" required")
                for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines())
 assert astra_image.APPLICATION_BUNDLES == \
@@ -45,6 +46,15 @@ with open(os.path.join(astra_image.REPOSITORY,
 assert "commands/zsh/zshrc" in astra_image.CONFIGURATION
 assert "commands/zsh/motd" in astra_image.CONFIGURATION
 assert "remote-desktop" in astra_image.DISPLAY_SERVICES
+assert "ramfs" in astra_image.DISPLAY_SERVICES
+ram_service = astra_image.CONFIGURATION["services/ramfs/service.conf"]
+for required in ("runs astra\n", "start boot\n", "provides RAM:rw\n",
+                 "grant CONFIG:r\n", "needs SYSTEM\n",
+                 'argument "/services/ramfs"\n'):
+    assert required in ram_service
+assert "runs paired\n" not in ram_service
+assert "max_bytes 67108864\n" in astra_image.CONFIGURATION[
+    "services/ramfs/settings.conf"]
 assert "entropy" in astra_image.DISPLAY_SERVICES
 remote_service = astra_image.CONFIGURATION[
     "services/remote-desktop/service.conf"]
@@ -63,6 +73,16 @@ for test_command in ("posix", "hello", "cxx"):
     assert " " + test_command + " " not in \
         " " + " ".join(shipped_commands.split()) + " "
 assert "TEST_COMMANDS := posix hello cxx" in commands_make
+assert "--enable-etcdir=/config" in commands_make
+assert "--enable-etcdir=CONFIG:" not in commands_make
+assert "$(ZSH_BUILD_CONFIG): Makefile $(ZSH_CONFIG_SITE)" in commands_make
+with open(os.path.join(astra_image.REPOSITORY,
+                       "sw/userspace/services/terminal/console_session.c"),
+          encoding="ascii") as session:
+    launcher = session.read()
+    assert '"/libs/vim/runtime"' in launcher
+    assert '"/local/commands:/commands"' in launcher
+    assert '"LIBS:vim/runtime"' not in launcher
 
 with tempfile.TemporaryDirectory() as directory:
     try:
@@ -87,21 +107,26 @@ try:
 except RuntimeError as error:
     assert "provider index path is too long" in str(error)
 zshrc = astra_image.CONFIGURATION["commands/zsh/zshrc"]
-assert "HOME:/.motd.zsh" in zshrc
-assert "CONFIG:motd.zsh" in zshrc
-assert zshrc.index("HOME:/.motd.zsh") < zshrc.index("elif [[ -r HOME:/.motd ]]")
-assert zshrc.index("CONFIG:motd.zsh") < zshrc.index("elif [[ -r CONFIG:motd ]]")
-assert "$(<HOME:/.motd)" in zshrc and "$(<CONFIG:motd)" in zshrc
+assert "/home/.motd.zsh" in zshrc
+assert "/config/motd.zsh" in zshrc
+assert zshrc.index("/home/.motd.zsh") < zshrc.index("elif [[ -r /home/.motd ]]")
+assert zshrc.index("/config/motd.zsh") < zshrc.index("elif [[ -r /config/motd ]]")
+assert "$(</home/.motd)" in zshrc and "$(</config/motd)" in zshrc
+assert "HOME:/.motd" not in zshrc and "CONFIG:motd" not in zshrc
 assert "\\e]133;A" in zshrc and "\\e]133;B" in zshrc
 startup = astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
-assert startup[0].startswith("service SERVICES:storage ")
+desktop_startup = next(line for line in startup
+                       if line.startswith("application /services/desktop "))
+assert " grants GUI APP_LAUNCH APPS:r LIBS:r " in desktop_startup
+assert "/apps/r" not in desktop_startup
+assert startup[0].startswith("service /services/storage ")
 assert startup[1] == \
-    "service SERVICES:posixd grants serves POSIX_PROCESS required"
+    "service /services/posixd grants serves POSIX_PROCESS required"
 assert startup[2] == \
-    "service SERVICES:hostfs grants HOST_DEVICE " \
+    "service /services/hostfs grants HOST_DEVICE " \
     "serves WORK:rw METRICS:r required"
 assert startup[3] == \
-    "service SERVICES:entropy grants HOST_DEVICE serves ENTROPY required"
+    "service /services/entropy grants HOST_DEVICE serves ENTROPY required"
 
 
 class Result:

@@ -63,6 +63,7 @@ FS_UNLINK_AT = 17
 FS_CHMOD_FILE = 18
 FS_CHMOD_AT = 19
 FS_FILESYSTEM_INFO = 20
+FS_STAT_FILE = 22
 SERVICE_METRICS = 2
 METRICS_SNAPSHOT = 1
 SERVICE_ENTROPY = 4
@@ -222,7 +223,7 @@ def configure_channel(qtest, generation, operation, slot=3, owner=0x1001,
 
 def run(qtest, root, outside):
     qtest.detect_endian()
-    assert qtest.read32(HACC_VERSION) == 0x00010009
+    assert qtest.read32(HACC_VERSION) == 0x0001000A
     assert qtest.read32(HACC_CAPS) == 255
     assert qtest.read32(HACC_STATE) == 1
     assert qtest.read32(HACC_MAX_TRANSFER) == 2 * 1024 * 1024
@@ -240,7 +241,7 @@ def run(qtest, root, outside):
     snapshot = qtest.read(BUFFER + COMMAND_SIZE, metrics_size)
     size, version, count = struct.unpack_from(">IHH", snapshot, 0)
     assert size == metrics_size
-    assert version == 1
+    assert version == 2
     assert count == (metrics_size - 16) // 8
     assert count > METRIC_HOST_COMMANDS
     assert get64(snapshot, 16) != 0
@@ -488,6 +489,15 @@ def run(qtest, root, outside):
     assert status(opened) == STATUS_OK
     handle = get32(opened, 16)
     assert handle != 0
+    opened_stat = execute(qtest, [make_command(
+        generation, FS_STAT_FILE, handle=handle)])[0]
+    assert status(opened_stat) == STATUS_OK
+    actual_mode = struct.unpack_from(">H", opened_stat, 90)[0]
+    assert actual_mode & 0o7777 == 0o600, oct(actual_mode)
+    assert actual_mode & 0o170000 == 0o100000, oct(actual_mode)
+    missing_stat = execute(qtest, [make_command(
+        generation, FS_STAT_FILE, handle=0xFFFFFFFF)])[0]
+    assert status(missing_stat) == STATUS_BAD_HANDLE
 
     reopened = execute(qtest, [make_command(
         generation, FS_OPEN, "/data", flags=OPEN_READ, value=0o600)])[0]

@@ -475,6 +475,7 @@ astra_vfs_service_init(AstraVfsService *service, const AstraVfsBackendOps *ops,
         ops->open_at == NULL || ops->unlink_at == NULL ||
         ops->chmod_node == NULL || ops->chmod_at == NULL ||
         ops->filesystem_info == NULL || ops->stat_at == NULL ||
+        ops->stat_node == NULL ||
         sessions == NULL ||
         session_capacity == 0u ||
         session_capacity > ASTRA_VFS_SESSION_MAX || files == NULL ||
@@ -1313,6 +1314,31 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
             reply->status = service->backend.ops->stat_at(
                 service->backend.context, file->node,
                 (const char *)request->body.path, &info);
+            (void)state_acquire(service);
+            file_release(service, file);
+            if (reply->status == ASTRA_VFS_OK)
+                node_info_publish(reply, &info);
+        }
+        break;
+    }
+    case ASTRA_VFS_OP_STAT_FILE: {
+        AstraVfsNodeInfo info;
+
+        if (slot->version < UINT16_C(26) || request->flags != 0u) {
+            reply->status = slot->version < UINT16_C(26) ?
+                ASTRA_VFS_ERR_UNSUPPORTED : ASTRA_VFS_ERR_INVALID;
+            break;
+        }
+        file = find_file(service, slot->id, request->file, &status);
+        if (file == NULL)
+            reply->status = status;
+        else if (!file_acquire(service, file))
+            reply->status = ASTRA_VFS_ERR_IO;
+        else {
+            node_info_clear(&info);
+            state_release(service);
+            reply->status = service->backend.ops->stat_node(
+                service->backend.context, file->node, &info);
             (void)state_acquire(service);
             file_release(service, file);
             if (reply->status == ASTRA_VFS_OK)

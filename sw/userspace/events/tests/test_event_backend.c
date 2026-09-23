@@ -150,6 +150,8 @@ static void test_a_leaf_renders_its_events(void)
         assert(ops->open(&backend, "/boot/current/all", ASTRA_VFS_OPEN_READ,
                          ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
                ASTRA_VFS_OK);
+        assert(ops->stat_node(&backend, node, &info) == ASTRA_VFS_OK);
+        assert(info.kind == ASTRA_VFS_KIND_FILE && info.mode == 0400u);
         assert(ops->read(&backend, node, 0u, first, sizeof(first), &moved) ==
                ASTRA_VFS_OK);
         assert(moved == sizeof(first));
@@ -159,6 +161,7 @@ static void test_a_leaf_renders_its_events(void)
         assert(moved == sizeof(second));
         assert(memcmp(second, &text[sizeof(first)], sizeof(second)) == 0);
         assert(ops->close(&backend, node) == ASTRA_VFS_OK);
+        assert(ops->stat_node(&backend, node, &info) == ASTRA_VFS_ERR_INVALID);
     }
 }
 
@@ -353,6 +356,25 @@ static void test_the_tree_lists_itself(void)
         ++entries;
     }
     assert(entries == 1u);
+
+    /* File-handle enumeration must use the opened directory, not "/". */
+    {
+        uintptr_t directory = 0u;
+
+        assert(ops->open(&backend, "/boot/current", ASTRA_VFS_OPEN_READ |
+                         ASTRA_VFS_OPEN_DIRECTORY, ASTRA_VFS_MODE_DEFAULT,
+                         &directory, &info) == ASTRA_VFS_OK);
+        assert(ops->readdir(&backend, directory, "", 0u, name,
+                            sizeof(name), &info, &cookie) == ASTRA_VFS_OK);
+        assert(strcmp(name, "all") == 0);
+        assert(ops->readdir(&backend, directory, "child", 0u, name,
+                            sizeof(name), &info, &cookie) ==
+               ASTRA_VFS_ERR_UNSUPPORTED);
+        assert(ops->close(&backend, directory) == ASTRA_VFS_OK);
+        assert(ops->readdir(&backend, directory, "", 0u, name,
+                            sizeof(name), &info, &cookie) ==
+               ASTRA_VFS_ERR_BAD_HANDLE);
+    }
 }
 
 static void test_the_previous_boot_is_real_or_absent(void)

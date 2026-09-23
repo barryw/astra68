@@ -49,12 +49,12 @@ int main(void)
     uint64_t offset = UINT64_MAX;
 
     memset(subsystem, 's', sizeof(subsystem));
-    subsystem[167] = '\0';
+    subsystem[166] = '\0';
     assert(events_build_path(path, sizeof(path), 0, NULL, subsystem,
                              "notice", 0));
     assert(strlen(path) == sizeof(path) - 1u);
-    subsystem[167] = 's';
-    subsystem[168] = '\0';
+    subsystem[166] = 's';
+    subsystem[167] = '\0';
     assert(!events_build_path(path, sizeof(path), 0, NULL, subsystem,
                               "notice", 0));
 

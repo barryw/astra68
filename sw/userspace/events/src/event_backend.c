@@ -445,6 +445,17 @@ is_directory(uint8_t kind)
            kind == KIND_SUBSYSTEM_DIR || kind == KIND_SUBSYSTEM_ONE;
 }
 
+static void
+events_node_info(uint8_t kind, AstraVfsNodeInfo *info)
+{
+    int directory = is_directory(kind);
+
+    info->size = 0u;
+    info->kind = directory ? ASTRA_VFS_KIND_DIRECTORY : ASTRA_VFS_KIND_FILE;
+    info->mode = directory ? 0500u : 0400u;
+    info->nlink = directory ? 2u : 1u;
+}
+
 /* ------------------------------------------------------------------- verbs */
 
 static uint32_t
@@ -481,9 +492,7 @@ events_open(void *context, const char *path, uint32_t flags,
      * contract was written to allow, and a reader that trusts a size here
      * would be trusting a number that was true a moment ago.
      */
-    info->size = 0u;
-    info->kind = is_directory(held->kind) ? ASTRA_VFS_KIND_DIRECTORY :
-        ASTRA_VFS_KIND_FILE;
+    events_node_info(held->kind, info);
     return ASTRA_VFS_OK;
 }
 
@@ -619,9 +628,18 @@ events_stat(void *context, const char *path, AstraVfsNodeInfo *info)
     if (status != ASTRA_VFS_OK) {
         return status;
     }
-    info->size = 0u;
-    info->kind = is_directory(described.kind) ? ASTRA_VFS_KIND_DIRECTORY :
-        ASTRA_VFS_KIND_FILE;
+    events_node_info(described.kind, info);
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t
+events_stat_node(void *context, uintptr_t token, AstraVfsNodeInfo *info)
+{
+    AstraEventsNode *node = resolve_token(backend_of(context), token);
+
+    if (node == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    events_node_info(node->kind, info);
     return ASTRA_VFS_OK;
 }
 
@@ -705,11 +723,20 @@ events_readdir(void *context, uintptr_t directory, const char *path,
     const char *entry = NULL;
     uint32_t status;
 
-    (void)directory;
+    if (path == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    if (directory != 0u) {
+        const AstraEventsNode *opened = resolve_token(backend, directory);
 
-    status = describe(backend, &described, path);
-    if (status != ASTRA_VFS_OK) {
-        return status;
+        if (opened == NULL)
+            return ASTRA_VFS_ERR_BAD_HANDLE;
+        if (path[0] != '\0')
+            return ASTRA_VFS_ERR_UNSUPPORTED;
+        described = *opened;
+    } else {
+        status = describe(backend, &described, path);
+        if (status != ASTRA_VFS_OK)
+            return status;
     }
     if (!is_directory(described.kind)) {
         return ASTRA_VFS_ERR_INVALID;
@@ -789,6 +816,7 @@ static const AstraVfsBackendOps events_ops = {
     .chmod_at = astra_vfs_backend_no_chmod_at,
     .filesystem_info = astra_vfs_backend_no_filesystem_info,
     .stat_at = astra_vfs_backend_no_stat_at,
+    .stat_node = events_stat_node,
 };
 
 int

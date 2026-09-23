@@ -483,25 +483,6 @@ int astra_render_builder_fill(AstraRenderBuilder *builder,
                         INT16_MIN, INT16_MIN, INT16_MAX, INT16_MAX);
 }
 
-static int circle(AstraRenderBuilder *builder, uint32_t destination,
-                  int32_t center_x, int32_t center_y, uint16_t radius,
-                  int32_t left, int32_t top, int32_t right, int32_t bottom,
-                  uint16_t color)
-{
-    uint8_t *record;
-
-    if (!command(builder, ASTRA_RENDER_OP_CIRCLE,
-                 ASTRA_RENDER_GEOMETRY_FLAG_FILLED, destination,
-                 left, top, right, bottom, &record))
-        return 0;
-    if (record == NULL)
-        return 1;
-    astra_store_be32(record + 44u, pair_s16(center_x, center_y));
-    astra_store_be32(record + 52u, pair_u16(radius, 0u));
-    astra_store_be32(record + 60u, color);
-    return 1;
-}
-
 static int builder_rounded(AstraRenderBuilder *builder, uint32_t destination,
                            int32_t x, int32_t y, uint32_t width,
                            uint32_t height, uint16_t radius, uint16_t color,
@@ -509,12 +490,9 @@ static int builder_rounded(AstraRenderBuilder *builder, uint32_t destination,
                            int32_t clip_right, int32_t clip_bottom)
 {
     uint32_t bounded = radius;
-    int32_t right;
-    int32_t bottom;
-    int horizontal = 1;
-    int vertical = 1;
 
-    if (width == 0u || height == 0u)
+    if (width == 0u || height == 0u || width > UINT16_MAX ||
+        height > UINT16_MAX)
         return 0;
     if (bounded > width / 2u)
         bounded = width / 2u;
@@ -523,42 +501,23 @@ static int builder_rounded(AstraRenderBuilder *builder, uint32_t destination,
     if (bounded == 0u)
         return builder_fill(builder, destination, x, y, width, height, color,
                             clip_left, clip_top, clip_right, clip_bottom);
-    right = x + (int32_t)width;
-    bottom = y + (int32_t)height;
-    if (clip_left < x) clip_left = x;
-    if (clip_top < y) clip_top = y;
-    if (clip_right > right) clip_right = right;
-    if (clip_bottom > bottom) clip_bottom = bottom;
-    if (width > bounded * 2u)
-        horizontal = builder_fill(
-            builder, destination, x + (int32_t)bounded, y,
-            width - bounded * 2u, height, color,
-            clip_left, clip_top, clip_right, clip_bottom);
-    /* Side bands, not a full-width one: a full-width band would repaint every
-       pixel the horizontal band already covered, and fill costs real time. */
-    if (height > bounded * 2u)
-        vertical = builder_fill(
-                       builder, destination, x, y + (int32_t)bounded,
-                       bounded, height - bounded * 2u, color,
-                       clip_left, clip_top, clip_right, clip_bottom) &&
-                   builder_fill(
-                       builder, destination, right - (int32_t)bounded,
-                       y + (int32_t)bounded, bounded,
-                       height - bounded * 2u, color,
-                       clip_left, clip_top, clip_right, clip_bottom);
-    return horizontal && vertical &&
-           circle(builder, destination, x + bounded, y + bounded,
-                  bounded, clip_left, clip_top, clip_right, clip_bottom,
-                  color) &&
-           circle(builder, destination, right - bounded - 1,
-                  y + bounded, bounded, clip_left, clip_top,
-                  clip_right, clip_bottom, color) &&
-           circle(builder, destination, x + bounded,
-                  bottom - bounded - 1, bounded,
-                  clip_left, clip_top, clip_right, clip_bottom, color) &&
-           circle(builder, destination, right - bounded - 1,
-                  bottom - bounded - 1, bounded,
-                  clip_left, clip_top, clip_right, clip_bottom, color);
+    /* Use the scene clip's exact row coverage, so no corner pixel exposes
+       old data from the alternating window caches. */
+    for (uint32_t row = 0u; row < height;) {
+        uint32_t inset = astra_graphics_rounded_inset(row, height, bounded);
+        uint32_t end = row + 1u;
+
+        while (end < height &&
+               astra_graphics_rounded_inset(end, height, bounded) == inset)
+            ++end;
+        if (!builder_fill(builder, destination, x + (int32_t)inset,
+                          y + (int32_t)row, width - inset * 2u,
+                          end - row, color, clip_left, clip_top,
+                          clip_right, clip_bottom))
+            return 0;
+        row = end;
+    }
+    return 1;
 }
 
 int astra_render_builder_rounded(AstraRenderBuilder *builder,

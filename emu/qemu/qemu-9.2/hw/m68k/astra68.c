@@ -3356,6 +3356,19 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             astra_host_file_unlock(s, file);
         break;
     }
+    case ASTRA_HOST_FS_STAT_FILE:
+        file = astra_host_file_lock(s, owner, handle);
+        if (file == NULL) {
+            status = ASTRA_STATUS_BAD_HANDLE;
+        } else if (fstat(file->fd, &st) < 0) {
+            status = astra_host_status_from_errno(errno);
+        } else {
+            astra_host_publish_stat(command, &st);
+            status = ASTRA_STATUS_OK;
+        }
+        if (file != NULL)
+            astra_host_file_unlock(s, file);
+        break;
     case ASTRA_HOST_FS_READDIR: {
         uint32_t capacity = ldl_be_p(command + HOST_FIELD(data_capacity));
         uint8_t *data = astra_host_command_data(
@@ -5611,7 +5624,9 @@ static void astra68_init(MachineState *machine)
             { "astra-host-fs-filesystem-info",
               "astra-host-fs-filesystem-info-execution-ns" },
             { "astra-host-fs-stat-at",
-              "astra-host-fs-stat-at-execution-ns" }
+              "astra-host-fs-stat-at-execution-ns" },
+            { "astra-host-fs-stat-file",
+              "astra-host-fs-stat-file-execution-ns" }
         };
 
         G_STATIC_ASSERT(G_N_ELEMENTS(properties) ==

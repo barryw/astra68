@@ -97,7 +97,7 @@ enum {
 };
 
 static const char *const snapshot_path[] = {
-    "STORE:store.0", "STORE:store.1"
+    "/store/store.0", "/store/store.1"
 };
 
 typedef struct SnapshotFile {
@@ -219,12 +219,6 @@ start_persistence(void)
     AstraEventSnapshotInfo info[2];
     int valid[2] = {0, 0};
     uint32_t bank = 0u;
-    uint32_t status = astra_filesystem_mkdir(
-        &process_filesystem.filesystem, "STORE:");
-
-    if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_EXISTS) {
-        return;
-    }
     persistence_ready = 1;
     valid[0] = probe_snapshot(0u, &info[0]);
     valid[1] = probe_snapshot(1u, &info[1]);
@@ -302,7 +296,7 @@ save_snapshot(void)
 }
 
 /*
- * The catalog off SYS:, or nothing. Nothing is survivable: every event still
+ * The catalog off /system, or nothing. Nothing is survivable: every event still
  * renders, as its message id, which is honest and still greppable -- and it is
  * what a machine whose system volume predates the build would otherwise get
  * wrong by rendering somebody else's text under this build's ids.
@@ -321,7 +315,7 @@ load_catalog(void)
         return;
     }
     catalog_status = astra_process_read_file_alloc(
-        &process_filesystem, "SYS:astra_events.cat", &catalog_bytes, &length);
+        &process_filesystem, "/system/astra_events.cat", &catalog_bytes, &length);
     if (catalog_status != ASTRA_VFS_OK) {
         return;
     }

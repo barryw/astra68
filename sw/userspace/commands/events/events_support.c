@@ -16,12 +16,12 @@ int events_build_path(char *path, size_t capacity, int by_activity,
     if (path == NULL || capacity == 0u || level == NULL)
         return 0;
     if (by_activity)
-        length = snprintf(path, capacity, "EVENTS:activity/%s", activity);
+        length = snprintf(path, capacity, "/events/activity/%s", activity);
     else if (subsystem != NULL)
-        length = snprintf(path, capacity, "EVENTS:subsystem/%s/%s",
+        length = snprintf(path, capacity, "/events/subsystem/%s/%s",
                           subsystem, level);
     else
-        length = snprintf(path, capacity, "EVENTS:boot/%s/%s",
+        length = snprintf(path, capacity, "/events/boot/%s/%s",
                           previous_boot ? "-1" : "current", level);
     return length >= 0 && (size_t)length < capacity;
 }

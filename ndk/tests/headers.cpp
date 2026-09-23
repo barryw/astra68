@@ -5,5 +5,5 @@ static_assert(sizeof(AstraSyscallResult) == 20u,
 
 int astra_ndk_cxx_header_contract()
 {
-    return ASTRA_FILESYSTEM_LIBRARY_VERSION == 3u ? 0 : 1;
+    return ASTRA_FILESYSTEM_LIBRARY_VERSION == 4u ? 0 : 1;
 }

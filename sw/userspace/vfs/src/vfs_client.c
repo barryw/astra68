@@ -633,6 +633,56 @@ astra_vfs_stat_at_meta(AstraVfsClient *client, AstraVfsFile directory,
 }
 
 uint32_t
+astra_vfs_stat_file_meta(AstraVfsClient *client, AstraVfsFile file,
+                         AstraVfsDirEntry *meta)
+{
+    const AstraVfsBackendOps *ops;
+    void *context;
+    AstraVfsCallState *call;
+    AstraVfsNodeInfo info = {0};
+    uint32_t status;
+
+    if (client == NULL || meta == NULL || file == ASTRA_VFS_FILE_INVALID)
+        return ASTRA_VFS_ERR_INVALID;
+    if (client->version < UINT16_C(26))
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    if (client->direct_backend_ops != NULL) {
+        status = backend_enter(client, &ops, &context);
+        if (status != ASTRA_VFS_OK)
+            return status;
+        status = ops->stat_node(context, file, &info);
+        backend_leave(client);
+        if (status != ASTRA_VFS_OK)
+            return status;
+        meta->name[0] = '\0';
+        meta->size = info.size;
+        meta->mtime = info.mtime;
+        meta->uid = info.uid;
+        meta->gid = info.gid;
+        meta->kind = info.kind;
+        meta->mode = info.mode;
+        meta->nlink = info.nlink;
+        meta->reserved = 0u;
+        return ASTRA_VFS_OK;
+    }
+    call = begin(client);
+    call->request.file = file;
+    status = exchange(client, call, ASTRA_VFS_OP_STAT_FILE);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    meta->name[0] = '\0';
+    meta->size = call->reply.node_size;
+    meta->mtime = call->reply.mtime;
+    meta->uid = call->reply.uid;
+    meta->gid = call->reply.gid;
+    meta->kind = call->reply.kind;
+    meta->mode = call->reply.mode;
+    meta->nlink = call->reply.nlink;
+    meta->reserved = 0u;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t
 astra_vfs_stat(AstraVfsClient *client, const char *path, uint64_t *size,
                uint16_t *kind)
 {

@@ -1,5 +1,13 @@
 #define _POSIX_C_SOURCE 200809L
 #include <limits.h>
+#include <astra/vfs_service.h>
+
+#if !defined(PATH_MAX)
+#error "POSIX ports need the actual VFS pathname bound"
+#endif
+
+_Static_assert(PATH_MAX == ASTRA_VFS_PATH_MAX,
+               "POSIX PATH_MAX must track the VFS pathname ABI");
 
 #if !defined(SSIZE_MAX) || SSIZE_MAX < 0x10000L
 #error "SSIZE_MAX must be a usable preprocessor limit"

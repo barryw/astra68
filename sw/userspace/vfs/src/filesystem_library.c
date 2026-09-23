@@ -1,4 +1,5 @@
 #include <astra/filesystem_library.h>
+#include <astra/ascii.h>
 #include <astra/vfs_path.h>
 
 #include <stddef.h>
@@ -8,6 +9,69 @@ static int filesystem_valid(const AstraFilesystem *filesystem)
 {
     return filesystem != NULL && filesystem->_private_assigns != NULL &&
            filesystem->_private_client_for != NULL;
+}
+
+/* The first component is a protected namespace entry, not a backend node. */
+static int namespace_entry_name(const char *path,
+                                char name[ASTRA_CAPABILITY_NAME_MAX])
+{
+    char rest[ASTRA_VFS_PATH_MAX];
+    char normalized[ASTRA_VFS_PATH_MAX];
+
+    return path != NULL &&
+           astra_path_split(path, name, ASTRA_CAPABILITY_NAME_MAX, rest,
+                            sizeof(rest)) == ASTRA_VFS_OK &&
+           astra_path_normalise(rest, normalized, sizeof(normalized)) ==
+           ASTRA_VFS_OK && normalized[0] == '\0';
+}
+
+/* Disk-backed conveniences retain their own grants but display their mount. */
+static int root_link_target_for_assign(const AstraAssign *assign,
+                                       char target[ASTRA_VFS_PATH_MAX])
+{
+    static const char *const names[] = {
+        "APPS", "COMMANDS", "CONFIG", "CWD", "HOME", "LIBS", "LOCAL",
+        "SERVICES", "STARTUP", "STORE", "TMP", "TRASH", "WORK"
+    };
+    size_t length;
+
+    if (assign == NULL)
+        return 0;
+    if (strcmp(assign->name, "SYSTEM") == 0) {
+        memcpy(target, "/dh0", sizeof("/dh0"));
+        return 1;
+    }
+    for (size_t i = 0u; i < sizeof(names) / sizeof(names[0]); ++i)
+        if (strcmp(assign->name, names[i]) == 0) {
+            length = strlen(assign->root);
+            if (length + sizeof("/system/") > ASTRA_VFS_PATH_MAX)
+                return 0;
+            memcpy(target, "/system", sizeof("/system"));
+            if (length != 0u) {
+                target[sizeof("/system") - 1u] = '/';
+                memcpy(target + sizeof("/system"), assign->root,
+                       length + 1u);
+            }
+            return 1;
+        }
+    return 0;
+}
+
+/* Root links are namespace metadata; no writable backend owns their names. */
+static int root_link_target(const AstraAssignTable *assigns,
+                            const char *path,
+                            char target[ASTRA_VFS_PATH_MAX])
+{
+    char name[ASTRA_CAPABILITY_NAME_MAX];
+
+    if (path == NULL || path[0] != '/' ||
+        !namespace_entry_name(path, name))
+        return 0;
+    for (const char *at = path + 1; *at != '\0'; ++at)
+        if (*at == '/')
+            return 0;
+    return root_link_target_for_assign(astra_assign_lookup(assigns, name),
+                                       target);
 }
 
 static int file_valid(const AstraFile *file)
@@ -135,6 +199,13 @@ uint32_t astra_filesystem_open_mode(AstraFilesystem *filesystem,
          ((create_mode & (uint16_t)~ASTRA_VFS_MODE_MASK) != 0u ||
           (flags & ASTRA_VFS_OPEN_CREATE) == 0u)))
         return ASTRA_VFS_ERR_INVALID;
+    if ((flags & ASTRA_VFS_OPEN_CREATE) != 0u) {
+        char entry[ASTRA_CAPABILITY_NAME_MAX];
+
+        if (namespace_entry_name(path, entry) &&
+            astra_assign_lookup(filesystem->_private_assigns, entry) == NULL)
+            return ASTRA_VFS_ERR_READ_ONLY;
+    }
     *file = (AstraFile)ASTRA_FILE_INIT;
     if ((flags & ASTRA_VFS_OPEN_READ) != 0u)
         rights |= ASTRA_RIGHT_READ;
@@ -228,11 +299,12 @@ uint32_t astra_filesystem_open_at_mode(const AstraFile *directory,
     uint64_t size = 0u;
     uint16_t kind = ASTRA_VFS_KIND_UNKNOWN;
 
-    if (!file_valid(directory) || directory->_private_kind !=
-                                      ASTRA_VFS_KIND_DIRECTORY ||
-        path == NULL || file == NULL)
-        return !file_valid(directory) ? ASTRA_VFS_ERR_BAD_HANDLE :
-                                        ASTRA_VFS_ERR_INVALID;
+    if (!file_valid(directory))
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    if (path == NULL || file == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    if (directory->_private_kind != ASTRA_VFS_KIND_DIRECTORY)
+        return ASTRA_VFS_ERR_NOT_DIR;
     if ((flags & ASTRA_VFS_OPEN_READ) != 0u)
         rights |= ASTRA_RIGHT_READ;
     if ((flags & (ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
@@ -428,8 +500,10 @@ uint32_t astra_filesystem_write(AstraFile *file, const void *buffer,
 uint32_t astra_filesystem_seek(AstraFile *file, int64_t delta,
                                uint32_t origin, uint64_t *offset)
 {
+    AstraVfsDirEntry meta = {0};
     uint64_t base;
     uint64_t result;
+    uint32_t status;
 
     if (!file_valid(file) || offset == NULL)
         return ASTRA_VFS_ERR_INVALID;
@@ -437,8 +511,14 @@ uint32_t astra_filesystem_seek(AstraFile *file, int64_t delta,
         base = 0u;
     else if (origin == ASTRA_FILE_SEEK_CURRENT)
         base = file->_private_offset;
-    else if (origin == ASTRA_FILE_SEEK_END)
-        base = file->_private_size;
+    else if (origin == ASTRA_FILE_SEEK_END) {
+        status = astra_vfs_stat_file_meta(file->_private_client,
+                                          file->_private_file, &meta);
+        if (status != ASTRA_VFS_OK)
+            return status;
+        base = meta.size;
+        file->_private_size = base;
+    }
     else
         return ASTRA_VFS_ERR_INVALID;
     if (delta < 0) {
@@ -462,14 +542,26 @@ uint32_t astra_filesystem_seek(AstraFile *file, int64_t delta,
 uint32_t astra_filesystem_file_info(const AstraFile *file,
                                     AstraFileInfo *info)
 {
+    AstraVfsDirEntry meta = {0};
+    uint32_t status;
+
     if (!file_valid(file) || info == NULL || info->size < sizeof(*info))
         return ASTRA_VFS_ERR_INVALID;
+    status = astra_vfs_stat_file_meta(file->_private_client,
+                                      file->_private_file, &meta);
+    if (status != ASTRA_VFS_OK)
+        return status;
     *info = (AstraFileInfo)ASTRA_FILE_INFO_INIT;
     info->open_flags = file->_private_flags;
-    info->byte_size = file->_private_size;
+    info->byte_size = meta.size;
     info->offset = file->_private_offset;
-    info->kind = file->_private_kind;
+    info->kind = meta.kind;
     info->member = file_member(file);
+    info->mtime = meta.mtime;
+    info->uid = meta.uid;
+    info->gid = meta.gid;
+    info->mode = meta.mode;
+    info->nlink = meta.nlink;
     return ASTRA_VFS_OK;
 }
 
@@ -555,8 +647,28 @@ static uint32_t filesystem_stat_common(AstraFilesystem *filesystem,
     uint32_t member = 0u;
     uint32_t status;
 
-    if (info == NULL || info->size < sizeof(*info))
+    if (!filesystem_valid(filesystem) || path == NULL || info == NULL ||
+        info->size < sizeof(*info))
         return ASTRA_VFS_ERR_INVALID;
+    if (strcmp(path, "/") == 0) {
+        *info = (AstraFileInfo)ASTRA_FILE_INFO_INIT;
+        info->kind = ASTRA_VFS_KIND_DIRECTORY;
+        info->mode = 0555u;
+        info->nlink = 1u;
+        return ASTRA_VFS_OK;
+    }
+    if (literal) {
+        char target[ASTRA_VFS_PATH_MAX];
+
+        if (root_link_target(filesystem->_private_assigns, path, target)) {
+            *info = (AstraFileInfo)ASTRA_FILE_INFO_INIT;
+            info->byte_size = strlen(target);
+            info->kind = ASTRA_VFS_KIND_SYMLINK;
+            info->mode = 0777u;
+            info->nlink = 1u;
+            return ASTRA_VFS_OK;
+        }
+    }
     status = literal ?
         filesystem_locate_literal(
             filesystem, path, ASTRA_RIGHT_READ, NULL, wire, &kind, &size,
@@ -589,6 +701,34 @@ uint32_t astra_filesystem_lstat(AstraFilesystem *filesystem,
     return filesystem_stat_common(filesystem, path, info, 1);
 }
 
+uint32_t astra_filesystem_stat_at(const AstraFile *directory,
+                                  const char *path, AstraFileInfo *info)
+{
+    AstraVfsDirEntry meta = {0};
+    uint32_t status;
+
+    if (!file_valid(directory))
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    if (path == NULL || info == NULL || info->size < sizeof(*info))
+        return ASTRA_VFS_ERR_INVALID;
+    if (directory->_private_kind != ASTRA_VFS_KIND_DIRECTORY)
+        return ASTRA_VFS_ERR_NOT_DIR;
+    status = astra_vfs_stat_at_meta(directory->_private_client,
+                                    directory->_private_file, path, &meta);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    *info = (AstraFileInfo)ASTRA_FILE_INFO_INIT;
+    info->byte_size = meta.size;
+    info->kind = meta.kind;
+    info->member = file_member(directory);
+    info->mtime = meta.mtime;
+    info->uid = meta.uid;
+    info->gid = meta.gid;
+    info->mode = meta.mode;
+    info->nlink = meta.nlink;
+    return ASTRA_VFS_OK;
+}
+
 uint32_t astra_filesystem_mkdir_mode(AstraFilesystem *filesystem,
                                      const char *path, uint16_t create_mode)
 {
@@ -599,6 +739,16 @@ uint32_t astra_filesystem_mkdir_mode(AstraFilesystem *filesystem,
 
     if (!filesystem_valid(filesystem) || path == NULL)
         return ASTRA_VFS_ERR_INVALID;
+    if (strcmp(path, "/") == 0)
+        return ASTRA_VFS_ERR_EXISTS;
+    {
+        char entry[ASTRA_CAPABILITY_NAME_MAX];
+
+        if (namespace_entry_name(path, entry))
+            return astra_assign_lookup(filesystem->_private_assigns, entry) !=
+                           NULL ? ASTRA_VFS_ERR_EXISTS :
+                                  ASTRA_VFS_ERR_READ_ONLY;
+    }
     status = astra_vfs_assign_destination(
         filesystem->_private_assigns, path, ASTRA_RIGHT_WRITE, 0,
         filesystem_client_for, filesystem, logical, sizeof(logical), wire,
@@ -620,7 +770,14 @@ uint32_t astra_filesystem_unlink(AstraFilesystem *filesystem,
 {
     AstraVfsClient *client = NULL;
     char wire[ASTRA_VFS_PATH_MAX];
-    uint32_t status = filesystem_locate_literal(
+    char entry[ASTRA_CAPABILITY_NAME_MAX];
+    uint32_t status;
+
+    if (!filesystem_valid(filesystem) || path == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    if (strcmp(path, "/") == 0 || namespace_entry_name(path, entry))
+        return ASTRA_VFS_ERR_READ_ONLY;
+    status = filesystem_locate_literal(
         filesystem, path, ASTRA_RIGHT_WRITE, &client, wire, NULL, NULL, NULL,
         NULL, NULL);
 
@@ -632,8 +789,10 @@ uint32_t astra_filesystem_unlink_at(const AstraFile *directory,
 {
     if (!file_valid(directory))
         return ASTRA_VFS_ERR_BAD_HANDLE;
-    if (directory->_private_kind != ASTRA_VFS_KIND_DIRECTORY || path == NULL)
+    if (path == NULL)
         return ASTRA_VFS_ERR_INVALID;
+    if (directory->_private_kind != ASTRA_VFS_KIND_DIRECTORY)
+        return ASTRA_VFS_ERR_NOT_DIR;
     if ((file_rights(directory) & ASTRA_RIGHT_WRITE) == 0u)
         return ASTRA_VFS_ERR_ACCESS;
     return astra_vfs_unlink_at(directory->_private_client,
@@ -653,6 +812,13 @@ static uint32_t filesystem_two_paths(AstraFilesystem *filesystem,
     char to_logical[ASTRA_VFS_PATH_MAX];
     char to_wire[ASTRA_VFS_PATH_MAX];
     uint32_t status;
+    char entry[ASTRA_CAPABILITY_NAME_MAX];
+
+    if (!filesystem_valid(filesystem) || from == NULL || to == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    if (strcmp(from, "/") == 0 || strcmp(to, "/") == 0 ||
+        namespace_entry_name(from, entry) || namespace_entry_name(to, entry))
+        return ASTRA_VFS_ERR_READ_ONLY;
 
     if (filesystem_valid(filesystem) &&
         filesystem_resolve_single(filesystem, from, ASTRA_RIGHT_WRITE,
@@ -725,8 +891,10 @@ uint32_t astra_filesystem_chmod_at(const AstraFile *directory,
 {
     if (!file_valid(directory))
         return ASTRA_VFS_ERR_BAD_HANDLE;
-    if (directory->_private_kind != ASTRA_VFS_KIND_DIRECTORY || path == NULL)
+    if (path == NULL)
         return ASTRA_VFS_ERR_INVALID;
+    if (directory->_private_kind != ASTRA_VFS_KIND_DIRECTORY)
+        return ASTRA_VFS_ERR_NOT_DIR;
     if ((file_rights(directory) & ASTRA_RIGHT_WRITE) == 0u)
         return ASTRA_VFS_ERR_ACCESS;
     return astra_vfs_chmod_at(directory->_private_client,
@@ -770,6 +938,17 @@ uint32_t astra_filesystem_readlink(AstraFilesystem *filesystem,
     if (!filesystem_valid(filesystem) || path == NULL || buffer == NULL ||
         capacity == 0u || length == NULL)
         return ASTRA_VFS_ERR_INVALID;
+    {
+        char target[ASTRA_VFS_PATH_MAX];
+
+        if (root_link_target(filesystem->_private_assigns, path, target)) {
+            *length = (uint32_t)strlen(target);
+            if (*length > capacity)
+                return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
+            memcpy(buffer, target, *length);
+            return ASTRA_VFS_OK;
+        }
+    }
     status = astra_vfs_assign_resolve_links(
         filesystem->_private_assigns, path, ASTRA_RIGHT_READ, 0, 0,
         filesystem_client_for, filesystem, logical, sizeof(logical));
@@ -813,6 +992,14 @@ uint32_t astra_filesystem_symlink(const char *target,
     if (!filesystem_valid(filesystem) || target == NULL || target[0] == '\0' ||
         path == NULL)
         return ASTRA_VFS_ERR_INVALID;
+    {
+        char entry[ASTRA_CAPABILITY_NAME_MAX];
+
+        if (namespace_entry_name(path, entry))
+            return astra_assign_lookup(filesystem->_private_assigns, entry) !=
+                           NULL ? ASTRA_VFS_ERR_EXISTS :
+                                  ASTRA_VFS_ERR_READ_ONLY;
+    }
     status = astra_vfs_assign_destination(
         filesystem->_private_assigns, path, ASTRA_RIGHT_WRITE, 0,
         filesystem_client_for, filesystem, logical, sizeof(logical), wire,
@@ -821,6 +1008,9 @@ uint32_t astra_filesystem_symlink(const char *target,
                                    status;
 }
 
+#define DIRECTORY_SINGLE_BACKEND UINT16_C(1)
+#define DIRECTORY_VIRTUAL_ROOT UINT16_C(2)
+
 uint32_t astra_filesystem_directory_open(AstraFilesystem *filesystem,
                                          const char *path,
                                          AstraDirectory *directory)
@@ -828,9 +1018,15 @@ uint32_t astra_filesystem_directory_open(AstraFilesystem *filesystem,
     AstraVfsUnionDirectory opened = ASTRA_VFS_UNION_DIRECTORY_INIT;
     uint32_t status;
 
-    if (!filesystem_valid(filesystem) || directory == NULL)
+    if (!filesystem_valid(filesystem) || path == NULL || directory == NULL)
         return ASTRA_VFS_ERR_INVALID;
     *directory = (AstraDirectory)ASTRA_DIRECTORY_INIT;
+    if (strcmp(path, "/") == 0) {
+        directory->_private_filesystem = filesystem;
+        directory->_private_active = 1u;
+        directory->_private_reserved = DIRECTORY_VIRTUAL_ROOT;
+        return ASTRA_VFS_OK;
+    }
     status = astra_vfs_union_directory_open(
         filesystem->_private_assigns, path, filesystem_client_for,
         filesystem, &opened);
@@ -848,8 +1044,6 @@ uint32_t astra_filesystem_directory_open(AstraFilesystem *filesystem,
     directory->_private_done = opened.done;
     return ASTRA_VFS_OK;
 }
-
-#define DIRECTORY_SINGLE_BACKEND UINT16_C(1)
 
 uint32_t astra_filesystem_directory_from_file(const AstraFile *file,
                                               AstraDirectory *directory)
@@ -881,6 +1075,40 @@ uint32_t astra_filesystem_directory_read(AstraDirectory *directory,
     if (directory == NULL || entries == NULL || capacity == 0u ||
         count == NULL || directory->_private_active == 0u)
         return ASTRA_VFS_ERR_INVALID;
+    if ((directory->_private_reserved & DIRECTORY_VIRTUAL_ROOT) != 0u) {
+        const AstraAssignTable *assigns =
+            directory->_private_filesystem->_private_assigns;
+        uint32_t at = (uint32_t)directory->_private_cursor;
+
+        *count = 0u;
+        while (at < assigns->count && *count < capacity) {
+            const AstraAssign *assign = &assigns->entries[at];
+            char target[ASTRA_VFS_PATH_MAX];
+            uint32_t earlier;
+
+            for (earlier = 0u; earlier < at; ++earlier)
+                if (strcmp(assigns->entries[earlier].name, assign->name) == 0)
+                    break;
+            ++at;
+            if (earlier + 1u != at)
+                continue;
+            entries[*count] = (AstraDirectoryEntry){0};
+            for (uint32_t i = 0u; i + 1u < sizeof(entries[*count].name) &&
+                                   assign->name[i] != '\0'; ++i)
+                entries[*count].name[i] = astra_ascii_lower(assign->name[i]);
+            if (root_link_target_for_assign(assign, target)) {
+                entries[*count].kind = ASTRA_VFS_KIND_SYMLINK;
+                entries[*count].mode = 0777u;
+            } else {
+                entries[*count].kind = ASTRA_VFS_KIND_DIRECTORY;
+                entries[*count].mode = 0555u;
+            }
+            entries[*count].nlink = 1u;
+            ++*count;
+        }
+        directory->_private_cursor = at;
+        return ASTRA_VFS_OK;
+    }
     if ((directory->_private_reserved & DIRECTORY_SINGLE_BACKEND) != 0u) {
         if (directory->_private_done != 0u) {
             *count = 0u;
@@ -936,7 +1164,8 @@ uint32_t astra_filesystem_directory_rewind(AstraDirectory *directory)
 {
     if (directory == NULL || directory->_private_active == 0u)
         return ASTRA_VFS_ERR_INVALID;
-    if ((directory->_private_reserved & DIRECTORY_SINGLE_BACKEND) != 0u) {
+    if ((directory->_private_reserved & (DIRECTORY_SINGLE_BACKEND |
+                                         DIRECTORY_VIRTUAL_ROOT)) != 0u) {
         directory->_private_cursor = 0u;
         directory->_private_done = 0u;
         return ASTRA_VFS_OK;

@@ -422,9 +422,9 @@ main(void)
     assert(write_call(fildes[0], "x", 1u) == -1 && errno == EBADF);
     errno = 0;
     assert(pread(fildes[0], bytes, 1u, 0) == -1 && errno == ESPIPE);
-    assert(write_call(fildes[1], "WORK:notes.txt", 14u) == 14);
-    assert(read_call(fildes[0], bytes, 5u) == 5);
-    assert(memcmp(bytes, "WORK:", 5u) == 0);
+    assert(write_call(fildes[1], "/work/notes.txt", 15u) == 15);
+    assert(read_call(fildes[0], bytes, 6u) == 6);
+    assert(memcmp(bytes, "/work/", 6u) == 0);
     duplicate = dup(fildes[1]);
     assert(duplicate == 2);
     assert(close(fildes[1]) == 0 && !pipe_producer_closed);

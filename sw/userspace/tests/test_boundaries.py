@@ -84,6 +84,30 @@ def test_filesystem_private_state_stays_in_vfs():
             )
 
 
+def require_current_vfs_dependencies(makefile: str):
+    for path in ("build/m68k/backends/ext4.o",
+                 "build/m68k/backends/host.o",
+                 "build/m68k/library/backends/ram.o"):
+        if path not in makefile:
+            raise AssertionError(f"missing backend object {path}")
+    if "-include $(TARGET_OBJECTS:.o=.d)" not in makefile or \
+            "$(wildcard build/m68k/" in makefile:
+        raise AssertionError("stale generated dependency files are included")
+
+
+def test_vfs_backend_dependencies_follow_current_sources():
+    makefile = (USERSPACE / "vfs" / "Makefile").read_text()
+    require_current_vfs_dependencies(makefile)
+    try:
+        require_current_vfs_dependencies(makefile.replace(
+            "-include $(TARGET_OBJECTS:.o=.d)",
+            "-include $(wildcard build/m68k/*.d)"))
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("stale dependency regression was accepted")
+
+
 def test_service_startup_protocol_is_shared():
     services = ("events", "display", "storage", "input", "desktop", "terminal")
     for service in services:
@@ -265,6 +289,35 @@ def test_native_commands_use_runtime_argument_access():
                 "decodes the startup argument vector instead of using runtime",
             ),),
         )
+
+
+def require_primary_sbase_sources(makefile: str, commands: Path,
+                                  upstream: Path):
+    match = re.search(r"^SBASE_PRIMARY := (.+)$", makefile, re.MULTILINE)
+    if match is None:
+        raise AssertionError("primary sbase command list is missing")
+    for name in match.group(1).split():
+        if not (upstream / f"{name}.c").is_file():
+            raise AssertionError(f"{name}: upstream source is missing")
+        if (commands / name / f"{name}.c").exists():
+            raise AssertionError(f"{name}: obsolete native source remains")
+
+
+def test_primary_sbase_commands_have_no_native_copies():
+    commands = USERSPACE / "commands"
+    upstream = REPOSITORY / "third_party" / "sbase"
+    makefile = (commands / "Makefile").read_text()
+    require_primary_sbase_sources(makefile, commands, upstream)
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        (root / "ls").mkdir()
+        (root / "ls" / "ls.c").touch()
+        try:
+            require_primary_sbase_sources(makefile, root, upstream)
+        except AssertionError as error:
+            assert "obsolete native source" in str(error)
+        else:
+            raise AssertionError("obsolete native command copy was accepted")
 
 
 def test_posix_command_uses_the_vfs_path_authority():
@@ -618,7 +671,7 @@ def test_library_contracts_match_exact_readelf_fields():
     config = (USERSPACE / "config" / "Makefile").read_text()
     required = (
         "grep -Fc 'Shared library: [system.library.2]'",
-        "grep -Fc 'Shared library: [filesystem.library.3]'",
+        "grep -Fc 'Shared library: [filesystem.library.4]'",
     )
     for contract in required:
         if contract not in config:
@@ -1447,6 +1500,7 @@ def main():
         test_kernel_private_headers_do_not_cross_into_userspace,
         test_terminal_does_not_depend_on_supervisor_implementation,
         test_filesystem_private_state_stays_in_vfs,
+        test_vfs_backend_dependencies_follow_current_sources,
         test_service_startup_protocol_is_shared,
         test_program_startup_capability_lookup_is_shared,
         test_native_commands_use_runtime_argument_access,

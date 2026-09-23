@@ -43,51 +43,53 @@ int main(void)
 {
     char target[ASTRA_VFS_PATH_MAX + 2u];
 
-    assert(astra_posix_path_is_absolute("/WORK/note"));
-    assert(astra_posix_path_is_absolute("WORK:note"));
-    assert(astra_posix_path_is_absolute("work:"));
+    assert(astra_posix_path_is_absolute("/work/note"));
+    assert(astra_posix_path_is_absolute("/dh0/docs/readme"));
+    assert(!astra_posix_path_is_absolute("WORK:note"));
+    assert(!astra_posix_path_is_absolute("work:"));
     assert(!astra_posix_path_is_absolute("note"));
     assert(!astra_posix_path_is_absolute("directory/a:b"));
     assert(!astra_posix_path_is_absolute(":note"));
     assert(!astra_posix_path_is_absolute(NULL));
 
-    expect("/WORK/project", "notes.txt", 1,
-           "/WORK/project/notes.txt", "WORK:project/notes.txt");
-    expect_invalid("/WORK", "");
-    expect("/WORK/project", "../notes.txt", 1,
-           "/WORK/notes.txt", "WORK:notes.txt");
-    expect("/WORK", "/SYS//lib/./../vim", 1,
-           "/SYS/vim", "SYS:vim");
-    expect("/WORK", "commands:vim", 1,
-           "/commands/vim", "COMMANDS:vim");
-    expect("/WORK", "COMMANDS:bin/../hello", 1,
-           "/COMMANDS/hello", "COMMANDS:hello");
-    expect_invalid("/WORK", "COMMANDS:../hello");
-    expect("/WORK", "HOME:/.zshrc", 1,
-           "/HOME/.zshrc", "HOME:.zshrc");
-    expect("/WORK", "../../..", 0, "/", "");
-    expect("/", "WORK", 1, "/WORK", "WORK:");
-    expect("/A/B/C", "../../D", 1, "/A/D", "A:D");
-    expect_native("/WORK/project", "notes.txt", 1,
-                  "WORK:project/notes.txt");
-    /* exec PATH lookup: slash-absolute enters COMMANDS, relative stays in CWD. */
-    expect_native("/WORK", "/commands/hello", 1, "COMMANDS:hello");
-    expect_native("/WORK", "commands/hello", 1, "WORK:commands/hello");
-    expect_native("/WORK", "commands:vim", 1, "COMMANDS:vim");
-    expect_native("/WORK", "/SYS//lib/./../vim", 1, "SYS:vim");
-    expect_native("/WORK", "../../..", 0, "");
+    expect("/work/project", "notes.txt", 1,
+           "/work/project/notes.txt", "/work/project/notes.txt");
+    expect_invalid("/work", "");
+    expect("/work/project", "../notes.txt", 1,
+           "/work/notes.txt", "/work/notes.txt");
+    expect("/work", "/sys//lib/./../vim", 1,
+           "/sys/vim", "/sys/vim");
+    expect("/work", "/dh0/docs/readme", 1,
+           "/dh0/docs/readme", "/dh0/docs/readme");
+    expect("/work", "commands:vim", 1,
+           "/work/commands:vim", "/work/commands:vim");
+    expect("/work", "commands/bin/../hello", 1,
+           "/work/commands/hello", "/work/commands/hello");
+    expect("/work", "../../..", 0, "/", "/");
+    expect("/", "work", 1, "/work", "/work");
+    expect("/a/b/c", "../../d", 1, "/a/d", "/a/d");
+    expect_native("/work/project", "notes.txt", 1,
+                  "/work/project/notes.txt");
+    /* PATH lookup and ordinary relative names use the same slash grammar. */
+    expect_native("/work", "/commands/hello", 1, "/commands/hello");
+    expect_native("/work", "commands/hello", 1, "/work/commands/hello");
+    expect_native("/work", "commands:vim", 1, "/work/commands:vim");
+    expect_native("/work", "../../..", 0, "/");
     assert(astra_posix_link_target_to_native("../note", target,
                                              sizeof(target)) == 0);
     assert(strcmp(target, "../note") == 0);
     assert(astra_posix_link_target_to_native("/work/note", target,
                                              sizeof(target)) == 0);
-    assert(strcmp(target, "WORK:note") == 0);
+    assert(strcmp(target, "/work/note") == 0);
     assert(astra_posix_link_target_to_native("work:note", target,
                                              sizeof(target)) == 0);
-    assert(strcmp(target, "WORK:note") == 0);
-    assert(astra_posix_link_target_to_posix("WORK:note", target,
+    assert(strcmp(target, "work:note") == 0);
+    assert(astra_posix_link_target_to_posix("work:note", target,
                                             sizeof(target)) == 0);
-    assert(strcmp(target, "/WORK/note") == 0);
+    assert(strcmp(target, "work:note") == 0);
+    assert(astra_posix_link_target_to_posix("/sys/apps", target,
+                                            sizeof(target)) == 0);
+    assert(strcmp(target, "/sys/apps") == 0);
     assert(astra_posix_link_target_to_posix("../note", target,
                                             sizeof(target)) == 0);
     assert(strcmp(target, "../note") == 0);

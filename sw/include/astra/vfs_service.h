@@ -28,7 +28,7 @@
  */
 
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
-#define ASTRA_VFS_VERSION  UINT16_C(25)
+#define ASTRA_VFS_VERSION  UINT16_C(26)
 
 /*
  * The oldest version this build can still speak. A client asks for a minimum
@@ -171,7 +171,8 @@
 #define ASTRA_VFS_OP_CHMOD_AT    UINT32_C(32)
 #define ASTRA_VFS_OP_FILESYSTEM_INFO UINT32_C(33)
 #define ASTRA_VFS_OP_STAT_AT     UINT32_C(34)
-#define ASTRA_VFS_OP_MAX         ASTRA_VFS_OP_STAT_AT
+#define ASTRA_VFS_OP_STAT_FILE   UINT32_C(35)
+#define ASTRA_VFS_OP_MAX         ASTRA_VFS_OP_STAT_FILE
 
 /*
  * One shared-area transfer, and the unit the whole read path is sized around.
@@ -245,6 +246,7 @@
 #define ASTRA_VFS_ERR_PEER        ((uint32_t)ASTRA_STATUS_PEER_DEAD)
 #define ASTRA_VFS_ERR_CROSS_DEVICE ((uint32_t)ASTRA_STATUS_CROSS_DEVICE)
 #define ASTRA_VFS_ERR_LOOP          ((uint32_t)ASTRA_STATUS_LOOP)
+#define ASTRA_VFS_ERR_READ_ONLY     ((uint32_t)ASTRA_STATUS_READ_ONLY)
 
 /*
  * A protocol status as a word, or NULL for a number nothing has named yet.

@@ -365,6 +365,10 @@ int ext4_fopen2(ext4_file *file, const char *path, int flags);
 int ext4_fopen2_mode(ext4_file *file, const char *path, int flags,
 		     uint32_t mode);
 
+/** Open a relative file through an already-open directory inode. */
+int ext4_fopenat2_mode(ext4_file *file, const ext4_dir *directory,
+		       const char *path, int flags, uint32_t mode);
+
 /**@brief   File close function.
  *
  * @param   file File handle.
@@ -462,6 +466,11 @@ int ext4_inode_exist(const char *path, int type);
  * @return  Standard error code.*/
 int ext4_mode_set(const char *path, uint32_t mode);
 
+/** Change permissions through live inode identity or a directory handle. */
+int ext4_mode_set_handle(const ext4_file *file, uint32_t mode);
+int ext4_mode_setat(const ext4_dir *directory, const char *path,
+		    uint32_t mode);
+
 
 /**@brief Get file/directory/link mode bits.
  *
@@ -476,6 +485,16 @@ int ext4_mode_set(const char *path, uint32_t mode);
 int ext4_meta_get(const char *path, uint32_t *mode, uint32_t *uid,
 		  uint32_t *gid, uint32_t *mtime, uint32_t *nlink,
 		  uint64_t *size);
+
+/** Read metadata from a live inode, even after its path is renamed. */
+int ext4_meta_get_handle(const ext4_file *file, uint32_t *mode, uint32_t *uid,
+			 uint32_t *gid, uint32_t *mtime, uint32_t *nlink,
+			 uint64_t *size);
+
+/** No-follow metadata lookup beneath an open directory inode. */
+int ext4_meta_getat(const ext4_dir *directory, const char *path,
+		    uint32_t *mode, uint32_t *uid, uint32_t *gid,
+		    uint32_t *mtime, uint32_t *nlink, uint64_t *size);
 
 /**@brief ASTRA: metadata for an entry returned by ext4_dir_entry_next.
  * @param   dir open directory that returned entry
@@ -634,6 +653,13 @@ int ext4_removexattr(const char *path, const char *name, size_t name_len);
  * @return  Standard error code.*/
 int ext4_dir_rm(const char *path);
 
+/** Remove an empty directory. Unlike ext4_dir_rm, never removes children. */
+int ext4_dir_rmdir(const char *path);
+
+/** Remove one relative entry through an open directory inode. */
+int ext4_unlinkat(const ext4_dir *directory, const char *path,
+		  bool remove_directory);
+
 /**@brief Rename/move directory.
  *
  * @param path     Source path.
@@ -657,6 +683,10 @@ int ext4_dir_mk_mode(const char *path, uint32_t mode);
  *
  * @return  Standard error code.*/
 int ext4_dir_open(ext4_dir *dir, const char *path);
+
+/** Open a relative directory through an already-open directory inode. */
+int ext4_dir_openat(ext4_dir *dir, const ext4_dir *parent,
+		    const char *path);
 
 /**@brief   Directory close.
  *

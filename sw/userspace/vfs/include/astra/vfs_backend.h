@@ -114,6 +114,9 @@ typedef struct AstraVfsBackendOps {
     /** Read no-follow metadata beneath an already-open directory node. */
     uint32_t (*stat_at)(void *context, uintptr_t directory,
                         const char *path, AstraVfsNodeInfo *info);
+    /** Read current metadata from an open node, independent of its path. */
+    uint32_t (*stat_node)(void *context, uintptr_t node,
+                          AstraVfsNodeInfo *info);
 } AstraVfsBackendOps;
 
 struct AstraVfsBackend {
@@ -302,6 +305,16 @@ astra_vfs_backend_no_stat_at(void *context, uintptr_t directory,
     (void)context;
     (void)directory;
     (void)path;
+    (void)info;
+    return ASTRA_VFS_ERR_UNSUPPORTED;
+}
+
+static inline uint32_t
+astra_vfs_backend_no_stat_node(void *context, uintptr_t node,
+                               AstraVfsNodeInfo *info)
+{
+    (void)context;
+    (void)node;
     (void)info;
     return ASTRA_VFS_ERR_UNSUPPORTED;
 }

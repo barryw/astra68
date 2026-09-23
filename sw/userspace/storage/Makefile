@@ -181,7 +181,7 @@ test: $(HOST_TEST) build/host/test_lease_block build/host/test_ext4_port \
 EXT4_MOUNT_TEST_SOURCES := src/block_device.c src/memory_block.c src/mbr.c \
 	src/ext4_port.c src/ext4_alloc.c src/ext4_xattr_stub.c src/ext4_time.c \
 	$(ALLOC)/src/alloc.c $(LWEXT4_SOURCES) tests/test_ext4_mount.c \
-	tests/file_block.c $(VFS)/src/vfs_ext4_backend.c
+	tests/file_block.c $(VFS)/src/backends/ext4.c
 
 build/host/test_ext4_mount: $(EXT4_MOUNT_TEST_SOURCES) $(HOST_HEADERS)
 	@mkdir -p $(@D)
@@ -243,6 +243,14 @@ format-volume:
 # image back so e2fsck can judge it, which means a failed run leaves a
 # half-populated volume behind; inheriting that would make the next run's
 # result depend on the previous one's failure.
+ext4-native-at-test: build/host/test_ext4_mount
+	@mkdir -p build/host
+	dd if=/dev/zero of=build/host/ext4-native-at.img bs=1048576 count=16 status=none
+	$(MKE2FS) -q -t ext4 -b 4096 -I 256 -O $(EXT4_MKFS_FEATURES) \
+		$(EXT4_MKFS_JOURNAL) -F build/host/ext4-native-at.img
+	./build/host/test_ext4_mount build/host/ext4-native-at.img native-at
+	$(E2FSCK) -fn build/host/ext4-native-at.img
+
 ext4-test: build/host/test_ext4_mount
 	@mkdir -p build/host
 	dd if=/dev/zero of=build/host/ext4-test.img bs=1048576 count=16 \

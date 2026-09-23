@@ -1,4 +1,5 @@
 #include <astra/endian.h>
+#include <astra/ascii.h>
 #include <astra/vfs_provider_index.h>
 
 #include <string.h>
@@ -160,18 +161,20 @@ int astra_vfs_provider_index_parse(const uint8_t *bytes, uint32_t length,
     if (name_length == 0u || name_length == ASTRA_LIBRARY_NAME_MAX)
         return 0;
     path_length = length - PROVIDER_INDEX_HEADER;
-    if (assign_length + 1u >= capacity ||
-        path_length >= capacity - assign_length - 1u ||
+    if (assign_length + 2u >= capacity ||
+        path_length >= capacity - assign_length - 2u ||
         !relative_path_valid(bytes + PROVIDER_INDEX_HEADER, path_length))
         return 0;
-    memcpy(path, assign, assign_length);
-    path[assign_length] = ':';
+    path[0] = '/';
+    for (uint32_t at = 0u; at < assign_length; ++at)
+        path[1u + at] = astra_ascii_lower(assign[at]);
+    path[assign_length + 1u] = '/';
     for (uint32_t at = 0u; at < path_length; ++at) {
         uint8_t value = bytes[PROVIDER_INDEX_HEADER + at];
 
-        path[assign_length + 1u + at] = (char)value;
+        path[assign_length + 2u + at] = (char)value;
     }
-    path[assign_length + 1u + path_length] = '\0';
+    path[assign_length + 2u + path_length] = '\0';
     reference->size = ASTRA_LIBRARY_REFERENCE_SIZE;
     reference->major = astra_load_be16(bytes + 8u);
     reference->minor = astra_load_be16(bytes + 10u);

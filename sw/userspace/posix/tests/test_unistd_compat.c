@@ -66,7 +66,7 @@ int __wrap_close(int descriptor) { assert(descriptor == 7); return close_result;
 int
 __wrap_stat(const char *path, struct stat *about)
 {
-    assert(strcmp(path, "WORK:file") == 0);
+    assert(strcmp(path, "/work/file") == 0);
     if (stat_result != 0) {
         errno = ENOENT;
         return -1;
@@ -113,13 +113,13 @@ main(void)
     assert(usleep(1000500u) == 0);
     assert(slept.tv_sec == 1 && slept.tv_nsec == 500000L);
 
-    assert(truncate("WORK:file", 1234) == 0);
-    assert(strcmp(opened_path, "WORK:file") == 0);
+    assert(truncate("/work/file", 1234) == 0);
+    assert(strcmp(opened_path, "/work/file") == 0);
     assert((opened_flags & O_WRONLY) != 0);
     assert(truncated_to == 1234);
     close_result = -1;
     errno = 0;
-    assert(truncate("WORK:file", 99) == -1);
+    assert(truncate("/work/file", 99) == -1);
 
     assert(sysconf(_SC_CLK_TCK) == 1000000L);
     assert(sysconf(_SC_OPEN_MAX) == (long)nofile_limit);
@@ -135,12 +135,12 @@ main(void)
     errno = 0;
     assert(sysconf(INT32_MAX) == -1 && errno == EINVAL);
 
-    assert(pathconf("WORK:file", _PC_PATH_MAX) ==
+    assert(pathconf("/work/file", _PC_PATH_MAX) ==
            (long)ASTRA_VFS_PATH_MAX - 1L);
-    assert(pathconf("WORK:file", _PC_NAME_MAX) ==
+    assert(pathconf("/work/file", _PC_NAME_MAX) ==
            (long)ASTRA_VFS_NAME_MAX - 1L);
     errno = 0;
-    assert(pathconf("WORK:file", INT32_MAX) == -1 && errno == EINVAL);
+    assert(pathconf("/work/file", INT32_MAX) == -1 && errno == EINVAL);
     assert(fpathconf(9, _PC_PATH_MAX) == (long)ASTRA_VFS_PATH_MAX - 1L);
     fstat_result = -1;
     errno = 0;
@@ -148,7 +148,7 @@ main(void)
     fstat_result = 0;
     stat_result = -1;
     errno = 0;
-    assert(pathconf("WORK:file", _PC_PATH_MAX) == -1 && errno == ENOENT);
+    assert(pathconf("/work/file", _PC_PATH_MAX) == -1 && errno == ENOENT);
 
     fsync_result = 0;
     assert(fdatasync(9) == 0);

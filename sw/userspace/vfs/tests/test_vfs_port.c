@@ -947,6 +947,7 @@ static const AstraVfsBackendOps backend_ops = {
     .chmod_at = astra_vfs_backend_no_chmod_at,
     .filesystem_info = astra_vfs_backend_no_filesystem_info,
     .stat_at = astra_vfs_backend_no_stat_at,
+    .stat_node = astra_vfs_backend_no_stat_node,
 };
 
 static AstraVfsService service;

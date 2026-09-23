@@ -521,6 +521,21 @@ uint32_t astra_vfs_host_direct_transport(
             publish_info(reply, &info);
         break;
     }
+    case ASTRA_VFS_OP_STAT_FILE: {
+        AstraVfsNodeInfo info = {0};
+
+        if (client->version < UINT16_C(26))
+            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
+        else if (request->file == ASTRA_VFS_FILE_INVALID ||
+                 request->flags != 0u)
+            reply->status = ASTRA_VFS_ERR_INVALID;
+        else
+            reply->status = ops->stat_node(backend.context, request->file,
+                                           &info);
+        if (reply->status == ASTRA_VFS_OK)
+            publish_info(reply, &info);
+        break;
+    }
     case ASTRA_VFS_OP_READDIR:
         direct_readdir(&backend, request, reply);
         break;

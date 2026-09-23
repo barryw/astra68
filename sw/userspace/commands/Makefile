@@ -1,6 +1,6 @@
 include ../posix/kit/astra-posix.mk
 
-# The programs that live in COMMANDS:.
+# The programs that live in /commands.
 #
 # Each one is a directory with a source file of the same name, linked exactly
 # the way the supervisor is -- same linker script, same crt0, same runtime --
@@ -37,6 +37,7 @@ ZSH_SOURCE ?= $(HOME)/zsh-astra-v5.9.2
 ZSH_BUILD ?= $(HOME)/zsh-astra-build
 ZSH_IMAGE := $(ZSH_BUILD)/Src/zsh
 ZSH_CONFIG_SITE := $(CURDIR)/zsh/config.site
+SBASE := ../../../third_party/sbase
 CPPFLAGS := $(ASTRA_POSIX_CPPFLAGS) -I$(NTP)/include \
 	-I$(NETWORK)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
@@ -69,7 +70,8 @@ TERMINFO_LIBRARY := $(ASTRA_TERMINFO_LIBRARY)
 COMMANDS := status events devices which open service ls ps metrics cat mkdir rm \
 	    heapbench fsstress date echo ntp ping lua vim zsh
 TEST_COMMANDS := posix hello cxx
-SOURCE_COMMANDS := $(filter-out lua cxx vim zsh,$(COMMANDS) $(TEST_COMMANDS))
+SBASE_PRIMARY := ls mkdir
+SOURCE_COMMANDS := $(filter-out lua cxx vim zsh $(SBASE_PRIMARY),$(COMMANDS) $(TEST_COMMANDS))
 SOURCE_IMAGES := $(patsubst %,build/m68k/%,$(SOURCE_COMMANDS))
 TEST_IMAGES := $(patsubst %,build/m68k/%,$(TEST_COMMANDS))
 events_EXTRA_SOURCES := events/events_support.c
@@ -87,11 +89,11 @@ which_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 open_LIBRARIES := $(LIBC_LIBRARY) $(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY)
 service_LIBRARIES := $(LIBC_LIBRARY) $(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY)
 hello_LIBRARIES := $(LIBC_LIBRARY)
-ls_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+ls_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 ps_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 metrics_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 cat_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
-mkdir_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+mkdir_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 rm_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 posix_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 heapbench_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
@@ -112,7 +114,7 @@ COMMAND_MANIFEST := build/m68k/.commands
 # second list to keep in step with the first.
 .SECONDEXPANSION:
 LUA_CPPFLAGS := -I$(LUA) \
-	-DLUA_PATH_DEFAULT='"?.lua;?/init.lua;LIBS:Lua.kit/share/lua/5.5/?.lua;LIBS:Lua.kit/share/lua/5.5/?/init.lua"' \
+	-DLUA_PATH_DEFAULT='"?.lua;?/init.lua;/libs/Lua.kit/share/lua/5.5/?.lua;/libs/Lua.kit/share/lua/5.5/?/init.lua"' \
 	-DLUA_CPATH_DEFAULT='""'
 LUA_FLAGS := -std=gnu11 -Wall -Wextra -Werror
 
@@ -303,7 +305,7 @@ build/.program-config/%:
 	@mkdir -p $(@D)
 	@touch $@
 
-$(ZSH_BUILD_CONFIG): $(ZSH_CONFIG_SITE) $(ZSH_SOURCE)/configure \
+$(ZSH_BUILD_CONFIG): Makefile $(ZSH_CONFIG_SITE) $(ZSH_SOURCE)/configure \
 		$(zsh_LIBRARIES) $(ASTRA_POSIX_CRT0) $(ASTRA_DYNAMIC_USER_LD_INPUTS) \
 		$(ASTRA_TOOLCHAIN_STAMP) $(ASTRA_POSIX_POLICY_INPUTS) $(ZSH_PROGRAM)
 	rm -rf $(ZSH_BUILD)
@@ -318,7 +320,7 @@ $(ZSH_BUILD_CONFIG): $(ZSH_CONFIG_SITE) $(ZSH_SOURCE)/configure \
 		$(ZSH_SOURCE)/configure --host=m68k-unknown-elf \
 		--cache-file=/dev/null --disable-dynamic --disable-pcre \
 		--enable-multibyte \
-		--enable-etcdir=CONFIG:
+		--enable-etcdir=/config
 	@mkdir -p $(@D)
 	@rm -f build/.vendor-config/zsh-*
 	@touch $@
@@ -368,6 +370,112 @@ endef
 $(foreach command,$(SOURCE_COMMANDS),\
 	$(eval $(call ASTRA_SOURCE_COMMAND,$(command))))
 
+# Stage unmodified upstream utilities against Astra's shared POSIX layer.
+# They replace the native images only after the target behavior gate passes.
+SBASE_PORTABLE := basename cat cksum cmp cut date dd dirname echo env expr \
+	find fold grep head join kill ls mkdir nl od paste printf printenv pwd \
+	rmdir sed seq sleep sort split strings tail tee time tr tty unexpand \
+	uniq wc which whoami yes
+SBASE_UTIL_SOURCES := $(wildcard $(SBASE)/libutil/*.c)
+SBASE_UTIL_OBJECTS := $(patsubst $(SBASE)/libutil/%.c,\
+	build/m68k/sbase-util/%.o,$(SBASE_UTIL_SOURCES))
+SBASE_UTF_SOURCES := $(wildcard $(SBASE)/libutf/*.c)
+SBASE_UTF_OBJECTS := $(patsubst $(SBASE)/libutf/%.c,\
+	build/m68k/sbase-utf/%.o,$(SBASE_UTF_SOURCES))
+SBASE_PORTABLE_IMAGES := $(patsubst %,build/m68k/sbase-%,$(SBASE_PORTABLE))
+SBASE_PRIMARY_IMAGES := $(patsubst %,build/m68k/%,$(SBASE_PRIMARY))
+SBASE_FLAGS := -I$(SBASE) -D_DEFAULT_SOURCE -D_NETBSD_SOURCE \
+	-D_BSD_SOURCE -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 \
+	-include limits.h -include sys/sysmacros.h
+SBASE_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+
+build/m68k/sbase-util/%.o: $(SBASE)/libutil/%.c $(SBASE)/util.h \
+		$(ASTRA_POSIX_POLICY_INPUTS)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(SBASE_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
+build/m68k/libsbaseutil.a: $(SBASE_UTIL_OBJECTS) Makefile
+	@mkdir -p $(@D)
+	@rm -f $@.tmp
+	$(CROSS)gcc-ar rcs $@.tmp $(SBASE_UTIL_OBJECTS)
+	mv $@.tmp $@
+
+build/m68k/sbase-utf/%.o: $(SBASE)/libutf/%.c $(SBASE)/utf.h \
+		$(ASTRA_POSIX_POLICY_INPUTS)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(SBASE_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
+build/m68k/libsbaseutf.a: $(SBASE_UTF_OBJECTS) Makefile
+	@mkdir -p $(@D)
+	@rm -f $@.tmp
+	$(CROSS)gcc-ar rcs $@.tmp $(SBASE_UTF_OBJECTS)
+	mv $@.tmp $@
+
+SBASE_COMMAND_DEPENDENCIES = $(SBASE)/%.c $(SBASE)/arg.h $(SBASE)/util.h \
+		build/m68k/libsbaseutil.a build/m68k/libsbaseutf.a \
+		$(ASTRA_POSIX_PROGRAM_SOURCE) \
+		$(SBASE_LIBRARIES) $(COMPILER_LIBRARY) $(ASTRA_POSIX_CRT0) \
+		$(ASTRA_DYNAMIC_USER_LD_INPUTS) $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) \
+		$(ASTRA_POSIX_POLICY_INPUTS)
+
+define ASTRA_SBASE_BUILD
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(SBASE_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
+		-DASTRA_POSIX_PROGRAM_NAME='"$*"' \
+		-DASTRA_POSIX_PROGRAM_MAJOR=0 -DASTRA_POSIX_PROGRAM_MINOR=1 \
+		-DASTRA_POSIX_PROGRAM_PATCH=0 \
+		-DASTRA_POSIX_PROGRAM_AUTHOR='"sbase contributors"' \
+		-DASTRA_POSIX_PROGRAM_COPYRIGHT='"Copyright sbase contributors"' \
+		$(ASTRA_POSIX_LDFLAGS) -o $@.elf $(ASTRA_POSIX_CRT0) $< \
+		$(ASTRA_POSIX_PROGRAM_SOURCE) build/m68k/libsbaseutil.a \
+		build/m68k/libsbaseutf.a \
+		$(foreach library,$(SBASE_LIBRARIES),\
+			-Wl,-l:$(notdir $(library))) \
+		-Wl,-l:$(notdir $(COMPILER_LIBRARY))
+	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
+		$(foreach library,$(SBASE_LIBRARIES),\
+			--needed $(notdir $(library))) \
+		--needed $(notdir $(COMPILER_LIBRARY)) $@.elf
+	$(OBJCOPY) --strip-all --remove-section=.astra_events $@.elf $@
+	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
+		$(foreach library,$(SBASE_LIBRARIES),\
+			--needed $(notdir $(library))) \
+		--needed $(notdir $(COMPILER_LIBRARY)) $@
+endef
+
+build/m68k/sbase-%: $(SBASE_COMMAND_DEPENDENCIES)
+	$(ASTRA_SBASE_BUILD)
+
+$(SBASE_PRIMARY_IMAGES): build/m68k/%: $(SBASE_COMMAND_DEPENDENCIES)
+	$(ASTRA_SBASE_BUILD)
+
+.PHONY: sbase-feature-contract sbase-portable
+sbase-feature-contract:
+	@mkdir -p build/m68k
+	$(CC) $(CPPFLAGS) $(SBASE_FLAGS) $(TARGET_FLAGS) -fsyntax-only \
+		$(SBASE)/env.c $(SBASE)/sed.c $(SBASE)/tar.c
+	@if $(CC) $(CPPFLAGS) -I$(SBASE) -D_POSIX_C_SOURCE=200809L \
+		-include limits.h $(TARGET_FLAGS) \
+		-Werror=implicit-function-declaration -fsyntax-only \
+		$(SBASE)/env.c 2>build/m68k/sbase-feature-negative.log; then \
+		echo 'sbase feature contract: missing XSI flags went undetected'; \
+		exit 1; \
+	fi
+	@grep -q putenv build/m68k/sbase-feature-negative.log
+	@if $(CC) $(CPPFLAGS) -I$(SBASE) -D_DEFAULT_SOURCE \
+		-D_NETBSD_SOURCE -D_BSD_SOURCE -D_XOPEN_SOURCE=700 \
+		-D_FILE_OFFSET_BITS=64 -include limits.h $(TARGET_FLAGS) \
+		-Werror=implicit-function-declaration -fsyntax-only \
+		$(SBASE)/tar.c 2>build/m68k/sbase-sysmacros-negative.log; then \
+		echo 'sbase device macro contract: missing makedev went undetected'; \
+		exit 1; \
+	fi
+	@grep -q makedev build/m68k/sbase-sysmacros-negative.log
+
+sbase-portable: sbase-feature-contract $(SBASE_PORTABLE_IMAGES)
+
 dynamic-source-commands: $(SOURCE_IMAGES)
 
 size: $(IMAGES)
@@ -379,7 +487,8 @@ $(COMMAND_MANIFEST): Makefile $(IMAGES)
 
 # Header dependencies: a stale object compiled against an older ABI
 # constant is indistinguishable from a working one until it runs.
--include $(wildcard build/m68k/*.d build/m68k/lua-obj/*.d)
+-include $(wildcard build/m68k/*.d build/m68k/lua-obj/*.d \
+	build/m68k/sbase-util/*.d build/m68k/sbase-utf/*.d)
 
 clean:
 	rm -rf build
@@ -404,16 +513,29 @@ build/host/test_ps_support: ps/ps_support.c tests/test_ps_support.c \
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) -D_GNU_SOURCE $^ -o $@
 
+build/host/test_ps: tests/test_ps.c ps/ps.c ps/ps_support.c \
+		../../common/divide.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) $< ps/ps_support.c \
+		../../common/divide.c -o $@
+
 build/host/test_open: tests/test_open.c open/open.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) $< -o $@
 
+build/host/test_metrics: tests/test_metrics.c metrics/metrics.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) $< -o $@
+
 test: build/host/test_events_support build/host/test_date_support \
-		build/host/test_ps_support build/host/test_open
+		build/host/test_ps_support build/host/test_ps build/host/test_open \
+		build/host/test_metrics
 	./build/host/test_events_support
 	./build/host/test_date_support
 	./build/host/test_ps_support
+	./build/host/test_ps
 	./build/host/test_open
+	./build/host/test_metrics
 
 sanitize: test
 

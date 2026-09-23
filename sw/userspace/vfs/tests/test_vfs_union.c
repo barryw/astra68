@@ -220,7 +220,7 @@ test_the_first_member_that_opens_wins(void)
     reset_asked();
     forced_error_path = NULL;
     answers = "/local/commands/status";
-    assert(astra_vfs_assign_open(&table, "COMMANDS:status", ASTRA_RIGHT_READ,
+    assert(astra_vfs_assign_open(&table, "/commands/status", ASTRA_RIGHT_READ,
                                  ASTRA_VFS_OPEN_READ, client_for, NULL, wire,
                                  sizeof(wire), &file, NULL, NULL, &client,
                                  &member) == ASTRA_VFS_OK);
@@ -246,7 +246,7 @@ test_a_member_that_does_not_have_it_is_skipped(void)
     reset_asked();
     forced_error_path = NULL;
     answers = "/commands/status";
-    assert(astra_vfs_assign_open(&table, "COMMANDS:status", ASTRA_RIGHT_READ,
+    assert(astra_vfs_assign_open(&table, "/commands/status", ASTRA_RIGHT_READ,
                                  ASTRA_VFS_OPEN_READ, client_for, NULL, wire,
                                  sizeof(wire), &file, NULL, NULL, &client,
                                  &member) == ASTRA_VFS_OK);
@@ -270,7 +270,7 @@ test_no_member_has_it(void)
     reset_asked();
     forced_error_path = NULL;
     answers = NULL;
-    assert(astra_vfs_assign_open(&table, "COMMANDS:nothing", ASTRA_RIGHT_READ,
+    assert(astra_vfs_assign_open(&table, "/commands/nothing", ASTRA_RIGHT_READ,
                                  ASTRA_VFS_OPEN_READ, client_for, NULL, wire,
                                  sizeof(wire), &file, NULL, NULL, &client,
                                  &member) == ASTRA_VFS_ERR_NOT_FOUND);
@@ -279,7 +279,7 @@ test_no_member_has_it(void)
     /* A name nobody bound is refused without asking any disk anything. */
     reset_asked();
     forced_error_path = NULL;
-    assert(astra_vfs_assign_open(&table, "APPS:status", ASTRA_RIGHT_READ,
+    assert(astra_vfs_assign_open(&table, "/apps/status", ASTRA_RIGHT_READ,
                                  ASTRA_VFS_OPEN_READ, client_for, NULL, wire,
                                  sizeof(wire), &file, NULL, NULL, &client,
                                  &member) == ASTRA_VFS_ERR_NOT_FOUND);
@@ -307,7 +307,7 @@ test_creation_goes_to_the_primary_member(void)
      * first; test_a_writable_member_that_is_second_still_answers is the one
      * that proves a rights-deficient earlier member gets skipped.
      */
-    assert(astra_vfs_assign_open(&table, "COMMANDS:new", ASTRA_RIGHT_WRITE,
+    assert(astra_vfs_assign_open(&table, "/commands/new", ASTRA_RIGHT_WRITE,
                                  ASTRA_VFS_OPEN_WRITE, client_for, NULL, wire,
                                  sizeof(wire), &file, NULL, NULL, &client,
                                  &member) == ASTRA_VFS_OK);
@@ -354,7 +354,7 @@ test_a_writable_member_that_is_second_still_answers(void)
      * member" continue into a break would return NOT_FOUND here instead of
      * reaching member 1, and asked_count would still read 0 rather than 1.
      */
-    assert(astra_vfs_assign_open(&table, "COMMANDS:report", ASTRA_RIGHT_WRITE,
+    assert(astra_vfs_assign_open(&table, "/commands/report", ASTRA_RIGHT_WRITE,
                                  ASTRA_VFS_OPEN_WRITE, client_for, NULL, wire,
                                  sizeof(wire), &file, NULL, NULL, &client,
                                  &member) == ASTRA_VFS_OK);
@@ -400,7 +400,7 @@ test_a_member_no_client_serves_is_skipped(void)
      * continue into a break would return NOT_FOUND without ever reaching
      * member 1, and astra_vfs_open would never have been called at all.
      */
-    assert(astra_vfs_assign_open(&table, "COMMANDS:status", ASTRA_RIGHT_READ,
+    assert(astra_vfs_assign_open(&table, "/commands/status", ASTRA_RIGHT_READ,
                                  ASTRA_VFS_OPEN_READ,
                                  client_for_no_client_on_local_commands, NULL,
                                  wire, sizeof(wire), &file, NULL, NULL,
@@ -434,7 +434,7 @@ test_a_disk_error_outranks_a_later_not_found(void)
      * when a device actually failed has no reason to stop retrying against a
      * machine that cannot ever answer.
      */
-    status = astra_vfs_assign_open(&table, "COMMANDS:status", ASTRA_RIGHT_READ,
+    status = astra_vfs_assign_open(&table, "/commands/status", ASTRA_RIGHT_READ,
                                    ASTRA_VFS_OPEN_READ, client_for, NULL, wire,
                                    sizeof(wire), &file, NULL, NULL, &client,
                                    &member);
@@ -455,7 +455,7 @@ static void test_primary_skips_a_read_only_member(void)
 
     union_table_write_second(&table);
     assert(astra_vfs_assign_primary(
-               &table, "COMMANDS:new", ASTRA_RIGHT_WRITE, client_for, NULL,
+               &table, "/commands/new", ASTRA_RIGHT_WRITE, client_for, NULL,
                wire, sizeof(wire), &client, &member) == ASTRA_VFS_OK);
     assert(client == &standin);
     assert(member == 1u);
@@ -476,7 +476,7 @@ static void test_stat_checks_rights_after_finding_the_name(void)
     answers = "/commands/status";
     answers_also = "/local/commands/status";
     assert(astra_vfs_assign_stat(
-               &table, "COMMANDS:status", ASTRA_RIGHT_WRITE, client_for,
+               &table, "/commands/status", ASTRA_RIGHT_WRITE, client_for,
                NULL, wire, sizeof(wire), &entry, &client, NULL, &member) ==
            ASTRA_VFS_OK);
     assert(stat_asked_count == 2u);
@@ -502,7 +502,7 @@ static void test_directory_skips_an_empty_member(void)
     empty_directory = "/local/commands";
     answer_kind = ASTRA_VFS_KIND_DIRECTORY;
     assert(astra_vfs_union_directory_open(
-               &table, "COMMANDS:", client_for, NULL, &directory) ==
+               &table, "/commands", client_for, NULL, &directory) ==
            ASTRA_VFS_OK);
     assert(astra_vfs_union_directory_read(
                &directory, &entry, 1u, &count, &member) == ASTRA_VFS_OK);
@@ -539,7 +539,7 @@ static void test_links_follow_without_crossing_authority(void)
     answers = "/work/file";
     answers_also = NULL;
     assert(astra_vfs_assign_stat(
-               &table, "WORK:link", ASTRA_RIGHT_READ, client_for, NULL,
+               &table, "/work/link", ASTRA_RIGHT_READ, client_for, NULL,
                wire, sizeof(wire), &entry, NULL, NULL, NULL) ==
            ASTRA_VFS_OK);
     assert(entry.kind == ASTRA_VFS_KIND_FILE);
@@ -555,7 +555,7 @@ static void test_links_follow_without_crossing_authority(void)
     link_count = 41u;
     answers = "/work/file";
     assert(astra_vfs_assign_stat(
-               &table, "WORK:link0", ASTRA_RIGHT_READ, client_for, NULL,
+               &table, "/work/link0", ASTRA_RIGHT_READ, client_for, NULL,
                wire, sizeof(wire), &entry, NULL, NULL, NULL) ==
            ASTRA_VFS_OK);
     assert(strcmp(wire, "/work/file") == 0);
@@ -563,13 +563,13 @@ static void test_links_follow_without_crossing_authority(void)
     links[0] = (TestLink){"/work/link", "../secret"};
     link_count = 1u;
     assert(astra_vfs_assign_stat(
-               &table, "WORK:link", ASTRA_RIGHT_READ, client_for, NULL,
+               &table, "/work/link", ASTRA_RIGHT_READ, client_for, NULL,
                wire, sizeof(wire), &entry, NULL, NULL, NULL) ==
            ASTRA_VFS_ERR_NOT_FOUND);
 
     links[0] = (TestLink){"/work/link", "SECRET:secret"};
     assert(astra_vfs_assign_stat(
-               &table, "WORK:link", ASTRA_RIGHT_READ, client_for, NULL,
+               &table, "/work/link", ASTRA_RIGHT_READ, client_for, NULL,
                wire, sizeof(wire), &entry, NULL, NULL, NULL) ==
            ASTRA_VFS_ERR_NOT_FOUND);
 
@@ -578,7 +578,7 @@ static void test_links_follow_without_crossing_authority(void)
     link_count = 2u;
     stat_total = 0u;
     assert(astra_vfs_assign_stat(
-               &table, "WORK:a", ASTRA_RIGHT_READ, client_for, NULL,
+               &table, "/work/a", ASTRA_RIGHT_READ, client_for, NULL,
                wire, sizeof(wire), &entry, NULL, NULL, NULL) ==
            ASTRA_VFS_ERR_LOOP);
     assert(stat_total < 20u);

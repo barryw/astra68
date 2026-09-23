@@ -1107,6 +1107,179 @@ check_vfs_directory_handle(void)
 }
 
 static int
+check_vfs_nonrecursive_unlink(void)
+{
+    AstraVfsExt4File files[2];
+    AstraVfsExt4Backend backend;
+    const AstraVfsBackendOps *ops = astra_vfs_ext4_ops();
+    AstraVfsFilesystemInfo capacity = {0};
+    ext4_file child;
+    uint32_t status;
+    int rc;
+
+    memset(files, 0, sizeof(files));
+    if (!astra_vfs_ext4_init(&backend, MOUNT_POINT, files, 2u))
+        return fail("VFS unlink backend init", 0);
+    rc = ext4_dir_mk(MOUNT_POINT "vfs-empty");
+    if (rc != EOK)
+        return fail("VFS create empty directory", rc);
+    rc = ext4_dir_mk(MOUNT_POINT "vfs-nonempty");
+    if (rc != EOK)
+        return fail("VFS create nonempty directory", rc);
+    rc = ext4_fopen2(&child, MOUNT_POINT "vfs-nonempty/child",
+                     O_WRONLY | O_CREAT | O_EXCL);
+    if (rc != EOK)
+        return fail("VFS create directory child", rc);
+    (void)ext4_fclose(&child);
+
+    status = ops->unlink(&backend, "/vfs-nonempty");
+    if (status != ASTRA_VFS_ERR_NOT_EMPTY)
+        return fail("VFS nonempty unlink must fail", (int)status);
+    status = ops->unlink(&backend, "/");
+    if (status != ASTRA_VFS_ERR_BUSY)
+        return fail("VFS root unlink must fail", (int)status);
+    rc = ext4_fopen2(&child, MOUNT_POINT "vfs-nonempty/child", O_RDONLY);
+    if (rc != EOK)
+        return fail("VFS rejected unlink preserved child", rc);
+    (void)ext4_fclose(&child);
+    status = ops->unlink(&backend, "/vfs-empty");
+    if (status != ASTRA_VFS_OK)
+        return fail("VFS empty unlink", (int)status);
+    rc = ext4_fopen2(&child, MOUNT_POINT "vfs-empty", O_RDONLY);
+    if (rc != ENOENT)
+        return fail("VFS removed directory absent", rc);
+    rc = ext4_fremove(MOUNT_POINT "vfs-nonempty/child");
+    if (rc != EOK)
+        return fail("VFS unlink test child cleanup", rc);
+    status = ops->unlink(&backend, "/vfs-nonempty");
+    if (status != ASTRA_VFS_OK)
+        return fail("VFS now-empty unlink", (int)status);
+    status = ops->filesystem_info(&backend, 0u, "/", &capacity);
+    if (status != ASTRA_VFS_OK || capacity.size != sizeof(capacity) ||
+        capacity.block_size != 4096u || capacity.blocks == 0u ||
+        capacity.blocks_free > capacity.blocks || capacity.files == 0u)
+        return fail("VFS filesystem capacity", (int)status);
+    status = ops->filesystem_info(&backend, 0u, "/does-not-exist", &capacity);
+    if (status != ASTRA_VFS_ERR_NOT_FOUND)
+        return fail("VFS capacity missing path", (int)status);
+    status = ops->filesystem_info(&backend, 99u, NULL, &capacity);
+    if (status != ASTRA_VFS_ERR_BAD_HANDLE)
+        return fail("VFS capacity invalid handle", (int)status);
+    puts("VFS unlink: empty succeeds, nonempty fails without data loss");
+    return 0;
+}
+
+static int
+check_vfs_open_at_after_rename(void)
+{
+    AstraVfsExt4File files[3];
+    AstraVfsExt4Backend backend;
+    const AstraVfsBackendOps *ops = astra_vfs_ext4_ops();
+    AstraVfsNodeInfo info = {0};
+    uintptr_t directory = 0u;
+    uintptr_t child = 0u;
+    uint32_t status;
+    int rc;
+
+    memset(files, 0, sizeof(files));
+    if (!astra_vfs_ext4_init(&backend, MOUNT_POINT, files, 3u))
+        return fail("VFS open-at backend init", 0);
+    rc = ext4_dir_mk(MOUNT_POINT "vfs-at");
+    if (rc != EOK)
+        return fail("VFS create open-at directory", rc);
+    status = ops->open(&backend, "/vfs-at",
+                       ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY,
+                       ASTRA_VFS_MODE_DEFAULT, &directory, &info);
+    if (status != ASTRA_VFS_OK)
+        return fail("VFS open-at parent", (int)status);
+    rc = ext4_frename(MOUNT_POINT "vfs-at", MOUNT_POINT "vfs-at-renamed");
+    if (rc != EOK)
+        return fail("VFS rename open-at parent", rc);
+    status = ops->open_at(&backend, directory, "child",
+                          ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+                              ASTRA_VFS_OPEN_EXCLUSIVE,
+                          0600u, &child, &info);
+    if (status != ASTRA_VFS_OK || child == 0u ||
+        info.kind != ASTRA_VFS_KIND_FILE || (info.mode & 0777u) != 0600u)
+        return fail("VFS create through renamed directory", (int)status);
+    status = ops->chmod_node(&backend, child, 0640u);
+    if (status != ASTRA_VFS_OK)
+        return fail("VFS chmod live inode", (int)status);
+    status = ops->stat_node(&backend, child, &info);
+    if (status != ASTRA_VFS_OK || info.kind != ASTRA_VFS_KIND_FILE ||
+        (info.mode & 0777u) != 0640u)
+        return fail("VFS stat live inode", (int)status);
+    status = ops->stat_node(&backend, 99u, &info);
+    if (status != ASTRA_VFS_ERR_BAD_HANDLE)
+        return fail("VFS stat invalid inode handle", (int)status);
+    status = ops->chmod_node(&backend, 99u, 0640u);
+    if (status != ASTRA_VFS_ERR_BAD_HANDLE)
+        return fail("VFS chmod invalid inode handle", (int)status);
+    if (ops->close(&backend, child) != ASTRA_VFS_OK)
+        return fail("VFS close open-at child", 0);
+    child = 0u;
+    rc = ext4_inode_exist(MOUNT_POINT "vfs-at-renamed/child",
+                          EXT4_DE_REG_FILE);
+    if (rc != EOK)
+        return fail("VFS created child under renamed inode", rc);
+    rc = ext4_inode_exist(MOUNT_POINT "vfs-at/child", EXT4_DE_REG_FILE);
+    if (rc != ENOENT)
+        return fail("VFS open-at stale path absent", rc);
+    status = ops->stat_at(&backend, directory, "child", &info);
+    if (status != ASTRA_VFS_OK || info.kind != ASTRA_VFS_KIND_FILE ||
+        (info.mode & 0777u) != 0640u)
+        return fail("VFS stat-at renamed directory child", (int)status);
+    status = ops->chmod_at(&backend, directory, "child", 0600u, 0u);
+    if (status != ASTRA_VFS_OK)
+        return fail("VFS chmod-at renamed directory child", (int)status);
+    status = ops->stat_at(&backend, directory, "child", &info);
+    if (status != ASTRA_VFS_OK || (info.mode & 0777u) != 0600u)
+        return fail("VFS chmod-at mode persisted", (int)status);
+    status = ops->chmod_at(&backend, directory, "missing", 0600u, 0u);
+    if (status != ASTRA_VFS_ERR_NOT_FOUND)
+        return fail("VFS chmod-at missing child", (int)status);
+    status = ops->stat_at(&backend, directory, "missing", &info);
+    if (status != ASTRA_VFS_ERR_NOT_FOUND)
+        return fail("VFS stat-at missing child", (int)status);
+    status = ops->open_at(&backend, directory, "missing",
+                          ASTRA_VFS_OPEN_READ, ASTRA_VFS_MODE_DEFAULT,
+                          &child, &info);
+    if (status != ASTRA_VFS_ERR_NOT_FOUND)
+        return fail("VFS open-at missing child", (int)status);
+    status = ops->open_at(&backend, directory, "/vfs-at-renamed/child",
+                          ASTRA_VFS_OPEN_READ, ASTRA_VFS_MODE_DEFAULT,
+                          &child, &info);
+    if (status != ASTRA_VFS_ERR_INVALID)
+        return fail("VFS open-at rejects absolute path", (int)status);
+    status = ops->unlink_at(&backend, directory, "child",
+                             ASTRA_VFS_AT_REMOVE_DIRECTORY);
+    if (status != ASTRA_VFS_ERR_NOT_DIR)
+        return fail("VFS unlink-at file as directory", (int)status);
+    status = ops->unlink_at(&backend, directory, "child", 0u);
+    if (status != ASTRA_VFS_OK)
+        return fail("VFS unlink-at renamed directory child", (int)status);
+    status = ops->unlink_at(&backend, directory, "child", 0u);
+    if (status != ASTRA_VFS_ERR_NOT_FOUND)
+        return fail("VFS unlink-at missing child", (int)status);
+    rc = ext4_dir_mk(MOUNT_POINT "vfs-at-renamed/empty");
+    if (rc != EOK)
+        return fail("VFS create unlink-at directory", rc);
+    status = ops->unlink_at(&backend, directory, "empty", 0u);
+    if (status != ASTRA_VFS_ERR_IS_DIR)
+        return fail("VFS unlink-at directory as file", (int)status);
+    status = ops->unlink_at(&backend, directory, "empty",
+                             ASTRA_VFS_AT_REMOVE_DIRECTORY);
+    if (status != ASTRA_VFS_OK)
+        return fail("VFS unlink-at empty directory", (int)status);
+    if (ops->close(&backend, directory) != ASTRA_VFS_OK)
+        return fail("VFS close open-at directory", 0);
+    if (ops->unlink(&backend, "/vfs-at-renamed") != ASTRA_VFS_OK)
+        return fail("VFS open-at directory cleanup", 0);
+    puts("VFS open-at: renamed directory inode retained; bad paths rejected");
+    return 0;
+}
+
+static int
 populate(void)
 {
     char path[64];
@@ -2188,6 +2361,7 @@ main(int argc, char **argv)
     int stale_recover;
     int stale_mode;
     int journal_pressure;
+    int native_at_only;
 
     setvbuf(stdout, NULL, _IONBF, 0);
 
@@ -2198,7 +2372,8 @@ main(int argc, char **argv)
         printf("usage: %s <image> [verify-only|partitioned|on-file|full|"
                "powercut-write|powercut-recover|journal-failure-write|"
                "journal-failure-recover|stale-setup|stale-history|"
-               "stale-delete|stale-recover|journal-pressure]\n", argv[0]);
+               "stale-delete|stale-recover|journal-pressure|native-at]\n",
+               argv[0]);
         return 2;
     }
     verify_only = argc > 2 && strcmp(argv[2], "verify-only") == 0;
@@ -2217,6 +2392,7 @@ main(int argc, char **argv)
     stale_recover = argc > 2 && strcmp(argv[2], "stale-recover") == 0;
     stale_mode = stale_setup || stale_history || stale_delete || stale_recover;
     journal_pressure = argc > 2 && strcmp(argv[2], "journal-pressure") == 0;
+    native_at_only = argc > 2 && strcmp(argv[2], "native-at") == 0;
 
     if (getenv("ASTRA_EXT4_DEBUG") != NULL) {
         ext4_dmask_set(DEBUG_ALL);
@@ -2249,14 +2425,15 @@ main(int argc, char **argv)
     if (do_mount()) {
         return 1;
     }
-    if (!stale_mode && !journal_pressure &&
+    if (!stale_mode && !journal_pressure && !native_at_only &&
         check_writeback_barrier_contract()) {
         return 1;
     }
-    if (!stale_mode && !journal_pressure && check_group_commit_contract()) {
+    if (!stale_mode && !journal_pressure && !native_at_only &&
+        check_group_commit_contract()) {
         return 1;
     }
-    if (!stale_mode && !journal_pressure &&
+    if (!stale_mode && !journal_pressure && !native_at_only &&
         check_handle_abort_savepoint_contract()) {
         return 1;
     }
@@ -2300,6 +2477,9 @@ main(int argc, char **argv)
         (void)check_journal_pressure_contract();
     } else if (stale_mode) {
         /* The stale-log modes form one focused multi-mount oracle. */
+    } else if (native_at_only) {
+        (void)check_vfs_nonrecursive_unlink();
+        (void)check_vfs_open_at_after_rename();
     } else if (powercut_recover) {
         (void)read_verify(MOUNT_POINT "powercut.bin", 220u, 16384u);
     } else if (journal_failure_write) {
@@ -2327,7 +2507,10 @@ main(int argc, char **argv)
     } else if (full_volume) {
         (void)check_full_volume_reports_enospc();
     } else if (populate() == 0) {
-        if (check_vfs_directory_handle() == 0 && verify() == 0 && !on_file &&
+        if (check_vfs_directory_handle() == 0 &&
+            check_vfs_nonrecursive_unlink() == 0 &&
+            check_vfs_open_at_after_rename() == 0 && verify() == 0 &&
+            !on_file &&
             check_coalesced_read_cache() == 0 &&
             check_concurrent_read_oracle() == 0 &&
             check_concurrent_disjoint_writes() == 0)
@@ -2360,7 +2543,7 @@ main(int argc, char **argv)
     }
     if (!on_file && !verify_only && !full_volume && !powercut_recover &&
         !journal_failure_recover &&
-        !stale_mode && !journal_pressure &&
+        !stale_mode && !journal_pressure && !native_at_only &&
         controlled.largest_scatter < 2u) {
         printf("FAIL dirty writeback never coalesced adjacent blocks\n");
         ++failures;

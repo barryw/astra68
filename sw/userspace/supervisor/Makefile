@@ -58,7 +58,7 @@ TARGET := build/m68k/astra_supervisor.elf
 IMAGE := build/m68k/astra_supervisor.image.elf
 # The catalog the machine reads: the .astra_events section's bytes verbatim, so
 # a lookup on the machine is (id - base) / 128 and never a parse. It is a build
-# product and belongs on SYS:, not in git.
+# product and belongs on /system, not in git.
 CATALOG := build/m68k/astra_events.cat
 HOST_TEST := build/host/test_supervisor
 LOADER_TEST := build/host/test_loader_manifest

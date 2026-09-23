@@ -24,13 +24,13 @@ int main(void)
         "astra-config 1\n"
         "schema = 1\n"
         "name remote-desktop\n"
-        "executable SERVICES:remote-desktop\n"
+        "executable /services/remote-desktop\n"
         "runs paired\n"
         "enabled true\n"
         "delegates false\n"
         "start manual\n"
         "restart on-fault\n"
-        "argument SERVICES:remote-desktop\n"
+        "argument /services/remote-desktop\n"
         "grant NETWORK\n"
         "provides REMOTE\n"
         "needs NETWORK\n";
@@ -64,6 +64,43 @@ int main(void)
 
         assert(supervisor_service_definition_parse(
                    linux_only, sizeof(linux_only) - 1u,
+                   &second, &line) == ASTRA_STATUS_INVALID);
+    }
+    {
+        static const char ram_volume[] =
+            "astra-config 1\nschema 1\n"
+            "name ramfs\nexecutable /services/ramfs\n"
+            "runs astra\nenabled true\ndelegates false\n"
+            "start boot\nrestart on-fault\n"
+            "argument /services/ramfs\n"
+            "provides RAM:rw\ngrant CONFIG:r\nneeds SYSTEM\n";
+        static const char invalid_volume[] =
+            "astra-config 1\nschema 1\n"
+            "name ramfs\nexecutable /services/ramfs\n"
+            "runs astra\nenabled true\ndelegates false\n"
+            "start boot\nrestart on-fault\n"
+            "argument /services/ramfs\n"
+            "provides RAM:bogus\ngrant CONFIG:r\nneeds SYSTEM\n";
+        static const char disabled_volume[] =
+            "astra-config 1\nschema 1\n"
+            "name ramfs\nexecutable /services/ramfs\n"
+            "runs astra\nenabled false\ndelegates false\n"
+            "start boot\nrestart on-fault\n"
+            "argument /services/ramfs\n"
+            "provides RAM:rw\ngrant CONFIG:r\nneeds SYSTEM\n";
+
+        assert(supervisor_service_definition_parse(
+                   ram_volume, sizeof(ram_volume) - 1u,
+                   &second, &line) == ASTRA_STATUS_OK);
+        assert((second.flags & ASTRA_SERVICE_RUNS_ASTRA) != 0u &&
+               second.publication_count == 1u &&
+               strcmp(second.publications[0].name, "RAM") == 0);
+        assert(supervisor_service_definition_parse(
+                   disabled_volume, sizeof(disabled_volume) - 1u,
+                   &second, &line) == ASTRA_STATUS_OK);
+        assert((second.flags & ASTRA_SERVICE_ENABLED) == 0u);
+        assert(supervisor_service_definition_parse(
+                   invalid_volume, sizeof(invalid_volume) - 1u,
                    &second, &line) == ASTRA_STATUS_INVALID);
     }
     puts("service definition store tests passed");

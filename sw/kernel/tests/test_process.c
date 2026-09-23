@@ -7803,12 +7803,12 @@ static void test_arguments_and_environment_are_published(void)
     KernelCpuContext *next;
     uint8_t vector[32];
     char text[16];
-    static const char environment[] = "HOME=WORK:\0TZ=UTC\0";
+    static const char environment[] = "HOME=/home\0TZ=UTC\0";
     static const char arguments[] =
-        "vim\0-R\0+42\0--cmd\0set number\0--\0WORK:notes.txt\0";
+        "vim\0-R\0+42\0--cmd\0set number\0--\0/work/notes.txt\0";
     static const char *const expected[] = {
         "vim", "-R", "+42", "--cmd", "set number", "--",
-        "WORK:notes.txt"
+        "/work/notes.txt"
     };
     uint32_t process_id = 0u;
 
@@ -7851,7 +7851,7 @@ static void test_arguments_and_environment_are_published(void)
     assert(startup_be32(&vector[8]) == 0u);
     assert(kernel_user_copy_from_asm(text, startup_be32(&vector[0]), 11u) ==
            KERNEL_USER_COPY_OK);
-    assert(strcmp(text, "HOME=WORK:") == 0);
+    assert(strcmp(text, "HOME=/home") == 0);
     assert(kernel_user_copy_from_asm(text, startup_be32(&vector[4]), 7u) ==
            KERNEL_USER_COPY_OK);
     assert(strcmp(text, "TZ=UTC") == 0);
@@ -9949,7 +9949,7 @@ static uint32_t startup_be32(const uint8_t *bytes);
 
 static void test_exec_replaces_one_image_and_preserves_argv(void)
 {
-    static const char arguments[] = "vim\0-R\0WORK:notes.txt\0";
+    static const char arguments[] = "vim\0-R\0/work/notes.txt\0";
     static const char environment[] = "TERM=astra\0";
     static const char handoff[] = "posix-fds";
     AstraExecRequest request;
@@ -10144,9 +10144,9 @@ static void test_exec_replaces_one_image_and_preserves_argv(void)
     assert(kernel_user_copy_from_asm(text, startup_be32(&vector[4]), 3u) ==
            KERNEL_USER_COPY_OK);
     assert(strcmp(text, "-R") == 0);
-    assert(kernel_user_copy_from_asm(text, startup_be32(&vector[8]), 15u) ==
+    assert(kernel_user_copy_from_asm(text, startup_be32(&vector[8]), 16u) ==
            KERNEL_USER_COPY_OK);
-    assert(strcmp(text, "WORK:notes.txt") == 0);
+    assert(strcmp(text, "/work/notes.txt") == 0);
     assert(startup_be32(&vector[12]) == 0u);
 }
 
@@ -10783,7 +10783,7 @@ static void test_initial_supervisor_can_snapshot_every_live_process(void)
                                      2u * sizeof(records[0])) ==
            KERNEL_USER_COPY_OK);
     assert(records[0].process.id == supervisor_id);
-    assert(strcmp(records[0].name, "ROM:supervisor") == 0);
+    assert(strcmp(records[0].name, "/rom/supervisor") == 0);
     assert(records[1].process.id == child_id);
     assert(strcmp(records[1].name, "zsh") == 0);
 

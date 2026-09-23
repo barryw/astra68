@@ -4,6 +4,7 @@
 #include <astra/manifest.h>
 #include <astra/runtime.h>
 
+
 static int copy(char *out, uint32_t capacity, const char *text)
 {
     uint32_t at = 0u;
@@ -18,6 +19,16 @@ static int copy(char *out, uint32_t capacity, const char *text)
     return 1;
 }
 
+static int authority_name_valid(const char *name)
+{
+    if (name[0] == '\0')
+        return 0;
+    for (; *name != '\0'; ++name)
+        if (*name == '/')
+            return 0;
+    return 1;
+}
+
 int supervisor_manifest_authority(char *token, char *name, uint32_t *rights,
                                   int allow_raw)
 {
@@ -27,10 +38,12 @@ int supervisor_manifest_authority(char *token, char *name, uint32_t *rights,
         ++colon;
     if (*colon == '\0') {
         *rights = 0u;
-        return allow_raw && copy(name, ASTRA_CAPABILITY_NAME_MAX, token);
+        return allow_raw && copy(name, ASTRA_CAPABILITY_NAME_MAX, token) &&
+               authority_name_valid(name);
     }
     *colon++ = '\0';
-    if (!copy(name, ASTRA_CAPABILITY_NAME_MAX, token))
+    if (!copy(name, ASTRA_CAPABILITY_NAME_MAX, token) ||
+        !authority_name_valid(name))
         return 0;
     if (strcmp(colon, "r") == 0) {
         *rights = ASTRA_RIGHT_READ;
@@ -76,11 +89,16 @@ static int parse_line(char *line, SupervisorManifestEntry *entry)
         strcmp(entry->path, "") == 0 || strcmp(token[at++], "grants") != 0)
         return 0;
     {
-        char *colon = entry->path;
+        const char *separator = entry->path + 1u;
 
-        while (*colon != '\0' && *colon != ':')
-            ++colon;
-        if (colon == entry->path || *colon != ':' || colon[1] == '\0')
+        if (entry->path[0] != '/' || entry->path[1] == '/')
+            return 0;
+        while (*separator != '\0' && *separator != '/') {
+            if (*separator == ':')
+                return 0;
+            ++separator;
+        }
+        if (*separator != '/' || separator[1] == '\0')
             return 0;
     }
 

@@ -104,7 +104,7 @@ static uint32_t load_title_icon(AstraArea *area, uint32_t *length)
     AstraResult result;
 
     status = astra_process_read_file_alloc(
-        &process_filesystem, "APP:manifest", (void **)&bundle_manifest_text,
+        &process_filesystem, "/app/manifest", (void **)&bundle_manifest_text,
         &manifest_length);
     if (status != ASTRA_VFS_OK) {
         (void)astra_log("Terminal icon manifest read failed");

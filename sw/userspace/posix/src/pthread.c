@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #ifndef ASTRA_PTHREAD_NO_LIBC_LOCKS
+#include <stdio.h>
 #include <sys/lock.h>
 #endif
 
@@ -826,12 +827,20 @@ void __retarget_lock_init_recursive(_LOCK_T *lock)
 
 void __retarget_lock_close(_LOCK_T lock)
 {
+    /* Picolibc's standard FILEs are static and its exit finalizer flushes
+     * stdout even after an application has called fclose(stdout). Keep their
+     * locks alive for that final flush; other FILE locks still get reclaimed. */
+    if (lock != NULL &&
+        ((stdin != NULL && lock == stdin->lock) ||
+         (stdout != NULL && lock == stdout->lock) ||
+         (stderr != NULL && lock == stderr->lock)))
+        return;
     free(lock);
 }
 
 void __retarget_lock_close_recursive(_LOCK_T lock)
 {
-    free(lock);
+    __retarget_lock_close(lock);
 }
 
 void __retarget_lock_acquire(_LOCK_T lock)

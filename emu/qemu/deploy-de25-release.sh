@@ -77,7 +77,8 @@ install -m 0644 \"\$unit_source\" \"\$unit_temporary\"
 mv -f \"\$unit_temporary\" \"\$unit_target\"
 trap - EXIT HUP INT TERM
 systemctl daemon-reload
-systemctl enable --now astra-remote-desktop.service
+systemctl enable astra-remote-desktop.service
+systemctl stop astra-remote-desktop.service
 "
 $SSH "$BOARD" "systemctl restart '$SERVICE'"
 LIVE=$($SSH "$BOARD" "
@@ -108,6 +109,26 @@ if [ "$LIVE" != "$IDENTITY" ]; then
     echo "running Astra release identity changed" >&2
     exit 1
 fi
+$SSH "$BOARD" "
+set -eu
+systemctl start astra-remote-desktop.service
+expected='$STORE/releases/$IDENTITY/bin/astra-remote-desktop'
+attempt=0
+while [ \"\$attempt\" -lt 100 ]; do
+    if systemctl is-active --quiet astra-remote-desktop.service; then
+        process_id=\$(systemctl show --property MainPID --value astra-remote-desktop.service)
+        actual=\$(readlink -f \"/proc/\$process_id/exe\" 2>/dev/null || true)
+        if [ \"\$actual\" = \"\$expected\" ]; then
+            exit 0
+        fi
+    fi
+    attempt=\$((attempt + 1))
+    sleep 0.1
+done
+systemctl status astra-remote-desktop.service --no-pager >&2 || true
+echo 'remote desktop did not start from the selected release' >&2
+exit 1
+"
 $SSH "$BOARD" "PYTHONDONTWRITEBYTECODE=1 python3 \
 '$STORE/current/bin/astra-release.py' prune '$STORE'"
 INCOMING=

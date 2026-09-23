@@ -63,7 +63,7 @@ def run(qemu, rom, image, catalog, deadline):
     directory = tempfile.mkdtemp()
     ring_path = os.path.join(directory, "ring.bin")
     # A copy, with this build's catalog on it: the machine resolves ids from
-    # SYS: and the gate must boot what a built machine actually has, not an
+    # /system and the gate must boot what a built machine actually has, not an
     # image that happens to be lying around.
     scratch = os.path.join(directory, "card.img")
     shutil.copyfile(image, scratch)
@@ -78,7 +78,7 @@ def run(qemu, rom, image, catalog, deadline):
         before = machine.sequence()
         machine.qmp.type_line(COMMAND)
         # `write: ` is how report_status prefixes the answer, whatever the
-        # refusal turns out to be -- the terminal holds no SYS: at all here,
+        # refusal turns out to be -- the terminal holds no /system at all here,
         # so it is "not found" rather than "access denied".
         if machine.wait_for_text("write:", 60.0, before)[0] is None:
             raise RuntimeError("the shell never refused %r" % COMMAND)

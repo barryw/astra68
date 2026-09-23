@@ -379,6 +379,8 @@ session handle with explicit rights.
 Volumes and assigns such as `SYS:` and `WORK:` belong to the storage namespace.
 Arbitrary devices do not masquerade as filesystems. A compatibility `/dev`
 entry maps to a typed adapter handle and never exposes raw MMIO.
+The concrete device, partition, volume, boot-source, and tooling work is
+tracked in [DEVICE_AND_VOLUME_PLAN.md](DEVICE_AND_VOLUME_PLAN.md).
 
 ### 9.1 One service-session open call
 

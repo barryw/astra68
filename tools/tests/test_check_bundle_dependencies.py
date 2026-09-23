@@ -37,7 +37,7 @@ def test_stale_provider_is_rejected(root):
 
 def test_stale_requirement_is_rejected(root):
     provider = write(root / "provider",
-                     "provides filesystem.library 3 3.0.0\n")
+                     "provides filesystem.library 4 4.0.0\n")
     consumer = write(root / "consumer",
                      "requires filesystem.library 2 2.4.0\n")
     errors = dependencies.validate(

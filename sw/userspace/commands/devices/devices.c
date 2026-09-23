@@ -126,8 +126,11 @@ main(int argc, char **argv)
     uint32_t status;
     uint32_t shown = 0u;
 
-    (void)argc;
     (void)argv;
+    if (argc != 1) {
+        fputs("usage: devices\n", stderr);
+        return 2;
+    }
     if (!astra_startup_validate(startup)) {
         return ASTRA_STATUS_INVALID;
     }

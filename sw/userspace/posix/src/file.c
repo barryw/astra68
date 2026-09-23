@@ -8,10 +8,8 @@
  * why nothing here is reachable from `write()` except through the vector the
  * descriptor table calls. A program that only prints links none of it.
  *
- * Astra authority still comes from assigns. POSIX programs see those assigns
- * as the first level below a synthetic slash root: WORK:src/main.c is
- * /WORK/src/main.c, and `/` lists only the names the process was granted.
- * Native ASSIGN:path spelling remains accepted at this boundary.
+ * Astra authority still comes from assigns. POSIX programs use the Filesystem
+ * Kit's root directory, which lists only names the process was granted.
  */
 
 #include <astra/posix.h>
@@ -85,6 +83,7 @@ posix_errno(uint32_t status)
     case ASTRA_VFS_ERR_BUFFER_TOO_SMALL: return ERANGE;
     case ASTRA_VFS_ERR_CROSS_DEVICE: return EXDEV;
     case ASTRA_VFS_ERR_LOOP:        return ELOOP;
+    case ASTRA_VFS_ERR_READ_ONLY:   return EROFS;
     default:                      return EIO;
     }
 }
@@ -372,9 +371,9 @@ start(void)
     assigns = astra_process_vfs_assigns();
     (void)strcpy(cwd,
                  astra_assign_lookup(assigns, "CWD") != NULL ?
-                     "/CWD" :
+                     "/cwd" :
                  astra_assign_lookup(assigns, "WORK") != NULL ?
-                     "/WORK" : "/");
+                     "/work" : "/");
     astra_posix_file_bind(&ops);
     started = 1;
     return 1;
@@ -676,6 +675,13 @@ translate_open_flags(int flags, uint32_t *wanted)
     return 1;
 }
 
+/* POSIX O_RDONLY opens a directory; native VFS requires an explicit kind. */
+static int
+may_open_directory(uint32_t wanted)
+{
+    return wanted == ASTRA_VFS_OPEN_READ;
+}
+
 static int
 install_open_file(AstraFile *opened, int flags)
 {
@@ -734,6 +740,18 @@ open_path(const char *path, int flags, mode_t create_mode)
     status = astra_filesystem_open_mode(
         &filesystem.filesystem, resolved.native, wanted,
         (uint16_t)create_mode, &opened);
+    if ((status == ASTRA_VFS_ERR_NOT_FOUND ||
+         status == ASTRA_VFS_ERR_IS_DIR) && may_open_directory(wanted)) {
+        AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+
+        if (astra_filesystem_stat(&filesystem.filesystem, resolved.native,
+                                  &info) == ASTRA_VFS_OK &&
+            info.kind == ASTRA_VFS_KIND_DIRECTORY)
+            status = astra_filesystem_open_mode(
+                &filesystem.filesystem, resolved.native,
+                wanted | ASTRA_VFS_OPEN_DIRECTORY,
+                (uint16_t)create_mode, &opened);
+    }
     if (status != ASTRA_VFS_OK)
         return fail(status);
     return install_open_file(&opened, flags);
@@ -791,6 +809,16 @@ openat(int dirfd, const char *path, int flags, ...)
         return -1;
     status = astra_filesystem_open_at_mode(
         directory, path, wanted, (uint16_t)create_mode, &opened);
+    if ((status == ASTRA_VFS_ERR_NOT_FOUND ||
+         status == ASTRA_VFS_ERR_IS_DIR) && may_open_directory(wanted)) {
+        AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+
+        if (astra_filesystem_stat_at(directory, path, &info) ==
+                ASTRA_VFS_OK && info.kind == ASTRA_VFS_KIND_DIRECTORY)
+            status = astra_filesystem_open_at_mode(
+                directory, path, wanted | ASTRA_VFS_OPEN_DIRECTORY,
+                (uint16_t)create_mode, &opened);
+    }
     if (status != ASTRA_VFS_OK)
         return fail(status);
     return install_open_file(&opened, flags);
@@ -966,6 +994,7 @@ stat_path(const char *path, struct stat *out, int literal)
 {
     AstraFileInfo info = ASTRA_FILE_INFO_INIT;
     PosixPath resolved;
+    const char *leaf;
     uint32_t status;
 
     if (out == NULL) {
@@ -986,13 +1015,12 @@ stat_path(const char *path, struct stat *out, int literal)
     }
     if (!resolve(path, &resolved))
         return -1;
-    if (resolved.root) {
-        (void)memset(out, 0, sizeof(*out));
-        out->st_mode = S_IFDIR | 0555;
-        out->st_nlink = 1;
-        out->st_blksize = 512;
-        return 0;
-    }
+    /* A final slash, . or .. names a directory, even after a root alias. */
+    leaf = strrchr(path, '/');
+    leaf = leaf != NULL ? leaf + 1u : path;
+    if (literal && (leaf[0] == '\0' || strcmp(leaf, ".") == 0 ||
+                    strcmp(leaf, "..") == 0))
+        literal = 0;
     status = literal ?
         astra_filesystem_lstat(&filesystem.filesystem, resolved.native,
                                   &info) :
@@ -1012,6 +1040,43 @@ int stat(const char *path, struct stat *out)
 int lstat(const char *path, struct stat *out)
 {
     return stat_path(path, out, 1);
+}
+
+int
+fstatat(int dirfd, const char *path, struct stat *out, int flags)
+{
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+    AstraFile *directory;
+    uint32_t status;
+
+    if ((flags & ~AT_SYMLINK_NOFOLLOW) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (path == NULL || out == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    if (path[0] == '\0') {
+        errno = ENOENT;
+        return -1;
+    }
+    if (astra_posix_path_is_absolute(path) || dirfd == AT_FDCWD)
+        return stat_path(path, out, (flags & AT_SYMLINK_NOFOLLOW) != 0);
+    if ((flags & AT_SYMLINK_NOFOLLOW) != 0) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    if (!start())
+        return -1;
+    directory = file_for_descriptor(dirfd);
+    if (directory == NULL)
+        return -1;
+    status = astra_filesystem_stat_at(directory, path, &info);
+    if (status != ASTRA_VFS_OK)
+        return fail(status);
+    fill(out, &info);
+    return 0;
 }
 
 int
@@ -1134,6 +1199,26 @@ access(const char *path, int mode)
 }
 
 int
+faccessat(int dirfd, const char *path, int mode, int flags)
+{
+    struct stat about;
+
+    if ((mode & ~(R_OK | W_OK | X_OK)) != 0 ||
+        (flags & ~(AT_EACCESS | AT_SYMLINK_NOFOLLOW)) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (fstatat(dirfd, path, &about, flags & AT_SYMLINK_NOFOLLOW) != 0)
+        return -1;
+    if ((mode & X_OK) != 0 &&
+        (about.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0) {
+        errno = EACCES;
+        return -1;
+    }
+    return 0;
+}
+
+int
 mkdir(const char *path, mode_t mode)
 {
     PosixPath resolved;
@@ -1174,15 +1259,20 @@ remove_path(const char *path, uint32_t flags)
         return -1;
     }
     separator = strrchr(resolved.native, '/');
-    if (separator == NULL)
-        separator = strchr(resolved.native, ':');
+    if (separator == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (separator == resolved.native) {
+        errno = EROFS;
+        return -1;
+    }
     if (separator == NULL || separator[1] == '\0') {
         errno = flags == 0u ? EISDIR : EBUSY;
         return -1;
     }
     leaf = separator + 1u;
-    parent_length = (size_t)(separator - resolved.native) +
-                    (*separator == ':' ? 1u : 0u);
+    parent_length = (size_t)(separator - resolved.native);
     if (parent_length + 1u > sizeof(parent_path)) {
         errno = ENAMETOOLONG;
         return -1;
@@ -1510,8 +1600,6 @@ typedef struct PosixDir {
     uint64_t position;
     uint32_t count;
     uint32_t next;
-    uint32_t root_index;
-    uint8_t root;
 } PosixDir;
 
 _Static_assert(sizeof(PosixDir) <= sizeof(((DIR *)0)->buf),
@@ -1528,6 +1616,7 @@ opendir(const char *path)
         return NULL;
     if (resolved.root) {
         PosixDir *state;
+        uint32_t status;
 
         dir = calloc(1u, sizeof(*dir));
         if (dir == NULL) {
@@ -1536,7 +1625,13 @@ opendir(const char *path)
         }
         dir->fd = -1;
         state = (PosixDir *)(void *)dir->buf;
-        state->root = 1u;
+        status = astra_filesystem_directory_open(
+            &filesystem.filesystem, "/", &state->directory);
+        if (status != ASTRA_VFS_OK) {
+            free(dir);
+            (void)fail(status);
+            return NULL;
+        }
         return dir;
     }
     fd = open(path, O_RDONLY | O_DIRECTORY);
@@ -1615,30 +1710,6 @@ readdir(DIR *dir)
         return NULL;
     }
     state = (PosixDir *)(void *)dir->buf;
-    if (state->root != 0u) {
-        const AstraAssignTable *assigns = astra_process_vfs_assigns();
-
-        while (state->root_index < assigns->count) {
-            const AstraAssign *assign = &assigns->entries[state->root_index];
-            int duplicate = 0;
-
-            for (index = 0u; index < state->root_index; ++index)
-                if (strcmp(assigns->entries[index].name, assign->name) == 0) {
-                    duplicate = 1;
-                    break;
-                }
-            ++state->root_index;
-            if (duplicate)
-                continue;
-            (void)memset(&dir->dirent, 0, sizeof(dir->dirent));
-            dir->dirent.d_type = DT_DIR;
-            (void)strncpy(dir->dirent.d_name, assign->name,
-                          sizeof(dir->dirent.d_name) - 1u);
-            ++state->position;
-            return &dir->dirent;
-        }
-        return NULL;
-    }
     if (state->next >= state->count) {
         uint32_t status = astra_filesystem_directory_read(
             &state->directory, state->batch,
@@ -1678,14 +1749,10 @@ directory_rewind(DIR *dir)
         return -1;
     }
     state = (PosixDir *)(void *)dir->buf;
-    if (state->root != 0u) {
-        state->root_index = 0u;
-    } else {
-        status = astra_filesystem_directory_rewind(&state->directory);
-        if (status != ASTRA_VFS_OK) {
-            errno = posix_errno(status);
-            return -1;
-        }
+    status = astra_filesystem_directory_rewind(&state->directory);
+    if (status != ASTRA_VFS_OK) {
+        errno = posix_errno(status);
+        return -1;
     }
     state->position = 0u;
     state->count = 0u;
@@ -1765,8 +1832,7 @@ closedir(DIR *dir)
         return -1;
     }
     state = (PosixDir *)(void *)dir->buf;
-    if (state->root == 0u)
-        astra_filesystem_directory_close(&state->directory);
+    astra_filesystem_directory_close(&state->directory);
     if (dir->fd >= 0)
         result = close(dir->fd);
     free(dir);

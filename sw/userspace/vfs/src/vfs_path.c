@@ -1,5 +1,5 @@
 /*
- * Splitting NAME:rest, and normalising the rest. Neither function touches an
+ * Splitting /name/rest, and normalising the rest. Neither function touches an
  * assign table or a backend: a path is refused here for what it says, and
  * refused later for what the process does not hold, and keeping the two apart
  * is what makes each one testable on its own.
@@ -36,19 +36,25 @@ astra_path_split(const char *path, char *name, uint32_t name_capacity,
         rest_capacity == 0u) {
         return ASTRA_VFS_ERR_INVALID;
     }
-    while (path[index] != ':') {
-        if (path[index] == '\0' || index + 1u >= name_capacity) {
+    if (path[0] != '/') {
+        return ASTRA_VFS_ERR_INVALID;
+    }
+    ++index;
+    while (path[index] != '/' && path[index] != '\0') {
+        if (path[index] == ':' || out + 1u >= name_capacity) {
             return ASTRA_VFS_ERR_INVALID;
         }
-        name[index] = astra_ascii_upper(path[index]);
+        name[out++] = astra_ascii_upper(path[index]);
         ++index;
     }
-    if (index == 0u) {
-        return ASTRA_VFS_ERR_INVALID;   /* ":rest" names nothing */
+    if (out == 0u) {
+        return ASTRA_VFS_ERR_INVALID;   /* "/" names the virtual root */
     }
-    name[index] = '\0';
+    name[out] = '\0';
 
-    ++index;                            /* step over the colon */
+    if (path[index] == '/')
+        ++index;
+    out = 0u;
     while (path[index] != '\0') {
         if (out + 1u >= rest_capacity) {
             /* Truncation would name a different file. */
@@ -77,22 +83,12 @@ append(char *out, uint32_t length, uint32_t capacity, const char *text)
 }
 
 /*
- * True when the first component carries a colon, which is what makes a word
- * absolute. A colon further along is a character in a file name: only the
- * component before the first separator can name an assign.
+ * All absolute paths begin with a slash, including paths on mounted volumes.
  */
 static int
 is_absolute(const char *typed)
 {
-    uint32_t index = 0u;
-
-    while (typed[index] != '\0' && typed[index] != '/') {
-        if (typed[index] == ':') {
-            return 1;
-        }
-        ++index;
-    }
-    return 0;
+    return typed[0] == '/';
 }
 
 uint32_t
@@ -112,17 +108,24 @@ astra_path_qualify(const char *assign, const char *directory,
         return append(out, 0u, capacity, typed) == capacity ?
             ASTRA_VFS_ERR_INVALID : ASTRA_VFS_OK;
     }
-    length = append(out, length, capacity, assign);
-    if (length != capacity) {
-        length = append(out, length, capacity, ":");
+    length = append(out, length, capacity, "/");
+    for (uint32_t index = 0u; length != capacity && assign[index] != '\0';
+         ++index) {
+        if (length + 1u >= capacity)
+            length = capacity;
+        else {
+            out[length++] = astra_ascii_lower(assign[index]);
+            out[length] = '\0';
+        }
     }
     if (length != capacity) {
-        length = append(out, length, capacity, directory);
+        if (directory[0] != '\0')
+            length = append(out, length, capacity, "/");
+        if (length != capacity)
+            length = append(out, length, capacity, directory);
     }
     if (length != capacity && typed != NULL && typed[0] != '\0') {
-        if (directory[0] != '\0') {
-            length = append(out, length, capacity, "/");
-        }
+        length = append(out, length, capacity, "/");
         if (length != capacity) {
             length = append(out, length, capacity, typed);
         }

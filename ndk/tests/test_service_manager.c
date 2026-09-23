@@ -60,7 +60,7 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
 static AstraServiceDefinition valid_definition(void)
 {
     AstraServiceDefinition definition = {0};
-    static const char executable[] = "SERVICES:remote-desktop";
+    static const char executable[] = "/services/remote-desktop";
 
     definition.structure_size = sizeof(definition);
     definition.flags = ASTRA_SERVICE_RUNS_PAIRED | ASTRA_SERVICE_ENABLED;
@@ -83,7 +83,7 @@ int main(void)
 
     (void)memset(&definition, 0xa5, sizeof(definition));
     assert(astra_service_definition_init(
-               &definition, "remote-desktop", "SERVICES:remote-desktop",
+               &definition, "remote-desktop", "/services/remote-desktop",
                ASTRA_SERVICE_RUNS_PAIRED) == ASTRA_OK);
     assert(definition.argument_count == 1u &&
            strcmp(definition.arguments, definition.executable) == 0);

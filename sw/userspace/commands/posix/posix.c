@@ -35,6 +35,7 @@
 #include <string.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <regex.h>
 #include <sys/resource.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -146,6 +147,8 @@ enum {
     FAIL_AT_PATHS = 96,
     FAIL_FSTAT_STREAM = 97,
     FAIL_FSTAT_BAD_DESCRIPTOR = 98,
+    FAIL_SYNTHETIC_FSTAT = 99,
+    FAIL_STDIO_MEMORY = 100,
 };
 
 #define DIRECTORY "posixcheck"
@@ -198,6 +201,183 @@ network_child(void)
     if (close(3) != 0)
         return complain(FAIL_SOCKET_EXEC, "TCP exec child close");
     return 0;
+}
+
+static int
+synthetic_fstat(void)
+{
+    static const char *const paths[] = {
+        "/proc/1/status", "/events/boot/current/all", "/metrics/snapshot"
+    };
+    struct stat about;
+
+    for (size_t index = 0u; index < sizeof(paths) / sizeof(paths[0]);
+         ++index) {
+        int fd = open(paths[index], O_RDONLY);
+
+        if (fd < 0 || fstat(fd, &about) != 0 ||
+            !S_ISREG(about.st_mode) || close(fd) != 0)
+            return complain(FAIL_SYNTHETIC_FSTAT, paths[index]);
+        if (fstat(fd, &about) != -1 || errno != EBADF)
+            return complain(FAIL_SYNTHETIC_FSTAT, "closed synthetic file");
+    }
+    if (open("/proc/does-not-exist", O_RDONLY) != -1 || errno != ENOENT)
+        return complain(FAIL_SYNTHETIC_FSTAT, "missing synthetic file");
+    puts("ASTRA SYNTHETIC FSTAT PASS");
+    return 0;
+}
+
+static int
+directory_relative_stat(void)
+{
+    struct stat about;
+    int directory = open("/commands", O_RDONLY);
+    int result;
+
+    if (directory < 0) {
+        perror("at-stat open");
+        return 90;
+    }
+    errno = 0;
+    if (open("/commands/does-not-exist", O_RDONLY) != -1 ||
+        errno != ENOENT) {
+        printf("at-stat missing open errno=%d\n", errno);
+        (void)close(directory);
+        return 94;
+    }
+    result = fstatat(directory, "status", &about, 0);
+    if (result != 0) {
+        perror("at-stat existing");
+        (void)close(directory);
+        return 91;
+    }
+    if (!S_ISREG(about.st_mode) ||
+        faccessat(directory, "status", X_OK, AT_EACCESS) != 0) {
+        perror("at-stat executable");
+        printf("mode=%o\n", (unsigned)about.st_mode);
+        (void)close(directory);
+        return 92;
+    }
+    errno = 0;
+    if (fstatat(directory, "does-not-exist", &about, 0) != -1 ||
+        errno != ENOENT) {
+        printf("at-stat missing errno=%d\n", errno);
+        (void)close(directory);
+        return 93;
+    }
+    (void)close(directory);
+    puts("ASTRA AT STAT PASS");
+    return 0;
+}
+
+static int
+stdio_memory_probe(const char *path)
+{
+    FILE *pattern = fmemopen("hello", 6u, "r");
+    FILE *file;
+    char *pattern_line = NULL;
+    char *file_line = NULL;
+    size_t pattern_capacity = 0u;
+    size_t file_capacity = 0u;
+
+    if (pattern == NULL)
+        return complain(FAIL_STDIO_MEMORY, "fmemopen");
+    if (getline(&pattern_line, &pattern_capacity, pattern) != 6 ||
+        strcmp(pattern_line, "hello") != 0 ||
+        getline(&pattern_line, &pattern_capacity, pattern) != -1 ||
+        !feof(pattern) || ferror(pattern) ||
+        fflush(pattern) != 0 ||
+        fclose(pattern) != 0)
+        return complain(FAIL_STDIO_MEMORY, "memory getline and EOF");
+    (void)astra_log("STDIO MEMORY CLOSED");
+    file = fopen(path, "r");
+    if (file == NULL || getline(&file_line, &file_capacity, file) != 12 ||
+        strcmp(file_line, "sbase-hello\n") != 0)
+        return complain(FAIL_STDIO_MEMORY, "file getline");
+    puts(file_line);
+    (void)astra_log("STDIO FILE PRINTED");
+    if (getline(&file_line, &file_capacity, file) != -1 || !feof(file) ||
+        ferror(file) || fflush(file) != 0 ||
+        fclose(file) != 0)
+        return complain(FAIL_STDIO_MEMORY, "file EOF and close");
+    (void)astra_log("STDIO FILE CLOSED");
+    free(pattern_line);
+    free(file_line);
+    if (fflush(stdin) != 0 || fclose(stdin) != 0)
+        return complain(FAIL_STDIO_MEMORY, "stdin close");
+    (void)astra_log("STDIO STDIN CLOSED");
+    if (fflush(stdout) != 0 || fclose(stdout) != 0)
+        return complain(FAIL_STDIO_MEMORY, "stdout close");
+    (void)astra_log("STDIO STDOUT CLOSED");
+    return 0;
+}
+
+static int
+stdio_early_close_probe(const char *path)
+{
+    FILE *file;
+    char *line = NULL;
+    size_t capacity = 0u;
+
+    errno = 0;
+    file = fopen(path, "r");
+    if (strcmp(path, "sbase-missing") == 0) {
+        if (file != NULL || errno != ENOENT)
+            return complain(FAIL_STDIO_MEMORY, "missing file open");
+        puts("ASTRA EARLY CLOSE MISSING PASS");
+        return 0;
+    }
+    if (file == NULL || getline(&line, &capacity, file) != 12 ||
+        strcmp(line, "sbase-hello\n") != 0)
+        return complain(FAIL_STDIO_MEMORY, "early file getline");
+    (void)astra_log("EARLY FILE READ");
+    if (fflush(file) != 0)
+        return complain(FAIL_STDIO_MEMORY, "early file flush");
+    (void)astra_log("EARLY FILE FLUSHED");
+    if (fclose(file) != 0)
+        return complain(FAIL_STDIO_MEMORY, "early file close");
+    (void)astra_log("EARLY FILE CLOSED");
+    free(line);
+    if (fflush(stdin) != 0 || fclose(stdin) != 0)
+        return complain(FAIL_STDIO_MEMORY, "early stdin close");
+    (void)astra_log("EARLY STDIN CLOSED");
+    puts("ASTRA EARLY CLOSE PASS");
+    if (fflush(stdout) != 0 || fclose(stdout) != 0)
+        return complain(FAIL_STDIO_MEMORY, "early stdout close");
+    (void)astra_log("EARLY STDOUT CLOSED");
+    return 0;
+}
+
+static int
+regex_close_probe(const char *pattern, const char *path)
+{
+    regex_t compiled;
+    FILE *file;
+    char *line = NULL;
+    size_t capacity = 0u;
+    int matched;
+
+    if (regcomp(&compiled, pattern, REG_NOSUB) != 0)
+        return complain(FAIL_STDIO_MEMORY, "regex compile");
+    (void)astra_log("REGEX COMPILED");
+    file = fopen(path, "r");
+    if (file == NULL || getline(&line, &capacity, file) != 12)
+        return complain(FAIL_STDIO_MEMORY, "regex file read");
+    matched = regexec(&compiled, line, 0, NULL, 0) == 0;
+    (void)astra_log("REGEX EXECUTED");
+    if (matched)
+        puts(path);
+    if (ferror(file) || fflush(file) != 0 || fclose(file) != 0)
+        return complain(FAIL_STDIO_MEMORY, "regex file close");
+    (void)astra_log("REGEX FILE CLOSED");
+    free(line);
+    if (fflush(stdin) != 0 || fclose(stdin) != 0)
+        return complain(FAIL_STDIO_MEMORY, "regex stdin close");
+    (void)astra_log("REGEX STDIN CLOSED");
+    if (fflush(stdout) != 0 || fclose(stdout) != 0)
+        return complain(FAIL_STDIO_MEMORY, "regex stdout close");
+    (void)astra_log("REGEX STDOUT CLOSED");
+    return matched ? 0 : 1;
 }
 
 static int
@@ -331,7 +511,7 @@ main(int argc, char **argv)
 {
     static const char *const expected_arguments[] = {
         "posix", "-R", "+42", "--cmd", "set number", "--",
-        "WORK:notes.txt"
+        "/work/notes.txt"
     };
     char before[ASTRA_VFS_PATH_MAX];
     char after[ASTRA_VFS_PATH_MAX];
@@ -345,6 +525,16 @@ main(int argc, char **argv)
 
     if (argc == 2 && strcmp(argv[1], "--network-child") == 0)
         return network_child();
+    if (argc == 2 && strcmp(argv[1], "--synthetic-fstat") == 0)
+        return synthetic_fstat();
+    if (argc == 2 && strcmp(argv[1], "--at-stat") == 0)
+        return directory_relative_stat();
+    if (argc == 3 && strcmp(argv[1], "--stdio-memory") == 0)
+        return stdio_memory_probe(argv[2]);
+    if (argc == 3 && strcmp(argv[1], "--stdio-early-close") == 0)
+        return stdio_early_close_probe(argv[2]);
+    if (argc == 4 && strcmp(argv[1], "--regex-close") == 0)
+        return regex_close_probe(argv[2], argv[3]);
     if (argc == 4 && strcmp(argv[1], "--durability") == 0)
         return durability_probe(argv[2], argv[3], 0);
     if (argc == 4 && strcmp(argv[1], "--durability-gated") == 0)
@@ -943,7 +1133,7 @@ main(int argc, char **argv)
                 _exit(complain(FAIL_TCP, "TCP child dup2"));
             if (client != 3 && close(client) != 0)
                 _exit(complain(FAIL_TCP, "TCP child close"));
-            execve("COMMANDS:posix", child_argv, environ);
+            execve("/commands/posix", child_argv, environ);
             _exit(complain(FAIL_SOCKET_EXEC, "TCP child execve"));
         }
         accepted = accept(listener, NULL, NULL);

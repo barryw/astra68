@@ -59,6 +59,7 @@ environ
 execle
 execlpe
 execve
+faccessat
 fcntl
 fork
 free
@@ -71,6 +72,7 @@ fdclosedir
 fdopendir
 fpathconf
 fstat
+fstatat
 fstatvfs
 fsync
 ftruncate

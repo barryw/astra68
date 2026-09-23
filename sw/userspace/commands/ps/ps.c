@@ -38,65 +38,11 @@ enum {
 };
 
 static char output[PS_OUTPUT_MAX];
+static AstraProcessFilesystem filesystem = ASTRA_PROCESS_FILESYSTEM_INIT;
 static const char header[] =
     "       PID   GEN STATE  PRI  NI THR MEM(K)  CPU%        TIME    RUNS "
     "  CALLS HND COMMAND\n";
 static uint32_t output_used;
-
-static uint32_t
-read_snapshot(AstraProcSnapshot **records, uint32_t *moved)
-{
-    const AstraAssign *assign = NULL;
-    AstraVfsClient *client;
-    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
-    uint64_t size = 0u;
-    uint64_t offset = 0u;
-    uint16_t kind = 0u;
-    char path[ASTRA_VFS_PATH_MAX];
-    uint32_t status;
-
-    *moved = 0u;
-    *records = NULL;
-    status = astra_assign_resolve(astra_process_vfs_assigns(),
-                                  "PROC:snapshot", ASTRA_RIGHT_READ, 0u,
-                                  path, sizeof(path), &assign);
-    if (status != ASTRA_VFS_OK)
-        return status;
-    client = astra_process_vfs_client_for(assign);
-    if (client == NULL)
-        return ASTRA_VFS_ERR_NOT_FOUND;
-    status = astra_vfs_open(client, path, ASTRA_VFS_OPEN_READ, &file, &size,
-                            &kind);
-    if (status != ASTRA_VFS_OK)
-        return status;
-    status = astra_ps_snapshot_allocate(size, astra_runtime_reallocate,
-                                        records);
-    if (status != ASTRA_VFS_OK) {
-        (void)astra_vfs_close(client, file);
-        return status;
-    }
-    while (offset < size) {
-        uint32_t chunk = (uint32_t)(size - offset);
-        uint32_t got = 0u;
-
-        if (chunk > ASTRA_VFS_IO_MAX)
-            chunk = ASTRA_VFS_IO_MAX;
-        status = astra_vfs_read(client, file, offset,
-                                (uint8_t *)*records + (uint32_t)offset,
-                                chunk, &got);
-        if (status != ASTRA_VFS_OK || got == 0u) {
-            status = status != ASTRA_VFS_OK ? status : ASTRA_VFS_ERR_PROTOCOL;
-            break;
-        }
-        offset += got;
-    }
-    if (astra_vfs_close(client, file) != ASTRA_VFS_OK &&
-        status == ASTRA_VFS_OK)
-        status = ASTRA_VFS_ERR_PROTOCOL;
-    *moved = (uint32_t)offset;
-    return status == ASTRA_VFS_OK && offset == size
-               ? ASTRA_VFS_OK : status;
-}
 
 static void
 say_error(const char *text)
@@ -152,16 +98,16 @@ main(int argc, char **argv)
     (void)argv;
     if (!astra_startup_validate(startup))
         return ASTRA_STATUS_INVALID;
-    status = astra_process_vfs_init(startup);
+    status = astra_process_filesystem_open(&filesystem, startup);
     if (status != ASTRA_VFS_OK) {
         say_error("ps: filesystem unavailable\n");
         return (int)status;
     }
-    status = read_snapshot(&records, &moved);
+    status = astra_process_read_file_alloc(
+        &filesystem, "/proc/snapshot", (void **)&records, &moved);
     if (status != ASTRA_VFS_OK) {
         say_error("ps: PROC: not granted to this program\n");
-        (void)astra_runtime_reallocate(records, 0u);
-        astra_process_vfs_close();
+        astra_process_filesystem_close(&filesystem);
         return (int)status;
     }
     if (moved % sizeof(records[0]) != 0u)
@@ -187,11 +133,11 @@ main(int argc, char **argv)
                 ++listed;
         }
     }
-    astra_process_vfs_close();
-    (void)astra_runtime_reallocate(records, 0u);
+    astra_process_filesystem_close(&filesystem);
+    astra_runtime_deallocate(records);
     if (status == ASTRA_VFS_OK && !flush_output())
         status = ASTRA_VFS_ERR_IO;
-    if (status == ASTRA_VFS_ERR_IO)
+    if (status != ASTRA_VFS_OK)
         return (int)status;
     return listed != 0u ? 0 : (int)ASTRA_STATUS_NOT_FOUND;
 }

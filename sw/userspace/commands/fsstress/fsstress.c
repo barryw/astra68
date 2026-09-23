@@ -673,7 +673,7 @@ main(int argc, char **argv)
     uint32_t seed = UINT32_C(0x68a57a31), workers = 4u, files = 16u;
     uint32_t max_bytes = 8192u;
     uint32_t selected_operation = OP_COUNT;
-    const char *base = "WORK:fsstress";
+    const char *base = "/work/fsstress";
     char *root;
     pid_t *children;
     Report aggregate = {0};

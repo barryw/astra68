@@ -208,6 +208,16 @@ static uint32_t metrics_stat(void *context, const char *path,
                         ASTRA_VFS_MODE_DEFAULT, &node, info);
 }
 
+static uint32_t metrics_stat_node(void *context, uintptr_t node,
+                                  AstraVfsNodeInfo *info)
+{
+    if (node == METRIC_NODE_ROOT)
+        return metrics_stat(context, "", info);
+    if (node == METRIC_NODE_SNAPSHOT)
+        return metrics_stat(context, "snapshot", info);
+    return ASTRA_VFS_ERR_INVALID;
+}
+
 static uint32_t metrics_readdir(void *context, uintptr_t directory,
                                 const char *path, uint64_t cookie, char *name,
                                 uint32_t capacity, AstraVfsNodeInfo *info,
@@ -254,6 +264,7 @@ static const AstraVfsBackendOps operations = {
     .chmod_at = astra_vfs_backend_no_chmod_at,
     .filesystem_info = astra_vfs_backend_no_filesystem_info,
     .stat_at = astra_vfs_backend_no_stat_at,
+    .stat_node = metrics_stat_node,
 };
 
 int astra_metric_vfs_init(AstraMetricVfs *metrics,

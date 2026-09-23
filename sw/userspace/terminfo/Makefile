@@ -113,8 +113,8 @@ $(ARCHIVE): $(NCURSES_INPUT_STAMP)
 		$(NCURSES_SOURCE)/configure \
 		--build=x86_64-pc-linux-gnu --host=m68k-unknown-elf \
 		--prefix=$(NCURSES_PREFIX) \
-		--with-default-terminfo-dir=/LIBS/terminfo \
-		--with-terminfo-dirs=/LIBS/terminfo --with-termlib \
+		--with-default-terminfo-dir=/libs/terminfo \
+		--with-terminfo-dirs=/libs/terminfo --with-termlib \
 		--enable-widec --without-shared --with-normal --without-cxx \
 		--without-cxx-binding --without-ada --without-progs \
 		--without-tests --without-manpages --without-debug \

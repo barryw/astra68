@@ -4,6 +4,7 @@
 #include <astra/render_batch.h>
 #include <astra/window_scene.h>
 #include <astra/render_builder.h>
+#include <astra/rounded.h>
 #include <astra/surface.h>
 #include <astra/theme.h>
 #include <astra/ui_font.h>
@@ -888,12 +889,10 @@ static void test_text_box_scroll_uses_overlap_safe_copy(void)
 
 static void test_rounded_fill_has_no_overlap(void)
 {
-    /* A rounded fill must not cover any pixel twice: its bands used to
-       overlap, and one repainted band is milliseconds on real hardware. */
     static uint8_t batch_storage[ASTRA_RENDER_BUILDER_BYTES];
+    uint8_t coverage[60u][100u] = {{0}};
     AstraRenderBuilder solid;
     uint32_t surface;
-    uint32_t filled = 0u;
 
     assert(astra_render_builder_init(&solid, batch_storage,
                                      sizeof(batch_storage), 9u));
@@ -907,12 +906,26 @@ static void test_rounded_fill_has_no_overlap(void)
             ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
             ASTRA_RENDER_BATCH_ARENA_OFFSET +
             index * ASTRA_RENDER_COMMAND_BYTES;
+        uint32_t position = be32(item + 48u);
         uint32_t extent = be32(item + 56u);
+        uint32_t x = position >> 16;
+        uint32_t y = position & 0xffffu;
+        uint32_t width = extent >> 16;
+        uint32_t height = extent & 0xffffu;
 
-        if ((be32(item + 4u) >> 16) == ASTRA_RENDER_OP_FILL)
-            filled += (extent >> 16) * (extent & 0xffffu);
+        assert((be32(item + 4u) >> 16) == ASTRA_RENDER_OP_FILL);
+        assert(x + width <= 100u && y + height <= 60u);
+        for (uint32_t row = y; row < y + height; ++row)
+            for (uint32_t column = x; column < x + width; ++column)
+                assert(++coverage[row][column] == 1u);
     }
-    assert(filled == 100u * 60u - 4u * 12u * 12u);
+    for (uint32_t row = 0u; row < 60u; ++row) {
+        uint32_t inset = astra_graphics_rounded_inset(row, 60u, 12u);
+
+        for (uint32_t column = 0u; column < 100u; ++column)
+            assert(coverage[row][column] ==
+                   (uint8_t)(column >= inset && column < 100u - inset));
+    }
 }
 
 int main(void)

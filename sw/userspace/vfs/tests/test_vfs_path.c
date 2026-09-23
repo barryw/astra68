@@ -10,19 +10,19 @@ test_splitting(void)
     char name[ASTRA_CAPABILITY_NAME_MAX];
     char rest[64];
 
-    assert(astra_path_split("WORK:src/main.c", name, sizeof(name), rest,
+    assert(astra_path_split("/work/src/main.c", name, sizeof(name), rest,
                             sizeof(rest)) == ASTRA_VFS_OK);
     assert(strcmp(name, "WORK") == 0);
     assert(strcmp(rest, "src/main.c") == 0);
 
     /* An assign alone names its root. */
-    assert(astra_path_split("SYS:", name, sizeof(name), rest, sizeof(rest)) ==
+    assert(astra_path_split("/sys", name, sizeof(name), rest, sizeof(rest)) ==
            ASTRA_VFS_OK);
     assert(strcmp(name, "SYS") == 0);
     assert(strcmp(rest, "") == 0);
 
     /* The name is canonicalised; the rest is byte-exact. */
-    assert(astra_path_split("work:Makefile", name, sizeof(name), rest,
+    assert(astra_path_split("/work/Makefile", name, sizeof(name), rest,
                             sizeof(rest)) == ASTRA_VFS_OK);
     assert(strcmp(name, "WORK") == 0);
     assert(strcmp(rest, "Makefile") == 0);
@@ -32,32 +32,38 @@ static void
 test_refusals(void)
 {
     static const char malformed_assign[] = {
-        'W', (char)0xc0, (char)0x80, 'K', ':', 'x', '\0'
+        '/', 'W', (char)0xc0, (char)0x80, 'K', '/', 'x', '\0'
     };
     static const char malformed_rest[] = {
-        'W', 'O', 'R', 'K', ':', (char)0xed, (char)0xa0, (char)0x80, '\0'
+        '/', 'W', 'O', 'R', 'K', '/', (char)0xed, (char)0xa0,
+        (char)0x80, '\0'
     };
     char name[ASTRA_CAPABILITY_NAME_MAX];
     char rest[64];
     char tiny[4];
 
-    /* There is no root: a leading slash is not a path on this machine. */
-    assert(astra_path_split("/etc/passwd", name, sizeof(name), rest,
-                            sizeof(rest)) == ASTRA_VFS_ERR_INVALID);
+    /* The virtual root is not an assign; a mounted path is. */
+    assert(astra_path_split("/", name, sizeof(name), rest, sizeof(rest)) ==
+           ASTRA_VFS_ERR_INVALID);
     /* A relative path is not absolute and is not this function's business. */
     assert(astra_path_split("src/main.c", name, sizeof(name), rest,
                             sizeof(rest)) == ASTRA_VFS_ERR_INVALID);
-    assert(astra_path_split(":rest", name, sizeof(name), rest, sizeof(rest)) ==
+    assert(astra_path_split("WORK:rest", name, sizeof(name), rest,
+                            sizeof(rest)) == ASTRA_VFS_ERR_INVALID);
+    assert(astra_path_split("/:rest", name, sizeof(name), rest,
+                            sizeof(rest)) == ASTRA_VFS_ERR_INVALID);
+    assert(astra_path_split("//rest", name, sizeof(name), rest,
+                            sizeof(rest)) ==
            ASTRA_VFS_ERR_INVALID);
     assert(astra_path_split("", name, sizeof(name), rest, sizeof(rest)) ==
            ASTRA_VFS_ERR_INVALID);
     assert(astra_path_split(NULL, name, sizeof(name), rest, sizeof(rest)) ==
            ASTRA_VFS_ERR_INVALID);
     /* A name longer than the field would be a different name if truncated. */
-    assert(astra_path_split("AVERYLONGASSIGNNAME:x", name, sizeof(name), rest,
+    assert(astra_path_split("/AVERYLONGASSIGNNAME/x", name, sizeof(name), rest,
                             sizeof(rest)) == ASTRA_VFS_ERR_INVALID);
     /* Truncation would name a different file, so it is refused. */
-    assert(astra_path_split("WORK:src/main.c", name, sizeof(name), tiny,
+    assert(astra_path_split("/work/src/main.c", name, sizeof(name), tiny,
                             sizeof(tiny)) == ASTRA_VFS_ERR_INVALID);
     assert(astra_path_split(malformed_assign, name, sizeof(name), rest,
                             sizeof(rest)) == ASTRA_VFS_ERR_INVALID);
@@ -147,50 +153,52 @@ test_qualifying(void)
     /* A relative word is relative to where the shell is standing. */
     assert(astra_path_qualify("WORK", "src", "main.c", out, sizeof(out)) ==
            ASTRA_VFS_OK);
-    assert(strcmp(out, "WORK:src/main.c") == 0);
+    assert(strcmp(out, "/work/src/main.c") == 0);
 
     assert(astra_path_qualify("WORK", "", "main.c", out, sizeof(out)) ==
            ASTRA_VFS_OK);
-    assert(strcmp(out, "WORK:main.c") == 0);
+    assert(strcmp(out, "/work/main.c") == 0);
 
     /* Bundle resources use the same rule in services and applications. */
     assert(astra_path_qualify("APP", "", "icon.aicon", out, sizeof(out)) ==
            ASTRA_VFS_OK);
-    assert(strcmp(out, "APP:icon.aicon") == 0);
+    assert(strcmp(out, "/app/icon.aicon") == 0);
     assert(astra_path_qualify("APPS", "Terminal.app", "icon.aicon", out,
                               sizeof(out)) == ASTRA_VFS_OK);
-    assert(strcmp(out, "APPS:Terminal.app/icon.aicon") == 0);
+    assert(strcmp(out, "/apps/Terminal.app/icon.aicon") == 0);
     assert(astra_path_qualify("WORK", "src", malformed, out,
                               sizeof(out)) == ASTRA_VFS_ERR_INVALID);
 
     /* No word at all names where the shell is standing. */
     assert(astra_path_qualify("WORK", "src", NULL, out, sizeof(out)) ==
            ASTRA_VFS_OK);
-    assert(strcmp(out, "WORK:src") == 0);
+    assert(strcmp(out, "/work/src") == 0);
     assert(astra_path_qualify("WORK", "", "", out, sizeof(out)) ==
            ASTRA_VFS_OK);
-    assert(strcmp(out, "WORK:") == 0);
+    assert(strcmp(out, "/work") == 0);
 
-    /* A word carrying an assign is already absolute and is left alone. */
-    assert(astra_path_qualify("WORK", "src", "SYS:commands", out,
+    /* A leading slash is absolute and is left alone. */
+    assert(astra_path_qualify("WORK", "src", "/sys/commands", out,
                               sizeof(out)) == ASTRA_VFS_OK);
-    assert(strcmp(out, "SYS:commands") == 0);
-    assert(astra_path_qualify("WORK", "src", "SYS:", out, sizeof(out)) ==
+    assert(strcmp(out, "/sys/commands") == 0);
+    assert(astra_path_qualify("WORK", "src", "/sys", out, sizeof(out)) ==
            ASTRA_VFS_OK);
-    assert(strcmp(out, "SYS:") == 0);
+    assert(strcmp(out, "/sys") == 0);
 
     /*
-     * A colon after a separator is a character in a file name, not an assign:
-     * only the first component can carry one.
+     * A colon is an ordinary filename character, never a volume separator.
      */
     assert(astra_path_qualify("WORK", "src", "a/b:c", out, sizeof(out)) ==
            ASTRA_VFS_OK);
-    assert(strcmp(out, "WORK:src/a/b:c") == 0);
+    assert(strcmp(out, "/work/src/a/b:c") == 0);
+    assert(astra_path_qualify("WORK", "src", "dh0:note", out,
+                              sizeof(out)) == ASTRA_VFS_OK);
+    assert(strcmp(out, "/work/src/dh0:note") == 0);
 
     /* `..` is passed through for the resolver to refuse, not quietly eaten. */
     assert(astra_path_qualify("WORK", "src", "..", out, sizeof(out)) ==
            ASTRA_VFS_OK);
-    assert(strcmp(out, "WORK:src/..") == 0);
+    assert(strcmp(out, "/work/src/..") == 0);
 }
 
 static void
@@ -211,7 +219,7 @@ test_qualify_refusals(void)
     /* Truncation would name a different file. */
     assert(astra_path_qualify("WORK", "src", "main.c", tiny, sizeof(tiny)) ==
            ASTRA_VFS_ERR_INVALID);
-    assert(astra_path_qualify("WORK", "src", "SYS:a/very/long/one", tiny,
+    assert(astra_path_qualify("WORK", "src", "/sys/a/very/long/one", tiny,
                               sizeof(tiny)) == ASTRA_VFS_ERR_INVALID);
     assert(astra_path_qualify("WORK", "src", NULL, tiny, 2u) ==
            ASTRA_VFS_ERR_INVALID);

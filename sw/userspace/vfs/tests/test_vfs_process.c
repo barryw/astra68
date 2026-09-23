@@ -104,27 +104,6 @@ const AstraAssign *astra_assign_lookup(const AstraAssignTable *table,
     return NULL;
 }
 
-uint32_t astra_path_normalise(const char *path, char *out, uint32_t capacity)
-{
-    size_t length = strlen(path);
-
-    if (length + 1u > capacity || strstr(path, "..") != NULL)
-        return ASTRA_VFS_ERR_INVALID;
-    memcpy(out, path, length + 1u);
-    return ASTRA_VFS_OK;
-}
-
-uint32_t astra_path_qualify(const char *assign, const char *directory,
-                            const char *path, char *out, uint32_t capacity)
-{
-    int length = snprintf(out, capacity, "%s:%s%s%s", assign, directory,
-                          directory[0] != '\0' && path[0] != '\0' ? "/" : "",
-                          path);
-
-    return length >= 0 && (uint32_t)length < capacity ? ASTRA_VFS_OK :
-                                                       ASTRA_VFS_ERR_LIMIT;
-}
-
 /*
  * astra_process_read_file takes the one-round-trip path when the service can
  * offer it. This suite exercises the resolver, not the transport, so both
@@ -303,7 +282,7 @@ uint32_t astra_filesystem_open(AstraFilesystem *filesystem, const char *path,
                                uint32_t flags, AstraFile *file)
 {
     (void)filesystem;
-    assert(strcmp(path, "APP:test") == 0 && flags == ASTRA_VFS_OPEN_READ);
+    assert(strcmp(path, "/app/test") == 0 && flags == ASTRA_VFS_OPEN_READ);
     file->_private_file = 1u;
     return ASTRA_VFS_OK;
 }
@@ -382,14 +361,14 @@ int main(void)
         "loader/library.1", path, sizeof(path), &abi));
 
     assert(!astra_vfs_provider_index_parse(
-        (const uint8_t *)"LIBS:Filesystem.kit/library", 27u,
+        (const uint8_t *)"/libs/Filesystem.kit/library", 27u,
         "LIBS", "filesystem.library", 1u, path, sizeof(path), &reference));
     assert(path[0] == '\0');
     assert(reference.size == 0u);
     assert(astra_vfs_provider_index_parse(
         indexed, sizeof(indexed), "LIBS", "filesystem.library", 1u, path,
         sizeof(path), &reference));
-    assert(strcmp(path, "LIBS:File") == 0);
+    assert(strcmp(path, "/libs/File") == 0);
     assert(reference.size == ASTRA_LIBRARY_REFERENCE_SIZE);
     assert(strcmp(reference.name, "filesystem.library.1") == 0);
     assert(reference.major == 1u && reference.minor == 2u &&
@@ -397,10 +376,10 @@ int main(void)
            reference.abi_minor == 4u &&
            reference.build_id == 0x12345678u);
     assert(!astra_vfs_provider_index_parse(
-        (const uint8_t *)"SYS:Filesystem.kit/library", 26u,
+        (const uint8_t *)"/sys/Filesystem.kit/library", 26u,
         "LIBS", "filesystem.library", 1u, path, sizeof(path), &reference));
     assert(!astra_vfs_provider_index_parse(
-        (const uint8_t *)"LIBS:Filesystem kit/library", 27u,
+        (const uint8_t *)"/libs/Filesystem kit/library", 27u,
         "LIBS", "filesystem.library", 1u, path, sizeof(path), &reference));
     assert(!astra_vfs_provider_index_parse(
         legacy_absolute, sizeof(legacy_absolute), "LIBS",
@@ -430,28 +409,28 @@ int main(void)
 
             assert(astra_process_path("file", path, sizeof(path)) ==
                        ASTRA_VFS_OK &&
-                   strcmp(path, "CWD:file") == 0);
+                   strcmp(path, "/cwd/file") == 0);
             assert(astra_process_vfs_set_current_directory("CWD", "proto") ==
                    ASTRA_VFS_OK);
             assert(astra_process_path("file", path, sizeof(path)) ==
                        ASTRA_VFS_OK &&
-                   strcmp(path, "CWD:proto/file") == 0);
+                   strcmp(path, "/cwd/proto/file") == 0);
             assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
             assert(seeds == seeded);
             assert(astra_process_path("file", path, sizeof(path)) ==
                        ASTRA_VFS_OK &&
-                   strcmp(path, "CWD:proto/file") == 0);
+                   strcmp(path, "/cwd/proto/file") == 0);
             assert(astra_process_vfs_after_fork_child(&startup) ==
                    ASTRA_VFS_OK);
             assert(seeds == seeded);
             assert(astra_process_path("file", path, sizeof(path)) ==
                        ASTRA_VFS_OK &&
-                   strcmp(path, "CWD:proto/file") == 0);
+                   strcmp(path, "/cwd/proto/file") == 0);
             assert(astra_process_vfs_set_current_directory("WORK", "other") ==
                    ASTRA_VFS_OK);
             assert(astra_process_path("file", path, sizeof(path)) ==
                        ASTRA_VFS_OK &&
-                   strcmp(path, "WORK:other/file") == 0);
+                   strcmp(path, "/work/other/file") == 0);
             assert(astra_process_vfs_set_current_directory("MISSING", "") ==
                    ASTRA_VFS_ERR_NOT_FOUND);
         }
@@ -641,12 +620,12 @@ int main(void)
 
         filesystem.filesystem._private_assigns = (const void *)1u;
 
-        assert(astra_process_read_file(&filesystem, "APP:test", bytes,
+        assert(astra_process_read_file(&filesystem, "/app/test", bytes,
                                        sizeof(bytes), &length) ==
                ASTRA_VFS_OK);
         assert(length == sizeof(bytes) && memcmp(bytes, "hello", 5u) == 0);
         assert(closes == 1u);
-        assert(astra_process_read_file(&filesystem, "APP:test", bytes, 4u,
+        assert(astra_process_read_file(&filesystem, "/app/test", bytes, 4u,
                                        &length) == ASTRA_VFS_ERR_LIMIT);
         assert(closes == 2u);
         {
@@ -654,7 +633,7 @@ int main(void)
             static uint8_t large[65u * 128u];
 
             assert(astra_process_read_file_alloc(
-                       &filesystem, "APP:test", &allocated, &length) ==
+                       &filesystem, "/app/test", &allocated, &length) ==
                    ASTRA_VFS_OK);
             assert(length == 5u && memcmp(allocated, "hello\0", 6u) == 0);
             astra_runtime_deallocate(allocated);
@@ -662,7 +641,7 @@ int main(void)
             mock_file_content = large;
             mock_file_length = sizeof(large);
             assert(astra_process_read_file_alloc(
-                       &filesystem, "APP:test", &allocated, &length) ==
+                       &filesystem, "/app/test", &allocated, &length) ==
                    ASTRA_VFS_OK);
             assert(length == sizeof(large));
             assert(memcmp(allocated, large, sizeof(large)) == 0);
@@ -670,14 +649,14 @@ int main(void)
             astra_runtime_deallocate(allocated);
             fail_allocate = 1;
             assert(astra_process_read_file_alloc(
-                       &filesystem, "APP:test", &allocated, &length) ==
+                       &filesystem, "/app/test", &allocated, &length) ==
                    ASTRA_VFS_ERR_LIMIT);
             fail_allocate = 0;
             assert(allocated == NULL && length == 0u);
             mock_file_content = default_file_content;
             mock_file_length = 5u;
             assert(astra_process_read_file_alloc(
-                       &filesystem, "APP:test", NULL, &length) ==
+                       &filesystem, "/app/test", NULL, &length) ==
                    ASTRA_VFS_ERR_INVALID);
         }
     }
@@ -694,14 +673,14 @@ int main(void)
         whole_file_bytes = (const uint8_t *)"fast";
         whole_file_moved = 4u;
         whole_file_node_size = 4u;
-        assert(astra_process_read_file(&filesystem, "APP:test", bytes,
+        assert(astra_process_read_file(&filesystem, "/app/test", bytes,
                                        sizeof(bytes), &length) ==
                ASTRA_VFS_OK);
         assert(length == 4u && memcmp(bytes, "fast", 4u) == 0);
 
         whole_file_bytes = (const uint8_t *)"evil";
         whole_file_node_size = UINT64_C(0x100000004);
-        assert(astra_process_read_file(&filesystem, "APP:test", bytes,
+        assert(astra_process_read_file(&filesystem, "/app/test", bytes,
                                        sizeof(bytes), &length) ==
                ASTRA_VFS_OK);
         assert(length == 5u && memcmp(bytes, "hello", 5u) == 0);

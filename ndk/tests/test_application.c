@@ -80,7 +80,7 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
 int main(void)
 {
     static const char *const dropped[] = {
-        "WORK:first.txt", "WORK:second.txt"
+        "/work/first.txt", "/work/second.txt"
     };
     static const char *const shell_arguments[] = {"--tab", "Progress"};
     static const char malformed_path[] = {
@@ -97,7 +97,7 @@ int main(void)
     uint32_t process_id = 0u;
 
     assert(astra_application_launch(ASTRA_INVALID_HANDLE,
-                                    "APPS:Terminal.app", 17u,
+                                    "/apps/Terminal.app", 18u,
                                     &process_id) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
     assert(astra_application_launch(7u, malformed_path,
@@ -105,14 +105,14 @@ int main(void)
                                     &process_id) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
     assert(astra_application_launch_with_arguments(
-               7u, "APPS:Terminal.app", 17u,
+               7u, "/apps/Terminal.app", 18u,
                ASTRA_LAUNCH_SOURCE_DESKTOP, malformed_arguments, 1u,
                &process_id) == ASTRA_ERROR_INVALID_ARGUMENT);
     expected_count = 1u;
     expected_source = ASTRA_LAUNCH_SOURCE_DESKTOP;
-    expected_path = "APPS:Terminal.app";
+    expected_path = "/apps/Terminal.app";
     expected_arguments = NULL;
-    assert(astra_application_launch(7u, "APPS:Terminal.app", 17u,
+    assert(astra_application_launch(7u, "/apps/Terminal.app", 18u,
                                     &process_id) == ASTRA_OK);
     assert(process_id == 42u);
     assert(process_handle_closes == 1u);
@@ -120,14 +120,14 @@ int main(void)
     expected_source = ASTRA_LAUNCH_SOURCE_DESKTOP;
     expected_arguments = dropped;
     assert(astra_application_launch_with_arguments(
-               7u, "APPS:Terminal.app", 17u,
+               7u, "/apps/Terminal.app", 18u,
                ASTRA_LAUNCH_SOURCE_DESKTOP, dropped, 2u, &process_id) ==
            ASTRA_OK);
     assert(process_id == 42u);
     assert(process_handle_closes == 2u);
     expected_count = 3u;
     expected_source = ASTRA_LAUNCH_SOURCE_SHELL;
-    expected_path = "APPS:InterfaceGallery.app";
+    expected_path = "/apps/InterfaceGallery.app";
     expected_arguments = shell_arguments;
     assert(astra_application_launch_with_arguments(
                7u, expected_path,
@@ -158,10 +158,10 @@ int main(void)
     large_argument[300] = '\0';
     expected_count = 2u;
     expected_source = ASTRA_LAUNCH_SOURCE_SHELL;
-    expected_path = "APPS:Terminal.app";
+    expected_path = "/apps/Terminal.app";
     expected_arguments = large_arguments;
     assert(astra_application_launch_with_arguments(
-               7u, expected_path, 17u, ASTRA_LAUNCH_SOURCE_SHELL,
+               7u, expected_path, 18u, ASTRA_LAUNCH_SOURCE_SHELL,
                large_arguments, 1u, &process_id) == ASTRA_OK);
     assert(process_id == 42u);
     assert(process_handle_closes == 5u);
@@ -169,7 +169,7 @@ int main(void)
         large_argument[index] = 'a';
     large_argument[sizeof(large_argument) - 1u] = '\0';
     assert(astra_application_launch_with_arguments(
-               7u, expected_path, 17u, ASTRA_LAUNCH_SOURCE_SHELL,
+               7u, expected_path, 18u, ASTRA_LAUNCH_SOURCE_SHELL,
                large_arguments, 1u, &process_id) ==
            ASTRA_ERROR_NO_RESOURCES);
     for (uint32_t index = 0u; index < 150u; ++index)

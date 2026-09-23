@@ -31,7 +31,7 @@ int main(int argc, char **argv)
         path_index = 2;
     }
     if (argc <= path_index) {
-        (void)fputs("open: usage: open [--wait] APPS:Name.app "
+        (void)fputs("open: usage: open [--wait] /apps/Name.app "
                     "[argument ...]\n",
                     stderr);
         return 1;

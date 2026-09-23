@@ -13,6 +13,7 @@
 /* POSIX process state is owned here: startup installs the copied environment
  * before user main runs, and exec replaces it atomically with the image. */
 char **environ;
+
 static char **
 copy_startup_vectors(const AstraStartupInfo *startup, char ***environment)
 {

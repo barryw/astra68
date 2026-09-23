@@ -9,7 +9,13 @@ capability GUI
 capability CLIPBOARD
 capability WORK:rw
 capability HOME:rw
+capability TMP:rw
+capability RAM:rw
+capability DH0:r
+capability SYSTEM:r
+capability LOCAL:rw
 capability COMMANDS:r
+capability APPS:r
 capability LIBS:r
 capability EVENTS:r
 capability PROC:r
@@ -24,7 +30,7 @@ capability APP_LAUNCH
 capability SERVICE_MANAGER
 capability ENTROPY
 requires compiler.library 1 1.0.0
-requires filesystem.library 3 3.0.0
+requires filesystem.library 4 4.0.0
 requires graphics.library 2 2.1.0
 requires interface.library 5 5.1.0
 requires runtime.library 1 1.6.0

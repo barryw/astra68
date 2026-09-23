@@ -245,6 +245,24 @@ fake_stat(void *context, const char *path, AstraVfsNodeInfo *info)
     return ASTRA_VFS_OK;
 }
 
+static uint32_t
+fake_stat_node(void *context, uintptr_t node, AstraVfsNodeInfo *info)
+{
+    FakeNode *found = (FakeNode *)node;
+
+    (void)context;
+    if (found == NULL)
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    info->size = found->size;
+    info->mtime = 1234567;
+    info->uid = 17u;
+    info->gid = 23u;
+    info->kind = found->kind;
+    info->mode = found->mode;
+    info->nlink = 3u;
+    return ASTRA_VFS_OK;
+}
+
 /*
  * The cookie is the slot after the one returned, so a scan resumes where it
  * stopped without counting from the first node. `fake_readdir_scans` is how a
@@ -550,7 +568,7 @@ static const AstraVfsBackendOps fake_ops = {
     fake_stat, fake_readdir, fake_mkdir, fake_unlink, fake_rename,
     fake_chmod, fake_readlink, fake_symlink, fake_link, fake_open_at,
     fake_unlink_at, fake_chmod_node, fake_chmod_at, fake_filesystem_info,
-    fake_stat_at
+    fake_stat_at, fake_stat_node
 };
 
 static AstraVfsService service;
@@ -1622,6 +1640,10 @@ test_client_through_transport(void)
         assert(astra_vfs_chmod_at(&client, directory, "relative.txt", 0620u,
                                   0u) == ASTRA_VFS_OK);
         assert(fake_find("/dir/relative.txt")->mode == 0620u);
+        assert(astra_vfs_stat_file_meta(&client, relative, &metadata) ==
+               ASTRA_VFS_OK);
+        assert(metadata.mode == 0620u && metadata.mtime == 1234567 &&
+               metadata.uid == 17u && metadata.nlink == 3u);
         assert(astra_vfs_stat_at_meta(&client, directory, "relative.txt",
                                       &metadata) == ASTRA_VFS_OK);
         assert(metadata.mode == 0620u && metadata.mtime == 1234567 &&
@@ -1640,6 +1662,8 @@ test_client_through_transport(void)
                ASTRA_VFS_OK);
         assert(info.files_free == 480u && info.name_max == 63u);
         assert(astra_vfs_close(&client, relative) == ASTRA_VFS_OK);
+        assert(astra_vfs_stat_file_meta(&client, relative, &metadata) ==
+               ASTRA_VFS_ERR_BAD_HANDLE);
         assert(astra_vfs_unlink_at(&client, directory, "relative.txt", 0u) ==
                ASTRA_VFS_OK);
         assert(fake_find("/dir/relative.txt") == NULL);
@@ -1650,6 +1674,9 @@ test_client_through_transport(void)
                                  &relative, NULL, NULL) ==
                ASTRA_VFS_ERR_UNSUPPORTED);
         assert(astra_vfs_stat_at_meta(&client, directory, "old", &metadata) ==
+               ASTRA_VFS_ERR_UNSUPPORTED);
+        client.version = UINT16_C(25);
+        assert(astra_vfs_stat_file_meta(&client, directory, &metadata) ==
                ASTRA_VFS_ERR_UNSUPPORTED);
         client.version = ASTRA_VFS_VERSION;
     }

@@ -45,18 +45,18 @@ uint32_t astra_vfs_assign_open(
     if (library_mode != 0u) {
         if (open_count == 0u) {
             assert(strcmp(path,
-                          "LIBS:.providers/runtime.library.abi-1") == 0);
+                          "/libs/.providers/runtime.library.abi-1") == 0);
             *file = 9u;
             *size = sizeof(provider_record);
         } else {
             assert(open_count == 1u);
-            assert(strcmp(path, "LIBS:Runtime.kit/runtime.library") == 0);
+            assert(strcmp(path, "/libs/Runtime.kit/runtime.library") == 0);
             *file = 10u;
             *size = 77u;
         }
         ++open_count;
     } else {
-        assert(strcmp(path, "COMMANDS:large") == 0);
+        assert(strcmp(path, "/commands/large") == 0);
         *file = 9u;
         *size = open_size;
     }
@@ -113,7 +113,7 @@ int main(void)
     open_size = (5u * 1024u * 1024u) + 17u;
     open_kind = ASTRA_VFS_KIND_FILE;
     assert(astra_vfs_read_source_open(
-               &source, &table, "COMMANDS:large", client_for, NULL) ==
+               &source, &table, "/commands/large", client_for, NULL) ==
            ASTRA_VFS_OK);
     assert(source.length == (uint32_t)open_size);
 
@@ -164,20 +164,20 @@ int main(void)
 
     open_kind = ASTRA_VFS_KIND_DIRECTORY;
     assert(astra_vfs_read_source_open(
-               &source, &table, "COMMANDS:large", client_for, NULL) ==
+               &source, &table, "/commands/large", client_for, NULL) ==
            ASTRA_VFS_ERR_INVALID);
     assert(close_count == 2u);
 
     open_kind = ASTRA_VFS_KIND_FILE;
     open_size = UINT64_C(0x100000000);
     assert(astra_vfs_read_source_open(
-               &source, &table, "COMMANDS:large", client_for, NULL) ==
+               &source, &table, "/commands/large", client_for, NULL) ==
            ASTRA_VFS_ERR_LIMIT);
     assert(close_count == 3u);
 
     open_status = ASTRA_VFS_ERR_NOT_FOUND;
     assert(astra_vfs_read_source_open(
-               &source, &table, "COMMANDS:large", client_for, NULL) ==
+               &source, &table, "/commands/large", client_for, NULL) ==
            ASTRA_VFS_ERR_NOT_FOUND);
     assert(source.file == ASTRA_VFS_FILE_INVALID);
 
@@ -193,7 +193,7 @@ int main(void)
                    &table, "LIBS", "runtime.library.1", client_for, NULL,
                    path, sizeof(path), &reference) == ASTRA_VFS_OK);
         assert(open_count == 1u);
-        assert(strcmp(path, "LIBS:Runtime.kit/runtime.library") == 0);
+        assert(strcmp(path, "/libs/Runtime.kit/runtime.library") == 0);
         assert(reference.size == ASTRA_LIBRARY_REFERENCE_SIZE);
     }
     open_count = 0u;

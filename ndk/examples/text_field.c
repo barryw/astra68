@@ -6,7 +6,7 @@ AstraResult astra_example_build_text_field(
     uint32_t content_bytes, void *metadata, uint32_t metadata_bytes,
     uint16_t width, uint16_t height)
 {
-    static const char initial[] = "HOME:/projects/\xe4\xb8\x96\xe7\x95\x8c";
+    static const char initial[] = "/home//projects/\xe4\xb8\x96\xe7\x95\x8c";
     AstraTextModelInfo model_info = ASTRA_TEXT_MODEL_INFO_INIT;
     AstraFieldInfo field_info = ASTRA_FIELD_INFO_INIT;
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;

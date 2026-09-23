@@ -77,6 +77,14 @@ uint32_t astra_vfs_host_transport_submit(
         command->mode = 0640u;
         command->nlink = 2u;
         break;
+    case ASTRA_HOST_FS_STAT_FILE:
+        assert(command->handle == 0x1234u);
+        command->node_size_lo = 31u;
+        command->kind = ASTRA_VFS_KIND_FILE;
+        command->mode = 0600u;
+        command->uid = 42u;
+        command->nlink = 1u;
+        break;
     case ASTRA_HOST_FS_READDIR:
         assert(command->handle == 0x1234u &&
                strcmp(command->path, "/") == 0 && command->offset_lo == 5u);
@@ -249,9 +257,13 @@ int main(void)
     assert(ops->stat_at(&backend, node, "child", &info) == ASTRA_VFS_OK);
     assert(info.size == 23u && info.mtime == 99 && info.uid == 17u &&
            info.gid == 23u && info.mode == 0640u && info.nlink == 2u);
+    EXPECT(ASTRA_HOST_FS_STAT_FILE);
+    assert(ops->stat_node(&backend, node, &info) == ASTRA_VFS_OK);
+    assert(info.size == 31u && info.uid == 42u && info.mode == 0600u);
+    assert(ops->stat_node(&backend, 0u, &info) == ASTRA_VFS_ERR_INVALID);
     EXPECT(ASTRA_HOST_FS_CLOSE);
     assert(ops->close(&backend, node) == ASTRA_VFS_OK);
 #undef EXPECT
-    assert(host.calls == 21u);
+    assert(host.calls == 22u);
     return 0;
 }

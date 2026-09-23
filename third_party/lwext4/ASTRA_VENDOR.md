@@ -79,7 +79,7 @@ so a future fix has somewhere to land.
 
 ## Astra68 changes to upstream files
 
-Nineteen upstream changes are applied **in-tree**. The patches are retained
+Twenty upstream changes are applied **in-tree**. The patches are retained
 verbatim under `astra/patches/` as the audit record and as the re-apply path
 for a future upstream bump.
 
@@ -104,6 +104,7 @@ for a future upstream bump.
 | `0017-slicing-by-4-crc32c.patch` | `src/ext4_crc32.c:107`, `src/ext4_crc32.c:378` | Metadata and journal CRC32C was the hottest guest loop in the rename profile. The shared implementation now consumes four bytes per iteration with slicing-by-4 tables, retains byte loads for unaligned big-endian buffers, and uses a pointer bound so the MC68040 loop does not recompute the remaining word count on every iteration. |
 | `0018-create-final-component-only.patch` | `src/ext4.c:1020` | Upstream interpreted `O_CREAT` as permission to manufacture every missing path component as a directory. File creation now creates only the final component, matching POSIX and the VFS backend contract; a missing parent returns `ENOENT`. |
 | `0019-rename-replaces-destination.patch` | `src/ext4.c:237`, `src/ext4.c:1291`, `src/ext4.c:1524` | `ext4_frename` returned `EEXIST` whenever the destination existed, so an atomic configuration update could be created but never committed. Rename now replaces an existing compatible destination in one namespace transaction, preserves both operands on refusal, frees the displaced inode after the namespace commit, and rejects cross-mount moves and directory-descendant cycles. |
+| `0020-native-directory-handles.patch` | `src/ext4.c`, `src/ext4_journal.c`, `include/ext4.h` | Adds inode-relative file/directory open, metadata, chmod, and nonrecursive unlink for Astra's generic directory-handle VFS contract. `ext4_dir_rm` remains explicitly recursive; VFS uses the single-inode remover, which refuses nonempty directories. Fixes journal block-record lifetime when multiple buffers in one transaction refer to the same block: the record is removed only after its buffer queue empties. The native-at image test exercises a rename-surviving directory handle, successful and rejected operations, journal commit, and `e2fsck`. |
 
 Defect 0003 is invisible against lwext4's own `mkfs`, which leaves
 `s_hash_seed` zero. It appears only against an `mke2fs` image, which is the

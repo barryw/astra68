@@ -43,6 +43,8 @@
 #define PROC_NODE_SNAPSHOT 1u
 #define PROC_NODE_LIBRARY_MEMORY 2u
 #define PROC_NODE_LIBRARY_DISK 3u
+#define PROC_NODE_ROOT 4u
+#define PROC_NODE_LIBRARIES 5u
 #define PROC_OPEN_NODE_MAGIC 0x50524f43u
 
 enum ProcProcessLeaf {
@@ -354,7 +356,7 @@ render_disk_libraries(ProcText *text)
     static AstraVfsDirEntry entries[8];
     AstraAssignTable *assigns = supervisor_assigns();
     AstraVfsUnionDirectory directory = ASTRA_VFS_UNION_DIRECTORY_INIT;
-    const char base[] = "LIBS:.providers";
+    const char base[] = "/libs/.providers";
     const char *failure = "PROC library directory open";
     uint32_t status;
 
@@ -581,7 +583,7 @@ proc_open(void *context, const char *path, uint32_t flags,
         (flags & ASTRA_VFS_OPEN_CREATE) != 0u)
         return ASTRA_VFS_ERR_ACCESS;
     if (supervisor_proc_path_is_root(path)) {
-        *node = 0u;
+        *node = PROC_NODE_ROOT;
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_DIRECTORY;
         info->mode = 0500u;
@@ -599,7 +601,7 @@ proc_open(void *context, const char *path, uint32_t flags,
         return ASTRA_VFS_OK;
     }
     if (supervisor_proc_path_is_libraries(path)) {
-        *node = 0u;
+        *node = PROC_NODE_LIBRARIES;
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_DIRECTORY;
         info->mode = 0500u;
@@ -636,21 +638,13 @@ proc_open(void *context, const char *path, uint32_t flags,
     index = parse_path(path, &leaf);
     if (index >= snapshot_count)
         return ASTRA_VFS_ERR_NOT_FOUND;
-    if (leaf == PROC_PROCESS_DIRECTORY) {
-        *node = 0u;
-        info->size = 0u;
-        info->kind = ASTRA_VFS_KIND_DIRECTORY;
-        info->mode = 0500u;
-        info->nlink = 2u;
-        return ASTRA_VFS_OK;
-    }
     if (leaf == PROC_PROCESS_STATUS) {
         ProcText text = {0};
 
         if (render_status(index, &text) != ASTRA_VFS_OK)
             return ASTRA_VFS_ERR_NOT_FOUND;
         length = (uint32_t)text.length;
-    } else {
+    } else if (leaf == PROC_PROCESS_LIBRARIES) {
         ProcText text = {0};
 
         if (render_library_text(snapshot[index].process.id, &text) !=
@@ -671,9 +665,10 @@ proc_open(void *context, const char *path, uint32_t flags,
         *node = (uintptr_t)opened;
     }
     info->size = length;
-    info->kind = ASTRA_VFS_KIND_FILE;
-    info->mode = 0400u;
-    info->nlink = 1u;
+    info->kind = leaf == PROC_PROCESS_DIRECTORY ?
+                 ASTRA_VFS_KIND_DIRECTORY : ASTRA_VFS_KIND_FILE;
+    info->mode = leaf == PROC_PROCESS_DIRECTORY ? 0500u : 0400u;
+    info->nlink = leaf == PROC_PROCESS_DIRECTORY ? 2u : 1u;
     return ASTRA_VFS_OK;
 }
 
@@ -683,7 +678,7 @@ proc_close(void *context, uintptr_t node)
     ProcOpenNode *opened = (ProcOpenNode *)node;
 
     (void)context;
-    if (node > PROC_NODE_LIBRARY_DISK) {
+    if (node > PROC_NODE_LIBRARIES) {
         if (opened->magic != PROC_OPEN_NODE_MAGIC)
             return ASTRA_VFS_ERR_INVALID;
         opened->magic = 0u;
@@ -729,12 +724,17 @@ proc_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
         *moved = text.moved;
         return ASTRA_VFS_OK;
     }
-    if (node == 0u)
+    if (node == PROC_NODE_ROOT || node == PROC_NODE_LIBRARIES)
         return ASTRA_VFS_ERR_IS_DIR;
+    if (node <= PROC_NODE_LIBRARIES)
+        return ASTRA_VFS_ERR_INVALID;
     opened = (ProcOpenNode *)node;
-    if (opened->magic != PROC_OPEN_NODE_MAGIC ||
-        (opened->leaf != PROC_PROCESS_STATUS &&
-         opened->leaf != PROC_PROCESS_LIBRARIES))
+    if (opened->magic != PROC_OPEN_NODE_MAGIC)
+        return ASTRA_VFS_ERR_INVALID;
+    if (opened->leaf == PROC_PROCESS_DIRECTORY)
+        return ASTRA_VFS_ERR_IS_DIR;
+    if (opened->leaf != PROC_PROCESS_STATUS &&
+        opened->leaf != PROC_PROCESS_LIBRARIES)
         return ASTRA_VFS_ERR_INVALID;
     if (refresh_snapshot() != ASTRA_VFS_OK)
         return ASTRA_VFS_ERR_IO;
@@ -781,14 +781,104 @@ proc_stat(void *context, const char *path, AstraVfsNodeInfo *info)
 }
 
 static uint32_t
+proc_stat_node(void *context, uintptr_t node, AstraVfsNodeInfo *info)
+{
+    ProcText text = {0};
+    uint32_t status = ASTRA_VFS_OK;
+
+    (void)context;
+    if (info == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    if (node == PROC_NODE_ROOT || node == PROC_NODE_LIBRARIES) {
+        info->size = 0u;
+        info->kind = ASTRA_VFS_KIND_DIRECTORY;
+        info->mode = 0500u;
+        info->nlink = 2u;
+        return ASTRA_VFS_OK;
+    }
+    if (node == PROC_NODE_SNAPSHOT) {
+        status = refresh_snapshot();
+        if (status == ASTRA_VFS_OK)
+            info->size = (uint64_t)snapshot_count * sizeof(*snapshot);
+    } else if (node == PROC_NODE_LIBRARY_MEMORY) {
+        status = render_library_text(0u, &text);
+        info->size = text.length;
+    } else if (node == PROC_NODE_LIBRARY_DISK) {
+        status = render_disk_libraries(&text);
+        info->size = text.length;
+    } else {
+        ProcOpenNode *opened = (ProcOpenNode *)node;
+        uint32_t index;
+
+        if (node <= PROC_NODE_LIBRARIES)
+            return ASTRA_VFS_ERR_INVALID;
+        if (opened->magic != PROC_OPEN_NODE_MAGIC ||
+            (opened->leaf != PROC_PROCESS_DIRECTORY &&
+             opened->leaf != PROC_PROCESS_STATUS &&
+             opened->leaf != PROC_PROCESS_LIBRARIES))
+            return ASTRA_VFS_ERR_INVALID;
+        status = refresh_snapshot();
+        if (status != ASTRA_VFS_OK)
+            return status;
+        index = find_snapshot_process(opened->process_id,
+                                      opened->generation);
+        if (opened->leaf == PROC_PROCESS_DIRECTORY) {
+            if (index == UINT32_MAX)
+                return ASTRA_VFS_ERR_NOT_FOUND;
+            info->size = 0u;
+            info->kind = ASTRA_VFS_KIND_DIRECTORY;
+            info->mode = 0500u;
+            info->nlink = 2u;
+            return ASTRA_VFS_OK;
+        }
+        if (index != UINT32_MAX) {
+            status = opened->leaf == PROC_PROCESS_STATUS ?
+                render_status(index, &text) :
+                render_library_text(opened->process_id, &text);
+        }
+        info->size = text.length;
+    }
+    if (status != ASTRA_VFS_OK)
+        return status;
+    info->kind = ASTRA_VFS_KIND_FILE;
+    info->mode = 0400u;
+    info->nlink = 1u;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t
 proc_readdir(void *context, uintptr_t directory, const char *path,
              uint64_t cookie, char *name, uint32_t capacity,
              AstraVfsNodeInfo *info, uint64_t *next)
 {
     enum ProcProcessLeaf leaf = PROC_PROCESS_DIRECTORY;
+    uint32_t directory_index = UINT32_MAX;
 
     (void)context;
-    (void)directory;
+    if (directory != 0u) {
+        if (path == NULL || path[0] != '\0')
+            return ASTRA_VFS_ERR_UNSUPPORTED;
+        if (directory == PROC_NODE_ROOT)
+            path = "/";
+        else if (directory == PROC_NODE_LIBRARIES)
+            path = "/libraries";
+        else if (directory <= PROC_NODE_LIBRARIES)
+            return ASTRA_VFS_ERR_NOT_DIR;
+        else {
+            const ProcOpenNode *opened = (const ProcOpenNode *)directory;
+
+            if (opened->magic != PROC_OPEN_NODE_MAGIC)
+                return ASTRA_VFS_ERR_BAD_HANDLE;
+            if (opened->leaf != PROC_PROCESS_DIRECTORY)
+                return ASTRA_VFS_ERR_NOT_DIR;
+            if (refresh_snapshot() != ASTRA_VFS_OK)
+                return ASTRA_VFS_ERR_IO;
+            directory_index = find_snapshot_process(opened->process_id,
+                                                     opened->generation);
+            if (directory_index == UINT32_MAX)
+                return ASTRA_VFS_ERR_NOT_FOUND;
+        }
+    }
     if (supervisor_proc_path_is_libraries(path)) {
         static const char *const names[] = {"memory", "disk"};
 
@@ -810,10 +900,15 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
         *next = cookie + 1u;
         return ASTRA_VFS_OK;
     }
-    if (!supervisor_proc_path_is_root(path)) {
-        if (refresh_snapshot() != ASTRA_VFS_OK)
-            return ASTRA_VFS_ERR_IO;
-        uint32_t index = parse_path(path, &leaf);
+    if (directory_index != UINT32_MAX ||
+        !supervisor_proc_path_is_root(path)) {
+        uint32_t index = directory_index;
+
+        if (index == UINT32_MAX) {
+            if (refresh_snapshot() != ASTRA_VFS_OK)
+                return ASTRA_VFS_ERR_IO;
+            index = parse_path(path, &leaf);
+        }
 
         if (leaf != PROC_PROCESS_DIRECTORY ||
             index >= snapshot_count)
@@ -910,6 +1005,7 @@ static const AstraVfsBackendOps proc_ops = {
     .chmod_at = astra_vfs_backend_no_chmod_at,
     .filesystem_info = astra_vfs_backend_no_filesystem_info,
     .stat_at = astra_vfs_backend_no_stat_at,
+    .stat_node = proc_stat_node,
 };
 
 const AstraVfsBackendOps *

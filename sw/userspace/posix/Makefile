@@ -70,7 +70,7 @@ PICOLIBC_MATH := $(PICOLIBC)/lib/libm.a
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.1
 STREAMS_LIBRARY := $(STREAMS)/build/m68k/libraries/streams.library.1
-FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.3
+FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.4
 NETWORK_LIBRARY := $(NETWORK)/build/m68k/libraries/network.library.1
 NETWORK_LIB := $(NETWORK)/build/m68k/libastranetwork.a
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
@@ -99,6 +99,7 @@ DIRENT_COMPAT_TEST := build/host/test_dirent_compat
 TIME_COMPAT_TEST := build/host/test_time_compat
 TEMP_COMPAT_TEST := build/host/test_temp_compat
 LIMITS_CONTRACT := build/m68k/limits-contract.o
+SYSMACROS_CONTRACT := build/m68k/sysmacros-contract.o
 CXX_HEADERS_CONTRACT := build/m68k/cxx-headers-contract.o
 CXX_PROGRAM_OBJECT := build/m68k/cxx-program.o
 CXX_LINK_CONTRACT := build/m68k/cxx-runtime-test.elf
@@ -202,7 +203,7 @@ $(LIBC_LIBRARY): $(LIBC_IDENTITY) $(LIBRARY_OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
 		-L$(dir $(NETWORK_LIBRARY)) \
 		-Wl,--no-as-needed \
-		-Wl,-l:streams.library.1 -Wl,-l:filesystem.library.3 \
+		-Wl,-l:streams.library.1 -Wl,-l:filesystem.library.4 \
 		-Wl,-l:network.library.1 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1 \
 		-Wl,--start-group $(PICOLIBC_LIB) $(PICOLIBC_MATH) \
@@ -224,7 +225,7 @@ libc-library-contract: $(LIBC_LIBRARY)
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
 		grep -Fc 'Shared library: [streams.library.1]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
-		grep -Fc 'Shared library: [filesystem.library.3]')" = 1
+		grep -Fc 'Shared library: [filesystem.library.4]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
 		grep -Fc 'Shared library: [compiler.library.1]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
@@ -271,11 +272,11 @@ $(DESCRIPTOR_TEST): src/console.c src/resource.c $(RUNTIME)/src/startup.c \
 		tests/heap_prepare_stub.c \
 		tests/test_descriptor.c -o $@
 
-$(STARTUP_TEST): src/startup.c tests/test_startup.c
+$(STARTUP_TEST): src/startup.c src/path.c tests/test_startup.c
 	@mkdir -p $(@D)
 	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \
 		-I$(STREAMS)/include -I$(VFS)/include -I$(NDK)/include \
-		$(COMMON_FLAGS) -O2 -no-pie src/startup.c tests/test_startup.c -o $@
+		$(COMMON_FLAGS) -O2 -no-pie src/startup.c src/path.c tests/test_startup.c -o $@
 
 $(POLL_TEST): src/console.c src/poll.c src/resource.c $(RUNTIME)/src/startup.c \
 		tests/heap_prepare_stub.c tests/test_poll.c
@@ -391,6 +392,10 @@ $(LIMITS_CONTRACT): tests/limits_contract.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -c $< -o $@
 
+$(SYSMACROS_CONTRACT): tests/sysmacros_contract.c include/sys/sysmacros.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -c $< -o $@
+
 $(CXX_HEADERS_CONTRACT): tests/cxx_headers.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(CXX_CPPFLAGS) -std=c++17 -Wall -Wextra -Werror -pedantic \
@@ -457,7 +462,7 @@ $(LINK_CONTRACT): tests/link_standard_main.c kit/program.c $(LIBC_LIBRARY) \
 		--needed compiler.library.1 $@
 	@echo "astra posix dynamic standard main link: PASS"
 
-test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) $(IDENTITY_TEST) $(PROCESS_TEST) $(SIGNAL_TEST) $(SOCKET_ADDRESS_TEST) $(PTHREAD_TEST) $(RESOURCE_TEST) $(SCHEDULING_TEST) $(HEAP_TEST) $(ALLOC_TEST) $(UNISTD_COMPAT_TEST) $(ENTROPY_TEST) $(EXEC_COMPAT_TEST) $(DIRENT_COMPAT_TEST) $(TIME_COMPAT_TEST) $(TEMP_COMPAT_TEST) $(LIMITS_CONTRACT) $(CXX_HEADERS_CONTRACT) $(LINK_CONTRACT) $(CXX_LINK_CONTRACT)
+test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) $(IDENTITY_TEST) $(PROCESS_TEST) $(SIGNAL_TEST) $(SOCKET_ADDRESS_TEST) $(PTHREAD_TEST) $(RESOURCE_TEST) $(SCHEDULING_TEST) $(HEAP_TEST) $(ALLOC_TEST) $(UNISTD_COMPAT_TEST) $(ENTROPY_TEST) $(EXEC_COMPAT_TEST) $(DIRENT_COMPAT_TEST) $(TIME_COMPAT_TEST) $(TEMP_COMPAT_TEST) $(LIMITS_CONTRACT) $(SYSMACROS_CONTRACT) $(CXX_HEADERS_CONTRACT) $(LINK_CONTRACT) $(CXX_LINK_CONTRACT)
 	./$(HOST_TEST)
 	./$(PATH_TEST)
 	./$(DESCRIPTOR_TEST)

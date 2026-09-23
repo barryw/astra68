@@ -1,4 +1,5 @@
 #include <astra/vfs_reader.h>
+#include <astra/ascii.h>
 
 #include <astra/address_space.h>
 #include <astra/vfs_port_transport.h>
@@ -145,12 +146,15 @@ uint32_t astra_vfs_library_resolve(
     *reference = (AstraLibraryReference){0};
     if (!astra_vfs_provider_identity_parse(identity, name, sizeof(name),
                                             &abi) ||
+        !path_append(index_path, sizeof(index_path), "/") ||
         !path_append(index_path, sizeof(index_path), assign) ||
-        !path_append(index_path, sizeof(index_path), ":.providers/") ||
+        !path_append(index_path, sizeof(index_path), "/.providers/") ||
         !path_append(index_path, sizeof(index_path), name) ||
         !path_append(index_path, sizeof(index_path), ".abi-") ||
         !path_append_number(index_path, sizeof(index_path), abi))
         return ASTRA_VFS_ERR_INVALID;
+    for (uint32_t at = 1u; index_path[at] != '/'; ++at)
+        index_path[at] = astra_ascii_lower(index_path[at]);
     status = astra_vfs_read_source_open(
         &index_source, table, index_path, client_for, context);
     if (status != ASTRA_VFS_OK)

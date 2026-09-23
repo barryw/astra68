@@ -793,8 +793,8 @@ static uint32_t build_controls(void)
                            ASTRA_TEXT_CLIENT_PRIMARY);
     if (status == ASTRA_STATUS_OK)
         status = init_field_model(
-            &field_model, "HOME:/projects/astra68",
-            sizeof("HOME:/projects/astra68") - 1u,
+            &field_model, "/home//projects/astra68",
+            sizeof("/home//projects/astra68") - 1u,
             field_content, sizeof(field_content),
             field_metadata, sizeof(field_metadata));
     if (status == ASTRA_STATUS_OK)

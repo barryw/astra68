@@ -11,7 +11,7 @@
 /** Package provider name resolved by the eager ELF loader. */
 #define ASTRA_FILESYSTEM_LIBRARY_NAME "filesystem.library"
 /** Minimum compatible Filesystem Kit ABI major requested by applications. */
-#define ASTRA_FILESYSTEM_LIBRARY_VERSION 3u
+#define ASTRA_FILESYSTEM_LIBRARY_VERSION 4u
 /** Current Filesystem Kit ABI major. */
 #define ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR ASTRA_FILESYSTEM_LIBRARY_VERSION
 /** Current backward-compatible Filesystem Kit ABI revision. */
@@ -300,6 +300,9 @@ uint32_t astra_filesystem_stat(AstraFilesystem *filesystem, const char *path,
  */
 uint32_t astra_filesystem_lstat(AstraFilesystem *filesystem,
                                 const char *path, AstraFileInfo *info);
+/** Read metadata for a relative path beneath an open directory. */
+uint32_t astra_filesystem_stat_at(const AstraFile *directory,
+                                  const char *path, AstraFileInfo *info);
 /** Create a directory with default permissions. @param filesystem Attached filesystem. @param path Assign-qualified UTF-8 path. @return ASTRA_VFS_* status. */
 uint32_t astra_filesystem_mkdir(AstraFilesystem *filesystem,
                                 const char *path);

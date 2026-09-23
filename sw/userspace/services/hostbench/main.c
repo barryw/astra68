@@ -499,12 +499,12 @@ static uint32_t filesystem_loop(uint64_t *elapsed)
     AstraFileInfo info = ASTRA_FILE_INFO_INIT;
     uint64_t started;
 
-    if (astra_filesystem_stat(&shared_filesystem, "WORK:", &info) !=
+    if (astra_filesystem_stat(&shared_filesystem, "/work", &info) !=
             ASTRA_VFS_OK)
         return 0u;
     started = astra_clock_monotonic();
     for (uint32_t index = 0u; index < HOSTBENCH_LAYER_ITERATIONS; ++index)
-        if (astra_filesystem_stat(&shared_filesystem, "WORK:", &info) !=
+        if (astra_filesystem_stat(&shared_filesystem, "/work", &info) !=
                 ASTRA_VFS_OK)
             return 0u;
     *elapsed = astra_clock_monotonic() - started;
@@ -552,13 +552,13 @@ static uint32_t assign_resolve_loop(uint64_t *elapsed)
     char wire[ASTRA_VFS_PATH_MAX];
     uint64_t started;
 
-    if (astra_assign_resolve(&shared_assigns, "WORK:hostbench",
+    if (astra_assign_resolve(&shared_assigns, "/work/hostbench",
                              ASTRA_RIGHT_READ, 0u, wire, sizeof(wire),
                              &assign) != ASTRA_VFS_OK || assign == NULL)
         return 0u;
     started = astra_clock_monotonic();
     for (uint32_t index = 0u; index < HOSTBENCH_LAYER_ITERATIONS; ++index)
-        if (astra_assign_resolve(&shared_assigns, "WORK:hostbench",
+        if (astra_assign_resolve(&shared_assigns, "/work/hostbench",
                                  ASTRA_RIGHT_READ, 0u, wire, sizeof(wire),
                                  &assign) != ASTRA_VFS_OK || assign == NULL)
             return 0u;
@@ -574,7 +574,7 @@ static uint32_t filesystem_open_batch(uint32_t iterations, uint64_t *elapsed)
 
     started = astra_clock_monotonic();
     for (uint32_t index = 0u; index < iterations; ++index) {
-        if (astra_filesystem_open_mode(&shared_filesystem, "WORK:hostbench",
+        if (astra_filesystem_open_mode(&shared_filesystem, "/work/hostbench",
                                        flags, ASTRA_VFS_MODE_DEFAULT,
                                        &file) != ASTRA_VFS_OK ||
             astra_filesystem_close(&file) != ASTRA_VFS_OK)
@@ -606,7 +606,7 @@ static uint32_t paired_open_loops(uint64_t *backend_elapsed,
                             ASTRA_VFS_MODE_DEFAULT, &local_file, &size,
                             &kind) != ASTRA_VFS_OK ||
         astra_vfs_close(&shared_direct_client, local_file) != ASTRA_VFS_OK ||
-        astra_filesystem_open_mode(&shared_filesystem, "WORK:hostbench", flags,
+        astra_filesystem_open_mode(&shared_filesystem, "/work/hostbench", flags,
                                    ASTRA_VFS_MODE_DEFAULT,
                                    &filesystem_file) != ASTRA_VFS_OK ||
         astra_filesystem_close(&filesystem_file) != ASTRA_VFS_OK)
@@ -696,7 +696,7 @@ static uint32_t filesystem_write_batch(uint32_t iterations,
         AstraFile file = ASTRA_FILE_INIT;
         uint32_t moved = 0u;
 
-        if (astra_filesystem_open_mode(&shared_filesystem, "WORK:hostbench",
+        if (astra_filesystem_open_mode(&shared_filesystem, "/work/hostbench",
                                        flags, ASTRA_VFS_MODE_DEFAULT,
                                        &file) != ASTRA_VFS_OK ||
             astra_filesystem_write(&file, memory_source,

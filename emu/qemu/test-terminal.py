@@ -149,16 +149,17 @@ TERMINAL_ICON = (70, 90)
 # The shipped plain MOTD is zsh's startup fallback. Seeing it proves the
 # terminal launched zsh and zsh read its system startup file.
 BANNER = "Astra 68"
-POSIX_COMMAND = 'posix -R +42 --cmd "set number" -- WORK:notes.txt'
+POSIX_COMMAND = 'posix -R +42 --cmd "set number" -- /work/notes.txt'
 DURABILITY_COMMAND = (
-    "posix --durability WORK:durability-cut.txt durable-data-68040")
+    "posix --durability /work/durability-cut.txt durable-data-68040")
 
 ZSH_SCRIPT = [
     # The result is beyond 32 bits, proving the cross-configured arithmetic
     # type and its decimal formatting on the actual MC68040 target.
     ('print $((4294967296+7))', "4294967303"),
-    ('print -r -- ZSH-PATH-$PATH', "ZSH-PATH-/commands"),
-    ('print -r -- ZSH-HOME-$HOME', "ZSH-HOME-HOME:"),
+    ('print -r -- ZSH-PATH-$PATH',
+     "ZSH-PATH-/local/commands:/commands"),
+    ('print -r -- ZSH-HOME-$HOME', "ZSH-HOME-/home"),
     # A bare external command must resolve through Astra's /commands PATH;
     # Status is checked in the same zsh command that launched the program.
     ('status 23; print -r -- ZSH-STATUS-$?',
@@ -173,57 +174,186 @@ ZSH_SCRIPT = [
     ('print -r -- ZSH-PIPE-$(/commands/echo 42 | cat)',
      "ZSH-PIPE-42"),
     ('print -r -- ZSH-WHICH-$(/commands/which status | cat)',
-     "ZSH-WHICH-/commands/status [1]"),
-    ('print $((6*7)) > WORK:zsh.out; cat WORK:zsh.out; rm WORK:zsh.out',
+     "ZSH-WHICH-/commands/status [0]"),
+    ('print $((6*7)) > /work/zsh.out; cat /work/zsh.out; rm /work/zsh.out',
      "42"),
-    ('/commands/echo 42 > WORK:zsh-command.out; '
-     'print -r -- ZSH-FILE-$(cat WORK:zsh-command.out); '
-     'rm WORK:zsh-command.out', "ZSH-FILE-42"),
-    ('/commands/date > WORK:zsh-date.out; '
-     '[[ -s WORK:zsh-date.out ]] && print ZSH-DATE-FILE; '
-     'rm WORK:zsh-date.out', "ZSH-DATE-FILE"),
-    ('/commands/ls -z 2> WORK:zsh-error.out; '
-     '[[ -s WORK:zsh-error.out ]] && print ZSH-STDERR-FILE; '
-     'rm WORK:zsh-error.out', "ZSH-STDERR-FILE"),
+    ('/commands/echo 42 > /work/zsh-command.out; '
+     'print -r -- ZSH-FILE-$(cat /work/zsh-command.out); '
+     'rm /work/zsh-command.out', "ZSH-FILE-42"),
+    ('/commands/date > /work/zsh-date.out; '
+     '[[ -s /work/zsh-date.out ]] && print ZSH-DATE-FILE; '
+     'rm /work/zsh-date.out', "ZSH-DATE-FILE"),
+    ('/commands/ls -z 2> /work/zsh-error.out; '
+     '[[ -s /work/zsh-error.out ]] && print ZSH-STDERR-FILE; '
+     'rm /work/zsh-error.out', "ZSH-STDERR-FILE"),
+]
+
+SBASE_COMMANDS = ("basename", "cat", "grep", "head", "wc", "mkdir",
+                  "rmdir", "which", "pwd", "ls", "tail", "sort", "uniq")
+SBASE_SCRIPT = [
+    ("print -r -- sbase-hello > sbase-file.txt; print SB-SETUP-$?",
+     "SB-SETUP-0"),
+    ("posix --stdio-memory sbase-file.txt; print SB-STDIO-$?",
+     "SB-STDIO-0"),
+    ("sbase-basename /work/sbase-file.txt; print SB-BASE-$?",
+     ("sbase-file.txt", "SB-BASE-0")),
+    ("sbase-basename; print SB-BASE-ERR-$?", "SB-BASE-ERR-1"),
+    ("sbase-cat sbase-file.txt; print SB-CAT-$?",
+     ("sbase-hello", "SB-CAT-0")),
+    ("sbase-cat sbase-missing; print SB-CAT-ERR-$?", "SB-CAT-ERR-1"),
+    ("sbase-head sbase-file.txt; print SB-HEAD-$?",
+     ("sbase-hello", "SB-HEAD-0")),
+    ("sbase-head sbase-missing; print SB-HEAD-ERR-$?", "SB-HEAD-ERR-1"),
+    ("sbase-wc sbase-file.txt; print SB-WC-$?",
+     ("12 sbase-file.txt", "SB-WC-0")),
+    ("sbase-wc sbase-missing; print SB-WC-ERR-$?", "SB-WC-ERR-1"),
+    ("sbase-pwd; print SB-PWD-$?", ("/", "SB-PWD-0")),
+    ("sbase-pwd -P; print SB-PWD-PHYSICAL-$?",
+     ("/", "SB-PWD-PHYSICAL-0")),
+    ("sbase-pwd -Z; print SB-PWD-ERR-$?", "SB-PWD-ERR-1"),
+    ("sbase-ls sbase-file.txt; print SB-LS-$?",
+     ("sbase-file.txt", "SB-LS-0")),
+    ("sbase-ls sbase-missing; print SB-LS-ERR-$?", "SB-LS-ERR-1"),
+    ("sbase-ls -F /", ("cwd/", "dh0/")),
+    ("sbase-ls -F /proc/", ("snapshot", "libraries/", "1/")),
+    ("sbase-ls -F /commands/", ("devices", "which")),
+    ("sbase-ls -F /events/", "activity/"),
+    ("sbase-tail sbase-file.txt; print SB-TAIL-$?",
+     ("sbase-hello", "SB-TAIL-0")),
+    ("sbase-tail sbase-missing; print SB-TAIL-ERR-$?", "SB-TAIL-ERR-1"),
+    ("sbase-sort sbase-file.txt; print SB-SORT-$?",
+     ("sbase-hello", "SB-SORT-0")),
+    ("sbase-sort sbase-missing; print SB-SORT-ERR-$?", "SB-SORT-ERR-2"),
+    ("sbase-uniq sbase-file.txt; print SB-UNIQ-$?",
+     ("sbase-hello", "SB-UNIQ-0")),
+    ("sbase-uniq sbase-missing; print SB-UNIQ-ERR-$?", "SB-UNIQ-ERR-1"),
+    ("sbase-mkdir sbase-dir; print SB-MKDIR-$?", "SB-MKDIR-0"),
+    ("sbase-mkdir sbase-dir; print SB-MKDIR-ERR-$?", "SB-MKDIR-ERR-1"),
+    ("sbase-rmdir sbase-dir; print SB-RMDIR-$?", "SB-RMDIR-0"),
+    ("sbase-rmdir sbase-dir; print SB-RMDIR-ERR-$?", "SB-RMDIR-ERR-1"),
+    ("posix --at-stat; print SB-AT-STAT-$?",
+     ("ASTRA AT STAT PASS", "SB-AT-STAT-0")),
+    ("sbase-which status; print SB-WHICH-$?",
+     ("/commands/status", "SB-WHICH-0")),
+    ("sbase-which no-such-command; print SB-WHICH-ERR-$?",
+     "SB-WHICH-ERR-2"),
+    ("sbase-grep -q hello sbase-file.txt; print SB-GREP-QUICK-$?",
+     "SB-GREP-QUICK-0"),
+    ("posix --stdio-early-close sbase-file.txt; print SB-EARLY-$?",
+     ("ASTRA EARLY CLOSE PASS", "SB-EARLY-0")),
+    ("posix --stdio-early-close sbase-missing; print SB-EARLY-MISSING-$?",
+     ("ASTRA EARLY CLOSE MISSING PASS", "SB-EARLY-MISSING-0")),
+    ("sbase-grep -F -l hello sbase-file.txt; print SB-GREP-FIXED-LIST-$?",
+     ("sbase-file.txt", "SB-GREP-FIXED-LIST-0")),
+    ("sbase-grep -F -l absent sbase-file.txt; "
+     "print SB-GREP-FIXED-LIST-NO-$?", "SB-GREP-FIXED-LIST-NO-1"),
+    ("posix --regex-close hello sbase-file.txt; print SB-REGEX-$?",
+     ("sbase-file.txt", "SB-REGEX-0")),
+    ("posix --regex-close absent sbase-file.txt; print SB-REGEX-NO-$?",
+     "SB-REGEX-NO-1"),
+    ("sbase-grep -l hello sbase-file.txt; print SB-GREP-LIST-$?",
+     ("sbase-file.txt", "SB-GREP-LIST-0")),
+    ("sbase-grep -q absent sbase-file.txt; print SB-GREP-QUIET-NO-$?",
+     "SB-GREP-QUIET-NO-1"),
+    ("sbase-grep -F hello sbase-file.txt < sbase-file.txt; "
+     "print SB-GREP-REDIRECT-$?",
+     ("sbase-hello", "SB-GREP-REDIRECT-0")),
+    ("sbase-grep -F hello sbase-file.txt; print SB-GREP-FIXED-$?",
+     ("sbase-hello", "SB-GREP-FIXED-0")),
+    ("sbase-grep hello sbase-file.txt; print SB-GREP-$?",
+     ("sbase-hello", "SB-GREP-0")),
+    ("sbase-grep absent sbase-file.txt; print SB-GREP-NO-$?",
+     "SB-GREP-NO-1"),
+    ("rm sbase-file.txt; print SB-CLEAN-$?", "SB-CLEAN-0"),
 ]
 
 SCRIPT = [
+    ("ls -F /", ("dh0/", "ram/", "events/", "metrics/", "proc/", "cwd@",
+                 "home@", "libs@", "local@", "work@", "tmp@")),
+    ("mkdir /ram/smoke; print ASTRA-RAM-MKDIR-$?",
+     "ASTRA-RAM-MKDIR-0"),
+    ("print -r -- ram-works > /ram/smoke/note; cat /ram/smoke/note",
+     "ram-works"),
+    ("print -r -- split-works > /ram/smoke/split; print RAM-SPLIT-WRITE-$?",
+     "RAM-SPLIT-WRITE-0"),
+    ("cat /ram/smoke/split", "split-works"),
+    ("rm /ram/smoke/split; print RAM-SPLIT-CLEAN-$?",
+     "RAM-SPLIT-CLEAN-0"),
+    ("rm /ram/smoke/note; sbase-rmdir /ram/smoke; "
+     "print ASTRA-RAM-CLEAN-$?", "ASTRA-RAM-CLEAN-0"),
+    ("sbase-rmdir /ram; print ASTRA-RAM-ROOT-$?",
+     "ASTRA-RAM-ROOT-1"),
+    ("ls -l /", ("system -> /dh0", "apps -> /system/apps",
+                 "commands -> /system/commands", "home -> /system/home",
+                 "libs -> /system/libs", "tmp -> /system/tmp")),
+    ("rm /system; print ASTRA-SYSTEM-UNLINK-$?",
+     "ASTRA-SYSTEM-UNLINK-1"),
+    ("rm /apps; print ASTRA-APPS-UNLINK-$?",
+     "ASTRA-APPS-UNLINK-1"),
+    ("rm /commands; print ASTRA-COMMANDS-UNLINK-$?",
+     "ASTRA-COMMANDS-UNLINK-1"),
+    ("rm /tmp; print ASTRA-TMP-UNLINK-$?", "ASTRA-TMP-UNLINK-1"),
+    ("sbase-rmdir /system; print ASTRA-SYSTEM-RMDIR-$?",
+     "ASTRA-SYSTEM-RMDIR-1"),
+    ("mkdir /stuff; print ASTRA-ROOT-ERR-$?",
+     ("Read-only file system", "ASTRA-ROOT-ERR-1")),
+    ("mkdir /home/../stuff; print ASTRA-ROOT-PARENT-$?",
+     ("Read-only file system", "ASTRA-ROOT-PARENT-1")),
+    ("sbase-rmdir /home; print ASTRA-ROOT-REMOVE-$?",
+     ("Read-only file system", "ASTRA-ROOT-REMOVE-1")),
+    ("ls -F /home/..", ("cwd@", "dh0/")),
+    ("print ASTRA-TMPDIR-$TMPDIR", "ASTRA-TMPDIR-/tmp"),
+    ("mkdir /tmp/root-contract; print ASTRA-TMP-MKDIR-$?",
+     "ASTRA-TMP-MKDIR-0"),
+    ("sbase-rmdir /tmp/root-contract; print ASTRA-TMP-RMDIR-$?",
+     "ASTRA-TMP-RMDIR-0"),
+    ("mkdir /home/root-contract; print ASTRA-HOME-MKDIR-$?",
+     "ASTRA-HOME-MKDIR-0"),
+    ("sbase-rmdir /home/root-contract; print ASTRA-HOME-RMDIR-$?",
+     "ASTRA-HOME-RMDIR-0"),
     ("mkdir proto; print ASTRA-MKDIR", "ASTRA-MKDIR"),
     ("print -r -- 'via the protocol' > hello.txt", "hello.txt"),
-    ("ls", "proto/"),
-    ("cd proto; pwd", "/CWD/proto"),
+    ("ls -F", "proto/"),
+    ("cd proto; pwd", "/cwd/proto"),
     ("mkdir inner; print ASTRA-INNER", "ASTRA-INNER"),
-    ("ls", "inner/"),
+    ("ls -F", "inner/"),
     ("print -r -- hi > scratch.txt; cat scratch.txt", "hi"),
     ("rm scratch.txt; print ASTRA-RM-$?", "ASTRA-RM-0"),
-    ("cd ..; pwd", "/CWD"),
+    ("cd ..; pwd", "/cwd"),
     ("cat hello.txt", "via the protocol"),
-    ("print no > EVENTS:no", "permission denied"),
-    ("ls EVENTS:", "activity/"),
-    ("ls EVENTS:boot/current", "earliest"),
+    ("print no > /events/no", "permission denied"),
+    ("ls -F /events/", "activity/"),
+    ("ls -F /events/boot/current", "earliest"),
     ("events", "shell ready"),
     ("status 7; print ASTRA-STATUS-$?", "ASTRA-STATUS-7"),
     ("status; print ASTRA-STATUS-$?", "ASTRA-STATUS-0"),
     ("/commands/status 3; print ASTRA-STATUS-$?", "ASTRA-STATUS-3"),
-    ("print no > COMMANDS:status", "permission denied"),
-    ("ls COMMANDS:", ("devices  [0]", "devices  [1]", "which  [1]")),
-    ("rm COMMANDS:doesnotexist", "not found"),
+    ("print no > /commands/status", "permission denied"),
+    ("ls /commands/", ("devices", "which")),
+    ("rm /commands/doesnotexist", "not found"),
     ("nosuchthing", "command not found"),
     ("print ASTRA-STATUS-$?", "ASTRA-STATUS-127"),
     ("which status", "/commands/status"),
     ("which devices", "/commands/devices"),
-    ("devices status", "/commands/status [1]"),
-    ("ps", ("ROM:supervisor", "SERVICES:desktop", "APPS:Terminal.app",
+    ("devices", "slot  src  owner"),
+    ("devices status; print ASTRA-DEVICES-ERR-$?",
+     ("usage: devices", "ASTRA-DEVICES-ERR-2")),
+    ("ps", ("/rom/supervisor", "/services/desktop", "/apps/Terminal.app",
             " ps", " zsh")),
-    ("ls PROC:", ("snapshot", "libraries/", "1/")),
-    ("cat PROC:1/status", ("name ROM:supervisor", "id 1")),
-    ("cat PROC:libraries/memory",
-     ("NAME VERSION ABI BUILD BASE SPAN CACHE RESIDENT MAPPED REFS PIDS",
+    ("ls -F /proc/", ("snapshot", "libraries/", "1/")),
+    ("ls -F /proc/libraries/", ("memory", "disk")),
+    ("ls -F /proc/1/", ("status", "libraries")),
+    ("ls /proc/not-a-pid; print ASTRA-PROC-ERR-$?",
+     ("No such file or directory", "ASTRA-PROC-ERR-1")),
+    ("cat /proc/1/status", ("name /rom/supervisor", "id 1")),
+    ("cat /proc/libraries/memory",
+     ("NAME VERSION ABI BUILD BASE SPAN CACHE RESIDENT MAPPED REFS PID",
       "filesystem.library")),
-    ("cat PROC:libraries/disk",
+    ("cat /proc/libraries/disk",
      ("NAME VERSION ABI BUILD SIZE PATH",
       "filesystem.library",
       "font.library")),
+    ("posix --synthetic-fstat", "ASTRA SYNTHETIC FSTAT PASS"),
     ("metrics", ("host.channel.commands ", "hostfs.vfs.requests ",
                  "host.fs.open.calls ")),
     ("events --boot -1", "namespace bound"),
@@ -231,7 +361,7 @@ SCRIPT = [
     ("print ASTRA-STATUS-$?", "ASTRA-STATUS-0"),
     (DURABILITY_COMMAND,
      ("ASTRA DURABILITY SYNCED", "ASTRA DURABILITY PASS")),
-    ("posix --durability-check WORK:durability-cut.txt durable-data-68040",
+    ("posix --durability-check /work/durability-cut.txt durable-data-68040",
      "ASTRA DURABILITY EXACT"),
     ("lua -v", "Lua 5.5.1"),
     ("lua -e \"print(6*7)\"", "42"),
@@ -247,13 +377,13 @@ SCRIPT = [
      "print(assert(io.open('luanew')):read('*a'));os.remove('luanew')\"",
      "ok"),
     *ZSH_SCRIPT,
-    ("mkdir 'two words'; ls", "two words/"),
+    ("mkdir 'two words'; ls -F", "two words/"),
     ("which status > out.txt", "out.txt"),
     ("cat out.txt", "/commands/status"),
     ("which devices >> out.txt", "out.txt"),
     ("cat out.txt", ("/commands/status",
                      "/commands/devices")),
-    ("pwd > pwd.txt; cat pwd.txt", "/CWD"),
+    ("pwd > pwd.txt; cat pwd.txt", "/cwd"),
     ("ls >", "parse error"),
     ("GREETING=hello; print -r -- $GREETING", "hello"),
     ("unset GREETING; print -r -- -$GREETING-", "--"),
@@ -276,14 +406,14 @@ PERFORMANCE_SCRIPT = [
     ("echo one", "one"),
     ("which status", "/commands/status"),
     ("which devices", "/commands/devices"),
-    ("devices status", "/commands/status [1]"),
+    ("devices", "slot  src  owner"),
 ]
 PERFORMANCE_BUDGET_SECONDS = {
     "hello": 8.0,
     "echo one": 8.0,
     "which status": 8.0,
     "which devices": 7.0,
-    "devices status": 7.0,
+    "devices": 7.0,
 }
 
 QCODE = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus",
@@ -439,7 +569,7 @@ class Qmp:
 
 class Machine:
     def __init__(self, qemu, rom, image, socket_directory, extra_args=(),
-                 hostfs_root=None):
+                 hostfs_root=None, debug_guest=False):
         # Resolve every source-relative input before starting QEMU.  A missing
         # catalog must not leave a live emulator behind.
         self.names = trace_decode.kernel_event_names(
@@ -451,11 +581,15 @@ class Machine:
                          "build", "m68k", "terminal.elf")])
         self.runtime_directory = tempfile.mkdtemp(prefix="astra-qmp-")
         self.qmp_path = os.path.join(self.runtime_directory, "qmp.sock")
+        self.gdb_path = (os.path.join(self.runtime_directory, "gdb.sock")
+                         if debug_guest else None)
         self.ring_path = os.path.join(socket_directory, "ring.bin")
         command = ([qemu, "-M", "astra68", "-m", MEMORY, "-bios", rom,
                     "-display", "none", "-monitor", "none", "-serial", "stdio",
                     "-no-reboot",
                     "-qmp", "unix:%s,server=on,wait=off" % self.qmp_path] +
+                   (["-gdb", "unix:%s,server=on,wait=off" % self.gdb_path]
+                    if self.gdb_path else []) +
                    list(extra_args) +
                    ["-drive", "if=none,format=raw,file=%s" % image])
         hostfs_root = hostfs_root or os.environ.get(
@@ -534,7 +668,7 @@ class Machine:
 
         Continuations are rejoined here rather than left to the caller: a
         record holds twenty bytes, so most of what this gate looks for --
-        `/commands/status [1]`, `namespace bound` -- straddles two of them, and
+        `/commands/status [0]`, `namespace bound` -- straddles two of them, and
         a check against single records would fail on the length of its own
         needle rather than on anything the machine did.
         """
@@ -864,7 +998,7 @@ def zsh_interactive(machine, command_deadline, verbose=False):
     # become ready before launching the next.
     for observer in range(4):
         before = machine.sequence()
-        machine.qmp.type_line("open APPS:Terminal.app")
+        machine.qmp.type_line("open /apps/Terminal.app")
         if machine.wait_for_text(BANNER, command_deadline, before)[0] is None:
             print("FAIL: observer terminal %u did not open" % (observer + 1))
             for text in machine.said(before)[0][-80:]:
@@ -934,7 +1068,7 @@ def vim_creates_and_runs_lua(machine, command_deadline, verbose=False):
     machine.settle()
     vim_before = machine.sequence()
     machine.qmp.type_line(
-        "vim -Nu NONE -n -c \"call setline(1,'')\" -c write -- WORK:" +
+        "vim -Nu NONE -n -c \"call setline(1,'')\" -c write -- /work/" +
         VIM_LUA_FILE)
 
     # Vim owns the first terminal now. Open a second one to observe the ready
@@ -1086,7 +1220,8 @@ def refresh_workspace_rom(rom):
 
 def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         report_timings, prepared_image, performance_only, vim_gate,
-        network_only, vim_only, cxx_only, zsh_only, interface_layout_only):
+        network_only, vim_only, cxx_only, zsh_only, interface_layout_only,
+        sbase_only):
     timings = []
     if not refresh_workspace_rom(rom):
         return 1
@@ -1097,14 +1232,20 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         if not prepared_image:
             astra_image.install(scratch, catalog)
         full_gate = not (performance_only or network_only or vim_only or
-                         cxx_only or zsh_only or interface_layout_only)
+                         cxx_only or zsh_only or interface_layout_only or
+                         sbase_only)
         test_commands = []
         if full_gate or network_only:
             test_commands.append("posix")
         if full_gate or performance_only:
             test_commands.append("hello")
+        if full_gate:
+            test_commands.extend(("sbase-ls", "sbase-mkdir", "sbase-rmdir"))
         if cxx_only:
             test_commands.append("cxx")
+        if sbase_only:
+            test_commands.append("posix")
+            test_commands.extend("sbase-" + name for name in SBASE_COMMANDS)
         if test_commands:
             result = subprocess.run(
                 ["make", "-C", os.path.join(ROOT, "sw", "userspace",
@@ -1117,22 +1258,25 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
             for name in test_commands:
                 astra_image.install_test_command(scratch, name)
         needs_warm_store = not (performance_only or network_only or vim_only or
-                                cxx_only or zsh_only or interface_layout_only)
+                                cxx_only or zsh_only or interface_layout_only or
+                                sbase_only)
         if needs_warm_store and not warm_the_store(
                 qemu, rom, scratch, temporary, boot_deadline,
                 command_deadline):
             return 1
         run_dir = os.path.join(temporary, "run")
         os.mkdir(run_dir)
-        machine = Machine(qemu, rom, scratch, run_dir)
+        machine = Machine(qemu, rom, scratch, run_dir,
+                          debug_guest=sbase_only)
         try:
             if interface_layout_only:
                 return 0 if interface_layout_benchmark(
                     machine, boot_deadline) else 1
             if not open_terminal(machine, boot_deadline, command_deadline):
                 return 1
-            script = (ZSH_SCRIPT if zsh_only else
-                      [('cxx; cat PROC:libraries/memory',
+            script = (SBASE_SCRIPT if sbase_only else
+                      ZSH_SCRIPT if zsh_only else
+                      [('cxx; cat /proc/libraries/memory',
                         'ASTRA C++ PASS')] if cxx_only else
                       [] if vim_only else
                       [(POSIX_COMMAND, "POSIX RAW PASS")] if network_only else
@@ -1167,14 +1311,59 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                             print("kernel stack:")
                             print(machine.qmp.monitor(
                                 "xp /64xw 0x%s" % match.group(1)).rstrip())
+                        print("sampled PCs after command timeout:")
+                        for _ in range(12):
+                            machine.qmp.execute("cont")
+                            time.sleep(0.02)
+                            machine.qmp.execute("stop")
+                            sampled = machine.qmp.monitor("info registers")
+                            pc = re.search(r"\bPC = ([0-9a-fA-F]{8})", sampled)
+                            sr = re.search(r"\bSR = ([0-9a-fA-F]{4})", sampled)
+                            print("    pc=%s sr=%s" %
+                                  (pc.group(1) if pc else "?",
+                                   sr.group(1) if sr else "?"))
                     except (OSError, RuntimeError) as error:
                         print("guest registers unavailable: %s" % error)
+                    if machine.gdb_path:
+                        try:
+                            snapshot = subprocess.run(
+                                ["gdb-multiarch", "-nx", "-q", "-batch",
+                                 os.path.join(ROOT, "sw/kernel/build/astra_kernel.elf"),
+                                 "-ex", "target remote %s" % machine.gdb_path,
+                                 "-ex", "source %s" % os.path.join(
+                                     ROOT, "tools/gdb-kernel-snapshot.py"),
+                                 "-ex", "astra-kernel-snapshot"],
+                                capture_output=True, text=True, timeout=30,
+                                check=False)
+                            print("kernel snapshot:")
+                            print((snapshot.stdout + snapshot.stderr).rstrip())
+                        except (OSError, subprocess.TimeoutExpired) as error:
+                            print("kernel snapshot unavailable: %s" % error)
                     print("recent trace records:")
                     for text in machine.trace()[-40:]:
                         print("    %s" % text)
                     print("last serial lines:")
                     for text in machine.recent_serial():
                         print("    %s" % text)
+                    if sbase_only:
+                        try:
+                            machine.qmp.execute("cont")
+                            diagnostic_before = machine.sequence()
+                            machine.qmp.double_click(*TERMINAL_ICON)
+                            ready, _ = machine.wait_for_text(
+                                BANNER, command_deadline, diagnostic_before)
+                            if ready is not None:
+                                machine.qmp.type_line(
+                                    "ps; print ASTRA-DIAG-PS")
+                                wait_for_command(machine, "ASTRA-DIAG-PS",
+                                                 command_deadline,
+                                                 diagnostic_before)
+                            print("second-terminal diagnostics:")
+                            for item in machine.said(diagnostic_before)[0][-60:]:
+                                print("    |%s|" % item)
+                        except (OSError, RuntimeError) as error:
+                            print("second-terminal diagnostics failed: %s" %
+                                  error)
                     return 1
                 timings.append((line, elapsed))
                 if verbose:
@@ -1184,6 +1373,9 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                 return 1
             if vim_only:
                 print("ASTRA VIM LUA PASS")
+                return 0
+            if sbase_only:
+                print("ASTRA SBASE PORTABLE PASS")
                 return 0
             if zsh_only:
                 if not zsh_interactive(machine, command_deadline, verbose):
@@ -1262,7 +1454,7 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
             # launcher. Run this last because the new window takes input focus.
             before = machine.sequence()
             machine.qmp.type_line(
-                "open APPS:Missing.app; print ASTRA-OPEN-MISSING-$?")
+                "open /apps/Missing.app; print ASTRA-OPEN-MISSING-$?")
             said = wait_for_command(machine,
                                     ("open: application launch failed",
                                      "ASTRA-OPEN-MISSING-1"),
@@ -1272,10 +1464,10 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                 return 1
             before = machine.sequence()
             machine.qmp.type_line(
-                "open APPS:InterfaceGallery.app; "
+                "open /apps/InterfaceGallery.app; "
                 "print ASTRA-OPEN-$?; ps")
             said = wait_for_command(
-                machine, ("ASTRA-OPEN-0", "APPS:InterfaceGallery.app"),
+                machine, ("ASTRA-OPEN-0", "/apps/InterfaceGallery.app"),
                 command_deadline, before)
             if said is None:
                 print("FAIL: open did not start and release Interface Gallery")
@@ -1308,7 +1500,7 @@ def main():
     parser.add_argument("--image", required=True,
                         help="card image with an ext4 volume; copied, not written")
     parser.add_argument("--catalog", default=astra_image.DEFAULT_CATALOG,
-        help="the .astra_events bytes to place on the volume as SYS:" +
+        help="the .astra_events bytes to place on the volume as /system" +
              astra_image.CATALOG_NAME)
     parser.add_argument("--boot-deadline", type=float, default=90.0)
     parser.add_argument("--command-deadline", type=float, default=60.0)
@@ -1331,6 +1523,8 @@ def main():
                         help="run only the C++ runtime integration gate")
     parser.add_argument("--zsh-only", action="store_true",
                         help="run only the upstream zsh integration gate")
+    parser.add_argument("--sbase-only", action="store_true",
+                        help="run staged upstream file-command behavior")
     parser.add_argument("--interface-layout-only", action="store_true",
                         help="run only the target interface reflow benchmark")
     arguments = parser.parse_args()
@@ -1342,7 +1536,7 @@ def main():
                arguments.performance_only, arguments.vim_gate,
                arguments.network_only, arguments.vim_only,
                arguments.cxx_only, arguments.zsh_only,
-               arguments.interface_layout_only)
+               arguments.interface_layout_only, arguments.sbase_only)
 
 
 if __name__ == "__main__":

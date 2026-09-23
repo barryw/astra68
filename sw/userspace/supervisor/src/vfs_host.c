@@ -24,9 +24,8 @@ static int vfs_ready;
  * The namespace begins once the storage service publishes its port. Resolution
  * remains in the Kit rather than in the shell.
  *
- * One partition, so SYS: is the whole volume and its read-only-ness is the
- * right it carries rather than the mount it names. See the wiring plan's
- * "where this knowingly falls short of the spec".
+ * The boot SD partition is /dh0. /system names the selected boot volume; its
+ * rights come from the grant, not from the ext4 mount.
  */
 static void
 bind_standard_assigns(void)
@@ -34,7 +33,9 @@ bind_standard_assigns(void)
     uint32_t status;
 
     astra_assign_table_init(&vfs_assigns);
-    (void)astra_assign_bind(&vfs_assigns, "SYS", vfs_handle,
+    (void)astra_assign_bind(&vfs_assigns, "DH0", vfs_handle,
+                            ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "");
+    (void)astra_assign_bind(&vfs_assigns, "SYSTEM", vfs_handle,
                             ASTRA_RIGHT_READ, "");
     (void)astra_assign_bind(&vfs_assigns, "SERVICES", vfs_handle,
                             ASTRA_RIGHT_READ, "services");
@@ -48,7 +49,7 @@ bind_standard_assigns(void)
     } else {
         ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
                      ASTRA_EVENT_LEVEL_WARNING,
-                     "CONFIG: unbound, mkdir refused with status %u", status);
+                     "/config/ unbound, mkdir refused with status %u", status);
     }
     status = astra_vfs_mkdir(&vfs_client, "/libs");
     if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
@@ -57,7 +58,7 @@ bind_standard_assigns(void)
     } else {
         ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
                      ASTRA_EVENT_LEVEL_WARNING,
-                     "LIBS: unbound, mkdir refused with status %u", status);
+                     "/libs/ unbound, mkdir refused with status %u", status);
     }
     status = astra_vfs_mkdir(&vfs_client, "/apps");
     if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
@@ -66,7 +67,7 @@ bind_standard_assigns(void)
     } else {
         ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
                      ASTRA_EVENT_LEVEL_WARNING,
-                     "APPS: unbound, mkdir refused with status %u", status);
+                     "/apps/ unbound, mkdir refused with status %u", status);
     }
     status = astra_vfs_mkdir(&vfs_client, "/trash");
     if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
@@ -76,7 +77,16 @@ bind_standard_assigns(void)
     } else {
         ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
                      ASTRA_EVENT_LEVEL_WARNING,
-                     "TRASH: unbound, mkdir refused with status %u", status);
+                     "/trash/ unbound, mkdir refused with status %u", status);
+    }
+    status = astra_vfs_mkdir(&vfs_client, "/tmp");
+    if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
+        (void)astra_assign_bind(&vfs_assigns, "TMP", vfs_handle,
+                                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "tmp");
+    } else {
+        ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
+                     ASTRA_EVENT_LEVEL_WARNING,
+                     "/tmp/ unbound, mkdir refused with status %u", status);
     }
     /*
      * A volume with no work directory on it has not been used yet, so making
@@ -97,7 +107,7 @@ bind_standard_assigns(void)
          */
         ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
                      ASTRA_EVENT_LEVEL_WARNING,
-                     "WORK: unbound, mkdir refused with status %u", status);
+                     "/work/ unbound, mkdir refused with status %u", status);
     }
     status = astra_vfs_mkdir(&vfs_client, "/home");
     if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
@@ -106,68 +116,37 @@ bind_standard_assigns(void)
     } else {
         ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
                      ASTRA_EVENT_LEVEL_WARNING,
-                     "HOME: unbound, mkdir refused with status %u", status);
+                     "/home/ unbound, mkdir refused with status %u", status);
     }
-    /*
-     * Where programs live, and a union: the person's own directory first, then
-     * the shipped one. A name found in `local/commands` shadows the command
-     * the system shipped, which is what override means -- and the shadowing is
-     * visible, because a listing shows both and a launch records which member
-     * answered.
-     *
-     * Both members are made if they are missing and omitted rather than fatal
-     * if the volume refuses, the same shape WORK: has. A volume with no
-     * commands directory has not had one installed yet.
-     */
+    /* PATH orders local overrides before the shipped commands directory. */
     status = astra_vfs_mkdir(&vfs_client, "/local");
     if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
         status = astra_vfs_mkdir(&vfs_client, "/local/commands");
     }
     if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
-        (void)astra_assign_bind(&vfs_assigns, "COMMANDS", vfs_handle,
+        (void)astra_assign_bind(&vfs_assigns, "LOCAL", vfs_handle,
                                 ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE,
-                                "local/commands");
+                                "local");
     } else {
-        /*
-         * Said once, and the union keeps working. A name that silently returns
-         * less than it did yesterday is worse than a name that says why.
-         */
         ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
                      ASTRA_EVENT_LEVEL_WARNING,
-                     "COMMANDS: local member skipped, mkdir refused with "
+                     "/local/commands skipped, mkdir refused with "
                      "status %u", status);
     }
     status = astra_vfs_mkdir(&vfs_client, "/commands");
     if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
-        /*
-         * Bind if the first member never made it, join if it did: the shipped
-         * member answers on its own rather than the name vanishing with the
-         * writable one.
-         */
-        if (astra_assign_lookup(&vfs_assigns, "COMMANDS") == NULL) {
-            (void)astra_assign_bind(&vfs_assigns, "COMMANDS", vfs_handle,
-                                    ASTRA_RIGHT_READ, "commands");
-        } else {
-            (void)astra_assign_join(&vfs_assigns, "COMMANDS", vfs_handle,
-                                    ASTRA_RIGHT_READ, "commands");
-        }
+        (void)astra_assign_bind(&vfs_assigns, "COMMANDS", vfs_handle,
+                                ASTRA_RIGHT_READ, "commands");
     } else {
         ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
                      ASTRA_EVENT_LEVEL_WARNING,
-                     "COMMANDS: shipped member skipped, mkdir refused with "
+                     "/commands/ shipped member skipped, mkdir refused with "
                      "status %u", status);
     }
-    /*
-     * Said once more, at the point it becomes true. Two "member skipped"
-     * warnings tell a reader that each attempt failed; neither says the
-     * conclusion that follows from both together -- that COMMANDS: now has
-     * no members at all, and every launch this boot will fail with
-     * "not a command" for a reason no single one of those two lines states.
-     */
     if (astra_assign_lookup(&vfs_assigns, "COMMANDS") == NULL) {
         ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
                      ASTRA_EVENT_LEVEL_WARNING,
-                     "COMMANDS: has no members at all");
+                     "/commands/ has no members at all");
     }
     /*
      * What namespace this boot actually got. A rare fact recorded once, which

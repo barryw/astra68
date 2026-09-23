@@ -1617,7 +1617,8 @@ jbd_trans_remove_block_rec(struct jbd_journal *journal,
 {
 	/* If this block record doesn't belong to this transaction,
 	 * give up.*/
-	if (block_rec->trans == trans) {
+	if (block_rec->trans == trans &&
+	    TAILQ_EMPTY(&block_rec->dirty_buf_queue)) {
 		LIST_REMOVE(block_rec, tbrec_node);
 		RB_REMOVE(jbd_block,
 				&journal->block_rec_root,

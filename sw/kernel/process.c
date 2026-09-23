@@ -7185,7 +7185,7 @@ void kernel_process_register_initial_image(uint32_t process_id)
     initial_image_progress = 0u;
     initial_image_exited = 0u;
     if (process != NULL) {
-        static const char name[] = "ROM:supervisor";
+        static const char name[] = "/rom/supervisor";
 
         kernel_bytes_copy(process->name, name, sizeof(name));
     }

@@ -85,9 +85,9 @@ AstraResult astra_handle_close(AstraHandle *handle)
 
 int main(void)
 {
-    char *plain[] = {"open", "APPS:Test.app", "argument", NULL};
+    char *plain[] = {"open", "/apps/Test.app", "argument", NULL};
     char *waiting[] = {
-        "open", "--wait", "APPS:Test.app", "argument", NULL
+        "open", "--wait", "/apps/Test.app", "argument", NULL
     };
     char *missing[] = {"open", NULL};
 

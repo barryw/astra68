@@ -87,7 +87,7 @@ AstraVfsClient *supervisor_vfs_client_for(const AstraAssign *assign);
 AstraVfsClient *supervisor_vfs_assign_client(const AstraAssign *assign,
                                              void *context);
 
-/* The send handle a launch grants for SYS:, WORK: and COMMANDS:. */
+/* The send handle a launch grants for /system, /work and /commands. */
 uint32_t supervisor_vfs_port(void);
 
 /*

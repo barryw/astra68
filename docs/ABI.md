@@ -31,7 +31,7 @@ final mappings, entry, stack, handles, and startup block before publication.
 
 ## Filesystem Kit ABI 3.0
 
-`filesystem.library.3` replaces the fixed startup-sized `AstraAssignTable`
+`filesystem.library.4` replaces the fixed startup-sized `AstraAssignTable`
 array with a growable pointer/count/capacity table and adds
 `astra_assign_table_destroy`. The startup page bounds only the namespace
 records delivered at launch; aliases, union members, and mounts added later

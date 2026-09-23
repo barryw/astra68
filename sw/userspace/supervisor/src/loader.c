@@ -157,14 +157,12 @@ static uint32_t resolve_entry_image(const SupervisorManifestEntry *entry,
         astra_bundle_manifest_destroy(&bundle);
         return ASTRA_STATUS_LIMIT;
     }
-    if (entry->path[0] != 'A' || entry->path[1] != 'P' ||
-        entry->path[2] != 'P' || entry->path[3] != 'S' ||
-        entry->path[4] != ':')
+    if (strncmp(entry->path, "/apps/", 6u) != 0)
     {
         astra_bundle_manifest_destroy(&bundle);
         return ASTRA_STATUS_INVALID;
     }
-    tail = entry->path + 5u;
+    tail = entry->path + 6u;
     apps = astra_assign_lookup(supervisor_assigns(), "APPS");
     if (apps == NULL || !append(bundle_root, root_capacity, apps->root) ||
         (bundle_root[0] != '\0' && !append(bundle_root, root_capacity, "/")) ||
@@ -185,9 +183,11 @@ static const char *private_store_root(const SupervisorManifestEntry *entry)
 {
     const char *root = entry->path;
 
-    while (*root != '\0' && *root != ':')
+    if (*root == '/')
         ++root;
-    return *root == ':' ? root + 1 : "";
+    while (*root != '\0' && *root != '/')
+        ++root;
+    return *root == '/' ? root + 1 : "";
 }
 
 static uint32_t private_config_root(const SupervisorManifestEntry *entry,
@@ -203,6 +203,8 @@ static uint32_t private_config_root(const SupervisorManifestEntry *entry,
 
 static uint32_t named_service(const char *name)
 {
+    if (strcmp(name, "SYSTEM") == 0)
+        return supervisor_vfs_port();
     for (uint32_t index = 0u; index < service_count; ++index)
         if (astra_capability_name_equal(service_names[index], name))
             return service_handles[index];
@@ -210,11 +212,10 @@ static uint32_t named_service(const char *name)
 }
 
 static int definition_path(const char *name, const char *leaf, char *out,
-                           uint32_t capacity, int logical)
+                           uint32_t capacity)
 {
     out[0] = '\0';
-    return append(out, capacity,
-                  logical ? "CONFIG:services/" : "/config/services/") &&
+    return append(out, capacity, "/config/services/") &&
            append(out, capacity, name) && append(out, capacity, "/") &&
            append(out, capacity, leaf);
 }
@@ -228,7 +229,7 @@ static uint32_t dynamic_definition_read(const char *name,
     uint32_t status;
 
     if (!astra_service_name_valid(name) ||
-        !definition_path(name, "service.conf", path, sizeof(path), 1))
+        !definition_path(name, "service.conf", path, sizeof(path)))
         return ASTRA_STATUS_INVALID;
     status = supervisor_vfs_read_alloc(path, (void **)&definition_text,
                                        &length);
@@ -258,9 +259,9 @@ static uint32_t dynamic_definition_write(
     if (client == NULL ||
         astra_service_definition_validate(definition) != ASTRA_OK ||
         !definition_path(definition->name, "service.conf", path,
-                         sizeof(path), 0) ||
+                         sizeof(path)) ||
         !definition_path(definition->name, ".service.tmp", temporary,
-                         sizeof(temporary), 0))
+                         sizeof(temporary)))
         return ASTRA_STATUS_INVALID;
     directory[0] = '\0';
     if (!append(directory, sizeof(directory), SERVICE_DEFINITION_DIRECTORY) ||
@@ -501,8 +502,27 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
             continue;
         }
         if (strcmp(wanted->name, "STORE") == 0) {
+            AstraVfsDirEntry store_info = {0};
+            char store_path[ASTRA_VFS_PATH_MAX] = "/";
+
             if (supervisor_vfs_port() == 0u)
                 continue;
+            /* A namespace entry is not the backing directory. Provision
+             * private storage before granting it to the child. */
+            if (private_store_root(entry)[0] == '\0' ||
+                !append(store_path, sizeof(store_path),
+                        private_store_root(entry)))
+                return ASTRA_STATUS_INVALID;
+            status = astra_vfs_mkdir_mode(supervisor_vfs_client(), store_path,
+                                          0700u);
+            if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_EXISTS)
+                return status;
+            status = astra_vfs_stat_meta(supervisor_vfs_client(), store_path,
+                                          &store_info);
+            if (status != ASTRA_VFS_OK)
+                return status;
+            if (store_info.kind != ASTRA_VFS_KIND_DIRECTORY)
+                return ASTRA_STATUS_NOT_DIR;
             status = add_grant(
                 out, count, "STORE", supervisor_vfs_port(),
                 ASTRA_RIGHT_SIGNAL | delegated,
@@ -690,7 +710,7 @@ static uint32_t publish(const SupervisorManifestPublication *publication,
 {
     AstraVfsClient *client;
 
-    if (strcmp(publication->name, "SYS") == 0)
+    if (strcmp(publication->name, "SYSTEM") == 0)
         return supervisor_vfs_start(handle) ? ASTRA_STATUS_OK :
                                               SUPERVISOR_LOADER_FAIL_PUBLISH;
     if (service_count == ASTRA_HANDLE_COUNT_MAX)
@@ -1157,7 +1177,7 @@ static uint32_t dynamic_definition_remove(const char *name)
     uint32_t status;
 
     if (client == NULL ||
-        !definition_path(name, "service.conf", path, sizeof(path), 0))
+        !definition_path(name, "service.conf", path, sizeof(path)))
         return ASTRA_STATUS_INVALID;
     directory[0] = '\0';
     if (!append(directory, sizeof(directory),
@@ -1647,20 +1667,19 @@ static void pump_launch(const AstraStartupInfo *startup)
         for (uint32_t at = 0u; at <= path_length; ++at)
             bundle_path[at] = request.arguments.bytes[at];
     }
-    for (uint32_t at = 0u; bundle_path[at] != '\0'; ++at)
+    if (!ends_with(bundle_path, ".app") ||
+        strncmp(bundle_path, "/apps/", 6u) != 0 ||
+        bundle_path[6] == '\0') {
+        launch_reply(reply_send, request.header.transaction_id,
+                     ASTRA_STATUS_INVALID, 0u, 0u);
+        return;
+    }
+    for (uint32_t at = 6u; bundle_path[at] != '\0'; ++at)
         if (bundle_path[at] == '/' || bundle_path[at] == '\\') {
             launch_reply(reply_send, request.header.transaction_id,
                          ASTRA_STATUS_INVALID, 0u, 0u);
             return;
         }
-    if (!ends_with(bundle_path, ".app") ||
-        bundle_path[0] != 'A' || bundle_path[1] != 'P' ||
-        bundle_path[2] != 'P' || bundle_path[3] != 'S' ||
-        bundle_path[4] != ':') {
-        launch_reply(reply_send, request.header.transaction_id,
-                     ASTRA_STATUS_INVALID, 0u, 0u);
-        return;
-    }
     if (!append(entry.path, sizeof(entry.path), bundle_path)) {
         launch_reply(reply_send, request.header.transaction_id,
                      ASTRA_STATUS_LIMIT, 0u, 0u);
@@ -1733,7 +1752,7 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
     astra_runtime_deallocate(manifest_text);
     if (status != ASTRA_STATUS_OK)
         return SUPERVISOR_LOADER_FAIL_MANIFEST;
-    if (strcmp(manifest->entries[0].path, "SERVICES:storage") != 0)
+    if (strcmp(manifest->entries[0].path, "/services/storage") != 0)
         return SUPERVISOR_LOADER_FAIL_ORDER;
     if (astra_rt_port_create(1u, ASTRA_EVENT_CONTROL_REQUEST_SIZE,
                           &event_target_receive, &event_target_send) !=

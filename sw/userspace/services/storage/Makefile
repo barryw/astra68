@@ -18,7 +18,7 @@ CPPFLAGS := -I$(NDK)/include -I../../include -I../../../include \
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O2 -flto -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
-# Storage mounts SYS: before loader.library or any ordinary shared library can
+# Storage mounts /system before loader.library or any ordinary shared library can
 # be read.  It is therefore one of the two production bootstrap images that
 # deliberately use the canonical static link profile (the ROM Supervisor is
 # the other); every post-mount service uses dynamic-program.mk.

@@ -7,7 +7,7 @@ create a second filesystem stack.
 ## Native application contract
 
 Applications link the direct symbols declared by the NDK. Their executable has
-an eager `DT_NEEDED` dependency on `filesystem.library.3`; launch fails before
+an eager `DT_NEEDED` dependency on `filesystem.library.4`; launch fails before
 `main()` with a precise diagnostic when the required ABI is unavailable. An
 `AstraFilesystem` attaches to the process namespace already built from its
 startup grants; it borrows those assign and client objects and cannot expand
@@ -65,12 +65,15 @@ translation remain POSIX policy and do not leak into the native library.
 
 ## Filesystem service boundary
 
-`AstraVfsBackendOps` is the private implementation seam used by today's
-storage service. The service core owns protocol decoding, validation, sessions,
+`AstraVfsBackendOps` is the private implementation seam shared by today's
+storage, host, and logical RAM-volume services. The service core owns protocol decoding, validation, sessions,
 handles, generations, concurrency, cancellation, and accounting. A backend
 owns filesystem nodes and medium access, returns Astra VFS statuses, provides
-its own filesystem locking, and never retains request pointers. lwext4 and the
-in-memory tests already implement the same operation table.
+its own filesystem locking, and never retains request pointers. ext4, hostfs,
+and ramfs implement the same operation table under `vfs/src/backends/`.
+Service definition/publication and lifecycle management already use the NDK
+Service Manager; a second device or mount registry would duplicate that
+authority. A logical RAM volume has no raw block endpoint to register.
 
 A public filesystem-service kit should expose this split as a versioned server
 contract only when an out-of-tree filesystem is ready to consume it. That kit

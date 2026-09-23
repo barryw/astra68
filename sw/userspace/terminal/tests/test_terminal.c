@@ -581,8 +581,8 @@ static void test_echo_reports_each_line_once(void)
     astra_terminal_write(&terminal, "abc\bd\n");
     assert(echoed_lines == 2u && strcmp(echoed[1], "abd") == 0);
     /* A redraw replaces the line rather than recording every prefix of it. */
-    astra_terminal_write(&terminal, "WORK:> l\rWORK:> ls\n");
-    assert(echoed_lines == 3u && strcmp(echoed[2], "WORK:> ls") == 0);
+    astra_terminal_write(&terminal, "/work> l\r/work> ls\n");
+    assert(echoed_lines == 3u && strcmp(echoed[2], "/work> ls") == 0);
     /* ONLCR's CR must not erase the completed line before LF records it. */
     astra_terminal_write(&terminal, "child output\r\n");
     assert(echoed_lines == 4u && strcmp(echoed[3], "child output") == 0);

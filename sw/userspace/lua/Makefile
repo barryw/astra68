@@ -29,7 +29,7 @@ LIBC_LIBRARY := $(POSIX)/build/m68k/libraries/libc.library.1
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.1
 STREAMS_LIBRARY := $(STREAMS)/build/m68k/libraries/streams.library.1
-FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.3
+FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.4
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 
 all: $(LIB) lua-library-contract

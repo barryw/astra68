@@ -5,7 +5,6 @@
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/vfs_process.h>
-#include <astra/vfs_union.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -13,10 +12,10 @@
 ASTRA_PROGRAM("metrics", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
-#define METRIC_READ_RECORDS 8u
-
 _Static_assert(sizeof(AstraMetricRecord) <= ASTRA_VFS_IO_MAX,
                "one metric record must fit one public VFS read");
+
+static AstraProcessFilesystem filesystem = ASTRA_PROCESS_FILESYSTEM_INIT;
 
 static int emit_record(const AstraMetricRecord *record)
 {
@@ -54,47 +53,35 @@ static int emit_record(const AstraMetricRecord *record)
 
 static int show_metrics(void)
 {
-    static AstraMetricRecord records[METRIC_READ_RECORDS];
-    AstraVfsClient *client = NULL;
-    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
-    uint64_t offset = 0u;
-    uint64_t size = 0u;
-    uint16_t kind = 0u;
-    char wire[ASTRA_VFS_PATH_MAX];
-    uint32_t status = astra_vfs_assign_open(
-        astra_process_vfs_assigns(), "METRICS:snapshot", ASTRA_RIGHT_READ,
-        ASTRA_VFS_OPEN_READ, astra_process_vfs_assign_client, NULL, wire,
-        sizeof(wire), &file, &size, &kind, &client, NULL);
+    AstraFile file = ASTRA_FILE_INIT;
+    AstraMetricRecord record;
+    uint32_t used = 0u;
+    uint32_t status = astra_filesystem_open(
+        &filesystem.filesystem, "/metrics/snapshot", ASTRA_VFS_OPEN_READ,
+        &file);
 
     if (status != ASTRA_VFS_OK)
         return (int)status;
-    while (offset < size) {
+    while (status == ASTRA_VFS_OK) {
         uint32_t moved = 0u;
 
-        uint32_t wanted = ASTRA_VFS_IO_MAX -
-                          ASTRA_VFS_IO_MAX % sizeof(records[0]);
-
-        if ((uint64_t)wanted > size - offset)
-            wanted = (uint32_t)(size - offset);
-        status = astra_vfs_read(client, file, offset, records, wanted,
-                                &moved);
-        if (status != ASTRA_VFS_OK || moved == 0u ||
-            moved % sizeof(records[0]) != 0u) {
-            status = status != ASTRA_VFS_OK ? status : ASTRA_VFS_ERR_PROTOCOL;
+        status = astra_filesystem_read(
+            &file, (uint8_t *)&record + used, sizeof(record) - used, &moved);
+        if (status != ASTRA_VFS_OK || moved == 0u)
             break;
-        }
-        for (uint32_t index = 0u;
-             index < moved / sizeof(records[0]); ++index)
-            if (!emit_record(&records[index])) {
+        used += moved;
+        if (used == sizeof(record)) {
+            if (!emit_record(&record))
                 status = ASTRA_VFS_ERR_PROTOCOL;
-                break;
-            }
-        if (status != ASTRA_VFS_OK)
-            break;
-        offset += moved;
+            used = 0u;
+        }
     }
-    (void)astra_vfs_close(client, file);
-    return status == ASTRA_VFS_OK && offset == size ? 0 : (int)status;
+    if (astra_filesystem_close(&file) != ASTRA_VFS_OK &&
+        status == ASTRA_VFS_OK)
+        status = ASTRA_VFS_ERR_IO;
+    if (status == ASTRA_VFS_OK && used != 0u)
+        status = ASTRA_VFS_ERR_PROTOCOL;
+    return (int)status;
 }
 
 int main(int argc, char **argv)
@@ -107,13 +94,13 @@ int main(int argc, char **argv)
     (void)argv;
     if (!astra_startup_validate(startup))
         return ASTRA_STATUS_INVALID;
-    status = astra_process_vfs_init(startup);
+    status = astra_process_filesystem_open(&filesystem, startup);
     if (status != ASTRA_VFS_OK) {
         (void)fputs("metrics: filesystem unavailable\n", stderr);
         return (int)status;
     }
     result = show_metrics();
-    astra_process_vfs_close();
+    astra_process_filesystem_close(&filesystem);
     if (result != 0)
         (void)fputs("metrics: METRICS: unavailable or invalid\n", stderr);
     return fflush(stdout) == 0 ? result : (int)ASTRA_STATUS_IO;

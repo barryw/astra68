@@ -813,10 +813,10 @@ static void test_launch(void)
     static const uint8_t image[64] = {0u};
     static const char *const words[] = {
         "vim", "-R", "+42", "--cmd", "set number", "--",
-        "WORK:notes.txt"
+        "/work/notes.txt"
     };
     static const char *const environment_names[] = {"HOME", "TZ"};
-    static const char *const environment_values[] = {"WORK:", "UTC"};
+    static const char *const environment_values[] = {"/home", "UTC"};
     static const char malformed[] = {'b', 'a', 'd', (char)0xc0, (char)0x80,
                                      '\0'};
     static const char *const malformed_values[] = {malformed};
@@ -881,7 +881,7 @@ static void test_launch(void)
     assert(arguments.environment_count == 2u);
     assert(arguments.environment_length == 18u);
     assert(arguments.environment_address == (uint32_t)(uintptr_t)environment);
-    assert(strcmp(environment, "HOME=WORK:") == 0);
+    assert(strcmp(environment, "HOME=/home") == 0);
     assert(strcmp(environment + 11u, "TZ=UTC") == 0);
     assert(astra_launch_arguments_pack(
                &arguments, argument_storage, sizeof(argument_storage),
@@ -1584,10 +1584,10 @@ static void test_exec(void)
 {
     static char *const argv[] = {
         "vim", "-R", "+42", "--cmd", "set number", "--",
-        "WORK:notes.txt", NULL
+        "/work/notes.txt", NULL
     };
     static char *const envp[] = {
-        "HOME=WORK:", "TERM=astra-256color", NULL
+        "HOME=/home", "TERM=astra-256color", NULL
     };
     static char *const bad_envp[] = { "HOME", NULL };
     static char malformed_argument[] = {

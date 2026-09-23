@@ -416,6 +416,15 @@ uint32_t astra_vfs_stat_at_meta(AstraVfsClient *client,
                                 AstraVfsFile directory, const char *path,
                                 AstraVfsDirEntry *meta);
 
+/** Read current metadata for an open node, independent of its path.
+ * @param client Connected client.
+ * @param file Open file or directory token.
+ * @param meta Receives metadata.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_vfs_stat_file_meta(AstraVfsClient *client, AstraVfsFile file,
+                                  AstraVfsDirEntry *meta);
+
 /**
  * Read a batch from a directory path.
  * @param client Connected client.

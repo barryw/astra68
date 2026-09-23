@@ -23,11 +23,11 @@ static void valid_manifest(void)
 {
     char text[] =
         "# shipped startup\n"
-            "service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
-            "serves SYS:r required\n"
-            "service SERVICES:hostfs grants HOST_DEVICE "
+            "service /services/storage grants BLOCK_DEVICE BLOCK_IRQ "
+            "serves SYSTEM:r required\n"
+            "service /services/hostfs grants HOST_DEVICE "
             "serves WORK:rw METRICS:r required\n"
-        "service SERVICES:events grants SYS:r STORE:rw serves EVENTS:r\n";
+        "service /services/events grants SYSTEM:r STORE:rw serves EVENTS:r\n";
     SupervisorManifest manifest = SUPERVISOR_MANIFEST_INIT;
 
     assert(supervisor_manifest_parse(text, sizeof(text) - 1u, &manifest));
@@ -38,7 +38,7 @@ static void valid_manifest(void)
                   "BLOCK_DEVICE") == 0);
     assert(manifest.entries[0].grants[0].is_namespace == 0u);
     assert(manifest.entries[0].serves_count == 1u);
-    assert(strcmp(manifest.entries[0].serves[0].name, "SYS") == 0);
+    assert(strcmp(manifest.entries[0].serves[0].name, "SYSTEM") == 0);
     assert(manifest.entries[1].serves_count == 2u);
     assert(strcmp(manifest.entries[1].serves[1].name, "METRICS") == 0);
     assert(manifest.entries[2].grants[1].rights ==
@@ -46,7 +46,7 @@ static void valid_manifest(void)
 
     {
         char terminal[] =
-        "application SERVICES:terminal grants DISPLAY INPUT INPUT_IRQ "
+        "application /services/terminal grants DISPLAY INPUT INPUT_IRQ "
             "WORK:rw COMMANDS:r LIBS:r EVENTS:r EVENT_CONTROL delegates\n";
 
         assert(supervisor_manifest_parse(terminal, sizeof(terminal) - 1u,
@@ -59,10 +59,10 @@ static void valid_manifest(void)
     }
     {
         char display[] =
-            "service SERVICES:display grants DISPLAY DISPLAY_IRQ "
+            "service /services/display grants DISPLAY DISPLAY_IRQ "
             "VBLANK_IRQ "
             "serves GUI required\n"
-            "application SERVICES:terminal grants GUI WORK:rw COMMANDS:r "
+            "application /services/terminal grants GUI WORK:rw COMMANDS:r "
             "LIBS:r EVENTS:r EVENT_CONTROL delegates\n";
 
         assert(supervisor_manifest_parse(display, sizeof(display) - 1u,
@@ -81,7 +81,7 @@ static void valid_manifest(void)
     }
     {
         char network[] =
-            "service SERVICES:network grants NETWORK_DEVICE NETWORK_IRQ "
+            "service /services/network grants NETWORK_DEVICE NETWORK_IRQ "
             "serves NETWORK NETWORK_LISTEN required\n";
 
         assert(supervisor_manifest_parse(network, sizeof(network) - 1u,
@@ -100,13 +100,17 @@ static void valid_manifest(void)
 static void refuses_whole_file(void)
 {
     char bad_right[] =
-        "service SERVICES:storage grants BLOCK_DEVICE serves SYS:r required\n"
-        "service SERVICES:events grants STORE:write serves EVENTS:r\n";
+        "service /services/storage grants BLOCK_DEVICE serves SYS:r required\n"
+        "service /services/events grants STORE:write serves EVENTS:r\n";
     char wrong_order[] =
-        "service SERVICES:events serves EVENTS:r grants STORE:rw\n";
-    char command[] = "command COMMANDS:shell grants SYS:r required\n";
+        "service /services/events serves EVENTS:r grants STORE:rw\n";
+    char command[] = "command /commands/shell grants SYS:r required\n";
     char required_application[] =
-        "application APPS:Broken.app grants GUI required\n";
+        "application /apps/Broken.app grants GUI required\n";
+    char old_colon_path[] = "service SERVICES:storage grants BLOCK_DEVICE\n";
+    char root_path[] = "service / grants BLOCK_DEVICE\n";
+    char path_grant[] =
+        "application /services/desktop grants GUI /apps/r LIBS:r\n";
     char too_many[4096] = "";
     SupervisorManifest manifest = SUPERVISOR_MANIFEST_INIT;
 
@@ -120,8 +124,15 @@ static void refuses_whole_file(void)
     assert(!supervisor_manifest_parse(required_application,
                                       sizeof(required_application) - 1u,
                                       &manifest));
+    assert(!supervisor_manifest_parse(old_colon_path,
+                                      sizeof(old_colon_path) - 1u,
+                                      &manifest));
+    assert(!supervisor_manifest_parse(root_path, sizeof(root_path) - 1u,
+                                      &manifest));
+    assert(!supervisor_manifest_parse(path_grant, sizeof(path_grant) - 1u,
+                                      &manifest));
     for (uint32_t index = 0u; index < 40u; ++index)
-        (void)strcat(too_many, "service SERVICES:extra grants SYS:r\n");
+        (void)strcat(too_many, "service /services/extra grants SYS:r\n");
     assert(supervisor_manifest_parse(too_many, strlen(too_many), &manifest));
     assert(manifest.count == 40u);
     fail_reallocation = 1;
@@ -137,19 +148,21 @@ static void parses_bundle_grants(void)
     SupervisorManifestGrant grant;
     char raw[] = "GUI";
     char namespaced[] = "WORK:rw";
+    char bad_path[] = "/apps/r";
 
     assert(supervisor_manifest_grant(raw, &grant));
     assert(strcmp(grant.name, "GUI") == 0 && grant.is_namespace == 0u);
     assert(supervisor_manifest_grant(namespaced, &grant));
     assert(strcmp(grant.name, "WORK") == 0 && grant.is_namespace == 1u);
     assert(grant.rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE));
+    assert(!supervisor_manifest_grant(bad_path, &grant));
 }
 
 static void accepts_large_commented_manifest(void)
 {
     char text[262144u];
     SupervisorManifest manifest = SUPERVISOR_MANIFEST_INIT;
-    const char service[] = "\nservice SERVICES:storage grants BLOCK_DEVICE\n";
+    const char service[] = "\nservice /services/storage grants BLOCK_DEVICE\n";
 
     text[0] = '#';
     memset(text + 1u, 'x', sizeof(text) - sizeof(service) - 1u);
@@ -165,15 +178,15 @@ static void path_uses_vfs_authority(void)
     char text[ASTRA_VFS_PATH_MAX + 64u];
     SupervisorManifest manifest = SUPERVISOR_MANIFEST_INIT;
 
-    memcpy(path, "SERVICES:", sizeof("SERVICES:") - 1u);
-    memset(path + sizeof("SERVICES:") - 1u, 'p',
-           150u - (sizeof("SERVICES:") - 1u));
+    memcpy(path, "/services/", sizeof("/services/") - 1u);
+    memset(path + sizeof("/services/") - 1u, 'p',
+           150u - (sizeof("/services/") - 1u));
     path[150] = '\0';
     (void)snprintf(text, sizeof(text), "service %s grants SYS:r\n", path);
     assert(supervisor_manifest_parse(text, strlen(text), &manifest));
     assert(strlen(manifest.entries[0].path) == 150u);
-    memset(path + sizeof("SERVICES:") - 1u, 'p',
-           ASTRA_VFS_PATH_MAX - (sizeof("SERVICES:") - 1u));
+    memset(path + sizeof("/services/") - 1u, 'p',
+           ASTRA_VFS_PATH_MAX - (sizeof("/services/") - 1u));
     path[ASTRA_VFS_PATH_MAX] = '\0';
     (void)snprintf(text, sizeof(text), "service %s grants SYS:r\n", path);
     assert(!supervisor_manifest_parse(text, strlen(text), &manifest));
@@ -182,7 +195,7 @@ static void path_uses_vfs_authority(void)
 
 static void parses_exact_span_without_terminator(void)
 {
-    const char source[] = "service SERVICES:test grants SYS:r";
+    const char source[] = "service /services/test grants SYS:r";
     size_t length = sizeof(source) - 1u;
     char *text = malloc(length);
     SupervisorManifest manifest = SUPERVISOR_MANIFEST_INIT;
@@ -191,7 +204,7 @@ static void parses_exact_span_without_terminator(void)
     memcpy(text, source, length);
     assert(supervisor_manifest_parse(text, (uint32_t)length, &manifest));
     assert(manifest.count == 1u);
-    assert(strcmp(manifest.entries[0].path, "SERVICES:test") == 0);
+    assert(strcmp(manifest.entries[0].path, "/services/test") == 0);
     free(text);
 
     text = malloc(length);

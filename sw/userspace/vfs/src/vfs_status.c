@@ -29,7 +29,7 @@ astra_vfs_status_text(uint32_t status)
          * prompt because only one of them is worth retrying.
          */
         "the service is gone", "cross-device operation",
-        "too many symbolic links"
+        "too many symbolic links", "read-only namespace"
     };
 
     if (status >= (uint32_t)(sizeof(text) / sizeof(text[0])))

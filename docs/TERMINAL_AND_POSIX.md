@@ -104,8 +104,9 @@ so applications do not need a terminal-specific argument.
 
 Terminal launches `COMMANDS:zsh` with `HOME=HOME:`, `PATH=/commands`,
 `SHELL=/commands/zsh`, and `TERM=astra-256color`. Its system zsh startup is
-scoped to `CONFIG:commands/zsh`; zsh therefore reads `CONFIG:/zshrc` without
-learning the host volume layout. Normal user startup remains `HOME:/.zshrc`.
+scoped to `CONFIG:commands/zsh`; zsh therefore reads `/CONFIG/zshrc` without
+learning the host volume layout. The shared POSIX startup converts `HOME:`
+to `/HOME` before zsh runs, so normal user startup is `/HOME/.zshrc`.
 
 The shell launches an installed native GUI bundle with
 `open APPS:Name.app [argument ...]`. `open`, desktop icons, and the future
@@ -115,9 +116,9 @@ soon as startup succeeds unless `--wait` is requested. Window creation remains
 asynchronous, and launch origin is available to the application through
 `astra_startup_launch_source()` rather than a command-line switch.
 
-The startup file sources the first script found at `HOME:/.motd.zsh` or
-`CONFIG:motd.zsh`. If neither exists, it prints the first plain file found at
-`HOME:/.motd` or `CONFIG:motd`. Scripts can call `ps`, `metrics`, or other
+The startup file sources the first script found at `/HOME/.motd.zsh` or
+`/CONFIG/motd.zsh`. If neither exists, it prints the first plain file found at
+`/HOME/.motd` or `/CONFIG/motd`. Scripts can call `ps`, `metrics`, or other
 commands for dynamic content; plain files are deliberately literal and need no
 second placeholder language. User files override system files.
 
@@ -249,12 +250,22 @@ kernel's no-forced-thread-destruction and bounded-latency invariants.
 
 Native logical locations may use names such as `SYS:`, `WORK:`, `HOME:`,
 `RAM:`, and `APP:`. POSIX programs see one stable slash-path view of the same
-underlying storage objects, for example `/System`, `/Work`, `/Home`, `/Ram`,
-and the launched bundle directory.
+underlying storage objects: `SYS:commands/zsh` is `/SYS/commands/zsh`,
+`WORK:file` is `/WORK/file`, and a future `DH0:docs` is `/DH0/docs`. The first
+slash component is an assign, not a second mount or a raw device. `/` exposes
+only the names granted to that process. See
+[DEVICE_AND_VOLUME_PLAN.md](DEVICE_AND_VOLUME_PLAN.md) for physical-device,
+partition, mounted-volume, and alias identities.
 
 The two syntaxes are views, not duplicate filesystems. `chdir`, desktop
 navigation, drag and drop, and native open operations ultimately resolve to the
-same object identity and capability checks.
+same object identity and capability checks. POSIX software should use slash
+paths in `HOME`, `PATH`, startup files, prompts, and API results; it must not
+depend on zsh parsing native `NAME:` spellings. The current Terminal startup
+still uses `HOME=HOME:` and a `CONFIG:` startup path; converting those to slash
+spellings is part of the device/volume namespace work, not an upstream zsh
+change. A current directory must remain bound to its original VFS object when
+an alias changes or a removable volume disappears.
 
 ## 9. Porting stages
 

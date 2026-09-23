@@ -22,7 +22,7 @@ LIBRARY_MAP := config.library.exports
 SYSTEM_LIBRARY := $(NDK)/build/m68k/libraries/system.library.2
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.1
-FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.3
+FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.4
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 HOST_TEST := build/host/test_config_document
 
@@ -55,7 +55,7 @@ $(LIBRARY): $(LIBRARY_OBJECTS) $(LIBRARY_MAP) $(ASTRA_SHARED_LINK_INPUTS) \
 		-L$(dir $(COMPILER_LIBRARY)) -L$(dir $(FILESYSTEM_LIBRARY)) \
 		-Wl,--no-as-needed -Wl,-l:system.library.2 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1 \
-		-Wl,-l:filesystem.library.3 $(ASTRA_SHARED_LINK_END)
+		-Wl,-l:filesystem.library.4 $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(LIBRARY)
 	@python3 ../../../tools/check_shared_library_layout.py $(LIBRARY)
@@ -71,7 +71,7 @@ library-contract: $(LIBRARY)
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [system.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.1]')" = 1
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [filesystem.library.3]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [filesystem.library.4]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 4
 	@$(READELF) -VW $< | grep -q 'ASTRA_CONFIG_1.0'
 	$(call ASTRA_CHECK_DSO,$(LIBRARY))

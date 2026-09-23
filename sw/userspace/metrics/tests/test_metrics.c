@@ -190,6 +190,12 @@ test_vfs_snapshot(void)
     assert(refreshes == 1u && value == 41u);
     assert(node != 0u && info.kind == ASTRA_VFS_KIND_FILE);
     assert(info.size == sizeof(records));
+    value = 50u;
+    assert(ops->stat_node(&metrics, node, &info) == ASTRA_VFS_OK);
+    assert(info.kind == ASTRA_VFS_KIND_FILE && info.size == sizeof(records));
+    assert(refreshes == 2u && value == 51u);
+    assert(ops->stat_node(&metrics, 9u, &info) == ASTRA_VFS_ERR_INVALID);
+    value = 41u;
     memset(records, 0, sizeof(records));
     assert(ops->read(&metrics, node, 0u, records, sizeof(records), &moved) ==
            ASTRA_VFS_OK);

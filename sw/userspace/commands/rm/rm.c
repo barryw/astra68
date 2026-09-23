@@ -1,27 +1,14 @@
 /*
  * `rm` -- removes a name, or several.
  *
- * A builtin until now. Moving it out is worth more here than anywhere else in
- * this set: a builtin runs with everything the shell holds, so `rm` refusing
- * to touch a read-only member was the shell being careful. As a program it
- * holds only what it was granted, and the refusal comes from the member --
- * which is the difference between a rule and a guarantee.
- *
- * It also has to keep a distinction the shell's builtin already made and which
- * is easy to lose: a name on no member at all is "not found", while a member
- * that refused on rights has said nothing about whether the name is there.
- * Reporting the second as the first is how a machine tells a person a file
- * does not exist when it does.
- *
- * A name with no assign is resolved against CWD:, the place the shell says the
- * prompt is standing.
+ * Use the Filesystem Kit so the protected root namespace cannot be bypassed
+ * by resolving a command argument directly to a backend path.
  */
 
 #include <astra/vfs_process.h>
 #include <astra/posix.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
-#include <astra/vfs_union.h>
 
 #include <stdio.h>
 
@@ -34,22 +21,15 @@ say(const char *text)
     (void)fputs(text, stderr);
 }
 
-static int remove_name(const char *name)
+static int remove_name(AstraProcessFilesystem *filesystem, const char *name)
 {
-    AstraVfsClient *client = NULL;
     char typed[ASTRA_VFS_PATH_MAX];
-    char wire[ASTRA_VFS_PATH_MAX];
     const char *text;
     uint32_t status;
 
     status = astra_process_path(name, typed, sizeof(typed));
     if (status == ASTRA_VFS_OK)
-        status = astra_vfs_assign_lstat(
-            astra_process_vfs_assigns(), typed, ASTRA_RIGHT_WRITE,
-            astra_process_vfs_assign_client, NULL, wire, sizeof(wire), NULL,
-            &client, NULL, NULL);
-    if (status == ASTRA_VFS_OK)
-        status = astra_vfs_unlink(client, wire);
+        status = astra_filesystem_unlink(&filesystem->filesystem, typed);
     if (status == ASTRA_VFS_OK)
         return 0;
     text = astra_vfs_status_text(status);
@@ -69,6 +49,7 @@ int
 main(int argc, char **argv)
 {
     const AstraStartupInfo *startup = astra_posix_startup();
+    AstraProcessFilesystem filesystem = ASTRA_PROCESS_FILESYSTEM_INIT;
     int result = 0;
     uint32_t status;
 
@@ -78,7 +59,7 @@ main(int argc, char **argv)
         say("rm: needs a name\n");
         return ASTRA_STATUS_INVALID;
     }
-    status = astra_process_vfs_init(startup);
+    status = astra_process_filesystem_open(&filesystem, startup);
     if (status != ASTRA_VFS_OK) {
         say("rm: filesystem unavailable\n");
         return (int)status;
@@ -90,10 +71,10 @@ main(int argc, char **argv)
         if (word == NULL || word[0] == '\0')
             continue;
         /* Every name is attempted; the first refusal is what is returned. */
-        one = remove_name(word);
+        one = remove_name(&filesystem, word);
         if (one != 0 && result == 0)
             result = one;
     }
-    astra_process_vfs_close();
+    astra_process_filesystem_close(&filesystem);
     return result;
 }

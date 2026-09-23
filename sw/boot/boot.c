@@ -262,7 +262,7 @@ static void print_inventory(void)
     uart_hex32(VESTA->RAM_BASE);
     uart_putc('\n');
 
-    uart_puts("ROM:    ");
+    uart_puts("/rom/    ");
     uart_dec32(VESTA->ROM_SIZE >> 10);
     uart_puts(" KiB @ 0x");
     uart_hex32(VESTA->ROM_BASE);
@@ -1260,7 +1260,7 @@ static void idle_forever(const char *screen_message, const char *serial_message)
     uart_puts(screen_message);
     for (;;) {
         serial_puts(serial_message);
-        serial_puts("ROM: v" ASTRA_ROM_VERSION "  Built: " ASTRA_ROM_BUILD_UTC
+        serial_puts("/rom/ v" ASTRA_ROM_VERSION "  Built: " ASTRA_ROM_BUILD_UTC
                     "  Git: " ASTRA_ROM_GIT_REVISION "\n");
         serial_puts("BUILD: 0x");
         serial_hex32(VESTA->BUILD_ID);

@@ -39,6 +39,7 @@ ASTRA_FILESYSTEM_3.0 {
         astra_filesystem_rename;
         astra_filesystem_seek;
         astra_filesystem_stat;
+        astra_filesystem_stat_at;
         astra_filesystem_symlink;
         astra_filesystem_sync;
         astra_filesystem_truncate;

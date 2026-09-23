@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-09-21
+Status: active continuation map, 2026-09-23
 
 This file contains current facts only. Git history holds superseded board,
 processor, benchmark, and milestone records. The platform is **Astra 68**, its
@@ -1598,6 +1598,53 @@ baseline. The negative reserve tests prove both ordinary process and ordinary
 kernel-frame allocations are denied before either recovery tier is consumed.
 The storage/ext4 fixed arena remains intentionally separate because it provides
 precharged, deterministic allocation failure during recovery.
+
+The active CLI migration stages 42 unmodified sbase utilities for target
+qualification, without publishing them as the primary `/commands` names yet. Shared VFS
+operations for directory-relative open/stat/unlink/chmod, live-handle stat,
+and filesystem capacity are backend-neutral; ext4 and hostfs implement the
+applicable operations. An ext4 `rmdir` data-loss defect is fixed by rejecting
+nonempty directories without recursive removal. Raw and partitioned ext4
+images, journal recovery, `e2fsck`, VFS host tests, POSIX host tests, and the
+QEMU host-filesystem protocol test pass. Live file-handle metadata now supplies
+Filesystem Kit `file_info` and `SEEK_END`. Stable volume/node IDs and
+directory-handle symlink traversal are not yet implemented. A fresh-image QEMU
+terminal gate now passes 92 commands, including POSIX root listing, rejection
+of root creation with `EROFS`, creation beneath `/home`, previous-boot event
+history, Lua, and zsh. The supervisor now provisions each requested private
+STORE backing directory before granting the protected namespace entry; an
+events service can no longer create its own mount root. Primary `ls` and
+`mkdir` now build from unmodified sbase sources. Handle-based directory
+enumeration was repaired in EVENTS and PROC, and target checks cover nested
+directories in both. This is not final `ls` qualification: VFS has no stable
+device/inode IDs yet, so `ls -i` and recursive cycle detection need the shared
+metadata work before release. The fixed internal SD volume is exposed as
+`/dh0`; `/system` and disk-backed conveniences including `/apps`, `/commands`,
+`/home`, `/libs`, `/local`, `/work`, and `/tmp` are protected,
+capability-backed root links. `/tmp` currently uses persistent SD storage.
+Filesystem Kit `lstat`/`readlink` and root enumeration report the links, while
+native unlink/rename and CLI `rm` cannot remove them. POSIX `lstat` follows
+the resolved directory for terminal `.` and `..` paths. The 92-case QEMU
+terminal gate covers `ls -l` link targets, writable `/tmp`, and negative
+root `rm`/`rmdir` checks. Device inventory, hotplug,
+and the remaining filesystem edge-case gates in
+`docs/DEVICE_AND_VOLUME_PLAN.md` remain incomplete. The internal SD card is
+the fixed Astra system disk; no new Astra bootloader is planned. Immutable
+release `b8cbff2519f1e649aa05709b8e61bf42365d61cc9a2847d36d7173454489352a`
+is selected and running on the DE25 with `astra.service` and remote desktop
+active, zero Astra restarts, and boot stage 8. A physical RFB Terminal frame
+shows the protected root links and only `/dh0`, `/events`, `/metrics`, and
+`/proc` as root directories. The physical Terminal writes, reads, and removes
+a `/tmp` file; attempts to remove `/tmp` and `/home` fail with read-only
+namespace errors. `/config`, `/work`, and `/cwd` display their actual
+process-scoped grant targets, which need not match a global directory of the
+same name. The logical `ramfs` service now publishes `/ram` through the normal
+VFS service/assign path. Its private `max_bytes` setting defaults to 64 MiB,
+charges file data and metadata on demand, and leaves `/tmp` SD-backed. The
+VFS ext4, host, and RAM backends live under `src/backends/`. Host VFS tests,
+ASan/UBSan, the ext4 native `open_at` mount gate, and a fresh-image QEMU
+Terminal gate pass 96 commands including RAM create/read/remove and protected
+root removal. This RAM change has not yet been deployed to the DE25.
 
 ## Build and artifact rules
 

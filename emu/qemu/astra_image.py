@@ -6,11 +6,11 @@ expects to find them.
 
 The event catalog is the `.astra_events` section verbatim, and the ROM image
 strips that section, so a running program does not carry its own text -- the
-events service reads it from SYS:. Without it every line the events tree
+events service reads it from /system. Without it every line the events tree
 renders is a message id, which is honest, useless as a check, and exactly what
 a stale catalog would look like.
 
-The commands are the programs in COMMANDS:. They are files on the volume rather
+The commands are the programs in /commands. They are files on the volume rather
 than anything the ROM carries, which is the whole claim task 4 makes, so a gate
 that did not install them would be testing a machine with no programs on it.
 
@@ -33,9 +33,7 @@ DEFAULT_CATALOG = os.path.join(
     REPOSITORY, "sw/userspace/build/m68k/astra_events.cat")
 
 COMMANDS_DIRECTORY = "commands"
-# The writable member of COMMANDS:, and the reason it exists in this gate: a
-# command installed here shadows the one the system shipped, which is what a
-# union is for and what nothing else on the volume can demonstrate.
+# The user-owned PATH entry is never cleared by image publication.
 LOCAL_COMMANDS_DIRECTORY = "local/commands"
 DEFAULT_COMMANDS = os.path.join(REPOSITORY, "sw/userspace/commands/build/m68k")
 DEFAULT_VIM_RUNTIME = os.path.join(DEFAULT_COMMANDS, "vim-runtime")
@@ -56,28 +54,46 @@ CONFIGURATION = {
         "astra-config 1\n"
         "schema 1\n"
         "pool pool.ntp.org\n"),
+    "services/ramfs/settings.conf": (
+        "astra-config 1\n"
+        "schema 1\n"
+        "max_bytes 67108864\n"),
+    "services/ramfs/service.conf": (
+        "astra-config 1\n"
+        "schema 1\n"
+        "name \"ramfs\"\n"
+        "executable \"/services/ramfs\"\n"
+        "runs astra\n"
+        "enabled true\n"
+        "delegates false\n"
+        "start boot\n"
+        "restart on-fault\n"
+        "argument \"/services/ramfs\"\n"
+        "provides RAM:rw\n"
+        "grant CONFIG:r\n"
+        "needs SYSTEM\n"),
     "services/remote-desktop/service.conf": (
         "astra-config 1\n"
         "schema 1\n"
         "name \"remote-desktop\"\n"
-        "executable \"SERVICES:remote-desktop\"\n"
+        "executable \"/services/remote-desktop\"\n"
         "runs paired\n"
         "enabled true\n"
         "delegates false\n"
         "start boot\n"
         "restart on-fault\n"
-        "argument \"SERVICES:remote-desktop\"\n"
+        "argument \"/services/remote-desktop\"\n"
         "grant HOST_DEVICE\n"),
     "commands/zsh/zshrc": (
-        "# User startup remains zsh's normal HOME:/.zshrc.\n"
-        "if [[ -r HOME:/.motd.zsh ]]; then\n"
-        "  source HOME:/.motd.zsh\n"
-        "elif [[ -r HOME:/.motd ]]; then\n"
-        "  print -r -- \"$(<HOME:/.motd)\"\n"
-        "elif [[ -r CONFIG:motd.zsh ]]; then\n"
-        "  source CONFIG:motd.zsh\n"
-        "elif [[ -r CONFIG:motd ]]; then\n"
-        "  print -r -- \"$(<CONFIG:motd)\"\n"
+        "# User startup remains zsh's normal $HOME/.zshrc.\n"
+        "if [[ -r /home/.motd.zsh ]]; then\n"
+        "  source /home/.motd.zsh\n"
+        "elif [[ -r /home/.motd ]]; then\n"
+        "  print -r -- \"$(</home/.motd)\"\n"
+        "elif [[ -r /config/motd.zsh ]]; then\n"
+        "  source /config/motd.zsh\n"
+        "elif [[ -r /config/motd ]]; then\n"
+        "  print -r -- \"$(</config/motd)\"\n"
         "fi\n"
         "_astra_prompt_start() { print -n -- $'\\e]133;A\\e\\\\' }\n"
         "precmd_functions+=(_astra_prompt_start)\n"
@@ -101,7 +117,7 @@ PROVIDER_INDEX_VERSION = 2
 LIBRARY_IDENTITY_HEADER = struct.Struct(">IHHHHHHHHIII")
 LIBRARY_RECORD_VERSION = 2
 LIBRARY_RECORD_SIZE = 128
-# The reader qualifies the payload through LIBS: into the VFS path buffer.
+# The reader qualifies the payload through /libs into the VFS path buffer.
 # The serialized header is outside that path and must not consume its budget.
 VFS_PATH_MAX = 192
 PROVIDER_ASSIGN = "LIBS"
@@ -117,35 +133,35 @@ PROVIDER_INDEX_MAX = (PROVIDER_INDEX_HEADER.size + VFS_PATH_MAX -
 # desktop profile is the profile, and a gate that wants a terminal opens one
 # from the desktop the way a person does.
 DISPLAY_STARTUP_MANIFEST = (
-    "service SERVICES:storage grants BLOCK_DEVICE BLOCK_IRQ "
-    "serves SYS:r required\n"
-    "service SERVICES:posixd grants serves POSIX_PROCESS required\n"
-    "service SERVICES:hostfs grants HOST_DEVICE "
+    "service /services/storage grants BLOCK_DEVICE BLOCK_IRQ "
+    "serves SYSTEM:r required\n"
+    "service /services/posixd grants serves POSIX_PROCESS required\n"
+    "service /services/hostfs grants HOST_DEVICE "
     "serves WORK:rw METRICS:r required\n"
-    "service SERVICES:entropy grants HOST_DEVICE "
+    "service /services/entropy grants HOST_DEVICE "
     "serves ENTROPY required\n"
-    "service SERVICES:network grants NETWORK_DEVICE NETWORK_IRQ "
+    "service /services/network grants NETWORK_DEVICE NETWORK_IRQ "
     "serves NETWORK NETWORK_LISTEN required\n"
-    "service SERVICES:ntpd grants CLOCK CONFIG:r LIBS:r NETWORK "
+    "service /services/ntpd grants CLOCK CONFIG:r LIBS:r NETWORK "
     "serves NTP required\n"
-    "service SERVICES:events grants SYS:r STORE:rw LIBS:r "
+    "service /services/events grants SYSTEM:r STORE:rw LIBS:r "
     "serves EVENTS:r EVENT_CONTROL required\n"
-    "service SERVICES:input grants INPUT INPUT_IRQ "
+    "service /services/input grants INPUT INPUT_IRQ "
     "serves INPUT_SERVICE required\n"
-    "service SERVICES:clipboard grants serves CLIPBOARD required\n"
-    "service SERVICES:display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ "
+    "service /services/clipboard grants serves CLIPBOARD required\n"
+    "service /services/display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ "
     "INPUT_SERVICE serves GUI required\n"
-    "application SERVICES:desktop grants GUI APP_LAUNCH APPS:r LIBS:r "
+    "application /services/desktop grants GUI APP_LAUNCH APPS:r LIBS:r "
     "NETWORK NETWORK_LISTEN NTP\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
-DISPLAY_SERVICES = ("storage", "posixd", "hostfs", "entropy", "network", "ntpd", "events",
+DISPLAY_SERVICES = ("storage", "ramfs", "posixd", "hostfs", "entropy", "network", "ntpd", "events",
                     "input", "clipboard", "display", "desktop",
                     "remote-desktop")
 HOSTBENCH_SERVICES = DISPLAY_SERVICES + ("hostbench",)
 HOSTBENCH_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
-    "application SERVICES:hostbench grants HOST_DEVICE\n")
+    "application /services/hostbench grants HOST_DEVICE\n")
 INTERFACE_GALLERY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
-    "application APPS:InterfaceGallery.app grants GUI CLIPBOARD LIBS:r\n")
+    "application /apps/InterfaceGallery.app grants GUI CLIPBOARD LIBS:r\n")
 
 
 def _build_current_userspace():
@@ -747,26 +763,11 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
             _debugfs(volume, "write %s %s" % (host, target),
                      "configuration " + path)
 
-        # HOME: is user-owned state, not a publisher-owned tree. Ensure the
-        # stable mount point exists and leave every existing entry untouched.
+        # User-owned state is not replaced by publishing system products.
         _mkdir(volume, "/%s" % HOME_DIRECTORY, "the home directory")
-
-        # The shadowing pair. `which` is installed on both members under two
-        # names: the shipped one stays where it is, and a copy goes into the
-        # writable member under the same name as a shipped command, so a
-        # lookup has a real choice to make and the gate can see which it made.
         _mkdir(volume, "/local", "the local directory")
         _mkdir(volume, "/%s" % LOCAL_COMMANDS_DIRECTORY,
                "the local commands directory")
-        _clear_directory(volume, "/%s" % LOCAL_COMMANDS_DIRECTORY)
-        for name, path in built:
-            if name != "which":
-                continue
-            target = "/%s/%s" % (LOCAL_COMMANDS_DIRECTORY, "devices")
-            _debugfs(volume, "rm %s" % target, "the old local command",
-                     optional=True)
-            _debugfs(volume, "write %s %s" % (path, target),
-                     "a shadowing command")
         _reset_journal(volume)
         _splice(image, offset, volume)
 

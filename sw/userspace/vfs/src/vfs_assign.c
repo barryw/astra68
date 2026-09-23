@@ -371,16 +371,19 @@ astra_assign_resolve(const AstraAssignTable *table, const char *path,
     }
     if (path == NULL)
         return ASTRA_VFS_ERR_INVALID;
-    while (path[index] != ':') {
-        if (path[index] == '\0' || index + 1u >= sizeof(name))
+    if (path[0] != '/')
+        return ASTRA_VFS_ERR_INVALID;
+    ++index;
+    while (path[index] != '/' && path[index] != '\0') {
+        if (path[index] == ':' || index >= sizeof(name))
             return ASTRA_VFS_ERR_INVALID;
-        name[index] = astra_ascii_upper(path[index]);
+        name[index - 1u] = astra_ascii_upper(path[index]);
         ++index;
     }
-    if (index == 0u)
+    if (index == 1u)
         return ASTRA_VFS_ERR_INVALID;
-    name[index] = '\0';
-    rest = path + index + 1u;
+    name[index - 1u] = '\0';
+    rest = path + index + (path[index] == '/' ? 1u : 0u);
     found = member_canonical(table, name, member);
     if (found == NULL) {
         return ASTRA_VFS_ERR_NOT_FOUND;

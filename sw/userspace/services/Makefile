@@ -1,4 +1,4 @@
-SUBDIRS := storage hostfs hostbench entropy events network ntpd posixd clipboard \
+SUBDIRS := storage ramfs hostfs hostbench entropy events network ntpd posixd clipboard \
 	terminal input display desktop remote-desktop
 
 all test sanitize analyze clean:

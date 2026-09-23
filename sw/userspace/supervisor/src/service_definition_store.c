@@ -318,7 +318,7 @@ static const char *service_leaf(const char *path)
     const char *leaf = path;
 
     for (const char *at = path; *at != '\0'; ++at)
-        if (*at == ':' || *at == '/')
+        if (*at == '/')
             leaf = at + 1u;
     return leaf;
 }

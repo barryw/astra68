@@ -122,7 +122,7 @@ def wait_state(machine, state, timeout, number):
     trace = machine.trace()
     relevant = []
     for index, line in enumerate(trace):
-        if "launch SERVICES:remote-d" in line:
+        if "launch /services/remote-d" in line:
             relevant = trace[max(0, index - 20):index + 80]
             break
     raise RuntimeError("remote-desktop never reached state %s:\n%s\n%s\n%s" %
@@ -217,7 +217,7 @@ def main():
             wait_state(machine, "stopped", 30.0, number)
             command(
                 machine,
-                "service add remote-probe SERVICES:remote-desktop "
+                "service add remote-probe /services/remote-desktop "
                 "--paired --disabled --manual --restart=never "
                 "--grant=HOST_DEVICE", None, 30.0, number[0])
             number[0] += 1
