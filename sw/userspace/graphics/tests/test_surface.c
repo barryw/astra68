@@ -459,7 +459,12 @@ static void test_font_advance_and_baseline(void)
         assert(astra_ui_glyph_y(0, &fractional) == -1);
     }
 
-    for (uint16_t height = 11u; height <= 13u; height += 2u) {
+    const uint16_t ui_heights[] = {11u, 13u, 16u};
+
+    assert(astra_ui_font_strike(15u) == NULL);
+    for (uint32_t index = 0u;
+         index < sizeof(ui_heights) / sizeof(ui_heights[0]); ++index) {
+        uint16_t height = ui_heights[index];
         strike = astra_ui_font_strike(height);
         assert(strike != NULL &&
                strike->bitmap_format == ASTRA_FONT_BITMAP_A8);
@@ -820,6 +825,27 @@ static void test_styled_text_uses_one_glyph_source(void)
            !astra_render_builder_replay(&builder, destination, header));
 }
 
+static void test_direct_styled_text(void)
+{
+    static uint8_t batch_storage[ASTRA_RENDER_BUILDER_BYTES];
+    AstraRenderBuilder builder;
+    uint32_t destination;
+
+    assert(astra_render_builder_init(&builder, batch_storage,
+                                     sizeof(batch_storage), 7u));
+    destination = astra_render_builder_surface(&builder, 80u, 24u);
+    assert(destination != 0u);
+    assert(astra_render_builder_text_styled(
+        &builder, destination, 2, 3, "A", 1u, 13u, 0xffffu,
+        ASTRA_TEXT_STYLE_BOLD | ASTRA_TEXT_STYLE_ITALIC |
+        ASTRA_TEXT_STYLE_UNDERLINE | ASTRA_TEXT_STYLE_STRIKETHROUGH));
+    assert(builder.glyph_count == 1u && builder.command_count == 3u);
+    assert(!astra_render_builder_text_styled(
+        &builder, destination, 2, 3, "A", 1u, 13u, 0xffffu,
+        ASTRA_TEXT_STYLE_HIDDEN));
+    assert(builder.glyph_count == 1u && builder.command_count == 3u);
+}
+
 static void test_draw_list_copy_is_a_hardware_self_blit(void)
 {
     uint8_t draw_storage[ASTRA_DRAW_LIST_AREA_BYTES];
@@ -949,6 +975,7 @@ int main(void)
     test_command_failure_reason();
     test_mono_draw_list();
     test_styled_text_uses_one_glyph_source();
+    test_direct_styled_text();
     test_draw_list_copy_is_a_hardware_self_blit();
     test_text_box_scroll_uses_overlap_safe_copy();
     test_rounded_fill_has_no_overlap();

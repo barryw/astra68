@@ -1,7 +1,9 @@
-ASTRA_INTERFACE_5.1 {
+ASTRA_INTERFACE_5.2 {
     global:
         astra_interface_button_init;
         astra_interface_checkbox_init;
+        astra_interface_command_invoke;
+        astra_interface_command_query;
         astra_interface_container_init;
         astra_interface_control_get_value;
         astra_interface_control_set_flex;

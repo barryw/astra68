@@ -109,7 +109,8 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
             assert(d1 == 0x303u && d3 == sizeof(*request));
             assert(request->window == 7u && request->generation != 0u);
             assert(request->action >= ASTRA_GUI_WINDOW_QUERY &&
-                   request->action <= ASTRA_GUI_WINDOW_SET_POINTER_IMAGE);
+                   request->action <=
+                       ASTRA_GUI_WINDOW_SET_APPLICATION_NAME);
             if (request->action == ASTRA_GUI_WINDOW_CLOSE)
                 assert(handles == 0 && d5 == 0u);
             else if (request->action == ASTRA_GUI_WINDOW_SET_POINTER_IMAGE)
@@ -243,6 +244,7 @@ int main(void)
            theme.mono_cell_width == ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH);
     assert(theme.window_radius == 12 && theme.signal_height == 2);
     assert(theme.title_active.red > theme.title_inactive.red);
+    assert(create.gadgets == ASTRA_WINDOW_GADGET_AUTO);
     create.width = 320;
     create.height = 180;
     create.pitch = 640;
@@ -288,6 +290,21 @@ int main(void)
     assert(astra_window_set_title(&window, "Renamed", 7u) == ASTRA_OK);
     expect_action(before, ASTRA_GUI_WINDOW_SET_TITLE);
     assert(last_command.title_length == 7u && last_command.title[0] == 'R');
+    before = call_count;
+    assert(astra_window_set_application_name(&window, "Gallery", 7u) ==
+           ASTRA_OK);
+    expect_action(before, ASTRA_GUI_WINDOW_SET_APPLICATION_NAME);
+    assert(last_command.title_length == 7u &&
+           last_command.title[0] == 'G');
+    before = call_count;
+    assert(astra_window_set_application_name(&window, "", 0u) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_window_set_application_name(&window, NULL, 1u) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_window_set_application_name(&window, malformed_utf8,
+                                              sizeof(malformed_utf8)) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(call_count == before);
     before = call_count;
     assert(astra_window_set_title(&window, malformed_utf8,
                                   sizeof(malformed_utf8)) ==
@@ -450,6 +467,14 @@ int main(void)
     create.title_length = sizeof(title) - 1u;
     create.event_mask = ASTRA_WINDOW_SUBSCRIBE_DEFAULT;
     expected_type = ASTRA_WINDOW_STANDARD;
+
+    create.gadgets = ASTRA_WINDOW_GADGET_AUTO |
+                     ASTRA_WINDOW_GADGET_MINIMIZE;
+    before = call_count;
+    assert(astra_window_create(1, 2, &create, &window) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(call_count == before);
+    create.gadgets = ASTRA_WINDOW_GADGET_AUTO;
 
     before = call_count;
     assert(astra_window_move(&window, 1u, 2u) ==

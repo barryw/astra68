@@ -33,20 +33,20 @@ atkinson = ROOT / (
 atkinson_data = convert(
     atkinson, "Astra Sans",
     "7925f50f649b3813257faf2f4c0b381011f434f1",
-    [(11, 8), (13, 10)])
+    [(11, 8), (13, 10), (16, 13)])
 assert atkinson_data == (ROOT / "sw/userspace/graphics/fonts/"
                           "astra-workbench.afnt").read_bytes()
 cmap, strikes, glyphs, bitmap = afnt.unpack_afnt(atkinson_data)
 codepoints = {scalar for scalar, _ in cmap}
 assert len(cmap) >= 350
 assert {ord("A"), 0x00e9, 0x2014, 0xfffd} <= codepoints
-assert len(strikes) == 2
+assert len(strikes) == 3
 assert all(strike[1] == afnt.A8 for strike in strikes)
 assert all(record[5] == record[3] for record in glyphs)
 assert any(0 < coverage < 255 for coverage in bitmap)
 metadata = json.loads(afnt.parse_afnt(atkinson_data)[b"NAME"])
 assert metadata["family"] == "Astra Sans"
-assert metadata["outline_ppem"] == [8, 10]
+assert metadata["outline_ppem"] == [8, 10, 13]
 
 jetbrains = ROOT / (
     "sw/userspace/graphics/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf")

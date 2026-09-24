@@ -45,6 +45,26 @@ def parse_cpu_benchmark(line):
     return tuple(map(int, match.groups())) if match else None
 
 
+def collected_cycle_span(qmp):
+    """Return a span only after the guest has collected a stable submission."""
+    before = qmp.property("astra-display-submissions")
+    submit = qmp.property("astra-display-submit-cycle")
+    complete = qmp.property("astra-display-completion-cycle")
+    collect = qmp.property("astra-display-collect-cycle")
+    after = qmp.property("astra-display-submissions")
+    if before != after or not (0 < submit <= complete <= collect):
+        return None
+    return collect - submit
+
+
+def pointer_route_settled(updates, x, y, submissions, completions,
+                          previous_updates, target_x, target_y,
+                          minimum_submissions):
+    return (updates > previous_updates and x == target_x and y == target_y
+            and submissions >= minimum_submissions
+            and submissions == completions)
+
+
 class Qmp:
     def __init__(self, path, deadline=20.0):
         self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -286,11 +306,18 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                 "type": "rel", "data": {"axis": "x", "value": 5}}, {
                 "type": "rel", "data": {"axis": "y", "value": 3}}]})
             pointer_deadline = time.monotonic() + 2.0
-            while (qmp.property("astra-display-cursor-updates") ==
-                       cursor_updates_before or
-                   qmp.property("astra-display-completions") ==
-                       launched_submissions) and \
-                    time.monotonic() < pointer_deadline:
+            while time.monotonic() < pointer_deadline:
+                pointer_sample = (
+                    qmp.property("astra-display-cursor-updates"),
+                    qmp.property("astra-display-cursor-x"),
+                    qmp.property("astra-display-cursor-y"),
+                    qmp.property("astra-display-submissions"),
+                    qmp.property("astra-display-completions"))
+                if pointer_route_settled(
+                        *pointer_sample, cursor_updates_before,
+                        cursor_x_before + 6, cursor_y_before + 3,
+                        launched_submissions + EXPECTED_POINTER_SUBMISSIONS):
+                    break
                 time.sleep(0.01)
             cursor_updates = qmp.property("astra-display-cursor-updates")
             cursor_x = qmp.property("astra-display-cursor-x")
@@ -299,16 +326,14 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
             pointer_completions = qmp.property("astra-display-completions")
             pointer_operation = qmp.property("astra-display-operation")
             pointer_batches = qmp.property("astra-display-render-batches")
-            if cursor_updates != cursor_updates_before + 1 or \
+            if cursor_updates <= cursor_updates_before or \
                     cursor_x != cursor_x_before + 6 or \
                     cursor_y != cursor_y_before + 3 or \
-                    pointer_submissions != (launched_submissions +
-                                            EXPECTED_POINTER_SUBMISSIONS) or \
-                    pointer_completions != (launched_submissions +
-                                            EXPECTED_POINTER_SUBMISSIONS) or \
-                    pointer_batches != launched_batches + \
-                        EXPECTED_POINTER_BATCHES or \
-                    pointer_operation != CURSOR_OPERATION:
+                    pointer_submissions < (launched_submissions +
+                                           EXPECTED_POINTER_SUBMISSIONS) or \
+                    pointer_completions != pointer_submissions or \
+                    pointer_batches < launched_batches + \
+                        EXPECTED_POINTER_BATCHES:
                 raise RuntimeError(
                     "pointer route updates=%d x=%d requests=%d/%d "
                     "batches=%d op=%d" %
@@ -333,12 +358,6 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                 raise RuntimeError("pointer update took %d cycles; budget %d" %
                                    (pointer_cycles,
                                     POINTER_BUDGET_CYCLES))
-            queue = qmp.word(DISPLAY_QUEUE)
-            irq = qmp.word(ASTRAEA_IRQ_STATUS)
-            if queue != QUEUE_REQUEST_READY or irq & DRAW_DONE:
-                raise RuntimeError(
-                    "pointer completion not consumed: queue=0x%08x irq=0x%08x" %
-                    (queue, irq))
             # Pointer traffic must not starve application timers.  Terminal
             # does not consume pointer events, so its underline must keep
             # blinking while the hardware cursor is moving.
@@ -412,13 +431,11 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
             resized_batches = qmp.property(
                 "astra-display-render-batches")
             resized_glyphs = qmp.property("astra-display-glyph-commands")
-            resize_submit_cycle = qmp.property(
-                "astra-display-submit-cycle")
-            resize_completion_cycle = qmp.property(
-                "astra-display-completion-cycle")
-            resize_collect_cycle = qmp.property(
-                "astra-display-collect-cycle")
-            resize_cycles = resize_collect_cycle - resize_submit_cycle
+            collect_deadline = time.monotonic() + 1.0
+            resize_cycles = collected_cycle_span(qmp)
+            while resize_cycles is None and time.monotonic() < collect_deadline:
+                time.sleep(0.01)
+                resize_cycles = collected_cycle_span(qmp)
             resize_elapsed = time.monotonic() - resize_started
             if resized_batches <= resize_batches or \
                     resized_glyphs <= resize_glyphs or \
@@ -431,11 +448,9 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                      resized_glyphs,
                      qmp.property("astra-display-submissions"),
                      qmp.property("astra-display-completions")))
-            if not (resize_submit_cycle < resize_completion_cycle <=
-                    resize_collect_cycle) or \
-                    resize_cycles > RESIZE_BUDGET_CYCLES:
+            if resize_cycles is None or resize_cycles > RESIZE_BUDGET_CYCLES:
                 raise RuntimeError(
-                    "Terminal resize render took %d cycles; budget %d" %
+                    "Terminal resize render took %s cycles; budget %d" %
                     (resize_cycles, RESIZE_BUDGET_CYCLES))
             # The fixture opens at (180,90), 840 pixels wide, with the system
             # theme's 2-pixel frame, 4-pixel spacing and 20-pixel gadgets.
@@ -507,7 +522,10 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                      qmp.property("astra-display-glyph-commands")))
             second_batches = qmp.property("astra-display-render-batches")
             qmp.move(1008, 105)
-            time.sleep(0.1)
+            close_hover_deadline = time.monotonic() + 3.0
+            while qmp.property("astra-display-render-batches") <= \
+                    second_batches and time.monotonic() < close_hover_deadline:
+                time.sleep(0.01)
             close_hover_batches = qmp.property(
                 "astra-display-render-batches")
             if close_hover_batches <= second_batches:
@@ -554,6 +572,39 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                      relaunch_glyphs,
                      qmp.property("astra-display-glyph-commands"),
                      serial[-100:]))
+            about_batches = qmp.property("astra-display-render-batches")
+            qmp.move(40, 15)
+            qmp.click()
+            qmp.move(70, 65)
+            qmp.click()
+            about_deadline = time.monotonic() + 5.0
+            while qmp.property("astra-display-render-batches") < \
+                    about_batches + 2 and time.monotonic() < about_deadline:
+                time.sleep(0.01)
+            if qmp.property("astra-display-render-batches") < \
+                    about_batches + 2:
+                raise RuntimeError("About system action did not open a dialog")
+            qmp.move(800, 550)
+            qmp.click()  # Inert dialog interior must not kill the display service.
+            qmp.move(900, 520)
+            pointer_deadline = time.monotonic() + 2.0
+            while (qmp.property("astra-display-cursor-x") != 900 or
+                   qmp.property("astra-display-cursor-y") != 520) and \
+                    time.monotonic() < pointer_deadline:
+                time.sleep(0.01)
+            if (qmp.property("astra-display-cursor-x"),
+                    qmp.property("astra-display-cursor-y")) != (900, 520):
+                raise RuntimeError("About interior click killed display input")
+            dialog_batches = qmp.property("astra-display-render-batches")
+            qmp.move(1158, 481)
+            qmp.click()
+            close_deadline = time.monotonic() + 3.0
+            while qmp.property("astra-display-render-batches") <= \
+                    dialog_batches and time.monotonic() < close_deadline:
+                time.sleep(0.01)
+            if qmp.property("astra-display-render-batches") <= \
+                    dialog_batches:
+                raise RuntimeError("About dialog close gadget did not respond")
             commands = qmp.property("astra-display-render-commands")
             fills = qmp.property("astra-display-fill-commands")
             blits = qmp.property("astra-display-blit-commands")

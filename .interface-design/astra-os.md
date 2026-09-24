@@ -5,9 +5,19 @@
 Astra OS is the user-facing environment of Astra 68: a fast, elegant,
 single-user 68040 workstation whose restraint comes from deliberate hardware
 and software boundaries. It should feel precise and immediate rather than
-nostalgic or generic. The signature is the **ion signal rail**: cyan for active
+nostalgic or generic. The signature is the **ion orbit mark**: cyan for active
 and affirmative state, amber for attention, and muted red for faults, set
 against deep system chrome and lunar client surfaces.
+
+The system bar uses the cyan orbit beside a spaced, all-caps ASTRA wordmark.
+The focused application is a bold label on a quiet graphite pill. The bar has
+no cyan underline; accent color is reserved for the mark and meaningful
+interaction states. Unimplemented menus are not painted as inert labels.
+The ASTRA mark and wordmark form one menu trigger. Its open state uses a
+rounded cyan pill; the hardware-composited popup uses the shared graphite,
+border, accent, and text roles, with 16 px Astra Sans labels. Menu commands
+appear only when they have working handlers; the first system command is
+About This Astra. Opening system UI must not change application focus.
 
 This system is independent of the host-side AstraVM instrument. Shared product
 vocabulary does not imply shared component implementations or token values.

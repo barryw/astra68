@@ -59,7 +59,7 @@ typedef struct AstraWindowCreateInfo {
     uint16_t width; /**< Initial content width. */
     uint16_t height; /**< Initial content height. */
     uint32_t pitch; /**< RGB565 row stride, or zero for draw lists. */
-    uint32_t gadgets; /**< ASTRA_WINDOW_GADGET_* mask. */
+    uint32_t gadgets; /**< ASTRA_WINDOW_GADGET_AUTO or explicit mask. */
     uint8_t type; /**< ASTRA_WINDOW_* type value. */
     uint8_t close_state; /**< Initial close-gadget state. */
     uint8_t minimize_state; /**< Initial minimize-gadget state. */
@@ -77,8 +77,7 @@ typedef struct AstraWindowCreateInfo {
 #define ASTRA_WINDOW_CREATE_INFO_INIT { \
     sizeof(AstraWindowCreateInfo), ASTRA_WINDOW_RESIZABLE, \
     0, 0, 0, 0, 0, \
-    ASTRA_WINDOW_GADGET_CLOSE | ASTRA_WINDOW_GADGET_MINIMIZE | \
-        ASTRA_WINDOW_GADGET_MAXIMIZE, \
+    ASTRA_WINDOW_GADGET_AUTO, \
     ASTRA_WINDOW_STANDARD, ASTRA_GADGET_NORMAL, ASTRA_GADGET_NORMAL, \
     ASTRA_GADGET_NORMAL, 0, 0, ASTRA_WINDOW_CONTENT_RGB565, \
     ASTRA_WINDOW_SUBSCRIBE_DEFAULT, ASTRA_INVALID_HANDLE, 0, 0 \
@@ -137,6 +136,15 @@ ASTRA_NODISCARD AstraResult astra_window_restore(AstraWindow *window);
 /** Replace the UTF-8 title. @param window Open window. @param title UTF-8 bytes. @param title_length Byte length. @return ASTRA_OK or an error. */
 ASTRA_NODISCARD AstraResult astra_window_set_title(
     AstraWindow *window, const char *title, uint16_t title_length);
+/** Set the stable UTF-8 application name shown in the system bar, independent
+ * of the mutable window title. Set this before activating a new window.
+ * @param window Open window.
+ * @param name Counted UTF-8 application name.
+ * @param name_length Nonzero byte length, at most ASTRA_WINDOW_TITLE_MAX.
+ * @return ASTRA_OK or a validation/service error.
+ */
+ASTRA_NODISCARD AstraResult astra_window_set_application_name(
+    AstraWindow *window, const char *name, uint16_t name_length);
 /** Replace event subscriptions. @param window Open window. @param event_mask ASTRA_WINDOW_SUBSCRIBE_* mask. @return ASTRA_OK or an error. */
 ASTRA_NODISCARD AstraResult astra_window_set_event_mask(
     AstraWindow *window, uint32_t event_mask);

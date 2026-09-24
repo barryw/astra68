@@ -915,16 +915,13 @@ int astra_main(const AstraStartupInfo *startup)
 
         astra_surface_clear(&window_terminal.surface.view,
                                 rgb565(theme.system_bar));
-        info.flags = ASTRA_WINDOW_ACTIVE | ASTRA_WINDOW_RESIZABLE;
+        info.flags = ASTRA_WINDOW_RESIZABLE;
         info.x = 180u;
         info.y = 90u;
         info.width = window_terminal.width;
         info.height = window_terminal.height;
         info.pitch = 0u;
         info.content_format = ASTRA_WINDOW_CONTENT_DRAW_LIST;
-        info.gadgets = ASTRA_WINDOW_GADGET_CLOSE |
-                       ASTRA_WINDOW_GADGET_MINIMIZE |
-                       ASTRA_WINDOW_GADGET_MAXIMIZE;
         info.type = ASTRA_WINDOW_STANDARD;
         info.title = "TERMINAL";
         info.title_length = 8u;
@@ -940,6 +937,11 @@ int astra_main(const AstraStartupInfo *startup)
                                      window_terminal.surface.area,
                                      &info, &window_terminal.window);
         close_area(&title_icon);
+        if (result == ASTRA_OK)
+            result = astra_window_set_application_name(
+                &window_terminal.window, "Terminal", 8u);
+        if (result == ASTRA_OK)
+            result = astra_window_activate(&window_terminal.window);
         if (result != ASTRA_OK)
             status = TERMINAL_FAIL_WINDOW + (uint32_t)(-result);
         else

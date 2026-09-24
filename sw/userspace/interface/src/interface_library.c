@@ -1,6 +1,7 @@
 #include <astra/interface_library.h>
 
 #include <astra/bytes.h>
+#include <astra/display.h>
 #include <astra/library.h>
 #include <astra/result.h>
 #include <astra/runtime.h>
@@ -14,7 +15,7 @@
 #define ALERT_WIDTH 420u
 #define ALERT_HEIGHT 150u
 
-ASTRA_DYNAMIC_LIBRARY("interface.library.5", 5, 1, 0,
+ASTRA_DYNAMIC_LIBRARY("interface.library.5", 5, 2, 0,
               ASTRA_INTERFACE_LIBRARY_ABI_MAJOR,
               ASTRA_INTERFACE_LIBRARY_ABI_MINOR,
               "Barry Walker", "Copyright 2026 Barry Walker");
@@ -125,6 +126,7 @@ AstraResult astra_interface_show_alert(AstraHandle gui,
     AstraResult result;
     uint32_t status;
     uint32_t applied_pointer_shape = UINT32_MAX;
+    int created = 0;
 
     if (gui == ASTRA_INVALID_HANDLE || !valid(info))
         return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -139,12 +141,11 @@ AstraResult astra_interface_show_alert(AstraHandle gui,
         return result;
     }
     astra_interface_ui_damage_clear(&context);
-    create.flags = ASTRA_WINDOW_MODAL | ASTRA_WINDOW_ACTIVE;
-    create.x = 430u;
-    create.y = 250u;
+    create.flags = ASTRA_WINDOW_MODAL;
+    create.x = (ASTRA_DISPLAY_WIDTH - ALERT_WIDTH) / 2u;
+    create.y = (ASTRA_DISPLAY_HEIGHT - ALERT_HEIGHT) / 2u;
     create.width = ALERT_WIDTH;
     create.height = ALERT_HEIGHT;
-    create.gadgets = ASTRA_WINDOW_GADGET_CLOSE;
     create.type = ASTRA_WINDOW_DIALOG;
     create.title = info->title;
     create.title_length = info->title_length;
@@ -156,6 +157,11 @@ AstraResult astra_interface_show_alert(AstraHandle gui,
                         ASTRA_WINDOW_SUBSCRIBE_STATE |
                         ASTRA_WINDOW_SUBSCRIBE_KEY;
     result = astra_window_create(gui, surface.area, &create, &window);
+    created = result == ASTRA_OK;
+    if (result == ASTRA_OK)
+        result = astra_window_set_application_name(&window, "Astra", 5u);
+    if (result == ASTRA_OK)
+        result = astra_window_activate(&window);
     if (result == ASTRA_OK) {
         for (;;) {
             AstraWindowEvent event = {0};
@@ -198,10 +204,12 @@ AstraResult astra_interface_show_alert(AstraHandle gui,
                 }
             }
         }
-        {
-            AstraResult close_result = astra_window_close(&window);
-            if (result == ASTRA_OK) result = close_result;
-        }
+    }
+    if (created) {
+        AstraResult close_result = astra_window_close(&window);
+
+        if (result == ASTRA_OK)
+            result = close_result;
     }
     status = astra_shared_surface_close(&surface);
     if (result == ASTRA_OK && status != ASTRA_SYSCALL_OK)

@@ -102,7 +102,7 @@ must be an ordinary sibling container, which keeps the header reachable while
 its body is closed and prevents ambiguous ownership. State remains
 application-owned and can be restored by setting the target container before
 or after UI initialization. Disclosures require `interface.library.5` version
-5.1.0 or newer.
+5.2.0 or newer.
 
 ```{literalinclude} ../../examples/interface_disclosure.c
 :language: c

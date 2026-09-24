@@ -20,7 +20,7 @@ LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 INTERFACE_TARGET := build/m68k/libraries/interface.library.5
 INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
 	build/m68k/text_surface.o build/m68k/undo.o build/m68k/text_model.o \
-	build/m68k/scroll.o
+	build/m68k/scroll.o build/m68k/command.o
 INTERFACE_LIBRARY_MAP := interface.library.exports
 NDK_HOST_UTF8 := $(NDK)/build/host/utf8.o
 GRAPHICS_LIBRARY := $(GRAPHICS)/build/m68k/libraries/graphics.library.2
@@ -34,6 +34,7 @@ TEXT_SURFACE_HOST_TEST := build/host/test_text_surface
 UNDO_HOST_TEST := build/host/test_undo
 TEXT_MODEL_HOST_TEST := build/host/test_text_model
 SCROLL_HOST_TEST := build/host/test_scroll
+COMMAND_HOST_TEST := build/host/test_command
 GRAPHICS_FONT_HEADERS := $(GRAPHICS)/build/generated/astra_font8x8.inc \
 	$(GRAPHICS)/build/generated/astra_ui_font.inc \
 	$(GRAPHICS)/build/generated/astra_mono_font.inc
@@ -78,6 +79,11 @@ build/m68k/scroll.o: src/scroll.c
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
 
+build/m68k/command.o: src/command.c $(NDK)/include/astra/command.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
 $(INTERFACE_OBJECTS): Makefile
 
 shared-libraries-ready:
@@ -104,11 +110,17 @@ library-contract: $(INTERFACE_TARGET)
 	@python3 ../../../tools/check_shared_library_layout.py $(INTERFACE_TARGET)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(INTERFACE_LIBRARY_MAP) $(INTERFACE_TARGET)
+	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
+		grep -Eq ' astra_interface_button_init@@ASTRA_INTERFACE_5\.2$$'
+	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
+		grep -Eq ' astra_interface_command_invoke@@ASTRA_INTERFACE_5\.2$$'
+	@! $(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
+		grep -q 'ASTRA_INTERFACE_5\.1'
 	@python3 $(SYMBOL_OWNERSHIP_CHECK) --readelf $(READELF) \
 		$(INTERFACE_TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) \
 		$(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library.5 5.1.0 ABI 5.1$$'
+		grep -q '^interface.library.5 5.2.0 ABI 5.2$$'
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [graphics.library.2]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
@@ -152,16 +164,22 @@ $(SCROLL_HOST_TEST): src/scroll.c tests/test_scroll.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
+$(COMMAND_HOST_TEST): src/command.c tests/test_command.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
+
 $(NDK_HOST_UTF8):
 	$(MAKE) -C $(NDK) build/host/utf8.o
 
 test: $(INTERFACE_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
-		$(UNDO_HOST_TEST) $(TEXT_MODEL_HOST_TEST) $(SCROLL_HOST_TEST)
+		$(UNDO_HOST_TEST) $(TEXT_MODEL_HOST_TEST) $(SCROLL_HOST_TEST) \
+		$(COMMAND_HOST_TEST)
 	./$(INTERFACE_HOST_TEST)
 	./$(TEXT_SURFACE_HOST_TEST)
 	./$(UNDO_HOST_TEST)
 	./$(TEXT_MODEL_HOST_TEST)
 	./$(SCROLL_HOST_TEST)
+	./$(COMMAND_HOST_TEST)
 
 sanitize: $(NDK_HOST_UTF8)
 	@mkdir -p build/host
@@ -189,6 +207,10 @@ sanitize: $(NDK_HOST_UTF8)
 		$(SANITIZER_FLAGS) src/scroll.c tests/test_scroll.c \
 		-o build/host/test_scroll_sanitize
 	./build/host/test_scroll_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/command.c tests/test_command.c \
+		-o build/host/test_command_sanitize
+	./build/host/test_command_sanitize
 
 analyze:
 	@mkdir -p build/analyzer
@@ -204,6 +226,8 @@ analyze:
 		-c src/text_model.c -o build/analyzer/text_model.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/scroll.c -o build/analyzer/scroll.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/command.c -o build/analyzer/command.o
 
 clean:
 	rm -rf build

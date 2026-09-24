@@ -1626,7 +1626,7 @@ static uint32_t create_window(AstraHandle gui)
         return GALLERY_FAIL_SURFACE;
     if (paint(1u) != ASTRA_STATUS_OK)
         return GALLERY_FAIL_RENDER;
-    info.flags = ASTRA_WINDOW_ACTIVE | ASTRA_WINDOW_RESIZABLE;
+    info.flags = ASTRA_WINDOW_RESIZABLE;
     info.x = 400u;
     info.y = 120u;
     info.width = GALLERY_WIDTH;
@@ -1644,6 +1644,11 @@ static uint32_t create_window(AstraHandle gui)
                       ASTRA_WINDOW_SUBSCRIBE_VBLANK;
     result = astra_window_create(
         gui, surface.area, &info, &window);
+    if (result == ASTRA_OK)
+        result = astra_window_set_application_name(
+            &window, "Interface Gallery", 17u);
+    if (result == ASTRA_OK)
+        result = astra_window_activate(&window);
     if (result != ASTRA_OK) {
         (void)astra_log_failure("gallery window create",
                                 (uint32_t)(-result));

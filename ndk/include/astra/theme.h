@@ -19,6 +19,7 @@ ASTRA_EXTERN_C_BEGIN
 #define ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT UINT16_C(11)
 /** Native system-title font height in pixels. */
 #define ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT UINT16_C(13)
+#define ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT UINT16_C(16)
 /** Native terminal/code font height in pixels. */
 #define ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT UINT16_C(16)
 /** Native terminal/code cell width in pixels. */

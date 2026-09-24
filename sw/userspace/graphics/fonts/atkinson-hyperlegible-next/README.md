@@ -18,7 +18,7 @@ tool environment described by `tools/fonts/afnt.py`:
 tools/fonts/afnt.py import-outline \
   --family "Astra Sans" --style Regular --license OFL-1.1 \
   --source-revision 7925f50f649b3813257faf2f4c0b381011f434f1 \
-  --strike 11:8 --strike 13:10 \
+  --strike 11:8 --strike 13:10 --strike 16:13 \
   --output sw/userspace/graphics/fonts/astra-workbench.afnt \
   sw/userspace/graphics/fonts/atkinson-hyperlegible-next/AtkinsonHyperlegibleNext-Regular.ttf
 ```

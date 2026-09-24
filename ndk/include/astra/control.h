@@ -22,7 +22,7 @@ ASTRA_EXTERN_C_BEGIN
 /** Display refresh used to derive deterministic animation phases. */
 #define ASTRA_UI_VBLANK_HZ 60u
 
-/** Control kinds implemented by Interface Kit ABI 5.1. */
+/** Control kinds implemented by Interface Kit ABI 5.2. */
 enum {
     ASTRA_CONTROL_LABEL = 1u,
     ASTRA_CONTROL_BUTTON = 2u,

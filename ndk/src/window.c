@@ -56,7 +56,7 @@ static AstraResult command(AstraWindow *window, uint32_t action,
     AstraResult result;
 
     if (!window_live(window) || action < ASTRA_GUI_WINDOW_QUERY ||
-        action > ASTRA_GUI_WINDOW_SET_POINTER_IMAGE ||
+        action > ASTRA_GUI_WINDOW_SET_APPLICATION_NAME ||
         (attachment != NULL && *attachment == ASTRA_INVALID_HANDLE) ||
         !astra_utf8_validate(title, title_length, 0u) ||
         title_length > ASTRA_WINDOW_TITLE_MAX)
@@ -149,7 +149,8 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
     uint32_t reply_handles = 0u;
     uint32_t known_flags = ASTRA_WINDOW_RESIZABLE | ASTRA_WINDOW_MODAL |
                            ASTRA_WINDOW_ACTIVE;
-    uint32_t known_gadgets = ASTRA_WINDOW_GADGET_CLOSE |
+    uint32_t known_gadgets = ASTRA_WINDOW_GADGET_AUTO |
+                             ASTRA_WINDOW_GADGET_CLOSE |
                              ASTRA_WINDOW_GADGET_MINIMIZE |
                              ASTRA_WINDOW_GADGET_MAXIMIZE;
     uint32_t known_events = ASTRA_WINDOW_SUBSCRIBE_ALL;
@@ -169,6 +170,8 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
         info->type > ASTRA_WINDOW_DESKTOP ||
         (info->flags & ~known_flags) != 0 ||
         (info->gadgets & ~known_gadgets) != 0 ||
+        ((info->gadgets & ASTRA_WINDOW_GADGET_AUTO) != 0u &&
+         info->gadgets != ASTRA_WINDOW_GADGET_AUTO) ||
         !state_valid(info->close_state) ||
         !state_valid(info->minimize_state) ||
         !state_valid(info->maximize_state) ||
@@ -376,6 +379,15 @@ AstraResult astra_window_set_title(AstraWindow *window, const char *title,
                    title_length, 0u, 0, NULL);
 }
 
+AstraResult astra_window_set_application_name(
+    AstraWindow *window, const char *name, uint16_t name_length)
+{
+    if (name_length == 0u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return command(window, ASTRA_GUI_WINDOW_SET_APPLICATION_NAME,
+                   NULL, name, name_length, 0u, NULL, NULL);
+}
+
 AstraResult astra_window_set_event_mask(AstraWindow *window,
                                         uint32_t event_mask)
 {
@@ -536,7 +548,11 @@ static AstraResult receive_event(AstraWindow *window, AstraWindowEvent *event,
         message.event.size != sizeof(message.event) ||
         message.event.version != ASTRA_WINDOW_EVENT_VERSION ||
         message.event.type < ASTRA_WINDOW_EVENT_POINTER_MOTION ||
-        message.event.type > ASTRA_WINDOW_EVENT_TEXT ||
+        message.event.type > ASTRA_WINDOW_EVENT_SYSTEM_ACTION ||
+        (message.event.type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION &&
+         (message.event.data.system_action.action !=
+              ASTRA_SYSTEM_ACTION_ABOUT ||
+          !astra_words_zero(message.event.data.system_action.reserved, 6u))) ||
         (message.event.type == ASTRA_WINDOW_EVENT_STATE &&
          (message.event.data.state.state > ASTRA_WINDOW_STATE_MAXIMIZED ||
           (message.event.data.state.flags &

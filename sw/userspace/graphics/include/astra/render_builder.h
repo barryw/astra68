@@ -66,6 +66,12 @@ int astra_render_builder_text(AstraRenderBuilder *builder,
                               uint32_t destination, int32_t x, int32_t y,
                               const char *utf8, uint32_t length,
                               uint16_t pixel_height, uint16_t color);
+int astra_render_builder_text_styled(AstraRenderBuilder *builder,
+                                     uint32_t destination, int32_t x,
+                                     int32_t y, const char *utf8,
+                                     uint32_t length,
+                                     uint16_t pixel_height, uint16_t color,
+                                     uint32_t style_flags);
 int astra_render_builder_mono_text(AstraRenderBuilder *builder,
                                    uint32_t destination, int32_t x,
                                    int32_t y, const char *utf8,

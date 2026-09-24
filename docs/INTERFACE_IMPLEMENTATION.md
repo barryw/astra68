@@ -40,8 +40,8 @@ order needed to finish the complete design without application-private UI.
 | Collection controls | 1d, 2b, 4a | scroll model, ScrollView, scrollbar, splitter, list, tree, table, grid, columns, toolbar, status, pagination | scroll model/view/bar and splitter accepted; list, tree, table, grid, columns, toolbar, status, and pagination pending |
 | TextSurface | 7a-7b | shared UTF-8 model, grid/code/flow layout, runs, gutters, overlays, caret, selection, undo, find, clipboard, scrollback | grid renderer, selection paint/hit test/extraction, typed clipboard, Terminal copy/paste and resource-backed styled scrollback, shared undo/redo, piece-table model, and field accepted; find, wide cells, and code/flow layout pending |
 | Input vocabulary | 6a-6b | keymap-selected Meta labels and immutable system/workspace/app shortcut tiers | input service emits one normalized Meta bit; detection, override, labels, and shortcut tiers pending |
-| Command model | 1e, 2a, 6b | stable IDs, typed arguments, state, metadata, asynchronous invocation; shared by menus, palette, toolbar, scripting | pending |
-| Menus and palette | 1e, 2a, 3a | persistent application strip, skeleton menus, command palette, system escape shortcuts | pending |
+| Command model | 1e, 2a, 6b | stable IDs, typed arguments, state, metadata, asynchronous invocation; shared by menus, palette, toolbar, scripting | caller-owned responder chain, state query and invocation accepted in ABI 5.2; desktop Terminal launch uses it; cross-process publication and menu/shortcut consumers pending |
+| Menus and palette | 1e, 2a, 3a | persistent application strip, skeleton menus, command palette, system escape shortcuts | cyan orbit and tracked ASTRA wordmark, focus-aware bold application pill independent of the window title; hardware-composited ASTRA menu with functional About panel and 16 px labels; app-owned menu publication, palette, and shortcuts pending |
 | Telescope | 2a, 3a | Cmd-Space search/launch surface, filesystem change index, ranked results, keyboard selection and open | pending |
 | System panels | 4b, 5a-5b | Open, Save, Fonts, and truthful pixel-format-aware Colour services | pending |
 | Atlas | 2b | shared sidebar and toolbar with grid, list, and columns views | pending |
@@ -258,8 +258,8 @@ The retained trace is `/tmp/astra-splitter-final.flSMgn/ring.bin` on Beast,
 SHA-256
 `34bf6843d15a8f470f93dd66e65eabc832fcf5e4b28e399597ee3cb3c55e6e0d`.
 
-Current source uses Interface Kit ABI 4.5 and GUI protocol 12 with one
-canonical pointer-image path. Window clients select the server-supplied arrow,
+The pointer-image path introduced by Interface Kit ABI 4.5 uses one
+canonical implementation. Window clients select the server-supplied arrow,
 horizontal resize, vertical resize, either diagonal resize, I-beam, or wait
 image, or transfer a copied RGBA image and hotspot. Interface Kit derives field
 and splitter images from its existing hover/capture state and suppresses
@@ -315,7 +315,7 @@ This prevents an unsupported scalar from disappearing even before the planned
 Atkinson Hyperlegible Next, JetBrains Mono, and Noto system fallback stack is
 installed through the font service.
 
-Current source advances Interface Kit to ABI 5.1 with a reusable Disclosure
+Interface Kit ABI 5.1 introduced a reusable Disclosure
 control. A disclosure owns only its UTF-8 header and the ID of one sibling
 container; that target container's existing collapsed bit remains the sole
 expanded-state authority. Pointer activation, Enter/Space, and Left/Right

@@ -1,6 +1,7 @@
 #include <astra/application.h>
 #include <astra/bundle.h>
 #include <astra/bytes.h>
+#include <astra/command.h>
 #include <astra/display.h>
 #include <astra/event_emit.h>
 #include <astra/gui.h>
@@ -57,6 +58,27 @@ ASTRA_PROGRAM("desktop", 0, 3, 0, "Barry Walker",
 static AstraProcessFilesystem process_filesystem =
     ASTRA_PROCESS_FILESYSTEM_INIT;
 
+static AstraResult launch_terminal_state(void *context,
+                                         AstraCommandState *state)
+{
+    (void)context;
+    *state = (AstraCommandState){"New Terminal", 12u, 1u, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult launch_terminal(void *context,
+                                   const AstraCommandArguments *args)
+{
+    uint32_t process_id;
+
+    if (args != NULL && args->length != 0u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return astra_application_launch(*(const uint32_t *)context,
+                                    TERMINAL_BUNDLE,
+                                    (uint16_t)(sizeof(TERMINAL_BUNDLE) - 1u),
+                                    &process_id);
+}
+
 static void launch_error(uint32_t gui, AstraResult failure)
 {
     AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
@@ -77,6 +99,19 @@ static void launch_error(uint32_t gui, AstraResult failure)
     info.button_length = 2u;
     alert_result = astra_interface_show_alert(gui, &info);
     (void)alert_result;
+}
+
+static AstraResult show_about(uint32_t gui)
+{
+    AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
+
+    info.title = "About This Astra";
+    info.title_length = 16u;
+    info.message = "Astra OS - Axiom kernel - MC68040";
+    info.message_length = 33u;
+    info.button = "Close";
+    info.button_length = 5u;
+    return astra_interface_show_alert(gui, &info);
 }
 
 static uint16_t icon_color(const AstraAicon *icon, uint16_t index)
@@ -241,6 +276,12 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *gui;
     const AstraStartupCapability *launcher;
+    uint32_t launcher_handle;
+    AstraCommand terminal_command = {
+        "workspace.new_terminal", 22u, 0u, 0u, launch_terminal_state,
+        launch_terminal, &launcher_handle
+    };
+    AstraCommandScope command_scope = {NULL, &terminal_command, 1u};
     uint32_t status;
 
     if (!astra_startup_validate(startup) || startup->capabilities_address == 0u)
@@ -252,6 +293,7 @@ int astra_main(const AstraStartupInfo *startup)
         startup, ASTRA_CAPABILITY_APPLICATION_LAUNCH);
     if (bootstrap == NULL || gui == NULL || launcher == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
+    launcher_handle = launcher->handle;
     status = astra_process_filesystem_open(&process_filesystem, startup);
     if (status != ASTRA_STATUS_OK) status = DESKTOP_FAIL_FILESYSTEM;
     if (status == ASTRA_STATUS_OK &&
@@ -268,10 +310,10 @@ int astra_main(const AstraStartupInfo *startup)
         info.width = DESKTOP_WIDTH;
         info.height = DESKTOP_HEIGHT;
         info.flags = 0u;
-        info.gadgets = 0u;
         info.content_format = ASTRA_WINDOW_CONTENT_DRAW_LIST;
         info.type = ASTRA_WINDOW_DESKTOP;
-        info.event_mask = ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON;
+        info.event_mask = ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON |
+                          ASTRA_WINDOW_SUBSCRIBE_SYSTEM_ACTION;
         result = astra_window_create(gui->handle, surface.area, &info, &window);
         if (result != ASTRA_OK)
             status = DESKTOP_FAIL_WINDOW + (uint32_t)(-result);
@@ -287,6 +329,12 @@ int astra_main(const AstraStartupInfo *startup)
             &window, &event, ASTRA_DEADLINE_INFINITE);
 
         if (result != ASTRA_OK) return (int)(-result);
+        if (event.type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION &&
+            event.data.system_action.action == ASTRA_SYSTEM_ACTION_ABOUT) {
+            if (show_about(gui->handle) != ASTRA_OK)
+                (void)astra_log("About This Astra could not open");
+            continue;
+        }
         if (event.type == ASTRA_WINDOW_EVENT_POINTER_BUTTON &&
             (event.flags & ASTRA_WINDOW_EVENT_DOWN) != 0u &&
             event.data.pointer.button == ASTRA_INPUT_BUTTON_LEFT &&
@@ -295,12 +343,10 @@ int astra_main(const AstraStartupInfo *startup)
             event.data.pointer.x < TERMINAL_ICON_RIGHT &&
             event.data.pointer.y >= TERMINAL_ICON_TOP &&
             event.data.pointer.y < TERMINAL_ICON_BOTTOM) {
-            uint32_t process_id;
             AstraResult launch_result;
 
-            launch_result = astra_application_launch(
-                launcher->handle, TERMINAL_BUNDLE,
-                (uint16_t)(sizeof(TERMINAL_BUNDLE) - 1u), &process_id);
+            launch_result = astra_interface_command_invoke(
+                &command_scope, "workspace.new_terminal", 22u, NULL);
             if (launch_result != ASTRA_OK) {
                 launch_error(gui->handle, launch_result);
             }

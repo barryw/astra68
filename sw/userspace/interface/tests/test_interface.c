@@ -1,12 +1,14 @@
 #include <astra/interface.h>
 #include <astra/interface_library.h>
 #include <astra/control.h>
+#include <astra/display.h>
 #include <astra/draw_list.h>
 #include <astra/input_modifiers.h>
 #include <astra/surface.h>
 #include <astra/theme.h>
 
 #include <assert.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "../src/control_internal.h"
@@ -45,6 +47,102 @@ static uint32_t copy_height;
 static uint32_t line_calls;
 static uint32_t pointer_shape_calls;
 static uint32_t last_pointer_shape;
+static uint8_t alert_draw_storage[ASTRA_DRAW_LIST_AREA_BYTES];
+static uint32_t alert_create_calls;
+static uint32_t alert_name_calls;
+static uint32_t alert_activate_calls;
+static uint32_t alert_close_calls;
+static AstraResult alert_name_result = ASTRA_OK;
+
+int astra_draw_list_view_init(AstraSurfaceView *surface, void *storage,
+                              uint32_t byte_size, uint16_t width,
+                              uint16_t height)
+{
+    AstraDrawListHeader *header = storage;
+
+    memset(storage, 0, byte_size);
+    header->magic = ASTRA_DRAW_LIST_MAGIC;
+    header->version = ASTRA_DRAW_LIST_VERSION_1_2;
+    header->total_bytes = ASTRA_DRAW_LIST_AREA_BYTES;
+    header->width = width;
+    header->height = height;
+    *surface = (AstraSurfaceView){
+        storage, byte_size, 0u, width, height,
+        ASTRA_SURFACE_VIEW_DRAW_LIST, 0u, 0u, width, height};
+    return 1;
+}
+
+uint32_t astra_shared_draw_list_create(AstraSharedSurface *surface,
+                                       uint16_t width, uint16_t height)
+{
+    surface->area = 2u;
+    surface->mapping = alert_draw_storage;
+    assert(astra_draw_list_view_init(&surface->view, alert_draw_storage,
+                                     sizeof(alert_draw_storage), width,
+                                     height));
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t astra_shared_surface_close(AstraSharedSurface *surface)
+{
+    assert(surface->area == 2u);
+    return ASTRA_SYSCALL_OK;
+}
+
+AstraResult astra_window_create(uint32_t gui, uint32_t area,
+                                const AstraWindowCreateInfo *info,
+                                AstraWindow *window)
+{
+    assert(gui == 1u && area == 2u && window != NULL &&
+           (info->flags & ASTRA_WINDOW_ACTIVE) == 0u &&
+           info->type == ASTRA_WINDOW_DIALOG &&
+           info->gadgets == ASTRA_WINDOW_GADGET_AUTO &&
+           info->x == (ASTRA_DISPLAY_WIDTH - 420u) / 2u &&
+           info->y == (ASTRA_DISPLAY_HEIGHT - 150u) / 2u);
+    ++alert_create_calls;
+    return ASTRA_OK;
+}
+
+AstraResult astra_window_set_application_name(AstraWindow *window,
+                                               const char *name,
+                                               uint16_t length)
+{
+    assert(window != NULL && length == 5u && memcmp(name, "Astra", 5u) == 0);
+    ++alert_name_calls;
+    return alert_name_result;
+}
+
+AstraResult astra_window_activate(AstraWindow *window)
+{
+    assert(window != NULL);
+    ++alert_activate_calls;
+    return ASTRA_OK;
+}
+
+AstraResult astra_window_event_wait(AstraWindow *window,
+                                    AstraWindowEvent *event,
+                                    AstraMonotonicDeadline deadline)
+{
+    assert(window != NULL && event != NULL &&
+           deadline == ASTRA_DEADLINE_INFINITE);
+    event->type = ASTRA_WINDOW_EVENT_CLOSE_REQUEST;
+    return ASTRA_OK;
+}
+
+AstraResult astra_window_present_region(AstraWindow *window,
+                                         const AstraWindowFrame *region)
+{
+    (void)window;
+    (void)region;
+    return ASTRA_OK;
+}
+
+AstraResult astra_window_close(AstraWindow *window)
+{
+    assert(window != NULL);
+    ++alert_close_calls;
+    return ASTRA_OK;
+}
 
 AstraResult astra_window_set_pointer_shape(AstraWindow *window,
                                            AstraPointerShape shape)
@@ -2589,6 +2687,21 @@ int main(void)
     assert(!astra_interface_test_valid(&info));
     info.message = "Could not launch application.";
     info.message_length = 29u;
+    {
+        AstraResult result = astra_interface_show_alert(1u, &info);
+
+        if (result != ASTRA_OK)
+            fprintf(stderr, "alert result=%d\n", result);
+        assert(result == ASTRA_OK);
+    }
+    assert(alert_create_calls == 1u && alert_name_calls == 1u &&
+           alert_activate_calls == 1u && alert_close_calls == 1u);
+    alert_name_result = ASTRA_ERROR_IO;
+    assert(astra_interface_show_alert(1u, &info) == ASTRA_ERROR_IO);
+    assert(alert_create_calls == 2u && alert_name_calls == 2u &&
+           alert_activate_calls == 1u && alert_close_calls == 2u);
+    alert_name_result = ASTRA_OK;
+    text_calls = 0u;
     {
         AstraSurfaceView surface = {
             render_pixels, sizeof(render_pixels), 420u * sizeof(uint16_t),

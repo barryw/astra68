@@ -829,6 +829,19 @@ int astra_render_builder_text(AstraRenderBuilder *builder,
                         INT16_MIN, INT16_MIN, INT16_MAX, INT16_MAX, 0u);
 }
 
+int astra_render_builder_text_styled(AstraRenderBuilder *builder,
+                                     uint32_t destination, int32_t x,
+                                     int32_t y, const char *utf8,
+                                     uint32_t length,
+                                     uint16_t pixel_height, uint16_t color,
+                                     uint32_t style_flags)
+{
+    return builder_text(builder, destination, x, y, utf8, length,
+                        pixel_height, 0u, color,
+                        INT16_MIN, INT16_MIN, INT16_MAX, INT16_MAX,
+                        style_flags);
+}
+
 int astra_render_builder_mono_text(AstraRenderBuilder *builder,
                                    uint32_t destination, int32_t x,
                                    int32_t y, const char *utf8,

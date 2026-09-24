@@ -40,6 +40,11 @@ $(GALLERY_STAMP): $(GALLERY_MANIFEST) $(GALLERY) $(ICON_TOOL) $(BUNDLE_TOOL)
 	@touch $@
 
 test: all
+	@for app in $(TERMINAL) $(GALLERY); do \
+		m68k-astra-readelf --version-info "$$app" | grep -q ASTRA_INTERFACE_5.2 || exit 1; \
+		m68k-astra-readelf --version-info "$$app" | grep -q ASTRA_SYSTEM_2.2 || exit 1; \
+		if m68k-astra-readelf --version-info "$$app" | grep -q ASTRA_INTERFACE_5.1; then exit 1; fi; \
+	done
 
 sanitize analyze:
 	@true

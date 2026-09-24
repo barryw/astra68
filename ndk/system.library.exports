@@ -81,3 +81,8 @@ ASTRA_SYSTEM_2.1 {
     global:
         astra_application_launch_waitable;
 } ASTRA_SYSTEM_2.0;
+
+ASTRA_SYSTEM_2.2 {
+    global:
+        astra_window_set_application_name;
+} ASTRA_SYSTEM_2.1;

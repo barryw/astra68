@@ -126,7 +126,7 @@ The Events API group exposes the existing diagnostic event emitter, log, trace
 reader, and event catalog through `runtime.library`. It records observable
 system events; it does not replace interprocess messaging.
 
-`interface.library` ABI 5.1 exposes the retained control context, TextSurface,
+`interface.library` ABI 5.2 exposes the retained control context, TextSurface,
 typed clipboard, per-document undo/redo, the shared UTF-8 piece-table model,
 and retained fields through the
 public NDK. Label, Button, and the other primitive controls share intrinsic

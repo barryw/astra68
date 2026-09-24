@@ -13,7 +13,7 @@
 /** GUI service wire protocol tag. */
 #define ASTRA_GUI_PROTOCOL UINT32_C(0x47554920) /* GUI  */
 /** Current GUI service wire protocol version. */
-#define ASTRA_GUI_VERSION 12u
+#define ASTRA_GUI_VERSION 14u
 
 /** Maximum counted UTF-8 bytes in a window title. */
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
@@ -56,6 +56,8 @@ enum {
     ASTRA_WINDOW_GADGET_MINIMIZE = 1u << 1,
     ASTRA_WINDOW_GADGET_MAXIMIZE = 1u << 2
 };
+/** Resolve controls from the window role at creation. */
+#define ASTRA_WINDOW_GADGET_AUTO UINT32_C(0x80000000)
 
 /** Title-bar gadget interaction state. */
 enum {
@@ -79,7 +81,7 @@ typedef struct AstraWindowFrame {
 } AstraWindowFrame;
 
 /** Current serialized window-event version. */
-#define ASTRA_WINDOW_EVENT_VERSION 5u
+#define ASTRA_WINDOW_EVENT_VERSION 6u
 
 /** Window event kinds. */
 enum {
@@ -93,8 +95,12 @@ enum {
     ASTRA_WINDOW_EVENT_CLOSE_REQUEST = 6,
     ASTRA_WINDOW_EVENT_STATE_RESET = 7,
     ASTRA_WINDOW_EVENT_KEY = 8,
-    ASTRA_WINDOW_EVENT_TEXT = 9
+    ASTRA_WINDOW_EVENT_TEXT = 9,
+    /** An action selected from the display-owned system menu. */
+    ASTRA_WINDOW_EVENT_SYSTEM_ACTION = 10
 };
+
+enum { ASTRA_SYSTEM_ACTION_ABOUT = 1u };
 
 /** Window event subscription mask. */
 enum {
@@ -107,7 +113,8 @@ enum {
     ASTRA_WINDOW_SUBSCRIBE_KEY = 1u << 6,
     ASTRA_WINDOW_SUBSCRIBE_TEXT = 1u << 7,
     /** Request a coalescing waitable pulse for each display vblank. */
-    ASTRA_WINDOW_SUBSCRIBE_VBLANK = 1u << 8
+    ASTRA_WINDOW_SUBSCRIBE_VBLANK = 1u << 8,
+    ASTRA_WINDOW_SUBSCRIBE_SYSTEM_ACTION = 1u << 9
 };
 
 /** Events delivered to every ordinary application window. */
@@ -120,7 +127,7 @@ enum {
      ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON | \
      ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL | ASTRA_WINDOW_SUBSCRIBE_DEFAULT | \
      ASTRA_WINDOW_SUBSCRIBE_KEY | ASTRA_WINDOW_SUBSCRIBE_TEXT | \
-     ASTRA_WINDOW_SUBSCRIBE_VBLANK)
+     ASTRA_WINDOW_SUBSCRIBE_VBLANK | ASTRA_WINDOW_SUBSCRIBE_SYSTEM_ACTION)
 
 /** Flags that qualify one delivered window event. */
 enum {
@@ -209,6 +216,11 @@ typedef struct AstraWindowTextEvent {
     uint32_t reserved[4];
 } AstraWindowTextEvent;
 
+typedef struct AstraWindowSystemActionEvent {
+    uint32_t action; /**< ASTRA_SYSTEM_ACTION_* value. */
+    uint32_t reserved[6]; /**< Must be zero. */
+} AstraWindowSystemActionEvent;
+
 /** Event-kind-specific payload preserving the public wire extent. */
 typedef union AstraWindowEventData {
     /** Pointer motion or button data. */
@@ -223,6 +235,7 @@ typedef union AstraWindowEventData {
     AstraWindowKeyEvent key;
     /** Unicode text-input data. */
     AstraWindowTextEvent text;
+    AstraWindowSystemActionEvent system_action;
     /** Reserved wire storage. */
     uint32_t reserved[7];
 } AstraWindowEventData;
@@ -275,6 +288,7 @@ enum {
     ASTRA_GUI_WINDOW_PRESENT = 15u,
     ASTRA_GUI_WINDOW_SET_POINTER_SHAPE = 16u,
     ASTRA_GUI_WINDOW_SET_POINTER_IMAGE = 17u,
+    ASTRA_GUI_WINDOW_SET_APPLICATION_NAME = 18u,
 };
 
 typedef struct AstraGuiOpenWindow {

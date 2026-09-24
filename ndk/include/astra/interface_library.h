@@ -3,6 +3,7 @@
 #define ASTRA_INTERFACE_LIBRARY_H
 
 #include <astra/clipboard.h>
+#include <astra/command.h>
 #include <astra/control.h>
 #include <astra/interface.h>
 #include <astra/scroll.h>
@@ -14,7 +15,7 @@
 /** Breaking Interface Kit ABI generation carried by interface.library.5. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 5u
 /** Current backward-compatible Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 1u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 2u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
