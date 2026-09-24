@@ -89,9 +89,10 @@ DIST_STAGE := $(DIST_DIR)/stage/$(DIST_NAME)
 DIST_ARCHIVE := $(DIST_DIR)/$(DIST_NAME).tar.xz
 DOC_STAMP := build/docs/.complete
 DOC_INPUTS := $(shell find docs -type f) $(wildcard include/astra/*.h examples/*.c) \
-	../sw/include/astra/gui.h ../sw/include/astra/message_abi.h
+	../sw/include/astra/gui.h ../sw/include/astra/message_abi.h \
+	../sw/include/astra/pcm_format.h
 OS_COMPONENTS := runtime graphics vfs streams posix network events config \
-	interface
+	interface audio
 NDK_EXTERNAL_LIBRARY_KEYS := $(filter-out system,$(ASTRA_LIBRARY_KEYS))
 NDK_SHARED_LIBRARY_CONTRACTS := $(call astra_library_contract_owner_targets,\
 	$(NDK_EXTERNAL_LIBRARY_KEYS))

@@ -1,5 +1,11 @@
 # Arty HDMI audio transport
 
+The same `astra_hdmi_audio` block is used on the production DE25, but its
+register base there is `0x20106000`, not the Arty address below. The complete
+DE25 software architecture and release gates are in
+`docs/AUDIO_ARCHITECTURE.md`; direct Linux tone and PCM tests do not qualify
+application playback.
+
 This block is the bounded Linux-to-HDMI PCM sink for the Arty target. Linux
 owns mixing and writes signed 24-bit stereo frames; the PL consumes one frame
 per 48 kHz audio-clock edge. Applications and the Astra guest do not map this
@@ -40,5 +46,8 @@ Run the directed RTL gate on Beast:
 ```
 
 `fpga/arty/linux/astra-audio-certify` validates the live register contract,
-prefills the queue, streams a one-second 440 Hz fixed-point test tone without
-queue faults, and leaves playback disabled.
+prefills the queue, streams either a 440 Hz test tone (`--seconds N`) or an
+arbitrary raw 48 kHz interleaved stereo signed-24-bit little-endian PCM file
+(`--pcm-s24le FILE`), checks the underrun and overflow counters, and leaves
+playback disabled. This is a direct Linux hardware certifier, not an Astra
+application audio API.

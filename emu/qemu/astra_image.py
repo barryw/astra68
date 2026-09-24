@@ -37,6 +37,8 @@ COMMANDS_DIRECTORY = "commands"
 LOCAL_COMMANDS_DIRECTORY = "local/commands"
 DEFAULT_COMMANDS = os.path.join(REPOSITORY, "sw/userspace/commands/build/m68k")
 DEFAULT_VIM_RUNTIME = os.path.join(DEFAULT_COMMANDS, "vim-runtime")
+DEFAULT_STARTUP_SOUND = os.path.join(
+    REPOSITORY, "sw/userspace/services/desktop/build/m68k/startup.pcm")
 SERVICES_DIRECTORY = "services"
 LIBS_DIRECTORY = "libs"
 TERMINFO_DIRECTORY = "terminfo"
@@ -151,15 +153,22 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/clipboard grants serves CLIPBOARD required\n"
     "service /services/display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ "
     "INPUT_SERVICE serves GUI required\n"
-    "application /services/desktop grants GUI APP_LAUNCH APPS:r LIBS:r "
-    "NETWORK NETWORK_LISTEN NTP\n")
+    "service /services/media grants HOST_DEVICE serves PCM\n"
+    "application /services/desktop grants GUI APP_LAUNCH APPS:r LIBS:r SYSTEM:r "
+    "NETWORK NETWORK_LISTEN NTP PCM\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("storage", "ramfs", "posixd", "hostfs", "entropy", "network", "ntpd", "events",
-                    "input", "clipboard", "display", "desktop",
+                    "input", "clipboard", "display", "media", "desktop",
                     "remote-desktop")
 HOSTBENCH_SERVICES = DISPLAY_SERVICES + ("hostbench",)
 HOSTBENCH_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
     "application /services/hostbench grants HOST_DEVICE\n")
+AUDIO_CERTIFY_SERVICES = DISPLAY_SERVICES + ("audio-certify",)
+AUDIO_CERTIFY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
+    "application /services/audio-certify grants HOST_DEVICE\n")
+PCM_CERTIFY_SERVICES = DISPLAY_SERVICES + ("pcm-certify",)
+PCM_CERTIFY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
+    "application /services/pcm-certify grants PCM LIBS:r\n")
 INTERFACE_GALLERY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
     "application /apps/InterfaceGallery.app grants GUI CLIPBOARD LIBS:r\n")
 
@@ -647,6 +656,11 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
         _bundles(apps, APPLICATION_BUNDLES)
     vim_runtime_tree = None if vim_runtime is None else \
         _vim_runtime(vim_runtime)
+    if service_names is not None and "desktop" in service_names and (
+            not os.path.isfile(DEFAULT_STARTUP_SOUND) or
+            os.path.getsize(DEFAULT_STARTUP_SOUND) != 80000 * 4):
+        raise RuntimeError("startup sound asset is missing or stale -- "
+                           "build desktop first")
     offset, length = ext4_partition(image)
     with tempfile.TemporaryDirectory(prefix="astra-volume-") as temporary:
         volume = os.path.join(temporary, "volume.img")
@@ -681,6 +695,13 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
                      optional=True)
             _debugfs(volume, "write %s %s" % (path, target),
                      "service " + name)
+
+        if service_names is not None and "desktop" in service_names:
+            _mkdir(volume, "/media", "the system media directory")
+            _debugfs(volume, "rm /media/startup.pcm", "the old startup sound",
+                     optional=True)
+            _debugfs(volume, "write %s /media/startup.pcm" %
+                     DEFAULT_STARTUP_SOUND, "the startup sound")
 
         _mkdir(volume, "/%s" % LIBS_DIRECTORY,
                "the shared Kit directory")
@@ -781,6 +802,12 @@ if __name__ == "__main__":
     elif len(sys.argv) == 3 and sys.argv[1] == "--hostbench":
         install(sys.argv[2], service_names=HOSTBENCH_SERVICES,
                 manifest_text=HOSTBENCH_STARTUP_MANIFEST)
+    elif len(sys.argv) == 3 and sys.argv[1] == "--audio-certify":
+        install(sys.argv[2], service_names=AUDIO_CERTIFY_SERVICES,
+                manifest_text=AUDIO_CERTIFY_STARTUP_MANIFEST)
+    elif len(sys.argv) == 3 and sys.argv[1] == "--pcm-certify":
+        install(sys.argv[2], service_names=PCM_CERTIFY_SERVICES,
+                manifest_text=PCM_CERTIFY_STARTUP_MANIFEST)
     elif len(sys.argv) == 3 and sys.argv[1] == "--interface-gallery":
         install(sys.argv[2], service_names=DISPLAY_SERVICES,
                 manifest_text=INTERFACE_GALLERY_STARTUP_MANIFEST)
@@ -795,5 +822,6 @@ if __name__ == "__main__":
     else:
         raise SystemExit(
             "usage: astra_image.py "
-            "[--display|--hostbench|--interface-gallery] IMAGE | "
+            "[--display|--hostbench|--audio-certify|--pcm-certify|"
+            "--interface-gallery] IMAGE | "
             "--create IMAGE SIZE_MIB | --service NAME IMAGE")

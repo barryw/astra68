@@ -14,6 +14,9 @@ Environment=ASTRA_FRONT_PANEL_MMIO_OFFSET=0x20107000
 ExecStart=/var/lib/astra/current/bin/run-arty.sh
 Restart=always
 RestartSec=1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=astra-runtime
 Nice=-10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=0

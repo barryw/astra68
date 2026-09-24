@@ -5,11 +5,9 @@
 	.globl astra_thread_start_trampoline
 	.type astra_thread_start_trampoline, @function
 astra_thread_start_trampoline:
-	| D2 is the kernel's one thread argument: a persistent AstraThreadStart.
-	movea.l %d2, %a0
-	move.l  4(%a0), -(%sp)
-	movea.l (%a0), %a0
-	jsr     (%a0)
+	| D2 points to the runtime-owned copy, released before user entry.
+	move.l  %d2, -(%sp)
+	bsr.l   astra_thread_start_invoke@PLTPC
 	addq.l  #4, %sp
 	moveq   #0, %d1
 	moveq   #ASTRA_SYSCALL_THREAD_EXIT, %d0

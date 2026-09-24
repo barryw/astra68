@@ -1,0 +1,13 @@
+ASTRA_PCM_2.0 {
+    global:
+        astra_pcm_open;
+        astra_pcm_write;
+        astra_pcm_gain;
+        astra_pcm_pause;
+        astra_pcm_clear;
+        astra_pcm_status;
+        astra_pcm_finish;
+        astra_pcm_close;
+    local:
+        *;
+};

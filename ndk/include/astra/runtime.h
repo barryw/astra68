@@ -160,7 +160,8 @@ typedef struct AstraThreadStart {
 } AstraThreadStart;
 /**
  * Create a thread in the current process.
- * @param start Entry point and argument copied by the kernel.
+ * @param start Entry point and argument copied by the runtime before the
+ * syscall. Caller storage may be reused immediately after this returns.
  * @param priority Scheduler priority.
  * @param rights Rights for the returned thread handle.
  * @param handle Receives the thread handle.
@@ -170,6 +171,17 @@ typedef struct AstraThreadStart {
 uint32_t astra_rt_thread_create(const AstraThreadStart *start,
                                 uint32_t priority, uint32_t rights,
                                 uint32_t *handle, uint32_t *thread_id);
+/** Start a thread without retaining a join handle.
+ * The runtime copies @p start before returning and closes the thread handle
+ * after the entry point returns. Its stack is reaped automatically on exit.
+ * Use this for independent, finite work; use ::astra_rt_thread_create when
+ * the caller must wait, cancel, or inspect its result.
+ * @param start Entry point and argument copied by the runtime.
+ * @param priority Scheduler priority for the new thread.
+ * @return ASTRA_SYSCALL_* status. On success the thread may already be running.
+ */
+uint32_t astra_rt_thread_start_detached(const AstraThreadStart *start,
+                                        uint32_t priority);
 /**
  * Create a committed shared-memory area.
  * @param byte_size Requested bytes, rounded to pages.

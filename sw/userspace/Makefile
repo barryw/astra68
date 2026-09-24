@@ -1,4 +1,4 @@
-SUBDIRS := compiler runtime metrics alloc storage vfs events input terminal graphics interface network config loader \
+SUBDIRS := compiler runtime metrics alloc storage vfs events input terminal graphics interface network config audio loader \
 	streams posix terminfo ntp lua cxx commands supervisor services applications kits apps
 
 # `all` and `test` both walk the same recursive producers.  A caller may ask

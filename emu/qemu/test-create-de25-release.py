@@ -16,7 +16,10 @@ for required in (
     'make -B -j "$JOBS" -C "$REPOSITORY/fpga/arty/linux"',
     'make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux"',
     "bin/astra-remote-desktop=",
+    "bin/astra-audio-host=",
     "systemd/astra-remote-desktop.service=",
+    "systemd/astra-audio-host.service=",
+    "systemd/astra.service=",
     "getconf _NPROCESSORS_ONLN",
     "qemu/lib/libpixman-1.so.0=",
     "qemu/lib/libpcre.so.3=",
@@ -30,5 +33,14 @@ assert "ASTRA_DE25_TERMINAL_DISPLAY" not in script
 graphics_makefile = (Path(__file__).parents[2] /
                      "fpga/arty/linux/Makefile").read_text()
 assert "$(NDK_INCLUDE)/astra/theme.h" in graphics_makefile
+
+remote_unit = (Path(__file__).parents[2] /
+               "fpga/de25/astra-remote-desktop.service").read_text()
+assert "Before=astra.service" in remote_unit
+assert "WantedBy=astra.service" in remote_unit
+assert "RuntimeDirectory=astra" in remote_unit
+assert "RuntimeDirectoryPreserve=yes" in remote_unit
+assert "After=astra.service" not in remote_unit
+assert "Requires=astra.service" not in remote_unit
 
 print("DE25 release creation contract: PASS")

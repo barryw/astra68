@@ -24,6 +24,7 @@ PUBLIC_BOOT="$REPOSITORY/sw/include/astra/boot.h"
 PUBLIC_BLOCK="$REPOSITORY/sw/include/astra/block.h"
 PUBLIC_NETWORK="$REPOSITORY/sw/include/astra/network.h"
 PUBLIC_HOST="$REPOSITORY/sw/include/astra/host.h"
+PUBLIC_AUDIO_HOST="$REPOSITORY/sw/include/astra/audio_host.h"
 PUBLIC_STATUS="$REPOSITORY/sw/include/astra/status.h"
 PUBLIC_VFS_SERVICE="$REPOSITORY/sw/include/astra/vfs_service.h"
 
@@ -86,6 +87,8 @@ overlay_identity()
             "sw/include/astra/network.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_HOST")" \
             "sw/include/astra/host.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_AUDIO_HOST")" \
+            "sw/include/astra/audio_host.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_STATUS")" \
             "sw/include/astra/status.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_VFS_SERVICE")" \
@@ -176,6 +179,7 @@ cp "$PUBLIC_BOOT" "$STAGED_SOURCE/include/astra/boot.h"
 cp "$PUBLIC_BLOCK" "$STAGED_SOURCE/include/astra/block.h"
 cp "$PUBLIC_NETWORK" "$STAGED_SOURCE/include/astra/network.h"
 cp "$PUBLIC_HOST" "$STAGED_SOURCE/include/astra/host.h"
+cp "$PUBLIC_AUDIO_HOST" "$STAGED_SOURCE/include/astra/audio_host.h"
 cp "$PUBLIC_STATUS" "$STAGED_SOURCE/include/astra/status.h"
 cp "$PUBLIC_VFS_SERVICE" "$STAGED_SOURCE/include/astra/vfs_service.h"
 ln -s include/astra "$STAGED_SOURCE/astra"

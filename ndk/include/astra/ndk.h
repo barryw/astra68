@@ -37,6 +37,7 @@
 #include <astra/interface_kit.h>
 #include <astra/messaging_kit.h>
 #include <astra/network_kit.h>
+#include <astra/pcm.h>
 #include <astra/theme.h>
 #include <astra/pointer.h>
 #include <astra/window.h>

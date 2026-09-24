@@ -20,15 +20,17 @@ RENDER_TARGET := $(OUT)/astra-render-certify
 COPPER_TARGET := $(OUT)/astra-copper-certify
 CAPTURE_TARGET := $(OUT)/astra-display-capture-certify
 AUDIO_TARGET := $(OUT)/astra-audio-certify
+AUDIO_HOST_TARGET := $(OUT)/astra-audio-host
 HDMI_LINK_TARGET := $(OUT)/astra-hdmi-link
 TERMINAL_TARGET := $(OUT)/astra-terminal-display
 TIME_SYNC_TARGET := $(OUT)/astra-time-sync
 SPLASH_TARGET := $(OUT)/astra_boot_splash.rgb565
 TARGETS := $(BOOT_TARGET) $(STATUS_TARGET) $(SPRITE_TARGET) $(RENDER_TARGET) \
-	$(COPPER_TARGET) $(AUDIO_TARGET) $(TERMINAL_TARGET) \
+	$(COPPER_TARGET) $(AUDIO_TARGET) $(AUDIO_HOST_TARGET) $(TERMINAL_TARGET) \
 	$(TIME_SYNC_TARGET) $(SPLASH_TARGET)
 HOST_TEST_TARGETS := $(OUT)/test-astra-boot-text \
 	$(OUT)/test-astra-terminal-display $(OUT)/test-astra-audio \
+	$(OUT)/test-astra-audio-host \
 	$(OUT)/test-astra-hdmi-link $(OUT)/test-astra-graphics-platform \
 	$(OUT)/test-astra-graphics-platform-de25 \
 	$(OUT)/test-astra-window-scene
@@ -124,7 +126,14 @@ $(CAPTURE_TARGET): astra_display_capture_certify.c astra_graphics_hw.c \
 $(AUDIO_TARGET): astra_audio_certify.c astra_graphics_hw.h
 	mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections \
-		astra_audio_certify.c $(LDFLAGS) -o $@
+	astra_audio_certify.c $(LDFLAGS) -o $@
+
+$(AUDIO_HOST_TARGET): astra_audio_host.c astra_graphics_hw.h \
+		$(ASTRA_INCLUDE)/astra/audio_host.h \
+		$(ASTRA_INCLUDE)/astra/host.h $(ASTRA_INCLUDE)/astra/status.h
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections \
+		astra_audio_host.c $(LDFLAGS) -o $@
 
 $(HDMI_LINK_TARGET): astra_hdmi_link.c
 	mkdir -p $(OUT)
@@ -168,6 +177,7 @@ analyze: astra_render_protocol.h $(GRAPHICS_FONT_HEADERS)
 		-fanalyzer -fsyntax-only \
 		astra_display_capture_certify.c astra_graphics_hw.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_audio_certify.c
+	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_audio_host.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_hdmi_link.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_time_sync.c
 	$(CC) $(CFLAGS) -I. -I$(OUT) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
@@ -181,6 +191,7 @@ test-host: $(HOST_TEST_TARGETS)
 	$(OUT)/test-astra-boot-text
 	$(OUT)/test-astra-terminal-display --self-test
 	$(OUT)/test-astra-audio --self-test
+	$(OUT)/test-astra-audio-host --self-test
 	$(OUT)/test-astra-hdmi-link --self-test
 	$(OUT)/test-astra-graphics-platform
 	$(OUT)/test-astra-graphics-platform-de25
@@ -213,6 +224,12 @@ $(OUT)/test-astra-terminal-display: astra_terminal_display.c \
 $(OUT)/test-astra-audio: astra_audio_certify.c
 	mkdir -p $(OUT)
 	$(HOSTCC) $(CFLAGS) astra_audio_certify.c -o $@
+
+$(OUT)/test-astra-audio-host: astra_audio_host.c \
+		$(ASTRA_INCLUDE)/astra/audio_host.h \
+		$(ASTRA_INCLUDE)/astra/host.h $(ASTRA_INCLUDE)/astra/status.h
+	@mkdir -p $(OUT)
+	$(HOSTCC) $(CFLAGS) astra_audio_host.c -o $@
 
 $(OUT)/test-astra-hdmi-link: astra_hdmi_link.c
 	mkdir -p $(OUT)

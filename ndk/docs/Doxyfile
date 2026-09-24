@@ -17,7 +17,8 @@ HIDE_FRIEND_COMPOUNDS  = YES
 HIDE_IN_BODY_DOCS      = NO
 
 INPUT                  = include/astra ../sw/include/astra/gui.h \
-                         ../sw/include/astra/message_abi.h
+                         ../sw/include/astra/message_abi.h \
+                         ../sw/include/astra/pcm_format.h
 FILE_PATTERNS          = *.h
 RECURSIVE              = YES
 EXCLUDE_PATTERNS       = */internal/*

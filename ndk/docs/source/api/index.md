@@ -12,4 +12,6 @@ front-panel
 fonts
 graphics
 interface
+pcm
+tasks
 ```

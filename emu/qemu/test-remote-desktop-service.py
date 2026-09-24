@@ -109,6 +109,13 @@ def command(machine, text, expected, timeout, number):
     return lines
 
 
+def event(machine, phrase, number):
+    pattern = phrase.replace(" ", "\\ ")
+    return command(machine, "events | while IFS= read -r line; do "
+                   "[[ $line == *%s* ]] && print -r -- $line; "
+                   "done; true" % pattern, phrase, 30.0, number)
+
+
 def wait_state(machine, state, timeout, number):
     deadline = time.monotonic() + timeout
     lines = []
@@ -238,8 +245,7 @@ def main():
                     number[0]); number[0] += 1
             wait_for(lambda: not port_available(port), "VNC activation", 10.0)
             wait_state(machine, "running", 30.0, number)
-            command(machine, "events", "remote desktop ready", 30.0,
-                    number[0]); number[0] += 1
+            event(machine, "remote desktop ready", number[0]); number[0] += 1
 
             command(machine, "service pause remote-desktop", None, 30.0,
                     number[0]); number[0] += 1
@@ -267,11 +273,24 @@ def main():
 
             broker.close()
             wait_for(lambda: port_available(port), "broker failure", 10.0)
+            wait_state(machine, "failed", 30.0, number)
+            event(machine, "remote desktop peer", number[0]); number[0] += 1
+            listed = command(machine, "service list", "remote-desktop",
+                             30.0, number[0]); number[0] += 1
+            if not any(line.startswith("remote-desktop") and
+                       "failed" in line for line in listed):
+                raise RuntimeError("service list hid remote-desktop failure")
             broker = Broker(broker_command, environment, control)
-            wait_for(lambda: not port_available(port), "broker recovery", 10.0)
-            wait_state(machine, "running", 30.0, number)
-            command(machine, "events", "remote desktop recovered", 30.0,
-                    number[0]); number[0] += 1
+            deadline = time.monotonic() + 20.0
+            while port_available(port) and time.monotonic() < deadline:
+                command(machine, "service inspect remote-desktop", None,
+                        30.0, number[0]); number[0] += 1
+                time.sleep(0.1)  # Manager traffic must not defer the retry.
+            if port_available(port):
+                raise RuntimeError("broker recovery was not retried")
+            running = wait_state(machine, "running", 30.0, number)
+            pid = restarted_service_pid(running, pid)
+            event(machine, "remote desktop ready", number[0]); number[0] += 1
 
             command(machine, "service stop remote-desktop", None, 30.0,
                     number[0]); number[0] += 1

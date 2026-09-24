@@ -78,15 +78,6 @@ int astra_main(const AstraStartupInfo *startup)
         if (status == ASTRA_STATUS_OK)
             continue;
         (void)astra_log_failure("remote desktop peer", status);
-        do {
-            sleep_until_health_check();
-            status = submit(&channel, ASTRA_HOST_REMOTE_DESKTOP_ACQUIRE,
-                            NULL);
-        } while (status == ASTRA_STATUS_BUSY ||
-                 status == ASTRA_STATUS_PEER_DEAD ||
-                 status == ASTRA_STATUS_IO);
-        if (status != ASTRA_STATUS_OK)
-            return (int)status;
-        (void)astra_log("remote desktop recovered");
+        return (int)status;
     }
 }

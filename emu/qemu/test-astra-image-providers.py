@@ -22,6 +22,26 @@ assert astra_image.HOSTBENCH_SERVICES == \
 assert astra_image.HOSTBENCH_STARTUP_MANIFEST == \
     astra_image.DISPLAY_STARTUP_MANIFEST + \
     "application /services/hostbench grants HOST_DEVICE\n"
+assert astra_image.AUDIO_CERTIFY_SERVICES == \
+    astra_image.DISPLAY_SERVICES + ("audio-certify",)
+assert astra_image.AUDIO_CERTIFY_STARTUP_MANIFEST == \
+    astra_image.DISPLAY_STARTUP_MANIFEST + \
+    "application /services/audio-certify grants HOST_DEVICE\n"
+assert "audio-certify" not in astra_image.DISPLAY_SERVICES
+assert astra_image.PCM_CERTIFY_SERVICES == \
+    astra_image.DISPLAY_SERVICES + ("pcm-certify",)
+assert astra_image.PCM_CERTIFY_STARTUP_MANIFEST == \
+    astra_image.DISPLAY_STARTUP_MANIFEST + \
+    "application /services/pcm-certify grants PCM LIBS:r\n"
+assert "media" in astra_image.DISPLAY_SERVICES
+assert "service /services/media grants HOST_DEVICE serves PCM\n" in \
+    astra_image.DISPLAY_STARTUP_MANIFEST
+assert "NETWORK NETWORK_LISTEN NTP PCM\n" in \
+    astra_image.DISPLAY_STARTUP_MANIFEST
+assert "APPS:r LIBS:r SYSTEM:r" in astra_image.DISPLAY_STARTUP_MANIFEST
+assert "service /services/media grants HOST_DEVICE serves PCM required" not in \
+    astra_image.PCM_CERTIFY_STARTUP_MANIFEST
+assert "service /services/storage" in astra_image.PCM_CERTIFY_STARTUP_MANIFEST
 assert astra_image.INTERFACE_GALLERY_STARTUP_MANIFEST == \
     astra_image.DISPLAY_STARTUP_MANIFEST + \
     "application /apps/InterfaceGallery.app grants GUI CLIPBOARD LIBS:r\n"
@@ -33,8 +53,8 @@ with open(os.path.join(astra_image.REPOSITORY,
                        "sw/userspace/kits/Runtime.kit/manifest"),
           encoding="ascii") as manifest:
     runtime_manifest = manifest.read()
-    assert "version 1.7.0\n" in runtime_manifest
-    assert "provides runtime.library 1 1.7.0\n" in runtime_manifest
+    assert "version 1.8.0\n" in runtime_manifest
+    assert "provides runtime.library 1 1.8.0\n" in runtime_manifest
     assert "version 1.6.0\n" not in runtime_manifest
     assert "provides runtime.library 1 1.6.0\n" not in runtime_manifest
 with open(os.path.join(astra_image.REPOSITORY,
@@ -293,6 +313,30 @@ try:
 except SelectionComplete:
     pass
 assert calls == [("services", "services", ("hostbench",))]
+with tempfile.TemporaryDirectory() as directory:
+    original_sound = astra_image.DEFAULT_STARTUP_SOUND
+    astra_image.DEFAULT_STARTUP_SOUND = os.path.join(directory, "startup.pcm")
+    try:
+        try:
+            astra_image._install_built(
+                "image", catalog=__file__, commands=None,
+                services="services", kits=None, apps=None, terminfo=None,
+                vim_runtime=None, service_names=("desktop",))
+            raise AssertionError("missing startup sound was accepted")
+        except RuntimeError as error:
+            assert "startup sound asset is missing or stale" in str(error)
+        with open(astra_image.DEFAULT_STARTUP_SOUND, "wb") as output:
+            output.truncate(80000 * 4)
+        try:
+            astra_image._install_built(
+                "image", catalog=__file__, commands=None,
+                services="services", kits=None, apps=None, terminfo=None,
+                vim_runtime=None, service_names=("desktop",))
+            raise AssertionError("valid startup sound was rejected")
+        except SelectionComplete:
+            pass
+    finally:
+        astra_image.DEFAULT_STARTUP_SOUND = original_sound
 astra_image._commands = original_commands
 astra_image._services = original_services
 astra_image._bundles = original_bundles

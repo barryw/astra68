@@ -26,7 +26,7 @@
 #define ASTRA_HOST_VERSION_1_4 UINT32_C(0x00010004)
 #define ASTRA_HOST_VERSION_1_5 UINT32_C(0x00010005)
 #define ASTRA_HOST_VERSION_1_8 UINT32_C(0x00010008)
-#define ASTRA_HOST_VERSION     UINT32_C(0x0001000a)
+#define ASTRA_HOST_VERSION     UINT32_C(0x0001000b)
 #define ASTRA_HOST_CAP_FILESYSTEM (1u << 0)
 #define ASTRA_HOST_CAP_OWNER_SCOPED (1u << 1)
 #define ASTRA_HOST_CAP_SUBMISSION_DESCRIPTOR (1u << 2)
@@ -35,12 +35,14 @@
 #define ASTRA_HOST_CAP_METRICS (1u << 5)
 #define ASTRA_HOST_CAP_REMOTE_DESKTOP (1u << 6)
 #define ASTRA_HOST_CAP_ENTROPY (1u << 7)
+#define ASTRA_HOST_CAP_AUDIO (1u << 8)
 #define ASTRA_HOST_STATE_READY    (1u << 0)
 
 #define ASTRA_HOST_SERVICE_FILESYSTEM UINT16_C(1)
 #define ASTRA_HOST_SERVICE_METRICS UINT16_C(2)
 #define ASTRA_HOST_SERVICE_REMOTE_DESKTOP UINT16_C(3)
 #define ASTRA_HOST_SERVICE_ENTROPY UINT16_C(4)
+#define ASTRA_HOST_SERVICE_AUDIO UINT16_C(5)
 #define ASTRA_HOST_FS_PATH_MAX 192u
 
 enum {
@@ -82,6 +84,29 @@ enum {
 #define ASTRA_HOST_ENTROPY_FILL UINT16_C(1)
 /** Host entropy requests follow the POSIX getentropy(3) bound. */
 #define ASTRA_HOST_ENTROPY_MAX UINT32_C(256)
+
+/* Host PCM transport: 48 kHz stereo, with the input format selected at open. */
+enum {
+    ASTRA_HOST_AUDIO_OPEN = 1u,
+    ASTRA_HOST_AUDIO_WRITE,
+    ASTRA_HOST_AUDIO_GAIN,
+    ASTRA_HOST_AUDIO_STATUS,
+    ASTRA_HOST_AUDIO_CLOSE,
+    ASTRA_HOST_AUDIO_FINISH,
+    ASTRA_HOST_AUDIO_PAUSE,
+    ASTRA_HOST_AUDIO_CLEAR
+};
+
+typedef struct AstraHostAudioStatus {
+    uint32_t queued_frames;
+    uint32_t hardware_frames;
+    uint32_t underruns;
+    uint32_t overflows;
+    uint32_t software_gaps;
+} AstraHostAudioStatus;
+
+_Static_assert(sizeof(AstraHostAudioStatus) == 20u,
+               "host audio status ABI changed");
 
 /*
  * A point-in-time, read-only view of the work done below Astra's VFS. Values

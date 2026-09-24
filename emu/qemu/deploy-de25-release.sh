@@ -69,6 +69,13 @@ if [ "$ACTIVE" != "$IDENTITY" ]; then
 fi
 $SSH "$BOARD" "
 set -eu
+runtime_unit_source='$STORE/current/systemd/astra.service'
+runtime_unit_target=/etc/systemd/system/astra.service
+runtime_unit_temporary=/etc/systemd/system/.astra.service.\$\$
+trap 'rm -f \"\$runtime_unit_temporary\"' EXIT HUP INT TERM
+install -m 0644 \"\$runtime_unit_source\" \"\$runtime_unit_temporary\"
+mv -f \"\$runtime_unit_temporary\" \"\$runtime_unit_target\"
+trap - EXIT HUP INT TERM
 unit_source='$STORE/current/systemd/astra-remote-desktop.service'
 unit_target=/etc/systemd/system/astra-remote-desktop.service
 unit_temporary=/etc/systemd/system/.astra-remote-desktop.service.\$\$
@@ -76,8 +83,16 @@ trap 'rm -f \"\$unit_temporary\"' EXIT HUP INT TERM
 install -m 0644 \"\$unit_source\" \"\$unit_temporary\"
 mv -f \"\$unit_temporary\" \"\$unit_target\"
 trap - EXIT HUP INT TERM
+audio_unit_source='$STORE/current/systemd/astra-audio-host.service'
+audio_unit_target=/etc/systemd/system/astra-audio-host.service
+audio_unit_temporary=/etc/systemd/system/.astra-audio-host.service.\$\$
+trap 'rm -f \"\$audio_unit_temporary\"' EXIT HUP INT TERM
+install -m 0644 \"\$audio_unit_source\" \"\$audio_unit_temporary\"
+mv -f \"\$audio_unit_temporary\" \"\$audio_unit_target\"
+trap - EXIT HUP INT TERM
 systemctl daemon-reload
-systemctl enable astra-remote-desktop.service
+systemctl reenable astra-remote-desktop.service
+systemctl reenable astra-audio-host.service
 systemctl stop astra-remote-desktop.service
 "
 $SSH "$BOARD" "systemctl restart '$SERVICE'"
@@ -109,6 +124,15 @@ if [ "$LIVE" != "$IDENTITY" ]; then
     echo "running Astra release identity changed" >&2
     exit 1
 fi
+$SSH "$BOARD" "
+set -eu
+expected='$STORE/releases/$IDENTITY/bin/astra-audio-host'
+test -S /run/astra/audio.sock
+systemctl is-active --quiet astra-audio-host.service
+process_id=\$(systemctl show --property MainPID --value astra-audio-host.service)
+actual=\$(readlink -f \"/proc/\$process_id/exe\" 2>/dev/null || true)
+test \"\$actual\" = \"\$expected\"
+"
 $SSH "$BOARD" "
 set -eu
 systemctl start astra-remote-desktop.service

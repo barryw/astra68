@@ -697,24 +697,31 @@ without exposing register addresses as the application ABI.
 
 ### 12.2 Audio and media
 
-**DIRECTION:** A protected Astra media service owns application-facing media
-timing, stream/voice allocation, buffer scheduling, and mixing policy. On the
-Arty, a Linux host service performs the production backend work through
-bounded, preallocated queues and feeds the single HDMI PCM boundary; no
-application talks directly to the host service or raw audio MMIO.
+**DIRECTION:** On the production DE25, a protected Astra media service owns
+application-facing handles, streams, voices, timing, and policy. A Linux audio
+daemon generates, resamples, and mixes software sources, then feeds the
+existing 48 kHz stereo HDMI PCM FIFO. No application accesses Linux audio
+interfaces, QEMU internals, or raw audio MMIO. The MC68040 vCPU remains on
+CPU2 and performs no host audio mixing or synthesis.
 
-It should expose both conventional streams and native Astra concepts such as
-PCM voices, wavetable instruments, synchronized triggers, and media clocks.
-Real-time paths use preallocated buffers, bounded queues, and no filesystem I/O,
-unbounded allocation, or ordinary-priority blocking.
+Reliable generic PCM playback and physical contention measurements come
+first. Host-backed port-library adapters and the public Audio Kit follow a
+passing PCM gate. MIDI/SoundFont synthesis follows, with independently
+controlled PCM and synth voice volumes; speech generation is last. All sources
+share the same host mixer and HDMI sink. The detailed DE25 hardware boundary,
+phasing, and validation gates are in `AUDIO_ARCHITECTURE.md`.
 
-Audio continuity while the CPU, UI, storage, and network are busy is a primary
-system acceptance test, not merely an audio-driver test.
-
-The hosted MC68040/PMMU vCPU is isolated on ARM core 1. Linux IRQs, QEMU I/O,
-audio mixing and synthesis, and the fixed-point game-math worker remain on
-core 0. Guest-visible audio and math devices enqueue bounded asynchronous work;
-they do not perform expensive operations synchronously on the vCPU thread.
+Audio, image, and video formats are supplied by installable userspace codecs,
+not hardcoded in applications or the kernel. A shared media registry discovers
+providers by their declared capabilities and selects a decoder from explicit
+file-format metadata when present and validated magic/container headers. A
+filename extension never determines a file's format. Metadata is a hint until
+the codec validates the stream; disagreement or unknown bytes produce a clear
+unsupported-format error. Encoders are separate capabilities, since decoding
+a format does not imply Astra can write it. Codec failures must remain isolated
+from the desktop, media service, and kernel. Define the provider ABI against
+the first real WAV/image/video integrations instead of freezing a speculative
+interface now. The cross-format contract is in `CODEC_ARCHITECTURE.md`.
 
 ## 13. Networking
 

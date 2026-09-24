@@ -16,6 +16,8 @@ for required in (
     "Environment=ASTRA_FRONT_PANEL_MMIO_OFFSET=0x20107000",
     "ExecStart=/var/lib/astra/current/bin/run-arty.sh",
     "Restart=always",
+    "StandardOutput=journal",
+    "StandardError=journal",
     "Nice=-10",
     "IOSchedulingPriority=0",
 ):
@@ -24,15 +26,20 @@ for required in (
 for release_policy in ("ASTRA_VCPU_CPU", "ASTRA_IO_CPU", "ASTRA_AUX_CPU",
                        "ASTRA_DISPLAY_CPU"):
     assert release_policy not in unit, release_policy
+for dependency in ("Requires=astra-audio-host.service",
+                   "Requires=astra-remote-desktop.service",
+                   "BindsTo=astra-audio-host.service",
+                   "BindsTo=astra-remote-desktop.service"):
+    assert dependency not in unit, dependency
 
 print("DE25 runtime service contract: PASS")
 
 remote = (Path(__file__).with_name(
     "astra-remote-desktop.service")).read_text()
 for required in (
-    "Requires=astra.service",
-    "After=astra.service",
+    "Before=astra.service",
     "PartOf=astra.service",
+    "WantedBy=astra.service",
     "ConditionPathExists=/dev/astra-display-capture",
     "ExecStart=/var/lib/astra/current/bin/astra-remote-desktop",
     "Environment=ASTRA_QMP_SOCKET=/run/astra/remote-desktop-qmp.sock",
@@ -41,6 +48,8 @@ for required in (
     "Environment=ASTRA_RFB_LISTEN_ADDRESS=0.0.0.0",
     "Environment=ASTRA_RFB_PASSWORD_FILE=/etc/astra/remote-desktop.password",
     "Restart=always",
+    "StandardOutput=journal",
+    "StandardError=journal",
     "NoNewPrivileges=true",
     "ProtectSystem=strict",
     "RestrictAddressFamilies=AF_UNIX AF_INET",
@@ -52,6 +61,24 @@ for required in (
 assert "Environment=ASTRA_RFB_PASSWORD=" not in remote
 
 print("DE25 remote desktop service contract: PASS")
+
+audio = (Path(__file__).with_name("astra-audio-host.service")).read_text()
+for required in (
+    "Before=astra.service",
+    "PartOf=astra.service",
+    "WantedBy=astra.service",
+    "ExecStart=/var/lib/astra/current/bin/astra-audio-host",
+    "Restart=on-failure",
+    "StandardOutput=journal",
+    "StandardError=journal",
+    "DeviceAllow=/dev/mem rw",
+):
+    assert required in audio, required
+assert "RequiredBy=astra.service" not in audio
+assert "RequiredBy=astra.service" not in remote
+assert "BindsTo=astra.service" not in audio
+assert "BindsTo=astra.service" not in remote
+print("DE25 audio service contract: PASS")
 
 modules = (Path(__file__).with_name(
     "astra-display-capture.conf")).read_text().splitlines()

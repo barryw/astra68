@@ -73,7 +73,7 @@ Candidate initial service boundaries are:
 | workspace | desktop policy, volumes, launcher, menus, application and document presentation | graphics MMIO, filesystem internals |
 | terminal/PTY | terminal sessions, PTYs, termios state and terminal rendering | native process policy, kernel scheduling |
 | POSIX personality | file descriptors, Unix process/job semantics and libc adaptation | native kernel ABI or native application identity |
-| media | Astra streams/voices, timing, buffering and the ESP audio protocol | application UI policy, direct ESP access |
+| media | Astra stream/voice handles, timing, buffering, and the host-audio protocol | application UI policy, direct Linux or HDMI-register access |
 
 These names and combinations are provisional. Measurements may justify
 co-locating closely coupled services, but service boundaries may not erase

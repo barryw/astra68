@@ -10,6 +10,7 @@
 #include <astra/interface_kit.h>
 #include <astra/interface_library.h>
 #include <astra/input.h>
+#include <astra/pcm.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
@@ -20,6 +21,7 @@
 #include <astra/window.h>
 
 #include "desktop_layout.h"
+#include "startup_sound.h"
 
 #define DESKTOP_WIDTH ASTRA_DISPLAY_WIDTH
 #define DESKTOP_TOP 34u
@@ -57,6 +59,65 @@ ASTRA_PROGRAM("desktop", 0, 3, 0, "Barry Walker",
 
 static AstraProcessFilesystem process_filesystem =
     ASTRA_PROCESS_FILESYSTEM_INIT;
+
+static void play_startup_sound(uint32_t pcm_service)
+{
+    AstraPcmStream stream = ASTRA_PCM_STREAM_INIT;
+    uint8_t *frames = NULL;
+    uint32_t length = 0u;
+    uint32_t sent = 0u;
+    uint64_t deadline;
+    AstraPcmStatus state = {0};
+
+    if (astra_process_read_file_alloc(
+            &process_filesystem, "/system/media/startup.pcm",
+            (void **)&frames, &length) != ASTRA_VFS_OK ||
+        length != ASTRA_STARTUP_SOUND_FRAMES * 4u) {
+        (void)astra_log("startup sound asset unavailable");
+        goto done;
+    }
+    if (astra_pcm_open(pcm_service, ASTRA_PCM_FORMAT_S16BE_STEREO,
+                       &stream) != ASTRA_OK) {
+        (void)astra_log("startup sound service unavailable");
+        goto done;
+    }
+    deadline = astra_clock_monotonic() + UINT64_C(5000000000);
+    while (sent < ASTRA_STARTUP_SOUND_FRAMES) {
+        uint32_t accepted = 0u;
+        AstraResult result = astra_pcm_write(
+            &stream, frames + sent * 4u,
+            ASTRA_STARTUP_SOUND_FRAMES - sent, &accepted);
+
+        sent += accepted;
+        if (result == ASTRA_ERROR_BUSY &&
+            astra_clock_monotonic() < deadline) {
+            (void)astra_rt_thread_sleep(UINT64_C(2000000),
+                                        ASTRA_THREAD_SLEEP_RELATIVE,
+                                        0u, NULL);
+        } else if (result != ASTRA_OK) {
+            goto done;
+        }
+    }
+    if (astra_pcm_finish(&stream) != ASTRA_OK)
+        goto done;
+    while (astra_clock_monotonic() < deadline) {
+        if (astra_pcm_status(&stream, &state) != ASTRA_OK)
+            break;
+        if (state.queued_frames == 0u && state.hardware_frames == 0u) {
+            (void)astra_log("startup sound complete");
+            break;
+        }
+        (void)astra_rt_thread_sleep(UINT64_C(2000000),
+                                    ASTRA_THREAD_SLEEP_RELATIVE, 0u, NULL);
+    }
+done:
+    if (stream.control != 0u) {
+        AstraResult ignored = astra_pcm_close(&stream);
+
+        (void)ignored;
+    }
+    astra_runtime_deallocate(frames);
+}
 
 static AstraResult launch_terminal_state(void *context,
                                          AstraCommandState *state)
@@ -276,6 +337,7 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *gui;
     const AstraStartupCapability *launcher;
+    const AstraStartupCapability *pcm;
     uint32_t launcher_handle;
     AstraCommand terminal_command = {
         "workspace.new_terminal", 22u, 0u, 0u, launch_terminal_state,
@@ -291,6 +353,7 @@ int astra_main(const AstraStartupInfo *startup)
     gui = astra_startup_capability(startup, ASTRA_CAPABILITY_GUI);
     launcher = astra_startup_capability(
         startup, ASTRA_CAPABILITY_APPLICATION_LAUNCH);
+    pcm = astra_startup_capability(startup, ASTRA_CAPABILITY_PCM);
     if (bootstrap == NULL || gui == NULL || launcher == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     launcher_handle = launcher->handle;
@@ -323,6 +386,14 @@ int astra_main(const AstraStartupInfo *startup)
     if (status != ASTRA_STATUS_OK) return (int)status;
     ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_DISPLAY, ASTRA_EVENT_LEVEL_INFO,
                  "desktop ready");
+    if (pcm != NULL) {
+        AstraThreadStart sound_start = {play_startup_sound, pcm->handle};
+
+        if (astra_rt_thread_start_detached(
+                &sound_start, ASTRA_PROCESS_PRIORITY_NORMAL - 4u) !=
+            ASTRA_SYSCALL_OK)
+            (void)astra_log("startup sound thread could not start");
+    }
     for (;;) {
         AstraWindowEvent event = {0};
         AstraResult result = astra_window_event_wait(

@@ -39,6 +39,8 @@ ASTRA_NETWORK_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/network/build/m68k/libraries/network.library.1
 ASTRA_CONFIG_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/config/build/m68k/libraries/config.library.1
+ASTRA_PCM_LIBRARY := \
+	$(ASTRA_USERSPACE_ROOT)/audio/build/m68k/libraries/pcm.library.2
 ASTRA_LOADER_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/loader/build/m68k/loader.library.1
 
@@ -60,7 +62,8 @@ ASTRA_SHARED_LIBRARIES := \
 	$(ASTRA_FONT_LIBRARY) \
 	$(ASTRA_INTERFACE_LIBRARY) \
 	$(ASTRA_NETWORK_LIBRARY) \
-	$(ASTRA_CONFIG_LIBRARY)
+	$(ASTRA_CONFIG_LIBRARY) \
+	$(ASTRA_PCM_LIBRARY)
 
 ASTRA_SHARED_LIBRARY_DIRS := $(sort $(dir $(ASTRA_SHARED_LIBRARIES)))
 ASTRA_SHARED_LIBRARY_SEARCH_FLAGS := \
@@ -74,7 +77,7 @@ ASTRA_SHARED_LIBRARY_SEARCH_FLAGS := \
 # in every native or POSIX application Makefile.
 ASTRA_LIBRARY_KEYS := system compiler unwind runtime streams filesystem libc \
 	terminfo cxx lua ntp graphics font interface \
-	network config
+	network config pcm
 
 ASTRA_LIBRARY_FILE_system := $(ASTRA_SYSTEM_LIBRARY)
 ASTRA_LIBRARY_FILE_compiler := $(ASTRA_COMPILER_LIBRARY)
@@ -92,6 +95,7 @@ ASTRA_LIBRARY_FILE_font := $(ASTRA_FONT_LIBRARY)
 ASTRA_LIBRARY_FILE_interface := $(ASTRA_INTERFACE_LIBRARY)
 ASTRA_LIBRARY_FILE_network := $(ASTRA_NETWORK_LIBRARY)
 ASTRA_LIBRARY_FILE_config := $(ASTRA_CONFIG_LIBRARY)
+ASTRA_LIBRARY_FILE_pcm := $(ASTRA_PCM_LIBRARY)
 
 ASTRA_LIBRARY_DEPS_system := runtime
 ASTRA_LIBRARY_DEPS_compiler :=
@@ -109,6 +113,7 @@ ASTRA_LIBRARY_DEPS_font := graphics runtime compiler
 ASTRA_LIBRARY_DEPS_interface := graphics font system runtime compiler
 ASTRA_LIBRARY_DEPS_network := runtime compiler
 ASTRA_LIBRARY_DEPS_config := system runtime compiler filesystem
+ASTRA_LIBRARY_DEPS_pcm := runtime compiler
 
 ASTRA_LIBRARY_OWNER_system := $(ASTRA_REPOSITORY_ROOT)/ndk:library
 ASTRA_LIBRARY_OWNER_compiler := $(ASTRA_USERSPACE_ROOT)/compiler:library
@@ -126,6 +131,7 @@ ASTRA_LIBRARY_OWNER_font := $(ASTRA_USERSPACE_ROOT)/graphics:font-library
 ASTRA_LIBRARY_OWNER_interface := $(ASTRA_USERSPACE_ROOT)/interface:interface-library
 ASTRA_LIBRARY_OWNER_network := $(ASTRA_USERSPACE_ROOT)/network:library
 ASTRA_LIBRARY_OWNER_config := $(ASTRA_USERSPACE_ROOT)/config:library
+ASTRA_LIBRARY_OWNER_pcm := $(ASTRA_USERSPACE_ROOT)/audio:library
 
 # Release and NDK gates use the owners' full ABI contracts.  Application
 # builds intentionally use the freshness targets above so launching one
@@ -146,6 +152,7 @@ ASTRA_LIBRARY_CONTRACT_OWNER_font := $(ASTRA_USERSPACE_ROOT)/graphics:library-co
 ASTRA_LIBRARY_CONTRACT_OWNER_interface := $(ASTRA_USERSPACE_ROOT)/interface:library-contract
 ASTRA_LIBRARY_CONTRACT_OWNER_network := $(ASTRA_USERSPACE_ROOT)/network:library-contract
 ASTRA_LIBRARY_CONTRACT_OWNER_config := $(ASTRA_USERSPACE_ROOT)/config:library-contract
+ASTRA_LIBRARY_CONTRACT_OWNER_pcm := $(ASTRA_USERSPACE_ROOT)/audio:library-contract
 
 astra_library_key = $(strip $(foreach key,$(ASTRA_LIBRARY_KEYS),\
 	$(if $(filter $(ASTRA_LIBRARY_FILE_$(key)),$(1)),$(key))))

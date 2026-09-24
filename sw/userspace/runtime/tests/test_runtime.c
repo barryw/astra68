@@ -36,6 +36,13 @@ static uint32_t mock_stream_closed_handle;
 static uint32_t mock_stream_dynamic;
 static uint32_t mock_stream_partial;
 static uint32_t mock_thread_handle = 0x22222222u;
+static uint32_t mock_thread_rights;
+static void *mock_thread_start_copy;
+static uint32_t mock_thread_start_frees;
+static uint32_t mock_thread_entry_argument;
+static uint32_t mock_thread_entry_saw_open_handle;
+static int mock_track_thread_start;
+static int mock_fail_thread_start_alloc;
 static int mock_clone_child;
 static uint32_t mock_cancel_wait_once;
 static uint64_t mock_time_ns;
@@ -49,11 +56,24 @@ static uint32_t mock_clock_calls;
 
 void *astra_runtime_allocate(size_t size)
 {
-    return malloc(size);
+    void *allocated;
+
+    if (mock_track_thread_start && mock_fail_thread_start_alloc) {
+        mock_fail_thread_start_alloc = 0;
+        return NULL;
+    }
+    allocated = malloc(size);
+    if (mock_track_thread_start)
+        mock_thread_start_copy = allocated;
+    return allocated;
 }
 
 void astra_runtime_deallocate(void *pointer)
 {
+    if (mock_track_thread_start && pointer == mock_thread_start_copy) {
+        ++mock_thread_start_frees;
+        mock_thread_start_copy = NULL;
+    }
     free(pointer);
 }
 
@@ -64,8 +84,12 @@ static void dummy_signal(int signal_number)
 
 static void dummy_thread(uint32_t argument)
 {
-    (void)argument;
+    mock_thread_entry_argument = argument;
+    mock_thread_entry_saw_open_handle =
+        mock_stream_closed_handle == 0u;
 }
+
+extern void astra_thread_start_invoke(void *start);
 
 void astra_thread_start_trampoline(void)
 {
@@ -96,6 +120,8 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
     mock_argument2 = argument2;
     mock_argument3 = argument3;
     mock_argument4 = argument4;
+    if (number == ASTRA_SYSCALL_THREAD_CREATE)
+        mock_thread_rights = argument3;
     ++mock_calls;
     /*
      * Every wrapper but the event one and the launch takes a single argument,
@@ -495,6 +521,8 @@ test_syscall_wrappers(void)
     assert(mock_argument0 == 1u && mock_argument1 == 1u);
     assert(mock_argument2 == (ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL));
     assert(sync_handle == ASTRA_SYSCALL_ABI_VERSION);
+    mock_track_thread_start = 1;
+    mock_thread_start_frees = 0u;
     assert(astra_rt_thread_create(
                &thread_start, ASTRA_PROCESS_PRIORITY_NORMAL,
                ASTRA_RIGHT_READ | ASTRA_RIGHT_WAIT, &sync_handle,
@@ -502,11 +530,51 @@ test_syscall_wrappers(void)
     assert(mock_number == ASTRA_SYSCALL_THREAD_CREATE);
     assert(mock_argument0 ==
            (uint32_t)(uintptr_t)astra_thread_start_trampoline);
-    assert(mock_argument1 == (uint32_t)(uintptr_t)&thread_start);
+    assert(mock_thread_start_copy != NULL);
+    assert(mock_argument1 ==
+           (uint32_t)(uintptr_t)mock_thread_start_copy);
     assert(mock_argument2 == ASTRA_PROCESS_PRIORITY_NORMAL);
     assert(mock_argument3 == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WAIT));
     assert(sync_handle == ASTRA_SYSCALL_ABI_VERSION);
     assert(thread_id == 0x11111111u);
+    thread_start.argument = 1234u;
+    mock_stream_closed_handle = 0u;
+    astra_thread_start_invoke(mock_thread_start_copy);
+    assert(mock_thread_entry_argument == 0x12345678u);
+    assert(mock_thread_entry_saw_open_handle != 0u);
+    assert(mock_stream_closed_handle == 0u);
+    assert(mock_thread_start_frees == 1u);
+    calls = mock_calls;
+    assert(astra_rt_thread_start_detached(
+               &thread_start, ASTRA_PROCESS_PRIORITY_NORMAL) ==
+           ASTRA_SYSCALL_OK);
+    assert(mock_calls == calls + 1u);
+    assert(mock_number == ASTRA_SYSCALL_THREAD_CREATE);
+    assert(mock_stream_closed_handle == 0u);
+    assert(mock_thread_rights == ASTRA_RIGHT_READ);
+    assert(mock_thread_start_copy != NULL);
+    astra_thread_start_invoke(mock_thread_start_copy);
+    assert(mock_thread_entry_saw_open_handle != 0u);
+    assert(mock_number == ASTRA_SYSCALL_CLOSE);
+    assert(mock_stream_closed_handle == 0x22222222u);
+    assert(mock_thread_start_frees == 2u);
+    mock_status = ASTRA_SYSCALL_RESOURCE_LIMIT;
+    calls = mock_calls;
+    assert(astra_rt_thread_start_detached(
+               &thread_start, ASTRA_PROCESS_PRIORITY_NORMAL) ==
+           ASTRA_SYSCALL_RESOURCE_LIMIT);
+    assert(mock_calls == calls + 1u);
+    assert(mock_number == ASTRA_SYSCALL_THREAD_CREATE);
+    assert(mock_thread_start_frees == 3u);
+    mock_status = ASTRA_SYSCALL_OK;
+    mock_fail_thread_start_alloc = 1;
+    calls = mock_calls;
+    assert(astra_rt_thread_start_detached(
+               &thread_start, ASTRA_PROCESS_PRIORITY_NORMAL) ==
+           ASTRA_SYSCALL_OUT_OF_MEMORY);
+    assert(mock_calls == calls);
+    assert(mock_thread_start_frees == 3u);
+    mock_track_thread_start = 0;
     assert(astra_futex_wait(&futex_word, 7u,
                             UINT64_C(0x123456789abcdef0)) ==
            ASTRA_SYSCALL_OK);

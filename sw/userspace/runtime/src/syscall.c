@@ -3,6 +3,25 @@
 
 extern void astra_thread_start_trampoline(void);
 
+typedef struct {
+    AstraThreadStart start;
+    uint32_t detached;
+} RuntimeThreadStart;
+
+/* The new thread owns the copied start record from this point onward. */
+void astra_thread_start_invoke(RuntimeThreadStart *start)
+{
+    RuntimeThreadStart copied = *start;
+    uint32_t self;
+
+    astra_runtime_deallocate(start);
+    copied.start.entry(copied.start.argument);
+    if (copied.detached != 0u &&
+        astra_query_abi(NULL, NULL, &self) == ASTRA_SYSCALL_OK &&
+        self != 0u)
+        (void)astra_close(self);
+}
+
 #if !defined(ASTRA_RUNTIME_DYNAMIC_LIBRARY)
 static _Thread_local uint32_t current_thread_handle;
 #endif
@@ -67,26 +86,53 @@ astra_rt_semaphore_create(uint32_t initial, uint32_t maximum,
     return result.status;
 }
 
-uint32_t
-astra_rt_thread_create(const AstraThreadStart *start, uint32_t priority,
-                       uint32_t rights, uint32_t *handle, uint32_t *thread_id)
+static uint32_t
+thread_create(const AstraThreadStart *start, uint32_t priority,
+              uint32_t rights, uint32_t detached, uint32_t *handle,
+              uint32_t *thread_id)
 {
     AstraSyscallResult result;
+    RuntimeThreadStart *copied;
 
     if (start == NULL || start->entry == NULL || handle == NULL)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     *handle = 0u;
     if (thread_id != NULL)
         *thread_id = 0u;
+    copied = astra_runtime_allocate(sizeof(*copied));
+    if (copied == NULL)
+        return ASTRA_SYSCALL_OUT_OF_MEMORY;
+    copied->start = *start;
+    copied->detached = detached;
     astra_syscall5(ASTRA_SYSCALL_THREAD_CREATE,
                    (uint32_t)(uintptr_t)astra_thread_start_trampoline,
-                   (uint32_t)(uintptr_t)start, priority, rights, 0u, &result);
+                   (uint32_t)(uintptr_t)copied, priority, rights, 0u,
+                   &result);
     if (result.status == ASTRA_SYSCALL_OK) {
         *handle = result.value0;
         if (thread_id != NULL)
             *thread_id = result.value1;
-    }
+    } else
+        astra_runtime_deallocate(copied);
     return result.status;
+}
+
+uint32_t
+astra_rt_thread_create(const AstraThreadStart *start, uint32_t priority,
+                       uint32_t rights, uint32_t *handle, uint32_t *thread_id)
+{
+    return thread_create(start, priority, rights, 0u, handle, thread_id);
+}
+
+uint32_t
+astra_rt_thread_start_detached(const AstraThreadStart *start,
+                               uint32_t priority)
+{
+    uint32_t handle = 0u;
+    uint32_t status = thread_create(start, priority, ASTRA_RIGHT_READ,
+                                    1u, &handle, NULL);
+
+    return status;
 }
 
 uint32_t

@@ -5230,8 +5230,8 @@ static void test_process_fault_death_reports_peer_dead(void)
                                      &next) == KERNEL_PROCESS_OK);
 
     memset(registers, 0, sizeof(registers));
-    make_frame(frame, 0x7u, 2u, KERNEL_PROCESS_CODE_BASE,
-               0x60000000u);
+    /* A null entry from a broken user thread must retire only its process. */
+    make_frame(frame, 0x7u, 2u, 0u, 0u);
     assert(kernel_process_on_fault(registers, user_stack, frame,
                                    &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
@@ -5255,8 +5255,8 @@ static void test_process_fault_death_reports_peer_dead(void)
     assert(kernel_user_copy_from_asm(&info, info_address, sizeof(info)) ==
            KERNEL_USER_COPY_OK);
     assert(info.exit_status == (uint32_t)ASTRA_STATUS_FAULTED);
-    assert(info.fault_pc == KERNEL_PROCESS_CODE_BASE);
-    assert(info.fault_address == 0x60000000u);
+    assert(info.fault_pc == 0u);
+    assert(info.fault_address == 0u);
     assert(info.fault_vector == 2u);
     assert(info.fault_status == 0u);
     assert(info.peak_resident_frames >= info.resident_frames);

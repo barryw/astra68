@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-09-23
+Status: active continuation map, 2026-09-24
 
 This file contains current facts only. Git history holds superseded board,
 processor, benchmark, and milestone records. The platform is **Astra 68**, its
@@ -28,6 +28,69 @@ kernel is **Axiom**, and the user-facing system is **Astra OS**.
   512 MiB of the separate LPDDR4B device at `0x40000000..0x5fffffff` for
   graphics and sound. Linux exposes 934 MiB of LPDDR4A as normal system RAM.
 - The ROM aperture is 512 KiB at `0xffe00000`.
+
+The DE25 HDMI audio sink is 48 kHz stereo signed-24-bit with a 512-frame FIFO
+at `0x20106000`. A direct Linux feeder played a 30-second arbitrary PCM clip
+on the live board without new FIFO underruns or overflows, both idle and with
+a concurrent SD-card read on CPU1. The CPU0 feeder used 1.639 s and 1.664 s
+of CPU time respectively over 30 s. Instrumented replays saw a worst refill
+gap of 6.805 ms and a minimum 185-frame FIFO level under SD contention. This
+was the physical baseline. The fixed-format guest PCM transport and Linux
+host mixer now exist behind the owner-bound AstraHost channel. A 30-second
+guest-to-HDMI run on the final release delivered 1,440,000 frames with zero
+underruns, overflows, or gaps and a 191-frame minimum FIFO level. A
+production-service run mixed two independent 30-second client streams during
+a direct SD read, with zero faults and a 178-frame minimum FIFO level. The
+no-provider guest boot and
+malformed/cross-client requests fail cleanly. The daemon is packaged and
+ordered before the runtime, and competing hardware ownership is rejected.
+A media service and `pcm.library.2` now build as a separate
+Audio Kit, with NDK declarations/documentation only and positive/negative
+host tests for batching, backpressure, bad buffers/replies, and service
+protocol validation. The new library selects 48 kHz stereo signed-24-bit LE
+or signed-16-bit BE input and exposes per-stream pause and queue clear.
+The host self-test mixes 16 simultaneous voices, exercises paused and cleared
+queues, and rejects invalid format/frame/control requests. A 30-second
+physical DE25 socket run now mixed 16 simultaneous voices (peak 16),
+1,440,000 source frames per voice, with 1,440,544 sink frames, minimum FIFO
+456 frames, and zero underruns, overflows, or software gaps. It does not yet
+measure MC68040 media-service load or game mixer cost. A PCM application
+certifier and isolated image profile are staged. The optional media service is
+now in the default desktop image, and the desktop streams a build-time-rendered
+startup chime from a detached thread when audio is available. QEMU confirmed
+that a missing host audio provider leaves the desktop and Terminal alive while
+reporting the media failure. Clean DE25 release
+`c2d9345145bcd22ead0ea66f665858b9c8ad5986d112e33bbdfc314ebd13a809`
+boots without the prior desktop thread PC=0 user fault. The earlier release's
+trace showed that closing a detached thread's self-handle before its callback
+made the desktop sound thread fail its first VFS call and killed only the
+desktop process, not the kernel. The shared runtime now keeps that handle
+valid until the callback returns. On the new release the startup sound was
+audible on the physical DE25, the trace has no VFS assertion or process exit,
+and Astra and the audio host remain active with zero systemd restarts. Injected
+pointer input has not yet been certified as responsive; the desktop screenshot
+alone is not a responsiveness gate. Broader format/rate
+conversion, the full restart/latency/contention gate, adapters, and game-ready
+Audio Kit remain open. The PCM
+headers pass installed C/C++ syntax checks and introduce no Doxygen warnings;
+the global NDK documentation gate currently fails on unrelated undocumented
+command, GUI, VFS, and runtime declarations.
+`docs/AUDIO_ARCHITECTURE.md` holds the acceptance criteria.
+
+Release `802122b1d20b658edd355713f995a1857f1f66e6d74b02cfa1bb70db2cbd4bb6`
+deploys the audio and remote-desktop Linux providers as systemd `Wants` of
+`astra.service`, not `Requires`; both log to the journal. On the preceding
+release, stopping audio left Astra and remote-desktop PIDs unchanged; killing
+the audio daemon restarted only its unit (`NRestarts=1`). On the final release,
+killing the remote-desktop daemon restarted only that unit (`NRestarts=1`):
+VNC was listening again five seconds later while Astra PID 2151125 and audio
+PID 2151124 remained unchanged. The guest media service detects a missing
+provider and is optional at boot: QEMU tests confirmed `service inspect media`
+reports `failed` after a retry while the desktop and terminal stay responsive.
+A remote-desktop broker failure likewise reports a guest service failure and
+automatically recovers after the broker returns, even under continuous manager
+traffic. Full Linux journal text is not yet bridged to Astra; provider fault
+events are available through `events`.
 
 The production Agilex 5 shell routes with every clock constrained. Retained
 setup, hold, recovery, removal, and minimum-pulse slack are +0.076 ns, 0.000 ns,

@@ -14,6 +14,9 @@ STORAGE=${ASTRA_DE25_STORAGE:?set ASTRA_DE25_STORAGE}
 LIBDIR=${ASTRA_DE25_QEMU_LIBDIR:?set ASTRA_DE25_QEMU_LIBDIR}
 SOURCE_MANIFEST=${ASTRA_DE25_SOURCE_MANIFEST:?set ASTRA_DE25_SOURCE_MANIFEST}
 DISPLAY=$REPOSITORY/build/de25-graphics/linux/astra-terminal-display
+AUDIO=$REPOSITORY/build/de25-graphics/linux/astra-audio-host
+AUDIO_UNIT=$REPOSITORY/fpga/de25/astra-audio-host.service
+RUNTIME_UNIT=$REPOSITORY/fpga/de25/astra.service
 REMOTE_DESKTOP=$REPOSITORY/build/de25-capture/astra-remote-desktop
 REMOTE_DESKTOP_UNIT=$REPOSITORY/fpga/de25/astra-remote-desktop.service
 DE25_SYSROOT=${ASTRA_DE25_SYSROOT:?set ASTRA_DE25_SYSROOT}
@@ -25,7 +28,8 @@ JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1\n')
 # metrics or generated assets.
 make -B -j "$JOBS" -C "$REPOSITORY/fpga/arty/linux" \
     PLATFORM=de25 CROSS_COMPILE=aarch64-linux-gnu- \
-    ../../../build/de25-graphics/linux/astra-terminal-display
+    ../../../build/de25-graphics/linux/astra-terminal-display \
+    ../../../build/de25-graphics/linux/astra-audio-host
 make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux" \
     CROSS_COMPILE=aarch64-linux-gnu- DE25_SYSROOT="$DE25_SYSROOT" \
     remote-desktop
@@ -39,6 +43,9 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$RELEASE_TOOL" create "$OUTPUT" \
     "storage-terminal.img=$STORAGE" \
     "source/SOURCE_SHA256SUMS=$SOURCE_MANIFEST" \
     "bin/astra-terminal-display=$DISPLAY" \
+    "bin/astra-audio-host=$AUDIO" \
+    "systemd/astra.service=$RUNTIME_UNIT" \
+    "systemd/astra-audio-host.service=$AUDIO_UNIT" \
     "bin/astra-remote-desktop=$REMOTE_DESKTOP" \
     "systemd/astra-remote-desktop.service=$REMOTE_DESKTOP_UNIT" \
     "bin/astra-input-hotplug.py=$SCRIPT_DIR/astra-input-hotplug.py" \

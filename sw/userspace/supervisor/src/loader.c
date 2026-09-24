@@ -31,6 +31,7 @@
 #define MANIFEST_PATH "/vol/startup/system"
 #define STORAGE_IMAGE_PATH "/vol/services/storage"
 #define SERVICE_DEFINITION_DIRECTORY "/config/services"
+#define SERVICE_RETRY_NS UINT64_C(5000000000)
 
 /* Sized by the process table, not by the number of services in one image. */
 static SupervisorManifest startup_manifest;
@@ -70,6 +71,9 @@ static uint32_t manager_send;
 static AstraServiceDefinition definition_scratch[2];
 static SupervisorProcessTable paused_services;
 #define paused_service_count (paused_services.count)
+static SupervisorProcessTable failed_services;
+#define failed_service_count (failed_services.count)
+static uint64_t service_retry_at;
 
 static int append(char *out, uint32_t capacity, const char *text)
 {
@@ -372,6 +376,43 @@ static uint32_t paused_service_slot(const char *name)
     return UINT32_MAX;
 }
 
+static uint32_t failed_service_slot(const char *name)
+{
+    for (uint32_t index = 0u; index < failed_service_count; ++index)
+        if (strcmp(failed_services.records[index].service_name, name) == 0)
+            return index;
+    return UINT32_MAX;
+}
+
+static void clear_service_failure(const char *name)
+{
+    uint32_t slot = failed_service_slot(name);
+
+    if (slot != UINT32_MAX) {
+        --failed_service_count;
+        failed_services.records[slot] =
+            failed_services.records[failed_service_count];
+        if (failed_service_count == 0u)
+            service_retry_at = 0u;
+    }
+}
+
+static void mark_service_failed(const char *name)
+{
+    if (failed_service_slot(name) != UINT32_MAX)
+        return;
+    if (!supervisor_process_table_reserve(&failed_services,
+                                          failed_service_count + 1u,
+                                          astra_runtime_reallocate)) {
+        (void)astra_log_failure("service failure state", ASTRA_STATUS_NO_SPACE);
+        return;
+    }
+    (void)strcpy(failed_services.records[failed_service_count++].service_name,
+                 name);
+    if (failed_service_count == 1u)
+        service_retry_at = astra_clock_monotonic() + SERVICE_RETRY_NS;
+}
+
 static void service_info(const AstraServiceDefinition *definition,
                          AstraServiceInfo *info)
 {
@@ -393,6 +434,8 @@ static void service_info(const AstraServiceDefinition *definition,
     } else if (paused_service_slot(definition->name) !=
                UINT32_MAX) {
         info->state = ASTRA_SERVICE_STATE_PAUSED;
+    } else if (failed_service_slot(definition->name) != UINT32_MAX) {
+        info->state = ASTRA_SERVICE_STATE_FAILED;
     } else {
         info->state = ASTRA_SERVICE_STATE_STOPPED;
     }
@@ -1165,8 +1208,34 @@ static uint32_t launch_definition(const AstraStartupInfo *startup,
 
         if (paused != UINT32_MAX)
             remove_paused_name(paused);
+        clear_service_failure(definition->name);
+    } else {
+        mark_service_failed(definition->name);
     }
     return status;
+}
+
+static void retry_failed_services(const AstraStartupInfo *startup)
+{
+    uint32_t index = 0u;
+
+    while (index < failed_service_count) {
+        char name[ASTRA_VFS_NAME_MAX];
+        AstraServiceDefinition *definition = &definition_scratch[0];
+        uint32_t status;
+
+        (void)strcpy(name, failed_services.records[index].service_name);
+        status = configured_definition(name, definition, NULL);
+        if (status == ASTRA_STATUS_OK &&
+            (definition->flags & ASTRA_SERVICE_ENABLED) != 0u &&
+            definition->restart_policy != ASTRA_SERVICE_RESTART_NEVER &&
+            service_process_slot(name) == UINT32_MAX) {
+            status = launch_definition(startup, definition);
+            if (status == ASTRA_STATUS_OK)
+                continue; /* launch removed this failure record */
+        }
+        ++index;
+    }
 }
 
 static uint32_t dynamic_definition_remove(const char *name)
@@ -1219,6 +1288,7 @@ static uint32_t service_control(const AstraStartupInfo *startup,
 
             if (paused != UINT32_MAX)
                 remove_paused_name(paused);
+            clear_service_failure(name);
         }
     } else if (operation == ASTRA_SERVICE_MANAGER_RESTART) {
         if (slot != UINT32_MAX) {
@@ -1274,6 +1344,8 @@ static uint32_t service_control(const AstraStartupInfo *startup,
             paused_service_slot(name) != UINT32_MAX)
             return ASTRA_STATUS_BUSY;
         status = dynamic_definition_remove(name);
+        if (status == ASTRA_STATUS_OK)
+            clear_service_failure(name);
     } else {
         return ASTRA_STATUS_UNSUPPORTED;
     }
@@ -1844,6 +1916,8 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
             } else
                 status = launch_open_status(status);
         }
+        if (status != ASTRA_STATUS_OK && service_pointer != NULL)
+            mark_service_failed(service_pointer->name);
         if (status != ASTRA_STATUS_OK && entry->required)
             return status;
     }
@@ -1934,7 +2008,17 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
         for (uint32_t at = 0u; at < process_count; ++at)
             waits[at + 4u] = process_table.records[at].handle;
         status = astra_wait_multiple(waits, process_count + 4u,
-                                     ASTRA_DEADLINE_FOREVER, &index, NULL);
+                                     failed_service_count != 0u ?
+                                         service_retry_at :
+                                         ASTRA_DEADLINE_FOREVER,
+                                     &index, NULL);
+        if (status == ASTRA_SYSCALL_TIMED_OUT) {
+            retry_failed_services(startup);
+            if (failed_service_count != 0u)
+                service_retry_at = astra_clock_monotonic() +
+                                   SERVICE_RETRY_NS;
+            continue;
+        }
 
         if (index == 0u) {
             if (status != ASTRA_SYSCALL_OK)
@@ -1984,6 +2068,14 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
                 if (service_name[0] != '\0')
                     unpublish_owner(service_name);
                 remove_process_slot(slot);
+                if (service_name[0] != '\0') {
+                    if (action == SUPERVISOR_PROCESS_ACTION_NONE &&
+                        exit_status != ASTRA_STATUS_OK)
+                        mark_service_failed(service_name);
+                    else if (action == SUPERVISOR_PROCESS_ACTION_STOP ||
+                             action == SUPERVISOR_PROCESS_ACTION_PAUSE)
+                        clear_service_failure(service_name);
+                }
                 if (action == SUPERVISOR_PROCESS_ACTION_PAUSE &&
                     service_name[0] != '\0' &&
                     paused_service_slot(service_name) ==

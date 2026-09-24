@@ -1,0 +1,8 @@
+astra-bundle 1
+kind kit
+id org.astra.audio
+name "Astra Audio Kit"
+version 2.0.0
+provides pcm.library 2 2.0.0
+requires compiler.library 1 1.0.0
+requires runtime.library 1 1.5.0

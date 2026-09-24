@@ -16,6 +16,7 @@ FILESYSTEM_LIBRARY := $(ASTRA_FILESYSTEM_LIBRARY)
 INTERFACE_LIBRARY := $(ASTRA_INTERFACE_LIBRARY)
 NETWORK_LIBRARY := $(ASTRA_NETWORK_LIBRARY)
 CONFIG_LIBRARY := $(ASTRA_CONFIG_LIBRARY)
+PCM_LIBRARY := $(ASTRA_PCM_LIBRARY)
 BUNDLE_TOOL := ../../../tools/build/astra-bundle
 BUNDLE_DEPENDENCY_TOOL := ../../../tools/check_bundle_dependencies.py
 RUNTIME := build/Runtime.kit
@@ -26,6 +27,7 @@ FILESYSTEM := build/Filesystem.kit
 INTERFACE := build/Interface.kit
 NETWORK := build/Network.kit
 CONFIGURATION := build/Configuration.kit
+AUDIO := build/Audio.kit
 CXX := build/Cxx.kit
 LUA := build/Lua.kit
 RUNTIME_STAMP := build/.Runtime.kit.stamp
@@ -106,6 +108,11 @@ CONFIG_LIBRARY_PROVIDES := $(shell sed -n \
 	's/^provides config\.library //p' Configuration.kit/manifest)
 CONFIG_LIBRARY_ABI := $(word 1,$(CONFIG_LIBRARY_PROVIDES))
 CONFIG_LIBRARY_VERSION := $(word 2,$(CONFIG_LIBRARY_PROVIDES))
+PCM_STAMP := build/.Audio.kit.stamp
+PCM_LIBRARY_PROVIDES := $(shell sed -n \
+	's/^provides pcm\.library //p' Audio.kit/manifest)
+PCM_LIBRARY_ABI := $(word 1,$(PCM_LIBRARY_PROVIDES))
+PCM_LIBRARY_VERSION := $(word 2,$(PCM_LIBRARY_PROVIDES))
 LIBRARIES := $(ASTRA_SHARED_LIBRARIES) $(LOADER_LIBRARY)
 PROVIDER_MANIFESTS := $(wildcard *.kit/manifest)
 DEPENDENCY_MANIFESTS := $(PROVIDER_MANIFESTS) $(wildcard ../apps/*.app/manifest)
@@ -115,7 +122,7 @@ KIT_INVENTORY := build/.kits
 all: $(RUNTIME_STAMP) $(STREAMS_STAMP) $(POSIX_STAMP) $(GRAPHICS_STAMP) \
 	$(FILESYSTEM_STAMP) $(INTERFACE_STAMP) \
 	$(NETWORK_STAMP) $(CONFIGURATION_STAMP) $(CXX_STAMP) $(LUA_STAMP) \
-	$(KIT_INVENTORY) provider-coverage
+	$(PCM_STAMP) $(KIT_INVENTORY) provider-coverage
 
 $(COMPILER_LIBRARY): FORCE
 	$(MAKE) -C ../compiler compiler-library-contract
@@ -164,6 +171,9 @@ $(NETWORK_LIBRARY): FORCE
 
 $(CONFIG_LIBRARY): FORCE
 	$(MAKE) -C ../config library-contract
+
+$(PCM_LIBRARY): FORCE
+	$(MAKE) -C ../audio library-contract
 
 $(BUNDLE_TOOL): FORCE
 	$(MAKE) -C ../../../tools all
@@ -286,6 +296,15 @@ $(CONFIGURATION_STAMP): Configuration.kit/manifest $(CONFIG_LIBRARY) \
 	cp $(CONFIG_LIBRARY) \
 		$(CONFIGURATION)/libraries/config.library/abi-$(CONFIG_LIBRARY_ABI)/$(CONFIG_LIBRARY_VERSION)/m68k-68040/config.library
 	$(BUNDLE_TOOL) check $(CONFIGURATION)
+	@touch $@
+
+$(PCM_STAMP): Audio.kit/manifest $(PCM_LIBRARY) $(BUNDLE_TOOL)
+	rm -rf $(AUDIO)
+	@mkdir -p $(AUDIO)/libraries/pcm.library/abi-$(PCM_LIBRARY_ABI)/$(PCM_LIBRARY_VERSION)/m68k-68040
+	cp Audio.kit/manifest $(AUDIO)/manifest
+	cp $(PCM_LIBRARY) \
+		$(AUDIO)/libraries/pcm.library/abi-$(PCM_LIBRARY_ABI)/$(PCM_LIBRARY_VERSION)/m68k-68040/pcm.library
+	$(BUNDLE_TOOL) check $(AUDIO)
 	@touch $@
 
 provider-coverage: $(LIBRARIES) $(DEPENDENCY_MANIFESTS) \

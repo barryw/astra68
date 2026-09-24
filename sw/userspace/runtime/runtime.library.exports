@@ -127,7 +127,8 @@ ASTRA_RUNTIME_1.0 {
         astra_rt_signal;
         astra_rt_signal_configure;
         astra_rt_signal_return;
-        astra_rt_thread_create;
+astra_rt_thread_create;
+astra_rt_thread_start_detached;
         astra_rt_thread_sleep;
         astra_runtime_finalize;
         astra_runtime_initialize;

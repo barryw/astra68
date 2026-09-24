@@ -9,5 +9,5 @@
 #include <astra/library.h>
 
 ASTRA_DYNAMIC_LIBRARY(
-    "runtime.library.1", 1, 7, 0, 1, 7,
+    "runtime.library.1", 1, 8, 0, 1, 8,
     "Astra68 contributors", "Copyright 2026 Astra68 contributors");

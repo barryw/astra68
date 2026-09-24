@@ -41,6 +41,7 @@
 #include "hw/m68k/astra_render_protocol.h"
 #include "astra/block.h"
 #include "astra/boot.h"
+#include "astra/audio_host.h"
 #include "astra/display.h"
 #include "astra/host.h"
 #include "astra/network.h"
@@ -450,6 +451,7 @@ typedef struct AstraHostChannel {
     uint32_t interrupt_position;
     uint8_t *completed;
     int remote_desktop_fd;
+    int audio_fd;
     uint32_t remote_desktop_generation;
     bool active;
     bool interrupt_armed;
@@ -478,7 +480,7 @@ typedef struct AstraHostState {
     uint32_t channel_result;
     bool completion_pending;
     AstraHostChannel channels[ASTRA_HOST_CHANNEL_COUNT];
-    QemuMutex remote_desktop_locks[ASTRA_HOST_CHANNEL_COUNT];
+    QemuMutex channel_socket_locks[ASTRA_HOST_CHANNEL_COUNT];
 } AstraHostState;
 
 struct Astra68State {
@@ -2259,17 +2261,19 @@ static void astra_host_file_unlock(Astra68State *s, AstraHostFile *file)
 
 static void astra_host_channel_drain(AstraHostChannel *channel)
 {
-    if (channel->active && channel->remote_desktop_fd >= 0) {
-        close(channel->remote_desktop_fd);
-    }
     channel->active = false;
     channel->completion_pending = false;
     while (channel->jobs != 0) {
         aio_poll(qemu_get_aio_context(), true);
     }
+    if (channel->remote_desktop_fd >= 0)
+        close(channel->remote_desktop_fd);
+    if (channel->audio_fd >= 0)
+        close(channel->audio_fd);
     g_free(channel->completed);
     memset(channel, 0, sizeof(*channel));
     channel->remote_desktop_fd = -1;
+    channel->audio_fd = -1;
 }
 
 static void astra_host_refresh_completion(Astra68State *s)
@@ -2863,7 +2867,7 @@ static void astra_host_execute_remote_desktop(
             goto done;
 
     slot = channel - s->host.channels;
-    qemu_mutex_lock(&s->host.remote_desktop_locks[slot]);
+    qemu_mutex_lock(&s->host.channel_socket_locks[slot]);
     if (operation == ASTRA_HOST_REMOTE_DESKTOP_ACQUIRE &&
         channel->remote_desktop_fd < 0)
         status = astra_host_remote_connect(channel, command);
@@ -2874,7 +2878,7 @@ static void astra_host_execute_remote_desktop(
     if (status == ASTRA_STATUS_OK)
         stl_be_p(command + HOST_FIELD(result_value),
                  channel->remote_desktop_generation);
-    qemu_mutex_unlock(&s->host.remote_desktop_locks[slot]);
+    qemu_mutex_unlock(&s->host.channel_socket_locks[slot]);
 
 done:
     stl_be_p(command + HOST_FIELD(status), status);
@@ -2946,6 +2950,174 @@ done:
     stl_be_p(command + HOST_FIELD(status), status);
 }
 
+static void astra_host_execute_audio(Astra68State *s,
+                                     AstraHostChannel *channel,
+                                     uint8_t *command, uint32_t physical,
+                                     uint32_t bytes, uint32_t command_bytes,
+                                     uint32_t expected_generation)
+{
+    uint16_t operation = lduw_be_p(command + HOST_FIELD(operation));
+    uint32_t handle = ldl_be_p(command + HOST_FIELD(handle));
+    uint32_t value = ldl_be_p(command + HOST_FIELD(value_lo));
+    uint32_t length = ldl_be_p(command + HOST_FIELD(data_length));
+    uint32_t capacity = ldl_be_p(command + HOST_FIELD(data_capacity));
+    uint32_t status = ASTRA_STATUS_INVALID;
+    uint8_t *data = NULL;
+    AstraAudioHostRequest request = {
+        .magic = ASTRA_AUDIO_HOST_MAGIC,
+        .version = ASTRA_AUDIO_HOST_VERSION,
+        .operation = operation,
+        .handle = handle,
+        .value = value,
+        .data_length = length,
+    };
+    AstraAudioHostReply reply;
+    struct iovec parts[2];
+    struct msghdr message = {0};
+    uint32_t slot;
+    ssize_t moved;
+
+    stl_be_p(command + HOST_FIELD(status), 0u);
+    stl_be_p(command + HOST_FIELD(result_length), 0u);
+    stl_be_p(command + HOST_FIELD(result_value), 0u);
+    if (channel == NULL)
+        goto done;
+    if (ldl_be_p(command + HOST_FIELD(size)) != ASTRA_HOST_COMMAND_SIZE ||
+        lduw_be_p(command + HOST_FIELD(version)) !=
+            ASTRA_HOST_COMMAND_VERSION ||
+        lduw_be_p(command + HOST_FIELD(service)) !=
+            ASTRA_HOST_SERVICE_AUDIO ||
+        operation < ASTRA_HOST_AUDIO_OPEN ||
+        operation > ASTRA_HOST_AUDIO_CLEAR ||
+        lduw_be_p(command + HOST_FIELD(flags)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(generation)) !=
+            expected_generation ||
+        ldl_be_p(command + HOST_FIELD(offset_hi)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(offset_lo)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(value_hi)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(reserved0)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(node_size_hi)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(node_size_lo)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(mtime_hi)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(mtime_lo)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(uid)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(gid)) != 0u ||
+        lduw_be_p(command + HOST_FIELD(kind)) != 0u ||
+        lduw_be_p(command + HOST_FIELD(mode)) != 0u ||
+        lduw_be_p(command + HOST_FIELD(nlink)) != 0u ||
+        lduw_be_p(command + HOST_FIELD(reserved1)) != 0u)
+        goto done;
+    for (size_t index = HOST_FIELD(path); index < ASTRA_HOST_COMMAND_SIZE;
+         ++index)
+        if (command[index] != 0u)
+            goto done;
+    if (operation == ASTRA_HOST_AUDIO_WRITE) {
+        if (handle == 0u || value != 0u || length == 0u ||
+            length > ASTRA_AUDIO_HOST_PACKET_FRAMES *
+                         ASTRA_AUDIO_HOST_FRAME_BYTES ||
+            length % 2u != 0u ||
+            capacity < length)
+            goto done;
+        data = astra_host_command_data(s, physical, bytes, command_bytes,
+                                       command, length);
+        if (data == NULL)
+            goto done;
+    } else if (operation == ASTRA_HOST_AUDIO_STATUS) {
+        if (value != 0u || length != 0u ||
+            capacity < sizeof(AstraHostAudioStatus))
+            goto done;
+        data = astra_host_command_data(s, physical, bytes, command_bytes,
+                                       command,
+                                       sizeof(AstraHostAudioStatus));
+        if (data == NULL)
+            goto done;
+    } else if (length != 0u || capacity != 0u ||
+               (operation == ASTRA_HOST_AUDIO_OPEN && handle != 0u) ||
+               (operation != ASTRA_HOST_AUDIO_OPEN && handle == 0u) ||
+               ((operation == ASTRA_HOST_AUDIO_CLOSE ||
+                 operation == ASTRA_HOST_AUDIO_FINISH ||
+                 operation == ASTRA_HOST_AUDIO_CLEAR) && value != 0u) ||
+               (operation == ASTRA_HOST_AUDIO_PAUSE && value > 1u)) {
+        goto done;
+    }
+
+    slot = channel - s->host.channels;
+    qemu_mutex_lock(&s->host.channel_socket_locks[slot]);
+    if (channel->audio_fd < 0) {
+        const char *path = g_getenv("ASTRA_AUDIO_HOST_SOCKET");
+        struct sockaddr_un address = {.sun_family = AF_UNIX};
+        struct timeval timeout = {.tv_sec = 0, .tv_usec = 200000};
+        int fd;
+
+        if (path == NULL || path[0] == '\0')
+            path = ASTRA_AUDIO_HOST_SOCKET;
+        if (strlen(path) >= sizeof(address.sun_path))
+            goto unlock;
+        fd = qemu_socket(AF_UNIX, SOCK_SEQPACKET, 0);
+        if (fd < 0)
+            goto peer_dead;
+        (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO,
+                         &timeout, sizeof(timeout));
+        (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+                         &timeout, sizeof(timeout));
+        memcpy(address.sun_path, path, strlen(path) + 1u);
+        if (connect(fd, (struct sockaddr *)&address,
+                    sizeof(address)) != 0) {
+            close(fd);
+            goto peer_dead;
+        }
+        channel->audio_fd = fd;
+    }
+    parts[0].iov_base = &request;
+    parts[0].iov_len = sizeof(request);
+    parts[1].iov_base = data;
+    parts[1].iov_len = operation == ASTRA_HOST_AUDIO_WRITE ? length : 0u;
+    message.msg_iov = parts;
+    message.msg_iovlen = parts[1].iov_len != 0u ? 2u : 1u;
+    moved = sendmsg(channel->audio_fd, &message, MSG_NOSIGNAL);
+    if (moved != (ssize_t)(sizeof(request) + parts[1].iov_len))
+        goto peer_dead;
+    moved = recv(channel->audio_fd, &reply, sizeof(reply), 0);
+    if (moved != sizeof(reply) || reply.magic != ASTRA_AUDIO_HOST_MAGIC ||
+        reply.status > ASTRA_STATUS_SYSTEM_MAX) {
+        status = ASTRA_STATUS_PROTOCOL;
+        goto disconnect;
+    }
+    status = reply.status;
+    if (status == ASTRA_STATUS_OK) {
+        if (operation == ASTRA_HOST_AUDIO_OPEN)
+            stl_be_p(command + HOST_FIELD(result_value), reply.handle);
+        if (operation == ASTRA_HOST_AUDIO_WRITE)
+            stl_be_p(command + HOST_FIELD(result_length),
+                     reply.queued_frames);
+        if (operation == ASTRA_HOST_AUDIO_STATUS) {
+            stl_be_p(data + offsetof(AstraHostAudioStatus, queued_frames),
+                     reply.queued_frames);
+            stl_be_p(data + offsetof(AstraHostAudioStatus, hardware_frames),
+                     reply.hardware_frames);
+            stl_be_p(data + offsetof(AstraHostAudioStatus, underruns),
+                     reply.underruns);
+            stl_be_p(data + offsetof(AstraHostAudioStatus, overflows),
+                     reply.overflows);
+            stl_be_p(data + offsetof(AstraHostAudioStatus, software_gaps),
+                     reply.software_gaps);
+            stl_be_p(command + HOST_FIELD(result_length),
+                     sizeof(AstraHostAudioStatus));
+        }
+    }
+    goto unlock;
+
+peer_dead:
+    status = ASTRA_STATUS_PEER_DEAD;
+disconnect:
+    close(channel->audio_fd);
+    channel->audio_fd = -1;
+unlock:
+    qemu_mutex_unlock(&s->host.channel_socket_locks[slot]);
+done:
+    stl_be_p(command + HOST_FIELD(status), status);
+}
+
 static void astra_host_execute_command(Astra68State *s, uint32_t owner,
                                        AstraHostChannel *channel,
                                        uint8_t *command,
@@ -2965,6 +3137,10 @@ static void astra_host_execute_command(Astra68State *s, uint32_t owner,
                  ASTRA_HOST_SERVICE_ENTROPY)
         astra_host_execute_entropy(s, command, physical, bytes,
                                    command_bytes, expected_generation);
+    else if (lduw_be_p(command + HOST_FIELD(service)) ==
+                 ASTRA_HOST_SERVICE_AUDIO)
+        astra_host_execute_audio(s, channel, command, physical, bytes,
+                                 command_bytes, expected_generation);
     else
         astra_host_execute_fs(s, owner, command, physical, bytes,
                               command_bytes, expected_generation);
@@ -3984,6 +4160,7 @@ static void astra_host_channel_configure(Astra68State *s, uint32_t physical)
     channel->status = ASTRA_SYSCALL_OK;
     channel->completed = g_new0(uint8_t, command_capacity);
     channel->remote_desktop_fd = -1;
+    channel->audio_fd = -1;
     channel->active = true;
     s->host.channel_result = ASTRA_SYSCALL_OK;
 }
@@ -4654,7 +4831,8 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
                 ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ |
                 ASTRA_HOST_CAP_METRICS |
                 ASTRA_HOST_CAP_REMOTE_DESKTOP |
-                ASTRA_HOST_CAP_ENTROPY : 0u;
+                ASTRA_HOST_CAP_ENTROPY |
+                ASTRA_HOST_CAP_AUDIO : 0u;
     case 0x88c:
         return s->host.root_fd >= 0 ? ASTRA_HOST_STATE_READY : 0u;
     case 0x890: return s->host.generation;
@@ -5529,8 +5707,9 @@ static void astra68_init(MachineState *machine)
     s->host.root_fd = -1;
     qemu_mutex_init(&s->host.files_lock);
     for (uint32_t slot = 0; slot < ASTRA_HOST_CHANNEL_COUNT; ++slot) {
-        qemu_mutex_init(&s->host.remote_desktop_locks[slot]);
+        qemu_mutex_init(&s->host.channel_socket_locks[slot]);
         s->host.channels[slot].remote_desktop_fd = -1;
+        s->host.channels[slot].audio_fd = -1;
     }
     s->host.files = g_hash_table_new(g_direct_hash, g_direct_equal);
     hostfs_root = g_getenv("ASTRA_HOSTFS_ROOT");
