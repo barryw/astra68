@@ -41,6 +41,8 @@ ASTRA_SYSTEM_2.0 {
         astra_port_send_until;
         astra_service_add;
         astra_service_control;
+        astra_system_shutdown_request;
+        astra_system_restart_request;
         astra_service_definition_add_argument;
         astra_service_definition_add_dependency;
         astra_service_definition_add_grant;

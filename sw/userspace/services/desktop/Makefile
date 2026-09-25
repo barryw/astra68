@@ -24,9 +24,8 @@ OBJECT := build/m68k/main.o
 OBJECTS :=
 HOST_TEST := build/host/test_desktop_layout
 HOST_TEST_SANITIZE := build/host/test_desktop_layout_sanitize
-SOUND_TEST := build/host/test_startup_sound
-SOUND_TEST_SANITIZE := build/host/test_startup_sound_sanitize
-SOUND_RENDERER := build/host/render_startup_sound
+SOUND_SOURCE := assets/AstraStartup.wav
+SOUND_RENDERER := render_startup_sound.py
 SOUND_ASSET := build/m68k/startup.pcm
 LIBRARIES := $(ASTRA_PCM_LIBRARY) $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_GRAPHICS_LIBRARY) \
 	$(ASTRA_FONT_LIBRARY) \
@@ -40,14 +39,9 @@ $(OBJECT): main.c desktop_layout.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
-$(SOUND_RENDERER): render_startup_sound.c startup_sound.c startup_sound.h
+$(SOUND_ASSET): $(SOUND_SOURCE) $(SOUND_RENDERER)
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 \
-		render_startup_sound.c startup_sound.c -o $@
-
-$(SOUND_ASSET): $(SOUND_RENDERER)
-	@mkdir -p $(@D)
-	$(SOUND_RENDERER) $@
+	python3 $(SOUND_RENDERER) $(SOUND_SOURCE) $@
 
 .DELETE_ON_ERROR: $(SOUND_ASSET)
 
@@ -55,36 +49,23 @@ $(HOST_TEST): tests/test_desktop_layout.c desktop_layout.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 $< -o $@
 
-$(SOUND_TEST): tests/test_startup_sound.c startup_sound.c startup_sound.h
-	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 \
-		tests/test_startup_sound.c startup_sound.c -o $@
-
-test: $(HOST_TEST) $(SOUND_TEST) $(SOUND_ASSET)
+test: $(HOST_TEST) $(SOUND_ASSET)
 	./$(HOST_TEST)
-	./$(SOUND_TEST)
+	python3 tests/test_startup_sound.py $(SOUND_SOURCE) $(SOUND_ASSET)
 
 $(HOST_TEST_SANITIZE): tests/test_desktop_layout.c desktop_layout.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O1 \
 		-fsanitize=address,undefined -fno-omit-frame-pointer $< -o $@
 
-$(SOUND_TEST_SANITIZE): tests/test_startup_sound.c startup_sound.c startup_sound.h
-	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O1 \
-		-fsanitize=address,undefined -fno-omit-frame-pointer \
-		tests/test_startup_sound.c startup_sound.c -o $@
-
-sanitize: $(HOST_TEST_SANITIZE) $(SOUND_TEST_SANITIZE)
+sanitize: $(HOST_TEST_SANITIZE) $(SOUND_ASSET)
 	./$(HOST_TEST_SANITIZE)
-	./$(SOUND_TEST_SANITIZE)
+	python3 tests/test_startup_sound.py $(SOUND_SOURCE) $(SOUND_ASSET)
 
 analyze:
 	@mkdir -p build/analyzer
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
 		-c main.c -o build/analyzer/main.o
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
-		-c startup_sound.c -o build/analyzer/startup_sound.o
 
 clean:
 	rm -rf build

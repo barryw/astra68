@@ -79,11 +79,11 @@ def connect(host, port, password=None, macos_format=False,
     maxima = values[6:9]
     shifts = values[9:12]
     name = receive_exact(connection, values[12]).decode("utf-8")
-    expected = (24, 24, 0, 1, (255, 255, 255), (0, 8, 16))
+    expected = (32, 24, 0, 1, (255, 255, 255), (16, 8, 0))
     actual = (bits, depth, big_endian, true_colour, maxima, shifts)
     if actual != expected:
         raise RuntimeError(f"unexpected RFB pixel format: {actual}")
-    bytes_per_pixel = 3
+    bytes_per_pixel = 4
     if macos_format:
         connection.sendall(struct.pack(">B3xBBBBHHHBBB3x", 0,
                                        32, 32, 0, 1,

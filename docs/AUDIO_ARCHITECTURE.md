@@ -1,12 +1,12 @@
 # DE25 audio architecture
 
-Status: the fixed-format guest-to-HDMI PCM transport is implemented and has
-passed a 30-second physical run. A first fixed-format media service and
-`pcm.library.2` are being built; their application path has not yet passed a
-physical release gate. The optional media service is now in the default
-desktop image. The desktop's startup chime is rendered to 48 kHz stereo PCM
-on Beast during the build, then streamed from an automatically reaped desktop
-thread; the MC68040 does not synthesize it. This document supersedes the
+Status: the fixed-format guest-to-HDMI PCM transport, media service, and
+`pcm.library.2` have passed physical release gates. The optional media service
+is in the default desktop image. The desktop's source asset is
+`sw/userspace/services/desktop/assets/AstraStartup.wav`; the build validates
+and converts it to 48 kHz stereo S16BE PCM, then streams it from an
+automatically reaped desktop thread. The MC68040 does not synthesize it.
+This document supersedes the
 Arty/core-placement assumptions in `OS_VISION.md` for the DE25.
 
 ## Hardware and ownership

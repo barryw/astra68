@@ -9,6 +9,7 @@
 static uint32_t reply_receive;
 static uint32_t transaction;
 static uint32_t expected_operation;
+static const char *expected_name;
 static AstraServiceListCursor expected_cursor;
 
 uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
@@ -31,6 +32,7 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         assert(handles[0] == reply_receive + 1u);
         assert(request->header.protocol == ASTRA_SERVICE_MANAGER_PROTOCOL);
         assert(request->header.operation == expected_operation);
+        assert(strcmp(request->name, expected_name) == 0);
         assert(memcmp(&request->cursor, &expected_cursor,
                       sizeof(request->cursor)) == 0);
         transaction = request->header.transaction_id;
@@ -146,6 +148,7 @@ int main(void)
            ASTRA_ERROR_INVALID_ARGUMENT);
 
     expected_operation = ASTRA_SERVICE_MANAGER_LIST;
+    expected_name = "";
     expected_cursor.position = UINT64_C(0xffffffffffffffff);
     expected_cursor.source = ASTRA_SERVICE_LIST_SOURCE_DYNAMIC;
     expected_cursor.reserved = 0u;
@@ -155,12 +158,22 @@ int main(void)
            next.position == UINT64_C(0xffffffffffffffff) &&
            next.source == ASTRA_SERVICE_LIST_SOURCE_DYNAMIC);
     expected_operation = ASTRA_SERVICE_MANAGER_RESTART;
+    expected_name = "remote-desktop";
     (void)memset(&expected_cursor, 0, sizeof(expected_cursor));
     assert(astra_service_control(9u, ASTRA_SERVICE_MANAGER_RESTART,
                                  "remote-desktop", &info) == ASTRA_OK);
     assert(info.process_id == 12u);
     assert(astra_service_control(9u, ASTRA_SERVICE_MANAGER_LIST,
                                  "remote-desktop", &info) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    expected_operation = ASTRA_SERVICE_MANAGER_SHUTDOWN;
+    expected_name = "";
+    assert(astra_system_shutdown_request(9u) == ASTRA_OK);
+    assert(astra_system_shutdown_request(ASTRA_INVALID_HANDLE) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    expected_operation = ASTRA_SERVICE_MANAGER_SYSTEM_RESTART;
+    assert(astra_system_restart_request(9u) == ASTRA_OK);
+    assert(astra_system_restart_request(ASTRA_INVALID_HANDLE) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
     puts("service manager contract tests passed");
     return 0;

@@ -27,7 +27,7 @@ LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	$(ASTRA_STATIC_LINK_SCRIPT_FLAGS)
 TARGET := build/m68k/storage.elf
 IMAGE := build/m68k/storage
-OBJECT := build/m68k/main.o
+OBJECT := build/m68k/main.o build/m68k/shutdown.o
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 STORAGE_LIB := $(STORAGE)/build/m68k/libastrablock.a
 EXT4_LIB := $(STORAGE)/build/m68k/libastraext4.a
@@ -48,14 +48,26 @@ $(TARGET): $(OBJECT) $(CRT0) $(VFS_LIB) $(EXT4_LIB) $(STORAGE_LIB) \
 $(IMAGE): $(TARGET)
 	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@
 
-$(OBJECT): main.c
+build/m68k/main.o: main.c shutdown.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/shutdown.o: shutdown.c shutdown.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
 size: $(IMAGE)
 	$(SIZE) $(IMAGE)
 
-test sanitize:
+build/host/test_shutdown: tests/test_shutdown.c shutdown.c shutdown.h
+	@mkdir -p $(@D)
+	cc $(filter-out -I$(RUNTIME)/freestanding,$(CPPFLAGS)) \
+		$(COMMON_FLAGS) tests/test_shutdown.c shutdown.c -o $@
+
+test: build/host/test_shutdown
+	build/host/test_shutdown
+
+sanitize:
 	@true
 
 analyze:

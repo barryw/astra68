@@ -72,12 +72,23 @@ main(void)
     assert(sent_message.header.operation == ASTRA_SERVICE_READY);
     assert(sent_message.header.transaction_id == 0u);
     assert(sent_message.status == ASTRA_STATUS_OK);
+    assert(sent_message.flags == 0u);
     assert(sent_handle_count == 2u && sent_handles[0] == handles[0] &&
            sent_handles[1] == handles[1]);
 
     assert(astra_service_ready(7u, ASTRA_STATUS_IO, handles, 2u) ==
            ASTRA_SYSCALL_OK);
     assert(sent_message.status == ASTRA_STATUS_IO);
+    assert(sent_message.flags == 0u);
     assert(sent_handle_count == 0u);
+    assert(astra_service_ready_managed(7u, ASTRA_STATUS_OK, NULL, 0u, 55u) ==
+           ASTRA_SYSCALL_OK);
+    assert(sent_message.flags == ASTRA_SERVICE_READY_SHUTDOWN_MANAGED);
+    assert(sent_handle_count == 1u && sent_handles[0] == 55u);
+    assert(astra_service_ready_managed(7u, ASTRA_STATUS_OK, NULL, 0u, 0u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_service_ready_managed(7u, ASTRA_STATUS_IO, NULL, 0u, 55u) ==
+           ASTRA_SYSCALL_OK);
+    assert(sent_message.flags == 0u);
     return 0;
 }

@@ -18,6 +18,7 @@
 #include <astra/posix_process.h>
 #include <astra/network.h>
 #include <astra/syscall.h>
+#include <astra/shutdown.h>
 
 /*
  * Exit status of a process that failed an assertion, tagged the same way the
@@ -86,6 +87,11 @@ const AstraStartupCapability *astra_startup_capability(
 uint32_t astra_service_ready(uint32_t bootstrap, uint32_t status,
                              const uint32_t *handles,
                              uint32_t handle_count);
+/** Publish startup completion and a private shutdown sender to the supervisor. */
+uint32_t astra_service_ready_managed(uint32_t bootstrap, uint32_t status,
+                                     const uint32_t *handles,
+                                     uint32_t handle_count,
+                                     uint32_t shutdown_send);
 
 /**
  * Invoke a raw five-argument syscall.
@@ -355,7 +361,7 @@ void *astra_runtime_reallocate(void *pointer, size_t size);
 size_t astra_runtime_allocation_size(void *pointer);
 /**
  * Configure current-thread POSIX signal delivery.
- * @param trampoline Signal trampoline, or NULL to disable delivery.
+ * @param trampoline Signal trampoline; must be non-NULL.
  * @param stack_top Top of the signal stack.
  * @param blocked Replacement blocked-signal mask.
  * @param pending Receives pending-signal mask when non-NULL.
@@ -667,6 +673,19 @@ uint32_t astra_futex_wake(volatile uint32_t *address, uint32_t count,
  * @param state Aligned shared mutex word initialized to zero.
  * @return ASTRA_SYSCALL_* status.
  */
+static inline uint32_t astra_mutex_swap(volatile uint32_t *state,
+                                        uint32_t replacement, int order)
+{
+    uint32_t previous = __atomic_load_n(state, __ATOMIC_RELAXED);
+
+    /* MC68040 GCC can return the value from before a failed CAS retry when
+     * lowering __atomic_exchange_n. The wake decision needs the value that
+     * the successful CAS actually replaced. */
+    while (!__atomic_compare_exchange_n(state, &previous, replacement, 0,
+                                        order, __ATOMIC_RELAXED)) {}
+    return previous;
+}
+
 static inline uint32_t astra_mutex_lock(volatile uint32_t *state)
 {
     uint32_t expected = 0u;
@@ -682,7 +701,7 @@ static inline uint32_t astra_mutex_lock(volatile uint32_t *state)
         uint32_t status;
 
         if (previous != 2u)
-            previous = __atomic_exchange_n(state, 2u, __ATOMIC_ACQUIRE);
+            previous = astra_mutex_swap(state, 2u, __ATOMIC_ACQUIRE);
         if (previous == 0u)
             return ASTRA_SYSCALL_OK;
         status = astra_futex_wait(state, 2u, ASTRA_DEADLINE_FOREVER);
@@ -690,7 +709,7 @@ static inline uint32_t astra_mutex_lock(volatile uint32_t *state)
             status != ASTRA_SYSCALL_CANCELLED &&
             status != ASTRA_SYSCALL_WOULD_BLOCK)
             return status;
-        expected = __atomic_exchange_n(state, 2u, __ATOMIC_ACQUIRE);
+        expected = astra_mutex_swap(state, 2u, __ATOMIC_ACQUIRE);
         if (expected == 0u)
             return ASTRA_SYSCALL_OK;
     }
@@ -707,7 +726,7 @@ static inline uint32_t astra_mutex_unlock(volatile uint32_t *state)
 
     if (state == NULL || ((uintptr_t)state & (sizeof(*state) - 1u)) != 0u)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    previous = __atomic_exchange_n(state, 0u, __ATOMIC_RELEASE);
+    previous = astra_mutex_swap(state, 0u, __ATOMIC_RELEASE);
     if (previous == 0u)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     return previous == 2u ? astra_futex_wake(state, 1u, NULL) :
@@ -1406,6 +1425,44 @@ uint32_t astra_process_wait(uint32_t handle, uint64_t deadline_ns,
  */
 uint32_t astra_rt_port_create(uint32_t message_max, uint32_t byte_max,
                            uint32_t *receive_handle, uint32_t *send_handle);
+/** Send a process shutdown request with a private one-reply channel.
+ * @param lifecycle_send Target process's shutdown send capability.
+ * @param transaction Nonzero ID unique to this attempt.
+ * @param reply_receive Receives the waitable reply capability on success.
+ * @return ASTRA_SYSCALL_* status. No capability escapes on failure.
+ */
+uint32_t astra_shutdown_request(uint32_t lifecycle_send,
+                                uint32_t transaction,
+                                uint32_t *reply_receive);
+/** Receive one shutdown request and its one-use reply capability.
+ * @param lifecycle_receive This process's shutdown receive capability.
+ * @param request Receives the validated request.
+ * @param reply_send Receives the reply capability on success.
+ * @return ASTRA_SYSCALL_* status; malformed messages fail closed.
+ */
+uint32_t astra_shutdown_receive(uint32_t lifecycle_receive,
+                                AstraShutdownRequest *request,
+                                uint32_t *reply_send);
+/** Send READY or CANCEL and close the reply capability.
+ * READY still requires a subsequent clean process exit.
+ * @param reply_send One-use reply capability received with the request.
+ * @param transaction Request's transaction ID.
+ * @param decision ASTRA_SHUTDOWN_READY or ASTRA_SHUTDOWN_CANCEL.
+ * @param reason Zero for READY; for CANCEL, zero means the user declined.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_shutdown_respond(uint32_t reply_send, uint32_t transaction,
+                                uint32_t decision, uint32_t reason);
+/** Receive and validate the response to one shutdown request.
+ * The caller still owns and must close @p reply_receive.
+ * @param reply_receive Private reply receive capability.
+ * @param transaction Expected transaction ID.
+ * @param reply Receives the validated reply.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_shutdown_receive_reply(uint32_t reply_receive,
+                                      uint32_t transaction,
+                                      AstraShutdownReply *reply);
 /**
  * Send one message and optional transferred capabilities without blocking.
  * @param handle Port send capability.

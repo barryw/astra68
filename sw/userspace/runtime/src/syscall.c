@@ -332,15 +332,16 @@ astra_rt_signal_configure(void (*trampoline)(int), void *stack_top,
 {
     AstraSyscallResult result;
 
-    if (trampoline == NULL || stack_top == NULL || pending == NULL ||
-        previous_blocked == NULL)
+    if (trampoline == NULL || stack_top == NULL)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     astra_syscall5(ASTRA_SYSCALL_SIGNAL_CONFIGURE,
                    (uint32_t)(uintptr_t)trampoline,
                    (uint32_t)(uintptr_t)stack_top, blocked, 0u, 0u, &result);
     if (result.status == ASTRA_SYSCALL_OK) {
-        *pending = result.value0;
-        *previous_blocked = result.value1;
+        if (pending != NULL)
+            *pending = result.value0;
+        if (previous_blocked != NULL)
+            *previous_blocked = result.value1;
     }
     return result.status;
 }

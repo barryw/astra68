@@ -126,6 +126,22 @@ ASTRA_NODISCARD AstraResult astra_service_control(
     AstraHandle manager, uint32_t operation, const char *name,
     AstraServiceInfo *info);
 
+/** Request normal DE25 shutdown. Acceptance does not mean completion;
+ * applications may still cancel, and force shutdown is a separate action.
+ * @param manager Service-manager capability handle.
+ * @return ASTRA_RESULT_* status for accepting the request.
+ */
+ASTRA_NODISCARD AstraResult astra_system_shutdown_request(
+    AstraHandle manager);
+
+/** Request normal DE25 restart. Uses the same vetoable process and filesystem
+ * shutdown sequence as Shut Down. Acceptance does not mean completion.
+ * @param manager Service-manager capability handle.
+ * @return ASTRA_RESULT_* status for accepting the request.
+ */
+ASTRA_NODISCARD AstraResult astra_system_restart_request(
+    AstraHandle manager);
+
 ASTRA_EXTERN_C_END
 
 #endif

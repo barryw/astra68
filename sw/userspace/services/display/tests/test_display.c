@@ -593,6 +593,63 @@ int main(void)
         assert(!valid_command(&image, sizeof(image), 2u, 1u, 300u, 200u));
     }
 
+    {
+        DisplayWindow cursor_windows[TEST_WINDOW_COUNT] = {0};
+        DisplayState cursor = {
+            .windows = cursor_windows,
+            .capacity = TEST_WINDOW_COUNT,
+            .damage = {
+                { 0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u },
+                { 0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u },
+            },
+        };
+        AstraGuiWindowCommand close = {
+            .window = 1u,
+            .action = ASTRA_GUI_WINDOW_CLOSE,
+        };
+        DisplayWindow closed = {0};
+        AstraLogicalInputEvent reset = {
+            .type = ASTRA_INPUT_EVENT_STATE_RESET,
+        };
+        uint32_t error;
+        uint32_t effects = 0u;
+        uint32_t frame_window = 0u;
+        uint32_t frame_timestamp = 0u;
+        int changed = 0;
+
+        add_window(&cursor, 0u, ASTRA_WINDOW_STANDARD,
+                   100u, 100u, 300u, 200u, ASTRA_WINDOW_RESIZABLE, 0u);
+        cursor.count = 1u;
+        cursor.pointer_x = 10;
+        cursor.pointer_y = 10;
+        cursor.capture_window = 1u;
+        cursor.capture_region = HIT_RESIZE_E;
+        assert(display_pointer_shape(&cursor, &theme) ==
+               ASTRA_POINTER_SHAPE_RESIZE_HORIZONTAL);
+        assert(handle_pointer(&cursor, &reset, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK);
+        assert((effects & DISPLAY_POINTER_CURSOR) != 0u &&
+               cursor.capture_window == 0u &&
+               display_pointer_shape(&cursor, &theme) ==
+                   ASTRA_POINTER_SHAPE_DEFAULT);
+        cursor.pointer_x = 100 + (int32_t)outer_width(
+            &theme, &cursor.windows[0]) - 1;
+        cursor.pointer_y = 180;
+        assert(display_pointer_shape(&cursor, &theme) ==
+               ASTRA_POINTER_SHAPE_RESIZE_HORIZONTAL);
+        assert(valid_batch(compose(batch, 31u, &cursor, &error, NULL, 1)) != 0u);
+        assert(read_be32(batch + 44u) ==
+               (ASTRA_DISPLAY_CURSOR_VISIBLE |
+                ASTRA_DISPLAY_CURSOR_SHAPE(
+                    ASTRA_POINTER_SHAPE_RESIZE_HORIZONTAL)));
+        assert(apply_command(&cursor, &theme, &close, &closed, &changed) ==
+               ASTRA_STATUS_OK && changed && cursor.count == 0u);
+        assert(display_pointer_shape(&cursor, &theme) ==
+               ASTRA_POINTER_SHAPE_DEFAULT);
+        assert(valid_batch(compose(batch, 32u, &cursor, &error, NULL, 1)) != 0u);
+        assert(read_be32(batch + 44u) == ASTRA_DISPLAY_CURSOR_VISIBLE);
+    }
+
     DisplayWindow state_windows[TEST_WINDOW_COUNT] = {0};
     DisplayState state = {
         .windows = state_windows,
@@ -709,9 +766,9 @@ int main(void)
         assert(astra_render_builder_init(&builder, batch, sizeof(batch), 1u));
         assert(build_system_surfaces(&builder, &bar, &bar_theme));
         assert(astra_render_builder_finish(&builder) != 0u);
-        assert(builder.glyph_count == 14u); /* ASTRA + Workspace */
-        assert(batch_has_colored_fill_at(26, 17, color(bar_theme.accent)));
-        assert(batch_has_colored_fill_at(
+        assert(builder.glyph_count == 26u); /* ASTRA, Workspace, File/Edit/View */
+        assert(!batch_has_colored_fill_at(16, 17, color(bar_theme.accent)));
+        assert(!batch_has_colored_fill_at(
             100, 14, color(bar_theme.title_inactive)));
         assert(!batch_has_colored_fill_at(
             20, DISPLAY_WORK_TOP - 1u, color(bar_theme.accent)));
@@ -728,7 +785,7 @@ int main(void)
         assert(astra_render_builder_init(&builder, batch, sizeof(batch), 3u));
         assert(build_system_surfaces(&builder, &bar, &bar_theme));
         assert(astra_render_builder_finish(&builder) != 0u);
-        assert(batch_has_colored_fill_at(16, 17, color(bar_theme.accent)));
+        assert(!batch_has_colored_fill_at(16, 17, color(bar_theme.accent)));
         assert(!batch_has_colored_fill_at(
             20, DISPLAY_WORK_TOP - 1u, color(bar_theme.accent)));
     }
@@ -761,7 +818,8 @@ int main(void)
                               &frame_timestamp) == ASTRA_STATUS_OK);
         assert(menu.overlay == DISPLAY_OVERLAY_MENU &&
                menu.swallow_pointer_up != 0u &&
-               (effects & DISPLAY_POINTER_RENDER) != 0u);
+               (effects & (DISPLAY_POINTER_RENDER | DISPLAY_POINTER_CURSOR)) ==
+                   (DISPLAY_POINTER_RENDER | DISPLAY_POINTER_CURSOR));
         assert((active.request.flags & ASTRA_WINDOW_ACTIVE) != 0u &&
                menu.capture_window == 0u);
         assert(handle_pointer(&menu, &up, &effects, &frame_window,
@@ -775,7 +833,23 @@ int main(void)
         assert(astra_render_builder_init(&builder, batch, sizeof(batch), 4u));
         assert(build_overlay_surface(&builder, &menu, &menu_theme));
         assert(astra_render_builder_finish(&builder) != 0u);
-        assert(builder.glyph_count == 16u);
+        assert(builder.glyph_count == 32u);
+        assert(DISPLAY_MENU_X == 12);
+        assert(batch_has_fill(0, 0, DISPLAY_MENU_WIDTH,
+                              menu_theme.window_radius,
+                              color(menu_theme.frame)));
+        assert(batch_has_fill(12, 44, DISPLAY_MENU_WIDTH - 24u,
+                              1u, color(menu_theme.border_soft)));
+        assert(!batch_has_fill(12, 84, DISPLAY_MENU_WIDTH - 24u,
+                               1u, color(menu_theme.border_soft)));
+        assert(menu_item_at(DISPLAY_MENU_X + 8,
+                            DISPLAY_MENU_Y + 8) == 1u);
+        assert(menu_item_at(DISPLAY_MENU_X + 7,
+                            DISPLAY_MENU_Y + 8) == 0u);
+        assert(menu_item_at(DISPLAY_MENU_X + 24,
+                            DISPLAY_MENU_Y + 44) == 0u);
+        assert(menu_item_at(DISPLAY_MENU_X + 24,
+                            DISPLAY_MENU_Y + 84) == 0u);
 
         motion.value_x = DISPLAY_MENU_X + 24;
         motion.value_y = DISPLAY_MENU_Y + 24;
@@ -801,6 +875,49 @@ int main(void)
         assert(handle_pointer(&menu, &up, &effects, &frame_window,
                               &frame_timestamp) == ASTRA_STATUS_OK);
         assert(delivered_count == 1u);
+        menu.pointer_x = DISPLAY_MENU_X + 24;
+        menu.pointer_y = DISPLAY_MENU_Y + 72;
+        assert(menu_item_at(menu.pointer_x, menu.pointer_y) == 2u);
+        assert(menu_item_at(DISPLAY_MENU_X - 1, menu.pointer_y) == 0u);
+        menu.pointer_x = 40;
+        menu.pointer_y = 15;
+        assert(handle_pointer(&menu, &down, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(handle_pointer(&menu, &up, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK);
+        menu.pointer_x = DISPLAY_MENU_X + 24;
+        menu.pointer_y = DISPLAY_MENU_Y + 72;
+        delivered_count = 0u;
+        assert(handle_pointer(&menu, &down, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(delivered_count == 1u &&
+               delivered.event.type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION &&
+               delivered.event.data.system_action.action ==
+                   ASTRA_SYSTEM_ACTION_RESTART);
+        assert(handle_pointer(&menu, &up, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK);
+        menu.pointer_x = 40;
+        menu.pointer_y = 15;
+        assert(handle_pointer(&menu, &down, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(handle_pointer(&menu, &up, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK);
+        menu.pointer_x = DISPLAY_MENU_X + 24;
+        menu.pointer_y = DISPLAY_MENU_Y + 116;
+        assert(menu_item_at(menu.pointer_x, menu.pointer_y) == 3u);
+        delivered_count = 0u;
+        assert(handle_pointer(&menu, &down, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(delivered_count == 1u &&
+               delivered.event.type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION &&
+               delivered.event.data.system_action.action ==
+                   ASTRA_SYSTEM_ACTION_SHUTDOWN);
+        menu.pointer_x = 240;
+        menu.pointer_y = 15;
+        delivered_count = 0u;
+        assert(handle_pointer(&menu, &down, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(menu.overlay == DISPLAY_OVERLAY_NONE && delivered_count == 0u);
     }
 
     {

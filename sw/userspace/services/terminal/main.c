@@ -42,7 +42,8 @@ enum {
     TERMINAL_FAIL_FONT = ASTRA_STATUS_PROGRAM_FIRST + 0x20u,
     TERMINAL_FAIL_LIBRARY = ASTRA_STATUS_PROGRAM_FIRST + 0x30u,
     TERMINAL_FAIL_ICON = ASTRA_STATUS_PROGRAM_FIRST + 0x40u,
-    TERMINAL_FAIL_STORAGE = ASTRA_STATUS_PROGRAM_FIRST + 0x50u
+    TERMINAL_FAIL_STORAGE = ASTRA_STATUS_PROGRAM_FIRST + 0x50u,
+    TERMINAL_FAIL_SHUTDOWN = ASTRA_STATUS_PROGRAM_FIRST + 0x60u
 };
 
 ASTRA_PROGRAM("terminal", 0, 1, 0, "Barry Walker",
@@ -674,10 +675,8 @@ static int window_next_key(void *context, uint32_t *key)
         if (result != ASTRA_OK)
             return CONSOLE_SESSION_INPUT_ERROR;
         if (event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST) {
-            if (astra_window_close(&window->window) != ASTRA_OK)
-                return CONSOLE_SESSION_INPUT_ERROR;
-            window->live = 0u;
-            return CONSOLE_SESSION_INPUT_STOP;
+            (void)console_session_request_close();
+            continue;
         }
         if (event.type == ASTRA_WINDOW_EVENT_RESIZE) {
             uint16_t width = (uint16_t)event.data.resize.width;
@@ -815,6 +814,8 @@ int astra_main(const AstraStartupInfo *startup)
     ConsoleSessionBackend backend;
     uint32_t status;
     uint32_t title_icon_length = 0u;
+    uint32_t shutdown_receive = 0u;
+    uint32_t shutdown_send = 0u;
     uint32_t terminal_capacity_columns = 0u;
     uint32_t terminal_capacity_rows = 0u;
     size_t terminal_storage_bytes = 0u;
@@ -950,7 +951,15 @@ int astra_main(const AstraStartupInfo *startup)
     if (title_icon.handle != ASTRA_INVALID_HANDLE)
         close_area(&title_icon);
 
-    (void)astra_service_ready(bootstrap->handle, status, NULL, 0u);
+    if (status == ASTRA_STATUS_OK &&
+        astra_rt_port_create(1u, sizeof(AstraShutdownRequest),
+                             &shutdown_receive, &shutdown_send) !=
+            ASTRA_SYSCALL_OK)
+        status = TERMINAL_FAIL_SHUTDOWN;
+    (void)astra_service_ready_managed(bootstrap->handle, status, NULL, 0u,
+                                       shutdown_send);
+    if (shutdown_send != 0u)
+        (void)astra_close(shutdown_send);
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_STATUS_OK) {
         if (window_terminal.model_area.handle != ASTRA_INVALID_HANDLE)
@@ -975,6 +984,7 @@ int astra_main(const AstraStartupInfo *startup)
     backend.next_key = window_next_key;
     backend.wait_handle = astra_window_event_wait_handle(
         &window_terminal.window);
+    backend.shutdown_receive = shutdown_receive;
     backend.idle_poll_ns = TERMINAL_CURSOR_BLINK_NS;
     backend.process_filesystem = &process_filesystem;
     backend.startup = startup;

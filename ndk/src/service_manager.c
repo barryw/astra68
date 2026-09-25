@@ -191,3 +191,21 @@ AstraResult astra_service_control(AstraHandle manager, uint32_t operation,
         *info = reply.info;
     return result;
 }
+
+AstraResult astra_system_shutdown_request(AstraHandle manager)
+{
+    AstraServiceManagerReply reply = {0};
+    uint32_t handles = 0u;
+
+    return exchange(manager, ASTRA_SERVICE_MANAGER_SHUTDOWN, NULL, NULL,
+                    NULL, &reply, NULL, &handles);
+}
+
+AstraResult astra_system_restart_request(AstraHandle manager)
+{
+    AstraServiceManagerReply reply = {0};
+    uint32_t handles = 0u;
+
+    return exchange(manager, ASTRA_SERVICE_MANAGER_SYSTEM_RESTART, NULL,
+                    NULL, NULL, &reply, NULL, &handles);
+}

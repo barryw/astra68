@@ -10,14 +10,14 @@ and affirmative state, amber for attention, and muted red for faults, set
 against deep system chrome and lunar client surfaces.
 
 The system bar uses the cyan orbit beside a spaced, all-caps ASTRA wordmark.
-The focused application is a bold label on a quiet graphite pill. The bar has
-no cyan underline; accent color is reserved for the mark and meaningful
-interaction states. Unimplemented menus are not painted as inert labels.
-The ASTRA mark and wordmark form one menu trigger. Its open state uses a
-rounded cyan pill; the hardware-composited popup uses the shared graphite,
-border, accent, and text roles, with 16 px Astra Sans labels. Menu commands
-appear only when they have working handlers; the first system command is
-About This Astra. Opening system UI must not change application focus.
+The focused application is a bold unboxed label; inactive File, Edit, and View
+headings are muted until they have working menus. Headers have a quiet dark
+background, no cyan underline, and generous horizontal spacing. The ASTRA mark
+and wordmark form one menu trigger; opening it colors the wordmark cyan without
+a button background. The hardware-composited popup uses shared graphite,
+border, accent, and text roles, with 16 px Astra Sans labels. It contains only
+working actions: About This Astra, then a divider, then Restart and Shut Down
+as one group. Opening system UI must not change application focus.
 
 This system is independent of the host-side AstraVM instrument. Shared product
 vocabulary does not imply shared component implementations or token values.

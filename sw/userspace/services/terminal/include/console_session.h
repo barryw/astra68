@@ -22,6 +22,7 @@ typedef struct ConsoleSessionBackend {
     int (*present)(void *context, const AstraTerminal *terminal);
     int (*next_key)(void *context, uint32_t *key);
     uint32_t wait_handle;
+    uint32_t shutdown_receive;
     uint64_t idle_poll_ns;
     AstraProcessFilesystem *process_filesystem;
     const AstraStartupInfo *startup;
@@ -36,5 +37,7 @@ enum {
 
 /* Runs one interactive zsh session and returns its exit status. */
 uint32_t console_session_run_backend(const ConsoleSessionBackend *backend);
+/* Close only an idle, unedited shell; never hang up an editor or background job. */
+int console_session_request_close(void);
 
 #endif

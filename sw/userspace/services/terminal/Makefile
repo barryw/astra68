@@ -31,7 +31,8 @@ CATALOG := build/m68k/astra_events.cat
 OBJECTS := build/m68k/main.o build/m68k/console_session.o \
 	build/m68k/console_stream.o build/m68k/terminal_cursor.o \
 	build/m68k/terminal_scrollback.o
-HOST_TEST := build/host/test_terminal_cursor build/host/test_terminal_scrollback
+HOST_TEST := build/host/test_terminal_cursor build/host/test_terminal_scrollback \
+	build/host/test_console_shutdown
 HOST_TEST_SANITIZE := build/host/test_terminal_cursor_sanitize \
 	build/host/test_terminal_scrollback_sanitize
 TERMINAL_LIB := $(TERMINAL)/build/m68k/libastraterminal.a
@@ -93,6 +94,12 @@ build/host/test_terminal_cursor: terminal_cursor.c include/terminal_cursor.h \
 test: $(HOST_TEST)
 	./build/host/test_terminal_cursor
 	./build/host/test_terminal_scrollback
+	./build/host/test_console_shutdown
+
+build/host/test_console_shutdown: tests/test_console_shutdown.c \
+		include/console_shutdown.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 $< -o $@
 
 build/host/test_terminal_scrollback: terminal_scrollback.c \
 		include/terminal_scrollback.h tests/test_terminal_scrollback.c \

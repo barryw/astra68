@@ -1,0 +1,58 @@
+name: AstraRemote
+options:
+  deploymentTarget:
+    macOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    GENERATE_INFOPLIST_FILE: YES
+    PRODUCT_BUNDLE_IDENTIFIER: org.astra68.AstraRemote
+    INFOPLIST_KEY_CFBundleDisplayName: Astra Remote
+    INFOPLIST_KEY_NSLocalNetworkUsageDescription: Connect to your Astra desktop.
+    CODE_SIGN_ENTITLEMENTS: AstraRemote/AstraRemote.entitlements
+    CODE_SIGN_STYLE: Automatic
+    CLANG_ENABLE_OBJC_ARC: YES
+    HEADER_SEARCH_PATHS:
+      - $(DERIVED_FILE_DIR)/tigervnc/source/common
+      - $(DERIVED_FILE_DIR)/tigervnc/build
+    LIBRARY_SEARCH_PATHS:
+      - $(DERIVED_FILE_DIR)/tigervnc/build/common/rfb
+      - $(DERIVED_FILE_DIR)/tigervnc/build/common/rdr
+      - $(DERIVED_FILE_DIR)/tigervnc/build/common/core
+      - $(DERIVED_FILE_DIR)/tigervnc/build/common/network
+      - /opt/homebrew/lib
+      - /usr/local/lib
+    OTHER_LDFLAGS:
+      - -lrfbclient
+      - -lnetwork
+      - -lrfb
+      - -lrdr
+      - -lcore
+      - -lpixman-1
+      - -ljpeg
+      - -lz
+    CLANG_CXX_LANGUAGE_STANDARD: c++17
+targets:
+  AstraRemote:
+    type: application
+    platform: macOS
+    sources:
+      - AstraRemote
+    settings:
+      base:
+        SWIFT_OBJC_BRIDGING_HEADER: AstraRemote/Bridge/AstraRemote-Bridging-Header.h
+        ENABLE_APP_SANDBOX: NO
+        LD_RUNPATH_SEARCH_PATHS: $(inherited) @executable_path/../Frameworks /opt/homebrew/lib /usr/local/lib
+    dependencies:
+      - sdk: AppKit.framework
+      - sdk: AVFAudio.framework
+      - sdk: CoreGraphics.framework
+    preBuildScripts:
+      - name: Build TigerVNC client core
+        script: '"${SRCROOT}/scripts/build-tigervnc.sh"'
+        basedOnDependencyAnalysis: false
+    postBuildScripts:
+      - name: Embed image libraries
+        script: '"${SRCROOT}/scripts/embed-libraries.sh"'
+        basedOnDependencyAnalysis: false

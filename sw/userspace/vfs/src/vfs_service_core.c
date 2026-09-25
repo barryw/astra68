@@ -713,6 +713,30 @@ astra_vfs_service_release_session(AstraVfsService *service, uint32_t session)
     state_release(service);
 }
 
+uint32_t
+astra_vfs_service_shutdown(AstraVfsService *service,
+                           const AstraVfsMountOps *mount, void *context)
+{
+    uint32_t status;
+
+    if (service == NULL || mount == NULL || mount->unmount == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    for (uint32_t index = 0u; index < service->session_capacity; ++index) {
+        uint32_t session = service->sessions[index].id;
+
+        if (session != 0u)
+            astra_vfs_service_release_session(service, session);
+    }
+    if (service->open_sessions != 0u || service->open_files != 0u)
+        return ASTRA_VFS_ERR_BUSY;
+    if (mount->flush != NULL) {
+        status = mount->flush(context);
+        if (status != ASTRA_VFS_OK)
+            return status;
+    }
+    return mount->unmount(context);
+}
+
 static void
 handle_open(AstraVfsService *service, uint32_t session,
             const AstraVfsRequest *request, AstraVfsOpenFile *directory,

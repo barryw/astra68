@@ -17,7 +17,7 @@ TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -ffreestanding -fno-builtin \
 PIC_FLAGS := $(TARGET_FLAGS) -fPIC -fvisibility=hidden
 HOST_FLAGS := -O2 -fno-builtin
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
-TARGET_C_SOURCES := src/startup.c src/lifecycle.c src/service.c src/arguments.c src/syscall.c src/stream_source.c src/executable.c src/launch.c src/port.c src/posix_process.c \
+TARGET_C_SOURCES := src/startup.c src/lifecycle.c src/service.c src/arguments.c src/syscall.c src/stream_source.c src/executable.c src/launch.c src/port.c src/shutdown.c src/posix_process.c \
 	src/event_control.c src/memory.c \
 	src/host_channel_client.c \
 	src/log.c src/sort.c src/assert.c src/event_catalog.c src/allocator_heap.c src/allocator.c \
@@ -72,9 +72,11 @@ DYNAMIC_CRT0 := build/m68k/crt0-dynamic.o
 HOST_TEST := build/host/test_runtime
 STARTUP_SERVICE_TEST := build/host/test_startup_service
 LIFECYCLE_TEST := build/host/test_lifecycle
+SHUTDOWN_CONTRACT_TEST := build/host/test_shutdown_contract
 POSIX_PROCESS_TEST := build/host/test_posix_process
 DYNAMIC_LOADER_TEST := build/host/test_dynamic_loader
 ALLOCATOR_TEST := build/host/test_allocator
+MUTEX_TEST := build/host/test_mutex
 HOST_CHANNEL_CLIENT_TEST := build/host/test_host_channel_client
 DYNAMIC_CONTRACT_LIBRARY := build/contract/dynamic.library
 DYNAMIC_CONTRACT_PROGRAM := build/contract/dynamic.elf
@@ -223,7 +225,7 @@ $(DYNAMIC_CRT0): src/m68k/crt0.S
 	$(CC) $(CPPFLAGS) $(ASTRA_TARGET_ABI_FLAGS) -fPIC \
 		-DASTRA_DYNAMIC_STARTUP=1 $(DEPFLAGS) -c $< -o $@
 
-HOST_TEST_SOURCES := src/startup.c src/arguments.c src/syscall.c src/stream_source.c src/executable.c src/launch.c src/port.c \
+HOST_TEST_SOURCES := src/startup.c src/arguments.c src/syscall.c src/stream_source.c src/executable.c src/launch.c src/port.c src/shutdown.c \
 	src/event_control.c src/memory.c \
 	src/host_channel_client.c \
 	src/sort.c src/log.c src/event_catalog.c src/dynamic_loader.c \
@@ -243,6 +245,11 @@ $(LIFECYCLE_TEST): src/lifecycle.c tests/test_lifecycle.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
+$(SHUTDOWN_CONTRACT_TEST): src/shutdown.c tests/test_shutdown_contract.c ../../include/astra/shutdown.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/shutdown.c tests/test_shutdown_contract.c -o $@
+
 $(POSIX_PROCESS_TEST): src/posix_process.c tests/test_posix_process.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
@@ -252,6 +259,10 @@ $(ALLOCATOR_TEST): src/allocator_heap.c src/allocator.c \
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -pthread \
 		src/allocator_heap.c src/allocator.c tests/test_allocator.c -o $@
+
+$(MUTEX_TEST): tests/test_mutex.c $(NDK)/include/astra/runtime.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $< -o $@
 
 $(HOST_CHANNEL_CLIENT_TEST): src/host_channel_client.c \
 		tests/test_host_channel_client.c
@@ -268,13 +279,16 @@ $(DYNAMIC_LOADER_TEST): src/dynamic_loader.c tests/test_dynamic_loader.c \
 		src/dynamic_process.c tests/test_dynamic_loader.c -o $@
 
 test: $(HOST_TEST) $(STARTUP_SERVICE_TEST) $(LIFECYCLE_TEST) \
+		$(SHUTDOWN_CONTRACT_TEST) \
 		$(POSIX_PROCESS_TEST) $(ALLOCATOR_TEST) $(HOST_CHANNEL_CLIENT_TEST) \
-		$(DYNAMIC_LOADER_TEST)
+		$(DYNAMIC_LOADER_TEST) $(MUTEX_TEST)
 	./$(HOST_TEST)
 	./$(STARTUP_SERVICE_TEST)
 	./$(LIFECYCLE_TEST)
+	./$(SHUTDOWN_CONTRACT_TEST)
 	./$(POSIX_PROCESS_TEST)
 	./$(ALLOCATOR_TEST)
+	./$(MUTEX_TEST)
 	./$(HOST_CHANNEL_CLIENT_TEST)
 	./$(DYNAMIC_LOADER_TEST) $(DYNAMIC_CONTRACT_PROGRAM) \
 		$(DYNAMIC_CONTRACT_LIBRARY) $(DYNAMIC_TLS_CONTRACT_LIBRARY)

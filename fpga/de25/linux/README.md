@@ -40,7 +40,8 @@ The certifier rejects writable mappings, captures one frame through the ioctl,
 and writes exactly the meaningful RGB888 payload from the read-only mapping.
 
 `astra-remote-desktop` exposes that final frame through standard RFB/VNC. The
-production service listens on the Linux host's IPv4 interfaces at port 5900,
+server converts the RGB888 capture to the protocol's 32-bit BGRA pixel format.
+The production service listens on the Linux host's IPv4 interfaces at port 5900,
 so macOS Screen Sharing connects directly to `vnc://192.168.1.52:5900`. The
 required root-owned `/etc/astra/remote-desktop.password` contains the VNC
 password; standard VNC authentication uses at most eight password characters.
@@ -50,6 +51,25 @@ and pointer events use QEMU's dedicated
 `/run/astra/remote-desktop-qmp.sock` monitor and existing `input-send-event`
 path, leaving the diagnostics monitor available. Per-client reference tracking
 releases held keys and buttons when a viewer disconnects.
+
+Audio-capable viewers negotiate QEMU's VNC audio extension. The broker subscribes
+to the final 48 kHz stereo host mix over `/run/astra/audio.sock` only while a
+viewer has enabled audio. The mixer converts the stream to signed-16-bit
+little-endian PCM, and the broker forwards it without blocking the HDMI feeder.
+Other VNC viewers still work for video and input. The live positive/negative
+gate checks negotiation, malformed formats, and a byte-for-byte PCM match; use
+the desktop's built startup PCM as the sample, not a timing-sensitive
+generated tone. Run this on Beast:
+
+```sh
+make -C sw/userspace/services/desktop build/m68k/startup.pcm
+scp sw/userspace/services/desktop/build/m68k/startup.pcm \
+    fpga/de25/linux/test_remote_desktop.py \
+    fpga/de25/linux/test_remote_desktop_audio.py root@192.168.1.52:/tmp/
+ssh root@192.168.1.52 'python3 /tmp/test_remote_desktop_audio.py \
+    --password-file /etc/astra/remote-desktop.password \
+    --pcm-file /tmp/startup.pcm'
+```
 
 Build it against the same Ubuntu 22.04 AArch64 sysroot used for QEMU, with the
 target's `libvncserver-dev` package extracted into that sysroot:

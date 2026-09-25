@@ -1221,8 +1221,11 @@ def refresh_workspace_rom(rom):
 def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         report_timings, prepared_image, performance_only, vim_gate,
         network_only, vim_only, cxx_only, zsh_only, interface_layout_only,
-        sbase_only):
+        sbase_only, shutdown_only, shutdown_veto_only, restart_only,
+        restart_veto_only, restart_menu_only, shutdown_menu_only, ps_only):
     timings = []
+    power_only = (shutdown_only or shutdown_veto_only or restart_only or
+                  restart_veto_only or restart_menu_only or shutdown_menu_only)
     if not refresh_workspace_rom(rom):
         return 1
     with tempfile.TemporaryDirectory(prefix="astra-terminal-") as temporary:
@@ -1230,8 +1233,11 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         shutil.copyfile(image, scratch)
         # Into the copy, so the image this gate was pointed at is untouched.
         if not prepared_image:
-            astra_image.install(scratch, catalog)
-        full_gate = not (performance_only or network_only or vim_only or
+            astra_image.install(
+                scratch, catalog,
+                vim_runtime=None if power_only else
+                    astra_image.DEFAULT_VIM_RUNTIME)
+        full_gate = not (power_only or ps_only or performance_only or network_only or vim_only or
                          cxx_only or zsh_only or interface_layout_only or
                          sbase_only)
         test_commands = []
@@ -1257,7 +1263,7 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                 return 1
             for name in test_commands:
                 astra_image.install_test_command(scratch, name)
-        needs_warm_store = not (performance_only or network_only or vim_only or
+        needs_warm_store = not (power_only or ps_only or performance_only or network_only or vim_only or
                                 cxx_only or zsh_only or interface_layout_only or
                                 sbase_only)
         if needs_warm_store and not warm_the_store(
@@ -1274,7 +1280,77 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                     machine, boot_deadline) else 1
             if not open_terminal(machine, boot_deadline, command_deadline):
                 return 1
-            script = (SBASE_SCRIPT if sbase_only else
+            if restart_menu_only or shutdown_menu_only:
+                action = "Restart" if restart_menu_only else "Shut Down"
+                expected = 89 if restart_menu_only else 88
+                machine.qmp.point(40, 15)
+                machine.qmp.button(True)
+                machine.qmp.button(False)
+                time.sleep(0.2)
+                machine.qmp.point(56, 106 if restart_menu_only else 150)
+                machine.qmp.button(True)
+                machine.qmp.button(False)
+                try:
+                    code = machine.process.wait(timeout=command_deadline)
+                except subprocess.TimeoutExpired:
+                    print("FAIL: ASTRA menu %s did not complete" % action)
+                    for line in machine.recent_serial(20):
+                        print("    %s" % line)
+                    for line in machine.recent_trace(40):
+                        print("    %s" % line)
+                    return 1
+                if code != expected:
+                    print("FAIL: ASTRA menu %s QEMU exit %d, expected %d" %
+                          (action, code, expected))
+                    return 1
+                print("ASTRA MENU %s PASS" % action.upper())
+                return 0
+            if shutdown_only or restart_only:
+                action = "restart" if restart_only else "shutdown"
+                expected = 89 if restart_only else 88
+                machine.qmp.type_line(action)
+                try:
+                    code = machine.process.wait(timeout=command_deadline)
+                except subprocess.TimeoutExpired:
+                    print("FAIL: %s did not complete; recent trace:" % action)
+                    for line in machine.recent_trace(40):
+                        print("    %s" % line)
+                    return 1
+                if code != expected:
+                    print("FAIL: %s QEMU exit %d, expected %d" %
+                          (action, code, expected))
+                    for line in machine.recent_serial(40):
+                        print("    %s" % line)
+                    return 1
+                print("ASTRA %s PASS" % action.upper())
+                return 0
+            if shutdown_veto_only or restart_veto_only:
+                action = "restart" if restart_veto_only else "shutdown"
+                expected = 89 if restart_veto_only else 88
+                machine.qmp.type_line(action + " & read")
+                time.sleep(3.0)
+                if machine.process.poll() is not None:
+                    print("FAIL: %s closed a busy Terminal" % action)
+                    return 1
+                machine.qmp.key("ret")
+                try:
+                    code = machine.process.wait(timeout=command_deadline)
+                except subprocess.TimeoutExpired:
+                    print("FAIL: %s did not resume at a clean prompt" % action)
+                    for line in machine.recent_trace(40):
+                        print("    %s" % line)
+                    return 1
+                if code != expected:
+                    print("FAIL: resumed %s QEMU exit %d, expected %d" %
+                          (action, code, expected))
+                    return 1
+                print("ASTRA %s VETO/RESUME PASS" % action.upper())
+                return 0
+            script = ([('ps; print ASTRA-PS-DONE',
+                        ('/rom/supervisor', 'ASTRA-PS-DONE')),
+                       ('cat /proc/no-such-process; print ASTRA-PROC-MISS-$?',
+                        'ASTRA-PROC-MISS-1')] if ps_only else
+                      SBASE_SCRIPT if sbase_only else
                       ZSH_SCRIPT if zsh_only else
                       [('cxx; cat /proc/libraries/memory',
                         'ASTRA C++ PASS')] if cxx_only else
@@ -1373,6 +1449,9 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                 return 1
             if vim_only:
                 print("ASTRA VIM LUA PASS")
+                return 0
+            if ps_only:
+                print("ASTRA PS PASS")
                 return 0
             if sbase_only:
                 print("ASTRA SBASE PORTABLE PASS")
@@ -1525,6 +1604,20 @@ def main():
                         help="run only the upstream zsh integration gate")
     parser.add_argument("--sbase-only", action="store_true",
                         help="run staged upstream file-command behavior")
+    parser.add_argument("--ps-only", action="store_true",
+                        help="check ps completion and a missing PROC path")
+    parser.add_argument("--shutdown-only", action="store_true",
+                        help="request clean shutdown from Terminal and require QEMU exit 88")
+    parser.add_argument("--shutdown-veto-only", action="store_true",
+                        help="busy Terminal must delay shutdown until zsh returns to a prompt")
+    parser.add_argument("--restart-only", action="store_true",
+                        help="request clean restart from Terminal and require QEMU exit 89")
+    parser.add_argument("--restart-veto-only", action="store_true",
+                        help="busy Terminal must delay restart until zsh returns to a prompt")
+    parser.add_argument("--restart-menu-only", action="store_true",
+                        help="click Restart in the ASTRA menu and require QEMU exit 89")
+    parser.add_argument("--shutdown-menu-only", action="store_true",
+                        help="click Shut Down in the ASTRA menu and require QEMU exit 88")
     parser.add_argument("--interface-layout-only", action="store_true",
                         help="run only the target interface reflow benchmark")
     arguments = parser.parse_args()
@@ -1536,7 +1629,11 @@ def main():
                arguments.performance_only, arguments.vim_gate,
                arguments.network_only, arguments.vim_only,
                arguments.cxx_only, arguments.zsh_only,
-               arguments.interface_layout_only, arguments.sbase_only)
+               arguments.interface_layout_only, arguments.sbase_only,
+               arguments.shutdown_only, arguments.shutdown_veto_only,
+               arguments.restart_only, arguments.restart_veto_only,
+               arguments.restart_menu_only, arguments.shutdown_menu_only,
+               arguments.ps_only)
 
 
 if __name__ == "__main__":

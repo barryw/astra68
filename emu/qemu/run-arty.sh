@@ -237,4 +237,20 @@ if grep -q "\*\*\* AXIOM KERNEL PANIC \*\*\*" "$CONSOLE_LOG"; then
 fi
 trap - EXIT
 cleanup
-exit "$status"
+if [ "$status" -eq 88 ]; then
+    if systemctl poweroff --no-block; then
+        echo "Astra guest shut down cleanly; DE25 poweroff requested"
+        exit 0
+    fi
+    echo "Astra guest shut down, but DE25 poweroff failed" >&2
+fi
+if [ "$status" -eq 89 ]; then
+    if systemctl reboot --no-block; then
+        echo "Astra guest restarted cleanly; DE25 reboot requested"
+        exit 0
+    fi
+    echo "Astra guest restarted, but DE25 reboot failed" >&2
+fi
+# A QEMU exit without the dedicated clean-shutdown code is a runtime failure,
+# including exit 0; systemd must restart it rather than leave Astra absent.
+exit 1

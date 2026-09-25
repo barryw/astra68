@@ -100,6 +100,8 @@ send_reply(uint32_t reply_handle, const AstraPosixProcessRequest *request,
         reply.parent = entry->parent;
         reply.group = entry->group;
         reply.session = entry->session;
+        reply.session_members = posix_process_session_size(
+            &table, entry->session);
     }
     (void)astra_port_send(reply_handle, &reply, sizeof(reply), NULL, 0u);
 }
@@ -331,9 +333,10 @@ astra_main(const AstraStartupInfo *startup)
                 waits[count++] = table.entries[slot].handle;
         status = astra_wait_multiple(waits, count, ASTRA_DEADLINE_FOREVER,
                                      &index, NULL);
-        if (status == ASTRA_SYSCALL_OK && index == 0u)
+        if (status == ASTRA_SYSCALL_OK && index == 0u) {
+            remove_dead();
             process_request();
-        else if (status == ASTRA_SYSCALL_OK ||
+        } else if (status == ASTRA_SYSCALL_OK ||
                  status == ASTRA_SYSCALL_PEER_DEAD)
             remove_dead();
         else {

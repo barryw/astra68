@@ -39,6 +39,10 @@ DEFAULT_COMMANDS = os.path.join(REPOSITORY, "sw/userspace/commands/build/m68k")
 DEFAULT_VIM_RUNTIME = os.path.join(DEFAULT_COMMANDS, "vim-runtime")
 DEFAULT_STARTUP_SOUND = os.path.join(
     REPOSITORY, "sw/userspace/services/desktop/build/m68k/startup.pcm")
+DEFAULT_STARTUP_SOUND_SOURCE = os.path.join(
+    REPOSITORY, "sw/userspace/services/desktop/assets/AstraStartup.wav")
+DEFAULT_STARTUP_SOUND_RENDERER = os.path.join(
+    REPOSITORY, "sw/userspace/services/desktop/render_startup_sound.py")
 SERVICES_DIRECTORY = "services"
 LIBS_DIRECTORY = "libs"
 TERMINFO_DIRECTORY = "terminfo"
@@ -154,7 +158,7 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ "
     "INPUT_SERVICE serves GUI required\n"
     "service /services/media grants HOST_DEVICE serves PCM\n"
-    "application /services/desktop grants GUI APP_LAUNCH APPS:r LIBS:r SYSTEM:r "
+"application /services/desktop grants GUI APP_LAUNCH SERVICE_MANAGER APPS:r LIBS:r SYSTEM:r "
     "NETWORK NETWORK_LISTEN NTP PCM\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("storage", "ramfs", "posixd", "hostfs", "entropy", "network", "ntpd", "events",
@@ -656,11 +660,14 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
         _bundles(apps, APPLICATION_BUNDLES)
     vim_runtime_tree = None if vim_runtime is None else \
         _vim_runtime(vim_runtime)
-    if service_names is not None and "desktop" in service_names and (
-            not os.path.isfile(DEFAULT_STARTUP_SOUND) or
-            os.path.getsize(DEFAULT_STARTUP_SOUND) != 80000 * 4):
-        raise RuntimeError("startup sound asset is missing or stale -- "
-                           "build desktop first")
+    if service_names is not None and "desktop" in service_names:
+        sound_check = subprocess.run(
+            [sys.executable, DEFAULT_STARTUP_SOUND_RENDERER,
+             DEFAULT_STARTUP_SOUND_SOURCE, DEFAULT_STARTUP_SOUND, "--verify"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        if sound_check.returncode != 0:
+            raise RuntimeError("startup sound asset is missing or stale -- "
+                               "build desktop first")
     offset, length = ext4_partition(image)
     with tempfile.TemporaryDirectory(prefix="astra-volume-") as temporary:
         volume = os.path.join(temporary, "volume.img")

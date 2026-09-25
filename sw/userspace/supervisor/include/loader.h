@@ -64,6 +64,8 @@ typedef struct SupervisorManifest {
 
 typedef struct SupervisorProcessRecord {
     uint32_t handle;
+    uint32_t shutdown_send;
+    uint32_t shutdown_managed;
     uint32_t resident;
     uint32_t id;
     uint32_t paused;

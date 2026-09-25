@@ -550,8 +550,10 @@ static AstraResult receive_event(AstraWindow *window, AstraWindowEvent *event,
         message.event.type < ASTRA_WINDOW_EVENT_POINTER_MOTION ||
         message.event.type > ASTRA_WINDOW_EVENT_SYSTEM_ACTION ||
         (message.event.type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION &&
-         (message.event.data.system_action.action !=
+         (message.event.data.system_action.action <
               ASTRA_SYSTEM_ACTION_ABOUT ||
+          message.event.data.system_action.action >
+              ASTRA_SYSTEM_ACTION_RESTART ||
           !astra_words_zero(message.event.data.system_action.reserved, 6u))) ||
         (message.event.type == ASTRA_WINDOW_EVENT_STATE &&
          (message.event.data.state.state > ASTRA_WINDOW_STATE_MAXIMIZED ||

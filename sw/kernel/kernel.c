@@ -1328,6 +1328,16 @@ static void start_initial_user_image(void)
 void kernel_process_initial_image_exited(uint32_t exit_status,
                                          uint32_t exit_reason)
 {
+    if (kernel_process_clean_power_exit(exit_status, exit_reason)) {
+        if (exit_reason == KERNEL_PROCESS_EXIT_RESTART) {
+            console_puts("Initial image ....... CLEAN RESTART\n");
+            kernel_platform_debug_marker(ASTRA_KERNEL_STATUS_RESTART);
+        } else {
+            console_puts("Initial image ....... CLEAN SHUTDOWN\n");
+            kernel_platform_debug_marker(ASTRA_KERNEL_STATUS_SHUTDOWN);
+        }
+        return;
+    }
     console_puts("Initial image ....... EXITED, reason ");
     console_dec32(exit_reason);
     console_puts(" status 0x");

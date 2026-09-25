@@ -620,6 +620,85 @@ reset(void)
         (uint32_t)(sizeof(service_files) / sizeof(service_files[0]))));
 }
 
+typedef struct MountProbe {
+    uint32_t calls;
+    uint32_t fail_flush;
+    uint32_t fail_unmount;
+} MountProbe;
+
+static uint32_t mount_flush(void *context)
+{
+    MountProbe *probe = context;
+
+    assert(probe->calls == 0u);
+    ++probe->calls;
+    return probe->fail_flush ? ASTRA_VFS_ERR_IO : ASTRA_VFS_OK;
+}
+
+static uint32_t mount_unmount(void *context)
+{
+    MountProbe *probe = context;
+
+    ++probe->calls;
+    return probe->fail_unmount ? ASTRA_VFS_ERR_IO : ASTRA_VFS_OK;
+}
+
+static void test_mount_shutdown(void)
+{
+    const AstraVfsMountOps writable = {mount_flush, mount_unmount};
+    const AstraVfsMountOps readonly = {NULL, mount_unmount};
+    const AstraVfsMountOps invalid = {mount_flush, NULL};
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    MountProbe probe = {0};
+    uint32_t session;
+
+    reset();
+    assert(fake_create("/file", ASTRA_VFS_KIND_FILE) != NULL);
+    session = open_session();
+    begin_request(&request, session, "/file");
+    request.flags = ASTRA_VFS_OPEN_READ;
+    astra_vfs_service_dispatch(&service, ASTRA_VFS_OP_OPEN,
+                               &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    assert(fake_find("/file")->open_count == 1);
+    assert(astra_vfs_service_shutdown(&service, &writable, &probe) ==
+           ASTRA_VFS_OK);
+    assert(probe.calls == 2u && service.open_sessions == 0u);
+    assert(fake_find("/file")->open_count == 0);
+
+    reset();
+    probe = (MountProbe){0};
+    assert(astra_vfs_service_shutdown(&service, &readonly, &probe) ==
+           ASTRA_VFS_OK);
+    assert(probe.calls == 1u); /* CDFS flush is a no-op. */
+
+    reset();
+    probe = (MountProbe){.fail_flush = 1u};
+    assert(astra_vfs_service_shutdown(&service, &writable, &probe) ==
+           ASTRA_VFS_ERR_IO);
+    assert(probe.calls == 1u); /* Never unmount after a failed flush. */
+    reset();
+    probe = (MountProbe){.fail_unmount = 1u};
+    assert(astra_vfs_service_shutdown(&service, &writable, &probe) ==
+           ASTRA_VFS_ERR_IO);
+    assert(probe.calls == 2u);
+
+    reset();
+    probe = (MountProbe){0};
+    session = open_session();
+    for (uint32_t index = 0u; index < service.session_capacity; ++index)
+        if (service.sessions[index].id == session)
+            service.sessions[index].inflight = 1u;
+    assert(astra_vfs_service_shutdown(&service, &writable, &probe) ==
+           ASTRA_VFS_ERR_BUSY);
+    assert(probe.calls == 0u);
+    assert(astra_vfs_service_shutdown(NULL, &writable, &probe) ==
+           ASTRA_VFS_ERR_INVALID);
+    assert(astra_vfs_service_shutdown(&service, &invalid, &probe) ==
+           ASTRA_VFS_ERR_INVALID);
+}
+
 static void
 test_last_failed_request_diagnostics(void)
 {
@@ -1908,6 +1987,7 @@ test_client_through_transport(void)
 int
 main(void)
 {
+    test_mount_shutdown();
     test_last_failed_request_diagnostics();
     test_terminal_readdir_cookie();
     test_session_handshake();

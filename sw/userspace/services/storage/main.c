@@ -17,6 +17,8 @@
 
 #include <ext4.h>
 
+#include "shutdown.h"
+
 #define MOUNT_POINT "/vol/"
 #define DEVICE_NAME "astra"
 #define STORAGE_WORKER_MAX (ASTRA_BLOCK_MAX_REQUESTS_PER_SERVICE + 1u)
@@ -64,9 +66,22 @@ static _Alignas(4) uint32_t fill_lock;
 static _Alignas(4) uint32_t backend_table_lock;
 static _Alignas(4) uint32_t backend_scan_lock;
 static uint32_t journal_timer;
+static uint32_t shutdown_event;
+static uint32_t shutdown_receive;
+static uint32_t shutdown_reply;
+static uint32_t shutdown_transaction;
 static uint32_t journal_thread_handle;
 static AstraThreadStart journal_thread_start;
 static uint32_t mount_readers;
+static volatile uint32_t shutdown_requested;
+static uint32_t worker_failed;
+static _Alignas(16) uint8_t signal_stack[4096u];
+
+static void storage_signal(int number)
+{
+    if (number == (int)ASTRA_SIGNAL_TERMINATE)
+        shutdown_requested = 1u;
+}
 
 static void storage_lock_failure(const char *operation, uint32_t status)
 {
@@ -230,8 +245,6 @@ static uint32_t mount_volume(uint32_t device, uint32_t irq)
     return ASTRA_STATUS_OK;
 }
 
-static void storage_worker(uint32_t index) __attribute__((noreturn));
-
 static void journal_worker(uint32_t unused) __attribute__((noreturn));
 
 static void journal_worker(uint32_t unused)
@@ -239,15 +252,23 @@ static void journal_worker(uint32_t unused)
     (void)unused;
     for (;;) {
         uint64_t deadline = astra_clock_monotonic() + JOURNAL_COMMIT_NS;
-        uint32_t status = astra_wait_one(journal_timer, deadline, NULL);
+        uint32_t handles[2] = {shutdown_event, journal_timer};
+        uint32_t index = ASTRA_WAIT_INDEX_NONE;
+        uint32_t status = astra_wait_multiple(handles, 2u, deadline,
+                                              &index, NULL);
+
+        if (status == ASTRA_SYSCALL_OK && index == 0u)
+            astra_thread_exit(ASTRA_STATUS_OK);
 
         if (status != ASTRA_SYSCALL_TIMED_OUT) {
             (void)astra_log_failure("storage journal timer", status);
+            __atomic_store_n(&worker_failed, 1u, __ATOMIC_RELEASE);
             astra_thread_exit(status);
         }
         status = (uint32_t)ext4_journal_commit(MOUNT_POINT);
         if (status != EOK) {
             (void)astra_log_failure("storage journal commit", status);
+            __atomic_store_n(&worker_failed, 1u, __ATOMIC_RELEASE);
             astra_thread_exit(STORAGE_FAIL_JOURNAL);
         }
     }
@@ -258,15 +279,71 @@ static void storage_worker(uint32_t index)
     if (index >= worker_count)
         astra_thread_exit(ASTRA_STATUS_INVALID);
     for (;;) {
-        uint32_t status = astra_wait_one(port.receive,
-                                         ASTRA_DEADLINE_FOREVER, NULL);
+        uint32_t handles[3] = {shutdown_event, port.receive,
+                               shutdown_receive};
+        uint32_t ready = ASTRA_WAIT_INDEX_NONE;
+        uint32_t status = astra_wait_multiple(
+            handles, index == 0u && shutdown_receive != 0u ? 3u : 2u,
+            ASTRA_DEADLINE_FOREVER, &ready, NULL);
 
+        if (status == ASTRA_SYSCALL_OK && ready == 0u)
+            break;
+        if (status == ASTRA_SYSCALL_OK && ready == 2u) {
+            AstraShutdownRequest request = {0};
+
+            status = astra_shutdown_receive(shutdown_receive, &request,
+                                             &shutdown_reply);
+            if (status != ASTRA_SYSCALL_OK) {
+                __atomic_store_n(&worker_failed, 1u, __ATOMIC_RELEASE);
+                break;
+            }
+            shutdown_transaction = request.header.transaction_id;
+            shutdown_requested = 1u;
+            break;
+        }
+        if (index == 0u && shutdown_requested != 0u)
+            break;
+        if (status == ASTRA_SYSCALL_CANCELLED)
+            continue;
         if (status != ASTRA_SYSCALL_OK) {
             (void)astra_log_failure("storage receive wait", status);
+            __atomic_store_n(&worker_failed, 1u, __ATOMIC_RELEASE);
             astra_thread_exit(status);
         }
         (void)astra_vfs_port_service_worker_pump(&port, &workers[index], 1u);
     }
+    if (index != 0u)
+        astra_thread_exit(ASTRA_STATUS_OK);
+}
+
+static uint32_t finish_storage(void)
+{
+    const AstraVfsMountOps mount = {
+        storage_flush_volume, storage_unmount_volume
+    };
+    uint32_t status;
+
+    status = astra_rt_signal(shutdown_event, 1u, NULL);
+    if (status != ASTRA_SYSCALL_OK)
+        return ASTRA_STATUS_IO;
+    for (uint32_t index = 1u; index < worker_count; ++index) {
+        status = astra_wait_one(worker_handles[index - 1u],
+                                ASTRA_DEADLINE_FOREVER, NULL);
+        if (status != ASTRA_SYSCALL_OK)
+            return ASTRA_STATUS_IO;
+        (void)astra_close(worker_handles[index - 1u]);
+    }
+    status = astra_wait_one(journal_thread_handle,
+                            ASTRA_DEADLINE_FOREVER, NULL);
+    if (status != ASTRA_SYSCALL_OK)
+        return ASTRA_STATUS_IO;
+    (void)astra_close(journal_thread_handle);
+    if (__atomic_load_n(&worker_failed, __ATOMIC_ACQUIRE) != 0u)
+        return ASTRA_STATUS_IO;
+    while (astra_vfs_port_service_worker_pump(&port, &workers[0], 1u) != 0u) {}
+    if (port.stalled != 0u)
+        return ASTRA_STATUS_IO;
+    return astra_vfs_service_shutdown(&service, &mount, &block);
 }
 
 int astra_main(const AstraStartupInfo *startup)
@@ -276,6 +353,7 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *bootstrap;
     uint32_t receive = 0u;
     uint32_t send = 0u;
+    uint32_t shutdown_send = 0u;
     uint32_t status;
 
     if (!astra_startup_validate(startup))
@@ -289,7 +367,10 @@ int astra_main(const AstraStartupInfo *startup)
         return ASTRA_STATUS_BAD_HANDLE;
 
     if (astra_rt_semaphore_create(0u, 1u, ASTRA_RIGHT_WAIT,
-                                  &journal_timer) != ASTRA_SYSCALL_OK)
+                                  &journal_timer) != ASTRA_SYSCALL_OK ||
+        astra_rt_event_create(ASTRA_EVENT_MANUAL_RESET,
+                              ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL,
+                              &shutdown_event) != ASTRA_SYSCALL_OK)
         status = STORAGE_FAIL_LOCK;
     else
         status = mount_volume(device->handle, irq->handle);
@@ -342,38 +423,61 @@ int astra_main(const AstraStartupInfo *startup)
             &port, astra_vfs_state_lock_acquire,
             astra_vfs_state_lock_release, &state_lock))
         status = STORAGE_FAIL_LOCK;
+    if (status == ASTRA_STATUS_OK &&
+        (status = astra_rt_signal_configure(
+            storage_signal, signal_stack + sizeof(signal_stack),
+            0u, NULL, NULL)) != ASTRA_SYSCALL_OK) {
+        (void)astra_log_failure("storage signal configure", status);
+        status = STORAGE_FAIL_THREAD;
+    }
 
     if (status == ASTRA_STATUS_OK) {
         AstraProcessInfo info = {0};
         uint32_t process_handle = 0u;
 
-        if (astra_query_abi(NULL, &process_handle, NULL) != ASTRA_SYSCALL_OK ||
-            astra_process_info(process_handle, &info) != ASTRA_SYSCALL_OK)
+        uint32_t query = astra_query_abi(NULL, &process_handle, NULL);
+
+        if (query == ASTRA_SYSCALL_OK)
+            query = astra_process_info(process_handle, &info);
+        if (query != ASTRA_SYSCALL_OK) {
+            (void)astra_log_failure("storage thread process info", query);
             status = STORAGE_FAIL_THREAD;
+        }
         for (uint32_t index = 1u;
              status == ASTRA_STATUS_OK && index < worker_count; ++index) {
             worker_starts[index - 1u].entry = storage_worker;
             worker_starts[index - 1u].argument = index;
-            if (astra_rt_thread_create(
+            uint32_t created = astra_rt_thread_create(
                     &worker_starts[index - 1u], info.default_priority,
                     ASTRA_RIGHT_READ | ASTRA_RIGHT_WAIT,
-                    &worker_handles[index - 1u], NULL) != ASTRA_SYSCALL_OK)
+                    &worker_handles[index - 1u], NULL);
+            if (created != ASTRA_SYSCALL_OK) {
+                (void)astra_log_failure("storage worker thread", created);
                 status = STORAGE_FAIL_THREAD;
+            }
         }
         if (status == ASTRA_STATUS_OK) {
             journal_thread_start.entry = journal_worker;
             journal_thread_start.argument = 0u;
-            if (astra_rt_thread_create(
+            uint32_t created = astra_rt_thread_create(
                     &journal_thread_start, info.default_priority,
                     ASTRA_RIGHT_READ | ASTRA_RIGHT_WAIT,
-                    &journal_thread_handle, NULL) != ASTRA_SYSCALL_OK)
+                    &journal_thread_handle, NULL);
+            if (created != ASTRA_SYSCALL_OK) {
+                (void)astra_log_failure("storage journal thread", created);
                 status = STORAGE_FAIL_THREAD;
+            }
         }
     }
 
+    if (status == ASTRA_STATUS_OK &&
+        astra_rt_port_create(1u, sizeof(AstraShutdownRequest),
+                             &shutdown_receive, &shutdown_send) !=
+            ASTRA_SYSCALL_OK)
+        status = STORAGE_FAIL_PORT;
     {
-        uint32_t ready_status = astra_service_ready(bootstrap->handle, status,
-                                                    &send, 1u);
+        uint32_t ready_status = astra_service_ready_managed(
+            bootstrap->handle, status, &send, 1u, shutdown_send);
 
         if (ready_status != ASTRA_SYSCALL_OK) {
             (void)astra_log_failure("storage ready send", ready_status);
@@ -381,9 +485,21 @@ int astra_main(const AstraStartupInfo *startup)
                 status = STORAGE_FAIL_READY;
         }
     }
+    if (shutdown_send != 0u)
+        (void)astra_close(shutdown_send);
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_STATUS_OK)
         return (int)status;
 
     storage_worker(0u);
+    status = finish_storage();
+    if (shutdown_reply != 0u)
+        (void)astra_shutdown_respond(
+            shutdown_reply, shutdown_transaction,
+            status == ASTRA_STATUS_OK ? ASTRA_SHUTDOWN_READY :
+                                        ASTRA_SHUTDOWN_CANCEL,
+            status);
+    if (status != ASTRA_STATUS_OK)
+        (void)astra_log_failure("storage shutdown", status);
+    return (int)status;
 }

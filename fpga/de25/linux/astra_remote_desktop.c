@@ -2,6 +2,8 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <astra/display_capture.h>
+#include <astra/audio_host.h>
+#include <astra/status.h>
 
 #include "astra_display_capture_uapi.h"
 
@@ -22,6 +24,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #define ASTRA_CAPTURE_DEVICE "/dev/astra-display-capture"
@@ -32,6 +35,7 @@
 #define ASTRA_RFB_PASSWORD_MAX 8u
 #define ASTRA_INPUT_STATUS_ADDRESS UINT32_C(0xfff0070c)
 #define ASTRA_INPUT_LEVEL_MASK UINT32_C(0x1f)
+#define ASTRA_RFB_AUDIO_ENCODING (-259)
 
 struct astra_remote_key {
     const char *qcode;
@@ -50,6 +54,9 @@ struct astra_remote_client_key {
 struct astra_remote_client {
     struct astra_remote_client_key *keys;
     unsigned int buttons;
+    bool audio_advertised;
+    bool audio_format_valid;
+    bool audio_enabled;
 };
 
 struct astra_remote_desktop {
@@ -68,8 +75,12 @@ struct astra_remote_server {
     rfbScreenInfoPtr screen;
     const uint8_t *frame;
     uint8_t *previous_frame;
+    uint8_t *rfb_frame;
     char *passwords[2];
     int capture;
+    int audio_fd;
+    const char *audio_path;
+    time_t audio_retry_at;
     bool have_frame;
     unsigned int generation;
 };
@@ -693,6 +704,240 @@ static enum rfbNewClientAction astra_remote_client_new(rfbClientPtr client)
     return RFB_CLIENT_ACCEPT;
 }
 
+static bool astra_remote_audio_format_valid(const uint8_t format[6])
+{
+    return format[0] == 3u && format[1] == 2u &&
+           format[2] == 0u && format[3] == 0u &&
+           format[4] == 0xbbu && format[5] == 0x80u;
+}
+
+static bool astra_remote_audio_packet_valid(
+    const AstraAudioHostMonitorPacket *packet, ssize_t length)
+{
+    return length >= 12 && packet->magic == ASTRA_AUDIO_HOST_MAGIC &&
+           packet->version == ASTRA_AUDIO_HOST_VERSION &&
+           packet->frames > 0u &&
+           packet->frames <= ASTRA_AUDIO_HOST_MONITOR_FRAMES &&
+           length == (ssize_t)(12u + packet->frames * 4u);
+}
+
+static rfbBool astra_remote_audio_extension_new(rfbClientPtr client,
+                                                 void **data)
+{
+    (void)client;
+    *data = NULL;
+    return TRUE;
+}
+
+static rfbBool astra_remote_audio_encoding(rfbClientPtr client, void **data,
+                                            int encoding)
+{
+    static const uint8_t advertised[16] = {
+        0u, 0u, 0u, 1u, /* FramebufferUpdate, one rectangle. */
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+        0xffu, 0xffu, 0xfeu, 0xfdu, /* QEMU audio: -259. */
+    };
+    struct astra_remote_client *state = client->clientData;
+
+    (void)data;
+    if (encoding != ASTRA_RFB_AUDIO_ENCODING || state == NULL)
+        return FALSE;
+    state->audio_advertised = true;
+    if (rfbWriteExact(client, (const char *)advertised,
+                      sizeof(advertised)) != 1)
+        rfbCloseClient(client);
+    return TRUE;
+}
+
+static rfbBool astra_remote_audio_message(rfbClientPtr client, void *data,
+                                           const rfbClientToServerMsg *message)
+{
+    struct astra_remote_client *state = client->clientData;
+    uint8_t header[3];
+    uint8_t format[6];
+    uint16_t operation;
+
+    (void)data;
+    if (message->type != 255u)
+        return FALSE;
+    if (state == NULL || !state->audio_advertised ||
+        rfbReadExact(client, (char *)header, sizeof(header)) != 1 ||
+        header[0] != 1u) {
+        rfbCloseClient(client);
+        return TRUE;
+    }
+    operation = ((uint16_t)header[1] << 8) | header[2];
+    switch (operation) {
+    case 2u: /* SetFormat */
+        if (rfbReadExact(client, (char *)format, sizeof(format)) != 1) {
+            rfbCloseClient(client);
+            break;
+        }
+        state->audio_format_valid = astra_remote_audio_format_valid(format);
+        if (!state->audio_format_valid)
+            rfbCloseClient(client);
+        break;
+    case 0u: /* Enable */
+        if (!state->audio_format_valid) {
+            rfbCloseClient(client);
+            break;
+        }
+        if (!state->audio_enabled) {
+            static const uint8_t begin[4] = {255u, 1u, 0u, 1u};
+
+            state->audio_enabled = true;
+            if (rfbWriteExact(client, (const char *)begin, sizeof(begin)) != 1)
+                rfbCloseClient(client);
+        }
+        break;
+    case 1u: /* Disable */
+        if (state->audio_enabled) {
+            static const uint8_t end[4] = {255u, 1u, 0u, 0u};
+
+            state->audio_enabled = false;
+            if (rfbWriteExact(client, (const char *)end, sizeof(end)) != 1)
+                rfbCloseClient(client);
+        }
+        break;
+    default:
+        rfbCloseClient(client);
+        break;
+    }
+    return TRUE;
+}
+
+static int astra_remote_audio_encodings[] = {ASTRA_RFB_AUDIO_ENCODING, 0};
+static rfbProtocolExtension astra_remote_audio_extension = {
+    .newClient = astra_remote_audio_extension_new,
+    .pseudoEncodings = astra_remote_audio_encodings,
+    .enablePseudoEncoding = astra_remote_audio_encoding,
+    .handleMessage = astra_remote_audio_message,
+};
+
+static bool astra_remote_audio_wanted(rfbScreenInfoPtr screen)
+{
+    rfbClientIteratorPtr iterator = rfbGetClientIterator(screen);
+    rfbClientPtr client;
+    bool wanted = false;
+
+    while ((client = rfbClientIteratorNext(iterator)) != NULL) {
+        const struct astra_remote_client *state = client->clientData;
+
+        if (state != NULL && state->audio_enabled) {
+            wanted = true;
+            break;
+        }
+    }
+    rfbReleaseClientIterator(iterator);
+    return wanted;
+}
+
+static int astra_remote_audio_connect(const char *path)
+{
+    struct sockaddr_un address = {.sun_family = AF_UNIX};
+    AstraAudioHostRequest request = {
+        .magic = ASTRA_AUDIO_HOST_MAGIC,
+        .version = ASTRA_AUDIO_HOST_VERSION,
+        .operation = ASTRA_AUDIO_HOST_MONITOR,
+    };
+    AstraAudioHostReply reply;
+    struct pollfd event;
+    int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+
+    if (fd < 0)
+        return -1;
+    if (strlen(path) >= sizeof(address.sun_path))
+        goto failed;
+    memcpy(address.sun_path, path, strlen(path) + 1u);
+    if (connect(fd, (struct sockaddr *)&address, sizeof(address)) != 0 ||
+        send(fd, &request, sizeof(request), MSG_DONTWAIT | MSG_NOSIGNAL) !=
+            sizeof(request))
+        goto failed;
+    event = (struct pollfd){.fd = fd, .events = POLLIN};
+    if (poll(&event, 1u, 20) != 1 ||
+        recv(fd, &reply, sizeof(reply), MSG_DONTWAIT | MSG_TRUNC) !=
+            sizeof(reply) ||
+        reply.magic != ASTRA_AUDIO_HOST_MAGIC ||
+        reply.status != ASTRA_STATUS_OK)
+        goto failed;
+    return fd;
+
+failed:
+    (void)close(fd);
+    return -1;
+}
+
+static void astra_remote_audio_send(rfbScreenInfoPtr screen,
+                                     const AstraAudioHostMonitorPacket *packet)
+{
+    uint8_t message[8u + ASTRA_AUDIO_HOST_MONITOR_FRAMES * 4u] = {
+        255u, 1u, 0u, 2u,
+    };
+    uint32_t bytes = packet->frames * 4u;
+    rfbClientIteratorPtr iterator = rfbGetClientIterator(screen);
+    rfbClientPtr client;
+
+    message[4] = (uint8_t)(bytes >> 24);
+    message[5] = (uint8_t)(bytes >> 16);
+    message[6] = (uint8_t)(bytes >> 8);
+    message[7] = (uint8_t)bytes;
+    memcpy(message + 8u, packet->pcm, bytes);
+    while ((client = rfbClientIteratorNext(iterator)) != NULL) {
+        const struct astra_remote_client *state = client->clientData;
+        struct pollfd event = {.fd = client->sock, .events = POLLOUT};
+
+        if (state != NULL && state->audio_enabled &&
+            poll(&event, 1u, 0) == 1 && (event.revents & POLLOUT) != 0) {
+            /* A partial stream write would desynchronize RFB: drop that
+             * slow client, never stall the desktop or the audio mixer. */
+            if (send(client->sock, message, 8u + bytes,
+                     MSG_DONTWAIT | MSG_NOSIGNAL) != (ssize_t)(8u + bytes))
+                rfbCloseClient(client);
+        }
+    }
+    rfbReleaseClientIterator(iterator);
+}
+
+static void astra_remote_audio_poll(struct astra_remote_server *server)
+{
+    AstraAudioHostMonitorPacket packet;
+    time_t now;
+    ssize_t length;
+
+    if (!astra_remote_audio_wanted(server->screen)) {
+        if (server->audio_fd >= 0) {
+            (void)close(server->audio_fd);
+            server->audio_fd = -1;
+        }
+        return;
+    }
+    if (server->audio_fd < 0) {
+        now = time(NULL);
+        if (now < server->audio_retry_at)
+            return;
+        server->audio_retry_at = now + 1;
+        server->audio_fd = astra_remote_audio_connect(server->audio_path);
+        if (server->audio_fd < 0)
+            return;
+        fputs("Astra remote desktop: audio monitor connected\n", stderr);
+    }
+    while ((length = recv(server->audio_fd, &packet, sizeof(packet),
+                          MSG_DONTWAIT | MSG_TRUNC)) > 0) {
+        if (!astra_remote_audio_packet_valid(&packet, length)) {
+            fputs("Astra remote desktop: invalid audio monitor packet\n",
+                  stderr);
+            errno = EPROTO;
+            length = -1;
+            break;
+        }
+        astra_remote_audio_send(server->screen, &packet);
+    }
+    if (length == 0 || (length < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+        (void)close(server->audio_fd);
+        server->audio_fd = -1;
+    }
+}
+
 static int astra_remote_network_config(const char *address_text,
                                        const char *password,
                                        in_addr_t *listen_interface)
@@ -754,20 +999,51 @@ static int astra_remote_password_read(const char *path,
 
 static void astra_remote_pixel_format(rfbPixelFormat *format)
 {
-    format->bitsPerPixel = 24;
+    format->bitsPerPixel = 32;
     format->depth = 24;
     format->bigEndian = 0u;
     format->trueColour = 1u;
     format->redMax = 255;
     format->greenMax = 255;
     format->blueMax = 255;
-    format->redShift = 0;
+    format->redShift = 16;
     format->greenShift = 8;
-    format->blueShift = 16;
+    format->blueShift = 0;
+}
+
+static bool astra_remote_pixel_format_valid(const rfbPixelFormat *format)
+{
+    return format->bitsPerPixel == 32 && format->depth == 24 &&
+           format->bigEndian == 0u && format->trueColour == 1u &&
+           format->redMax == 255 && format->greenMax == 255 &&
+           format->blueMax == 255 && format->redShift == 16 &&
+           format->greenShift == 8 && format->blueShift == 0;
+}
+
+static inline void astra_remote_pixel_to_bgra(uint8_t *output,
+                                               const uint8_t *input)
+{
+    output[0] = input[2];
+    output[1] = input[1];
+    output[2] = input[0];
+    output[3] = 0u;
+}
+
+static void astra_remote_frame_convert(const uint8_t *input, uint8_t *output,
+                                       unsigned int width,
+                                       unsigned int height)
+{
+    size_t pixels = (size_t)width * height;
+    size_t index;
+
+    for (index = 0u; index < pixels; ++index)
+        astra_remote_pixel_to_bgra(output + index * 4u,
+                                    input + index * 3u);
 }
 
 static bool astra_remote_damage_find(const uint8_t *current,
                                      const uint8_t *previous,
+                                     uint8_t *rendered,
                                      unsigned int width,
                                      unsigned int height,
                                      struct astra_remote_damage *damage)
@@ -784,6 +1060,9 @@ static bool astra_remote_damage_find(const uint8_t *current,
                 current[offset + 1u] == previous[offset + 1u] &&
                 current[offset + 2u] == previous[offset + 2u])
                 continue;
+            astra_remote_pixel_to_bgra(rendered +
+                                        ((size_t)y * width + x) * 4u,
+                                        current + offset);
             if (!changed) {
                 damage->x1 = x;
                 damage->y1 = y;
@@ -810,13 +1089,25 @@ static int astra_remote_self_test(void)
     in_addr_t listen_interface;
     char password[ASTRA_RFB_PASSWORD_MAX + 1u];
     rfbPixelFormat format = {0};
+    rfbPixelFormat invalid_format;
     struct astra_remote_damage damage;
     uint8_t previous[18] = {0};
     uint8_t current[18] = {0};
+    uint8_t rendered[24] = {0};
     uint32_t input_status;
+    AstraAudioHostMonitorPacket audio_packet = {
+        .magic = ASTRA_AUDIO_HOST_MAGIC,
+        .version = ASTRA_AUDIO_HOST_VERSION,
+        .frames = 1u,
+    };
 
     astra_remote_pixel_format(&format);
+    invalid_format = format;
+    invalid_format.bitsPerPixel = 24;
     current[(1u * 3u + 2u) * 3u] = 1u;
+    current[(1u * 3u + 2u) * 3u + 1u] = 2u;
+    current[(1u * 3u + 2u) * 3u + 2u] = 3u;
+    astra_remote_frame_convert(previous, rendered, 3u, 2u);
 
     if (strcmp(astra_qcode_for_keysym(XK_A), "a") != 0 ||
         strcmp(astra_qcode_for_keysym(XK_exclam), "1") != 0 ||
@@ -851,11 +1142,8 @@ static int astra_remote_self_test(void)
         strcmp(password, "Astra68!") != 0 ||
         astra_remote_password_parse("\n", password) == 0 ||
         astra_remote_password_parse("123456789", password) == 0 ||
-        format.bitsPerPixel != 24 || format.depth != 24 ||
-        format.bigEndian != 0u || format.trueColour != 1u ||
-        format.redMax != 255 || format.greenMax != 255 ||
-        format.blueMax != 255 || format.redShift != 0 ||
-        format.greenShift != 8 || format.blueShift != 16 ||
+        !astra_remote_pixel_format_valid(&format) ||
+        astra_remote_pixel_format_valid(&invalid_format) ||
         astra_remote_button_transition(0u, 0u) ||
         astra_remote_button_transition(0u, 8u) ||
         astra_remote_button_transition(0u, 64u) ||
@@ -865,11 +1153,33 @@ static int astra_remote_self_test(void)
         astra_remote_wheel_transitions(8u, 8u) != 0u ||
         astra_remote_wheel_transitions(8u, 0u) != 0u ||
         astra_remote_wheel_transitions(0u, 32u | 64u) != (32u | 64u) ||
-        astra_remote_damage_find(previous, previous, 3u, 2u,
+        astra_remote_damage_find(previous, previous, rendered, 3u, 2u,
                                  &damage) ||
-        !astra_remote_damage_find(current, previous, 3u, 2u, &damage) ||
+        !astra_remote_damage_find(current, previous, rendered, 3u, 2u,
+                                  &damage) ||
         damage.x1 != 2u || damage.y1 != 1u ||
-        damage.x2 != 3u || damage.y2 != 2u)
+        damage.x2 != 3u || damage.y2 != 2u ||
+        rendered[(1u * 3u + 2u) * 4u] != 3u ||
+        rendered[(1u * 3u + 2u) * 4u + 1u] != 2u ||
+        rendered[(1u * 3u + 2u) * 4u + 2u] != 1u ||
+        rendered[(1u * 3u + 2u) * 4u + 3u] != 0u ||
+        rendered[0] != 0u)
+        return EXIT_FAILURE;
+    if (!astra_remote_audio_format_valid(
+            (const uint8_t[]){3u, 2u, 0u, 0u, 0xbbu, 0x80u}) ||
+        astra_remote_audio_format_valid(
+            (const uint8_t[]){3u, 1u, 0u, 0u, 0xbbu, 0x80u}) ||
+        astra_remote_audio_format_valid(
+            (const uint8_t[]){3u, 2u, 0u, 0u, 0xacu, 0x44u}) ||
+        !astra_remote_audio_packet_valid(&audio_packet, 16) ||
+        astra_remote_audio_packet_valid(&audio_packet, 15) ||
+        astra_remote_audio_packet_valid(&audio_packet, 17))
+        return EXIT_FAILURE;
+    audio_packet.frames = 0u;
+    if (astra_remote_audio_packet_valid(&audio_packet, 12))
+        return EXIT_FAILURE;
+    audio_packet.frames = ASTRA_AUDIO_HOST_MONITOR_FRAMES + 1u;
+    if (astra_remote_audio_packet_valid(&audio_packet, 16))
         return EXIT_FAILURE;
     puts("ASTRA_REMOTE_DESKTOP_SELF_TEST PASS");
     return EXIT_SUCCESS;
@@ -877,6 +1187,10 @@ static int astra_remote_self_test(void)
 
 static void astra_remote_server_stop(struct astra_remote_server *server)
 {
+    if (server->audio_fd >= 0) {
+        (void)close(server->audio_fd);
+        server->audio_fd = -1;
+    }
     if (server->screen != NULL) {
         rfbShutdownServer(server->screen, TRUE);
         rfbScreenCleanup(server->screen);
@@ -895,6 +1209,8 @@ static void astra_remote_server_stop(struct astra_remote_server *server)
     server->desktop.pointer_dirty = false;
     free(server->previous_frame);
     server->previous_frame = NULL;
+    free(server->rfb_frame);
+    server->rfb_frame = NULL;
     server->have_frame = false;
     if (server->frame != MAP_FAILED) {
         (void)munmap((void *)(uintptr_t)server->frame,
@@ -929,20 +1245,22 @@ static int astra_remote_server_start(struct astra_remote_server *server,
         return -1;
     }
     server->previous_frame = malloc(ASTRA_DISPLAY_CAPTURE_FRAME_BYTES);
-    if (server->previous_frame == NULL) {
+    server->rfb_frame = malloc((size_t)ASTRA_DISPLAY_CAPTURE_WIDTH *
+                               ASTRA_DISPLAY_CAPTURE_HEIGHT * 4u);
+    if (server->previous_frame == NULL || server->rfb_frame == NULL) {
         astra_remote_server_stop(server);
         return -1;
     }
     server->screen = rfbGetScreen(&rfb_argc, rfb_argv,
                                   ASTRA_DISPLAY_CAPTURE_WIDTH,
-                                  ASTRA_DISPLAY_CAPTURE_HEIGHT, 8, 3, 3);
+                                  ASTRA_DISPLAY_CAPTURE_HEIGHT, 8, 3, 4);
     if (server->screen == NULL) {
         fputs("Astra remote desktop: cannot create RFB server\n", stderr);
         astra_remote_server_stop(server);
         return -1;
     }
     server->screen->screenData = &server->desktop;
-    server->screen->frameBuffer = (char *)(uintptr_t)server->frame;
+    server->screen->frameBuffer = (char *)server->rfb_frame;
     server->screen->desktopName = "Astra 68";
     /* The captured frame already contains Astra's hardware pointer. */
     rfbSetCursor(server->screen, NULL);
@@ -961,6 +1279,7 @@ static int astra_remote_server_start(struct astra_remote_server *server,
     server->screen->kbdReleaseAllKeys = astra_remote_release_keys;
     server->screen->ptrAddEvent = astra_remote_pointer_event;
     server->screen->newClientHook = astra_remote_client_new;
+    server->screen->maxClientWait = 1000;
     astra_remote_pixel_format(&server->screen->serverFormat);
     rfbInitServer(server->screen);
     if (!rfbIsActive(server->screen)) {
@@ -1070,6 +1389,7 @@ int main(int argc, char **argv)
         "ASTRA_REMOTE_DESKTOP_CONTROL_SOCKET");
     const char *listen_environment = getenv("ASTRA_RFB_LISTEN_ADDRESS");
     const char *password_path = getenv("ASTRA_RFB_PASSWORD_FILE");
+    const char *audio_environment = getenv("ASTRA_AUDIO_HOST_SOCKET");
     char password_storage[ASTRA_RFB_PASSWORD_MAX + 1u] = {0};
     const char *password;
     const char *listen_address =
@@ -1086,6 +1406,9 @@ int main(int argc, char **argv)
         },
         .frame = MAP_FAILED,
         .capture = -1,
+        .audio_fd = -1,
+        .audio_path = audio_environment != NULL && *audio_environment != '\0' ?
+            audio_environment : ASTRA_AUDIO_HOST_SOCKET,
     };
     int listener = -1;
     int lease = -1;
@@ -1099,6 +1422,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: %s [--self-test]\n", argv[0]);
         return EXIT_FAILURE;
     }
+    rfbRegisterProtocolExtension(&astra_remote_audio_extension);
     if (astra_port_from_environment(getenv("ASTRA_RFB_PORT"), &port) != 0) {
         fputs("Astra remote desktop: invalid ASTRA_RFB_PORT\n", stderr);
         goto done;
@@ -1187,6 +1511,7 @@ int main(int argc, char **argv)
             lease = -1;
             continue;
         }
+        astra_remote_audio_poll(&server);
         if (server.screen->clientHead == NULL)
             continue;
         {
@@ -1216,8 +1541,11 @@ int main(int argc, char **argv)
                 damage.y1 = 0u;
                 damage.x2 = info.width;
                 damage.y2 = info.height;
+                astra_remote_frame_convert(server.frame, server.rfb_frame,
+                                           info.width, info.height);
             } else if (!astra_remote_damage_find(
                            server.frame, server.previous_frame,
+                           server.rfb_frame,
                            info.width, info.height, &damage)) {
                 continue;
             }
@@ -1236,5 +1564,6 @@ done:
         (void)close(listener);
         (void)unlink(control_path);
     }
+    rfbUnregisterProtocolExtension(&astra_remote_audio_extension);
     return status;
 }

@@ -35,7 +35,8 @@ $(CERTIFIER): astra_display_capture_certify.c \
 	$(CC) $(CFLAGS) $< -o $@
 
 $(REMOTE_DESKTOP): astra_remote_desktop.c astra_display_capture_uapi.h \
-		$(ROOT)/sw/include/astra/display_capture.h Makefile
+		$(ROOT)/sw/include/astra/display_capture.h \
+		$(ROOT)/sw/include/astra/audio_host.h Makefile
 	test -r $(DE25_SYSROOT)/usr/include/rfb/rfb.h
 	test -r $(DE25_SYSROOT)/usr/lib/aarch64-linux-gnu/libvncserver.so
 	mkdir -p $(OUT)

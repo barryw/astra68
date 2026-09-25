@@ -100,7 +100,11 @@ enum {
     ASTRA_WINDOW_EVENT_SYSTEM_ACTION = 10
 };
 
-enum { ASTRA_SYSTEM_ACTION_ABOUT = 1u };
+enum {
+    ASTRA_SYSTEM_ACTION_ABOUT = 1u,
+    ASTRA_SYSTEM_ACTION_SHUTDOWN = 2u,
+    ASTRA_SYSTEM_ACTION_RESTART = 3u
+};
 
 /** Window event subscription mask. */
 enum {

@@ -1,6 +1,7 @@
 /* Terminal transport and lifecycle for one interactive zsh session. */
 
 #include <console_session.h>
+#include <console_shutdown.h>
 #include <console_stream.h>
 
 #include <astra/application_service.h>
@@ -32,6 +33,11 @@ typedef struct ConsoleSession {
     uint32_t child_id;
     uint32_t pending_key;
     uint8_t pending_key_valid;
+    uint8_t shell_prompt;
+    uint8_t shell_edited;
+    uint8_t shutdown_stage;
+    uint32_t shutdown_reply;
+    uint32_t shutdown_transaction;
     uint64_t present_deadline;
     int running;
 } ConsoleSession;
@@ -47,6 +53,8 @@ static void echo_line(void *context, const char *line, uint32_t length)
 static void prompt_ready(void *context)
 {
     (void)context;
+    session.shell_prompt = 1u;
+    session.shell_edited = 0u;
     ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_SHELL, ASTRA_EVENT_LEVEL_INFO,
                  "shell ready");
 }
@@ -204,12 +212,82 @@ static int flush_terminal(void)
 
 static void feed_key(uint32_t key)
 {
-    if (session.child == 0u)
+    if (session.child == 0u || session.shutdown_stage != 0u)
         return;
+    if (session.shell_prompt)
+        session.shell_edited = 1u;
     if (console_stream_key(key) == 0) {
         session.pending_key = key;
         session.pending_key_valid = 1u;
     }
+}
+
+static int shell_can_exit(void)
+{
+    const AstraStartupCapability *posix = astra_startup_capability(
+        session.backend.startup, ASTRA_CAPABILITY_POSIX_PROCESS);
+    AstraPosixProcessReply child = {0};
+    AstraPosixProcessReply tty = {0};
+
+    return posix != NULL && session.child != 0u &&
+        astra_posix_process_query(posix->handle, (int32_t)session.child_id,
+                                  &child) == ASTRA_STATUS_OK &&
+        astra_posix_process_tty_foreground(posix->handle, &tty) ==
+            ASTRA_STATUS_OK &&
+        child.session == tty.session &&
+        console_shutdown_safe(session.shell_prompt, session.shell_edited,
+                              session.pending_key_valid,
+                              child.session_members, child.group, tty.group);
+}
+
+static int begin_shell_exit(void)
+{
+    if (session.shutdown_stage != 0u)
+        return 0;
+    if (session.child == 0u) {
+        session.running = 0;
+        return 1;
+    }
+    if (!shell_can_exit())
+        return 0;
+    session.shutdown_stage = 1u;
+    return 1;
+}
+
+int console_session_request_close(void)
+{
+    return begin_shell_exit();
+}
+
+static int pump_shutdown(void)
+{
+    if (session.backend.shutdown_receive != 0u &&
+        session.shutdown_reply == 0u) {
+        AstraShutdownRequest request = {0};
+        uint32_t reply = 0u;
+        uint32_t status = astra_shutdown_receive(
+            session.backend.shutdown_receive, &request, &reply);
+
+        if (status != ASTRA_SYSCALL_WOULD_BLOCK &&
+            status != ASTRA_SYSCALL_OK)
+            return 0;
+        if (status == ASTRA_SYSCALL_OK) {
+            session.shutdown_reply = reply;
+            session.shutdown_transaction = request.header.transaction_id;
+        }
+    }
+    if (session.shutdown_reply != 0u && session.shutdown_stage == 0u)
+        (void)begin_shell_exit();
+    while (session.shutdown_stage >= 1u &&
+           session.shutdown_stage <= 5u) {
+        static const char exit_command[] = "exit\n";
+        uint32_t key = (uint8_t)exit_command[session.shutdown_stage - 1u];
+
+        if (console_stream_key(key) == 0)
+            break;
+        ++session.shutdown_stage;
+    }
+    return 1;
 }
 
 static int pump_once(void)
@@ -218,6 +296,9 @@ static int pump_once(void)
     uint32_t rendered = console_stream_pump();
     int input_result = CONSOLE_SESSION_INPUT_NONE;
     int had_key = 0;
+
+    if (!pump_shutdown())
+        return 0;
 
     if (session.pending_key_valid &&
         console_stream_key(session.pending_key) > 0) {
@@ -253,7 +334,7 @@ static int pump_once(void)
         }
     }
     if (!had_key) {
-        uint32_t waits[4];
+        uint32_t waits[5];
         uint32_t wait_count = 0u;
         uint32_t child_index = ASTRA_WAIT_INDEX_NONE;
         uint32_t sink = console_stream_wait_handle();
@@ -269,6 +350,9 @@ static int pump_once(void)
         }
         if (session.backend.wait_handle != 0u)
             waits[wait_count++] = session.backend.wait_handle;
+        if (session.backend.shutdown_receive != 0u &&
+            session.shutdown_reply == 0u)
+            waits[wait_count++] = session.backend.shutdown_receive;
         if (wait_count != 0u) {
             uint64_t deadline = session.backend.idle_poll_ns != 0u ?
                 astra_clock_monotonic() + session.backend.idle_poll_ns :
@@ -486,9 +570,28 @@ uint32_t console_session_run_backend(const ConsoleSessionBackend *backend)
         astra_terminal_clear(&session.terminal);
         status = run_zsh();
     }
+    if (session.shutdown_reply != 0u) {
+        const AstraStartupCapability *process = astra_startup_capability(
+            backend->startup, ASTRA_CAPABILITY_POSIX_PROCESS);
+        AstraPosixProcessReply own = {0};
+        uint32_t decision = status == ASTRA_STATUS_OK && process != NULL &&
+            astra_posix_process_query(process->handle, 0, &own) ==
+                ASTRA_STATUS_OK && own.session_members == 1u ?
+                    ASTRA_SHUTDOWN_READY : ASTRA_SHUTDOWN_CANCEL;
+
+        (void)astra_shutdown_respond(session.shutdown_reply,
+                                     session.shutdown_transaction,
+                                     decision,
+                                     decision == ASTRA_SHUTDOWN_READY ? 0u :
+                                         ASTRA_STATUS_BUSY);
+        session.shutdown_reply = 0u;
+        if (decision == ASTRA_SHUTDOWN_READY)
+            session.running = 0;
+    }
     (void)flush_terminal();
     while (status == SESSION_NOT_RUN && session.running)
         if (!pump_once())
             break;
-    return status;
+    return status == SESSION_NOT_RUN && !session.running &&
+        session.child == 0u ? ASTRA_STATUS_OK : status;
 }

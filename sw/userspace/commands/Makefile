@@ -67,7 +67,7 @@ CXX_LIBRARY := $(ASTRA_CXX_LIBRARY)
 UNWIND_LIBRARY := $(ASTRA_UNWIND_LIBRARY)
 TERMINFO_LIBRARY := $(ASTRA_TERMINFO_LIBRARY)
 
-COMMANDS := status events devices which open service ls ps metrics cat mkdir rm \
+COMMANDS := status events devices which open service shutdown restart ls ps metrics cat mkdir rm \
 	    heapbench fsstress date echo ntp ping lua vim zsh
 TEST_COMMANDS := posix hello cxx
 SBASE_PRIMARY := ls mkdir
@@ -88,6 +88,8 @@ devices_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 which_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 open_LIBRARIES := $(LIBC_LIBRARY) $(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY)
 service_LIBRARIES := $(LIBC_LIBRARY) $(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY)
+shutdown_LIBRARIES := $(LIBC_LIBRARY) $(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY)
+restart_LIBRARIES := $(LIBC_LIBRARY) $(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY)
 hello_LIBRARIES := $(LIBC_LIBRARY)
 ls_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 ps_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)

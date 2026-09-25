@@ -11,9 +11,11 @@
 #include <astra/interface_library.h>
 #include <astra/input.h>
 #include <astra/pcm.h>
+#include <astra/pcm_format.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
+#include <astra/service_manager.h>
 #include <astra/status.h>
 #include <astra/surface.h>
 #include <astra/theme.h>
@@ -21,7 +23,6 @@
 #include <astra/window.h>
 
 #include "desktop_layout.h"
-#include "startup_sound.h"
 
 #define DESKTOP_WIDTH ASTRA_DISPLAY_WIDTH
 #define DESKTOP_TOP 34u
@@ -65,6 +66,7 @@ static void play_startup_sound(uint32_t pcm_service)
     AstraPcmStream stream = ASTRA_PCM_STREAM_INIT;
     uint8_t *frames = NULL;
     uint32_t length = 0u;
+    uint32_t frame_count;
     uint32_t sent = 0u;
     uint64_t deadline;
     AstraPcmStatus state = {0};
@@ -72,7 +74,7 @@ static void play_startup_sound(uint32_t pcm_service)
     if (astra_process_read_file_alloc(
             &process_filesystem, "/system/media/startup.pcm",
             (void **)&frames, &length) != ASTRA_VFS_OK ||
-        length != ASTRA_STARTUP_SOUND_FRAMES * 4u) {
+        length == 0u || (length % 4u) != 0u) {
         (void)astra_log("startup sound asset unavailable");
         goto done;
     }
@@ -81,12 +83,15 @@ static void play_startup_sound(uint32_t pcm_service)
         (void)astra_log("startup sound service unavailable");
         goto done;
     }
-    deadline = astra_clock_monotonic() + UINT64_C(5000000000);
-    while (sent < ASTRA_STARTUP_SOUND_FRAMES) {
+    frame_count = length / 4u;
+    deadline = astra_clock_monotonic() +
+        (uint64_t)frame_count * UINT64_C(1000000000) / ASTRA_PCM_RATE +
+        UINT64_C(2000000000);
+    while (sent < frame_count) {
         uint32_t accepted = 0u;
         AstraResult result = astra_pcm_write(
             &stream, frames + sent * 4u,
-            ASTRA_STARTUP_SOUND_FRAMES - sent, &accepted);
+            frame_count - sent, &accepted);
 
         sent += accepted;
         if (result == ASTRA_ERROR_BUSY &&
@@ -173,6 +178,21 @@ static AstraResult show_about(uint32_t gui)
     info.button = "Close";
     info.button_length = 5u;
     return astra_interface_show_alert(gui, &info);
+}
+
+static void power_error(uint32_t gui, int restart)
+{
+    AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
+
+    info.kind = ASTRA_ALERT_ERROR;
+    info.title = restart ? "Restart" : "Shut Down";
+    info.title_length = (uint16_t)strlen(info.title);
+    info.message = restart ? "Restart could not be started." :
+                             "Shutdown could not be started.";
+    info.message_length = (uint16_t)strlen(info.message);
+    info.button = "OK";
+    info.button_length = 2u;
+    (void)astra_interface_show_alert(gui, &info);
 }
 
 static uint16_t icon_color(const AstraAicon *icon, uint16_t index)
@@ -337,6 +357,7 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *gui;
     const AstraStartupCapability *launcher;
+    const AstraStartupCapability *manager;
     const AstraStartupCapability *pcm;
     uint32_t launcher_handle;
     AstraCommand terminal_command = {
@@ -353,8 +374,11 @@ int astra_main(const AstraStartupInfo *startup)
     gui = astra_startup_capability(startup, ASTRA_CAPABILITY_GUI);
     launcher = astra_startup_capability(
         startup, ASTRA_CAPABILITY_APPLICATION_LAUNCH);
+    manager = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_SERVICE_MANAGER);
     pcm = astra_startup_capability(startup, ASTRA_CAPABILITY_PCM);
-    if (bootstrap == NULL || gui == NULL || launcher == NULL)
+    if (bootstrap == NULL || gui == NULL || launcher == NULL ||
+        manager == NULL || (manager->rights & ASTRA_RIGHT_SIGNAL) == 0u)
         return ASTRA_STATUS_BAD_HANDLE;
     launcher_handle = launcher->handle;
     status = astra_process_filesystem_open(&process_filesystem, startup);
@@ -404,6 +428,25 @@ int astra_main(const AstraStartupInfo *startup)
             event.data.system_action.action == ASTRA_SYSTEM_ACTION_ABOUT) {
             if (show_about(gui->handle) != ASTRA_OK)
                 (void)astra_log("About This Astra could not open");
+            continue;
+        }
+        if (event.type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION &&
+            (event.data.system_action.action == ASTRA_SYSTEM_ACTION_SHUTDOWN ||
+             event.data.system_action.action == ASTRA_SYSTEM_ACTION_RESTART)) {
+            int restart = event.data.system_action.action ==
+                ASTRA_SYSTEM_ACTION_RESTART;
+
+            (void)astra_log(restart ? "desktop restart requested" :
+                                      "desktop shutdown requested");
+            AstraResult result = restart ?
+                astra_system_restart_request(manager->handle) :
+                astra_system_shutdown_request(manager->handle);
+
+            if (result != ASTRA_OK) {
+                (void)astra_log_failure("desktop power request",
+                                        (uint32_t)(-result));
+                power_error(gui->handle, restart);
+            }
             continue;
         }
         if (event.type == ASTRA_WINDOW_EVENT_POINTER_BUTTON &&

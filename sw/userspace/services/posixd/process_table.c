@@ -427,3 +427,17 @@ posix_process_visit_session_group(const PosixProcessTable *table,
         *matched = count;
     return count != 0u ? ASTRA_STATUS_OK : ASTRA_STATUS_NOT_FOUND;
 }
+
+uint32_t
+posix_process_session_size(const PosixProcessTable *table, int32_t session)
+{
+    uint32_t count = 0u;
+
+    if (table == NULL || table->entries == NULL || session <= 0)
+        return 0u;
+    for (uint32_t index = 0u; index < table->capacity; ++index)
+        if (table->entries[index].process != 0 &&
+            table->entries[index].session == session)
+            ++count;
+    return count;
+}

@@ -78,6 +78,10 @@ ASTRA_RUNTIME_1.0 {
         astra_port_receive;
         astra_port_receive_from;
         astra_port_send;
+        astra_shutdown_request;
+        astra_shutdown_receive;
+        astra_shutdown_respond;
+        astra_shutdown_receive_reply;
         astra_posix_process_query;
         astra_posix_process_register;
         astra_posix_process_setpgid;
@@ -133,6 +137,7 @@ astra_rt_thread_start_detached;
         astra_runtime_finalize;
         astra_runtime_initialize;
         astra_service_ready;
+        astra_service_ready_managed;
         astra_startup_argument;
         astra_startup_capability;
         astra_startup_launch_source;

@@ -16,6 +16,7 @@ _Static_assert(SIGINT == ASTRA_SIGNAL_INTERRUPT &&
                SIGQUIT == ASTRA_SIGNAL_QUIT &&
                SIGKILL == ASTRA_SIGNAL_KILL &&
                SIGALRM == ASTRA_SIGNAL_ALARM &&
+               SIGTERM == ASTRA_SIGNAL_TERMINATE &&
                SIGSTOP == ASTRA_SIGNAL_STOP &&
                SIGTSTP == ASTRA_SIGNAL_TTY_STOP &&
                SIGCONT == ASTRA_SIGNAL_CONTINUE &&

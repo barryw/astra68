@@ -32,6 +32,11 @@ def fixture(directory, delay, output="", status=0, mailbox_bytes=8193):
     observed = container / "observed"
     root.mkdir()
     observed.mkdir()
+    (observed / "bin").mkdir()
+    write_executable(observed / "bin/systemctl", f"""#!/bin/sh
+printf '%s\\n' "$@" >"{observed}/power.args"
+exit "${{ASTRA_TEST_POWER_STATUS:-0}}"
+""")
     (root / "qemu/bin").mkdir(parents=True)
     (root / "bin").mkdir()
     (root / "rom").mkdir()
@@ -96,6 +101,7 @@ def environment(root, observed):
         ASTRA_HOSTFS_ROOT=str(observed / "hostfs"),
         ASTRA_AUX_CPU=str(available[0]),
         ASTRA_DISPLAY_CPU=str(available[-1]),
+        PATH=str(observed / "bin") + os.pathsep + os.environ["PATH"],
     )
 
 
@@ -121,7 +127,8 @@ def main():
         assert "helper CPU assignments are invalid" in result.stderr
         result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
                                 text=True, capture_output=True, check=False)
-        assert result.returncode == 0, result.stderr
+        assert result.returncode == 1, result.stderr
+        assert not (observed / "power.args").exists()
         qemu_args = (observed / "qemu.args").read_text().splitlines()
         assert qemu_args.count("-qmp") == 2
         qmp_arguments = [qemu_args[index + 1] for index, value in
@@ -155,7 +162,8 @@ def main():
         (observed / "display.exit-once").touch()
         result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
                                 text=True, capture_output=True, check=False)
-        assert result.returncode == 0, result.stderr
+        assert result.returncode == 1, result.stderr
+        assert not (observed / "power.args").exists()
         assert int((observed / "display.launches").read_text()) >= 3
         assert "display helper exited with status 42; restarting" in \
             result.stderr
@@ -202,6 +210,46 @@ def main():
             first.terminate()
             first.wait(timeout=2.0)
             writable(root)
+    with tempfile.TemporaryDirectory() as directory:
+        root, observed = fixture(directory, 0, status=88)
+        launch_environment = environment(root, observed)
+        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
+                                text=True, capture_output=True, check=False)
+        assert result.returncode == 0, result.stderr
+        assert (observed / "power.args").read_text().splitlines() == [
+            "poweroff", "--no-block"]
+        (observed / "power.args").unlink()
+        launch_environment["ASTRA_TEST_POWER_STATUS"] = "1"
+        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
+                                text=True, capture_output=True, check=False)
+        assert result.returncode == 1, result.stderr
+        assert (observed / "power.args").exists()
+        writable(root)
+    with tempfile.TemporaryDirectory() as directory:
+        root, observed = fixture(directory, 0, status=89)
+        launch_environment = environment(root, observed)
+        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
+                                text=True, capture_output=True, check=False)
+        assert result.returncode == 0, result.stderr
+        assert (observed / "power.args").read_text().splitlines() == [
+            "reboot", "--no-block"]
+        (observed / "power.args").unlink()
+        launch_environment["ASTRA_TEST_POWER_STATUS"] = "1"
+        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
+                                text=True, capture_output=True, check=False)
+        assert result.returncode == 1, result.stderr
+        assert (observed / "power.args").read_text().splitlines() == [
+            "reboot", "--no-block"]
+        writable(root)
+    with tempfile.TemporaryDirectory() as directory:
+        root, observed = fixture(directory, 0, "ASTRA68-QEMU SHUTDOWN\\n",
+                                 status=1)
+        result = subprocess.run([str(RUN_ARTY)],
+                                env=environment(root, observed),
+                                text=True, capture_output=True, check=False)
+        assert result.returncode == 1, result.stderr
+        assert not (observed / "power.args").exists()
+        writable(root)
     with tempfile.TemporaryDirectory() as directory:
         root, observed = fixture(directory, 0, "*** AXIOM KERNEL PANIC ***\n"
                                  "Fault:  0x40A00024\nSYSTEM HALTED\n", 1)

@@ -26,6 +26,7 @@ static uint32_t next_state = ASTRA_WINDOW_STATE_NORMAL;
 static uint32_t next_state_flags = ASTRA_WINDOW_ACTIVE;
 static uint32_t next_resize_width = 500u;
 static uint32_t next_resize_height = 240u;
+static uint32_t next_system_action = ASTRA_SYSTEM_ACTION_ABOUT;
 static AstraGuiWindowCommand last_command;
 static uint8_t *pointer_area;
 
@@ -145,6 +146,8 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
             } else if (next_event_type == ASTRA_WINDOW_EVENT_RESIZE) {
                 message->event.data.resize.width = next_resize_width;
                 message->event.data.resize.height = next_resize_height;
+            } else if (next_event_type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION) {
+                message->event.data.system_action.action = next_system_action;
             } else {
                 message->event.data.pointer.x = 12;
                 message->event.data.pointer.y = 18;
@@ -412,6 +415,17 @@ int main(void)
         next_resize_width = 0u;
         assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
         next_resize_width = 500u;
+        next_event_type = ASTRA_WINDOW_EVENT_SYSTEM_ACTION;
+        for (uint32_t action = ASTRA_SYSTEM_ACTION_ABOUT;
+             action <= ASTRA_SYSTEM_ACTION_RESTART; ++action) {
+            next_system_action = action;
+            assert(astra_window_event_try(&window, &event) == ASTRA_OK);
+            assert(event.data.system_action.action == action);
+        }
+        next_system_action = 0u;
+        assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
+        next_system_action = ASTRA_SYSTEM_ACTION_RESTART + 1u;
+        assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
         next_event_type = ASTRA_WINDOW_EVENT_POINTER_MOTION;
     }
     before = call_count;

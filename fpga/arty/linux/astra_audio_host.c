@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,6 +67,7 @@ typedef struct Client {
     struct Client *next;
     Voice *voices;
     int fd;
+    int monitor;
 } Client;
 
 typedef struct AudioHost {
@@ -85,6 +87,7 @@ typedef struct AudioHost {
     int playing;
     int tailing;
     int draining;
+    AstraAudioHostMonitorPacket monitor_packet;
 } AudioHost;
 
 static volatile sig_atomic_t running = 1;
@@ -148,6 +151,8 @@ static uint32_t queued_any(const AudioHost *host)
     return 0u;
 }
 
+static void free_client(AudioHost *host, Client *client);
+
 static void mix_frame(AudioHost *host, int32_t *left, int32_t *right)
 {
     int64_t sum_left = 0;
@@ -192,6 +197,56 @@ static void mix_frame(AudioHost *host, int32_t *left, int32_t *right)
     *right = saturate24(sum_right);
 }
 
+static void monitor_flush(AudioHost *host)
+{
+    Client *client = host->clients;
+    size_t length;
+
+    if (host->monitor_packet.frames == 0u)
+        return;
+    length = 12u + host->monitor_packet.frames * 4u;
+    while (client != NULL) {
+        Client *next = client->next;
+
+        if (client->monitor) {
+            ssize_t written = send(client->fd, &host->monitor_packet, length,
+                                   MSG_NOSIGNAL | MSG_DONTWAIT);
+
+            if (written != (ssize_t)length &&
+                !(written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)))
+                free_client(host, client);
+        }
+        client = next;
+    }
+    host->monitor_packet.frames = 0u;
+}
+
+static void monitor_frame(AudioHost *host, int32_t left, int32_t right)
+{
+    uint8_t *pcm;
+    int16_t samples[2] = {(int16_t)(left / 256), (int16_t)(right / 256)};
+
+    if (host->monitor_packet.frames == 0u) {
+        bool listening = false;
+
+        for (Client *client = host->clients; client != NULL;
+             client = client->next)
+            if (client->monitor)
+                listening = true;
+        if (!listening)
+            return;
+        host->monitor_packet.magic = ASTRA_AUDIO_HOST_MAGIC;
+        host->monitor_packet.version = ASTRA_AUDIO_HOST_VERSION;
+    }
+    pcm = host->monitor_packet.pcm + host->monitor_packet.frames * 4u;
+    for (unsigned channel = 0u; channel < 2u; ++channel) {
+        pcm[channel * 2u] = (uint8_t)samples[channel];
+        pcm[channel * 2u + 1u] = (uint8_t)((uint16_t)samples[channel] >> 8);
+    }
+    if (++host->monitor_packet.frames == ASTRA_AUDIO_HOST_MONITOR_FRAMES)
+        monitor_flush(host);
+}
+
 static void feed(AudioHost *host)
 {
     uint32_t level = read_reg(host, REG_STATUS) & STATUS_LEVEL_MASK;
@@ -217,6 +272,7 @@ static void feed(AudioHost *host)
         mix_frame(host, &left, &right);
         write_reg(host, REG_LEFT, (uint32_t)left & UINT32_C(0xffffff));
         write_reg(host, REG_RIGHT, (uint32_t)right & UINT32_C(0xffffff));
+        monitor_frame(host, left, right);
         --room;
         ++level;
         ++host->mixed_frames;
@@ -244,6 +300,7 @@ static void feed(AudioHost *host)
         host->tailing = 1;
         write_reg(host, REG_LEFT, 0u);
         write_reg(host, REG_RIGHT, 0u);
+        monitor_frame(host, 0, 0);
         --room;
         ++level;
         ++host->tail_written;
@@ -299,6 +356,9 @@ static uint32_t validate_request(const AstraAudioHostRequest *request,
                    ASTRA_STATUS_OK : ASTRA_STATUS_INVALID;
     if (request->data_length != 0u)
         return ASTRA_STATUS_INVALID;
+    if (request->operation == ASTRA_AUDIO_HOST_MONITOR)
+        return request->handle == 0u && request->value == 0u ?
+               ASTRA_STATUS_OK : ASTRA_STATUS_INVALID;
     if (request->operation == ASTRA_HOST_AUDIO_OPEN)
         return request->handle == 0u &&
                astra_pcm_format_frame_bytes(request->value) != 0u ?
@@ -329,6 +389,12 @@ static void execute(AudioHost *host, Client *client,
     Voice *voice;
 
     switch (request->operation) {
+    case ASTRA_AUDIO_HOST_MONITOR:
+        if (client->voices != NULL)
+            reply->status = ASTRA_STATUS_INVALID;
+        else
+            client->monitor = 1;
+        break;
     case ASTRA_HOST_AUDIO_OPEN:
         voice = calloc(1u, sizeof(*voice));
         if (voice != NULL)
@@ -466,6 +532,9 @@ static void receive_client(AudioHost *host, Client *client)
         memcpy(&request, packet, received < (ssize_t)sizeof(request) ?
                (size_t)received : sizeof(request));
         reply.status = validate_request(&request, (size_t)received);
+        if (reply.status == ASTRA_STATUS_OK && client->monitor &&
+            request.operation != ASTRA_AUDIO_HOST_MONITOR)
+            reply.status = ASTRA_STATUS_INVALID;
         if (reply.status == ASTRA_STATUS_OK)
             execute(host, client, &request, packet + sizeof(request), &reply);
     }
@@ -726,6 +795,11 @@ static int self_test(void)
         .handle = 1u,
         .data_length = sizeof(sample),
     };
+    AudioHost monitor_host = {0};
+    Client monitor_client = {.fd = -1, .monitor = 1};
+    AstraAudioHostMonitorPacket packet;
+    int sockets[2];
+    ssize_t received;
 
     if (!mix_self_test() ||
         s24le(sample) != INT32_C(0x7fffff) ||
@@ -749,9 +823,42 @@ static int self_test(void)
     request.value = ASTRA_PCM_FORMAT_S24LE_STEREO;
     if (validate_request(&request, sizeof(request)) != ASTRA_STATUS_OK)
         return EXIT_FAILURE;
+    request.operation = ASTRA_AUDIO_HOST_MONITOR;
+    request.value = 0u;
+    if (validate_request(&request, sizeof(request)) != ASTRA_STATUS_OK)
+        return EXIT_FAILURE;
+    request.handle = 1u;
+    if (validate_request(&request, sizeof(request)) != ASTRA_STATUS_INVALID)
+        return EXIT_FAILURE;
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets) != 0)
+        return EXIT_FAILURE;
+    monitor_frame(&monitor_host, INT32_C(0x400000), -INT32_C(0x400000));
+    if (monitor_host.monitor_packet.frames != 0u)
+        goto monitor_failed;
+    monitor_client.fd = sockets[0];
+    monitor_host.clients = &monitor_client;
+    for (unsigned frame = 0u; frame < ASTRA_AUDIO_HOST_MONITOR_FRAMES;
+         ++frame)
+        monitor_frame(&monitor_host, INT32_C(0x400000), -INT32_C(0x400000));
+    received = recv(sockets[1], &packet, sizeof(packet), MSG_DONTWAIT);
+    if (received != (ssize_t)sizeof(packet) ||
+        packet.magic != ASTRA_AUDIO_HOST_MAGIC ||
+        packet.version != ASTRA_AUDIO_HOST_VERSION ||
+        packet.frames != ASTRA_AUDIO_HOST_MONITOR_FRAMES ||
+        memcmp(packet.pcm, (const uint8_t[]){0x00, 0x40, 0x00, 0xc0},
+               4u) != 0 ||
+        monitor_host.monitor_packet.frames != 0u)
+        goto monitor_failed;
+    (void)close(sockets[0]);
+    (void)close(sockets[1]);
     request.magic = 0u;
     return validate_request(&request, sizeof(request)) ==
            ASTRA_STATUS_PROTOCOL ? EXIT_SUCCESS : EXIT_FAILURE;
+
+monitor_failed:
+    (void)close(sockets[0]);
+    (void)close(sockets[1]);
+    return EXIT_FAILURE;
 }
 
 int main(int argc, char **argv)

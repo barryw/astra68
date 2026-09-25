@@ -115,8 +115,18 @@ typedef enum KernelProcessExitReason {
     KERNEL_PROCESS_EXIT_SYSCALL,
     KERNEL_PROCESS_EXIT_LAST_THREAD,
     KERNEL_PROCESS_EXIT_USER_FAULT,
-    KERNEL_PROCESS_EXIT_SIGNAL
+    KERNEL_PROCESS_EXIT_SIGNAL,
+    KERNEL_PROCESS_EXIT_SHUTDOWN,
+    KERNEL_PROCESS_EXIT_RESTART
 } KernelProcessExitReason;
+
+static inline bool kernel_process_clean_power_exit(uint32_t exit_status,
+                                                   uint32_t exit_reason)
+{
+    return exit_status == 0u &&
+           (exit_reason == KERNEL_PROCESS_EXIT_SHUTDOWN ||
+            exit_reason == KERNEL_PROCESS_EXIT_RESTART);
+}
 
 typedef enum KernelProcessStatus {
     KERNEL_PROCESS_OK = 0,

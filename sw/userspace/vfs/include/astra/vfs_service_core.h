@@ -219,6 +219,21 @@ uint32_t astra_vfs_service_readdir_file_into(
 void astra_vfs_service_release_session(AstraVfsService *service,
                                        uint32_t session);
 
+/*
+ * The transport must have stopped accepting requests and joined its workers.
+ * VFS closes every session, then flushes and unmounts the mounted filesystem.
+ * A read-only backend may leave flush NULL; it is a successful no-op. Neither
+ * VFS nor its callers know whether the volume is ext4, AstraFS, CDFS, or RAM.
+ */
+typedef struct AstraVfsMountOps {
+    uint32_t (*flush)(void *context);
+    uint32_t (*unmount)(void *context);
+} AstraVfsMountOps;
+
+uint32_t astra_vfs_service_shutdown(AstraVfsService *service,
+                                     const AstraVfsMountOps *mount,
+                                     void *context);
+
 const AstraVfsServiceStats *astra_vfs_service_stats(
     const AstraVfsService *service);
 

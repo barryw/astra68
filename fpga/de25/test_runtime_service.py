@@ -15,7 +15,7 @@ for required in (
     "Environment=ASTRA_STORE=/var/lib/astra",
     "Environment=ASTRA_FRONT_PANEL_MMIO_OFFSET=0x20107000",
     "ExecStart=/var/lib/astra/current/bin/run-arty.sh",
-    "Restart=always",
+    "Restart=on-failure",
     "StandardOutput=journal",
     "StandardError=journal",
     "Nice=-10",

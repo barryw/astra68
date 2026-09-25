@@ -35,6 +35,46 @@ static AstraVfsService metrics_service;
 static AstraVfsSessionSlot metrics_sessions[ASTRA_VFS_SESSION_MAX];
 static AstraVfsPortService metrics_port;
 static AstraVfsPortWorker metrics_worker;
+static volatile uint32_t shutdown_requested;
+static _Alignas(16) uint8_t signal_stack[4096u];
+
+static void hostfs_signal(int number)
+{
+    if (number == (int)ASTRA_SIGNAL_TERMINATE)
+        shutdown_requested = 1u;
+}
+
+static uint32_t volume_noop_unmount(void *context)
+{
+    (void)context;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t hostfs_unmount(void *context)
+{
+    astra_vfs_host_transport_destroy(context);
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t finish_hostfs(void)
+{
+    const AstraVfsMountOps metrics_mount = {NULL, volume_noop_unmount};
+    const AstraVfsMountOps host_mount = {NULL, hostfs_unmount};
+    uint32_t status;
+
+    while (astra_vfs_port_service_worker_pump(&metrics_port,
+                                               &metrics_worker, 1u) != 0u) {}
+    while (astra_vfs_port_service_worker_pump(&port, &worker, 1u) != 0u) {}
+    if (metrics_port.stalled != 0u || port.stalled != 0u)
+        return ASTRA_STATUS_IO;
+    status = astra_vfs_service_shutdown(&metrics_service, &metrics_mount,
+                                        NULL);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    /* Linux owns the host volume and syncs it during host poweroff. Closing
+     * every guest session is the required guest-side durability boundary. */
+    return astra_vfs_service_shutdown(&service, &host_mount, &transport);
+}
 
 typedef struct HostMetricGroup {
     const char *const *names;
@@ -206,6 +246,8 @@ int astra_main(const AstraStartupInfo *startup)
     uint32_t send = 0u;
     uint32_t metrics_receive = 0u;
     uint32_t metrics_send = 0u;
+    uint32_t shutdown_receive = 0u;
+    uint32_t shutdown_send = 0u;
     uint32_t status = ASTRA_STATUS_OK;
 
     if (!astra_startup_validate(startup))
@@ -268,22 +310,55 @@ int astra_main(const AstraStartupInfo *startup)
          !astra_vfs_port_service_init(&metrics_port, metrics_receive,
                                       &metrics_service)))
         status = HOSTFS_FAIL_PORT;
+    if (status == ASTRA_STATUS_OK &&
+        astra_rt_signal_configure(
+            hostfs_signal, signal_stack + sizeof(signal_stack),
+            0u, NULL, NULL) != ASTRA_SYSCALL_OK)
+        status = ASTRA_STATUS_IO;
+    if (status == ASTRA_STATUS_OK &&
+        astra_rt_port_create(1u, sizeof(AstraShutdownRequest),
+                             &shutdown_receive, &shutdown_send) !=
+            ASTRA_SYSCALL_OK)
+        status = ASTRA_STATUS_LIMIT;
     {
         uint32_t published[] = {send, metrics_send};
-        uint32_t ready = astra_service_ready(bootstrap->handle, status,
-                                             published, 2u);
+        uint32_t ready = astra_service_ready_managed(bootstrap->handle, status,
+                                             published, 2u, shutdown_send);
         if (ready != ASTRA_SYSCALL_OK && status == ASTRA_STATUS_OK)
             status = HOSTFS_FAIL_READY;
     }
+    if (shutdown_send != 0u)
+        (void)astra_close(shutdown_send);
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_STATUS_OK)
         return (int)status;
     for (;;) {
-        uint32_t waits[] = {port.receive, metrics_port.receive};
+        uint32_t waits[] = {port.receive, metrics_port.receive,
+                            shutdown_receive};
         uint32_t selected = ASTRA_WAIT_INDEX_NONE;
 
-        status = astra_wait_multiple(waits, 2u, ASTRA_DEADLINE_FOREVER,
+        status = astra_wait_multiple(waits, 3u, ASTRA_DEADLINE_FOREVER,
                                      &selected, NULL);
+        if (status == ASTRA_SYSCALL_OK && selected == 2u) {
+            AstraShutdownRequest request = {0};
+            uint32_t reply = 0u;
+            uint32_t result = astra_shutdown_receive(
+                shutdown_receive, &request, &reply);
+
+            if (result != ASTRA_SYSCALL_OK)
+                return (int)ASTRA_STATUS_PROTOCOL;
+            result = finish_hostfs();
+            (void)astra_shutdown_respond(
+                reply, request.header.transaction_id,
+                result == ASTRA_VFS_OK ? ASTRA_SHUTDOWN_READY :
+                                         ASTRA_SHUTDOWN_CANCEL,
+                result);
+            return (int)result;
+        }
+        if (shutdown_requested != 0u)
+            return (int)finish_hostfs();
+        if (status == ASTRA_SYSCALL_CANCELLED)
+            continue;
         if (status != ASTRA_SYSCALL_OK || selected >= 2u)
             return (int)status;
         if (selected == 0u)

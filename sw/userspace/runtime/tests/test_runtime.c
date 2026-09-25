@@ -722,6 +722,11 @@ test_syscall_wrappers(void)
     assert(mock_argument2 == 0x40u);
     assert(pending == ASTRA_SYSCALL_ABI_VERSION &&
            previous_blocked == 0x11111111u);
+    assert(astra_rt_signal_configure(dummy_signal, private_address, 0u,
+                                     NULL, NULL) == ASTRA_SYSCALL_OK);
+    assert(astra_rt_signal_configure(NULL, private_address, 0u,
+                                     NULL, NULL) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(astra_rt_interval_timer(UINT64_C(0x100000002),
                                    UINT64_C(0x300000004), &old_delay,
                                    &old_interval) == ASTRA_SYSCALL_OK);

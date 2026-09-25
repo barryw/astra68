@@ -1,6 +1,54 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-09-24
+Status: active continuation map, 2026-09-25
+
+Graceful shutdown and restart are in progress. The current immutable DE25
+software release is
+`463154c7e4410ce4a4a5cecd07a28f80c34932135acda0ee8b77da33ececa870`.
+The installed release verified byte for byte, the running QEMU matches its
+selected executable, the guest reached stage 8, and Astra, audio, and remote
+desktop services started. A live authenticated RFB capture shows the ASTRA
+menu under its unboxed trigger, one divider between About and the paired
+Restart/Shut Down actions, and inactive File/Edit/View headings. Terminal
+opened from its desktop icon and reached the zsh prompt. The board's `ps`
+printed its header and process rows; `ls /`, `which ps`, and a missing `/proc`
+lookup returned to the prompt. Twenty-five further `ps` runs completed
+(median 335 ms). A target-code audit identified an MC68040 GCC atomic-exchange
+retry returning a stale previous value; the common NDK mutex now uses an
+explicit compare-exchange loop, with deterministic normal and contention
+regressions. The board
+has not yet exercised the Restart or Shut Down actions. A tested,
+PID-1-only shutdown syscall distinguishes successful guest shutdown from faults
+and requires all other processes to have exited. The DE25 launcher requests
+Linux poweroff or reboot only on QEMU's distinct clean-exit codes.
+VFS now has a generic mounted-filesystem shutdown contract: release sessions,
+flush (a no-op when the backend does not need guest-side flushing), then
+unmount. Ext4, RAMFS, and HostFS have stop handlers; ext4 drains its journal,
+disables write-back, unmounts and flushes the block device. HostFS closes its
+guest sessions; Linux owns its final poweroff flush. Positive and negative host
+tests and MC68040 builds pass.
+The process shutdown wire contract now defines correlated READY/CANCEL replies
+through a private reply port. READY alone is insufficient: a managed
+participant must also exit with status zero, while missing or malformed
+replies fail closed. Unmanaged processes are killed at Supervisor request.
+Managed processes now create private lifecycle receive ports and publish their
+senders in startup-ready; the Supervisor records the declaration. Terminal
+waits for a clean zsh
+prompt and no other session jobs, then asks zsh to exit normally. Storage,
+RAMFS, and HostFS implement the request and flush/unmount before READY. A
+reverse-order Supervisor stop sequence passed Beast-hosted QEMU boots from
+the current source: the `shutdown` CLI ran in Terminal and QEMU exited 88;
+an edited/busy Terminal delayed shutdown until it returned to a clean prompt.
+The desktop ASTRA menu now has Shut Down and Restart actions. A Beast-hosted
+QEMU run of `restart` exited 89, and a busy Terminal delayed that exit until
+the shell returned to a clean prompt. QEMU pointer tests clicked both menu
+actions and reached their respective 88/89 exits. The previous NDK window
+validator rejected every system action except About and killed the desktop;
+it now accepts the defined actions and rejects unknown values. The QEMU action
+tests passed before the above DE25 deployment.
+The active blockers are cancellation recovery after partial service teardown
+and user-visible shutdown consent/status.
+See `docs/SHUTDOWN.md`.
 
 This file contains current facts only. Git history holds superseded board,
 processor, benchmark, and milestone records. The platform is **Astra 68**, its
@@ -91,6 +139,38 @@ A remote-desktop broker failure likewise reports a guest service failure and
 automatically recovers after the broker returns, even under continuous manager
 traffic. Full Linux journal text is not yet bridged to Astra; provider fault
 events are available through `events`.
+
+Release `fc065481ccc7493d699a48c0cd3f37835412f2fafcf1f50481d7387d19492f97`
+corrects the RFB server's nonstandard 24-bit pixel format to 32-bit BGRA.
+The Beast-hosted live VNC test authenticated to the DE25, negotiated a
+1920x1080 32-bit framebuffer, and captured a complete frame. The macOS
+`tools/AstraRemote` SwiftUI/TigerVNC viewer builds and reaches the desktop
+from the Mac using its saved Keychain credential. Release
+`3344ee9901d0dba851ee00c3f8e296b3466ad0524da3c13c538ddc8416af8ca1`
+adds a nonblocking tap of the final Linux PCM mix and QEMU's VNC audio
+extension. The physical DE25 audio probe rejected unnegotiated and invalid
+formats and matched the rendered desktop startup motif byte for byte over
+VNC; the Mac viewer logged that AVAudioEngine started and received a PCM
+packet, and the user heard the motif cleanly. The first generated 440 Hz probe
+was crackly because its Python producer fed 10 ms batches without queueing
+headroom and closed the voice before draining. The regression probe now uses
+1024-frame batches, checks queue space, finishes and drains the voice, and
+compares the entire received sample. Astra, audio host, and remote desktop
+remained active with zero systemd restarts.
+Release `a43ea3c8e721909292b1caefb7582e72a3662d68be7b6661d151785c2b904f2a`
+replaces the generated startup motif with the user-provided 5.72-second
+48 kHz stereo WAV. The build converts it to S16BE PCM, and image publication
+verifies the output against the source rather than accepting an old fixed
+byte count. Host tests reject malformed, empty, wrong-format, and same-size
+stale assets. The DE25 VNC-audio probe matched all 1,098,240 PCM bytes;
+the marker regression test rejects silent markers. Astra, audio host, and
+remote desktop were active with zero systemd restarts after the release.
+Release `a1d77ad3b7594d112354315371bd5483c3470377709ca86dc3e5b2c1045b5a74`
+adds cursor-shape updates on window topology changes, input-state reset, and
+system-menu transitions. Display host, sanitizer, and MC68040 builds pass;
+the DE25 release gate passed and the live RFB frame capture and Astra,
+remote-desktop, and audio-host services remain active. A physical reproduction
+of the formerly stuck resize cursor has not yet been repeated by the user.
 
 The production Agilex 5 shell routes with every clock constrained. Retained
 setup, hold, recovery, removal, and minimum-pulse slack are +0.076 ns, 0.000 ns,

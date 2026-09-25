@@ -8,7 +8,7 @@
 
 #define ASTRA_CAPABILITY_POSIX_PROCESS "POSIX_PROCESS"
 #define ASTRA_POSIX_PROCESS_PROTOCOL UINT32_C(0x50505243) /* PPRC */
-#define ASTRA_POSIX_PROCESS_VERSION UINT16_C(3)
+#define ASTRA_POSIX_PROCESS_VERSION UINT16_C(4)
 
 #define ASTRA_POSIX_PROCESS_REGISTER 1u
 #define ASTRA_POSIX_PROCESS_SIGNAL   2u
@@ -48,10 +48,11 @@ typedef struct AstraPosixProcessReply {
     int32_t parent;
     int32_t group;
     int32_t session;
+    uint32_t session_members;
 } AstraPosixProcessReply;
 
 #define ASTRA_POSIX_PROCESS_REQUEST_SIZE 40u
-#define ASTRA_POSIX_PROCESS_REPLY_SIZE 44u
+#define ASTRA_POSIX_PROCESS_REPLY_SIZE 48u
 
 _Static_assert(sizeof(AstraPosixProcessRequest) ==
                    ASTRA_POSIX_PROCESS_REQUEST_SIZE,

@@ -41,6 +41,8 @@ uint32_t posix_process_remove(PosixProcessTable *table, int32_t process,
                               uint32_t *handle);
 uint32_t posix_process_query(const PosixProcessTable *table, int32_t process,
                              PosixProcessEntry *entry);
+uint32_t posix_process_session_size(const PosixProcessTable *table,
+                                    int32_t session);
 uint32_t posix_process_setpgid(PosixProcessTable *table, int32_t sender,
                                int32_t process, int32_t group);
 uint32_t posix_process_setsid(PosixProcessTable *table, int32_t sender,

@@ -3,6 +3,8 @@
 
 import os
 import struct
+import subprocess
+import sys
 import tempfile
 
 import astra_image
@@ -137,7 +139,7 @@ assert "\\e]133;A" in zshrc and "\\e]133;B" in zshrc
 startup = astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
 desktop_startup = next(line for line in startup
                        if line.startswith("application /services/desktop "))
-assert " grants GUI APP_LAUNCH APPS:r LIBS:r " in desktop_startup
+assert " grants GUI APP_LAUNCH SERVICE_MANAGER APPS:r LIBS:r " in desktop_startup
 assert "/apps/r" not in desktop_startup
 assert startup[0].startswith("service /services/storage ")
 assert startup[1] == \
@@ -325,8 +327,26 @@ with tempfile.TemporaryDirectory() as directory:
             raise AssertionError("missing startup sound was accepted")
         except RuntimeError as error:
             assert "startup sound asset is missing or stale" in str(error)
-        with open(astra_image.DEFAULT_STARTUP_SOUND, "wb") as output:
-            output.truncate(80000 * 4)
+        subprocess.run(
+            [sys.executable, astra_image.DEFAULT_STARTUP_SOUND_RENDERER,
+             astra_image.DEFAULT_STARTUP_SOUND_SOURCE,
+             astra_image.DEFAULT_STARTUP_SOUND], check=True)
+        with open(astra_image.DEFAULT_STARTUP_SOUND, "r+b") as output:
+            first = output.read(1)
+            output.seek(0)
+            output.write(bytes([first[0] ^ 1]))
+        try:
+            astra_image._install_built(
+                "image", catalog=__file__, commands=None,
+                services="services", kits=None, apps=None, terminfo=None,
+                vim_runtime=None, service_names=("desktop",))
+            raise AssertionError("same-size stale startup sound was accepted")
+        except RuntimeError as error:
+            assert "startup sound asset is missing or stale" in str(error)
+        subprocess.run(
+            [sys.executable, astra_image.DEFAULT_STARTUP_SOUND_RENDERER,
+             astra_image.DEFAULT_STARTUP_SOUND_SOURCE,
+             astra_image.DEFAULT_STARTUP_SOUND], check=True)
         try:
             astra_image._install_built(
                 "image", catalog=__file__, commands=None,

@@ -19,6 +19,7 @@
 #include <astra/runtime.h>
 #include <astra/service.h>
 #include <astra/service_manager.h>
+#include <astra/shutdown.h>
 #include <astra/status.h>
 #include <astra/vfs_path.h>
 #include <astra/vfs_host_direct.h>
@@ -74,6 +75,7 @@ static SupervisorProcessTable paused_services;
 static SupervisorProcessTable failed_services;
 #define failed_service_count (failed_services.count)
 static uint64_t service_retry_at;
+static uint32_t shutdown_transaction;
 
 static int append(char *out, uint32_t capacity, const char *text)
 {
@@ -676,7 +678,9 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
 
 static uint32_t receive_ready(uint32_t receive, uint32_t child,
                               uint32_t expected_handles,
-                              uint32_t published[ASTRA_MESSAGE_HANDLES_MAX])
+                              uint32_t published[ASTRA_MESSAGE_HANDLES_MAX],
+                              uint32_t *ready_flags,
+                              uint32_t *shutdown_send)
 {
     AstraServiceReady message;
     uint32_t handles[ASTRA_MESSAGE_HANDLES_MAX] = {0u};
@@ -686,6 +690,7 @@ static uint32_t receive_ready(uint32_t receive, uint32_t child,
 
     for (uint32_t index = 0u; index < ASTRA_MESSAGE_HANDLES_MAX; ++index)
         published[index] = 0u;
+    *shutdown_send = 0u;
     for (;;) {
         uint32_t exit_status = 0u;
 
@@ -728,7 +733,8 @@ static uint32_t receive_ready(uint32_t receive, uint32_t child,
         message.header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
         message.header.protocol != ASTRA_SERVICE_PROTOCOL ||
         message.header.protocol_version != ASTRA_SERVICE_VERSION ||
-        message.header.operation != ASTRA_SERVICE_READY) {
+        message.header.operation != ASTRA_SERVICE_READY ||
+        (message.flags & ~ASTRA_SERVICE_READY_SHUTDOWN_MANAGED) != 0u) {
         for (uint32_t index = 0u; index < handle_count; ++index)
             (void)astra_close(handles[index]);
         return ASTRA_STATUS_PROTOCOL;
@@ -738,13 +744,20 @@ static uint32_t receive_ready(uint32_t receive, uint32_t child,
             (void)astra_close(handles[index]);
         return message.status;
     }
-    if (handle_count != expected_handles) {
+    if (handle_count != expected_handles +
+                            ((message.flags &
+                              ASTRA_SERVICE_READY_SHUTDOWN_MANAGED) != 0u) ||
+        ((message.flags & ASTRA_SERVICE_READY_SHUTDOWN_MANAGED) != 0u &&
+         handles[expected_handles] == 0u)) {
         for (uint32_t index = 0u; index < handle_count; ++index)
             (void)astra_close(handles[index]);
         return ASTRA_STATUS_PROTOCOL;
     }
-    for (uint32_t index = 0u; index < handle_count; ++index)
+    for (uint32_t index = 0u; index < expected_handles; ++index)
         published[index] = handles[index];
+    if ((message.flags & ASTRA_SERVICE_READY_SHUTDOWN_MANAGED) != 0u)
+        *shutdown_send = handles[expected_handles];
+    *ready_flags = message.flags;
     return ASTRA_STATUS_OK;
 }
 
@@ -935,6 +948,8 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
     uint32_t grant_count = 0u;
     uint32_t receive = 0u;
     uint32_t send = 0u;
+    uint32_t shutdown_send = 0u;
+    uint32_t ready_flags = 0u;
     uint32_t child = 0u;
     uint32_t child_id = 0u;
     uint32_t child_wait = 0u;
@@ -1032,6 +1047,7 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
     (void)astra_close(send);
     if (status != ASTRA_STATUS_OK) {
         (void)astra_close(receive);
+        (void)astra_close(shutdown_send);
         if (child_wait != 0u)
             (void)astra_close(child_wait);
         if (child != 0u)
@@ -1039,7 +1055,8 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
         return status;
     }
     ready_start = astra_clock_monotonic();
-    status = receive_ready(receive, child, expected_handles, published);
+    status = receive_ready(receive, child, expected_handles, published,
+                           &ready_flags, &shutdown_send);
     launch_report(entry->path, image_length, open_us,
                   astra_elapsed_microseconds(
                       0u, profile.executable_probe_ns),
@@ -1051,6 +1068,7 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
                   status, &profile.transaction);
     (void)astra_close(receive);
     if (status != ASTRA_STATUS_OK) {
+        (void)astra_close(shutdown_send);
         if (child_wait != 0u)
             (void)astra_close(child_wait);
         (void)astra_close(child);
@@ -1066,6 +1084,7 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
             event_control_handle = published[index];
     }
     if (status != ASTRA_STATUS_OK) {
+        (void)astra_close(shutdown_send);
         for (uint32_t index = 0u; index < expected_handles; ++index)
             if (published[index] != 0u)
                 (void)astra_close(published[index]);
@@ -1075,6 +1094,9 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
         return status;
     }
     process_table.records[process_count].resident = entry->resident;
+    process_table.records[process_count].shutdown_send = shutdown_send;
+    process_table.records[process_count].shutdown_managed =
+        (ready_flags & ASTRA_SERVICE_READY_SHUTDOWN_MANAGED) != 0u;
     process_table.records[process_count].id = child_id;
     process_table.records[process_count].paused = 0u;
     process_table.records[process_count].service_flags =
@@ -1128,9 +1150,14 @@ static void unpublish_owner(const char *owner)
 
 static void remove_process_slot(uint32_t slot)
 {
+    (void)astra_close(process_table.records[slot].shutdown_send);
     (void)astra_close(process_table.records[slot].handle);
     --process_count;
-    process_table.records[slot] = process_table.records[process_count];
+    if (slot < process_count)
+        (void)memmove(&process_table.records[slot],
+                      &process_table.records[slot + 1u],
+                      (process_count - slot) *
+                          sizeof(process_table.records[slot]));
 }
 
 static uint32_t stop_process_slot(uint32_t slot, uint32_t action)
@@ -1488,6 +1515,107 @@ static void manager_reply(uint32_t reply_send, uint32_t transaction,
     (void)astra_close(reply_send);
 }
 
+static uint32_t shutdown_process(uint32_t slot)
+{
+    SupervisorProcessRecord *record = &process_table.records[slot];
+    uint32_t exit_status = 0u;
+    uint32_t wait_status = astra_process_wait(record->handle, 0u,
+                                               &exit_status);
+
+
+    if (wait_status != ASTRA_SYSCALL_TIMED_OUT)
+        return (record->shutdown_managed == 0u &&
+                (wait_status == ASTRA_SYSCALL_OK ||
+                 wait_status == ASTRA_SYSCALL_PEER_DEAD)) ||
+               (wait_status == ASTRA_SYSCALL_OK &&
+                exit_status == ASTRA_STATUS_OK) ?
+            ASTRA_STATUS_OK : ASTRA_STATUS_PEER_DEAD;
+    if (record->shutdown_managed == 0u) {
+        uint32_t status = astra_process_terminate(record->handle,
+                                                   ASTRA_SIGNAL_KILL);
+
+        if (status != ASTRA_SYSCALL_OK)
+            return ASTRA_STATUS_IO;
+        status = astra_process_wait(record->handle, ASTRA_DEADLINE_FOREVER,
+                                     &exit_status);
+        return status == ASTRA_SYSCALL_OK ||
+               status == ASTRA_SYSCALL_PEER_DEAD ? ASTRA_STATUS_OK :
+                                                   ASTRA_STATUS_IO;
+    }
+    {
+        uint32_t reply_receive = 0u;
+        AstraShutdownReply reply = {0};
+        uint32_t transaction = ++shutdown_transaction;
+        uint32_t status;
+
+        if (transaction == 0u)
+            transaction = ++shutdown_transaction;
+        status = astra_shutdown_request(record->shutdown_send, transaction,
+                                         &reply_receive);
+        if (status != ASTRA_SYSCALL_OK)
+            return ASTRA_STATUS_PEER_DEAD;
+        for (;;) {
+            uint32_t waits[] = {reply_receive, record->handle};
+            uint32_t ready = ASTRA_WAIT_INDEX_NONE;
+
+            status = astra_shutdown_receive_reply(reply_receive, transaction,
+                                                   &reply);
+            if (status != ASTRA_SYSCALL_WOULD_BLOCK)
+                break;
+            if (astra_process_wait(record->handle, 0u, &exit_status) !=
+                ASTRA_SYSCALL_TIMED_OUT) {
+                status = ASTRA_SYSCALL_PEER_DEAD;
+                break;
+            }
+            status = astra_wait_multiple(waits, 2u, ASTRA_DEADLINE_FOREVER,
+                                         &ready, NULL);
+            if (status != ASTRA_SYSCALL_OK &&
+                (status != ASTRA_SYSCALL_PEER_DEAD || ready == 0u))
+                break;
+        }
+        (void)astra_close(reply_receive);
+        if (status != ASTRA_SYSCALL_OK ||
+            reply.decision != ASTRA_SHUTDOWN_READY)
+            return ASTRA_STATUS_BUSY;
+        status = astra_process_wait(record->handle, ASTRA_DEADLINE_FOREVER,
+                                     &exit_status);
+        return status == ASTRA_SYSCALL_OK && exit_status == ASTRA_STATUS_OK ?
+            ASTRA_STATUS_OK : ASTRA_STATUS_PEER_DEAD;
+    }
+}
+
+static uint32_t shutdown_system(uint32_t operation)
+{
+    AstraSyscallResult result = {0};
+    /* Reverse launch order preserves boot-time service dependencies. */
+    for (uint32_t phase = 0u; phase < 2u; ++phase) {
+        for (;;) {
+            uint32_t slot = process_count;
+            uint32_t status;
+
+            while (slot != 0u &&
+                   process_table.records[slot - 1u].resident != phase)
+                --slot;
+            if (slot == 0u)
+                break;
+            --slot;
+            status = shutdown_process(slot);
+            if (status != ASTRA_STATUS_OK)
+                return status;
+            if (process_table.records[slot].service_name[0] != '\0')
+                unpublish_owner(process_table.records[slot].service_name);
+            remove_process_slot(slot);
+        }
+    }
+    astra_syscall5(operation == ASTRA_SERVICE_MANAGER_SYSTEM_RESTART ?
+                       ASTRA_SYSCALL_SYSTEM_RESTART :
+                       ASTRA_SYSCALL_SYSTEM_SHUTDOWN,
+                   0u, 0u, 0u, 0u,
+                    0u, &result);
+    return result.status == ASTRA_SYSCALL_OK ? ASTRA_STATUS_OK :
+                                               ASTRA_STATUS_BUSY;
+}
+
 static void pump_manager(const AstraStartupInfo *startup)
 {
     AstraServiceManagerRequest request = {0};
@@ -1512,7 +1640,7 @@ static void pump_manager(const AstraStartupInfo *startup)
         request.header.protocol_version != ASTRA_SERVICE_MANAGER_VERSION ||
         request.header.transaction_id == 0u ||
         request.header.operation < ASTRA_SERVICE_MANAGER_LIST ||
-        request.header.operation > ASTRA_SERVICE_MANAGER_DISABLE ||
+        request.header.operation > ASTRA_SERVICE_MANAGER_SYSTEM_RESTART ||
         (request.header.operation == ASTRA_SERVICE_MANAGER_LIST &&
          (request.cursor.source > ASTRA_SERVICE_LIST_SOURCE_DONE ||
           request.cursor.reserved != 0u || request.name[0] != '\0')) ||
@@ -1522,6 +1650,8 @@ static void pump_manager(const AstraStartupInfo *startup)
         ((request.header.operation == ASTRA_SERVICE_MANAGER_ADD) !=
          (handle_count == 2u)) ||
          (request.header.operation != ASTRA_SERVICE_MANAGER_LIST &&
+          request.header.operation != ASTRA_SERVICE_MANAGER_SHUTDOWN &&
+          request.header.operation != ASTRA_SERVICE_MANAGER_SYSTEM_RESTART &&
          !astra_service_name_valid(request.name))) {
         if (handle_count >= 1u && handles[0] != 0u)
             manager_reply(handles[0], request.header.transaction_id,
@@ -1540,6 +1670,11 @@ static void pump_manager(const AstraStartupInfo *startup)
             service_info(definition, &info);
             send_definition = 1;
         }
+    } else if (request.header.operation == ASTRA_SERVICE_MANAGER_SHUTDOWN ||
+               request.header.operation ==
+                   ASTRA_SERVICE_MANAGER_SYSTEM_RESTART) {
+        status = request.name[0] == '\0' ? ASTRA_STATUS_OK :
+                                           ASTRA_STATUS_INVALID;
     } else if (request.header.operation == ASTRA_SERVICE_MANAGER_ADD) {
         void *mapping = NULL;
         uint32_t bytes = 0u;
@@ -1575,6 +1710,13 @@ static void pump_manager(const AstraStartupInfo *startup)
     manager_reply(handles[0], request.header.transaction_id, status,
                   status == ASTRA_STATUS_OK ? &info : NULL, &next,
                   send_definition != 0 ? definition : NULL);
+    if (status == ASTRA_STATUS_OK &&
+        (request.header.operation == ASTRA_SERVICE_MANAGER_SHUTDOWN ||
+         request.header.operation == ASTRA_SERVICE_MANAGER_SYSTEM_RESTART)) {
+        status = shutdown_system(request.header.operation);
+        if (status != ASTRA_STATUS_OK)
+            (void)astra_log_failure("shutdown canceled", status);
+    }
 }
 
 /*

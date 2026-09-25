@@ -74,9 +74,8 @@
 
 #define ASTRA_CPU_HZ             12500000ull
 #define ASTRA_BUILD_ID           0x18ebe2e1u
-#define ASTRA_KERNEL_READY       0x4b314f4bu
-#define ASTRA_KERNEL_SOAK        0x4b31534bu
-#define ASTRA_KERNEL_PANIC       0x4b50414eu
+#define ASTRA_GUEST_SHUTDOWN_EXIT_CODE 88
+#define ASTRA_GUEST_RESTART_EXIT_CODE 89
 
 #define TIMER_ENABLE             (1u << 0)
 #define TIMER_PERIODIC           (1u << 1)
@@ -4880,19 +4879,29 @@ static void astra_report_status(Astra68State *s, uint32_t value)
 {
     const char *result;
 
-    if (value == ASTRA_KERNEL_PANIC) {
+    if (value == ASTRA_KERNEL_STATUS_PANIC) {
         result = "PANIC";
         astra_display_panic_text(s);
-    } else if (value == ASTRA_KERNEL_SOAK) {
+    } else if (value == ASTRA_KERNEL_STATUS_K1_SOAK) {
         result = "SOAK";
+    } else if (value == ASTRA_KERNEL_STATUS_SHUTDOWN) {
+        result = "SHUTDOWN";
+    } else if (value == ASTRA_KERNEL_STATUS_RESTART) {
+        result = "RESTART";
     } else {
         result = "READY";
     }
     fprintf(stderr, "\nASTRA68-QEMU %s cycles=%" PRIu64
             " pc=%08x scratch=%08x\n", result, astra_now_cycles(s),
             s->cpu->env.pc, value);
-    if (value != ASTRA_KERNEL_SOAK) {
-        qemu_system_shutdown_request(value == ASTRA_KERNEL_PANIC ?
+    if (value == ASTRA_KERNEL_STATUS_SHUTDOWN) {
+        qemu_system_shutdown_request_with_code(
+            SHUTDOWN_CAUSE_GUEST_SHUTDOWN, ASTRA_GUEST_SHUTDOWN_EXIT_CODE);
+    } else if (value == ASTRA_KERNEL_STATUS_RESTART) {
+        qemu_system_shutdown_request_with_code(
+            SHUTDOWN_CAUSE_GUEST_SHUTDOWN, ASTRA_GUEST_RESTART_EXIT_CODE);
+    } else if (value != ASTRA_KERNEL_STATUS_K1_SOAK) {
+        qemu_system_shutdown_request(value == ASTRA_KERNEL_STATUS_PANIC ?
                                      SHUTDOWN_CAUSE_GUEST_PANIC :
                                      SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
     }
@@ -4907,8 +4916,11 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
     switch (offset) {
     case 0x018:
         s->scratch = value;
-        if (value == ASTRA_KERNEL_READY || value == ASTRA_KERNEL_SOAK ||
-            value == ASTRA_KERNEL_PANIC) {
+        if (value == ASTRA_KERNEL_STATUS_K1_READY ||
+            value == ASTRA_KERNEL_STATUS_K1_SOAK ||
+            value == ASTRA_KERNEL_STATUS_PANIC ||
+            value == ASTRA_KERNEL_STATUS_SHUTDOWN ||
+            value == ASTRA_KERNEL_STATUS_RESTART) {
             astra_report_status(s, value);
         }
         break;

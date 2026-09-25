@@ -51,6 +51,8 @@ main(void)
                ASTRA_POSIX_PROCESS_NEW_SESSION) == ASTRA_STATUS_OK);
     assert(posix_process_query(&table, 200, &entry) == ASTRA_STATUS_OK);
     assert(entry.parent == 0 && entry.group == 200 && entry.session == 200);
+    assert(posix_process_session_size(&table, 200) == 1u);
+    assert(posix_process_session_size(&table, 999) == 0u);
     assert(posix_process_tty_attach(&table, 201) == ASTRA_STATUS_ACCESS);
     assert(posix_process_tty_attach(&table, 200) == ASTRA_STATUS_OK);
     assert(posix_process_tty_foreground(&table, 200, &entry.session,
@@ -60,6 +62,7 @@ main(void)
            ASTRA_STATUS_OK);
     assert(posix_process_query(&table, 201, &entry) == ASTRA_STATUS_OK);
     assert(entry.parent == 200 && entry.group == 200 && entry.session == 200);
+    assert(posix_process_session_size(&table, 200) == 2u);
     assert(posix_process_register(&table, 999, 202, 9u, 0u) ==
            ASTRA_STATUS_ACCESS);
     assert(posix_process_register(&table, 200, 201, 9u, 0u) ==
@@ -86,11 +89,14 @@ main(void)
     assert(posix_process_setpgid(&table, 201, 0, 200) == ASTRA_STATUS_OK);
     assert(posix_process_setsid(&table, 201, &entry) == ASTRA_STATUS_OK);
     assert(entry.session == 201 && entry.group == 201);
+    assert(posix_process_session_size(&table, 200) == 1u);
+    assert(posix_process_session_size(&table, 201) == 1u);
     assert(posix_process_tty_foreground(&table, 201, NULL, NULL) ==
            ASTRA_STATUS_NOT_FOUND);
 
     assert(posix_process_remove(&table, 200, &handle) == ASTRA_STATUS_OK);
     assert(handle == 7u);
+    assert(posix_process_session_size(&table, 200) == 0u);
     assert(posix_process_query(&table, 201, &entry) == ASTRA_STATUS_OK);
     assert(entry.parent == 0);
     assert(posix_process_visit(&table, 201, 999, visit, &log, &matched) ==

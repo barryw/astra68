@@ -7,7 +7,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010036u
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010037u
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -314,6 +314,9 @@
 #define ASTRA_SYSCALL_LIBRARY_ATTACH_RESIDENT 95
 /* Commits every page touched by D1=address, D2=length in a private reservation. */
 #define ASTRA_SYSCALL_VM_PRIVATE_COMMIT       96
+/* PID 1 only. Retires PID 1 after all other guest processes have exited. */
+#define ASTRA_SYSCALL_SYSTEM_SHUTDOWN          97
+#define ASTRA_SYSCALL_SYSTEM_RESTART           98
 
 #define ASTRA_VM_PRIVATE_READ  (1u << 0)
 #define ASTRA_VM_PRIVATE_WRITE (1u << 1)

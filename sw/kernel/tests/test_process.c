@@ -10276,10 +10276,147 @@ static void test_a_program_cannot_forge_a_verdict(void)
     assert(process.exit_status == (uint32_t)ASTRA_STATUS_PROGRAM_FIRST + 7u);
 }
 
+static void test_system_shutdown_requires_idle_initial_image(void)
+{
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t initial = 0u;
+    uint32_t other = 0u;
+
+    loader_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &other) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    registers[0] = ASTRA_SYSCALL_SYSTEM_SHUTDOWN;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(initial_image_exits == 0u);
+
+    loader_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &initial) ==
+           KERNEL_PROCESS_OK);
+    kernel_process_register_initial_image(initial);
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &other) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_SYSTEM_SHUTDOWN;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_WOULD_BLOCK);
+    assert(initial_image_exits == 0u);
+
+    loader_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &initial) ==
+           KERNEL_PROCESS_OK);
+    kernel_process_register_initial_image(initial);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_SYSTEM_SHUTDOWN;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_NO_RUNNABLE);
+    assert(initial_image_exits == 1u);
+    assert(last_initial_image_status == 0u);
+    assert(last_initial_image_reason == KERNEL_PROCESS_EXIT_SHUTDOWN);
+
+    loader_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &other) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_SYSTEM_RESTART;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(initial_image_exits == 0u);
+
+    loader_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &initial) ==
+           KERNEL_PROCESS_OK);
+    kernel_process_register_initial_image(initial);
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &other) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_SYSTEM_RESTART;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_WOULD_BLOCK);
+    assert(initial_image_exits == 0u);
+
+    loader_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &initial) ==
+           KERNEL_PROCESS_OK);
+    kernel_process_register_initial_image(initial);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_SYSTEM_RESTART;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_NO_RUNNABLE);
+    assert(initial_image_exits == 1u);
+    assert(last_initial_image_status == 0u);
+    assert(last_initial_image_reason == KERNEL_PROCESS_EXIT_RESTART);
+
+    loader_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &initial) ==
+           KERNEL_PROCESS_OK);
+    kernel_process_register_initial_image(initial);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_EXIT;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_NO_RUNNABLE);
+    assert(last_initial_image_status == 0u);
+    assert(last_initial_image_reason == KERNEL_PROCESS_EXIT_SYSCALL);
+}
+
 static void test_initial_image_exit_is_reported(void)
 {
     const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
     const uint32_t exit_status = 0x53565200u;
+
+    assert(kernel_process_clean_power_exit(0u,
+                                         KERNEL_PROCESS_EXIT_SHUTDOWN));
+    assert(kernel_process_clean_power_exit(0u,
+                                          KERNEL_PROCESS_EXIT_RESTART));
+    assert(!kernel_process_clean_power_exit(0u,
+                                          KERNEL_PROCESS_EXIT_SYSCALL));
+    assert(!kernel_process_clean_power_exit(1u,
+                                          KERNEL_PROCESS_EXIT_SHUTDOWN));
+    assert(!kernel_process_clean_power_exit(1u,
+                                           KERNEL_PROCESS_EXIT_RESTART));
+    assert(!kernel_process_clean_power_exit(0u,
+                                          KERNEL_PROCESS_EXIT_USER_FAULT));
+    assert(!kernel_process_clean_power_exit(0u,
+                                          KERNEL_PROCESS_EXIT_SIGNAL));
+    assert(!kernel_process_clean_power_exit(0u,
+                                          KERNEL_PROCESS_EXIT_LAST_THREAD));
     KernelCpuContext *next;
     KernelTraceRecord exit_record;
     uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
@@ -12196,6 +12333,7 @@ int main(void)
     test_reading_the_stream_is_the_privileged_half();
     test_no_debug_surface_closes_the_stream();
     test_a_program_cannot_forge_a_verdict();
+    test_system_shutdown_requires_idle_initial_image();
     test_initial_image_exit_is_reported();
     test_user_stack_accepts_a_large_posix_frame();
     test_user_stack_grows_on_fault_and_guards_the_floor();

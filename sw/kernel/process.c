@@ -2723,6 +2723,8 @@ static KernelProcessStatus retire_process(KernelProcess *retiring,
     KernelProcessStatus status;
     uint16_t retiring_slot;
     bool retires_current;
+    bool shutdown_initial;
+    uint32_t final_status;
     uint32_t closed_sync_objects;
     uint32_t closed_ports;
     uint32_t closed_rings;
@@ -2744,6 +2746,9 @@ static KernelProcessStatus retire_process(KernelProcess *retiring,
          retiring->process_state != KERNEL_PROCESS_RUNNING))
         return KERNEL_PROCESS_CORRUPT;
     retires_current = current_thread->process_slot == retiring_slot;
+    shutdown_initial = (reason == KERNEL_PROCESS_EXIT_SHUTDOWN ||
+                        reason == KERNEL_PROCESS_EXIT_RESTART) &&
+                       retiring->id == initial_image_process_id;
     if (retires_current)
         runtime_stop(retiring, current_thread);
     retiring->process_state = KERNEL_PROCESS_EXITING;
@@ -2773,6 +2778,7 @@ static KernelProcessStatus retire_process(KernelProcess *retiring,
         retiring->exit_status = (uint32_t)ASTRA_STATUS_BAD_EXIT;
     else
         retiring->exit_status = exit_status;
+    final_status = retiring->exit_status;
     retiring->terminal_result =
         reason == KERNEL_PROCESS_EXIT_USER_FAULT ||
         reason == KERNEL_PROCESS_EXIT_SIGNAL ?
@@ -2797,7 +2803,9 @@ static KernelProcessStatus retire_process(KernelProcess *retiring,
      * handle and no userspace boot controller remains to report the failure.
      */
     if (initial_image_process_id != 0u &&
-        retiring->id == initial_image_process_id && !initial_image_exited) {
+        retiring->id == initial_image_process_id && !initial_image_exited &&
+        reason != KERNEL_PROCESS_EXIT_SHUTDOWN &&
+        reason != KERNEL_PROCESS_EXIT_RESTART) {
         initial_image_exited = 1u;
         kernel_process_initial_image_exited(retiring->exit_status,
                                             (uint32_t)reason);
@@ -2851,6 +2859,11 @@ static KernelProcessStatus retire_process(KernelProcess *retiring,
         status != KERNEL_PROCESS_NO_RUNNABLE)
         return status;
     check_milestone();
+    if (shutdown_initial && !initial_image_exited) {
+        initial_image_exited = 1u;
+        kernel_process_initial_image_exited(final_status,
+                                            (uint32_t)reason);
+    }
     return status;
 }
 
@@ -10020,6 +10033,22 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         thread->context.data[0] = ASTRA_SYSCALL_OK;
         return retire_current(KERNEL_PROCESS_EXIT_SYSCALL,
                               thread->context.data[1], next_context);
+    case ASTRA_SYSCALL_SYSTEM_SHUTDOWN:
+    case ASTRA_SYSCALL_SYSTEM_RESTART:
+        if (current->id != initial_image_process_id) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (scheduler_stats.live_processes != 1u ||
+            current->live_threads != 1u) {
+            result = ASTRA_SYSCALL_WOULD_BLOCK;
+            break;
+        }
+        thread->context.data[0] = ASTRA_SYSCALL_OK;
+        return retire_current(syscall == ASTRA_SYSCALL_SYSTEM_RESTART ?
+                              KERNEL_PROCESS_EXIT_RESTART :
+                              KERNEL_PROCESS_EXIT_SHUTDOWN, 0u,
+                              next_context);
     case ASTRA_SYSCALL_THREAD_CREATE: {
         KernelPreparedThread prepared_thread;
         KernelHandle created_handle;
