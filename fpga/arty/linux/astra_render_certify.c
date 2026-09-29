@@ -127,7 +127,9 @@ enum {
     LANE_COMMAND_END = LANE_COMMAND_FIRST + LANE_COMMAND_COUNT,
     COMPOSITOR_COMMAND = LANE_COMMAND_END,
     COMPOSITOR_COMMAND_END = COMPOSITOR_COMMAND + 1u,
-    TEXTURE_COMMAND_FIRST = COMPOSITOR_COMMAND_END,
+    SCALED_COMMAND = COMPOSITOR_COMMAND_END,
+    SCALED_COMMAND_END = SCALED_COMMAND + 1u,
+    TEXTURE_COMMAND_FIRST = SCALED_COMMAND_END,
     TEXTURE_TRIANGLE_CASES = 8u,
     TEXTURE_REJECTED_CASE = 7u,
     TEXTURE_ARGB_OPS = 4u,
@@ -158,6 +160,16 @@ enum {
         COMPOSITOR_DESTINATION_PITCH * COMPOSITOR_HEIGHT,
     COMPOSITOR_DESTINATION_OFFSET = 0x00100000u,
     COMPOSITOR_CYCLE_BUDGET = 3125000u,
+    /* testscale's background: 408x167 ARGB8888 over 640x480 RGB565. */
+    SCALED_SOURCE_WIDTH = 408u,
+    SCALED_SOURCE_HEIGHT = 167u,
+    SCALED_SOURCE_PITCH = SCALED_SOURCE_WIDTH * 4u,
+    SCALED_DESTINATION_WIDTH = 640u,
+    SCALED_DESTINATION_HEIGHT = 480u,
+    SCALED_DESTINATION_PITCH = SCALED_DESTINATION_WIDTH * 2u,
+    /* Pixel mode is about 1.04 cycles per pixel; the serial blitter ~28. */
+    SCALED_CYCLE_BUDGET =
+        SCALED_DESTINATION_WIDTH * SCALED_DESTINATION_HEIGHT * 2u,
     VIRTUAL_SPRITE_WIDTH = 16u,
     VIRTUAL_SPRITE_HEIGHT = 16u,
     VIRTUAL_SPRITE_COLUMNS = 16u,
@@ -1987,6 +1999,136 @@ static int certify_compositor_copy(
     return 0;
 }
 
+// A scaled, blended BLIT on the pixel-stream path. Nearest-neighbour sampling
+// uses the blitter's Q24 step, ceil((source << 24) / destination); blending
+// is straight-alpha source-over and RGB565 packing truncates.
+static uint32_t scaled_source_pixel(unsigned x, unsigned y)
+{
+    uint32_t value = (x * 0x9e3779b1u) ^ (y * 0x85ebca6bu) ^ 0x2545f491u;
+
+    value ^= value >> 15;
+    value *= 0x2c1b3c6du;
+    return value ^ (value >> 12);
+}
+
+static uint16_t scaled_destination_pixel(unsigned x, unsigned y)
+{
+    return (uint16_t)(x * 0x0421u + y * 0x1f3du);
+}
+
+static uint16_t scaled_expected_pixel(uint32_t source, uint16_t destination)
+{
+    uint8_t alpha = astra_texture_mul255((uint8_t)(source >> 24), 0xffu);
+    uint8_t inverse = (uint8_t)(0xffu - alpha);
+    uint8_t d[3] = {
+        (uint8_t)(((destination >> 11) << 3) | (destination >> 13)),
+        (uint8_t)((((destination >> 5) & 0x3fu) << 2) |
+                  ((destination >> 9) & 0x3u)),
+        (uint8_t)(((destination & 0x1fu) << 3) | ((destination >> 2) & 0x7u)),
+    };
+    uint8_t out[3];
+    unsigned channel;
+
+    for (channel = 0u; channel < 3u; ++channel) {
+        unsigned sum = astra_texture_mul255(
+                (uint8_t)(source >> (16u - channel * 8u)), alpha) +
+            astra_texture_mul255(d[channel], inverse);
+
+        out[channel] = (uint8_t)(sum > 0xffu ? 0xffu : sum);
+    }
+    return (uint16_t)(((out[0] >> 3) << 11) | ((out[1] >> 2) << 5) |
+                      (out[2] >> 3));
+}
+
+static int certify_scaled_blit(
+    const struct astra_graphics_device *device, struct render_maps *maps,
+    uint32_t *cycles_out)
+{
+    volatile uint8_t *source = maps->frame.data;
+    volatile uint8_t *destination =
+        maps->frame.data + COMPOSITOR_DESTINATION_OFFSET;
+    uint64_t step_x = (((uint64_t)SCALED_SOURCE_WIDTH << 24) +
+                       SCALED_DESTINATION_WIDTH - 1u) /
+                      SCALED_DESTINATION_WIDTH;
+    uint64_t step_y = (((uint64_t)SCALED_SOURCE_HEIGHT << 24) +
+                       SCALED_DESTINATION_HEIGHT - 1u) /
+                      SCALED_DESTINATION_HEIGHT;
+    uint32_t cycles;
+    unsigned x, y;
+
+    for (y = 0u; y < SCALED_SOURCE_HEIGHT; ++y)
+        for (x = 0u; x < SCALED_SOURCE_WIDTH; ++x)
+            store_be32(source + (size_t)y * SCALED_SOURCE_PITCH + x * 4u,
+                       scaled_source_pixel(x, y));
+    for (y = 0u; y < SCALED_DESTINATION_HEIGHT; ++y)
+        for (x = 0u; x < SCALED_DESTINATION_WIDTH; ++x)
+            store_be16(destination + (size_t)y * SCALED_DESTINATION_PITCH +
+                           x * 2u,
+                       scaled_destination_pixel(x, y));
+    if (write_surface(maps, LANE_SOURCE_DESCRIPTOR_OFFSET,
+                      FRAME_DATA_OFFSET,
+                      SCALED_SOURCE_PITCH * SCALED_SOURCE_HEIGHT,
+                      SCALED_SOURCE_PITCH, SCALED_SOURCE_WIDTH,
+                      SCALED_SOURCE_HEIGHT, ASTRA_RENDER_FORMAT_ARGB8888,
+                      ASTRA_RENDER_SURFACE_READ, 0u) != 0 ||
+        write_surface(maps, LANE_DEST_DESCRIPTOR_OFFSET,
+                      FRAME_DATA_OFFSET + COMPOSITOR_DESTINATION_OFFSET,
+                      SCALED_DESTINATION_PITCH * SCALED_DESTINATION_HEIGHT,
+                      SCALED_DESTINATION_PITCH, SCALED_DESTINATION_WIDTH,
+                      SCALED_DESTINATION_HEIGHT, ASTRA_RENDER_FORMAT_RGB565,
+                      ASTRA_RENDER_SURFACE_READ |
+                          ASTRA_RENDER_SURFACE_WRITE, 0u) != 0 ||
+        write_blit(maps, SCALED_COMMAND, ASTRA_RENDER_FLAG_BLIT_ALPHA,
+                   0, 0, SCALED_DESTINATION_WIDTH, SCALED_DESTINATION_HEIGHT,
+                   LANE_DEST_DESCRIPTOR_OFFSET,
+                   LANE_SOURCE_DESCRIPTOR_OFFSET, 0u,
+                   0, 0, 0, 0,
+                   SCALED_SOURCE_WIDTH, SCALED_SOURCE_HEIGHT,
+                   SCALED_DESTINATION_WIDTH, SCALED_DESTINATION_HEIGHT,
+                   0xff000000u) != 0)
+        return -1;
+    astra_graphics_memory_barrier();
+    astra_mmio_write(device, ASTRA_REG_RENDER_SUBMISSION_PRODUCER,
+                     SCALED_COMMAND_END);
+    if (wait_for_completions(device, SCALED_COMMAND_END) != 0 ||
+        wait_for_idle(device, ENGINE_TIMEOUT_NS) != 0 ||
+        verify_blit_completion(maps, SCALED_COMMAND,
+                               SCALED_DESTINATION_WIDTH *
+                                   SCALED_DESTINATION_HEIGHT,
+                               &cycles) != 0)
+        return -1;
+    for (y = 0u; y < SCALED_DESTINATION_HEIGHT; ++y) {
+        unsigned source_y = (unsigned)((y * step_y) >> 24);
+
+        for (x = 0u; x < SCALED_DESTINATION_WIDTH; ++x) {
+            unsigned source_x = (unsigned)((x * step_x) >> 24);
+            uint16_t expected = scaled_expected_pixel(
+                scaled_source_pixel(source_x, source_y),
+                scaled_destination_pixel(x, y));
+            uint16_t actual = load_be16(
+                destination + (size_t)y * SCALED_DESTINATION_PITCH + x * 2u);
+
+            if (actual != expected) {
+                fprintf(stderr,
+                        "scaled blit (%u,%u) expected=%04x actual=%04x\n",
+                        x, y, expected, actual);
+                return -1;
+            }
+        }
+    }
+    if (cycles > SCALED_CYCLE_BUDGET) {
+        fprintf(stderr, "scaled blit left the pixel stream: %" PRIu32
+                        "/%u cycles\n",
+                cycles, SCALED_CYCLE_BUDGET);
+        return -1;
+    }
+    astra_mmio_write(device, ASTRA_REG_RENDER_COMPLETION_CONSUMER,
+                     SCALED_COMMAND_END);
+    astra_mmio_write(device, ASTRA_REG_RENDER_IRQ_PENDING, 1u);
+    *cycles_out = cycles;
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // Texture engine (TRIANGLES) and ARGB8888 destinations. Every fixture is
 // built in host memory, copied into the arena, and the expected result is
@@ -2754,6 +2896,7 @@ int main(int argc, char **argv)
     uint32_t overflow_cycles;
     uint32_t screen_offset_cycles;
     uint32_t compositor_cycles;
+    uint32_t scaled_cycles;
     uint64_t texture_cycles;
     uint32_t texture_pixels;
     unsigned present_milliseconds;
@@ -3134,6 +3277,13 @@ int main(int argc, char **argv)
            COMPOSITOR_SOURCE_WIDTH, COMPOSITOR_HEIGHT,
            COMPOSITOR_SOURCE_PITCH, COMPOSITOR_DESTINATION_PITCH,
            compositor_cycles, COMPOSITOR_CYCLE_BUDGET);
+    if (certify_scaled_blit(&device, &maps, &scaled_cycles) != 0)
+        goto stop_engine;
+    printf("ASTRA_RENDER_SCALED PASS source=%ux%u destination=%ux%u"
+           " cycles=%" PRIu32 " budget=%u\n",
+           SCALED_SOURCE_WIDTH, SCALED_SOURCE_HEIGHT,
+           SCALED_DESTINATION_WIDTH, SCALED_DESTINATION_HEIGHT,
+           scaled_cycles, SCALED_CYCLE_BUDGET);
     if (certify_texture_engine(&device, &maps, &texture_cycles,
                                &texture_pixels) != 0)
         goto stop_engine;

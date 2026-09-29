@@ -123,6 +123,22 @@ pixel-mode blend.
   `run_bench.sh`, and SDLFrameBench, which uses no scaling and should not
   change.
 
+## Done: scaled BLITs in pixel mode (bitstream `a13c8ed0`, deployed)
+
+- Scope: nearest-neighbour, destination at least as wide as the source,
+  any vertical ratio, plain or `BLIT_ALPHA`. Horizontal downscales,
+  reflection, key, mask, palette and ROP still take the serial blitter.
+- Sim: 1.04 cycles/px for the testscale background (perf case `4000`).
+  Board: `ASTRA_RENDER_SCALED` 1.58 cycles/px, 2.9 ms. The serial path
+  took 80-91 ms.
+- Board demos (render batches/s): testscale 11 to 60, testrendertarget 27
+  to 102, testsprite2 unchanged. `astra-render-certify` 10/10, and remote
+  desktop passes.
+- Record: `fpga/de25/TIMING_CLOSURE.md` (2026-09-30).
+- Next levers if a demo is still slow: the per-batch serialization
+  described above (reply before the hardware finishes), then horizontal
+  downscale in pixel mode (the chunk cap needs `floor(cap / step)`).
+
 ## The remaining SDL gates
 
 From `sw/userspace/sdl2/README.md`. Upstream test programs live in the SDL2

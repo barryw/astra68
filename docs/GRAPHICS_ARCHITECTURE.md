@@ -659,8 +659,9 @@ in hardware.
 
 ### Pixel-stream BLIT
 
-An unscaled BLIT between RGB565, XRGB8888 and ARGB8888, with no flags or only
-`FLAG_BLIT_ALPHA`, and 8-aligned pitches, runs in the copy burst mover's pixel
+A BLIT between RGB565, XRGB8888 and ARGB8888, with no flags or only
+`FLAG_BLIT_ALPHA`, 8-aligned pitches, and a destination at least as wide as
+its source, runs in the copy burst mover's pixel
 mode (`astra_render_copy_burst.sv`): source chunks are read ahead, destination
 chunks too when blending, and pixels are expanded, blended (pipelined DSP
 source-over) and packed at one per clock. A plain conversion is the same
@@ -669,8 +670,21 @@ A chunk whose source is opaque at opacity 255 skips its destination read;
 XRGB and RGB565 sources are always opaque. Same-format plain copies keep the
 byte path. A 640x480 ARGB8888 to RGB565 BLIT costs about 1.04 cycles per
 pixel, blended or not (sim, L25 and L150), where the serial blitter took
-25-170. Scaled, reflected, color-keyed, masked, palette and ROP BLITs, and
-pitches that are not a multiple of 8, still use the serial blitter.
+25-170.
+
+Scaling is nearest-neighbour with the serial blitter's Q24 steps, so both
+paths write the same pixels. Destination pixel `c` of a row reads source
+pixel `floor(phase_x + c * step_x)`, and each row advances the source by
+`floor(frac_y + step_y)` rows; an unscaled BLIT is step 1.0. With `step_x`
+at most 1.0 a chunk never spans more source pixels than destination
+pixels, so each chunk reads exactly its source span into the same slot the
+unscaled path uses, and the per-pixel source offset advances by zero or one
+pixel. Any vertical step works: a downscale by k spends k planner cycles per
+row stepping the source row address.
+
+Horizontally downscaled, reflected, color-keyed, masked, palette and ROP
+BLITs, and pitches that are not a multiple of 8, still use the serial
+blitter.
 
 ### Rectangle lists (FILL_RECTS)
 

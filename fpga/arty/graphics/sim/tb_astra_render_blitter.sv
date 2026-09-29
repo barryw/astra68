@@ -414,25 +414,32 @@ module tb_astra_render_blitter;
         end
     end
 
-    // One random direct-color BLIT (plain or BLIT_ALPHA) checked byte for
-    // byte against the reference over the whole destination surface.
-    // serial selects a 4-mod-8 pitch, which keeps the per-pixel path.
+    // One random direct-color BLIT (plain or BLIT_ALPHA) of a sw x sh
+    // source onto w x h destination pixels, checked byte for byte against the
+    // reference over the whole destination surface. Nearest-neighbour
+    // sampling uses the blitter's Q24 step, ceil((sw << 24) / w).
+    // serial selects a 4-mod-8 pitch, which keeps the per-pixel path; a
+    // source wider than its destination keeps it too.
     task automatic pixel_case(input [7:0] sf, input [7:0] df,
                               input blend, input [7:0] opacity,
                               input [1:0] alpha_kind, input integer w,
                               input integer h, input serial,
-                              input clipped);
+                              input clipped, input integer sw,
+                              input integer sh);
         integer sbpp, dbpp, ssw, ssh, dsw, dsh, i, j, k, dxi, dyi, expected_pixels;
         integer sxi, syi, spitch, dpitch, soff, doff, x0, y0, x1, y1;
         reg [31:0] value, want;
         reg [7:0] want_byte;
         reg in_rect;
+        reg [63:0] step_x, step_y, sample_x, sample_y;
         begin
+            step_x = (({32'd0, sw} << 24) + w - 1) / w;
+            step_y = (({32'd0, sh} << 24) + h - 1) / h;
             sbpp = sf == `ASTRA_RENDER_FORMAT_RGB565 ? 2 : 4;
             dbpp = df == `ASTRA_RENDER_FORMAT_RGB565 ? 2 : 4;
             sxi = px_rand(9); syi = px_rand(3);
             dxi = px_rand(9); dyi = px_rand(3);
-            ssw = sxi + w + px_rand(5); ssh = syi + h + px_rand(2);
+            ssw = sxi + sw + px_rand(5); ssh = syi + sh + px_rand(2);
             dsw = dxi + w + px_rand(5); dsh = dyi + h + px_rand(2);
             spitch = ((ssw * sbpp + 7) / 8 + px_rand(40)) * 8 +
                      (serial ? 4 : 0);
@@ -452,7 +459,7 @@ module tb_astra_render_blitter;
                         alpha_kind == 2 ? (px_rand(9) == 0 ? px_rand(256) : 8'hff) :
                         // Only the first and last columns translucent.
                         ((k % spitch) / 4 == sxi ||
-                         (k % spitch) / 4 == sxi + w - 1 ? 8'h40 : 8'hff));
+                         (k % spitch) / 4 == sxi + sw - 1 ? 8'h40 : 8'hff));
             for (k = 0; k < dpitch * dsh + 16; k = k + 1) begin
                 value = px_rand(256);
                 memory_i.write_byte(doff - 8 + k, value[7:0]);
@@ -467,7 +474,7 @@ module tb_astra_render_blitter;
             source_bpp = sbpp; destination_bpp = dbpp;
             source_x = sxi; source_y = syi;
             destination_x = dxi; destination_y = dyi;
-            source_width = w; source_height = h;
+            source_width = sw; source_height = sh;
             destination_width = w; destination_height = h;
             x0 = 0; y0 = 0; x1 = dsw; y1 = dsh;
             if (clipped) begin
@@ -493,9 +500,11 @@ module tb_astra_render_blitter;
                         for (k = 0; k < dbpp; k = k + 1)
                             value = {value[23:0],
                                      px_before[8 + j * dpitch + i * dbpp + k]};
+                        sample_x = ((i - dxi) * step_x) >> 24;
+                        sample_y = ((j - dyi) * step_y) >> 24;
                         want = ref_blit(sf, df, blend, opacity,
-                            mem_pixel(soff + (syi + j - dyi) * spitch +
-                                      (sxi + i - dxi) * sbpp, sbpp),
+                            mem_pixel(soff + (syi + sample_y) * spitch +
+                                      (sxi + sample_x) * sbpp, sbpp),
                             value);
                     end
                     for (k = 0; k < dbpp; k = k + 1) begin
@@ -503,8 +512,8 @@ module tb_astra_render_blitter;
                             px_before[8 + j * dpitch + i * dbpp + k];
                         if (memory_i.read_byte(doff + j * dpitch + i * dbpp + k)
                             !== want_byte)
-                            $fatal(1, "pixel case %0d->%0d blend=%0d op=%02x serial=%0d w=%0d h=%0d: (%0d,%0d) byte %0d = %02x expected %02x",
-                                   sf, df, blend, opacity, serial, w, h, i, j, k,
+                            $fatal(1, "pixel case %0d->%0d blend=%0d op=%02x serial=%0d %0dx%0d->%0dx%0d: (%0d,%0d) byte %0d = %02x expected %02x",
+                                   sf, df, blend, opacity, serial, sw, sh, w, h, i, j, k,
                                    memory_i.read_byte(doff + j * dpitch + i * dbpp + k),
                                    want_byte);
                     end
@@ -522,8 +531,8 @@ module tb_astra_render_blitter;
                 completed_pixels != expected_pixels)
                 $fatal(1, "pixel case status=%0d pixels=%0d expected %0d",
                        status, completed_pixels, expected_pixels);
-            if (blitter_i.fast_copy_q !== !serial ||
-                blitter_i.pixel_stream_q !== 1'b1)
+            if (blitter_i.fast_copy_q !== (!serial && sw <= w) ||
+                blitter_i.pixel_stream_q !== (sw <= w))
                 $fatal(1, "pixel case took the wrong path fast=%0d stream=%0d",
                        blitter_i.fast_copy_q, blitter_i.pixel_stream_q);
         end
@@ -537,7 +546,7 @@ module tb_astra_render_blitter;
     integer source_lane;
     integer destination_lane;
     reg [7:0] expected;
-    integer px_case, px_s, px_d;
+    integer px_case, px_s, px_d, px_w, px_h, px_sw, px_sh;
     reg px_blend;
     initial begin
         repeat (6) @(posedge clk);
@@ -1353,26 +1362,67 @@ module tb_astra_render_blitter;
             if (!px_blend && px_s == px_d)
                 px_d = (px_d + 1) % 3;
             px_stall_mode = px_case % 4 == 3;
+            px_w = px_case % 7 == 0 ? 1 + px_rand(3) : 1 + px_rand(300);
+            px_h = 1 + px_rand(4);
             pixel_case(px_formats[px_s], px_formats[px_d], px_blend,
                 px_case % 5 == 0 ? 8'hff : px_case % 5 == 1 ? 8'h00 :
                     px_rand(256), px_case % 4,
-                px_case % 7 == 0 ? 1 + px_rand(3) : 1 + px_rand(300),
-                1 + px_rand(4), 1'b0, px_case % 6 == 5);
+                px_w, px_h, 1'b0, px_case % 6 == 5, px_w, px_h);
             px_stall_mode = 0;
             stall_reads = 1'b0;
             stall_writes = 1'b0;
-            if (px_case % 5 == 2)
+            if (px_case % 5 == 2) begin
+                px_w = 1 + px_rand(40);
+                px_h = 1 + px_rand(3);
                 pixel_case(px_formats[px_s], px_formats[px_d], px_blend,
-                    px_rand(256), px_case % 4, 1 + px_rand(40),
-                    1 + px_rand(3), 1'b1, 1'b0);
+                    px_rand(256), px_case % 4, px_w, px_h, 1'b1, 1'b0,
+                    px_w, px_h);
+            end
         end
 
         // Opaque chunks skip the destination read; a translucent first or
         // last pixel on either lane of a partial beat must not.
         for (px_case = 0; px_case < 24; px_case = px_case + 1)
+        begin
+            px_w = 1 + px_case % 5;
+            px_h = 1 + px_rand(2);
             pixel_case(`ASTRA_RENDER_FORMAT_ARGB8888,
                 px_formats[px_case % 3], 1'b1, 8'hff, 2'd3,
-                1 + px_case % 5, 1 + px_rand(2), 1'b0, 1'b0);
+                px_w, px_h, 1'b0, 1'b0, px_w, px_h);
+        end
+
+        // Scaled pixel-stream BLITs: horizontal upscales (and equal widths
+        // with a vertical scale) against the same reference, with random
+        // stalls; the serial path (4-mod-8 pitch, or a horizontal
+        // downscale) must agree with it.
+        for (px_case = 0; px_case < 72; px_case = px_case + 1) begin
+            px_s = px_case % 3;
+            px_d = (px_case / 3) % 3;
+            px_blend = (px_case / 9) % 2;
+            if (!px_blend && px_s == px_d)
+                px_d = (px_d + 1) % 3;
+            px_stall_mode = px_case % 4 == 3;
+            px_w = px_case % 8 == 0 ? 1 + px_rand(4) : 1 + px_rand(300);
+            px_h = 1 + px_rand(6);
+            px_sw = px_case % 11 == 0 ? px_w : 1 + px_rand(px_w);
+            px_sh = px_case % 5 == 0 ? 1 + px_rand(12) : 1 + px_rand(px_h);
+            pixel_case(px_formats[px_s], px_formats[px_d], px_blend,
+                px_rand(256), px_case % 4, px_w, px_h, 1'b0,
+                px_case % 6 == 5, px_sw, px_sh);
+            px_stall_mode = 0;
+            stall_reads = 1'b0;
+            stall_writes = 1'b0;
+            if (px_case % 6 == 1) begin
+                px_w = 1 + px_rand(40);
+                px_sw = 1 + px_rand(px_w);
+                pixel_case(px_formats[px_s], px_formats[px_d], px_blend,
+                    px_rand(256), px_case % 4, px_w, px_h, 1'b1, 1'b0,
+                    px_sw, px_sh);
+                pixel_case(px_formats[px_s], px_formats[px_d], px_blend,
+                    px_rand(256), px_case % 4, px_sw, px_h, 1'b0, 1'b0,
+                    px_w, px_sh);
+            end
+        end
         $display("PASS astra_render_blitter");
         $finish;
     end

@@ -1655,6 +1655,13 @@ its soft dependency orders the DesignWare provider first. A controlled cold
 boot loaded both automatically, created `/dev/astra-display-capture`, reached
 stage 8, and left the opt-in remote service inactive until explicitly started.
 
+The board runs bitstream `a13c8ed0` (`rtl-scale`, 2026-09-30; entry in
+`fpga/de25/TIMING_CLOSURE.md`): nearest-neighbour scaled BLITs no narrower
+than their source run in the burst mover's pixel mode. Its rollback bundle is
+`/var/lib/astra/boot-incoming-noerr` (`68ce7bb2`). `astra-render-certify`
+(`/data/cert/astra-render-certify.scale`) passes 10/10, and the remote-desktop
+RFB test passes.
+
 ## Active dynamic-linking work
 
 The executable/startup ABI is version 7. A streamed process-load transaction

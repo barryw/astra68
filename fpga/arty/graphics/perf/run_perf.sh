@@ -5,7 +5,8 @@
 #          20 testdraw2 frame, 40 TRIANGLES quads vs FILL, 80 quad coverage,
 #          200 FILL_RECTS, 400 testdraw2 frame with FILL_RECTS batching,
 #          800 testdraw2 frame with FILL_RECTS and LINES, LINES segments,
-#          1000 blended FILL_RECTS, 2000 ARGB8888->RGB565 BLIT (NONE, BLEND)
+#          1000 blended FILL_RECTS, 2000 ARGB8888->RGB565 BLIT (NONE, BLEND),
+#          4000 scaled ARGB8888->RGB565 BLIT (408x167 -> 640x480)
 #   PERF_ARGS=+host places the batch (ring, descriptors, sources) in the
 #   host aperture, read at HOST_LAT (default 60) cycles.
 set -euo pipefail

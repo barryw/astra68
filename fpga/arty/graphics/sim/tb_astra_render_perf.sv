@@ -321,16 +321,25 @@ module tb_astra_render_perf;
         end
     endfunction
     // One W x blit_rows ARGB8888 -> RGB565 BLIT (all H rows unless
-    // +blit_rows=N), NONE or BLEND at opacity 255, and a check of every 13th
-    // pixel against the reference.
+    // +blit_rows=N) from a sw x sh source (the same extent when zero,
+    // nearest-neighbour otherwise), NONE or BLEND at opacity 255, and a
+    // check of every 13th pixel against the reference.
     reg [15:0] blit_before [0:W*H-1];
     integer blit_rows = H;
     task automatic blit_argb(input [8*24-1:0] name, input blend,
-                             input [1:0] alpha_kind);
-        integer k;
+                             input [1:0] alpha_kind, input integer sw,
+                             input integer sh);
+        integer k, sk;
         reg [31:0] s;
         reg [15:0] expect_px, got;
+        reg [63:0] step_x, step_y;
         begin
+            if (sw == 0) begin
+                sw = W;
+                sh = blit_rows;
+            end
+            step_x = (({32'd0, sw} << 24) + W - 1) / W;
+            step_y = (({32'd0, sh} << 24) + blit_rows - 1) / blit_rows;
             for (k = 0; k < W * H; k = k + 1) begin
                 s = k * 32'h9e3779b1;
                 s[31:24] = alpha_kind == 0 ? 8'hff :
@@ -345,13 +354,15 @@ module tb_astra_render_perf;
             be32(slot(sub) + 36, ARGB_DESC);
             be32(slot(sub) + 44, 0);
             be32(slot(sub) + 48, 0);
-            be32(slot(sub) + 52, {16'(W), 16'(blit_rows)});
+            be32(slot(sub) + 52, {16'(sw), 16'(sh)});
             be32(slot(sub) + 56, {16'(W), 16'(blit_rows)});
             be32(slot(sub) + 60, blend ? 32'hff000000 : 32'd0);
             sub = sub + 1;
             run(name, W * blit_rows);
             for (k = 0; k < W * blit_rows; k = k + 13) begin
-                expect_px = ref_argb_565(rd32(ARGB_DATA + k * 4),
+                sk = (((k / W) * step_y) >> 24) * W +
+                     (((k % W) * step_x) >> 24);
+                expect_px = ref_argb_565(rd32(ARGB_DATA + sk * 4),
                                          blit_before[k], blend, 8'hff);
                 got = {memory_i.read_byte(DST_DATA + k * 2),
                        memory_i.read_byte(DST_DATA + k * 2 + 1)};
@@ -782,10 +793,16 @@ module tb_astra_render_perf;
         // Format-converting BLITs: ARGB8888 -> RGB565, NONE and BLEND
         // (opaque, every seventh pixel translucent, every pixel random).
         if (cases[13]) begin
-            blit_argb("blit argb>565 none", 1'b0, 2'd0);
-            blit_argb("blit argb>565 blend opq", 1'b1, 2'd0);
-            blit_argb("blit argb>565 blend 1/7", 1'b1, 2'd2);
-            blit_argb("blit argb>565 blend rnd", 1'b1, 2'd1);
+            blit_argb("blit argb>565 none", 1'b0, 2'd0, 0, 0);
+            blit_argb("blit argb>565 blend opq", 1'b1, 2'd0, 0, 0);
+            blit_argb("blit argb>565 blend 1/7", 1'b1, 2'd2, 0, 0);
+            blit_argb("blit argb>565 blend rnd", 1'b1, 2'd1, 0, 0);
+        end
+        // Scaled BLITs as testscale draws its background: 408x167 ARGB8888
+        // onto the whole 640x480 RGB565 surface.
+        if (cases[14]) begin
+            blit_argb("scaled 408x167 none", 1'b0, 2'd0, 408, 167);
+            blit_argb("scaled 408x167 blend", 1'b1, 2'd1, 408, 167);
         end
         // Coverage: ADD on black, each covered pixel exactly once.
         if (cases[7]) begin

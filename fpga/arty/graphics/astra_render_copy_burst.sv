@@ -20,6 +20,13 @@
 // is exact because m(x, 255) = x. A chunk whose source pixels are all opaque
 // at opacity 255 does not depend on the destination, so its destination read
 // is skipped.
+//
+// Pixel mode samples its source nearest-neighbour with the blitter's Q24
+// steps: destination pixel c of a row reads source pixel
+// floor(phase_x + c * step_x) of the source row, and each row advances the
+// source by floor(frac_y + step_y) rows. An unscaled BLIT is step 1.0 and
+// phase 0. step_x is at most 1.0, so a chunk never spans more source pixels
+// than destination pixels and the unscaled chunk bounds still hold.
 `timescale 1ns/1ps
 `default_nettype none
 
@@ -47,6 +54,9 @@ module astra_render_copy_burst #(
     // ARGB8888, forward only), composited under opacity when pixel_blend.
     input wire pixel, input wire pixel_blend, input wire [7:0] opacity,
     input wire [7:0] source_format,
+    // Q24 nearest-neighbour steps and starting fractions (pixel mode only).
+    input wire [24:0] step_x, input wire [23:0] phase_x,
+    input wire [39:0] step_y, input wire [23:0] phase_y,
     input wire [31:0] source_address,
     input wire [31:0] destination_address, input wire [31:0] source_pitch,
     input wire [31:0] destination_pitch, input wire [17:0] row_bytes,
@@ -79,7 +89,8 @@ module astra_render_copy_burst #(
 
     localparam [3:0] P_IDLE = 4'd0, P_PLAN = 4'd1, P_SOURCE_LIMIT = 4'd2,
         P_DESTINATION_LIMIT = 4'd3, P_CHUNK = 4'd4, P_START = 4'd5,
-        P_ADDRESS = 4'd6, P_PUSH = 4'd7, P_DONE = 4'd8;
+        P_ADDRESS = 4'd6, P_PUSH = 4'd7, P_DONE = 4'd8,
+        P_SCALE_SUM = 4'd9, P_SCALE_SPAN = 4'd10, P_ROW_ADVANCE = 4'd11;
     localparam [1:0] W_IDLE = 2'd0, W_AW = 2'd1, W_DATA = 2'd2;
 
     function automatic [7:0] low_strobes(input [2:0] lanes);
@@ -138,8 +149,7 @@ module astra_render_copy_burst #(
     reg [2:0] chunk_source_lane_q, chunk_destination_lane_q;
     reg [5:0] read_beats_q, write_beats_q;
 
-    // Pixel mode walks destination bytes; the source advances by the
-    // source/destination bytes-per-pixel ratio (2, 1 or 1/2).
+    // Pixel mode walks destination bytes; the source follows the Q24 phase.
     localparam [7:0] FORMAT_RGB565 = `ASTRA_RENDER_FORMAT_RGB565;
     localparam [7:0] FORMAT_XRGB8888 = `ASTRA_RENDER_FORMAT_XRGB8888;
     localparam [7:0] FORMAT_ARGB8888 = `ASTRA_RENDER_FORMAT_ARGB8888;
@@ -147,21 +157,29 @@ module astra_render_copy_burst #(
     wire destination_wide = blend_format_q != FORMAT_RGB565;
     wire source_up = pixel_q && source_wide && !destination_wide;
     wire source_down = pixel_q && !source_wide && destination_wide;
-    function automatic [18:0] source_span(input [17:0] bytes,
-                                          input up, input down);
-        begin
-            source_span = up ? {bytes, 1'b0} :
-                down ? {2'd0, bytes[17:1]} : {1'b0, bytes};
-        end
-    endfunction
-    wire [31:0] cursor_source_address = source_row_address_q +
-        {13'd0, source_span(byte_cursor_q, source_up, source_down)};
+    reg [24:0] step_x_q;
+    reg [23:0] phase_x_q, frac_y_q;
+    reg [39:0] step_y_q, y_sum_q;
+    // Chunk phase is relative to the row's first source pixel.
+    reg [39:0] chunk_phase_q, chunk_next_phase_q, chunk_last_phase_q;
+    (* multstyle = "dsp" *) reg [31:0] chunk_product_q;
+    reg [8:0] span_bytes_q;
+    reg [15:0] row_advance_q;
+    wire [6:0] chunk_pixels = destination_wide ?
+        {1'b0, chunk_bytes_q[7:2]} : chunk_bytes_q[7:1];
+    wire [15:0] span_pixels = chunk_last_phase_q[39:24] -
+        chunk_phase_q[39:24] + 16'd1;
+    wire [31:0] pixel_source_address = source_row_address_q +
+        (source_wide ? {14'd0, chunk_phase_q[39:24], 2'b00} :
+                       {15'd0, chunk_phase_q[39:24], 1'b0});
+    wire [31:0] cursor_source_address = pixel_q ? pixel_source_address :
+        source_row_address_q + {14'd0, byte_cursor_q};
     wire [31:0] cursor_destination_address = destination_row_address_q +
         {14'd0, byte_cursor_q};
-    wire [31:0] chunk_source_logical = source_row_address_q +
-        {13'd0, source_span(chunk_start_q, source_up, source_down)};
-    wire [8:0] chunk_source_bytes = source_up ? {chunk_bytes_q, 1'b0} :
-        source_down ? {2'd0, chunk_bytes_q[7:1]} : {1'b0, chunk_bytes_q};
+    wire [31:0] chunk_source_logical = pixel_q ? pixel_source_address :
+        source_row_address_q + {14'd0, chunk_start_q};
+    wire [8:0] chunk_source_bytes = pixel_q ? span_bytes_q :
+        {1'b0, chunk_bytes_q};
     // Pixel chunks keep both sides within 31 beats and whole pixels.
     wire [8:0] chunk_limit = !pixel_q ? forward_chunk_limit_q :
         source_up ? 9'd120 : 9'd240;
@@ -192,6 +210,9 @@ module astra_render_copy_burst #(
     // unless every source pixel is opaque at opacity 255 (skipped).
     (* ram_style = "distributed", ramstyle = "MLAB" *)
     reg [28:0] queue_read_beat [0:SLOTS-1];
+    // Source phase fraction at each chunk's first pixel.
+    (* ram_style = "distributed", ramstyle = "MLAB" *)
+    reg [23:0] queue_frac [0:SLOTS-1];
     reg [5:0] slot_write_beats_q [0:SLOTS-1];
     reg [SLOTS-1:0] slot_dest_q, slot_skip_q, slot_opaque_q,
         slot_skip_first_q, slot_skip_last_q;
@@ -239,6 +260,8 @@ module astra_render_copy_burst #(
     reg [4:0] writes_outstanding_q;
     reg [1:0] w_open_q;       // pixel mode: AW accepted, WLAST not yet
     reg [7:0] w_s_off_q, w_d_off_q, w_pixels_q, w_px_count_q;
+    reg [23:0] w_frac_q;
+    wire [24:0] w_frac_sum = {1'b0, w_frac_q} + step_x_q;
     reg w_skip_q;
     // Stream pipeline: A (RAM address), B (RAM data), C (the W beat).
     reg a_valid_q, a_zero_q, a_first_q;
@@ -481,6 +504,10 @@ module astra_render_copy_burst #(
     // Chunk data: R beats in, stream reads out (one-cycle registered read).
     integer lane_slot;
     always @(posedge clk) begin
+        // Settled long before a row ends: the planner spends at least nine
+        // cycles on each row, and frac_y changes only when one ends.
+        y_sum_q <= {16'd0, frac_y_q} + step_y_q;
+        chunk_product_q <= chunk_pixels * step_x_q;
         if (r_accept && !r_draining_q && !r_kind)
             data[{r_slot_q, r_beat_q[4:0]}] <= m_axi_rdata;
         if (r_accept && !r_draining_q && r_kind)
@@ -597,6 +624,16 @@ module astra_render_copy_burst #(
             pixel_blend_q <= 1'b0;
             opacity_q <= 8'd0;
             source_format_q <= 8'd0;
+            step_x_q <= 25'd0;
+            phase_x_q <= 24'd0;
+            step_y_q <= 40'd0;
+            frac_y_q <= 24'd0;
+            chunk_phase_q <= 40'd0;
+            chunk_next_phase_q <= 40'd0;
+            chunk_last_phase_q <= 40'd0;
+            span_bytes_q <= 9'd0;
+            row_advance_q <= 16'd0;
+            w_frac_q <= 24'd0;
             slot_dest_q <= {SLOTS{1'b0}};
             slot_skip_q <= {SLOTS{1'b0}};
             slot_opaque_q <= {SLOTS{1'b0}};
@@ -789,6 +826,11 @@ module astra_render_copy_burst #(
                     pixel_blend_q <= pixel && pixel_blend;
                     opacity_q <= opacity;
                     source_format_q <= source_format;
+                    step_x_q <= step_x;
+                    phase_x_q <= phase_x;
+                    step_y_q <= step_y;
+                    frac_y_q <= phase_y;
+                    chunk_phase_q <= {16'd0, phase_x};
                     d_slot_q <= 3'd0;
                     d_count_q <= 4'd0;
                     slot_dest_q <= {SLOTS{1'b0}};
@@ -880,6 +922,22 @@ module astra_render_copy_burst #(
                         byte_cursor_q - {10'd0, chunk_bytes_q} : byte_cursor_q;
                     chunk_finishes_row_q <=
                         bytes_remaining_q == {10'd0, chunk_bytes_q};
+                    plan_state <= pixel_q ? P_SCALE_SUM : P_ADDRESS;
+                end
+
+                // The chunk's source span: its first pixel through the one
+                // its last destination pixel samples.
+                P_SCALE_SUM: begin
+                    chunk_next_phase_q <= chunk_phase_q +
+                        {8'd0, chunk_product_q};
+                    chunk_last_phase_q <= chunk_phase_q +
+                        {8'd0, chunk_product_q} - {15'd0, step_x_q};
+                    plan_state <= P_SCALE_SPAN;
+                end
+
+                P_SCALE_SPAN: begin
+                    span_bytes_q <= source_wide ? {span_pixels[6:0], 2'b00} :
+                        {span_pixels[7:0], 1'b0};
                     plan_state <= P_ADDRESS;
                 end
 
@@ -912,6 +970,7 @@ module astra_render_copy_burst #(
                     queue_shape[queue_tail_q] <= push_shape;
                     queue_read_beat[queue_tail_q] <=
                         chunk_destination_beat_q;
+                    queue_frac[queue_tail_q] <= chunk_phase_q[23:0];
                     slot_read_beats_q[queue_tail_q] <= read_beats_q;
                     slot_write_beats_q[queue_tail_q] <= write_beats_q;
                     slot_opaque_q[queue_tail_q] <= 1'b1;
@@ -933,9 +992,18 @@ module astra_render_copy_burst #(
                             plan_state <= P_DONE;
                         else begin
                             rows_remaining_q <= rows_remaining_q - 16'd1;
-                            source_row_address_q <= reverse_q ?
-                                source_row_address_q - source_pitch_q :
-                                source_row_address_q + source_pitch_q;
+                            chunk_phase_q <= {16'd0, phase_x_q};
+                            // Pixel mode advances floor(frac_y + step_y)
+                            // source rows: none, one here, or the rest in
+                            // P_ROW_ADVANCE.
+                            if (pixel_q)
+                                frac_y_q <= y_sum_q[23:0];
+                            if (reverse_q)
+                                source_row_address_q <=
+                                    source_row_address_q - source_pitch_q;
+                            else if (!pixel_q || y_sum_q[39:24] != 16'd0)
+                                source_row_address_q <=
+                                    source_row_address_q + source_pitch_q;
                             destination_row_address_q <= reverse_q ?
                                 destination_row_address_q -
                                     destination_pitch_q :
@@ -946,9 +1014,12 @@ module astra_render_copy_burst #(
                             forward_chunk_limit_q <= chunk_capacity(
                                 source_row_address_q[2:0],
                                 destination_row_address_q[2:0]);
-                            plan_state <= P_PLAN;
+                            row_advance_q <= y_sum_q[39:24] - 16'd1;
+                            plan_state <= pixel_q && y_sum_q[39:24] > 16'd1 ?
+                                P_ROW_ADVANCE : P_PLAN;
                         end
                     end else begin
+                        chunk_phase_q <= chunk_next_phase_q;
                         bytes_remaining_q <= bytes_remaining_q -
                             {10'd0, chunk_bytes_q};
                         byte_cursor_q <= reverse_q ?
@@ -959,6 +1030,16 @@ module astra_render_copy_burst #(
                             next_chunk_destination_lane);
                         plan_state <= P_PLAN;
                     end
+                end
+
+                // ponytail: one pitch per cycle; a vertical downscale by k
+                // costs k cycles per row, multiply if that ever matters.
+                P_ROW_ADVANCE: begin
+                    source_row_address_q <= source_row_address_q +
+                        source_pitch_q;
+                    row_advance_q <= row_advance_q - 16'd1;
+                    if (row_advance_q == 16'd1)
+                        plan_state <= P_PLAN;
                 end
 
                 // Every issued read and write has been answered.
@@ -979,6 +1060,7 @@ module astra_render_copy_burst #(
                              writes_outstanding_q < MAX_POSTED_WRITES &&
                              (!pixel_q || w_open_q != 2'd2)) begin
                     w_s_off_q <= {5'd0, head_source_lane};
+                    w_frac_q <= queue_frac[queue_head_q];
                     w_d_off_q <= {5'd0, head_destination_lane};
                     w_pixels_q <= destination_wide ?
                         {2'd0, head_chunk_bytes[7:2]} :
@@ -1050,7 +1132,9 @@ module astra_render_copy_burst #(
                     a_end_q <= pixel_issue_last || w_d_off_q[2:0] ==
                         (destination_wide ? 3'd4 : 3'd6);
                     a_skip_q <= w_skip_q;
-                    w_s_off_q <= w_s_off_q + pixel_step_source;
+                    w_s_off_q <= w_s_off_q +
+                        (w_frac_sum[24] ? pixel_step_source : 8'd0);
+                    w_frac_q <= w_frac_sum[23:0];
                     w_d_off_q <= w_d_off_q + pixel_step_destination;
                     w_px_count_q <= w_px_count_q + 8'd1;
                 end else if (!pixel_q && write_state == W_DATA &&

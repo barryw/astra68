@@ -1,5 +1,59 @@
 # DE25-Nano Timing Closure
 
+## 2026-09-30: scaled BLITs in pixel mode (routed, deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed a full production
+  synthesis, fit, route, signoff and programming-file build with
+  `build_astra_shell.sh` (`DISPLAY` unset) from a checksum rsync of the Mac
+  working tree at `~/astra-mg/rtl-scale`
+  (`ASTRA_DE25_BUILD_ROOT=build/de25-scale`). First attempt. The source is
+  the `rtl-noerr` build below plus this change.
+- Change. The copy burst mover's pixel mode samples its source
+  nearest-neighbour with the blitter's Q24 steps, so a BLIT whose
+  destination is at least as wide as its source (any height ratio) no
+  longer falls to the serial blitter. Each chunk reads exactly its source
+  span; with `step_x <= 1.0` that span is never wider than the chunk, so
+  the unscaled slot and page bounds hold. The per-pixel source offset
+  advances by 0 or 1 pixel from a 24-bit fraction, and each row advances
+  the source by `floor(frac_y + step_y)` rows. The planner spends two more
+  cycles per chunk (span) and one per extra source row (vertical
+  downscale). `docs/GRAPHICS_ARCHITECTURE.md`, "Pixel-stream BLIT".
+- `run_tests.sh` passes on `beast` (Icarus 12). `tb_astra_render_blitter`
+  adds 72 random scaled cases, with and without stalls, clips and blending,
+  against a Q24 reference. The serial path (4-mod-8 pitch, horizontal
+  downscale) meets the same reference. Dropping the per-pixel carry, or the
+  multi-row source advance, fails the bench. Perf case `4000` (408x167
+  ARGB8888 onto 640x480 RGB565, testscale's background): **1.04 cycles
+  per pixel**, plain or blended. The unscaled `2000` case is unchanged at
+  1.03.
+- Routed resource use: **40,714 / 46,800 ALMs (87 %)** (+605); 3,615,040 /
+  7,331,840 block-memory bits, 315 / 358 RAM blocks, 67 / 376 DSP blocks
+  (+1, the chunk step product).
+- All production clocks are constrained and pass; no negative slack in any
+  corner. The 165 MHz graphics clock (`pixel_pll outclk1`, Fmax 177.65 MHz)
+  closes at **+0.431 ns** setup. Worst setup overall is +0.154 ns
+  (`ASTRA_HDMI_PIXEL_CLOCK`), worst hold +0.000 ns
+  (`pll_inst|iopll_0_outclk0`).
+- Source SHA-256: copy burst
+  `dc2d778602efaff70693b99e05140553ccc0e2cd88e7790d8d0607e2d85b94fd`,
+  blitter `a4f54d8f6895d57b6ca646dcdc9b345a8845f140ef086d587135bff85bda2201`.
+  Build-input checksum manifest SHA-256
+  `f536a58ccc0c92d1b06f28e9acff91f52949e9a4b3d4327f41e4a4a8941b626e`; boot
+  core RBF SHA-256
+  `a13c8ed0ed63204d5a4ae666e319ccb68a5cb70ef1da7a30270dfed3d0ba2ba1`;
+  `astra68.hps.jic` SHA-256
+  `5da13bde45d7c0291479519edae128abc738a81fac794d5c8b7e432145a7d257`
+  (not programmed). Artifacts:
+  `beast:~/astra-mg/rtl-scale/build/de25-scale/astra-shell/output_files/`.
+- Deployed 2026-09-30 with `install_boot_bundle.sh` from
+  `/var/lib/astra/boot-incoming-scale`; rollback bundle
+  `/var/lib/astra/boot-incoming-noerr`. `astra-render-certify` 10/10,
+  including the new `ASTRA_RENDER_SCALED` case (the testscale background,
+  blended, checked against the model byte for byte): **484,473 cycles,
+  1.58 cycles per pixel**, 2.9 ms. Board demos, `run_bench.sh` 10 s:
+  testscale 11 to **60** render batches/s, testrendertarget 27 to **102**,
+  testsprite2 unchanged (47.6).
+
 ## 2026-09-28: no AXI error responses to the CPU, access-fault records, host-burst split (routed, not deployed)
 
 - On `beast`, Quartus Pro 26.1.1 Build 130 completed a full production

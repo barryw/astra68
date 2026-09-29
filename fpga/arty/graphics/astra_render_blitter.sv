@@ -338,8 +338,9 @@ module astra_render_blitter #(
     reg fill_blend_q;
     reg is_blit_q;
     reg direct_copy_q;
-    // Unscaled, unreflected direct-color BLIT, plain or BLIT_ALPHA: the
-    // burst mover's pixel mode converts and blends it one pixel per clock.
+    // Unreflected direct-color BLIT, plain or BLIT_ALPHA, no narrower than
+    // its source (a horizontal step of at most 1.0): the burst mover's pixel
+    // mode samples, converts and blends it one pixel per clock.
     reg pixel_stream_q;
     reg fast_copy_q;
     reg same_surface_q;
@@ -705,6 +706,10 @@ module astra_render_blitter #(
         .pixel_blend(command_flags_q[4]),
         .opacity(options_q[31:24]),
         .source_format(source_format_q),
+        .step_x(scale_step_x_q[24:0]),
+        .phase_x(source_phase_x_start_q[23:0]),
+        .step_y(scale_step_y_q),
+        .phase_y(source_phase_y_q[23:0]),
         .source_address(is_fill_q ? destination_row_address_q[31:0] :
                         source_row_address_q[31:0]),
         .destination_address(destination_row_address_q[31:0]),
@@ -1051,10 +1056,11 @@ module astra_render_blitter #(
                     direct_copy_q <= is_blit_q && blit_no_flags_q &&
                         blit_same_format_q && blit_same_dimensions_q;
                     pixel_stream_q <= is_blit_q && !same_surface_q &&
-                        blit_same_dimensions_q &&
+                        source_command_width_q <= command_width_q &&
                         (command_flags_q & ~`ASTRA_RENDER_FLAG_BLIT_ALPHA) ==
                             16'd0 &&
-                        !(blit_no_flags_q && blit_same_format_q) &&
+                        !(blit_no_flags_q && blit_same_format_q &&
+                          blit_same_dimensions_q) &&
                         source_format_q != `ASTRA_RENDER_FORMAT_INDEX8 &&
                         destination_format_q != `ASTRA_RENDER_FORMAT_INDEX8;
                     state <= ST_PLAN_COMMAND_VALIDATE;
