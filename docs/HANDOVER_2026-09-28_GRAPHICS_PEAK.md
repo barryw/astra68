@@ -282,8 +282,17 @@ reset cannot recover a lost host read. Recovery is a reboot.
   helper copy_us 37 avg, hardware_us 1,371 avg, 0 failures, no helper
   restarts, no board reboot. The board is left on b421dc7d with no
   overrides and profiling off. `kernel.panic = 10` stays.
-- Not yet run on the board for this release: POST certify and the
-  remote-desktop certify. Nothing is committed.
+- Board certification of b421dc7d on 68ce7bb2 (2026-09-29):
+  - **POST PASS**: every line OK (SDRAM, splash, front panel, data and
+    address lines, cache coherence, kernel image, BootInfo, VBR, user copy
+    with fault recovery, kernel worker, Vesta timer, input queue).
+  - **Remote desktop PASS**: `fpga/de25/linux/test_remote_desktop.py` on
+    the board against the live service, with VNC auth, a 1920x1080 frame
+    (6,220,800 bytes, the real desktop) and `--pointer 400 300
+    --verify-rfb-pointer`. The `--macos-format` capture also passes.
+    Astra, remote desktop and audio host are all active with 0 restarts.
+- Committed and pushed as `c5d59368..82ab9926` (kernel, emulator,
+  userspace, FPGA, docs).
 - Fix details (RTL, with the no-error-response change):
   `astra_render_host_reads` splits host-port bursts below the limit and
   passes RLAST only on the last piece. Media RAM bursts are unchanged. A
