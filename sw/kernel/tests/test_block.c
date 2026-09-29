@@ -281,10 +281,13 @@ static void test_owner_revoke_and_late_completion(void)
     uint32_t released_frames = 99u;
 
     initialize_test();
+    assert(!kernel_block_revocations_pending());
     assert(kernel_dma_create(9u, 4096u, 1u, &idle) == KERNEL_DMA_OK);
     assert(kernel_dma_create(9u, 4096u, 1u, &active) == KERNEL_DMA_OK);
     assert(kernel_block_submit(9u, BLOCK_OP_WRITE, 0u, 1u, active, 0u,
                                &request) == KERNEL_BLOCK_OK);
+    /* A live owner's request is not something maintenance must drain. */
+    assert(!kernel_block_revocations_pending());
     assert(kernel_block_revoke_owner(9u, &released, &deferred) ==
            KERNEL_BLOCK_OK);
     assert(released == 1u && deferred == 1u);
@@ -293,9 +296,11 @@ static void test_owner_revoke_and_late_completion(void)
     assert(kernel_block_request_info(request, 9u, &request_info) ==
            KERNEL_BLOCK_OK);
     assert(request_info.state == KERNEL_BLOCK_REQUEST_REVOKING);
+    assert(kernel_block_revocations_pending());
 
     queue_completion(request, 0u, 1u, 0u, 2u, 1u);
     assert(service_completions() == 1u);
+    assert(!kernel_block_revocations_pending());
     assert(kernel_block_request_info(request, 9u, &request_info) ==
            KERNEL_BLOCK_INVALID_HANDLE);
     assert(kernel_dma_buffer_info(active, 9u, &info) ==

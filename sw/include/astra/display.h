@@ -30,6 +30,9 @@
 #define ASTRA_DISPLAY_CAP_FENCED_PRESENT (UINT32_C(1) << 2)
 #define ASTRA_DISPLAY_CAP_RENDER_BATCH   (UINT32_C(1) << 3)
 #define ASTRA_DISPLAY_CAP_HARDWARE_CURSOR (UINT32_C(1) << 4)
+#define ASTRA_DISPLAY_CAP_READ_SURFACE   (UINT32_C(1) << 5)
+/* A render batch may carry an area attachment (AstraDisplayFrameRequest). */
+#define ASTRA_DISPLAY_CAP_ATTACHMENT     (UINT32_C(1) << 6)
 
 #define ASTRA_CAPABILITY_DISPLAY_IRQ "DISPLAY_IRQ"
 #define ASTRA_CAPABILITY_DISPLAY_VBLANK_IRQ "VBLANK_IRQ"
@@ -43,6 +46,8 @@
 #define ASTRA_DISPLAY_CURSOR_UPDATE 4u
 #define ASTRA_DISPLAY_PANIC_TEXT 5u
 #define ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE 6u
+/* Copy a rectangle of one Media RAM surface into the request's DMA buffer. */
+#define ASTRA_DISPLAY_FRAME_READ_SURFACE 7u
 
 #define ASTRA_DISPLAY_CURSOR_VISIBLE (UINT32_C(1) << 0)
 #define ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT 1u
@@ -74,12 +79,44 @@ _Static_assert(sizeof(AstraDisplayCursorImage) ==
                    ASTRA_DISPLAY_CURSOR_IMAGE_BYTES,
                "cursor image ABI size changed");
 
+/*
+ * READ_SURFACE buffer: this 64-byte header, written by the requester, then
+ * read_height packed rows of the surface format, which the device writes.
+ * The request's byte_size is the header plus those rows exactly. The device
+ * rejects a header whose surface is not wholly inside Media RAM or whose
+ * rectangle is not inside the surface, and then writes nothing.
+ */
+#define ASTRA_DISPLAY_SURFACE_READ_MAGIC UINT32_C(0x53524541) /* SREA */
+#define ASTRA_DISPLAY_SURFACE_READ_VERSION UINT32_C(1)
+#define ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES 64u
+
+typedef struct AstraDisplaySurfaceRead {
+    uint32_t magic;
+    uint32_t version;
+    /* Graphics-arena byte offset and extent of the surface allocation. */
+    uint32_t data_offset;
+    uint32_t data_bytes;
+    uint32_t pitch;
+    uint16_t width;
+    uint16_t height;
+    uint32_t format; /* ASTRA_RENDER_FORMAT_* */
+    uint16_t x;
+    uint16_t y;
+    uint16_t read_width;
+    uint16_t read_height;
+    uint32_t reserved[7];
+} AstraDisplaySurfaceRead;
+
+_Static_assert(sizeof(AstraDisplaySurfaceRead) ==
+                   ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES,
+               "surface read header ABI size changed");
+
 #define ASTRA_DISPLAY_COMPLETION_OK          0u
 #define ASTRA_DISPLAY_COMPLETION_BAD_REQUEST 1u
 #define ASTRA_DISPLAY_COMPLETION_IO_ERROR    2u
 #define ASTRA_DISPLAY_COMPLETION_RESET       3u
 
-#define ASTRA_DISPLAY_FRAME_REQUEST_SIZE    24u
+#define ASTRA_DISPLAY_FRAME_REQUEST_SIZE    40u
 #define ASTRA_DISPLAY_FRAME_COMPLETION_SIZE 20u
 
 /* Supervisor-only AstraHost display transport. */
@@ -89,6 +126,9 @@ _Static_assert(sizeof(AstraDisplayCursorImage) ==
 #define ASTRA_DISPLAY_HOST_CAP_FENCED_PRESENT (UINT32_C(1) << 1)
 #define ASTRA_DISPLAY_HOST_CAP_RENDER_BATCH   (UINT32_C(1) << 2)
 #define ASTRA_DISPLAY_HOST_CAP_HARDWARE_CURSOR (UINT32_C(1) << 3)
+#define ASTRA_DISPLAY_HOST_CAP_READ_SURFACE    (UINT32_C(1) << 4)
+/* DISPLAY_REQ_ATTACH names an AstraRenderAttachment for a render batch. */
+#define ASTRA_DISPLAY_HOST_CAP_ATTACHMENT      (UINT32_C(1) << 5)
 #define ASTRA_DISPLAY_HOST_CURSOR_X_MASK UINT32_C(0x0000ffff)
 #define ASTRA_DISPLAY_HOST_CURSOR_Y_SHIFT 16u
 #define ASTRA_DISPLAY_HOST_CURSOR_Y_MASK UINT32_C(0x7fff0000)
@@ -136,12 +176,26 @@ typedef struct AstraDisplayFrameRequest {
     _Alignas(4) uint32_t size;
     uint32_t operation;
     uint32_t fence;
-    /* RGB565 color for SOLID; DMA handle for frames; cursor X for CURSOR. */
+    /* RGB565 color for SOLID; DMA handle for frames, batches, and
+       READ_SURFACE; cursor X for CURSOR. */
     uint32_t source;
     /* Frame pitch, or cursor Y for CURSOR. */
     uint32_t pitch;
     /* Frame byte size, or ASTRA_DISPLAY_CURSOR_* flags for CURSOR. */
     uint32_t byte_size;
+    /*
+     * RENDER_BATCH only, otherwise zero: an area handle whose bytes
+     * [attachment_offset, attachment_offset + attachment_bytes) the device
+     * places at batch offset attachment_target before executing the batch.
+     * The attachment ends the batch's defined bytes; what follows it, up to
+     * byte_size, is padding (a staged rectangle's last row is shorter than
+     * its pitch) that the device need not fill. Pixels a client staged reach
+     * Media RAM without the display service or the MC68040 copying them.
+     */
+    uint32_t attachment;
+    uint32_t attachment_offset;
+    uint32_t attachment_bytes;
+    uint32_t attachment_target;
 } AstraDisplayFrameRequest;
 
 typedef struct AstraDisplayFrameCompletion {

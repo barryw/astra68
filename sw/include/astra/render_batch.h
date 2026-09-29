@@ -15,6 +15,9 @@
 #define ASTRA_RENDER_BATCH_VERSION_1_1 UINT32_C(0x00010001)
 #define ASTRA_RENDER_BATCH_VERSION_1_2 UINT32_C(0x00010002)
 #define ASTRA_RENDER_BATCH_VERSION_1_3 UINT32_C(0x00010003)
+/* Render-only: commands target off-screen Media RAM surfaces; the helper
+   executes them and changes neither scanout nor the window scene. */
+#define ASTRA_RENDER_BATCH_VERSION_1_4 UINT32_C(0x00010004)
 #define ASTRA_RENDER_BATCH_PRESENT_CURSOR (UINT32_C(1) << 0)
 #define ASTRA_RENDER_BATCH_HEADER_BYTES 64u
 #define ASTRA_RENDER_BATCH_ARENA_OFFSET UINT32_C(0x00800000)
@@ -37,6 +40,30 @@
 #define ASTRA_RENDER_BATCH_MIN_BYTES \
     (ASTRA_RENDER_BATCH_RESOURCE_OFFSET - ASTRA_RENDER_BATCH_ARENA_OFFSET)
 #define ASTRA_RENDER_BATCH_MAX_BYTES ASTRA_RENDER_BATCH_BUFFER_BYTES
+
+/*
+ * Where a render batch's attachment is in physical memory: the kernel
+ * writes one of these for DISPLAY_REQ_ATTACH, and the device copies the
+ * extents, in order, to batch offset `target`. Big-endian, like the batch.
+ * An attachment fits in a batch, so it spans at most one extent per page
+ * plus one for a start that is not page-aligned.
+ */
+#define ASTRA_RENDER_ATTACHMENT_MAGIC UINT32_C(0x41415454) /* AATT */
+#define ASTRA_RENDER_ATTACHMENT_EXTENT_MAX \
+    (ASTRA_RENDER_BATCH_MAX_BYTES / 4096u + 1u)
+
+typedef struct AstraRenderAttachmentExtent {
+    uint32_t physical;
+    uint32_t bytes;
+} AstraRenderAttachmentExtent;
+
+typedef struct AstraRenderAttachment {
+    uint32_t magic;
+    uint32_t count;
+    uint32_t target;
+    uint32_t bytes;
+    AstraRenderAttachmentExtent extents[ASTRA_RENDER_ATTACHMENT_EXTENT_MAX];
+} AstraRenderAttachment;
 
 typedef struct AstraRenderBatchHeader {
     uint32_t magic;

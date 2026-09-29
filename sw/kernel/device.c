@@ -440,6 +440,11 @@ bool kernel_device_stats(KernelDeviceStats *stats)
     return true;
 }
 
+bool kernel_device_pool_healthy(void)
+{
+    return initialized && corrupt == 0u;
+}
+
 bool kernel_device_pool_valid(void)
 {
     KernelAllocationStats metadata;

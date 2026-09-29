@@ -3,6 +3,7 @@
 #include <astra/integer.h>
 #include <astra/syscall.h>
 
+#include "audit.h"
 #include "bytes.h"
 #include "generation.h"
 #include "memory.h"
@@ -1711,6 +1712,50 @@ KernelThreadStatus kernel_thread_make_ready(KernelThread *thread)
     return status;
 }
 
+KernelThreadStatus kernel_thread_set_priority(KernelThread *thread,
+                                              uint8_t priority)
+{
+    KernelThreadWaitQueue *queues[KERNEL_THREAD_WAIT_MEMBER_MAX];
+    uint8_t members;
+
+    if (!valid_thread(thread) ||
+        priority >= KERNEL_THREAD_PRIORITY_LEVELS)
+        return KERNEL_THREAD_INVALID_ARGUMENT;
+    if (thread->state == KERNEL_THREAD_DEAD)
+        return KERNEL_THREAD_INVALID_STATE;
+    if (thread->state < KERNEL_THREAD_CREATED ||
+        thread->state > KERNEL_THREAD_BLOCKED ||
+        thread->base_priority != thread->effective_priority)
+        return KERNEL_THREAD_CORRUPT;
+    if (thread->base_priority == priority)
+        return KERNEL_THREAD_OK;
+    if (thread->state == KERNEL_THREAD_READY &&
+        thread->suspended == 0u &&
+        remove_ready(thread) != KERNEL_THREAD_OK)
+        return KERNEL_THREAD_CORRUPT;
+    members = thread->state == KERNEL_THREAD_BLOCKED ?
+        thread->wait_member_count : 0u;
+    for (uint16_t member = 0u; member < members; ++member) {
+        queues[member] = thread->wait_registrations[member].queue;
+        if (queues[member] == NULL ||
+            remove_wait_registration(
+                &thread->wait_registrations[member]) != KERNEL_THREAD_OK)
+            return KERNEL_THREAD_CORRUPT;
+    }
+    thread->base_priority = priority;
+    thread->effective_priority = priority;
+    if (thread->state == KERNEL_THREAD_READY &&
+        thread->suspended == 0u &&
+        enqueue_ready(thread) != KERNEL_THREAD_OK)
+        return KERNEL_THREAD_CORRUPT;
+    for (uint16_t member = 0u; member < members; ++member) {
+        if (enqueue_wait_registration(thread, member, queues[member]) !=
+            KERNEL_THREAD_OK)
+            return KERNEL_THREAD_CORRUPT;
+    }
+    return KERNEL_THREAD_OK;
+}
+
 KernelThreadStatus
 kernel_thread_set_process_priority(uint16_t process_slot, uint8_t priority)
 {
@@ -1731,38 +1776,14 @@ kernel_thread_set_process_priority(uint16_t process_slot, uint8_t priority)
     }
 
     for (uint32_t slot = 0u; slot < thread_slots; ++slot) {
-        KernelThreadWaitQueue *queues[KERNEL_THREAD_WAIT_MEMBER_MAX];
         KernelThread *thread = thread_at_slot((uint16_t)slot);
-        uint8_t members;
 
         if (thread == NULL || thread->process_slot != process_slot ||
             thread->state == KERNEL_THREAD_DEAD ||
             thread->base_priority == priority)
             continue;
-        if (thread->state == KERNEL_THREAD_READY &&
-            thread->suspended == 0u &&
-            remove_ready(thread) != KERNEL_THREAD_OK)
+        if (kernel_thread_set_priority(thread, priority) != KERNEL_THREAD_OK)
             return KERNEL_THREAD_CORRUPT;
-        members = thread->state == KERNEL_THREAD_BLOCKED ?
-            thread->wait_member_count : 0u;
-        for (uint16_t member = 0u; member < members; ++member) {
-            queues[member] = thread->wait_registrations[member].queue;
-            if (queues[member] == NULL ||
-                remove_wait_registration(
-                    &thread->wait_registrations[member]) != KERNEL_THREAD_OK)
-                return KERNEL_THREAD_CORRUPT;
-        }
-        thread->base_priority = priority;
-        thread->effective_priority = priority;
-        if (thread->state == KERNEL_THREAD_READY &&
-            thread->suspended == 0u &&
-            enqueue_ready(thread) != KERNEL_THREAD_OK)
-            return KERNEL_THREAD_CORRUPT;
-        for (uint16_t member = 0u; member < members; ++member) {
-            if (enqueue_wait_registration(thread, member, queues[member]) !=
-                KERNEL_THREAD_OK)
-                return KERNEL_THREAD_CORRUPT;
-        }
     }
     return KERNEL_THREAD_OK;
 }
@@ -2260,7 +2281,7 @@ KernelThreadStatus expire_deadlines_fast(uint64_t now,
     uint32_t expired = 0u;
     uint8_t highest = 0u;
 
-    if (!deadline_heap_valid())
+    if (KERNEL_AUDIT && !deadline_heap_valid())
         return KERNEL_THREAD_CORRUPT;
     while (deadline_count != 0u) {
         uint16_t slot = deadline_heap[0];
@@ -2647,6 +2668,11 @@ bool kernel_thread_pool_stats(KernelThreadPoolStats *stats)
     stats->irq_wake_to_run_max_cycles =
         pool_stats.irq_wake_to_run_max_cycles;
     return true;
+}
+
+bool kernel_thread_pool_healthy(void)
+{
+    return pool_corrupt == 0u;
 }
 
 bool kernel_thread_pool_valid(void)

@@ -75,8 +75,11 @@ KERNEL_HOST_TESTS = \
 	$(BUILD_DIR)/test_worker $(BUILD_DIR)/test_dispatch \
 	$(BUILD_DIR)/test_elf
 
+# `make KERNEL_AUDIT=1` runs the whole-pool audits on the machine too
+# (audit.h); the host suites always run them.
 CPPFLAGS = -I../include -I../../ndk/include -I$(BUILD_DIR) -include $(BUILD_INFO) \
            -DKERNEL_TRACE_BUILD_LEVEL=$(KERNEL_TRACE_BUILD_LEVEL) \
+           $(if $(KERNEL_AUDIT),-DKERNEL_AUDIT=$(KERNEL_AUDIT)) \
            $(CPPFLAGS_DEBUG_SURFACE)
 # -ffunction-sections with --gc-sections below. A large part of this kernel is
 # introspection and test surface -- the *_snapshot, *_stats and

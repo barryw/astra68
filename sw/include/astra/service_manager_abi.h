@@ -11,7 +11,7 @@
 #define ASTRA_CAPABILITY_SERVICE_MANAGER "SERVICE_MANAGER"
 
 #define ASTRA_SERVICE_MANAGER_PROTOCOL UINT32_C(0x5356434d) /* SVCM */
-#define ASTRA_SERVICE_MANAGER_VERSION 4u
+#define ASTRA_SERVICE_MANAGER_VERSION 5u
 
 enum {
     ASTRA_SERVICE_MANAGER_LIST = 1u,
@@ -27,6 +27,8 @@ enum {
     ASTRA_SERVICE_MANAGER_DISABLE,
     ASTRA_SERVICE_MANAGER_SHUTDOWN,
     ASTRA_SERVICE_MANAGER_SYSTEM_RESTART,
+    /* AstraServiceManagerRequest.value = AstraServiceRestartPolicy. */
+    ASTRA_SERVICE_MANAGER_SET_RESTART,
     ASTRA_SERVICE_MANAGER_REPLY
 };
 
@@ -56,10 +58,16 @@ typedef enum AstraServiceRestartPolicy {
 #define ASTRA_SERVICE_ENABLED     (1u << 2)
 #define ASTRA_SERVICE_PROTECTED   (1u << 3)
 #define ASTRA_SERVICE_DELEGATES   (1u << 4)
+/*
+ * The machine cannot work without it (storage, display): it is PROTECTED
+ * and its death halts the system instead of restarting it. Like PROTECTED,
+ * only the startup manifest can set it.
+ */
+#define ASTRA_SERVICE_CRITICAL    (1u << 5)
 #define ASTRA_SERVICE_FLAG_MASK                                           \
     (ASTRA_SERVICE_RUNS_ASTRA | ASTRA_SERVICE_RUNS_PAIRED |               \
      ASTRA_SERVICE_ENABLED | ASTRA_SERVICE_PROTECTED |                    \
-     ASTRA_SERVICE_DELEGATES)
+     ASTRA_SERVICE_DELEGATES | ASTRA_SERVICE_CRITICAL)
 
 typedef struct AstraServiceAuthority {
     char name[ASTRA_CAPABILITY_NAME_MAX];
@@ -128,6 +136,9 @@ typedef struct AstraServiceManagerRequest {
     AstraMessageHeader header;
     AstraServiceListCursor cursor;
     char name[ASTRA_VFS_NAME_MAX];
+    /* The operation's argument; zero for every operation that takes none. */
+    uint32_t value;
+    uint32_t reserved;
 } AstraServiceManagerRequest;
 
 typedef struct AstraServiceManagerReply {

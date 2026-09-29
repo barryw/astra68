@@ -13,7 +13,7 @@
 /** GUI service wire protocol tag. */
 #define ASTRA_GUI_PROTOCOL UINT32_C(0x47554920) /* GUI  */
 /** Current GUI service wire protocol version. */
-#define ASTRA_GUI_VERSION 14u
+#define ASTRA_GUI_VERSION 16u
 
 /** Maximum counted UTF-8 bytes in a window title. */
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
@@ -40,7 +40,10 @@ enum {
 /** Shared-area content representation. */
 enum {
     ASTRA_WINDOW_CONTENT_RGB565 = 1,
-    ASTRA_WINDOW_CONTENT_DRAW_LIST = 2
+    ASTRA_WINDOW_CONTENT_DRAW_LIST = 2,
+    /** Content is a GPU surface drawn by submitted draw lists; the window's
+        shared area is its CPU staging area for surface writes. */
+    ASTRA_WINDOW_CONTENT_SURFACE = 3
 };
 
 /** Window creation and state flags. */
@@ -273,6 +276,38 @@ _Static_assert(sizeof(AstraWindowEvent) == 52u,
 #define ASTRA_GUI_WINDOW_COMMAND 3u
 #define ASTRA_GUI_WINDOW_STATE   4u
 #define ASTRA_GUI_WINDOW_EVENT   5u
+#define ASTRA_GUI_GRAPHICS_COMMAND 6u
+#define ASTRA_GUI_GRAPHICS_REPLY   7u
+
+/* Window-scoped GPU objects; see docs/MANAGED_GRAPHICS.md. */
+enum {
+    /* width, height, format (ASTRA_PIXEL_FORMAT_*), flags (ASTRA_SURFACE_*)
+       -> object = surface id, pitch */
+    ASTRA_GUI_GRAPHICS_SURFACE_CREATE = 1u,
+    ASTRA_GUI_GRAPHICS_SURFACE_DESTROY = 2u,
+    /* object; x, y, width, height in the surface; offset and pitch of the
+       rows in the staging area */
+    ASTRA_GUI_GRAPHICS_SURFACE_WRITE = 3u,
+    /* handles[1] replaces the staging area */
+    ASTRA_GUI_GRAPHICS_STAGING_SET = 4u,
+    /* handles[1] is an ADLT v1.5 area -> object = list id */
+    ASTRA_GUI_GRAPHICS_LIST_ATTACH = 5u,
+    ASTRA_GUI_GRAPHICS_LIST_DETACH = 6u,
+    /* object = list, target = destination surface; replies after the
+       commands complete on the hardware */
+    ASTRA_GUI_GRAPHICS_LIST_SUBMIT = 7u,
+    /* object; x, y, width, height in the surface; offset and pitch of the
+       rows written into the staging area */
+    ASTRA_GUI_GRAPHICS_SURFACE_READ = 8u,
+};
+
+/** WINDOW_PRESENT flag: the client redraws every content pixel of its next
+    frame, so the service need not carry this frame forward into it. Only
+    CONTENT_SURFACE windows accept it. */
+#define ASTRA_GUI_PRESENT_DISCARD 1u
+
+/** Surface id naming a CONTENT_SURFACE window's own content. */
+#define ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID 1u
 
 enum {
     ASTRA_GUI_WINDOW_QUERY = 1u,
@@ -358,11 +393,39 @@ typedef struct AstraGuiWindowEvent {
     AstraWindowEvent event;
 } AstraGuiWindowEvent;
 
+typedef struct AstraGuiGraphicsCommand {
+    AstraMessageHeader header;
+    uint32_t window;
+    uint32_t generation;
+    uint32_t action;
+    uint32_t object;
+    uint32_t target;
+    int32_t x;
+    int32_t y;
+    uint32_t width;
+    uint32_t height;
+    uint32_t format;
+    uint32_t flags;
+    uint32_t offset;
+    uint32_t pitch;
+    uint32_t reserved[2];
+} AstraGuiGraphicsCommand;
+
+typedef struct AstraGuiGraphicsReply {
+    AstraMessageHeader header;
+    uint32_t status;
+    uint32_t object;
+    uint32_t pitch;
+    uint32_t reserved;
+} AstraGuiGraphicsReply;
+
 #define ASTRA_GUI_OPEN_WINDOW_SIZE   108u
 #define ASTRA_GUI_WINDOW_OPENED_SIZE 36u
 #define ASTRA_GUI_WINDOW_COMMAND_SIZE 104u
 #define ASTRA_GUI_WINDOW_STATE_SIZE   64u
 #define ASTRA_GUI_WINDOW_EVENT_SIZE   76u
+#define ASTRA_GUI_GRAPHICS_COMMAND_SIZE 84u
+#define ASTRA_GUI_GRAPHICS_REPLY_SIZE 40u
 
 _Static_assert(sizeof(AstraGuiOpenWindow) == ASTRA_GUI_OPEN_WINDOW_SIZE,
                "GUI open-window message is an ABI");
@@ -374,6 +437,13 @@ _Static_assert(sizeof(AstraGuiWindowState) == ASTRA_GUI_WINDOW_STATE_SIZE,
                "GUI window-state message is an ABI");
 _Static_assert(sizeof(AstraGuiWindowEvent) == ASTRA_GUI_WINDOW_EVENT_SIZE,
                "GUI window-event message is an ABI");
+_Static_assert(sizeof(AstraGuiGraphicsCommand) ==
+                   ASTRA_GUI_GRAPHICS_COMMAND_SIZE &&
+               ASTRA_GUI_GRAPHICS_COMMAND_SIZE <=
+                   ASTRA_GUI_WINDOW_COMMAND_SIZE,
+               "GUI graphics command must fit the window control port");
+_Static_assert(sizeof(AstraGuiGraphicsReply) == ASTRA_GUI_GRAPHICS_REPLY_SIZE,
+               "GUI graphics reply is an ABI");
 /** @endcond */
 
 #endif

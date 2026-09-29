@@ -1439,6 +1439,51 @@ KernelAreaStatus kernel_area_write(KernelArea *area, uint32_t offset,
     return KERNEL_AREA_OK;
 }
 
+/*
+ * The physical runs behind [offset, offset + size) of a live area, adjacent
+ * frames merged, for a device that reads the bytes itself. Every page must
+ * be committed: unlike kernel_area_read there is no CPU here to supply the
+ * zeros an uncommitted page stands for.
+ */
+KernelAreaStatus kernel_area_extents(const KernelArea *area, uint32_t offset,
+                                     uint32_t size, KernelAreaExtent *extents,
+                                     uint32_t capacity, uint32_t *count)
+{
+    uint32_t used = 0u;
+
+    if (extents == NULL || count == NULL || size == 0u ||
+        !range_valid(area, offset, size))
+        return KERNEL_AREA_INVALID_ARGUMENT;
+    while (size != 0u) {
+        uint32_t page = offset / KERNEL_PAGE_SIZE;
+        uint32_t page_offset = offset & (KERNEL_PAGE_SIZE - 1u);
+        uint32_t chunk = KERNEL_PAGE_SIZE - page_offset;
+        const uint32_t *entry = page_entries(area, page);
+        uint32_t physical;
+
+        if (chunk > size)
+            chunk = size;
+        if (entry == NULL || *entry == AREA_PAGE_ABSENT)
+            return KERNEL_AREA_INVALID_ARGUMENT;
+        physical = *entry + page_offset;
+        if (used != 0u &&
+            extents[used - 1u].physical + extents[used - 1u].bytes ==
+                physical) {
+            extents[used - 1u].bytes += chunk;
+        } else {
+            if (used == capacity)
+                return KERNEL_AREA_INVALID_ARGUMENT;
+            extents[used].physical = physical;
+            extents[used].bytes = chunk;
+            ++used;
+        }
+        offset += chunk;
+        size -= chunk;
+    }
+    *count = used;
+    return KERNEL_AREA_OK;
+}
+
 KernelAreaStatus kernel_area_read(const KernelArea *area, uint32_t offset,
                                   void *destination, uint32_t size)
 {

@@ -1,7 +1,9 @@
 #include "process.h"
+#include "audit.h"
 
 #include <astra/block.h>
 #include <astra/clock.h>
+#include <astra/copy_engine.h>
 #include <astra/display.h>
 #include <astra/divide.h>
 #include <astra/endian.h>
@@ -129,9 +131,7 @@ typedef struct KernelProcess {
     uint64_t interval_deadline;
     uint64_t interval_period;
     uint32_t signal_trampoline;
-    uint32_t signal_stack_top;
     uint32_t signal_pending;
-    uint32_t signal_blocked;
     uint32_t signal_target_thread;
     uint32_t dynamic_tls_template_base;
     uint32_t dynamic_tls_template_span;
@@ -329,6 +329,20 @@ static uint8_t initial_image_exited;
 static KernelDmaToken display_dma_token;
 static uint32_t display_dma_owner;
 static uint8_t display_dma_active;
+/* The in-flight batch's attachment: the device reads the area's frames
+   through this list, and the reference keeps them until the batch is
+   collected or aborted. Kernel memory is identity-mapped, so the list's
+   address is the physical address the device is given. */
+static AstraRenderAttachment display_attachment KERNEL_TABLES;
+static KernelArea *display_attachment_area;
+
+_Static_assert(sizeof(KernelAreaExtent) ==
+                   sizeof(AstraRenderAttachmentExtent) &&
+               offsetof(KernelAreaExtent, physical) ==
+                   offsetof(AstraRenderAttachmentExtent, physical) &&
+               offsetof(KernelAreaExtent, bytes) ==
+                   offsetof(AstraRenderAttachmentExtent, bytes),
+               "area extents are written straight into the attachment");
 
 static bool display_dma_abort_owner(uint32_t owner);
 static uint32_t host_channel_close(KernelProcess *process,
@@ -419,7 +433,7 @@ _Static_assert(KERNEL_PORT_SEND_RIGHTS ==
 _Static_assert(ASTRA_RIGHT_READ == KERNEL_THREAD_RIGHT_QUERY &&
                    ASTRA_RIGHT_WAIT == KERNEL_THREAD_RIGHT_WAIT &&
                    ASTRA_RIGHT_ADMINISTER ==
-                       KERNEL_THREAD_RIGHT_CANCEL_WAIT,
+                       KERNEL_THREAD_RIGHT_ADMINISTER,
                "thread-right ABI mismatch");
 _Static_assert(ASTRA_RIGHT_READ == KERNEL_PROCESS_RIGHT_QUERY &&
                    ASTRA_RIGHT_WRITE == KERNEL_PROCESS_RIGHT_TERMINATE &&
@@ -1035,13 +1049,13 @@ static void signal_deliver(KernelThread *thread)
     if (process == NULL || thread == NULL ||
         thread->signal_context_active != 0u ||
         process->signal_trampoline == 0u ||
-        process->signal_stack_top < 8u)
+        thread->signal_stack_top < 8u)
         return;
-    pending = process->signal_pending & ~process->signal_blocked;
+    pending = process->signal_pending & ~thread->signal_blocked;
     if (pending == 0u)
         return;
     signal = (uint32_t)__builtin_ctz(pending);
-    stack = process->signal_stack_top - sizeof(frame);
+    stack = thread->signal_stack_top - sizeof(frame);
     frame[0] = 0u;
     frame[1] = signal;
     if (kernel_copy_to_user(stack, frame, sizeof(frame)) !=
@@ -1075,13 +1089,13 @@ static KernelProcessStatus queue_process_signal(KernelProcess *process,
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     bit = UINT32_C(1) << signal;
     process->signal_pending |= bit;
-    if ((process->signal_blocked & bit) != 0u)
-        return KERNEL_PROCESS_OK;
     for (uint32_t slot = 0u; slot < kernel_thread_slot_limit(); ++slot) {
         KernelThread *candidate = kernel_thread_at(slot);
 
         if (candidate != NULL && candidate->process_id == process->id &&
             candidate->state != KERNEL_THREAD_DEAD &&
+            candidate->signal_stack_top >= 8u &&
+            (candidate->signal_blocked & bit) == 0u &&
             (candidate->id == process->signal_target_thread ||
              target == NULL)) {
             target = candidate;
@@ -1466,7 +1480,7 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
             !kernel_area_pool_healthy() || !kernel_ring_pool_healthy() ||
             !kernel_irq_pool_healthy() ||
             !kernel_handle_transfer_pool_healthy() ||
-            !kernel_device_pool_valid() ||
+            !kernel_device_pool_healthy() ||
             !process_pool_healthy())
 #endif
             return KERNEL_PROCESS_CORRUPT;
@@ -2575,6 +2589,148 @@ static uint32_t host_syscall(KernelProcess *process, KernelThread *thread,
     }
 }
 
+/* The copy engine's list. Identity-mapped kernel memory, like the display
+   attachment: its address is what the device is given. */
+static AstraCopyList copy_list KERNEL_TABLES;
+
+#if defined(KERNEL_PROCESS_HOST_TEST)
+const AstraCopyList *kernel_process_test_copy_list(void)
+{
+    return &copy_list;
+}
+#endif
+
+static bool copy_list_flush(void)
+{
+    bool ok;
+
+    if (copy_list.count == 0u)
+        return true;
+    copy_list.magic = ASTRA_COPY_LIST_MAGIC;
+    ok = kernel_platform_copy((uint32_t)(uintptr_t)&copy_list);
+    copy_list.count = 0u;
+    return ok;
+}
+
+static bool copy_list_add(uint32_t source, uint32_t destination,
+                          uint32_t bytes)
+{
+    AstraCopyExtent *last = copy_list.count != 0u ?
+        &copy_list.extents[copy_list.count - 1u] : NULL;
+
+    if (last != NULL && last->source + last->bytes == source &&
+        last->destination + last->bytes == destination) {
+        last->bytes += bytes;
+        return true;
+    }
+    if (copy_list.count == ASTRA_COPY_LIST_MAX && !copy_list_flush())
+        return false;
+    copy_list.extents[copy_list.count++] = (AstraCopyExtent){
+        .source = source, .destination = destination, .bytes = bytes,
+    };
+    return true;
+}
+
+/*
+ * ASTRA_SYSCALL_AREA_COPY_IN: rows of the caller's memory into an area, moved
+ * by the copy engine. Each source page must be readable (an untouched
+ * reserved page is committed, as its fault would commit it) and each area
+ * page committed. The engine runs inside this call, on one CPU with the
+ * kernel not preempted, so no page it names changes owner under it. A long
+ * copy is run in lists as they fill, so a failure part way may leave earlier
+ * rows written; the area is the caller's own.
+ */
+static uint32_t area_copy_in(KernelProcess *process, uint32_t user_request)
+{
+    AstraAreaCopy request;
+    KernelArea *area = NULL;
+    uint64_t source_span;
+    uint64_t area_span;
+
+    if (kernel_copy_from_user(&request, user_request, sizeof(request)) !=
+        KERNEL_USER_COPY_OK)
+        return ASTRA_SYSCALL_BAD_ADDRESS;
+    if (request.size != ASTRA_AREA_COPY_SIZE || request.row_bytes == 0u ||
+        request.rows == 0u || request.source_pitch < request.row_bytes ||
+        request.area_pitch < request.row_bytes)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    if (!kernel_platform_copy_present())
+        return ASTRA_SYSCALL_UNSUPPORTED;
+    source_span = (uint64_t)request.source_pitch * (request.rows - 1u) +
+                  request.row_bytes;
+    area_span = (uint64_t)request.area_pitch * (request.rows - 1u) +
+                request.row_bytes;
+    if (source_span > UINT32_MAX ||
+        (uint64_t)request.source + source_span > UINT32_MAX ||
+        area_span > UINT32_MAX ||
+        (uint64_t)request.area_offset + area_span > UINT32_MAX)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    if (kernel_handle_lookup(process->handles, request.area,
+                             KERNEL_OBJECT_AREA, ASTRA_RIGHT_WRITE,
+                             (void **)&area) != KERNEL_HANDLE_OK ||
+        area == NULL)
+        return ASTRA_SYSCALL_INVALID_HANDLE;
+    if (!kernel_user_copy_range_valid(request.source, (uint32_t)source_span))
+        return ASTRA_SYSCALL_BAD_ADDRESS;
+    copy_list.count = 0u;
+    for (uint32_t row = 0u; row < request.rows; ++row) {
+        uint32_t source = request.source + request.source_pitch * row;
+        uint32_t offset = request.area_offset + request.area_pitch * row;
+        uint32_t left = request.row_bytes;
+
+        while (left != 0u) {
+            uint32_t chunk = KERNEL_PAGE_SIZE -
+                             (source & (KERNEL_PAGE_SIZE - 1u));
+            uint32_t area_chunk = KERNEL_PAGE_SIZE -
+                                  (offset & (KERNEL_PAGE_SIZE - 1u));
+            uint32_t physical = 0u;
+            KernelAreaExtent destination;
+            uint32_t extents;
+            KernelVmMapping mapping;
+
+            if (chunk > area_chunk)
+                chunk = area_chunk;
+            if (chunk > left)
+                chunk = left;
+            mapping = kernel_vm_probe_address_space(&process->address_space,
+                                                    source, &physical);
+            /* A page the program reserved but never touched is committed
+               here, as the fault it would have taken would commit it. */
+            if (mapping == KERNEL_VM_MAPPING_UNMAPPED &&
+                kernel_process_prepare_user_copy(source, chunk, false))
+                mapping = kernel_vm_probe_address_space(
+                    &process->address_space, source, &physical);
+            if (mapping != KERNEL_VM_MAPPING_READ_ONLY &&
+                mapping != KERNEL_VM_MAPPING_READ_WRITE) {
+                copy_list.count = 0u;
+                return ASTRA_SYSCALL_BAD_ADDRESS;
+            }
+            if (kernel_area_extents(area, offset, chunk, &destination, 1u,
+                                    &extents) != KERNEL_AREA_OK) {
+                copy_list.count = 0u;
+                return ASTRA_SYSCALL_INVALID_ARGUMENT;
+            }
+            if (!copy_list_add((physical & ~(KERNEL_PAGE_SIZE - 1u)) +
+                                   (source & (KERNEL_PAGE_SIZE - 1u)),
+                               destination.physical, chunk))
+                return ASTRA_SYSCALL_IO_ERROR;
+            source += chunk;
+            offset += chunk;
+            left -= chunk;
+        }
+    }
+    return copy_list_flush() ? ASTRA_SYSCALL_OK : ASTRA_SYSCALL_IO_ERROR;
+}
+
+static bool display_attachment_release(void)
+{
+    KernelArea *area = display_attachment_area;
+
+    display_attachment_area = NULL;
+    display_attachment.magic = 0u;
+    return area == NULL || kernel_area_child_release(area) == KERNEL_AREA_OK;
+}
+
 static bool display_dma_abort_owner(uint32_t owner)
 {
     if (display_dma_active == 0u || display_dma_owner != owner)
@@ -2584,7 +2740,59 @@ static bool display_dma_abort_owner(uint32_t owner)
     kernel_bytes_clear(&display_dma_token, sizeof(display_dma_token));
     display_dma_owner = 0u;
     display_dma_active = 0u;
-    return true;
+    return display_attachment_release();
+}
+
+/*
+ * A render batch's attachment: validated against the batch, resolved to
+ * physical extents, and held. The attachment ends the batch's defined
+ * bytes, so the batch's own DMA covers only what precedes it. Area pages are mapped
+ * copyback, and the MC68040 here is QEMU TCG, which keeps no data cache:
+ * the device reads every store without a push.
+ */
+static uint32_t display_attachment_prepare(
+    const KernelProcess *process, const AstraDisplayFrameRequest *request,
+    uint32_t *dma_bytes, uint32_t *physical)
+{
+    KernelArea *area = NULL;
+    uint32_t count = 0u;
+
+    *dma_bytes = request->byte_size;
+    *physical = 0u;
+    if (request->attachment == 0u)
+        return request->attachment_offset == 0u &&
+               request->attachment_bytes == 0u &&
+               request->attachment_target == 0u ?
+            ASTRA_SYSCALL_OK : ASTRA_SYSCALL_INVALID_ARGUMENT;
+    if (request->operation != ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
+        request->attachment_bytes == 0u ||
+        request->attachment_target < ASTRA_RENDER_BATCH_MIN_BYTES ||
+        (request->attachment_target & 3u) != 0u ||
+        request->attachment_target > request->byte_size ||
+        request->attachment_bytes >
+            request->byte_size - request->attachment_target)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    if (kernel_handle_lookup(process->handles, request->attachment,
+                             KERNEL_OBJECT_AREA, ASTRA_RIGHT_READ,
+                             (void **)&area) != KERNEL_HANDLE_OK ||
+        area == NULL)
+        return ASTRA_SYSCALL_INVALID_HANDLE;
+    if (kernel_area_extents(area, request->attachment_offset,
+                            request->attachment_bytes,
+                            (KernelAreaExtent *)display_attachment.extents,
+                            ASTRA_RENDER_ATTACHMENT_EXTENT_MAX, &count) !=
+        KERNEL_AREA_OK)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    if (kernel_area_child_retain(area) != KERNEL_AREA_OK)
+        return ASTRA_SYSCALL_INVALID_HANDLE;
+    display_attachment_area = area;
+    display_attachment.magic = ASTRA_RENDER_ATTACHMENT_MAGIC;
+    display_attachment.count = count;
+    display_attachment.target = request->attachment_target;
+    display_attachment.bytes = request->attachment_bytes;
+    *dma_bytes = request->attachment_target;
+    *physical = (uint32_t)(uintptr_t)&display_attachment;
+    return ASTRA_SYSCALL_OK;
 }
 
 static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
@@ -2599,13 +2807,17 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
     if (syscall == ASTRA_SYSCALL_DISPLAY_SUBMIT) {
         AstraDisplayFrameRequest request;
         uint32_t platform_source;
+        uint32_t attachment = 0u;
 
         copy_status = kernel_copy_from_user(&request, user_address,
                                             sizeof(request));
         if (copy_status != KERNEL_USER_COPY_OK)
             return ASTRA_SYSCALL_BAD_ADDRESS;
         if (request.size != ASTRA_DISPLAY_FRAME_REQUEST_SIZE ||
-            request.fence == 0u)
+            request.fence == 0u ||
+            (request.operation != ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
+             (request.attachment | request.attachment_offset |
+              request.attachment_bytes | request.attachment_target) != 0u))
             return ASTRA_SYSCALL_INVALID_ARGUMENT;
         if (request.operation == ASTRA_DISPLAY_FRAME_PRESENT_SOLID) {
             if ((request.source & UINT32_C(0xffff0000)) != 0u ||
@@ -2640,31 +2852,55 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
             platform_source = display_dma_token.physical_address;
         } else if (request.operation ==
                        ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
-                   request.operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE) {
+                   request.operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE ||
+                   request.operation == ASTRA_DISPLAY_FRAME_READ_SURFACE) {
             KernelProcessDmaBuffer *buffer = NULL;
             KernelDmaBufferInfo info;
             KernelHandleStatus handle_status;
+            /* READ_SURFACE: the device reads the 64-byte header and writes
+               the rows behind it. DMA frames are mapped cache-inhibited
+               (kernel_vm_map_transfer_page), so neither direction needs a
+               cache push or invalidate. */
+            const bool read_back =
+                request.operation == ASTRA_DISPLAY_FRAME_READ_SURFACE;
 
             if (display_dma_active != 0u || request.pitch != 0u ||
                 (request.operation ==
                          ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ?
                      (request.byte_size < ASTRA_RENDER_BATCH_MIN_BYTES ||
                       request.byte_size > ASTRA_RENDER_BATCH_MAX_BYTES) :
+                 read_back ?
+                     (request.byte_size <=
+                          ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES ||
+                      request.byte_size > ASTRA_RENDER_BATCH_MAX_BYTES) :
                      request.byte_size != ASTRA_DISPLAY_CURSOR_IMAGE_BYTES))
                 return ASTRA_SYSCALL_INVALID_ARGUMENT;
+            uint32_t dma_bytes;
+            uint32_t attachment_status;
+
             handle_status = kernel_handle_lookup(
                 process->handles, request.source, KERNEL_OBJECT_DMA,
-                ASTRA_RIGHT_READ, (void **)&buffer);
+                read_back ? ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE :
+                            ASTRA_RIGHT_READ,
+                (void **)&buffer);
             if (handle_status != KERNEL_HANDLE_OK || buffer == NULL ||
                 buffer->active == 0u ||
                 kernel_dma_buffer_info(buffer->dma, process->owner, &info) !=
                     KERNEL_DMA_OK || info.byte_size < request.byte_size)
                 return ASTRA_SYSCALL_INVALID_HANDLE;
-            if (kernel_dma_begin(buffer->dma, process->owner, 0u,
-                                 request.byte_size, KERNEL_DMA_TO_DEVICE,
+            attachment_status = display_attachment_prepare(
+                process, &request, &dma_bytes, &attachment);
+            if (attachment_status != ASTRA_SYSCALL_OK)
+                return attachment_status;
+            if (kernel_dma_begin(buffer->dma, process->owner, 0u, dma_bytes,
+                                 read_back ? KERNEL_DMA_BIDIRECTIONAL :
+                                             KERNEL_DMA_TO_DEVICE,
                                  device_generation,
-                                 &display_dma_token) != KERNEL_DMA_OK)
+                                 &display_dma_token) != KERNEL_DMA_OK) {
+                if (!display_attachment_release())
+                    return ASTRA_SYSCALL_IO_ERROR;
                 return ASTRA_SYSCALL_WOULD_BLOCK;
+            }
             display_dma_owner = process->owner;
             display_dma_active = 1u;
             platform_source = display_dma_token.physical_address;
@@ -2685,10 +2921,12 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
         if (kernel_platform_display_submit(
                 request.fence, request.operation, platform_source,
                 (request.operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
-                 request.operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE) ?
+                 request.operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE ||
+                 request.operation == ASTRA_DISPLAY_FRAME_READ_SURFACE) ?
                     request.byte_size :
                 request.operation == ASTRA_DISPLAY_CURSOR_UPDATE ?
-                    request.byte_size : 0u))
+                    request.byte_size : 0u,
+                attachment))
             return ASTRA_SYSCALL_OK;
         if (!display_dma_abort_owner(process->owner))
             return ASTRA_SYSCALL_IO_ERROR;
@@ -2707,6 +2945,8 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
                                sizeof(display_dma_token));
             display_dma_owner = 0u;
             display_dma_active = 0u;
+            if (!display_attachment_release())
+                return ASTRA_SYSCALL_IO_ERROR;
         }
         copy_status = kernel_copy_to_user(user_address, &completion,
                                           sizeof(completion));
@@ -2949,6 +3189,8 @@ void kernel_process_init(void)
     kernel_bytes_clear(&display_dma_token, sizeof(display_dma_token));
     display_dma_owner = 0u;
     display_dma_active = 0u;
+    display_attachment_area = NULL;
+    display_attachment.magic = 0u;
     kernel_thread_pool_init();
     kernel_sync_pool_init();
     kernel_handle_transfer_pool_init();
@@ -3491,6 +3733,8 @@ static KernelProcessStatus prepare_cloned_thread(
     } else {
         thread->signal_context_active = 0u;
     }
+    thread->signal_stack_top = source->signal_stack_top;
+    thread->signal_blocked = source->signal_blocked;
     thread->user_stack_base = source->user_stack_base;
     thread->stack_pages = source->stack_pages;
     thread->tls_base = source->tls_base;
@@ -3581,8 +3825,6 @@ static KernelProcessStatus clone_current_process(
     child->default_priority = source->default_priority;
     child->priority_ceiling = source->priority_ceiling;
     child->signal_trampoline = source->signal_trampoline;
-    child->signal_stack_top = source->signal_stack_top;
-    child->signal_blocked = source->signal_blocked;
     kernel_handle_table_init(child->handles);
     if (!kernel_handle_table_set_owner(child->handles, child->owner,
                                        child->id))
@@ -4309,12 +4551,12 @@ static KernelProcessStatus replace_process_image(
     process->fault_vector = 0u;
     process->fault_status = 0u;
     process->signal_trampoline = 0u;
-    process->signal_stack_top = 0u;
     process->signal_pending = 0u;
     process->signal_target_thread = 0u;
     process->interval_deadline = 0u;
     process->interval_period = 0u;
     interval_next_deadline = interval_timer_earliest();
+    thread->signal_stack_top = 0u;
     thread->signal_context_active = 0u;
     scheduler_timer_rearm();
     *next_context = runtime_resume(thread);
@@ -10049,6 +10291,35 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                               KERNEL_PROCESS_EXIT_RESTART :
                               KERNEL_PROCESS_EXIT_SHUTDOWN, 0u,
                               next_context);
+    case ASTRA_SYSCALL_AREA_COPY_IN:
+        result = area_copy_in(current, thread->context.data[1]);
+        break;
+    case ASTRA_SYSCALL_SYSTEM_FAIL: {
+        char reason[ASTRA_SYSTEM_FAIL_MESSAGE_MAX + 1u];
+        uint32_t length = thread->context.data[2];
+
+        if (current->id != initial_image_process_id) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (length == 0u || length > ASTRA_SYSTEM_FAIL_MESSAGE_MAX) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (kernel_copy_from_user(reason, thread->context.data[1], length) !=
+            KERNEL_USER_COPY_OK) {
+            result = ASTRA_SYSCALL_BAD_ADDRESS;
+            break;
+        }
+        /* The message goes to the panic screen: printable bytes only. */
+        for (uint32_t at = 0u; at < length; ++at)
+            if (reason[at] < 0x20 || reason[at] > 0x7e)
+                reason[at] = '?';
+        reason[length] = '\0';
+        kernel_process_system_failed(reason);
+        result = ASTRA_SYSCALL_OK;
+        break;
+    }
     case ASTRA_SYSCALL_THREAD_CREATE: {
         KernelPreparedThread prepared_thread;
         KernelHandle created_handle;
@@ -10078,6 +10349,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             current, entry, thread->context.data[2], (uint8_t)priority,
             rights, &prepared_thread);
         if (create_status == KERNEL_PROCESS_OK) {
+            prepared_thread.thread->signal_blocked = thread->signal_blocked;
             create_status = map_thread_tls(
                 &current->address_space, current, &current->tls, true,
                 &prepared_thread.thread->tls_base,
@@ -10140,10 +10412,10 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                 !kernel_handle_transfer_pool_valid() ||
                 !process_pool_valid())
 #else
-            if (!kernel_sync_pool_healthy() || !kernel_thread_pool_valid() ||
+            if (!kernel_sync_pool_healthy() || !kernel_thread_pool_healthy() ||
                 !kernel_port_pool_healthy() ||
                 !kernel_area_pool_healthy() || !kernel_ring_pool_healthy() ||
-                !kernel_irq_pool_healthy() || !kernel_device_pool_valid() ||
+                !kernel_irq_pool_healthy() || !kernel_device_pool_healthy() ||
                 !kernel_handle_transfer_pool_healthy() ||
                 !process_pool_healthy())
 #endif
@@ -10583,11 +10855,11 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             break;
         }
         thread->context.data[1] = current->signal_pending;
-        thread->context.data[2] = current->signal_blocked;
+        thread->context.data[2] = thread->signal_blocked;
         current->signal_trampoline = trampoline;
-        current->signal_stack_top = stack_top;
+        thread->signal_stack_top = stack_top;
         current->signal_target_thread = thread->id;
-        current->signal_blocked =
+        thread->signal_blocked =
             blocked & ~((1u << ASTRA_SIGNAL_KILL) |
                         (1u << ASTRA_SIGNAL_STOP));
         break;
@@ -10669,13 +10941,13 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if ((flags & ASTRA_THREAD_SLEEP_RELATIVE) != 0u)
             deadline += now;
         if ((flags & ASTRA_THREAD_SLEEP_REPLACE_SIGNAL_MASK) != 0u) {
-            thread->context.data[1] = current->signal_blocked;
-                current->signal_blocked = thread->context.data[4] &
+            thread->context.data[1] = thread->signal_blocked;
+            thread->signal_blocked = thread->context.data[4] &
                     ~((1u << ASTRA_SIGNAL_KILL) |
                       (1u << ASTRA_SIGNAL_STOP));
             current->signal_target_thread = thread->id;
         }
-        if ((current->signal_pending & ~current->signal_blocked) != 0u) {
+        if ((current->signal_pending & ~thread->signal_blocked) != 0u) {
             result = ASTRA_SYSCALL_CANCELLED;
             break;
         }
@@ -11120,7 +11392,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         default:
             return KERNEL_PROCESS_CORRUPT;
         }
-        if (!kernel_irq_pool_valid())
+        if (!(KERNEL_AUDIT ? kernel_irq_pool_valid() :
+                             kernel_irq_pool_healthy()))
             return KERNEL_PROCESS_CORRUPT;
         break;
     }
@@ -11752,6 +12025,50 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         break;
     }
 
+    case ASTRA_SYSCALL_THREAD_PRIORITY: {
+        KernelThread *target = NULL;
+        KernelProcess *owner;
+        KernelHandleStatus handle_status;
+        KernelThreadStatus thread_status;
+        uint32_t priority = thread->context.data[2];
+        uint32_t previous;
+
+        handle_status = kernel_handle_lookup(
+            current->handles, thread->context.data[1], KERNEL_OBJECT_THREAD,
+            KERNEL_THREAD_RIGHT_ADMINISTER, (void **)&target);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || target == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        owner = process_for_thread(target);
+        if (owner == NULL || target->state == KERNEL_THREAD_DEAD) {
+            result = ASTRA_SYSCALL_PEER_DEAD;
+            break;
+        }
+        if (priority < KERNEL_THREAD_PRIORITY_USER_MIN ||
+            priority > KERNEL_THREAD_PRIORITY_USER_MAX) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (priority > owner->priority_ceiling) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        previous = target->base_priority;
+        thread_status = kernel_thread_set_priority(target, (uint8_t)priority);
+        if (thread_status != KERNEL_THREAD_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        thread->context.data[1] = previous;
+        break;
+    }
+
     case ASTRA_SYSCALL_DEVICE_QUERY:
     case ASTRA_SYSCALL_DEVICE_RESET:
     case ASTRA_SYSCALL_DEVICE_REVOKE: {
@@ -11843,7 +12160,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             if (!device_status_to_syscall(device_status, &result))
                 return KERNEL_PROCESS_CORRUPT;
         }
-        if (!kernel_device_pool_valid())
+        if (!(KERNEL_AUDIT ? kernel_device_pool_valid() :
+                             kernel_device_pool_healthy()))
             return KERNEL_PROCESS_CORRUPT;
         break;
     }
@@ -12162,7 +12480,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
 
         handle_status = kernel_handle_lookup(
             current->handles, thread->context.data[1], KERNEL_OBJECT_THREAD,
-            KERNEL_THREAD_RIGHT_CANCEL_WAIT, (void **)&target);
+            KERNEL_THREAD_RIGHT_ADMINISTER, (void **)&target);
         if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
             handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
             result = ASTRA_SYSCALL_INVALID_HANDLE;
@@ -12408,7 +12726,16 @@ KernelProcessStatus kernel_process_maintenance(void)
     }
 
     if (kernel_process_maintenance_pending()) {
-        KernelBlockStatus block_status = kernel_block_service(NULL);
+        /*
+         * Draining the transport here, on every process exit, used to take
+         * a live owner's completion out of the ring before its interrupt was
+         * captured: the request was complete, no record said so, and the
+         * storage thread waiting on it slept forever holding the mount lock.
+         * Only a dead owner's revoked requests need this drain.
+         */
+        KernelBlockStatus block_status =
+            kernel_block_revocations_pending() ? kernel_block_service(NULL) :
+                                                 KERNEL_BLOCK_OK;
 
         if (block_status != KERNEL_BLOCK_OK)
             return maintenance_failed(

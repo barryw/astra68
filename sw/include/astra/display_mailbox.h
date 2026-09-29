@@ -2,21 +2,28 @@
 #define ASTRA_DISPLAY_MAILBOX_H
 
 #include <astra/display.h>
+#include <astra/render_batch.h>
 #include <stdint.h>
 
 #define ASTRA_DISPLAY_MAILBOX_HEADER_BYTES 4096u
 #define ASTRA_DISPLAY_MAILBOX_FRAME_BYTES \
     (ASTRA_DISPLAY_WIDTH * ASTRA_DISPLAY_HEIGHT * 2u)
-#define ASTRA_DISPLAY_MAILBOX_BYTES \
-    (ASTRA_DISPLAY_MAILBOX_HEADER_BYTES + ASTRA_DISPLAY_MAILBOX_FRAME_BYTES)
+/* The payload carries either one RGB565 frame or one complete render batch. */
+#define ASTRA_DISPLAY_MAILBOX_PAYLOAD_BYTES \
+    (ASTRA_RENDER_BATCH_MAX_BYTES > ASTRA_DISPLAY_MAILBOX_FRAME_BYTES ? \
+         ASTRA_RENDER_BATCH_MAX_BYTES : ASTRA_DISPLAY_MAILBOX_FRAME_BYTES)
 #define ASTRA_DISPLAY_MAILBOX_MAGIC UINT32_C(0x41474658) /* AGFX */
-#define ASTRA_DISPLAY_MAILBOX_VERSION_1_1 UINT32_C(0x00010001)
-#define ASTRA_DISPLAY_MAILBOX_VERSION_1_2 UINT32_C(0x00010002)
-#define ASTRA_DISPLAY_MAILBOX_VERSION_1_3 UINT32_C(0x00010003)
-#define ASTRA_DISPLAY_MAILBOX_VERSION_1_4 UINT32_C(0x00010004)
-#define ASTRA_DISPLAY_MAILBOX_VERSION_1_5 UINT32_C(0x00010005)
+/* 1.7: the mailbox is two shared mappings. The header file
+   (ASTRA_DISPLAY_MAILBOX_PATH, HEADER_BYTES) holds this record and its futex
+   words, which need an ordinary shared file. The payload
+   (ASTRA_DISPLAY_PAYLOAD_PATH, PAYLOAD_BYTES) is separate so that on the DE25
+   it can be the host arena (/dev/astra-host-arena): physically contiguous,
+   non-cacheable HPS memory that the render engine reads directly through its
+   host aperture, so the helper copies nothing. The helper futex-wakes
+   completion_sequence after publishing it (since 1.6). */
+#define ASTRA_DISPLAY_MAILBOX_VERSION_1_7 UINT32_C(0x00010007)
 
-/* Host-native shared record between QEMU and the Arty Linux display helper. */
+/* Host-native shared record between QEMU and the Linux display helper. */
 typedef struct AstraDisplayMailbox {
     uint32_t magic;
     uint32_t version;
@@ -35,5 +42,10 @@ typedef struct AstraDisplayMailbox {
 
 _Static_assert(sizeof(AstraDisplayMailbox) == 64u,
                "display mailbox header must remain one cache line");
+_Static_assert(ASTRA_RENDER_BATCH_MAX_BYTES <=
+                   ASTRA_DISPLAY_MAILBOX_PAYLOAD_BYTES &&
+               ASTRA_DISPLAY_MAILBOX_FRAME_BYTES <=
+                   ASTRA_DISPLAY_MAILBOX_PAYLOAD_BYTES,
+               "display mailbox payload cannot hold every request");
 
 #endif

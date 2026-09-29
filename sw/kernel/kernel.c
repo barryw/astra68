@@ -507,7 +507,10 @@ static void panic_worker_state(void)
 
 static void panic_trace_records(void)
 {
-    KernelTraceRecord records[PANIC_REPORT_TRACE_RECORDS];
+    /* Static: a degraded boot reports from the process retire path, whose
+       stack has no room for 1 KiB of records. One core, and neither caller
+       returns into the other. */
+    static KernelTraceRecord records[PANIC_REPORT_TRACE_RECORDS];
     uint32_t count = kernel_trace_copy_recent(
         records, PANIC_REPORT_TRACE_RECORDS);
 
@@ -1346,6 +1349,28 @@ void kernel_process_initial_image_exited(uint32_t exit_status,
     report_degraded(KERNEL_TRACE_DEGRADED_INITIAL_IMAGE_EXITED,
                     exit_status, exit_reason,
                     "userspace boot control is unavailable");
+    /* By now a drain may have closed the console, so the reason -- which
+       service died, with what status -- is only in the ring. Say it here. */
+    panic_trace_records();
+}
+
+/*
+ * Unlike the initial image merely exiting, this is PID 1 saying the machine
+ * is useless -- storage or display is gone -- and a halt that names why is
+ * the only honest answer. The reason is copied: the caller's buffer is on a
+ * stack the panic path does not return to.
+ */
+void kernel_process_system_failed(const char *reason)
+{
+    static char message[ASTRA_SYSTEM_FAIL_MESSAGE_MAX + 1u];
+    uint32_t at = 0u;
+
+    while (at < ASTRA_SYSTEM_FAIL_MESSAGE_MAX && reason[at] != '\0') {
+        message[at] = reason[at];
+        ++at;
+    }
+    message[at] = '\0';
+    kernel_panic(message);
 }
 
 /*

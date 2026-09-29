@@ -143,6 +143,45 @@ static void test_process_priority_reorders_ready_and_blocked_threads(void)
     assert(kernel_thread_pool_valid());
 }
 
+static void test_thread_priority_changes_only_target(void)
+{
+    KernelThreadWaitQueue queue;
+    KernelThread *first;
+    KernelThread *second;
+    KernelThread *selected;
+    uint32_t sequence;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    kernel_thread_wait_queue_init(&queue);
+    sequence = kernel_thread_wait_queue_sequence(&queue);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u, 10u,
+                                  &first) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 1u, 0x00100002u,
+                                  0x70011000u, 0u, 12u,
+                                  &second) == KERNEL_THREAD_OK);
+    publish_thread(first);
+    publish_thread(second);
+    assert(kernel_thread_set_priority(first, 20u) == KERNEL_THREAD_OK);
+    assert(first->base_priority == 20u && second->base_priority == 12u);
+    assert(kernel_thread_set_priority(first, KERNEL_THREAD_PRIORITY_LEVELS) ==
+           KERNEL_THREAD_INVALID_ARGUMENT);
+    assert(kernel_thread_set_priority(NULL, 1u) ==
+           KERNEL_THREAD_INVALID_ARGUMENT);
+    assert(first->base_priority == 20u);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == first);
+    assert(kernel_thread_block(first, &queue, sequence) == KERNEL_THREAD_OK);
+    assert(kernel_thread_set_priority(first, 8u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_wake_one(&queue, ASTRA_SYSCALL_OK, &selected) ==
+           KERNEL_THREAD_OK);
+    assert(selected == first && first->base_priority == 8u);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == second);
+    assert(kernel_thread_pool_valid());
+}
+
 static void test_process_suspend_preserves_wait_state(void)
 {
     KernelThreadWaitQueue queue;
@@ -1076,6 +1115,7 @@ int main(void)
     test_record_injection_preserves_pool();
     test_priority_fifo_and_process_retirement();
     test_process_priority_reorders_ready_and_blocked_threads();
+    test_thread_priority_changes_only_target();
     test_process_suspend_preserves_wait_state();
     test_reused_slot_generation_ids_do_not_repeat();
     test_invalid_inputs_do_not_consume_slots();

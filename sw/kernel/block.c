@@ -483,6 +483,16 @@ KernelBlockStatus kernel_block_terminate_owner(uint32_t owner,
     return KERNEL_BLOCK_OK;
 }
 
+bool kernel_block_revocations_pending(void)
+{
+    if (!initialized)
+        return false;
+    for (uint32_t index = 0u; index < KERNEL_BLOCK_MAX_REQUESTS; ++index)
+        if (slots[index].state == KERNEL_BLOCK_REQUEST_REVOKING)
+            return true;
+    return false;
+}
+
 uint32_t kernel_block_owner_requests(uint32_t owner)
 {
     uint32_t count = 0u;

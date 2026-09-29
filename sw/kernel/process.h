@@ -500,6 +500,12 @@ void kernel_process_initial_image_exited(uint32_t exit_status,
 /* Each new stage the firmware-supplied image reports as it comes up. */
 void kernel_process_initial_image_progress(uint32_t stage);
 /*
+ * The initial image declared the system unable to continue (a critical
+ * service died). `reason` is bounded and printable. The kernel build halts
+ * and does not return; the host test build records it and returns.
+ */
+void kernel_process_system_failed(const char *reason);
+/*
  * Where a process's diagnostic line goes. The kernel owns the console, so the
  * sink lives with it; `bytes` is already bounded and stripped of anything
  * unprintable by the time it arrives.
@@ -570,6 +576,9 @@ bool kernel_process_test_library_cache_reclaims_after_last_mapping(void);
 bool kernel_process_test_library_cache_exceeds_legacy_slot_count(void);
 bool kernel_process_test_library_reference_selection(void);
 bool kernel_process_test_library_snapshot(void);
+/* The copy engine's list as the kernel wrote it; the address it hands the
+   device is not a host pointer. */
+const struct AstraCopyList *kernel_process_test_copy_list(void);
 #endif
 
 #endif

@@ -129,10 +129,13 @@ bool kernel_platform_post_text_cursor(uint32_t row, uint32_t column,
 void kernel_platform_post_text_geometry(uint32_t *columns, uint32_t *rows);
 uint32_t kernel_platform_display_capabilities(void);
 bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
-                                    uint32_t source, uint32_t byte_size);
+                                    uint32_t source, uint32_t byte_size,
+                                    uint32_t attachment);
 bool kernel_platform_display_collect(
     struct AstraDisplayFrameCompletion *completion);
 bool kernel_platform_display_reset(void);
+bool kernel_platform_copy_present(void);
+bool kernel_platform_copy(uint32_t list_physical);
 bool kernel_platform_bus_fault_read(KernelPlatformBusFault *fault);
 void kernel_platform_bus_fault_acknowledge(void);
 void kernel_platform_debug_marker(uint32_t value);

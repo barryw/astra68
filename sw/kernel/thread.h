@@ -81,10 +81,10 @@ _Static_assert(KERNEL_THREAD_STACK_BASE +
 
 #define KERNEL_THREAD_RIGHT_QUERY       (1u << 0)
 #define KERNEL_THREAD_RIGHT_WAIT        (1u << 4)
-#define KERNEL_THREAD_RIGHT_CANCEL_WAIT (1u << 6)
+#define KERNEL_THREAD_RIGHT_ADMINISTER   (1u << 6)
 #define KERNEL_THREAD_RIGHTS \
     (KERNEL_THREAD_RIGHT_QUERY | KERNEL_THREAD_RIGHT_WAIT | \
-     KERNEL_THREAD_RIGHT_CANCEL_WAIT)
+     KERNEL_THREAD_RIGHT_ADMINISTER)
 
 #define KERNEL_THREAD_DEADLINE_NEVER UINT64_MAX
 
@@ -148,6 +148,8 @@ typedef struct KernelThread {
     uint32_t user_stack_top;
     uint32_t tls_base;
     uint32_t tls_pages;
+    uint32_t signal_stack_top;
+    uint32_t signal_blocked;
     uint32_t timer_ticks;
     uint32_t run_count;
     uint32_t syscall_count;
@@ -313,6 +315,8 @@ KernelThreadStatus kernel_thread_make_ready(KernelThread *thread);
 KernelThreadStatus kernel_thread_take_next(KernelThread **thread);
 KernelThreadStatus kernel_thread_set_process_priority(uint16_t process_slot,
                                                       uint8_t priority);
+KernelThreadStatus kernel_thread_set_priority(KernelThread *thread,
+                                              uint8_t priority);
 KernelThreadStatus kernel_thread_suspend_process(uint16_t process_slot);
 KernelThreadStatus kernel_thread_resume_process(uint16_t process_slot);
 void kernel_thread_wait_queue_init(KernelThreadWaitQueue *queue);
@@ -361,6 +365,7 @@ KernelThread *kernel_thread_at(uint16_t slot);
 bool kernel_thread_snapshot(uint32_t slot, KernelThreadSnapshot *snapshot);
 bool kernel_thread_pool_stats(KernelThreadPoolStats *stats);
 bool kernel_thread_pool_valid(void);
+bool kernel_thread_pool_healthy(void);
 bool kernel_thread_process_runnable(uint16_t process_slot);
 uint32_t kernel_thread_process_count(uint16_t process_slot, bool live_only);
 uint32_t kernel_thread_process_run_count(uint16_t process_slot);

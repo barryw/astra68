@@ -58,6 +58,12 @@ typedef enum KernelAreaStatus {
 
 typedef struct KernelArea KernelArea;
 
+/* A physically contiguous run of an area's bytes. */
+typedef struct KernelAreaExtent {
+    uint32_t physical;
+    uint32_t bytes;
+} KernelAreaExtent;
+
 typedef struct KernelAreaSnapshot {
     uint32_t creator;
     uint32_t frame_owner;
@@ -151,6 +157,9 @@ KernelAreaStatus kernel_area_unmap_process(uint32_t process_id,
                                            uint32_t *unmapped);
 KernelAreaStatus kernel_area_write(KernelArea *area, uint32_t offset,
                                    const void *source, uint32_t size);
+KernelAreaStatus kernel_area_extents(const KernelArea *area, uint32_t offset,
+                                     uint32_t size, KernelAreaExtent *extents,
+                                     uint32_t capacity, uint32_t *count);
 KernelAreaStatus kernel_area_read(const KernelArea *area, uint32_t offset,
                                   void *destination, uint32_t size);
 bool kernel_area_live(const KernelArea *area);

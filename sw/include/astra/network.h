@@ -109,6 +109,18 @@ typedef struct AstraNetworkAddress {
 _Static_assert(sizeof(AstraNetworkAddress) == ASTRA_NETWORK_ADDRESS_SIZE,
                "network address ABI changed");
 
+/* Linux IFNAMSIZ, including the terminating NUL. */
+#define ASTRA_NETWORK_INTERFACE_NAME_SIZE 16u
+#define ASTRA_NETWORK_INTERFACE_ADDRESS_SIZE 44u
+typedef struct AstraNetworkInterfaceAddress {
+    AstraNetworkAddress address;
+    char name[ASTRA_NETWORK_INTERFACE_NAME_SIZE];
+} AstraNetworkInterfaceAddress;
+
+_Static_assert(sizeof(AstraNetworkInterfaceAddress) ==
+                   ASTRA_NETWORK_INTERFACE_ADDRESS_SIZE,
+               "network interface-address ABI changed");
+
 /* Broker-to-device operations. Values append once shipped. */
 enum {
     ASTRA_NETWORK_HOST_ENDPOINT_OPEN = 1u,
@@ -126,7 +138,9 @@ enum {
     ASTRA_NETWORK_HOST_SHUTDOWN = 13u,
     ASTRA_NETWORK_HOST_ARM = 14u,
     ASTRA_NETWORK_HOST_CLOSE = 15u,
-    ASTRA_NETWORK_HOST_CANCEL = 16u
+    ASTRA_NETWORK_HOST_CANCEL = 16u,
+    ASTRA_NETWORK_HOST_REVERSE_RESOLVE = 17u,
+    ASTRA_NETWORK_HOST_INTERFACES = 18u
 };
 
 #define ASTRA_NETWORK_HOST_COMMAND_VERSION 1u
@@ -219,7 +233,9 @@ enum {
     ASTRA_NETWORK_CANCEL = 15u,
     ASTRA_NETWORK_CLOSE = 16u,
     ASTRA_NETWORK_REPLY = 17u,
-    ASTRA_NETWORK_DOORBELL = 18u
+    ASTRA_NETWORK_DOORBELL = 18u,
+    ASTRA_NETWORK_REVERSE_RESOLVE = 19u,
+    ASTRA_NETWORK_INTERFACES = 20u
 };
 
 /* One transfer slot covers the complete 16-bit IP packet length. */

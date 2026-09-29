@@ -7,7 +7,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010037u
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010039u
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -317,6 +317,22 @@
 /* PID 1 only. Retires PID 1 after all other guest processes have exited. */
 #define ASTRA_SYSCALL_SYSTEM_SHUTDOWN          97
 #define ASTRA_SYSCALL_SYSTEM_RESTART           98
+/* D1=thread handle with ADMINISTER, D2=new priority; returns prior in D1. */
+#define ASTRA_SYSCALL_THREAD_PRIORITY          99
+/*
+ * PID 1 only. D1=message address, D2=length (1..ASTRA_SYSTEM_FAIL_MESSAGE_MAX).
+ * The system cannot continue -- a critical service died -- so the kernel halts
+ * with the panic screen and names the reason. Does not return.
+ */
+#define ASTRA_SYSCALL_SYSTEM_FAIL              100
+#define ASTRA_SYSTEM_FAIL_MESSAGE_MAX          96u
+/*
+ * D1=AstraAreaCopy. Copies rows of the caller's memory into an area it holds
+ * with WRITE right. The machine's copy engine moves the bytes, not the
+ * MC68040; the call returns when they are in the area. UNSUPPORTED means the
+ * machine has no copy engine.
+ */
+#define ASTRA_SYSCALL_AREA_COPY_IN             101
 
 #define ASTRA_VM_PRIVATE_READ  (1u << 0)
 #define ASTRA_VM_PRIVATE_WRITE (1u << 1)
@@ -486,6 +502,23 @@
 #define ASTRA_ABI_ALIGNMENT 4u
 /* Plain 32-bit scalar arrays follow the m68k ABI, which aligns them to 2. */
 #define ASTRA_SCALAR_ALIGNMENT 2u
+
+/* ASTRA_SYSCALL_AREA_COPY_IN: `rows` rows of `row_bytes` bytes, from
+   `source` every `source_pitch` bytes to `area_offset` every `area_pitch`. */
+typedef struct AstraAreaCopy {
+    _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t size;
+    uint32_t area;
+    uint32_t area_offset;
+    uint32_t area_pitch;
+    uint32_t source;
+    uint32_t source_pitch;
+    uint32_t row_bytes;
+    uint32_t rows;
+} AstraAreaCopy;
+
+#define ASTRA_AREA_COPY_SIZE 32u
+_Static_assert(sizeof(AstraAreaCopy) == ASTRA_AREA_COPY_SIZE,
+               "area copy ABI size changed");
 
 typedef struct AstraIrqRecord {
     _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t timestamp_high;

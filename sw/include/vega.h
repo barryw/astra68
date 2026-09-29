@@ -74,7 +74,6 @@ typedef volatile struct {
 #define VEGA_CAP_POST_TEXT (1u << 0)
 #define VEGA_CAP_FRAMEBUFFER (1u << 1)
 #define VEGA_CAP_PALETTE     (1u << 2)
-#define VEGA_CAP_TILEMAP     (1u << 3)
 #define VEGA_CAP_SPRITE      (1u << 4)
 #define VEGA_CAP_INDEX8      (1u << 5)
 #define VEGA_CAP_FB_SCROLL   (1u << 6)

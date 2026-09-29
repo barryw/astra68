@@ -175,7 +175,12 @@ uint32_t RESERVED_110;        // 0x110
     uint32_t INPUT_DEVICE_SEQ;  // 0x71C device[31:16], sequence[15:0]
     uint32_t INPUT_HOST_GEN;    // 0x720
     uint32_t INPUT_POP;         // 0x724 write bit 0
-    uint32_t _r6[(0x800 - 0x728) / 4];
+    uint32_t DISPLAY_REQ_ATTACH; // 0x728 physical AstraRenderAttachment or 0
+    // copy engine 0x72C (astra/copy_engine.h)
+    uint32_t COPY_ID;            // 0x72C "COPY" when present
+    uint32_t COPY_LIST;          // 0x730 write: physical AstraCopyList, runs it
+    uint32_t COPY_STATUS;        // 0x734 ASTRA_COPY_STATUS_* of the last list
+    uint32_t _r6[(0x800 - 0x738) / 4];
     // sticky physical bus-fault diagnostics 0x800
     uint32_t BUS_FAULT_STATUS;    // 0x800 status and captured bus attributes
     uint32_t BUS_FAULT_ADDRESS;   // 0x804 exact physical bus address

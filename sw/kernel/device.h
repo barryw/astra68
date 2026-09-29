@@ -98,5 +98,6 @@ KernelDeviceStatus kernel_device_owner_died(uint32_t owner,
                                             uint32_t *revoked_leases);
 bool kernel_device_stats(KernelDeviceStats *stats);
 bool kernel_device_pool_valid(void);
+bool kernel_device_pool_healthy(void);
 
 #endif

@@ -7,6 +7,7 @@
 #include "vega.h"
 #include "vesta.h"
 
+#include <astra/copy_engine.h>
 #include <astra/display.h>
 #include <astra/host.h>
 #include <astra/network.h>
@@ -467,12 +468,17 @@ uint32_t kernel_platform_display_capabilities(void)
             capabilities |= ASTRA_DISPLAY_CAP_RENDER_BATCH;
         if ((host & ASTRA_DISPLAY_HOST_CAP_HARDWARE_CURSOR) != 0u)
             capabilities |= ASTRA_DISPLAY_CAP_HARDWARE_CURSOR;
+        if ((host & ASTRA_DISPLAY_HOST_CAP_READ_SURFACE) != 0u)
+            capabilities |= ASTRA_DISPLAY_CAP_READ_SURFACE;
+        if ((host & ASTRA_DISPLAY_HOST_CAP_ATTACHMENT) != 0u)
+            capabilities |= ASTRA_DISPLAY_CAP_ATTACHMENT;
     }
     return capabilities;
 }
 
 bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
-                                    uint32_t source, uint32_t byte_size)
+                                    uint32_t source, uint32_t byte_size,
+                                    uint32_t attachment)
 {
     uint32_t queue;
     uint32_t host_operation = operation;
@@ -482,7 +488,8 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
          operation != ASTRA_DISPLAY_FRAME_PRESENT_RGB565 &&
          operation != ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
          operation != ASTRA_DISPLAY_CURSOR_UPDATE &&
-         operation != ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE) ||
+         operation != ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE &&
+         operation != ASTRA_DISPLAY_FRAME_READ_SURFACE) ||
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
          ((source & UINT32_C(0xffff0000)) != 0u || byte_size != 0u)) ||
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 && byte_size != 0u) ||
@@ -500,12 +507,22 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
           byte_size > ASTRA_DISPLAY_HOST_BYTE_SIZE_MAX)) ||
         (operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE &&
          byte_size != ASTRA_DISPLAY_CURSOR_IMAGE_BYTES) ||
+        (operation == ASTRA_DISPLAY_FRAME_READ_SURFACE &&
+         (byte_size <= ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES ||
+          byte_size > ASTRA_DISPLAY_HOST_BYTE_SIZE_MAX ||
+          (kernel_platform_display_capabilities() &
+           ASTRA_DISPLAY_CAP_READ_SURFACE) == 0u)) ||
         (operation != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
          operation != ASTRA_DISPLAY_CURSOR_UPDATE &&
          (source == 0u || (source & 3u) != 0u)) ||
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
          (kernel_platform_display_capabilities() &
           ASTRA_DISPLAY_CAP_RENDER_BATCH) == 0u) ||
+        (attachment != 0u &&
+         (operation != ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
+          (attachment & 3u) != 0u ||
+          (kernel_platform_display_capabilities() &
+           ASTRA_DISPLAY_CAP_ATTACHMENT) == 0u)) ||
         ((operation == ASTRA_DISPLAY_CURSOR_UPDATE ||
           operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE) &&
          (kernel_platform_display_capabilities() &
@@ -524,10 +541,12 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
     VESTA_WRITE(DISPLAY_REQ_ID, id);
     if (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
         operation == ASTRA_DISPLAY_CURSOR_UPDATE ||
-        operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE)
+        operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE ||
+        operation == ASTRA_DISPLAY_FRAME_READ_SURFACE)
         host_operation |= byte_size << ASTRA_DISPLAY_HOST_BYTE_SIZE_SHIFT;
     VESTA_WRITE(DISPLAY_REQ_OP, host_operation);
     VESTA_WRITE(DISPLAY_REQ_COLOR, source);
+    VESTA_WRITE(DISPLAY_REQ_ATTACH, attachment);
     ASTRAEA_WRITE(IRQ_STAT, ASTRAEA_IRQ_DRAW_DONE);
     ASTRAEA_WRITE(IRQ_EN,
                   ASTRAEA_READ(IRQ_EN) | ASTRAEA_IRQ_DRAW_DONE);
@@ -562,6 +581,19 @@ bool kernel_platform_display_collect(AstraDisplayFrameCompletion *completion)
     kernel_mmio_cpu_sync();
     return (VESTA_READ(DISPLAY_QUEUE) &
             ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID) == 0u;
+}
+
+bool kernel_platform_copy_present(void)
+{
+    return VESTA_READ(COPY_ID) == ASTRA_COPY_ENGINE_ID;
+}
+
+/* Runs one AstraCopyList; the copy is complete when the write retires. */
+bool kernel_platform_copy(uint32_t list_physical)
+{
+    VESTA_WRITE(COPY_LIST, list_physical);
+    kernel_mmio_cpu_sync();
+    return VESTA_READ(COPY_STATUS) == ASTRA_COPY_STATUS_OK;
 }
 
 bool kernel_platform_display_reset(void)

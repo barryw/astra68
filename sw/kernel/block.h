@@ -98,6 +98,13 @@ KernelBlockStatus kernel_block_terminate_owner(uint32_t owner,
                                                uint32_t *terminated);
 /* In-flight and collectable requests a single owner holds. */
 uint32_t kernel_block_owner_requests(uint32_t owner);
+/*
+ * Whether a dead owner's request still waits for its completion. Only then
+ * does maintenance have to drain the transport: a live owner's completions
+ * are drained by that owner, whose completion interrupt and collect loop
+ * wake the thread waiting for each one.
+ */
+bool kernel_block_revocations_pending(void);
 bool kernel_block_stats(KernelBlockStats *stats);
 bool kernel_block_valid(void);
 

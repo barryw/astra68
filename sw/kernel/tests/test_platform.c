@@ -392,21 +392,21 @@ static void test_fenced_display_transport(void)
             ASTRA_DISPLAY_CAP_RENDER_BATCH |
             ASTRA_DISPLAY_CAP_HARDWARE_CURSOR));
     assert(!kernel_platform_display_submit(0u,
-        ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x135du, 0u));
+        ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x135du, 0u, 0u));
     assert(kernel_platform_display_submit(7u,
-        ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x135du, 0u));
+        ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x135du, 0u, 0u));
     assert(registers->DISPLAY_REQ_ID == 7u);
     assert(registers->DISPLAY_REQ_OP ==
            ASTRA_DISPLAY_FRAME_PRESENT_SOLID);
     assert(registers->DISPLAY_REQ_COLOR == 0x135du);
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
     assert(kernel_platform_display_submit(
-        8u, ASTRA_DISPLAY_FRAME_PRESENT_RGB565, 0x02000000u, 0u));
+        8u, ASTRA_DISPLAY_FRAME_PRESENT_RGB565, 0x02000000u, 0u, 0u));
     assert(registers->DISPLAY_REQ_COLOR == 0x02000000u);
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
     assert(kernel_platform_display_submit(
         9u, ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH, 0x02001000u,
-        ASTRA_RENDER_BATCH_MIN_BYTES));
+        ASTRA_RENDER_BATCH_MIN_BYTES, 0u));
     assert(registers->DISPLAY_REQ_OP ==
            (ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH |
             ASTRA_RENDER_BATCH_MIN_BYTES <<
@@ -415,7 +415,7 @@ static void test_fenced_display_transport(void)
     assert(kernel_platform_display_submit(
         10u, ASTRA_DISPLAY_CURSOR_UPDATE,
         ASTRA_DISPLAY_HOST_CURSOR_PACK(321u, 123u, true),
-        ASTRA_DISPLAY_CURSOR_VISIBLE));
+        ASTRA_DISPLAY_CURSOR_VISIBLE, 0u));
     assert(registers->DISPLAY_REQ_OP ==
            (ASTRA_DISPLAY_CURSOR_UPDATE |
             ASTRA_DISPLAY_CURSOR_VISIBLE <<
@@ -425,19 +425,67 @@ static void test_fenced_display_transport(void)
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
     assert(!kernel_platform_display_submit(
         11u, ASTRA_DISPLAY_CURSOR_UPDATE,
-        ASTRA_DISPLAY_HOST_CURSOR_PACK(0u, 0u, true), UINT32_C(0x10)));
+        ASTRA_DISPLAY_HOST_CURSOR_PACK(0u, 0u, true), UINT32_C(0x10), 0u));
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
     assert(kernel_platform_display_submit(
         11u, ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE, 0x02002000u,
-        ASTRA_DISPLAY_CURSOR_IMAGE_BYTES));
+        ASTRA_DISPLAY_CURSOR_IMAGE_BYTES, 0u));
     assert(registers->DISPLAY_REQ_OP ==
            (ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE |
             ASTRA_DISPLAY_CURSOR_IMAGE_BYTES <<
                 ASTRA_DISPLAY_HOST_BYTE_SIZE_SHIFT));
+    /* READ_SURFACE needs the host capability and a header plus rows. */
+    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
+    registers->DISPLAY_REQ_OP = 0u;
+    assert(!kernel_platform_display_submit(
+        11u, ASTRA_DISPLAY_FRAME_READ_SURFACE, 0x02003000u,
+        ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES + 4u, 0u));
+    assert(registers->DISPLAY_REQ_OP == 0u);
+    registers->DISPLAY_CAPS |= ASTRA_DISPLAY_HOST_CAP_READ_SURFACE;
+    assert((kernel_platform_display_capabilities() &
+            ASTRA_DISPLAY_CAP_READ_SURFACE) != 0u);
+    assert(!kernel_platform_display_submit(
+        11u, ASTRA_DISPLAY_FRAME_READ_SURFACE, 0x02003000u,
+        ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES, 0u));
+    assert(!kernel_platform_display_submit(
+        11u, ASTRA_DISPLAY_FRAME_READ_SURFACE, 0u,
+        ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES + 4u, 0u));
+    assert(kernel_platform_display_submit(
+        11u, ASTRA_DISPLAY_FRAME_READ_SURFACE, 0x02003000u,
+        ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES + 4u, 0u));
+    assert(registers->DISPLAY_REQ_OP ==
+           (ASTRA_DISPLAY_FRAME_READ_SURFACE |
+            (ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES + 4u) <<
+                ASTRA_DISPLAY_HOST_BYTE_SIZE_SHIFT));
+    assert(registers->DISPLAY_REQ_COLOR == 0x02003000u);
+    assert(registers->DISPLAY_REQ_ATTACH == 0u);
+    /* An attachment needs the host capability, a render batch and an
+       aligned list; every submit writes the register, so none is stale. */
+    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
+    assert(!kernel_platform_display_submit(
+        16u, ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH, 0x02001000u,
+        ASTRA_RENDER_BATCH_MIN_BYTES, 0x02004000u));
+    registers->DISPLAY_CAPS |= ASTRA_DISPLAY_HOST_CAP_ATTACHMENT;
+    assert((kernel_platform_display_capabilities() &
+            ASTRA_DISPLAY_CAP_ATTACHMENT) != 0u);
+    assert(!kernel_platform_display_submit(
+        16u, ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x2468u, 0u, 0x02004000u));
+    assert(!kernel_platform_display_submit(
+        16u, ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH, 0x02001000u,
+        ASTRA_RENDER_BATCH_MIN_BYTES, 0x02004002u));
+    assert(kernel_platform_display_submit(
+        16u, ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH, 0x02001000u,
+        ASTRA_RENDER_BATCH_MIN_BYTES, 0x02004000u));
+    assert(registers->DISPLAY_REQ_ATTACH == 0x02004000u);
+    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
+    assert(kernel_platform_display_submit(
+        17u, ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH, 0x02001000u,
+        ASTRA_RENDER_BATCH_MIN_BYTES, 0u));
+    assert(registers->DISPLAY_REQ_ATTACH == 0u);
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
     assert(!kernel_platform_display_submit(
         12u, ASTRA_DISPLAY_CURSOR_UPDATE,
-        ASTRA_DISPLAY_HOST_CURSOR_PACK(ASTRA_DISPLAY_WIDTH, 0u, true), 0u));
+        ASTRA_DISPLAY_HOST_CURSOR_PACK(ASTRA_DISPLAY_WIDTH, 0u, true), 0u, 0u));
     assert((astraea->IRQ_EN & ASTRAEA_IRQ_DRAW_DONE) != 0u);
 
     /* A fast device may complete between SUBMIT and the acceptance read. */
@@ -445,19 +493,19 @@ static void test_fenced_display_transport(void)
         ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID, 13u);
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
     assert(kernel_platform_display_submit(
-        13u, ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x2468u, 0u));
+        13u, ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x2468u, 0u, 0u));
 
     /* A completion for another fence, or no accepted request, is not ours. */
     kernel_platform_test_display_submit_result(
         ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID, 99u);
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
     assert(!kernel_platform_display_submit(
-        14u, ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x2468u, 0u));
+        14u, ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x2468u, 0u, 0u));
     kernel_platform_test_display_submit_result(
         ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY, 0u);
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
     assert(!kernel_platform_display_submit(
-        15u, ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x2468u, 0u));
+        15u, ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x2468u, 0u, 0u));
     kernel_platform_test_display_submit_result(
         ASTRA_DISPLAY_HOST_QUEUE_BUSY, 0u);
 

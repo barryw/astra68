@@ -2,7 +2,7 @@
 //
 //   Vesta   (0xFFF00000)  system / IRQ / timers / block / input
 //   Astraea (0xFFF10000)  DMA / blitter / copper / arbiter
-//   Vega    (0xFFF20000)  video / tilemaps / sprites / palette
+//   Vega    (0xFFF20000)  video / framebuffer / sprites / palette
 #ifndef ASTRA_H
 #define ASTRA_H
 

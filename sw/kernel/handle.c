@@ -937,10 +937,14 @@ uint32_t kernel_handle_available(const KernelHandleTable *table)
 
         if (word + 1u == KERNEL_HANDLE_BITMAP_WORDS)
             free_slots &= KERNEL_HANDLE_LAST_WORD_MASK;
-        while (free_slots != 0u) {
-            free_slots &= free_slots - 1u;
-            ++count;
-        }
+        /* SWAR population count: the kernel links no libgcc for
+           __popcountsi2, and clearing one bit per pass cost ~1,700
+           instructions for a mostly empty table. */
+        free_slots -= (free_slots >> 1) & UINT32_C(0x55555555);
+        free_slots = (free_slots & UINT32_C(0x33333333)) +
+                     ((free_slots >> 2) & UINT32_C(0x33333333));
+        free_slots = (free_slots + (free_slots >> 4)) & UINT32_C(0x0f0f0f0f);
+        count += (free_slots * UINT32_C(0x01010101)) >> 24;
     }
     return count;
 }
