@@ -46,31 +46,90 @@ done:
     return valid;
 }
 
+/* The fixtures ship in the bundle; SDL finds them as upstream demos do. */
+static char base[256];
+
+static const char *resource(const char *name)
+{
+    static char path[320];
+
+    SDL_snprintf(path, sizeof(path), "%s%s", base, name);
+    return path;
+}
+
+/* The application's STORE, through SDL's preference path: written, then
+   read back. */
+static int check_preferences(void)
+{
+    static const char text[] = "astra";
+    char buffer[sizeof(text)] = {0};
+    char *directory = SDL_GetPrefPath("Astra", "SDLImageProbe");
+    char path[320];
+    SDL_RWops *stream;
+    int valid = 0;
+
+    if (directory == NULL)
+        return 0;
+    SDL_snprintf(path, sizeof(path), "%sprobe.txt", directory);
+    SDL_free(directory);
+    stream = SDL_RWFromFile(path, "wb");
+    if (stream == NULL ||
+        SDL_RWwrite(stream, text, 1, sizeof(text)) != sizeof(text)) {
+        if (stream != NULL)
+            SDL_RWclose(stream);
+        return 0;
+    }
+    SDL_RWclose(stream);
+    stream = SDL_RWFromFile(path, "rb");
+    if (stream != NULL) {
+        valid = SDL_RWread(stream, buffer, 1, sizeof(buffer)) ==
+                    sizeof(text) &&
+                SDL_memcmp(buffer, text, sizeof(text)) == 0;
+        SDL_RWclose(stream);
+    }
+    return valid;
+}
+
 int main(void)
 {
     static const char broken_png[] = "\211PNG\r\n\032\n";
     SDL_RWops *source;
     SDL_Surface *surface;
-    int available = IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG);
+    char *base_path = SDL_GetBasePath();
+    int available;
+
+    if (base_path == NULL) {
+        (void)astra_log("SDL_IMAGE_BASE_PATH_FAIL");
+        (void)astra_log(SDL_GetError());
+        return 1;
+    }
+    SDL_strlcpy(base, base_path, sizeof(base));
+    SDL_free(base_path);
+    if (!check_preferences()) {
+        (void)astra_log("SDL_IMAGE_PREF_PATH_FAIL");
+        (void)astra_log(SDL_GetError());
+        return 1;
+    }
+    available = IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG);
 
     if ((available & (IMG_INIT_PNG | IMG_INIT_JPG)) !=
         (IMG_INIT_PNG | IMG_INIT_JPG)) {
         (void)astra_log("SDL_IMAGE_INIT_FAIL");
         return 1;
     }
-    if (!check_image("/apps/SDLImageProbe.app/resources/sample.png",
+    if (!check_image(resource("sample.png"),
                      "SDL_IMAGE_PNG_FAIL") ||
-        !check_image("/apps/SDLImageProbe.app/resources/sample.jpg",
+        !check_image(resource("sample.jpg"),
                      "SDL_IMAGE_JPEG_FAIL") ||
-        !check_image("/apps/SDLImageProbe.app/resources/sample.qoi",
+        !check_image(resource("sample.qoi"),
                      "SDL_IMAGE_QOI_FAIL") ||
-        !check_image("/apps/SDLImageProbe.app/resources/misnamed.jpg",
+        !check_image(resource("misnamed.jpg"),
                      "SDL_IMAGE_MISNAMED_FAIL")) {
         IMG_Quit();
         return 1;
     }
-    if (!check_round_trip("/apps/SDLImageProbe.app/resources/sample.png", 0) ||
-        !check_round_trip("/apps/SDLImageProbe.app/resources/sample.jpg", 1)) {
+    if (!check_round_trip(resource("sample.png"), 0) ||
+        !check_round_trip(resource("sample.jpg"), 1)) {
         (void)astra_log("SDL_IMAGE_SAVE_FAIL");
         IMG_Quit();
         return 1;
@@ -94,7 +153,7 @@ int main(void)
         IMG_Quit();
         return 1;
     }
-    if (IMG_Load("/apps/SDLImageProbe.app/resources/missing.png") != NULL) {
+    if (IMG_Load(resource("missing.png")) != NULL) {
         (void)astra_log("SDL_IMAGE_MISSING_FILE_FAIL");
         IMG_Quit();
         return 1;

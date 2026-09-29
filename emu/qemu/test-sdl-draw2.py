@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Boot upstream SDL2 testdraw2 and observe its render submissions."""
+"""Boot an upstream SDL2 test program and observe its render submissions.
+
+The image's test app is the program: testdraw2 by default, or any upstream
+demo named with --program. Each must render, quit on Escape and exit clean.
+"""
 
 import argparse
 import importlib.util
@@ -28,7 +32,9 @@ def main():
     parser.add_argument("qemu")
     parser.add_argument("rom")
     parser.add_argument("image")
+    parser.add_argument("--program", default="testdraw2")
     arguments = parser.parse_args()
+    program = arguments.program
     with tempfile.TemporaryDirectory(prefix="astra-sdl-draw2-") as temporary:
         image = os.path.join(temporary, "test.img")
         shutil.copyfile(arguments.image, image)
@@ -53,7 +59,7 @@ def main():
             while (last := display_count(
                     machine, "astra-display-render-commands")) <= first + 100:
                 if time.monotonic() >= deadline:
-                    raise RuntimeError("upstream testdraw2 did not render")
+                    raise RuntimeError("upstream %s did not render" % program)
                 time.sleep(0.1)
             before_escape = machine.trace_sequence()
             machine.qmp.key("esc")
@@ -79,8 +85,8 @@ def main():
                 if (0, 1) in exits:
                     break
                 if time.monotonic() >= deadline:
-                    raise RuntimeError("Escape did not stop testdraw2: %r" %
-                                       machine.recent_serial(30))
+                    raise RuntimeError("Escape did not stop %s: %r" %
+                                       (program, machine.recent_serial(30)))
                 time.sleep(0.1)
             stopped = display_count(machine, "astra-display-render-commands")
             time.sleep(1)
@@ -91,8 +97,8 @@ def main():
                 raise RuntimeError("SDL quit left rendering or faults: "
                                    "commands=%d/%d trace=%r" %
                                    (stopped, settled, trace[-20:]))
-            print("SDL upstream testdraw2 QEMU: PASS (rendered, Escape, "
-                  "clean exit; %d commands)" % (last - first))
+            print("SDL upstream %s QEMU: PASS (rendered, Escape, "
+                  "clean exit; %d commands)" % (program, last - first))
         finally:
             machine.close()
 

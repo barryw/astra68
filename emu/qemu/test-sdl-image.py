@@ -44,7 +44,7 @@ def main():
                     raise RuntimeError("SDL_image probe failed: %r" %
                                        trace[max(0, index - 3):index + 10])
                 if any("SDL_IMAGE_READY" in line for line in trace):
-                    print("SDL_image QEMU: PASS (PNG, JPEG, QOI, PNG/JPEG "
+                    print("SDL_image QEMU: PASS (base and pref paths, PNG, JPEG, QOI, PNG/JPEG "
                           "round trips, misnamed, corrupt and missing file)")
                     return
                 time.sleep(0.1)

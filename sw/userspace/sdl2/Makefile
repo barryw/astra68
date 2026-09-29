@@ -111,7 +111,11 @@ build/m68k/net/%.o: $(SDL_NET_STAMP) Makefile
 
 # SDL programs the system image installs as applications (build/.apps).
 # Probes are built on demand by their *-bundle targets and never shipped.
-SHIPPED_APPS := SDLTestDraw2 SDLFrameBench
+# Upstream demos run unchanged; testutils.c finds their files in the
+# bundle's resources through SDL_GetBasePath.
+SDL_DEMOS := testsprite2 testgeometry testrendertarget testscale
+SHIPPED_APPS := SDLTestDraw2 SDLFrameBench SDLTestSprite2 SDLTestGeometry \
+	SDLTestRenderTarget SDLTestScale
 
 all: library-contract net-library-contract image-library-contract \
 	mixer-library-contract ttf-library-contract build/.apps
@@ -486,6 +490,8 @@ image-probe-bundle: build/.SDLImageProbe.app.stamp
 build/m68k/testaudioinfo: SDL_EXAMPLE_SOURCE = build/vendor/SDL2/test/testaudioinfo.c
 build/m68k/testver: SDL_EXAMPLE_SOURCE = build/vendor/SDL2/test/testver.c
 build/m68k/testdraw2: SDL_EXAMPLE_SOURCE = build/vendor/SDL2/test/testdraw2.c
+$(foreach demo,$(SDL_DEMOS),$(eval build/m68k/$(demo): SDL_EXAMPLE_SOURCE = build/vendor/SDL2/test/$(demo).c build/vendor/SDL2/test/testutils.c))
+$(foreach demo,$(SDL_DEMOS),$(eval build/m68k/$(demo): $(SDL2_ROOT)/test/$(demo).c $(SDL2_ROOT)/test/testutils.c))
 build/m68k/sdlprobe: SDL_EXAMPLE_SOURCE = tests/probe.c
 build/m68k/sdlvideoprobe: SDL_EXAMPLE_SOURCE = tests/video_probe.c
 build/m68k/sdlrenderprobe: SDL_EXAMPLE_SOURCE = tests/render_probe.c
@@ -499,7 +505,7 @@ build/m68k/sdlrenderprobe: tests/render_probe.c
 build/m68k/sdlframebench: tests/frame_bench.c
 build/m68k/testaudioinfo build/m68k/testver build/m68k/testdraw2 \
 build/m68k/sdlprobe build/m68k/sdlvideoprobe build/m68k/sdlrenderprobe \
-build/m68k/sdlframebench: \
+build/m68k/sdlframebench $(addprefix build/m68k/,$(SDL_DEMOS)): \
 		$(SDL2_SHARED) $(ASTRA_LIBC_LIBRARY)
 	@mkdir -p $(@D)
 	$(TARGET_CC) $(ASTRA_POSIX_CPPFLAGS) -Ibuild/vendor/SDL2/include \
@@ -586,6 +592,13 @@ frame-bench-bundle: build/.SDLFrameBench.app.stamp
 $(eval $(call astra_app_bundle,build,SDLTestDraw2,build/m68k/testdraw2,apps/SDLTestDraw2.app/manifest,$(SDL2_ROOT)/test/icon.bmp,))
 testdraw2-bundle: build/.SDLTestDraw2.app.stamp
 
+SDL_DEMO_ICON := $(SDL2_ROOT)/test/icon.bmp
+$(eval $(call astra_app_bundle,build,SDLTestSprite2,build/m68k/testsprite2,apps/SDLTestSprite2.app/manifest,$(SDL_DEMO_ICON),$(SDL_DEMO_ICON)))
+$(eval $(call astra_app_bundle,build,SDLTestGeometry,build/m68k/testgeometry,apps/SDLTestGeometry.app/manifest,$(SDL_DEMO_ICON),$(SDL_DEMO_ICON)))
+$(eval $(call astra_app_bundle,build,SDLTestRenderTarget,build/m68k/testrendertarget,apps/SDLTestRenderTarget.app/manifest,$(SDL_DEMO_ICON),$(SDL_DEMO_ICON) $(SDL2_ROOT)/test/sample.bmp))
+$(eval $(call astra_app_bundle,build,SDLTestScale,build/m68k/testscale,apps/SDLTestScale.app/manifest,$(SDL_DEMO_ICON),$(SDL_DEMO_ICON) $(SDL2_ROOT)/test/sample.bmp))
+demo-bundles: $(foreach demo,SDLTestSprite2 SDLTestGeometry SDLTestRenderTarget SDLTestScale,build/.$(demo).app.stamp)
+
 $(eval $(call astra_app_inventory,build,$(SHIPPED_APPS)))
 
 $(HOST_TEST): audio/SDL_astraaudio.c tests/host/test_astraaudio.c
@@ -653,5 +666,5 @@ clean:
 	image-library-contract mixer-library-contract ttf-library-contract \
 	target-check test \
 	video-probe-bundle render-probe-bundle frame-bench-bundle testdraw2-bundle \
-	net-probe-bundle image-probe-bundle mixer-probe-bundle ttf-probe-bundle \
+	demo-bundles net-probe-bundle image-probe-bundle mixer-probe-bundle ttf-probe-bundle \
 	sanitize analyze clean

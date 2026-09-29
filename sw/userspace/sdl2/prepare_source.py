@@ -87,6 +87,14 @@ MORE_PATCHES = [
         "#include <sys/stat.h>\n#endif",
         "#include <sys/stat.h>\n#include <string.h>\n#endif",
     )),
+    ("include/SDL_config_minimal.h", (
+        "#define SDL_FILESYSTEM_DUMMY  1",
+        "#define SDL_FILESYSTEM_ASTRA  1",
+    )),
+    ("Makefile.minimal", (
+        "\tsrc/filesystem/dummy/*.c \\\n",
+        "\tsrc/filesystem/astra/*.c \\\n",
+    )),
 ]
 
 
@@ -108,6 +116,7 @@ def prepare(source: Path) -> Path:
         + (PORT / "video" / "SDL_astravideo.c").read_bytes()
         + (PORT / "video" / "SDL_astravideo.h").read_bytes()
         + (PORT / "render" / "SDL_astrarender.c").read_bytes()
+        + (PORT / "filesystem" / "SDL_astrafilesystem.c").read_bytes()
         + (PORT / "Makefile").read_bytes()
     ).hexdigest()
     if (OUTPUT / ".astra-source-stamp").exists() and (
@@ -134,6 +143,9 @@ def prepare(source: Path) -> Path:
     render = OUTPUT / "src" / "render" / "astra"
     render.mkdir()
     shutil.copy2(PORT / "render" / "SDL_astrarender.c", render)
+    filesystem = OUTPUT / "src" / "filesystem" / "astra"
+    filesystem.mkdir()
+    shutil.copy2(PORT / "filesystem" / "SDL_astrafilesystem.c", filesystem)
     (OUTPUT / ".astra-source-stamp").write_text(stamp)
     return OUTPUT
 

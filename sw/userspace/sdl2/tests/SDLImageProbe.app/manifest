@@ -5,7 +5,7 @@ name "SDL Image Probe"
 version 0.1.0
 executable bin/m68k-68040/SDLImageProbe
 icon resources/SDLImageProbe.aicon
-capability APPS:r
+capability STORE:rw
 capability LIBS:r
 requires SDL2_image.library 2 2.8.12
 requires SDL2.library 2 2.32.10

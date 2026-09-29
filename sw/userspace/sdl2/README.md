@@ -8,6 +8,26 @@ changed revision, dirty checkout, or shifted integration point.
 Core, SDL_net, SDL_image, SDL_mixer, and SDL_ttf are published as separate
 versioned libraries in `SDL.kit`.
 
+## Files and upstream demos
+
+`filesystem/SDL_astrafilesystem.c` is SDL's filesystem backend.
+`SDL_GetBasePath` is `/app/resources/`: the application bundle's resources,
+reached through the `APP` namespace the supervisor grants every launched
+application, as SDL answers for a bundle on other systems.
+`SDL_GetPrefPath` is `/store/`, the application's private `STORE`; the
+manifest must ask for `STORE:rw`, and org and app do not take part. Outside a
+bundle, or without `STORE`, each returns NULL with an SDL error. File I/O
+stays on SDL's stdio RWops, which reach the native VFS through the POSIX
+adapter.
+
+Upstream `testsprite2`, `testgeometry`, `testrendertarget` and `testscale`
+ship unchanged as applications, built with upstream `testutils.c`, and find
+`icon.bmp` and `sample.bmp` in their bundles through `SDL_GetBasePath`.
+`emu/qemu/test-sdl-draw2.py --program NAME` is each one's gate: it renders,
+quits on Escape and exits clean. `test-sdl-image.py` checks both paths,
+including a write and read back through the preference path. Removing
+`icon.bmp` from testsprite2's bundle fails its gate.
+
 ## FPGA renderer
 
 SDL drawing now reaches the FPGA through Astra's managed graphics API; see

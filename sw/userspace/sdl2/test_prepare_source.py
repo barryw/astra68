@@ -37,6 +37,12 @@ class PrepareSourceTest(unittest.TestCase):
         self.assertNotIn("src/thread/pthread/SDL_syssem.c", makefile)
         self.assertIn("src/video/astra/*.c", makefile)
         self.assertIn("src/render/astra/*.c", makefile)
+        self.assertIn("src/filesystem/astra/*.c", makefile)
+        self.assertNotIn("src/filesystem/dummy/*.c", makefile)
+        self.assertIn("#define SDL_FILESYSTEM_ASTRA  1", config)
+        self.assertNotIn("SDL_FILESYSTEM_DUMMY", config)
+        self.assertTrue(
+            (output / "src/filesystem/astra/SDL_astrafilesystem.c").exists())
         self.assertEqual(render_before,
                          (source / "src/render/SDL_render.c").read_bytes())
         self.assertEqual(before, (source / "src/audio/SDL_audio.c").read_bytes())
