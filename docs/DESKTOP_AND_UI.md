@@ -145,11 +145,9 @@ a surface or scene operation, not MMIO.
   unsynchronized wall-clock timers.
 - A missed frame retains the previous completed frame; it never tears.
 
-The two hardware tile layers are first-class game-scene resources. They support
-pixel-granular X/Y scroll, independent wrap, foreground overlays, and
-copper-controlled scroll bands. Desktop content normally uses fenced chunky
-surfaces; tile layers are available when a workspace effect can justify their
-resource and bandwidth cost rather than being exposed as a second widget API.
+The current hardware keeps framebuffer viewport scrolling and wrapping;
+desktop and game content use fenced chunky surfaces. Game-specific texture
+operations belong in the shared renderer, not separate scanout tile layers.
 
 ## 7. Commands, menus, and automation
 

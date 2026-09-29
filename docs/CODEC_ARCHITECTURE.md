@@ -15,6 +15,55 @@ receives PCM frames, Graphics Kit receives image surfaces, and a future Video
 Kit receives timestamped frames. A codec does not become a kernel driver and
 applications do not need one hardcoded branch per format.
 
+There is one native client API, not a public API for each format. A caller asks
+the Codec Kit to probe a source, opens the selected format for decode or encode,
+transfers chunks, and closes the stream. The Kit owns provider selection and
+translates these calls to one versioned provider protocol. A new codec package
+implements that protocol and declares its media kind, formats, directions, and
+typed output description; applications do not link to it or learn its private
+entry points. The SDL_image/SDL_mixer decoders remain upstream compatibility
+code for SDL applications, not Astra's native codec registry or a dependency of
+native applications.
+
+The client-facing shape is deliberately small: `probe(bytes, hint)` identifies
+supported content, `open(format, direction, media_kind)` starts a stream,
+`transfer(input, output)` reports bytes consumed and produced, and `close()`
+releases it. These names describe the contract, not frozen C symbols. The
+client library owns file, memory, or network I/O and feeds bytes to the
+provider, so codecs do not need a POSIX descriptor or direct access to a
+caller's `AstraFile`. A tagged result describes PCM frames, image pixels, or
+other typed output; the caller chooses the media kind and output format but
+does not choose a codec-specific function. Transport chunk sizes are negotiated
+and partial progress is explicit. Never make an entire file fit in one IPC
+message or buffer merely to satisfy this API.
+
+The provider protocol should use ordinary Astra process/service IPC rather
+than assume `dlopen` exists: the current loader has no runtime `dlopen` or
+`dlsym` facility. The first provider must prove discovery and stream cleanup
+before this becomes a public ABI. A provider crash fails only its streams;
+the registry, desktop, and kernel remain available.
+
+The concrete installation path is the existing service manager: Codec Kit
+publishes one `CODEC` capability, and each installable codec is a separate
+service whose definition depends on `CODEC`. Providers register a versioned
+factory endpoint with the registry when ready. Clients receive the generic
+`CODEC` capability and link only `codec.library`; they neither link provider
+libraries nor know provider service names. Registry enumeration returns
+provider endpoints to the client library, which performs bounded probes with
+deadlines. A slow or crashed provider must not block the registry or another
+client. The selected provider serves the stream directly, with its own session
+and transfer area; provider death invalidates only that session. Registration
+and stream counts grow subject to available resources, not a hardcoded table.
+
+Decoded data has a *media-kind* contract, not a *file-format* contract. For
+example, all image decoders return a negotiated pixel format, dimensions and
+row stride; all audio decoders return negotiated PCM format, rate, channels and
+frame count. A caller may know how to display pixels or play PCM, but never
+needs to know how PNG or MP3 was encoded. The generic byte-stream operations
+and error statuses are identical across kinds. This is also why SDL_image and
+SDL_mixer stay in the SDL compatibility Kit rather than becoming provider
+dependencies of native applications.
+
 The provider contract has these operations:
 
 1. **Probe** a bounded byte prefix and optional file-format metadata without

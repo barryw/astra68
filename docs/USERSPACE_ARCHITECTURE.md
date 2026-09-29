@@ -230,9 +230,9 @@ windows in a dense back-to-front stack. Each successful create transfers a
 private control capability used for movement, sizing, z-order, activation,
 minimize/maximize/restore, title, query, and close. Activation raises the
 selected normal window and updates the single active title state. The
-compositor retains hardware-rendered window caches, unions damage independently
-for both alternating scanouts, and repairs rounded overlap with clipped masked
-  blits. The protected input service publishes normalized events to the display
+compositor retains hardware-rendered window decorations, shows each window's
+content bank directly as scene layers, and unions damage independently for
+both alternating scanouts (MANAGED_GRAPHICS.md section 5a). The protected input service publishes normalized events to the display
   service, which owns hit testing, focus, capture, titlebar dragging, gadget
   transitions, and per-window event masks. Window events carry screen and
   client-relative coordinates. Every ordinary window receives complete
@@ -247,6 +247,33 @@ watched. A normal close of the terminal application therefore retires that
 process without turning an expected application exit into a supervisor panic.
 
 ## 5. Service lifecycle and failure
+
+### Tiers
+
+Every resident service belongs to one of three tiers, named in the startup
+manifest (`emu/qemu/astra_image.py` builds it):
+
+| Tier | Manifest word | Examples | User control | When it dies |
+|---|---|---|---|---|
+| critical | `critical` | storage, display | none | the supervisor halts the machine (`ASTRA_SYSCALL_SYSTEM_FAIL`), naming the service |
+| system | `required` | posixd, input, network, desktop | none | restarted, always |
+| user | none, optional `start=boot\|manual` `restart=never\|on-fault\|always` | media; everything added with `service add` | start, stop, pause, resume, restart, enable/disable at boot, restart policy | per its restart policy |
+
+A machine without its storage or its display is useless, so their death is
+fatal rather than recovered; a future text-only mode would move display to
+`required`. The service manager answers `ASTRA_STATUS_ACCESS` to every
+lifecycle and policy operation on a critical or system service (`service`
+prints "not permitted: the system manages this service"). A user's choice for
+a manifest service lives in `/config/services/NAME/policy.conf` (`start`,
+`restart`) over the manifest default; deleting it restores the default, and a
+malformed one is reported and ignored. `service enable` / `disable` means
+"starts at boot" for every user service; `service set NAME restart POLICY`
+chooses what happens when it exits. `on-demand` start is parsed for added
+services but not implemented.
+
+Automatic restarts back off: the first death after a stable minute restarts
+at once, each further quick death waits twice as long from 0.2 s to a 10 s cap,
+and retries continue forever at that pace. `service stop` ends them.
 
 Each restartable service follows this conceptual state machine:
 
@@ -263,14 +290,15 @@ STOPPED -> STARTING -> READY -> STOPPING -> STOPPED
   operation is demonstrably idempotent.
 - Device-owning service death revokes mappings, stops DMA, masks interrupts,
   resets the engine, and completes or cancels every outstanding request.
-- Display-service death must leave a recovery console available. Workspace and
-  applications redraw after reconnect rather than assuming old graphics
-  objects survived.
-- Storage-service death fails requests and remounts or repairs according to the
-  filesystem contract; it never fabricates successful durability.
+- Display-service and storage-service death halt the machine (critical tier,
+  above); neither is restarted underneath its clients.
+- A restarted service's exclusively granted devices are reset and its
+  interrupt endpoints masked and drained before relaunch, so the new instance
+  starts from the state boot gave the first.
 
-Exact retry counts, backoff intervals, and critical-service escalation remain
-**OPEN** and require fault-injection measurements.
+The `fault-probe` fixture service (`astra_image.py --fault-probe`,
+`--fault-critical`) exercises the death path on the shipping ROM;
+`emu/qemu/test-service-policy.py` is its gate.
 
 ## 6. One coherent command model
 
@@ -342,7 +370,6 @@ native environment has the intended personality and failure boundaries.
 
 - Final service names and which coarse services share one process.
 - Manifest schema and dependency-cycle validation.
-- Service restart limits and critical-service recovery policy.
 - Clipboard, drag-and-drop, command, and automation wire protocols.
 - AstraFS filename case and normalization, open-file deletion, data checksums,
   journal sizing, indexing scope, and exact version-1 on-disk structures.

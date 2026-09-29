@@ -125,6 +125,84 @@ the global NDK documentation gate currently fails on unrelated undocumented
 command, GUI, VFS, and runtime declarations.
 `docs/AUDIO_ARCHITECTURE.md` holds the acceptance criteria.
 
+The SDL2 port has a pinned, disposable source overlay and a first Astra PCM
+audio backend in `sw/userspace/sdl2/`; upstream SDL is unchanged. Beast host
+and MC68040 audio-adapter tests pass, including missing/broken PCM cases.
+The full SDL2 core and test archives cross-compile with Astra PIC/ABI flags.
+The core now links as `SDL2.library.2`, uses SDL's upstream export list, and
+ships in `SDL.kit` through the normal provider index. The unchanged upstream
+examples link to that shared library. In a fresh Beast-hosted QEMU image with
+the Kit, upstream `testver` exits zero and a public-API probe selects the
+Astra audio driver. In a negative image without the Kit, the same probe fails
+to load with status 34, even when a bare SDL2 ELF is copied into `/libs`.
+Upstream `testaudioinfo` opens PCM during setup and fails in host QEMU because
+that machine has no PCM provider; Terminal now requests PCM for child commands
+where one exists. Playback and physical DE25 qualification remain open.
+Native per-thread priority and POSIX scheduling adapters cleared the previous
+SDL pthread-priority build blocker; kernel,
+runtime, and POSIX host suites and MC68040 builds pass. Per-thread signal
+masks and handler stacks are implemented in the native kernel, and the POSIX
+adapter inherits masks on thread creation.
+The requested-stack-size pthread attribute now validates against Astra's guarded,
+demand-grown native stack reservation. Its public layout change bumped libc and
+dependent Kit manifests to ABI 2; Beast's POSIX host suite, MC68040 library
+build, and full Kit test pass. The native display service accepts RGB565
+windows and copies damaged pixels into hardware BLIT batches; Beast host
+renderer/compositor positive and negative tests and MC68040 builds pass.
+An SDL Astra video/input backend now builds in the disposable overlay, with
+host positive/negative adapter tests. The shared POSIX entry adapter sends
+startup-ready before invoking an upstream app's `main`, so an indefinite GUI
+event loop cannot stall Supervisor boot. Unchanged upstream `testdraw2` builds
+against `SDL2.library.2`. A fresh Beast-hosted QEMU image auto-launched an SDL
+window probe, reached `SDL_VIDEO_READY` after presentation, and completed six
+display submissions including 63 blits. The same image with unmodified
+upstream `testdraw2` booted to stage 8, rendered, accepted Escape, and exited
+zero. The regression gate rejected an older image where window cleanup killed
+the display service and faulted the app. SDL keyboard focus, native
+show/hide activation, its required video-quit callback, and cursor-only
+display updates on minimized-window close now have tests. Beast POSIX host
+suite, SDL host/MC68040 checks, display host/sanitizer suite, and image
+provider tests pass. QEMU counts render commands but has no scanout
+framebuffer; pixel appearance, mouse behavior, and performance require a
+physical DE25 check.
+SDL_net 2.4.0 now builds from unchanged upstream source as a separate
+`SDL2_net.library.2` in `SDL.kit`. Its POSIX DNS/interface adapters use native
+Network Kit operations backed by Linux host sockets, not a guest IP stack.
+Beast host positive/negative network and POSIX tests pass; a fresh Beast QEMU
+image passed the `SDLNetProbe.app` forward/reverse DNS, interface, and UDP
+loopback gate. Upstream `chat`, `chatd`, and `showinterfaces` build and link;
+interactive and DE25 runtime checks remain open. SDL_image 2.8.12 now ships
+from a clean upstream checkout as `SDL2_image.library.2`; a fresh Beast QEMU
+image decoded PNG, JPEG, and QOI through SDL2's POSIX-backed file RWops,
+accepted a misleading filename by content, and rejected corrupt and missing
+inputs. PNG/JPEG save-and-load round trips and invalid-save rejection passed
+in the same QEMU gate using upstream's built-in encoders. AVIF/JXL/TIFF/WebP
+readers are not enabled. Unmodified SDL_mixer 2.8.2 now
+builds as `SDL2_mixer.library.2` in the same Kit with built-in WAV, MP3, OGG,
+and FLAC support. A fresh QEMU image passed ten consecutive runs loading and
+starting all four formats, rejecting malformed WAV/music input, and starting
+16 simultaneous mixed channels with SDL's dummy audio driver. This is not
+physical PCM output qualification. The repeated gate exposed a POSIX mutex
+lost-acquisition bug: after a futex wake, the contended path could acquire
+the mutex and then wait on it again. `pthread_mutex_lock`/`unlock` now use
+the existing Astra-native mutex substrate; deterministic unlock-wake and
+spurious-wake host regressions pass. Initial hidden-window creation, physical
+PCM playback, and game qualification remain open; see
+`sw/userspace/sdl2/README.md`.
+SDL_ttf 2.24.0 now builds from unchanged upstream source with its pinned
+FreeType submodule and is packaged as `SDL2_ttf.library.2`. A fresh QEMU image
+rendered the existing Atkinson Hyperlegible Next font and rejected missing and
+corrupt font inputs. HarfBuzz shaping and physical DE25 text quality remain
+unqualified. The native generic Codec Kit remains a design contract, not an
+implemented provider service or client library.
+An untouched Chocolate Doom 3.1.1 checkout at
+`410d96855b5df5410ff591a90efeafa889119224` cross-compiled all
+`chocolate-doom` objects against the Astra SDL2, SDL_mixer, and SDL_net
+libraries on Beast. Its upstream CMake link step still selects the old
+`crt0-hosted.o`/static POSIX archives, so no runnable game binary has been
+produced or tested. A generic Astra CMake link integration is needed; the
+upstream game source has not been changed.
+
 Release `802122b1d20b658edd355713f995a1857f1f66e6d74b02cfa1bb70db2cbd4bb6`
 deploys the audio and remote-desktop Linux providers as systemd `Wants` of
 `astra.service`, not `Requires`; both log to the journal. On the preceding
@@ -172,18 +250,88 @@ the DE25 release gate passed and the live RFB frame capture and Astra,
 remote-desktop, and audio-host services remain active. A physical reproduction
 of the formerly stuck resize cursor has not yet been repeated by the user.
 
-The production Agilex 5 shell routes with every clock constrained. Retained
-setup, hold, recovery, removal, and minimum-pulse slack are +0.076 ns, 0.000 ns,
-+2.518 ns, +0.006 ns, and +0.220 ns. Resource use is 45,080 / 46,800 ALMs,
-4,189,680 / 7,331,840 block-memory bits, 342 / 358 RAM blocks, 60 / 376 DSPs,
-and 5 / 11 PLLs. Exact build and deployment evidence belongs in
+The latest retained and deployed production Agilex 5 capture shell routes with
+every clock constrained. Setup, hold, recovery, removal, and minimum-pulse
+slack are +0.024 ns, 0.000 ns, +2.645 ns, +0.046 ns, and +0.220 ns. Resource
+use is 45,797 / 46,800 ALMs and 354 / 358 RAM blocks. Exact build and
+deployment evidence belongs in
 `fpga/de25/TIMING_CLOSURE.md`.
+
+The latest isolated source checkpoint removes the old tile controls, Copper
+targets, validators, line builders, and scene AXI arbiter while retaining
+framebuffer scrolling/wrapping and sprites. On 2026-09-25 its exact full DE25
+route passed at 41,077 / 46,800 ALMs, 302 / 358 RAM blocks, and 46 / 376 DSP
+blocks. Worst setup slack is +0.012 ns on an HDMI output pin; the 165 MHz
+graphics clock has +0.801 ns. Full graphics simulation, ARM host build,
+Linux host tests, and DE25 build contract pass. On 2026-09-26 it was
+installed on the DE25 together with matching runtime release `2006eb8d…`.
+The boot bundle was saved in `boot-rollback-01d05c63`, and the previous
+release is kept as `previous`. The board passed POST, reached initial-image
+stage 8, and has the display helper READY and three services active with no
+restarts. The user reports HDMI output is on the TV; the Cam Link is not
+attached. The full physical validation pass has not been run. See the exact
+identity, timing, and artifact hashes in `fpga/de25/TIMING_CLOSURE.md`.
+
+Next-session plan for DE25 physical validation: `docs/HANDOVER_2026-09-26_SDL_HARDWARE.md`.
+
+Texture engine, uncommitted as of 2026-09-26 (`docs/TEXTURE_ENGINE.md`):
+the TRIANGLES opcode (rasterization, nearest and bilinear sampling,
+modulation, NONE/BLEND/ADD/MOD/MUL) and ARGB8888 destinations for every op
+are in RTL. They match `sw/userspace/graphics/src/texture_reference.c` bit for
+bit in simulation, and the full suite passes. A full DE25 route closes every
+clock:
+
+- 45,925 / 46,800 ALMs, 304 / 358 RAM blocks, 53 / 376 DSP blocks.
+- Worst setup slack +0.051 ns (HDMI), +0.364 ns on the 165 MHz clock.
+- **Only 875 ALMs remain.** The next FPGA feature must first reclaim logic;
+  the largest candidate is sharing the texture engine's six attribute
+  steppers.
+- All 3-bit AXI read IDs are now used.
+- Not deployed; the DE25 certification (`astra_render_certify` ASTRA_TEXTURE
+  phase) has not run.
+
+Managed graphics, uncommitted as of 2026-09-26: SDL drawing no longer runs on
+the MC68040, and the whole SDL2 2D renderer now reaches the hardware
+contract.
+
+- `graphics.h` (`system.library` 2.4) is implemented for window-scoped GPU
+  surfaces and ADLT v1.5 draw lists. They execute as render-only batches
+  through the display service.
+- ADLT v1.5 adds FILL_RECTS and LINES: `astra_draw_rectangles` and
+  `astra_draw_lines` (`system.library` 2.6) are one draw-list command and
+  one `ASTRA_RENDER_OP_FILL_RECTS` or `ASTRA_RENDER_OP_LINES` hardware
+  command per 4096 records; translucent BLEND rectangles, and translucent
+  FILLs, use `FILL_RECTS_OPTION_BLEND`. SDL points, fills, lines, and
+  blended-line spans gather into them across SDL commands. The FILL_RECTS
+  and LINES RTL is being written; until it ships the board rejects them.
+- ADLT v1.4 adds TRIANGLES and a NONE/BLEND/ADD/MOD/MUL blend field with
+  linear filtering. `render_builder.c` emits `ASTRA_RENDER_OP_TRIANGLES` per
+  `docs/TEXTURE_ENGINE.md` §1 for geometry, rotation, color modulation,
+  ADD/MOD/MUL, and filtered copies; plain and alpha copies stay blits.
+  ARGB8888 is a draw target.
+- Readback runs end to end: `READ_SURFACE` display request (kernel, QEMU,
+  Linux helper), `ASTRA_GUI_GRAPHICS_SURFACE_READ`, `astra_surface_read`, and
+  SDL `RenderReadPixels`.
+- The SDL2 `astra` render driver supports every SDL blend mode except
+  composed ones, color modulation, any `CopyEx` angle, `RenderGeometry`,
+  linear scaling, ARGB8888 targets, and readback.
+- Host tests pass at every layer, each checked against a deliberate
+  perturbation. The QEMU gates pass: `test-display.py`, `test-terminal.py`,
+  `test-sdl-video.py`, `test-sdl-draw2.py`, and the new
+  `test-sdl-render.py` (TRIANGLES commands and surface reads counted).
+- `test-display.py` had failed since d7fed3bb, because window-change renders
+  presented the cursor every time. They now present it only when the pointer
+  shape changes.
+- Next: the texture-engine RTL (FPGA line), then the DE25 visual and
+  performance gate. QEMU counts TRIANGLES but renders no pixels.
+
+The contract and phase record are in `docs/MANAGED_GRAPHICS.md`.
 
 The active display checkpoint has a fixed 1920x1080x60 HDMI output at 148.500
 MHz and a 165 MHz graphics-build domain. The FPGA performs nearest-neighbor
 logical scaling, integer fit/letterboxing when possible, fractional fit/fill
 otherwise, composed-line replay, and logical copper-beam translation. The
-framebuffer, tiles, sprites, copper, and boot overlay scale together; the
+deployed framebuffer, tiles, sprites, copper, and boot overlay scale together; the
 double-buffered 32x32 ARGB hardware pointer is the native unscaled output
 plane. The MC68040 supplies logical content and mode requests but never scales
 pixels.
@@ -951,6 +1099,41 @@ source derives a transfer slot from Astraea's complete 8 MiB render workspace;
 the old independent mapping constant and duplicate public DMA quotas are gone.
 The anonymous private window correspondingly spans 480 MiB; allocation remains
 demand-paged and owner-charged.
+
+## Service tiers and user service policy
+
+Resident services are `critical` (storage, display: death halts the machine
+through the PID-1-only `ASTRA_SYSCALL_SYSTEM_FAIL`, which panics naming the
+service), `required` (restarted always; includes the desktop) or user
+services (media, anything added with `service add`). Critical and system
+services refuse every service-manager operation with ACCESS. Users choose
+"starts at boot" (`service enable`/`disable`) and the restart policy
+(`service set NAME restart never|on-fault|always`, NDK
+`astra_service_set_restart`, service-manager protocol v5); a manifest
+service's choice persists in `/config/services/NAME/policy.conf`. Automatic
+restarts back off (immediate, then 0.2 s doubling to 10 s, reset after a
+stable minute). `docs/USERSPACE_ARCHITECTURE.md` §5 is the contract;
+`emu/qemu/test-service-policy.py` (with the `fault-probe` fixture image
+profiles) is the gate.
+
+Restarting a service re-grants PID 1's retained device and IRQ handles,
+resets devices the service alone holds, and masks and drains its IRQ
+endpoints; the input service drops dead clients before judging a seat-owner
+connect. No gate currently kills a service that holds an exclusive device
+(display, the old test path, is now critical); that path was proven by
+perturbation on 2026-09-26 and on the DE25 before display became critical.
+
+Block completions reach their waiter only through the owner's completion
+interrupt and its own collect loop: kernel maintenance drains the transport
+only for a dead owner's revoked requests, and a storage lane collects once
+after it becomes visible. Before this, a process exit could strand a storage
+thread holding the ext4 mount lock (found on the DE25, 2026-09-26).
+
+## Active: graphics performance
+
+Target: 60 fps with ten TestDraw2 windows, the 040 idle, vblank gating only
+the change of the screen. State, measurements, board overrides and the plan:
+`docs/HANDOVER_2026-09-27_GRAPHICS_PERFORMANCE.md`.
 
 ## MC68040 contract
 

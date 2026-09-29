@@ -11,7 +11,7 @@ The split is a dependency boundary, not two competing runtimes:
 compiler.library.1                 (no dependencies)
         |
         +--> runtime.library.1
-        +--> libc.library.1
+        +--> libc.library.2
                   |
                   +--> unwind.library.1
                             |

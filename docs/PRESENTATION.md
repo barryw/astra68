@@ -37,7 +37,7 @@ active-register privilege by using the same MMIO address.
 
 CPU writes to visual state update a pending shadow, never the active scanout
 copy. Visual state includes mode, framebuffer descriptor, viewport, default
-palettes and backdrop, colorkey, tile layers, sprite and virtual-sprite state,
+palettes and backdrop, colorkey, sprite and virtual-sprite state,
 and other frame-scoped presentation controls. Status, interrupt
 acknowledgement, fault reporting, and diagnostic controls remain immediate.
 
@@ -68,6 +68,30 @@ after the presentation completion fence identifies the frame that retired it.
 
 The compositor owns damage tracking and hidden-buffer coherence. Applications
 see acquire, drawing, and present operations rather than front/back addresses.
+
+## Bank retirement
+
+The display helper completes a present, or any other batch that changes the
+screen, as soon as it has issued the commit; the flip still happens at
+vblank. Before it runs a later request that changes the screen it waits for
+that commit to land. Render-only batches, surface reads and cursor updates do
+not wait. The display service may therefore rely on exactly one guarantee:
+
+> When a batch that changes the screen executes, every earlier present is on
+> screen.
+
+A completion does not mean that its frame is on screen. A surface a scene
+referenced is free for writing only once a later screen-changing batch has
+executed. The service's banks follow from that:
+
+- Window caches are written only by compose batches, which change the
+  screen, so two banks suffice: the bank a compose writes was last shown two
+  scenes ago.
+- Window content is written by render-only batches, which do not wait, so it
+  has three banks: the bank a client draws into is never one the last
+  committed scene or the scene before it shows. The one before is off screen
+  once the compose that retired it has executed, and the client's next write
+  follows that compose.
 
 ## Active-surface write guard
 

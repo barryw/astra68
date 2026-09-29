@@ -2,10 +2,11 @@
 
 ## Status and authority
 
-This document is the normative product and hardware architecture for the
-Astra 68 graphics complex on the Arty Z7-20 target. It freezes the version-1
-feature set and the invariants that the RTL, Linux host driver, QEMU device,
-Axiom display boundary, Astra OS display service, and NDK must preserve.
+This document records the historical Arty Z7-20 version-1 architecture. Its
+tile-layer contract is retired and must not be used for new software or RTL.
+Current DE25 implementation and release authority are `docs/CURRENT_STATE.md`,
+`fpga/de25/TIMING_CLOSURE.md`, the graphics register header, and the tested RTL.
+The historical specifications below remain as design history only.
 
 The logical chip names remain:
 
@@ -170,13 +171,13 @@ have an explicit order independent of ARM host endianness:
 | INDEX8 | 1 | palette index | scanout, sources, destinations |
 | RGB565 | 2 | big-endian `RRRRRGGG GGGBBBBB` | scanout, sources, destinations |
 | XRGB8888 | 4 | `XX RR GG BB` | scanout, sources, destinations |
-| ARGB8888 | 4 | `AA RR GG BB` | source only |
+| ARGB8888 | 4 | `AA RR GG BB` | sources, destinations (not scanout) |
 | MASK1 | 1 bit | most-significant bit first | masks and glyphs |
 | A4 | 4 bits | high nibble first | glyph coverage |
 | A8 | 1 | coverage | glyph coverage |
 | INDEX4 | 4 bits | high nibble first | tile and compact color-glyph source |
 
-ARGB8888 is not a scanout format. The active framebuffer is always logically
+ARGB8888 is not a scanout format; since the texture engine (`docs/TEXTURE_ENGINE.md` §7) it is a valid render destination for every operation. The active framebuffer is always logically
 opaque after composition. Destination conversion rounds to the nearest
 representable channel value.
 
@@ -523,6 +524,56 @@ Each command validates its complete source, destination, workspace, pitch, and
 integer arithmetic before its first DMA request. A rejected command performs
 no partial write.
 
+### Command transport and descriptor lifetime
+
+A doorbell is one write of `SUBMISSION_PRODUCER`. The command processor reads
+published command slots in bursts of up to 32 and keeps them on chip until
+they are consumed; a slot belongs to the hardware from its publication until
+`SUBMISSION_CONSUMER` passes it.
+
+Surface descriptors follow the same ownership rule: **software must not
+rewrite a descriptor while any published command that references it has not
+completed.** A descriptor may be rewritten after that command's completion
+record is visible, and a command published by a later doorbell sees the new
+contents.
+
+The hardware relies on that rule to reuse descriptors. A descriptor is read
+from DDR once and reused by the next command that references it when both
+commands were published by the same doorbell (or the second was published
+before the first was read) and the command between them also referenced it.
+That command's range checks prove its own writes cannot overlap the
+descriptor; a descriptor it did not reference is dropped, because its writes
+may have. Every reused descriptor is still validated in full, against the
+command's generation and required access, before use. Queue rebase, engine
+reset and a fatal fault discard all reused state.
+
+Pixel writes are posted. An engine finishes a command once its last write is
+issued; the command processor counts the write responses, and every engine
+write uses one AXI ID so the interconnect keeps them in order across commands
+and engines. The ordering rules that replace waiting per command:
+
+- A command's completion record is written only after every engine write
+  issued before it has been answered, and records are written in command
+  order. `COMPLETION_PRODUCER` advances only when a record's own write
+  response arrives, so when software sees a completion, that command's pixels
+  and every earlier command's are visible.
+- A read never passes an unanswered write. A descriptor read that misses the
+  reuse above, and every command that reads the arena (BLIT, GLYPH_RUN,
+  FLOOD_FILL, TRIANGLES, and FILL_RECTS and LINES for their records), waits
+  until all earlier writes are answered. FILL and the other geometry opcodes
+  only write, so they start while earlier writes are still in flight.
+- A failed write response is charged to the command that issued the write:
+  its completion reports `AXI_WRITE` with detail `0x0002bbrr` (ID byte `bb`,
+  response byte `rr`), as when the engine waited for the response itself. Later
+  commands are unaffected. A failed command's destination contents are
+  undefined, as before.
+- At most four completion records wait at once; the fifth command waits to
+  enqueue its record. Queue rebase is accepted only when no record is waiting
+  and no write is unanswered.
+- A deadline covers a command until its last write is issued. A write
+  response that never arrives stalls completion rather than timing out, as a
+  response that never arrived did before.
+
 ### Blitter and virtual sprites
 
 The blitter supports:
@@ -531,7 +582,7 @@ The blitter supports:
 - solid fill;
 - source color key;
 - MASK1 copy;
-- premultiplied source-over and constant opacity;
+- straight-alpha source-over (SDL BLEND, `docs/TEXTURE_ENGINE.md` §6) and constant opacity;
 - nearest-neighbor X/Y scaling;
 - X/Y reflection;
 - overlap-safe same-format one-to-one copies;
@@ -606,6 +657,72 @@ the service's per-frame command budget bound the group, while multiple groups
 may be submitted over time. There is no fixed virtual-sprite descriptor count
 in hardware.
 
+### Pixel-stream BLIT
+
+An unscaled BLIT between RGB565, XRGB8888 and ARGB8888, with no flags or only
+`FLAG_BLIT_ALPHA`, and 8-aligned pitches, runs in the copy burst mover's pixel
+mode (`astra_render_copy_burst.sv`): source chunks are read ahead, destination
+chunks too when blending, and pixels are expanded, blended (pipelined DSP
+source-over) and packed at one per clock. A plain conversion is the same
+datapath with a' = 255 over a zero destination, exact because m(x, 255) = x.
+A chunk whose source is opaque at opacity 255 skips its destination read;
+XRGB and RGB565 sources are always opaque. Same-format plain copies keep the
+byte path. A 640x480 ARGB8888 to RGB565 BLIT costs about 1.04 cycles per
+pixel, blended or not (sim, L25 and L150), where the serial blitter took
+25-170. Scaled, reflected, color-keyed, masked, palette and ROP BLITs, and
+pitches that are not a multiple of 8, still use the serial blitter.
+
+### Rectangle lists (FILL_RECTS)
+
+`FILL_RECTS` (opcode 4) is a list of solid fills in one command, so a frame
+of points and rectangles costs one command rather than one per rectangle. It
+is exactly `count` FILL commands, in record order, each with this command's
+destination, clip and deadline. With option bit 1 (`BLEND`) each record is
+instead composited source-over: the color is straight-alpha ARGB8888 and
+every pixel equals a `FLAG_BLIT_ALPHA` BLIT of a 1x1 ARGB8888 source of that
+color scaled over the rectangle at opacity 255 (§7 of
+`docs/TEXTURE_ENGINE.md`), bit for bit. Blended records need an RGB565,
+XRGB8888 or ARGB8888 destination with an 8-byte-aligned pitch
+(`BAD_DESCRIPTOR` otherwise); the burst mover blends at one 64-bit beat per
+clock. A blended record reads the pixels it blends into, so it starts only
+when no earlier record whose writes are still unanswered overlaps its
+rectangle (the hardware tracks the last four records; with four still in
+flight it waits for the oldest), and overlapping records compose in order.
+
+| Word | Meaning |
+|---:|---|
+| 8 | destination surface descriptor (WRITE) |
+| 9 | zero |
+| 10 | arena offset of the record array, 16-byte aligned |
+| 11 | record count, 1..4096 |
+| 12 | options: bit 0 `RECORD_COLOR`, bit 1 `BLEND`; other bits zero |
+| 13–14 | zero |
+| 15 | shared color when bit 0 is clear: the canonical FILL value, or ARGB8888 with `BLEND` |
+
+Each record is 16 bytes, big-endian:
+
+| Word | Meaning |
+|---:|---|
+| 0 | x, y: signed 16-bit each, as FILL's destination point |
+| 1 | width, height: unsigned 16-bit each; a zero extent is a no-op |
+| 2 | color when `RECORD_COLOR` is set, otherwise zero |
+| 3 | zero |
+
+Command flags must be zero. A zero count, a count above 4,096, a misaligned
+offset or an array past the arena rejects the command with `BAD_RANGE`
+(`0x00030004`); reserved words or option bits reject it with `BAD_FLAGS`
+(`0x00030001`). The array is range-checked like a glyph descriptor array: it
+may not overlap either ring, the destination descriptor, the destination
+data, or a protected range (`BAD_RANGE`, `0x00060001`/`0x00060002`). Records
+themselves are never rejected: the hardware ignores words 2 (without
+`RECORD_COLOR`) and 3, so a validated command never stops part-way because of
+record contents. Software writes them zero.
+
+The completion count is the total number of pixels written. The command
+fails as a whole: a record read error ends it with `AXI_READ`
+(`0x000d0001`), a write error with `AXI_WRITE`, cancellation with `RESET`
+and the deadline with `TIMEOUT`; records before the failure have been drawn.
+
 ### Geometry, pattern, and flood operations
 
 The hardware geometry path provides:
@@ -618,7 +735,7 @@ The hardware geometry path provides:
   signed pattern origin;
 - bounded scanline flood fill using a caller-supplied validated workspace.
 
-Geometry operates on INDEX8, RGB565, and XRGB8888 destinations. Version 1
+Geometry operates on INDEX8, RGB565, XRGB8888, and ARGB8888 destinations. Version 1
 geometry is exact aliased rasterization. Wide strokes, joins, caps,
 antialiased geometry, arbitrary polygons, and color texture fills are outside
 the version-1 contract. They may be added without changing the required
@@ -654,6 +771,31 @@ workspace must not overlap either ring, either flood descriptor, destination
 storage, or a protected range. Words 9 and 12 through 14 are zero for flood
 commands. Workspace exhaustion completes with `WORK_OVERFLOW` and may leave a
 partially modified hidden destination, which must not be presented.
+
+### Segment lists (LINES)
+
+`LINES` (opcode 262) is a list of independent line segments in one command:
+exactly `count` LINE commands, in record order, each with this command's
+destination and clip. Endpoint rules are LINE's (both endpoints are drawn; a
+zero-length segment draws one pixel), so an SDL `DrawLines` polyline lowered
+to segments shares its joint pixels exactly as separate LINEs do. There is no
+blending, as LINE has none.
+
+| Word | Meaning |
+|---:|---|
+| 8 | destination surface descriptor (WRITE) |
+| 9 | zero |
+| 10 | arena offset of the segment array, 16-byte aligned |
+| 11 | segment count, 1..4096 |
+| 12 | options: bit 0 `RECORD_COLOR`; other bits zero |
+| 13–14 | zero |
+| 15 | shared color, the canonical LINE foreground, when bit 0 is clear |
+
+Each segment is 16 bytes, big-endian: word 0 `P0` and word 1 `P1` (signed
+`x:16, y:16`, as LINE's words 11 and 12), word 2 the color when
+`RECORD_COLOR` is set, word 3 zero. Validation, range checks, rejection
+codes, the pixel count and failure behavior are those of `FILL_RECTS`; the
+destination formats are LINE's.
 
 ### Fonts and glyphs
 
@@ -880,6 +1022,56 @@ bytes, tile cache hits/misses, sprite pixels admitted/dropped, commands
 submitted/completed/failed, engine busy cycles, fence latency, scene deferrals,
 and reset counts. A retained first-fault record captures engine, operation,
 arena offset, AXI response, sequence, frame, and timestamp.
+
+### Register access faults
+
+No Astra fabric slave answers a CPU access with an AXI error. On the DE25 the
+HPS turns any SLVERR or DECERR on its FPGA bridges into an asynchronous SError
+and Linux panics, so a register-file policy violation would take the host
+down. Instead, like a PCIe device treating a rejected MMIO write:
+
+- a store the register file refuses (wrong engine state, bad value, partial
+  strobe, read-only or unmapped offset, misaligned address) is dropped and
+  answered OKAY;
+- a load from an unmapped or misaligned offset returns 0 and is answered OKAY;
+- both are counted in the slave's sticky access-fault record.
+
+Every slave has the same two registers (`astra_access_fault_record.sv`):
+
+| Slave (control window offset) | `ACCESS_FAULT_COUNT` | `ACCESS_FAULT_FIRST` |
+|---|---|---|
+| Graphics control (`0x0000`) | `0x024c` | `0x0250` |
+| Copper (`0x4000`) | `0x4038` | `0x403c` |
+| Display capture (`0x5000`) | `0x503c` | `0x5040` |
+| Audio (`0x6000`) | `0x6034` | `0x6038` |
+| Front panel (`0x7000`) | `0x7034` | `0x7038` |
+
+- `ACCESS_FAULT_COUNT[15:0]`: faults since the last clear, saturating at
+  `0xffff`. Any store to it clears COUNT and FIRST.
+- `ACCESS_FAULT_FIRST`: the first fault since the clear, 0 when COUNT is 0.
+  Bit 31 is 1 for a store and 0 for a load; bits 17:16 are the reason, 2 for
+  *rejected* (a real register refused the value or state) and 3 for
+  *unmapped* (no register there, or a misaligned address); bits 15:0 are the
+  byte offset the slave decoded (capture, audio and panel decode 8 bits).
+  The capture block's own writable registers keep reporting semantic refusals
+  through `COMMAND_ERRORS` as before; its record sees unmapped offsets.
+
+Graphics control `CAPABILITIES` (`0x008`) bit 12
+(`ASTRA_CAP_ACCESS_FAULT_RECORD`) advertises the record in every slave of the
+bitstream; bit 13 (`ASTRA_CAP_RENDER_HOST_APERTURE`) says
+`RENDER_HOST_APERTURE_BASE` (`0x248`) exists and drives a host-read port (DE25
+only). Older bitstreams have neither register and answer a load there with
+DECERR, so software reads `CAPABILITIES` first and never touches either
+register without its bit (`astra_graphics_access_fault_take`,
+`astra_graphics_render_host_aperture_set`). Graphics control decodes offsets
+`0x0000`-`0x03ff` only; its former aliases above `0x03ff` are unmapped.
+
+Platform Designer's lightweight-bridge interconnect routes addresses outside
+its three slaves to its default channel, the vendor peripheral subsystem,
+whose own router defaults to the button PIO, so no address in the 2 MiB
+window returns an interconnect DECERR; such accesses alias a vendor PIO and
+are not recorded. The HPS-to-FPGA window `0x40000000`-`0x7fffffff` maps
+entirely to LPDDR4B.
 
 Invalid commands, copper lists, descriptors, and addresses fail closed. A
 stuck renderer cannot halt scanout. A failed scene leaves the previous complete

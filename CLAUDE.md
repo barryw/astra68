@@ -124,6 +124,23 @@ There is no alternative CPU or emulator implementation in the repository.
   default, and the NAS clock runs ahead of `beast`'s.** meson then refuses with
   `Clock skew detected ... 0.03s in the future` and the build never starts. Set
   `ASTRA_QEMU_WORK_ROOT=$HOME/.cache/astra68/qemu-9.2.4` to build on local disk.
+- **Measure graphics throughput with `emu/qemu/bench-frame.py --fake-helper`.**
+  Without a mailbox QEMU has no helper and completes display requests itself;
+  the fake helper puts the real mailbox copy and wake in the path. The
+  release kernel skips whole-pool audits (`sw/kernel/audit.h`); build with
+  `make KERNEL_AUDIT=1` to run them on the machine.
+- **On the DE25, an AXI error response to a CPU access panics Linux.** SLVERR
+  or DECERR on the HPS-to-FPGA bridges arrives as an asynchronous SError. It
+  surfaces as a board that stops answering, with nothing in the journal, and
+  reads like an HPS or bridge hang. Since `68ce7bb2` the fabric slaves answer
+  OKAY and count refusals in a fault record, but an older bitstream or an
+  unmapped vendor address still panics. The board has `kernel.panic = 10`
+  (`/etc/sysctl.d/90-astra-panic-reboot.conf`), so it reboots itself. There
+  is no serial console on beast; a hang leaves no text.
+- **F2SDRAM loses narrow read bursts longer than 128 beats.** The read never
+  returns, and the render engine sits BUSY until the FPGA is reconfigured.
+  `astra_render_host_reads` splits host bursts to 32 beats. Any new FPGA
+  master to HPS DDR must do the same.
 - **The qualification kernel is a second ROM**, built with
   `make KERNEL_K1_QUALIFICATION=1` in `sw/boot`, with no debug surface and no
   initial user image. `emu/qemu/test-qualification.py` is its gate. It
