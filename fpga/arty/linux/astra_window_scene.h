@@ -12,7 +12,7 @@ enum astra_window_scene_status {
 };
 
 int astra_window_scene_compile(const void *request, size_t request_bytes,
-                               volatile void *output, size_t output_bytes,
+                               void *output, size_t output_bytes,
                                uint32_t arena_bytes, uint32_t *written_out);
 
 #endif

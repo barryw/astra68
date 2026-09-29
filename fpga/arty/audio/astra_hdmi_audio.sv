@@ -22,7 +22,7 @@ module astra_hdmi_audio (
     input  wire [3:0]  s_axi_wstrb,
     input  wire        s_axi_wvalid,
     output wire        s_axi_wready,
-    output reg  [1:0]  s_axi_bresp,
+    output wire  [1:0]  s_axi_bresp,
     output reg         s_axi_bvalid,
     input  wire        s_axi_bready,
     input  wire [31:0] s_axi_araddr,
@@ -30,7 +30,7 @@ module astra_hdmi_audio (
     input  wire        s_axi_arvalid,
     output wire        s_axi_arready,
     output reg  [31:0] s_axi_rdata,
-    output reg  [1:0]  s_axi_rresp,
+    output wire  [1:0]  s_axi_rresp,
     output reg         s_axi_rvalid,
     input  wire        s_axi_rready
 );
@@ -119,6 +119,24 @@ module astra_hdmi_audio (
     assign s_axi_wready = !w_pending_q && !s_axi_bvalid;
     assign s_axi_arready = !s_axi_rvalid;
 
+    // The bus always answers OKAY; nonzero codes are access faults.
+    reg [1:0] bresp_code_q;
+    reg [1:0] rresp_code_q;
+    reg [7:0] araddr_q;
+    wire [31:0] access_fault_count;
+    wire [31:0] access_fault_first;
+    assign s_axi_bresp = 2'b00;
+    assign s_axi_rresp = 2'b00;
+    astra_access_fault_record access_fault_i (
+        .clk(build_clk), .reset(build_reset),
+        .clear(write_fire && awaddr_q == 8'h34),
+        .write_fault(s_axi_bvalid && s_axi_bready && bresp_code_q != 2'b00),
+        .write_reason(bresp_code_q), .write_offset({8'd0, awaddr_q}),
+        .read_fault(s_axi_rvalid && s_axi_rready && rresp_code_q != 2'b00),
+        .read_reason(rresp_code_q), .read_offset({8'd0, araddr_q}),
+        .count_word(access_fault_count), .first_word(access_fault_first)
+    );
+
     always @(posedge audio_clk or posedge audio_reset) begin
         if (audio_reset) begin
             control_audio_sync1_q <= 2'd0;
@@ -147,10 +165,10 @@ module astra_hdmi_audio (
             w_pending_q <= 1'b0;
             wdata_q <= 32'd0;
             wstrb_q <= 4'd0;
-            s_axi_bresp <= 2'b00;
+            bresp_code_q <= 2'b00;
             s_axi_bvalid <= 1'b0;
             s_axi_rdata <= 32'd0;
-            s_axi_rresp <= 2'b00;
+            rresp_code_q <= 2'b00;
             s_axi_rvalid <= 1'b0;
             underflow_gray_sync1_q <= 32'd0;
             underflow_gray_sync2_q <= 32'd0;
@@ -176,43 +194,45 @@ module astra_hdmi_audio (
                 aw_pending_q <= 1'b0;
                 w_pending_q <= 1'b0;
                 s_axi_bvalid <= 1'b1;
-                s_axi_bresp <= 2'b00;
+                bresp_code_q <= 2'b00;
                 case (awaddr_q)
                     8'h0c: begin
                         if (wstrb_q != 4'hf || wdata_q[31:2] != 30'd0)
-                            s_axi_bresp <= 2'b10;
+                            bresp_code_q <= 2'b10;
                         else
                             control_q <= wdata_q[1:0];
                     end
                     8'h14: begin
                         if (wstrb_q != 4'hf || wdata_q[31:24] != 8'd0)
-                            s_axi_bresp <= 2'b10;
+                            bresp_code_q <= 2'b10;
                         else
                             left_q <= wdata_q[23:0];
                     end
                     8'h18: begin
                         if (wstrb_q != 4'hf || wdata_q[31:24] != 8'd0)
-                            s_axi_bresp <= 2'b10;
+                            bresp_code_q <= 2'b10;
                         else if (!fifo_wr_ready) begin
-                            s_axi_bresp <= 2'b10;
+                            bresp_code_q <= 2'b10;
                             overflow_count_q <= overflow_count_q + 32'd1;
                         end
                     end
                     8'h2c: begin
                         if (wstrb_q != 4'hf || wdata_q[31:1] != 31'd0)
-                            s_axi_bresp <= 2'b10;
+                            bresp_code_q <= 2'b10;
                         else
                             hdmi_output_requested <= wdata_q[0];
                     end
-                    default: s_axi_bresp <= 2'b11;
+                    8'h34: ; // clears the access-fault record
+                    default: bresp_code_q <= 2'b11;
                 endcase
             end
 
             if (s_axi_rvalid && s_axi_rready)
                 s_axi_rvalid <= 1'b0;
             if (s_axi_arvalid && s_axi_arready) begin
+                araddr_q <= s_axi_araddr[7:0];
                 s_axi_rvalid <= 1'b1;
-                s_axi_rresp <= 2'b00;
+                rresp_code_q <= 2'b00;
                 case (s_axi_araddr[7:0])
                     8'h00: s_axi_rdata <= DEVICE_ID;
                     8'h04: s_axi_rdata <= VERSION;
@@ -227,9 +247,11 @@ module astra_hdmi_audio (
                     8'h2c: s_axi_rdata <= {31'd0,
                                             hdmi_output_requested};
                     8'h30: s_axi_rdata <= link_status;
+                    8'h34: s_axi_rdata <= access_fault_count;
+                    8'h38: s_axi_rdata <= access_fault_first;
                     default: begin
                         s_axi_rdata <= 32'd0;
-                        s_axi_rresp <= 2'b11;
+                        rresp_code_q <= 2'b11;
                     end
                 endcase
             end

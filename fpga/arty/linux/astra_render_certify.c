@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Certify the bounded Astraea render transport and complete blitter on hardware.
+// The texture engine and ARGB8888 destinations are checked against the
+// bit-exact reference model (sw/userspace/graphics/src/texture_reference.c).
 
 #define _POSIX_C_SOURCE 200809L
 #define _FILE_OFFSET_BITS 64
@@ -8,6 +10,7 @@
 #include "astra_render_protocol.h"
 
 #include <astra/graphics.h>
+#include <astra/texture_reference.h>
 
 #include <errno.h>
 #include <inttypes.h>
@@ -124,6 +127,25 @@ enum {
     LANE_COMMAND_END = LANE_COMMAND_FIRST + LANE_COMMAND_COUNT,
     COMPOSITOR_COMMAND = LANE_COMMAND_END,
     COMPOSITOR_COMMAND_END = COMPOSITOR_COMMAND + 1u,
+    TEXTURE_COMMAND_FIRST = COMPOSITOR_COMMAND_END,
+    TEXTURE_TRIANGLE_CASES = 8u,
+    TEXTURE_REJECTED_CASE = 7u,
+    TEXTURE_ARGB_OPS = 4u,
+    TEXTURE_COMMAND_END =
+        TEXTURE_COMMAND_FIRST + TEXTURE_TRIANGLE_CASES + TEXTURE_ARGB_OPS,
+    TEXTURE_REGION_OFFSET = 0x00610000u,
+    TEXTURE_REGION_BYTES = 0x00010000u,
+    TEXTURE_DESCRIPTOR_OFFSET = TEXTURE_REGION_OFFSET,
+    TEXTURE_VERTEX_OFFSET = TEXTURE_REGION_OFFSET + 0x0400u,
+    TEXTURE_VERTEX_STRIDE = 0x0400u,
+    TEXTURE_SOURCE_OFFSET = TEXTURE_REGION_OFFSET + 0x3000u,
+    TEXTURE_DEST_OFFSET = TEXTURE_REGION_OFFSET + 0x5000u,
+    TEXTURE_DEST_WIDTH = 24u,
+    TEXTURE_DEST_HEIGHT = 16u,
+    TEXTURE_DEST_STRIDE = 0x0600u,
+    TEXTURE_SOURCE_WIDTH = 13u,
+    TEXTURE_SOURCE_HEIGHT = 11u,
+    TEXTURE_MAX_TRIANGLES = 8u,
     SCREEN_OFFSET_SOURCE_Y = 76u,
     SCREEN_OFFSET_HEIGHT = 644u,
     COMPOSITOR_SOURCE_WIDTH = 816u,
@@ -196,6 +218,18 @@ _Static_assert(SCRATCH_REGION_BYTES >=
                    LANE_DEST_DATA_OFFSET + LANE_SURFACE_BYTES -
                        SCRATCH_DATA_OFFSET,
                "lane fixtures exceed the scratch mapping");
+_Static_assert(TEXTURE_COMMAND_END <= (unsigned)ASTRA_RENDER_RING_ENTRIES,
+               "texture certification commands exceed the bounded ring");
+_Static_assert(TEXTURE_DEST_OFFSET + (TEXTURE_TRIANGLE_CASES + 1u) *
+                   TEXTURE_DEST_STRIDE <=
+                   TEXTURE_REGION_OFFSET + TEXTURE_REGION_BYTES,
+               "texture fixtures exceed the texture mapping");
+_Static_assert(TEXTURE_VERTEX_OFFSET + TEXTURE_TRIANGLE_CASES *
+                   TEXTURE_VERTEX_STRIDE <= TEXTURE_SOURCE_OFFSET,
+               "texture vertex arrays overlap the textures");
+_Static_assert(TEXTURE_MAX_TRIANGLES * 3u *
+                   ASTRA_RENDER_TRIANGLE_VERTEX_BYTES <= TEXTURE_VERTEX_STRIDE,
+               "texture vertex arrays exceed their stride");
 _Static_assert(COMPOSITOR_DESTINATION_OFFSET +
                    COMPOSITOR_DESTINATION_BYTES <= ASTRA_FRAMEBUFFER_BYTES,
                "compositor fixture exceeds the frame mapping");
@@ -204,6 +238,7 @@ struct render_maps {
     struct astra_graphics_memory_map queues;
     struct astra_graphics_memory_map scratch;
     struct astra_graphics_memory_map frame;
+    struct astra_graphics_memory_map texture;
 };
 
 struct scene_state {
@@ -221,8 +256,6 @@ struct scene_state {
     uint32_t display_crop_size;
     uint32_t display_viewport_origin;
     uint32_t display_viewport_size;
-    uint32_t tile0_control;
-    uint32_t tile1_control;
     uint32_t sprite_control;
 };
 
@@ -383,16 +416,12 @@ static uint32_t pair_s16(int16_t high, int16_t low)
     return ((uint32_t)(uint16_t)high << 16) | (uint16_t)low;
 }
 
-static int write_surface(const struct render_maps *maps,
-                         uint32_t descriptor_offset,
+static int store_surface(volatile uint8_t *descriptor,
                          uint32_t data_offset, uint32_t data_bytes,
                          uint32_t pitch, uint16_t width, uint16_t height,
                          uint8_t format, uint8_t flags,
                          uint32_t palette_offset)
 {
-    volatile uint8_t *descriptor = queue_address(
-        maps, descriptor_offset, ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES);
-
     if (descriptor == NULL)
         return -1;
     store_be32(descriptor + 0u,
@@ -407,6 +436,19 @@ static int write_surface(const struct render_maps *maps,
                ((uint32_t)format << 24) | ((uint32_t)flags << 16));
     store_be32(descriptor + 28u, palette_offset);
     return 0;
+}
+
+static int write_surface(const struct render_maps *maps,
+                         uint32_t descriptor_offset,
+                         uint32_t data_offset, uint32_t data_bytes,
+                         uint32_t pitch, uint16_t width, uint16_t height,
+                         uint8_t format, uint8_t flags,
+                         uint32_t palette_offset)
+{
+    return store_surface(queue_address(maps, descriptor_offset,
+                                       ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES),
+                         data_offset, data_bytes, pitch, width, height,
+                         format, flags, palette_offset);
 }
 
 static volatile uint8_t *command_record(const struct render_maps *maps,
@@ -1583,11 +1625,13 @@ static uint8_t expected_index_destination(unsigned x, unsigned y)
 
 static int verify_complete_blitter(const struct render_maps *maps)
 {
+    /* FLAG_BLIT_ALPHA is straight-alpha BLEND: 0x80800000 at opacity 0x80
+     * gives a' = 0x40 and red m(0x80, 0x40) = 0x20. */
     static const uint32_t expected_xrgb[5] = {
         0xffff0000u,
         0xff00ff00u,
-        0xff4000bfu,
-        0xff4000bfu,
+        0xff2000bfu,
+        0xff2000bfu,
         0xff0000ffu,
     };
     volatile const uint8_t *index_destination = scratch_address(
@@ -1943,6 +1987,530 @@ static int certify_compositor_copy(
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Texture engine (TRIANGLES) and ARGB8888 destinations. Every fixture is
+// built in host memory, copied into the arena, and the expected result is
+// the reference model run on the host copy.
+
+struct texture_case {
+    uint8_t destination_format;
+    int source; /* index into texture_sources, or -1 untextured */
+    uint32_t options;
+    uint32_t triangles;
+};
+
+static const struct texture_case texture_cases[TEXTURE_TRIANGLE_CASES] = {
+    {ASTRA_RENDER_FORMAT_XRGB8888, -1,
+     ASTRA_RENDER_TRIANGLE_OPTION_BLEND_BLEND, 6u},
+    {ASTRA_RENDER_FORMAT_RGB565, 2,
+     ASTRA_RENDER_TRIANGLE_OPTION_BLEND_MUL |
+         ASTRA_RENDER_TRIANGLE_OPTION_FILTER_LINEAR, 4u},
+    {ASTRA_RENDER_FORMAT_ARGB8888, 3,
+     ASTRA_RENDER_TRIANGLE_OPTION_BLEND_ADD, 4u},
+    {ASTRA_RENDER_FORMAT_ARGB8888, 4,
+     ASTRA_RENDER_TRIANGLE_OPTION_BLEND_MOD |
+         ASTRA_RENDER_TRIANGLE_OPTION_FILTER_LINEAR, 4u},
+    {ASTRA_RENDER_FORMAT_XRGB8888, 0,
+     ASTRA_RENDER_TRIANGLE_OPTION_BLEND_NONE, 4u},
+    {ASTRA_RENDER_FORMAT_ARGB8888, 1,
+     ASTRA_RENDER_TRIANGLE_OPTION_BLEND_BLEND |
+         ASTRA_RENDER_TRIANGLE_OPTION_FILTER_LINEAR, 4u},
+    /* Shared-edge quad: ADD by one must leave every pixel at exactly one. */
+    {ASTRA_RENDER_FORMAT_ARGB8888, -1,
+     ASTRA_RENDER_TRIANGLE_OPTION_BLEND_ADD, 2u},
+    /* A vertex outside +-32768 px: rejected, nothing written. */
+    {ASTRA_RENDER_FORMAT_RGB565, -1,
+     ASTRA_RENDER_TRIANGLE_OPTION_BLEND_NONE, 3u},
+};
+
+static const uint8_t texture_source_formats[5] = {
+    ASTRA_RENDER_FORMAT_RGB565, ASTRA_RENDER_FORMAT_XRGB8888,
+    ASTRA_RENDER_FORMAT_ARGB8888, ASTRA_RENDER_FORMAT_INDEX8,
+    ASTRA_RENDER_FORMAT_A8,
+};
+
+/* Rows are padded to eight bytes (texture_pitch). */
+static uint8_t texture_host_sources[5][((TEXTURE_SOURCE_WIDTH * 4u + 7u) &
+                                        ~7u) * TEXTURE_SOURCE_HEIGHT];
+static uint8_t texture_host_palette[256u * 4u];
+static uint8_t texture_host_dest[TEXTURE_TRIANGLE_CASES + 1u]
+                                [TEXTURE_DEST_STRIDE];
+static AstraTextureVertex texture_vertices[TEXTURE_TRIANGLE_CASES]
+                                          [TEXTURE_MAX_TRIANGLES * 3u];
+static uint32_t texture_expected_pixels[TEXTURE_TRIANGLE_CASES];
+static uint32_t texture_seed = 0x2545f491u;
+
+static uint32_t texture_random(void)
+{
+    texture_seed ^= texture_seed << 13;
+    texture_seed ^= texture_seed >> 17;
+    texture_seed ^= texture_seed << 5;
+    return texture_seed;
+}
+
+static unsigned texture_bytes_per_pixel(uint8_t format)
+{
+    return format == ASTRA_RENDER_FORMAT_RGB565 ? 2u :
+        format == ASTRA_RENDER_FORMAT_XRGB8888 ||
+        format == ASTRA_RENDER_FORMAT_ARGB8888 ? 4u : 1u;
+}
+
+static uint32_t texture_pitch(uint8_t format, unsigned width)
+{
+    return (width * texture_bytes_per_pixel(format) + 7u) & ~7u;
+}
+
+static uint32_t texture_source_offset(unsigned source)
+{
+    return TEXTURE_SOURCE_OFFSET + source * 0x0300u;
+}
+
+static uint32_t texture_palette_offset(void)
+{
+    return TEXTURE_SOURCE_OFFSET + 5u * 0x0300u + 0x40u;
+}
+
+static AstraTextureSurface texture_host_source(unsigned source)
+{
+    uint8_t format = texture_source_formats[source];
+    AstraTextureSurface surface = {
+        texture_host_sources[source],
+        format == ASTRA_RENDER_FORMAT_INDEX8 ? texture_host_palette : NULL,
+        texture_pitch(format, TEXTURE_SOURCE_WIDTH),
+        TEXTURE_SOURCE_WIDTH, TEXTURE_SOURCE_HEIGHT, format};
+
+    return surface;
+}
+
+static AstraTextureSurface texture_host_destination(unsigned index,
+                                                    uint8_t format)
+{
+    AstraTextureSurface surface = {
+        texture_host_dest[index], NULL,
+        texture_pitch(format, TEXTURE_DEST_WIDTH),
+        TEXTURE_DEST_WIDTH, TEXTURE_DEST_HEIGHT, format};
+
+    return surface;
+}
+
+static volatile uint8_t *texture_address(const struct render_maps *maps,
+                                         uint32_t arena_offset, size_t bytes)
+{
+    uint64_t relative;
+
+    if (arena_offset < TEXTURE_REGION_OFFSET)
+        return NULL;
+    relative = (uint64_t)arena_offset - TEXTURE_REGION_OFFSET;
+    if (relative + bytes > maps->texture.data_bytes)
+        return NULL;
+    return maps->texture.data + (size_t)relative;
+}
+
+static int texture_copy_in(const struct render_maps *maps,
+                           uint32_t arena_offset, const uint8_t *source,
+                           size_t bytes)
+{
+    volatile uint8_t *destination = texture_address(maps, arena_offset,
+                                                    bytes);
+    size_t index;
+
+    if (destination == NULL)
+        return -1;
+    for (index = 0; index < bytes; ++index)
+        destination[index] = source[index];
+    return 0;
+}
+
+static AstraTextureVertex texture_random_vertex(bool textured)
+{
+    AstraTextureVertex vertex;
+
+    vertex.x = (int32_t)(texture_random() % ((TEXTURE_DEST_WIDTH + 8u) * 256u)) -
+        4 * 256;
+    vertex.y = (int32_t)(texture_random() % ((TEXTURE_DEST_HEIGHT + 8u) * 256u)) -
+        4 * 256;
+    if ((texture_random() & 1u) != 0u) {
+        vertex.x = (vertex.x & ~255) | 128;
+        vertex.y = (vertex.y & ~255) | 128;
+    }
+    vertex.u = textured ?
+        (int32_t)(texture_random() % ((TEXTURE_SOURCE_WIDTH + 4u) * 65536u)) -
+            2 * 65536 : 0;
+    vertex.v = textured ?
+        (int32_t)(texture_random() % ((TEXTURE_SOURCE_HEIGHT + 4u) * 65536u)) -
+            2 * 65536 : 0;
+    vertex.color = texture_random();
+    return vertex;
+}
+
+static void texture_vertex_at(AstraTextureVertex *vertex, int32_t x,
+                              int32_t y, uint32_t color)
+{
+    vertex->x = x * 256 + 128;
+    vertex->y = y * 256 + 128;
+    vertex->u = 0;
+    vertex->v = 0;
+    vertex->color = color;
+}
+
+static int texture_store_vertices(const struct render_maps *maps,
+                                  unsigned index)
+{
+    volatile uint8_t *array = texture_address(
+        maps, TEXTURE_VERTEX_OFFSET + index * TEXTURE_VERTEX_STRIDE,
+        TEXTURE_VERTEX_STRIDE);
+    unsigned vertex;
+
+    if (array == NULL)
+        return -1;
+    for (vertex = 0u; vertex < texture_cases[index].triangles * 3u;
+         ++vertex) {
+        volatile uint8_t *record = array +
+            vertex * ASTRA_RENDER_TRIANGLE_VERTEX_BYTES;
+        const AstraTextureVertex *v = &texture_vertices[index][vertex];
+
+        clear_record(record, ASTRA_RENDER_TRIANGLE_VERTEX_BYTES);
+        store_be32(record + 0u, (uint32_t)v->x);
+        store_be32(record + 4u, (uint32_t)v->y);
+        store_be32(record + 8u, (uint32_t)v->u);
+        store_be32(record + 12u, (uint32_t)v->v);
+        store_be32(record + 16u, v->color);
+    }
+    return 0;
+}
+
+static uint32_t texture_descriptor(unsigned slot)
+{
+    return TEXTURE_DESCRIPTOR_OFFSET +
+        slot * ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES;
+}
+
+static int prepare_texture_workload(const struct render_maps *maps)
+{
+    const AstraTextureClip clip = {0, 0, TEXTURE_DEST_WIDTH,
+                                   TEXTURE_DEST_HEIGHT};
+    unsigned index;
+
+    for (index = 0u; index < 5u; ++index) {
+        uint8_t format = texture_source_formats[index];
+        uint32_t bytes = texture_pitch(format, TEXTURE_SOURCE_WIDTH) *
+            TEXTURE_SOURCE_HEIGHT;
+        unsigned byte;
+
+        if (bytes > sizeof(texture_host_sources[index]))
+            return -1;
+        for (byte = 0u; byte < bytes; ++byte)
+            texture_host_sources[index][byte] = (uint8_t)texture_random();
+        if (texture_copy_in(maps, texture_source_offset(index),
+                            texture_host_sources[index], bytes) != 0 ||
+            store_surface(texture_address(maps, texture_descriptor(16u + index),
+                                          ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES),
+                          texture_source_offset(index), bytes,
+                          texture_pitch(format, TEXTURE_SOURCE_WIDTH),
+                          TEXTURE_SOURCE_WIDTH, TEXTURE_SOURCE_HEIGHT, format,
+                          ASTRA_RENDER_SURFACE_READ,
+                          format == ASTRA_RENDER_FORMAT_INDEX8 ?
+                              texture_palette_offset() : 0u) != 0)
+            return -1;
+    }
+    for (index = 0u; index < sizeof(texture_host_palette); ++index)
+        texture_host_palette[index] = (uint8_t)texture_random();
+    if (texture_copy_in(maps, texture_palette_offset(), texture_host_palette,
+                        sizeof(texture_host_palette)) != 0)
+        return -1;
+
+    for (index = 0u; index <= TEXTURE_TRIANGLE_CASES; ++index) {
+        uint8_t format = index < TEXTURE_TRIANGLE_CASES ?
+            texture_cases[index].destination_format :
+            ASTRA_RENDER_FORMAT_ARGB8888;
+        uint32_t bytes = texture_pitch(format, TEXTURE_DEST_WIDTH) *
+            TEXTURE_DEST_HEIGHT;
+        unsigned byte;
+
+        for (byte = 0u; byte < bytes; ++byte)
+            texture_host_dest[index][byte] = index == 6u ? 0u :
+                (uint8_t)texture_random();
+        if (texture_copy_in(maps,
+                            TEXTURE_DEST_OFFSET + index * TEXTURE_DEST_STRIDE,
+                            texture_host_dest[index], bytes) != 0 ||
+            store_surface(texture_address(maps, texture_descriptor(index),
+                                          ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES),
+                          TEXTURE_DEST_OFFSET + index * TEXTURE_DEST_STRIDE,
+                          bytes, texture_pitch(format, TEXTURE_DEST_WIDTH),
+                          TEXTURE_DEST_WIDTH, TEXTURE_DEST_HEIGHT, format,
+                          ASTRA_RENDER_SURFACE_READ |
+                              ASTRA_RENDER_SURFACE_WRITE, 0u) != 0)
+            return -1;
+    }
+
+    for (index = 0u; index < TEXTURE_TRIANGLE_CASES; ++index) {
+        const struct texture_case *c = &texture_cases[index];
+        AstraTextureSurface destination =
+            texture_host_destination(index, c->destination_format);
+        AstraTextureSurface source =
+            texture_host_source(c->source < 0 ? 0u : (unsigned)c->source);
+        unsigned vertex;
+        volatile uint8_t *command;
+
+        for (vertex = 0u; vertex < c->triangles * 3u; ++vertex)
+            texture_vertices[index][vertex] =
+                texture_random_vertex(c->source >= 0);
+        if (index == 6u) {
+            texture_vertex_at(&texture_vertices[index][0], 0, 0, 0xff010101u);
+            texture_vertex_at(&texture_vertices[index][1], 20, 0, 0xff010101u);
+            texture_vertex_at(&texture_vertices[index][2], 20, 13, 0xff010101u);
+            texture_vertex_at(&texture_vertices[index][3], 0, 0, 0xff010101u);
+            texture_vertex_at(&texture_vertices[index][4], 0, 13, 0xff010101u);
+            texture_vertex_at(&texture_vertices[index][5], 20, 13, 0xff010101u);
+        }
+        if (index == TEXTURE_REJECTED_CASE)
+            texture_vertices[index][8].y = ASTRA_TEXTURE_COORD_LIMIT;
+        texture_expected_pixels[index] = 0u;
+        if (astra_texture_validate(&destination,
+                                   c->source >= 0 ? &source : NULL,
+                                   c->options, texture_vertices[index],
+                                   c->triangles) == ASTRA_RENDER_STATUS_OK)
+            texture_expected_pixels[index] = astra_texture_draw(
+                &destination, c->source >= 0 ? &source : NULL, c->options,
+                clip, texture_vertices[index], c->triangles);
+        if (texture_store_vertices(maps, index) != 0 ||
+            write_common_command(maps, TEXTURE_COMMAND_FIRST + index,
+                                 ASTRA_RENDER_OP_TRIANGLES, 0u,
+                                 TEXTURE_COMMAND_FIRST + index + 1u,
+                                 clip.left, clip.top, clip.right, clip.bottom,
+                                 texture_descriptor(index)) != 0)
+            return -1;
+        command = command_record(maps, TEXTURE_COMMAND_FIRST + index);
+        store_be32(command + 36u, c->source >= 0 ?
+                   texture_descriptor(16u + (unsigned)c->source) : 0u);
+        store_be32(command + 40u,
+                   TEXTURE_VERTEX_OFFSET + index * TEXTURE_VERTEX_STRIDE);
+        store_be32(command + 44u, c->triangles);
+        store_be32(command + 48u, c->options);
+    }
+    return 0;
+}
+
+/* FILL, LINE, BLIT copy and BLIT alpha into one ARGB8888 destination. */
+static int prepare_argb_destination_workload(const struct render_maps *maps)
+{
+    unsigned slot = TEXTURE_TRIANGLE_CASES;
+    unsigned first = TEXTURE_COMMAND_FIRST + TEXTURE_TRIANGLE_CASES;
+    AstraTextureSurface destination =
+        texture_host_destination(slot, ASTRA_RENDER_FORMAT_ARGB8888);
+    AstraTextureSurface xrgb = texture_host_source(1u);
+    AstraTextureSurface argb = texture_host_source(2u);
+    volatile uint8_t *command;
+    unsigned x, y;
+
+    for (y = 1u; y < 3u; ++y)
+        for (x = 1u; x < 5u; ++x)
+            store_be32((volatile uint8_t *)destination.data +
+                       y * destination.pitch + x * 4u, 0x11223344u);
+    for (x = 0u; x < 8u; ++x)
+        store_be32((volatile uint8_t *)destination.data +
+                   5u * destination.pitch + x * 4u, 0x7f010203u);
+    for (y = 0u; y < 3u; ++y)
+        for (x = 0u; x < 5u; ++x) {
+            uint8_t *copy = destination.data + (8u + y) * destination.pitch +
+                (2u + x) * 4u;
+            uint8_t *blend = destination.data + (8u + y) * destination.pitch +
+                (10u + x) * 4u;
+            uint32_t source = load_be32(xrgb.data + y * xrgb.pitch + x * 4u) |
+                0xff000000u;
+            uint32_t over = astra_texture_blend(
+                ASTRA_RENDER_TRIANGLE_OPTION_BLEND_BLEND,
+                load_be32(argb.data + y * argb.pitch + x * 4u),
+                load_be32(blend));
+
+            store_be32(copy, source);
+            store_be32(blend, over);
+        }
+
+    if (write_common_command(maps, first, ASTRA_RENDER_OP_FILL, 0u,
+                             first + 1u, 0, 0, TEXTURE_DEST_WIDTH,
+                             TEXTURE_DEST_HEIGHT, texture_descriptor(slot)) != 0)
+        return -1;
+    command = command_record(maps, first);
+    store_be32(command + 48u, pair_s16(1, 1));
+    store_be32(command + 56u, pair_u16(4u, 2u));
+    store_be32(command + 60u, 0x11223344u);
+    if (write_common_command(maps, first + 1u, ASTRA_RENDER_OP_LINE, 0u,
+                             first + 2u, 0, 0, TEXTURE_DEST_WIDTH,
+                             TEXTURE_DEST_HEIGHT, texture_descriptor(slot)) != 0)
+        return -1;
+    command = command_record(maps, first + 1u);
+    store_be32(command + 44u, pair_s16(0, 5));
+    store_be32(command + 48u, pair_s16(7, 5));
+    store_be32(command + 60u, 0x7f010203u);
+    if (write_blit(maps, first + 2u, 0u, 0, 0, TEXTURE_DEST_WIDTH,
+                   TEXTURE_DEST_HEIGHT, texture_descriptor(slot),
+                   texture_descriptor(17u), 0u, 0, 0, 2, 8,
+                   5u, 3u, 5u, 3u, 0u) != 0 ||
+        write_blit(maps, first + 3u, ASTRA_RENDER_FLAG_BLIT_ALPHA,
+                   0, 0, TEXTURE_DEST_WIDTH, TEXTURE_DEST_HEIGHT,
+                   texture_descriptor(slot), texture_descriptor(18u), 0u,
+                   0, 0, 10, 8, 5u, 3u, 5u, 3u, 0xff000000u) != 0)
+        return -1;
+    return 0;
+}
+
+static int verify_texture_completion(const struct render_maps *maps,
+                                     unsigned command, uint16_t opcode,
+                                     uint16_t status, uint32_t pixels,
+                                     uint64_t *cycles)
+{
+    uint32_t offset = COMPLETION_RING_OFFSET +
+        (command & (ASTRA_RENDER_RING_ENTRIES - 1u)) *
+            ASTRA_RENDER_COMPLETION_BYTES;
+    volatile const uint8_t *completion = queue_address(
+        maps, offset, ASTRA_RENDER_COMPLETION_BYTES);
+
+    if (completion == NULL ||
+        load_be32(completion + 4u) != pair_u16(opcode, status) ||
+        load_be32(completion + 8u) != command + 1u ||
+        load_be32(completion + 12u) != pixels) {
+        fprintf(stderr,
+                "texture completion %u: opcode/status=%08" PRIx32
+                " count=%" PRIu32 " fault=%08" PRIx32
+                " expected %04x/%u count=%" PRIu32 "\n",
+                command,
+                completion ? load_be32(completion + 4u) : 0u,
+                completion ? load_be32(completion + 12u) : 0u,
+                completion ? load_be32(completion + 24u) : 0u,
+                opcode, status, pixels);
+        return -1;
+    }
+    *cycles += load_be32(completion + 20u) - load_be32(completion + 16u);
+    return 0;
+}
+
+static int verify_texture_destination(const struct render_maps *maps,
+                                      unsigned slot, uint8_t format)
+{
+    uint32_t pitch = texture_pitch(format, TEXTURE_DEST_WIDTH);
+    volatile const uint8_t *actual = texture_address(
+        maps, TEXTURE_DEST_OFFSET + slot * TEXTURE_DEST_STRIDE,
+        pitch * TEXTURE_DEST_HEIGHT);
+    unsigned byte;
+    unsigned mismatches = 0u;
+
+    if (actual == NULL)
+        return -1;
+    for (byte = 0u; byte < pitch * TEXTURE_DEST_HEIGHT; ++byte)
+        if (actual[byte] != texture_host_dest[slot][byte] &&
+            mismatches++ < 64u)
+            fprintf(stderr,
+                    "texture destination %u byte %u (x=%u y=%u)"
+                    " expected=%02x actual=%02x\n",
+                    slot, byte,
+                    (byte % pitch) / texture_bytes_per_pixel(format),
+                    byte / pitch, texture_host_dest[slot][byte],
+                    actual[byte]);
+    if (mismatches != 0u) {
+        fprintf(stderr, "texture destination %u: %u of %u bytes differ\n",
+                slot, mismatches, pitch * TEXTURE_DEST_HEIGHT);
+        return -1;
+    }
+    return 0;
+}
+
+/* The engine only reads sources and the palette; they must be unchanged. */
+static int verify_texture_fixtures(const struct render_maps *maps,
+                                   const char *when)
+{
+    unsigned index;
+    unsigned mismatches = 0u;
+
+    for (index = 0u; index <= 5u; ++index) {
+        uint8_t format = index < 5u ? texture_source_formats[index] : 0u;
+        uint32_t offset = index < 5u ? texture_source_offset(index) :
+            texture_palette_offset();
+        const uint8_t *host = index < 5u ? texture_host_sources[index] :
+            texture_host_palette;
+        uint32_t bytes = index < 5u ?
+            texture_pitch(format, TEXTURE_SOURCE_WIDTH) *
+                TEXTURE_SOURCE_HEIGHT :
+            (uint32_t)sizeof(texture_host_palette);
+        volatile const uint8_t *actual = texture_address(maps, offset, bytes);
+        uint32_t byte;
+
+        if (actual == NULL)
+            return -1;
+        for (byte = 0u; byte < bytes; ++byte)
+            if (actual[byte] != host[byte] && mismatches++ < 64u)
+                fprintf(stderr,
+                        "texture fixture %u byte %" PRIu32
+                        " (arena %08" PRIx32 ") %s expected=%02x"
+                        " actual=%02x\n",
+                        index, byte, offset + byte, when, host[byte],
+                        actual[byte]);
+    }
+    if (mismatches != 0u) {
+        fprintf(stderr, "texture fixtures %s: %u bytes differ\n", when,
+                mismatches);
+        return -1;
+    }
+    return 0;
+}
+
+static int certify_texture_engine(const struct astra_graphics_device *device,
+                                  struct render_maps *maps,
+                                  uint64_t *cycles_out, uint32_t *pixels_out)
+{
+    static const uint16_t argb_opcodes[TEXTURE_ARGB_OPS] = {
+        ASTRA_RENDER_OP_FILL, ASTRA_RENDER_OP_LINE, ASTRA_RENDER_OP_BLIT,
+        ASTRA_RENDER_OP_BLIT};
+    static const uint32_t argb_pixels[TEXTURE_ARGB_OPS] = {8u, 8u, 15u, 15u};
+    uint64_t cycles = 0u;
+    uint32_t pixels = 0u;
+    unsigned index;
+
+    if (prepare_texture_workload(maps) != 0 ||
+        prepare_argb_destination_workload(maps) != 0) {
+        fprintf(stderr, "texture workload layout is invalid\n");
+        return -1;
+    }
+    astra_graphics_memory_barrier();
+    if (verify_texture_fixtures(maps, "before submission") != 0)
+        return -1;
+    astra_mmio_write(device, ASTRA_REG_RENDER_SUBMISSION_PRODUCER,
+                     TEXTURE_COMMAND_END);
+    if (wait_for_completions(device, TEXTURE_COMMAND_END) != 0 ||
+        wait_for_idle(device, ENGINE_TIMEOUT_NS) != 0 ||
+        verify_texture_fixtures(maps, "after the run") != 0)
+        return -1;
+    for (index = 0u; index < TEXTURE_TRIANGLE_CASES; ++index) {
+        uint16_t status = index == TEXTURE_REJECTED_CASE ?
+            ASTRA_RENDER_STATUS_BAD_RANGE : ASTRA_RENDER_STATUS_OK;
+
+        if (verify_texture_completion(maps, TEXTURE_COMMAND_FIRST + index,
+                                      ASTRA_RENDER_OP_TRIANGLES, status,
+                                      texture_expected_pixels[index],
+                                      &cycles) != 0 ||
+            verify_texture_destination(maps, index,
+                                       texture_cases[index]
+                                           .destination_format) != 0)
+            return -1;
+        pixels += texture_expected_pixels[index];
+    }
+    for (index = 0u; index < TEXTURE_ARGB_OPS; ++index)
+        if (verify_texture_completion(
+                maps, TEXTURE_COMMAND_FIRST + TEXTURE_TRIANGLE_CASES + index,
+                argb_opcodes[index], ASTRA_RENDER_STATUS_OK,
+                argb_pixels[index], &cycles) != 0)
+            return -1;
+    if (verify_texture_destination(maps, TEXTURE_TRIANGLE_CASES,
+                                   ASTRA_RENDER_FORMAT_ARGB8888) != 0)
+        return -1;
+    astra_mmio_write(device, ASTRA_REG_RENDER_COMPLETION_CONSUMER,
+                     TEXTURE_COMMAND_END);
+    astra_mmio_write(device, ASTRA_REG_RENDER_IRQ_PENDING, 1u);
+    *cycles_out = cycles;
+    *pixels_out = pixels;
+    return 0;
+}
+
 static int verify_virtual_sprite_group(const struct render_maps *maps)
 {
     unsigned item;
@@ -2003,8 +2571,6 @@ static void save_scene(const struct astra_graphics_device *device,
         device, ASTRA_REG_DISPLAY_VIEWPORT_ORIGIN);
     scene->display_viewport_size = astra_mmio_read(
         device, ASTRA_REG_DISPLAY_VIEWPORT_SIZE);
-    scene->tile0_control = astra_mmio_read(device, ASTRA_REG_TILE0_CONTROL);
-    scene->tile1_control = astra_mmio_read(device, ASTRA_REG_TILE1_CONTROL);
     scene->sprite_control = astra_mmio_read(device,
                                             ASTRA_REG_SPRITE_CONTROL);
 }
@@ -2031,8 +2597,6 @@ static void write_scene(const struct astra_graphics_device *device,
                      scene->display_viewport_origin);
     astra_mmio_write(device, ASTRA_REG_DISPLAY_VIEWPORT_SIZE,
                      scene->display_viewport_size);
-    astra_mmio_write(device, ASTRA_REG_TILE0_CONTROL, scene->tile0_control);
-    astra_mmio_write(device, ASTRA_REG_TILE1_CONTROL, scene->tile1_control);
     astra_mmio_write(device, ASTRA_REG_SPRITE_CONTROL,
                      scene->sprite_control);
     astra_mmio_write(device, ASTRA_REG_GLOBAL_CONTROL,
@@ -2080,8 +2644,6 @@ static int present_result(const struct astra_graphics_device *device,
         ((uint32_t)layout.viewport_y << 16) | layout.viewport_x;
     certification.display_viewport_size =
         ((uint32_t)layout.viewport_height << 16) | layout.viewport_width;
-    certification.tile0_control = 0u;
-    certification.tile1_control = 0u;
     certification.sprite_control = 0u;
     write_scene(device, &certification);
     if (astra_graphics_scene_commit(device, ENGINE_TIMEOUT_NS,
@@ -2159,10 +2721,12 @@ static void init_maps(struct render_maps *maps)
     astra_graphics_memory_map_init(&maps->queues);
     astra_graphics_memory_map_init(&maps->scratch);
     astra_graphics_memory_map_init(&maps->frame);
+    astra_graphics_memory_map_init(&maps->texture);
 }
 
 static void close_maps(struct render_maps *maps)
 {
+    astra_graphics_memory_map_close(&maps->texture);
     astra_graphics_memory_map_close(&maps->frame);
     astra_graphics_memory_map_close(&maps->scratch);
     astra_graphics_memory_map_close(&maps->queues);
@@ -2190,6 +2754,8 @@ int main(int argc, char **argv)
     uint32_t overflow_cycles;
     uint32_t screen_offset_cycles;
     uint32_t compositor_cycles;
+    uint64_t texture_cycles;
+    uint32_t texture_pixels;
     unsigned present_milliseconds;
     bool present_scaled;
     const char *capture_path;
@@ -2239,6 +2805,13 @@ int main(int argc, char **argv)
             ASTRA_GRAPHICS_ARENA_BASE + FRAME_DATA_OFFSET,
             ASTRA_FRAMEBUFFER_BYTES) != 0) {
         perror("map render certification framebuffer");
+        goto done;
+    }
+    if (astra_graphics_memory_map_open(
+            &device, &maps.texture,
+            ASTRA_GRAPHICS_ARENA_BASE + TEXTURE_REGION_OFFSET,
+            TEXTURE_REGION_BYTES) != 0) {
+        perror("map texture certification region");
         goto done;
     }
     if (prepare_workload(&maps) != 0)
@@ -2561,6 +3134,13 @@ int main(int argc, char **argv)
            COMPOSITOR_SOURCE_WIDTH, COMPOSITOR_HEIGHT,
            COMPOSITOR_SOURCE_PITCH, COMPOSITOR_DESTINATION_PITCH,
            compositor_cycles, COMPOSITOR_CYCLE_BUDGET);
+    if (certify_texture_engine(&device, &maps, &texture_cycles,
+                               &texture_pixels) != 0)
+        goto stop_engine;
+    printf("ASTRA_TEXTURE PASS triangles_cases=%u rejected=1"
+           " argb_ops=%u pixels=%" PRIu32 " cycles=%" PRIu64 "\n",
+           TEXTURE_TRIANGLE_CASES - 1u, TEXTURE_ARGB_OPS, texture_pixels,
+           texture_cycles);
     result = EXIT_SUCCESS;
 
 stop_engine:

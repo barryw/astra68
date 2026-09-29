@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Astra68 contributors
 //
-// Schedules framebuffer/tile/sprite construction four scanlines ahead and
+// Schedules framebuffer/sprite construction four scanlines ahead and
 // publishes only complete, matching line slots into the pixel clock domain.
 `timescale 1ns/1ps
 `default_nettype none
@@ -16,8 +16,6 @@ module astra_line_scheduler #(
     input  wire        quiesce,
     input  wire        scene_enable,
     input  wire        framebuffer_enable,
-    input  wire        tile0_enable,
-    input  wire        tile1_enable,
     input  wire        sprite_enable,
     input  wire [10:0] display_viewport_y,
     input  wire [10:0] display_viewport_height,
@@ -34,9 +32,9 @@ module astra_line_scheduler #(
     output reg  [1:0]  client_build_slot,
     output reg  [10:0] client_line_y,
     output reg  [10:0] client_source_y,
-    output reg  [3:0]  client_enable,
-    input  wire [3:0]  client_done,
-    input  wire [3:0]  client_line_complete,
+    output reg  [1:0]  client_enable,
+    input  wire [1:0]  client_done,
+    input  wire [1:0]  client_line_complete,
 
     output reg  [31:0] lines_built,
     output reg  [31:0] lines_failed,
@@ -65,10 +63,10 @@ module astra_line_scheduler #(
     localparam [2:0] SCHED_LAUNCH = 3'd4;
 
     reg [2:0] scheduler_state;
-    reg [3:0] required_clients;
-    reg [3:0] completed_clients;
-    reg [3:0] successful_clients;
-    reg [3:0] prepared_clients;
+    reg [1:0] required_clients;
+    reg [1:0] completed_clients;
+    reg [1:0] successful_clients;
+    reg [1:0] prepared_clients;
     reg prepared_scene_enable;
     reg line_map_sample_q;
     wire line_map_valid;
@@ -161,12 +159,11 @@ module astra_line_scheduler #(
     reg [3:0] slot_capture_pending;
     reg scene_epoch_seen;
 
-    wire [3:0] configured_clients = scene_enable ?
-        {sprite_enable, tile1_enable, tile0_enable,
-         framebuffer_enable} : 4'b0000;
-    wire [3:0] completed_now = completed_clients |
+    wire [1:0] configured_clients = scene_enable ?
+        {sprite_enable, framebuffer_enable} : 2'b00;
+    wire [1:0] completed_now = completed_clients |
         (client_done & required_clients);
-    wire [3:0] successful_now = successful_clients |
+    wire [1:0] successful_now = successful_clients |
         (client_done & client_line_complete & required_clients);
     wire build_finished = scheduler_state == SCHED_WAIT &&
         (completed_now & required_clients) == required_clients;
@@ -211,7 +208,7 @@ module astra_line_scheduler #(
 
     task automatic launch_line(
         input [10:0] line,
-        input [3:0] clients,
+        input [1:0] clients,
         input scene_enabled
     );
         begin
@@ -220,9 +217,9 @@ module astra_line_scheduler #(
             client_source_y <= line_prepare_source_y;
             client_enable <= clients;
             required_clients <= clients;
-            completed_clients <= 4'd0;
-            successful_clients <= 4'd0;
-            if (clients == 4'd0) begin
+            completed_clients <= 2'd0;
+            successful_clients <= 2'd0;
+            if (clients == 2'd0) begin
                 scheduler_state <= SCHED_IDLE;
                 publish_slot(line[1:0], line, line_prepare_source_y,
                              line_prepare_source_active, scene_enabled);
@@ -281,11 +278,11 @@ module astra_line_scheduler #(
             client_build_slot <= 2'd0;
             client_line_y <= 11'd0;
             client_source_y <= 11'd0;
-            client_enable <= 4'd0;
-            required_clients <= 4'd0;
-            completed_clients <= 4'd0;
-            successful_clients <= 4'd0;
-            prepared_clients <= 4'd0;
+            client_enable <= 2'd0;
+            required_clients <= 2'd0;
+            completed_clients <= 2'd0;
+            successful_clients <= 2'd0;
+            prepared_clients <= 2'd0;
             prepared_scene_enable <= 1'b0;
             bootstrap_active <= 1'b0;
             bootstrap_line <= 3'd0;
@@ -347,11 +344,11 @@ module astra_line_scheduler #(
                 scheduler_state <= SCHED_IDLE;
                 line_prepare_valid <= 1'b0;
                 line_prepare_source_active <= 1'b0;
-                client_enable <= 4'd0;
-                required_clients <= 4'd0;
-                completed_clients <= 4'd0;
-                successful_clients <= 4'd0;
-                prepared_clients <= 4'd0;
+                client_enable <= 2'd0;
+                required_clients <= 2'd0;
+                completed_clients <= 2'd0;
+                successful_clients <= 2'd0;
+                prepared_clients <= 2'd0;
                 prepared_scene_enable <= 1'b0;
                 bootstrap_active <= 1'b0;
                 bootstrap_line <= 3'd0;
@@ -376,7 +373,10 @@ module astra_line_scheduler #(
                     request_count <= 3'd0;
                     queue_launch_pending_q <= 1'b0;
                     event_capture_pending <= 1'b0;
-                    line_prepare_valid <= 1'b0;
+                    // A launched line keeps its preparation request: the
+                    // Copper answers only a presented request, and
+                    // withdrawing it would hold SCHED_PREPARE, and with it
+                    // the pending commit, forever.
                 end
                 if (scheduler_state == SCHED_MAP) begin
                     if (line_map_valid) begin
@@ -387,7 +387,7 @@ module astra_line_scheduler #(
                             line_prepare_valid <= 1'b1;
                             scheduler_state <= SCHED_PREPARE;
                         end else begin
-                            prepared_clients <= 4'd0;
+                            prepared_clients <= 2'd0;
                             scheduler_state <= SCHED_LAUNCH;
                         end
                     end
@@ -414,7 +414,7 @@ module astra_line_scheduler #(
                         else
                             lines_failed <= lines_failed + 32'd1;
                         scheduler_state <= SCHED_IDLE;
-                        client_enable <= 4'd0;
+                        client_enable <= 2'd0;
                         if (bootstrap_active) begin
                             if (bootstrap_line == 3'd3) begin
                                 bootstrap_active <= 1'b0;

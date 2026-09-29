@@ -11,6 +11,24 @@ if {[lsearch -exact [get_instances] astra_lpddr4b] >= 0} {
 # 256 KiB instance consumes 103 of the device's 358 M20Ks for no runtime path.
 remove_instance ocm
 
+# The vendor JTAG masters (subsys_debug) and the ACE5-Lite translator that
+# carries one of them into fpga2hps serve no Astra path; together with their
+# interconnect they cost about 3.8k ALMs.  fpga2hps is left unconnected.
+remove_instance subsys_debug
+remove_instance ace5lite_cache_coherency_translator_0
+# disable_fpga2hps.tcl turned the port off in hps_subsys; drop its clock and
+# reset feeds, whichever of them this load still shows.
+foreach connection [get_connections] {
+    if {[string match *subsys_hps.fpga2hps* $connection]} {
+        remove_connection $connection
+    }
+}
+foreach connection [get_connections] {
+    if {[string match *subsys_hps.fpga2hps* $connection]} {
+        error "subsys_hps.fpga2hps still connected: $connection"
+    }
+}
+
 add_component astra_lpddr4b $component
 add_instance astra_lpddr4b_status altera_avalon_pio
 set_instance_parameter_value astra_lpddr4b_status width 3
@@ -110,6 +128,27 @@ add_memory_bridge astra_fb_bridge astra_fb 1 0 1 128
 add_memory_bridge astra_scene_bridge astra_scene 1 0 2 64
 add_memory_bridge astra_capture_bridge astra_capture 0 1 1 64
 add_memory_bridge astra_render_bridge astra_render 1 1 3 64
+
+# The render engine reads batch data straight from HPS DDR through F2SDRAM
+# (the host aperture), so the fabric sets burst length and outstanding count
+# instead of a CPU copy through hps2fpga.  It replaces the vendor JTAG
+# debug path, the port's only other manager.
+remove_instance ext_hps_f2sdram_master
+add_instance astra_host_bridge altera_axi_bridge
+set_instance_parameter_value astra_host_bridge AXI_VERSION AXI4
+set_instance_parameter_value astra_host_bridge ADDR_WIDTH 32
+set_instance_parameter_value astra_host_bridge DATA_WIDTH 64
+set_instance_parameter_value astra_host_bridge S0_ID_WIDTH 3
+set_instance_parameter_value astra_host_bridge M0_ID_WIDTH 3
+set_instance_parameter_value astra_host_bridge ENABLE_AXI4_READ_ONLY_INTERFACE 1
+set_instance_parameter_value astra_host_bridge ENABLE_AXI4_WRITE_ONLY_INTERFACE 0
+add_connection astra_build_clock.out_clk astra_host_bridge.clk
+add_connection astra_build_reset.out_reset astra_host_bridge.clk_reset
+add_connection astra_host_bridge.m0 subsys_hps.f2sdram_adapter_axi4_sub
+set_connection_parameter_value \
+    astra_host_bridge.m0/subsys_hps.f2sdram_adapter_axi4_sub baseAddress 0x0
+add_interface astra_host axi4 end
+set_interface_property astra_host EXPORT_OF astra_host_bridge.s0
 
 foreach {name type role endpoint} {
     astra_lpddr4b_core_init_n reset end astra_lpddr4b.core_init_n

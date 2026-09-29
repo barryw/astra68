@@ -517,13 +517,9 @@ add_files -norecurse [list \
     [file join $repo_root fpga arty common astra_front_panel.sv] \
     [file join $repo_root fpga arty rtl astra_front_panel_axi.sv] \
     [file join $graphics_dir astra_framebuffer_config_validator.sv] \
-    [file join $graphics_dir astra_tile_config_validator.sv] \
     [file join $graphics_dir astra_sprite_scene_store.sv] \
     [file join $graphics_dir astra_framebuffer_line_store.sv] \
     [file join $graphics_dir astra_framebuffer_line_builder.sv] \
-    [file join $graphics_dir astra_tile_span_walker.sv] \
-    [file join $graphics_dir astra_tile_line_store.sv] \
-    [file join $graphics_dir astra_tile_line_builder.sv] \
     [file join $graphics_dir astra_sprite_line_store.sv] \
     [file join $graphics_dir astra_premult_blend.sv] \
     [file join $graphics_dir astra_sprite_line_builder.sv] \
@@ -541,6 +537,7 @@ add_files -norecurse [list \
     [file join $repo_root fpga arty common astra_async_fifo.sv] \
     [file join $graphics_dir astra_copper_pixel_events.sv] \
     [file join $graphics_dir astra_graphics_control.sv] \
+    [file join $graphics_dir astra_access_fault_record.sv] \
     [file join $graphics_dir astra_render_protocol.vh] \
     [file join $graphics_dir astra_render_surface_validator.sv] \
     [file join $graphics_dir astra_render_pixel_writer.sv] \

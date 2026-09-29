@@ -165,40 +165,6 @@ module astra_arty_graphics_top (
     wire fb_rvalid;
     wire fb_rready;
 
-    wire [5:0] tile0_arid;
-    wire [31:0] tile0_araddr;
-    wire [7:0] tile0_arlen;
-    wire [2:0] tile0_arsize;
-    wire [1:0] tile0_arburst;
-    wire [3:0] tile0_arcache;
-    wire [2:0] tile0_arprot;
-    wire [3:0] tile0_arqos;
-    wire tile0_arvalid;
-    wire tile0_arready;
-    wire [5:0] tile0_rid;
-    wire [63:0] tile0_rdata;
-    wire [1:0] tile0_rresp;
-    wire tile0_rlast;
-    wire tile0_rvalid;
-    wire tile0_rready;
-
-    wire [5:0] tile1_arid;
-    wire [31:0] tile1_araddr;
-    wire [7:0] tile1_arlen;
-    wire [2:0] tile1_arsize;
-    wire [1:0] tile1_arburst;
-    wire [3:0] tile1_arcache;
-    wire [2:0] tile1_arprot;
-    wire [3:0] tile1_arqos;
-    wire tile1_arvalid;
-    wire tile1_arready;
-    wire [5:0] tile1_rid;
-    wire [63:0] tile1_rdata;
-    wire [1:0] tile1_rresp;
-    wire tile1_rlast;
-    wire tile1_rvalid;
-    wire tile1_rready;
-
     wire [5:0] sprite_arid;
     wire [31:0] sprite_araddr;
     wire [7:0] sprite_arlen;
@@ -232,57 +198,22 @@ module astra_arty_graphics_top (
     wire scene_rlast;
     wire scene_rvalid;
     wire scene_rready;
-    wire [2:0] scene_client_arready;
-    wire [17:0] scene_client_rid;
-    wire [191:0] scene_client_rdata;
-    wire [5:0] scene_client_rresp;
-    wire [2:0] scene_client_rlast;
-    wire [2:0] scene_client_rvalid;
-
-    assign {sprite_arready, tile1_arready, tile0_arready} =
-        scene_client_arready;
-    assign {sprite_rid, tile1_rid, tile0_rid} = scene_client_rid;
-    assign {sprite_rdata, tile1_rdata, tile0_rdata} = scene_client_rdata;
-    assign {sprite_rresp, tile1_rresp, tile0_rresp} = scene_client_rresp;
-    assign {sprite_rlast, tile1_rlast, tile0_rlast} = scene_client_rlast;
-    assign {sprite_rvalid, tile1_rvalid, tile0_rvalid} = scene_client_rvalid;
-
-    astra_axi_read_3to1 scene_read_arbiter (
-        .aclk(fclk_clk1),
-        .aresetn(graphics_resetn[0]),
-        .s_axi_arid({sprite_arid, tile1_arid, tile0_arid}),
-        .s_axi_araddr({sprite_araddr, tile1_araddr, tile0_araddr}),
-        .s_axi_arlen({sprite_arlen, tile1_arlen, tile0_arlen}),
-        .s_axi_arsize({sprite_arsize, tile1_arsize, tile0_arsize}),
-        .s_axi_arburst({sprite_arburst, tile1_arburst, tile0_arburst}),
-        .s_axi_arcache({sprite_arcache, tile1_arcache, tile0_arcache}),
-        .s_axi_arprot({sprite_arprot, tile1_arprot, tile0_arprot}),
-        .s_axi_arqos({sprite_arqos, tile1_arqos, tile0_arqos}),
-        .s_axi_arvalid({sprite_arvalid, tile1_arvalid, tile0_arvalid}),
-        .s_axi_arready(scene_client_arready),
-        .s_axi_rid(scene_client_rid),
-        .s_axi_rdata(scene_client_rdata),
-        .s_axi_rresp(scene_client_rresp),
-        .s_axi_rlast(scene_client_rlast),
-        .s_axi_rvalid(scene_client_rvalid),
-        .s_axi_rready({sprite_rready, tile1_rready, tile0_rready}),
-        .m_axi_arid(scene_arid),
-        .m_axi_araddr(scene_araddr),
-        .m_axi_arlen(scene_arlen),
-        .m_axi_arsize(scene_arsize),
-        .m_axi_arburst(scene_arburst),
-        .m_axi_arcache(scene_arcache),
-        .m_axi_arprot(scene_arprot),
-        .m_axi_arqos(scene_arqos),
-        .m_axi_arvalid(scene_arvalid),
-        .m_axi_arready(scene_arready),
-        .m_axi_rid(scene_rid),
-        .m_axi_rdata(scene_rdata),
-        .m_axi_rresp(scene_rresp),
-        .m_axi_rlast(scene_rlast),
-        .m_axi_rvalid(scene_rvalid),
-        .m_axi_rready(scene_rready)
-    );
+    assign scene_arid = sprite_arid;
+    assign scene_araddr = sprite_araddr;
+    assign scene_arlen = sprite_arlen;
+    assign scene_arsize = sprite_arsize;
+    assign scene_arburst = sprite_arburst;
+    assign scene_arcache = sprite_arcache;
+    assign scene_arprot = sprite_arprot;
+    assign scene_arqos = sprite_arqos;
+    assign scene_arvalid = sprite_arvalid;
+    assign sprite_arready = scene_arready;
+    assign sprite_rid = scene_rid;
+    assign sprite_rdata = scene_rdata;
+    assign sprite_rresp = scene_rresp;
+    assign sprite_rlast = scene_rlast;
+    assign sprite_rvalid = scene_rvalid;
+    assign scene_rready = sprite_rready;
 
     wire [5:0] render_read_arid;
     wire [31:0] render_read_araddr;
@@ -825,38 +756,6 @@ module astra_arty_graphics_top (
         .fb_axi_rlast(fb_rlast),
         .fb_axi_rvalid(fb_rvalid),
         .fb_axi_rready(fb_rready),
-        .tile0_axi_arid(tile0_arid),
-        .tile0_axi_araddr(tile0_araddr),
-        .tile0_axi_arlen(tile0_arlen),
-        .tile0_axi_arsize(tile0_arsize),
-        .tile0_axi_arburst(tile0_arburst),
-        .tile0_axi_arcache(tile0_arcache),
-        .tile0_axi_arprot(tile0_arprot),
-        .tile0_axi_arqos(tile0_arqos),
-        .tile0_axi_arvalid(tile0_arvalid),
-        .tile0_axi_arready(tile0_arready),
-        .tile0_axi_rid(tile0_rid),
-        .tile0_axi_rdata(tile0_rdata),
-        .tile0_axi_rresp(tile0_rresp),
-        .tile0_axi_rlast(tile0_rlast),
-        .tile0_axi_rvalid(tile0_rvalid),
-        .tile0_axi_rready(tile0_rready),
-        .tile1_axi_arid(tile1_arid),
-        .tile1_axi_araddr(tile1_araddr),
-        .tile1_axi_arlen(tile1_arlen),
-        .tile1_axi_arsize(tile1_arsize),
-        .tile1_axi_arburst(tile1_arburst),
-        .tile1_axi_arcache(tile1_arcache),
-        .tile1_axi_arprot(tile1_arprot),
-        .tile1_axi_arqos(tile1_arqos),
-        .tile1_axi_arvalid(tile1_arvalid),
-        .tile1_axi_arready(tile1_arready),
-        .tile1_axi_rid(tile1_rid),
-        .tile1_axi_rdata(tile1_rdata),
-        .tile1_axi_rresp(tile1_rresp),
-        .tile1_axi_rlast(tile1_rlast),
-        .tile1_axi_rvalid(tile1_rvalid),
-        .tile1_axi_rready(tile1_rready),
         .sprite_axi_arid(sprite_arid),
         .sprite_axi_araddr(sprite_araddr),
         .sprite_axi_arlen(sprite_arlen),

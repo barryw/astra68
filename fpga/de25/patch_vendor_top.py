@@ -145,6 +145,15 @@ wire astra_render_arvalid, astra_render_arready;
 wire [2:0] astra_render_rid;
 wire [63:0] astra_render_rdata;
 wire astra_render_rlast, astra_render_rvalid, astra_render_rready;
+wire [2:0] astra_host_arid, astra_host_arsize, astra_host_arprot;
+wire [31:0] astra_host_araddr;
+wire [7:0] astra_host_arlen;
+wire [1:0] astra_host_arburst, astra_host_rresp;
+wire [3:0] astra_host_arcache;
+wire astra_host_arvalid, astra_host_arready;
+wire [2:0] astra_host_rid;
+wire [63:0] astra_host_rdata;
+wire astra_host_rlast, astra_host_rvalid, astra_host_rready;
 
 astra_de25_graphics graphics_i (
     .clock_50(system_clk_50), .build_clk(astra_build_clk),
@@ -231,7 +240,15 @@ astra_de25_graphics graphics_i (
     .render_arready(astra_render_arready), .render_rid(astra_render_rid),
     .render_rdata(astra_render_rdata), .render_rresp(astra_render_rresp),
     .render_rlast(astra_render_rlast), .render_rvalid(astra_render_rvalid),
-    .render_rready(astra_render_rready)
+    .render_rready(astra_render_rready),
+    .host_arid(astra_host_arid), .host_araddr(astra_host_araddr),
+    .host_arlen(astra_host_arlen), .host_arsize(astra_host_arsize),
+    .host_arburst(astra_host_arburst), .host_arcache(astra_host_arcache),
+    .host_arprot(astra_host_arprot), .host_arvalid(astra_host_arvalid),
+    .host_arready(astra_host_arready), .host_rid(astra_host_rid),
+    .host_rdata(astra_host_rdata), .host_rresp(astra_host_rresp),
+    .host_rlast(astra_host_rlast), .host_rvalid(astra_host_rvalid),
+    .host_rready(astra_host_rready)
 );
 
 '''
@@ -343,6 +360,22 @@ PORTS = r'''        .astra_build_clk_clk                    (astra_build_clk),
         .astra_render_rlast                     (astra_render_rlast),
         .astra_render_rvalid                    (astra_render_rvalid),
         .astra_render_rready                    (astra_render_rready),
+        .astra_host_arid                        (astra_host_arid),
+        .astra_host_araddr                      (astra_host_araddr),
+        .astra_host_arlen                       (astra_host_arlen),
+        .astra_host_arsize                      (astra_host_arsize),
+        .astra_host_arburst                     (astra_host_arburst),
+        .astra_host_arlock                      (1'b0),
+        .astra_host_arcache                     (astra_host_arcache),
+        .astra_host_arprot                      (astra_host_arprot),
+        .astra_host_arvalid                     (astra_host_arvalid),
+        .astra_host_arready                     (astra_host_arready),
+        .astra_host_rid                         (astra_host_rid),
+        .astra_host_rdata                       (astra_host_rdata),
+        .astra_host_rresp                       (astra_host_rresp),
+        .astra_host_rlast                       (astra_host_rlast),
+        .astra_host_rvalid                      (astra_host_rvalid),
+        .astra_host_rready                      (astra_host_rready),
         .astra_lpddr4b_core_init_n_reset_n     (astra_lpddr4b_cal_done_n),
         .astra_lpddr4b_ctrl_ready_reset_n      (astra_lpddr4b_ctrl_ready),
         .astra_lpddr4b_status_export            (astra_lpddr4b_calibration_status),

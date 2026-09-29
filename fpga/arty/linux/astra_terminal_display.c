@@ -9,6 +9,7 @@
 
 #include <astra/display.h>
 #include <astra/display_mailbox.h>
+#include <astra/graphics.h>
 #include <astra/render_batch.h>
 #include <astra/render_builder.h>
 #include <astra/theme.h>
@@ -24,6 +25,10 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#ifdef ASTRA_HOST_APERTURE
+#include <sys/ioctl.h>
+#include "astra_host_arena_uapi.h"
+#endif
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -208,8 +213,8 @@ static void stop(int signal_number)
 static int wait_pointer_ready(
     const struct astra_graphics_device *device)
 {
-    const struct timespec delay = { .tv_sec = 0, .tv_nsec = 1000000 };
-    uint64_t deadline = astra_monotonic_nanoseconds() + RENDER_TIMEOUT_NS;
+    uint64_t started = astra_monotonic_nanoseconds();
+    uint64_t deadline = started + RENDER_TIMEOUT_NS;
 
     while ((astra_mmio_read(device, ASTRA_REG_POINTER_STATUS) &
             (ASTRA_POINTER_STATUS_WRITE_READY |
@@ -218,8 +223,7 @@ static int wait_pointer_ready(
             ASTRA_POINTER_STATUS_COMMIT_READY)) {
         if (astra_monotonic_nanoseconds() >= deadline)
             return -1;
-        while (nanosleep(&delay, NULL) != 0 && errno == EINTR) {
-        }
+        astra_graphics_poll_pause(started);
     }
     return 0;
 }
@@ -227,15 +231,14 @@ static int wait_pointer_ready(
 static int wait_pointer_generation(
     const struct astra_graphics_device *device, uint32_t previous)
 {
-    const struct timespec delay = { .tv_sec = 0, .tv_nsec = 1000000 };
-    uint64_t deadline = astra_monotonic_nanoseconds() + RENDER_TIMEOUT_NS;
+    uint64_t started = astra_monotonic_nanoseconds();
+    uint64_t deadline = started + RENDER_TIMEOUT_NS;
 
     while (astra_mmio_read(device, ASTRA_REG_POINTER_GENERATION) ==
            previous) {
         if (astra_monotonic_nanoseconds() >= deadline)
             return -1;
-        while (nanosleep(&delay, NULL) != 0 && errno == EINTR) {
-        }
+        astra_graphics_poll_pause(started);
     }
     return 0;
 }
@@ -270,6 +273,20 @@ static int pointer_commit_begin(const struct astra_graphics_device *device,
 
 static uint32_t load_be32(const volatile uint8_t *bytes);
 
+/*
+ * A present issued and not yet on screen. The flip happens at vblank, and
+ * only the next change to the screen has to wait for it: rendering never
+ * does. Every request except a render-only batch finishes this first, so
+ * when a request runs the screen shows everything presented before it --
+ * which is what the display service's double banking already relies on.
+ */
+static struct {
+    bool scene;
+    struct astra_graphics_commit commit;
+    bool pointer;
+    uint32_t pointer_generation;
+} pending_present;
+
 static int pointer_update(const struct astra_graphics_device *device,
                           uint32_t packed, uint32_t flags, bool commit)
 {
@@ -301,8 +318,13 @@ static int pointer_update(const struct astra_graphics_device *device,
                      (flags & ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u);
     if (!commit)
         return 0;
-    return pointer_commit_begin(device, &generation, swap_image) == 0 ?
-        wait_pointer_generation(device, generation) : -1;
+    /* Issued, not awaited: the next pointer change waits in
+       wait_pointer_ready, and nothing else waits at all. */
+    if (pointer_commit_begin(device, &generation, swap_image) != 0)
+        return -1;
+    pending_present.pointer = true;
+    pending_present.pointer_generation = generation;
+    return 0;
 }
 
 static bool pointer_image_valid(const volatile uint8_t *bytes,
@@ -335,8 +357,11 @@ static int pointer_image_update(const struct astra_graphics_device *device,
     astra_mmio_write(device, ASTRA_REG_POINTER_HOTSPOT,
                      load_be32(bytes + 8u));
     pointer_shape = ASTRA_POINTER_SHAPE_CUSTOM;
-    return pointer_commit_begin(device, &generation, true) == 0 ?
-        wait_pointer_generation(device, generation) : -1;
+    if (pointer_commit_begin(device, &generation, true) != 0)
+        return -1;
+    pending_present.pointer = true;
+    pending_present.pointer_generation = generation;
+    return 0;
 }
 
 struct terminal_cursor {
@@ -403,6 +428,16 @@ static bool batch_descriptor_valid(const volatile uint8_t *batch,
                         ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES))
         return false;
     record = arena_offset - ASTRA_RENDER_BATCH_ARENA_OFFSET;
+    /* The engine may not write the batch window: on the DE25 it reads the
+       window from the host arena, so such a write would never be read back,
+       and anywhere it would overwrite the batch being executed. */
+    if ((load_be32(batch + record + 24u) >> 16 & ASTRA_RENDER_SURFACE_WRITE) !=
+            0u &&
+        (uint64_t)load_be32(batch + record + 8u) +
+                load_be32(batch + record + 12u) >
+            ASTRA_RENDER_BATCH_ARENA_OFFSET &&
+        load_be32(batch + record + 8u) < ASTRA_RENDER_BATCH_WORKSPACE_LIMIT)
+        return false;
     return load_be32(batch + record) ==
                ((uint32_t)ASTRA_RENDER_ABI_VERSION << 16 |
                 ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES) &&
@@ -437,6 +472,120 @@ static bool batch_glyphs_valid(uint32_t bytes, uint32_t arena_offset,
                           count * ASTRA_RENDER_GLYPH_DESCRIPTOR_BYTES);
 }
 
+static bool batch_fill_rects_valid(uint32_t bytes, uint32_t arena_offset,
+                                   uint32_t count)
+{
+    return count != 0u && count <= ASTRA_RENDER_MAX_FILL_RECTS &&
+           arena_offset >= ASTRA_RENDER_BATCH_DATA_OFFSET &&
+           (arena_offset & (ASTRA_RENDER_FILL_RECT_BYTES - 1u)) == 0u &&
+           batch_contains(bytes, arena_offset,
+                          count * ASTRA_RENDER_FILL_RECT_BYTES);
+}
+
+static bool batch_lines_valid(uint32_t bytes, uint32_t arena_offset,
+                              uint32_t count)
+{
+    return count != 0u && count <= ASTRA_RENDER_MAX_LINE_SEGMENTS &&
+           arena_offset >= ASTRA_RENDER_BATCH_DATA_OFFSET &&
+           (arena_offset & (ASTRA_RENDER_LINE_SEGMENT_BYTES - 1u)) == 0u &&
+           batch_contains(bytes, arena_offset,
+                          count * ASTRA_RENDER_LINE_SEGMENT_BYTES);
+}
+
+static bool batch_triangles_valid(uint32_t bytes, uint32_t arena_offset,
+                                  uint32_t count)
+{
+    return count != 0u && count <= ASTRA_RENDER_MAX_TRIANGLES &&
+           arena_offset >= ASTRA_RENDER_BATCH_DATA_OFFSET &&
+           (arena_offset & 31u) == 0u &&
+           batch_contains(bytes, arena_offset,
+                          count * 3u * ASTRA_RENDER_TRIANGLE_VERTEX_BYTES);
+}
+
+/* Bytes per pixel of a byte-addressed render format, or zero. */
+static uint32_t surface_read_pixel_bytes(uint32_t format)
+{
+    switch (format) {
+    case ASTRA_RENDER_FORMAT_INDEX8:
+    case ASTRA_RENDER_FORMAT_A8:
+        return 1u;
+    case ASTRA_RENDER_FORMAT_RGB565:
+        return 2u;
+    case ASTRA_RENDER_FORMAT_XRGB8888:
+    case ASTRA_RENDER_FORMAT_ARGB8888:
+        return 4u;
+    default:
+        return 0u;
+    }
+}
+
+/* A READ_SURFACE header (docs/TEXTURE_ENGINE.md §8) whose surface lies in
+   Media RAM and whose rectangle fills exactly @p bytes of request. */
+static bool surface_read_valid(const volatile uint8_t *header,
+                               uint32_t bytes)
+{
+    uint32_t data_offset = load_be32(header + 8u);
+    uint32_t data_bytes = load_be32(header + 12u);
+    uint32_t pitch = load_be32(header + 16u);
+    uint32_t size = load_be32(header + 20u);
+    uint32_t pixel = surface_read_pixel_bytes(load_be32(header + 24u));
+    uint32_t origin = load_be32(header + 28u);
+    uint32_t extent = load_be32(header + 32u);
+    uint32_t width = size >> 16;
+    uint32_t height = size & 0xffffu;
+    uint32_t read_width = extent >> 16;
+    uint32_t read_height = extent & 0xffffu;
+
+    for (uint32_t offset = 36u;
+         offset < ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES; offset += 4u)
+        if (load_be32(header + offset) != 0u)
+            return false;
+    return bytes > ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES &&
+           bytes <= ASTRA_RENDER_BATCH_MAX_BYTES &&
+           load_be32(header) == ASTRA_DISPLAY_SURFACE_READ_MAGIC &&
+           load_be32(header + 4u) == ASTRA_DISPLAY_SURFACE_READ_VERSION &&
+           pixel != 0u && width != 0u && height != 0u &&
+           data_offset >= ASTRA_RENDER_BATCH_WORKSPACE_LIMIT &&
+           data_offset <= ASTRA_RENDER_BATCH_MEDIA_LIMIT &&
+           data_bytes <= ASTRA_RENDER_BATCH_MEDIA_LIMIT - data_offset &&
+           pitch >= width * pixel &&
+           (uint64_t)pitch * height <= data_bytes &&
+           read_width != 0u && read_height != 0u &&
+           (origin >> 16) + read_width <= width &&
+           (origin & 0xffffu) + read_height <= height &&
+           ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES +
+                   (uint64_t)read_width * pixel * read_height == bytes;
+}
+
+/* Copy a validated rectangle from the arena into the rows behind header. */
+static int read_surface(const struct astra_graphics_device *device,
+                        volatile uint8_t *request)
+{
+    struct astra_graphics_memory_map mapping;
+    uint32_t pitch = load_be32(request + 16u);
+    uint32_t pixel = surface_read_pixel_bytes(load_be32(request + 24u));
+    uint32_t origin = load_be32(request + 28u);
+    uint32_t extent = load_be32(request + 32u);
+    uint32_t row = (extent >> 16) * pixel;
+    uint32_t rows = extent & 0xffffu;
+    uint32_t first = load_be32(request + 8u) + (origin & 0xffffu) * pitch +
+                     (origin >> 16) * pixel;
+
+    astra_graphics_memory_map_init(&mapping);
+    if (astra_graphics_memory_map_open(
+            device, &mapping, ASTRA_GRAPHICS_ARENA_BASE + first,
+            (size_t)pitch * (rows - 1u) + row) != 0)
+        return -1;
+    astra_graphics_memory_barrier();
+    for (uint32_t y = 0u; y < rows; ++y)
+        astra_graphics_memory_copy_from(
+            (uint8_t *)(uintptr_t)request +
+                ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES + (size_t)y * row,
+            mapping.data + (size_t)y * pitch, row);
+    astra_graphics_memory_map_close(&mapping);
+    return 0;
+}
+
 static bool render_batch_valid(const volatile uint8_t *batch,
                                uint32_t bytes)
 {
@@ -460,8 +609,10 @@ static bool render_batch_valid(const volatile uint8_t *batch,
     scene_offset = load_be32(batch + 48u);
     scene_bytes = load_be32(batch + 52u);
     if ((version != ASTRA_RENDER_BATCH_VERSION_1_2 &&
-         version != ASTRA_RENDER_BATCH_VERSION_1_3) ||
-        (version == ASTRA_RENDER_BATCH_VERSION_1_2 &&
+         version != ASTRA_RENDER_BATCH_VERSION_1_3 &&
+         version != ASTRA_RENDER_BATCH_VERSION_1_4) ||
+        ((version == ASTRA_RENDER_BATCH_VERSION_1_2 ||
+          version == ASTRA_RENDER_BATCH_VERSION_1_4) &&
          (scene_offset != 0u || scene_bytes != 0u)) ||
         (version == ASTRA_RENDER_BATCH_VERSION_1_3 &&
          (scene_offset < ASTRA_RENDER_BATCH_DATA_OFFSET ||
@@ -470,6 +621,7 @@ static bool render_batch_valid(const volatile uint8_t *batch,
         return false;
     presentation = load_be32(batch + 32u);
     if ((presentation & ~ASTRA_RENDER_BATCH_PRESENT_CURSOR) != 0u ||
+        (version == ASTRA_RENDER_BATCH_VERSION_1_4 && presentation != 0u) ||
         ((presentation & ASTRA_RENDER_BATCH_PRESENT_CURSOR) != 0u ?
              (load_be32(batch + 36u) >= ASTRA_DISPLAY_WIDTH ||
               load_be32(batch + 40u) >= ASTRA_DISPLAY_HEIGHT ||
@@ -513,7 +665,27 @@ static bool render_batch_valid(const volatile uint8_t *batch,
              (!batch_data_descriptor_valid(
                   batch, bytes, load_be32(batch + offset + 36u)) ||
               !batch_glyphs_valid(bytes, load_be32(batch + offset + 40u),
-                                  load_be32(batch + offset + 44u)))))
+                                  load_be32(batch + offset + 44u)))) ||
+            (operation == ASTRA_RENDER_OP_FILL_RECTS &&
+             !batch_fill_rects_valid(
+                 bytes,
+                 load_be32(batch + offset +
+                           ASTRA_RENDER_FILL_RECTS_WORD_RECORD_OFFSET * 4u),
+                 load_be32(batch + offset +
+                           ASTRA_RENDER_FILL_RECTS_WORD_RECORD_COUNT * 4u))) ||
+            (operation == ASTRA_RENDER_OP_LINES &&
+             !batch_lines_valid(
+                 bytes,
+                 load_be32(batch + offset +
+                           ASTRA_RENDER_LINES_WORD_SEGMENT_OFFSET * 4u),
+                 load_be32(batch + offset +
+                           ASTRA_RENDER_LINES_WORD_SEGMENT_COUNT * 4u))) ||
+            (operation == ASTRA_RENDER_OP_TRIANGLES &&
+             ((load_be32(batch + offset + 36u) != 0u &&
+               !batch_descriptor_valid(
+                   batch, bytes, load_be32(batch + offset + 36u))) ||
+              !batch_triangles_valid(bytes, load_be32(batch + offset + 40u),
+                                     load_be32(batch + offset + 44u)))))
             return false;
     }
     return true;
@@ -531,11 +703,30 @@ static bool render_batch_cursor(const volatile uint8_t *batch,
     return true;
 }
 
+/* Reports and clears the fabric's record of refused or unmapped register
+   accesses. Silent when it is empty or the bitstream has none. */
+static void log_access_faults(const struct astra_graphics_device *device,
+                              const char *when)
+{
+    struct astra_access_fault fault;
+
+    if (astra_graphics_access_fault_take(device, &fault) != 1)
+        return;
+    fprintf(stderr,
+            "graphics access faults %s: count=%u first=%s %s offset=0x%04x\n",
+            when, fault.count,
+            (fault.first & ASTRA_ACCESS_FAULT_STORE) != 0u ? "store" : "load",
+            ((fault.first >> ASTRA_ACCESS_FAULT_REASON_SHIFT) &
+             ASTRA_ACCESS_FAULT_REASON_MASK) == ASTRA_ACCESS_FAULT_REJECTED ?
+                "rejected" : "unmapped",
+            fault.first & ASTRA_ACCESS_FAULT_OFFSET_MASK);
+}
+
 static int wait_render(const struct astra_graphics_device *device,
                        uint32_t command_count)
 {
-    const struct timespec delay = { .tv_sec = 0, .tv_nsec = 1000000 };
-    uint64_t deadline = astra_monotonic_nanoseconds() + RENDER_TIMEOUT_NS;
+    uint64_t started = astra_monotonic_nanoseconds();
+    uint64_t deadline = started + RENDER_TIMEOUT_NS;
 
     for (;;) {
         uint32_t completed = astra_mmio_read(
@@ -548,9 +739,112 @@ static int wait_render(const struct astra_graphics_device *device,
         if ((status & ASTRA_RENDER_ENGINE_CONFIG_FAULT) != 0u ||
             astra_monotonic_nanoseconds() >= deadline)
             return -1;
-        while (nanosleep(&delay, NULL) != 0 && errno == EINTR) {
-        }
+        astra_graphics_poll_pause(started);
     }
+}
+
+#ifdef ASTRA_HOST_APERTURE
+/* The payload is the host arena, and the render engine reads a guest batch
+   from it through the host aperture: nothing to copy. QEMU completed its
+   payload stores with a DSB before publishing the request, and mailbox_take
+   ordered this thread after that with its own; the engine writes (the
+   completion ring) still land in media RAM.
+   A batch the helper builds itself (terminal text, the cursor, retiring a
+   render target) lives in the helper's memory, not in the payload. It is
+   copied into media RAM like on a build without the aperture, and runs
+   with the aperture off: with the aperture on, the engine would read
+   whatever the guest last left in the payload. */
+static uint32_t host_aperture_base;
+static const volatile uint8_t *host_payload;
+static uint32_t active_aperture_base = UINT32_MAX;
+
+/* The engine must be stopped: the aperture refuses a store otherwise. */
+static int select_render_aperture(const struct astra_graphics_device *device,
+                                  uint32_t base)
+{
+    if (base == active_aperture_base)
+        return 0;
+    if (astra_graphics_render_host_aperture_set(device, base,
+                                                RENDER_TIMEOUT_NS) != 0)
+        return -1;
+    active_aperture_base = base;
+    return 0;
+}
+#endif
+
+/* Copies the header, the commands and the resources into the batch window
+   of the arena, where the engine reads them without the host aperture. */
+static void stage_render_batch(volatile uint8_t *arena_window,
+                               const volatile uint8_t *batch, uint32_t bytes,
+                               uint32_t command_bytes)
+{
+    uint32_t resource_start = ASTRA_RENDER_BATCH_RESOURCE_OFFSET -
+                              ASTRA_RENDER_BATCH_ARENA_OFFSET;
+    uint32_t data_start = ASTRA_RENDER_BATCH_DATA_OFFSET -
+                          ASTRA_RENDER_BATCH_ARENA_OFFSET;
+
+    astra_graphics_memory_copy_to(arena_window, (const void *)batch,
+                                  ASTRA_RENDER_BATCH_HEADER_BYTES);
+    astra_graphics_memory_copy_to(
+        arena_window + ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
+            ASTRA_RENDER_BATCH_ARENA_OFFSET,
+        (const uint8_t *)(const void *)batch +
+            ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
+            ASTRA_RENDER_BATCH_ARENA_OFFSET,
+        command_bytes);
+    if (bytes > resource_start) {
+        uint32_t resource_end = bytes < data_start ? bytes : data_start;
+
+        astra_graphics_memory_copy_to(
+            arena_window + resource_start,
+            (const uint8_t *)(const void *)batch + resource_start,
+            resource_end - resource_start);
+    }
+    if (bytes > data_start)
+        astra_graphics_memory_copy_to(
+            arena_window + data_start,
+            (const uint8_t *)(const void *)batch + data_start,
+            bytes - data_start);
+    astra_graphics_memory_barrier();
+}
+
+/* With ASTRA_DISPLAY_STALL_DUMP=DIR, a stalled or failed batch is written to
+   DIR/stall-batch.bin as submitted, with the render register bank in
+   DIR/stall-registers.txt, so the command that stopped the engine can be
+   replayed off the board. Only the first stall of a process is kept. */
+static void dump_stalled_batch(const struct astra_graphics_device *device,
+                               const volatile uint8_t *batch, uint32_t bytes)
+{
+    static int dumped;
+    const char *directory = getenv("ASTRA_DISPLAY_STALL_DUMP");
+    char path[512];
+    uint8_t *copy;
+    FILE *file;
+
+    if (directory == NULL || dumped)
+        return;
+    dumped = 1;
+    copy = malloc(bytes);
+    if (copy == NULL)
+        return;
+    for (uint32_t at = 0u; at < bytes; ++at)
+        copy[at] = batch[at];
+    snprintf(path, sizeof(path), "%s/stall-batch.bin", directory);
+    file = fopen(path, "wb");
+    if (file != NULL) {
+        fwrite(copy, 1, bytes, file);
+        fclose(file);
+    }
+    free(copy);
+    snprintf(path, sizeof(path), "%s/stall-registers.txt", directory);
+    file = fopen(path, "w");
+    if (file == NULL)
+        return;
+    for (unsigned offset = ASTRA_REG_RENDER_CONTROL; offset <= 0x244u;
+         offset += 4u)
+        fprintf(file, "%03x %08x\n", offset, astra_mmio_read(device, offset));
+    fclose(file);
+    fprintf(stderr, "render stall dumped to %s\n", directory);
 }
 
 static int execute_render_batch(const struct astra_graphics_device *device,
@@ -564,10 +858,10 @@ static int execute_render_batch(const struct astra_graphics_device *device,
     uint32_t command_count;
     uint32_t command_bytes;
     uint32_t generation;
-    uint32_t resource_start = ASTRA_RENDER_BATCH_RESOURCE_OFFSET -
-                              ASTRA_RENDER_BATCH_ARENA_OFFSET;
-    uint32_t data_start = ASTRA_RENDER_BATCH_DATA_OFFSET -
-                          ASTRA_RENDER_BATCH_ARENA_OFFSET;
+    uint32_t records;
+    uint32_t failed_before = 0u;
+    uint32_t completed_before = 0u;
+    bool from_payload = false;
     int result = -1;
     static int profile_commands = -1;
 
@@ -581,6 +875,7 @@ static int execute_render_batch(const struct astra_graphics_device *device,
     *scanout_offset = load_be32(batch + 28u);
     command_count = load_be32(batch + 12u);
     command_bytes = command_count * ASTRA_RENDER_COMMAND_BYTES;
+    records = command_count;
     generation = load_be32(batch + 24u);
     astra_graphics_memory_map_init(&mapping);
     if (astra_graphics_memory_map_open(
@@ -590,33 +885,25 @@ static int execute_render_batch(const struct astra_graphics_device *device,
         fprintf(stderr, "render batch graphics mapping failed\n");
         return -1;
     }
-    astra_graphics_memory_copy_to(mapping.data, (const void *)batch,
-                                  ASTRA_RENDER_BATCH_HEADER_BYTES);
-    astra_graphics_memory_copy_to(
-        mapping.data + ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
-            ASTRA_RENDER_BATCH_ARENA_OFFSET,
-        (const uint8_t *)(const void *)batch +
-            ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
-            ASTRA_RENDER_BATCH_ARENA_OFFSET,
-        command_bytes);
-    if (bytes > resource_start) {
-        uint32_t resource_end = bytes < data_start ? bytes : data_start;
-
-        astra_graphics_memory_copy_to(
-            mapping.data + resource_start,
-            (const uint8_t *)(const void *)batch + resource_start,
-            resource_end - resource_start);
-    }
-    if (bytes > data_start)
-        astra_graphics_memory_copy_to(
-            mapping.data + data_start,
-            (const uint8_t *)(const void *)batch + data_start,
-            bytes - data_start);
-    astra_graphics_memory_barrier();
+#ifdef ASTRA_HOST_APERTURE
+    from_payload = batch == host_payload;
+#endif
+    if (!from_payload)
+        stage_render_batch(mapping.data, batch, bytes, command_bytes);
     profile_copied = astra_monotonic_nanoseconds();
 
     if (command_count != 0u) {
-        astra_mmio_write(device, ASTRA_REG_RENDER_CONTROL, 0u);
+        if (astra_graphics_render_stop(device, RENDER_TIMEOUT_NS) != 0) {
+            fprintf(stderr, "render engine did not stop: status=0x%08x\n",
+                    astra_mmio_read(device, ASTRA_REG_RENDER_STATUS));
+            goto done;
+        }
+#ifdef ASTRA_HOST_APERTURE
+        if (select_render_aperture(device,
+                                   from_payload ? host_aperture_base : 0u) !=
+            0)
+            goto done;
+#endif
         astra_mmio_write(device, ASTRA_REG_RENDER_SUBMISSION_PRODUCER, 0u);
         astra_mmio_write(device, ASTRA_REG_RENDER_COMPLETION_CONSUMER, 0u);
         astra_mmio_write(device, ASTRA_REG_RENDER_SUBMISSION_RING_OFFSET,
@@ -635,6 +922,10 @@ static int execute_render_batch(const struct astra_graphics_device *device,
             fprintf(stderr, "render batch rebase failed\n");
             goto done;
         }
+        failed_before = astra_mmio_read(device,
+                                        ASTRA_REG_RENDER_COMMANDS_FAILED);
+        completed_before = astra_mmio_read(
+            device, ASTRA_REG_RENDER_COMMANDS_COMPLETED);
         astra_mmio_write(device, ASTRA_REG_RENDER_CONTROL,
                          ASTRA_RENDER_CONTROL_ENABLE);
         astra_mmio_write(device, ASTRA_REG_RENDER_SUBMISSION_PRODUCER,
@@ -646,6 +937,8 @@ static int execute_render_batch(const struct astra_graphics_device *device,
                     astra_mmio_read(device,
                                     ASTRA_REG_RENDER_COMPLETION_PRODUCER),
                     astra_mmio_read(device, ASTRA_REG_RENDER_STATUS));
+            log_access_faults(device, "at render stall");
+            dump_stalled_batch(device, batch, bytes);
             goto done;
         }
     }
@@ -657,7 +950,16 @@ static int execute_render_batch(const struct astra_graphics_device *device,
                     ((profile_copied - profile_started) / 1000u),
                 (unsigned long long)
                     ((profile_rendered - profile_copied) / 1000u));
-    for (uint32_t index = 0u; index < command_count; ++index) {
+    /* Every command retires into COMPLETED, and a failed one into FAILED
+       too. When the counters say all succeeded the records need not be read:
+       each is several reads across the bridge, a few milliseconds a batch. */
+    if (!profile_commands && command_count != 0u &&
+        astra_mmio_read(device, ASTRA_REG_RENDER_COMMANDS_FAILED) ==
+            failed_before &&
+        astra_mmio_read(device, ASTRA_REG_RENDER_COMMANDS_COMPLETED) -
+                completed_before == command_count)
+        records = 0u;
+    for (uint32_t index = 0u; index < records; ++index) {
         uint32_t offset = ASTRA_RENDER_BATCH_COMPLETION_OFFSET -
             ASTRA_RENDER_BATCH_ARENA_OFFSET +
             index * ASTRA_RENDER_COMPLETION_BYTES;
@@ -691,6 +993,7 @@ static int execute_render_batch(const struct astra_graphics_device *device,
                     load_be32(completion), load_be32(completion + 4u),
                     load_be32(completion + 24u),
                     load_be32(completion + 28u), generation);
+            dump_stalled_batch(device, batch, bytes);
             goto done;
         }
     }
@@ -704,7 +1007,8 @@ done:
 static int compile_window_scene(
     const struct astra_graphics_device *device,
     const volatile uint8_t *batch, uint32_t batch_bytes,
-    uint32_t *output_offset_out, uint32_t *output_bytes_out)
+    uint32_t *output_offset_out, uint32_t *output_bytes_out,
+    uint32_t *dimensions_out)
 {
     struct astra_graphics_memory_map output;
     uint32_t scene_offset = load_be32(batch + 48u);
@@ -715,25 +1019,52 @@ static int compile_window_scene(
     uint32_t written = 0u;
     int status;
 
+    static uint8_t *compiled;
+    static uint32_t compiled_capacity;
+
     if (!batch_contains(batch_bytes, scene_offset, scene_bytes))
         return -1;
-    astra_graphics_memory_map_init(&output);
-    if (astra_graphics_memory_map_open(
-            device, &output, ASTRA_GRAPHICS_ARENA_BASE + output_offset,
-            output_capacity) != 0)
-        return -1;
+    if (output_capacity > compiled_capacity) {
+        uint8_t *grown = realloc(compiled, output_capacity);
+
+        if (grown == NULL)
+            return -1;
+        compiled = grown;
+        compiled_capacity = output_capacity;
+    }
     status = astra_window_scene_compile(
         (const uint8_t *)(const void *)batch + scene_record, scene_bytes,
-        output.data, output_capacity, ASTRA_GRAPHICS_ARENA_BYTES, &written);
-    if (status == ASTRA_WINDOW_SCENE_OK)
+        compiled, output_capacity, ASTRA_GRAPHICS_ARENA_BYTES, &written);
+    if (status == ASTRA_WINDOW_SCENE_OK) {
+        astra_graphics_memory_map_init(&output);
+        if (astra_graphics_memory_map_open(
+                device, &output, ASTRA_GRAPHICS_ARENA_BASE + output_offset,
+                output_capacity) != 0)
+            return -1;
+        /*
+         * Invalidate, body, then header: a scene is valid only once it is
+         * complete, and never while its old header still describes it.
+         */
+        astra_graphics_memory_fill(output.data, 0u,
+                                   ASTRA_WINDOW_SCENE_COMPILED_HEADER_BYTES);
         astra_graphics_memory_barrier();
-    astra_graphics_memory_map_close(&output);
+        astra_graphics_memory_copy_to(
+            output.data + ASTRA_WINDOW_SCENE_COMPILED_HEADER_BYTES,
+            compiled + ASTRA_WINDOW_SCENE_COMPILED_HEADER_BYTES,
+            written - ASTRA_WINDOW_SCENE_COMPILED_HEADER_BYTES);
+        astra_graphics_memory_barrier();
+        astra_graphics_memory_copy_to(
+            output.data, compiled, ASTRA_WINDOW_SCENE_COMPILED_HEADER_BYTES);
+        astra_graphics_memory_barrier();
+        astra_graphics_memory_map_close(&output);
+    }
     if (status != ASTRA_WINDOW_SCENE_OK) {
         fprintf(stderr, "window scene compile failed: %d\n", status);
         return -1;
     }
     *output_offset_out = output_offset;
     *output_bytes_out = written;
+    *dimensions_out = load_be32(batch + scene_record + 16u);
     return 0;
 }
 
@@ -745,11 +1076,7 @@ static bool mailbox_take(volatile const AstraDisplayMailbox *mailbox,
 
     astra_graphics_memory_barrier();
     if (mailbox->magic != ASTRA_DISPLAY_MAILBOX_MAGIC ||
-        (mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_1 &&
-         mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_2 &&
-         mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_3 &&
-         mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_4 &&
-         mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_5) ||
+        mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_7 ||
         sequence == 0u || sequence == previous_sequence)
         return false;
     request->sequence = sequence;
@@ -771,18 +1098,14 @@ static void mailbox_complete(volatile AstraDisplayMailbox *mailbox,
     mailbox->completion_generation = generation;
     astra_graphics_memory_barrier();
     mailbox->completion_sequence = request->sequence;
+    /* The emulator sleeps on completion_sequence. */
+    (void)syscall(SYS_futex, &mailbox->completion_sequence, FUTEX_WAKE, 1,
+                  NULL, NULL, 0);
 }
 
 static int mailbox_wait(volatile AstraDisplayMailbox *mailbox,
                         uint32_t sequence)
 {
-    if (mailbox->version < ASTRA_DISPLAY_MAILBOX_VERSION_1_4) {
-        const struct timespec delay = { .tv_sec = 0, .tv_nsec = 16000000 };
-
-        while (nanosleep(&delay, NULL) != 0 && errno == EINTR && running) {
-        }
-        return 0;
-    }
     while (running && mailbox->request_sequence == sequence) {
         if (syscall(SYS_futex, &mailbox->request_sequence,
                     FUTEX_WAIT, sequence, NULL, NULL, 0) == 0 ||
@@ -904,14 +1227,41 @@ static bool copy_cursor(struct terminal_cursor *out,
     return false;
 }
 
+static int finish_pending_present(const struct astra_graphics_device *device)
+{
+    int status = 0;
+
+    if (pending_present.scene &&
+        astra_graphics_scene_commit_wait(device, &pending_present.commit,
+                                         UINT64_C(2000000000), NULL) != 0)
+        status = -1;
+    if (pending_present.pointer &&
+        wait_pointer_generation(device,
+                                pending_present.pointer_generation) != 0)
+        status = -1;
+    pending_present.scene = false;
+    pending_present.pointer = false;
+    return status;
+}
+
+static int issue_present(const struct astra_graphics_device *device,
+                         bool commit_pointer)
+{
+    if (commit_pointer &&
+        pointer_commit_begin(device, &pending_present.pointer_generation,
+                             false) != 0)
+        return -1;
+    pending_present.pointer = commit_pointer;
+    astra_graphics_scene_commit_begin(device, &pending_present.commit);
+    pending_present.scene = true;
+    return 0;
+}
+
 static int present(const struct astra_graphics_device *device,
                    uint32_t scanout_offset, bool commit_pointer)
 {
     uint32_t size = (ASTRA_FRAMEBUFFER_HEIGHT << 16) |
                     ASTRA_FRAMEBUFFER_WIDTH;
-    uint32_t pointer_generation = 0u;
-    int scene_status;
-    int pointer_status = 0;
 
     if (astra_mmio_read(device, ASTRA_REG_ARENA_BASE) !=
             ASTRA_GRAPHICS_ARENA_BASE ||
@@ -929,32 +1279,45 @@ static int present(const struct astra_graphics_device *device,
     astra_mmio_write(device, ASTRA_REG_FB_VIEWPORT_Y, 0u);
     astra_mmio_write(device, ASTRA_REG_FB_CONTROL, 3u);
     astra_mmio_write(device, ASTRA_REG_FB_KEY, 0u);
-    if (commit_pointer &&
-        pointer_commit_begin(device, &pointer_generation, false) != 0)
-        return -1;
-    scene_status = astra_graphics_scene_commit(
-        device, UINT64_C(2000000000), NULL);
-    if (commit_pointer)
-        pointer_status = wait_pointer_generation(device, pointer_generation);
-    return scene_status == 0 && pointer_status == 0 ? 0 : -1;
+    return issue_present(device, commit_pointer);
+}
+
+/* A present whose caller draws next into what was on screen: it waits. */
+static int present_now(const struct astra_graphics_device *device,
+                       uint32_t scanout_offset, bool commit_pointer)
+{
+    int status = present(device, scanout_offset, commit_pointer);
+
+    return finish_pending_present(device) == 0 && status == 0 ? 0 : -1;
+}
+
+static int window_scene_layout(uint32_t dimensions,
+                               AstraDisplayLayout *layout)
+{
+    AstraDisplayMode mode = ASTRA_DISPLAY_MODE_INIT;
+
+    mode.width = (uint16_t)(dimensions >> 16);
+    mode.height = (uint16_t)dimensions;
+    return astra_display_layout_calculate(
+        &mode, ASTRA_FRAMEBUFFER_WIDTH, ASTRA_FRAMEBUFFER_HEIGHT,
+        layout) == ASTRA_OK ? 0 : -1;
 }
 
 static int present_window_scene(const struct astra_graphics_device *device,
                                 uint32_t scene_offset,
                                 uint32_t scene_bytes,
+                                uint32_t dimensions,
                                 bool commit_pointer)
 {
-    uint32_t size = (ASTRA_FRAMEBUFFER_HEIGHT << 16) |
-                    ASTRA_FRAMEBUFFER_WIDTH;
-    uint32_t pointer_generation = 0u;
-    int scene_status;
-    int pointer_status = 0;
+    AstraDisplayLayout layout;
 
+    if (window_scene_layout(dimensions, &layout) != 0)
+        return -1;
     astra_graphics_scene_prepare_empty(device);
     astra_mmio_write(device, ASTRA_REG_FB_BASE,
                      ASTRA_GRAPHICS_ARENA_BASE + scene_offset);
     astra_mmio_write(device, ASTRA_REG_FB_PITCH, ASTRA_FRAMEBUFFER_PITCH);
-    astra_mmio_write(device, ASTRA_REG_FB_SIZE, size);
+    astra_mmio_write(device, ASTRA_REG_FB_SIZE, dimensions);
     astra_mmio_write(device, ASTRA_REG_FB_VIEWPORT_X, 0u);
     astra_mmio_write(device, ASTRA_REG_FB_VIEWPORT_Y, 0u);
     astra_mmio_write(device, ASTRA_REG_FB_CONTROL,
@@ -963,14 +1326,21 @@ static int present_window_scene(const struct astra_graphics_device *device,
                          ASTRA_FRAMEBUFFER_WINDOW_SCENE);
     astra_mmio_write(device, ASTRA_REG_FB_KEY, 0u);
     astra_mmio_write(device, ASTRA_REG_FB_WINDOW_SCENE_BYTES, scene_bytes);
-    if (commit_pointer &&
-        pointer_commit_begin(device, &pointer_generation, false) != 0)
-        return -1;
-    scene_status = astra_graphics_scene_commit(
-        device, UINT64_C(2000000000), NULL);
-    if (commit_pointer)
-        pointer_status = wait_pointer_generation(device, pointer_generation);
-    return scene_status == 0 && pointer_status == 0 ? 0 : -1;
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_SOURCE_SIZE,
+                     (uint32_t)layout.source_height << 16 |
+                         layout.source_width);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_CROP_ORIGIN,
+                     (uint32_t)layout.crop_y << 16 | layout.crop_x);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_CROP_SIZE,
+                     (uint32_t)layout.crop_height << 16 |
+                         layout.crop_width);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_VIEWPORT_ORIGIN,
+                     (uint32_t)layout.viewport_y << 16 |
+                         layout.viewport_x);
+    astra_mmio_write(device, ASTRA_REG_DISPLAY_VIEWPORT_SIZE,
+                     (uint32_t)layout.viewport_height << 16 |
+                         layout.viewport_width);
+    return issue_present(device, commit_pointer);
 }
 
 struct terminal_damage {
@@ -1271,7 +1641,7 @@ static int present_solid_frame(
             ASTRA_DISPLAY_HEIGHT, color) ||
         execute_finished_batch(device, &builder, &scanout) != 0 ||
         scanout != scanout_for_generation(frame_generation) ||
-        present(device, scanout, false) != 0)
+        present_now(device, scanout, false) != 0)
         return -1;
     *active_scanout = scanout;
     return 0;
@@ -1295,7 +1665,7 @@ static int present_rgb565_frame(
                                   ASTRA_FRAMEBUFFER_BYTES);
     astra_graphics_memory_barrier();
     astra_graphics_memory_map_close(&mapping);
-    if (present(device, target, false) != 0)
+    if (present_now(device, target, false) != 0)
         return -1;
     *active_scanout = target;
     return 0;
@@ -1324,7 +1694,7 @@ static int make_render_target_inactive(
             &builder, destination, source, 0, 0, 0, 0,
             ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT) ||
         execute_finished_batch(device, &builder, &scanout) != 0 ||
-        scanout == target || present(device, scanout, false) != 0)
+        scanout == target || present_now(device, scanout, false) != 0)
         return -1;
     *active_scanout = scanout;
     return 0;
@@ -1363,7 +1733,7 @@ static int present_full_text(const struct astra_graphics_device *device,
             scanout != target)
             return -1;
     }
-    if (present(device, target, false) != 0)
+    if (present_now(device, target, false) != 0)
         return -1;
     *active_scanout = target;
     return 0;
@@ -1440,7 +1810,7 @@ static int present_text_update(
     if (!add_cursor(&builder, destination, cursor, cursor_drawn) ||
         execute_finished_batch(device, &builder, &scanout) != 0 ||
         scanout != scanout_for_generation(frame_generation) ||
-        present(device, scanout, false) != 0)
+        present_now(device, scanout, false) != 0)
         return -1;
     *active_scanout = scanout;
     return 0;
@@ -1448,6 +1818,7 @@ static int present_text_update(
 
 static int self_test(void)
 {
+    AstraDisplayLayout layout;
     char utf8[6];
     const uint8_t cp437[] = { 'A', 0x80u, 0xdbu };
     uint8_t plane[TEXT_PAGE_BYTES];
@@ -1466,12 +1837,28 @@ static int self_test(void)
     struct display_request request;
     static uint8_t validation_batch[
         ASTRA_RENDER_BATCH_MIN_BYTES +
-        ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES];
+        ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES +
+        3u * ASTRA_RENDER_TRIANGLE_VERTEX_BYTES];
+    uint8_t read_header[ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES];
     static uint8_t validation_cursor[ASTRA_DISPLAY_CURSOR_IMAGE_BYTES];
     volatile AstraDisplayMailbox *shared;
     uint64_t wait_started;
     pid_t child;
     int child_status;
+
+    if (window_scene_layout(320u << 16 | 200u, &layout) != 0 ||
+        layout.viewport_x != 160u || layout.viewport_y != 40u ||
+        layout.viewport_width != 1600u ||
+        layout.viewport_height != 1000u ||
+        window_scene_layout(ASTRA_DISPLAY_WIDTH << 16 |
+                            ASTRA_DISPLAY_HEIGHT, &layout) != 0 ||
+        layout.viewport_x != 0u || layout.viewport_y != 0u ||
+        layout.viewport_width != ASTRA_DISPLAY_WIDTH ||
+        layout.viewport_height != ASTRA_DISPLAY_HEIGHT ||
+        window_scene_layout(0u << 16 | 200u, &layout) == 0 ||
+        window_scene_layout((ASTRA_DISPLAY_WIDTH + 1u) << 16 | 200u,
+                            &layout) == 0)
+        return EXIT_FAILURE;
 
     if (TEXT_FONT_WIDTH != ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH ||
         TEXT_FONT_HEIGHT != ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT ||
@@ -1619,7 +2006,7 @@ static int self_test(void)
 
     (void)memset(&mailbox, 0, sizeof(mailbox));
     mailbox.magic = ASTRA_DISPLAY_MAILBOX_MAGIC;
-    mailbox.version = ASTRA_DISPLAY_MAILBOX_VERSION_1_3;
+    mailbox.version = ASTRA_DISPLAY_MAILBOX_VERSION_1_7;
     mailbox.request_id = 7u;
     mailbox.operation = ASTRA_DISPLAY_FRAME_PRESENT_SOLID;
     mailbox.color_rgb565 = 0x135du;
@@ -1649,7 +2036,7 @@ static int self_test(void)
     if (shared == MAP_FAILED)
         return EXIT_FAILURE;
     (void)memset((void *)shared, 0, sizeof(*shared));
-    shared->version = ASTRA_DISPLAY_MAILBOX_VERSION_1_4;
+    shared->version = ASTRA_DISPLAY_MAILBOX_VERSION_1_7;
     child = fork();
     if (child == 0) {
         const struct timespec delay = { .tv_sec = 0, .tv_nsec = 2000000 };
@@ -1670,6 +2057,38 @@ static int self_test(void)
         waitpid(child, &child_status, 0) != child ||
         !WIFEXITED(child_status) || WEXITSTATUS(child_status) != EXIT_SUCCESS ||
         shared->request_sequence != 1u) {
+        (void)munmap((void *)shared, sizeof(*shared));
+        return EXIT_FAILURE;
+    }
+    /* A completion wakes the emulator sleeping on completion_sequence. */
+    child = fork();
+    if (child == 0) {
+        const struct timespec limit = { .tv_sec = 1, .tv_nsec = 0 };
+
+        while (shared->completion_sequence == 0u) {
+            if (syscall(SYS_futex, &shared->completion_sequence, FUTEX_WAIT,
+                        0u, &limit, NULL, 0) != 0 &&
+                errno == ETIMEDOUT)
+                _exit(EXIT_FAILURE);
+        }
+        _exit(shared->completion_sequence == 1u ? EXIT_SUCCESS
+                                                : EXIT_FAILURE);
+    }
+    if (child < 0) {
+        (void)munmap((void *)shared, sizeof(*shared));
+        return EXIT_FAILURE;
+    }
+    {
+        const struct timespec delay = { .tv_sec = 0, .tv_nsec = 2000000 };
+        const struct display_request completed = { .sequence = 1u, .id = 1u };
+
+        (void)nanosleep(&delay, NULL);
+        wait_started = astra_monotonic_nanoseconds();
+        mailbox_complete(shared, &completed, ASTRA_DISPLAY_COMPLETION_OK, 1u);
+    }
+    if (waitpid(child, &child_status, 0) != child ||
+        !WIFEXITED(child_status) || WEXITSTATUS(child_status) != EXIT_SUCCESS ||
+        astra_monotonic_nanoseconds() - wait_started >= UINT64_C(10000000)) {
         (void)munmap((void *)shared, sizeof(*shared));
         return EXIT_FAILURE;
     }
@@ -1729,6 +2148,30 @@ static int self_test(void)
     if (!render_batch_valid(validation_batch, sizeof(validation_batch)))
         return EXIT_FAILURE;
     {
+        /* A writable surface may not touch the batch window. */
+        uint8_t *record = validation_batch +
+            ASTRA_RENDER_BATCH_RESOURCE_OFFSET -
+            ASTRA_RENDER_BATCH_ARENA_OFFSET;
+
+        store_be32(record + 8u, ASTRA_RENDER_BATCH_WORKSPACE_LIMIT - 64u);
+        store_be32(record + 12u, 64u);
+        store_be32(record + 24u, (uint32_t)ASTRA_RENDER_SURFACE_WRITE << 16);
+        if (render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(record + 8u, ASTRA_RENDER_BATCH_ARENA_OFFSET - 64u);
+        if (!render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(record + 12u, 65u);
+        if (render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(record + 8u, ASTRA_RENDER_BATCH_WORKSPACE_LIMIT);
+        if (!render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(record + 8u, 0u);
+        store_be32(record + 12u, 0u);
+        store_be32(record + 24u, 0u);
+    }
+    {
         uint32_t packed = 0u;
         uint32_t flags = 0u;
 
@@ -1760,12 +2203,234 @@ static int self_test(void)
                    ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
                    ASTRA_RENDER_BATCH_ARENA_OFFSET + 32u,
                ASTRA_RENDER_BATCH_RESOURCE_OFFSET);
+    {
+        /* One untextured triangle right after the frame descriptor. */
+        uint8_t *triangles = validation_batch +
+            ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
+            ASTRA_RENDER_BATCH_ARENA_OFFSET;
+        const uint32_t vertices = ASTRA_RENDER_BATCH_RESOURCE_OFFSET +
+                                  ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES;
+
+        store_be32(triangles + 4u, (uint32_t)ASTRA_RENDER_OP_TRIANGLES << 16);
+        store_be32(triangles + 40u, vertices);
+        store_be32(triangles + 44u, 1u);
+        if (!render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(triangles + 36u, ASTRA_RENDER_BATCH_RESOURCE_OFFSET);
+        if (!render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(triangles + 36u, ASTRA_RENDER_BATCH_RESOURCE_OFFSET + 4u);
+        if (render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(triangles + 36u, 0u);
+        store_be32(triangles + 44u, 2u);
+        if (render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(triangles + 44u, 0u);
+        if (render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(triangles + 44u, 1u);
+        store_be32(triangles + 40u, vertices - 16u);
+        if (render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(triangles + 40u, vertices);
+        if (!render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(triangles + 4u, (uint32_t)ASTRA_RENDER_OP_FILL << 16);
+        store_be32(triangles + 40u, 0u);
+        store_be32(triangles + 44u, 0u);
+    }
+    {
+        /* FILL_RECTS: the record array must be aligned, bounded and
+           inside the batch. Two records right after the descriptor. */
+        uint8_t *rects = validation_batch +
+            ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
+            ASTRA_RENDER_BATCH_ARENA_OFFSET;
+        const uint32_t records = ASTRA_RENDER_BATCH_RESOURCE_OFFSET +
+                                 ASTRA_RENDER_SURFACE_DESCRIPTOR_BYTES;
+        const uint32_t batch_end = ASTRA_RENDER_BATCH_ARENA_OFFSET +
+                                   (uint32_t)sizeof(validation_batch);
+        uint8_t *offset_word = rects +
+            ASTRA_RENDER_FILL_RECTS_WORD_RECORD_OFFSET * 4u;
+        uint8_t *count_word = rects +
+            ASTRA_RENDER_FILL_RECTS_WORD_RECORD_COUNT * 4u;
+
+        store_be32(rects + 4u, (uint32_t)ASTRA_RENDER_OP_FILL_RECTS << 16);
+        store_be32(offset_word, records);
+        store_be32(count_word, 2u);
+        if (!render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(count_word, 0u);
+        if (render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(count_word, ASTRA_RENDER_MAX_FILL_RECTS + 1u);
+        if (render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(count_word, 2u);
+        store_be32(offset_word, records + 8u);
+        if (render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        /* Exactly to the end of the batch, then one record past it. */
+        store_be32(offset_word, batch_end - 2u * ASTRA_RENDER_FILL_RECT_BYTES);
+        if (!render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(offset_word, batch_end - ASTRA_RENDER_FILL_RECT_BYTES);
+        if (render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        /* LINES: the same array rules for its segments. */
+        store_be32(rects + 4u, (uint32_t)ASTRA_RENDER_OP_LINES << 16);
+        store_be32(offset_word, records);
+        store_be32(count_word, 2u);
+        if (!render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(count_word, 0u);
+        if (render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(count_word, ASTRA_RENDER_MAX_LINE_SEGMENTS + 1u);
+        if (render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(count_word, 2u);
+        store_be32(offset_word, records + 8u);
+        if (render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(offset_word,
+                   batch_end - ASTRA_RENDER_LINE_SEGMENT_BYTES);
+        if (render_batch_valid(validation_batch, sizeof(validation_batch)))
+            return EXIT_FAILURE;
+        store_be32(rects + 4u, (uint32_t)ASTRA_RENDER_OP_FILL << 16);
+        store_be32(offset_word, 0u);
+        store_be32(count_word, 0u);
+    }
     validation_batch[0] = 0u;
     if (render_batch_valid(validation_batch, sizeof(validation_batch)))
         return EXIT_FAILURE;
 
+    /* READ_SURFACE: a 4x2 XRGB8888 read at (1,1) of a 16x8 surface. */
+    (void)memset(read_header, 0, sizeof(read_header));
+    store_be32(read_header + 0u, ASTRA_DISPLAY_SURFACE_READ_MAGIC);
+    store_be32(read_header + 4u, ASTRA_DISPLAY_SURFACE_READ_VERSION);
+    store_be32(read_header + 8u, ASTRA_RENDER_BATCH_WORKSPACE_LIMIT);
+    store_be32(read_header + 12u, 16u * 4u * 8u);
+    store_be32(read_header + 16u, 16u * 4u);
+    store_be32(read_header + 20u, 16u << 16 | 8u);
+    store_be32(read_header + 24u, ASTRA_RENDER_FORMAT_XRGB8888);
+    store_be32(read_header + 28u, 1u << 16 | 1u);
+    store_be32(read_header + 32u, 4u << 16 | 2u);
+    if (!surface_read_valid(read_header, 64u + 4u * 4u * 2u) ||
+        surface_read_valid(read_header, 64u + 4u * 4u * 2u + 4u) ||
+        surface_read_valid(read_header, 64u))
+        return EXIT_FAILURE;
+    {
+        static const struct {
+            uint32_t offset;
+            uint32_t value;
+        } rejected[] = {
+            { 0u, 0u },                                     /* magic */
+            { 4u, 2u },                                     /* version */
+            { 8u, ASTRA_RENDER_BATCH_WORKSPACE_LIMIT - 64u }, /* workspace */
+            { 8u, ASTRA_RENDER_BATCH_MEDIA_LIMIT - 64u },   /* past Media RAM */
+            { 12u, 16u * 4u * 8u - 1u },                    /* short surface */
+            { 16u, 16u * 4u - 4u },                         /* short pitch */
+            { 24u, ASTRA_RENDER_FORMAT_MASK1 },             /* sub-byte */
+            { 28u, 13u << 16 | 1u },                        /* past right */
+            { 28u, 1u << 16 | 7u },                         /* past bottom */
+            { 32u, 0u << 16 | 2u },                         /* empty */
+            { 60u, 1u },                                    /* reserved */
+        };
+
+        for (size_t index = 0u;
+             index < sizeof(rejected) / sizeof(rejected[0]); ++index) {
+            uint32_t saved = load_be32(read_header + rejected[index].offset);
+
+            store_be32(read_header + rejected[index].offset,
+                       rejected[index].value);
+            if (surface_read_valid(read_header, 64u + 4u * 4u * 2u))
+                return EXIT_FAILURE;
+            store_be32(read_header + rejected[index].offset, saved);
+        }
+    }
+    if (!surface_read_valid(read_header, 64u + 4u * 4u * 2u))
+        return EXIT_FAILURE;
+#ifdef ASTRA_HOST_APERTURE
+    {
+        /* Guest batches run with the aperture on, helper batches with it
+           off; a batch that keeps the current choice stores nothing. */
+        static uint32_t registers[ASTRA_CONTROL_BYTES / sizeof(uint32_t)];
+        struct astra_graphics_device mock = {
+            .memory_fd = -1,
+            .capture_lock_fd = -1,
+            .registers = registers,
+            .framebuffer = NULL,
+        };
+        uint32_t *aperture =
+            &registers[ASTRA_REG_RENDER_HOST_APERTURE_BASE / 4u];
+
+        registers[ASTRA_REG_CAPABILITIES / 4u] =
+            ASTRA_CAP_RENDER_HOST_APERTURE;
+        registers[ASTRA_REG_RENDER_STATUS / 4u] = 0u;
+        active_aperture_base = UINT32_MAX;
+        if (select_render_aperture(&mock, 0xbcd00000u) != 0 ||
+            *aperture != 0xbcd00000u)
+            return EXIT_FAILURE;
+        *aperture = 0x5a5a5000u;
+        if (select_render_aperture(&mock, 0xbcd00000u) != 0 ||
+            *aperture != 0x5a5a5000u)
+            return EXIT_FAILURE;
+        *aperture = 0xbcd00000u;
+        if (select_render_aperture(&mock, 0u) != 0 || *aperture != 0u)
+            return EXIT_FAILURE;
+        active_aperture_base = UINT32_MAX;
+    }
+#endif
+
     puts("ASTRA_TERMINAL_DISPLAY_SELF_TEST PASS");
     return EXIT_SUCCESS;
+}
+
+#ifdef ASTRA_HOST_APERTURE
+_Static_assert(ASTRA_DISPLAY_MAILBOX_PAYLOAD_BYTES == ASTRA_HOST_ARENA_BYTES,
+               "the host arena is the display mailbox payload");
+_Static_assert(ASTRA_DISPLAY_MAILBOX_PAYLOAD_BYTES ==
+                   ASTRA_RENDER_BATCH_BUFFER_BYTES,
+               "the render host aperture, the batch window, is the payload");
+#endif
+
+/* Maps the payload. On the DE25 it must be the host arena, whose physical
+   base becomes the render engine's host aperture. */
+static volatile uint8_t *display_payload_map(int fd)
+{
+    void *mapped;
+#ifdef ASTRA_HOST_APERTURE
+    struct astra_host_arena_info info;
+
+    if (ioctl(fd, ASTRA_HOST_ARENA_IOC_INFO, &info) != 0) {
+        perror("display payload is not the host arena");
+        return MAP_FAILED;
+    }
+    if (info.bytes != ASTRA_DISPLAY_MAILBOX_PAYLOAD_BYTES ||
+        info.physical == 0u || info.physical > UINT32_MAX ||
+        (info.physical & 0xfffu) != 0u) {
+        fprintf(stderr, "host arena unusable: 0x%llx, %llu bytes\n",
+                (unsigned long long)info.physical,
+                (unsigned long long)info.bytes);
+        return MAP_FAILED;
+    }
+    host_aperture_base = (uint32_t)info.physical;
+#else
+    struct stat payload_stat;
+
+    if (fstat(fd, &payload_stat) != 0 ||
+        payload_stat.st_size < (off_t)ASTRA_DISPLAY_MAILBOX_PAYLOAD_BYTES) {
+        fprintf(stderr, "shared display payload must be at least %u bytes\n",
+                ASTRA_DISPLAY_MAILBOX_PAYLOAD_BYTES);
+        return MAP_FAILED;
+    }
+#endif
+    mapped = mmap(NULL, ASTRA_DISPLAY_MAILBOX_PAYLOAD_BYTES,
+                  PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (mapped == MAP_FAILED)
+        perror("map shared display payload");
+    return mapped;
 }
 
 int main(int argc, char **argv)
@@ -1776,6 +2441,7 @@ int main(int argc, char **argv)
     struct terminal_scanout_state text_states[2] = {0};
     volatile uint8_t *plane = MAP_FAILED;
     volatile AstraDisplayMailbox *mailbox = MAP_FAILED;
+    volatile uint8_t *payload = MAP_FAILED;
     uint8_t current[TEXT_CELLS];
     struct stat plane_stat;
     struct stat mailbox_stat;
@@ -1783,6 +2449,7 @@ int main(int argc, char **argv)
     bool cursor_on = true;
     int plane_fd = -1;
     int mailbox_fd = -1;
+    int payload_fd = -1;
     int result = EXIT_FAILURE;
     uint32_t text_generation = 0u;
     uint32_t active_scanout;
@@ -1794,12 +2461,18 @@ int main(int argc, char **argv)
     if (argc == 2 && strcmp(argv[1], "--self-test") == 0)
         return self_test();
     if (argc == 2 && strcmp(argv[1], "--mailbox-bytes") == 0) {
-        printf("%u\n", ASTRA_DISPLAY_MAILBOX_BYTES);
+        printf("%u\n", ASTRA_DISPLAY_MAILBOX_HEADER_BYTES);
         return EXIT_SUCCESS;
     }
-    if (argc != 3) {
-        fprintf(stderr, "usage: %s [--self-test|--mailbox-bytes] | "
-                "<shared-post-text-page> <shared-display-mailbox>\n",
+    if (argc == 2 && strcmp(argv[1], "--payload-bytes") == 0) {
+        printf("%u\n", ASTRA_DISPLAY_MAILBOX_PAYLOAD_BYTES);
+        return EXIT_SUCCESS;
+    }
+    if (argc != 4) {
+        fprintf(stderr, "usage: %s "
+                "[--self-test|--mailbox-bytes|--payload-bytes] | "
+                "<shared-post-text-page> <shared-display-mailbox> "
+                "<shared-display-payload>\n",
                 argv[0]);
         return EXIT_FAILURE;
     }
@@ -1827,24 +2500,52 @@ int main(int argc, char **argv)
         goto done;
     }
     if (fstat(mailbox_fd, &mailbox_stat) != 0 ||
-        mailbox_stat.st_size < (off_t)ASTRA_DISPLAY_MAILBOX_BYTES) {
+        mailbox_stat.st_size < (off_t)ASTRA_DISPLAY_MAILBOX_HEADER_BYTES) {
         fprintf(stderr, "shared display mailbox must be at least %u bytes\n",
-                ASTRA_DISPLAY_MAILBOX_BYTES);
+                ASTRA_DISPLAY_MAILBOX_HEADER_BYTES);
         goto done;
     }
-    mailbox = mmap(NULL, ASTRA_DISPLAY_MAILBOX_BYTES,
+    mailbox = mmap(NULL, ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
                    PROT_READ | PROT_WRITE, MAP_SHARED, mailbox_fd, 0);
     if (mailbox == MAP_FAILED) {
         perror("map shared display mailbox");
         goto done;
     }
+    payload_fd = open(argv[3], O_RDWR | O_CLOEXEC);
+    if (payload_fd < 0) {
+        perror("open shared display payload");
+        goto done;
+    }
+    payload = display_payload_map(payload_fd);
+    if (payload == MAP_FAILED)
+        goto done;
     mailbox->magic = ASTRA_DISPLAY_MAILBOX_MAGIC;
-    mailbox->version = ASTRA_DISPLAY_MAILBOX_VERSION_1_5;
+    mailbox->version = ASTRA_DISPLAY_MAILBOX_VERSION_1_7;
     mailbox->completion_sequence = 0u;
     astra_graphics_memory_barrier();
     if (astra_graphics_device_open(&device, false) != 0 ||
         astra_graphics_device_validate(&device, true) != 0)
         goto done;
+    log_access_faults(&device, "at startup");
+#ifdef ASTRA_HOST_APERTURE
+    /* A previous helper may have left the engine enabled, and the aperture
+       refuses a store while it is; a bitstream without the aperture has no
+       register there at all. The helper checks both before storing. */
+    host_payload = payload;
+    if (select_render_aperture(&device, host_aperture_base) != 0)
+        goto done;
+#endif
+    if (astra_graphics_scene_commit_drain(&device, UINT64_C(1000000000)) !=
+        0) {
+        /* Restarting cannot clear it: only a reset of the graphics block
+           does. Stay up and say so once instead of restarting forever. */
+        fprintf(stderr,
+                "graphics scene commit held by hardware: COMMIT=%08x; "
+                "power-cycle the board\n",
+                astra_mmio_read(&device, ASTRA_REG_COMMIT));
+        for (;;)
+            pause();
+    }
     astra_graphics_scene_prepare_empty(&device);
     if (astra_graphics_scene_commit(
             &device, UINT64_C(2000000000), NULL) != 0)
@@ -1887,7 +2588,23 @@ int main(int argc, char **argv)
             uint32_t status = ASTRA_DISPLAY_COMPLETION_BAD_REQUEST;
 
             mailbox_sequence = request.sequence;
-            if (request.id != 0u &&
+            /*
+             * Only a request that changes the screen waits, and only for a
+             * previous change still in flight: render-only batches, surface
+             * reads and the cursor (which orders itself) never do.
+             */
+            if (request.operation != ASTRA_DISPLAY_FRAME_READ_SURFACE &&
+                request.operation != ASTRA_DISPLAY_CURSOR_UPDATE &&
+                request.operation != ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE &&
+                !(request.operation ==
+                      ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
+                  request.frame_bytes >= 8u &&
+                  load_be32((const uint8_t *)(const void *)payload + 4u) ==
+                      ASTRA_RENDER_BATCH_VERSION_1_4) &&
+                finish_pending_present(&device) != 0) {
+                /* The previous present never reached the screen. */
+                status = ASTRA_DISPLAY_COMPLETION_IO_ERROR;
+            } else if (request.id != 0u &&
                 request.operation == ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
                 (request.color_rgb565 & 0xffff0000u) == 0u) {
                 if (present_solid_frame(
@@ -1909,8 +2626,7 @@ int main(int argc, char **argv)
                        request.frame_bytes == ASTRA_FRAMEBUFFER_BYTES) {
                 if (present_rgb565_frame(
                     &device,
-                    (const uint8_t *)(const void *)mailbox +
-                        ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
+                    (const uint8_t *)(const void *)payload,
                     &text_generation, &active_scanout) == 0) {
                     generation = astra_mmio_read(&device,
                                                  ASTRA_REG_GENERATION);
@@ -1926,12 +2642,12 @@ int main(int argc, char **argv)
                            ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
                        request.frame_pitch == 0u &&
                        render_batch_valid(
-                           (const uint8_t *)(const void *)mailbox +
-                               ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
+                           (const uint8_t *)(const void *)payload,
                            request.frame_bytes)) {
                 uint32_t scanout_offset;
                 uint32_t window_scene_offset = 0u;
                 uint32_t window_scene_bytes = 0u;
+                uint32_t window_scene_dimensions = 0u;
                 uint64_t profile_started = astra_monotonic_nanoseconds();
                 uint64_t profile_rendered;
                 uint64_t profile_presented;
@@ -1939,14 +2655,16 @@ int main(int argc, char **argv)
                 uint32_t cursor_flags = 0u;
                 bool batch_cursor;
                 bool window_scene_batch;
+                bool render_only_batch;
                 int render_status;
                 int present_status;
                 const volatile uint8_t *batch =
-                    (const uint8_t *)(const void *)mailbox +
-                    ASTRA_DISPLAY_MAILBOX_HEADER_BYTES;
+                    (const uint8_t *)(const void *)payload;
 
                 window_scene_batch = load_be32(batch + 4u) ==
                                      ASTRA_RENDER_BATCH_VERSION_1_3;
+                render_only_batch = load_be32(batch + 4u) ==
+                                    ASTRA_RENDER_BATCH_VERSION_1_4;
                 batch_cursor = render_batch_cursor(
                     batch, &cursor_packed, &cursor_flags);
                 scanout_offset = load_be32(batch + 28u);
@@ -1963,7 +2681,7 @@ int main(int argc, char **argv)
                             target, capacity, active_window_scene_offset,
                             active_window_scene_bytes))
                         render_status = -1;
-                } else {
+                } else if (!render_only_batch) {
                     render_status = make_render_target_inactive(
                         &device, scanout_offset, &text_generation,
                         &active_scanout);
@@ -1975,17 +2693,20 @@ int main(int argc, char **argv)
                 if (render_status == 0 && window_scene_batch) {
                     render_status = compile_window_scene(
                         &device, batch, request.frame_bytes,
-                        &window_scene_offset, &window_scene_bytes);
+                        &window_scene_offset, &window_scene_bytes,
+                        &window_scene_dimensions);
                 }
                 if (render_status == 0 && batch_cursor)
                     render_status = pointer_update(
                         &device, cursor_packed, cursor_flags, false);
                 profile_rendered = astra_monotonic_nanoseconds();
                 present_status = render_status != 0 ? -1 :
+                    render_only_batch ? 0 :
                     window_scene_batch ?
                         present_window_scene(
                             &device, window_scene_offset,
-                            window_scene_bytes, batch_cursor) :
+                            window_scene_bytes, window_scene_dimensions,
+                            batch_cursor) :
                         present(&device, scanout_offset, batch_cursor);
                 profile_presented = astra_monotonic_nanoseconds();
                 if (getenv("ASTRA_DISPLAY_PROFILE") != NULL)
@@ -1993,14 +2714,15 @@ int main(int argc, char **argv)
                             "display profile bytes=%u commands=%u "
                             "render_us=%llu present_us=%llu\n",
                             request.frame_bytes,
-                            load_be32((const uint8_t *)(const void *)mailbox +
-                                      ASTRA_DISPLAY_MAILBOX_HEADER_BYTES + 12u),
+                            load_be32((const uint8_t *)(const void *)payload + 12u),
                             (unsigned long long)
                                 ((profile_rendered - profile_started) / 1000u),
                             (unsigned long long)
                                 ((profile_presented - profile_rendered) / 1000u));
                 if (render_status == 0 && present_status == 0) {
-                    if (window_scene_batch) {
+                    if (render_only_batch) {
+                        /* Off-screen work: the presented state is unchanged. */
+                    } else if (window_scene_batch) {
                         active_scanout = UINT32_MAX;
                         active_window_scene_offset = window_scene_offset;
                         active_window_scene_bytes = window_scene_bytes;
@@ -2012,7 +2734,24 @@ int main(int argc, char **argv)
                     generation = astra_mmio_read(&device,
                                                  ASTRA_REG_GENERATION);
                     status = ASTRA_DISPLAY_COMPLETION_OK;
-                    display_owned = true;
+                    if (!render_only_batch)
+                        display_owned = true;
+                } else {
+                    status = ASTRA_DISPLAY_COMPLETION_IO_ERROR;
+                }
+            } else if (request.id != 0u &&
+                       request.operation ==
+                           ASTRA_DISPLAY_FRAME_READ_SURFACE &&
+                       request.frame_pitch == 0u &&
+                       surface_read_valid(
+                           (const uint8_t *)(const void *)payload,
+                           request.frame_bytes)) {
+                if (read_surface(&device,
+                                 payload) ==
+                    0) {
+                    generation = astra_mmio_read(&device,
+                                                 ASTRA_REG_GENERATION);
+                    status = ASTRA_DISPLAY_COMPLETION_OK;
                 } else {
                     status = ASTRA_DISPLAY_COMPLETION_IO_ERROR;
                 }
@@ -2021,13 +2760,11 @@ int main(int argc, char **argv)
                            ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE &&
                        request.frame_pitch == 0u &&
                        pointer_image_valid(
-                           (const uint8_t *)(const void *)mailbox +
-                               ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
+                           (const uint8_t *)(const void *)payload,
                            request.frame_bytes)) {
                 if (pointer_image_update(
                         &device,
-                        (const uint8_t *)(const void *)mailbox +
-                            ASTRA_DISPLAY_MAILBOX_HEADER_BYTES) == 0) {
+                        (const uint8_t *)(const void *)payload) == 0) {
                     generation = astra_mmio_read(&device,
                                                  ASTRA_REG_GENERATION);
                     status = ASTRA_DISPLAY_COMPLETION_OK;
@@ -2137,10 +2874,14 @@ done:
     if (plane != MAP_FAILED)
         (void)munmap((void *)plane, TEXT_PAGE_BYTES);
     if (mailbox != MAP_FAILED)
-        (void)munmap((void *)mailbox, ASTRA_DISPLAY_MAILBOX_BYTES);
+        (void)munmap((void *)mailbox, ASTRA_DISPLAY_MAILBOX_HEADER_BYTES);
+    if (payload != MAP_FAILED)
+        (void)munmap((void *)payload, ASTRA_DISPLAY_MAILBOX_PAYLOAD_BYTES);
     if (plane_fd >= 0)
         (void)close(plane_fd);
     if (mailbox_fd >= 0)
         (void)close(mailbox_fd);
+    if (payload_fd >= 0)
+        (void)close(payload_fd);
     return result;
 }

@@ -93,8 +93,17 @@ module tb_astra_front_panel_axi;
         repeat (4) @(posedge clk);
         if (leds[3])
             $fatal(1, "activity LED did not expire");
-        write_reg(8'h04, 32'd0, 2'b11);
-        read_reg(8'h20, 32'd0, 2'b11);
+        // Unmapped accesses answer OKAY and land in the fault record.
+        read_reg(8'h34, 32'd0, 2'b00);
+        write_reg(8'h04, 32'd0, 2'b00);
+        read_reg(8'h20, 32'd0, 2'b00);
+        read_reg(8'h34, 32'd2, 2'b00);
+        read_reg(8'h38, 32'h80030004, 2'b00);
+        write_reg(8'h34, 32'd0, 2'b00);
+        read_reg(8'h34, 32'd0, 2'b00);
+        read_reg(8'h38, 32'd0, 2'b00);
+        read_reg(8'h21, 32'd0, 2'b00);
+        read_reg(8'h38, 32'h00030021, 2'b00);
         $display("ASTRA ARTY FRONT PANEL PASS");
         $finish;
     end

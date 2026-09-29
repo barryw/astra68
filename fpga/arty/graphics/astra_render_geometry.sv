@@ -207,6 +207,18 @@ module astra_render_geometry (
 
     wire signed [18:0] line_e2 =
         $signed({line_error_q[17], line_error_q}) <<< 1;
+    // One Bresenham step per clock: the same decisions the four-state
+    // sequence made, classified against the clip as the pixel is queued.
+    wire line_step_advance_x = line_e2 >= line_dy_q;
+    wire line_step_advance_y = line_e2 <= line_dx_q;
+    wire signed [17:0] line_step_delta =
+        line_step_advance_x && line_step_advance_y ?
+            line_dy_q + line_dx_q :
+        line_step_advance_x ? line_dy_q : line_dx_q;
+    wire line_pixel_in_clip = x_q >= $signed({clip_left_q[15], clip_left_q}) &&
+        x_q < $signed({clip_right_q[15], clip_right_q}) &&
+        y_q >= $signed({clip_top_q[15], clip_top_q}) &&
+        y_q < $signed({clip_bottom_q[15], clip_bottom_q});
     wire circle_decrement_x = circle_error_q >=
         $signed({{3{circle_x_q[16]}}, circle_x_q});
 
@@ -520,10 +532,25 @@ module astra_render_geometry (
                     endcase
                 end
 
-                state[2]: if (!emit_valid_q) begin
-                    line_finished_q <= x_q == line_x1_q && y_q == line_y1_q;
-                    queue_pixel(x_q, y_q);
-                    state <= ST_LINE_STEP;
+                state[2]: if (!emit_valid_q || emit_accept) begin
+                    emit_x_q <= x_q;
+                    emit_y_q <= y_q;
+                    emit_color_q <= foreground_q;
+                    emit_valid_q <= 1'b1;
+                    // Classification stays one cycle behind valid; a
+                    // back-to-back pixel carries its own clip result.
+                    emit_in_clip_q <= line_pixel_in_clip;
+                    if (x_q == line_x1_q && y_q == line_y1_q) begin
+                        line_finished_q <= 1'b1;
+                        state <= ST_LINE_STEP;
+                    end else begin
+                        line_finished_q <= 1'b0;
+                        if (line_step_advance_x)
+                            x_q <= x_q + line_step_x_q;
+                        if (line_step_advance_y)
+                            y_q <= y_q + line_step_y_q;
+                        line_error_q <= line_error_q + line_step_delta;
+                    end
                 end
                 state[15]: begin
                     if (line_apply_q) begin

@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 VIVADO_SETTINGS=${VIVADO_SETTINGS:-/tools/Xilinx/Vivado/2024.2/settings64.sh}
-ASTRA_OOC_COMPONENT=${ASTRA_OOC_COMPONENT:-tile-span}
+ASTRA_OOC_COMPONENT=${ASTRA_OOC_COMPONENT:-framebuffer-line}
 
 python3 "$SCRIPT_DIR/protocol/generate_protocol.py"
 
@@ -16,12 +16,6 @@ fi
 source "$VIVADO_SETTINGS"
 
 case "$ASTRA_OOC_COMPONENT" in
-    tile-span)
-        OOC_SCRIPT=synth_tile_span_ooc.tcl
-        ;;
-    tile-line)
-        OOC_SCRIPT=synth_tile_line_ooc.tcl
-        ;;
     framebuffer-line)
         OOC_SCRIPT=synth_framebuffer_line_ooc.tcl
         ;;

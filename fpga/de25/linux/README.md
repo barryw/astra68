@@ -86,3 +86,44 @@ modules described above. Install `astra_display_capture.ko` and
 DMA first and both remain resident until shutdown. The immutable Astra release
 contains `astra-remote-desktop.service`, and the release deployer installs the
 unit without enabling it; Astra's remote-desktop lease starts it on request.
+
+## Graphics arena
+
+`astra_graphics_arena.ko` exposes the media RAM behind the HPS-to-FPGA bridge
+(`0x40000000`, 512 MiB) as `/dev/astra-graphics-arena`, mapped
+write-combining (Normal non-cacheable). `/dev/mem` can only map memory outside
+System RAM as Device-nGnRnE, where every 8-byte store waits for its bridge
+response: a 32 KiB render batch took 1.8 ms to stage and an empty compose
+6.3 ms. Through the arena device the same work took 0.3 ms and 1.4-2.1 ms on
+the board. Nothing is cached, so no cache maintenance is needed; the DE25
+`astra-terminal-display` (built with `PLATFORM=de25`) maps the arena only
+through this device and orders arena stores before each doorbell with the DSB
+in `astra_graphics_memory_barrier`, as it did before.
+
+It is built with the capture module by the kernel `modules` command above.
+Install `astra_graphics_arena.ko` under the running kernel's module tree, run
+`depmod`, and install `fpga/de25/astra-graphics-arena.conf` in
+`/etc/modules-load.d`. Without it the terminal display fails at startup with
+`open /dev/astra-graphics-arena`.
+
+## Host arena
+
+The same module also creates `/dev/astra-host-arena`: the display mailbox
+payload (`ASTRA_DISPLAY_MAILBOX_PAYLOAD_BYTES`, 8 MiB), one physically
+contiguous block of HPS memory below 4 GiB allocated from CMA at load and
+shared by every opener. QEMU copies each guest render batch into it (mailbox
+1.7 keeps the futex header in `ASTRA_DISPLAY_MAILBOX_PATH` and puts the payload
+at `ASTRA_DISPLAY_PAYLOAD_PATH`; `run-arty.sh` uses this device when it
+exists). `ASTRA_HOST_ARENA_IOC_INFO` returns its physical base, which the
+DE25 display helper writes to the render engine's host aperture
+(`RENDER_HOST_APERTURE_BASE`, `0x248`, present only when `CAPABILITIES` bit 13
+is set; the helper refuses to start otherwise): engine reads of the batch window,
+arena offsets `0x00800000`-`0x00ffffff`, then come from this memory over
+F2SDRAM, and the helper copies nothing across the HPS-to-FPGA bridge. Engine
+writes stay in media RAM. F2SDRAM is neither coherent nor behind the SMMU,
+so the block is mapped Normal non-cacheable and a writer completes its
+stores with a DSB before the engine is rung.
+
+`astra-host-read-bench` (built with `PLATFORM=de25` in `fpga/arty/linux`)
+measures CPU writes into the host arena and into media RAM, and an uploaded
+BLIT read from each, checked byte for byte. Run it with Astra stopped.

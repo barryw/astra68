@@ -12,7 +12,11 @@ module astra_render_pixel_writer #(
     parameter integer AXI_ID_WIDTH = 6,
     parameter [AXI_ID_WIDTH-1:0] AXI_ID = {AXI_ID_WIDTH{1'b0}},
     parameter integer FIFO_DEPTH = 16,
-    parameter integer MAX_OUTSTANDING = 8
+    parameter integer MAX_OUTSTANDING = 8,
+    // POSTED: write responses belong to the command processor. The writer
+    // is done once every write is issued; a barrier waits for
+    // external_drained, the processor's count of unanswered writes.
+    parameter bit POSTED = 1'b0
 ) (
     input  wire                         clk,
     input  wire                         reset,
@@ -20,6 +24,7 @@ module astra_render_pixel_writer #(
     input  wire                         abort,
     input  wire                         flush,
     output wire                         flush_ready,
+    input  wire                         external_drained,
     input  wire                         barrier,
     output wire                         barrier_ready,
     output reg                          barrier_done,
@@ -223,7 +228,9 @@ module astra_render_pixel_writer #(
     assign m_axi_wstrb = issue_strobes;
     assign m_axi_wlast = 1'b1;
     assign m_axi_wvalid = issue_valid && !issue_w_sent;
-    assign m_axi_bready = busy;
+    assign m_axi_bready = !POSTED && busy;
+    wire responses_drained = POSTED ? external_drained :
+        outstanding_count == 0;
 
     always @(posedge clk) begin
         if (reset) begin
@@ -443,7 +450,8 @@ module astra_render_pixel_writer #(
                 end
 
                 case ({issue_complete, b_accept})
-                    2'b10: outstanding_count <= outstanding_count + 1'b1;
+                    2'b10: if (!POSTED)
+                        outstanding_count <= outstanding_count + 1'b1;
                     2'b01: begin
                         if (outstanding_count != 0)
                             outstanding_count <= outstanding_count - 1'b1;
@@ -476,7 +484,7 @@ module astra_render_pixel_writer #(
                     abort_pending <= 1'b0;
                 end else if (barrier_pending && !pack_valid &&
                              !fifo_stage_valid && fifo_count == 0 &&
-                             !issue_valid && outstanding_count == 0) begin
+                             !issue_valid && responses_drained) begin
                     barrier_done <= 1'b1;
                     barrier_pending <= 1'b0;
                 end else if (flush_pending && !pack_valid &&

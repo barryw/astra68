@@ -24,11 +24,18 @@ def constant_rows(spec: dict[str, object]) -> list[tuple[str, int]]:
         ("SURFACE_DESCRIPTOR_BYTES", int(spec["surface_descriptor_bytes"])),
         ("GLYPH_DESCRIPTOR_BYTES", int(spec["glyph_descriptor_bytes"])),
         ("MAX_GLYPH_DESCRIPTORS", int(spec["max_glyph_descriptors"])),
+        ("MAX_FILL_RECTS", int(spec["max_fill_rects"])),
+        ("FILL_RECT_BYTES", int(spec["fill_rect_bytes"])),
+        ("MAX_LINE_SEGMENTS", int(spec["max_line_segments"])),
+        ("LINE_SEGMENT_BYTES", int(spec["line_segment_bytes"])),
         ("RING_ENTRIES", int(spec["ring_entries"])),
         ("MAX_DEADLINE_US", int(spec["max_deadline_us"])),
         ("MAX_SURFACE_DIMENSION", int(spec["max_surface_dimension"])),
+        ("MAX_TRIANGLES", int(spec["max_triangles"])),
+        ("TRIANGLE_VERTEX_BYTES", int(spec["triangle_vertex_bytes"])),
     ]
     for group, prefix in (
+        ("host_aperture", "HOST_APERTURE"),
         ("formats", "FORMAT"),
         ("opcodes", "OP"),
         ("status", "STATUS"),
@@ -37,6 +44,8 @@ def constant_rows(spec: dict[str, object]) -> list[tuple[str, int]]:
         ("geometry_flags", "GEOMETRY_FLAG"),
         ("glyph_flags", "GLYPH_FLAG"),
         ("glyph_options", "GLYPH_OPTION"),
+        ("fill_rects_options", "FILL_RECTS_OPTION"),
+        ("lines_options", "LINES_OPTION"),
         ("blit_rops", "ROP"),
         ("blit_options", "BLIT_OPTION"),
         ("command_word_offsets", "CMD_WORD"),
@@ -44,8 +53,15 @@ def constant_rows(spec: dict[str, object]) -> list[tuple[str, int]]:
         ("flood_word_offsets", "FLOOD_WORD"),
         ("glyph_word_offsets", "GLYPH_WORD"),
         ("glyph_descriptor_word_offsets", "GLYPH_DESCRIPTOR_WORD"),
+        ("fill_rects_word_offsets", "FILL_RECTS_WORD"),
+        ("fill_rect_record_word_offsets", "FILL_RECT_WORD"),
+        ("lines_word_offsets", "LINES_WORD"),
+        ("line_segment_word_offsets", "LINE_SEGMENT_WORD"),
         ("surface_word_offsets", "SURFACE_WORD"),
         ("completion_word_offsets", "COMPLETION_WORD"),
+        ("triangle_options", "TRIANGLE_OPTION"),
+        ("triangle_word_offsets", "TRIANGLE_WORD"),
+        ("triangle_vertex_word_offsets", "TRIANGLE_VERTEX_WORD"),
     ):
         values = spec[group]
         assert isinstance(values, dict)

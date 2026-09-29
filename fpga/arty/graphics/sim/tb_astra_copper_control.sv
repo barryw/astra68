@@ -121,9 +121,10 @@ module tb_astra_copper_control;
             @(negedge clk);
             s_axi_wvalid = 0;
             while (!s_axi_bvalid) @(negedge clk);
-            if (s_axi_bresp == 0)
-                $fatal(1, "AXI write unexpectedly accepted address=%08x",
-                       address);
+            // Refused stores answer OKAY and are recorded, never SLVERR.
+            if (s_axi_bresp != 0 || dut.bresp_code_q != 2'b10)
+                $fatal(1, "AXI write address=%08x bresp=%b code=%b",
+                       address, s_axi_bresp, dut.bresp_code_q);
             s_axi_bready = 1;
             @(negedge clk);
             s_axi_bready = 0;
@@ -308,6 +309,31 @@ module tb_astra_copper_control;
         if (!value[0] || value[15:8] != 8'd4)
             $fatal(1, "rejected DISPATCH fault mismatch status=%08x",
                    value);
+
+        // Access-fault record: two refused stores above, then unmapped and
+        // misaligned accesses; a store to COUNT clears it.
+        axi_read(32'h4038, value);
+        if (value != 2)
+            $fatal(1, "copper fault count %0d", value);
+        axi_read(32'h403c, value);
+        if (value != 32'h80024030)
+            $fatal(1, "copper first fault %08x", value);
+        axi_write(32'h4038, 32'd0);
+        axi_read(32'h4038, value);
+        if (value != 0)
+            $fatal(1, "copper fault count not cleared %0d", value);
+        axi_write(32'h40f0, 32'hffffffff);
+        axi_read(32'h40f4, value);
+        if (value != 0)
+            $fatal(1, "unmapped copper read returned %08x", value);
+        axi_read(32'h4002, value);
+        axi_read(32'h4038, value);
+        if (value != 3)
+            $fatal(1, "copper fault count %0d, expected 3", value);
+        axi_read(32'h403c, value);
+        if (value != 32'h800340f0)
+            $fatal(1, "copper first unmapped fault %08x", value);
+        axi_write(32'h4038, 32'd0);
         $display("ASTRA COPPER CONTROL PASS");
         $finish;
     end

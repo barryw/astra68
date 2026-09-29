@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Astra68 contributors
 //
 // Production Vega graphics pipeline: frame-safe control, four-line
-// scheduling, independent DDR readers, dual-clock line stores, palettes, and
-// the fixed-order framebuffer/tile compositor.
+// scheduling, independent DDR readers, dual-clock line stores, palette, and
+// the fixed-order sprite/framebuffer compositor.
 `timescale 1ns/1ps
 `default_nettype none
 
@@ -14,7 +14,8 @@ module astra_graphics_pipeline #(
     parameter integer TOTAL_WIDTH = 2200,
     parameter integer TOTAL_HEIGHT = 1125,
     parameter integer BUILD_CYCLES_PER_US = 200,
-    parameter integer OUTPUT_PREFETCH = 38,
+    // One palette clock, three five-clock blends, and two output clocks.
+    parameter integer OUTPUT_PREFETCH = 18,
     parameter integer AXI_ID_WIDTH = 6,
     parameter integer FRAMEBUFFER_AXI_DATA_WIDTH = 64,
     parameter integer FRAMEBUFFER_MAX_BURST_BEATS = 16,
@@ -24,7 +25,8 @@ module astra_graphics_pipeline #(
     parameter integer BOOT_TEXT_ORIGIN_X = 396,
     parameter integer BOOT_TEXT_ORIGIN_Y = 744,
     parameter integer BOOT_TEXT_CELL_WIDTH = 24,
-    parameter integer BOOT_TEXT_ROW_PITCH = 48
+    parameter integer BOOT_TEXT_ROW_PITCH = 48,
+    parameter integer HOST_APERTURE = 0
 ) (
     input  wire                         build_clk,
     input  wire                         build_reset,
@@ -44,6 +46,7 @@ module astra_graphics_pipeline #(
     output wire [31:0]                  commit_deferrals,
     output wire                         scene_active,
     output wire                         render_interrupt,
+    output wire [31:0]                  render_host_aperture_base,
     output wire [31:0]                  framebuffer_axi_debug_status,
     output wire [31:0]                  framebuffer_axi_ar_accept_count,
     output wire [31:0]                  framebuffer_axi_r_accept_count,
@@ -87,39 +90,7 @@ module astra_graphics_pipeline #(
     input  wire                         fb_axi_rvalid,
     output wire                         fb_axi_rready,
 
-    output wire [AXI_ID_WIDTH-1:0]      tile0_axi_arid,
-    output wire [31:0]                  tile0_axi_araddr,
-    output wire [7:0]                   tile0_axi_arlen,
-    output wire [2:0]                   tile0_axi_arsize,
-    output wire [1:0]                   tile0_axi_arburst,
-    output wire [3:0]                   tile0_axi_arcache,
-    output wire [2:0]                   tile0_axi_arprot,
-    output wire [3:0]                   tile0_axi_arqos,
-    output wire                         tile0_axi_arvalid,
-    input  wire                         tile0_axi_arready,
-    input  wire [AXI_ID_WIDTH-1:0]      tile0_axi_rid,
-    input  wire [63:0]                  tile0_axi_rdata,
-    input  wire [1:0]                   tile0_axi_rresp,
-    input  wire                         tile0_axi_rlast,
-    input  wire                         tile0_axi_rvalid,
-    output wire                         tile0_axi_rready,
 
-    output wire [AXI_ID_WIDTH-1:0]      tile1_axi_arid,
-    output wire [31:0]                  tile1_axi_araddr,
-    output wire [7:0]                   tile1_axi_arlen,
-    output wire [2:0]                   tile1_axi_arsize,
-    output wire [1:0]                   tile1_axi_arburst,
-    output wire [3:0]                   tile1_axi_arcache,
-    output wire [2:0]                   tile1_axi_arprot,
-    output wire [3:0]                   tile1_axi_arqos,
-    output wire                         tile1_axi_arvalid,
-    input  wire                         tile1_axi_arready,
-    input  wire [AXI_ID_WIDTH-1:0]      tile1_axi_rid,
-    input  wire [63:0]                  tile1_axi_rdata,
-    input  wire [1:0]                   tile1_axi_rresp,
-    input  wire                         tile1_axi_rlast,
-    input  wire                         tile1_axi_rvalid,
-    output wire                         tile1_axi_rready,
 
     output wire [AXI_ID_WIDTH-1:0]      sprite_axi_arid,
     output wire [31:0]                  sprite_axi_araddr,
@@ -215,11 +186,9 @@ module astra_graphics_pipeline #(
     wire commit_pending_status;
     wire scheduler_idle;
     wire framebuffer_busy;
-    wire tile0_busy;
-    wire tile1_busy;
     wire sprite_busy;
     wire commit_safe = scheduler_idle && !framebuffer_busy &&
-                       !tile0_busy && !tile1_busy && !sprite_busy;
+                       !sprite_busy;
 
     wire scene_enable_build;
     wire scene_enable_baseline;
@@ -261,71 +230,7 @@ module astra_graphics_pipeline #(
     wire [10:0] display_viewport_y;
     wire [10:0] display_viewport_width;
     wire [10:0] display_viewport_height;
-    wire tile0_enable_build;
-    wire tile0_above_build;
-    wire [7:0] tile0_opacity_build;
-    wire tile0_enable_baseline;
-    wire tile0_above_baseline;
-    wire [7:0] tile0_opacity_baseline;
-    wire tile0_tile_16_build;
-    wire tile0_index_8_build;
-    wire [3:0] tile0_map_width_log2_build;
-    wire [3:0] tile0_map_height_log2_build;
-    wire tile0_tile_16_baseline;
-    wire tile0_index_8_baseline;
-    wire [3:0] tile0_map_width_log2_baseline;
-    wire [3:0] tile0_map_height_log2_baseline;
-    wire tile0_wrap_x_build;
-    wire tile0_wrap_y_build;
-    wire tile0_transparent_enable_build;
-    wire [7:0] tile0_transparent_index_build;
-    wire signed [31:0] tile0_scroll_x_build;
-    wire signed [31:0] tile0_scroll_y_build;
-    wire tile0_wrap_x_baseline;
-    wire tile0_wrap_y_baseline;
-    wire tile0_transparent_enable_baseline;
-    wire [7:0] tile0_transparent_index_baseline;
-    wire signed [31:0] tile0_scroll_x_baseline;
-    wire signed [31:0] tile0_scroll_y_baseline;
-    wire [31:0] tile0_map_base_build;
-    wire [31:0] tile0_pattern_base_build;
-    wire [16:0] tile0_tile_count_build;
-    wire [31:0] tile0_map_base_baseline;
-    wire [31:0] tile0_pattern_base_baseline;
-    wire [16:0] tile0_tile_count_baseline;
 
-    wire tile1_enable_build;
-    wire tile1_above_build;
-    wire [7:0] tile1_opacity_build;
-    wire tile1_enable_baseline;
-    wire tile1_above_baseline;
-    wire [7:0] tile1_opacity_baseline;
-    wire tile1_tile_16_build;
-    wire tile1_index_8_build;
-    wire [3:0] tile1_map_width_log2_build;
-    wire [3:0] tile1_map_height_log2_build;
-    wire tile1_tile_16_baseline;
-    wire tile1_index_8_baseline;
-    wire [3:0] tile1_map_width_log2_baseline;
-    wire [3:0] tile1_map_height_log2_baseline;
-    wire tile1_wrap_x_build;
-    wire tile1_wrap_y_build;
-    wire tile1_transparent_enable_build;
-    wire [7:0] tile1_transparent_index_build;
-    wire signed [31:0] tile1_scroll_x_build;
-    wire signed [31:0] tile1_scroll_y_build;
-    wire tile1_wrap_x_baseline;
-    wire tile1_wrap_y_baseline;
-    wire tile1_transparent_enable_baseline;
-    wire [7:0] tile1_transparent_index_baseline;
-    wire signed [31:0] tile1_scroll_x_baseline;
-    wire signed [31:0] tile1_scroll_y_baseline;
-    wire [31:0] tile1_map_base_build;
-    wire [31:0] tile1_pattern_base_build;
-    wire [16:0] tile1_tile_count_build;
-    wire [31:0] tile1_map_base_baseline;
-    wire [31:0] tile1_pattern_base_baseline;
-    wire [16:0] tile1_tile_count_baseline;
 
     wire sprite_enable_build;
     wire sprite_enable_baseline;
@@ -408,10 +313,6 @@ module astra_graphics_pipeline #(
     wire framebuffer_palette_write_enable;
     wire [7:0] framebuffer_palette_write_index;
     wire [31:0] framebuffer_palette_write_argb;
-    wire tile_palette_write_enable;
-    wire [3:0] tile_palette_write_bank;
-    wire [7:0] tile_palette_write_index;
-    wire [31:0] tile_palette_write_argb;
     wire palette_host_write_ready;
     wire palette_restore_busy;
     wire palette_restore_done;
@@ -650,28 +551,6 @@ module astra_graphics_pipeline #(
         .baseline_framebuffer_wrap_y(framebuffer_wrap_y_baseline),
         .baseline_framebuffer_key_enable(framebuffer_key_enable_baseline),
         .baseline_framebuffer_key(framebuffer_key_baseline),
-        .baseline_tile0_enable(tile0_enable_baseline),
-        .baseline_tile0_above(tile0_above_baseline),
-        .baseline_tile0_opacity(tile0_opacity_baseline),
-        .baseline_tile0_wrap_x(tile0_wrap_x_baseline),
-        .baseline_tile0_wrap_y(tile0_wrap_y_baseline),
-        .baseline_tile0_transparent_enable(
-            tile0_transparent_enable_baseline),
-        .baseline_tile0_transparent_index(
-            tile0_transparent_index_baseline),
-        .baseline_tile0_scroll_x(tile0_scroll_x_baseline),
-        .baseline_tile0_scroll_y(tile0_scroll_y_baseline),
-        .baseline_tile1_enable(tile1_enable_baseline),
-        .baseline_tile1_above(tile1_above_baseline),
-        .baseline_tile1_opacity(tile1_opacity_baseline),
-        .baseline_tile1_wrap_x(tile1_wrap_x_baseline),
-        .baseline_tile1_wrap_y(tile1_wrap_y_baseline),
-        .baseline_tile1_transparent_enable(
-            tile1_transparent_enable_baseline),
-        .baseline_tile1_transparent_index(
-            tile1_transparent_index_baseline),
-        .baseline_tile1_scroll_x(tile1_scroll_x_baseline),
-        .baseline_tile1_scroll_y(tile1_scroll_y_baseline),
         .baseline_sprite_enable(sprite_enable_baseline),
         .validate_target(copper_validate_move_target),
         .validate_data(copper_validate_move_data),
@@ -687,10 +566,6 @@ module astra_graphics_pipeline #(
         .framebuffer_palette_write_enable(),
         .framebuffer_palette_write_index(),
         .framebuffer_palette_write_argb(),
-        .tile_palette_write_enable(),
-        .tile_palette_write_bank(),
-        .tile_palette_write_index(),
-        .tile_palette_write_argb(),
         .sprite_palette_write_enable(
             copper_sprite_palette_write_enable),
         .sprite_palette_write_bank(copper_sprite_palette_write_bank),
@@ -703,24 +578,6 @@ module astra_graphics_pipeline #(
         .framebuffer_wrap_y(framebuffer_wrap_y_build),
         .framebuffer_key_enable(framebuffer_key_enable_build),
         .framebuffer_key(framebuffer_key_build),
-        .tile0_enable(tile0_enable_build),
-        .tile0_above(tile0_above_build),
-        .tile0_opacity(tile0_opacity_build),
-        .tile0_wrap_x(tile0_wrap_x_build),
-        .tile0_wrap_y(tile0_wrap_y_build),
-        .tile0_transparent_enable(tile0_transparent_enable_build),
-        .tile0_transparent_index(tile0_transparent_index_build),
-        .tile0_scroll_x(tile0_scroll_x_build),
-        .tile0_scroll_y(tile0_scroll_y_build),
-        .tile1_enable(tile1_enable_build),
-        .tile1_above(tile1_above_build),
-        .tile1_opacity(tile1_opacity_build),
-        .tile1_wrap_x(tile1_wrap_x_build),
-        .tile1_wrap_y(tile1_wrap_y_build),
-        .tile1_transparent_enable(tile1_transparent_enable_build),
-        .tile1_transparent_index(tile1_transparent_index_build),
-        .tile1_scroll_x(tile1_scroll_x_build),
-        .tile1_scroll_y(tile1_scroll_y_build),
         .sprite_enable(sprite_enable_build)
     );
 
@@ -747,22 +604,6 @@ module astra_graphics_pipeline #(
         .baseline_framebuffer_viewport_y(framebuffer_viewport_y_baseline),
         .baseline_framebuffer_wrap_x(framebuffer_wrap_x_baseline),
         .baseline_framebuffer_wrap_y(framebuffer_wrap_y_baseline),
-        .baseline_tile0_enable(tile0_enable_baseline),
-        .baseline_tile0_tile_16(tile0_tile_16_baseline),
-        .baseline_tile0_index_8(tile0_index_8_baseline),
-        .baseline_tile0_map_width_log2(tile0_map_width_log2_baseline),
-        .baseline_tile0_map_height_log2(tile0_map_height_log2_baseline),
-        .baseline_tile0_map_base(tile0_map_base_baseline),
-        .baseline_tile0_pattern_base(tile0_pattern_base_baseline),
-        .baseline_tile0_tile_count(tile0_tile_count_baseline),
-        .baseline_tile1_enable(tile1_enable_baseline),
-        .baseline_tile1_tile_16(tile1_tile_16_baseline),
-        .baseline_tile1_index_8(tile1_index_8_baseline),
-        .baseline_tile1_map_width_log2(tile1_map_width_log2_baseline),
-        .baseline_tile1_map_height_log2(tile1_map_height_log2_baseline),
-        .baseline_tile1_map_base(tile1_map_base_baseline),
-        .baseline_tile1_pattern_base(tile1_pattern_base_baseline),
-        .baseline_tile1_tile_count(tile1_tile_count_baseline),
         .validate_target(copper_validate_move_target),
         .validate_data(copper_validate_move_data),
         .validate_allowed(copper_structural_validate_allowed),
@@ -778,20 +619,6 @@ module astra_graphics_pipeline #(
         .framebuffer_pitch(framebuffer_pitch_build),
         .framebuffer_width(framebuffer_width_build),
         .framebuffer_height(framebuffer_height_build),
-        .tile0_tile_16(tile0_tile_16_build),
-        .tile0_index_8(tile0_index_8_build),
-        .tile0_map_width_log2(tile0_map_width_log2_build),
-        .tile0_map_height_log2(tile0_map_height_log2_build),
-        .tile0_map_base(tile0_map_base_build),
-        .tile0_pattern_base(tile0_pattern_base_build),
-        .tile0_tile_count(tile0_tile_count_build),
-        .tile1_tile_16(tile1_tile_16_build),
-        .tile1_index_8(tile1_index_8_build),
-        .tile1_map_width_log2(tile1_map_width_log2_build),
-        .tile1_map_height_log2(tile1_map_height_log2_build),
-        .tile1_map_base(tile1_map_base_build),
-        .tile1_pattern_base(tile1_pattern_base_build),
-        .tile1_tile_count(tile1_tile_count_build),
         .candidates_accepted(),
         .candidates_rejected(),
         .candidates_deferred()
@@ -817,14 +644,9 @@ module astra_graphics_pipeline #(
                 copper_validate_exact_supported;
         end
     end
-    // Validation already proved the target and payload before promotion.
-    // Only the two permissions that can change with a new scene baseline
-    // remain dynamic at execution time.
-    assign copper_move_allowed =
-        !(copper_move_target == 16'h0098 && copper_move_data[0] &&
-          !tile0_enable_baseline) &&
-        !(copper_move_target == 16'h00d8 && copper_move_data[0] &&
-          !tile1_enable_baseline);
+    // The active Copper bank was validated before promotion. No remaining
+    // visual target has a scene-dependent execution permission.
+    assign copper_move_allowed = 1'b1;
     assign copper_validate_move_allowed =
         copper_structural_validate_allowed_q ||
         (copper_register_validate_allowed_q &&
@@ -912,7 +734,8 @@ module astra_graphics_pipeline #(
         .BOOT_TEXT_ORIGIN_X(BOOT_TEXT_ORIGIN_X),
         .BOOT_TEXT_ORIGIN_Y(BOOT_TEXT_ORIGIN_Y),
         .BOOT_TEXT_CELL_WIDTH(BOOT_TEXT_CELL_WIDTH),
-        .BOOT_TEXT_ROW_PITCH(BOOT_TEXT_ROW_PITCH)
+        .BOOT_TEXT_ROW_PITCH(BOOT_TEXT_ROW_PITCH),
+        .HOST_APERTURE(HOST_APERTURE)
     ) control_i (
         .clk(build_clk),
         .reset(build_reset),
@@ -957,38 +780,6 @@ module astra_graphics_pipeline #(
         .framebuffer_axi_last_ar_address(framebuffer_axi_last_ar_address),
         .framebuffer_axi_response_stall_cycles(
             framebuffer_axi_response_stall_cycles),
-        .tile0_enable(tile0_enable_baseline),
-        .tile0_above_framebuffer(tile0_above_baseline),
-        .tile0_opacity(tile0_opacity_baseline),
-        .tile0_tile_16(tile0_tile_16_baseline),
-        .tile0_index_8(tile0_index_8_baseline),
-        .tile0_map_width_log2(tile0_map_width_log2_baseline),
-        .tile0_map_height_log2(tile0_map_height_log2_baseline),
-        .tile0_wrap_x(tile0_wrap_x_baseline),
-        .tile0_wrap_y(tile0_wrap_y_baseline),
-        .tile0_transparent_enable(tile0_transparent_enable_baseline),
-        .tile0_transparent_index(tile0_transparent_index_baseline),
-        .tile0_scroll_x(tile0_scroll_x_baseline),
-        .tile0_scroll_y(tile0_scroll_y_baseline),
-        .tile0_map_base(tile0_map_base_baseline),
-        .tile0_pattern_base(tile0_pattern_base_baseline),
-        .tile0_tile_count(tile0_tile_count_baseline),
-        .tile1_enable(tile1_enable_baseline),
-        .tile1_above_framebuffer(tile1_above_baseline),
-        .tile1_opacity(tile1_opacity_baseline),
-        .tile1_tile_16(tile1_tile_16_baseline),
-        .tile1_index_8(tile1_index_8_baseline),
-        .tile1_map_width_log2(tile1_map_width_log2_baseline),
-        .tile1_map_height_log2(tile1_map_height_log2_baseline),
-        .tile1_wrap_x(tile1_wrap_x_baseline),
-        .tile1_wrap_y(tile1_wrap_y_baseline),
-        .tile1_transparent_enable(tile1_transparent_enable_baseline),
-        .tile1_transparent_index(tile1_transparent_index_baseline),
-        .tile1_scroll_x(tile1_scroll_x_baseline),
-        .tile1_scroll_y(tile1_scroll_y_baseline),
-        .tile1_map_base(tile1_map_base_baseline),
-        .tile1_pattern_base(tile1_pattern_base_baseline),
-        .tile1_tile_count(tile1_tile_count_baseline),
         .sprite_enable(sprite_enable_baseline),
         .sprite_descriptor_write_enable(
             sprite_descriptor_write_enable),
@@ -1031,10 +822,6 @@ module astra_graphics_pipeline #(
         .framebuffer_palette_write_enable(framebuffer_palette_write_enable),
         .framebuffer_palette_write_index(framebuffer_palette_write_index),
         .framebuffer_palette_write_argb(framebuffer_palette_write_argb),
-        .tile_palette_write_enable(tile_palette_write_enable),
-        .tile_palette_write_bank(tile_palette_write_bank),
-        .tile_palette_write_index(tile_palette_write_index),
-        .tile_palette_write_argb(tile_palette_write_argb),
         .palette_write_ready(palette_host_write_ready),
         .boot_text_shadow_enable(boot_text_shadow_enable),
         .boot_text_write_enable(boot_text_write_enable),
@@ -1073,6 +860,7 @@ module astra_graphics_pipeline #(
         .render_completion_producer(render_completion_producer),
         .render_completion_consumer(render_completion_consumer),
         .render_resource_generation(render_resource_generation),
+        .render_host_aperture_base(render_host_aperture_base),
         .render_busy(render_busy),
         .render_engine_reset_active(render_engine_reset_active),
         .render_configuration_fault(render_configuration_fault),
@@ -1257,9 +1045,9 @@ module astra_graphics_pipeline #(
     wire [1:0] scheduler_build_slot;
     wire [10:0] scheduler_line_y;
     wire [10:0] scheduler_source_y;
-    wire [3:0] scheduler_client_enable;
-    wire [3:0] scheduler_client_done;
-    wire [3:0] scheduler_client_complete;
+    wire [1:0] scheduler_client_enable;
+    wire [1:0] scheduler_client_done;
+    wire [1:0] scheduler_client_complete;
     wire [1:0] pixel_read_slot;
     wire pixel_line_available;
     wire [3:0] pixel_slot_valid;
@@ -1305,8 +1093,6 @@ module astra_graphics_pipeline #(
         .quiesce(commit_quiesce),
         .scene_enable(scene_enable_build),
         .framebuffer_enable(framebuffer_enable_build),
-        .tile0_enable(tile0_enable_build),
-        .tile1_enable(tile1_enable_build),
         .sprite_enable(sprite_enable_build),
         .display_viewport_y(display_viewport_y),
         .display_viewport_height(display_viewport_height),
@@ -1357,33 +1143,7 @@ module astra_graphics_pipeline #(
     wire [31:0] framebuffer_build_cycles;
     wire [31:0] framebuffer_read_bytes;
 
-    wire tile0_done;
-    wire tile0_line_complete;
-    wire tile0_pixel_valid;
-    wire [3:0] tile0_pixel_bank;
-    wire [7:0] tile0_pixel_index;
-    wire [3:0] tile0_slot_valid;
-    wire tile0_config_error;
-    wire tile0_descriptor_error;
-    wire tile0_fetch_error;
-    wire [1:0] tile0_completed_slot;
-    wire [31:0] tile0_build_cycles;
-    wire [31:0] tile0_map_read_bytes;
-    wire [31:0] tile0_pattern_read_bytes;
 
-    wire tile1_done;
-    wire tile1_line_complete;
-    wire tile1_pixel_valid;
-    wire [3:0] tile1_pixel_bank;
-    wire [7:0] tile1_pixel_index;
-    wire [3:0] tile1_slot_valid;
-    wire tile1_config_error;
-    wire tile1_descriptor_error;
-    wire tile1_fetch_error;
-    wire [1:0] tile1_completed_slot;
-    wire [31:0] tile1_build_cycles;
-    wire [31:0] tile1_map_read_bytes;
-    wire [31:0] tile1_pattern_read_bytes;
 
     wire [10:0] line_read_x;
 
@@ -1455,129 +1215,8 @@ module astra_graphics_pipeline #(
         .pixel_value(framebuffer_pixel_value)
     );
 
-    astra_tile_line_builder #(
-        .OUTPUT_WIDTH(OUTPUT_WIDTH),
-        .AXI_ID_WIDTH(AXI_ID_WIDTH),
-        .AXI_ID({AXI_ID_WIDTH{1'b0}}),
-        .TRUSTED_CONFIG(1)
-    ) tile0_builder_i (
-        .build_clk(build_clk),
-        .build_reset(build_reset),
-        .start(scheduler_start && scheduler_client_enable[1]),
-        .build_slot(scheduler_build_slot),
-        .line_y(scheduler_source_y),
-        .scroll_x(tile0_scroll_x_build),
-        .scroll_y(tile0_scroll_y_build),
-        .tile_16(tile0_tile_16_build),
-        .index_8(tile0_index_8_build),
-        .map_width_log2(tile0_map_width_log2_build),
-        .map_height_log2(tile0_map_height_log2_build),
-        .wrap_x(tile0_wrap_x_build),
-        .wrap_y(tile0_wrap_y_build),
-        .transparent_enable(tile0_transparent_enable_build),
-        .transparent_index(tile0_transparent_index_build),
-        .map_base(tile0_map_base_build),
-        .pattern_base(tile0_pattern_base_build),
-        .tile_count(tile0_tile_count_build),
-        .arena_base(ARENA_BASE),
-        .arena_limit(ARENA_LIMIT),
-        .busy(tile0_busy),
-        .done(tile0_done),
-        .line_complete(tile0_line_complete),
-        .completed_slot(tile0_completed_slot),
-        .slot_valid(tile0_slot_valid),
-        .config_error(tile0_config_error),
-        .descriptor_error(tile0_descriptor_error),
-        .fetch_error(tile0_fetch_error),
-        .build_cycles(tile0_build_cycles),
-        .map_read_bytes(tile0_map_read_bytes),
-        .pattern_read_bytes(tile0_pattern_read_bytes),
-        .m_axi_arid(tile0_axi_arid),
-        .m_axi_araddr(tile0_axi_araddr),
-        .m_axi_arlen(tile0_axi_arlen),
-        .m_axi_arsize(tile0_axi_arsize),
-        .m_axi_arburst(tile0_axi_arburst),
-        .m_axi_arcache(tile0_axi_arcache),
-        .m_axi_arprot(tile0_axi_arprot),
-        .m_axi_arqos(tile0_axi_arqos),
-        .m_axi_arvalid(tile0_axi_arvalid),
-        .m_axi_arready(tile0_axi_arready),
-        .m_axi_rid(tile0_axi_rid),
-        .m_axi_rdata(tile0_axi_rdata),
-        .m_axi_rresp(tile0_axi_rresp),
-        .m_axi_rlast(tile0_axi_rlast),
-        .m_axi_rvalid(tile0_axi_rvalid),
-        .m_axi_rready(tile0_axi_rready),
-        .pixel_clk(pixel_clk),
-        .pixel_reset(pixel_reset),
-        .pixel_read_slot(pixel_read_slot),
-        .pixel_read_x(line_read_x),
-        .pixel_valid(tile0_pixel_valid),
-        .pixel_palette_bank(tile0_pixel_bank),
-        .pixel_index(tile0_pixel_index)
-    );
-
-    astra_tile_line_builder #(
-        .OUTPUT_WIDTH(OUTPUT_WIDTH),
-        .AXI_ID_WIDTH(AXI_ID_WIDTH),
-        .AXI_ID({AXI_ID_WIDTH{1'b0}}),
-        .TRUSTED_CONFIG(1)
-    ) tile1_builder_i (
-        .build_clk(build_clk),
-        .build_reset(build_reset),
-        .start(scheduler_start && scheduler_client_enable[2]),
-        .build_slot(scheduler_build_slot),
-        .line_y(scheduler_source_y),
-        .scroll_x(tile1_scroll_x_build),
-        .scroll_y(tile1_scroll_y_build),
-        .tile_16(tile1_tile_16_build),
-        .index_8(tile1_index_8_build),
-        .map_width_log2(tile1_map_width_log2_build),
-        .map_height_log2(tile1_map_height_log2_build),
-        .wrap_x(tile1_wrap_x_build),
-        .wrap_y(tile1_wrap_y_build),
-        .transparent_enable(tile1_transparent_enable_build),
-        .transparent_index(tile1_transparent_index_build),
-        .map_base(tile1_map_base_build),
-        .pattern_base(tile1_pattern_base_build),
-        .tile_count(tile1_tile_count_build),
-        .arena_base(ARENA_BASE),
-        .arena_limit(ARENA_LIMIT),
-        .busy(tile1_busy),
-        .done(tile1_done),
-        .line_complete(tile1_line_complete),
-        .completed_slot(tile1_completed_slot),
-        .slot_valid(tile1_slot_valid),
-        .config_error(tile1_config_error),
-        .descriptor_error(tile1_descriptor_error),
-        .fetch_error(tile1_fetch_error),
-        .build_cycles(tile1_build_cycles),
-        .map_read_bytes(tile1_map_read_bytes),
-        .pattern_read_bytes(tile1_pattern_read_bytes),
-        .m_axi_arid(tile1_axi_arid),
-        .m_axi_araddr(tile1_axi_araddr),
-        .m_axi_arlen(tile1_axi_arlen),
-        .m_axi_arsize(tile1_axi_arsize),
-        .m_axi_arburst(tile1_axi_arburst),
-        .m_axi_arcache(tile1_axi_arcache),
-        .m_axi_arprot(tile1_axi_arprot),
-        .m_axi_arqos(tile1_axi_arqos),
-        .m_axi_arvalid(tile1_axi_arvalid),
-        .m_axi_arready(tile1_axi_arready),
-        .m_axi_rid(tile1_axi_rid),
-        .m_axi_rdata(tile1_axi_rdata),
-        .m_axi_rresp(tile1_axi_rresp),
-        .m_axi_rlast(tile1_axi_rlast),
-        .m_axi_rvalid(tile1_axi_rvalid),
-        .m_axi_rready(tile1_axi_rready),
-        .pixel_clk(pixel_clk),
-        .pixel_reset(pixel_reset),
-        .pixel_read_slot(pixel_read_slot),
-        .pixel_read_x(line_read_x),
-        .pixel_valid(tile1_pixel_valid),
-        .pixel_palette_bank(tile1_pixel_bank),
-        .pixel_index(tile1_pixel_index)
-    );
+    // SDL uses the shared framebuffer/blitter path. Hardware framebuffer
+    // viewport/wrap scrolling remains independent of the removed tile planes.
 
     astra_sprite_line_builder #(
         .OUTPUT_WIDTH(OUTPUT_WIDTH),
@@ -1590,7 +1229,7 @@ module astra_graphics_pipeline #(
     ) sprite_builder_i (
         .build_clk(build_clk),
         .build_reset(build_reset),
-        .start(scheduler_start && scheduler_client_enable[3]),
+        .start(scheduler_start && scheduler_client_enable[1]),
         .build_slot(scheduler_build_slot),
         .line_y(scheduler_source_y),
         .order_read_enable(sprite_order_read_enable),
@@ -1664,13 +1303,9 @@ module astra_graphics_pipeline #(
         .pixel_behind_argb(sprite_behind_argb)
     );
 
-    assign scheduler_client_done = {
-        sprite_done, tile1_done, tile0_done, framebuffer_done
-    };
-    assign scheduler_client_complete = {
-        sprite_line_complete, tile1_line_complete, tile0_line_complete,
-        framebuffer_line_complete
-    };
+    assign scheduler_client_done = {sprite_done, framebuffer_done};
+    assign scheduler_client_complete =
+        {sprite_line_complete, framebuffer_line_complete};
 
     // Structural pixel configuration crosses as one atomic frame snapshot.
     // The source holds the data until the pixel side acknowledges it; the
@@ -1777,22 +1412,16 @@ module astra_graphics_pipeline #(
     } = pixel_config_active_pixel;
     assign scene_active = scene_enable_build;
 
-    wire [54:0] build_line_visual = {
+    wire [34:0] build_line_visual = {
         sprite_enable_build,
         framebuffer_enable_build,
         framebuffer_key_enable_build,
-        framebuffer_key_build,
-        tile0_enable_build,
-        tile0_above_build,
-        tile0_opacity_build,
-        tile1_enable_build,
-        tile1_above_build,
-        tile1_opacity_build
+        framebuffer_key_build
     };
-    reg [54:0] line_visual_slot0;
-    reg [54:0] line_visual_slot1;
-    reg [54:0] line_visual_slot2;
-    reg [54:0] line_visual_slot3;
+    reg [34:0] line_visual_slot0;
+    reg [34:0] line_visual_slot1;
+    reg [34:0] line_visual_slot2;
+    reg [34:0] line_visual_slot3;
     always @(posedge build_clk) begin
         if (scheduler_start) begin
             case (scheduler_build_slot)
@@ -1816,14 +1445,14 @@ module astra_graphics_pipeline #(
         visual_candidate_tag == visual_candidate_line;
     wire visual_select_next_line = pixel_x == OUTPUT_WIDTH - 1 &&
         (pixel_y < OUTPUT_HEIGHT - 1 || pixel_y == TOTAL_HEIGHT - 1);
-    wire [54:0] visual_candidate_data =
+    wire [34:0] visual_candidate_data =
         visual_candidate_slot == 2'd0 ? line_visual_slot0 :
         visual_candidate_slot == 2'd1 ? line_visual_slot1 :
         visual_candidate_slot == 2'd2 ? line_visual_slot2 : line_visual_slot3;
-    reg [54:0] pixel_line_visual_q;
+    reg [34:0] pixel_line_visual_q;
     always @(posedge pixel_clk) begin
         if (pixel_reset)
-            pixel_line_visual_q <= 55'd0;
+            pixel_line_visual_q <= 35'd0;
         else if (visual_select_next_line && visual_candidate_ready)
             pixel_line_visual_q <= visual_candidate_data;
     end
@@ -1832,23 +1461,11 @@ module astra_graphics_pipeline #(
     wire framebuffer_enable_line_pixel;
     wire framebuffer_key_enable_line_pixel;
     wire [31:0] framebuffer_key_line_pixel;
-    wire tile0_enable_line_pixel;
-    wire tile0_above_line_pixel;
-    wire [7:0] tile0_opacity_line_pixel;
-    wire tile1_enable_line_pixel;
-    wire tile1_above_line_pixel;
-    wire [7:0] tile1_opacity_line_pixel;
     assign {
         sprite_enable_line_pixel,
         framebuffer_enable_line_pixel,
         framebuffer_key_enable_line_pixel,
-        framebuffer_key_line_pixel,
-        tile0_enable_line_pixel,
-        tile0_above_line_pixel,
-        tile0_opacity_line_pixel,
-        tile1_enable_line_pixel,
-        tile1_above_line_pixel,
-        tile1_opacity_line_pixel
+        framebuffer_key_line_pixel
     } = pixel_line_visual_q;
 
     reg [23:0] backdrop_rgb_pixel_active;
@@ -1925,18 +1542,11 @@ module astra_graphics_pipeline #(
     wire copper_framebuffer_palette_event = !copper_pixel_event_irq &&
         copper_pixel_event_target >= 16'h1000 &&
         copper_pixel_event_target <= 16'h13fc;
-    wire copper_tile_palette_event = !copper_pixel_event_irq &&
-        copper_pixel_event_target >= 16'h2000 &&
-        copper_pixel_event_target <= 16'h5ffc;
-    wire copper_palette_event = copper_framebuffer_palette_event ||
-                                copper_tile_palette_event;
     wire [15:0] copper_framebuffer_palette_offset =
         copper_pixel_event_target - 16'h1000;
-    wire [15:0] copper_tile_palette_offset =
-        copper_pixel_event_target - 16'h2000;
     assign copper_pixel_event_ready = copper_pixel_event_irq ||
         copper_pixel_event_target == 16'h0018 ||
-        (copper_palette_event && palette_copper_write_ready);
+        (copper_framebuffer_palette_event && palette_copper_write_ready);
     assign copper_exact_enqueue_valid = copper_irq_event ||
         (copper_move_valid && copper_move_class == 2'd0);
 
@@ -2005,12 +1615,6 @@ module astra_graphics_pipeline #(
 
     wire [7:0] framebuffer_palette_index;
     wire [31:0] framebuffer_palette_argb;
-    wire [3:0] tile0_palette_read_bank;
-    wire [7:0] tile0_palette_read_index;
-    wire [31:0] tile0_palette_argb;
-    wire [3:0] tile1_palette_read_bank;
-    wire [7:0] tile1_palette_read_index;
-    wire [31:0] tile1_palette_argb;
 
     astra_palette_store palette_i (
         .control_clk(build_clk),
@@ -2022,31 +1626,16 @@ module astra_graphics_pipeline #(
         .framebuffer_write_enable(framebuffer_palette_write_enable),
         .framebuffer_write_index(framebuffer_palette_write_index),
         .framebuffer_write_argb(framebuffer_palette_write_argb),
-        .tile_write_enable(tile_palette_write_enable),
-        .tile_write_bank(tile_palette_write_bank),
-        .tile_write_index(tile_palette_write_index),
-        .tile_write_argb(tile_palette_write_argb),
         .pixel_clk(pixel_clk),
         .pixel_reset(pixel_reset),
         .copper_write_enable(copper_pixel_event_valid &&
                              copper_pixel_event_ready &&
-                             copper_palette_event),
-        .copper_write_tile(copper_tile_palette_event),
-        .copper_write_bank(copper_tile_palette_offset[13:10]),
-        .copper_write_index(
-            copper_framebuffer_palette_event ?
-                copper_framebuffer_palette_offset[9:2] :
-                copper_tile_palette_offset[9:2]),
+                             copper_framebuffer_palette_event),
+        .copper_write_index(copper_framebuffer_palette_offset[9:2]),
         .copper_write_argb(copper_pixel_event_data),
         .copper_write_ready(palette_copper_write_ready),
         .framebuffer_read_index(framebuffer_palette_index),
-        .framebuffer_read_argb(framebuffer_palette_argb),
-        .tile0_read_bank(tile0_palette_read_bank),
-        .tile0_read_index(tile0_palette_read_index),
-        .tile0_read_argb(tile0_palette_argb),
-        .tile1_read_bank(tile1_palette_read_bank),
-        .tile1_read_index(tile1_palette_read_index),
-        .tile1_read_argb(tile1_palette_argb)
+        .framebuffer_read_argb(framebuffer_palette_argb)
     );
 
     wire compositor_output_valid;
@@ -2067,24 +1656,6 @@ module astra_graphics_pipeline #(
         .framebuffer_key(framebuffer_key_line_pixel),
         .framebuffer_palette_index(framebuffer_palette_index),
         .framebuffer_palette_argb(framebuffer_palette_argb),
-        .tile0_enable(tile0_enable_line_pixel),
-        .tile0_above_framebuffer(tile0_above_line_pixel),
-        .tile0_opacity(tile0_opacity_line_pixel),
-        .tile0_pixel_valid(tile0_pixel_valid),
-        .tile0_palette_bank(tile0_pixel_bank),
-        .tile0_palette_index(tile0_pixel_index),
-        .tile0_palette_read_bank(tile0_palette_read_bank),
-        .tile0_palette_read_index(tile0_palette_read_index),
-        .tile0_palette_argb(tile0_palette_argb),
-        .tile1_enable(tile1_enable_line_pixel),
-        .tile1_above_framebuffer(tile1_above_line_pixel),
-        .tile1_opacity(tile1_opacity_line_pixel),
-        .tile1_pixel_valid(tile1_pixel_valid),
-        .tile1_palette_bank(tile1_pixel_bank),
-        .tile1_palette_index(tile1_pixel_index),
-        .tile1_palette_read_bank(tile1_palette_read_bank),
-        .tile1_palette_read_index(tile1_palette_read_index),
-        .tile1_palette_argb(tile1_palette_argb),
         .output_valid(compositor_output_valid),
         .output_rgb(compositor_output_rgb)
     );
@@ -2190,22 +1761,6 @@ module astra_graphics_pipeline #(
         framebuffer_completed_slot,
         framebuffer_build_cycles,
         framebuffer_read_bytes,
-        tile0_slot_valid,
-        tile0_config_error,
-        tile0_descriptor_error,
-        tile0_fetch_error,
-        tile0_completed_slot,
-        tile0_build_cycles,
-        tile0_map_read_bytes,
-        tile0_pattern_read_bytes,
-        tile1_slot_valid,
-        tile1_config_error,
-        tile1_descriptor_error,
-        tile1_fetch_error,
-        tile1_completed_slot,
-        tile1_build_cycles,
-        tile1_map_read_bytes,
-        tile1_pattern_read_bytes,
         sprite_completed_slot,
         scanline_replaying
     };

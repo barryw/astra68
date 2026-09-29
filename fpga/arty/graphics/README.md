@@ -1,14 +1,14 @@
 # Vega graphics RTL
 
 This historical path contains the shared production RTL used by the DE25-Nano
-Astra shell. The normative behavioral
-contract is [`docs/GRAPHICS_ARCHITECTURE.md`](../../../docs/GRAPHICS_ARCHITECTURE.md);
+Astra shell. The historical Arty design is recorded in
+[`docs/GRAPHICS_ARCHITECTURE.md`](../../../docs/GRAPHICS_ARCHITECTURE.md);
 [`fpga/de25/TIMING_CLOSURE.md`](../../de25/TIMING_CLOSURE.md) records current source identities,
 failed experiments, routed results, release artifacts, and hardware evidence.
 
-The complete graphics subsystem is implemented and hardware-qualified. It is
-feature-frozen except for correctness fixes. New graphics features require a
-new architecture decision and complete regression, route, and hardware gates.
+The deployed graphics subsystem is hardware-qualified. Tile hardware is
+retired from the current source; its replacement SDL rendering work requires
+complete regression, route, and hardware gates before release.
 
 ## Implemented hardware
 
@@ -20,10 +20,7 @@ new architecture decision and complete regression, route, and hardware gates.
 - INDEX8, big-endian RGB565, and XRGB8888 framebuffer scanout.
 - Pixel-granular horizontal, vertical, and diagonal framebuffer scrolling,
   with independent X/Y wrapping over a virtual framebuffer.
-- Two independently scrolling INDEX4/INDEX8 tile layers using 8x8 or 16x16
-  patterns, per-tile palette selection, reflection, transparency, and
-  independent X/Y wrapping.
-- Ordered composition of tile layers, framebuffer, boot text, and sprite
+- Ordered composition of framebuffer, boot text, and sprite
   planes into RGB888, followed by exact repeated-line replay and a native
   32x32 ARGB hardware-pointer plane.
 - Triple-buffered scene metadata and fenced, atomic frame-boundary promotion.
@@ -58,9 +55,21 @@ new architecture decision and complete regression, route, and hardware gates.
 - Fill and overlap-safe copy.
 - Independent X/Y scaling and reflection.
 - Color-keyed and MASK1-masked copies.
-- Premultiplied source-over composition with per-command opacity.
+- Straight-alpha source-over (SDL BLEND) with per-command opacity.
 - All sixteen two-input Boolean raster operations.
 - Supported source/destination format conversions and palette expansion.
+- Latency-tolerant transport: commands are fetched up to 32 per burst into
+  on-chip RAM; a surface descriptor the previous command also referenced is
+  reused without a DDR read (valid only within one doorbell; see
+  `docs/GRAPHICS_ARCHITECTURE.md`); pixel writes are posted and a command's
+  completion record is written once its writes are answered, so no command
+  waits on a memory round trip. `perf/run_ordering.sh` checks the ordering
+  against a memory whose writes land late and whose responses reorder.
+- Fills and plain copies stream through one burst mover with eight source
+  chunks read ahead, about three RGB565 pixels per clock at any DDR latency.
+  Unscaled format-converting and source-over BLITs (RGB565, XRGB8888,
+  ARGB8888) stream through the same mover at one pixel per clock; a chunk of
+  opaque source pixels at opacity 255 skips its destination read.
 
 ### Geometry and fonts
 
@@ -70,6 +79,12 @@ new architecture decision and complete regression, route, and hardware gates.
   exhaustion reports `WORK_OVERFLOW` without corrupting adjacent memory.
 - Hardware AFNT glyph expansion for MASK1, A4, A8, INDEX4, and INDEX8 glyph
   data through the same writer, blend, completion, timeout, and reset paths.
+- Texture engine (`TRIANGLES`, docs/TEXTURE_ENGINE.md): exact top-left
+  rasterization, affine u/v/color interpolation, nearest and bilinear
+  sampling of RGB565, XRGB8888, ARGB8888, INDEX8 and A8, color modulation,
+  and NONE/BLEND/ADD/MOD/MUL into RGB565, XRGB8888 and ARGB8888. Its oracle
+  is `sw/userspace/graphics/src/texture_reference.c`.
+- ARGB8888 is a destination for every operation.
 - The four-row CP437 boot-text plane remains available for diagnostics before
   the general command processor is usable. It uses the generated true 8x16
   Spleen rescue strike and is separate from the AFNT command path.
@@ -89,10 +104,10 @@ new architecture decision and complete regression, route, and hardware gates.
 
 The real-time scanout side is divided into bounded stages:
 
-1. Framebuffer, tile, and sprite engines snapshot one scanline's scene state.
+1. Framebuffer and sprite engines snapshot one scanline's scene state.
 2. Map and source fetchers issue bounded 64-bit AXI bursts into the reserved
    graphics arena.
-3. Framebuffer, descriptor, pattern, palette, tile, and sprite stores build
+3. Framebuffer, descriptor, palette, and sprite stores build
    complete line slots.
 4. The compositor resolves the ordered layers and sprite planes into RGB888.
 5. The scaler maps the fixed physical beam to logical source coordinates and
@@ -102,7 +117,7 @@ The real-time scanout side is divided into bounded stages:
 
 Linux reserves the contiguous 128 MiB physical range
 `0x18000000..0x1fffffff` as `no-map` graphics memory. Framebuffers, sprite
-pixels, tile maps and patterns, render surfaces, command data, and AFNT data
+pixels, render surfaces, command data, and AFNT data
 live there rather than in PL block RAM. PL RAM is reserved for bounded line
 working sets, metadata banks, queues, palettes, boot text, and copper stores.
 
@@ -140,7 +155,7 @@ fpga/arty/graphics/run_tests.sh
 ```
 
 The suite covers framebuffer formats and byte order, AXI boundaries and
-backpressure, tile phases and scrolling, scene promotion, all 64 sprites,
+backpressure, framebuffer scrolling, scene promotion, all 64 sprites,
 every legal sprite source width and height, clipping and rejection, scaling,
 reflection, blending, collisions, CDC publication skew, command validation,
 ring backpressure, completion and reset, the complete blitter, virtual-sprite
@@ -151,7 +166,16 @@ Component routes remain useful for attribution but are not release evidence:
 
 ```sh
 fpga/arty/graphics/run_ooc.sh
-ASTRA_OOC_COMPONENT=tile-line fpga/arty/graphics/run_ooc.sh
+ASTRA_OOC_COMPONENT=sprite-line fpga/arty/graphics/run_ooc.sh
+```
+
+Render-engine cycle accounting under a DDR-like latency model (per-command
+cost, fill/copy per pixel, one SDL testdraw2 frame) and Quartus area per
+engine:
+
+```sh
+fpga/arty/graphics/perf/run_perf.sh 100          # read/write latency 100
+fpga/arty/graphics/perf/run_ooc_q.sh /tmp/render-ooc
 ```
 
 Set `ASTRA_OOC_OUT` to a durable output directory. Generated simulation,

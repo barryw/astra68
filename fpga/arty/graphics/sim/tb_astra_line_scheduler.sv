@@ -17,8 +17,6 @@ module tb_astra_line_scheduler;
     reg quiesce = 1'b0;
     reg scene_enable = 1'b1;
     reg framebuffer_enable = 1'b1;
-    reg tile0_enable = 1'b1;
-    reg tile1_enable = 1'b1;
     reg sprite_enable = 1'b1;
     reg [10:0] display_viewport_y = 11'd0;
     reg [10:0] display_viewport_height = OUTPUT_HEIGHT;
@@ -34,9 +32,9 @@ module tb_astra_line_scheduler;
     wire [1:0] client_build_slot;
     wire [10:0] client_line_y;
     wire [10:0] client_source_y;
-    wire [3:0] client_enable;
-    reg [3:0] client_done = 4'd0;
-    reg [3:0] client_line_complete = 4'd0;
+    wire [1:0] client_enable;
+    reg [1:0] client_done = 2'd0;
+    reg [1:0] client_line_complete = 2'd0;
     wire [31:0] lines_built;
     wire [31:0] lines_failed;
     wire [31:0] scheduler_overruns;
@@ -66,8 +64,6 @@ module tb_astra_line_scheduler;
         .quiesce(quiesce),
         .scene_enable(scene_enable),
         .framebuffer_enable(framebuffer_enable),
-        .tile0_enable(tile0_enable),
-        .tile1_enable(tile1_enable),
         .sprite_enable(sprite_enable),
         .display_viewport_y(display_viewport_y),
         .display_viewport_height(display_viewport_height),
@@ -77,7 +73,8 @@ module tb_astra_line_scheduler;
         .line_prepare_y(line_prepare_y),
         .line_prepare_source_y(line_prepare_source_y),
         .line_prepare_source_active(line_prepare_source_active),
-        .line_prepare_ready(line_prepare_ready),
+        // The Copper beam scheduler only answers a presented request.
+        .line_prepare_ready(line_prepare_ready && line_prepare_valid),
         .client_start(client_start),
         .client_build_slot(client_build_slot),
         .client_line_y(client_line_y),
@@ -107,8 +104,6 @@ module tb_astra_line_scheduler;
 
     integer countdown0 = 0;
     integer countdown1 = 0;
-    integer countdown2 = 0;
-    integer countdown3 = 0;
     reg [10:0] active_line = 11'd0;
     integer start_count [0:7];
     integer last_source [0:7];
@@ -116,18 +111,15 @@ module tb_astra_line_scheduler;
     integer index;
 
     always @(posedge build_clk) begin
-        client_done <= 4'd0;
-        client_line_complete <= 4'd0;
+        client_done <= 2'd0;
+        client_line_complete <= 2'd0;
         if (build_reset) begin
             countdown0 <= 0;
             countdown1 <= 0;
-            countdown2 <= 0;
-            countdown3 <= 0;
             active_line <= 11'd0;
         end else begin
             if (client_start) begin
-                if (client_enable != {sprite_enable, tile1_enable,
-                                      tile0_enable, framebuffer_enable})
+                if (client_enable != {sprite_enable, framebuffer_enable})
                     $fatal(1, "scheduler launched wrong client mask %b",
                            client_enable);
                 if (display_viewport_y == 0 &&
@@ -142,8 +134,6 @@ module tb_astra_line_scheduler;
                 total_starts <= total_starts + 1;
                 countdown0 <= 3;
                 countdown1 <= 5;
-                countdown2 <= 7;
-                countdown3 <= 9;
             end
             if (countdown0 != 0) begin
                 countdown0 <= countdown0 - 1;
@@ -157,20 +147,6 @@ module tb_astra_line_scheduler;
                 if (countdown1 == 1) begin
                     client_done[1] <= 1'b1;
                     client_line_complete[1] <= active_line != 10'd5;
-                end
-            end
-            if (countdown2 != 0) begin
-                countdown2 <= countdown2 - 1;
-                if (countdown2 == 1) begin
-                    client_done[2] <= 1'b1;
-                    client_line_complete[2] <= 1'b1;
-                end
-            end
-            if (countdown3 != 0) begin
-                countdown3 <= countdown3 - 1;
-                if (countdown3 == 1) begin
-                    client_done[3] <= 1'b1;
-                    client_line_complete[3] <= 1'b1;
                 end
             end
         end
@@ -400,11 +376,39 @@ module tb_astra_line_scheduler;
         quiesce = 1'b0;
         $display("quiesce/drain pass");
 
+        // A frame-boundary quiesce that lands while a launched line waits
+        // for Copper preparation must still let that line finish; otherwise
+        // the scheduler never idles and the pending commit never applies.
+        line_prepare_ready = 1'b0;
+        starts_before_quiesce = total_starts;
+        drive_line_end(7);
+        quiesce_cycles = 0;
+        while (!line_prepare_valid && quiesce_cycles < 100) begin
+            @(posedge build_clk);
+            quiesce_cycles = quiesce_cycles + 1;
+        end
+        if (!line_prepare_valid)
+            $fatal(1, "prepare-quiesce test never requested preparation starts=%0d state=%0d count=%0d", total_starts - starts_before_quiesce, dut.scheduler_state, dut.request_count);
+        @(negedge build_clk);
+        quiesce = 1'b1;
+        repeat (10) @(posedge build_clk);
+        @(negedge build_clk);
+        line_prepare_ready = 1'b1;
+        quiesce_cycles = 0;
+        while (!scheduler_idle && quiesce_cycles < 200) begin
+            @(posedge build_clk);
+            quiesce_cycles = quiesce_cycles + 1;
+        end
+        if (!scheduler_idle)
+            $fatal(1,
+                "scheduler wedged: quiesce during preparation state=%0d valid=%0d",
+                dut.scheduler_state, line_prepare_valid);
+        quiesce = 1'b0;
+        $display("quiesce during preparation pass");
+
         // A backdrop-only scene still publishes four complete slots and does
         // not deadlock the bootstrap state machine.
         framebuffer_enable = 1'b0;
-        tile0_enable = 1'b0;
-        tile1_enable = 1'b0;
         sprite_enable = 1'b0;
         pulse_scene_changed();
         wait_for_counts(built_before_hold + 6, 1);

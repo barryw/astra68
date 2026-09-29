@@ -16,7 +16,9 @@ module astra_graphics_control #(
     parameter integer BOOT_TEXT_ORIGIN_X = 396,
     parameter integer BOOT_TEXT_ORIGIN_Y = 744,
     parameter integer BOOT_TEXT_CELL_WIDTH = 24,
-    parameter integer BOOT_TEXT_ROW_PITCH = 48
+    parameter integer BOOT_TEXT_ROW_PITCH = 48,
+    // 1 when render_host_aperture_base drives a host-read port.
+    parameter integer HOST_APERTURE = 0
 ) (
     input  wire        clk,
     input  wire        reset,
@@ -62,40 +64,6 @@ module astra_graphics_control #(
     input  wire [31:0] framebuffer_axi_last_ar_address,
     input  wire [31:0] framebuffer_axi_response_stall_cycles,
 
-    output wire        tile0_enable,
-    output wire        tile0_above_framebuffer,
-    output wire [7:0]  tile0_opacity,
-    output wire        tile0_tile_16,
-    output wire        tile0_index_8,
-    output wire [3:0]  tile0_map_width_log2,
-    output wire [3:0]  tile0_map_height_log2,
-    output wire        tile0_wrap_x,
-    output wire        tile0_wrap_y,
-    output wire        tile0_transparent_enable,
-    output wire [7:0]  tile0_transparent_index,
-    output wire signed [31:0] tile0_scroll_x,
-    output wire signed [31:0] tile0_scroll_y,
-    output wire [31:0] tile0_map_base,
-    output wire [31:0] tile0_pattern_base,
-    output wire [16:0] tile0_tile_count,
-
-    output wire        tile1_enable,
-    output wire        tile1_above_framebuffer,
-    output wire [7:0]  tile1_opacity,
-    output wire        tile1_tile_16,
-    output wire        tile1_index_8,
-    output wire [3:0]  tile1_map_width_log2,
-    output wire [3:0]  tile1_map_height_log2,
-    output wire        tile1_wrap_x,
-    output wire        tile1_wrap_y,
-    output wire        tile1_transparent_enable,
-    output wire [7:0]  tile1_transparent_index,
-    output wire signed [31:0] tile1_scroll_x,
-    output wire signed [31:0] tile1_scroll_y,
-    output wire [31:0] tile1_map_base,
-    output wire [31:0] tile1_pattern_base,
-    output wire [16:0] tile1_tile_count,
-
     output wire        sprite_enable,
     output reg         sprite_descriptor_write_enable,
     output reg  [5:0]  sprite_descriptor_write_index,
@@ -138,10 +106,6 @@ module astra_graphics_control #(
     output reg         framebuffer_palette_write_enable,
     output reg  [7:0]  framebuffer_palette_write_index,
     output reg  [31:0] framebuffer_palette_write_argb,
-    output reg         tile_palette_write_enable,
-    output reg  [3:0]  tile_palette_write_bank,
-    output reg  [7:0]  tile_palette_write_index,
-    output reg  [31:0] tile_palette_write_argb,
     input  wire        palette_write_ready,
 
     output wire        boot_text_shadow_enable,
@@ -182,6 +146,8 @@ module astra_graphics_control #(
     input  wire [10:0] render_completion_producer,
     output reg  [10:0] render_completion_consumer,
     output reg  [31:0] render_resource_generation,
+    // HPS physical base of the host aperture (0 = off); see astra_render_host_reads.
+    output reg  [31:0] render_host_aperture_base,
     input  wire        render_busy,
     input  wire        render_engine_reset_active,
     input  wire        render_configuration_fault,
@@ -210,7 +176,7 @@ module astra_graphics_control #(
     input  wire [3:0]  s_axi_wstrb,
     input  wire        s_axi_wvalid,
     output wire        s_axi_wready,
-    output reg  [1:0]  s_axi_bresp,
+    output wire [1:0]  s_axi_bresp,
     output reg         s_axi_bvalid,
     input  wire        s_axi_bready,
     input  wire [31:0] s_axi_araddr,
@@ -218,13 +184,16 @@ module astra_graphics_control #(
     input  wire        s_axi_arvalid,
     output wire        s_axi_arready,
     output reg  [31:0] s_axi_rdata,
-    output reg  [1:0]  s_axi_rresp,
+    output wire [1:0]  s_axi_rresp,
     output reg         s_axi_rvalid,
     input  wire        s_axi_rready
 );
     localparam [31:0] DEVICE_ID = 32'h41535452;
-    localparam [31:0] VERSION = 32'h00010009;
-    localparam [31:0] CAPABILITIES = 32'h00000fff;
+    localparam [31:0] VERSION = 32'h00020000;
+    // Bit 12: access-fault record at 0x24c/0x250. Bit 13: host aperture
+    // register 0x248 drives a host-read port.
+    localparam [31:0] CAPABILITIES = 32'h00001ff7 |
+        (HOST_APERTURE != 0 ? 32'h00002000 : 32'h00000000);
     localparam integer BOOT_TEXT_CELLS = BOOT_TEXT_COLS * BOOT_TEXT_ROWS;
     localparam [31:0] DEFAULT_FB_PITCH = OUTPUT_WIDTH * 2;
     localparam [31:0] DEFAULT_FB_SIZE = {
@@ -263,20 +232,6 @@ module astra_graphics_control #(
     reg [31:0] shadow_display_crop_size;
     reg [31:0] shadow_display_viewport_origin;
     reg [31:0] shadow_display_viewport_size;
-    reg [31:0] shadow_tile0_map_base;
-    reg [31:0] shadow_tile0_pattern_base;
-    reg [31:0] shadow_tile0_scroll_x;
-    reg [31:0] shadow_tile0_scroll_y;
-    reg [31:0] shadow_tile0_geometry;
-    reg [31:0] shadow_tile0_count;
-    reg [31:0] shadow_tile0_control;
-    reg [31:0] shadow_tile1_map_base;
-    reg [31:0] shadow_tile1_pattern_base;
-    reg [31:0] shadow_tile1_scroll_x;
-    reg [31:0] shadow_tile1_scroll_y;
-    reg [31:0] shadow_tile1_geometry;
-    reg [31:0] shadow_tile1_count;
-    reg [31:0] shadow_tile1_control;
     reg [31:0] shadow_sprite_control;
 
     reg [31:0] pending_global_control_q;
@@ -297,20 +252,6 @@ module astra_graphics_control #(
     reg        pending_fb_protection_valid_q;
     reg [31:0] pending_fb_protection_offset_q;
     reg [31:0] pending_fb_protection_bytes_q;
-    reg [31:0] pending_tile0_map_base_q;
-    reg [31:0] pending_tile0_pattern_base_q;
-    reg [31:0] pending_tile0_scroll_x_q;
-    reg [31:0] pending_tile0_scroll_y_q;
-    reg [31:0] pending_tile0_geometry_q;
-    reg [31:0] pending_tile0_count_q;
-    reg [31:0] pending_tile0_control_q;
-    reg [31:0] pending_tile1_map_base_q;
-    reg [31:0] pending_tile1_pattern_base_q;
-    reg [31:0] pending_tile1_scroll_x_q;
-    reg [31:0] pending_tile1_scroll_y_q;
-    reg [31:0] pending_tile1_geometry_q;
-    reg [31:0] pending_tile1_count_q;
-    reg [31:0] pending_tile1_control_q;
     reg [31:0] pending_sprite_control_q;
 
     reg [31:0] active_global_control_q;
@@ -331,26 +272,11 @@ module astra_graphics_control #(
     reg        active_fb_protection_valid_q;
     reg [31:0] active_fb_protection_offset_q;
     reg [31:0] active_fb_protection_bytes_q;
-    reg [31:0] active_tile0_map_base_q;
-    reg [31:0] active_tile0_pattern_base_q;
-    reg [31:0] active_tile0_scroll_x_q;
-    reg [31:0] active_tile0_scroll_y_q;
-    reg [31:0] active_tile0_geometry_q;
-    reg [31:0] active_tile0_count_q;
-    reg [31:0] active_tile0_control_q;
-    reg [31:0] active_tile1_map_base_q;
-    reg [31:0] active_tile1_pattern_base_q;
-    reg [31:0] active_tile1_scroll_x_q;
-    reg [31:0] active_tile1_scroll_y_q;
-    reg [31:0] active_tile1_geometry_q;
-    reg [31:0] active_tile1_count_q;
-    reg [31:0] active_tile1_control_q;
     reg [31:0] active_sprite_control_q;
     reg [31:0] generation_q;
     reg commit_pending_q;
 
     reg [31:0] framebuffer_palette_selector;
-    reg [31:0] tile_palette_selector;
     reg [10:0] sprite_descriptor_selector;
     reg [11:0] sprite_palette_selector;
     reg [31:0] shadow_boot_text_control;
@@ -383,10 +309,6 @@ module astra_graphics_control #(
     reg shadow_scene_valid_q;
     reg framebuffer_validator_done_seen_q;
     reg framebuffer_validator_result_q;
-    reg tile0_validator_done_seen_q;
-    reg tile0_validator_result_q;
-    reg tile1_validator_done_seen_q;
-    reg tile1_validator_result_q;
     reg sprite_validator_done_seen_q;
     reg sprite_validator_result_q;
     reg sprite_pending_ready_q;
@@ -421,44 +343,10 @@ module astra_graphics_control #(
         .surface_bytes(framebuffer_validator_surface_bytes)
     );
 
-    reg tile_validator_select_q;
-    reg tile_validator_start_q;
-    wire tile_validator_busy;
-    wire tile_validator_done;
-    wire tile_validator_valid;
-    astra_tile_config_validator tile_validator_i (
-        .clk(clk),
-        .reset(reset),
-        .start(tile_validator_start_q),
-        .tile_16(tile_validator_select_q ?
-            shadow_tile1_geometry[8] : shadow_tile0_geometry[8]),
-        .index_8(tile_validator_select_q ?
-            shadow_tile1_geometry[9] : shadow_tile0_geometry[9]),
-        .map_width_log2(tile_validator_select_q ?
-            shadow_tile1_geometry[3:0] : shadow_tile0_geometry[3:0]),
-        .map_height_log2(tile_validator_select_q ?
-            shadow_tile1_geometry[7:4] : shadow_tile0_geometry[7:4]),
-        .map_base(tile_validator_select_q ?
-            shadow_tile1_map_base : shadow_tile0_map_base),
-        .pattern_base(tile_validator_select_q ?
-            shadow_tile1_pattern_base : shadow_tile0_pattern_base),
-        .tile_count(tile_validator_select_q ?
-            shadow_tile1_count[16:0] : shadow_tile0_count[16:0]),
-        .arena_base(ARENA_BASE),
-        .arena_limit(ARENA_LIMIT),
-        .busy(tile_validator_busy),
-        .done(tile_validator_done),
-        .config_valid(tile_validator_valid)
-    );
-
     wire validators_done =
         framebuffer_validator_done_seen_q &&
-        tile0_validator_done_seen_q &&
-        tile1_validator_done_seen_q &&
         sprite_validator_done_seen_q;
     wire framebuffer_validator_result = framebuffer_validator_result_q;
-    wire tile0_validator_result = tile0_validator_result_q;
-    wire tile1_validator_result = tile1_validator_result_q;
     wire sprite_validator_result = sprite_validator_result_q;
     // shadow_sprite_control is assigned only after the write-time validator
     // has proved that bit 0 is the sole settable bit.
@@ -510,10 +398,8 @@ module astra_graphics_control #(
               {1'b0, shadow_fb_window_scene_bytes} <=
               {1'b0, ARENA_LIMIT})) &&
         (!shadow_global_control[0] ||
-         ((!shadow_fb_control[0] || shadow_fb_control[6] ||
-            framebuffer_validator_result) &&
-          (!shadow_tile0_control[0] || tile0_validator_result) &&
-          (!shadow_tile1_control[0] || tile1_validator_result)));
+         (!shadow_fb_control[0] || shadow_fb_control[6] ||
+          framebuffer_validator_result));
     wire shadow_scene_valid_status =
         !shadow_config_dirty_q && shadow_scene_valid_q;
 
@@ -548,39 +434,6 @@ module astra_graphics_control #(
     assign display_viewport_width = active_display_viewport_size_q[10:0];
     assign display_viewport_height = active_display_viewport_size_q[26:16];
 
-    assign tile0_enable = active_tile0_control_q[0];
-    assign tile0_above_framebuffer = active_tile0_control_q[1];
-    assign tile0_transparent_enable = active_tile0_control_q[2];
-    assign tile0_transparent_index = active_tile0_control_q[15:8];
-    assign tile0_opacity = active_tile0_control_q[23:16];
-    assign tile0_map_width_log2 = active_tile0_geometry_q[3:0];
-    assign tile0_map_height_log2 = active_tile0_geometry_q[7:4];
-    assign tile0_tile_16 = active_tile0_geometry_q[8];
-    assign tile0_index_8 = active_tile0_geometry_q[9];
-    assign tile0_wrap_x = active_tile0_geometry_q[10];
-    assign tile0_wrap_y = active_tile0_geometry_q[11];
-    assign tile0_map_base = active_tile0_map_base_q;
-    assign tile0_pattern_base = active_tile0_pattern_base_q;
-    assign tile0_scroll_x = active_tile0_scroll_x_q;
-    assign tile0_scroll_y = active_tile0_scroll_y_q;
-    assign tile0_tile_count = active_tile0_count_q[16:0];
-
-    assign tile1_enable = active_tile1_control_q[0];
-    assign tile1_above_framebuffer = active_tile1_control_q[1];
-    assign tile1_transparent_enable = active_tile1_control_q[2];
-    assign tile1_transparent_index = active_tile1_control_q[15:8];
-    assign tile1_opacity = active_tile1_control_q[23:16];
-    assign tile1_map_width_log2 = active_tile1_geometry_q[3:0];
-    assign tile1_map_height_log2 = active_tile1_geometry_q[7:4];
-    assign tile1_tile_16 = active_tile1_geometry_q[8];
-    assign tile1_index_8 = active_tile1_geometry_q[9];
-    assign tile1_wrap_x = active_tile1_geometry_q[10];
-    assign tile1_wrap_y = active_tile1_geometry_q[11];
-    assign tile1_map_base = active_tile1_map_base_q;
-    assign tile1_pattern_base = active_tile1_pattern_base_q;
-    assign tile1_scroll_x = active_tile1_scroll_x_q;
-    assign tile1_scroll_y = active_tile1_scroll_y_q;
-    assign tile1_tile_count = active_tile1_count_q[16:0];
     assign sprite_enable = active_sprite_control_q[0];
     assign render_enable = render_control_q[0];
     assign render_interrupt = render_irq_pending_q;
@@ -599,9 +452,14 @@ module astra_graphics_control #(
     reg [31:0] wdata_q;
     reg [3:0] wstrb_q;
     reg write_execute_q;
-    reg write_shadow_tile1_control_q;
     reg write_response_pending_q;
     reg [1:0] write_response_q;
+    // AXI response codes as the register file decided them. The bus always
+    // answers OKAY; a nonzero code is recorded as an access fault.
+    reg [1:0] bresp_code_q;
+    reg [1:0] rresp_code_q;
+    wire [31:0] access_fault_count;
+    wire [31:0] access_fault_first;
     reg write_render_busy_q;
     reg write_alignment_valid_q;
     reg write_prefix_valid_q;
@@ -622,7 +480,7 @@ module astra_graphics_control #(
     reg write_collision_row_valid_q;
     reg write_render_control_valid_q;
     reg ar_pending;
-reg [11:0] araddr_q;
+reg [15:0] araddr_q;
 reg read_decode_pending_q;
 reg read_response_pending_q;
 reg [3:0] read_bank_q;
@@ -645,6 +503,18 @@ reg [9:0] read_bank_valid_q;
                           !boot_text_commit_busy_q;
     assign s_axi_arready = !ar_pending && !read_decode_pending_q &&
                            !read_response_pending_q && !s_axi_rvalid;
+    assign s_axi_bresp = 2'b00;
+    assign s_axi_rresp = 2'b00;
+    astra_access_fault_record access_fault_i (
+        .clk(clk), .reset(reset),
+        .clear(write_execute_q && write_alignment_valid_q &&
+               write_prefix_valid_q && awaddr_q[9:0] == 10'h24c),
+        .write_fault(s_axi_bvalid && s_axi_bready && bresp_code_q != 2'b00),
+        .write_reason(bresp_code_q), .write_offset(awaddr_q[15:0]),
+        .read_fault(s_axi_rvalid && s_axi_rready && rresp_code_q != 2'b00),
+        .read_reason(rresp_code_q), .read_offset(araddr_q),
+        .count_word(access_fault_count), .first_word(access_fault_first)
+    );
     wire write_fire = aw_pending && w_pending && !s_axi_bvalid &&
                       !write_response_pending_q &&
                       !commit_validation_pending_q && !write_execute_q;
@@ -668,8 +538,6 @@ reg [9:0] read_bank_valid_q;
     wire write_changes_scene =
         awaddr_q[11:0] == 12'h00c || awaddr_q[11:0] == 12'h018 ||
         (awaddr_q[11:0] >= 12'h040 && awaddr_q[11:0] <= 12'h070) ||
-        (awaddr_q[11:0] >= 12'h080 && awaddr_q[11:0] <= 12'h098) ||
-        (awaddr_q[11:0] >= 12'h0c0 && awaddr_q[11:0] <= 12'h0d8) ||
         awaddr_q[11:0] == 12'h180 || awaddr_q[11:0] == 12'h188 ||
         awaddr_q[11:0] == 12'h190;
 
@@ -722,41 +590,10 @@ reg [9:0] read_bank_valid_q;
         end
     endfunction
 
-    function automatic [31:0] read_bank2(input [3:0] word);
-        begin
-            case (word)
-                4'h0: read_bank2 = shadow_tile0_map_base;
-                4'h1: read_bank2 = shadow_tile0_pattern_base;
-                4'h2: read_bank2 = shadow_tile0_scroll_x;
-                4'h3: read_bank2 = shadow_tile0_scroll_y;
-                4'h4: read_bank2 = shadow_tile0_geometry;
-                4'h5: read_bank2 = shadow_tile0_count;
-                4'h6: read_bank2 = shadow_tile0_control;
-                default: read_bank2 = 32'd0;
-            endcase
-        end
-    endfunction
-
-    function automatic [31:0] read_bank3(input [3:0] word);
-        begin
-            case (word)
-                4'h0: read_bank3 = shadow_tile1_map_base;
-                4'h1: read_bank3 = shadow_tile1_pattern_base;
-                4'h2: read_bank3 = shadow_tile1_scroll_x;
-                4'h3: read_bank3 = shadow_tile1_scroll_y;
-                4'h4: read_bank3 = shadow_tile1_geometry;
-                4'h5: read_bank3 = shadow_tile1_count;
-                4'h6: read_bank3 = shadow_tile1_control;
-                default: read_bank3 = 32'd0;
-            endcase
-        end
-    endfunction
-
     function automatic [31:0] read_bank4(input [3:0] word);
         begin
             case (word)
                 4'h0: read_bank4 = framebuffer_palette_selector;
-                4'h2: read_bank4 = tile_palette_selector;
                 default: read_bank4 = 32'd0;
             endcase
         end
@@ -863,6 +700,9 @@ reg [9:0] read_bank_valid_q;
             case (word)
                 4'h0: read_bank9 = render_reset_count;
                 4'h1: read_bank9 = {31'd0, render_irq_pending_q};
+                4'h2: read_bank9 = render_host_aperture_base;
+                4'h3: read_bank9 = access_fault_count;
+                4'h4: read_bank9 = access_fault_first;
                 default: read_bank9 = 32'd0;
             endcase
         end
@@ -894,20 +734,6 @@ reg [9:0] read_bank_valid_q;
             pending_fb_protection_bytes_q <=
                 shadow_fb_control[6] ? shadow_fb_window_scene_bytes :
                 framebuffer_validator_surface_bytes;
-            pending_tile0_map_base_q <= shadow_tile0_map_base;
-            pending_tile0_pattern_base_q <= shadow_tile0_pattern_base;
-            pending_tile0_scroll_x_q <= shadow_tile0_scroll_x;
-            pending_tile0_scroll_y_q <= shadow_tile0_scroll_y;
-            pending_tile0_geometry_q <= shadow_tile0_geometry;
-            pending_tile0_count_q <= shadow_tile0_count;
-            pending_tile0_control_q <= shadow_tile0_control;
-            pending_tile1_map_base_q <= shadow_tile1_map_base;
-            pending_tile1_pattern_base_q <= shadow_tile1_pattern_base;
-            pending_tile1_scroll_x_q <= shadow_tile1_scroll_x;
-            pending_tile1_scroll_y_q <= shadow_tile1_scroll_y;
-            pending_tile1_geometry_q <= shadow_tile1_geometry;
-            pending_tile1_count_q <= shadow_tile1_count;
-            pending_tile1_control_q <= shadow_tile1_control;
             pending_sprite_control_q <= shadow_sprite_control;
         end
     endtask
@@ -934,20 +760,6 @@ reg [9:0] read_bank_valid_q;
             active_fb_protection_valid_q <= pending_fb_protection_valid_q;
             active_fb_protection_offset_q <= pending_fb_protection_offset_q;
             active_fb_protection_bytes_q <= pending_fb_protection_bytes_q;
-            active_tile0_map_base_q <= pending_tile0_map_base_q;
-            active_tile0_pattern_base_q <= pending_tile0_pattern_base_q;
-            active_tile0_scroll_x_q <= pending_tile0_scroll_x_q;
-            active_tile0_scroll_y_q <= pending_tile0_scroll_y_q;
-            active_tile0_geometry_q <= pending_tile0_geometry_q;
-            active_tile0_count_q <= pending_tile0_count_q;
-            active_tile0_control_q <= pending_tile0_control_q;
-            active_tile1_map_base_q <= pending_tile1_map_base_q;
-            active_tile1_pattern_base_q <= pending_tile1_pattern_base_q;
-            active_tile1_scroll_x_q <= pending_tile1_scroll_x_q;
-            active_tile1_scroll_y_q <= pending_tile1_scroll_y_q;
-            active_tile1_geometry_q <= pending_tile1_geometry_q;
-            active_tile1_count_q <= pending_tile1_count_q;
-            active_tile1_control_q <= pending_tile1_control_q;
             active_sprite_control_q <= pending_sprite_control_q;
         end
     endtask
@@ -960,19 +772,18 @@ reg [9:0] read_bank_valid_q;
             wdata_q <= 32'd0;
             wstrb_q <= 4'd0;
             write_execute_q <= 1'b0;
-            write_shadow_tile1_control_q <= 1'b0;
             write_response_pending_q <= 1'b0;
             write_response_q <= 2'b00;
             write_render_busy_q <= 1'b0;
             write_prefix_valid_q <= 1'b0;
             ar_pending <= 1'b0;
-            araddr_q <= 12'd0;
+            araddr_q <= 16'd0;
             read_decode_pending_q <= 1'b0;
             read_response_pending_q <= 1'b0;
-            s_axi_bresp <= 2'b00;
+            bresp_code_q <= 2'b00;
             s_axi_bvalid <= 1'b0;
             s_axi_rdata <= 32'd0;
-            s_axi_rresp <= 2'b00;
+            rresp_code_q <= 2'b00;
             s_axi_rvalid <= 1'b0;
             shadow_global_control <= 32'd0;
             shadow_backdrop <= 32'h00101820;
@@ -989,20 +800,6 @@ reg [9:0] read_bank_valid_q;
             shadow_display_crop_size <= DEFAULT_DISPLAY_SIZE;
             shadow_display_viewport_origin <= 32'd0;
             shadow_display_viewport_size <= DEFAULT_DISPLAY_SIZE;
-            shadow_tile0_map_base <= ARENA_BASE + 32'h00400000;
-            shadow_tile0_pattern_base <= ARENA_BASE + 32'h00420000;
-            shadow_tile0_scroll_x <= 32'd0;
-            shadow_tile0_scroll_y <= 32'd0;
-            shadow_tile0_geometry <= 32'h00000e78;
-            shadow_tile0_count <= 32'd1;
-            shadow_tile0_control <= 32'h00ff0000;
-            shadow_tile1_map_base <= ARENA_BASE + 32'h00440000;
-            shadow_tile1_pattern_base <= ARENA_BASE + 32'h00460000;
-            shadow_tile1_scroll_x <= 32'd0;
-            shadow_tile1_scroll_y <= 32'd0;
-            shadow_tile1_geometry <= 32'h00000e78;
-            shadow_tile1_count <= 32'd1;
-            shadow_tile1_control <= 32'h00ff0000;
             shadow_sprite_control <= 32'd0;
             pending_global_control_q <= 32'd0;
             pending_backdrop_q <= 32'h00101820;
@@ -1022,20 +819,6 @@ reg [9:0] read_bank_valid_q;
             pending_fb_protection_valid_q <= 1'b0;
             pending_fb_protection_offset_q <= 32'd0;
             pending_fb_protection_bytes_q <= 32'd0;
-            pending_tile0_map_base_q <= ARENA_BASE + 32'h00400000;
-            pending_tile0_pattern_base_q <= ARENA_BASE + 32'h00420000;
-            pending_tile0_scroll_x_q <= 32'd0;
-            pending_tile0_scroll_y_q <= 32'd0;
-            pending_tile0_geometry_q <= 32'h00000e78;
-            pending_tile0_count_q <= 32'd1;
-            pending_tile0_control_q <= 32'h00ff0000;
-            pending_tile1_map_base_q <= ARENA_BASE + 32'h00440000;
-            pending_tile1_pattern_base_q <= ARENA_BASE + 32'h00460000;
-            pending_tile1_scroll_x_q <= 32'd0;
-            pending_tile1_scroll_y_q <= 32'd0;
-            pending_tile1_geometry_q <= 32'h00000e78;
-            pending_tile1_count_q <= 32'd1;
-            pending_tile1_control_q <= 32'h00ff0000;
             pending_sprite_control_q <= 32'd0;
             active_global_control_q <= 32'd0;
             active_backdrop_q <= 32'h00101820;
@@ -1055,36 +838,16 @@ reg [9:0] read_bank_valid_q;
             active_fb_protection_valid_q <= 1'b0;
             active_fb_protection_offset_q <= 32'd0;
             active_fb_protection_bytes_q <= 32'd0;
-            active_tile0_map_base_q <= ARENA_BASE + 32'h00400000;
-            active_tile0_pattern_base_q <= ARENA_BASE + 32'h00420000;
-            active_tile0_scroll_x_q <= 32'd0;
-            active_tile0_scroll_y_q <= 32'd0;
-            active_tile0_geometry_q <= 32'h00000e78;
-            active_tile0_count_q <= 32'd1;
-            active_tile0_control_q <= 32'h00ff0000;
-            active_tile1_map_base_q <= ARENA_BASE + 32'h00440000;
-            active_tile1_pattern_base_q <= ARENA_BASE + 32'h00460000;
-            active_tile1_scroll_x_q <= 32'd0;
-            active_tile1_scroll_y_q <= 32'd0;
-            active_tile1_geometry_q <= 32'h00000e78;
-            active_tile1_count_q <= 32'd1;
-            active_tile1_control_q <= 32'h00ff0000;
             active_sprite_control_q <= 32'd0;
             generation_q <= 32'd0;
             commit_pending_q <= 1'b0;
             commit_quiesce <= 1'b0;
             commit_validation_pending_q <= 1'b0;
             validator_start_q <= 1'b0;
-            tile_validator_select_q <= 1'b0;
-            tile_validator_start_q <= 1'b0;
             shadow_config_dirty_q <= 1'b0;
             shadow_scene_valid_q <= 1'b1;
             framebuffer_validator_done_seen_q <= 1'b0;
             framebuffer_validator_result_q <= 1'b0;
-            tile0_validator_done_seen_q <= 1'b0;
-            tile0_validator_result_q <= 1'b0;
-            tile1_validator_done_seen_q <= 1'b0;
-            tile1_validator_result_q <= 1'b0;
             sprite_validator_done_seen_q <= 1'b0;
             sprite_validator_result_q <= 1'b0;
             sprite_pending_ready_q <= 1'b0;
@@ -1094,14 +857,9 @@ reg [9:0] read_bank_valid_q;
             commit_errors <= 32'd0;
             commit_deferrals <= 32'd0;
             framebuffer_palette_selector <= 32'd0;
-            tile_palette_selector <= 32'd0;
             framebuffer_palette_write_enable <= 1'b0;
             framebuffer_palette_write_index <= 8'd0;
             framebuffer_palette_write_argb <= 32'd0;
-            tile_palette_write_enable <= 1'b0;
-            tile_palette_write_bank <= 4'd0;
-            tile_palette_write_index <= 8'd0;
-            tile_palette_write_argb <= 32'd0;
             sprite_descriptor_selector <= 11'd0;
             sprite_palette_selector <= 12'd0;
             sprite_descriptor_write_enable <= 1'b0;
@@ -1147,14 +905,13 @@ reg [9:0] read_bank_valid_q;
             render_completion_ring_offset <= 32'h00010000;
             render_completion_consumer <= 11'd0;
             render_resource_generation <= 32'd0;
+            render_host_aperture_base <= 32'd0;
             render_irq_pending_q <= 1'b0;
         end else begin
             sprite_pending_ready_q <= sprite_pending_ready;
             scene_changed <= 1'b0;
             validator_start_q <= 1'b0;
-            tile_validator_start_q <= 1'b0;
             framebuffer_palette_write_enable <= 1'b0;
-            tile_palette_write_enable <= 1'b0;
             sprite_descriptor_write_enable <= 1'b0;
             sprite_palette_write_enable <= 1'b0;
             sprite_validate_start <= 1'b0;
@@ -1219,18 +976,16 @@ reg [9:0] read_bank_valid_q;
             if (write_response_pending_q && !s_axi_bvalid) begin
                 write_response_pending_q <= 1'b0;
                 s_axi_bvalid <= 1'b1;
-                s_axi_bresp <= write_response_q;
+                bresp_code_q <= write_response_q;
             end
 
             if (write_fire) begin
                 aw_pending <= 1'b0;
                 w_pending <= 1'b0;
                 write_execute_q <= 1'b1;
-                write_shadow_tile1_control_q <=
-                    awaddr_q[11:0] == 12'h0d8;
                 write_render_busy_q <= render_busy;
                 write_alignment_valid_q <= awaddr_q[1:0] == 2'b00;
-                write_prefix_valid_q <= awaddr_q[11:10] == 2'b00;
+                write_prefix_valid_q <= awaddr_q[15:10] == 6'd0;
                 write_full_strobe_q <= wstrb_q == 4'hf;
                 write_commit_request_valid_q <= wstrb_q[0] && wdata_q[0];
                 write_boot_control_valid_q <= wstrb_q == 4'hf &&
@@ -1274,9 +1029,6 @@ reg [9:0] read_bank_valid_q;
                 if (!write_alignment_valid_q || !write_prefix_valid_q) begin
                     write_response_q <= 2'b11;
                 end else begin
-                    if (write_shadow_tile1_control_q)
-                        shadow_tile1_control <= merge_write(
-                            shadow_tile1_control, wdata_q, wstrb_q);
                     case (awaddr_q[9:0])
                         12'h00c: shadow_global_control <= merge_write(
                             shadow_global_control, wdata_q, wstrb_q);
@@ -1298,12 +1050,8 @@ reg [9:0] read_bank_valid_q;
                                 write_response_pending_q <= 1'b0;
                                 commit_validation_pending_q <= 1'b1;
                                 validator_start_q <= 1'b1;
-                                tile_validator_select_q <= 1'b0;
-                                tile_validator_start_q <= 1'b1;
                                 sprite_validate_start <= 1'b1;
                                 framebuffer_validator_done_seen_q <= 1'b0;
-                                tile0_validator_done_seen_q <= 1'b0;
-                                tile1_validator_done_seen_q <= 1'b0;
                                 sprite_validator_done_seen_q <= 1'b0;
                             end
                         end
@@ -1335,33 +1083,10 @@ reg [9:0] read_bank_valid_q;
                             shadow_display_viewport_size, wdata_q, wstrb_q);
                         12'h070: shadow_fb_window_scene_bytes <= merge_write(
                             shadow_fb_window_scene_bytes, wdata_q, wstrb_q);
-                        12'h080: shadow_tile0_map_base <= merge_write(
-                            shadow_tile0_map_base, wdata_q, wstrb_q);
-                        12'h084: shadow_tile0_pattern_base <= merge_write(
-                            shadow_tile0_pattern_base, wdata_q, wstrb_q);
-                        12'h088: shadow_tile0_scroll_x <= merge_write(
-                            shadow_tile0_scroll_x, wdata_q, wstrb_q);
-                        12'h08c: shadow_tile0_scroll_y <= merge_write(
-                            shadow_tile0_scroll_y, wdata_q, wstrb_q);
-                        12'h090: shadow_tile0_geometry <= merge_write(
-                            shadow_tile0_geometry, wdata_q, wstrb_q);
-                        12'h094: shadow_tile0_count <= merge_write(
-                            shadow_tile0_count, wdata_q, wstrb_q);
-                        12'h098: shadow_tile0_control <= merge_write(
-                            shadow_tile0_control, wdata_q, wstrb_q);
-                        12'h0c0: shadow_tile1_map_base <= merge_write(
-                            shadow_tile1_map_base, wdata_q, wstrb_q);
-                        12'h0c4: shadow_tile1_pattern_base <= merge_write(
-                            shadow_tile1_pattern_base, wdata_q, wstrb_q);
-                        12'h0c8: shadow_tile1_scroll_x <= merge_write(
-                            shadow_tile1_scroll_x, wdata_q, wstrb_q);
-                        12'h0cc: shadow_tile1_scroll_y <= merge_write(
-                            shadow_tile1_scroll_y, wdata_q, wstrb_q);
-                        12'h0d0: shadow_tile1_geometry <= merge_write(
-                            shadow_tile1_geometry, wdata_q, wstrb_q);
-                        12'h0d4: shadow_tile1_count <= merge_write(
-                            shadow_tile1_count, wdata_q, wstrb_q);
-                        12'h0d8: begin end
+                        12'h080, 12'h084, 12'h088, 12'h08c,
+                        12'h090, 12'h094, 12'h098, 12'h0c0,
+                        12'h0c4, 12'h0c8, 12'h0cc, 12'h0d0,
+                        12'h0d4, 12'h0d8: write_response_q <= 2'b10;
                         12'h100: framebuffer_palette_selector <= merge_write(
                             framebuffer_palette_selector, wdata_q, wstrb_q);
                         12'h104: begin
@@ -1376,22 +1101,8 @@ reg [9:0] read_bank_valid_q;
                                 framebuffer_palette_write_argb <= wdata_q;
                             end
                         end
-                        12'h108: tile_palette_selector <= merge_write(
-                            tile_palette_selector, wdata_q, wstrb_q);
-                        12'h10c: begin
-                            if (active_global_control_q[0] ||
-                                commit_pending_q || !write_full_strobe_q ||
-                                !palette_write_ready) begin
-                                write_response_q <= 2'b10;
-                            end else begin
-                                tile_palette_write_enable <= 1'b1;
-                                tile_palette_write_bank <=
-                                    tile_palette_selector[11:8];
-                                tile_palette_write_index <=
-                                    tile_palette_selector[7:0];
-                                tile_palette_write_argb <= wdata_q;
-                            end
-                        end
+                        12'h108, 12'h10c:
+                            write_response_q <= 2'b10;
                         12'h140: begin
                             if (!write_boot_control_valid_q ||
                                 !boot_text_commit_available) begin
@@ -1582,6 +1293,17 @@ reg [9:0] read_bank_valid_q;
                             else
                                 render_resource_generation <= wdata_q;
                         end
+                        12'h248: begin
+                            // Only while the engine is stopped, so a base
+                            // change can never land inside a burst.
+                            if (!write_full_strobe_q || render_enable ||
+                                write_render_busy_q || wdata_q[11:0] != 12'd0)
+                                write_response_q <= 2'b10;
+                            else
+                                render_host_aperture_base <= wdata_q;
+                        end
+                        12'h24c: ; // clears the access-fault record
+                        12'h250: write_response_q <= 2'b10;
                         12'h244: begin
                             if (!write_full_strobe_q ||
                                 wdata_q[31:1] != 31'd0)
@@ -1602,17 +1324,6 @@ reg [9:0] read_bank_valid_q;
                 framebuffer_validator_result_q <=
                     framebuffer_validator_valid;
             end
-            if (commit_validation_pending_q && tile_validator_done) begin
-                if (!tile_validator_select_q) begin
-                    tile0_validator_done_seen_q <= 1'b1;
-                    tile0_validator_result_q <= tile_validator_valid;
-                    tile_validator_select_q <= 1'b1;
-                    tile_validator_start_q <= 1'b1;
-                end else begin
-                    tile1_validator_done_seen_q <= 1'b1;
-                    tile1_validator_result_q <= tile_validator_valid;
-                end
-            end
             if (commit_validation_pending_q && sprite_validate_done) begin
                 sprite_validator_done_seen_q <= 1'b1;
                 sprite_validator_result_q <= sprite_validate_valid;
@@ -1628,7 +1339,7 @@ reg [9:0] read_bank_valid_q;
                     shadow_config_dirty_q <= 1'b0;
                     shadow_scene_valid_q <= 1'b0;
                     s_axi_bvalid <= 1'b1;
-                    s_axi_bresp <= 2'b00;
+                    bresp_code_q <= 2'b00;
                     commit_errors <= commit_errors + 32'd1;
                 end
             end
@@ -1641,7 +1352,7 @@ reg [9:0] read_bank_valid_q;
                 shadow_config_dirty_q <= 1'b0;
                 shadow_scene_valid_q <= 1'b1;
                 s_axi_bvalid <= 1'b1;
-                s_axi_bresp <= 2'b00;
+                bresp_code_q <= 2'b00;
                 commit_pending_q <= 1'b1;
             end
 
@@ -1673,13 +1384,13 @@ reg [9:0] read_bank_valid_q;
                 render_irq_pending_q <= 1'b1;
             if (s_axi_arvalid && s_axi_arready) begin
                 ar_pending <= 1'b1;
-                araddr_q <= s_axi_araddr[11:0];
+                araddr_q <= s_axi_araddr[15:0];
             end
             if (ar_pending) begin
                 ar_pending <= 1'b0;
                 read_decode_pending_q <= 1'b1;
                 read_bank_q <= araddr_q[9:6];
-                read_prefix_valid_q <= araddr_q[11:10] == 2'd0 &&
+                read_prefix_valid_q <= araddr_q[15:10] == 6'd0 &&
                     araddr_q[9:6] <= 4'd9 && araddr_q[1:0] == 2'b00;
                 read_bank_word_q[0] <= araddr_q[5:2];
                 read_bank_word_q[1] <= araddr_q[5:2];
@@ -1697,8 +1408,8 @@ reg [9:0] read_bank_valid_q;
                 read_response_pending_q <= 1'b1;
                 read_bank_data_q[0] <= read_bank0(read_bank_word_q[0]);
                 read_bank_data_q[1] <= read_bank1(read_bank_word_q[1]);
-                read_bank_data_q[2] <= read_bank2(read_bank_word_q[2]);
-                read_bank_data_q[3] <= read_bank3(read_bank_word_q[3]);
+                read_bank_data_q[2] <= 32'd0;
+                read_bank_data_q[3] <= 32'd0;
                 read_bank_data_q[4] <= read_bank4(read_bank_word_q[4]);
                 read_bank_data_q[5] <= read_bank5(read_bank_word_q[5]);
                 read_bank_data_q[6] <= read_bank6(read_bank_word_q[6]);
@@ -1707,8 +1418,8 @@ reg [9:0] read_bank_valid_q;
                 read_bank_data_q[9] <= read_bank9(read_bank_word_q[9]);
                 read_bank_valid_q[0] <= 1'b1;
                 read_bank_valid_q[1] <= read_bank_word_q[1] <= 4'hc;
-                read_bank_valid_q[2] <= read_bank_word_q[2] <= 4'h6;
-                read_bank_valid_q[3] <= read_bank_word_q[3] <= 4'h6;
+                read_bank_valid_q[2] <= 1'b0;
+                read_bank_valid_q[3] <= 1'b0;
                 read_bank_valid_q[4] <= read_bank_word_q[4] == 4'h0 ||
                     read_bank_word_q[4] == 4'h2;
                 read_bank_valid_q[5] <= read_bank_word_q[5] == 4'h0 ||
@@ -1720,64 +1431,74 @@ reg [9:0] read_bank_valid_q;
                 read_bank_valid_q[6] <= 1'b1;
                 read_bank_valid_q[7] <= read_bank_word_q[7] <= 4'h4;
                 read_bank_valid_q[8] <= 1'b1;
-                read_bank_valid_q[9] <= read_bank_word_q[9] <= 4'h1;
+                read_bank_valid_q[9] <= read_bank_word_q[9] <= 4'h4;
             end
             if (read_response_pending_q) begin
                 read_response_pending_q <= 1'b0;
                 s_axi_rvalid <= 1'b1;
                 if (!read_prefix_valid_q) begin
                     s_axi_rdata <= 32'd0;
-                    s_axi_rresp <= 2'b11;
+                    rresp_code_q <= 2'b11;
                 end else begin
                     case (read_bank_q)
                         3'd0: begin
-                            s_axi_rdata <= read_bank_data_q[0];
-                            s_axi_rresp <= read_bank_valid_q[0] ?
+                            s_axi_rdata <= read_bank_valid_q[0] ?
+                                read_bank_data_q[0] : 32'd0;
+                            rresp_code_q <= read_bank_valid_q[0] ?
                                 2'b00 : 2'b11;
                         end
                         3'd1: begin
-                            s_axi_rdata <= read_bank_data_q[1];
-                            s_axi_rresp <= read_bank_valid_q[1] ?
+                            s_axi_rdata <= read_bank_valid_q[1] ?
+                                read_bank_data_q[1] : 32'd0;
+                            rresp_code_q <= read_bank_valid_q[1] ?
                                 2'b00 : 2'b11;
                         end
                         3'd2: begin
-                            s_axi_rdata <= read_bank_data_q[2];
-                            s_axi_rresp <= read_bank_valid_q[2] ?
+                            s_axi_rdata <= read_bank_valid_q[2] ?
+                                read_bank_data_q[2] : 32'd0;
+                            rresp_code_q <= read_bank_valid_q[2] ?
                                 2'b00 : 2'b11;
                         end
                         3'd3: begin
-                            s_axi_rdata <= read_bank_data_q[3];
-                            s_axi_rresp <= read_bank_valid_q[3] ?
+                            s_axi_rdata <= read_bank_valid_q[3] ?
+                                read_bank_data_q[3] : 32'd0;
+                            rresp_code_q <= read_bank_valid_q[3] ?
                                 2'b00 : 2'b11;
                         end
                         3'd4: begin
-                            s_axi_rdata <= read_bank_data_q[4];
-                            s_axi_rresp <= read_bank_valid_q[4] ?
+                            s_axi_rdata <= read_bank_valid_q[4] ?
+                                read_bank_data_q[4] : 32'd0;
+                            rresp_code_q <= read_bank_valid_q[4] ?
                                 2'b00 : 2'b11;
                         end
                         3'd5: begin
-                            s_axi_rdata <= read_bank_data_q[5];
-                            s_axi_rresp <= read_bank_valid_q[5] ?
+                            s_axi_rdata <= read_bank_valid_q[5] ?
+                                read_bank_data_q[5] : 32'd0;
+                            rresp_code_q <= read_bank_valid_q[5] ?
                                 2'b00 : 2'b11;
                         end
                         3'd6: begin
-                            s_axi_rdata <= read_bank_data_q[6];
-                            s_axi_rresp <= read_bank_valid_q[6] ?
+                            s_axi_rdata <= read_bank_valid_q[6] ?
+                                read_bank_data_q[6] : 32'd0;
+                            rresp_code_q <= read_bank_valid_q[6] ?
                                 2'b00 : 2'b11;
                         end
                         4'd7: begin
-                            s_axi_rdata <= read_bank_data_q[7];
-                            s_axi_rresp <= read_bank_valid_q[7] ?
+                            s_axi_rdata <= read_bank_valid_q[7] ?
+                                read_bank_data_q[7] : 32'd0;
+                            rresp_code_q <= read_bank_valid_q[7] ?
                                 2'b00 : 2'b11;
                         end
                         4'd8: begin
-                            s_axi_rdata <= read_bank_data_q[8];
-                            s_axi_rresp <= read_bank_valid_q[8] ?
+                            s_axi_rdata <= read_bank_valid_q[8] ?
+                                read_bank_data_q[8] : 32'd0;
+                            rresp_code_q <= read_bank_valid_q[8] ?
                                 2'b00 : 2'b11;
                         end
                         default: begin
-                            s_axi_rdata <= read_bank_data_q[9];
-                            s_axi_rresp <= read_bank_valid_q[9] ?
+                            s_axi_rdata <= read_bank_valid_q[9] ?
+                                read_bank_data_q[9] : 32'd0;
+                            rresp_code_q <= read_bank_valid_q[9] ?
                                 2'b00 : 2'b11;
                         end
                     endcase

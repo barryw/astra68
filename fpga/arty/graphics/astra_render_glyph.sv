@@ -210,6 +210,12 @@ reg [15:0] glyph_last_x_q, glyph_last_y_q;
     reg [25:0] blend_div_product_r_q, blend_div_product_g_q;
     reg [25:0] blend_div_product_b_q;
     reg [7:0] blend_result_r_q, blend_result_g_q, blend_result_b_q;
+    // ARGB8888 destinations keep alpha: out.a = a + m(dst.a, 255 - a), the
+    // BLEND alpha equation of docs/TEXTURE_ENGINE.md, with a the coverage
+    // (A4 scaled by 17) or palette alpha.
+    reg [7:0] blend_alpha8_q;
+    reg [15:0] blend_alpha_product_q;
+    reg [7:0] blend_alpha_result_q;
     reg blend_component_rgb565_q;
     reg [16:0] descriptor_source_end_x_q;
     reg [16:0] descriptor_source_end_y_q;
@@ -345,6 +351,12 @@ reg [31:0] source_column_byte_q, destination_column_byte_q;
                     8'hff, red5, red5[4:2], green6, green6[5:4],
                     blue5, blue5[4:2]
                 };
+                `ASTRA_RENDER_FORMAT_ARGB8888: decode_destination = {
+                    beat_byte(beat, lane),
+                    beat_byte(beat, lane + 3'd1),
+                    beat_byte(beat, lane + 3'd2),
+                    beat_byte(beat, lane + 3'd3)
+                };
                 default: decode_destination = {
                     8'hff,
                     beat_byte(beat, lane + 3'd1),
@@ -366,6 +378,8 @@ reg [31:0] source_column_byte_q, destination_column_byte_q;
                 `ASTRA_RENDER_FORMAT_RGB565:
                     pack_destination = {16'd0, argb[23:19],
                         argb[15:10], argb[7:3]};
+                `ASTRA_RENDER_FORMAT_ARGB8888:
+                    pack_destination = argb;
                 default: pack_destination = {8'hff, argb[23:0]};
             endcase
         end
@@ -1180,6 +1194,8 @@ reg [31:0] source_column_byte_q, destination_column_byte_q;
                         blend_destination_g_q <= destination_color_q[15:8];
                         blend_destination_b_q <= destination_color_q[7:0];
                     end
+                    blend_alpha8_q <= coverage_max_q == 8'd15 ?
+                        {coverage_q[3:0], coverage_q[3:0]} : coverage_q;
                     if (coverage_max_q == 8'd15) begin
                         blend_alpha_q <= {4'd0, coverage_q[3:0]};
                         blend_inverse_alpha_q <=
@@ -1192,10 +1208,14 @@ reg [31:0] source_column_byte_q, destination_column_byte_q;
                 end
 
                 ST_BLEND_MULTIPLY: begin
+                    blend_alpha_product_q <= destination_color_q[31:24] *
+                        (8'd255 - blend_alpha8_q);
                     state <= ST_BLEND_PRODUCT_PIPE;
                 end
 
                 ST_BLEND_PRODUCT_PIPE: begin
+                    blend_alpha_result_q <= blend_alpha8_q +
+                        divide_255_round({1'b0, blend_alpha_product_q});
                     state <= ST_BLEND_ACCUMULATE;
                 end
 
@@ -1256,8 +1276,8 @@ reg [31:0] source_column_byte_q, destination_column_byte_q;
                     else
                         output_pixel_q <= pack_destination(
                             command_destination_format_q,
-                            {8'hff, blend_result_r_q, blend_result_g_q,
-                             blend_result_b_q});
+                            {blend_alpha_result_q, blend_result_r_q,
+                             blend_result_g_q, blend_result_b_q});
                     state <= ST_EMIT;
                 end
 

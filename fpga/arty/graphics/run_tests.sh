@@ -29,6 +29,14 @@ iverilog -g2012 -Wall \
 vvp "$BUILD/tb_video_timing_1080p"
 
 iverilog -g2012 -Wall \
+    -s tb_astra_access_fault_record \
+    -o "$BUILD/tb_astra_access_fault_record" \
+    "$ROOT/fpga/arty/graphics/astra_access_fault_record.sv" \
+    "$ROOT/fpga/arty/graphics/sim/tb_astra_access_fault_record.sv"
+
+vvp "$BUILD/tb_astra_access_fault_record"
+
+iverilog -g2012 -Wall \
     -s tb_astra_display_axis_scaler \
     -o "$BUILD/tb_astra_display_axis_scaler" \
     "$ROOT/fpga/arty/graphics/astra_display_axis_scaler.sv" \
@@ -73,6 +81,7 @@ iverilog -g2012 -Wall \
     -s tb_astra_display_capture \
     -o "$BUILD/tb_astra_display_capture" \
     "$ROOT/fpga/arty/common/astra_async_fifo.sv" \
+    "$ROOT/fpga/arty/graphics/astra_access_fault_record.sv" \
     "$ROOT/fpga/arty/graphics/astra_display_capture.sv" \
     "$ROOT/fpga/arty/graphics/sim/tb_astra_display_capture.sv"
 
@@ -82,6 +91,7 @@ iverilog -g2012 -Wall \
     -s tb_astra_front_panel_axi \
     -o "$BUILD/tb_astra_front_panel_axi" \
     "$ROOT/fpga/arty/common/astra_front_panel.sv" \
+    "$ROOT/fpga/arty/graphics/astra_access_fault_record.sv" \
     "$ROOT/fpga/arty/rtl/astra_front_panel_axi.sv" \
     "$ROOT/fpga/arty/rtl/sim/tb_astra_front_panel_axi.sv"
 
@@ -95,35 +105,6 @@ iverilog -g2012 -Wall \
 
 (cd "$ROOT" && vvp "$BUILD/tb_astra_boot_text_overlay")
 
-iverilog -g2012 -Wall \
-    -s tb_astra_tile_span_walker \
-    -o "$BUILD/tb_astra_tile_span_walker" \
-    "$ROOT/fpga/arty/graphics/astra_tile_span_walker.sv" \
-    "$ROOT/fpga/arty/graphics/sim/tb_astra_tile_span_walker.sv"
-
-vvp "$BUILD/tb_astra_tile_span_walker"
-
-iverilog -g2012 -Wall \
-    -s tb_astra_tile_line_builder \
-    -o "$BUILD/tb_astra_tile_line_builder" \
-    "$ROOT/fpga/arty/graphics/astra_tile_config_validator.sv" \
-    "$ROOT/fpga/arty/graphics/astra_tile_span_walker.sv" \
-    "$ROOT/fpga/arty/graphics/astra_tile_line_store.sv" \
-    "$ROOT/fpga/arty/graphics/astra_tile_line_builder.sv" \
-    "$ROOT/fpga/arty/graphics/sim/tb_astra_tile_line_builder.sv"
-
-vvp "$BUILD/tb_astra_tile_line_builder"
-
-iverilog -g2012 -Wall \
-    -s tb_astra_tile_line_builder_perf \
-    -o "$BUILD/tb_astra_tile_line_builder_perf" \
-    "$ROOT/fpga/arty/graphics/astra_tile_config_validator.sv" \
-    "$ROOT/fpga/arty/graphics/astra_tile_span_walker.sv" \
-    "$ROOT/fpga/arty/graphics/astra_tile_line_store.sv" \
-    "$ROOT/fpga/arty/graphics/astra_tile_line_builder.sv" \
-    "$ROOT/fpga/arty/graphics/sim/tb_astra_tile_line_builder_perf.sv"
-
-vvp "$BUILD/tb_astra_tile_line_builder_perf"
 
 iverilog -g2012 -Wall -I "$ROOT/fpga/arty/graphics" \
     -s tb_astra_framebuffer_line_builder \
@@ -251,6 +232,7 @@ iverilog -g2012 -Wall \
     -s tb_astra_copper_control \
     -o "$BUILD/tb_astra_copper_control" \
     "$ROOT/fpga/arty/graphics/astra_copper.sv" \
+    "$ROOT/fpga/arty/graphics/astra_access_fault_record.sv" \
     "$ROOT/fpga/arty/graphics/astra_copper_control.sv" \
     "$ROOT/fpga/arty/graphics/sim/tb_astra_copper_control.sv"
 
@@ -276,7 +258,6 @@ iverilog -g2012 -Wall \
     -s tb_astra_copper_structural_state \
     -o "$BUILD/tb_astra_copper_structural_state" \
     "$ROOT/fpga/arty/graphics/astra_framebuffer_config_validator.sv" \
-    "$ROOT/fpga/arty/graphics/astra_tile_config_validator.sv" \
     "$ROOT/fpga/arty/graphics/astra_copper_structural_state.sv" \
     "$ROOT/fpga/arty/graphics/sim/tb_astra_copper_structural_state.sv"
 
@@ -295,8 +276,8 @@ iverilog -g2012 -Wall \
     -s tb_astra_graphics_control \
     -o "$BUILD/tb_astra_graphics_control" \
     "$ROOT/fpga/arty/graphics/astra_framebuffer_config_validator.sv" \
-    "$ROOT/fpga/arty/graphics/astra_tile_config_validator.sv" \
     "$ROOT/fpga/arty/graphics/astra_sprite_scene_store.sv" \
+    "$ROOT/fpga/arty/graphics/astra_access_fault_record.sv" \
     "$ROOT/fpga/arty/graphics/astra_graphics_control.sv" \
     "$ROOT/fpga/arty/graphics/sim/tb_astra_graphics_control.sv"
 
@@ -304,13 +285,9 @@ vvp "$BUILD/tb_astra_graphics_control"
 
 PIPELINE_SOURCES=(
     "$ROOT/fpga/arty/graphics/astra_framebuffer_config_validator.sv"
-    "$ROOT/fpga/arty/graphics/astra_tile_config_validator.sv"
     "$ROOT/fpga/arty/graphics/astra_sprite_scene_store.sv"
     "$ROOT/fpga/arty/graphics/astra_framebuffer_line_store.sv"
     "$ROOT/fpga/arty/graphics/astra_framebuffer_line_builder.sv"
-    "$ROOT/fpga/arty/graphics/astra_tile_span_walker.sv"
-    "$ROOT/fpga/arty/graphics/astra_tile_line_store.sv"
-    "$ROOT/fpga/arty/graphics/astra_tile_line_builder.sv"
     "$ROOT/fpga/arty/graphics/astra_sprite_line_store.sv"
     "$ROOT/fpga/arty/graphics/astra_sprite_line_builder.sv"
     "$ROOT/fpga/arty/graphics/astra_display_axis_scaler.sv"
@@ -323,6 +300,7 @@ PIPELINE_SOURCES=(
     "$ROOT/fpga/arty/graphics/astra_boot_text_overlay.sv"
     "$ROOT/fpga/arty/graphics/astra_axi_lite_1to2.sv"
     "$ROOT/fpga/arty/graphics/astra_copper.sv"
+    "$ROOT/fpga/arty/graphics/astra_access_fault_record.sv"
     "$ROOT/fpga/arty/graphics/astra_copper_control.sv"
     "$ROOT/fpga/arty/graphics/astra_copper_beam_scheduler.sv"
     "$ROOT/fpga/arty/graphics/astra_copper_registers.sv"
@@ -337,6 +315,7 @@ PIPELINE_SOURCES=(
     "$ROOT/fpga/arty/graphics/astra_render_geometry.sv"
     "$ROOT/fpga/arty/graphics/astra_render_flood.sv"
     "$ROOT/fpga/arty/graphics/astra_render_glyph.sv"
+    "$ROOT/fpga/arty/graphics/astra_render_texture.sv"
     "$ROOT/fpga/arty/graphics/astra_render_command_processor.sv"
     "$ROOT/fpga/arty/graphics/astra_graphics_pipeline.sv"
     "$ROOT/fpga/arty/graphics/sim/astra_render_axi_memory_model.sv"
@@ -420,6 +399,35 @@ iverilog -g2012 -Wall -Wno-timescale \
 
 (cd "$ROOT" && vvp "$BUILD/tb_astra_render_glyph")
 
+# Texture engine: the C reference model is the oracle. Its own hand-computed
+# self-test runs first, then it generates the vectors the RTL must match.
+TEXTURE_BUILD="$BUILD/texture"
+TEXTURE_CFLAGS=(-std=c11 -O2 -Wall -Wextra -Werror
+    -I "$ROOT/sw/userspace/graphics/include" -I "$ROOT/sw/include"
+    -I "$ROOT/fpga/arty/linux")
+mkdir -p "$TEXTURE_BUILD"
+cc "${TEXTURE_CFLAGS[@]}" \
+    "$ROOT/sw/userspace/graphics/src/texture_reference.c" \
+    "$ROOT/sw/userspace/graphics/tests/test_texture_reference.c" \
+    -o "$TEXTURE_BUILD/test_texture_reference"
+"$TEXTURE_BUILD/test_texture_reference"
+cc "${TEXTURE_CFLAGS[@]}" \
+    "$ROOT/sw/userspace/graphics/src/texture_reference.c" \
+    "$ROOT/fpga/arty/graphics/sim/texture_vectors.c" \
+    -o "$TEXTURE_BUILD/texture_vectors"
+"$TEXTURE_BUILD/texture_vectors" "$TEXTURE_BUILD"
+
+iverilog -g2012 -Wall -Wno-timescale \
+    -I "$ROOT/fpga/arty/graphics" \
+    -s tb_astra_render_texture \
+    -o "$BUILD/tb_astra_render_texture" \
+    "$ROOT/fpga/arty/graphics/astra_render_pixel_writer.sv" \
+    "$ROOT/fpga/arty/graphics/astra_render_texture.sv" \
+    "$ROOT/fpga/arty/graphics/sim/astra_render_axi_memory_model.sv" \
+    "$ROOT/fpga/arty/graphics/sim/tb_astra_render_texture.sv"
+
+(cd "$TEXTURE_BUILD" && vvp "$BUILD/tb_astra_render_texture")
+
 iverilog -g2012 -Wall -Wno-timescale \
     -I "$ROOT/fpga/arty/graphics" \
     -s tb_astra_render_command_processor \
@@ -431,8 +439,25 @@ iverilog -g2012 -Wall -Wno-timescale \
     "$ROOT/fpga/arty/graphics/astra_render_geometry.sv" \
     "$ROOT/fpga/arty/graphics/astra_render_flood.sv" \
     "$ROOT/fpga/arty/graphics/astra_render_glyph.sv" \
+    "$ROOT/fpga/arty/graphics/astra_render_texture.sv" \
     "$ROOT/fpga/arty/graphics/astra_render_command_processor.sv" \
     "$ROOT/fpga/arty/graphics/sim/astra_render_axi_memory_model.sv" \
     "$ROOT/fpga/arty/graphics/sim/tb_astra_render_command_processor.sv"
 
 (cd "$ROOT" && vvp "$BUILD/tb_astra_render_command_processor")
+
+iverilog -g2012 -Wall -I "$ROOT/fpga/arty/graphics" \
+    -s tb_astra_render_host_reads \
+    -o "$BUILD/tb_astra_render_host_reads" \
+    "$ROOT/fpga/arty/graphics/astra_render_host_reads.sv" \
+    "$ROOT/fpga/arty/graphics/sim/astra_render_axi_latency_model.sv" \
+    "$ROOT/fpga/arty/graphics/sim/tb_astra_render_host_reads.sv"
+
+vvp "$BUILD/tb_astra_render_host_reads"
+
+# Latency-model bench: axis-aligned TRIANGLES quads cover each pixel exactly
+# once (ADD on black). The timing cases run from perf/run_perf.sh.
+BUILD="$BUILD" ROOT="$ROOT" "$ROOT/fpga/arty/graphics/perf/run_perf.sh" 25 25 80
+
+# Memory ordering of posted writes: slow, reorderable write responses.
+BUILD="$BUILD" ROOT="$ROOT" "$ROOT/fpga/arty/graphics/perf/run_ordering.sh"

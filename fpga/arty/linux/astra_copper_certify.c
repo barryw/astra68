@@ -29,8 +29,6 @@ struct scene_controls {
     uint32_t global;
     uint32_t backdrop;
     uint32_t framebuffer;
-    uint32_t tile0;
-    uint32_t tile1;
     uint32_t sprites;
 };
 
@@ -196,8 +194,6 @@ int main(int argc, char **argv)
     scene.global = astra_mmio_read(&device, ASTRA_REG_GLOBAL_CONTROL);
     scene.backdrop = astra_mmio_read(&device, ASTRA_REG_BACKDROP);
     scene.framebuffer = astra_mmio_read(&device, ASTRA_REG_FB_CONTROL);
-    scene.tile0 = astra_mmio_read(&device, ASTRA_REG_TILE0_CONTROL);
-    scene.tile1 = astra_mmio_read(&device, ASTRA_REG_TILE1_CONTROL);
     scene.sprites = astra_mmio_read(&device, ASTRA_REG_SPRITE_CONTROL);
 
     save_render_state(&device, &saved);
@@ -267,8 +263,6 @@ int main(int argc, char **argv)
         uint32_t generation;
 
         astra_mmio_write(&device, ASTRA_REG_FB_CONTROL, 0u);
-        astra_mmio_write(&device, ASTRA_REG_TILE0_CONTROL, 0u);
-        astra_mmio_write(&device, ASTRA_REG_TILE1_CONTROL, 0u);
         astra_mmio_write(&device, ASTRA_REG_SPRITE_CONTROL, 0u);
         astra_mmio_write(&device, ASTRA_REG_GLOBAL_CONTROL, 1u);
         if (astra_graphics_scene_commit(&device, COPPER_TIMEOUT_NS,
@@ -350,8 +344,6 @@ cleanup:
 
         astra_mmio_write(&device, ASTRA_REG_BACKDROP, scene.backdrop);
         astra_mmio_write(&device, ASTRA_REG_FB_CONTROL, scene.framebuffer);
-        astra_mmio_write(&device, ASTRA_REG_TILE0_CONTROL, scene.tile0);
-        astra_mmio_write(&device, ASTRA_REG_TILE1_CONTROL, scene.tile1);
         astra_mmio_write(&device, ASTRA_REG_SPRITE_CONTROL, scene.sprites);
         astra_mmio_write(&device, ASTRA_REG_GLOBAL_CONTROL, scene.global);
         if (astra_graphics_scene_commit(&device, COPPER_TIMEOUT_NS,

@@ -32,7 +32,7 @@ enum {
     ASTRA_CONTROL_BASE = ASTRA_CONTROL_BASE_VALUE,
     ASTRA_CONTROL_BYTES = 0x00010000u,
     ASTRA_GRAPHICS_DEVICE_ID = 0x41535452u,
-    ASTRA_GRAPHICS_VERSION = 0x00010009u,
+    ASTRA_GRAPHICS_VERSION = 0x00020000u,
     ASTRA_CAPTURE_DEVICE_ID = ASTRA_DISPLAY_CAPTURE_DEVICE_ID,
     ASTRA_CAPTURE_VERSION = ASTRA_DISPLAY_CAPTURE_VERSION,
     ASTRA_COPPER_DEVICE_ID = 0x434f5052u,
@@ -44,11 +44,28 @@ enum {
     ASTRA_CAP_COPPER = 0x00000200u,
     ASTRA_CAP_DISPLAY_SCALER = 0x00000400u,
     ASTRA_CAP_HARDWARE_POINTER = 0x00000800u,
+    /* The fabric answers every CPU access OKAY and records refused or
+       unmapped ones (ACCESS_FAULT_COUNT/FIRST in graphics control, Copper,
+       capture, audio and front panel). Without it those registers do not
+       exist and a load from them is a DECERR, which the DE25 turns into an
+       SError: never touch them unless this bit is set. */
+    ASTRA_CAP_ACCESS_FAULT_RECORD = 0x00001000u,
+    /* RENDER_HOST_APERTURE_BASE (0x248) exists and drives a host-read port. */
+    ASTRA_CAP_RENDER_HOST_APERTURE = 0x00002000u,
+    /* ACCESS_FAULT_FIRST fields; bit 31 (store) is
+       ASTRA_ACCESS_FAULT_STORE below, outside int range. */
+    ASTRA_ACCESS_FAULT_REASON_SHIFT = 16u,
+    ASTRA_ACCESS_FAULT_REASON_MASK = 0x3u,
+    ASTRA_ACCESS_FAULT_REJECTED = 2u,
+    ASTRA_ACCESS_FAULT_UNMAPPED = 3u,
+    ASTRA_ACCESS_FAULT_OFFSET_MASK = 0xffffu,
     ASTRA_BOOT_TEXT_COLS = 36u,
     ASTRA_BOOT_TEXT_ROWS = 4u,
     ASTRA_BOOT_TEXT_CELLS =
         ASTRA_BOOT_TEXT_COLS * ASTRA_BOOT_TEXT_ROWS,
 };
+
+#define ASTRA_ACCESS_FAULT_STORE 0x80000000u
 
 enum astra_graphics_register {
     ASTRA_REG_DEVICE_ID = 0x000,
@@ -80,8 +97,6 @@ enum astra_graphics_register {
     ASTRA_REG_DISPLAY_VIEWPORT_ORIGIN = 0x068,
     ASTRA_REG_DISPLAY_VIEWPORT_SIZE = 0x06c,
     ASTRA_REG_FB_WINDOW_SCENE_BYTES = 0x070,
-    ASTRA_REG_TILE0_CONTROL = 0x098,
-    ASTRA_REG_TILE1_CONTROL = 0x0d8,
     ASTRA_REG_BOOT_TEXT_CONTROL = 0x140,
     ASTRA_REG_BOOT_TEXT_INDEX = 0x144,
     ASTRA_REG_BOOT_TEXT_CELL = 0x148,
@@ -136,6 +151,9 @@ enum astra_graphics_register {
     ASTRA_REG_RENDER_TIMEOUT_COUNT = 0x23c,
     ASTRA_REG_RENDER_RESET_COUNT = 0x240,
     ASTRA_REG_RENDER_IRQ_PENDING = 0x244,
+    ASTRA_REG_RENDER_HOST_APERTURE_BASE = 0x248,
+    ASTRA_REG_ACCESS_FAULT_COUNT = 0x24c,
+    ASTRA_REG_ACCESS_FAULT_FIRST = 0x250,
     ASTRA_REG_COPPER_DEVICE_ID = 0x4000,
     ASTRA_REG_COPPER_VERSION = 0x4004,
     ASTRA_REG_COPPER_CONTROL = 0x4008,
@@ -150,6 +168,10 @@ enum astra_graphics_register {
     ASTRA_REG_COPPER_IRQ_SOURCES = 0x402c,
     ASTRA_REG_COPPER_DISPATCH_SELECTOR = 0x4030,
     ASTRA_REG_COPPER_DISPATCH_ENDPOINT = 0x4034,
+    ASTRA_REG_COPPER_ACCESS_FAULT_COUNT = 0x4038,
+    ASTRA_REG_COPPER_ACCESS_FAULT_FIRST = 0x403c,
+    ASTRA_REG_CAPTURE_ACCESS_FAULT_COUNT = 0x503c,
+    ASTRA_REG_CAPTURE_ACCESS_FAULT_FIRST = 0x5040,
     ASTRA_REG_CAPTURE_DEVICE_ID = 0x5000 + ASTRA_CAPTURE_REG_DEVICE_ID,
     ASTRA_REG_CAPTURE_VERSION = 0x5000 + ASTRA_CAPTURE_REG_VERSION,
     ASTRA_REG_CAPTURE_CAPABILITIES = 0x5000 + ASTRA_CAPTURE_REG_CAPABILITIES,
@@ -260,6 +282,12 @@ struct astra_graphics_device {
     int capture_lock_fd;
     volatile uint32_t *registers;
     volatile uint8_t *framebuffer;
+    /*
+     * The whole graphics arena, mapped once by astra_graphics_device_open.
+     * Memory maps are views into it: mapping per request cost an mmap, a
+     * munmap and a fault on every touched page, every frame.
+     */
+    volatile uint8_t *arena;
 };
 
 struct astra_display_capture_result {
@@ -292,8 +320,26 @@ void astra_graphics_memory_copy_to(volatile void *destination,
 void astra_graphics_memory_copy_from(void *destination,
                                      volatile const void *source,
                                      size_t bytes);
+int astra_graphics_scene_commit_drain(
+    const struct astra_graphics_device *device, uint64_t timeout_ns);
 int astra_graphics_scene_commit(
     const struct astra_graphics_device *device, uint64_t timeout_ns,
+    uint32_t *generation_out);
+/*
+ * The two halves of a commit. A commit lands at the next vblank; issuing it
+ * and waiting for it are separate so that nothing but the next change to
+ * the screen has to wait for that vblank.
+ */
+struct astra_graphics_commit {
+    uint32_t generation;
+    uint32_t errors;
+};
+void astra_graphics_scene_commit_begin(
+    const struct astra_graphics_device *device,
+    struct astra_graphics_commit *commit);
+int astra_graphics_scene_commit_wait(
+    const struct astra_graphics_device *device,
+    const struct astra_graphics_commit *commit, uint64_t timeout_ns,
     uint32_t *generation_out);
 int astra_graphics_capture_rgb(
     const struct astra_graphics_device *device, uint32_t physical_address,
@@ -302,6 +348,34 @@ int astra_graphics_wait_register_mask(
     const struct astra_graphics_device *device, unsigned offset,
     uint32_t mask, uint32_t expected, uint64_t timeout_ns,
     uint32_t *value_out);
+/* Clears RENDER_CONTROL and waits until the engine reports neither busy nor
+   enabled. The ring, generation and host-aperture registers refuse a store
+   while the engine is enabled or busy. A bitstream with
+   ASTRA_CAP_ACCESS_FAULT_RECORD drops and records it; an older one answers
+   SLVERR, which on the DE25 is an asynchronous SError that panics Linux.
+   Write them only after this returns 0; on -1 the engine is still busy and
+   they must not be written. */
+int astra_graphics_render_stop(const struct astra_graphics_device *device,
+                               uint64_t timeout_ns);
+bool astra_graphics_has_capability(
+    const struct astra_graphics_device *device, uint32_t capability);
+struct astra_access_fault {
+    uint32_t count;
+    uint32_t first;
+};
+/* Reads the graphics-control access-fault record and, when it holds a
+   fault, clears it. Returns 1 with the record in *fault, 0 when it is empty,
+   and -1 (errno ENOTSUP) when the bitstream has no record. Faults that land
+   between the read and the clear are lost. */
+int astra_graphics_access_fault_take(
+    const struct astra_graphics_device *device,
+    struct astra_access_fault *fault);
+/* Stops the render engine and programs RENDER_HOST_APERTURE_BASE, then
+   reads it back. -1 with errno ENOTSUP when the bitstream has no host
+   aperture (the register is then absent and must not be touched). */
+int astra_graphics_render_host_aperture_set(
+    const struct astra_graphics_device *device, uint32_t base,
+    uint64_t timeout_ns);
 void astra_graphics_copper_write_instruction(
     const struct astra_graphics_device *device, unsigned index,
     uint32_t word0, uint32_t word1);
@@ -313,5 +387,9 @@ void astra_mmio_write(const struct astra_graphics_device *device,
                       unsigned offset, uint32_t value);
 void astra_graphics_memory_barrier(void);
 uint64_t astra_monotonic_nanoseconds(void);
+/* One pause of a hardware wait that began at `started`: spin while the wait
+   is young, sleep once it has lasted long enough that it is waiting on
+   something slow (a vblank, a fault). */
+void astra_graphics_poll_pause(uint64_t started);
 
 #endif

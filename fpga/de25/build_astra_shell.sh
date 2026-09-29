@@ -6,7 +6,7 @@ QUARTUS_ROOT=${QUARTUS_ROOT:-/home/barry/altera_pro/26.1.1/quartus}
 GHRD=$(realpath "${1:?usage: build_astra_shell.sh GHRD.qar RESOURCE.zip [quartus-license]}")
 RESOURCE=$(realpath "${2:?usage: build_astra_shell.sh GHRD.qar RESOURCE.zip [quartus-license]}")
 LICENSE=$(realpath "${3:-/home/barry/.altera.quartus/quartus2_lic.dat}")
-BUILD_ROOT="$ROOT/build/de25"
+BUILD_ROOT=${ASTRA_DE25_BUILD_ROOT:-"$ROOT/build/de25"}
 OUT="$BUILD_ROOT/astra-shell"
 INCOMING="$BUILD_ROOT/astra-shell.incoming"
 FAILED="$BUILD_ROOT/astra-shell.failed"
@@ -121,12 +121,34 @@ python3 "$ROOT/fpga/de25/patch_vendor_hdmi.py" \
     done
 } >>"$INCOMING/golden_top.qsf"
 
+python3 "$ROOT/fpga/de25/patch_vendor_f2sdram_adapter.py" "$INCOMING"
+# add_lpddr4b.tcl removes the vendor JTAG masters; drop their project files so
+# Quartus neither upgrades nor generates IP that nothing instantiates.
+grep -q 'QSYS_FILE jtag_subsys/jtag_subsys.qsys' "$INCOMING/golden_top.qsf"
+for ip in ext_hps_f2sdram_master qsys_top_ace5lite_cache_coherency_translator_0; do
+    # The vendor qsf has CRLF line endings.
+    grep -Eq "IP_FILE ip/qsys_top/$ip\\.ip"$'\r'"?\$" "$INCOMING/golden_top.qsf"
+    sed -i -E "\\| ip/qsys_top/$ip\\.ip"$'\r'"?\$|d" "$INCOMING/golden_top.qsf"
+done
+sed -i '/ jtag_subsys\//d' "$INCOMING/golden_top.qsf"
 (
     cd "$INCOMING"
     "$QUARTUS_ROOT/sopc_builder/bin/qsys-script" \
         --quartus-project=golden_top --package-version=26.1 \
+        --script="$ROOT/fpga/de25/disable_fpga2hps.tcl"
+    "$QUARTUS_ROOT/sopc_builder/bin/qsys-script" \
+        --quartus-project=golden_top --package-version=26.1 \
         --cmd='set ::ASTRA_TARGET_QSYS qsys_top.qsys; set ::ASTRA_LPDDR4B_IP ip/qsys_top/astra_lpddr4b.ip' \
         --script="$ROOT/fpga/de25/add_lpddr4b.tcl"
+    # The archive ships hps_subsys's generated RTL, which Quartus reuses; it
+    # still instantiates FPGA2HPS ports that disable_fpga2hps.tcl removed.
+    "$QUARTUS_ROOT/sopc_builder/bin/qsys-generate" hps_subsys/hps_subsys.qsys \
+        --synthesis=VERILOG --quartus-project=golden_top \
+        --part=A5EB013BB23BE4SCS
+    if grep -q fpga2hps_awid hps_subsys/hps_subsys/synth/hps_subsys.v; then
+        echo "hps_subsys RTL still has FPGA2HPS ports" >&2
+        exit 1
+    fi
 )
 python3 "$ROOT/fpga/de25/patch_vendor_top.py" \
     "$INCOMING/golden_top.v" "$INCOMING/golden_top.qsf" \

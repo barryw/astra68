@@ -164,8 +164,6 @@ static int present_surface(const struct astra_graphics_device *device)
     astra_mmio_write(device, ASTRA_REG_DISPLAY_VIEWPORT_SIZE,
                      ((uint32_t)layout.viewport_height << 16) |
                          layout.viewport_width);
-    astra_mmio_write(device, ASTRA_REG_TILE0_CONTROL, 0u);
-    astra_mmio_write(device, ASTRA_REG_TILE1_CONTROL, 0u);
     astra_mmio_write(device, ASTRA_REG_GLOBAL_CONTROL, 1u);
     if (astra_graphics_scene_commit(device, timeout_ns, &generation) != 0)
         return -1;

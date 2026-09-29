@@ -54,9 +54,17 @@ module astra_boot_text_overlay #(
     // Cell bits 7:0 select CP437, bits 9:8 select the fixed boot palette.
     // The memories live entirely in the pixel domain; the mailbox below is
     // the only control-to-pixel crossing.
-    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [15:0] cell_bank0 [0:CELLS-1];
-    (* ram_style = "distributed", ramstyle = "MLAB" *) reg [15:0] cell_bank1 [0:CELLS-1];
-    (* rom_style = "distributed" *) reg [7:0] font_rom [0:FONT_BYTES-1];
+    // A bank is written only while inactive, and an inactive bank's read
+    // data is never used, so read-during-write is don't-care (as MLAB, not
+    // 4,600 registers).
+    (* ram_style = "distributed", ramstyle = "MLAB, no_rw_check" *)
+    reg [15:0] cell_bank0 [0:CELLS-1];
+    (* ram_style = "distributed", ramstyle = "MLAB, no_rw_check" *)
+    reg [15:0] cell_bank1 [0:CELLS-1];
+    // 32 Kbit font: block ROM with a registered read (two M20K). As
+    // distributed ROM it cost about 2,400 ALMs.
+    (* rom_style = "block", romstyle = "M20K" *)
+    reg [7:0] font_rom [0:FONT_BYTES-1];
 
     integer init_index;
     initial begin
@@ -286,10 +294,15 @@ module astra_boot_text_overlay #(
         bank1_read_data : bank0_read_data;
 
     reg [15:0] render_cell_q;
+    reg [7:0] font_row;
     reg [2:0] render_glyph_col_q;
     reg [3:0] render_glyph_row_q;
     reg render_glyph_region_q;
     reg render_enable_q;
+    // The font row is read in the same stage as the cell it belongs to.
+    always @(posedge pixel_clk)
+        font_row <= font_rom[{active_cell[7:0], lookup_glyph_row_q}];
+
     always @(posedge pixel_clk) begin
         if (pixel_reset) begin
             render_cell_q <= 16'h0020;
@@ -306,8 +319,6 @@ module astra_boot_text_overlay #(
         end
     end
 
-    wire [7:0] font_row =
-        font_rom[{render_cell_q[7:0], render_glyph_row_q}];
     wire glyph_pixel = render_glyph_region_q &&
         font_row[7 - render_glyph_col_q];
 

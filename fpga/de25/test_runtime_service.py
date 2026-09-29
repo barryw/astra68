@@ -84,3 +84,8 @@ modules = (Path(__file__).with_name(
     "astra-display-capture.conf")).read_text().splitlines()
 assert modules == ["astra_display_capture"]
 print("DE25 display capture module-load contract: PASS")
+
+modules = (Path(__file__).with_name(
+    "astra-graphics-arena.conf")).read_text().splitlines()
+assert modules == ["astra_graphics_arena"]
+print("DE25 graphics arena module-load contract: PASS")

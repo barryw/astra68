@@ -20,9 +20,8 @@ module tb_astra_graphics_pipeline #(
     localparam [2:0] COPPER_OP_WAIT = 3'd2;
     localparam [2:0] COPPER_OP_IRQ = 3'd4;
     localparam [2:0] COPPER_OP_DISPATCH = 3'd6;
-    // Keep vblank longer than concurrent scene activation and the 4,352-entry
-    // active-palette baseline restore. Production 720p provides about 667 us;
-    // this reduced mode provides about 76 us at the same clock ratio.
+    // Keep vblank longer than concurrent scene activation and the 256-entry
+    // framebuffer-palette restore. This reduced mode has a short blanking gap.
     localparam integer AXI_ID_WIDTH = 6;
     localparam [31:0] ARENA_BASE = 32'h00001000;
     localparam [31:0] ARENA_LIMIT = 32'h00101000;
@@ -59,6 +58,7 @@ module tb_astra_graphics_pipeline #(
     wire [31:0] commit_deferrals;
     wire scene_active;
     wire render_interrupt;
+    wire [31:0] render_host_aperture_base;
     wire [31:0] framebuffer_axi_debug_status;
     wire [31:0] framebuffer_axi_ar_accept_count;
     wire [31:0] framebuffer_axi_r_accept_count;
@@ -102,39 +102,6 @@ module tb_astra_graphics_pipeline #(
     reg fb_axi_rvalid = 1'b0;
     wire fb_axi_rready;
 
-    wire [AXI_ID_WIDTH-1:0] tile0_axi_arid;
-    wire [31:0] tile0_axi_araddr;
-    wire [7:0] tile0_axi_arlen;
-    wire [2:0] tile0_axi_arsize;
-    wire [1:0] tile0_axi_arburst;
-    wire [3:0] tile0_axi_arcache;
-    wire [2:0] tile0_axi_arprot;
-    wire [3:0] tile0_axi_arqos;
-    wire tile0_axi_arvalid;
-    wire tile0_axi_arready = 1'b1;
-    wire [AXI_ID_WIDTH-1:0] tile0_axi_rid = {AXI_ID_WIDTH{1'b0}};
-    wire [63:0] tile0_axi_rdata = 64'd0;
-    wire [1:0] tile0_axi_rresp = 2'b00;
-    wire tile0_axi_rlast = 1'b0;
-    wire tile0_axi_rvalid = 1'b0;
-    wire tile0_axi_rready;
-
-    wire [AXI_ID_WIDTH-1:0] tile1_axi_arid;
-    wire [31:0] tile1_axi_araddr;
-    wire [7:0] tile1_axi_arlen;
-    wire [2:0] tile1_axi_arsize;
-    wire [1:0] tile1_axi_arburst;
-    wire [3:0] tile1_axi_arcache;
-    wire [2:0] tile1_axi_arprot;
-    wire [3:0] tile1_axi_arqos;
-    wire tile1_axi_arvalid;
-    wire tile1_axi_arready = 1'b1;
-    wire [AXI_ID_WIDTH-1:0] tile1_axi_rid = {AXI_ID_WIDTH{1'b0}};
-    wire [63:0] tile1_axi_rdata = 64'd0;
-    wire [1:0] tile1_axi_rresp = 2'b00;
-    wire tile1_axi_rlast = 1'b0;
-    wire tile1_axi_rvalid = 1'b0;
-    wire tile1_axi_rready;
 
     wire [AXI_ID_WIDTH-1:0] sprite_axi_arid;
     wire [31:0] sprite_axi_araddr;
@@ -202,7 +169,7 @@ module tb_astra_graphics_pipeline #(
         .OUTPUT_HEIGHT(OUTPUT_HEIGHT),
         .TOTAL_WIDTH(TOTAL_WIDTH),
         .TOTAL_HEIGHT(TOTAL_HEIGHT),
-        .OUTPUT_PREFETCH(38),
+        .OUTPUT_PREFETCH(18),
         .AXI_ID_WIDTH(AXI_ID_WIDTH),
         .FRAMEBUFFER_AXI_DATA_WIDTH(FRAMEBUFFER_AXI_DATA_WIDTH),
 .BOOT_FONT_HEX("build/arty-graphics/post_fonts.hex")
@@ -594,9 +561,9 @@ module tb_astra_graphics_pipeline #(
                 copper_beam0(COPPER_OP_WAIT, 10'd1), 32'd0);
             write_copper_instruction(12'd1,
                 copper_ins0(COPPER_OP_MOVE, 16'h0058),
-                {16'd0, source_rgb565(32, 2)});
+                {16'd0, source_rgb565(33, 3)});
             write_copper_instruction(12'd2,
-                copper_ins0(COPPER_OP_MOVE, 16'h0054), 32'h00000020);
+                copper_ins0(COPPER_OP_MOVE, 16'h0054), 32'h00000038);
             write_copper_instruction(12'd3,
                 copper_beam0(COPPER_OP_WAIT, 10'd2), 32'd32);
             write_copper_instruction(12'd4,
@@ -842,7 +809,9 @@ module tb_astra_graphics_pipeline #(
 
             if (check_frame && pixel_x < OUTPUT_WIDTH &&
                 pixel_y < OUTPUT_HEIGHT) begin
-                expected565 = source_rgb565(pixel_x, pixel_y);
+                expected565 = source_rgb565(
+                    (pixel_x + 1) % OUTPUT_WIDTH,
+                    (pixel_y + 1) % OUTPUT_HEIGHT);
                 expected_rgb = expand_rgb565(expected565);
                 if (pixel_x == 32 && pixel_y == 2)
                     expected_rgb = 24'h112233;
@@ -855,15 +824,14 @@ module tb_astra_graphics_pipeline #(
                            pixel_x, pixel_y);
                 if (dut.scanline_output_rgb !== expected_rgb)
                     $fatal(1,
-                        "pixel mismatch x=%0d y=%0d got=%06x expected=%06x underruns=%0d read_slot=%0d valid=%b tags=%0d,%0d,%0d,%0d copper=%0d/%0d/%0d sprite_build=%0d visual2=%0d",
+                        "pixel mismatch x=%0d y=%0d got=%06x expected=%06x underruns=%0d read_slot=%0d valid=%b tags=%0d,%0d,%0d,%0d copper=%0d/%0d/%0d sprite_build=%0d",
                         pixel_x, pixel_y, dut.scanline_output_rgb, expected_rgb,
                         pixel_underruns, dut.pixel_read_slot,
                         dut.pixel_slot_valid, dut.pixel_slot_tag0,
                         dut.pixel_slot_tag1, dut.pixel_slot_tag2,
                         dut.pixel_slot_tag3, dut.copper_enabled,
                         dut.copper_running, dut.copper_waiting,
-                        dut.sprite_enable_build,
-                        dut.line_visual_slot2[54]);
+                        dut.sprite_enable_build);
                 checked_pixels <= checked_pixels + 1;
                 if (pixel_x == OUTPUT_WIDTH - 1 &&
                     pixel_y == OUTPUT_HEIGHT - 1) begin
@@ -954,20 +922,10 @@ module tb_astra_graphics_pipeline #(
         axi_write(32'h00000044, FRAMEBUFFER_PITCH);
         axi_write(32'h00000048,
                   (OUTPUT_HEIGHT << 16) | OUTPUT_WIDTH);
-        axi_write(32'h0000004c, 32'd0);
-        axi_write(32'h00000050, 32'd0);
-        axi_write(32'h00000054, 32'h00000003);
+        axi_write(32'h0000004c, 32'd1);
+        axi_write(32'h00000050, 32'd1);
+        axi_write(32'h00000054, 32'h0000001b);
         axi_write(32'h00000018, 32'h00010203);
-        // Keep disabled structural clients valid too: copper may legally
-        // enable them later without bypassing address validation.
-        axi_write(32'h00000080, 32'h00004000);
-        axi_write(32'h00000084, 32'h00005000);
-        axi_write(32'h00000090, 32'h00002022);
-        axi_write(32'h00000094, 32'd1);
-        axi_write(32'h000000c0, 32'h00006000);
-        axi_write(32'h000000c4, 32'h00007000);
-        axi_write(32'h000000d0, 32'h00002022);
-        axi_write(32'h000000d4, 32'd1);
         write_sprite_palette(4'd1, 8'd1, SPRITE_ARGB);
         write_sprite_descriptor_word(3'd0, 32'h00010113);
         write_sprite_descriptor_word(3'd1, 32'h00010008);

@@ -1,5 +1,800 @@
 # DE25-Nano Timing Closure
 
+## 2026-09-28: no AXI error responses to the CPU, access-fault records, host-burst split (routed, not deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed a full production
+  synthesis, fit, route, signoff and programming-file build with
+  `build_astra_shell.sh` (`DISPLAY` unset) from a checksum rsync of the Mac
+  working tree at `~/astra-mg/rtl-noerr`
+  (`ASTRA_DE25_BUILD_ROOT=build/de25-noerr`). First attempt. The source is
+  the F2SDRAM host-read build below plus two changes.
+- No slave answers a CPU access with SLVERR or DECERR. The HPS turns either
+  one into an asynchronous SError and Linux panics, which a store to
+  `RENDER_HOST_APERTURE_BASE` while the engine was enabled did on the
+  board. Graphics control, Copper, display capture, audio and the front
+  panel now drop a refused store and return 0 for an unmapped load, both
+  answered OKAY, and count them in a shared sticky record
+  (`astra_access_fault_record.sv`): `ACCESS_FAULT_COUNT`/`FIRST` at
+  `0x24c/0x250`, `0x4038/0x403c`, `0x503c/0x5040`, `0x6034/0x6038`,
+  `0x7034/0x7038` (layout in `docs/GRAPHICS_ARCHITECTURE.md`, section 14).
+  `CAPABILITIES` becomes `0x3ff7` on the DE25: bit 12 is the record, bit 13
+  the host aperture. Graphics control no longer aliases offsets above
+  `0x3ff`. Platform Designer's lightweight-bridge routers send unmapped
+  addresses to a default slave (the vendor peripheral subsystem, then its
+  button PIO), so the 2 MiB window has no interconnect DECERR holes. The
+  H2F window maps `0x40000000-0x7fffffff` to LPDDR4B in full.
+- Host-burst split. On the board, a narrow 64-bit read burst of 136 beats or
+  more through the host aperture (F2SDRAM) never returns; 128 beats and
+  fewer do. The render engine's ring prefetch reads up to 32 entries, 256
+  beats, so the first desktop batch with 17+ queued commands wedged at
+  intake (`SUBMITTED=1`, `COMPLETED=0`, consumer 0, busy). The
+  host-read bench, at 30 beats or fewer, never hit it.
+  `astra_render_host_reads` now issues host bursts as pieces of at most 32
+  beats and passes RLAST on the last piece only; Media RAM bursts are
+  unchanged. In the perf tb with the host port at 8 outstanding reads and
+  300 cycles of latency, 32 and 64 beats run in identical cycles and 16 is
+  slower (640x480 host-source BLIT 398,906 vs 319,900 cycles). A latency
+  model option now loses bursts over 128 beats: the router bench stalls on
+  the old router and passes on the new one. A replay of the captured
+  61-command batch through the command processor and router reproduces
+  the board wedge on the old router and completes command 1 on the new one.
+- `run_tests.sh` (graphics and audio) passes on `beast` (Icarus 12). The
+  Mac's Icarus 13 and 14 reject declaration-after-use that predates this
+  change in `astra_render_command_processor.sv` and its bench. Every bench
+  touched here also passes on the Mac. Restoring an error response
+  in each slave, or dropping the fault recording, fails its bench.
+- Routed resource use: **ALMs needed 40,109 / 46,800 (86 %)** (-184 from
+  the build below); 3,615,040 / 7,331,840 block-memory bits, 315 / 358 RAM
+  blocks, 66 / 376 DSP blocks.
+- All production clocks are constrained and pass. Worst setup, hold,
+  recovery and removal slacks are **+0.124 ns** (`ASTRA_HDMI_PIXEL_CLOCK`),
+  **+0.000 ns** (`pll_inst|iopll_0_outclk0`), **+2.672 ns** and **+0.000 ns**
+  (`ASTRA_AUDIO_SAMPLE_CLOCK`). The 165 MHz graphics clock
+  (`pixel_pll outclk1`, Fmax 175.56 MHz) closes at **+0.364 ns** setup,
+  +0.005 ns hold. The 148.5 MHz pixel clock (Fmax 176.03 MHz) closes at
+  +1.053 ns.
+- Source SHA-256: graphics control
+  `f704d6dc16b37d07a97103072875e16dadfa3266e17c985e03776b9603bc5cc3`,
+  router `9c6f0047c881acc5496f0309d44405092bc72ae356db196b54972b09be34a3c4`,
+  fault record
+  `4993c039bed16fcabbd775f70035ba4e663505a70466626f2f53a90fbee768f1`, DE25
+  graphics top `4e86cb85db10946d626c1cf60f525a0dd07f5df8ba13c0350c251be22a6a5796`.
+  Build-input checksum manifest SHA-256
+  `4ec7132cc84d16ef5a753a009790999f830b285cfe5be16ce1099c5dd589c5ed`; boot
+  core RBF SHA-256
+  `68ce7bb2cea6d86c4aa180f90a664c9356c453fd6a98a23bce10c32d48f5f888`;
+  `astra68.hps.jic` SHA-256
+  `20544848faad9095e007b510d892f2b73300dea1f781c2a8f496a72bad9ef1cb`.
+  Artifacts: `beast:~/astra-mg/rtl-noerr/build/de25-noerr/astra-shell/output_files/`.
+
+## 2026-09-28: F2SDRAM host reads, debug-master reclaim and line-scheduler fix (routed, not deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed a full production
+  synthesis, fit, route, signoff and programming-file build with
+  `build_astra_shell.sh` (`DISPLAY` unset) from an rsync of the Mac working
+  tree at `~/astra-mg/rtl-f2s` (`ASTRA_DE25_BUILD_ROOT=build/de25-f2s`).
+  Third attempt; the failures are below.
+- Source change over the pixel-stream BLIT checkpoint:
+  - Host aperture. Render-engine reads of arena offsets
+    `[0x00800000, 0x01000000)` (the render batch window) go to HPS DDR when
+    the new register `RENDER_HOST_APERTURE_BASE` (0x248, HPS physical, 4 KiB
+    aligned, 0 = off; writable only while the engine is idle) is set:
+    host address = base + (offset - 0x800000). Writes (the completion
+    ring) and every other read stay in Media RAM. With base 0 the design
+    behaves as before. The aperture is defined in
+    `protocol/astra_render_v1.json`.
+  - `astra_render_host_reads.sv` sits on the render AXI read channels:
+    one registered AR slot, and a 16-entry, 1-bit FIFO of which port each
+    burst went to. R is taken only from the port of the oldest burst, so
+    both ports keep reads in flight and responses stay in request order
+    without a data buffer. A drain-on-switch first version cost 60 % on
+    host-source blends in simulation and was replaced.
+  - Platform. `astra_host_bridge` (read-only AXI4, 64-bit at 165 MHz)
+    connects to `subsys_hps.f2sdram_adapter_axi4_sub` (256-bit at 100 MHz).
+    Platform Designer adds the width adapter and a dual-clock FIFO. The
+    vendor adapter declared read acceptance 1, which allowed one burst in
+    flight. `patch_vendor_f2sdram_adapter.py` raises it to 8 in the hw.tcl,
+    the .ip and both cached .qsys copies (patching hw.tcl alone is ignored).
+    The adapter forces AxCACHE non-cacheable; F2SDRAM is not behind the
+    SMMU (`f2sdram_SMMU=false`).
+  - Area reclaim. The vendor JTAG debug masters (`subsys_debug`: `fpga_m`,
+    `hps_m`, `hps_f2sdram`), the ACE5-Lite translator and its `fpga2hps`
+    interconnect, and `ext_hps_f2sdram_master` are removed; no Astra tool
+    used them. FPGA2HPS is disabled in the HPS IP (`disable_fpga2hps.tcl`,
+    `f2s_data_width` 256 to 0), and `hps_subsys` is regenerated, because
+    the vendor archive ships a pre-generated `hps_subsys.v` that still
+    wires the removed ports. PMON is kept.
+  - Includes the line-scheduler PREPARE/quiesce fix from the hotfix entry
+    below.
+- Failed attempts in this series: EXIT=1, the new `golden_top.qsf` cleanup
+  grep did not match because the vendor qsf is CRLF (the grep and sed now
+  accept `\r`); EXIT=3, Error 129015: `F2SOC_RDATA` on the MPFE not legally
+  connected, because FPGA2HPS was left enabled and undriven; then, in a
+  synthesis-only check, Error 13305 from the stale pre-generated
+  `hps_subsys.v`.
+- `run_tests.sh` passes on the same source, including the new router bench
+  (18,508 beats, 516 bursts to Media RAM, 585 to the host port) and the
+  0x248 control checks. Breaking the router on purpose fails the bench in all
+  five cases: R taken from both ports, wrong translation, no window limit,
+  no base-0 bypass, FIFO advanced per beat. Perf case `2000` (640x480
+  ARGB8888 to RGB565) with the ring, descriptors and source in the host
+  window, at host read latency 60: at most +140 cycles per frame over Media
+  RAM (+0.04 %), 1.03-1.05 cycles per pixel in every mode. Router OOC: 58
+  ALUTs, 31 registers.
+- Routed resource use: **ALMs needed 40,293 / 46,800 (86 %)** (-4,239);
+  4,620 / 4,680 LABs partially or completely used (4,432 logic, 188
+  memory), packing difficulty High; 3,615,040 / 7,331,840 block-memory
+  bits, 314 / 358 RAM blocks, 66 / 376 DSP blocks, 5 / 11 PLLs. Router 100
+  ALMs, `astra_host_bridge` 88, its master agent 14. `subsys_debug`, the
+  translator and `ext_hps_f2sdram_master` are absent from the fit report.
+- All production clocks are constrained and pass, with no unconstrained
+  clocks or ports. Worst setup, hold, recovery and removal slacks are
+  **+0.012 ns** (`ASTRA_HDMI_PIXEL_CLOCK`), **+0.002 ns**, **+2.662 ns** and
+  **+0.031 ns**. The 165 MHz graphics clock (Fmax 180.83 MHz) closes at
+  **+0.530 ns**; the 148.5 MHz pixel clock (Fmax 165.04 MHz) at +0.675 ns.
+- Source SHA-256: router
+  `fd5e65868aff4a848acdeeb0064bc9d015b00170cf1cc14c76eebc84e1e2c456`, line
+  scheduler `4cb5ce92bdb78f918e997bdc42b464d841333eba5ecbde5e3780c2475b7cffda`,
+  graphics control
+  `acf9efcc169f96d0e9b91b30fee263ee2c1b3ca4a108123a379e99befafc4486`, DE25
+  graphics top `c5ed6aca6175ab40cd741d7a821a168bbe48c1da5790e4d17457e0d2cd926cf8`.
+  Build-input checksum manifest SHA-256
+  `8dbe3225e5d50988c92e7340de425895f1073d428f2440589dbf5c9ca6176c48`; boot
+  core RBF SHA-256
+  `3cb067558345445720d888b67a90d2d6cd5ff77bfbb8b13b42c4084b9f5a93fe`;
+  `astra68.hps.jic` SHA-256
+  `e1237549c9b468be7e39d9400784445e80752f4d72036678077169d48e0dd85e`.
+  Artifacts: `beast:~/astra-mg/rtl-f2s/build/de25-f2s/astra-shell/output_files/`.
+- On the board, still to prove: that F2SDRAM reaches HPS DDR at the
+  physical address the host-arena module reports (a read-only JTAG probe
+  through the old span extender was inconclusive), and that U-Boot and Linux
+  boot normally with FPGA2HPS absent from the handoff.
+- Disposition: routed; awaiting install after the line-scheduler hotfix
+  soak.
+
+## 2026-09-28: scene-commit wedge is a line-scheduler latch (hotfix)
+
+- Symptom: under a sustained SDLFrameBench soak on `f14ab71c` the helper
+  logs `graphics scene commit timed out` (COMMIT `0x12370007`, then
+  `0x17e30007`). After that, every commit is `rejected` until a power cycle.
+- Board registers on the live wedge: COMMIT pending=1 and DEFERRALS
+  +60/s, so `frame_boundary` is live and `commit_quiesce` is set every
+  frame. FB_AXI_STATUS `0x200`: the builder is idle, nothing is
+  outstanding, and the AR/R counters are frozen with no stalls.
+  SPRITE_STATUS has every busy bit clear. Render is idle. Nothing is
+  moving, so this is not DDR starvation: `commit_safe` is held low by
+  `scheduler_idle` alone.
+- Cause: in `astra_line_scheduler.sv` the quiesce block cleared
+  `line_prepare_valid` unconditionally. A frame-boundary quiesce that
+  arrives while a launched line sits in `SCHED_PREPARE` withdraws the
+  request. The Copper answers only a presented request
+  (`astra_copper_beam_scheduler.sv`, `line_prepare_ready` requires
+  `line_prepare_valid`), so the scheduler stays in PREPARE for good.
+  `scheduler_idle` never rises, and the commit is deferred on every frame.
+  `commit_pending` clears only when the commit activates or on
+  `build_reset`. `scene_changed`, the only other thing that resets the
+  scheduler, needs a commit or Copper to be enabled, so the latch
+  survives helper restarts. Render load makes the race more likely: slower
+  line builds push the last bootstrap line's PREPARE onto the vblank
+  boundary.
+- Fix: quiesce no longer withdraws a presented preparation request. The
+  launched line finishes, the scheduler idles, and the commit applies at
+  the next boundary. The tearing invariant is unchanged, because quiesce
+  still stops every new launch. The change is one deleted assignment, with
+  no area cost. QoS was not changed, because the board showed no display
+  starvation.
+- Test: `tb_astra_line_scheduler` "quiesce during preparation" raises
+  quiesce while a line waits for preparation, with the tb's ready gated by
+  valid as the real Copper does. It fails with the old code (state=2
+  PREPARE, valid=0) and passes with the fix. Full `run_tests.sh` passes.
+- Helper: `astra_terminal_display` now drains a leftover pending commit
+  (`astra_graphics_scene_commit_drain`, 1 s) before its first commit. If
+  the commit stays held, it reports `graphics scene commit held by
+  hardware ... power-cycle the board` once and stays up, instead of
+  exiting into a restart loop.
+- Route (hotfix-only fallback, certified `f14ab71c` source plus the fix):
+  `c1e9f2e7...` closes every clock with no negative slack (worst 0.000).
+  Not installed; the combined F2SDRAM route carries the same fix.
+
+## 2026-09-27: HPS-to-Media-RAM bandwidth is HPS-issue-bound (measured, no build)
+
+- Board: routed shell `f14ab71c...` (unchanged), Astra stopped. Probe
+  `/data/cert/astra-arena-bandwidth` (write-combining arena): store64,
+  memcpy and 64-byte `stp q` all 133 MB/s; load64 13-15 MB/s; load_q64
+  59 MB/s on A55, 257-296 MB/s on A76.
+- PMON (`pmon_capture.sh`, configs `basic_lat`, `wo`, `ch_bp`, `ch_eff`)
+  during the store phases: every write is one AW of 4 x 128-bit beats
+  (64 bytes, the line the CPU merged); 124,828 AW / 499,202 W / 124,828 B,
+  none missing. AW-to-B latency is 24 cycles at 100 MHz (average 24.0,
+  maximum 24-25). AW backpressure 0.0 %, W backpressure 2.1 % (about one
+  cycle per burst). AW-to-AW spacing 48.2 cycles, AW efficiency 2.1 %.
+  The fabric accepts each write at once and answers in a fixed 24 cycles;
+  the HPS issues the next write only about 24 cycles after it gets the B.
+  The next AW is never issued before the B: one write outstanding.
+- The limit covers the whole MPU and does not depend on the store width
+  or the core type. A55 and A76 give the same 133 MB/s, and 2 or 4 cores
+  storing at once still give 2.1 % AW efficiency, so the combined CPU
+  write rate stays about 133 MB/s. Reads: 32-35-cycle fabric latency;
+  single 8-byte loads are serial (58 cycles each); 64-byte A76 loads
+  overlap about two.
+- The fabric is not the limit. HPS DMA (dw-axi-dmac,
+  `dmaengine_prep_dma_memcpy` from Linux RAM to `0x50000000`, measured with
+  a probe module outside the repository) also issues 64-byte bursts with one
+  transaction outstanding per channel. Throughput scales with channel count
+  at an unchanged 23-24-cycle fabric latency:
+  1 channel 152 MB/s, 4 channels 606-617 MB/s (5 of 5 runs verified byte-exact through
+  the arena), 8 channels over both controllers 1,148 MB/s (144 MB/s
+  each). Reads by DMA: 1/2/4 channels 131/256/493 MB/s.
+  The second controller (`10dc0000`) is not usable. Its media reads time
+  out, one of five write runs timed out, and afterwards the controller stayed
+  wedged until a cold reset. A first probe that mapped the arena through the
+  wrong controller's IOMMU hung the HPS. Reloading `golden_top_hps.sof` over
+  JTAG recovered it; the HPS was up again after 30 s.
+- Root cause: the Agilex 5 HPS allows one outstanding transaction per
+  master on this path, and only one for all CPU writes together. The
+  bandwidth is therefore 64 B / (fabric latency + HPS turnaround), which is
+  64 B / 48 cycles at 100 MHz. Widening the path, adding outstanding capacity,
+  deepening PMON or relaxing burst acceptance in the fabric cannot help: none
+  of them is exercised. The one fabric-side lever is the 24-cycle round trip.
+  Even with zero fabric latency, CPU writes cannot exceed about 264 MB/s,
+  so 1 GB/s from CPU stores is not reachable with any FPGA change.
+- Disposition: no RTL or platform change. The paths that do reach 1 GB/s
+  are either many HPS masters writing at once (DMA channels; only one
+  reliable 4-channel controller exists, and the display capture already uses
+  it) or the fabric reading the source itself from HPS DDR over
+  F2SDRAM/FPGA-to-HPS. The fabric then chooses the burst length and the
+  number of outstanding transactions. After restore: `verify_running_shell`
+  PASS, stage 8, and the probe unchanged at 133 MB/s.
+
+## 2026-09-27: pixel-stream BLITs and texture stepper reclaim (deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed a full production
+  synthesis, fit, route, signoff and programming-file build with
+  `build_astra_shell.sh` (`DISPLAY` unset) from an rsync of the Mac working
+  tree at `~/astra-mg/rtl-blit` (`ASTRA_DE25_BUILD_ROOT=build/de25-blit`).
+  First attempt.
+- Source change over the overlap-aware FILL_RECTS checkpoint below:
+  - Burst mover pixel mode. An unscaled, unreflected BLIT with no flags or
+    only `FLAG_BLIT_ALPHA`, between RGB565, XRGB8888 and ARGB8888 (any pair
+    except a plain same-format copy, which stays on the byte path), with
+    8-byte-aligned pitches, now streams through the mover at one pixel per
+    clock: source chunks (and destination chunks when blending) are read
+    ahead into the eight slots, each pixel is expanded, composited (a' =
+    m(a, opacity), eight DSP products, the blitter's divide) and packed, and
+    whole W beats are merged; the next chunk's AW is issued while the last
+    one drains. Unblended conversion is the same datapath with a' = 255 and
+    a zero destination (exact: m(x, 255) = x). A chunk whose source pixels
+    are all opaque at opacity 255 skips its destination read; XRGB8888 and
+    RGB565 sources are always opaque. Other BLITs keep the per-pixel path,
+    so the old blend FSM stays (scaling, reflection, key, mask, palette and
+    ROP still use it).
+  - Area reclaim in the texture engine: the six attribute steppers no longer
+    keep `step - 2A` copies or a registered wrapped remainder; the commit
+    cycle subtracts 2A from the registered sum and selects between `Q` and a
+    precomputed `Q + 1`. Same cycle schedule (the 194-case bench costs
+    2,494,005 cycles before and after), bit-exact.
+  - Quartus OOC (render engines): mover 1,856 to 2,703 ALUTs and 1,271 to
+    1,968 registers; texture engine 8,788 to 8,208 ALUTs and 7,052 to 6,236
+    registers; all engines 25,517 to 25,789 ALUTs and 23,136 to 23,018
+    registers.
+- `run_tests.sh` passes on the same source. The blitter bench adds 90
+  random pixel-stream BLITs (every format pair, plain and blended, random
+  lanes, pitches, clips, opacity and alpha, random read and write stalls)
+  checked byte for byte against a reference model over the whole surface,
+  18 more forced onto the per-pixel path with a 4-mod-8 pitch against the
+  same reference, and 24 where only a row's first or last pixel is
+  translucent. Perturbations
+  (inverse alpha off by one, destination reads always skipped, wrong beat
+  end, 200-byte chunks, either partial-beat alpha mask ignored, texture carry
+  swapped) all fail.
+- Routed resource use: **ALMs needed 44,532 / 46,800 (95 %)** (-26);
+  4,673 / 4,680 LABs partially or completely used, packing difficulty High;
+  3,615,520 / 7,331,840 block-memory bits, 313 / 358 RAM blocks (+2), 66 /
+  376 DSP blocks (+4), 5 / 11 PLLs.
+- All production clocks are constrained and pass. Worst setup, hold,
+  recovery and removal slacks are **+0.168 ns** (`ASTRA_HDMI_PIXEL_CLOCK`),
+  **0.000 ns**, **+2.480 ns** and **+0.022 ns**. The 165 MHz graphics clock
+  (Fmax 177.78 MHz) closes at **+0.435 ns**; the 148.5 MHz pixel clock at
+  +0.896 ns.
+- Source SHA-256: copy mover
+  `b512e19a44fad888fd8ee574fee57359284783e1e2fa5faee1843d089faa39bb`,
+  blitter `61e18f8383af2b99833604c3a0f65349e2e25c4f8be589848c9dec741b60c6b2`,
+  texture engine
+  `68bb35fd34ef233667650fe91c20df923f328d87659b58cef075e04600c56aff`;
+  command processor unchanged. Build-input checksum manifest SHA-256
+  `4febdfaa96149d2732572eea1b4ad04a20a146cbc893e3da05110c9bbc9ddac1`; boot
+  core RBF SHA-256
+  `f14ab71c02adfa6b32f4c28ff2146fe790df5a9ef6b0e8173f2328d04685f50e`;
+  `astra68.hps.jic` SHA-256
+  `deb5dae0dba9174db3d5a91faa3048b293bcb0b2955badd41f08774ddc89c621`.
+- Simulation (`perf/run_perf.sh`, case `2000`): one 640x480 ARGB8888 to
+  RGB565 BLIT costs, at 25 / 150-cycle latency, 318,794 / 319,544 cycles
+  unblended (1.04 per pixel), 318,796 / 319,546 blended with opaque alpha,
+  and 319,020 / 324,330 blended with random alpha (1.04 / 1.06). The
+  per-pixel path it replaces costs 25.0 / 87.5 cycles per pixel unblended
+  and 76.3 / 170.0 blended (measured over 640x48 rows: about 7.7M / 26.9M
+  and 23.4M / 52.2M cycles for the full frame); the board measured 97 ms
+  and 230 ms on it.
+- Hardware: installed on astra-de25 with runtime release `748e81fb...`
+  (boot bundle via `install_boot_bundle.sh`; the previous boot files are in
+  `/var/lib/astra/boot-rollback-main6-748e81fb`). `verify_running_shell`
+  PASS, POST PASS, stage 8, `astra-render-certify` (`.g` build) PASS in every
+  phase, and Astra back at stage 8 afterwards.
+- Disposition: deployed.
+
+## 2026-09-27: overlap-aware blended FILL_RECTS records (not deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed a full production
+  synthesis, fit, route, signoff and programming-file build with
+  `build_astra_shell.sh` (`DISPLAY` unset) from an rsync of the Mac working
+  tree at `~/astra-mg/rtl-main6`
+  (`ASTRA_DE25_BUILD_ROOT=build/de25-blend-overlap`). First attempt.
+- Source change over the blended FILL_RECTS checkpoint below: a blended
+  record no longer waits for every earlier write. The command processor
+  keeps the unclipped rectangles of the last four records, each with the
+  engine write count at which its writes were all issued, and a record waits
+  only while an overlapping record still has unanswered writes, or while all
+  four are unanswered. A first prototype kept one union bounding box and
+  gained little (the box grew over undrained records); it was replaced.
+  `run_tests.sh` passes (21.3 min); the ordering bench adds a record that
+  overlaps an earlier, not the latest, record. Perturbations (no overlap
+  check, marks ignored, only the latest record checked) all fail it.
+- Routed resource use: **ALMs needed 44,558 / 46,800 (95 %)** (+323);
+  4,666 / 4,680 LABs partially or completely used (4,451 logic, 215 memory),
+  packing difficulty High; 311 / 358 RAM blocks, 62 / 376 DSP blocks, 5 / 11
+  PLLs.
+- All production clocks are constrained and pass. Worst setup, hold,
+  recovery and removal slacks are **+0.116 ns** (`ASTRA_HDMI_PIXEL_CLOCK`),
+  **0.000 ns**, **+3.410 ns** and **+0.036 ns**. The 165 MHz graphics clock
+  (Fmax 183.52 MHz) closes at **+0.611 ns**; the 148.5 MHz pixel clock at
+  +1.124 ns.
+- Source SHA-256: command processor
+  `6f27e818ab600318235c4e408bad94c36e9e4949dff1330386a3011d3ee94754`; other
+  render sources unchanged. Build-input checksum manifest SHA-256
+  `8eab8cbee0688f42ec514683bc5cd254fe5c939a230020c07d0d4d635f1ad261`; boot
+  core RBF SHA-256
+  `819ddadb17afcbd333fb6632f1285e68db39f020948dfe72aa5424d87ce32b9c`;
+  `astra68.hps.jic` SHA-256
+  `aa33cb7f17151f05ffc17c21e7534376822b6c596d7bffd40b055b857ca56d64`.
+- Simulation (`perf/run_perf.sh`): 8x8 blended records cost 164 / 241 /
+  345 cycles at 25 / 100 / 200-cycle latency (were 184 / 336 / 540). What
+  remains is one read round trip per record: the mover reads the
+  destination before blending it.
+- Disposition: capacity and timing checkpoint; not programmed or certified.
+
+## 2026-09-27: blended FILL_RECTS (not deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed a full production
+  synthesis, fit, route, signoff and programming-file build with
+  `build_astra_shell.sh` (`DISPLAY` unset) from an rsync of the Mac working
+  tree at `~/astra-mg/rtl-main5` (`ASTRA_DE25_BUILD_ROOT=build/de25-blend`).
+  First attempt.
+- Source change over the LINES checkpoint below: FILL_RECTS option bit 1
+  (`BLEND`): the burst mover reads the destination and writes it back
+  composited under a straight-alpha ARGB color through three pipeline
+  stages (twelve 8x8 channel products in DSP blocks), one 64-bit beat per
+  clock; blended records wait for the previous record's writes. Semantics
+  and constraints: `docs/GRAPHICS_ARCHITECTURE.md` §9. `run_tests.sh` passes
+  on the same source (21.3 min), including equivalence with sequential
+  `FLAG_BLIT_ALPHA` BLITs in three formats and the slow-memory ordering bench.
+- Routed resource use: **ALMs needed 44,235 / 46,800 (95 %)** (+835 over
+  the LINES route); 4,644 / 4,680 LABs partially or completely used (4,429
+  logic, 215 memory), packing difficulty High; 3,599,136 / 7,331,840
+  block-memory bits, 311 / 358 RAM blocks, **62 / 376 DSP blocks** (+9), 5 /
+  11 PLLs.
+- All production clocks are constrained and pass. Worst setup, hold,
+  recovery and removal slacks are **+0.043 ns** (`ASTRA_HDMI_PIXEL_CLOCK`),
+  **0.000 ns**, **+2.584 ns** and **+0.054 ns**. The 165 MHz graphics clock
+  (Fmax 183.65 MHz) closes at **+0.615 ns**; the 148.5 MHz pixel clock at
+  +0.860 ns.
+- Source SHA-256: command processor
+  `8b50168d2866d8148e42226c7bbe7f45f3a77e702192af28ea14267d4bef3980`,
+  copy mover `4115ca7f2ca58bf039e15e09d9b23f479d956f850b9386cbd96898cb61e9a36c`,
+  blitter `eb9cfd08b083ef61938f2d7f71358e0492db8a3a6b50a7a05cae437f00dcf300`,
+  protocol header
+  `2a4c2a772a0fd66a41ed320c03df9f6de20604cf9fe99cdde3824f62b3f9277b`.
+  Build-input checksum manifest SHA-256
+  `7ef0cc41f0dd67f7429395a4fec92d0f52072db52e4a5287149605ff206feba0`; boot
+  core RBF SHA-256
+  `b01eec665d54c9e0568d26f3809e5e5ee46202215f62b637e1f68ab362e54edb`;
+  `astra68.hps.jic` SHA-256
+  `2fff026252753688c8a1df48618657fc6b757beda19c27716f24c6c4a1d50928`.
+- Simulation (`perf/run_perf.sh`): a full 640x480 blended record costs 0.33
+  / 0.34 / 0.35 cycles per pixel at 25 / 100 / 200-cycle latency; 8x8
+  blended records cost 184 / 336 / 540 cycles each, dominated by the wait
+  for the previous record's writes (the per-pixel blitter path it replaces
+  costs about 40 cycles per pixel).
+- Disposition: capacity and timing checkpoint; not programmed or certified.
+
+## 2026-09-27: boot-text area reclaim and LINES (not deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed a full production
+  synthesis, fit, route, signoff and programming-file build with
+  `build_astra_shell.sh` (`DISPLAY` unset) from an rsync of the Mac working
+  tree at `~/astra-mg/rtl-main4`
+  (`ASTRA_DE25_BUILD_ROOT=build/de25-reclaim-lines`). First attempt.
+- Area reclaim: the fitted FILL_RECTS image spent 2,432 ALMs in
+  `boot_text_i`. Its 32 Kbit font was a distributed (LUT) ROM and its two
+  cell banks were refused as MLAB for read-during-write, so they became
+  4,600 registers. The font is now block ROM (two M20K) read in the same
+  stage as the cell (unchanged latency), and the banks are MLAB with
+  `no_rw_check` (a bank is written only while inactive and an inactive
+  bank's read data is never used). Quartus OOC for the overlay: 2,053 to 199
+  ALUTs, 3,040 to 152 registers. The overlay bench now checks every pixel
+  of four cells against the font file. The texture engine was not changed,
+  so TRIANGLES cycles are unchanged.
+- LINES (opcode 262): a segment array run through the geometry engine's
+  LINE, sharing the FILL_RECTS record loop; `docs/GRAPHICS_ARCHITECTURE.md`
+  §9. `run_tests.sh` passes on the same source (20.5 min) with LINES
+  equivalence against sequential LINE commands and rejection cases.
+- Routed resource use: **ALMs needed 43,400 / 46,800 (93 %)**, down 2,280
+  from the FILL_RECTS route (45,680); 4,643 / 4,680 LABs partially or
+  completely used (4,428 logic, 215 memory; the fitter spreads logic when
+  it can, so this count stays near the total); packing difficulty still
+  reported High. 3,599,136 / 7,331,840 block-memory bits, 311 / 358 RAM
+  blocks, 53 / 376 DSP blocks, 5 / 11 PLLs.
+- All production clocks are constrained and pass. Worst setup, hold,
+  recovery and removal slacks are **+0.100 ns** (`ASTRA_HDMI_PIXEL_CLOCK`),
+  **0.000 ns**, **+2.937 ns** and **+0.030 ns**. The 165 MHz graphics clock
+  (Fmax 173.97 MHz) closes at **+0.312 ns**; the 148.5 MHz pixel clock, which
+  now reads the font from M20K, closes at +1.104 ns.
+- Source SHA-256: command processor
+  `e7579ea1ba65474d81e30291ee2319fd933c3a5abe901a7637870616c416310c`,
+  boot-text overlay
+  `c9d91537c52063542ef95411390d9dc212df11ee2d89e51fbb812cfa23275360`,
+  protocol header
+  `517a496f81f265ef97e17a1bdcc7c521b474685a62c9ec55a4be8fa17def1867`.
+  Build-input checksum manifest SHA-256
+  `03d51d4c6074da99f8bd6402440037ce4add83a8cc62b1f163d608e1b3d0b69e`; boot
+  core RBF SHA-256
+  `2ce38c20261658eb5113872c7aa2846b18c5751dd077861b54967920d7571aee`;
+  `astra68.hps.jic` SHA-256
+  `220cd68df649e06f4c5676be8a3361dffef55aab287ba3e67e5ab0a2c0833eeb`.
+- Simulation (`perf/run_perf.sh`): an 11-pixel LINES segment costs 51 / 52
+  / 55 cycles at 25 / 100 / 200-cycle latency against 118 / 125 / 127 per
+  LINE command; the testdraw2 frame in four commands (clear, FILL_RECTS,
+  LINES, FILL_RECTS) costs 208k / 209k / 212k cycles.
+- Disposition: capacity and timing checkpoint; not programmed or certified.
+
+## 2026-09-27: FILL_RECTS (not deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed a full production
+  synthesis, fit, route, signoff and programming-file build with
+  `build_astra_shell.sh` (`DISPLAY` unset) from an rsync of the Mac working
+  tree at `~/astra-mg/rtl-main3`
+  (`ASTRA_DE25_BUILD_ROOT=build/de25-fill-rects`).
+- Source change over the posted-writes checkpoint below: the `FILL_RECTS`
+  opcode (4; `docs/GRAPHICS_ARCHITECTURE.md` §9), a command-processor record
+  loop that reads up to 64 records per page-bounded burst into the local RAM
+  and runs each as a blitter FILL, validated once as an array command. The
+  completion-record queue went from eight entries to four. `run_tests.sh`
+  passes on the same source (20.4 min), including FILL_RECTS equivalence
+  with sequential FILLs, rejection cases and the ordering bench; the Linux
+  helper's `render_batch_valid` accepts the opcode (host self-test passes).
+- First attempt, eight-entry queue: **fitter failure**, "requires 4689
+  LABs, the device contains only 4680" (45,942 ALMs placed). Disposition:
+  the queue was trimmed to four entries and the record loop stores the
+  record's point and extent straight into the command words; Quartus OOC for
+  the render engines fell from 24,551 to 24,179 ALUTs (command processor
+  4,563 to 4,132), below the posted-writes image that fitted. Second attempt
+  passed.
+- Routed resource use: **45,680 / 46,800 ALMs (98 %)**, 3,566,368 /
+  7,331,840 block-memory bits, **309 / 358 RAM blocks**, 53 / 376 DSP
+  blocks, 5 / 11 PLLs.
+- All production clocks are constrained and pass. Worst setup, hold,
+  recovery and removal slacks are **+0.045 ns** (`ASTRA_HDMI_PIXEL_CLOCK`),
+  **0.000 ns**, **+2.853 ns** and **+0.160 ns**. The 165 MHz graphics clock
+  (`iopll_0_outclk1`, Fmax 175.44 MHz) closes at **+0.360 ns**; the 148.5
+  MHz pixel clock at +0.924 ns.
+- Source SHA-256: command processor
+  `b3263210a202c8fb78840d306aa9702424ca0fb536e96bb15073d11e47a311b4`,
+  protocol header
+  `351501995c2d3ed66c62dccf9488207b74343b0245edd710c44540b663cff1e8`; copy
+  mover, pixel writer and blitter unchanged. Build-input checksum manifest
+  SHA-256 `80b13cac307ab8a7efa1704de15a5f3578ca1b39eba7964295b9a7f5eeaa6008`;
+  boot core RBF SHA-256
+  `632b5c73e81aec4df8d1034a95b1b1989f67ada98317b1c2005bada3eff401df`;
+  `astra68.hps.jic` SHA-256
+  `b14a2e2c7f3d72ad7186230ea135d57db74fc4324352b18f0f6a39f12b6145dc`.
+- Simulation evidence (`perf/run_perf.sh`): a 1x1 FILL_RECTS record costs
+  46 / 48 / 50 cycles at 25 / 100 / 200-cycle DDR latency against 113 / 116
+  / 121 per FILL command; the testdraw2 frame with its points and rectangles
+  batched costs 214k / 216k / 219k cycles in 103 commands against 241k /
+  243k / 247k in 506.
+- Disposition: capacity and timing checkpoint. The DE25 was not programmed;
+  POST, storage, graphics, HDMI, repeated boot and `astra-render-certify`
+  have not been run on this image. Remaining capacity is 1,120 ALMs by count,
+  but the first attempt shows the LAB packing limit is reached near 45,950.
+
+## 2026-09-27: posted render writes (not deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed a full production
+  synthesis, fit, route, signoff and programming-file build with
+  `build_astra_shell.sh` (`DISPLAY` unset) from an rsync of the Mac working
+  tree at `~/astra-mg/rtl-main2`
+  (`ASTRA_DE25_BUILD_ROOT=build/de25-render-posted`).
+- Source change over the render-perf3 checkpoint below, in
+  `fpga/arty/graphics`: engines finish once their last write is issued; every
+  engine write uses one AXI ID; the command processor counts write responses
+  and keeps completion records in an eight-entry in-order queue, writing each
+  record between engine bursts once the writes before it are answered and
+  retiring it on its own response; reads (descriptor misses and pixel-reading
+  engines) wait for all earlier writes; write errors are charged to the
+  issuing command. Ordering rules: `docs/GRAPHICS_ARCHITECTURE.md` §9.
+  `run_tests.sh` passes on the same source (19.5 min), including the new
+  `perf/run_ordering.sh` bench (writes visible only at their response,
+  reordered completion responses, an injected SLVERR).
+- First attempt failed in synthesis (no fit): the new fault-detail capture
+  indexed `m_axi_bid[5:0]`, but the DE25 instantiates the processor with
+  `AXI_ID_WIDTH = 3`. The ID is now zero-extended to eight bits first; an
+  iverilog elaboration at width 3 is clean. The second attempt passed.
+- Routed resource use: **45,611 / 46,800 ALMs (97 %)**, 3,566,464 /
+  7,331,840 block-memory bits, **309 / 358 RAM blocks**, 53 / 376 DSP
+  blocks, 5 / 11 PLLs: 141 fewer ALMs and one more RAM block than the
+  render-perf3 route (45,752 ALMs).
+- All production clocks are constrained and pass. Worst setup, hold,
+  recovery and removal slacks are **+0.079 ns** (`ASTRA_HDMI_PIXEL_CLOCK`),
+  **0.000 ns**, **+2.146 ns** and **+0.024 ns**. The 165 MHz graphics clock
+  (`iopll_0_outclk1`, Fmax 175.25 MHz) closes at **+0.354 ns** (was
+  +0.361 ns); its worst path is in the unchanged framebuffer line builder,
+  the worst render-processor path (`last_fault_detail` enable) has
+  +0.407 ns. The 148.5 MHz pixel clock closes at +1.004 ns.
+- Source SHA-256: command processor
+  `879c493a1efcef0ce8b0a823f6ceb9e4ebab685e23fff533bee6a0140e53bc03`,
+  copy mover `eedb06c5adcadf23c2ee25f9655049c0f7d73c8e1b88725b40258cac39c47b17`,
+  pixel writer
+  `0cfcb950328c8d0f19faf4d828bde7109fa3a029b9982d1e46ba0814abda176a`,
+  blitter `47cf76c348808d2f1ab8996e84fc829cad86719641a376337163d4adf0336705`,
+  geometry unchanged. Build-input checksum manifest SHA-256
+  `3e6f878b67b593d062f47bf55296714bb720fab4bf486ab5342d653228dfcee9`; boot
+  core RBF SHA-256
+  `e859b4768af9bd214c18cf5370382e955d84c9f928235ffcfe5c0f2cdc476010`;
+  `astra68.hps.jic` SHA-256
+  `4cee9f434e7d0bd1e0a7fc3fd1f369cdc82bf9c458d866f06fff9d6891393dac`.
+- Simulation evidence (`perf/run_perf.sh`): a small FILL costs 113 / 116 /
+  121 cycles at 25 / 100 / 200-cycle DDR latency (render-perf3: 138 / 216 /
+  319); one SDL testdraw2 frame 241k / 243k / 247k cycles (render-perf3:
+  253k / 289k / 338k).
+- Disposition: capacity and timing checkpoint. The DE25 was not programmed;
+  POST, storage, graphics, HDMI, repeated boot and `astra-render-certify`
+  have not been run on this image.
+
+## 2026-09-27: render transport and burst mover (render-perf3, not deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed a full production
+  synthesis, fit, route, signoff and programming-file build with
+  `build_astra_shell.sh` from an rsync of the Mac working tree at
+  `~/astra-mg/rtl-main` (`ASTRA_DE25_BUILD_ROOT=build/de25-render-perf3`).
+  First attempt; no iteration was needed. (A first launch failed before
+  synthesis only because `qsys-script` inherited an ssh-forwarded `DISPLAY`;
+  run the build with `DISPLAY` unset.)
+- Source change, all in `fpga/arty/graphics`: command prefetch (up to 32
+  commands per AXI read into a 512x65 M20K), a three-slot surface-descriptor
+  cache with the per-doorbell rule of `docs/GRAPHICS_ARCHITECTURE.md` §9,
+  posted completion records retired on their write response, skipped
+  disabled range-check pairs, a read-ahead burst mover (eight chunk slots in
+  M20K) for fills and plain copies, one Bresenham step per clock, and 128
+  outstanding pixel-writer writes. The copy mover's AR/AW now stay valid
+  until their handshake across an abort (a latent baseline bug: an abort in
+  the handshake cycle abandoned an accepted address).
+  `fpga/arty/graphics/run_tests.sh` passes on the same source (21 min).
+- Routed resource use: **45,752 / 46,800 ALMs (98 %)**, 3,566,272 /
+  7,331,840 block-memory bits, **308 / 358 RAM blocks**, 53 / 376 DSP
+  blocks, 5 / 11 PLLs. Against the texture-engine route (45,925 ALMs, 304
+  RAM blocks) that is **173 fewer ALMs** and 4 more RAM blocks: the new
+  mover is smaller than the one it replaces (Quartus OOC: 1,158 vs 1,666
+  ALUTs, 847 vs 1,710 registers).
+- All production clocks are constrained and pass. Worst setup, hold,
+  recovery and removal slacks are **+0.138 ns** (`ASTRA_HDMI_PIXEL_CLOCK`),
+  **0.000 ns**, **+2.962 ns** and **+0.002 ns**. The 165 MHz graphics clock
+  (`pixel_pll_i|iopll_0_outclk1`, 6.060 ns, Fmax 175.47 MHz) closes at
+  **+0.361 ns** (was +0.364 ns); its five worst paths all start in the
+  texture engine (`texture_i|vertex_x_q[1][4]`), none in the changed logic.
+  The 148.5 MHz pixel clock closes at +1.051 ns.
+- Source SHA-256: command processor
+  `2b3c1814ff8f2f929bdd8799ee315b034ec6f0c13af6dc7d7e5b41947695a8a6`,
+  copy mover `45d0097ddfe90bb336dabd72cda817d4cc2c6dce5f27f6fd81542a34fd8658af`,
+  blitter `a87b4589a3885ba9db0127743925a124c1ab901b5232316f81cd17cfd98017d9`,
+  geometry `ec933d2488c9d735c97f6e8b142aca5f4bf41ccc2b407941ab7fc903c4c9ba76`,
+  texture engine and pipeline unchanged. Build-input checksum manifest
+  SHA-256 `fa5cf2aa3dd1c907759559a5a47dfadbd7de36203f54481fdb979e666ff65097`;
+  boot core RBF SHA-256
+  `4983ff7fb6869a2adb362a511dc74cfd8ac0c447b680304142c8db93218b0b8b`;
+  `astra68.hps.jic` SHA-256
+  `693346c3b9c0927aa6f98f850582eb8f9c7034e9a0d45e261298a79fc4cd85f9`.
+- Simulation evidence (`fpga/arty/graphics/perf/run_perf.sh`, latency model,
+  RGB565 640x480): one SDL testdraw2 frame costs 253k / 289k / 338k cycles
+  at 25 / 100 / 200-cycle DDR latency, against 1.61M / 1.89M / 3.35M for the
+  baseline; fill and plain copy run at 0.30–0.34 cycles per pixel at any of
+  those latencies.
+- Disposition: capacity and timing checkpoint. The DE25 was not programmed;
+  POST, storage, graphics, HDMI, repeated boot and `astra-render-certify`
+  have not been run on this image.
+
+## 2026-09-26: texture engine (TRIANGLES) and ARGB8888 destinations (not deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed a full production
+  synthesis, fit, route, signoff and programming-file build in
+  `build/de25-texture-engine/astra-shell` (`build_astra_shell.sh`,
+  `ASTRA_DE25_BUILD_ROOT=build/de25-texture-engine`). The source adds
+  `astra_render_texture.sv` (docs/TEXTURE_ENGINE.md) behind the command
+  processor, ARGB8888 destinations for geometry, flood and glyph, and
+  straight-alpha `FLAG_BLIT_ALPHA`. The full graphics suite (including the
+  194-case model-checked texture bench) passes on the same source. First
+  attempt; no iteration was needed.
+- Routed resource use: **45,925 / 46,800 ALMs (98 %)**, 3,516,608 /
+  7,331,840 block-memory bits, **304 / 358 RAM blocks**, **53 / 376 DSP
+  blocks**, 5 / 11 PLLs. The texture engine alone is about 5,006 ALMs
+  (+4,848 ALMs, +2 RAM blocks, +7 DSP blocks over the tile-control-free
+  route). Only **875 ALMs** remain: the next FPGA feature must first reclaim
+  logic. The engine's largest cost is six parallel 50-bit attribute
+  steppers; time-multiplexing them through one adder is the known reduction.
+- All production clocks are constrained and pass; no failing path. Worst
+  setup, hold, recovery, removal and minimum-pulse slacks are **+0.051 ns**
+  (`ASTRA_HDMI_PIXEL_CLOCK`, output path), **0.000 ns**, **+2.967 ns**,
+  **+0.092 ns** and **+0.220 ns**. The 165 MHz graphics clock
+  (`pixel_pll_i|iopll_0_outclk1`, 6.060 ns) closes at **+0.364 ns** (was
+  +0.801 ns); its worst path starts in the texture engine's shared multiplier
+  bank (`texture_i|bank_a_q[4]`). The 148.5 MHz pixel clock closes at
+  +0.937 ns.
+- Source SHA-256: texture engine
+  `126c8eed22b639b6e13f89d9b5c59991c7797ee643f594683a4ddf4f8e7de554`,
+  command processor
+  `2f024a5f02674794bae4b72a9a16377243f4d1e37123252eedf9ed1a93cd663b`,
+  blitter `9bd9f6b9a68634fc719bb940e4bb49086c9028eeb8fe5f1bc408160a153297be`,
+  glyph `2c91d78bc3d2bffda52dd9ec5adc1938cb23665e37b5caf14fbbb8e2003dd2b3`,
+  pipeline (unchanged)
+  `d7252bdf4751ad403bc5de78e84713701f02dc16452f89238f227fe506b81ba6`.
+  Build-input checksum manifest SHA-256 is
+  `82a2dc1df9e2cf3e0ac4889d8cc906c8fadd41aac70677c4e503ff72da948c4f`; boot
+  core RBF SHA-256 is
+  `3325d8ffbe45686bf28ea3720487953692fe3d5f38d4a0e7376008ff9ff00ca9`.
+- Disposition: capacity and timing checkpoint only. The DE25 was not
+  programmed; POST, storage, graphics, HDMI, repeated boot and
+  `astra-render-certify` (`ASTRA_TEXTURE PASS`) have not been run on this
+  image.
+
+## 2026-09-25: retired tile controls and scene arbiter (not deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed a full production
+  synthesis, fit, route, signoff, and programming-file build from the exact
+  tile-control-free source in `build/de25-sdl-no-tile-controls/astra-shell`.
+  The graphics suite, DE25 build contract, ARM host binaries, and Linux host
+  tests pass. Tile register writes now return SLVERR, tile register reads
+  return DECERR, retired Copper targets are rejected, and the sprite AXI
+  client connects directly to the scene bridge. This is an isolated capacity
+  checkpoint, **not** a deployed or hardware-qualified release.
+- Routed resource use: **41,077 / 46,800 ALMs**, **3,516,472 / 7,331,840
+  block-memory bits**, **302 / 358 RAM blocks**, **46 / 376 DSP blocks**, and
+  **5 / 11 PLLs**. Remaining nominal capacity is 5,723 ALMs, 56 RAM blocks,
+  and 330 DSP blocks; fit and timing, not raw counts, remain the acceptance
+  gate for any SDL datapath.
+- All production clocks are constrained and timing passes. Worst setup, hold,
+  recovery, removal, and minimum-pulse slacks are **+0.012 ns**, **0.000 ns**,
+  **+2.732 ns**, **+0.041 ns**, and **+0.220 ns**. No failed timing cone. The
+  worst setup path is `graphics_i|hdmi_tx_d[22]` to `HDMI_TX_D[22]` on
+  `ASTRA_HDMI_PIXEL_CLOCK`; the 165 MHz graphics clock's setup slack is
+  +0.801 ns. The tiny HDMI output margin means future FPGA work still needs
+  an exact full route, even if it does not touch scanout logic.
+- Source SHA-256: pipeline
+  `d7252bdf4751ad403bc5de78e84713701f02dc16452f89238f227fe506b81ba6`,
+  control `5c21c22fd743ccd7233d327c78d21067a5b6599ac83190650b237cdca1e2daf1`,
+  Copper registers
+  `5f093a892e9b7d4aaec3d02c2e37fe0a0061a6c49221dad4c2e881bc1983e22f`,
+  Copper structural state
+  `bf432bfcb8f4a55c521bf3130049833bc0760c4b642cd8f5a3c1c9a23ae7872c`,
+  scheduler `b011ca1074fb2b3f11dd56cf611791d56e13052acae9ca9e5567c9fc1a21b251`,
+  and DE25 top
+  `505770f8b70cf7dd72cff11d3e7c35286d6d63e4aeae91e49ffd25f11c00cb3c`.
+  Full build-input checksum manifest SHA-256 is
+  `76a4ffc0a20170a37c6f8387fef9f25ae8f9b4459766d27a56ba6602fbd1617a`;
+  boot core RBF SHA-256 is
+  `da1ecee8a62ef96ab898e07d992b27528c08d0784decd61240a6b32da18150ed`.
+  The DE25 remains on the previous release; POST, storage, graphics, HDMI,
+  and repeated boot gates have not been run on this image.
+
+## 2026-09-25: tile-free compositor and palette capacity route (not deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed the isolated full
+  production build in `build/de25-sdl-final-cut/astra-shell`. This source has
+  no instantiated tile-line builders, no tile palette storage, and a
+  framebuffer/sprite-only three-stage pixel compositor. The integrated
+  framebuffer scroll/wrap tests and exact-source full graphics suite pass.
+  Tile control/Copper contracts
+  are not yet retired, so this is **not** a releasable image.
+- The full route uses 42,158 / 46,800 ALMs, 3,516,488 / 7,331,840 block
+  bits, 302 / 358 RAM blocks, and 46 / 376 DSP blocks. Setup, hold, recovery,
+  removal, and minimum-pulse timing all pass, with worst slacks +0.054 ns,
+  0.000 ns, +3.247 ns, +0.027 ns, and +0.220 ns. That leaves 4,642 ALMs
+  and 56 RAM blocks before device limits; it does **not** prove the remaining
+  SDL2 rendering operations will fit or meet timing.
+- Pipeline, palette, and compositor source SHA-256 values are
+  `e99efd188105ecea3cbbc42ac54b8a9b09dd7613a901b46ab1e3ed9216177585`,
+  `4c011f3047efe3df0f68e997b1183e0ffcde97371b14354e1ee9af9c509a88ae`,
+  and `bd3bcd6bca4dcaaead2a4ae2a13dd0a4001e723db9765a5d0307087b87946bf5`.
+  Full build-input checksum manifest SHA-256 is
+  `f4f6bd892e5485fd40c863b25cf372e3eb30b6e92dade8213f8d6db86dff37ef`;
+  RBF SHA-256 is
+  `8558da2a65bee69ee24c85e2310955139f78dede3794a5e1e8696ac23cb1947f`.
+  The DE25 was not changed; hardware POST and visual gates remain open.
+
+## 2026-09-25: framebuffer-only palette capacity experiment (not deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed a full isolated
+  production route in `build/de25-sdl-nopalette/astra-shell`. This source
+  removed the 4096-entry tile-palette baseline/active storage and restores
+  only the 256 framebuffer entries. The focused palette test passed host and
+  Copper writes, restore/backpressure, and the 1500-clock upper bound; restore
+  took 781 control clocks versus 13,068 in the previous tile-palette test.
+  Removed tile-palette MMIO writes and Copper target validation are negative
+  tested. The later three-stage compositor/prefetch cut is **not** in this
+  artifact and requires its own route.
+- Full-route resources are 42,241 / 46,800 ALMs, 3,516,488 / 7,331,840
+  block bits, 302 / 358 RAM blocks, and 46 / 376 DSP blocks. Worst setup,
+  hold, recovery, removal, and minimum-pulse slack are +0.087 ns, 0.000 ns,
+  +3.039 ns, +0.080 ns, and +0.220 ns. Against the preceding explicit
+  tile-builder-removal route, that is 185 fewer ALMs and eight fewer RAM
+  blocks; the two fitter results are separate complete routes.
+- Pipeline, palette, and compositor source SHA-256 values in this build are
+  `7d47f05cdc44339050bb1633c409d50d9d450b6ae4221f11dc45d7bad8649d7c`,
+  `4c011f3047efe3df0f68e997b1183e0ffcde97371b14354e1ee9af9c509a88ae`,
+  and `0905f1a7a08231a97f8451c38b668076cafc8fdcb9aa83228048100439b491a2`.
+  Full build-input checksum manifest SHA-256 is
+  `177b075a9dfc3b359c0ee0426060702bdd37aed859ce3b6563b68251331d0c18`;
+  RBF SHA-256 is
+  `6b419a87b74ae63ac8629f052fbc0f8fd9f015668179480f2ef19b1563fa32a6`.
+  No DE25 install or hardware release gate was performed.
+
+## 2026-09-25: explicit tile-builder removal (not deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed the entire production
+  build in isolated `build/de25-sdl-notile-v2/astra-shell`. The source now has
+  no tile-line-builder instances. Its framebuffer builder still receives
+  independent viewport X/Y and wrap X/Y controls; the integrated scroll/wrap
+  simulation and no-tile-AXI negative check pass. The full Beast graphics
+  simulation suite exits zero against this source revision, including the
+  1920-pixel integrated pipeline and render-command processor.
+- Full-route resources: 42,426 / 46,800 ALMs, 3,647,576 / 7,331,840 block
+  bits, 310 / 358 RAM blocks, and 46 / 376 DSP blocks. Worst setup, hold,
+  recovery, removal, and minimum-pulse slack are +0.079 ns, 0.000 ns,
+  +2.711 ns, +0.039 ns, and +0.220 ns. The 166-ALM difference from the
+  tied-off predecessor is fitter variation; RAM use is unchanged.
+- Pipeline SHA-256 is
+  `06bebbad4638df13c57ba32f48583f1fd27dcba248c12f96602874222348f707`;
+  full build-input checksum manifest SHA-256 is
+  `d7217f009489b03293e0e581276aaa9bfb6315dd933ebd93ec9e54c3a8583e5c`;
+  published RBF SHA-256 is
+  `c19ae261997d5e37930948aa27acae09fbe9020a86cb881723715dc589b9b108`.
+  This is an isolated capacity checkpoint, not a release: tile palette and
+  low-level control/Copper contracts remain, SDL rendering is not yet
+  hardware-backed, and the DE25 hardware release gate has not been run.
+
+## 2026-09-25: tile-disabled SDL capacity experiment (not deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed the full production
+  synthesis, fit, route, signoff, assembly, checksum, and publication flow in
+  isolated `build/de25-sdl-audit/astra-shell`. The experimental pipeline ties
+  both tile builders and tile compositor inputs off while leaving framebuffer
+  viewport X/Y scrolling and wrapping active. The integrated graphics test
+  checks scrolled/wrapped pixels and rejects tile AXI traffic with both legacy
+  tile-enable controls set; the complete graphics simulation suite passes.
+- Full-route resources: 42,260 / 46,800 ALMs; 3,647,576 / 7,331,840 block
+  bits; 310 / 358 RAM blocks; 46 / 376 DSP blocks. Worst setup, hold,
+  recovery, removal, and minimum-pulse slack: +0.078 ns, 0.000 ns, +2.974 ns,
+  +0.002 ns, and +0.220 ns. Relative to the latest documented active capture
+  route (45,797 ALMs, 354 RAM blocks), this experiment has 3,537 fewer ALMs
+  and 44 fewer RAM blocks; it is not a controlled single-change comparison
+  against that historical source revision.
+- Source identity: pipeline SHA-256
+  `32b82112177989ef2f9b20f6e78df46f3dcaa4e71c31bca9e52cfdca2a89aea8`;
+  full build-input checksum manifest SHA-256
+  `19496e9574feac6bdaad4735014e0e4c278ecf37234e1cc16573b6e79294ede6`.
+  Published RBF SHA-256 is
+  `867b7314a328437a3d0b2ad546c5edbb753293f4091b378ecb36f8bddc2347d6`.
+  The build was not installed on the DE25: tile control/register and software
+  contracts still need coherent retirement, and the SDL renderer additions
+  still need a separate full-route and hardware release gate.
+
 ## 2026-09-14: native-width framebuffer deadline closure
 
 - The preceding 64-bit scene-reader route was not physically acceptable.

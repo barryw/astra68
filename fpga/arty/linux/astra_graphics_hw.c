@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <sys/file.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -35,6 +36,7 @@ void astra_graphics_device_init(struct astra_graphics_device *device)
     device->capture_lock_fd = -1;
     device->registers = MAP_FAILED;
     device->framebuffer = MAP_FAILED;
+    device->arena = MAP_FAILED;
 }
 
 int astra_display_capture_claim(struct astra_graphics_device *device)
@@ -124,6 +126,36 @@ int astra_graphics_device_open(struct astra_graphics_device *device,
         return -1;
     }
 
+#ifdef ASTRA_GRAPHICS_ARENA_DEVICE
+    {
+        /* /dev/mem maps memory outside System RAM as Device-nGnRnE, where
+           every store waits for its bridge response. The arena driver maps
+           it write-combining, from the media RAM base, which is the arena
+           base. Arena stores are ordered before each doorbell by the DSB in
+           astra_graphics_memory_barrier. */
+        int arena_fd = open(ASTRA_GRAPHICS_ARENA_DEVICE, O_RDWR | O_CLOEXEC);
+
+        _Static_assert(ASTRA_GRAPHICS_ARENA_BASE == 0x40000000u,
+                       "the arena device maps from the media RAM base");
+        if (arena_fd < 0) {
+            perror("open " ASTRA_GRAPHICS_ARENA_DEVICE);
+            astra_graphics_device_close(device);
+            return -1;
+        }
+        device->arena = mmap(NULL, ASTRA_GRAPHICS_ARENA_BYTES,
+                             PROT_READ | PROT_WRITE, MAP_SHARED, arena_fd, 0);
+        (void)close(arena_fd);
+    }
+#else
+    device->arena = mmap(NULL, ASTRA_GRAPHICS_ARENA_BYTES,
+                         PROT_READ | PROT_WRITE, MAP_SHARED,
+                         device->memory_fd, (off_t)ASTRA_GRAPHICS_ARENA_BASE);
+#endif
+    if (device->arena == MAP_FAILED) {
+        perror("map graphics arena");
+        astra_graphics_device_close(device);
+        return -1;
+    }
     if (map_framebuffer) {
         device->framebuffer = mmap(NULL, ASTRA_FRAMEBUFFER_BYTES,
                                    PROT_READ | PROT_WRITE, MAP_SHARED,
@@ -140,6 +172,10 @@ int astra_graphics_device_open(struct astra_graphics_device *device,
 
 void astra_graphics_device_close(struct astra_graphics_device *device)
 {
+    if (device->arena != MAP_FAILED) {
+        (void)munmap((void *)device->arena, ASTRA_GRAPHICS_ARENA_BYTES);
+        device->arena = MAP_FAILED;
+    }
     if (device->framebuffer != MAP_FAILED) {
         (void)munmap((void *)device->framebuffer, ASTRA_FRAMEBUFFER_BYTES);
         device->framebuffer = MAP_FAILED;
@@ -220,6 +256,13 @@ int astra_graphics_memory_map_open(
         end > ASTRA_GRAPHICS_ARENA_LIMIT) {
         errno = EINVAL;
         return -1;
+    }
+    if (device->arena != MAP_FAILED && device->arena != NULL) {
+        /* A view: nothing for close to unmap. */
+        mapping->data = device->arena +
+                        (physical_address - ASTRA_GRAPHICS_ARENA_BASE);
+        mapping->data_bytes = bytes;
+        return 0;
     }
 
     page_size_long = sysconf(_SC_PAGESIZE);
@@ -330,7 +373,6 @@ int astra_graphics_capture_rgb(
     const struct astra_graphics_device *device, uint32_t physical_address,
     const char *path, struct astra_display_capture_result *result)
 {
-    const struct timespec delay = { .tv_sec = 0, .tv_nsec = 1000000 };
     const uint64_t timeout_ns = UINT64_C(2000000000);
     struct astra_graphics_memory_map frame;
     uint8_t *copy = NULL;
@@ -377,8 +419,7 @@ int astra_graphics_capture_rgb(
             errno = ETIMEDOUT;
             goto disable;
         }
-        while (nanosleep(&delay, NULL) != 0 && errno == EINTR) {
-        }
+        astra_graphics_poll_pause(started);
     }
     if (astra_mmio_read(device, ASTRA_REG_CAPTURE_COMPLETED_BASE) !=
             physical_address ||
@@ -436,7 +477,6 @@ int astra_graphics_wait_register_mask(
     uint32_t mask, uint32_t expected, uint64_t timeout_ns,
     uint32_t *value_out)
 {
-    const struct timespec delay = { .tv_sec = 0, .tv_nsec = 1000000 };
     uint64_t now = astra_monotonic_nanoseconds();
     uint64_t deadline = timeout_ns > UINT64_MAX - now ?
         UINT64_MAX : now + timeout_ns;
@@ -457,9 +497,69 @@ int astra_graphics_wait_register_mask(
             errno = ETIMEDOUT;
             return -1;
         }
-        while (nanosleep(&delay, NULL) != 0 && errno == EINTR) {
-        }
+        astra_graphics_poll_pause(now);
     }
+}
+
+int astra_graphics_render_stop(const struct astra_graphics_device *device,
+                               uint64_t timeout_ns)
+{
+    astra_mmio_write(device, ASTRA_REG_RENDER_CONTROL, 0u);
+    return astra_graphics_wait_register_mask(
+        device, ASTRA_REG_RENDER_STATUS,
+        ASTRA_RENDER_ENGINE_BUSY | ASTRA_RENDER_ENGINE_ENABLED, 0u,
+        timeout_ns, NULL);
+}
+
+bool astra_graphics_has_capability(
+    const struct astra_graphics_device *device, uint32_t capability)
+{
+    return (astra_mmio_read(device, ASTRA_REG_CAPABILITIES) & capability) ==
+           capability;
+}
+
+int astra_graphics_access_fault_take(
+    const struct astra_graphics_device *device,
+    struct astra_access_fault *fault)
+{
+    fault->count = 0u;
+    fault->first = 0u;
+    if (!astra_graphics_has_capability(device,
+                                       ASTRA_CAP_ACCESS_FAULT_RECORD)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    fault->count = astra_mmio_read(device, ASTRA_REG_ACCESS_FAULT_COUNT);
+    if (fault->count == 0u)
+        return 0;
+    fault->first = astra_mmio_read(device, ASTRA_REG_ACCESS_FAULT_FIRST);
+    astra_mmio_write(device, ASTRA_REG_ACCESS_FAULT_COUNT, 0u);
+    return 1;
+}
+
+int astra_graphics_render_host_aperture_set(
+    const struct astra_graphics_device *device, uint32_t base,
+    uint64_t timeout_ns)
+{
+    if (!astra_graphics_has_capability(device,
+                                       ASTRA_CAP_RENDER_HOST_APERTURE)) {
+        fprintf(stderr, "bitstream has no render host aperture\n");
+        errno = ENOTSUP;
+        return -1;
+    }
+    if (astra_graphics_render_stop(device, timeout_ns) != 0) {
+        fprintf(stderr, "render engine did not stop: status=0x%08x\n",
+                astra_mmio_read(device, ASTRA_REG_RENDER_STATUS));
+        return -1;
+    }
+    astra_mmio_write(device, ASTRA_REG_RENDER_HOST_APERTURE_BASE, base);
+    if (astra_mmio_read(device, ASTRA_REG_RENDER_HOST_APERTURE_BASE) !=
+        base) {
+        fprintf(stderr, "render host aperture did not take 0x%08x\n", base);
+        errno = EIO;
+        return -1;
+    }
+    return 0;
 }
 
 void astra_graphics_copper_write_instruction(
@@ -480,24 +580,28 @@ void astra_graphics_scene_prepare_empty(
     astra_mmio_write(device, ASTRA_REG_BACKDROP, 0u);
     astra_mmio_write(device, ASTRA_REG_FB_CONTROL, 0u);
     astra_mmio_write(device, ASTRA_REG_FB_WINDOW_SCENE_BYTES, 0u);
-    astra_mmio_write(device, ASTRA_REG_TILE0_CONTROL, 0u);
-    astra_mmio_write(device, ASTRA_REG_TILE1_CONTROL, 0u);
     astra_mmio_write(device, ASTRA_REG_SPRITE_CONTROL, 0u);
     astra_mmio_write(device, ASTRA_REG_GLOBAL_CONTROL, 1u);
 }
 
-int astra_graphics_scene_commit(
-    const struct astra_graphics_device *device, uint64_t timeout_ns,
+void astra_graphics_scene_commit_begin(
+    const struct astra_graphics_device *device,
+    struct astra_graphics_commit *commit)
+{
+    commit->generation = astra_mmio_read(device, ASTRA_REG_GENERATION);
+    commit->errors = astra_mmio_read(device, ASTRA_REG_COMMIT_ERRORS);
+    astra_mmio_write(device, ASTRA_REG_COMMIT, 1u);
+}
+
+int astra_graphics_scene_commit_wait(
+    const struct astra_graphics_device *device,
+    const struct astra_graphics_commit *commit, uint64_t timeout_ns,
     uint32_t *generation_out)
 {
-    const struct timespec poll_delay = { .tv_sec = 0, .tv_nsec = 1000000 };
-    uint32_t generation = astra_mmio_read(device, ASTRA_REG_GENERATION);
-    uint32_t errors = astra_mmio_read(device, ASTRA_REG_COMMIT_ERRORS);
     uint64_t now = astra_monotonic_nanoseconds();
     uint64_t deadline = timeout_ns > UINT64_MAX - now ?
         UINT64_MAX : now + timeout_ns;
 
-    astra_mmio_write(device, ASTRA_REG_COMMIT, 1u);
     for (;;) {
         uint32_t status = astra_mmio_read(device, ASTRA_REG_COMMIT);
         uint32_t active_generation =
@@ -505,15 +609,15 @@ int astra_graphics_scene_commit(
         uint32_t active_errors =
             astra_mmio_read(device, ASTRA_REG_COMMIT_ERRORS);
 
-        if ((status & 1u) == 0u && active_generation != generation) {
+        if ((status & 1u) == 0u && active_generation != commit->generation) {
             if (generation_out != NULL)
                 *generation_out = active_generation;
             return 0;
         }
-        if (active_errors != errors) {
+        if (active_errors != commit->errors) {
             fprintf(stderr,
                     "graphics scene commit rejected: errors=%u->%u\n",
-                    errors, active_errors);
+                    commit->errors, active_errors);
             return -1;
         }
         if (astra_monotonic_nanoseconds() >= deadline) {
@@ -523,8 +627,63 @@ int astra_graphics_scene_commit(
                     status, active_generation);
             return -1;
         }
-        while (nanosleep(&poll_delay, NULL) != 0 && errno == EINTR) {
-        }
+        astra_graphics_poll_pause(now);
+    }
+}
+
+int astra_graphics_scene_commit_drain(
+    const struct astra_graphics_device *device, uint64_t timeout_ns)
+{
+    uint64_t now = astra_monotonic_nanoseconds();
+    uint64_t deadline = now + timeout_ns;
+
+    /* A commit left by an earlier helper applies at the next safe frame
+       boundary; wait for it rather than have the next commit rejected. */
+    while ((astra_mmio_read(device, ASTRA_REG_COMMIT) & 1u) != 0u) {
+        if (astra_monotonic_nanoseconds() >= deadline)
+            return -1;
+        astra_graphics_poll_pause(now);
+    }
+    return 0;
+}
+
+int astra_graphics_scene_commit(
+    const struct astra_graphics_device *device, uint64_t timeout_ns,
+    uint32_t *generation_out)
+{
+    struct astra_graphics_commit commit;
+
+    astra_graphics_scene_commit_begin(device, &commit);
+    return astra_graphics_scene_commit_wait(device, &commit, timeout_ns,
+                                            generation_out);
+}
+
+/*
+ * No interrupt reaches the HPS from the graphics block, so every wait polls.
+ * A render batch or pointer commit usually finishes within this budget, and
+ * spinning answers it within one register read; sleeping 50 us at a time
+ * added up to a tenth of a millisecond to every batch. Past the budget the
+ * wait is a vblank or a fault, and the core goes back to the guest. Timer
+ * slack is cut to 1 ns so that sleep ends when asked, not 50 us later.
+ */
+#define POLL_SPIN_NS UINT64_C(2000000)
+
+void astra_graphics_poll_pause(uint64_t started)
+{
+    static bool slack_set;
+    const struct timespec delay = { .tv_sec = 0, .tv_nsec = 50000 };
+
+    if (astra_monotonic_nanoseconds() - started < POLL_SPIN_NS) {
+#if defined(__aarch64__)
+        __asm__ volatile("yield" ::: "memory");
+#endif
+        return;
+    }
+    if (!slack_set) {
+        (void)prctl(PR_SET_TIMERSLACK, 1UL, 0UL, 0UL, 0UL);
+        slack_set = true;
+    }
+    while (nanosleep(&delay, NULL) != 0 && errno == EINTR) {
     }
 }
 

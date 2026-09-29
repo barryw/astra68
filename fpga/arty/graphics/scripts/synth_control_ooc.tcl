@@ -9,8 +9,8 @@ if {[info exists ::env(ASTRA_OOC_OUT)]} {
 
 file mkdir $output_dir
 read_verilog -sv [file join $graphics_dir astra_framebuffer_config_validator.sv]
-read_verilog -sv [file join $graphics_dir astra_tile_config_validator.sv]
 read_verilog -sv [file join $graphics_dir astra_graphics_control.sv]
+read_verilog -sv [file join $graphics_dir astra_access_fault_record.sv]
 read_xdc [file join $script_dir control_ooc.xdc]
 synth_design -top astra_graphics_control -part xc7z020clg400-1 \
     -mode out_of_context -flatten_hierarchy rebuilt

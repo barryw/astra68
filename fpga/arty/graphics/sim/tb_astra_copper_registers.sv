@@ -13,24 +13,6 @@ module tb_astra_copper_registers;
     reg baseline_framebuffer_wrap_y = 1;
     reg baseline_framebuffer_key_enable = 0;
     reg [31:0] baseline_framebuffer_key = 32'h1234;
-    reg baseline_tile0_enable = 1;
-    reg baseline_tile0_above = 0;
-    reg [7:0] baseline_tile0_opacity = 8'h80;
-    reg baseline_tile0_wrap_x = 1;
-    reg baseline_tile0_wrap_y = 0;
-    reg baseline_tile0_transparent_enable = 1;
-    reg [7:0] baseline_tile0_transparent_index = 8'h7f;
-    reg signed [31:0] baseline_tile0_scroll_x = 33;
-    reg signed [31:0] baseline_tile0_scroll_y = 44;
-    reg baseline_tile1_enable = 0;
-    reg baseline_tile1_above = 1;
-    reg [7:0] baseline_tile1_opacity = 8'h40;
-    reg baseline_tile1_wrap_x = 0;
-    reg baseline_tile1_wrap_y = 1;
-    reg baseline_tile1_transparent_enable = 0;
-    reg [7:0] baseline_tile1_transparent_index = 8'h55;
-    reg signed [31:0] baseline_tile1_scroll_x = 55;
-    reg signed [31:0] baseline_tile1_scroll_y = 66;
     reg baseline_sprite_enable = 1;
     reg [15:0] validate_target = 0;
     reg [31:0] validate_data = 0;
@@ -46,10 +28,6 @@ module tb_astra_copper_registers;
     wire framebuffer_palette_write_enable;
     wire [7:0] framebuffer_palette_write_index;
     wire [31:0] framebuffer_palette_write_argb;
-    wire tile_palette_write_enable;
-    wire [3:0] tile_palette_write_bank;
-    wire [7:0] tile_palette_write_index;
-    wire [31:0] tile_palette_write_argb;
     wire sprite_palette_write_enable;
     wire [3:0] sprite_palette_write_bank;
     wire [7:0] sprite_palette_write_index;
@@ -60,16 +38,6 @@ module tb_astra_copper_registers;
     wire framebuffer_wrap_x, framebuffer_wrap_y;
     wire framebuffer_key_enable;
     wire [31:0] framebuffer_key;
-    wire tile0_enable, tile0_above;
-    wire [7:0] tile0_opacity;
-    wire tile0_wrap_x, tile0_wrap_y, tile0_transparent_enable;
-    wire [7:0] tile0_transparent_index;
-    wire signed [31:0] tile0_scroll_x, tile0_scroll_y;
-    wire tile1_enable, tile1_above;
-    wire [7:0] tile1_opacity;
-    wire tile1_wrap_x, tile1_wrap_y, tile1_transparent_enable;
-    wire [7:0] tile1_transparent_index;
-    wire signed [31:0] tile1_scroll_x, tile1_scroll_y;
     wire sprite_enable;
 
     astra_copper_registers dut (.*);
@@ -99,7 +67,7 @@ module tb_astra_copper_registers;
         @(posedge clk);
         #1;
         if (backdrop_rgb != baseline_backdrop_rgb ||
-            framebuffer_viewport_x != 11 || tile0_scroll_y != 44 ||
+            framebuffer_viewport_x != 11 || framebuffer_viewport_y != 22 ||
             !sprite_enable)
             $fatal(1, "baseline did not initialize");
 
@@ -117,33 +85,35 @@ module tb_astra_copper_registers;
         #1;
         if (!validate_allowed)
             $fatal(1, "visual framebuffer control rejected");
-        validate_target = 16'h00d8;
+        validate_target = 16'h0098;
         validate_data = 32'h00000001;
         #1;
         if (validate_allowed)
-            $fatal(1, "dormant invalid tile could be enabled by copper");
+            $fatal(1, "retired tile0 control accepted");
         validate_data = 32'h00000000;
         #1;
-        if (!validate_allowed)
-            $fatal(1, "dormant tile disable was rejected");
+        if (validate_allowed)
+            $fatal(1, "retired tile0 disable accepted");
+        validate_target = 16'h00d8;
+        #1;
+        if (validate_allowed)
+            $fatal(1, "retired tile1 control accepted");
 
         move(16'h0018, 32'h00abcdef);
         if (backdrop_rgb != 24'habcdef || move_timing_class != 0)
             $fatal(1, "pixel-class backdrop failed");
         move(16'h004c, -32'sd50);
         move(16'h0054, 32'h38);
-        move(16'h0098, 32'h00c00007);
         if (framebuffer_viewport_x != -50 || !framebuffer_wrap_x ||
             !framebuffer_wrap_y || !framebuffer_key_enable ||
-            !tile0_enable || !tile0_above || !tile0_transparent_enable ||
-            tile0_opacity != 8'hc0 || move_timing_class != 1)
+            move_timing_class != 1)
             $fatal(1, "next-scanline visual state failed");
 
         move_target = 16'h00d8;
         move_data = 32'h00000001;
         #1;
         if (move_allowed || !move_ready)
-            $fatal(1, "runtime permission leaked into MOVE capacity");
+            $fatal(1, "retired tile target remained writable");
 
         palette_write_ready = 0;
         @(negedge clk);
@@ -169,10 +139,14 @@ module tb_astra_copper_registers;
         @(negedge clk);
         move_valid = 0;
 
-        move(16'h3554, 32'hff010203);
-        if (!tile_palette_write_enable || tile_palette_write_bank != 4'h5 ||
-            tile_palette_write_index != 8'h55)
-            $fatal(1, "tile palette target decode failed");
+        @(negedge clk);
+        validate_target = 16'h3554;
+        validate_data = 32'hff010203;
+        move_target = validate_target;
+        move_data = validate_data;
+        #1;
+        if (validate_allowed || move_allowed)
+            $fatal(1, "removed tile palette target was accepted");
         move(16'h8aa8, 32'hff040506);
         if (!sprite_palette_write_enable ||
             sprite_palette_write_bank != 4'ha ||
@@ -185,7 +159,7 @@ module tb_astra_copper_registers;
         baseline_restore = 0;
         if (backdrop_rgb != 24'h010203 || framebuffer_viewport_x != 11 ||
             framebuffer_wrap_x || !framebuffer_wrap_y ||
-            tile0_opacity != 8'h80)
+            !sprite_enable)
             $fatal(1, "frame baseline restore failed");
         $display("ASTRA COPPER REGISTERS PASS");
         $finish;

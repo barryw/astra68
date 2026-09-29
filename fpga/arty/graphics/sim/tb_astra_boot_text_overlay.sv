@@ -55,6 +55,11 @@ module tb_astra_boot_text_overlay;
         .output_rgb(output_rgb)
     );
 
+    reg [7:0] font_file [0:4095];
+    reg [7:0] scan_char, scan_row;
+    integer scan_x, scan_y;
+    initial $readmemh("build/arty-graphics/post_fonts.hex", font_file);
+
     task automatic write_character(
         input [7:0] index,
         input [1:0] color,
@@ -169,6 +174,22 @@ module tb_astra_boot_text_overlay;
         #1;
         if (output_rgb != input_rgb)
             $fatal(1, "transparent glyph background was not preserved");
+
+        // Every pixel of the four first cells against the font file:
+        // A, C, the full block, then an untouched cell.
+        for (scan_y = 0; scan_y < 48; scan_y = scan_y + 1)
+            for (scan_x = 0; scan_x < 4 * 24; scan_x = scan_x + 1) begin
+                scan_char = scan_x < 24 ? "A" : scan_x < 48 ? "C" :
+                    scan_x < 72 ? 8'hdb : 8'h20;
+                scan_row = font_file[{scan_char, 4'(scan_y / 3)}];
+                prepare_pixel(ORIGIN_X + scan_x, ORIGIN_Y + scan_y);
+                #1;
+                if (output_rgb !== (scan_x < 72 &&
+                        scan_row[7 - (scan_x % 24) / 3] ?
+                            24'h00e5e5 : input_rgb))
+                    $fatal(1, "glyph pixel (%0d,%0d) = %06x", scan_x,
+                           scan_y, output_rgb);
+            end
 
         // A full-block glyph must end exactly at its cell boundary; the next
         // untouched cell remains transparent. Its last source row also ends

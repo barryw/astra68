@@ -128,7 +128,7 @@ module tb_astra_render_blitter;
         .AXI_ID(6'd1),
         .WRITE_ID(6'd6)
     ) blitter_i (
-        .clk(clk), .reset(reset), .start(start), .abort(abort),
+        .clk(clk), .reset(reset), .start(start), .abort(abort), .fill_blend(1'b0),
         .is_fill(opcode == `ASTRA_RENDER_OP_FILL),
         .is_blit(opcode == `ASTRA_RENDER_OP_BLIT), .arena_base(32'd0),
         .clip_left(clip_left), .clip_top(clip_top),
@@ -248,6 +248,7 @@ module tb_astra_render_blitter;
     );
 
     integer last_elapsed;
+    integer abort_case;
 
     task automatic launch;
         integer elapsed;
@@ -326,6 +327,208 @@ module tb_astra_render_blitter;
         end
     endfunction
 
+
+    // ---- pixel-stream reference (expand, straight-alpha source-over,
+    // pack), the blitter's per-pixel equations ---------------------------
+    function automatic [7:0] ref_m(input [7:0] x, input [7:0] y);
+        reg [16:0] a;
+        begin
+            a = x * y + 17'd128;
+            ref_m = (a + (a >> 8)) >> 8;
+        end
+    endfunction
+    function automatic [7:0] ref_sat(input [8:0] v);
+        ref_sat = v[8] ? 8'hff : v[7:0];
+    endfunction
+    function automatic [31:0] ref_expand(input [7:0] f, input [31:0] v);
+        begin
+            if (f == `ASTRA_RENDER_FORMAT_RGB565)
+                ref_expand = {8'hff, v[15:11], v[15:13], v[10:5], v[10:9],
+                              v[4:0], v[4:2]};
+            else if (f == `ASTRA_RENDER_FORMAT_XRGB8888)
+                ref_expand = {8'hff, v[23:0]};
+            else
+                ref_expand = v;
+        end
+    endfunction
+    function automatic [31:0] ref_pack(input [7:0] f, input [31:0] c);
+        begin
+            if (f == `ASTRA_RENDER_FORMAT_RGB565)
+                ref_pack = {16'd0, c[23:19], c[15:10], c[7:3]};
+            else if (f == `ASTRA_RENDER_FORMAT_XRGB8888)
+                ref_pack = {8'hff, c[23:0]};
+            else
+                ref_pack = c;
+        end
+    endfunction
+    function automatic [31:0] ref_blit(input [7:0] sf, input [7:0] df,
+                                       input blend, input [7:0] opacity,
+                                       input [31:0] sv, input [31:0] dv);
+        reg [31:0] sc, dc, r;
+        reg [7:0] a;
+        begin
+            sc = ref_expand(sf, sv);
+            dc = ref_expand(df, dv);
+            if (!blend) begin
+                r = sc;
+            end else begin
+                a = ref_m(sc[31:24], opacity);
+                r[31:24] = ref_sat(a + ref_m(dc[31:24], 8'hff - a));
+                r[23:16] = ref_sat(ref_m(sc[23:16], a) +
+                                   ref_m(dc[23:16], 8'hff - a));
+                r[15:8] = ref_sat(ref_m(sc[15:8], a) +
+                                  ref_m(dc[15:8], 8'hff - a));
+                r[7:0] = ref_sat(ref_m(sc[7:0], a) +
+                                 ref_m(dc[7:0], 8'hff - a));
+            end
+            ref_blit = ref_pack(df, r);
+        end
+    endfunction
+    function automatic [31:0] mem_pixel(input [31:0] address,
+                                        input [2:0] bpp);
+        begin
+            mem_pixel = bpp == 3'd2 ?
+                {16'd0, memory_i.read_byte(address),
+                 memory_i.read_byte(address + 1)} :
+                {memory_i.read_byte(address), memory_i.read_byte(address + 1),
+                 memory_i.read_byte(address + 2),
+                 memory_i.read_byte(address + 3)};
+        end
+    endfunction
+    reg [31:0] px_rng = 32'h2545f491;
+    function automatic [31:0] px_rand(input [31:0] modulus);
+        begin
+            px_rng = px_rng ^ (px_rng << 13);
+            px_rng = px_rng ^ (px_rng >> 17);
+            px_rng = px_rng ^ (px_rng << 5);
+            px_rand = px_rng % modulus;
+        end
+    endfunction
+    reg [7:0] px_before [0:131071];
+    reg [7:0] px_formats [0:2];
+    integer px_stall_mode = 0;
+    always @(negedge clk) begin
+        if (px_stall_mode != 0) begin
+            stall_writes = px_rand(4) == 0;
+            stall_reads = px_rand(5) == 0;
+        end
+    end
+
+    // One random direct-color BLIT (plain or BLIT_ALPHA) checked byte for
+    // byte against the reference over the whole destination surface.
+    // serial selects a 4-mod-8 pitch, which keeps the per-pixel path.
+    task automatic pixel_case(input [7:0] sf, input [7:0] df,
+                              input blend, input [7:0] opacity,
+                              input [1:0] alpha_kind, input integer w,
+                              input integer h, input serial,
+                              input clipped);
+        integer sbpp, dbpp, ssw, ssh, dsw, dsh, i, j, k, dxi, dyi, expected_pixels;
+        integer sxi, syi, spitch, dpitch, soff, doff, x0, y0, x1, y1;
+        reg [31:0] value, want;
+        reg [7:0] want_byte;
+        reg in_rect;
+        begin
+            sbpp = sf == `ASTRA_RENDER_FORMAT_RGB565 ? 2 : 4;
+            dbpp = df == `ASTRA_RENDER_FORMAT_RGB565 ? 2 : 4;
+            sxi = px_rand(9); syi = px_rand(3);
+            dxi = px_rand(9); dyi = px_rand(3);
+            ssw = sxi + w + px_rand(5); ssh = syi + h + px_rand(2);
+            dsw = dxi + w + px_rand(5); dsh = dyi + h + px_rand(2);
+            spitch = ((ssw * sbpp + 7) / 8 + px_rand(40)) * 8 +
+                     (serial ? 4 : 0);
+            dpitch = ((dsw * dbpp + 7) / 8 + px_rand(40)) * 8 +
+                     (serial ? 4 : 0);
+            soff = 32'h00010000 + px_rand(2048) * sbpp;
+            doff = 32'h00100000 + px_rand(2048) * dbpp;
+            if (dpitch * dsh + 16 > 131072)
+                $fatal(1, "pixel case destination too large");
+            for (k = 0; k < spitch * ssh; k = k + 1)
+                memory_i.write_byte(soff + k, px_rand(256));
+            if (sf == `ASTRA_RENDER_FORMAT_ARGB8888)
+                for (k = 0; k < spitch * ssh; k = k + 4)
+                    memory_i.write_byte(soff + k,
+                        alpha_kind == 0 ? 8'hff :
+                        alpha_kind == 1 ? px_rand(256) :
+                        alpha_kind == 2 ? (px_rand(9) == 0 ? px_rand(256) : 8'hff) :
+                        // Only the first and last columns translucent.
+                        ((k % spitch) / 4 == sxi ||
+                         (k % spitch) / 4 == sxi + w - 1 ? 8'h40 : 8'hff));
+            for (k = 0; k < dpitch * dsh + 16; k = k + 1) begin
+                value = px_rand(256);
+                memory_i.write_byte(doff - 8 + k, value[7:0]);
+                px_before[k] = value[7:0];
+            end
+            opcode = `ASTRA_RENDER_OP_BLIT;
+            source_data_offset = soff; destination_data_offset = doff;
+            source_pitch = spitch; destination_pitch = dpitch;
+            source_surface_width = ssw; source_surface_height = ssh;
+            destination_surface_width = dsw; destination_surface_height = dsh;
+            source_format = sf; destination_format = df;
+            source_bpp = sbpp; destination_bpp = dbpp;
+            source_x = sxi; source_y = syi;
+            destination_x = dxi; destination_y = dyi;
+            source_width = w; source_height = h;
+            destination_width = w; destination_height = h;
+            x0 = 0; y0 = 0; x1 = dsw; y1 = dsh;
+            if (clipped) begin
+                x0 = dxi + px_rand(w); y0 = dyi + px_rand(h);
+                x1 = x0 + 1 + px_rand(dsw - x0); y1 = y0 + 1 + px_rand(dsh - y0);
+            end
+            clip_left = x0; clip_top = y0; clip_right = x1; clip_bottom = y1;
+            same_surface = 1'b0;
+            source_palette_offset = 32'd0;
+            auxiliary_data_offset = 32'd0; auxiliary_pitch = 32'd0;
+            auxiliary_surface_width = 16'd0; auxiliary_surface_height = 16'd0;
+            command_flags = blend ? `ASTRA_RENDER_FLAG_BLIT_ALPHA : 16'd0;
+            options = blend ? {opacity, 24'd0} : 32'd0;
+            launch();
+            expected_pixels = 0;
+            for (j = 0; j < dsh; j = j + 1)
+                for (i = 0; i < dsw; i = i + 1) begin
+                    in_rect = i >= dxi && i < dxi + w && j >= dyi && j < dyi + h &&
+                             i >= x0 && i < x1 && j >= y0 && j < y1;
+                    if (in_rect) begin
+                        expected_pixels = expected_pixels + 1;
+                        value = 0;
+                        for (k = 0; k < dbpp; k = k + 1)
+                            value = {value[23:0],
+                                     px_before[8 + j * dpitch + i * dbpp + k]};
+                        want = ref_blit(sf, df, blend, opacity,
+                            mem_pixel(soff + (syi + j - dyi) * spitch +
+                                      (sxi + i - dxi) * sbpp, sbpp),
+                            value);
+                    end
+                    for (k = 0; k < dbpp; k = k + 1) begin
+                        want_byte = in_rect ? want >> (8 * (dbpp - 1 - k)) :
+                            px_before[8 + j * dpitch + i * dbpp + k];
+                        if (memory_i.read_byte(doff + j * dpitch + i * dbpp + k)
+                            !== want_byte)
+                            $fatal(1, "pixel case %0d->%0d blend=%0d op=%02x serial=%0d w=%0d h=%0d: (%0d,%0d) byte %0d = %02x expected %02x",
+                                   sf, df, blend, opacity, serial, w, h, i, j, k,
+                                   memory_i.read_byte(doff + j * dpitch + i * dbpp + k),
+                                   want_byte);
+                    end
+                end
+            // Bytes around the surface rows are untouched.
+            for (k = 0; k < 8; k = k + 1)
+                if (memory_i.read_byte(doff - 8 + k) !== px_before[k])
+                    $fatal(1, "pixel case wrote before the surface");
+            for (j = 0; j < dsh; j = j + 1)
+                for (k = dsw * dbpp; k < dpitch; k = k + 1)
+                    if (memory_i.read_byte(doff + j * dpitch + k) !==
+                        px_before[8 + j * dpitch + k])
+                        $fatal(1, "pixel case wrote row padding");
+            if (status != `ASTRA_RENDER_STATUS_OK ||
+                completed_pixels != expected_pixels)
+                $fatal(1, "pixel case status=%0d pixels=%0d expected %0d",
+                       status, completed_pixels, expected_pixels);
+            if (blitter_i.fast_copy_q !== !serial ||
+                blitter_i.pixel_stream_q !== 1'b1)
+                $fatal(1, "pixel case took the wrong path fast=%0d stream=%0d",
+                       blitter_i.fast_copy_q, blitter_i.pixel_stream_q);
+        end
+    endtask
+
     integer row;
     integer column;
     integer before_reads;
@@ -334,6 +537,8 @@ module tb_astra_render_blitter;
     integer source_lane;
     integer destination_lane;
     reg [7:0] expected;
+    integer px_case, px_s, px_d;
+    reg px_blend;
     initial begin
         repeat (6) @(posedge clk);
         reset = 1'b0;
@@ -524,7 +729,7 @@ module tb_astra_render_blitter;
         // Exact compositor cache update: an 816-pixel RGB565 client is
         // copied two pixels into an 820-pixel decorated window.  The four-byte
         // lane shift must use the burst mover, preserve the frame bytes, and
-        // remain comfortably inside one 60 Hz frame.
+        // remain comfortably in_rect one 60 Hz frame.
         memory_i.clear_memory(8'hee);
         source_data_offset = 32'h00010000;
         destination_data_offset = 32'h00100000;
@@ -560,8 +765,8 @@ module tb_astra_render_blitter;
         launch();
         if (status != `ASTRA_RENDER_STATUS_OK ||
             completed_pixels != 32'd359040 || last_elapsed > 450000 ||
-            read_transactions - before_reads != 6224 ||
-            write_transactions - before_writes != 6224)
+            read_transactions - before_reads != 3321 ||
+            write_transactions - before_writes != 3321)
             $fatal(1,
                    "offset RGB565 status=%0d pixels=%0d cycles=%0d/450000 reads=%0d writes=%0d",
                    status, completed_pixels, last_elapsed,
@@ -653,8 +858,8 @@ module tb_astra_render_blitter;
         launch();
         if (status != `ASTRA_RENDER_STATUS_OK ||
             completed_pixels != 32'd824320 || last_elapsed > 900000 ||
-            read_transactions - before_reads != 12880 ||
-            write_transactions - before_writes != 12880)
+            read_transactions - before_reads != 7728 ||
+            write_transactions - before_writes != 7728)
             $fatal(1,
                    "desktop RGB565 status=%0d pixels=%0d cycles=%0d/900000 reads=%0d writes=%0d",
                    status, completed_pixels, last_elapsed,
@@ -818,8 +1023,9 @@ module tb_astra_render_blitter;
                         `ASTRA_RENDER_FLAG_BLIT_MASK1;
         options = 32'h80000000;
         launch();
+        // Straight alpha: a' = m(0x80, 0x80) = 0x40, r = m(0x80, a') = 0x20.
         expect_byte(32'h5000, 8'hff);
-        expect_byte(32'h5001, 8'h40);
+        expect_byte(32'h5001, 8'h20);
         expect_byte(32'h5002, 8'h00);
         expect_byte(32'h5003, 8'hbf);
         memory_i.write_byte(32'h5000, 8'hff);
@@ -1000,8 +1206,9 @@ module tb_astra_render_blitter;
         expect_byte(32'h3400, 8'h41);
         expect_byte(32'h3401, 8'h02);
 
-        // ARGB sources are premultiplied. Constant opacity scales alpha and
-        // color together before source-over against the destination.
+        // ARGB sources are straight alpha (the BLEND equation of
+        // docs/TEXTURE_ENGINE.md): opacity scales alpha, a' = m(a, opacity),
+        // then out = m(src, a') + m(dst, 255 - a').
         destination_data_offset = 32'h3800;
         destination_format = `ASTRA_RENDER_FORMAT_XRGB8888;
         destination_bpp = 3'd4;
@@ -1017,11 +1224,72 @@ module tb_astra_render_blitter;
         options = 32'h80000000;
         launch();
         expect_byte(32'h3800, 8'hff);
-        expect_byte(32'h3801, 8'h40);
+        expect_byte(32'h3801, 8'h20);
         expect_byte(32'h3802, 8'h00);
         expect_byte(32'h3803, 8'hbf);
         command_flags = 16'd0;
         options = 32'd0;
+
+        // An abort that lands on the cycle an address handshake completes
+        // must still finish that burst: an abandoned AR leaves R beats for
+        // the next reader, an abandoned AW leaves the memory waiting for W.
+        for (abort_case = 0; abort_case < 2; abort_case = abort_case + 1) begin
+            source_data_offset = 32'h1000;
+            destination_data_offset = 32'h9000;
+            source_pitch = 32'd128;
+            destination_pitch = 32'd128;
+            source_surface_width = 16'd64;
+            source_surface_height = 16'd16;
+            destination_surface_width = 16'd64;
+            destination_surface_height = 16'd16;
+            source_format = `ASTRA_RENDER_FORMAT_RGB565;
+            destination_format = `ASTRA_RENDER_FORMAT_RGB565;
+            source_bpp = 3'd2;
+            destination_bpp = 3'd2;
+            source_x = 16'sd0;
+            source_y = 16'sd0;
+            destination_x = 16'sd0;
+            destination_y = 16'sd0;
+            source_width = 16'd64;
+            source_height = 16'd16;
+            destination_width = 16'd64;
+            destination_height = 16'd16;
+            clip_left = 16'sd0;
+            clip_top = 16'sd0;
+            clip_right = 16'sd64;
+            clip_bottom = 16'sd16;
+            same_surface = 1'b0;
+            opcode = `ASTRA_RENDER_OP_BLIT;
+            command_flags = 16'd0;
+            options = 32'd0;
+            fork
+                launch();
+                begin
+                    @(negedge clk);
+                    while (!(copy_write_active &&
+                             (abort_case == 0 ?
+                                 read_arvalid && read_arready :
+                                 copy_awvalid && write_awready)))
+                        @(negedge clk);
+                    abort = 1'b1;
+                    @(negedge clk);
+                    abort = 1'b0;
+                end
+            join
+            if (status != `ASTRA_RENDER_STATUS_RESET)
+                $fatal(1, "abort on %0s handshake status=%0d",
+                       abort_case == 0 ? "AR" : "AW", status);
+            // The bus is clean: an ordinary copy still lands exactly.
+            destination_data_offset = 32'ha000;
+            launch();
+            if (status != `ASTRA_RENDER_STATUS_OK)
+                $fatal(1, "copy after abort status=%0d", status);
+            for (row = 0; row < 16; row = row + 1)
+                for (column = 0; column < 128; column = column + 1)
+                    expect_byte(32'ha000 + row * 128 + column,
+                                memory_i.read_byte(32'h1000 + row * 128 +
+                                                   column));
+        end
 
         // Read failure is contained and never reaches the destination writer.
         set_index_surface(32'h4000, 32'h5000, 16'd8, 16'd4, 32'd16);
@@ -1068,6 +1336,43 @@ module tb_astra_render_blitter;
             $fatal(1, "write failure status=%0d detail=%08x",
                    status, fault_detail);
 
+
+        // Pixel-stream BLITs: every direct-color conversion, plain and
+        // BLIT_ALPHA, over random lanes, pitches, clips and alpha, with
+        // random read and write backpressure; the 4-mod-8 pitch keeps the
+        // per-pixel path, so both paths meet the same reference.
+        px_formats[0] = `ASTRA_RENDER_FORMAT_RGB565;
+        px_formats[1] = `ASTRA_RENDER_FORMAT_XRGB8888;
+        px_formats[2] = `ASTRA_RENDER_FORMAT_ARGB8888;
+        inject_read_error = 1'b0;
+        inject_write_error = 1'b0;
+        for (px_case = 0; px_case < 90; px_case = px_case + 1) begin
+            px_s = px_case % 3;
+            px_d = (px_case / 3) % 3;
+            px_blend = (px_case / 9) % 2;
+            if (!px_blend && px_s == px_d)
+                px_d = (px_d + 1) % 3;
+            px_stall_mode = px_case % 4 == 3;
+            pixel_case(px_formats[px_s], px_formats[px_d], px_blend,
+                px_case % 5 == 0 ? 8'hff : px_case % 5 == 1 ? 8'h00 :
+                    px_rand(256), px_case % 4,
+                px_case % 7 == 0 ? 1 + px_rand(3) : 1 + px_rand(300),
+                1 + px_rand(4), 1'b0, px_case % 6 == 5);
+            px_stall_mode = 0;
+            stall_reads = 1'b0;
+            stall_writes = 1'b0;
+            if (px_case % 5 == 2)
+                pixel_case(px_formats[px_s], px_formats[px_d], px_blend,
+                    px_rand(256), px_case % 4, 1 + px_rand(40),
+                    1 + px_rand(3), 1'b1, 1'b0);
+        end
+
+        // Opaque chunks skip the destination read; a translucent first or
+        // last pixel on either lane of a partial beat must not.
+        for (px_case = 0; px_case < 24; px_case = px_case + 1)
+            pixel_case(`ASTRA_RENDER_FORMAT_ARGB8888,
+                px_formats[px_case % 3], 1'b1, 8'hff, 2'd3,
+                1 + px_case % 5, 1 + px_rand(2), 1'b0, 1'b0);
         $display("PASS astra_render_blitter");
         $finish;
     end

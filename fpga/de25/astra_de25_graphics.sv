@@ -131,7 +131,24 @@ module astra_de25_graphics (
     input  wire [1:0]  render_rresp,
     input  wire        render_rlast,
     input  wire        render_rvalid,
-    output wire        render_rready
+    output wire        render_rready,
+
+    // Render reads in the host aperture, to HPS memory over F2SDRAM.
+    output wire [2:0]  host_arid,
+    output wire [31:0] host_araddr,
+    output wire [7:0]  host_arlen,
+    output wire [2:0]  host_arsize,
+    output wire [1:0]  host_arburst,
+    output wire [3:0]  host_arcache,
+    output wire [2:0]  host_arprot,
+    output wire        host_arvalid,
+    input  wire        host_arready,
+    input  wire [2:0]  host_rid,
+    input  wire [63:0] host_rdata,
+    input  wire [1:0]  host_rresp,
+    input  wire        host_rlast,
+    input  wire        host_rvalid,
+    output wire        host_rready
 );
     wire pixel_clk;
     wire audio_mclk;
@@ -261,8 +278,8 @@ module astra_de25_graphics (
     assign hdmi_lrclk = audio_lrclk;
     assign hdmi_i2s = audio_i2s[0];
 
-    wire [31:0] host_awaddr = {16'd0, control_awaddr};
-    wire [31:0] host_araddr = {16'd0, control_araddr};
+    wire [31:0] control_awaddr32 = {16'd0, control_awaddr};
+    wire [31:0] control_araddr32 = {16'd0, control_araddr};
     wire [31:0] graphics_awaddr, graphics_araddr;
     wire [2:0] graphics_awprot, graphics_arprot;
     wire graphics_awvalid, graphics_awready;
@@ -341,12 +358,12 @@ module astra_de25_graphics (
         .SLAVE1_ALT_MASK(32'h0000ff00), .SLAVE1_ALT_VALUE(32'h00007000)
     ) control_split_i (
         .clk(build_clk), .reset(build_reset),
-        .s_awaddr(host_awaddr), .s_awprot(control_awprot),
+        .s_awaddr(control_awaddr32), .s_awprot(control_awprot),
         .s_awvalid(control_awvalid), .s_awready(control_awready),
         .s_wdata(control_wdata), .s_wstrb(control_wstrb),
         .s_wvalid(control_wvalid), .s_wready(control_wready),
         .s_bresp(control_bresp), .s_bvalid(control_bvalid),
-        .s_bready(control_bready), .s_araddr(host_araddr),
+        .s_bready(control_bready), .s_araddr(control_araddr32),
         .s_arprot(control_arprot), .s_arvalid(control_arvalid),
         .s_arready(control_arready), .s_rdata(control_rdata),
         .s_rresp(control_rresp), .s_rvalid(control_rvalid),
@@ -524,65 +541,39 @@ module astra_de25_graphics (
 
     wire [2:0] fb_arid_full;
     wire [2:0] fb_rid_full = {2'd0, fb_rid};
-    wire [2:0] tile0_arid, tile1_arid, sprite_arid;
-    wire [31:0] tile0_araddr, tile1_araddr, sprite_araddr;
-    wire [7:0] tile0_arlen, tile1_arlen, sprite_arlen;
-    wire [2:0] tile0_arsize, tile1_arsize, sprite_arsize;
-    wire [1:0] tile0_arburst, tile1_arburst, sprite_arburst;
-    wire [3:0] tile0_arcache, tile1_arcache, sprite_arcache;
-    wire [2:0] tile0_arprot, tile1_arprot, sprite_arprot;
-    wire [3:0] tile0_arqos, tile1_arqos, sprite_arqos;
-    wire tile0_arvalid, tile1_arvalid, sprite_arvalid;
-    wire tile0_arready, tile1_arready, sprite_arready;
-    wire [2:0] tile0_rid, tile1_rid, sprite_rid;
-    wire [63:0] tile0_rdata, tile1_rdata, sprite_rdata;
-    wire [1:0] tile0_rresp, tile1_rresp, sprite_rresp;
-    wire tile0_rlast, tile1_rlast, sprite_rlast;
-    wire tile0_rvalid, tile1_rvalid, sprite_rvalid;
-    wire tile0_rready, tile1_rready, sprite_rready;
+    wire [2:0] sprite_arid;
+    wire [31:0] sprite_araddr;
+    wire [7:0] sprite_arlen;
+    wire [2:0] sprite_arsize;
+    wire [1:0] sprite_arburst;
+    wire [3:0] sprite_arcache;
+    wire [2:0] sprite_arprot;
+    wire [3:0] sprite_arqos;
+    wire sprite_arvalid, sprite_arready;
+    wire [2:0] sprite_rid;
+    wire [63:0] sprite_rdata;
+    wire [1:0] sprite_rresp;
+    wire sprite_rlast, sprite_rvalid, sprite_rready;
     wire [2:0] scene_arid_full;
     wire [2:0] scene_rid_full = {1'b0, scene_rid};
-    wire [2:0] scene_client_arready;
-    wire [8:0] scene_client_rid;
-    wire [191:0] scene_client_rdata;
-    wire [5:0] scene_client_rresp;
-    wire [2:0] scene_client_rlast, scene_client_rvalid;
 
     assign fb_arid = fb_arid_full[0];
     assign scene_arid = scene_arid_full[1:0];
-    assign {sprite_arready, tile1_arready, tile0_arready} =
-        scene_client_arready;
-    assign {sprite_rid, tile1_rid, tile0_rid} = scene_client_rid;
-    assign {sprite_rdata, tile1_rdata, tile0_rdata} = scene_client_rdata;
-    assign {sprite_rresp, tile1_rresp, tile0_rresp} = scene_client_rresp;
-    assign {sprite_rlast, tile1_rlast, tile0_rlast} = scene_client_rlast;
-    assign {sprite_rvalid, tile1_rvalid, tile0_rvalid} = scene_client_rvalid;
-
-    astra_axi_read_3to1 #(.AXI_ID_WIDTH(3)) scene_arbiter_i (
-        .aclk(build_clk), .aresetn(build_reset_n),
-        .s_axi_arid({sprite_arid, tile1_arid, tile0_arid}),
-        .s_axi_araddr({sprite_araddr, tile1_araddr, tile0_araddr}),
-        .s_axi_arlen({sprite_arlen, tile1_arlen, tile0_arlen}),
-        .s_axi_arsize({sprite_arsize, tile1_arsize, tile0_arsize}),
-        .s_axi_arburst({sprite_arburst, tile1_arburst, tile0_arburst}),
-        .s_axi_arcache({sprite_arcache, tile1_arcache, tile0_arcache}),
-        .s_axi_arprot({sprite_arprot, tile1_arprot, tile0_arprot}),
-        .s_axi_arqos({sprite_arqos, tile1_arqos, tile0_arqos}),
-        .s_axi_arvalid({sprite_arvalid, tile1_arvalid, tile0_arvalid}),
-        .s_axi_arready(scene_client_arready),
-        .s_axi_rid(scene_client_rid), .s_axi_rdata(scene_client_rdata),
-        .s_axi_rresp(scene_client_rresp), .s_axi_rlast(scene_client_rlast),
-        .s_axi_rvalid(scene_client_rvalid),
-        .s_axi_rready({sprite_rready, tile1_rready, tile0_rready}),
-        .m_axi_arid(scene_arid_full), .m_axi_araddr(scene_araddr),
-        .m_axi_arlen(scene_arlen), .m_axi_arsize(scene_arsize),
-        .m_axi_arburst(scene_arburst), .m_axi_arcache(scene_arcache),
-        .m_axi_arprot(scene_arprot), .m_axi_arqos(),
-        .m_axi_arvalid(scene_arvalid), .m_axi_arready(scene_arready),
-        .m_axi_rid(scene_rid_full), .m_axi_rdata(scene_rdata),
-        .m_axi_rresp(scene_rresp), .m_axi_rlast(scene_rlast),
-        .m_axi_rvalid(scene_rvalid), .m_axi_rready(scene_rready)
-    );
+    assign scene_arid_full = sprite_arid;
+    assign scene_araddr = sprite_araddr;
+    assign scene_arlen = sprite_arlen;
+    assign scene_arsize = sprite_arsize;
+    assign scene_arburst = sprite_arburst;
+    assign scene_arcache = sprite_arcache;
+    assign scene_arprot = sprite_arprot;
+    assign scene_arvalid = sprite_arvalid;
+    assign sprite_arready = scene_arready;
+    assign sprite_rid = scene_rid_full;
+    assign sprite_rdata = scene_rdata;
+    assign sprite_rresp = scene_rresp;
+    assign sprite_rlast = scene_rlast;
+    assign sprite_rvalid = scene_rvalid;
+    assign scene_rready = sprite_rready;
 
     wire [3:0] fb_arqos;
     wire [3:0] render_arqos, render_awqos;
@@ -595,6 +586,19 @@ module astra_de25_graphics (
     wire [31:0] framebuffer_axi_last_ar_address;
     wire [31:0] framebuffer_axi_response_stall_cycles;
     wire scene_active;
+    wire [31:0] render_host_aperture_base;
+    wire [2:0]  engine_arid;
+    wire [31:0] engine_araddr;
+    wire [7:0]  engine_arlen;
+    wire [2:0]  engine_arsize;
+    wire [1:0]  engine_arburst;
+    wire [3:0]  engine_arcache;
+    wire [2:0]  engine_arprot;
+    wire        engine_arvalid, engine_arready;
+    wire [2:0]  engine_rid;
+    wire [63:0] engine_rdata;
+    wire [1:0]  engine_rresp;
+    wire        engine_rlast, engine_rvalid, engine_rready;
     astra_graphics_pipeline #(
         .ARENA_BASE(32'h40000000), .ARENA_LIMIT(32'h60000000),
         .OUTPUT_WIDTH(1920), .OUTPUT_HEIGHT(1080),
@@ -602,7 +606,8 @@ module astra_de25_graphics (
         .BUILD_CYCLES_PER_US(165),
         .FRAMEBUFFER_AXI_DATA_WIDTH(128),
         .FRAMEBUFFER_MAX_BURST_BEATS(32),
-        .AXI_ID_WIDTH(3)
+        .AXI_ID_WIDTH(3),
+        .HOST_APERTURE(1)
     ) pipeline_i (
         .build_clk(build_clk), .build_reset(build_reset),
         .pixel_clk(pixel_clk), .pixel_reset(pixel_reset),
@@ -613,6 +618,7 @@ module astra_de25_graphics (
         .pixel_underruns(pixel_underruns), .commit_errors(commit_errors),
         .commit_deferrals(commit_deferrals), .scene_active(scene_active),
         .render_interrupt(render_interrupt),
+        .render_host_aperture_base(render_host_aperture_base),
         .framebuffer_axi_debug_status(framebuffer_axi_debug_status),
         .framebuffer_axi_ar_accept_count(framebuffer_axi_ar_accept_count),
         .framebuffer_axi_r_accept_count(framebuffer_axi_r_accept_count),
@@ -637,22 +643,6 @@ module astra_de25_graphics (
         .fb_axi_rid(fb_rid_full), .fb_axi_rdata(fb_rdata),
         .fb_axi_rresp(fb_rresp), .fb_axi_rlast(fb_rlast),
         .fb_axi_rvalid(fb_rvalid), .fb_axi_rready(fb_rready),
-        .tile0_axi_arid(tile0_arid), .tile0_axi_araddr(tile0_araddr),
-        .tile0_axi_arlen(tile0_arlen), .tile0_axi_arsize(tile0_arsize),
-        .tile0_axi_arburst(tile0_arburst), .tile0_axi_arcache(tile0_arcache),
-        .tile0_axi_arprot(tile0_arprot), .tile0_axi_arqos(tile0_arqos),
-        .tile0_axi_arvalid(tile0_arvalid), .tile0_axi_arready(tile0_arready),
-        .tile0_axi_rid(tile0_rid), .tile0_axi_rdata(tile0_rdata),
-        .tile0_axi_rresp(tile0_rresp), .tile0_axi_rlast(tile0_rlast),
-        .tile0_axi_rvalid(tile0_rvalid), .tile0_axi_rready(tile0_rready),
-        .tile1_axi_arid(tile1_arid), .tile1_axi_araddr(tile1_araddr),
-        .tile1_axi_arlen(tile1_arlen), .tile1_axi_arsize(tile1_arsize),
-        .tile1_axi_arburst(tile1_arburst), .tile1_axi_arcache(tile1_arcache),
-        .tile1_axi_arprot(tile1_arprot), .tile1_axi_arqos(tile1_arqos),
-        .tile1_axi_arvalid(tile1_arvalid), .tile1_axi_arready(tile1_arready),
-        .tile1_axi_rid(tile1_rid), .tile1_axi_rdata(tile1_rdata),
-        .tile1_axi_rresp(tile1_rresp), .tile1_axi_rlast(tile1_rlast),
-        .tile1_axi_rvalid(tile1_rvalid), .tile1_axi_rready(tile1_rready),
         .sprite_axi_arid(sprite_arid), .sprite_axi_araddr(sprite_araddr),
         .sprite_axi_arlen(sprite_arlen), .sprite_axi_arsize(sprite_arsize),
         .sprite_axi_arburst(sprite_arburst),
@@ -662,14 +652,14 @@ module astra_de25_graphics (
         .sprite_axi_rdata(sprite_rdata), .sprite_axi_rresp(sprite_rresp),
         .sprite_axi_rlast(sprite_rlast), .sprite_axi_rvalid(sprite_rvalid),
         .sprite_axi_rready(sprite_rready),
-        .render_axi_arid(render_arid), .render_axi_araddr(render_araddr),
-        .render_axi_arlen(render_arlen), .render_axi_arsize(render_arsize),
-        .render_axi_arburst(render_arburst), .render_axi_arcache(render_arcache),
-        .render_axi_arprot(render_arprot), .render_axi_arqos(render_arqos),
-        .render_axi_arvalid(render_arvalid), .render_axi_arready(render_arready),
-        .render_axi_rid(render_rid), .render_axi_rdata(render_rdata),
-        .render_axi_rresp(render_rresp), .render_axi_rlast(render_rlast),
-        .render_axi_rvalid(render_rvalid), .render_axi_rready(render_rready),
+        .render_axi_arid(engine_arid), .render_axi_araddr(engine_araddr),
+        .render_axi_arlen(engine_arlen), .render_axi_arsize(engine_arsize),
+        .render_axi_arburst(engine_arburst), .render_axi_arcache(engine_arcache),
+        .render_axi_arprot(engine_arprot), .render_axi_arqos(render_arqos),
+        .render_axi_arvalid(engine_arvalid), .render_axi_arready(engine_arready),
+        .render_axi_rid(engine_rid), .render_axi_rdata(engine_rdata),
+        .render_axi_rresp(engine_rresp), .render_axi_rlast(engine_rlast),
+        .render_axi_rvalid(engine_rvalid), .render_axi_rready(engine_rready),
         .render_axi_awid(render_awid), .render_axi_awaddr(render_awaddr),
         .render_axi_awlen(render_awlen), .render_axi_awsize(render_awsize),
         .render_axi_awburst(render_awburst), .render_axi_awcache(render_awcache),
@@ -680,6 +670,37 @@ module astra_de25_graphics (
         .render_axi_wready(render_wready), .render_axi_bid(render_bid),
         .render_axi_bresp(render_bresp), .render_axi_bvalid(render_bvalid),
         .render_axi_bready(render_bready)
+    );
+
+    astra_render_host_reads #(
+        .ARENA_BASE(32'h40000000), .AXI_ID_WIDTH(3)
+    ) host_reads_i (
+        .clk(build_clk), .reset(build_reset),
+        .host_base(render_host_aperture_base),
+        .s_arid(engine_arid), .s_araddr(engine_araddr),
+        .s_arlen(engine_arlen), .s_arsize(engine_arsize),
+        .s_arburst(engine_arburst), .s_arcache(engine_arcache),
+        .s_arprot(engine_arprot), .s_arvalid(engine_arvalid),
+        .s_arready(engine_arready), .s_rid(engine_rid),
+        .s_rdata(engine_rdata), .s_rresp(engine_rresp),
+        .s_rlast(engine_rlast), .s_rvalid(engine_rvalid),
+        .s_rready(engine_rready),
+        .m_arid(render_arid), .m_araddr(render_araddr),
+        .m_arlen(render_arlen), .m_arsize(render_arsize),
+        .m_arburst(render_arburst), .m_arcache(render_arcache),
+        .m_arprot(render_arprot), .m_arvalid(render_arvalid),
+        .m_arready(render_arready), .m_rid(render_rid),
+        .m_rdata(render_rdata), .m_rresp(render_rresp),
+        .m_rlast(render_rlast), .m_rvalid(render_rvalid),
+        .m_rready(render_rready),
+        .h_arid(host_arid), .h_araddr(host_araddr),
+        .h_arlen(host_arlen), .h_arsize(host_arsize),
+        .h_arburst(host_arburst), .h_arcache(host_arcache),
+        .h_arprot(host_arprot), .h_arvalid(host_arvalid),
+        .h_arready(host_arready), .h_rid(host_rid),
+        .h_rdata(host_rdata), .h_rresp(host_rresp),
+        .h_rlast(host_rlast), .h_rvalid(host_rvalid),
+        .h_rready(host_rready)
     );
 
     astra_front_panel_axi #(

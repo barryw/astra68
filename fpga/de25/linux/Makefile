@@ -1,5 +1,6 @@
 ifneq ($(KERNELRELEASE),)
 obj-m += astra_display_capture.o
+obj-m += astra_graphics_arena.o
 
 ccflags-y += -Wall -Wextra -Werror -I$(src)/../../../sw/include
 else
@@ -7,6 +8,7 @@ CC := $(CROSS_COMPILE)gcc
 ROOT := ../../..
 OUT ?= $(ROOT)/build/de25-capture
 CERTIFIER := $(OUT)/astra-display-capture-certify
+BANDWIDTH := $(OUT)/astra-arena-bandwidth
 REMOTE_DESKTOP := $(OUT)/astra-remote-desktop
 CFLAGS := -std=c11 -O2 -pipe -Wall -Wextra -Werror -Wformat=2 \
 	-Wshadow -Wstrict-prototypes -D_FORTIFY_SOURCE=2 \
@@ -24,7 +26,11 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 
 .PHONY: all remote-desktop test clean
 
-all: $(CERTIFIER)
+all: $(CERTIFIER) $(BANDWIDTH)
+
+$(BANDWIDTH): astra_arena_bandwidth.c astra_de25_media.h Makefile
+	mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $< -o $@
 
 remote-desktop: $(REMOTE_DESKTOP)
 
@@ -49,5 +55,5 @@ test: $(REMOTE_DESKTOP)
 		--qemu-user $(QEMU_USER) --sysroot $(DE25_SYSROOT)
 
 clean:
-	rm -f $(CERTIFIER) $(REMOTE_DESKTOP)
+	rm -f $(CERTIFIER) $(BANDWIDTH) $(REMOTE_DESKTOP)
 endif

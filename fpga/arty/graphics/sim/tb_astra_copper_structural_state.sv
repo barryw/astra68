@@ -10,8 +10,6 @@ module tb_astra_copper_structural_state;
     reg baseline_changed = 1'b0;
     reg copper_running = 1'b0;
     reg copper_fault = 1'b0;
-    reg baseline_tile0_enable = 1'b1;
-    reg baseline_tile1_enable = 1'b1;
     reg [15:0] validate_target = 16'd0;
     reg [31:0] validate_data = 32'd0;
     wire validate_allowed;
@@ -28,20 +26,6 @@ module tb_astra_copper_structural_state;
     wire [31:0] framebuffer_pitch;
     wire [12:0] framebuffer_width;
     wire [12:0] framebuffer_height;
-    wire tile0_tile_16;
-    wire tile0_index_8;
-    wire [3:0] tile0_map_width_log2;
-    wire [3:0] tile0_map_height_log2;
-    wire [31:0] tile0_map_base;
-    wire [31:0] tile0_pattern_base;
-    wire [16:0] tile0_tile_count;
-    wire tile1_tile_16;
-    wire tile1_index_8;
-    wire [3:0] tile1_map_width_log2;
-    wire [3:0] tile1_map_height_log2;
-    wire [31:0] tile1_map_base;
-    wire [31:0] tile1_pattern_base;
-    wire [16:0] tile1_tile_count;
     wire [31:0] candidates_accepted;
     wire [31:0] candidates_rejected;
     wire [31:0] candidates_deferred;
@@ -66,22 +50,6 @@ module tb_astra_copper_structural_state;
         .baseline_framebuffer_viewport_y(32'sd0),
         .baseline_framebuffer_wrap_x(1'b0),
         .baseline_framebuffer_wrap_y(1'b0),
-        .baseline_tile0_enable(baseline_tile0_enable),
-        .baseline_tile0_tile_16(1'b0),
-        .baseline_tile0_index_8(1'b1),
-        .baseline_tile0_map_width_log2(4'd2),
-        .baseline_tile0_map_height_log2(4'd2),
-        .baseline_tile0_map_base(32'h18010000),
-        .baseline_tile0_pattern_base(32'h18020000),
-        .baseline_tile0_tile_count(17'd16),
-        .baseline_tile1_enable(baseline_tile1_enable),
-        .baseline_tile1_tile_16(1'b1),
-        .baseline_tile1_index_8(1'b0),
-        .baseline_tile1_map_width_log2(4'd2),
-        .baseline_tile1_map_height_log2(4'd2),
-        .baseline_tile1_map_base(32'h18030000),
-        .baseline_tile1_pattern_base(32'h18040000),
-        .baseline_tile1_tile_count(17'd16),
         .validate_target(validate_target), .validate_data(validate_data),
         .validate_allowed(validate_allowed),
         .move_valid(move_valid), .move_target(move_target),
@@ -94,18 +62,6 @@ module tb_astra_copper_structural_state;
         .framebuffer_pitch(framebuffer_pitch),
         .framebuffer_width(framebuffer_width),
         .framebuffer_height(framebuffer_height),
-        .tile0_tile_16(tile0_tile_16), .tile0_index_8(tile0_index_8),
-        .tile0_map_width_log2(tile0_map_width_log2),
-        .tile0_map_height_log2(tile0_map_height_log2),
-        .tile0_map_base(tile0_map_base),
-        .tile0_pattern_base(tile0_pattern_base),
-        .tile0_tile_count(tile0_tile_count),
-        .tile1_tile_16(tile1_tile_16), .tile1_index_8(tile1_index_8),
-        .tile1_map_width_log2(tile1_map_width_log2),
-        .tile1_map_height_log2(tile1_map_height_log2),
-        .tile1_map_base(tile1_map_base),
-        .tile1_pattern_base(tile1_pattern_base),
-        .tile1_tile_count(tile1_tile_count),
         .candidates_accepted(candidates_accepted),
         .candidates_rejected(candidates_rejected),
         .candidates_deferred(candidates_deferred)
@@ -191,17 +147,26 @@ module tb_astra_copper_structural_state;
         if (framebuffer_pitch != 32'd64 || candidates_rejected != 32'd2)
             $fatal(1, "faulted list structural state was not discarded");
 
-        baseline_tile0_enable = 1'b0;
-        pulse_frame();
+        validate_target = 16'h0080;
+        validate_data = 32'h18010000;
+        move_target = validate_target;
+        #1;
+        if (validate_allowed || move_allowed)
+            $fatal(1, "retired tile0 structural target accepted");
+        validate_target = 16'h00d4;
+        move_target = validate_target;
+        #1;
+        if (validate_allowed || move_allowed)
+            $fatal(1, "retired tile1 structural target accepted");
+
         copper_running = 1'b1;
-        write_move(16'h0080, 32'h10000000);
+        write_move(16'h0044, 32'd192);
         @(negedge clk); copper_running = 1'b0;
         repeat (20) @(negedge clk);
         pulse_frame();
         #1;
-        if (tile0_map_base != 32'h10000000 ||
-            candidates_accepted != 32'd2)
-            $fatal(1, "disabled client blocked unrelated structural update");
+        if (framebuffer_pitch != 32'd192 || candidates_accepted != 32'd2)
+            $fatal(1, "framebuffer structural update was blocked");
 
         $display("ASTRA COPPER STRUCTURAL STATE PASS");
         $finish;

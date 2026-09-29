@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Astra68 contributors
 //
-// Fixed-order Vega pixel compositor for the framebuffer, two tile layers, and
+// Fixed-order Vega pixel compositor for the framebuffer and
 // precomposed front/behind sprite planes. Palette values are straight-alpha
 // ARGB8888; sprite planes are premultiplied ARGB8888. Every blend starts from
 // an opaque backdrop, so the resulting HDMI pixel is always opaque RGB888.
@@ -178,7 +178,6 @@ endmodule
 module astra_pixel_compositor (
     input  wire        pixel_clk,
     input  wire        pixel_reset,
-
     input  wire        input_valid,
     input  wire [23:0] backdrop_rgb,
 
@@ -195,26 +194,6 @@ module astra_pixel_compositor (
     output wire [7:0]  framebuffer_palette_index,
     input  wire [31:0] framebuffer_palette_argb,
 
-    input  wire        tile0_enable,
-    input  wire        tile0_above_framebuffer,
-    input  wire [7:0]  tile0_opacity,
-    input  wire        tile0_pixel_valid,
-    input  wire [3:0]  tile0_palette_bank,
-    input  wire [7:0]  tile0_palette_index,
-    output wire [3:0]  tile0_palette_read_bank,
-    output wire [7:0]  tile0_palette_read_index,
-    input  wire [31:0] tile0_palette_argb,
-
-    input  wire        tile1_enable,
-    input  wire        tile1_above_framebuffer,
-    input  wire [7:0]  tile1_opacity,
-    input  wire        tile1_pixel_valid,
-    input  wire [3:0]  tile1_palette_bank,
-    input  wire [7:0]  tile1_palette_index,
-    output wire [3:0]  tile1_palette_read_bank,
-    output wire [7:0]  tile1_palette_read_index,
-    input  wire [31:0] tile1_palette_argb,
-
     output wire        output_valid,
     output wire [23:0] output_rgb
 );
@@ -224,13 +203,9 @@ module astra_pixel_compositor (
     localparam integer BLEND_LATENCY = 5;
 
     assign framebuffer_palette_index = framebuffer_pixel_value[7:0];
-    assign tile0_palette_read_bank = tile0_palette_bank;
-    assign tile0_palette_read_index = tile0_palette_index;
-    assign tile1_palette_read_bank = tile1_palette_bank;
-    assign tile1_palette_read_index = tile1_palette_index;
 
-    // These registers align direct-format data and controls with the
-    // synchronous palette memories sampled from the unregistered addresses.
+    // One clock aligns direct-format pixels and sprite controls with the
+    // synchronous framebuffer-palette read.
     reg input_valid_q;
     reg [23:0] backdrop_q;
     reg sprite_enable_q;
@@ -242,14 +217,6 @@ module astra_pixel_compositor (
     reg [31:0] framebuffer_pixel_value_q;
     reg framebuffer_key_enable_q;
     reg [31:0] framebuffer_key_q;
-    reg tile0_enable_q;
-    reg tile0_above_q;
-    reg [7:0] tile0_opacity_q;
-    reg tile0_pixel_valid_q;
-    reg tile1_enable_q;
-    reg tile1_above_q;
-    reg [7:0] tile1_opacity_q;
-    reg tile1_pixel_valid_q;
 
     always @(posedge pixel_clk) begin
         if (pixel_reset) begin
@@ -264,14 +231,6 @@ module astra_pixel_compositor (
             framebuffer_pixel_value_q <= 32'd0;
             framebuffer_key_enable_q <= 1'b0;
             framebuffer_key_q <= 32'd0;
-            tile0_enable_q <= 1'b0;
-            tile0_above_q <= 1'b0;
-            tile0_opacity_q <= 8'd0;
-            tile0_pixel_valid_q <= 1'b0;
-            tile1_enable_q <= 1'b0;
-            tile1_above_q <= 1'b0;
-            tile1_opacity_q <= 8'd0;
-            tile1_pixel_valid_q <= 1'b0;
         end else begin
             input_valid_q <= input_valid;
             backdrop_q <= backdrop_rgb;
@@ -284,14 +243,6 @@ module astra_pixel_compositor (
             framebuffer_pixel_value_q <= framebuffer_pixel_value;
             framebuffer_key_enable_q <= framebuffer_key_enable;
             framebuffer_key_q <= framebuffer_key;
-            tile0_enable_q <= tile0_enable;
-            tile0_above_q <= tile0_above_framebuffer;
-            tile0_opacity_q <= tile0_opacity;
-            tile0_pixel_valid_q <= tile0_pixel_valid;
-            tile1_enable_q <= tile1_enable;
-            tile1_above_q <= tile1_above_framebuffer;
-            tile1_opacity_q <= tile1_opacity;
-            tile1_pixel_valid_q <= tile1_pixel_valid;
         end
     end
 
@@ -315,205 +266,78 @@ module astra_pixel_compositor (
         (framebuffer_format_q == FORMAT_INDEX8 ||
          framebuffer_format_q == FORMAT_RGB565 ||
          framebuffer_format_q == FORMAT_XRGB8888);
-    wire tile0_apply = input_valid_q && tile0_enable_q &&
-                       tile0_pixel_valid_q;
-    wire tile1_apply = input_valid_q && tile1_enable_q &&
-                       tile1_pixel_valid_q;
     wire sprite_behind_apply = input_valid_q && sprite_enable_q &&
                                sprite_behind_q[31:24] != 8'd0;
     wire sprite_front_apply = input_valid_q && sprite_enable_q &&
                               sprite_front_q[31:24] != 8'd0;
 
-    // Bottom to top: tile 1 below, tile 0 below, sprites behind, framebuffer,
-    // sprites front, tile 1 above, then tile 0 above. Later-layer metadata is
-    // delayed to the exact cycle at which the preceding result enters the
-    // next pipeline.
-    wire layer0_valid;
-    wire [23:0] layer0_rgb;
-    astra_blend_opaque_pipeline layer0_i (
+    // Bottom to top: behind sprites, framebuffer, front sprites.
+    wire behind_valid;
+    wire [23:0] behind_rgb;
+    astra_blend_premult_opaque_pipeline behind_i (
         .pixel_clk(pixel_clk),
         .pixel_reset(pixel_reset),
         .input_valid(input_valid_q),
         .destination_rgb(backdrop_q),
-        .source_argb(tile1_palette_argb),
-        .opacity(tile1_opacity_q),
-        .apply_source(tile1_apply && !tile1_above_q),
-        .output_valid(layer0_valid),
-        .output_rgb(layer0_rgb)
+        .source_premult_argb(sprite_behind_q),
+        .apply_source(sprite_behind_apply),
+        .output_valid(behind_valid),
+        .output_rgb(behind_rgb)
     );
 
-    wire [31:0] layer1_argb;
-    wire [7:0] layer1_opacity;
-    wire layer1_apply;
+    wire [31:0] framebuffer_delayed_argb;
+    wire [7:0] framebuffer_delayed_opacity;
+    wire framebuffer_delayed_apply;
     astra_compositor_layer_delay #(
         .DELAY(BLEND_LATENCY)
-    ) layer1_delay_i (
-        .pixel_clk(pixel_clk),
-        .pixel_reset(pixel_reset),
-        .input_argb(tile0_palette_argb),
-        .input_opacity(tile0_opacity_q),
-        .input_apply(tile0_apply && !tile0_above_q),
-        .output_argb(layer1_argb),
-        .output_opacity(layer1_opacity),
-        .output_apply(layer1_apply)
-    );
-    wire layer1_valid;
-    wire [23:0] layer1_rgb;
-    astra_blend_opaque_pipeline layer1_i (
-        .pixel_clk(pixel_clk),
-        .pixel_reset(pixel_reset),
-        .input_valid(layer0_valid),
-        .destination_rgb(layer0_rgb),
-        .source_argb(layer1_argb),
-        .opacity(layer1_opacity),
-        .apply_source(layer1_apply),
-        .output_valid(layer1_valid),
-        .output_rgb(layer1_rgb)
-    );
-
-    wire [31:0] layer2_argb;
-    wire [7:0] layer2_unused_opacity;
-    wire layer2_apply;
-    astra_compositor_layer_delay #(
-        .DELAY(BLEND_LATENCY * 2)
-    ) layer2_delay_i (
-        .pixel_clk(pixel_clk),
-        .pixel_reset(pixel_reset),
-        .input_argb(sprite_behind_q),
-        .input_opacity(8'd255),
-        .input_apply(sprite_behind_apply),
-        .output_argb(layer2_argb),
-        .output_opacity(layer2_unused_opacity),
-        .output_apply(layer2_apply)
-    );
-    wire layer2_valid;
-    wire [23:0] layer2_rgb;
-    astra_blend_premult_opaque_pipeline layer2_i (
-        .pixel_clk(pixel_clk),
-        .pixel_reset(pixel_reset),
-        .input_valid(layer1_valid),
-        .destination_rgb(layer1_rgb),
-        .source_premult_argb(layer2_argb),
-        .apply_source(layer2_apply),
-        .output_valid(layer2_valid),
-        .output_rgb(layer2_rgb)
-    );
-
-    wire [31:0] layer3_argb;
-    wire [7:0] layer3_opacity;
-    wire layer3_apply;
-    astra_compositor_layer_delay #(
-        .DELAY(BLEND_LATENCY * 3)
-    ) layer3_delay_i (
+    ) framebuffer_delay_i (
         .pixel_clk(pixel_clk),
         .pixel_reset(pixel_reset),
         .input_argb(framebuffer_argb),
         .input_opacity(8'd255),
         .input_apply(framebuffer_apply),
-        .output_argb(layer3_argb),
-        .output_opacity(layer3_opacity),
-        .output_apply(layer3_apply)
+        .output_argb(framebuffer_delayed_argb),
+        .output_opacity(framebuffer_delayed_opacity),
+        .output_apply(framebuffer_delayed_apply)
     );
-    wire layer3_valid;
-    wire [23:0] layer3_rgb;
-    astra_blend_opaque_pipeline layer3_i (
+    wire framebuffer_valid;
+    wire [23:0] framebuffer_rgb;
+    astra_blend_opaque_pipeline framebuffer_i (
         .pixel_clk(pixel_clk),
         .pixel_reset(pixel_reset),
-        .input_valid(layer2_valid),
-        .destination_rgb(layer2_rgb),
-        .source_argb(layer3_argb),
-        .opacity(layer3_opacity),
-        .apply_source(layer3_apply),
-        .output_valid(layer3_valid),
-        .output_rgb(layer3_rgb)
+        .input_valid(behind_valid),
+        .destination_rgb(behind_rgb),
+        .source_argb(framebuffer_delayed_argb),
+        .opacity(framebuffer_delayed_opacity),
+        .apply_source(framebuffer_delayed_apply),
+        .output_valid(framebuffer_valid),
+        .output_rgb(framebuffer_rgb)
     );
 
-    wire [31:0] layer4_argb;
-    wire [7:0] layer4_unused_opacity;
-    wire layer4_apply;
+    wire [31:0] front_delayed_argb;
+    wire front_delayed_apply;
     astra_compositor_layer_delay #(
-        .DELAY(BLEND_LATENCY * 4)
-    ) layer4_delay_i (
+        .DELAY(BLEND_LATENCY * 2)
+    ) front_delay_i (
         .pixel_clk(pixel_clk),
         .pixel_reset(pixel_reset),
         .input_argb(sprite_front_q),
         .input_opacity(8'd255),
         .input_apply(sprite_front_apply),
-        .output_argb(layer4_argb),
-        .output_opacity(layer4_unused_opacity),
-        .output_apply(layer4_apply)
+        .output_argb(front_delayed_argb),
+        .output_opacity(),
+        .output_apply(front_delayed_apply)
     );
-    wire layer4_valid;
-    wire [23:0] layer4_rgb;
-    astra_blend_premult_opaque_pipeline layer4_i (
+    astra_blend_premult_opaque_pipeline front_i (
         .pixel_clk(pixel_clk),
         .pixel_reset(pixel_reset),
-        .input_valid(layer3_valid),
-        .destination_rgb(layer3_rgb),
-        .source_premult_argb(layer4_argb),
-        .apply_source(layer4_apply),
-        .output_valid(layer4_valid),
-        .output_rgb(layer4_rgb)
-    );
-
-    wire [31:0] layer5_argb;
-    wire [7:0] layer5_opacity;
-    wire layer5_apply;
-    astra_compositor_layer_delay #(
-        .DELAY(BLEND_LATENCY * 5)
-    ) layer5_delay_i (
-        .pixel_clk(pixel_clk),
-        .pixel_reset(pixel_reset),
-        .input_argb(tile1_palette_argb),
-        .input_opacity(tile1_opacity_q),
-        .input_apply(tile1_apply && tile1_above_q),
-        .output_argb(layer5_argb),
-        .output_opacity(layer5_opacity),
-        .output_apply(layer5_apply)
-    );
-    wire layer5_valid;
-    wire [23:0] layer5_rgb;
-    astra_blend_opaque_pipeline layer5_i (
-        .pixel_clk(pixel_clk),
-        .pixel_reset(pixel_reset),
-        .input_valid(layer4_valid),
-        .destination_rgb(layer4_rgb),
-        .source_argb(layer5_argb),
-        .opacity(layer5_opacity),
-        .apply_source(layer5_apply),
-        .output_valid(layer5_valid),
-        .output_rgb(layer5_rgb)
-    );
-
-    wire [31:0] layer6_argb;
-    wire [7:0] layer6_opacity;
-    wire layer6_apply;
-    astra_compositor_layer_delay #(
-        .DELAY(BLEND_LATENCY * 6)
-    ) layer6_delay_i (
-        .pixel_clk(pixel_clk),
-        .pixel_reset(pixel_reset),
-        .input_argb(tile0_palette_argb),
-        .input_opacity(tile0_opacity_q),
-        .input_apply(tile0_apply && tile0_above_q),
-        .output_argb(layer6_argb),
-        .output_opacity(layer6_opacity),
-        .output_apply(layer6_apply)
-    );
-    astra_blend_opaque_pipeline layer6_i (
-        .pixel_clk(pixel_clk),
-        .pixel_reset(pixel_reset),
-        .input_valid(layer5_valid),
-        .destination_rgb(layer5_rgb),
-        .source_argb(layer6_argb),
-        .opacity(layer6_opacity),
-        .apply_source(layer6_apply),
+        .input_valid(framebuffer_valid),
+        .destination_rgb(framebuffer_rgb),
+        .source_premult_argb(front_delayed_argb),
+        .apply_source(front_delayed_apply),
         .output_valid(output_valid),
         .output_rgb(output_rgb)
     );
-
-    wire unused_layer_opacity = &{1'b0, layer2_unused_opacity,
-                                  layer4_unused_opacity};
 endmodule
 
 `default_nettype wire

@@ -8,7 +8,9 @@ PLATFORM_CPPFLAGS :=
 else ifeq ($(PLATFORM),de25)
 PLATFORM_CPPFLAGS := -DASTRA_GRAPHICS_ARENA_BASE_VALUE=0x40000000u \
 	-DASTRA_GRAPHICS_ARENA_LIMIT_VALUE=0x60000000u \
-	-DASTRA_CONTROL_BASE_VALUE=0x20100000u
+	-DASTRA_CONTROL_BASE_VALUE=0x20100000u \
+	-DASTRA_GRAPHICS_ARENA_DEVICE='"/dev/astra-graphics-arena"' \
+	-DASTRA_HOST_APERTURE -I../../de25/linux
 else
 $(error unsupported graphics platform: $(PLATFORM))
 endif
@@ -23,6 +25,7 @@ AUDIO_TARGET := $(OUT)/astra-audio-certify
 AUDIO_HOST_TARGET := $(OUT)/astra-audio-host
 HDMI_LINK_TARGET := $(OUT)/astra-hdmi-link
 TERMINAL_TARGET := $(OUT)/astra-terminal-display
+HOST_READ_TARGET := $(OUT)/astra-host-read-bench
 TIME_SYNC_TARGET := $(OUT)/astra-time-sync
 SPLASH_TARGET := $(OUT)/astra_boot_splash.rgb565
 TARGETS := $(BOOT_TARGET) $(STATUS_TARGET) $(SPRITE_TARGET) $(RENDER_TARGET) \
@@ -37,13 +40,14 @@ HOST_TEST_TARGETS := $(OUT)/test-astra-boot-text \
 ifeq ($(PLATFORM),arty)
 TARGETS += $(HDMI_LINK_TARGET)
 else ifeq ($(PLATFORM),de25)
-TARGETS += $(CAPTURE_TARGET)
+TARGETS += $(CAPTURE_TARGET) $(HOST_READ_TARGET)
 endif
 COMMON_SOURCES := astra_graphics_hw.c astra_boot_text.c
 COMMON_HEADERS := astra_graphics_hw.h astra_boot_text.h
 GRAPHICS := ../../../sw/userspace/graphics
 GRAPHICS_INCLUDE := $(GRAPHICS)/include
 GRAPHICS_GENERATED := $(GRAPHICS)/build/generated
+TEXTURE_REFERENCE_SOURCE := $(GRAPHICS)/src/texture_reference.c
 GRAPHICS_SOURCES := $(GRAPHICS)/src/surface.c \
 	$(GRAPHICS)/src/render_builder.c
 WINDOW_SCENE_SOURCES := astra_window_scene.c
@@ -101,12 +105,13 @@ $(SPRITE_TARGET): astra_sprite_certify.c astra_graphics_hw.c \
 		$(LDFLAGS) -o $@
 
 $(RENDER_TARGET): astra_render_certify.c astra_graphics_hw.c \
-		astra_graphics_hw.h astra_render_protocol.h $(DISPLAY_MODE_SOURCE)
+		astra_graphics_hw.h astra_render_protocol.h $(DISPLAY_MODE_SOURCE) \
+		$(TEXTURE_REFERENCE_SOURCE)
 	mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
-		-ffunction-sections -fdata-sections \
+		-I$(GRAPHICS_INCLUDE) -I. -ffunction-sections -fdata-sections \
 		astra_render_certify.c astra_graphics_hw.c $(DISPLAY_MODE_SOURCE) \
-		$(LDFLAGS) -o $@
+		$(TEXTURE_REFERENCE_SOURCE) $(LDFLAGS) -o $@
 
 $(COPPER_TARGET): astra_copper_certify.c astra_graphics_hw.c \
 		astra_graphics_hw.h
@@ -143,8 +148,19 @@ $(HDMI_LINK_TARGET): astra_hdmi_link.c
 $(GRAPHICS_FONT_HEADERS):
 	$(MAKE) -C $(GRAPHICS) $(@:$(GRAPHICS)/%=%)
 
+$(HOST_READ_TARGET): astra_host_read_bench.c $(COMMON_SOURCES) \
+		$(COMMON_HEADERS) $(GRAPHICS_SOURCES) $(GRAPHICS_FONT_HEADERS) \
+		astra_render_protocol.h ../../de25/linux/astra_host_arena_uapi.h
+	mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -I. -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
+		-I$(GRAPHICS_INCLUDE) -I$(GRAPHICS_GENERATED) \
+		-ffunction-sections -fdata-sections \
+		astra_host_read_bench.c $(COMMON_SOURCES) $(GRAPHICS_SOURCES) \
+		$(LDFLAGS) -o $@
+
 $(TERMINAL_TARGET): astra_terminal_display.c $(COMMON_SOURCES) \
 		$(COMMON_HEADERS) $(GRAPHICS_SOURCES) $(WINDOW_SCENE_SOURCES) \
+		$(DISPLAY_MODE_SOURCE) \
 		astra_window_scene.h $(GRAPHICS_FONT_HEADERS) \
 		astra_render_protocol.h \
 		$(ASTRA_INCLUDE)/astra/display.h \
@@ -156,7 +172,7 @@ $(TERMINAL_TARGET): astra_terminal_display.c $(COMMON_SOURCES) \
 		-I$(GRAPHICS_INCLUDE) -I$(GRAPHICS_GENERATED) \
 		-ffunction-sections -fdata-sections \
 		astra_terminal_display.c $(COMMON_SOURCES) $(GRAPHICS_SOURCES) \
-		$(WINDOW_SCENE_SOURCES) \
+		$(WINDOW_SCENE_SOURCES) $(DISPLAY_MODE_SOURCE) \
 		$(LDFLAGS) -o $@
 
 analyze: astra_render_protocol.h $(GRAPHICS_FONT_HEADERS)
@@ -169,8 +185,9 @@ analyze: astra_render_protocol.h $(GRAPHICS_FONT_HEADERS)
 		-fanalyzer -fsyntax-only \
 		astra_sprite_certify.c astra_graphics_hw.c
 	$(CC) $(CFLAGS) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
-		-fanalyzer -fsyntax-only \
-		astra_render_certify.c astra_graphics_hw.c $(DISPLAY_MODE_SOURCE)
+		-I$(GRAPHICS_INCLUDE) -I. -fanalyzer -fsyntax-only \
+		astra_render_certify.c astra_graphics_hw.c $(DISPLAY_MODE_SOURCE) \
+		$(TEXTURE_REFERENCE_SOURCE)
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only \
 		astra_copper_certify.c astra_graphics_hw.c
 	$(CC) $(CFLAGS) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
@@ -208,7 +225,7 @@ $(OUT)/test-astra-boot-text: test_astra_boot_text.c \
 
 $(OUT)/test-astra-terminal-display: astra_terminal_display.c \
 		$(COMMON_SOURCES) $(COMMON_HEADERS) $(GRAPHICS_SOURCES) \
-		$(WINDOW_SCENE_SOURCES) astra_window_scene.h \
+		$(WINDOW_SCENE_SOURCES) $(DISPLAY_MODE_SOURCE) astra_window_scene.h \
 		$(GRAPHICS_FONT_HEADERS) \
 		astra_render_protocol.h \
 		$(ASTRA_INCLUDE)/astra/display.h \
@@ -219,7 +236,7 @@ $(OUT)/test-astra-terminal-display: astra_terminal_display.c \
 	$(HOSTCC) $(CFLAGS) -I. -I$(OUT) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
 		-I$(GRAPHICS_INCLUDE) -I$(GRAPHICS_GENERATED) \
 		astra_terminal_display.c $(COMMON_SOURCES) $(GRAPHICS_SOURCES) \
-		$(WINDOW_SCENE_SOURCES) -o $@
+		$(WINDOW_SCENE_SOURCES) $(DISPLAY_MODE_SOURCE) -o $@
 
 $(OUT)/test-astra-audio: astra_audio_certify.c
 	mkdir -p $(OUT)

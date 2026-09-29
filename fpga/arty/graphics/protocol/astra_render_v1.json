@@ -5,8 +5,18 @@
   "surface_descriptor_bytes": 32,
   "glyph_descriptor_bytes": 16,
   "max_glyph_descriptors": 4096,
+  "max_fill_rects": 4096,
+  "fill_rect_bytes": 16,
+  "max_line_segments": 4096,
+  "line_segment_bytes": 16,
   "ring_entries": 1024,
   "max_deadline_us": 500000,
+  "host_aperture": {
+    "OFFSET": 8388608,
+    "BYTES": 8388608,
+    "BASE_REGISTER": 584,
+    "BASE_ALIGN_BYTES": 4096
+  },
   "max_surface_dimension": 4096,
   "formats": {
     "INDEX8": 0,
@@ -22,13 +32,16 @@
     "FILL": 1,
     "BLIT": 2,
     "BLIT_BATCH": 3,
+    "FILL_RECTS": 4,
     "LINE": 256,
     "RECT": 257,
     "CIRCLE": 258,
     "ELLIPSE": 259,
     "PATTERN_FILL": 260,
     "FLOOD_FILL": 261,
-    "GLYPH_RUN": 512
+    "LINES": 262,
+    "GLYPH_RUN": 512,
+    "TRIANGLES": 768
   },
   "status": {
     "OK": 0,
@@ -76,6 +89,15 @@
   },
   "glyph_options": {
     "TRANSPARENT_INDEX_MASK": 255
+  },
+  "fill_rects_options": {
+    "RECORD_COLOR": 1,
+    "BLEND": 2,
+    "ALLOWED_MASK": 3
+  },
+  "lines_options": {
+    "RECORD_COLOR": 1,
+    "ALLOWED_MASK": 1
   },
   "blit_rops": {
     "CLEAR": 0,
@@ -154,6 +176,38 @@
     "DESTINATION_X_Y": 2,
     "WIDTH_HEIGHT": 3
   },
+  "fill_rects_word_offsets": {
+    "DST_DESCRIPTOR": 8,
+    "RESERVED_9": 9,
+    "RECORD_OFFSET": 10,
+    "RECORD_COUNT": 11,
+    "OPTIONS": 12,
+    "RESERVED_13": 13,
+    "RESERVED_14": 14,
+    "COLOR": 15
+  },
+  "fill_rect_record_word_offsets": {
+    "X_Y": 0,
+    "WIDTH_HEIGHT": 1,
+    "COLOR": 2,
+    "RESERVED": 3
+  },
+  "lines_word_offsets": {
+    "DST_DESCRIPTOR": 8,
+    "RESERVED_9": 9,
+    "SEGMENT_OFFSET": 10,
+    "SEGMENT_COUNT": 11,
+    "OPTIONS": 12,
+    "RESERVED_13": 13,
+    "RESERVED_14": 14,
+    "COLOR": 15
+  },
+  "line_segment_word_offsets": {
+    "P0": 0,
+    "P1": 1,
+    "COLOR": 2,
+    "RESERVED": 3
+  },
   "surface_word_offsets": {
     "VERSION_SIZE": 0,
     "GENERATION": 1,
@@ -187,5 +241,34 @@
     "LINE_BYTES": 8,
     "SPAN_BYTES": 32,
     "SPAN_SOLID": 1
+  },
+  "max_triangles": 4096,
+  "triangle_vertex_bytes": 32,
+  "triangle_options": {
+    "BLEND_MASK": 7,
+    "BLEND_NONE": 0,
+    "BLEND_BLEND": 1,
+    "BLEND_ADD": 2,
+    "BLEND_MOD": 3,
+    "BLEND_MUL": 4,
+    "FILTER_LINEAR": 8,
+    "ALLOWED_MASK": 15
+  },
+  "triangle_word_offsets": {
+    "DST_DESCRIPTOR": 8,
+    "SRC_DESCRIPTOR": 9,
+    "VERTEX_OFFSET": 10,
+    "TRIANGLE_COUNT": 11,
+    "OPTIONS": 12,
+    "RESERVED_13": 13,
+    "RESERVED_14": 14,
+    "RESERVED_15": 15
+  },
+  "triangle_vertex_word_offsets": {
+    "X": 0,
+    "Y": 1,
+    "U": 2,
+    "V": 3,
+    "COLOR": 4
   }
 }

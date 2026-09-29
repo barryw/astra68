@@ -13,11 +13,10 @@
 
 #include <astra/display_capture.h>
 
+#include "astra_de25_media.h"
 #include "astra_display_capture_uapi.h"
 
 #define ASTRA_DE25_CAPTURE_REGISTERS 0x20105000ULL
-#define ASTRA_DE25_MEDIA_BASE 0x40000000ULL
-#define ASTRA_DE25_MEDIA_BYTES 0x20000000ULL
 #define ASTRA_DE25_CAPTURE_FRAME \
 	(ASTRA_DE25_MEDIA_BASE + ASTRA_DE25_MEDIA_BYTES - \
 	 ASTRA_DISPLAY_CAPTURE_FRAME_BYTES)

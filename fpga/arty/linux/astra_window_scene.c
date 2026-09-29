@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include <astra/display.h>
 #include <astra/rounded.h>
@@ -38,7 +39,7 @@ static uint32_t load_be32(const uint8_t *at)
            ((uint32_t)at[2] << 8) | at[3];
 }
 
-static void store_be32(volatile uint8_t *at, uint32_t value)
+static void store_be32(uint8_t *at, uint32_t value)
 {
     at[0] = (uint8_t)(value >> 24);
     at[1] = (uint8_t)(value >> 16);
@@ -174,13 +175,13 @@ static int decode_layer(const uint8_t *record, uint32_t arena_bytes,
     return 1;
 }
 
-static int write_span(volatile uint8_t *output, uint32_t output_capacity,
+static int write_span(uint8_t *output, uint32_t output_capacity,
                       uint32_t span_offset, uint32_t index,
                       const struct row_span *span)
 {
     uint64_t offset = (uint64_t)span_offset +
                       (uint64_t)index * ASTRA_WINDOW_SCENE_SPAN_BYTES;
-    volatile uint8_t *record;
+    uint8_t *record;
 
     if (offset + ASTRA_WINDOW_SCENE_SPAN_BYTES > output_capacity)
         return 0;
@@ -198,16 +199,23 @@ static int write_span(volatile uint8_t *output, uint32_t output_capacity,
     return 1;
 }
 
+/*
+ * The compiled scene is built in ordinary memory, not in the arena: the
+ * arena is an uncached device mapping, where every store is a bus
+ * transaction, and the per-line span walk stores to it hundreds of
+ * thousands of times. The caller copies the finished result out in wide
+ * stores. Layers are decoded once, not once per line.
+ */
 int astra_window_scene_compile(const void *request_pointer,
                                size_t request_bytes,
-                               volatile void *output_pointer,
+                               void *output_pointer,
                                size_t output_bytes, uint32_t arena_bytes,
                                uint32_t *written_out)
 {
     const uint8_t *request = request_pointer;
-    volatile uint8_t *output = output_pointer;
-    struct row_span rows[2][ASTRA_DISPLAY_WIDTH];
-    struct scene_layer layer;
+    uint8_t *output = output_pointer;
+    static struct row_span rows[2][ASTRA_DISPLAY_WIDTH];
+    struct scene_layer *layers;
     uint32_t total_bytes;
     uint32_t generation;
     uint32_t size;
@@ -266,12 +274,18 @@ int astra_window_scene_compile(const void *request_pointer,
             (uint64_t)height * ASTRA_WINDOW_SCENE_SPAN_BYTES >
         output_capacity)
         return ASTRA_WINDOW_SCENE_NO_SPACE;
+    layers = malloc((layer_count != 0u ? layer_count : 1u) *
+                    sizeof(*layers));
+    if (layers == NULL)
+        return ASTRA_WINDOW_SCENE_NO_SPACE;
     for (uint32_t index = 0u; index < layer_count; ++index)
         if (!decode_layer(request + layer_offset +
                               index * ASTRA_WINDOW_SCENE_LAYER_BYTES,
                           arena_bytes, output_offset, output_capacity,
-                          &layer))
+                          &layers[index])) {
+            free(layers);
             return ASTRA_WINDOW_SCENE_BAD_LAYER;
+        }
 
     /* A valid header is published last; an interrupted compile is inert. */
     store_be32(output, 0u);
@@ -287,8 +301,7 @@ int astra_window_scene_compile(const void *request_pointer,
             .value = backdrop,
         };
         for (uint32_t index = 0u; index < layer_count; ++index) {
-            const uint8_t *record = request + layer_offset +
-                                    index * ASTRA_WINDOW_SCENE_LAYER_BYTES;
+            const struct scene_layer *layer = &layers[index];
             int32_t left;
             int32_t right;
             uint32_t source_y;
@@ -297,16 +310,14 @@ int astra_window_scene_compile(const void *request_pointer,
             struct row_span incoming;
             struct row_span *swap;
 
-            (void)decode_layer(record, arena_bytes, output_offset,
-                               output_capacity, &layer);
-            if (!layer.visible || (int32_t)y < layer.y ||
-                (int32_t)y >= layer.y + (int32_t)layer.height)
+            if (!layer->visible || (int32_t)y < layer->y ||
+                (int32_t)y >= layer->y + (int32_t)layer->height)
                 continue;
-            source_y = (uint32_t)((int32_t)y - layer.y);
+            source_y = (uint32_t)((int32_t)y - layer->y);
             inset = astra_graphics_rounded_inset(
-                source_y, layer.height, layer.radius);
-            left = layer.x + (int32_t)inset;
-            right = layer.x + (int32_t)layer.width - (int32_t)inset;
+                source_y, layer->height, layer->radius);
+            left = layer->x + (int32_t)inset;
+            right = layer->x + (int32_t)layer->width - (int32_t)inset;
             if (left < 0)
                 left = 0;
             if (right > (int32_t)width)
@@ -314,24 +325,26 @@ int astra_window_scene_compile(const void *request_pointer,
             if (left >= right)
                 continue;
             incoming = (struct row_span){
-                .source_offset = layer.source_offset,
-                .source_bytes = layer.source_bytes,
-                .source_pitch = layer.source_pitch,
-                .source_x = (uint16_t)(left - layer.x),
+                .source_offset = layer->source_offset,
+                .source_bytes = layer->source_bytes,
+                .source_pitch = layer->source_pitch,
+                .source_x = (uint16_t)(left - layer->x),
                 .source_y = (uint16_t)source_y,
                 .start = (uint16_t)left,
                 .end = (uint16_t)right,
             };
             if (!overlay(next, &next_count, current, current_count, incoming,
-                         width))
+                         width)) {
+                free(layers);
                 return ASTRA_WINDOW_SCENE_NO_SPACE;
+            }
             swap = current;
             current = next;
             next = swap;
             current_count = next_count;
         }
         {
-            volatile uint8_t *line = output + line_offset +
+            uint8_t *line = output + line_offset +
                 y * ASTRA_WINDOW_SCENE_LINE_BYTES;
 
             store_be32(line + 0u, span_count);
@@ -339,9 +352,12 @@ int astra_window_scene_compile(const void *request_pointer,
         }
         for (uint32_t index = 0u; index < current_count; ++index)
             if (!write_span(output, output_capacity, span_offset,
-                            span_count++, &current[index]))
+                            span_count++, &current[index])) {
+                free(layers);
                 return ASTRA_WINDOW_SCENE_NO_SPACE;
+            }
     }
+    free(layers);
     total_bytes = span_offset + span_count * ASTRA_WINDOW_SCENE_SPAN_BYTES;
     for (uint32_t offset = 0u;
          offset < ASTRA_WINDOW_SCENE_COMPILED_HEADER_BYTES; offset += 4u)

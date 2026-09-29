@@ -11,13 +11,19 @@
 module astra_render_blitter #(
     parameter integer AXI_ID_WIDTH = 6,
     parameter [AXI_ID_WIDTH-1:0] AXI_ID = {AXI_ID_WIDTH{1'b0}},
-    parameter [AXI_ID_WIDTH-1:0] WRITE_ID = {AXI_ID_WIDTH{1'b0}}
+    parameter [AXI_ID_WIDTH-1:0] WRITE_ID = {AXI_ID_WIDTH{1'b0}},
+    parameter bit POSTED_WRITES = 1'b0
 ) (
     input  wire                         clk,
     input  wire                         reset,
     input  wire                         start,
     input  wire                         abort,
     input  wire                         is_fill,
+    // A FILL whose options word is a straight-alpha ARGB color drawn with
+    // source-over (the BLIT_ALPHA equation at opacity 255). The command
+    // processor admits it only for direct formats and an 8-byte pitch, so
+    // it always takes the burst mover.
+    input  wire                         fill_blend,
     input  wire                         is_blit,
     input  wire [31:0]                  arena_base,
     input  wire signed [15:0]           clip_left,
@@ -329,8 +335,12 @@ module astra_render_blitter #(
     reg plan_command_valid_q;
     reg abort_pending;
     reg is_fill_q;
+    reg fill_blend_q;
     reg is_blit_q;
     reg direct_copy_q;
+    // Unscaled, unreflected direct-color BLIT, plain or BLIT_ALPHA: the
+    // burst mover's pixel mode converts and blends it one pixel per clock.
+    reg pixel_stream_q;
     reg fast_copy_q;
     reg same_surface_q;
     reg [31:0] arena_base_q;
@@ -665,19 +675,40 @@ module astra_render_blitter #(
 
     assign copy_write_active = state == ST_FAST_WAIT || fast_copy_busy;
 
+    // Fill color replicated into one big-endian 64-bit beat, exactly as the
+    // pixel writer lays out a single pixel of each format.
+    wire [63:0] fill_beat =
+        destination_format_q == `ASTRA_RENDER_FORMAT_INDEX8 ?
+            {8{options_q[7:0]}} :
+        destination_format_q == `ASTRA_RENDER_FORMAT_RGB565 ?
+            {4{options_q[7:0], options_q[15:8]}} :
+            {2{options_q[7:0], options_q[15:8], options_q[23:16],
+               options_q[31:24]}};
+
     astra_render_copy_burst #(
         .AXI_ID_WIDTH(AXI_ID_WIDTH),
         .READ_ID(AXI_ID),
-        .WRITE_ID(WRITE_ID)
+        .WRITE_ID(WRITE_ID),
+        .POSTED(POSTED_WRITES)
     ) fast_copy_i (
         .clk(clk),
         .reset(reset),
         .start(fast_copy_start),
         .abort(abort || abort_pending),
         .reverse(reverse_q),
-        .source_address(source_row_address_q[31:0]),
+        .fill(is_fill_q && !fill_blend_q),
+        .fill_beat(fill_beat),
+        .blend(fill_blend_q),
+        .blend_argb(options_q),
+        .blend_format(destination_format_q),
+        .pixel(pixel_stream_q),
+        .pixel_blend(command_flags_q[4]),
+        .opacity(options_q[31:24]),
+        .source_format(source_format_q),
+        .source_address(is_fill_q ? destination_row_address_q[31:0] :
+                        source_row_address_q[31:0]),
         .destination_address(destination_row_address_q[31:0]),
-        .source_pitch(source_pitch_q),
+        .source_pitch(is_fill_q ? destination_pitch_q : source_pitch_q),
         .destination_pitch(destination_pitch_q),
         .row_bytes(fast_row_bytes_q),
         .row_count(effective_height_q),
@@ -743,8 +774,10 @@ module astra_render_blitter #(
             state <= ST_IDLE;
             abort_pending <= 1'b0;
             is_fill_q <= 1'b0;
+            fill_blend_q <= 1'b0;
             is_blit_q <= 1'b0;
             direct_copy_q <= 1'b0;
+            pixel_stream_q <= 1'b0;
             fast_copy_q <= 1'b0;
             same_surface_q <= 1'b0;
             arena_base_q <= 32'd0;
@@ -946,6 +979,7 @@ module astra_render_blitter #(
                     source_arvalid <= 1'b0;
                     if (start) begin
                         is_fill_q <= is_fill;
+                        fill_blend_q <= is_fill && fill_blend;
                         is_blit_q <= is_blit;
                         same_surface_q <= same_surface;
                         arena_base_q <= arena_base;
@@ -1016,6 +1050,13 @@ module astra_render_blitter #(
                         command_height_q != 16'd0;
                     direct_copy_q <= is_blit_q && blit_no_flags_q &&
                         blit_same_format_q && blit_same_dimensions_q;
+                    pixel_stream_q <= is_blit_q && !same_surface_q &&
+                        blit_same_dimensions_q &&
+                        (command_flags_q & ~`ASTRA_RENDER_FLAG_BLIT_ALPHA) ==
+                            16'd0 &&
+                        !(blit_no_flags_q && blit_same_format_q) &&
+                        source_format_q != `ASTRA_RENDER_FORMAT_INDEX8 &&
+                        destination_format_q != `ASTRA_RENDER_FORMAT_INDEX8;
                     state <= ST_PLAN_COMMAND_VALIDATE;
                 end
 
@@ -1398,8 +1439,10 @@ module astra_render_blitter #(
                 end
 
                 ST_LAST_MULTIPLY: begin
-                    fast_copy_q <= direct_copy_q &&
-                        source_pitch_q[2:0] == 3'd0 &&
+                    // Solid fills share the burst engine's write side.
+                    fast_copy_q <= (is_fill_q ||
+                        ((direct_copy_q || pixel_stream_q) &&
+                         source_pitch_q[2:0] == 3'd0)) &&
                         destination_pitch_q[2:0] == 3'd0;
                     destination_prefix_greater_q <=
                         destination_first_row_address_q[47:12] >
@@ -1740,11 +1783,15 @@ module astra_render_blitter #(
                     end
                 end
 
+                // Straight-alpha BLEND (docs/TEXTURE_ENGINE.md section 7):
+                // a' = m(src.a, opacity) first, then rgb' = m(src.rgb, a');
+                // the destination phase adds m(dst, 255 - a') per channel.
                 ST_BLEND_SOURCE_LOAD: begin
                     blend_multiplicand_q <=
                         argb_channel(blend_source_argb_q,
                                      blend_channel_q);
-                    blend_multiplier_q <= options_q[31:24];
+                    blend_multiplier_q <= blend_channel_q == 2'd0 ?
+                        options_q[31:24] : blend_result_argb_q[31:24];
                     state <= ST_BLEND_MULTIPLY;
                 end
 

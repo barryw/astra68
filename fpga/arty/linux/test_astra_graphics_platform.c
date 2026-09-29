@@ -70,11 +70,47 @@ int main(void)
         registers[ASTRA_REG_BACKDROP / 4u] != 0u ||
         registers[ASTRA_REG_FB_CONTROL / 4u] != 0u ||
         registers[ASTRA_REG_FB_WINDOW_SCENE_BYTES / 4u] != 0u ||
-        registers[ASTRA_REG_TILE0_CONTROL / 4u] != 0u ||
-        registers[ASTRA_REG_TILE1_CONTROL / 4u] != 0u ||
         registers[ASTRA_REG_SPRITE_CONTROL / 4u] != 0u ||
         registers[ASTRA_REG_GLOBAL_CONTROL / 4u] != 1u)
         return 1;
+    /* A bitstream without the fault record or the host aperture has no
+       registers there: the helpers must not store to them. */
+    struct astra_access_fault fault;
+
+    (void)memset(registers, 0, sizeof(registers));
+    registers[ASTRA_REG_CAPABILITIES / 4u] = 0x00000ff7u;
+    registers[ASTRA_REG_ACCESS_FAULT_COUNT / 4u] = 0x5a5a5a5au;
+    registers[ASTRA_REG_RENDER_HOST_APERTURE_BASE / 4u] = 0x5a5a5a5au;
+    registers[ASTRA_REG_RENDER_CONTROL / 4u] = 0x5a5a5a5au;
+    if (astra_graphics_access_fault_take(&graphics, &fault) != -1 ||
+        errno != ENOTSUP ||
+        astra_graphics_render_host_aperture_set(&graphics, 0x12345000u,
+                                                1000000u) != -1 ||
+        errno != ENOTSUP ||
+        registers[ASTRA_REG_ACCESS_FAULT_COUNT / 4u] != 0x5a5a5a5au ||
+        registers[ASTRA_REG_RENDER_HOST_APERTURE_BASE / 4u] != 0x5a5a5a5au ||
+        registers[ASTRA_REG_RENDER_CONTROL / 4u] != 0x5a5a5a5au)
+        return 1;
+    registers[ASTRA_REG_CAPABILITIES / 4u] =
+        0x00000ff7u | ASTRA_CAP_ACCESS_FAULT_RECORD |
+        ASTRA_CAP_RENDER_HOST_APERTURE;
+    registers[ASTRA_REG_ACCESS_FAULT_COUNT / 4u] = 0u;
+    if (astra_graphics_access_fault_take(&graphics, &fault) != 0 ||
+        fault.count != 0u)
+        return 1;
+    registers[ASTRA_REG_ACCESS_FAULT_COUNT / 4u] = 3u;
+    registers[ASTRA_REG_ACCESS_FAULT_FIRST / 4u] = 0x80020248u;
+    if (astra_graphics_access_fault_take(&graphics, &fault) != 1 ||
+        fault.count != 3u || fault.first != 0x80020248u ||
+        registers[ASTRA_REG_ACCESS_FAULT_COUNT / 4u] != 0u)
+        return 1;
+    registers[ASTRA_REG_RENDER_STATUS / 4u] = 0u;
+    if (astra_graphics_render_host_aperture_set(&graphics, 0x12345000u,
+                                                1000000u) != 0 ||
+        registers[ASTRA_REG_RENDER_CONTROL / 4u] != 0u ||
+        registers[ASTRA_REG_RENDER_HOST_APERTURE_BASE / 4u] != 0x12345000u)
+        return 1;
+
     (void)unlink(CAPTURE_LOCK_TEST_PATH);
     astra_graphics_device_init(&capture_a);
     astra_graphics_device_init(&capture_b);

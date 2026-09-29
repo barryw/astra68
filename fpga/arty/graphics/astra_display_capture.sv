@@ -33,7 +33,7 @@ module astra_display_capture #(
     input  wire [3:0]                   s_axi_wstrb,
     input  wire                         s_axi_wvalid,
     output wire                         s_axi_wready,
-    output reg  [1:0]                   s_axi_bresp,
+    output wire [1:0]                   s_axi_bresp,
     output reg                          s_axi_bvalid,
     input  wire                         s_axi_bready,
     input  wire [31:0]                  s_axi_araddr,
@@ -41,7 +41,7 @@ module astra_display_capture #(
     input  wire                         s_axi_arvalid,
     output wire                         s_axi_arready,
     output reg  [31:0]                  s_axi_rdata,
-    output reg  [1:0]                   s_axi_rresp,
+    output wire [1:0]                   s_axi_rresp,
     output reg                          s_axi_rvalid,
     input  wire                         s_axi_rready,
 
@@ -297,6 +297,25 @@ module astra_display_capture #(
     wire write_address_valid = control_write || base_write;
     wire write_transport_valid = awaddr_q[1:0] == 2'b00;
     wire read_fire = s_axi_arvalid && s_axi_arready;
+    wire fault_clear_write = awaddr_q == 8'h3c;
+
+    // The bus always answers OKAY; nonzero codes are access faults.
+    reg [1:0] bresp_code_q;
+    reg [1:0] rresp_code_q;
+    reg [7:0] araddr_q;
+    wire [31:0] access_fault_count;
+    wire [31:0] access_fault_first;
+    assign s_axi_bresp = 2'b00;
+    assign s_axi_rresp = 2'b00;
+    astra_access_fault_record access_fault_i (
+        .clk(build_clk), .reset(build_reset),
+        .clear(write_fire && fault_clear_write),
+        .write_fault(s_axi_bvalid && s_axi_bready && bresp_code_q != 2'b00),
+        .write_reason(bresp_code_q), .write_offset({8'd0, awaddr_q}),
+        .read_fault(s_axi_rvalid && s_axi_rready && rresp_code_q != 2'b00),
+        .read_reason(rresp_code_q), .read_offset({8'd0, araddr_q}),
+        .count_word(access_fault_count), .first_word(access_fault_first)
+    );
 
     assign s_axi_awready = !aw_pending_q && !s_axi_bvalid;
     assign s_axi_wready = !w_pending_q && !s_axi_bvalid;
@@ -349,10 +368,10 @@ module astra_display_capture #(
             w_pending_q <= 1'b0;
             wdata_q <= 32'd0;
             wstrb_q <= 4'd0;
-            s_axi_bresp <= 2'b00;
+            bresp_code_q <= 2'b00;
             s_axi_bvalid <= 1'b0;
             s_axi_rdata <= 32'd0;
-            s_axi_rresp <= 2'b00;
+            rresp_code_q <= 2'b00;
             s_axi_rvalid <= 1'b0;
         end else begin
             start_build_sync_q <= {start_build_sync_q[0],
@@ -480,8 +499,8 @@ module astra_display_capture #(
                 aw_pending_q <= 1'b0;
                 w_pending_q <= 1'b0;
                 s_axi_bvalid <= 1'b1;
-                s_axi_bresp <= write_address_valid && write_transport_valid ?
-                    2'b00 : 2'b11;
+                bresp_code_q <= (write_address_valid || fault_clear_write) &&
+                    write_transport_valid ? 2'b00 : 2'b11;
                 if (write_address_valid && write_transport_valid) begin
                     if (wstrb_q != 4'hf) begin
                         command_error_count_q <= command_error_count_q + 32'd1;
@@ -527,8 +546,9 @@ module astra_display_capture #(
             if (s_axi_rvalid && s_axi_rready)
                 s_axi_rvalid <= 1'b0;
             if (read_fire) begin
+                araddr_q <= s_axi_araddr[7:0];
                 s_axi_rvalid <= 1'b1;
-                s_axi_rresp <= 2'b00;
+                rresp_code_q <= 2'b00;
                 case (s_axi_araddr[7:0])
                     8'h00: s_axi_rdata <= DEVICE_ID;
                     8'h04: s_axi_rdata <= VERSION;
@@ -550,9 +570,11 @@ module astra_display_capture #(
                     8'h30: s_axi_rdata <= axi_error_count_q;
                     8'h34: s_axi_rdata <= command_error_count_q;
                     8'h38: s_axi_rdata <= last_capture_cycles_q;
+                    8'h3c: s_axi_rdata <= access_fault_count;
+                    8'h40: s_axi_rdata <= access_fault_first;
                     default: begin
                         s_axi_rdata <= 32'd0;
-                        s_axi_rresp <= 2'b11;
+                        rresp_code_q <= 2'b11;
                     end
                 endcase
             end

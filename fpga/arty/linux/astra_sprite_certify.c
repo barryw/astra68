@@ -1112,8 +1112,6 @@ cleanup:
     astra_mmio_write(device, ASTRA_REG_COPPER_CONTROL, 0u);
     astra_mmio_write(device, ASTRA_REG_COPPER_IRQ_PENDING, 1u);
     astra_mmio_write(device, ASTRA_REG_FB_CONTROL, 0u);
-    astra_mmio_write(device, ASTRA_REG_TILE0_CONTROL, 0u);
-    astra_mmio_write(device, ASTRA_REG_TILE1_CONTROL, 0u);
     astra_mmio_write(device, ASTRA_REG_GLOBAL_CONTROL, 1u);
     if (astra_graphics_scene_commit(device, COMMIT_TIMEOUT_NS,
                                     &generation) != 0)
@@ -1224,8 +1222,6 @@ int main(int argc, char **argv)
     if (background_path == NULL) {
         /* Throughput certification owns and replaces the complete scene. */
         astra_mmio_write(&device, ASTRA_REG_FB_CONTROL, 0u);
-        astra_mmio_write(&device, ASTRA_REG_TILE0_CONTROL, 0u);
-        astra_mmio_write(&device, ASTRA_REG_TILE1_CONTROL, 0u);
         if (quiesce_sprites(&device, &generation) != 0)
             goto done;
     }

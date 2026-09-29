@@ -47,46 +47,10 @@ module tb_astra_graphics_control;
     reg [31:0] framebuffer_axi_last_ar_address = 32'h40001280;
     reg [31:0] framebuffer_axi_response_stall_cycles = 32'h00012345;
 
-    wire tile0_enable;
-    wire tile0_above_framebuffer;
-    wire [7:0] tile0_opacity;
-    wire tile0_tile_16;
-    wire tile0_index_8;
-    wire [3:0] tile0_map_width_log2;
-    wire [3:0] tile0_map_height_log2;
-    wire tile0_wrap_x;
-    wire tile0_wrap_y;
-    wire tile0_transparent_enable;
-    wire [7:0] tile0_transparent_index;
-    wire signed [31:0] tile0_scroll_x;
-    wire signed [31:0] tile0_scroll_y;
-    wire [31:0] tile0_map_base;
-    wire [31:0] tile0_pattern_base;
-    wire [16:0] tile0_tile_count;
-    wire tile1_enable;
-    wire tile1_above_framebuffer;
-    wire [7:0] tile1_opacity;
-    wire tile1_tile_16;
-    wire tile1_index_8;
-    wire [3:0] tile1_map_width_log2;
-    wire [3:0] tile1_map_height_log2;
-    wire tile1_wrap_x;
-    wire tile1_wrap_y;
-    wire tile1_transparent_enable;
-    wire [7:0] tile1_transparent_index;
-    wire signed [31:0] tile1_scroll_x;
-    wire signed [31:0] tile1_scroll_y;
-    wire [31:0] tile1_map_base;
-    wire [31:0] tile1_pattern_base;
-    wire [16:0] tile1_tile_count;
 
     wire framebuffer_palette_write_enable;
     wire [7:0] framebuffer_palette_write_index;
     wire [31:0] framebuffer_palette_write_argb;
-    wire tile_palette_write_enable;
-    wire [3:0] tile_palette_write_bank;
-    wire [7:0] tile_palette_write_index;
-    wire [31:0] tile_palette_write_argb;
 
     wire sprite_enable;
     wire sprite_descriptor_write_enable;
@@ -305,38 +269,6 @@ wire [31:0] sprite_scale_step_x;
         .framebuffer_axi_last_ar_address(framebuffer_axi_last_ar_address),
         .framebuffer_axi_response_stall_cycles(
             framebuffer_axi_response_stall_cycles),
-        .tile0_enable(tile0_enable),
-        .tile0_above_framebuffer(tile0_above_framebuffer),
-        .tile0_opacity(tile0_opacity),
-        .tile0_tile_16(tile0_tile_16),
-        .tile0_index_8(tile0_index_8),
-        .tile0_map_width_log2(tile0_map_width_log2),
-        .tile0_map_height_log2(tile0_map_height_log2),
-        .tile0_wrap_x(tile0_wrap_x),
-        .tile0_wrap_y(tile0_wrap_y),
-        .tile0_transparent_enable(tile0_transparent_enable),
-        .tile0_transparent_index(tile0_transparent_index),
-        .tile0_scroll_x(tile0_scroll_x),
-        .tile0_scroll_y(tile0_scroll_y),
-        .tile0_map_base(tile0_map_base),
-        .tile0_pattern_base(tile0_pattern_base),
-        .tile0_tile_count(tile0_tile_count),
-        .tile1_enable(tile1_enable),
-        .tile1_above_framebuffer(tile1_above_framebuffer),
-        .tile1_opacity(tile1_opacity),
-        .tile1_tile_16(tile1_tile_16),
-        .tile1_index_8(tile1_index_8),
-        .tile1_map_width_log2(tile1_map_width_log2),
-        .tile1_map_height_log2(tile1_map_height_log2),
-        .tile1_wrap_x(tile1_wrap_x),
-        .tile1_wrap_y(tile1_wrap_y),
-        .tile1_transparent_enable(tile1_transparent_enable),
-        .tile1_transparent_index(tile1_transparent_index),
-        .tile1_scroll_x(tile1_scroll_x),
-        .tile1_scroll_y(tile1_scroll_y),
-        .tile1_map_base(tile1_map_base),
-        .tile1_pattern_base(tile1_pattern_base),
-        .tile1_tile_count(tile1_tile_count),
         .sprite_enable(sprite_enable),
         .sprite_descriptor_write_enable(
             sprite_descriptor_write_enable),
@@ -382,10 +314,6 @@ wire [31:0] sprite_scale_step_x;
             framebuffer_palette_write_index),
         .framebuffer_palette_write_argb(
             framebuffer_palette_write_argb),
-        .tile_palette_write_enable(tile_palette_write_enable),
-        .tile_palette_write_bank(tile_palette_write_bank),
-        .tile_palette_write_index(tile_palette_write_index),
-        .tile_palette_write_argb(tile_palette_write_argb),
         .palette_write_ready(palette_write_ready),
         .boot_text_shadow_enable(boot_text_shadow_enable),
         .boot_text_write_enable(boot_text_write_enable),
@@ -465,7 +393,6 @@ wire [31:0] sprite_scale_step_x;
     );
 
     integer framebuffer_palette_writes = 0;
-    integer tile_palette_writes = 0;
     integer boot_text_writes = 0;
     integer boot_text_commits = 0;
     integer pointer_image_writes = 0;
@@ -485,13 +412,6 @@ wire [31:0] sprite_scale_step_x;
             if (framebuffer_palette_write_index != 8'h12 ||
                 framebuffer_palette_write_argb != 32'h80abcdef)
                 $fatal(1, "wrong framebuffer palette write");
-        end
-        if (tile_palette_write_enable) begin
-            tile_palette_writes <= tile_palette_writes + 1;
-            if (tile_palette_write_bank != 4'h5 ||
-                tile_palette_write_index != 8'h34 ||
-                tile_palette_write_argb != 32'hc0123456)
-                $fatal(1, "wrong tile palette write");
         end
         if (boot_text_write_enable) begin
             boot_text_writes <= boot_text_writes + 1;
@@ -560,6 +480,18 @@ wire [31:0] sprite_scale_step_x;
         end
     endtask
 
+    integer expected_fault_count = 0;
+
+    task automatic check_fault_count(input [1:0] expected_response);
+        begin
+            if (expected_response != 2'b00)
+                expected_fault_count = expected_fault_count + 1;
+            if (dut.access_fault_count !== expected_fault_count)
+                $fatal(1, "access fault count %0d expected %0d",
+                       dut.access_fault_count, expected_fault_count);
+        end
+    endtask
+
     task automatic collect_b(input [1:0] expected_response);
         integer cycles;
         begin
@@ -571,14 +503,18 @@ wire [31:0] sprite_scale_step_x;
                 if (cycles > 20000)
                     $fatal(1, "AXI write response timed out");
             end
-            if (s_axi_bresp !== expected_response)
-                $fatal(1, "BRESP=%b expected=%b",
-                       s_axi_bresp, expected_response);
+            // The bus never answers with an error; the register file's
+            // verdict is recorded in the access-fault record instead.
+            if (s_axi_bresp !== 2'b00 ||
+                dut.bresp_code_q !== expected_response)
+                $fatal(1, "BRESP=%b code=%b expected OKAY/%b",
+                       s_axi_bresp, dut.bresp_code_q, expected_response);
             @(negedge clk);
             s_axi_bready = 1'b1;
             @(posedge clk);
             @(negedge clk);
             s_axi_bready = 1'b0;
+            check_fault_count(expected_response);
         end
     endtask
 
@@ -624,16 +560,18 @@ wire [31:0] sprite_scale_step_x;
                 if (cycles > 20)
                     $fatal(1, "AXI read response timed out");
             end
-            if (s_axi_rresp !== expected_response ||
+            if (s_axi_rresp !== 2'b00 ||
+                dut.rresp_code_q !== expected_response ||
                 s_axi_rdata !== expected_data)
-                $fatal(1, "read %08x got %b/%08x expected %b/%08x",
-                       address, s_axi_rresp, s_axi_rdata,
+                $fatal(1, "read %08x got %b/%b/%08x expected OKAY/%b/%08x",
+                       address, s_axi_rresp, dut.rresp_code_q, s_axi_rdata,
                        expected_response, expected_data);
             @(negedge clk);
             s_axi_rready = 1'b1;
             @(posedge clk);
             @(negedge clk);
             s_axi_rready = 1'b0;
+            check_fault_count(expected_response);
         end
     endtask
 
@@ -661,7 +599,7 @@ wire [31:0] sprite_scale_step_x;
             end
             held_data = s_axi_rdata;
             held_response = s_axi_rresp;
-            if (held_data !== 32'h00010009 || held_response !== 2'b00)
+            if (held_data !== 32'h00020000 || held_response !== 2'b00)
                 $fatal(1, "backpressured AXI read returned bad data");
 
             // Present a second request while the first response is held.
@@ -728,8 +666,8 @@ wire [31:0] sprite_scale_step_x;
         reset = 1'b0;
 
         axi_read(32'h00000000, 32'h41535452, 2'b00);
-        axi_read(32'h00000004, 32'h00010009, 2'b00);
-        axi_read(32'h00000008, 32'h00000fff, 2'b00);
+        axi_read(32'h00000004, 32'h00020000, 2'b00);
+        axi_read(32'h00000008, 32'h00001ff7, 2'b00);
         axi_read(32'h0000005c, 32'h04380780, 2'b00);
         axi_read(32'h00000060, 32'd0, 2'b00);
         axi_read(32'h00000064, 32'h04380780, 2'b00);
@@ -857,7 +795,17 @@ wire [31:0] sprite_scale_step_x;
         axi_read(32'h00000204, 32'h00020000, 2'b00);
         axi_read(32'h00000210, 32'h00030000, 2'b00);
         axi_read(32'h0000021c, 32'h00000055, 2'b00);
+        // Host aperture base: 4 KiB aligned, only while the engine is idle.
+        axi_write(32'h00000248, 32'h81234000, 4'hf, 0, 2'b10);
         render_busy = 1'b0;
+        axi_read(32'h00000248, 32'd0, 2'b00);
+        axi_write(32'h00000248, 32'h81234800, 4'hf, 0, 2'b10);
+        axi_write(32'h00000248, 32'h81234000, 4'h3, 0, 2'b10);
+        axi_write(32'h00000248, 32'h81234000, 4'hf, 0, 2'b00);
+        axi_read(32'h00000248, 32'h81234000, 2'b00);
+        if (dut.render_host_aperture_base !== 32'h81234000)
+            $fatal(1, "host aperture base not exported");
+        axi_write(32'h00000248, 32'd0, 4'hf, 0, 2'b00);
         @(negedge clk);
         render_completion_irq = 1'b1;
         @(negedge clk);
@@ -874,10 +822,17 @@ wire [31:0] sprite_scale_step_x;
 
         axi_write(32'h00000100, 32'h00000012, 4'hf, 0, 2'b00);
         axi_write(32'h00000104, 32'h80abcdef, 4'hf, 1, 2'b00);
-        axi_write(32'h00000108, 32'h00000534, 4'hf, 1, 2'b00);
-        axi_write(32'h0000010c, 32'hc0123456, 4'hf, 0, 2'b00);
-        if (framebuffer_palette_writes != 1 || tile_palette_writes != 1)
-            $fatal(1, "palette writes were not emitted exactly once");
+        axi_write(32'h00000108, 32'h00000534, 4'hf, 1, 2'b10);
+        axi_write(32'h0000010c, 32'hc0123456, 4'hf, 0, 2'b10);
+        axi_read(32'h00000108, 32'd0, 2'b00);
+        axi_write(32'h00000080, 32'h18000000, 4'hf, 0, 2'b10);
+        axi_write(32'h00000098, 32'h00ff0001, 4'hf, 0, 2'b10);
+        axi_write(32'h000000c0, 32'h18000000, 4'hf, 0, 2'b10);
+        axi_write(32'h000000d8, 32'h00ff0001, 4'hf, 0, 2'b10);
+        axi_read(32'h00000080, 32'd0, 2'b11);
+        axi_read(32'h000000d8, 32'd0, 2'b11);
+        if (framebuffer_palette_writes != 1)
+            $fatal(1, "framebuffer palette write count changed");
         $display("disabled-scene palette programming pass");
 
         axi_write(32'h00000180, 32'h80000000, 4'hf, 0, 2'b10);
@@ -1065,40 +1020,57 @@ wire [31:0] sprite_scale_step_x;
         if (commit_pending_status || scene_enable || commit_errors != 32'd2)
             $fatal(1, "invalid framebuffer scene was accepted");
 
-        // The same commit gate rejects an invalid enabled tile allocation.
         axi_write(32'h00000040, 32'h18000000, 4'hf, 0, 2'b00);
-        axi_write(32'h00000080, 32'h18400001, 4'hf, 1, 2'b00);
-        axi_write(32'h00000098, 32'h00ff0001, 4'hf, 0, 2'b00);
-        axi_write(32'h00000010, 32'h00000001, 4'hf, 0, 2'b00);
-        if (commit_pending_status || commit_errors != 32'd3)
-            $fatal(1, "invalid tile scene was accepted");
-        $display("shared-validator commit rejection pass");
-
-        // Restore tile state, then prove an enabled malformed sprite is
-        // rejected by the same atomic submission gate.
-        axi_write(32'h00000080, 32'h18400000, 4'hf, 0, 2'b00);
-        axi_write(32'h00000098, 32'h00ff0000, 4'hf, 0, 2'b00);
+        // A malformed sprite is rejected by the same atomic submission gate.
         axi_write(32'h00000184, 32'h00000000, 4'hf, 0, 2'b00);
         axi_write(32'h00000188, 32'h00000003, 4'hf, 0, 2'b00);
         axi_write(32'h00000010, 32'h00000001, 4'hf, 0, 2'b00);
-        if (commit_pending_status || commit_errors != 32'd4)
+        if (commit_pending_status || commit_errors != 32'd3)
             $fatal(1, "invalid sprite scene was accepted");
         axi_write(32'h00000188, 32'h00000000, 4'hf, 0, 2'b00);
         $display("sprite-validator commit rejection pass");
 
         axi_write(32'h0000006c, 32'd0, 4'hf, 0, 2'b00);
         axi_write(32'h00000010, 32'h00000001, 4'hf, 0, 2'b00);
-        if (commit_pending_status || commit_errors != 32'd5)
+        if (commit_pending_status || commit_errors != 32'd4)
             $fatal(1, "invalid display mapping was accepted");
         $display("display-validator commit rejection pass");
 
-        axi_write(32'h00000248, 32'd0, 4'hf, 0, 2'b11);
-        axi_read(32'h00000248, 32'd0, 2'b11);
+        // Every refused or unmapped access above answered OKAY and was
+        // counted; a store to ACCESS_FAULT_COUNT clears the record.
+        if (expected_fault_count == 0)
+            $fatal(1, "no access faults were exercised");
+        axi_read(32'h0000024c, expected_fault_count, 2'b00);
+        expected_fault_count = 0;
+        axi_write(32'h0000024c, 32'd0, 4'hf, 0, 2'b00);
+        check_fault_count(2'b00);
+        axi_read(32'h0000024c, 32'd0, 2'b00);
+        axi_read(32'h00000250, 32'd0, 2'b00);
+
+        // Rejected store: host aperture while the render engine is enabled.
+        axi_write(32'h00000200, 32'd1, 4'hf, 0, 2'b00);
+        axi_write(32'h00000248, 32'h81234000, 4'hf, 0, 2'b10);
+        axi_read(32'h00000248, 32'd0, 2'b00);
+        axi_write(32'h00000200, 32'd0, 4'hf, 0, 2'b00);
+        // Unmapped store and load, misaligned store, aliases above 0x3ff.
+        axi_write(32'h000003fc, 32'hffffffff, 4'hf, 0, 2'b11);
+        axi_read(32'h000002fc, 32'd0, 2'b11);
         axi_write(32'h00000041, 32'd0, 4'hf, 1, 2'b11);
-        axi_read(32'h000000d8, 32'h00ff0000, 2'b00);
         axi_write(32'h000004d8, 32'h00000001, 4'hf, 0, 2'b11);
-        axi_read(32'h000000d8, 32'h00ff0000, 2'b00);
-        $display("write decode/alignment pass");
+        axi_read(32'h000000d8, 32'd0, 2'b11);
+        axi_write(32'h00001248, 32'h81234000, 4'hf, 0, 2'b11);
+        axi_read(32'h0000100c, 32'd0, 2'b11);
+        axi_write(32'h00000250, 32'd0, 4'hf, 0, 2'b10);
+        axi_read(32'h0000024c, 32'd9, 2'b00);
+        axi_read(32'h00000250, 32'h80020248, 2'b00);
+        expected_fault_count = 0;
+        axi_write(32'h0000024c, 32'd0, 4'hf, 0, 2'b00);
+        axi_read(32'h00000123, 32'd0, 2'b11);
+        axi_read(32'h00000250, 32'h00030123, 2'b00);
+        expected_fault_count = 0;
+        axi_write(32'h0000024c, 32'd0, 4'hf, 0, 2'b00);
+        axi_read(32'h0000024c, 32'd0, 2'b00);
+        $display("access-fault record pass");
 
         $display("ASTRA GRAPHICS CONTROL PASS");
         $finish;

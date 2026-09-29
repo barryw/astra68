@@ -129,10 +129,18 @@ module tb_astra_hdmi_audio;
         end
         /* The FIFO output register holds one prefetched frame. */
         write_reg(8'h18, 32'h00000001, 2'b00);
-        write_reg(8'h18, 32'h00000001, 2'b10);
+        // Refused and unmapped accesses answer OKAY and are recorded.
+        read_reg(8'h34, 32'd0);
+        write_reg(8'h18, 32'h00000001, 2'b00);
         read_reg(8'h20, 32'd1);
-        write_reg(8'h0c, 32'd4, 2'b10);
-        write_reg(8'h34, 32'd0, 2'b11);
+        write_reg(8'h0c, 32'd4, 2'b00);
+        write_reg(8'h3c, 32'd0, 2'b00);
+        read_reg(8'h3c, 32'd0);
+        read_reg(8'h34, 32'd4);
+        read_reg(8'h38, 32'h80020018);
+        write_reg(8'h34, 32'd0, 2'b00);
+        read_reg(8'h34, 32'd0);
+        read_reg(8'h38, 32'd0);
 
         $display("ASTRA HDMI AUDIO PASS underflows=%0d",
                  dut.underflow_count_q);

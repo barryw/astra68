@@ -61,10 +61,31 @@ for required in (
     "add_memory_bridge astra_scene_bridge astra_scene 1 0 2 64",
     "add_memory_bridge astra_capture_bridge astra_capture 0 1 1 64",
     "add_memory_bridge astra_render_bridge astra_render 1 1 3 64",
+    "remove_instance ext_hps_f2sdram_master",
+    "add_instance astra_host_bridge altera_axi_bridge",
+    "set_instance_parameter_value astra_host_bridge ENABLE_AXI4_READ_ONLY_INTERFACE 1",
+    "add_connection astra_build_clock.out_clk astra_host_bridge.clk",
+    "add_connection astra_host_bridge.m0 subsys_hps.f2sdram_adapter_axi4_sub",
+    "astra_host_bridge.m0/subsys_hps.f2sdram_adapter_axi4_sub baseAddress 0x0",
+    "set_interface_property astra_host EXPORT_OF astra_host_bridge.s0",
+    "remove_instance subsys_debug",
+    "remove_instance ace5lite_cache_coherency_translator_0",
 ):
     assert required in tcl, required
 assert tcl.count("qsys_mm.enableOutOfOrderSupport true") == 2
-assert "subsys_debug.fpga_m_master/astra_control_bridge.s0" not in tcl
+assert "add_connection subsys_debug" not in tcl
+assert "ace5lite_cache_coherency_translator_0." not in tcl
+assert "add_connection clk_100.out_clk subsys_hps.fpga2hps" not in tcl
+assert 'error "subsys_hps.fpga2hps still connected' in tcl
+disable = (HERE / "disable_fpga2hps.tcl").read_text(encoding="utf-8")
+for required in (
+    "load_component agilex_hps",
+    "set_component_parameter_value f2s_data_width 0",
+    'error "agilex_hps f2s_data_width is not the vendor 256"',
+    'error "hps_subsys still exports $export"',
+):
+    assert required in disable, required
+assert "remove_instance astra_hps_pmon" not in tcl
 assert "subsys_hps.hps2fpga astra_lpddr4b.s0_axi4" not in tcl
 assert "add_connection clk_100.out_clk astra_control_bridge.clk" not in tcl
 assert "add_connection clk_100.out_clk $name.clk" not in tcl
@@ -79,6 +100,9 @@ for required in (
     "add_lpddr4b.tcl",
     "patch_vendor_top.py",
     "patch_vendor_pixel_pll.py",
+    "patch_vendor_f2sdram_adapter.py",
+    "QSYS_FILE jtag_subsys/jtag_subsys.qsys",
+    "/ jtag_subsys\\//d",
     "compile_de25_tree",
     "golden_top_hps.sof",
     "golden_top_boot.core.rbf",
@@ -102,6 +126,12 @@ for required in (
     "mv \"$incoming\" \"$out\"",
 ):
     assert required in build, required
+
+assert build.index("patch_vendor_f2sdram_adapter.py") < build.index("qsys-script")
+assert build.index("disable_fpga2hps.tcl") < build.index("de25/add_lpddr4b.tcl")
+assert build.index("qsys-generate\" hps_subsys/hps_subsys.qsys") > build.index(
+    "disable_fpga2hps.tcl")
+assert "if grep -q fpga2hps_awid hps_subsys/hps_subsys/synth/hps_subsys.v" in build
 
 boot_rbf = build.index("output_files/golden_top_boot.rbf")
 boot_conversion = build[boot_rbf - 160:boot_rbf + 120]
@@ -185,7 +215,8 @@ for required in (
     ".ARENA_LIMIT(32'h60000000)",
     ".AXI_ID_WIDTH(3)",
     ".FRAMEBUFFER_AXI_DATA_WIDTH(128)",
-    "astra_axi_read_3to1 #(",
+    "assign scene_arid_full = sprite_arid;",
+    "assign scene_rready = sprite_rready;",
     "astra_hdmi_audio audio_i",
     "astra_i2s_transmitter i2s_i",
     ".sample_clk(audio_sample_clk)",
@@ -195,7 +226,6 @@ for required in (
     "hdmi_int_sync_q",
     "hdmi_ready_build_sync_q",
     ".hdmi_output_active(hdmi_ready_build && hdmi_output_requested)",
-    ".aresetn(build_reset_n)",
     ".BUILD_CYCLES_PER_US(165)",
     ".CLK_HZ(165000000)",
     "video_timing #(.VIDEO_ID_CODE(16))",
@@ -203,11 +233,17 @@ for required in (
     ".OUTPUT_HEIGHT(1080)",
     ".TOTAL_WIDTH(2200)",
     ".TOTAL_HEIGHT(1125)",
+    "astra_render_host_reads #(",
+    ".host_base(render_host_aperture_base)",
+    ".h_araddr(host_araddr)",
 ):
     assert required in graphics, required
 
 assert "altsource_probe" not in graphics
 assert ".aresetn(reset_n)" not in graphics
+assert "astra_axi_read_3to1 #(" not in graphics
+assert "tile0_axi_" not in graphics
+assert "tile1_axi_" not in graphics
 
 capture = (ROOT / "fpga/arty/graphics/astra_display_capture.sv").read_text(
     encoding="utf-8"
@@ -263,7 +299,8 @@ assert 'PUBLIC_BOOT="$REPOSITORY/sw/include/astra/boot.h"' in prepare_qemu
 assert 'cp "$PUBLIC_BOOT" "$STAGED_SOURCE/include/astra/boot.h"' in prepare_qemu
 assert "MEMORY=${ASTRA_MEMORY:-512M}" in runner
 assert '${ASTRA_MEMORY:-512M}' in debugger
-assert 'DEFAULT_MEMORY = "512M"' in qemu_runtime
+assert "DEFAULT_MEMORY_BYTES = 512 * 1024 * 1024" in qemu_runtime
+assert 'DEFAULT_MEMORY = "%dM" % (DEFAULT_MEMORY_BYTES // (1024 * 1024))' in qemu_runtime
 assert "MEMORY = DEFAULT_MEMORY" in terminal_gate
 assert 'parser.add_argument("--memory", default=MEMORY' in terminal_gate
 assert '"-m", DEFAULT_MEMORY' in display_gate
@@ -328,6 +365,8 @@ with tempfile.TemporaryDirectory() as temporary_text:
     assert ".astra_scene_araddr" in patched_top
     assert ".astra_render_awaddr" in patched_top
     assert ".astra_capture_awaddr" in patched_top
+    assert ".astra_host_araddr" in patched_top
+    assert ".host_rdata(astra_host_rdata)" in patched_top
     assert ".buttons(~fpga_button_pio)" in patched_top
     assert ".hdmi_tx_d(HDMI_TX_D)" in patched_top
     assert "fpga_led_pio = astra_leds" in patched_top

@@ -279,6 +279,33 @@ module tb_astra_display_capture;
             $fatal(1, "FIFO overflow was not counted");
 
         write_reg(8'h0c, 32'h00000000);
+
+        // Unmapped accesses answer OKAY, read zero, and are recorded.
+        read_reg(8'h3c, value);
+        if (value != 0)
+            $fatal(1, "fault record not clear at start: %08x", value);
+        write_reg(8'h00, 32'hffffffff);
+        read_reg(8'h44, value);
+        if (value != 0)
+            $fatal(1, "unmapped read returned %08x", value);
+        read_reg(8'h3c, value);
+        if (value != 2)
+            $fatal(1, "fault count %0d, expected 2", value);
+        read_reg(8'h40, value);
+        if (value != 32'h80030000)
+            $fatal(1, "first fault %08x", value);
+        write_reg(8'h3c, 32'd0);
+        read_reg(8'h3c, value);
+        if (value != 0)
+            $fatal(1, "fault count not cleared: %08x", value);
+        read_reg(8'h40, value);
+        if (value != 0)
+            $fatal(1, "first fault not cleared: %08x", value);
+        read_reg(8'h45, value);
+        read_reg(8'h40, value);
+        if (value != 32'h00030045)
+            $fatal(1, "misaligned read fault %08x", value);
+        write_reg(8'h3c, 32'd0);
         $display("astra display capture tests passed");
         $finish;
     end

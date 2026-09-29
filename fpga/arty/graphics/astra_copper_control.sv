@@ -59,7 +59,7 @@ module astra_copper_control #(
     input  wire [3:0]  s_axi_wstrb,
     input  wire        s_axi_wvalid,
     output wire        s_axi_wready,
-    output reg  [1:0]  s_axi_bresp,
+    output wire [1:0]  s_axi_bresp,
     output reg         s_axi_bvalid,
     input  wire        s_axi_bready,
     input  wire [31:0] s_axi_araddr,
@@ -67,7 +67,7 @@ module astra_copper_control #(
     input  wire        s_axi_arvalid,
     output wire        s_axi_arready,
     output reg  [31:0] s_axi_rdata,
-    output reg  [1:0]  s_axi_rresp,
+    output wire [1:0]  s_axi_rresp,
     output reg         s_axi_rvalid,
     input  wire        s_axi_rready
 );
@@ -220,6 +220,24 @@ module astra_copper_control #(
 
     reg read_program_pending_q;
     assign s_axi_arready = !read_program_pending_q && !s_axi_rvalid;
+
+    // The bus always answers OKAY; nonzero codes are access faults.
+    reg [1:0] bresp_code_q;
+    reg [1:0] rresp_code_q;
+    reg [15:0] araddr_q;
+    wire [31:0] access_fault_count;
+    wire [31:0] access_fault_first;
+    assign s_axi_bresp = 2'b00;
+    assign s_axi_rresp = 2'b00;
+    astra_access_fault_record access_fault_i (
+        .clk(clk), .reset(reset),
+        .clear(write_fire && awaddr_q == 16'h4038),
+        .write_fault(s_axi_bvalid && s_axi_bready && bresp_code_q != 2'b00),
+        .write_reason(bresp_code_q), .write_offset(awaddr_q),
+        .read_fault(s_axi_rvalid && s_axi_rready && rresp_code_q != 2'b00),
+        .read_reason(rresp_code_q), .read_offset(araddr_q),
+        .count_word(access_fault_count), .first_word(access_fault_first)
+    );
     wire unused_protection = &{1'b0, s_axi_awprot, s_axi_arprot};
 
     always @(posedge clk) begin
@@ -254,14 +272,14 @@ module astra_copper_control #(
             w_pending_q <= 1'b0;
             wdata_q <= 32'd0;
             wstrb_q <= 4'd0;
-            s_axi_bresp <= 2'b00;
+            bresp_code_q <= 2'b00;
             s_axi_bvalid <= 1'b0;
             read_program_pending_q <= 1'b0;
             program_word_address_q <= 13'd0;
             program_write_data_q <= 32'd0;
             program_write_strobe_q <= 4'd0;
             s_axi_rdata <= 32'd0;
-            s_axi_rresp <= 2'b00;
+            rresp_code_q <= 2'b00;
             s_axi_rvalid <= 1'b0;
         end else begin
             waiting_status_q <= waiting;
@@ -308,12 +326,12 @@ module astra_copper_control #(
                 aw_pending_q <= 1'b0;
                 w_pending_q <= 1'b0;
                 s_axi_bvalid <= 1'b1;
-                s_axi_bresp <= 2'b00;
+                bresp_code_q <= 2'b00;
                 if (awaddr_q[1:0] != 2'b00) begin
-                    s_axi_bresp <= 2'b11;
+                    bresp_code_q <= 2'b11;
                 end else if (awaddr_q[15]) begin
                     if (!program_write_ready) begin
-                        s_axi_bresp <= 2'b10;
+                        bresp_code_q <= 2'b10;
                     end else begin
                         program_word_address_q <= awaddr_q[14:2];
                         program_write_data_q <= wdata_q;
@@ -325,7 +343,7 @@ module astra_copper_control #(
                         16'h4008: begin
                             if (wstrb_q != 4'hf ||
                                 (wdata_q & 32'hfffffff8) != 32'd0) begin
-                                s_axi_bresp <= 2'b10;
+                                bresp_code_q <= 2'b10;
                             end else begin
                                 enable_q <= wdata_q[0];
                                 promote_request_q <= wdata_q[1];
@@ -336,7 +354,7 @@ module astra_copper_control #(
                             if (wstrb_q != 4'hf ||
                                 wdata_q[15:12] != 4'd0 ||
                                 wdata_q[31:29] != 3'd0) begin
-                                s_axi_bresp <= 2'b10;
+                                bresp_code_q <= 2'b10;
                             end else begin
                                 validate_first_q <= wdata_q[11:0];
                                 validate_count_q <= wdata_q[28:16];
@@ -345,28 +363,28 @@ module astra_copper_control #(
                         16'h4014: begin
                             if (wstrb_q != 4'hf || wdata_q != 32'd1 ||
                                 validate_busy)
-                                s_axi_bresp <= 2'b10;
+                                bresp_code_q <= 2'b10;
                             else
                                 validate_start_q <= 1'b1;
                         end
                         16'h4028: begin
                             if (wstrb_q != 4'hf ||
                                 (wdata_q & 32'hfffffffe) != 32'd0)
-                                s_axi_bresp <= 2'b10;
+                                bresp_code_q <= 2'b10;
                             else if (wdata_q[0])
                                 irq_pending_q <= 1'b0;
                         end
                         16'h4030: begin
                             if (wstrb_q != 4'hf ||
                                 wdata_q[31:4] != 28'd0 || enable_q)
-                                s_axi_bresp <= 2'b10;
+                                bresp_code_q <= 2'b10;
                             else
                                 dispatch_selector_q <= wdata_q[3:0];
                         end
                         16'h4034: begin
                             if (wstrb_q != 4'hf || enable_q ||
                                 wdata_q[30:11] != 20'd0)
-                                s_axi_bresp <= 2'b10;
+                                bresp_code_q <= 2'b10;
                             else begin
                                 dispatch_write_pending_q <= 1'b1;
                                 dispatch_write_selector_q <=
@@ -375,7 +393,9 @@ module astra_copper_control #(
                                 dispatch_write_valid_q <= wdata_q[31];
                             end
                         end
-                        default: s_axi_bresp <= 2'b11;
+                        16'h4038: ; // clears the access-fault record
+                        16'h403c: bresp_code_q <= 2'b10;
+                        default: bresp_code_q <= 2'b11;
                     endcase
                 end
             end
@@ -383,16 +403,17 @@ module astra_copper_control #(
             if (s_axi_rvalid && s_axi_rready)
                 s_axi_rvalid <= 1'b0;
             if (s_axi_arvalid && s_axi_arready) begin
+                araddr_q <= s_axi_araddr[15:0];
                 if (s_axi_araddr[1:0] != 2'b00) begin
                     s_axi_rdata <= 32'd0;
-                    s_axi_rresp <= 2'b11;
+                    rresp_code_q <= 2'b11;
                     s_axi_rvalid <= 1'b1;
                 end else if (s_axi_araddr[15]) begin
                     program_word_address_q <= s_axi_araddr[14:2];
                     program_read_q <= 1'b1;
                     read_program_pending_q <= 1'b1;
                 end else begin
-                    s_axi_rresp <= 2'b00;
+                    rresp_code_q <= 2'b00;
                     s_axi_rvalid <= 1'b1;
                     case (s_axi_araddr[15:0])
                         16'h4000: s_axi_rdata <= DEVICE_ID;
@@ -421,9 +442,11 @@ module astra_copper_control #(
                         16'h4034: s_axi_rdata <= {
                             dispatch_valid_q[dispatch_selector_q], 20'd0,
                             dispatch_producer_q[dispatch_selector_q]};
+                        16'h4038: s_axi_rdata <= access_fault_count;
+                        16'h403c: s_axi_rdata <= access_fault_first;
                         default: begin
                             s_axi_rdata <= 32'd0;
-                            s_axi_rresp <= 2'b11;
+                            rresp_code_q <= 2'b11;
                         end
                     endcase
                 end
@@ -431,7 +454,7 @@ module astra_copper_control #(
             if (read_program_pending_q && program_read_valid) begin
                 read_program_pending_q <= 1'b0;
                 s_axi_rdata <= program_read_data;
-                s_axi_rresp <= 2'b00;
+                rresp_code_q <= 2'b00;
                 s_axi_rvalid <= 1'b1;
             end
         end

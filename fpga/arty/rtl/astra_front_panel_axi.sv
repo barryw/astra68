@@ -24,7 +24,7 @@ module astra_front_panel_axi #(
     input  wire [3:0]  s_axi_wstrb,
     input  wire        s_axi_wvalid,
     output wire        s_axi_wready,
-    output reg  [1:0]  s_axi_bresp,
+    output wire [1:0]  s_axi_bresp,
     output reg         s_axi_bvalid,
     input  wire        s_axi_bready,
     input  wire [31:0] s_axi_araddr,
@@ -32,7 +32,7 @@ module astra_front_panel_axi #(
     input  wire        s_axi_arvalid,
     output wire        s_axi_arready,
     output reg  [31:0] s_axi_rdata,
-    output reg  [1:0]  s_axi_rresp,
+    output wire [1:0]  s_axi_rresp,
     output reg         s_axi_rvalid,
     input  wire        s_axi_rready
 );
@@ -94,6 +94,25 @@ module astra_front_panel_axi #(
     assign s_axi_wready = !w_pending_q && !s_axi_bvalid;
     assign s_axi_arready = !s_axi_rvalid && !write_fire;
 
+    // The bus always answers OKAY; nonzero codes are access faults.
+    wire fault_clear_write = awaddr_q == 8'h34;
+    reg [1:0] bresp_code_q;
+    reg [1:0] rresp_code_q;
+    reg [7:0] araddr_q;
+    wire [31:0] access_fault_count;
+    wire [31:0] access_fault_first;
+    assign s_axi_bresp = 2'b00;
+    assign s_axi_rresp = 2'b00;
+    astra_access_fault_record access_fault_i (
+        .clk(clk), .reset(reset),
+        .clear(write_fire && fault_clear_write),
+        .write_fault(s_axi_bvalid && s_axi_bready && bresp_code_q != 2'b00),
+        .write_reason(bresp_code_q), .write_offset({8'd0, awaddr_q}),
+        .read_fault(s_axi_rvalid && s_axi_rready && rresp_code_q != 2'b00),
+        .read_reason(rresp_code_q), .read_offset({8'd0, araddr_q}),
+        .count_word(access_fault_count), .first_word(access_fault_first)
+    );
+
     always @(posedge clk) begin
         if (reset) begin
             aw_pending_q <= 1'b0;
@@ -101,10 +120,10 @@ module astra_front_panel_axi #(
             w_pending_q <= 1'b0;
             wdata_q <= 32'd0;
             wstrb_q <= 4'd0;
-            s_axi_bresp <= 2'b00;
+            bresp_code_q <= 2'b00;
             s_axi_bvalid <= 1'b0;
             s_axi_rdata <= 32'd0;
-            s_axi_rresp <= 2'b00;
+            rresp_code_q <= 2'b00;
             s_axi_rvalid <= 1'b0;
         end else begin
             if (s_axi_awvalid && s_axi_awready) begin
@@ -122,19 +141,27 @@ module astra_front_panel_axi #(
                 aw_pending_q <= 1'b0;
                 w_pending_q <= 1'b0;
                 s_axi_bvalid <= 1'b1;
-                s_axi_bresp <= write_valid ? 2'b00 : 2'b11;
+                bresp_code_q <= write_valid || fault_clear_write ?
+                    2'b00 : 2'b11;
             end
 
             if (s_axi_rvalid && s_axi_rready)
                 s_axi_rvalid <= 1'b0;
             if (read_fire) begin
                 s_axi_rvalid <= 1'b1;
-                if (read_address_valid(s_axi_araddr[7:0])) begin
+                araddr_q <= s_axi_araddr[7:0];
+                if (s_axi_araddr[7:0] == 8'h34) begin
+                    s_axi_rdata <= access_fault_count;
+                    rresp_code_q <= 2'b00;
+                end else if (s_axi_araddr[7:0] == 8'h38) begin
+                    s_axi_rdata <= access_fault_first;
+                    rresp_code_q <= 2'b00;
+                end else if (read_address_valid(s_axi_araddr[7:0])) begin
                     s_axi_rdata <= panel_read_data;
-                    s_axi_rresp <= 2'b00;
+                    rresp_code_q <= 2'b00;
                 end else begin
                     s_axi_rdata <= 32'd0;
-                    s_axi_rresp <= 2'b11;
+                    rresp_code_q <= 2'b11;
                 end
             end
         end
