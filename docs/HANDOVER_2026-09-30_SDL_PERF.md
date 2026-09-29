@@ -78,6 +78,51 @@ What was learned about board frame time (SDLFrameBench, see the IPC handover):
 Replying before the hardware finishes (ordered by fences), or fewer copies per
 frame, are the known levers. They may matter more for render-target programs.
 
+## Diagnosis (measured 2026-09-30, board, `ASTRA_DISPLAY_PROFILE=1`)
+
+Both slow demos have one root cause: **scaled BLITs run on the serial
+blitter.**
+
+- **testscale.** One render batch per frame, **80-91 ms of hardware time**
+  (CPU copy ~20 us) for two BLITs, a window-sized scaled background and a
+  scaled sprite. That is ~28 cycles/px.
+- **testrendertarget.** Render batches average **~30 ms** of hardware. Every
+  copy it makes is a full-surface `SDL_RenderCopy(..., NULL, NULL)` between
+  surfaces of different sizes (background into the target, target into the
+  window), which makes them scaled BLITs too.
+- **Why it is slow.** Unscaled BLITs run in the copy burst mover's pixel mode
+  at ~1.04 cycles/px (`GRAPHICS_ARCHITECTURE.md`, "Pixel-stream BLIT").
+  Scaled, reflected, color-keyed, masked, palette and ROP BLITs still use the
+  serial blitter, at 25-170 cycles/px.
+- **The texture engine is no way out:** 47 cycles/px nearest and 74 bilinear
+  (`TEXTURE_ENGINE.md`).
+
+**The fix is in RTL: nearest-neighbour scaled BLITs in pixel mode.** Per
+destination row:
+- read the source row once (source width in beats) into a line buffer;
+- emit destination pixels at one per clock, picking
+  `buffer[x_acc >> 16]` with a 16.16 step;
+- reuse the buffer for every destination row that maps to the same source
+  row.
+
+For upscales that is about (source row + destination row) beats per
+destination row, near 1-1.5 cycles/px against today's 25-170. Downscales
+read whole source rows, so they cost more, but remain far below the serial
+path. Reflection is a negative step, and alpha blending reuses the existing
+pixel-mode blend.
+
+- **Budget.** 875 ALMs free, per the sprites plan; logic may need
+  reclaiming.
+- **Procedure.** `fpga/de25/TIMING_CLOSURE.md` for the procedure and record.
+  Model tests first (`tb_astra_render_*` style), then full route, board
+  certification (`astra-render-certify`), and a new render-certify case
+  comparing scaled BLIT pixels against the model.
+- **Linear filtering.** SDL's linear scale mode currently goes to the texture
+  engine. A bilinear pixel mode is a later step.
+- **Re-measure after the fix.** testscale and testrendertarget with
+  `run_bench.sh`, and SDLFrameBench, which uses no scaling and should not
+  change.
+
 ## The remaining SDL gates
 
 From `sw/userspace/sdl2/README.md`. Upstream test programs live in the SDL2
