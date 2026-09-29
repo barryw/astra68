@@ -18,6 +18,7 @@ TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 TARGET := build/m68k/display.elf
 IMAGE := build/m68k/display
 OBJECT := build/m68k/main.o
+OBJECTS := build/m68k/window_graphics.o
 GRAPHICS_RENDERER_LIB := \
 	$(GRAPHICS)/build/m68k/libastragraphics-renderer.a
 GRAPHICS_FONT_HEADERS := $(GRAPHICS)/build/generated/astra_font8x8.inc \
@@ -35,36 +36,40 @@ ASTRA_PROGRAM_PRIVATE_INPUTS := $(GRAPHICS_RENDERER_LIB)
 ASTRA_PROGRAM_PRIVATE_OWNER_TARGETS := $(GRAPHICS):renderer
 include ../../dynamic-program.mk
 
-$(OBJECT): main.c
+build/m68k/%.o: %.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
 $(GRAPHICS_FONT_HEADERS): $(GRAPHICS_FONT_INPUTS)
 	$(MAKE) -C $(GRAPHICS) $(@:$(GRAPHICS)/%=%)
 
-$(HOST_TEST): main.c tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
+$(HOST_TEST): main.c window_graphics.c window_graphics.h \
+		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
 		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/render_builder.c \
-		$(NDK)/src/bundle.c $(NDK)/src/utf8.c
+		$(NDK)/src/bundle.c $(RUNTIME)/src/string.c $(NDK)/src/utf8.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated \
 		$(COMMON_FLAGS) -O2 -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections $(GRAPHICS)/src/surface.c \
 		$(GRAPHICS)/src/render_builder.c $(NDK)/src/bundle.c \
-		$(NDK)/src/utf8.c tests/test_display.c -o $@
+		$(RUNTIME)/src/string.c \
+		$(NDK)/src/utf8.c window_graphics.c tests/test_display.c -o $@
 
 test: $(HOST_TEST)
 	./$(HOST_TEST)
 
-$(HOST_TEST_SANITIZE): main.c tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
+$(HOST_TEST_SANITIZE): main.c window_graphics.c window_graphics.h \
+		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
 		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/render_builder.c \
-		$(NDK)/src/bundle.c $(NDK)/src/utf8.c
+		$(NDK)/src/bundle.c $(RUNTIME)/src/string.c $(NDK)/src/utf8.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated \
 		$(COMMON_FLAGS) -O1 -fsanitize=address,undefined \
 		-fno-omit-frame-pointer -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections $(GRAPHICS)/src/surface.c \
 		$(GRAPHICS)/src/render_builder.c $(NDK)/src/bundle.c \
-		$(NDK)/src/utf8.c tests/test_display.c -o $@
+		$(RUNTIME)/src/string.c \
+		$(NDK)/src/utf8.c window_graphics.c tests/test_display.c -o $@
 
 sanitize: $(HOST_TEST_SANITIZE)
 	./$(HOST_TEST_SANITIZE)
@@ -73,6 +78,8 @@ analyze:
 	@mkdir -p build/analyzer
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
 		-c main.c -o build/analyzer/main.o
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
+		-c window_graphics.c -o build/analyzer/window_graphics.o
 
 clean:
 	rm -rf build

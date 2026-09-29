@@ -31,6 +31,16 @@ enum LoaderFailure {
     LOADER_FAILURE_PROGRAM_STATUS
 };
 
+
+/* Loader-side refusals, logged with a failed dependency. */
+#define LOADER_REFUSED_MAPPING   0x1001u
+#define LOADER_REFUSED_DYNAMIC   0x1002u
+#define LOADER_REFUSED_SONAME    0x1003u
+#define LOADER_REFUSED_SPAN      0x1004u
+#define LOADER_REFUSED_IDENTITY  0x1005u
+/* Or'd in when the copy came from the resident library cache. */
+#define LOADER_REFUSED_RESIDENT  0x10000u
+
 static int loader_failure(const char *operation, uint32_t status,
                           enum LoaderFailure failure)
 {
@@ -164,26 +174,35 @@ static uint32_t dependency_open(void *opaque, const char *identity,
         }
     }
     (void)astra_vfs_read_source_close(&dependency->source);
-    if (status != ASTRA_SYSCALL_OK || base == 0u || span == 0u ||
+    /* Which step refused, so the log names the cause: a syscall status, or
+       LOADER_REFUSED_* above the syscall range for the checks below. */
+    if (status == ASTRA_SYSCALL_OK && (base == 0u || span == 0u))
+        status = LOADER_REFUSED_MAPPING;
+    if (status == ASTRA_SYSCALL_OK &&
         astra_dynamic_open((uintptr_t)base, span, 0u, base, image) !=
-            ASTRA_DYNAMIC_OK ||
-        astra_dynamic_soname(image, &soname) != ASTRA_DYNAMIC_OK ||
-        span <= ASTRA_LIBRARY_FILE_OFFSET + ASTRA_LIBRARY_SIZE ||
-        !(resident != 0 ?
-            identity_matches(
-                identity,
-                (const AstraLibrary *)(uintptr_t)
-                    (base + ASTRA_LIBRARY_FILE_OFFSET),
-                soname) :
-            reference_matches(
-                &reference,
-                (const AstraLibrary *)(uintptr_t)
-                    (base + ASTRA_LIBRARY_FILE_OFFSET),
-                soname))) {
+            ASTRA_DYNAMIC_OK)
+        status = LOADER_REFUSED_DYNAMIC;
+    if (status == ASTRA_SYSCALL_OK &&
+        astra_dynamic_soname(image, &soname) != ASTRA_DYNAMIC_OK)
+        status = LOADER_REFUSED_SONAME;
+    if (status == ASTRA_SYSCALL_OK &&
+        span <= ASTRA_LIBRARY_FILE_OFFSET + ASTRA_LIBRARY_SIZE)
+        status = LOADER_REFUSED_SPAN;
+    if (status == ASTRA_SYSCALL_OK) {
+        const AstraLibrary *library = (const AstraLibrary *)(uintptr_t)
+            (base + ASTRA_LIBRARY_FILE_OFFSET);
+
+        if (!(resident != 0 ? identity_matches(identity, library, soname) :
+                              reference_matches(&reference, library, soname)))
+            status = LOADER_REFUSED_IDENTITY;
+    }
+    if (status != ASTRA_SYSCALL_OK) {
         uint32_t failure = status == ASTRA_SYSCALL_OUT_OF_MEMORY ? status :
                                                                   ASTRA_SYSCALL_INVALID_ARGUMENT;
 
-        (void)astra_log_failure(identity, failure);
+        (void)astra_log_failure(identity, status | (resident != 0 ?
+                                                    LOADER_REFUSED_RESIDENT :
+                                                    0u));
         if (dependency->load_handle != 0u)
             (void)astra_close(dependency->load_handle);
         astra_runtime_deallocate(dependency);

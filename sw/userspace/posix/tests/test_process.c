@@ -25,6 +25,7 @@ static uint32_t child_status;
 static uint32_t closed_handle;
 static uint32_t after_fork_child_calls;
 static uint32_t file_after_fork_child_calls;
+static uint32_t thread_after_fork_child_calls;
 static uint32_t registered_handle;
 static uint32_t registered_pid;
 static uint32_t resumed_handle;
@@ -147,6 +148,12 @@ astra_posix_file_after_fork_child(void)
 {
     ++file_after_fork_child_calls;
     return 0;
+}
+
+void
+astra_posix_thread_after_fork_child(void)
+{
+    ++thread_after_fork_child_calls;
 }
 
 int
@@ -296,6 +303,7 @@ main(void)
     assert(fork() == 0);
     assert(file_after_fork_child_calls == 1u);
     assert(after_fork_child_calls == 1u);
+    assert(thread_after_fork_child_calls == 1u);
     assert(getrusage(RUSAGE_CHILDREN, &usage) == 0);
     assert(usage.ru_utime.tv_sec == 0 && usage.ru_utime.tv_usec == 0);
     assert(wait(NULL) == (pid_t)-1 && errno == ECHILD);

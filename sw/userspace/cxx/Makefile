@@ -18,7 +18,7 @@ LIBRARY_CONTRACT_STAMP := build/m68k/cxx.library.inputs
 EXTRA_EXPORTS := cxx.extra.exports
 CONTRACT_TOOL := ../../../tools/generate_archive_contract.py
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
-LIBC_LIBRARY := $(POSIX)/build/m68k/libraries/libc.library.1
+LIBC_LIBRARY := $(POSIX)/build/m68k/libraries/libc.library.2
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.1
 UNWIND_LIBRARY := $(COMPILER)/build/m68k/libraries/unwind.library.1
@@ -83,7 +83,7 @@ $(LIBRARY): $(LIBRARY_IDENTITY) $(LIBRARY_MAP) $(LIBRARY_UNDEFINED) \
 		-L$(dir $(COMPILER_LIBRARY)) \
 		-Wl,-rpath-link,$(abspath $(STREAMS)/build/m68k/libraries) \
 		-Wl,-rpath-link,$(abspath $(VFS)/build/m68k/libraries) \
-		-Wl,--no-as-needed -Wl,-l:libc.library.1 \
+		-Wl,--no-as-needed -Wl,-l:libc.library.2 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1 \
 		-Wl,-l:unwind.library.1 -Wl,--start-group \
 		$(LIBSTDCPP) -Wl,--end-group $(ASTRA_SHARED_LINK_END)
@@ -98,7 +98,7 @@ cxx-library-contract: $(LIBRARY)
 	@python3 ../../../tools/library_info.py $< | \
 		grep -q '^cxx.library.1 1.0.0 ABI 1.0$$'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [cxx.library.1]'
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [libc.library.1]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [libc.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [unwind.library.1]')" = 1

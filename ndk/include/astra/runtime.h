@@ -552,6 +552,15 @@ uint32_t astra_library_snapshot(uint32_t observer,
 uint32_t astra_process_priority(uint32_t handle, uint32_t priority,
                                 uint32_t *previous_priority);
 /**
+ * Replace one thread's base scheduler priority without changing its process.
+ * @param handle Thread capability with administration rights.
+ * @param priority New priority within the owning process's ceiling.
+ * @param previous_priority Receives the prior priority when non-NULL.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_thread_priority(uint32_t handle, uint32_t priority,
+                               uint32_t *previous_priority);
+/**
  * Publish monotonically increasing startup or work progress.
  * @param value Component-defined progress value.
  * @return ASTRA_SYSCALL_* status.

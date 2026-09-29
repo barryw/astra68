@@ -26,6 +26,14 @@ scale (320x200 becomes 1600x1000) and falls back to aspect-preserving
 fractional fit when only 1x would fit. Explicit integer, fit, and fill policies
 use the same nearest-neighbor FPGA path. The MC68040 never resamples pixels.
 
+Batch primitives that share a paint. {c:func}`astra_draw_rectangles` appends
+any number of filled rectangles as one command, which the service lowers to
+one hardware rectangle list per 4,096 rectangles for replace and alpha
+blending; {c:func}`astra_draw_lines` does the same for line segments, and
+{c:func}`astra_draw_triangles` for triangles. Each command costs
+the service and the hardware work of its own, so one call per rectangle is the
+slow way to draw points and spans.
+
 Draw lists are mutable until submission and sealed while in flight. Surfaces,
 font strikes, palettes, and other referenced objects remain pinned through the
 completion fence, so application cleanup cannot create a DMA use-after-free.
@@ -33,7 +41,7 @@ completion fence, so application cleanup cannot create a DMA use-after-free.
 ## Surfaces and formats
 
 Creation flags state whether a surface may be scanned out, used as a draw
-source or target, used as a tile map, or mapped by the CPU. These are validation
+source or target, or mapped by the CPU. These are validation
 rights, not hints. The service chooses a hardware-compatible pitch and reports
 it through {c:func}`astra_surface_get_info`.
 
@@ -43,19 +51,11 @@ specified by the AFNT contract; indexed glyph palettes are RGB565 and use a
 caller-selected transparent index.
 
 An {c:struct}`AstraPalette` is a copied, mutable set of up to 256 opaque sRGB
-entries. One presentation snapshot supplies indexed framebuffer, tile, and
-sprite colors. Tile and sprite descriptors select sixteen-color banks within
-that palette; transparency remains an explicit descriptor index rather than
+entries. One presentation snapshot supplies indexed framebuffer and sprite
+colors. Sprite transparency remains an explicit descriptor index rather than
 palette alpha.
 
 ## Sprites and raster programs
-
-An {c:struct}`AstraTileLayers` object owns two independently configurable
-hardware layers. Each layer references a power-of-two TILE16 map and an INDEX4
-tile-pattern surface, selects 8x8 or 16x16 tiles, and carries signed pixel
-scroll, independent X/Y wrapping, transparency, and foreground/background
-placement. Updating a layer copies and validates the descriptor; passing null
-disables it.
 
 An {c:struct}`AstraSpriteSet` contains up to 64 copied sprite descriptions.
 Replacing an entry is atomic from the next presentation that references the

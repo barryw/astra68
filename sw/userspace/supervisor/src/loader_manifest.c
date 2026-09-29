@@ -1,23 +1,12 @@
 #include <loader.h>
 
+#include <astra/application_policy.h>
 #include <astra/bytes.h>
 #include <astra/manifest.h>
+#include <astra/service_manager_abi.h>
 #include <astra/runtime.h>
+#include <astra/string.h>
 
-
-static int copy(char *out, uint32_t capacity, const char *text)
-{
-    uint32_t at = 0u;
-
-    while (text[at] != '\0') {
-        if (at + 1u >= capacity)
-            return 0;
-        out[at] = text[at];
-        ++at;
-    }
-    out[at] = '\0';
-    return 1;
-}
 
 static int authority_name_valid(const char *name)
 {
@@ -38,11 +27,11 @@ int supervisor_manifest_authority(char *token, char *name, uint32_t *rights,
         ++colon;
     if (*colon == '\0') {
         *rights = 0u;
-        return allow_raw && copy(name, ASTRA_CAPABILITY_NAME_MAX, token) &&
+        return allow_raw && astra_string_copy(name, ASTRA_CAPABILITY_NAME_MAX, token) &&
                authority_name_valid(name);
     }
     *colon++ = '\0';
-    if (!copy(name, ASTRA_CAPABILITY_NAME_MAX, token) ||
+    if (!astra_string_copy(name, ASTRA_CAPABILITY_NAME_MAX, token) ||
         !authority_name_valid(name))
         return 0;
     if (strcmp(colon, "r") == 0) {
@@ -67,6 +56,115 @@ int supervisor_manifest_grant(char *text, SupervisorManifestGrant *grant)
     return 1;
 }
 
+int supervisor_launch_admits(const SupervisorManifestEntry *ceiling,
+                             const SupervisorManifestGrant *wanted)
+{
+#define RAW 0u
+#define R ASTRA_RIGHT_READ
+#define RW (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE)
+#define ENTRY(name, rights) {name, rights},
+    static const struct {
+        const char *name;
+        uint32_t rights;
+    } application[] = { ASTRA_APPLICATION_CEILING(ENTRY) };
+#undef ENTRY
+#undef RW
+#undef R
+#undef RAW
+
+    if (wanted == NULL)
+        return 0;
+    if (ceiling != NULL) {
+        for (uint32_t at = 0u; at < ceiling->grant_count; ++at) {
+            const SupervisorManifestGrant *allowed = &ceiling->grants[at];
+
+            if (allowed->is_namespace == wanted->is_namespace &&
+                strcmp(allowed->name, wanted->name) == 0 &&
+                (wanted->rights & ~allowed->rights) == 0u)
+                return 1;
+        }
+        return 0;
+    }
+    for (uint32_t at = 0u; at < sizeof(application) / sizeof(application[0]);
+         ++at)
+        if ((application[at].rights != 0u) == (wanted->is_namespace != 0u) &&
+            strcmp(application[at].name, wanted->name) == 0 &&
+            (wanted->rights & ~application[at].rights) == 0u)
+            return 1;
+    return 0;
+}
+
+uint32_t supervisor_service_start_policy(const char *word)
+{
+    return strcmp(word, "boot") == 0 ? ASTRA_SERVICE_START_BOOT :
+           strcmp(word, "manual") == 0 ? ASTRA_SERVICE_START_MANUAL : 0u;
+}
+
+uint32_t supervisor_service_restart_policy(const char *word)
+{
+    return strcmp(word, "never") == 0 ? ASTRA_SERVICE_RESTART_NEVER :
+           strcmp(word, "on-fault") == 0 ? ASTRA_SERVICE_RESTART_ON_FAULT :
+           strcmp(word, "always") == 0 ? ASTRA_SERVICE_RESTART_ALWAYS :
+                                         UINT32_MAX;
+}
+
+/* The words that end a service line's grant and serves lists. */
+static int policy_word(const char *token)
+{
+    return strcmp(token, "required") == 0 ||
+           strcmp(token, "critical") == 0 ||
+           strncmp(token, "start=", 6u) == 0 ||
+           strncmp(token, "restart=", 8u) == 0;
+}
+
+/*
+ * `required`, `critical`, `start=boot|manual` and
+ * `restart=never|on-fault|always`, in any order, each at most once, and
+ * only on a service. A required or critical service has no start or restart
+ * choice: it always runs, and what happens when it dies is fixed by its tier.
+ */
+static int parse_policy(char **token, uint32_t at, uint32_t count,
+                        SupervisorManifestEntry *entry)
+{
+    int start_given = 0;
+    int restart_given = 0;
+
+    entry->start_policy = ASTRA_SERVICE_START_BOOT;
+    entry->restart_policy = ASTRA_SERVICE_RESTART_ON_FAULT;
+    for (; at < count; ++at) {
+        if (strcmp(token[at], "required") == 0 && entry->required == 0u) {
+            entry->required = 1u;
+        } else if (strcmp(token[at], "critical") == 0 &&
+                   entry->critical == 0u) {
+            entry->critical = 1u;
+        } else if (strncmp(token[at], "start=", 6u) == 0 && !start_given) {
+            entry->start_policy =
+                supervisor_service_start_policy(token[at] + 6u);
+            if (entry->start_policy == 0u)
+                return 0;
+            start_given = 1;
+        } else if (strncmp(token[at], "restart=", 8u) == 0 &&
+                   !restart_given) {
+            entry->restart_policy =
+                supervisor_service_restart_policy(token[at] + 8u);
+            if (entry->restart_policy == UINT32_MAX)
+                return 0;
+            restart_given = 1;
+        } else {
+            return 0;
+        }
+    }
+    if (entry->resident == 0u &&
+        (entry->required != 0u || entry->critical != 0u || start_given ||
+         restart_given))
+        return 0;
+    if ((entry->required != 0u && entry->critical != 0u) ||
+        ((entry->required != 0u || entry->critical != 0u) &&
+         (start_given || restart_given)))
+        return 0;
+    return 1;
+}
+
 static int parse_line(char *line, SupervisorManifestEntry *entry)
 {
     char *token[3u + SUPERVISOR_MANIFEST_GRANT_MAX +
@@ -82,10 +180,12 @@ static int parse_line(char *line, SupervisorManifestEntry *entry)
     (void)memset(entry, 0, sizeof(*entry));
     if (strcmp(token[at], "service") == 0)
         entry->resident = 1u;
+    else if (strcmp(token[at], "trusted") == 0)
+        entry->trusted = 1u;
     else if (strcmp(token[at], "application") != 0)
         return 0;
     ++at;
-    if (!copy(entry->path, sizeof(entry->path), token[at++]) ||
+    if (!astra_string_copy(entry->path, sizeof(entry->path), token[at++]) ||
         strcmp(entry->path, "") == 0 || strcmp(token[at++], "grants") != 0)
         return 0;
     {
@@ -103,8 +203,7 @@ static int parse_line(char *line, SupervisorManifestEntry *entry)
     }
 
     while (at < count && strcmp(token[at], "serves") != 0 &&
-           strcmp(token[at], "delegates") != 0 &&
-           strcmp(token[at], "required") != 0) {
+           strcmp(token[at], "delegates") != 0 && !policy_word(token[at])) {
         SupervisorManifestGrant *grant;
 
         if (entry->grant_count == SUPERVISOR_MANIFEST_GRANT_MAX)
@@ -115,10 +214,23 @@ static int parse_line(char *line, SupervisorManifestEntry *entry)
         ++entry->grant_count;
         ++at;
     }
+    if (entry->trusted != 0u) {
+        uint32_t length = (uint32_t)strlen(entry->path);
+
+        /* A ceiling, not a process: it serves, delegates and requires
+           nothing, and names exactly one application bundle. */
+        if (at != count || strncmp(entry->path, "/apps/", 6u) != 0 ||
+            length < 11u || strcmp(entry->path + length - 4u, ".app") != 0)
+            return 0;
+        for (uint32_t at_path = 6u; at_path < length; ++at_path)
+            if (entry->path[at_path] == '/')
+                return 0;
+        return 1;
+    }
     if (at < count && strcmp(token[at], "serves") == 0) {
         ++at;
         while (at < count && strcmp(token[at], "delegates") != 0 &&
-               strcmp(token[at], "required") != 0) {
+               !policy_word(token[at])) {
             SupervisorManifestPublication *publication;
 
             if (entry->serves_count ==
@@ -138,13 +250,7 @@ static int parse_line(char *line, SupervisorManifestEntry *entry)
         entry->delegates = 1u;
         ++at;
     }
-    if (at < count && strcmp(token[at], "required") == 0) {
-        if (entry->resident == 0u)
-            return 0;
-        entry->required = 1u;
-        ++at;
-    }
-    return at == count;
+    return parse_policy(token, at, count, entry);
 }
 
 void supervisor_manifest_destroy(SupervisorManifest *manifest)

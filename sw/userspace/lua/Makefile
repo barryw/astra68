@@ -25,7 +25,7 @@ LIBRARY_IDENTITY := build/m68k/dynamic/lua_library.o
 LIBRARY_MAP := build/m68k/lua.library.exports
 EXPORT_TOOL := ../../../tools/generate_header_exports.py
 PUBLIC_HEADERS := $(LUA)/lua.h $(LUA)/lauxlib.h $(LUA)/lualib.h
-LIBC_LIBRARY := $(POSIX)/build/m68k/libraries/libc.library.1
+LIBC_LIBRARY := $(POSIX)/build/m68k/libraries/libc.library.2
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.1
 STREAMS_LIBRARY := $(STREAMS)/build/m68k/libraries/streams.library.1
@@ -73,7 +73,7 @@ $(LIBRARY): $(LIBRARY_IDENTITY) $(LIBRARY_OBJECTS) $(LIBRARY_MAP) \
 		-Wl,-rpath-link,$(abspath $(VFS)/build/m68k/libraries) \
 		-Wl,-rpath-link,$(abspath $(RUNTIME)/build/m68k/libraries) \
 		-L$(dir $(RUNTIME_LIBRARY)) -Wl,--no-as-needed \
-		-Wl,-l:libc.library.1 -Wl,-l:runtime.library.1 \
+		-Wl,-l:libc.library.2 -Wl,-l:runtime.library.1 \
 		-Wl,-l:compiler.library.1 $(ASTRA_SHARED_LINK_END)
 
 lua-library-contract: $(LIBRARY)
@@ -87,7 +87,7 @@ lua-library-contract: $(LIBRARY)
 	@python3 ../../../tools/library_info.py $< | \
 		grep -q '^lua.library.5 5.5.1 ABI 5.5$$'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [lua.library.5]'
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [libc.library.1]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [libc.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 3

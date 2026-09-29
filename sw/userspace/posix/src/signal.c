@@ -25,9 +25,10 @@ _Static_assert(SIGINT == ASTRA_SIGNAL_INTERRUPT &&
                "C library and Astra signal ABIs differ");
 
 static struct sigaction actions[ASTRA_POSIX_SIGNAL_COUNT];
-static sigset_t blocked;
-static volatile sig_atomic_t caught_generation;
-static _Alignas(16) unsigned char signal_stack[ASTRA_POSIX_SIGNAL_STACK_BYTES];
+static _Thread_local sigset_t blocked;
+static _Thread_local volatile sig_atomic_t caught_generation;
+static _Thread_local _Alignas(16)
+    unsigned char signal_stack[ASTRA_POSIX_SIGNAL_STACK_BYTES];
 
 static void astra_posix_signal_trampoline(int signal_number);
 

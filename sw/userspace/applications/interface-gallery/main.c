@@ -12,6 +12,7 @@
 #include <astra/theme.h>
 #include <astra/vfs_process.h>
 #include <astra/window.h>
+#include <astra/string.h>
 
 #define GALLERY_WIDTH 1120u
 #define GALLERY_HEIGHT 800u
@@ -147,94 +148,77 @@ static uint16_t rgb565(AstraColorRGBA8 value)
     return astra_surface_rgb565(value.red, value.green, value.blue);
 }
 
-static uint32_t append(char *out, uint32_t at, const char *text)
-{
-    while (*text != '\0') out[at++] = *text++;
-    return at;
-}
-
-static uint32_t append_hex32(char *out, uint32_t at, uint32_t value)
-{
-    static const char digits[] = "0123456789abcdef";
-
-    for (int shift = 28; shift >= 0; shift -= 4)
-        out[at++] = digits[(value >> shift) & 0xfu];
-    return at;
-}
-
-static uint32_t append_hex64(char *out, uint32_t at, uint64_t value)
-{
-    at = append_hex32(out, at, (uint32_t)(value >> 32));
-    return append_hex32(out, at, (uint32_t)value);
-}
-
 static void report_layout(uint32_t count, uint32_t iterations,
                           uint64_t elapsed)
 {
-    char line[112];
-    uint32_t at = 0u;
+    char line_text[112];
+    AstraString line;
 
-    at = append(line, at, "INTERFACE LAYOUT controls=");
-    at = append_hex32(line, at, count);
-    at = append(line, at, " iterations=");
-    at = append_hex32(line, at, iterations);
-    at = append(line, at, " elapsed-ns=");
-    at = append_hex64(line, at, elapsed);
-    line[at] = '\0';
-    (void)astra_log(line);
+    astra_string_init(&line, line_text, sizeof(line_text));
+
+    (void)astra_string_append(&line, "INTERFACE LAYOUT controls=");
+    (void)astra_string_append_hex(&line, count, 8u);
+    (void)astra_string_append(&line, " iterations=");
+    (void)astra_string_append_hex(&line, iterations, 8u);
+    (void)astra_string_append(&line, " elapsed-ns=");
+    (void)astra_string_append_hex(&line, elapsed, 16u);
+    (void)astra_log(line_text);
 }
 
 static void report_undo(uint64_t record_elapsed, uint64_t undo_elapsed,
                         uint64_t redo_elapsed, uint32_t history_bytes)
 {
-    char line[176];
-    uint32_t at = 0u;
+    char line_text[176];
+    AstraString line;
 
-    at = append(line, at, "INTERFACE UNDO n=");
-    at = append_hex32(line, at, GALLERY_UNDO_BENCHMARK_OPERATIONS);
-    at = append(line, at, " rec=");
-    at = append_hex64(line, at, record_elapsed);
-    at = append(line, at, " undo=");
-    at = append_hex64(line, at, undo_elapsed);
-    at = append(line, at, " redo=");
-    at = append_hex64(line, at, redo_elapsed);
-    at = append(line, at, " bytes=");
-    at = append_hex32(line, at, history_bytes);
-    line[at] = '\0';
-    (void)astra_log(line);
+    astra_string_init(&line, line_text, sizeof(line_text));
+
+    (void)astra_string_append(&line, "INTERFACE UNDO n=");
+    (void)astra_string_append_hex(&line, GALLERY_UNDO_BENCHMARK_OPERATIONS, 8u);
+    (void)astra_string_append(&line, " rec=");
+    (void)astra_string_append_hex(&line, record_elapsed, 16u);
+    (void)astra_string_append(&line, " undo=");
+    (void)astra_string_append_hex(&line, undo_elapsed, 16u);
+    (void)astra_string_append(&line, " redo=");
+    (void)astra_string_append_hex(&line, redo_elapsed, 16u);
+    (void)astra_string_append(&line, " bytes=");
+    (void)astra_string_append_hex(&line, history_bytes, 8u);
+    (void)astra_log(line_text);
 }
 
 static void report_text(uint64_t append_elapsed, uint64_t fragmented_elapsed,
                         uint32_t pieces)
 {
-    char line[144];
-    uint32_t at = 0u;
+    char line_text[144];
+    AstraString line;
 
-    at = append(line, at, "INTERFACE TEXT n=");
-    at = append_hex32(line, at, GALLERY_TEXT_BENCHMARK_OPERATIONS);
-    at = append(line, at, " append-ns=");
-    at = append_hex64(line, at, append_elapsed);
-    at = append(line, at, " fragmented-ns=");
-    at = append_hex64(line, at, fragmented_elapsed);
-    at = append(line, at, " pieces=");
-    at = append_hex32(line, at, pieces);
-    line[at] = '\0';
-    (void)astra_log(line);
+    astra_string_init(&line, line_text, sizeof(line_text));
+
+    (void)astra_string_append(&line, "INTERFACE TEXT n=");
+    (void)astra_string_append_hex(&line, GALLERY_TEXT_BENCHMARK_OPERATIONS, 8u);
+    (void)astra_string_append(&line, " append-ns=");
+    (void)astra_string_append_hex(&line, append_elapsed, 16u);
+    (void)astra_string_append(&line, " fragmented-ns=");
+    (void)astra_string_append_hex(&line, fragmented_elapsed, 16u);
+    (void)astra_string_append(&line, " pieces=");
+    (void)astra_string_append_hex(&line, pieces, 8u);
+    (void)astra_log(line_text);
 }
 
 static void report_control(const char *name, uint32_t count, uint64_t elapsed)
 {
-    char line[112];
-    uint32_t at = 0u;
+    char line_text[112];
+    AstraString line;
 
-    at = append(line, at, "INTERFACE ");
-    at = append(line, at, name);
-    at = append(line, at, " n=");
-    at = append_hex32(line, at, count);
-    at = append(line, at, " elapsed-ns=");
-    at = append_hex64(line, at, elapsed);
-    line[at] = '\0';
-    (void)astra_log(line);
+    astra_string_init(&line, line_text, sizeof(line_text));
+
+    (void)astra_string_append(&line, "INTERFACE ");
+    (void)astra_string_append(&line, name);
+    (void)astra_string_append(&line, " n=");
+    (void)astra_string_append_hex(&line, count, 8u);
+    (void)astra_string_append(&line, " elapsed-ns=");
+    (void)astra_string_append_hex(&line, elapsed, 16u);
+    (void)astra_log(line_text);
 }
 
 static uint32_t add_label(uint32_t index, uint32_t id, const char *text,
@@ -470,34 +454,24 @@ static uint32_t init_field_model(AstraTextModel *model, const char *text,
         ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
+/* 0 through 100, then '%'. */
 static uint32_t format_percent(char out[5], int64_t value)
 {
-    uint32_t at = 0u;
+    AstraString text;
 
-    if (value >= 100) out[at++] = '1';
-    if (value >= 10) out[at++] = (char)('0' + value / 10 % 10);
-    out[at++] = (char)('0' + value % 10);
-    out[at++] = '%';
-    out[at] = '\0';
-    return at;
+    astra_string_init(&text, out, 5u);
+    (void)astra_string_append_i64(&text, value);
+    (void)astra_string_append_char(&text, '%');
+    return text.length;
 }
 
 static uint32_t format_integer(char out[22], int64_t value)
 {
-    char reverse[20];
-    uint64_t magnitude = value < 0 ? 0u - (uint64_t)value :
-                                     (uint64_t)value;
-    uint32_t at = 0u;
-    uint32_t digits = 0u;
+    AstraString text;
 
-    if (value < 0) out[at++] = '-';
-    do {
-        reverse[digits++] = (char)('0' + magnitude % 10u);
-        magnitude /= 10u;
-    } while (magnitude != 0u);
-    while (digits != 0u) out[at++] = reverse[--digits];
-    out[at] = '\0';
-    return at;
+    astra_string_init(&text, out, 22u);
+    (void)astra_string_append_i64(&text, value);
+    return text.length;
 }
 
 static AstraControl *field_control(uint32_t id)

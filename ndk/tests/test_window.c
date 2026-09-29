@@ -20,6 +20,10 @@ static uint32_t next_open_status;
 static uint32_t expected_icon_area;
 static uint32_t expected_icon_length;
 static uint8_t expected_type = ASTRA_WINDOW_STANDARD;
+/* Rights of the content-area duplicate; a content-surface window's area is
+   its staging area, which the service writes readback into. */
+static uint32_t expected_content_rights =
+    ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER;
 static uint16_t next_event_type = ASTRA_WINDOW_EVENT_POINTER_MOTION;
 static uint32_t next_text_codepoint;
 static uint32_t next_state = ASTRA_WINDOW_STATE_NORMAL;
@@ -50,8 +54,9 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
     *out_d2 = 0u;
     if (number == ASTRA_SYSCALL_HANDLE_DUPLICATE) {
         assert((d1 == 2u || d1 == expected_icon_area || d1 == 0x505u) &&
-               d2 == (ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP |
-                      ASTRA_RIGHT_TRANSFER));
+               d2 == (d1 == 2u ? expected_content_rights :
+                      (ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP |
+                       ASTRA_RIGHT_TRANSFER)));
         *out_d1 = d1 == 2u ? 0x101u :
                   (d1 == 0x505u ? 0x103u : 0x102u);
     } else if (number == ASTRA_SYSCALL_AREA_CREATE) {
@@ -365,6 +370,12 @@ int main(void)
     before = call_count;
     assert(astra_window_present(&window) == ASTRA_OK);
     expect_action(before, ASTRA_GUI_WINDOW_PRESENT);
+    assert(last_command.flags == 0u && last_command.width == 0u);
+    before = call_count;
+    assert(astra_window_present_discard(&window) == ASTRA_OK);
+    expect_action(before, ASTRA_GUI_WINDOW_PRESENT);
+    assert(last_command.flags == ASTRA_GUI_PRESENT_DISCARD &&
+           last_command.width == 0u && last_command.height == 0u);
     before = call_count;
     assert(astra_window_present_region(&window, &frame) == ASTRA_OK);
     expect_action(before, ASTRA_GUI_WINDOW_PRESENT);
@@ -470,6 +481,18 @@ int main(void)
     expected_type = ASTRA_WINDOW_DESKTOP;
     assert(astra_window_create(1, 2, &create, &window) == ASTRA_OK);
     assert(astra_window_close(&window) == ASTRA_OK);
+    window = (AstraWindow)ASTRA_WINDOW_INIT;
+    create.content_format = ASTRA_WINDOW_CONTENT_SURFACE;
+    expected_content_rights |= ASTRA_RIGHT_WRITE;
+    assert(astra_window_create(1, 2, &create, &window) == ASTRA_OK);
+    expected_content_rights &= ~(uint32_t)ASTRA_RIGHT_WRITE;
+    assert(astra_window_close(&window) == ASTRA_OK);
+    window = (AstraWindow)ASTRA_WINDOW_INIT;
+    create.pitch = 640u;
+    before = call_count;
+    assert(astra_window_create(1, 2, &create, &window) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(call_count == before);
     create.type = ASTRA_WINDOW_STANDARD;
     create.content_format = ASTRA_WINDOW_CONTENT_RGB565;
     create.pitch = 640u;

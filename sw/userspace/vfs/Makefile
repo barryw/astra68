@@ -90,6 +90,7 @@ FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/backends/host.o \
 	build/m68k/library/vfs_process.o \
 	build/m68k/library/process_filesystem.o \
+	build/m68k/library/application_catalog.o \
 	build/m68k/library/vfs_reader.o \
 	build/m68k/library/vfs_provider_index.o \
 	build/m68k/library/vfs_status.o
@@ -232,10 +233,11 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 		$(NDK)/include/astra/vfs_union.h \
 		$(NDK)/include/astra/filesystem_library.h \
 		$(NDK)/include/astra/vfs_process.h \
+		$(NDK)/include/astra/application_catalog.h \
 		include/astra/vfs_reader.h include/astra/vfs_port_transport.h \
 		../../include/astra/vfs_service.h
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
-		grep -q '^filesystem.library.4 4.0.0 ABI 4.0$$'
+		grep -q '^filesystem.library.4 4.1.0 ABI 4.1$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
 	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.4]' >/dev/null
 	@test "$$($(READELF) -dW $< | \
@@ -247,6 +249,8 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 	@test "$$($(READELF) -dW $< | awk '/TEXTREL/{n++} END{print n+0}')" = 0
 	@$(READELF) -lW $< | grep ' GNU_RELRO ' >/dev/null
 	@$(READELF) -VW $< | grep 'ASTRA_FILESYSTEM_3.0' >/dev/null
+	@$(READELF) --dyn-syms -W $< | \
+		grep -Eq ' astra_application_catalog_load@@ASTRA_FILESYSTEM_4\.1$$'
 	@ASTRA_LIBRARY_FIXTURE=$(abspath $<) $(KERNEL_ELF_TEST) >/dev/null
 	@echo "astra filesystem shared library: PASS"
 
@@ -312,6 +316,7 @@ PATH_TEST := build/host/test_vfs_path
 PROCESS_TEST := build/host/test_vfs_process
 READER_TEST := build/host/test_vfs_reader
 FILESYSTEM_LIBRARY_TEST := build/host/test_filesystem_library
+CATALOG_TEST := build/host/test_application_catalog
 HOST_BACKEND_TEST := build/host/test_vfs_host_backend
 RAM_BACKEND_TEST := build/host/test_vfs_ram_backend
 HOST_TRANSPORT_TEST := build/host/test_vfs_host_transport
@@ -338,6 +343,16 @@ $(READER_TEST): src/vfs_reader.c src/vfs_provider_index.c \
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/vfs_reader.c src/vfs_provider_index.c \
 		tests/test_vfs_reader.c -o $@
+
+CATALOG_SOURCES := src/application_catalog.c $(NDK)/src/bundle.c \
+	$(RUNTIME)/src/string.c \
+	$(NDK)/src/manifest.c $(NDK)/src/utf8.c tests/test_application_catalog.c
+
+$(CATALOG_TEST): $(CATALOG_SOURCES) $(HEADERS) \
+		$(NDK)/include/astra/application_catalog.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(CATALOG_SOURCES) -o $@
 
 $(FILESYSTEM_LIBRARY_TEST): src/filesystem_library.c src/vfs_union.c \
 		src/vfs_assign.c src/vfs_path.c $(UTF8_OBJECT) \
@@ -370,6 +385,7 @@ $(HOST_TRANSPORT_TEST): src/vfs_host_transport.c \
 test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 		$(PORT_THREAD_TEST) \
 		$(PROCESS_TEST) $(READER_TEST) $(FILESYSTEM_LIBRARY_TEST) \
+		$(CATALOG_TEST) \
 		$(HOST_BACKEND_TEST) $(RAM_BACKEND_TEST) $(HOST_TRANSPORT_TEST)
 	./$(HOST_TEST)
 	./$(ASSIGN_TEST)
@@ -380,6 +396,7 @@ test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 	./$(PROCESS_TEST)
 	./$(READER_TEST)
 	./$(FILESYSTEM_LIBRARY_TEST)
+	./$(CATALOG_TEST)
 	./$(HOST_BACKEND_TEST)
 	./$(RAM_BACKEND_TEST)
 	./$(HOST_TRANSPORT_TEST)
@@ -427,6 +444,10 @@ sanitize:
 		tests/test_filesystem_library.c \
 		-o build/host/test_filesystem_library_sanitize
 	./build/host/test_filesystem_library_sanitize
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) $(CATALOG_SOURCES) \
+		-o build/host/test_application_catalog_sanitize
+	./build/host/test_application_catalog_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) src/backends/host.c \
 		tests/test_vfs_host_backend.c \

@@ -119,6 +119,20 @@ static AstraDrawListCommand *draw_commands(AstraSurfaceView *surface)
 static int clip_valid(const AstraSurfaceView *surface);
 static int clip_empty(const AstraSurfaceView *surface);
 
+/* ADLT colors are ARGB8888; 5:6:5 expands by bit replication and returns
+   to the identical RGB565 value when the service converts it back. */
+static uint32_t draw_color(uint16_t color)
+{
+    uint32_t red = (color >> 11u) & 31u;
+    uint32_t green = (color >> 5u) & 63u;
+    uint32_t blue = color & 31u;
+
+    return UINT32_C(0xff000000) |
+           (((red << 3u) | (red >> 2u)) << 16u) |
+           (((green << 2u) | (green >> 4u)) << 8u) |
+           ((blue << 3u) | (blue >> 2u));
+}
+
 static AstraDrawListCommand *append_command(AstraSurfaceView *surface,
                                             uint32_t operation)
 {
@@ -129,7 +143,7 @@ static AstraDrawListCommand *append_command(AstraSurfaceView *surface,
         surface->kind != ASTRA_SURFACE_VIEW_DRAW_LIST)
         return NULL;
     header = draw_header(surface);
-    if (header->command_count >= ASTRA_DRAW_LIST_COMMAND_MAX)
+    if (header->command_count >= header->command_capacity)
         return NULL;
     command = &draw_commands(surface)[header->command_count++];
     *command = (AstraDrawListCommand){0};
@@ -214,10 +228,11 @@ int astra_draw_list_view_init(AstraSurfaceView *surface, void *storage,
     header = draw_header(surface);
     *header = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_2,
+        .version = ASTRA_DRAW_LIST_VERSION_1_5,
         .total_bytes = ASTRA_DRAW_LIST_AREA_BYTES,
         .width = width,
         .height = height,
+        .command_capacity = ASTRA_DRAW_LIST_COMMAND_MAX,
     };
     return 1;
 }
@@ -231,9 +246,10 @@ int astra_draw_list_view_adopt(AstraSurfaceView *surface, void *storage,
     if (surface == NULL || storage == NULL ||
         byte_size < ASTRA_DRAW_LIST_AREA_BYTES ||
         header->magic != ASTRA_DRAW_LIST_MAGIC ||
-        header->version != ASTRA_DRAW_LIST_VERSION_1_2 ||
+        header->version != ASTRA_DRAW_LIST_VERSION_1_5 ||
         header->total_bytes != ASTRA_DRAW_LIST_AREA_BYTES ||
         header->width != width || header->height != height ||
+        header->command_capacity != ASTRA_DRAW_LIST_COMMAND_MAX ||
         header->command_count > ASTRA_DRAW_LIST_COMMAND_MAX ||
         header->payload_bytes > ASTRA_DRAW_LIST_PAYLOAD_BYTES)
         return 0;
@@ -300,7 +316,7 @@ void astra_surface_fill(AstraSurfaceView *surface, int32_t x, int32_t y,
             command->y = y;
             command->width = width;
             command->height = height;
-            command->foreground = color;
+            command->color = draw_color(color);
         }
         return;
     }
@@ -409,7 +425,7 @@ int astra_surface_line(AstraSurfaceView *surface, int32_t x0, int32_t y0,
         command->y = y0;
         command->width = (uint32_t)x1;
         command->height = (uint32_t)y1;
-        command->foreground = color;
+        command->color = draw_color(color);
         return 1;
     }
     if (surface->kind != ASTRA_SURFACE_VIEW_RGB565 ||
@@ -462,19 +478,24 @@ int astra_draw_list_copy(AstraSurfaceView *surface, uint32_t source_x,
         destination_x > surface->width ||
         width > surface->width - destination_x ||
         destination_y > surface->height ||
-        height > surface->height - destination_y)
+        height > surface->height - destination_y ||
+        surface->width > INT16_MAX || surface->height > INT16_MAX)
         return 0;
     if (clip_empty(surface))
         return 1;
-    command = append_command(surface, ASTRA_DRAW_LIST_COPY);
+    command = append_command(surface, ASTRA_DRAW_LIST_BLIT);
     if (command == NULL)
         return 0;
     command->x = (int32_t)destination_x;
     command->y = (int32_t)destination_y;
     command->width = width;
     command->height = height;
-    command->foreground = source_x;
-    command->background = source_y;
+    command->color = ASTRA_DRAW_LIST_COLOR_IDENTITY;
+    command->source = ASTRA_DRAW_LIST_SOURCE_DESTINATION;
+    command->source_x = (int16_t)source_x;
+    command->source_y = (int16_t)source_y;
+    command->source_width = (uint16_t)width;
+    command->source_height = (uint16_t)height;
     return 1;
 }
 
@@ -528,7 +549,7 @@ void astra_surface_fill_round(AstraSurfaceView *surface, int32_t x, int32_t y,
             command->width = width;
             command->height = height;
             command->radius = bounded_radius;
-            command->foreground = color;
+            command->color = draw_color(color);
         }
         return;
     }
@@ -837,7 +858,7 @@ static int draw_list_text(AstraSurfaceView *surface, int32_t x, int32_t y,
     command->flags = style_flags;
     command->x = x;
     command->y = y;
-    command->foreground = color;
+    command->color = draw_color(color);
     command->font_height = pixel_height;
     command->width = cell_width;
     command->payload_offset = ASTRA_DRAW_LIST_PAYLOAD_OFFSET +

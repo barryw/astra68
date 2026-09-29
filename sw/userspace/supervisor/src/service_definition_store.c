@@ -262,6 +262,18 @@ static void authority(Writer *writer, const char *key, const char *name,
     text(writer, "\n");
 }
 
+static const char *start_word(uint32_t policy)
+{
+    return policy == ASTRA_SERVICE_START_BOOT ? "boot" :
+           policy == ASTRA_SERVICE_START_ON_DEMAND ? "on-demand" : "manual";
+}
+
+static const char *restart_word(uint32_t policy)
+{
+    return policy == ASTRA_SERVICE_RESTART_ALWAYS ? "always" :
+           policy == ASTRA_SERVICE_RESTART_ON_FAULT ? "on-fault" : "never";
+}
+
 uint32_t supervisor_service_definition_serialize(
     const AstraServiceDefinition *definition, char *out, uint32_t capacity,
     uint32_t *required)
@@ -285,15 +297,10 @@ uint32_t supervisor_service_definition_serialize(
     text(&writer, (definition->flags & ASTRA_SERVICE_DELEGATES) != 0u ?
                   "true\n" : "false\n");
     text(&writer, "start ");
-    text(&writer, definition->start_policy == ASTRA_SERVICE_START_BOOT ?
-                  "boot\n" : definition->start_policy ==
-                  ASTRA_SERVICE_START_ON_DEMAND ? "on-demand\n" :
-                  "manual\n");
-    text(&writer, "restart ");
-    text(&writer, definition->restart_policy == ASTRA_SERVICE_RESTART_ALWAYS ?
-                  "always\n" : definition->restart_policy ==
-                  ASTRA_SERVICE_RESTART_ON_FAULT ? "on-fault\n" :
-                  "never\n");
+    text(&writer, start_word(definition->start_policy));
+    text(&writer, "\nrestart ");
+    text(&writer, restart_word(definition->restart_policy));
+    text(&writer, "\n");
     for (uint32_t index = 0u; index < definition->argument_count; ++index) {
         quoted(&writer, "argument", definition->arguments + argument);
         argument += (uint32_t)strlen(definition->arguments + argument) + 1u;
@@ -306,6 +313,74 @@ uint32_t supervisor_service_definition_serialize(
                   definition->publications[index].rights);
     for (uint32_t index = 0u; index < definition->dependency_count; ++index)
         quoted(&writer, "needs", definition->dependencies[index]);
+    *required = writer.used + 1u;
+    if (out == NULL || capacity < *required)
+        return ASTRA_STATUS_BUFFER_TOO_SMALL;
+    out[writer.used] = '\0';
+    return ASTRA_STATUS_OK;
+}
+
+/*
+ * A user's choice for a manifest service, over the manifest's default. Only
+ * the two things a user may choose are here; either key may be absent, and
+ * an absent key leaves the default. A protected service ignores the file
+ * entirely: the caller never applies one to it.
+ */
+uint32_t supervisor_service_policy_apply(const char *text, uint32_t length,
+                                         AstraServiceDefinition *definition)
+{
+    AstraConfigDocumentError error = {0};
+    char word[16];
+    uint32_t count = 0u;
+    uint32_t start = definition->start_policy;
+    uint32_t restart = definition->restart_policy;
+
+    if ((definition->flags & ASTRA_SERVICE_PROTECTED) != 0u ||
+        astra_config_document_validate(
+            text, length, SUPERVISOR_SERVICE_DEFINITION_SCHEMA, &error) !=
+            ASTRA_CONFIG_OK)
+        return ASTRA_STATUS_INVALID;
+    if (astra_config_document_count(text, length, "start", &count) !=
+            ASTRA_CONFIG_OK || count > 1u)
+        return ASTRA_STATUS_INVALID;
+    if (count == 1u) {
+        if (one_string(text, length, "start", word, sizeof(word)) !=
+                ASTRA_STATUS_OK ||
+            (start = supervisor_service_start_policy(word)) == 0u)
+            return ASTRA_STATUS_INVALID;
+    }
+    if (astra_config_document_count(text, length, "restart", &count) !=
+            ASTRA_CONFIG_OK || count > 1u)
+        return ASTRA_STATUS_INVALID;
+    if (count == 1u) {
+        if (one_string(text, length, "restart", word, sizeof(word)) !=
+                ASTRA_STATUS_OK ||
+            (restart = supervisor_service_restart_policy(word)) ==
+                UINT32_MAX)
+            return ASTRA_STATUS_INVALID;
+    }
+    definition->start_policy = start;
+    definition->restart_policy = restart;
+    return ASTRA_STATUS_OK;
+}
+
+uint32_t supervisor_service_policy_serialize(
+    const AstraServiceDefinition *definition, char *out, uint32_t capacity,
+    uint32_t *required)
+{
+    Writer writer = {out, capacity, 0u};
+
+    if (definition == NULL || required == NULL ||
+        (definition->flags & ASTRA_SERVICE_PROTECTED) != 0u ||
+        (definition->start_policy != ASTRA_SERVICE_START_BOOT &&
+         definition->start_policy != ASTRA_SERVICE_START_MANUAL) ||
+        definition->restart_policy > ASTRA_SERVICE_RESTART_ALWAYS)
+        return ASTRA_STATUS_INVALID;
+    text(&writer, "astra-config 1\nschema 1\nstart ");
+    text(&writer, start_word(definition->start_policy));
+    text(&writer, "\nrestart ");
+    text(&writer, restart_word(definition->restart_policy));
+    text(&writer, "\n");
     *required = writer.used + 1u;
     if (out == NULL || capacity < *required)
         return ASTRA_STATUS_BUFFER_TOO_SMALL;
@@ -332,12 +407,26 @@ uint32_t supervisor_service_definition_from_manifest(
         return ASTRA_STATUS_INVALID;
     (void)memset(definition, 0, sizeof(*definition));
     definition->structure_size = sizeof(*definition);
+    /*
+     * Three tiers. A critical service is never restarted: its death halts
+     * the machine. A required one is always restarted. Neither can be
+     * touched by users, which is what PROTECTED means. Everything else
+     * carries the manifest's start and restart defaults, which the user may
+     * override (supervisor_service_policy_apply).
+     */
     definition->flags = ASTRA_SERVICE_RUNS_ASTRA | ASTRA_SERVICE_ENABLED |
-        (entry->required != 0u ? ASTRA_SERVICE_PROTECTED : 0u) |
+        (entry->required != 0u || entry->critical != 0u ?
+             ASTRA_SERVICE_PROTECTED : 0u) |
+        (entry->critical != 0u ? ASTRA_SERVICE_CRITICAL : 0u) |
         (entry->delegates != 0u ? ASTRA_SERVICE_DELEGATES : 0u);
-    definition->start_policy = ASTRA_SERVICE_START_BOOT;
-    definition->restart_policy = entry->required != 0u ?
-        ASTRA_SERVICE_RESTART_ALWAYS : ASTRA_SERVICE_RESTART_ON_FAULT;
+    definition->start_policy =
+        entry->required != 0u || entry->critical != 0u ||
+                entry->start_policy == 0u ?
+            ASTRA_SERVICE_START_BOOT : entry->start_policy;
+    definition->restart_policy =
+        entry->critical != 0u ? ASTRA_SERVICE_RESTART_NEVER :
+        entry->required != 0u ? ASTRA_SERVICE_RESTART_ALWAYS :
+                                entry->restart_policy;
     if (strlen(service_leaf(entry->path)) >= sizeof(definition->name) ||
         strlen(entry->path) >= sizeof(definition->executable))
         return ASTRA_STATUS_LIMIT;
@@ -379,8 +468,12 @@ uint32_t supervisor_service_definition_to_manifest(
     entry->resident = 1u;
     entry->delegates =
         (definition->flags & ASTRA_SERVICE_DELEGATES) != 0u;
-    entry->required =
+    entry->critical =
+        (definition->flags & ASTRA_SERVICE_CRITICAL) != 0u;
+    entry->required = entry->critical == 0u &&
         (definition->flags & ASTRA_SERVICE_PROTECTED) != 0u;
+    entry->start_policy = definition->start_policy;
+    entry->restart_policy = definition->restart_policy;
     entry->grant_count = definition->grant_count;
     for (uint32_t index = 0u; index < definition->grant_count; ++index) {
         (void)memcpy(entry->grants[index].name,

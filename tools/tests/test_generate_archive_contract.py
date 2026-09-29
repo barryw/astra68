@@ -19,7 +19,7 @@ Symbol table '.symtab' contains 7 entries:
      3: 00000000     8 FUNC    GLOBAL HIDDEN     3 private_helper
      4: 00000000     0 NOTYPE  GLOBAL DEFAULT  UND memcpy
      5: 00000000     0 FILE    GLOBAL DEFAULT  ABS source.c
-     6: 00000000     0 NOTYPE  GLOBAL DEFAULT  ABS ASTRA_LIBC_1_0
+     6: 00000000     0 NOTYPE  GLOBAL DEFAULT  ABS ASTRA_LIBC_2_0
 """
 
 
@@ -53,11 +53,11 @@ def test_writes_deterministic_contract_files(tmp_path: Path) -> None:
     response = tmp_path / "libc.rsp"
     symbols = {"write", "read"}
 
-    write_version_map(version_map, "ASTRA_LIBC_1_0", symbols)
+    write_version_map(version_map, "ASTRA_LIBC_2_0", symbols)
     write_undefined_response(response, symbols)
 
     assert version_map.read_text(encoding="utf-8") == (
-        "ASTRA_LIBC_1_0 {\n"
+        "ASTRA_LIBC_2_0 {\n"
         "    global:\n"
         "        read;\n"
         "        write;\n"

@@ -13,7 +13,18 @@ int main(void)
            address[2] == 2u && address[3] == 25u);
     assert(inet_ntop(AF_INET, address, text, sizeof(text)) == text);
     assert(strcmp(text, "192.0.2.25") == 0);
+    {
+        struct in_addr ipv4;
+
+        memcpy(&ipv4, address, sizeof(ipv4));
+        assert(strcmp(inet_ntoa(ipv4), "192.0.2.25") == 0);
+    }
     assert(inet_pton(AF_INET, "256.0.0.1", address) == 0);
+    {
+        struct in_addr ipv4 = { .s_addr = INADDR_NONE };
+
+        assert(strcmp(inet_ntoa(ipv4), "255.255.255.255") == 0);
+    }
 
     assert(inet_pton(AF_INET6, "2001:db8::1", address) == 1);
     assert(inet_ntop(AF_INET6, address, text, sizeof(text)) == text);

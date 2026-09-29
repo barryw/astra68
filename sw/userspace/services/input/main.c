@@ -82,6 +82,29 @@ static void reap_clients(AstraInputService *service,
     }
 }
 
+/*
+ * A client that exited is otherwise noticed only when an event is next
+ * delivered to it, so a seat owner that died keeps the seat until the user
+ * touches a device -- and its restarted successor is refused as BUSY. Probe
+ * every client's port before judging a connect.
+ */
+static void detach_dead_clients(
+    AstraInputService *service,
+    AstraInputPortSink sinks[ASTRA_INPUT_CLIENT_MAX])
+{
+    for (uint32_t index = 0u; index < ASTRA_INPUT_CLIENT_MAX; ++index) {
+        uint32_t status;
+
+        if (sinks[index].send_handle == 0u)
+            continue;
+        status = astra_wait_one(sinks[index].send_handle, 0u, NULL);
+        if (status == ASTRA_SYSCALL_PEER_DEAD ||
+            status == ASTRA_SYSCALL_CLOSED)
+            (void)astra_input_service_detach(service, index + 1u);
+    }
+    reap_clients(service, sinks);
+}
+
 static void accept_client(
     uint32_t receive, AstraInputService *service,
     AstraInputPortSink sinks[ASTRA_INPUT_CLIENT_MAX])
@@ -118,11 +141,11 @@ static void accept_client(
            ASTRA_INPUT_SUBSCRIBE_POINTER_BUTTON |
            ASTRA_INPUT_SUBSCRIBE_POINTER_WHEEL)) != 0u)
         status = ASTRA_STATUS_ACCESS;
+    detach_dead_clients(service, sinks);
     if (status == ASTRA_STATUS_OK &&
         (request.flags & ASTRA_INPUT_CONNECT_SEAT_OWNER) != 0u &&
         service->focus_id != 0u)
         status = ASTRA_STATUS_BUSY;
-    reap_clients(service, sinks);
     if (status == ASTRA_STATUS_OK) {
         for (uint32_t index = 0u; index < ASTRA_INPUT_CLIENT_MAX; ++index) {
             if (sinks[index].send_handle == 0u) {

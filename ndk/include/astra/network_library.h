@@ -14,7 +14,7 @@
 /** Network Kit ELF ABI major version. */
 #define ASTRA_NETWORK_LIBRARY_ABI_MAJOR 1u
 /** Network Kit backward-compatible ABI revision. */
-#define ASTRA_NETWORK_LIBRARY_ABI_MINOR 1u
+#define ASTRA_NETWORK_LIBRARY_ABI_MINOR 2u
 
 /** Open network-service session. */
 typedef struct AstraNetworkSession {
@@ -141,10 +141,18 @@ AstraNetworkStatus astra_network_get_option(AstraNetworkEndpoint *endpoint, uint
 AstraNetworkStatus astra_network_set_option(AstraNetworkEndpoint *endpoint, uint32_t option, uint32_t value);
 /** Start name resolution. @param session Session. @param name Name. @param length Name bytes. @param family Family. @param type Type. @param protocol Protocol. @param request Receives request. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_resolve_start(AstraNetworkSession *session, const char *name, uint32_t length, uint16_t family, uint8_t type, uint8_t protocol, AstraNetworkRequest *request);
+/** Start reverse name resolution through the host network stack. The result is a NUL-terminated hostname. @param session Session. @param address Address to look up. @param request Receives request. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_reverse_start(AstraNetworkSession *session, const AstraNetworkAddress *address, AstraNetworkRequest *request);
 /** Poll resolution. @param request Request. @param addresses Receives addresses. @param capacity Capacity. @param count Receives count. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_request_try(AstraNetworkRequest *request, AstraNetworkAddress *addresses, uint32_t capacity, uint32_t *count);
 /** Wait for resolution. @param request Request. @param addresses Receives addresses. @param capacity Capacity. @param count Receives count. @param deadline Deadline. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_request_wait(AstraNetworkRequest *request, AstraNetworkAddress *addresses, uint32_t capacity, uint32_t *count, uint64_t deadline);
+/** Poll a reverse-lookup request. @param request Request. @param name Destination, or NULL to query size. @param capacity Destination bytes. @param required Receives required bytes including NUL. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_reverse_try(AstraNetworkRequest *request, char *name, uint32_t capacity, uint32_t *required);
+/** Wait for a reverse-lookup request. @param request Request. @param name Destination. @param capacity Destination bytes. @param required Receives required bytes including NUL. @param deadline Deadline. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_reverse_wait(AstraNetworkRequest *request, char *name, uint32_t capacity, uint32_t *required, uint64_t deadline);
+/** Enumerate current host-backed interface addresses. Pass capacity zero to query count. @param session Session. @param addresses Destination records. @param capacity Record capacity. @param count Receives total record count. @return ASTRA_NETWORK_* status. */
+AstraNetworkStatus astra_network_interfaces(AstraNetworkSession *session, AstraNetworkInterfaceAddress *addresses, uint32_t capacity, uint32_t *count);
 /** Cancel resolution. @param request Request. @return ASTRA_NETWORK_* status. */
 AstraNetworkStatus astra_network_request_cancel(AstraNetworkRequest *request);
 /** Borrow readiness handle. @param endpoint Endpoint. @return Wait handle. */

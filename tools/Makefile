@@ -5,11 +5,12 @@ CFLAGS := -O2 -std=c11 -Wall -Wextra -Werror
 all: build/astra-bundle
 
 build/astra-bundle: bundle_tool.c ../ndk/src/manifest.c ../ndk/src/bundle.c \
-		../ndk/src/utf8.c \
+		../ndk/src/utf8.c ../sw/userspace/runtime/src/string.c \
 		../ndk/include/astra/bundle.h ../sw/include/astra/process.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) bundle_tool.c ../ndk/src/manifest.c \
-		../ndk/src/bundle.c ../ndk/src/utf8.c -o $@
+		../ndk/src/bundle.c ../ndk/src/utf8.c \
+		../sw/userspace/runtime/src/string.c -o $@
 
 test: build/astra-bundle
 	python3 ./tests/test_aicon.py

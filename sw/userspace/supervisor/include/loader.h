@@ -50,8 +50,17 @@ typedef struct SupervisorManifestEntry {
         serves[SUPERVISOR_MANIFEST_PUBLICATION_MAX];
     uint32_t serves_count;
     uint32_t delegates;
+    /* `required`: always running, restarted, untouchable by users. */
     uint32_t required;
+    /* `critical`: as required, but its death halts the machine. */
+    uint32_t critical;
+    /* `start=` / `restart=` defaults for a user-controllable service. */
+    uint32_t start_policy;
+    uint32_t restart_policy;
     uint32_t resident;
+    /* `trusted`: a launch ceiling for an application bundle, never launched
+       at boot. */
+    uint32_t trusted;
 } SupervisorManifestEntry;
 
 typedef struct SupervisorManifest {
@@ -72,6 +81,11 @@ typedef struct SupervisorProcessRecord {
     uint32_t service_flags;
     uint32_t restart_policy;
     uint32_t action;
+    uint32_t critical;
+    /* Consecutive quick deaths; drives the restart backoff. */
+    uint32_t failures;
+    /* Launch time for a running record; next attempt for a failed one. */
+    uint64_t when;
     char service_name[ASTRA_VFS_NAME_MAX];
 } SupervisorProcessRecord;
 
@@ -120,7 +134,16 @@ supervisor_process_table_reserve(SupervisorProcessTable *table,
 int supervisor_manifest_parse(char *text, uint32_t length,
                               SupervisorManifest *manifest);
 void supervisor_manifest_destroy(SupervisorManifest *manifest);
+/* "boot"/"manual" -> ASTRA_SERVICE_START_*, or 0. */
+uint32_t supervisor_service_start_policy(const char *word);
+/* "never"/"on-fault"/"always" -> ASTRA_SERVICE_RESTART_*, or UINT32_MAX. */
+uint32_t supervisor_service_restart_policy(const char *word);
 int supervisor_manifest_grant(char *text, SupervisorManifestGrant *grant);
+/* Nonzero when @p wanted lies inside @p ceiling (a `trusted` entry), or
+   inside the default application ceiling (astra/application_policy.h) when
+   @p ceiling is NULL. */
+int supervisor_launch_admits(const SupervisorManifestEntry *ceiling,
+                             const SupervisorManifestGrant *wanted);
 int supervisor_manifest_authority(char *text, char *name, uint32_t *rights,
                                   int allow_raw);
 /* Launches the shipped manifest from the temporary bootstrap mount. */

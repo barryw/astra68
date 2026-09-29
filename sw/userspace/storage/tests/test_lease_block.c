@@ -40,6 +40,8 @@ static uint32_t mock_arm_refusals;
 static uint32_t mock_ack_before_collect;
 static int mock_answers_before_collect;
 static int mock_answers_during_collect;
+/* The completion was drained into its slot by someone else: no record. */
+static int mock_drained_before_wait;
 static int mock_completion_queued;   /* the transport's completion-valid bit */
 static int mock_record_pending;
 static int mock_request_active[MOCK_LANE_MAX];
@@ -77,6 +79,7 @@ mock_reset(void)
     mock_ack_before_collect = 0u;
     mock_answers_before_collect = 0;
     mock_answers_during_collect = 0;
+    mock_drained_before_wait = 0;
     mock_completion_queued = 0;
     mock_record_pending = 0;
     memset(mock_request_active, 0, sizeof(mock_request_active));
@@ -181,6 +184,16 @@ astra_block_lease_submit(uint32_t device, const AstraBlockRequest *request,
     }
     if (active > mock_maximum_active) {
         mock_maximum_active = active;
+    }
+    if (mock_drained_before_wait) {
+        /*
+         * What hung storage on the DE25: the request completed and another
+         * collector -- a sibling lane, or kernel maintenance on a process
+         * exit -- drained it into the kernel slot before this lane was
+         * visible. No record remains, and the device will not raise another.
+         */
+        mock_request_complete[slot] = 1;
+        mock_device_answers = 0;
     }
     if (mock_answers_before_collect) {
         /*
@@ -603,6 +616,23 @@ test_second_transfer_on_one_attachment(void)
     assert(mock_reset_calls == 0u);
 }
 
+/*
+ * A completion already drained into its slot, with no record left behind,
+ * must still complete the request -- without a wait that nothing would end.
+ */
+static void
+test_completion_drained_before_the_lane_waits(void)
+{
+    AstraLeaseBlock lease;
+
+    assert(attach(&lease) == ASTRA_BLOCK_OK);
+    mock_drained_before_wait = 1;
+    assert(astra_lease_block_backend()->flush(&lease, 0u) == ASTRA_BLOCK_OK);
+    assert(mock_wait_calls == 0u);
+    assert(mock_reset_calls == 0u);
+    assert(mock_ack_before_collect == 0u);
+}
+
 /* The same two transfers down the path that does wait for its interrupt. */
 static void
 test_second_transfer_through_the_wait_path(void)
@@ -806,6 +836,7 @@ int
 main(void)
 {
     test_status_translation();
+    test_completion_drained_before_the_lane_waits();
     test_geometry_translation();
     test_attach_claims_advertised_lanes();
     test_attach_uses_the_dma_resource_boundary();

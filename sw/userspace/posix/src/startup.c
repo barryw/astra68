@@ -3,6 +3,8 @@
 #include <astra/posix.h>
 #include <astra/posix_descriptor.h>
 #include <astra/runtime.h>
+#include <astra/service.h>
+#include <astra/status.h>
 
 #include <signal.h>
 #include <stddef.h>
@@ -75,6 +77,7 @@ copy_startup_vectors(const AstraStartupInfo *startup, char ***environment)
 int
 astra_posix_enter(const AstraStartupInfo *startup, AstraPosixMain program)
 {
+    const AstraStartupCapability *bootstrap;
     char **argv;
     char **environment;
 
@@ -93,5 +96,15 @@ astra_posix_enter(const AstraStartupInfo *startup, AstraPosixMain program)
     if (argv == NULL)
         return 1;
     environ = environment;
+    bootstrap = astra_startup_capability(startup,
+                                         ASTRA_CAPABILITY_SERVICE_READY);
+    if (bootstrap != NULL) {
+        uint32_t status = astra_service_ready(bootstrap->handle,
+                                              ASTRA_STATUS_OK, NULL, 0u);
+
+        (void)astra_close(bootstrap->handle);
+        if (status != ASTRA_SYSCALL_OK)
+            return 1;
+    }
     return program((int)startup->argc, argv);
 }

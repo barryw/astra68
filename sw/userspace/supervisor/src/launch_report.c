@@ -1,5 +1,7 @@
 #include <launch_report.h>
 
+#include <astra/string.h>
+
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -30,32 +32,13 @@ static uint32_t digits(uint64_t value)
     return count;
 }
 
-static void append_text(char *out, uint32_t *at, const char *text)
-{
-    while (*text != '\0')
-        out[(*at)++] = *text++;
-}
-
-static void append_number(char *out, uint32_t *at, uint64_t value)
-{
-    char reverse[20];
-    uint32_t count = 0u;
-
-    do {
-        reverse[count++] = (char)('0' + value % 10u);
-        value /= 10u;
-    } while (value != 0u);
-    while (count != 0u)
-        out[(*at)++] = reverse[--count];
-}
-
 uint32_t
 supervisor_launch_report_format(
     char *out, uint32_t capacity, const char *prefix, const char *path,
     const SupervisorLaunchReportField *fields, uint32_t field_count)
 {
     uint32_t required = 0u;
-    uint32_t at = 0u;
+    AstraString line;
 
     if (prefix == NULL || path == NULL ||
         (fields == NULL && field_count != 0u) ||
@@ -78,12 +61,13 @@ supervisor_launch_report_format(
             out[0] = '\0';
         return 0u;
     }
-    append_text(out, &at, prefix);
-    append_text(out, &at, path);
+    /* The capacity was checked against the exact length above. */
+    astra_string_init(&line, out, capacity);
+    (void)astra_string_append(&line, prefix);
+    (void)astra_string_append(&line, path);
     for (uint32_t index = 0u; index < field_count; ++index) {
-        append_text(out, &at, fields[index].label);
-        append_number(out, &at, fields[index].value);
+        (void)astra_string_append(&line, fields[index].label);
+        (void)astra_string_append_u64(&line, fields[index].value);
     }
-    out[at] = '\0';
-    return at;
+    return line.length;
 }

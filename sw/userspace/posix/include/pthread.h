@@ -5,17 +5,25 @@
 #include <stdint.h>
 #include <sched.h>
 #include <time.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include <astra/address_space.h>
 
 typedef uint32_t pthread_t;
 typedef uintptr_t pthread_key_t;
 
 typedef struct pthread_attr_t {
     int detach_state;
+    size_t stack_size;
 } pthread_attr_t;
+
+#include <signal.h>
+#if defined(__astra__) && !defined(_SIGSET_T_DECLARED)
+typedef __sigset_t sigset_t;
+#define _SIGSET_T_DECLARED
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct pthread_mutexattr_t {
     int type;
@@ -56,6 +64,7 @@ typedef volatile uint32_t pthread_once_t __attribute__((aligned(4)));
 
 #define PTHREAD_CREATE_JOINABLE 0
 #define PTHREAD_CREATE_DETACHED 1
+#define PTHREAD_STACK_MIN ASTRA_MEMORY_PAGE_SIZE
 #define PTHREAD_MUTEX_NORMAL 0
 #define PTHREAD_MUTEX_ERRORCHECK 1
 #define PTHREAD_MUTEX_RECURSIVE 2
@@ -76,12 +85,19 @@ int pthread_attr_init(pthread_attr_t *attr);
 int pthread_attr_destroy(pthread_attr_t *attr);
 int pthread_attr_getdetachstate(const pthread_attr_t *attr, int *state);
 int pthread_attr_setdetachstate(pthread_attr_t *attr, int state);
+int pthread_attr_getstacksize(const pthread_attr_t *attr, size_t *stack_size);
+int pthread_attr_setstacksize(pthread_attr_t *attr, size_t stack_size);
 int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
                    void *(*start)(void *), void *argument);
 int pthread_join(pthread_t thread, void **result);
 int pthread_detach(pthread_t thread);
 pthread_t pthread_self(void);
 int pthread_equal(pthread_t left, pthread_t right);
+int pthread_sigmask(int how, const sigset_t *set, sigset_t *previous);
+int pthread_getschedparam(pthread_t thread, int *policy,
+                          struct sched_param *parameters);
+int pthread_setschedparam(pthread_t thread, int policy,
+                          const struct sched_param *parameters);
 void pthread_exit(void *result) __attribute__((noreturn));
 
 int pthread_mutexattr_init(pthread_mutexattr_t *attr);

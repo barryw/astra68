@@ -4,8 +4,10 @@
 #include <astra/status.h>
 #include <astra/stream.h>
 #include <astra/syscall.h>
+#include "socket_internal.h"
 
 #include <errno.h>
+#include <net/if.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -251,6 +253,8 @@ int tcsetwinsize(int fd, const struct winsize *window)
 
 int ioctl(int fd, unsigned long operation, void *parameter)
 {
+    if (operation == SIOCGIFCONF)
+        return astra_posix_socket_interface_ioctl(fd, parameter);
     if (operation == ASTRA_TIOCGWINSZ)
         return tcgetwinsize(fd, parameter);
     if (operation == ASTRA_TIOCSWINSZ)

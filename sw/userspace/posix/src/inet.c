@@ -205,3 +205,10 @@ in_addr_t inet_addr(const char *text)
 
     return inet_aton(text, &address) ? address.s_addr : INADDR_NONE;
 }
+
+char *inet_ntoa(struct in_addr address)
+{
+    static _Thread_local char text[INET_ADDRSTRLEN];
+
+    return (char *)inet_ntop(AF_INET, &address, text, sizeof(text));
+}

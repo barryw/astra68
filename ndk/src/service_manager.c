@@ -8,7 +8,7 @@
 #include <string.h>
 
 static AstraResult exchange(AstraHandle manager, uint32_t operation,
-                            const char *name,
+                            const char *name, uint32_t value,
                             const AstraServiceListCursor *cursor,
                             AstraHandle *sent, AstraServiceManagerReply *reply,
                             AstraHandle *received, uint32_t *received_count)
@@ -30,6 +30,7 @@ static AstraResult exchange(AstraHandle manager, uint32_t operation,
         (void)strcpy(request.name, name);
     if (cursor != NULL)
         request.cursor = *cursor;
+    request.value = value;
     result = astra_message_header_init(
         &request.header, sizeof(request), ASTRA_SERVICE_MANAGER_PROTOCOL,
         ASTRA_SERVICE_MANAGER_VERSION, operation, 1u);
@@ -90,7 +91,7 @@ AstraResult astra_service_list(AstraHandle manager,
         cursor->source > ASTRA_SERVICE_LIST_SOURCE_DONE ||
         cursor->reserved != 0u)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    result = exchange(manager, ASTRA_SERVICE_MANAGER_LIST, NULL, cursor,
+    result = exchange(manager, ASTRA_SERVICE_MANAGER_LIST, NULL, 0u, cursor,
                       NULL, &reply, NULL, &handles);
     if (result == ASTRA_OK) {
         *info = reply.info;
@@ -110,7 +111,7 @@ AstraResult astra_service_inspect(AstraHandle manager, const char *name,
 
     if (info == NULL || definition == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    result = exchange(manager, ASTRA_SERVICE_MANAGER_INSPECT, name, NULL,
+    result = exchange(manager, ASTRA_SERVICE_MANAGER_INSPECT, name, 0u, NULL,
                       NULL, &reply, &area.handle, &count);
     if (result != ASTRA_OK)
         return result;
@@ -164,8 +165,8 @@ AstraResult astra_service_add(AstraHandle manager,
         result = astra_area_unmap(&area);
     if (result == ASTRA_OK)
         result = exchange(manager, ASTRA_SERVICE_MANAGER_ADD,
-                          definition->name, NULL, &area.handle, &reply, NULL,
-                          &handles);
+                          definition->name, 0u, NULL, &area.handle, &reply,
+                          NULL, &handles);
     if (area.handle != ASTRA_INVALID_HANDLE) {
         AstraResult close_result = astra_area_close(&area);
 
@@ -185,8 +186,24 @@ AstraResult astra_service_control(AstraHandle manager, uint32_t operation,
     if (operation < ASTRA_SERVICE_MANAGER_REMOVE ||
         operation > ASTRA_SERVICE_MANAGER_DISABLE)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    result = exchange(manager, operation, name, NULL, NULL, &reply, NULL,
+    result = exchange(manager, operation, name, 0u, NULL, NULL, &reply, NULL,
                       &handles);
+    if (result == ASTRA_OK && info != NULL)
+        *info = reply.info;
+    return result;
+}
+
+AstraResult astra_service_set_restart(AstraHandle manager, const char *name,
+                                      uint32_t policy, AstraServiceInfo *info)
+{
+    AstraServiceManagerReply reply = {0};
+    uint32_t handles = 0u;
+    AstraResult result;
+
+    if (policy > ASTRA_SERVICE_RESTART_ALWAYS)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = exchange(manager, ASTRA_SERVICE_MANAGER_SET_RESTART, name,
+                      policy, NULL, NULL, &reply, NULL, &handles);
     if (result == ASTRA_OK && info != NULL)
         *info = reply.info;
     return result;
@@ -197,7 +214,7 @@ AstraResult astra_system_shutdown_request(AstraHandle manager)
     AstraServiceManagerReply reply = {0};
     uint32_t handles = 0u;
 
-    return exchange(manager, ASTRA_SERVICE_MANAGER_SHUTDOWN, NULL, NULL,
+    return exchange(manager, ASTRA_SERVICE_MANAGER_SHUTDOWN, NULL, 0u, NULL,
                     NULL, &reply, NULL, &handles);
 }
 
@@ -206,6 +223,6 @@ AstraResult astra_system_restart_request(AstraHandle manager)
     AstraServiceManagerReply reply = {0};
     uint32_t handles = 0u;
 
-    return exchange(manager, ASTRA_SERVICE_MANAGER_SYSTEM_RESTART, NULL,
+    return exchange(manager, ASTRA_SERVICE_MANAGER_SYSTEM_RESTART, NULL, 0u,
                     NULL, NULL, &reply, NULL, &handles);
 }

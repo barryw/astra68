@@ -20,7 +20,7 @@ ASTRA_STREAMS_LIBRARY := \
 ASTRA_FILESYSTEM_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/vfs/build/m68k/libraries/filesystem.library.4
 ASTRA_LIBC_LIBRARY := \
-	$(ASTRA_USERSPACE_ROOT)/posix/build/m68k/libraries/libc.library.1
+	$(ASTRA_USERSPACE_ROOT)/posix/build/m68k/libraries/libc.library.2
 ASTRA_TERMINFO_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/terminfo/build/m68k/libraries/terminfo.library.6
 ASTRA_CXX_LIBRARY := \
@@ -41,6 +41,16 @@ ASTRA_CONFIG_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/config/build/m68k/libraries/config.library.1
 ASTRA_PCM_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/audio/build/m68k/libraries/pcm.library.2
+ASTRA_SDL2_LIBRARY := \
+	$(ASTRA_USERSPACE_ROOT)/sdl2/build/m68k/libraries/SDL2.library.2
+ASTRA_SDL2_NET_LIBRARY := \
+	$(ASTRA_USERSPACE_ROOT)/sdl2/build/m68k/libraries/SDL2_net.library.2
+ASTRA_SDL2_IMAGE_LIBRARY := \
+	$(ASTRA_USERSPACE_ROOT)/sdl2/build/m68k/libraries/SDL2_image.library.2
+ASTRA_SDL2_MIXER_LIBRARY := \
+	$(ASTRA_USERSPACE_ROOT)/sdl2/build/m68k/libraries/SDL2_mixer.library.2
+ASTRA_SDL2_TTF_LIBRARY := \
+	$(ASTRA_USERSPACE_ROOT)/sdl2/build/m68k/libraries/SDL2_ttf.library.2
 ASTRA_LOADER_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/loader/build/m68k/loader.library.1
 
@@ -63,7 +73,12 @@ ASTRA_SHARED_LIBRARIES := \
 	$(ASTRA_INTERFACE_LIBRARY) \
 	$(ASTRA_NETWORK_LIBRARY) \
 	$(ASTRA_CONFIG_LIBRARY) \
-	$(ASTRA_PCM_LIBRARY)
+	$(ASTRA_PCM_LIBRARY) \
+	$(ASTRA_SDL2_LIBRARY) \
+	$(ASTRA_SDL2_NET_LIBRARY) \
+	$(ASTRA_SDL2_IMAGE_LIBRARY) \
+	$(ASTRA_SDL2_MIXER_LIBRARY) \
+	$(ASTRA_SDL2_TTF_LIBRARY)
 
 ASTRA_SHARED_LIBRARY_DIRS := $(sort $(dir $(ASTRA_SHARED_LIBRARIES)))
 ASTRA_SHARED_LIBRARY_SEARCH_FLAGS := \
@@ -77,7 +92,7 @@ ASTRA_SHARED_LIBRARY_SEARCH_FLAGS := \
 # in every native or POSIX application Makefile.
 ASTRA_LIBRARY_KEYS := system compiler unwind runtime streams filesystem libc \
 	terminfo cxx lua ntp graphics font interface \
-	network config pcm
+	network config pcm sdl2 sdl2net sdl2image sdl2mixer sdl2ttf
 
 ASTRA_LIBRARY_FILE_system := $(ASTRA_SYSTEM_LIBRARY)
 ASTRA_LIBRARY_FILE_compiler := $(ASTRA_COMPILER_LIBRARY)
@@ -96,6 +111,11 @@ ASTRA_LIBRARY_FILE_interface := $(ASTRA_INTERFACE_LIBRARY)
 ASTRA_LIBRARY_FILE_network := $(ASTRA_NETWORK_LIBRARY)
 ASTRA_LIBRARY_FILE_config := $(ASTRA_CONFIG_LIBRARY)
 ASTRA_LIBRARY_FILE_pcm := $(ASTRA_PCM_LIBRARY)
+ASTRA_LIBRARY_FILE_sdl2 := $(ASTRA_SDL2_LIBRARY)
+ASTRA_LIBRARY_FILE_sdl2net := $(ASTRA_SDL2_NET_LIBRARY)
+ASTRA_LIBRARY_FILE_sdl2image := $(ASTRA_SDL2_IMAGE_LIBRARY)
+ASTRA_LIBRARY_FILE_sdl2mixer := $(ASTRA_SDL2_MIXER_LIBRARY)
+ASTRA_LIBRARY_FILE_sdl2ttf := $(ASTRA_SDL2_TTF_LIBRARY)
 
 ASTRA_LIBRARY_DEPS_system := runtime
 ASTRA_LIBRARY_DEPS_compiler :=
@@ -113,6 +133,11 @@ ASTRA_LIBRARY_DEPS_font := graphics runtime compiler
 ASTRA_LIBRARY_DEPS_interface := graphics font system runtime compiler
 ASTRA_LIBRARY_DEPS_network := runtime compiler
 ASTRA_LIBRARY_DEPS_config := system runtime compiler filesystem
+ASTRA_LIBRARY_DEPS_sdl2 := pcm graphics system libc runtime compiler
+ASTRA_LIBRARY_DEPS_sdl2net := sdl2 libc runtime compiler
+ASTRA_LIBRARY_DEPS_sdl2image := sdl2 libc runtime compiler
+ASTRA_LIBRARY_DEPS_sdl2mixer := sdl2 libc runtime compiler
+ASTRA_LIBRARY_DEPS_sdl2ttf := sdl2 libc runtime compiler
 ASTRA_LIBRARY_DEPS_pcm := runtime compiler
 
 ASTRA_LIBRARY_OWNER_system := $(ASTRA_REPOSITORY_ROOT)/ndk:library
@@ -132,6 +157,11 @@ ASTRA_LIBRARY_OWNER_interface := $(ASTRA_USERSPACE_ROOT)/interface:interface-lib
 ASTRA_LIBRARY_OWNER_network := $(ASTRA_USERSPACE_ROOT)/network:library
 ASTRA_LIBRARY_OWNER_config := $(ASTRA_USERSPACE_ROOT)/config:library
 ASTRA_LIBRARY_OWNER_pcm := $(ASTRA_USERSPACE_ROOT)/audio:library
+ASTRA_LIBRARY_OWNER_sdl2 := $(ASTRA_USERSPACE_ROOT)/sdl2:shared
+ASTRA_LIBRARY_OWNER_sdl2net := $(ASTRA_USERSPACE_ROOT)/sdl2:net-shared
+ASTRA_LIBRARY_OWNER_sdl2image := $(ASTRA_USERSPACE_ROOT)/sdl2:image-shared
+ASTRA_LIBRARY_OWNER_sdl2mixer := $(ASTRA_USERSPACE_ROOT)/sdl2:mixer-shared
+ASTRA_LIBRARY_OWNER_sdl2ttf := $(ASTRA_USERSPACE_ROOT)/sdl2:ttf-shared
 
 # Release and NDK gates use the owners' full ABI contracts.  Application
 # builds intentionally use the freshness targets above so launching one
@@ -153,6 +183,11 @@ ASTRA_LIBRARY_CONTRACT_OWNER_interface := $(ASTRA_USERSPACE_ROOT)/interface:libr
 ASTRA_LIBRARY_CONTRACT_OWNER_network := $(ASTRA_USERSPACE_ROOT)/network:library-contract
 ASTRA_LIBRARY_CONTRACT_OWNER_config := $(ASTRA_USERSPACE_ROOT)/config:library-contract
 ASTRA_LIBRARY_CONTRACT_OWNER_pcm := $(ASTRA_USERSPACE_ROOT)/audio:library-contract
+ASTRA_LIBRARY_CONTRACT_OWNER_sdl2 := $(ASTRA_USERSPACE_ROOT)/sdl2:library-contract
+ASTRA_LIBRARY_CONTRACT_OWNER_sdl2net := $(ASTRA_USERSPACE_ROOT)/sdl2:net-library-contract
+ASTRA_LIBRARY_CONTRACT_OWNER_sdl2image := $(ASTRA_USERSPACE_ROOT)/sdl2:image-library-contract
+ASTRA_LIBRARY_CONTRACT_OWNER_sdl2mixer := $(ASTRA_USERSPACE_ROOT)/sdl2:mixer-library-contract
+ASTRA_LIBRARY_CONTRACT_OWNER_sdl2ttf := $(ASTRA_USERSPACE_ROOT)/sdl2:ttf-library-contract
 
 astra_library_key = $(strip $(foreach key,$(ASTRA_LIBRARY_KEYS),\
 	$(if $(filter $(ASTRA_LIBRARY_FILE_$(key)),$(1)),$(key))))

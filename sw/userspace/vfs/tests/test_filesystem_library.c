@@ -693,9 +693,51 @@ static void test_protected_root_links(void)
     astra_assign_table_destroy(&assigns);
 }
 
+/* WORK served by another volume (hostfs) is that volume's root: a mount in
+   `/`, not a link into /system. */
+static void test_foreign_root_is_not_a_system_link(void)
+{
+    AstraAssignTable assigns;
+    AstraFilesystem filesystem = ASTRA_FILESYSTEM_INIT;
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+    AstraDirectory directory = ASTRA_DIRECTORY_INIT;
+    AstraDirectoryEntry entries[4];
+    char target[ASTRA_VFS_PATH_MAX];
+    uint32_t count;
+    uint32_t length;
+
+    astra_assign_table_init(&assigns);
+    assert(astra_assign_bind(&assigns, "SYSTEM", 7u, ASTRA_RIGHT_READ, "") ==
+           ASTRA_VFS_OK);
+    assert(astra_assign_bind(&assigns, "HOME", 7u, ASTRA_RIGHT_READ,
+                             "home") == ASTRA_VFS_OK);
+    assert(astra_assign_bind(&assigns, "WORK", 8u,
+                             ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "") ==
+           ASTRA_VFS_OK);
+    assert(astra_filesystem_attach(&filesystem, &assigns, client_for, NULL,
+                                   NULL) == ASTRA_VFS_OK);
+    assert(astra_filesystem_directory_open(&filesystem, "/", &directory) ==
+           ASTRA_VFS_OK);
+    assert(astra_filesystem_directory_read(&directory, entries, 4u, &count) ==
+           ASTRA_VFS_OK && count == 3u);
+    assert(same(entries[1].name, "home") &&
+           entries[1].kind == ASTRA_VFS_KIND_SYMLINK);
+    assert(same(entries[2].name, "work") &&
+           entries[2].kind == ASTRA_VFS_KIND_DIRECTORY);
+    assert(astra_filesystem_lstat(&filesystem, "/work", &info) ==
+               ASTRA_VFS_OK && info.kind == ASTRA_VFS_KIND_DIRECTORY);
+    assert(astra_filesystem_readlink(&filesystem, "/work", target,
+                                     sizeof(target), &length) !=
+           ASTRA_VFS_OK);
+    astra_filesystem_directory_close(&directory);
+    astra_filesystem_detach(&filesystem);
+    astra_assign_table_destroy(&assigns);
+}
+
 int main(void)
 {
     test_protected_root_links();
+    test_foreign_root_is_not_a_system_link();
     assert(ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR ==
            ASTRA_FILESYSTEM_LIBRARY_VERSION);
     AstraAssignTable assigns;

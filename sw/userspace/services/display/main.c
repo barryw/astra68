@@ -15,6 +15,13 @@
 #include <astra/window.h>
 #include <astra/window_scene.h>
 
+#include "window_graphics.h"
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#include <astra_render_protocol.h>
+#pragma GCC diagnostic pop
+
 #define DISPLAY_WORK_TOP 34u
 #define DISPLAY_WORK_BOTTOM (ASTRA_DISPLAY_HEIGHT - 42u)
 #define DISPLAY_MEDIA_BASE ASTRA_RENDER_BATCH_WORKSPACE_LIMIT
@@ -22,6 +29,8 @@
 #define DISPLAY_MEDIA_ALIGNMENT UINT32_C(64)
 #define WINDOW_SURFACE_MAX_BYTES \
     (ASTRA_DISPLAY_WIDTH * (DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP) * 2u)
+#define DISPLAY_CONTENT_BANKS 3u
+#define DISPLAY_CONTENT_NONE 0xffu
 #define DISPLAY_IRQ_DRAIN_MAX 8u
 #define DISPLAY_INPUT_QUEUE 8u
 #define DISPLAY_DOUBLE_CLICK_MS 500u
@@ -80,6 +89,7 @@ typedef struct DisplayWindow {
     char application_name[ASTRA_WINDOW_TITLE_MAX];
     uint16_t application_name_length;
     AstraSharedSurface surface;
+    DisplayWindowGraphics *graphics;
     uint32_t title_icon_area;
     void *title_icon_bytes;
     AstraAicon title_icon;
@@ -92,10 +102,15 @@ typedef struct DisplayWindow {
     uint32_t event_sequence;
     uint32_t cache_offset[2];
     uint32_t cache_bytes;
-    uint32_t content_offset;
+    /* Three content banks, ACTIVE/PENDING/EDITABLE (PRESENTATION.md):
+       the client draws only into content_back, which no scene that can
+       still be on screen references. */
+    uint32_t content_offset[DISPLAY_CONTENT_BANKS];
     uint32_t content_bytes;
+    uint32_t content_pitch;
     uint32_t cache_resource[2];
     uint32_t content_resource;
+    uint32_t content_layer[2];
     uint16_t restore_x;
     uint16_t restore_y;
     uint16_t restore_width;
@@ -109,6 +124,14 @@ typedef struct DisplayWindow {
     uint8_t content_pending;
     uint8_t content_dirty;
     uint8_t content_initialized;
+    uint8_t content_front;
+    uint8_t content_back;
+    /* The bank the last committed scene shows, or DISPLAY_CONTENT_NONE. */
+    uint8_t content_shown;
+    uint8_t content_pending_back;
+    uint8_t content_pending_shown;
+    /* The last PRESENT promised to redraw every pixel of the next frame. */
+    uint8_t content_discard;
     uint8_t event_lost;
     uint8_t pending_close;
     uint32_t pending_close_timestamp_ms;
@@ -120,7 +143,8 @@ typedef struct DisplayWindow {
     uint16_t pointer_hot_y;
     uint32_t pointer_image_generation;
     DamageRect content_damage;
-    DamageRect cache_damage[2];
+    /* Where each bank differs from content_front. */
+    DamageRect content_stale[DISPLAY_CONTENT_BANKS];
 } DisplayWindow;
 
 typedef struct DisplayState {
@@ -164,6 +188,10 @@ typedef struct DisplayState {
     uint8_t system_pending;
     uint8_t overlay;
     uint8_t overlay_hover;
+    /* What the overlay surface holds, and what this compose drew. */
+    uint8_t overlay_drawn;
+    uint8_t overlay_drawn_hover;
+    uint8_t overlay_pending;
     uint8_t swallow_pointer_up;
     uint8_t pending_input_valid;
     uint32_t pending_input_window;
@@ -319,12 +347,22 @@ static uint32_t media_advance_past(const DisplayWindow *window,
                                    uint32_t offset, uint32_t bytes,
                                    uint32_t next)
 {
-    next = media_advance_extent(offset, bytes, window->content_offset,
-                                window->content_bytes, next);
+    for (uint32_t bank = 0u; bank < DISPLAY_CONTENT_BANKS; ++bank)
+        next = media_advance_extent(offset, bytes,
+                                    window->content_offset[bank],
+                                    window->content_bytes, next);
     for (uint32_t bank = 0u; bank < 2u; ++bank)
         next = media_advance_extent(offset, bytes,
                                     window->cache_offset[bank],
                                     window->cache_bytes, next);
+    /* ponytail: a linear scan of every surface; O(n^2) per allocation.
+       Replace with a free-extent index if texture-heavy clients measure it. */
+    if (window->graphics != NULL)
+        for (uint32_t index = 0u; index < window->graphics->surface_count;
+             ++index)
+            next = media_advance_extent(
+                offset, bytes, window->graphics->surfaces[index].offset,
+                window->graphics->surfaces[index].bytes, next);
     return next;
 }
 
@@ -428,26 +466,34 @@ static uint32_t display_window_media_prepare(const DisplayState *state,
                                              DisplayWindow *candidate)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    /* A 64-byte pitch lets a scene layer start at any content row: the
+       rounded bottom strip is its own layer (compose). */
+    uint32_t pitch = align_media_bytes((uint32_t)candidate->request.width *
+                                       2u);
     uint32_t content_bytes;
     uint32_t cache_bytes;
 
     if (state == NULL || candidate == NULL ||
         candidate->request.width == 0u || candidate->request.height == 0u)
         return ASTRA_STATUS_INVALID;
-    content_bytes = align_media_bytes(
-        (uint32_t)candidate->request.width * candidate->request.height * 2u);
-    cache_bytes = align_media_bytes(
+    content_bytes = align_media_bytes(pitch * candidate->request.height);
+    /* An undecorated window is its content alone: it has no cache. */
+    cache_bytes = !decorated(candidate) ? 0u : align_media_bytes(
         outer_width(&theme, candidate) * outer_height(&theme, candidate) *
         2u);
     if (content_bytes > candidate->content_bytes) {
-        candidate->content_offset = 0u;
-        candidate->content_bytes = 0u;
-        candidate->content_offset = display_media_allocate(
-            state, candidate, UINT32_MAX, content_bytes);
-        if (candidate->content_offset == 0u)
-            return ASTRA_STATUS_LIMIT;
+        for (uint32_t bank = 0u; bank < DISPLAY_CONTENT_BANKS; ++bank)
+            candidate->content_offset[bank] = 0u;
+        candidate->content_bytes = content_bytes;
+        for (uint32_t bank = 0u; bank < DISPLAY_CONTENT_BANKS; ++bank) {
+            candidate->content_offset[bank] = display_media_allocate(
+                state, candidate, UINT32_MAX, content_bytes);
+            if (candidate->content_offset[bank] == 0u)
+                return ASTRA_STATUS_LIMIT;
+        }
     }
     candidate->content_bytes = content_bytes;
+    candidate->content_pitch = pitch;
     if (cache_bytes > candidate->cache_bytes) {
         candidate->cache_offset[0] = 0u;
         candidate->cache_offset[1] = 0u;
@@ -621,8 +667,6 @@ static void damage_content(DisplayState *state, const AstraTheme *theme,
     DamageRect screen = damage;
 
     damage_add(&window->content_damage, damage);
-    damage_add(&window->cache_damage[0], damage);
-    damage_add(&window->cache_damage[1], damage);
     screen.left += window->request.x + frame;
     screen.right += window->request.x + frame;
     screen.top += window->request.y + frame + title + signal;
@@ -634,8 +678,15 @@ static void dirty_cache(DisplayWindow *window)
 {
     window->cache_dirty[0] = 1u;
     window->cache_dirty[1] = 1u;
-    window->cache_damage[0] = (DamageRect){0};
-    window->cache_damage[1] = (DamageRect){0};
+}
+
+/* A new window draws into bank 1 while no scene shows any. */
+static void init_content_banks(DisplayWindow *window)
+{
+    window->content_front = 0u;
+    window->content_back = 1u;
+    window->content_shown = DISPLAY_CONTENT_NONE;
+    window->content_pending_shown = DISPLAY_CONTENT_NONE;
 }
 
 static void reset_content(DisplayWindow *window)
@@ -866,9 +917,20 @@ static int frame_valid(const AstraTheme *theme,
     candidate.request.height = height;
     right = (uint32_t)x + outer_width(theme, &candidate);
     bottom = (uint32_t)y + outer_height(theme, &candidate);
-    return width != 0u && height != 0u && x < ASTRA_DISPLAY_WIDTH &&
-           y >= DISPLAY_WORK_TOP && right <= ASTRA_DISPLAY_WIDTH &&
-           bottom <= DISPLAY_WORK_BOTTOM;
+    return width != 0u && height != 0u &&
+           (window->request.content_format != ASTRA_WINDOW_CONTENT_RGB565 ||
+            window->surface.view.pixels == NULL ||
+            ((uint32_t)width * 2u <= window->surface.view.pitch &&
+             (uint64_t)window->surface.view.pitch * height <=
+                 window->surface.view.byte_size)) &&
+           (window->request.type != ASTRA_WINDOW_FULLSCREEN ||
+            (x == 0u && y == 0u)) &&
+           x < ASTRA_DISPLAY_WIDTH &&
+           (window->request.type == ASTRA_WINDOW_FULLSCREEN ||
+            y >= DISPLAY_WORK_TOP) &&
+           right <= ASTRA_DISPLAY_WIDTH &&
+           bottom <= (window->request.type == ASTRA_WINDOW_FULLSCREEN ?
+                      ASTRA_DISPLAY_HEIGHT : DISPLAY_WORK_BOTTOM);
 }
 
 static uint32_t prepare_geometry(const DisplayState *state,
@@ -1444,9 +1506,10 @@ static int draw_title_icon(AstraRenderBuilder *builder, uint32_t destination,
     return 1;
 }
 
+/* A decorated window's frame and title bar. The client area is left in
+   the frame color: the content is its own scene layer on top. */
 static int build_cache(AstraRenderBuilder *builder, uint32_t cache,
-                       uint32_t content, const AstraTheme *theme,
-                       const DisplayWindow *window)
+                       const AstraTheme *theme, const DisplayWindow *window)
 {
     const AstraGuiOpenWindow *request = &window->request;
     uint16_t frame = frame_width(theme, request->type);
@@ -1456,13 +1519,6 @@ static int build_cache(AstraRenderBuilder *builder, uint32_t cache,
     int32_t client_x = frame;
     int32_t client_y = frame;
 
-    if (content == 0u)
-        return 0;
-    if (request->type == ASTRA_WINDOW_FULLSCREEN ||
-        request->type == ASTRA_WINDOW_DESKTOP)
-        return astra_render_builder_blit(
-            builder, cache, content, 0, 0, request->width,
-            request->height, 0u, 0);
     if (!astra_render_builder_rounded(
             builder, cache, 0, 0, outer_width(theme, window),
             outer_height(theme, window), radius, color(theme->frame)))
@@ -1539,42 +1595,8 @@ static int build_cache(AstraRenderBuilder *builder, uint32_t cache,
         if ((request->gadgets & ASTRA_WINDOW_GADGET_CLOSE) != 0u)
             draw_gadget(builder, cache, theme, gadget_x, gadget_y,
                         ASTRA_WINDOW_GADGET_CLOSE, request->close_state);
-        client_y += title + signal;
     }
-    return astra_render_builder_blit(
-        builder, cache, content, client_x, client_y,
-        request->width, request->height,
-        radius > frame ? (uint16_t)(radius - frame) : 0u, title == 0u);
-}
-
-static int update_cache_content(AstraRenderBuilder *builder, uint32_t cache,
-                                uint32_t content, const AstraTheme *theme,
-                                const DisplayWindow *window,
-                                const DamageRect *damage)
-{
-    uint16_t frame = frame_width(theme, window->request.type);
-    uint16_t title = title_height(theme, window->request.type);
-    uint16_t signal = title == 0u ? 0u : theme->signal_height;
-    uint16_t radius = window_radius(theme, window);
-    int32_t client_x = frame;
-    int32_t client_y = frame + title + signal;
-    uint16_t client_radius = radius > frame ?
-        (uint16_t)(radius - frame) : 0u;
-    int touches_rounding = client_radius != 0u &&
-        (damage->bottom > (int32_t)window->request.height - client_radius ||
-         (title == 0u && damage->top < client_radius));
-
-    if (!touches_rounding)
-        return astra_render_builder_blit_region(
-            builder, cache, content, damage->left, damage->top,
-            client_x + damage->left, client_y + damage->top,
-            (uint16_t)(damage->right - damage->left),
-            (uint16_t)(damage->bottom - damage->top));
-    return astra_render_builder_blit_clipped(
-        builder, cache, content, client_x, client_y,
-        window->request.width, window->request.height, client_radius,
-        title == 0u, client_x + damage->left, client_y + damage->top,
-        client_x + damage->right, client_y + damage->bottom);
+    return builder->failed == 0u;
 }
 
 static void system_bar_title(const DisplayState *state, const char **title,
@@ -1688,13 +1710,20 @@ static int build_overlay_surface(AstraRenderBuilder *builder,
     uint16_t width = DISPLAY_MENU_WIDTH;
     uint16_t height = DISPLAY_MENU_HEIGHT;
 
+    state->overlay_pending = 0u;
     if (state->overlay == DISPLAY_OVERLAY_NONE)
         return 1;
     state->overlay_resource = astra_render_builder_surface_at(
         builder, state->overlay_offset, state->overlay_capacity,
         width, height);
-    if (state->overlay_resource == 0u ||
-        !astra_render_builder_rounded(
+    if (state->overlay_resource == 0u)
+        return 0;
+    /* The surface keeps its pixels: redraw only what it does not hold. */
+    if (state->overlay_drawn == state->overlay &&
+        state->overlay_drawn_hover == state->overlay_hover)
+        return 1;
+    state->overlay_pending = 1u;
+    if (!astra_render_builder_rounded(
             builder, state->overlay_resource, 0, 0,
             width, height, theme->window_radius, color(theme->frame)) ||
         !astra_render_builder_rounded(
@@ -1733,6 +1762,124 @@ static int build_overlay_surface(AstraRenderBuilder *builder,
     return 1;
 }
 
+/* Rows [first, first + rows) of one content bank. */
+static uint32_t content_descriptor(AstraRenderBuilder *builder,
+                                   const DisplayWindow *window, uint8_t bank,
+                                   uint32_t first, uint32_t rows,
+                                   uint8_t access)
+{
+    return astra_render_builder_surface_format_at(
+        builder, window->content_offset[bank] + first * window->content_pitch,
+        rows * window->content_pitch, window->request.width, (uint16_t)rows,
+        window->content_pitch, ASTRA_RENDER_FORMAT_RGB565, access);
+}
+
+static DamageRect damage_union(DamageRect left, DamageRect right)
+{
+    if (left.valid == 0u)
+        return right;
+    damage_add(&left, right);
+    return left;
+}
+
+/* The bank the client draws into after this compose: neither the one this
+   scene shows nor the one the scene before it shows, because a batch that
+   changes the screen runs only once every earlier present is on screen
+   (PRESENTATION.md) -- so the older of those is free once this batch has
+   run, and no sooner. */
+static uint8_t content_next_back(const DisplayWindow *window)
+{
+    uint8_t bank = 0u;
+
+    while (bank == window->content_back || bank == window->content_shown)
+        ++bank;
+    return bank;
+}
+
+/* Bring the next back bank up to date with the frame this compose shows,
+   unless the client promised to redraw all of it. The copy runs in this
+   batch, after every write into the frame it copies. */
+static int content_copy_forward(AstraRenderBuilder *builder,
+                                DisplayWindow *window)
+{
+    uint8_t next = content_next_back(window);
+    DamageRect stale = damage_union(window->content_stale[next],
+                                    window->content_damage);
+    uint32_t source;
+    uint32_t destination;
+
+    window->content_pending_back = next;
+    if (window->content_discard != 0u || stale.valid == 0u)
+        return 1;
+    source = content_descriptor(builder, window, window->content_back, 0u,
+                                window->request.height,
+                                ASTRA_RENDER_SURFACE_READ);
+    destination = content_descriptor(
+        builder, window, next, 0u, window->request.height,
+        ASTRA_RENDER_SURFACE_READ | ASTRA_RENDER_SURFACE_WRITE);
+    return source != 0u && destination != 0u &&
+           astra_render_builder_blit_region(
+               builder, destination, source, stale.left, stale.top,
+               stale.left, stale.top, (uint16_t)(stale.right - stale.left),
+               (uint16_t)(stale.bottom - stale.top));
+}
+
+enum {
+    CONTENT_LAYERS_COUNT,
+    CONTENT_LAYERS_DESCRIBE,
+    CONTENT_LAYERS_ADD,
+};
+
+/*
+ * The client area as scene layers straight from the content bank, over the
+ * decoration. Under a title bar only the bottom corners round: the bottom
+ * 2r rows are one layer with radius r, and the rows above its bottom r are
+ * a square layer on top that hides its rounded top corners.
+ * CONTENT_LAYERS_COUNT returns the layer count; DESCRIBE creates their
+ * source descriptors, which must precede the scene's contiguous layer
+ * records; ADD appends the layers. The last two return success.
+ */
+static int content_layers(AstraRenderBuilder *builder,
+                          const AstraTheme *theme, DisplayWindow *window,
+                          int step)
+{
+    uint16_t frame = frame_width(theme, window->request.type);
+    uint16_t title = title_height(theme, window->request.type);
+    uint16_t signal = title == 0u ? 0u : theme->signal_height;
+    uint16_t radius = window_radius(theme, window);
+    uint32_t width = window->request.width;
+    uint32_t height = window->request.height;
+    uint32_t round = radius > frame ? (uint32_t)(radius - frame) : 0u;
+    int32_t x = window->request.x + frame;
+    int32_t y = window->request.y + frame + title + signal;
+    uint8_t bank = window->content_pending_shown;
+    int split;
+
+    if (round > width / 2u)
+        round = width / 2u;
+    if (round > height / 2u)
+        round = height / 2u;
+    split = round != 0u && title != 0u;
+    if (step == CONTENT_LAYERS_COUNT)
+        return split ? 2 : 1;
+    if (step == CONTENT_LAYERS_DESCRIBE) {
+        window->content_layer[0] = content_descriptor(
+            builder, window, bank, split ? height - round * 2u : 0u,
+            split ? round * 2u : height, ASTRA_RENDER_SURFACE_READ);
+        window->content_layer[1] = !split ? 0u : content_descriptor(
+            builder, window, bank, 0u, height - round,
+            ASTRA_RENDER_SURFACE_READ);
+        return window->content_layer[0] != 0u &&
+               (!split || window->content_layer[1] != 0u);
+    }
+    return astra_render_builder_window_scene_layer(
+               builder, window->content_layer[0], x,
+               y + (int32_t)(split ? height - round * 2u : 0u),
+               (uint16_t)round, 1) &&
+           (!split || astra_render_builder_window_scene_layer(
+                          builder, window->content_layer[1], x, y, 0u, 1));
+}
+
 static uint32_t compose_failed(const AstraRenderBuilder *builder,
                                uint32_t *error, uint32_t *failure,
                                uint32_t status)
@@ -1765,7 +1912,10 @@ static uint32_t compose(void *storage, uint32_t fence,
         *failure = ASTRA_RENDER_BUILDER_FAILURE_NONE;
     for (uint32_t index = 0u; index < state->count; ++index)
         if (state->windows[index].state != ASTRA_WINDOW_STATE_MINIMIZED)
-            ++layer_count;
+            layer_count += (decorated(&state->windows[index]) ? 1u : 0u) +
+                (uint32_t)content_layers(NULL, &theme,
+                                         &state->windows[index],
+                                         CONTENT_LAYERS_COUNT);
     status = display_system_media_prepare(state);
     if (status == ASTRA_STATUS_OK)
         status = display_scene_prepare(state, layer_count);
@@ -1788,36 +1938,89 @@ static uint32_t compose(void *storage, uint32_t fence,
             (const AstraDrawListHeader *)(const void *)
                 window->surface.view.pixels;
         uint32_t cache_bank;
+        int content_ok = 1;
+
+        uint8_t bank = window->content_dirty != 0u ?
+            window->content_back : window->content_front;
 
         window->cache_pending = 2u;
         window->content_pending = 0u;
+        window->content_pending_shown =
+            window->state == ASTRA_WINDOW_STATE_MINIMIZED ?
+                DISPLAY_CONTENT_NONE : bank;
+        window->content_resource = content_descriptor(
+            &builder, window, bank, 0u, window->request.height,
+            ASTRA_RENDER_SURFACE_READ | ASTRA_RENDER_SURFACE_WRITE);
+        if (window->request.content_format ==
+            ASTRA_WINDOW_CONTENT_SURFACE) {
+            /* The client draws the content surface itself; the service
+               only clears Media RAM before the client's first frame. */
+            content_ok = window->content_initialized != 0u ||
+                         astra_render_builder_fill(
+                             &builder, window->content_resource, 0, 0,
+                             window->request.width, window->request.height,
+                             color(theme.client));
+        } else if (window->request.content_format ==
+                       ASTRA_WINDOW_CONTENT_RGB565 &&
+                   window->content_dirty != 0u) {
+            DamageRect region = window->content_damage;
+            const uint8_t *pixels =
+                (const uint8_t *)(const void *)window->surface.view.pixels;
+            uint32_t source = 0u;
 
-        window->content_resource = astra_render_builder_surface_at(
-            &builder, window->content_offset, window->content_bytes,
-            window->request.width, window->request.height);
-        if (window->content_resource == 0u ||
-            (window->content_initialized == 0u &&
-             !(window->content_dirty != 0u &&
-               astra_draw_list_covers(list, window->request.width,
-                                      window->request.height)) &&
-             !astra_render_builder_fill(
-                 &builder, window->content_resource, 0, 0,
-                 window->request.width,
-                 window->request.height, color(theme.client))) ||
-            (window->content_dirty != 0u &&
-             !astra_render_builder_replay(
-                 &builder, window->content_resource, list))) {
+            if (region.valid == 0u || region.left < 0 || region.top < 0 ||
+                region.right > window->request.width ||
+                region.bottom > window->request.height ||
+                region.left >= region.right || region.top >= region.bottom)
+                content_ok = 0;
+            else {
+                pixels += (uint32_t)region.top * window->surface.view.pitch +
+                          (uint32_t)region.left * 2u;
+                source = astra_render_builder_upload_rgb565(
+                    &builder, pixels, window->surface.view.pitch,
+                    (uint16_t)(region.right - region.left),
+                    (uint16_t)(region.bottom - region.top));
+                content_ok = source != 0u && astra_render_builder_blit_region(
+                    &builder, window->content_resource, source, 0, 0,
+                    region.left, region.top,
+                    (uint16_t)(region.right - region.left),
+                    (uint16_t)(region.bottom - region.top));
+            }
+        } else {
+            content_ok =
+                (window->content_initialized != 0u ||
+                 (window->content_dirty != 0u &&
+                  astra_draw_list_covers(list, window->request.width,
+                                         window->request.height)) ||
+                 astra_render_builder_fill(
+                     &builder, window->content_resource, 0, 0,
+                     window->request.width, window->request.height,
+                     color(theme.client))) &&
+                (window->content_dirty == 0u ||
+                 astra_render_builder_replay(
+                     &builder, window->content_resource, list));
+        }
+        if (window->content_resource == 0u || !content_ok) {
             return compose_failed(
                 &builder, error, failure,
                 builder.failed != 0u ? ASTRA_STATUS_LIMIT :
                                        ASTRA_STATUS_PROTOCOL);
         }
         window->content_pending = window->content_dirty;
+        if (window->content_dirty != 0u &&
+            !content_copy_forward(&builder, window))
+            return compose_failed(&builder, error, failure,
+                                  ASTRA_STATUS_LIMIT);
         if (window->state == ASTRA_WINDOW_STATE_MINIMIZED)
             continue;
+        if (!content_layers(&builder, &theme, window,
+                            CONTENT_LAYERS_DESCRIBE))
+            return compose_failed(&builder, error, failure,
+                                  ASTRA_STATUS_LIMIT);
+        if (!decorated(window))
+            continue;
         cache_bank = window->cache_valid != 0u &&
-                     window->cache_dirty[window->cache_active] == 0u &&
-                     window->cache_damage[window->cache_active].valid == 0u ?
+                     window->cache_dirty[window->cache_active] == 0u ?
                          window->cache_active :
                      window->cache_valid != 0u ?
                          window->cache_active ^ 1u : 0u;
@@ -1833,19 +2036,7 @@ static uint32_t compose(void *storage, uint32_t fence,
         if ((window->cache_dirty[cache_bank] != 0u ||
              (window->cache_valid & (1u << cache_bank)) == 0u) &&
             !build_cache(&builder, window->cache_resource[cache_bank],
-                         window->content_resource, &theme, window)) {
-            return compose_failed(
-                &builder, error, failure,
-                builder.failed != 0u ? ASTRA_STATUS_LIMIT :
-                                       ASTRA_STATUS_PROTOCOL);
-        }
-        if (window->cache_dirty[cache_bank] == 0u &&
-            window->cache_damage[cache_bank].valid != 0u &&
-            !update_cache_content(&builder,
-                                  window->cache_resource[cache_bank],
-                                  window->content_resource,
-                                  &theme, window,
-                                  &window->cache_damage[cache_bank])) {
+                         &theme, window)) {
             return compose_failed(
                 &builder, error, failure,
                 builder.failed != 0u ? ASTRA_STATUS_LIMIT :
@@ -1856,12 +2047,13 @@ static uint32_t compose(void *storage, uint32_t fence,
     if (!astra_render_builder_window_scene(
             &builder, state->scene_offset[state->scene_pending],
             state->scene_capacity[state->scene_pending],
+            ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT,
             color(theme.canvas)) ||
         !astra_render_builder_window_scene_layer(
             &builder, state->system_resource[0], 0, 0, 0u, 1) ||
         !astra_render_builder_window_scene_layer(
-            &builder, state->system_resource[1], 0, DISPLAY_WORK_BOTTOM,
-            0u, 1))
+            &builder, state->system_resource[1], 0,
+            DISPLAY_WORK_BOTTOM, 0u, 1))
         return compose_failed(&builder, error, failure,
                               ASTRA_STATUS_LIMIT);
     for (uint32_t index = 0u; index < state->count; ++index) {
@@ -1869,10 +2061,13 @@ static uint32_t compose(void *storage, uint32_t fence,
 
         if (window->state == ASTRA_WINDOW_STATE_MINIMIZED)
             continue;
-        if (!astra_render_builder_window_scene_layer(
-                &builder, window->cache_resource[window->cache_pending],
-                window->request.x, window->request.y,
-                window_radius(&theme, window), 1))
+        if ((decorated(window) &&
+             !astra_render_builder_window_scene_layer(
+                 &builder, window->cache_resource[window->cache_pending],
+                 window->request.x, window->request.y,
+                 window_radius(&theme, window), 1)) ||
+            !content_layers(&builder, &theme, window,
+                            CONTENT_LAYERS_ADD))
             return compose_failed(&builder, error, failure,
                                   ASTRA_STATUS_LIMIT);
     }
@@ -1909,7 +2104,6 @@ static void log_builder_failure(uint32_t failure)
         "display render command has an invalid destination",
         "display render command ring is full",
         "display render surface geometry is invalid",
-        "display render glyph table is full",
         "display render presentation state is invalid",
         "display window scene is invalid",
     };
@@ -1968,20 +2162,40 @@ static uint32_t submit_request(uint32_t device, uint32_t irq,
     return ASTRA_STATUS_OK;
 }
 
-static uint32_t present(uint32_t device, uint32_t irq,
-                        const AstraDmaBufferInfo *buffer, uint32_t byte_size,
-                        uint32_t fence, uint32_t *armed)
+/* One DMA-buffer request: a render batch, or a READ_SURFACE whose rows the
+   device writes back into the same buffer. */
+static uint32_t submit_buffer(uint32_t device, uint32_t irq,
+                              const AstraDmaBufferInfo *buffer,
+                              uint32_t operation, uint32_t byte_size,
+                              const DisplayGraphicsAttachment *attachment,
+                              uint32_t fence, uint32_t *armed)
 {
     AstraDisplayFrameRequest request = {
         .size = ASTRA_DISPLAY_FRAME_REQUEST_SIZE,
-        .operation = ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH,
+        .operation = operation,
         .fence = fence,
         .source = buffer->handle,
         .pitch = 0u,
         .byte_size = byte_size,
     };
 
+    if (attachment != NULL) {
+        request.attachment = attachment->area;
+        request.attachment_offset = attachment->offset;
+        request.attachment_bytes = attachment->bytes;
+        request.attachment_target = attachment->target;
+    }
+
     return submit_request(device, irq, &request, armed);
+}
+
+static uint32_t present(uint32_t device, uint32_t irq,
+                        const AstraDmaBufferInfo *buffer, uint32_t byte_size,
+                        uint32_t fence, uint32_t *armed)
+{
+    return submit_buffer(device, irq, buffer,
+                         ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH, byte_size,
+                         NULL, fence, armed);
 }
 
 static uint32_t update_cursor(uint32_t device, uint32_t irq,
@@ -2049,22 +2263,39 @@ static void commit_render_state(DisplayState *state)
     state->scene_valid = 1u;
     if (state->system_pending != 0u)
         state->system_initialized = 1u;
+    if (state->overlay_pending != 0u) {
+        state->overlay_drawn = state->overlay;
+        state->overlay_drawn_hover = state->overlay_hover;
+        state->overlay_pending = 0u;
+    }
     for (uint32_t index = 0u; index < state->count; ++index) {
         DisplayWindow *window = &state->windows[index];
 
         if (window->content_pending != 0u) {
+            uint8_t drawn = window->content_back;
+
+            for (uint32_t bank = 0u; bank < DISPLAY_CONTENT_BANKS; ++bank)
+                window->content_stale[bank] = bank == drawn ?
+                    (DamageRect){0} :
+                    damage_union(window->content_stale[bank],
+                                 window->content_damage);
+            window->content_stale[window->content_pending_back] =
+                (DamageRect){0};
+            window->content_front = drawn;
+            window->content_back = window->content_pending_back;
+            window->content_discard = 0u;
             window->content_dirty = 0u;
             window->content_initialized = 1u;
             window->content_damage = (DamageRect){0};
             window->content_pending = 0u;
         }
+        window->content_shown = window->content_pending_shown;
         if (window->cache_pending < 2u) {
             uint32_t bank = window->cache_pending;
 
             window->cache_active = (uint8_t)bank;
             window->cache_valid |= (uint8_t)(1u << bank);
             window->cache_dirty[bank] = 0u;
-            window->cache_damage[bank] = (DamageRect){0};
             window->cache_pending = 2u;
         }
     }
@@ -2089,6 +2320,28 @@ static uint32_t render(uint32_t device, uint32_t irq,
         commit_render_state(state);
     }
     return status;
+}
+
+/* Presents whatever changed: a frame when something is damaged (with the
+   cursor in it when @p cursor), else just the cursor, else nothing. A
+   change that damaged nothing -- the pointer leaving a closed window's
+   gadgets -- is not a render failure. */
+static uint32_t present_changes(uint32_t device, uint32_t irq,
+                                AstraDmaBufferInfo *framebuffer,
+                                DisplayState *state, uint32_t *next_fence,
+                                uint32_t *cursor_fence, uint32_t *armed,
+                                int cursor, uint32_t shape)
+{
+    if (state->damage[*next_fence & 1u].valid != 0u)
+        return render(device, irq, framebuffer, state, next_fence, armed,
+                      cursor);
+    if (cursor)
+        return update_cursor(device, irq, state->pointer_x,
+                             state->pointer_y,
+                             ASTRA_DISPLAY_CURSOR_VISIBLE |
+                                 ASTRA_DISPLAY_CURSOR_SHAPE(shape),
+                             cursor_fence, armed);
+    return ASTRA_STATUS_OK;
 }
 
 static void log_render_failure(const char *phase, uint32_t status)
@@ -2143,7 +2396,9 @@ static int valid_open(const AstraGuiOpenWindow *request, uint32_t size,
            request->header.operation == ASTRA_GUI_OPEN_WINDOW &&
            request->header.transaction_id != 0u &&
            (request->event_mask & ~ASTRA_WINDOW_SUBSCRIBE_ALL) == 0u &&
-           request->content_format == ASTRA_WINDOW_CONTENT_DRAW_LIST &&
+           (request->content_format == ASTRA_WINDOW_CONTENT_DRAW_LIST ||
+            request->content_format == ASTRA_WINDOW_CONTENT_RGB565 ||
+            request->content_format == ASTRA_WINDOW_CONTENT_SURFACE) &&
            request->type >= ASTRA_WINDOW_STANDARD &&
            request->type <= ASTRA_WINDOW_DESKTOP &&
            (request->flags & ~(ASTRA_WINDOW_RESIZABLE | ASTRA_WINDOW_MODAL |
@@ -2158,7 +2413,10 @@ static int valid_open(const AstraGuiOpenWindow *request, uint32_t size,
            request->title_icon_length <=
                ASTRA_WINDOW_TITLE_ICON_BYTES_MAX &&
            (title == 0u || request->width >= 96u) &&
-           request->pitch == 0u &&
+           (request->content_format != ASTRA_WINDOW_CONTENT_RGB565 ?
+                request->pitch == 0u :
+                request->pitch >= (uint32_t)request->width * 2u &&
+                (request->pitch & 1u) == 0u) &&
            (request->type != ASTRA_WINDOW_DESKTOP ||
             (request->x == 0u && request->y == DISPLAY_WORK_TOP &&
              request->width == ASTRA_DISPLAY_WIDTH &&
@@ -2216,7 +2474,8 @@ static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
         return frame_zero && request->title_length == 0u &&
                (request->flags & ~ASTRA_WINDOW_SUBSCRIBE_ALL) == 0u;
     if (request->action == ASTRA_GUI_WINDOW_PRESENT)
-        return request->title_length == 0u && request->flags == 0u &&
+        return request->title_length == 0u &&
+               (request->flags & ~ASTRA_GUI_PRESENT_DISCARD) == 0u &&
                (frame_zero ||
                 (request->width != 0u && request->height != 0u &&
                  (uint32_t)request->x + request->width <= content_width &&
@@ -2499,6 +2758,12 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
     case ASTRA_GUI_WINDOW_SET_POINTER_IMAGE:
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_PRESENT:
+        if ((command->flags & ASTRA_GUI_PRESENT_DISCARD) != 0u &&
+            window->request.content_format != ASTRA_WINDOW_CONTENT_SURFACE)
+            return ASTRA_STATUS_INVALID;
+        /* The last present before a compose decides the next frame. */
+        window->content_discard =
+            (command->flags & ASTRA_GUI_PRESENT_DISCARD) != 0u;
         window->content_dirty = 1u;
         damage_content(state, theme, window,
                        command->width == 0u ?
@@ -2609,12 +2874,24 @@ static uint32_t render_window_change(
     uint32_t *next_fence, uint32_t *cursor_fence, uint32_t *armed)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    uint32_t shape = display_pointer_shape(state, &theme);
+    uint32_t presented_shape = state->loaded_pointer_shape;
+    uint32_t presented_window = state->loaded_pointer_window;
+    uint32_t presented_generation = state->loaded_pointer_generation;
     uint32_t status = prepare_pointer_image(
         device, irq, pointer_buffer, state, &theme, cursor_fence, armed);
+    /* A window change never moves the pointer; the input path presents
+       every position. It presents the cursor only when the shape under the
+       pointer, or its custom image, changed, and then atomically with the
+       frame when there is one. */
+    int cursor = shape != presented_shape ||
+                 state->loaded_pointer_window != presented_window ||
+                 state->loaded_pointer_generation != presented_generation;
 
     if (status == ASTRA_STATUS_OK)
-        status = render(device, irq, framebuffer, state, next_fence, armed, 1);
-    if (status == ASTRA_STATUS_OK)
+        status = present_changes(device, irq, framebuffer, state, next_fence,
+                                 cursor_fence, armed, cursor, shape);
+    if (status == ASTRA_STATUS_OK && cursor)
         pointer_shape_presented(state, &theme);
     return status;
 }
@@ -2997,6 +3274,7 @@ static void close_window(DisplayWindow *window)
         (void)astra_close(window->vblank_signal);
     if (window->surface.area != 0u)
         (void)astra_shared_surface_close(&window->surface);
+    display_window_graphics_close(window->graphics);
     if (window->title_icon_bytes != NULL)
         (void)astra_rt_area_unmap(window->title_icon_bytes);
     if (window->title_icon_area != 0u)
@@ -3043,10 +3321,20 @@ static void receive_open(uint32_t device, uint32_t irq,
         candidate.request.gadgets = window_gadgets(request.type);
         status = display_window_media_prepare(state, &candidate);
     }
-    if (status == ASTRA_STATUS_OK)
-        status = service_status(astra_shared_draw_list_adopt(
-            &candidate.surface, handles[0], request.width, request.height,
-            ASTRA_AREA_MAP_READ));
+    if (status == ASTRA_STATUS_OK &&
+        request.content_format == ASTRA_WINDOW_CONTENT_SURFACE)
+        /* The shared area is the window's CPU staging area. */
+        status = display_window_graphics_open(&candidate.graphics,
+                                              handles[0]);
+    else if (status == ASTRA_STATUS_OK)
+        status = service_status(request.content_format ==
+                ASTRA_WINDOW_CONTENT_RGB565 ?
+            astra_shared_surface_adopt(
+                &candidate.surface, handles[0], request.width,
+                request.height, request.pitch, ASTRA_AREA_MAP_READ) :
+            astra_shared_draw_list_adopt(
+                &candidate.surface, handles[0], request.width,
+                request.height, ASTRA_AREA_MAP_READ));
     if (status == ASTRA_STATUS_OK) {
         handles[0] = 0u;
         if (request.title_icon_length != 0u) {
@@ -3095,6 +3383,7 @@ static void receive_open(uint32_t device, uint32_t irq,
         candidate.generation = 1u;
         candidate.event_send = handles[1];
         handles[1] = 0u;
+        init_content_banks(&candidate);
         dirty_cache(&candidate);
         reset_content(&candidate);
         state->windows[state->count++] = candidate;
@@ -3152,6 +3441,98 @@ static void receive_open(uint32_t device, uint32_t irq,
             (void)astra_close(handles[index]);
 }
 
+typedef struct GraphicsHostContext {
+    uint32_t device;
+    uint32_t irq;
+    AstraDmaBufferInfo *framebuffer;
+    DisplayState *state;
+    uint32_t *armed;
+} GraphicsHostContext;
+
+static uint32_t graphics_allocate(void *context, uint32_t bytes)
+{
+    const GraphicsHostContext *host = context;
+
+    return display_media_allocate(host->state, NULL, UINT32_MAX, bytes);
+}
+
+static uint32_t graphics_request(void *context, uint32_t operation,
+                                 uint32_t bytes,
+                                 const DisplayGraphicsAttachment *attachment)
+{
+    const GraphicsHostContext *host = context;
+    static uint32_t fence = UINT32_C(0x40000000);
+
+    /* Render-only and readback fences stay apart from frame (low) and
+       cursor (high) fences. */
+    if (++fence >= UINT32_C(0x80000000))
+        fence = UINT32_C(0x40000001);
+    return submit_buffer(host->device, host->irq, host->framebuffer,
+                         operation, bytes, attachment, fence, host->armed);
+}
+
+static uint32_t graphics_submit(void *context, uint32_t bytes,
+                                const DisplayGraphicsAttachment *attachment)
+{
+    return graphics_request(context, ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH,
+                            bytes, attachment);
+}
+
+static uint32_t graphics_read(void *context, uint32_t bytes)
+{
+    return graphics_request(context, ASTRA_DISPLAY_FRAME_READ_SURFACE, bytes,
+                            NULL);
+}
+
+static void receive_graphics(uint32_t device, uint32_t irq,
+                             AstraDmaBufferInfo *framebuffer,
+                             DisplayState *state, uint32_t window_index,
+                             const AstraGuiGraphicsCommand *command,
+                             uint32_t size, uint32_t *handles,
+                             uint32_t handle_count, uint32_t *armed)
+{
+    DisplayWindow *window = &state->windows[window_index];
+    GraphicsHostContext context = {
+        device, irq, framebuffer, state, armed
+    };
+    DisplayGraphicsHost host = {
+        .context = &context,
+        .allocate = graphics_allocate,
+        .submit = graphics_submit,
+        .read = graphics_read,
+        .batch_storage = (void *)(uintptr_t)framebuffer->virtual_base,
+        .content_offset = window->content_offset[window->content_back],
+        .content_bytes = window->content_bytes,
+        .content_pitch = window->content_pitch,
+        .content_width = window->request.width,
+        .content_height = window->request.height,
+    };
+    AstraGuiGraphicsReply reply = {0};
+    uint32_t status = display_window_graphics_command_valid(
+        command, size, handle_count, window->id) ?
+        ASTRA_STATUS_OK : ASTRA_STATUS_PROTOCOL;
+
+    if (status == ASTRA_STATUS_OK && window->graphics == NULL)
+        status = ASTRA_STATUS_UNSUPPORTED;
+    if (status == ASTRA_STATUS_OK)
+        status = display_window_graphics_command(
+            window->graphics, &host, command, handles, &reply);
+    if (status != ASTRA_STATUS_OK) {
+        reply.object = 0u;
+        reply.pitch = 0u;
+    }
+    astra_message_header_set(&reply.header, sizeof(reply),
+                             ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
+                             ASTRA_GUI_GRAPHICS_REPLY,
+                             command->header.transaction_id);
+    reply.status = status;
+    if (handle_count != 0u && handles[0] != 0u)
+        (void)astra_port_send(handles[0], &reply, sizeof(reply), NULL, 0u);
+    for (uint32_t index = 0u; index < handle_count; ++index)
+        if (handles[index] != 0u)
+            (void)astra_close(handles[index]);
+}
+
 static void receive_command(uint32_t device, uint32_t irq,
                             AstraDmaBufferInfo *framebuffer,
                             AstraDmaBufferInfo *pointer_buffer,
@@ -3160,6 +3541,10 @@ static void receive_command(uint32_t device, uint32_t irq,
                             uint32_t *armed)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    union {
+        AstraGuiWindowCommand window;
+        AstraGuiGraphicsCommand graphics;
+    } message = {0};
     AstraGuiWindowCommand command = {0};
     AstraGuiWindowState reply;
     DisplayWindow closed = {0};
@@ -3184,7 +3569,7 @@ static void receive_command(uint32_t device, uint32_t irq,
     uint16_t old_height = state->windows[window_index].request.height;
     int pointer_image_pending = 0;
     uint32_t status = astra_port_receive(
-        receive, &command, sizeof(command), handles,
+        receive, &message, sizeof(message), handles,
         ASTRA_MESSAGE_HANDLES_MAX, &size, &handle_count);
     int changed = 0;
 
@@ -3203,6 +3588,14 @@ static void receive_command(uint32_t device, uint32_t irq,
     }
     if (status != ASTRA_SYSCALL_OK)
         return;
+    if (size >= ASTRA_MESSAGE_HEADER_SIZE &&
+        message.graphics.header.operation == ASTRA_GUI_GRAPHICS_COMMAND) {
+        receive_graphics(device, irq, framebuffer, state, window_index,
+                         &message.graphics, size, handles, handle_count,
+                         armed);
+        return;
+    }
+    command = message.window;
     status = valid_command(&command, size, handle_count, id,
                            state->windows[window_index].request.width,
                            state->windows[window_index].request.height) ?
@@ -3619,9 +4012,11 @@ static void serve_windows(uint32_t device, uint32_t irq,
                 (effects & DISPLAY_POINTER_RENDER) == 0u)
                 pointer_shape_presented(&state, &theme);
             if ((effects & DISPLAY_POINTER_RENDER) != 0u) {
-                status = render(device, irq, framebuffer, &state,
-                                &next_fence, &armed,
-                                (effects & DISPLAY_POINTER_CURSOR) != 0u);
+                status = present_changes(
+                    device, irq, framebuffer, &state, &next_fence,
+                    &cursor_fence, &armed,
+                    (effects & DISPLAY_POINTER_CURSOR) != 0u,
+                    display_pointer_shape(&state, &theme));
                 if (status != ASTRA_STATUS_OK)
                     render_failure("display pointer render failed", status);
                 if ((effects & DISPLAY_POINTER_CURSOR) != 0u)

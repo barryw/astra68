@@ -62,10 +62,11 @@ int astra_draw_list_view_init(AstraSurfaceView *surface, void *storage,
 
     memset(storage, 0, byte_size);
     header->magic = ASTRA_DRAW_LIST_MAGIC;
-    header->version = ASTRA_DRAW_LIST_VERSION_1_2;
+    header->version = ASTRA_DRAW_LIST_VERSION_1_5;
     header->total_bytes = ASTRA_DRAW_LIST_AREA_BYTES;
     header->width = width;
     header->height = height;
+    header->command_capacity = ASTRA_DRAW_LIST_COMMAND_MAX;
     *surface = (AstraSurfaceView){
         storage, byte_size, 0u, width, height,
         ASTRA_SURFACE_VIEW_DRAW_LIST, 0u, 0u, width, height};
@@ -213,8 +214,9 @@ int astra_draw_list_view_adopt(AstraSurfaceView *surface, void *storage,
         byte_size < ASTRA_DRAW_LIST_AREA_BYTES)
         return 0;
     return header->magic == ASTRA_DRAW_LIST_MAGIC &&
-           header->version == ASTRA_DRAW_LIST_VERSION_1_2 &&
+           header->version == ASTRA_DRAW_LIST_VERSION_1_5 &&
            header->total_bytes == ASTRA_DRAW_LIST_AREA_BYTES &&
+           header->command_capacity == ASTRA_DRAW_LIST_COMMAND_MAX &&
            header->width == width && header->height == height &&
            header->command_count <= ASTRA_DRAW_LIST_COMMAND_MAX &&
            header->payload_bytes <= ASTRA_DRAW_LIST_PAYLOAD_BYTES;
@@ -1959,10 +1961,11 @@ static void test_scroll_view_layout_and_wheel(void)
     AstraWindowEvent event;
     AstraDrawListHeader list = {
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_2,
+        .version = ASTRA_DRAW_LIST_VERSION_1_5,
         .total_bytes = ASTRA_DRAW_LIST_AREA_BYTES,
         .width = 130u,
-        .height = 60u};
+        .height = 60u,
+        .command_capacity = ASTRA_DRAW_LIST_COMMAND_MAX};
     AstraSurfaceView draw_list = {
         (uint16_t *)(void *)&list, ASTRA_DRAW_LIST_AREA_BYTES, 0u,
         130u, 60u, ASTRA_SURFACE_VIEW_DRAW_LIST, 0u, 0u, 130u, 60u};

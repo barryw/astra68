@@ -9,6 +9,7 @@
 #include <astra/vfs_host_direct.h>
 #include <astra/vfs_host_transport.h>
 #include <astra/vfs_path.h>
+#include <astra/string.h>
 
 #include <stdint.h>
 #include <string.h>
@@ -55,89 +56,71 @@ static void clear_words(volatile void *address, uint32_t bytes)
         words[index] = 0u;
 }
 
-static uint32_t append(char *out, uint32_t at, const char *text)
-{
-    while (*text != '\0')
-        out[at++] = *text++;
-    return at;
-}
-
-static uint32_t append_hex32(char *out, uint32_t at, uint32_t value)
-{
-    static const char digits[] = "0123456789abcdef";
-
-    for (int shift = 28; shift >= 0; shift -= 4)
-        out[at++] = digits[(value >> shift) & 0xfu];
-    return at;
-}
-
-static uint32_t append_hex64(char *out, uint32_t at, uint64_t value)
-{
-    at = append_hex32(out, at, (uint32_t)(value >> 32));
-    return append_hex32(out, at, (uint32_t)value);
-}
-
 static void report(uint32_t depth, uint64_t elapsed)
 {
-    char line[112];
-    uint32_t at = 0u;
+    char line_text[112];
+    AstraString line;
 
-    at = append(line, at, "RAW USER depth=");
-    at = append_hex32(line, at, depth);
-    at = append(line, at, " iterations=");
-    at = append_hex32(line, at, ASTRA_HOSTBENCH_ITERATIONS);
-    at = append(line, at, " elapsed-ns=");
-    at = append_hex64(line, at, elapsed);
-    line[at] = '\0';
-    (void)astra_log(line);
+    astra_string_init(&line, line_text, sizeof(line_text));
+
+    (void)astra_string_append(&line, "RAW USER depth=");
+    (void)astra_string_append_hex(&line, depth, 8u);
+    (void)astra_string_append(&line, " iterations=");
+    (void)astra_string_append_hex(&line, ASTRA_HOSTBENCH_ITERATIONS, 8u);
+    (void)astra_string_append(&line, " elapsed-ns=");
+    (void)astra_string_append_hex(&line, elapsed, 16u);
+    (void)astra_log(line_text);
 }
 
 static void report_layer(const char *name, uint64_t elapsed)
 {
-    char line[112];
-    uint32_t at = 0u;
+    char line_text[112];
+    AstraString line;
 
-    at = append(line, at, "LAYER name=");
-    at = append(line, at, name);
-    at = append(line, at, " iterations=");
-    at = append_hex32(line, at, HOSTBENCH_LAYER_ITERATIONS);
-    at = append(line, at, " elapsed-ns=");
-    at = append_hex64(line, at, elapsed);
-    line[at] = '\0';
-    (void)astra_log(line);
+    astra_string_init(&line, line_text, sizeof(line_text));
+
+    (void)astra_string_append(&line, "LAYER name=");
+    (void)astra_string_append(&line, name);
+    (void)astra_string_append(&line, " iterations=");
+    (void)astra_string_append_hex(&line, HOSTBENCH_LAYER_ITERATIONS, 8u);
+    (void)astra_string_append(&line, " elapsed-ns=");
+    (void)astra_string_append_hex(&line, elapsed, 16u);
+    (void)astra_log(line_text);
 }
 
 static void report_adaptive(uint32_t polls, uint32_t misses,
                             uint64_t elapsed)
 {
-    char line[128];
-    uint32_t at = 0u;
+    char line_text[128];
+    AstraString line;
 
-    at = append(line, at, "ADAPT polls=");
-    at = append_hex32(line, at, polls);
-    at = append(line, at, " iterations=");
-    at = append_hex32(line, at, HOSTBENCH_ADAPTIVE_ITERATIONS);
-    at = append(line, at, " misses=");
-    at = append_hex32(line, at, misses);
-    at = append(line, at, " elapsed-ns=");
-    at = append_hex64(line, at, elapsed);
-    line[at] = '\0';
-    (void)astra_log(line);
+    astra_string_init(&line, line_text, sizeof(line_text));
+
+    (void)astra_string_append(&line, "ADAPT polls=");
+    (void)astra_string_append_hex(&line, polls, 8u);
+    (void)astra_string_append(&line, " iterations=");
+    (void)astra_string_append_hex(&line, HOSTBENCH_ADAPTIVE_ITERATIONS, 8u);
+    (void)astra_string_append(&line, " misses=");
+    (void)astra_string_append_hex(&line, misses, 8u);
+    (void)astra_string_append(&line, " elapsed-ns=");
+    (void)astra_string_append_hex(&line, elapsed, 16u);
+    (void)astra_log(line_text);
 }
 
 static void report_memory(const char *name, uint64_t bytes, uint64_t elapsed)
 {
-    char line[112];
-    uint32_t at = 0u;
+    char line_text[112];
+    AstraString line;
 
-    at = append(line, at, "MEM name=");
-    at = append(line, at, name);
-    at = append(line, at, " bytes=");
-    at = append_hex64(line, at, bytes);
-    at = append(line, at, " elapsed-ns=");
-    at = append_hex64(line, at, elapsed);
-    line[at] = '\0';
-    (void)astra_log(line);
+    astra_string_init(&line, line_text, sizeof(line_text));
+
+    (void)astra_string_append(&line, "MEM name=");
+    (void)astra_string_append(&line, name);
+    (void)astra_string_append(&line, " bytes=");
+    (void)astra_string_append_hex(&line, bytes, 16u);
+    (void)astra_string_append(&line, " elapsed-ns=");
+    (void)astra_string_append_hex(&line, elapsed, 16u);
+    (void)astra_log(line_text);
 }
 
 static uint32_t memory_check(void)
@@ -278,12 +261,13 @@ static uint32_t run_adaptive(volatile AstraHostChannelHeader *header,
 
 static int fail(const AstraStartupCapability *bootstrap, uint32_t code)
 {
-    char line[40];
-    uint32_t at = append(line, 0u, "ASTRA RAW USER FAIL code=");
+    char line_text[40];
+    AstraString line;
 
-    at = append_hex32(line, at, code);
-    line[at] = '\0';
-    (void)astra_log(line);
+    astra_string_init(&line, line_text, sizeof(line_text));
+    (void)astra_string_append(&line, "ASTRA RAW USER FAIL code=");
+    (void)astra_string_append_hex(&line, code, 8u);
+    (void)astra_log(line_text);
     if (bootstrap != NULL)
         (void)astra_service_ready(bootstrap->handle, ASTRA_STATUS_IO, NULL,
                                   0u);

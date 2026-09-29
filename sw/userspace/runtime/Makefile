@@ -20,7 +20,7 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 TARGET_C_SOURCES := src/startup.c src/lifecycle.c src/service.c src/arguments.c src/syscall.c src/stream_source.c src/executable.c src/launch.c src/port.c src/shutdown.c src/posix_process.c \
 	src/event_control.c src/memory.c \
 	src/host_channel_client.c \
-	src/log.c src/sort.c src/assert.c src/event_catalog.c src/allocator_heap.c src/allocator.c \
+	src/log.c src/sort.c src/string.c src/assert.c src/event_catalog.c src/allocator_heap.c src/allocator.c \
 	src/dynamic_loader.c src/dynamic_process.c
 TARGET_ASM_SOURCES := src/m68k/syscall.S src/m68k/thread_start.S \
 	src/m68k/read_tp.S
@@ -78,6 +78,7 @@ DYNAMIC_LOADER_TEST := build/host/test_dynamic_loader
 ALLOCATOR_TEST := build/host/test_allocator
 MUTEX_TEST := build/host/test_mutex
 HOST_CHANNEL_CLIENT_TEST := build/host/test_host_channel_client
+STRING_TEST := build/host/test_string
 DYNAMIC_CONTRACT_LIBRARY := build/contract/dynamic.library
 DYNAMIC_CONTRACT_PROGRAM := build/contract/dynamic.elf
 DYNAMIC_TLS_CONTRACT_LIBRARY := build/contract/dynamic-tls.library
@@ -171,7 +172,7 @@ runtime-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 		--allow strcmp --allow strcpy --allow strlen \
 		--allow strncmp --allow strncpy
 	@python3 ../../../tools/library_info.py $< | \
-		grep -q '^runtime.library.1 1.8.0 ABI 1.8$$'
+		grep -q '^runtime.library.1 1.9.0 ABI 1.9$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
 	@$(READELF) -dW $< | grep -F 'Library soname: [runtime.library.1]' >/dev/null
 	@$(READELF) -dW $< | grep 'BIND_NOW' >/dev/null
@@ -188,6 +189,7 @@ runtime-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.4' >/dev/null
 	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.5' >/dev/null
 	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.6' >/dev/null
+	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.9' >/dev/null
 	@ASTRA_LIBRARY_FIXTURE=$(abspath $<) $(KERNEL_ELF_TEST) >/dev/null
 	@echo "astra runtime shared library: PASS"
 
@@ -281,7 +283,8 @@ $(DYNAMIC_LOADER_TEST): src/dynamic_loader.c tests/test_dynamic_loader.c \
 test: $(HOST_TEST) $(STARTUP_SERVICE_TEST) $(LIFECYCLE_TEST) \
 		$(SHUTDOWN_CONTRACT_TEST) \
 		$(POSIX_PROCESS_TEST) $(ALLOCATOR_TEST) $(HOST_CHANNEL_CLIENT_TEST) \
-		$(DYNAMIC_LOADER_TEST) $(MUTEX_TEST)
+		$(DYNAMIC_LOADER_TEST) $(MUTEX_TEST) $(STRING_TEST)
+	./$(STRING_TEST)
 	./$(HOST_TEST)
 	./$(STARTUP_SERVICE_TEST)
 	./$(LIFECYCLE_TEST)
@@ -293,8 +296,17 @@ test: $(HOST_TEST) $(STARTUP_SERVICE_TEST) $(LIFECYCLE_TEST) \
 	./$(DYNAMIC_LOADER_TEST) $(DYNAMIC_CONTRACT_PROGRAM) \
 		$(DYNAMIC_CONTRACT_LIBRARY) $(DYNAMIC_TLS_CONTRACT_LIBRARY)
 
+$(STRING_TEST): src/string.c tests/test_string.c \
+		$(NDK)/include/astra/string.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/string.c tests/test_string.c -o $@
+
 sanitize:
 	@mkdir -p build/host
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
+		src/string.c tests/test_string.c -o build/host/test_string_sanitize
+	./build/host/test_string_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -DASTRA_LIBRARY_LOADER_TEST -no-pie \
 		$(HOST_TEST_SOURCES) \

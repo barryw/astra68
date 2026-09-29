@@ -84,6 +84,8 @@ getegid
 geteuid
 getgid
 getgroups
+gethostbyaddr
+gethostbyname
 get_current_dir_name
 getdtablesize
 gethostname
@@ -104,12 +106,14 @@ getsockopt
 gettimeofday
 getuid
 getwd
+h_errno
 in6addr_any
 in6addr_loopback
 initgroups
 inet_addr
 inet_aton
 inet_ntop
+inet_ntoa
 inet_pton
 ioctl
 isatty
@@ -144,8 +148,10 @@ pwrite
 pvalloc
 pthread_attr_destroy
 pthread_attr_getdetachstate
+pthread_attr_getstacksize
 pthread_attr_init
 pthread_attr_setdetachstate
+pthread_attr_setstacksize
 pthread_cond_broadcast
 pthread_cond_destroy
 pthread_cond_init
@@ -161,6 +167,7 @@ pthread_detach
 pthread_equal
 pthread_exit
 pthread_getspecific
+pthread_getschedparam
 pthread_join
 pthread_key_create
 pthread_key_delete
@@ -186,7 +193,9 @@ pthread_rwlockattr_getpshared
 pthread_rwlockattr_init
 pthread_rwlockattr_setpshared
 pthread_self
+pthread_sigmask
 pthread_setspecific
+pthread_setschedparam
 read
 readdir
 readdir_r

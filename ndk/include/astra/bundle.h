@@ -129,5 +129,15 @@ uint32_t astra_aicon_strike(const AstraAicon *icon, uint16_t size,
 /** Read one palette entry. @param icon Validated icon. @param index Palette index. @param rgba Receives red, green, blue, alpha. @return ASTRA_BUNDLE_OK or an error. */
 uint32_t astra_aicon_palette(const AstraAicon *icon, uint16_t index,
                              uint8_t rgba[4]);
+/** Expand a strike to straight-alpha ARGB8888 for upload as a surface.
+ * @param icon Validated icon. @param strike Strike of @p icon.
+ * @param pixels Receives width x height native 0xAARRGGBB words, rows
+ * @p stride words apart; each index takes its palette entry's alpha and an
+ * index past the palette is transparent. @param stride Words per row, at
+ * least the strike width.
+ * @return ASTRA_BUNDLE_OK or an error. */
+uint32_t astra_aicon_strike_argb(const AstraAicon *icon,
+                                 const AstraAiconStrike *strike,
+                                 uint32_t *pixels, uint32_t stride);
 
 #endif

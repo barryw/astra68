@@ -17,6 +17,11 @@ INTERFACE_LIBRARY := $(ASTRA_INTERFACE_LIBRARY)
 NETWORK_LIBRARY := $(ASTRA_NETWORK_LIBRARY)
 CONFIG_LIBRARY := $(ASTRA_CONFIG_LIBRARY)
 PCM_LIBRARY := $(ASTRA_PCM_LIBRARY)
+SDL2_LIBRARY := $(ASTRA_SDL2_LIBRARY)
+SDL2_NET_LIBRARY := $(ASTRA_SDL2_NET_LIBRARY)
+SDL2_IMAGE_LIBRARY := $(ASTRA_SDL2_IMAGE_LIBRARY)
+SDL2_MIXER_LIBRARY := $(ASTRA_SDL2_MIXER_LIBRARY)
+SDL2_TTF_LIBRARY := $(ASTRA_SDL2_TTF_LIBRARY)
 BUNDLE_TOOL := ../../../tools/build/astra-bundle
 BUNDLE_DEPENDENCY_TOOL := ../../../tools/check_bundle_dependencies.py
 RUNTIME := build/Runtime.kit
@@ -28,6 +33,7 @@ INTERFACE := build/Interface.kit
 NETWORK := build/Network.kit
 CONFIGURATION := build/Configuration.kit
 AUDIO := build/Audio.kit
+SDL := build/SDL.kit
 CXX := build/Cxx.kit
 LUA := build/Lua.kit
 RUNTIME_STAMP := build/.Runtime.kit.stamp
@@ -113,6 +119,31 @@ PCM_LIBRARY_PROVIDES := $(shell sed -n \
 	's/^provides pcm\.library //p' Audio.kit/manifest)
 PCM_LIBRARY_ABI := $(word 1,$(PCM_LIBRARY_PROVIDES))
 PCM_LIBRARY_VERSION := $(word 2,$(PCM_LIBRARY_PROVIDES))
+SDL_STAMP := build/.SDL.kit.stamp
+KIT_STAMPS := $(RUNTIME_STAMP) $(STREAMS_STAMP) $(POSIX_STAMP) \
+	$(CXX_STAMP) $(LUA_STAMP) $(GRAPHICS_STAMP) $(FILESYSTEM_STAMP) \
+	$(INTERFACE_STAMP) $(NETWORK_STAMP) $(CONFIGURATION_STAMP) \
+	$(PCM_STAMP) $(SDL_STAMP)
+SDL2_LIBRARY_PROVIDES := $(shell sed -n \
+	's/^provides SDL2\.library //p' SDL.kit/manifest)
+SDL2_LIBRARY_ABI := $(word 1,$(SDL2_LIBRARY_PROVIDES))
+SDL2_LIBRARY_VERSION := $(word 2,$(SDL2_LIBRARY_PROVIDES))
+SDL2_NET_LIBRARY_PROVIDES := $(shell sed -n \
+	's/^provides SDL2_net\.library //p' SDL.kit/manifest)
+SDL2_NET_LIBRARY_ABI := $(word 1,$(SDL2_NET_LIBRARY_PROVIDES))
+SDL2_NET_LIBRARY_VERSION := $(word 2,$(SDL2_NET_LIBRARY_PROVIDES))
+SDL2_IMAGE_LIBRARY_PROVIDES := $(shell sed -n \
+	's/^provides SDL2_image\.library //p' SDL.kit/manifest)
+SDL2_IMAGE_LIBRARY_ABI := $(word 1,$(SDL2_IMAGE_LIBRARY_PROVIDES))
+SDL2_IMAGE_LIBRARY_VERSION := $(word 2,$(SDL2_IMAGE_LIBRARY_PROVIDES))
+SDL2_MIXER_LIBRARY_PROVIDES := $(shell sed -n \
+'s/^provides SDL2_mixer\.library //p' SDL.kit/manifest)
+SDL2_MIXER_LIBRARY_ABI := $(word 1,$(SDL2_MIXER_LIBRARY_PROVIDES))
+SDL2_MIXER_LIBRARY_VERSION := $(word 2,$(SDL2_MIXER_LIBRARY_PROVIDES))
+SDL2_TTF_LIBRARY_PROVIDES := $(shell sed -n \
+'s/^provides SDL2_ttf\.library //p' SDL.kit/manifest)
+SDL2_TTF_LIBRARY_ABI := $(word 1,$(SDL2_TTF_LIBRARY_PROVIDES))
+SDL2_TTF_LIBRARY_VERSION := $(word 2,$(SDL2_TTF_LIBRARY_PROVIDES))
 LIBRARIES := $(ASTRA_SHARED_LIBRARIES) $(LOADER_LIBRARY)
 PROVIDER_MANIFESTS := $(wildcard *.kit/manifest)
 DEPENDENCY_MANIFESTS := $(PROVIDER_MANIFESTS) $(wildcard ../apps/*.app/manifest)
@@ -122,7 +153,11 @@ KIT_INVENTORY := build/.kits
 all: $(RUNTIME_STAMP) $(STREAMS_STAMP) $(POSIX_STAMP) $(GRAPHICS_STAMP) \
 	$(FILESYSTEM_STAMP) $(INTERFACE_STAMP) \
 	$(NETWORK_STAMP) $(CONFIGURATION_STAMP) $(CXX_STAMP) $(LUA_STAMP) \
-	$(PCM_STAMP) $(KIT_INVENTORY) provider-coverage
+	$(PCM_STAMP) $(SDL_STAMP) $(KIT_INVENTORY) provider-coverage
+
+# Kit recipes are part of the package content, not only build instructions.
+# A changed copy/install step must republish the corresponding bundle.
+$(KIT_STAMPS): Makefile
 
 $(COMPILER_LIBRARY): FORCE
 	$(MAKE) -C ../compiler compiler-library-contract
@@ -174,6 +209,10 @@ $(CONFIG_LIBRARY): FORCE
 
 $(PCM_LIBRARY): FORCE
 	$(MAKE) -C ../audio library-contract
+
+$(SDL2_LIBRARY) $(SDL2_NET_LIBRARY) $(SDL2_IMAGE_LIBRARY) \
+$(SDL2_MIXER_LIBRARY) $(SDL2_TTF_LIBRARY) &: FORCE
+	$(MAKE) -C ../sdl2 all
 
 $(BUNDLE_TOOL): FORCE
 	$(MAKE) -C ../../../tools all
@@ -307,6 +346,37 @@ $(PCM_STAMP): Audio.kit/manifest $(PCM_LIBRARY) $(BUNDLE_TOOL)
 	$(BUNDLE_TOOL) check $(AUDIO)
 	@touch $@
 
+$(SDL_STAMP): SDL.kit/manifest $(SDL2_LIBRARY) \
+		$(SDL2_NET_LIBRARY) $(SDL2_IMAGE_LIBRARY) \
+		$(SDL2_MIXER_LIBRARY) $(SDL2_TTF_LIBRARY) $(BUNDLE_TOOL)
+	rm -rf $(SDL)
+	@mkdir -p $(SDL)/libraries/SDL2.library/abi-$(SDL2_LIBRARY_ABI)/$(SDL2_LIBRARY_VERSION)/m68k-68040
+	@mkdir -p $(SDL)/libraries/SDL2_net.library/abi-$(SDL2_NET_LIBRARY_ABI)/$(SDL2_NET_LIBRARY_VERSION)/m68k-68040
+	@mkdir -p $(SDL)/libraries/SDL2_image.library/abi-$(SDL2_IMAGE_LIBRARY_ABI)/$(SDL2_IMAGE_LIBRARY_VERSION)/m68k-68040
+	@mkdir -p $(SDL)/libraries/SDL2_mixer.library/abi-$(SDL2_MIXER_LIBRARY_ABI)/$(SDL2_MIXER_LIBRARY_VERSION)/m68k-68040
+	@mkdir -p $(SDL)/libraries/SDL2_ttf.library/abi-$(SDL2_TTF_LIBRARY_ABI)/$(SDL2_TTF_LIBRARY_VERSION)/m68k-68040
+	@mkdir -p $(SDL)/licenses
+	cp SDL.kit/manifest $(SDL)/manifest
+	cp $(SDL2_LIBRARY) \
+		$(SDL)/libraries/SDL2.library/abi-$(SDL2_LIBRARY_ABI)/$(SDL2_LIBRARY_VERSION)/m68k-68040/SDL2.library
+	cp $(SDL2_NET_LIBRARY) \
+		$(SDL)/libraries/SDL2_net.library/abi-$(SDL2_NET_LIBRARY_ABI)/$(SDL2_NET_LIBRARY_VERSION)/m68k-68040/SDL2_net.library
+	cp $(SDL2_IMAGE_LIBRARY) \
+		$(SDL)/libraries/SDL2_image.library/abi-$(SDL2_IMAGE_LIBRARY_ABI)/$(SDL2_IMAGE_LIBRARY_VERSION)/m68k-68040/SDL2_image.library
+	cp $(SDL2_MIXER_LIBRARY) \
+		$(SDL)/libraries/SDL2_mixer.library/abi-$(SDL2_MIXER_LIBRARY_ABI)/$(SDL2_MIXER_LIBRARY_VERSION)/m68k-68040/SDL2_mixer.library
+	cp $(SDL2_TTF_LIBRARY) \
+		$(SDL)/libraries/SDL2_ttf.library/abi-$(SDL2_TTF_LIBRARY_ABI)/$(SDL2_TTF_LIBRARY_VERSION)/m68k-68040/SDL2_ttf.library
+	cp ../sdl2/build/vendor/SDL2/LICENSE.txt $(SDL)/licenses/SDL2.txt
+	cp ../sdl2/build/vendor/SDL2_net/LICENSE.txt $(SDL)/licenses/SDL2_net.txt
+	cp ../sdl2/build/vendor/SDL2_image/LICENSE.txt $(SDL)/licenses/SDL2_image.txt
+	cp ../sdl2/build/vendor/SDL2_mixer/LICENSE.txt $(SDL)/licenses/SDL2_mixer.txt
+	cp ../sdl2/build/vendor/SDL2_ttf/LICENSE.txt $(SDL)/licenses/SDL2_ttf.txt
+	cp ../sdl2/build/vendor/SDL2_ttf/external/freetype/docs/FTL.TXT \
+		$(SDL)/licenses/FreeType.txt
+	$(BUNDLE_TOOL) check $(SDL)
+	@touch $@
+
 provider-coverage: $(LIBRARIES) $(DEPENDENCY_MANIFESTS) \
 		$(BUNDLE_DEPENDENCY_TOOL)
 	python3 $(BUNDLE_DEPENDENCY_TOOL) \
@@ -321,6 +391,7 @@ $(KIT_INVENTORY): FORCE $(PROVIDER_MANIFESTS)
 	@rm -f $@.tmp
 
 test: all
+	python3 test_stamp_dependencies.py
 	@touch $(FILESYSTEM)/stale-artifact
 	@rm -f $(FILESYSTEM_STAMP)
 	@$(MAKE) $(FILESYSTEM_STAMP)

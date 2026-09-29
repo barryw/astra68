@@ -128,12 +128,13 @@ $(HOST_TEST): $(TEST_SOURCES)
 
 $(LOADER_TEST): src/loader_manifest.c $(NDK)/src/manifest.c \
 		$(NDK)/src/utf8.c \
-		$(NDK)/src/bundle.c \
+		$(NDK)/src/bundle.c $(RUNTIME)/src/string.c \
 		tests/test_loader_manifest.c \
 		include/loader.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/loader_manifest.c $(NDK)/src/manifest.c $(NDK)/src/bundle.c \
+		$(RUNTIME)/src/string.c \
 		$(NDK)/src/utf8.c \
 		tests/test_loader_manifest.c -o $@
 
@@ -145,7 +146,7 @@ $(SERVICE_DEFINITION_TEST): src/service_definition_store.c \
 		src/loader_manifest.c $(CONFIG)/src/config_document.c \
 		$(NDK)/src/config_scope.c \
 		$(NDK)/src/manifest.c $(NDK)/src/utf8.c \
-		$(NDK)/src/service_definition.c \
+		$(NDK)/src/service_definition.c $(RUNTIME)/src/string.c \
 		tests/test_service_definition_store.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
@@ -156,10 +157,11 @@ $(LOADER_STATUS_TEST): tests/test_loader_status.c include/loader.h \
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $< -o $@
 
 $(LAUNCH_REPORT_TEST): src/launch_report.c tests/test_launch_report.c \
-		include/launch_report.h
+		include/launch_report.h $(RUNTIME)/src/string.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		src/launch_report.c tests/test_launch_report.c -o $@
+		src/launch_report.c $(RUNTIME)/src/string.c \
+		tests/test_launch_report.c -o $@
 
 $(VOLUME_READ_TEST): src/volume.c tests/test_volume_read.c include/volume.h
 	@mkdir -p $(@D)
@@ -188,7 +190,7 @@ sanitize:
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) src/loader_manifest.c $(NDK)/src/manifest.c \
 		$(NDK)/src/utf8.c \
-		$(NDK)/src/bundle.c \
+		$(NDK)/src/bundle.c $(RUNTIME)/src/string.c \
 		tests/test_loader_manifest.c -o build/host/test_loader_manifest_sanitize
 	./build/host/test_loader_manifest_sanitize
 	$(HOST_CC) $(CPPFLAGS) -I$(LWEXT4)/include -I$(STORAGE)/port/include \

@@ -1,11 +1,13 @@
 #include <astra/network_kit.h>
 #include <astra/posix_descriptor.h>
 #include <astra/runtime.h>
+#include "socket_internal.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -109,6 +111,11 @@ static int network_open(void)
     return 1;
 }
 
+AstraNetworkSession *astra_posix_network_session(void)
+{
+    return network_open() ? &network_session : NULL;
+}
+
 static int grow_sockets(uint32_t wanted)
 {
     uint32_t capacity = socket_capacity == 0u ? 4u : socket_capacity;
@@ -153,6 +160,55 @@ static PosixSocket *socket_for_fd(int fd)
         return NULL;
     }
     return &sockets[slot];
+}
+
+int astra_posix_socket_interface_ioctl(int fd, void *parameter)
+{
+    struct ifconf *config = parameter;
+    AstraNetworkInterfaceAddress *interfaces = NULL;
+    AstraNetworkStatus status;
+    uint32_t count = 0u, capacity = 0u;
+    int result;
+
+    if (socket_for_fd(fd) == NULL)
+        return -1;
+    if (config == NULL || config->ifc_len < 0 ||
+        (config->ifc_len != 0 && config->ifc_buf == NULL)) {
+        errno = EINVAL;
+        return -1;
+    }
+    status = astra_network_interfaces(&network_session, NULL, 0u, &count);
+    if (status != ASTRA_NETWORK_OK &&
+        status != ASTRA_NETWORK_BUFFER_TOO_SMALL) {
+        errno = network_errno(status);
+        return -1;
+    }
+    while (count != 0u) {
+        if (count > ASTRA_NETWORK_SLOT_BYTES / sizeof(*interfaces)) {
+            errno = ENOBUFS;
+            return -1;
+        }
+        interfaces = calloc(count, sizeof(*interfaces));
+        if (interfaces == NULL) {
+            errno = ENOMEM;
+            return -1;
+        }
+        capacity = count;
+        status = astra_network_interfaces(&network_session, interfaces,
+                                          capacity, &count);
+        if (status != ASTRA_NETWORK_BUFFER_TOO_SMALL)
+            break;
+        free(interfaces);
+        interfaces = NULL;
+    }
+    if (status != ASTRA_NETWORK_OK || count > capacity) {
+        free(interfaces);
+        errno = status == ASTRA_NETWORK_OK ? EIO : network_errno(status);
+        return -1;
+    }
+    result = astra_posix_pack_ifconf(interfaces, count, config);
+    free(interfaces);
+    return result;
 }
 
 static uint32_t network_message_flags(int flags)

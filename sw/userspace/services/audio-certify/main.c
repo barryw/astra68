@@ -4,6 +4,7 @@
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/status.h>
+#include <astra/string.h>
 
 #include <stdint.h>
 
@@ -72,33 +73,19 @@ static uint32_t prepare_pcm(AstraHostChannelClient *channel, uint32_t phase,
     return phase;
 }
 
-static uint32_t append_text(char *out, uint32_t at, const char *text)
-{
-    while (*text != '\0')
-        out[at++] = *text++;
-    return at;
-}
-
-static uint32_t append_hex32(char *out, uint32_t at, uint32_t value)
-{
-    static const char digits[] = "0123456789abcdef";
-
-    for (int shift = 28; shift >= 0; shift -= 4)
-        out[at++] = digits[(value >> shift) & 0xfu];
-    return at;
-}
-
 static void report(const char *prefix, uint32_t code, uint32_t detail)
 {
-    char line[100];
-    uint32_t at = append_text(line, 0u, prefix);
+    char line_text[100];
+    AstraString line;
 
-    at = append_text(line, at, " stage=");
-    at = append_hex32(line, at, code);
-    at = append_text(line, at, " detail=");
-    at = append_hex32(line, at, detail);
-    line[at] = '\0';
-    (void)astra_log(line);
+    astra_string_init(&line, line_text, sizeof(line_text));
+    (void)astra_string_append(&line, prefix);
+
+    (void)astra_string_append(&line, " stage=");
+    (void)astra_string_append_hex(&line, code, 8u);
+    (void)astra_string_append(&line, " detail=");
+    (void)astra_string_append_hex(&line, detail, 8u);
+    (void)astra_log(line_text);
 }
 
 static void pause_for_queue(void)

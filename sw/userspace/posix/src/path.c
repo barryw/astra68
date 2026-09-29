@@ -1,17 +1,9 @@
 #include "path.h"
 
+#include <astra/string.h>
 #include <astra/vfs_service.h>
 
 #include <stddef.h>
-
-static int append(char *out, uint32_t capacity, uint32_t *length, char value)
-{
-    if (*length + 1u >= capacity)
-        return 0;
-    out[(*length)++] = value;
-    out[*length] = '\0';
-    return 1;
-}
 
 int astra_posix_path_is_absolute(const char *path)
 {
@@ -21,33 +13,27 @@ int astra_posix_path_is_absolute(const char *path)
 static int input_path(const char *cwd, const char *path, char *out,
                       uint32_t capacity)
 {
-    uint32_t length = 0u;
+    AstraString text;
 
-    out[0] = '\0';
+    astra_string_init(&text, out, capacity);
     if (*path != '/') {
-        while (*cwd != '\0')
-            if (!append(out, capacity, &length, *cwd++))
-                return 0;
-        if (length == 0u || out[length - 1u] != '/')
-            if (!append(out, capacity, &length, '/'))
-                return 0;
+        (void)astra_string_append(&text, cwd);
+        if (text.length == 0u || out[text.length - 1u] != '/')
+            (void)astra_string_append_char(&text, '/');
     }
-    while (*path != '\0')
-        if (!append(out, capacity, &length, *path++))
-            return 0;
-    return 1;
+    (void)astra_string_append(&text, path);
+    return !text.truncated;
 }
 
 static int normalise(const char *input, char *out, uint32_t capacity)
 {
-    uint32_t length = 0u;
+    AstraString text;
     uint32_t at = 0u;
 
     if (capacity < 2u || input[0] != '/')
         return 0;
-    out[0] = '\0';
-    if (!append(out, capacity, &length, '/'))
-        return 0;
+    astra_string_init(&text, out, capacity);
+    (void)astra_string_append_char(&text, '/');
     while (input[at] != '\0') {
         uint32_t start;
         uint32_t count;
@@ -63,20 +49,20 @@ static int normalise(const char *input, char *out, uint32_t capacity)
         if (count == 1u && input[start] == '.')
             continue;
         if (count == 2u && input[start] == '.' && input[start + 1u] == '.') {
-            while (length > 1u && out[length - 1u] != '/')
-                --length;
-            if (length > 1u)
-                --length;
-            out[length] = '\0';
+            /* Drop the last component; the root stays. */
+            while (text.length > 1u && out[text.length - 1u] != '/')
+                --text.length;
+            if (text.length > 1u)
+                --text.length;
+            out[text.length] = '\0';
             continue;
         }
-        if (length > 1u && !append(out, capacity, &length, '/'))
+        if (text.length > 1u)
+            (void)astra_string_append_char(&text, '/');
+        if (!astra_string_append_bytes(&text, input + start, count))
             return 0;
-        for (uint32_t index = 0u; index < count; ++index)
-            if (!append(out, capacity, &length, input[start + index]))
-                return 0;
     }
-    return 1;
+    return !text.truncated;
 }
 
 int astra_posix_path_resolve(const char *cwd, const char *path,
@@ -84,7 +70,6 @@ int astra_posix_path_resolve(const char *cwd, const char *path,
                              char *native, uint32_t native_capacity)
 {
     char input[ASTRA_VFS_PATH_MAX];
-    uint32_t length = 0u;
 
     if (cwd == NULL || path == NULL || path[0] == '\0' || normal == NULL ||
         native == NULL || cwd[0] != '/')
@@ -92,14 +77,9 @@ int astra_posix_path_resolve(const char *cwd, const char *path,
     if (!input_path(cwd, path, input, sizeof(input)) ||
         !normalise(input, normal, normal_capacity))
         return -1;
-    while (normal[length] != '\0') {
-        if (length + 1u >= native_capacity)
-            return -1;
-        native[length] = normal[length];
-        ++length;
-    }
-    native[length] = '\0';
-    return length == 1u ? 0 : 1;
+    if (!astra_string_copy(native, native_capacity, normal))
+        return -1;
+    return normal[1] == '\0' ? 0 : 1;
 }
 
 int astra_posix_path_resolve_native(const char *cwd, const char *path,
@@ -116,27 +96,15 @@ int astra_posix_path_resolve_native(const char *cwd, const char *path,
 int astra_posix_link_target_to_native(const char *target, char *native,
                                       uint32_t capacity)
 {
-    uint32_t length = 0u;
-
     if (target == NULL || native == NULL || capacity == 0u)
         return -1;
-    native[0] = '\0';
-    while (*target != '\0')
-        if (!append(native, capacity, &length, *target++))
-            return -1;
-    return 0;
+    return astra_string_copy(native, capacity, target) ? 0 : -1;
 }
 
 int astra_posix_link_target_to_posix(const char *target, char *posix,
                                      uint32_t capacity)
 {
-    uint32_t length = 0u;
-
     if (target == NULL || posix == NULL || capacity == 0u)
         return -1;
-    posix[0] = '\0';
-    while (*target != '\0')
-        if (!append(posix, capacity, &length, *target++))
-            return -1;
-    return 0;
+    return astra_string_copy(posix, capacity, target) ? 0 : -1;
 }

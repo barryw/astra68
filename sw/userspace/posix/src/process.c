@@ -16,6 +16,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "thread_internal.h"
+
 typedef struct AstraPosixChild {
     struct AstraPosixChild *next;
     uint32_t handle;
@@ -119,6 +121,7 @@ fork(void)
         return (pid_t)-1;
     }
     if (process_id == 0u) {
+        astra_posix_thread_after_fork_child();
         discard_inherited_children();
         free(child);
         if (astra_posix_file_after_fork_child() != 0 ||

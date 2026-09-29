@@ -159,6 +159,16 @@ ASTRA_NODISCARD AstraResult astra_window_set_pointer_image(
  * @return ASTRA_OK on success or an AstraResult error.
  */
 ASTRA_NODISCARD AstraResult astra_window_present(AstraWindow *window);
+/** Publish the whole content surface and give up its pixels: the next
+ * frame starts undefined and the client redraws every pixel of it before
+ * presenting again, as SDL's renderer already requires. This saves the
+ * service copying the frame forward. Only ::ASTRA_WINDOW_CONTENT_SURFACE
+ * windows accept it.
+ * @param window Open window.
+ * @return ASTRA_OK on success or an AstraResult error.
+ * @since system.library 2.6.
+ */
+ASTRA_NODISCARD AstraResult astra_window_present_discard(AstraWindow *window);
 /** Publish only the changed content rectangle.
  * @param window Open window.
  * @param damage Changed content-space rectangle.
@@ -168,6 +178,24 @@ ASTRA_NODISCARD AstraResult astra_window_present_region(
     AstraWindow *window, const AstraWindowFrame *damage);
 /** Close a window. @param window Open window. @return ASTRA_OK or an error. */
 ASTRA_NODISCARD AstraResult astra_window_close(AstraWindow *window);
+/**
+ * Bind a graphics display to a ::ASTRA_WINDOW_CONTENT_SURFACE window.
+ * The display borrows the window's control channel: close it first.
+ * @param window Open window.
+ * @param display Empty display that receives the binding.
+ * @return ASTRA_OK or an AstraResult error.
+ */
+ASTRA_NODISCARD AstraResult astra_window_display(const AstraWindow *window,
+                                                 AstraDisplay *display);
+/**
+ * Borrow a ::ASTRA_WINDOW_CONTENT_SURFACE window's content as an RGB565
+ * draw target and source, sized to the window's current content.
+ * @param window Open window.
+ * @param surface Empty surface that receives the borrowed content.
+ * @return ASTRA_OK or an AstraResult error.
+ */
+ASTRA_NODISCARD AstraResult astra_window_surface(AstraWindow *window,
+                                                 AstraSurface *surface);
 /** Poll one event. @param window Open window. @param event Receives the event. @return ASTRA_OK, ASTRA_ERR_WOULD_BLOCK, or an error. */
 ASTRA_NODISCARD AstraResult astra_window_event_try(
     AstraWindow *window, AstraWindowEvent *event);

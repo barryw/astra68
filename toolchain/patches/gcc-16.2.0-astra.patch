@@ -92,6 +92,101 @@ diff --git a/libgcc/config.host b/libgcc/config.host
  m68k-*-elf* | fido-*-elf)
  	tmake_file="$tmake_file m68k/t-floatlib"
  	;;
+diff --git a/libgcc/config/m68k/fpgnulib.c b/libgcc/config/m68k/fpgnulib.c
+--- a/libgcc/config/m68k/fpgnulib.c
++++ b/libgcc/config/m68k/fpgnulib.c
+@@ -215,21 +215,58 @@
+   return dl.d;
+ }
+ 
++/* Astra: integer <-> single conversions work in single precision.  The
++   generic versions went through double, which made every int <-> float
++   conversion a double conversion plus a double rounding: most of a soft-float
++   graphics client's arithmetic.  Rounding is to nearest, ties to even, as
++   __truncdfsf2 rounds; __fixsfsi truncates and saturates as __fixdfsi does. */
++
++/* ASTRA-SINGLE-CONVERSIONS-BEGIN */
++static float
++__astra_pack_sf (unsigned long mant, long sign)
++{
++  union float_long fl;
++  long exp;
++  unsigned long rest;
++
++  if (mant == 0)
++    {
++      fl.l = sign;
++      return fl.f;
++    }
++  /* The leading one moves to bit 31; the value is then 1.f * 2^(exp-127). */
++  exp = 31 + 127 - __builtin_clzl (mant);
++  mant <<= __builtin_clzl (mant);
++  rest = mant & 0xFFUL;
++  mant >>= 8;
++  if (rest > 0x80UL || (rest == 0x80UL && (mant & 1UL)))
++    {
++      mant++;
++      if (mant == (unsigned long) HIDDEN << 1)
++	{
++	  mant >>= 1;
++	  exp++;
++	}
++    }
++  fl.l = PACK (sign, exp, (long) (mant & ~(unsigned long) HIDDEN));
++  return fl.f;
++}
++
+ /* convert unsigned int to float */
+ float
+ __floatunsisf (unsigned long l)
+ {
+-  double foo = __floatunsidf (l);
+-  return foo;
++  return __astra_pack_sf (l, 0);
+ }
+ 
+ /* convert int to float */
+ float
+ __floatsisf (long l)
+ {
+-  double foo = __floatsidf (l);
+-  return foo;
++  return l < 0 ? __astra_pack_sf (-(unsigned long) l, SIGNBIT)
++	       : __astra_pack_sf ((unsigned long) l, 0);
+ }
++/* ASTRA-SINGLE-CONVERSIONS-END */
+ 
+ /* convert float to double */
+ double
+@@ -386,12 +423,26 @@
+ }
+ 
+ /* convert float to int */
++/* ASTRA-FIX-SINGLE-BEGIN */
+ long
+ __fixsfsi (float a1)
+ {
+-  double foo = a1;
+-  return __fixdfsi (foo);
++  union float_long fl;
++  long exp;
++  unsigned long l;
++
++  fl.f = a1;
++  exp = EXP (fl.l) - 127;
++  if (exp >= 31)
++    /* Return largest integer, as __fixdfsi does for Inf and NaN too.  */
++    return SIGN (fl.l) ? 0x80000000L : 0x7fffffffL;
++  if (exp < 0)
++    return 0;
++  l = (unsigned long) MANT (fl.l);
++  l = exp >= 23 ? l << (exp - 23) : l >> (23 - exp);
++  return SIGN (fl.l) ? -(long) l : (long) l;
+ }
++/* ASTRA-FIX-SINGLE-END */
+ 
+ #else /* EXTFLOAT */
+ 
 diff --git a/libgcc/config/m68k/lb1sf68.S b/libgcc/config/m68k/lb1sf68.S
 --- a/libgcc/config/m68k/lb1sf68.S
 +++ b/libgcc/config/m68k/lb1sf68.S

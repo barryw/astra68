@@ -41,17 +41,19 @@ static int root_link_target_for_assign(const AstraAssign *assign,
         memcpy(target, "/dh0", sizeof("/dh0"));
         return 1;
     }
+    /* A convenience on the system volume names a directory there. One bound
+       at a root is some volume's own root -- hostfs serving WORK -- and is a
+       mount, not a link into /system. */
+    if (assign->root[0] == '\0')
+        return 0;
     for (size_t i = 0u; i < sizeof(names) / sizeof(names[0]); ++i)
         if (strcmp(assign->name, names[i]) == 0) {
             length = strlen(assign->root);
             if (length + sizeof("/system/") > ASTRA_VFS_PATH_MAX)
                 return 0;
-            memcpy(target, "/system", sizeof("/system"));
-            if (length != 0u) {
-                target[sizeof("/system") - 1u] = '/';
-                memcpy(target + sizeof("/system"), assign->root,
-                       length + 1u);
-            }
+            memcpy(target, "/system/", sizeof("/system/") - 1u);
+            memcpy(target + sizeof("/system/") - 1u, assign->root,
+                   length + 1u);
             return 1;
         }
     return 0;

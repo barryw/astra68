@@ -75,7 +75,7 @@ components include message ports in `astra/port.h`, shared areas in
 access in `astra/front_panel.h`, the
 font/text-layout service contract in `astra/font.h`, and the complete Vega and
 Astraea graphics contract in `astra/graphics.h`. Graphics applications work
-through owned surfaces, palettes, tile/sprite sets, raster programs, command
+through owned surfaces, palettes, sprite sets, raster programs, command
 lists, and fences rather than raw MMIO. The direct backend currently provides
 the contract and validation boundary; services which require the operating
 system return `ASTRA_ERR_UNAVAILABLE` until their resource manager lands.

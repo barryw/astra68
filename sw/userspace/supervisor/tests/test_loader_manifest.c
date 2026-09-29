@@ -1,4 +1,5 @@
 #include <loader.h>
+#include <astra/service_manager_abi.h>
 
 #include <assert.h>
 #include <stdio.h>
@@ -218,10 +219,152 @@ static void parses_exact_span_without_terminator(void)
     supervisor_manifest_destroy(&manifest);
 }
 
+static SupervisorManifestGrant grant(const char *text)
+{
+    char copy[64];
+    SupervisorManifestGrant out;
+
+    assert(strlen(text) < sizeof(copy));
+    strcpy(copy, text);
+    assert(supervisor_manifest_grant(copy, &out));
+    return out;
+}
+
+static void trusted_entries_are_ceilings(void)
+{
+    char text[] =
+        "service /services/storage grants BLOCK_DEVICE serves SYSTEM:r "
+            "required\n"
+        "trusted /apps/Terminal.app grants GUI SYSTEM:r SERVICE_MANAGER "
+            "WORK:rw\n";
+    SupervisorManifest manifest = SUPERVISOR_MANIFEST_INIT;
+    const SupervisorManifestEntry *terminal;
+    SupervisorManifestGrant wanted;
+
+    assert(supervisor_manifest_parse(text, sizeof(text) - 1u, &manifest));
+    assert(manifest.count == 2u);
+    terminal = &manifest.entries[1];
+    assert(terminal->trusted == 1u && terminal->resident == 0u &&
+           terminal->required == 0u && terminal->grant_count == 4u);
+    wanted = grant("SERVICE_MANAGER");
+    assert(supervisor_launch_admits(terminal, &wanted));
+    wanted = grant("SYSTEM:r");
+    assert(supervisor_launch_admits(terminal, &wanted));
+    /* Rights above the ceiling, a raw name used as a namespace, and a name
+       the ceiling lacks are all refused. */
+    wanted = grant("SYSTEM:rw");
+    assert(!supervisor_launch_admits(terminal, &wanted));
+    wanted = grant("GUI:r");
+    assert(!supervisor_launch_admits(terminal, &wanted));
+    wanted = grant("DISPLAY");
+    assert(!supervisor_launch_admits(terminal, &wanted));
+    supervisor_manifest_destroy(&manifest);
+
+    /* A trusted line names one bundle and nothing else. */
+    {
+        static const char *bad[] = {
+            "trusted /services/desktop grants GUI\n",
+            "trusted /apps/Terminal grants GUI\n",
+            "trusted /apps/a/b.app grants GUI\n",
+            "trusted /apps/.app grants GUI\n",
+            "trusted /apps/Terminal.app grants GUI serves X\n",
+            "trusted /apps/Terminal.app grants GUI delegates\n",
+            "trusted /apps/Terminal.app grants GUI required\n",
+        };
+
+        for (uint32_t at = 0u; at < sizeof(bad) / sizeof(bad[0]); ++at) {
+            char line[96];
+
+            strcpy(line, bad[at]);
+            assert(!supervisor_manifest_parse(line, (uint32_t)strlen(line),
+                                              &manifest));
+        }
+    }
+}
+
+static void default_application_ceiling(void)
+{
+    static const char *admitted[] = {
+        "GUI", "CLIPBOARD", "PCM", "NETWORK", "APP_LAUNCH", "APPS:r",
+        "LIBS:r", "STORE:rw", "HOME:rw", "CONFIG:rw", "RAM:r",
+    };
+    static const char *refused[] = {
+        "DISPLAY", "INPUT", "HOST_DEVICE", "BLOCK_DEVICE", "CLOCK",
+        "SERVICE_MANAGER", "EVENT_CONTROL", "PROCESS", "APPS:rw",
+        "LIBS:rw", "SYSTEM:r", "PROC:r", "COMMANDS:r", "STORE",
+        "GUI:r", "UNKNOWN",
+    };
+
+    for (uint32_t at = 0u; at < sizeof(admitted) / sizeof(admitted[0]);
+         ++at) {
+        SupervisorManifestGrant wanted = grant(admitted[at]);
+
+        assert(supervisor_launch_admits(NULL, &wanted));
+    }
+    for (uint32_t at = 0u; at < sizeof(refused) / sizeof(refused[0]); ++at) {
+        SupervisorManifestGrant wanted = grant(refused[at]);
+
+        assert(!supervisor_launch_admits(NULL, &wanted));
+    }
+    assert(!supervisor_launch_admits(NULL, NULL));
+}
+
+static void parses_service_tiers(void)
+{
+    char text[] =
+        "service /services/storage grants BLOCK_DEVICE serves SYSTEM:r "
+        "critical\n"
+        "service /services/input grants INPUT serves INPUT_SERVICE required\n"
+        "service /services/media grants HOST_DEVICE serves PCM "
+        "restart=always start=manual\n"
+        "service /services/remote grants NETWORK\n";
+    SupervisorManifest manifest = SUPERVISOR_MANIFEST_INIT;
+    const char *refused[] = {
+        "service /services/a grants X critical required\n",
+        "service /services/a grants X required required\n",
+        "service /services/a grants X required start=manual\n",
+        "service /services/a grants X critical restart=always\n",
+        "service /services/a grants X start=on-demand\n",
+        "service /services/a grants X restart=sometimes\n",
+        "service /services/a grants X start=boot start=manual\n",
+        "application /apps/A.app grants GUI critical\n",
+        "application /apps/A.app grants GUI restart=never\n",
+        "trusted /apps/A.app grants GUI start=manual\n",
+    };
+
+    assert(supervisor_manifest_parse(text, sizeof(text) - 1u, &manifest));
+    assert(manifest.count == 4u);
+    assert(manifest.entries[0].critical == 1u &&
+           manifest.entries[0].required == 0u &&
+           manifest.entries[0].serves_count == 1u);
+    assert(manifest.entries[1].required == 1u &&
+           manifest.entries[1].critical == 0u);
+    assert(manifest.entries[2].required == 0u &&
+           manifest.entries[2].start_policy == ASTRA_SERVICE_START_MANUAL &&
+           manifest.entries[2].restart_policy ==
+               ASTRA_SERVICE_RESTART_ALWAYS &&
+           manifest.entries[2].serves_count == 1u);
+    assert(manifest.entries[3].start_policy == ASTRA_SERVICE_START_BOOT &&
+           manifest.entries[3].restart_policy ==
+               ASTRA_SERVICE_RESTART_ON_FAULT &&
+           manifest.entries[3].grant_count == 1u);
+    for (uint32_t at = 0u; at < sizeof(refused) / sizeof(refused[0]); ++at) {
+        char line[128];
+
+        (void)strcpy(line, refused[at]);
+        assert(!supervisor_manifest_parse(line, (uint32_t)strlen(line),
+                                          &manifest));
+    }
+    supervisor_manifest_destroy(&manifest);
+}
+
 int main(void)
 {
+    trusted_entries_are_ceilings();
+    default_application_ceiling();
     valid_manifest();
     refuses_whole_file();
+    parses_service_tiers();
     parses_bundle_grants();
     accepts_large_commented_manifest();
     path_uses_vfs_authority();

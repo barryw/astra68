@@ -32,13 +32,14 @@ SYSTEM_OBJECTS := build/m68k/dynamic/resource.o build/m68k/dynamic/area.o \
 	build/m68k/dynamic/manifest.o build/m68k/dynamic/bundle.o \
 	build/m68k/dynamic/config_scope.o \
 	build/m68k/dynamic/window.o build/m68k/dynamic/pointer.o \
+	build/m68k/dynamic/graphics.o build/m68k/dynamic/display_mode.o \
 	build/m68k/dynamic/clipboard.o build/m68k/dynamic/keymap.o
 SYSTEM_MAP := system.library.exports
 SYSTEM_HEADERS := include/astra/resource.h include/astra/area.h \
 	include/astra/port.h include/astra/application.h \
 	include/astra/service_manager.h include/astra/manifest.h \
 	include/astra/bundle.h include/astra/config_library.h \
-	include/astra/window.h include/astra/pointer.h \
+	include/astra/window.h include/astra/pointer.h include/astra/graphics.h \
 	include/astra/clipboard.h include/astra/keymap.h
 SYMBOL_OWNERSHIP_CHECK := ../tools/check_shared_symbol_ownership.py
 SOURCES := src/resource.c src/area.c src/port.c src/bulk_ring.c \
@@ -141,7 +142,7 @@ system-library-contract: $(SYSTEM_LIBRARY)
 	@python3 ../tools/check_elf_exports.py --readelf $(READELF) \
 		$(SYSTEM_MAP) $(SYSTEM_LIBRARY)
 	@python3 ../tools/library_info.py $< | \
-		grep -q '^system.library.2 2.2.0 ABI 2.2$$'
+		grep -q '^system.library.2 2.6.0 ABI 2.6$$'
 	@$(READELF) -hW $< | grep -q 'Type:.*DYN'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [system.library.2]'
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
@@ -149,7 +150,7 @@ system-library-contract: $(SYSTEM_LIBRARY)
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'
 	@$(READELF) -lW $< | grep -q ' GNU_RELRO '
-	@$(READELF) -VW $< | grep -q 'ASTRA_SYSTEM_2.2'
+	@$(READELF) -VW $< | grep -q 'ASTRA_SYSTEM_2.6'
 	@echo "astra system shared library: PASS"
 
 build/m68k/%.o: src/%.c
@@ -164,7 +165,8 @@ build/host/test_font: src/font.c src/utf8.c tests/test_font.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
 
-build/host/test_graphics: src/graphics.c src/display_mode.c tests/test_graphics.c
+build/host/test_graphics: src/graphics.c src/display_mode.c src/resource.c \
+		src/area.c src/port.c src/window.c src/utf8.c tests/test_graphics.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
 
@@ -208,6 +210,7 @@ build/host/test_fixed: src/fixed.c tests/test_fixed.c
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
 
 build/host/test_bundle: src/manifest.c src/bundle.c src/utf8.c \
+		../sw/userspace/runtime/src/string.c \
 		tests/test_bundle.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
@@ -231,6 +234,7 @@ build/host/test_datetime: src/datetime.c ../sw/common/civil.c \
 	$(HOST_CC) $(HOST_CFLAGS) $^ -o $@
 
 test: $(HOST_TESTS) header-contract
+	python3 tests/test_distribution_makefile.py
 	./build/host/test_front_panel
 	./build/host/test_font
 	./build/host/test_graphics
@@ -256,6 +260,7 @@ build/host/test_font_sanitize: src/font.c src/utf8.c tests/test_font.c
 	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
 
 build/host/test_graphics_sanitize: src/graphics.c src/display_mode.c \
+		src/resource.c src/area.c src/port.c src/window.c src/utf8.c \
 		tests/test_graphics.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
@@ -301,6 +306,7 @@ build/host/test_fixed_sanitize: src/fixed.c tests/test_fixed.c
 	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
 
 build/host/test_bundle_sanitize: src/manifest.c src/bundle.c src/utf8.c \
+		../sw/userspace/runtime/src/string.c \
 		tests/test_bundle.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(SANITIZER_FLAGS) $^ -o $@
@@ -391,11 +397,34 @@ developer-components: all pic shared-library-contracts
 
 $(DIST_ARCHIVE): developer-components $(DOC_STAMP)
 	rm -rf $(DIST_STAGE)
-	install -d $(DIST_STAGE)/include/posix $(DIST_STAGE)/lib/m68040 \
+	install -d $(DIST_STAGE)/include/posix $(DIST_STAGE)/include/SDL2 \
+		$(DIST_STAGE)/lib/m68040 \
 		$(DIST_STAGE)/make $(DIST_STAGE)/src $(DIST_STAGE)/examples \
-		$(DIST_STAGE)/docs $(DIST_STAGE)/tools
+		$(DIST_STAGE)/docs $(DIST_STAGE)/tools $(DIST_STAGE)/licenses
 	$(MAKE) install-headers DESTDIR=$(abspath $(DIST_STAGE)) PREFIX=
 	cp -R ../sw/userspace/posix/include/. $(DIST_STAGE)/include/posix/
+	cp -R ../sw/userspace/sdl2/build/vendor/SDL2/include/. \
+		$(DIST_STAGE)/include/SDL2/
+	install -m 0644 ../sw/userspace/sdl2/build/vendor/SDL2_net/include/SDL_net.h \
+		$(DIST_STAGE)/include/SDL2/SDL_net.h
+	install -m 0644 ../sw/userspace/sdl2/build/vendor/SDL2_image/include/SDL_image.h \
+		$(DIST_STAGE)/include/SDL2/SDL_image.h
+	install -m 0644 ../sw/userspace/sdl2/build/vendor/SDL2_mixer/include/SDL_mixer.h \
+		$(DIST_STAGE)/include/SDL2/SDL_mixer.h
+	install -m 0644 ../sw/userspace/sdl2/build/vendor/SDL2_ttf/SDL_ttf.h \
+		$(DIST_STAGE)/include/SDL2/SDL_ttf.h
+	install -m 0644 ../sw/userspace/sdl2/build/vendor/SDL2/LICENSE.txt \
+		$(DIST_STAGE)/licenses/SDL2.txt
+	install -m 0644 ../sw/userspace/sdl2/build/vendor/SDL2_net/LICENSE.txt \
+		$(DIST_STAGE)/licenses/SDL2_net.txt
+	install -m 0644 ../sw/userspace/sdl2/build/vendor/SDL2_image/LICENSE.txt \
+		$(DIST_STAGE)/licenses/SDL2_image.txt
+	install -m 0644 ../sw/userspace/sdl2/build/vendor/SDL2_mixer/LICENSE.txt \
+		$(DIST_STAGE)/licenses/SDL2_mixer.txt
+	install -m 0644 ../sw/userspace/sdl2/build/vendor/SDL2_ttf/LICENSE.txt \
+		$(DIST_STAGE)/licenses/SDL2_ttf.txt
+	install -m 0644 ../sw/userspace/sdl2/build/vendor/SDL2_ttf/external/freetype/docs/FTL.TXT \
+		$(DIST_STAGE)/licenses/FreeType.txt
 	install -m 0644 README.md $(DIST_STAGE)/README.md
 	install -m 0644 make/*.mk $(DIST_STAGE)/make/
 	install -m 0644 ../sw/userspace/posix/kit/program.c \

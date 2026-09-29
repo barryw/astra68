@@ -271,8 +271,63 @@ static void icon_test(void)
            ASTRA_BUNDLE_INVALID);
 }
 
+/* Two colours: index 0 transparent, index 1 translucent 0x112233; the
+   16-pixel strike is a checkerboard, the larger strikes index 0. */
+static void icon_argb_test(void)
+{
+    enum { PALETTE = 32u, STRIKES = PALETTE + 8u, DATA = STRIKES + 48u };
+    static uint8_t bytes[DATA + 16u * 16u + 32u * 32u + 64u * 64u];
+    static uint32_t argb[16u * 20u];
+    AstraAicon icon;
+    AstraAiconStrike strike;
+    uint32_t data = DATA;
+
+    put32(bytes, 0u, ASTRA_AICON_MAGIC);
+    put16(bytes, 4u, ASTRA_AICON_VERSION);
+    put16(bytes, 6u, ASTRA_AICON_HEADER_SIZE);
+    put32(bytes, 8u, sizeof(bytes));
+    put16(bytes, 12u, 3u);
+    put16(bytes, 14u, 2u);
+    put32(bytes, 16u, PALETTE);
+    put32(bytes, 20u, STRIKES);
+    put32(bytes, 24u, DATA);
+    put32(bytes, PALETTE + 4u, 0x11223380u);
+    for (uint32_t at = 0u, size = 16u; at < 3u; ++at, size *= 2u) {
+        uint32_t record = STRIKES + at * 16u;
+
+        put16(bytes, record, (uint16_t)size);
+        put16(bytes, record + 2u, (uint16_t)size);
+        put32(bytes, record + 4u, data);
+        put32(bytes, record + 8u, size * size);
+        data += size * size;
+    }
+    for (uint32_t at = 0u; at < 16u * 16u; ++at)
+        bytes[DATA + at] = (uint8_t)((at / 16u + at % 16u) & 1u);
+    assert(astra_aicon_open(bytes, sizeof(bytes), &icon) == ASTRA_BUNDLE_OK);
+    assert(astra_aicon_strike(&icon, 16u, &strike) == ASTRA_BUNDLE_OK);
+    for (uint32_t at = 0u; at < 16u * 20u; ++at)
+        argb[at] = 0xdeadbeefu;
+    assert(astra_aicon_strike_argb(&icon, &strike, argb, 20u) ==
+           ASTRA_BUNDLE_OK);
+    for (uint32_t y = 0u; y < 16u; ++y)
+        for (uint32_t x = 0u; x < 20u; ++x)
+            assert(argb[y * 20u + x] ==
+                   (x >= 16u ? 0xdeadbeefu :
+                    ((x + y) & 1u) != 0u ? 0x80112233u : 0u));
+    assert(astra_aicon_strike_argb(&icon, &strike, argb, 15u) ==
+           ASTRA_BUNDLE_INVALID);
+    assert(astra_aicon_strike_argb(&icon, &strike, NULL, 16u) ==
+           ASTRA_BUNDLE_INVALID);
+    assert(astra_aicon_strike_argb(NULL, &strike, argb, 16u) ==
+           ASTRA_BUNDLE_INVALID);
+    strike.length = 1u;
+    assert(astra_aicon_strike_argb(&icon, &strike, argb, 16u) ==
+           ASTRA_BUNDLE_INVALID);
+}
+
 int main(void)
 {
+    icon_argb_test();
     manifest_test();
     icon_test();
     return 0;

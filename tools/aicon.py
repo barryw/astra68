@@ -131,15 +131,119 @@ def gallery_strike(size):
     return bytes(pixels)
 
 
+# The desktop draws an icon one palette colour at a time into a bounded draw
+# list, so an image is reduced to this many opaque colours plus transparency.
+IMAGE_COLORS_MAX = 15
+
+
+def read_bmp(path):
+    """Uncompressed 1/4/8/24/32-bit Windows bitmap -> (width, height, rows of
+    (r, g, b, a)). Without an alpha channel the top-left pixel's colour is
+    transparent, the colour-key convention SDL's own sample art uses."""
+    with open(path, "rb") as handle:
+        data = handle.read()
+    if data[:2] != b"BM" or len(data) < 54:
+        raise ValueError("%s is not a Windows bitmap" % path)
+    offset = struct.unpack_from("<I", data, 10)[0]
+    header = struct.unpack_from("<I", data, 14)[0]
+    width, height, planes, bits, compression = struct.unpack_from(
+        "<iiHHI", data, 18)
+    colors = struct.unpack_from("<I", data, 46)[0] if header >= 40 else 0
+    if planes != 1 or width <= 0 or height == 0 or bits not in (
+            1, 4, 8, 24, 32) or compression not in (0, 3):
+        raise ValueError("%s: unsupported bitmap layout" % path)
+    if compression == 3 and bits != 32:
+        raise ValueError("%s: unsupported bitmap masks" % path)
+    top_down = height < 0
+    height = abs(height)
+    table = []
+    if bits <= 8:
+        count = colors or (1 << bits)
+        base = 14 + header
+        for index in range(count):
+            b, g, r = data[base + index * 4:base + index * 4 + 3]
+            table.append((r, g, b, 255))
+    stride = ((width * bits + 31) // 32) * 4
+    rows = []
+    for row in range(height):
+        source = row if top_down else height - 1 - row
+        line = data[offset + source * stride:offset + (source + 1) * stride]
+        pixels = []
+        for x in range(width):
+            if bits == 32:
+                b, g, r, a = line[x * 4:x * 4 + 4]
+                pixels.append((r, g, b, a if compression == 3 else 255))
+            elif bits == 24:
+                b, g, r = line[x * 3:x * 3 + 3]
+                pixels.append((r, g, b, 255))
+            else:
+                bit = x * bits
+                value = (line[bit // 8] >> (8 - bits - bit % 8)) & \
+                    ((1 << bits) - 1)
+                pixels.append(table[value])
+        rows.append(pixels)
+    if all(pixel[3] == 255 for line in rows for pixel in line):
+        key = rows[0][0]
+        rows = [[(0, 0, 0, 0) if pixel == key else pixel for pixel in line]
+                for line in rows]
+    return width, height, rows
+
+
+def image_icon(path):
+    """(palette, strike builder) for an image: aspect kept, centred, nearest
+    sampled, reduced to IMAGE_COLORS_MAX colours by popularity."""
+    width, height, rows = read_bmp(path)
+    counts = {}
+    for line in rows:
+        for pixel in line:
+            if pixel[3] >= 128:
+                key = pixel[:3]
+                counts[key] = counts.get(key, 0) + 1
+    if not counts:
+        raise ValueError("%s has no opaque pixels" % path)
+    chosen = sorted(counts, key=lambda key: (-counts[key], key))
+    chosen = chosen[:IMAGE_COLORS_MAX]
+    palette = ((0, 0, 0, 0),) + tuple(color + (255,) for color in chosen)
+
+    def nearest(color):
+        best = min(range(len(chosen)), key=lambda index: sum(
+            (a - b) ** 2 for a, b in zip(chosen[index], color)))
+        return best + 1
+
+    mapping = {}
+
+    def strike(size):
+        pixels = bytearray(size * size)
+        scale = max(width, height)
+        drawn_w = max(1, width * size // scale)
+        drawn_h = max(1, height * size // scale)
+        left = (size - drawn_w) // 2
+        top = (size - drawn_h) // 2
+        for y in range(drawn_h):
+            for x in range(drawn_w):
+                pixel = rows[y * height // drawn_h][x * width // drawn_w]
+                if pixel[3] < 128:
+                    continue
+                key = pixel[:3]
+                if key not in mapping:
+                    mapping[key] = nearest(key)
+                pixels[(top + y) * size + left + x] = mapping[key]
+        return bytes(pixels)
+
+    return palette, strike
+
+
 def build(kind):
     choices = {
         "terminal": (TERMINAL_PALETTE, terminal_strike),
         "gallery": (GALLERY_PALETTE, gallery_strike),
     }
-    try:
+    if kind in choices:
         palette, builder = choices[kind]
-    except KeyError as error:
-        raise ValueError("unknown icon kind: %s" % kind) from error
+    elif kind.lower().endswith(".bmp"):
+        palette, builder = image_icon(kind)
+    else:
+        raise ValueError("unknown icon kind: %s" % kind)
     strikes = [(size, builder(size)) for size in SIZES]
     palette_offset = 32
     strike_offset = palette_offset + len(palette) * 4
@@ -161,7 +265,8 @@ def build(kind):
 
 def main():
     if len(sys.argv) != 3:
-        raise SystemExit("usage: aicon.py {terminal|gallery} OUTPUT.aicon")
+        raise SystemExit("usage: aicon.py {terminal|gallery|IMAGE.bmp} "
+                         "OUTPUT.aicon")
     with open(sys.argv[2], "wb") as handle:
         handle.write(build(sys.argv[1]))
 

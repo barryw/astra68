@@ -103,6 +103,76 @@ int main(void)
                    invalid_volume, sizeof(invalid_volume) - 1u,
                    &second, &line) == ASTRA_STATUS_INVALID);
     }
+    {
+        SupervisorManifestEntry entry;
+        AstraServiceDefinition service;
+        char policy[128];
+        static const char chosen[] =
+            "astra-config 1\nschema 1\nstart manual\n";
+        static const char bad[] =
+            "astra-config 1\nschema 1\nrestart sometimes\n";
+
+        (void)memset(&entry, 0, sizeof(entry));
+        (void)strcpy(entry.path, "/services/storage");
+        entry.resident = 1u;
+        entry.critical = 1u;
+        assert(supervisor_service_definition_from_manifest(
+                   &entry, &service) == ASTRA_STATUS_OK);
+        assert((service.flags & ASTRA_SERVICE_PROTECTED) != 0u &&
+               (service.flags & ASTRA_SERVICE_CRITICAL) != 0u &&
+               service.start_policy == ASTRA_SERVICE_START_BOOT &&
+               service.restart_policy == ASTRA_SERVICE_RESTART_NEVER);
+        /* A protected service takes no user choice at all. */
+        assert(supervisor_service_policy_apply(
+                   chosen, sizeof(chosen) - 1u, &service) ==
+               ASTRA_STATUS_INVALID);
+        assert(supervisor_service_policy_serialize(
+                   &service, policy, sizeof(policy), &required) ==
+               ASTRA_STATUS_INVALID);
+        entry.critical = 0u;
+        entry.required = 1u;
+        assert(supervisor_service_definition_from_manifest(
+                   &entry, &service) == ASTRA_STATUS_OK);
+        assert((service.flags & ASTRA_SERVICE_PROTECTED) != 0u &&
+               (service.flags & ASTRA_SERVICE_CRITICAL) == 0u &&
+               service.restart_policy == ASTRA_SERVICE_RESTART_ALWAYS);
+        {
+            SupervisorManifestEntry back;
+
+            assert(supervisor_service_definition_to_manifest(
+                       &service, &back) == ASTRA_STATUS_OK);
+            assert(back.required == 1u && back.critical == 0u);
+        }
+
+        (void)strcpy(entry.path, "/services/media");
+        entry.required = 0u;
+        entry.start_policy = ASTRA_SERVICE_START_BOOT;
+        entry.restart_policy = ASTRA_SERVICE_RESTART_ON_FAULT;
+        assert(supervisor_service_definition_from_manifest(
+                   &entry, &service) == ASTRA_STATUS_OK);
+        assert((service.flags & ASTRA_SERVICE_PROTECTED) == 0u);
+        /* An absent key keeps the default; a present one overrides. */
+        assert(supervisor_service_policy_apply(
+                   chosen, sizeof(chosen) - 1u, &service) ==
+               ASTRA_STATUS_OK);
+        assert(service.start_policy == ASTRA_SERVICE_START_MANUAL &&
+               service.restart_policy == ASTRA_SERVICE_RESTART_ON_FAULT);
+        assert(supervisor_service_policy_apply(
+                   bad, sizeof(bad) - 1u, &service) == ASTRA_STATUS_INVALID);
+        assert(service.start_policy == ASTRA_SERVICE_START_MANUAL);
+        service.restart_policy = ASTRA_SERVICE_RESTART_NEVER;
+        assert(supervisor_service_policy_serialize(
+                   &service, policy, sizeof(policy), &required) ==
+               ASTRA_STATUS_OK);
+        assert(strcmp(policy, "astra-config 1\nschema 1\nstart manual\n"
+                              "restart never\n") == 0);
+        service.start_policy = ASTRA_SERVICE_START_BOOT;
+        service.restart_policy = ASTRA_SERVICE_RESTART_ALWAYS;
+        assert(supervisor_service_policy_apply(
+                   policy, required - 1u, &service) == ASTRA_STATUS_OK);
+        assert(service.start_policy == ASTRA_SERVICE_START_MANUAL &&
+               service.restart_policy == ASTRA_SERVICE_RESTART_NEVER);
+    }
     puts("service definition store tests passed");
     return 0;
 }

@@ -119,3 +119,9 @@ ASTRA_FILESYSTEM_3.0 {
     local:
         *;
 };
+
+ASTRA_FILESYSTEM_4.1 {
+    global:
+        astra_application_catalog_destroy;
+        astra_application_catalog_load;
+} ASTRA_FILESYSTEM_3.0;

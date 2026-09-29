@@ -31,9 +31,9 @@ LIBRARIES := $(ASTRA_PCM_LIBRARY) $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_GRAPHICS_LI
 	$(ASTRA_FONT_LIBRARY) \
 	$(ASTRA_FILESYSTEM_LIBRARY) $(ASTRA_SYSTEM_LIBRARY) \
 	$(ASTRA_RUNTIME_LIBRARY) $(ASTRA_COMPILER_LIBRARY)
+# The startup sound is a product of this program like its image.
+ASTRA_PROGRAM_TARGETS := $(IMAGE) size $(SOUND_ASSET)
 include ../../dynamic-program.mk
-
-all: $(SOUND_ASSET)
 
 $(OBJECT): main.c desktop_layout.h
 	@mkdir -p $(@D)

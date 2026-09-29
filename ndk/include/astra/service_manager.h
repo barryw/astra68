@@ -126,6 +126,21 @@ ASTRA_NODISCARD AstraResult astra_service_control(
     AstraHandle manager, uint32_t operation, const char *name,
     AstraServiceInfo *info);
 
+/**
+ * Choose whether a service is started again after it exits: never, only
+ * after a fault, or always. Refused with ASTRA_ERROR_PERMISSION for a
+ * system or critical service. Persists across restarts of the machine.
+ * @param manager Service-manager capability handle.
+ * @param name Stable service identifier.
+ * @param policy ASTRA_SERVICE_RESTART_* value.
+ * @param info Receives state after the change; may be NULL.
+ * @return ASTRA_RESULT_* status.
+ * @since system.library 2.5.
+ */
+ASTRA_NODISCARD AstraResult astra_service_set_restart(
+    AstraHandle manager, const char *name, uint32_t policy,
+    AstraServiceInfo *info);
+
 /** Request normal DE25 shutdown. Acceptance does not mean completion;
  * applications may still cancel, and force shutdown is a separate action.
  * @param manager Service-manager capability handle.

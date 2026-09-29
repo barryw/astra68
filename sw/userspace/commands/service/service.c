@@ -41,9 +41,24 @@ static const char *restart_name(uint32_t value)
            value == ASTRA_SERVICE_RESTART_ON_FAULT ? "on-fault" : "never";
 }
 
+/* Who a service belongs to: the machine, or the user. */
+static const char *tier_name(uint32_t flags)
+{
+    return (flags & ASTRA_SERVICE_CRITICAL) != 0u ? "critical" :
+           (flags & ASTRA_SERVICE_PROTECTED) != 0u ? "system" : "user";
+}
+
+/* Whether it starts at boot, however that is recorded. */
+static int starts_at_boot(const AstraServiceInfo *info)
+{
+    return (info->flags & ASTRA_SERVICE_ENABLED) != 0u &&
+           info->start_policy == ASTRA_SERVICE_START_BOOT;
+}
+
 static int failure(const char *operation, AstraResult result)
 {
-    const char *reason = result == ASTRA_ERROR_PERMISSION ? "not permitted" :
+    const char *reason = result == ASTRA_ERROR_PERMISSION ?
+            "not permitted: the system manages this service" :
         result == ASTRA_ERROR_BUSY ? "service is busy" :
         result == ASTRA_ERROR_INVALID_HANDLE ? "service not found" :
         result == ASTRA_ERROR_NO_RESOURCES ? "insufficient resources" :
@@ -57,10 +72,9 @@ static int failure(const char *operation, AstraResult result)
 
 static void print_info(const AstraServiceInfo *info)
 {
-    (void)printf("%-24s %-7s %-8s %-8s %5u\n", info->name,
-                 runs_name(info->flags),
-                 (info->flags & ASTRA_SERVICE_ENABLED) != 0u ? "enabled" :
-                                                               "disabled",
+    (void)printf("%-24s %-8s %-4s %-8s %-8s %5u\n", info->name,
+                 tier_name(info->flags), starts_at_boot(info) ? "yes" : "no",
+                 restart_name(info->restart_policy),
                  state_name(info->state), info->process_id);
 }
 
@@ -68,7 +82,7 @@ static int list(AstraHandle manager)
 {
     AstraServiceListCursor cursor = ASTRA_SERVICE_LIST_CURSOR_INIT;
 
-    (void)fputs("SERVICE                  RUNS    BOOT     STATE      PID\n",
+    (void)fputs("SERVICE                  TIER     BOOT RESTART  STATE      PID\n",
                 stdout);
     for (;;) {
         AstraServiceInfo info;
@@ -96,12 +110,11 @@ static int inspect(AstraHandle manager, const char *name)
 
     if (result != ASTRA_OK)
         return failure("inspect", result);
-    (void)printf("name: %s\nexecutable: %s\nruns: %s\nenabled: %s\n"
-                 "protected: %s\nstate: %s\npid: %u\nstart: %s\n"
+    (void)printf("name: %s\nexecutable: %s\nruns: %s\ntier: %s\n"
+                 "boot: %s\nstate: %s\npid: %u\nstart: %s\n"
                  "restart: %s\n",
                  info.name, info.executable, runs_name(info.flags),
-                 (info.flags & ASTRA_SERVICE_ENABLED) != 0u ? "yes" : "no",
-                 (info.flags & ASTRA_SERVICE_PROTECTED) != 0u ? "yes" : "no",
+                 tier_name(info.flags), starts_at_boot(&info) ? "yes" : "no",
                  state_name(info.state), info.process_id,
                  start_name(info.start_policy),
                  restart_name(info.restart_policy));
@@ -250,11 +263,27 @@ int main(int argc, char **argv)
         return inspect(capability->handle, argv[2]);
     if (strcmp(argv[1], "add") == 0)
         return add(capability->handle, argc, argv);
+    if (argc == 5 && strcmp(argv[1], "set") == 0 &&
+        strcmp(argv[3], "restart") == 0) {
+        uint32_t policy = strcmp(argv[4], "never") == 0 ?
+            ASTRA_SERVICE_RESTART_NEVER :
+            strcmp(argv[4], "on-fault") == 0 ?
+                ASTRA_SERVICE_RESTART_ON_FAULT :
+            strcmp(argv[4], "always") == 0 ?
+                ASTRA_SERVICE_RESTART_ALWAYS : UINT32_MAX;
+
+        if (policy == UINT32_MAX)
+            return failure("set", ASTRA_ERROR_INVALID_ARGUMENT);
+        result = astra_service_set_restart(capability->handle, argv[2],
+                                           policy, &info);
+        return result == ASTRA_OK ? 0 : failure("set", result);
+    }
     action = argc == 3 ? operation(argv[1]) : 0u;
     if (action == 0u) {
         (void)fputs(
             "usage: service [list|inspect NAME|start NAME|stop NAME|"
             "restart NAME|pause NAME|resume NAME|enable NAME|disable NAME|"
+            "set NAME restart never|on-fault|always|"
             "delete NAME|add NAME EXECUTABLE [options] [-- ARG ...]]\n",
             stderr);
         return (int)-ASTRA_ERROR_INVALID_ARGUMENT;

@@ -149,6 +149,7 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_DISPLAY_COLLECT &&
         number != ASTRA_SYSCALL_PROCESS_DYNAMIC_COMMIT &&
         number != ASTRA_SYSCALL_PROCESS_PRIORITY &&
+        number != ASTRA_SYSCALL_THREAD_PRIORITY &&
         number != ASTRA_SYSCALL_PROCESS_INFO &&
         number != ASTRA_SYSCALL_THREAD_INFO &&
         number != ASTRA_SYSCALL_PROCESS_SNAPSHOT &&
@@ -622,6 +623,10 @@ test_syscall_wrappers(void)
     assert(mock_number == ASTRA_SYSCALL_PROCESS_PRIORITY);
     assert(mock_argument0 == process);
     assert(mock_argument1 == 12u);
+    assert(abi == ASTRA_SYSCALL_ABI_VERSION);
+    assert(astra_thread_priority(thread, 11u, &abi) == ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_THREAD_PRIORITY);
+    assert(mock_argument0 == thread && mock_argument1 == 11u);
     assert(abi == ASTRA_SYSCALL_ABI_VERSION);
     assert(astra_process_snapshot(process, process_records,
                                   40u, &moved) ==

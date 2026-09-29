@@ -31,3 +31,11 @@ ASTRA_NETWORK_1.1 {
     local:
         *;
 };
+
+ASTRA_NETWORK_1.2 {
+    global:
+        astra_network_interfaces;
+        astra_network_reverse_start;
+        astra_network_reverse_try;
+        astra_network_reverse_wait;
+} ASTRA_NETWORK_1.1;

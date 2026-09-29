@@ -162,10 +162,12 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
         ((info->content_format == ASTRA_WINDOW_CONTENT_RGB565 &&
           (info->pitch < (uint32_t)info->width * 2u ||
            (info->pitch & 1u) != 0u)) ||
-         (info->content_format == ASTRA_WINDOW_CONTENT_DRAW_LIST &&
+         ((info->content_format == ASTRA_WINDOW_CONTENT_DRAW_LIST ||
+           info->content_format == ASTRA_WINDOW_CONTENT_SURFACE) &&
           info->pitch != 0u) ||
          (info->content_format != ASTRA_WINDOW_CONTENT_RGB565 &&
-          info->content_format != ASTRA_WINDOW_CONTENT_DRAW_LIST)) ||
+          info->content_format != ASTRA_WINDOW_CONTENT_DRAW_LIST &&
+          info->content_format != ASTRA_WINDOW_CONTENT_SURFACE)) ||
         info->type < ASTRA_WINDOW_STANDARD ||
         info->type > ASTRA_WINDOW_DESKTOP ||
         (info->flags & ~known_flags) != 0 ||
@@ -188,9 +190,13 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
         window->_private_id != 0u || window->_private_generation != 0u ||
         window->_private_vblank != ASTRA_INVALID_HANDLE)
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    /* A content-surface window's area is its staging area, which the
+       service also writes when it returns surface readback. */
     result = astra_handle_duplicate(
         content_area,
-        ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER |
+            (info->content_format == ASTRA_WINDOW_CONTENT_SURFACE ?
+                 ASTRA_RIGHT_WRITE : 0u),
         &transferred[0]);
     if (result != ASTRA_OK)
         return result;
@@ -362,6 +368,12 @@ WINDOW_ACTION(astra_window_minimize, ASTRA_GUI_WINDOW_MINIMIZE)
 WINDOW_ACTION(astra_window_maximize, ASTRA_GUI_WINDOW_MAXIMIZE)
 WINDOW_ACTION(astra_window_restore, ASTRA_GUI_WINDOW_RESTORE)
 WINDOW_ACTION(astra_window_present, ASTRA_GUI_WINDOW_PRESENT)
+
+AstraResult astra_window_present_discard(AstraWindow *window)
+{
+    return command(window, ASTRA_GUI_WINDOW_PRESENT, 0, 0, 0u,
+                   ASTRA_GUI_PRESENT_DISCARD, 0, NULL);
+}
 
 AstraResult astra_window_present_region(AstraWindow *window,
                                         const AstraWindowFrame *damage)

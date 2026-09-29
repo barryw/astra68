@@ -14,12 +14,15 @@
 #ifndef ASTRA_PTHREAD_NO_LIBC_LOCKS
 #include <stdio.h>
 #include <sys/lock.h>
+
+#include "thread_internal.h"
 #endif
 
 typedef struct ThreadStart {
     AstraThreadStart astra;
     void *(*function)(void *);
     void *argument;
+    sigset_t inherited_mask;
     uint8_t detached;
 } ThreadStart;
 
@@ -100,12 +103,23 @@ static int condition_deadline(const pthread_cond_t *condition,
     return EINVAL;
 }
 
+/* Every mutex lock and unlock asks who the caller is; a thread's handle
+   never changes, so it is asked of the kernel once. */
+static _Thread_local pthread_t self_handle;
+
 pthread_t pthread_self(void)
 {
-    uint32_t thread = 0u;
+    uint32_t thread = self_handle;
 
-    return astra_query_abi(NULL, NULL, &thread) == ASTRA_SYSCALL_OK ? thread :
-                                                                      0u;
+    if (thread == 0u &&
+        astra_query_abi(NULL, NULL, &thread) == ASTRA_SYSCALL_OK)
+        self_handle = thread;
+    return thread;
+}
+
+void astra_posix_thread_after_fork_child(void)
+{
+    self_handle = 0u;
 }
 
 int pthread_equal(pthread_t left, pthread_t right)
@@ -118,6 +132,7 @@ int pthread_attr_init(pthread_attr_t *attr)
     if (attr == NULL)
         return EINVAL;
     attr->detach_state = PTHREAD_CREATE_JOINABLE;
+    attr->stack_size = ASTRA_THREAD_STACK_BYTES_MAX;
     return 0;
 }
 
@@ -140,6 +155,24 @@ int pthread_attr_setdetachstate(pthread_attr_t *attr, int state)
                          state != PTHREAD_CREATE_DETACHED))
         return EINVAL;
     attr->detach_state = state;
+    return 0;
+}
+
+int pthread_attr_getstacksize(const pthread_attr_t *attr, size_t *stack_size)
+{
+    if (attr == NULL || stack_size == NULL)
+        return EINVAL;
+    *stack_size = attr->stack_size;
+    return 0;
+}
+
+int pthread_attr_setstacksize(pthread_attr_t *attr, size_t stack_size)
+{
+    if (attr == NULL || stack_size < PTHREAD_STACK_MIN ||
+        stack_size > ASTRA_THREAD_STACK_BYTES_MAX)
+        return EINVAL;
+    /* Native thread stacks grow on demand within a guarded reservation. */
+    attr->stack_size = stack_size;
     return 0;
 }
 
@@ -186,11 +219,14 @@ static void thread_entry(uint32_t argument)
     ThreadStart *start = (ThreadStart *)(uintptr_t)argument;
     void *(*function)(void *) = start->function;
     void *value = start->argument;
+    sigset_t inherited_mask = start->inherited_mask;
     bool detached = start->detached != 0u;
 
     free(start);
     if (detached)
         (void)astra_close(pthread_self());
+    if (sigprocmask(SIG_SETMASK, &inherited_mask, NULL) != 0)
+        pthread_exit((void *)(uintptr_t)UINTPTR_MAX);
     pthread_exit(function(value));
 }
 
@@ -204,13 +240,16 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
     AstraProcessInfo info = {0};
     uint32_t process;
     uint32_t status;
-    uint32_t rights = ASTRA_RIGHT_READ | ASTRA_RIGHT_WAIT;
+    uint32_t rights = ASTRA_RIGHT_READ | ASTRA_RIGHT_WAIT |
+                      ASTRA_RIGHT_ADMINISTER;
     int detached = attr == NULL ? PTHREAD_CREATE_JOINABLE :
                                   attr->detach_state;
 
     if (thread == NULL || start == NULL ||
         (detached != PTHREAD_CREATE_JOINABLE &&
-         detached != PTHREAD_CREATE_DETACHED))
+         detached != PTHREAD_CREATE_DETACHED) ||
+        (attr != NULL && (attr->stack_size < PTHREAD_STACK_MIN ||
+                          attr->stack_size > ASTRA_THREAD_STACK_BYTES_MAX)))
         return EINVAL;
     record = malloc(sizeof(*record));
     if (record == NULL)
@@ -229,6 +268,12 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
     record->function = start;
     record->argument = argument;
     record->detached = (uint8_t)detached;
+    if (sigprocmask(SIG_SETMASK, NULL, &record->inherited_mask) != 0) {
+        int error = errno;
+
+        free(record);
+        return error;
+    }
     status = astra_rt_thread_create(&record->astra, info.default_priority,
                                     rights, thread, NULL);
     if (status != ASTRA_SYSCALL_OK) {
@@ -262,6 +307,54 @@ int pthread_join(pthread_t thread, void **result)
 int pthread_detach(pthread_t thread)
 {
     return syscall_error(astra_close(thread));
+}
+
+int pthread_sigmask(int how, const sigset_t *set, sigset_t *previous)
+{
+    return sigprocmask(how, set, previous) == 0 ? 0 : errno;
+}
+
+int pthread_getschedparam(pthread_t thread, int *policy,
+                          struct sched_param *parameters)
+{
+    AstraThreadInfo info = {0};
+    uint32_t status;
+
+    if (policy == NULL || parameters == NULL)
+        return EINVAL;
+    info.size = sizeof(info);
+    status = astra_thread_info(thread, &info);
+    if (status == ASTRA_SYSCALL_INVALID_HANDLE ||
+        status == ASTRA_SYSCALL_PEER_DEAD)
+        return ESRCH;
+    if (status == ASTRA_SYSCALL_ACCESS_DENIED)
+        return EPERM;
+    if (status != ASTRA_SYSCALL_OK)
+        return EIO;
+    *policy = SCHED_RR;
+    parameters->sched_priority = info.base_priority;
+    return 0;
+}
+
+int pthread_setschedparam(pthread_t thread, int policy,
+                          const struct sched_param *parameters)
+{
+    uint32_t status;
+
+    if (parameters == NULL || policy != SCHED_RR ||
+        parameters->sched_priority < (int)ASTRA_PROCESS_PRIORITY_MIN ||
+        parameters->sched_priority > (int)ASTRA_PROCESS_PRIORITY_MAX)
+        return EINVAL;
+    status = astra_thread_priority(
+        thread, (uint32_t)parameters->sched_priority, NULL);
+    if (status == ASTRA_SYSCALL_INVALID_HANDLE ||
+        status == ASTRA_SYSCALL_PEER_DEAD)
+        return ESRCH;
+    if (status == ASTRA_SYSCALL_ACCESS_DENIED)
+        return EPERM;
+    if (status == ASTRA_SYSCALL_INVALID_ARGUMENT)
+        return EINVAL;
+    return status == ASTRA_SYSCALL_OK ? 0 : EIO;
 }
 
 int pthread_mutexattr_init(pthread_mutexattr_t *attr)
@@ -339,8 +432,8 @@ int pthread_mutex_trylock(pthread_mutex_t *mutex)
 
 int pthread_mutex_lock(pthread_mutex_t *mutex)
 {
-    uint32_t expected = 0u;
     pthread_t self;
+    uint32_t status;
 
     if (mutex == NULL || !mutex_type_valid(mutex->type))
         return EINVAL;
@@ -355,22 +448,9 @@ int pthread_mutex_lock(pthread_mutex_t *mutex)
         if (mutex->type == PTHREAD_MUTEX_ERRORCHECK)
             return EDEADLK;
     }
-    if (!__atomic_compare_exchange_n(&mutex->state, &expected, 1u, false,
-                                     __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
-        uint32_t state = expected;
-
-        for (;;) {
-            if (state != 2u)
-                state = __atomic_exchange_n(&mutex->state, 2u,
-                                            __ATOMIC_ACQUIRE);
-            if (state == 0u)
-                break;
-            (void)astra_futex_wait(&mutex->state, 2u,
-                                   ASTRA_DEADLINE_FOREVER);
-            state = __atomic_exchange_n(&mutex->state, 2u,
-                                        __ATOMIC_ACQUIRE);
-        }
-    }
+    status = astra_mutex_lock(&mutex->state);
+    if (status != ASTRA_SYSCALL_OK)
+        return syscall_error(status);
     mutex->owner = self;
     mutex->depth = 1u;
     return 0;
@@ -391,11 +471,7 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
     }
     mutex->owner = 0u;
     mutex->depth = 0u;
-    if (__atomic_fetch_sub(&mutex->state, 1u, __ATOMIC_RELEASE) != 1u) {
-        __atomic_store_n(&mutex->state, 0u, __ATOMIC_RELEASE);
-        (void)astra_futex_wake(&mutex->state, 1u, NULL);
-    }
-    return 0;
+    return syscall_error(astra_mutex_unlock(&mutex->state));
 }
 
 int pthread_condattr_init(pthread_condattr_t *attr)

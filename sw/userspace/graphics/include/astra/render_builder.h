@@ -20,7 +20,25 @@ typedef enum AstraRenderBuilderFailure {
     ASTRA_RENDER_BUILDER_FAILURE_SCENE,
 } AstraRenderBuilderFailure;
 
-typedef struct AstraRenderBuilder {
+typedef enum AstraRenderReplayResult {
+    ASTRA_RENDER_REPLAY_INVALID = 0,
+    ASTRA_RENDER_REPLAY_DONE = 1,
+    /* The batch is full: flush it and resume at *next in a new batch. */
+    ASTRA_RENDER_REPLAY_FULL = 2,
+} AstraRenderReplayResult;
+
+typedef struct AstraRenderBuilder AstraRenderBuilder;
+
+/* Maps a draw-list source surface id to a descriptor in the current batch,
+   or returns zero to reject it. Called once per BLIT; must not cache
+   descriptors, because a full batch rolls its data back. */
+typedef struct AstraRenderSourceResolver {
+    uint32_t (*resolve)(void *context, AstraRenderBuilder *builder,
+                        uint32_t surface_id);
+    void *context;
+} AstraRenderSourceResolver;
+
+struct AstraRenderBuilder {
     uint8_t *bytes;
     uint32_t generation;
     uint32_t command_count;
@@ -31,7 +49,7 @@ typedef struct AstraRenderBuilder {
     uint32_t scene_layer_count;
     uint32_t scene_output_capacity;
     uint32_t failed; /* AstraRenderBuilderFailure */
-} AstraRenderBuilder;
+};
 
 int astra_render_builder_init(AstraRenderBuilder *builder, void *storage,
                               uint32_t bytes, uint32_t generation);
@@ -41,6 +59,7 @@ int astra_render_builder_cursor(AstraRenderBuilder *builder, uint32_t x,
 int astra_render_builder_window_scene(AstraRenderBuilder *builder,
                                       uint32_t output_offset,
                                       uint32_t output_capacity,
+                                      uint16_t width, uint16_t height,
                                       uint16_t backdrop_rgb565);
 int astra_render_builder_window_scene_layer(AstraRenderBuilder *builder,
                                             uint32_t surface,
@@ -54,6 +73,41 @@ uint32_t astra_render_builder_surface_at(AstraRenderBuilder *builder,
                                          uint32_t data_offset,
                                          uint32_t data_capacity,
                                          uint16_t width, uint16_t height);
+/* A persistent Media RAM surface in any render format. access is
+   ASTRA_RENDER_SURFACE_READ and/or ASTRA_RENDER_SURFACE_WRITE. */
+uint32_t astra_render_builder_surface_format_at(
+    AstraRenderBuilder *builder, uint32_t data_offset,
+    uint32_t data_capacity, uint16_t width, uint16_t height, uint32_t pitch,
+    uint8_t format, uint8_t access);
+/* Row bytes for width pixels of format, or zero for an unknown format. */
+uint32_t astra_render_format_row_bytes(uint8_t format, uint32_t width);
+/* Rows of source pixels copied into the batch; returns a READ descriptor. */
+uint32_t astra_render_builder_upload(AstraRenderBuilder *builder,
+                                     const void *pixels,
+                                     uint32_t source_pitch, uint16_t width,
+                                     uint16_t height, uint8_t format);
+/*
+ * A source surface whose pixels the device places in the batch: height rows
+ * of source_pitch bytes, as they lie in the caller's staging area. Nothing is
+ * copied. Returns a READ descriptor and, in *batch_offset, where the pixels
+ * belong; the caller submits the batch with the staged bytes as its
+ * attachment (AstraDisplayFrameRequest). The pixels are the last data the
+ * batch allocates, so they must be reserved after every other descriptor.
+ */
+uint32_t astra_render_builder_upload_reserve(AstraRenderBuilder *builder,
+                                             uint32_t source_pitch,
+                                             uint16_t width, uint16_t height,
+                                             uint8_t format,
+                                             uint32_t *batch_offset);
+/* An ARGB8888 draw-list color converted to a destination's native value. */
+uint32_t astra_render_builder_destination_color(uint8_t format,
+                                                uint32_t argb);
+/* A render-only batch (v1.4): no scanout, scene, or cursor change. */
+uint32_t astra_render_builder_finish_render_only(AstraRenderBuilder *builder);
+uint32_t astra_render_builder_upload_rgb565(AstraRenderBuilder *builder,
+                                             const void *pixels,
+                                             uint32_t source_pitch,
+                                             uint16_t width, uint16_t height);
 int astra_render_builder_fill(AstraRenderBuilder *builder,
                               uint32_t destination, int32_t x, int32_t y,
                               uint32_t width, uint32_t height,
@@ -79,6 +133,11 @@ int astra_render_builder_mono_text(AstraRenderBuilder *builder,
                                    uint16_t cell_width, uint16_t color);
 int astra_draw_list_covers(const AstraDrawListHeader *header,
                            uint16_t width, uint16_t height);
+int astra_render_builder_replay_range(
+    AstraRenderBuilder *builder, uint32_t destination,
+    const AstraDrawListHeader *draw_list, uint32_t area_bytes,
+    const AstraRenderSourceResolver *resolver, uint32_t first,
+    uint32_t *next);
 int astra_render_builder_replay(AstraRenderBuilder *builder,
                                 uint32_t destination,
                                 const AstraDrawListHeader *draw_list);

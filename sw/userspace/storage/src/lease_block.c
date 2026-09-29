@@ -349,6 +349,47 @@ lane_completed(AstraLeaseBlock *lease, AstraLeaseBlockLane *lane)
     return completed;
 }
 
+/*
+ * A request is submitted before its lane says so, and a sibling's collect in
+ * that gap drains this request's completion into its kernel slot without
+ * publishing it: the lane was not yet active. Its interrupt record goes with
+ * the sibling's drain, and nothing would ever wake this lane. So once the
+ * lane is visible, collect every active lane once, serialized with every
+ * other collector. Records are retired only when that found this lane done,
+ * as the interrupt path does after a collect that found work: retiring after
+ * an empty collect acknowledges a completion that may have landed in the
+ * transport meanwhile, which the device treats as an error.
+ *
+ * ponytail: one collect per active lane per request; collect only this lane
+ * if queue depth makes it show.
+ */
+static uint32_t
+catch_up(AstraLeaseBlock *lease, AstraLeaseBlockLane *lane)
+{
+    uint32_t status = astra_wait_one(lease->completion_lock,
+                                     ASTRA_DEADLINE_FOREVER, NULL);
+
+    if (status != ASTRA_SYSCALL_OK) {
+        return status;
+    }
+    status = service_completions(lease);
+    if (status == ASTRA_SYSCALL_OK) {
+        int completed = lane_completed(lease, lane);
+
+        if (completed < 0) {
+            status = ASTRA_SYSCALL_IO_ERROR;
+        } else if (completed > 0) {
+            status = drain(lease);
+        }
+    }
+    if (semaphore_release(lease->completion_lock) != ASTRA_SYSCALL_OK &&
+        status == ASTRA_SYSCALL_OK) {
+        status = ASTRA_SYSCALL_IO_ERROR;
+    }
+    return status;
+}
+
+
 static AstraBlockStatus
 reset_timed_out_requests(AstraLeaseBlock *lease,
                          AstraLeaseBlockLane *timed_out)
@@ -510,6 +551,10 @@ run_request(AstraLeaseBlock *lease, AstraLeaseBlockLane *lane,
     status = lane_unlock(lease);
     if (status != ASTRA_SYSCALL_OK) {
         return refused(lease, ASTRA_LEASE_BLOCK_SITE_SUBMIT, status);
+    }
+    status = catch_up(lease, lane);
+    if (status != ASTRA_SYSCALL_OK) {
+        return refused(lease, ASTRA_LEASE_BLOCK_SITE_COLLECT, status);
     }
     status = (uint32_t)wait_for_lane(lease, lane, deadline);
     if (status == ASTRA_BLOCK_OK && operation != ASTRA_BLOCK_OP_FLUSH &&

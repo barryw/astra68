@@ -5,6 +5,7 @@
 
 #include <astra/gui.h>
 #include <astra/input_service.h>
+#include <astra/display_mailbox.h>
 #include <astra/render_batch.h>
 #include <astra/runtime.h>
 
@@ -25,7 +26,7 @@ static uint32_t input_message_index;
 static uint32_t signal_count;
 static uint32_t last_signal;
 
-#define TEST_AREA_COUNT 3u
+#define TEST_AREA_COUNT 8u
 #define TEST_AREA_BYTES UINT32_C(65536)
 
 static _Alignas(8) uint8_t test_areas[TEST_AREA_COUNT][TEST_AREA_BYTES];
@@ -60,7 +61,8 @@ uint32_t astra_rt_area_map(uint32_t handle, uint32_t permissions,
     uint32_t index = handle - 0x800u;
 
     assert(index < TEST_AREA_COUNT && test_area_live[index] != 0u &&
-           permissions == (ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE) &&
+           (permissions == ASTRA_AREA_MAP_READ ||
+            permissions == (ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE)) &&
            address != NULL && byte_size != NULL);
     *address = test_areas[index];
     *byte_size = test_area_sizes[index];
@@ -379,6 +381,7 @@ static void add_window(DisplayState *state, uint32_t index, uint8_t type,
     window->id = index + 1u;
     window->generation = 1u;
     assert(display_window_media_prepare(state, window) == ASTRA_STATUS_OK);
+    init_content_banks(window);
     dirty_cache(window);
     reset_content(window);
     window->event_send = 0x500u;
@@ -418,46 +421,22 @@ static void test_dynamic_window_resources(void)
         state.windows[state.count++] = candidate;
     }
     assert(state.count == 5u);
-    for (uint32_t left = 0u; left < state.count; ++left) {
-        for (uint32_t bank = 0u; bank < 2u; ++bank)
+    /* Every content bank and cache bank of every window is disjoint. */
+    for (uint32_t left = 0u; left < state.count * 5u; ++left)
+        for (uint32_t right = left + 1u; right < state.count * 5u;
+             ++right) {
+            const DisplayWindow *a = &state.windows[left / 5u];
+            const DisplayWindow *b = &state.windows[right / 5u];
+            uint32_t ab = left % 5u;
+            uint32_t bb = right % 5u;
+
             assert(!media_extents_overlap(
-                state.windows[left].content_offset,
-                state.windows[left].content_bytes,
-                state.windows[left].cache_offset[bank],
-                state.windows[left].cache_bytes));
-        assert(!media_extents_overlap(
-            state.windows[left].cache_offset[0],
-            state.windows[left].cache_bytes,
-            state.windows[left].cache_offset[1],
-            state.windows[left].cache_bytes));
-        for (uint32_t right = left + 1u; right < state.count; ++right) {
-            assert(!media_extents_overlap(
-                state.windows[left].content_offset,
-                state.windows[left].content_bytes,
-                state.windows[right].content_offset,
-                state.windows[right].content_bytes));
-            for (uint32_t left_bank = 0u; left_bank < 2u; ++left_bank)
-                for (uint32_t right_bank = 0u; right_bank < 2u;
-                     ++right_bank) {
-                    assert(!media_extents_overlap(
-                        state.windows[left].cache_offset[left_bank],
-                        state.windows[left].cache_bytes,
-                        state.windows[right].cache_offset[right_bank],
-                        state.windows[right].cache_bytes));
-                    assert(!media_extents_overlap(
-                        state.windows[left].content_offset,
-                        state.windows[left].content_bytes,
-                        state.windows[right].cache_offset[right_bank],
-                        state.windows[right].cache_bytes));
-                    assert(!media_extents_overlap(
-                        state.windows[left].cache_offset[left_bank],
-                        state.windows[left].cache_bytes,
-                        state.windows[right].content_offset,
-                        state.windows[right].content_bytes));
-                }
+                ab < 3u ? a->content_offset[ab] : a->cache_offset[ab - 3u],
+                ab < 3u ? a->content_bytes : a->cache_bytes,
+                bb < 3u ? b->content_offset[bb] : b->cache_offset[bb - 3u],
+                bb < 3u ? b->content_bytes : b->cache_bytes));
         }
-    }
-    first_content = state.windows[0].content_offset;
+    first_content = state.windows[0].content_offset[0];
     first_cache[0] = state.windows[0].cache_offset[0];
     first_cache[1] = state.windows[0].cache_offset[1];
     for (uint32_t index = 0u; index + 1u < state.count; ++index)
@@ -471,13 +450,13 @@ static void test_dynamic_window_resources(void)
         candidate.request.height = 80u;
         assert(display_window_media_prepare(&state, &candidate) ==
                ASTRA_STATUS_OK);
-        assert(candidate.content_offset == first_content &&
+        assert(candidate.content_offset[0] == first_content &&
                candidate.cache_offset[0] == first_cache[0] &&
                candidate.cache_offset[1] == first_cache[1]);
     }
     {
         DisplayWindow occupied = {
-            .content_offset = DISPLAY_MEDIA_BASE,
+            .content_offset = {DISPLAY_MEDIA_BASE},
             .content_bytes = DISPLAY_MEDIA_LIMIT - DISPLAY_MEDIA_BASE,
         };
         DisplayWindow candidate = {0};
@@ -501,11 +480,826 @@ static void test_dynamic_window_resources(void)
            test_area_closes == 2u);
 }
 
+
+/* Window graphics: a recording host stands in for the display device. */
+#define GRAPHICS_BATCH_MAX 8u
+static uint8_t graphics_batches[GRAPHICS_BATCH_MAX][262144];
+static uint32_t graphics_batch_bytes[GRAPHICS_BATCH_MAX];
+static uint32_t graphics_batch_count;
+static uint32_t graphics_submit_status = ASTRA_STATUS_OK;
+static uint8_t big_staging[4096u * 1100u * 4u];
+
+static uint32_t record_submit(void *context, uint32_t bytes,
+                              const DisplayGraphicsAttachment *attachment)
+{
+    const DisplayState *state = context;
+
+    /* What the device does with an attachment: the staged bytes land at
+       their target, the batch's last defined bytes. */
+    if (attachment != NULL) {
+        const DisplayWindowGraphics *graphics = state->windows[0].graphics;
+
+        assert(attachment->area == graphics->staging_area &&
+               attachment->bytes != 0u &&
+               attachment->target >= ASTRA_RENDER_BATCH_MIN_BYTES &&
+               attachment->target <= bytes &&
+               attachment->bytes <= bytes - attachment->target &&
+               bytes - attachment->target - attachment->bytes < 64u * 1024u &&
+               attachment->offset <= graphics->staging_bytes &&
+               attachment->bytes <=
+                   graphics->staging_bytes - attachment->offset);
+        memcpy(batch + attachment->target,
+               graphics->staging + attachment->offset, attachment->bytes);
+    }
+    assert(read_be32(batch + 4u) == ASTRA_RENDER_BATCH_VERSION_1_4 &&
+           read_be32(batch + 8u) == bytes && read_be32(batch + 32u) == 0u &&
+           read_be32(batch + 48u) == 0u);
+    if (graphics_batch_count < GRAPHICS_BATCH_MAX) {
+        uint32_t kept = bytes < sizeof(graphics_batches[0]) ?
+                        bytes : (uint32_t)sizeof(graphics_batches[0]);
+
+        memcpy(graphics_batches[graphics_batch_count], batch, kept);
+        graphics_batch_bytes[graphics_batch_count] = bytes;
+    }
+    ++graphics_batch_count;
+    return graphics_submit_status;
+}
+
+/* The recording device answers a READ_SURFACE by writing, after the
+   header, byte (row * 31 + column) of each read row, where row and column
+   count from the surface origin in bytes. */
+static AstraDisplaySurfaceRead read_requests[4];
+static uint32_t read_request_bytes[4];
+static uint32_t read_count;
+static uint32_t read_status = ASTRA_STATUS_OK;
+
+static uint32_t record_read(void *context, uint32_t bytes)
+{
+    AstraDisplaySurfaceRead request;
+    uint32_t row;
+
+    (void)context;
+    memcpy(&request, batch, sizeof(request));
+    row = astra_render_format_row_bytes((uint8_t)request.format,
+                                        request.read_width);
+    assert(request.magic == ASTRA_DISPLAY_SURFACE_READ_MAGIC &&
+           request.version == ASTRA_DISPLAY_SURFACE_READ_VERSION &&
+           bytes == ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES +
+                        row * request.read_height &&
+           bytes <= ASTRA_RENDER_BUILDER_BYTES);
+    for (uint32_t line = 0u; line < request.read_height; ++line)
+        for (uint32_t at = 0u; at < row; ++at)
+            batch[ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES + line * row +
+                  at] = (uint8_t)((request.y + line) * 31u +
+                                  request.x * (row / request.read_width) +
+                                  at);
+    if (read_count < 4u) {
+        read_requests[read_count] = request;
+        read_request_bytes[read_count] = bytes;
+    }
+    ++read_count;
+    return read_status;
+}
+
+static uint32_t record_allocate(void *context, uint32_t bytes)
+{
+    return display_media_allocate(context, NULL, UINT32_MAX, bytes);
+}
+
+static const uint8_t *recorded_command(uint32_t batch_index, uint32_t index)
+{
+    return graphics_batches[batch_index] +
+           ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
+           ASTRA_RENDER_BATCH_ARENA_OFFSET +
+           index * ASTRA_RENDER_COMMAND_BYTES;
+}
+
+static const uint8_t *recorded_record(uint32_t batch_index, uint32_t offset)
+{
+    assert(offset >= ASTRA_RENDER_BATCH_ARENA_OFFSET &&
+           offset - ASTRA_RENDER_BATCH_ARENA_OFFSET + 32u <=
+               sizeof(graphics_batches[0]));
+    return graphics_batches[batch_index] + offset -
+           ASTRA_RENDER_BATCH_ARENA_OFFSET;
+}
+
+static uint32_t graphics_run(DisplayWindowGraphics *graphics,
+                             const DisplayGraphicsHost *host,
+                             AstraGuiGraphicsCommand command,
+                             uint32_t attachment,
+                             AstraGuiGraphicsReply *reply)
+{
+    uint32_t handles[2] = {0x900u, attachment};
+
+    command.header = (AstraMessageHeader){0};
+    astra_message_header_set(&command.header, sizeof(command),
+                             ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
+                             ASTRA_GUI_GRAPHICS_COMMAND, 1u);
+    command.window = 42u;
+    command.generation = 1u;
+    assert(display_window_graphics_command_valid(
+        &command, sizeof(command), attachment != 0u ? 2u : 1u, 42u));
+    *reply = (AstraGuiGraphicsReply){0};
+    graphics_batch_count = 0u;
+    return display_window_graphics_command(graphics, host, &command, handles,
+                                           reply);
+}
+
+/* ARGB8888 targets start transparent black and keep a fill's alpha. */
+static void test_window_graphics_argb_target(DisplayWindowGraphics *graphics,
+                                             const DisplayGraphicsHost *host)
+{
+    AstraGuiGraphicsReply reply;
+    uint32_t target;
+    uint32_t list_area = 0u;
+    uint32_t mapped = 0u;
+    uint32_t list_id;
+    AstraDrawListHeader *list;
+    const uint8_t *command;
+
+    assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_CREATE,
+               .width = 16u, .height = 8u,
+               .format = ASTRA_PIXEL_FORMAT_ARGB8888,
+               .flags = ASTRA_SURFACE_DRAW_TARGET |
+                        ASTRA_SURFACE_DRAW_SOURCE}, 0u, &reply) ==
+           ASTRA_STATUS_OK && graphics_batch_count == 1u);
+    target = reply.object;
+    command = recorded_command(0u, 0u);
+    assert(read_be32(command + 4u) >> 16 == ASTRA_RENDER_OP_FILL &&
+           read_be32(command + 60u) == 0u &&
+           read_be32(recorded_record(0u, read_be32(command + 32u)) + 24u) >>
+                   24 == ASTRA_RENDER_FORMAT_ARGB8888);
+    assert(astra_rt_area_create(8192u, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                                ASTRA_RIGHT_MAP, &list_area) ==
+           ASTRA_SYSCALL_OK);
+    assert(astra_rt_area_map(list_area, ASTRA_AREA_MAP_READ |
+                             ASTRA_AREA_MAP_WRITE, (void **)&list,
+                             &mapped) == ASTRA_SYSCALL_OK);
+    *list = (AstraDrawListHeader){
+        .magic = ASTRA_DRAW_LIST_MAGIC,
+        .version = ASTRA_DRAW_LIST_VERSION_1_5,
+        .total_bytes = 8192u,
+        .command_count = 1u,
+        .width = 16u,
+        .height = 8u,
+        .command_capacity = 16u,
+    };
+    *(AstraDrawListCommand *)(void *)(list + 1) = (AstraDrawListCommand){
+        .operation = ASTRA_DRAW_LIST_FILL,
+        .width = 4u, .height = 4u, .color = 0x40a0b0c0u,
+        .clip_right = 16u, .clip_bottom = 8u,
+    };
+    assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_LIST_ATTACH}, list_area,
+               &reply) == ASTRA_STATUS_OK);
+    list_id = reply.object;
+    assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+               .object = list_id, .target = target}, 0u, &reply) ==
+           ASTRA_STATUS_OK && graphics_batch_count == 1u);
+    command = recorded_command(0u, 0u);
+    assert(read_be32(command + 4u) >> 16 == ASTRA_RENDER_OP_FILL &&
+           read_be32(command + 60u) == 0x40a0b0c0u);
+    /* A rectangle list is one hardware command whatever its length; an
+       empty rectangle costs nothing. */
+    {
+        AstraDrawListCommand *rects =
+            (AstraDrawListCommand *)(void *)(list + 1);
+        AstraDrawListRect *records = (AstraDrawListRect *)(void *)
+            ((uint8_t *)list +
+             astra_draw_list_payload_offset(list->command_capacity));
+        const uint8_t *record;
+
+        records[0] = (AstraDrawListRect){ 1, 2, 3u, 4u };
+        records[1] = (AstraDrawListRect){ 5, 6, 0u, 1u };
+        records[2] = (AstraDrawListRect){ 7, 3, 2u, 2u };
+        list->payload_bytes = 3u * sizeof(*records);
+        *rects = (AstraDrawListCommand){
+            .operation = ASTRA_DRAW_LIST_FILL_RECTS,
+            .color = 0x40a0b0c0u,
+            .payload_offset =
+                astra_draw_list_payload_offset(list->command_capacity),
+            .payload_bytes = 3u * sizeof(*records),
+            .clip_right = 16u, .clip_bottom = 8u,
+        };
+        assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                   .object = list_id, .target = target}, 0u,
+                   &reply) == ASTRA_STATUS_OK &&
+               graphics_batch_count == 1u &&
+               read_be32(graphics_batches[0] + 12u) == 1u);
+        command = recorded_command(0u, 0u);
+        assert(read_be32(command + 4u) ==
+                   (uint32_t)ASTRA_RENDER_OP_FILL_RECTS << 16 &&
+               read_be32(command + 44u) == 2u &&
+               read_be32(command + 48u) == 0u &&
+               read_be32(command + 60u) == 0x40a0b0c0u);
+        record = recorded_record(0u, read_be32(command + 40u));
+        assert(read_be32(record + 0u) == ((uint32_t)1u << 16 | 2u) &&
+               read_be32(record + 4u) == ((uint32_t)3u << 16 | 4u) &&
+               read_be32(record + 16u) == ((uint32_t)7u << 16 | 3u));
+        /* Translucent BLEND is the same list, blended by the hardware. */
+        rects->flags =
+            ASTRA_DRAW_LIST_BLEND_FLAGS(ASTRA_DRAW_LIST_BLEND_BLEND);
+        assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                   .object = list_id, .target = target}, 0u,
+                   &reply) == ASTRA_STATUS_OK &&
+               graphics_batch_count == 1u &&
+               read_be32(graphics_batches[0] + 12u) == 1u);
+        command = recorded_command(0u, 0u);
+        assert(read_be32(command + 4u) ==
+                   (uint32_t)ASTRA_RENDER_OP_FILL_RECTS << 16 &&
+               read_be32(command + 44u) == 2u &&
+               read_be32(command + 48u) ==
+                   ASTRA_RENDER_FILL_RECTS_OPTION_BLEND &&
+               read_be32(command + 60u) == 0x40a0b0c0u);
+    }
+    assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_DESTROY,
+               .object = target}, 0u, &reply) == ASTRA_STATUS_OK);
+}
+
+/* SURFACE_READ: rows come back through the device into staging. */
+static void test_window_graphics_read(DisplayWindowGraphics *graphics,
+                                      const DisplayGraphicsHost *host,
+                                      const DisplayWindow *window,
+                                      uint8_t *staging, uint32_t mapped)
+{
+    AstraGuiGraphicsReply reply;
+    uint32_t readable;
+    uint32_t hidden;
+
+    assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_CREATE,
+               .width = 32u, .height = 16u,
+               .format = ASTRA_PIXEL_FORMAT_XRGB8888,
+               .flags = ASTRA_SURFACE_DRAW_TARGET |
+                        ASTRA_SURFACE_CPU_READ}, 0u, &reply) ==
+           ASTRA_STATUS_OK);
+    readable = reply.object;
+    assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_CREATE,
+               .width = 32u, .height = 16u,
+               .format = ASTRA_PIXEL_FORMAT_XRGB8888,
+               .flags = ASTRA_SURFACE_DRAW_TARGET}, 0u, &reply) ==
+           ASTRA_STATUS_OK);
+    hidden = reply.object;
+    read_count = 0u;
+    memset(staging, 0xee, mapped);
+    assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_READ, .object = readable,
+               .x = 3, .y = 5, .width = 4u, .height = 2u, .offset = 100u,
+               .pitch = 40u}, 0u, &reply) == ASTRA_STATUS_OK);
+    assert(read_count == 1u && graphics_batch_count == 0u &&
+           read_request_bytes[0] ==
+               ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES + 2u * 16u);
+    assert(read_requests[0].data_bytes == 32u * 16u * 4u &&
+           read_requests[0].pitch == 128u && read_requests[0].width == 32u &&
+           read_requests[0].height == 16u &&
+           read_requests[0].format == ASTRA_RENDER_FORMAT_XRGB8888 &&
+           read_requests[0].x == 3u && read_requests[0].y == 5u &&
+           read_requests[0].read_width == 4u &&
+           read_requests[0].read_height == 2u &&
+           read_requests[0].data_offset >= ASTRA_RENDER_BATCH_WORKSPACE_LIMIT);
+    for (uint32_t line = 0u; line < 2u; ++line)
+        for (uint32_t at = 0u; at < 16u; ++at)
+            assert(staging[100u + line * 40u + at] ==
+                   (uint8_t)((5u + line) * 31u + 12u + at));
+    /* Bytes between the staged rows are the client's, untouched. */
+    assert(staging[99] == 0xee && staging[116] == 0xee &&
+           staging[139] == 0xee && staging[156] == 0xee);
+    /* The window content is readable too. */
+    read_count = 0u;
+    assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_READ,
+               .object = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID,
+               .width = 320u, .height = 2u, .pitch = 640u}, 0u, &reply) ==
+           ASTRA_STATUS_OK && read_count == 1u &&
+           read_requests[0].data_offset ==
+               window->content_offset[window->content_back] &&
+           read_requests[0].format == ASTRA_RENDER_FORMAT_RGB565);
+    /* Readback needs CPU_READ, a rectangle inside the surface, and rows
+       inside the staging area; a device failure reaches the client. */
+    read_count = 0u;
+    assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_READ, .object = hidden,
+               .width = 1u, .height = 1u, .pitch = 4u}, 0u, &reply) ==
+           ASTRA_STATUS_ACCESS);
+    assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_READ, .object = readable,
+               .x = 29, .width = 4u, .height = 1u, .pitch = 16u}, 0u,
+               &reply) == ASTRA_STATUS_INVALID);
+    assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_READ, .object = readable,
+               .width = 32u, .height = 16u, .offset = mapped - 128u * 15u,
+               .pitch = 128u}, 0u, &reply) == ASTRA_STATUS_INVALID);
+    assert(read_count == 0u);
+    read_status = ASTRA_STATUS_IO;
+    assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_READ, .object = readable,
+               .width = 1u, .height = 1u, .pitch = 4u}, 0u, &reply) ==
+           ASTRA_STATUS_IO);
+    read_status = ASTRA_STATUS_OK;
+    /* A read larger than one buffer is split into bands. */
+    graphics->staging = big_staging;
+    graphics->staging_bytes = sizeof(big_staging);
+    assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_CREATE,
+               .width = 4096u, .height = 1100u,
+               .format = ASTRA_PIXEL_FORMAT_XRGB8888,
+               .flags = ASTRA_SURFACE_CPU_READ}, 0u, &reply) ==
+           ASTRA_STATUS_OK);
+    read_count = 0u;
+    assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_READ,
+               .object = reply.object, .width = 4096u, .height = 1100u,
+               .pitch = 4096u * 4u}, 0u, &reply) == ASTRA_STATUS_OK);
+    assert(read_count == 3u &&
+           read_requests[0].y == 0u && read_requests[1].y ==
+               read_requests[0].read_height &&
+           read_requests[0].read_height + read_requests[1].read_height +
+                   read_requests[2].read_height == 1100u);
+    assert(big_staging[(uint64_t)4096u * 4u * 1099u + 5u] ==
+           (uint8_t)(1099u * 31u + 5u));
+    graphics->staging = staging;
+    graphics->staging_bytes = mapped;
+    assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_DESTROY,
+               .object = readable}, 0u, &reply) == ASTRA_STATUS_OK);
+    assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_DESTROY,
+               .object = hidden}, 0u, &reply) == ASTRA_STATUS_OK);
+}
+
+static void test_window_graphics(void)
+{
+    DisplayWindow window = {0};
+    DisplayState state = {
+        .windows = &window,
+        .capacity = 1u,
+        .count = 1u,
+    };
+    DisplayGraphicsHost host = {
+        .context = &state,
+        .allocate = record_allocate,
+        .submit = record_submit,
+        .read = record_read,
+        .batch_storage = batch,
+        .content_width = 320u,
+        .content_height = 200u,
+    };
+    AstraGuiGraphicsReply reply;
+    uint32_t staging_area = 0u;
+    uint32_t list_area = 0u;
+    uint32_t sprite;
+    uint32_t sprite_offset;
+    uint8_t *staging;
+    AstraDrawListHeader *list;
+    AstraDrawListCommand *draw;
+    const uint8_t *command;
+    const uint8_t *record;
+    uint32_t mapped = 0u;
+    uint32_t creates = test_area_creates;
+    uint32_t closes = test_area_closes;
+
+    window.request.type = ASTRA_WINDOW_STANDARD;
+    window.request.width = 320u;
+    window.request.height = 200u;
+    assert(display_window_media_prepare(&state, &window) == ASTRA_STATUS_OK);
+    host.content_offset = window.content_offset[window.content_back];
+    host.content_pitch = window.content_pitch;
+    host.content_bytes = window.content_bytes;
+    assert(astra_rt_area_create(8192u, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                                ASTRA_RIGHT_MAP, &staging_area) ==
+           ASTRA_SYSCALL_OK);
+    assert(astra_rt_area_map(staging_area, ASTRA_AREA_MAP_READ |
+                             ASTRA_AREA_MAP_WRITE, (void **)&staging,
+                             &mapped) == ASTRA_SYSCALL_OK);
+    assert(display_window_graphics_open(&window.graphics, staging_area) ==
+           ASTRA_STATUS_OK);
+
+    /* Creation clears the Media RAM an earlier client may have used. */
+    assert(graphics_run(window.graphics, &host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_CREATE,
+               .width = 16u, .height = 8u,
+               .format = ASTRA_PIXEL_FORMAT_ARGB8888,
+               .flags = ASTRA_SURFACE_DRAW_SOURCE |
+                        ASTRA_SURFACE_CPU_WRITE}, 0u, &reply) ==
+           ASTRA_STATUS_OK);
+    sprite = reply.object;
+    assert(sprite > ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID &&
+           reply.pitch == 64u && graphics_batch_count == 1u);
+    command = recorded_command(0u, 0u);
+    record = recorded_record(0u, read_be32(command + 32u));
+    sprite_offset = read_be32(record + 8u);
+    assert(read_be32(command + 4u) >> 16 == ASTRA_RENDER_OP_FILL &&
+           read_be32(command + 60u) == 0u &&
+           read_be32(record + 24u) >> 24 == ASTRA_RENDER_FORMAT_ARGB8888);
+    /* The allocator now steps over the surface. */
+    assert(!media_extents_overlap(
+        record_allocate(&state, 4096u), 4096u, sprite_offset, 16u * 8u * 4u));
+    assert(!media_extents_overlap(window.content_offset[window.content_back],
+                                  window.content_bytes,
+                                  sprite_offset, 16u * 8u * 4u));
+
+    /* Unsupported rights are reported, not dropped. */
+    assert(graphics_run(window.graphics, &host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_CREATE,
+               .width = 16u, .height = 8u,
+               .format = ASTRA_PIXEL_FORMAT_RGB565,
+               .flags = ASTRA_SURFACE_SCANOUT}, 0u, &reply) ==
+           ASTRA_STATUS_UNSUPPORTED && graphics_batch_count == 0u);
+    assert(graphics_run(window.graphics, &host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_CREATE,
+               .width = 4097u, .height = 8u,
+               .format = ASTRA_PIXEL_FORMAT_RGB565,
+               .flags = ASTRA_SURFACE_DRAW_SOURCE}, 0u, &reply) ==
+           ASTRA_STATUS_INVALID);
+
+    /* A staging write uploads the rows and blits them into place. */
+    for (uint32_t at = 0u; at < 64u * 8u; ++at)
+        staging[256u + at] = (uint8_t)(at * 7u);
+    assert(graphics_run(window.graphics, &host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_WRITE, .object = sprite,
+               .x = 4, .y = 2, .width = 8u, .height = 4u,
+               .offset = 256u, .pitch = 64u}, 0u, &reply) ==
+           ASTRA_STATUS_OK && graphics_batch_count == 1u);
+    command = recorded_command(0u, 0u);
+    assert(read_be32(command + 4u) >> 16 == ASTRA_RENDER_OP_BLIT &&
+           read_be32(recorded_record(0u, read_be32(command + 32u)) + 8u) ==
+               sprite_offset &&
+           read_be32(command + 48u) == ((uint32_t)4u << 16 | 2u) &&
+           read_be32(command + 52u) == ((uint32_t)8u << 16 | 4u));
+    record = recorded_record(0u, read_be32(command + 36u));
+    /* The rows keep the staging pitch: the device placed them as staged. */
+    assert(read_be32(record + 16u) == 64u &&
+           memcmp(recorded_record(0u, read_be32(record + 8u)),
+                  staging + 256u, 32u) == 0 &&
+           memcmp(recorded_record(0u, read_be32(record + 8u)) + 64u * 3u,
+                  staging + 256u + 64u * 3u, 32u) == 0);
+    /* Writes stay inside the surface and the staging area. */
+    assert(graphics_run(window.graphics, &host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_WRITE, .object = sprite,
+               .x = 12, .width = 8u, .height = 1u, .pitch = 32u}, 0u,
+               &reply) == ASTRA_STATUS_INVALID);
+    assert(graphics_run(window.graphics, &host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_WRITE, .object = sprite,
+               .width = 16u, .height = 8u, .offset = 8192u - 64u * 7u,
+               .pitch = 64u}, 0u, &reply) == ASTRA_STATUS_INVALID);
+
+    /* A large write is split into batches that each fit the mailbox. */
+    graphics_batch_count = 0u;
+    window.graphics->staging = big_staging;
+    window.graphics->staging_bytes = sizeof(big_staging);
+    assert(graphics_run(window.graphics, &host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_CREATE,
+               .width = 4096u, .height = 1100u,
+               .format = ASTRA_PIXEL_FORMAT_XRGB8888,
+               .flags = ASTRA_SURFACE_DRAW_SOURCE |
+                        ASTRA_SURFACE_CPU_WRITE}, 0u, &reply) ==
+           ASTRA_STATUS_OK);
+    {
+        uint32_t large = reply.object;
+        uint32_t rows = 0u;
+
+        assert(graphics_run(window.graphics, &host,
+                            (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_SURFACE_WRITE,
+                   .object = large, .width = 4096u, .height = 1100u,
+                   .pitch = 4096u * 4u}, 0u, &reply) == ASTRA_STATUS_OK);
+        assert(graphics_batch_count == 3u);
+        for (uint32_t index = 0u; index < graphics_batch_count; ++index) {
+            const uint8_t *blit = recorded_command(index, 0u);
+
+            assert(graphics_batch_bytes[index] <=
+                   ASTRA_DISPLAY_MAILBOX_PAYLOAD_BYTES);
+            assert(read_be32(blit + 48u) == rows);
+            rows += read_be32(blit + 52u) & 0xffffu;
+        }
+        assert(rows == 1100u);
+        assert(graphics_run(window.graphics, &host,
+                            (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_SURFACE_DESTROY,
+                   .object = large}, 0u, &reply) == ASTRA_STATUS_OK);
+    }
+    window.graphics->staging = staging;
+    window.graphics->staging_bytes = mapped;
+
+    /* A submitted list blits the sprite into the window content. */
+    assert(astra_rt_area_create(8192u, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                                ASTRA_RIGHT_MAP, &list_area) ==
+           ASTRA_SYSCALL_OK);
+    assert(astra_rt_area_map(list_area, ASTRA_AREA_MAP_READ |
+                             ASTRA_AREA_MAP_WRITE, (void **)&list,
+                             &mapped) == ASTRA_SYSCALL_OK);
+    *list = (AstraDrawListHeader){
+        .magic = ASTRA_DRAW_LIST_MAGIC,
+        .version = ASTRA_DRAW_LIST_VERSION_1_5,
+        .total_bytes = 8192u,
+        .command_count = 1u,
+        .width = 320u,
+        .height = 200u,
+        .command_capacity = 16u,
+    };
+    draw = (AstraDrawListCommand *)(void *)(list + 1);
+    *draw = (AstraDrawListCommand){
+        .operation = ASTRA_DRAW_LIST_BLIT,
+        .flags = ASTRA_DRAW_LIST_BLEND_FLAGS(ASTRA_DRAW_LIST_BLEND_BLEND),
+        .x = 100, .y = 50, .width = 32u, .height = 16u,
+        .color = ASTRA_DRAW_LIST_COLOR_IDENTITY,
+        .source = sprite,
+        .source_width = 16u, .source_height = 8u,
+        .clip_right = 320u, .clip_bottom = 200u,
+    };
+    assert(graphics_run(window.graphics, &host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_LIST_ATTACH}, list_area,
+               &reply) == ASTRA_STATUS_OK && reply.object != 0u);
+    {
+        uint32_t list_id = reply.object;
+
+        assert(graphics_run(window.graphics, &host,
+                            (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                   .object = list_id,
+                   .target = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID}, 0u,
+                   &reply) == ASTRA_STATUS_OK && graphics_batch_count == 1u);
+        command = recorded_command(0u, 0u);
+        assert(read_be32(command + 4u) ==
+               ((uint32_t)ASTRA_RENDER_OP_BLIT << 16 |
+                ASTRA_RENDER_FLAG_BLIT_ALPHA));
+        assert(read_be32(recorded_record(0u, read_be32(command + 32u)) +
+                         8u) == window.content_offset[window.content_back]);
+        assert(read_be32(recorded_record(0u, read_be32(command + 36u)) +
+                         8u) == sprite_offset);
+        /* The sprite is not a draw target; a surface without SOURCE is
+           not a source. */
+        assert(graphics_run(window.graphics, &host,
+                            (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                   .object = list_id, .target = sprite}, 0u, &reply) ==
+               ASTRA_STATUS_ACCESS);
+        /* A destroyed source makes the list invalid; nothing is drawn. */
+        assert(graphics_run(window.graphics, &host,
+                            (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_SURFACE_DESTROY,
+                   .object = sprite}, 0u, &reply) == ASTRA_STATUS_OK);
+        assert(graphics_run(window.graphics, &host,
+                            (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                   .object = list_id,
+                   .target = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID}, 0u,
+                   &reply) == ASTRA_STATUS_INVALID &&
+               graphics_batch_count == 0u);
+        /* A failed hardware submission is reported to the client. */
+        draw->source = ASTRA_DRAW_LIST_SOURCE_DESTINATION;
+        draw->flags = 0u;
+        draw->source_width = 32u;
+        draw->source_height = 16u;
+        graphics_submit_status = ASTRA_STATUS_IO;
+        assert(graphics_run(window.graphics, &host,
+                            (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                   .object = list_id,
+                   .target = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID}, 0u,
+                   &reply) == ASTRA_STATUS_IO);
+        graphics_submit_status = ASTRA_STATUS_OK;
+        assert(graphics_run(window.graphics, &host,
+                            (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_LIST_DETACH,
+                   .object = list_id}, 0u, &reply) == ASTRA_STATUS_OK);
+        assert(graphics_run(window.graphics, &host,
+                            (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                   .object = list_id,
+                   .target = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID}, 0u,
+                   &reply) == ASTRA_STATUS_NOT_FOUND);
+    }
+    test_window_graphics_argb_target(window.graphics, &host);
+    test_window_graphics_read(window.graphics, &host, &window, staging,
+                              mapped);
+    /* Closing releases every area the graphics state owned. */
+    display_window_graphics_close(window.graphics);
+    window.graphics = NULL;
+    assert(test_area_creates - creates == test_area_closes - closes);
+}
+
+static const uint8_t *batch_command(uint32_t index)
+{
+    assert(index < read_be32(batch + 12u));
+    return batch + ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
+           ASTRA_RENDER_BATCH_ARENA_OFFSET +
+           index * ASTRA_RENDER_COMMAND_BYTES;
+}
+
+static uint32_t batch_descriptor_offset(uint32_t descriptor)
+{
+    return read_be32(batch + descriptor - ASTRA_RENDER_BATCH_ARENA_OFFSET +
+                     8u);
+}
+
+static const uint8_t *batch_scene_layer(uint32_t index)
+{
+    const uint8_t *scene = batch_scene();
+
+    assert(index < read_be32(scene + 20u));
+    return scene + read_be32(scene + 24u) +
+           index * ASTRA_WINDOW_SCENE_LAYER_BYTES;
+}
+
+static uint32_t present_content(DisplayState *state, uint32_t index,
+                                uint32_t flags, uint16_t x, uint16_t y,
+                                uint16_t width, uint16_t height)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraGuiWindowCommand present = {
+        .header = {
+            .total_size = sizeof(AstraGuiWindowCommand),
+            .header_size = ASTRA_MESSAGE_HEADER_SIZE,
+            .protocol = ASTRA_GUI_PROTOCOL,
+            .protocol_version = ASTRA_GUI_VERSION,
+            .operation = ASTRA_GUI_WINDOW_COMMAND,
+            .transaction_id = 1u,
+        },
+        .window = state->windows[index].id,
+        .generation = state->windows[index].generation,
+        .action = ASTRA_GUI_WINDOW_PRESENT,
+        .flags = flags,
+        .x = x, .y = y, .width = width, .height = height,
+    };
+    DisplayWindow closed = {0};
+    int changed = 0;
+
+    assert(valid_command(&present, sizeof(present), 1u,
+                         state->windows[index].id,
+                         state->windows[index].request.width,
+                         state->windows[index].request.height));
+    return apply_command(state, &theme, &present, &closed, &changed);
+}
+
+/* Compose, check the batch, and commit it as a completed present would. */
+static void compose_commit(DisplayState *state, uint32_t fence)
+{
+    uint32_t error = ASTRA_STATUS_OK;
+
+    assert(valid_batch(compose(batch, fence, state, &error, NULL, 0)) != 0u);
+    assert(error == ASTRA_STATUS_OK);
+    commit_render_state(state);
+}
+
+static void test_content_banks(void)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    DisplayWindow windows[TEST_WINDOW_COUNT] = {0};
+    DisplayState state = {
+        .windows = windows,
+        .capacity = TEST_WINDOW_COUNT,
+    };
+    DisplayWindow *window = &windows[0];
+    uint32_t round = theme.window_radius - theme.frame_width;
+    int32_t client_x = 100 + theme.frame_width;
+    int32_t client_y = 90 + theme.frame_width + theme.titlebar_height +
+                       theme.signal_height;
+    const uint8_t *command;
+    const uint8_t *layer;
+    uint8_t shown;
+
+    add_window(&state, 0u, ASTRA_WINDOW_STANDARD, 100u, 90u, 300u, 200u,
+               ASTRA_WINDOW_ACTIVE, 0u);
+    window->request.content_format = ASTRA_WINDOW_CONTENT_SURFACE;
+    /* The pitch lets a layer begin at any row. */
+    assert(window->content_pitch == 640u &&
+           window->content_bytes == 640u * 200u);
+    damage_window(&state, &theme, window);
+    compose_commit(&state, 2u);
+    assert(window->content_front == 1u && window->content_back == 0u &&
+           window->content_shown == 1u);
+    /* The service's own first clear is carried forward like any frame. */
+    assert(window->content_stale[0].valid == 0u &&
+           window->content_stale[2].valid != 0u);
+
+    /* A discarding present of a changed window costs no GPU command: the
+       scene shows the bank the client drew, in three layers. */
+    assert(present_content(&state, 0u, ASTRA_GUI_PRESENT_DISCARD,
+                           0u, 0u, 0u, 0u) == ASTRA_STATUS_OK);
+    assert(valid_batch(compose(batch, 3u, &state, &(uint32_t){0}, NULL, 0))
+           != 0u);
+    assert(read_be32(batch + 12u) == 0u);
+    assert(read_be32(batch_scene() + 20u) == 5u);
+    layer = batch_scene_layer(2u);
+    assert(read_be32(layer) == window->cache_offset[window->cache_pending] &&
+           (read_be32(layer + 20u) & 0xffffu) == theme.window_radius);
+    /* The rounded bottom strip ... */
+    layer = batch_scene_layer(3u);
+    assert(read_be32(layer) == window->content_offset[0] +
+                                   (200u - round * 2u) * 640u &&
+           read_be32(layer + 8u) == 640u &&
+           read_be32(layer + 12u) == (300u << 16 | round * 2u) &&
+           read_be32(layer + 16u) ==
+               ((uint32_t)client_x << 16 |
+                (uint32_t)(client_y + 200 - (int32_t)round * 2)) &&
+           read_be32(layer + 20u) ==
+               (round | ASTRA_WINDOW_SCENE_LAYER_VISIBLE));
+    /* ... under the square rows that hide its top corners. */
+    layer = batch_scene_layer(4u);
+    assert(read_be32(layer) == window->content_offset[0] &&
+           read_be32(layer + 12u) == (300u << 16 | (200u - round)) &&
+           read_be32(layer + 16u) ==
+               ((uint32_t)client_x << 16 | (uint32_t)client_y) &&
+           read_be32(layer + 20u) == ASTRA_WINDOW_SCENE_LAYER_VISIBLE);
+    commit_render_state(&state);
+    assert(window->content_front == 0u && window->content_shown == 0u &&
+           window->content_back == 2u && window->content_discard == 0u);
+
+    /* A plain present carries the frame forward: one blit from the drawn
+       bank into the bank the client draws next -- never one this scene or
+       the one before it shows. That bank last held the first frame, so it
+       missed the whole discarded one. */
+    shown = window->content_shown;
+    assert(present_content(&state, 0u, 0u, 10u, 20u, 30u, 40u) ==
+           ASTRA_STATUS_OK);
+    assert(valid_batch(compose(batch, 4u, &state, &(uint32_t){0}, NULL, 0))
+           != 0u);
+    assert(read_be32(batch + 12u) == 1u);
+    command = batch_command(0u);
+    assert(read_be32(command + 4u) >> 16 == ASTRA_RENDER_OP_BLIT &&
+           batch_descriptor_offset(read_be32(command + 36u)) ==
+               window->content_offset[2] &&
+           batch_descriptor_offset(read_be32(command + 32u)) ==
+               window->content_offset[window->content_pending_back] &&
+           window->content_pending_back != 2u &&
+           window->content_pending_back != shown &&
+           read_be32(command + 44u) == 0u && read_be32(command + 48u) == 0u &&
+           read_be32(command + 52u) == (300u << 16 | 200u));
+    commit_render_state(&state);
+    assert(window->content_front == 2u && window->content_back == 1u);
+
+    /* Bank 0 missed the last frame and this one: it gets both damages. */
+    assert(present_content(&state, 0u, 0u, 200u, 150u, 10u, 10u) ==
+           ASTRA_STATUS_OK);
+    assert(valid_batch(compose(batch, 5u, &state, &(uint32_t){0}, NULL, 0))
+           != 0u);
+    command = batch_command(0u);
+    assert(read_be32(batch + 12u) == 1u &&
+           window->content_pending_back == 0u &&
+           read_be32(command + 44u) == (10u << 16 | 20u) &&
+           read_be32(command + 48u) == (10u << 16 | 20u) &&
+           read_be32(command + 52u) == (200u << 16 | 140u));
+    commit_render_state(&state);
+    /* An unchanged window costs nothing and keeps showing its front. */
+    damage_both(&state, (DamageRect){0, 0, 10, 10, 1u});
+    assert(valid_batch(compose(batch, 6u, &state, &(uint32_t){0}, NULL, 0))
+           != 0u);
+    assert(read_be32(batch + 12u) == 0u &&
+           read_be32(batch_scene_layer(4u)) ==
+               window->content_offset[window->content_front]);
+    commit_render_state(&state);
+
+    /* Only a CONTENT_SURFACE client can promise to redraw everything. */
+    window->request.content_format = ASTRA_WINDOW_CONTENT_DRAW_LIST;
+    assert(present_content(&state, 0u, ASTRA_GUI_PRESENT_DISCARD,
+                           0u, 0u, 0u, 0u) == ASTRA_STATUS_INVALID);
+    window->request.content_format = ASTRA_WINDOW_CONTENT_SURFACE;
+
+    /* An open menu is drawn once and then only when its hover moves. */
+    set_overlay(&state, DISPLAY_OVERLAY_MENU);
+    compose_commit(&state, 7u);
+    assert(state.overlay_drawn == DISPLAY_OVERLAY_MENU);
+    damage_both(&state, overlay_bounds(DISPLAY_OVERLAY_MENU));
+    state.system_initialized = 1u;
+    assert(valid_batch(compose(batch, 8u, &state, &(uint32_t){0}, NULL, 0))
+           != 0u);
+    assert(read_be32(batch + 12u) == 0u);
+    state.overlay_hover = 2u;
+    assert(valid_batch(compose(batch, 8u, &state, &(uint32_t){0}, NULL, 0))
+           != 0u);
+    assert(read_be32(batch + 12u) != 0u && state.overlay_pending != 0u);
+}
+
 int main(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
 
     test_dynamic_window_resources();
+    test_window_graphics();
+    test_content_banks();
+
+    {
+        DisplayWindow fullscreen = {0};
+        DisplayWindow ordinary = {0};
+
+        fullscreen.request.type = ASTRA_WINDOW_FULLSCREEN;
+        assert(frame_valid(&theme, &fullscreen, 0u, 0u, 320u, 200u));
+        assert(frame_valid(&theme, &fullscreen, 0u, 0u,
+                           ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT));
+        assert(!frame_valid(&theme, &fullscreen, 1u, 0u, 320u, 200u));
+        assert(!frame_valid(&theme, &fullscreen, 0u, 1u, 320u, 200u));
+        assert(!frame_valid(&theme, &fullscreen, 0u, 0u,
+                            ASTRA_DISPLAY_WIDTH + 1u, 200u));
+        ordinary.request.type = ASTRA_WINDOW_STANDARD;
+        assert(!frame_valid(&theme, &ordinary, 0u, 0u, 320u, 200u));
+    }
 
     {
         DisplayWindow animated_windows[TEST_WINDOW_COUNT] = {0};
@@ -995,6 +1789,37 @@ int main(void)
             assert(valid_open(&dialog_open, sizeof(dialog_open), 3u));
             dialog_open.gadgets = ASTRA_WINDOW_GADGET_MINIMIZE;
             assert(!valid_open(&dialog_open, sizeof(dialog_open), 3u));
+        }
+        {
+            AstraGuiOpenWindow rgb_open = open;
+            DisplayWindow rgb_window = {0};
+            uint16_t pixel = 0u;
+
+            rgb_open.type = ASTRA_WINDOW_DIALOG;
+            rgb_open.x = 430u;
+            rgb_open.y = 250u;
+            rgb_open.width = 200u;
+            rgb_open.height = 120u;
+            rgb_open.pitch = 400u;
+            rgb_open.content_format = ASTRA_WINDOW_CONTENT_RGB565;
+            rgb_open.gadgets = ASTRA_WINDOW_GADGET_AUTO;
+            assert(valid_open(&rgb_open, sizeof(rgb_open), 3u));
+            rgb_open.pitch = 399u;
+            assert(!valid_open(&rgb_open, sizeof(rgb_open), 3u));
+            rgb_open.pitch = 398u;
+            assert(!valid_open(&rgb_open, sizeof(rgb_open), 3u));
+            rgb_open.pitch = 400u;
+            rgb_window.request = rgb_open;
+            rgb_window.surface.view.pixels = &pixel;
+            rgb_window.surface.view.pitch = rgb_open.pitch;
+            rgb_window.surface.view.byte_size = rgb_open.pitch *
+                                                rgb_open.height;
+            assert(frame_valid(&theme, &rgb_window, rgb_open.x, rgb_open.y,
+                               180u, 100u));
+            assert(!frame_valid(&theme, &rgb_window, rgb_open.x, rgb_open.y,
+                                210u, 100u));
+            assert(!frame_valid(&theme, &rgb_window, rgb_open.x, rgb_open.y,
+                                180u, 121u));
         }
         {
             AstraGuiOpenWindow malformed = open;
@@ -1494,14 +2319,10 @@ int main(void)
 
         state.windows[3].cache_dirty[0] = 0u;
         state.windows[3].cache_dirty[1] = 0u;
-        state.windows[3].cache_damage[0] = (DamageRect){0};
-        state.windows[3].cache_damage[1] = (DamageRect){0};
         assert(apply_command(&state, &theme, &present, &closed, &changed) ==
                ASTRA_STATUS_OK && changed);
         assert(state.windows[3].cache_dirty[0] == 0u &&
                state.windows[3].cache_dirty[1] == 0u &&
-               state.windows[3].cache_damage[0].valid != 0u &&
-               state.windows[3].cache_damage[1].valid != 0u &&
                state.windows[3].content_dirty != 0u &&
                state.windows[3].content_damage.left == 0 &&
                state.windows[3].content_damage.top == 0 &&
@@ -1832,11 +2653,27 @@ int main(void)
 
         windows[0] = sole_window;
         solo.system_initialized = 1u;
+        solo.damage[0] = (DamageRect){0};
+        solo.damage[1] = (DamageRect){0};
         command.action = ASTRA_GUI_WINDOW_CLOSE;
         assert(apply_command(&solo, &theme, &command, &closed,
                              &changed) == ASTRA_STATUS_OK);
         assert(changed != 0 && solo.count == 0u &&
-               solo.system_initialized == 0u);
+               solo.system_initialized == 0u &&
+               solo.damage[0].valid != 0u &&
+               solo.damage[1].valid != 0u);
+
+        windows[0] = sole_window;
+        windows[0].state = ASTRA_WINDOW_STATE_MINIMIZED;
+        windows[0].request.flags = 0u;
+        solo.count = 1u;
+        solo.damage[0] = (DamageRect){0};
+        solo.damage[1] = (DamageRect){0};
+        assert(apply_command(&solo, &theme, &command, &closed,
+                             &changed) == ASTRA_STATUS_OK);
+        assert(changed != 0 && solo.count == 0u &&
+               solo.damage[0].valid == 0u &&
+               solo.damage[1].valid == 0u);
 
         windows[0] = sole_window;
         windows[0].request.flags = 0u;
@@ -1873,12 +2710,14 @@ int main(void)
                color(theme.canvas));
         assert(batch_scene_layer_source(0u) == stack.system_offset[0]);
         assert(batch_scene_layer_source(1u) == stack.system_offset[1]);
+        /* An undecorated window is its content bank, with no cache. */
         assert(batch_scene_layer_source(2u) ==
-               stack.windows[0].cache_offset[
-                   stack.windows[0].cache_pending]);
+               stack.windows[0].content_offset[
+                   stack.windows[0].content_back]);
         assert(batch_scene_layer_source(3u) ==
-               stack.windows[1].cache_offset[
-                   stack.windows[1].cache_pending]);
+               stack.windows[1].content_offset[
+                   stack.windows[1].content_back]);
+        /* The only blits carry each first frame into the next back bank. */
         assert(batch_blit_count() == 2u);
     }
     {
@@ -1904,9 +2743,35 @@ int main(void)
         assert(error == ASTRA_STATUS_OK);
         for (uint32_t index = 0u; index < 5u; ++index)
             assert(batch_blit_from_surface(
-                       many.windows[index].content_offset) != 0u);
+                       many.windows[index].content_offset[
+                           many.windows[index].content_back]) != 0u);
         assert(display_wait_handles(&many, 0x10u, 0x20u, 0x25u, 0u,
                                     waits, sources) == 8u);
+    }
+    {
+        static uint16_t pixels[100u * 80u];
+        DisplayWindow rgb_window = {0};
+        DisplayState rgb = {
+            .windows = &rgb_window,
+            .capacity = 1u,
+            .damage = {
+                {100, 100, 200, 180, 1u},
+                {100, 100, 200, 180, 1u},
+            },
+        };
+
+        pixels[0] = 0xf800u;
+        add_window(&rgb, 0u, ASTRA_WINDOW_POPOVER, 100u, 100u,
+                   100u, 80u, 0u, 0u);
+        assert(astra_surface_view_init(&rgb_window.surface.view, pixels,
+                                       sizeof(pixels), 100u, 80u, 200u));
+        rgb_window.request.content_format = ASTRA_WINDOW_CONTENT_RGB565;
+        rgb_window.request.pitch = 200u;
+        assert(valid_batch(compose(batch, 1u, &rgb, &error, NULL, 0)) != 0u);
+        assert(error == ASTRA_STATUS_OK);
+        rgb_window.content_damage.right = 101;
+        assert(compose(batch, 2u, &rgb, &error, NULL, 0) == 0u);
+        assert(error == ASTRA_STATUS_PROTOCOL);
     }
     puts("display compositor tests passed");
     return 0;

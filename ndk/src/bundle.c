@@ -2,22 +2,17 @@
 #include <astra/endian.h>
 #include <astra/manifest.h>
 #include <astra/runtime.h>
+#include <astra/string.h>
 
 #include <stddef.h>
 #include <string.h>
 
 #define WORD_MAX 5u
 
+/* Manifest fields are never empty. */
 static int copy(char *out, uint32_t capacity, const char *text)
 {
-    uint32_t at = 0u;
-    while (text[at] != '\0') {
-        if (at + 1u >= capacity) return 0;
-        out[at] = text[at];
-        ++at;
-    }
-    out[at] = '\0';
-    return at != 0u;
+    return text[0] != '\0' && astra_string_copy(out, capacity, text);
 }
 
 static int number(const char *text, uint16_t *value)
@@ -364,5 +359,36 @@ uint32_t astra_aicon_palette(const AstraAicon *icon, uint16_t index,
             icon->length - icon->palette_offset)
         return ASTRA_BUNDLE_INVALID;
     memcpy(rgba, icon->bytes + icon->palette_offset + index * 4u, 4u);
+    return ASTRA_BUNDLE_OK;
+}
+
+uint32_t astra_aicon_strike_argb(const AstraAicon *icon,
+                                 const AstraAiconStrike *strike,
+                                 uint32_t *pixels, uint32_t stride)
+{
+    uint32_t argb[256];
+
+    if (icon == NULL || strike == NULL || pixels == NULL ||
+        strike->pixels == NULL || stride < strike->width ||
+        icon->palette_count == 0u || icon->palette_count > 256u ||
+        (uint32_t)strike->width * strike->height != strike->length)
+        return ASTRA_BUNDLE_INVALID;
+    for (uint32_t index = 0u; index < 256u; ++index) {
+        uint8_t rgba[4];
+
+        argb[index] = 0u;
+        if (index < icon->palette_count) {
+            if (astra_aicon_palette(icon, (uint16_t)index, rgba) !=
+                    ASTRA_BUNDLE_OK)
+                return ASTRA_BUNDLE_INVALID;
+            argb[index] = (uint32_t)rgba[3] << 24 |
+                          (uint32_t)rgba[0] << 16 |
+                          (uint32_t)rgba[1] << 8 | rgba[2];
+        }
+    }
+    for (uint32_t y = 0u; y < strike->height; ++y)
+        for (uint32_t x = 0u; x < strike->width; ++x)
+            pixels[y * stride + x] =
+                argb[strike->pixels[y * strike->width + x]];
     return ASTRA_BUNDLE_OK;
 }

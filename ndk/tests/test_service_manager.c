@@ -10,6 +10,7 @@ static uint32_t reply_receive;
 static uint32_t transaction;
 static uint32_t expected_operation;
 static const char *expected_name;
+static uint32_t expected_value;
 static AstraServiceListCursor expected_cursor;
 
 uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
@@ -35,6 +36,7 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         assert(strcmp(request->name, expected_name) == 0);
         assert(memcmp(&request->cursor, &expected_cursor,
                       sizeof(request->cursor)) == 0);
+        assert(request->value == expected_value && request->reserved == 0u);
         transaction = request->header.transaction_id;
     } else if (number == ASTRA_SYSCALL_PORT_RECEIVE_TRY) {
         AstraServiceManagerReply *reply = (AstraServiceManagerReply *)d2;
@@ -166,6 +168,21 @@ int main(void)
     assert(astra_service_control(9u, ASTRA_SERVICE_MANAGER_LIST,
                                  "remote-desktop", &info) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
+    expected_operation = ASTRA_SERVICE_MANAGER_SET_RESTART;
+    expected_value = ASTRA_SERVICE_RESTART_NEVER;
+    info.process_id = 0u;
+    assert(astra_service_set_restart(9u, "remote-desktop",
+                                     ASTRA_SERVICE_RESTART_NEVER, &info) ==
+           ASTRA_OK);
+    assert(info.process_id == 12u);
+    expected_value = ASTRA_SERVICE_RESTART_ALWAYS;
+    assert(astra_service_set_restart(9u, "remote-desktop",
+                                     ASTRA_SERVICE_RESTART_ALWAYS, NULL) ==
+           ASTRA_OK);
+    assert(astra_service_set_restart(9u, "remote-desktop",
+                                     ASTRA_SERVICE_RESTART_ALWAYS + 1u,
+                                     NULL) == ASTRA_ERROR_INVALID_ARGUMENT);
+    expected_value = 0u;
     expected_operation = ASTRA_SERVICE_MANAGER_SHUTDOWN;
     expected_name = "";
     assert(astra_system_shutdown_request(9u) == ASTRA_OK);

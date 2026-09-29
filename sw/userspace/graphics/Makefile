@@ -203,13 +203,14 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 		awk '/NEEDED/{n++} END{print n+0}')" = 3
 	$(call ASTRA_CHECK_DSO,$(GRAPHICS_LIBRARY) $(FONT_LIBRARY))
 
-$(HOST_TEST): src/surface.c src/render_builder.c tests/test_surface.c \
+$(HOST_TEST): src/surface.c src/render_builder.c src/texture_reference.c \
+		tests/test_surface.c \
 		../../../ndk/include/astra/surface.h include/astra/render_builder.h \
 		../../include/astra/rounded.h ../../include/astra/window_scene.h \
 		$(FONT_HEADER)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
-		src/surface.c src/render_builder.c \
+		src/surface.c src/render_builder.c src/texture_reference.c \
 		tests/test_surface.c -o $@
 
 $(HOST_TEST): $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
@@ -220,8 +221,8 @@ test: $(HOST_TEST)
 sanitize: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
-		src/surface.c src/render_builder.c tests/test_surface.c \
-		-o build/host/test_surface_sanitize
+		src/surface.c src/render_builder.c src/texture_reference.c \
+		tests/test_surface.c -o build/host/test_surface_sanitize
 	./build/host/test_surface_sanitize
 
 analyze: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER)

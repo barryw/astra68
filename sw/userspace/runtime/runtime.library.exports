@@ -98,6 +98,7 @@ ASTRA_RUNTIME_1.0 {
         astra_process_info;
         astra_thread_info;
         astra_process_priority;
+        astra_thread_priority;
         astra_process_resume;
         astra_process_signal;
         astra_process_snapshot;
@@ -205,3 +206,20 @@ ASTRA_RUNTIME_1.7 {
     global:
         astra_exec_executable_stream;
 } ASTRA_RUNTIME_1.6;
+
+ASTRA_RUNTIME_1.9 {
+    global:
+        astra_string_append;
+        astra_string_append_bytes;
+        astra_string_append_char;
+        astra_string_append_hex;
+        astra_string_append_i64;
+        astra_string_append_u64;
+        astra_string_compare_ascii_nocase;
+        astra_string_concat;
+        astra_string_copy;
+        astra_string_has_prefix;
+        astra_string_has_suffix;
+        astra_string_init;
+        astra_string_utf8_prefix;
+} ASTRA_RUNTIME_1.7;

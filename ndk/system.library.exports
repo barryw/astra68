@@ -88,3 +88,52 @@ ASTRA_SYSTEM_2.2 {
     global:
         astra_window_set_application_name;
 } ASTRA_SYSTEM_2.1;
+
+ASTRA_SYSTEM_2.3 {
+    global:
+        astra_display_cleanup;
+        astra_display_close;
+        astra_display_layout_calculate;
+        astra_display_staging;
+        astra_draw_blit;
+        astra_draw_line;
+        astra_draw_list_cleanup;
+        astra_draw_list_close;
+        astra_draw_list_create;
+        astra_draw_list_reset;
+        astra_draw_list_set_clip;
+        astra_draw_rectangle;
+        astra_draw_submit;
+        astra_fence_cleanup;
+        astra_fence_close;
+        astra_fence_poll;
+        astra_fence_wait;
+        astra_surface_cleanup;
+        astra_surface_close;
+        astra_surface_create;
+        astra_surface_get_info;
+        astra_surface_write;
+        astra_surface_write_staged;
+        astra_window_display;
+        astra_window_surface;
+} ASTRA_SYSTEM_2.2;
+
+ASTRA_SYSTEM_2.4 {
+    global:
+        astra_draw_triangles;
+        astra_surface_read;
+} ASTRA_SYSTEM_2.3;
+
+ASTRA_SYSTEM_2.5 {
+    global:
+        astra_aicon_strike_argb;
+        astra_draw_ui_text;
+        astra_service_set_restart;
+} ASTRA_SYSTEM_2.4;
+
+ASTRA_SYSTEM_2.6 {
+    global:
+        astra_draw_lines;
+        astra_draw_rectangles;
+        astra_window_present_discard;
+} ASTRA_SYSTEM_2.5;

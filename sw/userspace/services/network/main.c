@@ -146,10 +146,16 @@ static AstraNetworkStatus host_execute(AstraNetworkHostCommand *source,
     if (output != NULL && command->result_status == ASTRA_NETWORK_OK) {
         uint32_t moved = command->result_value;
 
-        if (command->operation == ASTRA_NETWORK_HOST_RESOLVE &&
-            moved <= UINT32_MAX / sizeof(AstraNetworkAddress))
+        if (command->operation == ASTRA_NETWORK_HOST_RESOLVE) {
+            if (moved > UINT32_MAX / sizeof(AstraNetworkAddress))
+                return ASTRA_NETWORK_IO;
             moved *= sizeof(AstraNetworkAddress);
-        else if (command->operation == ASTRA_NETWORK_HOST_RECEIVE &&
+        } else if (command->operation == ASTRA_NETWORK_HOST_INTERFACES) {
+            if (moved > UINT32_MAX /
+                            sizeof(AstraNetworkInterfaceAddress))
+                return ASTRA_NETWORK_IO;
+            moved *= sizeof(AstraNetworkInterfaceAddress);
+        } else if (command->operation == ASTRA_NETWORK_HOST_RECEIVE &&
                  (command->flags & ASTRA_NETWORK_MESSAGE_TRUNCATE) != 0u &&
                  moved > output_size)
             moved = output_size;
@@ -524,9 +530,21 @@ static AstraNetworkStatus dispatch_resolve(
         command.value = request->value;
         return host_execute(&command, NULL, 0u, NULL, 0u);
     }
-    command.operation = ASTRA_NETWORK_HOST_RESOLVE;
+    command.operation = request->header.operation ==
+        ASTRA_NETWORK_REVERSE_RESOLVE ?
+        ASTRA_NETWORK_HOST_REVERSE_RESOLVE : ASTRA_NETWORK_HOST_RESOLVE;
     command.value = request->value;
     if (request->value == 0u) {
+        if (request->header.operation == ASTRA_NETWORK_REVERSE_RESOLVE) {
+            if (request->address.size != sizeof(request->address) ||
+                (request->address.family != ASTRA_NETWORK_FAMILY_IPV4 &&
+                 request->address.family != ASTRA_NETWORK_FAMILY_IPV6))
+                return ASTRA_NETWORK_INVALID;
+            command.address = request->address;
+            status = host_execute(&command, NULL, 0u, NULL, 0u);
+            reply->value = command.result_value;
+            return status;
+        }
         if (!shared_slot(session, request, 1, &shared_bytes, &shared_length) ||
             shared_length == 0u || shared_length > ASTRA_NETWORK_NAME_MAX ||
             request->address.family > ASTRA_NETWORK_FAMILY_IPV6)
@@ -546,6 +564,26 @@ static AstraNetworkStatus dispatch_resolve(
     reply->value = command.result_value;
     if (request->value != 0u)
         reply->transferred = command.result_value;
+    return status;
+}
+
+static AstraNetworkStatus dispatch_interfaces(
+    NetworkSession *session, const AstraNetworkRequestMessage *request,
+    AstraNetworkReplyMessage *reply)
+{
+    AstraNetworkHostCommand command;
+    uint8_t *bytes;
+    uint32_t length;
+    AstraNetworkStatus status;
+
+    if (!shared_slot(session, request, 0, &bytes, &length) ||
+        length % sizeof(AstraNetworkInterfaceAddress) != 0u)
+        return ASTRA_NETWORK_INVALID;
+    (void)memset(&command, 0, sizeof(command));
+    command.operation = ASTRA_NETWORK_HOST_INTERFACES;
+    status = host_execute(&command, NULL, 0u, bytes, length);
+    reply->value = command.result_value;
+    reply->transferred = command.result_value;
     return status;
 }
 
@@ -592,8 +630,12 @@ static void process_request(uint32_t receive, int may_listen,
         reply.status = ASTRA_NETWORK_INVALID;
     } else if (bound_endpoint == NULL &&
                (request.header.operation == ASTRA_NETWORK_RESOLVE ||
+                request.header.operation == ASTRA_NETWORK_REVERSE_RESOLVE ||
                 request.header.operation == ASTRA_NETWORK_CANCEL)) {
         reply.status = dispatch_resolve(session, &request, &reply);
+    } else if (bound_endpoint == NULL &&
+               request.header.operation == ASTRA_NETWORK_INTERFACES) {
+        reply.status = dispatch_interfaces(session, &request, &reply);
     } else if (bound_endpoint == NULL &&
                request.header.operation == ASTRA_NETWORK_CLOSE &&
                request.endpoint == 0u) {
@@ -608,6 +650,8 @@ static void process_request(uint32_t receive, int may_listen,
                 request.generation == bound_endpoint->generation &&
                 request.header.operation != ASTRA_NETWORK_OPEN_ENDPOINT &&
                 request.header.operation != ASTRA_NETWORK_RESOLVE &&
+                request.header.operation != ASTRA_NETWORK_REVERSE_RESOLVE &&
+                request.header.operation != ASTRA_NETWORK_INTERFACES &&
                 request.header.operation != ASTRA_NETWORK_CANCEL)) {
         reply.status = dispatch_endpoint(session, &request, &reply,
                                          transferred, &transferred_count,

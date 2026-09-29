@@ -17,6 +17,12 @@ uint32_t supervisor_service_definition_serialize(
     uint32_t *required);
 uint32_t supervisor_service_definition_from_manifest(
     const SupervisorManifestEntry *entry, AstraServiceDefinition *definition);
+/* A user's policy.conf for a manifest service, over its manifest default. */
+uint32_t supervisor_service_policy_apply(const char *text, uint32_t length,
+                                         AstraServiceDefinition *definition);
+uint32_t supervisor_service_policy_serialize(
+    const AstraServiceDefinition *definition, char *out, uint32_t capacity,
+    uint32_t *required);
 uint32_t supervisor_service_definition_to_manifest(
     const AstraServiceDefinition *definition, SupervisorManifestEntry *entry);
 
