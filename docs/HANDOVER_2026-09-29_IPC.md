@@ -167,3 +167,31 @@ A frame is about 262k guest instructions, down from about 480k.
   (`loginctl` times out). Restart logind or reboot beast.
 - A software reboot of the board leaves RSTMGR HDSKREQ bit 0
   (EMIFFLUSHREQ) set. It is harmless: F2SDRAM works with it set.
+
+## Update, end of 2026-09-29: IPC phase 1 done
+
+- **PORT_CALL landed** (`f3845d04`, release `76104ba8`). See
+  `docs/IPC_CALL.md`, "As built", for the design as implemented, the
+  deviations and the numbers. Beast +14-19% fps; board argb 55 -> 57,
+  argb-blend 52 -> 53-54, rgb565 59-60 unchanged.
+- **Build lock on beast.** Every entry script sources
+  `~/astra-mg/build-lock.sh`; run ad-hoc work as `~/astra-mg/locked CMD`.
+  See `CLAUDE.md`.
+- **Profile 5** (`beast:~/astra-mg/ipc-prof/report5.txt`, PORT_CALL build):
+  `area_copy_in` 15.2%, `probe_root` 7.1%, `kernel_area_extents` 4.1%,
+  `page_entries` 4.0%, `kernel_area_page_physical` 2.3%. A caller probe shows
+  one upload per frame and ~300 source-page and ~300 area-page lookups, one
+  per 4 KiB page: the per-page walk is the cost, not repeated calls.
+- **That work would not help the board.** The board guest runs ~14 M
+  instructions/s at 57 fps, far below TCG's capacity on the A76. A board frame
+  is the upload into Media RAM (~7 ms, capped at ~133 MB/s by the HPS bridge)
+  plus about three serialized render batches (surface write, list submit,
+  compose), each ~2.2 ms of hardware time (`ASTRA_DISPLAY_PROFILE=1`: 11,210
+  batches, mean copy 38 us, mean hardware 2.2 ms for batches with hardware
+  work). The display service waits for each batch before replying. rgb565 at
+  59-60 is the display's rate, so argb and argb-blend have at most 5-11% left.
+- Board-side levers, if wanted: fewer copies per streamed frame (staging ->
+  surface -> window content -> scene), or replying to LIST_SUBMIT before the
+  hardware finishes, ordered by fences. Both are graphics-architecture work,
+  not kernel IPC. IPC phase 2 is not justified by these numbers.
+
