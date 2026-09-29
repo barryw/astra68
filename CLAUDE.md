@@ -92,6 +92,15 @@ There is no alternative CPU or emulator implementation in the repository.
   that fills every word of one, into `memset`. All three link as undefined
   references, which reads like a missing linker script rather than an
   arithmetic choice.
+- **One build at a time on `beast`, enforced.** Builds share `build/`
+  directories (`sw/kernel/build` between host tests and the ROM, the ncurses
+  tree, QEMU's work root), and two concurrent runs corrupt each other in ways
+  that read as real failures. Every entry script in `~/astra-mg`, `~/ipc-prof.sh`
+  and `~/f2s-*.sh` sources `~/astra-mg/build-lock.sh`; run anything ad hoc as
+  `~/astra-mg/locked <command>`. A second build exits 75 with
+  `ASTRA-BUILD-BUSY` and names the holder -- wait for it, never work around
+  it. `verify-nopc.sh` keeps going after a failed step, so a failed verify is
+  still running until its shell exits.
 - Stale objects are indistinguishable from kernel bugs. Exit status 127 from a
   user image means a stale object first, not a kernel fault. Never source-sync
   with plain `rsync -a`: use the checksum/non-mtime command in `AGENTS.md` so a
