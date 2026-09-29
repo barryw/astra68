@@ -112,11 +112,22 @@ CONFIGURATION = {
 DEFAULT_SERVICES = os.path.join(
     REPOSITORY, "sw/userspace/services")
 DEFAULT_KITS = os.path.join(REPOSITORY, "sw/userspace/kits/build")
-DEFAULT_APPS = os.path.join(REPOSITORY, "sw/userspace/apps/build")
+# Every directory that ships applications; each names its shipped bundles in
+# a build-written `.apps` inventory (tools/astra-bundle.mk).
+DEFAULT_APPS = (os.path.join(REPOSITORY, "sw/userspace/apps/build"),
+                os.path.join(REPOSITORY, "sw/userspace/sdl2/build"))
+APPLICATION_POLICY = os.path.join(
+    REPOSITORY, "sw/include/astra/application_policy.h")
 DEFAULT_TERMINFO = os.path.join(
     REPOSITORY,
     "sw/userspace/terminal/build/terminfo/a/astra-256color")
-APPLICATION_BUNDLES = ("Terminal.app", "InterfaceGallery.app")
+# Terminal is the shell: it holds system authority no other application may
+# claim, so the startup manifest names its launch ceiling explicitly.
+TERMINAL_CEILING = (
+    "GUI CLIPBOARD WORK:rw HOME:rw TMP:rw RAM:rw DH0:r SYSTEM:r LOCAL:rw "
+    "COMMANDS:r APPS:r LIBS:r EVENTS:r PROC:r METRICS:r CONFIG_COMMANDS:r "
+    "EVENT_CONTROL NETWORK NETWORK_LISTEN NTP PCM POSIX_PROCESS APP_LAUNCH "
+    "SERVICE_MANAGER ENTROPY")
 PROVIDER_INDEX_MAGIC = 0x41505256  # "APRV"
 PROVIDER_INDEX_HEADER = struct.Struct(">IHHHHHHHHI")
 PROVIDER_INDEX_VERSION = 2
@@ -138,9 +149,14 @@ PROVIDER_INDEX_MAX = (PROVIDER_INDEX_HEADER.size + VFS_PATH_MAX -
 # PEER_DEAD as soon as the machine is up. The desktop is what holds it. So the
 # desktop profile is the profile, and a gate that wants a terminal opens one
 # from the desktop the way a person does.
+#
+# Tiers: `critical` services are the machine (no storage or display, no
+# Astra) and their death halts it; `required` ones always run and are
+# restarted; neither can be touched from `service`. Unmarked services, and the
+# ones added under /config/services, belong to the user.
 DISPLAY_STARTUP_MANIFEST = (
     "service /services/storage grants BLOCK_DEVICE BLOCK_IRQ "
-    "serves SYSTEM:r required\n"
+    "serves SYSTEM:r critical\n"
     "service /services/posixd grants serves POSIX_PROCESS required\n"
     "service /services/hostfs grants HOST_DEVICE "
     "serves WORK:rw METRICS:r required\n"
@@ -156,10 +172,11 @@ DISPLAY_STARTUP_MANIFEST = (
     "serves INPUT_SERVICE required\n"
     "service /services/clipboard grants serves CLIPBOARD required\n"
     "service /services/display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ "
-    "INPUT_SERVICE serves GUI required\n"
+    "INPUT_SERVICE serves GUI critical\n"
     "service /services/media grants HOST_DEVICE serves PCM\n"
-"application /services/desktop grants GUI APP_LAUNCH SERVICE_MANAGER APPS:r LIBS:r SYSTEM:r "
-    "NETWORK NETWORK_LISTEN NTP PCM\n")
+    "service /services/desktop grants GUI APP_LAUNCH SERVICE_MANAGER APPS:r "
+    "LIBS:r SYSTEM:r NETWORK NETWORK_LISTEN NTP PCM required\n"
+    "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("storage", "ramfs", "posixd", "hostfs", "entropy", "network", "ntpd", "events",
                     "input", "clipboard", "display", "media", "desktop",
@@ -173,6 +190,11 @@ AUDIO_CERTIFY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
 PCM_CERTIFY_SERVICES = DISPLAY_SERVICES + ("pcm-certify",)
 PCM_CERTIFY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
     "application /services/pcm-certify grants PCM LIBS:r\n")
+# The fixture that dies: installed, not started, for a gate to add as a user
+# service; or started as a critical one, whose death must halt the machine.
+FAULT_PROBE_SERVICES = DISPLAY_SERVICES + ("fault-probe",)
+FAULT_CRITICAL_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
+    "service /services/fault-probe grants critical\n")
 INTERFACE_GALLERY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
     "application /apps/InterfaceGallery.app grants GUI CLIPBOARD LIBS:r\n")
 
@@ -445,6 +467,90 @@ def _bundles(directory, names=None):
     return found
 
 
+def _application_bundles(directories):
+    """The bundles each directory's `.apps` inventory ships, in order."""
+    found = []
+    names = set()
+    for directory in directories:
+        inventory = os.path.join(directory, ".apps")
+        try:
+            with open(inventory, "r", encoding="ascii") as handle:
+                listed = tuple(line.rstrip("\n") for line in handle)
+        except OSError as error:
+            raise RuntimeError("no application inventory at %s -- build "
+                               "applications first" % inventory) from error
+        if (not listed or len(set(listed)) != len(listed) or
+                any(not name.endswith(".app") or "/" in name or
+                    name in (".app", "..") for name in listed)):
+            raise RuntimeError("invalid application inventory at %s" %
+                               inventory)
+        for name in listed:
+            if name in names:
+                raise RuntimeError("application %s is shipped twice" % name)
+            names.add(name)
+        found.extend(_bundles(directory, listed))
+    return found
+
+
+def _application_ceiling(header=None):
+    """{name: rights} from the ASTRA_APPLICATION_CEILING table; rights is
+    "" for a capability, "r" or "rw" for a namespace."""
+    with open(header or APPLICATION_POLICY, encoding="ascii") as handle:
+        text = handle.read()
+    rights = {"RAW": "", "R": "r", "RW": "rw"}
+    ceiling = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("X(\""):
+            continue
+        name, _, kind = line[3:].partition("\", ")
+        kind = kind.split(")")[0].strip()
+        if not name or kind not in rights or name in ceiling:
+            raise RuntimeError("invalid application policy line: %s" % line)
+        ceiling[name] = rights[kind]
+    if not ceiling:
+        raise RuntimeError("no application ceiling in %s" %
+                           (header or APPLICATION_POLICY))
+    return ceiling
+
+
+def _grant_admitted(grant, ceiling):
+    """ceiling: {name: "" | "r" | "rw"}."""
+    name, _, rights = grant.partition(":")
+    if name not in ceiling or rights not in ("", "r", "rw"):
+        return False
+    allowed = ceiling[name]
+    if (rights == "") != (allowed == ""):
+        return False
+    return rights in ("", "r") or allowed == "rw"
+
+
+def check_application_policy(bundles, manifest_text, header=None):
+    """Refuses to ship a bundle the supervisor would refuse to launch."""
+    default = _application_ceiling(header)
+    trusted = {}
+    for line in manifest_text.splitlines():
+        words = line.split()
+        if words and words[0] == "trusted":
+            if len(words) < 3 or words[2] != "grants":
+                raise RuntimeError("invalid trusted line: %s" % line)
+            trusted[words[1]] = {
+                grant.partition(":")[0]: grant.partition(":")[2]
+                for grant in words[3:]}
+    for bundle in bundles:
+        path = "/%s/%s" % (APPS_DIRECTORY, os.path.basename(bundle))
+        ceiling = trusted.get(path, default)
+        with open(os.path.join(bundle, "manifest"), encoding="ascii") as \
+                handle:
+            for line in handle:
+                words = line.split()
+                if len(words) == 2 and words[0] == "capability" and \
+                        not _grant_admitted(words[1], ceiling):
+                    raise RuntimeError(
+                        "%s requests %s beyond its launch ceiling" %
+                        (path, words[1]))
+
+
 def _providers(bundles):
     """Latest provider path for each (library, ABI), rebuilt from manifests."""
     found = {}
@@ -603,6 +709,57 @@ def install_test_command(image, name, commands=DEFAULT_COMMANDS):
                          "/%s/%s" % (COMMANDS_DIRECTORY, name))
 
 
+def test_app_grants(bundle):
+    """Use the tested bundle's declared capabilities, not a GUI-only grant."""
+    with open(os.path.join(bundle, "manifest"), encoding="ascii") as handle:
+        lines = handle.read().splitlines()
+    capabilities = []
+    for line in lines:
+        fields = line.split()
+        if fields and fields[0] == "capability":
+            if len(fields) != 2:
+                raise RuntimeError("invalid test app capability line")
+            capabilities.append(fields[1])
+    if not capabilities:
+        raise RuntimeError("test app declares no capabilities")
+    return " ".join(capabilities)
+
+
+def install_test_app(image, bundle):
+    """Install and boot one GUI test app in a disposable image."""
+    name = os.path.basename(os.path.normpath(bundle))
+    if (not name.endswith(".app") or
+            any(not (character.isalnum() or character in "._-")
+                for character in name)):
+        raise RuntimeError("invalid test app name %r" % name)
+    _bundles(os.path.dirname(bundle), (name,))
+    offset, length = ext4_partition(image)
+    with tempfile.TemporaryDirectory(prefix="astra-test-app-") as temporary:
+        volume = os.path.join(temporary, "volume.img")
+        _slice(image, offset, length, volume)
+        fsck = subprocess.run(["e2fsck", "-fy", volume],
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT)
+        if fsck.returncode > 2:
+            raise RuntimeError("e2fsck refused test app image: %s" %
+                               fsck.stdout.decode("utf-8", "replace").strip())
+        target = "/%s/%s" % (APPS_DIRECTORY, name)
+        _mkdir(volume, target, "test app directory")
+        _clear_directory(volume, target)
+        _install_bundle(volume, bundle, target)
+        startup = os.path.join(temporary, "startup-manifest")
+        with open(startup, "w", encoding="ascii", newline="\n") as handle:
+            handle.write(DISPLAY_STARTUP_MANIFEST +
+                         "application %s grants %s\n" %
+                         (target, test_app_grants(bundle)))
+        _debugfs(volume, "rm /startup/system", "old test startup manifest",
+                 optional=True)
+        _debugfs(volume, "write %s /startup/system" %
+                 _debugfs_quote(startup), "test startup manifest")
+        _reset_journal(volume)
+        _splice(image, offset, volume)
+
+
 def install(image, catalog=DEFAULT_CATALOG, commands=DEFAULT_COMMANDS,
             services=DEFAULT_SERVICES, kits=DEFAULT_KITS,
             apps=DEFAULT_APPS, terminfo=DEFAULT_TERMINFO,
@@ -657,7 +814,8 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
     service_images = _services(services, service_names)
     kit_bundles = [] if kits is None else _bundles(kits)
     application_bundles = [] if apps is None else \
-        _bundles(apps, APPLICATION_BUNDLES)
+        _application_bundles(apps)
+    check_application_policy(application_bundles, manifest_text)
     vim_runtime_tree = None if vim_runtime is None else \
         _vim_runtime(vim_runtime)
     if service_names is not None and "desktop" in service_names:
@@ -815,6 +973,12 @@ if __name__ == "__main__":
     elif len(sys.argv) == 3 and sys.argv[1] == "--pcm-certify":
         install(sys.argv[2], service_names=PCM_CERTIFY_SERVICES,
                 manifest_text=PCM_CERTIFY_STARTUP_MANIFEST)
+    elif len(sys.argv) == 3 and sys.argv[1] == "--fault-probe":
+        install(sys.argv[2], service_names=FAULT_PROBE_SERVICES,
+                manifest_text=DISPLAY_STARTUP_MANIFEST)
+    elif len(sys.argv) == 3 and sys.argv[1] == "--fault-critical":
+        install(sys.argv[2], service_names=FAULT_PROBE_SERVICES,
+                manifest_text=FAULT_CRITICAL_STARTUP_MANIFEST)
     elif len(sys.argv) == 3 and sys.argv[1] == "--interface-gallery":
         install(sys.argv[2], service_names=DISPLAY_SERVICES,
                 manifest_text=INTERFACE_GALLERY_STARTUP_MANIFEST)
@@ -826,9 +990,12 @@ if __name__ == "__main__":
         publish(sys.argv[2], size_mib * (1 << 20))
     elif len(sys.argv) == 4 and sys.argv[1] == "--service":
         install_service(sys.argv[3], sys.argv[2])
+    elif len(sys.argv) == 4 and sys.argv[1] == "--test-app":
+        install_test_app(sys.argv[3], sys.argv[2])
     else:
         raise SystemExit(
             "usage: astra_image.py "
             "[--display|--hostbench|--audio-certify|--pcm-certify|"
-            "--interface-gallery] IMAGE | "
-            "--create IMAGE SIZE_MIB | --service NAME IMAGE")
+            "--fault-probe|--fault-critical|--interface-gallery] IMAGE | "
+            "--create IMAGE SIZE_MIB | --service NAME IMAGE | "
+            "--test-app BUNDLE IMAGE")

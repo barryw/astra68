@@ -10,10 +10,10 @@ WORK_ROOT=$(dirname -- "$SOURCE")
 BUILD="$WORK_ROOT/build-$PROFILE-$BUILD_CONTRACT-${SOURCE_ID#source-}"
 
 case "$PROFILE" in
-    host|desktop|arty|arty-profile|de25|de25-profile)
+    host|host-profile|desktop|arty|arty-profile|de25|de25-profile)
         ;;
     *)
-        echo "usage: $0 [host|desktop|arty|arty-profile|de25|de25-profile]" >&2
+        echo "usage: $0 [host|host-profile|desktop|arty|arty-profile|de25|de25-profile]" >&2
         exit 2
         ;;
 esac
@@ -30,6 +30,21 @@ if [ ! -f "$BUILD/build.ninja" ]; then
                 --enable-system \
                 --enable-pixman \
                 --enable-fdt \
+                --disable-werror >&2
+            ;;
+        host-profile)
+            # The profiler plugin on the development host: guest profiles
+            # without the board (tools/astra-prof record).
+            "$SOURCE/configure" \
+                --target-list=m68k-softmmu \
+                --without-default-features \
+                --enable-tcg \
+                --enable-system \
+                --enable-pixman \
+                --enable-fdt \
+                --enable-plugins \
+                --enable-debug-info \
+                --extra-cflags='-O3 -fno-omit-frame-pointer' \
                 --disable-werror >&2
             ;;
         desktop)

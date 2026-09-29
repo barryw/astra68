@@ -4,7 +4,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 REPOSITORY=$(CDPATH='' cd -- "$SCRIPT_DIR/../.." && pwd)
 WORKSPACE=$(mktemp -d "${TMPDIR:-/tmp}/astra-de25-release.XXXXXX")
-RELEASE=$WORKSPACE/release
+RELEASE=${ASTRA_DE25_RELEASE_OUTPUT:-$WORKSPACE/release}
 STORAGE=$WORKSPACE/storage-terminal.img
 SOURCE_BEFORE=$WORKSPACE/source-before.sha256
 SOURCE_AFTER=$WORKSPACE/source-after.sha256
@@ -84,4 +84,8 @@ ASTRA_DE25_QEMU_LIBDIR=$DE25_SYSROOT/usr/lib/aarch64-linux-gnu \
 ASTRA_DE25_SOURCE_MANIFEST=$SOURCE_AFTER \
 ASTRA_DE25_SYSROOT=$DE25_SYSROOT \
     "$SCRIPT_DIR/create-de25-release.sh" "$RELEASE"
-"$SCRIPT_DIR/deploy-de25-release.sh" "$RELEASE"
+if [ -z "${ASTRA_DE25_RELEASE_OUTPUT:-}" ]; then
+    "$SCRIPT_DIR/deploy-de25-release.sh" "$RELEASE"
+else
+    echo "ASTRA_DE25_RELEASE_STAGED $RELEASE"
+fi

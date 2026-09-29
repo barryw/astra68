@@ -11,6 +11,19 @@ import astra_image
 
 
 assert astra_image.HOME_DIRECTORY == "home"
+with tempfile.TemporaryDirectory(prefix="astra-test-app-grants-") as bundle:
+    manifest = os.path.join(bundle, "manifest")
+    with open(manifest, "w", encoding="ascii") as handle:
+        handle.write("capability NETWORK\ncapability LIBS:r\n")
+    assert astra_image.test_app_grants(bundle) == "NETWORK LIBS:r"
+    with open(manifest, "w", encoding="ascii") as handle:
+        handle.write("capability NETWORK extra\n")
+    try:
+        astra_image.test_app_grants(bundle)
+    except RuntimeError as error:
+        assert "invalid test app capability" in str(error)
+    else:
+        raise AssertionError("malformed test app grant accepted")
 with open(os.path.join(astra_image.REPOSITORY,
                        "sw/userspace/apps/Terminal.app/manifest"),
           encoding="ascii") as manifest:
@@ -19,6 +32,7 @@ with open(os.path.join(astra_image.REPOSITORY,
     assert "capability RAM:rw\n" in terminal_manifest
     assert "capability APP_LAUNCH\n" in terminal_manifest
     assert "capability ENTROPY\n" in terminal_manifest
+    assert "capability PCM\n" in terminal_manifest
 assert astra_image.HOSTBENCH_SERVICES == \
     astra_image.DISPLAY_SERVICES + ("hostbench",)
 assert astra_image.HOSTBENCH_STARTUP_MANIFEST == \
@@ -38,25 +52,93 @@ assert astra_image.PCM_CERTIFY_STARTUP_MANIFEST == \
 assert "media" in astra_image.DISPLAY_SERVICES
 assert "service /services/media grants HOST_DEVICE serves PCM\n" in \
     astra_image.DISPLAY_STARTUP_MANIFEST
-assert "NETWORK NETWORK_LISTEN NTP PCM\n" in \
+assert "NETWORK NETWORK_LISTEN NTP PCM required\n" in \
     astra_image.DISPLAY_STARTUP_MANIFEST
 assert "APPS:r LIBS:r SYSTEM:r" in astra_image.DISPLAY_STARTUP_MANIFEST
 assert "service /services/media grants HOST_DEVICE serves PCM required" not in \
     astra_image.PCM_CERTIFY_STARTUP_MANIFEST
 assert "service /services/storage" in astra_image.PCM_CERTIFY_STARTUP_MANIFEST
+assert "fault-probe" not in astra_image.DISPLAY_SERVICES
+assert astra_image.FAULT_PROBE_SERVICES == \
+    astra_image.DISPLAY_SERVICES + ("fault-probe",)
+assert astra_image.FAULT_CRITICAL_STARTUP_MANIFEST == \
+    astra_image.DISPLAY_STARTUP_MANIFEST + \
+    "service /services/fault-probe grants critical\n"
 assert astra_image.INTERFACE_GALLERY_STARTUP_MANIFEST == \
     astra_image.DISPLAY_STARTUP_MANIFEST + \
     "application /apps/InterfaceGallery.app grants GUI CLIPBOARD LIBS:r\n"
+try:
+    astra_image.install_test_app("unused.img", "../unsafe/../probe!.app")
+except RuntimeError as error:
+    assert "invalid test app name" in str(error)
+else:
+    raise AssertionError("unsafe test app name accepted")
 assert not any(line.startswith("application ") and line.endswith(" required")
                for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines())
-assert astra_image.APPLICATION_BUNDLES == \
-    ("Terminal.app", "InterfaceGallery.app")
+# The launch policy: the ceiling table parses, Terminal is the one trusted
+# bundle, and a bundle beyond its ceiling never reaches a volume.
+ceiling = astra_image._application_ceiling()
+assert ceiling["GUI"] == "" and ceiling["APPS"] == "r" and \
+    ceiling["STORE"] == "rw" and "SERVICE_MANAGER" not in ceiling
+assert [line for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
+        if line.startswith("trusted ")] == [
+    "trusted /apps/Terminal.app grants " + astra_image.TERMINAL_CEILING]
+for grant, admitted in (("GUI", True), ("APPS:r", True), ("APPS:rw", False),
+                        ("GUI:r", False), ("STORE", False), ("DISPLAY", False),
+                        ("HOME:x", False), ("STORE:rw", True)):
+    assert astra_image._grant_admitted(grant, ceiling) == admitted, grant
+with tempfile.TemporaryDirectory() as directory:
+    def bundle(name, capabilities):
+        path = os.path.join(directory, name)
+        os.makedirs(path, exist_ok=True)
+        with open(os.path.join(path, "manifest"), "w",
+                  encoding="ascii") as handle:
+            handle.write("astra-bundle 1\nkind application\n" + "".join(
+                "capability %s\n" % item for item in capabilities))
+        return path
+
+    ordinary = bundle("Game.app", ["GUI", "PCM", "STORE:rw"])
+    greedy = bundle("Greedy.app", ["GUI", "DISPLAY"])
+    shell = bundle("Terminal.app", ["GUI", "SERVICE_MANAGER", "SYSTEM:r"])
+    astra_image.check_application_policy(
+        [ordinary, shell], astra_image.DISPLAY_STARTUP_MANIFEST)
+    for bundles, manifest in (([greedy], astra_image.DISPLAY_STARTUP_MANIFEST),
+                              ([shell], "service /services/storage grants\n")):
+        try:
+            astra_image.check_application_policy(bundles, manifest)
+        except RuntimeError as error:
+            assert "beyond its launch ceiling" in str(error)
+        else:
+            raise AssertionError("bundle beyond its ceiling accepted")
+    # Inventories: one per directory, no duplicates, only listed bundles.
+    first = os.path.join(directory, "first")
+    second = os.path.join(directory, "second")
+    for place, names in ((first, ["A.app"]), (second, ["B.app"])):
+        os.makedirs(place)
+        for name in names + ["Probe.app"]:
+            os.makedirs(os.path.join(place, name))
+            open(os.path.join(place, name, "manifest"), "w").close()
+        with open(os.path.join(place, ".apps"), "w") as handle:
+            handle.write("".join(name + "\n" for name in names))
+    assert [os.path.basename(path) for path in
+            astra_image._application_bundles((first, second))] == \
+        ["A.app", "B.app"]
+    with open(os.path.join(second, ".apps"), "w") as handle:
+        handle.write("A.app\n")
+    os.makedirs(os.path.join(second, "A.app"), exist_ok=True)
+    open(os.path.join(second, "A.app", "manifest"), "w").close()
+    try:
+        astra_image._application_bundles((first, second))
+    except RuntimeError as error:
+        assert "shipped twice" in str(error)
+    else:
+        raise AssertionError("duplicate application accepted")
 with open(os.path.join(astra_image.REPOSITORY,
                        "sw/userspace/kits/Runtime.kit/manifest"),
           encoding="ascii") as manifest:
     runtime_manifest = manifest.read()
-    assert "version 1.8.0\n" in runtime_manifest
-    assert "provides runtime.library 1 1.8.0\n" in runtime_manifest
+    assert "version 1.9.0\n" in runtime_manifest
+    assert "provides runtime.library 1 1.9.0\n" in runtime_manifest
     assert "version 1.6.0\n" not in runtime_manifest
     assert "provides runtime.library 1 1.6.0\n" not in runtime_manifest
 with open(os.path.join(astra_image.REPOSITORY,
@@ -138,10 +220,19 @@ assert "HOME:/.motd" not in zshrc and "CONFIG:motd" not in zshrc
 assert "\\e]133;A" in zshrc and "\\e]133;B" in zshrc
 startup = astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
 desktop_startup = next(line for line in startup
-                       if line.startswith("application /services/desktop "))
+                       if line.startswith("service /services/desktop "))
 assert " grants GUI APP_LAUNCH SERVICE_MANAGER APPS:r LIBS:r " in desktop_startup
 assert "/apps/r" not in desktop_startup
 assert startup[0].startswith("service /services/storage ")
+# The machine's tiers: storage and display halt it, the desktop is restarted,
+# and media is the user's.
+assert startup[0].endswith(" critical")
+display_startup = next(line for line in startup
+                       if line.startswith("service /services/display "))
+assert display_startup.endswith(" critical")
+assert desktop_startup.endswith(" required")
+assert not any(line.endswith((" critical", " required"))
+               for line in startup if line.startswith("service /services/media "))
 assert startup[1] == \
     "service /services/posixd grants serves POSIX_PROCESS required"
 assert startup[2] == \

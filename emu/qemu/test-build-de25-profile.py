@@ -27,7 +27,7 @@ for required in (
 ):
     assert required in build, f"missing DE25 build contract: {required}"
 assert "-mcpu=cortex-a55" not in build
-assert build.count("--disable-werror >&2") == 3, \
+assert build.count("--disable-werror >&2") == 4, \
     "configure output must not contaminate build.sh's stdout artifact path"
 assert '--extra-ldflags="$EXTRA_LDFLAGS" >&2' in build
 assert 'PUBLIC_ADDRESS_SPACE="$REPOSITORY/sw/include/astra/address_space.h"' in prepare

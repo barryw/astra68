@@ -37,6 +37,16 @@ RUN_ROOT=${ASTRA_RUN_ROOT:-/run/astra}
 LOG_ROOT=${ASTRA_LOG_ROOT:-$ASTRA_STORE/log}
 TEXT_PLANE=${ASTRA_TEXT_PLANE_PATH:-$RUN_ROOT/post-text.bin}
 DISPLAY_MAILBOX=${ASTRA_DISPLAY_MAILBOX_PATH:-$RUN_ROOT/display.bin}
+# The payload is the DE25 host arena when its driver is loaded: the render
+# engine reads batches from it in place. Elsewhere it is an ordinary file.
+HOST_ARENA=/dev/astra-host-arena
+if [ -n "${ASTRA_DISPLAY_PAYLOAD_PATH:-}" ]; then
+    DISPLAY_PAYLOAD=$ASTRA_DISPLAY_PAYLOAD_PATH
+elif [ -c "$HOST_ARENA" ]; then
+    DISPLAY_PAYLOAD=$HOST_ARENA
+else
+    DISPLAY_PAYLOAD=$RUN_ROOT/display-payload.bin
+fi
 HOSTFS_ROOT=${ASTRA_HOSTFS_ROOT:-$ASTRA_STORE/hostfs}
 QMP_SOCKET=${ASTRA_QMP_SOCKET:-$RUN_ROOT/qmp.sock}
 REMOTE_DESKTOP_QMP_SOCKET=${ASTRA_REMOTE_DESKTOP_QMP_SOCKET:-$RUN_ROOT/remote-desktop-qmp.sock}
@@ -68,6 +78,14 @@ if ! DISPLAY_MAILBOX_BYTES=$(
 fi
 case "$DISPLAY_MAILBOX_BYTES" in
 ''|*[!0-9]*|0) echo "Astra display mailbox size is invalid" >&2; exit 1 ;;
+esac
+if ! DISPLAY_PAYLOAD_BYTES=$(
+        "$TERMINAL_DISPLAY" --payload-bytes); then
+    echo "Cannot determine Astra display payload size" >&2
+    exit 1
+fi
+case "$DISPLAY_PAYLOAD_BYTES" in
+''|*[!0-9]*|0) echo "Astra display payload size is invalid" >&2; exit 1 ;;
 esac
 if ! HOST_PAGE_BYTES=$(getconf PAGESIZE); then
     echo "Cannot determine host page size" >&2
@@ -147,8 +165,12 @@ rm -f "$QMP_SOCKET" "$REMOTE_DESKTOP_QMP_SOCKET"
 dd if=/dev/zero of="$TEXT_PLANE" bs=4096 count=1 2>/dev/null
 dd if=/dev/zero of="$DISPLAY_MAILBOX" bs="$DISPLAY_MAILBOX_STORAGE_BYTES" \
     count=1 2>/dev/null
+if [ ! -c "$DISPLAY_PAYLOAD" ]; then
+    dd if=/dev/zero of="$DISPLAY_PAYLOAD" bs="$DISPLAY_PAYLOAD_BYTES" \
+        count=1 2>/dev/null
+fi
 start_helper "$DISPLAY_CPU" "$TERMINAL_DISPLAY" "$TEXT_PLANE" \
-    "$DISPLAY_MAILBOX"
+    "$DISPLAY_MAILBOX" "$DISPLAY_PAYLOAD"
 display_pid=$started_pid
 input_pid=
 qemu_pid=
@@ -194,6 +216,7 @@ taskset -c "$AUX_CPU" tee "$CONSOLE_LOG" <"$console_pipe" &
 log_pid=$!
 env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
     ASTRA_DISPLAY_MAILBOX_PATH="$DISPLAY_MAILBOX" \
+    ASTRA_DISPLAY_PAYLOAD_PATH="$DISPLAY_PAYLOAD" \
     ASTRA_HOSTFS_ROOT="$HOSTFS_ROOT" \
     LD_LIBRARY_PATH="$LIBDIR" "$QEMU" \
     -object memory-backend-ram,id=astra-ram,size="$MEMORY",prealloc=on \
@@ -213,7 +236,7 @@ while process_alive "$qemu_pid"; do
         helper_status=$?
         echo "Astra display helper exited with status $helper_status; restarting" >&2
         start_helper "$DISPLAY_CPU" "$TERMINAL_DISPLAY" "$TEXT_PLANE" \
-            "$DISPLAY_MAILBOX"
+            "$DISPLAY_MAILBOX" "$DISPLAY_PAYLOAD"
         display_pid=$started_pid
     fi
     if ! process_alive "$input_pid"; then

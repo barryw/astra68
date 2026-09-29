@@ -141,10 +141,13 @@ INTERFACE_SPLITTER_MAX_NS_PER_ACTION = 30_000
 # microseconds retains 36.7% scheduling headroom.
 INTERFACE_DISCLOSURE_MAX_NS_PER_ACTION = 60_000
 
-# The desktop's Terminal icon. A double click here is what starts a terminal;
-# there is no manifest entry that starts one directly, because a window client
-# with no window server to ask is a program that exits before it draws.
-TERMINAL_ICON = (70, 90)
+# The Terminal bundle. A double click on its desktop icon is what starts a
+# terminal; there is no manifest entry that starts one directly, because a
+# window client with no window server to ask is a program that exits before
+# it draws. Where the icon is comes from the desktop itself (desktop_icon).
+TERMINAL_BUNDLE = "/apps/Terminal.app"
+DESKTOP_ICON = re.compile(
+    r"desktop icon (\S+) (\d+) (\d+) (\d+) (\d+)$")
 
 # The shipped plain MOTD is zsh's startup fallback. Seeing it proves the
 # terminal launched zsh and zsh read its system startup file.
@@ -268,8 +271,10 @@ SBASE_SCRIPT = [
 ]
 
 SCRIPT = [
-    ("ls -F /", ("dh0/", "ram/", "events/", "metrics/", "proc/", "cwd@",
-                 "home@", "libs@", "local@", "work@", "tmp@")),
+    # cwd and work are the host directory's own root here (hostfs serves
+    # WORK), so they are mounts, not links into /system.
+    ("ls -F /", ("dh0/", "ram/", "events/", "metrics/", "proc/", "cwd/",
+                 "home@", "libs@", "local@", "work/", "tmp@")),
     ("mkdir /ram/smoke; print ASTRA-RAM-MKDIR-$?",
      "ASTRA-RAM-MKDIR-0"),
     ("print -r -- ram-works > /ram/smoke/note; cat /ram/smoke/note",
@@ -301,7 +306,7 @@ SCRIPT = [
      ("Read-only file system", "ASTRA-ROOT-PARENT-1")),
     ("sbase-rmdir /home; print ASTRA-ROOT-REMOVE-$?",
      ("Read-only file system", "ASTRA-ROOT-REMOVE-1")),
-    ("ls -F /home/..", ("cwd@", "dh0/")),
+    ("ls -F /home/..", ("cwd/", "dh0/")),
     ("print ASTRA-TMPDIR-$TMPDIR", "ASTRA-TMPDIR-/tmp"),
     ("mkdir /tmp/root-contract; print ASTRA-TMP-MKDIR-$?",
      "ASTRA-TMP-MKDIR-0"),
@@ -567,11 +572,13 @@ class Qmp:
             self.button(False)
 
 
-class Machine:
-    def __init__(self, qemu, rom, image, socket_directory, extra_args=(),
-                 hostfs_root=None, debug_guest=False):
-        # Resolve every source-relative input before starting QEMU.  A missing
-        # catalog must not leave a live emulator behind.
+class TraceReader:
+    """The kernel trace ring of a running machine, decoded, through any QMP
+    client with a `monitor(line)` method. Shared by every desktop gate."""
+
+    def __init__(self, monitor, ring_path):
+        self.monitor = monitor
+        self.ring_path = ring_path
         self.names = trace_decode.kernel_event_names(
             os.path.join(ROOT, "sw/kernel/trace.h"))
         self.catalog = trace_decode.load_catalogs([
@@ -579,6 +586,75 @@ class Machine:
                          "m68k", "astra_supervisor.elf"),
             os.path.join(ROOT, "sw/userspace", "services", "terminal",
                          "build", "m68k", "terminal.elf")])
+
+    def trace(self):
+        reply = self.monitor('pmemsave 0x%08x %d "%s"'
+                             % (RING_ADDRESS, RING_SIZE, self.ring_path))
+        if reply and reply.strip():
+            raise RuntimeError("ring unavailable: %s" % reply.strip())
+        with open(self.ring_path, "rb") as handle:
+            _, rendered = trace_decode.decode(handle.read(), self.catalog,
+                                               self.names)
+        return rendered
+
+    def said(self, after=0):
+        """Every line the machine has printed since sequence `after`.
+
+        Continuations are rejoined here rather than left to the caller: a
+        record holds twenty bytes, so most of what a gate looks for --
+        `/commands/status [0]`, `namespace bound` -- straddles two of them, and
+        a check against single records would fail on the length of its own
+        needle rather than on anything the machine did.
+        """
+        lines = []
+        pending = ""
+        highest = after
+        for line in self.trace():
+            match = RECORD.match(line)
+            if match is None:
+                continue
+            sequence = int(match.group(1))
+            body = match.group(2)
+            continued = body.endswith("\\")
+            if continued:
+                body = body[:-1]
+            if sequence > after:
+                pending += body
+                highest = max(highest, sequence)
+            if not continued and pending:
+                lines.append(pending)
+                pending = ""
+        if pending:
+            lines.append(pending)
+        return lines, highest
+
+    def desktop_icon(self, bundle=TERMINAL_BUNDLE, deadline=30.0):
+        """The screen point at the centre of @p bundle's desktop icon.
+
+        The desktop logs each icon's hit rectangle as it lays out the grid,
+        so the click lands where the desktop put the icon rather than where
+        a constant in a gate last remembered it."""
+        end = time.monotonic() + deadline
+        while True:
+            for line in self.said()[0]:
+                match = DESKTOP_ICON.search(line)
+                if match is not None and match.group(1) == bundle:
+                    left, top, width, height = (
+                        int(match.group(index)) for index in range(2, 6))
+                    return left + width // 2, top + height // 2
+            if time.monotonic() >= end:
+                raise RuntimeError("the desktop never placed %s" % bundle)
+            time.sleep(0.25)
+
+
+class Machine:
+    def __init__(self, qemu, rom, image, socket_directory, extra_args=(),
+                 hostfs_root=None, debug_guest=False):
+        # Resolve every source-relative input before starting QEMU.  A missing
+        # catalog must not leave a live emulator behind.
+        self.reader = TraceReader(
+            lambda line: self.qmp.monitor(line),
+            os.path.join(socket_directory, "ring.bin"))
         self.runtime_directory = tempfile.mkdtemp(prefix="astra-qmp-")
         self.qmp_path = os.path.join(self.runtime_directory, "qmp.sock")
         self.gdb_path = (os.path.join(self.runtime_directory, "gdb.sock")
@@ -654,48 +730,16 @@ class Machine:
         return self.qmp.word(address)
 
     def trace(self):
-        reply = self.qmp.monitor('pmemsave 0x%08x %d "%s"'
-                                 % (RING_ADDRESS, RING_SIZE, self.ring_path))
-        if reply and reply.strip():
-            raise RuntimeError("ring unavailable: %s" % reply.strip())
-        with open(self.ring_path, "rb") as handle:
-            _, rendered = trace_decode.decode(handle.read(), self.catalog,
-                                               self.names)
-        return rendered
+        return self.reader.trace()
 
     def said(self, after=0):
-        """Every line the machine has printed since sequence `after`.
-
-        Continuations are rejoined here rather than left to the caller: a
-        record holds twenty bytes, so most of what this gate looks for --
-        `/commands/status [0]`, `namespace bound` -- straddles two of them, and
-        a check against single records would fail on the length of its own
-        needle rather than on anything the machine did.
-        """
-        lines = []
-        pending = ""
-        highest = after
-        for line in self.trace():
-            match = RECORD.match(line)
-            if match is None:
-                continue
-            sequence = int(match.group(1))
-            body = match.group(2)
-            continued = body.endswith("\\")
-            if continued:
-                body = body[:-1]
-            if sequence > after:
-                pending += body
-                highest = max(highest, sequence)
-            if not continued and pending:
-                lines.append(pending)
-                pending = ""
-        if pending:
-            lines.append(pending)
-        return lines, highest
+        return self.reader.said(after)
 
     def sequence(self):
         return self.said()[1]
+
+    def desktop_icon(self, bundle=TERMINAL_BUNDLE, deadline=30.0):
+        return self.reader.desktop_icon(bundle, deadline)
 
     def trace_sequence(self):
         highest = 0
@@ -803,7 +847,7 @@ def open_terminal(machine, boot_deadline, command_deadline):
     # what says it painted is the launch report for the app it is running.
     time.sleep(2.0)
     before = machine.sequence()
-    machine.qmp.double_click(*TERMINAL_ICON)
+    machine.qmp.double_click(*machine.desktop_icon())
     lines, _ = machine.wait_for_text(BANNER, command_deadline, before)
     if lines is None:
         print("FAIL: the terminal never drew its banner after a double click")
@@ -1075,7 +1119,7 @@ def vim_creates_and_runs_lua(machine, command_deadline, verbose=False):
     # file written by Vim's post-startup command, then move it aside and return
     # focus to the editor. This is a readiness handshake, not a guessed sleep.
     before = machine.sequence()
-    machine.qmp.double_click(*TERMINAL_ICON)
+    machine.qmp.double_click(*machine.desktop_icon())
     if machine.wait_for_text(BANNER, command_deadline, before)[0] is None:
         print("FAIL: no observer terminal opened while Vim was running")
         return False
@@ -1222,7 +1266,8 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
         report_timings, prepared_image, performance_only, vim_gate,
         network_only, vim_only, cxx_only, zsh_only, interface_layout_only,
         sbase_only, shutdown_only, shutdown_veto_only, restart_only,
-        restart_veto_only, restart_menu_only, shutdown_menu_only, ps_only):
+        restart_veto_only, restart_menu_only, shutdown_menu_only, ps_only,
+        probe_command=None, probe_output=None, probe_exit=0):
     timings = []
     power_only = (shutdown_only or shutdown_veto_only or restart_only or
                   restart_veto_only or restart_menu_only or shutdown_menu_only)
@@ -1239,7 +1284,7 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                     astra_image.DEFAULT_VIM_RUNTIME)
         full_gate = not (power_only or ps_only or performance_only or network_only or vim_only or
                          cxx_only or zsh_only or interface_layout_only or
-                         sbase_only)
+                         sbase_only or probe_command)
         test_commands = []
         if full_gate or network_only:
             test_commands.append("posix")
@@ -1265,7 +1310,7 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                 astra_image.install_test_command(scratch, name)
         needs_warm_store = not (power_only or ps_only or performance_only or network_only or vim_only or
                                 cxx_only or zsh_only or interface_layout_only or
-                                sbase_only)
+                                sbase_only or probe_command)
         if needs_warm_store and not warm_the_store(
                 qemu, rom, scratch, temporary, boot_deadline,
                 command_deadline):
@@ -1280,6 +1325,27 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                     machine, boot_deadline) else 1
             if not open_terminal(machine, boot_deadline, command_deadline):
                 return 1
+            if probe_command:
+                before = machine.sequence()
+                machine.qmp.type_line(
+                    probe_command + "; print ASTRA-PROBE-EXIT-$?")
+                if wait_for_command(machine, probe_output, command_deadline,
+                                    before) is None:
+                    print("FAIL: probe did not produce %r" % probe_output)
+                    said = machine.said(before)[0]
+                    for text in said[:40] + said[-40:]:
+                        print("    |%s|" % text)
+                    for text in machine.recent_trace(20):
+                        print("    %s" % text)
+                    return 1
+                if wait_for_command(machine, "ASTRA-PROBE-EXIT-%d" % probe_exit,
+                                    command_deadline, before) is None:
+                    print("FAIL: probe did not exit with status %d" % probe_exit)
+                    for text in machine.said(before)[0][-80:]:
+                        print("    |%s|" % text)
+                    return 1
+                print("ASTRA COMMAND PROBE PASS")
+                return 0
             if restart_menu_only or shutdown_menu_only:
                 action = "Restart" if restart_menu_only else "Shut Down"
                 expected = 89 if restart_menu_only else 88
@@ -1425,7 +1491,7 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                         try:
                             machine.qmp.execute("cont")
                             diagnostic_before = machine.sequence()
-                            machine.qmp.double_click(*TERMINAL_ICON)
+                            machine.qmp.double_click(*machine.desktop_icon())
                             ready, _ = machine.wait_for_text(
                                 BANNER, command_deadline, diagnostic_before)
                             if ready is not None:
@@ -1606,6 +1672,12 @@ def main():
                         help="run staged upstream file-command behavior")
     parser.add_argument("--ps-only", action="store_true",
                         help="check ps completion and a missing PROC path")
+    parser.add_argument("--probe-command",
+                        help="run one command and check its exit status")
+    parser.add_argument("--probe-output",
+                        help="text the probe command must print")
+    parser.add_argument("--probe-exit", type=int, default=0,
+                        help="expected command exit status (default: 0)")
     parser.add_argument("--shutdown-only", action="store_true",
                         help="request clean shutdown from Terminal and require QEMU exit 88")
     parser.add_argument("--shutdown-veto-only", action="store_true",
@@ -1621,6 +1693,11 @@ def main():
     parser.add_argument("--interface-layout-only", action="store_true",
                         help="run only the target interface reflow benchmark")
     arguments = parser.parse_args()
+    if bool(arguments.probe_command) != bool(arguments.probe_output):
+        parser.error("--probe-command and --probe-output must be used together")
+    if arguments.probe_exit not in range(256) or (arguments.probe_exit != 0 and
+                                                 not arguments.probe_command):
+        parser.error("--probe-exit requires a probe and a status from 0 to 255")
     MEMORY = arguments.memory
     return run(arguments.qemu, arguments.rom, arguments.image,
                arguments.catalog, arguments.boot_deadline,
@@ -1633,7 +1710,8 @@ def main():
                arguments.shutdown_only, arguments.shutdown_veto_only,
                arguments.restart_only, arguments.restart_veto_only,
                arguments.restart_menu_only, arguments.shutdown_menu_only,
-               arguments.ps_only)
+               arguments.ps_only, arguments.probe_command,
+               arguments.probe_output, arguments.probe_exit)
 
 
 if __name__ == "__main__":

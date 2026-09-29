@@ -232,11 +232,11 @@ def main():
                     30.0, number[0]); number[0] += 1
             command(machine, "service enable remote-probe", None, 30.0,
                     number[0]); number[0] += 1
-            command(machine, "service inspect remote-probe", "enabled: yes",
+            command(machine, "service inspect remote-probe", "boot: yes",
                     30.0, number[0]); number[0] += 1
             command(machine, "service disable remote-probe", None, 30.0,
                     number[0]); number[0] += 1
-            command(machine, "service inspect remote-probe", "enabled: no",
+            command(machine, "service inspect remote-probe", "boot: no",
                     30.0, number[0]); number[0] += 1
             command(machine, "service delete remote-probe", None, 30.0,
                     number[0]); number[0] += 1

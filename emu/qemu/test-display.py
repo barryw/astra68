@@ -15,6 +15,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import astra_image
+import importlib.util
 from qemu_runtime import DEFAULT_MEMORY, qemu_environment
 
 BOOT_MARKER = "stage 8"
@@ -28,8 +29,9 @@ PRESENT_BUDGET_CYCLES = 250000
 POINTER_BUDGET_CYCLES = 250000
 RESIZE_BUDGET_CYCLES = 250000
 NOMINAL_CPU_HZ = 12500000
-EXPECTED_SUBMISSIONS = 2
-EXPECTED_BATCHES = 1
+# The desktop is quiet when every request it made has completed and no new
+# one arrived for this long.
+DESKTOP_SETTLE_SECONDS = 0.5
 EXPECTED_POINTER_SUBMISSIONS = 1
 EXPECTED_POINTER_BATCHES = 0
 RENDER_OPERATION = 3
@@ -39,6 +41,14 @@ CPU_BENCHMARK = re.compile(
     r"\(best ([0-9]+) us kernel decode\)$"
 )
 
+
+
+# The shared trace reader: where the desktop put an icon is read from what
+# the desktop logged, not from a constant.
+_TERMINAL_SPEC = importlib.util.spec_from_file_location(
+    "terminal_gate", os.path.join(os.path.dirname(__file__), "test-terminal.py"))
+terminal_gate = importlib.util.module_from_spec(_TERMINAL_SPEC)
+_TERMINAL_SPEC.loader.exec_module(terminal_gate)
 
 def parse_cpu_benchmark(line):
     match = CPU_BENCHMARK.fullmatch(line)
@@ -164,6 +174,8 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
         started = time.monotonic()
         try:
             qmp = Qmp(socket_path)
+            reader = terminal_gate.TraceReader(
+                qmp.monitor, os.path.join(directory, "ring.bin"))
             end = time.monotonic() + deadline
             last_counts = (0, 0, 0)
             while not booted.is_set() and machine.poll() is None and \
@@ -202,13 +214,21 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
             if benchmark_us <= 0 or benchmark_us > 10000000:
                 raise RuntimeError("invalid CPU benchmark time: %d us" %
                                    benchmark_us)
-            settle_deadline = time.monotonic() + 2.0
-            while (qmp.property("astra-display-submissions") <
-                   EXPECTED_SUBMISSIONS or
-                   qmp.property("astra-display-completions") <
-                   EXPECTED_SUBMISSIONS) and \
-                    time.monotonic() < settle_deadline:
-                time.sleep(0.01)
+            # The desktop uploads one icon per installed application, so its
+            # first frame is not a fixed number of requests: wait until the
+            # display is quiet instead.
+            settle_deadline = time.monotonic() + 20.0
+            quiet_since = time.monotonic()
+            last = None
+            while time.monotonic() < settle_deadline:
+                now = (qmp.property("astra-display-submissions"),
+                       qmp.property("astra-display-completions"))
+                if now != last or now[0] != now[1]:
+                    last = now
+                    quiet_since = time.monotonic()
+                elif time.monotonic() - quiet_since >= DESKTOP_SETTLE_SECONDS:
+                    break
+                time.sleep(0.02)
             elapsed = time.monotonic() - started
             submissions = qmp.property("astra-display-submissions")
             completions = qmp.property("astra-display-completions")
@@ -225,8 +245,7 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
             glyphs = qmp.property("astra-display-glyph-commands")
             queue = qmp.word(DISPLAY_QUEUE)
             irq = qmp.word(ASTRAEA_IRQ_STATUS)
-            if (submissions, completions) != (EXPECTED_SUBMISSIONS,
-                                               EXPECTED_SUBMISSIONS):
+            if submissions == 0 or submissions != completions:
                 raise RuntimeError(
                     "display requests=%d completions=%d batches=%d "
                     "commands=%d fills=%d blits=%d glyphs=%d" %
@@ -234,9 +253,12 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                      blits, glyphs))
             if generation == 0:
                 raise RuntimeError("display completion had no generation")
-            if operation != RENDER_OPERATION or batches != EXPECTED_BATCHES:
-                raise RuntimeError("display used operation=%d batches=%d" %
-                                   (operation, batches))
+            render_only = qmp.property("astra-display-render-only-batches")
+            if operation != RENDER_OPERATION or batches == 0 or \
+                    render_only == 0:
+                raise RuntimeError(
+                    "display used operation=%d batches=%d render-only=%d" %
+                    (operation, batches, render_only))
             if commands == 0 or fills == 0 or blits == 0 or glyphs == 0:
                 raise RuntimeError(
                     "hardware command mix commands=%d fills=%d blits=%d glyphs=%d" %
@@ -259,8 +281,10 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
             desktop_fills = fills
             desktop_blits = blits
             desktop_glyphs = glyphs
+            terminal_icon = reader.desktop_icon()
+            desktop_batches = batches
             try:
-                qmp.move(70, 90)
+                qmp.move(*terminal_icon)
                 launch_started = time.monotonic()
                 qmp.click()
                 time.sleep(0.08)
@@ -271,7 +295,7 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                     (machine.poll(), serial[-40:])) from error
             launch_deadline = time.monotonic() + 5.0
             while (qmp.property("astra-display-render-batches") <
-                   EXPECTED_BATCHES + 2 or
+                   desktop_batches + 2 or
                    qmp.property("astra-display-submissions") !=
                    qmp.property("astra-display-completions")) and \
                     time.monotonic() < launch_deadline:
@@ -284,7 +308,7 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
             launched_blits = qmp.property("astra-display-blit-commands")
             launched_glyphs = qmp.property("astra-display-glyph-commands")
             launch_elapsed = time.monotonic() - launch_started
-            if launched_batches < EXPECTED_BATCHES + 2 or \
+            if launched_batches < desktop_batches + 2 or \
                     launched_submissions != qmp.property(
                         "astra-display-completions") or \
                     launched_commands <= desktop_commands or \
@@ -498,7 +522,7 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                      qmp.property("astra-display-completions")))
             second_batches = restored_batches
             second_glyphs = qmp.property("astra-display-glyph-commands")
-            qmp.move(70, 90)
+            qmp.move(*terminal_icon)
             qmp.click()
             time.sleep(0.08)
             qmp.click()
@@ -545,7 +569,7 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
             closed_batches = qmp.property("astra-display-render-batches")
             relaunch_batches = closed_batches
             relaunch_glyphs = qmp.property("astra-display-glyph-commands")
-            qmp.move(70, 90)
+            qmp.move(*terminal_icon)
             qmp.click()
             time.sleep(0.08)
             qmp.click()

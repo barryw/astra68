@@ -26,7 +26,8 @@ def writable(root):
             path.chmod(path.stat().st_mode | 0o200)
 
 
-def fixture(directory, delay, output="", status=0, mailbox_bytes=8193):
+def fixture(directory, delay, output="", status=0, mailbox_bytes=8193,
+            payload_bytes=12345):
     container = pathlib.Path(directory)
     root = container / "release"
     observed = container / "observed"
@@ -45,6 +46,8 @@ exit "${{ASTRA_TEST_POWER_STATUS:-0}}"
     shutil.copyfile(RELEASE_TOOL, root / "bin/astra-release.py")
     write_executable(root / "bin/astra-terminal-display", f"""#!/bin/sh
 if [ "$1" = --mailbox-bytes ]; then echo {mailbox_bytes}; exit 0; fi
+if [ "$1" = --payload-bytes ]; then echo {payload_bytes}; exit 0; fi
+printf '%s\n' "$@" >"{observed}/display.args"
 python3 -c 'import os; print(*sorted(os.sched_getaffinity(0)))' >"{observed}/display.affinity"
 count=0
 test ! -r "{observed}/display.launches" || read count <"{observed}/display.launches"
@@ -60,6 +63,8 @@ while :; do sleep 1; done
     write_executable(root / "qemu/bin/qemu-system-m68k-astra", f"""#!/bin/sh
 test -d "$ASTRA_HOSTFS_ROOT" || exit 97
 stat -c %s "$ASTRA_DISPLAY_MAILBOX_PATH" >"{observed}/mailbox.size"
+printf '%s\n' "$ASTRA_DISPLAY_PAYLOAD_PATH" >"{observed}/payload.path"
+stat -c %s "$ASTRA_DISPLAY_PAYLOAD_PATH" >"{observed}/payload.size"
 printf '%s\n' "$ASTRA_HOSTFS_ROOT" >"{observed}/hostfs.root"
 printf '%s\\n' "$@" >"{observed}/qemu.args"
 sleep {delay}
@@ -152,6 +157,14 @@ def main():
         page_size = os.sysconf("SC_PAGE_SIZE")
         mailbox_size = ((8193 + page_size - 1) // page_size) * page_size
         assert int((observed / "mailbox.size").read_text()) == mailbox_size
+        payload = observed / "run/display-payload.bin"
+        if not pathlib.Path("/dev/astra-host-arena").exists():
+            assert (observed / "payload.path").read_text().strip() == \
+                str(payload)
+            assert int((observed / "payload.size").read_text()) == 12345
+            assert (observed / "display.args").read_text().splitlines() == [
+                str(observed / "run/post-text.bin"),
+                str(observed / "run/display.bin"), str(payload)]
         storage = qemu_args[qemu_args.index("-drive") + 1]
         assert storage == "if=none,format=raw,file=%s" % (
             observed / "state/storage-terminal.img")

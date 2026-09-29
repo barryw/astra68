@@ -15,7 +15,8 @@ def write_executable(path: Path, source: str) -> None:
     path.chmod(0o755)
 
 
-def run_case(deploy_status: int, mutate_source: bool = False) -> None:
+def run_case(deploy_status: int, mutate_source: bool = False,
+             stage_only: bool = False) -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         repository = root / "repository"
@@ -53,6 +54,7 @@ chmod -R a-w "$1"
 """)
         write_executable(script_dir / "deploy-de25-release.sh", f"""#!/bin/sh
 test -f "$1/rom/astra_boot.bin"
+touch "$FAKE_DEPLOY_MARKER"
 exit {deploy_status}
 """)
         fake_bin = root / "bin"
@@ -77,9 +79,17 @@ esac
         environment["FAKE_QEMU"] = str(root / "qemu-system-m68k")
         environment["FAKE_MAKE_LOG"] = str(root / "make.log")
         environment["FAKE_MUTATE"] = "1" if mutate_source else "0"
+        environment["FAKE_DEPLOY_MARKER"] = str(root / "deployed")
+        if stage_only:
+            environment["ASTRA_DE25_RELEASE_OUTPUT"] = str(root / "staged")
         result = subprocess.run([str(publisher)], env=environment,
                                 check=False, cwd=root)
-        assert result.returncode == (1 if mutate_source else deploy_status)
+        assert result.returncode == (1 if mutate_source else
+                                    0 if stage_only else deploy_status)
+        assert (root / "deployed").exists() == (not stage_only and
+                                                 not mutate_source)
+        assert (root / "staged/rom/astra_boot.bin").exists() == (stage_only and
+                                                                  not mutate_source)
         assert list(workspace_parent.iterdir()) == []
         assert "sw/boot build/astra_boot.bin" in (root / "make.log").read_text()
 
@@ -87,4 +97,6 @@ esac
 run_case(0)
 run_case(23)
 run_case(0, mutate_source=True)
+run_case(23, stage_only=True)
+run_case(0, mutate_source=True, stage_only=True)
 print("DE25 release publisher cleanup: PASS")

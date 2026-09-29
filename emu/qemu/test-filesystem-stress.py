@@ -40,11 +40,15 @@ HOST_GAUGE_PROPERTIES = (
     "astra-host-inflight",
     "astra-host-max-inflight",
 )
+# Every host filesystem operation the emulator counts (hw/m68k/astra68.c).
+# The accounting check below sums these against all host commands, so an
+# operation missing here reads as commands nobody issued.
 HOST_OPERATION_PROPERTIES = tuple(
     "astra-host-fs-" + name for name in (
-        "invalid", "open", "close", "read", "write", "sync", "truncate",
-        "stat", "readdir", "mkdir", "unlink", "rename", "chmod",
-        "readlink", "symlink"))
+        "invalid", "open", "open-at", "close", "read", "write", "sync",
+        "truncate", "stat", "stat-at", "stat-file", "readdir", "mkdir",
+        "unlink", "unlink-at", "rename", "chmod", "chmod-at", "chmod-file",
+        "readlink", "symlink", "link", "filesystem-info"))
 HOST_OPERATION_TIMING_PROPERTIES = tuple(
     name + "-execution-ns" for name in HOST_OPERATION_PROPERTIES)
 
@@ -99,7 +103,7 @@ def open_terminal(machine):
     if not wait_serial(machine, terminal.BOOT_MARKER):
         return False
     time.sleep(2.0)
-    machine.qmp.double_click(*terminal.TERMINAL_ICON)
+    machine.qmp.double_click(*machine.desktop_icon())
     if wait_text(machine, terminal.BANNER, 0)[0] is None:
         return False
     settle(machine)
@@ -207,6 +211,21 @@ def run_seed(args, seed):
             raise RuntimeError("QEMU runtime tuning failed")
         if not open_terminal(machine):
             raise RuntimeError("boot did not reach Terminal")
+        # The host accounting below counts every host command, so the other
+        # host clients must be quiet: without a host helper here, media and
+        # remote-desktop keep retrying their host channels. Both are user
+        # services, so the gate stops them the way a user would.
+        before = machine.sequence()
+        machine.qmp.type_line("service stop remote-desktop; "
+                              "service stop media; print -r -- FS-QUIET-$?")
+        lines, _ = wait_text(
+            machine, tuple("FS-QUIET-%d" % digit for digit in range(10)),
+            before, time.monotonic() + 60.0)
+        if lines is None or not any(line.startswith("FS-QUIET-0")
+                                    for line in lines):
+            raise RuntimeError("could not stop the other host clients: %s"
+                               % (lines or [])[-8:])
+        settle(machine)
         if args.exec_log:
             machine.qmp.monitor("log exec,nochain")
         stats_before = machine_stats(machine)
