@@ -41,15 +41,16 @@
 #define ASTRA_CAPTURE_STATUS_COMPLETE (1u << 3)
 #define ASTRA_CAPTURE_STATUS_WRITER_BUSY (1u << 4)
 #define ASTRA_CAPTURE_STATUS_FRAME_DONE (1u << 5)
+/*
+ * Neither of the next two says anything about the capture in progress. The
+ * overflow bit is the pixel FIFO's sticky flag, set from the first overflow
+ * until the pixel domain resets; LAST_DROPPED describes whichever frame
+ * finished last. A capture is judged by the counters CLEAR_COUNTERS zeroed for
+ * it -- a mask that included these failed every capture after one lost frame.
+ */
 #define ASTRA_CAPTURE_STATUS_FIFO_OVERFLOW (1u << 6)
 #define ASTRA_CAPTURE_STATUS_LAST_DROPPED (1u << 7)
 #define ASTRA_CAPTURE_STATUS_LAST_AXI_ERROR (1u << 8)
 #define ASTRA_CAPTURE_STATUS_COMMAND_ERROR (1u << 9)
-
-#define ASTRA_CAPTURE_STATUS_ERROR_MASK \
-    (ASTRA_CAPTURE_STATUS_FIFO_OVERFLOW | \
-     ASTRA_CAPTURE_STATUS_LAST_DROPPED | \
-     ASTRA_CAPTURE_STATUS_LAST_AXI_ERROR | \
-     ASTRA_CAPTURE_STATUS_COMMAND_ERROR)
 
 #endif

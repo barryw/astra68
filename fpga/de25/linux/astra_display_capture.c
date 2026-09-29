@@ -139,37 +139,77 @@ no_device:
 	return -ENODEV;
 }
 
+/*
+ * What one capture came to, from counters CLEAR_COUNTERS zeroed for it. The
+ * status register's overflow bit is not one of them: it reports the pixel
+ * FIFO's sticky overflow flag, which stays set from the first overflow until
+ * the pixel domain resets, and LAST_DROPPED describes whichever frame finished
+ * last. Treating either as this capture's failure failed every capture after
+ * one frame was lost under render load, until the board rebooted.
+ */
+static u32 astra_capture_outcome(struct astra_display_capture *capture)
+{
+	return astra_capture_read(capture, ASTRA_CAPTURE_REG_COMPLETED_COUNT) |
+	       astra_capture_read(capture, ASTRA_CAPTURE_REG_DROPPED_COUNT) |
+	       astra_capture_read(capture, ASTRA_CAPTURE_REG_AXI_ERROR_COUNT) |
+	       astra_capture_read(capture,
+				  ASTRA_CAPTURE_REG_COMMAND_ERROR_COUNT);
+}
+
 static int astra_capture_hardware(struct astra_display_capture *capture,
 				  struct astra_display_capture_info *info)
 {
 	ktime_t started = ktime_get();
 	u32 status;
+	u32 outcome;
 	int result;
 
+	/*
+	 * A capture an earlier call gave up on finishes at its frame's end;
+	 * commands sent before then are refused and counted as errors.
+	 */
+	result = readl_poll_timeout(
+		capture->registers + ASTRA_CAPTURE_REG_STATUS, status,
+		!(status & (ASTRA_CAPTURE_STATUS_ARMED |
+			    ASTRA_CAPTURE_STATUS_ACTIVE)),
+		100, ASTRA_CAPTURE_FAULT_TIMEOUT_US);
+	if (result)
+		return result;
 	astra_capture_write(capture, ASTRA_CAPTURE_REG_CONTROL,
-			    ASTRA_CAPTURE_ENABLE | ASTRA_CAPTURE_CLEAR_COUNTERS);
+			    ASTRA_CAPTURE_ENABLE | ASTRA_CAPTURE_ACKNOWLEDGE |
+			    ASTRA_CAPTURE_CLEAR_COUNTERS);
 	astra_capture_write(capture, ASTRA_CAPTURE_REG_BUFFER_BASE,
 			    ASTRA_DE25_CAPTURE_FRAME);
 	astra_capture_write(capture, ASTRA_CAPTURE_REG_CONTROL,
 			    ASTRA_CAPTURE_ENABLE | ASTRA_CAPTURE_ARM);
-	result = readl_poll_timeout(
-		capture->registers + ASTRA_CAPTURE_REG_STATUS, status,
-		(status & (ASTRA_CAPTURE_STATUS_COMPLETE |
-			   ASTRA_CAPTURE_STATUS_ERROR_MASK)),
-		100, ASTRA_CAPTURE_FAULT_TIMEOUT_US);
-	if (result || !(status & ASTRA_CAPTURE_STATUS_COMPLETE) ||
-	    (status & ASTRA_CAPTURE_STATUS_ERROR_MASK) ||
-	    astra_capture_read(capture, ASTRA_CAPTURE_REG_COMPLETED_BASE) !=
-			ASTRA_DE25_CAPTURE_FRAME ||
-	    astra_capture_read(capture, ASTRA_CAPTURE_REG_COMPLETED_COUNT) != 1 ||
-	    astra_capture_read(capture, ASTRA_CAPTURE_REG_DROPPED_COUNT) != 0 ||
-	    astra_capture_read(capture, ASTRA_CAPTURE_REG_OVERFLOW_COUNT) != 0 ||
-	    astra_capture_read(capture, ASTRA_CAPTURE_REG_AXI_ERROR_COUNT) != 0 ||
-	    astra_capture_read(capture,
-			       ASTRA_CAPTURE_REG_COMMAND_ERROR_COUNT) != 0) {
+	result = read_poll_timeout(astra_capture_outcome, outcome,
+				   outcome != 0, 100,
+				   ASTRA_CAPTURE_FAULT_TIMEOUT_US, false,
+				   capture);
+	if (!result &&
+	    (astra_capture_read(capture,
+				ASTRA_CAPTURE_REG_COMMAND_ERROR_COUNT) != 0 ||
+	     astra_capture_read(capture,
+				ASTRA_CAPTURE_REG_AXI_ERROR_COUNT) != 0))
+		result = -EIO;
+	/* A frame lost to FIFO overflow under memory load: the next one may
+	   not be, so the caller retries rather than giving up. */
+	else if (!result &&
+		 astra_capture_read(capture,
+				    ASTRA_CAPTURE_REG_DROPPED_COUNT) != 0)
+		result = -EAGAIN;
+	else if (!result &&
+		 (astra_capture_read(capture,
+				     ASTRA_CAPTURE_REG_COMPLETED_COUNT) != 1 ||
+		  astra_capture_read(capture,
+				     ASTRA_CAPTURE_REG_COMPLETED_BASE) !=
+			ASTRA_DE25_CAPTURE_FRAME))
+		result = -EIO;
+	if (result) {
 		astra_capture_write(capture, ASTRA_CAPTURE_REG_CONTROL,
+				    ASTRA_CAPTURE_ENABLE |
 				    ASTRA_CAPTURE_ACKNOWLEDGE);
-		return result ?: -EIO;
+		return result;
 	}
 	info->generation = astra_capture_read(
 		capture, ASTRA_CAPTURE_REG_COMPLETED_GENERATION);
@@ -177,7 +217,7 @@ static int astra_capture_hardware(struct astra_display_capture *capture,
 		capture, ASTRA_CAPTURE_REG_LAST_CYCLES);
 	info->capture_nanoseconds = ktime_to_ns(ktime_sub(ktime_get(), started));
 	astra_capture_write(capture, ASTRA_CAPTURE_REG_CONTROL,
-			    ASTRA_CAPTURE_ACKNOWLEDGE);
+			    ASTRA_CAPTURE_ENABLE | ASTRA_CAPTURE_ACKNOWLEDGE);
 	return 0;
 }
 

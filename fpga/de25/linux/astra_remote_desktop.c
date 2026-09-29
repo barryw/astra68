@@ -1520,7 +1520,11 @@ int main(int argc, char **argv)
 
             if (ioctl(server.capture, ASTRA_DISPLAY_CAPTURE_IOC_CAPTURE,
                       &info) != 0) {
-            perror("capture Astra display");
+                /* A frame lost to memory load; the next pass captures the
+                   next one. */
+                if (errno == EAGAIN || errno == EINTR)
+                    continue;
+                perror("capture Astra display");
                 astra_remote_server_stop(&server);
                 (void)close(lease);
                 lease = -1;

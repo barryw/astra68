@@ -397,35 +397,51 @@ int astra_graphics_capture_rgb(
                                        ASTRA_CAPTURE_FRAME_BYTES) != 0)
         goto done;
 
-    astra_mmio_write(device, ASTRA_REG_CAPTURE_CONTROL,
-                     ASTRA_CAPTURE_ENABLE | ASTRA_CAPTURE_CLEAR_COUNTERS);
-    astra_mmio_write(device, ASTRA_REG_CAPTURE_BUFFER_BASE,
-                     physical_address);
     started = astra_monotonic_nanoseconds();
     deadline = started + timeout_ns;
-    astra_mmio_write(device, ASTRA_REG_CAPTURE_CONTROL,
-                     ASTRA_CAPTURE_ENABLE | ASTRA_CAPTURE_ARM);
-    for (;;) {
-        uint32_t capture_status =
-            astra_mmio_read(device, ASTRA_REG_CAPTURE_STATUS);
-
-        if ((capture_status & ASTRA_CAPTURE_STATUS_COMPLETE) != 0u)
-            break;
-        if ((capture_status & ASTRA_CAPTURE_STATUS_LAST_DROPPED) != 0u) {
-            errno = EIO;
-            goto disable;
-        }
+    /* A capture given up on earlier finishes at its frame's end; commands
+       before then are refused. The kernel driver does the same. */
+    while ((astra_mmio_read(device, ASTRA_REG_CAPTURE_STATUS) &
+            (ASTRA_CAPTURE_STATUS_ARMED | ASTRA_CAPTURE_STATUS_ACTIVE)) !=
+           0u) {
         if (astra_monotonic_nanoseconds() >= deadline) {
             errno = ETIMEDOUT;
             goto disable;
         }
         astra_graphics_poll_pause(started);
     }
+    astra_mmio_write(device, ASTRA_REG_CAPTURE_CONTROL,
+                     ASTRA_CAPTURE_ENABLE | ASTRA_CAPTURE_ACKNOWLEDGE |
+                         ASTRA_CAPTURE_CLEAR_COUNTERS);
+    astra_mmio_write(device, ASTRA_REG_CAPTURE_BUFFER_BASE,
+                     physical_address);
+    astra_mmio_write(device, ASTRA_REG_CAPTURE_CONTROL,
+                     ASTRA_CAPTURE_ENABLE | ASTRA_CAPTURE_ARM);
+    /* Judged by this capture's own counters, never the sticky status bits
+       (sw/include/astra/display_capture.h). */
+    for (;;) {
+        if ((astra_mmio_read(device, ASTRA_REG_CAPTURE_COMPLETED_COUNT) |
+             astra_mmio_read(device, ASTRA_REG_CAPTURE_DROPPED_COUNT) |
+             astra_mmio_read(device, ASTRA_REG_CAPTURE_AXI_ERROR_COUNT) |
+             astra_mmio_read(device,
+                             ASTRA_REG_CAPTURE_COMMAND_ERROR_COUNT)) != 0u)
+            break;
+        if (astra_monotonic_nanoseconds() >= deadline) {
+            errno = ETIMEDOUT;
+            goto disable;
+        }
+        astra_graphics_poll_pause(started);
+    }
+    if (astra_mmio_read(device, ASTRA_REG_CAPTURE_DROPPED_COUNT) != 0u &&
+        astra_mmio_read(device, ASTRA_REG_CAPTURE_AXI_ERROR_COUNT) == 0u &&
+        astra_mmio_read(device,
+                        ASTRA_REG_CAPTURE_COMMAND_ERROR_COUNT) == 0u) {
+        errno = EAGAIN;
+        goto disable;
+    }
     if (astra_mmio_read(device, ASTRA_REG_CAPTURE_COMPLETED_BASE) !=
             physical_address ||
         astra_mmio_read(device, ASTRA_REG_CAPTURE_COMPLETED_COUNT) != 1u ||
-        astra_mmio_read(device, ASTRA_REG_CAPTURE_DROPPED_COUNT) != 0u ||
-        astra_mmio_read(device, ASTRA_REG_CAPTURE_OVERFLOW_COUNT) != 0u ||
         astra_mmio_read(device, ASTRA_REG_CAPTURE_AXI_ERROR_COUNT) != 0u ||
         astra_mmio_read(device,
                         ASTRA_REG_CAPTURE_COMMAND_ERROR_COUNT) != 0u) {
@@ -462,8 +478,10 @@ int astra_graphics_capture_rgb(
     status = 0;
 
 disable:
+    /* Enable stays set: turning it off during a capture is refused and
+       counted as a command error. */
     astra_mmio_write(device, ASTRA_REG_CAPTURE_CONTROL,
-                     ASTRA_CAPTURE_ACKNOWLEDGE);
+                     ASTRA_CAPTURE_ENABLE | ASTRA_CAPTURE_ACKNOWLEDGE);
 done:
     if (output != NULL)
         (void)fclose(output);

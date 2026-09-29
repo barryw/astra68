@@ -1644,7 +1644,10 @@ RFB input/frame tests passed with both `astra.service` and
 The matching `astra_display_capture.ko` and `dw-axi-dmac-platform.ko` are
 installed under the running kernel's `extra/` module directory with SHA-256
 values
-`1cc0eece7badb0aebc8c7690cfd341841356e36fc0358f03d0882ff9881d56e4`
+`2bfd74ff2fe096307b75f915e4a7e19876ac78b675ee33da290ea975c3be2b57`
+(2026-09-30: judges each capture by its own counters, returns EAGAIN for a
+frame lost to FIFO overflow; the previous module is kept on the board as
+`/root/astra_display_capture.ko.pre-sticky-fix`)
 and
 `d254cdea3f4b5f0b57ac99cf6a1cebde41c2f4996c38bc2f0f69627355e42300`.
 `/etc/modules-load.d/astra-display-capture.conf` loads the capture module while

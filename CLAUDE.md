@@ -101,6 +101,14 @@ There is no alternative CPU or emulator implementation in the repository.
   `ASTRA-BUILD-BUSY` and names the holder -- wait for it, never work around
   it. `verify-nopc.sh` keeps going after a failed step, so a failed verify is
   still running until its shell exits.
+- **Display capture's status overflow bit is sticky.** It is the pixel
+  FIFO's overflow flag, set from the first overflow until the pixel domain
+  resets. A driver that treated it (or LAST_DROPPED) as the current capture's
+  failure failed every capture after one frame was lost under render load,
+  until reboot: remote desktop dropped with `capture Astra display:
+  Input/output error`. Judge a capture by the counters CLEAR_COUNTERS zeroed
+  for it; a lost frame is EAGAIN. Under heavy rendering most captures lose
+  their frame (64-entry FIFO against DDR load).
 - Stale objects are indistinguishable from kernel bugs. Exit status 127 from a
   user image means a stale object first, not a kernel fault. Never source-sync
   with plain `rsync -a`: use the checksum/non-mtime command in `AGENTS.md` so a

@@ -195,3 +195,22 @@ A frame is about 262k guest instructions, down from about 480k.
   hardware finishes, ordered by fences. Both are graphics-architecture work,
   not kernel IPC. IPC phase 2 is not justified by these numbers.
 
+## Update, 2026-09-30: SDL phase 2 and a display-capture fix
+
+- **SDL phase 2** (`d81e7c83`, release `b86a9cea`): SDL filesystem backend
+  (base `/app/resources/`, pref `/store/`), upstream testsprite2,
+  testgeometry, testrendertarget and testscale shipped as applications and
+  gated in the standing verify. All four open from the live desktop on the
+  DE25 without faults: testsprite2 ~48 fps, testgeometry ~53,
+  testrendertarget ~27, testscale ~11. The last two are slow and worth a
+  profile.
+- **Remote desktop capture broke after heavy rendering and stayed broken
+  until reboot.** The capture status overflow bit is sticky (see `CLAUDE.md`)
+  and the driver treated it as the current capture's failure. Fixed in
+  `astra_display_capture.ko` (installed on the board, hash in
+  `CURRENT_STATE.md`), the helper's capture path, and remote desktop, which
+  now retries a lost frame. Under testsprite2 load 9 of 40 captures kept
+  their frame and none failed; before, one overflow failed everything.
+  Capture bandwidth under render load is the remaining, RTL-side problem.
+- The board was rebooted once (2026-09-30 04:25) to clear the stuck state.
+
