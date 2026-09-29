@@ -372,6 +372,10 @@ static bool active_state(uint8_t state)
     return state == KERNEL_PORT_OPEN || state == KERNEL_PORT_PEER_CLOSED;
 }
 
+/* Ports in an active state, kept as they change so creating one is O(1);
+   the pool validator recounts it. */
+static uint32_t active_ports;
+
 static uint32_t active_port_count(void)
 {
     uint32_t count = 0u;
@@ -629,6 +633,7 @@ static KernelPortStatus close_port(KernelPort *port,
         return KERNEL_PORT_CORRUPT;
 
     port->state = KERNEL_PORT_CLOSING;
+    --active_ports;
     port->receive_terminal = receive_result;
     port->send_terminal = send_result;
     if (!wake_all(&port->readable, receive_result, &receive_woken) ||
@@ -706,6 +711,7 @@ void kernel_port_pool_init(void)
     next_port_slot = 0u;
     next_message_slot = 0u;
     kernel_bytes_clear(&pool_stats, sizeof(pool_stats));
+    active_ports = 0u;
     pool_corrupt = 0u;
 }
 
@@ -775,7 +781,7 @@ KernelPortStatus kernel_port_create(uint32_t owner,
         return KERNEL_PORT_CORRUPT;
     }
     ++pool_stats.created_ports;
-    active = active_port_count();
+    active = ++active_ports;
     if (active > pool_stats.max_active_ports)
         pool_stats.max_active_ports = active;
     *port = candidate;
@@ -1528,7 +1534,7 @@ bool kernel_port_pool_valid(void)
             (seen != (message->state != KERNEL_PORT_MESSAGE_FREE)))
             return false;
     }
-    if (active > KERNEL_PORT_MAX ||
+    if (active > KERNEL_PORT_MAX || active_ports != active_port_count() ||
         queued_messages != pool_stats.queued_messages ||
         queued_bytes != pool_stats.queued_bytes ||
         queued_handles != pool_stats.queued_handles ||
@@ -1568,7 +1574,7 @@ bool kernel_port_pool_stats(KernelPortPoolStats *stats)
     if (stats == NULL || !kernel_port_pool_valid())
         return false;
     kernel_bytes_copy(stats, &pool_stats, sizeof(*stats));
-    stats->active_ports = active_port_count();
+    stats->active_ports = active_ports;
     stats->closing_ports = closing_port_count();
     return true;
 }

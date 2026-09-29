@@ -3447,6 +3447,57 @@ static void test_console_writes_through_a_display_lease(void)
                        sizeof(landed)) == KERNEL_USER_COPY_OK);
             assert(memcmp(landed, source + row * 32u, sizeof(landed)) == 0);
         }
+        /* Rows that follow each other on both sides are copied as one span:
+           here it crosses a user page and an area page, so both lookups
+           must move to the next page part way. */
+        {
+            uint32_t span_source;
+            uint8_t span[80];
+            uint8_t span_landed[80];
+
+            /* The source is a second area, mapped: two committed pages. */
+            registers[0] = ASTRA_SYSCALL_AREA_CREATE;
+            registers[1] = 2u * KERNEL_PAGE_SIZE;
+            registers[2] = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                           ASTRA_RIGHT_MAP;
+            assert(kernel_process_on_syscall(registers,
+                                             KERNEL_PROCESS_STACK_TOP - 8u,
+                                             frame, &next) ==
+                   KERNEL_PROCESS_OK);
+            assert(next->data[0] == ASTRA_SYSCALL_OK);
+            registers[1] = next->data[1];
+            registers[0] = ASTRA_SYSCALL_AREA_MAP;
+            registers[2] = ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE;
+            assert(kernel_process_on_syscall(registers,
+                                             KERNEL_PROCESS_STACK_TOP - 8u,
+                                             frame, &next) ==
+                   KERNEL_PROCESS_OK);
+            assert(next->data[0] == ASTRA_SYSCALL_OK);
+            span_source = next->data[1] + KERNEL_PAGE_SIZE - 40u;
+            for (uint32_t at = 0u; at < sizeof(span); ++at)
+                span[at] = (uint8_t)(at * 13u + 5u);
+            assert(kernel_user_copy_to_asm(span_source, span, sizeof(span)) ==
+                   KERNEL_USER_COPY_OK);
+            copy = (AstraAreaCopy){
+                .size = ASTRA_AREA_COPY_SIZE, .area = area_handle,
+                .area_offset = KERNEL_PAGE_SIZE - 16u, .area_pitch = 40u,
+                .source = span_source, .source_pitch = 40u, .row_bytes = 40u,
+                .rows = 2u,
+            };
+            assert(kernel_user_copy_to_asm(user_cells, &copy, sizeof(copy)) ==
+                   KERNEL_USER_COPY_OK);
+            registers[0] = ASTRA_SYSCALL_AREA_COPY_IN;
+            registers[1] = user_cells;
+            assert(kernel_process_on_syscall(registers,
+                                             KERNEL_PROCESS_STACK_TOP - 8u,
+                                             frame, &next) ==
+                   KERNEL_PROCESS_OK);
+            assert(next->data[0] == ASTRA_SYSCALL_OK);
+            assert(kernel_user_copy_from_asm(
+                       span_landed, mapped + KERNEL_PAGE_SIZE - 16u,
+                       sizeof(span_landed)) == KERNEL_USER_COPY_OK);
+            assert(memcmp(span_landed, span, sizeof(span)) == 0);
+        }
         copy_engine_present = false;
         copy_engine_lists = 0u;
         registers[1] = display_handle;

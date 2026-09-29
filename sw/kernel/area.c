@@ -1484,6 +1484,23 @@ KernelAreaStatus kernel_area_extents(const KernelArea *area, uint32_t offset,
     return KERNEL_AREA_OK;
 }
 
+bool kernel_area_range_live(const KernelArea *area, uint32_t offset,
+                            uint32_t size)
+{
+    return size != 0u && range_valid(area, offset, size);
+}
+
+bool kernel_area_page_physical(const KernelArea *area, uint32_t offset,
+                               uint32_t *physical)
+{
+    const uint32_t *entry = page_entries(area, offset / KERNEL_PAGE_SIZE);
+
+    if (entry == NULL || *entry == AREA_PAGE_ABSENT)
+        return false;
+    *physical = *entry + (offset & (KERNEL_PAGE_SIZE - 1u));
+    return true;
+}
+
 KernelAreaStatus kernel_area_read(const KernelArea *area, uint32_t offset,
                                   void *destination, uint32_t size)
 {

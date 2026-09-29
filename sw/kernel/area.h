@@ -162,6 +162,16 @@ KernelAreaStatus kernel_area_extents(const KernelArea *area, uint32_t offset,
                                      uint32_t capacity, uint32_t *count);
 KernelAreaStatus kernel_area_read(const KernelArea *area, uint32_t offset,
                                   void *destination, uint32_t size);
+/* Whether [offset, offset + size) lies inside a live area: the validation
+   every kernel_area_* call repeats. A caller that looks up many pages of one
+   range checks once here, then uses kernel_area_page_physical within the
+   same uninterrupted kernel section, where the area cannot change. */
+bool kernel_area_range_live(const KernelArea *area, uint32_t offset,
+                            uint32_t size);
+/* The physical address of byte @p offset of an area whose range the caller
+   checked with kernel_area_range_live; false when that page is absent. */
+bool kernel_area_page_physical(const KernelArea *area, uint32_t offset,
+                               uint32_t *physical);
 bool kernel_area_live(const KernelArea *area);
 uint32_t kernel_area_creator(const KernelArea *area);
 uint32_t kernel_area_generation(const KernelArea *area);

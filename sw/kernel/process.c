@@ -2672,51 +2672,81 @@ static uint32_t area_copy_in(KernelProcess *process, uint32_t user_request)
         return ASTRA_SYSCALL_INVALID_HANDLE;
     if (!kernel_user_copy_range_valid(request.source, (uint32_t)source_span))
         return ASTRA_SYSCALL_BAD_ADDRESS;
+    /* The area is checked once for the whole span, then read page by page
+       without the check: the copy runs in one kernel section. */
+    if (!kernel_area_range_live(area, request.area_offset,
+                                (uint32_t)area_span))
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    /* Rows that follow each other on both sides are one span, walked a page
+       at a time instead of a row at a time. */
+    if (request.source_pitch == request.row_bytes &&
+        request.area_pitch == request.row_bytes) {
+        request.row_bytes = (uint32_t)source_span;
+        request.rows = 1u;
+    }
     copy_list.count = 0u;
-    for (uint32_t row = 0u; row < request.rows; ++row) {
-        uint32_t source = request.source + request.source_pitch * row;
-        uint32_t offset = request.area_offset + request.area_pitch * row;
-        uint32_t left = request.row_bytes;
+    {
+        uint32_t source_page = 1u;          /* no page is cached */
+        uint32_t source_frame = 0u;
+        uint32_t area_page = 1u;
+        uint32_t area_frame = 0u;
 
-        while (left != 0u) {
-            uint32_t chunk = KERNEL_PAGE_SIZE -
-                             (source & (KERNEL_PAGE_SIZE - 1u));
-            uint32_t area_chunk = KERNEL_PAGE_SIZE -
-                                  (offset & (KERNEL_PAGE_SIZE - 1u));
-            uint32_t physical = 0u;
-            KernelAreaExtent destination;
-            uint32_t extents;
-            KernelVmMapping mapping;
+        for (uint32_t row = 0u; row < request.rows; ++row) {
+            uint32_t source = request.source + request.source_pitch * row;
+            uint32_t offset = request.area_offset + request.area_pitch * row;
+            uint32_t left = request.row_bytes;
 
-            if (chunk > area_chunk)
-                chunk = area_chunk;
-            if (chunk > left)
-                chunk = left;
-            mapping = kernel_vm_probe_address_space(&process->address_space,
-                                                    source, &physical);
-            /* A page the program reserved but never touched is committed
-               here, as the fault it would have taken would commit it. */
-            if (mapping == KERNEL_VM_MAPPING_UNMAPPED &&
-                kernel_process_prepare_user_copy(source, chunk, false))
-                mapping = kernel_vm_probe_address_space(
-                    &process->address_space, source, &physical);
-            if (mapping != KERNEL_VM_MAPPING_READ_ONLY &&
-                mapping != KERNEL_VM_MAPPING_READ_WRITE) {
-                copy_list.count = 0u;
-                return ASTRA_SYSCALL_BAD_ADDRESS;
+            while (left != 0u) {
+                uint32_t page = source & ~(KERNEL_PAGE_SIZE - 1u);
+                uint32_t chunk = KERNEL_PAGE_SIZE -
+                                 (source & (KERNEL_PAGE_SIZE - 1u));
+                uint32_t area_chunk = KERNEL_PAGE_SIZE -
+                                      (offset & (KERNEL_PAGE_SIZE - 1u));
+                uint32_t destination;
+
+                if (chunk > area_chunk)
+                    chunk = area_chunk;
+                if (chunk > left)
+                    chunk = left;
+                if (page != source_page) {
+                    uint32_t physical = 0u;
+                    KernelVmMapping mapping = kernel_vm_probe_address_space(
+                        &process->address_space, source, &physical);
+
+                    /* A page the program reserved but never touched is
+                       committed here, as the fault it would have taken
+                       would commit it. */
+                    if (mapping == KERNEL_VM_MAPPING_UNMAPPED &&
+                        kernel_process_prepare_user_copy(source, chunk,
+                                                         false))
+                        mapping = kernel_vm_probe_address_space(
+                            &process->address_space, source, &physical);
+                    if (mapping != KERNEL_VM_MAPPING_READ_ONLY &&
+                        mapping != KERNEL_VM_MAPPING_READ_WRITE) {
+                        copy_list.count = 0u;
+                        return ASTRA_SYSCALL_BAD_ADDRESS;
+                    }
+                    source_page = page;
+                    source_frame = physical & ~(KERNEL_PAGE_SIZE - 1u);
+                }
+                if ((offset & ~(KERNEL_PAGE_SIZE - 1u)) != area_page) {
+                    if (!kernel_area_page_physical(area, offset,
+                                                   &destination)) {
+                        copy_list.count = 0u;
+                        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+                    }
+                    area_page = offset & ~(KERNEL_PAGE_SIZE - 1u);
+                    area_frame = destination & ~(KERNEL_PAGE_SIZE - 1u);
+                }
+                destination = area_frame + (offset & (KERNEL_PAGE_SIZE - 1u));
+                if (!copy_list_add(source_frame +
+                                       (source & (KERNEL_PAGE_SIZE - 1u)),
+                                   destination, chunk))
+                    return ASTRA_SYSCALL_IO_ERROR;
+                source += chunk;
+                offset += chunk;
+                left -= chunk;
             }
-            if (kernel_area_extents(area, offset, chunk, &destination, 1u,
-                                    &extents) != KERNEL_AREA_OK) {
-                copy_list.count = 0u;
-                return ASTRA_SYSCALL_INVALID_ARGUMENT;
-            }
-            if (!copy_list_add((physical & ~(KERNEL_PAGE_SIZE - 1u)) +
-                                   (source & (KERNEL_PAGE_SIZE - 1u)),
-                               destination.physical, chunk))
-                return ASTRA_SYSCALL_IO_ERROR;
-            source += chunk;
-            offset += chunk;
-            left -= chunk;
         }
     }
     return copy_list_flush() ? ASTRA_SYSCALL_OK : ASTRA_SYSCALL_IO_ERROR;
