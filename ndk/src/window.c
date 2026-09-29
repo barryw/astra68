@@ -47,12 +47,7 @@ static AstraResult command(AstraWindow *window, uint32_t action,
 {
     AstraGuiWindowCommand request = {0};
     AstraGuiWindowState reply = {0};
-    AstraPort reply_port = ASTRA_PORT_INIT;
-    AstraHandle transferred[2] = { ASTRA_INVALID_HANDLE,
-                                   ASTRA_INVALID_HANDLE };
-    uint32_t transfer_count = attachment == NULL ? 1u : 2u;
-    uint32_t reply_size = 0u;
-    uint32_t reply_handles = 0u;
+    AstraCall call = {0};
     AstraResult result;
 
     if (!window_live(window) || action < ASTRA_GUI_WINDOW_QUERY ||
@@ -61,18 +56,12 @@ static AstraResult command(AstraWindow *window, uint32_t action,
         !astra_utf8_validate(title, title_length, 0u) ||
         title_length > ASTRA_WINDOW_TITLE_MAX)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    result = astra_port_create(1u, sizeof(reply), &reply_port);
-    if (result != ASTRA_OK)
-        return result;
-    transferred[0] = reply_port.send;
-    if (attachment != NULL)
-        transferred[1] = *attachment;
     result = astra_message_header_init(
         &request.header, sizeof(request), ASTRA_GUI_PROTOCOL,
         ASTRA_GUI_VERSION, ASTRA_GUI_WINDOW_COMMAND,
         window->_private_generation);
     if (result != ASTRA_OK)
-        goto done;
+        return result;
     request.window = window->_private_id;
     request.generation = window->_private_generation;
     request.action = action;
@@ -86,21 +75,17 @@ static AstraResult command(AstraWindow *window, uint32_t action,
     request.title_length = title_length;
     for (uint32_t index = 0u; index < title_length; ++index)
         request.title[index] = title[index];
-    result = astra_port_send_until(
-        window->_private_control, &request, sizeof(request), transferred,
-        transfer_count,
-        ASTRA_DEADLINE_INFINITE);
-    reply_port.send = transferred[0];
-    if (attachment != NULL)
-        *attachment = transferred[1];
+    call.request = &request;
+    call.request_size = sizeof(request);
+    call.handles = attachment;
+    call.handle_count = attachment != NULL ? 1u : 0u;
+    call.reply = &reply;
+    call.reply_capacity = sizeof(reply);
+    result = astra_port_call(window->_private_control, &call,
+                             ASTRA_DEADLINE_INFINITE);
     if (result != ASTRA_OK)
-        goto done;
-    result = astra_port_receive_until(
-        reply_port.receive, &reply, sizeof(reply), 0, 0,
-        &reply_size, &reply_handles, ASTRA_DEADLINE_INFINITE);
-    if (result != ASTRA_OK)
-        goto done;
-    if (reply_size != sizeof(reply) || reply_handles != 0u ||
+        return result;
+    if (call.reply_size != sizeof(reply) || call.reply_handle_count != 0u ||
         reply.header.total_size != sizeof(reply) ||
         reply.header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
         reply.header.flags != 0u ||
@@ -110,22 +95,12 @@ static AstraResult command(AstraWindow *window, uint32_t action,
         reply.header.operation != ASTRA_GUI_WINDOW_STATE ||
         reply.header.transaction_id != request.header.transaction_id ||
         reply.window != window->_private_id ||
-        reply.generation == 0u || !astra_words_zero(reply.reserved, 2u)) {
-        result = ASTRA_ERROR_IO;
-        goto done;
-    }
+        reply.generation == 0u || !astra_words_zero(reply.reserved, 2u))
+        return ASTRA_ERROR_IO;
     result = astra_internal_service_result(reply.status);
     if (result == ASTRA_OK) {
         window->_private_generation = reply.generation;
         copy_info(info, &reply);
-    }
-
-done:
-    {
-        AstraResult close_result = astra_port_close(&reply_port);
-
-        if (result == ASTRA_OK && close_result != ASTRA_OK)
-            result = close_result;
     }
     return result;
 }
@@ -137,16 +112,15 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
 {
     AstraGuiOpenWindow request = {0};
     AstraGuiWindowOpened reply = {0};
-    AstraPort reply_port = ASTRA_PORT_INIT;
     AstraPort event_port = ASTRA_PORT_INIT;
-    AstraHandle transferred[4] = { ASTRA_INVALID_HANDLE,
-                                   ASTRA_INVALID_HANDLE,
+    /* Content, events, then the optional title icon; the service finds its
+       reply capability between events and the icon. */
+    AstraHandle transferred[3] = { ASTRA_INVALID_HANDLE,
                                    ASTRA_INVALID_HANDLE,
                                    ASTRA_INVALID_HANDLE };
     AstraHandle returned[2] = { ASTRA_INVALID_HANDLE,
                                 ASTRA_INVALID_HANDLE };
-    uint32_t reply_size = 0u;
-    uint32_t reply_handles = 0u;
+    AstraCall call = {0};
     uint32_t known_flags = ASTRA_WINDOW_RESIZABLE | ASTRA_WINDOW_MODAL |
                            ASTRA_WINDOW_ACTIVE;
     uint32_t known_gadgets = ASTRA_WINDOW_GADGET_AUTO |
@@ -200,15 +174,11 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
         &transferred[0]);
     if (result != ASTRA_OK)
         return result;
-    result = astra_port_create(1u, sizeof(reply), &reply_port);
-    if (result != ASTRA_OK)
-        goto done;
     result = astra_port_create(8u, ASTRA_GUI_WINDOW_EVENT_SIZE * 8u,
                                &event_port);
     if (result != ASTRA_OK)
         goto done;
     transferred[1] = event_port.send;
-    transferred[2] = reply_port.send;
     result = astra_message_header_init(
         &request.header, sizeof(request), ASTRA_GUI_PROTOCOL,
         ASTRA_GUI_VERSION, ASTRA_GUI_OPEN_WINDOW, 1u);
@@ -235,24 +205,24 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
         result = astra_handle_duplicate(
             info->title_icon_area,
             ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
-            &transferred[3]);
+            &transferred[2]);
         if (result != ASTRA_OK)
             goto done;
     }
-    result = astra_port_send_until(gui_endpoint, &request, sizeof(request),
-                                   transferred,
-                                   info->title_icon_length != 0u ? 4u : 3u,
-                                   ASTRA_DEADLINE_INFINITE);
+    call.request = &request;
+    call.request_size = sizeof(request);
+    call.handles = transferred;
+    call.handle_count = info->title_icon_length != 0u ? 3u : 2u;
+    call.reply_index = 2u;
+    call.reply = &reply;
+    call.reply_capacity = sizeof(reply);
+    call.reply_handles = returned;
+    call.reply_handle_capacity = 2u;
+    result = astra_port_call(gui_endpoint, &call, ASTRA_DEADLINE_INFINITE);
     event_port.send = transferred[1];
-    reply_port.send = transferred[2];
     if (result != ASTRA_OK)
         goto done;
-    result = astra_port_receive_until(
-        reply_port.receive, &reply, sizeof(reply), returned, 2u,
-        &reply_size, &reply_handles, ASTRA_DEADLINE_INFINITE);
-    if (result != ASTRA_OK)
-        goto done;
-    if (reply_size != sizeof(reply)) {
+    if (call.reply_size != sizeof(reply)) {
         result = ASTRA_ERROR_IO;
         goto done;
     }
@@ -269,7 +239,7 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
     }
     result = astra_internal_service_result(reply.status);
     if (result == ASTRA_OK) {
-        if (reply_handles != 2u || reply.window == 0u ||
+        if (call.reply_handle_count != 2u || reply.window == 0u ||
             reply.generation == 0u ||
             returned[0] == ASTRA_INVALID_HANDLE ||
             returned[1] == ASTRA_INVALID_HANDLE) {
@@ -284,7 +254,7 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
             returned[1] = ASTRA_INVALID_HANDLE;
             event_port.receive = ASTRA_INVALID_HANDLE;
         }
-    } else if (reply_handles != 0u ||
+    } else if (call.reply_handle_count != 0u ||
                returned[0] != ASTRA_INVALID_HANDLE ||
                returned[1] != ASTRA_INVALID_HANDLE ||
                reply.window != 0u || reply.generation != 0u) {
@@ -292,7 +262,7 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
     }
 
 done:
-    for (uint32_t index = 0u; index < 4u; ++index)
+    for (uint32_t index = 0u; index < 3u; ++index)
         if (transferred[index] != ASTRA_INVALID_HANDLE) {
             AstraResult ignored = astra_handle_close(&transferred[index]);
             (void)ignored;
@@ -305,12 +275,6 @@ done:
     if (event_port.send != ASTRA_INVALID_HANDLE ||
         event_port.receive != ASTRA_INVALID_HANDLE) {
         AstraResult close_result = astra_port_close(&event_port);
-
-        if (result == ASTRA_OK && close_result != ASTRA_OK)
-            result = close_result;
-    }
-    {
-        AstraResult close_result = astra_port_close(&reply_port);
 
         if (result == ASTRA_OK && close_result != ASTRA_OK)
             result = close_result;

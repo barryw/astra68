@@ -1,6 +1,8 @@
 # IPC call and one-shot reply capabilities (design)
 
-Status: proposed, 2026-09-29. Nothing here is implemented.
+Status: phase 1 implemented, 2026-09-29 (ABI `0x0001003A`, syscall 102).
+Phase 2 is not. **As built** at the end of this page records where the
+implementation departs from the proposal below, and why.
 
 ## Why
 
@@ -193,3 +195,63 @@ a full port would.
 - **A full seL4 design (ReplyRecv plus scheduling-context donation):** it
   needs continuations and priority donation that this kernel lacks. The
   gain over this design is small at this machine's scale.
+
+## As built (phase 1)
+
+Code: `sw/kernel/process.c` (`port_call_syscall`, `deliver_reply`,
+`reply_release`), `sw/kernel/thread.c` (`kernel_thread_call_*`),
+`sw/kernel/handle.c` (`kernel_handle_lookup_context`,
+`kernel_handle_set_context`), `ndk/src/port.c` (`astra_port_call`). Tests:
+`test_port_call_contract_and_races` and `test_port_call_between_processes` in
+`sw/kernel/tests/test_process.c`, `test_call` in `ndk/tests/test_port.c`.
+
+- **Measured** (beast, `bench-frame.py --fake-helper`, SDLFrameBench
+  640x480, against the post-copy-fix numbers in
+  `HANDOVER_2026-09-29_IPC.md`): argb 1,316 -> ~1,565 fps (+19%),
+  argb-blend 1,367 -> ~1,560 (+14%), rgb565 1,460 -> ~1,690 (+16%). The
+  proposal predicted 8-12%.
+- **The capability allocates nothing.** Its handle entry's object is the
+  caller's thread slot plus one, and its release context is the call number.
+  Call numbers are machine-wide, so a capability that outlives its thread
+  cannot match whatever reuses the slot. A spent capability has context zero.
+  The caller waits on a queue in its own thread record, `call_waiters`; being
+  registered there is what "waiting in this call" means, so the deadline,
+  cancel and death paths needed no new code.
+- **The capability travels as an ordinary handle.** PORT_CALL installs it in
+  the caller's table and the normal send moves it, so every protocol's handle
+  layout, the transfer pool and the release-on-discard path are the existing
+  ones. A request discarded from a closing service port releases its caller
+  with PEER_DEAD through the same release.
+- **A late reply fails for the service** with PEER_DEAD, and the service keeps
+  its handles. The proposal had it succeed and be discarded. The display
+  service tears a new window down when its reply fails and the loader does the
+  same for a launch; answering success would have left both orphaned. PEER_DEAD
+  is also what a send to a closed reply port answered.
+- **What the caller cannot accept is the caller's problem.** A reply that does
+  not fit, a full caller handle table, or a caller that unmapped its buffer
+  each end the call with BUFFER_TOO_SMALL, RESOURCE_LIMIT or BAD_ADDRESS, while
+  the service's send succeeds and its handles are released. The proposal
+  returned the handles to the service on a full table, which a move cannot do
+  once exported.
+- **`ASTRA_PORT_CALL_UNSENT`.** PEER_DEAD, TIMED_OUT, BAD_ADDRESS and
+  RESOURCE_LIMIT can each come from before or after the send, so status alone
+  cannot tell a caller whether its handles moved. Every refusal before the
+  send leaves `d1 = ASTRA_PORT_CALL_UNSENT`; the NDK retries WOULD_BLOCK on it
+  and clears the handle array otherwise.
+- **The reply buffers are checked at the call.** The kernel commits them on the
+  caller's behalf and refuses the call with BAD_ADDRESS unless every page is
+  mapped writable, so the replier's physical-page write needs no lazy commit.
+  A deadline already past answers TIMED_OUT with nothing sent.
+- **Kernel stack.** A message may carry 255 handles, so a transfer batch and
+  import reservation together are over 3 KiB. Inlined into `port_syscall` they
+  took its frame from 2,428 to 5,484 bytes and the send path past the 8 KiB
+  kernel stack. The reply's transfer state is static (one syscall runs at a
+  time on the one processor) and `deliver_reply` is out of line; the PORT_CALL
+  path is 1,228 + 2,232 + 2,104 bytes, below the existing send path.
+- A second send on a spent capability answers CLOSED. The capability has
+  SIGNAL and TRANSFER only: WAIT_ONE refuses it and HANDLE_DUPLICATE refuses it
+  because it has no retain.
+- Unmigrated: the display service's own connection to the input service
+  (`connect_input`) still makes a reply port. It is service code, which phase 1
+  leaves alone.
+

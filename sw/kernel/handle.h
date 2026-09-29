@@ -38,7 +38,8 @@ typedef enum KernelObjectType {
     KERNEL_OBJECT_IRQ = 11,
     KERNEL_OBJECT_DMA = 12,
     KERNEL_OBJECT_PROCESS_LOAD = 13,
-    KERNEL_OBJECT_LIBRARY_LOAD = 14
+    KERNEL_OBJECT_LIBRARY_LOAD = 14,
+    KERNEL_OBJECT_REPLY = 15
 } KernelObjectType;
 
 typedef enum KernelHandleStatus {
@@ -143,6 +144,19 @@ KernelHandleStatus kernel_handle_lookup_any(const KernelHandleTable *table,
                                             uint32_t required_rights,
                                             KernelObjectType *type,
                                             void **object);
+/*
+ * The entry's release context as well as its object. A reply capability keeps
+ * its whole state there (see ASTRA_SYSCALL_PORT_CALL), so reading it and
+ * replacing it are the only two things its lifetime needs.
+ */
+KernelHandleStatus kernel_handle_lookup_context(
+    const KernelHandleTable *table, KernelHandle handle,
+    KernelObjectType required_type, uint32_t required_rights,
+    void **object, void **context);
+KernelHandleStatus kernel_handle_set_context(KernelHandleTable *table,
+                                             KernelHandle handle,
+                                             KernelObjectType required_type,
+                                             void *context);
 KernelHandleStatus kernel_handle_close(KernelHandleTable *table,
                                        KernelHandle handle);
 uint32_t kernel_handle_close_all(KernelHandleTable *table);

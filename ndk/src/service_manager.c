@@ -14,18 +14,12 @@ static AstraResult exchange(AstraHandle manager, uint32_t operation,
                             AstraHandle *received, uint32_t *received_count)
 {
     AstraServiceManagerRequest request = {0};
-    AstraPort response = ASTRA_PORT_INIT;
-    AstraHandle handles[2];
-    uint32_t send_count = sent == NULL ? 1u : 2u;
-    uint32_t size = 0u;
+    AstraCall call = {0};
     AstraResult result;
 
     if (manager == ASTRA_INVALID_HANDLE || reply == NULL ||
         (name != NULL && !astra_service_name_valid(name)))
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    result = astra_port_create(1u, sizeof(*reply), &response);
-    if (result != ASTRA_OK)
-        return result;
     if (name != NULL)
         (void)strcpy(request.name, name);
     if (cursor != NULL)
@@ -35,25 +29,20 @@ static AstraResult exchange(AstraHandle manager, uint32_t operation,
         &request.header, sizeof(request), ASTRA_SERVICE_MANAGER_PROTOCOL,
         ASTRA_SERVICE_MANAGER_VERSION, operation, 1u);
     if (result != ASTRA_OK)
-        goto done;
-    handles[0] = response.send;
-    if (sent != NULL)
-        handles[1] = *sent;
-    result = astra_port_send_until(manager, &request, sizeof(request),
-                                   handles, send_count,
-                                   ASTRA_DEADLINE_INFINITE);
-    response.send = handles[0];
-    if (sent != NULL)
-        *sent = handles[1];
+        return result;
+    call.request = &request;
+    call.request_size = sizeof(request);
+    call.handles = sent;
+    call.handle_count = sent != NULL ? 1u : 0u;
+    call.reply = reply;
+    call.reply_capacity = sizeof(*reply);
+    call.reply_handles = received;
+    call.reply_handle_capacity = received != NULL ? 1u : 0u;
+    result = astra_port_call(manager, &call, ASTRA_DEADLINE_INFINITE);
+    *received_count = call.reply_handle_count;
     if (result != ASTRA_OK)
-        goto done;
-    result = astra_port_receive_until(
-        response.receive, reply, sizeof(*reply), received,
-        received != NULL ? 1u : 0u, &size, received_count,
-        ASTRA_DEADLINE_INFINITE);
-    if (result != ASTRA_OK)
-        goto done;
-    if (size != sizeof(*reply) ||
+        return result;
+    if (call.reply_size != sizeof(*reply) ||
         reply->header.total_size != sizeof(*reply) ||
         reply->header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
         reply->header.protocol != ASTRA_SERVICE_MANAGER_PROTOCOL ||
@@ -68,13 +57,6 @@ static AstraResult exchange(AstraHandle manager, uint32_t operation,
         (reply->next_cursor.source > ASTRA_SERVICE_LIST_SOURCE_DONE ||
          reply->next_cursor.reserved != 0u))
         result = ASTRA_ERROR_IO;
-done:
-    {
-        AstraResult close_result = astra_port_close(&response);
-
-        if (result == ASTRA_OK && close_result != ASTRA_OK)
-            result = close_result;
-    }
     return result;
 }
 

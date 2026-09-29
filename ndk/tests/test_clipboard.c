@@ -1,24 +1,53 @@
 #include <astra/clipboard.h>
+#include <astra/clipboard_service.h>
+#include <astra/port.h>
+#include <astra/status.h>
 #include <astra/syscall.h>
+
+#include "syscall.h"
 
 #include <assert.h>
 #include <stdint.h>
 #include <string.h>
 
+static uint32_t calls;
+
+/* The clipboard service, for CLEAR: the only exchange without an area. */
 uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
                                 uintptr_t d3, uintptr_t d4, uintptr_t d5,
                                 uint32_t *out_d1, uint32_t *out_d2)
 {
-    (void)number;
-    (void)d1;
+    const AstraCall *call = astra_ndk_test_call;
+    const AstraClipboardRequest *request;
+    AstraClipboardReply *reply;
+
     (void)d2;
     (void)d3;
     (void)d4;
     (void)d5;
-    (void)out_d1;
-    (void)out_d2;
-    assert(!"unexpected clipboard syscall");
-    return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    assert(number == ASTRA_SYSCALL_PORT_CALL &&
+           ((const AstraPortCall *)d1)->port == 0x77u);
+    request = call->request;
+    reply = call->reply;
+    /* With no document, the reply capability is the only handle. */
+    assert(call->handle_count == 0u && call->reply_index == 0u &&
+           call->request_size == sizeof(*request) &&
+           call->reply_capacity == sizeof(*reply) &&
+           call->reply_handle_capacity == 1u);
+    assert(request->header.operation == ASTRA_CLIPBOARD_OPERATION_CLEAR);
+    memset(reply, 0, sizeof(*reply));
+    reply->header.total_size = sizeof(*reply);
+    reply->header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
+    reply->header.protocol = ASTRA_CLIPBOARD_PROTOCOL;
+    reply->header.protocol_version = ASTRA_CLIPBOARD_PROTOCOL_VERSION;
+    reply->header.operation = ASTRA_CLIPBOARD_OPERATION_REPLY;
+    reply->header.transaction_id = request->header.transaction_id;
+    reply->status = ASTRA_STATUS_OK;
+    reply->generation = 5u;
+    *out_d1 = sizeof(*reply);
+    *out_d2 = 0u;
+    ++calls;
+    return ASTRA_SYSCALL_OK;
 }
 
 int main(void)
@@ -93,6 +122,12 @@ int main(void)
         document[saved] = (uint8_t)0xffu;
         assert(astra_clipboard_document_validate(document, bytes) ==
                ASTRA_ERROR_INVALID_ARGUMENT);
+    }
+    {
+        uint32_t generation = 0u;
+
+        assert(astra_clipboard_clear(0x77u, &generation) == ASTRA_OK);
+        assert(generation == 5u && calls == 1u);
     }
     return 0;
 }

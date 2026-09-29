@@ -141,40 +141,26 @@ static AstraResult graphics_command(AstraHandle control, uint32_t window,
                                     AstraGuiGraphicsReply *reply)
 {
     static uint32_t transaction;
-    AstraPort reply_port = ASTRA_PORT_INIT;
-    AstraHandle transferred[2] = { ASTRA_INVALID_HANDLE,
-                                   ASTRA_INVALID_HANDLE };
-    uint32_t reply_size = 0u;
-    uint32_t reply_handles = 0u;
+    AstraCall call = {0};
     AstraResult result;
-    AstraResult close_result;
 
     if (++transaction == 0u)
         transaction = 1u;
-    result = astra_port_create(1u, sizeof(*reply), &reply_port);
-    if (result != ASTRA_OK)
-        return result;
-    transferred[0] = reply_port.send;
-    if (attachment != 0)
-        transferred[1] = *attachment;
     result = astra_message_header_init(
         &request->header, sizeof(*request), ASTRA_GUI_PROTOCOL,
         ASTRA_GUI_VERSION, ASTRA_GUI_GRAPHICS_COMMAND, transaction);
     request->window = window;
     request->generation = 1u;
+    call.request = request;
+    call.request_size = sizeof(*request);
+    call.handles = attachment;
+    call.handle_count = attachment != 0 ? 1u : 0u;
+    call.reply = reply;
+    call.reply_capacity = sizeof(*reply);
     if (result == ASTRA_OK)
-        result = astra_port_send_until(
-            control, request, sizeof(*request), transferred,
-            attachment != 0 ? 2u : 1u, ASTRA_DEADLINE_INFINITE);
-    reply_port.send = transferred[0];
-    if (attachment != 0)
-        *attachment = transferred[1];
-    if (result == ASTRA_OK)
-        result = astra_port_receive_until(
-            reply_port.receive, reply, sizeof(*reply), 0, 0, &reply_size,
-            &reply_handles, ASTRA_DEADLINE_INFINITE);
+        result = astra_port_call(control, &call, ASTRA_DEADLINE_INFINITE);
     if (result == ASTRA_OK &&
-        (reply_size != sizeof(*reply) || reply_handles != 0u ||
+        (call.reply_size != sizeof(*reply) || call.reply_handle_count != 0u ||
          reply->header.total_size != sizeof(*reply) ||
          reply->header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
          reply->header.flags != 0u ||
@@ -187,8 +173,7 @@ static AstraResult graphics_command(AstraHandle control, uint32_t window,
         result = ASTRA_ERROR_IO;
     if (result == ASTRA_OK)
         result = astra_internal_service_result(reply->status);
-    close_result = astra_port_close(&reply_port);
-    return result == ASTRA_OK ? close_result : result;
+    return result;
 }
 
 static void area_release(AstraArea *area)

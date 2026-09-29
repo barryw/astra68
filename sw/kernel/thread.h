@@ -178,6 +178,19 @@ typedef struct KernelThread {
     uint8_t wait_mode;
     uint16_t wait_registration_count;
     KernelThreadWaitQueue death_waiters;
+    /*
+     * The thread's outstanding PORT_CALL. Only the thread itself ever waits on
+     * call_waiters, so a registration there means it is blocked in the call
+     * that `call` names. A reply capability carries the slot and that number;
+     * one from an earlier, abandoned call names a number the thread has moved
+     * past, so it can never complete a later call.
+     */
+    KernelThreadWaitQueue call_waiters;
+    uint32_t call;
+    uint32_t call_reply;
+    uint32_t call_reply_capacity;
+    uint32_t call_reply_handles;
+    uint32_t call_reply_handle_capacity;
     uint32_t exit_status;
     uint32_t terminal_result;
     uint64_t deadline_cycles;
@@ -350,6 +363,16 @@ KernelThreadStatus kernel_thread_wake_all_detail(
     bool write_one_detail, uint32_t *woken_threads);
 KernelThreadStatus kernel_thread_cancel_wait(KernelThread *thread,
                                              uint32_t result);
+KernelThreadStatus kernel_thread_call_begin(KernelThread *thread,
+                                            uint32_t *call);
+KernelThreadStatus kernel_thread_call_block(KernelThread *thread,
+                                            uint64_t now, uint64_t deadline);
+KernelThread *kernel_thread_call_waiting(uint16_t slot, uint32_t call);
+KernelThreadStatus kernel_thread_call_complete(KernelThread *thread,
+                                               uint32_t result,
+                                               uint32_t size,
+                                               uint32_t handle_count,
+                                               uint32_t replier);
 KernelThreadStatus kernel_thread_expire_deadlines(
     uint64_t now, uint32_t *expired_threads, uint8_t *highest_priority);
 bool kernel_thread_next_deadline(uint64_t *deadline);

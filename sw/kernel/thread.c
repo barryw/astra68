@@ -46,6 +46,7 @@ static uint32_t deadline_capacity;
 static uint32_t deadline_count;
 static uint32_t wait_registration_count;
 static uint32_t reap_pending_count;
+static uint32_t next_call;
 static KernelThreadPoolStats pool_stats;
 static uint8_t pool_corrupt;
 
@@ -1415,6 +1416,7 @@ KernelThreadStatus kernel_thread_allocate(uint16_t process_slot,
     candidate->deadline_position = KERNEL_THREAD_SLOT_NONE;
     reset_wait_row(candidate);
     kernel_thread_wait_queue_init(&candidate->death_waiters);
+    kernel_thread_wait_queue_init(&candidate->call_waiters);
     if (!allocate_kernel_stack(candidate)) {
         candidate->occupied = 0u;
         (void)release_thread_record(candidate);
@@ -2273,6 +2275,72 @@ KernelThreadStatus kernel_thread_cancel_wait(KernelThread *thread,
     return status;
 }
 
+/*
+ * PORT_CALL's wait. Call numbers are machine-wide rather than per thread, so a
+ * capability outliving its thread cannot match whatever reuses the slot.
+ *
+ * The wait registrations are secured here, before the request is sent: once
+ * it is, the caller has to be able to block, because a service already holds
+ * the capability.
+ */
+KernelThreadStatus kernel_thread_call_begin(KernelThread *thread,
+                                            uint32_t *call)
+{
+    if (!valid_thread(thread) || call == NULL ||
+        thread->state != KERNEL_THREAD_RUNNING)
+        return KERNEL_THREAD_INVALID_ARGUMENT;
+    if (!ensure_wait_registrations(thread))
+        return KERNEL_THREAD_OUT_OF_MEMORY;
+    if (++next_call == 0u)
+        next_call = 1u;
+    thread->call = next_call;
+    *call = next_call;
+    return KERNEL_THREAD_OK;
+}
+
+KernelThreadStatus kernel_thread_call_block(KernelThread *thread,
+                                            uint64_t now, uint64_t deadline)
+{
+    if (!valid_thread(thread) || thread->call == 0u)
+        return KERNEL_THREAD_INVALID_ARGUMENT;
+    return kernel_thread_block_until(
+        thread, &thread->call_waiters, thread->call_waiters.sequence, now,
+        deadline, ASTRA_SYSCALL_TIMED_OUT);
+}
+
+KernelThread *kernel_thread_call_waiting(uint16_t slot, uint32_t call)
+{
+    KernelThread *thread = thread_at_slot(slot);
+
+    if (call == 0u || !valid_thread(thread) || thread->call != call ||
+        thread->state != KERNEL_THREAD_BLOCKED ||
+        thread->call_waiters.count == 0u)
+        return NULL;
+    return thread;
+}
+
+KernelThreadStatus kernel_thread_call_complete(KernelThread *thread,
+                                               uint32_t result,
+                                               uint32_t size,
+                                               uint32_t handle_count,
+                                               uint32_t replier)
+{
+    KernelThread *woken = NULL;
+    KernelThreadStatus status;
+
+    if (!valid_thread(thread) || thread->call == 0u ||
+        thread->call_waiters.count == 0u)
+        return KERNEL_THREAD_INVALID_STATE;
+    thread->context.data[1] = size;
+    thread->context.data[2] = handle_count;
+    thread->context.data[3] = replier;
+    thread->call = 0u;
+    status = kernel_thread_wake_one(&thread->call_waiters, result, &woken);
+    if (status != KERNEL_THREAD_OK || woken != thread)
+        return KERNEL_THREAD_CORRUPT;
+    return KERNEL_THREAD_OK;
+}
+
 static __attribute__((noinline))
 KernelThreadStatus expire_deadlines_fast(uint64_t now,
                                          uint32_t *expired_threads,
@@ -2594,6 +2662,7 @@ bool kernel_thread_pool_stats(KernelThreadPoolStats *stats)
               thread->ready_next != KERNEL_THREAD_SLOT_NONE)) ||
             thread->handle_references > 1u ||
             !valid_wait_queue(&thread->death_waiters) ||
+            !valid_wait_queue(&thread->call_waiters) ||
             (thread->state != KERNEL_THREAD_DEAD &&
              thread->stack_released != 0u) ||
             (thread->state == KERNEL_THREAD_DEAD &&

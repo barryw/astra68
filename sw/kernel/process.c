@@ -3273,6 +3273,20 @@ uint32_t kernel_process_test_handle_count(uint32_t process_id)
 
     return process != NULL ? kernel_handle_count(process->handles) : 0u;
 }
+
+bool kernel_process_test_share_handle(uint32_t from_process_id,
+                                      KernelHandle handle,
+                                      uint32_t to_process_id, uint32_t rights,
+                                      KernelHandle *shared)
+{
+    KernelProcess *from = find_process_by_id(from_process_id);
+    KernelProcess *to = find_process_by_id(to_process_id);
+
+    return from != NULL && to != NULL &&
+           kernel_handle_duplicate_into(from->handles, handle, rights,
+                                        to->handles, shared) ==
+               KERNEL_HANDLE_OK;
+}
 #endif
 
 #if defined(KERNEL_PROCESS_HOST_TEST)
@@ -8599,6 +8613,183 @@ static bool valid_message_header(const uint8_t *message,
 }
 
 /*
+ * A reply capability (KERNEL_OBJECT_REPLY) is two numbers and no object: the
+ * caller's thread slot, plus one, as the object, and the call number as the
+ * release context. Nothing is allocated for it, so there is nothing to leak or
+ * free; the thread record is the only state, and a capability whose call the
+ * thread has left simply names nothing. A spent capability has a context of
+ * zero, which no call ever has.
+ */
+#define KERNEL_REPLY_RIGHTS (ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_TRANSFER)
+
+/* Dropped without a reply: the caller learns what a closed reply port told it. */
+static void reply_release(void *object, void *context)
+{
+    uint32_t call = (uint32_t)(uintptr_t)context;
+    KernelThread *caller;
+
+    if (call == 0u)
+        return;
+    caller = kernel_thread_call_waiting(
+        (uint16_t)((uintptr_t)object - 1u), call);
+    if (caller != NULL &&
+        kernel_thread_call_complete(caller, ASTRA_SYSCALL_PEER_DEAD, 0u, 0u,
+                                    0u) != KERNEL_THREAD_OK)
+        process_pool_corrupt = 1u;
+}
+
+static bool handle_status_to_syscall(KernelHandleStatus status,
+                                     uint32_t *result)
+{
+    switch (status) {
+    case KERNEL_HANDLE_INVALID_HANDLE:
+    case KERNEL_HANDLE_TYPE_MISMATCH:
+        *result = ASTRA_SYSCALL_INVALID_HANDLE;
+        return true;
+    case KERNEL_HANDLE_ACCESS_DENIED:
+        *result = ASTRA_SYSCALL_ACCESS_DENIED;
+        return true;
+    case KERNEL_HANDLE_INVALID_ARGUMENT:
+    case KERNEL_HANDLE_DUPLICATE:
+        *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        return true;
+    case KERNEL_HANDLE_TRANSFER_POOL_FULL:
+    case KERNEL_HANDLE_TABLE_FULL:
+        *result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+        return true;
+    default:
+        return false;
+    }
+}
+
+/*
+ * PORT_SEND_TRY on a reply capability: straight into the waiting caller, with
+ * no port, no queued message record and no second trap on either side.
+ *
+ * Argument errors are the service's and leave the capability live, as a
+ * refused send leaves a port. A caller that has gone -- deadline, cancel,
+ * death -- answers PEER_DEAD and the service keeps its handles, which is what
+ * a send to a closed reply port did. Otherwise the reply is the caller's: it
+ * may not fit, its table may be full, or it may have unmapped its buffer, and
+ * each of those is reported to the caller while the service's send succeeds
+ * and its handles are gone. A reply never blocks and never fails because of
+ * what the caller did.
+ */
+/*
+ * The transfer state is sized for 255 handles, over 3 KiB, and the caller's
+ * frame already holds the message. On the stack it would push the send path
+ * past the 8 KiB kernel stack, so it lives here: a syscall runs to completion
+ * on the one processor, and only one reply is ever being delivered.
+ */
+static KernelHandleTransferBatch reply_transfer KERNEL_TABLES;
+static KernelHandleImportReservation reply_import KERNEL_TABLES;
+
+static __attribute__((noinline)) KernelProcessStatus deliver_reply(
+    KernelProcess *current, KernelHandle reply_handle, void *object,
+    void *context, const uint8_t *message, uint32_t message_size,
+    const KernelHandle *handles, uint32_t handle_count, uint32_t *result)
+{
+    KernelHandleTransferBatch *transfer = &reply_transfer;
+    KernelHandleImportReservation *import = &reply_import;
+    KernelHandleStatus handle_status;
+    KernelProcess *caller_process;
+    KernelThread *caller;
+    uint32_t call = (uint32_t)(uintptr_t)context;
+    uint32_t caller_result = ASTRA_SYSCALL_OK;
+    bool imported = false;
+
+    if (call == 0u) {
+        *result = ASTRA_SYSCALL_CLOSED;
+        return KERNEL_PROCESS_OK;
+    }
+    for (uint32_t index = 0u; index < handle_count; ++index) {
+        if (handles[index] == reply_handle) {
+            *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            return KERNEL_PROCESS_OK;
+        }
+    }
+    if (handle_count != 0u) {
+        handle_status = kernel_handle_transfer_validate(
+            current->handles, handles, handle_count, ASTRA_RIGHT_TRANSFER);
+        if (handle_status != KERNEL_HANDLE_OK)
+            return handle_status_to_syscall(handle_status, result) ?
+                KERNEL_PROCESS_OK : KERNEL_PROCESS_CORRUPT;
+    }
+    caller = kernel_thread_call_waiting(
+        (uint16_t)((uintptr_t)object - 1u), call);
+    caller_process = caller != NULL ? process_for_thread(caller) : NULL;
+    if (caller_process == NULL) {
+        *result = ASTRA_SYSCALL_PEER_DEAD;
+        return KERNEL_PROCESS_OK;
+    }
+    if (handle_count != 0u) {
+        handle_status = kernel_handle_transfer_prepare(
+            current->handles, handles, handle_count, ASTRA_RIGHT_TRANSFER,
+            transfer);
+        if (handle_status != KERNEL_HANDLE_OK)
+            return handle_status_to_syscall(handle_status, result) ?
+                KERNEL_PROCESS_OK : KERNEL_PROCESS_CORRUPT;
+        if (kernel_handle_transfer_commit_export(current->handles,
+                                                 transfer) !=
+            KERNEL_HANDLE_OK)
+            return KERNEL_PROCESS_CORRUPT;
+    }
+    if (message_size > caller->call_reply_capacity ||
+        handle_count > caller->call_reply_handle_capacity) {
+        caller_result = ASTRA_SYSCALL_BUFFER_TOO_SMALL;
+    } else if (handle_count != 0u) {
+        handle_status = kernel_handle_import_reserve(
+            caller_process->handles, transfer->detached, handle_count,
+            import);
+        if (handle_status == KERNEL_HANDLE_TABLE_FULL)
+            caller_result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+        else if (handle_status != KERNEL_HANDLE_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        else
+            imported = true;
+    }
+    if (caller_result == ASTRA_SYSCALL_OK) {
+        KernelVmStatus vm_status = kernel_vm_write(
+            &caller_process->address_space, caller->call_reply, message,
+            message_size);
+
+        if (vm_status == KERNEL_VM_OK && imported)
+            vm_status = kernel_vm_write(
+                &caller_process->address_space, caller->call_reply_handles,
+                import->handles, handle_count * sizeof(import->handles[0]));
+        if (vm_status == KERNEL_VM_CORRUPT)
+            return KERNEL_PROCESS_CORRUPT;
+        if (vm_status != KERNEL_VM_OK) {
+            caller_result = ASTRA_SYSCALL_BAD_ADDRESS;
+            if (imported &&
+                kernel_handle_import_cancel(caller_process->handles,
+                                            import) != KERNEL_HANDLE_OK)
+                return KERNEL_PROCESS_CORRUPT;
+        } else if (imported &&
+                   kernel_handle_import_commit(caller_process->handles,
+                                               import,
+                                               transfer->detached) !=
+                       KERNEL_HANDLE_OK) {
+            return KERNEL_PROCESS_CORRUPT;
+        }
+    }
+    if (caller_result != ASTRA_SYSCALL_OK && handle_count != 0u &&
+        kernel_handle_detached_release(transfer->detached, handle_count) !=
+            KERNEL_HANDLE_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    if (kernel_handle_set_context(current->handles, reply_handle,
+                                  KERNEL_OBJECT_REPLY, NULL) !=
+            KERNEL_HANDLE_OK ||
+        kernel_thread_call_complete(caller, caller_result, message_size,
+                                    handle_count,
+                                    current->handles->process_id) !=
+            KERNEL_THREAD_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    *result = ASTRA_SYSCALL_OK;
+    return KERNEL_PROCESS_OK;
+}
+
+/*
  * The three port syscalls, lifted out of the dispatch switch.
  *
  * block_syscall already established this shape and returns a syscall result
@@ -8618,6 +8809,9 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
     KernelPort *port = NULL;
     KernelHandleStatus handle_status;
     KernelPortStatus port_status;
+    void *reply_object = NULL;
+    void *reply_context = NULL;
+    bool is_reply = false;
 
     if (syscall == ASTRA_SYSCALL_PORT_CREATE) {
         KernelHandle receive_handle = KERNEL_HANDLE_INVALID;
@@ -8692,6 +8886,19 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
         syscall == ASTRA_SYSCALL_PORT_SEND_TRY ? ASTRA_RIGHT_SIGNAL :
                                                  ASTRA_RIGHT_READ,
         (void **)&port);
+    /* A send may also be a reply: see deliver_reply. */
+    if (handle_status == KERNEL_HANDLE_TYPE_MISMATCH &&
+        syscall == ASTRA_SYSCALL_PORT_SEND_TRY) {
+        handle_status = kernel_handle_lookup_context(
+            current->handles, thread->context.data[1], KERNEL_OBJECT_REPLY,
+            ASTRA_RIGHT_SIGNAL, &reply_object, &reply_context);
+        if (handle_status == KERNEL_HANDLE_OK) {
+            if (reply_object == NULL)
+                return KERNEL_PROCESS_CORRUPT;
+            port = NULL;
+            is_reply = true;
+        }
+    }
     if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
         handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
         *result = ASTRA_SYSCALL_INVALID_HANDLE;
@@ -8701,7 +8908,7 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
         *result = ASTRA_SYSCALL_ACCESS_DENIED;
         return KERNEL_PROCESS_OK;
     }
-    if (handle_status != KERNEL_HANDLE_OK || port == NULL)
+    if (handle_status != KERNEL_HANDLE_OK || (port == NULL && !is_reply))
         return KERNEL_PROCESS_CORRUPT;
 
     if (syscall == ASTRA_SYSCALL_PORT_SEND_TRY) {
@@ -8747,6 +8954,22 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
             }
             if (copy_status != KERNEL_USER_COPY_OK)
                 return KERNEL_PROCESS_CORRUPT;
+        }
+        if (is_reply) {
+            KernelProcessStatus reply_status = deliver_reply(
+                current, thread->context.data[1], reply_object,
+                reply_context, message, message_size, attached,
+                handle_count, result);
+
+            if (reply_status != KERNEL_PROCESS_OK)
+                return reply_status;
+            if (*result == ASTRA_SYSCALL_OK && ready_thread_outranks(thread))
+                ++scheduler_stats.wake_preemptions;
+            if (!process_pool_healthy() ||
+                !kernel_handle_transfer_pool_healthy() ||
+                !kernel_thread_pool_healthy())
+                return KERNEL_PROCESS_CORRUPT;
+            return KERNEL_PROCESS_OK;
         }
         performance = kernel_performance_begin(
             KERNEL_PERFORMANCE_PORT_SEND);
@@ -8842,6 +9065,198 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
             !kernel_handle_transfer_pool_healthy())
             return KERNEL_PROCESS_CORRUPT;
     }
+    return KERNEL_PROCESS_OK;
+}
+
+/*
+ * The kernel writes a reply into the caller's memory from the replier's
+ * syscall, by physical page, with no chance to commit a page on demand. So the
+ * buffers are committed now, on the caller's own behalf, and must be mapped
+ * writable before anything is sent.
+ */
+static bool reply_buffer_writable(KernelProcess *process, uint32_t address,
+                                  uint32_t size)
+{
+    uint32_t page;
+    uint32_t last;
+
+    if (size == 0u)
+        return true;
+    if (address > UINT32_MAX - (size - 1u))
+        return false;
+    (void)kernel_process_prepare_user_copy(address, size, true);
+    page = address & ~(KERNEL_PAGE_SIZE - 1u);
+    last = (address + size - 1u) & ~(KERNEL_PAGE_SIZE - 1u);
+    for (;;) {
+        uint32_t physical;
+
+        if (kernel_vm_probe_address_space(&process->address_space, page,
+                                          &physical) !=
+            KERNEL_VM_MAPPING_READ_WRITE)
+            return false;
+        if (page == last)
+            return true;
+        page += KERNEL_PAGE_SIZE;
+    }
+}
+
+/*
+ * ASTRA_SYSCALL_PORT_CALL. Everything that can refuse the call does so before
+ * the request is sent, so a refusal means nothing happened. After the send the
+ * only way out is the wait, which the reply, the deadline, a cancel or the
+ * capability's release ends.
+ */
+static KernelProcessStatus port_call_syscall(KernelProcess *current,
+                                             KernelThread *thread,
+                                             uint32_t *result, bool *blocked)
+{
+    KernelHandle attached[ASTRA_MESSAGE_HANDLES_MAX];
+    uint8_t message[ASTRA_MESSAGE_SIZE_MAX];
+    AstraPortCall call;
+    KernelPort *port = NULL;
+    KernelHandle reply = KERNEL_HANDLE_INVALID;
+    KernelHandleStatus handle_status;
+    KernelPortStatus port_status;
+    KernelThreadStatus thread_status;
+    KernelPerformanceToken performance;
+    uint64_t deadline;
+    uint64_t now;
+    uint32_t reply_capacity;
+    uint32_t call_number;
+    uint32_t woken = 0u;
+    int copy_status;
+
+    *blocked = false;
+    copy_status = kernel_copy_from_user(&call, thread->context.data[1],
+                                        sizeof(call));
+    thread->context.data[1] = ASTRA_PORT_CALL_UNSENT;
+    thread->context.data[2] = 0u;
+    thread->context.data[3] = 0u;
+    if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+        copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
+        *result = ASTRA_SYSCALL_BAD_ADDRESS;
+        return KERNEL_PROCESS_OK;
+    }
+    if (copy_status != KERNEL_USER_COPY_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    if (call.size != sizeof(call) ||
+        call.request_size < ASTRA_MESSAGE_HEADER_SIZE ||
+        call.request_size > ASTRA_MESSAGE_SIZE_MAX ||
+        call.handle_count >= ASTRA_MESSAGE_HANDLES_MAX ||
+        call.reply_index > call.handle_count ||
+        (call.handle_count != 0u &&
+         (call.handles & (ASTRA_SCALAR_ALIGNMENT - 1u)) != 0u) ||
+        call.reply_capacity < ASTRA_MESSAGE_HEADER_SIZE ||
+        call.reply_handle_capacity > ASTRA_MESSAGE_HANDLES_MAX ||
+        (call.reply_handle_capacity != 0u &&
+         (call.reply_handles & (ASTRA_SCALAR_ALIGNMENT - 1u)) != 0u) ||
+        !decode_wait_deadline(call.deadline_hi, call.deadline_lo,
+                              &deadline)) {
+        *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        return KERNEL_PROCESS_OK;
+    }
+    reply_capacity = call.reply_capacity > ASTRA_MESSAGE_SIZE_MAX ?
+        ASTRA_MESSAGE_SIZE_MAX : call.reply_capacity;
+
+    handle_status = kernel_handle_lookup(current->handles, call.port,
+                                         KERNEL_OBJECT_PORT_SEND,
+                                         ASTRA_RIGHT_SIGNAL, (void **)&port);
+    if (handle_status != KERNEL_HANDLE_OK)
+        return handle_status_to_syscall(handle_status, result) ?
+            KERNEL_PROCESS_OK : KERNEL_PROCESS_CORRUPT;
+    if (port == NULL)
+        return KERNEL_PROCESS_CORRUPT;
+
+    copy_status = kernel_copy_from_user(message, call.request,
+                                        call.request_size);
+    if (copy_status == KERNEL_USER_COPY_OK && call.handle_count != 0u)
+        copy_status = kernel_copy_from_user(
+            attached, call.handles,
+            call.handle_count * sizeof(attached[0]));
+    if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
+        copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
+        *result = ASTRA_SYSCALL_BAD_ADDRESS;
+        return KERNEL_PROCESS_OK;
+    }
+    if (copy_status != KERNEL_USER_COPY_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    if (!valid_message_header(message, call.request_size)) {
+        *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        return KERNEL_PROCESS_OK;
+    }
+    if (!reply_buffer_writable(current, call.reply, reply_capacity) ||
+        !reply_buffer_writable(
+            current, call.reply_handles,
+            call.reply_handle_capacity * sizeof(attached[0]))) {
+        *result = ASTRA_SYSCALL_BAD_ADDRESS;
+        return KERNEL_PROCESS_OK;
+    }
+    now = scheduler_cycles();
+    if (deadline != KERNEL_THREAD_DEADLINE_NEVER && deadline <= now) {
+        *result = ASTRA_SYSCALL_TIMED_OUT;
+        return KERNEL_PROCESS_OK;
+    }
+
+    thread_status = kernel_thread_call_begin(thread, &call_number);
+    if (thread_status == KERNEL_THREAD_OUT_OF_MEMORY) {
+        *result = ASTRA_SYSCALL_OUT_OF_MEMORY;
+        return KERNEL_PROCESS_OK;
+    }
+    if (thread_status != KERNEL_THREAD_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    handle_status = kernel_handle_install(
+        current->handles, KERNEL_OBJECT_REPLY, KERNEL_REPLY_RIGHTS,
+        (void *)(uintptr_t)((uint32_t)thread->slot + 1u), reply_release,
+        (void *)(uintptr_t)call_number, &reply);
+    if (handle_status != KERNEL_HANDLE_OK)
+        return handle_status_to_syscall(handle_status, result) ?
+            KERNEL_PROCESS_OK : KERNEL_PROCESS_CORRUPT;
+    for (uint32_t index = call.handle_count; index > call.reply_index;
+         --index)
+        attached[index] = attached[index - 1u];
+    attached[call.reply_index] = reply;
+
+    performance = kernel_performance_begin(KERNEL_PERFORMANCE_PORT_SEND);
+    port_status = kernel_port_send(port, current->handles, message,
+                                   call.request_size, attached,
+                                   call.handle_count + 1u, &woken);
+    kernel_performance_end(performance);
+    if (port_status != KERNEL_PORT_OK) {
+        /* Not sent, so the capability is still ours and names no wait. */
+        if (port_status == KERNEL_PORT_CORRUPT ||
+            kernel_handle_close(current->handles, reply) != KERNEL_HANDLE_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        if (!port_status_to_syscall(port_status, result))
+            return KERNEL_PROCESS_CORRUPT;
+        if (port_status == KERNEL_PORT_WOULD_BLOCK) {
+            uint32_t sequence;
+
+            if (kernel_port_wait_sequence(
+                    port, KERNEL_PORT_ENDPOINT_SEND, &sequence) !=
+                KERNEL_PORT_OK)
+                return KERNEL_PROCESS_CORRUPT;
+            thread->port_probe_handle = call.port;
+            thread->port_probe_sequence = sequence;
+        }
+        return KERNEL_PROCESS_OK;
+    }
+
+    thread->call_reply = call.reply;
+    thread->call_reply_capacity = reply_capacity;
+    thread->call_reply_handles = call.reply_handles;
+    thread->call_reply_handle_capacity = call.reply_handle_capacity;
+    thread->context.data[1] = 0u;
+    thread->context.data[2] = 0u;
+    thread->context.data[3] = 0u;
+    thread_status = kernel_thread_call_block(thread, now, deadline);
+    if (thread_status != KERNEL_THREAD_OK)
+        return KERNEL_PROCESS_CORRUPT;
+    if (woken != 0u && ready_thread_outranks(thread))
+        ++scheduler_stats.wake_preemptions;
+    if (!kernel_port_pool_healthy() ||
+        !kernel_handle_transfer_pool_healthy())
+        return KERNEL_PROCESS_CORRUPT;
+    *blocked = true;
     return KERNEL_PROCESS_OK;
 }
 
@@ -12211,6 +12626,22 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         status = wait_handle_set(current, thread, &handle, 1u, now,
                                  deadline_cycles, false, port_probe_handle,
                                  port_probe_sequence, &blocked, &result);
+        if (status != KERNEL_PROCESS_OK)
+            return status;
+        if (!blocked)
+            break;
+        ++scheduler_stats.wait_blocks;
+        status = schedule_next(next_context);
+        if (status != KERNEL_PROCESS_OK &&
+            status != KERNEL_PROCESS_NO_RUNNABLE)
+            return status;
+        check_milestone();
+        return status;
+    }
+    case ASTRA_SYSCALL_PORT_CALL: {
+        bool blocked;
+
+        status = port_call_syscall(current, thread, &result, &blocked);
         if (status != KERNEL_PROCESS_OK)
             return status;
         if (!blocked)

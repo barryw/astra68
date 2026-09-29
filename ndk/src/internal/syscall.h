@@ -19,6 +19,13 @@ uint32_t astra_ndk_test_syscall(uint32_t number,
 
 #define astra_internal_syscall astra_ndk_test_syscall
 
+/*
+ * The call behind the PORT_CALL descriptor a fake receives. The descriptor's
+ * fields are the 32-bit ABI and cannot carry a host test's pointers.
+ */
+struct AstraCall;
+extern const struct AstraCall *astra_ndk_test_call;
+
 #else
 
 _Static_assert(sizeof(uintptr_t) == sizeof(uint32_t),

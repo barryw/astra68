@@ -812,6 +812,48 @@ KernelHandleStatus kernel_handle_lookup(const KernelHandleTable *table,
     return KERNEL_HANDLE_OK;
 }
 
+KernelHandleStatus kernel_handle_lookup_context(
+    const KernelHandleTable *table, KernelHandle handle,
+    KernelObjectType required_type, uint32_t required_rights,
+    void **object, void **context)
+{
+    const KernelHandleEntry *entry;
+    KernelHandleStatus status;
+
+    if (object == NULL || context == NULL)
+        return KERNEL_HANDLE_INVALID_ARGUMENT;
+    *object = NULL;
+    *context = NULL;
+    status = find_entry(table, handle, &entry);
+    if (status != KERNEL_HANDLE_OK)
+        return status;
+    if (required_type != KERNEL_OBJECT_NONE &&
+        entry->type != (uint16_t)required_type)
+        return KERNEL_HANDLE_TYPE_MISMATCH;
+    if ((entry->rights & required_rights) != required_rights)
+        return KERNEL_HANDLE_ACCESS_DENIED;
+    *object = entry->object;
+    *context = entry->release_context;
+    return KERNEL_HANDLE_OK;
+}
+
+KernelHandleStatus kernel_handle_set_context(KernelHandleTable *table,
+                                             KernelHandle handle,
+                                             KernelObjectType required_type,
+                                             void *context)
+{
+    KernelHandleEntry *entry;
+    KernelHandleStatus status = find_entry_mutable(table, handle, &entry);
+
+    if (status != KERNEL_HANDLE_OK)
+        return status;
+    if (required_type == KERNEL_OBJECT_NONE ||
+        entry->type != (uint16_t)required_type)
+        return KERNEL_HANDLE_TYPE_MISMATCH;
+    entry->release_context = context;
+    return KERNEL_HANDLE_OK;
+}
+
 KernelHandleStatus kernel_handle_lookup_any(const KernelHandleTable *table,
                                             KernelHandle handle,
                                             uint32_t required_rights,

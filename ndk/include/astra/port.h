@@ -215,6 +215,68 @@ ASTRA_NODISCARD AstraResult astra_port_receive_until(
     uint32_t *handle_count,
     AstraMonotonicDeadline deadline_ns);
 
+/**
+ * One request and the room for its reply, for ::astra_port_call.
+ * @since 0.1.0
+ */
+typedef struct AstraCall {
+    /** Complete request message, naturally aligned. */
+    const void *request;
+    /** Complete request size matching its header. */
+    uint32_t request_size;
+    /** Capabilities sent with the request, or NULL for none. */
+    AstraHandle *handles;
+    /** Number of @ref handles, at most ::ASTRA_MESSAGE_HANDLES_MAX - 1. */
+    uint32_t handle_count;
+    /**
+     * Where the service finds the reply capability in the handle list it
+     * receives: 0 puts it first, @ref handle_count puts it last.
+     */
+    uint32_t reply_index;
+    /** Reply output, naturally aligned. */
+    void *reply;
+    /** Reply capacity, at least ::ASTRA_MESSAGE_HEADER_SIZE. */
+    uint32_t reply_capacity;
+    /** Reply capability output, or NULL when capacity is zero. */
+    AstraHandle *reply_handles;
+    /** Reply capability capacity. */
+    uint32_t reply_handle_capacity;
+    /** Out: the reply size, or the size required when it did not fit. */
+    uint32_t reply_size;
+    /** Out: the reply handle count, or the count required. */
+    uint32_t reply_handle_count;
+} AstraCall;
+
+/**
+ * Send a request and wait for its reply, in one kernel call.
+ *
+ * The kernel creates a one-shot reply capability, inserts it into the sent
+ * handle list at @ref AstraCall::reply_index, and delivers the service's
+ * answer straight into @ref AstraCall::reply. The service replies with an
+ * ordinary send on the capability and cannot tell it from a reply port.
+ *
+ * A full port is retried around the kernel's wait primitive until
+ * @p deadline_ns, as ::astra_port_send_until does. Once the request is sent
+ * every entry of @ref AstraCall::handles is replaced with
+ * ::ASTRA_INVALID_HANDLE, whatever the result; a call refused before sending
+ * leaves them unchanged.
+ *
+ * @param send_endpoint Service send capability with signal rights.
+ * @param[in,out] call Request, reply buffers and reply sizes.
+ * @param deadline_ns Signed absolute monotonic nanosecond deadline for the
+ *        whole call.
+ * @return ::ASTRA_OK with the reply in place;
+ *         ::ASTRA_ERROR_BUFFER_TOO_SMALL with the required sizes;
+ *         ::ASTRA_ERROR_PEER_DEAD when the service dropped the request or was
+ *         gone; ::ASTRA_ERROR_TIMEOUT or ::ASTRA_ERROR_CANCELLED, after which
+ *         a late reply is discarded; or a validation/resource error.
+ * @since 0.1.0
+ */
+ASTRA_NODISCARD AstraResult astra_port_call(
+    AstraHandle send_endpoint,
+    AstraCall *call,
+    AstraMonotonicDeadline deadline_ns);
+
 /** @} */
 
 ASTRA_EXTERN_C_END

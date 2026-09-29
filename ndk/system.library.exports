@@ -32,6 +32,7 @@ ASTRA_SYSTEM_2.0 {
         astra_pointer_event_wait;
         astra_pointer_observer_close;
         astra_pointer_observer_open;
+        astra_port_call;
         astra_port_cleanup;
         astra_port_close;
         astra_port_create;

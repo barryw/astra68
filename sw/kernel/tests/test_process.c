@@ -5187,6 +5187,675 @@ static void test_wait_multiple_syscall_contract_and_races(void)
     assert(final.free_frames == baseline.free_frames);
 }
 
+typedef struct TestCallRequest {
+    AstraMessageHeader header;
+    uint32_t payload[2];
+} TestCallRequest;
+
+typedef struct TestCallReply {
+    AstraMessageHeader header;
+    uint32_t payload[4];
+} TestCallReply;
+
+static KernelProcessStatus test_trap(uint32_t stack, uint8_t *frame,
+                                     KernelCpuContext **next,
+                                     uint32_t number, uint32_t d1,
+                                     uint32_t d2, uint32_t d3, uint32_t d4,
+                                     uint32_t d5)
+{
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT];
+
+    memset(registers, 0, sizeof(registers));
+    registers[0] = number;
+    registers[1] = d1;
+    registers[2] = d2;
+    registers[3] = d3;
+    registers[4] = d4;
+    registers[5] = d5;
+    return kernel_process_on_syscall(registers, stack, frame, next);
+}
+
+static void test_call_message(void *buffer, uint32_t size,
+                              uint32_t operation, uint32_t seed)
+{
+    AstraMessageHeader *header = buffer;
+    uint32_t *payload = (uint32_t *)((uint8_t *)buffer + sizeof(*header));
+
+    memset(buffer, 0, size);
+    header->total_size = size;
+    header->header_size = ASTRA_MESSAGE_HEADER_SIZE;
+    header->protocol = 0x43414c4cu;
+    header->protocol_version = 1u;
+    header->operation = operation;
+    header->transaction_id = seed;
+    for (uint32_t index = 0u;
+         index < (size - sizeof(*header)) / sizeof(uint32_t); ++index)
+        payload[index] = seed + index;
+}
+
+/* Writes the request, its handles and the descriptor into the current
+   address space, then traps. */
+static KernelProcessStatus test_port_call(
+    uint32_t stack, uint8_t *frame, KernelCpuContext **next,
+    uint32_t base, uint32_t port, const KernelHandle *handles,
+    uint32_t handle_count, uint32_t reply_index, uint32_t reply_capacity,
+    uint32_t reply_handle_capacity, uint64_t deadline_ns, uint32_t seed)
+{
+    TestCallRequest request;
+    AstraPortCall call;
+
+    test_call_message(&request, sizeof(request), 1u, seed);
+    memset(&call, 0, sizeof(call));
+    call.size = sizeof(call);
+    call.port = port;
+    call.request = base + 64u;
+    call.request_size = sizeof(request);
+    call.handles = base + 128u + 2u;
+    call.handle_count = handle_count;
+    call.reply_index = reply_index;
+    call.reply = base + 256u;
+    call.reply_capacity = reply_capacity;
+    call.reply_handles = base + 192u + 2u;
+    call.reply_handle_capacity = reply_handle_capacity;
+    call.deadline_hi = (uint32_t)(deadline_ns >> 32);
+    call.deadline_lo = (uint32_t)deadline_ns;
+    assert(kernel_user_copy_to_asm(base, &call, sizeof(call)) ==
+           KERNEL_USER_COPY_OK);
+    assert(kernel_user_copy_to_asm(base + 64u, &request, sizeof(request)) ==
+           KERNEL_USER_COPY_OK);
+    if (handle_count != 0u)
+        assert(kernel_user_copy_to_asm(base + 128u + 2u, handles,
+                                       handle_count * sizeof(handles[0])) ==
+               KERNEL_USER_COPY_OK);
+    return test_trap(stack, frame, next, ASTRA_SYSCALL_PORT_CALL, base,
+                     0u, 0u, 0u, 0u);
+}
+
+#define TEST_CALL_FOREVER \
+    (((uint64_t)ASTRA_DEADLINE_NONE_HI << 32) | ASTRA_DEADLINE_NONE_LO)
+
+/*
+ * PORT_CALL between two threads of one process: the caller outranks the
+ * service, so each reply hands the processor straight back to the caller and
+ * the service's own answer is read from its saved context.
+ */
+static void test_port_call_contract_and_races(void)
+{
+    static const uint8_t image[] = {
+        0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u
+    };
+    const uint32_t call_base = KERNEL_PROCESS_STACK_TOP - 1024u;
+    const uint32_t main_stack = KERNEL_PROCESS_STACK_TOP - 2048u;
+    KernelThreadSnapshot main_thread;
+    KernelThreadSnapshot sibling_thread;
+    KernelHandleTransferStats transfer_stats;
+    KernelPortPoolStats port_stats;
+    KernelMemoryStats baseline;
+    KernelMemoryStats final;
+    KernelCpuContext *next;
+    KernelThread *service;
+    TestCallRequest request;
+    TestCallRequest received;
+    TestCallReply reply;
+    TestCallReply answered;
+    KernelHandle handles[ASTRA_MESSAGE_HANDLES_MAX];
+    KernelHandle got[2];
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t service_in;
+    uint32_t service_out;
+    uint32_t service_stack;
+    uint32_t process_id;
+    uint32_t receive_handle;
+    uint32_t send_handle;
+    uint32_t request_event;
+    uint32_t reply_event;
+    uint32_t wait_event;
+    uint32_t capability;
+    uint32_t sibling_handle;
+    uint32_t stale;
+    uint32_t handle_baseline;
+    uint64_t deadline_ns;
+
+    initialize_test();
+    assert(kernel_memory_stats(&baseline));
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_PORT_CREATE,
+                     1u, 2u * sizeof(TestCallRequest), 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    receive_handle = next->data[1];
+    send_handle = next->data[2];
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_EVENT_CREATE,
+                     0u, TEST_TRANSFER_SYNC_RIGHTS, 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    request_event = next->data[1];
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_EVENT_CREATE,
+                     0u, TEST_TRANSFER_SYNC_RIGHTS, 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    reply_event = next->data[1];
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_EVENT_CREATE,
+                     0u, TEST_SYNC_RIGHTS, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    wait_event = next->data[1];
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_THREAD_CREATE,
+                     KERNEL_PROCESS_CODE_BASE + 2u, 0u,
+                     KERNEL_THREAD_PRIORITY_NORMAL - 1u, KERNEL_THREAD_RIGHTS,
+                     0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    sibling_handle = next->data[1];
+    assert(kernel_thread_snapshot(0u, &main_thread));
+    assert(kernel_thread_snapshot(1u, &sibling_thread));
+    service = kernel_thread_at(1u);
+    assert(service != NULL);
+    service_in = sibling_thread.user_stack_top - 1024u;
+    service_out = sibling_thread.user_stack_top - 512u;
+    service_stack = sibling_thread.user_stack_top - 1536u;
+    handle_baseline = kernel_process_test_handle_count(process_id);
+
+    /* Refusals send nothing and leave no capability behind. */
+    handles[0] = request_event;
+    assert(test_port_call(main_stack, frame, &next, call_base, send_handle,
+                          handles, 1u, 2u, sizeof(reply), 2u,
+                          TEST_CALL_FOREVER, 1u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(test_port_call(main_stack, frame, &next, call_base, send_handle,
+                          handles, 1u, 0u, ASTRA_MESSAGE_HEADER_SIZE - 1u,
+                          2u, TEST_CALL_FOREVER, 1u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(test_port_call(main_stack, frame, &next, call_base,
+                          receive_handle, handles, 1u, 0u, sizeof(reply), 2u,
+                          TEST_CALL_FOREVER, 1u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+    assert(next->data[1] == ASTRA_PORT_CALL_UNSENT);
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_PORT_CALL, 0u,
+                     0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_BAD_ADDRESS);
+    assert(next->data[1] == ASTRA_PORT_CALL_UNSENT);
+    {
+        AstraPortCall call;
+
+        /* A reply buffer the kernel could not write later is refused now:
+           here the read-only code page. */
+        assert(kernel_user_copy_from_asm(&call, call_base, sizeof(call)) ==
+               KERNEL_USER_COPY_OK);
+        call.port = send_handle;
+        call.reply_index = 0u;
+        call.reply_capacity = sizeof(reply);
+        call.reply = KERNEL_PROCESS_CODE_BASE;
+        assert(kernel_user_copy_to_asm(call_base, &call, sizeof(call)) ==
+               KERNEL_USER_COPY_OK);
+        assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_PORT_CALL,
+                         call_base, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_BAD_ADDRESS);
+        /* And a deadline already past sends nothing either. */
+        call.reply = call_base + 256u;
+        call.deadline_hi = 0u;
+        call.deadline_lo = 0u;
+        assert(kernel_user_copy_to_asm(call_base, &call, sizeof(call)) ==
+               KERNEL_USER_COPY_OK);
+        assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_PORT_CALL,
+                         call_base, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_TIMED_OUT);
+        assert(next->data[1] == ASTRA_PORT_CALL_UNSENT);
+    }
+    assert(kernel_process_test_handle_count(process_id) == handle_baseline);
+    assert(kernel_port_pool_stats(&port_stats));
+    assert(port_stats.queued_messages == 0u);
+
+    /* 1. A reply with a handle, the capability at index 0 of two. */
+    handles[0] = request_event;
+    assert(test_port_call(main_stack, frame, &next, call_base, send_handle,
+                          handles, 1u, 0u, sizeof(reply), 2u,
+                          TEST_CALL_FOREVER, 0x100u) == KERNEL_PROCESS_OK);
+    assert(next != NULL);
+    assert(kernel_thread_snapshot(0u, &main_thread));
+    assert(main_thread.state == KERNEL_THREAD_BLOCKED);
+    assert(test_trap(service_stack, frame, &next,
+                     ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive_handle,
+                     service_in, sizeof(received), service_in + 128u, 2u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == sizeof(TestCallRequest));
+    assert(next->data[2] == 2u);
+    assert(next->data[3] == process_id);
+    assert(kernel_user_copy_from_asm(&received, service_in,
+                                     sizeof(received)) ==
+           KERNEL_USER_COPY_OK);
+    test_call_message(&request, sizeof(request), 1u, 0x100u);
+    assert(memcmp(&received, &request, sizeof(request)) == 0);
+    assert(kernel_user_copy_from_asm(got, service_in + 128u, sizeof(got)) ==
+           KERNEL_USER_COPY_OK);
+    capability = got[0];
+    assert(capability != KERNEL_HANDLE_INVALID);
+    /* The capability is only a reply: no wait, no copy. */
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_WAIT_ONE,
+                     capability, ASTRA_DEADLINE_NONE_HI,
+                     ASTRA_DEADLINE_NONE_LO, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(test_trap(service_stack, frame, &next,
+                     ASTRA_SYSCALL_HANDLE_DUPLICATE, capability,
+                     ASTRA_RIGHT_SIGNAL, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    /* Nor may a reply carry its own capability. */
+    test_call_message(&reply, sizeof(reply), 2u, 0x200u);
+    assert(kernel_user_copy_to_asm(service_out, &reply, sizeof(reply)) ==
+           KERNEL_USER_COPY_OK);
+    handles[0] = capability;
+    assert(kernel_user_copy_to_asm(service_out + 128u, handles,
+                                   sizeof(handles[0])) ==
+           KERNEL_USER_COPY_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     capability, service_out, sizeof(reply),
+                     service_out + 128u, 1u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    handles[0] = reply_event;
+    assert(kernel_user_copy_to_asm(service_out + 128u, handles,
+                                   sizeof(handles[0])) ==
+           KERNEL_USER_COPY_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     capability, service_out, sizeof(reply),
+                     service_out + 128u, 1u) == KERNEL_PROCESS_OK);
+    assert(service->context.data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == sizeof(reply));
+    assert(next->data[2] == 1u);
+    assert(next->data[3] == process_id);
+    assert(kernel_user_copy_from_asm(&answered, call_base + 256u,
+                                     sizeof(answered)) ==
+           KERNEL_USER_COPY_OK);
+    assert(memcmp(&answered, &reply, sizeof(reply)) == 0);
+    assert(kernel_user_copy_from_asm(got, call_base + 192u + 2u,
+                                     sizeof(got[0])) == KERNEL_USER_COPY_OK);
+    assert(got[0] != KERNEL_HANDLE_INVALID);
+    /* The event moved: the old value is gone and the new one works. */
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_SIGNAL,
+                     reply_event, 1u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_SIGNAL, got[0],
+                     1u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    reply_event = got[0];
+    request_event = KERNEL_HANDLE_INVALID;
+
+    /* 2. The spent capability refuses a second reply and closes quietly;
+          dropping a live one tells its caller PEER_DEAD. */
+    assert(test_port_call(main_stack, frame, &next, call_base, send_handle,
+                          NULL, 0u, 0u, sizeof(reply), 0u,
+                          TEST_CALL_FOREVER, 0x300u) == KERNEL_PROCESS_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     capability, service_out, sizeof(reply), 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_CLOSED);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     capability, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_thread_snapshot(0u, &main_thread));
+    assert(main_thread.state == KERNEL_THREAD_BLOCKED);
+    assert(test_trap(service_stack, frame, &next,
+                     ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive_handle,
+                     service_in, sizeof(received), service_in + 128u, 2u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[2] == 1u);
+    assert(kernel_user_copy_from_asm(&capability, service_in + 128u,
+                                     sizeof(capability)) ==
+           KERNEL_USER_COPY_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     capability, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(service->context.data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+    assert(next->data[1] == 0u);
+    assert(next->data[2] == 0u);
+
+    /* 3. A reply that does not fit: the caller gets the sizes, the service's
+          send succeeds, and the handle it sent is gone. */
+    assert(test_port_call(main_stack, frame, &next, call_base, send_handle,
+                          NULL, 0u, 0u, ASTRA_MESSAGE_HEADER_SIZE, 0u,
+                          TEST_CALL_FOREVER, 0x400u) == KERNEL_PROCESS_OK);
+    assert(test_trap(service_stack, frame, &next,
+                     ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive_handle,
+                     service_in, sizeof(received), service_in + 128u, 2u) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_user_copy_from_asm(&capability, service_in + 128u,
+                                     sizeof(capability)) ==
+           KERNEL_USER_COPY_OK);
+    handles[0] = reply_event;
+    assert(kernel_user_copy_to_asm(service_out + 128u, handles,
+                                   sizeof(handles[0])) ==
+           KERNEL_USER_COPY_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     capability, service_out, sizeof(reply),
+                     service_out + 128u, 1u) == KERNEL_PROCESS_OK);
+    assert(service->context.data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_BUFFER_TOO_SMALL);
+    assert(next->data[1] == sizeof(reply));
+    assert(next->data[2] == 1u);
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_SIGNAL,
+                     reply_event, 1u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_HANDLE);
+    reply_event = KERNEL_HANDLE_INVALID;
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     capability, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    /* 4. Deadline: the call times out, the capability it left can never
+          complete the next call, and its late reply fails for the service
+          with nothing consumed. */
+    deadline_ns = (scheduler_test_cycles + 25u) *
+                  KERNEL_PLATFORM_NS_PER_CPU_CYCLE;
+    assert(test_port_call(main_stack, frame, &next, call_base, send_handle,
+                          NULL, 0u, 0u, sizeof(reply), 1u, deadline_ns,
+                          0x500u) == KERNEL_PROCESS_OK);
+    assert(test_trap(service_stack, frame, &next,
+                     ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive_handle,
+                     service_in, sizeof(received), service_in + 128u, 2u) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_user_copy_from_asm(&stale, service_in + 128u,
+                                     sizeof(stale)) == KERNEL_USER_COPY_OK);
+    /* The service waits too, so the deadline expires from idle. */
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_WAIT_ONE,
+                     wait_event, ASTRA_DEADLINE_NONE_HI,
+                     ASTRA_DEADLINE_NONE_LO, 0u, 0u) ==
+           KERNEL_PROCESS_NO_RUNNABLE);
+    scheduler_test_cycles += 25u;
+    assert(kernel_process_on_supervisor_timer() == KERNEL_PROCESS_OK);
+    next = kernel_process_current_context();
+    assert(next != NULL);
+    assert(next->data[0] == ASTRA_SYSCALL_TIMED_OUT);
+    assert(next->data[1] == 0u);
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_SIGNAL,
+                     wait_event, 1u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_port_call(main_stack, frame, &next, call_base, send_handle,
+                          NULL, 0u, 0u, sizeof(reply), 1u,
+                          TEST_CALL_FOREVER, 0x600u) == KERNEL_PROCESS_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_EVENT_CREATE,
+                     0u, TEST_TRANSFER_SYNC_RIGHTS, 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    reply_event = next->data[1];
+    handles[0] = reply_event;
+    assert(kernel_user_copy_to_asm(service_out + 128u, handles,
+                                   sizeof(handles[0])) ==
+           KERNEL_USER_COPY_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     stale, service_out, sizeof(reply), service_out + 128u,
+                     1u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_SIGNAL,
+                     reply_event, 1u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     stale, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_thread_snapshot(0u, &main_thread));
+    assert(main_thread.state == KERNEL_THREAD_BLOCKED);
+    assert(test_trap(service_stack, frame, &next,
+                     ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive_handle,
+                     service_in, sizeof(received), service_in + 128u, 2u) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_user_copy_from_asm(&capability, service_in + 128u,
+                                     sizeof(capability)) ==
+           KERNEL_USER_COPY_OK);
+    test_call_message(&reply, sizeof(reply), 2u, 0x601u);
+    assert(kernel_user_copy_to_asm(service_out, &reply, sizeof(reply)) ==
+           KERNEL_USER_COPY_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     capability, service_out, sizeof(reply),
+                     service_out + 128u, 1u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == sizeof(reply));
+    assert(next->data[2] == 1u);
+    assert(kernel_user_copy_from_asm(&answered, call_base + 256u,
+                                     sizeof(answered)) ==
+           KERNEL_USER_COPY_OK);
+    assert(memcmp(&answered, &reply, sizeof(reply)) == 0);
+    assert(kernel_user_copy_from_asm(&reply_event, call_base + 192u + 2u,
+                                     sizeof(reply_event)) ==
+           KERNEL_USER_COPY_OK);
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     capability, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+
+    /* 5. Cancel: the caller is released, and while it waits on something
+          else a reply to the cancelled call is refused. */
+    assert(test_port_call(main_stack, frame, &next, call_base, send_handle,
+                          NULL, 0u, 0u, sizeof(reply), 0u,
+                          TEST_CALL_FOREVER, 0x700u) == KERNEL_PROCESS_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_CANCEL_WAIT,
+                     main_thread.self_handle, 0u, 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_CANCELLED);
+    assert(next->data[1] == 0u);
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_WAIT_ONE,
+                     wait_event, ASTRA_DEADLINE_NONE_HI,
+                     ASTRA_DEADLINE_NONE_LO, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(test_trap(service_stack, frame, &next,
+                     ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive_handle,
+                     service_in, sizeof(received), service_in + 128u, 2u) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_user_copy_from_asm(&capability, service_in + 128u,
+                                     sizeof(capability)) ==
+           KERNEL_USER_COPY_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     capability, service_out, sizeof(reply), 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     capability, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_SIGNAL,
+                     wait_event, 1u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    /* 6. A full port refuses the call with nothing sent. */
+    test_call_message(&request, sizeof(request), 3u, 0x800u);
+    assert(kernel_user_copy_to_asm(call_base + 512u, &request,
+                                   sizeof(request)) == KERNEL_USER_COPY_OK);
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     send_handle, call_base + 512u, sizeof(request), 0u,
+                     0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    handle_baseline = kernel_process_test_handle_count(process_id);
+    assert(test_port_call(main_stack, frame, &next, call_base, send_handle,
+                          NULL, 0u, 0u, sizeof(reply), 0u,
+                          TEST_CALL_FOREVER, 0x900u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_WOULD_BLOCK);
+    assert(next->data[1] == ASTRA_PORT_CALL_UNSENT);
+    assert(kernel_process_test_handle_count(process_id) == handle_baseline);
+
+    /* 7. The service port closing with a call queued: the discarded request
+          drops its capability, which releases the caller. */
+    assert(test_trap(main_stack, frame, &next,
+                     ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive_handle,
+                     call_base + 512u, sizeof(received), 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_port_call(main_stack, frame, &next, call_base, send_handle,
+                          NULL, 0u, 0u, sizeof(reply), 0u,
+                          TEST_CALL_FOREVER, 0xa00u) == KERNEL_PROCESS_OK);
+    assert(test_trap(service_stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     receive_handle, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(service->context.data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+
+    assert(kernel_handle_transfer_stats(&transfer_stats));
+    assert(transfer_stats.live_detached == 0u);
+    assert(transfer_stats.reserved_detached == 0u);
+    assert(kernel_thread_pool_valid());
+    assert(kernel_port_pool_valid());
+    assert(kernel_handle_transfer_pool_valid());
+
+    {
+        const uint32_t closing[] = {
+            send_handle, reply_event, wait_event, sibling_handle
+        };
+
+        for (uint32_t index = 0u; index < 4u; ++index) {
+            assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                             closing[index], 0u, 0u, 0u, 0u) ==
+                   KERNEL_PROCESS_OK);
+            assert(next->data[0] == ASTRA_SYSCALL_OK);
+        }
+    }
+    (void)request_event;
+    assert(test_trap(main_stack, frame, &next, ASTRA_SYSCALL_EXIT, 0u, 0u,
+                     0u, 0u, 0u) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(kernel_memory_stats(&final));
+    assert(final.free_frames == baseline.free_frames);
+}
+
+/*
+ * The reply crosses address spaces and handle tables: the service writes the
+ * caller's buffer at an address that holds something else in its own space.
+ * A service that dies holding a capability releases its caller.
+ */
+static void test_port_call_between_processes(void)
+{
+    static const uint8_t image[] = {
+        0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u, 0x4eu, 0x71u
+    };
+    const uint32_t base = KERNEL_PROCESS_STACK_TOP - 1024u;
+    const uint32_t stack = KERNEL_PROCESS_STACK_TOP - 2048u;
+    KernelMemoryStats baseline;
+    KernelMemoryStats final;
+    KernelCpuContext *next;
+    TestCallRequest received;
+    TestCallReply reply;
+    TestCallReply answered;
+    TestCallReply untouched;
+    KernelHandle handles[1];
+    KernelHandle got;
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t service_id;
+    uint32_t client_id;
+    uint32_t receive_handle;
+    uint32_t send_handle;
+    uint32_t client_send;
+    uint32_t capability;
+    uint32_t reply_event;
+    uint32_t client_handles;
+
+    initialize_test();
+    assert(kernel_memory_stats(&baseline));
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &service_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &client_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+
+    /* Service: a port, an event to hand back, and a marker at the address
+       the client will use for its reply. */
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_PORT_CREATE, 2u,
+                     2u * sizeof(TestCallRequest), 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    receive_handle = next->data[1];
+    send_handle = next->data[2];
+    assert(kernel_process_test_share_handle(service_id, send_handle,
+                                            client_id,
+                                            KERNEL_PORT_SEND_RIGHTS,
+                                            &client_send));
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_CLOSE, send_handle,
+                     0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_EVENT_CREATE, 0u,
+                     TEST_TRANSFER_SYNC_RIGHTS, 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    reply_event = next->data[1];
+    memset(&untouched, 0x5a, sizeof(untouched));
+    assert(kernel_user_copy_to_asm(base + 256u, &untouched,
+                                   sizeof(untouched)) == KERNEL_USER_COPY_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_WAIT_ONE,
+                     receive_handle, ASTRA_DEADLINE_NONE_HI,
+                     ASTRA_DEADLINE_NONE_LO, 0u, 0u) == KERNEL_PROCESS_OK);
+    client_handles = kernel_process_test_handle_count(client_id);
+
+    /* Client: the call. The service wakes on its port. */
+    assert(test_port_call(stack, frame, &next, base, client_send, NULL, 0u,
+                          0u, sizeof(reply), 1u, TEST_CALL_FOREVER,
+                          0x1000u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_PORT_RECEIVE_TRY,
+                     receive_handle, base + 512u, sizeof(received),
+                     base + 640u, 1u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[3] == client_id);
+    assert(kernel_user_copy_from_asm(&capability, base + 640u,
+                                     sizeof(capability)) ==
+           KERNEL_USER_COPY_OK);
+    test_call_message(&reply, sizeof(reply), 2u, 0x2000u);
+    assert(kernel_user_copy_to_asm(base + 768u, &reply, sizeof(reply)) ==
+           KERNEL_USER_COPY_OK);
+    handles[0] = reply_event;
+    assert(kernel_user_copy_to_asm(base + 896u, handles, sizeof(handles)) ==
+           KERNEL_USER_COPY_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     capability, base + 768u, sizeof(reply), base + 896u,
+                     1u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_process_test_handle_count(client_id) ==
+           client_handles + 1u);
+    assert(kernel_user_copy_from_asm(&answered, base + 256u,
+                                     sizeof(answered)) ==
+           KERNEL_USER_COPY_OK);
+    assert(memcmp(&answered, &untouched, sizeof(untouched)) == 0);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_CLOSE, capability,
+                     0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_WAIT_ONE,
+                     receive_handle, ASTRA_DEADLINE_NONE_HI,
+                     ASTRA_DEADLINE_NONE_LO, 0u, 0u) == KERNEL_PROCESS_OK);
+
+    /* Client again: its registers and its memory hold the reply. */
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(next->data[1] == sizeof(reply));
+    assert(next->data[2] == 1u);
+    assert(next->data[3] == service_id);
+    assert(kernel_user_copy_from_asm(&answered, base + 256u,
+                                     sizeof(answered)) ==
+           KERNEL_USER_COPY_OK);
+    assert(memcmp(&answered, &reply, sizeof(reply)) == 0);
+    assert(kernel_user_copy_from_asm(&got, base + 192u + 2u, sizeof(got)) ==
+           KERNEL_USER_COPY_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_SIGNAL, got, 1u, 0u,
+                     0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+
+    /* A second call; the service takes it and dies holding it. */
+    assert(test_port_call(stack, frame, &next, base, client_send, NULL, 0u,
+                          0u, sizeof(reply), 0u, TEST_CALL_FOREVER,
+                          0x3000u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_PORT_RECEIVE_TRY,
+                     receive_handle, base + 512u, sizeof(received),
+                     base + 640u, 1u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_EXIT, 0u, 0u, 0u,
+                     0u, 0u) == KERNEL_PROCESS_NO_RUNNABLE);
+    /* Its handles close when it is reaped, and that releases the caller. */
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(kernel_process_on_supervisor_timer() == KERNEL_PROCESS_OK);
+    next = kernel_process_current_context();
+    assert(next != NULL);
+    assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+    assert(next->data[3] == 0u);
+
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_CLOSE, client_send,
+                     0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_CLOSE, got, 0u, 0u,
+                     0u, 0u) == KERNEL_PROCESS_OK);
+    assert(kernel_thread_pool_valid());
+    assert(kernel_port_pool_valid());
+    assert(kernel_handle_transfer_pool_valid());
+    assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_EXIT, 0u, 0u, 0u,
+                     0u, 0u) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(kernel_memory_stats(&final));
+    assert(final.free_frames == baseline.free_frames);
+}
+
 static void test_bootstrap_argument_is_prestart_only(void)
 {
     static const uint8_t image[] = {
@@ -12880,6 +13549,8 @@ int main(void)
     test_real_handle_exhaustion_rolls_back_thread_create();
     test_real_stack_oom_rolls_back_thread_create();
     test_wait_multiple_syscall_contract_and_races();
+    test_port_call_contract_and_races();
+    test_port_call_between_processes();
     test_bootstrap_argument_is_prestart_only();
     test_waitable_timer_syscalls_and_terminal_races();
     test_process_death_wait_handle_lifetime_and_slot_reuse();

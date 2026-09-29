@@ -24,11 +24,9 @@ static AstraResult application_launch(
 {
     AstraApplicationLaunchRequest request = {0};
     AstraApplicationLaunchReply reply = {0};
-    AstraPort reply_port = ASTRA_PORT_INIT;
     char path[ASTRA_APPLICATION_PATH_MAX];
     AstraHandle transferred = ASTRA_INVALID_HANDLE;
-    uint32_t reply_size = 0u;
-    uint32_t reply_handles = 0u;
+    AstraCall call = {0};
     AstraResult result;
 
     if (launcher == ASTRA_INVALID_HANDLE || bundle_path == 0 ||
@@ -71,28 +69,21 @@ static AstraResult application_launch(
         request.arguments.length = (uint16_t)length;
         request.arguments.source = (uint16_t)source;
     }
-    result = astra_port_create(1u, sizeof(reply), &reply_port);
-    if (result != ASTRA_OK)
-        return result;
     result = astra_message_header_init(
         &request.header, sizeof(request), ASTRA_APPLICATION_PROTOCOL,
         ASTRA_APPLICATION_VERSION, ASTRA_APPLICATION_LAUNCH, 1u);
     if (result != ASTRA_OK)
-        goto done;
-    transferred = reply_port.send;
-    result = astra_port_send_until(launcher, &request, sizeof(request),
-                                   &transferred, 1u,
-                                   ASTRA_DEADLINE_INFINITE);
-    reply_port.send = transferred;
+        return result;
+    call.request = &request;
+    call.request_size = sizeof(request);
+    call.reply = &reply;
+    call.reply_capacity = sizeof(reply);
+    call.reply_handles = &transferred;
+    call.reply_handle_capacity = 1u;
+    result = astra_port_call(launcher, &call, ASTRA_DEADLINE_INFINITE);
     if (result != ASTRA_OK)
         goto done;
-    transferred = ASTRA_INVALID_HANDLE;
-    result = astra_port_receive_until(
-        reply_port.receive, &reply, sizeof(reply), &transferred, 1u, &reply_size,
-        &reply_handles, ASTRA_DEADLINE_INFINITE);
-    if (result != ASTRA_OK)
-        goto done;
-    if (reply_size != sizeof(reply) ||
+    if (call.reply_size != sizeof(reply) ||
         reply.header.total_size != sizeof(reply) ||
         reply.header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
         reply.header.flags != 0u || reply.header.reserved != 0u ||
@@ -105,8 +96,9 @@ static AstraResult application_launch(
     }
     result = astra_internal_service_result(reply.status);
     if ((result == ASTRA_OK &&
-         (reply_handles != 1u || transferred == ASTRA_INVALID_HANDLE)) ||
-        (result != ASTRA_OK && reply_handles != 0u)) {
+         (call.reply_handle_count != 1u ||
+          transferred == ASTRA_INVALID_HANDLE)) ||
+        (result != ASTRA_OK && call.reply_handle_count != 0u)) {
         result = ASTRA_ERROR_IO;
         goto done;
     }
@@ -127,10 +119,6 @@ done:
             if (result == ASTRA_OK && close_result != ASTRA_OK)
                 result = close_result;
         }
-        close_result = astra_port_close(&reply_port);
-
-        if (result == ASTRA_OK && close_result != ASTRA_OK)
-            result = close_result;
     }
     return result;
 }

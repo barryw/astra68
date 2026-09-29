@@ -3,9 +3,11 @@
 #include <stdio.h>
 
 #include <astra/application.h>
+#include <astra/port.h>
 #include <astra/status.h>
 
-static uint32_t reply_receive;
+#include "syscall.h"
+
 static uint32_t transaction;
 static uint16_t expected_count;
 static uint16_t expected_source;
@@ -20,18 +22,17 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
 {
     *out_d1 = 0u;
     *out_d2 = 0u;
-    if (number == ASTRA_SYSCALL_PORT_CREATE) {
-        assert(d1 == 1u && d2 == sizeof(AstraApplicationLaunchReply));
-        reply_receive = 0x100u;
-        *out_d1 = reply_receive;
-        *out_d2 = reply_receive + 1u;
-    } else if (number == ASTRA_SYSCALL_PORT_SEND_TRY) {
-        const AstraApplicationLaunchRequest *request =
-            (const AstraApplicationLaunchRequest *)d2;
-        const uint32_t *handles = (const uint32_t *)d4;
+    if (number == ASTRA_SYSCALL_PORT_CALL) {
+        const AstraCall *call = astra_ndk_test_call;
+        const AstraApplicationLaunchRequest *request = call->request;
+        AstraApplicationLaunchReply *reply = call->reply;
 
-        assert(d1 == 7u && d3 == sizeof(*request) && d5 == 1u);
-        assert(handles[0] == reply_receive + 1u);
+        assert(((const AstraPortCall *)d1)->port == 7u);
+        assert(d2 == 0u && d3 == 0u && d4 == 0u && d5 == 0u);
+        assert(call->request_size == sizeof(*request));
+        assert(call->handle_count == 0u && call->reply_index == 0u);
+        assert(call->reply_capacity == sizeof(*reply));
+        assert(call->reply_handle_capacity == 1u);
         assert(request->header.protocol == ASTRA_APPLICATION_PROTOCOL);
         assert(request->header.operation == ASTRA_APPLICATION_LAUNCH);
         assert(request->arguments.count == expected_count);
@@ -49,12 +50,6 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
             }
         }
         transaction = request->header.transaction_id;
-    } else if (number == ASTRA_SYSCALL_PORT_RECEIVE_TRY) {
-        AstraApplicationLaunchReply *reply =
-            (AstraApplicationLaunchReply *)d2;
-        uint32_t *handles = (uint32_t *)d4;
-
-        assert(d1 == reply_receive && d3 == sizeof(*reply) && d5 == 1u);
         reply->header.total_size = sizeof(*reply);
         reply->header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
         reply->header.protocol = ASTRA_APPLICATION_PROTOCOL;
@@ -65,14 +60,13 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         reply->process_id = 42u;
         *out_d1 = sizeof(*reply);
         if (reply_has_handle) {
-            handles[0] = 0x200u;
+            call->reply_handles[0] = 0x200u;
             *out_d2 = 1u;
         }
     } else {
         assert(number == ASTRA_SYSCALL_CLOSE);
-        assert(d1 == reply_receive || d1 == 0x200u);
-        if (d1 == 0x200u)
-            ++process_handle_closes;
+        assert(d1 == 0x200u);
+        ++process_handle_closes;
     }
     return ASTRA_SYSCALL_OK;
 }

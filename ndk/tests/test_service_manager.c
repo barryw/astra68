@@ -1,13 +1,14 @@
+#include <astra/port.h>
 #include <astra/service_manager.h>
 #include <astra/status.h>
+
+#include "syscall.h"
 
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
-static uint32_t reply_receive;
-static uint32_t transaction;
 static uint32_t expected_operation;
 static const char *expected_name;
 static uint32_t expected_value;
@@ -19,35 +20,32 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
 {
     *out_d1 = 0u;
     *out_d2 = 0u;
-    if (number == ASTRA_SYSCALL_PORT_CREATE) {
-        assert(d1 == 1u && d2 == sizeof(AstraServiceManagerReply));
-        reply_receive = 0x200u;
-        *out_d1 = reply_receive;
-        *out_d2 = reply_receive + 1u;
-    } else if (number == ASTRA_SYSCALL_PORT_SEND_TRY) {
-        const AstraServiceManagerRequest *request =
-            (const AstraServiceManagerRequest *)d2;
-        const uint32_t *handles = (const uint32_t *)d4;
+    (void)d2;
+    (void)d3;
+    (void)d4;
+    (void)d5;
+    if (number == ASTRA_SYSCALL_PORT_CALL) {
+        const AstraCall *call = astra_ndk_test_call;
+        const AstraServiceManagerRequest *request = call->request;
+        AstraServiceManagerReply *reply = call->reply;
 
-        assert(d1 == 9u && d3 == sizeof(*request) && d5 == 1u);
-        assert(handles[0] == reply_receive + 1u);
+        assert(((const AstraPortCall *)d1)->port == 9u);
+        assert(call->request_size == sizeof(*request));
+        assert(call->handle_count == 0u && call->reply_index == 0u);
+        assert(call->reply_capacity == sizeof(*reply) &&
+               call->reply_handle_capacity == 0u);
         assert(request->header.protocol == ASTRA_SERVICE_MANAGER_PROTOCOL);
         assert(request->header.operation == expected_operation);
         assert(strcmp(request->name, expected_name) == 0);
         assert(memcmp(&request->cursor, &expected_cursor,
                       sizeof(request->cursor)) == 0);
         assert(request->value == expected_value && request->reserved == 0u);
-        transaction = request->header.transaction_id;
-    } else if (number == ASTRA_SYSCALL_PORT_RECEIVE_TRY) {
-        AstraServiceManagerReply *reply = (AstraServiceManagerReply *)d2;
-
-        assert(d1 == reply_receive && d3 == sizeof(*reply) && d5 == 0u);
         reply->header.total_size = sizeof(*reply);
         reply->header.header_size = ASTRA_MESSAGE_HEADER_SIZE;
         reply->header.protocol = ASTRA_SERVICE_MANAGER_PROTOCOL;
         reply->header.protocol_version = ASTRA_SERVICE_MANAGER_VERSION;
         reply->header.operation = ASTRA_SERVICE_MANAGER_REPLY;
-        reply->header.transaction_id = transaction;
+        reply->header.transaction_id = request->header.transaction_id;
         reply->status = ASTRA_STATUS_OK;
         reply->next_cursor.position = UINT64_C(0xffffffffffffffff);
         reply->next_cursor.source = ASTRA_SERVICE_LIST_SOURCE_DYNAMIC;
@@ -56,7 +54,7 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         reply->info.process_id = 12u;
         *out_d1 = sizeof(*reply);
     } else {
-        assert(number == ASTRA_SYSCALL_CLOSE && d1 == reply_receive);
+        assert(0 && "unexpected syscall");
     }
     return ASTRA_SYSCALL_OK;
 }

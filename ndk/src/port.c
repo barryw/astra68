@@ -103,6 +103,76 @@ static AstraResult port_receive_once(AstraHandle receive_endpoint,
     return result;
 }
 
+/*
+ * The kernel's descriptor holds the call's shape; the deadline is the only
+ * field a retry after a full port changes, and it does not.
+ */
+static int call_valid(const AstraCall *call)
+{
+    return call != 0 && message_valid(call->request, call->request_size) &&
+           call->handle_count < ASTRA_MESSAGE_HANDLES_MAX &&
+           handle_vector_valid(call->handles, call->handle_count) &&
+           call->reply_index <= call->handle_count &&
+           call->reply != 0 && pointer_aligned(call->reply) &&
+           call->reply_capacity >= ASTRA_MESSAGE_HEADER_SIZE &&
+           handle_vector_valid(call->reply_handles,
+                               call->reply_handle_capacity);
+}
+
+#if defined(ASTRA_NDK_TEST)
+const struct AstraCall *astra_ndk_test_call;
+#endif
+
+AstraResult astra_port_call(AstraHandle send_endpoint, AstraCall *call,
+                            AstraMonotonicDeadline deadline_ns)
+{
+    AstraPortCall descriptor;
+    uint64_t deadline = (uint64_t)deadline_ns;
+    AstraResult result;
+    uint32_t size;
+    uint32_t handle_count;
+
+    if (send_endpoint == ASTRA_INVALID_HANDLE || !call_valid(call) ||
+        !deadline_valid(deadline_ns))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    call->reply_size = 0u;
+    call->reply_handle_count = 0u;
+    descriptor.size = sizeof(descriptor);
+    descriptor.port = send_endpoint;
+    descriptor.request = (uintptr_t)call->request;
+    descriptor.request_size = call->request_size;
+    descriptor.handles = (uintptr_t)call->handles;
+    descriptor.handle_count = call->handle_count;
+    descriptor.reply_index = call->reply_index;
+    descriptor.reply = (uintptr_t)call->reply;
+    descriptor.reply_capacity = call->reply_capacity;
+    descriptor.reply_handles = (uintptr_t)call->reply_handles;
+    descriptor.reply_handle_capacity = call->reply_handle_capacity;
+    descriptor.deadline_hi = (uint32_t)(deadline >> 32);
+    descriptor.deadline_lo = (uint32_t)deadline;
+#if defined(ASTRA_NDK_TEST)
+    astra_ndk_test_call = call;
+#endif
+    for (;;) {
+        result = astra_internal_result(astra_internal_syscall(
+            ASTRA_SYSCALL_PORT_CALL, (uintptr_t)&descriptor, 0, 0, 0, 0,
+            &size, &handle_count));
+        if (size != ASTRA_PORT_CALL_UNSENT)
+            break;
+        if (result != ASTRA_ERROR_WOULD_BLOCK ||
+            deadline_ns == ASTRA_DEADLINE_POLL)
+            return result;
+        result = wait_for_endpoint(send_endpoint, deadline_ns);
+        if (result != ASTRA_OK)
+            return result;
+    }
+    for (uint32_t index = 0u; index < call->handle_count; ++index)
+        call->handles[index] = ASTRA_INVALID_HANDLE;
+    call->reply_size = size;
+    call->reply_handle_count = handle_count;
+    return result;
+}
+
 AstraResult astra_message_header_init(AstraMessageHeader *header,
                                       uint32_t total_size,
                                       uint32_t protocol,

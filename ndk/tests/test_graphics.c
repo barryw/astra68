@@ -10,8 +10,11 @@
 #include <astra/graphics.h>
 #include <astra/graphics_library.h>
 #include <astra/gui.h>
+#include <astra/port.h>
 #include <astra/status.h>
 #include <astra/window.h>
+
+#include "syscall.h"
 
 #define CHECK(expr) do { \
     if (!(expr)) { \
@@ -76,7 +79,6 @@ static uint32_t fake_staging_area;
 static uint32_t fake_status = ASTRA_STATUS_OK;
 static uint8_t fake_reply[128];
 static uint32_t fake_reply_size;
-static uint32_t fake_reply_endpoint;
 static AstraDrawListHeader fake_submitted_header;
 static AstraDrawListCommand fake_submitted[1200];
 /* The whole submitted list area, payload included. */
@@ -194,6 +196,9 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
                                 uintptr_t d3, uintptr_t d4, uintptr_t d5,
                                 uint32_t *out_d1, uint32_t *out_d2)
 {
+    (void)d3;
+    (void)d4;
+    (void)d5;
     *out_d1 = 0u;
     *out_d2 = 0u;
     switch (number) {
@@ -272,28 +277,31 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         fake_next_handle += 2u;
         fake_live_handles += 2u;
         return ASTRA_SYSCALL_OK;
-    case ASTRA_SYSCALL_PORT_SEND_TRY: {
-        const uint32_t *handles = (const uint32_t *)d4;
-        const AstraMessageHeader *header = (const AstraMessageHeader *)d2;
+    case ASTRA_SYSCALL_PORT_CALL: {
+        const AstraCall *call = astra_ndk_test_call;
+        const AstraMessageHeader *header = call->request;
+        uint32_t handles[3] = {0u, 0u, 0u};
+        uint32_t count = call->handle_count + 1u;
 
-        CHECK(d1 == FAKE_CONTROL && d5 >= 1u);
-        fake_reply_endpoint = handles[0] - 1u;
-        /* The service now owns every transferred handle. */
-        fake_live_handles -= (uint32_t)d5;
+        CHECK(((const AstraPortCall *)d1)->port == FAKE_CONTROL &&
+              call->handle_count < 3u && call->reply_index == 0u);
+        /* The service's view: the reply capability, then the attachment,
+           which it now owns. */
+        handles[0] = 0xcafeu;
+        for (uint32_t index = 0u; index < call->handle_count; ++index)
+            handles[index + 1u] = call->handles[index];
+        fake_live_handles -= call->handle_count;
         if (header->operation == ASTRA_GUI_GRAPHICS_COMMAND)
-            fake_graphics((const AstraGuiGraphicsCommand *)d2, handles,
-                          (uint32_t)d5);
+            fake_graphics(call->request, handles, count);
         else
-            fake_window_query((const AstraGuiWindowCommand *)d2);
-        return ASTRA_SYSCALL_OK;
-    }
-    case ASTRA_SYSCALL_PORT_RECEIVE_TRY:
-        CHECK(d1 == fake_reply_endpoint && fake_reply_size != 0u &&
-              d3 >= fake_reply_size);
-        memcpy((void *)d2, fake_reply, fake_reply_size);
+            fake_window_query(call->request);
+        CHECK(fake_reply_size != 0u &&
+              call->reply_capacity >= fake_reply_size);
+        memcpy(call->reply, fake_reply, fake_reply_size);
         *out_d1 = fake_reply_size;
         fake_reply_size = 0u;
         return ASTRA_SYSCALL_OK;
+    }
     case ASTRA_SYSCALL_EVENT_CREATE:
         CHECK(d1 == (ASTRA_EVENT_MANUAL_RESET |
                      ASTRA_EVENT_INITIALLY_SIGNALED));

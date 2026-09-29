@@ -172,42 +172,33 @@ static AstraResult exchange(AstraHandle service, uint32_t operation,
                             AstraHandle *received_handle)
 {
     AstraClipboardRequest request = {0};
-    AstraPort reply_port = ASTRA_PORT_INIT;
-    AstraHandle handles[2] = { ASTRA_INVALID_HANDLE, ASTRA_INVALID_HANDLE };
-    uint32_t handle_count = 0u;
-    uint32_t received_count = 0u;
-    uint32_t reply_size = 0u;
+    AstraCall call = {0};
     AstraResult result;
 
     if (service == ASTRA_INVALID_HANDLE || reply == NULL ||
         received_handle == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *received_handle = ASTRA_INVALID_HANDLE;
-    result = astra_port_create(1u, sizeof(*reply), &reply_port);
-    if (result != ASTRA_OK)
-        return result;
     result = astra_message_header_init(
         &request.header, sizeof(request), ASTRA_CLIPBOARD_PROTOCOL,
         ASTRA_CLIPBOARD_PROTOCOL_VERSION, operation, 1u);
     if (result != ASTRA_OK)
         goto done;
     request.document_size = document_size;
-    if (document_handle != ASTRA_INVALID_HANDLE)
-        handles[handle_count++] = document_handle;
-    handles[handle_count++] = reply_port.send;
-    result = astra_port_send_until(service, &request, sizeof(request), handles,
-                                   handle_count, ASTRA_DEADLINE_INFINITE);
-    if (document_handle != ASTRA_INVALID_HANDLE)
-        document_handle = handles[0];
-    reply_port.send = handles[handle_count - 1u];
+    /* The reply capability goes last, after the document if there is one. */
+    call.request = &request;
+    call.request_size = sizeof(request);
+    call.handles = &document_handle;
+    call.handle_count = document_handle != ASTRA_INVALID_HANDLE ? 1u : 0u;
+    call.reply_index = call.handle_count;
+    call.reply = reply;
+    call.reply_capacity = sizeof(*reply);
+    call.reply_handles = received_handle;
+    call.reply_handle_capacity = 1u;
+    result = astra_port_call(service, &call, ASTRA_DEADLINE_INFINITE);
     if (result != ASTRA_OK)
         goto done;
-    result = astra_port_receive_until(
-        reply_port.receive, reply, sizeof(*reply), received_handle, 1u,
-        &reply_size, &received_count, ASTRA_DEADLINE_INFINITE);
-    if (result != ASTRA_OK)
-        goto done;
-    if (reply_size != sizeof(*reply) ||
+    if (call.reply_size != sizeof(*reply) ||
         reply->header.total_size != sizeof(*reply) ||
         reply->header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
         reply->header.flags != 0u ||
@@ -218,8 +209,9 @@ static AstraResult exchange(AstraHandle service, uint32_t operation,
         reply->header.reserved != 0u || reply->reserved != 0u ||
         (reply->status == ASTRA_STATUS_OK &&
          ((operation == ASTRA_CLIPBOARD_OPERATION_GET) !=
-          (received_count == 1u))) ||
-        (reply->status != ASTRA_STATUS_OK && received_count != 0u)) {
+          (call.reply_handle_count == 1u))) ||
+        (reply->status != ASTRA_STATUS_OK &&
+         call.reply_handle_count != 0u)) {
         result = ASTRA_ERROR_IO;
         goto done;
     }
@@ -235,12 +227,6 @@ done:
     if (result != ASTRA_OK && *received_handle != ASTRA_INVALID_HANDLE) {
         AstraResult ignored = astra_handle_close(received_handle);
         (void)ignored;
-    }
-    {
-        AstraResult close_result = astra_port_close(&reply_port);
-
-        if (result == ASTRA_OK && close_result != ASTRA_OK)
-            result = close_result;
     }
     return result;
 }

@@ -14,9 +14,9 @@ generation-safe handles, process isolation, deadlines, and peer-death results.
 - a transferable send endpoint that clients use to enqueue requests.
 
 A service publishes its send endpoint through its bootstrap or discovery
-protocol. A client that needs a reply creates another port and moves that
-port's send endpoint with its request. There is no implicit global reply port
-and no kernel interpretation of service protocols.
+protocol. A client that needs a reply makes a call (below) rather than a reply
+port. There is no implicit global reply port and no kernel interpretation of
+service protocols.
 
 Closing the receive endpoint discards queued messages and makes every sender
 observe {c:enumerator}`ASTRA_ERROR_PEER_DEAD`. Closing the final send endpoint
@@ -51,6 +51,32 @@ Receive is also atomic. If either output capacity is too small,
 leaves the message queued. A copy fault publishes no destination handle and
 also leaves the message queued for a valid retry.
 
+## Calls
+
+{c:func}`astra_port_call` sends a request and waits for its reply in one
+kernel call. The kernel makes a one-shot reply capability for the calling
+thread and puts it in the request's handle list at
+{c:member}`AstraCall.reply_index`, where the protocol expects its reply
+handle. The service answers with an ordinary send on that capability and
+closes it, exactly as it would a reply port's send endpoint, so services do not
+know which kind of client they are serving. The reply is written straight into
+{c:member}`AstraCall.reply`; no port is created and nothing is queued.
+
+- A capability answers once. A second send on it reports
+  {c:enumerator}`ASTRA_ERROR_CLOSED`; it cannot be duplicated or waited on.
+- A service that closes the capability, or dies holding it, releases the
+  caller with {c:enumerator}`ASTRA_ERROR_PEER_DEAD`.
+- A caller that stops waiting -- deadline, cancellation, death -- abandons the
+  call. Its request was delivered, so a cancelled call is not retried; the
+  service's late reply fails with {c:enumerator}`ASTRA_ERROR_PEER_DEAD` and
+  the service keeps the handles it tried to send.
+- A reply that does not fit reports
+  {c:enumerator}`ASTRA_ERROR_BUFFER_TOO_SMALL` with the sizes it needed; the
+  service's send still succeeds.
+- The request's handles move once it is sent, whatever the outcome. A call
+  refused before sending -- a full port, a dead service, a bad argument --
+  leaves them with the caller.
+
 ## Blocking and deadlines
 
 The `_try` functions perform one bounded syscall. The `_until` functions retry
@@ -60,7 +86,8 @@ single attempt and {c:macro}`ASTRA_DEADLINE_INFINITE` when no finite deadline
 is appropriate.
 
 No message pointer or handle-vector pointer remains in the kernel while a
-thread sleeps. Queue readiness uses a failed-probe sequence token, so a state
+thread sleeps, with one exception: a call keeps the address of its reply
+buffer, which the kernel commits when the call is made, until the call ends. Queue readiness uses a failed-probe sequence token, so a state
 change between the try and wait cannot be lost and a message larger than the
 minimum header does not spin merely because 24 bytes remain writable.
 

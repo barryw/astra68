@@ -21,11 +21,7 @@ AstraResult astra_pointer_observer_open(AstraHandle input_service,
     AstraInputConnect request = {0};
     AstraInputConnected reply = {0};
     AstraPort events = ASTRA_PORT_INIT;
-    AstraPort replies = ASTRA_PORT_INIT;
-    AstraHandle transferred[2] = { ASTRA_INVALID_HANDLE,
-                                   ASTRA_INVALID_HANDLE };
-    uint32_t size = 0u;
-    uint32_t handles = 0u;
+    AstraCall call = {0};
     AstraResult result;
 
     if (input_service == ASTRA_INVALID_HANDLE || observer == 0 ||
@@ -40,30 +36,24 @@ AstraResult astra_pointer_observer_open(AstraHandle input_service,
                                &events);
     if (result != ASTRA_OK)
         return result;
-    result = astra_port_create(1u, sizeof(reply), &replies);
-    if (result != ASTRA_OK)
-        goto done;
-    transferred[0] = events.send;
-    transferred[1] = replies.send;
     result = astra_message_header_init(
         &request.header, sizeof(request), ASTRA_INPUT_SERVICE_PROTOCOL,
         ASTRA_INPUT_SERVICE_VERSION, ASTRA_INPUT_OPERATION_CONNECT, 1u);
     if (result != ASTRA_OK)
         goto done;
     request.subscriptions = subscriptions;
-    result = astra_port_send_until(input_service, &request, sizeof(request),
-                                   transferred, 2u,
-                                   ASTRA_DEADLINE_INFINITE);
-    events.send = transferred[0];
-    replies.send = transferred[1];
+    /* The event sink first, then the reply capability. */
+    call.request = &request;
+    call.request_size = sizeof(request);
+    call.handles = &events.send;
+    call.handle_count = 1u;
+    call.reply_index = 1u;
+    call.reply = &reply;
+    call.reply_capacity = sizeof(reply);
+    result = astra_port_call(input_service, &call, ASTRA_DEADLINE_INFINITE);
     if (result != ASTRA_OK)
         goto done;
-    result = astra_port_receive_until(
-        replies.receive, &reply, sizeof(reply), 0, 0, &size, &handles,
-        ASTRA_DEADLINE_INFINITE);
-    if (result != ASTRA_OK)
-        goto done;
-    if (size != sizeof(reply) || handles != 0u ||
+    if (call.reply_size != sizeof(reply) || call.reply_handle_count != 0u ||
         reply.header.total_size != sizeof(reply) ||
         reply.header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
         reply.header.flags != 0u ||
@@ -90,22 +80,11 @@ AstraResult astra_pointer_observer_open(AstraHandle input_service,
     }
 
 done:
-    for (uint32_t index = 0u; index < 2u; ++index)
-        if (transferred[index] != ASTRA_INVALID_HANDLE) {
-            AstraResult ignored = astra_handle_close(&transferred[index]);
-            (void)ignored;
-        }
     {
         AstraResult close_result = astra_port_close(&events);
 
         if (result == ASTRA_OK && close_result != ASTRA_OK &&
             close_result != ASTRA_ERROR_INVALID_HANDLE)
-            result = close_result;
-    }
-    {
-        AstraResult close_result = astra_port_close(&replies);
-
-        if (result == ASTRA_OK && close_result != ASTRA_OK)
             result = close_result;
     }
     return result;

@@ -572,6 +572,11 @@ void kernel_process_test_bind_physical_memory(uint8_t *memory, uint32_t base,
 void kernel_process_test_fail_next_thread_create(
     KernelProcessThreadCreateFault fault);
 uint32_t kernel_process_test_handle_count(uint32_t process_id);
+/* A copy of one process's handle in another, as a launch grant makes it. */
+bool kernel_process_test_share_handle(uint32_t from_process_id,
+                                      KernelHandle handle,
+                                      uint32_t to_process_id, uint32_t rights,
+                                      KernelHandle *shared);
 bool kernel_process_test_library_cache_reclaims_after_last_mapping(void);
 bool kernel_process_test_library_cache_exceeds_legacy_slot_count(void);
 bool kernel_process_test_library_reference_selection(void);

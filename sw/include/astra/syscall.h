@@ -7,7 +7,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010039u
+#define ASTRA_SYSCALL_ABI_VERSION 0x0001003Au
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -334,6 +334,30 @@
  */
 #define ASTRA_SYSCALL_AREA_COPY_IN             101
 
+/*
+ * D1=AstraPortCall. A request and its reply in one trap.
+ *
+ * The kernel makes a one-shot reply capability for the calling thread, puts it
+ * in the sent handle list at `reply_index`, sends as PORT_SEND_TRY does, and
+ * blocks the caller until the reply, the deadline, a cancel, or the service
+ * dropping the capability. The service answers with an ordinary PORT_SEND_TRY
+ * on the capability and closes it as it would a reply port's send handle, so
+ * no service knows the difference.
+ *
+ * A refusal before the request is sent -- a full port answers WOULD_BLOCK, as
+ * PORT_SEND_TRY does -- leaves d1 = ASTRA_PORT_CALL_UNSENT and every handle
+ * with the caller. Several statuses can come from either side of the send, so
+ * d1 is the only way to know whether the handles moved. Once sent, the call
+ * ends in d0 = the reply status, d1 = reply size, d2 = reply handle count and
+ * d3 = the replying process id. BUFFER_TOO_SMALL
+ * reports the sizes the reply needed; PEER_DEAD means the capability was
+ * closed without a reply. TIMED_OUT and CANCELLED leave the request delivered
+ * and the capability abandoned: a late reply fails for the service with
+ * PEER_DEAD, exactly as a send to a closed reply port did.
+ */
+#define ASTRA_SYSCALL_PORT_CALL                102
+#define ASTRA_PORT_CALL_UNSENT 0xffffffffu
+
 #define ASTRA_VM_PRIVATE_READ  (1u << 0)
 #define ASTRA_VM_PRIVATE_WRITE (1u << 1)
 #define ASTRA_VM_PRIVATE_RESERVE_EXACT   0u
@@ -519,6 +543,28 @@ typedef struct AstraAreaCopy {
 #define ASTRA_AREA_COPY_SIZE 32u
 _Static_assert(sizeof(AstraAreaCopy) == ASTRA_AREA_COPY_SIZE,
                "area copy ABI size changed");
+
+/* ASTRA_SYSCALL_PORT_CALL. `reply_index` may equal `handle_count`, which puts
+   the reply capability last; the service receives handle_count + 1 handles. */
+typedef struct AstraPortCall {
+    _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t size;
+    uint32_t port;
+    uint32_t request;
+    uint32_t request_size;
+    uint32_t handles;
+    uint32_t handle_count;
+    uint32_t reply_index;
+    uint32_t reply;
+    uint32_t reply_capacity;
+    uint32_t reply_handles;
+    uint32_t reply_handle_capacity;
+    uint32_t deadline_hi;
+    uint32_t deadline_lo;
+} AstraPortCall;
+
+#define ASTRA_PORT_CALL_SIZE 52u
+_Static_assert(sizeof(AstraPortCall) == ASTRA_PORT_CALL_SIZE,
+               "port call ABI size changed");
 
 typedef struct AstraIrqRecord {
     _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t timestamp_high;

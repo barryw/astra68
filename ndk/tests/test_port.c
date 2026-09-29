@@ -98,11 +98,25 @@ uint32_t astra_ndk_test_syscall(uint32_t number,
     assert(script_cursor < script_count);
     call = &script[script_cursor++];
     assert(number == call->number);
-    assert(d1 == call->arguments[0]);
-    assert(d2 == call->arguments[1]);
-    assert(d3 == call->arguments[2]);
-    assert(d4 == call->arguments[3]);
-    assert(d5 == call->arguments[4]);
+    if (number == ASTRA_SYSCALL_PORT_CALL) {
+        /* d1 is the wrapper's own descriptor; the script names its fields:
+           port, deadline high and low, handle count, reply index. */
+        const AstraPortCall *descriptor = (const AstraPortCall *)d1;
+
+        assert(descriptor->size == sizeof(*descriptor) &&
+               descriptor->port == call->arguments[0] &&
+               descriptor->deadline_hi == call->arguments[1] &&
+               descriptor->deadline_lo == call->arguments[2] &&
+               descriptor->handle_count == call->arguments[3] &&
+               descriptor->reply_index == call->arguments[4]);
+        assert(d2 == 0u && d3 == 0u && d4 == 0u && d5 == 0u);
+    } else {
+        assert(d1 == call->arguments[0]);
+        assert(d2 == call->arguments[1]);
+        assert(d3 == call->arguments[2]);
+        assert(d4 == call->arguments[3]);
+        assert(d5 == call->arguments[4]);
+    }
     assert(out_d1 != 0);
     assert(out_d2 != 0);
     *out_d1 = call->out_d1;
@@ -323,6 +337,101 @@ static void test_send_deadline(void)
     script_done();
 }
 
+static void test_call(void)
+{
+    TestMessage request = test_message();
+    TestMessage reply;
+    AstraHandle handles[2] = {0x401u, 0x402u};
+    AstraHandle returned[1] = {ASTRA_INVALID_HANDLE};
+    const AstraMonotonicDeadline deadline =
+        (AstraMonotonicDeadline)UINT64_C(0x0000000123456789);
+    AstraCall call = {0};
+
+    call.request = &request;
+    call.request_size = sizeof(request);
+    call.handles = handles;
+    call.handle_count = 2u;
+    call.reply_index = 1u;
+    call.reply = &reply;
+    call.reply_capacity = sizeof(reply);
+    call.reply_handles = returned;
+    call.reply_handle_capacity = 1u;
+
+    /* A full port is waited on and retried; the reply lands in place and
+       the sent handles are gone. */
+    script_reset();
+    expect_call(ASTRA_SYSCALL_PORT_CALL, 0x210u, 1u, 0x23456789u, 2u, 1u,
+                ASTRA_SYSCALL_WOULD_BLOCK, ASTRA_PORT_CALL_UNSENT, 0u);
+    expect_call(ASTRA_SYSCALL_WAIT_ONE, 0x210u, 1u, 0x23456789u, 0, 0,
+                ASTRA_SYSCALL_OK, 0, 0);
+    expect_call(ASTRA_SYSCALL_PORT_CALL, 0x210u, 1u, 0x23456789u, 2u, 1u,
+                ASTRA_SYSCALL_OK, sizeof(reply), 1u);
+    assert(astra_port_call(0x210u, &call, deadline) == ASTRA_OK);
+    assert(astra_ndk_test_call == &call);
+    assert(call.reply_size == sizeof(reply) && call.reply_handle_count == 1u);
+    assert(handles[0] == ASTRA_INVALID_HANDLE &&
+           handles[1] == ASTRA_INVALID_HANDLE);
+    script_done();
+
+    /* Refused before sending: the handles stay, whatever the status. */
+    handles[0] = 0x401u;
+    handles[1] = 0x402u;
+    script_reset();
+    expect_call(ASTRA_SYSCALL_PORT_CALL, 0x210u, 1u, 0x23456789u, 2u, 1u,
+                ASTRA_SYSCALL_PEER_DEAD, ASTRA_PORT_CALL_UNSENT, 0u);
+    assert(astra_port_call(0x210u, &call, deadline) ==
+           ASTRA_ERROR_PEER_DEAD);
+    assert(handles[0] == 0x401u && handles[1] == 0x402u);
+    assert(call.reply_size == 0u && call.reply_handle_count == 0u);
+    script_done();
+
+    script_reset();
+    expect_call(ASTRA_SYSCALL_PORT_CALL, 0x210u, 0u, 0u, 2u, 1u,
+                ASTRA_SYSCALL_WOULD_BLOCK, ASTRA_PORT_CALL_UNSENT, 0u);
+    assert(astra_port_call(0x210u, &call, ASTRA_DEADLINE_POLL) ==
+           ASTRA_ERROR_WOULD_BLOCK);
+    assert(handles[0] == 0x401u && handles[1] == 0x402u);
+    script_done();
+
+    /* The same status after sending: the service had the handles. */
+    script_reset();
+    expect_call(ASTRA_SYSCALL_PORT_CALL, 0x210u, 1u, 0x23456789u, 2u, 1u,
+                ASTRA_SYSCALL_PEER_DEAD, 0u, 0u);
+    assert(astra_port_call(0x210u, &call, deadline) ==
+           ASTRA_ERROR_PEER_DEAD);
+    assert(handles[0] == ASTRA_INVALID_HANDLE &&
+           handles[1] == ASTRA_INVALID_HANDLE);
+    script_done();
+
+    /* A reply too large reports what it needed. */
+    call.handles = 0;
+    call.handle_count = 0u;
+    call.reply_index = 0u;
+    script_reset();
+    expect_call(ASTRA_SYSCALL_PORT_CALL, 0x210u, 1u, 0x23456789u, 0u, 0u,
+                ASTRA_SYSCALL_BUFFER_TOO_SMALL, 200u, 3u);
+    assert(astra_port_call(0x210u, &call, deadline) ==
+           ASTRA_ERROR_BUFFER_TOO_SMALL);
+    assert(call.reply_size == 200u && call.reply_handle_count == 3u);
+    script_done();
+
+    /* Shapes the kernel would refuse are refused without a trap. */
+    script_reset();
+    call.reply_index = 1u;
+    assert(astra_port_call(0x210u, &call, deadline) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    call.reply_index = 0u;
+    call.reply_capacity = ASTRA_MESSAGE_HEADER_SIZE - 1u;
+    assert(astra_port_call(0x210u, &call, deadline) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    call.reply_capacity = sizeof(reply);
+    assert(astra_port_call(ASTRA_INVALID_HANDLE, &call, deadline) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_port_call(0x210u, 0, deadline) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    script_done();
+}
+
 static void test_receive(void)
 {
     union {
@@ -419,6 +528,7 @@ int main(void)
     test_create_and_close();
     test_send();
     test_send_deadline();
+    test_call();
     test_receive();
     test_receive_deadline();
     puts("port tests: PASS");
