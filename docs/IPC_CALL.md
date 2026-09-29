@@ -209,7 +209,10 @@ Code: `sw/kernel/process.c` (`port_call_syscall`, `deliver_reply`,
   640x480, against the post-copy-fix numbers in
   `HANDOVER_2026-09-29_IPC.md`): argb 1,316 -> ~1,565 fps (+19%),
   argb-blend 1,367 -> ~1,560 (+14%), rgb565 1,460 -> ~1,690 (+16%). The
-  proposal predicted 8-12%.
+  proposal predicted 8-12%. On the board (release `76104ba8`, 60 s):
+  argb 55 -> 57, argb-blend 52 -> 53-54, rgb565 59-60 unchanged. A board
+  frame is ~7 ms upload plus 10-11 ms present, helper and fabric time, so the
+  trap count is no longer what limits it there.
 - **The capability allocates nothing.** Its handle entry's object is the
   caller's thread slot plus one, and its release context is the call number.
   Call numbers are machine-wide, so a capability that outlives its thread
