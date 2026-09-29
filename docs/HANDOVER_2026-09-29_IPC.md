@@ -29,8 +29,8 @@ Watch the board and report problems immediately.
 **Board (astra-de25).**
 - Bitstream `68ce7bb2` (`rtl-noerr`). Its rollback bundle is
   `/var/lib/astra/boot-incoming-f2s`.
-- Release: the one published from the final commit. If that publish did
-  not happen, `b421dc7d`. Check with `readlink /var/lib/astra/current`.
+- Release `9ef3aebc`, published from `3c412b84` (the kernel fixes) after a
+  full verify.
 - `kernel.panic = 10`, so the board reboots itself after a panic.
 - Certified on `b421dc7d`:
   - POST PASS.
@@ -40,9 +40,12 @@ Watch the board and report problems immediately.
   - `astra-render-certify`: 9/9.
   - 15-minute SDLFrameBench soak: clean.
 
-**Board fps** (SDLFrameBench 640x480, b421dc7d): argb-blend 42, argb 45,
-rgb565 53. These predate today's kernel fixes, which are not yet measured on
-the board.
+**Board fps** (SDLFrameBench 640x480): argb-blend **52** (42 on b421dc7d),
+argb **55** (45), rgb565 **59-60** (53), with 0 helper failures, on
+`9ef3aebc`. A frame is now upload about 7 ms (ARGB) or 5.3 ms (RGB565),
+plus present 10.4-11.7 ms. **Present is now the biggest share of a board
+frame.** Profile the present path (`WINDOW_PRESENT` compose, the display
+service and the helper) alongside the IPC work.
 
 **Beast fps** (`emu/qemu/bench-frame.py --fake-helper`):
 
