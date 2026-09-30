@@ -208,7 +208,26 @@ after its first pass; read it before writing the gate.
 - testthread's handler line and thread #2's first line race (it raises
   SIGTERM right after creating the thread); the gate accepts either order.
 
-**Next:** `loopwave`, then Chocolate Doom.
+## Done: loopwave in QEMU
+
+- loopwave ships as an application with `sample.wav` and the PCM
+  capability. `emu/qemu/test-sdl-audio.py` runs a stand-in for the Linux
+  audio daemon on `ASTRA_AUDIO_HOST_SOCKET` (same socket protocol, 4096-frame
+  voice queues drained at 48 kHz) and checks the captured voice against its
+  own MS-ADPCM decode of the bundle's `sample.wav` (bit-exact with ffmpeg
+  and SDL_wave.c). QEMU under full gate load: worst 0.5 s window
+  correlation 0.991 across the loop boundary, +51 ppm, 0 queue underruns.
+  Offline perturbations (one 1024-frame packet dropped, one repeated,
+  samples byte-swapped) each fail.
+- The +51 ppm is upstream SDL 2: `SDL_ResampleAudio` restarts phase and
+  truncates the output length per chunk. Not an Astra fault.
+- SDL plays silence while the device is paused; the gate aligns from the
+  first non-silent frame.
+- loopwave has no window. From the desktop it plays until killed; SDL's
+  minimal config has no `HAVE_SIGACTION`, so SIGTERM is not SDL_QUIT.
+
+**Next:** loopwave on the DE25 (the daemon's monitor tap,
+`ASTRA_AUDIO_HOST_MONITOR`, gives the final mix), then Chocolate Doom.
 
 ## The remaining SDL gates
 

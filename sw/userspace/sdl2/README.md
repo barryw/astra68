@@ -49,6 +49,19 @@ per thread, join its first thread on a flag, and run the SIGTERM handler it
 raises (a 5 s sleep, then stopping and joining the second thread) to a
 clean exit.
 
+Upstream `loopwave` ships with `sample.wav` (MS-ADPCM, mono, 22050 Hz) in its
+bundle. SDL decodes and resamples it to the device's 48 kHz stereo S16BE.
+QEMU has no physical sink, so `emu/qemu/test-sdl-audio.py` points QEMU's
+host audio provider at a stand-in for the Linux audio daemon: the daemon's
+socket protocol and 4096-frame voice queues, drained at 48 kHz. The gate
+decodes the bundle's `sample.wav` itself, bit-exact with `SDL_wave.c`, and
+requires the captured voice to be that sound looped past a loop boundary:
+every 0.5 s window correlates at 0.97 or better, left equals right, and
+the alignment moves only by upstream SDL 2's resampler drift (each chunk's
+output length is truncated; about +50 ppm here). A dropped or repeated
+packet, or byte-swapped samples, fails it. loopwave has no window and no
+quit path but SIGTERM's default action.
+
 ## FPGA renderer
 
 SDL drawing now reaches the FPGA through Astra's managed graphics API; see
@@ -158,7 +171,7 @@ changing SDL sources: `testver` for core linking (passed in QEMU), `testthread`
 and `testtimer` for runtime behavior (both passed in QEMU), `testdraw2` for
 window rendering,
 `testkeys` and `testmouse` for input (both passed in QEMU), and `loopwave`
-for PCM playback. Follow
+for PCM playback (passed in QEMU against a stand-in host daemon). Follow
 them with `testsprite2` for moving graphics and Chocolate Doom for a real-game
 integration gate. The DE25 visual, input, and audio gates remain open.
 
