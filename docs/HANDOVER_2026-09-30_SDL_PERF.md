@@ -175,6 +175,25 @@ perf of the vCPU thread; `/var/lib/astra/tools/perf`), and overrides for a
 board A/B without publishing: `systemctl set-environment QEMU=...` or
 `ROM=... ASTRA_BASE_STORAGE=... ASTRA_STATE_ROOT=<fresh dir>`.
 
+## Done: batch validation, input gates (release `323ab243`)
+
+- `9d02f09a` helper: guest batches are validated once, with word loads
+  (the payload is non-cacheable; each byte load crossed the bus).
+  testsprite2 52 -> 60, `copy_us` 2,300 -> 3.
+- `36a4dae3` SDL: testkeys and testmouse ship as applications. `SDL_Log`
+  goes to the system log. `test-sdl-input.py` gates both (testmouse through
+  QMP drag, Shift-drag, wheel and close, checked in the decoded render
+  batches); both run in `~/astra-mg/gates.sh` and pass in the full verify.
+- Board, release `323ab243`: every demo at the 60 Hz display rate except
+  testrendertarget (~45 fps, a full-size target created and destroyed
+  every frame; see the open leads above). Remote desktop PASS.
+
+**Next:** timers and threads (`testtimer`, `testthread`), then `loopwave`,
+then Chocolate Doom. testtimer and testthread log through `SDL_Log` and
+exit by themselves; `test-sdl-input.py`'s testkeys check (log lines, then a
+clean exit after the last one) is the pattern. testthread waits for SIGTERM
+after its first pass; read it before writing the gate.
+
 ## The remaining SDL gates
 
 From `sw/userspace/sdl2/README.md`. Upstream test programs live in the SDL2
