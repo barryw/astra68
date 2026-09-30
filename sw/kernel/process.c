@@ -2450,6 +2450,14 @@ bool kernel_process_host_channel_irq_service(uint8_t source,
     if (woken_threads == NULL)
         return false;
     *woken_threads = 0u;
+    /* Acknowledge before scanning. The acknowledgement clears every
+     * channel's pending completion, so a completion the host published
+     * between a scan and a later acknowledgement was erased: its waiter
+     * slept until some unrelated host interrupt (the DE25's audio feed
+     * stalled ~150 ms about once a minute). Now a completion before the
+     * acknowledgement is seen by the scan, and one after it raises the
+     * interrupt again. */
+    kernel_platform_host_channel_ack();
     for (uint32_t slot = 0u; slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
          ++slot) {
         KernelHostChannel *channel = &host_channels[slot];
@@ -2467,7 +2475,6 @@ bool kernel_process_host_channel_irq_service(uint8_t source,
         *woken_threads += woken;
         channel->waiting = 0u;
     }
-    kernel_platform_host_channel_ack();
     return valid;
 }
 

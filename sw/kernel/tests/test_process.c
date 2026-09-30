@@ -897,6 +897,9 @@ static uint32_t host_channel_disarm_calls;
 static KernelPlatformHostChannelState
     host_channel_states[KERNEL_VM_HOST_CHANNEL_PAGE_COUNT];
 static uint32_t host_channel_ack_calls;
+/* Nonzero: the host publishes this consumer position just as the kernel
+ * acknowledges the interrupt -- the race a scan-then-ack service loses. */
+static uint32_t host_channel_publish_on_ack;
 
 bool kernel_platform_host_state(KernelPlatformHostState *state)
 {
@@ -1001,6 +1004,11 @@ bool kernel_platform_host_channel_completion(
 void kernel_platform_host_channel_ack(void)
 {
     ++host_channel_ack_calls;
+    if (host_channel_publish_on_ack != 0u) {
+        host_channel_states[host_channel_slot].consumer_position =
+            host_channel_publish_on_ack;
+        host_channel_publish_on_ack = 0u;
+    }
 }
 
 void kernel_platform_host_release_owner(uint32_t owner)
@@ -8311,6 +8319,25 @@ static void test_host_admission(void)
         assert(woken == 1u);
         assert(host_channel_ack_calls == 2u);
         assert(host_channel_disarm_calls == 1u);
+        next = kernel_process_resume_idle();
+        assert(next != NULL && next->data[0] == ASTRA_SYSCALL_OK);
+        assert(kernel_thread_snapshot(slot, &thread));
+        assert(thread.state == KERNEL_THREAD_RUNNING);
+
+        /* A completion that lands while the service runs is not lost: the
+         * acknowledgement comes before the scan, so the scan sees it (and
+         * one after the scan raises the interrupt again). */
+        registers[2] = 22u;
+        assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                         &next) ==
+               KERNEL_PROCESS_NO_RUNNABLE);
+        assert(kernel_thread_snapshot(slot, &thread));
+        assert(thread.state == KERNEL_THREAD_BLOCKED);
+        host_channel_publish_on_ack = 22u;
+        assert(kernel_process_host_channel_irq_service(
+            IRQ_SRC_HOST, 0u, NULL, &woken));
+        assert(woken == 1u);
+        assert(host_channel_ack_calls == 3u);
         next = kernel_process_resume_idle();
         assert(next != NULL && next->data[0] == ASTRA_SYSCALL_OK);
         assert(kernel_thread_snapshot(slot, &thread));

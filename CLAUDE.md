@@ -158,6 +158,12 @@ There is no alternative CPU or emulator implementation in the repository.
   returns, and the render engine sits BUSY until the FPGA is reconfigured.
   `astra_render_host_reads` splits host bursts to 32 beats. Any new FPGA
   master to HPS DDR must do the same.
+- **Acknowledge a shared completion interrupt before scanning, never
+  after.** QEMU's host-channel acknowledgement clears every channel's
+  pending bit, so a completion published between a scan and a later ack
+  was erased and its waiter slept until an unrelated interrupt. It
+  surfaced as audio gaps (a stalled media service) about once a minute on
+  the DE25, with the vCPU idle and every host command fast.
 - **The qualification kernel is a second ROM**, built with
   `make KERNEL_K1_QUALIFICATION=1` in `sw/boot`, with no debug surface and no
   initial user image. `emu/qemu/test-qualification.py` is its gate. It

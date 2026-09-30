@@ -234,6 +234,8 @@ typedef struct AstraTimer {
     uint32_t control;
     uint32_t status;
     int index;
+    /* When the armed countdown is due, on QEMU_CLOCK_VIRTUAL. */
+    int64_t due_ns;
 } AstraTimer;
 
 typedef struct AstraeaState {
@@ -496,6 +498,10 @@ typedef struct AstraHostState {
     uint64_t submissions;
     uint64_t commands;
     uint64_t execution_ns;
+    /* Worst submit-to-completion time of a channel command (writable, so a
+     * measurement can start from zero), and how many took over 20 ms. */
+    uint64_t execution_max_ns;
+    uint64_t slow_commands;
     uint64_t operation_counts[ASTRA_HOST_FS_MAX + 1u];
     uint64_t operation_execution_ns[ASTRA_HOST_FS_MAX + 1u];
     uint64_t inflight;
@@ -535,6 +541,14 @@ struct Astra68State {
     uint32_t ram_size;
     uint64_t reset_clock_ns;
     uint64_t rtc_latch;
+    /* CPU_CYCLES_LO latches the whole count; CPU_CYCLES_HI reads the latch
+     * (vesta.h), so a low-word wrap between the reads cannot tear it. */
+    uint64_t cycles_latch;
+    /* Worst lateness of a timer expiry callback past its due time
+     * (writable, so a measurement can start from zero), and how many were
+     * over 1 ms late. */
+    uint64_t timer_late_max_ns;
+    uint64_t timer_late_count;
     uint64_t rtc_base_ns;
     uint64_t rtc_base_clock_ns;
     uint32_t rtc_set_high;
@@ -4674,6 +4688,7 @@ static void astra_host_channel_complete(void *opaque, int ret)
     Astra68State *s = job->machine;
     AstraHostChannel *channel = &s->host.channels[job->slot];
     uint8_t *base;
+    uint64_t elapsed;
 
     assert(channel->jobs != 0);
     --channel->jobs;
@@ -4688,8 +4703,12 @@ static void astra_host_channel_complete(void *opaque, int ret)
     }
     base = astra_dma_data(s, channel->physical_buffer, channel->byte_size, 0,
                           channel->byte_size);
-    qatomic_add(&s->host.execution_ns,
-                qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - job->started_ns);
+    elapsed = qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - job->started_ns;
+    qatomic_add(&s->host.execution_ns, elapsed);
+    if (elapsed > qatomic_read(&s->host.execution_max_ns))
+        qatomic_set(&s->host.execution_max_ns, elapsed);
+    if (elapsed > UINT64_C(20000000))
+        qatomic_inc(&s->host.slow_commands);
     astra_host_channel_publish_completion(s, channel, base, job->position,
                                           ret);
     g_free(job);
@@ -4980,6 +4999,12 @@ static void astra_timer_expired(void *opaque)
     AstraTimer *timer = opaque;
     Astra68State *s = timer->machine;
 
+    int64_t late = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - timer->due_ns;
+
+    if (late > 0 && (uint64_t)late > s->timer_late_max_ns)
+        s->timer_late_max_ns = late;
+    if (late > 1000000)
+        ++s->timer_late_count;
     timer->status |= TIMER_EXPIRED;
     if (s->trace_timers) {
         fprintf(stderr, "ASTRA68 timer expired load=%" PRIu32
@@ -4988,9 +5013,9 @@ static void astra_timer_expired(void *opaque)
                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
     }
     if (timer->control & TIMER_PERIODIC) {
-        timer_mod_ns(timer->qemu_timer,
-                     qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                     astra_timer_period_ns(timer));
+        timer->due_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                        astra_timer_period_ns(timer);
+        timer_mod_ns(timer->qemu_timer, timer->due_ns);
     } else {
         timer->control &= ~TIMER_ENABLE;
     }
@@ -5043,7 +5068,6 @@ static uint32_t astra_irq_current(Astra68State *s)
 
 static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
 {
-    uint64_t cycles;
     uint64_t host_ns;
     int timer_index;
     AstraTimer *timer;
@@ -5083,11 +5107,10 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     case 0x0d4: return 0x00000302; /* completed, phase done */
     case 0x0d8: return s->ram_size - 4;
     case 0x0ec:
-        cycles = astra_now_cycles(s);
-        return cycles;
+        s->cycles_latch = astra_now_cycles(s);
+        return (uint32_t)s->cycles_latch;
     case 0x0f0:
-        cycles = astra_now_cycles(s);
-        return cycles >> 32;
+        return (uint32_t)(s->cycles_latch >> 32);
     case 0x12c:
         return qemu_clock_get_ns(QEMU_CLOCK_REALTIME) / 1000u;
     /* The host seeds this clock at reset; Astra may discipline it later. */
@@ -5485,9 +5508,9 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
                                 astra_timer_period_ns(timer),
                                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
                     }
-                    timer_mod_ns(timer->qemu_timer,
-                                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                                 astra_timer_period_ns(timer));
+                    timer->due_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                                    astra_timer_period_ns(timer);
+                    timer_mod_ns(timer->qemu_timer, timer->due_ns);
                 }
                 astra_update_irq(s);
                 break;
@@ -6182,6 +6205,22 @@ static void astra68_init(MachineState *machine)
     object_property_add_uint64_ptr(OBJECT(machine),
                                    "astra-host-execution-ns",
                                    &s->host.execution_ns,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-host-execution-max-ns",
+                                   &s->host.execution_max_ns,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-timer-late-max-ns",
+                                   &s->timer_late_max_ns,
+                                   OBJ_PROP_FLAG_READWRITE);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-timer-late-count",
+                                   &s->timer_late_count,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-host-slow-commands",
+                                   &s->host.slow_commands,
                                    OBJ_PROP_FLAG_READ);
     {
         static const struct {

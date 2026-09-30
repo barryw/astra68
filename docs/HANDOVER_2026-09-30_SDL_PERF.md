@@ -279,10 +279,28 @@ contract.
   pcm-certify use it. Host requests for the same audio: ~15,000 to ~1,900;
   guest cost ~20 M to ~4 M instructions/s.
 
-**Next:** re-measure the DE25 gap rate with `astra_pcm_wait`
-(`fpga/de25/linux/audio_monitor.py` now prints the daemon's underruns,
-overflows and gaps over the capture). If gaps remain, find what blocks the
-guest for ~140 ms. Then Chocolate Doom.
+- With `astra_pcm_wait` (release `5f5358f5`): 2 gaps in 400 s, down from
+  about one a minute, still not zero.
+- Instrumented QEMU (new QOM counters, readable over QMP):
+  `astra-host-execution-max-ns` / `astra-host-slow-commands` (worst host
+  channel command, submit to completion) and `astra-timer-late-max-ns` /
+  `astra-timer-late-count` (timer callbacks past due). With gaps present,
+  host commands peaked at 5.9-8.6 ms and the timer at 3.4 ms: neither.
+- **Root cause: a lost wakeup in the kernel's host channel interrupt.**
+  `kernel_process_host_channel_irq_service` scanned the channels, then
+  acknowledged; QEMU's acknowledgement clears every channel's pending
+  completion, so a completion published between the scan and the
+  acknowledgement was erased and its waiter (the media service, and so the
+  audio feed) slept until some unrelated host interrupt. It now
+  acknowledges first. `test_process` models the race (a completion
+  published at the acknowledgement) and fails on the old order.
+- Also fixed: QEMU did not latch `CPU_CYCLES_LO`/`HI` as `vesta.h`
+  promises; a low-word wrap between the reads (every ~343.6 s) returned a
+  count 343.6 s high and expired every pending deadline early.
+
+**Next:** board gap rate on the release with both fixes (target zero), then
+Chocolate Doom. Userspace drivers that take IRQ capabilities (display,
+block, input) should be checked for the same scan-then-acknowledge shape.
 
 ## The remaining SDL gates
 
