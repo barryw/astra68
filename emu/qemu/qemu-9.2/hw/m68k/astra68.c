@@ -3414,7 +3414,6 @@ static void astra_host_execute_audio(Astra68State *s,
         if (handle == 0u || value != 0u || length == 0u ||
             length > ASTRA_AUDIO_HOST_PACKET_FRAMES *
                          ASTRA_AUDIO_HOST_FRAME_BYTES ||
-            length % 2u != 0u ||
             capacity < length)
             goto done;
         data = astra_host_command_data(s, physical, bytes, command_bytes,

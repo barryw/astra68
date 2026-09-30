@@ -86,7 +86,7 @@ client.
 
 This certifies the fixed 48 kHz stereo signed-24-bit transport and physical
 mixer under the tested workload, not the complete PCM release gate below.
-Measured end-to-end latency, mono/rate conversion, pan, master gain/mute,
+Measured end-to-end latency, pan, master gain/mute,
 client-death and daemon-restart behavior during playback, and broader
 display/input contention still need their own acceptance evidence before the
 media service and public Audio Kit are considered stable.
@@ -138,10 +138,20 @@ meet this gate, stop and measure the failure before changing hardware.
 
 ## Port adapters and public libraries
 
-The `pcm.library.2`/NDK slice accepts 48 kHz stereo signed-24-bit LE or
-signed-16-bit BE input, with per-stream gain, pause/resume, clear, finish,
-status, and close. The Linux mixer converts the 16-bit input to the physical
-24-bit sink. A host-side self-test mixes 16 simultaneous voices and rejects
+The `pcm.library.2`/NDK slice takes a format word
+(`sw/include/astra/pcm_format.h`, the one contract shared by the guest,
+QEMU and the Linux daemon) that names encoding, channels and rate: every
+SDL2 sample format plus packed 24-bit, mono or stereo, 8 to 192 kHz. The
+word travels unchanged through the media service and the AstraHost audio
+channel's OPEN; no other transport carries audio. Streams have per-stream
+gain, pause/resume, clear, finish, status, and close. The Linux daemon
+decodes each WRITE to 24-bit scale and resamples every voice that is not at
+48 kHz with a Kaiser-windowed sinc (12 zero crossings, 256 interpolated
+phases, cutoff 0.95 of the lower Nyquist rate, so rates above 48 kHz are
+anti-aliased), then mixes. A 48 kHz stream stays bit-exact. The MC68040
+converts nothing: measured on loopwave (22050 Hz mono ADPCM), guest cost
+fell from ~422 M to ~20 M instructions per second of audio, the difference
+being libgcc soft-float under SDL 2's float resampler. A host-side self-test mixes 16 simultaneous voices and rejects
 bad formats, partial frames, and invalid controls. A 30-second physical DE25
 socket test mixed 16 simultaneous streams, reached a 456-frame minimum FIFO,
 and observed zero underruns, overflows, or software gaps. This qualifies the
@@ -150,9 +160,10 @@ is staged in the default desktop image to exercise the media-service boundary; i
 general-purpose game-audio contract until the remaining PCM gate passes.
 After that gate, add compatibility adapters for the actual upstream port
 interfaces, then publish the complete native Audio Kit/NDK API. SDL2's audio
-backend can advertise 48 kHz `AUDIO_S16MSB` and forward PCM. SDL2 can convert
-other requested formats and rates as a correctness path, but the MC68040 cost
-has not been measured. The backend cannot move an application's SDL callback,
+backend opens the device at each application's own format, channels and
+rate; SDL converts only what the host cannot take (more than two channels,
+a rate outside 8-192 kHz), and that path runs in guest soft-float. The
+backend cannot move an application's SDL callback,
 SDL2_mixer, or SDL_audiolib code from the MC68040 to Linux. Host-backed
 adapters must be built at the appropriate library boundary where measurement
 shows guest mixing or decoding is material. Do not patch Doom or DevilutionX

@@ -107,7 +107,7 @@ AstraResult astra_pcm_open(AstraHandle service, uint32_t format,
     if (status != ASTRA_SYSCALL_OK)
         return astra_result_from_syscall(status);
     status = astra_rt_area_create(ASTRA_PCM_TRANSFER_FRAMES *
-                                  ASTRA_PCM_FRAME_BYTES,
+                                  ASTRA_PCM_MAX_FRAME_BYTES,
                                   ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
                                   ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
                                   &stream->area);
@@ -119,7 +119,7 @@ AstraResult astra_pcm_open(AstraHandle service, uint32_t format,
                                ASTRA_AREA_MAP_WRITE, &stream->mapped,
                                &mapped_size);
     if (status != ASTRA_SYSCALL_OK ||
-        mapped_size < ASTRA_PCM_TRANSFER_FRAMES * ASTRA_PCM_FRAME_BYTES) {
+        mapped_size < ASTRA_PCM_TRANSFER_FRAMES * ASTRA_PCM_MAX_FRAME_BYTES) {
         result = ASTRA_ERROR_NO_RESOURCES;
         goto fail;
     }

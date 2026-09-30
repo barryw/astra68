@@ -9,6 +9,7 @@
 #include <astra/status.h>
 
 #include <errno.h>
+#include <math.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -46,15 +47,40 @@ enum {
     CONTROL_DRAIN = 2u,
     STATUS_LEVEL_MASK = 0x3ffu,
     PREFILL_FRAMES = 384u,
+    /* Resampling: a Kaiser-windowed sinc, ZERO_CROSSINGS wide on each side
+     * at the cutoff, tabulated at FILTER_PHASES fractional positions and
+     * interpolated between them. The cutoff sits a little below the lower
+     * of the two Nyquist rates, so upsampling removes images and
+     * downsampling removes what the sink cannot carry. */
+    ZERO_CROSSINGS = 12u,
+    FILTER_PHASES = 256u,
+    /* Frames kept behind the read position for the filter's left wing:
+     * the widest filter, at ASTRA_PCM_RATE_MAX, needs 51. */
+    HISTORY_FRAMES = 64u,
 };
+
+#define FILTER_ROLLOFF 0.95
+#define KAISER_BETA 8.6
 
 typedef struct Voice {
     struct Voice *next;
-    uint8_t *frames;
+    /* Decoded source frames, left and right, at 24-bit scale: the queue
+     * plus HISTORY_FRAMES behind it. */
+    float (*frames)[2];
+    /* (FILTER_PHASES + 1) rows of taps; NULL when the rate is the sink's. */
+    float *filter;
     uint32_t handle;
     uint32_t gain_q16;
     uint32_t format;
+    uint32_t encoding;
+    uint32_t channels;
+    uint32_t rate;
     uint32_t frame_bytes;
+    uint32_t taps;
+    /* Source frames the filter needs after the read position. */
+    uint32_t lookahead;
+    /* Fractional read position, in 1/ASTRA_PCM_RATE of a source frame. */
+    uint32_t phase;
     uint32_t read_at;
     uint32_t queued;
     int paused;
@@ -108,19 +134,121 @@ static void write_reg(AudioHost *host, unsigned offset, uint32_t value)
     host->registers[offset / 4u] = value;
 }
 
-static int32_t s24le(const uint8_t *data)
+static uint32_t load_le(const uint8_t *data, uint32_t bytes)
 {
-    uint32_t bits = (uint32_t)data[0] | ((uint32_t)data[1] << 8) |
-                    ((uint32_t)data[2] << 16);
+    uint32_t value = 0u;
 
-    return (int32_t)(bits ^ UINT32_C(0x800000)) - INT32_C(0x800000);
+    for (uint32_t at = bytes; at-- > 0u;)
+        value = (value << 8) | data[at];
+    return value;
 }
 
-static int32_t s16be_as_s24(const uint8_t *data)
+static uint32_t load_be(const uint8_t *data, uint32_t bytes)
 {
-    uint16_t bits = ((uint16_t)data[0] << 8) | data[1];
+    uint32_t value = 0u;
 
-    return (int32_t)((int16_t)bits) * 256;
+    for (uint32_t at = 0u; at < bytes; ++at)
+        value = (value << 8) | data[at];
+    return value;
+}
+
+static float as_float(uint32_t bits)
+{
+    float value;
+
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+/* One sample of @p encoding at the sink's 24-bit scale. Integer encodings
+ * come out exact; float ones may exceed full scale and are saturated when
+ * mixed. */
+static float decode_sample(uint32_t encoding, const uint8_t *data)
+{
+    switch (encoding) {
+    case ASTRA_PCM_ENCODING_U8:
+        return (float)((int32_t)data[0] - 128) * 65536.0f;
+    case ASTRA_PCM_ENCODING_S8:
+        return (float)(int8_t)data[0] * 65536.0f;
+    case ASTRA_PCM_ENCODING_S16BE:
+        return (float)(int16_t)load_be(data, 2u) * 256.0f;
+    case ASTRA_PCM_ENCODING_S16LE:
+        return (float)(int16_t)load_le(data, 2u) * 256.0f;
+    case ASTRA_PCM_ENCODING_U16BE:
+        return (float)((int32_t)load_be(data, 2u) - 32768) * 256.0f;
+    case ASTRA_PCM_ENCODING_U16LE:
+        return (float)((int32_t)load_le(data, 2u) - 32768) * 256.0f;
+    case ASTRA_PCM_ENCODING_S24LE:
+        return (float)((int32_t)(load_le(data, 3u) ^ UINT32_C(0x800000)) -
+                       INT32_C(0x800000));
+    case ASTRA_PCM_ENCODING_S32BE:
+        return (float)((double)(int32_t)load_be(data, 4u) / 256.0);
+    case ASTRA_PCM_ENCODING_S32LE:
+        return (float)((double)(int32_t)load_le(data, 4u) / 256.0);
+    case ASTRA_PCM_ENCODING_F32BE:
+        return as_float(load_be(data, 4u)) * 8388608.0f;
+    case ASTRA_PCM_ENCODING_F32LE:
+        return as_float(load_le(data, 4u)) * 8388608.0f;
+    default:
+        return 0.0f;
+    }
+}
+
+static double bessel_i0(double x)
+{
+    double sum = 1.0, term = 1.0;
+
+    for (unsigned k = 1u; k < 64u && term > sum * 1e-12; ++k) {
+        term *= (x / (2.0 * k)) * (x / (2.0 * k));
+        sum += term;
+    }
+    return sum;
+}
+
+/* The polyphase table for converting @p rate to the sink rate. Row p holds
+ * the taps for a read position p / FILTER_PHASES of a frame past the
+ * current one; tap j weighs the frame j - (taps / 2 - 1) away. Each row is
+ * normalised to unity gain at DC. */
+static float *make_filter(uint32_t rate, uint32_t *taps_out)
+{
+    double cutoff = FILTER_ROLLOFF *
+                    (rate > ASTRA_PCM_RATE ?
+                     (double)ASTRA_PCM_RATE / rate : 1.0);
+    uint32_t half = (uint32_t)ceil(ZERO_CROSSINGS / cutoff);
+    uint32_t taps = 2u * half;
+    float *filter = malloc((FILTER_PHASES + 1u) * taps * sizeof(*filter));
+    double norm = bessel_i0(KAISER_BETA);
+
+    if (filter == NULL || half > HISTORY_FRAMES)
+        return free(filter), NULL;
+    for (uint32_t phase = 0u; phase <= FILTER_PHASES; ++phase) {
+        float *row = filter + phase * taps;
+        double sum = 0.0;
+
+        for (uint32_t tap = 0u; tap < taps; ++tap) {
+            double t = (double)tap - (half - 1u) -
+                       (double)phase / FILTER_PHASES;
+            double x = M_PI * cutoff * t;
+            double edge = t / half;
+            double window = fabs(edge) >= 1.0 ? 0.0 :
+                bessel_i0(KAISER_BETA * sqrt(1.0 - edge * edge)) / norm;
+            double value = (x == 0.0 ? 1.0 : sin(x) / x) * window;
+
+            row[tap] = (float)value;
+            sum += value;
+        }
+        for (uint32_t tap = 0u; tap < taps; ++tap)
+            row[tap] = (float)(row[tap] / sum);
+    }
+    *taps_out = taps;
+    return filter;
+}
+
+static void free_voice(Voice *voice)
+{
+    free(voice->frames);
+    free(voice->filter);
+    free(voice);
 }
 
 static int32_t saturate24(int64_t sample)
@@ -140,15 +268,76 @@ static Voice *find_voice(Client *client, uint32_t handle)
     return NULL;
 }
 
+/* Frames in a voice's ring: the queue and the history behind it. */
+#define VOICE_FRAMES (ASTRA_AUDIO_HOST_QUEUE_FRAMES + HISTORY_FRAMES)
+
+/* A voice can give a sink frame when the filter's right wing is queued, or
+ * when the stream is finished and the missing frames are its silent end. */
+static int voice_ready(const Voice *voice)
+{
+    return !voice->paused && voice->queued != 0u &&
+           (voice->finished || voice->queued > voice->lookahead);
+}
+
 static uint32_t queued_any(const AudioHost *host)
 {
     for (const Client *client = host->clients; client != NULL;
          client = client->next)
         for (const Voice *voice = client->voices; voice != NULL;
              voice = voice->next)
-            if (voice->queued != 0u && !voice->paused)
+            if (voice_ready(voice))
                 return 1u;
     return 0u;
+}
+
+/* The source frame @p offset away from the read position: history behind
+ * it, silence past a finished stream's end. */
+static const float *voice_frame(const Voice *voice, int32_t offset)
+{
+    static const float silence[2];
+
+    if (offset >= 0 && (uint32_t)offset >= voice->queued)
+        return silence;
+    return voice->frames[(voice->read_at + VOICE_FRAMES + (uint32_t)offset) %
+                         VOICE_FRAMES];
+}
+
+/* One sink frame of @p voice, at 24-bit scale before gain, and the read
+ * position moved on by one sink period. */
+static void voice_next(Voice *voice, double out[2])
+{
+    uint32_t advance = 1u;
+
+    if (voice->filter == NULL) {
+        const float *frame = voice_frame(voice, 0);
+
+        out[0] = frame[0];
+        out[1] = frame[1];
+    } else {
+        double position = (double)voice->phase * FILTER_PHASES /
+                          ASTRA_PCM_RATE;
+        uint32_t row = (uint32_t)position;
+        double blend = position - row;
+        const float *first = voice->filter + row * voice->taps;
+        const float *second = first + voice->taps;
+        int32_t from = 1 - (int32_t)(voice->taps / 2u);
+
+        out[0] = out[1] = 0.0;
+        for (uint32_t tap = 0u; tap < voice->taps; ++tap) {
+            const float *frame = voice_frame(voice, from + (int32_t)tap);
+            double weight = first[tap] + blend * (second[tap] - first[tap]);
+
+            out[0] += frame[0] * weight;
+            out[1] += frame[1] * weight;
+        }
+        voice->phase += voice->rate;
+        advance = voice->phase / ASTRA_PCM_RATE;
+        voice->phase %= ASTRA_PCM_RATE;
+    }
+    if (advance > voice->queued)
+        advance = voice->queued;
+    voice->read_at = (voice->read_at + advance) % VOICE_FRAMES;
+    voice->queued -= advance;
 }
 
 static void free_client(AudioHost *host, Client *client);
@@ -163,11 +352,11 @@ static void mix_frame(AudioHost *host, int32_t *left, int32_t *right)
          client = client->next)
         for (Voice *voice = client->voices; voice != NULL;
              voice = voice->next) {
-            const uint8_t *frame;
+            double sample[2];
 
             if (voice->paused)
                 continue;
-            if (voice->queued == 0u) {
+            if (!voice_ready(voice)) {
                 if (voice->ever_written && !voice->finished &&
                     !voice->gap_reported) {
                     ++host->software_gaps;
@@ -175,21 +364,16 @@ static void mix_frame(AudioHost *host, int32_t *left, int32_t *right)
                 }
                 continue;
             }
-            frame = voice->frames +
-                    voice->read_at * voice->frame_bytes;
             ++active_voices;
-            if (voice->format == ASTRA_PCM_FORMAT_S24LE_STEREO) {
-                sum_left += ((int64_t)s24le(frame) * voice->gain_q16) >> 16;
-                sum_right += ((int64_t)s24le(frame + 3u) * voice->gain_q16) >> 16;
+            voice_next(voice, sample);
+            if (voice->filter == NULL) {
+                /* The sink's own rate stays bit-exact. */
+                sum_left += ((int64_t)sample[0] * voice->gain_q16) >> 16;
+                sum_right += ((int64_t)sample[1] * voice->gain_q16) >> 16;
             } else {
-                sum_left += ((int64_t)s16be_as_s24(frame) *
-                             voice->gain_q16) >> 16;
-                sum_right += ((int64_t)s16be_as_s24(frame + 2u) *
-                              voice->gain_q16) >> 16;
+                sum_left += llrint(sample[0] * voice->gain_q16 / 65536.0);
+                sum_right += llrint(sample[1] * voice->gain_q16 / 65536.0);
             }
-            voice->read_at = (voice->read_at + 1u) %
-                             ASTRA_AUDIO_HOST_QUEUE_FRAMES;
-            --voice->queued;
         }
     if (active_voices > host->maximum_active_voices)
         host->maximum_active_voices = active_voices;
@@ -330,8 +514,7 @@ static void free_client(AudioHost *host, Client *client)
         Voice *voice = client->voices;
 
         client->voices = voice->next;
-        free(voice->frames);
-        free(voice);
+        free_voice(voice);
     }
     (void)epoll_ctl(host->epoll_fd, EPOLL_CTL_DEL, client->fd, NULL);
     (void)close(client->fd);
@@ -349,7 +532,6 @@ static uint32_t validate_request(const AstraAudioHostRequest *request,
     if (request->operation == ASTRA_HOST_AUDIO_WRITE)
         return request->handle != 0u && request->value == 0u &&
                        request->data_length != 0u &&
-                       request->data_length % 2u == 0u &&
                        request->data_length <=
                            ASTRA_AUDIO_HOST_PACKET_FRAMES *
                                ASTRA_AUDIO_HOST_FRAME_BYTES ?
@@ -397,11 +579,23 @@ static void execute(AudioHost *host, Client *client,
         break;
     case ASTRA_HOST_AUDIO_OPEN:
         voice = calloc(1u, sizeof(*voice));
-        if (voice != NULL)
-            voice->frames = malloc(ASTRA_AUDIO_HOST_QUEUE_FRAMES *
-                                   ASTRA_AUDIO_HOST_FRAME_BYTES);
-        if (voice == NULL || voice->frames == NULL) {
-            free(voice);
+        if (voice == NULL) {
+            reply->status = ASTRA_STATUS_NO_SPACE;
+            break;
+        }
+        voice->format = request->value;
+        voice->encoding = astra_pcm_format_encoding(request->value);
+        voice->channels = astra_pcm_format_channels(request->value);
+        voice->rate = astra_pcm_format_rate(request->value);
+        voice->frame_bytes = astra_pcm_format_frame_bytes(request->value);
+        voice->frames = calloc(VOICE_FRAMES, sizeof(*voice->frames));
+        if (voice->rate != ASTRA_PCM_RATE) {
+            voice->filter = make_filter(voice->rate, &voice->taps);
+            voice->lookahead = voice->taps / 2u;
+        }
+        if (voice->frames == NULL ||
+            (voice->rate != ASTRA_PCM_RATE && voice->filter == NULL)) {
+            free_voice(voice);
             reply->status = ASTRA_STATUS_NO_SPACE;
             break;
         }
@@ -409,8 +603,6 @@ static void execute(AudioHost *host, Client *client,
             ++host->next_handle;
         voice->handle = host->next_handle;
         voice->gain_q16 = UINT32_C(65536);
-        voice->format = request->value;
-        voice->frame_bytes = astra_pcm_format_frame_bytes(request->value);
         voice->next = client->voices;
         client->voices = voice;
         reply->handle = voice->handle;
@@ -436,11 +628,13 @@ static void execute(AudioHost *host, Client *client,
         }
         for (uint32_t at = 0u; at < request->data_length;
              at += voice->frame_bytes) {
-            uint32_t write_at = (voice->read_at + voice->queued) %
-                                ASTRA_AUDIO_HOST_QUEUE_FRAMES;
+            float *frame = voice->frames[(voice->read_at + voice->queued) %
+                                         VOICE_FRAMES];
+            uint32_t sample = voice->frame_bytes / voice->channels;
 
-            memcpy(voice->frames + write_at * voice->frame_bytes,
-                   data + at, voice->frame_bytes);
+            frame[0] = decode_sample(voice->encoding, data + at);
+            frame[1] = voice->channels == 1u ? frame[0] :
+                       decode_sample(voice->encoding, data + at + sample);
             ++voice->queued;
         }
         voice->ever_written = 1;
@@ -474,8 +668,7 @@ static void execute(AudioHost *host, Client *client,
         }
         voice = *at;
         *at = voice->next;
-        free(voice->frames);
-        free(voice);
+        free_voice(voice);
         break;
     }
     case ASTRA_HOST_AUDIO_FINISH:
@@ -499,6 +692,8 @@ static void execute(AudioHost *host, Client *client,
         else {
             voice->queued = 0u;
             voice->read_at = 0u;
+            voice->phase = 0u;
+            memset(voice->frames, 0, VOICE_FRAMES * sizeof(*voice->frames));
             voice->ever_written = 0;
             voice->gap_reported = 0;
         }
@@ -778,10 +973,202 @@ done:
         Voice *voice = client.voices;
 
         client.voices = voice->next;
-        free(voice->frames);
-        free(voice);
+        free_voice(voice);
     }
     return passed;
+}
+
+static int decode_self_test(void)
+{
+    static const struct {
+        uint32_t encoding;
+        uint8_t bytes[4];
+        float expected;
+    } cases[] = {
+        {ASTRA_PCM_ENCODING_U8, {0x00u}, -8388608.0f},
+        {ASTRA_PCM_ENCODING_U8, {0x80u}, 0.0f},
+        {ASTRA_PCM_ENCODING_S8, {0x7fu}, 127.0f * 65536.0f},
+        {ASTRA_PCM_ENCODING_S16LE, {0x00u, 0x80u}, -8388608.0f},
+        {ASTRA_PCM_ENCODING_S16BE, {0x00u, 0x01u}, 256.0f},
+        {ASTRA_PCM_ENCODING_U16LE, {0xffu, 0xffu}, 32767.0f * 256.0f},
+        {ASTRA_PCM_ENCODING_U16BE, {0x80u, 0x00u}, 0.0f},
+        {ASTRA_PCM_ENCODING_S32BE, {0x80u, 0u, 0u, 0u}, -8388608.0f},
+        {ASTRA_PCM_ENCODING_S32LE, {0u, 1u, 0u, 0u}, 1.0f},
+        {ASTRA_PCM_ENCODING_F32BE, {0x3fu, 0x00u, 0u, 0u}, 4194304.0f},
+        {ASTRA_PCM_ENCODING_F32LE, {0u, 0u, 0x80u, 0xbfu}, -8388608.0f},
+    };
+
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i)
+        if (decode_sample(cases[i].encoding, cases[i].bytes) !=
+            cases[i].expected) {
+            fprintf(stderr, "audio decode self-test failed at %zu\n", i);
+            return 0;
+        }
+    return astra_pcm_format_frame_bytes(
+               ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_S16BE, 3u, 48000u)) ==
+               0u &&
+           astra_pcm_format_frame_bytes(
+               ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_S16BE, 1u, 7999u)) ==
+               0u &&
+           astra_pcm_format_frame_bytes(
+               ASTRA_PCM_FORMAT(12u, 2u, 48000u)) == 0u &&
+           astra_pcm_format_frame_bytes(
+               ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_S24LE, 1u, 8000u)) == 3u;
+}
+
+/* Plays @p seconds of a @p tone Hz sine at @p rate through one voice of
+ * @p format and returns the RMS and zero crossings of the middle half of
+ * the sink output, relative to the input's full-scale RMS; 0 on failure. */
+static int resample_tone(uint32_t format, double tone, double amplitude,
+                         double *level, uint32_t *crossings,
+                         uint32_t *window)
+{
+    AudioHost host = {0};
+    Client client = {0};
+    AstraAudioHostRequest request = {
+        .magic = ASTRA_AUDIO_HOST_MAGIC,
+        .version = ASTRA_AUDIO_HOST_VERSION,
+        .operation = ASTRA_HOST_AUDIO_OPEN,
+        .value = format,
+    };
+    AstraAudioHostReply reply = {.status = ASTRA_STATUS_OK};
+    uint32_t rate = astra_pcm_format_rate(format);
+    uint32_t channels = astra_pcm_format_channels(format);
+    uint32_t frame_bytes = astra_pcm_format_frame_bytes(format);
+    uint32_t sample_bytes = frame_bytes / channels;
+    uint32_t encoding = astra_pcm_format_encoding(format);
+    uint32_t frames = rate / 4u; /* 250 ms */
+    uint32_t written = 0u, produced = 0u, expected;
+    uint8_t packet[ASTRA_AUDIO_HOST_PACKET_FRAMES *
+                   ASTRA_AUDIO_HOST_FRAME_BYTES];
+    double squares = 0.0;
+    int32_t previous = 0;
+    int passed = 0;
+
+    host.clients = &client;
+    *crossings = 0u;
+    execute(&host, &client, &request, NULL, &reply);
+    if (reply.status != ASTRA_STATUS_OK)
+        goto done;
+    request.operation = ASTRA_HOST_AUDIO_WRITE;
+    request.handle = reply.handle;
+    request.value = 0u;
+    /* Short of the end by more than the filter's reach. */
+    expected = (uint32_t)((uint64_t)(frames - HISTORY_FRAMES) *
+                          ASTRA_PCM_RATE / rate);
+    *window = expected / 2u;
+    while (produced < expected) {
+        int32_t left, right;
+
+        while (written < frames && client.voices->queued <
+               ASTRA_AUDIO_HOST_QUEUE_FRAMES - 256u) {
+            uint32_t count = frames - written < 256u ?
+                             frames - written : 256u;
+
+            for (uint32_t i = 0u; i < count; ++i) {
+                double value = amplitude *
+                               sin(2.0 * M_PI * tone * (written + i) / rate);
+                for (uint32_t c = 0u; c < channels; ++c) {
+                    uint8_t *at = packet + i * frame_bytes + c * sample_bytes;
+                    int32_t whole = (int32_t)lrint(value * 32767.0);
+
+                    if (encoding == ASTRA_PCM_ENCODING_S16BE) {
+                        at[0] = (uint8_t)((uint32_t)whole >> 8);
+                        at[1] = (uint8_t)whole;
+                    } else if (encoding == ASTRA_PCM_ENCODING_S16LE) {
+                        at[0] = (uint8_t)whole;
+                        at[1] = (uint8_t)((uint32_t)whole >> 8);
+                    } else {
+                        float single = (float)value;
+                        uint32_t bits;
+
+                        memcpy(&bits, &single, sizeof(bits));
+                        for (uint32_t b = 0u; b < 4u; ++b)
+                            at[b] = (uint8_t)(bits >> (24u - 8u * b));
+                    }
+                }
+            }
+            request.data_length = count * frame_bytes;
+            reply = (AstraAudioHostReply){.status = ASTRA_STATUS_OK};
+            execute(&host, &client, &request, packet, &reply);
+            if (reply.status != ASTRA_STATUS_OK)
+                goto done;
+            written += count;
+            if (written == frames) {
+                request.operation = ASTRA_HOST_AUDIO_FINISH;
+                request.data_length = 0u;
+                execute(&host, &client, &request, NULL, &reply);
+                request.operation = ASTRA_HOST_AUDIO_WRITE;
+            }
+        }
+        if (!queued_any(&host))
+            goto done;
+        mix_frame(&host, &left, &right);
+        if (left != right)
+            goto done;
+        if (produced >= expected / 4u && produced < expected * 3u / 4u) {
+            squares += (double)left * left;
+            if ((left < 0) != (previous < 0))
+                ++*crossings;
+        }
+        previous = left;
+        ++produced;
+    }
+    *level = sqrt(squares / (expected / 2u)) /
+             (8388607.0 * sqrt(0.5));
+    passed = 1;
+done:
+    while (client.voices != NULL) {
+        Voice *voice = client.voices;
+
+        client.voices = voice->next;
+        free_voice(voice);
+    }
+    return passed;
+}
+
+static int resample_self_test(void)
+{
+    static const struct {
+        uint32_t format;
+        double tone, amplitude, level_low, level_high;
+    } cases[] = {
+        /* Upsampling keeps a tone's level and pitch. */
+        {ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_S16BE, 1u, 22050u),
+         1000.0, 0.5, 0.49, 0.51},
+        {ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_S16LE, 2u, 44100u),
+         440.0, 0.5, 0.49, 0.51},
+        {ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_S16BE, 2u, 8000u),
+         1000.0, 0.5, 0.49, 0.51},
+        /* Downsampling keeps what the sink can carry... */
+        {ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_F32BE, 1u, 96000u),
+         1000.0, 0.5, 0.49, 0.51},
+        /* ...and removes what it cannot, rather than folding it down. */
+        {ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_F32BE, 1u, 96000u),
+         30000.0, 0.5, 0.0, 0.005},
+        {ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_F32BE, 2u, 192000u),
+         60000.0, 0.5, 0.0, 0.005},
+    };
+
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        double level = 0.0;
+        uint32_t crossings = 0u, window = 0u;
+        int played = resample_tone(cases[i].format, cases[i].tone,
+                                   cases[i].amplitude, &level, &crossings,
+                                   &window);
+        double wanted = 2.0 * cases[i].tone * window / ASTRA_PCM_RATE;
+
+        if (!played ||
+            level < cases[i].level_low || level > cases[i].level_high ||
+            (cases[i].level_low > 0.0 &&
+             fabs(crossings - wanted) > 2.0)) {
+            fprintf(stderr, "audio resample self-test failed at %zu "
+                    "(level %.4f, crossings %u, wanted %.0f)\n",
+                    i, level, crossings, wanted);
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static int self_test(void)
@@ -801,18 +1188,25 @@ static int self_test(void)
     int sockets[2];
     ssize_t received;
 
-    if (!mix_self_test() ||
-        s24le(sample) != INT32_C(0x7fffff) ||
-        s16be_as_s24((const uint8_t[]){0x80u, 0u}) !=
-            -INT32_C(0x800000) ||
-        s24le(sample + 3u) != -INT32_C(0x800000) ||
+    if (!mix_self_test() || !decode_self_test() || !resample_self_test() ||
+        decode_sample(ASTRA_PCM_ENCODING_S24LE, sample) != 8388607.0f ||
+        decode_sample(ASTRA_PCM_ENCODING_S16BE,
+                      (const uint8_t[]){0x80u, 0u}) != -8388608.0f ||
+        decode_sample(ASTRA_PCM_ENCODING_S24LE, sample + 3u) !=
+            -8388608.0f ||
         saturate24(INT64_C(9000000)) != INT32_C(0x7fffff) ||
         saturate24(-INT64_C(9000000)) != -INT32_C(0x800000) ||
         validate_request(&request, sizeof(request) + sizeof(sample)) !=
             ASTRA_STATUS_OK)
         return EXIT_FAILURE;
+    /* Any length can be whole frames of some format (8-bit mono); the
+     * voice checks its own. Only the transport's packet limit is fixed. */
     request.data_length = 5u;
-    if (validate_request(&request, sizeof(request) + 5u) !=
+    if (validate_request(&request, sizeof(request) + 5u) != ASTRA_STATUS_OK)
+        return EXIT_FAILURE;
+    request.data_length = ASTRA_AUDIO_HOST_PACKET_FRAMES *
+                          ASTRA_AUDIO_HOST_FRAME_BYTES + 1u;
+    if (validate_request(&request, sizeof(request) + request.data_length) !=
         ASTRA_STATUS_INVALID)
         return EXIT_FAILURE;
     request.data_length = 0u;

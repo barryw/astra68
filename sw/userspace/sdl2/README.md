@@ -50,17 +50,17 @@ raises (a 5 s sleep, then stopping and joining the second thread) to a
 clean exit.
 
 Upstream `loopwave` ships with `sample.wav` (MS-ADPCM, mono, 22050 Hz) in its
-bundle. SDL decodes and resamples it to the device's 48 kHz stereo S16BE.
-QEMU has no physical sink, so `emu/qemu/test-sdl-audio.py` points QEMU's
-host audio provider at a stand-in for the Linux audio daemon: the daemon's
-socket protocol and 4096-frame voice queues, drained at 48 kHz. The gate
-decodes the bundle's `sample.wav` itself, bit-exact with `SDL_wave.c`, and
-requires the captured voice to be that sound looped past a loop boundary:
-every 0.5 s window correlates at 0.97 or better, left equals right, and
-the alignment moves only by upstream SDL 2's resampler drift (each chunk's
-output length is truncated; about +50 ppm here). A dropped or repeated
-packet, or byte-swapped samples, fails it. loopwave has no window and no
-quit path but SIGTERM's default action.
+bundle. SDL decodes it to S16BE mono 22050 Hz and the device takes exactly
+that: the Linux audio host resamples. QEMU has no physical sink, so
+`emu/qemu/test-sdl-audio.py` points QEMU's host audio provider at a
+stand-in for the Linux audio daemon: the daemon's socket protocol and
+4096-frame voice queues, each drained at its own rate. The gate decodes the
+bundle's `sample.wav` itself, bit-exact with `SDL_wave.c`, and requires
+loopwave's stream to be that format and exactly those samples, looped past
+a loop boundary. `--heard` checks a DE25 capture of the daemon's final
+48 kHz mix (`fpga/de25/linux/audio_monitor.py`) by correlation, which also
+catches an underrun's inserted silence. loopwave has no window and no quit
+path but SIGTERM's default action.
 
 ## FPGA renderer
 
@@ -115,9 +115,10 @@ QEMU renders nothing, so the gates check submissions and command counters;
 pixels need the texture-engine RTL and the DE25.
 
 The audio backend runs over `pcm.library.2`. It
-opens the app's native `PCM` capability, advertises 48 kHz stereo S16BE,
-uses SDL's own conversion for other requested formats, and honors PCM queue
-backpressure. `make test` on Beast checks granted/missing/broken PCM cases,
+opens the app's native `PCM` capability and opens the device at the app's
+own sample format, channels and rate (the Linux host converts and
+resamples; SDL converts only more than two channels or a rate outside
+8-192 kHz), and honors PCM queue backpressure. `make test` on Beast checks granted/missing/broken PCM cases,
 the unchanged upstream source, and MC68040 compilation. `make core` builds
 the full upstream SDL2 core and test archives with Astra's PIC/ABI flags;
 `make shared` links and checks the Kit library using upstream's export list.

@@ -135,10 +135,11 @@ $(AUDIO_TARGET): astra_audio_certify.c astra_graphics_hw.h
 
 $(AUDIO_HOST_TARGET): astra_audio_host.c astra_graphics_hw.h \
 		$(ASTRA_INCLUDE)/astra/audio_host.h \
+		$(ASTRA_INCLUDE)/astra/pcm_format.h \
 		$(ASTRA_INCLUDE)/astra/host.h $(ASTRA_INCLUDE)/astra/status.h
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections \
-		astra_audio_host.c $(LDFLAGS) -o $@
+		astra_audio_host.c $(LDFLAGS) -lm -o $@
 
 $(HDMI_LINK_TARGET): astra_hdmi_link.c
 	mkdir -p $(OUT)
@@ -244,9 +245,10 @@ $(OUT)/test-astra-audio: astra_audio_certify.c
 
 $(OUT)/test-astra-audio-host: astra_audio_host.c \
 		$(ASTRA_INCLUDE)/astra/audio_host.h \
+		$(ASTRA_INCLUDE)/astra/pcm_format.h \
 		$(ASTRA_INCLUDE)/astra/host.h $(ASTRA_INCLUDE)/astra/status.h
 	@mkdir -p $(OUT)
-	$(HOSTCC) $(CFLAGS) astra_audio_host.c -o $@
+	$(HOSTCC) $(CFLAGS) astra_audio_host.c -lm -o $@
 
 $(OUT)/test-astra-hdmi-link: astra_hdmi_link.c
 	mkdir -p $(OUT)

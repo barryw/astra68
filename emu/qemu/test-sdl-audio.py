@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 """Upstream SDL2 loopwave, heard through a stand-in host audio daemon.
 
-loopwave decodes test/sample.wav (MS-ADPCM, mono, 22050 Hz) in SDL, which
-converts it to the Astra device format (48 kHz stereo S16BE) and plays it
-in a loop through pcm.library.2, the media service and QEMU's host audio
-provider. The provider talks to the Linux audio daemon's socket, which here
-is a stand-in: it keeps the daemon's per-voice 4096-frame queues and drains
-them at 48 kHz, so backpressure is the daemon's, and it records every frame
-each voice is given.
+loopwave decodes test/sample.wav (MS-ADPCM, mono, 22050 Hz) in SDL and plays
+it in a loop through pcm.library.2, the media service and QEMU's host audio
+provider. The Linux audio host converts and resamples every stream, so
+SDL's device takes loopwave's own format (S16BE mono 22050 Hz) and the
+MC68040 converts nothing. The provider talks to the Linux daemon's socket,
+which here is a stand-in: it keeps the daemon's per-voice 4096-frame queues
+and drains each at its own rate, so backpressure is the daemon's, and it
+records every frame each voice is given.
 
-The gate decodes sample.wav itself (bit-exact with SDL_wave.c) and requires
-loopwave's voice to be that sound, looped: every 0.5 s window of the
-capture, across at least one loop boundary, must correlate with the
-reference, left and right identical, with the alignment moving only by
-SDL 2's resampler drift (it truncates each chunk's output, a few frames a
-second). A dropped, repeated or byte-swapped packet, or a wrong rate, fails
-it.
-Queue underruns (the daemon's software gaps) are reported; QEMU time on
-beast is not physical DE25 throughput.
+The gate decodes sample.wav itself (bit-exact with SDL_wave.c and ffmpeg)
+and requires loopwave's stream to be exactly that, looped past a loop
+boundary, in that format. Queue underruns (the daemon's software gaps) are
+reported; QEMU time on beast is not physical DE25 throughput.
 
 --heard FILE checks a DE25 capture of the physical daemon's final mix
-(fpga/de25/linux/audio_monitor.py) the same way.
+(fpga/de25/linux/audio_monitor.py): 48 kHz after the host's resampler, so
+every 0.5 s window must correlate with sample.wav resampled here, left
+equal right, with no drift beyond a few frames. A dropped, repeated or
+byte-swapped packet, an underrun's inserted silence, or a wrong rate fails
+it.
 """
 
 import argparse
@@ -51,8 +51,22 @@ REQUEST = struct.Struct("=6I")
 REPLY = struct.Struct("=8I")
 PACKET_FRAMES, QUEUE_FRAMES = 1024, 4096
 OPEN, WRITE, GAIN, STATUS, CLOSE, FINISH, PAUSE, CLEAR = range(1, 9)
-S24LE_STEREO, S16BE_STEREO = 1, 2
-FRAME_BYTES = {S24LE_STEREO: 6, S16BE_STEREO: 4}
+# pcm_format.h: a format word is encoding | channels << 8 | rate << 12.
+S24LE, S16BE = 1, 2
+ENCODING_BYTES = {1: 3, 2: 2, 3: 1, 4: 1, 5: 2, 6: 2, 7: 2, 8: 4, 9: 4,
+                  10: 4, 11: 4}
+MAX_FRAME_BYTES, RATE_MIN, RATE_MAX = 8, 8000, 192000
+
+
+def frame_bytes(format_):
+    encoding, channels, rate = format_ & 0xFF, (format_ >> 8) & 0xF, \
+        format_ >> 12
+    if (encoding not in ENCODING_BYTES or not 1 <= channels <= 2 or
+            not RATE_MIN <= rate <= RATE_MAX):
+        return 0
+    return ENCODING_BYTES[encoding] * channels
+
+
 OK, PROTOCOL, INVALID, BAD_HANDLE, UNSUPPORTED, BUSY = 0, 1, 8, 9, 13, 14
 RATE = 48000
 
@@ -60,8 +74,11 @@ RATE = 48000
 class Voice:
     def __init__(self, handle, format_):
         self.handle = handle
-        self.frame_bytes = FRAME_BYTES[format_]
+        self.frame_bytes = frame_bytes(format_)
         self.format = format_
+        self.encoding = format_ & 0xFF
+        self.channels = (format_ >> 8) & 0xF
+        self.rate = format_ >> 12
         self.queued = 0.0
         self.paused = False
         self.finished = False
@@ -85,9 +102,12 @@ class AudioHost:
 
     def drain(self):
         now = time.monotonic()
-        frames = (now - self.clock) * RATE
+        elapsed = now - self.clock
         self.clock = now
         for voice in self.voices:
+            # The host resamples each voice to the sink, so its queue
+            # drains at the voice's own rate.
+            frames = elapsed * voice.rate
             if voice.paused or voice.queued == 0:
                 continue
             if frames > voice.queued and not voice.finished:
@@ -108,7 +128,7 @@ class AudioHost:
         while True:
             try:
                 packet = client.recv(REQUEST.size +
-                                     PACKET_FRAMES * max(FRAME_BYTES.values()))
+                                     PACKET_FRAMES * MAX_FRAME_BYTES)
             except OSError:
                 return
             if not packet:
@@ -131,7 +151,7 @@ class AudioHost:
             return reply
         voice = mine.get(handle)
         if operation == OPEN:
-            if handle != 0 or value not in FRAME_BYTES or data:
+            if handle != 0 or not frame_bytes(value) or data:
                 reply[1] = INVALID
                 return reply
             self.next_handle += 1
@@ -216,15 +236,42 @@ def ms_adpcm_mono(path):
     return numpy.array(samples, dtype=numpy.float64), rate
 
 
+LOOPWAVE = S16BE | 1 << 8 | 22050 << 12  # sample.wav, as SDL decodes it
+
+
 def sounding(voice):
-    """Frames from the first non-silent one on."""
+    """Source frames from the first non-silent one on."""
     samples = numpy.frombuffer(bytes(voice.written), dtype=">i2")
     sound = numpy.flatnonzero(samples)
-    return (len(samples) - sound[0]) // 2 if len(sound) else 0
+    return (len(samples) - sound[0]) // voice.channels if len(sound) else 0
 
 
-def verify(voice, sample, rate, seconds):
-    frames = numpy.frombuffer(bytes(voice.written), dtype=">i2")
+def verify_stream(voice, sample, seconds):
+    """loopwave's stream, exactly: the host converts, so SDL sends the
+    decoded file unchanged, looped, after the silence it plays while the
+    device is paused."""
+    heard = numpy.frombuffer(bytes(voice.written), dtype=">i2")
+    sound = numpy.flatnonzero(heard)
+    if not len(sound):
+        raise RuntimeError("loopwave's stream is silent")
+    heard = heard[sound[0]:]
+    need = int(len(sample) + seconds * voice.rate)
+    if len(heard) < need:
+        raise RuntimeError("only %d frames arrived; %d cover a loop" %
+                           (len(heard), need))
+    looped = numpy.tile(sample, need // len(sample) + 2)[:len(heard)]
+    wrong = numpy.flatnonzero(heard != looped)
+    if len(wrong):
+        raise RuntimeError("frame %d of loopwave's stream is %d, sample.wav "
+                           "says %d" % (wrong[0], heard[wrong[0]],
+                                        looped[wrong[0]]))
+    return len(heard)
+
+
+def verify_mix(pcm, sample, rate, seconds):
+    """The host's 48 kHz stereo mix (S16BE bytes) against sample.wav,
+    resampled here: every 0.5 s window must correlate, left equal right."""
+    frames = numpy.frombuffer(pcm, dtype=">i2")
     frames = frames.reshape(-1, 2)
     if not numpy.array_equal(frames[:, 0], frames[:, 1]):
         raise RuntimeError("left and right differ for a mono source")
@@ -252,9 +299,8 @@ def verify(voice, sample, rate, seconds):
         return numpy.corrcoef(heard[start:start + length],
                               reference[at:at + length])[0, 1]
 
-    # SDL 2 resamples each chunk from phase zero and truncates its output
-    # length, so it drops up to one frame per chunk: the lag drifts by a few
-    # frames a second. A lost or repeated packet is a jump of hundreds.
+    # The lag may creep by a frame or two between windows (the resamplers
+    # differ); a lost or repeated packet is a jump of hundreds.
     window = RATE // 2
     lag = max(range(-64, 65), key=lambda lag: score(window, lag, window))
     first, worst, gain = lag, 1.0, []
@@ -302,12 +348,11 @@ def main():
     if arguments.heard:
         # The board's monitor tap is the final mix, so an underrun shows as
         # the daemon's inserted silence and fails the correlation.
-        capture = Voice(0, S16BE_STEREO)
         with open(arguments.heard, "rb") as handle:
-            capture.written = numpy.frombuffer(
-                handle.read(), dtype="<i2").astype(">i2").tobytes()
-        worst, drift, frames = verify(capture, sample, rate,
-                                      arguments.seconds)
+            pcm = numpy.frombuffer(handle.read(),
+                                   dtype="<i2").astype(">i2").tobytes()
+        worst, drift, frames = verify_mix(pcm, sample, rate,
+                                          arguments.seconds)
         print("SDL upstream loopwave DE25: PASS (%d frames; sample.wav "
               "looped, worst 0.5 s correlation %.3f, rate %+.0f ppm)" %
               (frames, worst, drift))
@@ -328,6 +373,8 @@ def main():
         if arguments.profile:
             plugin = os.path.join(os.path.dirname(arguments.qemu),
                                   "contrib/plugins/libastra_profile.so")
+            if os.path.exists(arguments.profile):
+                os.unlink(arguments.profile)
             extra = ["-plugin", "%s,output=%s,control=%s,label=audio" %
                      (plugin, os.path.abspath(arguments.profile), control)]
         machine = terminal_gate.Machine(arguments.qemu, arguments.rom, image,
@@ -338,7 +385,7 @@ def main():
                 raise RuntimeError("Astra did not finish booting: %r" %
                                    machine.recent_serial(40))
             deadline = time.monotonic() + loop_seconds * 3 + 90
-            need = (loop_seconds + arguments.seconds) * RATE
+            need = (loop_seconds + arguments.seconds) * rate
             while True:
                 with host.lock:
                     host.drain()
@@ -370,18 +417,20 @@ def main():
                 raise RuntimeError("loopwave did not use the Astra driver")
             with host.lock:
                 voice = max(host.voices, key=lambda v: len(v.written))
-                if voice.format != S16BE_STEREO:
-                    raise RuntimeError("loopwave's stream is format %d"
-                                       % voice.format)
+                # SDL must hand the file over as it decoded it: the host
+                # converts, the MC68040 does not.
+                if voice.format != LOOPWAVE:
+                    raise RuntimeError("loopwave's stream is format %#x, "
+                                       "not %#x" % (voice.format, LOOPWAVE))
                 if arguments.save:
                     with open(arguments.save, "wb") as handle:
                         handle.write(voice.written)
-                worst, drift, frames = verify(voice, sample, rate,
-                                              arguments.seconds)
+                frames = verify_stream(voice, sample.astype(numpy.int16),
+                                       arguments.seconds)
                 gaps = voice.gaps
-            print("SDL upstream loopwave QEMU: PASS (%d frames; sample.wav "
-                  "looped, worst 0.5 s correlation %.3f, rate %+.0f ppm; "
-                  "%d queue underruns)" % (frames, worst, drift, gaps))
+            print("SDL upstream loopwave QEMU: PASS (%d frames of "
+                  "S16BE mono 22050 Hz, bit-exact sample.wav looped; %d "
+                  "queue underruns)" % (frames, gaps))
         finally:
             machine.close()
             host.close()

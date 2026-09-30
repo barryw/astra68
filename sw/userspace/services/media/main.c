@@ -153,7 +153,7 @@ static void serve_open(uint32_t factory)
         status = astra_rt_area_map(session->area, ASTRA_AREA_MAP_READ,
                                    &session->samples, &mapped_size);
         if (status != ASTRA_SYSCALL_OK ||
-            mapped_size < ASTRA_PCM_TRANSFER_FRAMES * ASTRA_PCM_FRAME_BYTES)
+            mapped_size < ASTRA_PCM_TRANSFER_FRAMES * ASTRA_PCM_MAX_FRAME_BYTES)
             status = ASTRA_STATUS_BAD_HANDLE;
         else
             status = ASTRA_STATUS_OK;
@@ -299,7 +299,7 @@ int astra_main(const AstraStartupInfo *startup)
         return ASTRA_STATUS_BAD_HANDLE;
     status = astra_host_client_open(device->handle, ASTRA_HOST_CAP_AUDIO,
                                     ASTRA_PCM_TRANSFER_FRAMES *
-                                    ASTRA_PCM_FRAME_BYTES, &host);
+                                    ASTRA_PCM_MAX_FRAME_BYTES, &host);
     if (status == ASTRA_SYSCALL_OK)
         status = astra_rt_port_create(1u, sizeof(AstraPcmRequest),
                                       &factory, &publication);

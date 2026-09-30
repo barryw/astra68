@@ -52,9 +52,11 @@ typedef struct AstraPcmStatus {
 /** Open one playback stream on an AUDIO/PCM service capability.
  * Each stream has an isolated service session, revoked on client death.
  * @param service Startup `PCM` service capability.
- * @param format ASTRA_PCM_FORMAT_S24LE_STEREO or
- * ASTRA_PCM_FORMAT_S16BE_STEREO. SDL2 can advertise the latter as its
- * 48 kHz AUDIO_S16MSB playback device; SDL2 handles other app formats.
+ * @param format A format word from ASTRA_PCM_FORMAT(): any encoding in
+ * pcm_format.h, one or two channels, ASTRA_PCM_RATE_MIN to
+ * ASTRA_PCM_RATE_MAX frames per second. The Linux audio host converts and
+ * resamples it to the sink, so submit samples as they are; SDL2's device
+ * takes each application's own format this way.
  * @param stream Empty caller-owned stream initialized with
  * ASTRA_PCM_STREAM_INIT.
  * @return ASTRA_OK on success, otherwise an AstraResult error.

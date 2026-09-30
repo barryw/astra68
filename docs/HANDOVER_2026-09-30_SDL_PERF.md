@@ -247,9 +247,26 @@ after its first pass; read it before writing the gate.
   locked contract; QEMU's FPU is itself softfloat) or patching SDL's
   resampler to integer arithmetic (changes upstream SDL).
 
-**Next:** decide the resampling tier (recommended: host-side, new PCM
-formats), re-run loopwave on the board, then Chocolate Doom (SDL_mixer at
-44.1 kHz hits the same path).
+## Done: conversion and resampling on Linux
+
+User direction: do it all on Linux, over the existing channel, one
+contract.
+- `sw/include/astra/pcm_format.h` is the one contract (guest, QEMU, daemon).
+  A format word is encoding | channels << 8 | rate << 12: every SDL2 sample
+  format plus packed S24LE, 1-2 channels, 8-192 kHz. It rides OPEN's
+  `value` through pcm.library, the media service and the AstraHost audio
+  channel unchanged; no new transport. `ASTRA_AUDIO_HOST_FRAME_BYTES` is now
+  `ASTRA_PCM_MAX_FRAME_BYTES` (8), and QEMU stages `pcm_format.h`.
+- The daemon (`fpga/arty/linux/astra_audio_host.c`) decodes on WRITE and
+  resamples each voice with a Kaiser-windowed sinc; 48 kHz stays bit-exact.
+  Its self-test checks level and pitch at 8, 22.05, 44.1 and 96 kHz and
+  rejection of 30 kHz in 96 kHz and 60 kHz in 192 kHz; a cutoff above
+  Nyquist, a wrong phase step, or unnormalised taps each fail it.
+- SDL's device takes the app's own spec. loopwave's QEMU gate is now
+  bit-exact: S16BE mono 22050 Hz, exactly sample.wav looped.
+- Guest cost of loopwave: ~422 M to ~20 M instructions per second of audio.
+
+**Next:** loopwave on the DE25 with the new daemon, then Chocolate Doom.
 
 ## The remaining SDL gates
 

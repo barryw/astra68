@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <string.h>
 
-static uint8_t shared[ASTRA_PCM_TRANSFER_FRAMES * ASTRA_PCM_FRAME_BYTES];
+static uint8_t shared[ASTRA_PCM_TRANSFER_FRAMES * ASTRA_PCM_MAX_FRAME_BYTES];
 static AstraPcmRequest last_request;
 static uint32_t sends;
 static uint32_t writes;
@@ -119,7 +119,7 @@ int main(void)
 {
     AstraPcmStream stream = ASTRA_PCM_STREAM_INIT;
     AstraPcmStatus status = {0};
-    uint8_t samples[1500u * ASTRA_PCM_FRAME_BYTES];
+    uint8_t samples[1500u * 6u]; /* S24LE stereo */
     uint32_t accepted = 99u;
     uint32_t before;
 
@@ -132,8 +132,8 @@ int main(void)
     assert(astra_pcm_write(&stream, samples, 1500u, &accepted) ==
            ASTRA_ERROR_BUSY);
     assert(accepted == ASTRA_PCM_TRANSFER_FRAMES && writes == 2u);
-    assert(memcmp(shared, samples + accepted * ASTRA_PCM_FRAME_BYTES,
-                  (1500u - accepted) * ASTRA_PCM_FRAME_BYTES) == 0);
+    assert(memcmp(shared, samples + accepted * 6u,
+                  (1500u - accepted) * 6u) == 0);
     assert(astra_pcm_gain(&stream, 32768u) == ASTRA_OK);
     assert(last_request.value == 32768u);
     assert(astra_pcm_pause(&stream, 1) == ASTRA_OK);
@@ -159,6 +159,8 @@ int main(void)
 
     before = sends;
     assert(astra_pcm_open(99u, 0u, &stream) == ASTRA_ERROR_INVALID_ARGUMENT);
+    /* The old bare encoding numbers name no channels or rate. */
+    assert(astra_pcm_open(99u, 2u, &stream) == ASTRA_ERROR_INVALID_ARGUMENT);
     assert(sends == before);
     assert(astra_pcm_open(99u, ASTRA_PCM_FORMAT_S16BE_STEREO, &stream) ==
            ASTRA_OK);

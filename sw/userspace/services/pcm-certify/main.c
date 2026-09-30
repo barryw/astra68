@@ -8,7 +8,9 @@
 ASTRA_PROGRAM("pcm-certify", 0, 1, 0, "Astra68 contributors",
               "Astra native");
 
-static uint8_t samples[ASTRA_PCM_TRANSFER_FRAMES * ASTRA_PCM_FRAME_BYTES];
+#define S24_STEREO_FRAME_BYTES 6u /* ASTRA_PCM_FORMAT_S24LE_STEREO */
+
+static uint8_t samples[ASTRA_PCM_TRANSFER_FRAMES * S24_STEREO_FRAME_BYTES];
 
 static void fill_tone(uint32_t phase, uint32_t count)
 {
@@ -18,7 +20,7 @@ static void fill_tone(uint32_t phase, uint32_t count)
                          (int32_t)(position * 50000u) :
                          (int32_t)((108u - position) * 50000u);
         uint32_t bits = (uint32_t)sample;
-        uint32_t at = i * ASTRA_PCM_FRAME_BYTES;
+        uint32_t at = i * S24_STEREO_FRAME_BYTES;
 
         for (uint32_t channel = 0u; channel < 2u; ++channel) {
             samples[at++] = (uint8_t)bits;

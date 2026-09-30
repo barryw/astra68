@@ -6,12 +6,13 @@
 #include <stdint.h>
 
 #include <astra/host.h>
+#include <astra/pcm_format.h>
 
 #define ASTRA_AUDIO_HOST_SOCKET "/run/astra/audio.sock"
 #define ASTRA_AUDIO_HOST_LOCK "/run/astra/audio.lock"
 #define ASTRA_AUDIO_HOST_MAGIC UINT32_C(0x41554431) /* AUD1 */
 #define ASTRA_AUDIO_HOST_VERSION 2u
-#define ASTRA_AUDIO_HOST_FRAME_BYTES 6u
+#define ASTRA_AUDIO_HOST_FRAME_BYTES ASTRA_PCM_MAX_FRAME_BYTES
 #define ASTRA_AUDIO_HOST_PACKET_FRAMES 1024u
 #define ASTRA_AUDIO_HOST_QUEUE_FRAMES 4096u
 #define ASTRA_AUDIO_HOST_MONITOR UINT32_C(0x80000001)

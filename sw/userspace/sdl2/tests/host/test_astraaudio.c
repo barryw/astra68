@@ -15,6 +15,7 @@ static int status_failure;
 static int disconnected;
 static uint32_t received_frames;
 static uint32_t sleep_count;
+static uint32_t opened_format;
 
 void *SDL_calloc(size_t count, size_t size) { return calloc(count, size); }
 void *SDL_malloc(size_t size) { return malloc(size); }
@@ -29,7 +30,8 @@ void SDL_OpenedAudioDeviceDisconnected(SDL_AudioDevice *device)
 }
 void SDL_CalculateAudioSpec(SDL_AudioSpec *spec)
 {
-    spec->size = (Uint32)spec->samples * spec->channels * 2u;
+    spec->size = (Uint32)spec->samples * spec->channels *
+                 (SDL_AUDIO_BITSIZE(spec->format) / 8u);
     spec->silence = 0u;
 }
 const AstraStartupInfo *astra_posix_startup(void) { return NULL; }
@@ -44,7 +46,7 @@ AstraResult astra_pcm_open(AstraHandle service, uint32_t format,
                            AstraPcmStream *stream)
 {
     assert(service == 42u);
-    assert(format == ASTRA_PCM_FORMAT_S16BE_STEREO);
+    opened_format = format;
     if (open_result != 0)
         return ASTRA_ERROR_IO;
     stream->control = 1u;
@@ -114,11 +116,14 @@ int main(void)
     assert(driver.OpenDevice(&device, NULL) == -1); /* service failure */
     assert(device.hidden == NULL);
     open_result = 0;
+    /* The host converts: the device keeps the application's spec. */
     assert(driver.OpenDevice(&device, NULL) == 0);
-    assert(device.spec.freq == ASTRA_PCM_RATE);
-    assert(device.spec.channels == ASTRA_PCM_CHANNELS);
-    assert(device.spec.format == AUDIO_S16MSB);
-    assert(device.spec.size == 1024u);
+    assert(device.spec.freq == 22050);
+    assert(device.spec.channels == 1u);
+    assert(device.spec.format == AUDIO_U8);
+    assert(device.spec.size == 256u);
+    assert(opened_format ==
+           ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_U8, 1u, 22050u));
     assert(driver.GetDeviceBuf(&device) != NULL);
     write_busy_once = 1;
     driver.PlayDevice(&device);
@@ -130,5 +135,24 @@ int main(void)
     assert(disconnected == 1); /* failed provider does not masquerade as audio */
     driver.CloseDevice(&device);
     assert(device.hidden == NULL);
+
+    /* What the host cannot take, SDL converts: 5.1 to stereo, and a rate
+     * outside the host's range to the sink's. */
+    status_failure = 0;
+    device.spec.freq = 4000;
+    device.spec.channels = 6u;
+    device.spec.format = AUDIO_F32MSB;
+    device.spec.samples = 256u;
+    assert(driver.OpenDevice(&device, NULL) == 0);
+    assert(device.spec.freq == (int)ASTRA_PCM_RATE);
+    assert(device.spec.channels == 2u);
+    assert(device.spec.format == AUDIO_F32MSB);
+    assert(device.spec.size == 2048u);
+    assert(opened_format == ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_F32BE, 2u,
+                                             ASTRA_PCM_RATE));
+    received_frames = 0u;
+    driver.PlayDevice(&device);
+    assert(received_frames == 256u);
+    driver.CloseDevice(&device);
     return 0;
 }

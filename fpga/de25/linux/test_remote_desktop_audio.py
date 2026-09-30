@@ -13,6 +13,8 @@ from test_remote_desktop import connect, receive_exact
 
 MAGIC = 0x41554431
 VERSION = 2
+# sw/include/astra/pcm_format.h: encoding | channels << 8 | rate << 12
+S16BE_STEREO = 2 | 2 << 8 | 48000 << 12
 
 
 def select_marker(samples):
@@ -78,7 +80,7 @@ def play_pcm(path, samples):
     connection.settimeout(5)
     connection.connect(path)
     try:
-        handle = host_request(connection, 1, value=2)[2]
+        handle = host_request(connection, 1, value=S16BE_STEREO)[2]
         if not handle:
             raise AssertionError("audio host returned a zero handle")
         queued = 0

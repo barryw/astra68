@@ -11,6 +11,8 @@ import time
 
 MAGIC = 0x41554431
 OPEN, WRITE, GAIN, STATUS, CLOSE, FINISH, PAUSE, CLEAR = range(1, 9)
+# sw/include/astra/pcm_format.h: encoding | channels << 8 | rate << 12
+S24LE_STEREO = 1 | 2 << 8 | 48000 << 12
 OK, PROTOCOL, INVALID, BAD_HANDLE, BUSY = 0, 1, 8, 9, 14
 REQUEST = struct.Struct("=6I")
 REPLY = struct.Struct("=8I")
@@ -69,13 +71,15 @@ def main():
             connections.append(connection)
         connection = connections[0]
         require_status(submit(connection, STATUS, magic=0), PROTOCOL)
-        require_status(submit(connection, WRITE, 999, data=b"12345"), INVALID)
+        require_status(submit(connection, WRITE, 999,
+                              data=b"1" * (1024 * 8 + 1)), INVALID)
         require_status(submit(connection, WRITE, 999, data=b"123456"),
                        BAD_HANDLE)
         require_status(submit(connection, OPEN, value=0), INVALID)
         handles = []
         for index, client in enumerate(connections):
-            handle = require_status(submit(client, OPEN, value=1), OK)[2]
+            handle = require_status(submit(client, OPEN,
+                                           value=S24LE_STEREO), OK)[2]
             if not handle:
                 raise RuntimeError("audio provider returned a zero voice handle")
             handles.append(handle)
