@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Upstream SDL2 loopwave, heard through a stand-in host audio daemon.
 
+loopwave is a command. The gate installs SDL's sample.wav as
+/home/sample.wav, types `loopwave /home/sample.wav` in the Terminal, and ends
+it with Ctrl-C: SDL turns SIGINT into SDL_QUIT, so loopwave must close its
+PCM stream and exit 0.
+
 loopwave decodes test/sample.wav (MS-ADPCM, mono, 22050 Hz) in SDL and plays
 it in a loop through pcm.library.2, the media service and QEMU's host audio
 provider. The Linux audio host converts and resamples every stream, so
@@ -45,6 +50,10 @@ spec = importlib.util.spec_from_file_location(
     "astra_terminal_gate", os.path.join(HERE, "test-terminal.py"))
 terminal_gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(terminal_gate)
+spec = importlib.util.spec_from_file_location(
+    "astra_image", os.path.join(HERE, "astra_image.py"))
+astra_image = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(astra_image)
 
 # sw/include/astra/audio_host.h, host.h, pcm_format.h, status.h
 MAGIC, VERSION = 0x41554431, 2
@@ -85,6 +94,7 @@ class Voice:
         self.finished = False
         self.written = bytearray()
         self.gaps = 0
+        self.closed = False
 
 
 class AudioHost:
@@ -189,6 +199,7 @@ class AudioHost:
         elif operation == CLOSE:
             del mine[handle]
             voice.queued = 0.0
+            voice.closed = True
         elif operation != GAIN:
             reply[1] = UNSUPPORTED
         return reply
@@ -335,7 +346,8 @@ def main():
     parser.add_argument("rom", nargs="?")
     parser.add_argument("image", nargs="?")
     parser.add_argument("--wav", required=True,
-                        help="the sample.wav loopwave's bundle carries")
+                        help="SDL's test/sample.wav; the gate installs it "
+                        "as /home/sample.wav")
     parser.add_argument("--seconds", type=float, default=2.0,
                         help="audio past the first loop boundary to check")
     parser.add_argument("--save", help="write loopwave's stream here "
@@ -366,6 +378,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="astra-sdl-audio-") as work:
         image = os.path.join(work, "test.img")
         shutil.copyfile(arguments.image, image)
+        astra_image._replace_volume_file(image, arguments.wav,
+                                         "/home/sample.wav")
         host = AudioHost(os.path.join(work, "audio.sock"))
         os.environ["ASTRA_AUDIO_HOST_SOCKET"] = os.path.join(work,
                                                              "audio.sock")
@@ -384,62 +398,77 @@ def main():
                                         work, extra_args=extra)
         profiling = False
         try:
-            if not machine.wait_for_serial(terminal_gate.BOOT_MARKER, 120):
-                raise RuntimeError("Astra did not finish booting: %r" %
-                                   machine.recent_serial(40))
+            if not terminal_gate.open_terminal(machine, 120, 60):
+                raise RuntimeError("no terminal")
+            # loopwave is a command: it plays until Ctrl-C, which SDL turns
+            # into SDL_QUIT, so it closes its stream and exits 0 -- the
+            # marker only prints if the shell saw a normal exit.
+            before = machine.sequence()
+            machine.qmp.type_line("loopwave /home/sample.wav; "
+                                  "print ASTRA-LOOPWAVE-EXIT-$?")
             deadline = time.monotonic() + loop_seconds * 3 + 90
             need = (loop_seconds + arguments.seconds) * rate
             while True:
                 with host.lock:
                     host.drain()
-                    # The desktop's startup chime is a voice too; loopwave's
-                    # is the one still open and longest.
-                    voices = sorted(host.voices,
-                                    key=lambda v: len(v.written))
-                    heard = sounding(voices[-1]) if voices else 0
+                    voices = [v for v in host.voices
+                              if v.format == LOOPWAVE]
+                    heard = sounding(voices[0]) if voices else 0
+                    # Underruns while playing; the queue that drains after
+                    # Ctrl-C, before the stream closes, is the stream's end.
+                    gaps = voices[0].gaps if voices else 0
                 if heard >= need:
                     break
                 if arguments.profile and heard and not profiling:
                     subprocess.run(profile + ["start", "audio"], check=True)
                     profiling, profiled = True, (time.monotonic(), heard)
-                said = "\n".join(machine.said(0)[0])
-                if "ERROR:" in said:
-                    raise RuntimeError("loopwave failed: %r" %
-                                       machine.said(0)[0][-20:])
+                said = machine.said(before)[0]
+                # The typed line echoes the marker; only a line that is the
+                # marker says the shell got control back.
+                if (any("ERROR:" in line for line in said) or
+                        any(line.startswith("ASTRA-LOOPWAVE-EXIT-")
+                            for line in said)):
+                    raise RuntimeError("loopwave stopped: %r" %
+                                       machine.said(before)[0][-20:])
                 if time.monotonic() >= deadline:
                     raise RuntimeError(
-                        "loopwave gave %d of %d frames: %r" %
-                        (heard, need, machine.said(0)[0][-20:]))
+                        "loopwave gave %d of %d frames (voice formats %r): "
+                        "%r" % (heard, need,
+                                [hex(v.format) for v in host.voices],
+                                machine.said(before)[0][-20:]))
                 time.sleep(0.5)
             if profiling:
                 subprocess.run(profile + ["stop"], check=True)
                 print("profiled %.1f s, %d frames heard" %
                       (time.monotonic() - profiled[0], heard - profiled[1]))
-            said = "\n".join(machine.said(0)[0])
+            machine.qmp.chord("ctrl", "c")
+            if machine.wait_for_text("ASTRA-LOOPWAVE-EXIT-0", 30, before,
+                                     exact=True)[0] is None:
+                raise RuntimeError("Ctrl-C did not end loopwave clean: %r" %
+                                   machine.said(before)[0][-20:])
+            said = "\n".join(machine.said(before)[0])
             if "Using audio driver: astra" not in said:
                 raise RuntimeError("loopwave did not use the Astra driver")
             with host.lock:
-                voice = max(host.voices, key=lambda v: len(v.written))
-                # SDL must hand the file over as it decoded it: the host
-                # converts, the MC68040 does not.
-                if voice.format != LOOPWAVE:
-                    raise RuntimeError("loopwave's stream is format %#x, "
-                                       "not %#x" % (voice.format, LOOPWAVE))
+                voice = [v for v in host.voices if v.format == LOOPWAVE][0]
+                if not voice.closed:
+                    raise RuntimeError("loopwave exited without closing "
+                                       "its stream")
                 if arguments.save:
                     with open(arguments.save, "wb") as handle:
                         handle.write(voice.written)
                 frames = verify_stream(voice, sample.astype(numpy.int16),
                                        arguments.seconds)
-                gaps = voice.gaps
             names = {OPEN: "open", WRITE: "write", STATUS: "status",
                      GAIN: "gain", CLOSE: "close", FINISH: "finish",
                      PAUSE: "pause", CLEAR: "clear"}
             print("host requests: " + ", ".join(
                 "%s %d" % (names.get(op, op), count)
                 for op, count in sorted(host.requests.items())))
-            print("SDL upstream loopwave QEMU: PASS (%d frames of "
-                  "S16BE mono 22050 Hz, bit-exact sample.wav looped; %d "
-                  "queue underruns)" % (frames, gaps))
+            print("SDL upstream loopwave QEMU: PASS (command; %d frames of "
+                  "S16BE mono 22050 Hz, bit-exact sample.wav looped; "
+                  "Ctrl-C closed the stream and exited 0; %d queue "
+                  "underruns)" % (frames, gaps))
         finally:
             machine.close()
             host.close()

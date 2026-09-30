@@ -65,6 +65,14 @@ MORE_PATCHES = [
         "#define HAVE_STDDEF_H   1",
         "#define HAVE_STDDEF_H   1\n#define HAVE_STDIO_H    1",
     )),
+    # SIGINT and SIGTERM become SDL_QUIT, as on every Unix port: Ctrl-C in
+    # the Terminal ends an SDL program through its own quit path, which
+    # closes its audio and windows, instead of killing it.
+    ("include/SDL_config_minimal.h", (
+        "#define HAVE_STDIO_H    1",
+        "#define HAVE_STDIO_H    1\n#define HAVE_SIGNAL_H   1\n"
+        "#define HAVE_SIGACTION  1",
+    )),
     ("include/SDL_config_minimal.h", (
         "#define SDL_TIMERS_DISABLED 1",
         # clock_gettime: SDL's counters then read the monotonic clock, not

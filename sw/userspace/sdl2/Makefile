@@ -117,7 +117,7 @@ SDL_DEMOS := testsprite2 testgeometry testrendertarget testscale testkeys \
 	testmouse testtimer testthread loopwave
 SHIPPED_APPS := SDLTestDraw2 SDLFrameBench SDLTestSprite2 SDLTestGeometry \
 	SDLTestRenderTarget SDLTestScale SDLTestKeys SDLTestMouse SDLTestTimer \
-	SDLTestThread SDLLoopWave
+	SDLTestThread
 
 all: library-contract net-library-contract image-library-contract \
 	mixer-library-contract ttf-library-contract build/.apps
@@ -603,8 +603,7 @@ $(eval $(call astra_app_bundle,build,SDLTestKeys,build/m68k/testkeys,apps/SDLTes
 $(eval $(call astra_app_bundle,build,SDLTestMouse,build/m68k/testmouse,apps/SDLTestMouse.app/manifest,$(SDL_DEMO_ICON),))
 $(eval $(call astra_app_bundle,build,SDLTestTimer,build/m68k/testtimer,apps/SDLTestTimer.app/manifest,$(SDL_DEMO_ICON),))
 $(eval $(call astra_app_bundle,build,SDLTestThread,build/m68k/testthread,apps/SDLTestThread.app/manifest,$(SDL_DEMO_ICON),))
-$(eval $(call astra_app_bundle,build,SDLLoopWave,build/m68k/loopwave,apps/SDLLoopWave.app/manifest,$(SDL_DEMO_ICON),$(SDL2_ROOT)/test/sample.wav))
-demo-bundles: $(foreach demo,SDLTestSprite2 SDLTestGeometry SDLTestRenderTarget SDLTestScale SDLTestKeys SDLTestMouse SDLTestTimer SDLTestThread SDLLoopWave,build/.$(demo).app.stamp)
+demo-bundles: $(foreach demo,SDLTestSprite2 SDLTestGeometry SDLTestRenderTarget SDLTestScale SDLTestKeys SDLTestMouse SDLTestTimer SDLTestThread,build/.$(demo).app.stamp)
 
 $(eval $(call astra_app_inventory,build,$(SHIPPED_APPS)))
 

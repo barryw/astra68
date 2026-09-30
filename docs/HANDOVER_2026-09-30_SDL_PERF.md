@@ -305,6 +305,29 @@ contract.
   (restart astra, open loopwave from the desktop, capture the monitor tap,
   read the QOM latency counters).
 
+## Done: loopwave is a command; interrupt completion audit
+
+- loopwave is `/commands/loopwave FILE.wav`. `sw/userspace/commands` asks the
+  SDL port to build SDL programs listed in `SDL_COMMANDS`, then strips and
+  checks them like any command (the locked bundle format has no
+  kit-provided commands). SDL maps SIGINT/SIGTERM to `SDL_QUIT`
+  (`HAVE_SIGACTION`), and Terminal forwards PCM to child commands with its
+  other authorities. The QEMU gate types the command, checks the stream
+  bit-exact, presses Ctrl-C and requires exit status 0 and a closed stream.
+- Audit of every other interrupt consumer (read-only): none repeated the
+  host channel bug. Two real defects fixed in the kernel's completion
+  callbacks (`kernel_platform_device_irq_complete`):
+  - network: readiness raised again after the acknowledgement was treated
+    as a device failure, which masks the source for good; now a new
+    `NETWORK_READY_SEQ` generation is new work, and only the captured
+    generation still pending is a failure;
+  - vblank: completion cleared a vblank that arrived after capture without
+    recording it (a lost frame event); now it stays pending and re-fires.
+  `test_platform` covers both; restoring the old network code fails it.
+- Noted, not changed: the generic IRQ wait maps `CONDITION_CHANGED` to an
+  error rather than a retry (`process.c` ~8512); the host channel path
+  retries.
+
 **Next:** Chocolate Doom. Userspace drivers that take IRQ capabilities (display,
 block, input) should be checked for the same scan-then-acknowledge shape.
 

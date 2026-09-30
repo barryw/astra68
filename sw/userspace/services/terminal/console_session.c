@@ -10,6 +10,7 @@
 #include <astra/event_control.h>
 #include <astra/network.h>
 #include <astra/ntp.h>
+#include <astra/pcm_format.h>
 #include <astra/runtime.h>
 #include <astra/service_manager_abi.h>
 #include <astra/status.h>
@@ -109,6 +110,9 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
         ASTRA_CAPABILITY_APPLICATION_LAUNCH,
         ASTRA_CAPABILITY_SERVICE_MANAGER,
         ASTRA_CAPABILITY_ENTROPY,
+        /* A command a person runs may play sound, as it may use the
+         * network: loopwave, SDL programs, anything linked to pcm.library. */
+        ASTRA_CAPABILITY_PCM,
     };
     const uint32_t streams[] = {
         console_stream_stdout(), console_stream_stderr(),

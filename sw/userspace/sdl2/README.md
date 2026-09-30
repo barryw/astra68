@@ -49,18 +49,21 @@ per thread, join its first thread on a flag, and run the SIGTERM handler it
 raises (a 5 s sleep, then stopping and joining the second thread) to a
 clean exit.
 
-Upstream `loopwave` ships with `sample.wav` (MS-ADPCM, mono, 22050 Hz) in its
-bundle. SDL decodes it to S16BE mono 22050 Hz and the device takes exactly
-that: the Linux audio host resamples. QEMU has no physical sink, so
+Upstream `loopwave` ships as a command (`/commands/loopwave FILE.wav`, built
+by this port and installed by `sw/userspace/commands`). SIGINT and SIGTERM
+become `SDL_QUIT` here as on every Unix port (`HAVE_SIGACTION`), so Ctrl-C in
+the Terminal ends it through SDL's own quit path. For SDL's `sample.wav`
+(MS-ADPCM, mono, 22050 Hz), SDL decodes to S16BE mono 22050 Hz and the device
+takes exactly that: the Linux audio host resamples. QEMU has no physical sink, so
 `emu/qemu/test-sdl-audio.py` points QEMU's host audio provider at a
 stand-in for the Linux audio daemon: the daemon's socket protocol and
-4096-frame voice queues, each drained at its own rate. The gate decodes the
-bundle's `sample.wav` itself, bit-exact with `SDL_wave.c`, and requires
+4096-frame voice queues, each drained at its own rate. The gate installs
+`sample.wav` as `/home/sample.wav`, types `loopwave /home/sample.wav` in the
+Terminal, decodes the file itself, bit-exact with `SDL_wave.c`, and requires
 loopwave's stream to be that format and exactly those samples, looped past
-a loop boundary. `--heard` checks a DE25 capture of the daemon's final
+a loop boundary; then Ctrl-C must close the stream and exit 0. `--heard` checks a DE25 capture of the daemon's final
 48 kHz mix (`fpga/de25/linux/audio_monitor.py`) by correlation, which also
-catches an underrun's inserted silence. loopwave has no window and no quit
-path but SIGTERM's default action.
+catches an underrun's inserted silence.
 
 ## FPGA renderer
 

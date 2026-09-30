@@ -67,11 +67,16 @@ CXX_LIBRARY := $(ASTRA_CXX_LIBRARY)
 UNWIND_LIBRARY := $(ASTRA_UNWIND_LIBRARY)
 TERMINFO_LIBRARY := $(ASTRA_TERMINFO_LIBRARY)
 
+# Upstream SDL programs that are commands rather than applications. The SDL
+# port builds them (it owns SDL's headers and build rules); this directory
+# strips them and checks their libraries like every other command.
+SDL_COMMANDS := loopwave
 COMMANDS := status events devices which open service shutdown restart ls ps metrics cat mkdir rm \
-	    heapbench fsstress date echo ntp ping lua vim zsh
+	    heapbench fsstress date echo ntp ping lua vim zsh $(SDL_COMMANDS)
 TEST_COMMANDS := posix hello cxx
 SBASE_PRIMARY := ls mkdir
-SOURCE_COMMANDS := $(filter-out lua cxx vim zsh $(SBASE_PRIMARY),$(COMMANDS) $(TEST_COMMANDS))
+SOURCE_COMMANDS := $(filter-out lua cxx vim zsh $(SDL_COMMANDS) \
+	$(SBASE_PRIMARY),$(COMMANDS) $(TEST_COMMANDS))
 SOURCE_IMAGES := $(patsubst %,build/m68k/%,$(SOURCE_COMMANDS))
 TEST_IMAGES := $(patsubst %,build/m68k/%,$(TEST_COMMANDS))
 events_EXTRA_SOURCES := events/events_support.c
@@ -104,6 +109,8 @@ date_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 echo_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 ntp_LIBRARIES := $(LIBC_LIBRARY) $(NTP_LIBRARY) $(RUNTIME_LIBRARY)
 ping_LIBRARIES := $(LIBC_LIBRARY) $(NETWORK_LIBRARY) $(RUNTIME_LIBRARY)
+loopwave_LIBRARIES := $(ASTRA_SDL2_LIBRARY) $(LIBC_LIBRARY) \
+	$(RUNTIME_LIBRARY) $(COMPILER_LIBRARY)
 ANALYZER_OBJECTS := $(patsubst %,build/analyzer/%.o,$(SOURCE_COMMANDS)) \
 	build/analyzer/lua-adapter.o
 # What the gate installs on the volume: stripped, the way the ROM's own image
@@ -232,6 +239,20 @@ $(VIM_IMAGE): Makefile $(VIM_BUILD_CONFIG) $(VIM_PROGRAM) \
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
 		$(foreach library,$(vim_LIBRARIES),\
 			--needed $(notdir $(library))) $(VIM_IMAGE)
+
+# The SDL port decides whether its program is current; asking it every time
+# is how a changed SDL or upstream source reaches /commands.
+$(patsubst %,../sdl2/build/m68k/%,$(SDL_COMMANDS)): __sdl_command_force
+	$(MAKE) -C ../sdl2 $(patsubst ../sdl2/%,%,$@)
+
+$(patsubst %,build/m68k/%,$(SDL_COMMANDS)): build/m68k/%: ../sdl2/build/m68k/%
+	@mkdir -p $(@D)
+	$(OBJCOPY) --strip-all --remove-section=.astra_events $< $@
+	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
+		$(foreach library,$($(@F)_LIBRARIES),\
+			--needed $(notdir $(library))) $@
+
+.PHONY: __sdl_command_force
 
 build/m68k/vim: $(VIM_IMAGE)
 	@mkdir -p $(@D)
