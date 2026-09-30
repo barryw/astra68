@@ -24,6 +24,7 @@ it.
 """
 
 import argparse
+import collections
 import importlib.util
 import os
 import shutil
@@ -91,6 +92,7 @@ class AudioHost:
 
     def __init__(self, path):
         self.lock = threading.Lock()
+        self.requests = collections.Counter()
         self.voices = []
         self.next_handle = 0
         self.clock = time.monotonic()
@@ -145,6 +147,7 @@ class AudioHost:
             return reply
         magic, version, operation, handle, value, length = \
             REQUEST.unpack_from(packet)
+        self.requests[operation] += 1
         data = packet[REQUEST.size:]
         if (magic != MAGIC or version != VERSION or length != len(data)):
             reply[1] = PROTOCOL
@@ -428,6 +431,12 @@ def main():
                 frames = verify_stream(voice, sample.astype(numpy.int16),
                                        arguments.seconds)
                 gaps = voice.gaps
+            names = {OPEN: "open", WRITE: "write", STATUS: "status",
+                     GAIN: "gain", CLOSE: "close", FINISH: "finish",
+                     PAUSE: "pause", CLEAR: "clear"}
+            print("host requests: " + ", ".join(
+                "%s %d" % (names.get(op, op), count)
+                for op, count in sorted(host.requests.items())))
             print("SDL upstream loopwave QEMU: PASS (%d frames of "
                   "S16BE mono 22050 Hz, bit-exact sample.wav looped; %d "
                   "queue underruns)" % (frames, gaps))

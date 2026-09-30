@@ -86,20 +86,25 @@ static int ASTRAAUDIO_OpenDevice(_THIS, const char *devname)
     return 0;
 }
 
+/* Room worth waking for: a whole buffer, or half the host queue when the
+ * buffer is larger, so the queue never runs down to empty before the next
+ * write. */
+static uint32_t ASTRAAUDIO_Room(_THIS, uint32_t frames)
+{
+    const uint32_t half = ASTRA_PCM_QUEUE_FRAMES / 2u;
+
+    (void)_this;
+    return frames < half ? frames : half;
+}
+
 static void ASTRAAUDIO_WaitDevice(_THIS)
 {
-    AstraPcmStatus status;
+    const uint32_t frames = _this->spec.size / _this->hidden->frame_bytes;
 
-    while (!SDL_AtomicGet(&_this->shutdown)) {
-        if (astra_pcm_status(&_this->hidden->stream, &status) != ASTRA_OK) {
-            SDL_OpenedAudioDeviceDisconnected(_this);
-            return;
-        }
-        if (status.queued_frames <= _this->spec.samples)
-            return;
-        (void)astra_rt_thread_sleep(UINT64_C(2000000),
-                                    ASTRA_THREAD_SLEEP_RELATIVE, 0u, NULL);
-    }
+    if (!SDL_AtomicGet(&_this->shutdown) &&
+        astra_pcm_wait(&_this->hidden->stream,
+                       ASTRAAUDIO_Room(_this, frames)) != ASTRA_OK)
+        SDL_OpenedAudioDeviceDisconnected(_this);
 }
 
 static Uint8 *ASTRAAUDIO_GetDeviceBuf(_THIS)
@@ -123,12 +128,13 @@ static void ASTRAAUDIO_PlayDevice(_THIS)
         sent += accepted;
         if (result == ASTRA_OK)
             continue;
-        if (result != ASTRA_ERROR_BUSY) {
+        if (result != ASTRA_ERROR_BUSY ||
+            astra_pcm_wait(&_this->hidden->stream,
+                           ASTRAAUDIO_Room(_this, frames - sent)) !=
+                ASTRA_OK) {
             SDL_OpenedAudioDeviceDisconnected(_this);
             return;
         }
-        (void)astra_rt_thread_sleep(UINT64_C(2000000),
-                                    ASTRA_THREAD_SLEEP_RELATIVE, 0u, NULL);
     }
 }
 

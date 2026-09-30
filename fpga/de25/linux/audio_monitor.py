@@ -15,14 +15,26 @@ import struct
 import sys
 import time
 
-MAGIC, VERSION, MONITOR = 0x41554431, 2, 0x80000001
+MAGIC, VERSION, STATUS, MONITOR = 0x41554431, 2, 4, 0x80000001
 HEADER = struct.Struct("<3I")
 MONITOR_FRAMES = 480
+
+
+def counters(path):
+    """The daemon's FIFO underruns, overflows and software gaps."""
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    connection.settimeout(1.0)
+    connection.connect(path)
+    connection.send(struct.pack("<6I", MAGIC, VERSION, STATUS, 0, 0, 0))
+    reply = struct.unpack("<8I", connection.recv(32))
+    connection.close()
+    return reply[5:]
 
 
 def main():
     seconds, output = float(sys.argv[1]), sys.argv[2]
     path = sys.argv[3] if len(sys.argv) > 3 else "/run/astra/audio.sock"
+    before = counters(path)
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
     connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
     connection.settimeout(1.0)
@@ -45,7 +57,10 @@ def main():
                 raise SystemExit("bad monitor packet")
             handle.write(packet[HEADER.size:])
             frames += count
-    print("AUDIO_MONITOR frames=%d seconds=%.1f" % (frames, seconds))
+    after = counters(path)
+    print("AUDIO_MONITOR frames=%d seconds=%.1f underruns=%d overflows=%d "
+          "gaps=%d" % ((frames, seconds) +
+                       tuple(b - a for a, b in zip(before, after))))
 
 
 if __name__ == "__main__":

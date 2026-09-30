@@ -132,6 +132,7 @@ AstraResult astra_pcm_open(AstraHandle service, uint32_t format,
     }
     stream->transaction = 1u;
     stream->frame_bytes = frame_bytes;
+    stream->format = format;
     astra_message_header_set(&request.header, sizeof(request),
                              ASTRA_PCM_PROTOCOL, ASTRA_PCM_PROTOCOL_VERSION,
                              ASTRA_PCM_OPEN, stream->transaction);
@@ -225,6 +226,32 @@ AstraResult astra_pcm_status(AstraPcmStream *stream, AstraPcmStatus *status)
         status->software_gaps = reply.software_gaps;
     }
     return result;
+}
+
+AstraResult astra_pcm_wait(AstraPcmStream *stream, uint32_t frame_count)
+{
+    if (!stream_open(stream) || frame_count == 0u ||
+        frame_count > ASTRA_PCM_QUEUE_FRAMES)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    for (;;) {
+        AstraPcmStatus status;
+        AstraResult result = astra_pcm_status(stream, &status);
+        uint32_t room;
+
+        if (result != ASTRA_OK)
+            return result;
+        room = status.queued_frames >= ASTRA_PCM_QUEUE_FRAMES ? 0u :
+               ASTRA_PCM_QUEUE_FRAMES - status.queued_frames;
+        if (room >= frame_count)
+            return ASTRA_OK;
+        /* The host plays the frames in the way at the stream's own rate;
+         * sleep that long (at least a millisecond) instead of polling. */
+        (void)astra_rt_thread_sleep(
+            (uint64_t)(frame_count - room) * UINT64_C(1000000000) /
+                    astra_pcm_format_rate(stream->format) +
+                UINT64_C(1000000),
+            ASTRA_THREAD_SLEEP_RELATIVE, 0u, NULL);
+    }
 }
 
 AstraResult astra_pcm_finish(AstraPcmStream *stream)

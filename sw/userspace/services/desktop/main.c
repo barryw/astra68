@@ -94,9 +94,12 @@ static void play_startup_sound(uint32_t pcm_service)
         sent += accepted;
         if (result == ASTRA_ERROR_BUSY &&
             astra_clock_monotonic() < deadline) {
-            (void)astra_rt_thread_sleep(UINT64_C(2000000),
-                                        ASTRA_THREAD_SLEEP_RELATIVE,
-                                        0u, NULL);
+            uint32_t room = frame_count - sent;
+
+            if (room > ASTRA_PCM_QUEUE_FRAMES / 2u)
+                room = ASTRA_PCM_QUEUE_FRAMES / 2u;
+            if (astra_pcm_wait(&stream, room) != ASTRA_OK)
+                goto done;
         } else if (result != ASTRA_OK) {
             goto done;
         }

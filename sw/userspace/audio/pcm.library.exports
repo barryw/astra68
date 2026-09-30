@@ -11,3 +11,8 @@ ASTRA_PCM_2.0 {
     local:
         *;
 };
+
+ASTRA_PCM_2.1 {
+    global:
+        astra_pcm_wait;
+} ASTRA_PCM_2.0;

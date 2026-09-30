@@ -266,7 +266,23 @@ contract.
   bit-exact: S16BE mono 22050 Hz, exactly sample.wav looped.
 - Guest cost of loopwave: ~422 M to ~20 M instructions per second of audio.
 
-**Next:** loopwave on the DE25 with the new daemon, then Chocolate Doom.
+- DE25 (release `10102cba`): loopwave PASS, every 0.5 s window correlates
+  at 0.992, +0 ppm, no FIFO underruns. But the daemon counted about one
+  software gap (a 512-frame silent tail) per 60-100 s of playback.
+  `/proc/<tid>/schedstat` sampled every 5 ms showed the vCPU thread idle
+  (neither running nor runnable) for ~140 ms before a gap, so the guest
+  stopped feeding; the host was not starving it.
+- The guest's feed was BUSY-polling: SDL's WaitDevice waited for
+  queued <= 4096 (the whole queue) and PlayDevice retried every 2 ms, each
+  retry a full round trip. pcm.library 2.1 adds `astra_pcm_wait()`, which
+  sleeps for the predicted drain time; SDL, the desktop chime and
+  pcm-certify use it. Host requests for the same audio: ~15,000 to ~1,900;
+  guest cost ~20 M to ~4 M instructions/s.
+
+**Next:** re-measure the DE25 gap rate with `astra_pcm_wait`
+(`fpga/de25/linux/audio_monitor.py` now prints the daemon's underruns,
+overflows and gaps over the capture). If gaps remain, find what blocks the
+guest for ~140 ms. Then Chocolate Doom.
 
 ## The remaining SDL gates
 

@@ -13,6 +13,20 @@ static uint32_t writes;
 static uint32_t reply_status;
 static int bad_transaction;
 static int zero_control;
+/* Queued frames each status reply reports, in turn. */
+static uint32_t queued_script[4];
+static uint32_t queued_next;
+static uint64_t slept[4];
+static uint32_t sleeps;
+
+uint32_t astra_rt_thread_sleep(uint64_t deadline_ns, uint32_t flags,
+                                uint32_t reserved, uint32_t *remaining_ns)
+{
+    assert(flags == ASTRA_THREAD_SLEEP_RELATIVE && reserved == 0u &&
+           remaining_ns == NULL && sleeps < 4u);
+    slept[sleeps++] = deadline_ns;
+    return ASTRA_SYSCALL_OK;
+}
 
 uint32_t astra_rt_port_create(uint32_t messages, uint32_t bytes,
                               uint32_t *receive, uint32_t *send)
@@ -103,7 +117,8 @@ uint32_t astra_port_receive(uint32_t handle, void *message,
                              last_request.header.transaction_id +
                              (uint32_t)bad_transaction);
     reply->status = reply_status;
-    reply->queued_frames = 123u;
+    reply->queued_frames = queued_next != 0u ?
+                           queued_script[--queued_next] : 123u;
     reply->hardware_frames = 45u;
     *size = sizeof(*reply);
     *handle_count = last_request.header.operation == ASTRA_PCM_OPEN &&
@@ -145,6 +160,17 @@ int main(void)
     assert(last_request.header.operation == ASTRA_PCM_CLEAR);
     assert(astra_pcm_status(&stream, &status) == ASTRA_OK);
     assert(status.queued_frames == 123u && status.hardware_frames == 45u);
+    /* A wait sleeps for the time the host needs to play what is in the
+     * way, at the stream's rate (48 kHz here), and stops at room. */
+    queued_script[1] = ASTRA_PCM_QUEUE_FRAMES;          /* first status */
+    queued_script[0] = ASTRA_PCM_QUEUE_FRAMES - 1024u;  /* after a sleep */
+    queued_next = 2u;
+    assert(astra_pcm_wait(&stream, 1024u) == ASTRA_OK);
+    assert(sleeps == 1u && queued_next == 0u);
+    assert(slept[0] == UINT64_C(1024) * 1000000000u / 48000u + 1000000u);
+    assert(astra_pcm_wait(&stream, 0u) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_pcm_wait(&stream, ASTRA_PCM_QUEUE_FRAMES + 1u) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
     assert(astra_pcm_finish(&stream) == ASTRA_OK);
     before = sends;
     assert(astra_pcm_write(&stream, NULL, 1u, &accepted) ==

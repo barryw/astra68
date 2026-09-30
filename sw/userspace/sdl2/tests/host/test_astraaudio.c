@@ -14,7 +14,8 @@ static int write_busy_once;
 static int status_failure;
 static int disconnected;
 static uint32_t received_frames;
-static uint32_t sleep_count;
+static uint32_t wait_count;
+static uint32_t wait_frames;
 static uint32_t opened_format;
 
 void *SDL_calloc(size_t count, size_t size) { return calloc(count, size); }
@@ -81,15 +82,12 @@ AstraResult astra_pcm_close(AstraPcmStream *stream)
     stream->control = 0u;
     return ASTRA_OK;
 }
-uint32_t astra_rt_thread_sleep(uint64_t deadline_ns, uint32_t flags,
-                                uint32_t reserved, uint32_t *remaining_ns)
+AstraResult astra_pcm_wait(AstraPcmStream *stream, uint32_t frame_count)
 {
-    (void)deadline_ns;
-    (void)flags;
-    (void)reserved;
-    (void)remaining_ns;
-    ++sleep_count;
-    return 0u;
+    assert(stream->control == 1u);
+    ++wait_count;
+    wait_frames = frame_count;
+    return status_failure ? ASTRA_ERROR_IO : ASTRA_OK;
 }
 
 int main(void)
@@ -128,8 +126,11 @@ int main(void)
     write_busy_once = 1;
     driver.PlayDevice(&device);
     assert(received_frames == 256u);
-    assert(sleep_count == 1u);
+    /* A full queue waits for room for the rest, rather than polling. */
+    assert(wait_count == 1u && wait_frames == 255u);
     assert(disconnected == 0);
+    driver.WaitDevice(&device);
+    assert(wait_count == 2u && wait_frames == 256u && disconnected == 0);
     status_failure = 1;
     driver.WaitDevice(&device);
     assert(disconnected == 1); /* failed provider does not masquerade as audio */

@@ -61,11 +61,9 @@ int astra_main(const AstraStartupInfo *startup)
         result = astra_pcm_write(&stream, samples, count, &accepted);
         sent += accepted;
         if (result == ASTRA_ERROR_BUSY) {
-            if (astra_clock_monotonic() >= deadline)
+            if (astra_clock_monotonic() >= deadline ||
+                astra_pcm_wait(&stream, count - accepted) != ASTRA_OK)
                 goto fail;
-            (void)astra_rt_thread_sleep(UINT64_C(1000000),
-                                        ASTRA_THREAD_SLEEP_RELATIVE,
-                                        0u, NULL);
         } else if (result != ASTRA_OK) {
             goto fail;
         }

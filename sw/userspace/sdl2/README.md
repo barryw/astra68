@@ -118,8 +118,9 @@ The audio backend runs over `pcm.library.2`. It
 opens the app's native `PCM` capability and opens the device at the app's
 own sample format, channels and rate (the Linux host converts and
 resamples; SDL converts only more than two channels or a rate outside
-8-192 kHz), and honors PCM queue backpressure. `make test` on Beast checks granted/missing/broken PCM cases,
-the unchanged upstream source, and MC68040 compilation. `make core` builds
+8-192 kHz), and honors PCM queue backpressure by waiting for room with
+`astra_pcm_wait()` rather than polling. `make test` on Beast checks
+granted/missing/broken PCM cases, the unchanged upstream source, and MC68040 compilation. `make core` builds
 the full upstream SDL2 core and test archives with Astra's PIC/ABI flags;
 `make shared` links and checks the Kit library using upstream's export list.
 `make build/m68k/testaudioinfo` links SDL's unchanged upstream audio-info

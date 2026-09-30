@@ -27,6 +27,8 @@
 #define ASTRA_PCM_CHANNELS_MAX 2u
 /** Largest frame of any accepted format: 32-bit stereo. */
 #define ASTRA_PCM_MAX_FRAME_BYTES 8u
+/** Frames each stream's host queue holds: a full queue is backpressure. */
+#define ASTRA_PCM_QUEUE_FRAMES 4096u
 /** Internal transport batch size; callers may write larger buffers. */
 #define ASTRA_PCM_TRANSFER_FRAMES 1024u
 

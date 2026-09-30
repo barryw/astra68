@@ -15,7 +15,6 @@
 extern "C" {
 #endif
 
-/** A stream accepts one explicitly selected 48 kHz stereo input format. */
 /** Caller-owned stream; initialize with ::ASTRA_PCM_STREAM_INIT. */
 typedef struct AstraPcmStream {
     /** Private control endpoint. */
@@ -30,10 +29,12 @@ typedef struct AstraPcmStream {
     uint32_t transaction;
     /** Private selected frame width. */
     uint32_t frame_bytes;
+    /** Private selected format word. */
+    uint32_t format;
 } AstraPcmStream;
 
 /** Empty stream initializer. */
-#define ASTRA_PCM_STREAM_INIT {0u, 0u, 0u, NULL, 0u, 0u}
+#define ASTRA_PCM_STREAM_INIT {0u, 0u, 0u, NULL, 0u, 0u, 0u}
 
 /** Queue and hardware state sampled at one instant. */
 typedef struct AstraPcmStatus {
@@ -79,6 +80,18 @@ ASTRA_NODISCARD AstraResult astra_pcm_write(AstraPcmStream *stream,
                                             const void *frames,
                                             uint32_t frame_count,
                                             uint32_t *accepted);
+
+/** Wait until the stream's queue has room for @p frame_count frames.
+ * Sleeps for as long as the host needs to play the frames in the way, at
+ * the stream's own rate, rather than polling; pair it with
+ * astra_pcm_write() for blocking playback. A paused stream does not drain,
+ * so waiting on one returns only after it is resumed.
+ * @param stream Open PCM stream.
+ * @param frame_count 1 to ::ASTRA_PCM_QUEUE_FRAMES.
+ * @return ASTRA_OK once there is room, otherwise the status error.
+ */
+ASTRA_NODISCARD AstraResult astra_pcm_wait(AstraPcmStream *stream,
+                                           uint32_t frame_count);
 
 /** Set linear gain: 65536 is unity and zero is silent.
  * @param stream Open PCM stream.

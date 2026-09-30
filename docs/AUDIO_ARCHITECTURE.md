@@ -151,7 +151,17 @@ phases, cutoff 0.95 of the lower Nyquist rate, so rates above 48 kHz are
 anti-aliased), then mixes. A 48 kHz stream stays bit-exact. The MC68040
 converts nothing: measured on loopwave (22050 Hz mono ADPCM), guest cost
 fell from ~422 M to ~20 M instructions per second of audio, the difference
-being libgcc soft-float under SDL 2's float resampler. A host-side self-test mixes 16 simultaneous voices and rejects
+being libgcc soft-float under SDL 2's float resampler.
+
+Each stream's host queue holds `ASTRA_PCM_QUEUE_FRAMES` (4096) source
+frames; a WRITE that does not fit returns BUSY with the prefix accepted.
+Clients wait for room with `astra_pcm_wait()` (pcm.library 2.1), which
+reads the queue once and sleeps for the time the host needs to play the
+frames in the way at the stream's own rate. Polling BUSY every 2 ms, as the
+SDL backend, the desktop and pcm-certify did, cost ~500 full round trips a
+second (IPC, media service, host channel, QEMU, daemon) per stream: loopwave
+made ~15,000 host requests where ~1,900 now suffice, and its whole-machine
+guest cost fell from ~20 M to ~4 M instructions per second. A host-side self-test mixes 16 simultaneous voices and rejects
 bad formats, partial frames, and invalid controls. A 30-second physical DE25
 socket test mixed 16 simultaneous streams, reached a 456-frame minimum FIFO,
 and observed zero underruns, overflows, or software gaps. This qualifies the
