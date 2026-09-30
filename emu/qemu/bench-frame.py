@@ -3,8 +3,10 @@
 
 usage: bench-frame.py QEMU ROM IMAGE [--span S] [--profile OUT.aprof]
                       [--probe ADDR]... [--probe-register REG]
-                      [--fake-helper]
+                      [--fake-helper] [--ready-renders N]
 
+The test app is SDLFrameBench, or with --ready-renders any app: measurement
+starts once it has rendered N commands.
 Prints every SDL_FRAME_BENCH line the benchmark logs during SPAN seconds,
 plus the display device's submissions per second. With --profile, QEMU must
 be the host-profile build (emu/qemu/build.sh host-profile); the guest is
@@ -45,6 +47,8 @@ def main():
     parser.add_argument("--span", type=float, default=20.0)
     parser.add_argument("--profile")
     parser.add_argument("--fake-helper", action="store_true")
+    parser.add_argument("--ready-renders", type=int, default=0,
+                        help="wait for N render commands, not SDLFrameBench")
     parser.add_argument("--probe", action="append", default=[],
                         help="guest address whose callers --profile records")
     parser.add_argument("--probe-register",
@@ -83,16 +87,23 @@ def main():
         try:
             if not machine.wait_for_serial(terminal_gate.BOOT_MARKER, 120):
                 raise RuntimeError("Astra did not finish booting")
-            if not machine.wait_for_trace_text("SDL_FRAME_BENCH_READY", 90):
+            count = lambda name: machine.qmp.execute(
+                "qom-get", {"path": "/machine",
+                            "property": "astra-display-" + name})
+            if arguments.ready_renders:
+                deadline = time.monotonic() + 90
+                while count("render-commands") < arguments.ready_renders:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("the test app did not render")
+                    time.sleep(0.1)
+            elif not machine.wait_for_trace_text("SDL_FRAME_BENCH_READY", 90):
                 raise RuntimeError("SDLFrameBench did not start: %s" %
                                    machine.recent_trace())
             # Let the first measurement window pass before counting.
             time.sleep(3.0)
             after = machine.sequence()
-            count = lambda name: machine.qmp.execute(
-                "qom-get", {"path": "/machine",
-                            "property": "astra-display-" + name})
             before = count("submissions")
+            rendered_before = count("render-commands")
             prof = [sys.executable, os.path.join(ROOT, "tools/astra-prof"),
                     "control", control]
             if arguments.profile:
@@ -103,10 +114,12 @@ def main():
                 subprocess.run(prof + ["stop"], check=True)
             elapsed = time.monotonic() - start
             submitted = count("submissions") - before
+            rendered = count("render-commands") - rendered_before
             for line in machine.said(after)[0]:
                 if "SDL_FRAME_BENCH" in line or "FAIL" in line:
                     print(line)
-            print("display submissions %.1f/s" % (submitted / elapsed))
+            print("display submissions %.1f/s, render commands %.1f/s" %
+                  (submitted / elapsed, rendered / elapsed))
         finally:
             machine.close()
             if helper is not None:

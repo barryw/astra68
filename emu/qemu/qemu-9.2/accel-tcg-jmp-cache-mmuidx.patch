@@ -1,0 +1,50 @@
+--- a/accel/tcg/cputlb.c
++++ b/accel/tcg/cputlb.c
+@@ -374,6 +374,38 @@
+     }
+ }
+ 
++/*
++ * Astra: drop the jump-cache entries a flush of @cleaned can make stale.
++ * An entry is only added after its code page was looked up in the TLB of
++ * the index it runs under, which marks that index dirty, so an index that
++ * was already clean has no entries to drop. On m68k code runs through the
++ * kernel index exactly when TB_FLAGS_MSR_S is set, so a flush of only the
++ * user index -- every address-space switch -- keeps the kernel's entries.
++ * Clearing them all sent the kernel's indirect branches to the TB hash
++ * table after every switch.
++ */
++static void tlb_flush_jmp_cache_mmuidx(CPUState *cpu, uint16_t cleaned)
++{
++    CPUJumpCache *jc = cpu->tb_jmp_cache;
++
++    if (cleaned == 0 || jc == NULL) {
++        return;
++    }
++#ifdef TARGET_M68K
++    if (cleaned == (1u << MMU_USER_IDX)) {
++        for (int i = 0; i < TB_JMP_CACHE_SIZE; i++) {
++            TranslationBlock *tb = qatomic_read(&jc->array[i].tb);
++
++            if (tb != NULL && !(tb->flags & TB_FLAGS_MSR_S)) {
++                qatomic_set(&jc->array[i].tb, NULL);
++            }
++        }
++        return;
++    }
++#endif
++    tcg_flush_jmp_cache(cpu);
++}
++
+ static void tlb_flush_by_mmuidx_async_work(CPUState *cpu, run_on_cpu_data data)
+ {
+     uint16_t asked = data.host_int;
+@@ -398,7 +430,7 @@
+ 
+     qemu_spin_unlock(&cpu->neg.tlb.c.lock);
+ 
+-    tcg_flush_jmp_cache(cpu);
++    tlb_flush_jmp_cache_mmuidx(cpu, to_clean);
+ 
+     if (to_clean == ALL_MMUIDX_BITS) {
+         qatomic_set(&cpu->neg.tlb.c.full_flush_count,
