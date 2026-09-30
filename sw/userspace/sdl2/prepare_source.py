@@ -95,6 +95,24 @@ MORE_PATCHES = [
         "\tsrc/filesystem/dummy/*.c \\\n",
         "\tsrc/filesystem/astra/*.c \\\n",
     )),
+    # SDL_Log goes to the system log, as Android's goes to logcat: an app
+    # opened from the desktop has no stderr anyone reads.
+    ("src/SDL_log.c", (
+        "#if defined(__ANDROID__)\n#include <android/log.h>\n#endif",
+        "#if defined(__ANDROID__)\n#include <android/log.h>\n#endif\n"
+        "#if defined(__astra__)\n#include <astra/runtime.h>\n#endif",
+    )),
+    ("src/SDL_log.c", (
+        "#elif defined(__ANDROID__)\n    {\n        char tag[32];",
+        "#elif defined(__astra__)\n"
+        "    {\n"
+        "        char line[256];\n\n"
+        "        SDL_snprintf(line, sizeof(line), \"%s: %s\",\n"
+        "                     SDL_priority_prefixes[priority], message);\n"
+        "        (void)astra_log(line);\n"
+        "    }\n"
+        "#elif defined(__ANDROID__)\n    {\n        char tag[32];",
+    )),
 ]
 
 

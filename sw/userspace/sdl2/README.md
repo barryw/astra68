@@ -28,6 +28,16 @@ quits on Escape and exits clean. `test-sdl-image.py` checks both paths,
 including a write and read back through the preference path. Removing
 `icon.bmp` from testsprite2's bundle fails its gate.
 
+Upstream `testkeys` and `testmouse` ship the same way. `SDL_Log` reaches the
+system log (the port patches `SDL_LogOutput`, as Android sends it to
+logcat), so `emu/qemu/test-sdl-input.py` reads testkeys' scancode table from
+the trace and requires its clean exit. testmouse reports nothing; it draws.
+Its gate drives it through QMP and decodes the render-only batches a
+stand-in display helper receives. A left drag must draw a red line whose
+vector is the drag's, Shift held through a drag a red filled rectangle of
+the drag's size, one wheel notch the green wheel line, and the close gadget
+must quit it clean. Expecting any other colour fails the gate.
+
 ## FPGA renderer
 
 SDL drawing now reaches the FPGA through Astra's managed graphics API; see
@@ -135,7 +145,8 @@ Upstream examples in the sibling SDL2 checkout's `test/` directory provide
 progressive port gates without
 changing SDL sources: `testver` for core linking (passed in QEMU), `testthread`
 and `testtimer` for runtime behavior, `testdraw2` for window rendering,
-`testkeys` and `testmouse` for input, and `loopwave` for PCM playback. Follow
+`testkeys` and `testmouse` for input (both passed in QEMU), and `loopwave`
+for PCM playback. Follow
 them with `testsprite2` for moving graphics and Chocolate Doom for a real-game
 integration gate. The DE25 visual, input, and audio gates remain open.
 

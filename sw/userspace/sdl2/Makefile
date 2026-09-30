@@ -113,9 +113,10 @@ build/m68k/net/%.o: $(SDL_NET_STAMP) Makefile
 # Probes are built on demand by their *-bundle targets and never shipped.
 # Upstream demos run unchanged; testutils.c finds their files in the
 # bundle's resources through SDL_GetBasePath.
-SDL_DEMOS := testsprite2 testgeometry testrendertarget testscale
+SDL_DEMOS := testsprite2 testgeometry testrendertarget testscale testkeys \
+	testmouse
 SHIPPED_APPS := SDLTestDraw2 SDLFrameBench SDLTestSprite2 SDLTestGeometry \
-	SDLTestRenderTarget SDLTestScale
+	SDLTestRenderTarget SDLTestScale SDLTestKeys SDLTestMouse
 
 all: library-contract net-library-contract image-library-contract \
 	mixer-library-contract ttf-library-contract build/.apps
@@ -597,7 +598,9 @@ $(eval $(call astra_app_bundle,build,SDLTestSprite2,build/m68k/testsprite2,apps/
 $(eval $(call astra_app_bundle,build,SDLTestGeometry,build/m68k/testgeometry,apps/SDLTestGeometry.app/manifest,$(SDL_DEMO_ICON),$(SDL_DEMO_ICON)))
 $(eval $(call astra_app_bundle,build,SDLTestRenderTarget,build/m68k/testrendertarget,apps/SDLTestRenderTarget.app/manifest,$(SDL_DEMO_ICON),$(SDL_DEMO_ICON) $(SDL2_ROOT)/test/sample.bmp))
 $(eval $(call astra_app_bundle,build,SDLTestScale,build/m68k/testscale,apps/SDLTestScale.app/manifest,$(SDL_DEMO_ICON),$(SDL_DEMO_ICON) $(SDL2_ROOT)/test/sample.bmp))
-demo-bundles: $(foreach demo,SDLTestSprite2 SDLTestGeometry SDLTestRenderTarget SDLTestScale,build/.$(demo).app.stamp)
+$(eval $(call astra_app_bundle,build,SDLTestKeys,build/m68k/testkeys,apps/SDLTestKeys.app/manifest,$(SDL_DEMO_ICON),))
+$(eval $(call astra_app_bundle,build,SDLTestMouse,build/m68k/testmouse,apps/SDLTestMouse.app/manifest,$(SDL_DEMO_ICON),))
+demo-bundles: $(foreach demo,SDLTestSprite2 SDLTestGeometry SDLTestRenderTarget SDLTestScale SDLTestKeys SDLTestMouse,build/.$(demo).app.stamp)
 
 $(eval $(call astra_app_inventory,build,$(SHIPPED_APPS)))
 

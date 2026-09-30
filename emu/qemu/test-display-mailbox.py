@@ -28,10 +28,12 @@ HEADER_BYTES = 4096
 PAYLOAD_BYTES = 8 * 1024 * 1024
 REQUEST_SEQUENCE = 8
 REQUEST_ID = 12
+REQUEST_OPERATION = 16
 COMPLETION_SEQUENCE = 24
 COMPLETION_ID = 28
 COMPLETION_STATUS = 32
 COMPLETION_GENERATION = 36
+REQUEST_FRAME_BYTES = 44
 FUTEX_WAIT = 0
 FUTEX_WAKE = 1
 SYS_FUTEX = {"x86_64": 202, "aarch64": 98}
@@ -88,15 +90,19 @@ def ownership(qemu, rom, root):
 
 
 class Helper:
-    """Completes each request the way the board helper does."""
+    """Completes each request the way the board helper does. With @observe,
+    each request's (operation, frame_bytes) is passed to it first, while the
+    payload still holds the request."""
 
-    def __init__(self, view):
+    def __init__(self, view, observe=None):
         self.libc = ctypes.CDLL(None, use_errno=True)
         self.futex = SYS_FUTEX[platform.machine()]
         self.words = {offset: ctypes.c_uint32.from_buffer(view, offset)
                       for offset in (REQUEST_SEQUENCE, REQUEST_ID,
+                                     REQUEST_OPERATION, REQUEST_FRAME_BYTES,
                                      COMPLETION_SEQUENCE, COMPLETION_ID,
                                      COMPLETION_STATUS, COMPLETION_GENERATION)}
+        self.observe = observe
         self.stopping = False
         self.completions = 0
         self.gaps = []
@@ -122,6 +128,9 @@ class Helper:
                 continue
             if completed_at is not None:
                 self.gaps.append(time.monotonic() - completed_at)
+            if self.observe is not None:
+                self.observe(self.words[REQUEST_OPERATION].value,
+                             self.words[REQUEST_FRAME_BYTES].value)
             self.words[COMPLETION_ID].value = self.words[REQUEST_ID].value
             self.words[COMPLETION_STATUS].value = 0
             self.words[COMPLETION_GENERATION].value = self.completions + 1
