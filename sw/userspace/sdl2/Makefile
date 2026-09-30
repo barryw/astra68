@@ -114,9 +114,10 @@ build/m68k/net/%.o: $(SDL_NET_STAMP) Makefile
 # Upstream demos run unchanged; testutils.c finds their files in the
 # bundle's resources through SDL_GetBasePath.
 SDL_DEMOS := testsprite2 testgeometry testrendertarget testscale testkeys \
-	testmouse
+	testmouse testtimer testthread
 SHIPPED_APPS := SDLTestDraw2 SDLFrameBench SDLTestSprite2 SDLTestGeometry \
-	SDLTestRenderTarget SDLTestScale SDLTestKeys SDLTestMouse
+	SDLTestRenderTarget SDLTestScale SDLTestKeys SDLTestMouse SDLTestTimer \
+	SDLTestThread
 
 all: library-contract net-library-contract image-library-contract \
 	mixer-library-contract ttf-library-contract build/.apps
@@ -600,7 +601,9 @@ $(eval $(call astra_app_bundle,build,SDLTestRenderTarget,build/m68k/testrenderta
 $(eval $(call astra_app_bundle,build,SDLTestScale,build/m68k/testscale,apps/SDLTestScale.app/manifest,$(SDL_DEMO_ICON),$(SDL_DEMO_ICON) $(SDL2_ROOT)/test/sample.bmp))
 $(eval $(call astra_app_bundle,build,SDLTestKeys,build/m68k/testkeys,apps/SDLTestKeys.app/manifest,$(SDL_DEMO_ICON),))
 $(eval $(call astra_app_bundle,build,SDLTestMouse,build/m68k/testmouse,apps/SDLTestMouse.app/manifest,$(SDL_DEMO_ICON),))
-demo-bundles: $(foreach demo,SDLTestSprite2 SDLTestGeometry SDLTestRenderTarget SDLTestScale SDLTestKeys SDLTestMouse,build/.$(demo).app.stamp)
+$(eval $(call astra_app_bundle,build,SDLTestTimer,build/m68k/testtimer,apps/SDLTestTimer.app/manifest,$(SDL_DEMO_ICON),))
+$(eval $(call astra_app_bundle,build,SDLTestThread,build/m68k/testthread,apps/SDLTestThread.app/manifest,$(SDL_DEMO_ICON),))
+demo-bundles: $(foreach demo,SDLTestSprite2 SDLTestGeometry SDLTestRenderTarget SDLTestScale SDLTestKeys SDLTestMouse SDLTestTimer SDLTestThread,build/.$(demo).app.stamp)
 
 $(eval $(call astra_app_inventory,build,$(SHIPPED_APPS)))
 

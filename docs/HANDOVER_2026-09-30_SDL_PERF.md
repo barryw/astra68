@@ -194,6 +194,22 @@ exit by themselves; `test-sdl-input.py`'s testkeys check (log lines, then a
 clean exit after the last one) is the pattern. testthread waits for SIGTERM
 after its first pass; read it before writing the gate.
 
+## Done: timers and threads
+
+- testtimer and testthread ship unchanged as applications (no window,
+  no GUI capability). `emu/qemu/test-sdl-runtime.py --program NAME` gates
+  both from their `SDL_Log` lines, collected across polls because the trace
+  ring wraps under testtimer's callbacks; both run in `~/astra-mg/gates.sh`.
+- QEMU, under the full parallel gate load: 1 ms timer 1.04 ms; 100/50/233 ms
+  timers fired 99/299/64 times, none after removal; `SDL_Delay(1000)` read
+  1000 ms by ticks, ticks64 and the performance counter. testthread: TLS per
+  thread, 5 and 5 wake-ups, the self-raised SIGTERM handler slept, joined the
+  second thread and exited 0. No port change was needed.
+- testthread's handler line and thread #2's first line race (it raises
+  SIGTERM right after creating the thread); the gate accepts either order.
+
+**Next:** `loopwave`, then Chocolate Doom.
+
 ## The remaining SDL gates
 
 From `sw/userspace/sdl2/README.md`. Upstream test programs live in the SDL2

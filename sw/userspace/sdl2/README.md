@@ -38,6 +38,17 @@ vector is the drag's, Shift held through a drag a red filled rectangle of
 the drag's size, one wheel notch the green wheel line, and the close gadget
 must quit it clean. Expecting any other colour fails the gate.
 
+Upstream `testtimer` and `testthread` ship too; they open no window, log
+through `SDL_Log` and exit by themselves. `emu/qemu/test-sdl-runtime.py`
+collects their lines across polls, since the trace ring wraps under
+testtimer's callbacks. testtimer's 1 ms timer must average 0.9-1.5 ms, the
+100, 50 and 233 ms timers must fire 95-101, 285-301 and 61-65 times and
+never after removal, and a 1 s delay must read 1000-1050 ms by ticks,
+ticks64 and the performance counter. testthread must keep thread-local data
+per thread, join its first thread on a flag, and run the SIGTERM handler it
+raises (a 5 s sleep, then stopping and joining the second thread) to a
+clean exit.
+
 ## FPGA renderer
 
 SDL drawing now reaches the FPGA through Astra's managed graphics API; see
@@ -144,7 +155,8 @@ support.
 Upstream examples in the sibling SDL2 checkout's `test/` directory provide
 progressive port gates without
 changing SDL sources: `testver` for core linking (passed in QEMU), `testthread`
-and `testtimer` for runtime behavior, `testdraw2` for window rendering,
+and `testtimer` for runtime behavior (both passed in QEMU), `testdraw2` for
+window rendering,
 `testkeys` and `testmouse` for input (both passed in QEMU), and `loopwave`
 for PCM playback. Follow
 them with `testsprite2` for moving graphics and Chocolate Doom for a real-game
