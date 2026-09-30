@@ -298,8 +298,14 @@ contract.
   promises; a low-word wrap between the reads (every ~343.6 s) returned a
   count 343.6 s high and expired every pending deadline early.
 
-**Next:** board gap rate on the release with both fixes (target zero), then
-Chocolate Doom. Userspace drivers that take IRQ capabilities (display,
+- DE25, release `7bb53140` (commit `a5b0b1a9`): 0 gaps in 8 x 100 s runs
+  (about 13 expected at the old rate), 0 FIFO underruns or overflows; a
+  120 s capture checked against sample.wav: PASS, worst 0.5 s window 0.992,
+  +0 ppm. Board tooling: `/tmp/lw-tl6.sh` and `/tmp/lw-run.py` on beast
+  (restart astra, open loopwave from the desktop, capture the monitor tap,
+  read the QOM latency counters).
+
+**Next:** Chocolate Doom. Userspace drivers that take IRQ capabilities (display,
 block, input) should be checked for the same scan-then-acknowledge shape.
 
 ## The remaining SDL gates
