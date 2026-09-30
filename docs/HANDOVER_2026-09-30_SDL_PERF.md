@@ -226,8 +226,30 @@ after its first pass; read it before writing the gate.
 - loopwave has no window. From the desktop it plays until killed; SDL's
   minimal config has no `HAVE_SIGACTION`, so SIGTERM is not SDL_QUIT.
 
-**Next:** loopwave on the DE25 (the daemon's monitor tap,
-`ASTRA_AUDIO_HOST_MONITOR`, gives the final mix), then Chocolate Doom.
+## loopwave on the DE25: too slow (release `b16f86cb`)
+
+- Capture: `fpga/de25/linux/audio_monitor.py` on the board records the
+  daemon's monitor tap (the final mix, S16LE); `test-sdl-audio.py --heard
+  FILE --wav WAV` checks it with the QEMU gate's comparison.
+- Result: FAIL. Every 8,704 frames the mix is 8,192 frames of correct audio,
+  then the daemon's 512-frame silent tail: an underrun about 5.5 times a
+  second. The guest delivers ~94% of real time.
+- Cause, profiled on beast (`test-sdl-audio.py --profile`): ~422 M guest
+  instructions per second of audio. About 70% is libgcc soft-float
+  (`__mulsf3` and `__addsf3` in compiler.library at 0x3ffdf000), called from
+  SDL 2's float band-limited resampler (22050 to 48000 Hz). Userspace is
+  `-m68040 -msoft-float` by contract, so every sample multiply-add is a
+  library call.
+- The documented direction (`AUDIO_ARCHITECTURE.md`) is that the Linux mixer
+  converts and resamples, with formats that name rate and channels. Then SDL
+  opens the device at the app's own rate and channels and does no float
+  work on the guest. The alternatives are a hard-float userspace ABI (a
+  locked contract; QEMU's FPU is itself softfloat) or patching SDL's
+  resampler to integer arithmetic (changes upstream SDL).
+
+**Next:** decide the resampling tier (recommended: host-side, new PCM
+formats), re-run loopwave on the board, then Chocolate Doom (SDL_mixer at
+44.1 kHz hits the same path).
 
 ## The remaining SDL gates
 

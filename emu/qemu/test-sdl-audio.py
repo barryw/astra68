@@ -18,6 +18,9 @@ second). A dropped, repeated or byte-swapped packet, or a wrong rate, fails
 it.
 Queue underruns (the daemon's software gaps) are reported; QEMU time on
 beast is not physical DE25 throughput.
+
+--heard FILE checks a DE25 capture of the physical daemon's final mix
+(fpga/de25/linux/audio_monitor.py) the same way.
 """
 
 import argparse
@@ -26,6 +29,7 @@ import os
 import shutil
 import socket
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
@@ -278,17 +282,38 @@ def verify(voice, sample, rate, seconds):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("qemu")
-    parser.add_argument("rom")
-    parser.add_argument("image")
+    parser.add_argument("qemu", nargs="?")
+    parser.add_argument("rom", nargs="?")
+    parser.add_argument("image", nargs="?")
     parser.add_argument("--wav", required=True,
                         help="the sample.wav loopwave's bundle carries")
     parser.add_argument("--seconds", type=float, default=2.0,
                         help="audio past the first loop boundary to check")
     parser.add_argument("--save", help="write loopwave's stream here "
                         "(raw 48 kHz stereo S16BE)")
+    parser.add_argument("--profile", help="profile the guest while it "
+                        "plays (QEMU must be the host-profile build; report "
+                        "with tools/astra-prof report)")
+    parser.add_argument("--heard", help="check this DE25 capture instead "
+                        "of running QEMU (fpga/de25/linux/audio_monitor.py: "
+                        "raw 48 kHz stereo S16LE)")
     arguments = parser.parse_args()
     sample, rate = ms_adpcm_mono(arguments.wav)
+    if arguments.heard:
+        # The board's monitor tap is the final mix, so an underrun shows as
+        # the daemon's inserted silence and fails the correlation.
+        capture = Voice(0, S16BE_STEREO)
+        with open(arguments.heard, "rb") as handle:
+            capture.written = numpy.frombuffer(
+                handle.read(), dtype="<i2").astype(">i2").tobytes()
+        worst, drift, frames = verify(capture, sample, rate,
+                                      arguments.seconds)
+        print("SDL upstream loopwave DE25: PASS (%d frames; sample.wav "
+              "looped, worst 0.5 s correlation %.3f, rate %+.0f ppm)" %
+              (frames, worst, drift))
+        return
+    if not (arguments.qemu and arguments.rom and arguments.image):
+        parser.error("qemu, rom and image are required without --heard")
     loop_seconds = len(sample) / rate
     with tempfile.TemporaryDirectory(prefix="astra-sdl-audio-") as work:
         image = os.path.join(work, "test.img")
@@ -296,8 +321,18 @@ def main():
         host = AudioHost(os.path.join(work, "audio.sock"))
         os.environ["ASTRA_AUDIO_HOST_SOCKET"] = os.path.join(work,
                                                              "audio.sock")
+        extra, control = [], os.path.join(work, "profile.sock")
+        profile = [sys.executable,
+                   os.path.join(HERE, "..", "..", "tools", "astra-prof"),
+                   "control", control]
+        if arguments.profile:
+            plugin = os.path.join(os.path.dirname(arguments.qemu),
+                                  "contrib/plugins/libastra_profile.so")
+            extra = ["-plugin", "%s,output=%s,control=%s,label=audio" %
+                     (plugin, os.path.abspath(arguments.profile), control)]
         machine = terminal_gate.Machine(arguments.qemu, arguments.rom, image,
-                                        work)
+                                        work, extra_args=extra)
+        profiling = False
         try:
             if not machine.wait_for_serial(terminal_gate.BOOT_MARKER, 120):
                 raise RuntimeError("Astra did not finish booting: %r" %
@@ -314,6 +349,9 @@ def main():
                     heard = sounding(voices[-1]) if voices else 0
                 if heard >= need:
                     break
+                if arguments.profile and heard and not profiling:
+                    subprocess.run(profile + ["start", "audio"], check=True)
+                    profiling, profiled = True, (time.monotonic(), heard)
                 said = "\n".join(machine.said(0)[0])
                 if "ERROR:" in said:
                     raise RuntimeError("loopwave failed: %r" %
@@ -323,6 +361,10 @@ def main():
                         "loopwave gave %d of %d frames: %r" %
                         (heard, need, machine.said(0)[0][-20:]))
                 time.sleep(0.5)
+            if profiling:
+                subprocess.run(profile + ["stop"], check=True)
+                print("profiled %.1f s, %d frames heard" %
+                      (time.monotonic() - profiled[0], heard - profiled[1]))
             said = "\n".join(machine.said(0)[0])
             if "Using audio driver: astra" not in said:
                 raise RuntimeError("loopwave did not use the Astra driver")
