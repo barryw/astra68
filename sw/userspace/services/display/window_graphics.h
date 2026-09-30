@@ -68,14 +68,17 @@ typedef struct DisplayGraphicsHost {
     void *context;
     /* A free, 64-byte-aligned Media RAM extent, or zero. */
     uint32_t (*allocate)(void *context, uint32_t bytes);
-    /* Submit one finished render-only batch, with an optional attachment,
-       and wait for it. */
+    /* Submit one finished render-only batch, with an optional attachment.
+       It may still be running when this returns: the device runs requests
+       in order, so everything submitted after it sees its result. */
     uint32_t (*submit)(void *context, uint32_t bytes,
                        const DisplayGraphicsAttachment *attachment);
     /* Submit the AstraDisplaySurfaceRead request of @p bytes at the start
-       of batch_storage and wait until its rows are there. */
+       of the batch storage and wait until its rows are there. */
     uint32_t (*read)(void *context, uint32_t bytes);
-    void *batch_storage;
+    /* The batch storage, once no request still running uses it; a failure
+       of that request is returned here. */
+    uint32_t (*storage)(void *context, void **storage);
     /* The content bank the client draws into now. */
     uint32_t content_offset;
     uint32_t content_bytes;

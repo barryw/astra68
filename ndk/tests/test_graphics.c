@@ -302,12 +302,6 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         fake_reply_size = 0u;
         return ASTRA_SYSCALL_OK;
     }
-    case ASTRA_SYSCALL_EVENT_CREATE:
-        CHECK(d1 == (ASTRA_EVENT_MANUAL_RESET |
-                     ASTRA_EVENT_INITIALLY_SIGNALED));
-        ++fake_live_handles;
-        *out_d1 = fake_next_handle++;
-        return ASTRA_SYSCALL_OK;
     case ASTRA_SYSCALL_WAIT_ONE:
         return ASTRA_SYSCALL_OK;
     default:

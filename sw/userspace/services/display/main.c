@@ -2115,23 +2115,21 @@ static void log_builder_failure(uint32_t failure)
 
 static uint32_t last_builder_failure;
 
-static uint32_t submit_request(uint32_t device, uint32_t irq,
-                               const AstraDisplayFrameRequest *request,
-                               uint32_t *armed)
+/* The device runs one request at a time, in submission order. A render-only
+   batch is left running when its client is answered, so the client's next
+   frame overlaps the hardware; it is collected before the device or the
+   batch buffer is next used. */
+static struct {
+    uint32_t active;
+    uint32_t fence;
+} in_flight;
+
+static uint32_t collect_request(uint32_t device, uint32_t irq)
 {
     AstraDisplayFrameCompletion completion;
     uint32_t status;
 
-    if (*armed == 0u) {
-        if (astra_irq_arm(irq) != ASTRA_SYSCALL_OK)
-            return DISPLAY_FAIL_ARM;
-        *armed = 1u;
-    }
-    status = astra_display_submit(device, request);
-    if (status != ASTRA_SYSCALL_OK) {
-        (void)astra_log_failure("display submit syscall", status);
-        return DISPLAY_FAIL_SUBMIT;
-    }
+    in_flight.active = 0u;
     for (;;) {
         if (astra_wait_one(irq, ASTRA_DEADLINE_FOREVER, NULL) !=
             ASTRA_SYSCALL_OK)
@@ -2155,11 +2153,57 @@ static uint32_t submit_request(uint32_t device, uint32_t irq,
             return DISPLAY_FAIL_IRQ;
     }
     if (completion.size != ASTRA_DISPLAY_FRAME_COMPLETION_SIZE ||
-        completion.fence != request->fence ||
+        completion.fence != in_flight.fence ||
         completion.status != ASTRA_DISPLAY_COMPLETION_OK ||
         completion.generation == 0u || completion.reserved != 0u)
         return DISPLAY_FAIL_COMPLETION;
     return ASTRA_STATUS_OK;
+}
+
+/* Collects the request still running, if any. Its failure is this call's:
+   the client it answered has already been told it was accepted. */
+static uint32_t settle(uint32_t device, uint32_t irq)
+{
+    uint32_t status;
+
+    if (in_flight.active == 0u)
+        return ASTRA_STATUS_OK;
+    status = collect_request(device, irq);
+    if (status != ASTRA_STATUS_OK)
+        (void)astra_log_failure("display render-only batch", status);
+    return status;
+}
+
+static uint32_t start_request(uint32_t device, uint32_t irq,
+                              const AstraDisplayFrameRequest *request,
+                              uint32_t *armed)
+{
+    uint32_t status = settle(device, irq);
+
+    if (status != ASTRA_STATUS_OK)
+        return status;
+    if (*armed == 0u) {
+        if (astra_irq_arm(irq) != ASTRA_SYSCALL_OK)
+            return DISPLAY_FAIL_ARM;
+        *armed = 1u;
+    }
+    status = astra_display_submit(device, request);
+    if (status != ASTRA_SYSCALL_OK) {
+        (void)astra_log_failure("display submit syscall", status);
+        return DISPLAY_FAIL_SUBMIT;
+    }
+    in_flight.active = 1u;
+    in_flight.fence = request->fence;
+    return ASTRA_STATUS_OK;
+}
+
+static uint32_t submit_request(uint32_t device, uint32_t irq,
+                               const AstraDisplayFrameRequest *request,
+                               uint32_t *armed)
+{
+    uint32_t status = start_request(device, irq, request, armed);
+
+    return status == ASTRA_STATUS_OK ? collect_request(device, irq) : status;
 }
 
 /* One DMA-buffer request: a render batch, or a READ_SURFACE whose rows the
@@ -2168,7 +2212,7 @@ static uint32_t submit_buffer(uint32_t device, uint32_t irq,
                               const AstraDmaBufferInfo *buffer,
                               uint32_t operation, uint32_t byte_size,
                               const DisplayGraphicsAttachment *attachment,
-                              uint32_t fence, uint32_t *armed)
+                              uint32_t fence, uint32_t *armed, int wait)
 {
     AstraDisplayFrameRequest request = {
         .size = ASTRA_DISPLAY_FRAME_REQUEST_SIZE,
@@ -2186,7 +2230,8 @@ static uint32_t submit_buffer(uint32_t device, uint32_t irq,
         request.attachment_target = attachment->target;
     }
 
-    return submit_request(device, irq, &request, armed);
+    return wait ? submit_request(device, irq, &request, armed) :
+                  start_request(device, irq, &request, armed);
 }
 
 static uint32_t present(uint32_t device, uint32_t irq,
@@ -2195,7 +2240,7 @@ static uint32_t present(uint32_t device, uint32_t irq,
 {
     return submit_buffer(device, irq, buffer,
                          ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH, byte_size,
-                         NULL, fence, armed);
+                         NULL, fence, armed, 1);
 }
 
 static uint32_t update_cursor(uint32_t device, uint32_t irq,
@@ -2306,9 +2351,11 @@ static uint32_t render(uint32_t device, uint32_t irq,
                        uint32_t *next_fence, uint32_t *armed,
                        int include_cursor)
 {
-    uint32_t compose_status = ASTRA_STATUS_OK;
+    uint32_t compose_status = settle(device, irq);
 
     last_builder_failure = ASTRA_RENDER_BUILDER_FAILURE_NONE;
+    if (compose_status != ASTRA_STATUS_OK)
+        return compose_status;
     uint32_t bytes = compose((void *)(uintptr_t)framebuffer->virtual_base,
                              *next_fence, state, &compose_status,
                              &last_builder_failure, include_cursor);
@@ -3458,7 +3505,8 @@ static uint32_t graphics_allocate(void *context, uint32_t bytes)
 
 static uint32_t graphics_request(void *context, uint32_t operation,
                                  uint32_t bytes,
-                                 const DisplayGraphicsAttachment *attachment)
+                                 const DisplayGraphicsAttachment *attachment,
+                                 int wait)
 {
     const GraphicsHostContext *host = context;
     static uint32_t fence = UINT32_C(0x40000000);
@@ -3468,20 +3516,30 @@ static uint32_t graphics_request(void *context, uint32_t operation,
     if (++fence >= UINT32_C(0x80000000))
         fence = UINT32_C(0x40000001);
     return submit_buffer(host->device, host->irq, host->framebuffer,
-                         operation, bytes, attachment, fence, host->armed);
+                         operation, bytes, attachment, fence, host->armed,
+                         wait);
 }
 
 static uint32_t graphics_submit(void *context, uint32_t bytes,
                                 const DisplayGraphicsAttachment *attachment)
 {
     return graphics_request(context, ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH,
-                            bytes, attachment);
+                            bytes, attachment, 0);
 }
 
 static uint32_t graphics_read(void *context, uint32_t bytes)
 {
     return graphics_request(context, ASTRA_DISPLAY_FRAME_READ_SURFACE, bytes,
-                            NULL);
+                            NULL, 1);
+}
+
+static uint32_t graphics_storage(void *context, void **storage)
+{
+    const GraphicsHostContext *host = context;
+    uint32_t status = settle(host->device, host->irq);
+
+    *storage = (void *)(uintptr_t)host->framebuffer->virtual_base;
+    return status;
 }
 
 static void receive_graphics(uint32_t device, uint32_t irq,
@@ -3500,7 +3558,7 @@ static void receive_graphics(uint32_t device, uint32_t irq,
         .allocate = graphics_allocate,
         .submit = graphics_submit,
         .read = graphics_read,
-        .batch_storage = (void *)(uintptr_t)framebuffer->virtual_base,
+        .storage = graphics_storage,
         .content_offset = window->content_offset[window->content_back],
         .content_bytes = window->content_bytes,
         .content_pitch = window->content_pitch,

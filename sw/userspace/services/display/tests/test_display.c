@@ -561,6 +561,17 @@ static uint32_t record_read(void *context, uint32_t bytes)
     return read_status;
 }
 
+/* A failure the storage hook reports: a render-only batch the service left
+   running failed, and the next command that needs the buffer returns it. */
+static uint32_t storage_failure;
+
+static uint32_t record_storage(void *context, void **storage)
+{
+    (void)context;
+    *storage = batch;
+    return storage_failure;
+}
+
 static uint32_t record_allocate(void *context, uint32_t bytes)
 {
     return display_media_allocate(context, NULL, UINT32_MAX, bytes);
@@ -846,7 +857,7 @@ static void test_window_graphics(void)
         .allocate = record_allocate,
         .submit = record_submit,
         .read = record_read,
-        .batch_storage = batch,
+        .storage = record_storage,
         .content_width = 320u,
         .content_height = 200u,
     };
@@ -879,6 +890,18 @@ static void test_window_graphics(void)
                              &mapped) == ASTRA_SYSCALL_OK);
     assert(display_window_graphics_open(&window.graphics, staging_area) ==
            ASTRA_STATUS_OK);
+
+    /* A failed batch the service left running is the next command's
+       failure, not a silent one; nothing is submitted after it. */
+    storage_failure = ASTRA_STATUS_IO;
+    assert(graphics_run(window.graphics, &host, (AstraGuiGraphicsCommand){
+               .action = ASTRA_GUI_GRAPHICS_SURFACE_CREATE,
+               .width = 16u, .height = 8u,
+               .format = ASTRA_PIXEL_FORMAT_ARGB8888,
+               .flags = ASTRA_SURFACE_DRAW_SOURCE |
+                        ASTRA_SURFACE_CPU_WRITE}, 0u, &reply) ==
+           ASTRA_STATUS_IO && graphics_batch_count == 0u);
+    storage_failure = ASTRA_STATUS_OK;
 
     /* Creation clears the Media RAM an earlier client may have used. */
     assert(graphics_run(window.graphics, &host, (AstraGuiGraphicsCommand){

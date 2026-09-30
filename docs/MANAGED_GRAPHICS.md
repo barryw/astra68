@@ -192,11 +192,22 @@ in-tree writer and reader moves together.
 
 ## 5. Submission and batching
 
-`astra_draw_submit(list, fence)` sends `LIST_SUBMIT`. The service replies only
-after the list's commands have completed on the FPGA, so the returned fence is
-already signaled and submission errors come back from the call itself.
-Pipelined, pending fences are a later change. A submitted list is sealed
-until `astra_draw_list_reset`.
+`astra_draw_submit(list, fence)` sends `LIST_SUBMIT`. The service lowers the
+list into its batch, submits it, and replies without waiting for the FPGA, so
+the client's next frame runs while the hardware draws this one. The returned
+fence is already signaled, and needs no kernel object: everything the list
+uses was copied when the service accepted it (the commands into the batch,
+uploads by the device), and the device runs requests in order, so every later
+draw, readback and present sees the result. Validation errors come back from
+the call itself. A batch that fails on the hardware is logged and is the
+failure of the service's next request that needs the device or the batch
+buffer, which collects it first. A submitted list is sealed until
+`astra_draw_list_reset`.
+
+The service keeps one batch buffer. A render-only batch still running when
+the next request arrives is collected before that request writes the buffer,
+so the overlap is the client's own time between requests, not the service's
+batch building.
 
 A submitted list is lowered into **render-only batches**
 (batch version 1.4, `ASTRA_RENDER_BATCH_VERSION_1_4`), which never touch scanout or the window

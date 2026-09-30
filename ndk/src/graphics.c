@@ -4,6 +4,7 @@
 #include <astra/bytes.h>
 #include <astra/draw_list.h>
 #include <astra/gui.h>
+#include <astra/limits.h>
 #include <astra/port.h>
 #include <astra/text_style.h>
 #include <astra/utf8.h>
@@ -1328,12 +1329,19 @@ AstraResult astra_draw_ui_text(AstraDrawList *draw_list, AstraPointI32 origin,
     return ASTRA_OK;
 }
 
+/*
+ * A fence that was signaled when it was made needs no kernel event. Its
+ * handle is this value, which no kernel handle can be: a handle's low byte
+ * is its slot plus one, never zero.
+ */
+#define FENCE_SIGNALED ((AstraHandle)UINT32_C(0xffffff00))
+_Static_assert(ASTRA_HANDLE_COUNT_MAX <= 255u,
+               "FENCE_SIGNALED needs a slot byte no handle uses");
+
 AstraResult astra_draw_submit(AstraDrawList *draw_list, AstraFence *fence)
 {
     AstraGuiGraphicsCommand request = {0};
     AstraGuiGraphicsReply reply = {0};
-    uint32_t event = ASTRA_INVALID_HANDLE;
-    uint32_t ignored;
     AstraResult result;
 
     if (draw_list == 0 || fence == 0 ||
@@ -1351,16 +1359,13 @@ AstraResult astra_draw_submit(AstraDrawList *draw_list, AstraFence *fence)
                               &reply);
     if (result != ASTRA_OK)
         return result;
-    /* ponytail: the service replies after the hardware completes, so the
-       fence is born signaled; make it pending when submission pipelines. */
-    result = astra_internal_result(astra_internal_syscall(
-        ASTRA_SYSCALL_EVENT_CREATE,
-        ASTRA_EVENT_MANUAL_RESET | ASTRA_EVENT_INITIALLY_SIGNALED,
-        ASTRA_RIGHT_WAIT, 0, 0, 0, &event, &ignored));
-    if (result != ASTRA_OK)
-        return result;
+    /* The fence is born signaled. The service copies everything the list
+       uses when it accepts it (the commands into its batch; the device
+       copies uploads), so the caller may reuse them now, and the device
+       runs requests in order, so any later draw, read or present sees this
+       one's result even while the hardware is still running it. */
     draw_list->_private_sealed = 1u;
-    fence->_private_handle = event;
+    fence->_private_handle = FENCE_SIGNALED;
     return ASTRA_OK;
 }
 
@@ -1513,6 +1518,11 @@ AstraResult astra_fence_poll(const AstraFence *fence,
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (empty_handle(fence->_private_handle))
         return ASTRA_ERROR_INVALID_HANDLE;
+    if (fence->_private_handle == FENCE_SIGNALED) {
+        *signaled = 1;
+        *completion_result = ASTRA_OK;
+        return ASTRA_OK;
+    }
     result = astra_internal_result(astra_internal_syscall(
         ASTRA_SYSCALL_WAIT_ONE, fence->_private_handle, 0, 0, 0, 0,
         &ignored_d1, &ignored_d2));
@@ -1536,8 +1546,10 @@ AstraResult astra_fence_wait(const AstraFence *fence,
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (empty_handle(fence->_private_handle))
         return ASTRA_ERROR_INVALID_HANDLE;
-    /* Fences are signaled when astra_draw_submit returns, so any nonzero
-       timeout is satisfied at once. */
+    if (fence->_private_handle == FENCE_SIGNALED) {
+        *completion_result = ASTRA_OK;
+        return ASTRA_OK;
+    }
     result = astra_internal_result(astra_internal_syscall(
         ASTRA_SYSCALL_WAIT_ONE, fence->_private_handle,
         (uint32_t)(deadline >> 32), (uint32_t)deadline, 0, 0,
@@ -1555,6 +1567,10 @@ AstraResult astra_fence_close(AstraFence *fence)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (empty_handle(fence->_private_handle))
         return ASTRA_ERROR_INVALID_HANDLE;
+    if (fence->_private_handle == FENCE_SIGNALED) {
+        fence->_private_handle = ASTRA_INVALID_HANDLE;
+        return ASTRA_OK;
+    }
     return astra_handle_close(&fence->_private_handle);
 }
 

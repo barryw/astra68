@@ -207,17 +207,22 @@ static uint32_t descriptor(AstraRenderBuilder *builder,
         surface->height, surface->pitch, format, access);
 }
 
-static int builder_begin(AstraRenderBuilder *builder,
-                         const DisplayGraphicsHost *host)
+static uint32_t builder_begin(AstraRenderBuilder *builder,
+                              const DisplayGraphicsHost *host)
 {
     static uint32_t generation;
+    void *storage = NULL;
+    uint32_t status = host->storage(host->context, &storage);
 
+    if (status != ASTRA_STATUS_OK)
+        return status;
     /* Render-only batches use their own nonzero generation space, apart
        from the compositor's alternating frame fences. */
     if (++generation == 0u)
         generation = 1u;
-    return astra_render_builder_init(builder, host->batch_storage,
-                                     ASTRA_RENDER_BUILDER_BYTES, generation);
+    return astra_render_builder_init(builder, storage,
+                                     ASTRA_RENDER_BUILDER_BYTES, generation) ?
+        ASTRA_STATUS_OK : ASTRA_STATUS_INVALID;
 }
 
 static uint32_t builder_submit(AstraRenderBuilder *builder,
@@ -304,8 +309,9 @@ static uint32_t surface_create(DisplayWindowGraphics *graphics,
         return ASTRA_STATUS_LIMIT;
     /* Media RAM is reused across clients: clear it before anyone can read
        it, ARGB8888 to transparent black. */
-    if (!builder_begin(&builder, host))
-        return ASTRA_STATUS_INVALID;
+    status = builder_begin(&builder, host);
+    if (status != ASTRA_STATUS_OK)
+        return status;
     target = descriptor(&builder, &surface, format,
                         ASTRA_RENDER_SURFACE_READ |
                             ASTRA_RENDER_SURFACE_WRITE);
@@ -397,8 +403,9 @@ static uint32_t surface_write(DisplayWindowGraphics *graphics,
         uint32_t source;
         uint32_t status;
 
-        if (!builder_begin(&builder, host))
-            return ASTRA_STATUS_INVALID;
+        status = builder_begin(&builder, host);
+        if (status != ASTRA_STATUS_OK)
+            return status;
         target = descriptor(&builder, &surface, surface.format,
                             ASTRA_RENDER_SURFACE_READ |
                                 ASTRA_RENDER_SURFACE_WRITE);
@@ -440,11 +447,16 @@ static uint32_t surface_read(DisplayWindowGraphics *graphics,
     for (uint32_t done = 0u; done < command->height;) {
         uint32_t rows = command->height - done < band ?
                         command->height - done : band;
-        AstraDisplaySurfaceRead *request = host->batch_storage;
-        const uint8_t *pixels = (const uint8_t *)host->batch_storage +
-                                ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES;
-        uint32_t status;
+        AstraDisplaySurfaceRead *request;
+        const uint8_t *pixels;
+        void *storage = NULL;
+        uint32_t status = host->storage(host->context, &storage);
 
+        if (status != ASTRA_STATUS_OK)
+            return status;
+        request = storage;
+        pixels = (const uint8_t *)storage +
+                 ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES;
         *request = (AstraDisplaySurfaceRead){
             .magic = ASTRA_DISPLAY_SURFACE_READ_MAGIC,
             .version = ASTRA_DISPLAY_SURFACE_READ_VERSION,
@@ -556,8 +568,9 @@ static uint32_t list_submit(DisplayWindowGraphics *graphics,
         uint32_t destination;
         uint32_t status;
 
-        if (!builder_begin(&builder, host))
-            return ASTRA_STATUS_INVALID;
+        status = builder_begin(&builder, host);
+        if (status != ASTRA_STATUS_OK)
+            return status;
         destination = descriptor(&builder, &target, target.format,
                                  ASTRA_RENDER_SURFACE_READ |
                                      ASTRA_RENDER_SURFACE_WRITE);
