@@ -139,6 +139,42 @@ pixel-mode blend.
   described above (reply before the hardware finishes), then horizontal
   downscale in pixel mode (the chunk cap needs `floor(cap / step)`).
 
+## Done: guest-side overlap and QEMU jump cache (release `a49535f5`)
+
+Measured first: after the RTL fix the board was guest-CPU bound, serially.
+testrendertarget: vCPU thread 67% busy, hardware 23%, never together
+(~20 ms guest + ~7 ms hardware per frame). Guest cost is ~85% kernel
+(~15 syscalls, ~59k guest instructions per display request, beast profile).
+
+- `3d0e3712` QEMU: a user-only TLB flush (every address-space switch) no
+  longer empties the kernel's TB jump-cache entries, and a flush that
+  cleaned nothing drops nothing. perf on the board had TB hash lookups at
+  ~20% of the vCPU thread. +2-5%.
+- `a4e526d8` display service: render-only batches are answered before the
+  hardware finishes and collected before the next device use; fences need
+  no kernel event (2 syscalls less per submit). testrendertarget +30%,
+  FrameBench at the 60 fps display rate in every mode.
+- Board, release `a49535f5` (bitstream `a13c8ed0`), render batches/s:
+  testscale 60, testrendertarget 131, testsprite2 52, testgeometry 59.5,
+  SDLFrameBench 59-60 fps. Remote desktop PASS, no render failures.
+
+Open leads, in order of size:
+- testsprite2's render-only batch spends ~2.3 ms before the engine starts
+  (`copy_us`) against ~40 us for other batches. The helper's profile line
+  now prints `bytes=`, `commands=` and `staged=` (uncommitted until
+  verified) to tell a staged copy from a slow mapping.
+- Per-request kernel cost (~4k guest instructions per syscall, 15 per
+  request) and remaining TB hash lookups on user code after each switch.
+- testrendertarget creates and destroys a 640x480 target every frame: a
+  clearing FILL (2.1 ms hardware) and a 64 KiB draw-list area mapped by both
+  processes, whose `kernel_area_map` walks ~2,600 mappings linearly.
+
+Tools added: `~/astra-mg/sdl-prof.sh APP` (guest profile under the fake
+helper), `probe.sh`, `sysc.sh` (syscalls by number), `/tmp/perfq2.sh` (board
+perf of the vCPU thread; `/var/lib/astra/tools/perf`), and overrides for a
+board A/B without publishing: `systemctl set-environment QEMU=...` or
+`ROM=... ASTRA_BASE_STORAGE=... ASTRA_STATE_ROOT=<fresh dir>`.
+
 ## The remaining SDL gates
 
 From `sw/userspace/sdl2/README.md`. Upstream test programs live in the SDL2
