@@ -385,8 +385,16 @@ struct display_request {
     uint32_t frame_bytes;
 };
 
+/* Batches are read where the engine reads them, in memory mapped
+   non-cacheable, where every load crosses the bus: one word load, not four
+   byte loads, when the word is aligned. */
 static uint32_t load_be32(const volatile uint8_t *bytes)
 {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    if (((uintptr_t)bytes & 3u) == 0u)
+        return __builtin_bswap32(
+            *(const volatile uint32_t *)(const volatile void *)bytes);
+#endif
     return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
            ((uint32_t)bytes[2] << 8) | bytes[3];
 }
@@ -847,9 +855,12 @@ static void dump_stalled_batch(const struct astra_graphics_device *device,
     fprintf(stderr, "render stall dumped to %s\n", directory);
 }
 
+/* @p validated: the caller has already checked the batch with
+   render_batch_valid(); guest batches are, when their request is taken. */
 static int execute_render_batch(const struct astra_graphics_device *device,
                                 const volatile uint8_t *batch,
-                                uint32_t bytes, uint32_t *scanout_offset)
+                                uint32_t bytes, bool validated,
+                                uint32_t *scanout_offset)
 {
     struct astra_graphics_memory_map mapping;
     uint64_t profile_started = astra_monotonic_nanoseconds();
@@ -867,7 +878,7 @@ static int execute_render_batch(const struct astra_graphics_device *device,
 
     if (profile_commands < 0)
         profile_commands = getenv("ASTRA_DISPLAY_PROFILE_COMMANDS") != NULL;
-    if (!render_batch_valid(batch, bytes)) {
+    if (!validated && !render_batch_valid(batch, bytes)) {
         fprintf(stderr, "render batch rejected before submission (%u bytes)\n",
                 bytes);
         return -1;
@@ -945,11 +956,13 @@ static int execute_render_batch(const struct astra_graphics_device *device,
     profile_rendered = astra_monotonic_nanoseconds();
     if (getenv("ASTRA_DISPLAY_PROFILE") != NULL)
         fprintf(stderr,
-                "render profile copy_us=%llu hardware_us=%llu\n",
+                "render profile copy_us=%llu hardware_us=%llu bytes=%u "
+                "commands=%u staged=%d\n",
                 (unsigned long long)
                     ((profile_copied - profile_started) / 1000u),
                 (unsigned long long)
-                    ((profile_rendered - profile_copied) / 1000u));
+                    ((profile_rendered - profile_copied) / 1000u),
+                bytes, command_count, !from_payload);
     /* Every command retires into COMPLETED, and a failed one into FAILED
        too. When the counters say all succeeded the records need not be read:
        each is several reads across the bridge, a few milliseconds a batch. */
@@ -1618,7 +1631,8 @@ static int execute_finished_batch(
     uint32_t bytes = astra_render_builder_finish(builder);
 
     return bytes != 0u &&
-           execute_render_batch(device, terminal_batch, bytes, scanout) == 0 ?
+           execute_render_batch(device, terminal_batch, bytes, false,
+                                scanout) == 0 ?
                0 : -1;
 }
 
@@ -2688,7 +2702,8 @@ int main(int argc, char **argv)
                 }
                 if (render_status == 0) {
                     render_status = execute_render_batch(
-                        &device, batch, request.frame_bytes, &scanout_offset);
+                        &device, batch, request.frame_bytes, true,
+                        &scanout_offset);
                 }
                 if (render_status == 0 && window_scene_batch) {
                     render_status = compile_window_scene(
