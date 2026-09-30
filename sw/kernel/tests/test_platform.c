@@ -586,6 +586,27 @@ static void test_production_irq_qualification_controls(void)
                                                        status));
     assert(video->IRQ_EN == 0u);
 
+    /* Completion leaves a vblank that arrived after capture pending, so
+     * re-enabling the source records it instead of losing a frame. */
+    video->IRQ_EN = VEGA_IRQ_VBLANK;
+    video->IRQ_STAT = VEGA_IRQ_VBLANK;
+    assert(kernel_platform_device_irq_complete(IRQ_SRC_VEGA,
+                                               VEGA_IRQ_VBLANK));
+    assert(video->IRQ_STAT == VEGA_IRQ_VBLANK);
+    video->IRQ_EN = 0u;
+    video->IRQ_STAT = 0u;
+
+    /* Network readiness raised again after the acknowledgement is a new
+     * generation and new work; the captured generation still pending is a
+     * device that ignored the acknowledgement. */
+    registers->NETWORK_QUEUE = NETWORK_QUEUE_EVENT_PENDING;
+    registers->NETWORK_READY_SEQ = 8u;
+    assert(kernel_platform_device_irq_complete(IRQ_SRC_NETWORK, 7u));
+    assert(!kernel_platform_device_irq_complete(IRQ_SRC_NETWORK, 8u));
+    registers->NETWORK_QUEUE = 0u;
+    assert(kernel_platform_device_irq_complete(IRQ_SRC_NETWORK, 8u));
+    registers->NETWORK_READY_SEQ = 0u;
+
     usb->CONTROL = OHCI_CONTROL_HCFS_RESET;
     usb->INTERRUPT_STATUS = OHCI_INT_RHSC;
     usb->ASTRA_DMA_POOL_BASE = OHCI_DMA_POOL_BASE;

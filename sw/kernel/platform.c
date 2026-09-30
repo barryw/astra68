@@ -897,8 +897,6 @@ bool kernel_platform_device_irq_capture(uint8_t source, uint32_t *status)
 bool kernel_platform_device_irq_complete(uint8_t source,
                                          uint32_t captured_status)
 {
-    uint32_t pending;
-
     switch (source) {
     case IRQ_SRC_STORAGE:
         /*
@@ -913,14 +911,24 @@ bool kernel_platform_device_irq_complete(uint8_t source,
         return (VESTA_READ(INPUT_STATUS) & INPUT_EVENT_VALID) == 0u ||
                VESTA_READ(INPUT_DEVICE_SEQ) != captured_status;
     case IRQ_SRC_NETWORK:
+        /*
+         * Readiness raised after the acknowledgement carries a new
+         * generation: it is new work, and re-enabling the source delivers
+         * it. Only the captured generation still pending is a device that
+         * ignored the acknowledgement. Treating any re-raise as a failure
+         * quarantined a healthy, busy network for good.
+         */
         kernel_platform_network_ack_ready();
         return (VESTA_READ(NETWORK_QUEUE) &
-                NETWORK_QUEUE_EVENT_PENDING) == 0u;
+                NETWORK_QUEUE_EVENT_PENDING) == 0u ||
+               VESTA_READ(NETWORK_READY_SEQ) != captured_status;
     case IRQ_SRC_VEGA:
-        pending = VEGA_READ(IRQ_STAT) & VEGA_READ(IRQ_EN);
-        if (pending != 0u)
-            vega_irq_clear(pending);
-        kernel_mmio_cpu_sync();
+        /*
+         * Capture cleared the vblank it recorded. One that arrived since is
+         * the next frame's: leave it pending so re-enabling the source
+         * records it, rather than clearing it unrecorded and making the
+         * display wait a frame longer.
+         */
         return true;
     case IRQ_SRC_USB:
         return (OHCI_READ(ASTRA_STATUS) &
