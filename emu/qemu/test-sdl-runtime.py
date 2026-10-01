@@ -49,14 +49,21 @@ class Log:
     Records are kept by sequence and joined when read, which also mends a
     line whose continuation had not been written at the previous poll."""
 
-    def __init__(self, machine):
+    def __init__(self, machine, strict=True):
+        # strict: a ring that wrapped between polls fails the gate; a gate
+        # that only needs the latest story records the loss instead.
+        self.strict = strict
+        self.wrapped = 0
         self.machine = machine
         self.records = {}
         self.exits = []
         self.seen_exits = set()
+        # Newest record of any kind seen: the ring also carries kernel
+        # events, so text records alone cannot say whether it wrapped.
+        self.newest = 0
 
     def poll(self):
-        highest = max(self.records, default=0)
+        highest = self.newest
         oldest = None
         for line in self.machine.trace():
             record = terminal_gate.TRACE_RECORD.match(line)
@@ -64,6 +71,7 @@ class Log:
                 continue
             sequence = int(record.group(1))
             oldest = sequence if oldest is None else min(oldest, sequence)
+            self.newest = max(self.newest, sequence)
             if "process_exit" in line and sequence not in self.seen_exits:
                 self.seen_exits.add(sequence)
                 fields = line.split()
@@ -73,6 +81,9 @@ class Log:
             if text is not None:
                 self.records[sequence] = text.group(2)
         if highest and oldest is not None and oldest > highest + 1:
+            if not self.strict:
+                self.wrapped += 1
+                return
             raise RuntimeError("the trace ring wrapped between polls "
                                "(%d to %d)" % (highest, oldest))
 

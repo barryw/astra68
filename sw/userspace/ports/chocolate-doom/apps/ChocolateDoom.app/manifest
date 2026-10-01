@@ -1,0 +1,18 @@
+astra-bundle 1
+kind application
+id org.chocolate-doom.doom
+name "Chocolate Doom"
+version 3.1.1
+executable bin/m68k-68040/ChocolateDoom
+icon resources/ChocolateDoom.aicon
+capability GUI
+capability PCM
+capability STORE:rw
+capability TMP:rw
+capability LIBS:r
+requires SDL2.library 2 2.32.10
+requires SDL2_mixer.library 2 2.8.2
+requires SDL2_net.library 2 2.4.0
+requires libc.library 2 2.0.0
+requires runtime.library 1 1.6.0
+requires compiler.library 1 1.0.0

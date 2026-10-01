@@ -115,7 +115,9 @@ DEFAULT_KITS = os.path.join(REPOSITORY, "sw/userspace/kits/build")
 # Every directory that ships applications; each names its shipped bundles in
 # a build-written `.apps` inventory (tools/astra-bundle.mk).
 DEFAULT_APPS = (os.path.join(REPOSITORY, "sw/userspace/apps/build"),
-                os.path.join(REPOSITORY, "sw/userspace/sdl2/build"))
+                os.path.join(REPOSITORY, "sw/userspace/sdl2/build"),
+                os.path.join(REPOSITORY,
+                             "sw/userspace/ports/chocolate-doom/build"))
 APPLICATION_POLICY = os.path.join(
     REPOSITORY, "sw/include/astra/application_policy.h")
 DEFAULT_TERMINFO = os.path.join(
