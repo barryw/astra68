@@ -51,7 +51,7 @@ static AstraResult command(AstraWindow *window, uint32_t action,
     AstraResult result;
 
     if (!window_live(window) || action < ASTRA_GUI_WINDOW_QUERY ||
-        action > ASTRA_GUI_WINDOW_SET_APPLICATION_NAME ||
+        action > ASTRA_GUI_WINDOW_FULLSCREEN ||
         (attachment != NULL && *attachment == ASTRA_INVALID_HANDLE) ||
         !astra_utf8_validate(title, title_length, 0u) ||
         title_length > ASTRA_WINDOW_TITLE_MAX)
@@ -331,6 +331,7 @@ WINDOW_ACTION(astra_window_deactivate, ASTRA_GUI_WINDOW_DEACTIVATE)
 WINDOW_ACTION(astra_window_minimize, ASTRA_GUI_WINDOW_MINIMIZE)
 WINDOW_ACTION(astra_window_maximize, ASTRA_GUI_WINDOW_MAXIMIZE)
 WINDOW_ACTION(astra_window_restore, ASTRA_GUI_WINDOW_RESTORE)
+WINDOW_ACTION(astra_window_fullscreen, ASTRA_GUI_WINDOW_FULLSCREEN)
 WINDOW_ACTION(astra_window_present, ASTRA_GUI_WINDOW_PRESENT)
 
 AstraResult astra_window_present_discard(AstraWindow *window)
@@ -532,7 +533,7 @@ static AstraResult receive_event(AstraWindow *window, AstraWindowEvent *event,
               ASTRA_SYSTEM_ACTION_RESTART ||
           !astra_words_zero(message.event.data.system_action.reserved, 6u))) ||
         (message.event.type == ASTRA_WINDOW_EVENT_STATE &&
-         (message.event.data.state.state > ASTRA_WINDOW_STATE_MAXIMIZED ||
+         (message.event.data.state.state > ASTRA_WINDOW_STATE_FULLSCREEN ||
           (message.event.data.state.flags &
            ~(ASTRA_WINDOW_RESIZABLE | ASTRA_WINDOW_MODAL |
              ASTRA_WINDOW_ACTIVE)) != 0u ||

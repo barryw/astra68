@@ -117,6 +117,11 @@ typedef struct DisplayWindow {
     uint16_t restore_height;
     uint8_t state;
     uint8_t restore_state;
+    /* What RESTORE returns a fullscreen window to: fullscreen is the
+       FULLSCREEN type for as long as it lasts, so every chrome and
+       geometry rule follows from the type alone. */
+    uint8_t fullscreen_restore_type;
+    uint8_t fullscreen_restore_state;
     uint8_t cache_dirty[2];
     uint8_t cache_active;
     uint8_t cache_valid;
@@ -931,6 +936,18 @@ static int frame_valid(const AstraTheme *theme,
            right <= ASTRA_DISPLAY_WIDTH &&
            bottom <= (window->request.type == ASTRA_WINDOW_FULLSCREEN ?
                       ASTRA_DISPLAY_HEIGHT : DISPLAY_WORK_BOTTOM);
+}
+
+/* The work area less the window's own chrome. */
+static void maximized_content(const AstraTheme *theme, uint8_t type,
+                              uint16_t *width, uint16_t *height)
+{
+    uint16_t title = title_height(theme, type);
+
+    *width = (uint16_t)(ASTRA_DISPLAY_WIDTH - frame_width(theme, type) * 2u);
+    *height = (uint16_t)(DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP - title -
+                         (title == 0u ? 0u : theme->signal_height) -
+                         frame_width(theme, type) * 2u);
 }
 
 static uint32_t prepare_geometry(const DisplayState *state,
@@ -2499,7 +2516,7 @@ static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
         request->generation == 0u ||
         request->reserved16 != 0u || request->reserved != 0u ||
         request->action < ASTRA_GUI_WINDOW_QUERY ||
-        request->action > ASTRA_GUI_WINDOW_SET_APPLICATION_NAME ||
+        request->action > ASTRA_GUI_WINDOW_FULLSCREEN ||
         request->title_length > ASTRA_WINDOW_TITLE_MAX)
         return 0;
     if (request->action == ASTRA_GUI_WINDOW_SET_FRAME)
@@ -2591,7 +2608,10 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
     case ASTRA_GUI_WINDOW_QUERY:
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_SET_FRAME:
-        if (!frame_valid(theme, window, command->x, command->y,
+        if (window->state == ASTRA_WINDOW_STATE_FULLSCREEN ||
+            (window->state == ASTRA_WINDOW_STATE_MINIMIZED &&
+             window->restore_state == ASTRA_WINDOW_STATE_FULLSCREEN) ||
+            !frame_valid(theme, window, command->x, command->y,
                          command->width, command->height))
             return ASTRA_STATUS_INVALID;
         status = prepare_geometry(
@@ -2695,17 +2715,16 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
                 window->state == ASTRA_WINDOW_STATE_MINIMIZED ?
                     window->restore_state : window->state;
 
+            uint16_t width;
+            uint16_t height;
+
             if (restored_state == ASTRA_WINDOW_STATE_MAXIMIZED)
                 return ASTRA_STATUS_OK;
+            if (restored_state == ASTRA_WINDOW_STATE_FULLSCREEN)
+                return ASTRA_STATUS_INVALID;
+            maximized_content(theme, window->request.type, &width, &height);
             status = prepare_geometry(
-                state, window, 0u, DISPLAY_WORK_TOP,
-                ASTRA_DISPLAY_WIDTH -
-                    frame_width(theme, window->request.type) * 2u,
-                DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP -
-                    title_height(theme, window->request.type) -
-                    (title_height(theme, window->request.type) == 0u ?
-                     0u : theme->signal_height) -
-                    frame_width(theme, window->request.type) * 2u,
+                state, window, 0u, DISPLAY_WORK_TOP, width, height,
                 ASTRA_WINDOW_STATE_MAXIMIZED, &prepared);
             if (status != ASTRA_STATUS_OK)
                 return status;
@@ -2731,6 +2750,33 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
             next_generation(window);
             damage_window(state, theme, window);
             *changed = 1;
+        } else if (window->state == ASTRA_WINDOW_STATE_FULLSCREEN) {
+            DisplayWindow source = *window;
+            uint16_t width = window->restore_width;
+            uint16_t height = window->restore_height;
+            uint16_t x = window->restore_x;
+            uint16_t y = window->restore_y;
+
+            source.request.type = window->fullscreen_restore_type;
+            if (window->fullscreen_restore_state ==
+                ASTRA_WINDOW_STATE_MAXIMIZED) {
+                maximized_content(theme, source.request.type, &width,
+                                  &height);
+                x = 0u;
+                y = DISPLAY_WORK_TOP;
+            }
+            status = prepare_geometry(state, &source, x, y, width, height,
+                                      window->fullscreen_restore_state,
+                                      &prepared);
+            if (status != ASTRA_STATUS_OK)
+                return status;
+            damage_window(state, theme, window);
+            *window = prepared;
+            dirty_cache(window);
+            reset_content(window);
+            next_generation(window);
+            damage_window(state, theme, window);
+            *changed = 1;
         } else if (window->state == ASTRA_WINDOW_STATE_MAXIMIZED) {
             status = prepare_geometry(
                 state, window, window->restore_x, window->restore_y,
@@ -2744,6 +2790,45 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
             reset_content(window);
             next_generation(window);
             damage_window(state, theme, window);
+            *changed = 1;
+        }
+        return ASTRA_STATUS_OK;
+    case ASTRA_GUI_WINDOW_FULLSCREEN:
+        /* Only an application's own window may take the whole display. */
+        if (window->request.type != ASTRA_WINDOW_STANDARD &&
+            window->request.type != ASTRA_WINDOW_FULLSCREEN)
+            return ASTRA_STATUS_UNSUPPORTED;
+        if (window->state == ASTRA_WINDOW_STATE_MINIMIZED ||
+            window->request.type == ASTRA_WINDOW_FULLSCREEN)
+            return window->state == ASTRA_WINDOW_STATE_MINIMIZED ?
+                ASTRA_STATUS_INVALID : ASTRA_STATUS_OK;
+        {
+            DisplayWindow source = *window;
+
+            source.request.type = ASTRA_WINDOW_FULLSCREEN;
+            status = prepare_geometry(state, &source, 0u, 0u,
+                                      ASTRA_DISPLAY_WIDTH,
+                                      ASTRA_DISPLAY_HEIGHT,
+                                      ASTRA_WINDOW_STATE_FULLSCREEN,
+                                      &prepared);
+            if (status != ASTRA_STATUS_OK)
+                return status;
+            prepared.fullscreen_restore_type = window->request.type;
+            prepared.fullscreen_restore_state = window->state;
+            if (window->state == ASTRA_WINDOW_STATE_NORMAL) {
+                prepared.restore_x = window->request.x;
+                prepared.restore_y = window->request.y;
+                prepared.restore_width = window->request.width;
+                prepared.restore_height = window->request.height;
+            }
+            damage_window(state, theme, window);
+            *window = prepared;
+            dirty_cache(window);
+            reset_content(window);
+            next_generation(window);
+            damage_window(state, theme, window);
+            if (index != state->count - 1u)
+                reorder(state, theme, index, state->count - 1u);
             *changed = 1;
         }
         return ASTRA_STATUS_OK;

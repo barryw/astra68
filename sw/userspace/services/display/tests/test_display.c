@@ -2508,6 +2508,74 @@ int main(void)
             assert(window->state == ASTRA_WINDOW_STATE_NORMAL &&
                    (window->request.flags & ASTRA_WINDOW_ACTIVE) != 0u);
         }
+        {
+            /* Fullscreen takes the whole display without chrome and
+               RESTORE returns the window's own type, state and frame,
+               from normal and from maximized. */
+            uint32_t id = window->id;
+            uint8_t type = window->request.type;
+            AstraGuiWindowCommand fullscreen = {
+                .window = id, .action = ASTRA_GUI_WINDOW_FULLSCREEN,
+            };
+            AstraGuiWindowCommand restore = {
+                .window = id, .action = ASTRA_GUI_WINDOW_RESTORE,
+            };
+            AstraGuiWindowCommand maximize = {
+                .window = id, .action = ASTRA_GUI_WINDOW_MAXIMIZE,
+            };
+            AstraGuiWindowCommand frame = {
+                .window = id, .action = ASTRA_GUI_WINDOW_SET_FRAME,
+                .x = 0u, .y = 0u, .width = 640u, .height = 480u,
+            };
+            DisplayWindow *current;
+
+            assert(type == ASTRA_WINDOW_STANDARD);
+            assert(apply_command(&state, &theme, &fullscreen, &closed,
+                                 &changed) == ASTRA_STATUS_OK && changed);
+            current = &state.windows[find_id(&state, id)];
+            assert(find_id(&state, id) == state.count - 1u);
+            assert(current->state == ASTRA_WINDOW_STATE_FULLSCREEN &&
+                   current->request.type == ASTRA_WINDOW_FULLSCREEN &&
+                   current->request.x == 0u && current->request.y == 0u &&
+                   current->request.width == ASTRA_DISPLAY_WIDTH &&
+                   current->request.height == ASTRA_DISPLAY_HEIGHT &&
+                   outer_width(&theme, current) == ASTRA_DISPLAY_WIDTH &&
+                   outer_height(&theme, current) == ASTRA_DISPLAY_HEIGHT);
+            assert(hit_region(&theme, current, 5, 5) == HIT_CONTENT);
+            assert(apply_command(&state, &theme, &fullscreen, &closed,
+                                 &changed) == ASTRA_STATUS_OK && !changed);
+            assert(apply_command(&state, &theme, &maximize, &closed,
+                                 &changed) == ASTRA_STATUS_INVALID);
+            assert(apply_command(&state, &theme, &frame, &closed,
+                                 &changed) == ASTRA_STATUS_INVALID);
+            assert(apply_command(&state, &theme, &restore, &closed,
+                                 &changed) == ASTRA_STATUS_OK && changed);
+            current = &state.windows[find_id(&state, id)];
+            assert(current->state == ASTRA_WINDOW_STATE_NORMAL &&
+                   current->request.type == type &&
+                   current->request.x == restore_x &&
+                   current->request.y == restore_y &&
+                   current->request.width == restore_width &&
+                   current->request.height == restore_height);
+
+            assert(apply_command(&state, &theme, &maximize, &closed,
+                                 &changed) == ASTRA_STATUS_OK);
+            assert(apply_command(&state, &theme, &fullscreen, &closed,
+                                 &changed) == ASTRA_STATUS_OK);
+            assert(apply_command(&state, &theme, &restore, &closed,
+                                 &changed) == ASTRA_STATUS_OK);
+            current = &state.windows[find_id(&state, id)];
+            assert(current->state == ASTRA_WINDOW_STATE_MAXIMIZED &&
+                   current->request.type == type &&
+                   current->request.y == DISPLAY_WORK_TOP);
+            assert(apply_command(&state, &theme, &restore, &closed,
+                                 &changed) == ASTRA_STATUS_OK);
+            current = &state.windows[find_id(&state, id)];
+            assert(current->state == ASTRA_WINDOW_STATE_NORMAL &&
+                   current->request.x == restore_x &&
+                   current->request.width == restore_width);
+            window = current;
+        }
 
         state.pointer_x = window->request.x + frame_width(&theme,
             window->request.type) + window->request.width -

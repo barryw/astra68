@@ -68,14 +68,18 @@ static int ASTRA_CreateWindow(_THIS, SDL_Window *window)
     AstraArea placeholder = ASTRA_AREA_INIT;
     const AstraStartupCapability *gui = astra_startup_capability(
         astra_posix_startup(), ASTRA_CAPABILITY_GUI);
+    /* SDL sizes a window created fullscreen to the display and asks for
+     * fullscreen only once it exists (SetWindowFullscreen); the native
+     * window starts at the frame it will return to. */
+    const SDL_Rect *frame = &window->windowed;
     AstraResult result;
 
     (void)_this;
-    if (gui == NULL || window->x < 0 || window->y < 0 ||
-        window->x > UINT16_MAX || window->y > UINT16_MAX ||
-        window->w <= 0 || window->h <= 0 ||
-        window->w > (int)ASTRA_DISPLAY_WIDTH ||
-        window->h > (int)ASTRA_DISPLAY_HEIGHT)
+    if (gui == NULL || frame->x < 0 || frame->y < 0 ||
+        frame->x > UINT16_MAX || frame->y > UINT16_MAX ||
+        frame->w <= 0 || frame->h <= 0 ||
+        frame->w > (int)ASTRA_DISPLAY_WIDTH ||
+        frame->h > (int)ASTRA_DISPLAY_HEIGHT)
         return SDL_SetError("Astra window is outside the display");
     data = SDL_calloc(1u, sizeof(*data));
     if (data == NULL)
@@ -93,10 +97,10 @@ static int ASTRA_CreateWindow(_THIS, SDL_Window *window)
         return SDL_SetError("Astra could not allocate a window area (%d)",
                             result);
     }
-    info.x = (uint16_t)window->x;
-    info.y = (uint16_t)window->y;
-    info.width = (uint16_t)window->w;
-    info.height = (uint16_t)window->h;
+    info.x = (uint16_t)frame->x;
+    info.y = (uint16_t)frame->y;
+    info.width = (uint16_t)frame->w;
+    info.height = (uint16_t)frame->h;
     info.pitch = 0u;
     info.content_format = ASTRA_WINDOW_CONTENT_SURFACE;
     info.flags = (window->flags & SDL_WINDOW_RESIZABLE) != 0u ?
@@ -299,6 +303,26 @@ static void ASTRA_SetWindowSize(_THIS, SDL_Window *window)
         SDL_SetError("Astra window resize failed (%d)", result);
 }
 
+/* Fullscreen is a window state of the display service: the whole display
+ * without chrome, above the menu bar; restoring returns the window's own
+ * state and frame. The service reports the new frame as a state event. */
+static void ASTRA_SetWindowFullscreen(_THIS, SDL_Window *window,
+                                      SDL_VideoDisplay *display,
+                                      SDL_bool fullscreen)
+{
+    ASTRA_WindowData *data = window->driverdata;
+    AstraResult result;
+
+    (void)_this;
+    (void)display;
+    if (data == NULL)
+        return;
+    result = fullscreen ? astra_window_fullscreen(&data->native) :
+                          astra_window_restore(&data->native);
+    if (result != ASTRA_OK)
+        SDL_SetError("Astra window fullscreen failed (%d)", result);
+}
+
 static void ASTRA_PumpEvents(_THIS)
 {
     SDL_Window *window;
@@ -412,6 +436,7 @@ static SDL_VideoDevice *ASTRA_CreateDevice(void)
     device->SetWindowTitle = ASTRA_SetWindowTitle;
     device->SetWindowPosition = ASTRA_SetWindowPosition;
     device->SetWindowSize = ASTRA_SetWindowSize;
+    device->SetWindowFullscreen = ASTRA_SetWindowFullscreen;
     device->PumpEvents = ASTRA_PumpEvents;
     device->free = ASTRA_DeleteDevice;
     return device;

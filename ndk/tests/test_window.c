@@ -123,8 +123,7 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
             assert(port == 0x303u && call->request_size == sizeof(*request));
             assert(request->window == 7u && request->generation != 0u);
             assert(request->action >= ASTRA_GUI_WINDOW_QUERY &&
-                   request->action <=
-                       ASTRA_GUI_WINDOW_SET_APPLICATION_NAME &&
+                   request->action <= ASTRA_GUI_WINDOW_FULLSCREEN &&
                    request->action != ASTRA_GUI_WINDOW_CLOSE);
             assert(call->reply_index == 0u);
             if (request->action == ASTRA_GUI_WINDOW_SET_POINTER_IMAGE)
@@ -152,7 +151,9 @@ uint32_t astra_ndk_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
                            ASTRA_WINDOW_STATE_MINIMIZED :
                            (request->action == ASTRA_GUI_WINDOW_MAXIMIZE ?
                             ASTRA_WINDOW_STATE_MAXIMIZED :
-                            ASTRA_WINDOW_STATE_NORMAL);
+                            (request->action == ASTRA_GUI_WINDOW_FULLSCREEN ?
+                             ASTRA_WINDOW_STATE_FULLSCREEN :
+                             ASTRA_WINDOW_STATE_NORMAL));
             reply->z_order = 3u;
             *out_d1 = sizeof(*reply);
         }
@@ -280,6 +281,7 @@ int main(void)
     CHECK_ACTION(astra_window_minimize, ASTRA_GUI_WINDOW_MINIMIZE);
     CHECK_ACTION(astra_window_maximize, ASTRA_GUI_WINDOW_MAXIMIZE);
     CHECK_ACTION(astra_window_restore, ASTRA_GUI_WINDOW_RESTORE);
+    CHECK_ACTION(astra_window_fullscreen, ASTRA_GUI_WINDOW_FULLSCREEN);
 #undef CHECK_ACTION
 
     before = call_count;
@@ -404,7 +406,10 @@ int main(void)
         assert(astra_window_event_try(&window, &event) == ASTRA_OK);
         assert(event.data.state.state == ASTRA_WINDOW_STATE_NORMAL &&
                (event.data.state.flags & ASTRA_WINDOW_ACTIVE) != 0u);
-        next_state = ASTRA_WINDOW_STATE_MAXIMIZED + 1u;
+        next_state = ASTRA_WINDOW_STATE_FULLSCREEN;
+        assert(astra_window_event_try(&window, &event) == ASTRA_OK &&
+               event.data.state.state == ASTRA_WINDOW_STATE_FULLSCREEN);
+        next_state = ASTRA_WINDOW_STATE_FULLSCREEN + 1u;
         assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
         next_state = ASTRA_WINDOW_STATE_NORMAL;
         next_event_type = ASTRA_WINDOW_EVENT_RESIZE;

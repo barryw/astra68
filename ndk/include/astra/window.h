@@ -133,6 +133,13 @@ ASTRA_NODISCARD AstraResult astra_window_minimize(AstraWindow *window);
 ASTRA_NODISCARD AstraResult astra_window_maximize(AstraWindow *window);
 /** Restore normal state. @param window Open window. @return ASTRA_OK or an error. */
 ASTRA_NODISCARD AstraResult astra_window_restore(AstraWindow *window);
+/** Take the whole display without chrome; astra_window_restore() returns the
+ * window's previous state and frame. Standard windows only.
+ * @param window Open window.
+ * @return ASTRA_OK or an AstraResult error.
+ * @since system.library 2.7.
+ */
+ASTRA_NODISCARD AstraResult astra_window_fullscreen(AstraWindow *window);
 /** Replace the UTF-8 title. @param window Open window. @param title UTF-8 bytes. @param title_length Byte length. @return ASTRA_OK or an error. */
 ASTRA_NODISCARD AstraResult astra_window_set_title(
     AstraWindow *window, const char *title, uint16_t title_length);

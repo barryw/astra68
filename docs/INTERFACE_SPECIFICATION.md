@@ -132,6 +132,10 @@ pressed, and focus transitions; applications retain only semantic enablement.
 - Double-clicking the titlebar toggles maximization when permitted.
 - Resizable windows expose a 6-pixel invisible edge/corner hit zone.
 - Maximized windows become square and flush with the usable work area.
+- A standard window may go fullscreen: it becomes the fullscreen type for as
+  long as it lasts (the whole display, no chrome, above the system bars and
+  raised), and restore returns its own type, state (normal or maximized) and
+  frame. Frame and maximize requests are refused while it is fullscreen.
 - Minimize will place a window in the system shelf when shelf policy exists.
 - `astra_window_close` destroys the server object immediately. A separate
   application-veto close-request event may be added with pointer routing; it
@@ -226,7 +230,8 @@ The shared command area is transferred by capability; no application pointer
 crosses into the display service. A successful create returns an opaque
 `AstraWindow` containing a private control capability. The NDK uses that
 capability for query, set-frame, move, resize, raise, lower, activate,
-deactivate, minimize, maximize, restore, title, and close operations. The
+deactivate, minimize, maximize, fullscreen, restore, title, and close
+operations. The
 server validates every request and resolves theme roles into hardware commands.
 Applications may publish either their whole draw list or one bounded changed
 content rectangle. The server retains the last completed content surface, so

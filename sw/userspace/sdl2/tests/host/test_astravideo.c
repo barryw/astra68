@@ -23,6 +23,8 @@ static uint32_t last_write_pitch;
 static int window_closes;
 static int activations;
 static int minimizations;
+static int fullscreens;
+static int restores;
 static int presents;
 static AstraWindowFrame last_damage;
 static SDL_VideoDisplay display;
@@ -145,7 +147,9 @@ AstraResult astra_window_create(uint32_t gui, uint32_t area,
 {
     assert(gui == 7u && area == 42u && info->pitch == 0u);
     assert(info->content_format == ASTRA_WINDOW_CONTENT_SURFACE);
-    assert(info->width == 320u && info->height == 200u);
+    assert(info->x == 200u && info->y == 100u &&
+           info->width == 320u && info->height == 200u);
+    assert(info->type == ASTRA_WINDOW_STANDARD);
     if (create_failure)
         return ASTRA_ERROR_IO;
     window->_private_id = 1u;
@@ -168,6 +172,18 @@ AstraResult astra_window_minimize(AstraWindow *window)
 {
     assert(window->_private_id == 1u);
     ++minimizations;
+    return ASTRA_OK;
+}
+AstraResult astra_window_fullscreen(AstraWindow *window)
+{
+    assert(window->_private_id == 1u);
+    ++fullscreens;
+    return ASTRA_OK;
+}
+AstraResult astra_window_restore(AstraWindow *window)
+{
+    assert(window->_private_id == 1u);
+    ++restores;
     return ASTRA_OK;
 }
 AstraResult astra_window_present_region(AstraWindow *window,
@@ -286,7 +302,8 @@ int main(void)
     SDL_Rect damage[] = {{2, 3, 8, 9}, {7, 8, 5, 6}};
 
     created = ASTRA_CreateDevice();
-    assert(created != NULL && created->VideoQuit != NULL);
+    assert(created != NULL && created->VideoQuit != NULL &&
+           created->SetWindowFullscreen == ASTRA_SetWindowFullscreen);
     created->VideoQuit(created);
     created->free(created);
     device.displays = &display;
@@ -294,10 +311,13 @@ int main(void)
     has_gui = 1;
     gui_capability.handle = 7u;
     assert(ASTRA_VideoInit(&device) == 0);
-    window.x = 200;
-    window.y = 100;
-    window.w = 320;
-    window.h = 200;
+    /* As SDL creates a fullscreen window: sized to the display, with the
+       frame it returns to in windowed. The native window starts there. */
+    window.x = 0;
+    window.y = 0;
+    window.w = (int)ASTRA_DISPLAY_WIDTH;
+    window.h = (int)ASTRA_DISPLAY_HEIGHT;
+    window.windowed = (SDL_Rect){ 200, 100, 320, 200 };
     window.title = "Test";
     create_failure = 1;
     assert(ASTRA_CreateWindow(&device, &window) < 0);
@@ -315,6 +335,11 @@ int main(void)
     ASTRA_ShowWindow(&device, &window);
     ASTRA_HideWindow(&device, &window);
     assert(activations == 2 && minimizations == 1);
+    ASTRA_SetWindowFullscreen(&device, &window, &display, SDL_TRUE);
+    ASTRA_SetWindowFullscreen(&device, &window, &display, SDL_FALSE);
+    assert(fullscreens == 1 && restores == 1);
+    window.w = 320;
+    window.h = 200;
     assert(ASTRA_CreateWindowFramebuffer(&device, &window, &format,
                                          &pixels, &pitch) == 0);
     assert(format == SDL_PIXELFORMAT_RGB565 && pixels == backing);

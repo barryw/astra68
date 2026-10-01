@@ -138,3 +138,8 @@ ASTRA_SYSTEM_2.6 {
         astra_draw_rectangles;
         astra_window_present_discard;
 } ASTRA_SYSTEM_2.5;
+
+ASTRA_SYSTEM_2.7 {
+    global:
+        astra_window_fullscreen;
+} ASTRA_SYSTEM_2.6;

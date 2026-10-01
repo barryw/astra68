@@ -34,7 +34,10 @@ enum {
 enum {
     ASTRA_WINDOW_STATE_NORMAL = 0,
     ASTRA_WINDOW_STATE_MINIMIZED = 1,
-    ASTRA_WINDOW_STATE_MAXIMIZED = 2
+    ASTRA_WINDOW_STATE_MAXIMIZED = 2,
+    /** The whole display, without chrome; RESTORE returns to the state and
+        frame the window had before. */
+    ASTRA_WINDOW_STATE_FULLSCREEN = 3
 };
 
 /** Shared-area content representation. */
@@ -328,6 +331,7 @@ enum {
     ASTRA_GUI_WINDOW_SET_POINTER_SHAPE = 16u,
     ASTRA_GUI_WINDOW_SET_POINTER_IMAGE = 17u,
     ASTRA_GUI_WINDOW_SET_APPLICATION_NAME = 18u,
+    ASTRA_GUI_WINDOW_FULLSCREEN = 19u,
 };
 
 typedef struct AstraGuiOpenWindow {

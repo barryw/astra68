@@ -257,7 +257,7 @@ vblank bit is selected. Each 52-byte window event carries the normalized
 modifier snapshot in pointer and wheel payloads, and pointer events also carry
 client-local and screen coordinates. Every ordinary window subscribes by
 default to a complete state snapshot after active, inactive, minimized,
-maximized, restored, moved, or resized transitions. A separate resize event is
+maximized, fullscreen, restored, moved, or resized transitions. A separate resize event is
 emitted only when the client extent changes. State, resize, close-request, and
 loss-reset messages use the same per-window FIFO.
 
@@ -505,8 +505,8 @@ chrome recipe, flags, gadgets, title, preview states, and an event mask, with
 no pointer. The 36-byte
 `WINDOW_OPENED` reply returns status and an opaque identity; success also
 transfers a private control sender. A 104-byte `WINDOW_COMMAND` sent through
-that capability performs query, frame, z-order, activation, minimize/maximize,
-restore, title, event-mask, or close operations. Its 64-byte `WINDOW_STATE`
+that capability performs query, frame, z-order, activation,
+minimize/maximize/fullscreen, restore, title, event-mask, or close operations. Its 64-byte `WINDOW_STATE`
 reply returns the resulting frame, state, flags, z-order, and generation. A
 76-byte `WINDOW_EVENT` carries motion, button, wheel, full window state,
 resize, close, reset, physical-key, or Unicode text state. Pointer records include both
