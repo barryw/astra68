@@ -96,8 +96,58 @@ def image_icons():
         raise AssertionError("non-bitmap accepted")
 
 
+def wad(lumps):
+    """An IWAD holding the given (name, bytes) lumps."""
+    body = bytearray()
+    entries = []
+    for name, data in lumps:
+        entries.append((12 + len(body), len(data), name))
+        body += data
+    directory = 12 + len(body)
+    return (b"IWAD" + struct.pack("<II", len(lumps), directory) + bytes(body) +
+            b"".join(struct.pack("<II8s", offset, size, name.encode())
+                     for offset, size, name in entries))
+
+
+def wad_icons():
+    # PLAYPAL: index i is (i, 255 - i, 64). A 4x6 face: column x is one post
+    # of palette index 10 * (x + 1), rows 1..4; rows 0 and 5 transparent.
+    playpal = b"".join(bytes((i, 255 - i, 64)) for i in range(256)) * 14
+    columns = [bytes((1, 4, 0)) + bytes([10 * (x + 1)] * 4) + bytes((0, 255))
+               for x in range(4)]
+    offsets, at = [], 8 + 4 * 4
+    for column in columns:
+        offsets.append(at)
+        at += len(column)
+    face = (struct.pack("<HHhh", 4, 6, 0, 0) +
+            b"".join(struct.pack("<I", offset) for offset in offsets) +
+            b"".join(columns))
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "doom1.wad")
+        with open(path, "wb") as handle:
+            handle.write(wad([("PLAYPAL", playpal), ("STFST01", face)]))
+        encoded = aicon.build(path)
+        with open(path, "wb") as handle:
+            handle.write(wad([("PLAYPAL", playpal)]))
+        try:
+            aicon.build(path)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("WAD without the face accepted")
+    # Tile void, ember ring, then the face's own four colours.
+    assert palette_count(encoded) == 3 + 4
+    for width, height, pixels in strikes(encoded):
+        middle = (height // 2) * width
+        assert pixels[0] == 0 and pixels[-1] == 0          # rounded corner
+        assert pixels[width // 2] == 2                     # ember ring
+        assert pixels[middle + 2] == 1                     # void beside face
+        assert set(pixels[middle:middle + width]) >= {3, 4, 5, 6}
+
+
 def main():
     image_icons()
+    wad_icons()
     for width, height, pixels in strikes(aicon.build("terminal")):
         assert width == height and len(pixels) == width * height
         assert 3 in pixels and 4 in pixels and 5 in pixels

@@ -86,7 +86,11 @@ $(DOOM): $(CONFIGURED) FORCE_SOURCE_CHECK
 $(WAD_DIR)/doom1.wad: fetch_wad.py
 	python3 fetch_wad.py $(WAD_DIR)
 
-$(eval $(call astra_app_bundle,build,ChocolateDoom,$(DOOM),apps/ChocolateDoom.app/manifest,$(CHOCOLATE_DOOM_ROOT)/data/doom.png,$(WAD_DIR)/doom1.wad $(WAD_DIR)/doom1.wad.license.txt $(CHOCOLATE_DOOM_ROOT)/COPYING.md))
+# fetch_wad.py writes the licence beside the WAD.
+$(WAD_DIR)/doom1.wad.license.txt: $(WAD_DIR)/doom1.wad ;
+
+# The icon is the game's own status-bar face, from the IWAD the bundle ships.
+$(eval $(call astra_app_bundle,build,ChocolateDoom,$(DOOM),apps/ChocolateDoom.app/manifest,$(WAD_DIR)/doom1.wad,$(WAD_DIR)/doom1.wad $(WAD_DIR)/doom1.wad.license.txt $(CHOCOLATE_DOOM_ROOT)/COPYING.md))
 $(eval $(call astra_app_inventory,build,ChocolateDoom))
 
 # The bundle build checks the executable's libraries and the bundle; the

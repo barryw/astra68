@@ -307,6 +307,114 @@ def image_icon(path):
     return palette, strike
 
 
+# A game's own art on an Astra tile: the rounded tile of the system icons,
+# its ring in ember, the game's picture inside it.
+TILE_VOID = (9, 16, 23)
+TILE_EMBER = (200, 40, 24)
+# The status-bar face looking straight ahead: Doom at any size.
+DOOM_FACE = "STFST01"
+
+
+def read_wad_patch(path, name):
+    """A Doom-format WAD's picture lump, coloured by its PLAYPAL ->
+    (width, height, rows of (r, g, b, a))."""
+    with open(path, "rb") as handle:
+        data = handle.read()
+    if data[:4] not in (b"IWAD", b"PWAD"):
+        raise ValueError("%s is not a WAD" % path)
+    count, directory = struct.unpack_from("<II", data, 4)
+    lumps = {}
+    for index in range(count):
+        offset, size, lump = struct.unpack_from("<II8s", data,
+                                                directory + 16 * index)
+        lumps.setdefault(lump.rstrip(b"\0").decode("ascii", "replace"),
+                         data[offset:offset + size])
+    if "PLAYPAL" not in lumps or name not in lumps:
+        raise ValueError("%s has no PLAYPAL or %s" % (path, name))
+    palette = [tuple(lumps["PLAYPAL"][i * 3:i * 3 + 3]) for i in range(256)]
+    patch = lumps[name]
+    width, height = struct.unpack_from("<HH", patch)
+    rows = [[(0, 0, 0, 0)] * width for _ in range(height)]
+    for x in range(width):
+        at = struct.unpack_from("<I", patch, 8 + 4 * x)[0]
+        # Each column is posts of (top, length, pad, pixels..., pad).
+        while patch[at] != 255:
+            top, length = patch[at], patch[at + 1]
+            for row in range(length):
+                if top + row < height:
+                    rows[top + row][x] = palette[patch[at + 3 + row]] + (255,)
+            at += 4 + length
+    return width, height, rows
+
+
+def reduce_colors(counts, limit):
+    """At most `limit` colours for a picture: k-means over its colours,
+    weighted by use and seeded by popularity, so a face keeps its shading
+    where popularity alone would keep only its most common tones."""
+    items = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    centers = [color for color, _ in items[:limit]]
+    for _ in range(16):
+        groups = [[] for _ in centers]
+        for color, uses in items:
+            groups[min(range(len(centers)), key=lambda index: sum(
+                (a - b) ** 2 for a, b in zip(color, centers[index])))
+                   ].append((color, uses))
+        centers = [tuple(round(sum(color[channel] * uses
+                                   for color, uses in group) /
+                               sum(uses for _, uses in group))
+                         for channel in range(3)) if group else
+                   centers[index] for index, group in enumerate(groups)]
+    return sorted(set(centers))
+
+
+def wad_icon(path):
+    """(palette, strike builder) for a Doom IWAD: its status-bar face on an
+    Astra tile, filling the tile's height."""
+    width, height, rows = read_wad_patch(path, DOOM_FACE)
+    counts = {}
+    for line in rows:
+        for pixel in line:
+            if pixel[3]:
+                counts[pixel[:3]] = counts.get(pixel[:3], 0) + 1
+    face = reduce_colors(counts, IMAGE_COLORS_MAX - 2)
+    palette = ((0, 0, 0, 0), TILE_VOID + (255,), TILE_EMBER + (255,)) + \
+        tuple(color + (255,) for color in face)
+    nearest = {color: 3 + min(range(len(face)), key=lambda index: sum(
+        (a - b) ** 2 for a, b in zip(color, face[index])))
+        for color in counts}
+
+    def strike(size):
+        pixels = bytearray(size * size)
+        border = max(1, size // 32)
+        radius = max(2, size // 6)
+
+        def inside(x, y, inset=0):
+            x0, x1 = inset, size - 1 - inset
+            r = max(0, radius - inset)
+            if x < x0 or x > x1 or y < x0 or y > x1:
+                return False
+            cx = x0 + r if x < x0 + r else x1 - r if x > x1 - r else x
+            cy = x0 + r if y < x0 + r else x1 - r if y > x1 - r else y
+            return (x - cx) ** 2 + (y - cy) ** 2 <= r ** 2
+
+        for y in range(size):
+            for x in range(size):
+                if inside(x, y):
+                    pixels[y * size + x] = 1 if inside(x, y, border) else 2
+        drawn_h = size - 2 * border - 2 * max(1, size // 16)
+        drawn_w = max(1, round(width * drawn_h / height))
+        left = (size - drawn_w) // 2
+        top = (size - drawn_h) // 2
+        for y in range(drawn_h):
+            for x in range(drawn_w):
+                pixel = rows[y * height // drawn_h][x * width // drawn_w]
+                if pixel[3] and inside(left + x, top + y, border):
+                    pixels[(top + y) * size + left + x] = nearest[pixel[:3]]
+        return bytes(pixels)
+
+    return palette, strike
+
+
 def build(kind):
     choices = {
         "terminal": (TERMINAL_PALETTE, terminal_strike),
@@ -316,6 +424,8 @@ def build(kind):
         palette, builder = choices[kind]
     elif kind.lower().endswith((".bmp", ".png")):
         palette, builder = image_icon(kind)
+    elif kind.lower().endswith(".wad"):
+        palette, builder = wad_icon(kind)
     else:
         raise ValueError("unknown icon kind: %s" % kind)
     strikes = [(size, builder(size)) for size in SIZES]
@@ -340,7 +450,7 @@ def build(kind):
 def main():
     if len(sys.argv) != 3:
         raise SystemExit("usage: aicon.py {terminal|gallery|IMAGE.bmp|"
-                         "IMAGE.png} "
+                         "IMAGE.png|DOOM.wad} "
                          "OUTPUT.aicon")
     with open(sys.argv[2], "wb") as handle:
         handle.write(build(sys.argv[1]))

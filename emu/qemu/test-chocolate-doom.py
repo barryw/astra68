@@ -8,6 +8,13 @@ no arguments, as the desktop does. Doom must find its IWAD from its bundle
 renderer, and play its title and demos: the stand-in display helper must
 receive render-only batches steadily, and the stand-in audio daemon a
 44.1 kHz stereo S16BE voice carrying sound. No process may fault.
+
+Then it is played from the keyboard, as a person would: Escape opens the
+menu over the demo, Enter starts a new game (episode, skill), Escape returns
+to the menu from play, Up and Enter choose Quit Game and `y` confirms. Doom
+must then show ENDOOM and wait for a key, and that key must end it with
+status 0. Every step depends on the one before, so a key that is lost or
+misread leaves Doom running and fails the gate.
 """
 
 import argparse
@@ -72,6 +79,43 @@ def faults(machine):
     return [line for line in machine.trace()
             if "process_exit" in line and
             int(line.split()[-2], 16) in (3, 4)]
+
+
+# (qcode, seconds to let Doom act on it: menus wipe, a new game loads).
+PLAY = (("esc", 2), ("ret", 1.5), ("ret", 1.5), ("ret", 5),
+        ("esc", 2), ("up", 1), ("ret", 1.5), ("y", 4))
+
+
+def wait_exit(log, after, seconds):
+    """The first clean exit after trace sequence @p after, or None."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        log.poll()
+        if any(reason in (3, 4) for _, _, reason in log.exits):
+            raise RuntimeError("a process faulted: %r" % log.exits[-6:])
+        for at, status, reason in log.exits:
+            if at > after and (status, reason) == (0, 1):
+                return at
+        time.sleep(0.25)
+    return None
+
+
+def play_and_quit(machine, log):
+    log.poll()
+    start = log.newest
+    for qcode, settle in PLAY:
+        machine.qmp.key(qcode)
+        time.sleep(settle)
+    # ENDOOM waits for a key: Doom is still alive.
+    if wait_exit(log, start, 2) is not None:
+        raise RuntimeError("Doom exited without showing ENDOOM: %r" %
+                           (story(log),))
+    log.poll()
+    before = log.newest
+    machine.qmp.key("spc")
+    if wait_exit(log, before, 20) is None:
+        raise RuntimeError("Doom did not quit from its menu and ENDOOM: %r"
+                           % (story(log),))
 
 
 def main():
@@ -142,8 +186,13 @@ def main():
                 frames = len(samples) // 2
             if loud == 0:
                 raise RuntimeError("Doom's audio is silent")
+            play_and_quit(machine, log)
+            if faults(machine):
+                raise RuntimeError("a process faulted: %r" %
+                                   machine.said(0)[0][-30:])
             print("Chocolate Doom QEMU: PASS (%.1f render batches/s over "
-                  "%.0f s; %d audio frames at 44.1 kHz, peak %d; no faults)"
+                  "%.0f s; %d audio frames at 44.1 kHz, peak %d; played "
+                  "from the keyboard, quit through ENDOOM; no faults)"
                   % (rate, arguments.seconds, frames, loud))
         finally:
             machine.close()
