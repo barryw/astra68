@@ -90,7 +90,7 @@ $(WAD_DIR)/doom1.wad: fetch_wad.py
 $(WAD_DIR)/doom1.wad.license.txt: $(WAD_DIR)/doom1.wad ;
 
 # The icon is the game's own status-bar face, from the IWAD the bundle ships.
-$(eval $(call astra_app_bundle,build,ChocolateDoom,$(DOOM),apps/ChocolateDoom.app/manifest,$(WAD_DIR)/doom1.wad,$(WAD_DIR)/doom1.wad $(WAD_DIR)/doom1.wad.license.txt $(CHOCOLATE_DOOM_ROOT)/COPYING.md))
+$(eval $(call astra_app_bundle,build,ChocolateDoom,$(DOOM),apps/ChocolateDoom.app/manifest,$(WAD_DIR)/doom1.wad,$(WAD_DIR)/doom1.wad $(WAD_DIR)/doom1.wad.license.txt $(CHOCOLATE_DOOM_ROOT)/COPYING.md,defaults/chocolate-doom.cfg))
 $(eval $(call astra_app_inventory,build,ChocolateDoom))
 
 # The bundle build checks the executable's libraries and the bundle; the

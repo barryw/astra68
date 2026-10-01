@@ -27,6 +27,7 @@
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_reader.h>
 #include <astra/vfs_service_core.h>
+#include <astra/vfs_union.h>
 
 #include <string.h>
 
@@ -189,6 +190,100 @@ static uint32_t private_config_root(const SupervisorManifestEntry *entry,
         entry->resident != 0u ? ASTRA_CONFIG_OWNER_SERVICE :
                                ASTRA_CONFIG_OWNER_APPLICATION,
         private_store_root(entry), out, capacity);
+}
+
+static uint32_t copy_default(const char *defaults, const char *store_path,
+                             const char *name)
+{
+    char source[ASTRA_VFS_PATH_MAX] = "";
+    char target[ASTRA_VFS_PATH_MAX] = "";
+    AstraVfsClient *client = supervisor_vfs_client();
+    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
+    uint8_t *bytes = NULL;
+    uint32_t length = 0u;
+    uint32_t written = 0u;
+    uint64_t size = 0u;
+    uint16_t kind = 0u;
+    uint32_t status;
+
+    if (!astra_string_concat(source, sizeof(source), defaults) ||
+        !astra_string_concat(source, sizeof(source), "/") ||
+        !astra_string_concat(source, sizeof(source), name) ||
+        !astra_string_concat(target, sizeof(target), store_path) ||
+        !astra_string_concat(target, sizeof(target), "/") ||
+        !astra_string_concat(target, sizeof(target), name))
+        return ASTRA_VFS_ERR_LIMIT;
+    status = supervisor_vfs_read_alloc(source, (void **)&bytes, &length);
+    if (status == ASTRA_VFS_OK)
+        status = astra_vfs_open_mode(
+            client, target,
+            ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+                ASTRA_VFS_OPEN_EXCLUSIVE,
+            0600u, &file, &size, &kind);
+    while (status == ASTRA_VFS_OK && written < length) {
+        uint32_t moved = 0u;
+        uint32_t chunk = length - written > ASTRA_VFS_IO_MAX ?
+            ASTRA_VFS_IO_MAX : length - written;
+
+        status = astra_vfs_write(client, file, written, bytes + written,
+                                 chunk, &moved);
+        if (status == ASTRA_VFS_OK && moved == 0u)
+            status = ASTRA_VFS_ERR_IO;
+        written += moved;
+    }
+    if (file != ASTRA_VFS_FILE_INVALID &&
+        astra_vfs_close(client, file) != ASTRA_VFS_OK &&
+        status == ASTRA_VFS_OK)
+        status = ASTRA_VFS_ERR_IO;
+    astra_runtime_deallocate(bytes);
+    return status;
+}
+
+/*
+ * A new store starts with the defaults its bundle ships: the files in
+ * resources/defaults/, copied once, when the store is made. They are the
+ * application's from then on -- its own changes are never overwritten, and
+ * a store removed to reset it starts from the defaults again.
+ */
+static uint32_t seed_store(const SupervisorManifestEntry *entry,
+                           const char *store_path)
+{
+    AstraVfsUnionDirectory directory;
+    AstraVfsDirEntry entries[8];
+    char defaults[ASTRA_VFS_PATH_MAX] = "";
+    uint32_t status;
+
+    if (!astra_string_concat(defaults, sizeof(defaults), entry->path) ||
+        !astra_string_concat(defaults, sizeof(defaults),
+                             "/resources/defaults"))
+        return ASTRA_VFS_ERR_LIMIT;
+    status = astra_vfs_union_directory_open(
+        supervisor_assigns(), defaults, supervisor_vfs_assign_client, NULL,
+        &directory);
+    if (status == ASTRA_VFS_ERR_NOT_FOUND)
+        return ASTRA_VFS_OK;
+    if (status != ASTRA_VFS_OK)
+        return status;
+    for (;;) {
+        uint32_t count = 0u;
+        uint32_t member = 0u;
+
+        status = astra_vfs_union_directory_read(
+            &directory, entries,
+            (uint32_t)(sizeof(entries) / sizeof(entries[0])), &count,
+            &member);
+        if (status != ASTRA_VFS_OK || count == 0u)
+            break;
+        for (uint32_t item = 0u; item < count && status == ASTRA_VFS_OK;
+             ++item)
+            if (entries[item].kind == ASTRA_VFS_KIND_FILE)
+                status = copy_default(defaults, store_path,
+                                      entries[item].name);
+        if (status != ASTRA_VFS_OK)
+            break;
+    }
+    astra_vfs_union_directory_close(&directory);
+    return status == ASTRA_VFS_ERR_NOT_FOUND ? ASTRA_VFS_OK : status;
 }
 
 static uint32_t named_service(const char *name)
@@ -671,6 +766,14 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                                           0700u);
             if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_EXISTS)
                 return status;
+            /* Defaults are a convenience: an application whose defaults
+               could not be copied still runs, on its built-in ones. */
+            if (status == ASTRA_VFS_OK) {
+                uint32_t seeded = seed_store(entry, store_path);
+
+                if (seeded != ASTRA_VFS_OK)
+                    (void)astra_log_failure("store defaults", seeded);
+            }
             status = astra_vfs_stat_meta(supervisor_vfs_client(), store_path,
                                           &store_info);
             if (status != ASTRA_VFS_OK)

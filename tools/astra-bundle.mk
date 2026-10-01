@@ -1,7 +1,7 @@
 # Application bundles, built one way for every application.
 #
 #   include $(ASTRA_ROOT)/tools/astra-bundle.mk
-#   $(eval $(call astra_app_bundle,BUILD,NAME,BINARY,MANIFEST,ICON,RESOURCES))
+#   $(eval $(call astra_app_bundle,BUILD,NAME,BINARY,MANIFEST,ICON,RESOURCES[,DEFAULTS]))
 #   $(eval $(call astra_app_inventory,BUILD,NAMES))
 #
 # BUILD      output directory; the bundle is BUILD/NAME.app
@@ -14,6 +14,9 @@
 #            tools/aicon.py converts; the manifest's `icon` names
 #            resources/NAME.aicon
 # RESOURCES  files copied flat into resources/ (may be empty)
+# DEFAULTS   optional files copied flat into resources/defaults/: the
+#            supervisor copies them into the application's STORE when it
+#            first makes it, so they are the application's first preferences
 #
 # The rule is a stamp, BUILD/.NAME.app.stamp; depend on it to build the
 # bundle. astra_app_inventory writes BUILD/.apps, the bundles that directory
@@ -32,13 +35,15 @@ FORCE_ASTRA_BUNDLE_TOOL:
 
 define astra_app_bundle
 $(1)/.$(2).app.stamp: $(3) $(4) $(ASTRA_ICON_TOOL) $(ASTRA_BUNDLE_TOOL) \
-		$(filter-out terminal gallery,$(5)) $(6)
+		$(filter-out terminal gallery,$(5)) $(6) $(7)
 	rm -rf $(1)/$(2).app
 	@mkdir -p $(1)/$(2).app/bin/m68k-68040 $(1)/$(2).app/resources
 	cp $(4) $(1)/$(2).app/manifest
 	cp $(3) $(1)/$(2).app/bin/m68k-68040/$(2)
 	python3 $(ASTRA_ICON_TOOL) $(5) $(1)/$(2).app/resources/$(2).aicon
 	$(if $(strip $(6)),cp $(6) $(1)/$(2).app/resources/)
+	$(if $(strip $(7)),mkdir -p $(1)/$(2).app/resources/defaults && \
+		cp $(7) $(1)/$(2).app/resources/defaults/)
 	$(ASTRA_BUNDLE_TOOL) check $(1)/$(2).app
 	@touch $$@
 endef
