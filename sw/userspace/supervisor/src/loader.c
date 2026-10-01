@@ -781,6 +781,49 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                                ASTRA_CAPABILITY_FLAG_READ,
                            bundle_root);
         if (status != ASTRA_STATUS_OK) return status;
+        /* An application starts in its own bundle, at its data: a ported
+         * program that looks for its files in "." finds its resources, the
+         * way a Mac application's bundle carries everything it needs. */
+        if (!entry_grants(entry, "CWD")) {
+            char resources[ASTRA_CAPABILITY_ROOT_MAX] = "";
+
+            if (!astra_string_concat(resources, sizeof(resources),
+                                     bundle_root) ||
+                !astra_string_concat(resources, sizeof(resources),
+                                     "/resources"))
+                return ASTRA_STATUS_LIMIT;
+            status = add_grant(out, count, "CWD", apps->handle,
+                               ASTRA_RIGHT_SIGNAL,
+                               ASTRA_CAPABILITY_FLAG_NAMESPACE |
+                                   ASTRA_CAPABILITY_FLAG_READ,
+                               resources);
+            if (status != ASTRA_STATUS_OK)
+                return status;
+        }
+        /* Every application may keep its own configuration, asked for or
+         * not, as every one may reach the shared libraries. */
+        if (!entry_grants(entry, ASTRA_CONFIG_CAPABILITY)) {
+            const AstraAssign *held = astra_assign_lookup(
+                supervisor_assigns(), ASTRA_CONFIG_CAPABILITY);
+            char root[ASTRA_CAPABILITY_ROOT_MAX];
+
+            if (held != NULL) {
+                if (private_config_root(entry, held->root, root,
+                                        sizeof(root)) != ASTRA_CONFIG_OK)
+                    return ASTRA_STATUS_LIMIT;
+                status = add_grant(
+                    out, count, ASTRA_CONFIG_CAPABILITY, held->handle,
+                    ASTRA_RIGHT_SIGNAL,
+                    ASTRA_CAPABILITY_FLAG_NAMESPACE |
+                        ((held->rights & ASTRA_RIGHT_READ) != 0u ?
+                             ASTRA_CAPABILITY_FLAG_READ : 0u) |
+                        ((held->rights & ASTRA_RIGHT_WRITE) != 0u ?
+                             ASTRA_CAPABILITY_FLAG_WRITE : 0u),
+                    root);
+                if (status != ASTRA_STATUS_OK)
+                    return status;
+            }
+        }
     }
     return ASTRA_STATUS_OK;
 }
