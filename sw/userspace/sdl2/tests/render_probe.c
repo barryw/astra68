@@ -39,10 +39,23 @@ int main(void)
     window = SDL_CreateWindow("SDL Render Probe", SDL_WINDOWPOS_CENTERED,
                               SDL_WINDOWPOS_CENTERED, 320, 200,
                               SDL_WINDOW_SHOWN);
-    renderer = window != NULL ?
-        SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED) : NULL;
+    if (window == NULL)
+        return fail("SDL_RENDER_CREATE_FAIL");
+    /* There is no software renderer: the driver hint is a preference, so
+     * asking for "software" by name still gets the hardware renderer. */
+    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software");
+    renderer = SDL_CreateRenderer(window, -1, 0);
     if (renderer == NULL || SDL_GetRendererInfo(renderer, &info) != 0 ||
         SDL_strcmp(info.name, "astra") != 0)
+        return fail("SDL_RENDER_SOFTWARE_FAIL");
+    SDL_DestroyRenderer(renderer);
+    SDL_SetHint(SDL_HINT_RENDER_DRIVER, NULL);
+    /* Asking for vsync, as Doom does, gets the hardware renderer with it. */
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED |
+                                                  SDL_RENDERER_PRESENTVSYNC);
+    if (renderer == NULL || SDL_GetRendererInfo(renderer, &info) != 0 ||
+        SDL_strcmp(info.name, "astra") != 0 ||
+        (info.flags & SDL_RENDERER_PRESENTVSYNC) == 0u)
         return fail("SDL_RENDER_CREATE_FAIL");
     for (int index = 0; index < 32 * 32; ++index)
         pixels[index] = 0x80000000u | (Uint32)index * 0x010203u;

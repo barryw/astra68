@@ -106,6 +106,7 @@ static int ASTRA_CreateWindow(_THIS, SDL_Window *window)
     info.event_mask = ASTRA_WINDOW_SUBSCRIBE_ALL &
                       ~(ASTRA_WINDOW_SUBSCRIBE_VBLANK |
                         ASTRA_WINDOW_SUBSCRIBE_SYSTEM_ACTION);
+    data->event_mask = info.event_mask;
     result = astra_window_create(gui->handle, placeholder.handle, &info,
                                  &data->native);
     ASTRA_Ignore(astra_area_close(&placeholder));

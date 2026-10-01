@@ -65,6 +65,15 @@ MORE_PATCHES = [
         "#define HAVE_STDDEF_H   1",
         "#define HAVE_STDDEF_H   1\n#define HAVE_STDIO_H    1",
     )),
+    # No software renderer in the driver list: an MC68040 cannot render in
+    # software at any useful rate, so a renderer request the Astra driver
+    # cannot meet fails instead of silently landing on the CPU.
+    # SDL_CreateSoftwareRenderer, for rendering into a surface, remains.
+    ("src/render/SDL_render.c", (
+        "#if SDL_VIDEO_RENDER_SW\n    &SW_RenderDriver\n#endif\n};",
+        "#if SDL_VIDEO_RENDER_SW && !defined(__astra__)\n"
+        "    &SW_RenderDriver\n#endif\n};",
+    )),
     # SIGINT and SIGTERM become SDL_QUIT, as on every Unix port: Ctrl-C in
     # the Terminal ends an SDL program through its own quit path, which
     # closes its audio and windows, instead of killing it.
@@ -118,6 +127,9 @@ MORE_PATCHES = [
         "        SDL_snprintf(line, sizeof(line), \"%s: %s\",\n"
         "                     SDL_priority_prefixes[priority], message);\n"
         "        (void)astra_log(line);\n"
+        # Already logged: SDL's generic stderr copy below would reach the
+        # log a second time (stdout/stderr without a stream go there too).
+        "        return;\n"
         "    }\n"
         "#elif defined(__ANDROID__)\n    {\n        char tag[32];",
     )),

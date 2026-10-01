@@ -302,6 +302,32 @@ AstraResult astra_window_present_discard(AstraWindow *window)
     ++discarding_presents;
     return ASTRA_OK;
 }
+static uint32_t window_event_mask;
+static int vblank_waits;
+AstraResult astra_window_set_event_mask(AstraWindow *window,
+                                        uint32_t event_mask)
+{
+    (void)window;
+    window_event_mask = event_mask;
+    return ASTRA_OK;
+}
+AstraHandle astra_window_vblank_wait_handle(const AstraWindow *window)
+{
+    (void)window;
+    return 77u;
+}
+uint64_t astra_clock_monotonic(void)
+{
+    return UINT64_C(1000);
+}
+uint32_t astra_wait_one(uint32_t handle, uint64_t deadline_ns,
+                        uint32_t *detail)
+{
+    assert(handle == 77u && detail == NULL);
+    assert(deadline_ns == UINT64_C(1000) + ASTRA_VSYNC_WAIT_NS);
+    ++vblank_waits;
+    return 0u;
+}
 
 static SDL_RenderCommand commands[16];
 static int command_count;
@@ -362,6 +388,35 @@ int main(void)
        and the display service carries nothing forward. */
     assert(renderer.RenderPresent(&renderer) == 0 &&
            discarding_presents == 1);
+    /* Without vsync a present does not wait. */
+    assert(vblank_waits == 0 &&
+           (renderer.info.flags & SDL_RENDERER_PRESENTVSYNC) == 0u);
+    /* The driver offers vsync, so SDL never falls back to software for a
+     * program that asks for it; the renderer then subscribes the window to
+     * vblank and each present waits for one. */
+    assert((ASTRA_RenderDriver.info.flags & SDL_RENDERER_PRESENTVSYNC) != 0u);
+    {
+        ASTRA_WindowData vsync_data = {0};
+        SDL_Window vsync_window = {0};
+        SDL_Renderer vsync_renderer = {0};
+
+        vsync_data.event_mask = ASTRA_WINDOW_SUBSCRIBE_KEY;
+        vsync_window.driverdata = &vsync_data;
+        assert(ASTRA_CreateRenderer(&vsync_renderer, &vsync_window,
+                                    SDL_RENDERER_PRESENTVSYNC) == 0);
+        assert((vsync_renderer.info.flags & SDL_RENDERER_PRESENTVSYNC) != 0u);
+        assert(window_event_mask == (ASTRA_WINDOW_SUBSCRIBE_KEY |
+                                     ASTRA_WINDOW_SUBSCRIBE_VBLANK) &&
+               vsync_data.event_mask == window_event_mask);
+        assert(vsync_renderer.RenderPresent(&vsync_renderer) == 0 &&
+               vblank_waits == 1);
+        assert(vsync_renderer.SetVSync(&vsync_renderer, 0) == 0);
+        assert(vsync_data.event_mask == ASTRA_WINDOW_SUBSCRIBE_KEY &&
+               (vsync_renderer.info.flags & SDL_RENDERER_PRESENTVSYNC) == 0u);
+        assert(vsync_renderer.RenderPresent(&vsync_renderer) == 0 &&
+               vblank_waits == 1);
+        vsync_renderer.DestroyRenderer(&vsync_renderer);
+    }
     assert(ASTRA_SupportsBlendMode(&renderer, SDL_BLENDMODE_NONE) &&
            ASTRA_SupportsBlendMode(&renderer, SDL_BLENDMODE_BLEND) &&
            ASTRA_SupportsBlendMode(&renderer, SDL_BLENDMODE_ADD) &&

@@ -16,6 +16,9 @@ typedef struct ASTRA_WindowData {
     AstraSurface content;
     uint8_t *framebuffer;
     uint32_t framebuffer_pitch;
+    /* The window's ASTRA_WINDOW_SUBSCRIBE_* mask; the renderer adds VBLANK
+     * while it presents with vsync. */
+    uint32_t event_mask;
 } ASTRA_WindowData;
 
 #endif

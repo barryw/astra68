@@ -16,6 +16,12 @@
 #include "../../video/SDL_sysvideo.h"
 #include "../../video/astra/SDL_astravideo.h"
 
+#include <astra/runtime.h>
+
+/* A vsync present waits at most this long for a vblank: a display that
+ * stops signalling slows the program down, it does not hang it. */
+#define ASTRA_VSYNC_WAIT_NS UINT64_C(100000000)
+
 typedef struct ASTRA_TextureData {
     AstraSurface surface;
     AstraDrawList list;
@@ -37,6 +43,8 @@ typedef struct ASTRA_RenderData {
     /* ASTRA_GATHER_MAX of each, allocated on first use. */
     AstraRectI32 *rects;
     AstraPointI32 *segments; /* two endpoints per segment */
+    /* Present waits for the display's next vblank. */
+    int vsync;
 } ASTRA_RenderData;
 
 /*
@@ -1057,6 +1065,30 @@ static int ASTRA_RenderReadPixels(SDL_Renderer *renderer,
     return status;
 }
 
+/* Vsync is the window's vblank subscription: the display service signals
+ * the window's coalescing vblank event every frame while it subscribes. */
+static int ASTRA_SetVSync(SDL_Renderer *renderer, const int vsync)
+{
+    ASTRA_RenderData *data = renderer->driverdata;
+    ASTRA_WindowData *window = data->window;
+    uint32_t mask = vsync ? window->event_mask | ASTRA_WINDOW_SUBSCRIBE_VBLANK :
+                            window->event_mask & ~ASTRA_WINDOW_SUBSCRIBE_VBLANK;
+    AstraResult result;
+
+    if (mask != window->event_mask) {
+        result = astra_window_set_event_mask(&window->native, mask);
+        if (result != ASTRA_OK)
+            return ASTRA_Failed("vsync", result);
+        window->event_mask = mask;
+    }
+    data->vsync = vsync != 0;
+    if (data->vsync)
+        renderer->info.flags |= SDL_RENDERER_PRESENTVSYNC;
+    else
+        renderer->info.flags &= ~SDL_RENDERER_PRESENTVSYNC;
+    return 0;
+}
+
 static int ASTRA_RenderPresent(SDL_Renderer *renderer)
 {
     ASTRA_RenderData *data = renderer->driverdata;
@@ -1064,7 +1096,16 @@ static int ASTRA_RenderPresent(SDL_Renderer *renderer)
        spares the display service carrying each frame forward. */
     AstraResult result = astra_window_present_discard(&data->window->native);
 
-    return result == ASTRA_OK ? 0 : ASTRA_Failed("present", result);
+    if (result != ASTRA_OK)
+        return ASTRA_Failed("present", result);
+    /* The vblank event resets when a wait takes it, so this waits for the
+     * first vblank since the previous present: a frame that is already
+     * late is not held back a whole further frame. */
+    if (data->vsync)
+        (void)astra_wait_one(
+            astra_window_vblank_wait_handle(&data->window->native),
+            astra_clock_monotonic() + ASTRA_VSYNC_WAIT_NS, NULL);
+    return 0;
 }
 
 static void ASTRA_DestroyTexture(SDL_Renderer *renderer,
@@ -1102,7 +1143,6 @@ static int ASTRA_CreateRenderer(SDL_Renderer *renderer, SDL_Window *window,
 {
     ASTRA_RenderData *data;
 
-    (void)flags;
     if (window->driverdata == NULL)
         return SDL_SetError("Astra renderer needs an Astra window");
     data = SDL_calloc(1u, sizeof(*data));
@@ -1136,9 +1176,14 @@ static int ASTRA_CreateRenderer(SDL_Renderer *renderer, SDL_Window *window,
     renderer->RenderPresent = ASTRA_RenderPresent;
     renderer->DestroyTexture = ASTRA_DestroyTexture;
     renderer->DestroyRenderer = ASTRA_DestroyRenderer;
+    renderer->SetVSync = ASTRA_SetVSync;
     renderer->info = ASTRA_RenderDriver.info;
+    renderer->info.flags &= ~SDL_RENDERER_PRESENTVSYNC;
     renderer->driverdata = data;
     renderer->window = window;
+    if ((flags & SDL_RENDERER_PRESENTVSYNC) != 0u &&
+        ASTRA_SetVSync(renderer, 1) != 0)
+        return -1;
     return 0;
 }
 
@@ -1146,7 +1191,8 @@ SDL_RenderDriver ASTRA_RenderDriver = {
     ASTRA_CreateRenderer,
     {
         "astra",
-        SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE,
+        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC |
+            SDL_RENDERER_TARGETTEXTURE,
         3,
         { SDL_PIXELFORMAT_ARGB8888, SDL_PIXELFORMAT_RGB888,
           SDL_PIXELFORMAT_RGB565 },
