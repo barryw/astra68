@@ -17,45 +17,32 @@ Read `CLAUDE.md`, `AGENTS.md`, then this page. Previous:
     121.5 (was 69).
   - astra-audio-host uses 48% of an A76 core.
 
-## Done, not yet committed (verify was running)
+## Done and committed: `ab156ec2` (full verify green)
 
-All pieces below were green in their own gates. A full verify was running
-when this was written.
-
-**HostFS volumes.** One Linux directory with a subdirectory per volume
-(`work/`, `sound/`).
-- `AstraHostCommand.reserved0` became `volume`; command version 2; host
-  interface `0x1000c`.
-- QEMU resolves each path `RESOLVE_BENEATH` that volume's fd.
-- The hostfs service serves `WORK:rw METRICS:r SOUND:rw`. SOUND has no
-  direct accelerator path.
-- `run-arty.sh` moves a pre-volume root into `work/` once, and installs
-  shipped fonts the SOUND volume lacks.
-- `test-hostfs.py` was stale on version and caps and is fixed. It is not
-  in verify; add it.
-
-**SoundFonts on SOUND:.**
-- The daemon reads `sound/soundfonts/` in place through a FluidSynth loader
-  callback. `sound:NAME` names are opened with `openat2` (`RESOLVE_BENEATH`,
-  no symlinks).
-- `soundfonts/default` lists the default stack.
-- The media service no longer reads guest fonts and no longer needs
-  `SYSTEM:r`.
-- Fonts are no longer installed into the guest image.
-- SDL native MIDI stacks a bundle's `resources/soundfonts/*.sf2` (uploaded).
-
-**MIDI API, host audio protocol 5 and PCM wire 5.**
-- New host operations: `FONT_LIST`, `MIDI_PRESETS`, `MIDI_EVENTS`,
-  `MIDI_SET`. `MIDI_STATUS` returns a record.
-- pcm.library 2.4 adds `astra_midi_fonts`, `astra_midi_presets`,
-  `astra_midi_send`, `astra_midi_set` and `astra_midi_status`, plus inline
-  note, program, control and bend helpers.
-- `AstraMidiSong` was renamed `AstraMidiSynth`.
-- The daemon self-test covers all of it. The pcm.library unit test only
-  covers the renamed API so far; add fake-service cases for the new calls.
-- Still to do: build on beast, then run `make -C fpga/arty/linux
-  PLATFORM=de25 test-host`, `make -C sw/userspace test`, and the loopwave
-  and Doom gates. Then full verify, commit, and publish.
+- **HostFS volumes.** One Linux directory, one subdirectory per volume
+  (`work/`, `sound/`). The command's `volume` field is resolved
+  `RESOLVE_BENEATH` that volume's directory; the command version is 2 and
+  the host interface is `0x1000c`. hostfs serves `WORK:rw METRICS:r
+  SOUND:rw`.
+  - `run-arty.sh` moves a pre-volume root into `work/` once.
+  - `test-hostfs.py` now passes and covers isolation. It is not in verify;
+    add it.
+- **SoundFonts in `SOUND:soundfonts`.**
+  - The daemon reads them in place through a FluidSynth loader callback
+    (`openat2`, no links), so a guest-side change is what the host plays.
+  - `default` lists the default stack.
+  - The release ships the set; the launcher installs only fonts the volume
+    lacks.
+  - Bundle fonts (`resources/soundfonts/*.sf2`) are sent by digest.
+- **MIDI API.** Host audio protocol 5, PCM wire 5, pcm.library 2.4:
+  `astra_midi_fonts`, `astra_midi_presets`, `astra_midi_send` with inline
+  helpers, `astra_midi_set`, `astra_midi_status`. `AstraMidiSynth`
+  replaces `AstraMidiSong`.
+- **Board, release `3a0c8642`.**
+  - `hostfs/work` was migrated and `hostfs/sound/soundfonts` installed.
+  - Doom window after 18.4 s; music renders from SOUND (astra-audio-host at
+    ~50% of a core).
+  - Demo 62.8, game 78.6, windowed 118.7 render batches/s.
 
 ## Open findings
 
