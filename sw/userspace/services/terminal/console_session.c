@@ -7,6 +7,7 @@
 #include <astra/application_service.h>
 #include <astra/config_library.h>
 #include <astra/entropy.h>
+#include <astra/gui.h>
 #include <astra/event_control.h>
 #include <astra/network.h>
 #include <astra/ntp.h>
@@ -110,9 +111,10 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
         ASTRA_CAPABILITY_APPLICATION_LAUNCH,
         ASTRA_CAPABILITY_SERVICE_MANAGER,
         ASTRA_CAPABILITY_ENTROPY,
-        /* A command a person runs may play sound, as it may use the
-         * network: loopwave, SDL programs, anything linked to pcm.library. */
+        /* A command a person runs may play sound and open windows, as it
+         * may use the network: SDL programs are commands too. */
         ASTRA_CAPABILITY_PCM,
+        ASTRA_CAPABILITY_GUI,
     };
     const uint32_t streams[] = {
         console_stream_stdout(), console_stream_stderr(),
