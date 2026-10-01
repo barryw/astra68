@@ -1,6 +1,7 @@
 #include <astra/network_kit.h>
 #include <astra/posix_descriptor.h>
 #include <astra/runtime.h>
+#include "signal_internal.h"
 #include "socket_internal.h"
 
 #include <arpa/inet.h>
@@ -245,9 +246,9 @@ static int wait_ready(PosixSocket *socket, uint32_t wanted)
             return -1;
         }
         {
-            uint32_t status = astra_wait_one(
+            uint32_t status = posix_wait_one(
                 astra_network_readiness_handle(&socket->endpoint),
-                ASTRA_DEADLINE_FOREVER, NULL);
+                ASTRA_DEADLINE_FOREVER);
 
             if (status != ASTRA_SYSCALL_OK) {
                 errno = status == ASTRA_SYSCALL_CANCELLED ? EINTR : EPIPE;

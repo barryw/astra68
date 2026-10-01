@@ -10,6 +10,8 @@
 #include <signal.h>
 #include <stdint.h>
 
+#include "../src/signal_internal.h"
+
 static jmp_buf escaped;
 static void (*trampoline)(int);
 static uint32_t terminated_handle;
@@ -96,6 +98,30 @@ astra_rt_signal_return(void)
     longjmp(escaped, 2);
 }
 
+static uint32_t waits;
+static int wait_delivers_handled;
+
+/* The first wait is cancelled by a child's SIGCHLD, which runs no handler;
+ * a later one can be cancelled by a SIGUSR1 that does. */
+uint32_t
+astra_wait_one(uint32_t handle, uint64_t deadline, uint32_t *detail)
+{
+    assert(handle == 77u && deadline == ASTRA_DEADLINE_FOREVER &&
+           detail == NULL);
+    if (++waits == 1u) {
+        if (setjmp(escaped) == 0)
+            trampoline(SIGCHLD);
+        return ASTRA_SYSCALL_CANCELLED;
+    }
+    if (wait_delivers_handled) {
+        wait_delivers_handled = 0;
+        if (setjmp(escaped) == 0)
+            trampoline(SIGUSR1);
+        return ASTRA_SYSCALL_CANCELLED;
+    }
+    return ASTRA_SYSCALL_OK;
+}
+
 static void
 handler(int signal_number)
 {
@@ -160,6 +186,15 @@ main(void)
     if (setjmp(escaped) == 0)
         trampoline(SIGUSR1);
     assert(handled == 1 && returned == 1);
+
+    /* A blocking call resumes after a signal that ran no handler and is
+     * interrupted by one that did. */
+    assert(posix_wait_one(77u, ASTRA_DEADLINE_FOREVER) == ASTRA_SYSCALL_OK);
+    assert(waits == 2u && handled == 1);
+    wait_delivers_handled = 1;
+    assert(posix_wait_one(77u, ASTRA_DEADLINE_FOREVER) ==
+           ASTRA_SYSCALL_CANCELLED);
+    assert(waits == 3u && handled == 2);
 
     errno = 0;
     assert(sigsuspend(&suspend_mask) == -1 && errno == EIO);

@@ -181,6 +181,12 @@ astra_log_failure(const char *operation, uint32_t status)
 }
 
 uint32_t
+astra_posix_signal_generation(void)
+{
+    return 0u;
+}
+
+uint32_t
 astra_process_wait(uint32_t handle, uint64_t deadline, uint32_t *status)
 {
     (void)handle;

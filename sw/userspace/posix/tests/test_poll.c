@@ -111,6 +111,17 @@ uint32_t astra_wait_one(uint32_t handle, uint64_t deadline, uint32_t *detail)
     assert(handle == 99u);
     return ASTRA_SYSCALL_TIMED_OUT;
 }
+
+/* signal.c's restart rule is its own test's subject. */
+uint32_t posix_wait_one(uint32_t handle, uint64_t deadline)
+{
+    return astra_wait_one(handle, deadline, NULL);
+}
+
+uint32_t astra_posix_signal_generation(void)
+{
+    return 0u;
+}
 uint32_t astra_wait_multiple(const uint32_t *handles, uint32_t count,
                              uint64_t deadline, uint32_t *index,
                              uint32_t *detail)

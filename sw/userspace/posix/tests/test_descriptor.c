@@ -252,6 +252,12 @@ uint32_t astra_wait_one(uint32_t handle, uint64_t deadline, uint32_t *detail)
     return ASTRA_SYSCALL_TIMED_OUT;
 }
 
+/* signal.c's restart rule is its own test's subject. */
+uint32_t posix_wait_one(uint32_t handle, uint64_t deadline)
+{
+    return astra_wait_one(handle, deadline, NULL);
+}
+
 uint32_t
 astra_stream_write(uint32_t handle, const void *bytes, uint32_t length,
                    uint32_t *written)

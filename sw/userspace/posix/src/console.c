@@ -36,6 +36,7 @@
 
 #include "resource_internal.h"
 #include "heap_internal.h"
+#include "signal_internal.h"
 
 enum {
     POSIX_STDIN = 0,
@@ -1146,8 +1147,7 @@ write(int fd, const void *bytes, size_t length)
                 errno = EAGAIN;
                 return -1;
             }
-            status = astra_wait_one(slot->value, ASTRA_DEADLINE_FOREVER,
-                                    NULL);
+            status = posix_wait_one(slot->value, ASTRA_DEADLINE_FOREVER);
             if (status != ASTRA_SYSCALL_OK) {
                 errno = stream_errno(status);
                 return -1;
@@ -1187,7 +1187,7 @@ write(int fd, const void *bytes, size_t length)
             errno = EAGAIN;
             return -1;
         }
-        status = astra_wait_one(handle, ASTRA_DEADLINE_FOREVER, NULL);
+        status = posix_wait_one(handle, ASTRA_DEADLINE_FOREVER);
         if (status != ASTRA_SYSCALL_OK) {
             errno = stream_errno(status);
             return -1;
@@ -1271,8 +1271,7 @@ read(int fd, void *bytes, size_t length)
                 errno = EAGAIN;
                 return -1;
             }
-            status = astra_wait_one(slot->value, ASTRA_DEADLINE_FOREVER,
-                                    NULL);
+            status = posix_wait_one(slot->value, ASTRA_DEADLINE_FOREVER);
             if (status == ASTRA_SYSCALL_PEER_DEAD ||
                 status == ASTRA_SYSCALL_CLOSED)
                 continue;
@@ -1329,8 +1328,7 @@ read(int fd, void *bytes, size_t length)
             if ((events & ASTRA_STREAM_READY_READ) != 0u)
                 continue;
         }
-        status = astra_wait_one(slot->read_wait, ASTRA_DEADLINE_FOREVER,
-                                NULL);
+        status = posix_wait_one(slot->read_wait, ASTRA_DEADLINE_FOREVER);
         if (status != ASTRA_SYSCALL_OK) {
             errno = stream_errno(status);
             return status == ASTRA_SYSCALL_PEER_DEAD ||

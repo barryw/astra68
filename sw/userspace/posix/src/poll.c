@@ -1,3 +1,4 @@
+#include <astra/posix.h>
 #include <astra/posix_descriptor.h>
 
 #include <astra/runtime.h>
@@ -9,6 +10,8 @@
 #include <string.h>
 #include <sys/select.h>
 #include <sys/time.h>
+
+#include "signal_internal.h"
 
 static uint32_t idle_event;
 
@@ -39,7 +42,14 @@ wait_until(const uint32_t *waits, uint32_t count, uint64_t deadline)
     uint32_t status;
 
     if (count != 0u) {
-        status = astra_wait_multiple(waits, count, deadline, NULL, NULL);
+        uint32_t generation;
+
+        /* A signal that ran no handler does not interrupt (posix_wait_one). */
+        do {
+            generation = astra_posix_signal_generation();
+            status = astra_wait_multiple(waits, count, deadline, NULL, NULL);
+        } while (status == ASTRA_SYSCALL_CANCELLED &&
+                 astra_posix_signal_generation() == generation);
     } else {
         if (idle_event == 0u) {
             status = astra_rt_event_create(ASTRA_EVENT_MANUAL_RESET,
@@ -49,7 +59,7 @@ wait_until(const uint32_t *waits, uint32_t count, uint64_t deadline)
                 return -1;
             }
         }
-        status = astra_wait_one(idle_event, deadline, NULL);
+        status = posix_wait_one(idle_event, deadline);
     }
     if (status == ASTRA_SYSCALL_OK || status == ASTRA_SYSCALL_PEER_DEAD ||
         status == ASTRA_SYSCALL_CLOSED)

@@ -2,6 +2,7 @@
 
 #include <astra/runtime.h>
 #include <astra/limits.h>
+#include <astra/posix.h>
 #include <astra/posix_descriptor.h>
 #include <astra/status.h>
 #include <astra/syscall.h>
@@ -397,6 +398,7 @@ wait_for_child(pid_t pid, int *status, int options, struct rusage *usage)
         while (child != NULL) {
             uint32_t astra_status = 0u;
             uint32_t wait_result;
+            uint32_t generation;
 
             if (pid != (pid_t)-1 && child->pid != pid) {
                 previous = child;
@@ -404,11 +406,18 @@ wait_for_child(pid_t pid, int *status, int options, struct rusage *usage)
                 continue;
             }
             found = 1;
-            wait_result = astra_process_wait(
-                child->handle,
-                pid == (pid_t)-1 || (options & WNOHANG) != 0 ?
-                    0u : ASTRA_DEADLINE_FOREVER,
-                &astra_status);
+            /* Resumed after a signal that ran no handler, as
+             * posix_wait_one does: above all the SIGCHLD this very child
+             * raises as it exits. */
+            do {
+                generation = astra_posix_signal_generation();
+                wait_result = astra_process_wait(
+                    child->handle,
+                    pid == (pid_t)-1 || (options & WNOHANG) != 0 ?
+                        0u : ASTRA_DEADLINE_FOREVER,
+                    &astra_status);
+            } while (wait_result == ASTRA_SYSCALL_CANCELLED &&
+                     astra_posix_signal_generation() == generation);
             if (wait_result == ASTRA_SYSCALL_OK ||
                 wait_result == ASTRA_SYSCALL_PEER_DEAD)
                 return reap_child(child, previous, status, usage,

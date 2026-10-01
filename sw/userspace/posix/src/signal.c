@@ -4,6 +4,8 @@
 #include <astra/posix_descriptor.h>
 #include <astra/syscall.h>
 
+#include "signal_internal.h"
+
 #include <errno.h>
 #include <signal.h>
 #include <stdint.h>
@@ -155,6 +157,19 @@ uint32_t
 astra_posix_signal_generation(void)
 {
     return (uint32_t)caught_generation;
+}
+
+uint32_t
+posix_wait_one(uint32_t handle, uint64_t deadline)
+{
+    for (;;) {
+        uint32_t generation = astra_posix_signal_generation();
+        uint32_t status = astra_wait_one(handle, deadline, NULL);
+
+        if (status != ASTRA_SYSCALL_CANCELLED ||
+            astra_posix_signal_generation() != generation)
+            return status;
+    }
 }
 
 int
