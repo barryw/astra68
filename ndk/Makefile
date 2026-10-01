@@ -513,7 +513,8 @@ install: $(LIB) install-headers
 clean:
 	rm -rf build
 
--include $(TARGET_OBJECTS:.o=.d) $(PIC_OBJECTS:.o=.d)
+-include $(TARGET_OBJECTS:.o=.d) $(PIC_OBJECTS:.o=.d) \
+	$(SYSTEM_IDENTITY:.o=.d) $(SYSTEM_OBJECTS:.o=.d)
 
 .PHONY: all library pic test sanitize check analyze example docs docs-html docs-pdf \
 	docs-check docs-clean loader-library-contract shared-library-contracts \
