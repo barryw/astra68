@@ -1,3 +1,4 @@
+#include <astra/midi.h>
 #include <astra/pcm.h>
 #include <astra/pcm_service.h>
 #include <astra/runtime.h>
@@ -24,6 +25,8 @@ static uint8_t pending[65536];
 static uint32_t pending_bytes;
 static uint32_t converted_out;
 static int convert_ended;
+static int midi_mode;
+static uint32_t loads;
 
 uint32_t astra_rt_thread_sleep(uint64_t deadline_ns, uint32_t flags,
                                 uint32_t reserved, uint32_t *remaining_ns)
@@ -71,7 +74,8 @@ uint32_t astra_rt_handle_duplicate(uint32_t handle, uint32_t rights,
                                    uint32_t *duplicate)
 {
     assert(handle == 20u &&
-           ((rights & ASTRA_RIGHT_WRITE) != 0u) == (converting != 0));
+           ((rights & ASTRA_RIGHT_WRITE) != 0u) ==
+               (converting != 0 || midi_mode != 0));
     *duplicate = 21u;
     return ASTRA_SYSCALL_OK;
 }
@@ -91,10 +95,13 @@ uint32_t astra_port_send(uint32_t handle, const void *message,
     assert(count == (handle == 99u ? 2u : 0u));
     assert(handle != 99u ||
            ((const AstraPcmRequest *)message)->header.operation ==
-               (converting ? ASTRA_PCM_CONVERT_OPEN : ASTRA_PCM_OPEN));
+               (converting ? ASTRA_PCM_CONVERT_OPEN :
+                midi_mode ? ASTRA_PCM_MIDI_OPEN : ASTRA_PCM_OPEN));
     assert((count == 0u) == (handles == NULL));
     last_request = *(const AstraPcmRequest *)message;
     ++sends;
+    if (last_request.header.operation == ASTRA_PCM_MIDI_LOAD)
+        ++loads;
     if (last_request.header.operation == ASTRA_PCM_CONVERT) {
         assert(!convert_ended);
         for (uint32_t i = 0u; i < last_request.frames; ++i)
@@ -148,11 +155,14 @@ uint32_t astra_port_receive(uint32_t handle, void *message,
         reply->frames_out = converted_out / 2u;
         reply->queued_frames = pending_bytes / 2u;
     }
+    if (last_request.header.operation == ASTRA_PCM_MIDI_STATUS)
+        reply->value = 1u;
     reply->hardware_frames = 45u;
     *size = sizeof(*reply);
     *handle_count = (last_request.header.operation == ASTRA_PCM_OPEN ||
                      last_request.header.operation ==
-                         ASTRA_PCM_CONVERT_OPEN) &&
+                         ASTRA_PCM_CONVERT_OPEN ||
+                     last_request.header.operation == ASTRA_PCM_MIDI_OPEN) &&
                     reply_status == ASTRA_STATUS_OK ? 1u : 0u;
     if (*handle_count == 1u) {
         assert(handle_capacity == 1u && handles != NULL);
@@ -271,6 +281,33 @@ int main(void)
         assert(produced == 0u && convert_ended);
         assert(astra_pcm_convert(99u, 0u, source, 1u, to, target, 2u,
                                  &produced) == ASTRA_ERROR_INVALID_ARGUMENT);
+    }
+
+    /* MIDI: a song larger than one transfer goes in offset-ordered pieces
+     * naming the whole size; play, status and system fonts by name. */
+    {
+        static uint8_t file[20000];
+        AstraMidiSong song = ASTRA_MIDI_SONG_INIT;
+        int active = 0;
+
+        converting = 0;
+        midi_mode = 1;
+        assert(astra_midi_open(99u, &song) == ASTRA_OK);
+        assert(astra_midi_load(&song, file, sizeof(file)) == ASTRA_OK);
+        assert(loads == 3u && last_request.value == 16384u &&
+               last_request.target == sizeof(file) &&
+               last_request.frames == sizeof(file) - 16384u);
+        assert(astra_midi_play(&song, ASTRA_MIDI_FOREVER) == ASTRA_OK &&
+               last_request.value == ASTRA_PCM_MIDI_FOREVER);
+        assert(astra_midi_play(&song, 0) == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_midi_active(&song, &active) == ASTRA_OK && active == 1);
+        assert(astra_midi_add_system_font(&song, "TimGM6mb") == ASTRA_OK &&
+               last_request.frames == 8u &&
+               memcmp(shared, "TimGM6mb", 8u) == 0);
+        assert(astra_midi_add_system_font(&song, "") ==
+               ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_midi_close(&song) == ASTRA_OK &&
+               last_request.header.operation == ASTRA_PCM_CLOSE);
     }
     return 0;
 }

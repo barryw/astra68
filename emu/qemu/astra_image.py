@@ -39,6 +39,10 @@ DEFAULT_COMMANDS = os.path.join(REPOSITORY, "sw/userspace/commands/build/m68k")
 DEFAULT_VIM_RUNTIME = os.path.join(DEFAULT_COMMANDS, "vim-runtime")
 DEFAULT_STARTUP_SOUND = os.path.join(
     REPOSITORY, "sw/userspace/services/desktop/build/m68k/startup.pcm")
+# Astra's default SoundFont set (sw/userspace/services/media/fetch_soundfonts.py):
+# the fonts, their licences and the index the media service reads.
+DEFAULT_SOUNDFONTS = os.path.join(
+    REPOSITORY, "sw/userspace/services/media/build/soundfonts")
 DEFAULT_STARTUP_SOUND_SOURCE = os.path.join(
     REPOSITORY, "sw/userspace/services/desktop/assets/AstraStartup.wav")
 DEFAULT_STARTUP_SOUND_RENDERER = os.path.join(
@@ -175,7 +179,7 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/clipboard grants serves CLIPBOARD required\n"
     "service /services/display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ "
     "INPUT_SERVICE serves GUI critical\n"
-    "service /services/media grants HOST_DEVICE serves PCM\n"
+    "service /services/media grants HOST_DEVICE SYSTEM:r serves PCM\n"
     "service /services/desktop grants GUI APP_LAUNCH SERVICE_MANAGER APPS:r "
     "LIBS:r SYSTEM:r NETWORK NETWORK_LISTEN NTP PCM required\n"
     "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n")
@@ -869,6 +873,16 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
                      optional=True)
             _debugfs(volume, "write %s /media/startup.pcm" %
                      DEFAULT_STARTUP_SOUND, "the startup sound")
+
+        if service_names is not None and "media" in service_names:
+            _mkdir(volume, "/media", "the system media directory")
+            _mkdir(volume, "/media/soundfonts", "the SoundFont directory")
+            for name in sorted(os.listdir(DEFAULT_SOUNDFONTS)):
+                _debugfs(volume, "rm /media/soundfonts/%s" % name,
+                         "an old SoundFont file", optional=True)
+                _debugfs(volume, "write %s /media/soundfonts/%s" %
+                         (os.path.join(DEFAULT_SOUNDFONTS, name), name),
+                         "SoundFont file " + name)
 
         _mkdir(volume, "/%s" % LIBS_DIRECTORY,
                "the shared Kit directory")

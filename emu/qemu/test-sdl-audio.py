@@ -31,6 +31,8 @@ it.
 import argparse
 import collections
 import ctypes
+import fcntl
+import hashlib
 import importlib.util
 import os
 import shutil
@@ -57,12 +59,14 @@ astra_image = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(astra_image)
 
 # sw/include/astra/audio_host.h, host.h, pcm_format.h, status.h
-MAGIC, VERSION = 0x41554431, 3
-REQUEST = struct.Struct("=7I")
-REPLY = struct.Struct("=9I")
+MAGIC, VERSION = 0x41554431, 4
+REQUEST = struct.Struct("=8I")
+REPLY = struct.Struct("=10I")
 PACKET_FRAMES, QUEUE_FRAMES = 1024, 4096
 OPEN, WRITE, GAIN, STATUS, CLOSE, FINISH, PAUSE, CLEAR, CONVERT_OPEN, \
-    CONVERT = range(1, 11)
+    CONVERT, FONT_QUERY, FONT_BEGIN, FONT_DATA, FONT_END, MIDI_OPEN, \
+    MIDI_FONT, MIDI_LOAD, MIDI_PLAY, MIDI_STOP, MIDI_STATUS = range(1, 21)
+NOT_FOUND, MIDI_FOREVER = 2, 0xFFFFFFFF
 CONVERT_END = 1
 ROOT = os.path.dirname(os.path.dirname(HERE))
 
@@ -89,6 +93,59 @@ def converter_library(directory):
     loaded.astra_audio_converter_read.argtypes = [
         ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
     return loaded
+
+
+def synth_library(directory):
+    """The daemon's SoundFont synthesizer (astra_audio_synth.c) with the
+    pinned FluidSynth, built for this host."""
+    fluidsynth = os.path.join(ROOT, "build/fluidsynth-host")
+    archive = os.path.join(fluidsynth, "src/libfluidsynth.a")
+    # Gates run side by side; the build script starts with rm -rf.
+    os.makedirs(os.path.dirname(fluidsynth), exist_ok=True)
+    with open(fluidsynth + ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not os.path.exists(archive):
+            subprocess.run(["sh", os.path.join(ROOT,
+                                               "mk/build-fluidsynth.sh"),
+                            "host", fluidsynth], check=True,
+                           stdout=subprocess.DEVNULL)
+    library = os.path.join(directory, "astra_audio_synth.so")
+    source = os.environ.get("FLUIDSYNTH_ROOT",
+                            os.path.join(os.path.dirname(ROOT), "fluidsynth"))
+    subprocess.run(["cc", "-std=c11", "-O2", "-shared", "-fPIC",
+                    "-I" + os.path.join(ROOT, "sw/include"),
+                    "-I" + os.path.join(source, "include"),
+                    "-I" + os.path.join(fluidsynth, "include"),
+                    os.path.join(ROOT, "fpga/arty/linux/astra_audio_synth.c"),
+                    archive, "-lstdc++", "-lpthread", "-lm", "-o", library],
+                   check=True)
+    loaded = ctypes.CDLL(library)
+    loaded.astra_audio_synth_open.restype = ctypes.c_void_p
+    loaded.astra_audio_synth_open.argtypes = [ctypes.c_uint32]
+    for name, arguments in (
+            ("close", []), ("add_font", [ctypes.c_char_p]),
+            ("load", [ctypes.c_char_p, ctypes.c_uint32]),
+            ("play", [ctypes.c_int32]), ("pause", [ctypes.c_int]),
+            ("stop", []), ("active", []), ("status", []), ("ready", []),
+            ("read", [ctypes.c_void_p, ctypes.c_uint32])):
+        function = getattr(loaded, "astra_audio_synth_" + name)
+        function.argtypes = [ctypes.c_void_p] + arguments
+        function.restype = None if name == "close" else ctypes.c_uint32
+    loaded.astra_audio_synth_active.restype = ctypes.c_int
+    return loaded
+
+
+class Midi:
+    def __init__(self, handle, synth):
+        self.handle = handle
+        self.synth = synth
+        self.song = bytearray()
+        self.size = 0
+        self.gain = 65536
+        self.frames = 0
+        self.energy = 0.0
+        self.peak = 0.0
+        self.plays = 0
 # pcm_format.h: a format word is encoding | channels << 8 | rate << 12.
 S24LE, S16BE = 1, 2
 ENCODING_BYTES = {1: 3, 2: 2, 3: 1, 4: 1, 5: 2, 6: 2, 7: 2, 8: 4, 9: 4,
@@ -130,6 +187,21 @@ class AudioHost:
 
     def __init__(self, path):
         self.convert = converter_library(os.path.dirname(path))
+        self.synthesis = synth_library(os.path.dirname(path))
+        self.font_directory = os.path.join(os.path.dirname(path), "fonts")
+        os.makedirs(self.font_directory, exist_ok=True)
+        # As the release does, the host already holds the default set.
+        shipped = os.path.join(ROOT,
+                               "sw/userspace/services/media/build/soundfonts")
+        for name in os.listdir(shipped) if os.path.isdir(shipped) else ():
+            if name.endswith(".sf2"):
+                with open(os.path.join(shipped, name), "rb") as handle:
+                    body = handle.read()
+                with open(self.font_path(hashlib.sha256(body).digest()),
+                          "wb") as handle:
+                    handle.write(body)
+        self.uploads = {}
+        self.midis = {}
         self.converters = {}
         self.conversions = 0
         self.lock = threading.Lock()
@@ -156,6 +228,17 @@ class AudioHost:
             if frames > voice.queued and not voice.finished:
                 voice.gaps += 1
             voice.queued = max(0.0, voice.queued - frames)
+        # Synth voices are heard at the sink's rate: take what they have.
+        for midi in self.midis.values():
+            want = min(int(elapsed * RATE), 48000)
+            buffer = (ctypes.c_float * (2 * max(want, 1)))()
+            got = self.synthesis.astra_audio_synth_read(
+                midi.synth, ctypes.cast(buffer, ctypes.c_void_p), want)
+            if got:
+                left = numpy.frombuffer(buffer, dtype=numpy.float32)[:2 * got]
+                midi.frames += got
+                midi.energy += float(numpy.square(left).sum())
+                midi.peak = max(midi.peak, float(numpy.abs(left).max()))
 
     def accept(self):
         while not self.stopping:
@@ -179,16 +262,16 @@ class AudioHost:
             with self.lock:
                 self.drain()
                 reply, data = self.execute(mine, packet)
-            reply[8] = len(data)
+            reply[9] = len(data)
             client.send(REPLY.pack(*reply) + data)
 
     def execute(self, mine, packet):
-        reply = [MAGIC, OK, 0, 0, 0, 0, 0, 0, 0]
+        reply = [MAGIC, OK, 0, 0, 0, 0, 0, 0, 0, 0]
         if len(packet) < REQUEST.size:
             reply[1] = PROTOCOL
             return reply, b""
-        magic, version, operation, handle, value, value_hi, length = \
-            REQUEST.unpack_from(packet)
+        magic, version, operation, handle, value, value_hi, capacity, \
+            length = REQUEST.unpack_from(packet)
         self.requests[operation] += 1
         data = packet[REQUEST.size:]
         if (magic != MAGIC or version != VERSION or length != len(data)):
@@ -196,8 +279,14 @@ class AudioHost:
             return reply, b""
         if operation in (CONVERT_OPEN, CONVERT) or \
                 (operation == CLOSE and handle in self.converters):
-            return self.conversion(operation, handle, value, value_hi, data,
-                                   reply)
+            return self.conversion(operation, handle, value,
+                                   capacity if operation == CONVERT
+                                   else value_hi, data, reply)
+        if FONT_QUERY <= operation <= MIDI_STATUS or \
+                (operation in (CLOSE, GAIN, PAUSE) and
+                 (handle in self.midis or handle in self.uploads)):
+            return self.synth_request(operation, handle, value, value_hi,
+                                      data, reply)
         if value_hi:
             reply[1] = INVALID
             return reply, b""
@@ -238,8 +327,89 @@ class AudioHost:
         out = ctypes.create_string_buffer(value_hi)
         moved = self.convert.astra_audio_converter_read(converter, out,
                                                         value_hi)
-        reply[3] = self.convert.astra_audio_converter_ready(converter)
+        reply[4] = self.convert.astra_audio_converter_ready(converter)
         return reply, out.raw[:moved]
+
+    def font_path(self, digest):
+        return os.path.join(self.font_directory, digest.hex() + ".sf2")
+
+    def synth_request(self, operation, handle, value, value_hi, data, reply):
+        """Fonts and MIDI voices, judged as the daemon judges them."""
+        out = b""
+        midi = self.midis.get(handle)
+        if operation == FONT_QUERY:
+            if not os.path.exists(self.font_path(data)):
+                reply[1] = NOT_FOUND
+        elif operation == FONT_BEGIN:
+            self.next_handle += 1
+            self.uploads[self.next_handle] = [value, data, bytearray()]
+            reply[2] = self.next_handle
+        elif operation == FONT_DATA:
+            upload = self.uploads.get(handle)
+            if upload is None or value != len(upload[2]):
+                reply[1] = INVALID
+            else:
+                upload[2] += data
+        elif operation == FONT_END:
+            size, expected, body = self.uploads.pop(handle)
+            digest = hashlib.sha256(body).digest()
+            if len(body) != size or (expected and expected != digest):
+                reply[1] = INVALID
+            else:
+                with open(self.font_path(digest), "wb") as handle_:
+                    handle_.write(body)
+                out = digest
+        elif operation == MIDI_OPEN:
+            synth = self.synthesis.astra_audio_synth_open(RATE)
+            for at in range(0, len(data), 32):
+                path = self.font_path(data[at:at + 32])
+                if not os.path.exists(path):
+                    reply[1] = NOT_FOUND
+                    return reply, b""
+                self.synthesis.astra_audio_synth_add_font(synth,
+                                                          path.encode())
+            self.next_handle += 1
+            self.midis[self.next_handle] = Midi(self.next_handle, synth)
+            reply[2] = self.next_handle
+        elif midi is None and operation != CLOSE:
+            reply[1] = BAD_HANDLE
+        elif operation == MIDI_FONT:
+            path = self.font_path(data)
+            if not os.path.exists(path):
+                reply[1] = NOT_FOUND
+            else:
+                self.synthesis.astra_audio_synth_add_font(midi.synth,
+                                                          path.encode())
+        elif operation == MIDI_LOAD:
+            if value == 0:
+                midi.song, midi.size = bytearray(), value_hi
+            if value != len(midi.song) or value_hi != midi.size:
+                reply[1] = INVALID
+            else:
+                midi.song += data
+                if len(midi.song) == midi.size:
+                    self.synthesis.astra_audio_synth_load(
+                        midi.synth, bytes(midi.song), midi.size)
+        elif operation == MIDI_PLAY:
+            midi.plays += 1
+            reply[1] = self.synthesis.astra_audio_synth_play(
+                midi.synth, -1 if value == MIDI_FOREVER else value)
+        elif operation == MIDI_STOP:
+            self.synthesis.astra_audio_synth_stop(midi.synth)
+        elif operation == MIDI_STATUS:
+            reply[1] = self.synthesis.astra_audio_synth_status(midi.synth)
+            reply[3] = self.synthesis.astra_audio_synth_active(midi.synth)
+        elif operation == PAUSE:
+            self.synthesis.astra_audio_synth_pause(midi.synth, value)
+        elif operation == GAIN:
+            midi.gain = value
+        elif operation == CLOSE:
+            if handle in self.uploads:
+                del self.uploads[handle]
+            else:
+                self.synthesis.astra_audio_synth_close(
+                    self.midis.pop(handle).synth)
+        return reply, out
 
     def voice_request(self, mine, operation, handle, value, data, reply):
         voice = mine.get(handle)
@@ -267,9 +437,9 @@ class AudioHost:
             else:
                 voice.written += data
                 voice.queued += frames
-                reply[3] = int(voice.queued + 0.999)
+                reply[4] = int(voice.queued + 0.999)
         elif operation == STATUS:
-            reply[3] = int(voice.queued + 0.999)
+            reply[4] = int(voice.queued + 0.999)
         elif operation == FINISH:
             voice.finished = True
         elif operation == PAUSE:

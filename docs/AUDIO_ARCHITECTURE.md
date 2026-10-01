@@ -207,18 +207,51 @@ physical PCM gate merely to provide speculative API surface.
 
 ## MIDI synthesis, then speech
 
-Only after reliable PCM playback, add host-side synthesis as another source
-feeding the same mixer. Each synth voice has independent gain and pan, while
-MIDI channel volume and expression remain separate controls. The target is
-complete practical song playback: multiple MIDI channels, bank/program
-selection, velocity, pitch bend, sustain and other controllers, aftertouch,
-tempo changes, polyphony, and configurable SoundFonts with convincing reverb
-and chorus. A SoundFont-compatible engine such as FluidSynth is a candidate,
-not an ABI dependency or a substitute for DE25 CPU/memory measurements.
-Compare representative MIDI songs and overload behavior before choosing its
-default SoundFont, effect settings, or polyphony policy. Resource admission
-must be based on actual memory and deadline headroom rather than an arbitrary
-voice count.
+MIDI is the third host service on the audio channel (host audio protocol 4,
+PCM wire 4). The Linux daemon synthesizes Standard MIDI Files with a pinned,
+unmodified FluidSynth (v2.6.1, `mk/build-fluidsynth.sh`, static, no drivers
+and no glib) and mixes each song like any PCM voice, with the same gain,
+pause and close. The MC68040 sends a song once and nothing per note.
+
+- **Fonts are content-addressed.** The daemon names a SoundFont by the
+  SHA-256 of its bytes. `FONT_QUERY` asks whether it holds one;
+  `FONT_BEGIN`/`FONT_DATA`/`FONT_END` upload one in order and check size and
+  digest before keeping it under `StateDirectory=astra/soundfonts`. The DE25
+  release ships Astra's default set already named by digest
+  (`/var/lib/astra/current/soundfonts`), so the guest never sends it there.
+- **A MIDI voice is a stack of fonts.** `MIDI_OPEN` takes up to eight
+  digests, lowest first; `MIDI_FONT` adds one on top; a preset in a later
+  font hides the same bank and program in an earlier one. `MIDI_LOAD` takes
+  the song in pieces (at most 1 MiB), `MIDI_PLAY` a play count or forever,
+  `MIDI_STOP` ends it, and `MIDI_STATUS` says whether it still sounds.
+- **The feeder never waits on synthesis.** `astra_audio_synth.c` renders on
+  its own thread into a lock-free ring; loading a font, paging a sample in
+  (`synth.dynamic-sample-loading`) or rendering a dense passage cannot stall
+  HDMI. An empty ring is silence, not an underrun. FluidSynth runs with its
+  defaults: 256-voice polyphony, reverb and chorus on.
+- **The default set** is fetched pinned and checked by
+  `sw/userspace/services/media/fetch_soundfonts.py` (build inputs, never
+  repository files): GeneralUser GS v2.0.3, the default every voice uses, and
+  TimGM6mb, a compact General MIDI bank a program can ask for by name. The
+  image installs them with their licences and an index in
+  `/system/media/soundfonts`; the media service reads the index
+  (`SYSTEM:r`) and sends a font the host lacks the first time a voice needs
+  it.
+- **Applications** use pcm.library 2.3's `astra_midi_*`
+  (`ndk/include/astra/midi.h`). SDL_mixer's native MIDI backend
+  (`sw/userspace/sdl2/mixer/native_midi_astra.c`, `MUSIC_MID_NATIVE`) maps
+  `Mix_LoadMUS` of a MIDI file onto it, and fonts named through
+  `Mix_SetSoundFonts`/`SDL_SOUNDFONTS` stack on the default set. Chocolate
+  Doom's bundle sets `snd_musicdevice 8` (General MIDI), so its MUS lumps are
+  converted to MIDI and played on the host instead of in Nuked OPL3 on the
+  MC68040, which was about 75% of Doom's start-up profile on the DE25.
+
+The daemon's self-test uploads a font through the protocol, plays a note
+through the mixer and checks it is heard; the QEMU stand-in loads the same
+synthesizer as a shared object, and the Chocolate Doom gate requires host
+MIDI music with energy. Resource admission is still to be measured on the
+loaded DE25: memory per font stack and render time per voice against the
+feeder's deadline.
 
 Speech is last. It is an asynchronous host-generated PCM source with its own
 gain and cancellation, not work on the feeder or MC68040. Evaluate speech

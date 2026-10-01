@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 #define ASTRA_PCM_PROTOCOL UINT32_C(0x50434d31) /* PCM1 */
-#define ASTRA_PCM_PROTOCOL_VERSION UINT16_C(3)
+#define ASTRA_PCM_PROTOCOL_VERSION UINT16_C(4)
 
 enum {
     ASTRA_PCM_OPEN = 1u,
@@ -26,9 +26,25 @@ enum {
     /* frames source frames from the area (value ASTRA_PCM_CONVERT_END: no
      * more follow); the reply's frames_out target frames replace them in
      * the area, and queued_frames more are ready. */
-    ASTRA_PCM_CONVERT
+    ASTRA_PCM_CONVERT,
+    /* Factory: a MIDI voice with the default SoundFont set; the area is
+     * sent writable, as for CONVERT_OPEN. */
+    ASTRA_PCM_MIDI_OPEN,
+    /* frames bytes of a system font's name in the area. */
+    ASTRA_PCM_MIDI_SYSTEM_FONT,
+    /* frames bytes of a SoundFont or a Standard MIDI File at offset value
+     * of target bytes; the piece that reaches target ends it. */
+    ASTRA_PCM_MIDI_FONT,
+    ASTRA_PCM_MIDI_LOAD,
+    /* value plays, or ASTRA_PCM_MIDI_FOREVER. */
+    ASTRA_PCM_MIDI_PLAY,
+    ASTRA_PCM_MIDI_STOP,
+    /* The reply's value is nonzero while the song sounds. */
+    ASTRA_PCM_MIDI_STATUS
 };
 #define ASTRA_PCM_CONVERT_END 1u
+#define ASTRA_PCM_MIDI_FOREVER UINT32_C(0xffffffff)
+#define ASTRA_PCM_FONT_NAME_MAX 64u
 
 typedef struct AstraPcmRequest {
     AstraMessageHeader header;
@@ -46,9 +62,10 @@ typedef struct AstraPcmReply {
     uint32_t overflows;
     uint32_t software_gaps;
     uint32_t frames_out;
+    uint32_t value;
 } AstraPcmReply;
 
 _Static_assert(sizeof(AstraPcmRequest) == 36u, "PCM request ABI changed");
-_Static_assert(sizeof(AstraPcmReply) == 52u, "PCM reply ABI changed");
+_Static_assert(sizeof(AstraPcmReply) == 56u, "PCM reply ABI changed");
 
 #endif

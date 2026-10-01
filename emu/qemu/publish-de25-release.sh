@@ -71,7 +71,7 @@ make -C "$REPOSITORY/ndk" clean
 make -C "$REPOSITORY/tools" clean
 make -j "$JOBS" -C "$REPOSITORY/sw/userspace" all
 make -j "$JOBS" -C "$REPOSITORY/sw/boot" build/astra_boot.bin
-python3 "$SCRIPT_DIR/astra_image.py" --create "$STORAGE" 128
+python3 "$SCRIPT_DIR/astra_image.py" --create "$STORAGE" 256
 QEMU=$($SCRIPT_DIR/build.sh de25)
 
 source_manifest >"$SOURCE_AFTER"

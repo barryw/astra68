@@ -29,7 +29,7 @@ HOST_READ_TARGET := $(OUT)/astra-host-read-bench
 TIME_SYNC_TARGET := $(OUT)/astra-time-sync
 SPLASH_TARGET := $(OUT)/astra_boot_splash.rgb565
 TARGETS := $(BOOT_TARGET) $(STATUS_TARGET) $(SPRITE_TARGET) $(RENDER_TARGET) \
-	$(COPPER_TARGET) $(AUDIO_TARGET) $(AUDIO_HOST_TARGET) $(TERMINAL_TARGET) \
+	$(COPPER_TARGET) $(AUDIO_TARGET) $(TERMINAL_TARGET) \
 	$(TIME_SYNC_TARGET) $(SPLASH_TARGET)
 HOST_TEST_TARGETS := $(OUT)/test-astra-boot-text \
 	$(OUT)/test-astra-terminal-display $(OUT)/test-astra-audio \
@@ -40,7 +40,7 @@ HOST_TEST_TARGETS := $(OUT)/test-astra-boot-text \
 ifeq ($(PLATFORM),arty)
 TARGETS += $(HDMI_LINK_TARGET)
 else ifeq ($(PLATFORM),de25)
-TARGETS += $(CAPTURE_TARGET) $(HOST_READ_TARGET)
+TARGETS += $(CAPTURE_TARGET) $(HOST_READ_TARGET) $(AUDIO_HOST_TARGET)
 endif
 COMMON_SOURCES := astra_graphics_hw.c astra_boot_text.c
 COMMON_HEADERS := astra_graphics_hw.h astra_boot_text.h
@@ -133,14 +133,33 @@ $(AUDIO_TARGET): astra_audio_certify.c astra_graphics_hw.h
 	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections \
 	astra_audio_certify.c $(LDFLAGS) -o $@
 
-$(AUDIO_HOST_TARGET): astra_audio_host.c astra_audio_convert.c \
-		astra_audio_convert.h astra_graphics_hw.h \
-		$(ASTRA_INCLUDE)/astra/audio_host.h \
-		$(ASTRA_INCLUDE)/astra/pcm_format.h \
-		$(ASTRA_INCLUDE)/astra/host.h $(ASTRA_INCLUDE)/astra/status.h
+# The audio host's SoundFont synthesizer: pinned FluidSynth, built static
+# (mk/build-fluidsynth.sh). The daemon is DE25-only; it links against the
+# board's Jammy sysroot with libstdc++ static, which is newer here.
+FLUIDSYNTH_ROOT ?= $(abspath ../../../../fluidsynth)
+DE25_SYSROOT ?= $(HOME)/.cache/astra68/de25-jammy-arm64
+AUDIO_HOST_SOURCES := astra_audio_host.c astra_audio_convert.c \
+	astra_audio_synth.c astra_sha256.c
+AUDIO_HOST_HEADERS := astra_audio_convert.h astra_audio_synth.h \
+	astra_sha256.h $(ASTRA_INCLUDE)/astra/audio_host.h \
+	$(ASTRA_INCLUDE)/astra/pcm_format.h $(ASTRA_INCLUDE)/astra/host.h \
+	$(ASTRA_INCLUDE)/astra/status.h
+FLUIDSYNTH_BUILD := $(abspath $(OUT))/fluidsynth
+fluidsynth_include = -I$(FLUIDSYNTH_ROOT)/include -I$(FLUIDSYNTH_BUILD)/$(1)/include
+$(FLUIDSYNTH_BUILD)/%/src/libfluidsynth.a: ../../../mk/build-fluidsynth.sh
+	FLUIDSYNTH_ROOT=$(FLUIDSYNTH_ROOT) DE25_SYSROOT=$(DE25_SYSROOT) \
+		sh ../../../mk/build-fluidsynth.sh $* $(FLUIDSYNTH_BUILD)/$*
+
+$(AUDIO_HOST_TARGET): $(AUDIO_HOST_SOURCES) $(AUDIO_HOST_HEADERS) \
+		astra_graphics_hw.h astra_glibc_compat.c \
+		$(FLUIDSYNTH_BUILD)/de25/src/libfluidsynth.a
 	@mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections \
-		astra_audio_host.c astra_audio_convert.c $(LDFLAGS) -lm -o $@
+	$(CC) $(CFLAGS) --sysroot=$(DE25_SYSROOT) $(call fluidsynth_include,de25) \
+		-ffunction-sections -fdata-sections $(AUDIO_HOST_SOURCES) \
+		astra_glibc_compat.c \
+		$(FLUIDSYNTH_BUILD)/de25/src/libfluidsynth.a $(LDFLAGS) \
+		-static-libstdc++ -static-libgcc -Wl,-Bstatic -lstdc++ \
+		-Wl,-Bdynamic -lpthread -lm -o $@
 
 $(HDMI_LINK_TARGET): astra_hdmi_link.c
 	mkdir -p $(OUT)
@@ -198,6 +217,7 @@ analyze: astra_render_protocol.h $(GRAPHICS_FONT_HEADERS)
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_audio_certify.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_audio_host.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_audio_convert.c
+	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_sha256.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_hdmi_link.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_time_sync.c
 	$(CC) $(CFLAGS) -I. -I$(OUT) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
@@ -211,7 +231,8 @@ test-host: $(HOST_TEST_TARGETS)
 	$(OUT)/test-astra-boot-text
 	$(OUT)/test-astra-terminal-display --self-test
 	$(OUT)/test-astra-audio --self-test
-	$(OUT)/test-astra-audio-host --self-test
+	ASTRA_AUDIO_TEST_SOUNDFONT=$(FLUIDSYNTH_ROOT)/sf2/VintageDreamsWaves-v2.sf2 \
+		$(OUT)/test-astra-audio-host --self-test
 	$(OUT)/test-astra-hdmi-link --self-test
 	$(OUT)/test-astra-graphics-platform
 	$(OUT)/test-astra-graphics-platform-de25
@@ -245,13 +266,12 @@ $(OUT)/test-astra-audio: astra_audio_certify.c
 	mkdir -p $(OUT)
 	$(HOSTCC) $(CFLAGS) astra_audio_certify.c -o $@
 
-$(OUT)/test-astra-audio-host: astra_audio_host.c astra_audio_convert.c \
-		astra_audio_convert.h \
-		$(ASTRA_INCLUDE)/astra/audio_host.h \
-		$(ASTRA_INCLUDE)/astra/pcm_format.h \
-		$(ASTRA_INCLUDE)/astra/host.h $(ASTRA_INCLUDE)/astra/status.h
+$(OUT)/test-astra-audio-host: $(AUDIO_HOST_SOURCES) $(AUDIO_HOST_HEADERS) \
+		$(FLUIDSYNTH_BUILD)/host/src/libfluidsynth.a
 	@mkdir -p $(OUT)
-	$(HOSTCC) $(CFLAGS) astra_audio_host.c astra_audio_convert.c -lm -o $@
+	$(HOSTCC) $(CFLAGS) $(call fluidsynth_include,host) $(AUDIO_HOST_SOURCES) \
+		$(FLUIDSYNTH_BUILD)/host/src/libfluidsynth.a -lstdc++ -lpthread \
+		-lm -o $@
 
 $(OUT)/test-astra-hdmi-link: astra_hdmi_link.c
 	mkdir -p $(OUT)

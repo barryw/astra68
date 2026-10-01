@@ -102,9 +102,37 @@ enum {
     ASTRA_HOST_AUDIO_PAUSE,
     ASTRA_HOST_AUDIO_CLEAR,
     ASTRA_HOST_AUDIO_CONVERT_OPEN,
-    ASTRA_HOST_AUDIO_CONVERT
+    ASTRA_HOST_AUDIO_CONVERT,
+    ASTRA_HOST_AUDIO_FONT_QUERY,
+    ASTRA_HOST_AUDIO_FONT_BEGIN,
+    ASTRA_HOST_AUDIO_FONT_DATA,
+    ASTRA_HOST_AUDIO_FONT_END,
+    ASTRA_HOST_AUDIO_MIDI_OPEN,
+    ASTRA_HOST_AUDIO_MIDI_FONT,
+    ASTRA_HOST_AUDIO_MIDI_LOAD,
+    ASTRA_HOST_AUDIO_MIDI_PLAY,
+    ASTRA_HOST_AUDIO_MIDI_STOP,
+    ASTRA_HOST_AUDIO_MIDI_STATUS
 };
 #define ASTRA_HOST_AUDIO_CONVERT_END 1u
+
+/* SoundFonts and MIDI synthesis on the host. A SoundFont is named by the
+ * SHA-256 of its bytes. FONT_QUERY (data: the digest) succeeds when the
+ * host holds it. FONT_BEGIN (value_lo: size; data: the digest, or none to
+ * have the host compute it) opens an upload handle; FONT_DATA (value_lo:
+ * offset) carries the bytes in order; FONT_END checks size and digest,
+ * keeps the font, and returns its digest as data. MIDI_OPEN (data: up to
+ * ASTRA_HOST_MIDI_FONTS_MAX digests, each later font above the earlier)
+ * opens a synth voice; MIDI_FONT (data: a digest) adds one more font on
+ * top; MIDI_LOAD (value_lo: offset, value_hi: total size) takes a Standard
+ * MIDI File in order; MIDI_PLAY (value_lo: plays, ASTRA_HOST_MIDI_FOREVER
+ * repeats); PAUSE, GAIN and CLOSE act as on a PCM voice; MIDI_STOP ends
+ * the song; MIDI_STATUS returns 1 in result_value while it sounds. */
+#define ASTRA_HOST_AUDIO_DIGEST_BYTES 32u
+#define ASTRA_HOST_MIDI_FONTS_MAX 8u
+#define ASTRA_HOST_MIDI_SONG_MAX (1u << 20)
+#define ASTRA_HOST_FONT_MAX (128u << 20)
+#define ASTRA_HOST_MIDI_FOREVER UINT32_C(0xffffffff)
 
 typedef struct AstraHostAudioStatus {
     uint32_t queued_frames;

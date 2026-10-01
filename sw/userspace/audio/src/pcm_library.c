@@ -6,7 +6,9 @@
 
 #include <string.h>
 
-static int stream_open(const AstraPcmStream *stream)
+#include "pcm_session.h"
+
+int astra_pcm_session_valid(const AstraPcmStream *stream)
 {
     return stream != NULL && stream->control != 0u && stream->reply != 0u &&
            stream->area != 0u && stream->mapped != NULL &&
@@ -60,14 +62,15 @@ static AstraResult receive_reply(AstraPcmStream *stream,
     return astra_result_from_service(reply->status);
 }
 
-static AstraResult exchange(AstraPcmStream *stream, uint32_t operation,
-                            uint32_t frames, uint32_t value,
-                            AstraPcmReply *reply)
+AstraResult astra_pcm_session_exchange(AstraPcmStream *stream,
+                                       uint32_t operation, uint32_t frames,
+                                       uint32_t value, uint32_t target,
+                                       AstraPcmReply *reply)
 {
     AstraPcmRequest request = {0};
     uint32_t status;
 
-    if (!stream_open(stream))
+    if (!astra_pcm_session_valid(stream))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     ++stream->transaction;
     if (stream->transaction == 0u)
@@ -77,6 +80,7 @@ static AstraResult exchange(AstraPcmStream *stream, uint32_t operation,
                              operation, stream->transaction);
     request.frames = frames;
     request.value = value;
+    request.target = target;
     status = astra_port_send(stream->control, &request, sizeof(request),
                              NULL, 0u);
     if (status != ASTRA_SYSCALL_OK)
@@ -86,9 +90,9 @@ static AstraResult exchange(AstraPcmStream *stream, uint32_t operation,
 
 /* Opens a voice (OPEN, @p target 0) or a converter (CONVERT_OPEN): a
  * converter's service writes its output back into the transfer area. */
-static AstraResult session_open(AstraHandle service, uint32_t operation,
-                                uint32_t format, uint32_t target,
-                                AstraPcmStream *stream)
+AstraResult astra_pcm_session_open(AstraHandle service, uint32_t operation,
+                                   uint32_t format, uint32_t target,
+                                   AstraPcmStream *stream)
 {
     AstraPcmRequest request = {0};
     AstraPcmReply reply = {0};
@@ -129,8 +133,9 @@ static AstraResult session_open(AstraHandle service, uint32_t operation,
     status = astra_rt_handle_duplicate(stream->area,
                                         ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP |
                                         ASTRA_RIGHT_TRANSFER |
-                                        (target != 0u ? ASTRA_RIGHT_WRITE :
-                                         0u), &area_send);
+                                        (operation != ASTRA_PCM_OPEN ?
+                                         ASTRA_RIGHT_WRITE : 0u),
+                                        &area_send);
     if (status != ASTRA_SYSCALL_OK) {
         result = astra_result_from_syscall(status);
         goto fail;
@@ -167,7 +172,7 @@ fail:
 AstraResult astra_pcm_open(AstraHandle service, uint32_t format,
                            AstraPcmStream *stream)
 {
-    return session_open(service, ASTRA_PCM_OPEN, format, 0u, stream);
+    return astra_pcm_session_open(service, ASTRA_PCM_OPEN, format, 0u, stream);
 }
 
 /* Copies the frames_out target frames a CONVERT reply left in the area to
@@ -214,7 +219,7 @@ AstraResult astra_pcm_convert(AstraHandle service, uint32_t source_format,
                astra_pcm_format_rate(source_format);
     if (expected > target_capacity)
         return ASTRA_ERROR_BUFFER_TOO_SMALL;
-    result = session_open(service, ASTRA_PCM_CONVERT_OPEN, source_format,
+    result = astra_pcm_session_open(service, ASTRA_PCM_CONVERT_OPEN, source_format,
                           target_format, &stream);
     if (result != ASTRA_OK)
         return result;
@@ -231,9 +236,10 @@ AstraResult astra_pcm_convert(AstraHandle service, uint32_t source_format,
             (void)memcpy(stream.mapped, from + (size_t)sent * source_bytes,
                          (size_t)batch * source_bytes);
         }
-        result = exchange(&stream, ASTRA_PCM_CONVERT, batch,
-                          sent + batch == source_frames ?
-                          ASTRA_PCM_CONVERT_END : 0u, &reply);
+        result = astra_pcm_session_exchange(
+            &stream, ASTRA_PCM_CONVERT, batch,
+            sent + batch == source_frames ? ASTRA_PCM_CONVERT_END : 0u, 0u,
+            &reply);
         if (result == ASTRA_OK)
             result = take_output(&stream, &reply, target_bytes, target,
                                  target_capacity, &produced);
@@ -259,7 +265,7 @@ AstraResult astra_pcm_write(AstraPcmStream *stream, const void *frames,
 
     if (accepted != NULL)
         *accepted = 0u;
-    if (!stream_open(stream) || accepted == NULL ||
+    if (!astra_pcm_session_valid(stream) || accepted == NULL ||
         (frames == NULL && frame_count != 0u) ||
         frame_count > UINT32_MAX / stream->frame_bytes)
         return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -271,7 +277,8 @@ AstraResult astra_pcm_write(AstraPcmStream *stream, const void *frames,
         (void)memcpy(stream->mapped,
                      source + (size_t)done * stream->frame_bytes,
                      batch * stream->frame_bytes);
-        result = exchange(stream, ASTRA_PCM_WRITE, batch, 0u, &reply);
+        result = astra_pcm_session_exchange(stream, ASTRA_PCM_WRITE, batch, 0u,
+                                      0u, &reply);
         if (result != ASTRA_OK)
             return result;
         done += batch;
@@ -284,22 +291,24 @@ AstraResult astra_pcm_gain(AstraPcmStream *stream, uint32_t gain_q16)
 {
     AstraPcmReply reply = {0};
 
-    return exchange(stream, ASTRA_PCM_GAIN, 0u, gain_q16, &reply);
+    return astra_pcm_session_exchange(stream, ASTRA_PCM_GAIN, 0u, gain_q16,
+                                      0u, &reply);
 }
 
 AstraResult astra_pcm_pause(AstraPcmStream *stream, int paused)
 {
     AstraPcmReply reply = {0};
 
-    return exchange(stream, ASTRA_PCM_PAUSE, 0u, paused != 0 ? 1u : 0u,
-                    &reply);
+    return astra_pcm_session_exchange(stream, ASTRA_PCM_PAUSE, 0u,
+                                      paused != 0 ? 1u : 0u, 0u, &reply);
 }
 
 AstraResult astra_pcm_clear(AstraPcmStream *stream)
 {
     AstraPcmReply reply = {0};
 
-    return exchange(stream, ASTRA_PCM_CLEAR, 0u, 0u, &reply);
+    return astra_pcm_session_exchange(stream, ASTRA_PCM_CLEAR, 0u, 0u,
+                                      0u, &reply);
 }
 
 AstraResult astra_pcm_status(AstraPcmStream *stream, AstraPcmStatus *status)
@@ -309,7 +318,8 @@ AstraResult astra_pcm_status(AstraPcmStream *stream, AstraPcmStatus *status)
 
     if (status == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    result = exchange(stream, ASTRA_PCM_STATUS, 0u, 0u, &reply);
+    result = astra_pcm_session_exchange(stream, ASTRA_PCM_STATUS, 0u, 0u,
+                                      0u, &reply);
     if (result == ASTRA_OK) {
         status->queued_frames = reply.queued_frames;
         status->hardware_frames = reply.hardware_frames;
@@ -322,7 +332,7 @@ AstraResult astra_pcm_status(AstraPcmStream *stream, AstraPcmStatus *status)
 
 AstraResult astra_pcm_wait(AstraPcmStream *stream, uint32_t frame_count)
 {
-    if (!stream_open(stream) || frame_count == 0u ||
+    if (!astra_pcm_session_valid(stream) || frame_count == 0u ||
         frame_count > ASTRA_PCM_QUEUE_FRAMES)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     for (;;) {
@@ -350,7 +360,8 @@ AstraResult astra_pcm_finish(AstraPcmStream *stream)
 {
     AstraPcmReply reply = {0};
 
-    return exchange(stream, ASTRA_PCM_FINISH, 0u, 0u, &reply);
+    return astra_pcm_session_exchange(stream, ASTRA_PCM_FINISH, 0u, 0u,
+                                      0u, &reply);
 }
 
 AstraResult astra_pcm_close(AstraPcmStream *stream)
@@ -358,9 +369,10 @@ AstraResult astra_pcm_close(AstraPcmStream *stream)
     AstraPcmReply reply = {0};
     AstraResult result;
 
-    if (!stream_open(stream))
+    if (!astra_pcm_session_valid(stream))
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    result = exchange(stream, ASTRA_PCM_CLOSE, 0u, 0u, &reply);
+    result = astra_pcm_session_exchange(stream, ASTRA_PCM_CLOSE, 0u, 0u,
+                                      0u, &reply);
     release(stream);
     return result;
 }

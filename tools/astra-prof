@@ -596,7 +596,7 @@ def command_de25_boot(args):
                 timed_checked(
                     "coherent storage image",
                     [sys.executable, str(root / "emu/qemu/astra_image.py"),
-                     "--create", temporary_storage, "128"],
+                     "--create", temporary_storage, "256"],
                     text=True, capture_output=True)
                 os.replace(temporary_storage, cached_storage)
             finally:

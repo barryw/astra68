@@ -11,7 +11,7 @@
 #define ASTRA_AUDIO_HOST_SOCKET "/run/astra/audio.sock"
 #define ASTRA_AUDIO_HOST_LOCK "/run/astra/audio.lock"
 #define ASTRA_AUDIO_HOST_MAGIC UINT32_C(0x41554431) /* AUD1 */
-#define ASTRA_AUDIO_HOST_VERSION 3u
+#define ASTRA_AUDIO_HOST_VERSION 4u
 #define ASTRA_AUDIO_HOST_FRAME_BYTES ASTRA_PCM_MAX_FRAME_BYTES
 #define ASTRA_AUDIO_HOST_PACKET_FRAMES 1024u
 #define ASTRA_AUDIO_HOST_QUEUE_FRAMES ASTRA_PCM_QUEUE_FRAMES
@@ -24,18 +24,24 @@ typedef struct AstraAudioHostRequest {
     uint32_t operation;
     uint32_t handle;
     uint32_t value;
-    /* CONVERT_OPEN: the target format; CONVERT: the reply's capacity. */
+    /* CONVERT_OPEN: the target format; MIDI_LOAD: the song's size. */
     uint32_t value_hi;
+    /* Bytes the reply may carry back (CONVERT, FONT_END). */
+    uint32_t capacity;
     uint32_t data_length;
 } AstraAudioHostRequest;
 
 /* A reply carries data_length bytes after it in the same packet: a
- * CONVERT's converted frames, and nothing for every other operation. */
+ * CONVERT's converted frames, FONT_END's digest, nothing otherwise. */
 
 typedef struct AstraAudioHostReply {
     uint32_t magic;
     uint32_t status;
+    /* A new handle (OPEN, CONVERT_OPEN, FONT_BEGIN, MIDI_OPEN). */
     uint32_t handle;
+    /* Any other operation's result word (MIDI_STATUS: nonzero while the
+     * song sounds). */
+    uint32_t value;
     uint32_t queued_frames;
     uint32_t hardware_frames;
     uint32_t underruns;
@@ -52,9 +58,9 @@ typedef struct AstraAudioHostMonitorPacket {
     uint8_t pcm[ASTRA_AUDIO_HOST_MONITOR_FRAMES * 4u];
 } AstraAudioHostMonitorPacket;
 
-_Static_assert(sizeof(AstraAudioHostRequest) == 28u,
+_Static_assert(sizeof(AstraAudioHostRequest) == 32u,
                "audio host request layout changed");
-_Static_assert(sizeof(AstraAudioHostReply) == 36u,
+_Static_assert(sizeof(AstraAudioHostReply) == 40u,
                "audio host reply layout changed");
 _Static_assert(sizeof(AstraAudioHostMonitorPacket) == 1932u,
                "audio monitor packet layout changed");

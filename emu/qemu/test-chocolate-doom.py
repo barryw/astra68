@@ -162,8 +162,10 @@ def main():
                     raise RuntimeError("a process faulted: %r" %
                                        machine.said(0)[0][-30:])
                 if time.monotonic() >= deadline:
-                    raise RuntimeError("Doom rendered %d batches: %r" %
-                                       (len(batches.times), story(log)))
+                    raise RuntimeError("Doom rendered %d batches (host "
+                                       "audio requests %r): %r" %
+                                       (len(batches.times),
+                                        dict(host.requests), story(log)))
                 time.sleep(0.1)
             time.sleep(arguments.seconds)
             if faults(machine):
@@ -192,15 +194,29 @@ def main():
                 conversions = host.conversions
             if conversions == 0:
                 raise RuntimeError("Doom converted no sound on the host")
+            # Its music is MIDI on the host's SoundFont synthesizer, not
+            # OPL on the MC68040: a song played and was heard.
+            with host.lock:
+                host.drain()
+                songs = [m for m in host.midis.values() if m.plays]
+                music_frames = sum(m.frames for m in songs)
+                music_energy = sum(m.energy for m in songs)
+                music_peak = max((m.peak for m in songs), default=0.0)
+            if not songs or music_frames == 0 or music_energy == 0.0:
+                raise RuntimeError("no MIDI music from the host synthesizer "
+                                   "(%d songs, %d frames)" %
+                                   (len(songs), music_frames))
             play_and_quit(machine, log)
             if faults(machine):
                 raise RuntimeError("a process faulted: %r" %
                                    machine.said(0)[0][-30:])
             print("Chocolate Doom QEMU: PASS (%.1f render batches/s over "
                   "%.0f s; %d audio frames at 44.1 kHz, peak %d; %d effects "
-                  "converted on the host; played from the keyboard, quit "
-                  "through ENDOOM; no faults)"
-                  % (rate, arguments.seconds, frames, loud, conversions))
+                  "converted on the host; %.1f s of host MIDI music, peak "
+                  "%.2f of full scale; played "
+                  "from the keyboard, quit through ENDOOM; no faults)"
+                  % (rate, arguments.seconds, frames, loud, conversions,
+                     music_frames / 48000.0, music_peak))
         finally:
             machine.close()
             host.close()

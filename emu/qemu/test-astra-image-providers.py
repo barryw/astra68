@@ -50,12 +50,12 @@ assert astra_image.PCM_CERTIFY_STARTUP_MANIFEST == \
     astra_image.DISPLAY_STARTUP_MANIFEST + \
     "application /services/pcm-certify grants PCM LIBS:r\n"
 assert "media" in astra_image.DISPLAY_SERVICES
-assert "service /services/media grants HOST_DEVICE serves PCM\n" in \
+assert "service /services/media grants HOST_DEVICE SYSTEM:r serves PCM\n" in \
     astra_image.DISPLAY_STARTUP_MANIFEST
 assert "NETWORK NETWORK_LISTEN NTP PCM required\n" in \
     astra_image.DISPLAY_STARTUP_MANIFEST
 assert "APPS:r LIBS:r SYSTEM:r" in astra_image.DISPLAY_STARTUP_MANIFEST
-assert "service /services/media grants HOST_DEVICE serves PCM required" not in \
+assert "service /services/media grants HOST_DEVICE SYSTEM:r serves PCM required" not in \
     astra_image.PCM_CERTIFY_STARTUP_MANIFEST
 assert "service /services/storage" in astra_image.PCM_CERTIFY_STARTUP_MANIFEST
 assert "fault-probe" not in astra_image.DISPLAY_SERVICES

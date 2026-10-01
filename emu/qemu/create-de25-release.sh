@@ -34,6 +34,14 @@ make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux" \
     CROSS_COMPILE=aarch64-linux-gnu- DE25_SYSROOT="$DE25_SYSROOT" \
     remote-desktop
 
+# The default SoundFont set, named by digest as the audio host keeps fonts,
+# so the guest never sends it (fpga/arty/linux/astra_audio_host.c).
+SOUNDFONTS=$REPOSITORY/sw/userspace/services/media/build/soundfonts
+set --
+while read -r digest size file name role; do
+    set -- "$@" "soundfonts/$digest.sf2=$SOUNDFONTS/$file"
+done <"$SOUNDFONTS/index"
+
 PYTHONDONTWRITEBYTECODE=1 python3 "$RELEASE_TOOL" create "$OUTPUT" \
     "qemu/bin/qemu-system-m68k-astra=$QEMU" \
     "qemu/lib/libpixman-1.so.0=$(readlink -f "$LIBDIR/libpixman-1.so.0")" \
@@ -50,4 +58,5 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$RELEASE_TOOL" create "$OUTPUT" \
     "systemd/astra-remote-desktop.service=$REMOTE_DESKTOP_UNIT" \
     "bin/astra-input-hotplug.py=$SCRIPT_DIR/astra-input-hotplug.py" \
     "bin/run-arty.sh=$SCRIPT_DIR/run-arty.sh" \
-    "bin/astra-release.py=$RELEASE_TOOL"
+    "bin/astra-release.py=$RELEASE_TOOL" \
+    "$@"

@@ -57,7 +57,8 @@ SDL_MIXER_SOURCES := src/codecs/load_aiff.c src/codecs/load_voc.c \
 	src/codecs/music_xmp.c src/codecs/remap_channels.c \
 	src/effect_position.c src/effect_stereoreverse.c \
 	src/effects_internal.c src/mixer.c src/music.c src/utils.c
-SDL_MIXER_OBJECTS := $(patsubst %.c,build/m68k/mixer/%.o,$(SDL_MIXER_SOURCES))
+SDL_MIXER_OBJECTS := $(patsubst %.c,build/m68k/mixer/%.o,$(SDL_MIXER_SOURCES)) \
+	build/m68k/mixer/astra/native_midi_astra.o
 SDL_MIXER_IDENTITY := build/m68k/library_identity_mixer.o
 SDL_MIXER_EXPORTS := build/m68k/SDL2_mixer.library.exports
 SDL_MIXER_UNDEFINED := build/m68k/SDL2_mixer.library.undefined
@@ -273,9 +274,19 @@ build/m68k/mixer/%.o: $(SDL_MIXER_STAMP) Makefile
 		-Ibuild/vendor/SDL2_mixer/src \
 		-Ibuild/vendor/SDL2_mixer/src/codecs \
 		-DBUILD_SDL=1 -DMUSIC_WAV=1 -DMUSIC_OGG=1 -DOGG_USE_STB=1 \
-		-DMUSIC_MP3_MINIMP3=1 -DMUSIC_FLAC_DRFLAC=1 \
+		-DMUSIC_MP3_MINIMP3=1 -DMUSIC_FLAC_DRFLAC=1 -DMUSIC_MID_NATIVE=1 \
 		-std=c11 -Wall -Wextra $(ASTRA_POSIX_CFLAGS) \
 		-c build/vendor/SDL2_mixer/$*.c -o $@
+
+# MIDI music plays on the Linux audio host's SoundFont synthesizer.
+build/m68k/mixer/astra/native_midi_astra.o: mixer/native_midi_astra.c \
+		$(SDL_MIXER_STAMP) Makefile
+	@mkdir -p $(@D)
+	$(TARGET_CC) $(ASTRA_POSIX_CPPFLAGS) \
+		-Ibuild/vendor/SDL2/include -Ibuild/vendor/SDL2_mixer/include \
+		-Ibuild/vendor/SDL2_mixer/src/codecs \
+		-std=c11 -Wall -Wextra -Werror $(ASTRA_POSIX_CFLAGS) \
+		-c $< -o $@
 
 $(SDL_MIXER_IDENTITY): library_identity_mixer.c Makefile
 	@mkdir -p $(@D)
@@ -294,7 +305,8 @@ $(SDL_MIXER_EXPORTS) $(SDL_MIXER_UNDEFINED) &: $(SDL_MIXER_OBJECTS) \
 
 $(SDL_MIXER_SHARED): $(SDL_MIXER_IDENTITY) $(SDL_MIXER_OBJECTS) \
 		$(SDL_MIXER_EXPORTS) $(SDL_MIXER_UNDEFINED) $(SDL2_SHARED) \
-		$(ASTRA_SHARED_LINK_INPUTS) $(ASTRA_LIBC_LIBRARY)
+		$(ASTRA_SHARED_LINK_INPUTS) $(ASTRA_LIBC_LIBRARY) \
+		$(ASTRA_PCM_LIBRARY)
 	@mkdir -p $(@D)
 	$(TARGET_CC) $(ASTRA_ABI_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
 		-Wl,-soname,SDL2_mixer.library.2 \
@@ -302,7 +314,8 @@ $(SDL_MIXER_SHARED): $(SDL_MIXER_IDENTITY) $(SDL_MIXER_OBJECTS) \
 		-Wl,@$(SDL_MIXER_UNDEFINED) -o $@ \
 		$(SDL_MIXER_IDENTITY) $(SDL_MIXER_OBJECTS) \
 		$(ASTRA_SHARED_LIBRARY_SEARCH_FLAGS) -Wl,--no-as-needed \
-		-Wl,-l:SDL2.library.2 -Wl,-l:libc.library.2 \
+		-Wl,-l:SDL2.library.2 -Wl,-l:pcm.library.2 \
+		-Wl,-l:libc.library.2 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1 \
 		$(ASTRA_SHARED_LINK_END)
 

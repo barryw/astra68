@@ -28,9 +28,9 @@ SDL2 build uses SDL_audiolib: their sound-effect mixing remains in those
 libraries until host-backed adapters are measured and built. The native mixer
 already isolates multiple PCM streams, but reusable/looping samples, pan,
 host-side resampling, accurate completion, and broader physical timing gates
-remain before the system is game-ready. Wavetable and speech engines will
-ultimately supply PCM into this same mixer; neither engine is implemented by
-this PCM library.
+remain before the system is game-ready. MIDI music plays on the host's
+SoundFont synthesizer into this same mixer ([MIDI music](midi.md)); a speech
+engine will follow the same way.
 
 `astra_pcm_convert` (pcm.library 2.2) converts a buffer between any two
 format words on the Linux host: decoding, the mixer's windowed-sinc

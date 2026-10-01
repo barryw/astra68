@@ -21,3 +21,17 @@ ASTRA_PCM_2.2 {
     global:
         astra_pcm_convert;
 } ASTRA_PCM_2.1;
+
+ASTRA_PCM_2.3 {
+    global:
+        astra_midi_open;
+        astra_midi_add_system_font;
+        astra_midi_add_font;
+        astra_midi_load;
+        astra_midi_play;
+        astra_midi_pause;
+        astra_midi_stop;
+        astra_midi_gain;
+        astra_midi_active;
+        astra_midi_close;
+} ASTRA_PCM_2.2;

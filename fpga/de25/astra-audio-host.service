@@ -16,6 +16,8 @@ CPUAffinity=0
 Nice=-5
 RuntimeDirectory=astra
 RuntimeDirectoryPreserve=yes
+# SoundFonts the guest has sent, kept by digest across restarts.
+StateDirectory=astra/soundfonts
 UMask=0077
 NoNewPrivileges=true
 ProtectSystem=strict
