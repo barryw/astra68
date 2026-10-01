@@ -707,6 +707,10 @@ static void init_content_banks(DisplayWindow *window)
     window->content_pending_shown = DISPLAY_CONTENT_NONE;
 }
 
+/* New content geometry: every bank is rewritten whole, so no bank keeps a
+   stale region of the old geometry. One that did would carry a rectangle
+   past a smaller window into the next copy-forward blit, which the DE25
+   blitter refuses (BAD_RANGE). */
 static void reset_content(DisplayWindow *window)
 {
     window->content_initialized = 0u;
@@ -714,6 +718,8 @@ static void reset_content(DisplayWindow *window)
     window->content_damage = (DamageRect){
         0, 0, window->request.width, window->request.height, 1u
     };
+    for (uint32_t bank = 0u; bank < DISPLAY_CONTENT_BANKS; ++bank)
+        window->content_stale[bank] = (DamageRect){0};
     dirty_cache(window);
 }
 

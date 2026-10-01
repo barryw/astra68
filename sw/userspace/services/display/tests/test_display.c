@@ -1342,6 +1342,78 @@ static void test_content_banks(void)
     assert(read_be32(batch + 12u) != 0u && state.overlay_pending != 0u);
 }
 
+/* Every BLIT reads inside its source surface: the FPGA blitter refuses a
+   source rectangle past the surface (BAD_RANGE) where QEMU's clips it. */
+static int batch_blits_within_sources(void)
+{
+    uint32_t count = read_be32(batch + 12u);
+    uint32_t commands = ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
+                        ASTRA_RENDER_BATCH_ARENA_OFFSET;
+
+    for (uint32_t index = 0u; index < count; ++index) {
+        const uint8_t *command = batch + commands +
+                                 index * ASTRA_RENDER_COMMAND_BYTES;
+        uint32_t source = read_be32(command + 36u);
+        uint32_t extent;
+        uint32_t origin;
+        uint32_t size;
+
+        if ((read_be32(command + 4u) >> 16) != ASTRA_RENDER_OP_BLIT)
+            continue;
+        assert(source >= ASTRA_RENDER_BATCH_ARENA_OFFSET);
+        extent = read_be32(batch + source - ASTRA_RENDER_BATCH_ARENA_OFFSET +
+                           20u);
+        origin = read_be32(command + 44u);
+        size = read_be32(command + 52u);
+        if ((origin >> 16) + (size >> 16) > (extent >> 16) ||
+            (origin & 0xffffu) + (size & 0xffffu) > (extent & 0xffffu))
+            return 0;
+    }
+    return 1;
+}
+
+/* A window that leaves full screen keeps no damage from its larger self:
+   the next frame's carry-forward copies only what the window now has. */
+static void test_shrunk_window_copy_forward(void)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    DisplayWindow windows[TEST_WINDOW_COUNT] = {0};
+    DisplayState state = {
+        .windows = windows,
+        .capacity = TEST_WINDOW_COUNT,
+        .damage = {
+            {0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u},
+            {0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u}
+        }
+    };
+    AstraGuiWindowCommand fullscreen = {
+        .window = 1u, .action = ASTRA_GUI_WINDOW_FULLSCREEN,
+    };
+    AstraGuiWindowCommand restore = {
+        .window = 1u, .action = ASTRA_GUI_WINDOW_RESTORE,
+    };
+    DisplayWindow closed = {0};
+    int changed = 0;
+
+    add_window(&state, 0u, ASTRA_WINDOW_STANDARD, 100u, 100u, 800u, 600u,
+               ASTRA_WINDOW_ACTIVE, 0u);
+    state.windows[0].request.content_format = ASTRA_WINDOW_CONTENT_SURFACE;
+    compose_commit(&state, 1u);
+    assert(apply_command(&state, &theme, &fullscreen, &closed, &changed) ==
+           ASTRA_STATUS_OK && changed);
+    compose_commit(&state, 2u);
+    assert(present_content(&state, 0u, 0u, 0u, 0u, 0u, 0u) ==
+           ASTRA_STATUS_OK);
+    compose_commit(&state, 3u);
+    assert(apply_command(&state, &theme, &restore, &closed, &changed) ==
+           ASTRA_STATUS_OK && changed);
+    assert(state.windows[0].request.width == 800u &&
+           state.windows[0].request.height == 600u);
+    compose_commit(&state, 4u);
+    assert(batch_blit_count() != 0u);
+    assert(batch_blits_within_sources());
+}
+
 int main(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -3016,6 +3088,7 @@ int main(void)
         assert(compose(batch, 2u, &rgb, &error, NULL, 0) == 0u);
         assert(error == ASTRA_STATUS_PROTOCOL);
     }
+    test_shrunk_window_copy_forward();
     puts("display compositor tests passed");
     return 0;
 }

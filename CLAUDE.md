@@ -165,6 +165,14 @@ There is no alternative CPU or emulator implementation in the repository.
   returns, and the render engine sits BUSY until the FPGA is reconfigured.
   `astra_render_host_reads` splits host bursts to 32 beats. Any new FPGA
   master to HPS DDR must do the same.
+- **QEMU's renderer clips a blit the DE25 blitter refuses.** A BLIT whose
+  source rectangle runs past its source surface draws fine under every
+  QEMU gate and comes back `BAD_RANGE` (fault detail `0x00010001`) on the
+  board, which the display reports as `display request refused by the
+  device:2` and the client as a failed present. Find the command with
+  `ASTRA_DISPLAY_STALL_DUMP=/data/stall` in a drop-in for `astra.service`;
+  the dump is the refused batch. A window that left full screen once
+  carried its old size this way and froze Doom's first frame.
 - **Acknowledge a shared completion interrupt before scanning, never
   after.** QEMU's host-channel acknowledgement clears every channel's
   pending bit, so a completion published between a scan and a later ack
