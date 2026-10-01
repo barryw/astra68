@@ -140,6 +140,11 @@ pressed, and focus transitions; applications retain only semantic enablement.
   the program offers.
 - An application whose bundle says `single-instance` runs once: opening it
   again restores and raises its windows through its GUI session.
+- Opening an application shows its launch panel -- icon and name, over the
+  windows -- at once. It goes when the application presents its first frame
+  through its GUI session, or when the session ends. The supervisor names
+  the session (`AstraGuiOpenSession`); a session it does not name shows no
+  panel.
 - Minimize will place a window in the system shelf when shelf policy exists.
 - `astra_window_close` destroys the server object immediately. A separate
   application-veto close-request event may be added with pointer routing; it

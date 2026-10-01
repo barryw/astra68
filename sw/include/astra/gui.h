@@ -13,7 +13,7 @@
 /** GUI service wire protocol tag. */
 #define ASTRA_GUI_PROTOCOL UINT32_C(0x47554920) /* GUI  */
 /** Current GUI service wire protocol version. */
-#define ASTRA_GUI_VERSION 16u
+#define ASTRA_GUI_VERSION 17u
 
 /** Maximum counted UTF-8 bytes in a window title. */
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
@@ -286,7 +286,11 @@ _Static_assert(sizeof(AstraWindowEvent) == 52u,
    of the shared GUI port, so the display knows which windows are whose.
    OPEN_SESSION carries a reply capability and is answered by
    SESSION_OPENED with the session's send capability. SESSION_ACTIVATE,
-   sent through a session, restores and raises its windows. */
+   sent through a session, restores and raises its windows.
+   OPEN_SESSION names the application being launched -- a name, and its
+   AICON in a second handle when icon_length is nonzero -- and the display
+   shows a launch panel for it until the session's first WINDOW_PRESENT or
+   the session's end. An unnamed session shows nothing. */
 #define ASTRA_GUI_OPEN_SESSION     8u
 #define ASTRA_GUI_SESSION_OPENED   9u
 #define ASTRA_GUI_SESSION_ACTIVATE 10u
@@ -374,6 +378,14 @@ typedef struct AstraGuiSessionRequest {
     AstraMessageHeader header;
 } AstraGuiSessionRequest;
 
+typedef struct AstraGuiOpenSession {
+    AstraMessageHeader header;
+    uint16_t name_length;
+    uint16_t reserved16;
+    char name[ASTRA_WINDOW_TITLE_MAX];
+    uint32_t icon_length;
+} AstraGuiOpenSession;
+
 typedef struct AstraGuiSessionOpened {
     AstraMessageHeader header;
     uint32_t status;
@@ -451,10 +463,16 @@ typedef struct AstraGuiGraphicsReply {
 #define ASTRA_GUI_GRAPHICS_REPLY_SIZE 40u
 #define ASTRA_GUI_SESSION_REQUEST_SIZE ASTRA_MESSAGE_HEADER_SIZE
 #define ASTRA_GUI_SESSION_OPENED_SIZE (ASTRA_MESSAGE_HEADER_SIZE + 8u)
+#define ASTRA_GUI_OPEN_SESSION_SIZE \
+    (ASTRA_MESSAGE_HEADER_SIZE + 8u + ASTRA_WINDOW_TITLE_MAX)
 
 _Static_assert(sizeof(AstraGuiSessionRequest) ==
                    ASTRA_GUI_SESSION_REQUEST_SIZE,
                "GUI session request is an ABI");
+_Static_assert(sizeof(AstraGuiOpenSession) == ASTRA_GUI_OPEN_SESSION_SIZE &&
+                   ASTRA_GUI_OPEN_SESSION_SIZE != ASTRA_GUI_OPEN_WINDOW_SIZE &&
+                   ASTRA_GUI_OPEN_SESSION_SIZE <= ASTRA_GUI_OPEN_WINDOW_SIZE,
+               "GUI open-session message is an ABI and fits the GUI port");
 _Static_assert(sizeof(AstraGuiSessionOpened) ==
                    ASTRA_GUI_SESSION_OPENED_SIZE,
                "GUI session-opened message is an ABI");

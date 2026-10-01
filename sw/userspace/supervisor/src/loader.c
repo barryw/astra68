@@ -673,35 +673,107 @@ static int entry_grants(const SupervisorManifestEntry *entry,
     return 0;
 }
 
+/* A read-only copy of @p bytes in a fresh area, for another process. */
+static uint32_t bytes_area(const void *bytes, uint32_t length,
+                           uint32_t *transferred)
+{
+    uint32_t area = 0u;
+    uint32_t mapped = 0u;
+    void *mapping = NULL;
+    uint32_t status;
+
+    *transferred = 0u;
+    status = astra_rt_area_create(
+        length, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+        ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &area);
+    if (status != ASTRA_SYSCALL_OK)
+        return ASTRA_STATUS_LIMIT;
+    status = astra_rt_area_map(area,
+                               ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                               &mapping, &mapped);
+    if (status == ASTRA_SYSCALL_OK && mapped >= length)
+        (void)memcpy(mapping, bytes, length);
+    else if (status == ASTRA_SYSCALL_OK)
+        status = ASTRA_SYSCALL_BUFFER_TOO_SMALL;
+    if (mapping != NULL && astra_rt_area_unmap(mapping) != ASTRA_SYSCALL_OK &&
+        status == ASTRA_SYSCALL_OK)
+        status = ASTRA_SYSCALL_IO_ERROR;
+    if (status == ASTRA_SYSCALL_OK)
+        status = astra_rt_handle_duplicate(
+            area, ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
+            transferred);
+    (void)astra_close(area);
+    return status == ASTRA_SYSCALL_OK ? ASTRA_STATUS_OK : ASTRA_STATUS_IO;
+}
+
+/* The bundle of the application pump_launch is launching, so its GUI
+   session can name it; NULL for every other launch. */
+static const AstraBundleManifest *launch_bundle;
+
 /* The GUI session opened for the launch in progress, granted to the child
    in place of the shared GUI port; launch_entry gives it to the process
    record, or closes it when the launch fails. One launch at a time. */
 static uint32_t launch_session;
 
+/* The launch panel's name and icon: the bundle's name, cut to a whole
+   UTF-8 character, and its AICON. An icon that cannot be read leaves the
+   panel without one; it never fails the launch. */
+static void name_gui_session(const char *bundle_path,
+                             AstraGuiOpenSession *request, uint32_t *icon)
+{
+    char path[ASTRA_VFS_PATH_MAX] = "";
+    void *bytes = NULL;
+    uint32_t length = 0u;
+
+    *icon = 0u;
+    if (launch_bundle == NULL)
+        return;
+    while (length < ASTRA_WINDOW_TITLE_MAX &&
+           launch_bundle->name[length] != '\0')
+        ++length;
+    while (length != 0u &&
+           ((uint8_t)launch_bundle->name[length] & 0xc0u) == 0x80u)
+        --length;
+    (void)memcpy(request->name, launch_bundle->name, length);
+    request->name_length = (uint16_t)length;
+    if (launch_bundle->icon[0] == '\0' ||
+        !astra_string_concat(path, sizeof(path), bundle_path) ||
+        !astra_string_concat(path, sizeof(path), "/") ||
+        !astra_string_concat(path, sizeof(path), launch_bundle->icon) ||
+        supervisor_vfs_read_alloc(path, &bytes, &length) != ASTRA_VFS_OK)
+        return;
+    if (length != 0u && bytes_area(bytes, length, icon) == ASTRA_STATUS_OK)
+        request->icon_length = length;
+    astra_runtime_deallocate(bytes);
+}
+
 /* A private GUI door for one application, so the display knows its
    windows as its own. Bounded: a display that does not answer leaves the
    application on the shared port rather than holding up its launch. */
-static uint32_t open_gui_session(uint32_t gui, uint32_t *session)
+static uint32_t open_gui_session(uint32_t gui, const char *bundle_path,
+                                 uint32_t *session)
 {
-    AstraGuiSessionRequest request = {0};
+    AstraGuiOpenSession request = {0};
     AstraGuiSessionOpened reply = {0};
     uint32_t receive = 0u;
-    uint32_t send = 0u;
+    uint32_t send[2] = {0u, 0u};
     uint32_t handle = 0u;
     uint32_t size = 0u;
     uint32_t handles = 0u;
     uint32_t status;
 
     *session = 0u;
-    status = astra_rt_port_create(1u, sizeof(reply), &receive, &send);
+    status = astra_rt_port_create(1u, sizeof(reply), &receive, &send[0]);
     if (status != ASTRA_SYSCALL_OK)
         return ASTRA_STATUS_LIMIT;
+    name_gui_session(bundle_path, &request, &send[1]);
     astra_message_header_set(&request.header, sizeof(request),
                              ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
                              ASTRA_GUI_OPEN_SESSION, 1u);
-    status = astra_port_send(gui, &request, sizeof(request), &send, 1u);
+    status = astra_port_send(gui, &request, sizeof(request), send,
+                             send[1] != 0u ? 2u : 1u);
     if (status == ASTRA_SYSCALL_OK)
-        send = 0u;
+        send[0] = send[1] = 0u;
     if (status == ASTRA_SYSCALL_OK)
         status = astra_wait_one(receive,
                                 astra_clock_monotonic() +
@@ -720,8 +792,9 @@ static uint32_t open_gui_session(uint32_t gui, uint32_t *session)
     }
     if (handle != 0u)
         (void)astra_close(handle);
-    if (send != 0u)
-        (void)astra_close(send);
+    for (uint32_t index = 0u; index < 2u; ++index)
+        if (send[index] != 0u)
+            (void)astra_close(send[index]);
     (void)astra_close(receive);
     return status == ASTRA_SYSCALL_OK ? ASTRA_STATUS_OK : ASTRA_STATUS_IO;
 }
@@ -795,7 +868,8 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                     strcmp(wanted->name, ASTRA_CAPABILITY_GUI) == 0 &&
                     strncmp(entry->path, "/apps/", 6u) == 0 &&
                     launch_session == 0u &&
-                    open_gui_session(published, &launch_session) ==
+                    open_gui_session(published, entry->path,
+                                     &launch_session) ==
                         ASTRA_STATUS_OK)
                     published = launch_session;
                 if (published != 0u) {
@@ -1941,38 +2015,6 @@ static uint32_t list_service(const AstraServiceListCursor *cursor,
     }
 }
 
-static uint32_t definition_area(const AstraServiceDefinition *definition,
-                                uint32_t *transferred)
-{
-    uint32_t area = 0u;
-    uint32_t bytes = 0u;
-    void *mapping = NULL;
-    uint32_t status;
-
-    *transferred = 0u;
-    status = astra_rt_area_create(
-        sizeof(*definition), ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
-        ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &area);
-    if (status != ASTRA_SYSCALL_OK)
-        return ASTRA_STATUS_LIMIT;
-    status = astra_rt_area_map(area,
-                               ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
-                               &mapping, &bytes);
-    if (status == ASTRA_SYSCALL_OK && bytes >= sizeof(*definition))
-        (void)memcpy(mapping, definition, sizeof(*definition));
-    else if (status == ASTRA_SYSCALL_OK)
-        status = ASTRA_SYSCALL_BUFFER_TOO_SMALL;
-    if (mapping != NULL && astra_rt_area_unmap(mapping) != ASTRA_SYSCALL_OK &&
-        status == ASTRA_SYSCALL_OK)
-        status = ASTRA_SYSCALL_IO_ERROR;
-    if (status == ASTRA_SYSCALL_OK)
-        status = astra_rt_handle_duplicate(
-            area, ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
-            transferred);
-    (void)astra_close(area);
-    return status == ASTRA_SYSCALL_OK ? ASTRA_STATUS_OK : ASTRA_STATUS_IO;
-}
-
 static void manager_reply(uint32_t reply_send, uint32_t transaction,
                           uint32_t status, const AstraServiceInfo *info,
                           const AstraServiceListCursor *next_cursor,
@@ -1983,7 +2025,7 @@ static void manager_reply(uint32_t reply_send, uint32_t transaction,
     uint32_t area_count = 0u;
 
     if (status == ASTRA_STATUS_OK && definition != NULL) {
-        status = definition_area(definition, &area);
+        status = bytes_area(definition, sizeof(*definition), &area);
         area_count = status == ASTRA_STATUS_OK ? 1u : 0u;
     }
     astra_message_header_set(&reply.header, sizeof(reply),
@@ -2476,7 +2518,6 @@ static void pump_launch(const AstraStartupInfo *startup)
         }
         ++entry.grant_count;
     }
-    astra_bundle_manifest_destroy(&bundle);
     if (status == ASTRA_STATUS_OK) {
         const SupervisorManifestEntry *ceiling = trusted_ceiling(entry.path);
 
@@ -2503,15 +2544,18 @@ static void pump_launch(const AstraStartupInfo *startup)
             launch_arguments.source = request.arguments.source;
             launch_arguments.argument_address =
                 (uint32_t)(uintptr_t)request.arguments.bytes;
+            launch_bundle = &bundle;
             status = launch_entry(startup, &entry, NULL, bundle_root,
                                   &launch_arguments, source.length, open_us,
                                   astra_vfs_read_source_read_at,
                                   astra_vfs_read_source_close, &source,
                                   &process_id, &process_wait_handle);
+            launch_bundle = NULL;
         } else {
             status = launch_open_status(status);
         }
     }
+    astra_bundle_manifest_destroy(&bundle);
     if (status != ASTRA_STATUS_OK)
         (void)astra_log_failure("application launch", status);
     launch_reply(reply_send, request.header.transaction_id, status,

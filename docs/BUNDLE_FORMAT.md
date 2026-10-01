@@ -159,7 +159,10 @@ does not make all installed applications appear automatically. The desktop
 uses its 64x64 strike and launches the bundle on a primary-button
 double-click. A titled application window uses the bundle's 16x16 strike at
 the left of the title text; the display service, not the application, renders
-that chrome.
+that chrome. While an application starts, the display shows a launch panel
+with its 64x64 strike and its manifest `name`, from the moment the
+supervisor opens its GUI session until the application presents its first
+frame or exits. The application does nothing for it.
 
 ## 5. Copy, move, Trash, and dependencies
 

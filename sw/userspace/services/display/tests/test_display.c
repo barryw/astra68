@@ -1372,6 +1372,164 @@ static int batch_blits_within_sources(void)
     return 1;
 }
 
+#define TEST_AICON_BYTES (88u + 16u * 16u + 32u * 32u + 64u * 64u)
+
+static void store_be16(uint8_t *at, uint16_t value)
+{
+    at[0] = (uint8_t)(value >> 8);
+    at[1] = (uint8_t)value;
+}
+
+static void store_be32(uint8_t *at, uint32_t value)
+{
+    store_be16(at, (uint16_t)(value >> 16));
+    store_be16(at + 2u, (uint16_t)value);
+}
+
+/* A two-color AICON: palette 0 transparent, 1 opaque green; the 64 strike
+   green in its left half. */
+static void build_aicon(uint8_t *bytes)
+{
+    static const uint16_t sizes[3] = {16u, 32u, 64u};
+    uint32_t data = 88u;
+
+    memset(bytes, 0, TEST_AICON_BYTES);
+    store_be32(bytes, ASTRA_AICON_MAGIC);
+    store_be16(bytes + 4u, ASTRA_AICON_VERSION);
+    store_be16(bytes + 6u, ASTRA_AICON_HEADER_SIZE);
+    store_be32(bytes + 8u, TEST_AICON_BYTES);
+    store_be16(bytes + 12u, ASTRA_AICON_REQUIRED_STRIKES);
+    store_be16(bytes + 14u, 2u);
+    store_be32(bytes + 16u, 32u);
+    store_be32(bytes + 20u, 40u);
+    store_be32(bytes + 24u, 88u);
+    bytes[36] = 0x20u;
+    bytes[37] = 0xc0u;
+    bytes[38] = 0x40u;
+    bytes[39] = 0xffu;
+    for (uint32_t strike = 0u; strike < 3u; ++strike) {
+        uint8_t *record = bytes + 40u + strike * ASTRA_AICON_STRIKE_SIZE;
+        uint32_t count = (uint32_t)sizes[strike] * sizes[strike];
+
+        store_be16(record, sizes[strike]);
+        store_be16(record + 2u, sizes[strike]);
+        store_be32(record + 4u, data);
+        store_be32(record + 8u, count);
+        for (uint32_t at = 0u; at < count; ++at)
+            bytes[data + at] = at % sizes[strike] < sizes[strike] / 2u;
+        data += count;
+    }
+}
+
+/* A named session shows its launch panel over the windows until a window
+   of that session presents, or the session ends. */
+static void test_launch_panel(void)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    DisplayWindow windows[TEST_WINDOW_COUNT] = {0};
+    DisplayState state = {
+        .windows = windows,
+        .capacity = TEST_WINDOW_COUNT,
+        .damage = {
+            {0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u},
+            {0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u}
+        }
+    };
+    AstraGuiOpenSession named = {
+        .header = {
+            .total_size = sizeof(AstraGuiOpenSession),
+            .header_size = ASTRA_MESSAGE_HEADER_SIZE,
+            .protocol = ASTRA_GUI_PROTOCOL,
+            .protocol_version = ASTRA_GUI_VERSION,
+            .operation = ASTRA_GUI_OPEN_SESSION,
+            .transaction_id = 1u,
+        },
+        .name_length = 4u,
+        .name = "Doom",
+    };
+    const uint32_t rights =
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP;
+    uint32_t icon = 0u;
+    uint32_t closes;
+    uint32_t none = 0u;
+
+    assert(valid_open_session(&named, sizeof(named), 1u));
+    assert(!valid_open_session(&named, sizeof(named), 2u));
+    assert(!valid_open_session(&named, sizeof(AstraGuiSessionRequest), 1u));
+    named.name[0] = (char)0xff;
+    assert(!valid_open_session(&named, sizeof(named), 1u));
+    named.name[0] = 'D';
+    named.name_length = ASTRA_WINDOW_TITLE_MAX + 1u;
+    assert(!valid_open_session(&named, sizeof(named), 1u));
+    named.name_length = 4u;
+    named.icon_length = TEST_AICON_BYTES;
+    assert(valid_open_session(&named, sizeof(named), 2u));
+    assert(!valid_open_session(&named, sizeof(named), 1u));
+
+    assert(astra_rt_area_create(TEST_AICON_BYTES, rights, &icon) ==
+           ASTRA_SYSCALL_OK);
+    build_aicon(test_areas[icon - 0x800u]);
+    begin_launch(&state, &named, 5u, &icon);
+    assert(icon == 0u && state.launch.session == 5u &&
+           state.launch.icon_bytes != NULL &&
+           state.launch.strike.width == DISPLAY_LAUNCH_ICON);
+    compose_commit(&state, 1u);
+    /* The bars, then the panel; its icon blended over the panel. */
+    assert(read_be32(batch_scene() + 20u) == 3u);
+    assert(batch_scene_layer_source(2u) == state.launch_offset);
+    assert(state.launch_drawn == 5u);
+    assert(launch_icon_pixels[0] == astra_surface_rgb565(0x20, 0xc0, 0x40));
+    assert(launch_icon_pixels[DISPLAY_LAUNCH_ICON - 1u] ==
+           color(theme.title_inactive));
+
+    /* Its window opens under the panel: no frame yet, the panel stays. */
+    add_window(&state, 0u, ASTRA_WINDOW_STANDARD, 100u, 100u, 200u, 150u,
+               ASTRA_WINDOW_ACTIVE, 0u);
+    state.windows[0].session = 5u;
+    for (uint32_t bank = 0u; bank < DISPLAY_CONTENT_BANKS; ++bank)
+        assert(!media_extents_overlap(state.windows[0].content_offset[bank],
+                                      state.windows[0].content_bytes,
+                                      state.launch_offset,
+                                      state.launch_capacity));
+    damage_both(&state, (DamageRect){0, 0, 10, 10, 1u});
+    compose_commit(&state, 2u);
+    assert(state.launch.session == 5u);
+    assert(batch_scene_layer_source(read_be32(batch_scene() + 20u) - 1u) ==
+           state.launch_offset);
+
+    /* A window of another session drawing leaves it. */
+    state.windows[0].session = 6u;
+    assert(present_content(&state, 0u, 0u, 0u, 0u, 0u, 0u) ==
+           ASTRA_STATUS_OK);
+    assert(state.launch.session == 5u);
+
+    /* Its own first frame ends it, and gives the icon back. */
+    state.windows[0].session = 5u;
+    closes = test_area_closes;
+    assert(present_content(&state, 0u, 0u, 0u, 0u, 0u, 0u) ==
+           ASTRA_STATUS_OK);
+    assert(state.launch.session == 0u && state.launch.icon_bytes == NULL &&
+           test_area_closes == closes + 1u);
+    compose_commit(&state, 3u);
+    assert(batch_scene_layer_source(read_be32(batch_scene() + 20u) - 1u) !=
+           state.launch_offset);
+
+    /* An unnamed session shows nothing; a named one without an icon shows
+       its name alone, until its session ends. */
+    named.icon_length = 0u;
+    begin_launch(&state, &named, 9u, &none);
+    assert(state.launch.session == 9u && state.launch.icon_bytes == NULL);
+    compose_commit(&state, 4u);
+    assert(state.launch_drawn == 9u);
+    assert(astra_rt_area_create(4096u, rights, &state.session_receive[0]) ==
+           ASTRA_SYSCALL_OK);
+    state.session_id[0] = 9u;
+    state.session_count = 1u;
+    close_session(&state, 0u);
+    assert(state.session_count == 0u && state.launch.session == 0u);
+    compose_commit(&state, 5u);
+}
+
 /* A window that leaves full screen keeps no damage from its larger self:
    the next frame's carry-forward copies only what the window now has. */
 static void test_shrunk_window_copy_forward(void)
@@ -3088,6 +3246,7 @@ int main(void)
         assert(compose(batch, 2u, &rgb, &error, NULL, 0) == 0u);
         assert(error == ASTRA_STATUS_PROTOCOL);
     }
+    test_launch_panel();
     test_shrunk_window_copy_forward();
     puts("display compositor tests passed");
     return 0;

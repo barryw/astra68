@@ -44,6 +44,12 @@
 #define DISPLAY_MENU_ROW_PITCH 40
 #define DISPLAY_MENU_TRIGGER_RIGHT 104
 #define DISPLAY_APP_TITLE_X 116
+#define DISPLAY_LAUNCH_WIDTH 280u
+#define DISPLAY_LAUNCH_HEIGHT 176u
+#define DISPLAY_LAUNCH_ICON 64u
+#define DISPLAY_LAUNCH_ICON_TOP 24
+#define DISPLAY_LAUNCH_NAME_TOP 104
+#define DISPLAY_LAUNCH_STATUS_TOP 136
 
 enum {
     DISPLAY_OVERLAY_NONE = 0u,
@@ -155,6 +161,18 @@ typedef struct DisplayWindow {
     DamageRect content_stale[DISPLAY_CONTENT_BANKS];
 } DisplayWindow;
 
+/* The launch panel: an application the supervisor is starting, shown from
+   its named GUI session until that session's first present or its end. */
+typedef struct DisplayLaunch {
+    uint32_t session;
+    uint32_t icon_area;
+    void *icon_bytes;
+    AstraAicon icon;
+    AstraAiconStrike strike;
+    uint16_t name_length;
+    char name[ASTRA_WINDOW_TITLE_MAX];
+} DisplayLaunch;
+
 typedef struct DisplayState {
     DisplayWindow *windows;
     uint32_t windows_area;
@@ -200,6 +218,16 @@ typedef struct DisplayState {
     uint8_t overlay_drawn;
     uint8_t overlay_drawn_hover;
     uint8_t overlay_pending;
+    /* ponytail: one panel, the newest launch's; a launch started while
+       another loads takes the panel over. A stack of them if that matters. */
+    DisplayLaunch launch;
+    uint32_t launch_offset;
+    uint32_t launch_capacity;
+    uint32_t launch_resource;
+    /* The session whose panel the launch surface holds, and whether this
+       compose drew it. */
+    uint32_t launch_drawn;
+    uint8_t launch_pending;
     uint8_t swallow_pointer_up;
     uint8_t pending_input_valid;
     uint32_t pending_input_window;
@@ -415,6 +443,8 @@ static uint32_t display_media_allocate(const DisplayState *state,
         }
         next = media_advance_extent(offset, bytes, state->overlay_offset,
                                     state->overlay_capacity, next);
+        next = media_advance_extent(offset, bytes, state->launch_offset,
+                                    state->launch_capacity, next);
         if (next == offset)
             return offset;
         offset = align_media_bytes(next);
@@ -557,6 +587,16 @@ static uint32_t display_system_media_prepare(DisplayState *state)
             return ASTRA_STATUS_LIMIT;
         state->overlay_capacity = bytes;
     }
+    if (state->launch.session != 0u && state->launch_capacity == 0u) {
+        uint32_t bytes = align_media_bytes(
+            DISPLAY_LAUNCH_WIDTH * DISPLAY_LAUNCH_HEIGHT * 2u);
+
+        state->launch_offset = display_media_allocate(
+            state, NULL, UINT32_MAX, bytes);
+        if (state->launch_offset == 0u)
+            return ASTRA_STATUS_LIMIT;
+        state->launch_capacity = bytes;
+    }
     return ASTRA_STATUS_OK;
 }
 
@@ -667,6 +707,29 @@ static void set_overlay(DisplayState *state, uint8_t overlay)
     damage_both(state, (DamageRect){DISPLAY_MENU_X, 0,
                                    DISPLAY_MENU_TRIGGER_RIGHT, DISPLAY_WORK_TOP,
                                    1u});
+}
+
+static DamageRect launch_bounds(void)
+{
+    int32_t x = (int32_t)(ASTRA_DISPLAY_WIDTH - DISPLAY_LAUNCH_WIDTH) / 2;
+    int32_t y = (int32_t)DISPLAY_WORK_TOP +
+                (int32_t)(DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP -
+                          DISPLAY_LAUNCH_HEIGHT) / 2;
+
+    return (DamageRect){x, y, x + (int32_t)DISPLAY_LAUNCH_WIDTH,
+                        y + (int32_t)DISPLAY_LAUNCH_HEIGHT, 1u};
+}
+
+static void end_launch(DisplayState *state)
+{
+    if (state->launch.session == 0u)
+        return;
+    if (state->launch.icon_bytes != NULL)
+        (void)astra_rt_area_unmap(state->launch.icon_bytes);
+    if (state->launch.icon_area != 0u)
+        (void)astra_close(state->launch.icon_area);
+    state->launch = (DisplayLaunch){0};
+    damage_both(state, launch_bounds());
 }
 
 static void damage_window(DisplayState *state, const AstraTheme *theme,
@@ -1798,6 +1861,103 @@ static int build_overlay_surface(AstraRenderBuilder *builder,
     return 1;
 }
 
+static uint8_t launch_blend(uint8_t over, uint8_t under, uint8_t alpha)
+{
+    return (uint8_t)(((uint32_t)over * alpha +
+                      (uint32_t)under * (255u - alpha) + 127u) / 255u);
+}
+
+static uint16_t launch_icon_pixels[DISPLAY_LAUNCH_ICON * DISPLAY_LAUNCH_ICON];
+
+/* The icon's 64-pixel strike over the panel, blended by palette alpha:
+   one upload, however many colors the icon has. */
+static void launch_icon_compose(const DisplayLaunch *launch,
+                                AstraColorRGBA8 under)
+{
+    uint16_t palette[256];
+
+    for (uint16_t index = 0u; index < launch->icon.palette_count; ++index) {
+        uint8_t rgba[4] = {0u, 0u, 0u, 0u};
+
+        (void)astra_aicon_palette(&launch->icon, index, rgba);
+        palette[index] = astra_surface_rgb565(
+            launch_blend(rgba[0], under.red, rgba[3]),
+            launch_blend(rgba[1], under.green, rgba[3]),
+            launch_blend(rgba[2], under.blue, rgba[3]));
+    }
+    /* astra_aicon_open bounds every index by the palette. */
+    for (uint32_t at = 0u; at < DISPLAY_LAUNCH_ICON * DISPLAY_LAUNCH_ICON;
+         ++at)
+        launch_icon_pixels[at] = palette[launch->strike.pixels[at]];
+}
+
+static int launch_text(AstraRenderBuilder *builder, uint32_t destination,
+                       int32_t y, const char *text, uint32_t length,
+                       uint16_t height, uint16_t color, uint32_t style)
+{
+    uint32_t width;
+
+    length = astra_surface_ui_text_fit(text, length, height,
+                                       DISPLAY_LAUNCH_WIDTH - 32u);
+    width = astra_surface_ui_text_width(text, length, height);
+    return astra_render_builder_text_styled(
+        builder, destination,
+        (int32_t)(DISPLAY_LAUNCH_WIDTH - width) / 2, y, text, length,
+        height, color, style);
+}
+
+static int build_launch_surface(AstraRenderBuilder *builder,
+                                DisplayState *state, const AstraTheme *theme)
+{
+    const DisplayLaunch *launch = &state->launch;
+    uint16_t width = DISPLAY_LAUNCH_WIDTH;
+    uint16_t height = DISPLAY_LAUNCH_HEIGHT;
+
+    state->launch_pending = 0u;
+    if (launch->session == 0u)
+        return 1;
+    state->launch_resource = astra_render_builder_surface_at(
+        builder, state->launch_offset, state->launch_capacity,
+        width, height);
+    if (state->launch_resource == 0u)
+        return 0;
+    /* The surface keeps its pixels: draw a launch once. */
+    if (state->launch_drawn == launch->session)
+        return 1;
+    state->launch_pending = 1u;
+    if (!astra_render_builder_rounded(
+            builder, state->launch_resource, 0, 0,
+            width, height, theme->window_radius, color(theme->frame)) ||
+        !astra_render_builder_rounded(
+            builder, state->launch_resource, 2, 2,
+            width - 4u, height - 4u, theme->window_radius - 2u,
+            color(theme->title_inactive)))
+        return 0;
+    if (launch->icon_bytes != NULL) {
+        uint32_t source;
+
+        launch_icon_compose(launch, theme->title_inactive);
+        source = astra_render_builder_upload_rgb565(
+            builder, launch_icon_pixels, DISPLAY_LAUNCH_ICON * 2u,
+            DISPLAY_LAUNCH_ICON, DISPLAY_LAUNCH_ICON);
+        if (source == 0u || !astra_render_builder_blit_region(
+                builder, state->launch_resource, source, 0, 0,
+                (int32_t)(width - DISPLAY_LAUNCH_ICON) / 2,
+                DISPLAY_LAUNCH_ICON_TOP, DISPLAY_LAUNCH_ICON,
+                DISPLAY_LAUNCH_ICON))
+            return 0;
+    }
+    return launch_text(builder, state->launch_resource,
+                       DISPLAY_LAUNCH_NAME_TOP, launch->name,
+                       launch->name_length,
+                       ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT,
+                       color(theme->text_primary), ASTRA_TEXT_STYLE_BOLD) &&
+           launch_text(builder, state->launch_resource,
+                       DISPLAY_LAUNCH_STATUS_TOP, "Opening", 7u,
+                       ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT,
+                       color(theme->text_muted), 0u);
+}
+
 /* Rows [first, first + rows) of one content bank. */
 static uint32_t content_descriptor(AstraRenderBuilder *builder,
                                    const DisplayWindow *window, uint8_t bank,
@@ -1938,7 +2098,8 @@ static uint32_t compose(void *storage, uint32_t fence,
     uint32_t buffer = (fence & 1u) != 0u ? 1u : 0u;
     DamageRect *damage = &state->damage[buffer];
     uint32_t layer_count = 2u +
-        (state->overlay != DISPLAY_OVERLAY_NONE ? 1u : 0u);
+        (state->overlay != DISPLAY_OVERLAY_NONE ? 1u : 0u) +
+        (state->launch.session != 0u ? 1u : 0u);
     uint32_t status;
 
     if (error == NULL)
@@ -1965,7 +2126,8 @@ static uint32_t compose(void *storage, uint32_t fence,
     if (!build_system_surfaces(&builder, state, &theme))
         return compose_failed(&builder, error, failure,
                               ASTRA_STATUS_LIMIT);
-    if (!build_overlay_surface(&builder, state, &theme))
+    if (!build_overlay_surface(&builder, state, &theme) ||
+        !build_launch_surface(&builder, state, &theme))
         return compose_failed(&builder, error, failure,
                               ASTRA_STATUS_LIMIT);
     for (uint32_t index = 0u; index < state->count; ++index) {
@@ -2104,6 +2266,15 @@ static uint32_t compose(void *storage, uint32_t fence,
                  window_radius(&theme, window), 1)) ||
             !content_layers(&builder, &theme, window,
                             CONTENT_LAYERS_ADD))
+            return compose_failed(&builder, error, failure,
+                                  ASTRA_STATUS_LIMIT);
+    }
+    if (state->launch.session != 0u) {
+        DamageRect bounds = launch_bounds();
+
+        if (!astra_render_builder_window_scene_layer(
+                &builder, state->launch_resource,
+                bounds.left, bounds.top, theme.window_radius, 1))
             return compose_failed(&builder, error, failure,
                                   ASTRA_STATUS_LIMIT);
     }
@@ -2362,6 +2533,10 @@ static void commit_render_state(DisplayState *state)
         state->overlay_drawn = state->overlay;
         state->overlay_drawn_hover = state->overlay_hover;
         state->overlay_pending = 0u;
+    }
+    if (state->launch_pending != 0u) {
+        state->launch_drawn = state->launch.session;
+        state->launch_pending = 0u;
     }
     for (uint32_t index = 0u; index < state->count; ++index) {
         DisplayWindow *window = &state->windows[index];
@@ -2934,6 +3109,9 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
         window->content_discard =
             (command->flags & ASTRA_GUI_PRESENT_DISCARD) != 0u;
         window->content_dirty = 1u;
+        /* The application has drawn: its launch is over. */
+        if (window->session != 0u && window->session == state->launch.session)
+            end_launch(state);
         damage_content(state, theme, window,
                        command->width == 0u ?
                            (DamageRect){0, 0, window->request.width,
@@ -3516,11 +3694,64 @@ static int valid_session_request(const AstraGuiSessionRequest *request,
            request->header.operation == operation;
 }
 
+static int valid_open_session(const AstraGuiOpenSession *request,
+                              uint32_t size, uint32_t handles)
+{
+    return size == sizeof(*request) &&
+           handles == (request->icon_length != 0u ? 2u : 1u) &&
+           request->header.total_size == sizeof(*request) &&
+           request->header.header_size == ASTRA_MESSAGE_HEADER_SIZE &&
+           request->header.flags == 0u &&
+           request->header.protocol == ASTRA_GUI_PROTOCOL &&
+           request->header.protocol_version == ASTRA_GUI_VERSION &&
+           request->header.reserved == 0u &&
+           request->header.operation == ASTRA_GUI_OPEN_SESSION &&
+           request->reserved16 == 0u &&
+           request->name_length <= ASTRA_WINDOW_TITLE_MAX &&
+           astra_utf8_validate(request->name, request->name_length, 0u) &&
+           request->icon_length <= ASTRA_WINDOW_TITLE_ICON_BYTES_MAX;
+}
+
+/* A named session is an application being launched: it takes the launch
+   panel. An icon that does not open leaves the panel without one. */
+static void begin_launch(DisplayState *state,
+                         const AstraGuiOpenSession *request,
+                         uint32_t session, uint32_t *icon_area)
+{
+    DisplayLaunch *launch = &state->launch;
+    uint32_t mapped = 0u;
+
+    end_launch(state);
+    launch->session = session;
+    launch->name_length = request->name_length;
+    (void)memcpy(launch->name, request->name, request->name_length);
+    if (*icon_area != 0u &&
+        astra_rt_area_map(*icon_area, ASTRA_AREA_MAP_READ,
+                          &launch->icon_bytes, &mapped) ==
+            ASTRA_SYSCALL_OK) {
+        launch->icon_area = *icon_area;
+        *icon_area = 0u;
+        if (mapped < request->icon_length ||
+            astra_aicon_open(launch->icon_bytes, request->icon_length,
+                             &launch->icon) != ASTRA_BUNDLE_OK ||
+            astra_aicon_strike(&launch->icon, DISPLAY_LAUNCH_ICON,
+                               &launch->strike) != ASTRA_BUNDLE_OK) {
+            (void)astra_rt_area_unmap(launch->icon_bytes);
+            (void)astra_close(launch->icon_area);
+            launch->icon_bytes = NULL;
+            launch->icon_area = 0u;
+        }
+    } else {
+        launch->icon_bytes = NULL;
+    }
+    damage_both(state, launch_bounds());
+}
+
 /* A new session: its receive end joins the wait set, its send end goes to
    whoever asked -- the supervisor, for an application it is launching. */
 static void open_session(DisplayState *state,
-                         const AstraGuiSessionRequest *request,
-                         uint32_t reply)
+                         const AstraGuiOpenSession *request,
+                         uint32_t reply, uint32_t *icon_area)
 {
     AstraGuiSessionOpened message = {0};
     uint32_t receive = 0u;
@@ -3551,6 +3782,8 @@ static void open_session(DisplayState *state,
         state->session_receive[state->session_count] = receive;
         state->session_id[state->session_count++] = message.session;
         receive = 0u;
+        if (request->name_length != 0u)
+            begin_launch(state, request, message.session, icon_area);
     }
     if (send != 0u)
         (void)astra_close(send);
@@ -3562,6 +3795,8 @@ static void open_session(DisplayState *state,
    ports; nothing here outlives them. */
 static void close_session(DisplayState *state, uint32_t index)
 {
+    if (state->session_id[index] == state->launch.session)
+        end_launch(state);
     (void)astra_close(state->session_receive[index]);
     for (uint32_t at = index; at + 1u < state->session_count; ++at) {
         state->session_receive[at] = state->session_receive[at + 1u];
@@ -3645,25 +3880,53 @@ static void receive_open(uint32_t device, uint32_t irq,
     int added = 0;
 
     if (status == ASTRA_SYSCALL_PEER_DEAD && session != 0u) {
+        int launching = session == state->launch.session;
+
         for (uint32_t index = 0u; index < state->session_count; ++index)
             if (state->session_id[index] == session) {
                 close_session(state, index);
                 break;
             }
+        /* An application that ends before it draws takes its panel. */
+        if (launching) {
+            status = render_window_change(device, irq, framebuffer,
+                                          pointer_buffer, state, next_fence,
+                                          cursor_fence, armed);
+            if (status != ASTRA_STATUS_OK)
+                render_failure("display launch-end render failed", status);
+        }
         return;
     }
     if (status != ASTRA_SYSCALL_OK)
         return;
+    if (size == sizeof(AstraGuiOpenSession)) {
+        const AstraGuiOpenSession *message =
+            (const AstraGuiOpenSession *)(const void *)&request;
+
+        if (valid_open_session(message, size, handle_count)) {
+            open_session(state, message, handles[0],
+                         handle_count == 2u ? &handles[1] : &(uint32_t){0u});
+            if (state->launch.session != 0u &&
+                state->launch_drawn != state->launch.session) {
+                status = render_window_change(
+                    device, irq, framebuffer, pointer_buffer, state,
+                    next_fence, cursor_fence, armed);
+                if (status != ASTRA_STATUS_OK)
+                    render_failure("display launch render failed", status);
+            }
+        }
+        for (uint32_t index = 0u; index < handle_count; ++index)
+            if (handles[index] != 0u)
+                (void)astra_close(handles[index]);
+        return;
+    }
     if (size == sizeof(AstraGuiSessionRequest)) {
         const AstraGuiSessionRequest *message =
             (const AstraGuiSessionRequest *)(const void *)&request;
 
-        if (handle_count == 1u &&
-            valid_session_request(message, size, ASTRA_GUI_OPEN_SESSION))
-            open_session(state, message, handles[0]);
-        else if (handle_count == 0u && session != 0u &&
-                 valid_session_request(message, size,
-                                       ASTRA_GUI_SESSION_ACTIVATE))
+        if (handle_count == 0u && session != 0u &&
+            valid_session_request(message, size,
+                                  ASTRA_GUI_SESSION_ACTIVATE))
             activate_session(device, irq, framebuffer, pointer_buffer,
                              state, session, next_fence, cursor_fence,
                              armed);
