@@ -1985,6 +1985,19 @@ int main(void)
         assert(display_window_wait_index(3u, fair.count) == 0u);
         assert(display_window_wait_index(4u, fair.count) == 1u);
         assert(display_window_wait_index(5u, fair.count) == fair.count);
+        /* A client's dead port closes its window; the display's own
+         * sources ending is still fatal. */
+        assert(display_wait_client_ended(&fair, 3u, ASTRA_SYSCALL_PEER_DEAD));
+        assert(display_wait_client_ended(&fair, 4u, ASTRA_SYSCALL_PEER_DEAD));
+        assert(!display_wait_client_ended(&fair, 4u, ASTRA_SYSCALL_CLOSED));
+        assert(!display_wait_client_ended(&fair, 3u,
+                                          ASTRA_SYSCALL_INVALID_HANDLE));
+        assert(!display_wait_client_ended(&fair, 0u, ASTRA_SYSCALL_PEER_DEAD));
+        assert(!display_wait_client_ended(&fair, 1u, ASTRA_SYSCALL_PEER_DEAD));
+        assert(!display_wait_client_ended(&fair, 2u, ASTRA_SYSCALL_PEER_DEAD));
+        fair.pending_input_valid = 1u;
+        assert(display_wait_client_ended(&fair, 1u, ASTRA_SYSCALL_PEER_DEAD));
+        fair.pending_input_valid = 0u;
         fair.count = ASTRA_WAIT_MULTIPLE_MAX - 2u;
         assert(display_wait_handles(&fair, 0x10u, 0x20u, 0x25u, 0u,
                                     waits, sources) == 0u);

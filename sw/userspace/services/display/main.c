@@ -2131,9 +2131,11 @@ static uint32_t collect_request(uint32_t device, uint32_t irq)
 
     in_flight.active = 0u;
     for (;;) {
-        if (astra_wait_one(irq, ASTRA_DEADLINE_FOREVER, NULL) !=
-            ASTRA_SYSCALL_OK)
+        status = astra_wait_one(irq, ASTRA_DEADLINE_FOREVER, NULL);
+        if (status != ASTRA_SYSCALL_OK) {
+            (void)astra_log_failure("display completion wait", status);
             return DISPLAY_FAIL_WAIT;
+        }
         status = astra_display_collect(device, &completion);
         if (status == ASTRA_SYSCALL_OK)
             break;
@@ -3970,6 +3972,20 @@ static uint32_t display_window_wait_index(uint32_t source,
     return source - 3u;
 }
 
+/* A wait that ends on a client's dead port belongs to that client, not to
+ * the display: its handler reads the same terminal status and closes the
+ * window, or drops the event that was waiting for room.  Only the display's
+ * own sources -- the GUI port, the input service, the vblank IRQ -- are fatal
+ * when they end. */
+static int display_wait_client_ended(const DisplayState *state,
+                                     uint32_t source, uint32_t status)
+{
+    if (status != ASTRA_SYSCALL_PEER_DEAD)
+        return 0;
+    return source >= 3u ||
+           (source == 1u && state->pending_input_valid != 0u);
+}
+
 static uint32_t signal_vblank(DisplayState *state)
 {
     for (uint32_t index = 0u; index < state->count; ++index) {
@@ -3983,10 +3999,15 @@ static uint32_t signal_vblank(DisplayState *state)
             (void)send_event(&state->windows[index], &event);
         }
         if ((state->windows[index].request.event_mask &
-             ASTRA_WINDOW_SUBSCRIBE_VBLANK) != 0u &&
-            astra_rt_signal(state->windows[index].vblank_signal, 1u,
-                            NULL) != ASTRA_SYSCALL_OK)
-            return DISPLAY_FAIL_WAIT;
+             ASTRA_WINDOW_SUBSCRIBE_VBLANK) != 0u) {
+            uint32_t status = astra_rt_signal(
+                state->windows[index].vblank_signal, 1u, NULL);
+
+            if (status != ASTRA_SYSCALL_OK) {
+                (void)astra_log_failure("display vblank signal", status);
+                return DISPLAY_FAIL_WAIT;
+            }
+        }
     }
     return ASTRA_STATUS_OK;
 }
@@ -4035,8 +4056,13 @@ static void serve_windows(uint32_t device, uint32_t irq,
         status = astra_wait_multiple(waits, wait_count,
                                      ASTRA_DEADLINE_FOREVER,
                                      &selected, NULL);
-        if (status != ASTRA_SYSCALL_OK || selected >= wait_count)
+        if (selected >= wait_count ||
+            (status != ASTRA_SYSCALL_OK &&
+             !display_wait_client_ended(&state, sources[selected],
+                                        status))) {
+            (void)astra_log_failure("display wait", status);
             astra_process_exit(DISPLAY_FAIL_WAIT);
+        }
         selected = sources[selected];
         first_wait = (selected + 1u) % wait_count;
         if (selected == 0u)
