@@ -1592,6 +1592,47 @@ static int replay_fill_rects(AstraRenderBuilder *builder,
     return 1;
 }
 
+/*
+ * Linear filtering is a request, not a contract: the texture engine's
+ * bilinear path costs about 74 cycles per pixel (TEXTURE_ENGINE.md, 2.2
+ * Mpixel/s at 165 MHz), where a plain scaled copy runs in the blitter's
+ * pixel mode at under two. A filtered copy is kept only while it is scaled
+ * and its visible area fits this budget -- 16384 pixels, about 7.4 ms, half
+ * a 60 Hz frame. Larger, it is drawn nearest: a full-screen filtered copy
+ * would take over a second and miss the command deadline, and a program's
+ * appetite must never cost the display.
+ * ponytail: fixed budget; measure the engine's rate per board if it varies.
+ */
+#define LINEAR_FILTER_BUDGET_PIXELS 16384u
+
+static uint32_t visible_pixels(const AstraDrawListCommand *item)
+{
+    int64_t left = item->x > item->clip_left ? item->x : item->clip_left;
+    int64_t top = item->y > item->clip_top ? item->y : item->clip_top;
+    int64_t right = (int64_t)item->x + item->width;
+    int64_t bottom = (int64_t)item->y + item->height;
+
+    if (right > item->clip_right)
+        right = item->clip_right;
+    if (bottom > item->clip_bottom)
+        bottom = item->clip_bottom;
+    if (right <= left || bottom <= top)
+        return 0u;
+    return (uint64_t)(right - left) * (uint64_t)(bottom - top) > UINT32_MAX ?
+        UINT32_MAX : (uint32_t)((right - left) * (bottom - top));
+}
+
+static uint32_t affordable_blit_flags(const AstraDrawListCommand *item)
+{
+    int scaled = item->source_width != item->width ||
+                 item->source_height != item->height;
+
+    if ((item->flags & ASTRA_DRAW_LIST_FILTER_LINEAR) != 0u &&
+        (!scaled || visible_pixels(item) > LINEAR_FILTER_BUDGET_PIXELS))
+        return item->flags & ~(uint32_t)ASTRA_DRAW_LIST_FILTER_LINEAR;
+    return item->flags;
+}
+
 static int replay_blit(AstraRenderBuilder *builder, uint32_t destination,
                        uint8_t format,
                        const AstraRenderSourceResolver *resolver,
@@ -1604,8 +1645,9 @@ static int replay_blit(AstraRenderBuilder *builder, uint32_t destination,
     const uint8_t *source_record = descriptor_record(builder, source);
     const uint8_t *destination_record =
         descriptor_record(builder, destination);
+    uint32_t item_flags = affordable_blit_flags(item);
     uint32_t opacity = item->color >> 24;
-    uint32_t mode = ASTRA_DRAW_LIST_BLEND_MODE(item->flags);
+    uint32_t mode = ASTRA_DRAW_LIST_BLEND_MODE(item_flags);
     uint32_t source_size;
     uint8_t source_format;
     uint16_t flags = 0u;
@@ -1617,7 +1659,7 @@ static int replay_blit(AstraRenderBuilder *builder, uint32_t destination,
     int engine = (item->color & UINT32_C(0x00ffffff)) !=
                      UINT32_C(0x00ffffff) ||
                  mode > ASTRA_DRAW_LIST_BLEND_BLEND ||
-                 (item->flags & ASTRA_DRAW_LIST_FILTER_LINEAR) != 0u;
+                 (item_flags & ASTRA_DRAW_LIST_FILTER_LINEAR) != 0u;
     int same;
 
     if (source_record == NULL || destination_record == NULL)
@@ -1632,7 +1674,7 @@ static int replay_blit(AstraRenderBuilder *builder, uint32_t destination,
         source_format > ASTRA_RENDER_FORMAT_ARGB8888 ||
         (source_format == ASTRA_RENDER_FORMAT_INDEX8) !=
             (format == ASTRA_RENDER_FORMAT_INDEX8) ||
-        (same && (scaled || item->flags != 0u || engine)))
+        (same && (scaled || item_flags != 0u || engine)))
         return 0;
     if (engine) {
         int32_t u0 = (int32_t)item->source_x * 65536;
@@ -1640,21 +1682,21 @@ static int replay_blit(AstraRenderBuilder *builder, uint32_t destination,
         int32_t v0 = (int32_t)item->source_y * 65536;
         int32_t v1 = ((int32_t)item->source_y + item->source_height) *
                      65536;
-        int flip_x = (item->flags & ASTRA_DRAW_LIST_FLIP_X) != 0u;
-        int flip_y = (item->flags & ASTRA_DRAW_LIST_FLIP_Y) != 0u;
+        int flip_x = (item_flags & ASTRA_DRAW_LIST_FLIP_X) != 0u;
+        int flip_y = (item_flags & ASTRA_DRAW_LIST_FLIP_Y) != 0u;
 
         if (!direct_format(format) || !direct_format(source_format))
             return 0;
         return builder_quad(
-            builder, destination, source, triangle_options(item->flags),
+            builder, destination, source, triangle_options(item_flags),
             item->x, item->y, item->width, item->height,
             flip_x ? u1 : u0, flip_y ? v1 : v0, flip_x ? u0 : u1,
             flip_y ? v0 : v1, item->color, item->clip_left, item->clip_top,
             item->clip_right, item->clip_bottom);
     }
-    if ((item->flags & ASTRA_DRAW_LIST_FLIP_X) != 0u)
+    if ((item_flags & ASTRA_DRAW_LIST_FLIP_X) != 0u)
         flags |= ASTRA_RENDER_FLAG_BLIT_REFLECT_X;
-    if ((item->flags & ASTRA_DRAW_LIST_FLIP_Y) != 0u)
+    if ((item_flags & ASTRA_DRAW_LIST_FLIP_Y) != 0u)
         flags |= ASTRA_RENDER_FLAG_BLIT_REFLECT_Y;
     if (mode == ASTRA_DRAW_LIST_BLEND_BLEND &&
         (opacity != 255u ||

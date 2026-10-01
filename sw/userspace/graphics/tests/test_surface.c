@@ -1720,6 +1720,43 @@ static void test_session_engine_lowering(void)
     assert(be32(render + 48u) ==
            (ASTRA_RENDER_TRIANGLE_OPTION_BLEND_BLEND |
             ASTRA_RENDER_TRIANGLE_OPTION_FILTER_LINEAR));
+    {
+        /* Filtering is kept only where it is affordable: a copy whose
+           visible area exceeds the budget, or one that is not scaled at
+           all, is drawn by the blitter instead. */
+        int32_t x = blit->x;
+        int32_t y = blit->y;
+        uint32_t width = blit->width;
+        uint32_t height = blit->height;
+
+        blit->x = 0;
+        blit->y = 0;
+        blit->width = 320u;
+        blit->height = 200u;
+        assert(replay_session(&builder, storage, 20u, &resolver,
+                              &destination) == 1u);
+        assert(be32(batch_command(storage, 0u) + 4u) >> 16 ==
+               ASTRA_RENDER_OP_BLIT);
+        /* Clipped to its visible part, the same copy is affordable. */
+        blit->clip_right = 100u;
+        blit->clip_bottom = 100u;
+        assert(replay_session(&builder, storage, 21u, &resolver,
+                              &destination) == 1u);
+        assert(be32(batch_command(storage, 0u) + 4u) >> 16 ==
+               ASTRA_RENDER_OP_TRIANGLES);
+        blit->clip_right = 320u;
+        blit->clip_bottom = 200u;
+        blit->width = blit->source_width;
+        blit->height = blit->source_height;
+        assert(replay_session(&builder, storage, 22u, &resolver,
+                              &destination) == 1u);
+        assert(be32(batch_command(storage, 0u) + 4u) >> 16 ==
+               ASTRA_RENDER_OP_BLIT);
+        blit->x = x;
+        blit->y = y;
+        blit->width = width;
+        blit->height = height;
+    }
     /* A plain alpha copy keeps the blitter. */
     blit->flags = BLEND_ALPHA;
     assert(replay_session(&builder, storage, 6u, &resolver, &destination) ==
@@ -1934,24 +1971,37 @@ static void test_session_triangles_on_reference_model(void)
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x80000u, 0u
     };
     AstraRenderSourceResolver resolver = { resolve_test_surface, &surfaces };
-    AstraDrawListHeader *header = session_begin(320u, 200u);
-    AstraDrawListCommand *blit = session_add(header, ASTRA_DRAW_LIST_BLIT);
+    AstraDrawListHeader *header;
+    AstraDrawListCommand *blit;
     AstraRenderBuilder builder;
     uint32_t destination;
 
-    /* A 1:1 bilinear copy lands every texel on its pixel exactly; FLIP_X
-       mirrors it. Only the rectangle is written. */
+    /* A 1:1 bilinear quad lands every texel on its pixel exactly; swapping
+       its u edges mirrors it. Only the rectangle is written. (A 1:1 BLIT
+       would not reach the engine: unscaled, filtering changes nothing, and
+       the blitter draws it.) */
     for (int flip = 0; flip < 2; ++flip) {
-        *blit = (AstraDrawListCommand){
-            .operation = ASTRA_DRAW_LIST_BLIT,
-            .flags = ASTRA_DRAW_LIST_FILTER_LINEAR |
-                     (flip ? ASTRA_DRAW_LIST_FLIP_X : 0u),
-            .x = 5, .y = 7, .width = 32u, .height = 16u,
-            .color = ASTRA_DRAW_LIST_COLOR_IDENTITY, .source = 7u,
-            .source_x = 16, .source_y = 8,
-            .source_width = 32u, .source_height = 16u,
-            .clip_right = 320u, .clip_bottom = 200u,
-        };
+        int32_t u0 = (flip ? 48 : 16) << 16;
+        int32_t u1 = (flip ? 16 : 48) << 16;
+        AstraDrawListCommand *quad;
+        AstraDrawListVertex *vertices;
+
+        header = session_begin(320u, 200u);
+        quad = session_add(header, ASTRA_DRAW_LIST_TRIANGLES);
+        vertices = session_vertices(header, quad, 6u);
+        quad->source = 7u;
+        quad->flags = ASTRA_DRAW_LIST_FILTER_LINEAR;
+        vertices[0] = (AstraDrawListVertex){ 5 * 256, 7 * 256, u0, 8 << 16,
+                                             ASTRA_DRAW_LIST_COLOR_IDENTITY };
+        vertices[1] = (AstraDrawListVertex){ 37 * 256, 7 * 256, u1, 8 << 16,
+                                             ASTRA_DRAW_LIST_COLOR_IDENTITY };
+        vertices[2] = (AstraDrawListVertex){ 5 * 256, 23 * 256, u0, 24 << 16,
+                                             ASTRA_DRAW_LIST_COLOR_IDENTITY };
+        vertices[3] = vertices[1];
+        vertices[4] = (AstraDrawListVertex){ 37 * 256, 23 * 256, u1,
+                                             24 << 16,
+                                             ASTRA_DRAW_LIST_COLOR_IDENTITY };
+        vertices[5] = vertices[2];
         model_reset(surfaces.sprite_offset);
         assert(replay_session(&builder, storage, 3u, &resolver,
                               &destination) == 1u);
@@ -1972,11 +2022,16 @@ static void test_session_triangles_on_reference_model(void)
 
     /* A 2x nearest upscale with colour modulation, clipped on the left:
        each texel covers a 2x2 block. */
-    blit->flags = 0u;
-    blit->x = -4;
-    blit->width = 64u;
-    blit->height = 32u;
-    blit->color = 0xff80c0ffu;
+    header = session_begin(320u, 200u);
+    blit = session_add(header, ASTRA_DRAW_LIST_BLIT);
+    *blit = (AstraDrawListCommand){
+        .operation = ASTRA_DRAW_LIST_BLIT,
+        .x = -4, .y = 7, .width = 64u, .height = 32u,
+        .color = 0xff80c0ffu, .source = 7u,
+        .source_x = 16, .source_y = 8,
+        .source_width = 32u, .source_height = 16u,
+        .clip_right = 320u, .clip_bottom = 200u,
+    };
     model_reset(surfaces.sprite_offset);
     assert(replay_session(&builder, storage, 4u, &resolver, &destination) ==
            1u);
