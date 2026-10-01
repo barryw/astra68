@@ -100,6 +100,29 @@ ChocolateDoom.app`) and `gates.sh`. Not yet run on the DE25.
 
 Committed in logical pieces after a green full verify (see `git log`).
 
+## DE25 result (release a39e1f42)
+
+Doom **runs and plays on the board**: E1M1 entered from the menu, moved,
+fired; Escape/menu/quit path as in the gate; Ctrl+GUI+F to a window and
+back; single-instance held (two opens, one launch); no crash. Measured with
+`~/astra-mg/hw/run_doom_board.sh OUTDIR` (on beast; `doom_board.py` beside
+it; screenshots as raw RGB in OUTDIR):
+
+- **Startup: 317 s** from double-click to Doom's first frames, against
+  ~2 s in QEMU on beast. Not CPU speed alone. The board trace during the
+  load is page faults on sequential pages at about 27/s, i.e. each demand
+  fault costs tens of ms on the board. Find out why first (fault path on the
+  A76 host: TLB/cache flush instructions the kernel issues per fault, and
+  what QEMU TCG does with them there; compare the kernel's fault cost on
+  beast and board with the trace timestamps).
+- **Frame rate:** render-only batches 32/s (demo), 50/s (game), 69/s
+  (windowed). QEMU on beast gives ~5 batches per Doom frame at its 35 fps
+  cap, so roughly 10 fps full screen, 14 windowed. The vCPU is at 100%:
+  Doom's own software renderer and game loop on the emulated 040 are the
+  bound. Measure exactly with `-timedemo demo1` (Doom prints fps).
+- The host pointer stays visible over a full-screen game: hide it while a
+  full-screen window is active (or honour SDL_ShowCursor).
+
 ## Order of work for the next session
 
 1. Board: publish, run Doom on the DE25.
