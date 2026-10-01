@@ -2,6 +2,7 @@
 """Build Astra's deterministic, designed multi-strike application icons."""
 
 import struct
+import zlib
 import sys
 
 MAGIC = 0x4149434F
@@ -189,10 +190,83 @@ def read_bmp(path):
     return width, height, rows
 
 
+def read_png(path):
+    """Non-interlaced 8-bit PNG (grey, RGB, palette, grey+alpha, RGBA) ->
+    (width, height, rows of (r, g, b, a)): the icons upstream programs ship."""
+    with open(path, "rb") as handle:
+        data = handle.read()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("%s is not a PNG" % path)
+    at, header, palette, alpha, compressed = 8, None, [], b"", bytearray()
+    while at + 8 <= len(data):
+        length, kind = struct.unpack_from(">I4s", data, at)
+        body = data[at + 8:at + 8 + length]
+        if kind == b"IHDR":
+            header = struct.unpack(">IIBBBBB", body)
+        elif kind == b"PLTE":
+            palette = [tuple(body[i:i + 3]) for i in range(0, length, 3)]
+        elif kind == b"tRNS":
+            alpha = body
+        elif kind == b"IDAT":
+            compressed.extend(body)
+        elif kind == b"IEND":
+            break
+        at += 12 + length
+    if header is None:
+        raise ValueError("%s has no PNG header" % path)
+    width, height, depth, color, _, _, interlace = header
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(color)
+    if depth != 8 or channels is None or interlace != 0:
+        raise ValueError("%s: unsupported PNG layout" % path)
+    raw = zlib.decompress(bytes(compressed))
+    stride = width * channels
+    previous = bytearray(stride)
+    rows = []
+    for y in range(height):
+        kind = raw[y * (stride + 1)]
+        line = bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for x in range(stride):
+            left = line[x - channels] if x >= channels else 0
+            up = previous[x]
+            corner = previous[x - channels] if x >= channels else 0
+            if kind == 1:
+                line[x] = (line[x] + left) & 255
+            elif kind == 2:
+                line[x] = (line[x] + up) & 255
+            elif kind == 3:
+                line[x] = (line[x] + (left + up) // 2) & 255
+            elif kind == 4:
+                guess = left + up - corner
+                near = min((abs(guess - left), 0), (abs(guess - up), 1),
+                           (abs(guess - corner), 2))[1]
+                line[x] = (line[x] + (left, up, corner)[near]) & 255
+            elif kind != 0:
+                raise ValueError("%s: bad PNG filter %d" % (path, kind))
+        previous = line
+        pixels = []
+        for x in range(width):
+            value = line[x * channels:(x + 1) * channels]
+            if color == 0:
+                pixels.append((value[0], value[0], value[0], 255))
+            elif color == 2:
+                pixels.append((value[0], value[1], value[2], 255))
+            elif color == 3:
+                index = value[0]
+                pixels.append(palette[index] +
+                              (alpha[index] if index < len(alpha) else 255,))
+            elif color == 4:
+                pixels.append((value[0], value[0], value[0], value[1]))
+            else:
+                pixels.append(tuple(value))
+        rows.append(pixels)
+    return width, height, rows
+
+
 def image_icon(path):
     """(palette, strike builder) for an image: aspect kept, centred, nearest
     sampled, reduced to IMAGE_COLORS_MAX colours by popularity."""
-    width, height, rows = read_bmp(path)
+    width, height, rows = (read_png(path) if path.lower().endswith(".png")
+                           else read_bmp(path))
     counts = {}
     for line in rows:
         for pixel in line:
@@ -240,7 +314,7 @@ def build(kind):
     }
     if kind in choices:
         palette, builder = choices[kind]
-    elif kind.lower().endswith(".bmp"):
+    elif kind.lower().endswith((".bmp", ".png")):
         palette, builder = image_icon(kind)
     else:
         raise ValueError("unknown icon kind: %s" % kind)
@@ -265,7 +339,8 @@ def build(kind):
 
 def main():
     if len(sys.argv) != 3:
-        raise SystemExit("usage: aicon.py {terminal|gallery|IMAGE.bmp} "
+        raise SystemExit("usage: aicon.py {terminal|gallery|IMAGE.bmp|"
+                         "IMAGE.png} "
                          "OUTPUT.aicon")
     with open(sys.argv[2], "wb") as handle:
         handle.write(build(sys.argv[1]))
