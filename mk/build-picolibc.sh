@@ -27,6 +27,10 @@
 #   os-fallback    Keep picolibc's bare-metal stubs in a separate archive.
 #                  Astra does not link that archive because it supplies the
 #                  operating-system calls itself.
+#   fast-bufio     fread and fwrite move whole spans with memcpy (and large
+#                  ones straight to read()/write()). Without it every byte is
+#                  one getc_unlocked call: about twenty MC68040 instructions,
+#                  which made Doom's WAD reads a visible share of its frame.
 set -eu
 
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -68,6 +72,7 @@ cd "$BUILD"
     -Dtls-model=initial-exec \
     -Denable-malloc=false \
     -Dos-fallback=true \
+    -Dfast-bufio=true \
     -Dc_args="-I$HERE/../sw/include" \
     -Dspecsdir=none \
     "$SOURCE"

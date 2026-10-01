@@ -96,6 +96,7 @@ options that are not upstream defaults, and why:
 | `-Dtls-model=initial-exec` | Astra resolves the complete dependency closure and TLS layout before entering a program; unlike local-exec, this model remains relocatable inside `libc.library` |
 | `-Denable-malloc=false` | Astra's segregated-fit allocator is the sole allocator for native and POSIX code; picolibc must not add a selection-order-dependent second implementation |
 | `-Dos-fallback=true` | split bare-metal fallback stubs into a separate archive; Astra deliberately does not link it because its own process, signal, and heap implementations are authoritative |
+| `-Dfast-bufio=true` | `fread`/`fwrite` copy whole spans with `memcpy` and send large ones straight to `read`/`write`; otherwise every byte is one `getc_unlocked` call (~20 MC68040 instructions) |
 | `-Dmultilib=false` | one ABI, chosen in the cross file |
 
 The installed public headers are the source of truth for `libc.library`'s
