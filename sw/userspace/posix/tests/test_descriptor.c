@@ -34,6 +34,13 @@ static uint32_t stream_write_calls;
 static uint32_t stream_write_cancel_once;
 static off_t positioned_offset;
 
+/* Lines a program without streams writes to stdout go to the log. */
+uint32_t astra_log(const char *text)
+{
+    (void)text;
+    return ASTRA_SYSCALL_OK;
+}
+
 uint32_t astra_log_failure(const char *operation, uint32_t status)
 {
     assert(strcmp(operation, "POSIX descriptor restore") == 0);

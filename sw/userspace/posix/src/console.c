@@ -50,7 +50,10 @@ typedef enum PosixDescriptorKind {
     POSIX_DESCRIPTOR_PIPE_READ,
     POSIX_DESCRIPTOR_PIPE_WRITE,
     POSIX_DESCRIPTOR_SOCKET,
-    POSIX_DESCRIPTOR_TTY
+    POSIX_DESCRIPTOR_TTY,
+    /* stdout/stderr of a program no one gave a stream: lines go to the
+     * system log, as Android sends them to logcat, not to nowhere. */
+    POSIX_DESCRIPTOR_LOG
 } PosixDescriptorKind;
 
 /* A default allocation, not a ceiling. The containing charged area is the
@@ -841,7 +844,7 @@ restore_exec_descriptors(const AstraStartupInfo *startup)
         PosixOpenDescription *description;
 
         if (wire->kind < POSIX_DESCRIPTOR_STREAM ||
-            wire->kind > POSIX_DESCRIPTOR_TTY ||
+            wire->kind > POSIX_DESCRIPTOR_LOG ||
             wire->state_offset != state_at ||
             wire->state_offset > header->total_size ||
             wire->state_size > header->total_size - wire->state_offset) {
@@ -1021,6 +1024,18 @@ astra_posix_start(const AstraStartupInfo *startup)
             descriptors[POSIX_STDOUT].description;
         ++descriptors[POSIX_STDERR].description->references;
     }
+    /* A program started with no stream at all (an application from the
+     * desktop) still says why it failed: its output goes to the system log. */
+    if (descriptors[POSIX_STDOUT].description == NULL &&
+        descriptors[POSIX_STDERR].description == NULL) {
+        initial_descriptions[POSIX_STDOUT].kind = POSIX_DESCRIPTOR_LOG;
+        initial_descriptions[POSIX_STDOUT].status_flags = O_WRONLY;
+        initial_descriptions[POSIX_STDOUT].references = 2u;
+        descriptors[POSIX_STDOUT].description =
+            &initial_descriptions[POSIX_STDOUT];
+        descriptors[POSIX_STDERR].description =
+            &initial_descriptions[POSIX_STDOUT];
+    }
     {
         AstraPosixProcessReply foreground;
         uint32_t service = astra_posix_process_service();
@@ -1053,6 +1068,28 @@ astra_posix_start(const AstraStartupInfo *startup)
     }
 }
 
+/* One line at a time into the system log; a line longer than the buffer
+ * is logged in pieces. */
+static ssize_t
+log_write(const void *bytes, size_t length)
+{
+    static char line[200];
+    static size_t used;
+    const char *text = bytes;
+
+    for (size_t at = 0u; at < length; ++at) {
+        if (text[at] != '\n')
+            line[used++] = text[at];
+        if (text[at] == '\n' || used == sizeof(line) - 1u) {
+            line[used] = '\0';
+            if (used != 0u)
+                (void)astra_log(line);
+            used = 0u;
+        }
+    }
+    return (ssize_t)length;
+}
+
 ssize_t
 write(int fd, const void *bytes, size_t length)
 {
@@ -1070,6 +1107,8 @@ write(int fd, const void *bytes, size_t length)
         errno = EINVAL;
         return -1;
     }
+    if (slot->kind == POSIX_DESCRIPTOR_LOG)
+        return log_write(bytes, length);
     if (slot->kind == POSIX_DESCRIPTOR_FILE) {
         if (file_ops == NULL) {
             errno = EBADF;

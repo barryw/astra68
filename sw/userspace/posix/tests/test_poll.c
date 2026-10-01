@@ -14,6 +14,14 @@
 #include <astra/stream.h>
 #include <astra/syscall.h>
 
+/* Lines a program without streams writes to stdout go to the log. */
+uint32_t astra_log(const char *text);
+uint32_t astra_log(const char *text)
+{
+    (void)text;
+    return 0u;
+}
+
 uint32_t astra_log_failure(const char *operation, uint32_t status)
 {
     (void)operation;
