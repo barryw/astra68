@@ -186,14 +186,21 @@ def main():
                 frames = len(samples) // 2
             if loud == 0:
                 raise RuntimeError("Doom's audio is silent")
+            # Its 11025 Hz effects reach the 44.1 kHz mixer through the
+            # host converter, not SDL's soft-float resampler.
+            with host.lock:
+                conversions = host.conversions
+            if conversions == 0:
+                raise RuntimeError("Doom converted no sound on the host")
             play_and_quit(machine, log)
             if faults(machine):
                 raise RuntimeError("a process faulted: %r" %
                                    machine.said(0)[0][-30:])
             print("Chocolate Doom QEMU: PASS (%.1f render batches/s over "
-                  "%.0f s; %d audio frames at 44.1 kHz, peak %d; played "
-                  "from the keyboard, quit through ENDOOM; no faults)"
-                  % (rate, arguments.seconds, frames, loud))
+                  "%.0f s; %d audio frames at 44.1 kHz, peak %d; %d effects "
+                  "converted on the host; played from the keyboard, quit "
+                  "through ENDOOM; no faults)"
+                  % (rate, arguments.seconds, frames, loud, conversions))
         finally:
             machine.close()
             host.close()

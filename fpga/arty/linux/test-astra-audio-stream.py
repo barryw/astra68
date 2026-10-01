@@ -14,14 +14,14 @@ OPEN, WRITE, GAIN, STATUS, CLOSE, FINISH, PAUSE, CLEAR = range(1, 9)
 # sw/include/astra/pcm_format.h: encoding | channels << 8 | rate << 12
 S24LE_STEREO = 1 | 2 << 8 | 48000 << 12
 OK, PROTOCOL, INVALID, BAD_HANDLE, BUSY = 0, 1, 8, 9, 14
-REQUEST = struct.Struct("=6I")
-REPLY = struct.Struct("=8I")
+REQUEST = struct.Struct("=7I")
+REPLY = struct.Struct("=9I")
 FRAME_BYTES = 6
 FRAMES_PER_PACKET = 1024
 
 
 def submit(connection, operation, handle=0, value=0, data=b"", magic=MAGIC):
-    packet = REQUEST.pack(magic, 2, operation, handle, value, len(data)) + data
+    packet = REQUEST.pack(magic, 3, operation, handle, value, 0, len(data)) + data
     if connection.send(packet) != len(packet):
         raise RuntimeError("short audio request")
     answer = connection.recv(REPLY.size)

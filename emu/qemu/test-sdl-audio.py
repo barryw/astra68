@@ -30,6 +30,7 @@ it.
 
 import argparse
 import collections
+import ctypes
 import importlib.util
 import os
 import shutil
@@ -56,11 +57,38 @@ astra_image = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(astra_image)
 
 # sw/include/astra/audio_host.h, host.h, pcm_format.h, status.h
-MAGIC, VERSION = 0x41554431, 2
-REQUEST = struct.Struct("=6I")
-REPLY = struct.Struct("=8I")
+MAGIC, VERSION = 0x41554431, 3
+REQUEST = struct.Struct("=7I")
+REPLY = struct.Struct("=9I")
 PACKET_FRAMES, QUEUE_FRAMES = 1024, 4096
-OPEN, WRITE, GAIN, STATUS, CLOSE, FINISH, PAUSE, CLEAR = range(1, 9)
+OPEN, WRITE, GAIN, STATUS, CLOSE, FINISH, PAUSE, CLEAR, CONVERT_OPEN, \
+    CONVERT = range(1, 11)
+CONVERT_END = 1
+ROOT = os.path.dirname(os.path.dirname(HERE))
+
+
+def converter_library(directory):
+    """The daemon's own converter (fpga/arty/linux/astra_audio_convert.c),
+    built for this host: the stand-in converts exactly as the board does."""
+    source = os.path.join(ROOT, "fpga/arty/linux/astra_audio_convert.c")
+    library = os.path.join(directory, "astra_audio_convert.so")
+    subprocess.run(["cc", "-std=c11", "-O2", "-shared", "-fPIC",
+                    "-I" + os.path.join(ROOT, "sw/include"), source, "-lm",
+                    "-o", library], check=True)
+    loaded = ctypes.CDLL(library)
+    loaded.astra_audio_converter_open.restype = ctypes.c_void_p
+    loaded.astra_audio_converter_open.argtypes = [ctypes.c_uint32] * 2
+    loaded.astra_audio_converter_close.argtypes = [ctypes.c_void_p]
+    loaded.astra_audio_converter_write.restype = ctypes.c_uint32
+    loaded.astra_audio_converter_write.argtypes = [
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+    loaded.astra_audio_converter_end.argtypes = [ctypes.c_void_p]
+    loaded.astra_audio_converter_ready.restype = ctypes.c_uint32
+    loaded.astra_audio_converter_ready.argtypes = [ctypes.c_void_p]
+    loaded.astra_audio_converter_read.restype = ctypes.c_uint32
+    loaded.astra_audio_converter_read.argtypes = [
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+    return loaded
 # pcm_format.h: a format word is encoding | channels << 8 | rate << 12.
 S24LE, S16BE = 1, 2
 ENCODING_BYTES = {1: 3, 2: 2, 3: 1, 4: 1, 5: 2, 6: 2, 7: 2, 8: 4, 9: 4,
@@ -101,6 +129,9 @@ class AudioHost:
     """The Linux audio daemon's socket protocol, with a clock for a sink."""
 
     def __init__(self, path):
+        self.convert = converter_library(os.path.dirname(path))
+        self.converters = {}
+        self.conversions = 0
         self.lock = threading.Lock()
         self.requests = collections.Counter()
         self.voices = []
@@ -147,21 +178,70 @@ class AudioHost:
                 return
             with self.lock:
                 self.drain()
-                reply = self.execute(mine, packet)
-            client.send(REPLY.pack(*reply))
+                reply, data = self.execute(mine, packet)
+            reply[8] = len(data)
+            client.send(REPLY.pack(*reply) + data)
 
     def execute(self, mine, packet):
-        reply = [MAGIC, OK, 0, 0, 0, 0, 0, 0]
+        reply = [MAGIC, OK, 0, 0, 0, 0, 0, 0, 0]
         if len(packet) < REQUEST.size:
             reply[1] = PROTOCOL
-            return reply
-        magic, version, operation, handle, value, length = \
+            return reply, b""
+        magic, version, operation, handle, value, value_hi, length = \
             REQUEST.unpack_from(packet)
         self.requests[operation] += 1
         data = packet[REQUEST.size:]
         if (magic != MAGIC or version != VERSION or length != len(data)):
             reply[1] = PROTOCOL
-            return reply
+            return reply, b""
+        if operation in (CONVERT_OPEN, CONVERT) or \
+                (operation == CLOSE and handle in self.converters):
+            return self.conversion(operation, handle, value, value_hi, data,
+                                   reply)
+        if value_hi:
+            reply[1] = INVALID
+            return reply, b""
+        return self.voice_request(mine, operation, handle, value, data,
+                                  reply), b""
+
+    def conversion(self, operation, handle, value, value_hi, data, reply):
+        if operation == CONVERT_OPEN:
+            converter = self.convert.astra_audio_converter_open(value,
+                                                                value_hi)
+            if handle != 0 or data or not converter:
+                reply[1] = INVALID
+                return reply, b""
+            self.next_handle += 1
+            self.converters[self.next_handle] = converter
+            self.conversions += 1
+            reply[2] = self.next_handle
+            return reply, b""
+        converter = self.converters.get(handle)
+        if converter is None:
+            reply[1] = BAD_HANDLE
+            return reply, b""
+        if operation == CLOSE:
+            self.convert.astra_audio_converter_close(
+                self.converters.pop(handle))
+            return reply, b""
+        if value > CONVERT_END or not 0 < value_hi <= \
+                PACKET_FRAMES * MAX_FRAME_BYTES:
+            reply[1] = INVALID
+            return reply, b""
+        if data:
+            reply[1] = self.convert.astra_audio_converter_write(
+                converter, data, len(data))
+            if reply[1] != OK:
+                return reply, b""
+        if value & CONVERT_END:
+            self.convert.astra_audio_converter_end(converter)
+        out = ctypes.create_string_buffer(value_hi)
+        moved = self.convert.astra_audio_converter_read(converter, out,
+                                                        value_hi)
+        reply[3] = self.convert.astra_audio_converter_ready(converter)
+        return reply, out.raw[:moved]
+
+    def voice_request(self, mine, operation, handle, value, data, reply):
         voice = mine.get(handle)
         if operation == OPEN:
             if handle != 0 or not frame_bytes(value) or data:

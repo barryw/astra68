@@ -133,13 +133,14 @@ $(AUDIO_TARGET): astra_audio_certify.c astra_graphics_hw.h
 	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections \
 	astra_audio_certify.c $(LDFLAGS) -o $@
 
-$(AUDIO_HOST_TARGET): astra_audio_host.c astra_graphics_hw.h \
+$(AUDIO_HOST_TARGET): astra_audio_host.c astra_audio_convert.c \
+		astra_audio_convert.h astra_graphics_hw.h \
 		$(ASTRA_INCLUDE)/astra/audio_host.h \
 		$(ASTRA_INCLUDE)/astra/pcm_format.h \
 		$(ASTRA_INCLUDE)/astra/host.h $(ASTRA_INCLUDE)/astra/status.h
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections \
-		astra_audio_host.c $(LDFLAGS) -lm -o $@
+		astra_audio_host.c astra_audio_convert.c $(LDFLAGS) -lm -o $@
 
 $(HDMI_LINK_TARGET): astra_hdmi_link.c
 	mkdir -p $(OUT)
@@ -196,6 +197,7 @@ analyze: astra_render_protocol.h $(GRAPHICS_FONT_HEADERS)
 		astra_display_capture_certify.c astra_graphics_hw.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_audio_certify.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_audio_host.c
+	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_audio_convert.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_hdmi_link.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_time_sync.c
 	$(CC) $(CFLAGS) -I. -I$(OUT) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
@@ -243,12 +245,13 @@ $(OUT)/test-astra-audio: astra_audio_certify.c
 	mkdir -p $(OUT)
 	$(HOSTCC) $(CFLAGS) astra_audio_certify.c -o $@
 
-$(OUT)/test-astra-audio-host: astra_audio_host.c \
+$(OUT)/test-astra-audio-host: astra_audio_host.c astra_audio_convert.c \
+		astra_audio_convert.h \
 		$(ASTRA_INCLUDE)/astra/audio_host.h \
 		$(ASTRA_INCLUDE)/astra/pcm_format.h \
 		$(ASTRA_INCLUDE)/astra/host.h $(ASTRA_INCLUDE)/astra/status.h
 	@mkdir -p $(OUT)
-	$(HOSTCC) $(CFLAGS) astra_audio_host.c -lm -o $@
+	$(HOSTCC) $(CFLAGS) astra_audio_host.c astra_audio_convert.c -lm -o $@
 
 $(OUT)/test-astra-hdmi-link: astra_hdmi_link.c
 	mkdir -p $(OUT)

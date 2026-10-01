@@ -85,7 +85,13 @@ enum {
 /** Host entropy requests follow the POSIX getentropy(3) bound. */
 #define ASTRA_HOST_ENTROPY_MAX UINT32_C(256)
 
-/* Host PCM transport: 48 kHz stereo, with the input format selected at open. */
+/* Host PCM transport: 48 kHz stereo, with the input format selected at open.
+ * A converter (CONVERT_OPEN: value_lo source format, value_hi target
+ * format) turns PCM into another format and rate on the host and hands it
+ * back: CONVERT takes data_length source bytes (value_lo bit 0: no more
+ * follow), returns up to data_capacity target bytes in the same data area
+ * (result_length) and the target frames still ready (result_value).
+ * CLOSE ends either kind of handle. */
 enum {
     ASTRA_HOST_AUDIO_OPEN = 1u,
     ASTRA_HOST_AUDIO_WRITE,
@@ -94,8 +100,11 @@ enum {
     ASTRA_HOST_AUDIO_CLOSE,
     ASTRA_HOST_AUDIO_FINISH,
     ASTRA_HOST_AUDIO_PAUSE,
-    ASTRA_HOST_AUDIO_CLEAR
+    ASTRA_HOST_AUDIO_CLEAR,
+    ASTRA_HOST_AUDIO_CONVERT_OPEN,
+    ASTRA_HOST_AUDIO_CONVERT
 };
+#define ASTRA_HOST_AUDIO_CONVERT_END 1u
 
 typedef struct AstraHostAudioStatus {
     uint32_t queued_frames;

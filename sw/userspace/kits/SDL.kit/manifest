@@ -8,7 +8,7 @@ provides SDL2_net.library 2 2.4.0
 provides SDL2_image.library 2 2.8.12
 provides SDL2_mixer.library 2 2.8.2
 provides SDL2_ttf.library 2 2.24.0
-requires pcm.library 2 2.1.0
+requires pcm.library 2 2.2.0
 requires graphics.library 2 2.1.0
 requires system.library 2 2.7.0
 requires libc.library 2 2.0.0

@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 #define ASTRA_PCM_PROTOCOL UINT32_C(0x50434d31) /* PCM1 */
-#define ASTRA_PCM_PROTOCOL_VERSION UINT16_C(2)
+#define ASTRA_PCM_PROTOCOL_VERSION UINT16_C(3)
 
 enum {
     ASTRA_PCM_OPEN = 1u,
@@ -19,13 +19,22 @@ enum {
     ASTRA_PCM_CLOSE,
     ASTRA_PCM_REPLY,
     ASTRA_PCM_PAUSE,
-    ASTRA_PCM_CLEAR
+    ASTRA_PCM_CLEAR,
+    /* Factory: value is the source format, target the target format. The
+     * transfer area is written both ways, so it is sent writable. */
+    ASTRA_PCM_CONVERT_OPEN,
+    /* frames source frames from the area (value ASTRA_PCM_CONVERT_END: no
+     * more follow); the reply's frames_out target frames replace them in
+     * the area, and queued_frames more are ready. */
+    ASTRA_PCM_CONVERT
 };
+#define ASTRA_PCM_CONVERT_END 1u
 
 typedef struct AstraPcmRequest {
     AstraMessageHeader header;
     uint32_t frames;
     uint32_t value;
+    uint32_t target;
 } AstraPcmRequest;
 
 typedef struct AstraPcmReply {
@@ -36,9 +45,10 @@ typedef struct AstraPcmReply {
     uint32_t underruns;
     uint32_t overflows;
     uint32_t software_gaps;
+    uint32_t frames_out;
 } AstraPcmReply;
 
-_Static_assert(sizeof(AstraPcmRequest) == 32u, "PCM request ABI changed");
-_Static_assert(sizeof(AstraPcmReply) == 48u, "PCM reply ABI changed");
+_Static_assert(sizeof(AstraPcmRequest) == 36u, "PCM request ABI changed");
+_Static_assert(sizeof(AstraPcmReply) == 52u, "PCM reply ABI changed");
 
 #endif

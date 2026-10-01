@@ -20,6 +20,24 @@ static uint32_t opened_format;
 
 void *SDL_calloc(size_t count, size_t size) { return calloc(count, size); }
 void *SDL_malloc(size_t size) { return malloc(size); }
+void *SDL_memcpy(void *to, const void *from, size_t size)
+{
+    return memcpy(to, from, size);
+}
+void *SDL_memset(void *to, int value, size_t size)
+{
+    return memset(to, value, size);
+}
+double SDL_ceil(double value)
+{
+    double whole = (double)(long long)value;
+
+    return whole < value ? whole + 1.0 : whole;
+}
+Uint8 SDL_SilenceValueForFormat(const SDL_AudioFormat format)
+{
+    return format == AUDIO_U8 ? 0x80u : 0u;
+}
 void SDL_free(void *memory) { free(memory); }
 int SDL_Error(SDL_errorcode code) { (void)code; return -1; }
 int SDL_SetError(const char *format, ...) { (void)format; return -1; }
@@ -80,6 +98,33 @@ AstraResult astra_pcm_close(AstraPcmStream *stream)
 {
     assert(stream->control == 1u);
     stream->control = 0u;
+    return ASTRA_OK;
+}
+static int convert_failure;
+static uint32_t converted_source, converted_target, converted_frames;
+/* The fake host turns U8 mono into S16 mono at twice the rate. */
+AstraResult astra_pcm_convert(AstraHandle service, uint32_t source_format,
+                              const void *source, uint32_t source_frames,
+                              uint32_t target_format, void *target,
+                              uint32_t target_capacity,
+                              uint32_t *target_frames)
+{
+    const uint8_t *from = source;
+    uint8_t *to = target;
+
+    assert(service == 42u);
+    converted_source = source_format;
+    converted_target = target_format;
+    converted_frames = source_frames;
+    if (convert_failure)
+        return ASTRA_ERROR_PEER_DEAD;
+    assert(target_capacity >= 2u * source_frames);
+    for (uint32_t i = 0u; i < source_frames; ++i)
+        for (uint32_t copy = 0u; copy < 2u; ++copy) {
+            to[4u * i + 2u * copy] = (uint8_t)(from[i] - 0x80u);
+            to[4u * i + 2u * copy + 1u] = 0u;
+        }
+    *target_frames = 2u * source_frames;
     return ASTRA_OK;
 }
 AstraResult astra_pcm_wait(AstraPcmStream *stream, uint32_t frame_count)
@@ -155,5 +200,49 @@ int main(void)
     driver.PlayDevice(&device);
     assert(received_frames == 256u);
     driver.CloseDevice(&device);
+
+    /* SDL_BuildAudioCVT asks the host first: one filter, the format words
+     * where SDL keeps its resampler's rates, the length ratio exact. */
+    {
+        SDL_AudioCVT cvt;
+        uint8_t buffer[64];
+
+        memset(&cvt, 0, sizeof(cvt));
+        has_pcm = 0;
+        assert(ASTRAAUDIO_BuildHostCVT(&cvt, AUDIO_U8, 1u, 11025, AUDIO_S16MSB,
+                                       1u, 22050) == 0);
+        has_pcm = 1;
+        assert(ASTRAAUDIO_BuildHostCVT(&cvt, AUDIO_U8, 6u, 11025,
+                                       AUDIO_S16MSB, 1u, 22050) == 0);
+        assert(ASTRAAUDIO_BuildHostCVT(&cvt, AUDIO_U8, 1u, 4000,
+                                       AUDIO_S16MSB, 1u, 22050) == 0);
+        assert(cvt.filters[0] == NULL);
+        assert(ASTRAAUDIO_BuildHostCVT(&cvt, AUDIO_U8, 1u, 11025,
+                                       AUDIO_S16MSB, 1u, 22050) == 1);
+        assert(cvt.needed == 1 && cvt.filters[0] == ASTRAAUDIO_HostConvert &&
+               cvt.filters[1] == NULL && cvt.len_mult == 4 &&
+               cvt.len_ratio == 4.0);
+        cvt.src_format = AUDIO_U8;
+        cvt.dst_format = AUDIO_S16MSB;
+        cvt.buf = buffer;
+        cvt.len = 8;
+        cvt.len_cvt = 8;
+        for (uint32_t i = 0u; i < 8u; ++i)
+            buffer[i] = (uint8_t)(0x80u + i);
+        cvt.filter_index = 0;
+        cvt.filters[0](&cvt, cvt.src_format);
+        assert(converted_source ==
+               ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_U8, 1u, 11025u));
+        assert(converted_target ==
+               ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_S16BE, 1u, 22050u));
+        assert(converted_frames == 8u && cvt.len_cvt == 32);
+        assert(buffer[0] == 0u && buffer[28] == 7u && buffer[30] == 7u);
+        /* A dead service leaves the promised length, silent. */
+        convert_failure = 1;
+        cvt.len_cvt = 8;
+        cvt.filter_index = 0;
+        cvt.filters[0](&cvt, cvt.src_format);
+        assert(cvt.len_cvt == 32 && buffer[0] == 0u && buffer[31] == 0u);
+    }
     return 0;
 }

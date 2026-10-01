@@ -21,7 +21,17 @@ int main(void)
     assert(astra_pcm_request_valid(&request, sizeof(request), 0));
     request.header.operation = ASTRA_PCM_REPLY;
     assert(!astra_pcm_request_valid(&request, sizeof(request), 0));
-    request.header.operation = ASTRA_PCM_CLEAR + 1u;
+    request.header.operation = ASTRA_PCM_CONVERT_OPEN;
+    assert(astra_pcm_request_valid(&request, sizeof(request), 1));
+    assert(!astra_pcm_request_valid(&request, sizeof(request), 0));
+    request.target = 1u;
+    assert(astra_pcm_request_valid(&request, sizeof(request), 1));
+    request.header.operation = ASTRA_PCM_CONVERT;
+    assert(!astra_pcm_request_valid(&request, sizeof(request), 0));
+    request.target = 0u;
+    assert(astra_pcm_request_valid(&request, sizeof(request), 0));
+    assert(!astra_pcm_request_valid(&request, sizeof(request), 1));
+    request.header.operation = ASTRA_PCM_CONVERT + 1u;
     assert(!astra_pcm_request_valid(&request, sizeof(request), 0));
     request.header.operation = ASTRA_PCM_WRITE;
     request.header.protocol_version++;

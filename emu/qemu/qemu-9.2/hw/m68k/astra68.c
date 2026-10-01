@@ -3372,8 +3372,11 @@ static void astra_host_execute_audio(Astra68State *s,
     uint16_t operation = lduw_be_p(command + HOST_FIELD(operation));
     uint32_t handle = ldl_be_p(command + HOST_FIELD(handle));
     uint32_t value = ldl_be_p(command + HOST_FIELD(value_lo));
+    uint32_t value_hi = ldl_be_p(command + HOST_FIELD(value_hi));
     uint32_t length = ldl_be_p(command + HOST_FIELD(data_length));
     uint32_t capacity = ldl_be_p(command + HOST_FIELD(data_capacity));
+    const uint32_t packet = ASTRA_AUDIO_HOST_PACKET_FRAMES *
+                            ASTRA_AUDIO_HOST_FRAME_BYTES;
     uint32_t status = ASTRA_STATUS_INVALID;
     uint8_t *data = NULL;
     AstraAudioHostRequest request = {
@@ -3387,6 +3390,8 @@ static void astra_host_execute_audio(Astra68State *s,
     AstraAudioHostReply reply;
     struct iovec parts[2];
     struct msghdr message = {0};
+    struct iovec back[2];
+    struct msghdr answer = {0};
     uint32_t slot;
     ssize_t moved;
 
@@ -3401,13 +3406,13 @@ static void astra_host_execute_audio(Astra68State *s,
         lduw_be_p(command + HOST_FIELD(service)) !=
             ASTRA_HOST_SERVICE_AUDIO ||
         operation < ASTRA_HOST_AUDIO_OPEN ||
-        operation > ASTRA_HOST_AUDIO_CLEAR ||
+        operation > ASTRA_HOST_AUDIO_CONVERT ||
         lduw_be_p(command + HOST_FIELD(flags)) != 0u ||
         ldl_be_p(command + HOST_FIELD(generation)) !=
             expected_generation ||
         ldl_be_p(command + HOST_FIELD(offset_hi)) != 0u ||
         ldl_be_p(command + HOST_FIELD(offset_lo)) != 0u ||
-        ldl_be_p(command + HOST_FIELD(value_hi)) != 0u ||
+        (value_hi != 0u && operation != ASTRA_HOST_AUDIO_CONVERT_OPEN) ||
         ldl_be_p(command + HOST_FIELD(reserved0)) != 0u ||
         ldl_be_p(command + HOST_FIELD(node_size_hi)) != 0u ||
         ldl_be_p(command + HOST_FIELD(node_size_lo)) != 0u ||
@@ -3424,11 +3429,24 @@ static void astra_host_execute_audio(Astra68State *s,
          ++index)
         if (command[index] != 0u)
             goto done;
-    if (operation == ASTRA_HOST_AUDIO_WRITE) {
+    if (operation == ASTRA_HOST_AUDIO_CONVERT) {
+        /* Source bytes in, converted bytes back in the same data area. */
+        if (handle == 0u || value > ASTRA_HOST_AUDIO_CONVERT_END ||
+            length > packet || capacity == 0u || capacity > packet)
+            goto done;
+        data = astra_host_command_data(s, physical, bytes, command_bytes,
+                                       command, MAX(length, capacity));
+        if (data == NULL)
+            goto done;
+        request.value_hi = capacity;
+    } else if (operation == ASTRA_HOST_AUDIO_CONVERT_OPEN) {
+        if (handle != 0u || length != 0u || capacity != 0u ||
+            value == 0u || value_hi == 0u)
+            goto done;
+        request.value_hi = value_hi;
+    } else if (operation == ASTRA_HOST_AUDIO_WRITE) {
         if (handle == 0u || value != 0u || length == 0u ||
-            length > ASTRA_AUDIO_HOST_PACKET_FRAMES *
-                         ASTRA_AUDIO_HOST_FRAME_BYTES ||
-            capacity < length)
+            length > packet || capacity < length)
             goto done;
         data = astra_host_command_data(s, physical, bytes, command_bytes,
                                        command, length);
@@ -3483,22 +3501,39 @@ static void astra_host_execute_audio(Astra68State *s,
     parts[0].iov_base = &request;
     parts[0].iov_len = sizeof(request);
     parts[1].iov_base = data;
-    parts[1].iov_len = operation == ASTRA_HOST_AUDIO_WRITE ? length : 0u;
+    parts[1].iov_len = operation == ASTRA_HOST_AUDIO_WRITE ||
+                       operation == ASTRA_HOST_AUDIO_CONVERT ? length : 0u;
     message.msg_iov = parts;
     message.msg_iovlen = parts[1].iov_len != 0u ? 2u : 1u;
     moved = sendmsg(channel->audio_fd, &message, MSG_NOSIGNAL);
     if (moved != (ssize_t)(sizeof(request) + parts[1].iov_len))
         goto peer_dead;
-    moved = recv(channel->audio_fd, &reply, sizeof(reply), 0);
-    if (moved != sizeof(reply) || reply.magic != ASTRA_AUDIO_HOST_MAGIC ||
-        reply.status > ASTRA_STATUS_SYSTEM_MAX) {
+    back[0].iov_base = &reply;
+    back[0].iov_len = sizeof(reply);
+    back[1].iov_base = data;
+    back[1].iov_len = operation == ASTRA_HOST_AUDIO_CONVERT ? capacity : 0u;
+    answer.msg_iov = back;
+    answer.msg_iovlen = back[1].iov_len != 0u ? 2u : 1u;
+    moved = recvmsg(channel->audio_fd, &answer, 0);
+    if (moved < (ssize_t)sizeof(reply) ||
+        reply.magic != ASTRA_AUDIO_HOST_MAGIC ||
+        reply.status > ASTRA_STATUS_SYSTEM_MAX ||
+        reply.data_length > back[1].iov_len ||
+        moved != (ssize_t)(sizeof(reply) + reply.data_length) ||
+        (answer.msg_flags & MSG_TRUNC) != 0) {
         status = ASTRA_STATUS_PROTOCOL;
         goto disconnect;
     }
     status = reply.status;
     if (status == ASTRA_STATUS_OK) {
-        if (operation == ASTRA_HOST_AUDIO_OPEN)
+        if (operation == ASTRA_HOST_AUDIO_OPEN ||
+            operation == ASTRA_HOST_AUDIO_CONVERT_OPEN)
             stl_be_p(command + HOST_FIELD(result_value), reply.handle);
+        if (operation == ASTRA_HOST_AUDIO_CONVERT) {
+            stl_be_p(command + HOST_FIELD(result_length), reply.data_length);
+            stl_be_p(command + HOST_FIELD(result_value),
+                     reply.queued_frames);
+        }
         if (operation == ASTRA_HOST_AUDIO_WRITE)
             stl_be_p(command + HOST_FIELD(result_length),
                      reply.queued_frames);

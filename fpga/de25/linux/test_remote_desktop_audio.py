@@ -12,7 +12,7 @@ from test_remote_desktop import connect, receive_exact
 
 
 MAGIC = 0x41554431
-VERSION = 2
+VERSION = 3
 # sw/include/astra/pcm_format.h: encoding | channels << 8 | rate << 12
 S16BE_STEREO = 2 | 2 << 8 | 48000 << 12
 
@@ -67,9 +67,9 @@ def receive_audio(connection):
 
 
 def host_request(connection, operation, handle=0, value=0, data=b""):
-    connection.sendall(struct.pack("<6I", MAGIC, VERSION, operation,
-                                   handle, value, len(data)) + data)
-    reply = struct.unpack("<8I", receive_exact(connection, 32))
+    connection.sendall(struct.pack("<7I", MAGIC, VERSION, operation,
+                                   handle, value, 0, len(data)) + data)
+    reply = struct.unpack("<9I", receive_exact(connection, 36))
     if reply[:2] != (MAGIC, 0):
         raise AssertionError(f"audio host rejected operation {operation}: {reply}")
     return reply

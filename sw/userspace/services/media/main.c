@@ -24,6 +24,8 @@ typedef struct PcmSession {
     void *samples;
     uint32_t host_voice;
     uint32_t frame_bytes;
+    /* A converter's target frame width; zero for a voice. */
+    uint32_t target_frame_bytes;
 } PcmSession;
 
 static AstraHostChannelClient host;
@@ -31,9 +33,10 @@ static PcmSession *sessions;
 static uint32_t session_count;
 static int host_failed;
 
-static uint32_t host_command(uint16_t operation, uint32_t voice,
-                             uint32_t value, uint32_t length,
-                             AstraHostCommand **result)
+static uint32_t host_exchange(uint16_t operation, uint32_t voice,
+                              uint32_t value, uint32_t value_hi,
+                              uint32_t length, uint32_t capacity,
+                              AstraHostCommand **result)
 {
     AstraHostCommand *command = astra_host_client_prepare(
         &host, ASTRA_HOST_SERVICE_AUDIO, operation);
@@ -44,15 +47,16 @@ static uint32_t host_command(uint16_t operation, uint32_t voice,
     }
     command->handle = voice;
     command->value_lo = value;
+    command->value_hi = value_hi;
     command->data_length = length;
-    command->data_capacity = operation == ASTRA_HOST_AUDIO_STATUS ?
-                             sizeof(AstraHostAudioStatus) : length;
+    command->data_capacity = capacity;
     if (astra_host_client_submit(&host) != ASTRA_SYSCALL_OK) {
         host_failed = 1;
         return ASTRA_STATUS_PEER_DEAD;
     }
     if (command->status == ASTRA_STATUS_PEER_DEAD ||
         (operation != ASTRA_HOST_AUDIO_OPEN &&
+         operation != ASTRA_HOST_AUDIO_CONVERT_OPEN &&
          command->status == ASTRA_STATUS_BAD_HANDLE)) {
         host_failed = 1;
         return ASTRA_STATUS_PEER_DEAD;
@@ -60,6 +64,15 @@ static uint32_t host_command(uint16_t operation, uint32_t voice,
     if (result != NULL)
         *result = command;
     return command->status;
+}
+
+static uint32_t host_command(uint16_t operation, uint32_t voice,
+                             uint32_t value, uint32_t length,
+                             AstraHostCommand **result)
+{
+    return host_exchange(operation, voice, value, 0u, length,
+                         operation == ASTRA_HOST_AUDIO_STATUS ?
+                         sizeof(AstraHostAudioStatus) : length, result);
 }
 
 static void session_release(PcmSession *session)
@@ -89,7 +102,7 @@ static void session_release(PcmSession *session)
 static uint32_t send_reply(uint32_t reply_handle,
                            const AstraPcmRequest *request,
                            uint32_t status, AstraHostCommand *host_result,
-                           uint32_t transfer)
+                           uint32_t frames_out, uint32_t transfer)
 {
     AstraPcmReply reply = {0};
     const uint32_t *handles = transfer == 0u ? NULL : &transfer;
@@ -109,6 +122,11 @@ static uint32_t send_reply(uint32_t reply_handle,
         reply.underruns = state->underruns;
         reply.overflows = state->overflows;
         reply.software_gaps = state->software_gaps;
+    }
+    if (status == ASTRA_STATUS_OK && host_result != NULL &&
+        request->header.operation == ASTRA_PCM_CONVERT) {
+        reply.frames_out = frames_out;
+        reply.queued_frames = host_result->result_value;
     }
     return astra_port_send(reply_handle, &reply, sizeof(reply), handles,
                            transfer == 0u ? 0u : 1u);
@@ -132,7 +150,9 @@ static void serve_open(uint32_t factory)
         goto done;
     status = astra_pcm_request_valid(&request, size, 1) &&
              request.frames == 0u &&
-             astra_pcm_format_frame_bytes(request.value) != 0u ?
+             astra_pcm_format_frame_bytes(request.value) != 0u &&
+             (request.header.operation == ASTRA_PCM_OPEN ||
+              astra_pcm_format_frame_bytes(request.target) != 0u) ?
              ASTRA_STATUS_OK : ASTRA_STATUS_PROTOCOL;
     /* ponytail: one wait set holds the factory and active voices; shard
      * sessions across workers if the handle namespace grows beyond it. */
@@ -146,11 +166,17 @@ static void serve_open(uint32_t factory)
     }
     if (status == ASTRA_STATUS_OK) {
         session->frame_bytes = astra_pcm_format_frame_bytes(request.value);
+        if (request.header.operation == ASTRA_PCM_CONVERT_OPEN)
+            session->target_frame_bytes =
+                astra_pcm_format_frame_bytes(request.target);
         session->area = handles[0];
         handles[0] = 0u;
         session->reply = handles[1];
         handles[1] = 0u;
-        status = astra_rt_area_map(session->area, ASTRA_AREA_MAP_READ,
+        status = astra_rt_area_map(session->area,
+                                   ASTRA_AREA_MAP_READ |
+                                   (session->target_frame_bytes != 0u ?
+                                    ASTRA_AREA_MAP_WRITE : 0u),
                                    &session->samples, &mapped_size);
         if (status != ASTRA_SYSCALL_OK ||
             mapped_size < ASTRA_PCM_TRANSFER_FRAMES * ASTRA_PCM_MAX_FRAME_BYTES)
@@ -159,7 +185,11 @@ static void serve_open(uint32_t factory)
             status = ASTRA_STATUS_OK;
     }
     if (status == ASTRA_STATUS_OK) {
-        status = host_command(ASTRA_HOST_AUDIO_OPEN, 0u, request.value,
+        status = session->target_frame_bytes != 0u ?
+                 host_exchange(ASTRA_HOST_AUDIO_CONVERT_OPEN, 0u,
+                               request.value, request.target, 0u, 0u,
+                               &result) :
+                 host_command(ASTRA_HOST_AUDIO_OPEN, 0u, request.value,
                               0u, &result);
         if (status == ASTRA_STATUS_OK) {
             session->host_voice = result->result_value;
@@ -176,12 +206,12 @@ static void serve_open(uint32_t factory)
             status = ASTRA_STATUS_OK;
     }
     if (session != NULL && session->reply != 0u) {
-        if (send_reply(session->reply, &request, status, NULL,
+        if (send_reply(session->reply, &request, status, NULL, 0u,
                        status == ASTRA_STATUS_OK ? send : 0u) !=
             ASTRA_SYSCALL_OK)
             status = ASTRA_STATUS_PEER_DEAD;
     } else if (handles[1] != 0u) {
-        (void)send_reply(handles[1], &request, status, NULL, 0u);
+        (void)send_reply(handles[1], &request, status, NULL, 0u, 0u);
     }
     if (status == ASTRA_STATUS_OK) {
         session->next = sessions;
@@ -204,7 +234,8 @@ static void serve_session(PcmSession *session)
 {
     AstraPcmRequest request = {0};
     AstraHostCommand *result = NULL;
-    uint32_t size = 0u, count = 0u, transfer = 0u;
+    uint32_t size = 0u, count = 0u, transfer = 0u, frames_out = 0u;
+    uint32_t operation;
     uint32_t status = astra_port_receive(session->receive, &request,
                                           sizeof(request), &transfer, 1u,
                                           &size, &count);
@@ -213,8 +244,45 @@ static void serve_session(PcmSession *session)
         return;
     status = astra_pcm_request_valid(&request, size, 0) && count == 0u ?
              ASTRA_STATUS_OK : ASTRA_STATUS_PROTOCOL;
+    operation = request.header.operation;
+    /* A converter takes CONVERT and CLOSE; a voice everything else. */
+    if (status == ASTRA_STATUS_OK && operation != ASTRA_PCM_CLOSE &&
+        (session->target_frame_bytes != 0u) !=
+            (operation == ASTRA_PCM_CONVERT))
+        status = ASTRA_STATUS_INVALID;
     if (status == ASTRA_STATUS_OK) {
-        switch (request.header.operation) {
+        switch (operation) {
+        case ASTRA_PCM_CONVERT: {
+            const uint32_t area_bytes = ASTRA_PCM_TRANSFER_FRAMES *
+                                        ASTRA_PCM_MAX_FRAME_BYTES;
+
+            if (request.value > ASTRA_PCM_CONVERT_END ||
+                request.frames > area_bytes / session->frame_bytes) {
+                status = ASTRA_STATUS_INVALID;
+                break;
+            }
+            (void)memcpy((void *)(uintptr_t)host.data, session->samples,
+                         request.frames * session->frame_bytes);
+            status = host_exchange(
+                ASTRA_HOST_AUDIO_CONVERT, session->host_voice,
+                request.value == ASTRA_PCM_CONVERT_END ?
+                    ASTRA_HOST_AUDIO_CONVERT_END : 0u,
+                0u, request.frames * session->frame_bytes,
+                area_bytes - area_bytes % session->target_frame_bytes,
+                &result);
+            if (status != ASTRA_STATUS_OK)
+                break;
+            if (result->result_length > area_bytes ||
+                result->result_length % session->target_frame_bytes != 0u) {
+                status = ASTRA_STATUS_PROTOCOL;
+                break;
+            }
+            (void)memcpy(session->samples, (const void *)(uintptr_t)host.data,
+                         result->result_length);
+            frames_out = result->result_length /
+                         session->target_frame_bytes;
+            break;
+        }
         case ASTRA_PCM_WRITE:
             if (request.value != 0u || request.frames == 0u ||
                 request.frames > ASTRA_PCM_TRANSFER_FRAMES) {
@@ -275,7 +343,8 @@ static void serve_session(PcmSession *session)
             break;
         }
     }
-    (void)send_reply(session->reply, &request, status, result, 0u);
+    (void)send_reply(session->reply, &request, status, result, frames_out,
+                     0u);
     if (transfer != 0u)
         (void)astra_close(transfer);
     if (request.header.operation == ASTRA_PCM_CLOSE &&

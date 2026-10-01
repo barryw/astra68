@@ -74,6 +74,27 @@ MORE_PATCHES = [
         "#if SDL_VIDEO_RENDER_SW && !defined(__astra__)\n"
         "    &SW_RenderDriver\n#endif\n};",
     )),
+    # Format and rate conversion happen on the Linux audio host when it can
+    # take both specs: SDL's own chain runs in float, which the MC68040
+    # does in software (Doom's sound effects took minutes to convert).
+    ("src/audio/SDL_audiocvt.c", (
+        "    /* Convert data types, if necessary. Updates (cvt). */\n"
+        "    if (SDL_BuildAudioTypeCVTToFloat(cvt, src_format) < 0) {",
+        "#ifdef SDL_AUDIO_DRIVER_ASTRA\n"
+        "    {\n"
+        "        extern int ASTRAAUDIO_BuildHostCVT(SDL_AudioCVT *,\n"
+        "            SDL_AudioFormat, Uint8, int, SDL_AudioFormat, Uint8, int);\n"
+        "\n"
+        "        if (ASTRAAUDIO_BuildHostCVT(cvt, src_format, src_channels,\n"
+        "                                    src_rate, dst_format,\n"
+        "                                    dst_channels, dst_rate)) {\n"
+        "            return 1;\n"
+        "        }\n"
+        "    }\n"
+        "#endif\n"
+        "    /* Convert data types, if necessary. Updates (cvt). */\n"
+        "    if (SDL_BuildAudioTypeCVTToFloat(cvt, src_format) < 0) {",
+    )),
     # SIGINT and SIGTERM become SDL_QUIT, as on every Unix port: Ctrl-C in
     # the Terminal ends an SDL program through its own quit path, which
     # closes its audio and windows, instead of killing it.

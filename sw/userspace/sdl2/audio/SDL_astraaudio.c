@@ -39,6 +39,95 @@ static uint32_t ASTRAAUDIO_Encoding(SDL_AudioFormat format)
     }
 }
 
+/* The PCM format word for an SDL spec, or zero when the host cannot take
+ * it as is. */
+static uint32_t ASTRAAUDIO_Format(SDL_AudioFormat format, Uint8 channels,
+                                  int rate)
+{
+    uint32_t encoding = ASTRAAUDIO_Encoding(format);
+
+    if (encoding == 0u || channels == 0u ||
+        channels > ASTRA_PCM_CHANNELS_MAX ||
+        rate < (int)ASTRA_PCM_RATE_MIN || rate > (int)ASTRA_PCM_RATE_MAX)
+        return 0u;
+    return ASTRA_PCM_FORMAT(encoding, channels, (uint32_t)rate);
+}
+
+/* SDL_ConvertAudio's one filter when the host converts: the source and
+ * target format words ride in the two slots SDL's own resampler uses for
+ * its rates. */
+static void SDLCALL ASTRAAUDIO_HostConvert(SDL_AudioCVT *cvt,
+                                          SDL_AudioFormat format)
+{
+    const AstraStartupCapability *capability = astra_startup_capability(
+        astra_posix_startup(), ASTRA_CAPABILITY_PCM);
+    uint32_t source = (uint32_t)(uintptr_t)
+        cvt->filters[SDL_AUDIOCVT_MAX_FILTERS - 1];
+    uint32_t target = (uint32_t)(uintptr_t)
+        cvt->filters[SDL_AUDIOCVT_MAX_FILTERS];
+    uint32_t source_bytes = astra_pcm_format_frame_bytes(source);
+    uint32_t target_bytes = astra_pcm_format_frame_bytes(target);
+    uint32_t frames = (uint32_t)cvt->len_cvt / source_bytes;
+    uint32_t capacity = (uint32_t)(cvt->len * cvt->len_mult) / target_bytes;
+    uint32_t produced = 0u;
+    void *copy = SDL_malloc(frames == 0u ? 1u : frames * source_bytes);
+
+    (void)format;
+    if (copy == NULL || capability == NULL) {
+        SDL_OutOfMemory();
+    } else {
+        SDL_memcpy(copy, cvt->buf, frames * source_bytes);
+        if (astra_pcm_convert(capability->handle, source, copy, frames,
+                              target, cvt->buf, capacity, &produced) !=
+            ASTRA_OK) {
+            /* Audio is gone with the media service; keep the length the
+             * caller was promised, silent. */
+            produced = (uint32_t)((uint64_t)frames *
+                                  astra_pcm_format_rate(target) /
+                                  astra_pcm_format_rate(source));
+            SDL_memset(cvt->buf, SDL_SilenceValueForFormat(cvt->dst_format),
+                       produced * target_bytes);
+            SDL_SetError("Astra host audio conversion failed");
+        }
+    }
+    SDL_free(copy);
+    cvt->len_cvt = (int)(produced * target_bytes);
+    if (cvt->filters[++cvt->filter_index] != NULL)
+        cvt->filters[cvt->filter_index](cvt, cvt->dst_format);
+}
+
+/* Called by SDL_BuildAudioCVT before it builds its own float chain: when
+ * the host can take both specs, the whole conversion is one host request
+ * (decode, resample, encode) and the MC68040 only moves bytes. Returns 1
+ * with @p cvt set up, or 0 to let SDL convert. */
+int ASTRAAUDIO_BuildHostCVT(SDL_AudioCVT *cvt, SDL_AudioFormat src_format,
+                            Uint8 src_channels, int src_rate,
+                            SDL_AudioFormat dst_format, Uint8 dst_channels,
+                            int dst_rate)
+{
+    uint32_t source = ASTRAAUDIO_Format(src_format, src_channels, src_rate);
+    uint32_t target = ASTRAAUDIO_Format(dst_format, dst_channels, dst_rate);
+    double ratio;
+
+    if (source == 0u || target == 0u ||
+        astra_startup_capability(astra_posix_startup(),
+                                 ASTRA_CAPABILITY_PCM) == NULL)
+        return 0;
+    cvt->filters[0] = ASTRAAUDIO_HostConvert;
+    cvt->filter_index = 1;
+    cvt->filters[SDL_AUDIOCVT_MAX_FILTERS - 1] =
+        (SDL_AudioFilter)(uintptr_t)source;
+    cvt->filters[SDL_AUDIOCVT_MAX_FILTERS] =
+        (SDL_AudioFilter)(uintptr_t)target;
+    ratio = (double)dst_rate / src_rate *
+            astra_pcm_format_frame_bytes(target) /
+            astra_pcm_format_frame_bytes(source);
+    cvt->len_ratio = ratio;
+    cvt->len_mult = ratio > 1.0 ? (int)SDL_ceil(ratio) : 1;
+    cvt->needed = 1;
+    return 1;
+}
+
 static int ASTRAAUDIO_OpenDevice(_THIS, const char *devname)
 {
     const AstraStartupCapability *capability;

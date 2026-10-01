@@ -16,3 +16,8 @@ ASTRA_PCM_2.1 {
     global:
         astra_pcm_wait;
 } ASTRA_PCM_2.0;
+
+ASTRA_PCM_2.2 {
+    global:
+        astra_pcm_convert;
+} ASTRA_PCM_2.1;

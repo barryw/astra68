@@ -32,6 +32,15 @@ remain before the system is game-ready. Wavetable and speech engines will
 ultimately supply PCM into this same mixer; neither engine is implemented by
 this PCM library.
 
+`astra_pcm_convert` (pcm.library 2.2) converts a buffer between any two
+format words on the Linux host: decoding, the mixer's windowed-sinc
+resampler, and encoding with rounding and saturation. The result is exactly
+`floor(source_frames * target_rate / source_rate)` frames, so callers can
+size their buffers the way SDL does. SDL2's `SDL_BuildAudioCVT` uses it for
+every conversion the host can take (two channels or fewer, 8-192 kHz), which
+is how Chocolate Doom's sound effects reach its 44.1 kHz mixer without SDL's
+float resampler running in MC68040 soft-float.
+
 ```{doxygenfile} pcm.h
 ```
 

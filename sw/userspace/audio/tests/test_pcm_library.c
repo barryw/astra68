@@ -18,6 +18,12 @@ static uint32_t queued_script[4];
 static uint32_t queued_next;
 static uint64_t slept[4];
 static uint32_t sleeps;
+/* The fake converter doubles the rate of S16BE mono by repeating frames. */
+static int converting;
+static uint8_t pending[65536];
+static uint32_t pending_bytes;
+static uint32_t converted_out;
+static int convert_ended;
 
 uint32_t astra_rt_thread_sleep(uint64_t deadline_ns, uint32_t flags,
                                 uint32_t reserved, uint32_t *remaining_ns)
@@ -64,7 +70,8 @@ uint32_t astra_rt_area_unmap(void *address)
 uint32_t astra_rt_handle_duplicate(uint32_t handle, uint32_t rights,
                                    uint32_t *duplicate)
 {
-    assert(handle == 20u && (rights & ASTRA_RIGHT_WRITE) == 0u);
+    assert(handle == 20u &&
+           ((rights & ASTRA_RIGHT_WRITE) != 0u) == (converting != 0));
     *duplicate = 21u;
     return ASTRA_SYSCALL_OK;
 }
@@ -82,10 +89,28 @@ uint32_t astra_port_send(uint32_t handle, const void *message,
     assert(size == sizeof(last_request));
     assert(handle == 99u || handle == 30u);
     assert(count == (handle == 99u ? 2u : 0u));
+    assert(handle != 99u ||
+           ((const AstraPcmRequest *)message)->header.operation ==
+               (converting ? ASTRA_PCM_CONVERT_OPEN : ASTRA_PCM_OPEN));
     assert((count == 0u) == (handles == NULL));
     last_request = *(const AstraPcmRequest *)message;
     ++sends;
-    if (last_request.header.operation == ASTRA_PCM_WRITE) {
+    if (last_request.header.operation == ASTRA_PCM_CONVERT) {
+        assert(!convert_ended);
+        for (uint32_t i = 0u; i < last_request.frames; ++i)
+            for (uint32_t copy = 0u; copy < 2u; ++copy) {
+                pending[pending_bytes++] = shared[2u * i];
+                pending[pending_bytes++] = shared[2u * i + 1u];
+            }
+        convert_ended = last_request.value == ASTRA_PCM_CONVERT_END;
+        converted_out = pending_bytes < sizeof(shared) ? pending_bytes :
+                        sizeof(shared);
+        memcpy(shared, pending, converted_out);
+        memmove(pending, pending + converted_out,
+                pending_bytes - converted_out);
+        pending_bytes -= converted_out;
+        reply_status = ASTRA_STATUS_OK;
+    } else if (last_request.header.operation == ASTRA_PCM_WRITE) {
         ++writes;
         reply_status = writes == 2u ? ASTRA_STATUS_BUSY : ASTRA_STATUS_OK;
     } else {
@@ -119,9 +144,15 @@ uint32_t astra_port_receive(uint32_t handle, void *message,
     reply->status = reply_status;
     reply->queued_frames = queued_next != 0u ?
                            queued_script[--queued_next] : 123u;
+    if (last_request.header.operation == ASTRA_PCM_CONVERT) {
+        reply->frames_out = converted_out / 2u;
+        reply->queued_frames = pending_bytes / 2u;
+    }
     reply->hardware_frames = 45u;
     *size = sizeof(*reply);
-    *handle_count = last_request.header.operation == ASTRA_PCM_OPEN &&
+    *handle_count = (last_request.header.operation == ASTRA_PCM_OPEN ||
+                     last_request.header.operation ==
+                         ASTRA_PCM_CONVERT_OPEN) &&
                     reply_status == ASTRA_STATUS_OK ? 1u : 0u;
     if (*handle_count == 1u) {
         assert(handle_capacity == 1u && handles != NULL);
@@ -207,5 +238,39 @@ int main(void)
     assert(astra_pcm_open(99u, ASTRA_PCM_FORMAT_S24LE_STEREO, &stream) ==
            ASTRA_ERROR_IO);
     assert(stream.control == 0u && stream.area == 0u);
+    zero_control = 0;
+
+    /* Conversion: a source larger than one transfer, output four times
+     * larger, drained before more source is sent, ending exactly. */
+    {
+        static uint8_t source[6000u * 2u];
+        static uint8_t target[12000u * 2u];
+        const uint32_t from = ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_S16BE, 1u,
+                                               11025u);
+        const uint32_t to = ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_S16BE, 1u,
+                                             22050u);
+        uint32_t produced = 99u;
+
+        for (uint32_t i = 0u; i < sizeof(source); ++i)
+            source[i] = (uint8_t)(i * 7u);
+        converting = 1;
+        assert(astra_pcm_convert(99u, from, source, 6000u, to, target,
+                                 11999u, &produced) ==
+               ASTRA_ERROR_BUFFER_TOO_SMALL);
+        assert(produced == 0u);
+        assert(astra_pcm_convert(99u, from, source, 6000u, to, target,
+                                 12000u, &produced) == ASTRA_OK);
+        assert(produced == 12000u && convert_ended && pending_bytes == 0u);
+        assert(last_request.header.operation == ASTRA_PCM_CLOSE);
+        for (uint32_t i = 0u; i < 6000u; ++i)
+            assert(memcmp(target + 4u * i, source + 2u * i, 2u) == 0 &&
+                   memcmp(target + 4u * i + 2u, source + 2u * i, 2u) == 0);
+        convert_ended = 0;
+        assert(astra_pcm_convert(99u, from, NULL, 0u, to, NULL, 0u,
+                                 &produced) == ASTRA_OK);
+        assert(produced == 0u && convert_ended);
+        assert(astra_pcm_convert(99u, 0u, source, 1u, to, target, 2u,
+                                 &produced) == ASTRA_ERROR_INVALID_ARGUMENT);
+    }
     return 0;
 }

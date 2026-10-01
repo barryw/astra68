@@ -180,6 +180,18 @@ shows guest mixing or decoding is material. Do not patch Doom or DevilutionX
 for an Astra-only audio path, and do not claim that a PCM sink alone offloads
 their mixing. Native and POSIX applications share the one media service.
 
+Conversion is the second host service on the same channel. A converter
+handle (host audio protocol 3: `CONVERT_OPEN` with source and target format
+words, then `CONVERT` with source bytes in and converted bytes back in the
+same data area) runs `fpga/arty/linux/astra_audio_convert.c`, the one
+decode/resample/encode implementation the mixer voices also use; the QEMU
+gates' stand-in daemon loads the same file as a shared object. pcm.library
+2.2 exposes it as `astra_pcm_convert`, and SDL2's `SDL_BuildAudioCVT`
+installs it as a single filter whenever the host can take both specs.
+Measured on the DE25 before it existed, Chocolate Doom spent about 60% of a
+192-second start (music off) in SDL's float resampler converting its
+11025 Hz effects to 44.1 kHz in soft-float.
+
 The format layer above PCM will use installable userspace codec providers.
 WAV/PCM is the first useful file reader and writer; compressed formats such as
 MP3 are independent decoder/encoder capabilities, not built into the PCM

@@ -124,6 +124,31 @@ ASTRA_NODISCARD AstraResult astra_pcm_finish(AstraPcmStream *stream);
  */
 ASTRA_NODISCARD AstraResult astra_pcm_close(AstraPcmStream *stream);
 
+/** Convert PCM between formats and rates on the host (pcm.library 2.2).
+ * The Linux audio host decodes, resamples with the mixer's windowed sinc
+ * and encodes; the MC68040 only moves bytes. The result is exactly
+ * floor(@p source_frames * target rate / source rate) frames, with silence
+ * assumed before the first source frame and after the last.
+ * @param service PCM service capability, as for astra_pcm_open().
+ * @param source_format Format word of @p source.
+ * @param source Interleaved source frames.
+ * @param source_frames Number of source frames; zero gives zero frames.
+ * @param target_format Format word of @p target.
+ * @param target Receives interleaved target frames.
+ * @param target_capacity Room in @p target, in frames.
+ * @param target_frames Receives the number of frames written.
+ * @return ASTRA_OK on success; ASTRA_ERROR_BUFFER_TOO_SMALL before any
+ * work when @p target cannot hold the result; otherwise an error.
+ */
+ASTRA_NODISCARD AstraResult astra_pcm_convert(AstraHandle service,
+                                              uint32_t source_format,
+                                              const void *source,
+                                              uint32_t source_frames,
+                                              uint32_t target_format,
+                                              void *target,
+                                              uint32_t target_capacity,
+                                              uint32_t *target_frames);
+
 #ifdef __cplusplus
 }
 #endif
