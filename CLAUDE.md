@@ -118,6 +118,13 @@ There is no alternative CPU or emulator implementation in the repository.
   leave all five green and still be inert. Perturb the thing deliberately --
   break the value, revert the fix -- and see the failure you expect, or you
   have measured nothing.
+- **The ROM embeds the supervisor, and the supervisor links userspace static
+  libraries (`libastravfs.a`, `libastra.a`, `libastrart.a`) it has no rule to
+  rebuild.** `make -C sw/boot` before `make -C sw/userspace` relinks the ROM
+  against the previous build's libraries: an NDK or VFS change (a manifest
+  directive, say) reaches every program but the supervisor, and surfaces as
+  an application that silently never launches. Build userspace first, as
+  `emu/qemu/publish-de25-release.sh` does.
 - **The emulator is not rebuilt by the gates.** After editing
   `emu/qemu/qemu-9.2/hw/m68k/astra68.c`, run `emu/qemu/build.sh host` or you
   are testing the previous binary.

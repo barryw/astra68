@@ -136,6 +136,10 @@ pressed, and focus transitions; applications retain only semantic enablement.
   long as it lasts (the whole display, no chrome, above the system bars and
   raised), and restore returns its own type, state (normal or maximized) and
   frame. Frame and maximize requests are refused while it is fullscreen.
+  Ctrl+GUI+F does the same for the active window from the system, whatever
+  the program offers.
+- An application whose bundle says `single-instance` runs once: opening it
+  again restores and raises its windows through its GUI session.
 - Minimize will place a window in the system shelf when shelf policy exists.
 - `astra_window_close` destroys the server object immediately. A separate
   application-veto close-request event may be added with pointer routing; it

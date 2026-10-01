@@ -63,7 +63,12 @@ typedef struct AstraBundleManifest {
     uint32_t require_capacity; /**< Private allocation capacity. */
     uint32_t provide_capacity; /**< Private allocation capacity. */
     uint16_t capability_count; /**< Used entries in capabilities. */
+    uint16_t flags; /**< ASTRA_BUNDLE_FLAG_* (since system.library 2.7). */
 } AstraBundleManifest;
+
+/** `single-instance`: one copy runs at a time; opening the application
+ *  again brings the running one forward instead of starting another. */
+#define ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE 1u
 
 #define ASTRA_BUNDLE_MANIFEST_INIT {0}
 

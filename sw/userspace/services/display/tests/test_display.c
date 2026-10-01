@@ -2062,6 +2062,41 @@ int main(void)
         fair.pending_input_valid = 1u;
         assert(display_wait_client_ended(&fair, 1u, ASTRA_SYSCALL_PEER_DEAD));
         fair.pending_input_valid = 0u;
+        /* GUI sessions wait after the windows; a session's dead port is
+           its client's, like a window's. */
+        const uint32_t rights =
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP;
+
+        assert(astra_rt_area_create(4096u, rights,
+                                    &fair.session_receive[0]) ==
+                   ASTRA_SYSCALL_OK &&
+               astra_rt_area_create(4096u, rights,
+                                    &fair.session_receive[1]) ==
+                   ASTRA_SYSCALL_OK);
+        fair.session_id[0] = 7u;
+        fair.session_id[1] = 9u;
+        fair.session_count = 2u;
+        assert(display_wait_handles(&fair, 0x10u, 0x20u, 0x25u, 0u,
+                                    waits, sources) == 7u);
+        assert(waits[3] == 0x30u && waits[4] == 0x40u &&
+               waits[5] == fair.session_receive[0] && sources[5] == 5u &&
+               waits[6] == fair.session_receive[1] && sources[6] == 6u);
+        assert(display_window_wait_index(5u, fair.count) == fair.count);
+        assert(display_wait_client_ended(&fair, 6u, ASTRA_SYSCALL_PEER_DEAD));
+        {
+            uint32_t second = fair.session_receive[1];
+
+            close_session(&fair, 0u);
+            assert(fair.session_count == 1u &&
+                   fair.session_receive[0] == second &&
+                   fair.session_id[0] == 9u);
+            close_session(&fair, 0u);
+            assert(fair.session_count == 0u);
+        }
+        fair.session_count = ASTRA_WAIT_MULTIPLE_MAX - 4u;
+        assert(display_wait_handles(&fair, 0x10u, 0x20u, 0x25u, 0u,
+                                    waits, sources) == 0u);
+        fair.session_count = 0u;
         fair.count = ASTRA_WAIT_MULTIPLE_MAX - 2u;
         assert(display_wait_handles(&fair, 0x10u, 0x20u, 0x25u, 0u,
                                     waits, sources) == 0u);

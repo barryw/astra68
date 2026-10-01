@@ -15,6 +15,7 @@
 #include <astra/boot.h>
 #include <astra/bundle.h>
 #include <astra/display.h>
+#include <astra/gui.h>
 #include <astra/event_control.h>
 #include <astra/posix_process.h>
 #include <astra/runtime.h>
@@ -672,6 +673,59 @@ static int entry_grants(const SupervisorManifestEntry *entry,
     return 0;
 }
 
+/* The GUI session opened for the launch in progress, granted to the child
+   in place of the shared GUI port; launch_entry gives it to the process
+   record, or closes it when the launch fails. One launch at a time. */
+static uint32_t launch_session;
+
+/* A private GUI door for one application, so the display knows its
+   windows as its own. Bounded: a display that does not answer leaves the
+   application on the shared port rather than holding up its launch. */
+static uint32_t open_gui_session(uint32_t gui, uint32_t *session)
+{
+    AstraGuiSessionRequest request = {0};
+    AstraGuiSessionOpened reply = {0};
+    uint32_t receive = 0u;
+    uint32_t send = 0u;
+    uint32_t handle = 0u;
+    uint32_t size = 0u;
+    uint32_t handles = 0u;
+    uint32_t status;
+
+    *session = 0u;
+    status = astra_rt_port_create(1u, sizeof(reply), &receive, &send);
+    if (status != ASTRA_SYSCALL_OK)
+        return ASTRA_STATUS_LIMIT;
+    astra_message_header_set(&request.header, sizeof(request),
+                             ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
+                             ASTRA_GUI_OPEN_SESSION, 1u);
+    status = astra_port_send(gui, &request, sizeof(request), &send, 1u);
+    if (status == ASTRA_SYSCALL_OK)
+        send = 0u;
+    if (status == ASTRA_SYSCALL_OK)
+        status = astra_wait_one(receive,
+                                astra_clock_monotonic() +
+                                    UINT64_C(2000000000), NULL);
+    if (status == ASTRA_SYSCALL_OK)
+        status = astra_port_receive(receive, &reply, sizeof(reply), &handle,
+                                    1u, &size, &handles);
+    if (status == ASTRA_SYSCALL_OK &&
+        (size != sizeof(reply) || reply.status != ASTRA_STATUS_OK ||
+         handles != 1u || handle == 0u ||
+         reply.header.operation != ASTRA_GUI_SESSION_OPENED))
+        status = ASTRA_SYSCALL_IO_ERROR;
+    if (status == ASTRA_SYSCALL_OK) {
+        *session = handle;
+        handle = 0u;
+    }
+    if (handle != 0u)
+        (void)astra_close(handle);
+    if (send != 0u)
+        (void)astra_close(send);
+    (void)astra_close(receive);
+    return status == ASTRA_SYSCALL_OK ? ASTRA_STATUS_OK : ASTRA_STATUS_IO;
+}
+
 static uint32_t add_grant(AstraLaunchGrant *out, uint32_t *count,
                           const char *name, uint32_t handle, uint32_t rights,
                           uint32_t flags, const char *root)
@@ -735,6 +789,15 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
             if (held == NULL) {
                 uint32_t published = named_service(wanted->name);
 
+                /* An application gets its own GUI session; a service keeps
+                   the shared port. */
+                if (published != 0u &&
+                    strcmp(wanted->name, ASTRA_CAPABILITY_GUI) == 0 &&
+                    strncmp(entry->path, "/apps/", 6u) == 0 &&
+                    launch_session == 0u &&
+                    open_gui_session(published, &launch_session) ==
+                        ASTRA_STATUS_OK)
+                    published = launch_session;
                 if (published != 0u) {
                     status = add_grant(out, count, wanted->name, published,
                                        ASTRA_RIGHT_SIGNAL | delegated,
@@ -1365,6 +1428,14 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
     process_table.records[process_count].failures = 0u;
     process_table.records[process_count].when = astra_clock_monotonic();
     process_table.records[process_count].service_name[0] = '\0';
+    process_table.records[process_count].gui_session = launch_session;
+    launch_session = 0u;
+    process_table.records[process_count].bundle[0] = '\0';
+    if (strncmp(entry->path, "/apps/", 6u) == 0)
+        (void)astra_string_concat(
+            process_table.records[process_count].bundle,
+            sizeof(process_table.records[process_count].bundle),
+            entry->path);
     if (service != NULL)
         (void)astra_string_concat(process_table.records[process_count].service_name,
                      sizeof(process_table.records[process_count].service_name),
@@ -1395,10 +1466,17 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
                              uint32_t *process_id,
                              uint32_t *process_wait_handle)
 {
-    uint32_t status = launch_entry_attempt(
+    uint32_t status;
+
+    launch_session = 0u;
+    status = launch_entry_attempt(
         startup, entry, service, bundle_root, arguments, image_length,
         open_us, read_at, release, source, process_id, process_wait_handle);
-
+    /* A session the process record did not take belongs to no one. */
+    if (launch_session != 0u) {
+        (void)astra_close(launch_session);
+        launch_session = 0u;
+    }
     if (status != ASTRA_STATUS_OK) {
         const SupervisorLaunchReportField fields[] = {{" status=", status}};
 
@@ -1438,6 +1516,8 @@ static void unpublish_owner(const char *owner)
 
 static void remove_process_slot(uint32_t slot)
 {
+    if (process_table.records[slot].gui_session != 0u)
+        (void)astra_close(process_table.records[slot].gui_session);
     (void)astra_close(process_table.records[slot].shutdown_send);
     (void)astra_close(process_table.records[slot].handle);
     --process_count;
@@ -2242,6 +2322,33 @@ static void log_refused_grant(const char *path,
         (void)astra_log(message);
 }
 
+/*
+ * A single-instance application opened while it runs is brought forward
+ * instead of started again: its GUI session asks the display to restore
+ * and raise its windows. Returns the running process's slot, or UINT32_MAX.
+ */
+static uint32_t bring_forward(const char *bundle)
+{
+    for (uint32_t slot = 0u; slot < process_count; ++slot) {
+        const SupervisorProcessRecord *record = &process_table.records[slot];
+
+        if (record->action != SUPERVISOR_PROCESS_ACTION_NONE ||
+            strcmp(record->bundle, bundle) != 0)
+            continue;
+        if (record->gui_session != 0u) {
+            AstraGuiSessionRequest request = {0};
+
+            astra_message_header_set(&request.header, sizeof(request),
+                                     ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
+                                     ASTRA_GUI_SESSION_ACTIVATE, 1u);
+            (void)astra_port_send(record->gui_session, &request,
+                                  sizeof(request), NULL, 0u);
+        }
+        return slot;
+    }
+    return UINT32_MAX;
+}
+
 static void pump_launch(const AstraStartupInfo *startup)
 {
     AstraApplicationLaunchRequest request = {0};
@@ -2341,6 +2448,23 @@ static void pump_launch(const AstraStartupInfo *startup)
     entry.delegates = 1u;
     status = resolve_entry_image(&entry, entry_path, sizeof(entry_path),
                                  bundle_root, sizeof(bundle_root), &bundle);
+    if (status == ASTRA_STATUS_OK &&
+        (bundle.flags & ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE) != 0u) {
+        uint32_t running = bring_forward(entry.path);
+
+        if (running != UINT32_MAX) {
+            uint32_t wait = 0u;
+
+            astra_bundle_manifest_destroy(&bundle);
+            status = astra_rt_handle_duplicate(
+                         process_table.records[running].handle,
+                         ASTRA_RIGHT_WAIT | ASTRA_RIGHT_TRANSFER, &wait) ==
+                    ASTRA_SYSCALL_OK ? ASTRA_STATUS_OK : ASTRA_STATUS_LIMIT;
+            launch_reply(reply_send, request.header.transaction_id, status,
+                         process_table.records[running].id, wait);
+            return;
+        }
+    }
     for (uint32_t at = 0u;
          status == ASTRA_STATUS_OK && at < bundle.capability_count; ++at) {
         if (entry.grant_count == SUPERVISOR_MANIFEST_GRANT_MAX ||

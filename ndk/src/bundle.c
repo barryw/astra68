@@ -160,6 +160,13 @@ static int parse_line(char *line, AstraBundleManifest *manifest)
         return count == 2u && manifest->icon[0] == '\0' &&
                relative_path(word[1]) &&
                copy(manifest->icon, sizeof(manifest->icon), word[1]);
+    if (strcmp(word[0], "single-instance") == 0) {
+        if (count != 1u ||
+            (manifest->flags & ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE) != 0u)
+            return 0;
+        manifest->flags |= ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE;
+        return 1;
+    }
     if (strcmp(word[0], "capability") == 0) {
         if (count != 2u || manifest->capability_count == ASTRA_BUNDLE_CAPABILITY_MAX)
             return 0;
@@ -243,6 +250,11 @@ uint32_t astra_bundle_manifest_parse(char *text, uint32_t length,
     {
         astra_bundle_manifest_destroy(manifest);
         return ASTRA_BUNDLE_MISSING;
+    }
+    /* Only an application has instances. */
+    if (manifest->kind == ASTRA_BUNDLE_KIT && manifest->flags != 0u) {
+        astra_bundle_manifest_destroy(manifest);
+        return ASTRA_BUNDLE_INVALID;
     }
     return ASTRA_BUNDLE_OK;
 }

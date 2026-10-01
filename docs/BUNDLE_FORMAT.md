@@ -82,6 +82,22 @@ requires library.name ABI MINIMUM.VERSION
 provides library.name ABI VERSION
 ```
 
+Optional application-only singleton directive (system.library 2.7):
+
+```
+single-instance
+```
+
+One copy of the application runs at a time. Opening it again while it runs
+starts nothing: the supervisor asks the display, through the application's
+GUI session, to restore and raise its windows, and answers the launch with
+the running process. Games that take over the machine use it.
+
+An application may ship first preferences in `resources/defaults/`. When the
+supervisor first creates the application's `STORE:`, it copies those files
+into it; from then on they are the application's own, and later launches
+never overwrite them. Removing the store resets it to the defaults.
+
 A Kit must provide at least one library. An application may request only
 capabilities named by its manifest. Paths are bundle-relative: assigns,
 absolute paths, backslashes, and `.` or `..` components are forbidden.

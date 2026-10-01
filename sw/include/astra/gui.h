@@ -281,6 +281,15 @@ _Static_assert(sizeof(AstraWindowEvent) == 52u,
 #define ASTRA_GUI_WINDOW_EVENT   5u
 #define ASTRA_GUI_GRAPHICS_COMMAND 6u
 #define ASTRA_GUI_GRAPHICS_REPLY   7u
+/* A GUI session is a private door to the display for one application: the
+   supervisor opens one per application it launches and grants it in place
+   of the shared GUI port, so the display knows which windows are whose.
+   OPEN_SESSION carries a reply capability and is answered by
+   SESSION_OPENED with the session's send capability. SESSION_ACTIVATE,
+   sent through a session, restores and raises its windows. */
+#define ASTRA_GUI_OPEN_SESSION     8u
+#define ASTRA_GUI_SESSION_OPENED   9u
+#define ASTRA_GUI_SESSION_ACTIVATE 10u
 
 /* Window-scoped GPU objects; see docs/MANAGED_GRAPHICS.md. */
 enum {
@@ -361,6 +370,16 @@ typedef struct AstraGuiWindowOpened {
     uint32_t generation;
 } AstraGuiWindowOpened;
 
+typedef struct AstraGuiSessionRequest {
+    AstraMessageHeader header;
+} AstraGuiSessionRequest;
+
+typedef struct AstraGuiSessionOpened {
+    AstraMessageHeader header;
+    uint32_t status;
+    uint32_t session;
+} AstraGuiSessionOpened;
+
 typedef struct AstraGuiWindowCommand {
     AstraMessageHeader header;
     uint32_t window;
@@ -430,6 +449,15 @@ typedef struct AstraGuiGraphicsReply {
 #define ASTRA_GUI_WINDOW_EVENT_SIZE   76u
 #define ASTRA_GUI_GRAPHICS_COMMAND_SIZE 84u
 #define ASTRA_GUI_GRAPHICS_REPLY_SIZE 40u
+#define ASTRA_GUI_SESSION_REQUEST_SIZE ASTRA_MESSAGE_HEADER_SIZE
+#define ASTRA_GUI_SESSION_OPENED_SIZE (ASTRA_MESSAGE_HEADER_SIZE + 8u)
+
+_Static_assert(sizeof(AstraGuiSessionRequest) ==
+                   ASTRA_GUI_SESSION_REQUEST_SIZE,
+               "GUI session request is an ABI");
+_Static_assert(sizeof(AstraGuiSessionOpened) ==
+                   ASTRA_GUI_SESSION_OPENED_SIZE,
+               "GUI session-opened message is an ABI");
 
 _Static_assert(sizeof(AstraGuiOpenWindow) == ASTRA_GUI_OPEN_WINDOW_SIZE,
                "GUI open-window message is an ABI");

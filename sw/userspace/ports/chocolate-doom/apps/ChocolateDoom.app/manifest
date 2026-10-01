@@ -16,3 +16,4 @@ requires SDL2_net.library 2 2.4.0
 requires libc.library 2 2.0.0
 requires runtime.library 1 1.6.0
 requires compiler.library 1 1.0.0
+single-instance

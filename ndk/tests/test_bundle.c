@@ -72,6 +72,38 @@ static void manifest_test(void)
                    capabilities, sizeof(capabilities) - 1u, &manifest,
                    &line) == ASTRA_BUNDLE_OK);
         assert(manifest.capability_count == 9u);
+        assert(manifest.flags == 0u);
+    }
+    {
+        char single[] =
+            "astra-bundle 1\nkind application\nid org.astra.single\n"
+            "name Single\nversion 1.0.0\nexecutable bin/app\n"
+            "icon resources/app.aicon\nsingle-instance\n";
+        char twice[] =
+            "astra-bundle 1\nkind application\nid org.astra.single\n"
+            "name Single\nversion 1.0.0\nexecutable bin/app\n"
+            "icon resources/app.aicon\nsingle-instance\nsingle-instance\n";
+        char argument[] =
+            "astra-bundle 1\nkind application\nid org.astra.single\n"
+            "name Single\nversion 1.0.0\nexecutable bin/app\n"
+            "icon resources/app.aicon\nsingle-instance yes\n";
+        char kit[] =
+            "astra-bundle 1\nkind kit\nid org.astra.kit\nname Kit\n"
+            "version 1.0.0\nprovides x.library 1 1.0.0\nsingle-instance\n";
+
+        assert(astra_bundle_manifest_parse(
+                   single, sizeof(single) - 1u, &manifest, &line) ==
+               ASTRA_BUNDLE_OK);
+        assert(manifest.flags == ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE);
+        assert(astra_bundle_manifest_parse(
+                   twice, sizeof(twice) - 1u, &manifest, &line) ==
+               ASTRA_BUNDLE_INVALID && line == 9u);
+        assert(astra_bundle_manifest_parse(
+                   argument, sizeof(argument) - 1u, &manifest, &line) ==
+               ASTRA_BUNDLE_INVALID && line == 8u);
+        assert(astra_bundle_manifest_parse(
+                   kit, sizeof(kit) - 1u, &manifest, &line) ==
+               ASTRA_BUNDLE_INVALID);
     }
     {
         char bad[] = "astra-bundle 1\nkind application\nid Bad/Id\n";

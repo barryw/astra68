@@ -96,6 +96,9 @@ typedef struct DisplayWindow {
     AstraAiconStrike title_icon_strike;
     uint32_t id;
     uint32_t generation;
+    /* The GUI session the window was opened through, or zero for the
+       shared GUI port: whose window it is (ASTRA_GUI_OPEN_SESSION). */
+    uint32_t session;
     uint32_t control_receive;
     uint32_t event_send;
     uint32_t vblank_signal;
@@ -201,6 +204,12 @@ typedef struct DisplayState {
     uint8_t pending_input_valid;
     uint32_t pending_input_window;
     AstraGuiWindowEvent pending_input;
+    /* Open GUI sessions, waited on after the windows. Every session and
+       window is one wait handle, so the kernel's wait bound is theirs. */
+    uint32_t session_receive[ASTRA_WAIT_MULTIPLE_MAX];
+    uint32_t session_id[ASTRA_WAIT_MULTIPLE_MAX];
+    uint32_t session_count;
+    uint32_t next_session;
 } DisplayState;
 
 enum {
@@ -3488,10 +3497,131 @@ static void close_window(DisplayWindow *window)
     *window = (DisplayWindow){0};
 }
 
+static int valid_session_request(const AstraGuiSessionRequest *request,
+                                 uint32_t size, uint32_t operation)
+{
+    return size == sizeof(*request) &&
+           request->header.total_size == sizeof(*request) &&
+           request->header.header_size == ASTRA_MESSAGE_HEADER_SIZE &&
+           request->header.flags == 0u &&
+           request->header.protocol == ASTRA_GUI_PROTOCOL &&
+           request->header.protocol_version == ASTRA_GUI_VERSION &&
+           request->header.reserved == 0u &&
+           request->header.operation == operation;
+}
+
+/* A new session: its receive end joins the wait set, its send end goes to
+   whoever asked -- the supervisor, for an application it is launching. */
+static void open_session(DisplayState *state,
+                         const AstraGuiSessionRequest *request,
+                         uint32_t reply)
+{
+    AstraGuiSessionOpened message = {0};
+    uint32_t receive = 0u;
+    uint32_t send = 0u;
+    uint32_t status = state->count + state->session_count >=
+                              ASTRA_WAIT_MULTIPLE_MAX - 3u ?
+        ASTRA_STATUS_LIMIT : ASTRA_STATUS_OK;
+
+    if (status == ASTRA_STATUS_OK)
+        status = service_status(astra_rt_port_create(
+            4u, ASTRA_GUI_OPEN_WINDOW_SIZE * 4u, &receive, &send));
+    if (status == ASTRA_STATUS_OK) {
+        if (++state->next_session == 0u)
+            state->next_session = 1u;
+        message.session = state->next_session;
+    }
+    astra_message_header_set(&message.header, sizeof(message),
+                             ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
+                             ASTRA_GUI_SESSION_OPENED,
+                             request->header.transaction_id);
+    message.status = status;
+    if (astra_port_send(reply, &message, sizeof(message),
+                        status == ASTRA_STATUS_OK ? &send : NULL,
+                        status == ASTRA_STATUS_OK ? 1u : 0u) ==
+            ASTRA_SYSCALL_OK &&
+        status == ASTRA_STATUS_OK) {
+        send = 0u;
+        state->session_receive[state->session_count] = receive;
+        state->session_id[state->session_count++] = message.session;
+        receive = 0u;
+    }
+    if (send != 0u)
+        (void)astra_close(send);
+    if (receive != 0u)
+        (void)astra_close(receive);
+}
+
+/* Everyone holding the session has gone. Its windows end on their own
+   ports; nothing here outlives them. */
+static void close_session(DisplayState *state, uint32_t index)
+{
+    (void)astra_close(state->session_receive[index]);
+    for (uint32_t at = index; at + 1u < state->session_count; ++at) {
+        state->session_receive[at] = state->session_receive[at + 1u];
+        state->session_id[at] = state->session_id[at + 1u];
+    }
+    --state->session_count;
+}
+
+/* An application opened again while it runs: its windows come back and
+   forward, in their order, the topmost of them active. */
+static void activate_session(uint32_t device, uint32_t irq,
+                             AstraDmaBufferInfo *framebuffer,
+                             AstraDmaBufferInfo *pointer_buffer,
+                             DisplayState *state, uint32_t session,
+                             uint32_t *next_fence, uint32_t *cursor_fence,
+                             uint32_t *armed)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    uint32_t count = state->count;
+    uint32_t at = 0u;
+    int changed = 0;
+
+    /* Raising moves a window to the top, so the scan stays put on a match
+       and visits each window exactly once. */
+    for (uint32_t visited = 0u; visited < count && at < state->count;
+         ++visited) {
+        DisplayWindow *window = &state->windows[at];
+        AstraGuiWindowCommand command = { .window = window->id };
+        DisplayWindow closed = {0};
+        int step = 0;
+
+        if (window->session != session || session == 0u) {
+            ++at;
+            continue;
+        }
+        command.action = ASTRA_GUI_WINDOW_ACTIVATE;
+        (void)apply_command(state, &theme, &command, &closed, &step);
+        changed |= step;
+        command.action = ASTRA_GUI_WINDOW_RAISE;
+        (void)apply_command(state, &theme, &command, &closed, &step);
+        changed |= step;
+        if (find_id(state, command.window) == at)
+            ++at;
+    }
+    if (!changed)
+        return;
+    {
+        uint32_t status = render_window_change(device, irq, framebuffer,
+                                               pointer_buffer, state,
+                                               next_fence, cursor_fence,
+                                               armed);
+
+        if (status != ASTRA_STATUS_OK)
+            render_failure("display session activation render failed",
+                           status);
+    }
+    for (uint32_t index = 0u; index < state->count; ++index)
+        if (state->windows[index].session == session)
+            state_event(&state->windows[index], 0u, index);
+}
+
 static void receive_open(uint32_t device, uint32_t irq,
                          AstraDmaBufferInfo *framebuffer,
                          AstraDmaBufferInfo *pointer_buffer,
                          DisplayState *state, uint32_t gui_receive,
+                         uint32_t session,
                          uint32_t *next_fence, uint32_t *cursor_fence,
                          uint32_t *armed)
 {
@@ -3508,13 +3638,39 @@ static void receive_open(uint32_t device, uint32_t irq,
         ASTRA_MESSAGE_HANDLES_MAX, &size, &handle_count);
     int added = 0;
 
+    if (status == ASTRA_SYSCALL_PEER_DEAD && session != 0u) {
+        for (uint32_t index = 0u; index < state->session_count; ++index)
+            if (state->session_id[index] == session) {
+                close_session(state, index);
+                break;
+            }
+        return;
+    }
     if (status != ASTRA_SYSCALL_OK)
         return;
+    if (size == sizeof(AstraGuiSessionRequest)) {
+        const AstraGuiSessionRequest *message =
+            (const AstraGuiSessionRequest *)(const void *)&request;
+
+        if (handle_count == 1u &&
+            valid_session_request(message, size, ASTRA_GUI_OPEN_SESSION))
+            open_session(state, message, handles[0]);
+        else if (handle_count == 0u && session != 0u &&
+                 valid_session_request(message, size,
+                                       ASTRA_GUI_SESSION_ACTIVATE))
+            activate_session(device, irq, framebuffer, pointer_buffer,
+                             state, session, next_fence, cursor_fence,
+                             armed);
+        for (uint32_t index = 0u; index < handle_count; ++index)
+            if (handles[index] != 0u)
+                (void)astra_close(handles[index]);
+        return;
+    }
     status = valid_open(&request, size, handle_count) &&
              (request.type != ASTRA_WINDOW_DESKTOP || state->count == 0u) ?
         ASTRA_STATUS_OK : DISPLAY_FAIL_PROTOCOL;
     if (status == ASTRA_STATUS_OK &&
-        state->count >= ASTRA_WAIT_MULTIPLE_MAX - 3u)
+        state->count + state->session_count >= ASTRA_WAIT_MULTIPLE_MAX - 3u)
         status = ASTRA_STATUS_LIMIT;
     if (status == ASTRA_STATUS_OK)
         status = display_windows_reserve(state, state->count + 1u);
@@ -3583,6 +3739,7 @@ static void receive_open(uint32_t device, uint32_t irq,
         candidate.request.flags &= ~ASTRA_WINDOW_ACTIVE;
         candidate.id = allocate_id(state);
         candidate.generation = 1u;
+        candidate.session = session;
         candidate.event_send = handles[1];
         handles[1] = 0u;
         init_content_banks(&candidate);
@@ -4098,9 +4255,10 @@ static uint32_t display_wait_handles(const DisplayState *state,
         find_id(state, state->pending_input_window) : 0u;
 
     if (state == NULL || waits == NULL || sources == NULL ||
-        state->count > ASTRA_WAIT_MULTIPLE_MAX - 3u)
+        state->count > ASTRA_WAIT_MULTIPLE_MAX - 3u ||
+        state->session_count > ASTRA_WAIT_MULTIPLE_MAX - 3u - state->count)
         return 0u;
-    count = state->count + 3u;
+    count = state->count + state->session_count + 3u;
 
     first %= count;
     for (uint32_t slot = 0u; slot < count; ++slot) {
@@ -4115,7 +4273,10 @@ static uint32_t display_wait_handles(const DisplayState *state,
                           state->windows[pending].event_send :
                       source == 1u ? input_receive :
                       source == 2u ? vblank_irq :
-                      state->windows[source - 3u].control_receive;
+                      source - 3u < state->count ?
+                          state->windows[source - 3u].control_receive :
+                          state->session_receive[source - 3u -
+                                                 state->count];
     }
     return count;
 }
@@ -4223,7 +4384,7 @@ static void serve_windows(uint32_t device, uint32_t irq,
         first_wait = (selected + 1u) % wait_count;
         if (selected == 0u)
             receive_open(device, irq, framebuffer, pointer_buffer,
-                         &state, gui_receive, &next_fence,
+                         &state, gui_receive, 0u, &next_fence,
                          &cursor_fence, &armed);
         else if (selected == 1u && state.pending_input_valid != 0u) {
             retry_pending_input(&state);
@@ -4289,6 +4450,14 @@ static void serve_windows(uint32_t device, uint32_t irq,
                                 &state, window_index, &next_fence,
                                 &cursor_fence,
                                 &armed);
+            else if (selected - 3u - state.count < state.session_count) {
+                uint32_t session = selected - 3u - state.count;
+
+                receive_open(device, irq, framebuffer, pointer_buffer,
+                             &state, state.session_receive[session],
+                             state.session_id[session], &next_fence,
+                             &cursor_fence, &armed);
+            }
         }
     }
 }
