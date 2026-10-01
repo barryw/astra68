@@ -3050,6 +3050,48 @@ static uint32_t render_window_change(
     return status;
 }
 
+/* Ctrl+GUI+F, the system's own full-screen chord: whatever the program
+   offers, the person can always take a window full screen and back. */
+#define DISPLAY_FULLSCREEN_KEY 0x09u /* USB HID F */
+
+static int fullscreen_chord(const AstraLogicalInputEvent *input)
+{
+    return input->type == ASTRA_INPUT_EVENT_KEY &&
+           input->code == DISPLAY_FULLSCREEN_KEY &&
+           (input->modifiers & (ASTRA_INPUT_MOD_LEFT_CTRL |
+                                ASTRA_INPUT_MOD_RIGHT_CTRL)) != 0u &&
+           (input->modifiers & (ASTRA_INPUT_MOD_LEFT_GUI |
+                                ASTRA_INPUT_MOD_RIGHT_GUI)) != 0u;
+}
+
+/* Toggles the active window between full screen and the state and frame it
+   had; the program hears of it as a state change and a resize, as it would
+   had it asked. A window created full screen has nothing to return to. */
+static void toggle_fullscreen(DisplayState *state, const AstraTheme *theme,
+                              const AstraLogicalInputEvent *input,
+                              uint32_t *effects, uint32_t *frame_window,
+                              uint32_t *frame_timestamp)
+{
+    uint32_t index = active_window(state);
+    AstraGuiWindowCommand command = {0};
+    DisplayWindow closed = {0};
+    int changed = 0;
+
+    if (index == state->count)
+        return;
+    command.window = state->windows[index].id;
+    command.action =
+        state->windows[index].state == ASTRA_WINDOW_STATE_FULLSCREEN ?
+            ASTRA_GUI_WINDOW_RESTORE : ASTRA_GUI_WINDOW_FULLSCREEN;
+    if (apply_command(state, theme, &command, &closed, &changed) !=
+            ASTRA_STATUS_OK || !changed)
+        return;
+    *effects |= DISPLAY_POINTER_RENDER | DISPLAY_POINTER_FRAME |
+                DISPLAY_POINTER_RESIZE;
+    *frame_window = command.window;
+    *frame_timestamp = input->timestamp_ms;
+}
+
 static uint32_t handle_pointer(DisplayState *state,
                                const AstraLogicalInputEvent *input,
                                uint32_t *effects, uint32_t *frame_window,
@@ -3072,6 +3114,12 @@ static uint32_t handle_pointer(DisplayState *state,
                 set_overlay(state, DISPLAY_OVERLAY_NONE);
                 *effects |= DISPLAY_POINTER_RENDER;
             }
+            return ASTRA_STATUS_OK;
+        }
+        if (fullscreen_chord(input)) {
+            if ((input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u)
+                toggle_fullscreen(state, &theme, input, effects,
+                                  frame_window, frame_timestamp);
             return ASTRA_STATUS_OK;
         }
         index = active_window(state);

@@ -2638,6 +2638,46 @@ int main(void)
             assert(current->state == ASTRA_WINDOW_STATE_NORMAL &&
                    current->request.x == restore_x &&
                    current->request.width == restore_width);
+            {
+                /* Ctrl+GUI+F takes the active window full screen and back,
+                   whatever its program offers; the key goes no further. */
+                AstraLogicalInputEvent chord = {
+                    .type = ASTRA_INPUT_EVENT_KEY,
+                    .flags = ASTRA_INPUT_LOGICAL_DOWN,
+                    .code = DISPLAY_FULLSCREEN_KEY,
+                    .modifiers = ASTRA_INPUT_MOD_LEFT_CTRL |
+                                 ASTRA_INPUT_MOD_RIGHT_GUI,
+                };
+                uint32_t chord_effects = 0u;
+                uint32_t chord_window = 0u;
+                uint32_t chord_time = 0u;
+
+                assert((current->request.flags & ASTRA_WINDOW_ACTIVE) != 0u);
+                assert(handle_pointer(&state, &chord, &chord_effects,
+                                      &chord_window, &chord_time) ==
+                       ASTRA_STATUS_OK);
+                current = &state.windows[find_id(&state, id)];
+                assert(current->state == ASTRA_WINDOW_STATE_FULLSCREEN &&
+                       chord_window == id &&
+                       (chord_effects & DISPLAY_POINTER_RESIZE) != 0u);
+                chord.flags = 0u; /* release: nothing */
+                assert(handle_pointer(&state, &chord, &chord_effects,
+                                      &chord_window, &chord_time) ==
+                       ASTRA_STATUS_OK);
+                current = &state.windows[find_id(&state, id)];
+                assert(current->state == ASTRA_WINDOW_STATE_FULLSCREEN);
+                chord.flags = ASTRA_INPUT_LOGICAL_DOWN;
+                assert(handle_pointer(&state, &chord, &chord_effects,
+                                      &chord_window, &chord_time) ==
+                       ASTRA_STATUS_OK);
+                current = &state.windows[find_id(&state, id)];
+                assert(current->state == ASTRA_WINDOW_STATE_NORMAL &&
+                       current->request.x == restore_x &&
+                       current->request.width == restore_width);
+                /* Without GUI it is the program's own key. */
+                chord.modifiers = ASTRA_INPUT_MOD_LEFT_CTRL;
+                assert(!fullscreen_chord(&chord));
+            }
             window = current;
         }
 

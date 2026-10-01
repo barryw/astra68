@@ -376,6 +376,14 @@ static void ASTRA_PumpEvents(_THIS)
                 }
                 break;
             case ASTRA_WINDOW_EVENT_STATE:
+                /* The person may take a window full screen and back from
+                   the system (Ctrl+GUI+F) as well as the program: SDL's
+                   flag follows the display, as on other window systems. */
+                if (event.data.state.state == ASTRA_WINDOW_STATE_FULLSCREEN)
+                    window->flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+                else if (event.data.state.state !=
+                         ASTRA_WINDOW_STATE_MINIMIZED)
+                    window->flags &= ~SDL_WINDOW_FULLSCREEN_DESKTOP;
                 SDL_SendWindowEvent(window, SDL_WINDOWEVENT_MOVED,
                                     event.data.state.frame.x,
                                     event.data.state.frame.y);
