@@ -138,6 +138,48 @@ uint32_t astra_wait_one(uint32_t handle, uint64_t deadline_ns,
     return ASTRA_SYSCALL_OK;
 }
 
+/* The device's answer to the request in flight (collect_request). */
+static AstraDisplayFrameCompletion collected;
+static uint32_t refusals_logged;
+
+uint32_t astra_display_collect(uint32_t device,
+                               AstraDisplayFrameCompletion *completion)
+{
+    assert(device == 0x600u);
+    *completion = collected;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t astra_irq_read(uint32_t handle, AstraIrqRecord *record,
+                        uint32_t *events)
+{
+    (void)handle;
+    (void)record;
+    (void)events;
+    return ASTRA_SYSCALL_WOULD_BLOCK;
+}
+
+uint32_t astra_irq_ack(uint32_t handle, uint32_t sequence)
+{
+    (void)handle;
+    (void)sequence;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t astra_log(const char *text)
+{
+    (void)text;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t astra_log_failure(const char *operation, uint32_t status)
+{
+    (void)operation;
+    (void)status;
+    ++refusals_logged;
+    return ASTRA_SYSCALL_OK;
+}
+
 #define astra_main astra_display_service_main
 #include "../main.c"
 #undef astra_main
@@ -1304,6 +1346,28 @@ int main(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
 
+    {
+        /* A request the device answers with a failure is that request's:
+           a client's batch in flight is dropped and the display goes on;
+           only a malformed answer means the device itself is lost. */
+        collected = (AstraDisplayFrameCompletion){
+            .size = ASTRA_DISPLAY_FRAME_COMPLETION_SIZE, .fence = 7u,
+            .status = ASTRA_DISPLAY_COMPLETION_IO_ERROR, .generation = 3u,
+        };
+        in_flight.active = 1u;
+        in_flight.fence = 7u;
+        assert(settle(0x600u, 0x500u) == ASTRA_STATUS_OK &&
+               in_flight.active == 0u && refusals_logged == 1u);
+        in_flight.active = 1u;
+        assert(collect_request(0x600u, 0x500u) == DISPLAY_REQUEST_REFUSED);
+        collected.status = ASTRA_DISPLAY_COMPLETION_OK;
+        in_flight.active = 1u;
+        assert(collect_request(0x600u, 0x500u) == ASTRA_STATUS_OK);
+        collected.fence = 8u;
+        in_flight.active = 1u;
+        assert(collect_request(0x600u, 0x500u) == DISPLAY_FAIL_COMPLETION);
+        in_flight.active = 0u;
+    }
     test_dynamic_window_resources();
     test_window_graphics();
     test_content_banks();

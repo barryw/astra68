@@ -234,6 +234,10 @@ enum {
     DISPLAY_FAIL_IRQ,
     DISPLAY_FAIL_COMPLETION,
     DISPLAY_FAIL_PROTOCOL,
+    /* The device answered and refused this one request (a malformed batch,
+       a command over its deadline). The device and the display are fine:
+       it is that request's failure, never the machine's. */
+    DISPLAY_REQUEST_REFUSED,
 };
 
 ASTRA_PROGRAM("display", 0, 3, 0, "Barry Walker",
@@ -2172,9 +2176,14 @@ static uint32_t collect_request(uint32_t device, uint32_t irq)
             return DISPLAY_FAIL_IRQ;
     }
     if (completion.size != ASTRA_DISPLAY_FRAME_COMPLETION_SIZE ||
-        completion.fence != in_flight.fence ||
-        completion.status != ASTRA_DISPLAY_COMPLETION_OK ||
-        completion.generation == 0u || completion.reserved != 0u)
+        completion.fence != in_flight.fence || completion.reserved != 0u)
+        return DISPLAY_FAIL_COMPLETION;
+    if (completion.status != ASTRA_DISPLAY_COMPLETION_OK) {
+        (void)astra_log_failure("display request refused by the device",
+                                completion.status);
+        return DISPLAY_REQUEST_REFUSED;
+    }
+    if (completion.generation == 0u)
         return DISPLAY_FAIL_COMPLETION;
     return ASTRA_STATUS_OK;
 }
@@ -2188,6 +2197,13 @@ static uint32_t settle(uint32_t device, uint32_t irq)
     if (in_flight.active == 0u)
         return ASTRA_STATUS_OK;
     status = collect_request(device, irq);
+    /* The batch in flight is a client's drawing: the client lost that
+       frame, and nothing else did. */
+    if (status == DISPLAY_REQUEST_REFUSED) {
+        (void)astra_log("display dropped a client render the device "
+                        "refused");
+        return ASTRA_STATUS_OK;
+    }
     if (status != ASTRA_STATUS_OK)
         (void)astra_log_failure("display render-only batch", status);
     return status;
@@ -2425,10 +2441,14 @@ static void log_render_failure(const char *phase, uint32_t status)
         (void)astra_log_failure("display hardware render", status);
 }
 
+/* A refused frame was not committed: what it would have shown stays
+   damaged and is drawn by the next one. Only a device that stopped
+   answering ends the display. */
 static void render_failure(const char *phase, uint32_t status)
 {
     log_render_failure(phase, status);
-    astra_process_exit(DISPLAY_FAIL_COMPLETION);
+    if (status != DISPLAY_REQUEST_REFUSED)
+        astra_process_exit(DISPLAY_FAIL_COMPLETION);
 }
 
 static uint32_t window_gadgets(uint8_t type)
@@ -3723,11 +3743,14 @@ static void receive_command(uint32_t device, uint32_t irq,
                                        .action = ASTRA_GUI_WINDOW_CLOSE };
 
         (void)apply_command(state, &theme, &close, &closed, &changed);
-        if (changed && render_window_change(device, irq, framebuffer,
-                                            pointer_buffer, state,
-                                            next_fence, cursor_fence,
-                                            armed) != ASTRA_STATUS_OK)
-            astra_process_exit(DISPLAY_FAIL_COMPLETION);
+        if (changed) {
+            uint32_t render_status = render_window_change(
+                device, irq, framebuffer, pointer_buffer, state, next_fence,
+                cursor_fence, armed);
+
+            if (render_status != ASTRA_STATUS_OK)
+                render_failure("display close render failed", render_status);
+        }
         close_window(&closed);
         return;
     }
@@ -4164,19 +4187,24 @@ static void serve_windows(uint32_t device, uint32_t irq,
                                  &frame_window, &frame_timestamp);
             if (status != ASTRA_STATUS_OK)
                 astra_process_exit(DISPLAY_FAIL_PROTOCOL);
+            if ((effects & DISPLAY_POINTER_CURSOR) != 0u) {
+                status = prepare_pointer_image(device, irq, pointer_buffer,
+                                               &state, &theme, &cursor_fence,
+                                               &armed);
+                if (status != ASTRA_STATUS_OK)
+                    render_failure("display pointer image failed", status);
+            }
             if ((effects & DISPLAY_POINTER_CURSOR) != 0u &&
-                prepare_pointer_image(device, irq, pointer_buffer, &state,
-                                      &theme, &cursor_fence, &armed) !=
-                    ASTRA_STATUS_OK)
-                astra_process_exit(DISPLAY_FAIL_COMPLETION);
-            if ((effects & DISPLAY_POINTER_CURSOR) != 0u &&
-                (effects & DISPLAY_POINTER_RENDER) == 0u &&
-                update_cursor(device, irq, state.pointer_x, state.pointer_y,
-                              ASTRA_DISPLAY_CURSOR_VISIBLE |
-                                  ASTRA_DISPLAY_CURSOR_SHAPE(
-                                      display_pointer_shape(&state, &theme)),
-                              &cursor_fence, &armed) != ASTRA_STATUS_OK)
-                astra_process_exit(DISPLAY_FAIL_COMPLETION);
+                (effects & DISPLAY_POINTER_RENDER) == 0u) {
+                status = update_cursor(
+                    device, irq, state.pointer_x, state.pointer_y,
+                    ASTRA_DISPLAY_CURSOR_VISIBLE |
+                        ASTRA_DISPLAY_CURSOR_SHAPE(
+                            display_pointer_shape(&state, &theme)),
+                    &cursor_fence, &armed);
+                if (status != ASTRA_STATUS_OK)
+                    render_failure("display cursor update failed", status);
+            }
             if ((effects & DISPLAY_POINTER_CURSOR) != 0u &&
                 (effects & DISPLAY_POINTER_RENDER) == 0u)
                 pointer_shape_presented(&state, &theme);
