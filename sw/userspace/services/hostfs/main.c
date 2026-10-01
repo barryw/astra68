@@ -35,6 +35,14 @@ static AstraVfsService metrics_service;
 static AstraVfsSessionSlot metrics_sessions[ASTRA_VFS_SESSION_MAX];
 static AstraVfsPortService metrics_port;
 static AstraVfsPortWorker metrics_worker;
+/* SOUND: is the host directory the Linux audio host reads SoundFonts from,
+ * so an update here is what it plays. It has no direct path: a client's
+ * commands come through this service, which names the volume. */
+static AstraVfsHostBackend sound_backend;
+static AstraVfsService sound_service;
+static AstraVfsSessionSlot sound_sessions[ASTRA_VFS_SESSION_MAX];
+static AstraVfsPortService sound_port;
+static AstraVfsPortWorker sound_worker;
 static volatile uint32_t shutdown_requested;
 static _Alignas(16) uint8_t signal_stack[4096u];
 
@@ -64,10 +72,18 @@ static uint32_t finish_hostfs(void)
 
     while (astra_vfs_port_service_worker_pump(&metrics_port,
                                                &metrics_worker, 1u) != 0u) {}
+    while (astra_vfs_port_service_worker_pump(&sound_port, &sound_worker,
+                                               1u) != 0u) {}
     while (astra_vfs_port_service_worker_pump(&port, &worker, 1u) != 0u) {}
-    if (metrics_port.stalled != 0u || port.stalled != 0u)
+    if (metrics_port.stalled != 0u || sound_port.stalled != 0u ||
+        port.stalled != 0u)
         return ASTRA_STATUS_IO;
     status = astra_vfs_service_shutdown(&metrics_service, &metrics_mount,
+                                        NULL);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    /* SOUND shares WORK's transport; WORK's unmount destroys it. */
+    status = astra_vfs_service_shutdown(&sound_service, &metrics_mount,
                                         NULL);
     if (status != ASTRA_VFS_OK)
         return status;
@@ -240,12 +256,16 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *bootstrap;
     void *service_storage = NULL;
     void *metrics_storage = NULL;
+    void *sound_storage = NULL;
     uint32_t service_capacity = 0u;
     uint32_t metrics_capacity = 0u;
+    uint32_t sound_capacity = 0u;
     uint32_t receive = 0u;
     uint32_t send = 0u;
     uint32_t metrics_receive = 0u;
     uint32_t metrics_send = 0u;
+    uint32_t sound_receive = 0u;
+    uint32_t sound_send = 0u;
     uint32_t shutdown_receive = 0u;
     uint32_t shutdown_send = 0u;
     uint32_t status = ASTRA_STATUS_OK;
@@ -268,7 +288,8 @@ int astra_main(const AstraStartupInfo *startup)
         (!astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile),
                                        &service_storage,
                                        &service_capacity) ||
-         !astra_vfs_host_init(&backend, &transport, transport.generation) ||
+         !astra_vfs_host_init(&backend, &transport, transport.generation,
+                              ASTRA_HOST_FS_VOLUME_WORK) ||
          !astra_vfs_service_init(
              &service, astra_vfs_host_ops(), &backend, service_sessions,
              ASTRA_VFS_SESSION_MAX, service_storage, service_capacity) ||
@@ -277,6 +298,23 @@ int astra_main(const AstraStartupInfo *startup)
              astra_vfs_state_lock_release, &state_lock) ||
          !astra_vfs_service_set_state_wait(
              &service, astra_vfs_state_futex_wait,
+             astra_vfs_state_futex_wake)))
+        status = ASTRA_STATUS_LIMIT;
+    if (status == ASTRA_STATUS_OK &&
+        (!astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile),
+                                       &sound_storage, &sound_capacity) ||
+         !astra_vfs_host_init(&sound_backend, &transport,
+                              transport.generation,
+                              ASTRA_HOST_FS_VOLUME_SOUND) ||
+         !astra_vfs_service_init(
+             &sound_service, astra_vfs_host_ops(), &sound_backend,
+             sound_sessions, ASTRA_VFS_SESSION_MAX, sound_storage,
+             sound_capacity) ||
+         !astra_vfs_service_set_state_lock(
+             &sound_service, astra_vfs_state_lock_acquire,
+             astra_vfs_state_lock_release, &state_lock) ||
+         !astra_vfs_service_set_state_wait(
+             &sound_service, astra_vfs_state_futex_wait,
              astra_vfs_state_futex_wake)))
         status = ASTRA_STATUS_LIMIT;
     if (status == ASTRA_STATUS_OK &&
@@ -311,6 +349,18 @@ int astra_main(const AstraStartupInfo *startup)
                                       &metrics_service)))
         status = HOSTFS_FAIL_PORT;
     if (status == ASTRA_STATUS_OK &&
+        (astra_rt_port_create(
+             ASTRA_PORT_MESSAGES_MAX,
+             ASTRA_PORT_MESSAGES_MAX *
+                 (uint32_t)sizeof(AstraVfsRenameRequestMessage),
+             &sound_receive, &sound_send) != ASTRA_SYSCALL_OK ||
+         !astra_vfs_port_service_init(&sound_port, sound_receive,
+                                      &sound_service) ||
+         !astra_vfs_port_service_set_state_lock(
+             &sound_port, astra_vfs_state_lock_acquire,
+             astra_vfs_state_lock_release, &state_lock)))
+        status = HOSTFS_FAIL_PORT;
+    if (status == ASTRA_STATUS_OK &&
         astra_rt_signal_configure(
             hostfs_signal, signal_stack + sizeof(signal_stack),
             0u, NULL, NULL) != ASTRA_SYSCALL_OK)
@@ -321,9 +371,9 @@ int astra_main(const AstraStartupInfo *startup)
             ASTRA_SYSCALL_OK)
         status = ASTRA_STATUS_LIMIT;
     {
-        uint32_t published[] = {send, metrics_send};
+        uint32_t published[] = {send, metrics_send, sound_send};
         uint32_t ready = astra_service_ready_managed(bootstrap->handle, status,
-                                             published, 2u, shutdown_send);
+                                             published, 3u, shutdown_send);
         if (ready != ASTRA_SYSCALL_OK && status == ASTRA_STATUS_OK)
             status = HOSTFS_FAIL_READY;
     }
@@ -334,12 +384,12 @@ int astra_main(const AstraStartupInfo *startup)
         return (int)status;
     for (;;) {
         uint32_t waits[] = {port.receive, metrics_port.receive,
-                            shutdown_receive};
+                            sound_port.receive, shutdown_receive};
         uint32_t selected = ASTRA_WAIT_INDEX_NONE;
 
-        status = astra_wait_multiple(waits, 3u, ASTRA_DEADLINE_FOREVER,
+        status = astra_wait_multiple(waits, 4u, ASTRA_DEADLINE_FOREVER,
                                      &selected, NULL);
-        if (status == ASTRA_SYSCALL_OK && selected == 2u) {
+        if (status == ASTRA_SYSCALL_OK && selected == 3u) {
             AstraShutdownRequest request = {0};
             uint32_t reply = 0u;
             uint32_t result = astra_shutdown_receive(
@@ -359,12 +409,15 @@ int astra_main(const AstraStartupInfo *startup)
             return (int)finish_hostfs();
         if (status == ASTRA_SYSCALL_CANCELLED)
             continue;
-        if (status != ASTRA_SYSCALL_OK || selected >= 2u)
+        if (status != ASTRA_SYSCALL_OK || selected >= 3u)
             return (int)status;
         if (selected == 0u)
             (void)astra_vfs_port_service_worker_pump(&port, &worker, 1u);
-        else
+        else if (selected == 1u)
             (void)astra_vfs_port_service_worker_pump(
                 &metrics_port, &metrics_worker, 1u);
+        else
+            (void)astra_vfs_port_service_worker_pump(
+                &sound_port, &sound_worker, 1u);
     }
 }

@@ -486,7 +486,9 @@ typedef struct AstraHostChannel {
 typedef struct AstraHostState {
     GHashTable *files;
     QemuMutex files_lock;
+    /* ASTRA_HOSTFS_ROOT, and its subdirectory for each volume. */
     int root_fd;
+    int volume_fds[ASTRA_HOST_FS_VOLUME_COUNT];
     uint32_t next_handle;
     uint32_t generation;
     uint32_t request_buffer;
@@ -2797,7 +2799,7 @@ static bool astra_host_path_valid(const char *path)
     return true;
 }
 
-static int astra_host_open_beneath(Astra68State *s, const char *path,
+static int astra_host_open_beneath(int root, const char *path,
                                    int flags, mode_t mode)
 {
 #ifdef CONFIG_LINUX
@@ -2808,7 +2810,7 @@ static int astra_host_open_beneath(Astra68State *s, const char *path,
                    RESOLVE_NO_SYMLINKS,
     };
 
-    return syscall(SYS_openat2, s->host.root_fd, path, &how, sizeof(how));
+    return syscall(SYS_openat2, root, path, &how, sizeof(how));
 #else
     errno = ENOSYS;
     return -1;
@@ -2821,7 +2823,7 @@ static int astra_host_open_beneath(Astra68State *s, const char *path,
  * shared assign layer owns logical symlink resolution, so a host symlink is
  * data to report, not an alternate route around the namespace boundary.
  */
-static int astra_host_open_parent_walk(Astra68State *s, const char *path,
+static int astra_host_open_parent_walk(int root, const char *path,
                                        int *parent_out,
                                        char leaf[ASTRA_HOST_FS_PATH_MAX])
 {
@@ -2830,14 +2832,14 @@ static int astra_host_open_parent_walk(Astra68State *s, const char *path,
     char *slash;
     int parent;
 
-    if (s->host.root_fd < 0 || !astra_host_path_valid(path)) {
+    if (root < 0 || !astra_host_path_valid(path)) {
         errno = EINVAL;
         return -1;
     }
     memcpy(copy, path, sizeof(copy));
     if (copy[1] == '\0') {
         leaf[0] = '\0';
-        parent = dup(s->host.root_fd);
+        parent = dup(root);
         if (parent < 0) {
             return -1;
         }
@@ -2848,7 +2850,7 @@ static int astra_host_open_parent_walk(Astra68State *s, const char *path,
         errno = EINVAL;
         return -1;
     }
-    parent = dup(s->host.root_fd);
+    parent = dup(root);
     if (parent < 0) {
         return -1;
     }
@@ -2892,7 +2894,7 @@ static int astra_host_open_parent_walk(Astra68State *s, const char *path,
     }
 }
 
-static int astra_host_open_parent(Astra68State *s, const char *path,
+static int astra_host_open_parent(int root, const char *path,
                                   int *parent_out,
                                   char leaf[ASTRA_HOST_FS_PATH_MAX])
 {
@@ -2900,7 +2902,7 @@ static int astra_host_open_parent(Astra68State *s, const char *path,
     char *slash;
     int parent;
 
-    if (s->host.root_fd < 0 || parent_out == NULL || leaf == NULL ||
+    if (root < 0 || parent_out == NULL || leaf == NULL ||
         !astra_host_path_valid(path)) {
         errno = EINVAL;
         return -1;
@@ -2910,13 +2912,13 @@ static int astra_host_open_parent(Astra68State *s, const char *path,
     assert(slash != NULL);
     memcpy(leaf, slash + 1, strlen(slash + 1) + 1u);
     if (slash == copy) {
-        parent = dup(s->host.root_fd);
+        parent = dup(root);
     } else {
         *slash = '\0';
         parent = astra_host_open_beneath(
-            s, copy + 1, O_RDONLY | O_DIRECTORY, 0);
+            root, copy + 1, O_RDONLY | O_DIRECTORY, 0);
         if (parent < 0 && errno == ENOSYS)
-            return astra_host_open_parent_walk(s, path, parent_out, leaf);
+            return astra_host_open_parent_walk(root, path, parent_out, leaf);
     }
     if (parent < 0)
         return -1;
@@ -2924,14 +2926,14 @@ static int astra_host_open_parent(Astra68State *s, const char *path,
     return 0;
 }
 
-static int astra_host_open_path(Astra68State *s, const char *path, int flags,
+static int astra_host_open_path(int root, const char *path, int flags,
                                 mode_t mode)
 {
     char leaf[ASTRA_HOST_FS_PATH_MAX];
     int parent;
     int fd;
 
-    if (s->host.root_fd < 0 || !astra_host_path_valid(path)) {
+    if (root < 0 || !astra_host_path_valid(path)) {
         return -1;
     }
     if (path[1] == '\0') {
@@ -2939,28 +2941,28 @@ static int astra_host_open_path(Astra68State *s, const char *path, int flags,
             errno = EISDIR;
             return -1;
         }
-        return dup(s->host.root_fd);
+        return dup(root);
     }
-    fd = astra_host_open_beneath(s, path + 1, flags | O_NOFOLLOW, mode);
+    fd = astra_host_open_beneath(root, path + 1, flags | O_NOFOLLOW, mode);
     if (fd >= 0 || errno != ENOSYS)
         return fd;
-    if (astra_host_open_parent_walk(s, path, &parent, leaf) < 0)
+    if (astra_host_open_parent_walk(root, path, &parent, leaf) < 0)
         return -1;
     fd = openat(parent, leaf, flags | O_NOFOLLOW | O_CLOEXEC, mode);
     close(parent);
     return fd;
 }
 
-static int astra_host_parent_pair(Astra68State *s, const char *left,
+static int astra_host_parent_pair(int root, const char *left,
                                   const char *right, int *left_parent,
                                   char left_leaf[ASTRA_HOST_FS_PATH_MAX],
                                   int *right_parent,
                                   char right_leaf[ASTRA_HOST_FS_PATH_MAX])
 {
-    if (astra_host_open_parent(s, left, left_parent, left_leaf) < 0) {
+    if (astra_host_open_parent(root, left, left_parent, left_leaf) < 0) {
         return -1;
     }
-    if (astra_host_open_parent(s, right, right_parent, right_leaf) < 0) {
+    if (astra_host_open_parent(root, right, right_parent, right_leaf) < 0) {
         close(*left_parent);
         return -1;
     }
@@ -3262,7 +3264,7 @@ static void astra_host_execute_remote_desktop(
         ldl_be_p(command + HOST_FIELD(data_offset)) != 0u ||
         ldl_be_p(command + HOST_FIELD(data_length)) != 0u ||
         ldl_be_p(command + HOST_FIELD(data_capacity)) != 0u ||
-        ldl_be_p(command + HOST_FIELD(reserved0)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(volume)) != 0u ||
         ldl_be_p(command + HOST_FIELD(node_size_hi)) != 0u ||
         ldl_be_p(command + HOST_FIELD(node_size_lo)) != 0u ||
         ldl_be_p(command + HOST_FIELD(mtime_hi)) != 0u ||
@@ -3325,7 +3327,7 @@ static void astra_host_execute_entropy(Astra68State *s, uint8_t *command,
         ldl_be_p(command + HOST_FIELD(value_lo)) != 0u ||
         ldl_be_p(command + HOST_FIELD(data_length)) != 0u ||
         capacity == 0u || capacity > ASTRA_HOST_ENTROPY_MAX ||
-        ldl_be_p(command + HOST_FIELD(reserved0)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(volume)) != 0u ||
         ldl_be_p(command + HOST_FIELD(node_size_hi)) != 0u ||
         ldl_be_p(command + HOST_FIELD(node_size_lo)) != 0u ||
         ldl_be_p(command + HOST_FIELD(mtime_hi)) != 0u ||
@@ -3361,6 +3363,16 @@ static void astra_host_execute_entropy(Astra68State *s, uint8_t *command,
 
 done:
     stl_be_p(command + HOST_FIELD(status), status);
+}
+
+/* The audio operations whose reply carries data back into the area. */
+static bool astra_host_audio_answers(uint32_t operation)
+{
+    return operation == ASTRA_HOST_AUDIO_CONVERT ||
+           operation == ASTRA_HOST_AUDIO_FONT_END ||
+           operation == ASTRA_HOST_AUDIO_FONT_LIST ||
+           operation == ASTRA_HOST_AUDIO_MIDI_PRESETS ||
+           operation == ASTRA_HOST_AUDIO_MIDI_STATUS;
 }
 
 static void astra_host_execute_audio(Astra68State *s,
@@ -3407,15 +3419,16 @@ static void astra_host_execute_audio(Astra68State *s,
         lduw_be_p(command + HOST_FIELD(service)) !=
             ASTRA_HOST_SERVICE_AUDIO ||
         operation < ASTRA_HOST_AUDIO_OPEN ||
-        operation > ASTRA_HOST_AUDIO_MIDI_STATUS ||
+        operation > ASTRA_HOST_AUDIO_OPERATION_MAX ||
         lduw_be_p(command + HOST_FIELD(flags)) != 0u ||
         ldl_be_p(command + HOST_FIELD(generation)) !=
             expected_generation ||
         ldl_be_p(command + HOST_FIELD(offset_hi)) != 0u ||
         ldl_be_p(command + HOST_FIELD(offset_lo)) != 0u ||
         (value_hi != 0u && operation != ASTRA_HOST_AUDIO_CONVERT_OPEN &&
-         operation != ASTRA_HOST_AUDIO_MIDI_LOAD) ||
-        ldl_be_p(command + HOST_FIELD(reserved0)) != 0u ||
+         operation != ASTRA_HOST_AUDIO_MIDI_LOAD &&
+         operation != ASTRA_HOST_AUDIO_MIDI_SET) ||
+        ldl_be_p(command + HOST_FIELD(volume)) != 0u ||
         ldl_be_p(command + HOST_FIELD(node_size_hi)) != 0u ||
         ldl_be_p(command + HOST_FIELD(node_size_lo)) != 0u ||
         ldl_be_p(command + HOST_FIELD(mtime_hi)) != 0u ||
@@ -3443,11 +3456,10 @@ static void astra_host_execute_audio(Astra68State *s,
     } else {
         /*
          * QEMU bounds what crosses guest memory; the daemon judges the
-         * operation. Up to a packet goes out, and CONVERT and FONT_END
-         * answer with up to data_capacity bytes in the same area.
+         * operation. Up to a packet goes out, and the operations that
+         * answer with data use up to data_capacity bytes of the same area.
          */
-        answer = operation == ASTRA_HOST_AUDIO_CONVERT ||
-                 operation == ASTRA_HOST_AUDIO_FONT_END ? capacity : 0u;
+        answer = astra_host_audio_answers(operation) ? capacity : 0u;
         if (length > packet || capacity > packet || capacity < length ||
             (operation == ASTRA_HOST_AUDIO_CONVERT && capacity == 0u))
             goto done;
@@ -3520,13 +3532,14 @@ static void astra_host_execute_audio(Astra68State *s,
             operation == ASTRA_HOST_AUDIO_FONT_BEGIN ||
             operation == ASTRA_HOST_AUDIO_MIDI_OPEN)
             stl_be_p(command + HOST_FIELD(result_value), reply.handle);
-        if (operation == ASTRA_HOST_AUDIO_CONVERT ||
-            operation == ASTRA_HOST_AUDIO_FONT_END)
+        if (astra_host_audio_answers(operation))
             stl_be_p(command + HOST_FIELD(result_length), reply.data_length);
         if (operation == ASTRA_HOST_AUDIO_CONVERT)
             stl_be_p(command + HOST_FIELD(result_value),
                      reply.queued_frames);
-        if (operation == ASTRA_HOST_AUDIO_MIDI_STATUS)
+        if (operation == ASTRA_HOST_AUDIO_MIDI_STATUS ||
+            operation == ASTRA_HOST_AUDIO_FONT_LIST ||
+            operation == ASTRA_HOST_AUDIO_MIDI_PRESETS)
             stl_be_p(command + HOST_FIELD(result_value), reply.value);
         if (operation == ASTRA_HOST_AUDIO_WRITE)
             stl_be_p(command + HOST_FIELD(result_length),
@@ -3587,14 +3600,14 @@ static void astra_host_execute_command(Astra68State *s, uint32_t owner,
                               command_bytes, expected_generation);
 }
 
-static uint32_t astra_host_stat_path(Astra68State *s, const char *path,
+static uint32_t astra_host_stat_path(int root, const char *path,
                                      struct stat *st)
 {
     char leaf[ASTRA_HOST_FS_PATH_MAX];
     int parent;
     int rc;
 
-    if (astra_host_open_parent(s, path, &parent, leaf) < 0) {
+    if (astra_host_open_parent(root, path, &parent, leaf) < 0) {
         return astra_host_status_from_errno(errno);
     }
     rc = leaf[0] == '\0' ? fstat(parent, st) :
@@ -3802,9 +3815,11 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     uint32_t handle = ldl_be_p(command + HOST_FIELD(handle));
     uint32_t operation_index = 0;
     uint64_t started_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    uint32_t volume = ldl_be_p(command + HOST_FIELD(volume));
     AstraHostFile *file = NULL;
     uint32_t status = ASTRA_STATUS_INVALID;
     struct stat st;
+    int root;
 
     memset(command + HOST_FIELD(status), 0, sizeof(uint32_t));
     memset(command + HOST_FIELD(result_length), 0,
@@ -3814,10 +3829,14 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             ASTRA_HOST_COMMAND_VERSION ||
         lduw_be_p(command + HOST_FIELD(service)) !=
             ASTRA_HOST_SERVICE_FILESYSTEM ||
-        ldl_be_p(command + HOST_FIELD(generation)) != expected_generation) {
+        ldl_be_p(command + HOST_FIELD(generation)) != expected_generation ||
+        volume >= ASTRA_HOST_FS_VOLUME_COUNT) {
         qatomic_inc(&s->host.operation_counts[0]);
         goto done;
     }
+    /* Paths resolve beneath this volume's directory; handles carry the
+     * descriptor they were opened under, so they stay inside it too. */
+    root = s->host.volume_fds[volume];
     operation_index = operation <= ASTRA_HOST_FS_MAX ? operation : 0u;
     qatomic_inc(&s->host.operation_counts[operation_index]);
 
@@ -3830,7 +3849,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             !astra_host_native_open_flags(flags, &native_flags)) {
             break;
         }
-        fd = astra_host_open_path(s, path, native_flags,
+        fd = astra_host_open_path(root, path, native_flags,
                                   ldl_be_p(command + HOST_FIELD(value_lo)) &
                                       07777u);
         if (fd < 0) {
@@ -3946,7 +3965,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         if (!astra_host_path_terminated((const uint8_t *)path)) {
             break;
         }
-        status = astra_host_stat_path(s, path, &st);
+        status = astra_host_stat_path(root, path, &st);
         if (status == ASTRA_STATUS_OK) astra_host_publish_stat(command, &st);
         break;
     case ASTRA_HOST_FS_STAT_AT: {
@@ -4020,7 +4039,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             }
         } else {
             directory_fd = astra_host_open_path(
-                s, path, O_RDONLY | O_DIRECTORY, 0);
+                root, path, O_RDONLY | O_DIRECTORY, 0);
             if (directory_fd < 0) {
                 status = astra_host_status_from_errno(errno);
                 break;
@@ -4098,7 +4117,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         int parent;
 
         if (!astra_host_path_terminated((const uint8_t *)path) ||
-            astra_host_open_parent(s, path, &parent, leaf) < 0) {
+            astra_host_open_parent(root, path, &parent, leaf) < 0) {
             status = astra_host_status_from_errno(errno);
         } else if (leaf[0] == '\0') {
             status = ASTRA_STATUS_EXISTS;
@@ -4117,7 +4136,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         int parent;
 
         if (!astra_host_path_terminated((const uint8_t *)path) ||
-            astra_host_open_parent(s, path, &parent, leaf) < 0) {
+            astra_host_open_parent(root, path, &parent, leaf) < 0) {
             status = astra_host_status_from_errno(errno);
         } else if (leaf[0] == '\0') {
             status = ASTRA_STATUS_ACCESS;
@@ -4141,7 +4160,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
 
         if (!astra_host_path_terminated((const uint8_t *)path) ||
             !astra_host_path_terminated((const uint8_t *)path2) ||
-            astra_host_parent_pair(s, path, path2, &left_parent, left_leaf,
+            astra_host_parent_pair(root, path, path2, &left_parent, left_leaf,
                                    &right_parent, right_leaf) < 0) {
             status = astra_host_status_from_errno(errno);
         } else {
@@ -4157,7 +4176,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         int fd;
 
         if (!astra_host_path_terminated((const uint8_t *)path)) break;
-        fd = astra_host_open_path(s, path, O_RDONLY, 0);
+        fd = astra_host_open_path(root, path, O_RDONLY, 0);
         if (fd < 0) {
             status = astra_host_status_from_errno(errno);
         } else {
@@ -4179,7 +4198,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
 
         if (!astra_host_path_terminated((const uint8_t *)path) ||
             data == NULL || capacity == 0 ||
-            astra_host_open_parent(s, path, &parent, leaf) < 0) {
+            astra_host_open_parent(root, path, &parent, leaf) < 0) {
             status = astra_host_status_from_errno(errno);
         } else if (leaf[0] == '\0') {
             status = ASTRA_STATUS_INVALID;
@@ -4205,7 +4224,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
 
         if (!astra_host_path_terminated((const uint8_t *)path) ||
             !astra_host_path_terminated((const uint8_t *)path2) ||
-            astra_host_open_parent(s, path2, &parent, leaf) < 0) {
+            astra_host_open_parent(root, path2, &parent, leaf) < 0) {
             status = astra_host_status_from_errno(errno);
         } else if (leaf[0] == '\0') {
             status = ASTRA_STATUS_EXISTS;
@@ -4225,7 +4244,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
 
         if (!astra_host_path_terminated((const uint8_t *)path) ||
             !astra_host_path_terminated((const uint8_t *)path2) ||
-            astra_host_parent_pair(s, path, path2, &left_parent, left_leaf,
+            astra_host_parent_pair(root, path, path2, &left_parent, left_leaf,
                                    &right_parent, right_leaf) < 0) {
             status = astra_host_status_from_errno(errno);
         } else if (left_leaf[0] == '\0' || right_leaf[0] == '\0') {
@@ -4347,7 +4366,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         } else if (!astra_host_path_terminated((const uint8_t *)path)) {
             status = ASTRA_STATUS_INVALID;
         } else {
-            fd = astra_host_open_path(s, path, O_RDONLY, 0);
+            fd = astra_host_open_path(root, path, O_RDONLY, 0);
             status = fd < 0 ? astra_host_status_from_errno(errno) :
                      fstatvfs(fd, &about) == 0 ? ASTRA_STATUS_OK :
                      astra_host_status_from_errno(errno);
@@ -6176,6 +6195,8 @@ static void astra68_init(MachineState *machine)
     s->network.resolvers = g_hash_table_new_full(
         g_direct_hash, g_direct_equal, NULL, astra_network_resolver_free);
     s->host.root_fd = -1;
+    for (uint32_t volume = 0; volume < ASTRA_HOST_FS_VOLUME_COUNT; ++volume)
+        s->host.volume_fds[volume] = -1;
     qemu_mutex_init(&s->host.files_lock);
     for (uint32_t slot = 0; slot < ASTRA_HOST_CHANNEL_COUNT; ++slot) {
         qemu_mutex_init(&s->host.channel_socket_locks[slot]);
@@ -6192,6 +6213,28 @@ static void astra68_init(MachineState *machine)
             error_report("cannot open Astra host filesystem root '%s': %s",
                          hostfs_root, strerror(errno));
             exit(EXIT_FAILURE);
+        }
+        for (uint32_t volume = 0; volume < ASTRA_HOST_FS_VOLUME_COUNT;
+             ++volume) {
+            static const char *const names[ASTRA_HOST_FS_VOLUME_COUNT] = {
+                [ASTRA_HOST_FS_VOLUME_WORK] = "work",
+                [ASTRA_HOST_FS_VOLUME_SOUND] = "sound",
+            };
+
+            if (mkdirat(s->host.root_fd, names[volume], 0700) < 0 &&
+                errno != EEXIST) {
+                error_report("cannot create Astra host volume '%s/%s': %s",
+                             hostfs_root, names[volume], strerror(errno));
+                exit(EXIT_FAILURE);
+            }
+            s->host.volume_fds[volume] = openat(
+                s->host.root_fd, names[volume],
+                O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+            if (s->host.volume_fds[volume] < 0) {
+                error_report("cannot open Astra host volume '%s/%s': %s",
+                             hostfs_root, names[volume], strerror(errno));
+                exit(EXIT_FAILURE);
+            }
         }
     }
     astra_input_machine = s;

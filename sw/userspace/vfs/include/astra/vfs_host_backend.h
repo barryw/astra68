@@ -16,11 +16,13 @@ typedef struct AstraVfsHostTransport AstraVfsHostTransport;
 typedef struct AstraVfsHostBackend {
     AstraVfsHostTransport *transport;
     uint32_t generation;
+    /* The HostFS volume every command names (ASTRA_HOST_FS_VOLUME_*). */
+    uint32_t volume;
 } AstraVfsHostBackend;
 
 int astra_vfs_host_init(AstraVfsHostBackend *backend,
                         AstraVfsHostTransport *transport,
-                        uint32_t generation);
+                        uint32_t generation, uint32_t volume);
 const AstraVfsBackendOps *astra_vfs_host_ops(void);
 
 #endif

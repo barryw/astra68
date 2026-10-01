@@ -33,6 +33,8 @@ uint32_t astra_vfs_host_transport_submit(
     assert(command->version == ASTRA_HOST_COMMAND_VERSION);
     assert(command->service == ASTRA_HOST_SERVICE_FILESYSTEM);
     assert(command->generation == 9u);
+    /* Every command names the volume its backend was made for. */
+    assert(command->volume == ASTRA_HOST_FS_VOLUME_SOUND);
     assert(command->operation == host->expected_operation);
     ++host->calls;
     switch (command->operation) {
@@ -188,10 +190,16 @@ int main(void)
     AstraVfsFilesystemInfo filesystem_info;
 
     assert(!astra_vfs_host_init(NULL,
-                               (AstraVfsHostTransport *)(void *)&host, 9u));
-    assert(!astra_vfs_host_init(&backend, NULL, 9u));
+                               (AstraVfsHostTransport *)(void *)&host, 9u,
+                               ASTRA_HOST_FS_VOLUME_WORK));
+    assert(!astra_vfs_host_init(&backend, NULL, 9u,
+                                ASTRA_HOST_FS_VOLUME_WORK));
+    assert(!astra_vfs_host_init(
+        &backend, (AstraVfsHostTransport *)(void *)&host, 9u,
+        ASTRA_HOST_FS_VOLUME_COUNT));
     assert(astra_vfs_host_init(
-        &backend, (AstraVfsHostTransport *)(void *)&host, 9u));
+        &backend, (AstraVfsHostTransport *)(void *)&host, 9u,
+        ASTRA_HOST_FS_VOLUME_SOUND));
     ops = astra_vfs_host_ops();
 
 #define EXPECT(operation) host.expected_operation = (operation)

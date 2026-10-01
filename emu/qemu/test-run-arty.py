@@ -79,6 +79,9 @@ pathlib.Path({str(observed / 'hotplug.affinity')!r}).write_text(
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 while True: time.sleep(0.05)
 """)
+    (root / "soundfonts").mkdir()
+    (root / "soundfonts/Shipped.sf2").write_bytes(b"sfbk")
+    (root / "soundfonts/default").write_text("Shipped.sf2\n")
     records = []
     for path in sorted(item for item in root.rglob("*") if item.is_file()):
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -130,9 +133,23 @@ def main():
                                 text=True, capture_output=True, check=False)
         assert result.returncode != 0
         assert "helper CPU assignments are invalid" in result.stderr
+        # A HostFS root from before volumes is WORK's: it moves to work/.
+        (observed / "hostfs").mkdir()
+        (observed / "hostfs/notes.txt").write_text("kept")
+        (observed / "hostfs/.hidden").write_text("kept too")
         result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
                                 text=True, capture_output=True, check=False)
         assert result.returncode == 1, result.stderr
+        assert sorted(item.name for item in (observed / "hostfs").iterdir()) \
+            == ["sound", "work"]
+        assert (observed / "hostfs/sound/soundfonts/Shipped.sf2").read_bytes() \
+            == b"sfbk"
+        assert (observed / "hostfs/sound/soundfonts/default").read_text() == \
+            "Shipped.sf2\n"
+        # Later launches fill in only what the SOUND volume lacks.
+        (observed / "hostfs/sound/soundfonts/default").write_text("Mine.sf2\n")
+        assert (observed / "hostfs/work/notes.txt").read_text() == "kept"
+        assert (observed / "hostfs/work/.hidden").read_text() == "kept too"
         assert not (observed / "power.args").exists()
         qemu_args = (observed / "qemu.args").read_text().splitlines()
         assert qemu_args.count("-qmp") == 2
@@ -180,6 +197,8 @@ def main():
         assert int((observed / "display.launches").read_text()) >= 3
         assert "display helper exited with status 42; restarting" in \
             result.stderr
+        assert (observed / "hostfs/sound/soundfonts/default").read_text() == \
+            "Mine.sf2\n"
 
         (observed / "qemu.args").unlink()
         launch_environment["ASTRA_HOST_TIME_MIN"] = str(int(time.time()) + 60)

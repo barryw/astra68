@@ -35,3 +35,12 @@ ASTRA_PCM_2.3 {
         astra_midi_active;
         astra_midi_close;
 } ASTRA_PCM_2.2;
+
+ASTRA_PCM_2.4 {
+    global:
+        astra_midi_fonts;
+        astra_midi_presets;
+        astra_midi_send;
+        astra_midi_set;
+        astra_midi_status;
+} ASTRA_PCM_2.3;

@@ -16,13 +16,13 @@ TARGET := build/m68k/media.elf
 IMAGE := build/m68k/media
 OBJECT := build/m68k/main.o
 ASTRA_PROGRAM_PRIVATE_INPUTS := build/m68k/pcm_protocol.o
-LIBRARIES := $(ASTRA_FILESYSTEM_LIBRARY) $(ASTRA_SYSTEM_LIBRARY) \
-	$(ASTRA_RUNTIME_LIBRARY) $(ASTRA_COMPILER_LIBRARY)
+LIBRARIES := $(ASTRA_RUNTIME_LIBRARY) $(ASTRA_COMPILER_LIBRARY)
 include ../../dynamic-program.mk
 
-# The default SoundFont set the image installs in /system/media/soundfonts.
-all: build/soundfonts/index
-build/soundfonts/index: fetch_soundfonts.py
+# Astra's shared SoundFont set: the release and the gates put it in the
+# SOUND volume's soundfonts/ on the host, where the audio host reads it.
+all: build/soundfonts/default
+build/soundfonts/default: fetch_soundfonts.py
 	python3 fetch_soundfonts.py build/soundfonts
 
 $(OBJECT): main.c ../../../include/astra/pcm_service.h

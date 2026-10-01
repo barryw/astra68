@@ -207,44 +207,48 @@ physical PCM gate merely to provide speculative API surface.
 
 ## MIDI synthesis, then speech
 
-MIDI is the third host service on the audio channel (host audio protocol 4,
-PCM wire 4). The Linux daemon synthesizes Standard MIDI Files with a pinned,
+MIDI is the third host service on the audio channel (host audio protocol 5,
+PCM wire 5). The Linux daemon synthesizes Standard MIDI Files with a pinned,
 unmodified FluidSynth (v2.6.1, `mk/build-fluidsynth.sh`, static, no drivers
 and no glib) and mixes each song like any PCM voice, with the same gain,
 pause and close. The MC68040 sends a song once and nothing per note.
 
-- **Fonts are content-addressed.** The daemon names a SoundFont by the
-  SHA-256 of its bytes. `FONT_QUERY` asks whether it holds one;
-  `FONT_BEGIN`/`FONT_DATA`/`FONT_END` upload one in order and check size and
-  digest before keeping it under `StateDirectory=astra/soundfonts`. The DE25
-  release ships Astra's default set already named by digest
-  (`/var/lib/astra/current/soundfonts`), so the guest never sends it there.
-- **A MIDI voice is a stack of fonts.** `MIDI_OPEN` takes up to eight
-  digests, lowest first; `MIDI_FONT` adds one on top; a preset in a later
-  font hides the same bank and program in an earlier one. `MIDI_LOAD` takes
-  the song in pieces (at most 1 MiB), `MIDI_PLAY` a play count or forever,
-  `MIDI_STOP` ends it, and `MIDI_STATUS` says whether it still sounds.
+- **Shared fonts are files on a shared volume.** HostFS keeps one Linux
+  directory with a subdirectory per volume (`work/`, `sound/`; host command
+  version 2 names the volume in every command, and QEMU resolves each path
+  `RESOLVE_BENEATH` that volume's directory). `SOUND:soundfonts/` holds the
+  shared fonts and `default`, the stack every voice starts with. The daemon
+  reads the same files in place through a FluidSynth file callback that
+  opens `sound:NAME` beneath that directory only (`openat2`, no links), so
+  a font the guest changes is what the next voice plays. The DE25 release
+  ships the set and `run-arty.sh` installs any shipped font the volume
+  lacks, leaving changed or removed ones as they are.
+- **A program's own fonts are sent.** `FONT_BEGIN`/`FONT_DATA`/`FONT_END`
+  upload one, checked by size and SHA-256 and kept once by digest under
+  `StateDirectory=astra/soundfonts`. SDL's native MIDI backend sends every
+  `.sf2` in an application bundle's `resources/soundfonts/`.
+- **A voice is a stack and an instrument.** `MIDI_OPEN` starts with the
+  default stack; `MIDI_SYSTEM_FONT` (a shared font's name) and `MIDI_FONT`
+  (a sent font's digest) add one on top. Beyond songs (`MIDI_LOAD`,
+  `MIDI_PLAY`, `MIDI_STOP`), `MIDI_EVENTS` plays live channel messages,
+  `MIDI_SET` changes reverb, chorus, polyphony, tempo and position,
+  `MIDI_STATUS` reports the song's place, and `FONT_LIST` and
+  `MIDI_PRESETS` enumerate fonts and instruments. pcm.library 2.4's
+  `astra_midi_*` (`ndk/include/astra/midi.h`) is the public face.
 - **The feeder never waits on synthesis.** `astra_audio_synth.c` renders on
-  its own thread into a lock-free ring; loading a font, paging a sample in
-  (`synth.dynamic-sample-loading`) or rendering a dense passage cannot stall
-  HDMI. An empty ring is silence, not an underrun. FluidSynth runs with its
-  defaults: 256-voice polyphony, reverb and chorus on.
+  its own thread into a lock-free ring; every control is a queued command
+  applied in order, so loading a font, paging a sample in
+  (`synth.dynamic-sample-loading`) or rendering a dense passage cannot
+  stall HDMI. FluidSynth runs with its defaults: 256-voice polyphony,
+  reverb and chorus on.
 - **The default set** is fetched pinned and checked by
   `sw/userspace/services/media/fetch_soundfonts.py` (build inputs, never
-  repository files): GeneralUser GS v2.0.3, the default every voice uses, and
-  TimGM6mb, a compact General MIDI bank a program can ask for by name. The
-  image installs them with their licences and an index in
-  `/system/media/soundfonts`; the media service reads the index
-  (`SYSTEM:r`) and sends a font the host lacks the first time a voice needs
-  it.
-- **Applications** use pcm.library 2.3's `astra_midi_*`
-  (`ndk/include/astra/midi.h`). SDL_mixer's native MIDI backend
+  repository files): GeneralUser GS v2.0.3 as the default, and TimGM6mb.
+- **Applications** use `astra_midi_*`. SDL_mixer's native MIDI backend
   (`sw/userspace/sdl2/mixer/native_midi_astra.c`, `MUSIC_MID_NATIVE`) maps
-  `Mix_LoadMUS` of a MIDI file onto it, and fonts named through
-  `Mix_SetSoundFonts`/`SDL_SOUNDFONTS` stack on the default set. Chocolate
-  Doom's bundle sets `snd_musicdevice 8` (General MIDI), so its MUS lumps are
-  converted to MIDI and played on the host instead of in Nuked OPL3 on the
-  MC68040, which was about 75% of Doom's start-up profile on the DE25.
+  `Mix_LoadMUS` of a MIDI file onto it. Chocolate Doom's bundle sets
+  `snd_musicdevice 8` (General MIDI), so its music plays on the host
+  instead of Nuked OPL3 on the MC68040.
 
 The daemon's self-test uploads a font through the protocol, plays a note
 through the mixer and checks it is heard; the QEMU stand-in loads the same

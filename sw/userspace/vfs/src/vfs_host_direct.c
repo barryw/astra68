@@ -70,7 +70,8 @@ uint32_t astra_vfs_host_direct_connect(AstraVfsClient *client,
             astra_vfs_state_lock_release, &client->port_direct_lock) ||
         !astra_vfs_host_init(&direct->backend,
                              &direct->transport,
-                             direct->transport.generation))
+                             direct->transport.generation,
+                             ASTRA_HOST_FS_VOLUME_WORK))
         goto fail_transport;
     direct->magic = ASTRA_VFS_HOST_DIRECT_MAGIC;
     direct->version = ASTRA_VFS_HOST_DIRECT_VERSION;
@@ -143,7 +144,8 @@ uint32_t astra_vfs_host_direct_resume(AstraVfsClient *client, uint32_t area,
         direct->transport.generation != old_generation ||
         !astra_vfs_host_init(&direct->backend,
                              &direct->transport,
-                             direct->transport.generation))
+                             direct->transport.generation,
+                             ASTRA_HOST_FS_VOLUME_WORK))
         goto invalid;
     client->port_direct_address = address;
     client->port_direct_area = area;

@@ -144,6 +144,30 @@ if ! flock -n 9; then
     echo "Astra runtime is already active" >&2
     exit 1
 fi
+# HostFS keeps one directory per volume (work, sound). Before that, the
+# root was WORK itself: move what it held into work/ once. A move that was
+# interrupted resumes from the staging directory.
+if [ ! -d "$HOSTFS_ROOT/work" ]; then
+    staging=$HOSTFS_ROOT/.work-migrating
+    mkdir -p "$staging"
+    for entry in "$HOSTFS_ROOT"/* "$HOSTFS_ROOT"/.[!.]* "$HOSTFS_ROOT"/..?*; do
+        [ "$entry" = "$staging" ] && continue
+        [ -e "$entry" ] || [ -L "$entry" ] || continue
+        mv "$entry" "$staging/"
+    done
+    mv "$staging" "$HOSTFS_ROOT/work"
+fi
+# The release's shared SoundFonts, for any the SOUND volume lacks: a font
+# someone replaced or removed there stays as they left it.
+mkdir -p "$HOSTFS_ROOT/sound/soundfonts"
+for shipped in "$ASTRA_ROOT"/soundfonts/*; do
+    [ -f "$shipped" ] || continue
+    installed=$HOSTFS_ROOT/sound/soundfonts/${shipped##*/}
+    if [ ! -e "$installed" ] && [ ! -L "$installed" ]; then
+        cp "$shipped" "$installed.new" && chmod 0644 "$installed.new" &&
+            mv "$installed.new" "$installed"
+    fi
+done
 if [ -z "${STORAGE+x}" ]; then
     STORAGE=$STATE_ROOT/storage-terminal.img
     if [ ! -e "$STORAGE" ]; then

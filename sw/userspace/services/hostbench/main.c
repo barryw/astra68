@@ -757,7 +757,8 @@ static uint32_t run_layers(uint32_t device)
                                        NULL) ||
         !astra_vfs_host_init(&shared_backend,
                              &shared_transport,
-                             shared_transport.generation))
+                             shared_transport.generation,
+                             ASTRA_HOST_FS_VOLUME_WORK))
         return 0u;
     ops = astra_vfs_host_ops();
     if (ops->open(&shared_backend, "/hostbench",

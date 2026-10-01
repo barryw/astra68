@@ -14,12 +14,13 @@ int astra_pcm_request_valid(const AstraPcmRequest *request, uint32_t size,
            request->header.reserved == 0u &&
            request->header.transaction_id != 0u &&
            operation >= ASTRA_PCM_OPEN &&
-           operation <= ASTRA_PCM_MIDI_STATUS &&
+           operation <= ASTRA_PCM_OPERATION_MAX &&
            operation != ASTRA_PCM_REPLY &&
            (factory == (operation == ASTRA_PCM_OPEN ||
                         operation == ASTRA_PCM_CONVERT_OPEN ||
                         operation == ASTRA_PCM_MIDI_OPEN)) &&
            (operation == ASTRA_PCM_CONVERT_OPEN ||
             operation == ASTRA_PCM_MIDI_FONT ||
-            operation == ASTRA_PCM_MIDI_LOAD || request->target == 0u);
+            operation == ASTRA_PCM_MIDI_LOAD ||
+            operation == ASTRA_PCM_MIDI_SET || request->target == 0u);
 }

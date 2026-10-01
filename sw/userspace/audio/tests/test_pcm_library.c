@@ -28,6 +28,14 @@ static int convert_ended;
 static int midi_mode;
 static uint32_t loads;
 
+/* astra_midi_presets() waits on the monotonic clock. */
+uint64_t astra_clock_monotonic(void)
+{
+    static uint64_t now;
+
+    return now += UINT64_C(1000000);
+}
+
 uint32_t astra_rt_thread_sleep(uint64_t deadline_ns, uint32_t flags,
                                 uint32_t reserved, uint32_t *remaining_ns)
 {
@@ -287,7 +295,7 @@ int main(void)
      * naming the whole size; play, status and system fonts by name. */
     {
         static uint8_t file[20000];
-        AstraMidiSong song = ASTRA_MIDI_SONG_INIT;
+        AstraMidiSynth song = ASTRA_MIDI_SYNTH_INIT;
         int active = 0;
 
         converting = 0;
@@ -305,6 +313,18 @@ int main(void)
                last_request.frames == 8u &&
                memcmp(shared, "TimGM6mb", 8u) == 0);
         assert(astra_midi_add_system_font(&song, "") ==
+               ASTRA_ERROR_INVALID_ARGUMENT);
+        /* Arguments are judged before anything is sent. */
+        assert(astra_midi_set(&song, (AstraMidiSetting)0, 1u) ==
+               ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_midi_set(&song, (AstraMidiSetting)(ASTRA_MIDI_POSITION +
+                                                        1), 1u) ==
+               ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_midi_send(&song, NULL, 1u) ==
+               ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_midi_fonts(&song, 0u, NULL, 1u, NULL, NULL) ==
+               ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_midi_status(&song, NULL) ==
                ASTRA_ERROR_INVALID_ARGUMENT);
         assert(astra_midi_close(&song) == ASTRA_OK &&
                last_request.header.operation == ASTRA_PCM_CLOSE);

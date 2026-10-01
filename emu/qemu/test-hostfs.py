@@ -41,6 +41,10 @@ SUBMISSION = 0x0200F000
 CHANNEL_CONFIG = 0x0200F040
 CHANNEL_APERTURE = 0xFFD00000
 COMMAND_SIZE = 512
+COMMAND_VERSION = 2
+VOLUME_WORK = 0
+VOLUME_SOUND = 1
+VOLUME_COUNT = 2
 SUBMISSION_SIZE = 64
 CHANNEL_HEADER_SIZE = 64
 PATH_MAX = 192
@@ -163,10 +167,10 @@ def get64(command, offset):
 
 def make_command(generation, operation, path="", path2="", flags=0,
                  handle=0, value=0, offset=0, data_offset=0,
-                 data_length=0, data_capacity=0, service=1):
+                 data_length=0, data_capacity=0, service=1, volume=0):
     command = bytearray(COMMAND_SIZE)
-    struct.pack_into(">IHHHH", command, 0, COMMAND_SIZE, 1, service,
-                     operation, flags)
+    struct.pack_into(">IHHHH", command, 0, COMMAND_SIZE, COMMAND_VERSION,
+                     service, operation, flags)
     put32(command, 16, handle)
     put32(command, 20, generation)
     put32(command, 24, offset >> 32)
@@ -176,6 +180,7 @@ def make_command(generation, operation, path="", path2="", flags=0,
     put32(command, 40, data_offset)
     put32(command, 44, data_length)
     put32(command, 48, data_capacity)
+    put32(command, 60, volume)
     for field, start in ((path, 96), (path2, 288)):
         encoded = field.encode("utf-8")
         assert len(encoded) < PATH_MAX
@@ -221,10 +226,35 @@ def configure_channel(qtest, generation, operation, slot=3, owner=0x1001,
     return qtest.read32(HACC_CHANNEL_RESULT)
 
 
+def volumes(qtest, root):
+    """One host root, a directory per volume: a path in one volume never
+    reaches another, and a volume the machine does not have is refused."""
+    generation = qtest.read32(HACC_GENERATION)
+    created = execute(qtest, [make_command(
+        generation, FS_MKDIR, "/fonts", value=0o755,
+        volume=VOLUME_SOUND)])[0]
+    assert status(created) == STATUS_OK
+    assert os.path.isdir(os.path.join(root, "sound", "fonts"))
+    assert not os.path.exists(os.path.join(root, "work", "fonts"))
+    missing = execute(qtest, [make_command(
+        generation, FS_STAT, "/fonts", volume=VOLUME_WORK)])[0]
+    assert status(missing) != STATUS_OK
+    escaped = execute(qtest, [make_command(
+        generation, FS_STAT, "/../work", volume=VOLUME_SOUND)])[0]
+    assert status(escaped) != STATUS_OK
+    unknown = execute(qtest, [make_command(
+        generation, FS_STAT, "/fonts", volume=VOLUME_COUNT)])[0]
+    assert status(unknown) == STATUS_INVALID
+    stale = bytearray(make_command(generation, FS_STAT, "/fonts",
+                                   volume=VOLUME_SOUND))
+    struct.pack_into(">H", stale, 4, COMMAND_VERSION - 1)
+    assert status(execute(qtest, [bytes(stale)])[0]) == STATUS_INVALID
+
+
 def run(qtest, root, outside):
     qtest.detect_endian()
-    assert qtest.read32(HACC_VERSION) == 0x0001000A
-    assert qtest.read32(HACC_CAPS) == 255
+    assert qtest.read32(HACC_VERSION) == 0x0001000C
+    assert qtest.read32(HACC_CAPS) == 511
     assert qtest.read32(HACC_STATE) == 1
     assert qtest.read32(HACC_MAX_TRANSFER) == 2 * 1024 * 1024
     assert qtest.read32(HACC_MAX_COMMANDS) == 4096
@@ -713,7 +743,8 @@ def main():
             qtest = None
             try:
                 qtest = QTest(qtest_path)
-                run(qtest, root, outside)
+                run(qtest, os.path.join(root, "work"), outside)
+                volumes(qtest, root)
                 print("ASTRA QEMU HOSTFS PASS")
             finally:
                 if qtest is not None:

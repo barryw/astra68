@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Fetch Astra's default SoundFont set, pinned and checked by SHA-256, into
-OUT with each font's licence and the index the media service reads.
+"""Fetch Astra's shared SoundFont set, pinned and checked by SHA-256, into
+OUT with each font's licence and the default list.
 
-SoundFonts are build inputs, never repository files (ARTIFACT_POLICY.md).
+OUT becomes the SOUND volume's soundfonts/ directory on the Linux host (the
+DE25 release and the QEMU gates put it there), where the audio host reads
+the fonts in place. SoundFonts are build inputs, never repository files
+(ARTIFACT_POLICY.md).
 
-index: one line per font, "DIGEST SIZE FILE NAME ROLE": the digest names the
-font to the Linux audio host; ROLE "default" fonts make up every MIDI
-voice's instruments, in index order (a later font above an earlier one);
-"system" fonts are there for a program to ask for by NAME.
+default: the fonts every MIDI voice starts with, one file name a line,
+lowest first (a later font's preset hides the same one in an earlier).
+Every other font is there for a program to stack by its file name.
 """
 
 import hashlib
@@ -41,9 +43,8 @@ PACKAGE_MEMBERS = {
         "TimGM6mb.license.txt",
         "6ef01652619cf29b289a9403cd2ab59550fa3e2c30844c67292eea5421f993e9"),
 }
-# In index order: the compact bank first, General MIDI on top of it.
-FONTS = (("TimGM6mb.sf2", "TimGM6mb", "system"),
-         ("GeneralUser-GS.sf2", "GeneralUser-GS", "default"))
+# The default stack, lowest first.
+DEFAULT = ("GeneralUser-GS.sf2",)
 
 
 def fetch(name, cache):
@@ -97,13 +98,11 @@ def main():
             if hashlib.sha256(contents).hexdigest() != digest:
                 raise SystemExit("%s checksum mismatch" % target)
             write(os.path.join(output, target), contents)
-    lines = []
-    for file, name, role in FONTS:
-        with open(os.path.join(output, file), "rb") as handle:
-            data = handle.read()
-        lines.append("%s %d %s %s %s\n" % (hashlib.sha256(data).hexdigest(),
-                                           len(data), file, name, role))
-    write(os.path.join(output, "index"), "".join(lines).encode())
+    for name in DEFAULT:
+        if not os.path.isfile(os.path.join(output, name)):
+            raise SystemExit("default font %s was not fetched" % name)
+    write(os.path.join(output, "default"),
+          "".join(name + "\n" for name in DEFAULT).encode())
 
 
 if __name__ == "__main__":

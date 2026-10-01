@@ -34,13 +34,14 @@ make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux" \
     CROSS_COMPILE=aarch64-linux-gnu- DE25_SYSROOT="$DE25_SYSROOT" \
     remote-desktop
 
-# The default SoundFont set, named by digest as the audio host keeps fonts,
-# so the guest never sends it (fpga/arty/linux/astra_audio_host.c).
+# Astra's shared SoundFont set with its licences and default list. The
+# launcher installs it in the SOUND volume (run-arty.sh), where the guest
+# sees it as SOUND:soundfonts and the audio host reads it in place.
 SOUNDFONTS=$REPOSITORY/sw/userspace/services/media/build/soundfonts
 set --
-while read -r digest size file name role; do
-    set -- "$@" "soundfonts/$digest.sf2=$SOUNDFONTS/$file"
-done <"$SOUNDFONTS/index"
+for path in "$SOUNDFONTS"/*; do
+    set -- "$@" "soundfonts/${path##*/}=$path"
+done
 
 PYTHONDONTWRITEBYTECODE=1 python3 "$RELEASE_TOOL" create "$OUTPUT" \
     "qemu/bin/qemu-system-m68k-astra=$QEMU" \

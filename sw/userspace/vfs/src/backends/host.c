@@ -40,6 +40,7 @@ static uint32_t command_begin(AstraVfsHostBackend *backend,
     command->service = ASTRA_HOST_SERVICE_FILESYSTEM;
     command->operation = operation;
     command->generation = backend->generation;
+    command->volume = backend->volume;
     return ASTRA_VFS_OK;
 }
 
@@ -500,12 +501,14 @@ static const AstraVfsBackendOps host_ops = {
 
 int astra_vfs_host_init(AstraVfsHostBackend *backend,
                         AstraVfsHostTransport *transport,
-                        uint32_t generation)
+                        uint32_t generation, uint32_t volume)
 {
-    if (backend == NULL || transport == NULL || generation == 0u)
+    if (backend == NULL || transport == NULL || generation == 0u ||
+        volume >= ASTRA_HOST_FS_VOLUME_COUNT)
         return 0;
     backend->transport = transport;
     backend->generation = generation;
+    backend->volume = volume;
     return 1;
 }
 

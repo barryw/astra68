@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 #define ASTRA_PCM_PROTOCOL UINT32_C(0x50434d31) /* PCM1 */
-#define ASTRA_PCM_PROTOCOL_VERSION UINT16_C(4)
+#define ASTRA_PCM_PROTOCOL_VERSION UINT16_C(5)
 
 enum {
     ASTRA_PCM_OPEN = 1u,
@@ -30,7 +30,8 @@ enum {
     /* Factory: a MIDI voice with the default SoundFont set; the area is
      * sent writable, as for CONVERT_OPEN. */
     ASTRA_PCM_MIDI_OPEN,
-    /* frames bytes of a system font's name in the area. */
+    /* frames bytes of a shared font's file name in SOUND:soundfonts, in
+     * the area. */
     ASTRA_PCM_MIDI_SYSTEM_FONT,
     /* frames bytes of a SoundFont or a Standard MIDI File at offset value
      * of target bytes; the piece that reaches target ends it. */
@@ -39,12 +40,23 @@ enum {
     /* value plays, or ASTRA_PCM_MIDI_FOREVER. */
     ASTRA_PCM_MIDI_PLAY,
     ASTRA_PCM_MIDI_STOP,
-    /* The reply's value is nonzero while the song sounds. */
-    ASTRA_PCM_MIDI_STATUS
+    /* An AstraHostMidiStatus in the area (frames_out bytes); the reply's
+     * value is nonzero while the voice sounds. */
+    ASTRA_PCM_MIDI_STATUS,
+    /* AstraHostAudioFontRecords from index value into the area
+     * (frames_out bytes); the reply's value is the total. */
+    ASTRA_PCM_MIDI_FONTS,
+    /* AstraHostMidiPresets likewise; BUSY while a font is loading. */
+    ASTRA_PCM_MIDI_PRESETS,
+    /* frames bytes of short MIDI messages in the area. */
+    ASTRA_PCM_MIDI_EVENTS,
+    /* Setting value (ASTRA_HOST_MIDI_SET_*) becomes target. */
+    ASTRA_PCM_MIDI_SET
 };
+#define ASTRA_PCM_OPERATION_MAX ASTRA_PCM_MIDI_SET
 #define ASTRA_PCM_CONVERT_END 1u
 #define ASTRA_PCM_MIDI_FOREVER UINT32_C(0xffffffff)
-#define ASTRA_PCM_FONT_NAME_MAX 64u
+#define ASTRA_PCM_FONT_NAME_MAX 128u
 
 typedef struct AstraPcmRequest {
     AstraMessageHeader header;

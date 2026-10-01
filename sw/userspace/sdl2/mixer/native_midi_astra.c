@@ -4,8 +4,9 @@
  * A song goes whole to the Linux audio host's SoundFont synthesizer
  * (<astra/midi.h>) and plays there: the MC68040 sends the file once and
  * nothing per note. Songs play through Astra's default SoundFont set, with
- * any fonts the program names through Mix_SetSoundFonts() or
- * SDL_SOUNDFONTS stacked on top. */
+ * the application's own fonts stacked on top -- every .sf2 in its bundle's
+ * resources/soundfonts/, in name order -- and then any it names through
+ * Mix_SetSoundFonts() or SDL_SOUNDFONTS. */
 
 #include "SDL.h"
 #include "SDL_mixer.h"
@@ -16,6 +17,13 @@
 #include <astra/posix.h>
 #include <astra/runtime.h>
 
+#include <dirent.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* The bundle's own SoundFonts; a bundle with more is told so in the log. */
+#define BUNDLE_FONTS_MAX 16
+
 struct _NativeMidiSong {
     void *bytes;
     Uint32 length;
@@ -25,7 +33,7 @@ struct _NativeMidiSong {
  * every audio callback; each fresh answer is a round trip to the host. */
 #define ASTRA_MIDI_ACTIVE_NS UINT64_C(250000000)
 
-static AstraMidiSong voice = ASTRA_MIDI_SONG_INIT;
+static AstraMidiSynth voice = ASTRA_MIDI_SYNTH_INIT;
 static int voice_open;
 static NativeMidiSong *current;
 static uint32_t gain_q16 = UINT32_C(65536);
@@ -77,6 +85,53 @@ static int add_font(const char *path, void *data)
     return 1;
 }
 
+static int compare_names(const void *left, const void *right)
+{
+    return strcmp(*(char *const *)left, *(char *const *)right);
+}
+
+/* Stacks every .sf2 in the bundle's resources/soundfonts/, in name order. */
+static void add_bundle_fonts(void)
+{
+    char *base = SDL_GetBasePath();
+    char *names[BUNDLE_FONTS_MAX];
+    size_t count = 0u;
+    char *directory_path = NULL;
+    DIR *directory = NULL;
+    struct dirent *entry;
+
+    if (base != NULL &&
+        SDL_asprintf(&directory_path, "%ssoundfonts", base) >= 0)
+        directory = opendir(directory_path);
+    while (directory != NULL && (entry = readdir(directory)) != NULL) {
+        size_t length = strlen(entry->d_name);
+
+        if (length <= 4u || entry->d_name[0] == '.' ||
+            SDL_strcasecmp(entry->d_name + length - 4u, ".sf2") != 0)
+            continue;
+        if (count == BUNDLE_FONTS_MAX) {
+            SDL_Log("Astra MIDI: more than %d bundle SoundFonts; the rest "
+                    "are not used", BUNDLE_FONTS_MAX);
+            break;
+        }
+        if ((names[count] = SDL_strdup(entry->d_name)) != NULL)
+            ++count;
+    }
+    if (directory != NULL)
+        (void)closedir(directory);
+    qsort(names, count, sizeof(names[0]), compare_names);
+    for (size_t at = 0u; at < count; ++at) {
+        char *path = NULL;
+
+        if (SDL_asprintf(&path, "%s/%s", directory_path, names[at]) >= 0)
+            (void)add_font(path, NULL);
+        SDL_free(path);
+        SDL_free(names[at]);
+    }
+    SDL_free(directory_path);
+    SDL_free(base);
+}
+
 static int open_voice(void)
 {
     if (voice_open)
@@ -86,6 +141,7 @@ static int open_voice(void)
         return 0;
     }
     voice_open = 1;
+    add_bundle_fonts();
     if (Mix_GetSoundFonts() != NULL)
         (void)Mix_EachSoundFont(add_font, NULL);
     if (astra_midi_gain(&voice, gain_q16) != ASTRA_OK) {

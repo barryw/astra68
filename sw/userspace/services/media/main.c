@@ -6,7 +6,6 @@
 #include <astra/service.h>
 #include <astra/status.h>
 #include <astra/area.h>
-#include <astra/vfs_process.h>
 
 #include <stdint.h>
 #include <string.h>
@@ -32,25 +31,8 @@ typedef struct PcmSession {
     uint32_t upload;
 } PcmSession;
 
-/* Astra's SoundFonts, as fetch_soundfonts.py indexed them. */
-#define FONT_DIRECTORY "/system/media/soundfonts"
-#define FONTS_MAX ASTRA_HOST_MIDI_FONTS_MAX
+/* A sent SoundFont's name on the host: its SHA-256. */
 #define DIGEST_BYTES ASTRA_HOST_AUDIO_DIGEST_BYTES
-
-typedef struct SystemFont {
-    uint8_t digest[DIGEST_BYTES];
-    uint32_t size;
-    char file[ASTRA_PCM_FONT_NAME_MAX];
-    char name[ASTRA_PCM_FONT_NAME_MAX];
-    int default_font;
-    int held;
-} SystemFont;
-
-static AstraProcessFilesystem filesystem = ASTRA_PROCESS_FILESYSTEM_INIT;
-static int filesystem_open;
-static SystemFont fonts[FONTS_MAX];
-static uint32_t font_count;
-static int fonts_indexed;
 
 static AstraHostChannelClient host;
 static PcmSession *sessions;
@@ -156,170 +138,24 @@ static uint32_t send_reply(uint32_t reply_handle,
         reply.queued_frames = host_result->result_value;
     }
     if (status == ASTRA_STATUS_OK && host_result != NULL &&
-        request->header.operation == ASTRA_PCM_MIDI_STATUS)
+        (request->header.operation == ASTRA_PCM_MIDI_STATUS ||
+         request->header.operation == ASTRA_PCM_MIDI_FONTS ||
+         request->header.operation == ASTRA_PCM_MIDI_PRESETS)) {
+        reply.frames_out = frames_out;
         reply.value = host_result->result_value;
+    }
     return astra_port_send(reply_handle, &reply, sizeof(reply), handles,
                            transfer == 0u ? 0u : 1u);
 }
 
-static int hex_value(char digit)
-{
-    if (digit >= '0' && digit <= '9')
-        return digit - '0';
-    if (digit >= 'a' && digit <= 'f')
-        return digit - 'a' + 10;
-    return -1;
-}
-
-/* Copies one space-separated word of at most capacity - 1 bytes. */
-static const char *word(const char *at, const char *end, char *out,
-                        uint32_t capacity)
-{
-    uint32_t length = 0u;
-
-    while (at < end && *at == ' ')
-        ++at;
-    while (at < end && *at != ' ' && *at != '\n') {
-        if (length + 1u >= capacity)
-            return NULL;
-        out[length++] = *at++;
-    }
-    out[length] = '\0';
-    return length != 0u ? at : NULL;
-}
-
-/* "DIGEST SIZE FILE NAME ROLE" per line; any malformed line ends it. */
-static uint32_t index_fonts(void)
-{
-    char *text = NULL;
-    uint32_t length = 0u;
-    const char *at, *end;
-
-    if (fonts_indexed)
-        return font_count != 0u ? ASTRA_STATUS_OK : ASTRA_STATUS_NOT_FOUND;
-    fonts_indexed = 1;
-    if (!filesystem_open ||
-        astra_process_read_file_alloc(&filesystem, FONT_DIRECTORY "/index",
-                                      (void **)&text, &length) !=
-            ASTRA_VFS_OK)
-        return ASTRA_STATUS_NOT_FOUND;
-    at = text;
-    end = text + length;
-    while (at < end && font_count < FONTS_MAX) {
-        SystemFont *font = &fonts[font_count];
-        char field[2u * DIGEST_BYTES + 1u];
-        uint32_t size = 0u;
-
-        at = word(at, end, field, sizeof(field));
-        if (at == NULL || field[2u * DIGEST_BYTES - 1u] == '\0')
-            break;
-        for (uint32_t i = 0u; i < DIGEST_BYTES; ++i) {
-            int high = hex_value(field[2u * i]);
-            int low = hex_value(field[2u * i + 1u]);
-
-            if (high < 0 || low < 0)
-                goto done;
-            font->digest[i] = (uint8_t)(high << 4 | low);
-        }
-        at = word(at, end, field, sizeof(field));
-        if (at == NULL)
-            break;
-        for (const char *digit = field; *digit != '\0'; ++digit) {
-            if (*digit < '0' || *digit > '9' || size > UINT32_MAX / 10u)
-                goto done;
-            size = size * 10u + (uint32_t)(*digit - '0');
-        }
-        font->size = size;
-        if ((at = word(at, end, font->file, sizeof(font->file))) == NULL ||
-            (at = word(at, end, font->name, sizeof(font->name))) == NULL ||
-            (at = word(at, end, field, sizeof(field))) == NULL)
-            break;
-        font->default_font = strcmp(field, "default") == 0;
-        ++font_count;
-        while (at < end && *at++ != '\n')
-            ;
-    }
-done:
-    astra_runtime_deallocate(text);
-    return font_count != 0u ? ASTRA_STATUS_OK : ASTRA_STATUS_NOT_FOUND;
-}
-
-/* Makes sure the host holds @p font, sending it from the system volume the
- * first time the host has never seen it. */
-static uint32_t hold_font(SystemFont *font)
-{
-    const uint32_t chunk = ASTRA_PCM_TRANSFER_FRAMES *
-                           ASTRA_PCM_MAX_FRAME_BYTES;
-    AstraHostCommand *result = NULL;
-    AstraFile file = ASTRA_FILE_INIT;
-    char path[sizeof(FONT_DIRECTORY) + ASTRA_PCM_FONT_NAME_MAX + 1u];
-    uint32_t status, upload;
-
-    if (font->held)
-        return ASTRA_STATUS_OK;
-    (void)memcpy((void *)(uintptr_t)host.data, font->digest, DIGEST_BYTES);
-    status = host_exchange(ASTRA_HOST_AUDIO_FONT_QUERY, 0u, 0u, 0u,
-                           DIGEST_BYTES, DIGEST_BYTES, NULL);
-    if (status != ASTRA_STATUS_NOT_FOUND) {
-        font->held = status == ASTRA_STATUS_OK;
-        return status;
-    }
-    (void)memcpy(path, FONT_DIRECTORY "/", sizeof(FONT_DIRECTORY));
-    (void)memcpy(path + sizeof(FONT_DIRECTORY), font->file,
-                 strlen(font->file) + 1u);
-    if (astra_filesystem_open(&filesystem.filesystem, path,
-                              ASTRA_VFS_OPEN_READ, &file) != ASTRA_VFS_OK)
-        return ASTRA_STATUS_NOT_FOUND;
-    (void)memcpy((void *)(uintptr_t)host.data, font->digest, DIGEST_BYTES);
-    status = host_exchange(ASTRA_HOST_AUDIO_FONT_BEGIN, 0u, font->size, 0u,
-                           DIGEST_BYTES, DIGEST_BYTES, &result);
-    upload = status == ASTRA_STATUS_OK ? result->result_value : 0u;
-    for (uint32_t sent = 0u; status == ASTRA_STATUS_OK && sent < font->size;) {
-        uint32_t moved = 0u;
-        uint32_t want = font->size - sent < chunk ? font->size - sent : chunk;
-
-        if (astra_filesystem_read(&file, (void *)(uintptr_t)host.data, want,
-                                  &moved) != ASTRA_VFS_OK || moved == 0u) {
-            status = ASTRA_STATUS_IO;
-            break;
-        }
-        status = host_exchange(ASTRA_HOST_AUDIO_FONT_DATA, upload, sent, 0u,
-                               moved, moved, NULL);
-        sent += moved;
-    }
-    if (status == ASTRA_STATUS_OK)
-        status = host_exchange(ASTRA_HOST_AUDIO_FONT_END, upload, 0u, 0u, 0u,
-                               DIGEST_BYTES, NULL);
-    else if (upload != 0u)
-        (void)host_command(ASTRA_HOST_AUDIO_CLOSE, upload, 0u, 0u, NULL);
-    (void)astra_filesystem_close(&file);
-    font->held = status == ASTRA_STATUS_OK;
-    return status;
-}
-
-/* A MIDI voice with every default font, lowest first. */
+/* A MIDI voice with the default SoundFont set: the host reads the shared
+ * fonts from the SOUND volume itself. */
 static uint32_t open_midi(uint32_t *voice)
 {
     AstraHostCommand *result = NULL;
-    uint8_t digests[FONTS_MAX * DIGEST_BYTES];
-    uint32_t count = 0u;
-    uint32_t status = index_fonts();
+    uint32_t status = host_command(ASTRA_HOST_AUDIO_MIDI_OPEN, 0u, 0u, 0u,
+                                   &result);
 
-    for (uint32_t i = 0u; status == ASTRA_STATUS_OK && i < font_count; ++i) {
-        if (!fonts[i].default_font)
-            continue;
-        status = hold_font(&fonts[i]);
-        (void)memcpy(digests + count++ * DIGEST_BYTES, fonts[i].digest,
-                     DIGEST_BYTES);
-    }
-    if (status == ASTRA_STATUS_OK && count == 0u)
-        status = ASTRA_STATUS_NOT_FOUND;
-    if (status != ASTRA_STATUS_OK)
-        return status;
-    (void)memcpy((void *)(uintptr_t)host.data, digests, count * DIGEST_BYTES);
-    status = host_exchange(ASTRA_HOST_AUDIO_MIDI_OPEN, 0u, 0u, 0u,
-                           count * DIGEST_BYTES, count * DIGEST_BYTES,
-                           &result);
     if (status == ASTRA_STATUS_OK)
         *voice = result->result_value;
     return status;
@@ -430,7 +266,7 @@ done:
 static int session_takes(const PcmSession *session, uint32_t operation)
 {
     int midi_operation = operation >= ASTRA_PCM_MIDI_SYSTEM_FONT &&
-                         operation <= ASTRA_PCM_MIDI_STATUS;
+                         operation <= ASTRA_PCM_OPERATION_MAX;
 
     if (operation == ASTRA_PCM_CLOSE)
         return 1;
@@ -484,28 +320,38 @@ static uint32_t font_piece(PcmSession *session, const AstraPcmRequest *request)
                          0u, DIGEST_BYTES, DIGEST_BYTES, NULL);
 }
 
+/* A host reply's data, copied into the session's area: frames_out bytes. */
+static uint32_t answer_into_area(PcmSession *session, uint32_t operation,
+                                 uint32_t value, AstraHostCommand **result,
+                                 uint32_t *frames_out)
+{
+    const uint32_t area_bytes = ASTRA_PCM_TRANSFER_FRAMES *
+                                ASTRA_PCM_MAX_FRAME_BYTES;
+    uint32_t status = host_exchange(
+        operation, operation == ASTRA_HOST_AUDIO_FONT_LIST ? 0u :
+                   session->host_voice,
+        value, 0u, 0u, area_bytes, result);
+
+    if (status != ASTRA_STATUS_OK)
+        return status;
+    if ((*result)->result_length > area_bytes)
+        return ASTRA_STATUS_PROTOCOL;
+    (void)memcpy(session->samples, (const void *)(uintptr_t)host.data,
+                 (*result)->result_length);
+    *frames_out = (*result)->result_length;
+    return ASTRA_STATUS_OK;
+}
+
+/* A shared font, by its file name in SOUND:soundfonts. */
 static uint32_t system_font(PcmSession *session, const AstraPcmRequest *request)
 {
-    char name[ASTRA_PCM_FONT_NAME_MAX];
-    uint32_t status;
-
-    if (request->frames == 0u || request->frames >= sizeof(name))
+    if (request->frames == 0u || request->frames > ASTRA_PCM_FONT_NAME_MAX)
         return ASTRA_STATUS_INVALID;
-    (void)memcpy(name, session->samples, request->frames);
-    name[request->frames] = '\0';
-    status = index_fonts();
-    for (uint32_t i = 0u; status == ASTRA_STATUS_OK && i < font_count; ++i) {
-        if (strcmp(fonts[i].name, name) != 0)
-            continue;
-        status = hold_font(&fonts[i]);
-        if (status != ASTRA_STATUS_OK)
-            return status;
-        (void)memcpy((void *)(uintptr_t)host.data, fonts[i].digest,
-                     DIGEST_BYTES);
-        return host_exchange(ASTRA_HOST_AUDIO_MIDI_FONT, session->host_voice,
-                             0u, 0u, DIGEST_BYTES, DIGEST_BYTES, NULL);
-    }
-    return ASTRA_STATUS_NOT_FOUND;
+    (void)memcpy((void *)(uintptr_t)host.data, session->samples,
+                 request->frames);
+    return host_exchange(ASTRA_HOST_AUDIO_MIDI_SYSTEM_FONT,
+                         session->host_voice, 0u, 0u, request->frames,
+                         request->frames, NULL);
 }
 
 static void serve_session(PcmSession *session)
@@ -556,12 +402,44 @@ static void serve_session(PcmSession *session)
                                   NULL) : ASTRA_STATUS_INVALID;
             break;
         case ASTRA_PCM_MIDI_STOP:
-        case ASTRA_PCM_MIDI_STATUS:
             status = request.frames == 0u && request.value == 0u ?
-                     host_command(operation == ASTRA_PCM_MIDI_STOP ?
-                                  ASTRA_HOST_AUDIO_MIDI_STOP :
-                                  ASTRA_HOST_AUDIO_MIDI_STATUS,
+                     host_command(ASTRA_HOST_AUDIO_MIDI_STOP,
                                   session->host_voice, 0u, 0u, &result) :
+                     ASTRA_STATUS_INVALID;
+            break;
+        case ASTRA_PCM_MIDI_STATUS:
+        case ASTRA_PCM_MIDI_FONTS:
+        case ASTRA_PCM_MIDI_PRESETS:
+            status = request.frames != 0u ||
+                     (operation == ASTRA_PCM_MIDI_STATUS &&
+                      request.value != 0u) ? ASTRA_STATUS_INVALID :
+                     answer_into_area(session,
+                                      operation == ASTRA_PCM_MIDI_STATUS ?
+                                          ASTRA_HOST_AUDIO_MIDI_STATUS :
+                                      operation == ASTRA_PCM_MIDI_FONTS ?
+                                          ASTRA_HOST_AUDIO_FONT_LIST :
+                                          ASTRA_HOST_AUDIO_MIDI_PRESETS,
+                                      request.value, &result, &frames_out);
+            break;
+        case ASTRA_PCM_MIDI_EVENTS:
+            if (request.value != 0u || request.frames == 0u ||
+                request.frames > ASTRA_PCM_TRANSFER_FRAMES *
+                                     ASTRA_PCM_MAX_FRAME_BYTES ||
+                request.frames % ASTRA_HOST_MIDI_EVENT_BYTES != 0u) {
+                status = ASTRA_STATUS_INVALID;
+                break;
+            }
+            (void)memcpy((void *)(uintptr_t)host.data, session->samples,
+                         request.frames);
+            status = host_exchange(ASTRA_HOST_AUDIO_MIDI_EVENTS,
+                                   session->host_voice, 0u, 0u,
+                                   request.frames, request.frames, NULL);
+            break;
+        case ASTRA_PCM_MIDI_SET:
+            status = request.frames == 0u ?
+                     host_exchange(ASTRA_HOST_AUDIO_MIDI_SET,
+                                   session->host_voice, request.value,
+                                   request.target, 0u, 0u, NULL) :
                      ASTRA_STATUS_INVALID;
             break;
         case ASTRA_PCM_CONVERT: {
@@ -678,10 +556,6 @@ int astra_main(const AstraStartupInfo *startup)
     device = astra_startup_capability(startup, ASTRA_CAPABILITY_HOST_DEVICE);
     if (bootstrap == NULL || device == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
-    /* The system volume holds the SoundFonts; without it MIDI voices are
-     * refused and PCM works as before. */
-    filesystem_open = astra_process_filesystem_open(&filesystem, startup) ==
-                      ASTRA_VFS_OK;
     status = astra_host_client_open(device->handle, ASTRA_HOST_CAP_AUDIO,
                                     ASTRA_PCM_TRANSFER_FRAMES *
                                     ASTRA_PCM_MAX_FRAME_BYTES, &host);

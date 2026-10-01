@@ -26,7 +26,7 @@
 #define ASTRA_HOST_VERSION_1_4 UINT32_C(0x00010004)
 #define ASTRA_HOST_VERSION_1_5 UINT32_C(0x00010005)
 #define ASTRA_HOST_VERSION_1_8 UINT32_C(0x00010008)
-#define ASTRA_HOST_VERSION     UINT32_C(0x0001000b)
+#define ASTRA_HOST_VERSION     UINT32_C(0x0001000c)
 #define ASTRA_HOST_CAP_FILESYSTEM (1u << 0)
 #define ASTRA_HOST_CAP_OWNER_SCOPED (1u << 1)
 #define ASTRA_HOST_CAP_SUBMISSION_DESCRIPTOR (1u << 2)
@@ -71,6 +71,14 @@ enum {
 };
 #define ASTRA_HOST_FS_MAX ASTRA_HOST_FS_STAT_FILE
 
+/* HostFS volumes: one host directory, a subdirectory per volume. A path
+ * resolves beneath its own volume's directory and never reaches another. */
+enum {
+    ASTRA_HOST_FS_VOLUME_WORK = 0u,
+    ASTRA_HOST_FS_VOLUME_SOUND,
+    ASTRA_HOST_FS_VOLUME_COUNT
+};
+
 /* Flags carried in the command header in addition to ASTRA_VFS_OPEN_*. */
 #define ASTRA_HOST_FS_WRITE_APPEND (1u << 15)
 
@@ -112,27 +120,101 @@ enum {
     ASTRA_HOST_AUDIO_MIDI_LOAD,
     ASTRA_HOST_AUDIO_MIDI_PLAY,
     ASTRA_HOST_AUDIO_MIDI_STOP,
-    ASTRA_HOST_AUDIO_MIDI_STATUS
+    ASTRA_HOST_AUDIO_MIDI_STATUS,
+    ASTRA_HOST_AUDIO_MIDI_SYSTEM_FONT,
+    ASTRA_HOST_AUDIO_FONT_LIST,
+    ASTRA_HOST_AUDIO_MIDI_PRESETS,
+    ASTRA_HOST_AUDIO_MIDI_EVENTS,
+    ASTRA_HOST_AUDIO_MIDI_SET
 };
+#define ASTRA_HOST_AUDIO_OPERATION_MAX ASTRA_HOST_AUDIO_MIDI_SET
 #define ASTRA_HOST_AUDIO_CONVERT_END 1u
 
-/* SoundFonts and MIDI synthesis on the host. A SoundFont is named by the
- * SHA-256 of its bytes. FONT_QUERY (data: the digest) succeeds when the
- * host holds it. FONT_BEGIN (value_lo: size; data: the digest, or none to
- * have the host compute it) opens an upload handle; FONT_DATA (value_lo:
- * offset) carries the bytes in order; FONT_END checks size and digest,
- * keeps the font, and returns its digest as data. MIDI_OPEN (data: up to
- * ASTRA_HOST_MIDI_FONTS_MAX digests, each later font above the earlier)
- * opens a synth voice; MIDI_FONT (data: a digest) adds one more font on
- * top; MIDI_LOAD (value_lo: offset, value_hi: total size) takes a Standard
+/* SoundFonts and MIDI synthesis on the host. Shared fonts are files in the
+ * SOUND volume's soundfonts/ directory, which the host reads directly, and
+ * soundfonts/default lists, one file name a line, the fonts every voice
+ * starts with, lowest first. A program's own font is sent instead and
+ * named by the SHA-256 of its bytes: FONT_QUERY (data: the digest)
+ * succeeds when the host holds it; FONT_BEGIN (value_lo: size; data: the
+ * digest, or none to have the host compute it) opens an upload handle;
+ * FONT_DATA (value_lo: offset) carries the bytes in order; FONT_END checks
+ * size and digest, keeps the font, and returns its digest as data.
+ * MIDI_OPEN (no data) opens a synth voice with the default fonts;
+ * MIDI_SYSTEM_FONT (data: a shared font's file name) and MIDI_FONT (data:
+ * a sent font's digest) add one more font on top, a preset in a later font
+ * hiding the same bank and program in an earlier one; MIDI_LOAD (value_lo: offset, value_hi: total size) takes a Standard
  * MIDI File in order; MIDI_PLAY (value_lo: plays, ASTRA_HOST_MIDI_FOREVER
  * repeats); PAUSE, GAIN and CLOSE act as on a PCM voice; MIDI_STOP ends
- * the song; MIDI_STATUS returns 1 in result_value while it sounds. */
+ * the song; MIDI_STATUS returns an AstraHostMidiStatus as data.
+ *
+ * FONT_LIST (no handle; value_lo: the first index) returns
+ * AstraHostAudioFontRecords for the shared fonts in name order, as many as
+ * fit, and the total in result_value. MIDI_PRESETS (value_lo: the first
+ * index) does the same with AstraHostMidiPresets for every preset the
+ * voice's fonts provide, by bank and program; until the voice has loaded
+ * every font it was given it answers BUSY. MIDI_EVENTS (data: short MIDI
+ * messages, ASTRA_HOST_MIDI_EVENT_BYTES each) plays them at once, in order
+ * after every earlier request. MIDI_SET (value_lo: an
+ * ASTRA_HOST_MIDI_SET_* setting, value_hi: its value) changes one. The
+ * records below travel as bytes: every field is big-endian, as the guest
+ * reads it, whoever writes it. */
 #define ASTRA_HOST_AUDIO_DIGEST_BYTES 32u
-#define ASTRA_HOST_MIDI_FONTS_MAX 8u
+#define ASTRA_HOST_FONT_NAME_MAX 128u
 #define ASTRA_HOST_MIDI_SONG_MAX (1u << 20)
 #define ASTRA_HOST_FONT_MAX (128u << 20)
 #define ASTRA_HOST_MIDI_FOREVER UINT32_C(0xffffffff)
+/* status, data1, data2, zero: a channel message's bytes, as on the wire. */
+#define ASTRA_HOST_MIDI_EVENT_BYTES 4u
+#define ASTRA_HOST_MIDI_PRESET_NAME_MAX 24u
+#define ASTRA_HOST_AUDIO_FONT_DEFAULT (1u << 0)
+
+/* MIDI_SET's settings. Levels and times are in thousandths. */
+enum {
+    ASTRA_HOST_MIDI_SET_REVERB = 1u,      /* 0 off, 1 on */
+    ASTRA_HOST_MIDI_SET_REVERB_ROOM,      /* 0..1000 */
+    ASTRA_HOST_MIDI_SET_REVERB_DAMP,      /* 0..1000 */
+    ASTRA_HOST_MIDI_SET_REVERB_WIDTH,     /* 0..100000 */
+    ASTRA_HOST_MIDI_SET_REVERB_LEVEL,     /* 0..1000 */
+    ASTRA_HOST_MIDI_SET_CHORUS,           /* 0 off, 1 on */
+    ASTRA_HOST_MIDI_SET_CHORUS_VOICES,    /* 0..99 */
+    ASTRA_HOST_MIDI_SET_CHORUS_LEVEL,     /* 0..10000 */
+    ASTRA_HOST_MIDI_SET_CHORUS_SPEED,     /* mHz, 100..5000 */
+    ASTRA_HOST_MIDI_SET_CHORUS_DEPTH,     /* microseconds, 0..256000 */
+    ASTRA_HOST_MIDI_SET_POLYPHONY,        /* voices, 1..65535 */
+    ASTRA_HOST_MIDI_SET_TEMPO,            /* the song's tempo, 1..100000 */
+    ASTRA_HOST_MIDI_SET_POSITION          /* seek the song to this tick */
+};
+#define ASTRA_HOST_MIDI_SET_MAX ASTRA_HOST_MIDI_SET_POSITION
+
+typedef struct AstraHostAudioFontRecord {
+    uint32_t flags;                       /* ASTRA_HOST_AUDIO_FONT_* */
+    uint32_t bytes_hi;
+    uint32_t bytes_lo;
+    char name[ASTRA_HOST_FONT_NAME_MAX];  /* NUL-terminated file name */
+} AstraHostAudioFontRecord;
+
+typedef struct AstraHostMidiPreset {
+    uint16_t bank;
+    uint8_t program;
+    uint8_t font;                         /* its font's place in the stack */
+    char name[ASTRA_HOST_MIDI_PRESET_NAME_MAX];
+} AstraHostMidiPreset;
+
+typedef struct AstraHostMidiStatus {
+    uint32_t sounding;                    /* playing, or notes still ring */
+    uint32_t position_ticks;
+    uint32_t length_ticks;
+    uint32_t ticks_per_quarter;           /* zero with no song */
+    uint32_t tempo_us_per_quarter;
+    uint32_t fonts_loading;               /* fonts given, not yet ready */
+} AstraHostMidiStatus;
+
+_Static_assert(sizeof(AstraHostAudioFontRecord) == 140u,
+               "host font record layout changed");
+_Static_assert(sizeof(AstraHostMidiPreset) == 28u,
+               "host MIDI preset layout changed");
+_Static_assert(sizeof(AstraHostMidiStatus) == 24u,
+               "host MIDI status layout changed");
 
 typedef struct AstraHostAudioStatus {
     uint32_t queued_frames;
@@ -234,7 +316,7 @@ astra_host_metric_set(AstraHostMetricsSnapshot *snapshot, uint32_t metric,
     snapshot->values[metric].lo = (uint32_t)value;
 }
 
-#define ASTRA_HOST_COMMAND_VERSION 1u
+#define ASTRA_HOST_COMMAND_VERSION 2u
 #define ASTRA_HOST_COMMAND_SIZE 512u
 
 /*
@@ -260,7 +342,9 @@ typedef struct AstraHostCommand {
     uint32_t data_capacity;
     uint32_t result_length;
     uint32_t result_value;
-    uint32_t reserved0;
+    /* Filesystem commands: the volume, ASTRA_HOST_FS_VOLUME_*. Every other
+     * service: zero. */
+    uint32_t volume;
     uint32_t node_size_hi;
     uint32_t node_size_lo;
     uint32_t mtime_hi;

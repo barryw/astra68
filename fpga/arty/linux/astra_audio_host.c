@@ -11,6 +11,8 @@
 #include <astra/pcm_format.h>
 #include <astra/status.h>
 
+#include <dirent.h>
+#include <endian.h>
 #include <errno.h>
 #include <math.h>
 #include <fcntl.h>
@@ -30,10 +32,11 @@
 #include <time.h>
 #include <unistd.h>
 
+/* Fonts programs have sent, each as DIGEST.sf2 (systemd's StateDirectory). */
 #define ASTRA_AUDIO_HOST_FONT_DIRECTORY "/var/lib/astra/soundfonts"
-/* The release ships Astra's default set the same way, read-only, so the
- * guest never has to send it. */
-#define ASTRA_AUDIO_HOST_SHIPPED_FONTS "/var/lib/astra/current/soundfonts"
+/* The SOUND volume, shared with the guest through HostFS: shared fonts are
+ * its soundfonts/ directory, read in place. */
+#define ASTRA_AUDIO_HOST_SOUND "/var/lib/astra/hostfs/sound"
 
 enum {
     AUDIO_BASE = ASTRA_CONTROL_BASE + 0x6000u,
@@ -150,10 +153,12 @@ typedef struct AudioHost {
     int playing;
     int tailing;
     int draining;
-    /* Where SoundFonts are kept, each as DIGEST.sf2: those the guest sent,
-     * and those the release ships. */
+    /* Where fonts the guest sent are kept, each as DIGEST.sf2. */
     const char *font_directory;
-    const char *shipped_fonts;
+    /* The SOUND volume's directory; its soundfonts/ is opened when first
+     * needed, since QEMU may create it after this daemon starts. */
+    const char *sound;
+    int sound_fonts;
     AstraAudioHostMonitorPacket monitor_packet;
 } AudioHost;
 
@@ -521,11 +526,14 @@ static uint32_t validate_request(const AstraAudioHostRequest *request,
         request->version != ASTRA_AUDIO_HOST_VERSION ||
         request->data_length != packet_length - sizeof(*request))
         return ASTRA_STATUS_PROTOCOL;
-    /* Only CONVERT and FONT_END hand bytes back. */
+    /* Only these hand bytes back. */
     if (request->capacity > packet ||
         ((request->capacity != 0u) !=
          (request->operation == ASTRA_HOST_AUDIO_CONVERT ||
-          request->operation == ASTRA_HOST_AUDIO_FONT_END)))
+          request->operation == ASTRA_HOST_AUDIO_FONT_END ||
+          request->operation == ASTRA_HOST_AUDIO_FONT_LIST ||
+          request->operation == ASTRA_HOST_AUDIO_MIDI_PRESETS ||
+          request->operation == ASTRA_HOST_AUDIO_MIDI_STATUS)))
         return ASTRA_STATUS_INVALID;
     switch (request->operation) {
     case ASTRA_HOST_AUDIO_CONVERT:
@@ -558,13 +566,16 @@ static uint32_t validate_request(const AstraAudioHostRequest *request,
         break;
     case ASTRA_HOST_AUDIO_MIDI_OPEN:
         ok = request->handle == 0u && request->value == 0u &&
-             request->value_hi == 0u && length != 0u &&
-             length % digest == 0u &&
-             length <= ASTRA_HOST_MIDI_FONTS_MAX * digest;
+             request->value_hi == 0u && length == 0u;
         break;
     case ASTRA_HOST_AUDIO_MIDI_FONT:
         ok = request->handle != 0u && request->value == 0u &&
              request->value_hi == 0u && length == digest;
+        break;
+    case ASTRA_HOST_AUDIO_MIDI_SYSTEM_FONT:
+        ok = request->handle != 0u && request->value == 0u &&
+             request->value_hi == 0u && length != 0u &&
+             length <= ASTRA_HOST_FONT_NAME_MAX;
         break;
     case ASTRA_HOST_AUDIO_MIDI_LOAD:
         ok = request->handle != 0u && request->value_hi != 0u &&
@@ -579,9 +590,32 @@ static uint32_t validate_request(const AstraAudioHostRequest *request,
               (request->value != 0u && request->value <= INT32_MAX));
         break;
     case ASTRA_HOST_AUDIO_MIDI_STOP:
-    case ASTRA_HOST_AUDIO_MIDI_STATUS:
         ok = request->handle != 0u && request->value == 0u &&
              request->value_hi == 0u && length == 0u;
+        break;
+    case ASTRA_HOST_AUDIO_MIDI_STATUS:
+        ok = request->handle != 0u && request->value == 0u &&
+             request->value_hi == 0u && length == 0u &&
+             request->capacity >= sizeof(AstraHostMidiStatus);
+        break;
+    case ASTRA_HOST_AUDIO_FONT_LIST:
+        ok = request->handle == 0u && request->value_hi == 0u &&
+             length == 0u &&
+             request->capacity >= sizeof(AstraHostAudioFontRecord);
+        break;
+    case ASTRA_HOST_AUDIO_MIDI_PRESETS:
+        ok = request->handle != 0u && request->value_hi == 0u &&
+             length == 0u &&
+             request->capacity >= sizeof(AstraHostMidiPreset);
+        break;
+    case ASTRA_HOST_AUDIO_MIDI_EVENTS:
+        ok = request->handle != 0u && request->value == 0u &&
+             request->value_hi == 0u && length != 0u && length <= packet &&
+             length % ASTRA_HOST_MIDI_EVENT_BYTES == 0u;
+        break;
+    case ASTRA_HOST_AUDIO_MIDI_SET:
+        ok = request->handle != 0u && request->value != 0u &&
+             request->value <= ASTRA_HOST_MIDI_SET_MAX && length == 0u;
         break;
     default:
         ok = -1;
@@ -664,19 +698,184 @@ static int font_path(const AudioHost *host, const uint8_t *digest,
                     hex) < (int)capacity;
 }
 
-/* The readable copy of a font: the release's, else one the guest sent. */
 static int font_find(const AudioHost *host, const uint8_t *digest,
                      char *path, size_t capacity)
 {
-    if (host->shipped_fonts != NULL) {
-        AudioHost shipped = {.font_directory = host->shipped_fonts};
-
-        if (font_path(&shipped, digest, path, capacity) &&
-            access(path, R_OK) == 0)
-            return 1;
-    }
     return font_path(host, digest, path, capacity) &&
            access(path, R_OK) == 0;
+}
+
+/* The shared font directory, handed to the synthesizer once it exists. */
+static int sound_fonts_ready(AudioHost *host)
+{
+    char path[PATH_MAX];
+
+    if (host->sound_fonts >= 0)
+        return 1;
+    if (host->sound == NULL ||
+        snprintf(path, sizeof(path), "%s/soundfonts", host->sound) >=
+            (int)sizeof(path))
+        return 0;
+    host->sound_fonts = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC |
+                                       O_NOFOLLOW);
+    if (host->sound_fonts < 0)
+        return 0;
+    astra_audio_synth_set_sound_fonts(host->sound_fonts);
+    return 1;
+}
+
+/* Stacks the shared font @p name ("NAME.sf2") on @p midi, after checking
+ * it is there to read, so a wrong name is refused now rather than heard
+ * as silence. */
+static uint32_t add_sound_font(AudioHost *host, Midi *midi,
+                               const char *name)
+{
+    char path[sizeof("sound:") + ASTRA_HOST_FONT_NAME_MAX];
+    int fd;
+
+    if (!astra_audio_synth_sound_font_name(name))
+        return ASTRA_STATUS_INVALID;
+    if (!sound_fonts_ready(host) ||
+        (fd = astra_audio_synth_open_sound_font(name)) < 0)
+        return ASTRA_STATUS_NOT_FOUND;
+    (void)close(fd);
+    (void)snprintf(path, sizeof(path), "sound:%s", name);
+    return astra_audio_synth_add_font(midi->synth, path) == ASTRA_STATUS_OK ?
+           ASTRA_STATUS_OK : ASTRA_STATUS_NO_SPACE;
+}
+
+/* soundfonts/default, its comment and blank lines dropped: the default
+ * stack's file names, lowest first, one per NUL-terminated line in @p list.
+ * Returns how many, or zero without the file. */
+static uint32_t read_default_list(AudioHost *host, char *list,
+                                  size_t capacity)
+{
+    uint32_t names = 0u;
+    ssize_t length;
+    char *line, *next, *write;
+    int fd;
+
+    if (!sound_fonts_ready(host) ||
+        (fd = openat(host->sound_fonts, "default",
+                     O_RDONLY | O_CLOEXEC | O_NOFOLLOW)) < 0)
+        return 0u;
+    length = read(fd, list, capacity - 1u);
+    (void)close(fd);
+    if (length <= 0)
+        return 0u;
+    list[length] = '\0';
+    write = list;
+    for (line = list; line != NULL; line = next) {
+        size_t size;
+
+        next = strchr(line, '\n');
+        if (next != NULL)
+            *next++ = '\0';
+        if (line[0] == '\0' || line[0] == '#')
+            continue;
+        size = strlen(line) + 1u;
+        memmove(write, line, size);
+        write += size;
+        ++names;
+    }
+    return names;
+}
+
+/* Every font soundfonts/default names, lowest first. */
+static uint32_t add_default_fonts(AudioHost *host, Midi *midi)
+{
+    char list[2048];
+    uint32_t names = read_default_list(host, list, sizeof(list));
+    const char *name = list;
+
+    if (names == 0u)
+        return ASTRA_STATUS_NOT_FOUND;
+    for (uint32_t at = 0u; at < names; ++at, name += strlen(name) + 1u) {
+        uint32_t status = add_sound_font(host, midi, name);
+
+        if (status != ASTRA_STATUS_OK)
+            return status;
+    }
+    return ASTRA_STATUS_OK;
+}
+
+static int compare_names(const void *left, const void *right)
+{
+    return strcmp(*(char *const *)left, *(char *const *)right);
+}
+
+/* FONT_LIST: the shared fonts from index @p first in name order, as many
+ * records as @p capacity holds, and their total. */
+static uint32_t list_sound_fonts(AudioHost *host, uint32_t first,
+                                 uint8_t *out, uint32_t capacity,
+                                 uint32_t *bytes, uint32_t *total)
+{
+    char list[2048];
+    uint32_t defaults, count = 0u, room = 0u, copied = 0u;
+    char **names = NULL;
+    struct dirent *entry;
+    DIR *directory;
+    int fd;
+
+    *bytes = 0u;
+    *total = 0u;
+    if (!sound_fonts_ready(host))
+        return ASTRA_STATUS_OK;
+    defaults = read_default_list(host, list, sizeof(list));
+    if ((fd = dup(host->sound_fonts)) < 0 ||
+        (directory = fdopendir(fd)) == NULL) {
+        if (fd >= 0)
+            (void)close(fd);
+        return ASTRA_STATUS_IO;
+    }
+    rewinddir(directory);
+    while ((entry = readdir(directory)) != NULL) {
+        struct stat st;
+
+        if (!astra_audio_synth_sound_font_name(entry->d_name) ||
+            fstatat(host->sound_fonts, entry->d_name, &st,
+                    AT_SYMLINK_NOFOLLOW) != 0 || !S_ISREG(st.st_mode))
+            continue;
+        if (count == room) {
+            char **grown = realloc(names, (room = room ? room * 2u : 16u) *
+                                              sizeof(*names));
+
+            if (grown == NULL)
+                break;
+            names = grown;
+        }
+        if ((names[count] = strdup(entry->d_name)) != NULL)
+            ++count;
+    }
+    (void)closedir(directory);
+    if (count != 0u)
+        qsort(names, count, sizeof(*names), compare_names);
+    for (uint32_t at = first; at < count &&
+                              (copied + 1u) * sizeof(AstraHostAudioFontRecord)
+                                  <= capacity; ++at) {
+        AstraHostAudioFontRecord record = {0};
+        const char *name = list;
+        struct stat st;
+
+        for (uint32_t i = 0u; i < defaults; ++i, name += strlen(name) + 1u)
+            if (strcmp(name, names[at]) == 0)
+                record.flags |= ASTRA_HOST_AUDIO_FONT_DEFAULT;
+        if (fstatat(host->sound_fonts, names[at], &st,
+                    AT_SYMLINK_NOFOLLOW) != 0)
+            st.st_size = 0;
+        record.flags = htobe32(record.flags);
+        record.bytes_hi = htobe32((uint32_t)((uint64_t)st.st_size >> 32));
+        record.bytes_lo = htobe32((uint32_t)st.st_size);
+        (void)snprintf(record.name, sizeof(record.name), "%s", names[at]);
+        memcpy(out + copied * sizeof(record), &record, sizeof(record));
+        ++copied;
+    }
+    for (uint32_t at = 0u; at < count; ++at)
+        free(names[at]);
+    free(names);
+    *bytes = copied * (uint32_t)sizeof(AstraHostAudioFontRecord);
+    *total = count;
+    return ASTRA_STATUS_OK;
 }
 
 static int font_held(const AudioHost *host, const uint8_t *digest)
@@ -686,19 +885,16 @@ static int font_held(const AudioHost *host, const uint8_t *digest)
     return font_find(host, digest, path, sizeof(path));
 }
 
-/* Hands the synth every font in @p digests, lowest first. */
-static uint32_t add_fonts(const AudioHost *host, Midi *midi,
-                          const uint8_t *digests, uint32_t bytes)
+/* Stacks the sent font @p digest on @p midi. */
+static uint32_t add_sent_font(const AudioHost *host, Midi *midi,
+                              const uint8_t *digest)
 {
-    for (uint32_t at = 0u; at < bytes; at += ASTRA_HOST_AUDIO_DIGEST_BYTES) {
-        char path[PATH_MAX];
+    char path[PATH_MAX];
 
-        if (!font_find(host, digests + at, path, sizeof(path)))
-            return ASTRA_STATUS_NOT_FOUND;
-        if (astra_audio_synth_add_font(midi->synth, path) != ASTRA_STATUS_OK)
-            return ASTRA_STATUS_NO_SPACE;
-    }
-    return ASTRA_STATUS_OK;
+    if (!font_find(host, digest, path, sizeof(path)))
+        return ASTRA_STATUS_NOT_FOUND;
+    return astra_audio_synth_add_font(midi->synth, path) == ASTRA_STATUS_OK ?
+           ASTRA_STATUS_OK : ASTRA_STATUS_NO_SPACE;
 }
 
 static uint32_t next_handle(AudioHost *host)
@@ -806,7 +1002,7 @@ static void execute(AudioHost *host, Client *client,
             break;
         }
         midi->gain_q16 = UINT32_C(65536);
-        reply->status = add_fonts(host, midi, data, request->data_length);
+        reply->status = add_default_fonts(host, midi);
         if (reply->status != ASTRA_STATUS_OK) {
             free_midi(midi);
             break;
@@ -819,8 +1015,21 @@ static void execute(AudioHost *host, Client *client,
     case ASTRA_HOST_AUDIO_MIDI_FONT:
         midi = find_midi(client, request->handle);
         reply->status = midi == NULL ? ASTRA_STATUS_BAD_HANDLE :
-                        add_fonts(host, midi, data, request->data_length);
+                        add_sent_font(host, midi, data);
         break;
+    case ASTRA_HOST_AUDIO_MIDI_SYSTEM_FONT: {
+        char name[ASTRA_HOST_FONT_NAME_MAX + 1u];
+
+        midi = find_midi(client, request->handle);
+        if (midi == NULL) {
+            reply->status = ASTRA_STATUS_BAD_HANDLE;
+            break;
+        }
+        memcpy(name, data, request->data_length);
+        name[request->data_length] = '\0';
+        reply->status = add_sound_font(host, midi, name);
+        break;
+    }
     case ASTRA_HOST_AUDIO_MIDI_LOAD:
         midi = find_midi(client, request->handle);
         if (midi == NULL) {
@@ -876,6 +1085,68 @@ static void execute(AudioHost *host, Client *client,
         reply->status = astra_audio_synth_status(midi->synth);
         reply->value = (uint32_t)astra_audio_synth_active(midi->synth);
         reply->queued_frames = astra_audio_synth_ready(midi->synth);
+        {
+            AstraAudioSynthStatus report;
+            uint32_t words[6];
+
+            astra_audio_synth_report(midi->synth, &report);
+            words[0] = htobe32(report.sounding);
+            words[1] = htobe32(report.position_ticks);
+            words[2] = htobe32(report.length_ticks);
+            words[3] = htobe32(report.ticks_per_quarter);
+            words[4] = htobe32(report.tempo_us_per_quarter);
+            words[5] = htobe32(report.fonts_loading);
+            memcpy(out, words, sizeof(words));
+            reply->data_length = sizeof(words);
+        }
+        break;
+    case ASTRA_HOST_AUDIO_FONT_LIST:
+        reply->status = list_sound_fonts(host, request->value, out,
+                                         request->capacity,
+                                         &reply->data_length, &reply->value);
+        break;
+    case ASTRA_HOST_AUDIO_MIDI_PRESETS: {
+        AstraAudioSynthPreset presets[ASTRA_AUDIO_HOST_PACKET_FRAMES *
+                                      ASTRA_AUDIO_HOST_FRAME_BYTES /
+                                      sizeof(AstraHostMidiPreset)];
+        uint32_t copied = 0u;
+
+        midi = find_midi(client, request->handle);
+        if (midi == NULL) {
+            reply->status = ASTRA_STATUS_BAD_HANDLE;
+            break;
+        }
+        reply->status = astra_audio_synth_presets(
+            midi->synth, request->value, presets,
+            request->capacity / sizeof(AstraHostMidiPreset), &copied,
+            &reply->value);
+        for (uint32_t at = 0u; reply->status == ASTRA_STATUS_OK &&
+                               at < copied; ++at) {
+            AstraHostMidiPreset wire = {
+                .bank = htobe16(presets[at].bank),
+                .program = presets[at].program,
+                .font = presets[at].font,
+            };
+
+            memcpy(wire.name, presets[at].name, sizeof(wire.name));
+            memcpy(out + at * sizeof(wire), &wire, sizeof(wire));
+        }
+        if (reply->status == ASTRA_STATUS_OK)
+            reply->data_length = copied * (uint32_t)sizeof(AstraHostMidiPreset);
+        break;
+    }
+    case ASTRA_HOST_AUDIO_MIDI_EVENTS:
+        midi = find_midi(client, request->handle);
+        reply->status = midi == NULL ? ASTRA_STATUS_BAD_HANDLE :
+            astra_audio_synth_events(midi->synth, data,
+                                     request->data_length /
+                                         ASTRA_HOST_MIDI_EVENT_BYTES);
+        break;
+    case ASTRA_HOST_AUDIO_MIDI_SET:
+        midi = find_midi(client, request->handle);
+        reply->status = midi == NULL ? ASTRA_STATUS_BAD_HANDLE :
+            astra_audio_synth_set(midi->synth, request->value,
+                                  request->value_hi);
         break;
     case ASTRA_HOST_AUDIO_CONVERT_OPEN:
         converter = calloc(1u, sizeof(*converter));
@@ -1775,8 +2046,65 @@ static uint32_t midi_request(AudioHost *host, Client *client,
     return reply->status;
 }
 
-/* ASTRA_AUDIO_TEST_SOUNDFONT through the protocol: kept by digest, then a
- * one-note song played through the mixer, heard, and ended. */
+/* Writes @p bytes to DIRECTORY/NAME. */
+static int write_file(const char *directory, const char *name,
+                      const void *bytes, size_t length)
+{
+    char path[PATH_MAX];
+    FILE *file;
+    int written;
+
+    if (snprintf(path, sizeof(path), "%s/%s", directory, name) >=
+            (int)sizeof(path) ||
+        (file = fopen(path, "wb")) == NULL)
+        return 0;
+    written = fwrite(bytes, 1u, length, file) == length;
+    return fclose(file) == 0 && written;
+}
+
+/* Mixes as the feeder does until @p handle's voice falls silent (or for
+ * about 10 s), returning the energy heard; -1 on a failed request. */
+static double midi_listen(AudioHost *host, Client *client, uint32_t handle,
+                          uint8_t *out)
+{
+    AstraAudioHostRequest status = {
+        .magic = ASTRA_AUDIO_HOST_MAGIC,
+        .version = ASTRA_AUDIO_HOST_VERSION,
+        .operation = ASTRA_HOST_AUDIO_MIDI_STATUS,
+        .handle = handle,
+        .capacity = sizeof(AstraHostMidiStatus),
+    };
+    AstraAudioHostReply reply;
+    double energy = 0.0;
+    int active = 1;
+
+    for (unsigned tick = 0u; tick < 10000u && active; ++tick) {
+        struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+        uint32_t sounding;
+
+        for (unsigned frame = 0u; frame < 256u; ++frame) {
+            int32_t left, right;
+
+            mix_frame(host, &left, &right);
+            energy += (double)left * left;
+        }
+        if (midi_request(host, client, &status, NULL, out, &reply) !=
+                ASTRA_STATUS_OK ||
+            reply.data_length != sizeof(AstraHostMidiStatus))
+            return -1.0;
+        memcpy(&sounding, out, sizeof(sounding));
+        active = be32toh(sounding) != 0u;
+        if (active != (reply.value != 0u))
+            return -1.0;
+        (void)nanosleep(&pause, NULL);
+    }
+    return active ? -1.0 : energy;
+}
+
+/* ASTRA_AUDIO_TEST_SOUNDFONT through the protocol: shared from a SOUND
+ * directory as the default set, refused under any name that is not a plain
+ * file there, and also sent and kept by digest; then a one-note song on
+ * both, played through the mixer, heard, and ended. */
 static int midi_self_test(void)
 {
     static const uint8_t song[] = {
@@ -1787,7 +2115,10 @@ static int midi_self_test(void)
     };
     const char *source = getenv("ASTRA_AUDIO_TEST_SOUNDFONT");
     char directory[] = "/tmp/astra-audio-fonts-XXXXXX";
-    AudioHost host = {.font_directory = directory};
+    char sound[] = "/tmp/astra-audio-sound-XXXXXX";
+    char shared[sizeof(sound) + sizeof("/soundfonts")] = "";
+    AudioHost host = {.font_directory = directory, .sound = sound,
+                      .sound_fonts = -1};
     Client client = {.fd = -1};
     AstraAudioHostRequest request = {
         .magic = ASTRA_AUDIO_HOST_MAGIC,
@@ -1813,13 +2144,25 @@ static int midi_self_test(void)
         (size = ftell(file)) <= 0 || fseek(file, 0, SEEK_SET) != 0 ||
         (font = malloc((size_t)size)) == NULL ||
         fread(font, 1u, (size_t)size, file) != (size_t)size ||
-        mkdtemp(directory) == NULL) {
+        mkdtemp(directory) == NULL || mkdtemp(sound) == NULL) {
         if (file != NULL)
             fclose(file);
         free(font);
         return 0;
     }
     fclose(file);
+    (void)snprintf(shared, sizeof(shared), "%s/soundfonts", sound);
+    if (mkdir(shared, 0700) != 0 ||
+        !write_file(shared, "Test.sf2", font, (size_t)size) ||
+        !write_file(shared, "default", "# lowest first\nTest.sf2\n", 24u))
+        goto done;
+    {
+        char link[PATH_MAX];
+
+        (void)snprintf(link, sizeof(link), "%s/Link.sf2", shared);
+        if (symlink(source, link) != 0)
+            goto done;
+    }
     host.clients = &client;
     astra_sha256_init(&context);
     astra_sha256_update(&context, font, (size_t)size);
@@ -1875,10 +2218,41 @@ static int midi_self_test(void)
             goto done;
     }
     request.operation = ASTRA_HOST_AUDIO_MIDI_OPEN;
-    if (midi_request(&host, &client, &request, digest, out, &reply) !=
+    request.data_length = 0u;
+    if (midi_request(&host, &client, &request, NULL, out, &reply) !=
         ASTRA_STATUS_OK || client.midis == NULL)
         goto done;
     request.handle = reply.handle;
+    {
+        static const struct {
+            const char *name;
+            uint32_t status;
+        } names[] = {
+            {"Test.sf2", ASTRA_STATUS_OK},
+            {"Missing.sf2", ASTRA_STATUS_NOT_FOUND},
+            /* A link in the shared directory could lead anywhere. */
+            {"Link.sf2", ASTRA_STATUS_NOT_FOUND},
+            {"../Test.sf2", ASTRA_STATUS_INVALID},
+            {"default", ASTRA_STATUS_INVALID},
+            {".Test.sf2", ASTRA_STATUS_INVALID},
+        };
+
+        request.operation = ASTRA_HOST_AUDIO_MIDI_SYSTEM_FONT;
+        for (uint32_t i = 0u; i < sizeof(names) / sizeof(names[0]); ++i) {
+            request.data_length = (uint32_t)strlen(names[i].name);
+            if (midi_request(&host, &client, &request, names[i].name, out,
+                             &reply) != names[i].status) {
+                fprintf(stderr, "audio MIDI self-test: shared font %s\n",
+                        names[i].name);
+                goto done;
+            }
+        }
+    }
+    request.operation = ASTRA_HOST_AUDIO_MIDI_FONT;
+    request.data_length = sizeof(digest);
+    if (midi_request(&host, &client, &request, digest, out, &reply) !=
+        ASTRA_STATUS_OK)
+        goto done;
     request.operation = ASTRA_HOST_AUDIO_MIDI_PLAY;
     request.data_length = 0u;
     request.value = 1u;
@@ -1901,22 +2275,111 @@ static int midi_self_test(void)
         ASTRA_STATUS_OK)
         goto done;
     /* Mix as the feeder does until the song and its tail are over. */
-    for (unsigned tick = 0u; tick < 10000u && active; ++tick) {
-        struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+    energy = midi_listen(&host, &client, request.handle, out);
+    if (energy <= 0.0)
+        goto done;
+    active = 0;
+    /* The shared fonts, listed: a link is not one. */
+    request.operation = ASTRA_HOST_AUDIO_FONT_LIST;
+    request.handle = 0u;
+    request.value = 0u;
+    request.capacity = 2u * sizeof(AstraHostAudioFontRecord);
+    if (midi_request(&host, &client, &request, NULL, out, &reply) !=
+            ASTRA_STATUS_OK || reply.value != 1u ||
+        reply.data_length != sizeof(AstraHostAudioFontRecord)) {
+        fprintf(stderr, "audio MIDI self-test: font list\n");
+        goto done;
+    }
+    {
+        AstraHostAudioFontRecord record;
 
-        for (unsigned frame = 0u; frame < 256u; ++frame) {
+        memcpy(&record, out, sizeof(record));
+        if (strcmp(record.name, "Test.sf2") != 0 ||
+            be32toh(record.flags) != ASTRA_HOST_AUDIO_FONT_DEFAULT ||
+            be32toh(record.bytes_lo) != (uint32_t)size)
+            goto done;
+    }
+    request.handle = client.midis->handle;
+    /* Presets wait for every font; then they are listed in order. */
+    request.operation = ASTRA_HOST_AUDIO_MIDI_PRESETS;
+    request.capacity = 8u * sizeof(AstraHostMidiPreset);
+    for (unsigned wait = 0u;; ++wait) {
+        struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+        uint32_t status = midi_request(&host, &client, &request, NULL, out,
+                                       &reply);
+
+        if (status == ASTRA_STATUS_OK)
+            break;
+        if (status != ASTRA_STATUS_BUSY || wait == 5000u)
+            goto done;
+        (void)nanosleep(&pause, NULL);
+    }
+    if (reply.value == 0u || reply.data_length == 0u ||
+        reply.data_length % sizeof(AstraHostMidiPreset) != 0u) {
+        fprintf(stderr, "audio MIDI self-test: presets\n");
+        goto done;
+    }
+    for (uint32_t at = 1u; at < reply.data_length / sizeof(AstraHostMidiPreset);
+         ++at) {
+        AstraHostMidiPreset before, after;
+
+        memcpy(&before, out + (at - 1u) * sizeof(before), sizeof(before));
+        memcpy(&after, out + at * sizeof(after), sizeof(after));
+        if (be16toh(before.bank) > be16toh(after.bank) ||
+            (before.bank == after.bank && before.program >= after.program))
+            goto done;
+    }
+    request.capacity = 0u;
+    /* Settings are judged before they are queued. */
+    request.operation = ASTRA_HOST_AUDIO_MIDI_SET;
+    request.value = ASTRA_HOST_MIDI_SET_REVERB;
+    request.value_hi = 2u;
+    if (midi_request(&host, &client, &request, NULL, out, &reply) !=
+        ASTRA_STATUS_INVALID)
+        goto done;
+    request.value_hi = 0u;
+    if (midi_request(&host, &client, &request, NULL, out, &reply) !=
+        ASTRA_STATUS_OK)
+        goto done;
+    request.value = ASTRA_HOST_MIDI_SET_MAX + 1u;
+    if (midi_request(&host, &client, &request, NULL, out, &reply) !=
+        ASTRA_STATUS_INVALID)
+        goto done;
+    /* Live notes, after the song: heard, then let go. */
+    {
+        static const uint8_t events[] = {
+            0xc0, 0x00, 0x00, 0x00,   /* program 0 */
+            0x90, 0x45, 0x64, 0x00,   /* A4 on */
+        };
+        static const uint8_t release[] = {0x80, 0x45, 0x40, 0x00};
+        double live;
+
+        request.operation = ASTRA_HOST_AUDIO_MIDI_EVENTS;
+        request.value = 0u;
+        request.data_length = sizeof(events);
+        if (midi_request(&host, &client, &request, events, out, &reply) !=
+            ASTRA_STATUS_OK)
+            goto done;
+        for (unsigned frame = 0u; frame < 48000u; ++frame) {
             int32_t left, right;
 
             mix_frame(&host, &left, &right);
-            energy += (double)left * left;
+            if (frame % 256u == 0u) {
+                struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+
+                (void)nanosleep(&pause, NULL);
+            }
         }
-        request.operation = ASTRA_HOST_AUDIO_MIDI_STATUS;
-        request.value = 0u;
-        if (midi_request(&host, &client, &request, NULL, out, &reply) !=
+        request.data_length = sizeof(release);
+        if (midi_request(&host, &client, &request, release, out, &reply) !=
             ASTRA_STATUS_OK)
             goto done;
-        active = reply.value != 0u;
-        (void)nanosleep(&pause, NULL);
+        request.data_length = 0u;
+        live = midi_listen(&host, &client, request.handle, out);
+        if (live <= 0.0) {
+            fprintf(stderr, "audio MIDI self-test: live notes\n");
+            goto done;
+        }
     }
     request.operation = ASTRA_HOST_AUDIO_CLOSE;
     passed = !active && energy > 0.0 &&
@@ -1941,6 +2404,17 @@ done:
         if (font_path(&host, digest, path, sizeof(path)))
             (void)unlink(path);
         (void)rmdir(directory);
+        for (const char *const *name = (const char *const[]){
+                 "Test.sf2", "default", "Link.sf2", NULL};
+             shared[0] != '\0' && *name != NULL; ++name) {
+            (void)snprintf(path, sizeof(path), "%s/%s", shared, *name);
+            (void)unlink(path);
+        }
+        if (shared[0] != '\0')
+            (void)rmdir(shared);
+        (void)rmdir(sound);
+        if (host.sound_fonts >= 0)
+            (void)close(host.sound_fonts);
     }
     free(font);
     if (!passed)
@@ -2039,7 +2513,8 @@ int main(int argc, char **argv)
     const char *path = ASTRA_AUDIO_HOST_SOCKET;
     AudioHost host = {.listener = -1, .epoll_fd = -1, .lock_fd = -1,
                       .font_directory = getenv("ASTRA_AUDIO_HOST_FONTS"),
-                      .shipped_fonts = ASTRA_AUDIO_HOST_SHIPPED_FONTS};
+                      .sound = getenv("ASTRA_AUDIO_HOST_SOUND"),
+                      .sound_fonts = -1};
     struct epoll_event events[32];
     int result = EXIT_FAILURE;
 
@@ -2054,6 +2529,8 @@ int main(int argc, char **argv)
     /* systemd's StateDirectory makes the default; a test names its own. */
     if (host.font_directory == NULL || host.font_directory[0] == '\0')
         host.font_directory = ASTRA_AUDIO_HOST_FONT_DIRECTORY;
+    if (host.sound == NULL || host.sound[0] == '\0')
+        host.sound = ASTRA_AUDIO_HOST_SOUND;
     if (claim_hardware(&host) != 0 || setup_hardware(&host) != 0 ||
         setup_socket(&host, path) != 0) {
         perror("Astra audio host setup");
