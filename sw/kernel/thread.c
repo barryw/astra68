@@ -821,7 +821,10 @@ static KernelThreadWaitRegistration *registration_at(uint32_t identifier)
     if (thread_slot >= KERNEL_THREAD_SLOT_NONE)
         return NULL;
     thread = thread_at_slot((uint16_t)thread_slot);
-    return valid_thread(thread) && thread->wait_registrations != NULL &&
+    /* valid_thread() without its second lookup: the thread came from this
+     * slot, so the slot it records is what proves it. */
+    return thread != NULL && thread->slot == thread_slot &&
+           thread->occupied != 0u && thread->wait_registrations != NULL &&
            member < thread->wait_registrations_capacity ?
         &thread->wait_registrations[member] : NULL;
 }
@@ -853,7 +856,8 @@ static KernelThread *registration_thread(
         registration->member >= KERNEL_THREAD_WAIT_MEMBER_MAX)
         return NULL;
     thread = thread_at_slot(registration->thread_slot);
-    if (!valid_thread(thread) || thread->wait_registrations == NULL ||
+    if (thread == NULL || thread->slot != registration->thread_slot ||
+        thread->occupied == 0u || thread->wait_registrations == NULL ||
         registration->member >= thread->wait_registrations_capacity ||
         &thread->wait_registrations[registration->member] != registration)
         return NULL;
