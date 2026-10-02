@@ -274,6 +274,12 @@ _Static_assert(sizeof(KernelProcess) <= 4608u,
 static KernelProcess *processes[PROCESS_SLOT_COUNT] KERNEL_TABLES;
 static KernelHostChannel
     host_channels[KERNEL_VM_HOST_CHANNEL_PAGE_COUNT] KERNEL_TABLES;
+/*
+ * Channels that may have a waiter, one bit per slot: the completion
+ * interrupt visits these instead of all 256 slots. A superset -- the bit is
+ * set wherever waiting is, and the interrupt drops bits it finds idle.
+ */
+static uint32_t host_channel_waiting[KERNEL_VM_HOST_CHANNEL_PAGE_COUNT / 32u];
 static uint32_t library_cache_head;
 static KernelExecutableLoad *executable_loads;
 static KernelSchedulerStats scheduler_stats;
@@ -2408,6 +2414,7 @@ static KernelProcessStatus host_channel_wait(
     }
     channel->expected_consumer = consumer_position;
     channel->waiting = 1u;
+    host_channel_waiting[channel_slot / 32u] |= 1u << (channel_slot % 32u);
     sequence = kernel_thread_wait_queue_sequence(&channel->waiters);
     kernel_platform_host_channel_kick(channel_slot, consumer_position);
     kernel_platform_host_channel_arm(channel_slot, consumer_position);
@@ -2458,22 +2465,32 @@ bool kernel_process_host_channel_irq_service(uint8_t source,
      * acknowledgement is seen by the scan, and one after it raises the
      * interrupt again. */
     kernel_platform_host_channel_ack();
-    for (uint32_t slot = 0u; slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
-         ++slot) {
-        KernelHostChannel *channel = &host_channels[slot];
-        uint32_t result;
-        uint32_t woken;
+    for (uint32_t word = 0u;
+         word < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT / 32u; ++word) {
+        for (uint32_t bit = 0u;
+             bit < 32u && host_channel_waiting[word] >> bit != 0u; ++bit) {
+            uint32_t slot = word * 32u + bit;
+            KernelHostChannel *channel = &host_channels[slot];
+            uint32_t result;
+            uint32_t woken;
 
-        if (channel->active == 0u || channel->waiting == 0u)
-            continue;
-        if (!host_channel_result(channel, channel->expected_consumer,
-                                 &result))
-            continue;
-        if (kernel_thread_wake_all_irq(&channel->waiters, result, &woken) !=
-                KERNEL_THREAD_OK || woken > 1u)
-            valid = false;
-        *woken_threads += woken;
-        channel->waiting = 0u;
+            if ((host_channel_waiting[word] & (1u << bit)) == 0u)
+                continue;
+            if (channel->active == 0u || channel->waiting == 0u) {
+                host_channel_waiting[word] &= ~(1u << bit);
+                continue;
+            }
+            if (!host_channel_result(channel, channel->expected_consumer,
+                                     &result))
+                continue;
+            if (kernel_thread_wake_all_irq(&channel->waiters, result,
+                                           &woken) !=
+                    KERNEL_THREAD_OK || woken > 1u)
+                valid = false;
+            *woken_threads += woken;
+            channel->waiting = 0u;
+            host_channel_waiting[word] &= ~(1u << bit);
+        }
     }
     return valid;
 }

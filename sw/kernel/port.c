@@ -991,6 +991,28 @@ KernelPortStatus kernel_port_send(
     return KERNEL_PORT_OK;
 }
 
+/*
+ * Field by field, not a clear: the import reservation's handle and slot
+ * arrays are only ever read below its count, and clearing their 1.3 KiB on
+ * both sides of every receive was the larger part of what a receive cost.
+ */
+static void reset_receipt(KernelPortReceipt *receipt)
+{
+    receipt->import.count = 0u;
+    receipt->import.active = 0u;
+    receipt->import.reserved[0] = 0u;
+    receipt->import.reserved[1] = 0u;
+    receipt->port = NULL;
+    receipt->destination_table = NULL;
+    receipt->message = NULL;
+    receipt->message_size = 0u;
+    receipt->message_generation = 0u;
+    receipt->sender = 0u;
+    receipt->message_slot = KERNEL_PORT_SLOT_NONE;
+    receipt->handle_count = 0u;
+    receipt->active = 0u;
+}
+
 KernelPortStatus kernel_port_receive_prepare(
     KernelPort *port, KernelHandleTable *destination_table,
     uint32_t message_capacity, uint32_t handle_capacity,
@@ -1006,8 +1028,7 @@ KernelPortStatus kernel_port_receive_prepare(
         required_handle_count == NULL ||
         handle_capacity > KERNEL_PORT_MESSAGE_HANDLE_MAX)
         return KERNEL_PORT_INVALID_ARGUMENT;
-    kernel_bytes_clear(receipt, sizeof(*receipt));
-    receipt->message_slot = KERNEL_PORT_SLOT_NONE;
+    reset_receipt(receipt);
     *required_message_size = 0u;
     *required_handle_count = 0u;
     if (port->state == KERNEL_PORT_CLOSING)
@@ -1083,11 +1104,6 @@ static bool valid_receipt(const KernelPortReceipt *receipt,
            (*message)->data == receipt->message;
 }
 
-static void reset_receipt(KernelPortReceipt *receipt)
-{
-    kernel_bytes_clear(receipt, sizeof(*receipt));
-    receipt->message_slot = KERNEL_PORT_SLOT_NONE;
-}
 
 KernelPortStatus kernel_port_receive_commit(KernelPortReceipt *receipt,
                                             uint32_t *woken_threads)

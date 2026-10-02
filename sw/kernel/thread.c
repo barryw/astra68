@@ -21,6 +21,11 @@
 #define THREAD_STACK_CANARY 0x5354414bu
 #define THREAD_STACK_POISON 0xa5a5a5a5u
 #define THREAD_WAIT_REGISTRATION_NONE UINT32_MAX
+/* A registration identifier is its thread slot above its member index: a
+ * shift, not a divide by the member count, on every wait-queue hop. */
+#define THREAD_WAIT_MEMBER_SHIFT 8u
+_Static_assert(KERNEL_THREAD_WAIT_MEMBER_MAX <= (1u << THREAD_WAIT_MEMBER_SHIFT),
+               "wait members must fit below the thread slot");
 #define THREAD_SLOT_LEAF_BITS 8u
 #define THREAD_SLOT_LEAF_ENTRIES (1u << THREAD_SLOT_LEAF_BITS)
 #define THREAD_SLOT_DIRECTORY_ENTRIES (1u << (16u - THREAD_SLOT_LEAF_BITS))
@@ -811,8 +816,8 @@ static KernelThreadWaitRegistration *registration_at(uint32_t identifier)
 
     if (identifier == THREAD_WAIT_REGISTRATION_NONE)
         return NULL;
-    thread_slot = identifier / KERNEL_THREAD_WAIT_MEMBER_MAX;
-    member = identifier % KERNEL_THREAD_WAIT_MEMBER_MAX;
+    thread_slot = identifier >> THREAD_WAIT_MEMBER_SHIFT;
+    member = identifier & ((1u << THREAD_WAIT_MEMBER_SHIFT) - 1u);
     if (thread_slot >= KERNEL_THREAD_SLOT_NONE)
         return NULL;
     thread = thread_at_slot((uint16_t)thread_slot);
@@ -836,7 +841,9 @@ static uint16_t registration_member_at(uint32_t identifier)
     return registration != NULL ? registration->member : UINT16_MAX;
 }
 
-static uint32_t registration_identifier(
+/* The live thread that owns @p registration, or NULL when it is not one of
+ * a live thread's registrations. */
+static KernelThread *registration_thread(
     const KernelThreadWaitRegistration *registration)
 {
     KernelThread *thread;
@@ -844,24 +851,22 @@ static uint32_t registration_identifier(
     if (registration == NULL ||
         registration->thread_slot == KERNEL_THREAD_SLOT_NONE ||
         registration->member >= KERNEL_THREAD_WAIT_MEMBER_MAX)
-        return THREAD_WAIT_REGISTRATION_NONE;
+        return NULL;
     thread = thread_at_slot(registration->thread_slot);
     if (!valid_thread(thread) || thread->wait_registrations == NULL ||
         registration->member >= thread->wait_registrations_capacity ||
         &thread->wait_registrations[registration->member] != registration)
-        return THREAD_WAIT_REGISTRATION_NONE;
-    return (uint32_t)registration->thread_slot *
-               KERNEL_THREAD_WAIT_MEMBER_MAX +
-           registration->member;
+        return NULL;
+    return thread;
 }
 
-static KernelThread *registration_thread(
+static uint32_t registration_identifier(
     const KernelThreadWaitRegistration *registration)
 {
-    uint32_t identifier = registration_identifier(registration);
-
-    return identifier == THREAD_WAIT_REGISTRATION_NONE ? NULL :
-        thread_at_slot(registration->thread_slot);
+    return registration_thread(registration) == NULL ?
+        THREAD_WAIT_REGISTRATION_NONE :
+        ((uint32_t)registration->thread_slot << THREAD_WAIT_MEMBER_SHIFT) |
+            registration->member;
 }
 
 static uint16_t registration_member(
