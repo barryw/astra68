@@ -12,7 +12,12 @@ RestartSec=1
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=astra-audio-host
-CPUAffinity=0
+# CPUs 0-1 are Cortex-A55, 2-3 Cortex-A76. The vCPU has CPU 2 and QEMU's
+# host I/O threads CPU 3 (astra-input-hotplug.py). Resampling for a guest
+# converter runs 3.5x slower on an A55, and the guest waits for it: Doom's
+# effect precache spent 0.8 s here on CPU 0 and 0.24 s on CPU 3, which is
+# otherwise idle while the guest waits on a host command.
+CPUAffinity=3
 Nice=-5
 RuntimeDirectory=astra
 RuntimeDirectoryPreserve=yes
