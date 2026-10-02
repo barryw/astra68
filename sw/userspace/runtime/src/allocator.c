@@ -183,12 +183,11 @@ take_retained(AstraAllocatorControl *control, uint32_t pages)
         control->layout.extent_next[best_previous - 1u] = next;
     control->retained_pages -= pages;
     /*
-     * Zeroed, so a reused extent reads exactly as the freshly faulted pages
-     * it replaces. Programs depend on that whether or not malloc promises
-     * it, and a store per word is still far cheaper than a fault, a kernel
-     * zero fill and an unmap with its cache push per page.
+     * Not zeroed: malloc promises nothing, calloc clears its own, and
+     * nothing here reads a header it has not written. (A hang once blamed
+     * on stale contents was the kernel refusing to write a copy-on-write
+     * page shared since a fork; see kernel_vm_private_commit_range.)
      */
-    (void)memset(run_at_page(control, page), 0, (size_t)pages * PAGE_BYTES);
     return run_at_page(control, page);
 }
 

@@ -1306,8 +1306,21 @@ KernelVmStatus kernel_vm_private_commit_range(KernelAddressSpace *space,
 
             if (status != KERNEL_VM_OK)
                 return status;
-        } else if (write && mapping != KERNEL_VM_MAPPING_READ_WRITE)
-            return KERNEL_VM_NOT_OWNED;
+        } else if (write && mapping != KERNEL_VM_MAPPING_READ_WRITE) {
+            /*
+             * Read-only in a writable slot means copy-on-write shared since
+             * a fork. The kernel is about to store into it for the process,
+             * so it gets its private copy now, as its own store would have.
+             * Refusing instead failed any syscall that wrote into a heap
+             * page the child had not yet touched -- invisible while freed
+             * heap pages were always decommitted, and a hang in the
+             * terminal gate the moment the allocator kept them.
+             */
+            KernelVmStatus status = kernel_vm_cow_fault(space, address);
+
+            if (status != KERNEL_VM_OK)
+                return status;
+        }
         if (address == last)
             break;
     }

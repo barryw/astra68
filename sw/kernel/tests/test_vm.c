@@ -935,6 +935,21 @@ static void test_private_cow_mapping_requires_reservation(void)
     assert(child_base == parent_base && child_span == parent_span);
     assert(kernel_vm_map_cow_page(&child, child_base, physical, 103u,
                                   true) == KERNEL_VM_OK);
+    /* A kernel store into the shared page for the child -- a read() into
+     * a heap buffer after fork -- gives the child its own copy rather
+     * than refusing, and leaves the parent's page alone. */
+    {
+        uint32_t child_physical = 0u;
+
+        assert(kernel_vm_probe_address_space(&child, child_base, NULL) ==
+               KERNEL_VM_MAPPING_READ_ONLY);
+        assert(kernel_vm_private_commit_range(&child, child_base + 8u, 16u,
+                                              true) == KERNEL_VM_OK);
+        assert(kernel_vm_probe_address_space(&child, child_base,
+                                             &child_physical) ==
+               KERNEL_VM_MAPPING_READ_WRITE);
+        assert(child_physical != physical);
+    }
 
     assert(kernel_vm_destroy_address_space(&parent) == KERNEL_VM_OK);
     assert(kernel_vm_destroy_address_space(&child) == KERNEL_VM_OK);

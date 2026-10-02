@@ -192,7 +192,10 @@ main(void)
         assert(decommit_calls == decommits);
         again = astra_runtime_allocate(60000u);
         assert(again == buffer && decommit_calls == decommits);
-        /* ...and reads as the fresh zero pages it stands in for. */
+        /* calloc still clears a reused extent: it is not fresh pages. */
+        astra_runtime_deallocate(again);
+        again = astra_runtime_callocate(1u, 60000u);
+        assert(again == buffer);
         for (uint32_t index = 0u; index < 60000u; ++index)
             assert(((uint8_t *)again)[index] == 0u);
         astra_runtime_deallocate(again);
