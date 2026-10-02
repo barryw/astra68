@@ -113,6 +113,10 @@ def main():
     parser.add_argument("--probe", action="append", default=[],
                         help="guest address whose callers the profile "
                              "records (astra-prof report lists them)")
+    parser.add_argument("--register",
+                        help="register whose values each --probe records, "
+                             "e.g. d0 at the syscall trap for a syscall "
+                             "histogram")
     parser.add_argument("--only", action="append",
                         help="profile only these workloads (boot and the "
                              "terminal still run, unprofiled)")
@@ -155,7 +159,9 @@ def main():
                 "-plugin", "%s,output=%s,control=%s,autostart=%s,label=%s%s" %
                 (arguments.plugin, os.path.abspath(arguments.output), ctl,
                  "true" if boot else "false", "boot" if boot else "idle",
-                 "".join(",probe=%s" % probe for probe in arguments.probe))])
+                 "".join(",probe=%s" % probe for probe in arguments.probe) +
+                 (",register=%s" % arguments.register
+                  if arguments.register else ""))])
         try:
             if not machine.wait_for_serial(terminal_gate.BOOT_MARKER, 300):
                 print("FAIL boot: never reached the desktop")
