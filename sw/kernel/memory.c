@@ -918,6 +918,26 @@ KernelMemoryStatus kernel_memory_init(const AstraBootInfo *info)
     return KERNEL_MEMORY_OK;
 }
 
+/*
+ * The first clear bit in [@p index, @p end], or UINT32_MAX. A word at a time:
+ * the next-fit hint usually sits just past a long run of frames in use, and
+ * stepping across it one bit per iteration was most of an allocation.
+ */
+static uint32_t next_clear_bit(const uint32_t *bitmap, uint32_t index,
+                               uint32_t end)
+{
+    while (index <= end) {
+        uint32_t clear = ~bitmap[index >> 5] & (UINT32_MAX << (index & 31u));
+
+        if (clear != 0u) {
+            index = (index & ~31u) + (uint32_t)__builtin_ctz(clear);
+            return index <= end ? index : UINT32_MAX;
+        }
+        index = (index | 31u) + 1u;
+    }
+    return UINT32_MAX;
+}
+
 static bool find_contiguous_frames(uint32_t begin, uint32_t end,
                                    uint32_t frame_count,
                                    uint32_t alignment_frames,
@@ -928,9 +948,13 @@ static bool find_contiguous_frames(uint32_t begin, uint32_t end,
     if (begin > end)
         return false;
     for (uint32_t first = begin; first <= end;) {
-        uint32_t misalignment =
-            (ram_frame + first) & (alignment_frames - 1u);
+        uint32_t misalignment;
         uint32_t unavailable = frame_count;
+
+        first = next_clear_bit(blocked_bitmap, first, end);
+        if (first == UINT32_MAX)
+            return false;
+        misalignment = (ram_frame + first) & (alignment_frames - 1u);
 
         if (misalignment != 0u) {
             uint32_t skip = alignment_frames - misalignment;

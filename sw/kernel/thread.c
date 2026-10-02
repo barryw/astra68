@@ -20,12 +20,6 @@
 #define THREAD_ID_VALUE_MASK (THREAD_ID_PREFIX - 1u)
 #define THREAD_STACK_CANARY 0x5354414bu
 #define THREAD_STACK_POISON 0xa5a5a5a5u
-#define THREAD_WAIT_REGISTRATION_NONE UINT32_MAX
-/* A registration identifier is its thread slot above its member index: a
- * shift, not a divide by the member count, on every wait-queue hop. */
-#define THREAD_WAIT_MEMBER_SHIFT 8u
-_Static_assert(KERNEL_THREAD_WAIT_MEMBER_MAX <= (1u << THREAD_WAIT_MEMBER_SHIFT),
-               "wait members must fit below the thread slot");
 #define THREAD_SLOT_LEAF_BITS 8u
 #define THREAD_SLOT_LEAF_ENTRIES (1u << THREAD_SLOT_LEAF_BITS)
 #define THREAD_SLOT_DIRECTORY_ENTRIES (1u << (16u - THREAD_SLOT_LEAF_BITS))
@@ -808,122 +802,63 @@ static KernelThreadStatus remove_ready(KernelThread *thread)
     return KERNEL_THREAD_OK;
 }
 
-static KernelThreadWaitRegistration *registration_at(uint32_t identifier)
-{
-    uint32_t thread_slot;
-    uint32_t member;
-    KernelThread *thread;
-
-    if (identifier == THREAD_WAIT_REGISTRATION_NONE)
-        return NULL;
-    thread_slot = identifier >> THREAD_WAIT_MEMBER_SHIFT;
-    member = identifier & ((1u << THREAD_WAIT_MEMBER_SHIFT) - 1u);
-    if (thread_slot >= KERNEL_THREAD_SLOT_NONE)
-        return NULL;
-    thread = thread_at_slot((uint16_t)thread_slot);
-    /* valid_thread() without its second lookup: the thread came from this
-     * slot, so the slot it records is what proves it. */
-    return thread != NULL && thread->slot == thread_slot &&
-           thread->occupied != 0u && thread->wait_registrations != NULL &&
-           member < thread->wait_registrations_capacity ?
-        &thread->wait_registrations[member] : NULL;
-}
-
-static KernelThread *registration_thread_at(uint32_t identifier)
-{
-    KernelThreadWaitRegistration *registration = registration_at(identifier);
-
-    return registration != NULL ?
-        thread_at_slot(registration->thread_slot) : NULL;
-}
-
-static uint16_t registration_member_at(uint32_t identifier)
-{
-    KernelThreadWaitRegistration *registration = registration_at(identifier);
-
-    return registration != NULL ? registration->member : UINT16_MAX;
-}
-
-/* The live thread that owns @p registration, or NULL when it is not one of
- * a live thread's registrations. */
-static KernelThread *registration_thread(
+/*
+ * The live thread that owns @p registration. Queue links are pointers that
+ * every queue operation keeps consistent, so the release kernel follows them;
+ * an audit build proves each one is a live thread's own registration.
+ */
+static inline __attribute__((always_inline))
+KernelThread *registration_thread(
     const KernelThreadWaitRegistration *registration)
 {
+#if KERNEL_AUDIT
     KernelThread *thread;
 
-    if (registration == NULL ||
-        registration->thread_slot == KERNEL_THREAD_SLOT_NONE ||
+    if (registration == NULL || registration->thread == NULL ||
         registration->member >= KERNEL_THREAD_WAIT_MEMBER_MAX)
         return NULL;
-    thread = thread_at_slot(registration->thread_slot);
-    if (thread == NULL || thread->slot != registration->thread_slot ||
-        thread->occupied == 0u || thread->wait_registrations == NULL ||
+    thread = registration->thread;
+    if (!valid_thread(thread) || thread->wait_registrations == NULL ||
         registration->member >= thread->wait_registrations_capacity ||
         &thread->wait_registrations[registration->member] != registration)
         return NULL;
     return thread;
+#else
+    return registration != NULL ? registration->thread : NULL;
+#endif
 }
 
-static uint32_t registration_identifier(
-    const KernelThreadWaitRegistration *registration)
-{
-    return registration_thread(registration) == NULL ?
-        THREAD_WAIT_REGISTRATION_NONE :
-        ((uint32_t)registration->thread_slot << THREAD_WAIT_MEMBER_SHIFT) |
-            registration->member;
-}
-
-static uint16_t registration_member(
-    const KernelThreadWaitRegistration *registration)
-{
-    uint32_t identifier = registration_identifier(registration);
-
-    return identifier == THREAD_WAIT_REGISTRATION_NONE ? UINT16_MAX :
-        registration->member;
-}
-
-static bool valid_wait_queue_header(const KernelThreadWaitQueue *queue)
+static inline __attribute__((always_inline))
+bool valid_wait_queue_header(const KernelThreadWaitQueue *queue)
 {
     if (queue == NULL || queue->count > wait_registration_count)
         return false;
     if (queue->count == 0u)
-        return queue->head == THREAD_WAIT_REGISTRATION_NONE &&
-               queue->tail == THREAD_WAIT_REGISTRATION_NONE;
-    return registration_at(queue->head) != NULL &&
-           registration_at(queue->tail) != NULL;
+        return queue->head == NULL && queue->tail == NULL;
+    return registration_thread(queue->head) != NULL &&
+           registration_thread(queue->tail) != NULL;
 }
 
 static bool valid_wait_queue(const KernelThreadWaitQueue *queue)
 {
-    uint32_t identifier;
-    uint32_t previous = THREAD_WAIT_REGISTRATION_NONE;
+    const KernelThreadWaitRegistration *registration;
+    const KernelThreadWaitRegistration *previous = NULL;
     uint32_t traversed = 0u;
 
     if (!valid_wait_queue_header(queue))
         return false;
-    if (queue->count == 0u)
-        return true;
+    for (registration = queue->head; registration != NULL;
+         registration = registration->next) {
+        KernelThread *thread = registration_thread(registration);
 
-    identifier = queue->head;
-    while (identifier != THREAD_WAIT_REGISTRATION_NONE) {
-        KernelThreadWaitRegistration *registration;
-        KernelThread *thread;
-        uint16_t member;
-
-        if (traversed >= queue->count)
-            return false;
-        registration = registration_at(identifier);
-        thread = registration_thread_at(identifier);
-        member = registration_member_at(identifier);
-        if (registration == NULL || !valid_thread(thread) ||
+        if (traversed >= queue->count || !valid_thread(thread) ||
             thread->state != KERNEL_THREAD_BLOCKED ||
             thread->wait_member_count == 0u ||
-            member >= thread->wait_member_count ||
+            registration->member >= thread->wait_member_count ||
             registration->queue != queue ||
             registration->previous != previous)
             return false;
-        previous = identifier;
-        identifier = registration->next;
+        previous = registration;
         ++traversed;
     }
     return traversed == queue->count && previous == queue->tail;
@@ -957,8 +892,8 @@ static bool wait_row_valid(uint16_t thread_slot)
             &thread->wait_registrations[member];
 
         if (registration->queue == NULL) {
-            if (registration->previous != THREAD_WAIT_REGISTRATION_NONE ||
-                registration->next != THREAD_WAIT_REGISTRATION_NONE)
+            if (registration->previous != NULL ||
+                registration->next != NULL)
                 return false;
         } else {
             ++occupied;
@@ -977,9 +912,9 @@ static void reset_wait_row(KernelThread *thread)
             &thread->wait_registrations[member];
 
         registration->queue = NULL;
-        registration->previous = THREAD_WAIT_REGISTRATION_NONE;
-        registration->next = THREAD_WAIT_REGISTRATION_NONE;
-        registration->thread_slot = thread->slot;
+        registration->previous = NULL;
+        registration->next = NULL;
+        registration->thread = thread;
         registration->member = member;
     }
 }
@@ -1046,9 +981,8 @@ static KernelThreadStatus enqueue_wait_registration(
     KernelThread *thread, uint16_t member, KernelThreadWaitQueue *queue)
 {
     KernelThreadWaitRegistration *registration;
-    uint32_t previous = THREAD_WAIT_REGISTRATION_NONE;
-    uint32_t next;
-    uint32_t identifier;
+    KernelThreadWaitRegistration *previous = NULL;
+    KernelThreadWaitRegistration *next;
 
     if (!valid_thread(thread) || !valid_wait_queue_header(queue) ||
         thread->state != KERNEL_THREAD_BLOCKED ||
@@ -1059,40 +993,33 @@ static KernelThreadStatus enqueue_wait_registration(
             thread->wait_registrations_capacity)
         return KERNEL_THREAD_INVALID_STATE;
     registration = &thread->wait_registrations[member];
-    identifier = registration_identifier(registration);
-    if (identifier == THREAD_WAIT_REGISTRATION_NONE ||
-        registration->queue != NULL ||
-        registration->previous != THREAD_WAIT_REGISTRATION_NONE ||
-        registration->next != THREAD_WAIT_REGISTRATION_NONE)
+    if (registration->thread != thread || registration->member != member ||
+        registration->queue != NULL || registration->previous != NULL ||
+        registration->next != NULL)
         return KERNEL_THREAD_INVALID_STATE;
 
-    next = queue->head;
-    while (next != THREAD_WAIT_REGISTRATION_NONE) {
-        KernelThreadWaitRegistration *queued_registration =
-            registration_at(next);
-        KernelThread *queued = registration_thread(queued_registration);
+    for (next = queue->head; next != NULL; next = next->next) {
+        KernelThread *queued = registration_thread(next);
 
-        if (queued_registration == NULL || !valid_thread(queued) ||
-            queued_registration->queue != queue ||
-            queued_registration->previous != previous)
+        if (queued == NULL || next->queue != queue ||
+            next->previous != previous)
             return KERNEL_THREAD_CORRUPT;
         if (queued->effective_priority < thread->effective_priority)
             break;
         previous = next;
-        next = queued_registration->next;
     }
 
     registration->queue = queue;
     registration->previous = previous;
     registration->next = next;
-    if (previous == THREAD_WAIT_REGISTRATION_NONE)
-        queue->head = identifier;
+    if (previous == NULL)
+        queue->head = registration;
     else
-        registration_at(previous)->next = identifier;
-    if (next == THREAD_WAIT_REGISTRATION_NONE)
-        queue->tail = identifier;
+        previous->next = registration;
+    if (next == NULL)
+        queue->tail = registration;
     else
-        registration_at(next)->previous = identifier;
+        next->previous = registration;
     ++queue->count;
     ++wait_registration_count;
     ++thread->wait_registration_count;
@@ -1104,64 +1031,43 @@ static KernelThreadStatus enqueue_wait_registration(
 static KernelThreadStatus remove_wait_registration(
     KernelThreadWaitRegistration *registration)
 {
-    KernelThreadWaitRegistration *after = NULL;
-    KernelThreadWaitRegistration *before = NULL;
+    KernelThreadWaitRegistration *before;
+    KernelThreadWaitRegistration *after;
     KernelThreadWaitQueue *queue;
-    uint32_t identifier;
-    uint32_t previous;
-    uint32_t next;
-    KernelThread *thread;
+    KernelThread *thread = registration_thread(registration);
 
-    identifier = registration_identifier(registration);
-    if (identifier == THREAD_WAIT_REGISTRATION_NONE ||
-        registration->queue == NULL)
+    if (thread == NULL || registration->queue == NULL)
         return KERNEL_THREAD_INVALID_STATE;
-    thread = registration_thread(registration);
-    if (!valid_thread(thread) || thread->wait_registration_count == 0u)
-        return KERNEL_THREAD_CORRUPT;
     queue = registration->queue;
-    if (registration != registration_at(identifier) ||
+    if (thread->wait_registration_count == 0u ||
         !valid_wait_queue_header(queue) || queue->count == 0u ||
         wait_registration_count == 0u)
         return KERNEL_THREAD_CORRUPT;
-    previous = registration->previous;
-    next = registration->next;
-
-    if (previous == THREAD_WAIT_REGISTRATION_NONE) {
-        if (queue->head != identifier)
-            return KERNEL_THREAD_CORRUPT;
-    } else {
-        before = registration_at(previous);
-
-        if (before == NULL || before->queue != queue ||
-            before->next != identifier)
-            return KERNEL_THREAD_CORRUPT;
-    }
-    if (next == THREAD_WAIT_REGISTRATION_NONE) {
-        if (queue->tail != identifier)
-            return KERNEL_THREAD_CORRUPT;
-    } else {
-        after = registration_at(next);
-
-        if (after == NULL || after->queue != queue ||
-            after->previous != identifier)
-            return KERNEL_THREAD_CORRUPT;
-    }
+    before = registration->previous;
+    after = registration->next;
+    if (before == NULL ? queue->head != registration :
+                         before->queue != queue ||
+                             before->next != registration)
+        return KERNEL_THREAD_CORRUPT;
+    if (after == NULL ? queue->tail != registration :
+                        after->queue != queue ||
+                            after->previous != registration)
+        return KERNEL_THREAD_CORRUPT;
 
     if (before == NULL)
-        queue->head = next;
+        queue->head = after;
     else
-        before->next = next;
+        before->next = after;
     if (after == NULL)
-        queue->tail = previous;
+        queue->tail = before;
     else
-        after->previous = previous;
+        after->previous = before;
     --queue->count;
     --wait_registration_count;
     --thread->wait_registration_count;
     registration->queue = NULL;
-    registration->previous = THREAD_WAIT_REGISTRATION_NONE;
-    registration->next = THREAD_WAIT_REGISTRATION_NONE;
+    registration->previous = NULL;
+    registration->next = NULL;
     return KERNEL_THREAD_OK;
 }
 
@@ -1210,8 +1116,7 @@ static KernelThreadStatus complete_wait(
     uint32_t detail, bool write_one_detail)
 {
     KernelThreadStatus status;
-    uint16_t member = winner == NULL ? UINT16_MAX :
-        registration_member(winner);
+    uint16_t member = winner == NULL ? UINT16_MAX : winner->member;
     uint8_t mode;
     bool cancelled_deadline;
 
@@ -1254,7 +1159,7 @@ static KernelThreadStatus wake_waiter(
 {
     KernelThread *thread = registration_thread(registration);
 
-    if (!valid_thread(thread))
+    if (thread == NULL)
         return KERNEL_THREAD_INVALID_ARGUMENT;
     return complete_wait(thread, registration, already_advanced, result,
                          detail, write_one_detail);
@@ -1274,14 +1179,7 @@ static KernelThreadStatus wake_death_waiters(KernelThread *thread,
         return KERNEL_THREAD_CORRUPT;
     queue->sequence = kernel_generation_next(queue->sequence);
     while (queue->count != 0u) {
-        KernelThreadWaitRegistration *registration;
-        KernelThread *waiter;
-
-        registration = registration_at(queue->head);
-        waiter = registration_thread_at(queue->head);
-        if (registration == NULL || !valid_thread(waiter))
-            return KERNEL_THREAD_CORRUPT;
-        if (wake_waiter(registration, queue, result,
+        if (wake_waiter(queue->head, queue, result,
                         result == ASTRA_SYSCALL_OK ? thread->exit_status : 0u,
                         true) != KERNEL_THREAD_OK)
             return KERNEL_THREAD_CORRUPT;
@@ -1931,8 +1829,8 @@ void kernel_thread_wait_queue_init(KernelThreadWaitQueue *queue)
     if (queue == NULL)
         return;
     queue->sequence = 1u;
-    queue->head = THREAD_WAIT_REGISTRATION_NONE;
-    queue->tail = THREAD_WAIT_REGISTRATION_NONE;
+    queue->head = NULL;
+    queue->tail = NULL;
     queue->count = 0u;
 }
 
@@ -1950,36 +1848,20 @@ uint32_t kernel_thread_wait_queue_count(const KernelThreadWaitQueue *queue)
 uint32_t kernel_thread_wait_queue_waiter_count(
     const KernelThreadWaitQueue *queue)
 {
-    uint32_t identifier;
+    const KernelThreadWaitRegistration *registration;
     uint32_t count = 0u;
 
     if (!valid_wait_queue(queue))
         return UINT32_MAX;
-    identifier = queue->head;
-    while (identifier != THREAD_WAIT_REGISTRATION_NONE) {
-        KernelThreadWaitRegistration *registration =
-            registration_at(identifier);
-        KernelThread *thread = registration_thread_at(identifier);
-        uint32_t prior = queue->head;
-        bool seen = false;
+    for (registration = queue->head; registration != NULL;
+         registration = registration->next) {
+        const KernelThreadWaitRegistration *prior = queue->head;
 
-        if (registration == NULL || !valid_thread(thread))
-            return UINT32_MAX;
-        while (prior != identifier) {
-            KernelThreadWaitRegistration *prior_registration =
-                registration_at(prior);
-
-            if (prior_registration == NULL)
-                return UINT32_MAX;
-            if (registration_thread_at(prior) == thread) {
-                seen = true;
-                break;
-            }
-            prior = prior_registration->next;
-        }
-        if (!seen)
+        while (prior != registration &&
+               prior->thread != registration->thread)
+            prior = prior->next;
+        if (prior == registration)
             ++count;
-        identifier = registration->next;
     }
     return count;
 }
@@ -1996,7 +1878,8 @@ KernelThreadStatus block_wait_set_fast(
     if (!valid_thread(thread) || specs == NULL || member_count == 0u ||
         member_count > KERNEL_THREAD_WAIT_MEMBER_MAX ||
         thread->state != KERNEL_THREAD_RUNNING ||
-        thread->wait_member_count != 0u || !wait_row_clear(thread->slot) ||
+        thread->wait_member_count != 0u ||
+        thread->wait_registration_count != 0u ||
         (mode != KERNEL_THREAD_WAIT_ONE &&
          mode != KERNEL_THREAD_WAIT_MULTIPLE))
         return KERNEL_THREAD_INVALID_STATE;
@@ -2124,8 +2007,8 @@ KernelThreadStatus wake_one_fast(KernelThreadWaitQueue *queue,
     queue->sequence = kernel_generation_next(queue->sequence);
     if (queue->count == 0u)
         return KERNEL_THREAD_NO_RUNNABLE;
-    registration = registration_at(queue->head);
-    waiter = registration_thread_at(queue->head);
+    registration = queue->head;
+    waiter = registration_thread(queue->head);
     if (wake_waiter(registration, queue, result, 0u, false) !=
             KERNEL_THREAD_OK)
         return KERNEL_THREAD_CORRUPT;
@@ -2143,9 +2026,8 @@ KernelThreadStatus wake_one_profiled(KernelThreadWaitQueue *queue,
     KernelPerformanceMetric metric = KERNEL_PERFORMANCE_WAKE;
 
     if (queue != NULL && queue->count != 0u) {
-        KernelThreadWaitRegistration *registration =
-            registration_at(queue->head);
-        KernelThread *waiter = registration_thread_at(queue->head);
+        KernelThreadWaitRegistration *registration = queue->head;
+        KernelThread *waiter = registration_thread(queue->head);
 
         if (registration != NULL && registration->queue == queue &&
             valid_thread(waiter) &&
@@ -2185,13 +2067,12 @@ KernelThreadStatus wake_all_fast(KernelThreadWaitQueue *queue,
         wake_cycle = kernel_performance_cycles_low();
     queue->sequence = kernel_generation_next(queue->sequence);
     while (queue->count != 0u) {
-        KernelThreadWaitRegistration *registration =
-            registration_at(queue->head);
+        KernelThreadWaitRegistration *registration = queue->head;
         KernelThread *waiter;
 
         if (registration == NULL)
             return KERNEL_THREAD_CORRUPT;
-        waiter = registration_thread_at(queue->head);
+        waiter = registration_thread(queue->head);
         if (wake_waiter(registration, queue, result, detail,
                         write_one_detail) !=
                 KERNEL_THREAD_OK)
@@ -2220,9 +2101,8 @@ KernelThreadStatus wake_all_profiled(KernelThreadWaitQueue *queue,
     KernelPerformanceMetric metric = KERNEL_PERFORMANCE_WAKE;
 
     if (queue != NULL && queue->count != 0u) {
-        KernelThreadWaitRegistration *registration =
-            registration_at(queue->head);
-        KernelThread *waiter = registration_thread_at(queue->head);
+        KernelThreadWaitRegistration *registration = queue->head;
+        KernelThread *waiter = registration_thread(queue->head);
 
         if (registration != NULL && registration->queue == queue &&
             valid_thread(waiter) &&
@@ -2852,8 +2732,20 @@ KernelThreadState kernel_thread_process_representative_state(
 KernelThreadStatus kernel_thread_note_kernel_entry(KernelThread *thread,
                                                    uint32_t stack_pointer)
 {
+    /*
+     * Every trap and fault comes through here with the current thread. What
+     * an entry can break is the canary and the bounds below; the record's own
+     * stack fields are the audit's to prove.
+     */
+#if KERNEL_AUDIT
     if (!kernel_stack_valid(thread))
         return KERNEL_THREAD_CORRUPT;
+#else
+    const uint32_t *words = kernel_stack_words(thread);
+
+    if (words == NULL || words[0] != THREAD_STACK_CANARY)
+        return KERNEL_THREAD_CORRUPT;
+#endif
     if (stack_pointer < thread->kernel_stack_base + sizeof(uint32_t) ||
         stack_pointer >= thread->kernel_stack_top)
         return KERNEL_THREAD_CORRUPT;

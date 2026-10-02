@@ -109,20 +109,26 @@ typedef enum KernelThreadStatus {
     KERNEL_THREAD_OUT_OF_MEMORY
 } KernelThreadStatus;
 
+struct KernelThread;
+typedef struct KernelThreadWaitRegistration KernelThreadWaitRegistration;
+
+/* A wait queue links its waiters' registrations directly. Thread records and
+ * their registration rows never move while the thread is live, and a thread
+ * leaves every queue before its row is released. */
 typedef struct KernelThreadWaitQueue {
     uint32_t sequence;
-    uint32_t head;
-    uint32_t tail;
+    KernelThreadWaitRegistration *head;
+    KernelThreadWaitRegistration *tail;
     uint32_t count;
 } KernelThreadWaitQueue;
 
-typedef struct KernelThreadWaitRegistration {
+struct KernelThreadWaitRegistration {
     KernelThreadWaitQueue *queue;
-    uint32_t previous;
-    uint32_t next;
-    uint16_t thread_slot;
+    KernelThreadWaitRegistration *previous;
+    KernelThreadWaitRegistration *next;
+    struct KernelThread *thread;
     uint16_t member;
-} KernelThreadWaitRegistration;
+};
 
 typedef struct KernelThreadWaitSpec {
     KernelThreadWaitQueue *queue;

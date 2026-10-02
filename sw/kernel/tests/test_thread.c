@@ -495,8 +495,9 @@ static void test_wait_queue_rejects_corrupt_header(void)
     assert(kernel_thread_wake_one(&queue, ASTRA_SYSCALL_OK, &selected) ==
            KERNEL_THREAD_INVALID_ARGUMENT);
 
+    /* An empty queue with a head is corrupt; the link is never followed. */
     kernel_thread_wait_queue_init(&queue);
-    queue.head = 0u;
+    queue.head = (KernelThreadWaitRegistration *)(uintptr_t)4u;
     assert(kernel_thread_wait_queue_sequence(&queue) == 0u);
     assert(kernel_thread_wait_queue_count(&queue) == UINT32_MAX);
 }

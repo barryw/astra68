@@ -77,8 +77,10 @@ static KernelSyncPoolStats pool_stats;
 static uint8_t pool_corrupt;
 static uint16_t timer_count;
 
+#if defined(__m68k__)
 _Static_assert(sizeof(KernelSyncObject) <= 56u,
                "synchronization object memory budget changed");
+#endif
 
 static bool discard_sync_metadata(void);
 
