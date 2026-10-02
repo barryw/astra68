@@ -234,6 +234,56 @@ static uint32_t release_dynamic_sources(
     return failed != 0u ? ASTRA_SYSCALL_IO_ERROR : ASTRA_SYSCALL_OK;
 }
 
+/*
+ * Feeds the segment ranges a load asks for -- from the program or from its
+ * interpreter, as @p result names the source -- until it asks for none.
+ * Shared by launch and exec: the transaction is the same, only its commit
+ * differs. @p interpreter is NULL for a static program.
+ */
+static uint32_t stream_segments(uint32_t load_handle,
+                                const AstraReadSource *program,
+                                const AstraReadSource *interpreter,
+                                AstraSyscallResult *result,
+                                AstraProcessLoadProfile *profile)
+{
+    while (result->value1 != 0u) {
+        const AstraReadSource *source;
+        const uint8_t *bytes;
+        uint32_t moved = 0u;
+        uint32_t status;
+
+        if (result->value2 == ASTRA_PROCESS_LOAD_SOURCE_PROGRAM)
+            source = program;
+        else if (result->value2 == ASTRA_PROCESS_LOAD_SOURCE_INTERPRETER &&
+                 interpreter != NULL)
+            source = interpreter;
+        else
+            return ASTRA_SYSCALL_INVALID_ARGUMENT;
+        status = astra_stream_read_up_to(
+            source->read_at, source->context, source->length,
+            result->value0, result->value1, &bytes, &moved, profile);
+        if (status != ASTRA_SYSCALL_OK)
+            return status;
+        {
+            uint64_t start = load_profile_start(profile);
+
+            if (profile != NULL) {
+                ++profile->kernel_writes;
+                profile->kernel_write_bytes += moved;
+            }
+            astra_syscall5(ASTRA_SYSCALL_PROCESS_LOAD_WRITE, load_handle,
+                           result->value0, (uint32_t)(uintptr_t)bytes, moved,
+                           0u, result);
+            load_profile_operation(
+                profile, start,
+                profile != NULL ? &profile->kernel_write_ns : NULL);
+        }
+        if (result->status != ASTRA_SYSCALL_OK)
+            return result->status;
+    }
+    return ASTRA_SYSCALL_OK;
+}
+
 uint32_t astra_launch_dynamic_stream(
     const AstraReadSource *program,
     const AstraReadSource *interpreter,
@@ -333,43 +383,10 @@ uint32_t astra_launch_dynamic_stream(
         status = result.status;
         goto failed;
     }
-    while (result.value1 != 0u) {
-        const AstraReadSource *source;
-        const uint8_t *bytes;
-        uint32_t moved = 0u;
-
-        if (result.value2 == ASTRA_PROCESS_LOAD_SOURCE_PROGRAM)
-            source = program;
-        else if (result.value2 == ASTRA_PROCESS_LOAD_SOURCE_INTERPRETER)
-            source = interpreter;
-        else {
-            status = ASTRA_SYSCALL_INVALID_ARGUMENT;
-            goto failed;
-        }
-        status = astra_stream_read_up_to(
-            source->read_at, source->context, source->length,
-            result.value0, result.value1, &bytes, &moved, profile);
-        if (status != ASTRA_SYSCALL_OK)
-            goto failed;
-        {
-            uint64_t start = load_profile_start(profile);
-
-            if (profile != NULL) {
-                ++profile->kernel_writes;
-                profile->kernel_write_bytes += moved;
-            }
-            astra_syscall5(ASTRA_SYSCALL_PROCESS_LOAD_WRITE, load_handle,
-                           result.value0, (uint32_t)(uintptr_t)bytes, moved,
-                           0u, &result);
-            load_profile_operation(
-                profile, start,
-                profile != NULL ? &profile->kernel_write_ns : NULL);
-        }
-        if (result.status != ASTRA_SYSCALL_OK) {
-            status = result.status;
-            goto failed;
-        }
-    }
+    status = stream_segments(load_handle, program, interpreter, &result,
+                             profile);
+    if (status != ASTRA_SYSCALL_OK)
+        goto failed;
 
     {
         uint64_t start = load_profile_start(profile);
@@ -499,63 +516,50 @@ uint32_t astra_launch_executable_stream(
         process_handle, process_id);
 }
 
-static uint32_t materialize_source(const AstraReadSource *source,
-                                   uint8_t **image)
+/* Begins a load and feeds its fixed header and program headers. */
+static uint32_t load_headers(const AstraReadSource *source,
+                             uint32_t load_handle, uint32_t *created_handle)
 {
-    uint8_t *storage;
-    uint32_t offset = 0u;
+    const uint8_t *header;
+    AstraSyscallResult result;
     uint32_t status;
 
-    if (source == NULL || image == NULL || source->length == 0u ||
-        source->read_at == NULL)
-        return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    *image = NULL;
-    storage = astra_runtime_allocate(source->length);
-    if (storage == NULL)
-        return ASTRA_SYSCALL_OUT_OF_MEMORY;
-    status = astra_rt_private_commit(storage, source->length);
-    if (status != ASTRA_SYSCALL_OK) {
-        astra_runtime_deallocate(storage);
+    status = astra_stream_read_exact(source->read_at, source->context,
+                                     source->length, 0u,
+                                     ASTRA_EXECUTABLE_HEADER_SIZE, &header,
+                                     NULL);
+    if (status != ASTRA_SYSCALL_OK)
         return status;
+    if (load_handle == 0u)
+        astra_syscall5(ASTRA_SYSCALL_PROCESS_LOAD_BEGIN,
+                       (uint32_t)(uintptr_t)header, source->length, 0u, 0u,
+                       0u, &result);
+    else
+        astra_syscall5(ASTRA_SYSCALL_PROCESS_LOAD_INTERPRETER, load_handle,
+                       (uint32_t)(uintptr_t)header, source->length, 0u, 0u,
+                       &result);
+    if (result.status != ASTRA_SYSCALL_OK)
+        return result.status;
+    if (load_handle == 0u) {
+        *created_handle = result.value0;
+        load_handle = result.value0;
+        return astra_stream_feed(load_handle, source->length,
+                                 source->read_at, source->context,
+                                 ASTRA_SYSCALL_PROCESS_LOAD_WRITE,
+                                 result.value1, result.value2, NULL);
     }
-    while (offset != source->length) {
-        const uint8_t *bytes;
-        uint32_t length = source->length - offset;
-
-        if (length > ASTRA_AREA_SIZE_MAX)
-            length = ASTRA_AREA_SIZE_MAX;
-        status = astra_stream_read_exact(
-            source->read_at, source->context, source->length, offset,
-            length, &bytes, NULL);
-        if (status != ASTRA_SYSCALL_OK) {
-            astra_runtime_deallocate(storage);
-            return status;
-        }
-        memcpy(storage + offset, bytes, length);
-        offset += length;
-    }
-    *image = storage;
-    return ASTRA_SYSCALL_OK;
+    return astra_stream_feed(load_handle, source->length, source->read_at,
+                             source->context,
+                             ASTRA_SYSCALL_PROCESS_LOAD_WRITE,
+                             result.value0, result.value1, NULL);
 }
 
-static uint32_t process_exec_images(
-    const void *program, uint32_t program_length,
-    const void *interpreter, uint32_t interpreter_length,
-    const AstraExecRequest *request)
-{
-    AstraSyscallResult result;
-
-    if (program == NULL || program_length == 0u || request == NULL ||
-        (interpreter == NULL) != (interpreter_length == 0u))
-        return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    astra_syscall5(ASTRA_SYSCALL_PROCESS_EXEC,
-                   (uint32_t)(uintptr_t)program, program_length,
-                   (uint32_t)(uintptr_t)request,
-                   (uint32_t)(uintptr_t)interpreter, interpreter_length,
-                   &result);
-    return result.status;
-}
-
+/*
+ * Exec is the launch transaction aimed at the caller: the kernel asks for the
+ * same header and segment ranges, streamed straight from the file, into a
+ * replacement address space that PROCESS_EXEC exchanges for this one. Nothing
+ * is read that no load uses, and no copy of either file is assembled here.
+ */
 uint32_t astra_exec_executable_stream(
     const AstraReadSource *program,
     AstraInterpreterOpen open_interpreter, void *interpreter_context,
@@ -563,24 +567,26 @@ uint32_t astra_exec_executable_stream(
     AstraExecRequest *request)
 {
     AstraReadSource interpreter = {0};
-    uint8_t *program_image = NULL;
-    uint8_t *interpreter_image = NULL;
+    AstraSyscallResult result;
     char identity[ASTRA_LIBRARY_NAME_MAX + 6u];
     uint32_t identity_length = 0u;
     uint32_t program_released = 0u;
-    uint32_t interpreter_released = 0u;
-    uint32_t interpreter_opened = 0u;
+    uint32_t interpreter_released = 1u;
+    uint32_t load_handle = 0u;
     uint32_t status;
 
     if (program == NULL || program->read_at == NULL ||
         program->release == NULL || request == NULL)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     (void)astra_log_debug("exec stream entered", 19u);
+    if (program->length < ASTRA_EXECUTABLE_HEADER_SIZE) {
+        status = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        goto failed;
+    }
     status = astra_executable_interpreter(
         program, identity, sizeof(identity), &identity_length);
     if (status != ASTRA_SYSCALL_OK)
         goto failed;
-    (void)astra_log_debug("exec interpreter identified", 27u);
     if (identity_length != 0u) {
         if (open_interpreter == NULL) {
             status = ASTRA_SYSCALL_INVALID_ARGUMENT;
@@ -590,44 +596,52 @@ uint32_t astra_exec_executable_stream(
                                   &interpreter);
         if (status != ASTRA_SYSCALL_OK)
             goto failed;
-        (void)astra_log_debug("exec interpreter opened", 23u);
-        interpreter_opened = 1u;
-        if (interpreter.read_at == NULL || interpreter.release == NULL) {
+        interpreter_released = 0u;
+        if (interpreter.read_at == NULL || interpreter.release == NULL ||
+            interpreter.length < ASTRA_EXECUTABLE_HEADER_SIZE) {
             status = ASTRA_SYSCALL_INVALID_ARGUMENT;
             goto failed;
         }
     }
-    status = materialize_source(program, &program_image);
+    status = load_headers(program, 0u, &load_handle);
     if (status != ASTRA_SYSCALL_OK)
         goto failed;
-    (void)astra_log_debug("exec program materialized", 25u);
     if (identity_length != 0u) {
-        status = materialize_source(&interpreter, &interpreter_image);
+        status = load_headers(&interpreter, load_handle, NULL);
         if (status != ASTRA_SYSCALL_OK)
             goto failed;
-        (void)astra_log_debug("exec interpreter materialized", 29u);
-        status = release_dynamic_sources(
-            program, &interpreter, &program_released,
-            &interpreter_released);
-    } else {
-        program_released = 1u;
-        status = program->release(program->context) == 0u ?
-            ASTRA_SYSCALL_OK : ASTRA_SYSCALL_IO_ERROR;
+    }
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_LOAD_REPLACE, load_handle, 0u, 0u,
+                   0u, 0u, &result);
+    if (result.status != ASTRA_SYSCALL_OK) {
+        status = result.status;
+        goto failed;
+    }
+    status = stream_segments(load_handle, program,
+                             identity_length != 0u ? &interpreter : NULL,
+                             &result, NULL);
+    if (status != ASTRA_SYSCALL_OK)
+        goto failed;
+    (void)astra_log_debug("exec image streamed", 19u);
+    program_released = 1u;
+    if (program->release(program->context) != 0u)
+        status = ASTRA_SYSCALL_IO_ERROR;
+    if (interpreter_released == 0u) {
+        interpreter_released = 1u;
+        if (interpreter.release(interpreter.context) != 0u)
+            status = ASTRA_SYSCALL_IO_ERROR;
     }
     if (status != ASTRA_SYSCALL_OK)
         goto failed;
-    (void)astra_log_debug("exec sources released", 21u);
     if (prepare != NULL) {
-        (void)astra_log_debug("exec prepare entered", 20u);
         status = prepare(prepare_context, request);
         if (status != ASTRA_SYSCALL_OK)
             goto failed;
-        (void)astra_log_debug("exec prepare complete", 21u);
     }
     (void)astra_log_debug("exec syscall entered", 20u);
-    status = process_exec_images(
-        program_image, program->length, interpreter_image,
-        identity_length != 0u ? interpreter.length : 0u, request);
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_EXEC, load_handle,
+                   (uint32_t)(uintptr_t)request, 0u, 0u, 0u, &result);
+    status = result.status;
 
 failed:
     if (program_released == 0u) {
@@ -636,15 +650,14 @@ failed:
             status == ASTRA_SYSCALL_OK)
             status = ASTRA_SYSCALL_IO_ERROR;
     }
-    if (interpreter_opened != 0u && interpreter_released == 0u &&
-        interpreter.release != NULL) {
+    if (interpreter_released == 0u) {
         interpreter_released = 1u;
         if (interpreter.release(interpreter.context) != 0u &&
             status == ASTRA_SYSCALL_OK)
             status = ASTRA_SYSCALL_IO_ERROR;
     }
-    astra_runtime_deallocate(interpreter_image);
-    astra_runtime_deallocate(program_image);
+    if (load_handle != 0u)
+        (void)astra_close(load_handle);
     return status;
 }
 
@@ -714,13 +727,6 @@ astra_process_resume(uint32_t process_handle)
     astra_syscall5(ASTRA_SYSCALL_PROCESS_RESUME, process_handle, 0u,
                    0u, 0u, 0u, &result);
     return result.status;
-}
-
-uint32_t
-astra_process_exec(const void *image, uint32_t length,
-                   const AstraExecRequest *request)
-{
-    return process_exec_images(image, length, NULL, 0u, request);
 }
 
 uint32_t

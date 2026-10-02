@@ -198,7 +198,10 @@ typedef struct KernelExecutableLoad {
     uint16_t page;
     uint8_t stage;
     uint8_t source;
-    uint8_t reserved[2];
+    /* Nonzero for exec: pages go to `replacement`, not a new child. */
+    uint8_t replace;
+    uint8_t reserved;
+    KernelAddressSpace replacement;
 } KernelExecutableLoad;
 
 typedef struct KernelInitialImage {
@@ -4204,9 +4207,6 @@ static KernelProcessStatus accept_executable(const void *image,
                                              uint32_t image_size,
                                              uint32_t user_image,
                                              KernelElfImage *plan);
-static KernelProcessStatus accept_interpreter(uint32_t user_image,
-                                              uint32_t image_size,
-                                              KernelElfImage *plan);
 static bool executable_span(const KernelElfImage *plan, uint32_t *base,
                             uint32_t *size);
 static bool elf_relro_page_range(const KernelElfImage *plan,
@@ -4222,17 +4222,6 @@ static KernelProcessStatus dynamic_process_commit(
 static bool interpreter_placement(const KernelElfImage *program,
                                   const KernelElfImage *interpreter,
                                   KernelInitialImage *initial_image);
-
-static KernelProcessStatus discard_elf_plans(KernelElfImage *program,
-                                              KernelElfImage *interpreter,
-                                              KernelProcessStatus status)
-{
-    bool program_released = kernel_elf_image_discard(program);
-    bool interpreter_released = kernel_elf_image_discard(interpreter);
-
-    return program_released && interpreter_released ?
-        status : KERNEL_PROCESS_CORRUPT;
-}
 
 static KernelProcessStatus read_exec_startup(
     const KernelProcess *process, AstraStartupInfo *info,
@@ -4337,15 +4326,19 @@ trace_exec_corruption(const KernelProcess *process, uint32_t stage,
     return KERNEL_PROCESS_CORRUPT;
 }
 
-static KernelProcessStatus replace_process_image(
-    KernelProcess *process, KernelThread *thread, uint32_t user_image,
-    uint32_t image_size, uint32_t user_interpreter,
-    uint32_t interpreter_size, AstraExecRequest *request,
-    KernelCpuContext **next_context)
+/*
+ * Exec's commit: @p replacement already holds the new image's segments,
+ * streamed through the load transaction exactly as a launch streams them.
+ * This adds what an exec carries over -- handoff, startup block, stack, TLS
+ * -- then, without allocating, retires the old image and exchanges the
+ * spaces. A failure before the exchange leaves the caller untouched and
+ * destroys the replacement; the load cannot be committed again.
+ */
+static KernelProcessStatus exec_replace(
+    KernelProcess *process, KernelThread *thread, const KernelElfImage *plan,
+    const KernelElfImage *interpreter_plan, KernelAddressSpace *replacement,
+    AstraExecRequest *request, KernelCpuContext **next_context)
 {
-    KernelAddressSpace replacement;
-    KernelElfImage plan = {0};
-    KernelElfImage interpreter_plan = {0};
     KernelElfTls replacement_tls = {0};
     KernelVmPageRange replacement_relro[2];
     AstraStartupInfo prior_startup;
@@ -4363,90 +4356,62 @@ static KernelProcessStatus replace_process_image(
     uint32_t replacement_relro_count = 0u;
     KernelInitialImage initial_image;
 
-    if (process == NULL || thread == NULL || request == NULL ||
-        next_context == NULL || user_image == 0u || image_size == 0u ||
+    if (process == NULL || thread == NULL || plan == NULL ||
+        replacement == NULL || replacement->initialized == 0u ||
+        request == NULL || next_context == NULL ||
         request->size != ASTRA_EXEC_REQUEST_SIZE ||
         request->arguments.flags != 0u ||
         (request->handoff_address == 0u) !=
-            (request->handoff_size == 0u))
+            (request->handoff_size == 0u) ||
+        (plan->has_interpreter != 0u) != (interpreter_plan != NULL) ||
+        !executable_span(plan, &entry_base, &entry_size))
         return KERNEL_PROCESS_INVALID_ARGUMENT;
-    status = accept_executable(NULL, image_size, user_image, &plan);
-    if (status != KERNEL_PROCESS_OK ||
-        (user_interpreter == 0u) != (interpreter_size == 0u) ||
-        (plan.has_interpreter != 0u) != (user_interpreter != 0u) ||
-        !executable_span(&plan, &entry_base, &entry_size))
-        return discard_elf_plans(&plan, &interpreter_plan,
-                                 KERNEL_PROCESS_INVALID_ARGUMENT);
     initial_image = (KernelInitialImage){
-        .program_entry = plan.entry,
-        .program_writable_bytes = plan.writable_bytes,
+        .program_entry = plan->entry,
+        .program_writable_bytes = plan->writable_bytes,
     };
-    if (plan.has_interpreter != 0u) {
-        if (accept_interpreter(user_interpreter, interpreter_size,
-                               &interpreter_plan) != KERNEL_PROCESS_OK ||
-            !interpreter_placement(&plan, &interpreter_plan,
-                                   &initial_image))
-            return discard_elf_plans(&plan, &interpreter_plan,
-                                     KERNEL_PROCESS_INVALID_ARGUMENT);
-        if (interpreter_plan.has_tls != 0u) {
+    if (interpreter_plan != NULL) {
+        if (!interpreter_placement(plan, interpreter_plan, &initial_image))
+            return KERNEL_PROCESS_INVALID_ARGUMENT;
+        if (interpreter_plan->has_tls != 0u) {
             uint32_t tls_address;
 
             if (!astra_u32_add_checked(
                     initial_image.interpreter_base,
-                    interpreter_plan.tls.virtual_address, &tls_address))
-                return discard_elf_plans(
-                    &plan, &interpreter_plan,
-                    KERNEL_PROCESS_INVALID_ARGUMENT);
-            replacement_tls = interpreter_plan.tls;
+                    interpreter_plan->tls.virtual_address, &tls_address))
+                return KERNEL_PROCESS_INVALID_ARGUMENT;
+            replacement_tls = interpreter_plan->tls;
             replacement_tls.virtual_address = tls_address;
         }
-        if (plan.has_relro != 0u) {
+        if (plan->has_relro != 0u) {
             if (!elf_relro_page_range(
-                    &plan, 0u,
-                    &replacement_relro[replacement_relro_count]))
-                return discard_elf_plans(&plan, &interpreter_plan,
-                                         KERNEL_PROCESS_CORRUPT);
+                    plan, 0u, &replacement_relro[replacement_relro_count]))
+                return KERNEL_PROCESS_CORRUPT;
             ++replacement_relro_count;
         }
-        if (interpreter_plan.has_relro != 0u) {
+        if (interpreter_plan->has_relro != 0u) {
             if (!elf_relro_page_range(
-                    &interpreter_plan, initial_image.interpreter_base,
+                    interpreter_plan, initial_image.interpreter_base,
                     &replacement_relro[replacement_relro_count]))
-                return discard_elf_plans(&plan, &interpreter_plan,
-                                         KERNEL_PROCESS_CORRUPT);
+                return KERNEL_PROCESS_CORRUPT;
             ++replacement_relro_count;
         }
-    } else if (plan.has_tls != 0u) {
-        replacement_tls = plan.tls;
+    } else if (plan->has_tls != 0u) {
+        replacement_tls = plan->tls;
     }
+
     status = read_exec_startup(process, &prior_startup, &bootstrap_count);
     if (status != KERNEL_PROCESS_OK)
-        return discard_elf_plans(&plan, &interpreter_plan, status);
+        return status;
     request->arguments.source = (uint16_t)prior_startup.launch_source;
 
-    kernel_bytes_clear(&replacement, sizeof(replacement));
-    if (kernel_vm_create_address_space(process->owner, &replacement) !=
-        KERNEL_VM_OK)
-        return discard_elf_plans(&plan, &interpreter_plan,
-                                 KERNEL_PROCESS_OUT_OF_MEMORY);
-    status = map_segments(&replacement, process->owner, &plan, NULL,
-                          user_image, 0u, false);
-    if (status != KERNEL_PROCESS_OK)
-        goto failed;
-    if (plan.has_interpreter != 0u) {
-        status = map_segments(
-            &replacement, process->owner, &interpreter_plan, NULL,
-            user_interpreter, initial_image.interpreter_base, false);
-        if (status != KERNEL_PROCESS_OK)
-            goto failed;
-    }
     status = publish_exec_handoff(
-        &replacement, process->owner, request->handoff_address,
-        request->handoff_size, &plan, &handoff_address);
+        replacement, process->owner, request->handoff_address,
+        request->handoff_size, plan, &handoff_address);
     if (status != KERNEL_PROCESS_OK)
         goto failed;
     status = publish_startup_block(
-        &replacement, process->owner, process->self_handle,
+        replacement, process->owner, process->self_handle,
         thread->self_handle, &exec_capabilities[2], bootstrap_count,
         &request->arguments,
         request->arguments.count != 0u ? syscall_data.bytes : NULL,
@@ -4456,17 +4421,17 @@ static KernelProcessStatus replace_process_image(
     if (status != KERNEL_PROCESS_OK)
         goto failed;
     status = publish_page(
-        &replacement, process->owner,
+        replacement, process->owner,
         thread->user_stack_top - KERNEL_THREAD_STACK_SIZE, NULL, 0u,
         KERNEL_VM_READ | KERNEL_VM_WRITE);
     if (status != KERNEL_PROCESS_OK)
         goto failed;
-    status = map_thread_tls(&replacement, process, &replacement_tls, false,
+    status = map_thread_tls(replacement, process, &replacement_tls, false,
                             &new_tls_base, &new_tls_pages);
     if (status != KERNEL_PROCESS_OK)
         goto failed;
-    if (plan.has_interpreter == 0u) {
-        status = seal_elf_relro(&replacement, &plan, 0u);
+    if (plan->has_interpreter == 0u) {
+        status = seal_elf_relro(replacement, plan, 0u);
         if (status != KERNEL_PROCESS_OK)
             goto failed;
     }
@@ -4538,41 +4503,31 @@ static KernelProcessStatus replace_process_image(
         }
     }
     if (retired > process->live_threads)
-        return discard_elf_plans(
-            &plan, &interpreter_plan,
-            trace_exec_corruption(process, 9u, retired));
+        return trace_exec_corruption(process, 9u, retired);
     if (retired > scheduler_stats.live_threads)
-        return discard_elf_plans(
-            &plan, &interpreter_plan,
-            trace_exec_corruption(process, 10u, retired));
+        return trace_exec_corruption(process, 10u, retired);
     {
         KernelVmStatus vm_status = kernel_vm_exchange_address_spaces(
-            &process->address_space, &replacement);
+            &process->address_space, replacement);
 
         if (vm_status != KERNEL_VM_OK)
-            return discard_elf_plans(
-                &plan, &interpreter_plan,
-                trace_exec_corruption(process, 11u,
-                                      (uint32_t)vm_status));
+            return trace_exec_corruption(process, 11u,
+                                      (uint32_t)vm_status);
     }
     {
         KernelVmStatus vm_status = kernel_vm_switch(&process->address_space);
 
         if (vm_status != KERNEL_VM_OK)
-            return discard_elf_plans(
-                &plan, &interpreter_plan,
-                trace_exec_corruption(process, 12u,
-                                      (uint32_t)vm_status));
+            return trace_exec_corruption(process, 12u,
+                                      (uint32_t)vm_status);
     }
     {
         KernelVmStatus vm_status =
-            kernel_vm_destroy_address_space(&replacement);
+            kernel_vm_destroy_address_space(replacement);
 
         if (vm_status != KERNEL_VM_OK)
-            return discard_elf_plans(
-                &plan, &interpreter_plan,
-                trace_exec_corruption(process, 13u,
-                                      (uint32_t)vm_status));
+            return trace_exec_corruption(process, 13u,
+                                      (uint32_t)vm_status);
     }
 
     process->live_threads = (uint8_t)(process->live_threads - retired);
@@ -4586,8 +4541,8 @@ static KernelProcessStatus replace_process_image(
     thread->activity = 0u;
     kernel_context_initialize(
         &thread->context,
-        plan.has_interpreter != 0u ? initial_image.interpreter_entry :
-                                     plan.entry,
+        plan->has_interpreter != 0u ? initial_image.interpreter_entry :
+                                     plan->entry,
                               thread->user_stack_top);
     install_thread_tls(thread, new_tls_base, new_tls_pages);
     thread->context.data[2] = KERNEL_PROCESS_STARTUP_BASE;
@@ -4604,7 +4559,7 @@ static KernelProcessStatus replace_process_image(
                           sizeof(process->tls));
     process->dynamic_tls_template_base = 0u;
     process->dynamic_tls_template_span = 0u;
-    process->dynamic_state = plan.has_interpreter != 0u ?
+    process->dynamic_state = plan->has_interpreter != 0u ?
         KERNEL_DYNAMIC_PROCESS_PENDING : KERNEL_DYNAMIC_PROCESS_NONE;
     process->dynamic_relro_count = (uint8_t)replacement_relro_count;
     kernel_bytes_clear(process->dynamic_relro,
@@ -4628,14 +4583,13 @@ static KernelProcessStatus replace_process_image(
     thread->signal_context_active = 0u;
     scheduler_timer_rearm();
     *next_context = runtime_resume(thread);
-    return discard_elf_plans(&plan, &interpreter_plan,
-                             KERNEL_PROCESS_OK);
+    return KERNEL_PROCESS_OK;
 
 failed:
-    if (replacement.initialized != 0u &&
-        kernel_vm_destroy_address_space(&replacement) != KERNEL_VM_OK)
+    if (replacement->initialized != 0u &&
+        kernel_vm_destroy_address_space(replacement) != KERNEL_VM_OK)
         status = trace_exec_corruption(process, 14u, (uint32_t)status);
-    return discard_elf_plans(&plan, &interpreter_plan, status);
+    return status;
 }
 
 /*
@@ -6699,23 +6653,6 @@ static KernelProcessStatus accept_executable(const void *image,
     }
 }
 
-static KernelProcessStatus accept_interpreter(uint32_t user_image,
-                                              uint32_t image_size,
-                                              KernelElfImage *plan)
-{
-    KernelElfStatus elf_status;
-
-    if (user_image == 0u || image_size == 0u || plan == NULL)
-        return KERNEL_PROCESS_INVALID_ARGUMENT;
-    elf_status = accept_user_elf(
-        user_image, image_size, &interpreter_limits,
-        KERNEL_ELF_INTERPRETER, plan);
-    return elf_status == KERNEL_ELF_OK ? KERNEL_PROCESS_OK :
-           elf_status == KERNEL_ELF_OUT_OF_MEMORY ?
-               KERNEL_PROCESS_OUT_OF_MEMORY :
-               KERNEL_PROCESS_INVALID_ARGUMENT;
-}
-
 static bool executable_span(const KernelElfImage *plan, uint32_t *base,
                             uint32_t *size)
 {
@@ -7026,6 +6963,14 @@ static KernelProcessStatus commit_executable_process(
     return result;
 }
 
+/* Where a load's segment pages go: a new child's space, or for exec the
+ * replacement that PROCESS_EXEC will exchange for the caller's own. */
+static KernelAddressSpace *executable_load_space(KernelExecutableLoad *load)
+{
+    return load->replace != 0u ? &load->replacement :
+                                 &load->process->address_space;
+}
+
 static bool executable_load_valid(const KernelExecutableLoad *load)
 {
     for (const KernelExecutableLoad *candidate = executable_loads;
@@ -7054,7 +6999,14 @@ static void executable_load_release(void *object, void *context)
     self_physical = load->self_physical;
     self_frames = load->self_frames;
     resource_owner = load->resource_owner;
-    if (load->process != NULL) {
+    if (load->replace != 0u) {
+        /* An exec that committed exchanged the spaces and destroyed the old
+         * one; anything still here is an uncommitted replacement. */
+        if (load->replacement.initialized != 0u &&
+            kernel_vm_destroy_address_space(&load->replacement) !=
+                KERNEL_VM_OK)
+            process_pool_corrupt = 1u;
+    } else if (load->process != NULL) {
         KernelPreparedThread prepared = {
             .process = load->process,
             .thread = load->prepared_thread,
@@ -7218,7 +7170,7 @@ static KernelProcessStatus executable_load_next(
         }
         {
             KernelProcessStatus status = publish_page(
-                &load->process->address_space, load->process->owner,
+                executable_load_space(load), load->process->owner,
                 virtual_base + segment->virtual_address + page_offset,
                 NULL, 0u,
                 segment_vm_rights(segment->rights));
@@ -7298,7 +7250,7 @@ static KernelProcessStatus executable_load_write(
             if (copy > KERNEL_PAGE_SIZE)
                 copy = KERNEL_PAGE_SIZE;
             status = publish_user_page(
-                &load->process->address_space, load->process->owner,
+                executable_load_space(load), load->process->owner,
                 virtual_base + segment->virtual_address + page_offset,
                 user_bytes + consumed, copy,
                 segment_vm_rights(segment->rights));
@@ -7357,6 +7309,50 @@ static KernelProcessStatus executable_load_create_process(
     return executable_load_next(load, next_offset, next_length);
 }
 
+/*
+ * Exec's counterpart to executable_load_create_process: the same accepted
+ * headers, the same streamed segments, but into a replacement address space
+ * for @p process itself. Nothing about the running image changes until
+ * exec_replace() commits.
+ */
+static KernelProcessStatus executable_load_replace(
+    KernelExecutableLoad *load, KernelProcess *process,
+    uint32_t *next_offset, uint32_t *next_length)
+{
+    KernelInitialImage initial_image;
+    KernelVmStatus vm_status;
+
+    if (!executable_load_valid(load) || process == NULL ||
+        load->owner != process->id || load->elf.complete == 0u ||
+        load->process != NULL || load->replace != 0u ||
+        (load->elf.plan.has_interpreter == 0u &&
+         load->stage != KERNEL_EXECUTABLE_LOAD_PROGRAM_HEADERS) ||
+        (load->elf.plan.has_interpreter != 0u &&
+         (load->stage != KERNEL_EXECUTABLE_LOAD_INTERPRETER_HEADERS ||
+          load->interpreter.complete == 0u)))
+        return KERNEL_PROCESS_INVALID_STATE;
+    if (load->elf.plan.has_interpreter != 0u) {
+        if (!interpreter_placement(&load->elf.plan,
+                                   &load->interpreter.plan,
+                                   &initial_image))
+            return KERNEL_PROCESS_INVALID_ARGUMENT;
+        load->interpreter_base = initial_image.interpreter_base;
+        load->interpreter_span = initial_image.interpreter_span;
+    }
+    vm_status = kernel_vm_create_address_space(process->owner,
+                                               &load->replacement);
+    if (vm_status != KERNEL_VM_OK)
+        return vm_status == KERNEL_VM_OUT_OF_MEMORY ?
+            KERNEL_PROCESS_OUT_OF_MEMORY : KERNEL_PROCESS_CORRUPT;
+    load->replace = 1u;
+    load->process = process;
+    load->stage = KERNEL_EXECUTABLE_LOAD_SEGMENTS;
+    load->segment = 0u;
+    load->page = 0u;
+    load->source = ASTRA_PROCESS_LOAD_SOURCE_PROGRAM;
+    return executable_load_next(load, next_offset, next_length);
+}
+
 static KernelProcessStatus executable_load_commit(
     KernelProcess *launcher, KernelHandle load_handle,
     KernelExecutableLoad *load, KernelHandle *child_handle,
@@ -7372,7 +7368,7 @@ static KernelProcessStatus executable_load_commit(
     if (launcher == NULL || !executable_load_valid(load) ||
         load->owner != launcher->id || child_handle == NULL ||
         child_id == NULL || load->stage != KERNEL_EXECUTABLE_LOAD_SEGMENTS ||
-        load->process == NULL)
+        load->process == NULL || load->replace != 0u)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     *child_handle = KERNEL_HANDLE_INVALID;
     *child_id = 0u;
@@ -10494,14 +10490,82 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         thread->context.data[2] = child_id;
         break;
     }
+    case ASTRA_SYSCALL_PROCESS_LOAD_REPLACE: {
+        KernelExecutableLoad *load = NULL;
+        KernelHandleStatus handle_status;
+        KernelProcessStatus load_status;
+        uint32_t next_offset = 0u;
+        uint32_t next_length = 0u;
+
+        handle_status = kernel_handle_lookup(
+            current->handles, thread->context.data[1],
+            KERNEL_OBJECT_PROCESS_LOAD, KERNEL_PROCESS_LOAD_RIGHT,
+            (void **)&load);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || load == NULL ||
+            load->owner != current->id)
+            return KERNEL_PROCESS_CORRUPT;
+        load_status = executable_load_replace(load, current, &next_offset,
+                                              &next_length);
+        if (!executable_status_to_syscall(load_status, &result))
+            return KERNEL_PROCESS_CORRUPT;
+        if (load_status == KERNEL_PROCESS_OK) {
+            thread->context.data[1] = next_offset;
+            thread->context.data[2] = next_length;
+            thread->context.data[3] = load->source;
+        }
+        break;
+    }
     case ASTRA_SYSCALL_PROCESS_EXEC: {
         AstraExecRequest request;
-        uint32_t request_address = thread->context.data[3];
+        KernelExecutableLoad *load = NULL;
+        KernelHandle load_handle = thread->context.data[1];
+        KernelHandleStatus handle_status;
+        uint32_t request_address = thread->context.data[2];
+        uint32_t next_offset;
+        uint32_t next_length;
         KernelProcessStatus exec_status;
 
-        if (thread->context.data[1] == 0u ||
-            thread->context.data[2] == 0u ||
-            request_address < KERNEL_VM_USER_MIN ||
+        handle_status = kernel_handle_lookup(
+            current->handles, load_handle, KERNEL_OBJECT_PROCESS_LOAD,
+            KERNEL_PROCESS_LOAD_RIGHT, (void **)&load);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || load == NULL ||
+            load->owner != current->id)
+            return KERNEL_PROCESS_CORRUPT;
+        /* Every segment page written: the load asks for nothing more. */
+        if (load->replace == 0u || load->process != current ||
+            load->stage != KERNEL_EXECUTABLE_LOAD_SEGMENTS) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        exec_status = executable_load_next(load, &next_offset, &next_length);
+        if (exec_status != KERNEL_PROCESS_OK ||
+            next_offset != 0u || next_length != 0u) {
+            if (exec_status != KERNEL_PROCESS_OK &&
+                !executable_status_to_syscall(exec_status, &result))
+                return KERNEL_PROCESS_CORRUPT;
+            if (exec_status == KERNEL_PROCESS_OK)
+                result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (request_address < KERNEL_VM_USER_MIN ||
             request_address > UINT32_MAX -
                 (uint32_t)offsetof(AstraExecRequest, arguments) ||
             kernel_copy_from_user(&request, request_address,
@@ -10514,12 +10578,16 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             &request.arguments);
         if (result != ASTRA_SYSCALL_OK)
             break;
-        exec_status = replace_process_image(
-            current, thread, thread->context.data[1],
-            thread->context.data[2], thread->context.data[4],
-            thread->context.data[5], &request, next_context);
+        exec_status = exec_replace(
+            current, thread, &load->elf.plan,
+            load->elf.plan.has_interpreter != 0u ?
+                &load->interpreter.plan : NULL,
+            &load->replacement, &request, next_context);
         if (exec_status == KERNEL_PROCESS_OK) {
-            if (*next_context == NULL)
+            /* The image is replaced; the load that built it is spent. */
+            if (*next_context == NULL ||
+                kernel_handle_close(current->handles, load_handle) !=
+                    KERNEL_HANDLE_OK)
                 return KERNEL_PROCESS_CORRUPT;
             return KERNEL_PROCESS_OK;
         }

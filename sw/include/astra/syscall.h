@@ -7,7 +7,7 @@
 
 #define ASTRA_SYSCALL_TRAP 15
 #define ASTRA_SYSCALL_VECTOR 47
-#define ASTRA_SYSCALL_ABI_VERSION 0x0001003Au
+#define ASTRA_SYSCALL_ABI_VERSION 0x0001003Bu
 
 #define ASTRA_SYSCALL_QUERY_ABI 0
 #define ASTRA_SYSCALL_PROGRESS  1
@@ -185,7 +185,12 @@
 #define ASTRA_SYSCALL_INTERVAL_TIMER 64
 /* Restores the context saved by the active signal upcall. */
 #define ASTRA_SYSCALL_SIGNAL_RETURN 65
-/* Atomically replaces the calling process image; success never returns. */
+/*
+ * Atomically replaces the calling process image with a load built by
+ * PROCESS_LOAD_REPLACE; success never returns. D1 is the load handle and D2
+ * the AstraExecRequest. Exec is the launch transaction aimed at the caller:
+ * the same streamed headers and segment pages, a different commit.
+ */
 #define ASTRA_SYSCALL_PROCESS_EXEC 66
 /*
  * Transactional executable loading from a userspace file reader.
@@ -276,6 +281,14 @@
  * ASTRA_PROCESS_LOAD_SOURCE_* values below.
  */
 #define ASTRA_SYSCALL_PROCESS_LOAD_INTERPRETER 88
+/*
+ * CREATE's counterpart for exec: once every header is accepted, builds a
+ * replacement address space for the calling process itself rather than a
+ * child. D1 is the load handle; the first segment range is returned in
+ * D1:D2 and its source in D3, exactly as CREATE returns it. PROCESS_EXEC
+ * commits the load; closing the handle discards the replacement.
+ */
+#define ASTRA_SYSCALL_PROCESS_LOAD_REPLACE 103
 #define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
 #define ASTRA_PROCESS_LOAD_SOURCE_INTERPRETER 1u
 /*

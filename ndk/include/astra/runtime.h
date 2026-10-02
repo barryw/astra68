@@ -1215,9 +1215,11 @@ uint32_t astra_launch_executable_stream(
  *
  * The executable's PT_INTERP record is the only selector. Static images are
  * installed directly; dynamic images are paired with the exact interpreter
- * returned by @p open_interpreter. The function owns @p program on entry and
- * releases every successfully opened source exactly once on every failure
- * path. Success does not return to the old image.
+ * returned by @p open_interpreter. Both are streamed through the same load
+ * transaction a launch uses, reading only the ranges the kernel asks for, into
+ * a replacement image committed by PROCESS_EXEC. The function owns @p program
+ * on entry and releases every successfully opened source exactly once on
+ * every failure path. Success does not return to the old image.
  *
  * @param program Open immutable executable source.
  * @param open_interpreter Exact-provider resolver for dynamic images.
@@ -1389,15 +1391,6 @@ uint32_t astra_posix_process_tty_set_foreground(uint32_t service,
  * @return ASTRA_SYSCALL_* or service status.
  */
 uint32_t astra_posix_process_tty_signal(uint32_t service, uint32_t signal);
-/**
- * Atomically replace the current process image.
- * @param image Complete immutable ELF image.
- * @param length Image byte length.
- * @param request Packed argv, environment, and handoff state.
- * @return ASTRA_SYSCALL_* status; success never returns to the old image.
- */
-uint32_t astra_process_exec(const void *image, uint32_t length,
-                            const AstraExecRequest *request);
 
 /**
  * Waiting for a child, which is the machine's ordinary wait named for what a

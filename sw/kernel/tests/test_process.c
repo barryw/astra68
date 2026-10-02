@@ -10984,6 +10984,113 @@ static void test_streamed_library_is_sparse_atomic_and_reclaimable(void)
 
 static uint32_t startup_be32(const uint8_t *bytes);
 
+/*
+ * One syscall from the exec test's thread; the status the kernel left in D0.
+ */
+static uint32_t exec_syscall(uint32_t number, uint32_t d1, uint32_t d2,
+                             uint32_t d3, uint32_t d4, uint8_t *frame,
+                             KernelCpuContext **next)
+{
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+
+    registers[0] = number;
+    registers[1] = d1;
+    registers[2] = d2;
+    registers[3] = d3;
+    registers[4] = d4;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     next) == KERNEL_PROCESS_OK);
+    return (*next)->data[0];
+}
+
+/* Feeds every range the load asks for, one page at a time via @p scratch. */
+static uint32_t exec_feed(uint32_t handle, const uint8_t *program,
+                          uint32_t program_size, const uint8_t *interpreter,
+                          uint32_t interpreter_size, uint32_t scratch,
+                          uint32_t offset, uint32_t length, uint32_t source,
+                          uint8_t *frame, KernelCpuContext **next)
+{
+    while (length != 0u) {
+        const uint8_t *bytes = source == ASTRA_PROCESS_LOAD_SOURCE_PROGRAM ?
+            program : interpreter;
+        uint32_t size = source == ASTRA_PROCESS_LOAD_SOURCE_PROGRAM ?
+            program_size : interpreter_size;
+        uint32_t chunk = length > KERNEL_PAGE_SIZE ? KERNEL_PAGE_SIZE : length;
+        uint32_t status;
+
+        assert(bytes != NULL && offset + chunk <= size);
+        assert(kernel_user_copy_to_asm(scratch, bytes + offset, chunk) ==
+               KERNEL_USER_COPY_OK);
+        status = exec_syscall(ASTRA_SYSCALL_PROCESS_LOAD_WRITE, handle,
+                              offset, scratch, chunk, frame, next);
+        if (status != ASTRA_SYSCALL_OK)
+            return status;
+        offset = (*next)->data[1];
+        length = (*next)->data[2];
+        source = (*next)->data[3];
+    }
+    return ASTRA_SYSCALL_OK;
+}
+
+/*
+ * exec(2) as the runtime performs it: the launch transaction aimed at the
+ * caller -- BEGIN, headers, INTERPRETER, REPLACE, segments -- committed by
+ * PROCESS_EXEC. A refusal at any step closes the load, as the runtime does,
+ * and returns that step's status; success returns the new image's D0.
+ */
+static uint32_t stream_exec(const uint8_t *program, uint32_t program_size,
+                            const uint8_t *interpreter,
+                            uint32_t interpreter_size, uint32_t scratch,
+                            uint32_t user_request, uint8_t *frame,
+                            KernelCpuContext **next)
+{
+    uint32_t handle;
+    uint32_t status;
+
+    assert(kernel_user_copy_to_asm(scratch, program, KERNEL_ELF_HEADER_SIZE) ==
+           KERNEL_USER_COPY_OK);
+    status = exec_syscall(ASTRA_SYSCALL_PROCESS_LOAD_BEGIN, scratch,
+                          program_size, 0u, 0u, frame, next);
+    if (status != ASTRA_SYSCALL_OK)
+        return status;
+    handle = (*next)->data[1];
+    status = exec_feed(handle, program, program_size, NULL, 0u, scratch,
+                       (*next)->data[2], (*next)->data[3],
+                       ASTRA_PROCESS_LOAD_SOURCE_PROGRAM, frame, next);
+    if (status == ASTRA_SYSCALL_OK && interpreter != NULL) {
+        assert(kernel_user_copy_to_asm(scratch, interpreter,
+                                       KERNEL_ELF_HEADER_SIZE) ==
+               KERNEL_USER_COPY_OK);
+        status = exec_syscall(ASTRA_SYSCALL_PROCESS_LOAD_INTERPRETER, handle,
+                              scratch, interpreter_size, 0u, frame, next);
+        if (status == ASTRA_SYSCALL_OK)
+            status = exec_feed(handle, program, program_size, interpreter,
+                               interpreter_size, scratch, (*next)->data[1],
+                               (*next)->data[2],
+                               ASTRA_PROCESS_LOAD_SOURCE_INTERPRETER, frame,
+                               next);
+    }
+    if (status == ASTRA_SYSCALL_OK)
+        status = exec_syscall(ASTRA_SYSCALL_PROCESS_LOAD_REPLACE, handle, 0u,
+                              0u, 0u, frame, next);
+    if (status == ASTRA_SYSCALL_OK)
+        status = exec_feed(handle, program, program_size, interpreter,
+                           interpreter_size, scratch, (*next)->data[1],
+                           (*next)->data[2], (*next)->data[3], frame, next);
+    if (status == ASTRA_SYSCALL_OK)
+        status = exec_syscall(ASTRA_SYSCALL_PROCESS_EXEC, handle,
+                              user_request, 0u, 0u, frame, next);
+    if (status != ASTRA_SYSCALL_OK) {
+        KernelCpuContext *after;
+
+        assert(exec_syscall(ASTRA_SYSCALL_CLOSE, handle, 0u, 0u, 0u, frame,
+                            &after) == ASTRA_SYSCALL_OK);
+        assert(after == *next);
+    }
+    return status;
+}
+
 static void test_exec_replaces_one_image_and_preserves_argv(void)
 {
     static const char arguments[] = "vim\0-R\0/work/notes.txt\0";
@@ -11055,44 +11162,24 @@ static void test_exec_replaces_one_image_and_preserves_argv(void)
 
     /* A rejected image leaves the old address space and identity untouched. */
     launch_image[0] = 0u;
-    assert(kernel_user_copy_to_asm(user_page, launch_image,
-                                   sizeof(launch_image)) ==
-           KERNEL_USER_COPY_OK);
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
                LAUNCH_VADDR + 0x100u, 0u);
-    registers[0] = ASTRA_SYSCALL_PROCESS_EXEC;
-    registers[1] = user_page;
-    registers[2] = sizeof(launch_image);
-    registers[3] = user_request;
-    registers[4] = process_handle;
-    assert(kernel_process_on_syscall(registers,
-                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
-                                     &next) == KERNEL_PROCESS_OK);
-    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(stream_exec(launch_image, sizeof(launch_image), NULL, 0u,
+                       user_page, user_request, frame, &next) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(next->program_counter == LAUNCH_VADDR + 0x100u);
-    assert(next->data[4] == process_handle);
 
     /* Direct syscalls cannot publish malformed UTF-8 by bypassing the NDK. */
     memcpy(malformed_arguments, arguments, sizeof(arguments));
     malformed_arguments[1] = UINT8_C(0x80);
     launch_build_image();
-    assert(kernel_user_copy_to_asm(user_page, launch_image,
-                                   sizeof(launch_image)) ==
-           KERNEL_USER_COPY_OK);
     assert(kernel_user_copy_to_asm(user_arguments, malformed_arguments,
                                    sizeof(malformed_arguments)) ==
            KERNEL_USER_COPY_OK);
-    memset(registers, 0, sizeof(registers));
-    registers[0] = ASTRA_SYSCALL_PROCESS_EXEC;
-    registers[1] = user_page;
-    registers[2] = sizeof(launch_image);
-    registers[3] = user_request;
-    registers[4] = process_handle;
-    assert(kernel_process_on_syscall(registers,
-                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
-                                     &next) == KERNEL_PROCESS_OK);
-    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
-    assert(next->data[4] == process_handle);
+    assert(stream_exec(launch_image, sizeof(launch_image), NULL, 0u,
+                       user_page, user_request, frame, &next) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(next->program_counter == LAUNCH_VADDR + 0x100u);
     assert(kernel_user_copy_to_asm(user_arguments, arguments,
                                    sizeof(arguments)) == KERNEL_USER_COPY_OK);
 
@@ -11125,19 +11212,45 @@ static void test_exec_replaces_one_image_and_preserves_argv(void)
     assert(host_channel_open_calls == 1u && host_channel_close_calls == 0u);
 
     launch_build_image();
-    assert(kernel_user_copy_to_asm(user_page, launch_image,
-                                   sizeof(launch_image)) ==
-           KERNEL_USER_COPY_OK);
     assert(kernel_user_copy_to_asm(user_request, &request, sizeof(request)) ==
            KERNEL_USER_COPY_OK);
-    memset(registers, 0, sizeof(registers));
-    registers[0] = ASTRA_SYSCALL_PROCESS_EXEC;
-    registers[1] = user_page;
-    registers[2] = sizeof(launch_image);
-    registers[3] = user_request;
-    assert(kernel_process_on_syscall(registers,
-                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
-                                     &next) == KERNEL_PROCESS_OK);
+    /* An exec abandoned after REPLACE leaves the image and releases its
+     * replacement address space when the load is closed. */
+    {
+        KernelVmStats before;
+        KernelVmStats after;
+        uint32_t handle;
+
+        assert(kernel_vm_stats(&before));
+        assert(kernel_user_copy_to_asm(user_page, launch_image,
+                                       KERNEL_ELF_HEADER_SIZE) ==
+               KERNEL_USER_COPY_OK);
+        assert(exec_syscall(ASTRA_SYSCALL_PROCESS_LOAD_BEGIN, user_page,
+                            sizeof(launch_image), 0u, 0u, frame, &next) ==
+               ASTRA_SYSCALL_OK);
+        handle = next->data[1];
+        assert(exec_feed(handle, launch_image, sizeof(launch_image), NULL,
+                         0u, user_page, next->data[2], next->data[3],
+                         ASTRA_PROCESS_LOAD_SOURCE_PROGRAM, frame, &next) ==
+               ASTRA_SYSCALL_OK);
+        assert(exec_syscall(ASTRA_SYSCALL_PROCESS_LOAD_REPLACE, handle, 0u,
+                            0u, 0u, frame, &next) == ASTRA_SYSCALL_OK);
+        assert(kernel_vm_stats(&after));
+        assert(after.address_spaces == before.address_spaces + 1u);
+        /* PROCESS_EXEC refuses a load that still wants segments. */
+        if (next->data[2] != 0u)
+            assert(exec_syscall(ASTRA_SYSCALL_PROCESS_EXEC, handle,
+                                user_request, 0u, 0u, frame, &next) ==
+                   ASTRA_SYSCALL_INVALID_ARGUMENT);
+        assert(exec_syscall(ASTRA_SYSCALL_CLOSE, handle, 0u, 0u, 0u, frame,
+                            &next) == ASTRA_SYSCALL_OK);
+        assert(kernel_vm_stats(&after));
+        assert(after.address_spaces == before.address_spaces);
+        assert(next->program_counter == LAUNCH_VADDR + 0x100u);
+    }
+    assert(stream_exec(launch_image, sizeof(launch_image), NULL, 0u,
+                       user_page, user_request, frame, &next) ==
+           ASTRA_SYSCALL_OK);
     assert(next->program_counter == LAUNCH_VADDR + 0x100u);
     assert(next->usp == KERNEL_PROCESS_STACK_TOP);
     assert(next->data[2] == KERNEL_VM_USER_MIN);
@@ -11227,40 +11340,21 @@ static void test_exec_dynamic_image_enters_interpreter_atomically(void)
                    registers, KERNEL_PROCESS_STACK_TOP - 8u, frame, &next) ==
                KERNEL_PROCESS_OK);
     }
-    assert(kernel_user_copy_to_asm(private_base, dynamic_program,
-                                   sizeof(dynamic_program)) ==
-           KERNEL_USER_COPY_OK);
-    assert(kernel_user_copy_to_asm(private_base + sizeof(dynamic_program),
-                                   dynamic_interpreter,
-                                   sizeof(dynamic_interpreter)) ==
-           KERNEL_USER_COPY_OK);
     assert(kernel_user_copy_to_asm(user_request, &request, sizeof(request)) ==
            KERNEL_USER_COPY_OK);
 
     /* A dynamic image without its exact interpreter is rejected atomically. */
-    memset(registers, 0, sizeof(registers));
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
                LAUNCH_VADDR + 0x100u, 0u);
-    registers[0] = ASTRA_SYSCALL_PROCESS_EXEC;
-    registers[1] = private_base;
-    registers[2] = sizeof(dynamic_program);
-    registers[3] = user_request;
-    assert(kernel_process_on_syscall(registers,
-                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
-                                     &next) == KERNEL_PROCESS_OK);
-    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(stream_exec(dynamic_program, sizeof(dynamic_program), NULL, 0u,
+                       private_base, user_request, frame, &next) !=
+           ASTRA_SYSCALL_OK);
     assert(next->program_counter == LAUNCH_VADDR + 0x100u);
 
-    memset(registers, 0, sizeof(registers));
-    registers[0] = ASTRA_SYSCALL_PROCESS_EXEC;
-    registers[1] = private_base;
-    registers[2] = sizeof(dynamic_program);
-    registers[3] = user_request;
-    registers[4] = private_base + sizeof(dynamic_program);
-    registers[5] = sizeof(dynamic_interpreter);
-    assert(kernel_process_on_syscall(registers,
-                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
-                                     &next) == KERNEL_PROCESS_OK);
+    assert(stream_exec(dynamic_program, sizeof(dynamic_program),
+                       dynamic_interpreter, sizeof(dynamic_interpreter),
+                       private_base, user_request, frame, &next) ==
+           ASTRA_SYSCALL_OK);
     assert(next->program_counter ==
            KERNEL_VM_DYNAMIC_BASE + DYNAMIC_INTERPRETER_ENTRY);
     assert(kernel_user_copy_from_asm(&startup, KERNEL_VM_USER_MIN,
