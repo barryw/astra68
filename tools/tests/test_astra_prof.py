@@ -65,6 +65,35 @@ with tempfile.TemporaryDirectory() as directory:
             "baseline": str(zero), "candidate": str(good)})())
     assert "n/a" in output.getvalue()
 
+    # Workloads: repeated labels sum, labels missing from a run are left
+    # out of the common total, and changes are against the first profile.
+    workloads = module.workload_totals(good, None)
+    assert workloads == {"warm-1": [40, 0], "warm-2": [80, 0]}
+    other = Path(directory) / "other.aprof"
+    other.write_text(
+        "interval\twarm-1\t0\t1\n"
+        "block\t0x02001000\t0x00101000\t4\t8\t5\t0\t0\t0\t0\t4e71\n"
+        "end\n"
+        "interval\twarm-1\t1\t2\n"
+        "block\t0x02001000\t0x00101000\t4\t8\t5\t0\t0\t0\t0\t4e71\n"
+        "end\n")
+    assert module.workload_totals(other, None) == {"warm-1": [40, 0]}
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        assert module.command_workloads(type("Args", (), {
+            "profiles": [str(good), str(other)], "kernel": None,
+            "nm": "nm"})()) == 0
+    table = output.getvalue()
+    assert "warm-2" in table and "kernel instructions" not in table
+    common = [line for line in table.splitlines()
+              if line.startswith("(common)")][0]
+    assert "+0.0%" in common
+    with contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(io.StringIO()):
+        assert module.command_workloads(type("Args", (), {
+            "profiles": [str(good), str(other)], "kernel": ["k.elf"],
+            "nm": "nm"})()) == 2
+
     control = Path(directory) / "control.jsonl"
     control.write_text(
         '{"run":1,"milliseconds":820.0,"guest-cycles":10250000}\n'
