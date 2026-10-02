@@ -5,8 +5,10 @@
 #include <stdint.h>
 
 #define ASTRA_ALLOCATOR_CONTROL_MAGIC 0x41485031u /* "AHP1" */
-#define ASTRA_ALLOCATOR_CONTROL_VERSION 2u
+#define ASTRA_ALLOCATOR_CONTROL_VERSION 3u
 #define ASTRA_ALLOCATOR_CLASS_COUNT 20u
+/* Freed pages kept committed for reuse before frames go back. */
+#define ASTRA_ALLOCATOR_RETAIN_PAGES 256u
 
 typedef struct AstraAllocatorLayout {
     uint8_t *base;
@@ -34,6 +36,9 @@ typedef struct AstraAllocatorControl {
     uint32_t heap_used;
     uint32_t heap_pages_taken;
     uint32_t free_extent_head;
+    /* Freed extents still committed, newest first, and their pages. */
+    uint32_t retained_head;
+    uint32_t retained_pages;
     void *class_runs[ASTRA_ALLOCATOR_CLASS_COUNT];
     int (*growth_policy)(uint32_t current_bytes, uint32_t growth_bytes,
                          void *context);

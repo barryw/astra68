@@ -10,7 +10,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#define TEST_ARENA_BYTES (64u * 4096u)
+#include "../src/allocator_internal.h"
+
+#define TEST_ARENA_BYTES (1024u * 4096u)
 
 /* Deliberately declared here first: the test defines the allocator contract
  * before the public NDK surface and implementation are extended. */
@@ -175,6 +177,41 @@ main(void)
     assert(atomic_load(&futex_wait_calls) != 0u);
     assert(atomic_load(&policy_overlap) == 0u);
     astra_runtime_set_growth_policy(NULL, NULL);
+
+    /* A freed block stays committed: the next request of its size takes it
+     * back with nothing decommitted and so nothing to fault in again. */
+    {
+        uint32_t decommits = decommit_calls;
+        void *blocks[20];
+        void *buffer = astra_runtime_allocate(60000u);
+        void *again;
+
+        assert(buffer != NULL);
+        (void)memset(buffer, 0xa5, 60000u);
+        astra_runtime_deallocate(buffer);
+        assert(decommit_calls == decommits);
+        again = astra_runtime_allocate(60000u);
+        assert(again == buffer && decommit_calls == decommits);
+        /* ...and reads as the fresh zero pages it stands in for. */
+        for (uint32_t index = 0u; index < 60000u; ++index)
+            assert(((uint8_t *)again)[index] == 0u);
+        astra_runtime_deallocate(again);
+        /* Past the bound, the oldest retained extents go back. */
+        for (uint32_t index = 0u; index < 20u; ++index) {
+            blocks[index] = astra_runtime_allocate(65536u);
+            assert(blocks[index] != NULL);
+        }
+        assert(decommit_calls == decommits);
+        for (uint32_t index = 0u; index < 20u; ++index)
+            astra_runtime_deallocate(blocks[index]);
+        assert(decommit_calls > decommits);
+        /* One larger than the bound is never retained. */
+        decommits = decommit_calls;
+        buffer = astra_runtime_allocate(ASTRA_ALLOCATOR_RETAIN_PAGES * 4096u);
+        assert(buffer != NULL);
+        astra_runtime_deallocate(buffer);
+        assert(decommit_calls == decommits + 1u);
+    }
 
     astra_runtime_deallocate(small);
     astra_runtime_deallocate(zeroed);

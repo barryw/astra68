@@ -38,6 +38,16 @@
  * long-running program's footprint follow its live set back down instead of
  * ratcheting.
  *
+ * Not at once, though. Decommitting the instant a block is freed throws the
+ * frames away exactly when the next request is most likely to want them: a
+ * program that converts one buffer after another, or a class that goes from
+ * one object to none and back, faulted and zeroed every page again, and paid
+ * a cache push per page to unmap it. Freed extents are first **retained**,
+ * still committed, up to ASTRA_ALLOCATOR_RETAIN_PAGES; a request that fits
+ * one takes it with no fault at all, and only the oldest beyond that bound
+ * are decommitted. The footprint still follows the live set down, to within
+ * that bound.
+ *
  * Finding the run from a pointer uses page-index metadata stored at the front
  * of the private reservation. Its pages commit on demand with the heap, so
  * the table follows the address space rather than bloating every executable.
@@ -130,14 +140,70 @@ heap_ready(void)
     return control;
 }
 
-/* Takes `pages` contiguous pages: a free extent if one fits, else the break. */
+/*
+ * Takes `pages` committed pages from the smallest retained extent that holds
+ * them, leaving any remainder retained, or NULL when none does.
+ */
+static AstraRun *
+take_retained(AstraAllocatorControl *control, uint32_t pages)
+{
+    uint32_t previous = 0u;
+    uint32_t best = 0u;
+    uint32_t best_previous = 0u;
+    uint32_t page;
+    uint32_t next;
+
+    for (uint32_t current = control->retained_head; current != 0u;
+         current = control->layout.extent_next[current - 1u]) {
+        uint32_t size = control->layout.extent_pages[current - 1u];
+
+        if (size >= pages &&
+            (best == 0u ||
+             size < control->layout.extent_pages[best - 1u])) {
+            best = current;
+            best_previous = previous;
+        }
+        previous = current;
+    }
+    if (best == 0u)
+        return NULL;
+    page = best - 1u;
+    next = control->layout.extent_next[page];
+    if (control->layout.extent_pages[page] > pages) {
+        uint32_t rest = page + pages;
+
+        control->layout.extent_pages[rest] =
+            control->layout.extent_pages[page] - pages;
+        control->layout.extent_next[rest] = next;
+        next = rest + 1u;
+    }
+    if (best_previous == 0u)
+        control->retained_head = next;
+    else
+        control->layout.extent_next[best_previous - 1u] = next;
+    control->retained_pages -= pages;
+    /*
+     * Zeroed, so a reused extent reads exactly as the freshly faulted pages
+     * it replaces. Programs depend on that whether or not malloc promises
+     * it, and a store per word is still far cheaper than a fault, a kernel
+     * zero fill and an unmap with its cache push per page.
+     */
+    (void)memset(run_at_page(control, page), 0, (size_t)pages * PAGE_BYTES);
+    return run_at_page(control, page);
+}
+
+/* Takes `pages` contiguous pages: a retained extent if one fits, then a free
+ * extent, else the break. */
 static AstraRun *
 take_pages(AstraAllocatorControl *control, uint32_t pages)
 {
     uint32_t previous = 0u;
     uint32_t current = control->free_extent_head;
+    AstraRun *retained = take_retained(control, pages);
     void *fresh;
 
+    if (retained != NULL)
+        return retained;
     while (current != 0u) {
         uint32_t page = (uint32_t)current - 1u;
 
@@ -172,30 +238,22 @@ take_pages(AstraAllocatorControl *control, uint32_t pages)
     return fresh;
 }
 
+/* Decommits `pages` pages at `page` and files them as a free extent. */
 static void
-give_pages(AstraAllocatorControl *control, AstraRun *run)
+release_extent(AstraAllocatorControl *control, uint32_t page, uint32_t pages)
 {
-    uint32_t page = (uint32_t)(((uint8_t *)run - control->layout.base) >>
-                               PAGE_SHIFT);
-    /*
-     * Read out of the header before anything is dropped. The header lives on
-     * the run's own first page, so once that page is decommitted every field
-     * reads back as the zero of a freshly faulted page.
-     */
-    uint32_t pages = run->pages;
     uint32_t released = 0u;
     uint32_t previous = 0u;
     uint32_t current = control->free_extent_head;
 
-    for (uint32_t index = 0u; index < pages; ++index)
-        control->layout.page_run[page + index] = 0u;
     /*
      * The frames go back; the address range stays ours. Touching it again
-     * faults a fresh zeroed page in, which is exactly what a reused run
-     * wants. A failure here is not fatal -- the pages simply stay committed
-     * and the extent is still reusable -- so it is not worth a branch.
+     * faults a fresh zeroed page in. A failure here is not fatal -- the
+     * pages simply stay committed and the extent is still reusable -- so it
+     * is not worth a branch.
      */
-    (void)astra_rt_private_decommit(run, pages * PAGE_BYTES, &released);
+    (void)astra_rt_private_decommit(run_at_page(control, page),
+                                    pages * PAGE_BYTES, &released);
 
     /* Sorted by page, so the two neighbours are the two this can join. */
     while (current != 0u && (uint32_t)current - 1u < page) {
@@ -224,6 +282,48 @@ give_pages(AstraAllocatorControl *control, AstraRun *run)
                 control->layout.extent_next[page];
         }
     }
+}
+
+static void
+give_pages(AstraAllocatorControl *control, AstraRun *run)
+{
+    uint32_t page = (uint32_t)(((uint8_t *)run - control->layout.base) >>
+                               PAGE_SHIFT);
+    /* Read out of the header before anything is dropped: a decommitted
+     * page reads back as zeros. */
+    uint32_t pages = run->pages;
+
+    for (uint32_t index = 0u; index < pages; ++index)
+        control->layout.page_run[page + index] = 0u;
+    if (pages > ASTRA_ALLOCATOR_RETAIN_PAGES) {
+        release_extent(control, page, pages);
+        return;
+    }
+    /*
+     * ponytail: the oldest retained extent is found by walking the list,
+     * which the bound keeps to ASTRA_ALLOCATOR_RETAIN_PAGES entries at most.
+     */
+    while (control->retained_pages + pages > ASTRA_ALLOCATOR_RETAIN_PAGES) {
+        uint32_t previous = 0u;
+        uint32_t oldest = control->retained_head;
+        uint32_t oldest_pages;
+
+        while (control->layout.extent_next[oldest - 1u] != 0u) {
+            previous = oldest;
+            oldest = control->layout.extent_next[oldest - 1u];
+        }
+        if (previous == 0u)
+            control->retained_head = 0u;
+        else
+            control->layout.extent_next[previous - 1u] = 0u;
+        oldest_pages = control->layout.extent_pages[oldest - 1u];
+        control->retained_pages -= oldest_pages;
+        release_extent(control, oldest - 1u, oldest_pages);
+    }
+    control->layout.extent_pages[page] = pages;
+    control->layout.extent_next[page] = control->retained_head;
+    control->retained_head = page + 1u;
+    control->retained_pages += pages;
 }
 
 static AstraRun *
