@@ -89,6 +89,28 @@ memory_writev(void *context, uint64_t lba, const AstraBlockVector *vector,
 }
 
 static AstraBlockStatus
+memory_readv(void *context, uint64_t lba, const AstraBlockReadVector *vector,
+             uint64_t deadline)
+{
+    AstraMemoryBlock *memory = context;
+    const uint8_t *in = memory->storage + (size_t)lba * memory->sector_size;
+    uint32_t index;
+
+    (void)deadline;
+    if (maybe_fail(memory) != ASTRA_BLOCK_OK) {
+        return ASTRA_BLOCK_IO_ERROR;
+    }
+    for (index = 0u; index < vector->count; ++index) {
+        size_t bytes = (size_t)vector->sector_counts[index] *
+                       memory->sector_size;
+
+        memcpy(vector->buffers[index], in, bytes);
+        in += bytes;
+    }
+    return ASTRA_BLOCK_OK;
+}
+
+static AstraBlockStatus
 memory_flush(void *context, uint64_t deadline)
 {
     AstraMemoryBlock *memory = context;
@@ -103,6 +125,7 @@ const AstraBlockBackend astra_memory_block_backend = {
     .write = memory_write,
     .writev = memory_writev,
     .flush = memory_flush,
+    .readv = memory_readv,
 };
 
 void

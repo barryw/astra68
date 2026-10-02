@@ -38,7 +38,13 @@ typedef struct AstraLeaseBlock {
     uint32_t irq;           /* completion endpoint handle */
     uint32_t queue_depth;
     uint32_t available;
-    uint32_t state_lock;
+    /*
+     * Lane state's mutex word. Its critical sections are a few stores, taken
+     * about six times a request: a kernel semaphore here cost two syscalls
+     * each, a dozen per block request, for a lock that is almost never
+     * contended.
+     */
+    volatile uint32_t state_lock;
     uint32_t completion_lock;
     uint32_t sector_bytes;
     uint32_t max_transfer_sectors;

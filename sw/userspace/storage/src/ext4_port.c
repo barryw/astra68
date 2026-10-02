@@ -232,6 +232,40 @@ port_bwrite(struct ext4_blockdev *blockdev, const void *buffer, uint64_t block,
 }
 
 static int
+port_breadv(struct ext4_blockdev *blockdev, void *const *buffers,
+            const uint32_t *counts, uint64_t block, uint32_t count)
+{
+    AstraExt4Port *port = port_of(blockdev);
+    AstraBlockReadVector vector;
+    AstraBlockStatus status;
+    uint64_t sectors = 0u;
+    uint32_t index;
+
+    if (port == NULL || buffers == NULL || counts == NULL || count == 0u) {
+        return EINVAL;
+    }
+    for (index = 0u; index < count; ++index) {
+        if (buffers[index] == NULL || counts[index] == 0u ||
+            sectors > UINT32_MAX - counts[index]) {
+            return EINVAL;
+        }
+        sectors += counts[index];
+    }
+    if (validate_window(port, block, sectors) != EOK) {
+        return EINVAL;
+    }
+    vector.buffers = buffers;
+    vector.sector_counts = counts;
+    vector.count = count;
+    status = astra_block_readv(port->device, block, &vector,
+                               transfer_deadline(port));
+    if (status != ASTRA_BLOCK_OK) {
+        port->last_status = status;
+    }
+    return astra_ext4_errno(status);
+}
+
+static int
 port_bwritev(struct ext4_blockdev *blockdev, const void *const *buffers,
              const uint32_t *counts, uint64_t block, uint32_t count)
 {
@@ -372,6 +406,7 @@ astra_ext4_port_init(AstraExt4Port *port, AstraBlockDevice *device,
     port->interface.bread = port_bread;
     port->interface.bwrite = port_bwrite;
     port->interface.bwritev = port_bwritev;
+    port->interface.breadv = port_breadv;
     port->interface.flush = port_flush;
     port->interface.close = port_close;
     port->interface.lock = port_lock;

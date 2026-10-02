@@ -162,6 +162,20 @@ controlled_writev(void *context, uint64_t lba,
     return astra_memory_block_backend.writev(&memory, lba, vector, deadline);
 }
 
+/* One device read however many buffers it fills. */
+static AstraBlockStatus
+controlled_readv(void *context, uint64_t lba,
+                 const AstraBlockReadVector *vector, uint64_t deadline)
+{
+    (void)context;
+    if (pthread_mutex_lock(&controlled.mutex) != 0)
+        abort();
+    ++controlled.reads;
+    if (pthread_mutex_unlock(&controlled.mutex) != 0)
+        abort();
+    return astra_memory_block_backend.readv(&memory, lba, vector, deadline);
+}
+
 static AstraBlockStatus
 controlled_flush(void *context, uint64_t deadline)
 {
@@ -185,6 +199,7 @@ static const AstraBlockBackend controlled_backend = {
     .write = controlled_write,
     .writev = controlled_writev,
     .flush = controlled_flush,
+    .readv = controlled_readv,
 };
 
 static pthread_rwlock_t mount_lock = PTHREAD_RWLOCK_INITIALIZER;
@@ -1036,6 +1051,74 @@ check_coalesced_read_cache(void)
         return fail("coalesced cache warm read issued I/O", rc);
     (void)ext4_fclose(&file);
     puts("coalesced cache: warm contiguous read issued no I/O");
+    return 0;
+}
+
+/*
+ * A file read in pieces smaller than a block, in order -- a WAD's lumps --
+ * reads ahead on its first miss: the next pieces are cache hits, not one
+ * device transfer per new block.
+ */
+static int
+read_pieces(ext4_file *file, uint32_t *offset, uint32_t end)
+{
+    enum { PIECE = 1000u };
+    static uint8_t piece[PIECE];
+
+    while (*offset < end) {
+        size_t moved = 0u;
+        int rc = ext4_fread(file, piece, PIECE, &moved);
+
+        if (rc != EOK || moved != PIECE)
+            return fail("read-ahead read", rc);
+        for (uint32_t at = 0u; at < PIECE; ++at) {
+            if (piece[at] != pattern_byte(2u, *offset + at))
+                return fail("read-ahead bytes", 0);
+        }
+        *offset += PIECE;
+    }
+    return 0;
+}
+
+static int
+check_small_reads_read_ahead(void)
+{
+    ext4_file file;
+    uint64_t first;
+    uint64_t rest;
+    uint64_t next;
+    uint32_t offset = 0u;
+    int rc;
+
+    if (do_umount() || do_mount())
+        return 1;
+    rc = ext4_fopen(&file, MOUNT_POINT "dir/nested/big.bin", "rb");
+    if (rc != EOK)
+        return fail("read-ahead open", rc);
+    /* The first piece reads the inode, the indirect block and the data. */
+    if (read_pieces(&file, &offset, 1u))
+        return 1;
+    first = controlled_read_count();
+    /*
+     * The next 30 blocks cost a read per contiguous run of up to 16: one
+     * here, another where the indirect block sits between block 11 and 12,
+     * not one per block.
+     */
+    if (read_pieces(&file, &offset, 16u * 4096u - 1000u))
+        return 1;
+    rest = controlled_read_count() - first;
+    if (read_pieces(&file, &offset, 31u * 4096u))
+        return 1;
+    next = controlled_read_count() - first - rest;
+    (void)ext4_fclose(&file);
+    if (rest + next > 3u) {
+        printf("FAIL read-ahead: %llu then %llu device reads\n",
+               (unsigned long long)rest, (unsigned long long)next);
+        ++failures;
+        return 1;
+    }
+    printf("read-ahead: 31 blocks in 1000-byte pieces, %llu device reads\n",
+           (unsigned long long)(rest + next));
     return 0;
 }
 
@@ -2528,6 +2611,7 @@ main(int argc, char **argv)
             check_vfs_open_at_after_rename() == 0 && verify() == 0 &&
             !on_file &&
             check_coalesced_read_cache() == 0 &&
+            check_small_reads_read_ahead() == 0 &&
             check_concurrent_read_oracle() == 0 &&
             check_concurrent_disjoint_writes() == 0)
             (void)check_concurrent_mutation_linearization();

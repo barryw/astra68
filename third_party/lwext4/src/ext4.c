@@ -2041,9 +2041,49 @@ int ext4_ftruncate(ext4_file *f, uint64_t size)
 	return r;
 }
 
-static int ext4_fread_block(struct ext4_blockdev *bdev, ext4_fsblk_t fblock,
+/*
+ * ASTRA: a file-data cache miss reads ahead, up to EXT4_READ_AHEAD_MAX
+ * blocks in one device transfer.
+ *
+ * A miss read exactly the block asked for, so a program reading a file in
+ * pieces smaller than a block -- Chocolate Doom's ~550 WAD lumps at start-up,
+ * a few KiB each and in file order -- paid a whole device transfer, about
+ * thirty syscalls through the block lease, for every new 4 KiB. Reading on
+ * along the file's physically contiguous blocks turns the next pieces into
+ * cache hits. 16 blocks of 4 KiB is one 64 KiB maximum device transfer.
+ */
+
+/* On a miss for file block @p iblock_idx at @p fblock, reads it and the
+ * contiguous blocks after it, within the file, into the cache. Failure is
+ * not an error: the caller's own read follows and reports one. */
+static void ext4_fread_ahead(ext4_file *file, struct ext4_inode_ref *ref,
+			     uint32_t iblock_idx, ext4_fsblk_t fblock)
+{
+	struct ext4_blockdev *bdev = file->mp->fs.bdev;
+	uint32_t block_size = ext4_sb_get_block_size(&file->mp->fs.sb);
+	uint64_t blocks = (file->fsize + block_size - 1) / block_size;
+	uint32_t count = 1;
+
+	if (fblock == 0 || ext4_block_cached(bdev, fblock))
+		return;
+	while (count < EXT4_READ_AHEAD_MAX && iblock_idx + count < blocks) {
+		ext4_fsblk_t next = 0;
+
+		if (ext4_fs_get_inode_dblk_idx(ref, iblock_idx + count, &next,
+					       true) != EOK ||
+		    next != fblock + count)
+			break;
+		count++;
+	}
+	if (count > 1)
+		(void)ext4_blocks_read_ahead(bdev, fblock, count);
+}
+
+static int ext4_fread_block(ext4_file *file, struct ext4_inode_ref *ref,
+			    uint32_t iblock_idx, ext4_fsblk_t fblock,
 			    uint32_t offset, void *buf, size_t size)
 {
+	struct ext4_blockdev *bdev = file->mp->fs.bdev;
 	struct ext4_block block = EXT4_BLOCK_ZERO();
 	int r;
 
@@ -2051,6 +2091,7 @@ static int ext4_fread_block(struct ext4_blockdev *bdev, ext4_fsblk_t fblock,
 		memset(buf, 0, size);
 		return EOK;
 	}
+	ext4_fread_ahead(file, ref, iblock_idx, fblock);
 	r = ext4_block_get(bdev, &block, fblock);
 	if (r != EOK)
 		return r;
@@ -2129,8 +2170,8 @@ static int ext4_fread_no_lock(ext4_file *file, void *buf, size_t size,
 		if (r != EOK)
 			goto Finish;
 
-		r = ext4_fread_block(file->mp->fs.bdev, fblock, unalg,
-					     u8_buf, len);
+		r = ext4_fread_block(file, &ref, iblock_idx, fblock, unalg,
+				     u8_buf, len);
 		if (r != EOK)
 			goto Finish;
 
@@ -2196,8 +2237,9 @@ static int ext4_fread_no_lock(ext4_file *file, void *buf, size_t size,
 		}
 
 		if (run_count == 1) {
-			r = ext4_fread_block(file->mp->fs.bdev, run_start, 0,
-					     u8_buf, block_size);
+			r = ext4_fread_block(file, &ref, iblock_idx,
+					     run_start, 0, u8_buf,
+					     block_size);
 		} else
 			r = ext4_blocks_get_cached(file->mp->fs.bdev, u8_buf,
 						  run_start, run_count);
@@ -2218,7 +2260,8 @@ static int ext4_fread_no_lock(ext4_file *file, void *buf, size_t size,
 		if (r != EOK)
 			goto Finish;
 
-		r = ext4_fread_block(file->mp->fs.bdev, fblock, 0, u8_buf, size);
+		r = ext4_fread_block(file, &ref, iblock_idx, fblock, 0, u8_buf,
+				     size);
 		if (r != EOK)
 			goto Finish;
 

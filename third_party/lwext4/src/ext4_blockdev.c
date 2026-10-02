@@ -114,6 +114,17 @@ static int ext4_bdif_bwrite(struct ext4_blockdev *bdev, const void *buf,
 	return r;
 }
 
+static int ext4_bdif_breadv(struct ext4_blockdev *bdev, void *const *bufs,
+			    const uint32_t *blk_cnts, uint64_t blk_id,
+			    uint32_t buf_cnt)
+{
+	ext4_bdif_lock(bdev);
+	int r = bdev->bdif->breadv(bdev, bufs, blk_cnts, blk_id, buf_cnt);
+	bdev->bdif->bread_ctr++;
+	ext4_bdif_unlock(bdev);
+	return r;
+}
+
 static int ext4_bdif_bwritev(struct ext4_blockdev *bdev,
 			     const void *const *bufs,
 			     const uint32_t *blk_cnts, uint64_t blk_id,
@@ -442,6 +453,86 @@ static bool ext4_block_copy_cached(struct ext4_blockdev *bdev, void *buf,
 	}
 	ext4_cache_unlock(bdev);
 	return found;
+}
+
+bool ext4_block_cached(struct ext4_blockdev *bdev, uint64_t lba)
+{
+	struct ext4_block block = EXT4_BLOCK_ZERO();
+	bool found = false;
+
+	if (!bdev->bc)
+		return false;
+	ext4_cache_lock(bdev);
+	if (ext4_bcache_find_get(bdev->bc, &block, lba)) {
+		found = ext4_bcache_test_flag(block.buf, BC_UPTODATE);
+		ext4_bcache_free(bdev->bc, &block);
+	}
+	ext4_cache_unlock(bdev);
+	return found;
+}
+
+/*
+ * ASTRA: the blocks are read straight into fresh cache buffers by one
+ * scatter transfer, so read-ahead needs no staging buffer -- lwext4's bounded
+ * allocator has no class for one -- and copies nothing twice. Under the fill
+ * lane, so a concurrent miss for one of these blocks waits and then finds it
+ * up to date, as for a single-block fill.
+ */
+int ext4_blocks_read_ahead(struct ext4_blockdev *bdev, uint64_t lba,
+			   uint32_t cnt)
+{
+	struct ext4_block blocks[EXT4_READ_AHEAD_MAX];
+	void *bufs[EXT4_READ_AHEAD_MAX];
+	uint32_t counts[EXT4_READ_AHEAD_MAX];
+	uint32_t got = 0;
+	int r = EOK;
+
+	ext4_assert(bdev);
+	if (!bdev->bc || !bdev->bdif->breadv || cnt == 0)
+		return EOK;
+	if (cnt > EXT4_READ_AHEAD_MAX)
+		cnt = EXT4_READ_AHEAD_MAX;
+	/* One transfer, so no more than the device takes at once. */
+	if (bdev->bdif->ph_bmax &&
+	    cnt > (uint64_t)bdev->bdif->ph_bmax * bdev->bdif->ph_bsize /
+			  bdev->lg_bsize)
+		cnt = (uint32_t)((uint64_t)bdev->bdif->ph_bmax *
+				 bdev->bdif->ph_bsize / bdev->lg_bsize);
+	if (cnt == 0)
+		return EOK;
+	ext4_fill_lock(bdev);
+	for (got = 0; got < cnt; ++got) {
+		struct ext4_block zero = EXT4_BLOCK_ZERO();
+		bool uptodate;
+
+		blocks[got] = zero;
+		if (ext4_block_get_noread(bdev, &blocks[got], lba + got) != EOK)
+			break;
+		ext4_cache_lock(bdev);
+		uptodate = ext4_bcache_test_flag(blocks[got].buf, BC_UPTODATE);
+		ext4_cache_unlock(bdev);
+		if (uptodate) {
+			(void)ext4_block_set(bdev, &blocks[got]);
+			break;
+		}
+		bufs[got] = blocks[got].data;
+		counts[got] = bdev->lg_bsize / bdev->bdif->ph_bsize;
+	}
+	if (got != 0)
+		r = ext4_bdif_breadv(bdev, bufs, counts,
+				     (lba * bdev->lg_bsize + bdev->part_offset) /
+					     bdev->bdif->ph_bsize,
+				     got);
+	for (uint32_t at = 0; at < got; ++at) {
+		if (r == EOK) {
+			ext4_cache_lock(bdev);
+			ext4_bcache_set_flag(blocks[at].buf, BC_UPTODATE);
+			ext4_cache_unlock(bdev);
+		}
+		(void)ext4_block_set(bdev, &blocks[at]);
+	}
+	ext4_fill_unlock(bdev);
+	return r;
 }
 
 static int ext4_block_publish_cached(struct ext4_blockdev *bdev, void *buf,

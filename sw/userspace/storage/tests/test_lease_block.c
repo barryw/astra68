@@ -421,6 +421,28 @@ astra_wait_multiple(const uint32_t *handles, uint32_t count,
     return status;
 }
 
+/* Lane state's mutex is never contended on one thread. */
+uint32_t
+astra_futex_wait(volatile uint32_t *address, uint32_t expected,
+                 uint64_t deadline_ns)
+{
+    (void)address;
+    (void)expected;
+    (void)deadline_ns;
+    assert(!"lane mutex contended");
+    return ASTRA_SYSCALL_IO_ERROR;
+}
+
+uint32_t
+astra_futex_wake(volatile uint32_t *address, uint32_t count, uint32_t *woken)
+{
+    (void)address;
+    (void)count;
+    (void)woken;
+    assert(!"lane mutex had a waiter");
+    return ASTRA_SYSCALL_IO_ERROR;
+}
+
 uint32_t
 astra_rt_semaphore_create(uint32_t initial, uint32_t maximum,
                           uint32_t rights, uint32_t *handle)

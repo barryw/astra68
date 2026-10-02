@@ -76,6 +76,17 @@ struct ext4_blockdev_iface {
 		       const void *const *bufs, const uint32_t *blk_cnts,
 		       uint64_t blk_id, uint32_t buf_cnt);
 
+	/**@brief   Read a contiguous range into scatter buffers (ASTRA).
+	 * @param   bdev block device
+	 * @param   bufs output buffers
+	 * @param   blk_cnts physical block count for each buffer
+	 * @param   blk_id first physical block id
+	 * @param   buf_cnt buffer count. Not mandatory: without it a
+	 *          cache miss reads only the block it needs.*/
+	int (*breadv)(struct ext4_blockdev *bdev, void *const *bufs,
+		      const uint32_t *blk_cnts, uint64_t blk_id,
+		      uint32_t buf_cnt);
+
 	/**@brief   Make every preceding write durable. Not mandatory. */
 	int (*flush)(struct ext4_blockdev *bdev);
 
@@ -250,6 +261,24 @@ int ext4_blocks_get_direct(struct ext4_blockdev *bdev, void *buf, uint64_t lba,
  * @param   cnt logical block count
  * @return  standard error code*/
 int ext4_blocks_get_cached(struct ext4_blockdev *bdev, void *buf, uint64_t lba,
+			   uint32_t cnt);
+
+/**@brief   Whether a block is in the cache and up to date (ASTRA).
+ * @param   bdev block device descriptor
+ * @param   lba logical block address
+ * @return  true when reading it needs no device transfer*/
+bool ext4_block_cached(struct ext4_blockdev *bdev, uint64_t lba);
+
+/**@brief   Most blocks one read-ahead fills (ASTRA). */
+#define EXT4_READ_AHEAD_MAX 16u
+
+/**@brief   Reads blocks @p lba onward into the cache in one device transfer,
+ *          stopping before the first already cached (ASTRA).
+ * @param   bdev block device descriptor
+ * @param   lba first logical block address
+ * @param   cnt logical block count, at most EXT4_READ_AHEAD_MAX
+ * @return  standard error code*/
+int ext4_blocks_read_ahead(struct ext4_blockdev *bdev, uint64_t lba,
 			   uint32_t cnt);
 
 /**@brief   Block write procedure (without cache)

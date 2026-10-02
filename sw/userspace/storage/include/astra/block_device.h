@@ -68,6 +68,16 @@ typedef struct AstraBlockVector {
 typedef AstraBlockStatus (*AstraBlockWritev)(
     void *context, uint64_t lba, const AstraBlockVector *vector,
     uint64_t deadline);
+/* One contiguous range read into several buffers: a read-ahead fills a
+ * filesystem's cache buffers with one transfer and no staging copy. */
+typedef struct AstraBlockReadVector {
+    void *const *buffers;
+    const uint32_t *sector_counts;
+    uint32_t count;
+} AstraBlockReadVector;
+typedef AstraBlockStatus (*AstraBlockReadv)(
+    void *context, uint64_t lba, const AstraBlockReadVector *vector,
+    uint64_t deadline);
 typedef AstraBlockStatus (*AstraBlockFlush)(void *context, uint64_t deadline);
 typedef AstraBlockStatus (*AstraBlockQuery)(void *context,
                                             AstraBlockGeometry *geometry);
@@ -78,6 +88,8 @@ typedef struct AstraBlockBackend {
     AstraBlockWrite write;
     AstraBlockWritev writev;
     AstraBlockFlush flush;
+    /* Optional: without it a vector is read one buffer at a time. */
+    AstraBlockReadv readv;
 } AstraBlockBackend;
 
 typedef struct AstraBlockDevice {
@@ -104,6 +116,9 @@ AstraBlockStatus astra_block_write(AstraBlockDevice *device, uint64_t lba,
 AstraBlockStatus astra_block_writev(AstraBlockDevice *device, uint64_t lba,
                                     const AstraBlockVector *vector,
                                     uint64_t deadline);
+AstraBlockStatus astra_block_readv(AstraBlockDevice *device, uint64_t lba,
+                                   const AstraBlockReadVector *vector,
+                                   uint64_t deadline);
 AstraBlockStatus astra_block_flush(AstraBlockDevice *device,
                                    uint64_t deadline);
 const AstraBlockMetrics *astra_block_metrics(const AstraBlockDevice *device);
