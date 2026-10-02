@@ -836,6 +836,14 @@ int main(void)
     assert(stat_calls != 0u && renamed_file != 0u &&
            same(last_rename_from, "/work/real-dir/note") &&
            same(last_rename_to, "/work/real-dir/renamed"));
+    /* A name the backend does not have is one round trip: a backend
+       follows no links, so only LOOP or NOT_DIR send the client walking. */
+    open_calls = 0u;
+    stat_calls = 0u;
+    assert(astra_filesystem_open(&single_filesystem, "/work/absent",
+                                 ASTRA_VFS_OPEN_READ, &file) ==
+           ASTRA_VFS_ERR_NOT_FOUND);
+    assert(open_calls == 1u && stat_calls == 0u);
     assert(astra_filesystem_open(&single_filesystem, "/work",
                                  ASTRA_VFS_OPEN_READ |
                                      ASTRA_VFS_OPEN_DIRECTORY,

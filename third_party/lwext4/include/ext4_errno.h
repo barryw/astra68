@@ -64,6 +64,7 @@ extern "C" {
 #define EMLINK 31    /* Too many links */
 #define ERANGE 34    /* Math result not representable */
 #define ENOTEMPTY 39 /* Directory not empty */
+#define ELOOP 40     /* Too many symbolic links / link not followed */
 #define ENODATA 61   /* No data available */
 #define ENOTSUP 95   /* Not supported */
 #endif
@@ -78,6 +79,10 @@ extern "C" {
 
 #ifndef ENOTSUP
 #define ENOTSUP 95
+#endif
+
+#ifndef ELOOP
+#define ELOOP 40
 #endif
 
 #ifndef EOK

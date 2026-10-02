@@ -590,7 +590,7 @@ int ext4_fs_get_block_group_ref(struct ext4_fs *fs, uint32_t bgid,
 	ref->dirty = false;
 	struct ext4_bgroup *bg = ref->block_group;
 
-	if (!ext4_fs_verify_bg_csum(&fs->sb, bgid, bg)) {
+	if (CONFIG_META_CSUM_VERIFY && !ext4_fs_verify_bg_csum(&fs->sb, bgid, bg)) {
 		ext4_dbg(DEBUG_FS,
 			 DBG_WARN "Block group descriptor checksum failed."
 			 "Block group index: %" PRIu32"\n",
@@ -773,7 +773,8 @@ __ext4_fs_get_inode_ref(struct ext4_fs *fs, uint32_t index,
 	ref->fs = fs;
 	ref->dirty = false;
 
-	if (initialized && !ext4_fs_verify_inode_csum(ref)) {
+	if (CONFIG_META_CSUM_VERIFY && initialized &&
+	    !ext4_fs_verify_inode_csum(ref)) {
 		ext4_dbg(DEBUG_FS,
 			DBG_WARN "Inode checksum failed."
 			"Inode: %" PRIu32"\n",

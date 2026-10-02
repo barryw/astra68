@@ -178,7 +178,7 @@ int ext4_ialloc_free_inode(struct ext4_fs *fs, uint32_t index, bool is_dir)
 	if (rc != EOK)
 		return rc;
 
-	if (!ext4_ialloc_verify_bitmap_csum(sb, bg, b.data)) {
+	if (CONFIG_META_CSUM_VERIFY && !ext4_ialloc_verify_bitmap_csum(sb, bg, b.data)) {
 		ext4_dbg(DEBUG_IALLOC,
 			DBG_WARN "Bitmap checksum failed."
 			"Group: %" PRIu32"\n",
@@ -271,7 +271,7 @@ int ext4_ialloc_alloc_inode(struct ext4_fs *fs, uint32_t *idx, bool is_dir)
 				return rc;
 			}
 
-			if (!ext4_ialloc_verify_bitmap_csum(sb, bg, b.data)) {
+			if (CONFIG_META_CSUM_VERIFY && !ext4_ialloc_verify_bitmap_csum(sb, bg, b.data)) {
 				ext4_dbg(DEBUG_IALLOC,
 					DBG_WARN "Bitmap checksum failed."
 					"Group: %" PRIu32"\n",

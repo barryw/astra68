@@ -1174,15 +1174,26 @@ static int ext4_generic_open2_mode_from(ext4_file *f,
 		if (r != EOK)
 			break;
 
-		/*If expected file error*/
+		/* A component before the last that is not a directory -- a
+		 * file, or a link this library does not follow -- is ENOTDIR,
+		 * as POSIX says, never "no such name". */
 		if (imode != EXT4_INODE_MODE_DIRECTORY && !is_goal) {
-			r = ENOENT;
+			r = ENOTDIR;
 			break;
 		}
 		if (ftype != EXT4_DE_UNKNOWN) {
 			bool df = imode != ext4_fs_correspond_inode_mode(ftype);
 			if (df && is_goal) {
-				r = ENOENT;
+				/* The name exists with another type: say which, as
+				 * POSIX does, so a caller need not stat to find out.
+				 * A link reached without following is ELOOP, as
+				 * O_NOFOLLOW answers. */
+				r = imode == EXT4_INODE_MODE_SOFTLINK &&
+				    (ftype == EXT4_DE_REG_FILE ||
+				     ftype == EXT4_DE_DIR) ? ELOOP :
+				    ftype == EXT4_DE_REG_FILE &&
+				    imode == EXT4_INODE_MODE_DIRECTORY ? EISDIR :
+				    ftype == EXT4_DE_DIR ? ENOTDIR : ENOENT;
 				break;
 			}
 		}

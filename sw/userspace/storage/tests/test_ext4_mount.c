@@ -1131,6 +1131,22 @@ check_vfs_nonrecursive_unlink(void)
     if (rc != EOK)
         return fail("VFS create directory child", rc);
     (void)ext4_fclose(&child);
+    /* A name of the other type says so: a missing name and the wrong kind
+       are different answers, and POSIX open relies on the difference. */
+    rc = ext4_fopen2(&child, MOUNT_POINT "vfs-empty", O_RDONLY);
+    if (rc != EISDIR)
+        return fail("directory opened as a file is EISDIR", rc);
+    {
+        ext4_dir as_directory;
+
+        rc = ext4_dir_open(&as_directory,
+                           MOUNT_POINT "vfs-nonempty/child");
+        if (rc != ENOTDIR)
+            return fail("file opened as a directory is ENOTDIR", rc);
+    }
+    rc = ext4_fopen2(&child, MOUNT_POINT "vfs-absent", O_RDONLY);
+    if (rc != ENOENT)
+        return fail("missing name is ENOENT", rc);
 
     status = ops->unlink(&backend, "/vfs-nonempty");
     if (status != ASTRA_VFS_ERR_NOT_EMPTY)

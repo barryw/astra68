@@ -222,8 +222,12 @@ uint32_t astra_filesystem_open_mode(AstraFilesystem *filesystem,
             granted_rights = opened_assign->rights;
             goto opened;
         }
+        /* A backend follows no links: a link on the way answers NOT_DIR
+           and a final one LOOP, and only those need the walk below. Not
+           found is the answer, unless this open would create the name. */
         if (status != ASTRA_VFS_ERR_LOOP && status != ASTRA_VFS_ERR_NOT_DIR &&
-            status != ASTRA_VFS_ERR_NOT_FOUND)
+            (status != ASTRA_VFS_ERR_NOT_FOUND ||
+             (flags & ASTRA_VFS_OPEN_CREATE) == 0u))
             return status;
         client = NULL;
     }

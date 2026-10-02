@@ -79,7 +79,7 @@ so a future fix has somewhere to land.
 
 ## Astra68 changes to upstream files
 
-Twenty upstream changes are applied **in-tree**. The patches are retained
+Twenty-two upstream changes are applied **in-tree**. The patches are retained
 verbatim under `astra/patches/` as the audit record and as the re-apply path
 for a future upstream bump.
 
@@ -105,6 +105,8 @@ for a future upstream bump.
 | `0018-create-final-component-only.patch` | `src/ext4.c:1020` | Upstream interpreted `O_CREAT` as permission to manufacture every missing path component as a directory. File creation now creates only the final component, matching POSIX and the VFS backend contract; a missing parent returns `ENOENT`. |
 | `0019-rename-replaces-destination.patch` | `src/ext4.c:237`, `src/ext4.c:1291`, `src/ext4.c:1524` | `ext4_frename` returned `EEXIST` whenever the destination existed, so an atomic configuration update could be created but never committed. Rename now replaces an existing compatible destination in one namespace transaction, preserves both operands on refusal, frees the displaced inode after the namespace commit, and rejects cross-mount moves and directory-descendant cycles. |
 | `0020-native-directory-handles.patch` | `src/ext4.c`, `src/ext4_journal.c`, `include/ext4.h` | Adds inode-relative file/directory open, metadata, chmod, and nonrecursive unlink for Astra's generic directory-handle VFS contract. `ext4_dir_rm` remains explicitly recursive; VFS uses the single-inode remover, which refuses nonempty directories. Fixes journal block-record lifetime when multiple buffers in one transaction refer to the same block: the record is removed only after its buffer queue empties. The native-at image test exercises a rename-surviving directory handle, successful and rejected operations, journal commit, and `e2fsck`. |
+| `0021-skip-unused-metadata-verify.patch` | `include/ext4_config.h:111`, every read-side `*_verify*` call | Every read-side metadata checksum verify -- inode, group descriptor, block and inode bitmap, directory leaf and index block -- only feeds a debug warning; a mismatch fails nothing. With `CONFIG_DEBUG_PRINTF 0` the CRC32c was computed and discarded on every lookup, cached block or not: about 95 CRC32c and 200,000 guest instructions per path open, 5 s of Chocolate Doom's start on the DE25. `CONFIG_META_CSUM_VERIFY` follows `CONFIG_DEBUG_PRINTF`, so a debug build still verifies and warns. Checksums are still written, and journal checksums, which decide replay, are untouched. |
+| `0022-open-type-mismatch-errno.patch` | `src/ext4.c:1177`, `include/ext4_errno.h:66` | Every type mismatch on the way to a name answered `ENOENT`: a directory opened as a file, a file opened as a directory, a non-directory in the middle of a path, and a link reached without following. A caller could not tell "no such name" from "wrong kind", so the POSIX layer stat'ed after every miss and the VFS client walked the path component by component looking for links. lwext4 now answers `EISDIR`, `ENOTDIR` and `ELOOP` as POSIX, the RAM volume and HostFS do, and `ENOENT` only for a name that is not there; the errno table gains `ELOOP`. |
 
 Defect 0003 is invisible against lwext4's own `mkfs`, which leaves
 `s_hash_seed` zero. It appears only against an `mke2fs` image, which is the

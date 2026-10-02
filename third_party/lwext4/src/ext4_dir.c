@@ -386,7 +386,7 @@ int ext4_dir_add_entry(struct ext4_inode_ref *parent, const char *name,
 		if (r != EOK)
 			return r;
 
-		if (!ext4_dir_csum_verify(parent, (void *)block.data)) {
+		if (CONFIG_META_CSUM_VERIFY && !ext4_dir_csum_verify(parent, (void *)block.data)) {
 			ext4_dbg(DEBUG_DIR,
 				 DBG_WARN "Leaf block checksum failed."
 				 "Inode: %" PRIu32", "
@@ -512,7 +512,7 @@ int ext4_dir_find_entry(struct ext4_dir_search_result *result,
 		if (r != EOK)
 			return r;
 
-		if (!ext4_dir_csum_verify(parent, (void *)b.data)) {
+		if (CONFIG_META_CSUM_VERIFY && !ext4_dir_csum_verify(parent, (void *)b.data)) {
 			ext4_dbg(DEBUG_DIR,
 				 DBG_WARN "Leaf block checksum failed."
 				 "Inode: %" PRIu32", "

@@ -108,6 +108,17 @@ extern "C" {
 #define CONFIG_DEBUG_PRINTF 1
 #endif
 
+/**@brief   Verify metadata checksums on read.
+ * Every read-side verify in this library only feeds a debug warning: a
+ * mismatch fails nothing. Without debug output the verify is pure cost --
+ * a CRC32c per inode, group descriptor, bitmap and directory block on every
+ * lookup, cached or not -- so it follows CONFIG_DEBUG_PRINTF. Checksums are
+ * always written; journal checksums, which do decide replay, are not
+ * affected.*/
+#ifndef CONFIG_META_CSUM_VERIFY
+#define CONFIG_META_CSUM_VERIFY CONFIG_DEBUG_PRINTF
+#endif
+
 /**@brief   Assert printf enable (stdout)*/
 #ifndef CONFIG_DEBUG_ASSERT
 #define CONFIG_DEBUG_ASSERT 1

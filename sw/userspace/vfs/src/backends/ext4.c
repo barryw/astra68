@@ -80,6 +80,8 @@ status_of(int rc)
         return ASTRA_VFS_ERR_NOT_DIR;
     case EISDIR:
         return ASTRA_VFS_ERR_IS_DIR;
+    case ELOOP:
+        return ASTRA_VFS_ERR_LOOP;
     case EACCES:
     case EPERM:
         return ASTRA_VFS_ERR_ACCESS;

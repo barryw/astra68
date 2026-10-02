@@ -740,18 +740,13 @@ open_path(const char *path, int flags, mode_t create_mode)
     status = astra_filesystem_open_mode(
         &filesystem.filesystem, resolved.native, wanted,
         (uint16_t)create_mode, &opened);
-    if ((status == ASTRA_VFS_ERR_NOT_FOUND ||
-         status == ASTRA_VFS_ERR_IS_DIR) && may_open_directory(wanted)) {
-        AstraFileInfo info = ASTRA_FILE_INFO_INIT;
-
-        if (astra_filesystem_stat(&filesystem.filesystem, resolved.native,
-                                  &info) == ASTRA_VFS_OK &&
-            info.kind == ASTRA_VFS_KIND_DIRECTORY)
-            status = astra_filesystem_open_mode(
-                &filesystem.filesystem, resolved.native,
-                wanted | ASTRA_VFS_OPEN_DIRECTORY,
-                (uint16_t)create_mode, &opened);
-    }
+    /* Every backend answers IS_DIR for a directory opened as a file, so a
+       name that is not found needs no second look. */
+    if (status == ASTRA_VFS_ERR_IS_DIR && may_open_directory(wanted))
+        status = astra_filesystem_open_mode(
+            &filesystem.filesystem, resolved.native,
+            wanted | ASTRA_VFS_OPEN_DIRECTORY, (uint16_t)create_mode,
+            &opened);
     if (status != ASTRA_VFS_OK)
         return fail(status);
     return install_open_file(&opened, flags);
@@ -809,16 +804,10 @@ openat(int dirfd, const char *path, int flags, ...)
         return -1;
     status = astra_filesystem_open_at_mode(
         directory, path, wanted, (uint16_t)create_mode, &opened);
-    if ((status == ASTRA_VFS_ERR_NOT_FOUND ||
-         status == ASTRA_VFS_ERR_IS_DIR) && may_open_directory(wanted)) {
-        AstraFileInfo info = ASTRA_FILE_INFO_INIT;
-
-        if (astra_filesystem_stat_at(directory, path, &info) ==
-                ASTRA_VFS_OK && info.kind == ASTRA_VFS_KIND_DIRECTORY)
-            status = astra_filesystem_open_at_mode(
-                directory, path, wanted | ASTRA_VFS_OPEN_DIRECTORY,
-                (uint16_t)create_mode, &opened);
-    }
+    if (status == ASTRA_VFS_ERR_IS_DIR && may_open_directory(wanted))
+        status = astra_filesystem_open_at_mode(
+            directory, path, wanted | ASTRA_VFS_OPEN_DIRECTORY,
+            (uint16_t)create_mode, &opened);
     if (status != ASTRA_VFS_OK)
         return fail(status);
     return install_open_file(&opened, flags);

@@ -177,7 +177,7 @@ int ext4_balloc_free_block(struct ext4_inode_ref *inode_ref, ext4_fsblk_t baddr)
 		return rc;
 	}
 
-	if (!ext4_balloc_verify_bitmap_csum(sb, bg, bitmap_block.data)) {
+	if (CONFIG_META_CSUM_VERIFY && !ext4_balloc_verify_bitmap_csum(sb, bg, bitmap_block.data)) {
 		ext4_dbg(DEBUG_BALLOC,
 			DBG_WARN "Bitmap checksum failed."
 			"Group: %" PRIu32"\n",
@@ -278,7 +278,7 @@ int ext4_balloc_free_blocks(struct ext4_inode_ref *inode_ref,
 			return rc;
 		}
 
-		if (!ext4_balloc_verify_bitmap_csum(sb, bg, blk.data)) {
+		if (CONFIG_META_CSUM_VERIFY && !ext4_balloc_verify_bitmap_csum(sb, bg, blk.data)) {
 			ext4_dbg(DEBUG_BALLOC,
 				DBG_WARN "Bitmap checksum failed."
 				"Group: %" PRIu32"\n",
@@ -399,7 +399,7 @@ int ext4_balloc_alloc_block(struct ext4_inode_ref *inode_ref,
 		return r;
 	}
 
-	if (!ext4_balloc_verify_bitmap_csum(sb, bg, b.data)) {
+	if (CONFIG_META_CSUM_VERIFY && !ext4_balloc_verify_bitmap_csum(sb, bg, b.data)) {
 		ext4_dbg(DEBUG_BALLOC,
 			DBG_WARN "Bitmap checksum failed."
 			"Group: %" PRIu32"\n",
@@ -501,7 +501,7 @@ goal_failed:
 			return r;
 		}
 
-		if (!ext4_balloc_verify_bitmap_csum(sb, bg, b.data)) {
+		if (CONFIG_META_CSUM_VERIFY && !ext4_balloc_verify_bitmap_csum(sb, bg, b.data)) {
 			ext4_dbg(DEBUG_BALLOC,
 				DBG_WARN "Bitmap checksum failed."
 				"Group: %" PRIu32"\n",
@@ -611,7 +611,7 @@ int ext4_balloc_try_alloc_block(struct ext4_inode_ref *inode_ref,
 		return rc;
 	}
 
-	if (!ext4_balloc_verify_bitmap_csum(sb, bg_ref.block_group, b.data)) {
+	if (CONFIG_META_CSUM_VERIFY && !ext4_balloc_verify_bitmap_csum(sb, bg_ref.block_group, b.data)) {
 		ext4_dbg(DEBUG_BALLOC,
 			DBG_WARN "Bitmap checksum failed."
 			"Group: %" PRIu32"\n",

@@ -1,0 +1,57 @@
+diff --git a/include/ext4_errno.h b/include/ext4_errno.h
+index 2d922804..85141f7f 100644
+--- a/include/ext4_errno.h
++++ b/include/ext4_errno.h
+@@ -64,6 +64,7 @@ extern "C" {
+ #define EMLINK 31    /* Too many links */
+ #define ERANGE 34    /* Math result not representable */
+ #define ENOTEMPTY 39 /* Directory not empty */
++#define ELOOP 40     /* Too many symbolic links / link not followed */
+ #define ENODATA 61   /* No data available */
+ #define ENOTSUP 95   /* Not supported */
+ #endif
+@@ -80,6 +81,10 @@ extern "C" {
+ #define ENOTSUP 95
+ #endif
+ 
++#ifndef ELOOP
++#define ELOOP 40
++#endif
++
+ #ifndef EOK
+ #define EOK 0
+ #endif
+diff --git a/src/ext4.c b/src/ext4.c
+index d0bebe2d..5be5b75e 100644
+--- a/src/ext4.c
++++ b/src/ext4.c
+@@ -1174,15 +1174,26 @@ static int ext4_generic_open2_mode_from(ext4_file *f,
+ 		if (r != EOK)
+ 			break;
+ 
+-		/*If expected file error*/
++		/* A component before the last that is not a directory -- a
++		 * file, or a link this library does not follow -- is ENOTDIR,
++		 * as POSIX says, never "no such name". */
+ 		if (imode != EXT4_INODE_MODE_DIRECTORY && !is_goal) {
+-			r = ENOENT;
++			r = ENOTDIR;
+ 			break;
+ 		}
+ 		if (ftype != EXT4_DE_UNKNOWN) {
+ 			bool df = imode != ext4_fs_correspond_inode_mode(ftype);
+ 			if (df && is_goal) {
+-				r = ENOENT;
++				/* The name exists with another type: say which, as
++				 * POSIX does, so a caller need not stat to find out.
++				 * A link reached without following is ELOOP, as
++				 * O_NOFOLLOW answers. */
++				r = imode == EXT4_INODE_MODE_SOFTLINK &&
++				    (ftype == EXT4_DE_REG_FILE ||
++				     ftype == EXT4_DE_DIR) ? ELOOP :
++				    ftype == EXT4_DE_REG_FILE &&
++				    imode == EXT4_INODE_MODE_DIRECTORY ? EISDIR :
++				    ftype == EXT4_DE_DIR ? ENOTDIR : ENOENT;
+ 				break;
+ 			}
+ 		}

@@ -618,7 +618,7 @@ static int ext4_dir_dx_get_leaf(struct ext4_hash_info *hinfo,
 			return EXT4_ERR_BAD_DX_DIR;
 		}
 
-		if (!ext4_dir_dx_csum_verify(inode_ref, (void *)tmp_blk->data)) {
+		if (CONFIG_META_CSUM_VERIFY && !ext4_dir_dx_csum_verify(inode_ref, (void *)tmp_blk->data)) {
 			ext4_dbg(DEBUG_DIR_IDX,
 					DBG_WARN "HTree checksum failed."
 					"Inode: %" PRIu32", "
@@ -686,7 +686,7 @@ static int ext4_dir_dx_next_block(struct ext4_inode_ref *inode_ref,
 		if (r != EOK)
 			return r;
 
-		if (!ext4_dir_dx_csum_verify(inode_ref, (void *)b.data)) {
+		if (CONFIG_META_CSUM_VERIFY && !ext4_dir_dx_csum_verify(inode_ref, (void *)b.data)) {
 			ext4_dbg(DEBUG_DIR_IDX,
 					DBG_WARN "HTree checksum failed."
 					"Inode: %" PRIu32", "
@@ -729,7 +729,7 @@ int ext4_dir_dx_find_entry(struct ext4_dir_search_result *result,
 	if (rc != EOK)
 		return rc;
 
-	if (!ext4_dir_dx_csum_verify(inode_ref, (void *)root_block.data)) {
+	if (CONFIG_META_CSUM_VERIFY && !ext4_dir_dx_csum_verify(inode_ref, (void *)root_block.data)) {
 		ext4_dbg(DEBUG_DIR_IDX,
 			 DBG_WARN "HTree root checksum failed."
 			 "Inode: %" PRIu32", "
@@ -777,7 +777,7 @@ int ext4_dir_dx_find_entry(struct ext4_dir_search_result *result,
 		if (rc != EOK)
 			goto cleanup;
 
-		if (!ext4_dir_csum_verify(inode_ref, (void *)b.data)) {
+		if (CONFIG_META_CSUM_VERIFY && !ext4_dir_csum_verify(inode_ref, (void *)b.data)) {
 			ext4_dbg(DEBUG_DIR_IDX,
 				 DBG_WARN "HTree leaf block checksum failed."
 				 "Inode: %" PRIu32", "
@@ -1245,7 +1245,7 @@ int ext4_dir_dx_add_entry(struct ext4_inode_ref *parent,
 	if (r != EOK)
 		return r;
 
-	if (!ext4_dir_dx_csum_verify(parent, (void*)root_blk.data)) {
+	if (CONFIG_META_CSUM_VERIFY && !ext4_dir_dx_csum_verify(parent, (void*)root_blk.data)) {
 		ext4_dbg(DEBUG_DIR_IDX,
 			 DBG_WARN "HTree root checksum failed."
 			 "Inode: %" PRIu32", "
@@ -1297,7 +1297,7 @@ int ext4_dir_dx_add_entry(struct ext4_inode_ref *parent,
 	if (r != EOK)
 		goto release_index;
 
-	if (!ext4_dir_csum_verify(parent,(void *)target_block.data)) {
+	if (CONFIG_META_CSUM_VERIFY && !ext4_dir_csum_verify(parent,(void *)target_block.data)) {
 		ext4_dbg(DEBUG_DIR_IDX,
 				DBG_WARN "HTree leaf block checksum failed."
 				"Inode: %" PRIu32", "
@@ -1375,7 +1375,7 @@ int ext4_dir_dx_reset_parent_inode(struct ext4_inode_ref *dir,
 	if (rc != EOK)
 		return rc;
 
-	if (!ext4_dir_dx_csum_verify(dir, (void *)block.data)) {
+	if (CONFIG_META_CSUM_VERIFY && !ext4_dir_dx_csum_verify(dir, (void *)block.data)) {
 		ext4_dbg(DEBUG_DIR_IDX,
 			 DBG_WARN "HTree root checksum failed."
 			 "Inode: %" PRIu32", "
