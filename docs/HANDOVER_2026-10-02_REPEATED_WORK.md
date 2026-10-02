@@ -104,6 +104,29 @@ Script: beast `/tmp/wq-prof.sh TAG` (build, images, profile, keep kernel ELF
 under `~/astra-mg/wq/`); `/tmp/wq-gate.sh TAG` (verify-nopc + K1 + ROM
 rebuild).
 
+## Judge every change on the workload suite, not on Doom
+
+`emu/qemu/bench-workloads.py` (fixed work per interval; see its docstring)
+and `tools/astra-prof workloads`. Two runs of one kernel agree within 1.1%.
+Kernel instructions, before (`3f82836d`) and after the wait-path change:
+
+| workload | kernel before | kernel after | guest after |
+|---|---:|---:|---:|
+| boot | 97.4 M | 89.5 M (-8%) | 194.7 M (-4%) |
+| spawn (20 x `ls`) | 163.1 M | 137.1 M (-16%) | 190.8 M (-12%) |
+| fs (fsstress, 4 forked workers) | 42.3 M | 31.5 M (-26%) | 51.5 M (-17%) |
+| heap (heapbench) | 18.0 M | 14.8 M (-17%) | 29.5 M (-10%) |
+| lua | 33.9 M | 29.2 M (-14%) | 52.2 M (-8%) |
+| doom-start | 63.6 M | 55.5 M (-13%) | 115.8 M (-7%) |
+
+The largest generic cost the suite shows: **one `ls` from zsh costs ~9.5 M
+guest instructions, 72% kernel**. Process creation and dynamic loading are
+the next target, and they serve every command, not one program.
+
+Found on the way, not fixed: Astra has no `/dev/null`; `fork()` returns
+ENOTSUP while the process has any regular file open
+(`astra_posix_file_fork_ready`), so `prog > log` cannot fork.
+
 ## What changed, and the work it stops repeating
 
 1. **PCM transfers in 64 KiB, not 8 KiB** (`ASTRA_PCM_TRANSFER_BYTES`).
