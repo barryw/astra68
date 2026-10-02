@@ -28,6 +28,10 @@ DOOM_LINK := -T $(ASTRA_LINKER_SCRIPT) $(abspath $(ASTRA_POSIX_CRT0)) \
 	$(abspath $(PROGRAM_OBJECT)) \
 	$(foreach library,$(DOOM_LIBRARIES),-Wl,-l:$(notdir $(library)))
 SDL_INCLUDE := $(abspath $(SDL_PORT)/build/vendor/SDL2/include)
+# Speed over size: the MC68040 here is emulated, and what costs is the
+# number of instructions executed, not the bytes they occupy. -O2 inlines
+# and unrolls what -Os keeps as calls and loops in Doom's own hot code.
+DOOM_CFLAGS := $(filter-out -Os,$(ASTRA_POSIX_CFLAGS)) -O2
 
 .DEFAULT_GOAL := all
 all: build/.apps
@@ -52,14 +56,14 @@ $(PROGRAM_OBJECT): $(ASTRA_POSIX_PROGRAM_SOURCE) Makefile
 # Upstream's own build: autoreconf in the disposable copy, then configure
 # out of tree. SDL comes in through configure's standard *_CFLAGS/*_LIBS
 # overrides; math is in libc.library, so -lm is not sought.
-$(CONFIGURED): $(STAMP) $(PROGRAM_OBJECT) Makefile | sdl-libraries
+$(CONFIGURED): $(STAMP) $(PROGRAM_OBJECT) Makefile $(ASTRA_POSIX_POLICY_INPUTS) | sdl-libraries
 	cd $(VENDOR) && autoreconf -fi >/dev/null
 	rm -rf $(OBJ)
 	mkdir -p $(OBJ)
 	cd $(OBJ) && \
 		CC='$(ASTRA_CC)' \
 		CPPFLAGS='$(ASTRA_POSIX_CPPFLAGS)' \
-		CFLAGS='$(ASTRA_POSIX_CFLAGS)' \
+		CFLAGS='$(DOOM_CFLAGS)' \
 		LDFLAGS='$(DOOM_LDFLAGS)' \
 		LIBS='$(DOOM_LINK)' \
 		SDL_CFLAGS='-I$(SDL_INCLUDE)' SDL_LIBS=' ' \

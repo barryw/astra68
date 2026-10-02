@@ -7,7 +7,11 @@ ASTRA_POSIX_POLICY_INPUTS ?= $(filter %.mk,$(MAKEFILE_LIST))
 
 ASTRA_POSIX_CPPFLAGS ?= $(ASTRA_CPPFLAGS) -I$(ASTRA_NDK_ROOT)/include/posix
 ASTRA_POSIX_CXXCPPFLAGS ?= $(ASTRA_POSIX_CPPFLAGS)
-ASTRA_POSIX_CFLAGS ?= $(ASTRA_CFLAGS)
+# A POSIX program is hosted: it links libc, so the compiler may treat memcpy,
+# memcmp, strlen and friends as what they are. Under the native contract's
+# -ffreestanding -fno-builtin every memcmp(p, q, 4) was a library call --
+# Chocolate Doom's dehacked setup made 433,000 of them, 0.6 s on the DE25.
+ASTRA_POSIX_CFLAGS ?= $(filter-out -ffreestanding -fno-builtin,$(ASTRA_CFLAGS))
 ASTRA_POSIX_CXXFLAGS ?= $(ASTRA_CXXFLAGS)
 ASTRA_POSIX_LDFLAGS ?= $(ASTRA_LDFLAGS) \
 	-Wl,--undefined=astra_posix_entry_contract

@@ -106,21 +106,28 @@ memset:
 	subq.l  #1, %d2
 	bne     .Lmemset_align
 	bra     .Lmemset_done
+	/* 32 bytes per movem, as kernel_words_fill does: eleven instructions
+	 * a block became four. Below 64 bytes saving five registers is not
+	 * worth it and the word loop finishes. */
 .Lmemset_32_test:
-	cmpi.l  #32, %d2
+	cmpi.l  #64, %d2
 	bcs     .Lmemset_4_test
-.Lmemset_32:
-	move.l  %d1, (%a0)+
-	move.l  %d1, (%a0)+
-	move.l  %d1, (%a0)+
-	move.l  %d1, (%a0)+
-	move.l  %d1, (%a0)+
-	move.l  %d1, (%a0)+
-	move.l  %d1, (%a0)+
-	move.l  %d1, (%a0)+
+	movem.l %d3-%d7, -(%sp)
+	move.l  %d1, %d0
+	move.l  %d1, %d3
+	move.l  %d1, %d4
+	move.l  %d1, %d5
+	move.l  %d1, %d6
+	move.l  %d1, %d7
+	movea.l %d1, %a1
 	subi.l  #32, %d2
-	cmpi.l  #32, %d2
+.Lmemset_32:
+	movem.l %d0-%d1/%d3-%d7/%a1, (%a0)
+	lea     32(%a0), %a0
+	subi.l  #32, %d2
 	bcc     .Lmemset_32
+	addi.l  #32, %d2
+	movem.l (%sp)+, %d3-%d7
 .Lmemset_4_test:
 	cmpi.l  #4, %d2
 	bcs     .Lmemset_bytes
