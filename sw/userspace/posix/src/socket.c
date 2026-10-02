@@ -769,6 +769,9 @@ int accept(int fd, struct sockaddr *address, socklen_t *length)
     int descriptor_flags;
     int slot;
     int result;
+    uint16_t family;
+    uint8_t type;
+    uint8_t protocol;
 
     if (listener == NULL || (address != NULL && length == NULL)) {
         if (listener != NULL) errno = EFAULT;
@@ -791,15 +794,19 @@ int accept(int fd, struct sockaddr *address, socklen_t *length)
         if (wait_ready(listener, ASTRA_NETWORK_READY_ACCEPTABLE) < 0)
             return -1;
     }
+    /* claim_socket() may move the table the listener lives in. */
+    family = listener->family;
+    type = listener->type;
+    protocol = listener->protocol;
     slot = claim_socket();
     if (slot < 0) {
         (void)astra_network_endpoint_close(&accepted);
         return -1;
     }
     sockets[slot].active = 1u;
-    sockets[slot].family = listener->family;
-    sockets[slot].type = listener->type;
-    sockets[slot].protocol = listener->protocol;
+    sockets[slot].family = family;
+    sockets[slot].type = type;
+    sockets[slot].protocol = protocol;
     sockets[slot].endpoint = accepted;
     result = astra_posix_descriptor_socket((uint32_t)slot,
                                            descriptor_flags & O_NONBLOCK);
