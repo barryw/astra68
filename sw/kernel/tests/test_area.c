@@ -471,7 +471,7 @@ static void test_area_slots_belong_to_address_spaces(void)
     assert(local_base == KERNEL_VM_AREA_BASE);
     assert(kernel_area_map(shared, 1201u, &second, KERNEL_VM_READ,
                            &second_base, &size) == KERNEL_AREA_OK);
-    assert(second_base == KERNEL_VM_AREA_BASE + KERNEL_PAGE_SIZE);
+    assert(second_base == KERNEL_VM_AREA_BASE + KERNEL_VM_SHARED_TABLE_SPAN);
     assert(kernel_vm_switch(&first) == KERNEL_VM_OK);
     assert(kernel_vm_test_translate_current(first_base, true,
                                             &first_physical));
@@ -547,8 +547,9 @@ static void test_service_maps_more_than_thirty_two_small_areas(void)
                                KERNEL_VM_READ | KERNEL_VM_WRITE,
                                &bases[index], &sizes[index]) ==
                KERNEL_AREA_OK);
+        /* One span each: mappings attach shared span tables. */
         assert(bases[index] == KERNEL_VM_AREA_BASE +
-               index * KERNEL_PAGE_SIZE);
+               index * KERNEL_VM_SHARED_TABLE_SPAN);
         assert(sizes[index] == KERNEL_PAGE_SIZE);
     }
     for (uint32_t index = 0u; index < mapping_count; ++index) {
@@ -716,12 +717,11 @@ static void assert_failed_map_baseline(
 
 static void test_map_transaction_rolls_back_every_stage(void)
 {
+    /* An area maps by attaching its span tables: the stages are the
+     * pointer table and the table reference (kernel_vm_attach_shared_table). */
     static const KernelVmSharedMapFault vm_faults[] = {
         KERNEL_VM_SHARED_MAP_FAULT_AFTER_TABLE_ALLOCATE,
-        KERNEL_VM_SHARED_MAP_FAULT_AFTER_FRAME_RETAIN,
-        KERNEL_VM_SHARED_MAP_FAULT_AFTER_MAPPING_METADATA,
-        KERNEL_VM_SHARED_MAP_FAULT_AFTER_DESCRIPTOR_PUBLISH,
-        KERNEL_VM_SHARED_MAP_FAULT_AFTER_ROOT_PUBLISH
+        KERNEL_VM_SHARED_MAP_FAULT_AFTER_FRAME_RETAIN
     };
     const uint32_t fault_count =
         (uint32_t)(sizeof(vm_faults) / sizeof(vm_faults[0])) + 1u;
@@ -1092,9 +1092,10 @@ static void test_reserved_area_decommit_returns_frames(void)
     assert(kernel_memory_stats(&after));
     assert(released == cluster);
     /*
-     * The cluster, and the pointer/page-table pair each holder used.
+     * The cluster. The span's shared table stays attached to both holders
+     * until the area itself goes, so a recommit is one descriptor.
      */
-    assert(after.free_frames - before.free_frames == cluster + 4u);
+    assert(after.free_frames - before.free_frames == cluster);
     assert(kernel_area_snapshot(0u, &snapshot));
     assert(snapshot.committed_pages == 0u);
     assert(snapshot.page_count == reserved_pages);

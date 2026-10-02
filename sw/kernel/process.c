@@ -5784,7 +5784,7 @@ static KernelProcessStatus library_cache_share(
             if (span != current) {
                 if (current != UINT32_MAX && !writable && staged_any &&
                     kernel_vm_shared_table_create(
-                        LIBRARY_CACHE_OWNER, staged,
+                        LIBRARY_CACHE_OWNER, staged, false,
                         &entry->shared_table[current]) != KERNEL_VM_OK)
                     entry->shared_table[current] = 0u;
                 current = span;
@@ -5874,7 +5874,7 @@ static KernelProcessStatus map_cached_library(
             continue;
         status = kernel_vm_attach_shared_table(
             space, virtual_base + span * KERNEL_VM_SHARED_TABLE_SPAN,
-            cached->shared_table[span]);
+            cached->shared_table[span], true);
         if (status != KERNEL_VM_OK) {
             failure = status == KERNEL_VM_OUT_OF_MEMORY ?
                 KERNEL_PROCESS_OUT_OF_MEMORY :

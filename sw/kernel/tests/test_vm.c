@@ -1435,20 +1435,20 @@ static void test_shared_table_maps_a_span_with_one_descriptor(void)
     staged[1] = pages[1];
     staged[5] = pages[2];
     wrong[0] = pages[0];
-    assert(kernel_vm_shared_table_create(owner + 1u, wrong, &refused) ==
+    assert(kernel_vm_shared_table_create(owner + 1u, wrong, false, &refused) ==
            KERNEL_VM_NOT_OWNED && refused == 0u);
-    assert(kernel_vm_shared_table_create(owner, empty, &refused) ==
-           KERNEL_VM_INVALID_ARGUMENT);
-    assert(kernel_vm_shared_table_create(owner, staged, &table) ==
+    assert(kernel_vm_shared_table_create(owner, empty, false, &refused) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_shared_table_release(owner, refused) == KERNEL_VM_OK);
+    assert(kernel_vm_shared_table_create(owner, staged, false, &table) ==
            KERNEL_VM_OK);
     assert(kernel_vm_shared_table_attachments(table) == 0u);
 
-    assert(kernel_vm_attach_shared_table(&first, span_base + KERNEL_PAGE_SIZE,
-                                         table) ==
+    assert(kernel_vm_attach_shared_table(&first, span_base + KERNEL_PAGE_SIZE, table, true) ==
            KERNEL_VM_INVALID_ARGUMENT);
-    assert(kernel_vm_attach_shared_table(&first, span_base, table) ==
+    assert(kernel_vm_attach_shared_table(&first, span_base, table, true) ==
            KERNEL_VM_OK);
-    assert(kernel_vm_attach_shared_table(&first, span_base, table) ==
+    assert(kernel_vm_attach_shared_table(&first, span_base, table, true) ==
            KERNEL_VM_ALREADY_MAPPED);
     assert(kernel_vm_shared_table_attachments(table) == 1u);
     assert(kernel_vm_probe_address_space(&first, span_base + 0x10u,
@@ -1489,7 +1489,7 @@ static void test_shared_table_maps_a_span_with_one_descriptor(void)
     assert(kernel_vm_shared_table_attachments(table) == 0u);
 
     /* Destroy releases an attachment it still holds. */
-    assert(kernel_vm_attach_shared_table(&first, span_base, table) ==
+    assert(kernel_vm_attach_shared_table(&first, span_base, table, true) ==
            KERNEL_VM_OK);
     assert(kernel_vm_destroy_address_space(&first) == KERNEL_VM_OK);
     assert(kernel_vm_shared_table_attachments(table) == 0u);

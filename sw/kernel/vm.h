@@ -252,25 +252,41 @@ KernelVmStatus kernel_vm_map_shared_range(
  * owner knows a table is idle when only its own reference remains.
  *
  * create: @p physical_pages has KERNEL_VM_SHARED_TABLE_PAGES entries, one
- * per page of the span; zero leaves that page unmapped. The pages must be
- * KERNEL_FRAME_SHARED frames of @p owner; they are not retained per table --
- * the owner keeps them alive for at least as long as the table.
+ * per page of the span; zero leaves that page unmapped, and a span may start
+ * empty. The pages must be KERNEL_FRAME_SHARED frames of @p owner; they are
+ * not retained per table -- the owner keeps them alive for at least as long
+ * as the table. @p writable makes the pages writable wherever the attachment
+ * itself is not write-protected.
  */
 #define KERNEL_VM_SHARED_TABLE_SPAN 0x00040000u
 #define KERNEL_VM_SHARED_TABLE_PAGES \
     (KERNEL_VM_SHARED_TABLE_SPAN / KERNEL_PAGE_SIZE)
 KernelVmStatus kernel_vm_shared_table_create(
-    uint32_t owner, const uint32_t *physical_pages,
+    uint32_t owner, const uint32_t *physical_pages, bool writable,
     uint32_t *table_physical);
+/*
+ * One page of a shared table, for every address space attached at once: an
+ * area committing or dropping a page changes one descriptor, not one per
+ * mapping. Clearing flushes the ATC, since the running space may hold it.
+ */
+KernelVmStatus kernel_vm_shared_table_set(uint32_t owner,
+                                          uint32_t table_physical,
+                                          uint32_t index, uint32_t physical,
+                                          bool writable);
+KernelVmStatus kernel_vm_shared_table_clear(uint32_t owner,
+                                            uint32_t table_physical,
+                                            uint32_t index);
 /* Drops the owner's reference; the table must not be attached anywhere. */
 KernelVmStatus kernel_vm_shared_table_release(uint32_t owner,
                                               uint32_t table_physical);
 /* Number of address spaces a shared table is attached to. */
 uint32_t kernel_vm_shared_table_attachments(uint32_t table_physical);
-/* @p virtual_address is span-aligned and must be wholly unmapped. */
+/* @p virtual_address is span-aligned and must be wholly unmapped.
+ * @p write_protect makes the whole span read-only in this space. */
 KernelVmStatus kernel_vm_attach_shared_table(KernelAddressSpace *space,
                                              uint32_t virtual_address,
-                                             uint32_t table_physical);
+                                             uint32_t table_physical,
+                                             bool write_protect);
 KernelVmStatus kernel_vm_detach_shared_table(KernelAddressSpace *space,
                                              uint32_t virtual_address);
 /*

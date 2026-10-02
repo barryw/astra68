@@ -246,7 +246,9 @@ static KernelVmMapping probe_root(uint32_t root_physical,
         return KERNEL_VM_MAPPING_UNKNOWN;
     *physical_address = (page_descriptor & VM_DESC_PAGE_ADDRESS) |
                         (virtual_address & (KERNEL_PAGE_SIZE - 1u));
-    return (page_descriptor & VM_DESC_WRITE_PROTECT) != 0u ?
+    /* As the MMU does: write protection at any level of the walk. */
+    return ((root_descriptor | pointer_descriptor | page_descriptor) &
+            VM_DESC_WRITE_PROTECT) != 0u ?
         KERNEL_VM_MAPPING_READ_ONLY : KERNEL_VM_MAPPING_READ_WRITE;
 }
 
@@ -377,6 +379,8 @@ static void reset_stats(void)
     vm_stats.flushes = 0u;
     vm_stats.cache_invalidations = 0u;
     vm_stats.switches = 0u;
+    vm_stats.shared_tables = 0u;
+    vm_stats.shared_table_attachments = 0u;
 }
 
 static uint32_t frame_index(uint32_t physical_address)
@@ -2111,7 +2115,8 @@ KernelVmStatus kernel_vm_clone_address_space(
             if (shared_table_descriptor(pointer[pointer_index])) {
                 result = kernel_vm_attach_shared_table(
                     destination, (root_index << 25) | (pointer_index << 18),
-                    pointer[pointer_index] & VM_DESC_TABLE_ADDRESS);
+                    pointer[pointer_index] & VM_DESC_TABLE_ADDRESS,
+                    (pointer[pointer_index] & VM_DESC_WRITE_PROTECT) != 0u);
                 if (result != KERNEL_VM_OK)
                     goto failed;
                 continue;
@@ -2280,8 +2285,29 @@ KernelVmStatus kernel_vm_unmap_page(KernelAddressSpace *space,
     return KERNEL_VM_OK;
 }
 
+static bool shared_page_valid(uint32_t owner, uint32_t physical)
+{
+    KernelFrameInfo frame;
+
+    return (physical & (KERNEL_PAGE_SIZE - 1u)) == 0u &&
+           kernel_memory_frame_info(physical, &frame) &&
+           frame.owner == owner && frame.state == KERNEL_FRAME_SHARED &&
+           frame.references != 0u;
+}
+
+static volatile uint32_t *shared_table_words(uint32_t owner,
+                                             uint32_t table_physical)
+{
+    KernelFrameInfo table;
+
+    if (!initialized || !kernel_memory_frame_info(table_physical, &table) ||
+        table.owner != owner || table.state != KERNEL_FRAME_PAGE_TABLE)
+        return NULL;
+    return physical_words(table_physical);
+}
+
 KernelVmStatus kernel_vm_shared_table_create(
-    uint32_t owner, const uint32_t *physical_pages,
+    uint32_t owner, const uint32_t *physical_pages, bool writable,
     uint32_t *table_physical)
 {
     volatile uint32_t *table;
@@ -2294,19 +2320,13 @@ KernelVmStatus kernel_vm_shared_table_create(
         return KERNEL_VM_INVALID_ARGUMENT;
     *table_physical = 0u;
     for (uint32_t page = 0u; page < VM_PAGE_ENTRIES; ++page) {
-        KernelFrameInfo frame;
-
         if (physical_pages[page] == 0u)
             continue;
-        if ((physical_pages[page] & (KERNEL_PAGE_SIZE - 1u)) != 0u ||
-            !kernel_memory_frame_info(physical_pages[page], &frame) ||
-            frame.owner != owner || frame.state != KERNEL_FRAME_SHARED ||
-            frame.references == 0u)
+        if (!shared_page_valid(owner, physical_pages[page]))
             return KERNEL_VM_NOT_OWNED;
         ++mapped;
     }
-    if (mapped == 0u)
-        return KERNEL_VM_INVALID_ARGUMENT;
+    (void)mapped;
     status = allocate_table(owner, &physical);
     if (status != KERNEL_VM_OK)
         return status;
@@ -2318,11 +2338,45 @@ KernelVmStatus kernel_vm_shared_table_create(
     for (uint32_t page = 0u; page < VM_PAGE_ENTRIES; ++page)
         if (physical_pages[page] != 0u)
             table[page] = physical_pages[page] | VM_DESC_PAGE |
-                          VM_DESC_WRITE_PROTECT;
+                          (writable ? 0u : VM_DESC_WRITE_PROTECT);
     /* The table walk reads memory, not this CPU's data cache. */
     invalidate_caches();
     ++vm_stats.shared_tables;
     *table_physical = physical;
+    return KERNEL_VM_OK;
+}
+
+KernelVmStatus kernel_vm_shared_table_set(uint32_t owner,
+                                          uint32_t table_physical,
+                                          uint32_t index, uint32_t physical,
+                                          bool writable)
+{
+    volatile uint32_t *table = shared_table_words(owner, table_physical);
+
+    if (table == NULL || index >= VM_PAGE_ENTRIES ||
+        !shared_page_valid(owner, physical))
+        return KERNEL_VM_INVALID_ARGUMENT;
+    if (table[index] != VM_DESC_INVALID)
+        return KERNEL_VM_ALREADY_MAPPED;
+    table[index] = physical | VM_DESC_PAGE |
+                   (writable ? 0u : VM_DESC_WRITE_PROTECT);
+    invalidate_caches();
+    return KERNEL_VM_OK;
+}
+
+KernelVmStatus kernel_vm_shared_table_clear(uint32_t owner,
+                                            uint32_t table_physical,
+                                            uint32_t index)
+{
+    volatile uint32_t *table = shared_table_words(owner, table_physical);
+
+    if (table == NULL || index >= VM_PAGE_ENTRIES)
+        return KERNEL_VM_INVALID_ARGUMENT;
+    if (table[index] == VM_DESC_INVALID)
+        return KERNEL_VM_NOT_MAPPED;
+    table[index] = VM_DESC_INVALID;
+    invalidate_caches();
+    flush_all();
     return KERNEL_VM_OK;
 }
 
@@ -2355,7 +2409,8 @@ uint32_t kernel_vm_shared_table_attachments(uint32_t table_physical)
 
 KernelVmStatus kernel_vm_attach_shared_table(KernelAddressSpace *space,
                                              uint32_t virtual_address,
-                                             uint32_t table_physical)
+                                             uint32_t table_physical,
+                                             bool write_protect)
 {
     volatile uint32_t *root;
     volatile uint32_t *pointer;
@@ -2389,6 +2444,14 @@ KernelVmStatus kernel_vm_attach_shared_table(KernelAddressSpace *space,
         pointer_physical = root_descriptor & VM_DESC_TABLE_ADDRESS;
     }
     pointer = physical_words(pointer_physical);
+#if defined(KERNEL_VM_HOST_TEST)
+    if (new_pointer != 0u &&
+        consume_shared_map_fault(
+            KERNEL_VM_SHARED_MAP_FAULT_AFTER_TABLE_ALLOCATE)) {
+        (void)kernel_memory_release(new_pointer, 1u, space->owner);
+        return KERNEL_VM_OUT_OF_MEMORY;
+    }
+#endif
     if (pointer == NULL ||
         pointer[VM_POINTER_INDEX(virtual_address)] != VM_DESC_INVALID ||
         kernel_memory_retain(table_physical, 1u, table.owner) !=
@@ -2402,9 +2465,18 @@ KernelVmStatus kernel_vm_attach_shared_table(KernelAddressSpace *space,
             return KERNEL_VM_CORRUPT;
         return occupied ? KERNEL_VM_ALREADY_MAPPED : KERNEL_VM_CORRUPT;
     }
+#if defined(KERNEL_VM_HOST_TEST)
+    if (consume_shared_map_fault(
+            KERNEL_VM_SHARED_MAP_FAULT_AFTER_FRAME_RETAIN)) {
+        (void)kernel_memory_release(table_physical, 1u, table.owner);
+        if (new_pointer != 0u)
+            (void)kernel_memory_release(new_pointer, 1u, space->owner);
+        return KERNEL_VM_OUT_OF_MEMORY;
+    }
+#endif
     pointer[VM_POINTER_INDEX(virtual_address)] =
         table_physical | VM_DESC_CACHE_INHIBIT | VM_DESC_SHARED_TABLE |
-        VM_DESC_TABLE;
+        (write_protect ? VM_DESC_WRITE_PROTECT : 0u) | VM_DESC_TABLE;
     if (new_pointer != 0u) {
         root[VM_ROOT_INDEX(virtual_address)] =
             new_pointer | VM_DESC_CACHE_INHIBIT | VM_DESC_TABLE;

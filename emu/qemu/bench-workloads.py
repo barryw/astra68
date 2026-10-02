@@ -110,6 +110,9 @@ def main():
                         metavar="NAME=COMMAND",
                         help="also profile an ad-hoc shell workload; with "
                              "--only, name it there to select it")
+    parser.add_argument("--probe", action="append", default=[],
+                        help="guest address whose callers the profile "
+                             "records (astra-prof report lists them)")
     parser.add_argument("--only", action="append",
                         help="profile only these workloads (boot and the "
                              "terminal still run, unprofiled)")
@@ -149,9 +152,10 @@ def main():
         boot = "boot" in wanted
         machine = terminal_gate.Machine(
             arguments.qemu, arguments.rom, image, work, extra_args=[
-                "-plugin", "%s,output=%s,control=%s,autostart=%s,label=%s" %
+                "-plugin", "%s,output=%s,control=%s,autostart=%s,label=%s%s" %
                 (arguments.plugin, os.path.abspath(arguments.output), ctl,
-                 "true" if boot else "false", "boot" if boot else "idle")])
+                 "true" if boot else "false", "boot" if boot else "idle",
+                 "".join(",probe=%s" % probe for probe in arguments.probe))])
         try:
             if not machine.wait_for_serial(terminal_gate.BOOT_MARKER, 300):
                 print("FAIL boot: never reached the desktop")

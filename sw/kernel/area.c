@@ -83,6 +83,8 @@ struct KernelArea {
     uint8_t state;
     uint8_t frames_released;
     uint8_t reserved_form;
+    /* Frame of shared-table addresses, one per span; 0 until first map. */
+    uint32_t span_tables_physical;
 };
 
 #define AREA_LEAF_FRAMES \
@@ -400,86 +402,157 @@ static bool page_committed(const KernelArea *area, uint32_t page)
     return entry != NULL && *entry != AREA_PAGE_ABSENT;
 }
 
-static uint32_t area_page_address(uint32_t virtual_base, uint32_t page)
+/*
+ * An area is mapped through shared page tables (kernel_vm_shared_table_*),
+ * one per KERNEL_VM_SHARED_TABLE_SPAN of the area, built from its committed
+ * pages at its first mapping. Every slot is span-aligned, so every mapping
+ * attaches the same tables: mapping or unmapping an area is one descriptor
+ * per span however much of it is committed, and committing or dropping a
+ * page changes one descriptor however many processes map the area. A
+ * read-only mapping is the same tables behind a write-protected descriptor.
+ */
+static uint32_t span_count(const KernelArea *area)
 {
-    return virtual_base + page * KERNEL_PAGE_SIZE;
+    return (area->page_count + KERNEL_VM_SHARED_TABLE_PAGES - 1u) /
+           KERNEL_VM_SHARED_TABLE_PAGES;
 }
 
-/*
- * Publishes an area's committed pages into one address space. They are an
- * arbitrary set rather than a prefix -- a program may touch the far end of a
- * reserved area first -- so the set is walked as maximal contiguous runs and
- * each run is one call. An area with nothing committed maps nothing and
- * succeeds, which is what makes mapping a fresh reserved area free.
- */
-static KernelVmStatus map_committed_runs(const KernelArea *area,
-                                         KernelAddressSpace *space,
-                                         uint32_t virtual_base,
-                                         uint32_t permissions,
-                                         uint32_t *mapped_pages)
+/* Address space a mapping of @p area occupies: whole, aligned spans. */
+static uint32_t mapping_span_bytes(const KernelArea *area)
 {
-    uint32_t page = 0u;
+    return span_count(area) * KERNEL_VM_SHARED_TABLE_SPAN;
+}
 
-    *mapped_pages = 0u;
-    while (page < area->page_count) {
-        uint32_t run;
+static uint32_t *span_tables(const KernelArea *area)
+{
+    return area->span_tables_physical != 0u ?
+        kernel_memory_access(area->span_tables_physical, KERNEL_PAGE_SIZE) :
+        NULL;
+}
+
+static bool release_span_tables(KernelArea *area)
+{
+    uint32_t *tables = span_tables(area);
+    bool released = true;
+
+    if (area->span_tables_physical == 0u)
+        return true;
+    if (tables == NULL)
+        return false;
+    for (uint32_t span = 0u; span < span_count(area); ++span) {
+        if (tables[span] != 0u &&
+            kernel_vm_shared_table_release(area->frame_owner,
+                                           tables[span]) != KERNEL_VM_OK)
+            released = false;
+        tables[span] = 0u;
+    }
+    if (kernel_memory_release(area->span_tables_physical, 1u,
+                              KERNEL_OWNER_CORE) != KERNEL_MEMORY_OK)
+        released = false;
+    area->span_tables_physical = 0u;
+    return released;
+}
+
+/* The span directory, and a table for each span that holds a page. A
+ * reserved area with nothing committed costs one directory frame. */
+static KernelVmStatus ensure_span_tables(KernelArea *area)
+{
+    uint32_t staged[KERNEL_VM_SHARED_TABLE_PAGES];
+    uint32_t *tables;
+    uint32_t physical;
+
+    if (area->span_tables_physical != 0u)
+        return span_tables(area) != NULL ? KERNEL_VM_OK : KERNEL_VM_CORRUPT;
+    if (span_count(area) > KERNEL_PAGE_SIZE / sizeof(uint32_t))
+        return KERNEL_VM_CORRUPT;
+    if (kernel_memory_alloc_zeroed_tagged(
+            KERNEL_ALLOCATION_SITE_AREA_PAGE_METADATA, 1u, 1u,
+            KERNEL_FRAME_KERNEL, KERNEL_OWNER_CORE, &physical) !=
+        KERNEL_MEMORY_OK)
+        return KERNEL_VM_OUT_OF_MEMORY;
+    area->span_tables_physical = physical;
+    tables = span_tables(area);
+    if (tables == NULL) {
+        (void)release_span_tables(area);
+        return KERNEL_VM_CORRUPT;
+    }
+    for (uint32_t span = 0u; span < span_count(area); ++span) {
+        bool any = false;
         KernelVmStatus status;
 
-        if (!page_committed(area, page)) {
-            ++page;
-            continue;
+        for (uint32_t index = 0u; index < KERNEL_VM_SHARED_TABLE_PAGES;
+             ++index) {
+            uint32_t page = span * KERNEL_VM_SHARED_TABLE_PAGES + index;
+
+            staged[index] = page < area->page_count &&
+                                    page_committed(area, page) ?
+                *page_entries(area, page) : 0u;
+            any = any || staged[index] != 0u;
         }
-        run = 0u;
-        while (run < AREA_PAGE_LEAF_ENTRIES -
-                         page % AREA_PAGE_LEAF_ENTRIES &&
-               page_committed(area, page + run))
-            ++run;
-        status = kernel_vm_map_shared_range(
-            space, area_page_address(virtual_base, page),
-            page_entries(area, page),
-            run, area->frame_owner, permissions);
-        if (status != KERNEL_VM_OK)
+        if (!any)
+            continue;
+        status = kernel_vm_shared_table_create(area->frame_owner, staged,
+                                               true, &tables[span]);
+        if (status != KERNEL_VM_OK) {
+            tables[span] = 0u;
+            if (!release_span_tables(area))
+                return KERNEL_VM_CORRUPT;
             return status;
-        *mapped_pages += run;
-        page += run;
+        }
     }
     return KERNEL_VM_OK;
 }
 
-/*
- * The inverse, and it takes a page ceiling so that a failed map can withdraw
- * exactly the runs it published rather than every run the area has.
- */
+/* Attaches every span of @p area; @p mapped_spans counts what a failure
+ * left attached, for unmap_committed_runs. */
+static KernelVmStatus map_committed_runs(KernelArea *area,
+                                         KernelAddressSpace *space,
+                                         uint32_t virtual_base,
+                                         uint32_t permissions,
+                                         uint32_t *mapped_spans)
+{
+    KernelVmStatus status;
+    uint32_t *tables;
+
+    *mapped_spans = 0u;
+    status = ensure_span_tables(area);
+    if (status != KERNEL_VM_OK)
+        return status;
+    tables = span_tables(area);
+    for (uint32_t span = 0u; span < span_count(area); ++span) {
+        if (tables[span] == 0u) {
+            ++*mapped_spans;
+            continue;
+        }
+        status = kernel_vm_attach_shared_table(
+            space, virtual_base + span * KERNEL_VM_SHARED_TABLE_SPAN,
+            tables[span], (permissions & KERNEL_VM_WRITE) == 0u);
+        if (status != KERNEL_VM_OK)
+            return status;
+        ++*mapped_spans;
+    }
+    return KERNEL_VM_OK;
+}
+
+/* Detaches the first @p span_limit spans: a failed map withdraws exactly
+ * what it attached, an unmap passes the whole area. */
 static KernelVmStatus unmap_committed_runs(const KernelArea *area,
                                            KernelAddressSpace *space,
                                            uint32_t virtual_base,
-                                           uint32_t page_limit)
+                                           uint32_t span_limit)
 {
-    uint32_t page = 0u;
-    uint32_t unmapped = 0u;
+    const uint32_t *tables = span_tables(area);
 
-    while (page < area->page_count && unmapped < page_limit) {
-        uint32_t run;
+    for (uint32_t span = 0u; span < span_count(area) && span < span_limit;
+         ++span) {
         KernelVmStatus status;
 
-        if (!page_committed(area, page)) {
-            ++page;
+        if (tables == NULL || tables[span] == 0u)
             continue;
-        }
-        run = 0u;
-        while (run < AREA_PAGE_LEAF_ENTRIES -
-                         page % AREA_PAGE_LEAF_ENTRIES &&
-               page_committed(area, page + run) &&
-               unmapped + run < page_limit)
-            ++run;
-        status = kernel_vm_unmap_shared_range(
-            space, area_page_address(virtual_base, page),
-            page_entries(area, page),
-            run, area->frame_owner);
+        status = kernel_vm_detach_shared_table(
+            space, virtual_base + span * KERNEL_VM_SHARED_TABLE_SPAN);
         if (status != KERNEL_VM_OK)
             return status;
-        unmapped += run;
-        page += run;
     }
     return KERNEL_VM_OK;
 }
@@ -558,7 +631,7 @@ static void maybe_free(KernelArea *area)
 
 static bool release_area_storage(KernelArea *area)
 {
-    bool released = true;
+    bool released = release_span_tables(area);
 
     for (uint32_t page = 0u; page < area->page_count; ++page) {
         uint32_t *entry;
@@ -865,7 +938,8 @@ KernelAreaStatus kernel_area_map(KernelArea *area, uint32_t process_id,
             }
         }
     }
-    selected_span = area->page_count * KERNEL_PAGE_SIZE;
+    /* Whole spans: each mapping attaches the area's shared span tables. */
+    selected_span = mapping_span_bytes(area);
     selected_base = KERNEL_VM_AREA_BASE;
     for (;;) {
         uint32_t next = selected_base;
@@ -887,7 +961,7 @@ KernelAreaStatus kernel_area_map(KernelArea *area, uint32_t process_id,
             if (mapping->active == 0u ||
                 mapping->process_id != process_id)
                 continue;
-            mapping_span = mapping->area->page_count * KERNEL_PAGE_SIZE;
+            mapping_span = mapping_span_bytes(mapping->area);
             mapping_end = mapping->virtual_base + mapping_span;
             if (selected_base < mapping_end &&
                 mapping->virtual_base < selected_base + selected_span &&
@@ -917,7 +991,8 @@ KernelAreaStatus kernel_area_map(KernelArea *area, uint32_t process_id,
             return KERNEL_AREA_CORRUPT;
         }
         ++pool_stats.map_rollbacks;
-        if (!release_mapping(free_mapping)) {
+        if (!release_mapping(free_mapping) ||
+            (area->mapping_references == 0u && !release_span_tables(area))) {
             pool_corrupt = 1u;
             return KERNEL_AREA_CORRUPT;
         }
@@ -939,7 +1014,8 @@ KernelAreaStatus kernel_area_map(KernelArea *area, uint32_t process_id,
             pool_corrupt = 1u;
             return KERNEL_AREA_CORRUPT;
         }
-        if (!release_mapping(free_mapping)) {
+        if (!release_mapping(free_mapping) ||
+            (area->mapping_references == 0u && !release_span_tables(area))) {
             pool_corrupt = 1u;
             return KERNEL_AREA_CORRUPT;
         }
@@ -1086,6 +1162,56 @@ static KernelAreaMapping *authorised_mapping(
  * Everything is checked before anything is published, and a failure withdraws
  * what it managed, so a refused commit leaves the area exactly as it was.
  */
+/*
+ * A span's first page: its table, attached to every mapping of the area at
+ * once. Later pages of the span are one descriptor each.
+ */
+static bool open_span(KernelArea *area, uint32_t span)
+{
+    uint32_t staged[KERNEL_VM_SHARED_TABLE_PAGES] = {0u};
+    uint32_t *tables = span_tables(area);
+    KernelAreaMappingCursor cursor = {mapping_blocks, 0u};
+    KernelAreaMapping *mapping;
+
+    if (tables == NULL ||
+        kernel_vm_shared_table_create(area->frame_owner, staged, true,
+                                      &tables[span]) != KERNEL_VM_OK) {
+        if (tables != NULL)
+            tables[span] = 0u;
+        return false;
+    }
+    while ((mapping = next_mapping(&cursor)) != NULL) {
+        if (mapping->active == 0u || mapping->area != area)
+            continue;
+        if (kernel_vm_attach_shared_table(
+                mapping->space,
+                mapping->virtual_base + span * KERNEL_VM_SHARED_TABLE_SPAN,
+                tables[span],
+                (mapping->permissions & KERNEL_VM_WRITE) == 0u) !=
+            KERNEL_VM_OK) {
+            KernelAreaMappingCursor undo = {mapping_blocks, 0u};
+            KernelAreaMapping *attached;
+
+            while ((attached = next_mapping(&undo)) != mapping) {
+                if (attached->active == 0u || attached->area != area)
+                    continue;
+                if (kernel_vm_detach_shared_table(
+                        attached->space,
+                        attached->virtual_base +
+                            span * KERNEL_VM_SHARED_TABLE_SPAN) !=
+                    KERNEL_VM_OK)
+                    pool_corrupt = 1u;
+            }
+            if (kernel_vm_shared_table_release(area->frame_owner,
+                                               tables[span]) != KERNEL_VM_OK)
+                pool_corrupt = 1u;
+            tables[span] = 0u;
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool commit_cluster(KernelArea *area, uint32_t page)
 {
     uint32_t aligned;
@@ -1154,49 +1280,46 @@ static bool commit_cluster(KernelArea *area, uint32_t page)
     }
     for (uint32_t index = 0u; index < count; ++index)
         entries[index] = frames[index];
+    /* One descriptor per page, seen at once by every mapping. */
+    if (area->span_tables_physical != 0u) {
+        uint32_t *tables = span_tables(area);
 
-    {
-        KernelAreaMappingCursor cursor = {mapping_blocks, 0u};
-        KernelAreaMapping *mapping;
+        for (published = 0u; published < count; ++published) {
+            uint32_t target = first + published;
 
-        while ((mapping = next_mapping(&cursor)) != NULL) {
-            if (mapping->active == 0u || mapping->area != area)
-                continue;
-            if (kernel_vm_map_shared_range(
-                    mapping->space,
-                    area_page_address(mapping->virtual_base, first),
-                    entries, count, area->frame_owner,
-                    mapping->permissions) != KERNEL_VM_OK)
+            if (tables != NULL &&
+                tables[target / KERNEL_VM_SHARED_TABLE_PAGES] == 0u &&
+                !open_span(area,
+                           target / KERNEL_VM_SHARED_TABLE_PAGES))
                 break;
-            ++published;
+            if (tables == NULL ||
+                kernel_vm_shared_table_set(
+                    area->frame_owner,
+                    tables[target / KERNEL_VM_SHARED_TABLE_PAGES],
+                    target % KERNEL_VM_SHARED_TABLE_PAGES,
+                    frames[published], true) != KERNEL_VM_OK)
+                break;
         }
-    }
-    if (published != area->mapping_references) {
-        uint32_t withdrawn = 0u;
-        KernelAreaMappingCursor cursor = {mapping_blocks, 0u};
-        KernelAreaMapping *mapping;
+        if (published != count) {
+            for (uint32_t index = 0u; index < count; ++index) {
+                uint32_t target = first + index;
 
-        while (withdrawn < published &&
-               (mapping = next_mapping(&cursor)) != NULL) {
-            if (mapping->active == 0u || mapping->area != area)
-                continue;
-            if (kernel_vm_unmap_shared_range(
-                    mapping->space,
-                    area_page_address(mapping->virtual_base, first),
-                    entries, count, area->frame_owner) != KERNEL_VM_OK) {
-                pool_corrupt = 1u;
-                return false;
+                if (index < published &&
+                    kernel_vm_shared_table_clear(
+                        area->frame_owner,
+                        tables[target / KERNEL_VM_SHARED_TABLE_PAGES],
+                        target % KERNEL_VM_SHARED_TABLE_PAGES) !=
+                        KERNEL_VM_OK)
+                    pool_corrupt = 1u;
+                if (kernel_memory_release(frames[index], 1u,
+                                          area->frame_owner) !=
+                    KERNEL_MEMORY_OK)
+                    pool_corrupt = 1u;
+                entries[index] = AREA_PAGE_ABSENT;
             }
-            ++withdrawn;
+            ++pool_stats.commit_failures;
+            return false;
         }
-        for (uint32_t index = 0u; index < count; ++index) {
-            if (kernel_memory_release(frames[index], 1u, area->frame_owner) !=
-                KERNEL_MEMORY_OK)
-                pool_corrupt = 1u;
-            entries[index] = AREA_PAGE_ABSENT;
-        }
-        ++pool_stats.commit_failures;
-        return false;
     }
     area->committed_pages += count;
     pool_stats.committed_pages += count;
@@ -1239,31 +1362,24 @@ bool kernel_area_fault(uint32_t process_id, KernelAddressSpace *space,
  */
 static bool drop_page(KernelArea *area, uint32_t page)
 {
-    KernelAreaMappingCursor cursor = {mapping_blocks, 0u};
-    KernelAreaMapping *mapping;
     uint32_t *entry = page_entries(area, page);
-    uint32_t withdrawn = 0u;
 
     if (entry == NULL || *entry == AREA_PAGE_ABSENT) {
         pool_corrupt = 1u;
         return false;
     }
+    /* Withdrawn from every mapping at once, before the frame is freed. */
+    if (area->span_tables_physical != 0u) {
+        uint32_t *tables = span_tables(area);
 
-    while ((mapping = next_mapping(&cursor)) != NULL) {
-        if (mapping->active == 0u || mapping->area != area)
-            continue;
-        if (kernel_vm_unmap_shared_range(
-                mapping->space,
-                area_page_address(mapping->virtual_base, page),
-                entry, 1u, area->frame_owner) != KERNEL_VM_OK) {
+        if (tables == NULL ||
+            kernel_vm_shared_table_clear(
+                area->frame_owner,
+                tables[page / KERNEL_VM_SHARED_TABLE_PAGES],
+                page % KERNEL_VM_SHARED_TABLE_PAGES) != KERNEL_VM_OK) {
             pool_corrupt = 1u;
             return false;
         }
-        ++withdrawn;
-    }
-    if (withdrawn != area->mapping_references) {
-        pool_corrupt = 1u;
-        return false;
     }
     if (kernel_memory_release(*entry, 1u,
                               area->frame_owner) != KERNEL_MEMORY_OK) {
@@ -1714,6 +1830,9 @@ bool kernel_area_pool_valid(void)
                 if (area->page_directory[leaf] != NULL)
                     ++page_leaves;
             }
+            /* The span-table directory is page metadata too. */
+            if (area->span_tables_physical != 0u)
+                ++page_leaves;
             for (uint32_t page = 0u; page < area->page_count; ++page) {
                 if (page_committed(area, page))
                     ++present;
