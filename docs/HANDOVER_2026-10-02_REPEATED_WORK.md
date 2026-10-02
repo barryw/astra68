@@ -32,6 +32,46 @@ and feeds the FIFO between slices (`CONVERT_SLICE_BYTES`); underruns are back
 to 1,400-1,900 per session. The audio host's mixer sharing one loop with
 request work is the real limit -- a feed thread would remove it.
 
+## Round 2 (same day)
+
+**DE25, release `e4d93ead`: Doom renders 7.5-8.3 s after the double-click** (13.7 s at the
+start of the day). Guest instructions for the start: 121 M (222 M before).
+
+How the remaining time was found: guest-PC sampling on the board showed the
+vCPU **idle ~55% during S_Init** -- waiting on host commands. QOM counters
+(`astra-host-commands`, `astra-host-execution-ns`) put 2.65 s of the start
+in host execution, and the audio host's new per-operation report (printed at
+exit, `ASTRA AUDIO HOST operation=N count= total_us=`) put it in CONVERT.
+
+- **The audio host ran on a Cortex-A55.** CPUs 0-1 are A55, 2-3 A76; the
+  vCPU is on 2 and QEMU's host I/O threads on 3 (`astra-input-hotplug.py`).
+  The audio host was pinned to CPU 0, where resampling is 3.5x slower. Now
+  `CPUAffinity=3`: CONVERT 0.80 s -> 0.24 s per Doom start.
+- **Resampler** tabulates interpolated taps per output phase (Doom's 4:1 has
+  4 phases), bit-identical output, 449 -> 231 ms per minute of audio on an
+  A76; Kaiser tables cached per rate pair (61 ms per start on the A76).
+- **Audio host feed thread**: the 512-frame FIFO (10.7 ms) is fed while the
+  main loop serves a request; CONVERT resamples unlocked.
+- **POSIX ports get compiler builtins** (`-ffreestanding -fno-builtin` was
+  inherited from the native contract): Doom's dehacked setup made 433,000
+  `memcmp(p, q, 4)` library calls. Doom is compiled `-O2`. `memset` uses
+  `movem`. 137 M -> 122 M instructions.
+- **Kernel COW bug** (the "something depends on zeroed malloc" item):
+  `kernel_vm_private_commit_range` refused a kernel store into a page shared
+  copy-on-write since fork; now it breaks COW. The heap no longer zeroes
+  retained extents. `fix(posix)`: `accept()` read the listener after the
+  socket table could move.
+
+### Next
+
+1. The QEMU host-I/O core (CPU 3) now also runs the audio host, including
+   FluidSynth for music; watch display/input latency under music.
+2. 1,100 host commands per Doom start are audio WRITE/STATUS at ~0.05 ms in
+   the daemon; the per-command cost is transport (thread pool, socket,
+   completion IRQ), ~0.2 ms each on the board.
+3. Kernel wait path and `astra_clock_monotonic` syscalls remain as listed
+   below.
+
 ## What changed, and the work it stops repeating
 
 1. **PCM transfers in 64 KiB, not 8 KiB** (`ASTRA_PCM_TRANSFER_BYTES`).
