@@ -507,13 +507,19 @@ class Qmp:
                 return int(token, 16)
         raise RuntimeError("no word read back from 0x%x" % address)
 
-    def input_events(self, events):
+    def input_events(self, events, deadline=30.0):
+        # A machine that stopped draining input fails here, not forever.
+        end = time.monotonic() + deadline
         queued = self.word(INPUT_STATUS) & INPUT_COUNT_MASK
         while queued > INPUT_COUNT_MASK - len(events):
+            if time.monotonic() >= end:
+                raise RuntimeError("guest never drained the input queue")
             time.sleep(0.001)
             queued = self.word(INPUT_STATUS) & INPUT_COUNT_MASK
         self.execute("input-send-event", {"events": events})
         while (self.word(INPUT_STATUS) & INPUT_COUNT_MASK) > queued:
+            if time.monotonic() >= end:
+                raise RuntimeError("guest never consumed queued input")
             time.sleep(0.001)
 
     def send(self, down, qcode):
@@ -1630,6 +1636,14 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                   (error, "running" if status is None else status))
             print("last serial lines:")
             for text in machine.recent_serial(200):
+                print("    %s" % text)
+            return 1
+        except RuntimeError as error:
+            print("FAIL: %s" % error)
+            print("last serial lines:")
+            for text in machine.recent_serial(200):
+                print("    %s" % text)
+            for text in machine.recent_faults():
                 print("    %s" % text)
             return 1
         finally:

@@ -189,6 +189,16 @@ There is no alternative CPU or emulator implementation in the repository.
   ... never answered with 'POSIX RAW PASS'` with the kernel idle. It reads
   like code depending on malloc returning zeros; zeroing in userspace "fixed"
   it only by breaking COW first.
+- **The worker runs with interrupts enabled, and an interrupt can make a
+  thread current.** The reaper's `kernel_vm_deactivate` compared URP with
+  the dying space and then switched to the empty root; an interrupt between
+  the two installed a woken thread's root, the switch overwrote it, and the
+  worker resumed that thread with no switch. It surfaced (~1 boot in 500) as
+  the supervisor faulting on its own code (`pc 0x00142D1A`, vector 2,
+  `System degraded`) right after `remote-desktop` exited, and as
+  `test-terminal.py` hanging forever in `input_events` -- the walk of the
+  faulting page was valid; URP was the empty root. Any read-compare-switch
+  of `current_user_root` outside an interrupts-off region has the same hole.
 - **The qualification kernel is a second ROM**, built with
   `make KERNEL_K1_QUALIFICATION=1` in `sw/boot`, with no debug surface and no
   initial user image. `emu/qemu/test-qualification.py` is its gate. It

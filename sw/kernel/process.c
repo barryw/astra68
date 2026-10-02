@@ -1516,7 +1516,20 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
         return KERNEL_PROCESS_CORRUPT;
     (void)released_buffers;
     if (process->address_space_destroyed == 0u) {
-        if (kernel_vm_deactivate(&process->address_space) != KERNEL_VM_OK ||
+        /*
+         * The worker reaps with interrupts enabled, and an interrupt that
+         * wakes a thread installs that thread's root. Read-compare-switch
+         * must not straddle it: an interrupt between the compare and the
+         * switch leaves the woken thread current on the empty root, and the
+         * worker resumes it without switching again -- its first fetch
+         * faults on a page that is mapped.
+         */
+        uint16_t saved_status = kernel_interrupt_save_disable();
+        KernelVmStatus deactivated =
+            kernel_vm_deactivate(&process->address_space);
+
+        kernel_interrupt_restore(saved_status);
+        if (deactivated != KERNEL_VM_OK ||
             kernel_vm_destroy_address_space(&process->address_space) !=
             KERNEL_VM_OK)
             return KERNEL_PROCESS_CORRUPT;
