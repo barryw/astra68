@@ -903,6 +903,9 @@ static uint32_t next_handle(AudioHost *host)
 }
 
 /* @p out receives a reply's data: up to request->capacity bytes. */
+/* Converted bytes produced between two FIFO feeds. */
+#define CONVERT_SLICE_BYTES 8192u
+
 static void execute(AudioHost *host, Client *client,
                     const AstraAudioHostRequest *request,
                     const uint8_t *data, AstraAudioHostReply *reply,
@@ -1174,8 +1177,28 @@ static void execute(AudioHost *host, Client *client,
         }
         if (request->value & ASTRA_HOST_AUDIO_CONVERT_END)
             astra_audio_converter_end(converter->converter);
-        reply->data_length = astra_audio_converter_read(
-            converter->converter, out, request->capacity);
+        /*
+         * One reply carries up to a packet, but resampling a whole packet
+         * takes longer than the hardware FIFO lasts, and this loop is the
+         * one that keeps it fed: underruns went up tenfold when packets
+         * grew from 8 KiB to 64 KiB. So the reply is produced a slice at a
+         * time with the FIFO topped up between slices.
+         */
+        reply->data_length = 0u;
+        while (reply->data_length < request->capacity) {
+            uint32_t piece = request->capacity - reply->data_length;
+            uint32_t moved;
+
+            if (piece > CONVERT_SLICE_BYTES)
+                piece = CONVERT_SLICE_BYTES;
+            moved = astra_audio_converter_read(
+                converter->converter, out + reply->data_length, piece);
+            if (moved == 0u)
+                break;
+            reply->data_length += moved;
+            if (host->registers != NULL)
+                feed(host);
+        }
         reply->queued_frames =
             astra_audio_converter_ready(converter->converter);
         break;
