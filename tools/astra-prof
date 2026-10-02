@@ -298,6 +298,13 @@ def aggregate_values(intervals, images):
 
 def command_report(args):
     intervals = parse_profile(args.profile)
+    if getattr(args, "label", None):
+        intervals = [interval for interval in intervals
+                     if interval["label"] in args.label]
+        if not intervals:
+            print(f"astra-prof: no interval labelled {', '.join(args.label)}",
+                  file=sys.stderr)
+            return 2
     image_specs = list(args.image)
     if getattr(args, "userspace_root", None):
         image_specs += target_images(Path(args.userspace_root).resolve())
@@ -826,6 +833,8 @@ def parser():
                         help="add every built userspace debug ELF below ROOT")
     report.add_argument("--nm", default="m68k-astra-nm")
     report.add_argument("--limit", type=int, default=30)
+    report.add_argument("--label", action="append",
+                        help="only intervals with this label (repeatable)")
     report.set_defaults(run=command_report)
 
     compare = commands.add_parser("compare", help="compare repeated profiles")

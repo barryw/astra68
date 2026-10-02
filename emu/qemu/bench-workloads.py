@@ -106,11 +106,27 @@ def main():
     parser.add_argument("rom")
     parser.add_argument("image")
     parser.add_argument("output")
-    parser.add_argument("--only", action="append", choices=WORKLOADS,
-                        help="profile only these workloads (others still run "
-                             "when later ones depend on them)")
+    parser.add_argument("--shell", action="append", default=[],
+                        metavar="NAME=COMMAND",
+                        help="also profile an ad-hoc shell workload; with "
+                             "--only, name it there to select it")
+    parser.add_argument("--only", action="append",
+                        help="profile only these workloads (boot and the "
+                             "terminal still run, unprofiled)")
     arguments = parser.parse_args()
-    wanted = set(arguments.only or WORKLOADS)
+    shell_workloads = list(SHELL_WORKLOADS)
+    for spec in arguments.shell:
+        name, separator, command = spec.partition("=")
+        if not separator or not re.fullmatch(r"[a-z0-9-]+", name) or \
+                name in WORKLOADS:
+            parser.error("--shell wants a new NAME=COMMAND: %r" % spec)
+        shell_workloads.append((name, command))
+    names = WORKLOADS + tuple(name for name, _ in shell_workloads
+                              if name not in WORKLOADS)
+    for name in arguments.only or ():
+        if name not in names:
+            parser.error("unknown workload %r" % name)
+    wanted = set(arguments.only or names)
     failures = []
 
     with tempfile.TemporaryDirectory(prefix="astra-bench-workloads-") as work:
@@ -159,17 +175,16 @@ def main():
                 for line in machine.said(before)[0][-30:]:
                     print("    |%s|" % line)
                 return 1
-            for name, command in SHELL_WORKLOADS:
+            for name, command in shell_workloads:
+                if name not in wanted:
+                    continue
                 machine.settle()
                 before = machine.sequence()
-                profiled = name in wanted
-                if profiled:
-                    control(ctl, "start " + name)
+                control(ctl, "start " + name)
                 machine.qmp.type_line(
                     "%s; print ASTRA-BENCH-%s=$?" % (command, name))
                 status = wait_status(machine, name, before, 600)
-                if profiled:
-                    control(ctl, "stop")
+                control(ctl, "stop")
                 print("%s %s" % (name, "ok" if status == 0 else
                                  "FAIL status=%s" % status), flush=True)
                 if status != 0:
