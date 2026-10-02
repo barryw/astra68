@@ -92,6 +92,7 @@ AstraResult astra_pcm_session_exchange(AstraPcmStream *stream,
  * converter's service writes its output back into the transfer area. */
 AstraResult astra_pcm_session_open(AstraHandle service, uint32_t operation,
                                    uint32_t format, uint32_t target,
+                                   uint32_t area_bytes,
                                    AstraPcmStream *stream)
 {
     AstraPcmRequest request = {0};
@@ -104,6 +105,7 @@ AstraResult astra_pcm_session_open(AstraHandle service, uint32_t operation,
     uint32_t frame_bytes = astra_pcm_format_frame_bytes(format);
 
     if (service == 0u || frame_bytes == 0u || stream == NULL ||
+        area_bytes < frame_bytes || area_bytes > ASTRA_PCM_TRANSFER_BYTES ||
         stream->control != 0u ||
         stream->reply != 0u || stream->area != 0u ||
         stream->mapped != NULL || stream->transaction != 0u ||
@@ -113,8 +115,7 @@ AstraResult astra_pcm_session_open(AstraHandle service, uint32_t operation,
                                   &reply_send);
     if (status != ASTRA_SYSCALL_OK)
         return astra_result_from_syscall(status);
-    status = astra_rt_area_create(ASTRA_PCM_TRANSFER_FRAMES *
-                                  ASTRA_PCM_MAX_FRAME_BYTES,
+    status = astra_rt_area_create(area_bytes,
                                   ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
                                   ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
                                   &stream->area);
@@ -125,8 +126,7 @@ AstraResult astra_pcm_session_open(AstraHandle service, uint32_t operation,
     status = astra_rt_area_map(stream->area, ASTRA_AREA_MAP_READ |
                                ASTRA_AREA_MAP_WRITE, &stream->mapped,
                                &mapped_size);
-    if (status != ASTRA_SYSCALL_OK ||
-        mapped_size < ASTRA_PCM_TRANSFER_FRAMES * ASTRA_PCM_MAX_FRAME_BYTES) {
+    if (status != ASTRA_SYSCALL_OK || mapped_size < area_bytes) {
         result = ASTRA_ERROR_NO_RESOURCES;
         goto fail;
     }
@@ -172,19 +172,20 @@ fail:
 AstraResult astra_pcm_open(AstraHandle service, uint32_t format,
                            AstraPcmStream *stream)
 {
-    return astra_pcm_session_open(service, ASTRA_PCM_OPEN, format, 0u, stream);
+    return astra_pcm_session_open(service, ASTRA_PCM_OPEN, format, 0u,
+                                  ASTRA_PCM_VOICE_AREA_BYTES, stream);
 }
 
 /* Copies the frames_out target frames a CONVERT reply left in the area to
  * the caller, refusing more than were promised. */
 static AstraResult take_output(const AstraPcmStream *stream,
                                const AstraPcmReply *reply,
-                               uint32_t frame_bytes, uint8_t *target,
-                               uint32_t capacity, uint32_t *produced)
+                               uint32_t area_bytes, uint32_t frame_bytes,
+                               uint8_t *target, uint32_t capacity,
+                               uint32_t *produced)
 {
     if (reply->frames_out > capacity - *produced ||
-        (uint64_t)reply->frames_out * frame_bytes >
-            ASTRA_PCM_TRANSFER_FRAMES * ASTRA_PCM_MAX_FRAME_BYTES)
+        (uint64_t)reply->frames_out * frame_bytes > area_bytes)
         return ASTRA_ERROR_IO;
     (void)memcpy(target + (size_t)*produced * frame_bytes, stream->mapped,
                  (size_t)reply->frames_out * frame_bytes);
@@ -203,8 +204,8 @@ AstraResult astra_pcm_convert(AstraHandle service, uint32_t source_format,
     const uint8_t *from = source;
     uint32_t source_bytes = astra_pcm_format_frame_bytes(source_format);
     uint32_t target_bytes = astra_pcm_format_frame_bytes(target_format);
-    uint32_t batch_limit, sent = 0u, produced = 0u;
-    uint64_t expected;
+    uint32_t area_bytes, batch_limit, sent = 0u, produced = 0u;
+    uint64_t expected, largest;
     AstraResult result, closed;
     int ended = 0;
 
@@ -219,12 +220,23 @@ AstraResult astra_pcm_convert(AstraHandle service, uint32_t source_format,
                astra_pcm_format_rate(source_format);
     if (expected > target_capacity)
         return ASTRA_ERROR_BUFFER_TOO_SMALL;
-    result = astra_pcm_session_open(service, ASTRA_PCM_CONVERT_OPEN, source_format,
-                          target_format, &stream);
+    /* The area is created and zeroed for this one conversion, so it is
+     * only as large as the larger side, up to the transfer limit: a short
+     * effect costs no more pages than it fills, a long one moves in
+     * ASTRA_PCM_TRANSFER_BYTES exchanges. */
+    largest = (uint64_t)source_frames * source_bytes;
+    if (largest < expected * target_bytes)
+        largest = expected * target_bytes;
+    if (largest < (uint64_t)source_bytes + target_bytes)
+        largest = (uint64_t)source_bytes + target_bytes;
+    area_bytes = largest < ASTRA_PCM_TRANSFER_BYTES ? (uint32_t)largest :
+                 ASTRA_PCM_TRANSFER_BYTES;
+    result = astra_pcm_session_open(service, ASTRA_PCM_CONVERT_OPEN,
+                                    source_format, target_format, area_bytes,
+                                    &stream);
     if (result != ASTRA_OK)
         return result;
-    batch_limit = ASTRA_PCM_TRANSFER_FRAMES * ASTRA_PCM_MAX_FRAME_BYTES /
-                  source_bytes;
+    batch_limit = area_bytes / source_bytes;
     /* Take everything the host has ready before sending more source, so
      * it never holds more than one batch of source it cannot yet use. */
     while (result == ASTRA_OK && (!ended || reply.queued_frames != 0u)) {
@@ -241,8 +253,8 @@ AstraResult astra_pcm_convert(AstraHandle service, uint32_t source_format,
             sent + batch == source_frames ? ASTRA_PCM_CONVERT_END : 0u, 0u,
             &reply);
         if (result == ASTRA_OK)
-            result = take_output(&stream, &reply, target_bytes, target,
-                                 target_capacity, &produced);
+            result = take_output(&stream, &reply, area_bytes, target_bytes,
+                                 target, target_capacity, &produced);
         sent += batch;
         ended = sent == source_frames;
     }

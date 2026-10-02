@@ -31,6 +31,13 @@
 #define ASTRA_PCM_QUEUE_FRAMES 4096u
 /** Internal transport batch size; callers may write larger buffers. */
 #define ASTRA_PCM_TRANSFER_FRAMES 1024u
+/** Largest session transfer area, and so the most bytes one request or
+ * reply moves between pcm.library, the media service and the host. Every
+ * exchange is an IPC round trip through the kernel and the host channel,
+ * which costs far more than the bytes: a converter or MIDI session moves
+ * this much at a time. A voice's area holds one ASTRA_PCM_TRANSFER_FRAMES
+ * batch, since its host queue is the limit. */
+#define ASTRA_PCM_TRANSFER_BYTES (64u * 1024u)
 
 /** Sample encodings: every SDL2 sample format, plus packed 24-bit. */
 #define ASTRA_PCM_ENCODING_S24LE 1u /**< signed 24-bit little-endian, packed */

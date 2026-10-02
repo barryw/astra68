@@ -10,7 +10,7 @@
 #include "pcm_session.h"
 
 /* Bytes one request carries through the session's transfer area. */
-#define MIDI_CHUNK_BYTES (ASTRA_PCM_TRANSFER_FRAMES * ASTRA_PCM_MAX_FRAME_BYTES)
+#define MIDI_CHUNK_BYTES ASTRA_PCM_TRANSFER_BYTES
 /* How long astra_midi_presets() waits for a synth's fonts to load. */
 #define PRESETS_WAIT_NS UINT64_C(30000000000)
 
@@ -40,7 +40,8 @@ AstraResult astra_midi_open(AstraHandle service, AstraMidiSynth *song)
     return astra_pcm_session_open(service, ASTRA_PCM_MIDI_OPEN,
                                   ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_U8,
                                                    1u, ASTRA_PCM_RATE),
-                                  0u, &song->session);
+                                  0u, ASTRA_PCM_TRANSFER_BYTES,
+                                  &song->session);
 }
 
 /* Sends @p bytes of a song or SoundFont in area-sized pieces: each names

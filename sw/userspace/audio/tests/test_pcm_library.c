@@ -7,7 +7,9 @@
 #include <stdint.h>
 #include <string.h>
 
-static uint8_t shared[ASTRA_PCM_TRANSFER_FRAMES * ASTRA_PCM_MAX_FRAME_BYTES];
+static uint8_t shared[ASTRA_PCM_TRANSFER_BYTES];
+/* The size the library asked for its last area. */
+static uint32_t area_bytes;
 static AstraPcmRequest last_request;
 static uint32_t sends;
 static uint32_t writes;
@@ -21,12 +23,13 @@ static uint64_t slept[4];
 static uint32_t sleeps;
 /* The fake converter doubles the rate of S16BE mono by repeating frames. */
 static int converting;
-static uint8_t pending[65536];
+static uint8_t pending[4u * ASTRA_PCM_TRANSFER_BYTES];
 static uint32_t pending_bytes;
 static uint32_t converted_out;
 static int convert_ended;
 static int midi_mode;
 static uint32_t loads;
+static uint32_t conversions;
 
 /* astra_midi_presets() waits on the monotonic clock. */
 uint64_t astra_clock_monotonic(void)
@@ -57,8 +60,9 @@ uint32_t astra_rt_port_create(uint32_t messages, uint32_t bytes,
 uint32_t astra_rt_area_create(uint32_t bytes, uint32_t rights,
                               uint32_t *handle)
 {
-    assert(bytes == sizeof(shared));
+    assert(bytes != 0u && bytes <= sizeof(shared));
     assert((rights & ASTRA_RIGHT_WRITE) != 0u);
+    area_bytes = bytes;
     *handle = 20u;
     return ASTRA_SYSCALL_OK;
 }
@@ -68,7 +72,7 @@ uint32_t astra_rt_area_map(uint32_t handle, uint32_t permissions,
 {
     assert(handle == 20u && (permissions & ASTRA_AREA_MAP_WRITE) != 0u);
     *address = shared;
-    *size = sizeof(shared);
+    *size = area_bytes;
     return ASTRA_SYSCALL_OK;
 }
 
@@ -111,15 +115,16 @@ uint32_t astra_port_send(uint32_t handle, const void *message,
     if (last_request.header.operation == ASTRA_PCM_MIDI_LOAD)
         ++loads;
     if (last_request.header.operation == ASTRA_PCM_CONVERT) {
-        assert(!convert_ended);
+        assert(!convert_ended && last_request.frames * 2u <= area_bytes);
+        ++conversions;
         for (uint32_t i = 0u; i < last_request.frames; ++i)
             for (uint32_t copy = 0u; copy < 2u; ++copy) {
                 pending[pending_bytes++] = shared[2u * i];
                 pending[pending_bytes++] = shared[2u * i + 1u];
             }
         convert_ended = last_request.value == ASTRA_PCM_CONVERT_END;
-        converted_out = pending_bytes < sizeof(shared) ? pending_bytes :
-                        sizeof(shared);
+        converted_out = pending_bytes < area_bytes ? pending_bytes :
+                        area_bytes;
         memcpy(shared, pending, converted_out);
         memmove(pending, pending + converted_out,
                 pending_bytes - converted_out);
@@ -193,6 +198,7 @@ int main(void)
            ASTRA_OK);
     assert(stream.control == 30u);
     assert(stream.frame_bytes == 6u);
+    assert(area_bytes == ASTRA_PCM_TRANSFER_FRAMES * ASTRA_PCM_MAX_FRAME_BYTES);
     assert(astra_pcm_write(&stream, samples, 1500u, &accepted) ==
            ASTRA_ERROR_BUSY);
     assert(accepted == ASTRA_PCM_TRANSFER_FRAMES && writes == 2u);
@@ -278,7 +284,10 @@ int main(void)
         assert(produced == 0u);
         assert(astra_pcm_convert(99u, from, source, 6000u, to, target,
                                  12000u, &produced) == ASTRA_OK);
+        /* The area fits the whole result: one exchange, not one per
+         * voice-sized batch. */
         assert(produced == 12000u && convert_ended && pending_bytes == 0u);
+        assert(area_bytes == 24000u && conversions == 1u);
         assert(last_request.header.operation == ASTRA_PCM_CLOSE);
         for (uint32_t i = 0u; i < 6000u; ++i)
             assert(memcmp(target + 4u * i, source + 2u * i, 2u) == 0 &&
@@ -291,20 +300,48 @@ int main(void)
                                  &produced) == ASTRA_ERROR_INVALID_ARGUMENT);
     }
 
+    /* A conversion larger than the transfer limit moves in full areas:
+     * 80,000 source bytes and 160,000 target bytes in 64 KiB pieces. */
+    {
+        static uint8_t source[40000u * 2u];
+        static uint8_t target[80000u * 2u];
+        const uint32_t from = ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_S16BE, 1u,
+                                               11025u);
+        const uint32_t to = ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_S16BE, 1u,
+                                             22050u);
+        uint32_t produced = 0u;
+
+        for (uint32_t i = 0u; i < sizeof(source); ++i)
+            source[i] = (uint8_t)(i * 13u);
+        conversions = 0u;
+        convert_ended = 0;
+        assert(astra_pcm_convert(99u, from, source, 40000u, to, target,
+                                 80000u, &produced) == ASTRA_OK);
+        assert(produced == 80000u && convert_ended && pending_bytes == 0u);
+        assert(area_bytes == ASTRA_PCM_TRANSFER_BYTES);
+        /* ceil(160,000 / 65,536) exchanges: source rides along with the
+         * drains. */
+        assert(conversions == 3u);
+        for (uint32_t i = 0u; i < 40000u; ++i)
+            assert(memcmp(target + 4u * i, source + 2u * i, 2u) == 0 &&
+                   memcmp(target + 4u * i + 2u, source + 2u * i, 2u) == 0);
+    }
+
     /* MIDI: a song larger than one transfer goes in offset-ordered pieces
      * naming the whole size; play, status and system fonts by name. */
     {
-        static uint8_t file[20000];
+        static uint8_t file[150000];
         AstraMidiSynth song = ASTRA_MIDI_SYNTH_INIT;
         int active = 0;
 
         converting = 0;
         midi_mode = 1;
         assert(astra_midi_open(99u, &song) == ASTRA_OK);
+        assert(area_bytes == ASTRA_PCM_TRANSFER_BYTES);
         assert(astra_midi_load(&song, file, sizeof(file)) == ASTRA_OK);
-        assert(loads == 3u && last_request.value == 16384u &&
+        assert(loads == 3u && last_request.value == 131072u &&
                last_request.target == sizeof(file) &&
-               last_request.frames == sizeof(file) - 16384u);
+               last_request.frames == sizeof(file) - 131072u);
         assert(astra_midi_play(&song, ASTRA_MIDI_FOREVER) == ASTRA_OK &&
                last_request.value == ASTRA_PCM_MIDI_FOREVER);
         assert(astra_midi_play(&song, 0) == ASTRA_ERROR_INVALID_ARGUMENT);

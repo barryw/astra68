@@ -515,8 +515,7 @@ static void free_client(AudioHost *host, Client *client)
 static uint32_t validate_request(const AstraAudioHostRequest *request,
                                  size_t packet_length)
 {
-    const uint32_t packet = ASTRA_AUDIO_HOST_PACKET_FRAMES *
-                            ASTRA_AUDIO_HOST_FRAME_BYTES;
+    const uint32_t packet = ASTRA_AUDIO_HOST_PACKET_BYTES;
     const uint32_t digest = ASTRA_HOST_AUDIO_DIGEST_BYTES;
     const uint32_t length = request->data_length;
     int ok;
@@ -629,8 +628,7 @@ static uint32_t validate_request(const AstraAudioHostRequest *request,
         return request->handle != 0u && request->value == 0u &&
                        request->data_length != 0u &&
                        request->data_length <=
-                           ASTRA_AUDIO_HOST_PACKET_FRAMES *
-                               ASTRA_AUDIO_HOST_FRAME_BYTES ?
+                           ASTRA_AUDIO_HOST_PACKET_BYTES ?
                    ASTRA_STATUS_OK : ASTRA_STATUS_INVALID;
     if (request->data_length != 0u)
         return ASTRA_STATUS_INVALID;
@@ -1106,8 +1104,7 @@ static void execute(AudioHost *host, Client *client,
                                          &reply->data_length, &reply->value);
         break;
     case ASTRA_HOST_AUDIO_MIDI_PRESETS: {
-        AstraAudioSynthPreset presets[ASTRA_AUDIO_HOST_PACKET_FRAMES *
-                                      ASTRA_AUDIO_HOST_FRAME_BYTES /
+        AstraAudioSynthPreset presets[ASTRA_AUDIO_HOST_PACKET_BYTES /
                                       sizeof(AstraHostMidiPreset)];
         uint32_t copied = 0u;
 
@@ -1359,10 +1356,8 @@ static void execute(AudioHost *host, Client *client,
 static void receive_client(AudioHost *host, Client *client)
 {
     uint8_t packet[sizeof(AstraAudioHostRequest) +
-                   ASTRA_AUDIO_HOST_PACKET_FRAMES *
-                       ASTRA_AUDIO_HOST_FRAME_BYTES];
-    uint8_t out[ASTRA_AUDIO_HOST_PACKET_FRAMES *
-                ASTRA_AUDIO_HOST_FRAME_BYTES];
+                   ASTRA_AUDIO_HOST_PACKET_BYTES];
+    uint8_t out[ASTRA_AUDIO_HOST_PACKET_BYTES];
     AstraAudioHostRequest request;
     AstraAudioHostReply reply = {.magic = ASTRA_AUDIO_HOST_MAGIC,
                                  .status = ASTRA_STATUS_OK};
@@ -1697,8 +1692,7 @@ static int resample_tone(uint32_t format, double tone, double amplitude,
     uint32_t encoding = astra_pcm_format_encoding(format);
     uint32_t frames = rate / 4u; /* 250 ms */
     uint32_t written = 0u, produced = 0u, expected;
-    uint8_t packet[ASTRA_AUDIO_HOST_PACKET_FRAMES *
-                   ASTRA_AUDIO_HOST_FRAME_BYTES];
+    uint8_t packet[ASTRA_AUDIO_HOST_PACKET_BYTES];
     double squares = 0.0;
     int32_t previous = 0;
     int passed = 0;
@@ -1836,8 +1830,7 @@ static uint8_t *convert_through(uint32_t source, uint32_t target,
                                 const uint8_t *input, uint32_t bytes,
                                 uint32_t chunk, uint32_t *produced)
 {
-    enum { PACKET = ASTRA_AUDIO_HOST_PACKET_FRAMES *
-                    ASTRA_AUDIO_HOST_FRAME_BYTES };
+    enum { PACKET = ASTRA_AUDIO_HOST_PACKET_BYTES };
     AudioHost host = {0};
     Client client = {0};
     AstraAudioHostRequest request = {
@@ -1959,8 +1952,7 @@ static int convert_self_test(void)
         tone[i] = (uint8_t)lrint(128.0 + 100.0 *
                                  sin(2.0 * M_PI * 441.0 * i / 11025.0));
     whole = convert_through(doom_source, doom_target, tone, TONE_FRAMES,
-                            ASTRA_AUDIO_HOST_PACKET_FRAMES *
-                                ASTRA_AUDIO_HOST_FRAME_BYTES,
+                            ASTRA_AUDIO_HOST_PACKET_BYTES,
                             &whole_bytes);
     pieces = convert_through(doom_source, doom_target, tone, TONE_FRAMES,
                              37u, &piece_bytes);
@@ -2125,7 +2117,7 @@ static int midi_self_test(void)
         .version = ASTRA_AUDIO_HOST_VERSION,
     };
     AstraAudioHostReply reply;
-    uint8_t out[ASTRA_AUDIO_HOST_PACKET_FRAMES * ASTRA_AUDIO_HOST_FRAME_BYTES];
+    uint8_t out[ASTRA_AUDIO_HOST_PACKET_BYTES];
     uint8_t digest[ASTRA_HOST_AUDIO_DIGEST_BYTES], chunk[4096];
     AstraSha256 context;
     uint8_t *font = NULL;
@@ -2457,8 +2449,7 @@ static int self_test(void)
     request.data_length = 5u;
     if (validate_request(&request, sizeof(request) + 5u) != ASTRA_STATUS_OK)
         return EXIT_FAILURE;
-    request.data_length = ASTRA_AUDIO_HOST_PACKET_FRAMES *
-                          ASTRA_AUDIO_HOST_FRAME_BYTES + 1u;
+    request.data_length = ASTRA_AUDIO_HOST_PACKET_BYTES + 1u;
     if (validate_request(&request, sizeof(request) + request.data_length) !=
         ASTRA_STATUS_INVALID)
         return EXIT_FAILURE;

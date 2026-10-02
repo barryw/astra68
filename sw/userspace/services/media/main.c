@@ -24,6 +24,9 @@ typedef struct PcmSession {
     void *samples;
     uint32_t host_voice;
     uint32_t frame_bytes;
+    /* Usable bytes of the client's area: what it mapped, up to the host
+     * window. Every request is bounded by it. */
+    uint32_t area_bytes;
     /* A converter's target frame width; zero for a voice. */
     uint32_t target_frame_bytes;
     /* A MIDI voice, and the SoundFont it is being sent, if any. */
@@ -209,8 +212,10 @@ static void serve_open(uint32_t factory)
                                     session->midi ?
                                     ASTRA_AREA_MAP_WRITE : 0u),
                                    &session->samples, &mapped_size);
+        session->area_bytes = mapped_size < ASTRA_PCM_TRANSFER_BYTES ?
+                              mapped_size : ASTRA_PCM_TRANSFER_BYTES;
         if (status != ASTRA_SYSCALL_OK ||
-            mapped_size < ASTRA_PCM_TRANSFER_FRAMES * ASTRA_PCM_MAX_FRAME_BYTES)
+            session->area_bytes < ASTRA_PCM_MAX_FRAME_BYTES)
             status = ASTRA_STATUS_BAD_HANDLE;
         else
             status = ASTRA_STATUS_OK;
@@ -325,8 +330,7 @@ static uint32_t answer_into_area(PcmSession *session, uint32_t operation,
                                  uint32_t value, AstraHostCommand **result,
                                  uint32_t *frames_out)
 {
-    const uint32_t area_bytes = ASTRA_PCM_TRANSFER_FRAMES *
-                                ASTRA_PCM_MAX_FRAME_BYTES;
+    const uint32_t area_bytes = session->area_bytes;
     uint32_t status = host_exchange(
         operation, operation == ASTRA_HOST_AUDIO_FONT_LIST ? 0u :
                    session->host_voice,
@@ -379,8 +383,7 @@ static void serve_session(PcmSession *session)
         case ASTRA_PCM_MIDI_FONT:
         case ASTRA_PCM_MIDI_LOAD:
             if (request.frames == 0u ||
-                request.frames > ASTRA_PCM_TRANSFER_FRAMES *
-                                     ASTRA_PCM_MAX_FRAME_BYTES ||
+                request.frames > session->area_bytes ||
                 request.value > request.target ||
                 request.frames > request.target - request.value) {
                 status = ASTRA_STATUS_INVALID;
@@ -423,8 +426,7 @@ static void serve_session(PcmSession *session)
             break;
         case ASTRA_PCM_MIDI_EVENTS:
             if (request.value != 0u || request.frames == 0u ||
-                request.frames > ASTRA_PCM_TRANSFER_FRAMES *
-                                     ASTRA_PCM_MAX_FRAME_BYTES ||
+                request.frames > session->area_bytes ||
                 request.frames % ASTRA_HOST_MIDI_EVENT_BYTES != 0u) {
                 status = ASTRA_STATUS_INVALID;
                 break;
@@ -443,8 +445,7 @@ static void serve_session(PcmSession *session)
                      ASTRA_STATUS_INVALID;
             break;
         case ASTRA_PCM_CONVERT: {
-            const uint32_t area_bytes = ASTRA_PCM_TRANSFER_FRAMES *
-                                        ASTRA_PCM_MAX_FRAME_BYTES;
+            const uint32_t area_bytes = session->area_bytes;
 
             if (request.value > ASTRA_PCM_CONVERT_END ||
                 request.frames > area_bytes / session->frame_bytes) {
@@ -475,7 +476,8 @@ static void serve_session(PcmSession *session)
         }
         case ASTRA_PCM_WRITE:
             if (request.value != 0u || request.frames == 0u ||
-                request.frames > ASTRA_PCM_TRANSFER_FRAMES) {
+                request.frames > ASTRA_PCM_TRANSFER_FRAMES ||
+                request.frames * session->frame_bytes > session->area_bytes) {
                 status = ASTRA_STATUS_INVALID;
                 break;
             }
@@ -557,8 +559,7 @@ int astra_main(const AstraStartupInfo *startup)
     if (bootstrap == NULL || device == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     status = astra_host_client_open(device->handle, ASTRA_HOST_CAP_AUDIO,
-                                    ASTRA_PCM_TRANSFER_FRAMES *
-                                    ASTRA_PCM_MAX_FRAME_BYTES, &host);
+                                    ASTRA_PCM_TRANSFER_BYTES, &host);
     if (status == ASTRA_SYSCALL_OK)
         status = astra_rt_port_create(1u, sizeof(AstraPcmRequest),
                                       &factory, &publication);

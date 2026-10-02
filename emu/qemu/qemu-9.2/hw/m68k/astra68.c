@@ -3387,8 +3387,7 @@ static void astra_host_execute_audio(Astra68State *s,
     uint32_t value_hi = ldl_be_p(command + HOST_FIELD(value_hi));
     uint32_t length = ldl_be_p(command + HOST_FIELD(data_length));
     uint32_t capacity = ldl_be_p(command + HOST_FIELD(data_capacity));
-    const uint32_t packet = ASTRA_AUDIO_HOST_PACKET_FRAMES *
-                            ASTRA_AUDIO_HOST_FRAME_BYTES;
+    const uint32_t packet = ASTRA_AUDIO_HOST_PACKET_BYTES;
     uint32_t status = ASTRA_STATUS_INVALID;
     uint8_t *data = NULL;
     AstraAudioHostRequest request = {

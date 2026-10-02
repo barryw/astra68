@@ -59,10 +59,10 @@ astra_image = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(astra_image)
 
 # sw/include/astra/audio_host.h, host.h, pcm_format.h, status.h
-MAGIC, VERSION = 0x41554431, 5
+MAGIC, VERSION = 0x41554431, 6
 REQUEST = struct.Struct("=8I")
 REPLY = struct.Struct("=10I")
-PACKET_FRAMES, QUEUE_FRAMES = 1024, 4096
+PACKET_BYTES, QUEUE_FRAMES = 64 * 1024, 4096
 OPEN, WRITE, GAIN, STATUS, CLOSE, FINISH, PAUSE, CLEAR, CONVERT_OPEN, \
     CONVERT, FONT_QUERY, FONT_BEGIN, FONT_DATA, FONT_END, MIDI_OPEN, \
     MIDI_FONT, MIDI_LOAD, MIDI_PLAY, MIDI_STOP, MIDI_STATUS, \
@@ -280,8 +280,7 @@ class AudioHost:
         mine = {}
         while True:
             try:
-                packet = client.recv(REQUEST.size +
-                                     PACKET_FRAMES * MAX_FRAME_BYTES)
+                packet = client.recv(REQUEST.size + PACKET_BYTES)
             except OSError:
                 return
             if not packet:
@@ -340,8 +339,7 @@ class AudioHost:
             self.convert.astra_audio_converter_close(
                 self.converters.pop(handle))
             return reply, b""
-        if value > CONVERT_END or not 0 < value_hi <= \
-                PACKET_FRAMES * MAX_FRAME_BYTES:
+        if value > CONVERT_END or not 0 < value_hi <= PACKET_BYTES:
             reply[1] = INVALID
             return reply, b""
         if data:
@@ -390,7 +388,7 @@ class AudioHost:
                     defaults = {line.strip() for line in handle}
             except OSError:
                 defaults = set()
-            for name in names[value:value + 8192 // 140]:
+            for name in names[value:value + PACKET_BYTES // 140]:
                 size = os.path.getsize(os.path.join(directory, name))
                 out += struct.pack(">III", 1 if name in defaults else 0,
                                    size >> 32, size & 0xFFFFFFFF) + \
@@ -474,7 +472,7 @@ class AudioHost:
             reply[3] = report[0]
             out = struct.pack(">6I", *report)
         elif operation == MIDI_PRESETS:
-            capacity = 8192 // 28
+            capacity = PACKET_BYTES // 28
             presets = (ctypes.c_uint8 * (28 * capacity))()
             copied, total = ctypes.c_uint32(), ctypes.c_uint32()
             reply[1] = self.synthesis.astra_audio_synth_presets(
@@ -523,7 +521,7 @@ class AudioHost:
             frames = len(data) // voice.frame_bytes
             if (voice.finished or not data or
                     len(data) % voice.frame_bytes != 0 or
-                    frames > PACKET_FRAMES):
+                    len(data) > PACKET_BYTES):
                 reply[1] = INVALID
             elif frames > QUEUE_FRAMES - int(voice.queued + 0.999):
                 reply[1] = BUSY
