@@ -17,6 +17,7 @@
 #include <math.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -72,7 +73,9 @@ typedef struct Voice {
     float (*frames)[2];
     /* (ASTRA_AUDIO_FILTER_PHASES + 1) rows of taps; NULL when the rate is
      * the sink's. */
-    float *filter;
+    const float *filter;
+    /* Set only when the shared filter cache was full. */
+    float *owned_filter;
     uint32_t handle;
     uint32_t gain_q16;
     uint32_t format;
@@ -160,6 +163,20 @@ typedef struct AudioHost {
     const char *sound;
     int sound_fonts;
     AstraAudioHostMonitorPacket monitor_packet;
+    /*
+     * The FIFO holds 512 frames, 10.7 ms. Requests are served on the main
+     * loop, and one that takes longer than that -- resampling a 64 KiB
+     * CONVERT reply -- used to starve it between feeds. A feed thread tops
+     * the FIFO up while the main loop is busy; `lock` covers everything
+     * feed() reads (clients, voices, MIDI voices, the mix state). Set only
+     * by the daemon proper; the self-tests run single-threaded.
+     */
+    pthread_mutex_t lock;
+    int threaded;
+    /* Requests served and the time spent on them, by operation (0 counts
+     * everything outside the guest protocol), reported at exit. */
+    uint32_t operation_count[ASTRA_HOST_AUDIO_OPERATION_MAX + 1u];
+    uint64_t operation_ns[ASTRA_HOST_AUDIO_OPERATION_MAX + 1u];
 } AudioHost;
 
 static volatile sig_atomic_t running = 1;
@@ -183,7 +200,7 @@ static void write_reg(AudioHost *host, unsigned offset, uint32_t value)
 static void free_voice(Voice *voice)
 {
     free(voice->frames);
-    free(voice->filter);
+    free(voice->owned_filter);
     free(voice);
 }
 
@@ -456,6 +473,33 @@ static void feed(AudioHost *host)
         host->tail_written = 0u;
         host->draining = 1;
     }
+}
+
+/* Keeps the FIFO fed while the main loop is busy with a request. */
+static void *feed_thread(void *argument)
+{
+    AudioHost *host = argument;
+    sigset_t signals;
+
+    /* SIGTERM and SIGINT stop the main loop, not this one. */
+    (void)sigemptyset(&signals);
+    (void)sigaddset(&signals, SIGTERM);
+    (void)sigaddset(&signals, SIGINT);
+    (void)pthread_sigmask(SIG_BLOCK, &signals, NULL);
+    while (running) {
+        /* 2 ms is a fifth of the FIFO while sound plays. */
+        struct timespec pause = {0, 2000000L};
+        int idle;
+
+        (void)pthread_mutex_lock(&host->lock);
+        feed(host);
+        idle = !host->playing && !queued_any(host);
+        (void)pthread_mutex_unlock(&host->lock);
+        if (idle)
+            pause.tv_nsec = 50000000L;
+        (void)nanosleep(&pause, NULL);
+    }
+    return NULL;
 }
 
 static void free_upload(Upload *upload)
@@ -903,9 +947,6 @@ static uint32_t next_handle(AudioHost *host)
 }
 
 /* @p out receives a reply's data: up to request->capacity bytes. */
-/* Converted bytes produced between two FIFO feeds. */
-#define CONVERT_SLICE_BYTES 8192u
-
 static void execute(AudioHost *host, Client *client,
                     const AstraAudioHostRequest *request,
                     const uint8_t *data, AstraAudioHostReply *reply,
@@ -1178,27 +1219,16 @@ static void execute(AudioHost *host, Client *client,
         if (request->value & ASTRA_HOST_AUDIO_CONVERT_END)
             astra_audio_converter_end(converter->converter);
         /*
-         * One reply carries up to a packet, but resampling a whole packet
-         * takes longer than the hardware FIFO lasts, and this loop is the
-         * one that keeps it fed: underruns went up tenfold when packets
-         * grew from 8 KiB to 64 KiB. So the reply is produced a slice at a
-         * time with the FIFO topped up between slices.
+         * Resampling a whole packet takes longer than the FIFO lasts, so it
+         * runs without the mix lock and the feed thread keeps playing.
+         * Converters belong to this thread alone: nothing the feed reads.
          */
-        reply->data_length = 0u;
-        while (reply->data_length < request->capacity) {
-            uint32_t piece = request->capacity - reply->data_length;
-            uint32_t moved;
-
-            if (piece > CONVERT_SLICE_BYTES)
-                piece = CONVERT_SLICE_BYTES;
-            moved = astra_audio_converter_read(
-                converter->converter, out + reply->data_length, piece);
-            if (moved == 0u)
-                break;
-            reply->data_length += moved;
-            if (host->registers != NULL)
-                feed(host);
-        }
+        if (host->threaded)
+            (void)pthread_mutex_unlock(&host->lock);
+        reply->data_length = astra_audio_converter_read(
+            converter->converter, out, request->capacity);
+        if (host->threaded)
+            (void)pthread_mutex_lock(&host->lock);
         reply->queued_frames =
             astra_audio_converter_ready(converter->converter);
         break;
@@ -1221,14 +1251,16 @@ static void execute(AudioHost *host, Client *client,
         voice->frame_bytes = astra_pcm_format_frame_bytes(request->value);
         voice->frames = calloc(VOICE_FRAMES, sizeof(*voice->frames));
         if (voice->rate != ASTRA_PCM_RATE) {
-            voice->filter = astra_audio_make_filter(voice->rate,
-                                                    ASTRA_PCM_RATE,
-                                                    &voice->taps);
-            voice->lookahead = voice->taps / 2u;
-            if (voice->lookahead > HISTORY_FRAMES) {
-                free(voice->filter);
-                voice->filter = NULL;
+            voice->filter = astra_audio_filter(voice->rate, ASTRA_PCM_RATE,
+                                               &voice->taps);
+            if (voice->filter == NULL) {
+                voice->owned_filter = astra_audio_make_filter(
+                    voice->rate, ASTRA_PCM_RATE, &voice->taps);
+                voice->filter = voice->owned_filter;
             }
+            voice->lookahead = voice->taps / 2u;
+            if (voice->lookahead > HISTORY_FRAMES)
+                voice->filter = NULL;
         }
         if (voice->frames == NULL ||
             (voice->rate != ASTRA_PCM_RATE && voice->filter == NULL)) {
@@ -1404,9 +1436,21 @@ static void receive_client(AudioHost *host, Client *client)
         if (reply.status == ASTRA_STATUS_OK && client->monitor &&
             request.operation != ASTRA_AUDIO_HOST_MONITOR)
             reply.status = ASTRA_STATUS_INVALID;
-        if (reply.status == ASTRA_STATUS_OK)
+        if (reply.status == ASTRA_STATUS_OK) {
+            uint32_t operation = request.operation <=
+                                 ASTRA_HOST_AUDIO_OPERATION_MAX ?
+                                 request.operation : 0u;
+            struct timespec start, end;
+
+            (void)clock_gettime(CLOCK_MONOTONIC, &start);
             execute(host, client, &request, packet + sizeof(request), &reply,
                     out);
+            (void)clock_gettime(CLOCK_MONOTONIC, &end);
+            ++host->operation_count[operation];
+            host->operation_ns[operation] +=
+                (uint64_t)(end.tv_sec - start.tv_sec) * 1000000000u +
+                (uint64_t)end.tv_nsec - (uint64_t)start.tv_nsec;
+        }
     }
     reply.hardware_frames = read_reg(host, REG_STATUS) & STATUS_LEVEL_MASK;
     reply.underruns = read_reg(host, REG_UNDERRUNS) - host->underrun_start;
@@ -2530,6 +2574,7 @@ int main(int argc, char **argv)
                       .sound = getenv("ASTRA_AUDIO_HOST_SOUND"),
                       .sound_fonts = -1};
     struct epoll_event events[32];
+    pthread_t feeder;
     int result = EXIT_FAILURE;
 
     if (argc == 2 && strcmp(argv[1], "--self-test") == 0)
@@ -2554,26 +2599,45 @@ int main(int argc, char **argv)
             path, AUDIO_RATE);
     (void)signal(SIGTERM, stop_running);
     (void)signal(SIGINT, stop_running);
+    if (pthread_mutex_init(&host.lock, NULL) != 0 ||
+        pthread_create(&feeder, NULL, feed_thread, &host) != 0) {
+        perror("Astra audio host feed thread");
+        goto done;
+    }
+    host.threaded = 1;
     while (running) {
-        int count = epoll_wait(host.epoll_fd, events,
-                               sizeof(events) / sizeof(events[0]),
-                               host.playing || queued_any(&host) ? 1 : 1000);
+        int playing;
+        int count;
 
+        (void)pthread_mutex_lock(&host.lock);
+        playing = host.playing || queued_any(&host);
+        (void)pthread_mutex_unlock(&host.lock);
+        count = epoll_wait(host.epoll_fd, events,
+                           sizeof(events) / sizeof(events[0]),
+                           playing ? 1 : 1000);
         if (count < 0 && errno != EINTR) {
             perror("Astra audio host poll");
             goto done;
         }
+        (void)pthread_mutex_lock(&host.lock);
         for (int index = 0; index < count; ++index) {
             if (events[index].data.ptr == &host)
                 accept_client(&host);
             else
                 receive_client(&host, events[index].data.ptr);
         }
+        /* A write is heard now, not at the feed thread's next turn. */
         feed(&host);
+        (void)pthread_mutex_unlock(&host.lock);
     }
     result = EXIT_SUCCESS;
 
 done:
+    running = 0;
+    if (host.threaded) {
+        (void)pthread_join(feeder, NULL);
+        host.threaded = 0;
+    }
     if (host.registers != NULL) {
         write_reg(&host, REG_CONTROL, 0u);
         fprintf(stderr, "ASTRA AUDIO HOST frames=%llu voices_peak=%u "
@@ -2584,6 +2648,14 @@ done:
                 read_reg(&host, REG_UNDERRUNS) - host.underrun_start,
                 read_reg(&host, REG_OVERFLOWS) - host.overflow_start,
                 host.software_gaps);
+        for (uint32_t operation = 0u;
+             operation <= ASTRA_HOST_AUDIO_OPERATION_MAX; ++operation)
+            if (host.operation_count[operation] != 0u)
+                fprintf(stderr, "ASTRA AUDIO HOST operation=%u count=%u "
+                        "total_us=%llu\n", operation,
+                        host.operation_count[operation],
+                        (unsigned long long)
+                            (host.operation_ns[operation] / 1000u));
     }
     while (host.clients != NULL)
         free_client(&host, host.clients);

@@ -8,6 +8,7 @@
 #include <astra/status.h>
 
 #include <math.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -193,6 +194,49 @@ float *astra_audio_make_filter(uint32_t in_rate, uint32_t out_rate,
     return filter;
 }
 
+/*
+ * Building a table costs thousands of Bessel evaluations -- 61 ms on the
+ * DE25's A76 for Doom's 56 effects, each a new converter at the same two
+ * rates. Distinct rate pairs are few in practice; the bound keeps a guest
+ * that invents rates from growing it without limit. Locked because the
+ * gates' stand-in daemon converts on several threads.
+ */
+#define FILTER_CACHE_ENTRIES 32u
+
+static struct {
+    uint32_t in_rate;
+    uint32_t out_rate;
+    uint32_t taps;
+    float *filter;
+} filter_cache[FILTER_CACHE_ENTRIES];
+static pthread_mutex_t filter_cache_lock = PTHREAD_MUTEX_INITIALIZER;
+
+const float *astra_audio_filter(uint32_t in_rate, uint32_t out_rate,
+                                uint32_t *taps_out)
+{
+    const float *found = NULL;
+
+    (void)pthread_mutex_lock(&filter_cache_lock);
+    for (uint32_t index = 0u; index < FILTER_CACHE_ENTRIES; ++index) {
+        if (filter_cache[index].filter == NULL) {
+            filter_cache[index].filter = astra_audio_make_filter(
+                in_rate, out_rate, &filter_cache[index].taps);
+            if (filter_cache[index].filter == NULL)
+                break;
+            filter_cache[index].in_rate = in_rate;
+            filter_cache[index].out_rate = out_rate;
+        }
+        if (filter_cache[index].in_rate == in_rate &&
+            filter_cache[index].out_rate == out_rate) {
+            *taps_out = filter_cache[index].taps;
+            found = filter_cache[index].filter;
+            break;
+        }
+    }
+    (void)pthread_mutex_unlock(&filter_cache_lock);
+    return found;
+}
+
 struct AstraAudioConverter {
     uint32_t source_encoding;
     uint32_t source_channels;
@@ -203,8 +247,21 @@ struct AstraAudioConverter {
     uint32_t target_rate;
     uint32_t target_frame_bytes;
     /* NULL when the rates match. */
-    float *filter;
+    const float *filter;
+    /* Set only when the shared cache was full and this one is ours. */
+    float *owned_filter;
     uint32_t taps;
+    /*
+     * The interpolated taps for each output phase, when the ratio repeats
+     * soon enough to tabulate: output frame i reads row i % phases. A
+     * reduced ratio of in/out = M/L has exactly L phases (Doom's 11025 ->
+     * 44100 has 4), so the per-frame row choice, blend and multiply-add of
+     * two rows become one row read. The doubles are the same values the
+     * per-frame expression produces, so output is bit-identical. NULL when
+     * L is too large to be worth it.
+     */
+    double *weights;
+    uint32_t phases;
     /* Decoded source frames, left and right at 24-bit scale; frames[0] is
      * source frame @c base. */
     float (*frames)[2];
@@ -216,6 +273,49 @@ struct AstraAudioConverter {
     uint64_t produced;
     int ended;
 };
+
+static uint32_t greatest_divisor(uint32_t a, uint32_t b)
+{
+    while (b != 0u) {
+        uint32_t rest = a % b;
+
+        a = b;
+        b = rest;
+    }
+    return a;
+}
+
+/* Most output phases tabulated: a 152-tap downsampling filter at this many
+ * phases is 600 KiB, and the common ratios need a handful. */
+#define CONVERTER_PHASES_MAX 512u
+
+static void build_weights(AstraAudioConverter *converter)
+{
+    uint32_t phases = converter->target_rate /
+                      greatest_divisor(converter->source_rate,
+                                       converter->target_rate);
+
+    if (phases > CONVERTER_PHASES_MAX)
+        return;
+    converter->weights = malloc((size_t)phases * converter->taps *
+                                sizeof(*converter->weights));
+    if (converter->weights == NULL)
+        return;
+    for (uint32_t phase = 0u; phase < phases; ++phase) {
+        uint64_t scaled = (uint64_t)phase * converter->source_rate;
+        double offset = (double)(scaled % converter->target_rate) *
+                        ASTRA_AUDIO_FILTER_PHASES / converter->target_rate;
+        uint32_t row = (uint32_t)offset;
+        double blend = offset - row;
+        const float *first = converter->filter + row * converter->taps;
+        const float *second = first + converter->taps;
+        double *weight = converter->weights + phase * converter->taps;
+
+        for (uint32_t tap = 0u; tap < converter->taps; ++tap)
+            weight[tap] = first[tap] + blend * (second[tap] - first[tap]);
+    }
+    converter->phases = phases;
+}
 
 AstraAudioConverter *astra_audio_converter_open(uint32_t source,
                                                 uint32_t target)
@@ -237,13 +337,20 @@ AstraAudioConverter *astra_audio_converter_open(uint32_t source,
     converter->target_rate = astra_pcm_format_rate(target);
     converter->target_frame_bytes = astra_pcm_format_frame_bytes(target);
     if (converter->source_rate != converter->target_rate) {
-        converter->filter = astra_audio_make_filter(
+        converter->filter = astra_audio_filter(
             converter->source_rate, converter->target_rate,
             &converter->taps);
+        if (converter->filter == NULL) {
+            converter->owned_filter = astra_audio_make_filter(
+                converter->source_rate, converter->target_rate,
+                &converter->taps);
+            converter->filter = converter->owned_filter;
+        }
         if (converter->filter == NULL) {
             free(converter);
             return NULL;
         }
+        build_weights(converter);
     }
     return converter;
 }
@@ -253,7 +360,8 @@ void astra_audio_converter_close(AstraAudioConverter *converter)
     if (converter == NULL)
         return;
     free(converter->frames);
-    free(converter->filter);
+    free(converter->owned_filter);
+    free(converter->weights);
     free(converter);
 }
 
@@ -391,6 +499,34 @@ uint32_t astra_audio_converter_read(AstraAudioConverter *converter,
 
             value[0] = frame[0];
             value[1] = frame[1];
+        } else if (converter->weights != NULL) {
+            uint64_t scaled = index * converter->source_rate;
+            int64_t position = (int64_t)(scaled / converter->target_rate);
+            const double *weight = converter->weights +
+                (uint32_t)(index % converter->phases) * converter->taps;
+            int64_t from = position + 1 - (int64_t)half_width(converter);
+
+            value[0] = value[1] = 0.0;
+            if (from >= (int64_t)converter->base &&
+                from + converter->taps <=
+                    (int64_t)(converter->base + converter->held)) {
+                /* The whole window is held: no per-tap bounds check. */
+                const float (*frame)[2] =
+                    converter->frames + (from - (int64_t)converter->base);
+
+                for (uint32_t tap = 0u; tap < converter->taps; ++tap) {
+                    value[0] += frame[tap][0] * weight[tap];
+                    value[1] += frame[tap][1] * weight[tap];
+                }
+            } else {
+                for (uint32_t tap = 0u; tap < converter->taps; ++tap) {
+                    const float *frame = source_frame(converter,
+                                                      from + (int64_t)tap);
+
+                    value[0] += frame[0] * weight[tap];
+                    value[1] += frame[1] * weight[tap];
+                }
+            }
         } else {
             uint64_t scaled = index * converter->source_rate;
             int64_t position = (int64_t)(scaled / converter->target_rate);

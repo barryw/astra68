@@ -38,6 +38,13 @@ void astra_audio_encode_sample(uint32_t encoding, double value,
 float *astra_audio_make_filter(uint32_t in_rate, uint32_t out_rate,
                                uint32_t *taps_out);
 
+/* The same table from a process-wide cache, built once per rate pair and
+ * never freed: every converter and voice at a pair shares it. NULL when
+ * the cache is full (a guest choosing ever new rates) or memory ran out;
+ * the caller then makes and owns its own with astra_audio_make_filter(). */
+const float *astra_audio_filter(uint32_t in_rate, uint32_t out_rate,
+                                uint32_t *taps_out);
+
 typedef struct AstraAudioConverter AstraAudioConverter;
 
 /* A converter from one PCM format word to another (<astra/pcm_format.h>).
