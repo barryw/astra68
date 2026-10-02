@@ -1,4 +1,5 @@
 #include "memory.h"
+#include "audit.h"
 
 #include "bytes.h"
 
@@ -648,8 +649,24 @@ void *kernel_memory_access(uint32_t physical_address, uint32_t byte_count)
 #endif
 }
 
+/*
+ * What a frame holds before its caller writes it. An unfilled frame is one
+ * whose caller overwrites every byte before anyone can read it -- a page about
+ * to receive a copy -- so filling it first is wasted work. An audit build
+ * still poisons it, so a byte the caller forgot reads as 0xa110ca7e rather
+ * than as whatever the frame last held.
+ */
+#define FRAME_UNFILLED UINT32_C(0x00f1f1ed)
+
 static void poison(uint32_t first, uint32_t count, uint32_t value)
 {
+    if (value == FRAME_UNFILLED) {
+#if KERNEL_AUDIT
+        value = KERNEL_ALLOC_POISON;
+#else
+        return;
+#endif
+    }
 #if defined(KERNEL_MEMORY_HOST_TEST)
     uint32_t physical = stats.ram_base + first * KERNEL_PAGE_SIZE;
     uint32_t size = count * KERNEL_PAGE_SIZE;
@@ -1162,6 +1179,15 @@ KernelMemoryStatus kernel_memory_alloc_zeroed_tagged(
                            site, physical_base);
 }
 
+KernelMemoryStatus kernel_memory_alloc_unfilled_tagged(
+    KernelAllocationSite site, uint32_t frame_count,
+    uint32_t alignment_frames, KernelFrameState state, uint32_t owner,
+    uint32_t *physical_base)
+{
+    return allocate_frames(frame_count, alignment_frames, state, owner,
+                           FRAME_UNFILLED, site, physical_base);
+}
+
 KernelMemoryStatus kernel_memory_alloc_pages_zeroed(
     uint32_t frame_count, KernelFrameState state, uint32_t owner,
     uint32_t *physical_pages)
@@ -1171,9 +1197,29 @@ KernelMemoryStatus kernel_memory_alloc_pages_zeroed(
         physical_pages);
 }
 
+static KernelMemoryStatus allocate_pages(
+    KernelAllocationSite site, uint32_t frame_count, KernelFrameState state,
+    uint32_t owner, uint32_t initial_value, uint32_t *physical_pages);
+
 KernelMemoryStatus kernel_memory_alloc_pages_zeroed_tagged(
     KernelAllocationSite site, uint32_t frame_count, KernelFrameState state,
     uint32_t owner, uint32_t *physical_pages)
+{
+    return allocate_pages(site, frame_count, state, owner, 0u,
+                          physical_pages);
+}
+
+KernelMemoryStatus kernel_memory_alloc_pages_unfilled_tagged(
+    KernelAllocationSite site, uint32_t frame_count, KernelFrameState state,
+    uint32_t owner, uint32_t *physical_pages)
+{
+    return allocate_pages(site, frame_count, state, owner, FRAME_UNFILLED,
+                          physical_pages);
+}
+
+static KernelMemoryStatus allocate_pages(
+    KernelAllocationSite site, uint32_t frame_count, KernelFrameState state,
+    uint32_t owner, uint32_t initial_value, uint32_t *physical_pages)
 {
     uint32_t owner_slot;
     uint32_t found = 0u;
@@ -1211,8 +1257,9 @@ KernelMemoryStatus kernel_memory_alloc_pages_zeroed_tagged(
 
         for (uint32_t index = begin; index < end && found < frame_count;
              ++index) {
-            if (bitmap_test(blocked_bitmap, index))
-                continue;
+            index = next_clear_bit(blocked_bitmap, index, end - 1u);
+            if (index == UINT32_MAX)
+                break;
             /*
              * Never the DMA zone. This is the scattered path -- every area
              * page, every stack page, every code page -- and it is precisely
@@ -1221,8 +1268,10 @@ KernelMemoryStatus kernel_memory_alloc_pages_zeroed_tagged(
              * because it would look like the contiguous case was handled.
              */
             if (dma_zone_frames != 0u && index >= dma_zone_first &&
-                index < dma_zone_first + dma_zone_frames)
+                index < dma_zone_first + dma_zone_frames) {
+                index = dma_zone_first + dma_zone_frames - 1u;
                 continue;
+            }
             physical_pages[found] =
                 stats.ram_base + index * KERNEL_PAGE_SIZE;
             ++found;
@@ -1244,7 +1293,7 @@ KernelMemoryStatus kernel_memory_alloc_pages_zeroed_tagged(
             (physical_pages[page] - stats.ram_base) / KERNEL_PAGE_SIZE;
         KernelFrameInfo *frame = &frames[index];
 
-        poison(index, 1u, 0u);
+        poison(index, 1u, initial_value);
         bitmap_set(blocked_bitmap, index, true);
         bitmap_set(dynamic_bitmap, index, true);
         frame->owner = owner;

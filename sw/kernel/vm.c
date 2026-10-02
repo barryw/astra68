@@ -1,5 +1,7 @@
 #include "vm.h"
 
+#include "bytes.h"
+
 #include "memory.h"
 #include "pmmu.h"
 #include "thread.h"
@@ -1917,7 +1919,8 @@ KernelVmStatus kernel_vm_cow_fault(KernelAddressSpace *space,
         return kernel_vm_cow_make_private(space, virtual_address);
     }
 
-    if (kernel_memory_alloc_zeroed_tagged(
+    /* Unfilled: the whole page is copied over it. */
+    if (kernel_memory_alloc_unfilled_tagged(
             KERNEL_ALLOCATION_SITE_PROCESS_PRIVATE_PAGE, 1u, 1u,
             KERNEL_FRAME_PROCESS, space->owner, &replacement) !=
         KERNEL_MEMORY_OK)
@@ -1928,9 +1931,8 @@ KernelVmStatus kernel_vm_cow_fault(KernelAddressSpace *space,
         (void)kernel_memory_release(replacement, 1u, space->owner);
         return KERNEL_VM_CORRUPT;
     }
-    for (uint32_t word = 0u; word < KERNEL_PAGE_SIZE / sizeof(uint32_t);
-         ++word)
-        destination[word] = source[word];
+    kernel_bytes_copy((void *)(uintptr_t)destination,
+                      (const void *)(uintptr_t)source, KERNEL_PAGE_SIZE);
     if (!frame_mapping_add(replacement, KERNEL_FRAME_PROCESS,
                            virtual_address)) {
         (void)kernel_memory_release(replacement, 1u, space->owner);

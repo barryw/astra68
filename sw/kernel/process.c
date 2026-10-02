@@ -4676,9 +4676,11 @@ static KernelProcessStatus publish_page_tagged(
     uint32_t physical = 0u;
     uint8_t *bytes;
 
-    if (source_size != 0u && (source != NULL) == (user_source != 0u))
+    if (source_size > KERNEL_PAGE_SIZE ||
+        (source_size != 0u && (source != NULL) == (user_source != 0u)))
         return KERNEL_PROCESS_INVALID_ARGUMENT;
-    if (kernel_memory_alloc_zeroed_tagged(
+    /* Unfilled: the copy and the zeroed tail below write every byte. */
+    if (kernel_memory_alloc_unfilled_tagged(
             site, 1u, 1u, KERNEL_FRAME_PROCESS, owner, &physical) !=
         KERNEL_MEMORY_OK)
         return KERNEL_PROCESS_OUT_OF_MEMORY;
@@ -4688,9 +4690,7 @@ static KernelProcessStatus publish_page_tagged(
         (void)kernel_memory_release(physical, 1u, owner);
         return KERNEL_PROCESS_CORRUPT;
     }
-#if defined(KERNEL_PROCESS_HOST_TEST)
-    kernel_bytes_clear(bytes, KERNEL_PAGE_SIZE);
-#endif
+    kernel_bytes_clear(bytes + source_size, KERNEL_PAGE_SIZE - source_size);
     if (user_source != 0u) {
         if (kernel_copy_from_user(bytes, user_source, source_size) !=
                 KERNEL_USER_COPY_OK) {
@@ -4749,7 +4749,8 @@ static KernelProcessStatus publish_segment_page_batch(
     uint32_t page_count, uint32_t rights, uint32_t *mapped_pages)
 {
     *mapped_pages = 0u;
-    if (kernel_memory_alloc_pages_zeroed_tagged(
+    /* Unfilled: each page is written below, file bytes then a zeroed tail. */
+    if (kernel_memory_alloc_pages_unfilled_tagged(
             KERNEL_ALLOCATION_SITE_PROCESS_CODE_PAGE, page_count,
             KERNEL_FRAME_PROCESS, owner, segment_page_batch) !=
         KERNEL_MEMORY_OK)
@@ -4770,6 +4771,7 @@ static KernelProcessStatus publish_segment_page_batch(
             if (copy > KERNEL_PAGE_SIZE)
                 copy = KERNEL_PAGE_SIZE;
         }
+        kernel_bytes_clear(bytes + copy, KERNEL_PAGE_SIZE - copy);
         if (copy == 0u)
             continue;
         if (user_image != 0u) {
@@ -6010,7 +6012,8 @@ static KernelProcessStatus library_load_append_page(
     needs_block = block == NULL ||
         block->count ==
             (uint16_t)(sizeof(block->pages) / sizeof(block->pages[0]));
-    if (kernel_memory_alloc_zeroed_tagged(
+    /* Unfilled: the copy and the zeroed tail write every byte. */
+    if (kernel_memory_alloc_unfilled_tagged(
             KERNEL_ALLOCATION_SITE_LIBRARY_PAGE, 1u, 1u,
             KERNEL_FRAME_SHARED, LIBRARY_CACHE_OWNER, &physical) !=
         KERNEL_MEMORY_OK)
@@ -6020,6 +6023,7 @@ static KernelProcessStatus library_load_append_page(
         (void)kernel_memory_release(physical, 1u, LIBRARY_CACHE_OWNER);
         return KERNEL_PROCESS_CORRUPT;
     }
+    kernel_bytes_clear(target + length, KERNEL_PAGE_SIZE - length);
     if (user_bytes != 0u) {
         if (kernel_copy_from_user(target, user_bytes, length) !=
                 KERNEL_USER_COPY_OK) {

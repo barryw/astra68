@@ -178,6 +178,18 @@ KernelMemoryStatus kernel_memory_alloc_zeroed_tagged(
     KernelAllocationSite site, uint32_t frame_count,
     uint32_t alignment_frames, KernelFrameState state, uint32_t owner,
     uint32_t *physical_base);
+/*
+ * Frames whose contents are undefined: the caller writes every byte before
+ * the frame is mapped, read, or released, so it is not filled first. For a
+ * page that receives a copy, the fill was a second write of every word.
+ */
+KernelMemoryStatus kernel_memory_alloc_unfilled_tagged(
+    KernelAllocationSite site, uint32_t frame_count,
+    uint32_t alignment_frames, KernelFrameState state, uint32_t owner,
+    uint32_t *physical_base);
+KernelMemoryStatus kernel_memory_alloc_pages_unfilled_tagged(
+    KernelAllocationSite site, uint32_t frame_count, KernelFrameState state,
+    uint32_t owner, uint32_t *physical_pages);
 KernelMemoryStatus kernel_memory_alloc_pages_zeroed(
     uint32_t frame_count, KernelFrameState state, uint32_t owner,
     uint32_t *physical_pages);
