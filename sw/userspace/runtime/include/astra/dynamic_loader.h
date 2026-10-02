@@ -38,11 +38,15 @@ typedef struct AstraDynamicImage {
     uint32_t interpreter_size;      /**< PT_INTERP bytes including NUL. */
     uint32_t dynamic_address;       /**< PT_DYNAMIC target address. */
     uint32_t dynamic_size;          /**< PT_DYNAMIC byte count. */
-    uint32_t hash_address;          /**< SysV hash-table target address. */
+    uint32_t hash_address;          /**< DT_GNU_HASH table target address. */
+    uint32_t hash_bucket_count;     /**< GNU hash bucket count. */
+    uint32_t hash_symbol_offset;    /**< First symbol the hash covers. */
+    uint32_t hash_bloom_mask;       /**< Bloom words minus one. */
+    uint32_t hash_bloom_shift;      /**< Second Bloom bit's hash shift. */
     uint32_t string_address;        /**< Dynamic string-table address. */
     uint32_t string_size;           /**< Dynamic string-table byte count. */
     uint32_t symbol_address;        /**< Dynamic symbol-table address. */
-    uint32_t symbol_count;          /**< Validated dynamic symbol count. */
+    uint32_t symbol_count;          /**< Symbols the loaded table holds. */
     uint32_t rela_address;          /**< General RELA-table address. */
     uint32_t rela_size;             /**< General RELA-table bytes. */
     uint32_t jump_rela_address;     /**< PLT RELA-table address. */
@@ -107,7 +111,9 @@ typedef struct AstraDynamicTlsLayout {
  * @param header_address Target ELF-header address within the mapping.
  * @param load_bias Runtime address bias applied to dynamic symbols.
  * @param image Receives validated metadata. The mapped ELF metadata must
- * remain unchanged while this image is used.
+ * remain unchanged while this image is used: the symbol, GNU hash and
+ * version tables are checked here, once, and read unchecked afterwards.
+ * An image without DT_GNU_HASH is ASTRA_DYNAMIC_UNSUPPORTED.
  * @return Detailed dynamic-loader status.
  */
 AstraDynamicStatus astra_dynamic_open(uintptr_t mapping_origin,

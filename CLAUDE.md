@@ -199,6 +199,17 @@ There is no alternative CPU or emulator implementation in the repository.
   `test-terminal.py` hanging forever in `input_events` -- the walk of the
   faulting page was valid; URP was the empty root. Any read-compare-switch
   of `current_user_root` outside an interrupts-off region has the same hole.
+- **The loader reads only `DT_GNU_HASH`.** The compiler driver adds
+  `--hash-style=gnu` to every link (`LINK_SPEC` in
+  `toolchain/patches/gcc-16.2.0-astra.patch`, installed on `beast` from
+  `~/astra-toolchain/build/gcc-68040` with `make all-gcc install-gcc`). A
+  toolchain without it links SysV-only images, which the loader refuses as
+  unsupported, so it fails to launch. Check
+  with `m68k-astra-gcc -dumpspecs | grep hash-style`; after changing it,
+  relink everything (move the `build/` trees aside) and regenerate images.
+- **The profile plugin appends.** `bench-workloads.py OUT.aprof` adds its
+  intervals to an existing file, and `astra-prof` then sums both runs. Use a
+  fresh name or delete the file first.
 - **The qualification kernel is a second ROM**, built with
   `make KERNEL_K1_QUALIFICATION=1` in `sw/boot`, with no debug surface and no
   initial user image. `emu/qemu/test-qualification.py` is its gate. It

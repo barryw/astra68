@@ -64,10 +64,12 @@ areas, ~170 pages mapped and unmapped per process), not library code.
 
 ## Next, largest first
 
-1. **Loader symbol resolution**, ~1.1 M per launch (`dynamic_lookup_hashed`,
-   `symbol_version`, `relocate_table`): SysV hash walked across every
-   image per symbol. GNU hash bloom filters, or caching a library's
-   relocated data when the program does not interpose.
+1. ~~Loader symbol resolution~~ -- DONE with GNU hash (loader 22.3 M ->
+   13.0 M instructions per 20 launches, spawn -6.6%). What is left, ~0.5 M
+   per launch: hashing each name (~170 instructions), the version-string
+   compare, ~2,000 RELATIVE relocations and the verneed walk. The next
+   lever is caching a library's relocated data when the program does not
+   interpose; it removes nearly all of it.
 2. **Storage reads per launch** (~0.9 M): the loader and the program are
    read through the VFS every launch. Cache the interpreter in the
    library cache (it is a library) and map it like one.

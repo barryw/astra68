@@ -20,6 +20,7 @@
 #define ELF_DT_NULL 0u
 #define ELF_DT_NEEDED 1u
 #define ELF_DT_HASH 4u
+#define ELF_DT_GNU_HASH 0x6ffffef5u
 #define ELF_DT_BIND_NOW 24u
 #define ELF_DT_FLAGS_1 0x6ffffffbu
 #define ELF_DT_IGNORED_PROCESSOR 0x70000000u
@@ -145,7 +146,7 @@ static uint8_t *fixture_dynamic_entry(Fixture *fixture, uint32_t wanted)
 static void test_dynamic_singleton_tags(const char *program_path)
 {
     Fixture program = load_fixture(program_path, 0u);
-    uint8_t *hash = fixture_dynamic_entry(&program, ELF_DT_HASH);
+    uint8_t *hash = fixture_dynamic_entry(&program, ELF_DT_GNU_HASH);
     uint8_t *terminator = fixture_dynamic_entry(&program, ELF_DT_NULL);
     AstraDynamicImage image;
     uint32_t hash_address;
@@ -159,7 +160,7 @@ static void test_dynamic_singleton_tags(const char *program_path)
 
     hash_address = astra_load_be32(hash + 4u);
     astra_store_be32(hash + 4u, 0u);
-    astra_store_be32(terminator, ELF_DT_HASH);
+    astra_store_be32(terminator, ELF_DT_GNU_HASH);
     astra_store_be32(terminator + 4u, hash_address);
     assert(astra_dynamic_open((uintptr_t)program.mapping, program.span,
                               program.header_address, 0u, &image) ==
@@ -223,6 +224,143 @@ static AstraDynamicStatus resolve_tls_runtime(
     return ASTRA_DYNAMIC_OK;
 }
 
+/* Offsets inside a GNU hash table, from the fields open() recorded. */
+static uint8_t *gnu_hash_bloom(Fixture *fixture)
+{
+    return fixture->mapping + fixture->image.hash_address + 16u;
+}
+
+static uint8_t *gnu_hash_buckets(Fixture *fixture)
+{
+    return gnu_hash_bloom(fixture) +
+           (fixture->image.hash_bloom_mask + 1u) * 4u;
+}
+
+static uint8_t *gnu_hash_chains(Fixture *fixture)
+{
+    return gnu_hash_buckets(fixture) + fixture->image.hash_bucket_count * 4u;
+}
+
+/* Hashed symbols: from the offset to the end of the highest bucket's chain. */
+static uint32_t gnu_hash_hashed(Fixture *fixture)
+{
+    uint32_t last = 0u;
+    uint32_t symbol;
+
+    for (uint32_t bucket = 0u; bucket < fixture->image.hash_bucket_count;
+         ++bucket) {
+        uint32_t first = astra_load_be32(gnu_hash_buckets(fixture) +
+                                         bucket * 4u);
+
+        if (first > last)
+            last = first;
+    }
+    assert(last >= fixture->image.hash_symbol_offset);
+    for (symbol = last;
+         (astra_load_be32(gnu_hash_chains(fixture) +
+                          (symbol - fixture->image.hash_symbol_offset) *
+                              4u) & 1u) == 0u;
+         ++symbol)
+        assert(symbol + 1u < fixture->image.symbol_count);
+    return symbol + 1u - fixture->image.hash_symbol_offset;
+}
+
+static AstraDynamicStatus reopen(Fixture *fixture)
+{
+    AstraDynamicImage image;
+
+    return astra_dynamic_open((uintptr_t)fixture->mapping, fixture->span,
+                              fixture->header_address,
+                              fixture->image.load_bias, &image);
+}
+
+/*
+ * The library defines the contract symbols through DT_GNU_HASH alone. Each
+ * perturbation must turn a found symbol into a miss, or an accepted table
+ * into a refused one -- otherwise the part it breaks is not being read.
+ */
+static void test_gnu_hash_lookup(Fixture *library, uint32_t symbol_address)
+{
+    AstraDynamicResolution symbol;
+    uint8_t *field;
+    uint32_t saved;
+    uint32_t hashed;
+
+    assert(library->image.hash_bucket_count != 0u);
+    assert(library->image.hash_symbol_offset != 0u);
+    hashed = gnu_hash_hashed(library);
+    assert(hashed != 0u && library->image.hash_symbol_offset + hashed <=
+                               library->image.symbol_count);
+
+    /* A filter that says no skips the image without reading a chain. */
+    for (uint32_t word = 0u; word <= library->image.hash_bloom_mask; ++word)
+        astra_store_be32(gnu_hash_bloom(library) + word * 4u, 0u);
+    assert(astra_dynamic_lookup(&library->image,
+                                "astra_dynamic_contract_add", "ASTRA_1.0",
+                                &symbol) == ASTRA_DYNAMIC_UNRESOLVED_SYMBOL);
+    for (uint32_t word = 0u; word <= library->image.hash_bloom_mask; ++word)
+        astra_store_be32(gnu_hash_bloom(library) + word * 4u, UINT32_MAX);
+    assert(astra_dynamic_lookup(&library->image,
+                                "astra_dynamic_contract_add", "ASTRA_1.0",
+                                &symbol) == ASTRA_DYNAMIC_OK);
+    assert(symbol.address == symbol_address);
+
+    /* A chain entry whose stored hash differs is never compared by name. */
+    for (uint32_t index = 0u; index < hashed; ++index) {
+        field = gnu_hash_chains(library) + index * 4u;
+        astra_store_be32(field, astra_load_be32(field) ^ 2u);
+    }
+    assert(astra_dynamic_lookup(&library->image,
+                                "astra_dynamic_contract_add", "ASTRA_1.0",
+                                &symbol) == ASTRA_DYNAMIC_UNRESOLVED_SYMBOL);
+    for (uint32_t index = 0u; index < hashed; ++index) {
+        field = gnu_hash_chains(library) + index * 4u;
+        astra_store_be32(field, astra_load_be32(field) ^ 2u);
+    }
+    assert(astra_dynamic_lookup(&library->image,
+                                "astra_dynamic_contract_add", "ASTRA_1.0",
+                                &symbol) == ASTRA_DYNAMIC_OK);
+
+    /* Malformed tables are refused when the image is opened. */
+    assert(reopen(library) == ASTRA_DYNAMIC_OK);
+    field = library->mapping + library->image.hash_address;
+    saved = astra_load_be32(field);
+    astra_store_be32(field, 0u);
+    assert(reopen(library) == ASTRA_DYNAMIC_BAD_TABLE);
+    astra_store_be32(field, saved);
+    field += 8u;
+    saved = astra_load_be32(field);
+    astra_store_be32(field, 3u);
+    assert(reopen(library) == ASTRA_DYNAMIC_BAD_TABLE);
+    astra_store_be32(field, saved);
+    field += 4u;
+    saved = astra_load_be32(field);
+    astra_store_be32(field, 32u);
+    assert(reopen(library) == ASTRA_DYNAMIC_BAD_TABLE);
+    astra_store_be32(field, saved);
+    field = gnu_hash_buckets(library);
+    saved = astra_load_be32(field);
+    astra_store_be32(field, library->image.hash_symbol_offset - 1u);
+    assert(reopen(library) == ASTRA_DYNAMIC_BAD_TABLE);
+    astra_store_be32(field, UINT32_MAX - 1u);
+    assert(reopen(library) == ASTRA_DYNAMIC_BAD_TABLE);
+    astra_store_be32(field, saved);
+    assert(reopen(library) == ASTRA_DYNAMIC_OK);
+}
+
+static void test_gnu_hash_required(const char *library_path)
+{
+    Fixture library = load_fixture(library_path, 0x24000000u);
+    uint8_t *hash = fixture_dynamic_entry(&library, ELF_DT_GNU_HASH);
+
+    assert(hash != NULL && fixture_dynamic_entry(&library, ELF_DT_HASH) ==
+                               NULL);
+    /* A SysV table alone is a format the loader does not read. */
+    astra_store_be32(hash, ELF_DT_HASH);
+    assert(reopen(&library) == ASTRA_DYNAMIC_UNSUPPORTED);
+    unload_fixture(&library);
+}
+
 static void test_real_dynamic_pair(const char *program_path,
                                    const char *library_path)
 {
@@ -231,7 +369,6 @@ static void test_real_dynamic_pair(const char *program_path,
     AstraDynamicClosure closure;
     AstraDynamicResolution symbol;
     uint32_t symbol_address;
-    uint32_t bucket_count;
     const char *needed;
     const char *interpreter;
     const char *soname;
@@ -282,23 +419,7 @@ static void test_real_dynamic_pair(const char *program_path,
     assert(astra_dynamic_lookup(&library.image,
                                 "astra_dynamic_contract_missing", NULL,
                                 &symbol) == ASTRA_DYNAMIC_UNRESOLVED_SYMBOL);
-    bucket_count = astra_load_be32(library.mapping +
-                                   library.image.hash_address);
-    astra_store_be32(library.mapping + library.image.hash_address, 0u);
-    assert(astra_dynamic_lookup(&library.image,
-                                "astra_dynamic_contract_add", "ASTRA_1.0",
-                                &symbol) == ASTRA_DYNAMIC_BAD_TABLE);
-    astra_store_be32(library.mapping + library.image.hash_address,
-                     bucket_count);
-    for (uint32_t bucket = 0u; bucket < bucket_count; ++bucket)
-        astra_store_be32(library.mapping + library.image.hash_address + 8u +
-                         bucket * 4u, 1u);
-    astra_store_be32(library.mapping + library.image.hash_address + 8u +
-                     bucket_count * 4u + 4u,
-                     library.image.symbol_count);
-    assert(astra_dynamic_lookup(&library.image,
-                                "astra_dynamic_contract_missing", NULL,
-                                &symbol) == ASTRA_DYNAMIC_BAD_TABLE);
+    test_gnu_hash_lookup(&library, symbol_address);
     unload_fixture(&library);
     library = load_fixture(library_path, 0x24000000u);
     closure.images = &library.image;
@@ -494,7 +615,7 @@ static void test_process_dependency_graph(const char *program_path,
     unload_fixture(&program);
 
     program = load_fixture(program_path, 0u);
-    program.image.hash_address = UINT32_MAX;
+    program.image.symbol_count = 0u;
     process = NULL;
     failure_image = UINT32_MAX;
     assert(astra_dynamic_process_prepare(
@@ -502,7 +623,7 @@ static void test_process_dependency_graph(const char *program_path,
                process_fixture_finish, &context, &process) ==
            ASTRA_SYSCALL_OK);
     assert(astra_dynamic_process_relocate(
-               process, &layout, &failure_image) == ASTRA_DYNAMIC_BAD_TABLE);
+               process, &layout, &failure_image) == ASTRA_DYNAMIC_BAD_SYMBOL);
     assert(failure_image == 0u);
     astra_dynamic_process_discard(process);
     assert(context.opens == 3u && context.commits == 1u &&
@@ -710,6 +831,7 @@ int main(int argc, char **argv)
     assert(argc == 4);
     test_real_dynamic_pair(argv[1], argv[2]);
     test_dynamic_singleton_tags(argv[1]);
+    test_gnu_hash_required(argv[2]);
     test_none_relocation_has_no_target(argv[1]);
     test_relocation_writable_range_cache(argv[2]);
     test_relro_page_padding(argv[2]);

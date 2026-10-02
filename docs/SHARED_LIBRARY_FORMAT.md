@@ -25,6 +25,12 @@ A `.library` is big-endian ELF32/m68k `ET_DYN` code for MC68040. It carries:
 - the existing fixed `ALIB` identity record, advanced to record version 2;
 - semantic version, library ABI major/minor, architecture, and build identity;
 - `DT_SONAME`, explicit `DT_NEEDED` dependencies, dynamic symbols and strings;
+- a `DT_GNU_HASH` symbol table index -- the only one the loader reads, in
+  libraries and programs alike. The compiler driver links every dynamic image
+  with `--hash-style=gnu`, and an image with only a SysV `DT_HASH` is
+  refused as unsupported. The Bloom filter turns the common case -- asking
+  an image in the closure for a symbol it does not define -- into one word
+  test, and chains compare stored hashes before names;
 - versioned public C symbols and eager relocation records;
 - optional `.init_array`, `.fini_array`, and TLS metadata; and
 - no embedded package search paths or host filesystem paths.

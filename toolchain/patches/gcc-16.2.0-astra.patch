@@ -29,7 +29,7 @@ diff --git a/gcc/config/m68k/astra.h b/gcc/config/m68k/astra.h
 new file mode 100644
 --- /dev/null
 +++ b/gcc/config/m68k/astra.h
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,51 @@
 +/* Astra68 MC68040 userspace ABI.  */
 +
 +#undef TARGET_OS_CPP_BUILTINS
@@ -68,10 +68,13 @@ new file mode 100644
 +   and recovery images request -static explicitly and receive the matching
 +   no-interpreter profile.  The NDK selects the matching executable linker
 +   script from its versioned archive; the compiler owns only the target-wide
-+   interpreter default.  */
++   interpreter default.  The loader reads only DT_GNU_HASH: its Bloom
++   filter rejects an image that lacks a symbol in two loads, and its chains
++   compare hashes before names, so every dynamic link emits it, ports
++   included.  */
 +#undef LINK_SPEC
 +#define LINK_SPEC \
-+  "%{shared:-shared} " \
++  "%{shared:-shared} --hash-style=gnu " \
 +  "%{!shared:%{!static:--dynamic-linker=loader.library.1}}"
 +
 +#undef LIB_SPEC

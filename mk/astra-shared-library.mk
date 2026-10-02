@@ -24,7 +24,7 @@ $(ASTRA_EXISTING_PRODUCTS): .EXTRA_PREREQS += \
 ASTRA_SHARED_PIC_FLAGS := -fPIC -ftls-model=initial-exec
 ASTRA_SHARED_LINK_FLAGS := -nostdlib -shared \
 	-Wl,--no-undefined -Wl,-Bsymbolic -Wl,--build-id=none \
-	-Wl,--gc-sections -Wl,--hash-style=sysv -Wl,-z,now -Wl,-z,relro \
+	-Wl,--gc-sections -Wl,--hash-style=gnu -Wl,-z,now -Wl,-z,relro \
 	-Wl,-z,max-page-size=0x1000 -T $(ASTRA_SHARED_LIBRARY_LD) \
 	$(ASTRA_SHARED_CRT_BEGIN)
 ASTRA_SHARED_LINK_END := $(ASTRA_SHARED_CRT_END)

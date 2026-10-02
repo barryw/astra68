@@ -38,6 +38,9 @@ EOF
 "$READELF" -hW "$WORK/driver.library" | grep -q 'Type:.*DYN'
 "$READELF" -lW "$WORK/driver.library" | grep -q ' DYNAMIC '
 "$READELF" -dW "$WORK/driver.library" >/dev/null
+# The loader reads only DT_GNU_HASH.
+"$READELF" -dW "$WORK/driver.library" | grep -q '(GNU_HASH)'
+! "$READELF" -dW "$WORK/driver.library" | grep -q '(HASH)'
 ! "$READELF" -dW "$WORK/driver.library" | grep -q TEXTREL
 "$READELF" -rW "$WORK/driver.library" | grep -q 'R_68K_RELATIVE'
 
@@ -66,6 +69,8 @@ EOF
 "$READELF" -p .interp "$WORK/dynamic.elf" | grep -q 'loader.library.1'
 "$READELF" -dW "$WORK/dynamic.elf" | grep -q 'NEEDED.*driver.library.1'
 "$READELF" -dW "$WORK/dynamic.elf" | grep -q BIND_NOW
+"$READELF" -dW "$WORK/dynamic.elf" | grep -q '(GNU_HASH)'
+! "$READELF" -dW "$WORK/dynamic.elf" | grep -q '(HASH)'
 "$READELF" -rW "$WORK/dynamic.elf" | grep -Eq 'R_68K_(GLOB_DAT|JMP_SLOT)'
 
 cat >"$WORK/static.c" <<'EOF'
@@ -107,5 +112,6 @@ dynamic_end=$($CC -print-file-name=crtendS.o)
     "$($CC -print-file-name=libgcc_unwind_shared.a)" \
     -o "$WORK/constructor.elf"
 ! "$READELF" -dW "$WORK/constructor.elf" | grep -q TEXTREL
+"$READELF" -dW "$WORK/constructor.elf" | grep -q '(GNU_HASH)'
 
 echo "Astra GCC driver contract: PASS"
