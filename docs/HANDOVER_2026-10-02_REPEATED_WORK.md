@@ -18,7 +18,19 @@ exact MC68040 instruction counts, beast):
 | **total** | **222.2 M** | **136.7 M** |
 
 Full `verify-nopc.sh` green; K1 qualification (performance budgets) green.
-Not yet measured on the board.
+
+**DE25, release `74270915`**: Doom renders **10.1-10.4 s** after the
+double-click over three runs from a fresh `astra.service` (was 13.7 s on
+`2ecc70f3`). `S_Init` + precache ~3.4-3.9 s (was 6.4 s); `M_Init` + `R_Init`
+~1.9 s (was 3.2 s). Measured with `doom_timeline.py` over a QMP forward.
+
+The first release (`3275f18f`, without the slice fix below) rendered at
+9.8-10.2 s but the audio host's FIFO underruns rose from ~2,000 to ~29,000
+frames per session: the single-threaded audio host resampled a whole 64 KiB
+CONVERT reply between FIFO feeds. It now produces the reply 8 KiB at a time
+and feeds the FIFO between slices (`CONVERT_SLICE_BYTES`); underruns are back
+to 1,400-1,900 per session. The audio host's mixer sharing one loop with
+request work is the real limit -- a feed thread would remove it.
 
 ## What changed, and the work it stops repeating
 
