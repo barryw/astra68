@@ -72,6 +72,38 @@ exit, `ASTRA AUDIO HOST operation=N count= total_us=`) put it in CONVERT.
 3. Kernel wait path and `astra_clock_monotonic` syscalls remain as listed
    below.
 
+## Round 3 (same day): the kernel wait path
+
+`edac85f1`: wait queues link registrations by pointer instead of
+slot-encoded ids re-validated through the thread directory on every hop.
+Doom start under the profiling QEMU: **kernel 66.4 M -> 56.3 M**, total
+121.9 M -> 110.8 M. Kernel entry checks only canary and bounds outside
+`KERNEL_AUDIT`; the frame allocator skips in-use bitmap words (1.6 M -> 0.3 M).
+verify-nopc clean, K1 qualification pass. Not yet measured on the board.
+
+Profiling notes:
+- Run-to-run totals vary about +-5%: how often services poll and block
+  depends on timing, so a second run of identical code moved block/wake
+  counts 20-120%. Compare per-function instructions, not totals, for
+  changes under ~5 M.
+- The report's `calls` column counts block entries, not calls.
+- Kernel now ~51% of the start and flat: no function over 1.5%. Largest
+  clusters left: page-fault/frame path (~10 M: `kernel_words_fill`,
+  `next_mapping`, `map_owned_page`, `probe_root`, `kernel_fault_classify`),
+  and per-syscall entry (`kernel_process_on_syscall`, `process_for_thread`,
+  `capture_current`, `wait_handle_set` with two handle lookups per handle).
+- `next_mapping` walks every area mapping in the system on each
+  authorised-mapping lookup and page drop; a per-area or per-space list
+  would make it proportional to the mappings involved.
+- Clock syscalls are a few thousand per start: a user-readable timebase is
+  not worth it for Doom start (item 3 below).
+- Doom's own start work is visible now: `DEH_PointerSHA1Sum` 3 M,
+  `strncasecmp` 2.9 M (lump lookups), runtime `memcpy` 6.7 M.
+
+Script: beast `/tmp/wq-prof.sh TAG` (build, images, profile, keep kernel ELF
+under `~/astra-mg/wq/`); `/tmp/wq-gate.sh TAG` (verify-nopc + K1 + ROM
+rebuild).
+
 ## What changed, and the work it stops repeating
 
 1. **PCM transfers in 64 KiB, not 8 KiB** (`ASTRA_PCM_TRANSFER_BYTES`).
@@ -110,12 +142,9 @@ exit, `ASTRA AUDIO HOST operation=N count= total_us=`) put it in CONVERT.
 1. **Find the large-malloc-is-zero consumer.** Poison retained extents
    (0xA5) instead of zeroing, run `test-terminal.py`, find what breaks. Then
    decide whether zero-on-reuse stays (it costs a memset per reuse).
-2. **Kernel wait path** (still the top kernel cost): wait-queue links are
-   slot-encoded ids re-validated on every hop (`registration_at`,
-   `valid_wait_queue_header` ~8 per blocking wait); `wait_handle_set` looks
-   each handle up three times; `capture_current`/`runtime_resume` re-derive
-   the process. Make links pointers, validate once, keep audit under
-   `KERNEL_AUDIT`.
+2. ~~Kernel wait path~~: links are pointers (round 3). Left:
+   `wait_handle_set` resolves each handle twice; `capture_current` and
+   `runtime_resume` re-derive the process per entry.
 3. **`astra_clock_monotonic` is a syscall** everywhere (media health loop,
    block metrics twice per request, SDL ticks). A user-readable timebase would
    remove all of them.
