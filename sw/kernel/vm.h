@@ -146,6 +146,9 @@ typedef struct KernelVmStats {
     uint32_t flushes;
     uint32_t cache_invalidations;
     uint32_t switches;
+    /* Shared page tables in existence, and pointer descriptors naming one. */
+    uint32_t shared_tables;
+    uint32_t shared_table_attachments;
 } KernelVmStats;
 
 typedef struct KernelVmControlState {
@@ -235,6 +238,41 @@ KernelVmStatus kernel_vm_map_shared_range(
     KernelAddressSpace *space, uint32_t virtual_address,
     const uint32_t *physical_pages, uint32_t page_count,
     uint32_t frame_owner, uint32_t permissions);
+/*
+ * Shared page tables: one 256 KiB span of immutable read-only pages, built
+ * once and pointed at by every address space that maps it.
+ *
+ * A page table covers KERNEL_VM_SHARED_TABLE_SPAN on the MC68040. Where a
+ * span holds nothing but immutable shared pages -- a library's code -- its
+ * table is owned by the pages' owner, not by any process, and an address
+ * space maps the whole span with one pointer descriptor. Mapping, fork and
+ * teardown then cost one descriptor per span instead of the per-page owner,
+ * reference and reverse-map work, and no process's mapping count includes
+ * the pages. Each attachment holds one reference on the table frame, so the
+ * owner knows a table is idle when only its own reference remains.
+ *
+ * create: @p physical_pages has KERNEL_VM_SHARED_TABLE_PAGES entries, one
+ * per page of the span; zero leaves that page unmapped. The pages must be
+ * KERNEL_FRAME_SHARED frames of @p owner; they are not retained per table --
+ * the owner keeps them alive for at least as long as the table.
+ */
+#define KERNEL_VM_SHARED_TABLE_SPAN 0x00040000u
+#define KERNEL_VM_SHARED_TABLE_PAGES \
+    (KERNEL_VM_SHARED_TABLE_SPAN / KERNEL_PAGE_SIZE)
+KernelVmStatus kernel_vm_shared_table_create(
+    uint32_t owner, const uint32_t *physical_pages,
+    uint32_t *table_physical);
+/* Drops the owner's reference; the table must not be attached anywhere. */
+KernelVmStatus kernel_vm_shared_table_release(uint32_t owner,
+                                              uint32_t table_physical);
+/* Number of address spaces a shared table is attached to. */
+uint32_t kernel_vm_shared_table_attachments(uint32_t table_physical);
+/* @p virtual_address is span-aligned and must be wholly unmapped. */
+KernelVmStatus kernel_vm_attach_shared_table(KernelAddressSpace *space,
+                                             uint32_t virtual_address,
+                                             uint32_t table_physical);
+KernelVmStatus kernel_vm_detach_shared_table(KernelAddressSpace *space,
+                                             uint32_t virtual_address);
 /*
  * Permanently remove write access from process-owned pages. The complete
  * range is validated before any descriptor changes, so an unmapped, shared,

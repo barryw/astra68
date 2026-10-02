@@ -80,6 +80,33 @@ split without importing Haiku's generic file-backed VM machinery: Astra's VFS
 is a user service, so the kernel retains only the narrow streamed-image cache
 needed to share immutable library pages.
 
+### Shared code spans
+
+A library's code is mapped through **shared page tables**. On the MC68040 a
+page table covers 256 KiB (`KERNEL_VM_SHARED_TABLE_SPAN`). The canonical
+link (`mk/astra-shared-library.ld`) starts a library's writable data on a
+span of its own, and the kernel places every cached library at a
+span-aligned base, so each span below the data holds nothing but the
+library's immutable pages. The cache builds one page table per such span at
+the library's first mapping; a process maps the span by pointing one
+pointer-table descriptor at that table, marked with a software bit
+(`VM_DESC_SHARED_TABLE`).
+
+| | Per page (before) | Shared span |
+|---|---|---|
+| map libc's code (128 pages) into a process | 128 owner/reference/reverse-map updates | 2 descriptors |
+| fork | every page retained and re-mapped | the descriptor copied |
+| exec or exit | every page released | the descriptor cleared |
+
+Each attachment holds one reference on the table frame, so a library is idle
+when its tables and pages hold only the cache's own references. Writable data
+stays per-process and per-page: copied from the cache's pristine pages,
+relocated by the loader, then sealed by RELRO. No per-page operation may
+change a shared table -- `page_path` refuses one -- and copy-on-write never
+sees its pages. A span that holds a writable page, or whose table cannot be
+allocated, falls back to per-page mapping, so the layout is a performance
+contract, not an acceptance rule.
+
 `astra_vfs_library_source_open()` is the one runtime provider resolver. Both
 the supervisor bootstrap and ordinary process loader use it. The process-level
 helper is only a namespace-bound wrapper. A boundary test rejects direct

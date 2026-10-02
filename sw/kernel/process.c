@@ -221,6 +221,15 @@ typedef struct KernelLibraryPageBlock {
     uint32_t pages[(KERNEL_PAGE_SIZE - 8u) / sizeof(uint32_t)];
 } KernelLibraryPageBlock;
 
+/*
+ * A cached library's code is mapped into processes through shared page
+ * tables, one per KERNEL_VM_SHARED_TABLE_SPAN of the image that holds no
+ * writable page. The canonical library link puts writable data on its own
+ * span, so a library's code is a few pointer descriptors in every process
+ * that maps it, in every fork of one, and nothing at all to tear down.
+ */
+#define KERNEL_LIBRARY_SHARED_SPANS_MAX 64u
+
 typedef struct KernelLibraryCacheEntry {
     KernelElfImage plan;
     AstraLibraryReference reference;
@@ -230,7 +239,14 @@ typedef struct KernelLibraryCacheEntry {
     uint32_t base;
     uint32_t span;
     uint32_t page_count;
+    /* Per span of the image: its shared table, or zero for per-page. */
+    uint32_t shared_table[KERNEL_LIBRARY_SHARED_SPANS_MAX];
+    uint8_t shared_built;
+    uint8_t reserved[3];
 } KernelLibraryCacheEntry;
+
+_Static_assert(sizeof(KernelLibraryCacheEntry) <= KERNEL_PAGE_SIZE,
+               "a library cache entry is one metadata page");
 
 typedef enum KernelLibraryLoadStage {
     KERNEL_LIBRARY_LOAD_HEADERS = 1,
@@ -5428,27 +5444,6 @@ static bool library_page_iterator_next(KernelLibraryPageIterator *iterator,
     return true;
 }
 
-static bool library_page_iterator_chunk(KernelLibraryPageIterator *iterator,
-                                        const uint32_t **pages,
-                                        uint32_t *count)
-{
-    if (iterator == NULL || pages == NULL || count == NULL ||
-        iterator->block == NULL)
-        return false;
-    if (iterator->index == iterator->block->count) {
-        iterator->block_physical = iterator->block->next_physical;
-        if (iterator->block_physical == 0u)
-            return false;
-        iterator->block = library_page_block(iterator->block_physical);
-        iterator->index = 0u;
-        if (iterator->block == NULL || iterator->block->count == 0u)
-            return false;
-    }
-    *pages = &iterator->block->pages[iterator->index];
-    *count = iterator->block->count - iterator->index;
-    return true;
-}
-
 static KernelProcessStatus library_metadata_allocate(uint32_t *physical,
                                                      void **metadata)
 {
@@ -5479,6 +5474,15 @@ static KernelProcessStatus library_cache_release_entry(
 
     if (entry == NULL || entry->self_physical == 0u)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
+    for (uint32_t span = 0u; span < KERNEL_LIBRARY_SHARED_SPANS_MAX; ++span) {
+        if (entry->shared_table[span] == 0u)
+            continue;
+        if (kernel_vm_shared_table_release(LIBRARY_CACHE_OWNER,
+                                           entry->shared_table[span]) !=
+            KERNEL_VM_OK)
+            return KERNEL_PROCESS_CORRUPT;
+        entry->shared_table[span] = 0u;
+    }
     if (entry->page_count != 0u) {
         uint32_t released = 0u;
 
@@ -5523,6 +5527,11 @@ static bool library_cache_idle(const KernelLibraryCacheEntry *entry)
 
     if (entry == NULL || !library_page_iterator_begin(entry, &iterator))
         return false;
+    for (uint32_t span = 0u; span < KERNEL_LIBRARY_SHARED_SPANS_MAX; ++span)
+        if (entry->shared_table[span] != 0u &&
+            kernel_vm_shared_table_attachments(entry->shared_table[span]) !=
+                0u)
+            return false;
     while (visited < entry->page_count &&
            library_page_iterator_next(&iterator, &physical)) {
         KernelFrameInfo info;
@@ -5581,10 +5590,17 @@ static bool library_cache_place(uint32_t span, uint32_t *base)
             }
             physical = entry->next_physical;
         }
-        if (cursor >= KERNEL_VM_DYNAMIC_BASE + span &&
-            cursor - span >= blocker_end) {
-            *base = cursor - span;
-            return true;
+        /* Span-aligned, so each of the library's spans is its own and its
+         * code can be one shared table (library_cache_share). */
+        if (cursor >= KERNEL_VM_DYNAMIC_BASE + span) {
+            uint32_t candidate = (cursor - span) &
+                                 ~(KERNEL_VM_SHARED_TABLE_SPAN - 1u);
+
+            if (candidate >= KERNEL_VM_DYNAMIC_BASE &&
+                candidate >= blocker_end) {
+                *base = candidate;
+                return true;
+            }
         }
         if (blocker_base < KERNEL_VM_DYNAMIC_BASE || blocker_base >= cursor)
             return false;
@@ -5656,8 +5672,9 @@ bool kernel_process_test_library_cache_exceeds_legacy_slot_count(void)
         uint32_t page_physical = 0u;
         uint32_t base = 0u;
 
+        /* Each library takes its own span-aligned base (shared code). */
         if (!library_cache_place(KERNEL_PAGE_SIZE, &base) ||
-            base != expected_base - KERNEL_PAGE_SIZE ||
+            base != expected_base - KERNEL_VM_SHARED_TABLE_SPAN ||
             library_metadata_allocate(&entry_physical, (void **)&entry) !=
                 KERNEL_PROCESS_OK)
             goto failed;
@@ -5696,72 +5713,213 @@ failed:
 }
 #endif
 
+static uint32_t library_span_count(const KernelLibraryCacheEntry *entry)
+{
+    return (entry->span + KERNEL_VM_SHARED_TABLE_SPAN - 1u) /
+           KERNEL_VM_SHARED_TABLE_SPAN;
+}
+
+/* The span of @p entry that holds @p relative, if it has a shared table. */
+static bool library_span_shared(const KernelLibraryCacheEntry *entry,
+                                uint32_t relative)
+{
+    uint32_t span = relative / KERNEL_VM_SHARED_TABLE_SPAN;
+
+    return span < KERNEL_LIBRARY_SHARED_SPANS_MAX &&
+           entry->shared_table[span] != 0u;
+}
+
+/*
+ * Builds the shared table of every span of @p entry that holds only its
+ * immutable pages; a span with a writable page, or one whose table cannot be
+ * had, stays per-page. Once per entry, at its first mapping.
+ */
+static KernelProcessStatus library_cache_share(
+    KernelLibraryCacheEntry *entry)
+{
+    uint32_t staged[KERNEL_VM_SHARED_TABLE_PAGES];
+    KernelLibraryPageIterator iterator;
+    const KernelElfImage *plan = &entry->plan;
+    uint32_t current = UINT32_MAX;
+    bool writable = false;
+    bool staged_any = false;
+
+    if (entry->shared_built != 0u)
+        return KERNEL_PROCESS_OK;
+    entry->shared_built = 1u;
+    if ((entry->base & (KERNEL_VM_SHARED_TABLE_SPAN - 1u)) != 0u ||
+        library_span_count(entry) > KERNEL_LIBRARY_SHARED_SPANS_MAX)
+        return KERNEL_PROCESS_OK;
+    if (!library_page_iterator_begin(entry, &iterator))
+        return KERNEL_PROCESS_CORRUPT;
+    kernel_bytes_clear(staged, sizeof(staged));
+    for (uint32_t index = 0u; index <= plan->segment_count; ++index) {
+        const KernelElfSegment *segment = index < plan->segment_count ?
+            kernel_elf_image_segment(plan, index) : NULL;
+        uint32_t pages = segment != NULL ? segment->page_count : 1u;
+
+        if (index < plan->segment_count && segment == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        for (uint32_t page = 0u; page < pages; ++page) {
+            uint32_t relative = segment != NULL ?
+                segment->virtual_address + page * KERNEL_PAGE_SIZE :
+                UINT32_MAX;
+            uint32_t span = segment != NULL ?
+                relative / KERNEL_VM_SHARED_TABLE_SPAN : UINT32_MAX;
+            uint32_t physical = 0u;
+
+            if (span != current) {
+                if (current != UINT32_MAX && !writable && staged_any &&
+                    kernel_vm_shared_table_create(
+                        LIBRARY_CACHE_OWNER, staged,
+                        &entry->shared_table[current]) != KERNEL_VM_OK)
+                    entry->shared_table[current] = 0u;
+                current = span;
+                writable = false;
+                staged_any = false;
+                kernel_bytes_clear(staged, sizeof(staged));
+            }
+            if (segment == NULL)
+                break;
+            if (!library_page_iterator_next(&iterator, &physical))
+                return KERNEL_PROCESS_CORRUPT;
+            if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) != 0u) {
+                writable = true;
+                continue;
+            }
+            staged[(relative % KERNEL_VM_SHARED_TABLE_SPAN) /
+                   KERNEL_PAGE_SIZE] = physical;
+            staged_any = true;
+        }
+    }
+    return KERNEL_PROCESS_OK;
+}
+
+/*
+ * Removes @p cached from @p space: its shared spans as whole descriptors, its
+ * other pages one by one. @p partial accepts what a failed map left unmapped.
+ */
+static KernelProcessStatus unmap_cached_pages(
+    KernelAddressSpace *space, const KernelLibraryCacheEntry *cached,
+    uint32_t virtual_base, bool partial)
+{
+    bool failed = false;
+
+    for (uint32_t span = 0u; span < KERNEL_LIBRARY_SHARED_SPANS_MAX; ++span) {
+        KernelVmStatus status;
+
+        if (cached->shared_table[span] == 0u)
+            continue;
+        status = kernel_vm_detach_shared_table(
+            space, virtual_base + span * KERNEL_VM_SHARED_TABLE_SPAN);
+        if (status != KERNEL_VM_OK &&
+            !(partial && status == KERNEL_VM_NOT_MAPPED))
+            failed = true;
+    }
+    for (uint32_t index = 0u; index < cached->plan.segment_count; ++index) {
+        const KernelElfSegment *segment =
+            kernel_elf_image_segment(&cached->plan, index);
+
+        if (segment == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        for (uint32_t page = 0u; page < segment->page_count; ++page) {
+            uint32_t relative = segment->virtual_address +
+                                page * KERNEL_PAGE_SIZE;
+            KernelVmStatus status;
+
+            if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) == 0u &&
+                library_span_shared(cached, relative))
+                continue;
+            status = kernel_vm_unmap_page(space, virtual_base + relative);
+            if (status != KERNEL_VM_OK &&
+                !(partial && status == KERNEL_VM_NOT_MAPPED))
+                failed = true;
+        }
+    }
+    return failed ? KERNEL_PROCESS_CORRUPT : KERNEL_PROCESS_OK;
+}
+
 static KernelProcessStatus map_cached_library(
     KernelProcess *process, KernelLibraryCacheEntry *cached,
     uint32_t *mapped_base, uint32_t *mapped_span)
 {
     const KernelElfImage *plan = &cached->plan;
+    KernelAddressSpace *space = &process->address_space;
     KernelLibraryPageIterator iterator;
     uint32_t virtual_base = cached->base;
-    uint32_t mapped = 0u;
-    KernelProcessStatus failure = KERNEL_PROCESS_CORRUPT;
+    KernelProcessStatus failure;
 
+    failure = library_cache_share(cached);
+    if (failure != KERNEL_PROCESS_OK)
+        return failure;
     if (!library_page_iterator_begin(cached, &iterator))
         return KERNEL_PROCESS_CORRUPT;
+    for (uint32_t span = 0u; span < KERNEL_LIBRARY_SHARED_SPANS_MAX; ++span) {
+        KernelVmStatus status;
+
+        if (cached->shared_table[span] == 0u)
+            continue;
+        status = kernel_vm_attach_shared_table(
+            space, virtual_base + span * KERNEL_VM_SHARED_TABLE_SPAN,
+            cached->shared_table[span]);
+        if (status != KERNEL_VM_OK) {
+            failure = status == KERNEL_VM_OUT_OF_MEMORY ?
+                KERNEL_PROCESS_OUT_OF_MEMORY :
+                status == KERNEL_VM_ALREADY_MAPPED ?
+                    KERNEL_PROCESS_INVALID_ARGUMENT : KERNEL_PROCESS_CORRUPT;
+            goto failed;
+        }
+    }
     for (uint32_t index = 0u; index < plan->segment_count; ++index) {
         const KernelElfSegment *segment =
             kernel_elf_image_segment(plan, index);
-        if (segment == NULL)
-            return KERNEL_PROCESS_CORRUPT;
+        if (segment == NULL) {
+            failure = KERNEL_PROCESS_CORRUPT;
+            goto failed;
+        }
         uint32_t rights = segment_vm_rights(segment->rights);
 
-        for (uint32_t page = 0u; page < segment->page_count;) {
-            uint32_t address = virtual_base + segment->virtual_address +
-                               (page * KERNEL_PAGE_SIZE);
+        for (uint32_t page = 0u; page < segment->page_count; ++page) {
+            uint32_t relative = segment->virtual_address +
+                                page * KERNEL_PAGE_SIZE;
             uint32_t physical;
 
+            if (!library_page_iterator_next(&iterator, &physical)) {
+                failure = KERNEL_PROCESS_CORRUPT;
+                goto failed;
+            }
             if ((segment->rights & KERNEL_ELF_SEGMENT_WRITE) == 0u) {
-                const uint32_t *pages;
-                uint32_t count;
                 KernelVmStatus vm_status;
 
-                if (!library_page_iterator_chunk(&iterator, &pages, &count))
-                    goto failed;
-                if (count > segment->page_count - page)
-                    count = segment->page_count - page;
+                if (library_span_shared(cached, relative))
+                    continue;
                 vm_status = kernel_vm_map_shared_range(
-                    &process->address_space, address, pages, count,
+                    space, virtual_base + relative, &physical, 1u,
                     LIBRARY_CACHE_OWNER, rights);
-
-                if (vm_status == KERNEL_VM_OUT_OF_MEMORY)
-                    failure = KERNEL_PROCESS_OUT_OF_MEMORY;
-                else if (vm_status == KERNEL_VM_ALREADY_MAPPED)
-                    failure = KERNEL_PROCESS_INVALID_ARGUMENT;
-                else if (vm_status != KERNEL_VM_OK)
-                    failure = KERNEL_PROCESS_CORRUPT;
-                if (vm_status != KERNEL_VM_OK)
+                if (vm_status != KERNEL_VM_OK) {
+                    failure = vm_status == KERNEL_VM_OUT_OF_MEMORY ?
+                        KERNEL_PROCESS_OUT_OF_MEMORY :
+                        vm_status == KERNEL_VM_ALREADY_MAPPED ?
+                            KERNEL_PROCESS_INVALID_ARGUMENT :
+                            KERNEL_PROCESS_CORRUPT;
                     goto failed;
-                iterator.index += count;
-                mapped += count;
-                page += count;
+                }
                 continue;
             }
-            if (!library_page_iterator_next(&iterator, &physical))
-                goto failed;
             {
                 const uint8_t *source = physical_bytes(
                     physical, KERNEL_PAGE_SIZE);
 
-                if (source == NULL)
+                if (source == NULL) {
+                    failure = KERNEL_PROCESS_CORRUPT;
                     goto failed;
-                failure = publish_page(&process->address_space,
-                                       process->owner, address, source,
+                }
+                failure = publish_page(space, process->owner,
+                                       virtual_base + relative, source,
                                        KERNEL_PAGE_SIZE, rights);
                 if (failure != KERNEL_PROCESS_OK)
                     goto failed;
             }
-            ++mapped;
-            ++page;
         }
     }
     *mapped_base = virtual_base;
@@ -5769,25 +5927,9 @@ static KernelProcessStatus map_cached_library(
     return KERNEL_PROCESS_OK;
 
 failed:
-    for (uint32_t index = 0u; index < plan->segment_count && mapped != 0u;
-         ++index) {
-        const KernelElfSegment *segment =
-            kernel_elf_image_segment(plan, index);
-
-        if (segment == NULL)
-            return KERNEL_PROCESS_CORRUPT;
-
-        for (uint32_t page = 0u; page < segment->page_count && mapped != 0u;
-             ++page) {
-            uint32_t address = virtual_base + segment->virtual_address +
-                               (page * KERNEL_PAGE_SIZE);
-
-            if (kernel_vm_unmap_page(&process->address_space, address) !=
-                KERNEL_VM_OK)
-                return KERNEL_PROCESS_CORRUPT;
-            --mapped;
-        }
-    }
+    if (unmap_cached_pages(space, cached, virtual_base, true) !=
+        KERNEL_PROCESS_OK)
+        return KERNEL_PROCESS_CORRUPT;
     return failure;
 }
 
@@ -5846,28 +5988,11 @@ static KernelProcessStatus unmap_cached_library(
     KernelProcess *process, const KernelLibraryCacheEntry *cached,
     uint32_t virtual_base)
 {
-    bool failed = false;
-
     if (process == NULL || cached == NULL ||
         process->address_space.initialized == 0u)
         return KERNEL_PROCESS_CORRUPT;
-    for (uint32_t index = 0u; index < cached->plan.segment_count; ++index) {
-        const KernelElfSegment *segment =
-            kernel_elf_image_segment(&cached->plan, index);
-
-        if (segment == NULL)
-            return KERNEL_PROCESS_CORRUPT;
-
-        for (uint32_t page = 0u; page < segment->page_count; ++page) {
-            uint32_t address = virtual_base + segment->virtual_address +
-                               page * KERNEL_PAGE_SIZE;
-
-            if (kernel_vm_unmap_page(&process->address_space, address) !=
-                KERNEL_VM_OK)
-                failed = true;
-        }
-    }
-    return failed ? KERNEL_PROCESS_CORRUPT : KERNEL_PROCESS_OK;
+    return unmap_cached_pages(&process->address_space, cached, virtual_base,
+                              false);
 }
 
 static void library_load_release(void *object, void *context)

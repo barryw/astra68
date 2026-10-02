@@ -21,6 +21,8 @@ SECTIONS
      * symbols.  Keep them out of .dynsym even for table-only libraries that
      * intentionally need no per-library export map. */
     HIDDEN(ASTRA_PAGE_SIZE = 0x1000);
+    /* One MC68040 page table's reach (KERNEL_VM_SHARED_TABLE_SPAN). */
+    HIDDEN(ASTRA_SHARED_SPAN = 0x40000);
     HIDDEN(ASTRA_LIBRARY_METADATA = 0x200);
     HIDDEN(ASTRA_LIBRARY_SIZE = 128);
 
@@ -70,8 +72,14 @@ SECTIONS
     . = DATA_SEGMENT_ALIGN(ASTRA_PAGE_SIZE, ASTRA_PAGE_SIZE);
     /* Axiom intentionally accepts only whole-page load segments. GNU ld's
      * DATA_SEGMENT_ALIGN may choose a congruent sub-page VMA to save file
-     * padding; round once more because congruence is not Astra's contract. */
-    . = ALIGN(ASTRA_PAGE_SIZE);
+     * padding; round once more because congruence is not Astra's contract.
+     *
+     * Writable data starts a span of its own: everything below it is
+     * immutable, so the kernel maps a library's code into every process
+     * through shared page tables -- one descriptor per span instead of one
+     * mapping per page. Only addresses move; the file stays packed, because
+     * file offsets need only be congruent to addresses modulo a page. */
+    . = ALIGN(ASTRA_SHARED_SPAN);
     HIDDEN(__astra_writable_start = .);
     .preinit_array : {
         PROVIDE_HIDDEN(__preinit_array_start = .);

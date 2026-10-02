@@ -1401,6 +1401,116 @@ static void test_dynamic_code_range_is_shared_and_executable(void)
 }
 
 /*
+ * A shared table maps a whole span of immutable pages with one pointer
+ * descriptor: attaching it, forking over it and tearing it down never touch
+ * a page, its reference count or its reverse map, and no per-page change can
+ * reach inside it. The owner can drop it only once nothing is attached.
+ */
+static void test_shared_table_maps_a_span_with_one_descriptor(void)
+{
+    const uint32_t owner = 0x30000001u;
+    const uint32_t span_base =
+        (KERNEL_VM_DYNAMIC_BASE + KERNEL_VM_SHARED_TABLE_SPAN - 1u) &
+        ~(KERNEL_VM_SHARED_TABLE_SPAN - 1u);
+    KernelAddressSpace first = {0};
+    KernelAddressSpace child = {0};
+    KernelFrameInfo frame;
+    KernelVmStats before;
+    KernelVmStats stats;
+    uint32_t pages[3];
+    uint32_t staged[KERNEL_VM_SHARED_TABLE_PAGES] = {0u};
+    uint32_t wrong[KERNEL_VM_SHARED_TABLE_PAGES] = {0u};
+    uint32_t empty[KERNEL_VM_SHARED_TABLE_PAGES] = {0u};
+    uint32_t table = 0u;
+    uint32_t refused = 0u;
+    uint32_t physical = 0u;
+
+    initialize_test();
+    assert(kernel_vm_enable() == KERNEL_VM_OK);
+    assert(kernel_vm_stats(&before));
+    assert(kernel_vm_create_address_space(71u, &first) == KERNEL_VM_OK);
+    assert(kernel_memory_alloc_pages_zeroed(
+               3u, KERNEL_FRAME_SHARED, owner, pages) == KERNEL_MEMORY_OK);
+    staged[0] = pages[0];
+    staged[1] = pages[1];
+    staged[5] = pages[2];
+    wrong[0] = pages[0];
+    assert(kernel_vm_shared_table_create(owner + 1u, wrong, &refused) ==
+           KERNEL_VM_NOT_OWNED && refused == 0u);
+    assert(kernel_vm_shared_table_create(owner, empty, &refused) ==
+           KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_shared_table_create(owner, staged, &table) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_shared_table_attachments(table) == 0u);
+
+    assert(kernel_vm_attach_shared_table(&first, span_base + KERNEL_PAGE_SIZE,
+                                         table) ==
+           KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_attach_shared_table(&first, span_base, table) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_attach_shared_table(&first, span_base, table) ==
+           KERNEL_VM_ALREADY_MAPPED);
+    assert(kernel_vm_shared_table_attachments(table) == 1u);
+    assert(kernel_vm_probe_address_space(&first, span_base + 0x10u,
+                                         &physical) ==
+           KERNEL_VM_MAPPING_READ_ONLY && physical == pages[0] + 0x10u);
+    assert(kernel_vm_probe_address_space(
+               &first, span_base + 5u * KERNEL_PAGE_SIZE, &physical) ==
+           KERNEL_VM_MAPPING_READ_ONLY && physical == pages[2]);
+    assert(kernel_vm_probe_address_space(
+               &first, span_base + 2u * KERNEL_PAGE_SIZE, &physical) ==
+           KERNEL_VM_MAPPING_UNMAPPED);
+
+    /* Nothing per-page reaches inside the span, and no page was counted. */
+    assert(kernel_vm_unmap_page(&first, span_base) == KERNEL_VM_NOT_OWNED);
+    assert(kernel_vm_map_shared_range(
+               &first, span_base + 2u * KERNEL_PAGE_SIZE, &pages[0], 1u,
+               owner, KERNEL_VM_READ) != KERNEL_VM_OK);
+    assert(first.mapped_pages == 0u);
+    assert(kernel_memory_frame_info(pages[0], &frame));
+    assert(frame.references == 1u);
+
+    /* A fork shares the span by reference. */
+    assert(kernel_vm_clone_address_space(&first, 72u, &child) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_shared_table_attachments(table) == 2u);
+    assert(kernel_vm_probe_address_space(&child, span_base, &physical) ==
+           KERNEL_VM_MAPPING_READ_ONLY && physical == pages[0]);
+    assert(child.mapped_pages == 0u);
+    assert(kernel_vm_shared_table_release(owner, table) == KERNEL_VM_BUSY);
+
+    assert(kernel_vm_destroy_address_space(&child) == KERNEL_VM_OK);
+    assert(kernel_vm_shared_table_attachments(table) == 1u);
+    assert(kernel_vm_detach_shared_table(&first, span_base) == KERNEL_VM_OK);
+    assert(kernel_vm_detach_shared_table(&first, span_base) ==
+           KERNEL_VM_NOT_MAPPED);
+    assert(kernel_vm_probe_address_space(&first, span_base, &physical) ==
+           KERNEL_VM_MAPPING_UNMAPPED);
+    assert(kernel_vm_shared_table_attachments(table) == 0u);
+
+    /* Destroy releases an attachment it still holds. */
+    assert(kernel_vm_attach_shared_table(&first, span_base, table) ==
+           KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&first) == KERNEL_VM_OK);
+    assert(kernel_vm_shared_table_attachments(table) == 0u);
+    assert(kernel_vm_stats(&stats));
+    assert(stats.shared_table_attachments ==
+           before.shared_table_attachments);
+    assert(stats.shared_tables == before.shared_tables + 1u);
+    assert(kernel_vm_shared_table_release(owner, table) == KERNEL_VM_OK);
+    assert(kernel_vm_stats(&stats));
+    assert(stats.shared_tables == before.shared_tables);
+    assert(stats.address_spaces == before.address_spaces);
+    assert(stats.user_table_pages == before.user_table_pages);
+    for (uint32_t page = 0u; page < 3u; ++page) {
+        assert(kernel_memory_frame_info(pages[page], &frame));
+        assert(frame.references == 1u);
+        assert(kernel_memory_release(pages[page], 1u, owner) ==
+               KERNEL_MEMORY_OK);
+    }
+}
+
+/*
  * A device aperture above the initial root-table span must not be mapped cacheable.
  *
  * The supervisor map covers RAM beyond the low region in 4 MiB
@@ -1587,6 +1697,7 @@ int main(void)
     test_shared_range_duplicate_validation_is_atomic();
     test_shared_aliases_are_not_limited_by_process_table_size();
     test_dynamic_code_range_is_shared_and_executable();
+    test_shared_table_maps_a_span_with_one_descriptor();
     test_device_aperture_above_the_low_region_is_uncached();
     test_private_reservation_fault_and_decommit();
     test_private_largest_reservation_uses_remaining_extent();
