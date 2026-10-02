@@ -121,7 +121,9 @@ def main():
         print("Astra Arty launcher tests skipped: flock unavailable")
         return
     with tempfile.TemporaryDirectory() as directory:
-        root, observed = fixture(directory, 0.2)
+        # QEMU outlives two of run-arty.sh's 0.5 s supervision polls, so a
+        # helper that exits is seen and restarted while it runs.
+        root, observed = fixture(directory, 1.2)
         launch_environment = environment(root, observed)
         available = sorted(os.sched_getaffinity(0))
         aux_cpu = available[0]

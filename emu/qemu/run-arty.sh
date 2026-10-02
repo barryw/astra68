@@ -128,12 +128,19 @@ start_helper()
     started_pid=$!
 }
 
+# Fork-free: this runs for as long as Astra does, and a subshell and sed per
+# check cost about a fifth of the DE25's CPU at a 50 ms poll.
 process_alive()
 {
     process_pid=$1
-    [ -n "$process_pid" ] && kill -0 "$process_pid" 2>/dev/null &&
-        [ "$(sed -n 's/^State:[[:space:]]*\([^[:space:]]\).*/\1/p' \
-            "/proc/$process_pid/status" 2>/dev/null || true)" != "Z" ]
+    [ -n "$process_pid" ] && kill -0 "$process_pid" 2>/dev/null || return 1
+    # A zombie still answers kill -0.
+    while read -r process_key process_state process_rest; do
+        [ "$process_key" = "State:" ] || continue
+        [ "$process_state" != "Z" ]
+        return
+    done 2>/dev/null <"/proc/$process_pid/status"
+    return 1
 }
 
 mkdir -p "$(dirname "$TEXT_PLANE")" "$(dirname "$QMP_SOCKET")" \
@@ -209,8 +216,6 @@ stop_process()
     kill "$pid" 2>/dev/null || true
     count=0
     while process_alive "$pid" && [ "$count" -lt 10 ]; do
-        state=$(sed -n 's/^State:[[:space:]]*\([^[:space:]]\).*/\1/p' \
-            "/proc/$pid/status" 2>/dev/null || true)
         count=$((count + 1))
         sleep 0.1
     done
@@ -270,7 +275,8 @@ while process_alive "$qemu_pid"; do
         start_helper "$AUX_CPU" python3 "$INPUT_HOTPLUG" --qmp "$QMP_SOCKET"
         input_pid=$started_pid
     fi
-    sleep 0.05
+    # Each pass forks only this sleep; a helper is restarted within 0.5 s.
+    sleep 0.5
 done
 wait "$qemu_pid"
 status=$?
