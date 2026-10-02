@@ -179,6 +179,11 @@ There is no alternative CPU or emulator implementation in the repository.
   was erased and its waiter slept until an unrelated interrupt. It
   surfaced as audio gaps (a stalled media service) about once a minute on
   the DE25, with the vCPU idle and every host command fast.
+- **Something depends on large mallocs reading zero.** The heap now retains
+  freed extents (`ASTRA_ALLOCATOR_RETAIN_PAGES`) and must zero them on reuse:
+  with stale contents `test-terminal.py` hangs at `posix -R ... never
+  answered with 'POSIX RAW PASS'` and the kernel sits idle, which points at
+  nothing heap-related. The consumer is not yet found.
 - **The qualification kernel is a second ROM**, built with
   `make KERNEL_K1_QUALIFICATION=1` in `sw/boot`, with no debug surface and no
   initial user image. `emu/qemu/test-qualification.py` is its gate. It
