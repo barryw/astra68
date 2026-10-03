@@ -121,6 +121,62 @@ MORE_PATCHES = [
         "\tsrc/render/software/*.c \\\n",
         "\tsrc/render/software/*.c \\\n\tsrc/render/astra/*.c \\\n",
     )),
+    # Palette expansion (8-bit surface to 32-bit, Doom's every frame) is a
+    # move.b and an indexed move.l on the MC68040. GCC's m68k backend spends
+    # six instructions a pixel at -Os and -O2 alike: it reloads the source
+    # pointer, clears the index and shifts it instead of using the scaled
+    # index. Blit1to4 was a quarter of Chocolate Doom's guest instructions.
+    # SDL keeps per-architecture blitters (MMX, AltiVec) the same way.
+    ("src/video/SDL_blit_1.c", (
+        "static void Blit1to4(SDL_BlitInfo *info)\n{\n",
+        "#if defined(__astra__) && defined(__mc68040__)\n"
+        "static void Blit1to4(SDL_BlitInfo *info)\n"
+        "{\n"
+        "    int width = info->dst_w;\n"
+        "    int height = info->dst_h;\n"
+        "    const Uint8 *src = info->src;\n"
+        "    Uint8 *dst = info->dst;\n"
+        "    const Uint32 *map = (const Uint32 *)info->table;\n"
+        "    unsigned long index = 0; /* only its low byte is ever written */\n"
+        "\n"
+        "    while (height--) {\n"
+        "        unsigned long quads = (unsigned long)width >> 2;\n"
+        "        int rest = width & 3;\n"
+        "\n"
+        "        if (quads != 0) {\n"
+        "            __asm__ volatile(\n"
+        "                \"1:\\n\\t\"\n"
+        "                \"move.b (%[s])+,%[i]\\n\\t\"\n"
+        "                \"move.l (%[m],%[i].w*4),(%[d])+\\n\\t\"\n"
+        "                \"move.b (%[s])+,%[i]\\n\\t\"\n"
+        "                \"move.l (%[m],%[i].w*4),(%[d])+\\n\\t\"\n"
+        "                \"move.b (%[s])+,%[i]\\n\\t\"\n"
+        "                \"move.l (%[m],%[i].w*4),(%[d])+\\n\\t\"\n"
+        "                \"move.b (%[s])+,%[i]\\n\\t\"\n"
+        "                \"move.l (%[m],%[i].w*4),(%[d])+\\n\\t\"\n"
+        "                \"subq.l #1,%[q]\\n\\t\"\n"
+        "                \"bne.s 1b\"\n"
+        "                : [s] \"+a\" (src), [d] \"+a\" (dst),\n"
+        "                  [i] \"+d\" (index), [q] \"+d\" (quads)\n"
+        "                : [m] \"a\" (map)\n"
+        "                : \"cc\", \"memory\");\n"
+        "        }\n"
+        "        while (rest--) {\n"
+        "            *(Uint32 *)dst = map[*src++];\n"
+        "            dst += 4;\n"
+        "        }\n"
+        "        src += info->src_skip;\n"
+        "        dst += info->dst_skip;\n"
+        "    }\n"
+        "}\n"
+        "#else\n"
+        "static void Blit1to4(SDL_BlitInfo *info)\n{\n",
+    )),
+    ("src/video/SDL_blit_1.c", (
+        "static void Blit1to1Key(SDL_BlitInfo *info)\n",
+        "#endif /* __astra__ && __mc68040__ */\n"
+        "static void Blit1to1Key(SDL_BlitInfo *info)\n",
+    )),
     ("src/file/SDL_rwops.c", (
         "#include <sys/stat.h>\n#endif",
         "#include <sys/stat.h>\n#include <string.h>\n#endif",
