@@ -1,0 +1,54 @@
+/* $VER: CD0 1.0 (09.04.2026)
+ *
+ * Optical Disk file system entry
+ *
+ * This file enables the Optical Disk file system which allows you to
+ * read ISO-9660/UDF/HFS CD-ROM/DVD/Blueray disks from an Amiga with a
+ * SCSI or IDE controller.
+ *
+ * The "Unit" line defines the SCSI address of the CD-ROM drive. 
+ * Drives often come configured as unit 2, which is the default. Check 
+ * the documentation for your CD-ROM drive to find the exact SCSI 
+ * address.
+ * Note that most SCSI drives let you change this number using jumpers.
+ *
+ * Do not keep another active DOSDriver or ROM CDFS mounted with the
+ * same name. If CD0: already exists, replace or disable that entry
+ * before using this one, or rename this DOSDriver to another name.
+ */
+
+/* Change to L:ODFileSystem after copying ODFileSystem to
+ * your hard drive!
+ */
+FileSystem  = DF0:L/ODFileSystem
+Flags    = 0
+Surfaces = 1
+SectorsPerTrack   = 1
+SectorSize  = 2048
+Mask     = 0x7ffffffe
+MaxTransfer = 0x100000
+Reserved = 0
+Interleave  = 0
+LowCyl      = 0
+HighCyl     = 0
+Buffers     = 5
+BufMemType  = 0
+StackSize   = 16384
+Priority = 10
+GlobVec     = -1
+DosType     = 0x43443031
+/* ROM CD filesystems (e.g. the A4091's) register DosType 'CD01' in
+ * FileSystem.resource. Without ForceLoad, Mount silently substitutes
+ * that ROM filesystem for the FileSystem binary named above and
+ * overrides StackSize. ForceLoad makes Mount always load the binary
+ * from disk. (Requires Mount from OS 2.04 or newer.)
+ */
+ForceLoad   = 1
+Control     = "AIFF UDF"
+
+/* The Device and Unit fields are controlled by tooltypes in the CD0 
+ * icon.
+ *
+ * Device   = scsi.device
+ * Unit     = 2
+ */

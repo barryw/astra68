@@ -1,0 +1,38 @@
+/*
+ * ancestry.h — parent/ancestor lookup helpers
+ *
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+#ifndef ODFS_ANCESTRY_H
+#define ODFS_ANCESTRY_H
+
+#include "odfs/error.h"
+#include "odfs/node.h"
+
+typedef struct odfs_mount odfs_mount_t;
+
+/*
+ * Resolve the parent of a node by walking the mounted directory tree.
+ *
+ * parent_out receives the containing directory. When grandparent_out is
+ * non-NULL, it receives the parent of that directory, or the mount root when
+ * parent_out is the root.
+ */
+odfs_err_t odfs_resolve_parent_node(odfs_mount_t *mnt,
+                                    const odfs_node_t *node,
+                                    odfs_node_t *parent_out,
+                                    odfs_node_t *grandparent_out);
+
+/*
+ * Generic fallback used when the active backend exposes no resolve_parent op
+ * (or it declines a particular node). Locates the parent by depth-first
+ * search of the mounted tree. Not for direct use — call
+ * odfs_resolve_parent_node, which dispatches to the backend first.
+ */
+odfs_err_t odfs_resolve_parent_search(odfs_mount_t *mnt,
+                                      const odfs_node_t *node,
+                                      odfs_node_t *parent_out,
+                                      odfs_node_t *grandparent_out);
+
+#endif /* ODFS_ANCESTRY_H */

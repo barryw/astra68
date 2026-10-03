@@ -1,0 +1,112 @@
+name: ODFileSystem CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    container: stefanreinauer/amiga-gcc:gcc-v13.4
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mark git directory as safe
+        run: git config --global --add safe.directory '*'
+
+      - name: Build and run host unit tests
+        run: make check
+
+      - name: Check OS4Depot publishing without uploading
+        run: python3 tests/ci/test_os4depot_release.py
+
+      - name: Build host library without multisession support
+        run: >-
+          make lib HOST_BUILD=build/host-no-multisession
+          CPPFLAGS=-DODFS_FEATURE_MULTISESSION=0
+
+      - name: Run golden image tests
+        run: make golden-check
+
+      - name: Run malformed image tests
+        run: make malformed-check
+
+      - name: Run parser fuzz smoke tests
+        run: make fuzz-check
+
+      - name: Build Amiga handler
+        run: make amiga
+
+      - name: Build Amiga test handler
+        run: make amiga-test
+
+      - name: Build ROM profile
+        run: make rom
+
+      - name: Build ROM test profile
+        run: make rom-test
+
+      - name: Build AmigaOS 3 archive
+        run: make amigaos3-lha
+
+      - name: Check m68k release binaries for writable sections
+        run: |
+          sh tests/amiga/test_rom_sections.sh
+          sh tools/check_rom_sections.sh \
+            build/amiga/ODFileSystem \
+            build/amiga-020/ODFileSystem \
+            build/amiga-rom/ODFileSystem
+
+      - name: Upload CI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: odfilesystem-build
+          path: |
+            build/amiga/ODFileSystem
+            build/amiga-test/ODFileSystem
+            build/amiga-rom/ODFileSystem
+            build/amiga-rom-test/ODFileSystem
+            build/amiga/ODFileSystem.lha
+            build/host/tools/
+          if-no-files-found: error
+
+  build-amigaos4:
+    runs-on: ubuntu-latest
+    container: stefanreinauer/amigappc-gcc
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mark git directory as safe
+        run: git config --global --add safe.directory '*'
+
+      - name: Check AmigaOS 4 compiler
+        run: |
+          command -v ppc-amigaos-gcc
+          ppc-amigaos-gcc -dumpmachine
+
+      - name: Build AmigaOS 4 handlers and archive
+        run: |
+          make amigaos4-lha \
+            CC=ppc-amigaos-gcc \
+            AMIGA_BUILD=build/amigaos4 \
+            AMIGA_TEST_BUILD=build/amigaos4-test
+
+      - name: Upload AmigaOS 4 CI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: odfilesystem-amigaos4-build
+          path: |
+            build/amigaos4/ODFileSystem
+            build/amigaos4/CDFileSystem
+            build/amigaos4-test/ODFileSystem
+            build/amigaos4-test/CDFileSystem
+            build/amigaos4/ODFileSystem-amigaos4.lha
+          if-no-files-found: error

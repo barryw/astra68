@@ -1,0 +1,140 @@
+/*
+ * odfs/backend.h — backend (format reader) interface
+ *
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+#ifndef ODFS_BACKEND_H
+#define ODFS_BACKEND_H
+
+#include "odfs/error.h"
+#include "odfs/node.h"
+#include "odfs/cache.h"
+#include "odfs/log.h"
+
+/* forward declarations */
+typedef struct odfs_mount odfs_mount_t;
+
+/* directory enumeration callback */
+typedef odfs_err_t (*odfs_dir_iter_fn)(const odfs_node_t *entry, void *ctx);
+
+/* backend operations vtable */
+typedef struct odfs_backend_ops {
+    const char           *name;          /* e.g. "iso9660", "rock_ridge", "joliet" */
+    odfs_backend_type_t  backend_type;  /* enum value for this backend */
+
+    /*
+     * Probe media for this format.
+     * Returns ODFS_OK if format is detected, ODFS_ERR_BAD_FORMAT if not.
+     */
+    odfs_err_t (*probe)(odfs_cache_t *cache,
+                         odfs_log_state_t *log,
+                         uint32_t session_start);
+
+    /*
+     * Mount: parse root structures, populate root node.
+     *   session_start — LBA offset for the session
+     *   root_out      — populated with root directory node
+     *   backend_ctx   — receives backend-private mount state (caller frees via unmount)
+     */
+    odfs_err_t (*mount)(odfs_cache_t *cache,
+                         odfs_log_state_t *log,
+                         uint32_t session_start,
+                         odfs_node_t *root_out,
+                         void **backend_ctx);
+
+    /*
+     * Unmount: release backend-private state.
+     */
+    void (*unmount)(void *backend_ctx);
+
+    /*
+     * List directory entries.
+     *   resume_offset — if non-NULL, on input: byte offset to start from;
+     *                   on output: byte offset of the next unvisited entry.
+     *                   Pass NULL to iterate from the beginning.
+     */
+    odfs_err_t (*readdir)(void *backend_ctx,
+                           odfs_cache_t *cache,
+                           odfs_log_state_t *log,
+                           const odfs_node_t *dir,
+                           odfs_dir_iter_fn callback,
+                           void *cb_ctx,
+                           uint32_t *resume_offset);
+
+    /*
+     * Read file data.
+     *   offset — byte offset into file
+     *   buf    — output buffer
+     *   len    — bytes to read (in), bytes actually read (out)
+     */
+    odfs_err_t (*read)(void *backend_ctx,
+                        odfs_cache_t *cache,
+                        odfs_log_state_t *log,
+                        const odfs_node_t *file,
+                        uint64_t offset,
+                        void *buf,
+                        size_t *len);
+
+    /*
+     * Lookup a child node by name within a directory.
+     */
+    odfs_err_t (*lookup)(void *backend_ctx,
+                          odfs_cache_t *cache,
+                          odfs_log_state_t *log,
+                          const odfs_node_t *dir,
+                          const char *name,
+                          odfs_node_t *out);
+
+    /*
+     * Read a symbolic link's target as a POSIX-style path ("a/b",
+     * "../a", "/abs"). name is looked up within dir, matching lookup
+     * semantics. May be NULL, and may return ODFS_ERR_UNSUPPORTED when
+     * the object exists but carries no link target the backend can read.
+     */
+    odfs_err_t (*readlink)(void *backend_ctx,
+                            odfs_cache_t *cache,
+                            odfs_log_state_t *log,
+                            const odfs_node_t *dir,
+                            const char *name,
+                            char *buf,
+                            size_t buf_size);
+
+    /*
+     * Resolve the parent (and optional grandparent) of a directory node
+     * directly, without a tree walk. May be NULL, in which case the core
+     * falls back to a generic search.
+     *
+     *   dir             — the directory whose parent is wanted
+     *   parent_out      — receives the containing directory
+     *   grandparent_out — if non-NULL, receives the parent's parent (or the
+     *                     volume root when parent_out is the root)
+     *
+     * Returns ODFS_ERR_NOT_FOUND when dir is the root (has no parent), or
+     * ODFS_ERR_UNSUPPORTED to ask the core to use the generic search.
+     */
+    odfs_err_t (*resolve_parent)(void *backend_ctx,
+                                  odfs_cache_t *cache,
+                                  odfs_log_state_t *log,
+                                  const odfs_node_t *dir,
+                                  odfs_node_t *parent_out,
+                                  odfs_node_t *grandparent_out);
+
+    /*
+     * Get volume name. May be NULL if not applicable.
+     *   buf      — output buffer
+     *   buf_size — size of output buffer
+     */
+    odfs_err_t (*get_volume_name)(void *backend_ctx,
+                                   char *buf,
+                                   size_t buf_size);
+
+    /*
+     * Get volume total size in 2048-byte logical media blocks. May be NULL.
+     */
+    uint32_t (*get_volume_size)(void *backend_ctx);
+} odfs_backend_ops_t;
+
+const char *odfs_backend_type_name(odfs_backend_type_t type);
+
+#endif /* ODFS_BACKEND_H */

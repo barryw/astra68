@@ -1,0 +1,116 @@
+/*
+ * odfs/api.h — top-level public API
+ *
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+#ifndef ODFS_API_H
+#define ODFS_API_H
+
+#include "odfs/config.h"
+#include "odfs/error.h"
+#include "odfs/node.h"
+#include "odfs/media.h"
+#include "odfs/cache.h"
+#include "odfs/cache_meta.h"
+#include "odfs/log.h"
+#include "odfs/backend.h"
+
+/* mount options */
+typedef struct odfs_mount_opts {
+    int      force_backend;      /* ODFS_BACKEND_xxx or 0 for auto */
+    int      force_session;      /* session number, -1 for default (last) */
+    int      disable_rr;         /* disable Rock Ridge */
+    int      disable_joliet;     /* disable Joliet */
+    int      prefer_udf;         /* prefer UDF over ISO on bridge discs */
+    int      prefer_hfs;         /* prefer HFS on hybrid discs */
+    int      lowercase_iso;      /* lowercase plain ISO names */
+    int      prefer_aiff;        /* expose CDDA tracks as AIFF instead of WAV */
+    uint32_t cache_blocks;       /* block cache size (0 = use default) */
+    uint32_t meta_cache_kib;     /* parsed-dir cache budget in KiB
+                                    (default from config.h; 0 disables) */
+} odfs_mount_opts_t;
+
+/* mounted volume */
+typedef struct odfs_mount {
+    odfs_media_t             media;
+    odfs_cache_t             cache;
+#if ODFS_FEATURE_CACHE_META
+    odfs_meta_cache_t        meta;
+#endif
+    odfs_log_state_t         log;
+    odfs_mount_opts_t        opts;
+
+    odfs_backend_type_t      active_backend;
+    const odfs_backend_ops_t *backend_ops;
+    void                      *backend_ctx;
+    const odfs_backend_ops_t *backend_map[ODFS_BACKEND__COUNT];
+    void                      *backend_ctx_map[ODFS_BACKEND__COUNT];
+    odfs_node_t               virtual_root_map[ODFS_BACKEND__COUNT];
+    uint8_t                   has_virtual_root[ODFS_BACKEND__COUNT];
+
+    odfs_node_t              root;
+    /* total volume size in 2048-byte logical media blocks */
+    uint32_t                  total_blocks;
+    char                      volume_name[128];
+} odfs_mount_t;
+
+/* initialize default mount options */
+void odfs_mount_opts_default(odfs_mount_opts_t *opts);
+
+/* mount an image/device */
+odfs_err_t odfs_mount(odfs_media_t *media,
+                        const odfs_mount_opts_t *opts,
+                        odfs_log_state_t *log,
+                        odfs_mount_t *mnt);
+
+/* register an additional node backend on an existing mount */
+void odfs_mount_register_backend(odfs_mount_t *mnt,
+                                   odfs_backend_type_t node_backend,
+                                   const odfs_backend_ops_t *ops,
+                                   void *ctx,
+                                   const odfs_node_t *virtual_root);
+
+/* unmount */
+void odfs_unmount(odfs_mount_t *mnt);
+
+/* directory listing (resume_offset: NULL = from start, else resume point) */
+odfs_err_t odfs_readdir(odfs_mount_t *mnt,
+                          const odfs_node_t *dir,
+                          odfs_dir_iter_fn callback,
+                          void *ctx,
+                          uint32_t *resume_offset);
+
+/* file read */
+odfs_err_t odfs_read(odfs_mount_t *mnt,
+                       const odfs_node_t *file,
+                       uint64_t offset,
+                       void *buf,
+                       size_t *len);
+
+/* lookup path component */
+odfs_err_t odfs_lookup(odfs_mount_t *mnt,
+                         const odfs_node_t *dir,
+                         const char *name,
+                         odfs_node_t *out);
+
+/* read a symlink's POSIX-style target; name is looked up within dir */
+odfs_err_t odfs_readlink(odfs_mount_t *mnt,
+                           const odfs_node_t *dir,
+                           const char *name,
+                           char *buf,
+                           size_t buf_size);
+
+#if !defined(AMIGA)
+/* Host path resolver; Amiga frontends resolve paths through DOS locks. */
+odfs_err_t odfs_resolve_path(odfs_mount_t *mnt,
+                               const char *path,
+                               odfs_node_t *out);
+#endif
+
+/* multisession: find last session start LBA */
+odfs_err_t odfs_find_last_session(odfs_media_t *media,
+                                    odfs_log_state_t *log,
+                                    uint32_t *last_lba_out);
+
+#endif /* ODFS_API_H */

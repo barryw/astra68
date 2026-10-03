@@ -1,0 +1,155 @@
+Short:        Modern optical-disc filesystem
+Author:       stefan.reinauer@coreboot.org (Stefan Reinauer)
+Uploader:     stefan.reinauer@coreboot.org (Stefan Reinauer)
+Type:         disk/cdrom
+Version:      [VERSION]
+Requires:     Kickstart 2.04 (V37) or newer, CD/DVD drive or emulator CD device
+Architecture: m68k-amigaos
+
+ODFileSystem
+============
+
+ODFileSystem is a read-only optical-disc filesystem handler for
+AmigaOS.  It mounts CD-ROM, DVD, Blu-ray, and image-backed optical
+media through the normal AmigaDOS handler interface.
+
+The AmigaOS 3 release archive contains the m68k handlers intended for
+classic Amiga systems and emulators.  Copy the normal handler to L: and
+use it from a DOSDriver or Mountlist entry.
+
+
+Archive Contents
+----------------
+
+- ODFileSystem
+  Normal disk-loadable filesystem handler.  Copy this to
+  L:ODFileSystem for regular use.  Runs on any 68000 or better.
+
+- ODFileSystem020
+  Handler built for 68020 and higher processors.  Faster and smaller
+  than the 68000 build; use it on 68020/030/040/060 machines by
+  copying it to L:ODFileSystem instead of the 68000 version.
+
+- ODFileSystem-test
+  Test build with serial debug output enabled.
+
+- ODFileSystem-rom
+  Size-reduced ROM-profile build.
+
+- ODFileSystem-rom-test
+  Test build of the ROM profile with serial debug output enabled.
+
+- Env-Archive/Sys/def_cdda.info
+  Default Workbench disk icon for pure audio CDs.
+
+- README.md
+  This file.
+
+
+Features
+--------
+
+- ISO 9660 directory and file access
+- Rock Ridge long names and metadata
+- Joliet Unicode names
+- UDF bridge-disc support
+- HFS and HFS+ data-fork access
+- Multisession media support
+- CDDA tracks exposed as virtual audio files
+- Read-only operation for safe use with optical media
+
+For ISO-family hybrid discs, ODFileSystem prefers Rock Ridge, then
+Joliet, then plain ISO 9660.  For bridge discs it prefers the ISO view
+by default; UDF and HFS can be selected explicitly through mount
+options.
+
+
+Installation
+------------
+
+1. Copy the handler to:
+
+       L:ODFileSystem
+
+2. Install or edit a DOSDriver entry, for example:
+
+       DEVS:DOSDrivers/CD0
+
+3. Set the filesystem in the DOSDriver or Mountlist to:
+
+       FileSystem = L:ODFileSystem
+
+4. Set Device and Unit for your CD/DVD device.
+
+Typical examples:
+
+- SCSI CD-ROM:       Device = scsi.device, Unit = SCSI ID
+- A1200 IDE slave:   Device = scsi.device, Unit = 1
+- WinUAE/FS-UAE:     use the emulator's configured CD device/unit
+
+Only one active DOSDriver may use a given device name. If another CD
+filesystem is already mounted as CD0:, either replace or disable that
+entry before mounting ODFileSystem as CD0:, or rename the ODFileSystem
+DOSDriver to another name such as OD0:.
+
+Mount the device from Workbench by double-clicking the DOSDriver icon,
+or from Shell with:
+
+       Mount CD0:
+
+To use the supplied audio-CD icon, copy it to both the persistent and
+current default-icon directories:
+
+       Copy Env-Archive/Sys/def_cdda.info ENVARC:Sys/
+       Copy Env-Archive/Sys/def_cdda.info ENV:Sys/
+
+For pure audio CDs, ODFileSystem presents this default icon as the
+volume's Disk.info. If it is unavailable, Workbench falls back to its
+normal default CD icon. Data and mixed-mode discs continue to use
+their normal disk icons.
+
+
+Mount Options
+-------------
+
+Options can be supplied with the DOSDriver Control string:
+
+       Control = "LOWERCASE UDF FILEBUFFERS=128"
+
+Supported options include:
+
+- LOWERCASE
+  Lowercase plain ISO 9660 names.
+
+- NOROCKRIDGE or NORR
+  Disable Rock Ridge.
+
+- NOJOLIET or NOJ
+  Disable Joliet.
+
+- UDF
+  Prefer UDF on bridge discs.
+
+- HFSFIRST or HF
+  Prefer HFS on hybrid HFS/ISO discs.
+
+- FILEBUFFERS=n or FB=n
+  Set the filesystem block-cache size.
+
+- AIFF
+  Expose CDDA audio tracks as AIFF files instead of WAV files.
+
+
+Limitations
+-----------
+
+ODFileSystem is read-only.
+
+HFS and HFS+ support exposes data forks only.  Resource forks and
+Finder metadata are not presented through the AmigaDOS view, so some
+classic Mac media may not appear exactly as they would on Mac OS.
+
+Project source and current documentation are available from the
+ODFileSystem repository:
+
+       https://github.com/reinauer/ODFileSystem

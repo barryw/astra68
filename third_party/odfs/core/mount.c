@@ -1,0 +1,697 @@
+/*
+ * mount.c — mount/unmount logic
+ *
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+#include "odfs/api.h"
+#include "odfs/ancestry.h"
+#include "odfs/string.h"
+#include <string.h>
+#include <inttypes.h>
+
+/* backend registrations */
+#if ODFS_FEATURE_ISO9660
+extern const odfs_backend_ops_t iso9660_backend_ops;
+#endif
+#if ODFS_FEATURE_JOLIET
+extern const odfs_backend_ops_t joliet_backend_ops;
+#endif
+#if ODFS_FEATURE_UDF
+extern const odfs_backend_ops_t udf_backend_ops;
+#endif
+#if ODFS_FEATURE_HFS
+extern const odfs_backend_ops_t hfs_backend_ops;
+#endif
+#if ODFS_FEATURE_HFSPLUS
+extern const odfs_backend_ops_t hfsplus_backend_ops;
+#endif
+
+/*
+ * Backend probe table — order defines precedence.
+ *
+ * ISO9660 first (RR detected inside mount). Joliet second.
+ * UDF and HFS probed independently for standalone media.
+ * For hybrid discs, ISO-family wins unless overridden.
+ */
+static const odfs_backend_ops_t *const backend_table[] = {
+#if ODFS_FEATURE_ISO9660
+    &iso9660_backend_ops,
+#endif
+#if ODFS_FEATURE_JOLIET
+    &joliet_backend_ops,
+#endif
+#if ODFS_FEATURE_UDF
+    &udf_backend_ops,
+#endif
+#if ODFS_FEATURE_HFS
+    &hfs_backend_ops,
+#endif
+#if ODFS_FEATURE_HFSPLUS
+    &hfsplus_backend_ops,
+#endif
+    NULL
+};
+
+static size_t mount_build_session_candidates(odfs_mount_t *mnt,
+                                             uint32_t preferred_start,
+                                             uint32_t *starts,
+                                             size_t max_starts)
+{
+#if ODFS_FEATURE_MULTISESSION
+    odfs_toc_t toc;
+#endif
+    size_t count = 0;
+
+    if (!mnt || !starts || max_starts == 0)
+        return 0;
+
+    starts[count++] = preferred_start;
+
+#if ODFS_FEATURE_MULTISESSION
+    if (mnt->opts.force_session >= 0)
+        return count;
+
+    if (odfs_media_read_toc(&mnt->media, &toc) == ODFS_OK) {
+        int i;
+
+        for (i = (int)toc.session_count - 1; i >= 0 && count < max_starts; i--) {
+            uint32_t start = toc.sessions[i].start_lba;
+            int duplicate = 0;
+            size_t j;
+
+            if ((toc.sessions[i].control & 0x04) == 0)
+                continue;
+
+            for (j = 0; j < count; j++) {
+                if (starts[j] == start) {
+                    duplicate = 1;
+                    break;
+                }
+            }
+            if (!duplicate)
+                starts[count++] = start;
+        }
+    }
+#endif
+
+    if (preferred_start != 0 && count < max_starts)
+        starts[count++] = 0;
+
+    return count;
+}
+
+static odfs_err_t mount_try_session_start(odfs_mount_t *mnt,
+                                          uint32_t session_start)
+{
+    odfs_err_t err;
+    const odfs_backend_ops_t *chosen = NULL;
+    const odfs_backend_ops_t *iso_candidate = NULL;
+    const odfs_backend_ops_t *joliet_candidate = NULL;
+    const odfs_backend_ops_t *udf_candidate = NULL;
+    const odfs_backend_ops_t *hfs_candidate = NULL;
+    int i;
+
+    mnt->backend_ctx = NULL;
+    mnt->backend_ops = NULL;
+    mnt->active_backend = ODFS_BACKEND_NONE;
+    memset(&mnt->root, 0, sizeof(mnt->root));
+
+    /*
+     * Probe backends and select best match.
+     *
+     * Precedence (highest first): Rock Ridge > Joliet > plain ISO.
+     * ISO9660 is always probed first because RR detection happens
+     * inside its mount. If RR is found, we're done. If not, and
+     * Joliet is available, prefer Joliet over plain ISO for its
+     * Unicode names. User can force a specific backend.
+     */
+    for (i = 0; backend_table[i] != NULL; i++) {
+        const odfs_backend_ops_t *be = backend_table[i];
+
+        if (mnt->opts.force_backend != 0 &&
+            (odfs_backend_type_t)mnt->opts.force_backend != be->backend_type)
+            continue;
+
+        ODFS_DEBUG(&mnt->log, ODFS_SUB_MOUNT,
+                    "probing backend: %s", be->name);
+
+        err = be->probe(&mnt->cache, &mnt->log, session_start);
+        if (err == ODFS_OK) {
+            ODFS_INFO(&mnt->log, ODFS_SUB_MOUNT,
+                       "detected format: %s", be->name);
+            if (be->backend_type == ODFS_BACKEND_ISO9660)
+                iso_candidate = be;
+            else if (be->backend_type == ODFS_BACKEND_JOLIET)
+                joliet_candidate = be;
+            else if (be->backend_type == ODFS_BACKEND_UDF)
+                udf_candidate = be;
+            else if (be->backend_type == ODFS_BACKEND_HFS)
+                hfs_candidate = be;
+            else
+                { chosen = be; break; }
+        }
+    }
+
+    if (!chosen && udf_candidate && mnt->opts.prefer_udf) {
+        err = udf_candidate->mount(&mnt->cache, &mnt->log, session_start,
+                                   &mnt->root, &mnt->backend_ctx);
+        if (err == ODFS_OK)
+            chosen = udf_candidate;
+    }
+    if (!chosen && hfs_candidate && mnt->opts.prefer_hfs) {
+        err = hfs_candidate->mount(&mnt->cache, &mnt->log, session_start,
+                                   &mnt->root, &mnt->backend_ctx);
+        if (err == ODFS_OK)
+            chosen = hfs_candidate;
+    }
+
+    if (!chosen && iso_candidate) {
+        err = iso_candidate->mount(&mnt->cache, &mnt->log, session_start,
+                                   &mnt->root, &mnt->backend_ctx);
+        if (err == ODFS_OK) {
+            if (mnt->root.backend == ODFS_BACKEND_ROCK_RIDGE ||
+                mnt->opts.disable_joliet || !joliet_candidate) {
+                chosen = iso_candidate;
+            } else {
+                iso_candidate->unmount(mnt->backend_ctx);
+                mnt->backend_ctx = NULL;
+            }
+        }
+    }
+
+    if (!chosen && joliet_candidate) {
+        err = joliet_candidate->mount(&mnt->cache, &mnt->log, session_start,
+                                      &mnt->root, &mnt->backend_ctx);
+        if (err == ODFS_OK)
+            chosen = joliet_candidate;
+    }
+
+    if (!chosen && udf_candidate) {
+        err = udf_candidate->mount(&mnt->cache, &mnt->log, session_start,
+                                   &mnt->root, &mnt->backend_ctx);
+        if (err == ODFS_OK)
+            chosen = udf_candidate;
+    }
+
+    if (!chosen && hfs_candidate) {
+        err = hfs_candidate->mount(&mnt->cache, &mnt->log, session_start,
+                                   &mnt->root, &mnt->backend_ctx);
+        if (err == ODFS_OK)
+            chosen = hfs_candidate;
+    }
+
+    if (!chosen && iso_candidate && !mnt->backend_ctx) {
+        err = iso_candidate->mount(&mnt->cache, &mnt->log, session_start,
+                                   &mnt->root, &mnt->backend_ctx);
+        if (err == ODFS_OK)
+            chosen = iso_candidate;
+    }
+
+    if (!chosen) {
+        mnt->backend_ctx = NULL;
+        memset(&mnt->root, 0, sizeof(mnt->root));
+        return ODFS_ERR_BAD_FORMAT;
+    }
+
+    if (!mnt->backend_ctx) {
+        err = chosen->mount(&mnt->cache, &mnt->log, session_start,
+                            &mnt->root, &mnt->backend_ctx);
+        if (err != ODFS_OK) {
+            ODFS_ERROR(&mnt->log, ODFS_SUB_MOUNT,
+                        "backend %s mount failed: %s", chosen->name,
+                        odfs_err_str(err));
+            mnt->backend_ctx = NULL;
+            memset(&mnt->root, 0, sizeof(mnt->root));
+            return err;
+        }
+    }
+
+    mnt->backend_ops = chosen;
+    mnt->active_backend = mnt->root.backend;
+    return ODFS_OK;
+}
+
+static int mount_is_root(const odfs_mount_t *mnt, const odfs_node_t *node)
+{
+    if (!mnt || !node)
+        return 0;
+
+    return odfs_node_matches_identity(node, &mnt->root);
+}
+
+static int mount_backend_for_type(const odfs_mount_t *mnt,
+                                  odfs_backend_type_t type,
+                                  const odfs_backend_ops_t **ops_out,
+                                  void **ctx_out)
+{
+    if (!mnt || type <= ODFS_BACKEND_NONE || type >= ODFS_BACKEND__COUNT)
+        return 0;
+
+    if (mnt->backend_map[type]) {
+        if (ops_out)
+            *ops_out = mnt->backend_map[type];
+        if (ctx_out)
+            *ctx_out = mnt->backend_ctx_map[type];
+        return 1;
+    }
+
+    if (mnt->backend_ops &&
+        (type == mnt->root.backend || type == mnt->backend_ops->backend_type)) {
+        if (ops_out)
+            *ops_out = mnt->backend_ops;
+        if (ctx_out)
+            *ctx_out = mnt->backend_ctx;
+        return 1;
+    }
+
+    return 0;
+}
+
+#if !defined(AMIGA)
+static int mount_virtual_root_by_name(const odfs_mount_t *mnt,
+                                      const odfs_node_t *dir,
+                                      const char *name,
+                                      odfs_node_t *out)
+{
+    int i;
+
+    if (!mnt || !dir || !name || !out || !mount_is_root(mnt, dir))
+        return 0;
+
+    for (i = ODFS_BACKEND_NONE + 1; i < ODFS_BACKEND__COUNT; i++) {
+        if (!mnt->has_virtual_root[i])
+            continue;
+        if (odfs_strcasecmp(name, mnt->virtual_root_map[i].name) != 0)
+            continue;
+        *out = mnt->virtual_root_map[i];
+        return 1;
+    }
+
+    return 0;
+}
+#endif
+
+void odfs_mount_opts_default(odfs_mount_opts_t *opts)
+{
+    memset(opts, 0, sizeof(*opts));
+    opts->force_backend = 0;
+    opts->force_session = -1;
+    opts->disable_rr = 0;
+    opts->disable_joliet = 0;
+    opts->prefer_udf = 0;
+    opts->prefer_hfs = 0;
+    opts->lowercase_iso = 0; /* preserve original case */
+    opts->prefer_aiff = 0; /* expose CDDA tracks as WAV by default */
+    opts->cache_blocks = 0; /* use default from config.h */
+    opts->meta_cache_kib = ODFS_META_CACHE_KIB;
+}
+
+void odfs_mount_register_backend(odfs_mount_t *mnt,
+                                   odfs_backend_type_t node_backend,
+                                   const odfs_backend_ops_t *ops,
+                                   void *ctx,
+                                   const odfs_node_t *virtual_root)
+{
+    if (!mnt || node_backend <= ODFS_BACKEND_NONE ||
+        node_backend >= ODFS_BACKEND__COUNT)
+        return;
+
+    mnt->backend_map[node_backend] = ops;
+    mnt->backend_ctx_map[node_backend] = ctx;
+    mnt->has_virtual_root[node_backend] = 0;
+
+    if (virtual_root) {
+        mnt->virtual_root_map[node_backend] = *virtual_root;
+        mnt->has_virtual_root[node_backend] = 1;
+    }
+}
+
+odfs_err_t odfs_mount(odfs_media_t *media,
+                        const odfs_mount_opts_t *opts,
+                        odfs_log_state_t *log,
+                        odfs_mount_t *mnt)
+{
+    odfs_err_t err;
+    uint32_t cache_size;
+    uint32_t session_candidates[100];
+    size_t session_count;
+    size_t session_index;
+
+    if (!media || !mnt)
+        return ODFS_ERR_INVAL;
+
+    memset(mnt, 0, sizeof(*mnt));
+    mnt->media = *media;
+
+    if (opts)
+        mnt->opts = *opts;
+    else
+        odfs_mount_opts_default(&mnt->opts);
+
+    if (log)
+        mnt->log = *log;
+#if ODFS_FEATURE_LOG
+    else
+        odfs_log_init(&mnt->log);
+#endif
+    /* else: mnt was zeroed above, which is a valid disabled log state */
+
+    /* init block cache */
+    cache_size = mnt->opts.cache_blocks;
+    if (cache_size == 0)
+        cache_size = ODFS_BLOCK_CACHE_SIZE;
+
+    err = odfs_cache_init(&mnt->cache, &mnt->media, cache_size);
+    if (err != ODFS_OK)
+        return err;
+
+    ODFS_INFO(&mnt->log, ODFS_SUB_MOUNT,
+               "cache initialized: %" PRIu32 " blocks", cache_size);
+
+#if ODFS_FEATURE_CACHE_META
+    {
+        uint32_t meta_kib = mnt->opts.meta_cache_kib;
+
+        /* keep the byte conversion away from overflow */
+        if (meta_kib > (1UL << 20))
+            meta_kib = 1UL << 20;
+        odfs_meta_cache_init(&mnt->meta, meta_kib << 10);
+    }
+#endif
+
+    /* determine session start */
+    uint32_t session_start = 0;
+#if ODFS_FEATURE_MULTISESSION
+    if (mnt->opts.force_session >= 0) {
+        /* user forced a specific session — read TOC to find it */
+        odfs_toc_t toc;
+        if (odfs_media_read_toc(&mnt->media, &toc) == ODFS_OK &&
+            mnt->opts.force_session < toc.session_count) {
+            session_start = toc.sessions[mnt->opts.force_session].start_lba;
+            ODFS_INFO(&mnt->log, ODFS_SUB_MOUNT,
+                       "forced session %d at LBA %" PRIu32,
+                       mnt->opts.force_session, session_start);
+        }
+    } else {
+        /* default: find and use last session */
+        odfs_find_last_session(&mnt->media, &mnt->log, &session_start);
+    }
+#endif
+
+    session_count = mount_build_session_candidates(mnt, session_start,
+                                                   session_candidates,
+                                                   sizeof(session_candidates) /
+                                                   sizeof(session_candidates[0]));
+
+    err = ODFS_ERR_BAD_FORMAT;
+    for (session_index = 0; session_index < session_count; session_index++) {
+        uint32_t candidate = session_candidates[session_index];
+
+        if (session_index > 0) {
+            ODFS_INFO(&mnt->log, ODFS_SUB_MOUNT,
+                      "retrying mount from earlier session/data track at "
+                      "LBA %" PRIu32,
+                      candidate);
+        }
+
+        /* Retries probe different LBAs, and the block cache is keyed by LBA. */
+        err = mount_try_session_start(mnt, candidate);
+        if (err == ODFS_OK) {
+            session_start = candidate;
+            break;
+        }
+    }
+
+    if (err != ODFS_OK) {
+        ODFS_WARN(&mnt->log, ODFS_SUB_MOUNT,
+                   "no recognized filesystem format found");
+#if ODFS_FEATURE_CACHE_META
+        odfs_meta_cache_destroy(&mnt->meta);
+#endif
+        odfs_cache_destroy(&mnt->cache);
+        return ODFS_ERR_BAD_FORMAT;
+    }
+
+    odfs_mount_register_backend(mnt, mnt->root.backend, mnt->backend_ops,
+                                mnt->backend_ctx, &mnt->root);
+    if (mnt->backend_ops->backend_type != mnt->root.backend)
+        odfs_mount_register_backend(mnt, mnt->backend_ops->backend_type,
+                                    mnt->backend_ops,
+                                    mnt->backend_ctx, NULL);
+
+    /* retrieve volume name and size from backend */
+    if (mnt->backend_ops->get_volume_name)
+        mnt->backend_ops->get_volume_name(mnt->backend_ctx,
+                                          mnt->volume_name,
+                                          sizeof(mnt->volume_name));
+    if (mnt->backend_ops->get_volume_size)
+        mnt->total_blocks =
+            mnt->backend_ops->get_volume_size(mnt->backend_ctx);
+
+    return ODFS_OK;
+}
+
+void odfs_unmount(odfs_mount_t *mnt)
+{
+    int primary_seen = 0;
+    int i;
+
+    if (!mnt)
+        return;
+
+    for (i = ODFS_BACKEND_NONE + 1; i < ODFS_BACKEND__COUNT; i++) {
+        const odfs_backend_ops_t *ops = mnt->backend_map[i];
+        void *ctx = mnt->backend_ctx_map[i];
+        int j;
+        int duplicate = 0;
+
+        if (!ops || !ops->unmount)
+            continue;
+
+        for (j = ODFS_BACKEND_NONE + 1; j < i; j++) {
+            if (mnt->backend_map[j] == ops && mnt->backend_ctx_map[j] == ctx) {
+                duplicate = 1;
+                break;
+            }
+        }
+        if (duplicate)
+            continue;
+
+        if (ops == mnt->backend_ops && ctx == mnt->backend_ctx)
+            primary_seen = 1;
+        ops->unmount(ctx);
+    }
+
+    if (!primary_seen && mnt->backend_ops && mnt->backend_ops->unmount)
+        mnt->backend_ops->unmount(mnt->backend_ctx);
+
+#if ODFS_FEATURE_CACHE_META
+    odfs_meta_cache_destroy(&mnt->meta);
+#endif
+    odfs_cache_destroy(&mnt->cache);
+    odfs_media_close(&mnt->media);
+
+    memset(mnt, 0, sizeof(*mnt));
+}
+
+odfs_err_t odfs_readdir(odfs_mount_t *mnt,
+                          const odfs_node_t *dir,
+                          odfs_dir_iter_fn callback,
+                          void *ctx,
+                          uint32_t *resume_offset)
+{
+    const odfs_backend_ops_t *ops;
+    void *backend_ctx;
+
+    if (!mnt || !dir)
+        return ODFS_ERR_UNSUPPORTED;
+
+    if (dir->kind != ODFS_NODE_DIR)
+        return ODFS_ERR_NOT_DIR;
+
+    if (!mount_backend_for_type(mnt, dir->backend, &ops, &backend_ctx) ||
+        !ops || !ops->readdir)
+        return ODFS_ERR_UNSUPPORTED;
+
+#if ODFS_FEATURE_CACHE_META
+    {
+        odfs_err_t err = odfs_meta_readdir(&mnt->meta, ops, backend_ctx,
+                                           &mnt->cache, &mnt->log, dir,
+                                           callback, ctx, resume_offset);
+        if (err != ODFS_ERR_UNSUPPORTED)
+            return err;
+    }
+#endif
+
+    return ops->readdir(backend_ctx, &mnt->cache, &mnt->log, dir,
+                        callback, ctx, resume_offset);
+}
+
+odfs_err_t odfs_read(odfs_mount_t *mnt,
+                       const odfs_node_t *file,
+                       uint64_t offset,
+                       void *buf,
+                       size_t *len)
+{
+    const odfs_backend_ops_t *ops;
+    void *backend_ctx;
+
+    if (!mnt || !file)
+        return ODFS_ERR_UNSUPPORTED;
+
+    if (file->kind == ODFS_NODE_DIR)
+        return ODFS_ERR_IS_DIR;
+
+    if (!mount_backend_for_type(mnt, file->backend, &ops, &backend_ctx) ||
+        !ops || !ops->read)
+        return ODFS_ERR_UNSUPPORTED;
+
+    return ops->read(backend_ctx, &mnt->cache, &mnt->log, file,
+                     offset, buf, len);
+}
+
+odfs_err_t odfs_lookup(odfs_mount_t *mnt,
+                         const odfs_node_t *dir,
+                         const char *name,
+                         odfs_node_t *out)
+{
+    const odfs_backend_ops_t *ops;
+    void *backend_ctx;
+
+    if (!mnt || !dir)
+        return ODFS_ERR_UNSUPPORTED;
+
+    if (dir->kind != ODFS_NODE_DIR)
+        return ODFS_ERR_NOT_DIR;
+
+    if (!mount_backend_for_type(mnt, dir->backend, &ops, &backend_ctx) ||
+        !ops || !ops->lookup)
+        return ODFS_ERR_UNSUPPORTED;
+
+#if ODFS_FEATURE_CACHE_META
+    {
+        odfs_err_t err = odfs_meta_lookup(&mnt->meta, ops, backend_ctx,
+                                          &mnt->cache, &mnt->log, dir,
+                                          name, out);
+        if (err != ODFS_ERR_UNSUPPORTED)
+            return err;
+    }
+#endif
+
+    return ops->lookup(backend_ctx, &mnt->cache, &mnt->log, dir, name, out);
+}
+
+odfs_err_t odfs_readlink(odfs_mount_t *mnt,
+                           const odfs_node_t *dir,
+                           const char *name,
+                           char *buf,
+                           size_t buf_size)
+{
+    const odfs_backend_ops_t *ops;
+    void *backend_ctx;
+
+    if (!mnt || !dir || !name || !buf || buf_size == 0)
+        return ODFS_ERR_INVAL;
+
+    if (dir->kind != ODFS_NODE_DIR)
+        return ODFS_ERR_NOT_DIR;
+
+    if (!mount_backend_for_type(mnt, dir->backend, &ops, &backend_ctx) ||
+        !ops || !ops->readlink)
+        return ODFS_ERR_UNSUPPORTED;
+
+    return ops->readlink(backend_ctx, &mnt->cache, &mnt->log, dir, name,
+                         buf, buf_size);
+}
+
+odfs_err_t odfs_resolve_parent_node(odfs_mount_t *mnt,
+                                    const odfs_node_t *node,
+                                    odfs_node_t *parent_out,
+                                    odfs_node_t *grandparent_out)
+{
+    const odfs_backend_ops_t *ops;
+    void *backend_ctx;
+
+    if (!mnt || !node || !parent_out)
+        return ODFS_ERR_INVAL;
+
+    if (mount_is_root(mnt, node))
+        return ODFS_ERR_NOT_FOUND;
+
+    /* prefer the backend's direct resolver, if it has one */
+    if (mount_backend_for_type(mnt, node->backend, &ops, &backend_ctx) &&
+        ops && ops->resolve_parent) {
+        odfs_err_t err = ops->resolve_parent(backend_ctx, &mnt->cache,
+                                             &mnt->log, node,
+                                             parent_out, grandparent_out);
+        /* UNSUPPORTED means "use the generic search for this node" */
+        if (err != ODFS_ERR_UNSUPPORTED)
+            return err;
+    }
+
+    return odfs_resolve_parent_search(mnt, node, parent_out, grandparent_out);
+}
+
+#if !defined(AMIGA)
+odfs_err_t odfs_resolve_path(odfs_mount_t *mnt,
+                             const char *path,
+                             odfs_node_t *out)
+{
+    odfs_node_t current;
+    char component[ODFS_NAME_MAX];
+    const char *p;
+    size_t len;
+    odfs_err_t err;
+
+    if (!mnt || !path || !out)
+        return ODFS_ERR_INVAL;
+
+    current = mnt->root;
+
+    /* skip leading separator */
+    p = path;
+    while (*p == '/')
+        p++;
+
+    if (*p == '\0') {
+        *out = current;
+        return ODFS_OK;
+    }
+
+    while (*p) {
+        /* extract next component */
+        const char *slash = p;
+        while (*slash && *slash != '/')
+            slash++;
+        len = (size_t)(slash - p);
+        if (len == 0) {
+            p = slash + 1;
+            continue;
+        }
+        if (len >= ODFS_NAME_MAX)
+            return ODFS_ERR_NAME_TOO_LONG;
+
+        memcpy(component, p, len);
+        component[len] = '\0';
+
+        if (mount_virtual_root_by_name(mnt, &current, component, &current)) {
+            p = slash;
+            while (*p == '/')
+                p++;
+            continue;
+        }
+
+        err = odfs_lookup(mnt, &current, component, &current);
+        if (err != ODFS_OK)
+            return err;
+
+        p = slash;
+        while (*p == '/')
+            p++;
+    }
+
+    *out = current;
+    return ODFS_OK;
+}
+#endif
