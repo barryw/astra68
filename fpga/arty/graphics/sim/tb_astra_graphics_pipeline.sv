@@ -863,6 +863,16 @@ module tb_astra_graphics_pipeline #(
                             "integrated copper dispatch missing fence=%0d completed=%0d",
                             dut.render_retired_fence,
                             dut.render_commands_completed);
+                    // The scanout health registers carry the scheduler's
+                    // counters; underruns cross from the pixel domain.
+                    if (dut.pixel_underruns_build != pixel_underruns ||
+                        dut.control_i.scanout_lines_built != lines_built ||
+                        dut.framebuffer_max_build_cycles == 32'd0)
+                        $fatal(1,
+                            "scanout health registers wrong underruns=%0d/%0d lines=%0d/%0d max=%0d",
+                            dut.pixel_underruns_build, pixel_underruns,
+                            dut.control_i.scanout_lines_built, lines_built,
+                            dut.framebuffer_max_build_cycles);
                     $display(
                         "ASTRA GRAPHICS PIPELINE PASS pixels=%0d lines=%0d underruns=%0d deferrals=%0d",
                         checked_pixels + 1, lines_built,

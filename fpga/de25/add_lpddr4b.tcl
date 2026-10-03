@@ -103,7 +103,17 @@ set_connection_parameter_value \
 add_interface astra_control axi4lite start
 set_interface_property astra_control EXPORT_OF astra_control_bridge.m0
 
-proc add_memory_bridge {name exported read write id_width data_width} {
+# Scanout managers (fb, scene) have a hard per-line deadline; render and
+# capture are bulk.  Arbitration shares give a waiting scanout request
+# several interconnect grants per turn, but they act before the controller's
+# command queue: a render command issuing many small or slowly filled writes
+# still held scanout reads behind it for ~0.4 ms, and ~26 lines went black
+# each time.  Scanout reads therefore also carry ARQOS, which the LPDDR4B
+# controller schedules by priority (bits 3:2, fixed priority disabled).
+# Scanout demand is bounded by the line scheduler's four-line lookahead, so
+# the priority cannot starve bulk traffic.
+proc add_memory_bridge {name exported read write id_width data_width shares
+                        qos} {
     add_instance $name altera_axi_bridge
     set_instance_parameter_value $name AXI_VERSION AXI4
     set_instance_parameter_value $name ADDR_WIDTH 32
@@ -112,6 +122,8 @@ proc add_memory_bridge {name exported read write id_width data_width} {
     set_instance_parameter_value $name M0_ID_WIDTH $id_width
     set_instance_parameter_value $name ENABLE_AXI4_READ_ONLY_INTERFACE $read
     set_instance_parameter_value $name ENABLE_AXI4_WRITE_ONLY_INTERFACE $write
+    set_instance_parameter_value $name USE_S0_ARQOS $qos
+    set_instance_parameter_value $name USE_M0_ARQOS $qos
     add_connection astra_build_clock.out_clk $name.clk
     add_connection astra_build_reset.out_reset $name.clk_reset
     add_connection $name.m0 astra_lpddr4b.s0_axi4
@@ -120,14 +132,16 @@ proc add_memory_bridge {name exported read write id_width data_width} {
     # LPDDR4B may return responses across manager IDs out of command order.
     set_connection_parameter_value \
         $name.m0/astra_lpddr4b.s0_axi4 qsys_mm.enableOutOfOrderSupport true
+    set_connection_parameter_value \
+        $name.m0/astra_lpddr4b.s0_axi4 arbitrationPriority $shares
     add_interface $exported axi4 end
     set_interface_property $exported EXPORT_OF $name.s0
 }
 
-add_memory_bridge astra_fb_bridge astra_fb 1 0 1 128
-add_memory_bridge astra_scene_bridge astra_scene 1 0 2 64
-add_memory_bridge astra_capture_bridge astra_capture 0 1 1 64
-add_memory_bridge astra_render_bridge astra_render 1 1 3 64
+add_memory_bridge astra_fb_bridge astra_fb 1 0 1 128 8 1
+add_memory_bridge astra_scene_bridge astra_scene 1 0 2 64 8 1
+add_memory_bridge astra_capture_bridge astra_capture 0 1 1 64 1 0
+add_memory_bridge astra_render_bridge astra_render 1 1 3 64 1 0
 
 # The render engine reads batch data straight from HPS DDR through F2SDRAM
 # (the host aperture), so the fabric sets burst length and outstanding count

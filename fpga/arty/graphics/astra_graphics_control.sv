@@ -63,6 +63,14 @@ module astra_graphics_control #(
     input  wire [31:0] framebuffer_axi_r_accept_count,
     input  wire [31:0] framebuffer_axi_last_ar_address,
     input  wire [31:0] framebuffer_axi_response_stall_cycles,
+    // Scanout health: lines published complete and failed, line requests
+    // dropped on a full queue, lines the beam reached unbuilt, and the
+    // longest framebuffer line build since reset (build cycles).
+    input  wire [31:0] scanout_lines_built,
+    input  wire [31:0] scanout_lines_failed,
+    input  wire [31:0] scanout_overruns,
+    input  wire [31:0] scanout_underruns,
+    input  wire [31:0] framebuffer_max_build_cycles,
 
     output wire        sprite_enable,
     output reg         sprite_descriptor_write_enable,
@@ -703,6 +711,11 @@ reg [9:0] read_bank_valid_q;
                 4'h2: read_bank9 = render_host_aperture_base;
                 4'h3: read_bank9 = access_fault_count;
                 4'h4: read_bank9 = access_fault_first;
+                4'h5: read_bank9 = scanout_lines_built;
+                4'h6: read_bank9 = scanout_lines_failed;
+                4'h7: read_bank9 = scanout_overruns;
+                4'h8: read_bank9 = scanout_underruns;
+                4'h9: read_bank9 = framebuffer_max_build_cycles;
                 default: read_bank9 = 32'd0;
             endcase
         end
@@ -1431,7 +1444,7 @@ reg [9:0] read_bank_valid_q;
                 read_bank_valid_q[6] <= 1'b1;
                 read_bank_valid_q[7] <= read_bank_word_q[7] <= 4'h4;
                 read_bank_valid_q[8] <= 1'b1;
-                read_bank_valid_q[9] <= read_bank_word_q[9] <= 4'h4;
+                read_bank_valid_q[9] <= read_bank_word_q[9] <= 4'h9;
             end
             if (read_response_pending_q) begin
                 read_response_pending_q <= 1'b0;

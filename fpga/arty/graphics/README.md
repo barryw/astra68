@@ -115,6 +115,18 @@ The real-time scanout side is divided into bounded stages:
 6. The native hardware-pointer plane composites after scaling.
 7. HDMI consumes the aligned RGB/timing bundle at 1920x1080p60.
 
+A compiled window-scene line is fetched as a stream, not span by span: the
+line's span records arrive in bursts into a 16-entry descriptor ring, an issue
+walker requests each source span's pixels under the beat-FIFO credit, and the
+writer fills solid spans and writes source spans behind it. A line costs its
+write cycles (960 at two pixels a clock for 1920 pixels) plus about three
+memory round trips, whatever its span count. The serial form paid two round
+trips a span; on the DE25's LPDDR4B (~90-100 build cycles a round trip under
+render load) eleven spans overran the 2,442-cycle line period and the line
+scheduler blacked out every line until the spans thinned out.
+`tb_astra_framebuffer_scene_latency` holds an eleven-span line to its budget
+against a pipelined 100-cycle memory.
+
 Linux reserves the contiguous 128 MiB physical range
 `0x18000000..0x1fffffff` as `no-map` graphics memory. Framebuffers, sprite
 pixels, render surfaces, command data, and AFNT data

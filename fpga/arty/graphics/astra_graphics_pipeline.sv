@@ -155,6 +155,8 @@ module astra_graphics_pipeline #(
 
     wire frame_boundary_build;
     wire commit_quiesce;
+    reg [31:0] pixel_underruns_build;
+    reg [31:0] framebuffer_max_build_cycles;
     reg frame_toggle_pixel;
     (* ASYNC_REG = "TRUE" *) reg frame_toggle_meta;
     (* ASYNC_REG = "TRUE" *) reg frame_toggle_sync;
@@ -780,6 +782,11 @@ module astra_graphics_pipeline #(
         .framebuffer_axi_last_ar_address(framebuffer_axi_last_ar_address),
         .framebuffer_axi_response_stall_cycles(
             framebuffer_axi_response_stall_cycles),
+        .scanout_lines_built(lines_built),
+        .scanout_lines_failed(lines_failed),
+        .scanout_overruns(scheduler_overruns),
+        .scanout_underruns(pixel_underruns_build),
+        .framebuffer_max_build_cycles(framebuffer_max_build_cycles),
         .sprite_enable(sprite_enable_baseline),
         .sprite_descriptor_write_enable(
             sprite_descriptor_write_enable),
@@ -1214,6 +1221,50 @@ module astra_graphics_pipeline #(
         .pixel_valid(framebuffer_pixel_valid),
         .pixel_value(framebuffer_pixel_value)
     );
+
+    // The longest line build is the scanout margin left under real memory
+    // load; the line period is TOTAL_WIDTH pixel clocks.
+    always @(posedge build_clk) begin
+        if (build_reset)
+            framebuffer_max_build_cycles <= 32'd0;
+        else if (framebuffer_done &&
+                 framebuffer_build_cycles > framebuffer_max_build_cycles)
+            framebuffer_max_build_cycles <= framebuffer_build_cycles;
+    end
+
+    // The underrun counter advances at most once a line in the pixel domain;
+    // its Gray code crosses with one bit changing per step.
+    reg [31:0] pixel_underruns_gray_pixel;
+    (* ASYNC_REG = "TRUE" *) reg [31:0] pixel_underruns_gray_meta;
+    (* ASYNC_REG = "TRUE" *) reg [31:0] pixel_underruns_gray_sync;
+    always @(posedge pixel_clk) begin
+        if (pixel_reset)
+            pixel_underruns_gray_pixel <= 32'd0;
+        else
+            pixel_underruns_gray_pixel <=
+                pixel_underruns ^ (pixel_underruns >> 1);
+    end
+    function automatic [31:0] gray_to_binary(input [31:0] gray);
+        integer bit_index;
+        begin
+            gray_to_binary[31] = gray[31];
+            for (bit_index = 30; bit_index >= 0; bit_index = bit_index - 1)
+                gray_to_binary[bit_index] =
+                    gray_to_binary[bit_index + 1] ^ gray[bit_index];
+        end
+    endfunction
+    always @(posedge build_clk) begin
+        if (build_reset) begin
+            pixel_underruns_gray_meta <= 32'd0;
+            pixel_underruns_gray_sync <= 32'd0;
+            pixel_underruns_build <= 32'd0;
+        end else begin
+            pixel_underruns_gray_meta <= pixel_underruns_gray_pixel;
+            pixel_underruns_gray_sync <= pixel_underruns_gray_meta;
+            pixel_underruns_build <=
+                gray_to_binary(pixel_underruns_gray_sync);
+        end
+    end
 
     // SDL uses the shared framebuffer/blitter path. Hardware framebuffer
     // viewport/wrap scrolling remains independent of the removed tile planes.

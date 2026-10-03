@@ -57,10 +57,12 @@ for required in (
     "add_connection astra_build_reset.out_reset $name.clk_reset",
     "proc add_memory_bridge",
     "add_connection $name.m0 astra_lpddr4b.s0_axi4",
-    "add_memory_bridge astra_fb_bridge astra_fb 1 0 1 128",
-    "add_memory_bridge astra_scene_bridge astra_scene 1 0 2 64",
-    "add_memory_bridge astra_capture_bridge astra_capture 0 1 1 64",
-    "add_memory_bridge astra_render_bridge astra_render 1 1 3 64",
+    "add_memory_bridge astra_fb_bridge astra_fb 1 0 1 128 8 1\n",
+    "add_memory_bridge astra_scene_bridge astra_scene 1 0 2 64 8 1\n",
+    "add_memory_bridge astra_capture_bridge astra_capture 0 1 1 64 1 0\n",
+    "add_memory_bridge astra_render_bridge astra_render 1 1 3 64 1 0\n",
+    "set_instance_parameter_value $name USE_S0_ARQOS $qos",
+    "set_instance_parameter_value $name USE_M0_ARQOS $qos",
     "remove_instance ext_hps_f2sdram_master",
     "add_instance astra_host_bridge altera_axi_bridge",
     "set_instance_parameter_value astra_host_bridge ENABLE_AXI4_READ_ONLY_INTERFACE 1",
@@ -73,6 +75,9 @@ for required in (
 ):
     assert required in tcl, required
 assert tcl.count("qsys_mm.enableOutOfOrderSupport true") == 2
+# Scanout outranks bulk traffic at the interconnect and, through ARQOS, in
+# the LPDDR4B controller's queue (the black-band fix is the latter).
+assert "$name.m0/astra_lpddr4b.s0_axi4 arbitrationPriority $shares" in tcl
 assert "add_connection subsys_debug" not in tcl
 assert "ace5lite_cache_coherency_translator_0." not in tcl
 assert "add_connection clk_100.out_clk subsys_hps.fpga2hps" not in tcl
@@ -363,6 +368,8 @@ with tempfile.TemporaryDirectory() as temporary_text:
     assert ".astra_build_clk" in patched_top
     assert ".astra_build_reset_n" in patched_top
     assert ".astra_scene_araddr" in patched_top
+    assert ".astra_fb_arqos                         (4'b1100)" in patched_top
+    assert ".astra_scene_arqos                      (4'b1100)" in patched_top
     assert ".astra_render_awaddr" in patched_top
     assert ".astra_capture_awaddr" in patched_top
     assert ".astra_host_araddr" in patched_top

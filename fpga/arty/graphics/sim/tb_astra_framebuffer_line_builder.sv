@@ -4,7 +4,12 @@
 
 module tb_astra_framebuffer_line_builder #(
     parameter integer SCENE_PERF_MODE = 0,
-    parameter integer AXI_DATA_WIDTH = SCENE_PERF_MODE ? 128 : 64
+    parameter integer AXI_DATA_WIDTH = SCENE_PERF_MODE ? 128 : 64,
+    // Nonzero models a pipelined memory: every request returns its first
+    // beat MODEL_LATENCY cycles after acceptance and then streams one beat a
+    // clock. The board's LPDDR4B under render load measures ~90-100 build
+    // cycles a round trip (FB_AXI_RESPONSE_STALL_CYCLES), with a long tail.
+    parameter integer MODEL_LATENCY = 0
 );
     localparam integer OUTPUT_WIDTH = SCENE_PERF_MODE ? 1920 : 257;
     localparam integer OUTPUT_HEIGHT = 12;
@@ -14,7 +19,21 @@ module tb_astra_framebuffer_line_builder #(
     localparam integer BEAT_SHIFT = $clog2(BEAT_BYTES);
     // Keep at least 38% of the physical 2,444-cycle line period available for
     // real LPDDR latency and concurrent renderer traffic.
-    localparam integer NATIVE_LINE_BUILD_CYCLES = 1500;
+
+    // Writing 1,920 pixels at two a clock is 960 cycles. A decoupled build
+    // adds about two round trips (line entry, span records) and the first
+    // segment's latency, not one round trip per span; the rest of the
+    // 2,442-cycle period is margin for the latency tail and line-to-line
+    // jitter.
+    localparam integer LINE_PERIOD_CYCLES = 2442;
+    localparam integer WIDE_LINE_BUILD_CYCLES =
+        960 + 4 * MODEL_LATENCY + 160;
+    localparam integer NATIVE_LINE_BUILD_CYCLES =
+        MODEL_LATENCY != 0 ? WIDE_LINE_BUILD_CYCLES : 1500;
+    initial
+        if (SCENE_PERF_MODE && WIDE_LINE_BUILD_CYCLES >= LINE_PERIOD_CYCLES)
+            $fatal(1, "MODEL_LATENCY %0d leaves no line period margin",
+                   MODEL_LATENCY);
     localparam integer MAX_BURST_BEATS = SCENE_PERF_MODE ? 32 : 16;
 
     localparam [31:0] ARENA_BASE = 32'h00001000;
@@ -327,6 +346,115 @@ module tb_astra_framebuffer_line_builder #(
         end
     endtask
 
+    // The DE25 desktop with four overlapping windows compiled rows 417-795
+    // to eleven spans: six window sources between five solid gaps. Sources
+    // start at odd pixels so every segment begins mid-beat.
+    localparam [31:0] WIDE_SCENE_BASE = 32'h00034000;
+    // Outside the perf run the narrow line carries 37 seven-pixel spans:
+    // more than the decoder's ring holds, several record bursts, and span
+    // records split at 4 KiB boundaries.
+    localparam integer WIDE_SPANS = SCENE_PERF_MODE ? 11 : 37;
+    localparam [31:0] WIDE_SCENE_BYTES =
+        192 + OUTPUT_HEIGHT * WIDE_SPANS * 32;
+    // Spans the containment cases corrupt: any span, and a source span.
+    localparam integer WIDE_BAD_SPAN = WIDE_SPANS > 30 ? 20 : 3;
+    localparam integer WIDE_BAD_SOURCE = WIDE_SPANS > 30 ? 30 : 3;
+    integer wide_start [0:WIDE_SPANS-1];
+    integer wide_source_x [0:WIDE_SPANS-1];
+    integer wide_source_dy [0:WIDE_SPANS-1];
+    integer wide_solid [0:WIDE_SPANS-1];
+
+    task automatic define_wide_span(input integer index,
+                                    input integer start_x,
+                                    input integer solid,
+                                    input integer source_x,
+                                    input integer source_dy);
+        begin
+            wide_start[index] = start_x;
+            wide_solid[index] = solid;
+            wide_source_x[index] = source_x;
+            wide_source_dy[index] = source_dy;
+        end
+    endtask
+
+    function automatic integer wide_end(input integer index);
+        begin
+            wide_end = index == WIDE_SPANS - 1 ? OUTPUT_WIDTH :
+                wide_start[index + 1];
+        end
+    endfunction
+
+    task automatic initialize_wide_scene;
+        integer y;
+        integer index;
+        integer span_address;
+        begin
+            if (SCENE_PERF_MODE) begin
+                define_wide_span(0, 0, 1, 0, 0);
+                define_wide_span(1, 100, 0, 3, 1);
+                define_wide_span(2, 500, 1, 0, 0);
+                define_wide_span(3, 520, 0, 7, 3);
+                define_wide_span(4, 900, 0, 1, 0);
+                define_wide_span(5, 1200, 1, 0, 0);
+                define_wide_span(6, 1210, 0, 0, 2);
+                define_wide_span(7, 1600, 1, 0, 0);
+                define_wide_span(8, 1620, 0, 5, 4);
+                define_wide_span(9, 1751, 0, 9, 1);
+                define_wide_span(10, 1900, 1, 0, 0);
+            end else begin
+                for (index = 0; index < WIDE_SPANS; index = index + 1)
+                    define_wide_span(index, index * 7, index % 3 == 1,
+                                     (index * 5) % 11 + 1, index % 4);
+            end
+            store_be32(WIDE_SCENE_BASE + 0,
+                       `ASTRA_WINDOW_SCENE_COMPILED_MAGIC);
+            store_be32(WIDE_SCENE_BASE + 4,
+                       `ASTRA_WINDOW_SCENE_COMPILED_VERSION);
+            store_be32(WIDE_SCENE_BASE + 8, WIDE_SCENE_BYTES);
+            store_be32(WIDE_SCENE_BASE + 12, 32'd11);
+            store_be32(WIDE_SCENE_BASE + 16,
+                       (OUTPUT_WIDTH << 16) | OUTPUT_HEIGHT);
+            store_be32(WIDE_SCENE_BASE + 20, OUTPUT_HEIGHT);
+            store_be32(WIDE_SCENE_BASE + 24, 32'd64);
+            store_be32(WIDE_SCENE_BASE + 28, 32'd192);
+            store_be32(WIDE_SCENE_BASE + 32, OUTPUT_HEIGHT * WIDE_SPANS);
+            for (y = 36; y < 64; y = y + 4)
+                store_be32(WIDE_SCENE_BASE + y, 32'd0);
+            for (y = 0; y < OUTPUT_HEIGHT; y = y + 1) begin
+                store_be32(WIDE_SCENE_BASE + 64 + y * 8, y * WIDE_SPANS);
+                store_be32(WIDE_SCENE_BASE + 64 + y * 8 + 4, WIDE_SPANS);
+                for (index = 0; index < WIDE_SPANS; index = index + 1) begin
+                    span_address = WIDE_SCENE_BASE + 192 +
+                        (y * WIDE_SPANS + index) * 32;
+                    if (wide_solid[index]) begin
+                        store_be32(span_address + 0, 32'd0);
+                        store_be32(span_address + 4, 32'd0);
+                        store_be32(span_address + 8, 32'd0);
+                        store_be32(span_address + 12, 32'd0);
+                        store_be32(span_address + 20,
+                                   `ASTRA_WINDOW_SCENE_SPAN_SOLID);
+                        store_be32(span_address + 24, 32'h00001000 + index);
+                    end else begin
+                        store_be32(span_address + 0,
+                                   RGB565_BASE - ARENA_BASE);
+                        store_be32(span_address + 4,
+                                   SCENE_SOURCE_PITCH * 16);
+                        store_be32(span_address + 8, SCENE_SOURCE_PITCH);
+                        store_be32(span_address + 12,
+                                   (wide_source_x[index] << 16) |
+                                   (y + wide_source_dy[index]));
+                        store_be32(span_address + 20, 32'd0);
+                        store_be32(span_address + 24, 32'd0);
+                    end
+                    store_be32(span_address + 16,
+                               (wide_start[index] << 16) |
+                               (wide_end(index) - wide_start[index]));
+                    store_be32(span_address + 28, 32'd0);
+                end
+            end
+        end
+    endtask
+
     function automatic [AXI_DATA_WIDTH-1:0] read_beat(
         input [31:0] address
     );
@@ -340,6 +468,7 @@ module tb_astra_framebuffer_line_builder #(
 
     reg [31:0] command_address [0:1023];
     reg [7:0] command_length [0:1023];
+    integer command_ready [0:1023];
     integer command_write = 0;
     integer command_read = 0;
     integer model_cycle = 0;
@@ -410,7 +539,7 @@ module tb_astra_framebuffer_line_builder #(
 
             if (outstanding_count != 0 && !m_axi_rready)
                 $fatal(1, "accepted AXI read was backpressured");
-            if (dut.reserved_beats > MAX_BURST_BEATS * 2)
+            if (dut.reserved_beats > dut.BEAT_FIFO_DEPTH)
                 $fatal(1,
                     "AXI receive credits exceeded FIFO capacity: %0d",
                     dut.reserved_beats);
@@ -432,6 +561,7 @@ module tb_astra_framebuffer_line_builder #(
                     saw_4k_limited_burst <= 1;
                 command_address[command_write] <= m_axi_araddr;
                 command_length[command_write] <= m_axi_arlen;
+                command_ready[command_write] <= model_cycle + MODEL_LATENCY;
                 command_write <= command_write + 1;
                 ar_count <= ar_count + 1;
                 last_ar_address <= m_axi_araddr;
@@ -456,19 +586,21 @@ module tb_astra_framebuffer_line_builder #(
                 end else begin
                     response_index <= response_index + 8'd1;
                     response_address <= response_address + BEAT_BYTES;
-                    response_delay <= fast_responses ? 0 :
-                        1 + (model_cycle & 1);
+                    response_delay <= fast_responses ||
+                        MODEL_LATENCY != 0 ? 0 : 1 + (model_cycle & 1);
                 end
             end
 
             if (!response_active && !m_axi_rvalid &&
-                command_read < command_write && emit_responses) begin
+                command_read < command_write && emit_responses &&
+                (MODEL_LATENCY == 0 ||
+                 model_cycle >= command_ready[command_read])) begin
                 response_active <= 1'b1;
                 response_address <= command_address[command_read];
                 response_length <= command_length[command_read];
                 response_index <= 8'd0;
-                response_delay <= fast_responses ? 0 :
-                    12 + (model_cycle & 3);
+                response_delay <= fast_responses ||
+                    MODEL_LATENCY != 0 ? 0 : 12 + (model_cycle & 3);
                 command_read <= command_read + 1;
             end else if (response_active && !m_axi_rvalid &&
                          emit_responses) begin
@@ -647,6 +779,33 @@ module tb_astra_framebuffer_line_builder #(
         end
     endtask
 
+    task automatic check_wide_scene_line(input integer slot,
+                                         input integer test_line_y);
+        integer x;
+        integer index;
+        reg [31:0] expected;
+        begin
+            pixel_read_slot = slot[1:0];
+            index = 0;
+            for (x = 0; x < OUTPUT_WIDTH; x = x + 1) begin
+                while (x >= wide_end(index))
+                    index = index + 1;
+                @(negedge pixel_clk);
+                pixel_read_x = x[10:0];
+                @(posedge pixel_clk);
+                #1;
+                expected = wide_solid[index] ? 32'h00001000 + index :
+                    {16'd0, rgb565_value(
+                        wide_source_x[index] + x - wide_start[index],
+                        test_line_y + wide_source_dy[index])};
+                if (!pixel_valid || pixel_value !== expected)
+                    $fatal(1,
+                        "wide scene pixel %0d span %0d got valid=%0d value=%08x expected=%08x",
+                        x, index, pixel_valid, pixel_value, expected);
+            end
+        end
+    endtask
+
     task automatic select_surface(
         input integer test_format,
         input integer test_base,
@@ -684,6 +843,8 @@ module tb_astra_framebuffer_line_builder #(
         initialize_surface(EDGE_BASE, EDGE_PITCH, 512, 32,
                            FORMAT_INDEX8);
         initialize_window_scene();
+        if (SCENE_PERF_MODE)
+            initialize_wide_scene();
 
         repeat (5) @(posedge build_clk);
         build_reset = 1'b0;
@@ -728,6 +889,33 @@ module tb_astra_framebuffer_line_builder #(
                     build_cycles, NATIVE_LINE_BUILD_CYCLES);
             $display("native window scene pass cycles=%0d budget=%0d bytes=%0d",
                      build_cycles, NATIVE_LINE_BUILD_CYCLES, read_bytes);
+
+            // A line's cost must not grow with its span count by a memory
+            // round trip per span: eleven spans against board latency have
+            // to leave the line period's margin for the latency tail.
+            pulse_scene_changed();
+            window_scene_bytes = WIDE_SCENE_BYTES;
+            framebuffer_base = WIDE_SCENE_BASE;
+            build_slot = 2'd2;
+            line_y = 11'd6;
+            launch_and_wait(1, MAX_BUILD_CYCLES);
+            check_wide_scene_line(2, 6);
+            build_slot = 2'd3;
+            line_y = 11'd7;
+            launch_and_wait(1, MAX_BUILD_CYCLES);
+            check_wide_scene_line(3, 7);
+            $display("wide window scene latency=%0d spans=%0d cycles=%0d budget=%0d bytes=%0d requests=%0d outstanding=%0d",
+                     MODEL_LATENCY, WIDE_SPANS, build_cycles,
+                     WIDE_LINE_BUILD_CYCLES, read_bytes, ar_count,
+                     maximum_outstanding);
+            // The legacy model serialises requests and idles between beats;
+            // only the pipelined model is a latency budget.
+            if (MODEL_LATENCY != 0 && build_cycles > WIDE_LINE_BUILD_CYCLES)
+                $fatal(1,
+                    "wide window scene missed line budget: cycles=%0d budget=%0d",
+                    build_cycles, WIDE_LINE_BUILD_CYCLES);
+            $display("wide window scene pass cycles=%0d budget=%0d",
+                     build_cycles, WIDE_LINE_BUILD_CYCLES);
             $finish;
         end
 
@@ -914,9 +1102,64 @@ module tb_astra_framebuffer_line_builder #(
         if (!config_error || fetch_error || deadline_error || slot_valid[1])
             $fatal(1, "invalid window scene header was accepted");
         initialize_window_scene();
+        $display("window scene containment pass");
+
+        // A line longer than the descriptor ring streams through it. Its
+        // records outweigh its pixels, so the model streams without the idle
+        // beats that would otherwise meet the deadline.
+        fast_responses = 1'b1;
+        initialize_wide_scene();
+        window_scene_bytes = WIDE_SCENE_BYTES;
+        framebuffer_base = WIDE_SCENE_BASE;
+        for (state_index = 0; state_index < 4;
+             state_index = state_index + 1) begin
+            build_slot = state_index[1:0];
+            line_y = 11'd3 + state_index[10:0];
+            launch_and_wait(1, MAX_BUILD_CYCLES);
+            if (config_error || fetch_error || deadline_error ||
+                dut.beat_count != 0 || dut.reserved_beats != 0 ||
+                dut.burst_count != 0)
+                $fatal(1, "wide window scene left state behind");
+            check_wide_scene_line(state_index, 3 + state_index);
+        end
+        $display("wide window scene stream pass cycles=%0d bytes=%0d",
+                 build_cycles, read_bytes);
+
+        // A discontinuous span after earlier source spans have pixel reads in
+        // flight refuses the line, drains them, and leaves the builder
+        // reusable for the same line once the record is repaired.
+        store_be32(WIDE_SCENE_BASE + 192 +
+                       (5 * WIDE_SPANS + WIDE_BAD_SPAN) * 32 + 16,
+                   ((wide_start[WIDE_BAD_SPAN] + 1) << 16) |
+                   (wide_end(WIDE_BAD_SPAN) - wide_start[WIDE_BAD_SPAN]));
+        build_slot = 2'd1;
+        line_y = 11'd5;
+        launch_and_wait(0, MAX_BUILD_CYCLES);
+        if (!config_error || fetch_error || deadline_error || slot_valid[1] ||
+            dut.burst_count != 0)
+            $fatal(1, "discontinuous window scene span was accepted");
+        initialize_wide_scene();
+        launch_and_wait(1, MAX_BUILD_CYCLES);
+        check_wide_scene_line(1, 5);
+
+        // A source span that reads past its surface is refused the same way.
+        store_be32(WIDE_SCENE_BASE + 192 +
+                       (6 * WIDE_SPANS + WIDE_BAD_SOURCE) * 32 + 4,
+                   32'd64);
+        build_slot = 2'd2;
+        line_y = 11'd6;
+        launch_and_wait(0, MAX_BUILD_CYCLES);
+        if (!config_error || fetch_error || deadline_error || slot_valid[2])
+            $fatal(1, "out-of-surface window scene span was accepted");
+        initialize_wide_scene();
+        launch_and_wait(1, MAX_BUILD_CYCLES);
+        check_wide_scene_line(2, 6);
+        fast_responses = 1'b0;
+        $display("wide window scene containment pass");
+
+        initialize_window_scene();
         window_scene = 1'b0;
         window_scene_bytes = 32'd0;
-        $display("window scene containment pass");
 
         // A deadline stops new requests but must drain every accepted AXI read
         // before reporting completion or allowing another line to start.

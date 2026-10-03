@@ -46,6 +46,11 @@ module tb_astra_graphics_control;
     reg [31:0] framebuffer_axi_r_accept_count = 32'h50607080;
     reg [31:0] framebuffer_axi_last_ar_address = 32'h40001280;
     reg [31:0] framebuffer_axi_response_stall_cycles = 32'h00012345;
+    reg [31:0] scanout_lines_built = 32'h0a0b0c0d;
+    reg [31:0] scanout_lines_failed = 32'h00000011;
+    reg [31:0] scanout_overruns = 32'h00000022;
+    reg [31:0] scanout_underruns = 32'h00000033;
+    reg [31:0] framebuffer_max_build_cycles = 32'h00000944;
 
 
     wire framebuffer_palette_write_enable;
@@ -269,6 +274,11 @@ wire [31:0] sprite_scale_step_x;
         .framebuffer_axi_last_ar_address(framebuffer_axi_last_ar_address),
         .framebuffer_axi_response_stall_cycles(
             framebuffer_axi_response_stall_cycles),
+        .scanout_lines_built(scanout_lines_built),
+        .scanout_lines_failed(scanout_lines_failed),
+        .scanout_overruns(scanout_overruns),
+        .scanout_underruns(scanout_underruns),
+        .framebuffer_max_build_cycles(framebuffer_max_build_cycles),
         .sprite_enable(sprite_enable),
         .sprite_descriptor_write_enable(
             sprite_descriptor_write_enable),
@@ -681,6 +691,12 @@ wire [31:0] sprite_scale_step_x;
         axi_read(32'h00000038, framebuffer_axi_last_ar_address, 2'b00);
         axi_read(32'h0000003c,
                  framebuffer_axi_response_stall_cycles, 2'b00);
+        axi_read(32'h00000254, scanout_lines_built, 2'b00);
+        axi_read(32'h00000258, scanout_lines_failed, 2'b00);
+        axi_read(32'h0000025c, scanout_overruns, 2'b00);
+        axi_read(32'h00000260, scanout_underruns, 2'b00);
+        axi_read(32'h00000264, framebuffer_max_build_cycles, 2'b00);
+        axi_read(32'h00000268, 32'd0, 2'b11);
         axi_write(32'h0000002c, 32'd0, 4'hf, 0, 2'b11);
         axi_read(32'h00000003, 32'd0, 2'b11);
         axi_read_backpressure();

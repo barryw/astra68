@@ -1,5 +1,109 @@
 # DE25-Nano Timing Closure
 
+## 2026-10-04: line-builder beat FIFO 8 bursts (routed, deployed, rbf `b61dbda8`)
+
+- Built on `beast` with `build_astra_shell.sh` from `~/astra-mg/rtl-fifo`,
+  on top of `rtl-qos`. Installed as `/var/lib/astra/boot-incoming-fifo`.
+- Cause. The scanout health counters (`rtl-health`) showed bursts of 25-27
+  underruns each starting within 0.2 ms of a ~0.5 ms render command, with
+  line builds stretched to 4,344 cycles. Framebuffer read round trips during
+  render work reached p99 321 / max 496 cycles (idle p99 69). The beat FIFO,
+  the line builder's read credit, held 2 bursts (1 KiB) and could not cover
+  four bytes a clock at that latency. This was Doom's black bar.
+- Change. Beat FIFO 2 -> 8 bursts (4 KiB read credit). Bench at latency 300:
+  2,403 -> 1,883 cycles. Board under Doom with four TestDraw2 windows, 15 s:
+  0 underruns, 0 overruns, 0 failed lines, max build 2,611 cycles.
+- Routed: **40,854 / 46,800 ALMs (87 %)**; 3,640,768 / 7,331,840 block-memory
+  bits, 317 / 358 RAM blocks, 67 / 376 DSP blocks.
+- No negative slack in any corner. Graphics clock (`pixel_pll outclk1`)
+  setup +0.262 ns; worst setup +0.130 ns (`ASTRA_HDMI_PIXEL_CLOCK`); worst
+  hold +0.001 ns (`pll_inst outclk0`).
+
+## 2026-10-04: scanout read QoS (routed, rbf `b52db26a`; no effect)
+
+- `rtl-qos`, on top of `rtl-health`: framebuffer and scene reads carry
+  ARQOS priority 3 through the HPS bridges (`add_lpddr4b.tcl`,
+  `patch_vendor_top.py`, contract test). Underruns under render load were
+  unchanged, which ruled out queue priority. Kept: harmless.
+- Routed: 40,713 ALMs (87 %); 3,616,192 bits, 317 RAM, 67 DSP. No negative
+  slack; graphics clock setup +0.367 ns; worst setup +0.010 ns
+  (`ASTRA_HDMI_PIXEL_CLOCK`); worst hold +0.000 ns (`pll_inst outclk0`).
+
+## 2026-10-04: scanout health registers (routed, rbf `ed9f5cf9`)
+
+- `rtl-health`, on top of `rtl-scene`: bank 9 0x254-0x264 report lines
+  built, lines failed, scheduler overruns, pixel underruns (Gray-code CDC
+  from the pixel domain) and the maximum framebuffer build cycles
+  (`astra_graphics_control.sv`, `astra_graphics_pipeline.sv`, Linux header
+  names in `fpga/arty/linux/astra_graphics_hw.h`). The benches check them.
+- Routed: 40,773 ALMs (87 %); 3,616,160 bits, 317 RAM, 67 DSP. No negative
+  slack; graphics clock setup +0.272 ns; worst setup +0.092 ns
+  (`ASTRA_HDMI_PIXEL_CLOCK`); worst hold +0.001 ns.
+
+## 2026-10-04: streamed window-scene lines, scanout arbitration shares (routed, deployed)
+
+- On `beast`, Quartus Pro 26.1.1 Build 130 completed a full production
+  synthesis, fit, route, signoff and programming-file build with
+  `build_astra_shell.sh` (`DISPLAY` unset) from a checksum rsync of the Mac
+  working tree at `~/astra-mg/rtl-scene`
+  (`ASTRA_DE25_BUILD_ROOT=build/de25-scene`). First attempt. The source is
+  the `rtl-arb` build (scanout `arbitrationPriority` 8, render and capture
+  1; installed 2026-10-03 and did not change the black bands) plus this
+  change.
+- Cause. With four overlapping windows the desktop's compiled scene has 11
+  spans on rows 417-795; the remote-desktop capture (which taps
+  `pipeline_rgb`, as HDMI does) showed a solid black band on rows 430-957
+  in every frame. `astra_framebuffer_line_builder.sv` built a scene line
+  span by span: a round trip for the span record, one for the segment, and
+  a full drain before the next record. Under render load an LPDDR4B round
+  trip is ~85-100 build cycles (`FB_AXI_RESPONSE_STALL_CYCLES` sampled
+  300k times: p90 63, p99 84 cycles into a wait, tail 964), so 960 write
+  cycles plus ~17 round trips passed the 2,442-cycle line period and the
+  scheduler's 4-entry queue fell behind until the spans thinned out.
+- Change. A scene line is a stream: span records are requested in bursts
+  (up to 16 records, split at 4 KiB) and decoded in a four-stage pipeline
+  into a 16-entry descriptor ring; an issue walker requests each source
+  span's pixels under the beat-FIFO credit, and the writer fills solid
+  spans and writes source spans behind it. A per-burst tag routes record
+  beats to the decoder and pixel beats to the FIFO; metadata takes no
+  credit. The per-span checks are unchanged, plus an even source pitch
+  (pixels must not straddle beats) and at most `OUTPUT_WIDTH` spans a
+  line. An aborted line keeps its address valid until accepted and drains.
+  `fpga/arty/graphics/README.md`, "Pipeline and memory boundary".
+- `run_tests.sh` passes on `beast` (Icarus 12). The line-builder bench
+  gains a pipelined fixed-latency memory (`MODEL_LATENCY`) and an
+  eleven-span line shaped like the board's: **2,933 cycles before, 1,259
+  after** at latency 100 (budget 1,520); 2,120 at a sustained 250. A
+  37-span line (more than the ring, several record bursts, 4 KiB splits)
+  is pixel-exact at 64 and 128 bits, and a discontinuous or out-of-surface
+  span mid-line is refused, drained, and the line then rebuilds. Removing
+  the record 4 KiB cap, the ring occupancy limit, or the surface-bound
+  check each fails the bench.
+- Routed resource use: **40,733 / 46,800 ALMs (87 %)** (+19 over
+  `rtl-scale`); 3,616,160 / 7,331,840 block-memory bits, 317 / 358 RAM
+  blocks, 67 / 376 DSP blocks.
+- All production clocks are constrained and pass; no negative slack in any
+  corner. The 165 MHz graphics clock (`pixel_pll outclk1`, Fmax 186.19 MHz)
+  closes at **+0.689 ns** setup. Worst setup overall is +0.070 ns
+  (`ASTRA_HDMI_PIXEL_CLOCK`), worst hold +0.001 ns
+  (`ASTRA_HDMI_PIXEL_CLOCK`).
+- Source SHA-256: line builder
+  `905dc03d561fce0d42d374afa1d6608fd3ee04c6f4392554fdc0e88b93014916`.
+  Build-input checksum manifest SHA-256
+  `570298132dd31a6b9981f72211024985cb820e42e78fe43ddaa98968cba07a83`; boot
+  core RBF SHA-256
+  `effd9c420b61fe10ce1aea9954f7525ec745c8396cb9f9a6607f9dde739cf63c`;
+  `astra68.hps.jic` SHA-256
+  `26e3a0d602e0427c11da12b7fad09de09933518881bcc3c4709749ef4978aa66`
+  (not programmed). Artifacts:
+  `beast:~/astra-mg/rtl-scene/build/de25-scene/astra-shell/output_files/`.
+- Deployed 2026-10-04 with `install_boot_bundle.sh` from
+  `/var/lib/astra/boot-incoming-scene`; rollback bundle
+  `/var/lib/astra/boot-incoming-arb`. Same four-window layout (spans per
+  row identical, rows 417-796 at 11), same memory latency (p99 74, tail
+  913): **10 of 10 captures have no black rows** (6 of 6 had the 528-row
+  band before). Doom over it: 6 of 6 clean.
+
 ## 2026-09-30: scaled BLITs in pixel mode (routed, deployed)
 
 - On `beast`, Quartus Pro 26.1.1 Build 130 completed a full production

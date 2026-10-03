@@ -138,6 +138,34 @@ iverilog -g2012 -Wall -I "$ROOT/fpga/arty/graphics" \
 
 vvp "$BUILD/tb_astra_framebuffer_scene_perf"
 
+# The DE25's LPDDR4B answers a framebuffer read in ~90-100 build cycles under
+# render load; an eleven-span line has to fit the line period against it.
+iverilog -g2012 -Wall -I "$ROOT/fpga/arty/graphics" \
+    -Ptb_astra_framebuffer_line_builder.SCENE_PERF_MODE=1 \
+    -Ptb_astra_framebuffer_line_builder.MODEL_LATENCY=100 \
+    -s tb_astra_framebuffer_line_builder \
+    -o "$BUILD/tb_astra_framebuffer_scene_latency" \
+    "$ROOT/fpga/arty/graphics/astra_framebuffer_config_validator.sv" \
+    "$ROOT/fpga/arty/graphics/astra_framebuffer_line_store.sv" \
+    "$ROOT/fpga/arty/graphics/astra_framebuffer_line_builder.sv" \
+    "$ROOT/fpga/arty/graphics/sim/tb_astra_framebuffer_line_builder.sv"
+
+vvp "$BUILD/tb_astra_framebuffer_scene_latency"
+
+# Render commands raise that round trip to ~300 cycles (p99 321); the beat
+# FIFO's read credit has to keep a line inside the period there too.
+iverilog -g2012 -Wall -I "$ROOT/fpga/arty/graphics" \
+    -Ptb_astra_framebuffer_line_builder.SCENE_PERF_MODE=1 \
+    -Ptb_astra_framebuffer_line_builder.MODEL_LATENCY=300 \
+    -s tb_astra_framebuffer_line_builder \
+    -o "$BUILD/tb_astra_framebuffer_scene_latency_300" \
+    "$ROOT/fpga/arty/graphics/astra_framebuffer_config_validator.sv" \
+    "$ROOT/fpga/arty/graphics/astra_framebuffer_line_store.sv" \
+    "$ROOT/fpga/arty/graphics/astra_framebuffer_line_builder.sv" \
+    "$ROOT/fpga/arty/graphics/sim/tb_astra_framebuffer_line_builder.sv"
+
+vvp "$BUILD/tb_astra_framebuffer_scene_latency_300"
+
 iverilog -g2012 -Wall \
     -s tb_astra_sprite_scene_store \
     -o "$BUILD/tb_astra_sprite_scene_store" \

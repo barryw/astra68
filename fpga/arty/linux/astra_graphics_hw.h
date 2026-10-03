@@ -154,6 +154,14 @@ enum astra_graphics_register {
     ASTRA_REG_RENDER_HOST_APERTURE_BASE = 0x248,
     ASTRA_REG_ACCESS_FAULT_COUNT = 0x24c,
     ASTRA_REG_ACCESS_FAULT_FIRST = 0x250,
+    /* Scanout health: lines built and failed, queue overruns, lines the beam
+       reached unbuilt, and the longest framebuffer line build (build
+       cycles; the 1080p60 line period is 2,442). */
+    ASTRA_REG_SCANOUT_LINES_BUILT = 0x254,
+    ASTRA_REG_SCANOUT_LINES_FAILED = 0x258,
+    ASTRA_REG_SCANOUT_OVERRUNS = 0x25c,
+    ASTRA_REG_SCANOUT_UNDERRUNS = 0x260,
+    ASTRA_REG_FB_MAX_BUILD_CYCLES = 0x264,
     ASTRA_REG_COPPER_DEVICE_ID = 0x4000,
     ASTRA_REG_COPPER_VERSION = 0x4004,
     ASTRA_REG_COPPER_CONTROL = 0x4008,
