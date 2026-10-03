@@ -161,7 +161,7 @@ diff --git a/libgcc/config/m68k/fpgnulib.c b/libgcc/config/m68k/fpgnulib.c
  
  /* convert float to double */
  double
-@@ -386,12 +423,26 @@
+@@ -386,12 +423,194 @@
  }
  
  /* convert float to int */
@@ -187,13 +187,211 @@ diff --git a/libgcc/config/m68k/fpgnulib.c b/libgcc/config/m68k/fpgnulib.c
 +  return SIGN (fl.l) ? -(long) l : (long) l;
  }
 +/* ASTRA-FIX-SINGLE-END */
++
++/* Astra: single-precision multiply and divide in C.  lb1sf68.S built them
++   for the MC68000, which has no 32x32 multiply or 64/32 divide: both walked
++   the significand one bit a loop iteration, about 190 instructions a
++   multiply, and SDL_mixer's per-sample panning made that most of Chocolate
++   Doom's guest time.  The MC68040 does the significand in one MULU.L or
++   DIVU.L.  Results are IEEE single, rounded to nearest, ties to even, with
++   denormal operands and results; a NaN result is QUIET_NaN as lb1sf68.S
++   returns it.  They do not post lb1sf68.S's _fpCCR exception flags. */
++
++/* ASTRA-MUL-DIV-SINGLE-BEGIN */
++#define ASTRA_QUIET_NAN_SF 0x7fffffffL
++
++static float
++__astra_sf_from_bits (unsigned long bits)
++{
++  union float_long fl;
++
++  fl.l = (long) bits;
++  return fl.f;
++}
++
++/* Round a significand whose leading one is bit 31 (the value is
++   mant / 2^31 * 2^(exp - 127)) to single precision; sticky is nonzero when
++   bits below mant were lost.  Handles overflow to infinity and gradual
++   underflow. */
++static float
++__astra_round_sf (unsigned long sign, long exp, unsigned long mant,
++		  int sticky)
++{
++  unsigned long rest, bits;
++
++  if (exp >= 255)
++    return __astra_sf_from_bits (sign | 0x7f800000UL);
++  if (exp < 1)
++    {
++      unsigned long shift = (unsigned long) (1 - exp);
++
++      if (shift >= 32)
++	{
++	  sticky |= mant != 0;
++	  mant = 0;
++	}
++      else
++	{
++	  sticky |= (mant << (32 - shift)) != 0;
++	  mant >>= shift;
++	}
++      exp = 1;
++    }
++  rest = mant & 0xffUL;
++  mant >>= 8;
++  if (rest > 0x80UL || (rest == 0x80UL && (sticky || (mant & 1UL))))
++    mant++;
++  /* The hidden bit, when present, adds one to the exponent field; a
++     denormal has none, and rounding up into it makes the smallest normal. */
++  bits = ((unsigned long) (exp - 1) << 23) + mant;
++  if (bits >= 0x7f800000UL)
++    bits = 0x7f800000UL;
++  return __astra_sf_from_bits (sign | bits);
++}
++
++/* Significand with the leading one at bit 23 and its exponent; the operand
++   is finite and nonzero. */
++static unsigned long
++__astra_unpack_sf (unsigned long bits, long *exp)
++{
++  unsigned long mant = bits & 0x7fffffUL;
++
++  *exp = (long) ((bits >> 23) & 0xffUL);
++  if (*exp != 0)
++    return mant | (unsigned long) HIDDEN;
++  {
++    int shift = __builtin_clzl (mant) - 8;
++
++    *exp = 1 - shift;
++    return mant << shift;
++  }
++}
++
++float
++__mulsf3 (float a1, float a2)
++{
++  union float_long fl1, fl2;
++  unsigned long b1, b2, sign, m1, m2;
++  long e1, e2, exp;
++  __UINT64_TYPE__ product;
++
++  fl1.f = a1;
++  fl2.f = a2;
++  b1 = (unsigned long) fl1.l;
++  b2 = (unsigned long) fl2.l;
++  sign = (b1 ^ b2) & (unsigned long) SIGNBIT;
++  b1 &= 0x7fffffffUL;
++  b2 &= 0x7fffffffUL;
++  if (b1 > 0x7f800000UL || b2 > 0x7f800000UL)
++    return __astra_sf_from_bits (ASTRA_QUIET_NAN_SF);
++  if (b1 == 0x7f800000UL || b2 == 0x7f800000UL)
++    return (b1 == 0 || b2 == 0)
++	   ? __astra_sf_from_bits (ASTRA_QUIET_NAN_SF)
++	   : __astra_sf_from_bits (sign | 0x7f800000UL);
++  if (b1 == 0 || b2 == 0)
++    return __astra_sf_from_bits (sign);
++  m1 = __astra_unpack_sf (b1, &e1);
++  m2 = __astra_unpack_sf (b2, &e2);
++  /* [2^23, 2^24) squared is [2^46, 2^48): one MULU.L on the MC68040. */
++  product = (__UINT64_TYPE__) m1 * m2;
++  exp = e1 + e2 - 127;
++  if (product >> 47)
++    exp++;
++  else
++    product <<= 1;
++  return __astra_round_sf (sign, exp, (unsigned long) (product >> 16),
++			   (product & 0xffffU) != 0);
++}
++
++float
++__divsf3 (float a1, float a2)
++{
++  union float_long fl1, fl2;
++  unsigned long b1, b2, sign, m1, m2, quotient, remainder;
++  long e1, e2, exp;
++
++  fl1.f = a1;
++  fl2.f = a2;
++  b1 = (unsigned long) fl1.l;
++  b2 = (unsigned long) fl2.l;
++  sign = (b1 ^ b2) & (unsigned long) SIGNBIT;
++  b1 &= 0x7fffffffUL;
++  b2 &= 0x7fffffffUL;
++  if (b1 > 0x7f800000UL || b2 > 0x7f800000UL
++      || (b1 == 0x7f800000UL && b2 == 0x7f800000UL)
++      || (b1 == 0 && b2 == 0))
++    return __astra_sf_from_bits (ASTRA_QUIET_NAN_SF);
++  if (b1 == 0x7f800000UL || b2 == 0)
++    return __astra_sf_from_bits (sign | 0x7f800000UL);
++  if (b1 == 0 || b2 == 0x7f800000UL)
++    return __astra_sf_from_bits (sign);
++  m1 = __astra_unpack_sf (b1, &e1);
++  m2 = __astra_unpack_sf (b2, &e2);
++  /* m1 * 2^31 / m2 lies in (2^30, 2^32): one 64/32 DIVU.L. */
++#if defined (__mc68020__) || defined (__mc68030__) || defined (__mc68040__) \
++    || defined (__mc68060__)
++  {
++    unsigned long high = m1 >> 1, low = m1 << 31;
++
++    __asm__ ("divu%.l %2,%0:%1"
++	     : "+d" (high), "+d" (low) : "d" (m2) : "cc");
++    quotient = low;
++    remainder = high;
++  }
++#else
++  {
++    __UINT64_TYPE__ dividend = (__UINT64_TYPE__) m1 << 31;
++
++    quotient = (unsigned long) (dividend / m2);
++    remainder = (unsigned long) (dividend % m2);
++  }
++#endif
++  exp = e1 - e2 + 127;
++  if (!(quotient >> 31))
++    {
++      quotient <<= 1;
++      exp--;
++    }
++  return __astra_round_sf (sign, exp, quotient, remainder != 0);
++}
++/* ASTRA-MUL-DIV-SINGLE-END */
  
  #else /* EXTFLOAT */
  
 diff --git a/libgcc/config/m68k/lb1sf68.S b/libgcc/config/m68k/lb1sf68.S
 --- a/libgcc/config/m68k/lb1sf68.S
 +++ b/libgcc/config/m68k/lb1sf68.S
-@@ -4125,7 +4125,7 @@ SYM (__lesf2):
+@@ -2590,8 +2590,10 @@
+ 
+ 	.globl SYM (__addsf3)
+ 	.globl SYM (__subsf3)
++#ifndef __astra__
+ 	.globl SYM (__mulsf3)
+ 	.globl SYM (__divsf3)
++#endif
+ 	.globl SYM (__negsf2)
+ 	.globl SYM (__cmpsf2)
+ 	.globl SYM (__cmpsf2_internal)
+@@ -3157,6 +3159,10 @@
+ 	bchg	IMM (31),d7	| else we know b is INFINITY and has
+ 	bra	Lf$infty	| the opposite sign
+ 
++#ifndef __astra__
++| Astra builds __mulsf3 and __divsf3 from fpgnulib.c: these walk the
++| significand a bit an iteration, which the MC68040's MULU.L and DIVU.L do in
++| one instruction.
+ |=============================================================================
+ |                             __mulsf3
+ |=============================================================================
+@@ -3586,6 +3592,7 @@
+ 	btst	IMM (FLT_MANT_DIG-1),d1
+ 	bne	Ldivsf$2
+ 	bra	1b
++#endif /* !__astra__ */
+ 
+ Lround$exit:
+ | This is a common exit point for __mulsf3 and __divsf3. 
+@@ -4125,7 +4132,7 @@
  	rts
  #endif /* L_lesf2 */
  
