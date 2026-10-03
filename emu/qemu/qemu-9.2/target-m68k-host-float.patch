@@ -1,0 +1,495 @@
+diff --git a/target/m68k/fpu_helper.c b/target/m68k/fpu_helper.c
+--- a/target/m68k/fpu_helper.c
++++ b/target/m68k/fpu_helper.c
+@@ -24,6 +24,8 @@
+ #include "exec/exec-all.h"
+ #include "exec/cpu_ldst.h"
+ #include "softfloat.h"
++#include "qemu/host-utils.h"
++#include <math.h>
+ 
+ /*
+  * Undefined offsets may be different on various FPU.
+@@ -54,34 +56,376 @@
+     [0x3e] = make_floatx80_init(0x5a92, 0x9e8b3b5dc53d5de5ULL),  /* 10^2048  */
+     [0x3f] = make_floatx80_init(0x7525, 0xc46052028a20979bULL),  /* 10^4096  */
+ };
++
++/*
++ * Astra: host floating point for the single- and double-rounding forms.
++ *
++ * FSADD/FSSUB/FSMUL/FSDIV (and the FD forms) round an extended-precision
++ * operation once to single (double) precision. When both operands are
++ * exactly representable in that format and the result is a normal number
++ * in it, that is the IEEE operation in that format, which the host FPU
++ * computes. Every other case -- a rounding mode other than nearest, an
++ * operand with more precision or range, a zero, infinite, NaN, subnormal or
++ * near-overflow result -- takes the floatx80 path, so only the fast cases
++ * change and they change nothing the guest can see.
++ *
++ * On those terms the only exception that can arise is inexact, and it is
++ * found exactly: an FMA residual for multiply and divide (exactly
++ * representable because the result is at least 2^(p-1) above the smallest
++ * normal), and the TwoSum error for add and subtract. The host stays in
++ * round-to-nearest, as softfloat's own hardfloat path already assumes.
++ */
++#define ASTRA_FX80_BIAS 0x3fff
++
++static inline bool astra_fx80_to_f32(floatx80 a, float *out)
++{
++    uint32_t sign = a.high & 0x8000;
++    int32_t exp = a.high & 0x7fff;
++    uint32_t bits;
++
++    if ((a.low >> 63) == 0 || (a.low & ((1ULL << 40) - 1)) != 0) {
++        return false;
++    }
++    exp += 0x7f - ASTRA_FX80_BIAS;
++    if (exp < 1 || exp > 0xfe) {
++        return false;
++    }
++    bits = (sign << 16) | ((uint32_t)exp << 23) |
++           (uint32_t)((a.low >> 40) & 0x7fffff);
++    memcpy(out, &bits, sizeof(bits));
++    return true;
++}
++
++static inline bool astra_fx80_to_f64(floatx80 a, double *out)
++{
++    uint64_t sign = a.high & 0x8000;
++    int32_t exp = a.high & 0x7fff;
++    uint64_t bits;
++
++    if ((a.low >> 63) == 0 || (a.low & ((1ULL << 11) - 1)) != 0) {
++        return false;
++    }
++    exp += 0x3ff - ASTRA_FX80_BIAS;
++    if (exp < 1 || exp > 0x7fe) {
++        return false;
++    }
++    bits = (sign << 48) | ((uint64_t)exp << 52) |
++           ((a.low >> 11) & ((1ULL << 52) - 1));
++    memcpy(out, &bits, sizeof(bits));
++    return true;
++}
++
++/* The biased exponent of a float, or of a double. */
++static inline uint32_t astra_f32_exp(float value)
++{
++    uint32_t bits;
++
++    memcpy(&bits, &value, sizeof(bits));
++    return (bits >> 23) & 0xff;
++}
++
++static inline uint32_t astra_f64_exp(double value)
++{
++    uint64_t bits;
++
++    memcpy(&bits, &value, sizeof(bits));
++    return (bits >> 52) & 0x7ff;
++}
++
++/* A normal float or double, as the extended value it is exactly. */
++static inline floatx80 astra_f32_to_fx80(float value)
++{
++    uint32_t bits;
++
++    memcpy(&bits, &value, sizeof(bits));
++    return make_floatx80(((bits >> 16) & 0x8000) |
++                         (((bits >> 23) & 0xff) + ASTRA_FX80_BIAS - 0x7f),
++                         (uint64_t)((bits & 0x7fffff) | 0x800000) << 40);
++}
++
++static inline floatx80 astra_f64_to_fx80(double value)
++{
++    uint64_t bits;
++
++    memcpy(&bits, &value, sizeof(bits));
++    return make_floatx80(((bits >> 48) & 0x8000) |
++                         (((bits >> 52) & 0x7ff) + ASTRA_FX80_BIAS - 0x3ff),
++                         ((bits & ((1ULL << 52) - 1)) | (1ULL << 52)) << 11);
++}
++
++static inline bool astra_host_rounding(CPUM68KState *env)
++{
++    return (env->fpcr & FPCR_RND_MASK) == FPCR_RND_N;
++}
++
++enum { ASTRA_ADD, ASTRA_SUB, ASTRA_MUL, ASTRA_DIV };
++
++/* res = val1 OP val0 in single precision; false: take the floatx80 path. */
++static bool astra_single(CPUM68KState *env, int op, FPReg *res,
++                         FPReg *val0, FPReg *val1)
++{
++    float a, b, r, error;
++    uint32_t exp;
++
++    if (!astra_host_rounding(env) || !astra_fx80_to_f32(val1->d, &a) ||
++        !astra_fx80_to_f32(val0->d, &b)) {
++        return false;
++    }
++    switch (op) {
++    case ASTRA_ADD:
++    case ASTRA_SUB: {
++        float bb, sum_b;
++
++        if (op == ASTRA_SUB) {
++            b = -b;
++        }
++        r = a + b;
++        exp = astra_f32_exp(r);
++        if (exp < 1 || exp > 0xfd) {
++            return false;
++        }
++        bb = r - a;
++        sum_b = r - bb;
++        error = (a - sum_b) + (b - bb);
++        break;
++    }
++    case ASTRA_MUL:
++        r = a * b;
++        exp = astra_f32_exp(r);
++        if (exp < 1 + 24 || exp > 0xfe) {
++            return false;
++        }
++        error = fmaf(a, b, -r);
++        break;
++    default:
++        if (astra_f32_exp(a) < 1 + 24) {
++            return false;
++        }
++        r = a / b;
++        exp = astra_f32_exp(r);
++        if (exp < 1 + 24 || exp > 0xfe) {
++            return false;
++        }
++        error = fmaf(-r, b, a);
++        break;
++    }
++    if (error != 0) {
++        float_raise(float_flag_inexact, &env->fp_status);
++    }
++    res->d = astra_f32_to_fx80(r);
++    return true;
++}
++
++static bool astra_double(CPUM68KState *env, int op, FPReg *res,
++                         FPReg *val0, FPReg *val1)
++{
++    double a, b, r, error;
++    uint32_t exp;
++
++    if (!astra_host_rounding(env) || !astra_fx80_to_f64(val1->d, &a) ||
++        !astra_fx80_to_f64(val0->d, &b)) {
++        return false;
++    }
++    switch (op) {
++    case ASTRA_ADD:
++    case ASTRA_SUB: {
++        double bb, sum_b;
++
++        if (op == ASTRA_SUB) {
++            b = -b;
++        }
++        r = a + b;
++        exp = astra_f64_exp(r);
++        if (exp < 1 || exp > 0x7fd) {
++            return false;
++        }
++        bb = r - a;
++        sum_b = r - bb;
++        error = (a - sum_b) + (b - bb);
++        break;
++    }
++    case ASTRA_MUL:
++        r = a * b;
++        exp = astra_f64_exp(r);
++        if (exp < 1 + 53 || exp > 0x7fe) {
++            return false;
++        }
++        error = fma(a, b, -r);
++        break;
++    default:
++        if (astra_f64_exp(a) < 1 + 53) {
++            return false;
++        }
++        r = a / b;
++        exp = astra_f64_exp(r);
++        if (exp < 1 + 53 || exp > 0x7fe) {
++            return false;
++        }
++        error = fma(-r, b, a);
++        break;
++    }
++    if (error != 0) {
++        float_raise(float_flag_inexact, &env->fp_status);
++    }
++    res->d = astra_f64_to_fx80(r);
++    return true;
++}
+ 
++/*
++ * Extended to int32 in the current rounding mode, done on the integer
++ * significand: the same rounding and inexact as floatx80_to_int32 for
++ * every finite normal value in range; zero, denormals, infinities, NaNs
++ * and out-of-range values (invalid) keep the floatx80 path.
++ */
++static bool astra_fx80_to_int32(CPUM68KState *env, floatx80 a,
++                                int32_t *out)
++{
++    bool negative = (a.high & 0x8000) != 0;
++    int32_t exp = (a.high & 0x7fff) - ASTRA_FX80_BIAS;
++    uint64_t m = a.low;
++    uint64_t integer, fraction;
++    bool round, sticky, increment;
++
++    if ((a.high & 0x7fff) == 0 && m == 0) {
++        *out = 0;
++        return true;
++    }
++    if ((m >> 63) == 0 || (a.high & 0x7fff) == 0 || exp > 31) {
++        return false;
++    }
++    if (exp < 0) {
++        integer = 0;
++        round = exp == -1;
++        sticky = exp < -1 || (m << 1) != 0;
++    } else {
++        integer = m >> (63 - exp);
++        fraction = m << (exp + 1);
++        round = (fraction >> 63) != 0;
++        sticky = (fraction << 1) != 0;
++    }
++    switch (get_float_rounding_mode(&env->fp_status)) {
++    case float_round_nearest_even:
++        increment = round && (sticky || (integer & 1));
++        break;
++    case float_round_to_zero:
++        increment = false;
++        break;
++    case float_round_down:
++        increment = negative && (round || sticky);
++        break;
++    case float_round_up:
++        increment = !negative && (round || sticky);
++        break;
++    default:
++        return false;
++    }
++    integer += increment;
++    if (integer > (negative ? 0x80000000ULL : 0x7fffffffULL)) {
++        return false;
++    }
++    if (round || sticky) {
++        float_raise(float_flag_inexact, &env->fp_status);
++    }
++    *out = negative ? (int32_t)(0 - (uint32_t)integer) : (int32_t)integer;
++    return true;
++}
++
+ int32_t HELPER(reds32)(CPUM68KState *env, FPReg *val)
+ {
++    int32_t exact;
++
++    if (astra_fx80_to_int32(env, val->d, &exact)) {
++        return exact;
++    }
+     return floatx80_to_int32(val->d, &env->fp_status);
+ }
+ 
+ float32 HELPER(redf32)(CPUM68KState *env, FPReg *val)
+ {
++    float exact;
++
++    /* Exactly representable: no rounding, so no mode and no flags. */
++    if (astra_fx80_to_f32(val->d, &exact)) {
++        uint32_t bits;
++
++        memcpy(&bits, &exact, sizeof(bits));
++        return make_float32(bits);
++    }
+     return floatx80_to_float32(val->d, &env->fp_status);
+ }
+ 
+ void HELPER(exts32)(CPUM68KState *env, FPReg *res, int32_t val)
+ {
++    uint64_t magnitude = val < 0 ? 0 - (uint64_t)(int64_t)val
++                                 : (uint64_t)val;
++
++    /*
++     * Every int32 is exact at extended and double precision and raises
++     * nothing; at single precision floatx80 rounds one wider than 24 bits,
++     * so that case keeps the floatx80 path.
++     */
++    if (val != 0 &&
++        (magnitude <= (1ULL << 24) ||
++         get_floatx80_rounding_precision(&env->fp_status) !=
++             floatx80_precision_s)) {
++        int shift = clz64(magnitude);
++
++        res->d = make_floatx80((val < 0 ? 0x8000 : 0) |
++                               (ASTRA_FX80_BIAS + 63 - shift),
++                               magnitude << shift);
++        return;
++    }
+     res->d = int32_to_floatx80(val, &env->fp_status);
+ }
+ 
+ void HELPER(extf32)(CPUM68KState *env, FPReg *res, float32 val)
+ {
++    uint32_t exp = (float32_val(val) >> 23) & 0xff;
++
++    /* A normal single widens exactly, at any FPCR precision, and raises
++     * nothing. */
++    if (exp != 0 && exp != 0xff) {
++        float host;
++        uint32_t bits = float32_val(val);
++
++        memcpy(&host, &bits, sizeof(host));
++        res->d = astra_f32_to_fx80(host);
++        return;
++    }
+     res->d = float32_to_floatx80(val, &env->fp_status);
+ }
+ 
+ void HELPER(extf64)(CPUM68KState *env, FPReg *res, float64 val)
+ {
++    uint32_t exp = (float64_val(val) >> 52) & 0x7ff;
++
++    /*
++     * Exact unless the rounding precision is single: floatx80 rounds the
++     * widened value to it, so that case keeps the floatx80 path.
++     */
++    if (exp != 0 && exp != 0x7ff &&
++        get_floatx80_rounding_precision(&env->fp_status) !=
++            floatx80_precision_s) {
++        double host;
++        uint64_t bits = float64_val(val);
++
++        memcpy(&host, &bits, sizeof(host));
++        res->d = astra_f64_to_fx80(host);
++        return;
++    }
+     res->d = float64_to_floatx80(val, &env->fp_status);
+ }
+ 
+ float64 HELPER(redf64)(CPUM68KState *env, FPReg *val)
+ {
++    double exact;
++
++    if (astra_fx80_to_f64(val->d, &exact)) {
++        uint64_t bits;
++
++        memcpy(&bits, &exact, sizeof(bits));
++        return make_float64(bits);
++    }
+     return floatx80_to_float64(val->d, &env->fp_status);
+ }
+ 
+@@ -248,6 +592,12 @@
+ 
+ void HELPER(fsround)(CPUM68KState *env, FPReg *res, FPReg *val)
+ {
++    float exact;
++
++    if (astra_fx80_to_f32(val->d, &exact)) {
++        res->d = val->d;
++        return;
++    }
+     PREC_BEGIN(floatx80_precision_s);
+     res->d = floatx80_round(val->d, &env->fp_status);
+     PREC_END();
+@@ -255,6 +605,12 @@
+ 
+ void HELPER(fdround)(CPUM68KState *env, FPReg *res, FPReg *val)
+ {
++    double exact;
++
++    if (astra_fx80_to_f64(val->d, &exact)) {
++        res->d = val->d;
++        return;
++    }
+     PREC_BEGIN(floatx80_precision_d);
+     res->d = floatx80_round(val->d, &env->fp_status);
+     PREC_END();
+@@ -324,6 +680,9 @@
+ 
+ void HELPER(fsadd)(CPUM68KState *env, FPReg *res, FPReg *val0, FPReg *val1)
+ {
++    if (astra_single(env, ASTRA_ADD, res, val0, val1)) {
++        return;
++    }
+     PREC_BEGIN(floatx80_precision_s);
+     res->d = floatx80_add(val0->d, val1->d, &env->fp_status);
+     PREC_END();
+@@ -331,6 +690,9 @@
+ 
+ void HELPER(fdadd)(CPUM68KState *env, FPReg *res, FPReg *val0, FPReg *val1)
+ {
++    if (astra_double(env, ASTRA_ADD, res, val0, val1)) {
++        return;
++    }
+     PREC_BEGIN(floatx80_precision_d);
+     res->d = floatx80_add(val0->d, val1->d, &env->fp_status);
+     PREC_END();
+@@ -343,6 +705,9 @@
+ 
+ void HELPER(fssub)(CPUM68KState *env, FPReg *res, FPReg *val0, FPReg *val1)
+ {
++    if (astra_single(env, ASTRA_SUB, res, val0, val1)) {
++        return;
++    }
+     PREC_BEGIN(floatx80_precision_s);
+     res->d = floatx80_sub(val1->d, val0->d, &env->fp_status);
+     PREC_END();
+@@ -350,6 +715,9 @@
+ 
+ void HELPER(fdsub)(CPUM68KState *env, FPReg *res, FPReg *val0, FPReg *val1)
+ {
++    if (astra_double(env, ASTRA_SUB, res, val0, val1)) {
++        return;
++    }
+     PREC_BEGIN(floatx80_precision_d);
+     res->d = floatx80_sub(val1->d, val0->d, &env->fp_status);
+     PREC_END();
+@@ -362,6 +730,9 @@
+ 
+ void HELPER(fsmul)(CPUM68KState *env, FPReg *res, FPReg *val0, FPReg *val1)
+ {
++    if (astra_single(env, ASTRA_MUL, res, val0, val1)) {
++        return;
++    }
+     PREC_BEGIN(floatx80_precision_s);
+     res->d = floatx80_mul(val0->d, val1->d, &env->fp_status);
+     PREC_END();
+@@ -369,6 +740,9 @@
+ 
+ void HELPER(fdmul)(CPUM68KState *env, FPReg *res, FPReg *val0, FPReg *val1)
+ {
++    if (astra_double(env, ASTRA_MUL, res, val0, val1)) {
++        return;
++    }
+     PREC_BEGIN(floatx80_precision_d);
+     res->d = floatx80_mul(val0->d, val1->d, &env->fp_status);
+     PREC_END();
+@@ -395,6 +769,9 @@
+ 
+ void HELPER(fsdiv)(CPUM68KState *env, FPReg *res, FPReg *val0, FPReg *val1)
+ {
++    if (astra_single(env, ASTRA_DIV, res, val0, val1)) {
++        return;
++    }
+     PREC_BEGIN(floatx80_precision_s);
+     res->d = floatx80_div(val1->d, val0->d, &env->fp_status);
+     PREC_END();
+@@ -402,6 +779,9 @@
+ 
+ void HELPER(fddiv)(CPUM68KState *env, FPReg *res, FPReg *val0, FPReg *val1)
+ {
++    if (astra_double(env, ASTRA_DIV, res, val0, val1)) {
++        return;
++    }
+     PREC_BEGIN(floatx80_precision_d);
+     res->d = floatx80_div(val1->d, val0->d, &env->fp_status);
+     PREC_END();
