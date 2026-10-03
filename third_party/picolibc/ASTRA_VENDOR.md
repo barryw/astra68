@@ -25,12 +25,17 @@ have meant committing to a Linux personality in the kernel.
   here can do.
 * `.github/`, `.git/` — CI and history, neither of which this repository is the
   right home for.
-* `scripts/cross-m68k-astra.txt` — **added** for the Astra CPU/float and
+* `scripts/cross-m68k-astra.txt` — **added** for the Astra CPU and
   position-independent ABI.
-  Upstream's `cross-m68k-linux-gnu.txt` targets `-march=68020` with the
-  toolchain's default float ABI; Astra builds `-m68040 -msoft-float`. A libc
-  built for a different float ABI links without a complaint and returns wrong
-  answers. Picolibc explicitly disables Meson's automatic PIC setting on its
+  Upstream's `cross-m68k-linux-gnu.txt` targets `-march=68020`. Astra builds
+  `-m68040` and takes the float ABI from the compiler driver, which is hard
+  float (`docs/USERSPACE_FPU.md`); a flag here would let libc and its users
+  disagree, and only float and double returns would show it. Every object
+  now carries `Tag_GNU_M68K_ABI_FP`, so such a link fails.
+* `libc/machine/m68k/setjmp.S` — under `__HAVE_68881__`, `setjmp` and
+  `longjmp` save and restore FP2-FP7 (callee-saved in the hard-float ABI) at
+  offset 64, which `_JBLEN` 34 already reserves. Upstream saves them only in
+  the separate `setjmp_68881`, so a hard-float `longjmp` lost them. Picolibc explicitly disables Meson's automatic PIC setting on its
   top-level archives, so the cross contract supplies `-fPIC` directly; this is
   a file rather than a set of flags somebody remembers to pass.
 

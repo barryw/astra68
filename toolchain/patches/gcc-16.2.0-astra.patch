@@ -29,7 +29,7 @@ diff --git a/gcc/config/m68k/astra.h b/gcc/config/m68k/astra.h
 new file mode 100644
 --- /dev/null
 +++ b/gcc/config/m68k/astra.h
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,57 @@
 +/* Astra68 MC68040 userspace ABI.  */
 +
 +#undef TARGET_OS_CPP_BUILTINS
@@ -40,9 +40,11 @@ new file mode 100644
 +    builtin_assert ("system=astra"); \
 +  } while (0)
 +
-+/* A4 is the thread pointer.  A5 remains available to the m68k PIC ABI.  */
++/* A4 is the thread pointer.  A5 remains available to the m68k PIC ABI.
++   User code is hard float: the --with-cpu=68040 default selects the FPU,
++   and an explicit -msoft-float (the kernel, the boot firmware) still wins.  */
 +#undef DRIVER_SELF_SPECS
-+#define DRIVER_SELF_SPECS "-ffixed-a4 -msoft-float"
++#define DRIVER_SELF_SPECS "-ffixed-a4"
 +
 +/* Keep Astra's established ILP32 ABI compatible with GNU/Linux m68k.  */
 +#undef SIZE_TYPE
@@ -52,9 +54,13 @@ new file mode 100644
 +#undef STDINT_LONG32
 +#define STDINT_LONG32 0
 +
-+/* Mark every generated object, including crtbegin/crtend, non-executable.  */
++/* Mark every generated object, including crtbegin/crtend, non-executable,
++   and tag its float ABI (Tag_GNU_M68K_ABI_FP: 1 hard, 2 soft) so the
++   linker refuses to mix them: only float and double returns differ, so a
++   mixed link would run and read garbage from the wrong register.  */
++#define M68K_ASTRA_FILE_END 1
 +#undef TARGET_ASM_FILE_END
-+#define TARGET_ASM_FILE_END file_end_indicate_exec_stack
++#define TARGET_ASM_FILE_END m68k_astra_file_end
 +
 +/* Astra executables use the system's own startup object.  A shared library
 +   has constructors but no process entry point.  */
@@ -81,6 +87,47 @@ new file mode 100644
 +#define LIB_SPEC \
 +  "--start-group -lastraposix -lastrastreams -lastravfs -lastrart " \
 +  "-lc -lm --end-group"
+diff --git a/gcc/config/m68k/m68k.cc b/gcc/config/m68k/m68k.cc
+--- a/gcc/config/m68k/m68k.cc
++++ b/gcc/config/m68k/m68k.cc
+@@ -385,6 +385,16 @@
+ #undef TARGET_DOCUMENTATION_NAME
+ #define TARGET_DOCUMENTATION_NAME "m68k"
+ 
++#ifdef M68K_ASTRA_FILE_END
++static void
++m68k_astra_file_end (void)
++{
++  fprintf (asm_out_file, "\t.gnu_attribute 4, %d\n",
++	   TARGET_HARD_FLOAT ? 1 : 2);
++  file_end_indicate_exec_stack ();
++}
++#endif
++
+ struct gcc_target targetm = TARGET_INITIALIZER;
+ 
+ /* Base flags for 68k ISAs.  */
+diff --git a/gcc/config/m68k/m68k.md b/gcc/config/m68k/m68k.md
+--- a/gcc/config/m68k/m68k.md
++++ b/gcc/config/m68k/m68k.md
+@@ -6602,7 +6602,7 @@
+   [(set (match_operand:FP 0 "nonimmediate_operand" "=f")
+ 	(unspec:FP
+ 	  [(match_operand:FP 1 "general_operand" "f<FP:dreg>m")] UNSPEC_SIN))]
+-  "TARGET_68881 && flag_unsafe_math_optimizations"
++  "TARGET_68881 && flag_unsafe_math_optimizations && !TARGET_68040"
+ {
+   if (FP_REG_P (operands[1]))
+     return "fsin%.x %1,%0";
+@@ -6614,7 +6614,7 @@
+   [(set (match_operand:FP 0 "nonimmediate_operand" "=f")
+ 	(unspec:FP
+ 	  [(match_operand:FP 1 "general_operand" "f<FP:dreg>m")] UNSPEC_COS))]
+-  "TARGET_68881 && flag_unsafe_math_optimizations"
++  "TARGET_68881 && flag_unsafe_math_optimizations && !TARGET_68040"
+ {
+   if (FP_REG_P (operands[1]))
+     return "fcos%.x %1,%0";
 diff --git a/libgcc/config.host b/libgcc/config.host
 --- a/libgcc/config.host
 +++ b/libgcc/config.host

@@ -28,12 +28,20 @@ SYM (setjmp):
 	movel sp@(0),a0@(12)
 	movel sp,a0@(8)
 	moveml d2-d7/a2-a6,a0@(20)
+#ifdef __HAVE_68881__
+	/* Astra: FP2-FP7 are callee-saved under the hard-float ABI.  (REG():
+	   m68kasm.h defines only the integer names, and "fp" is A6.) */
+	fmovemx REG(fp2)-REG(fp7),a0@(64)
+#endif
 	clrl d0
 	rts
 	.size	SYM(setjmp), . - SYM(setjmp)
 
 SYM (longjmp):
 	moveal sp@(4),a0
+#ifdef __HAVE_68881__
+	fmovemx a0@(64),REG(fp2)-REG(fp7)
+#endif
 	movel sp@(8),d0
 	bne 1f
 	movel &1,d0

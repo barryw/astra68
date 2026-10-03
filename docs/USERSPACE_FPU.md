@@ -1,7 +1,9 @@
 # Userspace FPU for Astra 68
 
-Status: revision 0.2 (2026-10-03). Phase 0 done; phase 1 (kernel FPU context)
-implemented and gated; phases 2-3 not started.
+Status: revision 0.3 (2026-10-03). Phases 0-2 done: kernel FPU context
+implemented and gated; hard-float toolchain built in a copy of the prefix
+(`~/astra-toolchain/prefix-hardfp`), not installed. Phase 3 (flag day) not
+started.
 Status words follow `KERNEL_ARCHITECTURE.md`: **LOCKED**, **CURRENT**,
 **PLANNED**, **MISSING**.
 
@@ -760,6 +762,39 @@ This phase is safe to ship on its own: nothing else uses the FPU yet.
 - Test whether `ld` merges `Tag_GNU_M68K_ABI_FP` from shared libraries.
 - Extend `test-gcc-driver.sh`.
 - Add the QEMU F-line overlay with gate subtest 7.
+
+**Phase 2 result (2026-10-03).**
+
+- `gcc-16.2.0-astra.patch`: `DRIVER_SELF_SPECS` is `-ffixed-a4`, so
+  `--with-cpu=68040` selects the FPU and defines `__HAVE_68881__`; an
+  explicit `-msoft-float` still wins. `m68k_astra_file_end` emits
+  `.gnu_attribute 4, 1|2` in every object. `sin`/`cos` patterns require
+  `!TARGET_68040`; `fintrz`, `fscale` and `fmovecr` were already off under
+  68040 tuning.
+- picolibc: the cross file no longer names a float ABI (the driver's is
+  used; `mk/test-picolibc-target.sh` asserts it); `setjmp`/`longjmp` save
+  FP2-FP7 under `__HAVE_68881__` (`REG(fp2)`: `m68kasm.h` has no FP names,
+  and bare `fp` is A6).
+- Built by `~/astra-mg/build-hardfp.sh` into `~/astra-toolchain/prefix-hardfp`
+  from a fresh patched tree (`~/astra-toolchain/src-hardfp/work`): gcc,
+  libgcc, picolibc, libstdc++. The live prefix is unchanged.
+- **The linker merges the tag from shared libraries.** A soft object linked
+  against a hard `.so` fails: `libh.so uses hard float, gsp.o uses soft
+  float`. So a stale soft library or program cannot link against the new
+  libraries at all; the major bumps (4.4) cover only what is already linked.
+- The hard-built libc, libm and libstdc++ still call libgcc's 64-bit and
+  extended conversions (`__floatdidf`, `__fixxfsi`, `__fixdfdi`, ...): GCC
+  uses libcalls for those on the 68040 regardless of float ABI, and libgcc
+  is itself built hard. No `__mulsf3`-class helper is referenced.
+  `-ffast-math` `sin` is a tail call to `sin`.
+- `toolchain/test-gcc-driver.sh` asserts `__HAVE_68881__`, `fsmul`, the tags
+  on objects and shared libraries, the refused mixed link, and no
+  `fsin`/`fcos` under `-ffast-math`. It passes on `prefix-hardfp` and fails
+  on the live soft toolchain, as it must until phase 3 installs.
+- `qemu-9.2/target-m68k-68040-fpu-unimplemented.patch`: F-line for every
+  FPU opmode outside the 68040's silicon set and for FMOVECR. `test-fpu.py`
+  `contract` now requires vector 11; under the previous QEMU it fails
+  (`fsin executed in user mode`). `test-host-float.sh` still passes.
 
 **Phase 3: flag day.**
 

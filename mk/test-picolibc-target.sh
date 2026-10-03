@@ -8,8 +8,11 @@ READ_TP=$HERE/../third_party/picolibc/libc/machine/m68k/read_tp.S
 UNISTD=$HERE/../third_party/picolibc/libc/include/sys/unistd.h
 SIGNAL=$HERE/../third_party/picolibc/libc/include/signal.h
 
-grep -Fq "c = ['m68k-astra-gcc', '-m68040', '-msoft-float', '-ffixed-a4', '-fPIC'" \
+grep -Fq "c = ['m68k-astra-gcc', '-m68040', '-ffixed-a4', '-fPIC'" \
     "$CROSS"
+# The float ABI is the driver's; a flag here would split libc from its users.
+! grep -Fq -- '-msoft-float' "$CROSS"
+! grep -Fq -- '-mhard-float' "$CROSS"
 ! grep -Fq -- '-fvisibility=hidden' "$CROSS"
 grep -Fq "cpu = '68040'" "$CROSS"
 grep -Fq 'm68k-astra-gcc -print-sysroot' "$BUILD"

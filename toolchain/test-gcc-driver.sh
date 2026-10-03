@@ -114,4 +114,31 @@ dynamic_end=$($CC -print-file-name=crtendS.o)
 ! "$READELF" -dW "$WORK/constructor.elf" | grep -q TEXTREL
 "$READELF" -dW "$WORK/constructor.elf" | grep -q '(GNU_HASH)'
 
+# User code is hard float (docs/USERSPACE_FPU.md 4.3): the driver no longer
+# forces -msoft-float, every object names its float ABI, and the linker
+# refuses to mix them -- through a shared library too, because only float
+# and double returns differ and a mixed program would run.
+grep -q '^#define __HAVE_68881__ 1$' "$WORK/macros"
+printf 'float f(float a, float b) { return a * b; }\n' >"$WORK/float.c"
+printf 'float f(float, float);\nfloat g(void) { return f(1, 2); }\n' \
+    >"$WORK/call.c"
+"$CC" -O2 -S -o "$WORK/float.s" "$WORK/float.c"
+grep -q 'fsmul' "$WORK/float.s"
+! grep -q '__mulsf3' "$WORK/float.s"
+"$CC" -O2 -fPIC -c "$WORK/float.c" -o "$WORK/hard.o"
+"$CC" -O2 -fPIC -msoft-float -c "$WORK/float.c" -o "$WORK/soft.o"
+"$CC" -O2 -fPIC -msoft-float -c "$WORK/call.c" -o "$WORK/soft-call.o"
+"$READELF" -A "$WORK/hard.o" | grep -q 'Tag_GNU_M68K_ABI_FP: hard float'
+"$READELF" -A "$WORK/soft.o" | grep -q 'Tag_GNU_M68K_ABI_FP: soft float'
+"$CC" -nostdlib -shared "$WORK/hard.o" -o "$WORK/hard.library"
+"$READELF" -A "$WORK/hard.library" | grep -q 'Tag_GNU_M68K_ABI_FP: hard float'
+! "$CC" -nostdlib -shared "$WORK/soft-call.o" "$WORK/hard.library" \
+    -o "$WORK/mixed.library" 2>"$WORK/mixed.err"
+grep -q 'uses hard float' "$WORK/mixed.err"
+# No instruction the MC68040 leaves to the FPSP, even under -ffast-math.
+printf 'double s(double x) { return __builtin_sin(x) + __builtin_cos(x); }\n' \
+    >"$WORK/trig.c"
+"$CC" -O2 -ffast-math -S -o "$WORK/trig.s" "$WORK/trig.c"
+! grep -Eq 'f(sin|cos)' "$WORK/trig.s"
+
 echo "Astra GCC driver contract: PASS"

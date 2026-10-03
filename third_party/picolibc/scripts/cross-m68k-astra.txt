@@ -1,10 +1,11 @@
 # picolibc cross file for Astra 68.
 #
-# Astra's compiler owns the CPU, float, and thread-pointer ABI defaults.  Keep
+# Astra's compiler owns the CPU, float, and thread-pointer ABI defaults; the
+# float ABI is the driver's (hard float since docs/USERSPACE_FPU.md phase 2).  Keep
 # the libc build on that target so it cannot silently inherit Linux semantics.
 
 [binaries]
-c = ['m68k-astra-gcc', '-m68040', '-msoft-float', '-ffixed-a4', '-fPIC', '-nostdlib', '-Wl,--build-id=none']
+c = ['m68k-astra-gcc', '-m68040', '-ffixed-a4', '-fPIC', '-nostdlib', '-Wl,--build-id=none']
 ar = 'm68k-astra-ar'
 as = 'm68k-astra-as'
 ld = 'm68k-astra-ld'
