@@ -210,6 +210,16 @@ There is no alternative CPU or emulator implementation in the repository.
 - **The profile plugin appends.** `bench-workloads.py OUT.aprof` adds its
   intervals to an existing file, and `astra-prof` then sums both runs. Use a
   fresh name or delete the file first.
+- **QEMU stores `fmovem.l %fpcr/%fpsr/%fpiar` as FPIAR, FPSR, FPCR** from
+  the lowest address. The kernel's FPU switch moves each control register
+  with its own `fmove.l` so `KernelFpuContext.control` is FPCR, FPSR, FPIAR
+  whatever the emulator does. A save/load pair in either order passes
+  every round-trip test; it shows only when code writes one field (the
+  signal handler's FPCR reset did). `docs/USERSPACE_FPU.md`, phase 1.
+- **The kernel is float-free by a link-time check.**
+  `tools/check_kernel_float_free.py` fails the kernel link on any FPU
+  instruction outside `_kernel_restore_user_context` and
+  `kernel_fpu_flush`, the only code that touches user FPU state.
 - **The qualification kernel is a second ROM**, built with
   `make KERNEL_K1_QUALIFICATION=1` in `sw/boot`, with no debug surface and no
   initial user image. `emu/qemu/test-qualification.py` is its gate. It

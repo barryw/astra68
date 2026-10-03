@@ -6,6 +6,21 @@
 
 #define KERNEL_THREAD_KERNEL_STACK_TOP_OFFSET 76
 
+/*
+ * A user thread's MC68040 FPU state (docs/USERSPACE_FPU.md section 2):
+ * FPCR, FPSR and FPIAR, each moved alone, the FMOVEM.X images of FP0-FP7, and
+ * the FSAVE frame. The busy frame -- a four-byte header and 96 bytes -- is
+ * the largest the 68040 writes; the idle frame is the four-byte header
+ * alone. The assembly switch in vectors.S uses these offsets.
+ */
+#define KERNEL_THREAD_FPU_OFFSET 80
+#define KERNEL_FPU_CONTROL_OFFSET 0
+#define KERNEL_FPU_DATA_OFFSET 12
+#define KERNEL_FPU_FRAME_OFFSET 108
+#define KERNEL_FPU_FRAME_SIZE 100
+#define KERNEL_FPU_CONTEXT_SIZE 208
+#define KERNEL_FPU_IDLE_FRAME 0x41000000u
+
 #define KERNEL_THREAD_PRIORITY_LEVELS 32
 #define KERNEL_THREAD_PRIORITY_IDLE 0
 #define KERNEL_THREAD_PRIORITY_USER_MIN 1
@@ -141,9 +156,20 @@ typedef enum KernelThreadWaitMode {
     KERNEL_THREAD_WAIT_MULTIPLE
 } KernelThreadWaitMode;
 
+typedef struct KernelFpuContext {
+    uint32_t control[3];
+    uint8_t data[8][12];
+    uint32_t frame[KERNEL_FPU_FRAME_SIZE / 4];
+} KernelFpuContext;
+
 typedef struct KernelThread {
     KernelCpuContext context;
     uint32_t kernel_stack_top;
+    /*
+     * Authoritative only while this thread is not kernel_fpu_owner; while it
+     * is, the FPU holds the state and kernel_fpu_flush brings this up to date.
+     */
+    KernelFpuContext fpu;
     uint32_t kernel_stack_base;
     uint32_t kernel_stack_low_water;
     uint32_t kernel_stack_entries;
@@ -226,7 +252,28 @@ typedef struct KernelThread {
     uint8_t irq_wake_pending;
     uint8_t signal_context_active;
     KernelCpuContext signal_saved_context;
+    KernelFpuContext signal_saved_fpu;
 } KernelThread;
+
+/*
+ * The thread whose FPU state is in the FPU, or NULL. Written only by the
+ * restore path at IPL 7 and by kernel_fpu_invalidate, which masks: an
+ * interrupt taken in the worker can resume a user thread, so C code must
+ * never read-compare-write it unmasked.
+ */
+extern KernelThread *kernel_fpu_owner;
+
+/* A new thread's state: zero registers, FPCR 0, an idle frame. */
+void kernel_fpu_context_reset(KernelFpuContext *fpu);
+/* If `thread` owns the FPU, save it into thread->fpu and keep ownership. */
+void kernel_fpu_flush(KernelThread *thread);
+/* If `thread` owns the FPU, drop ownership: its next resume loads thread->fpu. */
+void kernel_fpu_invalidate(KernelThread *thread);
+#if !defined(__m68k__)
+/* The host build's model of the FPU registers and of the restore path. */
+extern KernelFpuContext kernel_fpu_host_registers;
+void kernel_fpu_host_resume(KernelThread *thread);
+#endif
 
 typedef struct KernelThreadSnapshot {
     uint32_t id;

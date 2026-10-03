@@ -1088,6 +1088,16 @@ static void signal_deliver(KernelThread *thread)
         return;
     kernel_bytes_copy(&thread->signal_saved_context, &thread->context,
                       sizeof(thread->context));
+    /*
+     * The handler is C and may use FP0-FP1 and FPCR/FPSR; the interrupted
+     * code must not see it. It starts in the default environment.
+     */
+    kernel_fpu_flush(thread);
+    kernel_bytes_copy(&thread->signal_saved_fpu, &thread->fpu,
+                      sizeof(thread->fpu));
+    thread->fpu.control[0] = 0u;
+    thread->fpu.control[1] = 0u;
+    kernel_fpu_invalidate(thread);
     thread->signal_context_active = 1u;
     process->signal_pending &= ~(1u << signal);
     thread->context.usp = stack;
@@ -3825,10 +3835,15 @@ static KernelProcessStatus prepare_cloned_thread(
         return KERNEL_PROCESS_OUT_OF_MEMORY;
     if (thread_status != KERNEL_THREAD_OK || thread == NULL)
         return KERNEL_PROCESS_CORRUPT;
+    /* clone_current_process flushed the source, so its record is current. */
+    kernel_bytes_copy(&thread->fpu, &source->fpu, sizeof(thread->fpu));
     if (source->signal_context_active != 0u) {
         kernel_bytes_copy(&thread->signal_saved_context,
                           &source->signal_saved_context,
                           sizeof(thread->signal_saved_context));
+        kernel_bytes_copy(&thread->signal_saved_fpu,
+                          &source->signal_saved_fpu,
+                          sizeof(thread->signal_saved_fpu));
         thread->signal_context_active = 1u;
     } else {
         thread->signal_context_active = 0u;
@@ -3972,6 +3987,8 @@ static KernelProcessStatus clone_current_process(
         goto failed;
     }
     child->self_handle = self_handle;
+    /* The forking thread's live FPU state is in the FPU, not its record. */
+    kernel_fpu_flush(source_thread);
     result = prepare_cloned_thread(child, source_thread, &prepared);
     if (result != KERNEL_PROCESS_OK)
         goto failed;
@@ -4573,6 +4590,9 @@ static KernelProcessStatus exec_replace(
         plan->has_interpreter != 0u ? initial_image.interpreter_entry :
                                      plan->entry,
                               thread->user_stack_top);
+    /* A new image starts with a new FPU, like a new process. */
+    kernel_fpu_invalidate(thread);
+    kernel_fpu_context_reset(&thread->fpu);
     install_thread_tls(thread, new_tls_base, new_tls_pages);
     thread->context.data[2] = KERNEL_PROCESS_STARTUP_BASE;
     thread->context.data[4] = process->self_handle;
@@ -11029,6 +11049,12 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             rights, &prepared_thread);
         if (create_status == KERNEL_PROCESS_OK) {
             prepared_thread.thread->signal_blocked = thread->signal_blocked;
+            /*
+             * C11 7.6: a new thread's floating-point environment starts as
+             * its creator's. Its registers start at zero.
+             */
+            kernel_fpu_flush(thread);
+            prepared_thread.thread->fpu.control[0] = thread->fpu.control[0];
             create_status = map_thread_tls(
                 &current->address_space, current, &current->tls, true,
                 &prepared_thread.thread->tls_base,
@@ -11594,6 +11620,9 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         kernel_bytes_copy(&thread->context,
                           &thread->signal_saved_context,
                           sizeof(thread->context));
+        kernel_fpu_invalidate(thread);
+        kernel_bytes_copy(&thread->fpu, &thread->signal_saved_fpu,
+                          sizeof(thread->fpu));
         thread->signal_context_active = 0u;
         *next_context = runtime_resume(thread);
         return KERNEL_PROCESS_OK;

@@ -336,8 +336,10 @@ $(BUILD_DIR)/civil.o: ../common/civil.c ../include/astra/civil.h | $(BUILD_DIR)
 $(BUILD_DIR)/divide.o: ../common/divide.c ../include/astra/divide.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(KERNEL_ELF): $(OBJECTS) kernel.ld
+$(KERNEL_ELF): $(OBJECTS) kernel.ld ../../tools/check_kernel_float_free.py
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS)
+	@python3 ../../tools/check_kernel_float_free.py $(OBJDUMP) $@ || \
+		{ rm -f $@; exit 1; }
 
 $(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@

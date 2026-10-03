@@ -159,6 +159,34 @@ kernel_enter_user:
 	.globl  _kernel_restore_user_context
 	.type   _kernel_restore_user_context, @function
 _kernel_restore_user_context:
+	| FPU switch (docs/USERSPACE_FPU.md 2.2). D0 is &thread->context, which
+	| is the thread. Nothing to do while the owner resumes -- every syscall
+	| return and same-thread interrupt return. Motorola's order: FSAVE, then
+	| the programmer's model on save; the model, then FRESTORE, on load.
+	| One FMOVE per control register, not FMOVEM.L: QEMU stores a multiple
+	| FMOVEM.L as FPIAR, FPSR, FPCR, and KernelFpuContext.control is named
+	| FPCR, FPSR, FPIAR whatever an emulator does.
+	| Before the latency exit, so the masked time is measured.
+	move.l  kernel_fpu_owner, %d1
+	cmp.l   %d1, %d0
+	beq.s   .Lfpu_current
+	tst.l   %d1
+	beq.s   .Lfpu_load
+	move.l  %d1, %a1
+	fsave   KERNEL_THREAD_FPU_OFFSET+KERNEL_FPU_FRAME_OFFSET(%a1)
+	fmovem.x %fp0-%fp7, KERNEL_THREAD_FPU_OFFSET+KERNEL_FPU_DATA_OFFSET(%a1)
+	fmove.l %fpcr, KERNEL_THREAD_FPU_OFFSET+KERNEL_FPU_CONTROL_OFFSET(%a1)
+	fmove.l %fpsr, KERNEL_THREAD_FPU_OFFSET+KERNEL_FPU_CONTROL_OFFSET+4(%a1)
+	fmove.l %fpiar, KERNEL_THREAD_FPU_OFFSET+KERNEL_FPU_CONTROL_OFFSET+8(%a1)
+.Lfpu_load:
+	move.l  %d0, %a1
+	fmove.l KERNEL_THREAD_FPU_OFFSET+KERNEL_FPU_CONTROL_OFFSET(%a1), %fpcr
+	fmove.l KERNEL_THREAD_FPU_OFFSET+KERNEL_FPU_CONTROL_OFFSET+4(%a1), %fpsr
+	fmove.l KERNEL_THREAD_FPU_OFFSET+KERNEL_FPU_CONTROL_OFFSET+8(%a1), %fpiar
+	fmovem.x KERNEL_THREAD_FPU_OFFSET+KERNEL_FPU_DATA_OFFSET(%a1), %fp0-%fp7
+	frestore KERNEL_THREAD_FPU_OFFSET+KERNEL_FPU_FRAME_OFFSET(%a1)
+	move.l  %d0, kernel_fpu_owner
+.Lfpu_current:
 	move.l  %d0, -(%sp)
 	jsr     kernel_irqoff_latency_exit
 	move.l  (%sp)+, %d0
@@ -171,6 +199,42 @@ _kernel_restore_user_context:
 	move.w  KERNEL_CONTEXT_SR_OFFSET(%a0), -(%sp)
 	movem.l KERNEL_CONTEXT_D0_OFFSET(%a0), %d0-%d7/%a0-%a6
 	rte
+
+	| The only kernel FPU instructions outside the restore path. Both mask
+	| interrupts: an interrupt taken in the worker can resume another user
+	| thread and so change kernel_fpu_owner between a compare and a write.
+	.globl  kernel_fpu_flush
+	.type   kernel_fpu_flush, @function
+kernel_fpu_flush:
+	move.l  4(%sp), %d0
+	move.w  %sr, %d1
+	ori.w   #0x0700, %sr
+	cmp.l   kernel_fpu_owner, %d0
+	bne.s   .Lfpu_flush_done
+	move.l  %d0, %a0
+	fsave   KERNEL_THREAD_FPU_OFFSET+KERNEL_FPU_FRAME_OFFSET(%a0)
+	fmovem.x %fp0-%fp7, KERNEL_THREAD_FPU_OFFSET+KERNEL_FPU_DATA_OFFSET(%a0)
+	fmove.l %fpcr, KERNEL_THREAD_FPU_OFFSET+KERNEL_FPU_CONTROL_OFFSET(%a0)
+	fmove.l %fpsr, KERNEL_THREAD_FPU_OFFSET+KERNEL_FPU_CONTROL_OFFSET+4(%a0)
+	fmove.l %fpiar, KERNEL_THREAD_FPU_OFFSET+KERNEL_FPU_CONTROL_OFFSET+8(%a0)
+	| The thread keeps the FPU: put back the internal state FSAVE took.
+	frestore KERNEL_THREAD_FPU_OFFSET+KERNEL_FPU_FRAME_OFFSET(%a0)
+.Lfpu_flush_done:
+	move.w  %d1, %sr
+	rts
+
+	.globl  kernel_fpu_invalidate
+	.type   kernel_fpu_invalidate, @function
+kernel_fpu_invalidate:
+	move.l  4(%sp), %d0
+	move.w  %sr, %d1
+	ori.w   #0x0700, %sr
+	cmp.l   kernel_fpu_owner, %d0
+	bne.s   .Lfpu_invalidate_done
+	clr.l   kernel_fpu_owner
+.Lfpu_invalidate_done:
+	move.w  %d1, %sr
+	rts
 
 	.globl  kernel_enter_idle
 	.type   kernel_enter_idle, @function

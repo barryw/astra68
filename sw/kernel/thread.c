@@ -243,10 +243,58 @@ static bool release_wait_registrations(KernelThread *thread)
     return true;
 }
 
+KernelThread *kernel_fpu_owner;
+
+void kernel_fpu_context_reset(KernelFpuContext *fpu)
+{
+    kernel_bytes_clear(fpu, sizeof(*fpu));
+    /*
+     * Idle, not null: under Astra's QEMU FRESTORE of a null frame does not
+     * reset the FPU, so a null frame would hand this thread the previous
+     * owner's registers.
+     */
+    fpu->frame[0] = KERNEL_FPU_IDLE_FRAME;
+}
+
+#if !defined(__m68k__)
+KernelFpuContext kernel_fpu_host_registers;
+
+void kernel_fpu_flush(KernelThread *thread)
+{
+    if (thread != NULL && kernel_fpu_owner == thread)
+        kernel_bytes_copy(&thread->fpu, &kernel_fpu_host_registers,
+                          sizeof(thread->fpu));
+}
+
+void kernel_fpu_invalidate(KernelThread *thread)
+{
+    if (thread != NULL && kernel_fpu_owner == thread)
+        kernel_fpu_owner = NULL;
+}
+
+/* What _kernel_restore_user_context does to the FPU. */
+void kernel_fpu_host_resume(KernelThread *thread)
+{
+    if (kernel_fpu_owner == thread)
+        return;
+    if (kernel_fpu_owner != NULL)
+        kernel_bytes_copy(&kernel_fpu_owner->fpu, &kernel_fpu_host_registers,
+                          sizeof(kernel_fpu_owner->fpu));
+    kernel_bytes_copy(&kernel_fpu_host_registers, &thread->fpu,
+                      sizeof(kernel_fpu_host_registers));
+    kernel_fpu_owner = thread;
+}
+#endif
+
 static bool release_thread_record(KernelThread *thread)
 {
     if (thread == NULL)
         return false;
+    /*
+     * Before the record can be reused: otherwise the next owner change
+     * FSAVEs into freed memory, which reads like an allocator bug.
+     */
+    kernel_fpu_invalidate(thread);
     if (!release_wait_registrations(thread))
         return false;
 #if defined(KERNEL_THREAD_STANDALONE_HOST)
@@ -265,6 +313,16 @@ static bool release_thread_record(KernelThread *thread)
 
 _Static_assert(offsetof(KernelThread, context) == 0u,
                "thread context must remain the first field");
+_Static_assert(offsetof(KernelThread, fpu) == KERNEL_THREAD_FPU_OFFSET,
+               "assembly thread FPU offset changed");
+_Static_assert(offsetof(KernelFpuContext, control) ==
+                   KERNEL_FPU_CONTROL_OFFSET &&
+               offsetof(KernelFpuContext, data) == KERNEL_FPU_DATA_OFFSET &&
+               offsetof(KernelFpuContext, frame) == KERNEL_FPU_FRAME_OFFSET &&
+               sizeof(KernelFpuContext) == KERNEL_FPU_CONTEXT_SIZE,
+               "assembly FPU context layout changed");
+_Static_assert(KERNEL_THREAD_FPU_OFFSET % 4 == 0,
+               "FSAVE and FMOVEM want a longword-aligned context");
 _Static_assert(offsetof(KernelThread, kernel_stack_top) ==
                    KERNEL_THREAD_KERNEL_STACK_TOP_OFFSET,
                "assembly thread stack offset changed");
@@ -1193,6 +1251,8 @@ static KernelThreadStatus wake_death_waiters(KernelThread *thread,
 
 void kernel_thread_pool_init(void)
 {
+    /* Every record is about to go; none of them may stay the FPU owner. */
+    kernel_fpu_owner = NULL;
     for (uint32_t index = 0u; index < thread_slots; ++index) {
         KernelThread *thread = thread_at_slot((uint16_t)index);
 
@@ -1346,6 +1406,8 @@ KernelThreadStatus kernel_thread_allocate(uint16_t process_slot,
     kernel_context_initialize(&candidate->context, program_counter,
                               user_stack);
     candidate->context.data[2] = initial_argument;
+    kernel_fpu_context_reset(&candidate->fpu);
+    kernel_fpu_context_reset(&candidate->signal_saved_fpu);
     if (!kernel_context_valid(&candidate->context)) {
         candidate->state = KERNEL_THREAD_DEAD;
         candidate->occupied = 0u;

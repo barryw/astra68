@@ -73,7 +73,7 @@ TERMINFO_LIBRARY := $(ASTRA_TERMINFO_LIBRARY)
 SDL_COMMANDS := loopwave
 COMMANDS := status events devices which open service shutdown restart ls ps metrics cat mkdir rm \
 	    heapbench fsstress date echo ntp ping lua vim zsh $(SDL_COMMANDS)
-TEST_COMMANDS := posix hello cxx
+TEST_COMMANDS := posix hello cxx fpucheck
 SBASE_PRIMARY := ls mkdir
 SOURCE_COMMANDS := $(filter-out lua cxx vim zsh $(SDL_COMMANDS) \
 	$(SBASE_PRIMARY),$(COMMANDS) $(TEST_COMMANDS))
@@ -103,6 +103,7 @@ cat_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 mkdir_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 rm_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 posix_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+fpucheck_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 heapbench_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 fsstress_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 date_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)

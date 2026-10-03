@@ -6,8 +6,10 @@
 #include "performance.h"
 
 #include <assert.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #define TEST_THREAD_LOAD 40u
 #define kernel_thread_allocate(process_slot, process_id, stack_slot, pc,      \
@@ -1111,6 +1113,96 @@ static void test_wait_set_timeout_cancel_and_atomic_admission(void)
     assert(kernel_thread_pool_valid());
 }
 
+static int fpu_is_fresh(const KernelFpuContext *fpu)
+{
+    const uint8_t *bytes = (const uint8_t *)fpu;
+
+    if (fpu->frame[0] != KERNEL_FPU_IDLE_FRAME)
+        return 0;
+    for (size_t index = 0; index < offsetof(KernelFpuContext, frame); ++index)
+        if (bytes[index] != 0u)
+            return 0;
+    return 1;
+}
+
+static void dirty_fpu_model(uint8_t seed)
+{
+    for (uint32_t reg = 0; reg < 8u; ++reg)
+        for (uint32_t byte = 0; byte < 12u; ++byte)
+            kernel_fpu_host_registers.data[reg][byte] =
+                (uint8_t)(seed + reg * 12u + byte);
+    kernel_fpu_host_registers.control[0] = 0x10u * seed;
+    kernel_fpu_host_registers.control[1] = 0x01000000u * seed;
+}
+
+/*
+ * The FPU's owner tracking (docs/USERSPACE_FPU.md 2.2-2.4), against the
+ * host model of the registers and of the restore path's switch.
+ */
+static void test_fpu_ownership_follows_the_restore_path(void)
+{
+    KernelThread *first;
+    KernelThread *second;
+    KernelFpuContext first_state;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    assert(kernel_fpu_owner == NULL);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u,
+                                  KERNEL_THREAD_PRIORITY_NORMAL,
+                                  &first) == KERNEL_THREAD_OK);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 1u, 0x00100010u,
+                                  0x70003000u, 0u,
+                                  KERNEL_THREAD_PRIORITY_NORMAL,
+                                  &second) == KERNEL_THREAD_OK);
+    /* Idle frame, zero registers, FPCR 0: never a null frame. */
+    assert(fpu_is_fresh(&first->fpu));
+    assert(fpu_is_fresh(&first->signal_saved_fpu));
+    assert(fpu_is_fresh(&second->fpu));
+
+    kernel_fpu_host_resume(first);
+    assert(kernel_fpu_owner == first);
+    dirty_fpu_model(1u);
+    first_state = kernel_fpu_host_registers;
+    /* The owner's record is stale until a flush or a switch. */
+    assert(fpu_is_fresh(&first->fpu));
+
+    kernel_fpu_host_resume(second);
+    assert(kernel_fpu_owner == second);
+    assert(memcmp(&first->fpu, &first_state, sizeof(first_state)) == 0);
+    assert(fpu_is_fresh(&kernel_fpu_host_registers));
+
+    /* Resuming the owner does no FPU work. */
+    dirty_fpu_model(2u);
+    kernel_fpu_host_resume(second);
+    assert(kernel_fpu_host_registers.control[0] == 0x20u);
+    assert(fpu_is_fresh(&second->fpu));
+
+    /* Flush saves and keeps ownership; a non-owner flush does nothing. */
+    kernel_fpu_flush(second);
+    assert(kernel_fpu_owner == second);
+    assert(memcmp(&second->fpu, &kernel_fpu_host_registers,
+                  sizeof(second->fpu)) == 0);
+    kernel_fpu_flush(first);
+    assert(memcmp(&first->fpu, &first_state, sizeof(first_state)) == 0);
+
+    /* Invalidate drops only the owner; the next resume loads the record. */
+    kernel_fpu_invalidate(first);
+    assert(kernel_fpu_owner == second);
+    kernel_fpu_invalidate(second);
+    assert(kernel_fpu_owner == NULL);
+    second->fpu.control[0] = 0x30u;
+    kernel_fpu_host_resume(second);
+    assert(kernel_fpu_host_registers.control[0] == 0x30u);
+
+    /* Releasing a non-owner leaves the owner; releasing the owner clears it. */
+    assert(kernel_thread_abort(first) == KERNEL_THREAD_OK);
+    assert(kernel_fpu_owner == second);
+    assert(kernel_thread_abort(second) == KERNEL_THREAD_OK);
+    assert(kernel_fpu_owner == NULL);
+}
+
 int main(void)
 {
     test_record_injection_preserves_pool();
@@ -1133,6 +1225,7 @@ int main(void)
     test_wait_registration_allocation_failure_is_atomic();
     test_wait_set_duplicate_member_is_deterministic();
     test_wait_set_timeout_cancel_and_atomic_admission();
+    test_fpu_ownership_follows_the_restore_path();
     puts("thread tests passed");
     return 0;
 }

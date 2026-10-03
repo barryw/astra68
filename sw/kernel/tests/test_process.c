@@ -12970,6 +12970,33 @@ static void test_private_memory_faults_in_through_the_exception_path(void)
     assert(last_fault_kind == KERNEL_PROCESS_FAULT_PRIVATE_WINDOW);
 }
 
+static KernelThread *only_thread_of(uint32_t process_id)
+{
+    KernelThread *found = NULL;
+
+    for (uint32_t slot = 0u; slot < kernel_thread_slot_limit(); ++slot) {
+        KernelThread *thread = kernel_thread_at(slot);
+
+        if (thread != NULL && thread->process_id == process_id) {
+            assert(found == NULL);
+            found = thread;
+        }
+    }
+    assert(found != NULL);
+    return found;
+}
+
+/* A recognisable FPU register image; FPCR is control[0]. */
+static void fpu_pattern(KernelFpuContext *fpu, uint8_t seed)
+{
+    kernel_fpu_context_reset(fpu);
+    for (uint32_t reg = 0u; reg < 8u; ++reg)
+        for (uint32_t byte = 0u; byte < 12u; ++byte)
+            fpu->data[reg][byte] = (uint8_t)(seed + reg * 12u + byte);
+    fpu->control[0] = 0x10u * seed;
+    fpu->control[1] = 0x01000000u * seed;
+}
+
 static void test_process_clone_returns_twice_and_is_waitable(void)
 {
     static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
@@ -12991,6 +13018,12 @@ static void test_process_clone_returns_twice_and_is_waitable(void)
     assert(kernel_process_create(image, sizeof(image), 0u, 0u,
                                  &parent_id) == KERNEL_PROCESS_OK);
     assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    /*
+     * The parent's live FPU state is in the FPU, newer than its record:
+     * the child must get the live state.
+     */
+    kernel_fpu_host_resume((KernelThread *)next);
+    fpu_pattern(&kernel_fpu_host_registers, 3u);
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
                KERNEL_PROCESS_CODE_BASE + 2u, 0u);
     registers[0] = ASTRA_SYSCALL_PROCESS_CLONE;
@@ -12999,6 +13032,9 @@ static void test_process_clone_returns_twice_and_is_waitable(void)
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     child_handle = next->data[1];
     child_id = next->data[2];
+    assert(memcmp(&only_thread_of(child_id)->fpu, &kernel_fpu_host_registers,
+                  sizeof(KernelFpuContext)) == 0);
+    assert(kernel_fpu_owner == only_thread_of(parent_id));
     assert(child_handle != KERNEL_HANDLE_INVALID && child_id != 0u &&
            child_id != parent_id);
     assert(kernel_process_stats(&stats));
@@ -13403,6 +13439,7 @@ static void test_process_signal_is_capability_checked_and_delivered(void)
     uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
     uint32_t observer_id;
     uint32_t target_id;
+    KernelFpuContext interrupted_fpu;
 
     initialize_test();
     assert(kernel_process_create(image, sizeof(image), 0u, 0u,
@@ -13460,6 +13497,14 @@ static void test_process_signal_is_capability_checked_and_delivered(void)
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
 
+    /*
+     * The target's live FPU state is in the FPU. Delivery must save it, not
+     * the stale record, and start the handler with FPCR and FPSR clear.
+     */
+    kernel_fpu_host_resume(only_thread_of(target_id));
+    fpu_pattern(&kernel_fpu_host_registers, 4u);
+    interrupted_fpu = kernel_fpu_host_registers;
+
     /* The target receives the pending signal on its next user-mode return. */
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_YIELD;
@@ -13473,6 +13518,14 @@ static void test_process_signal_is_capability_checked_and_delivered(void)
                                      sizeof(signal_frame)) ==
            KERNEL_USER_COPY_OK);
     assert(signal_frame[0] == 0u && signal_frame[1] == 2u);
+    assert((KernelThread *)next == only_thread_of(target_id));
+    assert(memcmp(&((KernelThread *)next)->signal_saved_fpu,
+                  &interrupted_fpu, sizeof(interrupted_fpu)) == 0);
+    kernel_fpu_host_resume((KernelThread *)next);
+    assert(kernel_fpu_host_registers.control[0] == 0u &&
+           kernel_fpu_host_registers.control[1] == 0u);
+    /* The handler clobbers everything; returning must undo all of it. */
+    fpu_pattern(&kernel_fpu_host_registers, 5u);
 
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_SIGNAL_RETURN;
@@ -13482,6 +13535,9 @@ static void test_process_signal_is_capability_checked_and_delivered(void)
                                      signal_stack_top - sizeof(signal_frame),
                                      frame, &next) == KERNEL_PROCESS_OK);
     assert(next->program_counter == KERNEL_PROCESS_CODE_BASE + 2u);
+    kernel_fpu_host_resume((KernelThread *)next);
+    assert(memcmp(&kernel_fpu_host_registers, &interrupted_fpu,
+                  sizeof(interrupted_fpu)) == 0);
 
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_PROCESS_EXIT;
