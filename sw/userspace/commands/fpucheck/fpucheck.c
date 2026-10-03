@@ -18,7 +18,8 @@
  *   signals     a handler starts with FPCR 0; its registers do not leak
  *   dirty       leave a pattern in the FPU and exit
  *   fresh       a new process and a new thread see zeros, never a pattern
- *   contract    run fsin, which the MC68040 does not implement
+ *   contract    run fsin, which the MC68040 does not implement; must not
+ *               return
  *   privilege   run fsave, which user mode may not; must not return
  */
 
@@ -396,8 +397,8 @@ check_fresh(void)
 }
 
 /*
- * The MC68040 has no FSIN; silicon takes the F-line vector (11). Until
- * Astra's QEMU does the same, the instruction runs and this says so.
+ * The MC68040 has no FSIN; silicon takes the F-line vector (11), and so
+ * does Astra's QEMU. Printing anything after it is the failure.
  */
 static int
 check_contract(void)
@@ -407,9 +408,9 @@ check_contract(void)
                      :
                      :
                      : "memory");
-    printf("FPU CONTRACT RAN: fsin executed in user mode\n");
+    printf("FPU CONTRACT FAIL: fsin executed in user mode\n");
     fflush(stdout);
-    return 0;
+    return 1;
 }
 
 /* FSAVE is privileged: vector 8, and this process does not come back. */

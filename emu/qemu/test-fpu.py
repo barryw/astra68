@@ -4,8 +4,8 @@
 Boots the terminal image with `fpucheck` installed and runs each of its
 subtests from zsh. A subtest passes when it prints `FPU <NAME> PASS` and
 exits 0. `privilege` must retire the process with vector 8 instead, and
-`contract` reports whether `fsin` ran (it does until Astra's QEMU raises
-F-line for the instructions the MC68040 lacks).
+`contract` -- an `fsin`, which the MC68040 leaves to software -- with the
+F-line vector 11 (qemu-9.2/target-m68k-68040-fpu-unimplemented.patch).
 """
 
 import argparse
@@ -46,6 +46,22 @@ def run_subtest(machine, name, deadline):
         if match:
             return said, int(match.group(1))
     return said, None
+
+
+def retires_with(machine, name, vector, deadline):
+    """The subtest must not return: the kernel retires it with `vector`."""
+    serial_before = len(machine.recent_serial(100000))
+    said, status = run_subtest(machine, name, deadline)
+    serial = machine.recent_serial(100000)[serial_before:]
+    report = " ".join(serial)
+    if (status is not None and status != 0 and "*** user fault" in report
+            and re.search(r"vector %d\b" % vector, report)):
+        print("PASS %s (vector %d)" % (name, vector))
+        return True
+    print("FAIL %s (exit %s)" % (name, status))
+    for line in [l for l in said if "FPU " in l] + serial[-10:]:
+        print("    |%s|" % line)
+    return False
 
 
 def main():
@@ -94,28 +110,13 @@ def main():
                 for line in verdict or said[-20:]:
                     print("    |%s|" % line)
 
-            said, status = run_subtest(machine, "contract",
-                                       args.command_deadline)
-            if status == 0 and any("FPU CONTRACT RAN" in l for l in said):
-                print("NOTE contract: fsin ran; the F-line overlay is not "
-                      "in this QEMU")
-            else:
-                print("NOTE contract: fsin did not run (exit %s)" % status)
+            if not retires_with(machine, "contract", 11,
+                                args.command_deadline):
+                failures.append("contract")
 
-            serial_before = len(machine.recent_serial(100000))
-            said, status = run_subtest(machine, "privilege",
-                                       args.command_deadline)
-            serial = machine.recent_serial(100000)[serial_before:]
-            report = " ".join(serial)
-            if (status is not None and status != 0 and
-                    "*** user fault" in report and
-                    re.search(r"vector 8\b", report)):
-                print("PASS privilege")
-            else:
+            if not retires_with(machine, "privilege", 8,
+                                args.command_deadline):
                 failures.append("privilege")
-                print("FAIL privilege (exit %s)" % status)
-                for line in [l for l in said if "FPU " in l] + serial[-10:]:
-                    print("    |%s|" % line)
         finally:
             machine.close()
     if failures:

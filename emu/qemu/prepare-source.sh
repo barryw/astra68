@@ -199,6 +199,8 @@ patch -d "$STAGED_SOURCE" -p1 --forward \
     < "$OVERLAY/accel-tcg-jmp-cache-mmuidx.patch" >&2
 patch -d "$STAGED_SOURCE" -p1 --forward \
     < "$OVERLAY/target-m68k-host-float.patch" >&2
+patch -d "$STAGED_SOURCE" -p1 --forward \
+    < "$OVERLAY/target-m68k-68040-fpu-unimplemented.patch" >&2
 
 {
     printf 'qemu_version=%s\n' "$QEMU_VERSION"
