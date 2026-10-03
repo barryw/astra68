@@ -14,15 +14,15 @@ big-endian m68k and 2-byte alignment are exercised upstream.
    `SDL_config_minimal.h`'s `SDL_JOYSTICK_DISABLED`. Enable the dummy and
    virtual joystick drivers now, a native gamepad driver later.
 2. **C++23 delivery (toolchain + NDK).** GCC 16.2 compiles C++23 and
-   `cxx.library.1`/`unwind.library.1` run exceptions, RTTI and threads in
+   `cxx.library.2`/`unwind.library.1` run exceptions, RTTI and threads in
    QEMU, but the g++ driver links statically by default (CD#3), there is no
    CMake toolchain file or `Platform/Astra.cmake`, and SDL.kit publishes no
    `SDL2Config.cmake`/`sdl2-image` packages. Gate: a C++23 program using
    `std::format`, `std::expected`, `std::filesystem` in QEMU.
 3. **Float in the audio path.** DevilutionX mixes through SDL_audiolib, a
    float pipeline (decode, gain, pan with `std::pow`, conversion) that
-   cannot be configured away; on `-msoft-float` it is likely the largest
-   CPU cost. Userspace FPU (decided: allowed) or fast float helpers.
+   cannot be configured away; under soft float it was likely the largest
+   CPU cost. Userspace is hard float now (`USERSPACE_FPU.md`).
 4. **Scaled present (RTL + renderer).** CD#4 with worse defaults: linear
    upscale plus fit-to-screen, about 1 s per frame on the texture engine.
 5. **Palettized present (managed graphics + SDL video backend).** The game

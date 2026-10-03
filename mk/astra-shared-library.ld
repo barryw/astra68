@@ -122,10 +122,16 @@ SECTIONS
     HIDDEN(__astra_writable_end = .);
     HIDDEN(__astra_image_end = .);
 
+    /*
+     * The float ABI tag (Tag_GNU_M68K_ABI_FP). Not loaded, but kept: it makes
+     * the linker refuse a program built for the other float ABI against this
+     * library (docs/USERSPACE_FPU.md).
+     */
+    .gnu.attributes 0 : { KEEP(*(.gnu.attributes)) }
+
     /DISCARD/ : {
         *(.comment)
         *(.note.GNU-stack)
-        *(.gnu.attributes)
         *(.eh_frame_hdr)
     }
 }

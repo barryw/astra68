@@ -8,7 +8,7 @@ icon resources/InterfaceGallery.aicon
 capability GUI
 capability CLIPBOARD
 capability LIBS:r
-requires compiler.library 1 1.0.0
+requires compiler.library 2 2.0.0
 requires filesystem.library 4 4.0.0
 requires graphics.library 2 2.1.0
 requires interface.library 5 5.2.0

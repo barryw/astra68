@@ -7,7 +7,7 @@ executable bin/m68k-68040/SDLTestGeometry
 icon resources/SDLTestGeometry.aicon
 capability GUI
 capability LIBS:r
-requires SDL2.library 2 2.32.10
-requires libc.library 2 2.0.0
+requires SDL2.library 3 2.32.10
+requires libc.library 3 3.0.0
 requires runtime.library 1 1.6.0
-requires compiler.library 1 1.0.0
+requires compiler.library 2 2.0.0

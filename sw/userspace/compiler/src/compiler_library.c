@@ -10,5 +10,5 @@
 #include <astra/library.h>
 
 ASTRA_DYNAMIC_LIBRARY(
-    "compiler.library.1", 1, 0, 0, 1, 0,
+    "compiler.library.2", 2, 0, 0, 2, 0,
     "Astra68/GCC", "Copyright 2026 Astra68/GCC");

@@ -10,7 +10,7 @@ COMPILER := ../compiler
 STREAMS := ../streams
 VFS := ../vfs
 LIBSTDCPP := $(shell $(CXX) -print-file-name=libstdc++_shared.a)
-LIBRARY := build/m68k/libraries/cxx.library.1
+LIBRARY := build/m68k/libraries/cxx.library.2
 LIBRARY_IDENTITY := build/m68k/cxx_library.o
 LIBRARY_MAP := build/m68k/cxx.library.exports
 LIBRARY_UNDEFINED := build/m68k/cxx.library.undefined
@@ -18,9 +18,9 @@ LIBRARY_CONTRACT_STAMP := build/m68k/cxx.library.inputs
 EXTRA_EXPORTS := cxx.extra.exports
 CONTRACT_TOOL := ../../../tools/generate_archive_contract.py
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
-LIBC_LIBRARY := $(POSIX)/build/m68k/libraries/libc.library.2
+LIBC_LIBRARY := $(POSIX)/build/m68k/libraries/libc.library.3
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
-COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.1
+COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 UNWIND_LIBRARY := $(COMPILER)/build/m68k/libraries/unwind.library.1
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
@@ -77,14 +77,14 @@ $(LIBRARY): $(LIBRARY_IDENTITY) $(LIBRARY_MAP) $(LIBRARY_UNDEFINED) \
 		| unwind-library-ready
 	@mkdir -p $(@D)
 	$(CXX) $(ASTRA_TARGET_ABI_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,cxx.library.1 -Wl,--version-script=$(LIBRARY_MAP) \
+		-Wl,-soname,cxx.library.2 -Wl,--version-script=$(LIBRARY_MAP) \
 		-Wl,@$(LIBRARY_UNDEFINED) -o $@ $(LIBRARY_IDENTITY) \
 		-L$(dir $(LIBC_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(COMPILER_LIBRARY)) \
 		-Wl,-rpath-link,$(abspath $(STREAMS)/build/m68k/libraries) \
 		-Wl,-rpath-link,$(abspath $(VFS)/build/m68k/libraries) \
-		-Wl,--no-as-needed -Wl,-l:libc.library.2 \
-		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1 \
+		-Wl,--no-as-needed -Wl,-l:libc.library.3 \
+		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		-Wl,-l:unwind.library.1 -Wl,--start-group \
 		$(LIBSTDCPP) -Wl,--end-group $(ASTRA_SHARED_LINK_END)
 
@@ -96,11 +96,11 @@ cxx-library-contract: $(LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(LIBRARY_MAP) $(LIBRARY)
 	@python3 ../../../tools/library_info.py $< | \
-		grep -q '^cxx.library.1 1.0.0 ABI 1.0$$'
-	@$(READELF) -dW $< | grep -Fq 'Library soname: [cxx.library.1]'
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [libc.library.2]')" = 1
+		grep -q '^cxx.library.2 2.0.0 ABI 2.0$$'
+	@$(READELF) -dW $< | grep -Fq 'Library soname: [cxx.library.2]'
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [libc.library.3]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.1]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [unwind.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 4
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'

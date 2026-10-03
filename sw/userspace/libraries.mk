@@ -10,7 +10,7 @@ ASTRA_REPOSITORY_ROOT := $(abspath $(ASTRA_USERSPACE_ROOT)/../..)
 ASTRA_SYSTEM_LIBRARY := \
 	$(ASTRA_REPOSITORY_ROOT)/ndk/build/m68k/libraries/system.library.2
 ASTRA_COMPILER_LIBRARY := \
-	$(ASTRA_USERSPACE_ROOT)/compiler/build/m68k/libraries/compiler.library.1
+	$(ASTRA_USERSPACE_ROOT)/compiler/build/m68k/libraries/compiler.library.2
 ASTRA_UNWIND_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/compiler/build/m68k/libraries/unwind.library.1
 ASTRA_RUNTIME_LIBRARY := \
@@ -20,13 +20,13 @@ ASTRA_STREAMS_LIBRARY := \
 ASTRA_FILESYSTEM_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/vfs/build/m68k/libraries/filesystem.library.4
 ASTRA_LIBC_LIBRARY := \
-	$(ASTRA_USERSPACE_ROOT)/posix/build/m68k/libraries/libc.library.2
+	$(ASTRA_USERSPACE_ROOT)/posix/build/m68k/libraries/libc.library.3
 ASTRA_TERMINFO_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/terminfo/build/m68k/libraries/terminfo.library.6
 ASTRA_CXX_LIBRARY := \
-	$(ASTRA_USERSPACE_ROOT)/cxx/build/m68k/libraries/cxx.library.1
+	$(ASTRA_USERSPACE_ROOT)/cxx/build/m68k/libraries/cxx.library.2
 ASTRA_LUA_LIBRARY := \
-	$(ASTRA_USERSPACE_ROOT)/lua/build/m68k/libraries/lua.library.5
+	$(ASTRA_USERSPACE_ROOT)/lua/build/m68k/libraries/lua.library.6
 ASTRA_NTP_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/ntp/build/m68k/libraries/ntp.library.1
 ASTRA_GRAPHICS_LIBRARY := \
@@ -42,13 +42,13 @@ ASTRA_CONFIG_LIBRARY := \
 ASTRA_PCM_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/audio/build/m68k/libraries/pcm.library.2
 ASTRA_SDL2_LIBRARY := \
-	$(ASTRA_USERSPACE_ROOT)/sdl2/build/m68k/libraries/SDL2.library.2
+	$(ASTRA_USERSPACE_ROOT)/sdl2/build/m68k/libraries/SDL2.library.3
 ASTRA_SDL2_NET_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/sdl2/build/m68k/libraries/SDL2_net.library.2
 ASTRA_SDL2_IMAGE_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/sdl2/build/m68k/libraries/SDL2_image.library.2
 ASTRA_SDL2_MIXER_LIBRARY := \
-	$(ASTRA_USERSPACE_ROOT)/sdl2/build/m68k/libraries/SDL2_mixer.library.2
+	$(ASTRA_USERSPACE_ROOT)/sdl2/build/m68k/libraries/SDL2_mixer.library.3
 ASTRA_SDL2_TTF_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/sdl2/build/m68k/libraries/SDL2_ttf.library.2
 ASTRA_LOADER_LIBRARY := \

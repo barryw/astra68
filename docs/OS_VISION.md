@@ -207,7 +207,7 @@ The active hardware baseline is:
 - the Arty Z7-20's 512 MiB DDR divided into 128 MiB of Astra guest RAM, 128 MiB
   of graphics RAM, and 256 MiB for Linux and host services;
 - full supervisor/user separation and paged address translation;
-- no hardware FPU, with soft-float where needed;
+- the MC68040's FPU for userspace (hard-float ABI); the kernel stays float-free;
 - Arty Vega/Astraea graphics as frozen by `GRAPHICS_ARCHITECTURE.md`, including
   1920x1080p60, two-axis ring scrolling, two independently scrolling tile
   layers, and exactly 64 hardware sprites. Sprite 0 is the optional desktop

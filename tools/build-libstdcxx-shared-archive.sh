@@ -43,7 +43,12 @@ test -n "$srcdir" || {
     echo "$0: cannot determine libstdc++ source directory" >&2
     exit 1
 }
-srcdir=$(CDPATH= cd -- "$build_dir/$srcdir" && pwd)
+# configure records the source path as given: relative to the build
+# directory, or absolute.
+case "$srcdir" in
+    /*) srcdir=$(CDPATH= cd -- "$srcdir" && pwd) ;;
+    *) srcdir=$(CDPATH= cd -- "$build_dir/$srcdir" && pwd) ;;
+esac
 configure=$srcdir/configure
 test -x "$configure" || {
     echo "$0: missing libstdc++ configure script: $configure" >&2

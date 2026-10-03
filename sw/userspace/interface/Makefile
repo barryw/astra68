@@ -27,7 +27,7 @@ GRAPHICS_LIBRARY := $(GRAPHICS)/build/m68k/libraries/graphics.library.2
 FONT_LIBRARY := $(GRAPHICS)/build/m68k/libraries/font.library.2
 SYSTEM_LIBRARY := $(NDK)/build/m68k/libraries/system.library.2
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
-COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.1
+COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 INTERFACE_HOST_TEST := build/host/test_interface
 TEXT_SURFACE_HOST_TEST := build/host/test_text_surface
@@ -103,7 +103,7 @@ $(INTERFACE_TARGET): $(INTERFACE_OBJECTS) $(INTERFACE_LIBRARY_MAP) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
 		-Wl,--no-as-needed -Wl,-l:graphics.library.2 \
 		-Wl,-l:font.library.2 -Wl,-l:system.library.2 \
-		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1 \
+		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		$(ASTRA_SHARED_LINK_END)
 
 library-contract: $(INTERFACE_TARGET)
@@ -130,7 +130,7 @@ library-contract: $(INTERFACE_TARGET)
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
-		grep -Fc 'Shared library: [compiler.library.1]')" = 1
+		grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		awk '/NEEDED/{n++} END{print n+0}')" = 5
 	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET))

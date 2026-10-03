@@ -1,9 +1,7 @@
 # Userspace FPU for Astra 68
 
-Status: revision 0.3 (2026-10-03). Phases 0-2 done: kernel FPU context
-implemented and gated; hard-float toolchain built in a copy of the prefix
-(`~/astra-toolchain/prefix-hardfp`), not installed. Phase 3 (flag day) not
-started.
+Status: revision 0.4 (2026-10-03). Phases 0-3 done: userspace is hard
+float. Board measurement pending.
 Status words follow `KERNEL_ARCHITECTURE.md`: **LOCKED**, **CURRENT**,
 **PLANNED**, **MISSING**.
 
@@ -805,6 +803,32 @@ This phase is safe to ship on its own: nothing else uses the FPU yet.
 - Run the full gate set (`~/astra-mg/gates.sh`), Chocolate Doom and the SDL
   audio and mixer gates.
 - Record DE25 Doom host time before and after.
+
+**Phase 3 result (2026-10-03).**
+
+- The hard-float prefix replaced the live one (the soft prefix is
+  `~/astra-toolchain/backup-20261003-softfp`); GCC relocated cleanly.
+- `mk/m68k-cross.mk`, `ndk/Makefile` and `ndk/make/astra-native.mk` no longer
+  name a float ABI. The kernel, the boot firmware and the bare-metal host
+  benchmark keep `-msoft-float`.
+- Majors bumped (soname, Kit ABI, identity): compiler.library 1 -> 2,
+  libc.library 2 -> 3, cxx.library 1 -> 2, lua.library 5 -> 6 (version
+  5.5.1 kept), SDL2.library 2 -> 3 and SDL2_mixer.library 2 -> 3 (upstream
+  versions kept). Kit manifests and Kit paths follow.
+- **The shared runtime archives had to be rebuilt by hand.**
+  `libgcc_builtins_shared.a`, `libgcc_unwind_shared.a` and
+  `libstdc++_shared.a` come from `tools/build-libgcc-shared-archives.sh` and
+  `tools/build-libstdcxx-shared-archive.sh`, not from GCC's install. The
+  copied prefix carried the soft-float ones, untagged, so everything linked;
+  `compiler.library`'s `__floatdidf` returned in D0/D1 and Lua printed
+  `1/2` as `1.0`. Only the terminal gate's Lua check and SDL testtimer saw
+  it; Doom and the rest passed.
+- Both user linker scripts discarded `.gnu.attributes`, so no shipped image
+  carried the tag; they keep it now, and the libc contract requires
+  `Tag_GNU_M68K_ABI_FP: hard float`.
+- `verify-then-publish.sh` (kernel and userspace tests, every gate, desktop,
+  service policy, power, remote desktop, filesystem stress, mailbox,
+  providers, NDK, SDL, display, ext4) passes from fresh build trees.
 
 **Phase 4 (optional, PLANNED).** Null-frame fidelity in QEMU plus null-frame
 laziness in the kernel (2.2), only if phase 1 shows the switch cost matters.

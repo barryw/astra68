@@ -216,6 +216,15 @@ There is no alternative CPU or emulator implementation in the repository.
   whatever the emulator does. A save/load pair in either order passes
   every round-trip test; it shows only when code writes one field (the
   signal handler's FPCR reset did). `docs/USERSPACE_FPU.md`, phase 1.
+- **Rebuilding GCC does not rebuild the shared runtime archives.**
+  `libgcc_builtins_shared.a`, `libgcc_unwind_shared.a` and
+  `libstdc++_shared.a` are made by `tools/build-libgcc-shared-archives.sh`
+  and `tools/build-libstdcxx-shared-archive.sh` from the GCC build tree, and
+  `compiler.library`/`cxx.library` are linked from them. At the hard-float
+  flag day a copied prefix kept the old soft-float ones: every program
+  linked, `compiler.library`'s `__floatdidf` returned in D0/D1, and Lua
+  printed `1/2` as `1.0`. Old archives carry no float tag, so the linker
+  could not object. Rerun both scripts after any toolchain rebuild.
 - **The kernel is float-free by a link-time check.**
   `tools/check_kernel_float_free.py` fails the kernel link on any FPU
   instruction outside `_kernel_restore_user_context` and

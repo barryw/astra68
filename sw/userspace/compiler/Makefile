@@ -15,7 +15,7 @@ READELF := $(CROSS)readelf
 # archives so they can be linked under Astra's own DSO layout and identity.
 BUILTINS_ARCHIVE := $(shell $(CC) -print-file-name=libgcc_builtins_shared.a)
 UNWIND_ARCHIVE := $(shell $(CC) -print-file-name=libgcc_unwind_shared.a)
-LIBRARY := build/m68k/libraries/compiler.library.1
+LIBRARY := build/m68k/libraries/compiler.library.2
 IDENTITY := build/m68k/compiler_library.o
 EXPORTS := build/m68k/compiler.library.exports
 UNDEFINED := build/m68k/compiler.library.undefined
@@ -31,7 +31,7 @@ CONTRACT_TOOL := ../../../tools/generate_archive_contract.py
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 POSIX := ../posix
 RUNTIME := ../runtime
-LIBC_LIBRARY := $(POSIX)/build/m68k/libraries/libc.library.2
+LIBC_LIBRARY := $(POSIX)/build/m68k/libraries/libc.library.3
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
@@ -71,7 +71,7 @@ $(LIBRARY): $(IDENTITY) $(EXPORTS) $(UNDEFINED) $(BUILTINS_ARCHIVE) \
 		$(ASTRA_SHARED_LINK_INPUTS)
 	@mkdir -p $(@D)
 	$(CC) $(ASTRA_TARGET_ABI_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,compiler.library.1 \
+		-Wl,-soname,compiler.library.2 \
 		-Wl,--version-script=$(EXPORTS) -Wl,@$(UNDEFINED) \
 		-o $@ $(IDENTITY) $(BUILTINS_ARCHIVE) $(ASTRA_SHARED_LINK_END)
 
@@ -80,8 +80,8 @@ compiler-library-contract: $(LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(EXPORTS) $(LIBRARY)
 	@python3 ../../../tools/library_info.py $< | \
-		grep -q '^compiler.library.1 1.0.0 ABI 1.0$$'
-	@$(READELF) -dW $< | grep -Fq 'Library soname: [compiler.library.1]'
+		grep -q '^compiler.library.2 2.0.0 ABI 2.0$$'
+	@$(READELF) -dW $< | grep -Fq 'Library soname: [compiler.library.2]'
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 0
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'
@@ -120,8 +120,8 @@ $(UNWIND_LIBRARY): $(UNWIND_IDENTITY) $(UNWIND_EXPORTS) \
 		-Wl,@$(UNWIND_UNDEFINED) -o $@ $(UNWIND_IDENTITY) \
 		-L$(dir $(LIBC_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(LIBRARY)) \
-		-Wl,--no-as-needed -Wl,-l:libc.library.2 \
-		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1 \
+		-Wl,--no-as-needed -Wl,-l:libc.library.3 \
+		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		$(UNWIND_ARCHIVE) $(ASTRA_SHARED_LINK_END)
 
 unwind-library-contract: $(UNWIND_LIBRARY)
@@ -133,9 +133,9 @@ unwind-library-contract: $(UNWIND_LIBRARY)
 	@python3 ../../../tools/library_info.py $< | \
 		grep -q '^unwind.library.1 1.0.0 ABI 1.0$$'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [unwind.library.1]'
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [libc.library.2]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [libc.library.3]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.1]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 3
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'

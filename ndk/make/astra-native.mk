@@ -6,7 +6,7 @@ ASTRA_CXX ?= $(ASTRA_CROSS)g++
 ASTRA_READELF ?= $(ASTRA_CROSS)readelf
 
 ASTRA_CPPFLAGS ?= -I$(ASTRA_NDK_ROOT)/include
-ASTRA_ABI_FLAGS ?= -m68040 -msoft-float -ffixed-a4 -D__astra__=1
+ASTRA_ABI_FLAGS ?= -m68040 -ffixed-a4 -D__astra__=1
 ASTRA_CFLAGS ?= $(ASTRA_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections -fPIC -ftls-model=initial-exec
 ASTRA_CXXFLAGS ?= $(ASTRA_ABI_FLAGS) -Os \
@@ -23,7 +23,7 @@ ASTRA_LDFLAGS ?= -nostdlib -pie -Wl,-Bdynamic -Wl,--no-as-needed \
 	-T $(ASTRA_LINKER_SCRIPT) $(ASTRA_LIBRARY_SEARCH_FLAGS)
 ASTRA_CRT0 ?= $(ASTRA_LIB_DIR)/crt0-dynamic.o
 ASTRA_NATIVE_LIBS ?= -Wl,-l:runtime.library.1 \
-	-Wl,-l:compiler.library.1
+	-Wl,-l:compiler.library.2
 ASTRA_DYNAMIC_EXECUTABLE_CHECK ?= \
 	$(ASTRA_NDK_ROOT)/tools/check_dynamic_executable.py
 

@@ -57,7 +57,7 @@ LOADER_PIC_OBJECTS := $(DYNAMIC_PIC_OBJECTS) \
 	build/m68k/dynamic/dynamic_process.o
 DYNAMIC_IDENTITY := build/m68k/dynamic/runtime_library.o
 DYNAMIC_LIBRARY := build/m68k/libraries/runtime.library.1
-COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.1
+COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 DYNAMIC_LIBRARY_LD := $(ASTRA_SHARED_LINK_INPUTS)
 DYNAMIC_LIBRARY_MAP := runtime.library.exports
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
@@ -156,7 +156,7 @@ $(DYNAMIC_LIBRARY): $(DYNAMIC_IDENTITY) $(DYNAMIC_PIC_OBJECTS) \
 		-o $@ \
 		$(DYNAMIC_IDENTITY) $(DYNAMIC_PIC_OBJECTS) \
 		-L$(dir $(COMPILER_LIBRARY)) -Wl,--no-as-needed \
-		-Wl,-l:compiler.library.1 $(ASTRA_SHARED_LINK_END)
+		-Wl,-l:compiler.library.2 $(ASTRA_SHARED_LINK_END)
 
 $(KERNEL_ELF_TEST):
 	$(MAKE) -C ../../kernel build/test_elf
@@ -177,7 +177,7 @@ runtime-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 	@$(READELF) -dW $< | grep -F 'Library soname: [runtime.library.1]' >/dev/null
 	@$(READELF) -dW $< | grep 'BIND_NOW' >/dev/null
 	@test "$$($(READELF) -dW $< | \
-		grep -Fc 'Shared library: [compiler.library.1]')" = 1
+		grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 1
 	@test "$$($(READELF) -dW $< | awk '/TEXTREL/{n++} END{print n+0}')" = 0
 	@test "$$($(READELF) -SW $< | \

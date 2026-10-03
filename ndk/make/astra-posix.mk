@@ -24,11 +24,11 @@ ASTRA_STATIC_CXX_CRTBEGIN ?= \
 	$(shell $(ASTRA_CXX) -print-file-name=crtbegin.o)
 ASTRA_STATIC_CXX_CRTEND ?= \
 	$(shell $(ASTRA_CXX) -print-file-name=crtend.o)
-ASTRA_POSIX_LIBS ?= -Wl,-l:libc.library.2 \
-	-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1
-ASTRA_POSIX_CXX_LIBS ?= -Wl,-l:cxx.library.1 \
-	-Wl,-l:libc.library.2 -Wl,-l:runtime.library.1 \
-	-Wl,-l:unwind.library.1 -Wl,-l:compiler.library.1
+ASTRA_POSIX_LIBS ?= -Wl,-l:libc.library.3 \
+	-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2
+ASTRA_POSIX_CXX_LIBS ?= -Wl,-l:cxx.library.2 \
+	-Wl,-l:libc.library.3 -Wl,-l:runtime.library.1 \
+	-Wl,-l:unwind.library.1 -Wl,-l:compiler.library.2
 
 # Static POSIX images are an explicit self-contained mode rather than the
 # default. They must opt in at the link call site; Astra itself uses that mode

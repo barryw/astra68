@@ -3,14 +3,14 @@ kind kit
 id org.astra.sdl
 name "SDL Kit"
 version 2.32.10
-provides SDL2.library 2 2.32.10
+provides SDL2.library 3 2.32.10
 provides SDL2_net.library 2 2.4.0
 provides SDL2_image.library 2 2.8.12
-provides SDL2_mixer.library 2 2.8.2
+provides SDL2_mixer.library 3 2.8.2
 provides SDL2_ttf.library 2 2.24.0
 requires pcm.library 2 2.3.0
 requires graphics.library 2 2.1.0
 requires system.library 2 2.7.0
-requires libc.library 2 2.0.0
+requires libc.library 3 3.0.0
 requires runtime.library 1 1.5.0
-requires compiler.library 1 1.0.0
+requires compiler.library 2 2.0.0

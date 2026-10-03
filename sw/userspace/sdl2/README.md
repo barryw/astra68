@@ -205,7 +205,7 @@ compatibility API; Astra's planned generic Codec Kit remains separate so
 native applications need not depend on SDL or understand per-format contracts.
 
 SDL_mixer 2.8.2 is pinned in the same disposable add-on overlay and shipped
-unchanged as `SDL2_mixer.library.2`. Built-in WAV/AIFF/VOC, minimp3, stb Vorbis,
+unchanged as `SDL2_mixer.library.3`. Built-in WAV/AIFF/VOC, minimp3, stb Vorbis,
 and dr_flac readers avoid external codec libraries. A fresh Beast-hosted QEMU
 image passed ten consecutive `SDLMixerProbe.app` runs that loaded and started
 MP3, OGG, and FLAC music, rejected invalid WAV/music bytes, and started 16

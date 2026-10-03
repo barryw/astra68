@@ -3,5 +3,5 @@
 #include <astra/library.h>
 
 ASTRA_DYNAMIC_LIBRARY(
-    "lua.library.5", 5, 5, 1, 5, 5,
+    "lua.library.6", 5, 5, 1, 6, 0,
     "Lua.org, PUC-Rio", "Copyright 1994-2026 Lua.org, PUC-Rio");

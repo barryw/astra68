@@ -17,7 +17,7 @@ heaps.
 - Linux and host services: the remainder of the 1 GiB HPS LPDDR4A device.
 - Primary display: 1920x1080 at 60 Hz.
 - One RGB565 scanout surface: `1920 * 1080 * 2 = 4,147,200` bytes.
-- CPU: QEMU TCG MC68040 without hardware FPU, approximately 72 MHz equivalent.
+- CPU: QEMU TCG MC68040 with its FPU (userspace hard float, `USERSPACE_FPU.md`), approximately 72 MHz equivalent.
 
 ## 2. Resource policy
 

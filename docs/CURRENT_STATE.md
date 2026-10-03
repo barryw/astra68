@@ -129,7 +129,7 @@ The SDL2 port has a pinned, disposable source overlay and a first Astra PCM
 audio backend in `sw/userspace/sdl2/`; upstream SDL is unchanged. Beast host
 and MC68040 audio-adapter tests pass, including missing/broken PCM cases.
 The full SDL2 core and test archives cross-compile with Astra PIC/ABI flags.
-The core now links as `SDL2.library.2`, uses SDL's upstream export list, and
+The core now links as `SDL2.library.3`, uses SDL's upstream export list, and
 ships in `SDL.kit` through the normal provider index. The unchanged upstream
 examples link to that shared library. In a fresh Beast-hosted QEMU image with
 the Kit, upstream `testver` exits zero and a public-API probe selects the
@@ -153,7 +153,7 @@ An SDL Astra video/input backend now builds in the disposable overlay, with
 host positive/negative adapter tests. The shared POSIX entry adapter sends
 startup-ready before invoking an upstream app's `main`, so an indefinite GUI
 event loop cannot stall Supervisor boot. Unchanged upstream `testdraw2` builds
-against `SDL2.library.2`. A fresh Beast-hosted QEMU image auto-launched an SDL
+against `SDL2.library.3`. A fresh Beast-hosted QEMU image auto-launched an SDL
 window probe, reached `SDL_VIDEO_READY` after presentation, and completed six
 display submissions including 63 blits. The same image with unmodified
 upstream `testdraw2` booted to stage 8, rendered, accepted Escape, and exited
@@ -178,7 +178,7 @@ accepted a misleading filename by content, and rejected corrupt and missing
 inputs. PNG/JPEG save-and-load round trips and invalid-save rejection passed
 in the same QEMU gate using upstream's built-in encoders. AVIF/JXL/TIFF/WebP
 readers are not enabled. Unmodified SDL_mixer 2.8.2 now
-builds as `SDL2_mixer.library.2` in the same Kit with built-in WAV, MP3, OGG,
+builds as `SDL2_mixer.library.3` in the same Kit with built-in WAV, MP3, OGG,
 and FLAC support. A fresh QEMU image passed ten consecutive runs loading and
 starting all four formats, rejecting malformed WAV/music input, and starting
 16 simultaneous mixed channels with SDL's dummy audio driver. This is not

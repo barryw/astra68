@@ -50,7 +50,7 @@ LIBRARY_OBJECTS := $(patsubst src/%.c,build/m68k/library/%.o,$(LIBRARY_SOURCES))
 ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(SOURCES))
 LIB := build/m68k/libastraposix.a
 PIC_LIB := build/m68k/libastraposix-pic.a
-LIBC_LIBRARY := build/m68k/libraries/libc.library.2
+LIBC_LIBRARY := build/m68k/libraries/libc.library.3
 LIBC_IDENTITY := build/m68k/library/libc_library.o
 LIBC_EXPORT_SOURCE := libc.posix.exports
 LIBC_DATA_SOURCE := libc.data.exports
@@ -68,7 +68,7 @@ SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 PICOLIBC_LIB := $(PICOLIBC)/lib/libc.a
 PICOLIBC_MATH := $(PICOLIBC)/lib/libm.a
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
-COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.1
+COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 STREAMS_LIBRARY := $(STREAMS)/build/m68k/libraries/streams.library.1
 FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.4
 NETWORK_LIBRARY := $(NETWORK)/build/m68k/libraries/network.library.1
@@ -197,7 +197,7 @@ $(LIBC_LIBRARY): $(LIBC_IDENTITY) $(LIBRARY_OBJECTS) \
 		| libraries-ready
 	@mkdir -p $(@D)
 	$(CC) $(ASTRA_TARGET_ABI_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,libc.library.2 \
+		-Wl,-soname,libc.library.3 \
 		-Wl,--version-script=$(LIBC_EXPORTS) \
 		-Wl,@$(LIBC_UNDEFINED) -o $@ \
 		$(LIBC_IDENTITY) $(LIBRARY_OBJECTS) \
@@ -207,7 +207,7 @@ $(LIBC_LIBRARY): $(LIBC_IDENTITY) $(LIBRARY_OBJECTS) \
 		-Wl,--no-as-needed \
 		-Wl,-l:streams.library.1 -Wl,-l:filesystem.library.4 \
 		-Wl,-l:network.library.1 \
-		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1 \
+		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		-Wl,--start-group $(PICOLIBC_LIB) $(PICOLIBC_MATH) \
 		-Wl,--end-group $(ASTRA_SHARED_LINK_END)
 
@@ -219,9 +219,12 @@ libc-library-contract: $(LIBC_LIBRARY)
 	@python3 $(LIBC_EXPORT_CHECK) --readelf $(READELF) \
 		$(LIBC_EXPORTS) $(LIBC_LIBRARY)
 	@python3 ../../../tools/library_info.py $(LIBC_LIBRARY) | \
-		grep -q '^libc.library.2 2.0.0 ABI 2.0$$'
+		grep -q '^libc.library.3 3.0.0 ABI 3.0$$'
 	@$(READELF) -hW $(LIBC_LIBRARY) | grep -q 'Type:.*DYN'
-	@$(READELF) -dW $(LIBC_LIBRARY) | grep -Fq 'Library soname: [libc.library.2]'
+	@# The float ABI tag survives the link, so a soft-float program cannot
+	@# link against libc (docs/USERSPACE_FPU.md).
+	@$(READELF) -A $(LIBC_LIBRARY) | grep -q 'Tag_GNU_M68K_ABI_FP: hard float'
+	@$(READELF) -dW $(LIBC_LIBRARY) | grep -Fq 'Library soname: [libc.library.3]'
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
 		grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
@@ -229,7 +232,7 @@ libc-library-contract: $(LIBC_LIBRARY)
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
 		grep -Fc 'Shared library: [filesystem.library.4]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
-		grep -Fc 'Shared library: [compiler.library.1]')" = 1
+		grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
 		grep -Fc 'Shared library: [network.library.1]')" = 1
 	@$(READELF) -dW $(LIBC_LIBRARY) | grep -q 'BIND_NOW'
@@ -475,8 +478,8 @@ $(LINK_CONTRACT): tests/link_standard_main.c kit/program.c $(LIBC_LIBRARY) \
 	@$(READELF) -lW $@ | grep -q ' INTERP '
 	@$(READELF) -p .interp $@ | grep -q 'loader.library.1'
 	@python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
-		--needed libc.library.2 --needed runtime.library.1 \
-		--needed compiler.library.1 $@
+		--needed libc.library.3 --needed runtime.library.1 \
+		--needed compiler.library.2 $@
 	@echo "astra posix dynamic standard main link: PASS"
 
 test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) $(IDENTITY_TEST) $(PROCESS_TEST) $(SIGNAL_TEST) $(SOCKET_ADDRESS_TEST) $(HOST_LOOKUP_TEST) $(INTERFACE_TEST) $(PTHREAD_TEST) $(RESOURCE_TEST) $(SCHEDULING_TEST) $(HEAP_TEST) $(ALLOC_TEST) $(UNISTD_COMPAT_TEST) $(ENTROPY_TEST) $(EXEC_COMPAT_TEST) $(DIRENT_COMPAT_TEST) $(TIME_COMPAT_TEST) $(TEMP_COMPAT_TEST) $(LIMITS_CONTRACT) $(SYSMACROS_CONTRACT) $(CXX_HEADERS_CONTRACT) $(LINK_CONTRACT) $(CXX_LINK_CONTRACT)

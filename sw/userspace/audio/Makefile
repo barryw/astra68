@@ -16,7 +16,7 @@ OBJECTS := build/m68k/pcm_library.o build/m68k/midi_library.o \
 	build/m68k/pcm_library_identity.o
 EXPORTS := pcm.library.exports
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
-COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.1
+COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 
 all: $(TARGET) library-contract
 library: $(TARGET)
@@ -37,7 +37,7 @@ $(TARGET): $(OBJECTS) $(EXPORTS) $(ASTRA_SHARED_LINK_INPUTS) | runtime-library-r
 		-Wl,--version-script=$(EXPORTS) $(OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
 		-Wl,--no-as-needed -Wl,-l:runtime.library.1 \
-		-Wl,-l:compiler.library.1 $(ASTRA_SHARED_LINK_END)
+		-Wl,-l:compiler.library.2 $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(TARGET)
 	@python3 ../../../tools/check_shared_library_layout.py $(TARGET)

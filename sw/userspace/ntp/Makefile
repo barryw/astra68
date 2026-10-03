@@ -26,9 +26,9 @@ LIBRARY := build/m68k/libraries/ntp.library.1
 LIBRARY_IDENTITY := build/m68k/dynamic/ntp_library.o
 LIBRARY_OBJECTS := $(patsubst src/%.c,build/m68k/dynamic/%.o,$(SOURCES))
 LIBRARY_MAP := ntp.library.exports
-LIBC_LIBRARY := $(POSIX)/build/m68k/libraries/libc.library.2
+LIBC_LIBRARY := $(POSIX)/build/m68k/libraries/libc.library.3
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
-COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.1
+COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 HOST_TEST := build/host/test_ntp_core
 
@@ -66,8 +66,8 @@ $(LIBRARY): $(LIBRARY_IDENTITY) $(LIBRARY_OBJECTS) $(LIBRARY_MAP) \
 		-L$(dir $(COMPILER_LIBRARY)) \
 		-Wl,-rpath-link,$(abspath $(STREAMS)/build/m68k/libraries) \
 		-Wl,-rpath-link,$(abspath $(VFS)/build/m68k/libraries) \
-		-Wl,--no-as-needed -Wl,-l:libc.library.2 \
-		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.1 \
+		-Wl,--no-as-needed -Wl,-l:libc.library.3 \
+		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		$(ASTRA_SHARED_LINK_END)
 
 ntp-library-contract: $(LIBRARY)
@@ -81,9 +81,9 @@ ntp-library-contract: $(LIBRARY)
 	@python3 ../../../tools/library_info.py $< | \
 		grep -q '^ntp.library.1 1.0.0 ABI 1.0$$'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [ntp.library.1]'
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [libc.library.2]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [libc.library.3]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.1]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 3
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'

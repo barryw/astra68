@@ -39,7 +39,7 @@ failed, and nothing ran.
    application starts in `/app/resources`. Until then:
    `open /apps/ChocolateDoom.app -iwad /app/resources/doom1.wad -window`.
 3. **Toolchain default link (compiler specs + NDK).** Default to the dynamic
-   POSIX link (`crt0-dynamic`, `libc.library.2`, runtime, compiler) and ship
+   POSIX link (`crt0-dynamic`, `libc.library.3`, runtime, compiler) and ship
    SDL headers, `.pc` files and CMake packages with the SDL Kit, so upstream
    `configure`/CMake run unchanged. DevilutionX and every later port need the
    same.
@@ -72,9 +72,9 @@ failed, and nothing ran.
 
 ## Decisions needed
 
-1. **Soft float.** Keep userspace `-msoft-float` and fix float hot spots in
-   the SDL layers, or give userspace the 68040 FPU (kernel FPU context,
-   QEMU FPU; `USERSPACE_BUDGET.md` says "without hardware FPU")?
+1. **Soft float.** Decided 2026-10-03: userspace uses the 68040 FPU
+   (`USERSPACE_FPU.md`; kernel FPU context, hard-float ABI, QEMU's FS/FD
+   arithmetic on the host FPU).
 2. **WAD.** Shareware `doom1.wad` (redistributable unmodified; shipping it in
    an OS image deserves a licence read) or Freedoom (BSD)? In the app bundle
    or a separate data bundle?

@@ -171,10 +171,17 @@ SECTIONS
      * toolchain feature Astra has not qualified, and silently discarding it
      * would hide that.
      */
+    /*
+     * The float ABI tag (Tag_GNU_M68K_ABI_FP). Not loaded, but kept: a
+     * library that carries it makes the linker refuse a program built for
+     * the other float ABI, and only float and double returns would show the
+     * mismatch otherwise (docs/USERSPACE_FPU.md).
+     */
+    .gnu.attributes 0 : { KEEP(*(.gnu.attributes)) }
+
     /DISCARD/ : {
         *(.comment)
         *(.note.GNU-stack)
-        *(.gnu.attributes)
     }
 }
 

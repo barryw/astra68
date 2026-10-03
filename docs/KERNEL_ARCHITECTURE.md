@@ -17,8 +17,12 @@ Status words are precise:
 ## Machine contract
 
 - **LOCKED:** one big-endian MC68040-compatible CPU with integrated MMU.
-- **LOCKED:** 512 MiB Astra guest RAM, no kernel floating point,
-  `-msoft-float`.
+- **LOCKED:** 512 MiB Astra guest RAM.
+- **LOCKED:** no kernel floating point: the kernel is built `-msoft-float`
+  and executes FPU instructions only to save and restore user FPU state
+  (`tools/check_kernel_float_free.py` enforces it at link).
+- **LOCKED:** userspace uses the MC68040 FPU, hard-float ABI
+  (`USERSPACE_FPU.md`); instructions the 68040 leaves to the FPSP take F-line.
 - **LOCKED:** no SMP, RCU, lock-free framework, swap, or memory overcommit.
 - **LOCKED:** bounded latency and predictable memory use outrank feature count.
 - **LOCKED:** Motorola MC68040 behavior is the architectural authority.
@@ -199,7 +203,7 @@ These are historical K6 implementation facts, not current object limits:
 |---|---:|
 | `KernelCpuContext` | 76 bytes, 4-byte aligned |
 | `KernelProcess` | 1,188 bytes under the m68k ABI |
-| `KernelThread` | 184 bytes under the m68k ABI |
+| `KernelThread` | 792 bytes under the m68k ABI (two 208-byte FPU contexts); one page |
 | `KernelThreadWaitQueue` | 12 bytes under the m68k ABI |
 | synchronization object | 36 bytes under the m68k ABI |
 | process slots | 7 (8,316 bytes static) |

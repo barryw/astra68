@@ -8,7 +8,7 @@ READELF := $(CROSS)readelf
 HOST_CC ?= cc
 HOST_CXX ?= c++
 ANALYZER_CC ?= gcc
-CPU_FLAGS ?= -m68040 -msoft-float
+CPU_FLAGS ?= -m68040
 
 CPPFLAGS := -Iinclude -I../sw/include -I../sw/userspace/runtime/include
 TARGET_CFLAGS := $(CPU_FLAGS) -Os -ffreestanding -fno-builtin -std=c11 \

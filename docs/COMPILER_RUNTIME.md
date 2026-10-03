@@ -2,20 +2,20 @@
 
 Astra dynamically linked code uses one implementation of every compiler
 helper. GCC's MC68040 arithmetic/conversion builtins live in
-`compiler.library.1`; DWARF exception handling and frame registration live in
+`compiler.library.2`; DWARF exception handling and frame registration live in
 `unwind.library.1`.
 
 The split is a dependency boundary, not two competing runtimes:
 
 ```text
-compiler.library.1                 (no dependencies)
+compiler.library.2                 (no dependencies)
         |
         +--> runtime.library.1
-        +--> libc.library.2
+        +--> libc.library.3
                   |
                   +--> unwind.library.1
                             |
-                            +--> cxx.library.1
+                            +--> cxx.library.2
 ```
 
 The unwinder needs allocation, memory, string, and pthread operations from

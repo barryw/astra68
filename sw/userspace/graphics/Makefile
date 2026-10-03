@@ -48,7 +48,7 @@ FONT_LIBRARY_OBJECTS := build/m68k/library/font_library.o \
 	build/m68k/library/font_surface.o
 SYSTEM_LIBRARY := $(NDK)/build/m68k/libraries/system.library.2
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
-COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.1
+COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 
 all: $(TARGET) $(RENDERER_TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) \
@@ -150,7 +150,7 @@ $(GRAPHICS_LIBRARY): $(GRAPHICS_LIBRARY_OBJECTS) $(GRAPHICS_LIBRARY_MAP) \
 		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(COMPILER_LIBRARY)) -Wl,--no-as-needed \
 		-Wl,-l:system.library.2 -Wl,-l:runtime.library.1 \
-		-Wl,-l:compiler.library.1 $(ASTRA_SHARED_LINK_END)
+		-Wl,-l:compiler.library.2 $(ASTRA_SHARED_LINK_END)
 
 $(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(FONT_LIBRARY_MAP) \
 		$(GRAPHICS_LIBRARY) \
@@ -162,7 +162,7 @@ $(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(FONT_LIBRARY_MAP) \
 		-L$(dir $(GRAPHICS_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(COMPILER_LIBRARY)) -Wl,--no-as-needed \
 		-Wl,-l:graphics.library.2 -Wl,-l:runtime.library.1 \
-		-Wl,-l:compiler.library.1 $(ASTRA_SHARED_LINK_END)
+		-Wl,-l:compiler.library.2 $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@python3 ../../../tools/check_shared_library_layout.py \
@@ -190,7 +190,7 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
 		grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
-		grep -Fc 'Shared library: [compiler.library.1]')" = 1
+		grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
 		awk '/NEEDED/{n++} END{print n+0}')" = 3
 	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
@@ -198,7 +198,7 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
 		grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
-		grep -Fc 'Shared library: [compiler.library.1]')" = 1
+		grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
 		awk '/NEEDED/{n++} END{print n+0}')" = 3
 	$(call ASTRA_CHECK_DSO,$(GRAPHICS_LIBRARY) $(FONT_LIBRARY))

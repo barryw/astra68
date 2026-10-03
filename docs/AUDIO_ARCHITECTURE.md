@@ -172,7 +172,7 @@ After that gate, add compatibility adapters for the actual upstream port
 interfaces, then publish the complete native Audio Kit/NDK API. SDL2's audio
 backend opens the device at each application's own format, channels and
 rate; SDL converts only what the host cannot take (more than two channels,
-a rate outside 8-192 kHz), and that path runs in guest soft-float. The
+a rate outside 8-192 kHz), and that path runs on the guest's FPU. The
 backend cannot move an application's SDL callback,
 SDL2_mixer, or SDL_audiolib code from the MC68040 to Linux. Host-backed
 adapters must be built at the appropriate library boundary where measurement

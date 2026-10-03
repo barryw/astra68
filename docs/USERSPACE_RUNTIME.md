@@ -165,7 +165,7 @@ of MC68040 text with exactly 388 bytes of BSS.
 
 ## Build and acceptance
 
-The canonical target is big-endian `m68k-linux-gnu-gcc -m68040 -msoft-float`
+The canonical target is big-endian `m68k-linux-gnu-gcc -m68040` (hard float)
 on Beast. Every runtime change must pass:
 
 - warnings-as-errors host tests;
