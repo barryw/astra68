@@ -64,6 +64,25 @@ CONFIGURATION = {
         "astra-config 1\n"
         "schema 1\n"
         "max_bytes 67108864\n"),
+    "services/cdfs/settings.conf": (
+        "astra-config 1\n"
+        "schema 1\n"
+        "image \"/home/disc.iso\"\n"),
+    "services/cdfs/service.conf": (
+        "astra-config 1\n"
+        "schema 1\n"
+        "name \"cdfs\"\n"
+        "executable \"/services/cdfs\"\n"
+        "runs astra\n"
+        "enabled false\n"
+        "delegates false\n"
+        "start boot\n"
+        "restart on-fault\n"
+        "argument \"/services/cdfs\"\n"
+        "provides CD0:r\n"
+        "grant CONFIG:r\n"
+        "grant HOME:r\n"
+        "needs SYSTEM\n"),
     "services/ramfs/service.conf": (
         "astra-config 1\n"
         "schema 1\n"
@@ -126,7 +145,7 @@ DEFAULT_TERMINFO = os.path.join(
 # Terminal is the shell: it holds system authority no other application may
 # claim, so the startup manifest names its launch ceiling explicitly.
 TERMINAL_CEILING = (
-    "GUI CLIPBOARD WORK:rw HOME:rw TMP:rw RAM:rw DH0:r SYSTEM:r LOCAL:rw "
+    "GUI CLIPBOARD WORK:rw HOME:rw TMP:rw RAM:rw CD0:r DH0:r SYSTEM:r LOCAL:rw "
     "COMMANDS:r APPS:r LIBS:r EVENTS:r PROC:rw METRICS:r CONFIG_COMMANDS:r "
     "EVENT_CONTROL NETWORK NETWORK_LISTEN NTP PCM POSIX_PROCESS APP_LAUNCH "
     "SERVICE_MANAGER ENTROPY LOG")
@@ -189,7 +208,7 @@ DISPLAY_STARTUP_MANIFEST = (
     "LIBS:r SYSTEM:r NETWORK NETWORK_LISTEN NTP PCM required priority=20\n"
     "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
-DISPLAY_SERVICES = ("storage", "ramfs", "posixd", "hostfs", "entropy", "network", "ntpd", "events",
+DISPLAY_SERVICES = ("storage", "ramfs", "cdfs", "posixd", "hostfs", "entropy", "network", "ntpd", "events",
                     "input", "clipboard", "display", "media", "sampler",
                     "desktop",
                     "remote-desktop")

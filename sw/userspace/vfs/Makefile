@@ -535,3 +535,5 @@ clean:
 
 .PHONY: all library service ram-backend loader-pic test sanitize tsan analyze \
 	library-contract clean libraries-ready
+
+include cdfs.mk

@@ -2065,6 +2065,22 @@ ASan/UBSan, the ext4 native `open_at` mount gate, and a fresh-image QEMU
 Terminal gate pass 96 commands including RAM create/read/remove and protected
 root removal. This RAM change has not yet been deployed to the DE25.
 
+CDFS now has an Astra-owned read-only VFS adapter around the unchanged
+`third_party/odfs` core. The optional `cdfs` service is packaged disabled and
+mounts a configured immutable image at `/cd0`; the same adapter accepts native
+block sources. Source generation/geometry changes invalidate cached block
+reads and metadata, and image size/mtime changes invalidate image mounts.
+Terminal and child commands can receive the read-only volume grant. ODFS
+supports ISO/Rock Ridge/Joliet, older UDF and HFS-family data forks; current
+VFS name/path limits still apply. Physical-drive discovery, TOC/eject and
+hotplug mount management remain unimplemented. The implementation gap audit
+in `docs/DEVICE_AND_VOLUME_PLAN.md` identifies the existing single-device
+block assumptions and the required native inventory/mount authority.
+Beast host VFS/CDFS tests, CDFS ASan/UBSan and analyzer checks, the MC68040
+service link checks, and the full userspace build pass. The dedicated fresh
+image QEMU service gate is queued behind another checkout's verification;
+physical optical drives and DE25 deployment are not qualified by this work.
+
 ## Build and artifact rules
 
 Build, QEMU, FPGA, and physical work run through Beast. Source transfer is an
