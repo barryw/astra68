@@ -7,26 +7,10 @@ include ../sw/userspace/libraries.mk
 # implementations live with the components that own them under sw/userspace;
 # system.library is sw/userspace/system.
 
-CC := $(CROSS)gcc
-READELF := $(CROSS)readelf
 HOST_CC ?= cc
 HOST_CXX ?= c++
-CPU_FLAGS ?= -m68040
 SYSTEM := ../sw/userspace/system
 
-CPPFLAGS := -Iinclude -I../sw/include -I../sw/userspace/runtime/include
-TARGET_CFLAGS := $(CPU_FLAGS) -Os -ffreestanding -fno-builtin -std=c11 \
-	-Wall -Wextra -Werror
-
-EXAMPLE_OBJECTS := build/m68k/port_message_example.o \
-	build/m68k/bulk_ring_example.o \
-	build/m68k/interface_controls_example.o \
-	build/m68k/interface_tabs_example.o \
-	build/m68k/interface_scroll_example.o \
-	build/m68k/interface_splitter_example.o \
-	build/m68k/interface_disclosure_example.o \
-	build/m68k/text_clipboard_example.o build/m68k/text_field_example.o \
-	build/m68k/undo_example.o
 # The kernel and service ABI headers applications see: the ones the public
 # headers include, and those that declare exported functions. The rest of
 # sw/include is firmware and private wire formats.
@@ -64,12 +48,6 @@ test: header-contract
 	python3 tests/test_documentation.py
 
 check: test
-
-build/m68k/%_example.o: examples/%.c
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(TARGET_CFLAGS) -c $< -o $@
-
-example: $(EXAMPLE_OBJECTS)
 
 $(DOC_STAMP): $(DOC_INPUTS)
 	sh docs/build.sh all
@@ -156,7 +134,7 @@ $(DIST_ARCHIVE): developer-components $(DOC_STAMP)
 	install -m 0644 make/*.mk $(DIST_STAGE)/make/
 	install -m 0644 ../sw/userspace/posix/kit/program.c \
 		$(DIST_STAGE)/src/astra-posix-program.c
-	install -m 0644 examples/*.c $(DIST_STAGE)/examples/
+	install -m 0644 examples/*.c examples/Makefile $(DIST_STAGE)/examples/
 	install -m 0644 ../mk/astra-shared-library.ld \
 		../sw/userspace/runtime/astra_user.ld \
 		../sw/userspace/runtime/astra_static_user.ld \
@@ -203,12 +181,16 @@ dist-check: $(DIST_ARCHIVE)
 	python3 tests/test_distribution.py $(DIST_ARCHIVE) $(ASTRA_OS_VERSION) \
 		$(foreach library,$(NDK_SHARED_LIBRARY_ARTIFACTS),\
 			--library $(notdir $(library)))
-	rm -rf $(DIST_DIR)/check
+	@# The archive's files are dated 1970 (--mtime=@0): products from an
+	@# earlier check would look newer than every source, so none survive.
+	rm -rf $(DIST_DIR)/check $(DIST_DIR)/smoke $(DIST_DIR)/examples
 	install -d $(DIST_DIR)/check
 	tar -xJf $(DIST_ARCHIVE) -C $(DIST_DIR)/check
 	$(MAKE) -f tests/distribution_smoke.mk \
 		ASTRA_NDK_ROOT=$(abspath $(DIST_DIR)/check/$(DIST_NAME)) \
 		BUILD_DIR=$(abspath $(DIST_DIR)/smoke) all
+	$(MAKE) -C $(DIST_DIR)/check/$(DIST_NAME)/examples \
+		BUILD_DIR=$(abspath $(DIST_DIR)/examples) all
 
 dist: dist-check
 	@echo "NDK: $(DIST_ARCHIVE)"
@@ -218,7 +200,7 @@ os-library-tests:
 		$(MAKE) -C ../sw/userspace/$$component all test sanitize analyze; \
 	done
 
-certify: check example dist-check os-library-tests
+certify: check dist-check os-library-tests
 
 sdk: certify
 
@@ -252,7 +234,7 @@ install-headers:
 clean:
 	rm -rf build
 
-.PHONY: all test check example docs docs-html docs-pdf \
+.PHONY: all test check docs docs-html docs-pdf \
 	docs-check docs-clean loader-library-contract shared-library-contracts \
 	developer-components dist dist-check \
 	os-library-tests certify sdk header-contract install-headers clean

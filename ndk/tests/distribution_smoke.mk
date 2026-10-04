@@ -14,10 +14,10 @@ $(BUILD_DIR)/sdl.elf: tests/distribution_sdl.c \
 	$(ASTRA_CC) $(ASTRA_POSIX_CPPFLAGS) \
 		-I$(ASTRA_NDK_ROOT)/include/SDL2 $(ASTRA_POSIX_CFLAGS) \
 		$(ASTRA_POSIX_LDFLAGS) -o $@ $(ASTRA_POSIX_CRT0) $< \
-		$(BUILD_DIR)/posix-program.o $(ASTRA_POSIX_LIBS) \
+		$(BUILD_DIR)/posix-program.o \
 		-Wl,-l:SDL2_mixer.library.3 -Wl,-l:SDL2_image.library.2 \
 		-Wl,-l:SDL2_net.library.2 -Wl,-l:SDL2_ttf.library.2 \
-		-Wl,-l:SDL2.library.3
+		-Wl,-l:SDL2.library.3 $(ASTRA_POSIX_LIBS)
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
 		--needed SDL2_mixer.library.3 --needed SDL2_image.library.2 \
 		--needed SDL2_net.library.2 --needed SDL2_ttf.library.2 \

@@ -165,3 +165,37 @@ AstraResult example_bulk_channel_close(ExampleBulkChannel *channel)
     }
     return first;
 }
+
+ASTRA_PROGRAM("bulk_ring", 1, 0, 0, "Your Name", "Copyright 2026 Your Name");
+
+/* Fill the ring from its producer end and drain it from its consumer end. */
+int astra_main(const AstraStartupInfo *startup)
+{
+    const AstraStartupCapability *output =
+        astra_startup_capability(startup, "STDOUT");
+    ExampleBulkChannel channel;
+    AstraMonotonicDeadline deadline;
+    AstraResult result;
+    uint32_t received = 0u;
+
+    if (output == 0 || example_bulk_channel_create(&channel) != ASTRA_OK)
+        return 1;
+    deadline = (AstraMonotonicDeadline)(astra_clock_monotonic() +
+                                        UINT64_C(1000000000));
+    result = example_bulk_channel_send(&channel, 3u, EXAMPLE_RING_CAPACITY);
+    while (result == ASTRA_OK && received < EXAMPLE_RING_CAPACITY) {
+        ExampleBulkRecord record;
+
+        result = example_bulk_channel_receive(&channel, &record, deadline);
+        if (result == ASTRA_OK && (record.sequence != 3u + received ||
+                                   record.value != received))
+            result = ASTRA_ERROR_INVALID_ARGUMENT;
+        if (result == ASTRA_OK)
+            ++received;
+    }
+    if (example_bulk_channel_close(&channel) != ASTRA_OK || result != ASTRA_OK)
+        return 2;
+    (void)astra_print(output->handle, "bulk_ring: 64 records in order, "
+                                      "3 to 66\n");
+    return 0;
+}

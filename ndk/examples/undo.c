@@ -1,4 +1,7 @@
 #include <astra/interface_kit.h>
+#include <astra/program.h>
+#include <astra/runtime.h>
+#include <astra/stream.h>
 
 enum { EXAMPLE_SET_ZOOM = 1u };
 
@@ -69,4 +72,36 @@ AstraResult astra_example_set_zoom(
     group.coalesce_id = EXAMPLE_SET_ZOOM;
     group.timestamp_ns = timestamp_ns;
     return astra_undo_perform_group(&document->undo, &group);
+}
+
+ASTRA_PROGRAM("undo", 1, 0, 0, "Your Name", "Copyright 2026 Your Name");
+
+/* Two quick zoom steps coalesce into one undoable group. */
+int astra_main(const AstraStartupInfo *startup)
+{
+    const AstraStartupCapability *output =
+        astra_startup_capability(startup, "STDOUT");
+    static uint32_t arena[256];
+    ExampleDocument document;
+    AstraUndoState state = ASTRA_UNDO_STATE_INIT;
+    uint32_t zoomed;
+
+    if (output == 0 ||
+        astra_example_document_init(&document, arena, sizeof(arena)) !=
+            ASTRA_OK ||
+        astra_example_set_zoom(&document, 125u, UINT64_C(0)) != ASTRA_OK ||
+        astra_example_set_zoom(&document, 150u, UINT64_C(100000000)) !=
+            ASTRA_OK)
+        return 1;
+    zoomed = document.zoom_percent;
+    if (astra_undo_get_state(&document.undo, &state) != ASTRA_OK ||
+        state.group_count != 1u || astra_undo_undo(&document.undo) != ASTRA_OK)
+        return 2;
+    if (document.zoom_percent != 100u ||
+        astra_undo_redo(&document.undo) != ASTRA_OK ||
+        document.zoom_percent != zoomed)
+        return 3;
+    (void)astra_print(output->handle, "undo: zoom 150 -> undo 100 -> redo 150"
+                                      " in 1 coalesced group\n");
+    return 0;
 }

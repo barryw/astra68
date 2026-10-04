@@ -3,9 +3,8 @@
 
 #include <stdint.h>
 
+#include <astra/clipboard.h>
 #include <astra/message_abi.h>
-
-#define ASTRA_CAPABILITY_CLIPBOARD "CLIPBOARD"
 
 #define ASTRA_CLIPBOARD_PROTOCOL UINT32_C(0x434c4950) /* CLIP */
 #define ASTRA_CLIPBOARD_PROTOCOL_VERSION UINT16_C(1)

@@ -12,6 +12,9 @@
 
 ASTRA_EXTERN_C_BEGIN
 
+/** Startup capability naming the system clipboard service. */
+#define ASTRA_CAPABILITY_CLIPBOARD "CLIPBOARD"
+
 /** Canonical MIME type for validated plain UTF-8 text. */
 #define ASTRA_CLIPBOARD_TYPE_UTF8 "text/plain;charset=utf-8"
 

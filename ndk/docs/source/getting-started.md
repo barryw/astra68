@@ -21,20 +21,10 @@ shared libraries (`runtime.library.1`, `system.library.2`,
 Include `make/astra-native.mk` (native programs) or `make/astra-posix.mk`
 (programs written against the C library) from the archive and use its
 variables. A native program declares its identity with `ASTRA_PROGRAM` and
-starts at `astra_main`:
+starts at `astra_main`. The terminal that launches it hands it `STDOUT`:
 
-```c
-#include <astra/program.h>
-#include <astra/runtime.h>
-
-ASTRA_PROGRAM("hello", 1, 0, 0, "Your Name", "Copyright 2026 Your Name");
-
-int astra_main(const AstraStartupInfo *startup)
-{
-    (void)startup;
-    astra_log("hello");
-    return 0;
-}
+```{literalinclude} ../../examples/hello.c
+:language: c
 ```
 
 ```make
@@ -42,7 +32,8 @@ include $(ASTRA_NDK_ROOT)/make/astra-native.mk
 
 hello: hello.c
 	$(ASTRA_CC) $(ASTRA_CPPFLAGS) $(ASTRA_CFLAGS) $(ASTRA_LDFLAGS) \
-		-o $@ $(ASTRA_CRT0) $< $(ASTRA_NATIVE_LIBS)
+		-o $@ $(ASTRA_CRT0) $< -Wl,-l:streams.library.1 \
+		$(ASTRA_NATIVE_LIBS)
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
 		--needed runtime.library.1 --needed compiler.library.2 $@
 ```
@@ -65,8 +56,17 @@ status codes, as each declaration states.
 
 ## An example
 
-The examples in `examples/` are complete programs; `make -C ndk example`
-builds them against the headers so they cannot drift.
+The examples in `examples/` are complete programs. `examples/Makefile`
+builds each one from the installed kit, and every release runs them all on
+the machine and checks what they print, so none can drift from the API.
+A one-shot timer re-armed for absolute deadlines:
+
+```{literalinclude} ../../examples/timer.c
+:language: c
+:linenos:
+```
+
+A message sent through a port the program owns:
 
 ```{literalinclude} ../../examples/port_message.c
 :language: c

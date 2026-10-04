@@ -1,7 +1,8 @@
-# Handover 2026-10-04: NDK cleanup (uncommitted), cursor, SDL/errno
+# Handover 2026-10-04: NDK cleanup, posted cursor, examples gate
 
-Read `CLAUDE.md`, `AGENTS.md`, then this page. Nothing below is committed.
-`git status` shows ~200 changed paths: all of it is this work.
+Read `CLAUDE.md`, `AGENTS.md`, then this page. Phases 1-4, the posted
+cursor and the SDL/errno fixes are commit `34d137ef` (full beast verify
+green). Phase 5 is the commit after it.
 
 ## Owner decisions taken this round
 
@@ -11,7 +12,7 @@ Read `CLAUDE.md`, `AGENTS.md`, then this page. Nothing below is committed.
   call is exported instead.
 - Every symbol a shipped library exports is public API with an NDK header.
 - Examples must be complete programs, linked from the dist archive and run in
-  a QEMU gate (phase 5, NOT started).
+  a QEMU gate (phase 5, done).
 - Quake port is parked; its own decisions are recorded at the end.
 
 ## Done (locally; verified as stated)
@@ -81,32 +82,55 @@ The docs/header-comment edits after that have only run on the Mac
 before committing.** `make -C ndk dist dist-check` has not been run since
 the dist recipe changed (lua/ncursesw/xml) -- run it on beast.
 
+## Phase 5 -- examples (done)
+
+Every `ndk/examples/*.c` is a complete native program (`ASTRA_PROGRAM`,
+`astra_main`, prints one line to `STDOUT`). `ndk/examples/Makefile` ships in
+the archive and builds each from the installed kit, linking only the
+libraries it calls (`<name>_LIBS`); `check_dynamic_executable.py` is given
+exactly those as `--needed`. `make -C ndk dist-check` builds them into
+`ndk/build/dist/examples`, and `emu/qemu/test-ndk-examples.py` installs each
+as `/local/commands/ndk-<name>`, runs it from zsh and requires its exact line
+and exit 0 (an example without an expectation fails the gate). New:
+`hello.c` (the getting-started program) and `timer.c` (runtime 1.10 timer
+wrappers). `text_clipboard.c` uses `astra/bytes.h`, not `<string.h>`.
+The interface examples are driven headless through
+`astra_interface_ui_handle_event` (Tab/Enter/Right, a wheel notch).
+
+Consequences:
+- Terminal commands are now granted `CLIPBOARD`, as they are `GUI` and
+  `PCM` (`console_session.c`). `ASTRA_CAPABILITY_CLIPBOARD` moved to the
+  public `clipboard.h`.
+- `dist-check` deletes `build/dist/{smoke,examples}` first: the archive is
+  dated 1970 (`--mtime=@0`), so an earlier product always looked current.
+- The SDL smoke link listed `$(ASTRA_POSIX_LIBS)` before the SDL libraries;
+  the NEEDED-order check failed. It had not run since the hard-float day.
+- `make -C ndk example` is gone; `dist-check` is the build.
+- beast `~/astra-mg/verify-nopc.sh` now runs `make -C ndk docs-check
+  dist-check` (`NDKDIST=`) and the examples gate (`ndk-examples EXIT=`);
+  previous copy `verify-nopc.sh.bak-20261004`.
+
 ## Not done
 
-- **Phase 5: examples.** Make every `ndk/examples/*.c` a program with `main`
-  or `astra_main`, build from the extracted dist archive, bundle, and run in
-  a QEMU gate that checks output; include the getting-started `hello` and a
-  timer example (exercises the new runtime 1.10 timer wrappers). Fix
-  `text_clipboard.c` (needs hosted flags). Docs literalinclude the same files.
-- Add `make -C ndk docs-check` to the beast verify (needs Docker there).
-- Remaining audit items: no runtime wrapper for IRQ/device revoke (driver-only,
-  deliberately skipped).
+- **DE25 deploy of the posted cursor.** QEMU, helper and ROM change together
+  (mailbox 1.8, kernel ABI `0x0001003C`): `emu/qemu/build.sh arty` on beast,
+  then `emu/qemu/publish-de25-release.sh`. Measure with
+  `/data/motion-ab.py 15 125` on the board: target ~21 Doom presents/s with
+  the mouse moving (was 8.0).
+- No runtime wrapper for IRQ/device revoke (driver-only, deliberately).
 
-## Cursor (in progress at handover)
+## Cursor (done in `34d137ef`; board measurement pending)
 
-Symptom: moving the mouse cut Doom on the DE25 from 21.4 to 8.0 presents/s
-(`/data/motion-ab.py 15 125` on the board; `/data/disp-ab.py` shows device
-counters). Cause: every cursor move was a full display-device request on the
-one-at-a-time mailbox (interrupt + completion round trip), and the device
-completes only ~110 requests/s. Interim changes in the tree (vblank pacing,
-helper `pointer_move` deferral, cursor riding on render-only batches, idle
-heuristics in `services/display/main.c`) got it to 13.7 only. Decision:
-replace them with a dedicated posted cursor channel, as KMS/DWM/WindowServer
-do -- a latest-value cursor register outside the request queue, no
-completion -- and delete the interim mechanisms. See the cursor section of
-the next handover or the commit that lands it.
+Symptom was Doom on the DE25 falling from 21.4 to 8.0 presents/s while the
+mouse moved: every move was a full display request on the one-at-a-time
+mailbox (~110 requests/s). Now `ASTRA_SYSCALL_DISPLAY_CURSOR` (104) writes
+Vesta `DISPLAY_CURSOR` (0x738), a posted latest-value word; QEMU copies it
+into mailbox 1.8 (`cursor`, `cursor_sequence`, futex on `wake_sequence`) and
+the helper commits the newest word to the pointer plane, deferring while the
+plane has not latched the previous one. The interim mechanisms are gone.
+`test-display.py` checks it: ~1000 cursor updates cost 3 device requests.
 
-## Also uncommitted from earlier this session (verified on beast)
+## Also in `34d137ef`
 
 - SDL Kit `SDL_config_minimal.h` defines `HAVE_STDLIB_H/STRING_H/MATH_H/
   CTYPE_H`; gate `sw/userspace/sdl2/tests/libc_prelude.c` in `target-check`.

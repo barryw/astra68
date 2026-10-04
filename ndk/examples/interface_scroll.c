@@ -1,4 +1,7 @@
 #include <astra/interface_kit.h>
+#include <astra/program.h>
+#include <astra/runtime.h>
+#include <astra/stream.h>
 
 #include <stddef.h>
 
@@ -76,4 +79,44 @@ AstraResult astra_example_build_scroll(
     root.direction = ASTRA_FLEX_ROW;
     root.align_items = ASTRA_FLEX_ALIGN_STRETCH;
     return astra_interface_ui_layout(ui, &root);
+}
+
+ASTRA_PROGRAM("interface_scroll", 1, 0, 0, "Your Name",
+              "Copyright 2026 Your Name");
+
+/* Turn the wheel one notch down over the viewport: the shared model scrolls
+   one line, and the scrollbar bound to it follows. */
+int astra_main(const AstraStartupInfo *startup)
+{
+    const AstraStartupCapability *output =
+        astra_startup_capability(startup, "STDOUT");
+    AstraScrollModel model = ASTRA_SCROLL_MODEL_INIT;
+    AstraScrollState state = ASTRA_SCROLL_STATE_INIT;
+    AstraControl controls[4];
+    AstraUIContext ui;
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraWindowEvent wheel = {0};
+
+    if (output == 0 ||
+        astra_example_build_scroll(&model, controls, &ui, 320u, 200u) !=
+            ASTRA_OK)
+        return 1;
+    wheel.size = sizeof(wheel);
+    wheel.version = ASTRA_WINDOW_EVENT_VERSION;
+    wheel.type = ASTRA_WINDOW_EVENT_POINTER_WHEEL;
+    wheel.data.wheel.x = 20;
+    wheel.data.wheel.y = 20;
+    wheel.data.wheel.delta_y = -1;
+    if (astra_interface_ui_handle_event(&ui, &wheel, &action) != ASTRA_OK ||
+        action.type != ASTRA_UI_ACTION_SCROLL_CHANGED ||
+        astra_scroll_get_state(&model, &state) != ASTRA_OK ||
+        state.offset_y != state.line_height)
+        return 2;
+    (void)astra_print(output->handle, "interface_scroll: one wheel notch "
+                                      "scrolled to ");
+    (void)astra_print_u32(output->handle, state.offset_y);
+    (void)astra_print(output->handle, " of ");
+    (void)astra_print_u32(output->handle, state.maximum_y);
+    (void)astra_print(output->handle, "\n");
+    return 0;
 }

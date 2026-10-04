@@ -5,6 +5,7 @@
 #include <console_stream.h>
 
 #include <astra/application_service.h>
+#include <astra/clipboard.h>
 #include <astra/config_library.h>
 #include <astra/entropy.h>
 #include <astra/gui.h>
@@ -115,6 +116,8 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
          * may use the network: SDL programs are commands too. */
         ASTRA_CAPABILITY_PCM,
         ASTRA_CAPABILITY_GUI,
+        /* ...and copy and paste, as the terminal itself does. */
+        ASTRA_CAPABILITY_CLIPBOARD,
     };
     const uint32_t streams[] = {
         console_stream_stdout(), console_stream_stderr(),

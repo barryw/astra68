@@ -47,6 +47,8 @@ REQUIRED = {
     "src/astra-posix-program.c",
     "tools/check_dynamic_executable.py",
     "tools/check_dynamic_relocations.py",
+    "examples/Makefile",
+    "examples/hello.c",
     "examples/undo.c",
     "docs/html/index.html",
     "docs/xml/index.xml",

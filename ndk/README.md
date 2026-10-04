@@ -59,7 +59,7 @@ The target library is freestanding. The cross compiler is selected by
 ```sh
 make -C ndk
 make -C ndk test
-make -C ndk example
+make -C ndk dist-check
 make -C ndk certify
 ```
 

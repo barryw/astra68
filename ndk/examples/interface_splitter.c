@@ -1,4 +1,7 @@
 #include <astra/interface_kit.h>
+#include <astra/program.h>
+#include <astra/runtime.h>
+#include <astra/stream.h>
 
 #include <stddef.h>
 
@@ -84,4 +87,51 @@ AstraResult astra_example_build_split_view(
     root.direction = ASTRA_FLEX_ROW;
     root.align_items = ASTRA_FLEX_ALIGN_STRETCH;
     return astra_interface_ui_layout(ui, &root);
+}
+
+ASTRA_PROGRAM("interface_splitter", 1, 0, 0, "Your Name",
+              "Copyright 2026 Your Name");
+
+enum { KEY_RIGHT = 0x4fu, KEY_TAB = 0x2bu };
+
+/* Deliver one key press (down, then up) and report the last action. */
+static AstraResult press(AstraUIContext *ui, uint32_t usage,
+                         AstraUIAction *action)
+{
+    AstraWindowEvent event = {0};
+    AstraResult result;
+
+    event.size = sizeof(event);
+    event.version = ASTRA_WINDOW_EVENT_VERSION;
+    event.type = ASTRA_WINDOW_EVENT_KEY;
+    event.flags = ASTRA_WINDOW_EVENT_DOWN;
+    event.data.key.usage = usage;
+    *action = (AstraUIAction)ASTRA_UI_ACTION_INIT;
+    result = astra_interface_ui_handle_event(ui, &event, action);
+    if (result != ASTRA_OK || action->type != ASTRA_UI_ACTION_NONE)
+        return result;
+    event.flags = 0u;
+    return astra_interface_ui_handle_event(ui, &event, action);
+}
+
+/* Tab to the splitter and press Right: it reports the new divider value. */
+int astra_main(const AstraStartupInfo *startup)
+{
+    const AstraStartupCapability *output =
+        astra_startup_capability(startup, "STDOUT");
+    AstraControl controls[5];
+    AstraUIContext ui;
+    AstraUIAction action;
+
+    if (output == 0 ||
+        astra_example_build_split_view(controls, &ui, 480u, 320u) != ASTRA_OK)
+        return 1;
+    if (press(&ui, KEY_TAB, &action) != ASTRA_OK ||
+        press(&ui, KEY_RIGHT, &action) != ASTRA_OK ||
+        action.type != ASTRA_UI_ACTION_VALUE_CHANGED ||
+        action.control_id != EXAMPLE_SPLITTER)
+        return 2;
+    (void)astra_print(output->handle, "interface_splitter: Tab, Right moved "
+                                      "the divider\n");
+    return 0;
 }
