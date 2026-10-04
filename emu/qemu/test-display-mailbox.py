@@ -23,7 +23,9 @@ import time
 
 from qemu_runtime import DEFAULT_MEMORY, qemu_environment
 
-# Mailbox 1.7: a header file (the futex words) and a separate payload.
+# Mailbox 1.8: a header file (the futex words) and a separate payload. The
+# helper sleeps on WAKE_SEQUENCE, which changes after every request and every
+# posted cursor; the cursor is a latest-value word, never a request.
 HEADER_BYTES = 4096
 PAYLOAD_BYTES = 8 * 1024 * 1024
 REQUEST_SEQUENCE = 8
@@ -34,6 +36,9 @@ COMPLETION_ID = 28
 COMPLETION_STATUS = 32
 COMPLETION_GENERATION = 36
 REQUEST_FRAME_BYTES = 44
+WAKE_SEQUENCE = 48
+CURSOR_SEQUENCE = 52
+CURSOR = 56
 FUTEX_WAIT = 0
 FUTEX_WAKE = 1
 SYS_FUTEX = {"x86_64": 202, "aarch64": 98}
@@ -92,7 +97,8 @@ def ownership(qemu, rom, root):
 class Helper:
     """Completes each request the way the board helper does. With @observe,
     each request's (operation, frame_bytes) is passed to it first, while the
-    payload still holds the request."""
+    payload still holds the request. Posted cursor writes are counted in
+    cursor_posts, and the newest word is kept in cursor."""
 
     def __init__(self, view, observe=None):
         self.libc = ctypes.CDLL(None, use_errno=True)
@@ -101,10 +107,13 @@ class Helper:
                       for offset in (REQUEST_SEQUENCE, REQUEST_ID,
                                      REQUEST_OPERATION, REQUEST_FRAME_BYTES,
                                      COMPLETION_SEQUENCE, COMPLETION_ID,
-                                     COMPLETION_STATUS, COMPLETION_GENERATION)}
+                                     COMPLETION_STATUS, COMPLETION_GENERATION,
+                                     WAKE_SEQUENCE, CURSOR_SEQUENCE, CURSOR)}
         self.observe = observe
         self.stopping = False
         self.completions = 0
+        self.cursor_posts = 0
+        self.cursor = 0
         self.gaps = []
         self.thread = threading.Thread(target=self.run, daemon=True)
 
@@ -120,11 +129,18 @@ class Helper:
         timeout = ctypes.create_string_buffer(16)
         ctypes.c_long.from_buffer(timeout, 8).value = 50_000_000
         seen = 0
+        cursor_seen = 0
         completed_at = None
         while not self.stopping:
+            wake = self.words[WAKE_SEQUENCE].value
+            cursor_sequence = self.words[CURSOR_SEQUENCE].value
+            if cursor_sequence != cursor_seen:
+                self.cursor = self.words[CURSOR].value
+                self.cursor_posts += (cursor_sequence - cursor_seen) & 0xffffffff
+                cursor_seen = cursor_sequence
             sequence = self.words[REQUEST_SEQUENCE].value
             if sequence == seen:
-                self.call(REQUEST_SEQUENCE, FUTEX_WAIT, sequence, timeout)
+                self.call(WAKE_SEQUENCE, FUTEX_WAIT, wake, timeout)
                 continue
             if completed_at is not None:
                 self.gaps.append(time.monotonic() - completed_at)

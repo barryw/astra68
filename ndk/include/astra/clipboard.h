@@ -3,6 +3,7 @@
 
 /** @file clipboard.h @brief Typed, immutable system clipboard documents. */
 
+#include <astra/compiler.h>
 #include <stdint.h>
 
 #include <astra/area.h>

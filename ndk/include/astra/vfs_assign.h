@@ -53,6 +53,7 @@ typedef struct AstraAssignTable {
     uint32_t capacity; /**< Allocated entries. */
 } AstraAssignTable;
 
+/** Empty table initializer. */
 #define ASTRA_ASSIGN_TABLE_INIT { 0 }
 
 /**
@@ -60,7 +61,9 @@ typedef struct AstraAssignTable {
  * @param table Table storage to initialize.
  */
 void astra_assign_table_init(AstraAssignTable *table);
-/** Release a table initialized by astra_assign_table_init(). */
+/** Release a table initialized by astra_assign_table_init().
+ * @param table Table to release; NULL is ignored.
+ */
 void astra_assign_table_destroy(AstraAssignTable *table);
 
 /**

@@ -1,4 +1,4 @@
-#include <astra/vfs_reader.h>
+#include <astra/vfs_library_source.h>
 #include <astra/ascii.h>
 
 #include <astra/address_space.h>

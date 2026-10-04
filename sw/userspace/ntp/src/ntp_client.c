@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _POSIX_MONOTONIC_CLOCK 200809L
 
-#include <astra/ntp_core.h>
+#include <astra/ntp_client.h>
 
 #include <errno.h>
 #include <netdb.h>

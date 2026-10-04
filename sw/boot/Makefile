@@ -26,6 +26,7 @@ BOOT_ELF = build/astra_boot.elf
 BOOT_BIN = build/astra_boot.bin
 BOOT_MAP = build/astra_boot.map
 LZ4_TEST = build/test_lz4_legacy
+FRONT_PANEL_TEST = build/test_front_panel
 override KERNEL_VERSION := $(ASTRA_OS_VERSION)
 KERNEL_PANIC_SELFTEST ?= 0
 KERNEL_SCHED_TRACE ?= 0
@@ -76,10 +77,8 @@ ID_SRCS = Makefile ../../mk/m68k-cross.mk gen_build_info.py pack_payload.py \
           ../../ndk/include/astra/attributes.h \
           ../../ndk/include/astra/types.h \
           ../../ndk/include/astra/resource.h \
-          ../../ndk/include/astra/front_panel.h \
-          ../../ndk/src/front_panel.c \
-          ../../ndk/src/internal/memory_map.h \
-          ../../ndk/src/internal/mmio.h \
+          ../include/astra/front_panel.h front_panel.c \
+          front_panel_memory_map.h front_panel_mmio.h \
           $(KERNEL_ID_SRCS) $(USER_IMAGE_ID_SRCS)
 
 # Arty loads this image into QEMU host memory.
@@ -119,15 +118,15 @@ $(ROM_PAYLOADS) $(KERNEL_PAYLOAD) $(USER_PAYLOAD) &: pack_payload.py \
 $(BOOT_ELF): crt0.S kernel_blob.S user_blob.S splash_blob.S splash.c \
                 splash.h lz4_legacy.c lz4_legacy.h \
                 $(SPLASH_PAYLOAD) boot.c \
-                ../common/boot_contract.c ../../ndk/src/front_panel.c \
+                ../common/boot_contract.c front_panel.c \
+                front_panel_memory_map.h front_panel_mmio.h \
                 ../include/ohci.h \
                 $(LD) $(BUILD_INFO) $(ROM_PAYLOADS) \
                 $(KERNEL_PAYLOAD) $(USER_PAYLOAD)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ crt0.S kernel_blob.S user_blob.S \
 		splash_blob.S splash.c lz4_legacy.c boot.c \
-		../common/boot_contract.c ../common/crc32.c \
-		../../ndk/src/front_panel.c
+		../common/boot_contract.c ../common/crc32.c front_panel.c
 
 $(BOOT_BIN): $(BOOT_ELF)
 	$(OBJCOPY) -O binary $< $@
@@ -149,8 +148,17 @@ $(LZ4_TEST): test_lz4_legacy.c lz4_legacy.c lz4_legacy.h \
 	$(HOST_CC) -std=c11 -O2 -Wall -Wextra -Werror -o $@ \
 		-I../include test_lz4_legacy.c lz4_legacy.c ../common/crc32.c
 
-test: $(LZ4_TEST)
+$(FRONT_PANEL_TEST): test_front_panel.c front_panel.c \
+                 front_panel_memory_map.h front_panel_mmio.h \
+                 ../include/astra/front_panel.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -std=c11 -O2 -Wall -Wextra -Werror \
+		-DASTRA_FRONT_PANEL_TEST -I../include -I../../ndk/include \
+		-o $@ test_front_panel.c front_panel.c
+
+test: $(LZ4_TEST) $(FRONT_PANEL_TEST)
 	./$(LZ4_TEST)
+	./$(FRONT_PANEL_TEST)
 	PYTHONPATH=../.. python3 -m pytest tests -q
 
 id:

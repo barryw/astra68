@@ -9,7 +9,7 @@
 #include <astra/status.h>
 #include <astra/syscall.h>
 #include <astra/vfs_process.h>
-#include <astra/vfs_reader.h>
+#include <astra/vfs_library_source.h>
 
 #include <stddef.h>
 #include <stdint.h>

@@ -222,3 +222,12 @@ ASTRA_RUNTIME_1.9 {
         astra_string_init;
         astra_string_utf8_prefix;
 } ASTRA_RUNTIME_1.7;
+
+ASTRA_RUNTIME_1.10 {
+    global:
+        astra_display_cursor;
+        astra_rt_cancel_wait;
+        astra_rt_timer_cancel;
+        astra_rt_timer_create;
+        astra_rt_timer_set;
+} ASTRA_RUNTIME_1.9;

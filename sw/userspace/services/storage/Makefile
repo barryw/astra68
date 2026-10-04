@@ -35,7 +35,7 @@ ALLOC_LIB := $(ALLOC)/build/m68k/libastraalloc.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 CRT0 := $(RUNTIME)/build/m68k/crt0.o
 ASTRA_PROGRAM_OWNER_TARGETS := $(RUNTIME):all $(STORAGE):all $(ALLOC):all \
-	$(VFS):all $(NDK):all
+	$(VFS):all ../../system:all
 include ../../program.mk
 
 $(TARGET): $(OBJECT) $(CRT0) $(VFS_LIB) $(EXT4_LIB) $(STORAGE_LIB) \

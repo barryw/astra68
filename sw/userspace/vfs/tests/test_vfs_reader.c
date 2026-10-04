@@ -3,7 +3,7 @@
 #include <string.h>
 
 #include <astra/address_space.h>
-#include <astra/vfs_reader.h>
+#include <astra/vfs_library_source.h>
 
 static AstraVfsClient mock_client;
 static uint32_t close_count;

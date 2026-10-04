@@ -33,7 +33,11 @@ case "$target" in
             build/docs/astra68-ndk.pdf
         ;;
 esac
-doxygen docs/Doxyfile
+if ! doxygen docs/Doxyfile; then
+    # QUIET sends every warning to the log; show them where the gate failed.
+    cat build/docs/doxygen-warnings.log >&2
+    exit 1
+fi
 
 build_html()
 {

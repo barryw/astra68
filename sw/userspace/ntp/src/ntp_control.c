@@ -1,5 +1,5 @@
 #include <astra/ntp.h>
-#include <astra/ntp_core.h>
+#include <astra/ntp_client.h>
 #include <astra/runtime.h>
 #include <astra/status.h>
 

@@ -29,6 +29,8 @@ PUBLIC_AUDIO_HOST="$REPOSITORY/sw/include/astra/audio_host.h"
 PUBLIC_PCM_FORMAT="$REPOSITORY/sw/include/astra/pcm_format.h"
 PUBLIC_STATUS="$REPOSITORY/sw/include/astra/status.h"
 PUBLIC_VFS_SERVICE="$REPOSITORY/sw/include/astra/vfs_service.h"
+PUBLIC_COMPILER="$REPOSITORY/sw/include/astra/compiler.h"
+PUBLIC_OBJECT_ABI="$REPOSITORY/sw/include/astra/object_abi.h"
 
 sha256_file()
 {
@@ -99,6 +101,10 @@ overlay_identity()
             "sw/include/astra/status.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_VFS_SERVICE")" \
             "sw/include/astra/vfs_service.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_COMPILER")" \
+            "sw/include/astra/compiler.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_OBJECT_ABI")" \
+            "sw/include/astra/object_abi.h"
     ) | sha256_stream
 }
 
@@ -191,6 +197,8 @@ cp "$PUBLIC_AUDIO_HOST" "$STAGED_SOURCE/include/astra/audio_host.h"
 cp "$PUBLIC_PCM_FORMAT" "$STAGED_SOURCE/include/astra/pcm_format.h"
 cp "$PUBLIC_STATUS" "$STAGED_SOURCE/include/astra/status.h"
 cp "$PUBLIC_VFS_SERVICE" "$STAGED_SOURCE/include/astra/vfs_service.h"
+cp "$PUBLIC_COMPILER" "$STAGED_SOURCE/include/astra/compiler.h"
+cp "$PUBLIC_OBJECT_ABI" "$STAGED_SOURCE/include/astra/object_abi.h"
 ln -s include/astra "$STAGED_SOURCE/astra"
 patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/meson.build.patch" >&2
 patch -d "$STAGED_SOURCE" -p1 --forward \

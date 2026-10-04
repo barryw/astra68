@@ -67,7 +67,7 @@ int astra_utf8_scalar_retreat(const void *text, uint32_t length,
 static inline uint32_t astra_utf8_decode(const void *text, uint32_t length,
                                          uint32_t *consumed)
 {
-    const uint8_t *bytes = text;
+    const uint8_t *bytes = (const uint8_t *)text;
     uint8_t first;
 
     if (bytes == 0 || length == 0u || consumed == 0)
@@ -113,7 +113,7 @@ static inline uint32_t astra_utf8_decode(const void *text, uint32_t length,
  */
 static inline uint32_t astra_utf8_encode(uint32_t scalar, void *output)
 {
-    uint8_t *bytes = output;
+    uint8_t *bytes = (uint8_t *)output;
 
     if (bytes == 0)
         return 0u;

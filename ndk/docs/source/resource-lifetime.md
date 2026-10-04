@@ -1,15 +1,16 @@
 # Resource Lifetime
 
-Astra is a multitasking system. Shared devices are acquired through
-process-owned handles and exposed to applications through typed NDK wrappers.
-An application must not coordinate shared hardware by writing ownership
-registers directly.
+Astra is a multitasking system with protected processes. Every kernel object
+and service a program uses -- areas, ports, rings, windows, surfaces --
+is reached through a process-owned handle, usually inside a typed NDK
+wrapper. Programs never touch hardware registers.
 
 ## Handles and typed wrappers
 
 {c:type}`AstraHandle` is an opaque capability token. A typed wrapper such as
-{c:struct}`AstraFrontPanelLedLease` restricts which operations can consume that
-token and prevents unrelated handles from being mixed accidentally.
+{c:struct}`AstraArea` or {c:struct}`AstraPort` restricts which operations can
+consume that token and prevents unrelated handles from being mixed
+accidentally.
 
 A live typed wrapper is **move-only by convention in C**: initialize it once,
 do not copy it, and release or transfer it exactly once. Copying a live wrapper
@@ -38,7 +39,7 @@ that now belongs to the receiver.
 
 ## Blocking and asynchronous work
 
-Acquisition options state whether waiting is allowed and provide a timeout.
-Each API operation documents whether it can block. Future command queues use
-the same ownership model and return fences for asynchronous completion; the
-resource must remain valid until the corresponding fence completes.
+Each operation documents whether it can block. Operations that wait take an
+absolute {c:type}`AstraMonotonicDeadline`. Asynchronous graphics work returns
+an {c:struct}`AstraFence`; the objects it references stay valid until the
+fence signals, whatever the program closes meanwhile.

@@ -75,7 +75,7 @@ ntp-library-contract: $(LIBRARY)
 	@python3 $(SYMBOL_OWNERSHIP_CHECK) --readelf $(READELF) \
 		$(LIBRARY) $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY)
 	@python3 ../../../tools/check_library_exports.py $(LIBRARY_MAP) \
-		../../include/astra/ntp.h include/astra/ntp_core.h
+		../../include/astra/ntp.h $(NDK)/include/astra/ntp_client.h
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(LIBRARY_MAP) $(LIBRARY)
 	@python3 ../../../tools/library_info.py $< | \
@@ -93,14 +93,14 @@ ntp-library-contract: $(LIBRARY)
 
 $(HOST_TEST): src/ntp_core.c tests/test_ntp_core.c
 	@mkdir -p $(@D)
-	$(HOST_CC) -Iinclude $(COMMON_FLAGS) -O2 $^ -o $@
+	$(HOST_CC) -I$(NDK)/include -Iinclude $(COMMON_FLAGS) -O2 $^ -o $@
 
 test: $(HOST_TEST)
 	./$(HOST_TEST)
 
 sanitize:
 	@mkdir -p build/host
-	$(HOST_CC) -Iinclude $(COMMON_FLAGS) -O2 \
+	$(HOST_CC) -I$(NDK)/include -Iinclude $(COMMON_FLAGS) -O2 \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
 		src/ntp_core.c tests/test_ntp_core.c \
 		-o build/host/test_ntp_core_sanitize

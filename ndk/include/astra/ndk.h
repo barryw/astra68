@@ -13,7 +13,6 @@
 #include <astra/version.h>
 #include <astra/attributes.h>
 #include <astra/types.h>
-#include <astra/fixed.h>
 #include <astra/resource.h>
 #include <astra/application.h>
 #include <astra/area.h>
@@ -21,7 +20,6 @@
 #include <astra/port.h>
 #include <astra/program.h>
 #include <astra/bulk_ring.h>
-#include <astra/front_panel.h>
 #include <astra/filesystem_kit.h>
 #include <astra/posix.h>
 #include <astra/runtime.h>
@@ -31,7 +29,6 @@
 #include <astra/terminal.h>
 #include <astra/text_surface.h>
 #include <astra/events_kit.h>
-#include <astra/font.h>
 #include <astra/graphics.h>
 #include <astra/graphics_kit.h>
 #include <astra/interface_kit.h>

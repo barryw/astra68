@@ -51,7 +51,7 @@ build/m68k/network_core.o: $(CORE) include/astra/network_core.h ../../include/as
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -c $< -o $@
 
-build/m68k/ping_core.o: $(PING_CORE) include/astra/ping_core.h
+build/m68k/ping_core.o: $(PING_CORE) $(NDK)/include/astra/ping.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -c $< -o $@
 
@@ -87,7 +87,7 @@ library-contract: $(NETWORK_LIBRARY)
 	@python3 $(SYMBOL_OWNERSHIP_CHECK) --readelf $(READELF) \
 		$(NETWORK_LIBRARY) $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY)
 	@python3 ../../../tools/check_library_exports.py \
-		$(NETWORK_LIBRARY_MAP) include/astra/ping_core.h \
+		$(NETWORK_LIBRARY_MAP) $(NDK)/include/astra/ping.h \
 		$(NDK)/include/astra/network_library.h
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(NETWORK_LIBRARY_MAP) $(NETWORK_LIBRARY)

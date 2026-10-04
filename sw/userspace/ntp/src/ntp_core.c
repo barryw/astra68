@@ -4,7 +4,7 @@
  * See third_party/toybox/ASTRA_VENDOR.md.
  */
 
-#include <astra/ntp_core.h>
+#include <astra/ntp_client.h>
 
 #include <limits.h>
 #include <stddef.h>

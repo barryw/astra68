@@ -487,21 +487,11 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
         (operation != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
          operation != ASTRA_DISPLAY_FRAME_PRESENT_RGB565 &&
          operation != ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
-         operation != ASTRA_DISPLAY_CURSOR_UPDATE &&
          operation != ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE &&
          operation != ASTRA_DISPLAY_FRAME_READ_SURFACE) ||
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
          ((source & UINT32_C(0xffff0000)) != 0u || byte_size != 0u)) ||
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 && byte_size != 0u) ||
-        (operation == ASTRA_DISPLAY_CURSOR_UPDATE &&
-         ((byte_size &
-           ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) != 0u ||
-          ((byte_size & ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
-               ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT) >=
-              ASTRA_POINTER_SHAPE_COUNT ||
-          (source & ASTRA_DISPLAY_HOST_CURSOR_X_MASK) >= ASTRA_DISPLAY_WIDTH ||
-          ((source & ASTRA_DISPLAY_HOST_CURSOR_Y_MASK) >>
-               ASTRA_DISPLAY_HOST_CURSOR_Y_SHIFT) >= ASTRA_DISPLAY_HEIGHT)) ||
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
          (byte_size < ASTRA_RENDER_BATCH_MIN_BYTES ||
           byte_size > ASTRA_DISPLAY_HOST_BYTE_SIZE_MAX)) ||
@@ -513,7 +503,6 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
           (kernel_platform_display_capabilities() &
            ASTRA_DISPLAY_CAP_READ_SURFACE) == 0u)) ||
         (operation != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
-         operation != ASTRA_DISPLAY_CURSOR_UPDATE &&
          (source == 0u || (source & 3u) != 0u)) ||
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
          (kernel_platform_display_capabilities() &
@@ -523,8 +512,7 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
           (attachment & 3u) != 0u ||
           (kernel_platform_display_capabilities() &
            ASTRA_DISPLAY_CAP_ATTACHMENT) == 0u)) ||
-        ((operation == ASTRA_DISPLAY_CURSOR_UPDATE ||
-          operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE) &&
+        (operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE &&
          (kernel_platform_display_capabilities() &
           ASTRA_DISPLAY_CAP_HARDWARE_CURSOR) == 0u) ||
         (kernel_platform_display_capabilities() &
@@ -540,7 +528,6 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
         return false;
     VESTA_WRITE(DISPLAY_REQ_ID, id);
     if (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
-        operation == ASTRA_DISPLAY_CURSOR_UPDATE ||
         operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE ||
         operation == ASTRA_DISPLAY_FRAME_READ_SURFACE)
         host_operation |= byte_size << ASTRA_DISPLAY_HOST_BYTE_SIZE_SHIFT;
@@ -560,6 +547,23 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
     return (queue & ASTRA_DISPLAY_HOST_QUEUE_BUSY) != 0u ||
            ((queue & ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID) != 0u &&
             VESTA_READ(DISPLAY_CPL_ID) == id);
+}
+
+/* The posted cursor: one register write that replaces the device's newest
+   position and flags. It takes no request slot and completes nothing, so it
+   cannot wait behind rendering. */
+bool kernel_platform_display_cursor(uint32_t x, uint32_t y, uint32_t flags)
+{
+    const uint32_t word = ASTRA_DISPLAY_HOST_CURSOR_PACK(x, y, flags);
+
+    if (x >= ASTRA_DISPLAY_WIDTH || y >= ASTRA_DISPLAY_HEIGHT ||
+        (flags & ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) != 0u ||
+        !ASTRA_DISPLAY_HOST_CURSOR_VALID(word) ||
+        (kernel_platform_display_capabilities() &
+         ASTRA_DISPLAY_CAP_HARDWARE_CURSOR) == 0u)
+        return false;
+    VESTA_WRITE(DISPLAY_CURSOR, word);
+    return true;
 }
 
 bool kernel_platform_display_collect(AstraDisplayFrameCompletion *completion)

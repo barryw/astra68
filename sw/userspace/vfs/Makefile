@@ -10,7 +10,9 @@ LWEXT4 := ../../../third_party/lwext4
 RUNTIME := ../runtime
 STORAGE := ../storage
 NDK := ../../../ndk
-UTF8_OBJECT := $(NDK)/build/host/utf8.o
+SYSTEM := ../system
+ASTRA_COMMON := ../../common
+UTF8_OBJECT := $(SYSTEM)/build/host/utf8.o
 CPPFLAGS := -I$(NDK)/include -Iinclude -I../../include
 PORT_CPPFLAGS := $(CPPFLAGS) -I$(RUNTIME)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
@@ -40,7 +42,7 @@ HEADERS := include/astra/vfs_service_core.h include/astra/vfs_backend.h \
 	$(NDK)/include/astra/vfs_client.h include/astra/vfs_local_transport.h \
 	$(NDK)/include/astra/vfs_assign.h $(NDK)/include/astra/vfs_path.h \
 	include/astra/vfs_port_transport.h $(NDK)/include/astra/vfs_union.h \
-	$(NDK)/include/astra/vfs_process.h include/astra/vfs_reader.h \
+	$(NDK)/include/astra/vfs_process.h $(NDK)/include/astra/vfs_reader.h \
 	include/astra/vfs_host_backend.h include/astra/vfs_host_transport.h \
 	include/astra/vfs_host_direct.h \
 	include/astra/vfs_ram_backend.h \
@@ -50,8 +52,8 @@ HEADERS := include/astra/vfs_service_core.h include/astra/vfs_backend.h \
 
 TARGET := build/m68k/libastravfs.a
 SERVICE_TARGET := build/m68k/libastravfs-service.a
-NDK_OBJECTS := $(NDK)/build/m68k/manifest.o $(NDK)/build/m68k/bundle.o \
-	$(NDK)/build/m68k/utf8.o
+SYSTEM_STATIC_OBJECTS := $(SYSTEM)/build/m68k/manifest.o $(SYSTEM)/build/m68k/bundle.o \
+	$(SYSTEM)/build/m68k/utf8.o
 TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/filesystem_library.o \
 	build/m68k/vfs_assign.o build/m68k/vfs_path.o \
@@ -62,7 +64,7 @@ TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/vfs_union.o \
 	build/m68k/vfs_process.o build/m68k/process_filesystem.o \
 	build/m68k/vfs_reader.o \
-	build/m68k/vfs_provider_index.o $(NDK_OBJECTS) \
+	build/m68k/vfs_provider_index.o $(SYSTEM_STATIC_OBJECTS) \
 	build/m68k/vfs_status.o
 SERVICE_OBJECTS := build/m68k/library/vfs_service_core.o \
 	build/m68k/library/vfs_port_transport.o \
@@ -75,8 +77,8 @@ LOADER_PIC_SOURCES := vfs_service_core vfs_client vfs_assign vfs_path vfs_local_
 	vfs_process vfs_reader vfs_provider_index vfs_status
 LOADER_PIC_OBJECTS := $(patsubst %,build/m68k/loader/%.o,$(LOADER_PIC_SOURCES)) \
 	build/m68k/loader/backends/host.o \
-	build/m68k/loader/ndk_manifest.o build/m68k/loader/ndk_bundle.o \
-	build/m68k/loader/ndk_utf8.o
+	build/m68k/loader/system_manifest.o build/m68k/loader/system_bundle.o \
+	build/m68k/loader/system_utf8.o
 FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library.4
 FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/filesystem_library_identity.o \
@@ -95,7 +97,7 @@ FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/vfs_provider_index.o \
 	build/m68k/library/vfs_status.o
 FILESYSTEM_LIBRARY_MAP := filesystem.library.exports
-SYSTEM_LIBRARY := $(NDK)/build/m68k/libraries/system.library.2
+SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.2
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 KERNEL_ELF_TEST := ../../kernel/build/test_elf
@@ -131,7 +133,12 @@ build/m68k/loader/backends/host.o: src/backends/host.c $(HEADERS)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
 
-build/m68k/loader/ndk_%.o: $(NDK)/src/%.c
+build/m68k/loader/system_%.o: $(SYSTEM)/src/%.c
+	@mkdir -p $(@D)
+	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
+build/m68k/loader/system_utf8.o: $(ASTRA_COMMON)/utf8.c
 	@mkdir -p $(@D)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
@@ -172,15 +179,15 @@ build/m68k/vfs_reader.o: src/vfs_reader.c $(HEADERS)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
 
-$(NDK_OBJECTS): | libraries-ready
+$(SYSTEM_STATIC_OBJECTS): | libraries-ready
 	@test -f $@
 
 $(UTF8_OBJECT):
-	$(MAKE) -C $(NDK) build/host/utf8.o
+	$(MAKE) -C $(SYSTEM) build/host/utf8.o
 
 libraries-ready:
 	$(MAKE) -C $(RUNTIME) library
-	$(MAKE) -C $(NDK) build/m68k/manifest.o build/m68k/bundle.o \
+	$(MAKE) -C $(SYSTEM) build/m68k/manifest.o build/m68k/bundle.o \
 		build/m68k/utf8.o library
 
 build/m68k/library/%.o: src/%.c $(HEADERS) \
@@ -199,7 +206,7 @@ build/m68k/library/backends/ram.o: src/backends/ram.c $(HEADERS)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
 
-build/m68k/library/ndk_%.o: $(NDK)/src/%.c
+build/m68k/library/system_%.o: $(SYSTEM)/src/%.c
 	@mkdir -p $(@D)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
@@ -234,7 +241,7 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 		$(NDK)/include/astra/filesystem_library.h \
 		$(NDK)/include/astra/vfs_process.h \
 		$(NDK)/include/astra/application_catalog.h \
-		include/astra/vfs_reader.h include/astra/vfs_port_transport.h \
+		$(NDK)/include/astra/vfs_reader.h include/astra/vfs_port_transport.h \
 		../../include/astra/vfs_service.h
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
 		grep -q '^filesystem.library.4 4.1.0 ABI 4.1$$'
@@ -338,15 +345,15 @@ $(PROCESS_TEST): src/vfs_process.c src/process_filesystem.c \
 
 $(READER_TEST): src/vfs_reader.c src/vfs_provider_index.c \
 		tests/test_vfs_reader.c $(HEADERS) \
-		include/astra/vfs_reader.h
+		$(NDK)/include/astra/vfs_reader.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/vfs_reader.c src/vfs_provider_index.c \
 		tests/test_vfs_reader.c -o $@
 
-CATALOG_SOURCES := src/application_catalog.c $(NDK)/src/bundle.c \
+CATALOG_SOURCES := src/application_catalog.c $(SYSTEM)/src/bundle.c \
 	$(RUNTIME)/src/string.c \
-	$(NDK)/src/manifest.c $(NDK)/src/utf8.c tests/test_application_catalog.c
+	$(SYSTEM)/src/manifest.c $(ASTRA_COMMON)/utf8.c tests/test_application_catalog.c
 
 $(CATALOG_TEST): $(CATALOG_SOURCES) $(HEADERS) \
 		$(NDK)/include/astra/application_catalog.h

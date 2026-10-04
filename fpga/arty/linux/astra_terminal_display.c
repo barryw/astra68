@@ -283,16 +283,18 @@ static uint32_t load_be32(const volatile uint8_t *bytes);
 static struct {
     bool scene;
     struct astra_graphics_commit commit;
-    bool pointer;
-    uint32_t pointer_generation;
 } pending_present;
 
+/* Writes the pointer plane from one posted cursor word
+   (ASTRA_DISPLAY_HOST_CURSOR_PACK) and commits it. The commit is issued,
+   not awaited, and no frame waits for it: the plane latches it at the next
+   scan, and the next pointer change waits in wait_pointer_ready. */
 static int pointer_update(const struct astra_graphics_device *device,
-                          uint32_t packed, uint32_t flags, bool commit)
+                          uint32_t word)
 {
-    uint32_t x = packed & ASTRA_DISPLAY_HOST_CURSOR_X_MASK;
-    uint32_t y = (packed & ASTRA_DISPLAY_HOST_CURSOR_Y_MASK) >>
-                 ASTRA_DISPLAY_HOST_CURSOR_Y_SHIFT;
+    uint32_t x = ASTRA_DISPLAY_HOST_CURSOR_X(word);
+    uint32_t y = ASTRA_DISPLAY_HOST_CURSOR_Y(word);
+    uint32_t flags = ASTRA_DISPLAY_HOST_CURSOR_FLAGS(word);
     uint32_t generation;
     uint32_t shape = (flags & ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
                      ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT;
@@ -316,15 +318,52 @@ static int pointer_update(const struct astra_graphics_device *device,
     astra_mmio_write(device, ASTRA_REG_POINTER_POSITION, (y << 16) | x);
     astra_mmio_write(device, ASTRA_REG_POINTER_CONTROL,
                      (flags & ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u);
-    if (!commit)
+    return pointer_commit_begin(device, &generation, swap_image);
+}
+
+/*
+ * The posted cursor the hardware cannot take yet. The pointer latches one
+ * commit per scanned frame, so a second move in a frame cannot be written
+ * until the next scan. Waiting for it would hold up every request behind it;
+ * the cursor is a latest-value state instead, so the newest word is kept
+ * here and committed as soon as the hardware is ready
+ * (pointer_apply_deferred, from the request loop).
+ */
+static struct {
+    bool pending;
+    uint32_t word;
+} deferred_pointer;
+
+static bool pointer_ready_now(const struct astra_graphics_device *device)
+{
+    const uint32_t ready = ASTRA_POINTER_STATUS_WRITE_READY |
+                           ASTRA_POINTER_STATUS_COMMIT_READY;
+
+    return (astra_mmio_read(device, ASTRA_REG_POINTER_STATUS) & ready) ==
+           ready;
+}
+
+static int pointer_move(const struct astra_graphics_device *device,
+                        uint32_t word)
+{
+    if (!pointer_ready_now(device)) {
+        deferred_pointer.pending = true;
+        deferred_pointer.word = word;
         return 0;
-    /* Issued, not awaited: the next pointer change waits in
-       wait_pointer_ready, and nothing else waits at all. */
-    if (pointer_commit_begin(device, &generation, swap_image) != 0)
-        return -1;
-    pending_present.pointer = true;
-    pending_present.pointer_generation = generation;
-    return 0;
+    }
+    deferred_pointer.pending = false;
+    return pointer_update(device, word);
+}
+
+/* Commits a deferred move once the hardware takes it; with @p wait, before
+   a pointer change that must follow it. */
+static int pointer_apply_deferred(const struct astra_graphics_device *device,
+                                  bool wait)
+{
+    if (!deferred_pointer.pending || (!wait && !pointer_ready_now(device)))
+        return 0;
+    deferred_pointer.pending = false;
+    return pointer_update(device, deferred_pointer.word);
 }
 
 static bool pointer_image_valid(const volatile uint8_t *bytes,
@@ -348,7 +387,8 @@ static int pointer_image_update(const struct astra_graphics_device *device,
 {
     uint32_t generation;
 
-    if (wait_pointer_ready(device) != 0)
+    if (pointer_apply_deferred(device, true) != 0 ||
+        wait_pointer_ready(device) != 0)
         return -1;
     astra_mmio_write(device, ASTRA_REG_POINTER_IMAGE_SELECTOR, 0u);
     for (uint32_t at = 0u; at < ASTRA_DISPLAY_CURSOR_IMAGE_PIXELS; ++at)
@@ -357,11 +397,7 @@ static int pointer_image_update(const struct astra_graphics_device *device,
     astra_mmio_write(device, ASTRA_REG_POINTER_HOTSPOT,
                      load_be32(bytes + 8u));
     pointer_shape = ASTRA_POINTER_SHAPE_CUSTOM;
-    if (pointer_commit_begin(device, &generation, true) != 0)
-        return -1;
-    pending_present.pointer = true;
-    pending_present.pointer_generation = generation;
-    return 0;
+    return pointer_commit_begin(device, &generation, true);
 }
 
 struct terminal_cursor {
@@ -598,7 +634,6 @@ static bool render_batch_valid(const volatile uint8_t *batch,
                                uint32_t bytes)
 {
     uint32_t command_count;
-    uint32_t presentation;
     uint32_t scene_offset;
     uint32_t scene_bytes;
     uint32_t version;
@@ -627,21 +662,10 @@ static bool render_batch_valid(const volatile uint8_t *batch,
           scene_bytes < ASTRA_WINDOW_SCENE_HEADER_BYTES ||
           !batch_contains(bytes, scene_offset, scene_bytes))))
         return false;
-    presentation = load_be32(batch + 32u);
-    if ((presentation & ~ASTRA_RENDER_BATCH_PRESENT_CURSOR) != 0u ||
-        (version == ASTRA_RENDER_BATCH_VERSION_1_4 && presentation != 0u) ||
-        ((presentation & ASTRA_RENDER_BATCH_PRESENT_CURSOR) != 0u ?
-             (load_be32(batch + 36u) >= ASTRA_DISPLAY_WIDTH ||
-              load_be32(batch + 40u) >= ASTRA_DISPLAY_HEIGHT ||
-              (load_be32(batch + 44u) &
-               ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) != 0u ||
-              ((load_be32(batch + 44u) &
-                ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
-                   ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT) >=
-                  ASTRA_POINTER_SHAPE_COUNT) :
-             (load_be32(batch + 36u) != 0u ||
-              load_be32(batch + 40u) != 0u ||
-              load_be32(batch + 44u) != 0u)))
+    /* Header words 32-47 are reserved: the cursor is never part of a batch
+       (it is the posted DISPLAY_CURSOR word). */
+    if (load_be32(batch + 32u) != 0u || load_be32(batch + 36u) != 0u ||
+        load_be32(batch + 40u) != 0u || load_be32(batch + 44u) != 0u)
         return false;
     command_count = load_be32(batch + 12u);
     if ((command_count == 0u &&
@@ -696,18 +720,6 @@ static bool render_batch_valid(const volatile uint8_t *batch,
                                      load_be32(batch + offset + 44u)))))
             return false;
     }
-    return true;
-}
-
-static bool render_batch_cursor(const volatile uint8_t *batch,
-                                uint32_t *packed, uint32_t *flags)
-{
-    if ((load_be32(batch + 32u) & ASTRA_RENDER_BATCH_PRESENT_CURSOR) == 0u)
-        return false;
-    *packed = ASTRA_DISPLAY_HOST_CURSOR_PACK(
-        load_be32(batch + 36u), load_be32(batch + 40u),
-        (load_be32(batch + 44u) & ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u);
-    *flags = load_be32(batch + 44u);
     return true;
 }
 
@@ -1089,7 +1101,7 @@ static bool mailbox_take(volatile const AstraDisplayMailbox *mailbox,
 
     astra_graphics_memory_barrier();
     if (mailbox->magic != ASTRA_DISPLAY_MAILBOX_MAGIC ||
-        mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_7 ||
+        mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_8 ||
         sequence == 0u || sequence == previous_sequence)
         return false;
     request->sequence = sequence;
@@ -1116,14 +1128,47 @@ static void mailbox_complete(volatile AstraDisplayMailbox *mailbox,
                   NULL, NULL, 0);
 }
 
-static int mailbox_wait(volatile AstraDisplayMailbox *mailbox,
-                        uint32_t sequence)
+/* The newest posted cursor word, when it changed since @p seen. */
+static bool mailbox_cursor_take(volatile const AstraDisplayMailbox *mailbox,
+                                uint32_t *seen, uint32_t *word)
 {
-    while (running && mailbox->request_sequence == sequence) {
-        if (syscall(SYS_futex, &mailbox->request_sequence,
-                    FUTEX_WAIT, sequence, NULL, NULL, 0) == 0 ||
+    uint32_t sequence = mailbox->cursor_sequence;
+
+    if (sequence == *seen ||
+        mailbox->magic != ASTRA_DISPLAY_MAILBOX_MAGIC ||
+        mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_8)
+        return false;
+    astra_graphics_memory_barrier();
+    *word = mailbox->cursor;
+    *seen = sequence;
+    return ASTRA_DISPLAY_HOST_CURSOR_VALID(*word);
+}
+
+/* Waits for the next request or posted cursor; with @p bounded, for at most
+   a millisecond, so a deferred pointer move is committed soon after the
+   hardware is ready. The emulator changes wake_sequence after either, and
+   it is read before the checks, so a change between them is not slept
+   through. */
+static int mailbox_wait(volatile AstraDisplayMailbox *mailbox,
+                        uint32_t sequence, uint32_t cursor_seen,
+                        bool bounded)
+{
+    static const struct timespec pointer_poll = { 0, 1000000 };
+
+    while (running) {
+        uint32_t wake = mailbox->wake_sequence;
+
+        astra_graphics_memory_barrier();
+        if (mailbox->request_sequence != sequence ||
+            mailbox->cursor_sequence != cursor_seen)
+            return 0;
+        if (syscall(SYS_futex, &mailbox->wake_sequence,
+                    FUTEX_WAIT, wake, bounded ? &pointer_poll : NULL,
+                    NULL, 0) == 0 ||
             errno == EAGAIN || errno == EINTR)
             continue;
+        if (bounded && errno == ETIMEDOUT)
+            return 0;
         return -1;
     }
     return 0;
@@ -1248,30 +1293,19 @@ static int finish_pending_present(const struct astra_graphics_device *device)
         astra_graphics_scene_commit_wait(device, &pending_present.commit,
                                          UINT64_C(2000000000), NULL) != 0)
         status = -1;
-    if (pending_present.pointer &&
-        wait_pointer_generation(device,
-                                pending_present.pointer_generation) != 0)
-        status = -1;
     pending_present.scene = false;
-    pending_present.pointer = false;
     return status;
 }
 
-static int issue_present(const struct astra_graphics_device *device,
-                         bool commit_pointer)
+static int issue_present(const struct astra_graphics_device *device)
 {
-    if (commit_pointer &&
-        pointer_commit_begin(device, &pending_present.pointer_generation,
-                             false) != 0)
-        return -1;
-    pending_present.pointer = commit_pointer;
     astra_graphics_scene_commit_begin(device, &pending_present.commit);
     pending_present.scene = true;
     return 0;
 }
 
 static int present(const struct astra_graphics_device *device,
-                   uint32_t scanout_offset, bool commit_pointer)
+                   uint32_t scanout_offset)
 {
     uint32_t size = (ASTRA_FRAMEBUFFER_HEIGHT << 16) |
                     ASTRA_FRAMEBUFFER_WIDTH;
@@ -1292,14 +1326,14 @@ static int present(const struct astra_graphics_device *device,
     astra_mmio_write(device, ASTRA_REG_FB_VIEWPORT_Y, 0u);
     astra_mmio_write(device, ASTRA_REG_FB_CONTROL, 3u);
     astra_mmio_write(device, ASTRA_REG_FB_KEY, 0u);
-    return issue_present(device, commit_pointer);
+    return issue_present(device);
 }
 
 /* A present whose caller draws next into what was on screen: it waits. */
 static int present_now(const struct astra_graphics_device *device,
-                       uint32_t scanout_offset, bool commit_pointer)
+                       uint32_t scanout_offset)
 {
-    int status = present(device, scanout_offset, commit_pointer);
+    int status = present(device, scanout_offset);
 
     return finish_pending_present(device) == 0 && status == 0 ? 0 : -1;
 }
@@ -1319,8 +1353,7 @@ static int window_scene_layout(uint32_t dimensions,
 static int present_window_scene(const struct astra_graphics_device *device,
                                 uint32_t scene_offset,
                                 uint32_t scene_bytes,
-                                uint32_t dimensions,
-                                bool commit_pointer)
+                                uint32_t dimensions)
 {
     AstraDisplayLayout layout;
 
@@ -1353,7 +1386,7 @@ static int present_window_scene(const struct astra_graphics_device *device,
     astra_mmio_write(device, ASTRA_REG_DISPLAY_VIEWPORT_SIZE,
                      (uint32_t)layout.viewport_height << 16 |
                          layout.viewport_width);
-    return issue_present(device, commit_pointer);
+    return issue_present(device);
 }
 
 struct terminal_damage {
@@ -1655,7 +1688,7 @@ static int present_solid_frame(
             ASTRA_DISPLAY_HEIGHT, color) ||
         execute_finished_batch(device, &builder, &scanout) != 0 ||
         scanout != scanout_for_generation(frame_generation) ||
-        present_now(device, scanout, false) != 0)
+        present_now(device, scanout) != 0)
         return -1;
     *active_scanout = scanout;
     return 0;
@@ -1679,7 +1712,7 @@ static int present_rgb565_frame(
                                   ASTRA_FRAMEBUFFER_BYTES);
     astra_graphics_memory_barrier();
     astra_graphics_memory_map_close(&mapping);
-    if (present_now(device, target, false) != 0)
+    if (present_now(device, target) != 0)
         return -1;
     *active_scanout = target;
     return 0;
@@ -1708,7 +1741,7 @@ static int make_render_target_inactive(
             &builder, destination, source, 0, 0, 0, 0,
             ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT) ||
         execute_finished_batch(device, &builder, &scanout) != 0 ||
-        scanout == target || present_now(device, scanout, false) != 0)
+        scanout == target || present_now(device, scanout) != 0)
         return -1;
     *active_scanout = scanout;
     return 0;
@@ -1747,7 +1780,7 @@ static int present_full_text(const struct astra_graphics_device *device,
             scanout != target)
             return -1;
     }
-    if (present_now(device, target, false) != 0)
+    if (present_now(device, target) != 0)
         return -1;
     *active_scanout = target;
     return 0;
@@ -1824,7 +1857,7 @@ static int present_text_update(
     if (!add_cursor(&builder, destination, cursor, cursor_drawn) ||
         execute_finished_batch(device, &builder, &scanout) != 0 ||
         scanout != scanout_for_generation(frame_generation) ||
-        present_now(device, scanout, false) != 0)
+        present_now(device, scanout) != 0)
         return -1;
     *active_scanout = scanout;
     return 0;
@@ -2020,7 +2053,7 @@ static int self_test(void)
 
     (void)memset(&mailbox, 0, sizeof(mailbox));
     mailbox.magic = ASTRA_DISPLAY_MAILBOX_MAGIC;
-    mailbox.version = ASTRA_DISPLAY_MAILBOX_VERSION_1_7;
+    mailbox.version = ASTRA_DISPLAY_MAILBOX_VERSION_1_8;
     mailbox.request_id = 7u;
     mailbox.operation = ASTRA_DISPLAY_FRAME_PRESENT_SOLID;
     mailbox.color_rgb565 = 0x135du;
@@ -2050,14 +2083,19 @@ static int self_test(void)
     if (shared == MAP_FAILED)
         return EXIT_FAILURE;
     (void)memset((void *)shared, 0, sizeof(*shared));
-    shared->version = ASTRA_DISPLAY_MAILBOX_VERSION_1_7;
+    shared->magic = ASTRA_DISPLAY_MAILBOX_MAGIC;
+    shared->version = ASTRA_DISPLAY_MAILBOX_VERSION_1_8;
+    /* A posted cursor ends the wait as a request does, and is taken once. */
     child = fork();
     if (child == 0) {
         const struct timespec delay = { .tv_sec = 0, .tv_nsec = 2000000 };
 
         (void)nanosleep(&delay, NULL);
-        shared->request_sequence = 1u;
-        (void)syscall(SYS_futex, &shared->request_sequence,
+        shared->cursor = ASTRA_DISPLAY_HOST_CURSOR_PACK(
+            ASTRA_DISPLAY_WIDTH - 1u, 7u, ASTRA_DISPLAY_CURSOR_VISIBLE);
+        shared->cursor_sequence = 1u;
+        shared->wake_sequence = 1u;
+        (void)syscall(SYS_futex, &shared->wake_sequence,
                       FUTEX_WAKE, 1, NULL, NULL, 0);
         _exit(EXIT_SUCCESS);
     }
@@ -2066,7 +2104,50 @@ static int self_test(void)
         return EXIT_FAILURE;
     }
     wait_started = astra_monotonic_nanoseconds();
-    if (mailbox_wait(shared, 0u) != 0 ||
+    {
+        uint32_t seen = 0u;
+        uint32_t word = 0u;
+
+        if (mailbox_wait(shared, 0u, 0u, false) != 0 ||
+            astra_monotonic_nanoseconds() - wait_started >=
+                UINT64_C(10000000) ||
+            waitpid(child, &child_status, 0) != child ||
+            !WIFEXITED(child_status) ||
+            WEXITSTATUS(child_status) != EXIT_SUCCESS ||
+            !mailbox_cursor_take(shared, &seen, &word) || seen != 1u ||
+            word != ASTRA_DISPLAY_HOST_CURSOR_PACK(
+                        ASTRA_DISPLAY_WIDTH - 1u, 7u,
+                        ASTRA_DISPLAY_CURSOR_VISIBLE) ||
+            mailbox_cursor_take(shared, &seen, &word)) {
+            (void)munmap((void *)shared, sizeof(*shared));
+            return EXIT_FAILURE;
+        }
+        /* A word naming no cursor is consumed and refused. */
+        shared->cursor = ASTRA_DISPLAY_HOST_CURSOR_PACK(
+            ASTRA_DISPLAY_WIDTH, 0u, 0u);
+        shared->cursor_sequence = 2u;
+        if (mailbox_cursor_take(shared, &seen, &word) || seen != 2u) {
+            (void)munmap((void *)shared, sizeof(*shared));
+            return EXIT_FAILURE;
+        }
+    }
+    child = fork();
+    if (child == 0) {
+        const struct timespec delay = { .tv_sec = 0, .tv_nsec = 2000000 };
+
+        (void)nanosleep(&delay, NULL);
+        shared->request_sequence = 1u;
+        shared->wake_sequence = 2u;
+        (void)syscall(SYS_futex, &shared->wake_sequence,
+                      FUTEX_WAKE, 1, NULL, NULL, 0);
+        _exit(EXIT_SUCCESS);
+    }
+    if (child < 0) {
+        (void)munmap((void *)shared, sizeof(*shared));
+        return EXIT_FAILURE;
+    }
+    wait_started = astra_monotonic_nanoseconds();
+    if (mailbox_wait(shared, 0u, 2u, false) != 0 ||
         astra_monotonic_nanoseconds() - wait_started >= UINT64_C(10000000) ||
         waitpid(child, &child_status, 0) != child ||
         !WIFEXITED(child_status) || WEXITSTATUS(child_status) != EXIT_SUCCESS ||
@@ -2119,12 +2200,6 @@ static int self_test(void)
                ASTRA_RENDER_BATCH_COMPLETION_OFFSET);
     store_be32(validation_batch + 24u, 7u);
     store_be32(validation_batch + 28u, ASTRA_RENDER_BATCH_SCANOUT1_OFFSET);
-    store_be32(validation_batch + 32u, ASTRA_RENDER_BATCH_PRESENT_CURSOR);
-    store_be32(validation_batch + 36u, ASTRA_DISPLAY_WIDTH - 1u);
-    store_be32(validation_batch + 40u, ASTRA_DISPLAY_HEIGHT - 1u);
-    store_be32(validation_batch + 44u,
-               ASTRA_DISPLAY_CURSOR_VISIBLE |
-                   ASTRA_DISPLAY_CURSOR_SHAPE(ASTRA_POINTER_SHAPE_TEXT));
     store_be32(validation_batch +
                    ASTRA_RENDER_BATCH_RESOURCE_OFFSET -
                    ASTRA_RENDER_BATCH_ARENA_OFFSET,
@@ -2185,22 +2260,11 @@ static int self_test(void)
         store_be32(record + 12u, 0u);
         store_be32(record + 24u, 0u);
     }
-    {
-        uint32_t packed = 0u;
-        uint32_t flags = 0u;
-
-        if (!render_batch_cursor(validation_batch, &packed, &flags) ||
-            packed != ASTRA_DISPLAY_HOST_CURSOR_PACK(
-                ASTRA_DISPLAY_WIDTH - 1u, ASTRA_DISPLAY_HEIGHT - 1u, true) ||
-            flags != (ASTRA_DISPLAY_CURSOR_VISIBLE |
-                      ASTRA_DISPLAY_CURSOR_SHAPE(
-                          ASTRA_POINTER_SHAPE_TEXT)))
-            return EXIT_FAILURE;
-    }
-    store_be32(validation_batch + 36u, ASTRA_DISPLAY_WIDTH);
+    /* The cursor is never part of a batch: its header words are reserved. */
+    store_be32(validation_batch + 32u, 1u);
     if (render_batch_valid(validation_batch, sizeof(validation_batch)))
         return EXIT_FAILURE;
-    store_be32(validation_batch + 36u, ASTRA_DISPLAY_WIDTH - 1u);
+    store_be32(validation_batch + 32u, 0u);
     store_be32(validation_batch +
                    ASTRA_RENDER_BATCH_SUBMISSION_OFFSET -
                    ASTRA_RENDER_BATCH_ARENA_OFFSET + 32u,
@@ -2470,6 +2534,8 @@ int main(int argc, char **argv)
     uint32_t active_window_scene_offset = 0u;
     uint32_t active_window_scene_bytes = 0u;
     uint32_t mailbox_sequence = 0u;
+    uint32_t cursor_sequence = 0u;
+    uint32_t cursor_word = 0u;
     bool display_owned = false;
 
     if (argc == 2 && strcmp(argv[1], "--self-test") == 0)
@@ -2534,7 +2600,7 @@ int main(int argc, char **argv)
     if (payload == MAP_FAILED)
         goto done;
     mailbox->magic = ASTRA_DISPLAY_MAILBOX_MAGIC;
-    mailbox->version = ASTRA_DISPLAY_MAILBOX_VERSION_1_7;
+    mailbox->version = ASTRA_DISPLAY_MAILBOX_VERSION_1_8;
     mailbox->completion_sequence = 0u;
     astra_graphics_memory_barrier();
     if (astra_graphics_device_open(&device, false) != 0 ||
@@ -2608,7 +2674,6 @@ int main(int argc, char **argv)
              * reads and the cursor (which orders itself) never do.
              */
             if (request.operation != ASTRA_DISPLAY_FRAME_READ_SURFACE &&
-                request.operation != ASTRA_DISPLAY_CURSOR_UPDATE &&
                 request.operation != ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE &&
                 !(request.operation ==
                       ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
@@ -2665,9 +2730,6 @@ int main(int argc, char **argv)
                 uint64_t profile_started = astra_monotonic_nanoseconds();
                 uint64_t profile_rendered;
                 uint64_t profile_presented;
-                uint32_t cursor_packed = 0u;
-                uint32_t cursor_flags = 0u;
-                bool batch_cursor;
                 bool window_scene_batch;
                 bool render_only_batch;
                 int render_status;
@@ -2679,8 +2741,6 @@ int main(int argc, char **argv)
                                      ASTRA_RENDER_BATCH_VERSION_1_3;
                 render_only_batch = load_be32(batch + 4u) ==
                                     ASTRA_RENDER_BATCH_VERSION_1_4;
-                batch_cursor = render_batch_cursor(
-                    batch, &cursor_packed, &cursor_flags);
                 scanout_offset = load_be32(batch + 28u);
                 render_status = 0;
                 if (window_scene_batch) {
@@ -2711,18 +2771,14 @@ int main(int argc, char **argv)
                         &window_scene_offset, &window_scene_bytes,
                         &window_scene_dimensions);
                 }
-                if (render_status == 0 && batch_cursor)
-                    render_status = pointer_update(
-                        &device, cursor_packed, cursor_flags, false);
                 profile_rendered = astra_monotonic_nanoseconds();
                 present_status = render_status != 0 ? -1 :
                     render_only_batch ? 0 :
                     window_scene_batch ?
                         present_window_scene(
                             &device, window_scene_offset,
-                            window_scene_bytes, window_scene_dimensions,
-                            batch_cursor) :
-                        present(&device, scanout_offset, batch_cursor);
+                            window_scene_bytes, window_scene_dimensions) :
+                        present(&device, scanout_offset);
                 profile_presented = astra_monotonic_nanoseconds();
                 if (getenv("ASTRA_DISPLAY_PROFILE") != NULL)
                     fprintf(stderr,
@@ -2787,33 +2843,20 @@ int main(int argc, char **argv)
                     status = ASTRA_DISPLAY_COMPLETION_IO_ERROR;
                 }
             } else if (request.id != 0u &&
-                       request.operation == ASTRA_DISPLAY_CURSOR_UPDATE &&
-                       request.frame_pitch == 0u &&
-                       (request.frame_bytes &
-                        ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) == 0u &&
-                       ((request.frame_bytes &
-                         ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
-                            ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT) <
-                           ASTRA_POINTER_SHAPE_COUNT) {
-                if (pointer_update(&device, request.color_rgb565,
-                                   request.frame_bytes, true) == 0) {
-                    generation = astra_mmio_read(&device,
-                                                 ASTRA_REG_GENERATION);
-                    status = ASTRA_DISPLAY_COMPLETION_OK;
-                } else {
-                    status = ASTRA_DISPLAY_COMPLETION_IO_ERROR;
-                }
-            } else if (request.id != 0u &&
                        request.operation == ASTRA_DISPLAY_PANIC_TEXT &&
                        request.frame_pitch == 0u &&
                        request.frame_bytes == 0u) {
                 const struct terminal_cursor panic_cursor = {0};
 
+                deferred_pointer.pending = false;
+
                 if (copy_cells(current, plane) &&
-                    pointer_update(&device, 0u,
-                                   ASTRA_DISPLAY_CURSOR_SHAPE(
-                                       ASTRA_POINTER_SHAPE_DEFAULT),
-                                   true) == 0 &&
+                    pointer_update(&device,
+                                   ASTRA_DISPLAY_HOST_CURSOR_PACK(
+                                       0u, 0u,
+                                       ASTRA_DISPLAY_CURSOR_SHAPE(
+                                           ASTRA_POINTER_SHAPE_DEFAULT))) ==
+                        0 &&
                     present_text_on_both_scanouts(
                         &device, current, &panic_cursor, false, text_states,
                         &text_generation, &active_scanout) == 0 &&
@@ -2831,8 +2874,15 @@ int main(int argc, char **argv)
             }
             mailbox_complete(mailbox, &request, status, generation);
         }
+        /* The posted cursor: the newest word replaces any still deferred. */
+        if (mailbox_cursor_take(mailbox, &cursor_sequence, &cursor_word) &&
+            pointer_move(&device, cursor_word) != 0)
+            goto done;
+        if (pointer_apply_deferred(&device, false) != 0)
+            goto done;
         if (display_owned) {
-            if (mailbox_wait(mailbox, mailbox_sequence) != 0)
+            if (mailbox_wait(mailbox, mailbox_sequence, cursor_sequence,
+                             deferred_pointer.pending) != 0)
                 goto done;
             continue;
         }

@@ -4,7 +4,15 @@
 :project: astra-ndk
 ```
 
+```{doxygenfile} interface_kit.h
+:project: astra-ndk
+```
+
 ```{doxygenfile} interface.h
+:project: astra-ndk
+```
+
+```{doxygenfile} pointer.h
 :project: astra-ndk
 ```
 
@@ -14,11 +22,6 @@
 
 ```{doxygenfile} window.h
 :project: astra-ndk
-```
-
-```{doxygenstruct} AstraSurfaceView
-:project: astra-ndk
-:members:
 ```
 
 ```{doxygenfile} scroll.h

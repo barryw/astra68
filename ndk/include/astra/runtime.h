@@ -87,7 +87,18 @@ const AstraStartupCapability *astra_startup_capability(
 uint32_t astra_service_ready(uint32_t bootstrap, uint32_t status,
                              const uint32_t *handles,
                              uint32_t handle_count);
-/** Publish startup completion and a private shutdown sender to the supervisor. */
+/**
+ * Publish service startup completion with a shutdown handle the supervisor
+ * can use to request a managed shutdown of this service.
+ * @param bootstrap Supervisor bootstrap port.
+ * @param status Service-defined startup status.
+ * @param handles Capabilities published with the ready message.
+ * @param handle_count Number of entries in `handles`.
+ * @param shutdown_send Shutdown-request send handle; required (nonzero)
+ * when `status` is ASTRA_STATUS_OK.
+ * @return ASTRA_SYSCALL_* status; ASTRA_SYSCALL_INVALID_ARGUMENT if
+ * `status` is ASTRA_STATUS_OK and `shutdown_send` is zero.
+ */
 uint32_t astra_service_ready_managed(uint32_t bootstrap, uint32_t status,
                                      const uint32_t *handles,
                                      uint32_t handle_count,
@@ -144,6 +155,41 @@ uint32_t astra_rt_event_create(uint32_t flags, uint32_t rights,
  */
 uint32_t astra_rt_semaphore_create(uint32_t initial, uint32_t maximum,
                                    uint32_t rights, uint32_t *handle);
+/**
+ * Create a one-shot timer: a waitable object that becomes signaled when the
+ * deadline it is armed with passes.
+ * @param rights Rights for the returned handle, within ASTRA_RIGHT_READ,
+ *               ASTRA_RIGHT_WAIT, ASTRA_RIGHT_TRANSFER and
+ *               ASTRA_RIGHT_ADMINISTER; arming and cancelling need
+ *               ASTRA_RIGHT_ADMINISTER.
+ * @param handle Receives the timer handle.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_rt_timer_create(uint32_t rights, uint32_t *handle);
+/**
+ * Arm or re-arm a timer for an absolute monotonic deadline.
+ * @param handle Timer handle with ASTRA_RIGHT_ADMINISTER.
+ * @param deadline_ns Absolute deadline on astra_clock_monotonic(); a past
+ *                    deadline signals at once.
+ * @param woken Receives threads made runnable when non-NULL.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_rt_timer_set(uint32_t handle, uint64_t deadline_ns,
+                            uint32_t *woken);
+/**
+ * Disarm a timer; threads waiting on it return ASTRA_SYSCALL_CANCELLED.
+ * @param handle Timer handle with ASTRA_RIGHT_ADMINISTER.
+ * @param woken Receives threads made runnable when non-NULL.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_rt_timer_cancel(uint32_t handle, uint32_t *woken);
+/**
+ * End another thread's current wait with ASTRA_SYSCALL_CANCELLED.
+ * @param thread Thread handle with ASTRA_RIGHT_ADMINISTER.
+ * @return ASTRA_SYSCALL_OK, or ASTRA_SYSCALL_WOULD_BLOCK when the thread
+ *         is not waiting.
+ */
+uint32_t astra_rt_cancel_wait(uint32_t thread);
 /**
  * Signal an event or release semaphore units.
  * @param handle Signal-capable handle.
@@ -458,6 +504,12 @@ uint32_t astra_rt_library_attach(const AstraLibraryReference *reference,
  * Returns WOULD_BLOCK when no unique resident match exists, allowing the
  * caller to resolve an exact provider reference and retry with
  * astra_rt_library_attach().
+ * @param identity NUL-terminated ABI identity name, shorter than
+ * ASTRA_LIBRARY_NAME_MAX.
+ * @param base Receives mapped base address.
+ * @param span Receives mapped byte span.
+ * @param load_handle Receives the transaction capability.
+ * @return ASTRA_SYSCALL_* status.
  */
 uint32_t astra_rt_library_attach_resident(const char *identity,
                                           uint32_t *base, uint32_t *span,
@@ -678,9 +730,14 @@ uint32_t astra_futex_wake(volatile uint32_t *address, uint32_t count,
                           uint32_t *woken);
 
 /**
- * Acquire a shared sleepable mutex; uncontended acquisition stays in user mode.
- * @param state Aligned shared mutex word initialized to zero.
- * @return ASTRA_SYSCALL_* status.
+ * Atomically exchange a mutex word, retrying a spurious CAS failure so the
+ * returned value is always the one actually replaced (MC68040 GCC can
+ * otherwise return a stale pre-retry value when lowering
+ * __atomic_exchange_n).
+ * @param state Aligned shared mutex word.
+ * @param replacement Value to store.
+ * @param order A `__ATOMIC_*` builtin memory order for the exchange.
+ * @return The word's previous value.
  */
 static inline uint32_t astra_mutex_swap(volatile uint32_t *state,
                                         uint32_t replacement, int order)
@@ -695,6 +752,11 @@ static inline uint32_t astra_mutex_swap(volatile uint32_t *state,
     return previous;
 }
 
+/**
+ * Acquire a shared sleepable mutex; uncontended acquisition stays in user mode.
+ * @param state Aligned shared mutex word initialized to zero.
+ * @return ASTRA_SYSCALL_* status.
+ */
 static inline uint32_t astra_mutex_lock(volatile uint32_t *state)
 {
     uint32_t expected = 0u;
@@ -923,6 +985,20 @@ uint32_t astra_display_submit(uint32_t device,
  */
 uint32_t astra_display_collect(uint32_t device,
                                AstraDisplayFrameCompletion *completion);
+/**
+ * Move, show or hide the display's hardware cursor.
+ *
+ * A posted, latest-value write: it replaces any position the display has
+ * not shown yet and returns at once, with no fence to collect and no wait
+ * behind frames already submitted. Call it for every pointer move.
+ * @param device Display device capability with ASTRA_DISPLAY_CAP_HARDWARE_CURSOR.
+ * @param x On-screen column of the cursor hotspot.
+ * @param y On-screen row of the cursor hotspot.
+ * @param flags ASTRA_DISPLAY_CURSOR_VISIBLE and ASTRA_DISPLAY_CURSOR_SHAPE().
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_display_cursor(uint32_t device, uint32_t x, uint32_t y,
+                              uint32_t flags);
 /**
  * Read queued input events without exceeding caller capacity.
  * @param device Input device capability.

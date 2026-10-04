@@ -15,10 +15,11 @@ communication plane.
 
 This boundary provides source compatibility as the machine evolves. A hardware
 register may move or be replaced without changing application source as long
-as the corresponding NDK contract remains valid. Bare-metal builds currently
-use the direct-MMIO backend. Protected Astra keeps substantial implementations
-in resident services and shared Kits rather than copying them into every
-application.
+as the corresponding NDK contract remains valid. The NDK API is implemented by
+shared libraries (`system.library`, `graphics.library`, `interface.library`,
+and the rest) that sit over the kernel and resident services; Astra keeps
+those substantial implementations in shared Kits rather than copying them into
+every application.
 
 Shared hardware follows the process-owned handle and lease model in
 [`docs/RESOURCE_MODEL.md`](../docs/RESOURCE_MODEL.md). Public mutating APIs
@@ -33,29 +34,42 @@ remains responsible for cleanup after a crash or forced termination.
 
 ```
 include/astra/       public application API
-src/                 library implementations
-src/internal/        private hardware ABI and MMIO access
-tests/               host-side API/backend tests
+docs/                Doxygen/Sphinx sources for the generated guide
+make/                make fragments an application Makefile includes
+tests/               distribution and header-contract tests
 examples/            small application-facing examples
 ```
+
+The NDK ships only public headers, documentation, examples, make fragments,
+and distribution tests. Implementations live with the components that own
+them under `sw/userspace`: `system.library` and `libastra.a` in
+`sw/userspace/system`, UTF-8 in `sw/common/utf8.c`. The front-panel driver
+lives in the boot ROM (`sw/boot`, header `sw/include/astra/front_panel.h`) and
+is not part of the NDK.
 
 `sw/include` remains the low-level firmware register interface used by ROM and
 hardware diagnostics. It is not an application API.
 
 ## Build
 
-The target library is freestanding and defaults to the m68k Linux cross tools:
+The target library is freestanding. The cross compiler is selected by
+`mk/m68k-cross.mk`, which prefers `m68k-astra-gcc`, falls back to
+`m68k-linux-gnu-gcc`, then `m68k-elf-gcc`:
 
 ```sh
 make -C ndk
 make -C ndk test
-make -C ndk sanitize
-make -C ndk analyze
 make -C ndk example
+make -C ndk certify
 ```
 
-`sanitize` runs the host API tests under ASan/UBSan. `analyze` runs GCC's
-path-sensitive static analyzer and is intended for the Linux build hosts.
+`test` (aliased by `check`) runs the header contract: every shipped header
+must compile alone as both C11 and C++17, plus `tests/test_documentation.py`.
+Sanitizers (ASan/UBSan) and GCC's path-sensitive static analyzer run per
+OS-library component under `sw/userspace` (each component's own `sanitize`
+and `analyze` targets); `make -C ndk certify` (and `sdk`) invoke them for every
+component through `os-library-tests`. There is no standalone `make -C ndk
+sanitize` or `analyze` target.
 
 Include `make/astra-native.mk` or `make/astra-posix.mk` from an application
 Makefile. Their normal compile and link variables produce position-independent,
@@ -71,18 +85,19 @@ and system volume.
 
 Override `CROSS` or `CPU_FLAGS` for another compatible toolchain. Published
 components include message ports in `astra/port.h`, shared areas in
-`astra/area.h`, batched bulk IPC in `astra/bulk_ring.h`, managed front-panel
-access in `astra/front_panel.h`, the
-font/text-layout service contract in `astra/font.h`, and the complete Vega and
+`astra/area.h`, batched bulk IPC in `astra/bulk_ring.h`, font.library's UI and
+monospace bitmap fonts in `astra/font_library.h`, and the complete Vega and
 Astraea graphics contract in `astra/graphics.h`. Graphics applications work
 through owned surfaces, palettes, sprite sets, raster programs, command
-lists, and fences rather than raw MMIO. The direct backend currently provides
-the contract and validation boundary; services which require the operating
-system return `ASTRA_ERR_UNAVAILABLE` until their resource manager lands.
-`astra/graphics_kit.h` is the umbrella include for graphics and fonts. Native
-programs call ordinary versioned ELF symbols; their manifest and link metadata
-declare the required libraries, and the process loader resolves the complete
-dependency closure under `LIBS:` before `main` runs.
+lists, and fences rather than raw MMIO; the NDK API is implemented by
+`graphics.library` over the kernel and resident services, and a call that
+needs a resource manager which has not landed yet returns
+`ASTRA_ERROR_NOT_PRESENT`. `astra/graphics_kit.h` is the umbrella include for
+graphics and fonts. Native programs call ordinary versioned ELF symbols; their
+manifest and link metadata declare the required libraries, and the process
+loader resolves the complete dependency closure under `LIBS:` before `main`
+runs. The front-panel driver (`astra/front_panel.h`) is firmware, not an NDK
+component; see the Layout section above.
 
 `astra/filesystem_kit.h` publishes the corresponding Filesystem Kit identity;
 its direct API provides high-level file/directory operations and the existing
@@ -115,10 +130,14 @@ Run `make -C ndk sdk` for the complete SDK gate: target library, host tests,
 sanitizers, static analysis, compiled examples, OS-library contract tests, HTML,
 PDF, and a relocatable NDK archive. The archive is written as
 `ndk/build/dist/astra68-ndk-<astra-os-version>.tar.xz`; its NDK version is the
-Astra OS version by definition. `make -C ndk dist-check` also extracts that
-archive and dynamically links native C, POSIX C, and POSIX C++ programs using
-only its contents and the installed `m68k-astra` compiler. Each smoke program
-also passes the packaged dynamic-executable contract checker.
+Astra OS version by definition. The archive also ships `include/lua` (Lua
+headers), `include/ncursesw` (terminfo headers), `include/SDL2`,
+`include/posix`, and `docs/xml` (the Doxygen XML, for machine-readable API
+access) alongside `include/astra` and the HTML/PDF guides. `make -C ndk
+dist-check` extracts that archive and, using only its contents and the
+installed `m68k-astra` compiler, dynamically links native C, POSIX C, and
+POSIX C++ programs, their static-linked variants, and an SDL program. Each
+smoke program also passes the packaged dynamic-executable contract checker.
 
 Documentation warnings are errors, including undocumented public structures,
 members, callbacks, declarations, parameters, return values, and unresolved
@@ -143,5 +162,8 @@ link contract owned by the NDK and its OS-library implementations.
   cleanup rather than global mutable state.
 - New hardware support lands with its public API, implementation, tests, and
   documentation in the same change.
-- Binary compatibility is not promised before the operating-system library ABI
-  is defined. Source compatibility across a rebuild is the current guarantee.
+- Libraries are versioned by soname major and symbol versions (for example
+  `system.library.2` ABI 2.8, `runtime.library.1` ABI 1.10); a major bump
+  marks an incompatible change. A minor or patch bump is binary compatible.
+- Userspace is hard float: the MC68040 FPU, not a soft-float emulation
+  library.

@@ -45,18 +45,6 @@ typedef struct AstraDateTime {
  */
 bool astra_datetime_now(AstraDateTime *out);
 
-/**
- * Renders an instant with strftime's format, in the zone it carries.
- *
- * @param civil an instant from astra_datetime_now, local or utc.
- * @param format strftime format; NULL means "%Y-%m-%d %H:%M:%S %Z".
- * @param out buffer to write into.
- * @param capacity size of @p out in bytes.
- * @return characters written, or 0 if the result did not fit.
- */
-size_t astra_datetime_format(const AstraCivilTime *civil, const char *format,
-                             char *out, size_t capacity);
-
 /** Seconds since the epoch, for a program that wants the number.
  * @param seconds Receives UTC seconds since the Unix epoch.
  * @return true when the machine knows the date; false otherwise.

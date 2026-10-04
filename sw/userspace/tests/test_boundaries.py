@@ -76,7 +76,9 @@ def test_filesystem_private_state_stays_in_vfs():
         r"->_private_(?:client|read_at|write_at|file|flags|offset|size|kind|member)\b"
     )
     for path in production_sources(USERSPACE):
-        if USERSPACE / "vfs" in path.parents:
+        # system.library's own handle wrappers share these field names.
+        if USERSPACE / "vfs" in path.parents or \
+                USERSPACE / "system" in path.parents:
             continue
         if private_fields.search(path.read_text()):
             raise AssertionError(
@@ -504,14 +506,16 @@ def test_owner_analyzers_cover_production_sources():
             "sw/userspace/commands/Makefile: analyzer omits the Astra-owned "
             "Lua adapter"
         )
-    ndk_makefile = (REPOSITORY / "ndk" / "Makefile").read_text()
+    system_makefile = (USERSPACE / "system" / "Makefile").read_text()
     if not re.search(
         r"ANALYZER_OBJECTS\s*:=\s*\$\(patsubst\s+src/%\.c,"
-        r"build/analyzer/%\.o,\$\(SOURCES\)\)",
-        ndk_makefile,
+        r"build/analyzer/%\.o,\\\s*\$\(patsubst\s+\$\(ASTRA_COMMON\)/%\.c,"
+        r"src/%\.c,\$\(SOURCES\)\)\)",
+        system_makefile,
     ):
         raise AssertionError(
-            "ndk/Makefile: analyzer and target do not share one source list"
+            "sw/userspace/system/Makefile: analyzer and target do not share "
+            "one source list"
         )
     supervisor_makefile = (USERSPACE / "supervisor" / "Makefile").read_text()
     for variable, directory in (
@@ -937,7 +941,7 @@ def test_shared_libraries_have_one_loader_and_one_symbol_abi():
 
 
 def test_shared_libraries_have_one_provider_resolver():
-    reader_header = USERSPACE / "vfs" / "include" / "astra" / "vfs_reader.h"
+    reader_header = USERSPACE / "vfs" / "include" / "astra" / "vfs_library_source.h"
     reader_source = USERSPACE / "vfs" / "src" / "vfs_reader.c"
     consumers = (
         USERSPACE / "vfs" / "src" / "vfs_process.c",
@@ -1088,13 +1092,14 @@ def test_posix_dependencies_have_one_recursive_build_barrier():
 
     vfs = (USERSPACE / "vfs" / "Makefile").read_text()
     if vfs.count("$(MAKE) -C $(RUNTIME)") != 1 or \
-            vfs.count("$(MAKE) -C $(NDK) build/m68k/manifest.o") != 1:
+            vfs.count("$(MAKE) -C $(SYSTEM) build/m68k/manifest.o") != 1:
         raise AssertionError(
             "sw/userspace/vfs/Makefile: loadable-library dependencies can be "
             "built concurrently through multiple recursive makes"
         )
     if not re.search(
-        r"^\$\(NDK_OBJECTS\):\s*\|\s*libraries-ready\s*$", vfs, re.MULTILINE
+        r"^\$\(SYSTEM_STATIC_OBJECTS\):\s*\|\s*libraries-ready\s*$", vfs,
+        re.MULTILINE
     ) or not re.search(
         r"^\$\(FILESYSTEM_LIBRARY\):.*?\|\s*libraries-ready\s*$",
         vfs,
@@ -1207,12 +1212,14 @@ def test_userspace_orchestration_does_not_overlap_shared_producers():
         )
 
 
-def test_ndk_private_headers_stay_in_ndk():
+def test_system_private_headers_stay_in_system():
     forbidden = re.compile(r'#\s*include\s*[<"]internal/')
     for path in production_sources(USERSPACE):
+        if USERSPACE / "system" in path.parents:
+            continue
         if forbidden.search(path.read_text()):
             raise AssertionError(
-                f"{relative(path)}: imports an NDK-private header"
+                f"{relative(path)}: imports a system.library-private header"
             )
 
 
@@ -1239,6 +1246,8 @@ def test_ndk_owns_user_facing_headers():
         "font_library.h",
         "graphics_library.h",
         "keymap.h",
+        "ntp_client.h",
+        "ping.h",
         "posix.h",
         "runtime.h",
         "stream.h",
@@ -1250,6 +1259,7 @@ def test_ndk_owns_user_facing_headers():
         "vfs_client.h",
         "vfs_path.h",
         "vfs_process.h",
+        "vfs_reader.h",
         "vfs_union.h",
     )
     ndk = REPOSITORY / "ndk" / "include" / "astra"
@@ -1532,7 +1542,7 @@ def main():
         test_interface_library_objects_track_all_inputs,
         test_supervisor_owns_local_service_endpoint_lifetimes,
         test_userspace_orchestration_does_not_overlap_shared_producers,
-        test_ndk_private_headers_stay_in_ndk,
+        test_system_private_headers_stay_in_system,
         test_public_headers_are_imported_by_namespace,
         test_ndk_owns_user_facing_headers,
         test_gui_wire_types_are_owned_by_the_protocol,

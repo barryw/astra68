@@ -26,7 +26,7 @@
 #include <astra/vfs_path.h>
 #include <astra/vfs_host_direct.h>
 #include <astra/vfs_port_transport.h>
-#include <astra/vfs_reader.h>
+#include <astra/vfs_library_source.h>
 #include <astra/vfs_service_core.h>
 #include <astra/vfs_union.h>
 

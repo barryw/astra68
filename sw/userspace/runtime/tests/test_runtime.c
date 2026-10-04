@@ -150,6 +150,7 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_WAIT_MULTIPLE &&
         number != ASTRA_SYSCALL_DISPLAY_SUBMIT &&
         number != ASTRA_SYSCALL_DISPLAY_COLLECT &&
+        number != ASTRA_SYSCALL_DISPLAY_CURSOR &&
         number != ASTRA_SYSCALL_PROCESS_DYNAMIC_COMMIT &&
         number != ASTRA_SYSCALL_PROCESS_PRIORITY &&
         number != ASTRA_SYSCALL_THREAD_PRIORITY &&
@@ -786,6 +787,13 @@ test_syscall_wrappers(void)
     assert(mock_number == ASTRA_SYSCALL_DISPLAY_COLLECT);
     assert(mock_argument0 == 3u);
     assert(mock_argument1 == (uint32_t)(uintptr_t)&completion);
+    assert(astra_display_cursor(3u, 640u, 480u,
+                                ASTRA_DISPLAY_CURSOR_VISIBLE) ==
+           ASTRA_SYSCALL_OK);
+    assert(mock_number == ASTRA_SYSCALL_DISPLAY_CURSOR);
+    assert(mock_argument0 == 3u && mock_argument1 == 640u &&
+           mock_argument2 == 480u &&
+           mock_argument3 == ASTRA_DISPLAY_CURSOR_VISIBLE);
     calls = mock_calls;
     assert(astra_display_submit(3u, NULL) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);

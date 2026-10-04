@@ -103,6 +103,16 @@ MORE_PATCHES = [
         "#define HAVE_STDIO_H    1\n#define HAVE_SIGNAL_H   1\n"
         "#define HAVE_SIGACTION  1",
     )),
+    # The C headers every SDL platform config declares. SDL.h is then the
+    # libc prelude programs written against SDL assume (Chocolate Quake
+    # calls rand, atof and sqrtf with only SDL.h included). SDL's own build
+    # reads the same file, so the library and its programs agree.
+    ("include/SDL_config_minimal.h", (
+        "#define HAVE_SIGACTION  1",
+        "#define HAVE_SIGACTION  1\n#define HAVE_STDLIB_H   1\n"
+        "#define HAVE_STRING_H   1\n#define HAVE_MATH_H     1\n"
+        "#define HAVE_CTYPE_H    1",
+    )),
     ("include/SDL_config_minimal.h", (
         "#define SDL_TIMERS_DISABLED 1",
         # clock_gettime: SDL's counters then read the monotonic clock, not

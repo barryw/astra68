@@ -39,6 +39,7 @@ typedef struct AstraMidiSynth {
     AstraPcmStream session;
 } AstraMidiSynth;
 
+/** Empty synth initializer. */
 #define ASTRA_MIDI_SYNTH_INIT {ASTRA_PCM_STREAM_INIT}
 
 /** astra_midi_play() count that repeats until stopped. */
@@ -78,11 +79,13 @@ typedef struct AstraMidiPreset {
 typedef struct AstraMidiStatus {
     /** Nonzero while the song plays or any note still sounds. */
     int sounding;
-    /** The song's position and length in its own ticks. */
+    /** The song's position in its own ticks. */
     uint32_t position_ticks;
+    /** The song's length in its own ticks. */
     uint32_t length_ticks;
-    /** The song's resolution, and its current tempo. */
+    /** The song's resolution: ticks per quarter note. */
     uint32_t ticks_per_quarter;
+    /** The song's current tempo, in microseconds per quarter note. */
     uint32_t tempo_us_per_quarter;
     /** Fonts given to the synth that it is still loading. */
     uint32_t fonts_loading;
@@ -91,9 +94,14 @@ typedef struct AstraMidiStatus {
 /** One short MIDI message: a channel voice message's bytes as on the
  * wire. System messages are ignored. */
 typedef struct AstraMidiEvent {
+    /** Status byte: command nibble in the high bits, channel in the low. */
     uint8_t status;
+    /** First data byte (7-bit); meaning depends on @ref status. */
     uint8_t data1;
+    /** Second data byte (7-bit); meaning depends on @ref status, zero for
+     * two-byte messages such as program change. */
     uint8_t data2;
+    /** Padding to the host's 4-byte wire message; send as zero. */
     uint8_t reserved;
 } AstraMidiEvent;
 
@@ -118,19 +126,27 @@ typedef enum AstraMidiSetting {
  * @param service PCM service capability, as for astra_pcm_open().
  * @param synth Empty caller-owned synth initialized with
  * ASTRA_MIDI_SYNTH_INIT.
+ * @return ASTRA_OK on success; ASTRA_ERROR_INVALID_ARGUMENT if @p synth is
+ * NULL; otherwise the error opening the underlying PCM session.
  */
 ASTRA_NODISCARD AstraResult astra_midi_open(AstraHandle service,
                                             AstraMidiSynth *synth);
 
 /** Release the synth; its sound stops. Local resources are released even
- * if the service has died. */
+ * if the service has died.
+ * @param synth Open synth.
+ * @return ASTRA_OK on success, otherwise an error.
+ */
 ASTRA_NODISCARD AstraResult astra_midi_close(AstraMidiSynth *synth);
 
 /** List the shared SoundFonts, in name order.
+ * @param synth Open synth.
  * @param first Index of the first font to copy.
  * @param fonts Receives up to @p capacity fonts.
+ * @param capacity Room in @p fonts, in entries.
  * @param count Receives how many were copied.
  * @param total Receives how many there are; NULL when not wanted.
+ * @return ASTRA_OK on success, otherwise an error.
  */
 ASTRA_NODISCARD AstraResult astra_midi_fonts(AstraMidiSynth *synth,
                                              uint32_t first,
@@ -141,6 +157,8 @@ ASTRA_NODISCARD AstraResult astra_midi_fonts(AstraMidiSynth *synth,
 
 /** Stack a shared SoundFont on the synth by its file name in
  * SOUND:soundfonts (for example "TimGM6mb.sf2").
+ * @param synth Open synth.
+ * @param name NUL-terminated file name, shorter than the font name limit.
  * @return ASTRA_OK, or an error for a name that is not a plain .sf2 file
  * there.
  */
@@ -150,6 +168,10 @@ ASTRA_NODISCARD AstraResult astra_midi_add_system_font(AstraMidiSynth *synth,
 /** Stack a SoundFont given as bytes (an .sf2 file the program has read,
  * such as one in its bundle). The host checks it and keeps one copy of
  * each distinct font however often it is sent.
+ * @param synth Open synth.
+ * @param font Complete .sf2 file bytes.
+ * @param bytes Length of @p font in bytes.
+ * @return ASTRA_OK on success, otherwise an error.
  */
 ASTRA_NODISCARD AstraResult astra_midi_add_font(AstraMidiSynth *synth,
                                                 const void *font,
@@ -158,10 +180,13 @@ ASTRA_NODISCARD AstraResult astra_midi_add_font(AstraMidiSynth *synth,
 /** List the instruments the synth's fonts provide: for each bank and
  * program, the preset that is heard, in bank then program order. Waits
  * until every font given to the synth has loaded.
+ * @param synth Open synth.
  * @param first Index of the first preset to copy.
  * @param presets Receives up to @p capacity presets.
+ * @param capacity Room in @p presets, in entries.
  * @param count Receives how many were copied.
  * @param total Receives how many there are; NULL when not wanted.
+ * @return ASTRA_OK on success, otherwise an error.
  */
 ASTRA_NODISCARD AstraResult astra_midi_presets(AstraMidiSynth *synth,
                                                uint32_t first,
@@ -170,48 +195,90 @@ ASTRA_NODISCARD AstraResult astra_midi_presets(AstraMidiSynth *synth,
                                                uint32_t *count,
                                                uint32_t *total);
 
-/** Replace the song with a Standard MIDI File; stops any song playing. */
+/** Replace the song with a Standard MIDI File; stops any song playing.
+ * @param synth Open synth.
+ * @param file Complete Standard MIDI File bytes.
+ * @param bytes Length of @p file in bytes.
+ * @return ASTRA_OK on success, otherwise an error.
+ */
 ASTRA_NODISCARD AstraResult astra_midi_load(AstraMidiSynth *synth,
                                             const void *file,
                                             uint32_t bytes);
 
-/** Play the song from its start @p plays times, or ::ASTRA_MIDI_FOREVER. */
+/** Play the song from its start @p plays times, or ::ASTRA_MIDI_FOREVER.
+ * @param synth Open synth.
+ * @param plays Number of plays, nonzero, or ::ASTRA_MIDI_FOREVER.
+ * @return ASTRA_OK on success, otherwise an error.
+ */
 ASTRA_NODISCARD AstraResult astra_midi_play(AstraMidiSynth *synth,
                                             int32_t plays);
 
-/** Hold or resume the song where it is. */
+/** Hold or resume the song where it is.
+ * @param synth Open synth.
+ * @param paused Nonzero to pause, zero to resume.
+ * @return ASTRA_OK on success, otherwise an error.
+ */
 ASTRA_NODISCARD AstraResult astra_midi_pause(AstraMidiSynth *synth,
                                              int paused);
 
-/** End the song; every note stops at once. */
+/** End the song; every note stops at once.
+ * @param synth Open synth.
+ * @return ASTRA_OK on success, otherwise an error.
+ */
 ASTRA_NODISCARD AstraResult astra_midi_stop(AstraMidiSynth *synth);
 
-/** Play live MIDI messages at once, in order after every earlier call. */
+/** Play live MIDI messages at once, in order after every earlier call.
+ * @param synth Open synth.
+ * @param events Short MIDI messages to play.
+ * @param count Number of entries in @p events, nonzero.
+ * @return ASTRA_OK on success, otherwise an error.
+ */
 ASTRA_NODISCARD AstraResult astra_midi_send(AstraMidiSynth *synth,
                                             const AstraMidiEvent *events,
                                             uint32_t count);
 
 /** Change one setting; ASTRA_ERROR_INVALID_ARGUMENT for a value out of
- * its range. */
+ * its range.
+ * @param synth Open synth.
+ * @param setting Setting to change.
+ * @param value New value, in the setting's own range.
+ * @return ASTRA_OK on success, otherwise an error.
+ */
 ASTRA_NODISCARD AstraResult astra_midi_set(AstraMidiSynth *synth,
                                            AstraMidiSetting setting,
                                            uint32_t value);
 
-/** Set linear gain: 65536 is unity and zero is silent. */
+/** Set linear gain: 65536 is unity and zero is silent.
+ * @param synth Open synth.
+ * @param gain_q16 Unsigned Q16 linear gain.
+ * @return ASTRA_OK on success, otherwise an error.
+ */
 ASTRA_NODISCARD AstraResult astra_midi_gain(AstraMidiSynth *synth,
                                             uint32_t gain_q16);
 
-/** Ask where the song is and whether the synth still sounds. */
+/** Ask where the song is and whether the synth still sounds.
+ * @param synth Open synth.
+ * @param status Receives a point-in-time status snapshot.
+ * @return ASTRA_OK on success, otherwise an error.
+ */
 ASTRA_NODISCARD AstraResult astra_midi_status(AstraMidiSynth *synth,
                                               AstraMidiStatus *status);
 
 /** Ask whether the synth is still sounding.
+ * @param synth Open synth.
  * @param active Receives nonzero while a song plays or a note rings.
+ * @return ASTRA_OK on success, otherwise an error.
  */
 ASTRA_NODISCARD AstraResult astra_midi_active(AstraMidiSynth *synth,
                                               int *active);
 
-/** Start a note. */
+/** Start a note.
+ * @param synth Open synth.
+ * @param channel MIDI channel, 0..15.
+ * @param key MIDI note number, 0..127.
+ * @param velocity Note-on velocity, 0..127.
+ * @return The result of the underlying astra_midi_send().
+ */
 static inline AstraResult astra_midi_note_on(AstraMidiSynth *synth,
                                              uint8_t channel, uint8_t key,
                                              uint8_t velocity)
@@ -223,7 +290,12 @@ static inline AstraResult astra_midi_note_on(AstraMidiSynth *synth,
     return astra_midi_send(synth, &event, 1u);
 }
 
-/** Release a note. */
+/** Release a note.
+ * @param synth Open synth.
+ * @param channel MIDI channel, 0..15.
+ * @param key MIDI note number, 0..127.
+ * @return The result of the underlying astra_midi_send().
+ */
 static inline AstraResult astra_midi_note_off(AstraMidiSynth *synth,
                                               uint8_t channel, uint8_t key)
 {
@@ -233,7 +305,13 @@ static inline AstraResult astra_midi_note_off(AstraMidiSynth *synth,
     return astra_midi_send(synth, &event, 1u);
 }
 
-/** Choose a channel's instrument: bank select, then program change. */
+/** Choose a channel's instrument: bank select, then program change.
+ * @param synth Open synth.
+ * @param channel MIDI channel, 0..15.
+ * @param bank MIDI bank, 0..16383 (bank select MSB * 128 + LSB).
+ * @param program MIDI program, 0..127.
+ * @return The result of the underlying astra_midi_send().
+ */
 static inline AstraResult astra_midi_program(AstraMidiSynth *synth,
                                              uint8_t channel, uint16_t bank,
                                              uint8_t program)
@@ -250,7 +328,13 @@ static inline AstraResult astra_midi_program(AstraMidiSynth *synth,
     return astra_midi_send(synth, events, 3u);
 }
 
-/** Set a controller (CC 0..127) on a channel. */
+/** Set a controller (CC 0..127) on a channel.
+ * @param synth Open synth.
+ * @param channel MIDI channel, 0..15.
+ * @param controller MIDI controller number, 0..127.
+ * @param value Controller value, 0..127.
+ * @return The result of the underlying astra_midi_send().
+ */
 static inline AstraResult astra_midi_control(AstraMidiSynth *synth,
                                              uint8_t channel,
                                              uint8_t controller,
@@ -263,7 +347,12 @@ static inline AstraResult astra_midi_control(AstraMidiSynth *synth,
     return astra_midi_send(synth, &event, 1u);
 }
 
-/** Bend a channel's pitch: 0..16383, 8192 is centred. */
+/** Bend a channel's pitch: 0..16383, 8192 is centred.
+ * @param synth Open synth.
+ * @param channel MIDI channel, 0..15.
+ * @param value Pitch bend value, 0..16383.
+ * @return The result of the underlying astra_midi_send().
+ */
 static inline AstraResult astra_midi_pitch_bend(AstraMidiSynth *synth,
                                                 uint8_t channel,
                                                 uint16_t value)
@@ -275,7 +364,11 @@ static inline AstraResult astra_midi_pitch_bend(AstraMidiSynth *synth,
     return astra_midi_send(synth, &event, 1u);
 }
 
-/** Release every note on a channel (controller 123). */
+/** Release every note on a channel (controller 123).
+ * @param synth Open synth.
+ * @param channel MIDI channel, 0..15.
+ * @return The result of the underlying astra_midi_send().
+ */
 static inline AstraResult astra_midi_all_notes_off(AstraMidiSynth *synth,
                                                    uint8_t channel)
 {

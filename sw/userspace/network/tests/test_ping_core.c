@@ -1,4 +1,4 @@
-#include <astra/ping_core.h>
+#include <astra/ping.h>
 
 #include <assert.h>
 #include <stddef.h>

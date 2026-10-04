@@ -1,6 +1,6 @@
 /* ICMP checksum loop adapted from Toybox ping.c; see ASTRA_VENDOR.md. */
 
-#include <astra/ping_core.h>
+#include <astra/ping.h>
 
 #include <stddef.h>
 

@@ -6,7 +6,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _POSIX_MONOTONIC_CLOCK 200809L
 
-#include <astra/ping_core.h>
+#include <astra/ping.h>
 #include <astra/program.h>
 #include <astra/status.h>
 

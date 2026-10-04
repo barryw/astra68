@@ -1,99 +1,71 @@
 # Graphics and Display
 
-The graphics API exposes protected display surfaces, asynchronous draw lists,
-hardware sprites, beam-synchronized raster programs, and completion fences.
-Applications never receive physical SDRAM addresses or map Vega/Astraea MMIO.
-The display service validates every object, pins referenced storage, arbitrates
-the shared engines, and retires ownership only after a fence signals.
+A program draws through its window. The display service owns the screen,
+validates every request, and drives the shared graphics engines; programs
+never receive physical addresses or program chipset registers.
 
 ## Rendering flow
 
-1. Open an {c:struct}`AstraDisplay` and query
-   {c:func}`astra_graphics_get_info`.
-2. Create an {c:struct}`AstraSurface` with explicit dimensions, format, and
-   intended uses.
-3. Create an {c:struct}`AstraDrawList` with a mandatory clip rectangle and
-   append geometry, patterns, flood fills, or immutable text layouts.
-4. Submit the list with {c:func}`astra_draw_submit` and wait or poll its
-   {c:struct}`AstraFence`.
-5. Present a scanout surface at vblank with
-   {c:func}`astra_display_present_surface`.
+1. Create a window with `ASTRA_WINDOW_CONTENT_SURFACE` using
+   {c:func}`astra_window_create`.
+2. Bind a graphics connection to it with {c:func}`astra_window_display`, and
+   borrow its content as a draw target with {c:func}`astra_window_surface`.
+3. Create any further surfaces -- textures, sprites, back buffers -- with
+   {c:func}`astra_surface_create`, stating their dimensions, format, and uses.
+   Fill them from the CPU with {c:func}`astra_surface_write`, or through the
+   display's staging area with {c:func}`astra_display_staging` and
+   {c:func}`astra_surface_write_staged`.
+4. Record drawing in an {c:struct}`AstraDrawList` created with a destination
+   and a clip rectangle: blits, triangles, lines, rectangles, and UI text.
+5. Submit it with {c:func}`astra_draw_submit`. The returned
+   {c:struct}`AstraFence` signals when the work is done; wait on it, poll it,
+   or close it if nothing depends on the result.
+6. Show the frame with {c:func}`astra_window_present`,
+   {c:func}`astra_window_present_region`, or
+   {c:func}`astra_window_present_discard` when the next frame redraws every
+   pixel.
 
-The physical output is always 1920x1080p60. Select a logical scene with
-{c:func}`astra_display_set_mode`; its fence covers source, crop, and viewport
-as one frame-boundary transaction. `AUTO` uses the largest useful integer
-scale (320x200 becomes 1600x1000) and falls back to aspect-preserving
-fractional fit when only 1x would fit. Explicit integer, fit, and fill policies
-use the same nearest-neighbor FPGA path. The MC68040 never resamples pixels.
+The screen is 1920x1080. A window's content is RGB565.
+{c:func}`astra_display_layout_calculate` computes the exact crop and viewport
+the hardware scaler would use for a logical scene, without floating point.
 
-Batch primitives that share a paint. {c:func}`astra_draw_rectangles` appends
+## Batching
+
+Commands that share a paint batch: {c:func}`astra_draw_rectangles` appends
 any number of filled rectangles as one command, which the service lowers to
-one hardware rectangle list per 4,096 rectangles for replace and alpha
-blending; {c:func}`astra_draw_lines` does the same for line segments, and
-{c:func}`astra_draw_triangles` for triangles. Each command costs
-the service and the hardware work of its own, so one call per rectangle is the
-slow way to draw points and spans.
+one hardware rectangle list per 4,096 rectangles;
+{c:func}`astra_draw_lines` does the same for line segments, and
+{c:func}`astra_draw_triangles` for triangles. Every command costs the service
+and the hardware work of its own, so one call per rectangle is the slow way
+to draw points and spans.
 
-Draw lists are mutable until submission and sealed while in flight. Surfaces,
-font strikes, palettes, and other referenced objects remain pinned through the
-completion fence, so application cleanup cannot create a DMA use-after-free.
+Draw lists are mutable until submission and sealed while in flight.
+Surfaces a list references stay alive until its fence signals, so closing
+them early cannot corrupt work in flight.
 
 ## Surfaces and formats
 
-Creation flags state whether a surface may be scanned out, used as a draw
-source or target, or mapped by the CPU. These are validation
-rights, not hints. The service chooses a hardware-compatible pitch and reports
-it through {c:func}`astra_surface_get_info`.
+Creation flags state whether a surface may be a draw source or target, or
+read and written by the CPU. These are validation rights, not hints. The
+service chooses the pitch and reports it through
+{c:func}`astra_surface_get_info`. Draw targets are RGB565, XRGB8888,
+ARGB8888, or INDEX8 (INDEX8 takes no blending and no triangles).
 
-Scanout and geometry support INDEX8 and RGB565. Font sources additionally use
-MASK1, A4, and INDEX4. A4 blends into RGB565 with the exact native-channel rule
-specified by the AFNT contract; indexed glyph palettes are RGB565 and use a
-caller-selected transparent index.
+## The pointer
 
-An {c:struct}`AstraPalette` is a copied, mutable set of up to 256 opaque sRGB
-entries. One presentation snapshot supplies indexed framebuffer and sprite
-colors. Sprite transparency remains an explicit descriptor index rather than
-palette alpha.
+A window chooses the pointer shown over its content: a system shape with
+{c:func}`astra_window_set_pointer_shape`, or its own 32x32 image with
+{c:func}`astra_window_set_pointer_image`. The pointer is a hardware plane
+composed after scaling, moved by the display service at vertical blank.
 
-## Sprites and raster programs
+## Synchronizing with the display
 
-An {c:struct}`AstraSpriteSet` contains up to 64 copied sprite descriptions.
-Replacing an entry is atomic from the next presentation that references the
-set. Every sprite references an INDEX8 source rectangle whose width and height
-are independently selectable from 1 through 128 pixels. Destination width and
-height are independently selectable from 1 through 1024 pixels for
-nearest-neighbor scaling. The service validates source bounds, clipping,
-priority, palette bank, transparency, opacity, and collision policy before
-publishing hardware descriptors. Each sprite independently selects one of
-sixteen 256-entry ARGB palette banks.
-Vega admits complete sprites in descending priority and ascending descriptor
-index until either 16 spans or the 2,048-pixel scanline budget is exhausted.
-Scaling remains supported, so a wider destination span consumes more of that
-budget. Query {c:member}`AstraGraphicsInfo.max_sprites_per_line` and
-{c:member}`AstraGraphicsInfo.max_sprite_pixels_per_line` rather than assuming
-the 64 global descriptors can all overlap.
-Overflow is reported as
-{c:enumerator}`ASTRA_DISPLAY_STATUS_SPRITE_OVERFLOW` and never becomes a
-scanout underrun.
-
-An {c:struct}`AstraRasterProgram` is an immutable ordered list of validated beam
-changes. Public target identifiers deliberately expose only display-safe
-operations; they are translated to privileged copper instructions by the
-service. Applications cannot issue arbitrary copper MMIO writes.
-
-The dedicated 32x32 ARGB hardware pointer is composed after scene scaling, so
-it remains native-sized in every logical mode. Image, position, and enable
-changes are frame-atomic. Disabling it leaves all 64 ordinary scaled sprites
-available.
+A window that subscribes to `ASTRA_WINDOW_SUBSCRIBE_VBLANK` can wait on
+{c:func}`astra_window_vblank_wait_handle`, which the display signals once per
+frame.
 
 ## Lifetime
 
-Use `ASTRA_AUTO_DISPLAY`, `ASTRA_AUTO_SURFACE`, `ASTRA_AUTO_DRAW_LIST`,
-`ASTRA_AUTO_SPRITE_SET`, `ASTRA_AUTO_RASTER_PROGRAM`, and `ASTRA_AUTO_FENCE` for
-scope cleanup. Cleanup closes handles but never cancels submitted work. The
-service holds its own references until the associated fence retires.
-
-The current direct-MMIO NDK intentionally reports the graphics service as not
-present. The API and validation surface are linkable now; the operating-system
-display service will implement the same source contract without exposing raw
-hardware to applications.
+Use `ASTRA_AUTO_DISPLAY`, `ASTRA_AUTO_SURFACE`, `ASTRA_AUTO_DRAW_LIST`, and
+`ASTRA_AUTO_FENCE` for scope cleanup. Cleanup closes handles but never
+cancels submitted work. Close the display before its window.

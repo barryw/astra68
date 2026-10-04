@@ -6,7 +6,6 @@
  * @brief Public Graphics Kit surface and shared-library identities.
  */
 
-#include <astra/font.h>
 #include <astra/font_library.h>
 #include <astra/graphics.h>
 #include <astra/graphics_library.h>

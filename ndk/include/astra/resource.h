@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 
+#include <astra/object_abi.h>
 #include <astra/attributes.h>
 #include <astra/types.h>
 
@@ -30,63 +31,7 @@ typedef uint32_t AstraHandle;
 /** Sentinel representing no resource ownership. */
 #define ASTRA_INVALID_HANDLE ((AstraHandle)0)
 
-/** Rights that may be granted by a resource handle. */
-#ifndef ASTRA_RIGHTS_DEFINED
-#define ASTRA_RIGHTS_DEFINED 1
-enum {
-    /** Observe resource state or read data. */
-    ASTRA_RIGHT_READ = 1u << 0,
-    /** Modify resource state or write data. */
-    ASTRA_RIGHT_WRITE = 1u << 1,
-    /** Map the resource into the process address space. */
-    ASTRA_RIGHT_MAP = 1u << 2,
-    /** Signal an event, semaphore, or other waitable object. */
-    ASTRA_RIGHT_SIGNAL = 1u << 3,
-    /** Wait for the resource to become signaled or ready. */
-    ASTRA_RIGHT_WAIT = 1u << 4,
-    /** Transfer the capability to another process or subsystem. */
-    ASTRA_RIGHT_TRANSFER = 1u << 5,
-    /** Change resource configuration or lifecycle state. */
-    ASTRA_RIGHT_ADMINISTER = 1u << 6,
-    /** Use privileged diagnostics associated with the resource. */
-    ASTRA_RIGHT_DEBUG = 1u << 7
-};
-#endif
-
-/** Flags controlling resource acquisition. */
-enum {
-    /** Return immediately instead of waiting for a busy resource. */
-    ASTRA_ACQUIRE_NONBLOCK = 1u << 0,
-    /** Request ownership compatible with other shared owners. */
-    ASTRA_ACQUIRE_SHARED = 1u << 1,
-    /** Request ownership that excludes every other owner. */
-    ASTRA_ACQUIRE_EXCLUSIVE = 1u << 2
-};
-
-/**
- * Policy supplied to a resource-acquisition operation.
- *
- * Initialize this structure with ::ASTRA_ACQUIRE_OPTIONS_INIT, then modify
- * supported fields. Reserved fields must remain zero.
- *
- * @since 0.1.0
- */
-typedef struct AstraAcquireOptions {
-    /** Size of this structure in bytes, including reserved fields. */
-    uint32_t size;
-    /** Bitwise combination of acquisition flags. */
-    uint32_t flags;
-    /** Maximum wait in milliseconds when blocking is permitted. */
-    uint32_t timeout_ms;
-    /** Reserved for source-compatible growth; initialize to zero. */
-    uint32_t reserved[5];
-} AstraAcquireOptions;
-
-/** Infinite acquisition deadline for APIs that permit blocking. */
-#define ASTRA_TIMEOUT_INFINITE UINT32_C(0xffffffff)
-/** Default exclusive, immediate acquisition options initializer. */
-#define ASTRA_ACQUIRE_OPTIONS_INIT \
-    { sizeof(AstraAcquireOptions), ASTRA_ACQUIRE_EXCLUSIVE, 0, { 0, 0, 0, 0, 0 } }
+/* Handle rights (ASTRA_RIGHT_*) are in astra/object_abi.h. */
 
 /**
  * Close one process-owned capability.

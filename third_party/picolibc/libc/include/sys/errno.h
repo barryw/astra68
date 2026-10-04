@@ -33,6 +33,11 @@ SUCH DAMAGE.
 #ifndef _SYS_ERRNO_H_
 #define _SYS_ERRNO_H_
 
+/* Astra: errno itself, as glibc's and the BSDs' <sys/errno.h> provide it.
+   <errno.h> includes this header after declaring errno, so the guard above
+   makes the nested include a no-op whichever header comes first. */
+#include <errno.h>
+
 #define EPERM           1      /* Not owner */
 #define ENOENT          2      /* No such file or directory */
 #define ESRCH           3      /* No such process */

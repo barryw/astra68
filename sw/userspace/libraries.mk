@@ -8,7 +8,7 @@ ASTRA_USERSPACE_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 ASTRA_REPOSITORY_ROOT := $(abspath $(ASTRA_USERSPACE_ROOT)/../..)
 
 ASTRA_SYSTEM_LIBRARY := \
-	$(ASTRA_REPOSITORY_ROOT)/ndk/build/m68k/libraries/system.library.2
+	$(ASTRA_REPOSITORY_ROOT)/sw/userspace/system/build/m68k/libraries/system.library.2
 ASTRA_COMPILER_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/compiler/build/m68k/libraries/compiler.library.2
 ASTRA_UNWIND_LIBRARY := \
@@ -140,7 +140,7 @@ ASTRA_LIBRARY_DEPS_sdl2mixer := sdl2 libc runtime compiler
 ASTRA_LIBRARY_DEPS_sdl2ttf := sdl2 libc runtime compiler
 ASTRA_LIBRARY_DEPS_pcm := runtime compiler
 
-ASTRA_LIBRARY_OWNER_system := $(ASTRA_REPOSITORY_ROOT)/ndk:library
+ASTRA_LIBRARY_OWNER_system := $(ASTRA_REPOSITORY_ROOT)/sw/userspace/system:library
 ASTRA_LIBRARY_OWNER_compiler := $(ASTRA_USERSPACE_ROOT)/compiler:library
 ASTRA_LIBRARY_OWNER_unwind := $(ASTRA_USERSPACE_ROOT)/compiler:unwind-library
 ASTRA_LIBRARY_OWNER_runtime := $(ASTRA_USERSPACE_ROOT)/runtime:library
@@ -166,7 +166,7 @@ ASTRA_LIBRARY_OWNER_sdl2ttf := $(ASTRA_USERSPACE_ROOT)/sdl2:ttf-shared
 # Release and NDK gates use the owners' full ABI contracts.  Application
 # builds intentionally use the freshness targets above so launching one
 # program never certifies unrelated libraries.
-ASTRA_LIBRARY_CONTRACT_OWNER_system := $(ASTRA_REPOSITORY_ROOT)/ndk:system-library-contract
+ASTRA_LIBRARY_CONTRACT_OWNER_system := $(ASTRA_REPOSITORY_ROOT)/sw/userspace/system:system-library-contract
 ASTRA_LIBRARY_CONTRACT_OWNER_compiler := $(ASTRA_USERSPACE_ROOT)/compiler:compiler-library-contract
 ASTRA_LIBRARY_CONTRACT_OWNER_unwind := $(ASTRA_USERSPACE_ROOT)/compiler:unwind-library-contract
 ASTRA_LIBRARY_CONTRACT_OWNER_runtime := $(ASTRA_USERSPACE_ROOT)/runtime:runtime-library-contract

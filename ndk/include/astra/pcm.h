@@ -54,7 +54,7 @@ typedef struct AstraPcmStatus {
  * Each stream has an isolated service session, revoked on client death.
  * @param service Startup `PCM` service capability.
  * @param format A format word from ASTRA_PCM_FORMAT(): any encoding in
- * pcm_format.h, one or two channels, ASTRA_PCM_RATE_MIN to
+ * %pcm_format.h, one or two channels, ASTRA_PCM_RATE_MIN to
  * ASTRA_PCM_RATE_MAX frames per second. The Linux audio host converts and
  * resamples it to the sink, so submit samples as they are; SDL2's device
  * takes each application's own format this way.
@@ -100,10 +100,17 @@ ASTRA_NODISCARD AstraResult astra_pcm_wait(AstraPcmStream *stream,
  */
 ASTRA_NODISCARD AstraResult astra_pcm_gain(AstraPcmStream *stream,
                                            uint32_t gain_q16);
-/** Pause or resume playback without discarding queued frames. */
+/** Pause or resume playback without discarding queued frames.
+ * @param stream Open PCM stream.
+ * @param paused Nonzero to pause, zero to resume.
+ * @return ASTRA_OK on success, otherwise an error.
+ */
 ASTRA_NODISCARD AstraResult astra_pcm_pause(AstraPcmStream *stream,
                                             int paused);
-/** Discard queued frames; already-submitted hardware frames may still play. */
+/** Discard queued frames; already-submitted hardware frames may still play.
+ * @param stream Open PCM stream.
+ * @return ASTRA_OK on success, otherwise an error.
+ */
 ASTRA_NODISCARD AstraResult astra_pcm_clear(AstraPcmStream *stream);
 /** Read queue and sink counters.
  * @param stream Open PCM stream.

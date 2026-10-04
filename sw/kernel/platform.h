@@ -133,6 +133,7 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
                                     uint32_t attachment);
 bool kernel_platform_display_collect(
     struct AstraDisplayFrameCompletion *completion);
+bool kernel_platform_display_cursor(uint32_t x, uint32_t y, uint32_t flags);
 bool kernel_platform_display_reset(void);
 bool kernel_platform_copy_present(void);
 bool kernel_platform_copy(uint32_t list_physical);

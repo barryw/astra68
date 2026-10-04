@@ -9,6 +9,10 @@ OUTPUT_LANGUAGE        = English
 OPTIMIZE_OUTPUT_FOR_C  = YES
 TYPEDEF_HIDES_STRUCT   = YES
 EXTRACT_ALL            = NO
+# The first sentence of a comment is its brief: the XML a tool reads then
+# carries a <briefdescription> for every member, not only a detailed one.
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = YES
 EXTRACT_PRIVATE        = NO
 EXTRACT_STATIC         = YES
 HIDE_UNDOC_MEMBERS     = NO
@@ -18,7 +22,34 @@ HIDE_IN_BODY_DOCS      = NO
 
 INPUT                  = include/astra ../sw/include/astra/gui.h \
                          ../sw/include/astra/message_abi.h \
-                         ../sw/include/astra/pcm_format.h
+                         ../sw/include/astra/pcm_format.h \
+                         ../sw/include/astra/object_abi.h \
+                         ../sw/include/astra/address_space.h \
+                         ../sw/include/astra/application_service.h \
+                         ../sw/include/astra/block.h \
+                         ../sw/include/astra/bytes.h \
+                         ../sw/include/astra/civil.h \
+                         ../sw/include/astra/compiler.h \
+                         ../sw/include/astra/display.h \
+                         ../sw/include/astra/divide.h \
+                         ../sw/include/astra/event.h \
+                         ../sw/include/astra/event_descriptor.h \
+                         ../sw/include/astra/host.h \
+                         ../sw/include/astra/input.h \
+                         ../sw/include/astra/library.h \
+                         ../sw/include/astra/limits.h \
+                         ../sw/include/astra/network.h \
+                         ../sw/include/astra/ntp.h \
+                         ../sw/include/astra/posix_process.h \
+                         ../sw/include/astra/proc.h \
+                         ../sw/include/astra/process.h \
+                         ../sw/include/astra/program.h \
+                         ../sw/include/astra/service_manager_abi.h \
+                         ../sw/include/astra/shutdown.h \
+                         ../sw/include/astra/status.h \
+                         ../sw/include/astra/stream_service.h \
+                         ../sw/include/astra/syscall.h \
+                         ../sw/include/astra/vfs_service.h
 FILE_PATTERNS          = *.h
 RECURSIVE              = YES
 EXCLUDE_PATTERNS       = */internal/*
@@ -53,7 +84,9 @@ EXPAND_ONLY_PREDEF     = YES
 PREDEFINED             = ASTRA_EXTERN_C_BEGIN= \
                          ASTRA_EXTERN_C_END= \
                          ASTRA_NODISCARD= \
-                         ASTRA_CLEANUP(x)=
+                         ASTRA_CLEANUP(x)= \
+                         _Alignas(x)= \
+                         ASTRA_BYTES_RESTRICT=
 
 GENERATE_HTML          = YES
 HTML_OUTPUT            = html

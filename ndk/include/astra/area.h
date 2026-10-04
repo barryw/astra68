@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 
+#include <astra/object_abi.h>
 #include <astra/address_space.h>
 #include <astra/attributes.h>
 #include <astra/resource.h>
@@ -20,17 +21,7 @@ ASTRA_EXTERN_C_BEGIN
  *  @{
  */
 
-#ifndef ASTRA_AREA_ABI_CONSTANTS_DEFINED
-/** Internal one-definition guard shared with the raw trap ABI header. */
-#define ASTRA_AREA_ABI_CONSTANTS_DEFINED 1
-/** Maximum size of one shared or reserved area. */
-#define ASTRA_AREA_SIZE_MAX \
-    (ASTRA_SHARED_AREA_ADDRESS_END - ASTRA_SHARED_AREA_ADDRESS_START)
-/** Map readable pages. Every mapping must include this flag. */
-#define ASTRA_AREA_MAP_READ (1u << 0)
-/** Map writable pages; requires write rights on the area handle. */
-#define ASTRA_AREA_MAP_WRITE (1u << 1)
-#endif
+/* Area flags (ASTRA_AREA_*) are in astra/object_abi.h. */
 
 /** Owned area capability and optional process-local mapping. @since 0.1.0 */
 typedef struct AstraArea {

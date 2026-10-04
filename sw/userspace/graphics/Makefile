@@ -9,6 +9,7 @@ ANALYZER_CC ?= gcc
 RUNTIME := ../runtime
 COMPILER := ../compiler
 NDK := ../../../ndk
+SYSTEM := ../system
 CPPFLAGS := -I$(NDK)/include -Iinclude -I$(RUNTIME)/include \
 	-I../../include -I../../../fpga/arty/linux
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
@@ -46,7 +47,7 @@ GRAPHICS_LIBRARY_OBJECTS := build/m68k/library/graphics_library.o \
 	build/m68k/library/graphics_shared_surface.o
 FONT_LIBRARY_OBJECTS := build/m68k/library/font_library.o \
 	build/m68k/library/font_surface.o
-SYSTEM_LIBRARY := $(NDK)/build/m68k/libraries/system.library.2
+SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.2
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
@@ -137,7 +138,7 @@ $(TARGET_OBJECTS) $(PIC_OBJECTS): Makefile
 $(GRAPHICS_LIBRARY_OBJECTS) $(FONT_LIBRARY_OBJECTS): Makefile
 
 shared-libraries-ready:
-	$(MAKE) -C $(NDK) library
+	$(MAKE) -C $(SYSTEM) library
 	$(MAKE) -C $(COMPILER) library
 
 $(GRAPHICS_LIBRARY): $(GRAPHICS_LIBRARY_OBJECTS) $(GRAPHICS_LIBRARY_MAP) \

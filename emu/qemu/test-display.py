@@ -26,16 +26,16 @@ INPUT_COUNT_MASK = 0xFF
 QUEUE_REQUEST_READY = 1 << 8
 DRAW_DONE = 1 << 3
 PRESENT_BUDGET_CYCLES = 250000
-POINTER_BUDGET_CYCLES = 250000
 RESIZE_BUDGET_CYCLES = 250000
+# Reading two counters is not atomic: a batch may be submitted between them.
+POINTER_SUBMISSION_SLACK = 2
 NOMINAL_CPU_HZ = 12500000
 # The desktop is quiet when every request it made has completed and no new
 # one arrived for this long.
 DESKTOP_SETTLE_SECONDS = 0.5
-EXPECTED_POINTER_SUBMISSIONS = 1
+EXPECTED_POINTER_SUBMISSIONS = 0
 EXPECTED_POINTER_BATCHES = 0
 RENDER_OPERATION = 3
-CURSOR_OPERATION = 4
 CPU_BENCHMARK = re.compile(
     r"^CPU benchmark \.{6} ([0-9]+) Hz effective "
     r"\(best ([0-9]+) us kernel decode\)$"
@@ -364,28 +364,15 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                     (cursor_updates, cursor_x, pointer_submissions,
                      pointer_completions, pointer_batches,
                      pointer_operation))
-            pointer_submit_cycle = qmp.property(
-                "astra-display-cursor-submit-cycle")
-            pointer_completion_cycle = qmp.property(
-                "astra-display-cursor-completion-cycle")
-            pointer_collect_cycle = qmp.property(
-                "astra-display-cursor-collect-cycle")
-            pointer_cycles = pointer_collect_cycle - pointer_submit_cycle
-            if not (pointer_submit_cycle < pointer_completion_cycle <=
-                    pointer_collect_cycle):
-                raise RuntimeError(
-                    "pointer cycle order invalid: %d %d %d" %
-                                   (pointer_submit_cycle,
-                                    pointer_completion_cycle,
-                                    pointer_collect_cycle))
-            if pointer_cycles > POINTER_BUDGET_CYCLES:
-                raise RuntimeError("pointer update took %d cycles; budget %d" %
-                                   (pointer_cycles,
-                                    POINTER_BUDGET_CYCLES))
             # Pointer traffic must not starve application timers.  Terminal
             # does not consume pointer events, so its underline must keep
             # blinking while the hardware cursor is moving.
             blink_batches = pointer_batches
+            # The cursor is posted, never a request: under a burst of motion
+            # every device submission is a render batch (the blink, hover
+            # frames), and the cursor still follows.
+            motion_submissions = qmp.property("astra-display-submissions")
+            motion_updates = qmp.property("astra-display-cursor-updates")
             motion_end = time.monotonic() + 1.1
             motion_x = 700
             while time.monotonic() < motion_end:
@@ -402,6 +389,18 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                     "pointer motion starved terminal cursor blink: "
                     "batches=%d/%d" % (blink_batches, pointer_batches))
             pointer_submissions = qmp.property("astra-display-submissions")
+            moved = qmp.property("astra-display-cursor-updates") - \
+                motion_updates
+            motion_requests = pointer_submissions - motion_submissions
+            motion_batches = pointer_batches - blink_batches
+            if moved < 2 or motion_requests > \
+                    motion_batches + POINTER_SUBMISSION_SLACK:
+                raise RuntimeError(
+                    "pointer motion is not posted: cursor updates=%d, "
+                    "device requests=%d for %d render batches" %
+                    (moved, motion_requests, motion_batches))
+            print("ASTRA DISPLAY POSTED CURSOR PASS updates=%d requests=%d "
+                  "batches=%d" % (moved, motion_requests, motion_batches))
             pointer_completions = qmp.property("astra-display-completions")
             typed_submissions = pointer_submissions
             typed_batches = pointer_batches
@@ -649,12 +648,12 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                                    serial[-8:])
             print("ASTRA DISPLAY PASS fences=%d batches=%d commands=%d "
                   "fills=%d blits=%d glyphs=%d generation=%d cycles=%d/%d "
-                  "pointer=%d/%d cpu=%.3fMHz boot=%.3fs launch=%.3fs "
+                  "posted-cursor=%d cpu=%.3fMHz boot=%.3fs launch=%.3fs "
                   "resize=%d/%dcycles %.3fs" %
                   (submissions,
                    batches, commands, fills, blits, glyphs, generation,
-                   present_cycles, PRESENT_BUDGET_CYCLES, pointer_cycles,
-                   POINTER_BUDGET_CYCLES, measured_hz / 1000000.0,
+                   present_cycles, PRESENT_BUDGET_CYCLES, moved,
+                   measured_hz / 1000000.0,
                    elapsed, launch_elapsed, resize_cycles,
                    RESIZE_BUDGET_CYCLES, resize_elapsed))
             return 0

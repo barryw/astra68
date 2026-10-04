@@ -1,4 +1,4 @@
-#include <astra/ntp_core.h>
+#include <astra/ntp_client.h>
 
 #include <assert.h>
 #include <stdint.h>

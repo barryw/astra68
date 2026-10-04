@@ -39,10 +39,12 @@ resampler, and encoding with rounding and saturation. The result is exactly
 size their buffers the way SDL does. SDL2's `SDL_BuildAudioCVT` uses it for
 every conversion the host can take (two channels or fewer, 8-192 kHz), which
 is how Chocolate Doom's sound effects reach its 44.1 kHz mixer without SDL's
-float resampler running in MC68040 soft-float.
+float resampler running on the MC68040.
 
 ```{doxygenfile} pcm.h
+:project: astra-ndk
 ```
 
 ```{doxygenfile} pcm_format.h
+:project: astra-ndk
 ```

@@ -59,6 +59,10 @@ have meant committing to a Linux personality in the kernel.
   instead of replacing them with unchecked inline shifts. The libc boundary
   validates signal numbers and pointers, and never exposes reserved bit zero
   as a signal.
+* `libc/include/sys/errno.h` — includes `<errno.h>`, so `errno` is declared
+  wherever the E* values are, as glibc and the BSDs do. Upstream defines only
+  the values there, and code that includes `<sys/errno.h>` alone (Chocolate
+  Quake's `net_udp.c`) fails to compile.
 * `libc/machine/m68k/setjmp.S` — emits the non-executable GNU stack note for
   every ELF target, including Astra, rather than only Linux ELF targets.
 * `libc/machine/m68k/read_tp.S`, `set_tls.c` — use Astra's reserved A4 thread

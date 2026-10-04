@@ -90,19 +90,6 @@ typedef int64_t AstraMonotonicDeadline;
 #define ASTRA_DEADLINE_INFINITE ((AstraMonotonicDeadline)INT64_MAX)
 
 /**
- * Signed 26.6 fixed-point scalar used for device-independent layout metrics.
- *
- * The value 64 represents one whole unit. Arithmetic that can exceed the
- * signed 32-bit range must use a wider intermediate and clamp before storing.
- *
- * @since 0.1.0
- */
-typedef int32_t AstraFixed26_6;
-
-/** One whole unit in ::AstraFixed26_6 representation. */
-#define ASTRA_FIXED26_6_ONE INT32_C(64)
-
-/**
  * Unpremultiplied 8-bit sRGB color with alpha.
  *
  * Alpha zero is transparent and 255 is opaque. Conversion to a destination

@@ -3,6 +3,7 @@
 
 /** @file gui.h @brief Public window event vocabulary and private GUI wire ABI. */
 
+#include <astra/compiler.h>
 #include <stdint.h>
 
 #include <astra/syscall.h>
@@ -200,7 +201,9 @@ typedef struct AstraWindowStateEvent {
 
 /** New client extent after a resize transition. */
 typedef struct AstraWindowResizeEvent {
+    /** New client width in pixels. */
     uint32_t width;
+    /** New client height in pixels. */
     uint32_t height;
     /** Must be zero. */
     uint32_t reserved[5];
@@ -226,6 +229,7 @@ typedef struct AstraWindowTextEvent {
     uint32_t reserved[4];
 } AstraWindowTextEvent;
 
+/** ASTRA_WINDOW_EVENT_SYSTEM_ACTION payload: a system menu command. */
 typedef struct AstraWindowSystemActionEvent {
     uint32_t action; /**< ASTRA_SYSTEM_ACTION_* value. */
     uint32_t reserved[6]; /**< Must be zero. */
@@ -245,6 +249,7 @@ typedef union AstraWindowEventData {
     AstraWindowKeyEvent key;
     /** Unicode text-input data. */
     AstraWindowTextEvent text;
+    /** System menu command data. */
     AstraWindowSystemActionEvent system_action;
     /** Reserved wire storage. */
     uint32_t reserved[7];

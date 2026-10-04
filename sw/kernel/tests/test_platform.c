@@ -411,21 +411,30 @@ static void test_fenced_display_transport(void)
            (ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH |
             ASTRA_RENDER_BATCH_MIN_BYTES <<
                 ASTRA_DISPLAY_HOST_BYTE_SIZE_SHIFT));
-    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
-    assert(kernel_platform_display_submit(
-        10u, ASTRA_DISPLAY_CURSOR_UPDATE,
-        ASTRA_DISPLAY_HOST_CURSOR_PACK(321u, 123u, true),
-        ASTRA_DISPLAY_CURSOR_VISIBLE, 0u));
-    assert(registers->DISPLAY_REQ_OP ==
-           (ASTRA_DISPLAY_CURSOR_UPDATE |
-            ASTRA_DISPLAY_CURSOR_VISIBLE <<
-                ASTRA_DISPLAY_HOST_BYTE_SIZE_SHIFT));
-    assert(registers->DISPLAY_REQ_COLOR ==
-           ASTRA_DISPLAY_HOST_CURSOR_PACK(321u, 123u, true));
-    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
-    assert(!kernel_platform_display_submit(
-        11u, ASTRA_DISPLAY_CURSOR_UPDATE,
-        ASTRA_DISPLAY_HOST_CURSOR_PACK(0u, 0u, true), UINT32_C(0x10), 0u));
+    /* The cursor is one posted register write; the request queue is not
+       touched, so it can never wait behind a render. */
+    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_BUSY;
+    registers->DISPLAY_REQ_OP = 0u;
+    assert(kernel_platform_display_cursor(
+        321u, 123u, ASTRA_DISPLAY_CURSOR_VISIBLE |
+            ASTRA_DISPLAY_CURSOR_SHAPE(ASTRA_POINTER_SHAPE_TEXT)));
+    assert(registers->DISPLAY_CURSOR ==
+           (321u | 123u << 12 |
+            (ASTRA_DISPLAY_CURSOR_VISIBLE |
+             ASTRA_DISPLAY_CURSOR_SHAPE(ASTRA_POINTER_SHAPE_TEXT)) << 24));
+    assert(registers->DISPLAY_REQ_OP == 0u &&
+           registers->DISPLAY_QUEUE == ASTRA_DISPLAY_HOST_QUEUE_BUSY);
+    assert(ASTRA_DISPLAY_HOST_CURSOR_X(registers->DISPLAY_CURSOR) == 321u &&
+           ASTRA_DISPLAY_HOST_CURSOR_Y(registers->DISPLAY_CURSOR) == 123u);
+    assert(!kernel_platform_display_cursor(ASTRA_DISPLAY_WIDTH, 0u, 0u));
+    assert(!kernel_platform_display_cursor(0u, ASTRA_DISPLAY_HEIGHT, 0u));
+    assert(!kernel_platform_display_cursor(0u, 0u, UINT32_C(0x10)));
+    assert(!kernel_platform_display_cursor(
+        0u, 0u, ASTRA_DISPLAY_CURSOR_SHAPE(ASTRA_POINTER_SHAPE_COUNT)));
+    assert(registers->DISPLAY_CURSOR ==
+           ASTRA_DISPLAY_HOST_CURSOR_PACK(
+               321u, 123u, ASTRA_DISPLAY_CURSOR_VISIBLE |
+                   ASTRA_DISPLAY_CURSOR_SHAPE(ASTRA_POINTER_SHAPE_TEXT)));
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
     assert(kernel_platform_display_submit(
         11u, ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE, 0x02002000u,
@@ -484,8 +493,7 @@ static void test_fenced_display_transport(void)
     assert(registers->DISPLAY_REQ_ATTACH == 0u);
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
     assert(!kernel_platform_display_submit(
-        12u, ASTRA_DISPLAY_CURSOR_UPDATE,
-        ASTRA_DISPLAY_HOST_CURSOR_PACK(ASTRA_DISPLAY_WIDTH, 0u, true), 0u, 0u));
+        12u, 4u /* retired CURSOR_UPDATE */, 0u, 0u, 0u));
     assert((astraea->IRQ_EN & ASTRAEA_IRQ_DRAW_DONE) != 0u);
 
     /* A fast device may complete between SUBMIT and the acceptance read. */

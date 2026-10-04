@@ -3,12 +3,11 @@
 
 /**
  * @file graphics.h
- * @brief Managed display surfaces, drawing, sprites, raster changes, and fences.
+ * @brief Window display surfaces, draw lists, and fences.
  */
 
 #include <stdint.h>
 
-#include <astra/font.h>
 #include <astra/resource.h>
 
 ASTRA_EXTERN_C_BEGIN
@@ -24,32 +23,6 @@ ASTRA_EXTERN_C_BEGIN
  *
  * @{
  */
-
-/** Graphics capabilities reported by ::AstraGraphicsInfo. */
-enum {
-    /** Direct framebuffer scanout is available. */
-    ASTRA_GRAPHICS_CAP_FRAMEBUFFER = 1u << 0,
-    /** Framebuffer base changes can retire at vertical blank. */
-    ASTRA_GRAPHICS_CAP_PAGE_FLIP = 1u << 1,
-    /** The 64-entry hardware sprite compositor is available. */
-    ASTRA_GRAPHICS_CAP_SPRITES = 1u << 2,
-    /** Validated beam-synchronized raster programs are available. */
-    ASTRA_GRAPHICS_CAP_RASTER_PROGRAM = 1u << 3,
-    /** Asynchronous copy, fill, key, and mask blits are available. */
-    ASTRA_GRAPHICS_CAP_BLITTER = 1u << 4,
-    /** Hardware line and shape drawing is available. */
-    ASTRA_GRAPHICS_CAP_GEOMETRY = 1u << 5,
-    /** Hardware bitmap-glyph expansion is available. */
-    ASTRA_GRAPHICS_CAP_GLYPHS = 1u << 6,
-    /** Bounded hardware flood fill is available. */
-    ASTRA_GRAPHICS_CAP_FLOOD_FILL = 1u << 7,
-    /** A copied 256-entry display palette is available. */
-    ASTRA_GRAPHICS_CAP_PALETTE = 1u << 8,
-    /** Logical scenes are scaled to the fixed physical output in hardware. */
-    ASTRA_GRAPHICS_CAP_DISPLAY_SCALER = 1u << 9,
-    /** A native-resolution 32 by 32 ARGB pointer plane is available. */
-    ASTRA_GRAPHICS_CAP_HARDWARE_POINTER = 1u << 10
-};
 
 /** Logical-scene placement policies for the fixed physical output. */
 enum {
@@ -130,64 +103,12 @@ enum {
     ASTRA_BLIT_FILTER_LINEAR = 1u << 3
 };
 
-/** Sprite update flags. */
+/** Hardware-pointer image limits. */
 enum {
-    /** Sprite participates in composition. */
-    ASTRA_SPRITE_VISIBLE = 1u << 0,
-    /** Reflect the source rectangle horizontally. */
-    ASTRA_SPRITE_FLIP_X = 1u << 1,
-    /** Reflect the source rectangle vertically. */
-    ASTRA_SPRITE_FLIP_Y = 1u << 2,
-    /** Composite below the framebuffer instead of above it. */
-    ASTRA_SPRITE_BEHIND_FRAMEBUFFER = 1u << 3,
-    /** Include this sprite in collision detection. */
-    ASTRA_SPRITE_COLLISION_ENABLE = 1u << 4
-};
-
-/** Sticky and frame-local flags returned by ::AstraDisplayStatus. */
-enum {
-    /** A scanline missed its display-fetch deadline. */
-    ASTRA_DISPLAY_STATUS_VIDEO_UNDERRUN = 1u << 0,
-    /** The per-line sprite pixel budget was exceeded this frame. */
-    ASTRA_DISPLAY_STATUS_SPRITE_OVERFLOW = 1u << 1,
-    /** Vega rejected one or more active hardware descriptors. */
-    ASTRA_DISPLAY_STATUS_CONFIG_ERROR = 1u << 2
-};
-
-/** Static physical-output and hardware-sprite limits. */
-enum {
-    /** Fixed physical output width. */
-    ASTRA_GRAPHICS_OUTPUT_WIDTH = 1920,
-    /** Fixed physical output height. */
-    ASTRA_GRAPHICS_OUTPUT_HEIGHT = 1080,
-    /** Number of hardware sprite descriptors. */
-    ASTRA_GRAPHICS_SPRITE_COUNT = 64,
     /** Native hardware-pointer image width. */
     ASTRA_HARDWARE_POINTER_WIDTH = 32,
     /** Native hardware-pointer image height. */
-    ASTRA_HARDWARE_POINTER_HEIGHT = 32,
-    /** Maximum INDEX8 source width. */
-    ASTRA_SPRITE_SOURCE_WIDTH_MAX = 128,
-    /** Maximum INDEX8 source height. */
-    ASTRA_SPRITE_SOURCE_HEIGHT_MAX = 128,
-    /** Maximum destination width or height after scaling. */
-    ASTRA_SPRITE_DESTINATION_EXTENT_MAX = 2047,
-    /** Maximum complete sprite spans admitted on one scanline. */
-    ASTRA_SPRITES_PER_LINE = 16,
-    /** Guaranteed aggregate admitted sprite pixels per scanline. */
-    ASTRA_SPRITE_PIXELS_PER_LINE = 2048,
-    /** Number of independently selectable 256-entry palette banks. */
-    ASTRA_SPRITE_PALETTE_BANK_COUNT = 16
-};
-
-/** Raster-program targets exposed by the validated display service. */
-enum {
-    /** Change the 24-bit backdrop color. */
-    ASTRA_RASTER_TARGET_BACKDROP = 1,
-    /** Change one 24-bit display-palette entry. */
-    ASTRA_RASTER_TARGET_PALETTE = 2,
-    /** Stage a framebuffer base for the next vertical blank. */
-    ASTRA_RASTER_TARGET_FRAMEBUFFER_BASE = 3
+    ASTRA_HARDWARE_POINTER_HEIGHT = 32
 };
 
 /** Signed integer point in destination pixels. */
@@ -250,21 +171,6 @@ typedef struct AstraDrawList {
     AstraRectI32 _private_clip;
     /** @endcond */
 } AstraDrawList;
-/** Mutable copied 256-entry display palette. */
-typedef struct AstraPalette {
-    /** Private NDK handle; applications must not inspect this field. */
-    AstraHandle _private_handle;
-} AstraPalette;
-/** Mutable validated hardware-sprite set. */
-typedef struct AstraSpriteSet {
-    /** Private NDK handle; applications must not inspect this field. */
-    AstraHandle _private_handle;
-} AstraSpriteSet;
-/** Immutable, validated raster-change program. */
-typedef struct AstraRasterProgram {
-    /** Private NDK handle; applications must not inspect this field. */
-    AstraHandle _private_handle;
-} AstraRasterProgram;
 /** One-shot asynchronous completion object. */
 typedef struct AstraFence {
     /** Private NDK handle; applications must not inspect this field. */
@@ -280,18 +186,8 @@ typedef struct AstraFence {
 #define ASTRA_DRAW_LIST_INIT \
     { ASTRA_INVALID_HANDLE, ASTRA_INVALID_HANDLE, 0, 0, 0, 0, 0, 0, \
       { 0, 0, 0, 0 } }
-/** Initializer for an empty ::AstraPalette. */
-#define ASTRA_PALETTE_INIT { ASTRA_INVALID_HANDLE }
-/** Initializer for an empty ::AstraSpriteSet. */
-#define ASTRA_SPRITE_SET_INIT { ASTRA_INVALID_HANDLE }
-/** Initializer for an empty ::AstraRasterProgram. */
-#define ASTRA_RASTER_PROGRAM_INIT { ASTRA_INVALID_HANDLE }
 /** Initializer for an empty ::AstraFence. */
 #define ASTRA_FENCE_INIT { ASTRA_INVALID_HANDLE }
-/** Initializer for ::AstraGraphicsInfo. */
-#define ASTRA_GRAPHICS_INFO_INIT \
-    { sizeof(AstraGraphicsInfo), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, \
-      { 0, 0, 0 } }
 /** Initializer for ::AstraSurfaceCreateInfo. */
 #define ASTRA_SURFACE_CREATE_INFO_INIT \
     { sizeof(AstraSurfaceCreateInfo), 0, 0, 0, 0, 0, 0, \
@@ -303,16 +199,6 @@ typedef struct AstraFence {
 #define ASTRA_DRAW_PAINT_INIT \
     { sizeof(AstraDrawPaint), 0, { 0, 0, 0, 255 }, { 0, 0, 0, 0 }, \
       ASTRA_BLEND_NONE, { 0, 0, 0 } }
-/** Initializer for ::AstraSpriteUpdate. */
-#define ASTRA_SPRITE_UPDATE_INIT \
-    { sizeof(AstraSpriteUpdate), 0, { 0, 0, 0, 0 }, { 0, 0 }, 0, \
-      0, 0, 0, 255, 0, 0, 0, 0, { 0, 0 } }
-/** Initializer for ::AstraDisplayStatus. */
-#define ASTRA_DISPLAY_STATUS_INIT \
-    { sizeof(AstraDisplayStatus), 0, 0, { 0, 0, 0, 0, 0 } }
-/** Initializer for ::AstraPresentOptions. */
-#define ASTRA_PRESENT_OPTIONS_INIT \
-    { sizeof(AstraPresentOptions), 0, 0, 0, 0, { 0, 0, 0, 0 } }
 /** Initializer for ::AstraDisplayMode. */
 #define ASTRA_DISPLAY_MODE_INIT \
     { sizeof(AstraDisplayMode), ASTRA_DISPLAY_SCALE_AUTO, 0, 0, \
@@ -332,18 +218,6 @@ typedef struct AstraFence {
 #define ASTRA_AUTO_DRAW_LIST(name) \
     AstraDrawList name ASTRA_CLEANUP(astra_draw_list_cleanup) = \
         ASTRA_DRAW_LIST_INIT
-/** Declare a palette handle that closes itself at normal scope exit. */
-#define ASTRA_AUTO_PALETTE(name) \
-    AstraPalette name ASTRA_CLEANUP(astra_palette_cleanup) = \
-        ASTRA_PALETTE_INIT
-/** Declare a sprite-set handle that closes itself at normal scope exit. */
-#define ASTRA_AUTO_SPRITE_SET(name) \
-    AstraSpriteSet name ASTRA_CLEANUP(astra_sprite_set_cleanup) = \
-        ASTRA_SPRITE_SET_INIT
-/** Declare a raster-program handle that closes itself at normal scope exit. */
-#define ASTRA_AUTO_RASTER_PROGRAM(name) \
-    AstraRasterProgram name ASTRA_CLEANUP(astra_raster_program_cleanup) = \
-        ASTRA_RASTER_PROGRAM_INIT
 /** Declare a fence handle that closes itself at normal scope exit. */
 #define ASTRA_AUTO_FENCE(name) \
     AstraFence name ASTRA_CLEANUP(astra_fence_cleanup) = ASTRA_FENCE_INIT
@@ -393,38 +267,6 @@ typedef struct AstraHardwarePointerImage {
     /** Reserved for compatible growth; initialize to zero. */
     uint32_t reserved[4];
 } AstraHardwarePointerImage;
-
-/** Static graphics and output limits. */
-typedef struct AstraGraphicsInfo {
-    /** Structure size in bytes; initialize with `sizeof(AstraGraphicsInfo)`. */
-    uint32_t size;
-    /** Bitwise `ASTRA_GRAPHICS_CAP_*` values. */
-    uint32_t capabilities;
-    /** Physical output width in pixels. */
-    uint16_t output_width;
-    /** Physical output height in pixels. */
-    uint16_t output_height;
-    /** Largest supported surface width. */
-    uint16_t max_surface_width;
-    /** Largest supported surface height. */
-    uint16_t max_surface_height;
-    /** Number of hardware sprite descriptors. */
-    uint16_t sprite_count;
-    /** Largest supported sprite source width. */
-    uint16_t max_sprite_width;
-    /** Largest supported sprite source height. */
-    uint16_t max_sprite_height;
-    /** Guaranteed aggregate admitted sprite pixels per scanline. */
-    uint16_t max_sprite_pixels_per_line;
-    /** Number of independently selectable sprite palette banks. */
-    uint16_t sprite_palette_bank_count;
-    /** Maximum complete sprite spans admitted on one scanline. */
-    uint16_t max_sprites_per_line;
-    /** Reserved for compatible growth; initialize to zero. */
-    uint16_t _reserved0;
-    /** Reserved for compatible growth; initialize to zero. */
-    uint32_t reserved[3];
-} AstraGraphicsInfo;
 
 /** Parameters for allocating a protected graphics surface. */
 typedef struct AstraSurfaceCreateInfo {
@@ -526,111 +368,6 @@ typedef struct AstraVertex {
 /** Integer texels to 16.16 texture coordinates. */
 #define ASTRA_VERTEX_TEXELS(texels) ((int32_t)(texels) * 65536)
 
-/** Repeating 8 by 8 monochrome pattern, most-significant bit first. */
-typedef struct AstraPattern8 {
-    /** Row-major bits; bit 63 is row zero, column zero. */
-    uint64_t bits;
-    /** Signed horizontal pattern origin. */
-    int32_t origin_x;
-    /** Signed vertical pattern origin. */
-    int32_t origin_y;
-} AstraPattern8;
-
-/** One copied hardware-sprite update. */
-typedef struct AstraSpriteUpdate {
-    /** Structure size in bytes. */
-    uint32_t size;
-    /** INDEX8 image surface retained by the service. */
-    const AstraSurface *source;
-    /** Source rectangle; width and height are independently 1 through 128. */
-    AstraRectI32 source_rect;
-    /** Signed top-left destination position. */
-    AstraPointI32 destination;
-    /** Bitwise `ASTRA_SPRITE_*` values. */
-    uint32_t flags;
-    /** Composition priority from zero through 255. */
-    uint8_t priority;
-    /** 256-entry palette bank from zero through 15. */
-    uint8_t palette_bank;
-    /** Transparent 8-bit source index. */
-    uint8_t transparent_index;
-    /** Global opacity from transparent zero through opaque 255. */
-    uint8_t opacity;
-    /** Scaled destination width from 1 through 1024. */
-    uint16_t destination_width;
-    /** Scaled destination height from 1 through 1024. */
-    uint16_t destination_height;
-    /** Collision class bits contributed by this sprite. */
-    uint16_t collision_class;
-    /** Collision classes eligible to collide with this sprite. */
-    uint16_t collision_mask;
-    /** Reserved for compatible growth; initialize to zero. */
-    uint32_t reserved[2];
-} AstraSpriteUpdate;
-
-/** One validated beam-synchronized register change. */
-typedef struct AstraRasterChange {
-    /** Logical source beam line. */
-    uint16_t beam_y;
-    /** Logical source beam column. */
-    uint16_t beam_x;
-    /** One `ASTRA_RASTER_TARGET_*` value. */
-    uint16_t target;
-    /** Palette entry or other target-specific index. */
-    uint16_t target_index;
-    /** Target-specific 32-bit register value. */
-    uint32_t value;
-} AstraRasterChange;
-
-/** Latest display diagnostics and sprite collision result. */
-typedef struct AstraDisplayStatus {
-    /** Structure size in bytes. */
-    uint32_t size;
-    /** Bitwise `ASTRA_DISPLAY_STATUS_*` values. */
-    uint32_t flags;
-    /** One bit per sprite that collided in the latest completed frame. */
-    uint32_t sprite_collisions;
-    /** Reserved for compatible growth; currently zero. */
-    uint32_t reserved[5];
-} AstraDisplayStatus;
-
-/** Presentation policy for a page flip. */
-typedef struct AstraPresentOptions {
-    /** Structure size in bytes. */
-    uint32_t size;
-    /** Reserved presentation flags; initialize to zero. */
-    uint32_t flags;
-    /** Optional palette snapshot for indexed scanout and sprites. */
-    const AstraPalette *palette;
-    /** Optional sprite-set snapshot. */
-    const AstraSpriteSet *sprites;
-    /** Optional immutable raster program. */
-    const AstraRasterProgram *raster_program;
-    /** Reserved for compatible growth; initialize to zero. */
-    uint32_t reserved[4];
-} AstraPresentOptions;
-
-/**
- * Test whether a compatible graphics service is available.
- *
- * @return Nonzero when graphics services can be opened, otherwise zero.
- */
-int astra_graphics_present(void);
-/**
- * Query graphics limits and capabilities.
- *
- * @param[in,out] info Size-initialized structure that receives the result.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_graphics_get_info(AstraGraphicsInfo *info);
-
-/**
- * Open the primary display output.
- *
- * @param[out] display Empty handle that receives the display.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_display_open(AstraDisplay *display);
 /**
  * Close a display handle.
  *
@@ -653,19 +390,6 @@ ASTRA_NODISCARD AstraResult astra_display_close(AstraDisplay *display);
 ASTRA_NODISCARD AstraResult astra_display_layout_calculate(
     const AstraDisplayMode *mode, uint16_t output_width,
     uint16_t output_height, AstraDisplayLayout *layout);
-/** Apply a logical mode atomically at vertical blank. @param display Open display. @param mode Requested mode. @param fence Optional completion fence. @return ASTRA_OK or an error. */
-ASTRA_NODISCARD AstraResult astra_display_set_mode(
-    const AstraDisplay *display, const AstraDisplayMode *mode,
-    AstraFence *fence);
-/** Replace the copied native hardware-pointer image at vertical blank. @param display Open display. @param image Validated image. @param fence Optional completion fence. @return ASTRA_OK or an error. */
-ASTRA_NODISCARD AstraResult astra_display_set_pointer_image(
-    const AstraDisplay *display, const AstraHardwarePointerImage *image,
-    AstraFence *fence);
-/** Move and enable or disable the native hardware pointer at vertical blank. @param display Open display. @param position Physical screen position. @param enabled Nonzero to enable. @param fence Optional completion fence. @return ASTRA_OK or an error. */
-ASTRA_NODISCARD AstraResult astra_display_set_pointer_state(
-    const AstraDisplay *display, AstraPointI32 position, int enabled,
-    AstraFence *fence);
-
 /**
  * Allocate a protected surface owned by the caller.
  *
@@ -896,70 +620,6 @@ ASTRA_NODISCARD AstraResult astra_draw_rectangles(
     AstraDrawList *draw_list, const AstraRectI32 *rectangles, uint32_t count,
     const AstraDrawPaint *paint);
 /**
- * Append an outlined or filled circle.
- *
- * @param[in,out] draw_list Mutable destination list.
- * @param[in] center Circle center.
- * @param[in] radius Nonnegative radius no larger than 32767.
- * @param[in] filled Zero for an outline, one for a fill.
- * @param[in] paint Foreground color and behavior.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_draw_circle(
-    AstraDrawList *draw_list, AstraPointI32 center, uint32_t radius, int filled,
-    const AstraDrawPaint *paint);
-/**
- * Append an outlined or filled axis-aligned ellipse.
- *
- * @param[in,out] draw_list Mutable destination list.
- * @param[in] center Ellipse center.
- * @param[in] radius_x Nonnegative horizontal radius no larger than 32767.
- * @param[in] radius_y Nonnegative vertical radius no larger than 32767.
- * @param[in] filled Zero for an outline, one for a fill.
- * @param[in] paint Foreground color and behavior.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_draw_ellipse(
-    AstraDrawList *draw_list, AstraPointI32 center,
-    uint32_t radius_x, uint32_t radius_y, int filled,
-    const AstraDrawPaint *paint);
-/**
- * Append a repeating 8 by 8 monochrome pattern fill.
- *
- * @param[in,out] draw_list Mutable destination list.
- * @param[in] rectangle Nonempty destination rectangle.
- * @param[in] pattern Pattern bits and stable signed origin.
- * @param[in] paint Foreground and optional opaque-background colors.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_draw_pattern_fill(
-    AstraDrawList *draw_list, const AstraRectI32 *rectangle,
-    const AstraPattern8 *pattern, const AstraDrawPaint *paint);
-/**
- * Append a bounded scanline flood fill; workspace is service-owned.
- *
- * @param[in,out] draw_list Mutable destination list.
- * @param[in] seed Seed point within the list's clip rectangle.
- * @param[in] paint Replacement color.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_draw_flood_fill(
-    AstraDrawList *draw_list, AstraPointI32 seed,
-    const AstraDrawPaint *paint);
-/**
- * Append an immutable text layout at a baseline-relative origin.
- *
- * @param[in,out] draw_list Mutable destination list.
- * @param[in] layout Validated immutable text layout.
- * @param[in] origin Layout origin in destination pixels.
- * @param[in] paint Text color, decoration, and embedded-color policy.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_draw_text_layout(
-    AstraDrawList *draw_list, const AstraTextLayout *layout,
-    AstraPointI32 origin, const AstraTextPaint *paint);
-
-/**
  * Append one line of text in the system UI font, drawn by the glyph engine.
  *
  * The font is the one every Astra window's chrome uses; its native strikes
@@ -991,117 +651,6 @@ ASTRA_NODISCARD AstraResult astra_draw_ui_text(
  */
 ASTRA_NODISCARD AstraResult astra_draw_submit(
     AstraDrawList *draw_list, AstraFence *fence);
-
-/**
- * Create a copied display palette with 1 through 256 opaque entries.
- *
- * @param[in] display Display that owns the palette.
- * @param[in] entries Opaque sRGB entries copied before return.
- * @param[in] entry_count Number of entries from one through 256.
- * @param[out] palette Empty handle that receives the palette.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_palette_create(
-    const AstraDisplay *display,
-    const AstraColorRGBA8 *entries,
-    uint32_t entry_count,
-    AstraPalette *palette);
-/**
- * Replace a contiguous range in a palette.
- *
- * @param[in,out] palette Mutable palette to update.
- * @param[in] first_entry First destination entry from zero through 255.
- * @param[in] entries Opaque sRGB entries copied before return.
- * @param[in] entry_count Nonzero count that remains within 256 entries.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_palette_update(
-    AstraPalette *palette,
-    uint32_t first_entry,
-    const AstraColorRGBA8 *entries,
-    uint32_t entry_count);
-/**
- * Close a palette after referencing presentation fences retire.
- *
- * @param[in,out] palette Palette to close; emptied on success.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_palette_close(AstraPalette *palette);
-
-/**
- * Allocate a set containing up to 64 hardware sprites.
- *
- * @param[in] display Display that owns the sprite set.
- * @param[out] sprite_set Empty handle that receives the set.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_sprite_set_create(
-    const AstraDisplay *display, AstraSpriteSet *sprite_set);
-/**
- * Replace one sprite entry; a null update disables it.
- *
- * @param[in,out] sprite_set Mutable sprite set.
- * @param[in] index Sprite index from zero through 63.
- * @param[in] update Copied sprite state, or null to disable the entry.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_sprite_set_update(
-    AstraSpriteSet *sprite_set, uint32_t index,
-    const AstraSpriteUpdate *update);
-/**
- * Close a sprite set after referencing presentation fences retire.
- *
- * @param[in,out] sprite_set Sprite set to close; emptied on success.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_sprite_set_close(AstraSpriteSet *sprite_set);
-
-/**
- * Create an immutable validated raster program from ordered changes.
- *
- * @param[in] display Display that owns the program.
- * @param[in] changes Beam-ordered changes copied before return.
- * @param[in] change_count Number of changes from one through 2047.
- * @param[out] program Empty handle that receives the program.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_raster_program_create(
-    const AstraDisplay *display,
-    const AstraRasterChange *changes,
-    uint32_t change_count,
-    AstraRasterProgram *program);
-/**
- * Close a raster program after referencing presentation fences retire.
- *
- * @param[in,out] program Program to close; emptied on success.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_raster_program_close(
-    AstraRasterProgram *program);
-
-/**
- * Queue a vertical-blank-synchronized page flip and optional overlays.
- *
- * @param[in] display Destination display.
- * @param[in] surface Scanout-capable RGB565 or INDEX8 surface.
- * @param[in] options Optional size-initialized presentation snapshot.
- * @param[out] fence Empty handle signaled after presentation retires.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_display_present_surface(
-    const AstraDisplay *display,
-    const AstraSurface *surface,
-    const AstraPresentOptions *options,
-    AstraFence *fence);
-/**
- * Read the latest sticky display diagnostics and collision bitmap.
- *
- * @param[in] display Display to query.
- * @param[in,out] status Size-initialized structure that receives the result.
- * @return ::ASTRA_OK on success or a negative ::AstraResult error.
- */
-ASTRA_NODISCARD AstraResult astra_display_get_status(
-    const AstraDisplay *display, AstraDisplayStatus *status);
 
 /**
  * Poll a fence without blocking.
@@ -1138,12 +687,6 @@ void astra_display_cleanup(AstraDisplay *display);
 void astra_surface_cleanup(AstraSurface *surface);
 /** Cleanup helper used by ::ASTRA_AUTO_DRAW_LIST. @param draw_list Value to close. */
 void astra_draw_list_cleanup(AstraDrawList *draw_list);
-/** Cleanup helper used by ::ASTRA_AUTO_PALETTE. @param palette Value to close. */
-void astra_palette_cleanup(AstraPalette *palette);
-/** Cleanup helper used by ::ASTRA_AUTO_SPRITE_SET. @param sprite_set Value to close. */
-void astra_sprite_set_cleanup(AstraSpriteSet *sprite_set);
-/** Cleanup helper used by ::ASTRA_AUTO_RASTER_PROGRAM. @param program Value to close. */
-void astra_raster_program_cleanup(AstraRasterProgram *program);
 /** Cleanup helper used by ::ASTRA_AUTO_FENCE. @param fence Value to close. */
 void astra_fence_cleanup(AstraFence *fence);
 

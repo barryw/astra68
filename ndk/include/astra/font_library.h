@@ -4,10 +4,18 @@
 
 #include <stdint.h>
 
-#include <astra/font.h>
 #include <astra/surface.h>
+#include <astra/types.h>
 
 ASTRA_EXTERN_C_BEGIN
+
+/** Bitmap formats of a font strike (AstraUiStrike::bitmap_format). */
+enum {
+    /** One-bit transparent or opaque glyph mask. */
+    ASTRA_FONT_BITMAP_MASK1 = 1,
+    /** Eight-bit foreground coverage. */
+    ASTRA_FONT_BITMAP_A8 = 5
+};
 
 /** Breaking Font Kit ABI generation carried by font.library.2. */
 #define ASTRA_FONT_LIBRARY_ABI_MAJOR 2u

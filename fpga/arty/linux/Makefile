@@ -58,7 +58,7 @@ SPLASH_PACKER := ../../../sw/boot/pack_arty_splash.py
 SPLASH_SOURCE := ../../../sw/boot/assets/astra_boot_splash_1920x1080_blank.png
 ASTRA_INCLUDE := ../../../sw/include
 NDK_INCLUDE := ../../../ndk/include
-DISPLAY_MODE_SOURCE := ../../../ndk/src/display_mode.c
+DISPLAY_MODE_SOURCE := ../../../sw/userspace/system/src/display_mode.c
 PROTOCOL_SPEC := ../graphics/protocol/astra_render_v1.json
 PROTOCOL_GENERATOR := ../graphics/protocol/generate_protocol.py
 BASE_CFLAGS := -std=c11 -O2 -pipe -Wall -Wextra -Werror -Wformat=2 \

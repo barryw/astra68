@@ -9,6 +9,7 @@ RUNTIME := ../runtime
 COMPILER := ../compiler
 GRAPHICS := ../graphics
 NDK := ../../../ndk
+SYSTEM := ../system
 CPPFLAGS := -Iinclude -I$(GRAPHICS)/include -I$(RUNTIME)/include \
 	-I../../include -I$(NDK)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
@@ -22,10 +23,10 @@ INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
 	build/m68k/text_surface.o build/m68k/undo.o build/m68k/text_model.o \
 	build/m68k/scroll.o build/m68k/command.o
 INTERFACE_LIBRARY_MAP := interface.library.exports
-NDK_HOST_UTF8 := $(NDK)/build/host/utf8.o
+NDK_HOST_UTF8 := $(SYSTEM)/build/host/utf8.o
 GRAPHICS_LIBRARY := $(GRAPHICS)/build/m68k/libraries/graphics.library.2
 FONT_LIBRARY := $(GRAPHICS)/build/m68k/libraries/font.library.2
-SYSTEM_LIBRARY := $(NDK)/build/m68k/libraries/system.library.2
+SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.2
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
@@ -88,7 +89,7 @@ $(INTERFACE_OBJECTS): Makefile
 
 shared-libraries-ready:
 	$(MAKE) -C $(GRAPHICS) graphics-library font-library
-	$(MAKE) -C $(NDK) library
+	$(MAKE) -C $(SYSTEM) library
 	$(MAKE) -C $(COMPILER) library
 
 $(INTERFACE_TARGET): $(INTERFACE_OBJECTS) $(INTERFACE_LIBRARY_MAP) \
@@ -140,7 +141,7 @@ $(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/text_surface.c
 		tests/test_layout.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -DASTRA_INTERFACE_TEST \
-		-DASTRA_NDK_TEST \
+		-DASTRA_SYSTEM_TEST \
 		-ffunction-sections -Wl,--gc-sections $^ -o $@
 
 $(TEXT_SURFACE_HOST_TEST): src/text_surface.c tests/test_text_surface.c \
@@ -169,7 +170,7 @@ $(COMMAND_HOST_TEST): src/command.c tests/test_command.c
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
 $(NDK_HOST_UTF8):
-	$(MAKE) -C $(NDK) build/host/utf8.o
+	$(MAKE) -C $(SYSTEM) build/host/utf8.o
 
 test: $(INTERFACE_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
 		$(UNDO_HOST_TEST) $(TEXT_MODEL_HOST_TEST) $(SCROLL_HOST_TEST) \
@@ -184,7 +185,7 @@ test: $(INTERFACE_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
 sanitize: $(NDK_HOST_UTF8)
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		$(SANITIZER_FLAGS) -DASTRA_INTERFACE_TEST -DASTRA_NDK_TEST \
+		$(SANITIZER_FLAGS) -DASTRA_INTERFACE_TEST -DASTRA_SYSTEM_TEST \
 		-ffunction-sections -Wl,--gc-sections src/interface_library.c \
 		src/control.c src/text_surface.c src/text_model.c src/scroll.c \
 		$(NDK_HOST_UTF8) \

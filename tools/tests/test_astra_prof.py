@@ -248,7 +248,7 @@ with tempfile.TemporaryDirectory() as directory:
     image_path = root / "sw/userspace/services/demo/build/m68k/demo.elf"
     library_path = root / \
         "sw/userspace/runtime/build/m68k/libraries/runtime.library.1"
-    ndk_path = root / "ndk/build/m68k/libraries/system.library.2"
+    ndk_path = root / "sw/userspace/system/build/m68k/libraries/system.library.2"
     image_path.parent.mkdir(parents=True)
     library_path.parent.mkdir(parents=True)
     ndk_path.parent.mkdir(parents=True)

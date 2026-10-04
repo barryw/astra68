@@ -21,6 +21,8 @@
  * launch namespace; keep the parser and launch ABI on the same authority. */
 /** Maximum requested launch capabilities. */
 #define ASTRA_BUNDLE_CAPABILITY_MAX ASTRA_LAUNCH_GRANT_MAX
+/** Maximum requested-capability name bytes including NUL, room for a
+ * capability name plus an optional `:rw` suffix. */
 #define ASTRA_BUNDLE_CAPABILITY_NAME_MAX (ASTRA_CAPABILITY_NAME_MAX + 3u)
 /** Maximum logical library-name bytes including NUL. */
 #define ASTRA_BUNDLE_LIBRARY_NAME_MAX ASTRA_LIBRARY_NAME_MAX
@@ -70,6 +72,7 @@ typedef struct AstraBundleManifest {
  *  again brings the running one forward instead of starting another. */
 #define ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE 1u
 
+/** Empty manifest initializer. */
 #define ASTRA_BUNDLE_MANIFEST_INIT {0}
 
 enum {
@@ -90,7 +93,9 @@ enum {
 uint32_t astra_bundle_manifest_parse(char *text, uint32_t length,
                                      AstraBundleManifest *manifest,
                                      uint32_t *error_line);
-/** Release library arrays owned by a parsed manifest. */
+/** Release library arrays owned by a parsed manifest.
+ * @param manifest Manifest to release; NULL is ignored.
+ */
 void astra_bundle_manifest_destroy(AstraBundleManifest *manifest);
 
 /** Big-endian `AICO` file magic. */

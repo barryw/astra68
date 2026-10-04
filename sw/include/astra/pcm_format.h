@@ -20,8 +20,9 @@
 #define ASTRA_CAPABILITY_PCM "PCM"
 /** Sink sample rate in frames per second; the host mixes at this rate. */
 #define ASTRA_PCM_RATE 48000u
-/** Lowest and highest accepted stream rates in frames per second. */
+/** Lowest accepted stream rate in frames per second. */
 #define ASTRA_PCM_RATE_MIN 8000u
+/** Highest accepted stream rate in frames per second. */
 #define ASTRA_PCM_RATE_MAX 192000u
 /** Highest accepted channel count; mono is played on both sink channels. */
 #define ASTRA_PCM_CHANNELS_MAX 2u
@@ -64,22 +65,37 @@
 #define ASTRA_PCM_FORMAT_S16BE_STEREO \
     ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_S16BE, 2u, ASTRA_PCM_RATE)
 
+/** Extract the ASTRA_PCM_ENCODING_* encoding from a format word (bits 0-7).
+ * @param format Format word built by ASTRA_PCM_FORMAT().
+ * @return The encoding.
+ */
 static inline uint32_t astra_pcm_format_encoding(uint32_t format)
 {
     return format & 0xffu;
 }
 
+/** Extract the channel count from a format word (bits 8-11).
+ * @param format Format word built by ASTRA_PCM_FORMAT().
+ * @return The channel count.
+ */
 static inline uint32_t astra_pcm_format_channels(uint32_t format)
 {
     return (format >> 8) & 0xfu;
 }
 
+/** Extract the frame rate from a format word (bits 12-31).
+ * @param format Format word built by ASTRA_PCM_FORMAT().
+ * @return The rate in frames per second.
+ */
 static inline uint32_t astra_pcm_format_rate(uint32_t format)
 {
     return format >> 12;
 }
 
-/** Bytes in one sample of @p encoding, or zero for an unknown encoding. */
+/** Bytes in one sample of @p encoding, or zero for an unknown encoding.
+ * @param encoding An ASTRA_PCM_ENCODING_* value.
+ * @return Bytes per sample, or zero if @p encoding is not recognized.
+ */
 static inline uint32_t astra_pcm_encoding_bytes(uint32_t encoding)
 {
     switch (encoding) {
@@ -103,7 +119,11 @@ static inline uint32_t astra_pcm_encoding_bytes(uint32_t encoding)
     }
 }
 
-/** Bytes in one interleaved frame, or zero for an unsupported format. */
+/** Bytes in one interleaved frame, or zero for an unsupported format.
+ * @param format Format word built by ASTRA_PCM_FORMAT().
+ * @return Bytes per interleaved frame, or zero if @p format has an invalid
+ * channel count, an out-of-range rate, or an unrecognized encoding.
+ */
 static inline uint32_t astra_pcm_format_frame_bytes(uint32_t format)
 {
     uint32_t channels = astra_pcm_format_channels(format);

@@ -7,6 +7,7 @@ ANALYZER_CC ?= gcc
 TIC ?= tic
 INFOCMP ?= infocmp
 NDK := ../../../ndk
+SYSTEM := ../system
 CPPFLAGS := -I$(NDK)/include -I../../include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror
 DEPFLAGS := -MMD -MP
@@ -44,7 +45,7 @@ $(HOST_TEST): src/terminal.c tests/test_terminal.c \
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(filter %.c,$^) -o $@
 
-$(HOST_KEYMAP_TEST): $(NDK)/src/keymap.c tests/test_keymap.c \
+$(HOST_KEYMAP_TEST): $(SYSTEM)/src/keymap.c tests/test_keymap.c \
 		$(NDK)/include/astra/keymap.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(filter %.c,$^) -o $@
@@ -61,7 +62,7 @@ sanitize:
 		-o build/host/test_terminal_sanitize
 	./build/host/test_terminal_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		$(SANITIZER_FLAGS) $(NDK)/src/keymap.c tests/test_keymap.c \
+		$(SANITIZER_FLAGS) $(SYSTEM)/src/keymap.c tests/test_keymap.c \
 		-o build/host/test_keymap_sanitize
 	./build/host/test_keymap_sanitize
 
@@ -70,7 +71,7 @@ analyze:
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/terminal.c -o build/analyzer/terminal.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
-		-c $(NDK)/src/keymap.c -o build/analyzer/keymap.o
+		-c $(SYSTEM)/src/keymap.c -o build/analyzer/keymap.o
 
 # Header dependencies: a stale object compiled against an older ABI
 # constant is indistinguishable from a working one until it runs.

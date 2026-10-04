@@ -180,7 +180,8 @@ uint32_t RESERVED_110;        // 0x110
     uint32_t COPY_ID;            // 0x72C "COPY" when present
     uint32_t COPY_LIST;          // 0x730 write: physical AstraCopyList, runs it
     uint32_t COPY_STATUS;        // 0x734 ASTRA_COPY_STATUS_* of the last list
-    uint32_t _r6[(0x800 - 0x738) / 4];
+    uint32_t DISPLAY_CURSOR;     // 0x738 posted cursor (ASTRA_DISPLAY_HOST_CURSOR_PACK)
+    uint32_t _r6[(0x800 - 0x73C) / 4];
     // sticky physical bus-fault diagnostics 0x800
     uint32_t BUS_FAULT_STATUS;    // 0x800 status and captured bus attributes
     uint32_t BUS_FAULT_ADDRESS;   // 0x804 exact physical bus address
@@ -523,6 +524,8 @@ _Static_assert(offsetof(VestaRegs, INPUT_ID) == 0x700u,
                "Vesta input ABI offset");
 _Static_assert(offsetof(VestaRegs, INPUT_POP) == 0x724u,
                "Vesta input-pop ABI offset");
+_Static_assert(offsetof(VestaRegs, DISPLAY_CURSOR) == 0x738u,
+               "Vesta posted cursor register moved");
 _Static_assert(offsetof(VestaRegs, BUS_FAULT_STATUS) == 0x800u,
                "Vesta bus-fault ABI offset");
 _Static_assert(offsetof(VestaRegs, BUS_FAULT_ACK) == 0x81cu,

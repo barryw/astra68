@@ -67,7 +67,6 @@ source_manifest >"$SOURCE_BEFORE"
 # the independently qualified FPGA route is not this publisher's artifact.
 make -C "$REPOSITORY/sw/userspace" clean
 make -C "$REPOSITORY/sw/boot" clean
-make -C "$REPOSITORY/ndk" clean
 make -C "$REPOSITORY/tools" clean
 make -j "$JOBS" -C "$REPOSITORY/sw/userspace" all
 make -j "$JOBS" -C "$REPOSITORY/sw/boot" build/astra_boot.bin

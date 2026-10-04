@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 
+#include <astra/object_abi.h>
 #include <astra/area.h>
 #include <astra/attributes.h>
 #include <astra/resource.h>
@@ -20,62 +21,7 @@ ASTRA_EXTERN_C_BEGIN
  *  @{
  */
 
-#ifndef ASTRA_BULK_RING_ABI_CONSTANTS_DEFINED
-/** Internal one-definition guard shared with the raw trap ABI header. */
-#define ASTRA_BULK_RING_ABI_CONSTANTS_DEFINED 1
-/** Native-big-endian `ARIN` header signature. */
-#define ASTRA_BULK_RING_MAGIC UINT32_C(0x4152494e)
-/** Current shared-header ABI revision. */
-#define ASTRA_BULK_RING_ABI_VERSION 1u
-/** Fixed shared-header size and payload offset. */
-#define ASTRA_BULK_RING_HEADER_SIZE 64u
-/** Required alignment for each ring's area offset. */
-#define ASTRA_BULK_RING_OFFSET_ALIGNMENT 64u
-/** Smallest fixed element size. */
-#define ASTRA_BULK_RING_ELEMENT_SIZE_MIN 4u
-/** Smallest power-of-two element capacity. */
-#define ASTRA_BULK_RING_CAPACITY_MIN 2u
-/** Notification flag that closes a ring after detected shared corruption. */
-#define ASTRA_BULK_RING_NOTIFY_CORRUPT (1u << 0)
-/** Producer endpoint role supplied to attach and notification operations. */
-#define ASTRA_BULK_RING_PRODUCER 1u
-/** Consumer endpoint role supplied to attach and notification operations. */
-#define ASTRA_BULK_RING_CONSUMER 2u
-#endif
-
-#ifndef ASTRA_BULK_RING_HEADER_DEFINED
-/** Internal one-definition guard shared with the raw trap ABI header. */
-#define ASTRA_BULK_RING_HEADER_DEFINED 1
-/** Shared native-big-endian ring header. @since 0.1.0 */
-typedef struct AstraBulkRingHeader {
-    /** Immutable ::ASTRA_BULK_RING_MAGIC signature. */
-    uint32_t magic;
-    /** Immutable ::ASTRA_BULK_RING_ABI_VERSION. */
-    uint16_t version;
-    /** Immutable ::ASTRA_BULK_RING_HEADER_SIZE. */
-    uint16_t header_size;
-    /** Immutable flags; currently zero. */
-    uint32_t flags;
-    /** Immutable fixed element size in bytes. */
-    uint32_t element_size;
-    /** Immutable power-of-two element count. */
-    uint32_t capacity;
-    /** Immutable payload offset; currently 64 bytes. */
-    uint32_t data_offset;
-    /** Immutable complete header-plus-payload byte count. */
-    uint32_t total_size;
-    /** Immutable nonzero generation assigned by Axiom. */
-    uint32_t generation;
-    /** Monotonic element count written only by the producer. */
-    uint32_t producer_position;
-    /** Immutable zero fields reserved for producer-side growth. */
-    uint32_t producer_reserved[3];
-    /** Monotonic element count written only by the consumer. */
-    uint32_t consumer_position;
-    /** Immutable zero fields reserved for consumer-side growth. */
-    uint32_t consumer_reserved[3];
-} AstraBulkRingHeader;
-#endif
+/* Ring constants and ::AstraBulkRingHeader are in astra/object_abi.h. */
 
 /** Move-only endpoint pair returned by ring creation. @since 0.1.0 */
 typedef struct AstraBulkRingEndpoints {

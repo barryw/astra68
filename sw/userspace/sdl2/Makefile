@@ -130,7 +130,7 @@ core: prepare
 		CPPFLAGS='-I./include -I./src -I./src/audio \
 		-DSDL_AUDIO_DRIVER_ASTRA=1 -DDYNAPI_NEEDS_DLOPEN=1 \
 		-DSDL_VIDEO_DRIVER_ASTRA=1 -DSDL_VIDEO_RENDER_ASTRA=1 \
-		-DHAVE_MALLOC=1 -DHAVE_STDLIB_H=1 \
+		-DHAVE_MALLOC=1 \
 		-I$(abspath ../posix/include) -I$(abspath ../../../ndk/include) \
 		-I$(abspath ../../include)'
 
@@ -640,6 +640,10 @@ $(HOST_TEST_RENDER): render/SDL_astrarender.c tests/host/test_astrarender.c \
 
 target-check: prepare
 	@mkdir -p build/m68k
+	$(TARGET_CC) -std=c99 -Wall -Wextra -Werror \
+		-Werror=implicit-function-declaration -Ibuild/vendor/SDL2/include \
+		-I$(PICOLIBC)/include -c tests/libc_prelude.c \
+		-o build/m68k/libc_prelude.o
 	$(TARGET_CC) -std=c11 -Wall -Wextra -Werror \
 		-DSDL_AUDIO_DRIVER_ASTRA=1 $(SDL2_INCLUDES) $(ASTRA_INCLUDES) \
 		-I$(PICOLIBC)/include -c audio/SDL_astraaudio.c -o $(TARGET_AUDIO)

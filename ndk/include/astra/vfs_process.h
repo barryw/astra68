@@ -2,6 +2,7 @@
 #ifndef ASTRA_VFS_PROCESS_H
 #define ASTRA_VFS_PROCESS_H
 
+#include <astra/compiler.h>
 #include <stdint.h>
 
 #include <astra/process.h>
@@ -114,6 +115,13 @@ uint32_t astra_process_read_file(AstraProcessFilesystem *filesystem,
  * Read an entire file into heap storage, with one trailing NUL byte excluded
  * from `length`. The caller owns `*bytes` and releases it with
  * astra_runtime_deallocate().
+ * @param filesystem Open Filesystem Kit binding.
+ * @param path Assign-qualified or process-relative path.
+ * @param bytes Receives a heap-allocated, NUL-terminated copy of the file;
+ * set to NULL on failure.
+ * @param length Receives the byte length, excluding the trailing NUL; set
+ * to zero on failure.
+ * @return ASTRA_VFS_* status.
  */
 uint32_t astra_process_read_file_alloc(AstraProcessFilesystem *filesystem,
                                        const char *path, void **bytes,

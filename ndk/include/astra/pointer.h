@@ -6,6 +6,7 @@
  * @brief Screen-space pointer observation for applications without windows.
  */
 
+#include <astra/compiler.h>
 #include <stdint.h>
 
 #include <astra/attributes.h>

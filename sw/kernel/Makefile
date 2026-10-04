@@ -133,7 +133,7 @@ OBJECTS = $(BUILD_DIR)/entry.o $(BUILD_DIR)/vectors.o \
 	  $(BUILD_DIR)/thread.o $(BUILD_DIR)/sync.o $(BUILD_DIR)/port.o \
           $(BUILD_DIR)/area.o $(BUILD_DIR)/ring.o \
           $(BUILD_DIR)/elf.o \
-          $(BUILD_DIR)/ndk_utf8.o \
+          $(BUILD_DIR)/utf8.o \
           $(BUILD_DIR)/process.o \
           $(BUILD_DIR)/user_test.o \
           $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/worker.o \
@@ -273,7 +273,7 @@ $(BUILD_DIR)/ring.o: ring.c ring.h area.h thread.h bytes.h generation.h \
                      ../include/astra/integer.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/ndk_utf8.o: ../../ndk/src/utf8.c \
+$(BUILD_DIR)/utf8.o: ../common/utf8.c \
                          ../../ndk/include/astra/utf8.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
@@ -708,7 +708,7 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
                             ../include/astra/display.h \
                             ../include/astra/process.h \
                             ../include/astra/syscall.h \
-                            ../../ndk/src/utf8.c \
+                            ../common/utf8.c \
                             ../../ndk/include/astra/utf8.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_MEMORY_NO_POISON=1 -DKERNEL_VM_HOST_TEST=1 \
@@ -722,7 +722,7 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
 		dma.c block.c device.c vm.c exception.c \
 		user_copy.c \
 		bytes.c context.c handle.c performance.c thread.c sync.c port.c \
-		area.c ring.c irq.c elf.c trace.c ../../ndk/src/utf8.c process.c \
+		area.c ring.c irq.c elf.c trace.c ../common/utf8.c process.c \
 		tests/test_process.c -o $@
 
 $(BUILD_DIR)/test_dispatch: tests/test_dispatch.c dispatch.c dispatch.h \

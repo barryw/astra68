@@ -12,7 +12,9 @@ ALLOC := ../alloc
 VFS := ../vfs
 CONFIG := ../config
 NDK := ../../../ndk
-NDK_LIB := $(NDK)/build/m68k/libastra.a
+SYSTEM := ../system
+ASTRA_COMMON := ../../common
+NDK_LIB := $(SYSTEM)/build/m68k/libastra.a
 LWEXT4 := ../../../third_party/lwext4
 CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include \
 	-I$(STORAGE)/include -I../metrics/include -I$(ALLOC)/include \
@@ -72,7 +74,7 @@ VOLUME_READ_TEST := build/host/test_volume_read
 TEST_SOURCES := src/supervisor.c $(RUNTIME)/src/startup.c \
 	$(RUNTIME)/src/log.c tests/test_supervisor.c
 ASTRA_PROGRAM_OWNER_TARGETS := $(RUNTIME):all $(ALLOC):all $(STORAGE):all \
-	$(VFS):all ../graphics:all $(NDK):all
+	$(VFS):all ../graphics:all $(SYSTEM):all
 ASTRA_PROGRAM_TARGETS := image
 include ../program.mk
 
@@ -126,16 +128,16 @@ $(HOST_TEST): $(TEST_SOURCES)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
-$(LOADER_TEST): src/loader_manifest.c $(NDK)/src/manifest.c \
-		$(NDK)/src/utf8.c \
-		$(NDK)/src/bundle.c $(RUNTIME)/src/string.c \
+$(LOADER_TEST): src/loader_manifest.c $(SYSTEM)/src/manifest.c \
+		$(ASTRA_COMMON)/utf8.c \
+		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c \
 		tests/test_loader_manifest.c \
 		include/loader.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		src/loader_manifest.c $(NDK)/src/manifest.c $(NDK)/src/bundle.c \
+		src/loader_manifest.c $(SYSTEM)/src/manifest.c $(SYSTEM)/src/bundle.c \
 		$(RUNTIME)/src/string.c \
-		$(NDK)/src/utf8.c \
+		$(ASTRA_COMMON)/utf8.c \
 		tests/test_loader_manifest.c -o $@
 
 $(PROC_TREE_ROOT_TEST): tests/test_proc_tree_root.c
@@ -144,9 +146,9 @@ $(PROC_TREE_ROOT_TEST): tests/test_proc_tree_root.c
 
 $(SERVICE_DEFINITION_TEST): src/service_definition_store.c \
 		src/loader_manifest.c $(CONFIG)/src/config_document.c \
-		$(NDK)/src/config_scope.c \
-		$(NDK)/src/manifest.c $(NDK)/src/utf8.c \
-		$(NDK)/src/service_definition.c $(RUNTIME)/src/string.c \
+		$(SYSTEM)/src/config_scope.c \
+		$(SYSTEM)/src/manifest.c $(ASTRA_COMMON)/utf8.c \
+		$(SYSTEM)/src/service_definition.c $(RUNTIME)/src/string.c \
 		tests/test_service_definition_store.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
@@ -188,9 +190,9 @@ sanitize:
 		-o build/host/test_supervisor_sanitize
 	./build/host/test_supervisor_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		$(SANITIZER_FLAGS) src/loader_manifest.c $(NDK)/src/manifest.c \
-		$(NDK)/src/utf8.c \
-		$(NDK)/src/bundle.c $(RUNTIME)/src/string.c \
+		$(SANITIZER_FLAGS) src/loader_manifest.c $(SYSTEM)/src/manifest.c \
+		$(ASTRA_COMMON)/utf8.c \
+		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c \
 		tests/test_loader_manifest.c -o build/host/test_loader_manifest_sanitize
 	./build/host/test_loader_manifest_sanitize
 	$(HOST_CC) $(CPPFLAGS) -I$(LWEXT4)/include -I$(STORAGE)/port/include \

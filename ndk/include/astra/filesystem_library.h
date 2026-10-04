@@ -300,7 +300,14 @@ uint32_t astra_filesystem_stat(AstraFilesystem *filesystem, const char *path,
  */
 uint32_t astra_filesystem_lstat(AstraFilesystem *filesystem,
                                 const char *path, AstraFileInfo *info);
-/** Read metadata for a relative path beneath an open directory. */
+/**
+ * Read metadata for a relative path beneath an open directory.
+ * @param directory Open directory state.
+ * @param path Path relative to @p directory.
+ * @param info Receives metadata.
+ * @return ASTRA_VFS_* status; ASTRA_VFS_ERR_BAD_HANDLE if @p directory is
+ * not a valid open handle, ASTRA_VFS_ERR_NOT_DIR if it is not a directory.
+ */
 uint32_t astra_filesystem_stat_at(const AstraFile *directory,
                                   const char *path, AstraFileInfo *info);
 /** Create a directory with default permissions. @param filesystem Attached filesystem. @param path Assign-qualified UTF-8 path. @return ASTRA_VFS_* status. */

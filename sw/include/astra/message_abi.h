@@ -1,6 +1,7 @@
 #ifndef ASTRA_MESSAGE_ABI_H
 #define ASTRA_MESSAGE_ABI_H
 
+#include <astra/compiler.h>
 #include <astra/limits.h>
 
 /** @file message_abi.h

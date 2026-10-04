@@ -37,6 +37,7 @@ typedef struct AstraApplicationCatalog {
     uint32_t capacity; /**< Private allocation capacity. */
 } AstraApplicationCatalog;
 
+/** Empty catalog initializer. */
 #define ASTRA_APPLICATION_CATALOG_INIT { 0, 0, 0, 0 }
 
 /**
@@ -51,7 +52,9 @@ uint32_t astra_application_catalog_load(AstraProcessFilesystem *filesystem,
                                         const char *directory,
                                         AstraApplicationCatalog *catalog);
 
-/** Release a catalog's storage and reset it to empty. */
+/** Release a catalog's storage and reset it to empty.
+ * @param catalog Catalog to release; NULL is ignored.
+ */
 void astra_application_catalog_destroy(AstraApplicationCatalog *catalog);
 
 #endif

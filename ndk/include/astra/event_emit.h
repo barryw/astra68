@@ -2,6 +2,7 @@
 #ifndef ASTRA_EVENT_EMIT_H
 #define ASTRA_EVENT_EMIT_H
 
+#include <astra/compiler.h>
 #include <stdint.h>
 
 #include <astra/event.h>

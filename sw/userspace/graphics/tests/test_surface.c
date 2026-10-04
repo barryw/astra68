@@ -1,6 +1,5 @@
 #include <astra/draw_list.h>
 #include <astra/display.h>
-#include <astra/font.h>
 #include <astra/render_batch.h>
 #include <astra/window_scene.h>
 #include <astra/render_builder.h>
@@ -87,7 +86,7 @@ static uint32_t finish_batch(AstraRenderBuilder *builder,
     return bytes;
 }
 
-static void test_batch_cursor_is_atomic_presentation_state(void)
+static void test_batch_header_reserves_presentation_words(void)
 {
     static uint8_t storage[ASTRA_RENDER_BUILDER_BYTES];
     AstraRenderBuilder builder;
@@ -96,23 +95,11 @@ static void test_batch_cursor_is_atomic_presentation_state(void)
     assert(astra_render_builder_init(&builder, storage, sizeof(storage), 1u));
     frame = astra_render_builder_frame(&builder);
     assert(astra_render_builder_fill(&builder, frame, 0, 0, 1u, 1u, 0u));
-    assert(astra_render_builder_cursor(
-        &builder, ASTRA_DISPLAY_WIDTH - 1u, ASTRA_DISPLAY_HEIGHT - 1u,
-        ASTRA_DISPLAY_CURSOR_VISIBLE));
     assert(finish_batch(&builder, storage) != 0u);
     assert(be32(storage + 4u) == ASTRA_RENDER_BATCH_VERSION_1_2);
-    assert(be32(storage + 32u) == ASTRA_RENDER_BATCH_PRESENT_CURSOR);
-    assert(be32(storage + 36u) == ASTRA_DISPLAY_WIDTH - 1u);
-    assert(be32(storage + 40u) == ASTRA_DISPLAY_HEIGHT - 1u);
-    assert(be32(storage + 44u) == ASTRA_DISPLAY_CURSOR_VISIBLE);
-    for (uint32_t offset = 48u; offset < ASTRA_RENDER_BATCH_HEADER_BYTES;
+    for (uint32_t offset = 32u; offset < ASTRA_RENDER_BATCH_HEADER_BYTES;
          offset += 4u)
         assert(be32(storage + offset) == 0u);
-
-    assert(astra_render_builder_init(&builder, storage, sizeof(storage), 2u));
-    assert(!astra_render_builder_cursor(
-        &builder, ASTRA_DISPLAY_WIDTH, 0u, ASTRA_DISPLAY_CURSOR_VISIBLE));
-    assert(builder.failed == ASTRA_RENDER_BUILDER_FAILURE_PRESENTATION);
 }
 
 static void test_rgb565_upload_uses_hardware_blit(void)
@@ -1404,11 +1391,11 @@ static void test_session_header_is_bounded(void)
     assert(replay_session(&builder, storage, 5u, NULL, &destination) ==
            UINT32_MAX);
     header->reserved[3] = 0u;
-    /* A render-only batch can carry neither cursor nor scene. */
+    /* A render-only batch presents nothing: no scene, reserved header. */
     assert(replay_session(&builder, storage, 6u, NULL, &destination) == 1u);
-    assert(astra_render_builder_cursor(&builder, 1u, 1u,
-                                       ASTRA_DISPLAY_CURSOR_VISIBLE));
-    assert(astra_render_builder_finish_render_only(&builder) == 0u);
+    assert(astra_render_builder_finish_render_only(&builder) != 0u);
+    assert(be32(storage + 4u) == ASTRA_RENDER_BATCH_VERSION_1_4);
+    assert(be32(storage + 32u) == 0u);
 }
 
 
@@ -2565,7 +2552,7 @@ int main(void)
     test_session_fill_rects_rejections();
     test_session_fill_rects_split();
     test_session_lines();
-    test_batch_cursor_is_atomic_presentation_state();
+    test_batch_header_reserves_presentation_words();
     test_rgb565_upload_uses_hardware_blit();
     test_upload_reserve_ends_the_batch_data();
     test_window_scene_batch();

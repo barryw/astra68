@@ -144,6 +144,8 @@ static AstraDisplayFrameRequest display_request;
 static uint32_t display_attachment_physical;
 static AstraDisplayFrameCompletion display_completion;
 static uint32_t display_submissions;
+static uint32_t display_cursor_writes;
+static uint32_t display_cursor_word;
 static bool display_completion_ready;
 
 bool kernel_platform_post_text_present(void)
@@ -199,6 +201,19 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
     display_request.source = source;
     display_request.byte_size = byte_size;
     ++display_submissions;
+    return true;
+}
+
+bool kernel_platform_display_cursor(uint32_t x, uint32_t y, uint32_t flags)
+{
+    const uint32_t word = ASTRA_DISPLAY_HOST_CURSOR_PACK(x, y, flags);
+
+    if (x >= ASTRA_DISPLAY_WIDTH || y >= ASTRA_DISPLAY_HEIGHT ||
+        (flags & ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) != 0u ||
+        !ASTRA_DISPLAY_HOST_CURSOR_VALID(word))
+        return false;
+    display_cursor_word = word;
+    ++display_cursor_writes;
     return true;
 }
 
@@ -1324,7 +1339,8 @@ static void initialize_test(void)
             .class_id = ASTRA_DEVICE_CLASS_DISPLAY,
             .capabilities = ASTRA_DISPLAY_CAP_TEXT |
                             ASTRA_DISPLAY_CAP_SOLID_FRAME |
-                            ASTRA_DISPLAY_CAP_FENCED_PRESENT,
+                            ASTRA_DISPLAY_CAP_FENCED_PRESENT |
+                            ASTRA_DISPLAY_CAP_HARDWARE_CURSOR,
         };
 
         assert(kernel_device_register(&display) == KERNEL_DEVICE_OK);
@@ -3590,26 +3606,35 @@ static void test_console_writes_through_a_display_lease(void)
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
 
-    request = (AstraDisplayFrameRequest) {
-        .size = ASTRA_DISPLAY_FRAME_REQUEST_SIZE,
-        .operation = ASTRA_DISPLAY_CURSOR_UPDATE,
-        .fence = 11u,
-        .source = 321u,
-        .pitch = 123u,
-        .byte_size = ASTRA_DISPLAY_CURSOR_VISIBLE,
-    };
-    assert(kernel_user_copy_to_asm(user_cells, &request, sizeof(request)) ==
-           KERNEL_USER_COPY_OK);
-    registers[0] = ASTRA_SYSCALL_DISPLAY_SUBMIT;
+    /* The cursor is posted, not submitted: no request, no fence. */
+    registers[0] = ASTRA_SYSCALL_DISPLAY_CURSOR;
+    registers[2] = 321u;
+    registers[3] = 123u;
+    registers[4] = ASTRA_DISPLAY_CURSOR_VISIBLE |
+                   ASTRA_DISPLAY_CURSOR_SHAPE(ASTRA_POINTER_SHAPE_TEXT);
     assert(kernel_process_on_syscall(registers,
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
-    assert(display_submissions == 6u);
-    assert(display_request.operation == ASTRA_DISPLAY_CURSOR_UPDATE);
-    assert(display_request.source ==
-           ASTRA_DISPLAY_HOST_CURSOR_PACK(321u, 123u, true));
-    assert(display_request.byte_size == ASTRA_DISPLAY_CURSOR_VISIBLE);
+    assert(display_submissions == 5u && display_cursor_writes == 1u);
+    assert(display_cursor_word ==
+           ASTRA_DISPLAY_HOST_CURSOR_PACK(
+               321u, 123u, ASTRA_DISPLAY_CURSOR_VISIBLE |
+                   ASTRA_DISPLAY_CURSOR_SHAPE(ASTRA_POINTER_SHAPE_TEXT)));
+    registers[0] = ASTRA_SYSCALL_DISPLAY_CURSOR;
+    registers[2] = ASTRA_DISPLAY_WIDTH;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    registers[0] = ASTRA_SYSCALL_DISPLAY_CURSOR;
+    registers[2] = 0u;
+    registers[4] = UINT32_C(0x10);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(display_submissions == 5u && display_cursor_writes == 1u);
 }
 
 static void test_input_batch_read_is_bounded_and_fault_atomic(void)

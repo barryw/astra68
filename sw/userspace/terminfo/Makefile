@@ -12,6 +12,7 @@ POSIX := ../posix
 NETWORK := ../network
 COMPILER := ../compiler
 NDK := ../../../ndk
+SYSTEM := ../system
 PICOLIBC ?= $(HOME)/picolibc-astra
 NCURSES_SOURCE ?= $(HOME)/ncurses-astra-6.6
 NCURSES_PREFIX ?= $(HOME)/ncurses-astra
@@ -157,7 +158,7 @@ $(LIBRARY): $(LIBRARY_IDENTITY) $(LIBRARY_MAP) $(LIBRARY_UNDEFINED) \
 		-L$(dir $(COMPILER_LIBRARY)) \
 		-Wl,-rpath-link,$(abspath $(STREAMS)/build/m68k/libraries) \
 		-Wl,-rpath-link,$(abspath $(VFS)/build/m68k/libraries) \
-		-Wl,-rpath-link,$(abspath $(NDK)/build/m68k/libraries) \
+		-Wl,-rpath-link,$(abspath $(SYSTEM)/build/m68k/libraries) \
 		-Wl,--no-as-needed -Wl,-l:libc.library.3 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		-Wl,--start-group $(ARCHIVE) -Wl,--end-group \

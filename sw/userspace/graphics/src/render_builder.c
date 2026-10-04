@@ -3,7 +3,6 @@
 #include <astra/bytes.h>
 #include <astra/display.h>
 #include <astra/endian.h>
-#include <astra/font.h>
 #include <astra/render_batch.h>
 #include <astra/window_scene.h>
 #include <astra/surface.h>
@@ -236,27 +235,6 @@ uint32_t astra_render_builder_frame(const AstraRenderBuilder *builder)
 {
     return builder == NULL || builder->failed != 0u ? 0u :
            ASTRA_RENDER_BATCH_RESOURCE_OFFSET;
-}
-
-int astra_render_builder_cursor(AstraRenderBuilder *builder, uint32_t x,
-                                uint32_t y, uint32_t flags)
-{
-    if (builder == NULL || builder->bytes == NULL ||
-        x >= ASTRA_DISPLAY_WIDTH ||
-        y >= ASTRA_DISPLAY_HEIGHT ||
-        (flags & ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) != 0u ||
-        ((flags & ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
-             ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT) >= ASTRA_POINTER_SHAPE_COUNT) {
-        if (builder != NULL)
-            builder->failed = ASTRA_RENDER_BUILDER_FAILURE_PRESENTATION;
-        return 0;
-    }
-    astra_store_be32(builder->bytes + 32u,
-                     ASTRA_RENDER_BATCH_PRESENT_CURSOR);
-    astra_store_be32(builder->bytes + 36u, x);
-    astra_store_be32(builder->bytes + 40u, y);
-    astra_store_be32(builder->bytes + 44u, flags);
-    return 1;
 }
 
 int astra_render_builder_window_scene(AstraRenderBuilder *builder,
@@ -2004,8 +1982,7 @@ uint32_t astra_render_builder_finish_render_only(AstraRenderBuilder *builder)
     uint32_t bytes;
 
     if (builder == NULL || builder->failed != 0u ||
-        builder->scene_offset != 0u || builder->command_count == 0u ||
-        astra_load_be32(builder->bytes + 32u) != 0u)
+        builder->scene_offset != 0u || builder->command_count == 0u)
         return 0u;
     bytes = astra_render_builder_finish(builder);
     if (bytes != 0u)

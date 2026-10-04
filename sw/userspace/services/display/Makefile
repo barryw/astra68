@@ -10,6 +10,8 @@ include $(RUNTIME)/astra-link.mk
 include ../../libraries.mk
 GRAPHICS := ../../graphics
 NDK := ../../../../ndk
+SYSTEM := ../../system
+ASTRA_COMMON := ../../../common
 CPPFLAGS := -I../../../../ndk/include -I../../../include -I$(RUNTIME)/include \
 	-I$(GRAPHICS)/include -I../../../../fpga/arty/linux
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
@@ -46,14 +48,14 @@ $(GRAPHICS_FONT_HEADERS): $(GRAPHICS_FONT_INPUTS)
 $(HOST_TEST): main.c window_graphics.c window_graphics.h \
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
 		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/render_builder.c \
-		$(NDK)/src/bundle.c $(RUNTIME)/src/string.c $(NDK)/src/utf8.c
+		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated \
 		$(COMMON_FLAGS) -O2 -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections $(GRAPHICS)/src/surface.c \
-		$(GRAPHICS)/src/render_builder.c $(NDK)/src/bundle.c \
+		$(GRAPHICS)/src/render_builder.c $(SYSTEM)/src/bundle.c \
 		$(RUNTIME)/src/string.c \
-		$(NDK)/src/utf8.c window_graphics.c tests/test_display.c -o $@
+		$(ASTRA_COMMON)/utf8.c window_graphics.c tests/test_display.c -o $@
 
 test: $(HOST_TEST)
 	./$(HOST_TEST)
@@ -61,15 +63,15 @@ test: $(HOST_TEST)
 $(HOST_TEST_SANITIZE): main.c window_graphics.c window_graphics.h \
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
 		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/render_builder.c \
-		$(NDK)/src/bundle.c $(RUNTIME)/src/string.c $(NDK)/src/utf8.c
+		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated \
 		$(COMMON_FLAGS) -O1 -fsanitize=address,undefined \
 		-fno-omit-frame-pointer -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections $(GRAPHICS)/src/surface.c \
-		$(GRAPHICS)/src/render_builder.c $(NDK)/src/bundle.c \
+		$(GRAPHICS)/src/render_builder.c $(SYSTEM)/src/bundle.c \
 		$(RUNTIME)/src/string.c \
-		$(NDK)/src/utf8.c window_graphics.c tests/test_display.c -o $@
+		$(ASTRA_COMMON)/utf8.c window_graphics.c tests/test_display.c -o $@
 
 sanitize: $(HOST_TEST_SANITIZE)
 	./$(HOST_TEST_SANITIZE)

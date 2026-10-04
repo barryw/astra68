@@ -18,7 +18,8 @@
 /* Render-only: commands target off-screen Media RAM surfaces; the helper
    executes them and changes neither scanout nor the window scene. */
 #define ASTRA_RENDER_BATCH_VERSION_1_4 UINT32_C(0x00010004)
-#define ASTRA_RENDER_BATCH_PRESENT_CURSOR (UINT32_C(1) << 0)
+/* Header words 32-47 are reserved and zero: the cursor is never part of a
+   batch, it is the posted DISPLAY_CURSOR word (ASTRA_SYSCALL_DISPLAY_CURSOR). */
 #define ASTRA_RENDER_BATCH_HEADER_BYTES 64u
 #define ASTRA_RENDER_BATCH_ARENA_OFFSET UINT32_C(0x00800000)
 #define ASTRA_RENDER_BATCH_WORKSPACE_LIMIT UINT32_C(0x01000000)

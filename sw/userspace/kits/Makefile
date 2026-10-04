@@ -169,7 +169,7 @@ $(RUNTIME_LIBRARY): FORCE
 	$(MAKE) -C ../runtime runtime-library-contract
 
 $(SYSTEM_LIBRARY): FORCE
-	$(MAKE) -C ../../../ndk system-library-contract
+	$(MAKE) -C ../system system-library-contract
 
 $(LOADER_LIBRARY): FORCE
 	$(MAKE) -C ../loader all

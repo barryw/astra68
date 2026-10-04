@@ -71,6 +71,56 @@ astra_rt_event_create(uint32_t flags, uint32_t rights, uint32_t *handle)
 }
 
 uint32_t
+astra_rt_timer_create(uint32_t rights, uint32_t *handle)
+{
+    AstraSyscallResult result;
+
+    if (handle == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    *handle = 0u;
+    astra_syscall5(ASTRA_SYSCALL_TIMER_CREATE, rights, 0u, 0u, 0u, 0u,
+                   &result);
+    if (result.status == ASTRA_SYSCALL_OK)
+        *handle = result.value0;
+    return result.status;
+}
+
+uint32_t
+astra_rt_timer_set(uint32_t handle, uint64_t deadline_ns, uint32_t *woken)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_TIMER_SET, handle,
+                   (uint32_t)(deadline_ns >> 32), (uint32_t)deadline_ns, 0u,
+                   0u, &result);
+    if (woken != NULL)
+        *woken = result.status == ASTRA_SYSCALL_OK ? result.value0 : 0u;
+    return result.status;
+}
+
+uint32_t
+astra_rt_timer_cancel(uint32_t handle, uint32_t *woken)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_TIMER_CANCEL, handle, 0u, 0u, 0u, 0u,
+                   &result);
+    if (woken != NULL)
+        *woken = result.status == ASTRA_SYSCALL_OK ? result.value0 : 0u;
+    return result.status;
+}
+
+uint32_t
+astra_rt_cancel_wait(uint32_t thread)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_CANCEL_WAIT, thread, 0u, 0u, 0u, 0u,
+                   &result);
+    return result.status;
+}
+
+uint32_t
 astra_rt_semaphore_create(uint32_t initial, uint32_t maximum,
                           uint32_t rights, uint32_t *handle)
 {
@@ -1081,6 +1131,17 @@ astra_display_submit(uint32_t device,
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     astra_syscall5(ASTRA_SYSCALL_DISPLAY_SUBMIT, device,
                    (uint32_t)(uintptr_t)request, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
+astra_display_cursor(uint32_t device, uint32_t x, uint32_t y,
+                     uint32_t flags)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_DISPLAY_CURSOR, device, x, y, flags, 0u,
+                   &result);
     return result.status;
 }
 

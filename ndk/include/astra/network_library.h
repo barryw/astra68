@@ -2,6 +2,7 @@
 #ifndef ASTRA_NETWORK_LIBRARY_H
 #define ASTRA_NETWORK_LIBRARY_H
 
+#include <astra/compiler.h>
 #include <stddef.h>
 #include <stdint.h>
 

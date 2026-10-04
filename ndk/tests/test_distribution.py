@@ -16,6 +16,13 @@ REQUIRED = {
     "include/astra/ndk.h",
     "include/astra/version.h",
     "include/posix/unistd.h",
+    "include/lua/lua.h",
+    "include/lua/luaconf.h",
+    "include/lua/lauxlib.h",
+    "include/lua/lualib.h",
+    "include/ncursesw/term.h",
+    "include/ncursesw/termcap.h",
+    "include/ncursesw/ncurses_dll.h",
     "lib/m68040/astra_library.ld",
     "lib/m68040/astra_static_user.ld",
     "lib/m68040/astra_user.ld",
@@ -42,6 +49,7 @@ REQUIRED = {
     "tools/check_dynamic_relocations.py",
     "examples/undo.c",
     "docs/html/index.html",
+    "docs/xml/index.xml",
     "docs/astra68-ndk.pdf",
 }
 VERSION_PATTERN = re.compile(

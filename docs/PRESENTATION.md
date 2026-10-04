@@ -74,8 +74,12 @@ see acquire, drawing, and present operations rather than front/back addresses.
 The display helper completes a present, or any other batch that changes the
 screen, as soon as it has issued the commit; the flip still happens at
 vblank. Before it runs a later request that changes the screen it waits for
-that commit to land. Render-only batches, surface reads and cursor updates do
-not wait. The display service may therefore rely on exactly one guarantee:
+that commit to land. Render-only batches, surface reads and cursor images do
+not wait. The cursor position is not a request at all: it is the posted
+`DISPLAY_CURSOR` register (`ASTRA_SYSCALL_DISPLAY_CURSOR`), a latest-value
+word the helper commits when the pointer plane next takes one, with no
+completion and nothing queued behind it or in front of it. The display
+service may therefore rely on exactly one guarantee:
 
 > When a batch that changes the screen executes, every earlier present is on
 > screen.

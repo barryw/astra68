@@ -9,6 +9,8 @@ RUNTIME := ../runtime
 COMPILER := ../compiler
 VFS := ../vfs
 NDK := ../../../ndk
+SYSTEM := ../system
+ASTRA_COMMON := ../../common
 CPPFLAGS := -Iinclude -I$(NDK)/include -I../../include \
 	-I$(RUNTIME)/include -I$(VFS)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
@@ -19,7 +21,7 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LIBRARY := build/m68k/libraries/config.library.1
 LIBRARY_OBJECTS := build/m68k/config_library.o build/m68k/config_document.o
 LIBRARY_MAP := config.library.exports
-SYSTEM_LIBRARY := $(NDK)/build/m68k/libraries/system.library.2
+SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.2
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.4
@@ -41,7 +43,7 @@ build/m68k/config_document.o: src/config_document.c \
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
 shared-libraries-ready:
-	$(MAKE) -C $(NDK) library
+	$(MAKE) -C $(SYSTEM) library
 	$(MAKE) -C $(VFS) library
 	$(MAKE) -C $(COMPILER) library
 
@@ -76,9 +78,9 @@ library-contract: $(LIBRARY)
 	@$(READELF) -VW $< | grep -q 'ASTRA_CONFIG_1.0'
 	$(call ASTRA_CHECK_DSO,$(LIBRARY))
 
-$(HOST_TEST): src/config_document.c $(NDK)/src/config_scope.c \
-		$(NDK)/src/manifest.c \
-		$(NDK)/src/utf8.c \
+$(HOST_TEST): src/config_document.c $(SYSTEM)/src/config_scope.c \
+		$(SYSTEM)/src/manifest.c \
+		$(ASTRA_COMMON)/utf8.c \
 		tests/test_config_document.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 $^ -o $@
@@ -89,8 +91,8 @@ test: $(HOST_TEST)
 sanitize:
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 $(SANITIZER_FLAGS) \
-		src/config_document.c $(NDK)/src/config_scope.c \
-		$(NDK)/src/manifest.c $(NDK)/src/utf8.c \
+		src/config_document.c $(SYSTEM)/src/config_scope.c \
+		$(SYSTEM)/src/manifest.c $(ASTRA_COMMON)/utf8.c \
 		tests/test_config_document.c -o build/host/test_config_document_sanitize
 	./build/host/test_config_document_sanitize
 

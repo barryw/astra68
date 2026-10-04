@@ -26,10 +26,12 @@ code never runs its normal close path.
 
 ## Bounded datagrams
 
-Every message begins with {c:struct}`AstraMessageHeader` and contains at most
-256 additional bytes. Up to eight {c:type}`AstraHandle` values may accompany
-the datagram. Queue storage is reserved when the port is created and is bounded
-by both message count and total bytes.
+Every message begins with the 24-byte {c:struct}`AstraMessageHeader` and
+carries at most {c:macro}`ASTRA_MESSAGE_INLINE_MAX` (1,024) bytes after it.
+Handles may accompany the datagram, up to the process's whole handle
+namespace ({c:macro}`ASTRA_MESSAGE_HANDLES_MAX`). A port is created with a
+limit on both its queued message count and its queued bytes; queue storage
+is allocated as messages arrive, within those limits.
 
 A full queue returns {c:enumerator}`ASTRA_ERROR_WOULD_BLOCK`; it never grows or
 allocates opportunistically. Use shared-memory areas and bounded rings for bulk

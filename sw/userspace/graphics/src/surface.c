@@ -7,7 +7,6 @@
 
 #if defined(ASTRA_SURFACE_FONT)
 #include <astra/utf8.h>
-#include <astra/font.h>
 #include <astra/ui_font.h>
 #endif
 

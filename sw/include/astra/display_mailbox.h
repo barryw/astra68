@@ -21,7 +21,13 @@
    non-cacheable HPS memory that the render engine reads directly through its
    host aperture, so the helper copies nothing. The helper futex-wakes
    completion_sequence after publishing it (since 1.6). */
-#define ASTRA_DISPLAY_MAILBOX_VERSION_1_7 UINT32_C(0x00010007)
+/* 1.8: the cursor is a posted latest-value slot beside the request, written
+   from Vesta's DISPLAY_CURSOR register: cursor holds the newest
+   ASTRA_DISPLAY_HOST_CURSOR_PACK word and cursor_sequence counts the writes.
+   It never occupies the request and is never completed. wake_sequence
+   changes after every request and every cursor write, and is the one word
+   the helper futex-waits on, so neither kind of change can be missed. */
+#define ASTRA_DISPLAY_MAILBOX_VERSION_1_8 UINT32_C(0x00010008)
 
 /* Host-native shared record between QEMU and the Linux display helper. */
 typedef struct AstraDisplayMailbox {
@@ -37,7 +43,10 @@ typedef struct AstraDisplayMailbox {
     uint32_t completion_generation;
     uint32_t frame_pitch;
     uint32_t frame_bytes;
-    uint32_t reserved[4];
+    uint32_t wake_sequence;
+    uint32_t cursor_sequence;
+    uint32_t cursor;
+    uint32_t reserved;
 } AstraDisplayMailbox;
 
 _Static_assert(sizeof(AstraDisplayMailbox) == 64u,

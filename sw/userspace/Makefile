@@ -1,4 +1,4 @@
-SUBDIRS := compiler runtime metrics alloc storage vfs events input terminal graphics interface network config audio loader \
+SUBDIRS := compiler runtime system metrics alloc storage vfs events input terminal graphics interface network config audio loader \
 	streams posix terminfo ntp lua cxx sdl2 ports/chocolate-doom commands supervisor services applications kits apps
 
 # `all` and `test` both walk the same recursive producers.  A caller may ask
@@ -9,7 +9,6 @@ SUBDIRS := compiler runtime metrics alloc storage vfs events input terminal grap
 .NOTPARALLEL:
 
 include libraries.mk
-NDK := ../../ndk
 SYSTEM_CATALOG := build/m68k/astra_events.cat
 SUPERVISOR_ELF := supervisor/build/m68k/astra_supervisor.elf
 TERMINAL_ELF := services/terminal/build/m68k/terminal.elf
@@ -19,7 +18,6 @@ SHARED_LIBRARIES := $(ASTRA_SHARED_LIBRARIES)
 
 all:
 	$(MAKE) prune-shared-library-artifacts
-	$(MAKE) -C $(NDK) all
 	@for dir in $(SUBDIRS); do $(MAKE) -C $$dir $@ || exit $$?; done
 	$(MAKE) system-catalog
 	$(MAKE) shared-library-ownership

@@ -3,7 +3,7 @@
 #include <astra/clock.h>
 #include <astra/config_library.h>
 #include <astra/ntp.h>
-#include <astra/ntp_core.h>
+#include <astra/ntp_client.h>
 #include <astra/posix.h>
 #include <astra/posix_descriptor.h>
 #include <astra/program.h>

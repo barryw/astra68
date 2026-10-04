@@ -368,23 +368,35 @@ uint32_t astra_vfs_readdir(AstraVfsClient *client, const char *path,
                            uint64_t cursor, char *name, uint32_t capacity,
                            uint16_t *kind, uint64_t *next);
 
-/** Directory entry and metadata returned by batched enumeration. */
+/**
+ * Directory entry and metadata returned by batched enumeration.
+ *
+ * Two fields are anonymous unions, each with two names for the same
+ * storage: `size` (the VFS layer's spelling) or `byte_size` (the
+ * spelling Filesystem Kit uses) for the file length in bytes, and
+ * `reserved` (must be zero in a low-level VFS result) or `member` (the
+ * union member Filesystem Kit selects) for the following 16-bit field.
+ */
 typedef struct AstraVfsDirEntry {
     char name[ASTRA_VFS_NAME_MAX]; /**< NUL-terminated UTF-8 leaf name. */
+    /** @cond ASTRA_INTERNAL */
     union {
-        uint64_t size; /**< File length in bytes at the VFS layer. */
-        uint64_t byte_size; /**< File length spelling used by Filesystem Kit. */
+        uint64_t size;
+        uint64_t byte_size;
     };
+    /** @endcond */
     int64_t mtime; /**< Modification time in Unix seconds. */
     uint32_t uid; /**< Owning user identifier, or zero when unavailable. */
     uint32_t gid; /**< Owning group identifier, or zero when unavailable. */
     uint16_t kind; /**< ASTRA_VFS_NODE_* kind. */
     uint16_t mode; /**< POSIX permission and type bits. */
     uint16_t nlink; /**< Hard-link count, or zero when unavailable. */
+    /** @cond ASTRA_INTERNAL */
     union {
-        uint16_t reserved; /**< Must be zero in a low-level VFS result. */
-        uint16_t member; /**< Union member selected by Filesystem Kit. */
+        uint16_t reserved;
+        uint16_t member;
     };
+    /** @endcond */
 } AstraVfsDirEntry;
 
 /**

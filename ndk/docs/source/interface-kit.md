@@ -24,31 +24,33 @@ code runs, so applications need no second discovery path or runtime API table.
 ## Controls and responsive layout
 
 Controls and {c:type}`AstraUIContext` live in the application. Initialize every
-object with its `ASTRA_*_INIT` initializer, create controls through the library
-table, assign {c:type}`AstraFlexItem` constraints, then initialize and lay out
-the complete array. IDs are nonzero and unique. A child names its container by
-`parent_id`; parents must precede descendants in the array.
+object with its `ASTRA_*_INIT` initializer, create controls with the matching
+`astra_interface_*_init` call, assign {c:type}`AstraFlexItem` constraints, then
+initialize and lay out the complete array. IDs are nonzero and unique. A child
+names its container by `parent_id`; parents must precede descendants in the
+array.
 
 The flex engine uses deterministic integer arithmetic and has no child-count or
 nesting-depth cap of its own. The caller's control array and memory are the
-resource limit. A window frame event passed to `ui_handle_event` recomputes the
-entire descendant layout from the new parent extent. Pointer and keyboard
-events use the same function and return semantic {c:type}`AstraUIAction`
-records. Render only after handling input, then use `ui_damage` and
-`window_present_region` to publish the changed rectangle.
+resource limit. A window frame event passed to `astra_interface_ui_handle_event`
+recomputes the entire descendant layout from the new parent extent. Pointer and
+keyboard events use the same function and return semantic {c:type}`AstraUIAction`
+records. Render only after handling input, then use `astra_interface_ui_damage`
+and `astra_window_present_region` to publish the changed rectangle.
 
 Animated controls own their animation state and active-list link; the shared
 display-refresh epoch keeps them synchronized. Include
 `ASTRA_WINDOW_SUBSCRIBE_VBLANK` in the event mask, retrieve the window-owned
-borrowed handle with `window_vblank_wait_handle`, include it in the UI thread's
-multi-object wait, and call `ui_vblank` once after each coalescing pulse.
-Interface Kit visits only active controls; indeterminate progress indicators
-and focused carets create neither timer threads nor application polling.
-Dispatch the returned semantic action exactly like one returned by
-`ui_handle_event`; this is how pointer-held steppers report repeat changes
-without a second callback path. Stop
-subscribing when `ui_animations_active` becomes false. `window_close` closes
-the vblank handle with the rest of the window state.
+borrowed handle with `astra_window_vblank_wait_handle`, include it in the UI
+thread's multi-object wait, and call `astra_interface_ui_vblank` once after
+each coalescing pulse. Interface Kit visits only active controls;
+indeterminate progress indicators and focused carets create neither timer
+threads nor application polling. Dispatch the returned semantic action exactly
+like one returned by `astra_interface_ui_handle_event`; this is how
+pointer-held steppers report repeat changes without a second callback path.
+Stop subscribing when `astra_interface_ui_animations_active` becomes false.
+`astra_window_close` closes the vblank handle with the rest of the window
+state.
 
 Labels, buttons, checkboxes, radios, switches, sliders, dials, numeric steppers,
 segmented selectors, tab strips, disclosures, progress indicators, fields,
@@ -79,8 +81,8 @@ same value-change action as other selection controls.
 Use `ASTRA_CONTROL_COLLAPSED` on page containers. A collapsed container and all
 of its descendants leave layout, rendering, hit testing, focus traversal, and
 animation together; applications do not maintain separate hidden states in
-each subsystem. `ui_set_state` reflows after a collapse change and clears any
-interaction owned by a descendant that left the active page. Tabs and
+each subsystem. `astra_interface_ui_set_state` reflows after a collapse change
+and clears any interaction owned by a descendant that left the active page. Tabs and
 collapsed containers require `interface.library.5` version 5.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_tabs.c
@@ -126,7 +128,7 @@ pixel. Overlay bars fade after 800 milliseconds on the shared vblank clock.
 
 On draw-list surfaces, an isolated scroll transaction reuses retained pixels
 with one overlap-safe hardware copy and clips repaint to the newly exposed
-strip. Submit `ui_render` to a newly initialized draw list: commands queued
+strip. Submit `astra_interface_ui_render` to a newly initialized draw list: commands queued
 before it select the safe normal repaint because their effect on retained
 source pixels is unknown. Any unrelated damage or multiple view mutation in
 the same transaction also selects the normal path. These are correctness
@@ -148,7 +150,7 @@ or using the arrow keys updates the adjacent panes' existing flex bases while
 honouring both panes' minimum and maximum constraints. Shift plus an arrow
 moves one logical pixel; Home and End move to the permitted extremes. The same
 live change is reported as `ASTRA_UI_ACTION_VALUE_CHANGED`, and
-`control_set_value` restores a saved first-pane extent.
+`astra_interface_control_set_value` restores a saved first-pane extent.
 
 Splitters require `interface.library.5` version 5.0.0 or newer.
 
@@ -172,7 +174,7 @@ The caller owns the value domain. `minimum`, `maximum`, `value`, `step`, and
 `maximum = 732145632765400`, and `decimal_places = 2` represent the exact
 range -32.86 through 7321456327654.00 without floating-point work on the
 MC68040. The indicator's angular position is normalized internally; 0 through
-100 is not part of the public value contract. `control_get_value` and every
+100 is not part of the public value contract. `astra_interface_control_get_value` and every
 value-change action return both the exact integer and its scale.
 
 Dials require `interface.library.5` version 5.0.0 or newer. Their indicator
@@ -186,14 +188,14 @@ The window server supplies seven native hardware-pointer images:
 `ASTRA_POINTER_SHAPE_RESIZE_VERTICAL`,
 `ASTRA_POINTER_SHAPE_RESIZE_NW_SE`, `ASTRA_POINTER_SHAPE_RESIZE_NE_SW`,
 `ASTRA_POINTER_SHAPE_TEXT`, and `ASTRA_POINTER_SHAPE_WAIT`. Use
-`window_set_pointer_shape` to select one for a window's content. Interface
-Kit's `ui_update_pointer` selects the I-beam for fields and the matching resize
+`astra_window_set_pointer_shape` to select one for a window's content. Interface
+Kit's `astra_interface_ui_update_pointer` selects the I-beam for fields and the matching resize
 pointer for splitters while preserving pointer capture, so the image does not
 change in the middle of a drag. Pass
 `ASTRA_POINTER_SHAPE_AUTOMATIC` for that behavior, or pass a concrete shape as
 a window-wide override.
 
-Use `window_set_pointer_image` for an application-defined pointer. Supply a
+Use `astra_window_set_pointer_image` for an application-defined pointer. Supply a
 one-through-32-pixel RGBA image, byte pitch, and in-bounds hotspot through
 {c:type}`AstraHardwarePointerImage`. The call normalizes it to the native 32 by
 32 plane and transfers an immutable copy to the window server; callers may
@@ -203,7 +205,7 @@ built-in does not discard the copied custom image, so the window can select
 
 The wait image means the content below the pointer is temporarily unable to
 accept an interaction. Pass `ASTRA_POINTER_SHAPE_WAIT` to
-`ui_update_pointer` only for that state, then return to
+`astra_interface_ui_update_pointer` only for that state, then return to
 `ASTRA_POINTER_SHAPE_AUTOMATIC` when the operation becomes available. A custom
 image remains selected the same way by passing `ASTRA_POINTER_SHAPE_CUSTOM`.
 Pointer pixels, hotspot, position, visibility, and scene state become visible
@@ -228,12 +230,12 @@ Selections are half-open UTF-8 byte ranges whose anchor and focus must be
 Unicode-scalar boundaries. Fields render with the system monospace metrics,
 track a horizontal viewport, accept Unicode text events, and emit immediate
 text/selection plus semantic copy, cut, paste, and activate actions. Use
-`field_replace_selection` for programmatic or pasted text so the field's
-single-line invariant is checked in one place. Call `field_refresh` after any
+`astra_interface_field_replace_selection` for programmatic or pasted text so the field's
+single-line invariant is checked in one place. Call `astra_interface_field_refresh` after any
 other external model mutation.
 
 One document-owning thread may mutate a model. Borrowed spans returned by
-`text_model_read` remain valid only until the next mutation or arena move.
+`astra_text_model_read` remain valid only until the next mutation or arena move.
 
 On the physical 70.038 MHz MC68040, 4,096 contiguous single-byte appends
 measured 7.320 microseconds per edit. A deliberately maximally fragmented
@@ -274,19 +276,19 @@ snapshot that must be closed; a later writer cannot mutate that snapshot.
 Create one {c:type}`AstraUndoManager` per document and give it a caller-owned,
 four-byte-aligned arena. There is no transaction-count or action-count limit.
 The arena byte budget is the only retained-history limit, and
-`undo_move_arena` moves live history into a larger allocation when needed.
+`astra_undo_move_arena` moves live history into a larger allocation when needed.
 
 An action contains a nonzero application operation ID and a serializable
 payload with enough before/after state for both directions. A group gives one
-or more actions a user-facing UTF-8 name. `undo_perform_group` is the safest
+or more actions a user-facing UTF-8 name. `astra_undo_perform_group` is the safest
 entry point: it verifies capacity first, applies the forward transaction, and
 records it only after success. If an action fails, completed actions in that
 group are compensated. A compensation failure poisons the history rather than
-pretending the document state is known; `undo_clear` is the explicit recovery.
+pretending the document state is known; `astra_undo_clear` is the explicit recovery.
 
 Equal nonzero `coalesce_id` values join only consecutive groups with the same
 name inside `coalesce_interval_ns`. Coalescing never crosses a save point.
-Call `undo_mark_clean` after a successful save and use `undo_get_state` to
+Call `astra_undo_mark_clean` after a successful save and use `astra_undo_get_state` to
 drive dirty state plus labels such as “Undo Typing” and “Redo Typing.” A new
 edit after undo discards and wipes the redo branch.
 

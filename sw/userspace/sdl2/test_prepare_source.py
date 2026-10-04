@@ -28,6 +28,8 @@ class PrepareSourceTest(unittest.TestCase):
         self.assertIn("#define SDL_TIMER_UNIX 1", config)
         self.assertIn("#define HAVE_CLOCK_GETTIME 1", config)
         self.assertIn("#define HAVE_STDIO_H    1", config)
+        for header in ("STDLIB", "STRING", "MATH", "CTYPE"):
+            self.assertRegex(config, rf"#define HAVE_{header}_H +1\n")
         self.assertIn("#include <string.h>",
                       (output / "src/file/SDL_rwops.c").read_text())
         self.assertNotIn("#define SDL_THREADS_DISABLED", config)

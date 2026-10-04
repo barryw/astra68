@@ -24,7 +24,7 @@ $(OBJECT): main.c
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
 test sanitize:
-	$(MAKE) -C $(NDK) $@
+	$(MAKE) -C ../../system $@
 
 analyze:
 	@mkdir -p build/analyzer

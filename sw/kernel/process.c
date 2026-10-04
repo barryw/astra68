@@ -2893,11 +2893,20 @@ static uint32_t display_attachment_prepare(
 
 static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
                                 uint32_t syscall,
-                                uint32_t device_generation)
+                                uint32_t device_generation,
+                                uint32_t snapshot_capabilities)
 {
     uint32_t user_address = thread->context.data[2];
     int copy_status;
 
+    if (syscall == ASTRA_SYSCALL_DISPLAY_CURSOR) {
+        if ((snapshot_capabilities & ASTRA_DISPLAY_CAP_HARDWARE_CURSOR) == 0u)
+            return ASTRA_SYSCALL_UNSUPPORTED;
+        return kernel_platform_display_cursor(thread->context.data[2],
+                                              thread->context.data[3],
+                                              thread->context.data[4]) ?
+            ASTRA_SYSCALL_OK : ASTRA_SYSCALL_INVALID_ARGUMENT;
+    }
     if ((user_address & (sizeof(uint32_t) - 1u)) != 0u)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     if (syscall == ASTRA_SYSCALL_DISPLAY_SUBMIT) {
@@ -3000,17 +3009,6 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
             display_dma_owner = process->owner;
             display_dma_active = 1u;
             platform_source = display_dma_token.physical_address;
-        } else if (request.operation == ASTRA_DISPLAY_CURSOR_UPDATE) {
-            if (request.source >= ASTRA_DISPLAY_WIDTH ||
-                request.pitch >= ASTRA_DISPLAY_HEIGHT ||
-                (request.byte_size & ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) != 0u ||
-                ((request.byte_size & ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
-                     ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT) >=
-                    ASTRA_POINTER_SHAPE_COUNT)
-                return ASTRA_SYSCALL_INVALID_ARGUMENT;
-            platform_source = ASTRA_DISPLAY_HOST_CURSOR_PACK(
-                request.source, request.pitch,
-                (request.byte_size & ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u);
         } else {
             return ASTRA_SYSCALL_INVALID_ARGUMENT;
         }
@@ -3019,8 +3017,6 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
                 (request.operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
                  request.operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE ||
                  request.operation == ASTRA_DISPLAY_FRAME_READ_SURFACE) ?
-                    request.byte_size :
-                request.operation == ASTRA_DISPLAY_CURSOR_UPDATE ?
                     request.byte_size : 0u,
                 attachment))
             return ASTRA_SYSCALL_OK;
@@ -10191,7 +10187,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         break;
     }
     case ASTRA_SYSCALL_DISPLAY_SUBMIT:
-    case ASTRA_SYSCALL_DISPLAY_COLLECT: {
+    case ASTRA_SYSCALL_DISPLAY_COLLECT:
+    case ASTRA_SYSCALL_DISPLAY_CURSOR: {
         KernelDeviceLease *lease = NULL;
         KernelDeviceSnapshot snapshot;
         KernelHandleStatus handle_status = kernel_handle_lookup(
@@ -10227,7 +10224,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             break;
         }
         result = display_syscall(current, thread, syscall,
-                                 snapshot.generation);
+                                 snapshot.generation, snapshot.capabilities);
         break;
     }
     /*

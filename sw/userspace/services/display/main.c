@@ -2091,7 +2091,7 @@ static uint32_t display_pointer_shape(DisplayState *state,
 
 static uint32_t compose(void *storage, uint32_t fence,
                         DisplayState *state, uint32_t *error,
-                        uint32_t *failure, int include_cursor)
+                        uint32_t *failure)
 {
     AstraRenderBuilder builder = {0};
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -2287,14 +2287,6 @@ static uint32_t compose(void *storage, uint32_t fence,
             return compose_failed(&builder, error, failure,
                                   ASTRA_STATUS_LIMIT);
     }
-    if (include_cursor && !astra_render_builder_cursor(
-            &builder, (uint32_t)state->pointer_x,
-            (uint32_t)state->pointer_y,
-            ASTRA_DISPLAY_CURSOR_VISIBLE |
-                ASTRA_DISPLAY_CURSOR_SHAPE(
-                    display_pointer_shape(state, &theme))))
-        return compose_failed(&builder, error, failure,
-                              ASTRA_STATUS_INVALID);
     status = astra_render_builder_finish(&builder);
     if (status == 0u)
         return compose_failed(&builder, error, failure,
@@ -2311,7 +2303,6 @@ static void log_builder_failure(uint32_t failure)
         "display render command has an invalid destination",
         "display render command ring is full",
         "display render surface geometry is invalid",
-        "display render presentation state is invalid",
         "display window scene is invalid",
     };
 
@@ -2464,23 +2455,23 @@ static uint32_t present(uint32_t device, uint32_t irq,
                          NULL, fence, armed, 1);
 }
 
-static uint32_t update_cursor(uint32_t device, uint32_t irq,
-                              int32_t x, int32_t y, uint32_t flags,
-                              uint32_t *fence, uint32_t *armed)
+/* The cursor at the pointer's position, in @p shape: a posted write that
+   replaces whatever position the display has not shown yet. It is not a
+   device request, so it never waits behind a frame and no frame waits
+   behind it -- the way a KMS cursor plane or a compositor's hardware cursor
+   moves. Every pointer move is written at once. */
+static uint32_t update_cursor(uint32_t device, const DisplayState *state,
+                              uint32_t shape)
 {
-    AstraDisplayFrameRequest request = {
-        .size = ASTRA_DISPLAY_FRAME_REQUEST_SIZE,
-        .operation = ASTRA_DISPLAY_CURSOR_UPDATE,
-        .fence = *fence,
-        .source = (uint32_t)x,
-        .pitch = (uint32_t)y,
-        .byte_size = flags,
-    };
-    uint32_t status = submit_request(device, irq, &request, armed);
+    uint32_t status = astra_display_cursor(
+        device, (uint32_t)state->pointer_x, (uint32_t)state->pointer_y,
+        ASTRA_DISPLAY_CURSOR_VISIBLE | ASTRA_DISPLAY_CURSOR_SHAPE(shape));
 
-    if (status == ASTRA_STATUS_OK && ++*fence == 0u)
-        *fence = 1u;
-    return status;
+    if (status != ASTRA_SYSCALL_OK) {
+        (void)astra_log_failure("display cursor syscall", status);
+        return DISPLAY_FAIL_SUBMIT;
+    }
+    return ASTRA_STATUS_OK;
 }
 
 static uint32_t update_cursor_image(
@@ -2573,8 +2564,7 @@ static void commit_render_state(DisplayState *state)
 
 static uint32_t render(uint32_t device, uint32_t irq,
                        AstraDmaBufferInfo *framebuffer, DisplayState *state,
-                       uint32_t *next_fence, uint32_t *armed,
-                       int include_cursor)
+                       uint32_t *next_fence, uint32_t *armed)
 {
     uint32_t compose_status = settle(device, irq);
 
@@ -2583,7 +2573,7 @@ static uint32_t render(uint32_t device, uint32_t irq,
         return compose_status;
     uint32_t bytes = compose((void *)(uintptr_t)framebuffer->virtual_base,
                              *next_fence, state, &compose_status,
-                             &last_builder_failure, include_cursor);
+                             &last_builder_failure);
     uint32_t status = bytes == 0u ? compose_status :
         present(device, irq, framebuffer, bytes, *next_fence, armed);
 
@@ -2594,26 +2584,21 @@ static uint32_t render(uint32_t device, uint32_t irq,
     return status;
 }
 
-/* Presents whatever changed: a frame when something is damaged (with the
-   cursor in it when @p cursor), else just the cursor, else nothing. A
-   change that damaged nothing -- the pointer leaving a closed window's
-   gadgets -- is not a render failure. */
+/* Presents whatever changed: the cursor, when @p cursor, at once, then a
+   frame when something is damaged. A change that damaged nothing -- the
+   pointer leaving a closed window's gadgets -- is not a render failure. */
 static uint32_t present_changes(uint32_t device, uint32_t irq,
                                 AstraDmaBufferInfo *framebuffer,
                                 DisplayState *state, uint32_t *next_fence,
-                                uint32_t *cursor_fence, uint32_t *armed,
-                                int cursor, uint32_t shape)
+                                uint32_t *armed, int cursor, uint32_t shape)
 {
-    if (state->damage[*next_fence & 1u].valid != 0u)
-        return render(device, irq, framebuffer, state, next_fence, armed,
-                      cursor);
-    if (cursor)
-        return update_cursor(device, irq, state->pointer_x,
-                             state->pointer_y,
-                             ASTRA_DISPLAY_CURSOR_VISIBLE |
-                                 ASTRA_DISPLAY_CURSOR_SHAPE(shape),
-                             cursor_fence, armed);
-    return ASTRA_STATUS_OK;
+    uint32_t status = cursor ? update_cursor(device, state, shape) :
+                               ASTRA_STATUS_OK;
+
+    if (status == ASTRA_STATUS_OK &&
+        state->damage[*next_fence & 1u].valid != 0u)
+        status = render(device, irq, framebuffer, state, next_fence, armed);
+    return status;
 }
 
 static void log_render_failure(const char *phase, uint32_t status)
@@ -3229,15 +3214,14 @@ static uint32_t render_window_change(
         device, irq, pointer_buffer, state, &theme, cursor_fence, armed);
     /* A window change never moves the pointer; the input path presents
        every position. It presents the cursor only when the shape under the
-       pointer, or its custom image, changed, and then atomically with the
-       frame when there is one. */
+       pointer, or its custom image, changed. */
     int cursor = shape != presented_shape ||
                  state->loaded_pointer_window != presented_window ||
                  state->loaded_pointer_generation != presented_generation;
 
     if (status == ASTRA_STATUS_OK)
         status = present_changes(device, irq, framebuffer, state, next_fence,
-                                 cursor_fence, armed, cursor, shape);
+                                 armed, cursor, shape);
     if (status == ASTRA_STATUS_OK && cursor)
         pointer_shape_presented(state, &theme);
     return status;
@@ -4289,11 +4273,9 @@ static void receive_command(uint32_t device, uint32_t irq,
     if (status == ASTRA_STATUS_OK &&
         (command.action == ASTRA_GUI_WINDOW_SET_POINTER_SHAPE ||
          command.action == ASTRA_GUI_WINDOW_SET_POINTER_IMAGE) &&
-        update_cursor(device, irq, state->pointer_x, state->pointer_y,
-                      ASTRA_DISPLAY_CURSOR_VISIBLE |
-                          ASTRA_DISPLAY_CURSOR_SHAPE(
-                              display_pointer_shape(state, &theme)),
-                      cursor_fence, armed) != ASTRA_STATUS_OK)
+        update_cursor(device, state,
+                      display_pointer_shape(state, &theme)) !=
+            ASTRA_STATUS_OK)
         status = DISPLAY_FAIL_COMPLETION;
     if (pointer_image_pending && status != ASTRA_STATUS_OK) {
         DisplayWindow *window = &state->windows[window_index];
@@ -4672,30 +4654,19 @@ static void serve_windows(uint32_t device, uint32_t irq,
                 if (status != ASTRA_STATUS_OK)
                     render_failure("display pointer image failed", status);
             }
-            if ((effects & DISPLAY_POINTER_CURSOR) != 0u &&
-                (effects & DISPLAY_POINTER_RENDER) == 0u) {
-                status = update_cursor(
-                    device, irq, state.pointer_x, state.pointer_y,
-                    ASTRA_DISPLAY_CURSOR_VISIBLE |
-                        ASTRA_DISPLAY_CURSOR_SHAPE(
-                            display_pointer_shape(&state, &theme)),
-                    &cursor_fence, &armed);
+            if ((effects & DISPLAY_POINTER_CURSOR) != 0u) {
+                status = update_cursor(device, &state,
+                                       display_pointer_shape(&state, &theme));
                 if (status != ASTRA_STATUS_OK)
                     render_failure("display cursor update failed", status);
-            }
-            if ((effects & DISPLAY_POINTER_CURSOR) != 0u &&
-                (effects & DISPLAY_POINTER_RENDER) == 0u)
                 pointer_shape_presented(&state, &theme);
+            }
             if ((effects & DISPLAY_POINTER_RENDER) != 0u) {
                 status = present_changes(
-                    device, irq, framebuffer, &state, &next_fence,
-                    &cursor_fence, &armed,
-                    (effects & DISPLAY_POINTER_CURSOR) != 0u,
-                    display_pointer_shape(&state, &theme));
+                    device, irq, framebuffer, &state, &next_fence, &armed,
+                    0, display_pointer_shape(&state, &theme));
                 if (status != ASTRA_STATUS_OK)
                     render_failure("display pointer render failed", status);
-                if ((effects & DISPLAY_POINTER_CURSOR) != 0u)
-                    pointer_shape_presented(&state, &theme);
             }
             if ((effects & DISPLAY_POINTER_FRAME) != 0u) {
                 uint32_t index = find_id(&state, frame_window);

@@ -372,9 +372,10 @@ typedef struct AstraDisplayState {
     uint64_t cursor_y;
     uint64_t cursor_visible;
     uint64_t cursor_updates;
-    uint64_t cursor_submit_cycle;
-    uint64_t cursor_completion_cycle;
-    uint64_t cursor_collect_cycle;
+    /* Newest DISPLAY_CURSOR word (ASTRA_DISPLAY_HOST_CURSOR_PACK). */
+    uint32_t cursor;
+    uint32_t cursor_sequence;
+    uint32_t wake_sequence;
     int mailbox_lock_fd;
 #ifdef CONFIG_LINUX
     /* The helper wakes completion_sequence; this thread turns that wake into
@@ -386,7 +387,6 @@ typedef struct AstraDisplayState {
     bool mailbox_enabled;
     bool busy;
     bool completion_valid;
-    bool cursor_inflight;
 } AstraDisplayState;
 
 typedef struct AstraNetworkEndpointState {
@@ -596,7 +596,7 @@ static uint32_t astra_display_queue(const AstraDisplayState *display)
                 ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID : 0u);
 }
 
-static bool astra_display_count_batch(Astra68State *s, uint32_t source,
+static void astra_display_count_batch(Astra68State *s, uint32_t source,
                                       uint32_t byte_size)
 {
     AstraDisplayState *display = &s->display;
@@ -643,23 +643,8 @@ static bool astra_display_count_batch(Astra68State *s, uint32_t source,
         else if (opcode == ASTRA_RENDER_OP_TRIANGLES)
             ++display->triangle_commands;
     }
-    if (version == ASTRA_RENDER_BATCH_VERSION_1_4) {
+    if (version == ASTRA_RENDER_BATCH_VERSION_1_4)
         ++display->render_only_batches;
-        return false;
-    }
-    if (ldl_be_p(batch + 32u) != ASTRA_RENDER_BATCH_PRESENT_CURSOR ||
-        ldl_be_p(batch + 36u) >= ASTRA_DISPLAY_WIDTH ||
-        ldl_be_p(batch + 40u) >= ASTRA_DISPLAY_HEIGHT ||
-        (ldl_be_p(batch + 44u) & ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) != 0u ||
-        ((ldl_be_p(batch + 44u) & ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
-             ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT) >= ASTRA_POINTER_SHAPE_COUNT)
-        return false;
-    display->cursor_x = ldl_be_p(batch + 36u);
-    display->cursor_y = ldl_be_p(batch + 40u);
-    display->cursor_visible =
-        (ldl_be_p(batch + 44u) & ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u;
-    ++display->cursor_updates;
-    return true;
 }
 
 /*
@@ -778,8 +763,6 @@ static void astra_display_complete(Astra68State *s, uint32_t status,
     display->completion_generation = generation;
     display->generation = generation;
     display->completion_cycle = astra_now_cycles(s);
-    if (display->cursor_inflight)
-        display->cursor_completion_cycle = display->completion_cycle;
     ++display->completions;
     s->astraea.irq_status |= ASTRAEA_IRQ_DRAW_DONE;
     astra_update_irq(s);
@@ -876,6 +859,49 @@ static void astra_display_service(void *opaque)
         s, status, qatomic_read(&display->mailbox->completion_generation));
 }
 
+/* Rings the helper after a request or a cursor: wake_sequence is the one
+   word it sleeps on, so it is changed after whatever it announces. */
+static void astra_display_wake_helper(AstraDisplayState *display)
+{
+    display->wake_sequence += 1u;
+    qatomic_set(&display->mailbox->wake_sequence, display->wake_sequence);
+#ifdef CONFIG_LINUX
+    qemu_futex_wake((void *)&display->mailbox->wake_sequence, 1);
+#endif
+}
+
+/*
+ * DISPLAY_CURSOR: the posted cursor. It replaces the newest position and
+ * flags and is done -- no request slot, no completion, no interrupt -- so a
+ * moving pointer never waits behind rendering, nor rendering behind it. The
+ * helper commits the newest word when the pointer hardware next takes one.
+ * A word naming no valid cursor is ignored.
+ */
+static void astra_display_post_cursor(Astra68State *s, uint32_t value)
+{
+    AstraDisplayState *display = &s->display;
+
+    if (!ASTRA_DISPLAY_HOST_CURSOR_VALID(value))
+        return;
+    display->cursor = value;
+    display->cursor_x = ASTRA_DISPLAY_HOST_CURSOR_X(value);
+    display->cursor_y = ASTRA_DISPLAY_HOST_CURSOR_Y(value);
+    display->cursor_visible = (ASTRA_DISPLAY_HOST_CURSOR_FLAGS(value) &
+                               ASTRA_DISPLAY_CURSOR_VISIBLE) != 0u;
+    ++display->cursor_updates;
+    if (!display->mailbox_enabled)
+        return;
+    display->cursor_sequence += 1u;
+    qatomic_set(&display->mailbox->magic, ASTRA_DISPLAY_MAILBOX_MAGIC);
+    qatomic_set(&display->mailbox->version,
+                ASTRA_DISPLAY_MAILBOX_VERSION_1_8);
+    qatomic_set(&display->mailbox->cursor, value);
+    smp_wmb();
+    qatomic_set(&display->mailbox->cursor_sequence,
+                display->cursor_sequence);
+    astra_display_wake_helper(display);
+}
+
 static void astra_display_submit(Astra68State *s)
 {
     AstraDisplayState *display = &s->display;
@@ -894,7 +920,6 @@ static void astra_display_submit(Astra68State *s)
         (operation != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
          operation != ASTRA_DISPLAY_FRAME_PRESENT_RGB565 &&
          operation != ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
-         operation != ASTRA_DISPLAY_CURSOR_UPDATE &&
          operation != ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE &&
          operation != ASTRA_DISPLAY_FRAME_READ_SURFACE) ||
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
@@ -905,20 +930,9 @@ static void astra_display_submit(Astra68State *s)
         (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH &&
          (byte_size < ASTRA_RENDER_BATCH_MIN_BYTES ||
           byte_size > ASTRA_RENDER_BATCH_MAX_BYTES)) ||
-        (operation == ASTRA_DISPLAY_CURSOR_UPDATE &&
-         ((byte_size &
-           ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) != 0u ||
-          ((byte_size & ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
-               ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT) >=
-              ASTRA_POINTER_SHAPE_COUNT ||
-          (display->request_source & ASTRA_DISPLAY_HOST_CURSOR_X_MASK) >=
-              ASTRA_DISPLAY_WIDTH ||
-          ((display->request_source & ASTRA_DISPLAY_HOST_CURSOR_Y_MASK) >>
-               ASTRA_DISPLAY_HOST_CURSOR_Y_SHIFT) >= ASTRA_DISPLAY_HEIGHT)) ||
         (operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE &&
          byte_size != ASTRA_DISPLAY_CURSOR_IMAGE_BYTES) ||
         (operation != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
-         operation != ASTRA_DISPLAY_CURSOR_UPDATE &&
          (display->request_source < ASTRA_SDRAM_BASE ||
           frame_end > (uint64_t)ASTRA_SDRAM_BASE + s->ram_size)) ||
         (attachment != 0u &&
@@ -928,31 +942,14 @@ static void astra_display_submit(Astra68State *s)
         return;
     display->busy = true;
     display->operation = operation;
-    display->cursor_inflight = false;
     if (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH)
-        display->cursor_inflight = astra_display_count_batch(
-            s, display->request_source, byte_size);
-    if (operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE)
-        display->cursor_inflight = true;
+        astra_display_count_batch(s, display->request_source, byte_size);
     if (operation == ASTRA_DISPLAY_FRAME_READ_SURFACE) {
         display->read_source = display->request_source;
         display->read_bytes = byte_size;
         ++display->surface_reads;
     }
-    if (operation == ASTRA_DISPLAY_CURSOR_UPDATE) {
-        display->cursor_x = display->request_source &
-                            ASTRA_DISPLAY_HOST_CURSOR_X_MASK;
-        display->cursor_y = (display->request_source &
-                             ASTRA_DISPLAY_HOST_CURSOR_Y_MASK) >>
-                            ASTRA_DISPLAY_HOST_CURSOR_Y_SHIFT;
-        display->cursor_visible =
-            (display->request_source & ASTRA_DISPLAY_HOST_CURSOR_VISIBLE) != 0u;
-        ++display->cursor_updates;
-        display->cursor_inflight = true;
-    }
     display->submit_cycle = astra_now_cycles(s);
-    if (display->cursor_inflight)
-        display->cursor_submit_cycle = display->submit_cycle;
     ++display->submissions;
     if (display->mailbox_enabled) {
         qatomic_set(&display->mailbox_sequence,
@@ -960,7 +957,7 @@ static void astra_display_submit(Astra68State *s)
                         1u : display->mailbox_sequence + 1u);
         qatomic_set(&display->mailbox->magic, ASTRA_DISPLAY_MAILBOX_MAGIC);
         qatomic_set(&display->mailbox->version,
-                    ASTRA_DISPLAY_MAILBOX_VERSION_1_7);
+                    ASTRA_DISPLAY_MAILBOX_VERSION_1_8);
         qatomic_set(&display->mailbox->request_id, display->request_id);
         qatomic_set(&display->mailbox->operation, operation);
         qatomic_set(&display->mailbox->color_rgb565,
@@ -972,9 +969,7 @@ static void astra_display_submit(Astra68State *s)
                     operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ?
                         ASTRA_DISPLAY_MAILBOX_FRAME_BYTES :
                     operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
-                    operation == ASTRA_DISPLAY_FRAME_READ_SURFACE ?
-                        byte_size :
-                    operation == ASTRA_DISPLAY_CURSOR_UPDATE ||
+                    operation == ASTRA_DISPLAY_FRAME_READ_SURFACE ||
                     operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE ?
                         byte_size : 0u);
         if (operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ||
@@ -1001,8 +996,8 @@ static void astra_display_submit(Astra68State *s)
 #endif
         qatomic_set(&display->mailbox->request_sequence,
                     display->mailbox_sequence);
+        astra_display_wake_helper(display);
 #ifdef CONFIG_LINUX
-        qemu_futex_wake((void *)&display->mailbox->request_sequence, 1);
         qemu_event_set(&display->completion_armed);
         return;
 #endif
@@ -1074,7 +1069,6 @@ static void astra_display_reset(Astra68State *s)
     display->cursor_x = 0u;
     display->cursor_y = 0u;
     display->cursor_visible = 0u;
-    display->cursor_inflight = false;
     s->astraea.irq_status &= ~ASTRAEA_IRQ_DRAW_DONE;
     astra_update_irq(s);
 }
@@ -1090,7 +1084,7 @@ static void astra_display_panic_text(Astra68State *s)
                     1u : display->mailbox_sequence + 1u);
     qatomic_set(&display->mailbox->magic, ASTRA_DISPLAY_MAILBOX_MAGIC);
     qatomic_set(&display->mailbox->version,
-                ASTRA_DISPLAY_MAILBOX_VERSION_1_7);
+                ASTRA_DISPLAY_MAILBOX_VERSION_1_8);
     qatomic_set(&display->mailbox->request_id, UINT32_MAX);
     qatomic_set(&display->mailbox->operation, ASTRA_DISPLAY_PANIC_TEXT);
     qatomic_set(&display->mailbox->color_rgb565, 0u);
@@ -1099,9 +1093,7 @@ static void astra_display_panic_text(Astra68State *s)
     smp_wmb();
     qatomic_set(&display->mailbox->request_sequence,
                 display->mailbox_sequence);
-#ifdef CONFIG_LINUX
-    qemu_futex_wake((void *)&display->mailbox->request_sequence, 1);
-#endif
+    astra_display_wake_helper(display);
 }
 
 static uint32_t astra_input_level(const AstraInputState *input)
@@ -5273,6 +5265,7 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     case 0x728: return s->display.request_attachment;
     case 0x72c: return ASTRA_COPY_ENGINE_ID;
     case 0x734: return s->copy_status;
+    case 0x738: return s->display.cursor;
     case 0x820: return NETWORK_ID_MAGIC;
     case 0x824: return NETWORK_VERSION_1_0;
     case 0x828:
@@ -5462,9 +5455,6 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
             if (value & ASTRA_DISPLAY_HOST_POP) {
                 s->display.completion_valid = false;
                 s->display.collect_cycle = astra_now_cycles(s);
-                if (s->display.cursor_inflight)
-                    s->display.cursor_collect_cycle =
-                        s->display.collect_cycle;
             }
             if (value & ASTRA_DISPLAY_HOST_SUBMIT)
                 astra_display_submit(s);
@@ -5487,6 +5477,7 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
         break;
     case 0x728: s->display.request_attachment = value; break;
     case 0x730: s->copy_status = astra_copy_run(s, value); break;
+    case 0x738: astra_display_post_cursor(s, value); break;
     case 0x83c: s->network.request_buffer = value; break;
     case 0x840: s->network.request_bytes = value; break;
     case 0x844: s->network.request_count = value; break;
@@ -6436,18 +6427,6 @@ static void astra68_init(MachineState *machine)
                                    "astra-display-cursor-updates",
                                    &s->display.cursor_updates,
                                    OBJ_PROP_FLAG_READ);
-    object_property_add_uint64_ptr(OBJECT(machine),
-                                   "astra-display-cursor-submit-cycle",
-                                   &s->display.cursor_submit_cycle,
-                                   OBJ_PROP_FLAG_READ);
-    object_property_add_uint64_ptr(OBJECT(machine),
-                                   "astra-display-cursor-completion-cycle",
-                                   &s->display.cursor_completion_cycle,
-                                   OBJ_PROP_FLAG_READ);
-    object_property_add_uint64_ptr(OBJECT(machine),
-                                   "astra-display-cursor-collect-cycle",
-                                   &s->display.cursor_collect_cycle,
-                                   OBJ_PROP_FLAG_READ);
 
     /* Real constraints only: POST minimum, page alignment, and aperture. */
     if (machine->ram_size < MiB ||
@@ -6566,6 +6545,13 @@ static void astra68_init(MachineState *machine)
             s->display.payload = payload;
         }
         s->display.mailbox_enabled = true;
+        /* Continue the file's counters: a helper that outlived an earlier
+           QEMU compares against them, and a wake word that went back to a
+           value it already holds could be lost. */
+        s->display.wake_sequence =
+            qatomic_read(&s->display.mailbox->wake_sequence);
+        s->display.cursor_sequence =
+            qatomic_read(&s->display.mailbox->cursor_sequence);
 #ifdef CONFIG_LINUX
         qemu_event_init(&s->display.completion_armed, false);
         if (event_notifier_init(&s->display.completion_notifier, 0) < 0) {

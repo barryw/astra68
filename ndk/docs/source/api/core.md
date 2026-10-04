@@ -1,11 +1,23 @@
 # Core Types
 
-```{doxygengroup} astra_core
+Status codes, version identity, attributes, and the umbrella header.
+
+```{doxygenfile} types.h
 :project: astra-ndk
-:members:
 ```
 
-```{doxygengroup} astra_version
+```{doxygenfile} result.h
 :project: astra-ndk
-:members:
+```
+
+```{doxygenfile} attributes.h
+:project: astra-ndk
+```
+
+```{doxygenfile} version.h
+:project: astra-ndk
+```
+
+```{doxygenfile} ndk.h
+:project: astra-ndk
 ```

@@ -8,6 +8,7 @@ READELF := $(CROSS)readelf
 HOST_CC ?= cc
 ANALYZER_CC ?= gcc
 NDK := ../../../ndk
+SYSTEM := ../system
 COMPILER := ../compiler
 CPPFLAGS := -I$(NDK)/include -Iinclude -I../../include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
@@ -28,11 +29,10 @@ COMMON_ASM_SOURCES := ../../common/memory_m68k.S
 # The calendar is shared with the kernel rather than copied into userspace:
 # `ls -l`, `date` and the boot line render the same instant, and two
 # implementations of a leap year is one too many.
-COMMON_C_SOURCES := ../../common/civil.c ../../common/divide.c
-NDK_C_SOURCES := $(NDK)/src/utf8.c
+COMMON_C_SOURCES := ../../common/civil.c ../../common/divide.c \
+	../../common/utf8.c
 TARGET_OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(TARGET_C_SOURCES)) \
 	$(patsubst ../../common/%.c,build/m68k/common_%.o,$(COMMON_C_SOURCES)) \
-	build/m68k/ndk_utf8.o \
 	$(patsubst src/%.S,build/m68k/%.o,$(TARGET_ASM_SOURCES)) \
 	$(patsubst ../../common/%.S,build/m68k/common_%.o,$(COMMON_ASM_SOURCES))
 ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(TARGET_C_SOURCES)) \
@@ -49,7 +49,6 @@ DYNAMIC_PIC_C_SOURCES := $(filter-out src/dynamic_process.c,\
 DYNAMIC_PIC_OBJECTS := \
 	$(patsubst src/%.c,build/m68k/dynamic/%.o,$(DYNAMIC_PIC_C_SOURCES)) \
 	$(patsubst ../../common/%.c,build/m68k/dynamic/common_%.o,$(COMMON_C_SOURCES)) \
-	build/m68k/dynamic/ndk_utf8.o \
 	$(patsubst src/%.S,build/m68k/dynamic/%.o,$(TARGET_ASM_SOURCES)) \
 	$(patsubst ../../common/%.S,build/m68k/dynamic/common_%.o,$(COMMON_ASM_SOURCES))
 LOADER_PIC_TARGET := build/m68k/libastrart-loader-pic.a
@@ -133,11 +132,6 @@ build/m68k/dynamic/common_%.o: ../../common/%.S
 	$(CC) $(CPPFLAGS) $(ASTRA_TARGET_ABI_FLAGS) -fPIC $(DEPFLAGS) \
 		-c $< -o $@
 
-build/m68k/dynamic/ndk_utf8.o: $(NDK)/src/utf8.c $(NDK)/include/astra/utf8.h
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(DYNAMIC_PIC_FLAGS) $(DEPFLAGS) \
-		-c $< -o $@
-
 $(DYNAMIC_IDENTITY): src/runtime_library.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(DYNAMIC_PIC_FLAGS) $(DEPFLAGS) \
@@ -172,7 +166,7 @@ runtime-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 		--allow strcmp --allow strcpy --allow strlen \
 		--allow strncmp --allow strncpy
 	@python3 ../../../tools/library_info.py $< | \
-		grep -q '^runtime.library.1 1.9.0 ABI 1.9$$'
+		grep -q '^runtime.library.1 1.10.0 ABI 1.10$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
 	@$(READELF) -dW $< | grep -F 'Library soname: [runtime.library.1]' >/dev/null
 	@$(READELF) -dW $< | grep 'BIND_NOW' >/dev/null
@@ -189,7 +183,7 @@ runtime-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.4' >/dev/null
 	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.5' >/dev/null
 	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.6' >/dev/null
-	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.9' >/dev/null
+	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.10' >/dev/null
 	@ASTRA_LIBRARY_FIXTURE=$(abspath $<) $(KERNEL_ELF_TEST) >/dev/null
 	@echo "astra runtime shared library: PASS"
 
@@ -198,10 +192,6 @@ build/m68k/%.o: src/%.c
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
 
 build/m68k/common_%.o: ../../common/%.c
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
-
-build/m68k/ndk_utf8.o: $(NDK)/src/utf8.c $(NDK)/include/astra/utf8.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
 
@@ -231,7 +221,7 @@ HOST_TEST_SOURCES := src/startup.c src/arguments.c src/syscall.c src/stream_sour
 	src/event_control.c src/memory.c \
 	src/host_channel_client.c \
 	src/sort.c src/log.c src/event_catalog.c src/dynamic_loader.c \
-	$(COMMON_C_SOURCES) $(NDK_C_SOURCES) \
+	$(COMMON_C_SOURCES) \
 	tests/test_runtime.c
 
 $(HOST_TEST): $(HOST_TEST_SOURCES)

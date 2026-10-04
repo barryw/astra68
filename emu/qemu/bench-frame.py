@@ -4,6 +4,7 @@
 usage: bench-frame.py QEMU ROM IMAGE [--span S] [--profile OUT.aprof]
                       [--probe ADDR]... [--probe-register REG]
                       [--fake-helper] [--ready-renders N]
+                      [--pointer-hz HZ]
 
 The test app is SDLFrameBench, or with --ready-renders any app: measurement
 starts once it has rendered N commands.
@@ -16,6 +17,9 @@ Without a mailbox, QEMU completes every display request after a fixed 1 ms,
 which swamps what is being measured. --fake-helper (Linux) serves the real
 mailbox with the display gate's stand-in helper, which completes each
 request as soon as it arrives: transport and guest cost, no FPGA time.
+
+--pointer-hz moves the pointer in a circle HZ times a second for the whole
+span, as a hand on a mouse does: what pointer motion costs the frame rate.
 """
 
 import argparse
@@ -24,7 +28,9 @@ import os
 import shutil
 import subprocess
 import sys
+import math
 import tempfile
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -53,6 +59,8 @@ def main():
                         help="guest address whose callers --profile records")
     parser.add_argument("--probe-register",
                         help="register whose values each --probe records")
+    parser.add_argument("--pointer-hz", type=float, default=0.0,
+                        help="pointer motion events a second during the span")
     arguments = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="astra-bench-frame-") as work:
         image = os.path.join(work, "bench.img")
@@ -108,8 +116,17 @@ def main():
                     "control", control]
             if arguments.profile:
                 subprocess.run(prof + ["start", "frame"], check=True)
+            stop = threading.Event()
+            mover = threading.Thread(target=move_pointer,
+                                     args=(machine, arguments.pointer_hz,
+                                           stop))
             start = time.monotonic()
+            if arguments.pointer_hz > 0:
+                mover.start()
             time.sleep(arguments.span)
+            stop.set()
+            if mover.is_alive():
+                mover.join()
             if arguments.profile:
                 subprocess.run(prof + ["stop"], check=True)
             elapsed = time.monotonic() - start
@@ -118,8 +135,10 @@ def main():
             for line in machine.said(after)[0]:
                 if "SDL_FRAME_BENCH" in line or "FAIL" in line:
                     print(line)
-            print("display submissions %.1f/s, render commands %.1f/s" %
-                  (submitted / elapsed, rendered / elapsed))
+            print("display submissions %.1f/s, render commands %.1f/s"
+                  ", pointer %.0f Hz" %
+                  (submitted / elapsed, rendered / elapsed,
+                   arguments.pointer_hz))
         finally:
             machine.close()
             if helper is not None:
@@ -127,6 +146,22 @@ def main():
                 helper.thread.join(timeout=1)
                 helper.release()
                 view.close()
+
+
+def move_pointer(machine, hz, stop):
+    """Absolute motion, in screen pixels, around the middle until STOP."""
+    period = 1.0 / hz
+    due = time.monotonic()
+    step = 0
+    while not stop.is_set():
+        angle = step * 0.05
+        machine.point(int(640 + 300 * math.cos(angle)),
+                      int(360 + 200 * math.sin(angle)))
+        step += 1
+        due += period
+        delay = due - time.monotonic()
+        if delay > 0:
+            stop.wait(delay)
 
 
 if __name__ == "__main__":

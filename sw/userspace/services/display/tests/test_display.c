@@ -150,6 +150,23 @@ uint32_t astra_display_collect(uint32_t device,
     return ASTRA_SYSCALL_OK;
 }
 
+/* Posted cursor writes (update_cursor): never a request. */
+static uint32_t cursor_posts;
+static uint32_t cursor_post_x;
+static uint32_t cursor_post_y;
+static uint32_t cursor_post_flags;
+
+uint32_t astra_display_cursor(uint32_t device, uint32_t x, uint32_t y,
+                              uint32_t flags)
+{
+    assert(device == 0x600u);
+    cursor_post_x = x;
+    cursor_post_y = y;
+    cursor_post_flags = flags;
+    ++cursor_posts;
+    return ASTRA_SYSCALL_OK;
+}
+
 uint32_t astra_irq_read(uint32_t handle, AstraIrqRecord *record,
                         uint32_t *events)
 {
@@ -1208,7 +1225,7 @@ static void compose_commit(DisplayState *state, uint32_t fence)
 {
     uint32_t error = ASTRA_STATUS_OK;
 
-    assert(valid_batch(compose(batch, fence, state, &error, NULL, 0)) != 0u);
+    assert(valid_batch(compose(batch, fence, state, &error, NULL)) != 0u);
     assert(error == ASTRA_STATUS_OK);
     commit_render_state(state);
 }
@@ -1248,7 +1265,7 @@ static void test_content_banks(void)
        scene shows the bank the client drew, in three layers. */
     assert(present_content(&state, 0u, ASTRA_GUI_PRESENT_DISCARD,
                            0u, 0u, 0u, 0u) == ASTRA_STATUS_OK);
-    assert(valid_batch(compose(batch, 3u, &state, &(uint32_t){0}, NULL, 0))
+    assert(valid_batch(compose(batch, 3u, &state, &(uint32_t){0}, NULL))
            != 0u);
     assert(read_be32(batch + 12u) == 0u);
     assert(read_be32(batch_scene() + 20u) == 5u);
@@ -1284,7 +1301,7 @@ static void test_content_banks(void)
     shown = window->content_shown;
     assert(present_content(&state, 0u, 0u, 10u, 20u, 30u, 40u) ==
            ASTRA_STATUS_OK);
-    assert(valid_batch(compose(batch, 4u, &state, &(uint32_t){0}, NULL, 0))
+    assert(valid_batch(compose(batch, 4u, &state, &(uint32_t){0}, NULL))
            != 0u);
     assert(read_be32(batch + 12u) == 1u);
     command = batch_command(0u);
@@ -1303,7 +1320,7 @@ static void test_content_banks(void)
     /* Bank 0 missed the last frame and this one: it gets both damages. */
     assert(present_content(&state, 0u, 0u, 200u, 150u, 10u, 10u) ==
            ASTRA_STATUS_OK);
-    assert(valid_batch(compose(batch, 5u, &state, &(uint32_t){0}, NULL, 0))
+    assert(valid_batch(compose(batch, 5u, &state, &(uint32_t){0}, NULL))
            != 0u);
     command = batch_command(0u);
     assert(read_be32(batch + 12u) == 1u &&
@@ -1314,7 +1331,7 @@ static void test_content_banks(void)
     commit_render_state(&state);
     /* An unchanged window costs nothing and keeps showing its front. */
     damage_both(&state, (DamageRect){0, 0, 10, 10, 1u});
-    assert(valid_batch(compose(batch, 6u, &state, &(uint32_t){0}, NULL, 0))
+    assert(valid_batch(compose(batch, 6u, &state, &(uint32_t){0}, NULL))
            != 0u);
     assert(read_be32(batch + 12u) == 0u &&
            read_be32(batch_scene_layer(4u)) ==
@@ -1333,11 +1350,11 @@ static void test_content_banks(void)
     assert(state.overlay_drawn == DISPLAY_OVERLAY_MENU);
     damage_both(&state, overlay_bounds(DISPLAY_OVERLAY_MENU));
     state.system_initialized = 1u;
-    assert(valid_batch(compose(batch, 8u, &state, &(uint32_t){0}, NULL, 0))
+    assert(valid_batch(compose(batch, 8u, &state, &(uint32_t){0}, NULL))
            != 0u);
     assert(read_be32(batch + 12u) == 0u);
     state.overlay_hover = 2u;
-    assert(valid_batch(compose(batch, 8u, &state, &(uint32_t){0}, NULL, 0))
+    assert(valid_batch(compose(batch, 8u, &state, &(uint32_t){0}, NULL))
            != 0u);
     assert(read_be32(batch + 12u) != 0u && state.overlay_pending != 0u);
 }
@@ -1722,7 +1739,6 @@ int main(void)
         AstraLogicalInputEvent reset = {
             .type = ASTRA_INPUT_EVENT_STATE_RESET,
         };
-        uint32_t error;
         uint32_t effects = 0u;
         uint32_t frame_window = 0u;
         uint32_t frame_timestamp = 0u;
@@ -1748,17 +1764,23 @@ int main(void)
         cursor.pointer_y = 180;
         assert(display_pointer_shape(&cursor, &theme) ==
                ASTRA_POINTER_SHAPE_RESIZE_HORIZONTAL);
-        assert(valid_batch(compose(batch, 31u, &cursor, &error, NULL, 1)) != 0u);
-        assert(read_be32(batch + 44u) ==
-               (ASTRA_DISPLAY_CURSOR_VISIBLE |
-                ASTRA_DISPLAY_CURSOR_SHAPE(
-                    ASTRA_POINTER_SHAPE_RESIZE_HORIZONTAL)));
+        assert(update_cursor(0x600u, &cursor,
+                             display_pointer_shape(&cursor, &theme)) ==
+               ASTRA_STATUS_OK);
+        assert(cursor_post_x == (uint32_t)cursor.pointer_x &&
+               cursor_post_y == 180u &&
+               cursor_post_flags ==
+                   (ASTRA_DISPLAY_CURSOR_VISIBLE |
+                    ASTRA_DISPLAY_CURSOR_SHAPE(
+                        ASTRA_POINTER_SHAPE_RESIZE_HORIZONTAL)));
         assert(apply_command(&cursor, &theme, &close, &closed, &changed) ==
                ASTRA_STATUS_OK && changed && cursor.count == 0u);
         assert(display_pointer_shape(&cursor, &theme) ==
                ASTRA_POINTER_SHAPE_DEFAULT);
-        assert(valid_batch(compose(batch, 32u, &cursor, &error, NULL, 1)) != 0u);
-        assert(read_be32(batch + 44u) == ASTRA_DISPLAY_CURSOR_VISIBLE);
+        assert(update_cursor(0x600u, &cursor,
+                             display_pointer_shape(&cursor, &theme)) ==
+               ASTRA_STATUS_OK);
+        assert(cursor_post_flags == ASTRA_DISPLAY_CURSOR_VISIBLE);
     }
 
     DisplayWindow state_windows[TEST_WINDOW_COUNT] = {0};
@@ -2201,13 +2223,13 @@ int main(void)
                                color(theme.accent));
         label(&desktop.windows[0].surface.view, 40, 104,
               "Terminal", 8u, color(theme.text_primary));
-        assert(valid_batch(compose(batch, 1u, &desktop, &error, NULL, 0)) != 0u);
+        assert(valid_batch(compose(batch, 1u, &desktop, &error, NULL)) != 0u);
         assert(error == ASTRA_STATUS_OK);
         commit_render_state(&desktop);
         set_overlay(&desktop, DISPLAY_OVERLAY_MENU);
         {
             uint32_t failure = 0u;
-            uint32_t bytes = compose(batch, 2u, &desktop, &error, &failure, 0);
+            uint32_t bytes = compose(batch, 2u, &desktop, &error, &failure);
 
             assert(valid_batch(bytes) != 0u);
             assert(error == ASTRA_STATUS_OK &&
@@ -2221,7 +2243,7 @@ int main(void)
             desktop.overlay_offset, desktop.overlay_capacity));
         commit_render_state(&desktop);
         set_overlay(&desktop, DISPLAY_OVERLAY_NONE);
-        assert(valid_batch(compose(batch, 3u, &desktop, &error, NULL, 0)) != 0u);
+        assert(valid_batch(compose(batch, 3u, &desktop, &error, NULL)) != 0u);
         assert(read_be32(batch_scene() + 20u) == 3u);
     }
 
@@ -2334,19 +2356,19 @@ int main(void)
 
     add_window(&state, 0u, ASTRA_WINDOW_POPOVER, 300u, 380u,
                250u, 125u, 0u, 0u);
-    assert(valid_batch(compose(batch, 1u, &state, &error, NULL, 0)) != 0u);
+    assert(valid_batch(compose(batch, 1u, &state, &error, NULL)) != 0u);
     commit_render_state(&state);
     state.damage[1] = (DamageRect){0};
     add_window(&state, 1u, ASTRA_WINDOW_UTILITY, 600u, 80u,
                360u, 145u, 0u, ASTRA_WINDOW_GADGET_CLOSE);
     damage_window(&state, &theme, &state.windows[1]);
-    assert(valid_batch(compose(batch, 2u, &state, &error, NULL, 0)) != 0u);
+    assert(valid_batch(compose(batch, 2u, &state, &error, NULL)) != 0u);
     commit_render_state(&state);
     state.damage[0] = (DamageRect){0};
     add_window(&state, 2u, ASTRA_WINDOW_DIALOG, 520u, 300u,
                400u, 190u, ASTRA_WINDOW_MODAL, ASTRA_WINDOW_GADGET_CLOSE);
     damage_window(&state, &theme, &state.windows[2]);
-    assert(valid_batch(compose(batch, 3u, &state, &error, NULL, 0)) != 0u);
+    assert(valid_batch(compose(batch, 3u, &state, &error, NULL)) != 0u);
     commit_render_state(&state);
     state.damage[1] = (DamageRect){0};
     add_window(&state, 3u, ASTRA_WINDOW_STANDARD, 100u, 100u,
@@ -2354,19 +2376,19 @@ int main(void)
                ASTRA_WINDOW_GADGET_CLOSE | ASTRA_WINDOW_GADGET_MINIMIZE |
                    ASTRA_WINDOW_GADGET_MAXIMIZE);
     damage_window(&state, &theme, &state.windows[3]);
-    assert(valid_batch(compose(batch, 4u, &state, &error, NULL, 0)) != 0u);
+    assert(valid_batch(compose(batch, 4u, &state, &error, NULL)) != 0u);
     commit_render_state(&state);
     state.damage[0] = (DamageRect){0};
     assert(apply_command(&state, &theme, &resize, &closed, &changed) ==
            ASTRA_STATUS_OK && changed);
-    assert(valid_batch(compose(batch, 5u, &state, &error, NULL, 0)) != 0u);
+    assert(valid_batch(compose(batch, 5u, &state, &error, NULL)) != 0u);
     assert(batch_has_surface_fill(580u, 300u, color(theme.client)));
     commit_render_state(&state);
     assert(apply_command(&state, &theme, &move, &closed, &changed) ==
            ASTRA_STATUS_OK && changed);
     state.pointer_x = 321;
     state.pointer_y = 654;
-    assert(valid_batch(compose(batch, 6u, &state, &error, NULL, 1)) != 0u);
+    assert(valid_batch(compose(batch, 6u, &state, &error, NULL)) != 0u);
     assert(read_be32(batch + 12u) == 0u);
     assert(state.scene_pending == (state.scene_active ^ 1u));
     assert(!media_extents_overlap(
@@ -2374,10 +2396,9 @@ int main(void)
         state.scene_capacity[state.scene_pending],
         state.scene_offset[state.scene_active],
         state.scene_capacity[state.scene_active]));
-    assert(read_be32(batch + 32u) == ASTRA_RENDER_BATCH_PRESENT_CURSOR);
-    assert(read_be32(batch + 36u) == 321u);
-    assert(read_be32(batch + 40u) == 654u);
-    assert(read_be32(batch + 44u) == ASTRA_DISPLAY_CURSOR_VISIBLE);
+    /* The cursor is never in a frame: it is posted on its own. */
+    for (uint32_t offset = 32u; offset < 48u; offset += 4u)
+        assert(read_be32(batch + offset) == 0u);
     state.capture_window = 4u;
     state.capture_region = HIT_TITLE;
     state.capture_dx = 10;
@@ -3176,7 +3197,7 @@ int main(void)
         add_window(&stack, 1u, ASTRA_WINDOW_FULLSCREEN, 100u, 100u,
                    200u, 200u, ASTRA_WINDOW_ACTIVE, 0u);
 
-        bytes = compose(batch, 2u, &stack, &error, NULL, 0);
+        bytes = compose(batch, 2u, &stack, &error, NULL);
         assert(bytes != 0u && error == ASTRA_STATUS_OK);
         assert(read_be32(batch_scene() + 20u) == 4u);
         assert((uint16_t)read_be32(batch_scene() + 36u) ==
@@ -3212,7 +3233,7 @@ int main(void)
             add_window(&many, index, ASTRA_WINDOW_POPOVER,
                        (uint16_t)(20u + index * 120u), 80u,
                        100u, 80u, 0u, 0u);
-        assert(valid_batch(compose(batch, 9u, &many, &error, NULL, 0)) != 0u);
+        assert(valid_batch(compose(batch, 9u, &many, &error, NULL)) != 0u);
         assert(error == ASTRA_STATUS_OK);
         for (uint32_t index = 0u; index < 5u; ++index)
             assert(batch_blit_from_surface(
@@ -3240,10 +3261,10 @@ int main(void)
                                        sizeof(pixels), 100u, 80u, 200u));
         rgb_window.request.content_format = ASTRA_WINDOW_CONTENT_RGB565;
         rgb_window.request.pitch = 200u;
-        assert(valid_batch(compose(batch, 1u, &rgb, &error, NULL, 0)) != 0u);
+        assert(valid_batch(compose(batch, 1u, &rgb, &error, NULL)) != 0u);
         assert(error == ASTRA_STATUS_OK);
         rgb_window.content_damage.right = 101;
-        assert(compose(batch, 2u, &rgb, &error, NULL, 0) == 0u);
+        assert(compose(batch, 2u, &rgb, &error, NULL) == 0u);
         assert(error == ASTRA_STATUS_PROTOCOL);
     }
     test_launch_panel();
