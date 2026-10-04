@@ -1,7 +1,7 @@
 # Userspace FPU for Astra 68
 
-Status: revision 0.4 (2026-10-03). Phases 0-3 done: userspace is hard
-float. Board measurement pending.
+Status: revision 0.5 (2026-10-04). Phases 0-3 done and measured on the
+DE25: userspace is hard float.
 Status words follow `KERNEL_ARCHITECTURE.md`: **LOCKED**, **CURRENT**,
 **PLANNED**, **MISSING**.
 
@@ -829,6 +829,19 @@ This phase is safe to ship on its own: nothing else uses the FPU yet.
 - `verify-then-publish.sh` (kernel and userspace tests, every gate, desktop,
   service policy, power, remote desktop, filesystem stress, mailbox,
   providers, NDK, SDL, display, ext4) passes from fresh build trees.
+
+**Board result (2026-10-04, release `2764d8f6`).** `/data/ab-run.sh`, two
+runs each, Doom with four TestDraw2 windows, 30 s windows:
+
+| Release | Frames (gen) | Audio gaps |
+|---|---:|---:|
+| `635131e4` soft float, fast helpers | 507, 515 | 540, 545 |
+| `2764d8f6` hard float, host-float QEMU | 646, 631 | 0, 0 |
+
+Frames +25%; the audio gaps are gone. No supervisor faults. The first
+hard-float release (`e7f15c72`) exposed a latent uninitialised read in
+`astra_vfs_union_directory_open`/`seed_store` that killed the supervisor
+on Doom's first launch; fixed in `bf1d9c97`.
 
 **Phase 4 (optional, PLANNED).** Null-frame fidelity in QEMU plus null-frame
 laziness in the kernel (2.2), only if phase 1 shows the switch cost matters.
