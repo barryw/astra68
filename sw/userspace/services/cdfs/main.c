@@ -44,6 +44,7 @@ static uint32_t configured_image(const AstraStartupInfo *startup)
     AstraConfigError error = {0};
     char path[ASTRA_VFS_PATH_MAX];
     uint32_t count = 0u;
+    uint32_t length = 0u;
     uint32_t status;
 
     if (astra_process_filesystem_open(&filesystem, startup) != ASTRA_VFS_OK)
@@ -54,7 +55,7 @@ static uint32_t configured_image(const AstraStartupInfo *startup)
     status = astra_config_count(&config, "image", &count);
     if (status == ASTRA_CONFIG_OK && count == 1u)
         status = astra_config_get_string(&config, "image", 0u,
-                                         path, sizeof(path), NULL);
+                                         path, sizeof(path), &length);
     astra_config_close(&config);
     if (status != ASTRA_CONFIG_OK || count != 1u || path[0] != '/')
         return ASTRA_STATUS_INVALID;
