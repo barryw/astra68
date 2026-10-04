@@ -18,6 +18,13 @@ extended rather than replaced.
 
 The remaining work is broader than exposing `/dev`:
 
+One native inventory/mount manager chooses names by device type: the fixed SD
+system volume is `/dh0`, USB storage uses `/usb0`, `/usb1`, and so on, and
+optical drives use `/cd0`, `/cd1`, and so on. Optical classification takes
+precedence over transport: a USB CD/DVD drive is a `/cdN` drive, not a USB
+storage volume. Drivers report identity, media and I/O capabilities; they do
+not each implement naming or mount policy. POSIX adapts this same namespace.
+
 | Step | Concrete gap and change | Acceptance gate |
 | --- | --- | --- |
 | 1. Inventory and system-volume identity | `devices` sees granted capabilities, not an authoritative disk inventory. Add native device/media descriptors and a rights-checked inventory/change feed. Classify fixed SD, USB disk and optical media, with stable physical identity and separate media generations. Consolidate the independent first-`0x83` selection in Supervisor `volume.c` and storage `main.c` into one validated partition/UUID handoff. Reuse the MBR parser; explicitly reject unsupported GPT/extended layouts until their parsers exist. | Multiple/ambiguous partitions, duplicate UUIDs, malformed tables, changed media and missing system disk fail before writable mount; verify neighboring partitions remain intact. |
