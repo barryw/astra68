@@ -58,6 +58,14 @@ type, unsupported-format and mount-error status belong in the device
 inventory, leaving an empty root empty. The current CDFS image service does
 not implement this drive discovery/media transition flow.
 
+Hotplug must update the native namespace of already-running authorized
+applications. Today's Terminal ceiling and child mount list grant only
+`CD0:r` at startup, and opening a new Terminal is required after starting the
+image service. Finishing the manager includes a rights-checked live namespace
+refresh and authority for additional permitted drives; hardcoding more mount
+names in Terminal or implementing discovery separately in POSIX is not the
+general device layer.
+
 Qualify the full sequence with two drives: attach both empty, insert different
 supported discs, eject/reinsert one without changing its `/cdN`, then unplug
 it without renumbering the other. Reusing a filename on the second disc must
