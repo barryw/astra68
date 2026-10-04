@@ -50,13 +50,18 @@ Run on Beast:
 ```
 
 The QEMU gate republishes userspace. With concurrent checkouts, override both
-`NCURSES_BUILD` and `NCURSES_PREFIX`, plus `ZSH_BUILD` and `VIM_SOURCE`, to
-private paths before running it. Keep QEMU build caches private with
-`ASTRA_QEMU_WORK_ROOT`; images and logs must also use unique paths.
+`NCURSES_BUILD` and `NCURSES_PREFIX`, plus `ZSH_BUILD`, `VIM_SOURCE` and
+`VIM_RUNTIME_SOURCE`, to private paths before running it. Keep QEMU build
+caches private with `ASTRA_QEMU_WORK_ROOT`; images and logs must also use
+unique paths.
 
 The host gate covers 512/2048-byte block sources, short file reads, metadata,
 Rock Ridge links, relative directory operations, cookie iteration, read-only
 refusals, corrupt/I/O-failing media, cached-data invalidation, and VFS shutdown.
 The QEMU gate generates its own ISO and exercises the service from zsh on a
-private copy of the supplied system image. Physical optical drives are not
-qualified by these tests.
+private copy of the supplied system image. It also verifies that stopped
+mounts reject reads while Terminal can still fork and use `/home`.
+The Astra integration gates cover
+ISO 9660 and Rock Ridge; Joliet, UDF and HFS-family readers are compiled but
+still need representative-image qualification. Physical optical drives are
+not qualified by these tests.

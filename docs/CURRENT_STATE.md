@@ -2077,9 +2077,35 @@ hotplug mount management remain unimplemented. The implementation gap audit
 in `docs/DEVICE_AND_VOLUME_PLAN.md` identifies the existing single-device
 block assumptions and the required native inventory/mount authority.
 Beast host VFS/CDFS tests, CDFS ASan/UBSan and analyzer checks, the MC68040
-service link checks, and the full userspace build pass. The dedicated fresh
-image QEMU service gate is queued behind another checkout's verification;
-physical optical drives and DE25 deployment are not qualified by this work.
+service link checks, and the full userspace build pass. On 2026-10-04 the
+dedicated republished-image QEMU gate passed all nine commands: listing,
+reads, cwd traversal, missing-file/write refusals, changed-image invalidation,
+clean stop, post-stop read failure and unrelated `/home` I/O. Provider-index
+packaging and userspace boundary checks also pass. ISO 9660 and Rock Ridge
+are covered; Joliet, UDF and HFS-family readers still need representative-image
+qualification. Physical optical drives and DE25 deployment are not qualified.
+
+That gate exposed a shared port-lifetime defect: a dead service's send
+capability prevented an unrelated fork. `kernel_port_handle_retain()` now
+copies an already-held closing endpoint while retaining its peer-dead status.
+The existing port owner-death test fails before the change and passes after;
+port and handle suites pass, including final-reference reclamation and refusal
+to revive a freed port or copy a receive endpoint. An automated MC68040
+object-code comparison confirms the retain function changes only its state
+comparison immediate from 1 to 2: zero added instructions or branches on the
+existing path. The completed qualification run used the shared Beast lock and
+private dependency, QEMU, image and log paths.
+The retained log is on Beast at
+`/home/barry/Git/astra68-cdfs/build/cdfs-qualification.log`.
+
+Qualified implementation source: `feat/cdfs` at
+`aaeabd382f6283ac9e8f4c5e4b22bba0dee80c69`. Artifact SHA-256 identities:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `sw/boot/build/astra_boot.bin` | `f91ae7294b29f5bbaa252a8b9e87c2f5baaf46931df83bbefeb4f56936a605c7` |
+| `sw/userspace/services/cdfs/build/m68k/cdfs` | `44beec5c7e285b46eada5887998575bde6cbda411bd45780228b323c307ca960` |
+| `build/qemu-system-m68k` | `84a42b558d1f0af1b102b023bc96b75d2fd596a38766b6ab7965aa47c5d12fa1` |
 
 ## Build and artifact rules
 
