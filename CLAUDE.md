@@ -246,6 +246,7 @@ There is no alternative CPU or emulator implementation in the repository.
 | ROM budget and memory layout | `docs/MEMORY_MAP.md`, `sw/include/astra/boot.h` |
 | The wall clock, and what has a date | `docs/TIME.md` |
 | Debugging a program on the machine | `docs/DEBUGGING.md` |
+| Where the time goes on the DE25 (`astra-top`) | `docs/DEBUGGING.md` section 7 |
 | FPGA timing closure | `fpga/de25/TIMING_CLOSURE.md` |
 
 ## Standing instructions

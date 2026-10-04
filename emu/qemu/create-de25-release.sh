@@ -59,5 +59,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$RELEASE_TOOL" create "$OUTPUT" \
     "systemd/astra-remote-desktop.service=$REMOTE_DESKTOP_UNIT" \
     "bin/astra-input-hotplug.py=$SCRIPT_DIR/astra-input-hotplug.py" \
     "bin/run-arty.sh=$SCRIPT_DIR/run-arty.sh" \
+    "bin/astra-top=$SCRIPT_DIR/astra-top.py" \
+    "bin/de25-ab.sh=$SCRIPT_DIR/de25-ab.sh" \
+    "bin/de25-rfb.py=$SCRIPT_DIR/de25-rfb.py" \
     "bin/astra-release.py=$RELEASE_TOOL" \
     "$@"

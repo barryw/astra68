@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include <astra/proc.h>
+#include <astra/process.h>
 #include <astra/vfs_backend.h>
 
 typedef void *(*SupervisorProcReallocate)(void *pointer, size_t size);
@@ -83,10 +84,99 @@ supervisor_proc_path_is_library_disk(const char *path)
 }
 
 /*
+ * One write to PROC:<id>/ctl, Plan 9's /proc/n/ctl: a single command, with
+ * at most one trailing newline.
+ *
+ *   kill          end it
+ *   stop, start   suspend and resume it
+ *   signal N      deliver signal N (0-31) the way kill(2) does
+ *   priority N    set its scheduler priority (ASTRA_PROCESS_PRIORITY_MIN to
+ *                 _MAX); the process's own ceiling still applies
+ */
+enum SupervisorProcControlAction {
+    SUPERVISOR_PROC_CONTROL_KILL = 1,
+    SUPERVISOR_PROC_CONTROL_STOP,
+    SUPERVISOR_PROC_CONTROL_START,
+    SUPERVISOR_PROC_CONTROL_SIGNAL,
+    SUPERVISOR_PROC_CONTROL_PRIORITY
+};
+
+typedef struct SupervisorProcControl {
+    uint32_t action;
+    uint32_t value;
+} SupervisorProcControl;
+
+static inline int
+supervisor_proc_control_word(const char *text, uint32_t length,
+                             const char *word, uint32_t *rest)
+{
+    uint32_t at = 0u;
+
+    while (word[at] != '\0') {
+        if (at == length || text[at] != word[at])
+            return 0;
+        ++at;
+    }
+    *rest = at;
+    return 1;
+}
+
+static inline int
+supervisor_proc_control_parse(const char *text, uint32_t length,
+                              SupervisorProcControl *control)
+{
+    uint32_t at = 0u;
+    uint32_t value = 0u;
+    uint32_t digits = 0u;
+    uint32_t maximum;
+
+    if (text == NULL || control == NULL)
+        return 0;
+    if (length != 0u && text[length - 1u] == '\n')
+        --length;
+    if (supervisor_proc_control_word(text, length, "kill", &at) &&
+        at == length) {
+        control->action = SUPERVISOR_PROC_CONTROL_KILL;
+    } else if (supervisor_proc_control_word(text, length, "stop", &at) &&
+               at == length) {
+        control->action = SUPERVISOR_PROC_CONTROL_STOP;
+    } else if (supervisor_proc_control_word(text, length, "start", &at) &&
+               at == length) {
+        control->action = SUPERVISOR_PROC_CONTROL_START;
+    } else if (supervisor_proc_control_word(text, length, "signal ", &at)) {
+        control->action = SUPERVISOR_PROC_CONTROL_SIGNAL;
+    } else if (supervisor_proc_control_word(text, length, "priority ",
+                                            &at)) {
+        control->action = SUPERVISOR_PROC_CONTROL_PRIORITY;
+    } else {
+        return 0;
+    }
+    control->value = 0u;
+    if (control->action != SUPERVISOR_PROC_CONTROL_SIGNAL &&
+        control->action != SUPERVISOR_PROC_CONTROL_PRIORITY)
+        return 1;
+    maximum = control->action == SUPERVISOR_PROC_CONTROL_SIGNAL ?
+        31u : ASTRA_PROCESS_PRIORITY_MAX;
+    for (; at < length; ++at, ++digits) {
+        if (text[at] < '0' || text[at] > '9' || value > maximum)
+            return 0;
+        value = value * 10u + (uint32_t)(text[at] - '0');
+    }
+    if (digits == 0u || value > maximum ||
+        (control->action == SUPERVISOR_PROC_CONTROL_PRIORITY &&
+         value < ASTRA_PROCESS_PRIORITY_MIN))
+        return 0;
+    control->value = value;
+    return 1;
+}
+
+/*
  * The backend behind the PROC: assign. Rendered from the supervisor's own
  * process handles, because holding them is what makes an answer possible --
  * see proc_tree.c and docs/OBSERVABILITY.md.
  */
 const AstraVfsBackendOps *supervisor_proc_ops(void);
+/* The backend context for the read port (0) or the control port (1). */
+void *supervisor_proc_context(int control);
 
 #endif

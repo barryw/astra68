@@ -292,7 +292,7 @@ static void default_application_ceiling(void)
     static const char *refused[] = {
         "DISPLAY", "INPUT", "HOST_DEVICE", "BLOCK_DEVICE", "CLOCK",
         "SERVICE_MANAGER", "EVENT_CONTROL", "PROCESS", "APPS:rw",
-        "LIBS:rw", "SYSTEM:r", "PROC:r", "COMMANDS:r", "STORE",
+        "LIBS:rw", "SYSTEM:r", "PROC:r", "PROC:rw", "COMMANDS:r", "STORE",
         "GUI:r", "UNKNOWN",
     };
 

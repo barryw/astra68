@@ -40,7 +40,7 @@
  * A caller that does not recognize this value should refuse to run rather
  * than guess at a register layout that may have changed underneath it.
  */
-#define ASTRA_SYSCALL_ABI_VERSION 0x0001003Du
+#define ASTRA_SYSCALL_ABI_VERSION 0x0001003Eu
 
 /**
  * Identifies the running kernel's syscall ABI. No argument. Returns
@@ -935,6 +935,31 @@
  * flag answers ::ASTRA_SYSCALL_INVALID_ARGUMENT and changes nothing.
  */
 #define ASTRA_SYSCALL_DISPLAY_CURSOR   104
+/**
+ * Open a handle to any live process by id, for the initial supervisor's
+ * PROC: service. data[1] must be a QUERY handle the caller holds on itself,
+ * and the caller must be the initial supervisor process -- the same
+ * authority as ::ASTRA_SYSCALL_PROCESS_SNAPSHOT, deliberately not conferred
+ * by any other handle. data[2] is the process id and data[3] its
+ * generation, as PROC: reported it: a number alone never names a process,
+ * because ids are reused. data[4] is the rights wanted, a nonzero subset of
+ * QUERY, TERMINATE, SIGNAL, WAIT, TRANSFER and ADMINISTER (priority).
+ * Returns the new handle in data[1]. A process that does not exist, has
+ * exited, or has another generation answers ::ASTRA_SYSCALL_PEER_DEAD.
+ *
+ * This is how PROC:'s per-process `ctl` file reaches every process, however
+ * it was started: everyone else asks the supervisor, which applies one
+ * policy, rather than holding authority over processes by number.
+ */
+#define ASTRA_SYSCALL_PROCESS_OPEN     105
+/**
+ * Machine-wide scheduler counters for the initial supervisor's PROC:
+ * service. Authority matches ::ASTRA_SYSCALL_PROCESS_SNAPSHOT: data[1] a
+ * QUERY handle on the caller itself, which must be the initial supervisor.
+ * data[2] is the address of an `AstraSchedulerStats` record and data[3] its
+ * size, which must be exactly that record's.
+ */
+#define ASTRA_SYSCALL_SCHEDULER_STATS  106
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the main program image. */
 #define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the PT_INTERP image. */

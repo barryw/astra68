@@ -127,7 +127,7 @@ DEFAULT_TERMINFO = os.path.join(
 # claim, so the startup manifest names its launch ceiling explicitly.
 TERMINAL_CEILING = (
     "GUI CLIPBOARD WORK:rw HOME:rw TMP:rw RAM:rw DH0:r SYSTEM:r LOCAL:rw "
-    "COMMANDS:r APPS:r LIBS:r EVENTS:r PROC:r METRICS:r CONFIG_COMMANDS:r "
+    "COMMANDS:r APPS:r LIBS:r EVENTS:r PROC:rw METRICS:r CONFIG_COMMANDS:r "
     "EVENT_CONTROL NETWORK NETWORK_LISTEN NTP PCM POSIX_PROCESS APP_LAUNCH "
     "SERVICE_MANAGER ENTROPY")
 PROVIDER_INDEX_MAGIC = 0x41505256  # "APRV"
@@ -180,12 +180,16 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ "
     "INPUT_SERVICE serves GUI critical priority=20\n"
     "service /services/media grants HOST_DEVICE serves PCM priority=24\n"
+    # The machine's accounting, copied to WORK:.astra/sample once a second
+    # for the host's astra-top.
+    "service /services/sampler grants PROC:r WORK:rw\n"
     "service /services/desktop grants GUI APP_LAUNCH SERVICE_MANAGER APPS:r "
     "LIBS:r SYSTEM:r NETWORK NETWORK_LISTEN NTP PCM required priority=20\n"
     "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("storage", "ramfs", "posixd", "hostfs", "entropy", "network", "ntpd", "events",
-                    "input", "clipboard", "display", "media", "desktop",
+                    "input", "clipboard", "display", "media", "sampler",
+                    "desktop",
                     "remote-desktop")
 HOSTBENCH_SERVICES = DISPLAY_SERVICES + ("hostbench",)
 HOSTBENCH_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (

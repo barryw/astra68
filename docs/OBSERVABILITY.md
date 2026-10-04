@@ -210,6 +210,7 @@ PROC:
   42/
     status      identity, state, memory, CPU, handles, and exit information
     libraries   resident libraries mapped into process 42
+    ctl         write-only: kill, stop, start, signal N, priority N
 ```
 
 `status` contains the live `AstraProcessInfo` fields, including resident frames
@@ -274,10 +275,28 @@ must not be papered over.
 
 `PROC:` is a view rendered by the initial supervisor, which alone holds the
 kernel's complete-snapshot authority. A process can see it because it was
-granted a handle to that mount, and the rights on that mount decide how much it
-can see. Killing is not a write to a control file: it is a process-control
-operation that requires process-control authority, mediated by the same
-service.
+granted a handle to that mount.
+
+Control is the same tree's `ctl` files, Plan 9's `/proc/n/ctl`, and it is one
+path for every process: a shell job, a desktop application and a service are
+stopped, signalled and reprioritised the same way. The supervisor obeys a
+write because it alone may open any process by id and generation
+(`ASTRA_SYSCALL_PROCESS_OPEN`). It refuses itself and the machine's critical
+and required services, and the process's own priority ceiling still applies.
+
+The authority is a capability, not a mode bit. `PROC:r` and `PROC:rw` are two
+different ports: a VFS service sees no grant rights, only the port a request
+arrived on, so the read port refuses every write and only the control port
+obeys `ctl`. A process granted `PROC:r` cannot write `ctl` however it builds
+its messages. The Terminal holds `PROC:rw` and passes it to the commands it
+runs; applications get neither by default.
+
+`kill(pid)`, `getpriority`/`setpriority` on another pid, `nice` and `renice`
+all go through it. `posixd` keeps process groups, sessions and job control.
+
+A `ctl` file pins the id and generation it was opened on, so a recycled number
+is refused between open and write. The generation `ps` printed is not yet
+carried to the write; `kill 42` resolves 42 when it opens the file.
 
 The result keeps `ps`, `top`, and `kill` exactly as familiar as they should be,
 without granting every process the ability to inspect every other one by

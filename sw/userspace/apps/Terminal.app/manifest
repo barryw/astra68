@@ -18,7 +18,7 @@ capability COMMANDS:r
 capability APPS:r
 capability LIBS:r
 capability EVENTS:r
-capability PROC:r
+capability PROC:rw
 capability METRICS:r
 capability CONFIG_COMMANDS:r
 capability EVENT_CONTROL

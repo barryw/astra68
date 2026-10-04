@@ -1326,9 +1326,13 @@ def test_graphics_geometry_is_shared_within_graphics():
 
 
 def test_immutable_vfs_operations_are_shared():
+    # PROC: writes and truncates for real: a process's ctl file. The rest
+    # of both trees is immutable and uses the shared refusals.
     duplicate = re.compile(
-        r"static\s+uint32_t\s+(?:proc|events)_"
-        r"(?:write|sync|truncate|mkdir|unlink|rename|chmod|readlink)\s*\("
+        r"static\s+uint32_t\s+(?:"
+        r"proc_(?:sync|mkdir|unlink|rename|chmod|readlink)|"
+        r"events_(?:write|sync|truncate|mkdir|unlink|rename|chmod|readlink)"
+        r")\s*\("
     )
     for root in (USERSPACE / "supervisor", USERSPACE / "events"):
         for path in production_sources(root):

@@ -12267,6 +12267,139 @@ static void test_runtime_accounting_stops_with_cpu_ownership(void)
  * happened to launch itself: terminal children, fork children and exec names
  * all come from this same authority.
  */
+/*
+ * PROC:'s ctl files reach any process through the supervisor, so the kernel
+ * hands it a handle by id -- and hands nobody else one.
+ */
+static void test_initial_supervisor_opens_any_process(void)
+{
+    static const char child_arguments[] = "zsh\0-f\0";
+    AstraLaunchArguments launch = {0};
+    KernelProcessSnapshot child;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t supervisor_id;
+    uint32_t child_id;
+    uint32_t supervisor_handle;
+    uint32_t opened;
+
+    loader_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &supervisor_id) ==
+           KERNEL_PROCESS_OK);
+    launch.count = 2u;
+    launch.length = sizeof(child_arguments) - 1u;
+    launch.source = ASTRA_LAUNCH_SOURCE_SHELL;
+    assert(kernel_process_launch(loader_image, loader_image_size, 0u, NULL,
+                                 NULL, 0u, &launch, child_arguments, NULL,
+                                 &child_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    assert(snapshot_for(child_id, &child));
+    registers[0] = ASTRA_SYSCALL_QUERY_ABI;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    supervisor_handle = next->data[2];
+
+    /* Holding a handle on yourself is not authority over everyone. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_OPEN;
+    registers[1] = supervisor_handle;
+    registers[2] = child_id;
+    registers[3] = child.generation;
+    registers[4] = ASTRA_RIGHT_ADMINISTER;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+
+    /* The scheduler counters carry the same authority. */
+    {
+        uint32_t stats_registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+        uint32_t user_stats = KERNEL_PROCESS_STACK_TOP - 256u;
+        AstraSchedulerStats stats;
+        KernelSchedulerStats kernel_stats;
+
+        stats_registers[0] = ASTRA_SYSCALL_SCHEDULER_STATS;
+        stats_registers[1] = supervisor_handle;
+        stats_registers[2] = user_stats;
+        stats_registers[3] = sizeof(stats);
+        assert(kernel_process_on_syscall(stats_registers,
+                                         KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+        kernel_process_register_initial_image(supervisor_id);
+        assert(kernel_process_on_syscall(stats_registers,
+                                         KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        assert(kernel_user_copy_from_asm(&stats, user_stats, sizeof(stats)) ==
+               KERNEL_USER_COPY_OK);
+        assert(kernel_process_stats(&kernel_stats));
+        assert(stats.context_switches == kernel_stats.context_switches);
+        assert(stats.cross_address_space_switches ==
+               kernel_stats.cross_address_space_switches);
+        assert(stats.live_processes == 2u);
+        assert(stats.syscalls_low != 0u || stats.syscalls_high != 0u);
+        stats_registers[3] = sizeof(stats) - 4u;
+        assert(kernel_process_on_syscall(stats_registers,
+                                         KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    }
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    opened = next->data[1];
+
+    /* The handle is real: it sets the child's priority. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_PRIORITY;
+    registers[1] = opened;
+    registers[2] = 12u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(snapshot_for(child_id, &child));
+    assert(child.default_priority == 12u);
+
+    /* Debug authority is not on offer, nor is nothing at all. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_OPEN;
+    registers[1] = supervisor_handle;
+    registers[2] = child_id;
+    registers[3] = child.generation;
+    registers[4] = KERNEL_PROCESS_RIGHT_DEBUG;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    registers[4] = 0u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    /* A recycled number is not the process the caller saw. */
+    registers[4] = ASTRA_RIGHT_READ;
+    registers[3] = child.generation + 1u;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+    registers[2] = child_id + 1000u;
+    registers[3] = child.generation;
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+}
+
 static void test_initial_supervisor_can_snapshot_every_live_process(void)
 {
     enum { TEST_SNAPSHOT_CAPACITY = 40u };
@@ -13922,6 +14055,7 @@ int main(void)
     test_process_info_syscall();
     test_thread_priority_syscall_is_scoped_and_authorized();
     test_initial_supervisor_can_snapshot_every_live_process();
+    test_initial_supervisor_opens_any_process();
     puts("process tests passed");
     return 0;
 }

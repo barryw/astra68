@@ -25,6 +25,16 @@
 #ifndef SSIZE_MAX
 #define SSIZE_MAX (SIZE_MAX >> 1)
 #endif
+
+/*
+ * XSI: nice values run from -NZERO to NZERO-1. Astra's nice is
+ * 16 - priority (sw/include/astra/process.h), so NZERO is the normal
+ * priority; setpriority() clamps the part of that range the priority
+ * scale does not reach.
+ */
+#ifndef NZERO
+#define NZERO 16
+#endif
 #endif
 
 #endif

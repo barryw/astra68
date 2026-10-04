@@ -231,3 +231,9 @@ ASTRA_RUNTIME_1.10 {
         astra_rt_timer_create;
         astra_rt_timer_set;
 } ASTRA_RUNTIME_1.9;
+
+ASTRA_RUNTIME_1.11 {
+    global:
+        astra_process_open;
+        astra_scheduler_stats;
+} ASTRA_RUNTIME_1.10;

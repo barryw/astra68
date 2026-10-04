@@ -32,9 +32,14 @@ static uint32_t resumed_handle;
 static uint32_t registration_order;
 static uint32_t resume_order;
 static uint32_t operation_order;
-static int32_t signalled_selector;
-static int32_t signalled_group;
-static uint32_t signalled_number;
+/*
+ * volatile: glibc declares kill() and killpg() leaf functions, promising
+ * they never call back into this file, so without it GCC keeps these in
+ * registers across a call that, here, is ours and does.
+ */
+static volatile int32_t signalled_selector;
+static volatile int32_t signalled_group;
+static volatile uint32_t signalled_number;
 AstraPosixProcessReply process_reply;
 static const AstraStartupInfo startup = {
     .process_handle = 5u,
@@ -65,6 +70,33 @@ astra_posix_process_register(uint32_t service, uint32_t process_handle,
     registered_pid = process_id;
     registration_order = ++operation_order;
     return ASTRA_STATUS_OK;
+}
+
+/* PROC:<pid>/ctl, as the supervisor answers it: pid 77 exists, 78 is
+ * protected, and with no mount everything falls back to posixd. */
+static int proc_mounted;
+static volatile char proc_command[32];
+int
+posix_proc_control(pid_t process, const char *command)
+{
+    if (!proc_mounted) {
+        errno = ENOSYS;
+        return -1;
+    }
+    if (process == 78) {
+        errno = EACCES;
+        return -1;
+    }
+    if (process != 77) {
+        errno = ENOENT;
+        return -1;
+    }
+    for (uint32_t at = 0u; at < sizeof(proc_command); ++at) {
+        proc_command[at] = command[at];
+        if (command[at] == '\0')
+            break;
+    }
+    return 0;
 }
 
 uint32_t
@@ -254,6 +286,28 @@ main(void)
     assert(resumed_handle == 7u && registration_order < resume_order);
     assert(kill((pid_t)-123, SIGTERM) == 0);
     assert(signalled_selector == -123 && signalled_number == SIGTERM);
+    /* No PROC: mount: one process is posixd's too. */
+    assert(kill((pid_t)123, SIGHUP) == 0);
+    assert(signalled_selector == 123 && signalled_number == SIGHUP);
+    /* With one, it is the process's ctl file, whoever started it. */
+    proc_mounted = 1;
+    signalled_selector = 0;
+    assert(kill((pid_t)77, SIGTERM) == 0);
+    {
+        static const char want[] = "signal 15";
+
+        for (uint32_t at = 0u; at < sizeof(want); ++at)
+            assert(proc_command[at] == want[at]);
+        assert(signalled_selector == 0);
+    }
+    errno = 0;
+    assert(kill((pid_t)76, SIGTERM) == -1 && errno == ESRCH);
+    assert(signalled_selector == 0);
+    /* Refused there (protected, or PROC: is read-only): posixd decides. */
+    assert(kill((pid_t)78, SIGTERM) == 0 && signalled_selector == 78);
+    /* Groups stay with posixd. */
+    assert(kill((pid_t)-77, SIGTERM) == 0 && signalled_selector == -77);
+    proc_mounted = 0;
     assert(killpg((pid_t)1, SIGTERM) == 0);
     assert(signalled_group == 1 && signalled_number == SIGTERM);
     assert(setpgid(123, 123) == 0);

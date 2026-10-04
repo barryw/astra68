@@ -578,6 +578,27 @@ uint32_t astra_process_snapshot(uint32_t observer,
                                 uint32_t capacity,
                                 uint32_t *live_count);
 /**
+ * Open a handle to a live process by id (::ASTRA_SYSCALL_PROCESS_OPEN).
+ * Only the initial supervisor may; everyone else uses PROC:'s `ctl` files.
+ * @param observer The caller's QUERY handle on itself.
+ * @param process_id Process to open.
+ * @param generation Its generation, as PROC: reported it.
+ * @param rights Rights wanted on the new handle.
+ * @param handle Receives the handle.
+ * @return ASTRA_SYSCALL_* status; PEER_DEAD when no such live process.
+ */
+uint32_t astra_process_open(uint32_t observer, uint32_t process_id,
+                            uint32_t generation, uint32_t rights,
+                            uint32_t *handle);
+/**
+ * Read the machine-wide scheduler counters (::ASTRA_SYSCALL_SCHEDULER_STATS).
+ * Only the initial supervisor may; everyone else reads PROC:scheduler.
+ * @param observer The caller's QUERY handle on itself.
+ * @param stats Receives the record.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_scheduler_stats(uint32_t observer, AstraSchedulerStats *stats);
+/**
  * Read a page of resident shared-library/process mapping records.
  * @param observer Process capability authorizing observation.
  * @param start Zero-based resident-library ordinal to read first.

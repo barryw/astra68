@@ -162,6 +162,8 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup);
 uint32_t supervisor_loader_proc_mount(void);
 void supervisor_loader_pump_proc(void);
 uint32_t supervisor_loader_process_handle(void);
+/* The supervisor itself, or a critical or required service: no PROC: ctl. */
+int supervisor_loader_process_protected(uint32_t process_id);
 
 uint32_t supervisor_loader_event_control(void);
 void supervisor_loader_pump_event_control(void);

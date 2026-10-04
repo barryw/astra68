@@ -157,6 +157,8 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_PROCESS_INFO &&
         number != ASTRA_SYSCALL_THREAD_INFO &&
         number != ASTRA_SYSCALL_PROCESS_SNAPSHOT &&
+        number != ASTRA_SYSCALL_PROCESS_OPEN &&
+        number != ASTRA_SYSCALL_SCHEDULER_STATS &&
         number != ASTRA_SYSCALL_LIBRARY_SNAPSHOT &&
         number != ASTRA_SYSCALL_PROCESS_SIGNAL &&
         number != ASTRA_SYSCALL_PROCESS_TERMINATE &&
@@ -653,6 +655,30 @@ test_syscall_wrappers(void)
     assert(mock_argument1 == 0u && mock_argument2 == 0u);
     assert(astra_process_snapshot(process, NULL, 1u, &moved) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);
+    {
+        uint32_t opened = 1u;
+
+        assert(astra_process_open(process, 42u, 3u, ASTRA_RIGHT_ADMINISTER,
+                                  &opened) == ASTRA_SYSCALL_OK);
+        assert(mock_number == ASTRA_SYSCALL_PROCESS_OPEN);
+        assert(mock_argument0 == process && mock_argument1 == 42u &&
+               mock_argument2 == 3u &&
+               mock_argument3 == ASTRA_RIGHT_ADMINISTER);
+        assert(opened == ASTRA_SYSCALL_ABI_VERSION);
+        assert(astra_process_open(process, 42u, 3u, ASTRA_RIGHT_ADMINISTER,
+                                  NULL) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    }
+    {
+        AstraSchedulerStats stats;
+
+        assert(astra_scheduler_stats(process, &stats) == ASTRA_SYSCALL_OK);
+        assert(mock_number == ASTRA_SYSCALL_SCHEDULER_STATS);
+        assert(mock_argument0 == process &&
+               mock_argument1 == (uint32_t)(uintptr_t)&stats &&
+               mock_argument2 == sizeof(stats));
+        assert(astra_scheduler_stats(process, NULL) ==
+               ASTRA_SYSCALL_INVALID_ARGUMENT);
+    }
     assert(astra_library_snapshot(process, 3u, library_records,
                                   SNAPSHOT_BATCH_RECORDS, &moved,
                                   &library_total) ==

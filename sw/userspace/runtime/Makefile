@@ -166,7 +166,7 @@ runtime-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 		--allow strcmp --allow strcpy --allow strlen \
 		--allow strncmp --allow strncpy
 	@python3 ../../../tools/library_info.py $< | \
-		grep -q '^runtime.library.1 1.10.0 ABI 1.10$$'
+		grep -q '^runtime.library.1 1.11.0 ABI 1.11$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
 	@$(READELF) -dW $< | grep -F 'Library soname: [runtime.library.1]' >/dev/null
 	@$(READELF) -dW $< | grep 'BIND_NOW' >/dev/null
@@ -184,6 +184,7 @@ runtime-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.5' >/dev/null
 	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.6' >/dev/null
 	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.10' >/dev/null
+	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.11' >/dev/null
 	@ASTRA_LIBRARY_FIXTURE=$(abspath $<) $(KERNEL_ELF_TEST) >/dev/null
 	@echo "astra runtime shared library: PASS"
 

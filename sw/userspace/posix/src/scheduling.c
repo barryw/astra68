@@ -6,9 +6,13 @@
 
 #include <errno.h>
 #include <sched.h>
+#include <stdint.h>
 #include <sys/resource.h>
 #include <time.h>
+#include <stdio.h>
 #include <unistd.h>
+
+#include "proc_internal.h"
 
 static int
 current_process(uint32_t *handle, AstraProcessInfo *info)
@@ -26,11 +30,39 @@ current_process(uint32_t *handle, AstraProcessInfo *info)
     return -1;
 }
 
+/*
+ * The caller's own priority is a kernel call on its own handle. Another
+ * process's goes through PROC:, the way every process is managed, whether
+ * a shell started it or the desktop did.
+ */
+static int
+other_priority(id_t who, uint32_t requested, uint32_t *current)
+{
+    char command[24];
+    int result;
+
+    if (who > (id_t)INT32_MAX) {
+        errno = ESRCH;
+        return -1;
+    }
+    if (requested == 0u) {
+        result = posix_proc_priority((pid_t)who, current);
+    } else {
+        (void)snprintf(command, sizeof(command), "priority %lu",
+                       (unsigned long)requested);
+        result = posix_proc_control((pid_t)who, command);
+    }
+    if (result != 0 && (errno == ENOENT || errno == ENOSYS))
+        errno = ESRCH;
+    return result;
+}
+
 int
 getpriority(int which, id_t who)
 {
     AstraProcessInfo info = {0};
     uint32_t handle = 0u;
+    uint32_t priority;
 
     if (which != PRIO_PROCESS) {
         errno = EINVAL;
@@ -38,12 +70,11 @@ getpriority(int which, id_t who)
     }
     if (current_process(&handle, &info) != 0)
         return -1;
-    if (who != 0 && who != (id_t)info.id) {
-        errno = ESRCH;
+    priority = info.default_priority;
+    if (who != 0 && who != (id_t)info.id &&
+        other_priority(who, 0u, &priority) != 0)
         return -1;
-    }
-    return (int)ASTRA_PROCESS_PRIORITY_NORMAL -
-           (int)info.default_priority;
+    return (int)ASTRA_PROCESS_PRIORITY_NORMAL - (int)priority;
 }
 
 int
@@ -60,19 +91,17 @@ setpriority(int which, id_t who, int value)
     }
     if (current_process(&handle, &info) != 0)
         return -1;
-    if (who != 0 && who != (id_t)info.id) {
-        errno = ESRCH;
-        return -1;
-    }
     if (value < ASTRA_PROCESS_NICE_MIN)
         value = ASTRA_PROCESS_NICE_MIN;
     if (value > ASTRA_PROCESS_NICE_MAX)
         value = ASTRA_PROCESS_NICE_MAX;
     priority = (uint32_t)((int)ASTRA_PROCESS_PRIORITY_NORMAL - value);
+    if (who != 0 && who != (id_t)info.id)
+        return other_priority(who, priority, NULL);
     status = astra_process_priority(handle, priority, NULL);
     if (status == ASTRA_SYSCALL_OK)
         return 0;
-    errno = status == ASTRA_SYSCALL_ACCESS_DENIED ? EPERM :
+    errno = status == ASTRA_SYSCALL_ACCESS_DENIED ? EACCES :
             status == ASTRA_SYSCALL_INVALID_ARGUMENT ? EINVAL : EIO;
     return -1;
 }

@@ -954,6 +954,35 @@ astra_process_snapshot(uint32_t observer, AstraProcSnapshot *records,
 }
 
 uint32_t
+astra_process_open(uint32_t observer, uint32_t process_id,
+                   uint32_t generation, uint32_t rights, uint32_t *handle)
+{
+    AstraSyscallResult result;
+
+    if (handle == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    *handle = 0u;
+    astra_syscall5(ASTRA_SYSCALL_PROCESS_OPEN, observer, process_id,
+                   generation, rights, 0u, &result);
+    if (result.status == ASTRA_SYSCALL_OK)
+        *handle = result.value0;
+    return result.status;
+}
+
+uint32_t
+astra_scheduler_stats(uint32_t observer, AstraSchedulerStats *stats)
+{
+    AstraSyscallResult result;
+
+    if (stats == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_SCHEDULER_STATS, observer,
+                   (uint32_t)(uintptr_t)stats, (uint32_t)sizeof(*stats), 0u,
+                   0u, &result);
+    return result.status;
+}
+
+uint32_t
 astra_library_snapshot(uint32_t observer, uint32_t start,
                        AstraProcLibrarySnapshot *records, uint32_t capacity,
                        uint32_t *moved, uint32_t *library_count)

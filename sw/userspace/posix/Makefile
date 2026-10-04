@@ -39,7 +39,7 @@ CXX_TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -flto \
 
 SOURCES := src/startup.c src/console.c src/poll.c src/socket.c src/socket_interface.c src/inet.c src/netdb_compat.c src/terminal.c src/file.c src/heap.c src/alloc.c src/time.c src/pthread.c \
 	src/system.c src/scheduling.c src/signal.c \
-	src/identity.c src/process.c src/resource.c src/strftime_format.c src/path.c \
+	src/identity.c src/process.c src/proc_control.c src/resource.c src/strftime_format.c src/path.c \
 	src/unistd_compat.c src/exec_compat.c src/dirent_compat.c \
 	src/time_compat.c src/entropy.c
 

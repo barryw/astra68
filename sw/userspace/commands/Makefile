@@ -72,9 +72,10 @@ TERMINFO_LIBRARY := $(ASTRA_TERMINFO_LIBRARY)
 # strips them and checks their libraries like every other command.
 SDL_COMMANDS := loopwave
 COMMANDS := status events devices which open service shutdown restart ls ps metrics cat mkdir rm \
+	    nice renice \
 	    heapbench fsstress date echo ntp ping lua vim zsh $(SDL_COMMANDS)
 TEST_COMMANDS := posix hello cxx fpucheck
-SBASE_PRIMARY := ls mkdir
+SBASE_PRIMARY := ls mkdir nice renice
 SOURCE_COMMANDS := $(filter-out lua cxx vim zsh $(SDL_COMMANDS) \
 	$(SBASE_PRIMARY),$(COMMANDS) $(TEST_COMMANDS))
 SOURCE_IMAGES := $(patsubst %,build/m68k/%,$(SOURCE_COMMANDS))
@@ -101,6 +102,8 @@ ps_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 metrics_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 cat_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 mkdir_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+nice_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+renice_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 rm_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 posix_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 fpucheck_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)

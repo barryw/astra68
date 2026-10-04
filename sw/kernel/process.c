@@ -12469,6 +12469,79 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         result = ASTRA_SYSCALL_OK;
         break;
     }
+    case ASTRA_SYSCALL_PROCESS_OPEN: {
+        KernelProcess *target;
+        KernelHandle opened = KERNEL_HANDLE_INVALID;
+        uint32_t rights = thread->context.data[4];
+
+        status = snapshot_authorize(current, thread->context.data[1],
+                                    &result);
+        if (status != KERNEL_PROCESS_OK)
+            return status;
+        if (result != ASTRA_SYSCALL_OK)
+            break;
+        if (rights == 0u || (rights & ~KERNEL_PROCESS_RIGHTS) != 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        target = find_process_by_id(thread->context.data[2]);
+        if (target == NULL ||
+            target->generation != thread->context.data[3] ||
+            (target->process_state != KERNEL_PROCESS_CREATED &&
+             target->process_state != KERNEL_PROCESS_RUNNING)) {
+            result = ASTRA_SYSCALL_PEER_DEAD;
+            break;
+        }
+        status = kernel_process_grant_handle(current->id, target->id, rights,
+                                             &opened);
+        if (status == KERNEL_PROCESS_RESOURCE_LIMIT) {
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        if (status != KERNEL_PROCESS_OK)
+            return status;
+        thread->context.data[1] = opened;
+        break;
+    }
+
+    case ASTRA_SYSCALL_SCHEDULER_STATS: {
+        AstraSchedulerStats record;
+
+        status = snapshot_authorize(current, thread->context.data[1],
+                                    &result);
+        if (status != KERNEL_PROCESS_OK)
+            return status;
+        if (result != ASTRA_SYSCALL_OK)
+            break;
+        if (thread->context.data[3] != sizeof(record)) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        kernel_bytes_clear(&record, sizeof(record));
+        record.now_ns = kernel_platform_cycles_to_ns(scheduler_cycles());
+        record.context_switches = scheduler_stats.context_switches;
+        record.same_address_space_switches =
+            scheduler_stats.same_address_space_switches;
+        record.cross_address_space_switches =
+            scheduler_stats.cross_address_space_switches;
+        record.voluntary_switches = scheduler_stats.voluntary_switches;
+        record.timer_preemptions = scheduler_stats.timer_preemptions;
+        record.priority_preemptions = scheduler_stats.priority_preemptions;
+        record.wake_preemptions = scheduler_stats.wake_preemptions;
+        record.deadline_preemptions = scheduler_stats.deadline_preemptions;
+        record.wait_blocks = scheduler_stats.wait_blocks;
+        record.quantum_expirations = scheduler_stats.quantum_expirations;
+        record.syscalls_low = scheduler_stats.total_syscalls_low;
+        record.syscalls_high = scheduler_stats.total_syscalls_high;
+        record.live_processes = scheduler_stats.live_processes;
+        record.live_threads = scheduler_stats.live_threads;
+        if (kernel_copy_to_user(thread->context.data[2], &record,
+                                (uint32_t)sizeof(record)) !=
+            KERNEL_USER_COPY_OK)
+            result = ASTRA_SYSCALL_BAD_ADDRESS;
+        break;
+    }
+
     case ASTRA_SYSCALL_PROCESS_SNAPSHOT: {
         AstraProcSnapshot record;
         uint32_t live = 0u;

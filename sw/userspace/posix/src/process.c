@@ -11,12 +11,14 @@
 #include <limits.h>
 #include <signal.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "proc_internal.h"
 #include "thread_internal.h"
 
 typedef struct AstraPosixChild {
@@ -207,6 +209,22 @@ kill(pid_t process, int signal_number)
     if (signal_number < 0 || signal_number >= 32) {
         errno = EINVAL;
         return -1;
+    }
+    /*
+     * One process goes through its PROC: ctl file, so a shell job, a desktop
+     * application and a service are signalled the same way. posixd remains
+     * for groups and sessions, and for a caller with no PROC:rw mount.
+     */
+    if (process > 0) {
+        char command[16];
+
+        (void)snprintf(command, sizeof(command), "signal %d", signal_number);
+        if (posix_proc_control(process, command) == 0)
+            return 0;
+        if (errno == ENOENT)
+            errno = ESRCH;
+        if (errno != ENOSYS && errno != EACCES)
+            return -1;
     }
     if (service == 0u) {
         errno = ENOSYS;

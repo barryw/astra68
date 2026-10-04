@@ -12,12 +12,20 @@
  *
  *     PROC:
  *       snapshot     fixed AstraProcSnapshot records
+ *       scheduler    one AstraSchedulerStats record: machine-wide counters
  *       libraries/
  *         memory      resident libraries and their process mappings
  *         disk        installed library providers
  *       <id>/
  *         status      identity, state, priorities, exit reason
  *         libraries   resident libraries mapped by this process
+ *         ctl         write `kill`, `stop`, `start`, `signal N` or
+ *                     `priority N` (proc_tree.h); needs PROC: granted rw
+ *
+ * ctl is how every process is managed, however it was started -- a shell
+ * job, a desktop application, a service. The supervisor answers because it
+ * alone may open any process by id (ASTRA_SYSCALL_PROCESS_OPEN), and it
+ * refuses itself and the machine's critical and required services.
  *
  * `mem`, `cpu` and `threads` are named there too and are not separate leaves
  * yet. Their live counters are included in status so one query provides the
@@ -45,12 +53,16 @@
 #define PROC_NODE_LIBRARY_DISK 3u
 #define PROC_NODE_ROOT 4u
 #define PROC_NODE_LIBRARIES 5u
+#define PROC_NODE_SCHEDULER 6u
+/* Fixed nodes are small numbers; an open process leaf is a pointer. */
+#define PROC_NODE_LAST PROC_NODE_SCHEDULER
 #define PROC_OPEN_NODE_MAGIC 0x50524f43u
 
 enum ProcProcessLeaf {
     PROC_PROCESS_DIRECTORY = 0,
     PROC_PROCESS_STATUS,
-    PROC_PROCESS_LIBRARIES
+    PROC_PROCESS_LIBRARIES,
+    PROC_PROCESS_CONTROL
 };
 
 typedef struct ProcOpenNode {
@@ -61,6 +73,7 @@ typedef struct ProcOpenNode {
 } ProcOpenNode;
 
 static SupervisorProcSnapshotStore snapshot_store;
+static AstraSchedulerStats scheduler_record;
 #define snapshot (snapshot_store.records)
 #define snapshot_count (snapshot_store.count)
 #define snapshot_capacity (snapshot_store.capacity)
@@ -484,6 +497,8 @@ parse_path(const char *path, enum ProcProcessLeaf *leaf)
             *leaf = PROC_PROCESS_STATUS;
         else if (supervisor_proc_path_equal(path + at, "libraries"))
             *leaf = PROC_PROCESS_LIBRARIES;
+        else if (supervisor_proc_path_equal(path + at, "ctl"))
+            *leaf = PROC_PROCESS_CONTROL;
         else
             return UINT32_MAX;
     }
@@ -576,11 +591,19 @@ proc_open(void *context, const char *path, uint32_t flags,
     enum ProcProcessLeaf leaf = PROC_PROCESS_DIRECTORY;
     uint32_t length = 0u;
     uint32_t index;
+    uint32_t writing = flags & (ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+                                ASTRA_VFS_OPEN_TRUNCATE |
+                                ASTRA_VFS_OPEN_APPEND);
 
-    (void)context;
     (void)create_mode;
-    if ((flags & ASTRA_VFS_OPEN_WRITE) != 0u ||
-        (flags & ASTRA_VFS_OPEN_CREATE) != 0u)
+    if (writing != 0u &&
+        (context == NULL || *(const int *)context == 0 ||
+         supervisor_proc_path_is_root(path) ||
+         supervisor_proc_path_is_snapshot(path) ||
+         supervisor_proc_path_equal(path, "scheduler") ||
+         supervisor_proc_path_is_libraries(path) ||
+         supervisor_proc_path_is_library_memory(path) ||
+         supervisor_proc_path_is_library_disk(path)))
         return ASTRA_VFS_ERR_ACCESS;
     if (supervisor_proc_path_is_root(path)) {
         *node = PROC_NODE_ROOT;
@@ -595,6 +618,17 @@ proc_open(void *context, const char *path, uint32_t flags,
             return ASTRA_VFS_ERR_IO;
         *node = PROC_NODE_SNAPSHOT;
         info->size = (uint64_t)snapshot_count * sizeof(*snapshot);
+        info->kind = ASTRA_VFS_KIND_FILE;
+        info->mode = 0400u;
+        info->nlink = 1u;
+        return ASTRA_VFS_OK;
+    }
+    if (supervisor_proc_path_equal(path, "scheduler")) {
+        if (astra_scheduler_stats(supervisor_loader_process_handle(),
+                                  &scheduler_record) != ASTRA_SYSCALL_OK)
+            return ASTRA_VFS_ERR_IO;
+        *node = PROC_NODE_SCHEDULER;
+        info->size = sizeof(scheduler_record);
         info->kind = ASTRA_VFS_KIND_FILE;
         info->mode = 0400u;
         info->nlink = 1u;
@@ -638,6 +672,10 @@ proc_open(void *context, const char *path, uint32_t flags,
     index = parse_path(path, &leaf);
     if (index >= snapshot_count)
         return ASTRA_VFS_ERR_NOT_FOUND;
+    if (writing != 0u &&
+        (leaf != PROC_PROCESS_CONTROL ||
+         (flags & ASTRA_VFS_OPEN_EXCLUSIVE) != 0u))
+        return ASTRA_VFS_ERR_ACCESS;
     if (leaf == PROC_PROCESS_STATUS) {
         ProcText text = {0};
 
@@ -667,7 +705,8 @@ proc_open(void *context, const char *path, uint32_t flags,
     info->size = length;
     info->kind = leaf == PROC_PROCESS_DIRECTORY ?
                  ASTRA_VFS_KIND_DIRECTORY : ASTRA_VFS_KIND_FILE;
-    info->mode = leaf == PROC_PROCESS_DIRECTORY ? 0500u : 0400u;
+    info->mode = leaf == PROC_PROCESS_DIRECTORY ? 0500u :
+                 leaf == PROC_PROCESS_CONTROL ? 0200u : 0400u;
     info->nlink = leaf == PROC_PROCESS_DIRECTORY ? 2u : 1u;
     return ASTRA_VFS_OK;
 }
@@ -678,7 +717,7 @@ proc_close(void *context, uintptr_t node)
     ProcOpenNode *opened = (ProcOpenNode *)node;
 
     (void)context;
-    if (node > PROC_NODE_LIBRARIES) {
+    if (node > PROC_NODE_LAST) {
         if (opened->magic != PROC_OPEN_NODE_MAGIC)
             return ASTRA_VFS_ERR_INVALID;
         opened->magic = 0u;
@@ -699,6 +738,16 @@ proc_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
     *moved = 0u;
     if (node == PROC_NODE_SNAPSHOT)
         return read_snapshot(offset, out, length, moved);
+    if (node == PROC_NODE_SCHEDULER) {
+        /* Taken at open, so one read of the whole record is one instant. */
+        uint32_t available = offset >= sizeof(scheduler_record) ? 0u :
+            (uint32_t)(sizeof(scheduler_record) - offset);
+
+        *moved = length < available ? length : available;
+        for (uint32_t at = 0u; at < *moved; ++at)
+            out[at] = ((const uint8_t *)&scheduler_record)[offset + at];
+        return ASTRA_VFS_OK;
+    }
     if (node == PROC_NODE_LIBRARY_MEMORY) {
         ProcText text = {
             .out = out,
@@ -726,13 +775,15 @@ proc_read(void *context, uintptr_t node, uint64_t offset, void *buffer,
     }
     if (node == PROC_NODE_ROOT || node == PROC_NODE_LIBRARIES)
         return ASTRA_VFS_ERR_IS_DIR;
-    if (node <= PROC_NODE_LIBRARIES)
+    if (node <= PROC_NODE_LAST)
         return ASTRA_VFS_ERR_INVALID;
     opened = (ProcOpenNode *)node;
     if (opened->magic != PROC_OPEN_NODE_MAGIC)
         return ASTRA_VFS_ERR_INVALID;
     if (opened->leaf == PROC_PROCESS_DIRECTORY)
         return ASTRA_VFS_ERR_IS_DIR;
+    if (opened->leaf == PROC_PROCESS_CONTROL)
+        return ASTRA_VFS_OK; /* write-only: reads as empty */
     if (opened->leaf != PROC_PROCESS_STATUS &&
         opened->leaf != PROC_PROCESS_LIBRARIES)
         return ASTRA_VFS_ERR_INVALID;
@@ -800,6 +851,8 @@ proc_stat_node(void *context, uintptr_t node, AstraVfsNodeInfo *info)
         status = refresh_snapshot();
         if (status == ASTRA_VFS_OK)
             info->size = (uint64_t)snapshot_count * sizeof(*snapshot);
+    } else if (node == PROC_NODE_SCHEDULER) {
+        info->size = sizeof(scheduler_record);
     } else if (node == PROC_NODE_LIBRARY_MEMORY) {
         status = render_library_text(0u, &text);
         info->size = text.length;
@@ -810,12 +863,13 @@ proc_stat_node(void *context, uintptr_t node, AstraVfsNodeInfo *info)
         ProcOpenNode *opened = (ProcOpenNode *)node;
         uint32_t index;
 
-        if (node <= PROC_NODE_LIBRARIES)
+        if (node <= PROC_NODE_LAST)
             return ASTRA_VFS_ERR_INVALID;
         if (opened->magic != PROC_OPEN_NODE_MAGIC ||
             (opened->leaf != PROC_PROCESS_DIRECTORY &&
              opened->leaf != PROC_PROCESS_STATUS &&
-             opened->leaf != PROC_PROCESS_LIBRARIES))
+             opened->leaf != PROC_PROCESS_LIBRARIES &&
+             opened->leaf != PROC_PROCESS_CONTROL))
             return ASTRA_VFS_ERR_INVALID;
         status = refresh_snapshot();
         if (status != ASTRA_VFS_OK)
@@ -829,6 +883,15 @@ proc_stat_node(void *context, uintptr_t node, AstraVfsNodeInfo *info)
             info->kind = ASTRA_VFS_KIND_DIRECTORY;
             info->mode = 0500u;
             info->nlink = 2u;
+            return ASTRA_VFS_OK;
+        }
+        if (opened->leaf == PROC_PROCESS_CONTROL) {
+            if (index == UINT32_MAX)
+                return ASTRA_VFS_ERR_NOT_FOUND;
+            info->size = 0u;
+            info->kind = ASTRA_VFS_KIND_FILE;
+            info->mode = 0200u;
+            info->nlink = 1u;
             return ASTRA_VFS_OK;
         }
         if (index != UINT32_MAX) {
@@ -862,7 +925,7 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
             path = "/";
         else if (directory == PROC_NODE_LIBRARIES)
             path = "/libraries";
-        else if (directory <= PROC_NODE_LIBRARIES)
+        else if (directory <= PROC_NODE_LAST)
             return ASTRA_VFS_ERR_NOT_DIR;
         else {
             const ProcOpenNode *opened = (const ProcOpenNode *)directory;
@@ -913,12 +976,13 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
         if (leaf != PROC_PROCESS_DIRECTORY ||
             index >= snapshot_count)
             return ASTRA_VFS_ERR_NOT_FOUND;
-        if (cookie >= 2u)
+        if (cookie >= 3u)
             return ASTRA_VFS_ERR_NOT_FOUND;
         if (capacity < sizeof("libraries"))
             return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
         {
-            const char *entry = cookie == 0u ? "status" : "libraries";
+            const char *entry = cookie == 0u ? "status" :
+                                cookie == 1u ? "libraries" : "ctl";
             uint32_t at = 0u;
 
             do {
@@ -927,7 +991,7 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
         }
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_FILE;
-        info->mode = 0400u;
+        info->mode = cookie == 2u ? 0200u : 0400u;
         info->nlink = 1u;
         *next = cookie + 1u;
         return ASTRA_VFS_OK;
@@ -956,9 +1020,21 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
         *next = 2u;
         return ASTRA_VFS_OK;
     }
+    if (cookie == 2u) {
+        if (capacity < sizeof("scheduler"))
+            return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
+        for (uint32_t at = 0u; at < sizeof("scheduler"); ++at)
+            name[at] = "scheduler"[at];
+        info->size = 0u;
+        info->kind = ASTRA_VFS_KIND_FILE;
+        info->mode = 0400u;
+        info->nlink = 1u;
+        *next = 3u;
+        return ASTRA_VFS_OK;
+    }
     if (refresh_snapshot() != ASTRA_VFS_OK)
         return ASTRA_VFS_ERR_IO;
-    for (uint32_t index = (uint32_t)cookie - 2u;
+    for (uint32_t index = (uint32_t)cookie - 3u;
          index < snapshot_count; ++index) {
         const AstraProcessInfo *process = &snapshot[index].process;
         ProcText text = {
@@ -976,20 +1052,143 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
         info->kind = ASTRA_VFS_KIND_DIRECTORY;
         info->mode = 0500u;
         info->nlink = 2u;
-        *next = index + 3u;
+        *next = index + 4u;
         return ASTRA_VFS_OK;
     }
     return ASTRA_VFS_ERR_NOT_FOUND;
 }
 
-/* Process control needs explicit authority; PROC: is a read-only live view. */
+static uint32_t
+proc_status_from_syscall(uint32_t status)
+{
+    switch (status) {
+    case ASTRA_SYSCALL_OK:
+        return ASTRA_VFS_OK;
+    case ASTRA_SYSCALL_ACCESS_DENIED:
+        return ASTRA_VFS_ERR_ACCESS;
+    case ASTRA_SYSCALL_INVALID_ARGUMENT:
+        return ASTRA_VFS_ERR_INVALID;
+    case ASTRA_SYSCALL_PEER_DEAD:
+    case ASTRA_SYSCALL_INVALID_HANDLE:
+        return ASTRA_VFS_ERR_NOT_FOUND;
+    default:
+        return ASTRA_VFS_ERR_IO;
+    }
+}
+
+/* kill(2)'s mapping, as posixd has it: STOP suspends, CONTINUE resumes and
+ * then delivers, KILL ends the process, 0 only checks that it is there. */
+static uint32_t
+proc_deliver(uint32_t handle, uint32_t signal)
+{
+    uint32_t status;
+
+    if (signal == 0u)
+        return ASTRA_SYSCALL_OK;
+    if (signal == ASTRA_SIGNAL_STOP)
+        return astra_process_suspend(handle);
+    if (signal == ASTRA_SIGNAL_KILL)
+        return astra_process_terminate(handle, signal);
+    if (signal != ASTRA_SIGNAL_CONTINUE)
+        return astra_process_signal(handle, signal);
+    status = astra_process_resume(handle);
+    return status == ASTRA_SYSCALL_OK ?
+        astra_process_signal(handle, signal) : status;
+}
+
+/*
+ * One command against the process the ctl file was opened on -- the same
+ * id and generation, so a recycled number is refused, not obeyed.
+ */
+static uint32_t
+proc_control(const ProcOpenNode *opened, const SupervisorProcControl *control)
+{
+    uint32_t handle = 0u;
+    uint32_t status;
+
+    if (supervisor_loader_process_protected(opened->process_id))
+        return ASTRA_VFS_ERR_ACCESS;
+    status = astra_process_open(supervisor_loader_process_handle(),
+                                opened->process_id, opened->generation,
+                                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                                    ASTRA_RIGHT_SIGNAL |
+                                    ASTRA_RIGHT_ADMINISTER,
+                                &handle);
+    if (status != ASTRA_SYSCALL_OK)
+        return proc_status_from_syscall(status);
+    switch (control->action) {
+    case SUPERVISOR_PROC_CONTROL_KILL:
+        status = proc_deliver(handle, ASTRA_SIGNAL_KILL);
+        break;
+    case SUPERVISOR_PROC_CONTROL_STOP:
+        status = proc_deliver(handle, ASTRA_SIGNAL_STOP);
+        break;
+    case SUPERVISOR_PROC_CONTROL_START:
+        status = astra_process_resume(handle);
+        break;
+    case SUPERVISOR_PROC_CONTROL_SIGNAL:
+        status = proc_deliver(handle, control->value);
+        break;
+    default:
+        status = astra_process_priority(handle, control->value, NULL);
+        break;
+    }
+    (void)astra_close(handle);
+    return proc_status_from_syscall(status);
+}
+
+static uint32_t
+proc_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags,
+           const void *buffer, uint32_t length, uint32_t *moved,
+           uint64_t *position)
+{
+    const ProcOpenNode *opened = (const ProcOpenNode *)node;
+    SupervisorProcControl control;
+    uint32_t status;
+
+    (void)flags;
+    *moved = 0u;
+    if (context == NULL || *(const int *)context == 0)
+        return ASTRA_VFS_ERR_ACCESS;
+    if (node <= PROC_NODE_LAST || opened->magic != PROC_OPEN_NODE_MAGIC)
+        return ASTRA_VFS_ERR_INVALID;
+    if (opened->leaf != PROC_PROCESS_CONTROL)
+        return ASTRA_VFS_ERR_ACCESS;
+    if (!supervisor_proc_control_parse(buffer, length, &control))
+        return ASTRA_VFS_ERR_INVALID;
+    status = proc_control(opened, &control);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    *moved = length;
+    if (position != NULL)
+        *position = offset + length;
+    return ASTRA_VFS_OK;
+}
+
+/* A shell's `>` truncates before it writes; a ctl file has nothing to cut. */
+static uint32_t
+proc_truncate(void *context, uintptr_t node, uint64_t size)
+{
+    const ProcOpenNode *opened = (const ProcOpenNode *)node;
+
+    if (context == NULL || *(const int *)context == 0 ||
+        node <= PROC_NODE_LAST || opened->magic != PROC_OPEN_NODE_MAGIC ||
+        opened->leaf != PROC_PROCESS_CONTROL)
+        return ASTRA_VFS_ERR_ACCESS;
+    return size == 0u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_INVALID;
+}
+
+/*
+ * Reading is a live view; writing is only ever a ctl command, which needs
+ * PROC: granted rw.
+ */
 static const AstraVfsBackendOps proc_ops = {
     .open = proc_open,
     .close = proc_close,
     .read = proc_read,
-    .write = astra_vfs_backend_deny_write,
+    .write = proc_write,
     .sync = astra_vfs_backend_deny_sync,
-    .truncate = astra_vfs_backend_deny_truncate,
+    .truncate = proc_truncate,
     .stat = proc_stat,
     .readdir = proc_readdir,
     .mkdir = astra_vfs_backend_deny_mkdir,
@@ -1012,4 +1211,13 @@ const AstraVfsBackendOps *
 supervisor_proc_ops(void)
 {
     return &proc_ops;
+}
+
+void *
+supervisor_proc_context(int control)
+{
+    static int read_port = 0;
+    static int control_port = 1;
+
+    return control ? &control_port : &read_port;
 }

@@ -77,6 +77,16 @@ static AstraVfsSessionSlot proc_sessions[ASTRA_VFS_SESSION_MAX];
 static AstraVfsPortService proc_port;
 static uint32_t proc_receive;
 static uint32_t proc_send;
+/*
+ * PROC:rw is a second port, not a flag on the first: a VFS service sees no
+ * grant rights, so what a client may do has to be which port it holds. The
+ * control port serves the same tree and also obeys ctl writes.
+ */
+static AstraVfsService proc_control_service;
+static AstraVfsSessionSlot proc_control_sessions[ASTRA_VFS_SESSION_MAX];
+static AstraVfsPortService proc_control_port;
+static uint32_t proc_control_receive;
+static uint32_t proc_control_send;
 static uint32_t launch_send;
 static uint32_t manager_receive;
 static uint32_t manager_send;
@@ -960,6 +970,25 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                     ((wanted->rights & ASTRA_RIGHT_WRITE) != 0u ?
                          ASTRA_CAPABILITY_FLAG_WRITE : 0u),
                 root);
+            if (status != ASTRA_STATUS_OK)
+                return status;
+            continue;
+        }
+        if (strcmp(wanted->name, "PROC") == 0) {
+            uint32_t port = (wanted->rights & ASTRA_RIGHT_WRITE) != 0u ?
+                proc_control_send : proc_send;
+
+            if (port == 0u)
+                continue;
+            status = add_grant(
+                out, count, wanted->name, port,
+                ASTRA_RIGHT_SIGNAL | delegated,
+                ASTRA_CAPABILITY_FLAG_NAMESPACE |
+                    ((wanted->rights & ASTRA_RIGHT_READ) != 0u ?
+                         ASTRA_CAPABILITY_FLAG_READ : 0u) |
+                    ((wanted->rights & ASTRA_RIGHT_WRITE) != 0u ?
+                         ASTRA_CAPABILITY_FLAG_WRITE : 0u),
+                "");
             if (status != ASTRA_STATUS_OK)
                 return status;
             continue;
@@ -2265,33 +2294,45 @@ static void pump_manager(const AstraStartupInfo *startup)
  * refuses to boot over it. The send handle stays zero and children are granted
  * nothing, which is what a child then sees.
  */
-static void proc_tree_start(void)
+static int proc_service_start(AstraVfsService *service,
+                              AstraVfsSessionSlot *sessions,
+                              AstraVfsPortService *port, int control,
+                              uint32_t *receive, uint32_t *send)
 {
     void *file_storage = NULL;
     uint32_t file_capacity = 0u;
 
-    if (proc_send != 0u)
-        return;
     if (!astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile),
                                        &file_storage, &file_capacity) ||
         !astra_vfs_service_init(
-            &proc_service, supervisor_proc_ops(), NULL, proc_sessions,
+            service, supervisor_proc_ops(),
+            supervisor_proc_context(control), sessions,
             ASTRA_VFS_SESSION_MAX, file_storage, file_capacity))
-        return;
+        return 0;
     if (astra_rt_port_create(SUPERVISOR_PROC_PORT_MESSAGES,
                              (uint32_t)sizeof(AstraVfsRenameRequestMessage),
-                             &proc_receive, &proc_send) != ASTRA_SYSCALL_OK) {
-        proc_send = 0u;
-        return;
+                             receive, send) != ASTRA_SYSCALL_OK) {
+        *receive = 0u;
+        *send = 0u;
+        return 0;
     }
-    if (!astra_vfs_port_service_init(&proc_port, proc_receive,
-                                     &proc_service)) {
-        (void)astra_close(proc_receive);
-        (void)astra_close(proc_send);
-        proc_receive = 0u;
-        proc_send = 0u;
-        return;
+    if (!astra_vfs_port_service_init(port, *receive, service)) {
+        (void)astra_close(*receive);
+        (void)astra_close(*send);
+        *receive = 0u;
+        *send = 0u;
+        return 0;
     }
+    return 1;
+}
+
+static void proc_tree_start(void)
+{
+    if (proc_send != 0u)
+        return;
+    if (!proc_service_start(&proc_service, proc_sessions, &proc_port, 0,
+                            &proc_receive, &proc_send))
+        return;
     /*
      * Bound into this process's own namespace, not special-cased at the point
      * of a launch. A child inherits PROC: the way it inherits COMMANDS:, and a
@@ -2304,7 +2345,12 @@ static void proc_tree_start(void)
         (void)astra_close(proc_send);
         proc_receive = 0u;
         proc_send = 0u;
+        return;
     }
+    /* Without it PROC:rw grants nothing; reading still works. */
+    (void)proc_service_start(&proc_control_service, proc_control_sessions,
+                             &proc_control_port, 1, &proc_control_receive,
+                             &proc_control_send);
 }
 
 uint32_t supervisor_loader_proc_mount(void)
@@ -2316,6 +2362,13 @@ void supervisor_loader_pump_proc(void)
 {
     if (proc_send != 0u)
         (void)astra_vfs_port_service_pump(&proc_port,
+                                          SUPERVISOR_PROC_PORT_BUDGET);
+}
+
+static void pump_proc_control(void)
+{
+    if (proc_control_send != 0u)
+        (void)astra_vfs_port_service_pump(&proc_control_port,
                                           SUPERVISOR_PROC_PORT_BUDGET);
 }
 
@@ -2753,6 +2806,23 @@ uint32_t supervisor_loader_process_handle(void)
     return supervisor_process_handle;
 }
 
+int supervisor_loader_process_protected(uint32_t process_id)
+{
+    AstraProcessInfo self = {.size = sizeof(self)};
+
+    if (astra_process_info(supervisor_process_handle, &self) !=
+            ASTRA_SYSCALL_OK ||
+        self.id == process_id)
+        return 1;
+    for (uint32_t slot = 0u; slot < process_count; ++slot)
+        if (process_table.records[slot].id == process_id &&
+            (process_table.records[slot].critical != 0u ||
+             (process_table.records[slot].service_flags &
+              ASTRA_SERVICE_PROTECTED) != 0u))
+            return 1;
+    return 0;
+}
+
 uint32_t supervisor_loader_event_control(void)
 {
     return event_control_handle;
@@ -2775,11 +2845,14 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
         waits[1] = launch_receive;
         waits[2] = proc_receive;
         waits[3] = manager_receive;
-        if (process_count > ASTRA_WAIT_MULTIPLE_MAX - 4u)
+        /* A machine without PROC:rw waits on the read port twice. */
+        waits[4] = proc_control_receive != 0u ? proc_control_receive :
+                                                proc_receive;
+        if (process_count > ASTRA_WAIT_MULTIPLE_MAX - 5u)
             return ASTRA_STATUS_LIMIT;
         for (uint32_t at = 0u; at < process_count; ++at)
-            waits[at + 4u] = process_table.records[at].handle;
-        status = astra_wait_multiple(waits, process_count + 4u,
+            waits[at + 5u] = process_table.records[at].handle;
+        status = astra_wait_multiple(waits, process_count + 5u,
                                      next_service_retry(), &index, NULL);
         if (status == ASTRA_SYSCALL_TIMED_OUT) {
             retry_failed_services(startup);
@@ -2810,9 +2883,18 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
             pump_manager(startup);
             continue;
         }
-        if (index > 3u && index <= process_count + 3u) {
+        if (index == 4u) {
+            if (status != ASTRA_SYSCALL_OK)
+                return ASTRA_STATUS_PEER_DEAD;
+            if (proc_control_receive != 0u)
+                pump_proc_control();
+            else
+                supervisor_loader_pump_proc();
+            continue;
+        }
+        if (index > 4u && index <= process_count + 4u) {
             uint32_t exit_status = 0u;
-            uint32_t slot = index - 4u;
+            uint32_t slot = index - 5u;
             uint32_t wait_status = astra_process_wait(
                 process_table.records[slot].handle, 0u, &exit_status);
 

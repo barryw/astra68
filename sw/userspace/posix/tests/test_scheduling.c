@@ -8,11 +8,12 @@
 #include <errno.h>
 #include <sched.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <sys/resource.h>
 #include <time.h>
 #include <unistd.h>
 
-uint32_t priority = ASTRA_PROCESS_PRIORITY_NORMAL;
+volatile uint32_t priority = ASTRA_PROCESS_PRIORITY_NORMAL;
 uint32_t yielded;
 
 uint32_t
@@ -45,6 +46,38 @@ astra_process_priority(uint32_t handle, uint32_t value,
     return ASTRA_SYSCALL_OK;
 }
 
+/* PROC:, for processes other than the caller: pid 9 at priority 12, and
+ * its ceiling is 19. */
+volatile uint32_t other_priority = 12u;
+int
+posix_proc_priority(pid_t process, uint32_t *current)
+{
+    if (process != 9) {
+        errno = ENOENT;
+        return -1;
+    }
+    *current = other_priority;
+    return 0;
+}
+
+int
+posix_proc_control(pid_t process, const char *command)
+{
+    unsigned value = 0u;
+
+    if (process != 9) {
+        errno = ENOENT;
+        return -1;
+    }
+    assert(sscanf(command, "priority %u", &value) == 1);
+    if (value > 19u) {
+        errno = EACCES;
+        return -1;
+    }
+    other_priority = value;
+    return 0;
+}
+
 uint32_t
 astra_yield(void)
 {
@@ -63,6 +96,15 @@ main(void)
     assert(priority == ASTRA_PROCESS_PRIORITY_NORMAL - 3u);
     assert(nice(-2) == 1);
     assert(priority == ASTRA_PROCESS_PRIORITY_NORMAL - 1u);
+
+    /* Another pid goes through posixd; its answer is a nice value too. */
+    assert(getpriority(PRIO_PROCESS, 9) == 4);
+    assert(setpriority(PRIO_PROCESS, 9, 6) == 0 && other_priority == 10u);
+    assert(priority == ASTRA_PROCESS_PRIORITY_NORMAL - 1u);
+    errno = 0;
+    assert(setpriority(PRIO_PROCESS, 9, -4) == -1 && errno == EACCES);
+    errno = 0;
+    assert(getpriority(PRIO_PROCESS, 8) == -1 && errno == ESRCH);
 
     assert(sched_get_priority_min(SCHED_RR) ==
            (int)ASTRA_PROCESS_PRIORITY_MIN);

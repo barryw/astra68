@@ -345,6 +345,36 @@ SCRIPT = [
      ("usage: devices", "ASTRA-DEVICES-ERR-2")),
     ("ps", ("/rom/supervisor", "/services/desktop", "/apps/Terminal.app",
             " ps", " zsh")),
+    # nice and renice are sbase's. ps prints PRI and NI: nice 5 is
+    # priority 11, and the command keeps it across the exec.
+    ('nice -n 5 ps | while read -r row; do '
+     '[[ $row == *" 11   5 "* ]] && print ASTRA-NICE-PS; done',
+     "ASTRA-NICE-PS"),
+    # renice reaches another process (this shell) through its PROC: ctl
+    # file, which manages every process the same way.
+    ('renice -n 2 $$; print ASTRA-RENICE-$?; ps | while read -r row; do '
+     '[[ $row == "$$ "*" 14   2 "* ]] && print ASTRA-RENICE-PS; done',
+     ("ASTRA-RENICE-0", "ASTRA-RENICE-PS")),
+    ("renice -n -2 $$; print ASTRA-RENICE-BACK-$?", "ASTRA-RENICE-BACK-0"),
+    # Applications stop at 19 (nice -3): nice -4 is refused.
+    ("renice -n -4 $$; print ASTRA-RENICE-CEILING-$?",
+     "ASTRA-RENICE-CEILING-1"),
+    ("renice -n 1 999999; print ASTRA-RENICE-MISSING-$?",
+     "ASTRA-RENICE-MISSING-1"),
+    ("ls /proc/$$/", "ctl"),
+    ("print priority 13 > /proc/$$/ctl; print ASTRA-CTL-$?; "
+     "while read -r l; do [[ $l == 'priority 13' ]] && print ASTRA-CTL-PRI; "
+     "done < /proc/$$/status",
+     ("ASTRA-CTL-0", "ASTRA-CTL-PRI")),
+    ("print priority 16 > /proc/$$/ctl; print ASTRA-CTL-BACK-$?",
+     "ASTRA-CTL-BACK-0"),
+    ("print bogus > /proc/$$/ctl; print ASTRA-CTL-BOGUS-$?",
+     "ASTRA-CTL-BOGUS-1"),
+    # The supervisor and the machine's required services are not yours.
+    ("print kill > /proc/1/ctl; print ASTRA-CTL-SUPERVISOR-$?",
+     "ASTRA-CTL-SUPERVISOR-1"),
+    ("print stop > /proc/1/status; print ASTRA-CTL-STATUS-$?",
+     "ASTRA-CTL-STATUS-1"),
     ("ls -F /proc/", ("snapshot", "libraries/", "1/")),
     ("ls -F /proc/libraries/", ("memory", "disk")),
     ("ls -F /proc/1/", ("status", "libraries")),

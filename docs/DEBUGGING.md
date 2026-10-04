@@ -140,6 +140,47 @@ because both use addresses beginning at `0x00100000`.
 
 ---
 
+## 7. Where the time goes, on the board
+
+`astra-top` answers "what is using the machine" on the DE25 in one command,
+guest and host together. It ships in every release:
+
+```sh
+/var/lib/astra/current/bin/astra-top 10          # a 10-second window
+/var/lib/astra/current/bin/astra-top 10 --perf   # plus host hot spots
+/var/lib/astra/current/bin/astra-top 10 --json   # for A/B scripts
+```
+
+- **Guest**: CPU per Astra process from the kernel's own runtime
+  accounting, idle, context switches per second (cross- and same-address
+  space) and why the CPU changed hands (blocked, quantum, preempted by
+  priority, wake or deadline). The `sampler` service copies PROC:snapshot
+  and PROC:scheduler to `WORK:.astra/sample` once a second
+  (`/var/lib/astra/hostfs/work/.astra/sample` on the board).
+- **Host**: CPU per thread of QEMU and the helpers. The vCPU thread is the
+  68040; when it is near 100% the guest is CPU-bound.
+- **Output**: display presents per second and audio underruns and gaps.
+- **`--perf`**: the hottest host symbols in the vCPU thread -- TCG-generated
+  code, softmmu refills, helpers: the emulator's share, which no guest
+  counter shows.
+
+For "which guest function", use the instruction profiler: `/data/prof`
+(`ctl.py start LABEL|stop`) with `tools/astra-prof report`. It counts
+guest instructions per block, not time, so read it beside `astra-top`.
+
+Measure before and after a change, on the same workload, interleaved:
+
+```sh
+/var/lib/astra/current/bin/de25-ab.sh -n 2 OLD-RELEASE NEW-RELEASE
+```
+
+switches release, restarts, opens Doom over the remote desktop
+(`de25-rfb.py`, which can also type text into the guest with `--keys`),
+and takes idle / 125 Hz pointer motion / idle `astra-top` windows for each,
+A B A B, one JSON object per window. Releases stay in
+`/var/lib/astra/releases`, so a release published before a change is the
+baseline for the one after it.
+
 ## The rest of the kit
 
 | Want | Use |
