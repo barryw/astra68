@@ -138,7 +138,9 @@ static uint32_t walk(AstraVfsCdfsBackend *fs, uintptr_t directory,
             odfs_node_t up;
             odfs_err_t error = odfs_resolve_parent_node(&fs->mount, node, &up, NULL);
             if (error == ODFS_OK) *node = up;
-            else if (error != ODFS_ERR_NOT_FOUND) return status_of(error);
+            else if (error != ODFS_ERR_NOT_FOUND ||
+                     !odfs_node_matches_identity(node, &fs->mount.root))
+                return status_of(error);
         } else if (strcmp(component, ".") != 0) {
             odfs_node_t child;
             status = status_of(odfs_lookup(&fs->mount, node, component, &child));

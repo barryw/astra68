@@ -166,6 +166,7 @@ static void check_volume(AstraVfsCdfsBackend *fs)
     assert(ops->stat(fs, "/hello.txt", &info) == ASTRA_VFS_OK);
     assert(info.size == 3000u && info.kind == ASTRA_VFS_KIND_FILE);
     assert(info.mtime == INT64_C(1709166600)); /* 2024-02-29 00:30 UTC */
+    assert(ops->stat(fs, "/../..", &info) == ASTRA_VFS_OK && info.kind == ASTRA_VFS_KIND_DIRECTORY);
     assert(ops->stat(fs, "/hello.txt/", &info) == ASTRA_VFS_ERR_NOT_DIR);
     assert(ops->stat(fs, "/hello.txt/..", &info) == ASTRA_VFS_ERR_NOT_DIR);
     assert(ops->stat(fs, "/absent", &info) == ASTRA_VFS_ERR_NOT_FOUND);
