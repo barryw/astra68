@@ -108,20 +108,38 @@ uint32_t supervisor_service_restart_policy(const char *word)
                                          UINT32_MAX;
 }
 
+uint32_t supervisor_priority_word(const char *word)
+{
+    uint32_t value = 0u;
+
+    if (*word == '\0')
+        return 0u;
+    for (; *word != '\0'; ++word) {
+        if (*word < '0' || *word > '9' || value > ASTRA_PROCESS_PRIORITY_MAX)
+            return 0u;
+        value = value * 10u + (uint32_t)(*word - '0');
+    }
+    return value >= ASTRA_PROCESS_PRIORITY_MIN &&
+           value <= ASTRA_PROCESS_PRIORITY_MAX ? value : 0u;
+}
+
 /* The words that end a service line's grant and serves lists. */
 static int policy_word(const char *token)
 {
     return strcmp(token, "required") == 0 ||
            strcmp(token, "critical") == 0 ||
+           strncmp(token, "priority=", 9u) == 0 ||
            strncmp(token, "start=", 6u) == 0 ||
            strncmp(token, "restart=", 8u) == 0;
 }
 
 /*
- * `required`, `critical`, `start=boot|manual` and
+ * `required`, `critical`, `priority=N`, `start=boot|manual` and
  * `restart=never|on-fault|always`, in any order, each at most once, and
  * only on a service. A required or critical service has no start or restart
  * choice: it always runs, and what happens when it dies is fixed by its tier.
+ * Priority is separate from the tier: it is the one scheduler number, and
+ * an unmarked service runs at ASTRA_PROCESS_PRIORITY_NORMAL.
  */
 static int parse_policy(char **token, uint32_t at, uint32_t count,
                         SupervisorManifestEntry *entry)
@@ -137,6 +155,11 @@ static int parse_policy(char **token, uint32_t at, uint32_t count,
         } else if (strcmp(token[at], "critical") == 0 &&
                    entry->critical == 0u) {
             entry->critical = 1u;
+        } else if (strncmp(token[at], "priority=", 9u) == 0 &&
+                   entry->priority == 0u) {
+            entry->priority = supervisor_priority_word(token[at] + 9u);
+            if (entry->priority == 0u)
+                return 0;
         } else if (strncmp(token[at], "start=", 6u) == 0 && !start_given) {
             entry->start_policy =
                 supervisor_service_start_policy(token[at] + 6u);
@@ -155,8 +178,8 @@ static int parse_policy(char **token, uint32_t at, uint32_t count,
         }
     }
     if (entry->resident == 0u &&
-        (entry->required != 0u || entry->critical != 0u || start_given ||
-         restart_given))
+        (entry->required != 0u || entry->critical != 0u ||
+         entry->priority != 0u || start_given || restart_given))
         return 0;
     if ((entry->required != 0u && entry->critical != 0u) ||
         ((entry->required != 0u || entry->critical != 0u) &&

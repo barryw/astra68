@@ -50,9 +50,9 @@ assert astra_image.PCM_CERTIFY_STARTUP_MANIFEST == \
     astra_image.DISPLAY_STARTUP_MANIFEST + \
     "application /services/pcm-certify grants PCM LIBS:r\n"
 assert "media" in astra_image.DISPLAY_SERVICES
-assert "service /services/media grants HOST_DEVICE serves PCM\n" in \
+assert "service /services/media grants HOST_DEVICE serves PCM priority=24\n" in \
     astra_image.DISPLAY_STARTUP_MANIFEST
-assert "NETWORK NETWORK_LISTEN NTP PCM required\n" in \
+assert "NETWORK NETWORK_LISTEN NTP PCM required priority=20\n" in \
     astra_image.DISPLAY_STARTUP_MANIFEST
 assert "APPS:r LIBS:r SYSTEM:r" in astra_image.DISPLAY_STARTUP_MANIFEST
 assert "service /services/media grants HOST_DEVICE serves PCM required" not in \
@@ -225,21 +225,23 @@ assert " grants GUI APP_LAUNCH SERVICE_MANAGER APPS:r LIBS:r " in desktop_startu
 assert "/apps/r" not in desktop_startup
 assert startup[0].startswith("service /services/storage ")
 # The machine's tiers: storage and display halt it, the desktop is restarted,
-# and media is the user's.
-assert startup[0].endswith(" critical")
+# and media is the user's. Priority is its own word: system services at 20,
+# media above them at 24.
+assert startup[0].endswith(" critical priority=20")
 display_startup = next(line for line in startup
                        if line.startswith("service /services/display "))
-assert display_startup.endswith(" critical")
-assert desktop_startup.endswith(" required")
-assert not any(line.endswith((" critical", " required"))
-               for line in startup if line.startswith("service /services/media "))
+assert display_startup.endswith(" critical priority=20")
+assert desktop_startup.endswith(" required priority=20")
+assert [line for line in startup
+        if line.startswith("service /services/media ")] == \
+    ["service /services/media grants HOST_DEVICE serves PCM priority=24"]
 assert startup[1] == \
-    "service /services/posixd grants serves POSIX_PROCESS required"
+    "service /services/posixd grants serves POSIX_PROCESS required priority=20"
 assert startup[2] == \
     "service /services/hostfs grants HOST_DEVICE " \
-    "serves WORK:rw METRICS:r SOUND:rw required"
+    "serves WORK:rw METRICS:r SOUND:rw required priority=20"
 assert startup[3] == \
-    "service /services/entropy grants HOST_DEVICE serves ENTROPY required"
+    "service /services/entropy grants HOST_DEVICE serves ENTROPY required priority=20"
 
 
 class Result:

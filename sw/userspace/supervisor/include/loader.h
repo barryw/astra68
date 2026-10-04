@@ -54,6 +54,8 @@ typedef struct SupervisorManifestEntry {
     uint32_t required;
     /* `critical`: as required, but its death halts the machine. */
     uint32_t critical;
+    /* `priority=N`: the scheduler priority it is launched at; 0 is normal. */
+    uint32_t priority;
     /* `start=` / `restart=` defaults for a user-controllable service. */
     uint32_t start_policy;
     uint32_t restart_policy;
@@ -143,6 +145,8 @@ void supervisor_manifest_destroy(SupervisorManifest *manifest);
 uint32_t supervisor_service_start_policy(const char *word);
 /* "never"/"on-fault"/"always" -> ASTRA_SERVICE_RESTART_*, or UINT32_MAX. */
 uint32_t supervisor_service_restart_policy(const char *word);
+/* A manifest priority, 1 to ASTRA_PROCESS_PRIORITY_MAX; 0 when malformed. */
+uint32_t supervisor_priority_word(const char *word);
 int supervisor_manifest_grant(char *text, SupervisorManifestGrant *grant);
 /* Nonzero when @p wanted lies inside @p ceiling (a `trusted` entry), or
    inside the default application ceiling (astra/application_policy.h) when

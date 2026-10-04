@@ -71,12 +71,38 @@
 /** Fixed byte size of ::AstraThreadInfo. */
 #define ASTRA_THREAD_INFO_SIZE 48u
 
-/** Lowest ordinary-user scheduler priority; larger values run first. */
+/*
+ * Scheduler priority is one number per thread; larger runs first, and equal
+ * priorities share the CPU in ::ASTRA_PROCESS_QUANTUM_NS turns. A process
+ * carries a default its new threads take. The bands below are names for
+ * ranges of that one number, not a second setting:
+ *
+ *   1-7    background
+ *   8-19   applications; 16 is every process's default
+ *   20-23  system services
+ *   24-27  media: audio and other work with a deadline
+ *
+ * 0 is the idle loop and 28-31 are unassigned. The kernel is not on the
+ * scale: its traps and deferred work always run before any thread.
+ *
+ * A process may move itself and its threads anywhere from
+ * ::ASTRA_PROCESS_PRIORITY_MIN to the higher of
+ * ::ASTRA_PROCESS_PRIORITY_APPLICATION_MAX and the priority it was launched
+ * at. Only a launcher can place a child above the application band
+ * (::AstraLaunchArguments.priority).
+ */
+/** Lowest scheduler priority a thread may hold; larger values run first. */
 #define ASTRA_PROCESS_PRIORITY_MIN 1u
-/** Default scheduler priority assigned to a newly created process. */
+/** Default scheduler priority of a process launched without one. */
 #define ASTRA_PROCESS_PRIORITY_NORMAL 16u
-/** Highest ordinary-user scheduler priority; larger values run first. */
-#define ASTRA_PROCESS_PRIORITY_MAX 23u
+/** Top of the application band: as high as any process may raise itself. */
+#define ASTRA_PROCESS_PRIORITY_APPLICATION_MAX 19u
+/** Bottom of the system-service band. */
+#define ASTRA_PROCESS_PRIORITY_SYSTEM 20u
+/** Bottom of the media band: audio runs here so a busy application cannot starve it. */
+#define ASTRA_PROCESS_PRIORITY_MEDIA 24u
+/** Highest scheduler priority a thread may hold; larger values run first. */
+#define ASTRA_PROCESS_PRIORITY_MAX 27u
 /** Equal-priority runnable threads rotate at this scheduler quantum, in nanoseconds. */
 #define ASTRA_PROCESS_QUANTUM_NS UINT32_C(5000000)
 /** Most negative (highest-priority) nice value, relative to ::ASTRA_PROCESS_PRIORITY_NORMAL. */
@@ -287,10 +313,20 @@ typedef struct AstraLaunchArguments {
     uint16_t environment_length;
     /** User address of the packed environment entries. */
     uint32_t environment_address;
+    /**
+     * The child's scheduler priority, or zero for
+     * ::ASTRA_PROCESS_PRIORITY_NORMAL. A launcher may not place a child above
+     * its own ceiling, except the trusted initial supervisor, which places
+     * services anywhere on the scale. Must be zero for exec, which keeps the
+     * process's priority.
+     */
+    uint16_t priority;
+    /** Must be zero. */
+    uint16_t reserved;
 } AstraLaunchArguments;
 
 /** Fixed byte size of ::AstraLaunchArguments. */
-#define ASTRA_LAUNCH_ARGUMENTS_SIZE 20u
+#define ASTRA_LAUNCH_ARGUMENTS_SIZE 24u
 /** @cond ASTRA_INTERNAL */
 _Static_assert(sizeof(AstraLaunchArguments) == ASTRA_LAUNCH_ARGUMENTS_SIZE,
                "launch-argument syscall ABI changed");
@@ -315,7 +351,7 @@ typedef struct AstraExecRequest {
 } AstraExecRequest;
 
 /** Fixed byte size of ::AstraExecRequest. */
-#define ASTRA_EXEC_REQUEST_SIZE 32u
+#define ASTRA_EXEC_REQUEST_SIZE 36u
 /** @cond ASTRA_INTERNAL */
 _Static_assert(sizeof(AstraExecRequest) == ASTRA_EXEC_REQUEST_SIZE,
                "exec-request syscall ABI changed");

@@ -155,6 +155,8 @@ typedef struct KernelProcess {
     uint8_t exit_reason;
     uint8_t default_priority;
     uint8_t priority_ceiling;
+    /* Launched ASTRA_LAUNCH_FLAG_ESSENTIAL: its memory owner is protected. */
+    uint8_t essential;
     uint8_t thread_count;
     uint8_t live_threads;
     uint16_t user_stack_pages;
@@ -390,6 +392,12 @@ _Static_assert(KERNEL_THREAD_STACK_SIZE % KERNEL_PAGE_SIZE == 0u &&
 _Static_assert(ASTRA_PROCESS_PRIORITY_MIN == KERNEL_THREAD_PRIORITY_USER_MIN &&
                    ASTRA_PROCESS_PRIORITY_NORMAL ==
                        KERNEL_THREAD_PRIORITY_NORMAL &&
+                   ASTRA_PROCESS_PRIORITY_APPLICATION_MAX ==
+                       KERNEL_THREAD_PRIORITY_APPLICATION_MAX &&
+                   ASTRA_PROCESS_PRIORITY_SYSTEM ==
+                       KERNEL_THREAD_PRIORITY_SYSTEM &&
+                   ASTRA_PROCESS_PRIORITY_MEDIA ==
+                       KERNEL_THREAD_PRIORITY_MEDIA &&
                    ASTRA_PROCESS_PRIORITY_MAX == KERNEL_THREAD_PRIORITY_USER_MAX,
                "public and kernel process priorities differ");
 _Static_assert(KERNEL_THREAD_STACK_STRIDE % KERNEL_PAGE_SIZE == 0u,
@@ -3935,12 +3943,13 @@ static KernelProcessStatus clone_current_process(
     child->dynamic_relro_count = source->dynamic_relro_count;
     child->default_priority = source->default_priority;
     child->priority_ceiling = source->priority_ceiling;
+    child->essential = source->essential;
     child->signal_trampoline = source->signal_trampoline;
     kernel_handle_table_init(child->handles);
     if (!kernel_handle_table_set_owner(child->handles, child->owner,
                                        child->id))
         goto failed;
-    if (child->priority_ceiling == KERNEL_THREAD_PRIORITY_USER_MAX) {
+    if (child->essential != 0u) {
         if (!kernel_memory_protect_owner(child->owner))
             goto failed;
         owner_protected = true;
@@ -4081,6 +4090,7 @@ static KernelProcessStatus create_process(const void *image,
         return result;
     process->image_size = image_size;
     process->entry_base = KERNEL_PROCESS_CODE_BASE;
+    /* The kernel's own images (qualification, soak, tests) use the scale. */
     process->priority_ceiling = KERNEL_THREAD_PRIORITY_USER_MAX;
     kernel_handle_table_init(process->handles);
     if (!kernel_handle_table_set_owner(process->handles, process->owner,
@@ -4403,6 +4413,7 @@ static KernelProcessStatus exec_replace(
         request == NULL || next_context == NULL ||
         request->size != ASTRA_EXEC_REQUEST_SIZE ||
         request->arguments.flags != 0u ||
+        request->arguments.priority != 0u ||
         (request->handoff_address == 0u) !=
             (request->handoff_size == 0u) ||
         (plan->has_interpreter != 0u) != (interpreter_plan != NULL) ||
@@ -5119,6 +5130,10 @@ static uint32_t copy_launch_arguments(uint32_t user_address,
             (arguments->environment_address != 0u) ||
         arguments->source > ASTRA_LAUNCH_SOURCE_DESKTOP ||
         (arguments->flags & ~ASTRA_LAUNCH_FLAG_MASK) != 0u ||
+        (arguments->priority != 0u &&
+         (arguments->priority < KERNEL_THREAD_PRIORITY_USER_MIN ||
+          arguments->priority > KERNEL_THREAD_PRIORITY_USER_MAX)) ||
+        arguments->reserved != 0u ||
         arguments->length + arguments->environment_length >
             (uint32_t)sizeof(syscall_data.bytes) ||
         (arguments->count == 0u &&
@@ -5168,8 +5183,9 @@ static uint32_t copy_launch_metadata(
     if (result != ASTRA_SYSCALL_OK)
         return result;
     if (argument_address != 0u &&
-        (arguments->flags & ASTRA_LAUNCH_FLAG_ESSENTIAL) != 0u &&
-        launcher->id != initial_image_process_id)
+        launcher->id != initial_image_process_id &&
+        ((arguments->flags & ASTRA_LAUNCH_FLAG_ESSENTIAL) != 0u ||
+         arguments->priority > launcher->priority_ceiling))
         return ASTRA_SYSCALL_ACCESS_DENIED;
     for (uint32_t index = 0u; index < grant_count; ++index) {
         uint32_t at;
@@ -6990,14 +7006,23 @@ static KernelProcessStatus prepare_executable_process(
     result = claim_process_record(&process, &slot);
     if (result != KERNEL_PROCESS_OK)
         return result;
-    if (source_table == NULL ||
+    process->essential = source_table == NULL ||
         (arguments != NULL &&
-         (arguments->flags & ASTRA_LAUNCH_FLAG_ESSENTIAL) != 0u)) {
+         (arguments->flags & ASTRA_LAUNCH_FLAG_ESSENTIAL) != 0u);
+    /*
+     * One number: the launcher's, or the default. The initial image has no
+     * launcher and runs as a system service. A process may move itself
+     * anywhere in the application band, and never above where it started
+     * when that is higher.
+     */
+    if (arguments != NULL && arguments->priority != 0u)
+        process->default_priority = (uint8_t)arguments->priority;
+    else if (source_table == NULL)
         process->default_priority = KERNEL_THREAD_PRIORITY_SYSTEM;
-        process->priority_ceiling = KERNEL_THREAD_PRIORITY_USER_MAX;
-    } else {
-        process->priority_ceiling = KERNEL_THREAD_PRIORITY_NORMAL;
-    }
+    process->priority_ceiling =
+        process->default_priority > KERNEL_THREAD_PRIORITY_APPLICATION_MAX ?
+            process->default_priority :
+            KERNEL_THREAD_PRIORITY_APPLICATION_MAX;
     if (!executable_span(plan, &process->entry_base, &process->image_size)) {
         result = KERNEL_PROCESS_INVALID_ARGUMENT;
         goto failed;
@@ -7042,7 +7067,7 @@ static KernelProcessStatus prepare_executable_process(
     if (!kernel_handle_table_set_owner(process->handles, process->owner,
                                        process->id))
         goto failed;
-    if (process->priority_ceiling == KERNEL_THREAD_PRIORITY_USER_MAX &&
+    if (process->essential != 0u &&
         !kernel_memory_protect_owner(process->owner))
         goto failed;
     vm_status = kernel_vm_create_address_space(process->owner,
@@ -10475,7 +10500,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         load_status = executable_load_create_process(
             load, current->handles, launch_capabilities, grant_count,
             arguments.count != 0u || arguments.environment_count != 0u ||
-                    arguments.flags != 0u ?
+                    arguments.flags != 0u || arguments.priority != 0u ?
                 &arguments : NULL,
             arguments.count != 0u ? syscall_data.bytes : NULL,
             arguments.environment_count != 0u ?
@@ -10568,7 +10593,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             NULL, image_size, image, current->handles, launch_capabilities,
             grant_count,
             arguments.count != 0u || arguments.environment_count != 0u ||
-                    arguments.flags != 0u ?
+                    arguments.flags != 0u || arguments.priority != 0u ?
                 &arguments : NULL,
             arguments.count != 0u ? syscall_data.bytes : NULL,
             arguments.environment_count != 0u ?

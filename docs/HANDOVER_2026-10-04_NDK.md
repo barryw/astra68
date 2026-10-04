@@ -143,3 +143,71 @@ plane has not latched the previous one. The interim mechanisms are gone.
 Owner chose: GCC driver owns the dynamic link (default crt0-dynamic.o,
 astra_user.ld, libc/runtime/compiler .library; -static keeps today's image),
 and a CMake `astra_program()` function for program identity. Not started.
+
+## Pointer vs frame rate (2026-10-05, uncommitted, on the board as 1519d8ac)
+
+Measured on the DE25 with Doom and SDL Sprites (`/data/pointer-smooth.py
+SECONDS HZ` drives QMP motion and samples FPGA pointer commits; `/data/
+timeline.py` logs per second while a person rolls the trackball;
+`/data/fd-astat.py` counts audio gaps; `/data/ctxsw.py`, `vcpuwait.py`,
+`threadcpu.py` for host threads).
+
+Changes in the tree (Haiku-modelled, see `~/Git/haiku` InputServer.cpp
+fCursorBuffer and app_server EventStream / cursor loop):
+- Input service publishes pointer motion into a shared seqlock area the
+  display hands it at CONNECT (`ASTRA_INPUT_CONNECT_SHARED_POINTER`,
+  `AstraInputPointerState`, sink-level in `input_port_sink.c`); the display
+  samples it at vblank and before every input event (`sample_pointer`).
+- QEMU input device coalesces unread motion per axis (never the head
+  record) and interrupts for motion-only contents once a frame, half a
+  frame after vblank (`astra_input_coalesce`, `astra_input_irq_due`,
+  `motion_timer`; QOM `astra-input-coalesced`). Keys/buttons interrupt at
+  once, behind the motion queued before them.
+- Mailbox 1.9: helper publishes the panel's real scanout timing
+  (`AstraDisplayScanout` at offset 64, from SCANOUT_LINES_BUILT; panel is
+  60.08 Hz); QEMU's vblank follows it (`astra_next_vblank`). Without a
+  helper it stays a 60 Hz timer.
+- Helper has a cursor thread (`cursor_loop`, futex on cursor_sequence,
+  `pointer_lock`); the request loop no longer handles cursor moves.
+- `bench-frame.py --pointer-hz` fixed (`machine.qmp.point`), adds
+  `--pointer-center`.
+
+Results (QMP motion at 125 Hz, Doom): presents 21 -> 15.8 (was 14.9 before
+all of this); cursor commits 25.8/s with 133 ms gaps -> 52.7/s, max 34 ms.
+SDL Sprites holds 60.0 fps with motion, 0 audio gaps. Real trackball
+(before the device coalescing): Doom 21.4 -> 18.3.
+
+Open:
+- Audio gaps with Doom under motion: media ran at 16, Doom's priority.
+  Done (2026-10-04, below): priority is one number, decoupled from
+  required/critical; media runs at 24. Board measurement pending.
+- Doom loses ~25% under QMP motion; part is QMP-specific (monitor iothread,
+  BQL contention: vCPU blocked on a mutex 5.4% of the time). Re-measure
+  with the trackball on 1519d8ac.
+- Cursor 52.7 commits/s under Doom (not 60): not yet explained.
+
+## Scheduler priority: one number (2026-10-04)
+
+Owner decisions: one priority per thread with named bands, not two settings;
+users may raise their own processes to 19; manifest `priority=N`; no media
+CPU budget yet; no automatic foreground boost; no stutter-driven boost
+(reactive: the gap is already heard -- adapt buffer depth instead).
+
+- Scale 1-27 (`sw/include/astra/process.h`): 1-7 background, 8-19
+  applications (default 16), 20-23 system, 24-27 media. Kernel is not on the
+  scale. Kernel ABI `0x0001003D`.
+- `AstraLaunchArguments.priority` (now 24 bytes; exec request 36). Zero is
+  16. A launcher may not exceed its own ceiling; the initial supervisor is
+  exempt. Ceiling = max(19, launch priority).
+- `ASTRA_LAUNCH_FLAG_ESSENTIAL` is memory protection only
+  (`KernelProcess.essential`); it no longer sets 20.
+- Supervisor: manifest `priority=N` on service lines; carried in
+  `AstraServiceDefinition.priority` (service-manager protocol 6; persisted
+  as `priority N`). ADD and `/config/services` files refuse above 19.
+- Image manifest: every required/critical service `priority=20` (unchanged
+  behaviour), media `priority=24`.
+- Kernel bug found by the new test: PROCESS_CREATE dropped the arguments
+  block unless count/environment/flags were set.
+- Not done: a `nice`/`renice`-style command (POSIX setpriority works from
+  inside a process); media CPU budget; DE25 measurement of audio gaps with
+  Doom under motion (`/data/fd-astat.py`).

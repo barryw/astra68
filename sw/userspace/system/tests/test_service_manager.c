@@ -127,6 +127,12 @@ int main(void)
     assert(astra_service_definition_validate(&definition) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
     definition = valid_definition();
+    definition.priority = ASTRA_PROCESS_PRIORITY_MAX;
+    assert(astra_service_definition_validate(&definition) == ASTRA_OK);
+    definition.priority = ASTRA_PROCESS_PRIORITY_MAX + 1u;
+    assert(astra_service_definition_validate(&definition) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    definition = valid_definition();
     (void)strcpy(definition.name, "../escape");
     assert(astra_service_definition_validate(&definition) ==
            ASTRA_ERROR_INVALID_ARGUMENT);

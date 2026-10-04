@@ -315,9 +315,10 @@ static void parses_service_tiers(void)
     char text[] =
         "service /services/storage grants BLOCK_DEVICE serves SYSTEM:r "
         "critical\n"
-        "service /services/input grants INPUT serves INPUT_SERVICE required\n"
+        "service /services/input grants INPUT serves INPUT_SERVICE required "
+        "priority=20\n"
         "service /services/media grants HOST_DEVICE serves PCM "
-        "restart=always start=manual\n"
+        "restart=always priority=24 start=manual\n"
         "service /services/remote grants NETWORK\n";
     SupervisorManifest manifest = SUPERVISOR_MANIFEST_INIT;
     const char *refused[] = {
@@ -328,6 +329,12 @@ static void parses_service_tiers(void)
         "service /services/a grants X start=on-demand\n",
         "service /services/a grants X restart=sometimes\n",
         "service /services/a grants X start=boot start=manual\n",
+        "service /services/a grants X priority=0\n",
+        "service /services/a grants X priority=28\n",
+        "service /services/a grants X priority=\n",
+        "service /services/a grants X priority=2x\n",
+        "service /services/a grants X priority=20 priority=20\n",
+        "application /apps/A.app grants GUI priority=16\n",
         "application /apps/A.app grants GUI critical\n",
         "application /apps/A.app grants GUI restart=never\n",
         "trusted /apps/A.app grants GUI start=manual\n",
@@ -337,10 +344,13 @@ static void parses_service_tiers(void)
     assert(manifest.count == 4u);
     assert(manifest.entries[0].critical == 1u &&
            manifest.entries[0].required == 0u &&
+           manifest.entries[0].priority == 0u &&
            manifest.entries[0].serves_count == 1u);
     assert(manifest.entries[1].required == 1u &&
-           manifest.entries[1].critical == 0u);
-    assert(manifest.entries[2].required == 0u &&
+           manifest.entries[1].critical == 0u &&
+           manifest.entries[1].priority == ASTRA_PROCESS_PRIORITY_SYSTEM);
+    assert(manifest.entries[2].priority == ASTRA_PROCESS_PRIORITY_MEDIA &&
+           manifest.entries[2].required == 0u &&
            manifest.entries[2].start_policy == ASTRA_SERVICE_START_MANUAL &&
            manifest.entries[2].restart_policy ==
                ASTRA_SERVICE_RESTART_ALWAYS &&

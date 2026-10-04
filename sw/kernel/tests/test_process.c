@@ -7877,7 +7877,7 @@ static void test_executable_loading(void)
     assert(snapshot.live_threads == 1u);
     assert(snapshot.thread_count == 1u);
     assert(snapshot.default_priority == KERNEL_THREAD_PRIORITY_SYSTEM);
-    assert(snapshot.priority_ceiling == KERNEL_THREAD_PRIORITY_USER_MAX);
+    assert(snapshot.priority_ceiling == KERNEL_THREAD_PRIORITY_SYSTEM);
 
     /* Text, data, and the startup block are all charged to the process. */
     assert(process_id != snapshot.owner);
@@ -9500,6 +9500,17 @@ static void test_a_program_can_launch_a_program(void)
                                          KERNEL_PROCESS_STACK_TOP - 8u,
                                          frame, &next) == KERNEL_PROCESS_OK);
         assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+
+        /* Off the scale is malformed, whoever asks. */
+        arguments.flags = 0u;
+        arguments.priority = KERNEL_THREAD_PRIORITY_USER_MAX + 1u;
+        assert(kernel_user_copy_to_asm(user_arguments, &arguments,
+                                       sizeof(arguments)) ==
+               KERNEL_USER_COPY_OK);
+        assert(kernel_process_on_syscall(registers,
+                                         KERNEL_PROCESS_STACK_TOP - 8u,
+                                         frame, &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
         registers[5] = 0u;
     }
 
@@ -9527,12 +9538,12 @@ static void test_a_program_can_launch_a_program(void)
         assert(child_info.default_priority ==
                KERNEL_THREAD_PRIORITY_NORMAL);
         assert(child_info.priority_ceiling ==
-               KERNEL_THREAD_PRIORITY_NORMAL);
+               KERNEL_THREAD_PRIORITY_APPLICATION_MAX);
 
         memset(registers_query, 0, sizeof(registers_query));
         registers_query[0] = ASTRA_SYSCALL_PROCESS_PRIORITY;
         registers_query[1] = child_handle;
-        registers_query[2] = KERNEL_THREAD_PRIORITY_NORMAL + 1u;
+        registers_query[2] = KERNEL_THREAD_PRIORITY_APPLICATION_MAX + 1u;
         assert(kernel_process_on_syscall(registers_query,
                                          KERNEL_PROCESS_STACK_TOP - 8u,
                                          frame, &next) == KERNEL_PROCESS_OK);
@@ -9816,6 +9827,106 @@ static void test_a_program_can_launch_a_program(void)
     }
 }
 
+static bool snapshot_for(uint32_t id, KernelProcessSnapshot *snapshot)
+{
+    for (uint32_t slot = 0u; slot < kernel_process_slot_limit(); ++slot)
+        if (kernel_process_snapshot(slot, snapshot) && snapshot->id == id)
+            return true;
+    return false;
+}
+
+/* The one live process whose id is neither @p first nor @p second. */
+static bool snapshot_other(uint32_t first, uint32_t second,
+                           KernelProcessSnapshot *snapshot)
+{
+    for (uint32_t slot = 0u; slot < kernel_process_slot_limit(); ++slot)
+        if (kernel_process_snapshot(slot, snapshot) &&
+            snapshot->id != first && snapshot->id != second)
+            return true;
+    return false;
+}
+
+/*
+ * Priority is one number the launcher chooses. The supervisor may put a
+ * service in the media band; essential is memory authority and says nothing
+ * about priority.
+ */
+static void test_launch_priority_is_one_number(void)
+{
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
+    const uint32_t user_arguments = KERNEL_PROCESS_STACK_TOP - 512u;
+    KernelProcessSnapshot child;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    AstraLaunchArguments arguments = {0};
+    uint32_t controller_id;
+    uint32_t essential_id;
+
+    loader_build_image();
+    launch_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &controller_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(kernel_user_copy_to_asm(LOADER_DATA_VADDR, launch_image,
+                                   sizeof(launch_image)) ==
+           KERNEL_USER_COPY_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+
+    /* Not yet the supervisor: no child above the launcher's own ceiling. */
+    assert(snapshot_for(controller_id, &child));
+    assert(child.priority_ceiling == KERNEL_THREAD_PRIORITY_SYSTEM);
+    arguments.priority = KERNEL_THREAD_PRIORITY_MEDIA;
+    assert(kernel_user_copy_to_asm(user_arguments, &arguments,
+                                   sizeof(arguments)) == KERNEL_USER_COPY_OK);
+    registers[0] = ASTRA_SYSCALL_PROCESS_CREATE;
+    registers[1] = LOADER_DATA_VADDR;
+    registers[2] = sizeof(launch_image);
+    registers[5] = user_arguments;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+
+    kernel_process_register_initial_image(controller_id);
+    arguments.priority = 0u;
+    arguments.flags = ASTRA_LAUNCH_FLAG_ESSENTIAL;
+    assert(kernel_user_copy_to_asm(user_arguments, &arguments,
+                                   sizeof(arguments)) == KERNEL_USER_COPY_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_CREATE;
+    registers[1] = LOADER_DATA_VADDR;
+    registers[2] = sizeof(launch_image);
+    registers[5] = user_arguments;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    essential_id = next->data[2];
+    assert(snapshot_for(essential_id, &child));
+    assert(child.default_priority == KERNEL_THREAD_PRIORITY_NORMAL);
+    assert(child.priority_ceiling == KERNEL_THREAD_PRIORITY_APPLICATION_MAX);
+    assert(kernel_memory_owner_protected(child.owner));
+
+    arguments.flags = 0u;
+    arguments.priority = KERNEL_THREAD_PRIORITY_MEDIA;
+    assert(kernel_user_copy_to_asm(user_arguments, &arguments,
+                                   sizeof(arguments)) == KERNEL_USER_COPY_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_CREATE;
+    registers[1] = LOADER_DATA_VADDR;
+    registers[2] = sizeof(launch_image);
+    registers[5] = user_arguments;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    /* It outranks its launcher, so it is what runs next. */
+    assert(next->program_counter == LAUNCH_VADDR + 0x100u);
+    assert(snapshot_other(controller_id, essential_id, &child));
+    assert(child.default_priority == KERNEL_THREAD_PRIORITY_MEDIA);
+    assert(child.priority_ceiling == KERNEL_THREAD_PRIORITY_MEDIA);
+    assert(!kernel_memory_owner_protected(child.owner));
+}
+
 static void test_system_control_preempts_and_terminates_runaway(void)
 {
     const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
@@ -9873,7 +9984,7 @@ static void test_system_control_preempts_and_terminates_runaway(void)
     assert(runaway.id == runaway_id);
     assert(kernel_memory_owner_protected(controller.owner));
     assert(!kernel_memory_owner_protected(runaway.owner));
-    assert(runaway.priority_ceiling == KERNEL_THREAD_PRIORITY_NORMAL);
+    assert(runaway.priority_ceiling == KERNEL_THREAD_PRIORITY_APPLICATION_MAX);
 
     /* An ordinary task cannot promote itself into the control tier. */
     memset(registers, 0, sizeof(registers));
@@ -13776,6 +13887,7 @@ int main(void)
     test_an_activity_is_the_threads_own();
     test_a_program_can_launch_a_program();
     test_system_control_preempts_and_terminates_runaway();
+    test_launch_priority_is_one_number();
     test_streamed_launch_is_large_and_transactional();
     test_dynamic_stream_enters_interpreter_atomically();
     test_streamed_library_is_sparse_atomic_and_reclaimable();

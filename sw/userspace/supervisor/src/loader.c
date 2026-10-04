@@ -335,6 +335,10 @@ static uint32_t dynamic_definition_read(const char *name,
     status = supervisor_service_definition_parse(
         definition_text, length, definition, NULL);
     astra_runtime_deallocate(definition_text);
+    /* A user's file holds what ADD would accept, and nothing above it. */
+    if (status == ASTRA_STATUS_OK &&
+        definition->priority > ASTRA_PROCESS_PRIORITY_APPLICATION_MAX)
+        status = ASTRA_STATUS_ACCESS;
     return status;
 }
 
@@ -1334,7 +1338,7 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
                                      uint32_t *process_wait_handle)
 {
     AstraLaunchArguments default_arguments = {0};
-    AstraLaunchArguments essential_arguments = {0};
+    AstraLaunchArguments policy_arguments = {0};
     const AstraLaunchArguments *launch_arguments = arguments;
     AstraLaunchGrant grants[ASTRA_LAUNCH_GRANT_MAX];
     uint32_t grant_count = 0u;
@@ -1374,10 +1378,13 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
             (uint32_t)(uintptr_t)entry->path;
         launch_arguments = &default_arguments;
     }
-    if (entry->required != 0u || entry->critical != 0u) {
-        essential_arguments = *launch_arguments;
-        essential_arguments.flags |= ASTRA_LAUNCH_FLAG_ESSENTIAL;
-        launch_arguments = &essential_arguments;
+    if (entry->required != 0u || entry->critical != 0u ||
+        entry->priority != 0u) {
+        policy_arguments = *launch_arguments;
+        if (entry->required != 0u || entry->critical != 0u)
+            policy_arguments.flags |= ASTRA_LAUNCH_FLAG_ESSENTIAL;
+        policy_arguments.priority = (uint16_t)entry->priority;
+        launch_arguments = &policy_arguments;
     }
 
     if (!supervisor_process_table_reserve(
@@ -2224,7 +2231,8 @@ static void pump_manager(const AstraStartupInfo *startup)
             (void)astra_rt_area_unmap(mapping);
         (void)astra_close(handles[1]);
         if (status == ASTRA_STATUS_OK &&
-            (definition->flags & ASTRA_SERVICE_PROTECTED) != 0u)
+            ((definition->flags & ASTRA_SERVICE_PROTECTED) != 0u ||
+             definition->priority > ASTRA_PROCESS_PRIORITY_APPLICATION_MAX))
             status = ASTRA_STATUS_ACCESS;
         if (status == ASTRA_STATUS_OK &&
             configured_definition(definition->name,

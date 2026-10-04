@@ -156,28 +156,32 @@ PROVIDER_INDEX_MAX = (PROVIDER_INDEX_HEADER.size + VFS_PATH_MAX -
 # Astra) and their death halts it; `required` ones always run and are
 # restarted; neither can be touched from `service`. Unmarked services, and the
 # ones added under /config/services, belong to the user.
+#
+# `priority=N` is the scheduler priority, separate from the tier: system
+# services run at 20, media at 24 so audio is not starved by a busy
+# application, and anything unmarked at 16 (sw/include/astra/process.h).
 DISPLAY_STARTUP_MANIFEST = (
     "service /services/storage grants BLOCK_DEVICE BLOCK_IRQ "
-    "serves SYSTEM:r critical\n"
-    "service /services/posixd grants serves POSIX_PROCESS required\n"
+    "serves SYSTEM:r critical priority=20\n"
+    "service /services/posixd grants serves POSIX_PROCESS required priority=20\n"
     "service /services/hostfs grants HOST_DEVICE "
-    "serves WORK:rw METRICS:r SOUND:rw required\n"
+    "serves WORK:rw METRICS:r SOUND:rw required priority=20\n"
     "service /services/entropy grants HOST_DEVICE "
-    "serves ENTROPY required\n"
+    "serves ENTROPY required priority=20\n"
     "service /services/network grants NETWORK_DEVICE NETWORK_IRQ "
-    "serves NETWORK NETWORK_LISTEN required\n"
+    "serves NETWORK NETWORK_LISTEN required priority=20\n"
     "service /services/ntpd grants CLOCK CONFIG:r LIBS:r NETWORK "
-    "serves NTP required\n"
+    "serves NTP required priority=20\n"
     "service /services/events grants SYSTEM:r STORE:rw LIBS:r "
-    "serves EVENTS:r EVENT_CONTROL required\n"
+    "serves EVENTS:r EVENT_CONTROL required priority=20\n"
     "service /services/input grants INPUT INPUT_IRQ "
-    "serves INPUT_SERVICE required\n"
-    "service /services/clipboard grants serves CLIPBOARD required\n"
+    "serves INPUT_SERVICE required priority=20\n"
+    "service /services/clipboard grants serves CLIPBOARD required priority=20\n"
     "service /services/display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ "
-    "INPUT_SERVICE serves GUI critical\n"
-    "service /services/media grants HOST_DEVICE serves PCM\n"
+    "INPUT_SERVICE serves GUI critical priority=20\n"
+    "service /services/media grants HOST_DEVICE serves PCM priority=24\n"
     "service /services/desktop grants GUI APP_LAUNCH SERVICE_MANAGER APPS:r "
-    "LIBS:r SYSTEM:r NETWORK NETWORK_LISTEN NTP PCM required\n"
+    "LIBS:r SYSTEM:r NETWORK NETWORK_LISTEN NTP PCM required priority=20\n"
     "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("storage", "ramfs", "posixd", "hostfs", "entropy", "network", "ntpd", "events",

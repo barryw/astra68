@@ -142,6 +142,7 @@ uint32_t supervisor_service_definition_parse(
     AstraConfigDocumentError error = {0};
     char policy[16];
     int flag = 0;
+    uint32_t count = 0u;
     uint32_t status;
 
     if (definition == NULL)
@@ -195,6 +196,15 @@ uint32_t supervisor_service_definition_parse(
         return status;
     if (flag != 0)
         definition->flags |= ASTRA_SERVICE_DELEGATES;
+    status = astra_config_document_count(text, length, "priority", &count);
+    if (status != ASTRA_CONFIG_OK || count > 1u)
+        return ASTRA_STATUS_INVALID;
+    if (count == 1u) {
+        if (one_string(text, length, "priority", policy, sizeof(policy)) !=
+                ASTRA_STATUS_OK ||
+            (definition->priority = supervisor_priority_word(policy)) == 0u)
+            return ASTRA_STATUS_INVALID;
+    }
     if (arguments(text, length, definition) != ASTRA_STATUS_OK ||
         authorities(text, length, "grant", definition->grants,
                     ASTRA_LAUNCH_GRANT_MAX, &definition->grant_count) !=
@@ -301,6 +311,15 @@ uint32_t supervisor_service_definition_serialize(
     text(&writer, "\nrestart ");
     text(&writer, restart_word(definition->restart_policy));
     text(&writer, "\n");
+    if (definition->priority != 0u) {
+        char number[4] = {0};
+
+        number[0] = (char)('0' + definition->priority / 10u);
+        number[1] = (char)('0' + definition->priority % 10u);
+        text(&writer, "priority ");
+        text(&writer, definition->priority < 10u ? number + 1 : number);
+        text(&writer, "\n");
+    }
     for (uint32_t index = 0u; index < definition->argument_count; ++index) {
         quoted(&writer, "argument", definition->arguments + argument);
         argument += (uint32_t)strlen(definition->arguments + argument) + 1u;
@@ -436,6 +455,7 @@ uint32_t supervisor_service_definition_from_manifest(
     (void)memcpy(definition->arguments, entry->path, length);
     definition->argument_count = 1u;
     definition->argument_length = (uint16_t)length;
+    definition->priority = entry->priority;
     definition->grant_count = entry->grant_count;
     for (uint32_t index = 0u; index < entry->grant_count; ++index) {
         (void)memcpy(definition->grants[index].name,
@@ -474,6 +494,7 @@ uint32_t supervisor_service_definition_to_manifest(
         (definition->flags & ASTRA_SERVICE_PROTECTED) != 0u;
     entry->start_policy = definition->start_policy;
     entry->restart_policy = definition->restart_policy;
+    entry->priority = definition->priority;
     entry->grant_count = definition->grant_count;
     for (uint32_t index = 0u; index < definition->grant_count; ++index) {
         (void)memcpy(entry->grants[index].name,

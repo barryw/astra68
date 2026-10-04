@@ -65,8 +65,8 @@ supervisor stack behind its own 4 KiB unmapped guard.
 `PROCESS_PRIORITY` changes a process's default and every live thread under the
 scheduler lock. Ready threads move between the existing bitmap queues; blocked
 threads are removed and reinserted in each existing priority/FIFO wait queue.
-The user band is 1-23 with normal 16. POSIX nice values are the exact derived
-range -7 through 15 (`nice = 16 - priority`), not a second scheduler scale.
+Threads hold 1-27 with normal 16. POSIX nice values are the exact derived
+range -11 through 15 (`nice = 16 - priority`), not a second scheduler scale.
 
 All registers, USP, PC, and SR are thread state. CRP is process state. A switch
 between threads in one process does not reload CRP or flush caches/ATC; host,
@@ -103,21 +103,34 @@ before blocking; memory and the encoded thread namespace are its only bounds.
 - explicit priority donation across one blocking RPC edge, removed on reply,
   timeout, cancellation, or peer death.
 
-Priority bands are exact for ABI 0.1:
+**CURRENT:** priority is one number per thread. The bands name ranges of it;
+they are not a second setting (`sw/include/astra/process.h`):
 
 | Priority | Use |
 |---:|---|
 | 0 | idle only |
 | 1-7 | background |
-| 8-19 | ordinary |
-| 20-23 | interactive/system services |
-| 24-27 | time-sensitive media with budget right |
-| 28-30 | privileged real-time |
-| 31 | kernel deferred/critical work only |
+| 8-19 | applications; 16 is every process's default |
+| 20-23 | system services |
+| 24-27 | media (audio) |
+| 28-31 | unassigned |
 
-A real-time thread has a replenished CPU budget. Exhausting it demotes the
-thread to priority 23 until the next period, preventing starvation of input,
-display, init, and debugger services.
+The kernel is not on the scale: traps run to completion and the deferred
+worker is selected before any thread.
+
+A process's priority comes from its launcher (`AstraLaunchArguments.priority`,
+zero meaning 16). Its ceiling is the higher of 19 and that launch priority, so
+any process can move itself and its threads anywhere in 1-19, and a service
+the supervisor started at 24 can return to 24. An ordinary launcher may not
+place a child above its own ceiling; the initial supervisor places services
+from the manifest's `priority=N`. `ASTRA_LAUNCH_FLAG_ESSENTIAL` (`required`,
+`critical`) is memory authority and restart policy only and does not change
+priority.
+
+**PLANNED:** a replenished CPU budget for the media band. Exhausting it
+demotes the thread to 23 until the next period, so a runaway audio thread
+cannot starve input, display, init, and debugger services. Deferred while the
+media service is the band's only, trusted, occupant.
 
 ## Nonpreemptible regions
 

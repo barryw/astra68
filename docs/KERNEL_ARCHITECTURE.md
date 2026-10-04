@@ -211,7 +211,7 @@ These are historical K6 implementation facts, not current object limits:
 | handle slots/process | 37 |
 | handle value | 24-bit generation, 8-bit one-based slot |
 | ready queues | 32 FIFO queues, two 16-bit links/thread, 32-bit bitmap |
-| thread priority | process default 16, user ceiling 23, effective priority/thread |
+| thread priority | one number 1-27; process default 16 or its launch priority, self-ceiling max(19, launch priority) |
 | user stack/thread | one mapped 4 KiB page plus one unmapped 4 KiB guard interval |
 | supervisor stack/thread | guarded 8 KiB stack in one 12 KiB static slot |
 | supervisor stack arena | 16 slots, 192 KiB total; 128 KiB usable stacks |

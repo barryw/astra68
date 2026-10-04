@@ -28,7 +28,7 @@
 /** `SVCM` protocol identifier carried by every service-manager message. */
 #define ASTRA_SERVICE_MANAGER_PROTOCOL UINT32_C(0x5356434d) /* SVCM */
 /** Current service-manager wire protocol version. */
-#define ASTRA_SERVICE_MANAGER_VERSION 5u
+#define ASTRA_SERVICE_MANAGER_VERSION 6u
 
 /** Service-manager operation codes, carried in the message header's operation field. */
 enum {
@@ -184,6 +184,15 @@ typedef struct AstraServiceDefinition {
     uint32_t dependency_count;
     /** Names of other services that must already be running before this one may be launched. */
     char dependencies[ASTRA_LAUNCH_GRANT_MAX][ASTRA_CAPABILITY_NAME_MAX];
+    /**
+     * Scheduler priority the service is launched at (see
+     * ::ASTRA_PROCESS_PRIORITY_MIN), or zero for
+     * ::ASTRA_PROCESS_PRIORITY_NORMAL. A definition added through
+     * ::ASTRA_SERVICE_MANAGER_ADD may not exceed
+     * ::ASTRA_PROCESS_PRIORITY_APPLICATION_MAX; only the startup manifest
+     * places a service in the system or media band.
+     */
+    uint32_t priority;
 } AstraServiceDefinition;
 
 /** Snapshot of one configured service's identity, policy and run state. */

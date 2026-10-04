@@ -195,7 +195,10 @@ AstraResult astra_service_definition_validate(
         definition->argument_length > sizeof(definition->arguments) ||
         definition->grant_count > ASTRA_LAUNCH_GRANT_MAX ||
         definition->publication_count > ASTRA_MESSAGE_HANDLES_MAX ||
-        definition->dependency_count > ASTRA_LAUNCH_GRANT_MAX)
+        definition->dependency_count > ASTRA_LAUNCH_GRANT_MAX ||
+        (definition->priority != 0u &&
+         (definition->priority < ASTRA_PROCESS_PRIORITY_MIN ||
+          definition->priority > ASTRA_PROCESS_PRIORITY_MAX)))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t index = 0u; index < definition->argument_count; ++index) {
         uint32_t start = at;

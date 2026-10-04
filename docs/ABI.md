@@ -206,10 +206,13 @@ Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
 not panic. `QUERY_ABI` reports revision `0x00010036`; a later revision may add
 feature bits before additional calls freeze.
 
-Ordinary process priorities are 1 through 23, with 16 as normal; larger values
-run first. POSIX `nice`, `getpriority`, and `setpriority` translate that exact
-band to nice values -7 through 15, so there is no second scheduling policy or
-unrepresentable nice level. Ready and blocked threads are reinserted into their
+Process and thread priorities are one number, 1 through 27, with 16 as
+normal; larger values run first. Bands name its ranges: 1-7 background, 8-19
+applications, 20-23 system services, 24-27 media. A process may set itself
+anywhere up to the higher of 19 and its launch priority
+(`AstraLaunchArguments.priority`). POSIX `nice`, `getpriority`, and
+`setpriority` translate that exact scale to nice values -11 through 15, so
+there is no second scheduling policy or unrepresentable nice level. Ready and blocked threads are reinserted into their
 existing priority/FIFO queues when a process priority changes.
 
 `AstraDeviceInfo` is 24 bytes and naturally four-byte aligned. It contains

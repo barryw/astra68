@@ -30,6 +30,7 @@ int main(void)
         "delegates false\n"
         "start manual\n"
         "restart on-fault\n"
+        "priority 12\n"
         "argument /services/remote-desktop\n"
         "grant NETWORK\n"
         "provides REMOTE\n"
@@ -54,6 +55,16 @@ int main(void)
     assert(supervisor_service_definition_serialize(
                &first, serialized, sizeof(serialized), &required) ==
            ASTRA_STATUS_OK);
+    assert(supervisor_service_definition_parse(
+               serialized, required - 1u, &second, &line) ==
+           ASTRA_STATUS_OK);
+    assert(memcmp(&first, &second, sizeof(first)) == 0);
+    assert(first.priority == 12u);
+    first.priority = 7u;
+    assert(supervisor_service_definition_serialize(
+               &first, serialized, sizeof(serialized), &required) ==
+           ASTRA_STATUS_OK);
+    assert(strstr(serialized, "\npriority 7\n") != NULL);
     assert(supervisor_service_definition_parse(
                serialized, required - 1u, &second, &line) ==
            ASTRA_STATUS_OK);
@@ -146,11 +157,20 @@ int main(void)
 
         (void)strcpy(entry.path, "/services/media");
         entry.required = 0u;
+        entry.priority = ASTRA_PROCESS_PRIORITY_MEDIA;
         entry.start_policy = ASTRA_SERVICE_START_BOOT;
         entry.restart_policy = ASTRA_SERVICE_RESTART_ON_FAULT;
         assert(supervisor_service_definition_from_manifest(
                    &entry, &service) == ASTRA_STATUS_OK);
         assert((service.flags & ASTRA_SERVICE_PROTECTED) == 0u);
+        assert(service.priority == ASTRA_PROCESS_PRIORITY_MEDIA);
+        {
+            SupervisorManifestEntry back;
+
+            assert(supervisor_service_definition_to_manifest(
+                       &service, &back) == ASTRA_STATUS_OK);
+            assert(back.priority == ASTRA_PROCESS_PRIORITY_MEDIA);
+        }
         /* An absent key keeps the default; a present one overrides. */
         assert(supervisor_service_policy_apply(
                    chosen, sizeof(chosen) - 1u, &service) ==
