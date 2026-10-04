@@ -462,6 +462,8 @@ astra_vfs_union_directory_open(const AstraAssignTable *table,
 
     if (table == NULL || client_for == NULL || directory == NULL)
         return ASTRA_VFS_ERR_INVALID;
+    /* Open owns every field: read and close trust client and file. */
+    *directory = (AstraVfsUnionDirectory)ASTRA_VFS_UNION_DIRECTORY_INIT;
     status = follow_path(table, path, ASTRA_RIGHT_READ, client_for, context,
                          1, 0, directory->path, sizeof(directory->path),
                          &entry, NULL, NULL, NULL, wire, sizeof(wire));

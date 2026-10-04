@@ -249,7 +249,7 @@ static uint32_t copy_default(const char *defaults, const char *store_path,
 static uint32_t seed_store(const SupervisorManifestEntry *entry,
                            const char *store_path)
 {
-    AstraVfsUnionDirectory directory;
+    AstraVfsUnionDirectory directory = ASTRA_VFS_UNION_DIRECTORY_INIT;
     AstraVfsDirEntry entries[8];
     char defaults[ASTRA_VFS_PATH_MAX] = "";
     uint32_t status;

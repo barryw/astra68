@@ -521,6 +521,42 @@ static void test_directory_skips_an_empty_member(void)
     astra_assign_table_destroy(&table);
 }
 
+/*
+ * A caller's traversal is often a plain stack variable. Open owns the whole
+ * state: a stale client and handle left in it were once closed as if open,
+ * and the supervisor faulted seeding an application's store defaults.
+ */
+static void test_directory_open_owns_the_whole_state(void)
+{
+    AstraAssignTable table;
+    AstraVfsUnionDirectory directory;
+    AstraVfsDirEntry entry;
+    uint32_t count = 0u;
+
+    memset(&directory, 0xA5, sizeof(directory));
+    union_table(&table);
+    reset_asked();
+    answers = "/local/commands";
+    answers_also = "/commands";
+    empty_directory = "/local/commands";
+    answer_kind = ASTRA_VFS_KIND_DIRECTORY;
+    assert(astra_vfs_union_directory_open(
+               &table, "/commands", client_for, NULL, &directory) ==
+           ASTRA_VFS_OK);
+    assert(directory.client == NULL);
+    assert(directory.file == ASTRA_VFS_FILE_INVALID);
+    assert(astra_vfs_union_directory_read(
+               &directory, &entry, 1u, &count, NULL) == ASTRA_VFS_OK);
+    assert(count == 1u);
+    assert(strcmp(entry.name, "base") == 0);
+    astra_vfs_union_directory_close(&directory);
+    assert(close_count == 2u);
+    answers_also = NULL;
+    empty_directory = NULL;
+    answer_kind = ASTRA_VFS_KIND_FILE;
+    astra_assign_table_destroy(&table);
+}
+
 static void test_links_follow_without_crossing_authority(void)
 {
     AstraAssignTable table;
@@ -599,6 +635,7 @@ main(void)
     test_primary_skips_a_read_only_member();
     test_stat_checks_rights_after_finding_the_name();
     test_directory_skips_an_empty_member();
+    test_directory_open_owns_the_whole_state();
     test_links_follow_without_crossing_authority();
     puts("ASTRA VFS UNION PASS");
     return 0;
