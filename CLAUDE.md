@@ -251,7 +251,7 @@ There is no alternative CPU or emulator implementation in the repository.
 ## Standing instructions
 
 - **No throwaway code.** Build the real long-term piece even if incomplete.
-- **Modern methods, sized for this machine.** An MC68040 with an MMU, 128 MB and
+- **Modern methods, sized for this machine.** An MC68040 with an MMU, 512 MiB and
   one core. Take the *idea* a modern system expresses, not its implementation —
   and drop what does not apply, because no SMP deletes most of an allocator's
   complexity. Never the 1980s answer: no fixed partitions, no ceilings compiled

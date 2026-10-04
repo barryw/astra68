@@ -182,3 +182,32 @@ interrupt-load subtest.
 `third_party/odfs` vendored for a future CDFS (`ASTRA_VENDOR.md`); not built.
 
 Next for Doom: phase 2 (toolchain hard float) and phase 3 (flag day).
+
+## Phase 3 flag day: done in QEMU, blocked on the board (2026-10-04)
+
+- Committed on branch `fpu-hard-float` (`86a00ab1 feat!: userspace is hard
+  float`). Toolchain installed on beast (soft prefix kept as
+  `~/astra-toolchain/backup-20261003-softfp`; `prefix-hardfp` is now a
+  symlink to `prefix` because the gcc build tree records that path).
+  `verify-then-publish.sh` passes from fresh build trees.
+- Published release `e7f15c72` (hard float, QEMU with host-float + F-line
+  patches). The deploy hung until the leftover profiling drop-in
+  `/run/systemd/system/astra.service.d/profile.conf` was removed: the
+  deployer waits for the running QEMU to be the release's own.
+- **Blocker:** on the board, launching Doom from the desktop
+  (`/data/ab-run.sh`, double-click at 71,100) kills the supervisor: `***
+  user fault: process 0x00000001 ... pc 0x00113084 address 0x00000048
+  vector 2`, symbolized to `astra_vfs_close` (`sw/userspace/vfs/src/
+  vfs_client.c:352-361`, the `call = begin(client); call->request...` path,
+  so suspect a NULL call state from `call_acquire`). Every hard-float boot
+  that launches Doom does it; booting alone does not (state is per release,
+  so this is a fresh volume, not stale soft-float apps). Every QEMU gate
+  passed, including Chocolate Doom, so reproduce the desktop double-click
+  launch under QEMU first (test-desktop-apps.py launches apps differently).
+  Disassemble 0x113084 in `sw/userspace/supervisor/build/m68k/
+  astra_supervisor.elf` (the `.image.elf` printed nothing).
+- The A/B so far: `635131e4` (soft) gen 495-500, gaps 538-550 per 30 s;
+  `e7f15c72` measured nothing (supervisor dead). The board is back on
+  `635131e4` (working Doom); switch with `/data/ab-run.sh RELEASE`.
+- `docs/CHOCOLATE_QUAKE_PORT.md` (agent-drafted plan, memory corrected: the
+  board runs `-m 512M`). `CLAUDE.md`'s stale "128 MB" fixed.
