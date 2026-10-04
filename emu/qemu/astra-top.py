@@ -28,6 +28,7 @@ A/B scripts.
 """
 
 import argparse
+import bisect
 import json
 import math
 import mmap
@@ -131,10 +132,15 @@ def host_threads():
 
 
 def vcpu_thread():
-    for (comm, tid, name), _ in host_threads().items():
-        if comm.startswith("qemu-system-m68") and "TCG" in name:
+    """The vCPU thread: named "CPU 0/TCG" when QEMU names its threads,
+    otherwise the QEMU thread that has used the most CPU."""
+    qemu = [(ticks, name, tid)
+            for (comm, tid, name), (ticks, _) in host_threads().items()
+            if comm.startswith("qemu-system-m68")]
+    for _, name, tid in qemu:
+        if "TCG" in name:
             return tid
-    return None
+    return max(qemu)[2] if qemu else None
 
 
 def audio_counters():
@@ -233,6 +239,44 @@ def pointer_report(commits, sent, wall):
     return report
 
 
+def elf_functions(path):
+    """(address, size, name) of every function in an ELF64 little-endian
+    file's .symtab, sorted: enough to name a perf sample in a binary perf
+    itself will not resolve."""
+    with open(path, "rb") as handle:
+        data = handle.read()
+    if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+        return []
+    shoff, = struct.unpack_from("<Q", data, 0x28)
+    shentsize, shnum = struct.unpack_from("<HH", data, 0x3A)
+    sections = [struct.unpack_from("<IIQQQQIIQQ", data, shoff + i * shentsize)
+                for i in range(shnum)]
+    functions = []
+    for (_name, kind, _flags, _addr, offset, size, link, _info, _align,
+         entsize) in sections:
+        if kind != 2 or entsize == 0:      # SHT_SYMTAB
+            continue
+        strings = sections[link][4]
+        for at in range(offset, offset + size, entsize):
+            name, info, _other, _shndx, value, length = \
+                struct.unpack_from("<IBBHQQ", data, at)
+            if info & 0xF == 2 and value:  # STT_FUNC
+                end = data.index(b"\0", strings + name)
+                functions.append((value, length, data[strings + name:end]
+                                  .decode("utf-8", "replace")))
+    functions.sort()
+    return functions
+
+
+def name_address(functions, address):
+    index = bisect.bisect_right(functions, (address, float("inf"), "")) - 1
+    if index >= 0:
+        start, length, name = functions[index]
+        if address < start + max(length, 1):
+            return name
+    return None
+
+
 def run_perf(tid, seconds, out):
     perf = "/var/lib/astra/tools/perf"
     if not os.access(perf, os.X_OK):
@@ -249,14 +293,32 @@ def run_perf(tid, seconds, out):
             [perf, "report", "-i", data.name, "--no-children",
              "--sort", "dso,symbol", "--stdio"],
             capture_output=True, text=True)
-        rows = []
+        try:
+            functions = elf_functions(os.readlink("/proc/%d/exe" % tid))
+        except (OSError, ValueError, struct.error):
+            functions = []
+        totals = {}
         for line in report.stdout.splitlines():
             parts = line.split()
-            if len(parts) >= 3 and parts[0].endswith("%"):
-                rows.append({"percent": float(parts[0][:-1]),
-                             "dso": parts[1],
-                             "symbol": " ".join(parts[2:]).lstrip("[.k] ")})
-        out["rows"] = rows
+            if len(parts) < 3 or not parts[0].endswith("%"):
+                continue
+            percent, dso = float(parts[0][:-1]), parts[1]
+            if dso == "[JIT]":
+                symbol = "(translated guest code)"
+            else:
+                symbol = None
+                for word in parts[2:]:
+                    if word.startswith("0x"):
+                        symbol = name_address(functions, int(word, 16))
+                        break
+                if symbol is None:
+                    symbol = " ".join(w for w in parts[2:]
+                                      if w not in ("[.]", "[k]", "-"))
+            key = (dso, symbol)
+            totals[key] = totals.get(key, 0.0) + percent
+        out["rows"] = [{"percent": percent, "dso": dso, "symbol": symbol}
+                       for (dso, symbol), percent in
+                       sorted(totals.items(), key=lambda item: -item[1])]
 
 
 def delta32(after, before):
@@ -394,12 +456,14 @@ def show(result, top):
             row["pid"], row["priority"], row["cpu"], row["runs_per_s"],
             row["syscalls_per_s"], row["resident_kib"], row["name"],
             " (stopped)" if row["suspended"] else ""))
-    print("\n  %-16s %-20s %6s %4s" % ("HOST", "THREAD", "CPU%", "CORE"))
+    print("\n  %-16s %-20s %8s %6s %4s" % ("HOST", "THREAD", "TID", "CPU%",
+                                          "CORE"))
     for row in result["host_threads"][:top]:
         if row["cpu"] < 0.5:
             break
-        print("  %-16s %-20s %6.1f %4d" % (row["process"], row["thread"],
-                                           row["cpu"], row["on_cpu"]))
+        print("  %-16s %-20s %8d %6.1f %4d" % (
+            row["process"], row["thread"], row["tid"], row["cpu"],
+            row["on_cpu"]))
     perf = result.get("perf")
     if perf is not None:
         print("\nvCPU thread hot spots (host perf)")

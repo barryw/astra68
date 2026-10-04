@@ -75,4 +75,14 @@ assert pointer["gaps_over_50ms"] == 1
 assert abs(pointer["gap_ms_max"] - 66.6) < 1e-6
 assert abs(pointer["gap_ms_p50"] - 16.7) < 1e-6
 assert "gap_ms_max" not in top.pointer_report([1.0], 0, 1.0)
+# The symbol reader names an address in this Python's own binary, which is
+# an ELF with a symbol table on the Linux hosts that run it.
+if sys.platform.startswith("linux"):
+    functions = top.elf_functions(sys.executable)
+    if functions:
+        start, _, name = functions[len(functions) // 2]
+        assert top.name_address(functions, start) == name
+        assert top.name_address(functions, 0) is None
+assert top.name_address([(0x100, 0x10, "f")], 0x10f) == "f"
+assert top.name_address([(0x100, 0x10, "f")], 0x110) is None
 print("astra-top: PASS")
