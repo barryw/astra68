@@ -2703,6 +2703,12 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
             (void)astra_log_failure("service definition directory",
                                     create_status);
     }
+    /*
+     * Before the boot services, so one granted PROC: receives it. Nothing
+     * here waits on PROC: -- a service reports ready before it reads -- so
+     * a read made during boot is answered once the watch loop runs.
+     */
+    proc_tree_start();
     for (uint32_t index = 1u; index < manifest->count; ++index) {
         const SupervisorManifestEntry *entry = &manifest->entries[index];
         AstraServiceDefinition *service = &definition_scratch[0];
@@ -2782,7 +2788,6 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
             cursor = next;
         }
     }
-    proc_tree_start();
     /*
      * These receivers are services implemented by this process, so their
      * senders are provider-owned state.  Retaining them keeps idle services

@@ -362,6 +362,9 @@ SCRIPT = [
     ("renice -n 1 999999; print ASTRA-RENICE-MISSING-$?",
      "ASTRA-RENICE-MISSING-1"),
     ("ls /proc/$$/", "ctl"),
+    # The sampler service copies PROC: to WORK: for the host's astra-top.
+    ("ls /proc/; ls /work/.astra/; print ASTRA-SAMPLE-$?",
+     ("scheduler", "sample", "ASTRA-SAMPLE-0")),
     ("print priority 13 > /proc/$$/ctl; print ASTRA-CTL-$?; "
      "while read -r l; do [[ $l == 'priority 13' ]] && print ASTRA-CTL-PRI; "
      "done < /proc/$$/status",
