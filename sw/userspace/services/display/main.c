@@ -230,6 +230,11 @@ typedef struct DisplayState {
     uint8_t launch_pending;
     uint8_t swallow_pointer_up;
     uint8_t pending_input_valid;
+    /* The input service's shared pointer position (Haiku's shared cursor):
+       motion is sampled from it once a frame and before every input event,
+       never delivered one message per mouse report. */
+    const volatile AstraInputPointerState *shared_pointer;
+    uint32_t shared_pointer_sequence;
     uint32_t pending_input_window;
     AstraGuiWindowEvent pending_input;
     /* Open GUI sessions, waited on after the windows. Every session and
@@ -4347,7 +4352,9 @@ static void receive_command(uint32_t device, uint32_t irq,
             (void)astra_close(handles[index]);
 }
 
-static uint32_t connect_input(uint32_t service, uint32_t *receive_out)
+static uint32_t connect_input(
+    uint32_t service, uint32_t *receive_out,
+    const volatile AstraInputPointerState **pointer_out)
 {
     AstraInputConnect request = {0};
     AstraInputConnected reply = {0};
@@ -4355,7 +4362,11 @@ static uint32_t connect_input(uint32_t service, uint32_t *receive_out)
     uint32_t event_send = 0u;
     uint32_t reply_receive = 0u;
     uint32_t reply_send = 0u;
-    uint32_t handles[2];
+    uint32_t pointer_area = 0u;
+    uint32_t pointer_send = 0u;
+    void *pointer = NULL;
+    uint32_t pointer_bytes = 0u;
+    uint32_t handles[3];
     uint32_t size = 0u;
     uint32_t handle_count = 0u;
     uint32_t status;
@@ -4370,19 +4381,38 @@ static uint32_t connect_input(uint32_t service, uint32_t *receive_out)
                                   &reply_receive, &reply_send);
     if (status != ASTRA_SYSCALL_OK)
         goto done;
+    status = astra_rt_area_create(
+        sizeof(AstraInputPointerState),
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+            ASTRA_RIGHT_TRANSFER,
+        &pointer_area);
+    if (status == ASTRA_SYSCALL_OK)
+        status = astra_rt_area_map(pointer_area, ASTRA_AREA_MAP_READ,
+                                   &pointer, &pointer_bytes);
+    if (status == ASTRA_SYSCALL_OK)
+        status = astra_rt_handle_duplicate(
+            pointer_area,
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+                ASTRA_RIGHT_TRANSFER,
+            &pointer_send);
+    if (status != ASTRA_SYSCALL_OK)
+        goto done;
     astra_message_header_set(&request.header, sizeof(request),
                              ASTRA_INPUT_SERVICE_PROTOCOL,
                              ASTRA_INPUT_SERVICE_VERSION,
                              ASTRA_INPUT_OPERATION_CONNECT, 1u);
     request.subscriptions = ASTRA_INPUT_SUBSCRIBE_ALL;
-    request.flags = ASTRA_INPUT_CONNECT_SEAT_OWNER;
+    request.flags = ASTRA_INPUT_CONNECT_SEAT_OWNER |
+                    ASTRA_INPUT_CONNECT_SHARED_POINTER;
     handles[0] = event_send;
     handles[1] = reply_send;
-    status = astra_port_send(service, &request, sizeof(request), handles, 2u);
+    handles[2] = pointer_send;
+    status = astra_port_send(service, &request, sizeof(request), handles, 3u);
     if (status != ASTRA_SYSCALL_OK)
         goto done;
     event_send = 0u;
     reply_send = 0u;
+    pointer_send = 0u;
     status = astra_wait_one(reply_receive, ASTRA_DEADLINE_FOREVER, NULL);
     if (status != ASTRA_SYSCALL_OK)
         goto done;
@@ -4405,7 +4435,11 @@ static uint32_t connect_input(uint32_t service, uint32_t *receive_out)
         goto done;
     }
     *receive_out = event_receive;
+    *pointer_out = pointer;
     event_receive = 0u;
+    pointer = NULL;
+    /* ponytail: the area handle lives as long as the display does. */
+    pointer_area = 0u;
 
 done:
     if (event_receive != 0u)
@@ -4416,6 +4450,12 @@ done:
         (void)astra_close(reply_receive);
     if (reply_send != 0u)
         (void)astra_close(reply_send);
+    if (pointer_send != 0u)
+        (void)astra_close(pointer_send);
+    if (pointer != NULL)
+        (void)astra_rt_area_unmap(pointer);
+    if (pointer_area != 0u)
+        (void)astra_close(pointer_area);
     return status;
 }
 
@@ -4451,6 +4491,33 @@ static uint32_t receive_input(uint32_t receive,
 /* Apply every input event already queued, then present the resulting state
  * once.  Pointer motion is absolute, so replaying intermediate frames only
  * adds latency; button, key, and text events still retain queue order. */
+/* The pointer's newest position, when it moved since the display last
+   looked, handled as one motion however many reports it took. */
+static uint32_t sample_pointer(DisplayState *state, uint32_t *effects,
+                               uint32_t *frame_window,
+                               uint32_t *frame_timestamp)
+{
+    AstraInputPointerState now;
+    AstraLogicalInputEvent motion = {
+        .size = sizeof(motion),
+        .version = ASTRA_INPUT_SERVICE_VERSION,
+        .type = ASTRA_INPUT_EVENT_POINTER_MOTION,
+    };
+
+    /* A window still owes room for an event: motion waits its turn. */
+    if (state->shared_pointer == NULL || state->pending_input_valid != 0u ||
+        astra_input_pointer_read(state->shared_pointer, &now) ==
+            state->shared_pointer_sequence)
+        return ASTRA_STATUS_OK;
+    state->shared_pointer_sequence = now.sequence;
+    motion.timestamp_ms = now.timestamp_ms;
+    motion.modifiers = now.modifiers;
+    motion.value_x = now.x;
+    motion.value_y = now.y;
+    return handle_pointer(state, &motion, effects, frame_window,
+                          frame_timestamp);
+}
+
 static uint32_t drain_input(uint32_t receive, DisplayState *state,
                             uint32_t *effects, uint32_t *frame_window,
                             uint32_t *frame_timestamp)
@@ -4461,6 +4528,12 @@ static uint32_t drain_input(uint32_t receive, DisplayState *state,
 
         if (status == ASTRA_SYSCALL_WOULD_BLOCK)
             return ASTRA_STATUS_OK;
+        if (status != ASTRA_STATUS_OK)
+            return status;
+        /* The input service published where the pointer is before it sent
+           this: a click lands there, not where the last frame saw it. */
+        status = sample_pointer(state, effects, frame_window,
+                                frame_timestamp);
         if (status != ASTRA_STATUS_OK)
             return status;
         status = handle_pointer(state, &event, effects, frame_window,
@@ -4595,7 +4668,8 @@ static void serve_windows(uint32_t device, uint32_t irq,
                           uint32_t vblank_irq,
                           AstraDmaBufferInfo *framebuffer,
                           AstraDmaBufferInfo *pointer_buffer,
-                          uint32_t gui_receive, uint32_t input_receive)
+                          uint32_t gui_receive, uint32_t input_receive,
+                          const volatile AstraInputPointerState *pointer)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     DisplayState state = {
@@ -4604,6 +4678,7 @@ static void serve_windows(uint32_t device, uint32_t irq,
             { 0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u }
         },
         .loaded_pointer_shape = ASTRA_POINTER_SHAPE_DEFAULT,
+        .shared_pointer = pointer,
     };
     uint32_t next_fence = 1u;
     uint32_t cursor_fence = UINT32_C(0x80000001);
@@ -4639,12 +4714,20 @@ static void serve_windows(uint32_t device, uint32_t irq,
                          &cursor_fence, &armed);
         else if (selected == 1u && state.pending_input_valid != 0u) {
             retry_pending_input(&state);
-        } else if (selected == 1u) {
+        } else if (selected == 1u || selected == 2u) {
             uint32_t effects = 0u;
             uint32_t frame_window = 0u;
             uint32_t frame_timestamp = 0u;
-            status = drain_input(input_receive, &state, &effects,
-                                 &frame_window, &frame_timestamp);
+
+            /* Input events as they come; pointer motion once a frame. */
+            if (selected == 2u &&
+                dispatch_vblank(vblank_irq, &state) != ASTRA_STATUS_OK)
+                astra_process_exit(DISPLAY_FAIL_IRQ);
+            status = selected == 1u ?
+                drain_input(input_receive, &state, &effects, &frame_window,
+                            &frame_timestamp) :
+                sample_pointer(&state, &effects, &frame_window,
+                               &frame_timestamp);
             if (status != ASTRA_STATUS_OK)
                 astra_process_exit(DISPLAY_FAIL_PROTOCOL);
             if ((effects & DISPLAY_POINTER_CURSOR) != 0u) {
@@ -4678,9 +4761,6 @@ static void serve_windows(uint32_t device, uint32_t irq,
                     (effects & DISPLAY_POINTER_RESIZE) != 0u)
                     resize_event(&state.windows[index], frame_timestamp);
             }
-        } else if (selected == 2u) {
-            if (dispatch_vblank(vblank_irq, &state) != ASTRA_STATUS_OK)
-                astra_process_exit(DISPLAY_FAIL_IRQ);
         } else {
             uint32_t window_index = display_window_wait_index(
                 selected, state.count);
@@ -4714,6 +4794,7 @@ int astra_main(const AstraStartupInfo *startup)
     uint32_t gui_receive = 0u;
     uint32_t gui_send = 0u;
     uint32_t input_receive = 0u;
+    const volatile AstraInputPointerState *shared_pointer = NULL;
     uint32_t status;
 
     if (!astra_startup_validate(startup) ||
@@ -4737,7 +4818,8 @@ int astra_main(const AstraStartupInfo *startup)
         status = astra_dma_create(ASTRA_DISPLAY_CURSOR_IMAGE_BYTES,
                                   &pointer_buffer);
     if (status == ASTRA_SYSCALL_OK)
-        status = connect_input(input_service->handle, &input_receive);
+        status = connect_input(input_service->handle, &input_receive,
+                               &shared_pointer);
     if (status == ASTRA_SYSCALL_OK)
         status = astra_rt_port_create(4u, 4u * ASTRA_GUI_OPEN_WINDOW_SIZE,
                                    &gui_receive, &gui_send);
@@ -4760,6 +4842,7 @@ int astra_main(const AstraStartupInfo *startup)
         return (int)status;
     }
     serve_windows(device->handle, irq->handle, vblank_irq->handle,
-                  &framebuffer, &pointer_buffer, gui_receive, input_receive);
+                  &framebuffer, &pointer_buffer, gui_receive, input_receive,
+                  shared_pointer);
     return ASTRA_STATUS_OK;
 }

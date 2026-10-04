@@ -558,6 +558,51 @@ static void test_port_protocol_adapter(void)
            ASTRA_INPUT_DELIVERY_DEAD);
 }
 
+/* A shared-pointer client gets motion as a published position, never as
+   a message; other events still travel as messages. */
+static void test_shared_pointer_sink(void)
+{
+    AstraInputPointerState shared = {0};
+    AstraInputPointerState copy = {0};
+    AstraLogicalInputEvent event = {
+        .size = sizeof(event),
+        .version = ASTRA_INPUT_SERVICE_VERSION,
+        .type = ASTRA_INPUT_EVENT_POINTER_MOTION,
+        .timestamp_ms = 40u,
+        .modifiers = ASTRA_INPUT_MOD_LEFT_SHIFT,
+        .value_x = 321,
+        .value_y = 123,
+    };
+    TestPort port = {
+        .result = ASTRA_INPUT_PORT_SEND_OK,
+        .wait_result = ASTRA_INPUT_PORT_SEND_OK,
+    };
+    AstraInputPortSink sink = {
+        .send = port_send,
+        .wait = port_wait,
+        .context = &port,
+        .send_handle = 42u,
+        .pointer = &shared,
+    };
+
+    assert(astra_input_pointer_read(&shared, &copy) == 0u);
+    for (int32_t step = 0; step < 3; ++step) {
+        event.value_x = 321 + step;
+        assert(astra_input_port_deliver(&sink, &event) ==
+               ASTRA_INPUT_DELIVERY_OK);
+    }
+    assert(port.sends == 0u);
+    assert(astra_input_pointer_read(&shared, &copy) == 6u &&
+           copy.x == 323 && copy.y == 123 && copy.timestamp_ms == 40u &&
+           copy.modifiers == ASTRA_INPUT_MOD_LEFT_SHIFT);
+    event.type = ASTRA_INPUT_EVENT_POINTER_BUTTON;
+    assert(astra_input_port_deliver(&sink, &event) ==
+           ASTRA_INPUT_DELIVERY_OK);
+    assert(port.sends == 1u &&
+           port.message.event.type == ASTRA_INPUT_EVENT_POINTER_BUTTON);
+    assert(astra_input_pointer_read(&shared, &copy) == 6u);
+}
+
 int main(void)
 {
     test_keymap_modifiers_and_repeat();
@@ -573,6 +618,7 @@ int main(void)
     test_client_limits_and_death();
     test_unfocused_client_gets_loss_retry();
     test_port_protocol_adapter();
+    test_shared_pointer_sink();
     puts("input service core tests passed");
     return 0;
 }

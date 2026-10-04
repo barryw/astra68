@@ -17,7 +17,9 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <linux/futex.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -288,7 +290,8 @@ static struct {
 /* Writes the pointer plane from one posted cursor word
    (ASTRA_DISPLAY_HOST_CURSOR_PACK) and commits it. The commit is issued,
    not awaited, and no frame waits for it: the plane latches it at the next
-   scan, and the next pointer change waits in wait_pointer_ready. */
+   scan, and the next pointer change waits in wait_pointer_ready. The
+   caller holds pointer_lock. */
 static int pointer_update(const struct astra_graphics_device *device,
                           uint32_t word)
 {
@@ -322,49 +325,13 @@ static int pointer_update(const struct astra_graphics_device *device,
 }
 
 /*
- * The posted cursor the hardware cannot take yet. The pointer latches one
- * commit per scanned frame, so a second move in a frame cannot be written
- * until the next scan. Waiting for it would hold up every request behind it;
- * the cursor is a latest-value state instead, so the newest word is kept
- * here and committed as soon as the hardware is ready
- * (pointer_apply_deferred, from the request loop).
+ * The cursor has a thread of its own (cursor_loop), as app_server's cursor
+ * loop does in Haiku, so a move never waits behind a render or a scene
+ * commit and none waits behind it. This lock is held for every pointer
+ * register sequence, by that thread and by the request loop (images, the
+ * panic reset).
  */
-static struct {
-    bool pending;
-    uint32_t word;
-} deferred_pointer;
-
-static bool pointer_ready_now(const struct astra_graphics_device *device)
-{
-    const uint32_t ready = ASTRA_POINTER_STATUS_WRITE_READY |
-                           ASTRA_POINTER_STATUS_COMMIT_READY;
-
-    return (astra_mmio_read(device, ASTRA_REG_POINTER_STATUS) & ready) ==
-           ready;
-}
-
-static int pointer_move(const struct astra_graphics_device *device,
-                        uint32_t word)
-{
-    if (!pointer_ready_now(device)) {
-        deferred_pointer.pending = true;
-        deferred_pointer.word = word;
-        return 0;
-    }
-    deferred_pointer.pending = false;
-    return pointer_update(device, word);
-}
-
-/* Commits a deferred move once the hardware takes it; with @p wait, before
-   a pointer change that must follow it. */
-static int pointer_apply_deferred(const struct astra_graphics_device *device,
-                                  bool wait)
-{
-    if (!deferred_pointer.pending || (!wait && !pointer_ready_now(device)))
-        return 0;
-    deferred_pointer.pending = false;
-    return pointer_update(device, deferred_pointer.word);
-}
+static pthread_mutex_t pointer_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static bool pointer_image_valid(const volatile uint8_t *bytes,
                                 uint32_t byte_size)
@@ -386,18 +353,21 @@ static int pointer_image_update(const struct astra_graphics_device *device,
                                 const volatile uint8_t *bytes)
 {
     uint32_t generation;
+    int status = -1;
 
-    if (pointer_apply_deferred(device, true) != 0 ||
-        wait_pointer_ready(device) != 0)
-        return -1;
-    astra_mmio_write(device, ASTRA_REG_POINTER_IMAGE_SELECTOR, 0u);
-    for (uint32_t at = 0u; at < ASTRA_DISPLAY_CURSOR_IMAGE_PIXELS; ++at)
-        astra_mmio_write(device, ASTRA_REG_POINTER_IMAGE_DATA,
-                         load_be32(bytes + 16u + at * 4u));
-    astra_mmio_write(device, ASTRA_REG_POINTER_HOTSPOT,
-                     load_be32(bytes + 8u));
-    pointer_shape = ASTRA_POINTER_SHAPE_CUSTOM;
-    return pointer_commit_begin(device, &generation, true);
+    (void)pthread_mutex_lock(&pointer_lock);
+    if (wait_pointer_ready(device) == 0) {
+        astra_mmio_write(device, ASTRA_REG_POINTER_IMAGE_SELECTOR, 0u);
+        for (uint32_t at = 0u; at < ASTRA_DISPLAY_CURSOR_IMAGE_PIXELS; ++at)
+            astra_mmio_write(device, ASTRA_REG_POINTER_IMAGE_DATA,
+                             load_be32(bytes + 16u + at * 4u));
+        astra_mmio_write(device, ASTRA_REG_POINTER_HOTSPOT,
+                         load_be32(bytes + 8u));
+        pointer_shape = ASTRA_POINTER_SHAPE_CUSTOM;
+        status = pointer_commit_begin(device, &generation, true);
+    }
+    (void)pthread_mutex_unlock(&pointer_lock);
+    return status;
 }
 
 struct terminal_cursor {
@@ -1101,7 +1071,7 @@ static bool mailbox_take(volatile const AstraDisplayMailbox *mailbox,
 
     astra_graphics_memory_barrier();
     if (mailbox->magic != ASTRA_DISPLAY_MAILBOX_MAGIC ||
-        mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_8 ||
+        mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_9 ||
         sequence == 0u || sequence == previous_sequence)
         return false;
     request->sequence = sequence;
@@ -1136,7 +1106,7 @@ static bool mailbox_cursor_take(volatile const AstraDisplayMailbox *mailbox,
 
     if (sequence == *seen ||
         mailbox->magic != ASTRA_DISPLAY_MAILBOX_MAGIC ||
-        mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_8)
+        mailbox->version != ASTRA_DISPLAY_MAILBOX_VERSION_1_9)
         return false;
     astra_graphics_memory_barrier();
     *word = mailbox->cursor;
@@ -1144,34 +1114,155 @@ static bool mailbox_cursor_take(volatile const AstraDisplayMailbox *mailbox,
     return ASTRA_DISPLAY_HOST_CURSOR_VALID(*word);
 }
 
-/* Waits for the next request or posted cursor; with @p bounded, for at most
-   a millisecond, so a deferred pointer move is committed soon after the
-   hardware is ready. The emulator changes wake_sequence after either, and
-   it is read before the checks, so a change between them is not slept
-   through. */
-static int mailbox_wait(volatile AstraDisplayMailbox *mailbox,
-                        uint32_t sequence, uint32_t cursor_seen,
-                        bool bounded)
+/*
+ * The panel's scanout timing, for the emulator's vblank (AstraDisplayScanout).
+ * One read of the line counter is a phase: lines % height is how far into
+ * the active scan the panel is, and a vertical blank began when it was zero.
+ * Two reads a second or more apart are a rate, and so the frame period. The
+ * blank's lines are not counted, so the phase is early by at most the blank
+ * (about 0.7 ms of a 16.7 ms frame), the same every frame.
+ */
+enum {
+    SCANOUT_PUBLISH_NS = 500000000u,
+    SCANOUT_RATE_MIN_NS = 1000000000u,
+    SCANOUT_RATE_MAX_NS = 10000000000u
+};
+
+static struct {
+    uint64_t base_ns;
+    uint32_t base_lines;
+    uint64_t published_ns;
+} scanout_clock;
+
+/* The vblank at or before @p now and the frame period, from the line
+   counter at @p now and at an earlier base. */
+static void scanout_timing(uint64_t now, uint32_t lines, uint64_t base_ns,
+                           uint32_t base_lines, uint64_t *vblank_ns,
+                           uint64_t *period_ns)
 {
-    static const struct timespec pointer_poll = { 0, 1000000 };
+    uint64_t period = (now - base_ns) * ASTRA_FRAMEBUFFER_HEIGHT /
+                      (uint32_t)(lines - base_lines);
+
+    *period_ns = period;
+    *vblank_ns = now - (uint64_t)(lines % ASTRA_FRAMEBUFFER_HEIGHT) *
+                           period / ASTRA_FRAMEBUFFER_HEIGHT;
+}
+
+static void publish_scanout(const struct astra_graphics_device *device,
+                            volatile AstraDisplayMailbox *mailbox)
+{
+    volatile AstraDisplayScanout *scanout = (volatile AstraDisplayScanout *)
+        ((volatile uint8_t *)mailbox + ASTRA_DISPLAY_SCANOUT_OFFSET);
+    uint64_t now = astra_monotonic_nanoseconds();
+    uint32_t lines;
+    uint64_t vblank;
+    uint64_t period;
+    uint32_t sequence;
+
+    if (now - scanout_clock.published_ns < SCANOUT_PUBLISH_NS)
+        return;
+    scanout_clock.published_ns = now;
+    lines = astra_mmio_read(device, ASTRA_REG_SCANOUT_LINES_BUILT);
+    if (scanout_clock.base_ns == 0u || lines == scanout_clock.base_lines ||
+        now - scanout_clock.base_ns > SCANOUT_RATE_MAX_NS) {
+        scanout_clock.base_ns = now;
+        scanout_clock.base_lines = lines;
+        return;
+    }
+    if (now - scanout_clock.base_ns < SCANOUT_RATE_MIN_NS)
+        return;
+    scanout_timing(now, lines, scanout_clock.base_ns, scanout_clock.base_lines,
+                   &vblank, &period);
+    sequence = scanout->sequence;
+    scanout->sequence = sequence + 1u;
+    astra_graphics_memory_barrier();
+    scanout->vblank_ns = vblank;
+    scanout->period_ns = period;
+    astra_graphics_memory_barrier();
+    scanout->sequence = sequence + 2u;
+}
+
+/* Waits for the next request, for at most half a second. The emulator
+   changes wake_sequence after every request, and it is read before the
+   check, so a change between them is not slept through. */
+static int mailbox_wait(volatile AstraDisplayMailbox *mailbox,
+                        uint32_t sequence)
+{
+    /* Long enough to cost nothing, short enough that the scanout timing
+       is republished while the display is idle. */
+    static const struct timespec idle_poll = { 0, 500000000 };
 
     while (running) {
         uint32_t wake = mailbox->wake_sequence;
 
         astra_graphics_memory_barrier();
-        if (mailbox->request_sequence != sequence ||
-            mailbox->cursor_sequence != cursor_seen)
+        if (mailbox->request_sequence != sequence)
             return 0;
         if (syscall(SYS_futex, &mailbox->wake_sequence,
-                    FUTEX_WAIT, wake, bounded ? &pointer_poll : NULL,
-                    NULL, 0) == 0 ||
+                    FUTEX_WAIT, wake, &idle_poll, NULL, 0) == 0 ||
             errno == EAGAIN || errno == EINTR)
             continue;
-        if (bounded && errno == ETIMEDOUT)
+        if (errno == ETIMEDOUT)
             return 0;
         return -1;
     }
     return 0;
+}
+
+/* Waits for a posted cursor newer than @p seen; the emulator wakes
+   cursor_sequence after every one. A timeout lets the thread see `running`
+   fall. */
+static int cursor_wait(volatile AstraDisplayMailbox *mailbox, uint32_t seen)
+{
+    static const struct timespec idle_poll = { 0, 500000000 };
+
+    while (running && mailbox->cursor_sequence == seen) {
+        if (syscall(SYS_futex, &mailbox->cursor_sequence, FUTEX_WAIT, seen,
+                    &idle_poll, NULL, 0) == 0 ||
+            errno == EAGAIN || errno == EINTR || errno == ETIMEDOUT)
+            continue;
+        return -1;
+    }
+    return 0;
+}
+
+struct cursor_loop_context {
+    const struct astra_graphics_device *device;
+    volatile AstraDisplayMailbox *mailbox;
+};
+
+/*
+ * The cursor thread. It sleeps until a cursor is posted, waits for the
+ * pointer plane to take a commit -- one a scanned frame -- and then commits
+ * the newest word, not the one that woke it: a burst of moves in one frame
+ * is one commit, and every frame shows where the pointer is.
+ */
+static void *cursor_loop(void *opaque)
+{
+    const struct cursor_loop_context *context = opaque;
+    uint32_t seen = 0u;
+    uint32_t word = 0u;
+
+    while (running) {
+        if (cursor_wait(context->mailbox, seen) != 0)
+            break;
+        if (!running)
+            break;
+        (void)pthread_mutex_lock(&pointer_lock);
+        /* The newest word once the plane is ready; one the emulator did
+           not write as a cursor is passed over, not retried. */
+        if (wait_pointer_ready(context->device) == 0) {
+            uint32_t sequence = context->mailbox->cursor_sequence;
+
+            if (!mailbox_cursor_take(context->mailbox, &seen, &word))
+                seen = sequence;
+            else if (pointer_update(context->device, word) != 0)
+                fprintf(stderr,
+                        "astra-terminal-display: cursor commit failed\n");
+        }
+        (void)pthread_mutex_unlock(&pointer_lock);
+    }
+    return NULL;
 }
 
 static const uint16_t cp437_unicode[128] = {
@@ -1907,6 +1998,30 @@ static int self_test(void)
                             &layout) == 0)
         return EXIT_FAILURE;
 
+    /* The panel at exactly 60 Hz: two seconds are 120 frames of lines, and
+       a read 540 lines into a frame is half a frame after its vblank. */
+    {
+        uint64_t vblank = 0u;
+        uint64_t period = 0u;
+        const uint64_t base = UINT64_C(5000000000);
+        const uint32_t base_lines = UINT32_MAX - 1000u;
+
+        scanout_timing(base + UINT64_C(2000000000),
+                       base_lines + 120u * ASTRA_FRAMEBUFFER_HEIGHT,
+                       base, base_lines, &vblank, &period);
+        if (period != UINT64_C(16666666) ||
+            (base_lines + 120u * ASTRA_FRAMEBUFFER_HEIGHT) %
+                    ASTRA_FRAMEBUFFER_HEIGHT * period /
+                    ASTRA_FRAMEBUFFER_HEIGHT !=
+                base + UINT64_C(2000000000) - vblank)
+            return EXIT_FAILURE;
+        scanout_timing(base + UINT64_C(1000000000),
+                       60u * ASTRA_FRAMEBUFFER_HEIGHT + 540u,
+                       base, 0u, &vblank, &period);
+        if (base + UINT64_C(1000000000) - vblank != period * 540u / 1080u)
+            return EXIT_FAILURE;
+    }
+
     if (TEXT_FONT_WIDTH != ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH ||
         TEXT_FONT_HEIGHT != ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT ||
         cell_x(1u) - cell_x(0u) != ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH)
@@ -2053,7 +2168,7 @@ static int self_test(void)
 
     (void)memset(&mailbox, 0, sizeof(mailbox));
     mailbox.magic = ASTRA_DISPLAY_MAILBOX_MAGIC;
-    mailbox.version = ASTRA_DISPLAY_MAILBOX_VERSION_1_8;
+    mailbox.version = ASTRA_DISPLAY_MAILBOX_VERSION_1_9;
     mailbox.request_id = 7u;
     mailbox.operation = ASTRA_DISPLAY_FRAME_PRESENT_SOLID;
     mailbox.color_rgb565 = 0x135du;
@@ -2084,8 +2199,8 @@ static int self_test(void)
         return EXIT_FAILURE;
     (void)memset((void *)shared, 0, sizeof(*shared));
     shared->magic = ASTRA_DISPLAY_MAILBOX_MAGIC;
-    shared->version = ASTRA_DISPLAY_MAILBOX_VERSION_1_8;
-    /* A posted cursor ends the wait as a request does, and is taken once. */
+    shared->version = ASTRA_DISPLAY_MAILBOX_VERSION_1_9;
+    /* A posted cursor wakes the cursor loop, and is taken once. */
     child = fork();
     if (child == 0) {
         const struct timespec delay = { .tv_sec = 0, .tv_nsec = 2000000 };
@@ -2094,8 +2209,7 @@ static int self_test(void)
         shared->cursor = ASTRA_DISPLAY_HOST_CURSOR_PACK(
             ASTRA_DISPLAY_WIDTH - 1u, 7u, ASTRA_DISPLAY_CURSOR_VISIBLE);
         shared->cursor_sequence = 1u;
-        shared->wake_sequence = 1u;
-        (void)syscall(SYS_futex, &shared->wake_sequence,
+        (void)syscall(SYS_futex, &shared->cursor_sequence,
                       FUTEX_WAKE, 1, NULL, NULL, 0);
         _exit(EXIT_SUCCESS);
     }
@@ -2108,7 +2222,7 @@ static int self_test(void)
         uint32_t seen = 0u;
         uint32_t word = 0u;
 
-        if (mailbox_wait(shared, 0u, 0u, false) != 0 ||
+        if (cursor_wait(shared, 0u) != 0 ||
             astra_monotonic_nanoseconds() - wait_started >=
                 UINT64_C(10000000) ||
             waitpid(child, &child_status, 0) != child ||
@@ -2147,7 +2261,7 @@ static int self_test(void)
         return EXIT_FAILURE;
     }
     wait_started = astra_monotonic_nanoseconds();
-    if (mailbox_wait(shared, 0u, 2u, false) != 0 ||
+    if (mailbox_wait(shared, 0u) != 0 ||
         astra_monotonic_nanoseconds() - wait_started >= UINT64_C(10000000) ||
         waitpid(child, &child_status, 0) != child ||
         !WIFEXITED(child_status) || WEXITSTATUS(child_status) != EXIT_SUCCESS ||
@@ -2534,8 +2648,9 @@ int main(int argc, char **argv)
     uint32_t active_window_scene_offset = 0u;
     uint32_t active_window_scene_bytes = 0u;
     uint32_t mailbox_sequence = 0u;
-    uint32_t cursor_sequence = 0u;
-    uint32_t cursor_word = 0u;
+    struct cursor_loop_context cursor_context;
+    pthread_t cursor_thread;
+    bool cursor_thread_started = false;
     bool display_owned = false;
 
     if (argc == 2 && strcmp(argv[1], "--self-test") == 0)
@@ -2600,7 +2715,7 @@ int main(int argc, char **argv)
     if (payload == MAP_FAILED)
         goto done;
     mailbox->magic = ASTRA_DISPLAY_MAILBOX_MAGIC;
-    mailbox->version = ASTRA_DISPLAY_MAILBOX_VERSION_1_8;
+    mailbox->version = ASTRA_DISPLAY_MAILBOX_VERSION_1_9;
     mailbox->completion_sequence = 0u;
     astra_graphics_memory_barrier();
     if (astra_graphics_device_open(&device, false) != 0 ||
@@ -2648,6 +2763,14 @@ int main(int argc, char **argv)
         perror("install terminal display signal handler");
         goto done;
     }
+    cursor_context.device = &device;
+    cursor_context.mailbox = mailbox;
+    if (pthread_create(&cursor_thread, NULL, cursor_loop,
+                       &cursor_context) != 0) {
+        fprintf(stderr, "astra-terminal-display: cannot start cursor loop\n");
+        goto done;
+    }
+    cursor_thread_started = true;
     printf("ASTRA_TERMINAL_DISPLAY READY columns=%u rows=%u origin=0,0 "
            "size=%u,%u cursor=underline\n",
            TEXT_COLUMNS, TEXT_ROWS, ASTRA_FRAMEBUFFER_WIDTH,
@@ -2848,15 +2971,15 @@ int main(int argc, char **argv)
                        request.frame_bytes == 0u) {
                 const struct terminal_cursor panic_cursor = {0};
 
-                deferred_pointer.pending = false;
+                int pointer_status;
 
-                if (copy_cells(current, plane) &&
-                    pointer_update(&device,
-                                   ASTRA_DISPLAY_HOST_CURSOR_PACK(
-                                       0u, 0u,
-                                       ASTRA_DISPLAY_CURSOR_SHAPE(
-                                           ASTRA_POINTER_SHAPE_DEFAULT))) ==
-                        0 &&
+                (void)pthread_mutex_lock(&pointer_lock);
+                pointer_status = pointer_update(
+                    &device, ASTRA_DISPLAY_HOST_CURSOR_PACK(
+                                 0u, 0u, ASTRA_DISPLAY_CURSOR_SHAPE(
+                                             ASTRA_POINTER_SHAPE_DEFAULT)));
+                (void)pthread_mutex_unlock(&pointer_lock);
+                if (copy_cells(current, plane) && pointer_status == 0 &&
                     present_text_on_both_scanouts(
                         &device, current, &panic_cursor, false, text_states,
                         &text_generation, &active_scanout) == 0 &&
@@ -2874,15 +2997,9 @@ int main(int argc, char **argv)
             }
             mailbox_complete(mailbox, &request, status, generation);
         }
-        /* The posted cursor: the newest word replaces any still deferred. */
-        if (mailbox_cursor_take(mailbox, &cursor_sequence, &cursor_word) &&
-            pointer_move(&device, cursor_word) != 0)
-            goto done;
-        if (pointer_apply_deferred(&device, false) != 0)
-            goto done;
+        publish_scanout(&device, mailbox);
         if (display_owned) {
-            if (mailbox_wait(mailbox, mailbox_sequence, cursor_sequence,
-                             deferred_pointer.pending) != 0)
+            if (mailbox_wait(mailbox, mailbox_sequence) != 0)
                 goto done;
             continue;
         }
@@ -2935,6 +3052,12 @@ int main(int argc, char **argv)
     result = EXIT_SUCCESS;
 
 done:
+    if (cursor_thread_started) {
+        running = 0;
+        (void)syscall(SYS_futex, &mailbox->cursor_sequence, FUTEX_WAKE,
+                      INT_MAX, NULL, NULL, 0);
+        (void)pthread_join(cursor_thread, NULL);
+    }
     astra_graphics_device_close(&device);
     if (plane != MAP_FAILED)
         (void)munmap((void *)plane, TEXT_PAGE_BYTES);

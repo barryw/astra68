@@ -55,6 +55,16 @@ uint32_t astra_rt_area_create(uint32_t byte_size, uint32_t rights,
     return ASTRA_SYSCALL_OUT_OF_MEMORY;
 }
 
+uint32_t astra_rt_handle_duplicate(uint32_t handle, uint32_t rights,
+                                   uint32_t *duplicate)
+{
+    (void)handle;
+    (void)rights;
+    (void)duplicate;
+    assert(!"the display duplicates handles only when it connects");
+    return ASTRA_SYSCALL_INVALID_ARGUMENT;
+}
+
 uint32_t astra_rt_area_map(uint32_t handle, uint32_t permissions,
                            void **address, uint32_t *byte_size)
 {
@@ -2433,6 +2443,43 @@ int main(void)
     assert(frame_window == 4u && frame_timestamp == 100u);
     state.capture_window = 0u;
     state.capture_region = HIT_NONE;
+    {
+        /* Shared pointer: sampled, not delivered. Many reports between two
+           looks are one motion; an event is preceded by the newest one. */
+        AstraInputPointerState shared = {0};
+
+        state.shared_pointer = &shared;
+        effects = 0u;
+        assert(sample_pointer(&state, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK &&
+               effects == 0u);
+        for (int32_t step = 0; step < 8; ++step)
+            astra_input_pointer_publish(&shared, 600 + step, 500, 0u, 150u);
+        assert(sample_pointer(&state, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(state.pointer_x == 607 && state.pointer_y == 500 &&
+               (effects & DISPLAY_POINTER_CURSOR) != 0u);
+        effects = 0u;
+        assert(sample_pointer(&state, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK &&
+               effects == 0u);
+        astra_input_pointer_publish(&shared, 640, 520, 0u, 151u);
+        motion.type = ASTRA_INPUT_EVENT_FOCUS;
+        astra_message_header_set(
+            &input_messages[0].header, sizeof(AstraInputEventMessage),
+            ASTRA_INPUT_SERVICE_PROTOCOL, ASTRA_INPUT_SERVICE_VERSION,
+            ASTRA_INPUT_OPERATION_EVENT, 3u);
+        input_messages[0].event = motion;
+        input_message_count = 1u;
+        input_message_index = 0u;
+        assert(drain_input(0x600u, &state, &effects, &frame_window,
+                           &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(input_message_index == 1u && state.pointer_x == 640 &&
+               state.pointer_y == 520);
+        motion.type = ASTRA_INPUT_EVENT_POINTER_MOTION;
+        state.shared_pointer = NULL;
+        state.shared_pointer_sequence = 0u;
+    }
     pointer_event(&state.windows[3], &theme,
                   ASTRA_WINDOW_EVENT_POINTER_MOTION, 0u, 77u,
                   180, 190, 0u, 2u,

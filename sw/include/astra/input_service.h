@@ -51,6 +51,17 @@
      ASTRA_INPUT_SUBSCRIBE_TEXT | ASTRA_INPUT_SUBSCRIBE_FOCUS)
 
 #define ASTRA_INPUT_CONNECT_SEAT_OWNER (UINT32_C(1) << 0)
+/*
+ * Shared pointer position, Haiku's shared cursor (input_server's
+ * fCursorBuffer). CONNECT carries a third handle, an area of at least
+ * sizeof(AstraInputPointerState) with READ, WRITE and MAP rights. The service
+ * publishes every pointer motion there instead of sending it, and the
+ * client samples it when it is ready -- the display once a frame -- so a
+ * mouse reporting at 1000 Hz wakes the client no more often than it looks.
+ * Buttons and keys still arrive as events, after the position they happen
+ * at is published.
+ */
+#define ASTRA_INPUT_CONNECT_SHARED_POINTER (UINT32_C(1) << 1)
 
 typedef struct AstraLogicalInputEvent {
     uint16_t size;
@@ -88,11 +99,63 @@ typedef struct AstraInputConnected {
     uint32_t generation;
 } AstraInputConnected;
 
+/*
+ * The newest pointer position, written only by the input service. sequence
+ * is odd while a write is in progress and advances by two per position; a
+ * reader that is preempted by the writer sees it change and reads again.
+ */
+typedef struct AstraInputPointerState {
+    uint32_t sequence;
+    int32_t x;
+    int32_t y;
+    uint32_t modifiers;
+    uint32_t timestamp_ms;
+    uint32_t reserved[3];
+} AstraInputPointerState;
+
+static inline void astra_input_pointer_publish(
+    volatile AstraInputPointerState *state, int32_t x, int32_t y,
+    uint32_t modifiers, uint32_t timestamp_ms)
+{
+    uint32_t sequence = state->sequence;
+
+    state->sequence = sequence + 1u;
+    __asm__ __volatile__("" ::: "memory");
+    state->x = x;
+    state->y = y;
+    state->modifiers = modifiers;
+    state->timestamp_ms = timestamp_ms;
+    __asm__ __volatile__("" ::: "memory");
+    state->sequence = sequence + 2u;
+}
+
+/* A consistent copy, and its sequence; 0 never names a position. */
+static inline uint32_t astra_input_pointer_read(
+    const volatile AstraInputPointerState *state,
+    AstraInputPointerState *copy)
+{
+    uint32_t sequence;
+
+    do {
+        sequence = state->sequence;
+        __asm__ __volatile__("" ::: "memory");
+        copy->x = state->x;
+        copy->y = state->y;
+        copy->modifiers = state->modifiers;
+        copy->timestamp_ms = state->timestamp_ms;
+        __asm__ __volatile__("" ::: "memory");
+    } while ((sequence & 1u) != 0u || sequence != state->sequence);
+    copy->sequence = sequence;
+    return sequence;
+}
+
 _Static_assert(sizeof(AstraInputEventMessage) ==
                    ASTRA_MESSAGE_HEADER_SIZE + ASTRA_INPUT_EVENT_SIZE,
                "input event message ABI size changed");
 _Static_assert(sizeof(AstraInputConnect) == 32u,
                "input connect message ABI changed");
+_Static_assert(sizeof(AstraInputPointerState) == 32u,
+               "shared pointer state ABI changed");
 _Static_assert(sizeof(AstraInputConnected) == 36u,
                "input connected message ABI changed");
 

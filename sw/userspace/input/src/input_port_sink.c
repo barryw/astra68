@@ -12,6 +12,13 @@ AstraInputDeliveryResult astra_input_port_deliver(
     if (sink == NULL || sink->send == NULL || sink->send_handle == 0u ||
         event == NULL)
         return ASTRA_INPUT_DELIVERY_DEAD;
+    if (sink->pointer != NULL &&
+        event->type == ASTRA_INPUT_EVENT_POINTER_MOTION) {
+        astra_input_pointer_publish(sink->pointer, event->value_x,
+                                    event->value_y, event->modifiers,
+                                    event->timestamp_ms);
+        return ASTRA_INPUT_DELIVERY_OK;
+    }
     astra_message_header_set(&message.header, sizeof(message),
                              ASTRA_INPUT_SERVICE_PROTOCOL,
                              ASTRA_INPUT_SERVICE_VERSION,

@@ -61,6 +61,8 @@ def main():
                         help="register whose values each --probe records")
     parser.add_argument("--pointer-hz", type=float, default=0.0,
                         help="pointer motion events a second during the span")
+    parser.add_argument("--pointer-center", default="640,360",
+                        help="X,Y screen centre of the pointer's circle")
     arguments = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="astra-bench-frame-") as work:
         image = os.path.join(work, "bench.img")
@@ -119,7 +121,9 @@ def main():
             stop = threading.Event()
             mover = threading.Thread(target=move_pointer,
                                      args=(machine, arguments.pointer_hz,
-                                           stop))
+                                           stop, tuple(int(v) for v in
+                                           arguments.pointer_center.split(
+                                               ","))))
             start = time.monotonic()
             if arguments.pointer_hz > 0:
                 mover.start()
@@ -148,15 +152,15 @@ def main():
                 view.close()
 
 
-def move_pointer(machine, hz, stop):
-    """Absolute motion, in screen pixels, around the middle until STOP."""
+def move_pointer(machine, hz, stop, center):
+    """Absolute motion, in screen pixels, around CENTER until STOP."""
     period = 1.0 / hz
     due = time.monotonic()
     step = 0
     while not stop.is_set():
         angle = step * 0.05
-        machine.point(int(640 + 300 * math.cos(angle)),
-                      int(360 + 200 * math.sin(angle)))
+        machine.qmp.point(int(center[0] + 60 * math.cos(angle)),
+                          int(center[1] + 40 * math.sin(angle)))
         step += 1
         due += period
         delay = due - time.monotonic()

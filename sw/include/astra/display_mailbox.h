@@ -24,10 +24,16 @@
 /* 1.8: the cursor is a posted latest-value slot beside the request, written
    from Vesta's DISPLAY_CURSOR register: cursor holds the newest
    ASTRA_DISPLAY_HOST_CURSOR_PACK word and cursor_sequence counts the writes.
-   It never occupies the request and is never completed. wake_sequence
-   changes after every request and every cursor write, and is the one word
-   the helper futex-waits on, so neither kind of change can be missed. */
-#define ASTRA_DISPLAY_MAILBOX_VERSION_1_8 UINT32_C(0x00010008)
+   It never occupies the request and is never completed. The helper's
+   request loop futex-waits on wake_sequence, changed after every request;
+   its cursor loop, a thread of its own, on cursor_sequence. */
+/* 1.9: the panel's real scanout timing (AstraDisplayScanout), published by
+   the helper beside the record, so the emulator's vblank is the panel's --
+   as a KMS vblank event is the CRTC's, not a timer's. Before it, QEMU's
+   vblank was a free-running 60 Hz timer that drifted through the panel's
+   60.08 Hz about five frames a minute, and anything paced by it (the
+   cursor, SDL's vsync) hitched on the panel as often. */
+#define ASTRA_DISPLAY_MAILBOX_VERSION_1_9 UINT32_C(0x00010009)
 
 /* Host-native shared record between QEMU and the Linux display helper. */
 typedef struct AstraDisplayMailbox {
@@ -51,6 +57,26 @@ typedef struct AstraDisplayMailbox {
 
 _Static_assert(sizeof(AstraDisplayMailbox) == 64u,
                "display mailbox header must remain one cache line");
+
+/*
+ * At ASTRA_DISPLAY_SCANOUT_OFFSET in the header mapping, written only by
+ * the helper. vblank_ns is a CLOCK_MONOTONIC instant at which a vertical
+ * blank began and period_ns the measured frame period, so every later
+ * vblank is vblank_ns + k * period_ns. sequence is odd while it is written;
+ * zero means no panel has been measured.
+ */
+#define ASTRA_DISPLAY_SCANOUT_OFFSET 64u
+typedef struct AstraDisplayScanout {
+    uint32_t sequence;
+    uint32_t reserved;
+    uint64_t vblank_ns;
+    uint64_t period_ns;
+} AstraDisplayScanout;
+
+_Static_assert(ASTRA_DISPLAY_SCANOUT_OFFSET >= sizeof(AstraDisplayMailbox) &&
+                   ASTRA_DISPLAY_SCANOUT_OFFSET + sizeof(AstraDisplayScanout) <=
+                       ASTRA_DISPLAY_MAILBOX_HEADER_BYTES,
+               "display scanout record must sit after the mailbox");
 _Static_assert(ASTRA_RENDER_BATCH_MAX_BYTES <=
                    ASTRA_DISPLAY_MAILBOX_PAYLOAD_BYTES &&
                ASTRA_DISPLAY_MAILBOX_FRAME_BYTES <=

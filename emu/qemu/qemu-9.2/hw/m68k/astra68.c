@@ -332,7 +332,15 @@ typedef struct AstraInputState {
     uint16_t pointer_sequence;
     uint32_t host_generation;
     uint32_t dropped;
+    /* Motion records absorbed by an unread one on the same axis. */
+    uint64_t coalesced;
     bool overflow;
+    /* The frame has released the queued motion: interrupt for it. */
+    bool motion_released;
+    /* Half a frame after vblank, so the motion is consumed and published
+       before the display samples the pointer at the next one: every frame
+       sees the newest position, never a race with the vblank. */
+    QEMUTimer *motion_timer;
     QemuInputHandlerState *handler;
 } AstraInputState;
 
@@ -859,8 +867,8 @@ static void astra_display_service(void *opaque)
         s, status, qatomic_read(&display->mailbox->completion_generation));
 }
 
-/* Rings the helper after a request or a cursor: wake_sequence is the one
-   word it sleeps on, so it is changed after whatever it announces. */
+/* Rings the helper's request loop: wake_sequence is the word it sleeps on,
+   so it is changed after whatever it announces. */
 static void astra_display_wake_helper(AstraDisplayState *display)
 {
     display->wake_sequence += 1u;
@@ -874,7 +882,8 @@ static void astra_display_wake_helper(AstraDisplayState *display)
  * DISPLAY_CURSOR: the posted cursor. It replaces the newest position and
  * flags and is done -- no request slot, no completion, no interrupt -- so a
  * moving pointer never waits behind rendering, nor rendering behind it. The
- * helper commits the newest word when the pointer hardware next takes one.
+ * helper's cursor loop, a thread of its own, commits the newest word when
+ * the pointer hardware next takes one.
  * A word naming no valid cursor is ignored.
  */
 static void astra_display_post_cursor(Astra68State *s, uint32_t value)
@@ -894,12 +903,15 @@ static void astra_display_post_cursor(Astra68State *s, uint32_t value)
     display->cursor_sequence += 1u;
     qatomic_set(&display->mailbox->magic, ASTRA_DISPLAY_MAILBOX_MAGIC);
     qatomic_set(&display->mailbox->version,
-                ASTRA_DISPLAY_MAILBOX_VERSION_1_8);
+                ASTRA_DISPLAY_MAILBOX_VERSION_1_9);
     qatomic_set(&display->mailbox->cursor, value);
     smp_wmb();
     qatomic_set(&display->mailbox->cursor_sequence,
                 display->cursor_sequence);
-    astra_display_wake_helper(display);
+#ifdef CONFIG_LINUX
+    /* The helper's cursor loop sleeps on cursor_sequence itself. */
+    qemu_futex_wake((void *)&display->mailbox->cursor_sequence, 1);
+#endif
 }
 
 static void astra_display_submit(Astra68State *s)
@@ -957,7 +969,7 @@ static void astra_display_submit(Astra68State *s)
                         1u : display->mailbox_sequence + 1u);
         qatomic_set(&display->mailbox->magic, ASTRA_DISPLAY_MAILBOX_MAGIC);
         qatomic_set(&display->mailbox->version,
-                    ASTRA_DISPLAY_MAILBOX_VERSION_1_8);
+                    ASTRA_DISPLAY_MAILBOX_VERSION_1_9);
         qatomic_set(&display->mailbox->request_id, display->request_id);
         qatomic_set(&display->mailbox->operation, operation);
         qatomic_set(&display->mailbox->color_rgb565,
@@ -1084,7 +1096,7 @@ static void astra_display_panic_text(Astra68State *s)
                     1u : display->mailbox_sequence + 1u);
     qatomic_set(&display->mailbox->magic, ASTRA_DISPLAY_MAILBOX_MAGIC);
     qatomic_set(&display->mailbox->version,
-                ASTRA_DISPLAY_MAILBOX_VERSION_1_8);
+                ASTRA_DISPLAY_MAILBOX_VERSION_1_9);
     qatomic_set(&display->mailbox->request_id, UINT32_MAX);
     qatomic_set(&display->mailbox->operation, ASTRA_DISPLAY_PANIC_TEXT);
     qatomic_set(&display->mailbox->color_rgb565, 0u);
@@ -1108,13 +1120,80 @@ static uint32_t astra_input_status(const AstraInputState *input)
            (input->overflow ? ASTRA_INPUT_STATUS_OVERFLOW : 0);
 }
 
+/*
+ * Pointer motion is a latest value, as a mouse's counters are (the Amiga's
+ * JOYxDAT, read once a frame) and as Haiku's shared cursor is: a motion
+ * record nobody has read yet absorbs the next one on its axis -- deltas
+ * add, positions replace -- and a queue that holds only motion interrupts
+ * once a frame (astra_vblank). Buttons and keys interrupt at once, behind
+ * the motion queued before them. A mouse reporting at 1000 Hz then costs
+ * the machine one input wake-up a frame, not a thousand.
+ */
+static bool astra_input_is_motion(uint32_t header)
+{
+    uint32_t kind = (header >> 16) & 0xffu;
+
+    return (header >> 24) == ASTRA_INPUT_CLASS_POINTER &&
+           (kind == ASTRA_INPUT_POINTER_RELATIVE ||
+            kind == ASTRA_INPUT_POINTER_ABSOLUTE);
+}
+
+/* The head record is never merged into: the guest may be reading it. */
+static bool astra_input_coalesce(AstraInputState *input, uint32_t header,
+                                 uint32_t value, uint32_t device_sequence)
+{
+    uint8_t at = input->tail;
+
+    while (at != input->head) {
+        AstraInputEvent *event;
+
+        at = (at - 1u) & ASTRA_INPUT_QUEUE_MASK;
+        event = &input->queue[at];
+        if (at == input->head || !astra_input_is_motion(event->header))
+            return false;
+        if (event->header == header &&
+            (event->device_sequence >> 16) == (device_sequence >> 16)) {
+            event->value = ((header >> 16) & 0xffu) ==
+                               ASTRA_INPUT_POINTER_RELATIVE ?
+                (uint32_t)((int32_t)event->value + (int32_t)value) : value;
+            event->timestamp_ms = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL);
+            event->device_sequence = device_sequence;
+            ++input->coalesced;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Interrupt for anything but motion at once, and for motion once the frame
+   has released it. */
+static bool astra_input_irq_due(const AstraInputState *input)
+{
+    for (uint8_t at = input->head; at != input->tail;
+         at = (at + 1u) & ASTRA_INPUT_QUEUE_MASK)
+        if (input->motion_released ||
+            !astra_input_is_motion(input->queue[at].header))
+            return true;
+    return false;
+}
+
 static bool astra_input_push(Astra68State *s, uint8_t event_class,
                              uint8_t kind, uint16_t flags, uint32_t value,
                              uint16_t device, uint16_t *sequence)
 {
     AstraInputState *input = &s->input;
     uint8_t next = (input->tail + 1u) & ASTRA_INPUT_QUEUE_MASK;
+    uint32_t header = ((uint32_t)event_class << 24) |
+                      ((uint32_t)kind << 16) | flags;
     AstraInputEvent *event;
+
+    if (astra_input_is_motion(header) &&
+        astra_input_coalesce(input, header, value,
+                             (uint32_t)device << 16 |
+                                 (uint16_t)(*sequence + 1u))) {
+        ++*sequence;
+        return true;
+    }
 
     if (next == input->head) {
         input->overflow = true;
@@ -1124,8 +1203,7 @@ static bool astra_input_push(Astra68State *s, uint8_t event_class,
     }
     ++*sequence;
     event = &input->queue[input->tail];
-    event->header = ((uint32_t)event_class << 24) |
-                    ((uint32_t)kind << 16) | flags;
+    event->header = header;
     event->value = value;
     event->timestamp_ms = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL);
     event->device_sequence = (uint32_t)device << 16 | *sequence;
@@ -4989,7 +5067,7 @@ static uint32_t astra_pending_raw(Astra68State *s)
          (OHCI_ASTRA_IRQ | OHCI_ASTRA_DMA_FAULT)) != 0) {
         pending |= 1u << IRQ_SOURCE_USB;
     }
-    if (astra_input_level(&s->input) != 0) {
+    if (astra_input_irq_due(&s->input)) {
         pending |= 1u << IRQ_SOURCE_INPUT;
     }
     if (astra_block_present(s) &&
@@ -5061,15 +5139,69 @@ static void astra_timer_expired(void *opaque)
     astra_update_irq(s);
 }
 
-static void astra_vblank(void *opaque)
+static void astra_input_release_motion(void *opaque)
 {
     Astra68State *s = opaque;
 
+    if (astra_input_level(&s->input) != 0) {
+        s->input.motion_released = true;
+        astra_update_irq(s);
+    }
+}
+
+/*
+ * The time to the next vblank and the frame period. With a display helper
+ * that has measured the panel (AstraDisplayScanout), that is the panel's
+ * own vblank; otherwise a 60 Hz frame of the emulator's clock.
+ */
+static void astra_next_vblank(Astra68State *s, int64_t *delay_ns,
+                              int64_t *period_ns)
+{
+    const AstraDisplayScanout *scanout;
+    uint64_t vblank;
+    uint64_t period;
+    uint32_t sequence;
+    uint64_t now;
+
+    *delay_ns = NANOSECONDS_PER_SECOND / 60;
+    *period_ns = *delay_ns;
+    if (s->display.mailbox == NULL)
+        return;
+    scanout = (const AstraDisplayScanout *)
+        ((const uint8_t *)s->display.mailbox + ASTRA_DISPLAY_SCANOUT_OFFSET);
+    sequence = qatomic_read(&scanout->sequence);
+    smp_rmb();
+    vblank = qatomic_read(&scanout->vblank_ns);
+    period = qatomic_read(&scanout->period_ns);
+    smp_rmb();
+    if (sequence == 0u || (sequence & 1u) != 0u ||
+        sequence != qatomic_read(&scanout->sequence) ||
+        period < NANOSECONDS_PER_SECOND / 240 ||
+        period > NANOSECONDS_PER_SECOND / 24)
+        return;
+    /* QEMU_CLOCK_REALTIME is the helper's CLOCK_MONOTONIC. Aim a little
+       past the boundary so a late timer never fires a frame twice. */
+    now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    if (vblank <= now)
+        vblank += ((now - vblank) / period + 1u) * period;
+    if (vblank - now < period / 4u)
+        vblank += period;
+    *delay_ns = (int64_t)(vblank - now);
+    *period_ns = (int64_t)period;
+}
+
+static void astra_vblank(void *opaque)
+{
+    Astra68State *s = opaque;
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    int64_t delay;
+    int64_t period;
+
     s->vega.frame_counter++;
     s->vega.irq_status |= VEGA_IRQ_VBLANK;
-    timer_mod_ns(s->vega.vblank_timer,
-                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                 NANOSECONDS_PER_SECOND / 60);
+    astra_next_vblank(s, &delay, &period);
+    timer_mod_ns(s->input.motion_timer, now + period / 2);
+    timer_mod_ns(s->vega.vblank_timer, now + delay);
     astra_update_irq(s);
 }
 
@@ -5469,6 +5601,9 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
         if ((value & ASTRA_INPUT_POP_EVENT) != 0 &&
             astra_input_level(&s->input) != 0) {
             s->input.head = (s->input.head + 1u) & ASTRA_INPUT_QUEUE_MASK;
+            /* Drained: motion queued from now on waits for the next frame. */
+            if (astra_input_level(&s->input) == 0)
+                s->input.motion_released = false;
         }
         if ((value & ASTRA_INPUT_ACK_OVERFLOW) != 0) {
             s->input.overflow = false;
@@ -6135,6 +6270,7 @@ static void astra_machine_reset(void *opaque)
     s->input.keyboard_sequence = 0;
     s->input.pointer_sequence = 0;
     s->input.overflow = false;
+    s->input.motion_released = false;
     s->input.dropped = 0;
     ++s->input.host_generation;
 
@@ -6424,6 +6560,10 @@ static void astra68_init(MachineState *machine)
                                    &s->display.cursor_visible,
                                    OBJ_PROP_FLAG_READ);
     object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-input-coalesced",
+                                   &s->input.coalesced,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
                                    "astra-display-cursor-updates",
                                    &s->display.cursor_updates,
                                    OBJ_PROP_FLAG_READ);
@@ -6613,6 +6753,8 @@ static void astra68_init(MachineState *machine)
                                                &s->timers[i]);
     }
     s->vega.vblank_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, astra_vblank, s);
+    s->input.motion_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                         astra_input_release_motion, s);
     s->ohci.sof_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, astra_ohci_sof, s);
     s->display.service_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL_RT,
                                              astra_display_service, s);

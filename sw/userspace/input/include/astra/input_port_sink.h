@@ -1,6 +1,7 @@
 #ifndef ASTRA_INPUT_PORT_SINK_H
 #define ASTRA_INPUT_PORT_SINK_H
 
+#include <astra/input_service.h>
 #include <astra/input_service_core.h>
 
 #include <stdint.h>
@@ -25,6 +26,9 @@ typedef struct AstraInputPortSink {
     void *context;
     uint32_t send_handle;
     uint32_t lossless;
+    /* ASTRA_INPUT_CONNECT_SHARED_POINTER: where motion is published. */
+    volatile AstraInputPointerState *pointer;
+    uint32_t pointer_area;
 } AstraInputPortSink;
 
 AstraInputDeliveryResult astra_input_port_deliver(

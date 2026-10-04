@@ -70,14 +70,43 @@ static int client_active(const AstraInputService *service, uint32_t id)
     return 0;
 }
 
+static void release_sink(AstraInputPortSink *sink)
+{
+    if (sink->pointer != NULL)
+        (void)astra_rt_area_unmap((void *)sink->pointer);
+    if (sink->pointer_area != 0u)
+        (void)astra_close(sink->pointer_area);
+    if (sink->send_handle != 0u)
+        (void)astra_close(sink->send_handle);
+    *sink = (AstraInputPortSink){0};
+}
+
+/* The client's shared pointer area, mapped for writing. */
+static uint32_t map_pointer(uint32_t area,
+                            volatile AstraInputPointerState **pointer)
+{
+    void *address = NULL;
+    uint32_t bytes = 0u;
+    uint32_t status = astra_rt_area_map(
+        area, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE, &address, &bytes);
+
+    if (status != ASTRA_SYSCALL_OK)
+        return ASTRA_STATUS_ACCESS;
+    if (bytes < sizeof(AstraInputPointerState)) {
+        (void)astra_rt_area_unmap(address);
+        return ASTRA_STATUS_PROTOCOL;
+    }
+    *pointer = address;
+    return ASTRA_STATUS_OK;
+}
+
 static void reap_clients(AstraInputService *service,
                          AstraInputPortSink sinks[ASTRA_INPUT_CLIENT_MAX])
 {
     for (uint32_t index = 0u; index < ASTRA_INPUT_CLIENT_MAX; ++index) {
         if (sinks[index].send_handle != 0u &&
             !client_active(service, index + 1u)) {
-            (void)astra_close(sinks[index].send_handle);
-            sinks[index] = (AstraInputPortSink){0};
+            release_sink(&sinks[index]);
         }
     }
 }
@@ -121,7 +150,9 @@ static void accept_client(
 
     if (status != ASTRA_SYSCALL_OK)
         return;
-    status = size == sizeof(request) && count == 2u &&
+    status = size == sizeof(request) &&
+             count == ((request.flags & ASTRA_INPUT_CONNECT_SHARED_POINTER) !=
+                       0u ? 3u : 2u) &&
              request.header.total_size == sizeof(request) &&
              request.header.header_size == ASTRA_MESSAGE_HEADER_SIZE &&
              request.header.flags == 0u &&
@@ -132,7 +163,8 @@ static void accept_client(
              request.header.transaction_id != 0u &&
              request.subscriptions != 0u &&
              (request.subscriptions & ~ASTRA_INPUT_SUBSCRIBE_ALL) == 0u &&
-             (request.flags & ~ASTRA_INPUT_CONNECT_SEAT_OWNER) == 0u ?
+             (request.flags & ~(ASTRA_INPUT_CONNECT_SEAT_OWNER |
+                                ASTRA_INPUT_CONNECT_SHARED_POINTER)) == 0u ?
              ASTRA_STATUS_OK : ASTRA_STATUS_PROTOCOL;
     if (status == ASTRA_STATUS_OK &&
         (request.flags & ASTRA_INPUT_CONNECT_SEAT_OWNER) == 0u &&
@@ -165,20 +197,31 @@ static void accept_client(
         sink->send_handle = handles[0];
         sink->lossless =
             (request.flags & ASTRA_INPUT_CONNECT_SEAT_OWNER) != 0u;
-        if (!astra_input_service_attach(service, client_id,
+        if ((request.flags & ASTRA_INPUT_CONNECT_SHARED_POINTER) != 0u) {
+            status = map_pointer(handles[2], &sink->pointer);
+            if (status == ASTRA_STATUS_OK) {
+                sink->pointer_area = handles[2];
+                handles[2] = 0u;
+            }
+        }
+        if (status != ASTRA_STATUS_OK) {
+            handles[0] = 0u;
+            release_sink(sink);
+        } else if (!astra_input_service_attach(service, client_id,
                                         astra_input_port_deliver, sink) ||
             !astra_input_service_subscribe(service, client_id,
                                            request.subscriptions, 0u) ||
             ((request.flags & ASTRA_INPUT_CONNECT_SEAT_OWNER) != 0u &&
              !astra_input_service_set_focus(service, client_id, 0u))) {
             (void)astra_input_service_detach(service, client_id);
-            *sink = (AstraInputPortSink){0};
+            handles[0] = 0u;
+            release_sink(sink);
             status = ASTRA_STATUS_LIMIT;
         } else {
             handles[0] = 0u;
         }
     }
-    if (count == 2u)
+    if (count >= 2u)
         connected_reply(
             handles[1], request.header.transaction_id, status, client_id,
             status == ASTRA_STATUS_OK ?
