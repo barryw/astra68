@@ -66,6 +66,32 @@ refresh and authority for additional permitted drives; hardcoding more mount
 names in Terminal or implementing discovery separately in POSIX is not the
 general device layer.
 
+### Change notifications
+
+Use the existing bounded native message ports and wait primitives, following
+the input/pointer observer pattern (`ndk/include/astra/port.h`, `pointer.h`,
+and `sw/include/astra/input_service.h`). The device/mount authority owns the
+subscription and publishes versioned, typed messages for drive attachment,
+removal, media insertion/ejection, and mount-state changes. Subscribers select
+the changes they need and receive only their authorized view. This is the
+same native IPC mechanism used by other services; POSIX exposes adapters.
+
+Subscription must establish an initial snapshot and its sequence without a
+gap in which a change can be missed. Messages identify the stable device,
+drive root, sequence, and media/mount generation. Commit the authoritative
+state and fence retired handles before publishing the change, so a receiver
+can immediately query the new state. An existing Terminal or file manager
+updates its namespace/view from these messages instead of waiting for a new
+process or polling directory listings.
+
+Queues remain bounded. Lost/coalesced changes require an explicit resync
+notification and a fresh snapshot; a slow/dead subscriber cannot stall device
+removal or consume unbounded storage. Generation checks still reject I/O
+that races with removal, even before the notification is handled. Service
+restart invalidates its subscription generation and requires reconnection.
+The current EVENTS filesystem is rendered diagnostic history, not this live
+state subscription; applications must not parse log text for device state.
+
 Qualify the full sequence with two drives: attach both empty, insert different
 supported discs, eject/reinsert one without changing its `/cdN`, then unplug
 it without renumbering the other. Reusing a filename on the second disc must
