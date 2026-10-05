@@ -50,7 +50,7 @@ assert astra_image.PCM_CERTIFY_STARTUP_MANIFEST == \
     astra_image.DISPLAY_STARTUP_MANIFEST + \
     "application /services/pcm-certify grants PCM LIBS:r\n"
 assert "media" in astra_image.DISPLAY_SERVICES
-assert "service /services/media grants HOST_DEVICE serves PCM priority=24\n" in \
+assert "service /services/media grants HOST_DEVICE serves PCM priority=16\n" in \
     astra_image.DISPLAY_STARTUP_MANIFEST
 assert "NETWORK NETWORK_LISTEN NTP PCM required priority=20\n" in \
     astra_image.DISPLAY_STARTUP_MANIFEST
@@ -234,7 +234,7 @@ assert display_startup.endswith(" critical priority=20")
 assert desktop_startup.endswith(" required priority=20")
 assert [line for line in startup
         if line.startswith("service /services/media ")] == \
-    ["service /services/media grants HOST_DEVICE serves PCM priority=24"]
+    ["service /services/media grants HOST_DEVICE serves PCM priority=16"]
 assert startup[1] == \
     "service /services/posixd grants serves POSIX_PROCESS required priority=20"
 assert startup[2] == \

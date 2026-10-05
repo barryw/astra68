@@ -89,7 +89,10 @@
  * ::ASTRA_PROCESS_PRIORITY_MIN to the higher of
  * ::ASTRA_PROCESS_PRIORITY_APPLICATION_MAX and the priority it was launched
  * at. Only a launcher can place a child above the application band
- * (::AstraLaunchArguments.priority).
+ * (::AstraLaunchArguments.priority). A process holding an open audio stream
+ * (%audio_stream.h) may also place its threads up to
+ * ::ASTRA_PROCESS_PRIORITY_MEDIA: the thread that feeds the stream has the
+ * audio's deadline, as Haiku runs a BSoundPlayer thread at urgent priority.
  */
 /** Lowest scheduler priority a thread may hold; larger values run first. */
 #define ASTRA_PROCESS_PRIORITY_MIN 1u

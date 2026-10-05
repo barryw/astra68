@@ -41,6 +41,18 @@ static AstraResult play(AstraHandle service)
 
     if (result != ASTRA_OK)
         return result;
+    /* The stream lets this thread run in the media band, so a busy program
+       cannot make it late. Its deadline is the audio's. */
+    {
+        uint32_t self = 0u;
+        uint32_t status = astra_current_thread_handle(&self);
+
+        if (status == ASTRA_SYSCALL_OK)
+            status = astra_thread_priority(self, ASTRA_PROCESS_PRIORITY_MEDIA,
+                                           0);
+        if (status != ASTRA_SYSCALL_OK)
+            result = astra_result_from_syscall(status);
+    }
     for (uint32_t played = 0u; played < PLAYED && result == ASTRA_OK;
          ++played) {
         fill(astra_pcm_buffers_get(&buffers), &phase);

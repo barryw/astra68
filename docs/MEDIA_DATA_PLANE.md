@@ -177,12 +177,18 @@ media service: open/close, capability, policy, health -- not per buffer
   `GetDeviceBuf` is the shared buffer (SDL mixes in place), `PlayDevice`
   queues it, `WaitDevice` waits. Without streams (a host with no mailbox)
   SDL falls back to the media service's voice.
-- **Not yet:** the clock record (the design's seqlock of frames played):
-  nothing needs it while buffers return when copied; per-stream gain and
-  pause from the media service (streams play at unity); the SDL audio
-  thread's priority -- SDL asks for TIME_CRITICAL with SCHED_OTHER, which
-  Astra's sched_get_priority_max refuses, so the thread keeps the app's
-  priority today.
+- **Priority** (kernel `thread_priority_ceiling`): an open audio stream is
+  the authority for the media band. While a process holds one it may place
+  its threads up to `ASTRA_PROCESS_PRIORITY_MEDIA` (24); applications
+  otherwise stop at 19. SDL's audio thread goes there in the backend's
+  `ThreadInit` (SDL's own TIME_CRITICAL request goes through SCHED_OTHER,
+  which means nothing on Astra). The media service, off the data path,
+  returns to 16.
+- **Left out, on purpose:** the clock record (the design's seqlock of
+  frames played) -- buffers return when copied, and no client asks where
+  the output is; per-stream gain and pause -- no client sets either; a
+  SCHED_FIFO feed thread in the daemon -- motion gaps are already 0 on the
+  board. Each is for when something needs it.
 
 ### Deleted
 

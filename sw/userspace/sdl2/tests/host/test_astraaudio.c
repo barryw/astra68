@@ -137,6 +137,20 @@ static uint64_t group_deadline;
 
 uint64_t astra_clock_monotonic(void) { return 1000u; }
 static uint32_t logged_failures;
+static uint32_t priority_thread, priority_set;
+uint32_t astra_current_thread_handle(uint32_t *thread)
+{
+    *thread = 77u;
+    return ASTRA_SYSCALL_OK;
+}
+uint32_t astra_thread_priority(uint32_t handle, uint32_t priority,
+                               uint32_t *previous)
+{
+    (void)previous;
+    priority_thread = handle;
+    priority_set = priority;
+    return ASTRA_SYSCALL_OK;
+}
 uint32_t astra_log_failure(const char *operation, uint32_t status)
 {
     (void)operation;
@@ -276,6 +290,10 @@ int main(void)
            group_format == ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_U8, 1u,
                                             22050u));
     assert(device.hidden->mixbuf == NULL);
+    /* The audio thread joins the media band once it owns a stream. */
+    driver.ThreadInit(&device);
+    assert(priority_thread == 77u &&
+           priority_set == ASTRA_PROCESS_PRIORITY_MEDIA && logged_failures == 0u);
     assert(driver.GetDeviceBuf(&device) == group_memory);
     driver.PlayDevice(&device);
     assert(group_queued == 1u && received_frames == 0u);

@@ -8593,7 +8593,28 @@ static void test_audio_stream(void)
     host_state.capabilities |= ASTRA_HOST_CAP_AUDIO_STREAM;
     assert(audio_stream_open_calls == 0u);
 
-    TRY_OPEN(stream_only, ASTRA_SYSCALL_OK);
+    /* The media band is the stream's to grant: denied before it opens. */
+    {
+        uint32_t self;
+
+        assert(audio_stream_syscall(ASTRA_SYSCALL_QUERY_ABI, 0u, 0u, 0u,
+                                    KERNEL_PROCESS_OK, &next) ==
+               ASTRA_SYSCALL_OK);
+        self = next->data[3];
+        assert(audio_stream_syscall(ASTRA_SYSCALL_THREAD_PRIORITY, self,
+                                    KERNEL_THREAD_PRIORITY_MEDIA, 0u,
+                                    KERNEL_PROCESS_OK, &next) ==
+               ASTRA_SYSCALL_ACCESS_DENIED);
+        TRY_OPEN(stream_only, ASTRA_SYSCALL_OK);
+        assert(audio_stream_syscall(ASTRA_SYSCALL_THREAD_PRIORITY, self,
+                                    KERNEL_THREAD_PRIORITY_MEDIA, 0u,
+                                    KERNEL_PROCESS_OK, &next) ==
+               ASTRA_SYSCALL_OK);
+        assert(audio_stream_syscall(ASTRA_SYSCALL_THREAD_PRIORITY, self,
+                                    KERNEL_THREAD_PRIORITY_MEDIA + 1u, 0u,
+                                    KERNEL_PROCESS_OK, &next) ==
+               ASTRA_SYSCALL_ACCESS_DENIED);
+    }
     assert(kernel_user_copy_from_asm(&open, user_open, sizeof(open)) ==
            KERNEL_USER_COPY_OK);
     stream = open.stream;

@@ -233,6 +233,25 @@ static void ASTRAAUDIO_WaitDevice(_THIS)
         SDL_OpenedAudioDeviceDisconnected(_this);
 }
 
+/* SDL asks TIME_CRITICAL through SCHED_OTHER, which means nothing here. The
+ * stream is the authority for the media band: the thread that fills it has
+ * the audio's deadline, as Haiku's BSoundPlayer thread runs urgent. Without
+ * a stream the thread keeps the program's priority. */
+static void ASTRAAUDIO_ThreadInit(_THIS)
+{
+    uint32_t self = 0u;
+    uint32_t status;
+
+    if (_this->hidden->buffers.stream == 0u)
+        return;
+    status = astra_current_thread_handle(&self);
+    if (status == ASTRA_SYSCALL_OK)
+        status = astra_thread_priority(self, ASTRA_PROCESS_PRIORITY_MEDIA,
+                                       NULL);
+    if (status != ASTRA_SYSCALL_OK)
+        (void)astra_log_failure("SDL audio thread priority", status);
+}
+
 static Uint8 *ASTRAAUDIO_GetDeviceBuf(_THIS)
 {
     if (_this->hidden->buffers.stream != 0u)
@@ -289,6 +308,7 @@ static void ASTRAAUDIO_CloseDevice(_THIS)
 static SDL_bool ASTRAAUDIO_Init(SDL_AudioDriverImpl *impl)
 {
     impl->OpenDevice = ASTRAAUDIO_OpenDevice;
+    impl->ThreadInit = ASTRAAUDIO_ThreadInit;
     impl->WaitDevice = ASTRAAUDIO_WaitDevice;
     impl->GetDeviceBuf = ASTRAAUDIO_GetDeviceBuf;
     impl->PlayDevice = ASTRAAUDIO_PlayDevice;

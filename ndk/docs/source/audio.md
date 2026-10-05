@@ -46,8 +46,13 @@ buffers in the host's queue, so 3 x 10 ms at 48 kHz (480 frames) is about
 latency and wake the thread more often; a thread that is late for a buffer
 is heard as a gap.
 
-Give the filling thread the priority the deadline needs, not the program:
-audio is the deadline, the rest of the program is not.
+Run the filling thread in the media band. An open buffer group is the
+authority: while a program holds one, it may place its threads up to
+`ASTRA_PROCESS_PRIORITY_MEDIA` with {c:func}`astra_thread_priority`
+(applications otherwise stop at `ASTRA_PROCESS_PRIORITY_APPLICATION_MAX`).
+Raise only the thread with the audio's deadline: a busy program then cannot
+make it late, and the rest of the program keeps its own priority. SDL2 does
+this for its audio thread.
 
 A host without audio streams answers `ASTRA_ERROR_UNSUPPORTED` from
 {c:func}`astra_pcm_buffers_open`. A program that must play there falls back

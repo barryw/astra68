@@ -2642,6 +2642,24 @@ static bool audio_stream_result(const KernelAudioStream *stream,
     return false;
 }
 
+/*
+ * How high a process may place one of its threads. An open audio stream is
+ * the authority to run its feeding thread in the media band, as Haiku runs
+ * an application's own BSoundPlayer thread at urgent priority: the
+ * deadline is the audio's, not the program's. Never above the band's
+ * bottom, and never more than the process could already reach.
+ */
+static uint32_t thread_priority_ceiling(const KernelProcess *process)
+{
+    if (process->priority_ceiling >= KERNEL_THREAD_PRIORITY_MEDIA)
+        return process->priority_ceiling;
+    for (uint32_t slot = 0u; slot < KERNEL_AUDIO_STREAM_MAX; ++slot)
+        if (audio_streams[slot].state == KERNEL_AUDIO_STREAM_OPEN &&
+            audio_streams[slot].process_id == process->id)
+            return KERNEL_THREAD_PRIORITY_MEDIA;
+    return process->priority_ceiling;
+}
+
 static uint32_t audio_stream_open(KernelProcess *process,
                                   uint32_t device_generation,
                                   uint32_t user_address)
@@ -13267,7 +13285,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             break;
         }
-        if (priority > owner->priority_ceiling) {
+        if (priority > thread_priority_ceiling(owner)) {
             result = ASTRA_SYSCALL_ACCESS_DENIED;
             break;
         }
