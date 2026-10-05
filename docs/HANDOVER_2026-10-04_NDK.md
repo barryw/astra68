@@ -211,3 +211,19 @@ CPU budget yet; no automatic foreground boost; no stutter-driven boost
 - Not done: a `nice`/`renice`-style command (POSIX setpriority works from
   inside a process); media CPU budget; DE25 measurement of audio gaps with
   Doom under motion (`/data/fd-astat.py`).
+
+## Measurement and the media data plane (2026-10-05)
+
+- `astra-top` / `de25-ab.sh` on the board (docs/DEBUGGING.md section 7).
+  `0503d245` process control + measurement; `0bc40796` astra-top names
+  host hot spots; PROC: now starts before boot services.
+- A/B, Doom, media priority 24 (`c2613810`) vs 16 (twin `2cf870dc`, not
+  committed): 19.5/18.8 vs 21.0/21.3 presents/s idle; audio gaps in motion
+  0 vs ~300; guest ~24% idle both; ~200 more cross-space switches/s at 24.
+  The board is on the twin (media 16) now.
+- Root cause is architectural: audio data and every video frame go through
+  synchronous server round trips (audio ~3 per buffer through the media
+  service; video 5 serialized device round trips per frame, `settle()`
+  before each batch, queue depth 1). Design to copy Haiku:
+  `docs/MEDIA_DATA_PLANE.md` (awaiting owner review; phase 0 first).
+- Open: kernel switch-cause counters don't sum (`blocked 0/s`).
