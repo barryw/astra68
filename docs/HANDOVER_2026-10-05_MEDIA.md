@@ -1,5 +1,7 @@
 # Handover 2026-10-05: media data plane (audio and video)
 
+Phase 1 is finished. Phase 2 starts from `docs/HANDOVER_2026-10-05_VIDEO.md`.
+
 Read `CLAUDE.md` (note the **Haiku first** standing instruction), `AGENTS.md`,
 then `docs/MEDIA_DATA_PLANE.md` -- the approved design. This page is the
 state, the facts behind the design, and the next steps.
