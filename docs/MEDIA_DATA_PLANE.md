@@ -257,7 +257,10 @@ display CPU and runs/s, vCPU host overhead (`--perf`).
    audio daemon reaches guest buffers (socket today; the display mailbox
    shows a shared-memory + futex path). Fix the kernel switch-cause counters
    (`blocked` reads 0) so the A/B can attribute switches.
-1. **Audio data plane** as above; media service to control only; SDL audio
+1. **Audio data plane** as above (data path landed and measured
+   2026-10-05: Doom 18.6 -> 21.1 presents/s idle, 13.9 -> 15.6 in motion,
+   motion gaps 0, cross-space switches 807 -> 330/s, media 264 -> 8
+   runs/s; `docs/HANDOVER_2026-10-05_MEDIA.md`); media service to control only; SDL audio
    thread to 24, media service to 16. Expect: no gaps idle or in motion,
    media runs/s near zero, ~200 fewer cross-space switches/s, Doom back to
    >= 21 presents/s.

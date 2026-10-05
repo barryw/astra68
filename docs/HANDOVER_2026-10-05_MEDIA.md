@@ -127,6 +127,27 @@ media `ASTRA_PCM_STREAM_GRANT`, SDL on buffer groups. NDK: `audio.md` guide,
 Doom fail unless their voice is a stream; the NDK examples gate fails unless
 the stand-in heard both examples.
 
+### Phase 1 on the board (Chocolate Doom, de25-ab.sh, 3 rounds, 30 s windows)
+
+Baseline `7387fd33` (from `9669fb53`: counters, no streams, media 24) vs
+streams `a9cf49d2` (from `1707179a`, media still 24). Means of 3 rounds.
+
+| | baseline | streams |
+|---|---:|---:|
+| presents/s idle | 18.6 | **21.1** |
+| presents/s, 125 Hz motion | 13.9 | **15.6** |
+| audio gaps in motion / 30 s | 6, 7, 1 | **0, 0, 0** |
+| guest idle | 23.6% | **33.6%** |
+| switches/s (cross-space) | 940 (807) | **447 (330)** |
+| block / preempt switches/s | 566 / 265 | 306 / 48 |
+| media runs/s, CPU | 264, 9.4% | **8, 0.3%** |
+| Doom runs/s | 435 | 225 |
+
+The design's phase-1 expectations: no gaps idle or in motion (met), media
+runs/s near zero (8, its health checks; met), ~200 fewer cross-space
+switches/s (477 fewer), Doom back to >= 21 presents/s idle (21.1; met).
+Guest idle rose 10 points: that CPU is now free for phase 2 (video).
+
 Not done in phase 1: priorities (media back to 16, the SDL audio thread
 to 24 -- SDL asks TIME_CRITICAL with SCHED_OTHER, which Astra's
 `sched_get_priority_max` refuses, so it runs at the app's priority);
