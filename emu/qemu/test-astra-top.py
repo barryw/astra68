@@ -21,8 +21,9 @@ def process(pid, name, priority, runs, syscalls, runtime_ns):
 
 
 def sample(sequence, now_ns, switches, processes):
-    scheduler = top.SCHEDULER.pack(now_ns, switches, 0, switches, 0, 0,
-                                   switches // 2, 0, 0, 0, 0, 0, 0,
+    # Every switch is cross-space and counted as a block.
+    scheduler = top.SCHEDULER.pack(now_ns, switches, 0, switches,
+                                   switches, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                                    len(processes), len(processes))
     return top.HEADER.pack(top.SAMPLE_MAGIC, top.HEADER.size,
                            top.SCHEDULER.size, top.PROCESS.size,
@@ -37,7 +38,7 @@ def parse(data):
         return top.read_sample(handle.name)
 
 
-assert top.PROCESS.size == 112 and top.SCHEDULER.size == 64
+assert top.PROCESS.size == 112 and top.SCHEDULER.size == 72
 # One second of guest time: Doom ran 600 ms, media 100 ms. Doom's switch
 # counter wraps, as a 32-bit counter does after long enough.
 seq_a, before, procs_a = parse(sample(1, 10**9, 0xFFFFFFF0, [
@@ -57,6 +58,9 @@ assert rows["/services/media"]["runs_per_s"] == 200
 assert rows["/commands/ps"]["new"] and abs(rows["/commands/ps"]["cpu"] - 1) < 1e-9
 assert abs(window["idle"] - 29.0) < 1e-9
 assert window["scheduler_per_s"]["context_switches"] == 0x20
+assert window["scheduler_per_s"]["block_switches"] == 0x20
+assert sum(window["scheduler_per_s"][cause + "_switches"]
+           for cause in top.SWITCH_CAUSES) == 0x20
 assert window["processes"][0]["name"] == "/apps/Doom.app"
 try:
     top.guest_window(after, procs_b, before, procs_a)

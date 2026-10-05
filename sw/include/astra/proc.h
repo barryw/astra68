@@ -82,17 +82,28 @@ typedef struct AstraSchedulerStats {
     uint32_t same_address_space_switches;
     /** Switches into another process: the root pointer and ATC change. */
     uint32_t cross_address_space_switches;
-    /** A thread gave the CPU up: it blocked, yielded or exited. */
-    uint32_t voluntary_switches;
-    /** A thread's quantum ran out and an equal-priority thread took over. */
-    uint32_t timer_preemptions;
-    /** A higher-priority thread became ready and took the CPU. */
-    uint32_t priority_preemptions;
-    /** A wake of a higher-priority waiter preempted the running thread. */
-    uint32_t wake_preemptions;
-    /** A deadline expiry preempted the running thread. */
-    uint32_t deadline_preemptions;
-    /** Times a thread blocked in a wait. */
+    /*
+     * Each context switch is counted under exactly one cause; the seven
+     * below sum to context_switches.
+     */
+    /** The running thread blocked in a wait or suspended itself. */
+    uint32_t block_switches;
+    /** The running thread yielded. */
+    uint32_t yield_switches;
+    /** Its quantum ran out and an equal-priority thread took over. */
+    uint32_t quantum_switches;
+    /** A deadline expiry woke a higher-priority thread, which took over. */
+    uint32_t deadline_switches;
+    /** Any other higher-priority thread became ready and took over. */
+    uint32_t preempt_switches;
+    /** The running thread, or its process, exited. */
+    uint32_t exit_switches;
+    /** The CPU was idle and a thread became ready. */
+    uint32_t idle_switches;
+    /**
+     * Times a thread blocked in a wait, whether a switch or idle followed:
+     * this less block_switches is the waits that left the CPU idle.
+     */
     uint32_t wait_blocks;
     /** Quantum expirations, whether or not they switched. */
     uint32_t quantum_expirations;
@@ -107,7 +118,7 @@ typedef struct AstraSchedulerStats {
 } AstraSchedulerStats;
 
 /** @cond ASTRA_INTERNAL */
-_Static_assert(sizeof(AstraSchedulerStats) == 64u,
+_Static_assert(sizeof(AstraSchedulerStats) == 72u,
                "PROC scheduler record ABI changed");
 _Static_assert(sizeof(AstraProcSnapshot) == 112u,
                "PROC snapshot record ABI changed");

@@ -630,6 +630,16 @@ bool kernel_platform_deadline_to_cycles(int64_t deadline_ns,
     return true;
 }
 
+/* Every context switch is counted under exactly one cause. */
+static void assert_switch_causes_sum(const KernelSchedulerStats *stats)
+{
+    assert(stats->block_switches + stats->yield_switches +
+               stats->quantum_switches + stats->deadline_switches +
+               stats->preempt_switches + stats->exit_switches +
+               stats->idle_switches ==
+           stats->context_switches);
+}
+
 static void advance_quantum(void)
 {
     scheduler_test_cycles += kernel_platform_quantum_cycles();
@@ -1994,11 +2004,12 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(stats.created_threads == 3u);
     assert(stats.live_threads == 2u);
     assert(stats.dead_threads == 1u);
-    assert(stats.timer_preemptions == 1u);
+    assert(stats.quantum_switches == 1u);
     assert(stats.quantum_cycles == 62500u);
     assert(stats.quantum_expirations == 1u);
     assert(stats.deadline_expirations == 1u);
-    assert(stats.deadline_preemptions == 1u);
+    assert(stats.deadline_switches == 1u);
+    assert_switch_causes_sum(&stats);
     assert(stats.deadline_depth == 0u);
     assert(stats.deadline_max_depth == 1u);
     assert(stats.same_address_space_switches >= 1u);
@@ -3945,7 +3956,8 @@ static void test_priority_selection_and_equal_priority_rotation(void)
     assert(high_first.state == KERNEL_THREAD_RUNNING);
     assert(high_first.effective_priority == 20u);
     assert(kernel_process_stats(&stats));
-    assert(stats.priority_preemptions == 1u);
+    assert(stats.preempt_switches == 1u);
+    assert(stats.quantum_switches == 0u);
 
     advance_quantum();
     assert(kernel_process_on_timer(registers,
@@ -3955,8 +3967,10 @@ static void test_priority_selection_and_equal_priority_rotation(void)
     assert(high_second.state == KERNEL_THREAD_RUNNING);
     assert(high_second.effective_priority == 20u);
     assert(kernel_process_stats(&stats));
-    assert(stats.priority_preemptions == 1u);
+    assert(stats.preempt_switches == 1u);
+    assert(stats.quantum_switches == 1u);
     assert(stats.same_address_space_switches == 2u);
+    assert_switch_causes_sum(&stats);
 }
 
 static void test_interrupt_wakeup_preserves_equal_priority_quantum(void)
@@ -4100,7 +4114,9 @@ static void test_last_runnable_timed_wait_wakes_from_supervisor_idle(void)
     assert(next->data[0] == ASTRA_SYSCALL_TIMED_OUT);
     assert(kernel_process_stats(&stats));
     assert(stats.deadline_expirations == 1u);
-    assert(stats.deadline_preemptions == 0u);
+    assert(stats.deadline_switches == 0u);
+    assert(stats.idle_switches >= 2u);
+    assert_switch_causes_sum(&stats);
     assert(stats.deadline_depth == 0u);
 }
 
@@ -4168,7 +4184,7 @@ static void test_normal_syscalls_do_not_renew_quantum(void)
     assert(timer_last_load == 62500u);
     assert(kernel_process_stats(&stats));
     assert(stats.quantum_expirations == 1u);
-    assert(stats.timer_preemptions == 0u);
+    assert(stats.quantum_switches == 0u);
 }
 
 static void test_worker_time_does_not_consume_user_quantum(void)
@@ -4196,7 +4212,7 @@ static void test_worker_time_does_not_consume_user_quantum(void)
     assert(kernel_process_stats(&stats));
     assert(stats.current_process_id == first_process_id);
     assert(stats.quantum_expirations == 0u);
-    assert(stats.timer_preemptions == 0u);
+    assert(stats.quantum_switches == 0u);
 
     next = kernel_process_worker_resume();
     assert(next == first);
@@ -10029,7 +10045,8 @@ static void test_system_control_preempts_and_terminates_runaway(void)
     assert(next->data[0] == ASTRA_SYSCALL_TIMED_OUT);
     assert(kernel_process_stats(&stats));
     assert(stats.deadline_expirations == 1u);
-    assert(stats.deadline_preemptions == 1u);
+    assert(stats.deadline_switches == 1u);
+    assert_switch_causes_sum(&stats);
 
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_PROCESS_TERMINATE;

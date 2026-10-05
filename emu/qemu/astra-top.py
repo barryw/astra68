@@ -47,13 +47,16 @@ HOST_COMMS = ("qemu-system-m68", "astra-terminal-", "astra-audio-hos",
               "astra-remote-de")
 SAMPLE_MAGIC = 0x41534D31
 HEADER = struct.Struct(">6I")
-SCHEDULER = struct.Struct(">Q14I")
+SCHEDULER = struct.Struct(">Q16I")
+# AstraSchedulerStats, sw/include/astra/proc.h. The seven *_switches are
+# each switch's one cause and sum to context_switches.
+SWITCH_CAUSES = ("block", "yield", "quantum", "deadline", "preempt", "exit",
+                 "idle")
 SCHEDULER_FIELDS = (
-    "context_switches", "same_space_switches", "cross_space_switches",
-    "voluntary_switches", "timer_preemptions", "priority_preemptions",
-    "wake_preemptions", "deadline_preemptions", "wait_blocks",
-    "quantum_expirations", "syscalls_low", "syscalls_high",
-    "live_processes", "live_threads")
+    ("context_switches", "same_space_switches", "cross_space_switches") +
+    tuple(cause + "_switches" for cause in SWITCH_CAUSES) +
+    ("wait_blocks", "quantum_expirations", "syscalls_low", "syscalls_high",
+     "live_processes", "live_threads"))
 # AstraProcessInfo (80 bytes) then a 32-byte name: sw/include/astra/proc.h.
 PROCESS = struct.Struct(">9IH8B2xQQIIHHI32s")
 CLOCK_TICKS = os.sysconf("SC_CLK_TCK")
@@ -443,11 +446,9 @@ def show(result, top):
           "%.0f same)" % (guest["idle"], rate["context_switches"],
                           rate["cross_space_switches"],
                           rate["same_space_switches"]))
-    print("         blocked %.0f/s  quantum %.0f/s  preempted: priority "
-          "%.0f/s  wake %.0f/s  deadline %.0f/s" % (
-              rate["voluntary_switches"], rate["timer_preemptions"],
-              rate["priority_preemptions"], rate["wake_preemptions"],
-              rate["deadline_preemptions"]))
+    print("         by cause: " + "  ".join(
+        "%s %.0f/s" % (cause, rate[cause + "_switches"])
+        for cause in SWITCH_CAUSES))
     print("\n  %5s %4s %6s %8s %9s %6s  %s" % ("PID", "PRI", "CPU%",
                                               "RUNS/s", "SYSCALL/s", "RES-K",
                                               "NAME"))

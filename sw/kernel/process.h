@@ -211,9 +211,18 @@ typedef struct KernelSchedulerStats {
     uint32_t dead_processes;
     uint32_t launch_failures;
     uint32_t last_launch_failure;
+    /*
+     * Every change of running thread, and below it the one cause each was
+     * counted under: the seven *_switches sum to context_switches.
+     */
     uint32_t context_switches;
-    uint32_t timer_preemptions;
-    uint32_t voluntary_switches;
+    uint32_t block_switches;
+    uint32_t yield_switches;
+    uint32_t quantum_switches;
+    uint32_t deadline_switches;
+    uint32_t preempt_switches;
+    uint32_t exit_switches;
+    uint32_t idle_switches;
     uint32_t total_syscalls_low;
     uint32_t total_syscalls_high;
     uint32_t user_faults;
@@ -240,14 +249,12 @@ typedef struct KernelSchedulerStats {
     uint32_t current_thread_id;
     uint32_t same_address_space_switches;
     uint32_t cross_address_space_switches;
-    uint32_t priority_preemptions;
     uint32_t wait_blocks;
     uint32_t sync_wakeups;
     uint32_t wake_preemptions;
     uint32_t quantum_cycles;
     uint32_t quantum_expirations;
     uint32_t deadline_expirations;
-    uint32_t deadline_preemptions;
     uint32_t timer_rearms;
     uint32_t supervisor_timer_deferrals;
     uint32_t deadline_depth;

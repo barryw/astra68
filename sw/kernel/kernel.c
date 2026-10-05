@@ -1608,7 +1608,7 @@ void kernel_process_milestone_reached(const KernelSchedulerStats *validated)
     console_puts("Deadlines ........... ");
     console_dec32(stats.deadline_expirations);
     console_puts(" expired, ");
-    console_dec32(stats.deadline_preemptions);
+    console_dec32(stats.deadline_switches);
     console_puts(" priority handoff\n");
     console_puts("Sync objects ........ ");
     console_dec32(stats.sync_created_events);

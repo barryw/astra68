@@ -40,7 +40,7 @@
  * A caller that does not recognize this value should refuse to run rather
  * than guess at a register layout that may have changed underneath it.
  */
-#define ASTRA_SYSCALL_ABI_VERSION 0x0001003Eu
+#define ASTRA_SYSCALL_ABI_VERSION 0x0001003Fu
 
 /**
  * Identifies the running kernel's syscall ABI. No argument. Returns

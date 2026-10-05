@@ -107,6 +107,16 @@ Phase 0 questions, answer each with file:line before writing code:
    follows; test that causes sum to `context_switches`; astra-top "blocked"
    points at the new counter.
 
+**Done (5):** `activate` takes one `SwitchCause`; `KernelSchedulerStats`
+and `AstraSchedulerStats` (now 72 bytes, ABI `0x0001003F`) carry
+`block/yield/quantum/deadline/preempt/exit/idle_switches`, which sum to
+`context_switches` (asserted in `test_process.c`). `wait_blocks` stays the
+count of blocking waits; less `block_switches` it is the waits that idled the
+CPU. The overlapping `voluntary/timer/priority/deadline_preemptions` are
+gone; `wake_preemptions` stays kernel-internal (boot console). astra-top
+prints `by cause:`. Releases built before this one cannot be read by the new
+astra-top (record size), so A/B both sides from this tree.
+
 Order: counters (5), then the audio stream object + QEMU audio mailbox +
 daemon clock, then SDL/pcm library on it, then media service to control
 only and priorities (SDL audio thread 24, media 16).

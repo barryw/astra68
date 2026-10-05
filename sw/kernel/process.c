@@ -1297,8 +1297,38 @@ static KernelProcessStatus scheduler_expire_due(
     return KERNEL_PROCESS_OK;
 }
 
+/*
+ * Why the running thread changed. Each switch is counted under exactly one,
+ * so the per-cause counters sum to context_switches and an A/B can say where
+ * its switches went. A switch out of idle (no previous thread) is always
+ * SWITCH_IDLE, whatever the caller passed.
+ */
+typedef enum SwitchCause {
+    SWITCH_BLOCK,     /* the previous thread blocked or suspended itself */
+    SWITCH_YIELD,     /* the previous thread yielded */
+    SWITCH_QUANTUM,   /* its quantum ran out; an equal priority took over */
+    SWITCH_DEADLINE,  /* a deadline expiry woke a higher-priority thread */
+    SWITCH_PREEMPT,   /* any other higher-priority thread became ready */
+    SWITCH_EXIT,      /* the previous thread or its process exited */
+    SWITCH_IDLE       /* the CPU was idle */
+} SwitchCause;
+
+static void count_switch(SwitchCause cause)
+{
+    ++scheduler_stats.context_switches;
+    switch (cause) {
+    case SWITCH_BLOCK:    ++scheduler_stats.block_switches; break;
+    case SWITCH_YIELD:    ++scheduler_stats.yield_switches; break;
+    case SWITCH_QUANTUM:  ++scheduler_stats.quantum_switches; break;
+    case SWITCH_DEADLINE: ++scheduler_stats.deadline_switches; break;
+    case SWITCH_PREEMPT:  ++scheduler_stats.preempt_switches; break;
+    case SWITCH_EXIT:     ++scheduler_stats.exit_switches; break;
+    case SWITCH_IDLE:     ++scheduler_stats.idle_switches; break;
+    }
+}
+
 static __attribute__((noinline))
-KernelProcessStatus activate_fast(KernelThread *next,
+KernelProcessStatus activate_fast(KernelThread *next, SwitchCause cause,
                                   KernelCpuContext **next_context)
 {
     KernelProcess *next_process;
@@ -1314,7 +1344,7 @@ KernelProcessStatus activate_fast(KernelThread *next,
         if (kernel_vm_switch(&next_process->address_space) != KERNEL_VM_OK)
             return KERNEL_PROCESS_CORRUPT;
         runtime_stop(process_for_thread(previous), previous);
-        ++scheduler_stats.context_switches;
+        count_switch(previous == NULL ? SWITCH_IDLE : cause);
         if (previous != NULL) {
             if (previous->process_slot == next->process_slot)
                 ++scheduler_stats.same_address_space_switches;
@@ -1336,7 +1366,7 @@ KernelProcessStatus activate_fast(KernelThread *next,
 }
 
 static __attribute__((noinline))
-KernelProcessStatus activate_profiled(KernelThread *next,
+KernelProcessStatus activate_profiled(KernelThread *next, SwitchCause cause,
                                       KernelCpuContext **next_context)
 {
     KernelPerformanceToken performance;
@@ -1345,22 +1375,22 @@ KernelProcessStatus activate_profiled(KernelThread *next,
     KernelThread *previous = current_thread;
 
     if (previous == NULL || previous == next || next == NULL)
-        return activate_fast(next, next_context);
+        return activate_fast(next, cause, next_context);
     metric = previous->process_slot == next->process_slot ?
         KERNEL_PERFORMANCE_SAME_CRP_SWITCH :
         KERNEL_PERFORMANCE_CROSS_CRP_SWITCH;
     performance = kernel_performance_begin_sampled(metric);
-    status = activate_fast(next, next_context);
+    status = activate_fast(next, cause, next_context);
     kernel_performance_end(performance);
     return status;
 }
 
-static KernelProcessStatus activate(KernelThread *next,
+static KernelProcessStatus activate(KernelThread *next, SwitchCause cause,
                                     KernelCpuContext **next_context)
 {
     if (kernel_performance_sampling_enabled == 0u)
-        return activate_fast(next, next_context);
-    return activate_profiled(next, next_context);
+        return activate_fast(next, cause, next_context);
+    return activate_profiled(next, cause, next_context);
 }
 
 static KernelProcessStatus capture_current(const uint32_t *registers,
@@ -1402,7 +1432,8 @@ static KernelProcessStatus capture_current(const uint32_t *registers,
     return KERNEL_PROCESS_OK;
 }
 
-static KernelProcessStatus schedule_next(KernelCpuContext **next_context)
+static KernelProcessStatus schedule_next(SwitchCause cause,
+                                         KernelCpuContext **next_context)
 {
     KernelThread *next = NULL;
 
@@ -1410,7 +1441,7 @@ static KernelProcessStatus schedule_next(KernelCpuContext **next_context)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     switch (kernel_thread_take_next(&next)) {
     case KERNEL_THREAD_OK:
-        return activate(next, next_context);
+        return activate(next, cause, next_context);
     case KERNEL_THREAD_NO_RUNNABLE:
         /*
          * Supervisor execution uses SRP, so keep the last URP installed while
@@ -1456,8 +1487,7 @@ static KernelProcessStatus schedule_pending(KernelCpuContext **next_context,
 {
     KernelThread *previous = current_thread;
     KernelThread *next = NULL;
-    bool quantum_preemption;
-    bool deadline_preemption;
+    SwitchCause cause;
 
     if (next_context == NULL || process_for_thread(previous) == NULL ||
         previous->state != KERNEL_THREAD_RUNNING)
@@ -1469,20 +1499,21 @@ static KernelProcessStatus schedule_pending(KernelCpuContext **next_context,
         return KERNEL_PROCESS_OK;
     }
 
-    quantum_preemption = quantum_preempt_pending != 0u;
-    deadline_preemption = deadline_preempt_pending != 0u;
     if (kernel_thread_make_ready(previous) != KERNEL_THREAD_OK ||
         kernel_thread_take_next(&next) != KERNEL_THREAD_OK || next == NULL)
         return KERNEL_PROCESS_CORRUPT;
-    if (next != previous) {
-        if (quantum_preemption)
-            ++scheduler_stats.timer_preemptions;
-        if (deadline_preemption)
-            ++scheduler_stats.deadline_preemptions;
-        if (next->effective_priority > previous->effective_priority)
-            ++scheduler_stats.priority_preemptions;
-    }
-    return activate(next, next_context);
+    /*
+     * A deadline expiry outranks the quantum that may have run out with it;
+     * any other switch to a higher priority is a preemption; only an
+     * equal-priority successor is the quantum's doing.
+     */
+    if (deadline_preempt_pending != 0u)
+        cause = SWITCH_DEADLINE;
+    else if (next->effective_priority > previous->effective_priority)
+        cause = SWITCH_PREEMPT;
+    else
+        cause = SWITCH_QUANTUM;
+    return activate(next, cause, next_context);
 }
 
 static KernelProcessStatus finish_reap(KernelProcess *process)
@@ -1712,7 +1743,7 @@ static void check_milestone(void)
     if (!kernel_process_stats(&stats) ||
         stats.created_processes < 2u ||
         stats.created_threads < 3u ||
-        stats.timer_preemptions == 0u ||
+        stats.quantum_switches + stats.preempt_switches == 0u ||
         stats.same_address_space_switches == 0u ||
         stats.cross_address_space_switches == 0u ||
         stats.wait_blocks < 2u ||
@@ -1720,7 +1751,7 @@ static void check_milestone(void)
         stats.wake_preemptions == 0u ||
         stats.quantum_expirations == 0u ||
         stats.deadline_expirations == 0u ||
-        stats.deadline_preemptions == 0u ||
+        stats.deadline_switches == 0u ||
         stats.blocked_threads == 0u ||
         stats.deadline_max_depth == 0u ||
         stats.sync_cancellations == 0u ||
@@ -3194,7 +3225,7 @@ static KernelProcessStatus retire_process(KernelProcess *retiring,
         check_milestone();
         return KERNEL_PROCESS_OK;
     }
-    status = schedule_next(next_context);
+    status = schedule_next(SWITCH_EXIT, next_context);
     if (status != KERNEL_PROCESS_OK &&
         status != KERNEL_PROCESS_NO_RUNNABLE)
         return status;
@@ -3242,7 +3273,7 @@ static KernelProcessStatus retire_current_thread(
     --scheduler_stats.live_threads;
     ++scheduler_stats.dead_threads;
     scheduler_stats.thread_death_wakeups += woken;
-    status = schedule_next(next_context);
+    status = schedule_next(SWITCH_EXIT, next_context);
     if (status != KERNEL_PROCESS_OK &&
         status != KERNEL_PROCESS_NO_RUNNABLE)
         return status;
@@ -8018,7 +8049,7 @@ KernelProcessStatus kernel_process_start(KernelCpuContext **next_context)
         scheduler_started = 0u;
         return KERNEL_PROCESS_CORRUPT;
     }
-    activate_status = activate(next, next_context);
+    activate_status = activate(next, SWITCH_IDLE, next_context);
 
     if (activate_status != KERNEL_PROCESS_OK)
         scheduler_started = 0u;
@@ -8056,7 +8087,8 @@ static KernelCpuContext *resume_idle(bool from_worker)
         !kernel_thread_highest_ready_priority(&ready_priority))
         return NULL;
     (void)ready_priority;
-    if (schedule_next(&next) != KERNEL_PROCESS_OK || current_thread == NULL)
+    if (schedule_next(SWITCH_IDLE, &next) != KERNEL_PROCESS_OK ||
+        current_thread == NULL)
         return NULL;
     return next;
 }
@@ -8212,7 +8244,7 @@ KernelProcessStatus kernel_process_on_supervisor_timer(void)
 
         if (kernel_thread_highest_ready_priority(&ready_priority)) {
             (void)ready_priority;
-            status = schedule_next(&next);
+            status = schedule_next(SWITCH_IDLE, &next);
             return status == KERNEL_PROCESS_OK ? KERNEL_PROCESS_OK : status;
         }
     }
@@ -10988,9 +11020,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             kernel_thread_take_next(&next) != KERNEL_THREAD_OK ||
             next == NULL)
             return KERNEL_PROCESS_CORRUPT;
-        if (next != thread)
-            ++scheduler_stats.voluntary_switches;
-        return activate(next, next_context);
+        return activate(next, SWITCH_YIELD, next_context);
     }
     case ASTRA_SYSCALL_EXIT:
         thread->context.data[0] = ASTRA_SYSCALL_OK;
@@ -11699,7 +11729,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                            thread_status == KERNEL_THREAD_CONDITION_CHANGED ?
                 KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
         ++scheduler_stats.wait_blocks;
-        status = schedule_next(next_context);
+        status = schedule_next(SWITCH_BLOCK, next_context);
         if (status != KERNEL_PROCESS_OK &&
             status != KERNEL_PROCESS_NO_RUNNABLE)
             return status;
@@ -12352,7 +12382,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if (!blocked)
             break;
         ++scheduler_stats.wait_blocks;
-        status = schedule_next(next_context);
+        status = schedule_next(SWITCH_BLOCK, next_context);
         if (status != KERNEL_PROCESS_OK &&
             status != KERNEL_PROCESS_NO_RUNNABLE)
             return status;
@@ -12524,11 +12554,13 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             scheduler_stats.same_address_space_switches;
         record.cross_address_space_switches =
             scheduler_stats.cross_address_space_switches;
-        record.voluntary_switches = scheduler_stats.voluntary_switches;
-        record.timer_preemptions = scheduler_stats.timer_preemptions;
-        record.priority_preemptions = scheduler_stats.priority_preemptions;
-        record.wake_preemptions = scheduler_stats.wake_preemptions;
-        record.deadline_preemptions = scheduler_stats.deadline_preemptions;
+        record.block_switches = scheduler_stats.block_switches;
+        record.yield_switches = scheduler_stats.yield_switches;
+        record.quantum_switches = scheduler_stats.quantum_switches;
+        record.deadline_switches = scheduler_stats.deadline_switches;
+        record.preempt_switches = scheduler_stats.preempt_switches;
+        record.exit_switches = scheduler_stats.exit_switches;
+        record.idle_switches = scheduler_stats.idle_switches;
         record.wait_blocks = scheduler_stats.wait_blocks;
         record.quantum_expirations = scheduler_stats.quantum_expirations;
         record.syscalls_low = scheduler_stats.total_syscalls_low;
@@ -12764,7 +12796,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             target->suspended = 1u;
             if (self) {
                 thread->context.data[0] = ASTRA_SYSCALL_OK;
-                status = schedule_next(next_context);
+                status = schedule_next(SWITCH_BLOCK, next_context);
                 return status == KERNEL_PROCESS_OK ||
                        status == KERNEL_PROCESS_NO_RUNNABLE ?
                     status : KERNEL_PROCESS_CORRUPT;
@@ -12989,7 +13021,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if (!blocked)
             break;
         ++scheduler_stats.wait_blocks;
-        status = schedule_next(next_context);
+        status = schedule_next(SWITCH_BLOCK, next_context);
         if (status != KERNEL_PROCESS_OK &&
             status != KERNEL_PROCESS_NO_RUNNABLE)
             return status;
@@ -13005,7 +13037,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if (!blocked)
             break;
         ++scheduler_stats.wait_blocks;
-        status = schedule_next(next_context);
+        status = schedule_next(SWITCH_BLOCK, next_context);
         if (status != KERNEL_PROCESS_OK &&
             status != KERNEL_PROCESS_NO_RUNNABLE)
             return status;
@@ -13050,7 +13082,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if (!blocked)
             break;
         ++scheduler_stats.wait_blocks;
-        status = schedule_next(next_context);
+        status = schedule_next(SWITCH_BLOCK, next_context);
         if (status != KERNEL_PROCESS_OK &&
             status != KERNEL_PROCESS_NO_RUNNABLE)
             return status;
@@ -13101,7 +13133,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         if (futex_status != KERNEL_FUTEX_BLOCKED)
             return KERNEL_PROCESS_CORRUPT;
         ++scheduler_stats.wait_blocks;
-        status = schedule_next(next_context);
+        status = schedule_next(SWITCH_BLOCK, next_context);
         if (status != KERNEL_PROCESS_OK &&
             status != KERNEL_PROCESS_NO_RUNNABLE)
             return status;
@@ -13789,8 +13821,13 @@ bool kernel_process_stats(KernelSchedulerStats *stats)
     stats->launch_failures = scheduler_stats.launch_failures;
     stats->last_launch_failure = scheduler_stats.last_launch_failure;
     stats->context_switches = scheduler_stats.context_switches;
-    stats->timer_preemptions = scheduler_stats.timer_preemptions;
-    stats->voluntary_switches = scheduler_stats.voluntary_switches;
+    stats->block_switches = scheduler_stats.block_switches;
+    stats->yield_switches = scheduler_stats.yield_switches;
+    stats->quantum_switches = scheduler_stats.quantum_switches;
+    stats->deadline_switches = scheduler_stats.deadline_switches;
+    stats->preempt_switches = scheduler_stats.preempt_switches;
+    stats->exit_switches = scheduler_stats.exit_switches;
+    stats->idle_switches = scheduler_stats.idle_switches;
     stats->total_syscalls_low = scheduler_stats.total_syscalls_low;
     stats->total_syscalls_high = scheduler_stats.total_syscalls_high;
     stats->user_faults = scheduler_stats.user_faults;
@@ -13814,14 +13851,12 @@ bool kernel_process_stats(KernelSchedulerStats *stats)
         scheduler_stats.same_address_space_switches;
     stats->cross_address_space_switches =
         scheduler_stats.cross_address_space_switches;
-    stats->priority_preemptions = scheduler_stats.priority_preemptions;
     stats->wait_blocks = scheduler_stats.wait_blocks;
     stats->sync_wakeups = scheduler_stats.sync_wakeups;
     stats->wake_preemptions = scheduler_stats.wake_preemptions;
     stats->quantum_cycles = scheduler_stats.quantum_cycles;
     stats->quantum_expirations = scheduler_stats.quantum_expirations;
     stats->deadline_expirations = scheduler_stats.deadline_expirations;
-    stats->deadline_preemptions = scheduler_stats.deadline_preemptions;
     stats->timer_rearms = scheduler_stats.timer_rearms;
     stats->supervisor_timer_deferrals =
         scheduler_stats.supervisor_timer_deferrals;

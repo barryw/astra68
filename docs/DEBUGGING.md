@@ -153,8 +153,8 @@ guest and host together. It ships in every release:
 
 - **Guest**: CPU per Astra process from the kernel's own runtime
   accounting, idle, context switches per second (cross- and same-address
-  space) and why the CPU changed hands (blocked, quantum, preempted by
-  priority, wake or deadline). The `sampler` service copies PROC:snapshot
+  space) and why the CPU changed hands, one cause per switch (block, yield,
+  quantum, deadline, preempt, exit, idle; they sum to the total). The `sampler` service copies PROC:snapshot
   and PROC:scheduler to `WORK:.astra/sample` once a second
   (`/var/lib/astra/hostfs/work/.astra/sample` on the board).
 - **Host**: CPU per thread of QEMU and the helpers. The vCPU thread is the
