@@ -7,13 +7,23 @@
 #include "SDL_audio_c.h"
 #include "SDL_sysaudio.h"
 
+#include <astra/audio_stream.h>
 #include <astra/pcm.h>
 #include <astra/posix.h>
 #include <astra/runtime.h>
 
 #define _THIS SDL_AudioDevice *_this
 
+/* Buffers SDL fills in place (Haiku's sizing: max(3, latency/period+2)). */
+#define ASTRAAUDIO_BUFFERS 3u
+/* A host that takes nothing for this long is gone. */
+#define ASTRAAUDIO_WAIT_NS UINT64_C(1000000000)
+
+/* With an audio stream (pcm.library 2.5) SDL mixes straight into buffers
+ * the host reads, and each costs one wait; without one, the media service's
+ * voice and a copy. */
 struct SDL_PrivateAudioData {
+    AstraPcmBuffers buffers;
     AstraPcmStream stream;
     Uint8 *mixbuf;
     uint32_t frame_bytes;
@@ -154,16 +164,35 @@ static int ASTRAAUDIO_OpenDevice(_THIS, const char *devname)
     format = ASTRA_PCM_FORMAT(ASTRAAUDIO_Encoding(_this->spec.format),
                               _this->spec.channels,
                               (uint32_t)_this->spec.freq);
+    if (_this->spec.samples < ASTRA_AUDIO_STREAM_PERIOD_MIN)
+        _this->spec.samples = ASTRA_AUDIO_STREAM_PERIOD_MIN;
+    if (_this->spec.samples > ASTRA_AUDIO_STREAM_PERIOD_MAX)
+        _this->spec.samples = ASTRA_AUDIO_STREAM_PERIOD_MAX;
     SDL_CalculateAudioSpec(&_this->spec);
     hidden = (struct SDL_PrivateAudioData *)SDL_calloc(1, sizeof(*hidden));
     if (hidden == NULL)
         return SDL_OutOfMemory();
+    hidden->frame_bytes = astra_pcm_format_frame_bytes(format);
+    hidden->buffers = (AstraPcmBuffers)ASTRA_PCM_BUFFERS_INIT;
+    {
+        AstraResult opened = astra_pcm_buffers_open(
+            capability->handle, format, _this->spec.samples,
+            ASTRAAUDIO_BUFFERS, &hidden->buffers);
+
+        if (opened == ASTRA_OK) {
+            _this->hidden = hidden;
+            return 0;
+        }
+        /* A host with streams that refuses one is a fault, not a choice:
+         * say so before falling back to the media service's voice. */
+        if (opened != ASTRA_ERROR_UNSUPPORTED)
+            (void)astra_log_failure("SDL audio stream", (uint32_t)-opened);
+    }
     hidden->mixbuf = (Uint8 *)SDL_malloc(_this->spec.size);
     if (hidden->mixbuf == NULL) {
         SDL_free(hidden);
         return SDL_OutOfMemory();
     }
-    hidden->frame_bytes = astra_pcm_format_frame_bytes(format);
     hidden->stream = (AstraPcmStream)ASTRA_PCM_STREAM_INIT;
     if (astra_pcm_open(capability->handle, format,
                        &hidden->stream) != ASTRA_OK) {
@@ -190,6 +219,14 @@ static void ASTRAAUDIO_WaitDevice(_THIS)
 {
     const uint32_t frames = _this->spec.size / _this->hidden->frame_bytes;
 
+    if (_this->hidden->buffers.stream != 0u) {
+        if (!SDL_AtomicGet(&_this->shutdown) &&
+            astra_pcm_buffers_wait(&_this->hidden->buffers,
+                                   astra_clock_monotonic() +
+                                       ASTRAAUDIO_WAIT_NS) != ASTRA_OK)
+            SDL_OpenedAudioDeviceDisconnected(_this);
+        return;
+    }
     if (!SDL_AtomicGet(&_this->shutdown) &&
         astra_pcm_wait(&_this->hidden->stream,
                        ASTRAAUDIO_Room(_this, frames)) != ASTRA_OK)
@@ -198,6 +235,8 @@ static void ASTRAAUDIO_WaitDevice(_THIS)
 
 static Uint8 *ASTRAAUDIO_GetDeviceBuf(_THIS)
 {
+    if (_this->hidden->buffers.stream != 0u)
+        return (Uint8 *)astra_pcm_buffers_get(&_this->hidden->buffers);
     return _this->hidden->mixbuf;
 }
 
@@ -206,6 +245,12 @@ static void ASTRAAUDIO_PlayDevice(_THIS)
     const uint32_t frame_bytes = _this->hidden->frame_bytes;
     const uint32_t frames = _this->spec.size / frame_bytes;
     uint32_t sent = 0u;
+
+    if (_this->hidden->buffers.stream != 0u) {
+        if (astra_pcm_buffers_queue(&_this->hidden->buffers) != ASTRA_OK)
+            SDL_OpenedAudioDeviceDisconnected(_this);
+        return;
+    }
 
     while (sent < frames && !SDL_AtomicGet(&_this->shutdown)) {
         uint32_t accepted = 0u;
@@ -230,7 +275,9 @@ static void ASTRAAUDIO_PlayDevice(_THIS)
 static void ASTRAAUDIO_CloseDevice(_THIS)
 {
     if (_this->hidden != NULL) {
-        AstraResult result = astra_pcm_close(&_this->hidden->stream);
+        AstraResult result = _this->hidden->buffers.stream != 0u ?
+            astra_pcm_buffers_close(&_this->hidden->buffers) :
+            astra_pcm_close(&_this->hidden->stream);
 
         (void)result;
         SDL_free(_this->hidden->mixbuf);

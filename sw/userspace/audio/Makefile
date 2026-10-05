@@ -13,7 +13,7 @@ FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic \
 	-ffunction-sections -fdata-sections $(ASTRA_SHARED_PIC_FLAGS)
 TARGET := build/m68k/libraries/pcm.library.2
 OBJECTS := build/m68k/pcm_library.o build/m68k/midi_library.o \
-	build/m68k/pcm_library_identity.o
+	build/m68k/pcm_buffers.o build/m68k/pcm_library_identity.o
 EXPORTS := pcm.library.exports
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
@@ -22,6 +22,7 @@ all: $(TARGET) library-contract
 library: $(TARGET)
 
 build/m68k/%.o: src/%.c Makefile $(NDK)/include/astra/pcm.h \
+		../../include/astra/audio_stream.h \
 		$(NDK)/include/astra/midi.h src/pcm_session.h \
 		../../include/astra/pcm_service.h
 	@mkdir -p $(@D)
@@ -57,8 +58,14 @@ build/host/test_pcm_library: src/pcm_library.c src/midi_library.c \
 	$(HOST_CC) $(CPPFLAGS) -std=c11 -Wall -Wextra -Werror -pedantic \
 		-O2 $^ -o $@
 
-test: library-contract build/host/test_pcm_library
+build/host/test_pcm_buffers: src/pcm_buffers.c tests/test_pcm_buffers.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) -std=c11 -Wall -Wextra -Werror -pedantic \
+		-O2 $^ -o $@
+
+test: library-contract build/host/test_pcm_library build/host/test_pcm_buffers
 	./build/host/test_pcm_library
+	./build/host/test_pcm_buffers
 
 sanitize: library-contract
 	@mkdir -p build/host

@@ -57,6 +57,9 @@
 #define ASTRA_HOST_CAP_ENTROPY (1u << 7)
 /** The host exposes the audio service. */
 #define ASTRA_HOST_CAP_AUDIO (1u << 8)
+/** Set in ::AstraHostLeaseInfo.capabilities when the host plays application
+ * audio streams (%audio_stream.h, ::ASTRA_SYSCALL_AUDIO_STREAM_OPEN). */
+#define ASTRA_HOST_CAP_AUDIO_STREAM (1u << 9)
 /** Set in ::AstraHostLeaseInfo.state_flags once the host lease is ready for commands. */
 #define ASTRA_HOST_STATE_READY    (1u << 0)
 

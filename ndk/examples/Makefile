@@ -11,6 +11,7 @@ comma := ,
 STREAMS := -Wl,-l:streams.library.1
 SYSTEM := -Wl,-l:system.library.2
 INTERFACE := -Wl,-l:interface.library.5
+PCM := -Wl,-l:pcm.library.2
 
 hello_LIBS := $(STREAMS)
 timer_LIBS := $(STREAMS)
@@ -24,6 +25,8 @@ interface_tabs_LIBS := $(STREAMS) $(INTERFACE)
 interface_scroll_LIBS := $(STREAMS) $(INTERFACE)
 interface_splitter_LIBS := $(STREAMS) $(INTERFACE)
 interface_disclosure_LIBS := $(STREAMS) $(INTERFACE)
+pcm_tone_LIBS := $(STREAMS) $(PCM)
+midi_notes_LIBS := $(STREAMS) $(PCM)
 
 EXAMPLES := $(patsubst %.c,%,$(notdir $(wildcard $(EXAMPLES_DIR)*.c)))
 PROGRAMS := $(addprefix $(BUILD_DIR)/,$(addsuffix .elf,$(EXAMPLES)))

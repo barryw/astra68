@@ -18,7 +18,8 @@ int astra_pcm_request_valid(const AstraPcmRequest *request, uint32_t size,
            operation != ASTRA_PCM_REPLY &&
            (factory == (operation == ASTRA_PCM_OPEN ||
                         operation == ASTRA_PCM_CONVERT_OPEN ||
-                        operation == ASTRA_PCM_MIDI_OPEN)) &&
+                        operation == ASTRA_PCM_MIDI_OPEN ||
+                        operation == ASTRA_PCM_STREAM_GRANT)) &&
            (operation == ASTRA_PCM_CONVERT_OPEN ||
             operation == ASTRA_PCM_MIDI_FONT ||
             operation == ASTRA_PCM_MIDI_LOAD ||

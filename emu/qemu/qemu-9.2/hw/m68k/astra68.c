@@ -47,6 +47,8 @@
 #include "astra/block.h"
 #include "astra/boot.h"
 #include "astra/audio_host.h"
+#include "astra/audio_mailbox.h"
+#include "astra/audio_stream.h"
 #include "astra/copy_engine.h"
 #include "astra/display.h"
 #include "astra/host.h"
@@ -397,6 +399,46 @@ typedef struct AstraDisplayState {
     bool completion_valid;
 } AstraDisplayState;
 
+/* One application audio stream (astra/audio_stream.h): its buffers are in
+   guest memory, and each is copied into the stream's mailbox ring when the
+   ring has room for it, then given back. */
+typedef struct AstraAudioStream {
+    uint32_t owner;
+    uint32_t generation;
+    uint32_t physical_buffer;
+    uint32_t byte_size;
+    uint32_t buffer_count;
+    uint32_t stride;
+    uint32_t audio_bytes;
+    /* Buffers given back: the header's `consumed` is written from this. */
+    uint32_t consumed;
+    /* The header's `queued` as the last kick read it. Only the vCPU thread
+       reads the header's counter, right after the guest's own stores to the
+       buffers it covers; the main loop, refilling on a daemon wake, works
+       from this copy, so on a weakly ordered host it can never see the
+       count before the samples. */
+    uint32_t queued;
+    bool active;
+    bool armed;
+} AstraAudioStream;
+
+typedef struct AstraAudioStreamState {
+    AstraAudioStream streams[ASTRA_AUDIO_MAILBOX_STREAMS];
+    AstraAudioMailbox *mailbox;
+    uint8_t *rings;
+    uint32_t result;
+    int lock_fd;
+#ifdef CONFIG_LINUX
+    /* Sleeps on the daemon's room_sequence and hands each wake to the main
+       loop, which copies the buffers that now fit. */
+    QemuThread room_thread;
+    EventNotifier room_notifier;
+#endif
+    bool enabled;
+    /* A stream interrupt raised and not yet acknowledged (CHANNEL_ACK). */
+    bool completion_pending;
+} AstraAudioStreamState;
+
 typedef struct AstraNetworkEndpointState {
     Astra68State *machine;
     int fd;
@@ -579,6 +621,7 @@ struct Astra68State {
     uint64_t copy_lists;
     AstraNetworkState network;
     AstraHostState host;
+    AstraAudioStreamState audio;
     uint8_t panel_led_data;
     uint8_t panel_led_ownership;
 #ifdef CONFIG_POSIX
@@ -590,6 +633,7 @@ struct Astra68State {
 static Astra68State *astra_input_machine;
 
 static void astra_update_irq(Astra68State *s);
+static void astra_audio_stream_stop(Astra68State *s, uint32_t slot);
 static uint32_t astra_ohci_astra_status(Astra68State *s);
 static uint64_t astra_now_cycles(Astra68State *s);
 static void astra_panel_write32(Astra68State *s, hwaddr offset,
@@ -2763,7 +2807,7 @@ static void astra_host_channel_drain(AstraHostChannel *channel)
 
 static void astra_host_refresh_completion(Astra68State *s)
 {
-    s->host.completion_pending = false;
+    s->host.completion_pending = s->audio.completion_pending;
     for (uint32_t slot = 0; slot < ASTRA_HOST_CHANNEL_COUNT; ++slot) {
         s->host.completion_pending |=
             s->host.channels[slot].completion_pending;
@@ -2780,6 +2824,12 @@ static void astra_host_release_owner(Astra68State *s, uint32_t owner)
         if (s->host.channels[slot].active &&
             s->host.channels[slot].owner == owner) {
             astra_host_channel_drain(&s->host.channels[slot]);
+        }
+    }
+    for (uint32_t slot = 0; slot < ASTRA_AUDIO_MAILBOX_STREAMS; ++slot) {
+        if (s->audio.streams[slot].active &&
+            s->audio.streams[slot].owner == owner) {
+            astra_audio_stream_stop(s, slot);
         }
     }
     astra_host_refresh_completion(s);
@@ -4467,6 +4517,10 @@ static void astra_host_reset(Astra68State *s)
     for (uint32_t slot = 0; slot < ASTRA_HOST_CHANNEL_COUNT; ++slot) {
         astra_host_channel_drain(&s->host.channels[slot]);
     }
+    for (uint32_t slot = 0; slot < ASTRA_AUDIO_MAILBOX_STREAMS; ++slot) {
+        astra_audio_stream_stop(s, slot);
+    }
+    s->audio.completion_pending = false;
     astra_host_refresh_completion(s);
     if (s->host.files != NULL) {
         astra_host_release_files(s, 0);
@@ -5044,6 +5098,338 @@ static void astra_host_channel_kick(Astra68State *s, uint32_t slot,
 
 #undef HOST_FIELD
 
+/*
+ * Application audio streams (astra/audio_stream.h, audio_mailbox.h). The
+ * kernel opens and closes them through STREAM_CONFIG; STREAM_KICK says the
+ * application queued buffers; STREAM_ARM asks for one interrupt once a
+ * buffer is free. All of it runs with the BQL held: MMIO from the vCPU, and
+ * the daemon's room wakes through the main loop.
+ */
+#define AUDIO_HEADER_FIELD(field) offsetof(AstraAudioStreamHeader, field)
+#define AUDIO_CONFIG_FIELD(field) offsetof(AstraAudioStreamConfig, field)
+
+static void astra_audio_stream_stop(Astra68State *s, uint32_t slot)
+{
+    AstraAudioStream *stream = &s->audio.streams[slot];
+
+    if (!stream->active) {
+        return;
+    }
+    /* The daemon stops reading before anything else changes. */
+    qatomic_store_release(&s->audio.mailbox->streams[slot].generation, 0u);
+    memset(stream, 0, sizeof(*stream));
+}
+
+static void astra_audio_stream_interrupt(Astra68State *s,
+                                         AstraAudioStream *stream)
+{
+    stream->armed = false;
+    s->audio.completion_pending = true;
+    s->host.completion_pending = true;
+    astra_update_irq(s);
+}
+
+/* Copy every queued buffer the ring has room for, give each back, and raise
+   the armed interrupt when that freed one. @p kick: called from the guest's
+   STREAM_KICK, so the header's `queued` may be read. */
+static void astra_audio_stream_refill(Astra68State *s, uint32_t slot,
+                                      bool kick)
+{
+    AstraAudioStream *stream;
+    AstraAudioMailboxStream *ring;
+    uint8_t *base;
+    uint8_t *data;
+    uint32_t outstanding;
+    uint32_t used;
+    uint32_t written;
+    uint32_t copied = 0;
+
+    if (slot >= ASTRA_AUDIO_MAILBOX_STREAMS || !s->audio.streams[slot].active) {
+        return;
+    }
+    stream = &s->audio.streams[slot];
+    ring = &s->audio.mailbox->streams[slot];
+    data = s->audio.rings + slot * ASTRA_AUDIO_MAILBOX_RING_BYTES;
+    base = astra_dma_data(s, stream->physical_buffer, stream->byte_size, 0,
+                          stream->byte_size);
+    if (base == NULL) {
+        return;
+    }
+    /* The daemon cannot play it: say so in the header, wake the waiter. */
+    if (qatomic_load_acquire(&ring->status) != ASTRA_SYSCALL_OK) {
+        stl_be_p(base + AUDIO_HEADER_FIELD(status),
+                 qatomic_read(&ring->status));
+        astra_audio_stream_interrupt(s, stream);
+        return;
+    }
+    if (kick) {
+        stream->queued = ldl_be_p(base + AUDIO_HEADER_FIELD(queued));
+    }
+    outstanding = stream->queued - stream->consumed;
+    if (outstanding > stream->buffer_count) {
+        stl_be_p(base + AUDIO_HEADER_FIELD(status),
+                 ASTRA_SYSCALL_INVALID_ARGUMENT);
+        astra_audio_stream_interrupt(s, stream);
+        return;
+    }
+    written = ring->written;
+    used = written - qatomic_load_acquire(&ring->read);
+    if (used > ASTRA_AUDIO_MAILBOX_RING_BYTES) {
+        used = ASTRA_AUDIO_MAILBOX_RING_BYTES; /* a stale read: wait */
+    }
+    while (outstanding != 0 &&
+           used + stream->audio_bytes <=
+               ASTRA_AUDIO_MAILBOX_DEPTH * stream->audio_bytes) {
+        const uint8_t *source = base + ASTRA_AUDIO_STREAM_HEADER_SIZE +
+            (stream->consumed % stream->buffer_count) * stream->stride;
+        uint32_t at = written % ASTRA_AUDIO_MAILBOX_RING_BYTES;
+        uint32_t first = MIN(stream->audio_bytes,
+                             ASTRA_AUDIO_MAILBOX_RING_BYTES - at);
+
+        memcpy(data + at, source, first);
+        memcpy(data, source + first, stream->audio_bytes - first);
+        written += stream->audio_bytes;
+        used += stream->audio_bytes;
+        ++stream->consumed;
+        --outstanding;
+        ++copied;
+    }
+    if (copied == 0) {
+        return;
+    }
+    qatomic_store_release(&ring->written, written);
+    /* The copies have read every byte before the guest may refill them. */
+    smp_mb();
+    stl_be_p(base + AUDIO_HEADER_FIELD(consumed), stream->consumed);
+    if (stream->armed) {
+        astra_audio_stream_interrupt(s, stream);
+    }
+}
+
+static void astra_audio_stream_arm(Astra68State *s, uint32_t slot)
+{
+    AstraAudioStream *stream;
+    uint8_t *base;
+
+    if (slot >= ASTRA_AUDIO_MAILBOX_STREAMS || !s->audio.streams[slot].active) {
+        return;
+    }
+    stream = &s->audio.streams[slot];
+    stream->armed = true;
+    base = astra_dma_data(s, stream->physical_buffer, stream->byte_size, 0,
+                          stream->byte_size);
+    /* Already free, or failed: the interrupt is due now. */
+    if (base == NULL ||
+        ldl_be_p(base + AUDIO_HEADER_FIELD(status)) != ASTRA_SYSCALL_OK ||
+        stream->queued - stream->consumed < stream->buffer_count) {
+        astra_audio_stream_interrupt(s, stream);
+    }
+}
+
+static void astra_audio_stream_configure(Astra68State *s, uint32_t physical)
+{
+    AstraAudioStream *stream;
+    AstraAudioMailboxStream *ring;
+    uint8_t *config;
+    uint8_t *header;
+    uint32_t slot, owner, host_generation, generation, physical_buffer;
+    uint32_t byte_size, format, period_frames, buffer_count;
+    uint32_t frame_bytes, stride;
+    uint16_t operation;
+
+    s->audio.result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+    if (!s->audio.enabled) {
+        s->audio.result = ASTRA_SYSCALL_UNSUPPORTED;
+        return;
+    }
+    if ((physical & 63u) != 0) {
+        return;
+    }
+    config = astra_dma_data(s, physical, ASTRA_AUDIO_STREAM_CONFIG_SIZE, 0,
+                            ASTRA_AUDIO_STREAM_CONFIG_SIZE);
+    if (config == NULL ||
+        ldl_be_p(config + AUDIO_CONFIG_FIELD(size)) !=
+            ASTRA_AUDIO_STREAM_CONFIG_SIZE ||
+        lduw_be_p(config + AUDIO_CONFIG_FIELD(version)) !=
+            ASTRA_AUDIO_STREAM_CONFIG_VERSION) {
+        return;
+    }
+    for (size_t index = 0;
+         index < sizeof(((AstraAudioStreamConfig *)0)->reserved); ++index) {
+        if (config[AUDIO_CONFIG_FIELD(reserved) + index] != 0) {
+            return;
+        }
+    }
+    operation = lduw_be_p(config + AUDIO_CONFIG_FIELD(operation));
+    slot = ldl_be_p(config + AUDIO_CONFIG_FIELD(slot));
+    owner = ldl_be_p(config + AUDIO_CONFIG_FIELD(owner));
+    host_generation = ldl_be_p(config + AUDIO_CONFIG_FIELD(host_generation));
+    generation = ldl_be_p(config + AUDIO_CONFIG_FIELD(stream_generation));
+    physical_buffer = ldl_be_p(config + AUDIO_CONFIG_FIELD(physical_buffer));
+    byte_size = ldl_be_p(config + AUDIO_CONFIG_FIELD(byte_size));
+    format = ldl_be_p(config + AUDIO_CONFIG_FIELD(format));
+    period_frames = ldl_be_p(config + AUDIO_CONFIG_FIELD(period_frames));
+    buffer_count = ldl_be_p(config + AUDIO_CONFIG_FIELD(buffer_count));
+    if (slot >= ASTRA_AUDIO_MAILBOX_STREAMS || owner == 0 || generation == 0) {
+        return;
+    }
+    stream = &s->audio.streams[slot];
+    if (operation == ASTRA_AUDIO_STREAM_CONFIG_CLOSE) {
+        if (!stream->active || stream->owner != owner ||
+            stream->generation != generation) {
+            s->audio.result = stream->active ? ASTRA_SYSCALL_ACCESS_DENIED :
+                                               ASTRA_SYSCALL_PEER_DEAD;
+            return;
+        }
+        astra_audio_stream_stop(s, slot);
+        s->audio.result = ASTRA_SYSCALL_OK;
+        return;
+    }
+    frame_bytes = astra_pcm_format_frame_bytes(format);
+    stride = astra_audio_stream_buffer_bytes(frame_bytes, period_frames);
+    if (operation != ASTRA_AUDIO_STREAM_CONFIG_OPEN || stream->active ||
+        host_generation != s->host.generation || stride == 0 ||
+        period_frames < ASTRA_AUDIO_STREAM_PERIOD_MIN ||
+        period_frames > ASTRA_AUDIO_STREAM_PERIOD_MAX ||
+        buffer_count < ASTRA_AUDIO_STREAM_BUFFERS_MIN ||
+        buffer_count > ASTRA_AUDIO_STREAM_BUFFERS_MAX ||
+        (physical_buffer & (ASTRA_ABI_ALIGNMENT - 1u)) != 0 ||
+        byte_size != ASTRA_AUDIO_STREAM_HEADER_SIZE + buffer_count * stride) {
+        return;
+    }
+    header = astra_dma_data(s, physical_buffer, byte_size, 0, byte_size);
+    if (header == NULL) {
+        return;
+    }
+    memset(header, 0, ASTRA_AUDIO_STREAM_HEADER_SIZE);
+    stl_be_p(header + AUDIO_HEADER_FIELD(magic), ASTRA_AUDIO_STREAM_MAGIC);
+    stw_be_p(header + AUDIO_HEADER_FIELD(version), ASTRA_AUDIO_STREAM_VERSION);
+    stw_be_p(header + AUDIO_HEADER_FIELD(header_size),
+             ASTRA_AUDIO_STREAM_HEADER_SIZE);
+    stl_be_p(header + AUDIO_HEADER_FIELD(format), format);
+    stl_be_p(header + AUDIO_HEADER_FIELD(period_frames), period_frames);
+    stl_be_p(header + AUDIO_HEADER_FIELD(buffer_count), buffer_count);
+    stl_be_p(header + AUDIO_HEADER_FIELD(buffer_bytes), stride);
+    stl_be_p(header + AUDIO_HEADER_FIELD(buffer_offset),
+             ASTRA_AUDIO_STREAM_HEADER_SIZE);
+    stl_be_p(header + AUDIO_HEADER_FIELD(total_size), byte_size);
+    stl_be_p(header + AUDIO_HEADER_FIELD(stream_generation), generation);
+    stl_be_p(header + AUDIO_HEADER_FIELD(status), ASTRA_SYSCALL_OK);
+    *stream = (AstraAudioStream){
+        .owner = owner, .generation = generation,
+        .physical_buffer = physical_buffer, .byte_size = byte_size,
+        .buffer_count = buffer_count, .stride = stride,
+        .audio_bytes = frame_bytes * period_frames, .active = true,
+    };
+    /* An empty ring, then the generation that makes it the daemon's. */
+    ring = &s->audio.mailbox->streams[slot];
+    ring->format = format;
+    ring->period_frames = period_frames;
+    ring->buffer_bytes = stream->audio_bytes;
+    ring->start = qatomic_load_acquire(&ring->read);
+    qatomic_set(&ring->written, ring->start);
+    qatomic_set(&ring->status, 0u);
+    qatomic_store_release(&ring->generation, generation);
+    s->audio.result = ASTRA_SYSCALL_OK;
+}
+
+#ifdef CONFIG_LINUX
+static void *astra_audio_room_thread(void *opaque)
+{
+    Astra68State *s = opaque;
+    uint32_t seen = qatomic_read(&s->audio.mailbox->room_sequence);
+
+    for (;;) {
+        uint32_t now = qatomic_read(&s->audio.mailbox->room_sequence);
+
+        if (now == seen) {
+            qemu_futex_wait((void *)&s->audio.mailbox->room_sequence, now);
+            continue;
+        }
+        seen = now;
+        event_notifier_set(&s->audio.room_notifier);
+    }
+    return NULL;
+}
+
+static void astra_audio_room_ready(EventNotifier *notifier)
+{
+    Astra68State *s = container_of(notifier, Astra68State,
+                                   audio.room_notifier);
+
+    if (!event_notifier_test_and_clear(notifier)) {
+        return;
+    }
+    for (uint32_t slot = 0; slot < ASTRA_AUDIO_MAILBOX_STREAMS; ++slot) {
+        astra_audio_stream_refill(s, slot, false);
+    }
+}
+
+/* ASTRA_AUDIO_MAILBOX_PATH: the file astra-audio-host maps too. Without it
+   the host does not offer audio streams. */
+static void astra_audio_mailbox_init(Astra68State *s)
+{
+    const char *path = g_getenv("ASTRA_AUDIO_MAILBOX_PATH");
+    AstraAudioMailbox *mailbox;
+    void *mapped;
+    int fd;
+
+    s->audio.lock_fd = -1;
+    if (path == NULL || path[0] == '\0') {
+        return;
+    }
+    fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0660);
+    if (fd < 0 || flock(fd, LOCK_EX | LOCK_NB) != 0 ||
+        ftruncate(fd, ASTRA_AUDIO_MAILBOX_BYTES) != 0) {
+        error_report("cannot own audio mailbox '%s': %s", path,
+                     strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    mapped = mmap(NULL, ASTRA_AUDIO_MAILBOX_BYTES, PROT_READ | PROT_WRITE,
+                  MAP_SHARED, fd, 0);
+    if (mapped == MAP_FAILED) {
+        error_report("cannot map audio mailbox '%s': %s", path,
+                     strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    s->audio.lock_fd = fd;
+    mailbox = mapped;
+    /* Every slot starts closed; the counters continue, so a daemon that
+       outlived an earlier QEMU never sees its room word go backwards. */
+    for (uint32_t slot = 0; slot < ASTRA_AUDIO_MAILBOX_STREAMS; ++slot) {
+        qatomic_store_release(&mailbox->streams[slot].generation, 0u);
+    }
+    mailbox->stream_count = ASTRA_AUDIO_MAILBOX_STREAMS;
+    mailbox->ring_bytes = ASTRA_AUDIO_MAILBOX_RING_BYTES;
+    mailbox->ring_offset = ASTRA_AUDIO_MAILBOX_RING_OFFSET;
+    mailbox->version = ASTRA_AUDIO_MAILBOX_VERSION;
+    qatomic_store_release(&mailbox->magic, ASTRA_AUDIO_MAILBOX_MAGIC);
+    s->audio.mailbox = mailbox;
+    s->audio.rings = (uint8_t *)mapped + ASTRA_AUDIO_MAILBOX_RING_OFFSET;
+    if (event_notifier_init(&s->audio.room_notifier, 0) < 0) {
+        error_report("cannot create the audio room notifier");
+        exit(EXIT_FAILURE);
+    }
+    event_notifier_set_handler(&s->audio.room_notifier,
+                               astra_audio_room_ready);
+    qemu_thread_create(&s->audio.room_thread, "astra-audio-room",
+                       astra_audio_room_thread, s, QEMU_THREAD_DETACHED);
+    s->audio.enabled = true;
+}
+#else
+static void astra_audio_mailbox_init(Astra68State *s)
+{
+    s->audio.lock_fd = -1;
+    if (g_getenv("ASTRA_AUDIO_MAILBOX_PATH") != NULL) {
+        error_report("ASTRA_AUDIO_MAILBOX_PATH requires a Linux host");
+        exit(EXIT_FAILURE);
+    }
+}
+#endif
+
+#undef AUDIO_CONFIG_FIELD
+#undef AUDIO_HEADER_FIELD
+
 static uint32_t astra_pending_raw(Astra68State *s)
 {
     uint32_t pending = s->irq_soft;
@@ -5430,7 +5816,8 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
                 ASTRA_HOST_CAP_METRICS |
                 ASTRA_HOST_CAP_REMOTE_DESKTOP |
                 ASTRA_HOST_CAP_ENTROPY |
-                ASTRA_HOST_CAP_AUDIO : 0u;
+                ASTRA_HOST_CAP_AUDIO |
+                (s->audio.enabled ? ASTRA_HOST_CAP_AUDIO_STREAM : 0u) : 0u;
     case 0x88c:
         return s->host.root_fd >= 0 ? ASTRA_HOST_STATE_READY : 0u;
     case 0x890: return s->host.generation;
@@ -5445,6 +5832,7 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
         return (s->host.completed << HOST_SUBMIT_COMPLETED_SHIFT) |
                (s->host.status & 0xffffu);
     case 0x8cc: return s->host.channel_result;
+    case 0x8e4: return s->audio.result;
     case 0x8d0: return s->host.completion_pending ? 1u : 0u;
     case 0x8d8: return qatomic_read(&s->host.inflight);
     case 0x8dc: return qatomic_read(&s->host.max_inflight);
@@ -5649,11 +6037,15 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
     case 0x8bc: astra_host_release_owner(s, value); break;
     case 0x8c0: astra_host_submit(s, value); break;
     case 0x8c8: astra_host_channel_configure(s, value); break;
+    case 0x8e0: astra_audio_stream_configure(s, value); break;
+    case 0x8e8: astra_audio_stream_refill(s, value, true); break;
+    case 0x8ec: astra_audio_stream_arm(s, value); break;
     case 0x8d4:
         if ((value & 1u) != 0u) {
             for (uint32_t slot = 0; slot < ASTRA_HOST_CHANNEL_COUNT; ++slot) {
                 s->host.channels[slot].completion_pending = false;
             }
+            s->audio.completion_pending = false;
             s->host.completion_pending = false;
             astra_update_irq(s);
         }
@@ -6712,6 +7104,7 @@ static void astra68_init(MachineState *machine)
     }
 
     astra_panel_host_init(s);
+    astra_audio_mailbox_init(s);
 
     memory_region_init_io(&s->vesta_io, NULL, &astra_vesta_ops, s,
                           "astra68.vesta", ASTRA_VESTA_SIZE);

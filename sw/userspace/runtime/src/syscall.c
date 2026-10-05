@@ -983,6 +983,29 @@ astra_scheduler_stats(uint32_t observer, AstraSchedulerStats *stats)
 }
 
 uint32_t
+astra_audio_stream_open(uint32_t device, AstraAudioStreamOpen *request)
+{
+    AstraSyscallResult result;
+
+    if (request == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_AUDIO_STREAM_OPEN, device,
+                   (uint32_t)(uintptr_t)request, 0u, 0u, 0u, &result);
+    return result.status;
+}
+
+uint32_t
+astra_audio_stream_wait(uint32_t stream, uint64_t deadline_ns)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_AUDIO_STREAM_WAIT, stream,
+                   (uint32_t)(deadline_ns >> 32), (uint32_t)deadline_ns, 0u,
+                   0u, &result);
+    return result.status;
+}
+
+uint32_t
 astra_library_snapshot(uint32_t observer, uint32_t start,
                        AstraProcLibrarySnapshot *records, uint32_t capacity,
                        uint32_t *moved, uint32_t *library_count)

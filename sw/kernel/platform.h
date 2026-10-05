@@ -70,6 +70,13 @@ typedef struct KernelPlatformHostChannelState {
     uint32_t status;
 } KernelPlatformHostChannelState;
 
+typedef struct KernelPlatformAudioStreamState {
+    uint32_t generation;
+    uint32_t queued;
+    uint32_t consumed;
+    uint32_t status;
+} KernelPlatformAudioStreamState;
+
 typedef struct KernelInputEvent {
     uint32_t header;
     uint32_t value;
@@ -216,6 +223,18 @@ bool kernel_platform_host_channel_completion(
     uint32_t physical_buffer, uint32_t byte_size, uint32_t command_capacity,
     KernelPlatformHostChannelState *state);
 void kernel_platform_host_channel_ack(void);
+uint32_t kernel_platform_audio_stream_open(
+    uint32_t owner, uint32_t host_generation, uint32_t stream_generation,
+    uint32_t slot, uint32_t physical_buffer, uint32_t byte_size,
+    uint32_t format, uint32_t period_frames, uint32_t buffer_count);
+uint32_t kernel_platform_audio_stream_close(
+    uint32_t owner, uint32_t host_generation, uint32_t stream_generation,
+    uint32_t slot);
+void kernel_platform_audio_stream_kick(uint32_t slot);
+void kernel_platform_audio_stream_arm(uint32_t slot);
+bool kernel_platform_audio_stream_state(
+    uint32_t physical_buffer, uint32_t byte_size,
+    KernelPlatformAudioStreamState *state);
 bool kernel_platform_host_reset(void);
 void kernel_platform_host_release_owner(uint32_t owner);
 bool kernel_platform_input_present(void);

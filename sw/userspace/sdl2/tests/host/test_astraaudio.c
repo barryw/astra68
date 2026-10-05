@@ -127,6 +127,65 @@ AstraResult astra_pcm_convert(AstraHandle service, uint32_t source_format,
     *target_frames = 2u * source_frames;
     return ASTRA_OK;
 }
+/* The buffer group: a host with audio streams when has_streams is set. */
+static int has_streams;
+static int stream_wait_failure;
+static uint8_t group_memory[4u * 4096u];
+static uint32_t group_period, group_count, group_format;
+static uint32_t group_queued, group_waits, group_closes;
+static uint64_t group_deadline;
+
+uint64_t astra_clock_monotonic(void) { return 1000u; }
+static uint32_t logged_failures;
+uint32_t astra_log_failure(const char *operation, uint32_t status)
+{
+    (void)operation;
+    (void)status;
+    ++logged_failures;
+    return ASTRA_SYSCALL_OK;
+}
+AstraResult astra_pcm_buffers_open(AstraHandle service, uint32_t format,
+                                   uint32_t period_frames, uint32_t count,
+                                   AstraPcmBuffers *buffers)
+{
+    assert(service == 42u && buffers->stream == 0u);
+    if (!has_streams)
+        return ASTRA_ERROR_UNSUPPORTED;
+    group_format = format;
+    group_period = period_frames;
+    group_count = count;
+    buffers->stream = 7u;
+    buffers->first = group_memory;
+    buffers->count = count;
+    return ASTRA_OK;
+}
+void *astra_pcm_buffers_get(AstraPcmBuffers *buffers)
+{
+    assert(buffers->stream == 7u);
+    return group_memory + (group_queued % group_count) * group_period;
+}
+AstraResult astra_pcm_buffers_queue(AstraPcmBuffers *buffers)
+{
+    assert(buffers->stream == 7u);
+    ++group_queued;
+    return ASTRA_OK;
+}
+AstraResult astra_pcm_buffers_wait(AstraPcmBuffers *buffers,
+                                   uint64_t deadline_ns)
+{
+    assert(buffers->stream == 7u);
+    ++group_waits;
+    group_deadline = deadline_ns;
+    return stream_wait_failure ? ASTRA_ERROR_TIMEOUT : ASTRA_OK;
+}
+AstraResult astra_pcm_buffers_close(AstraPcmBuffers *buffers)
+{
+    assert(buffers->stream == 7u);
+    buffers->stream = 0u;
+    ++group_closes;
+    return ASTRA_OK;
+}
+
 AstraResult astra_pcm_wait(AstraPcmStream *stream, uint32_t frame_count)
 {
     assert(stream->control == 1u);
@@ -200,6 +259,37 @@ int main(void)
     driver.PlayDevice(&device);
     assert(received_frames == 256u);
     driver.CloseDevice(&device);
+
+    /* With audio streams SDL mixes into the host's buffers in place: no
+     * copy, no media service, one wait per buffer. */
+    has_streams = 1;
+    disconnected = 0;
+    received_frames = 0u;
+    device.spec.freq = 22050;
+    device.spec.channels = 1u;
+    device.spec.format = AUDIO_U8;
+    device.spec.samples = 16u; /* below the stream minimum */
+    assert(driver.OpenDevice(&device, NULL) == 0);
+    assert(device.spec.samples == ASTRA_AUDIO_STREAM_PERIOD_MIN);
+    assert(group_period == ASTRA_AUDIO_STREAM_PERIOD_MIN &&
+           group_count == ASTRAAUDIO_BUFFERS &&
+           group_format == ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_U8, 1u,
+                                            22050u));
+    assert(device.hidden->mixbuf == NULL);
+    assert(driver.GetDeviceBuf(&device) == group_memory);
+    driver.PlayDevice(&device);
+    assert(group_queued == 1u && received_frames == 0u);
+    assert(driver.GetDeviceBuf(&device) ==
+           group_memory + ASTRA_AUDIO_STREAM_PERIOD_MIN);
+    driver.WaitDevice(&device);
+    assert(group_waits == 1u &&
+           group_deadline == 1000u + ASTRAAUDIO_WAIT_NS && disconnected == 0);
+    stream_wait_failure = 1;
+    driver.WaitDevice(&device);
+    assert(disconnected == 1); /* a host that takes nothing is gone */
+    driver.CloseDevice(&device);
+    assert(group_closes == 1u && device.hidden == NULL);
+    has_streams = 0;
 
     /* SDL_BuildAudioCVT asks the host first: one filter, the format words
      * where SDL keeps its resampler's rates, the length ratio exact. */

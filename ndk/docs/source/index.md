@@ -13,6 +13,7 @@ resource-lifetime
 message-ports
 shared-memory
 graphics
+audio
 fonts
 filesystem
 interface-kit

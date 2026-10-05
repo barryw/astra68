@@ -25,6 +25,28 @@ SPEC = importlib.util.spec_from_file_location(
 terminal = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(terminal)
 astra_image = terminal.astra_image
+SPEC = importlib.util.spec_from_file_location(
+    "astra_sdl_audio_gate", os.path.join(HERE, "test-sdl-audio.py"))
+audio_gate = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(audio_gate)
+
+
+def heard(host, name):
+    """Why the stand-in host did not hear example @p name, or None."""
+    with host.lock:
+        host.drain()
+        if name == "pcm_tone":
+            voices = [v for v in host.voices
+                      if v.format == PCM_TONE_FORMAT and v.generation]
+            if not voices:
+                return "no audio stream in its format"
+            if not any(voices[0].written):
+                return "its audio stream was silent"
+        if name == "midi_notes":
+            synths = list(host.midis.values()) + host.closed_midis
+            if not any(m.energy > 0.0 for m in synths):
+                return "the synthesizer made no sound"
+    return None
 
 # What each example prints when it worked. Values that depend on the
 # machine's speed or the clock are not part of any line.
@@ -47,7 +69,13 @@ EXPECTED = {
     "interface_splitter": "interface_splitter: Tab, Right moved the divider",
     "interface_disclosure":
         "interface_disclosure: Tab, Enter collapsed Advanced",
+    "pcm_tone": "pcm_tone: 50 buffers of 480 frames, 440 Hz, played in place",
+    "midi_notes": "midi_notes: C E G C on the host's wavetable",
 }
+# The audio examples must also have been heard by the stand-in host
+# (test-sdl-audio.py's AudioHost): pcm_tone through its own audio stream,
+# midi_notes on the host's synthesizer.
+PCM_TONE_FORMAT = 2 | 1 << 8 | 48000 << 12  # S16BE mono 48 kHz
 EXIT_MARK = "NDK-EXAMPLE-EXIT-"
 
 
@@ -100,6 +128,9 @@ def main():
                 "/%s/ndk-%s" % (astra_image.LOCAL_COMMANDS_DIRECTORY, name))
         run_dir = os.path.join(temporary, "run")
         os.mkdir(run_dir)
+        host = audio_gate.AudioHost(os.path.join(run_dir, "audio.sock"))
+        os.environ["ASTRA_AUDIO_HOST_SOCKET"] = os.path.join(run_dir,
+                                                             "audio.sock")
         machine = terminal.Machine(args.qemu, args.rom, scratch, run_dir)
         try:
             if not terminal.open_terminal(machine, args.boot_deadline,
@@ -109,6 +140,11 @@ def main():
                 said, status = run_example(machine, name,
                                            args.command_deadline)
                 shown = [line for line in said if EXPECTED[name] in line]
+                silent = heard(host, name) if status == 0 and shown else None
+                if silent is not None:
+                    failures.append(name)
+                    print("FAIL %s: %s" % (name, silent))
+                    continue
                 if status == 0 and shown:
                     print("PASS %s: %s" % (name, shown[0].strip()))
                     continue
@@ -118,6 +154,7 @@ def main():
                     print("    |%s|" % line)
         finally:
             machine.close()
+            host.close()
     if failures:
         print("FAIL: test-ndk-examples: %s" % " ".join(failures))
         return 1

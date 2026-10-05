@@ -40,7 +40,7 @@
  * A caller that does not recognize this value should refuse to run rather
  * than guess at a register layout that may have changed underneath it.
  */
-#define ASTRA_SYSCALL_ABI_VERSION 0x0001003Fu
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010040u
 
 /**
  * Identifies the running kernel's syscall ABI. No argument. Returns
@@ -960,6 +960,28 @@
  * size, which must be exactly that record's.
  */
 #define ASTRA_SYSCALL_SCHEDULER_STATS  106
+/**
+ * Open an audio stream on the caller's own DMA buffer (%audio_stream.h).
+ * data[1] is a host device handle carrying ::ASTRA_RIGHT_AUDIO_STREAM --
+ * the media service grants applications one with that right alone -- and
+ * data[2] the address of an `AstraAudioStreamOpen` record. The buffer must
+ * hold the header and every buffer of the group. On success the record's
+ * `stream` is a new handle (READ, WRITE) and `stream_generation` the
+ * header's, and the host has written the header. The stream holds the DMA
+ * buffer for the device until the stream handle is closed; closing the DMA
+ * buffer first ends the stream (waits then answer PEER_DEAD).
+ */
+#define ASTRA_SYSCALL_AUDIO_STREAM_OPEN 107
+/**
+ * Hand the host every buffer the application has queued and wait for a
+ * free one. data[1] is a stream handle (::ASTRA_RIGHT_WRITE); data[2] and
+ * data[3] an absolute deadline as for ::ASTRA_SYSCALL_WAIT_ONE. Returns OK
+ * as soon as `queued - consumed < buffer_count`, TIMED_OUT at the deadline
+ * (a deadline already past makes this a plain kick), INVALID_ARGUMENT if
+ * the header's counters are inconsistent, and PEER_DEAD once the stream or
+ * the host is gone.
+ */
+#define ASTRA_SYSCALL_AUDIO_STREAM_WAIT 108
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the main program image. */
 #define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the PT_INTERP image. */

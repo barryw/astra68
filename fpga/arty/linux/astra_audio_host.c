@@ -8,6 +8,7 @@
 #include "astra_sha256.h"
 
 #include <astra/audio_host.h>
+#include <astra/audio_mailbox.h>
 #include <astra/pcm_format.h>
 #include <astra/status.h>
 
@@ -17,6 +18,7 @@
 #include <math.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <linux/futex.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -29,6 +31,7 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
@@ -94,6 +97,10 @@ typedef struct Voice {
     int finished;
     int gap_reported;
     int ever_written;
+    /* An application stream's voice: its mailbox generation, and the byte
+     * position it has read its ring to. */
+    uint32_t stream_generation;
+    uint32_t stream_position;
 } Voice;
 
 /* A conversion the guest reads back instead of hearing. */
@@ -142,6 +149,15 @@ typedef struct Client {
 typedef struct AudioHost {
     volatile uint32_t *registers;
     Client *clients;
+    /* QEMU's application streams (audio_mailbox.h), mixed like the
+     * clients' voices: `streams.voices` holds one per open slot. */
+    AstraAudioMailbox *mailbox;
+    uint8_t *rings;
+    Voice *stream_voices[ASTRA_AUDIO_MAILBOX_STREAMS];
+    /* The generation each slot last failed to open, so it is refused once
+     * and not retried every feed. */
+    uint32_t stream_failed[ASTRA_AUDIO_MAILBOX_STREAMS];
+    Client streams;
     int listener;
     int epoll_fd;
     int lock_fd;
@@ -221,6 +237,19 @@ static Voice *find_voice(Client *client, uint32_t handle)
     return NULL;
 }
 
+/* Every owner of voices: the clients, then the applications' streams. */
+static Client *first_owner(const AudioHost *host)
+{
+    return host->clients != NULL ? host->clients : (Client *)&host->streams;
+}
+
+static Client *next_owner(const AudioHost *host, const Client *client)
+{
+    if (client == &host->streams)
+        return NULL;
+    return client->next != NULL ? client->next : (Client *)&host->streams;
+}
+
 /* Frames in a voice's ring: the queue and the history behind it. */
 #define VOICE_FRAMES (ASTRA_AUDIO_HOST_QUEUE_FRAMES + HISTORY_FRAMES)
 
@@ -234,8 +263,8 @@ static int voice_ready(const Voice *voice)
 
 static uint32_t queued_any(const AudioHost *host)
 {
-    for (const Client *client = host->clients; client != NULL;
-         client = client->next)
+    for (const Client *client = first_owner(host); client != NULL;
+         client = next_owner(host, client))
         for (const Voice *voice = client->voices; voice != NULL;
              voice = voice->next)
             if (voice_ready(voice))
@@ -301,14 +330,189 @@ static void voice_next(Voice *voice, double out[2])
 
 static void free_client(AudioHost *host, Client *client);
 
+/* A voice for @p format (validated by the caller), or NULL without memory. */
+static Voice *new_voice(uint32_t format)
+{
+    Voice *voice = calloc(1u, sizeof(*voice));
+
+    if (voice == NULL)
+        return NULL;
+    voice->format = format;
+    voice->encoding = astra_pcm_format_encoding(format);
+    voice->channels = astra_pcm_format_channels(format);
+    voice->rate = astra_pcm_format_rate(format);
+    voice->frame_bytes = astra_pcm_format_frame_bytes(format);
+    voice->frames = calloc(VOICE_FRAMES, sizeof(*voice->frames));
+    if (voice->rate != ASTRA_PCM_RATE) {
+        voice->filter = astra_audio_filter(voice->rate, ASTRA_PCM_RATE,
+                                           &voice->taps);
+        if (voice->filter == NULL) {
+            voice->owned_filter = astra_audio_make_filter(
+                voice->rate, ASTRA_PCM_RATE, &voice->taps);
+            voice->filter = voice->owned_filter;
+        }
+        voice->lookahead = voice->taps / 2u;
+        if (voice->lookahead > HISTORY_FRAMES)
+            voice->filter = NULL;
+    }
+    if (voice->frames == NULL ||
+        (voice->rate != ASTRA_PCM_RATE && voice->filter == NULL)) {
+        free_voice(voice);
+        return NULL;
+    }
+    voice->gain_q16 = UINT32_C(65536);
+    return voice;
+}
+
+/* Queue one encoded frame on @p voice. */
+static void voice_push(Voice *voice, const uint8_t *data)
+{
+    float *frame = voice->frames[(voice->read_at + voice->queued) %
+                                 VOICE_FRAMES];
+    uint32_t sample = voice->frame_bytes / voice->channels;
+
+    frame[0] = astra_audio_decode_sample(voice->encoding, data);
+    frame[1] = voice->channels == 1u ? frame[0] :
+               astra_audio_decode_sample(voice->encoding, data + sample);
+    ++voice->queued;
+}
+
+static void stream_remove(AudioHost *host, uint32_t slot)
+{
+    Voice *voice = host->stream_voices[slot];
+
+    if (voice == NULL)
+        return;
+    for (Voice **link = &host->streams.voices; *link != NULL;
+         link = &(*link)->next)
+        if (*link == voice) {
+            *link = voice->next;
+            break;
+        }
+    free_voice(voice);
+    host->stream_voices[slot] = NULL;
+}
+
+/*
+ * Take from each application stream's ring what the next @p sink_frames of
+ * mix need, and no more: the ring, not this voice, is where a stream waits,
+ * so its latency stays the mailbox's two buffers. When taking makes room for
+ * another buffer, wake QEMU to copy it (audio_mailbox.h).
+ */
+static void pull_streams(AudioHost *host, uint32_t sink_frames)
+{
+    AstraAudioMailbox *mailbox = host->mailbox;
+    int room_made = 0;
+    int refused = 0;
+
+    if (mailbox == NULL ||
+        __atomic_load_n(&mailbox->magic, __ATOMIC_ACQUIRE) !=
+            ASTRA_AUDIO_MAILBOX_MAGIC ||
+        mailbox->version != ASTRA_AUDIO_MAILBOX_VERSION)
+        return;
+    for (uint32_t slot = 0u; slot < ASTRA_AUDIO_MAILBOX_STREAMS; ++slot) {
+        AstraAudioMailboxStream *ring = &mailbox->streams[slot];
+        const uint8_t *data = host->rings +
+            (size_t)slot * ASTRA_AUDIO_MAILBOX_RING_BYTES;
+        uint32_t generation = __atomic_load_n(&ring->generation,
+                                              __ATOMIC_ACQUIRE);
+        Voice *voice = host->stream_voices[slot];
+        uint32_t written;
+        uint32_t want;
+        uint32_t before;
+
+        if (voice != NULL && voice->stream_generation != generation)
+            stream_remove(host, slot);
+        if (generation == 0u || host->stream_failed[slot] == generation)
+            continue;
+        if (host->stream_voices[slot] == NULL) {
+            uint32_t frame_bytes = astra_pcm_format_frame_bytes(ring->format);
+            uint32_t status = ASTRA_SYSCALL_OK;
+
+            if (frame_bytes == 0u || ring->buffer_bytes == 0u ||
+                ring->buffer_bytes % frame_bytes != 0u ||
+                ring->buffer_bytes > ASTRA_AUDIO_MAILBOX_RING_BYTES /
+                                         ASTRA_AUDIO_MAILBOX_DEPTH)
+                status = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            voice = status == ASTRA_SYSCALL_OK ? new_voice(ring->format) :
+                                                 NULL;
+            if (voice == NULL) {
+                /* Refuse it where the application will see it: QEMU puts
+                 * the status in the stream header and its wait fails. */
+                if (status == ASTRA_SYSCALL_OK)
+                    status = ASTRA_SYSCALL_UNSUPPORTED;
+                host->stream_failed[slot] = generation;
+                fprintf(stderr, "ASTRA AUDIO HOST stream %u format %#x "
+                        "refused: %u\n", slot, ring->format, status);
+                if (__atomic_load_n(&ring->generation, __ATOMIC_ACQUIRE) ==
+                    generation) {
+                    __atomic_store_n(&ring->status, status, __ATOMIC_RELEASE);
+                    refused = 1;
+                }
+                continue;
+            }
+            voice->stream_generation = generation;
+            voice->stream_position = ring->start;
+            voice->next = host->streams.voices;
+            host->streams.voices = voice;
+            host->stream_voices[slot] = voice;
+        }
+        voice = host->stream_voices[slot];
+        written = __atomic_load_n(&ring->written, __ATOMIC_ACQUIRE);
+        before = written - voice->stream_position;
+        if (before > ASTRA_AUDIO_MAILBOX_RING_BYTES)
+            continue; /* not this generation's yet */
+        /* Source frames for the sink frames, plus the filter's wing. */
+        want = voice->lookahead + 1u +
+               (uint32_t)(((uint64_t)sink_frames * voice->rate +
+                           ASTRA_PCM_RATE - 1u) / ASTRA_PCM_RATE);
+        if (want > ASTRA_AUDIO_HOST_QUEUE_FRAMES)
+            want = ASTRA_AUDIO_HOST_QUEUE_FRAMES;
+        while (voice->queued < want &&
+               written - voice->stream_position >= voice->frame_bytes) {
+            uint32_t at = voice->stream_position %
+                          ASTRA_AUDIO_MAILBOX_RING_BYTES;
+            uint8_t frame[ASTRA_PCM_MAX_FRAME_BYTES];
+
+            if (at + voice->frame_bytes <= ASTRA_AUDIO_MAILBOX_RING_BYTES) {
+                voice_push(voice, data + at);
+            } else {
+                for (uint32_t byte = 0u; byte < voice->frame_bytes; ++byte)
+                    frame[byte] = data[(at + byte) %
+                                       ASTRA_AUDIO_MAILBOX_RING_BYTES];
+                voice_push(voice, frame);
+            }
+            voice->stream_position += voice->frame_bytes;
+            voice->ever_written = 1;
+            voice->gap_reported = 0;
+        }
+        if (__atomic_load_n(&ring->generation, __ATOMIC_ACQUIRE) !=
+            generation) {
+            /* Closed under us: what was just decoded is a dead stream's. */
+            stream_remove(host, slot);
+            continue;
+        }
+        __atomic_store_n(&ring->read, voice->stream_position,
+                         __ATOMIC_RELEASE);
+        if (before > ring->buffer_bytes &&
+            written - voice->stream_position <= ring->buffer_bytes)
+            room_made = 1;
+    }
+    if (room_made || refused) {
+        __atomic_add_fetch(&mailbox->room_sequence, 1u, __ATOMIC_RELEASE);
+        (void)syscall(SYS_futex, &mailbox->room_sequence, FUTEX_WAKE, 1,
+                      NULL, NULL, 0);
+    }
+}
+
 static void mix_frame(AudioHost *host, int32_t *left, int32_t *right)
 {
     int64_t sum_left = 0;
     int64_t sum_right = 0;
     uint32_t active_voices = 0u;
 
-    for (Client *client = host->clients; client != NULL;
-         client = client->next)
+    for (Client *client = first_owner(host); client != NULL;
+         client = next_owner(host, client))
         for (Voice *voice = client->voices; voice != NULL;
              voice = voice->next) {
             double sample[2];
@@ -409,6 +613,8 @@ static void feed(AudioHost *host)
     uint32_t level = read_reg(host, REG_STATUS) & STATUS_LEVEL_MASK;
     uint32_t room = AUDIO_FRAMES - level;
 
+    pull_streams(host, room);
+
     if (host->draining) {
         if (level != 0u)
             return;
@@ -444,8 +650,8 @@ static void feed(AudioHost *host)
         return;
     while (room != 0u && host->tail_written < AUDIO_FRAMES) {
         if (!host->tailing)
-            for (Client *client = host->clients; client != NULL;
-                 client = client->next)
+            for (Client *client = first_owner(host); client != NULL;
+                 client = next_owner(host, client))
                 for (Voice *voice = client->voices; voice != NULL;
                      voice = voice->next)
                     if (!voice->paused && voice->ever_written &&
@@ -1239,37 +1445,12 @@ static void execute(AudioHost *host, Client *client,
             client->monitor = 1;
         break;
     case ASTRA_HOST_AUDIO_OPEN:
-        voice = calloc(1u, sizeof(*voice));
+        voice = new_voice(request->value);
         if (voice == NULL) {
             reply->status = ASTRA_STATUS_NO_SPACE;
             break;
         }
-        voice->format = request->value;
-        voice->encoding = astra_pcm_format_encoding(request->value);
-        voice->channels = astra_pcm_format_channels(request->value);
-        voice->rate = astra_pcm_format_rate(request->value);
-        voice->frame_bytes = astra_pcm_format_frame_bytes(request->value);
-        voice->frames = calloc(VOICE_FRAMES, sizeof(*voice->frames));
-        if (voice->rate != ASTRA_PCM_RATE) {
-            voice->filter = astra_audio_filter(voice->rate, ASTRA_PCM_RATE,
-                                               &voice->taps);
-            if (voice->filter == NULL) {
-                voice->owned_filter = astra_audio_make_filter(
-                    voice->rate, ASTRA_PCM_RATE, &voice->taps);
-                voice->filter = voice->owned_filter;
-            }
-            voice->lookahead = voice->taps / 2u;
-            if (voice->lookahead > HISTORY_FRAMES)
-                voice->filter = NULL;
-        }
-        if (voice->frames == NULL ||
-            (voice->rate != ASTRA_PCM_RATE && voice->filter == NULL)) {
-            free_voice(voice);
-            reply->status = ASTRA_STATUS_NO_SPACE;
-            break;
-        }
         voice->handle = next_handle(host);
-        voice->gain_q16 = UINT32_C(65536);
         voice->next = client->voices;
         client->voices = voice;
         reply->handle = voice->handle;
@@ -1294,16 +1475,8 @@ static void execute(AudioHost *host, Client *client,
             break;
         }
         for (uint32_t at = 0u; at < request->data_length;
-             at += voice->frame_bytes) {
-            float *frame = voice->frames[(voice->read_at + voice->queued) %
-                                         VOICE_FRAMES];
-            uint32_t sample = voice->frame_bytes / voice->channels;
-
-            frame[0] = astra_audio_decode_sample(voice->encoding, data + at);
-            frame[1] = voice->channels == 1u ? frame[0] :
-                       astra_audio_decode_sample(voice->encoding, data + at + sample);
-            ++voice->queued;
-        }
+             at += voice->frame_bytes)
+            voice_push(voice, data + at);
         voice->ever_written = 1;
         voice->gap_reported = 0;
         reply->queued_frames = voice->queued;
@@ -1460,6 +1633,47 @@ static void receive_client(AudioHost *host, Client *client)
     if (sendmsg(client->fd, &message, MSG_NOSIGNAL | MSG_DONTWAIT) !=
         (ssize_t)(sizeof(reply) + reply.data_length))
         free_client(host, client);
+}
+
+/* The file QEMU copies application stream buffers into. Either side may
+ * create it; QEMU owns its header. Without it there are no streams, and the
+ * socket protocol still works. */
+static void setup_mailbox(AudioHost *host)
+{
+    const char *path = getenv("ASTRA_AUDIO_MAILBOX_PATH");
+    void *mapped;
+    int fd;
+
+    if (path == NULL || path[0] == '\0')
+        path = ASTRA_AUDIO_MAILBOX_DEFAULT_PATH;
+    fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        fprintf(stderr, "ASTRA AUDIO HOST no stream mailbox %s: %s\n", path,
+                strerror(errno));
+        return;
+    }
+    {
+        struct stat status;
+
+        if (fstat(fd, &status) != 0 ||
+            (status.st_size < (off_t)ASTRA_AUDIO_MAILBOX_BYTES &&
+             ftruncate(fd, ASTRA_AUDIO_MAILBOX_BYTES) != 0)) {
+            fprintf(stderr, "ASTRA AUDIO HOST cannot size %s: %s\n", path,
+                    strerror(errno));
+            (void)close(fd);
+            return;
+        }
+    }
+    mapped = mmap(NULL, ASTRA_AUDIO_MAILBOX_BYTES, PROT_READ | PROT_WRITE,
+                  MAP_SHARED, fd, 0);
+    (void)close(fd);
+    if (mapped == MAP_FAILED) {
+        fprintf(stderr, "ASTRA AUDIO HOST cannot map %s: %s\n", path,
+                strerror(errno));
+        return;
+    }
+    host->mailbox = mapped;
+    host->rings = (uint8_t *)mapped + ASTRA_AUDIO_MAILBOX_RING_OFFSET;
 }
 
 static int setup_hardware(AudioHost *host)
@@ -1695,6 +1909,87 @@ done:
         client.voices = voice->next;
         free_voice(voice);
     }
+    return passed;
+}
+
+/* A stream is taken from its ring as the mix needs it, wakes QEMU when it
+ * makes room for another buffer, and goes with its generation. */
+static int stream_self_test(void)
+{
+    AudioHost host = {0};
+    AstraAudioMailbox *mailbox = calloc(1u, ASTRA_AUDIO_MAILBOX_BYTES);
+    AstraAudioMailboxStream *ring;
+    uint8_t *data;
+    int32_t left = 0, right = 0;
+    int passed = 0;
+
+    if (mailbox == NULL)
+        return 0;
+    host.mailbox = mailbox;
+    host.rings = (uint8_t *)mailbox + ASTRA_AUDIO_MAILBOX_RING_OFFSET;
+    mailbox->magic = ASTRA_AUDIO_MAILBOX_MAGIC;
+    mailbox->version = ASTRA_AUDIO_MAILBOX_VERSION;
+    ring = &mailbox->streams[3];
+    data = host.rings + 3u * ASTRA_AUDIO_MAILBOX_RING_BYTES;
+    ring->format = ASTRA_PCM_FORMAT_S16BE_STEREO;
+    ring->period_frames = 256u;
+    ring->buffer_bytes = 1024u;
+    /* Two buffers that straddle the end of the ring. */
+    ring->start = ASTRA_AUDIO_MAILBOX_RING_BYTES - 1022u;
+    ring->read = ring->start;
+    for (uint32_t at = 0u; at < 2048u; at += 2u) {
+        data[(ring->start + at) % ASTRA_AUDIO_MAILBOX_RING_BYTES] = 0u;
+        data[(ring->start + at + 1u) % ASTRA_AUDIO_MAILBOX_RING_BYTES] = 1u;
+    }
+    ring->written = ring->start + 2048u;
+    ring->generation = 7u;
+    pull_streams(&host, 100u);
+    if (host.stream_voices[3] == NULL ||
+        host.stream_voices[3]->queued != 101u ||
+        ring->read != ring->start + 404u || mailbox->room_sequence != 0u)
+        goto done;
+    pull_streams(&host, 300u);
+    if (host.stream_voices[3]->queued != 301u ||
+        ring->read != ring->start + 1204u || mailbox->room_sequence != 1u)
+        goto done;
+    mix_frame(&host, &left, &right);
+    if (left != 256 || right != 256)
+        goto done;
+    ring->generation = 0u;
+    pull_streams(&host, 300u);
+    if (host.stream_voices[3] != NULL || host.streams.voices != NULL)
+        goto done;
+    ring->start = ring->written;
+    ring->generation = 8u;
+    pull_streams(&host, 300u);
+    if (host.stream_voices[3] == NULL ||
+        host.stream_voices[3]->stream_position != ring->written ||
+        host.stream_voices[3]->queued != 0u)
+        goto done;
+    /* A stream it cannot play is refused once, where QEMU will see it. */
+    {
+        AstraAudioMailboxStream *bad = &mailbox->streams[5];
+        uint32_t rooms = mailbox->room_sequence;
+
+        bad->format = ASTRA_PCM_FORMAT_S16BE_STEREO;
+        bad->buffer_bytes = 1022u; /* not whole frames */
+        bad->generation = 9u;
+        pull_streams(&host, 300u);
+        if (host.stream_voices[5] != NULL ||
+            bad->status != ASTRA_SYSCALL_INVALID_ARGUMENT ||
+            mailbox->room_sequence != rooms + 1u)
+            goto done;
+        pull_streams(&host, 300u);
+        if (mailbox->room_sequence != rooms + 1u)
+            goto done;
+    }
+    passed = 1;
+done:
+    for (uint32_t slot = 0u; slot < ASTRA_AUDIO_MAILBOX_STREAMS; ++slot)
+        stream_remove(&host, slot);
+    free(mailbox);
+    if (!passed)
+        fprintf(stderr, "audio stream self-test failed\n");
     return passed;
 }
 
@@ -2499,7 +2794,7 @@ static int self_test(void)
     int sockets[2];
     ssize_t received;
 
-    if (!mix_self_test() || !decode_self_test() || !resample_self_test() ||
+    if (!mix_self_test() || !stream_self_test() || !decode_self_test() || !resample_self_test() ||
         !convert_self_test() || !sha256_self_test() || !midi_self_test() ||
         astra_audio_decode_sample(ASTRA_PCM_ENCODING_S24LE, sample) != 8388607.0f ||
         astra_audio_decode_sample(ASTRA_PCM_ENCODING_S16BE,
@@ -2595,6 +2890,7 @@ int main(int argc, char **argv)
         perror("Astra audio host setup");
         goto done;
     }
+    setup_mailbox(&host);
     fprintf(stderr, "ASTRA AUDIO HOST ready socket=%s rate=%u channels=2\n",
             path, AUDIO_RATE);
     (void)signal(SIGTERM, stop_running);
@@ -2659,6 +2955,10 @@ done:
     }
     while (host.clients != NULL)
         free_client(&host, host.clients);
+    for (uint32_t slot = 0u; slot < ASTRA_AUDIO_MAILBOX_STREAMS; ++slot)
+        stream_remove(&host, slot);
+    if (host.mailbox != NULL)
+        (void)munmap(host.mailbox, ASTRA_AUDIO_MAILBOX_BYTES);
     if (host.epoll_fd >= 0)
         (void)close(host.epoll_fd);
     if (host.listener >= 0)

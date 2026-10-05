@@ -33,6 +33,9 @@
 #define ASTRA_RIGHT_ADMINISTER (1u << 6)
 /** Use privileged diagnostics associated with the resource. */
 #define ASTRA_RIGHT_DEBUG      (1u << 7)
+/** On a host device handle: open audio streams (%audio_stream.h), and
+ * nothing else the device offers. */
+#define ASTRA_RIGHT_AUDIO_STREAM (1u << 8)
 
 /** Maximum size of one shared or reserved area. */
 #define ASTRA_AREA_SIZE_MAX \

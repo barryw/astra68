@@ -235,6 +235,11 @@ uint32_t RESERVED_110;        // 0x110
     uint32_t HOST_ACCEL_CHANNEL_ACK;   // 0x8D4 write bit 0 after drain
     uint32_t HOST_ACCEL_INFLIGHT;      // 0x8D8 executing channel commands
     uint32_t HOST_ACCEL_MAX_INFLIGHT;  // 0x8DC high-water mark
+    // audio streams (astra/audio_stream.h); completions share CHANNEL_ACK
+    uint32_t HOST_ACCEL_STREAM_CONFIG; // 0x8E0 physical AstraAudioStreamConfig
+    uint32_t HOST_ACCEL_STREAM_RESULT; // 0x8E4 config result
+    uint32_t HOST_ACCEL_STREAM_KICK;   // 0x8E8 write slot: read its `queued`
+    uint32_t HOST_ACCEL_STREAM_ARM;    // 0x8EC write slot: one IRQ when one is free
 } VestaRegs;
 
 #define VESTA ((VestaRegs *)VESTA_BASE)
@@ -518,6 +523,8 @@ _Static_assert(offsetof(VestaRegs, RTC_NS_HI) == 0x428u,
                "Vesta wall-clock upper-half ABI offset");
 _Static_assert(offsetof(VestaRegs, RTC_ZONE) == 0x430u,
                "Vesta wall-clock zone ABI offset");
+_Static_assert(offsetof(VestaRegs, HOST_ACCEL_STREAM_ARM) == 0x8ecu,
+               "Vesta audio stream register layout changed");
 _Static_assert(offsetof(VestaRegs, RTC_SET_NS_LO) == 0x438u,
                "Vesta wall-clock set ABI offset");
 _Static_assert(offsetof(VestaRegs, INPUT_ID) == 0x700u,

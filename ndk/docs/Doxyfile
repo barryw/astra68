@@ -26,6 +26,7 @@ INPUT                  = include/astra ../sw/include/astra/gui.h \
                          ../sw/include/astra/object_abi.h \
                          ../sw/include/astra/address_space.h \
                          ../sw/include/astra/application_service.h \
+                         ../sw/include/astra/audio_stream.h \
                          ../sw/include/astra/block.h \
                          ../sw/include/astra/bytes.h \
                          ../sw/include/astra/civil.h \

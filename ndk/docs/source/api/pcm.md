@@ -1,50 +1,36 @@
 # PCM playback
 
-`pcm.library.2` is the native Audio Kit PCM slice. Its implementation is in
-the system library and media service; NDK headers contain declarations only.
-The application receives a `PCM` service capability at startup and passes its
-handle and an explicit format to `astra_pcm_open`. It does not open AstraHost
-or a Linux socket.
+`pcm.library.2` is the Audio Kit. The guide is [Audio](../audio.md): which
+of its three ways to use, the buffer-group loop and its sizing, one-shot
+voices, conversion and the wavetable synthesizer.
 
-Both input formats are **48,000 frames/second, stereo, interleaved**:
-signed 24-bit little-endian (six bytes per frame) and signed 16-bit
-big-endian (four bytes per frame). The latter matches SDL2's `AUDIO_S16SYS`
-on the MC68040. The Linux mixer converts either to the physical 24-bit sink.
-Use
-`astra_pcm_write` for any frame count; it batches internally, reports how many
-frames the service accepted, and returns `ASTRA_ERROR_BUSY` when the queue is
-full. Retry only the remainder. Calls on the same `AstraPcmStream` must be
-serialized by the caller. `astra_pcm_pause` preserves the queue while stopping
-playback; `astra_pcm_clear` discards queued frames without closing the stream.
-`astra_pcm_finish` drains queued audio; `astra_pcm_close` discards it. A dead
-media service invalidates the stream;
-open a new one rather than replaying an old handle.
+Every function takes the `PCM` startup capability. Formats are
+`ASTRA_PCM_FORMAT()` words: any encoding in `pcm_format.h`, one or two
+channels, 8 to 192 kHz. The Linux host converts and resamples each source to
+its 48 kHz stereo mix, so a program gives samples as it has them.
 
-This is **not yet a general game-audio API**. SDL2 can advertise a 48 kHz
-`AUDIO_S16MSB` device and perform its normal conversion for applications that
-request other formats and rates. That is a correctness path, not a measured
-MC68040 performance claim. Chocolate Doom uses SDL2_mixer and DevilutionX's
-SDL2 build uses SDL_audiolib: their sound-effect mixing remains in those
-libraries until host-backed adapters are measured and built. The native mixer
-already isolates multiple PCM streams, but reusable/looping samples, pan,
-host-side resampling, accurate completion, and broader physical timing gates
-remain before the system is game-ready. MIDI music plays on the host's
-SoundFont synthesizer into this same mixer ([MIDI music](midi.md)); a speech
-engine will follow the same way.
-
-`astra_pcm_convert` (pcm.library 2.2) converts a buffer between any two
-format words on the Linux host: decoding, the mixer's windowed-sinc
-resampler, and encoding with rounding and saturation. The result is exactly
-`floor(source_frames * target_rate / source_rate)` frames, so callers can
-size their buffers the way SDL does. SDL2's `SDL_BuildAudioCVT` uses it for
-every conversion the host can take (two channels or fewer, 8-192 kHz), which
-is how Chocolate Doom's sound effects reach its 44.1 kHz mixer without SDL's
-float resampler running on the MC68040.
+- **Buffer groups** (2.5): {c:func}`astra_pcm_buffers_open`,
+  {c:func}`astra_pcm_buffers_get`, {c:func}`astra_pcm_buffers_queue`,
+  {c:func}`astra_pcm_buffers_wait`, {c:func}`astra_pcm_buffers_close`. The
+  application's own buffers, read by the host in place, on a kernel audio
+  stream (`audio_stream.h`). SDL2's audio device is one.
+- **Voices** (2.0, 2.1): {c:func}`astra_pcm_open`, {c:func}`astra_pcm_write`,
+  {c:func}`astra_pcm_wait` and the controls. Each call is a round trip
+  through the media service. Calls on one `AstraPcmStream` must be
+  serialized by the caller; a dead media service invalidates it.
+- **Conversion** (2.2): {c:func}`astra_pcm_convert` on the host, with the
+  mixer's resampler. The result is exactly
+  `floor(source_frames * target_rate / source_rate)` frames. SDL2's
+  `SDL_BuildAudioCVT` uses it for every conversion the host can take.
 
 ```{doxygenfile} pcm.h
 :project: astra-ndk
 ```
 
 ```{doxygenfile} pcm_format.h
+:project: astra-ndk
+```
+
+```{doxygenfile} audio_stream.h
 :project: astra-ndk
 ```

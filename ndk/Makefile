@@ -15,7 +15,7 @@ SYSTEM := ../sw/userspace/system
 # headers include, and those that declare exported functions. The rest of
 # sw/include is firmware and private wire formats.
 KERNEL_ABI_HEADERS := $(addprefix ../sw/include/astra/,address_space.h \
-	application_service.h block.h bytes.h civil.h compiler.h display.h \
+	application_service.h audio_stream.h block.h bytes.h civil.h compiler.h display.h \
 	divide.h event.h event_descriptor.h gui.h host.h input.h library.h \
 	limits.h message_abi.h network.h ntp.h pcm_format.h posix_process.h \
 	proc.h process.h program.h service_manager_abi.h shutdown.h status.h \

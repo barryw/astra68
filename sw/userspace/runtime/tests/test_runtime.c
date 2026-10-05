@@ -159,6 +159,8 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_PROCESS_SNAPSHOT &&
         number != ASTRA_SYSCALL_PROCESS_OPEN &&
         number != ASTRA_SYSCALL_SCHEDULER_STATS &&
+        number != ASTRA_SYSCALL_AUDIO_STREAM_OPEN &&
+        number != ASTRA_SYSCALL_AUDIO_STREAM_WAIT &&
         number != ASTRA_SYSCALL_LIBRARY_SNAPSHOT &&
         number != ASTRA_SYSCALL_PROCESS_SIGNAL &&
         number != ASTRA_SYSCALL_PROCESS_TERMINATE &&
@@ -678,6 +680,21 @@ test_syscall_wrappers(void)
                mock_argument2 == sizeof(stats));
         assert(astra_scheduler_stats(process, NULL) ==
                ASTRA_SYSCALL_INVALID_ARGUMENT);
+    }
+    {
+        AstraAudioStreamOpen open = {.size = sizeof(open)};
+
+        assert(astra_audio_stream_open(process, &open) == ASTRA_SYSCALL_OK);
+        assert(mock_number == ASTRA_SYSCALL_AUDIO_STREAM_OPEN);
+        assert(mock_argument0 == process &&
+               mock_argument1 == (uint32_t)(uintptr_t)&open);
+        assert(astra_audio_stream_open(process, NULL) ==
+               ASTRA_SYSCALL_INVALID_ARGUMENT);
+        assert(astra_audio_stream_wait(process, UINT64_C(0x0000000500000007)) ==
+               ASTRA_SYSCALL_OK);
+        assert(mock_number == ASTRA_SYSCALL_AUDIO_STREAM_WAIT);
+        assert(mock_argument0 == process && mock_argument1 == 5u &&
+               mock_argument2 == 7u);
     }
     assert(astra_library_snapshot(process, 3u, library_records,
                                   SNAPSHOT_BATCH_RECORDS, &moved,

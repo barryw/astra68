@@ -1,6 +1,7 @@
 #include "process.h"
 #include "audit.h"
 
+#include <astra/audio_stream.h>
 #include <astra/block.h>
 #include <astra/clock.h>
 #include <astra/copy_engine.h>
@@ -14,6 +15,7 @@
 #include <astra/host.h>
 #include <astra/library.h>
 #include <astra/network.h>
+#include <astra/pcm_format.h>
 #include <astra/process.h>
 #include <astra/proc.h>
 #include <astra/render_batch.h>
@@ -102,6 +104,34 @@ typedef struct KernelHostChannel {
     uint8_t waiting;
     uint8_t reserved[2];
 } KernelHostChannel;
+
+/*
+ * An application's audio stream (audio_stream.h): its DMA buffer pinned for
+ * the host, which reads buffers straight out of it. The slot is the host's
+ * name for the stream. OPEN -> DEAD when the host has been told to stop and
+ * the pin is gone (the handle closed, or the DMA buffer under it did) ->
+ * FREE only when the handle closes, so a slot is never reused while a handle
+ * can still name it.
+ */
+#define KERNEL_AUDIO_STREAM_MAX 32u
+typedef enum KernelAudioStreamState {
+    KERNEL_AUDIO_STREAM_FREE = 0,
+    KERNEL_AUDIO_STREAM_OPEN,
+    KERNEL_AUDIO_STREAM_DEAD
+} KernelAudioStreamState;
+
+typedef struct KernelAudioStream {
+    KernelProcessDmaBuffer *buffer;
+    KernelDmaToken token;
+    KernelThreadWaitQueue waiters;
+    uint32_t process_id;
+    uint32_t owner;
+    uint32_t host_generation;
+    uint32_t generation;
+    uint32_t buffer_count;
+    uint8_t state;
+    uint8_t reserved[3];
+} KernelAudioStream;
 
 typedef enum KernelDynamicProcessState {
     KERNEL_DYNAMIC_PROCESS_NONE = 0,
@@ -301,6 +331,15 @@ static KernelHostChannel
  * set wherever waiting is, and the interrupt drops bits it finds idle.
  */
 static uint32_t host_channel_waiting[KERNEL_VM_HOST_CHANNEL_PAGE_COUNT / 32u];
+/*
+ * Thirty-two inputs to the host mixer: the mixer's limit, as the doorbell
+ * aperture is the host channels'. One waiting bit each, as above.
+ */
+static KernelAudioStream audio_streams[KERNEL_AUDIO_STREAM_MAX] KERNEL_TABLES;
+static uint32_t audio_stream_waiting;
+static uint32_t audio_stream_generation;
+_Static_assert(KERNEL_AUDIO_STREAM_MAX <= 32u,
+               "one audio stream waiting word");
 static uint32_t library_cache_head;
 static KernelExecutableLoad *executable_loads;
 static KernelSchedulerStats scheduler_stats;
@@ -377,6 +416,7 @@ static uint32_t host_channel_close(KernelProcess *process,
 static uint32_t host_channels_close_process(KernelProcess *process);
 static uint32_t host_channels_close_buffer(KernelProcess *process,
                                            KernelProcessDmaBuffer *buffer);
+static void audio_streams_close_buffer(KernelProcessDmaBuffer *buffer);
 static uint32_t host_channel_open(
     KernelProcess *process, const KernelThread *thread,
     AstraHostChannelOpen *channel,
@@ -1876,6 +1916,7 @@ static void dma_buffer_release(void *object, void *context)
     if (buffer == NULL || process == NULL || buffer->active == 0u)
         return;
     (void)host_channels_close_buffer(process, buffer);
+    audio_streams_close_buffer(buffer);
     for (uint32_t page = 0u; page < buffer->page_count; ++page) {
         (void)kernel_vm_unmap_page(
             &process->address_space,
@@ -2525,6 +2566,237 @@ static KernelProcessStatus host_channel_wait(
         KERNEL_PROCESS_INVALID_ARGUMENT : KERNEL_PROCESS_CORRUPT;
 }
 
+/*
+ * Tell the host to stop and end the pin. After this the host never reads or
+ * writes the buffer again, so the DMA buffer may go.
+ */
+static void audio_stream_end(KernelAudioStream *stream)
+{
+    uint32_t slot = (uint32_t)(stream - audio_streams);
+    uint32_t woken;
+
+    if (stream->state != KERNEL_AUDIO_STREAM_OPEN)
+        return;
+    (void)kernel_platform_audio_stream_close(
+        stream->owner, stream->host_generation, stream->generation, slot);
+    (void)kernel_dma_abort(&stream->token);
+    stream->state = KERNEL_AUDIO_STREAM_DEAD;
+    stream->buffer = NULL;
+    audio_stream_waiting &= ~(1u << slot);
+    (void)kernel_thread_wake_all(&stream->waiters, ASTRA_SYSCALL_PEER_DEAD,
+                                 &woken);
+}
+
+static void audio_stream_release(void *object, void *context)
+{
+    KernelAudioStream *stream = object;
+
+    (void)context;
+    if (stream == NULL || stream->state == KERNEL_AUDIO_STREAM_FREE)
+        return;
+    audio_stream_end(stream);
+    kernel_bytes_clear(stream, sizeof(*stream));
+    kernel_thread_wait_queue_init(&stream->waiters);
+}
+
+static void audio_streams_close_buffer(KernelProcessDmaBuffer *buffer)
+{
+    for (uint32_t slot = 0u; slot < KERNEL_AUDIO_STREAM_MAX; ++slot) {
+        if (audio_streams[slot].state == KERNEL_AUDIO_STREAM_OPEN &&
+            audio_streams[slot].buffer == buffer)
+            audio_stream_end(&audio_streams[slot]);
+    }
+}
+
+/*
+ * Whether a wait on @p stream is over, and with what. A buffer is free while
+ * fewer than buffer_count are queued and not yet consumed.
+ */
+static bool audio_stream_result(const KernelAudioStream *stream,
+                                uint32_t *result)
+{
+    KernelPlatformAudioStreamState state;
+    uint32_t outstanding;
+
+    if (stream->state != KERNEL_AUDIO_STREAM_OPEN ||
+        !kernel_platform_audio_stream_state(
+            stream->token.physical_address, stream->token.byte_count,
+            &state) ||
+        state.generation != stream->generation) {
+        *result = ASTRA_SYSCALL_PEER_DEAD;
+        return true;
+    }
+    if (state.status != ASTRA_SYSCALL_OK) {
+        *result = state.status;
+        return true;
+    }
+    outstanding = state.queued - state.consumed;
+    if (outstanding > stream->buffer_count) {
+        *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        return true;
+    }
+    if (outstanding < stream->buffer_count) {
+        *result = ASTRA_SYSCALL_OK;
+        return true;
+    }
+    return false;
+}
+
+static uint32_t audio_stream_open(KernelProcess *process,
+                                  uint32_t device_generation,
+                                  uint32_t user_address)
+{
+    AstraAudioStreamOpen request;
+    KernelPlatformHostState state;
+    KernelProcessDmaBuffer *buffer = NULL;
+    KernelAudioStream *stream = NULL;
+    KernelHandleStatus handle_status;
+    KernelHandle handle = KERNEL_HANDLE_INVALID;
+    KernelDmaToken token;
+    uint32_t buffer_bytes;
+    uint32_t total;
+    uint32_t slot;
+    uint32_t status;
+
+    if ((user_address & (ASTRA_ABI_ALIGNMENT - 1u)) != 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    if (kernel_copy_from_user(&request, user_address, sizeof(request)) !=
+        KERNEL_USER_COPY_OK)
+        return ASTRA_SYSCALL_BAD_ADDRESS;
+    if (!kernel_platform_host_state(&state) ||
+        (state.state_flags & ASTRA_HOST_STATE_READY) == 0u)
+        return ASTRA_SYSCALL_PEER_DEAD;
+    if ((state.capabilities & ASTRA_HOST_CAP_AUDIO_STREAM) == 0u)
+        return ASTRA_SYSCALL_UNSUPPORTED;
+    buffer_bytes = astra_audio_stream_buffer_bytes(
+        astra_pcm_format_frame_bytes(request.format), request.period_frames);
+    if (request.size != sizeof(request) || request.flags != 0u ||
+        request.stream != 0u || request.stream_generation != 0u ||
+        buffer_bytes == 0u ||
+        request.period_frames < ASTRA_AUDIO_STREAM_PERIOD_MIN ||
+        request.period_frames > ASTRA_AUDIO_STREAM_PERIOD_MAX ||
+        request.buffer_count < ASTRA_AUDIO_STREAM_BUFFERS_MIN ||
+        request.buffer_count > ASTRA_AUDIO_STREAM_BUFFERS_MAX)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    /* At most 32 x 4096 frames x 8 bytes: no overflow. */
+    total = ASTRA_AUDIO_STREAM_HEADER_SIZE +
+            request.buffer_count * buffer_bytes;
+    handle_status = kernel_handle_lookup(
+        process->handles, request.buffer, KERNEL_OBJECT_DMA,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, (void **)&buffer);
+    if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+        handle_status == KERNEL_HANDLE_TYPE_MISMATCH)
+        return ASTRA_SYSCALL_INVALID_HANDLE;
+    if (handle_status == KERNEL_HANDLE_ACCESS_DENIED)
+        return ASTRA_SYSCALL_ACCESS_DENIED;
+    if (handle_status != KERNEL_HANDLE_OK || buffer == NULL ||
+        buffer->active == 0u)
+        return ASTRA_SYSCALL_IO_ERROR;
+    if (total > (uint32_t)buffer->page_count * KERNEL_PAGE_SIZE)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    for (slot = 0u; slot < KERNEL_AUDIO_STREAM_MAX; ++slot) {
+        if (audio_streams[slot].state == KERNEL_AUDIO_STREAM_FREE) {
+            stream = &audio_streams[slot];
+            break;
+        }
+    }
+    if (stream == NULL)
+        return ASTRA_SYSCALL_RESOURCE_LIMIT;
+    if (kernel_dma_begin(buffer->dma, process->owner, 0u, total,
+                         KERNEL_DMA_BIDIRECTIONAL, device_generation,
+                         &token) != KERNEL_DMA_OK)
+        return ASTRA_SYSCALL_WOULD_BLOCK;
+    if (++audio_stream_generation == 0u)
+        audio_stream_generation = 1u;
+    status = kernel_platform_audio_stream_open(
+        process->owner, state.host_generation, audio_stream_generation, slot,
+        token.physical_address, total, request.format,
+        request.period_frames, request.buffer_count);
+    if (status != ASTRA_SYSCALL_OK) {
+        (void)kernel_dma_abort(&token);
+        return status == ASTRA_SYSCALL_INVALID_ARGUMENT ||
+                       status == ASTRA_SYSCALL_UNSUPPORTED ?
+            status : ASTRA_SYSCALL_IO_ERROR;
+    }
+    stream->buffer = buffer;
+    kernel_bytes_copy(&stream->token, &token, sizeof(token));
+    kernel_thread_wait_queue_init(&stream->waiters);
+    stream->process_id = process->id;
+    stream->owner = process->owner;
+    stream->host_generation = state.host_generation;
+    stream->generation = audio_stream_generation;
+    stream->buffer_count = request.buffer_count;
+    stream->state = KERNEL_AUDIO_STREAM_OPEN;
+    process->host_used = 1u;
+    if (kernel_handle_install(process->handles, KERNEL_OBJECT_AUDIO_STREAM,
+                              ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, stream,
+                              audio_stream_release, process, &handle) !=
+        KERNEL_HANDLE_OK) {
+        audio_stream_release(stream, process);
+        return ASTRA_SYSCALL_RESOURCE_LIMIT;
+    }
+    request.stream = handle;
+    request.stream_generation = stream->generation;
+    if (kernel_copy_to_user(user_address, &request, sizeof(request)) !=
+        KERNEL_USER_COPY_OK) {
+        (void)kernel_handle_close(process->handles, handle);
+        return ASTRA_SYSCALL_BAD_ADDRESS;
+    }
+    return ASTRA_SYSCALL_OK;
+}
+
+/*
+ * The kick and the wait are one call, as the host channel's are: the host
+ * learns of every queued buffer, then the caller sleeps until one is free.
+ * The interrupt that ends the sleep is armed before the last look, so a
+ * buffer freed in between is never missed. The host disarms as it fires, and
+ * nothing here disarms: another thread may still be asleep on the same arm,
+ * and a stray interrupt costs one scan that finds nothing.
+ */
+static KernelProcessStatus audio_stream_wait(
+    KernelThread *thread, KernelAudioStream *stream, uint64_t now,
+    uint64_t deadline, bool *blocked, uint32_t *result)
+{
+    uint32_t slot = (uint32_t)(stream - audio_streams);
+    KernelThreadStatus wait_status;
+    uint32_t sequence;
+
+    *blocked = false;
+    if (stream->state != KERNEL_AUDIO_STREAM_OPEN) {
+        *result = ASTRA_SYSCALL_PEER_DEAD;
+        return KERNEL_PROCESS_OK;
+    }
+    kernel_platform_audio_stream_kick(slot);
+    if (audio_stream_result(stream, result))
+        return KERNEL_PROCESS_OK;
+    if (deadline != KERNEL_THREAD_DEADLINE_NEVER && deadline <= now) {
+        *result = ASTRA_SYSCALL_TIMED_OUT;
+        return KERNEL_PROCESS_OK;
+    }
+    audio_stream_waiting |= 1u << slot;
+    sequence = kernel_thread_wait_queue_sequence(&stream->waiters);
+    kernel_platform_audio_stream_arm(slot);
+    if (audio_stream_result(stream, result))
+        return KERNEL_PROCESS_OK;
+    wait_status = kernel_thread_block_until(
+        thread, &stream->waiters, sequence, now, deadline,
+        ASTRA_SYSCALL_TIMED_OUT);
+    if (wait_status == KERNEL_THREAD_OK) {
+        *blocked = true;
+        return KERNEL_PROCESS_OK;
+    }
+    if (wait_status == KERNEL_THREAD_CONDITION_CHANGED &&
+        audio_stream_result(stream, result))
+        return KERNEL_PROCESS_OK;
+    if (wait_status == KERNEL_THREAD_DEADLINE_EXPIRED) {
+        *result = ASTRA_SYSCALL_TIMED_OUT;
+        return KERNEL_PROCESS_OK;
+    }
+    return wait_status == KERNEL_THREAD_INVALID_ARGUMENT ||
+                   wait_status == KERNEL_THREAD_INVALID_STATE ?
+        KERNEL_PROCESS_INVALID_ARGUMENT : KERNEL_PROCESS_CORRUPT;
+}
+
 bool kernel_process_host_channel_irq_service(uint8_t source,
                                              uint64_t timestamp,
                                              void *context,
@@ -2572,6 +2844,29 @@ bool kernel_process_host_channel_irq_service(uint8_t source,
             channel->waiting = 0u;
             host_channel_waiting[word] &= ~(1u << bit);
         }
+    }
+    /* Audio streams share the host interrupt and its acknowledgement. */
+    for (uint32_t slot = 0u;
+         slot < KERNEL_AUDIO_STREAM_MAX && audio_stream_waiting >> slot != 0u;
+         ++slot) {
+        KernelAudioStream *stream = &audio_streams[slot];
+        uint32_t result;
+        uint32_t woken;
+
+        if ((audio_stream_waiting & (1u << slot)) == 0u)
+            continue;
+        if (stream->state != KERNEL_AUDIO_STREAM_OPEN ||
+            kernel_thread_wait_queue_count(&stream->waiters) == 0u) {
+            audio_stream_waiting &= ~(1u << slot);
+            continue;
+        }
+        if (!audio_stream_result(stream, &result))
+            continue;
+        if (kernel_thread_wake_all_irq(&stream->waiters, result, &woken) !=
+            KERNEL_THREAD_OK)
+            valid = false;
+        *woken_threads += woken;
+        audio_stream_waiting &= ~(1u << slot);
     }
     return valid;
 }
@@ -3305,6 +3600,11 @@ void kernel_process_init(void)
     for (uint32_t index = 0u;
          index < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT; ++index)
         kernel_thread_wait_queue_init(&host_channels[index].waiters);
+    kernel_bytes_clear(audio_streams, sizeof(audio_streams));
+    for (uint32_t index = 0u; index < KERNEL_AUDIO_STREAM_MAX; ++index)
+        kernel_thread_wait_queue_init(&audio_streams[index].waiters);
+    audio_stream_waiting = 0u;
+    audio_stream_generation = 0u;
     library_cache_head = 0u;
     kernel_bytes_clear(&maintenance_diagnostics,
                        sizeof(maintenance_diagnostics));
@@ -12363,6 +12663,81 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         }
         result = host_syscall(current, thread, syscall, snapshot.generation);
         break;
+    }
+    case ASTRA_SYSCALL_AUDIO_STREAM_OPEN: {
+        KernelDeviceLease *lease = NULL;
+        KernelDeviceSnapshot snapshot;
+        KernelHandleStatus handle_status;
+
+        handle_status = kernel_handle_lookup(
+            current->handles, thread->context.data[1], KERNEL_OBJECT_DEVICE,
+            KERNEL_DEVICE_RIGHT_AUDIO_STREAM, (void **)&lease);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || lease == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        if (kernel_device_query(lease, &snapshot) != KERNEL_DEVICE_OK) {
+            result = ASTRA_SYSCALL_IO_ERROR;
+            break;
+        }
+        if (snapshot.device_id != ASTRA_DEVICE_ID_HOST0) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (snapshot.lease_state != ASTRA_DEVICE_LEASE_ACTIVE) {
+            result = ASTRA_SYSCALL_PEER_DEAD;
+            break;
+        }
+        result = audio_stream_open(current, snapshot.generation,
+                                   thread->context.data[2]);
+        break;
+    }
+    case ASTRA_SYSCALL_AUDIO_STREAM_WAIT: {
+        KernelAudioStream *stream = NULL;
+        KernelHandleStatus handle_status;
+        uint64_t deadline_cycles;
+        bool blocked;
+
+        handle_status = kernel_handle_lookup(
+            current->handles, thread->context.data[1],
+            KERNEL_OBJECT_AUDIO_STREAM, ASTRA_RIGHT_WRITE, (void **)&stream);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || stream == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        if (!decode_wait_deadline(thread->context.data[2],
+                                  thread->context.data[3],
+                                  &deadline_cycles)) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        status = audio_stream_wait(thread, stream, scheduler_cycles(),
+                                   deadline_cycles, &blocked, &result);
+        if (status != KERNEL_PROCESS_OK)
+            return status;
+        if (!blocked)
+            break;
+        ++scheduler_stats.wait_blocks;
+        status = schedule_next(SWITCH_BLOCK, next_context);
+        if (status != KERNEL_PROCESS_OK &&
+            status != KERNEL_PROCESS_NO_RUNNABLE)
+            return status;
+        check_milestone();
+        return status;
     }
     case ASTRA_SYSCALL_HOST_CHANNEL_WAIT: {
         uint64_t deadline_cycles;

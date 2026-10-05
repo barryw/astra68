@@ -27,6 +27,8 @@ PUBLIC_NETWORK="$REPOSITORY/sw/include/astra/network.h"
 PUBLIC_HOST="$REPOSITORY/sw/include/astra/host.h"
 PUBLIC_AUDIO_HOST="$REPOSITORY/sw/include/astra/audio_host.h"
 PUBLIC_PCM_FORMAT="$REPOSITORY/sw/include/astra/pcm_format.h"
+PUBLIC_AUDIO_STREAM="$REPOSITORY/sw/include/astra/audio_stream.h"
+PUBLIC_AUDIO_MAILBOX="$REPOSITORY/sw/include/astra/audio_mailbox.h"
 PUBLIC_STATUS="$REPOSITORY/sw/include/astra/status.h"
 PUBLIC_VFS_SERVICE="$REPOSITORY/sw/include/astra/vfs_service.h"
 PUBLIC_COMPILER="$REPOSITORY/sw/include/astra/compiler.h"
@@ -97,6 +99,10 @@ overlay_identity()
             "sw/include/astra/audio_host.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_PCM_FORMAT")" \
             "sw/include/astra/pcm_format.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_AUDIO_STREAM")" \
+            "sw/include/astra/audio_stream.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_AUDIO_MAILBOX")" \
+            "sw/include/astra/audio_mailbox.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_STATUS")" \
             "sw/include/astra/status.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_VFS_SERVICE")" \
@@ -195,6 +201,8 @@ cp "$PUBLIC_NETWORK" "$STAGED_SOURCE/include/astra/network.h"
 cp "$PUBLIC_HOST" "$STAGED_SOURCE/include/astra/host.h"
 cp "$PUBLIC_AUDIO_HOST" "$STAGED_SOURCE/include/astra/audio_host.h"
 cp "$PUBLIC_PCM_FORMAT" "$STAGED_SOURCE/include/astra/pcm_format.h"
+cp "$PUBLIC_AUDIO_STREAM" "$STAGED_SOURCE/include/astra/audio_stream.h"
+cp "$PUBLIC_AUDIO_MAILBOX" "$STAGED_SOURCE/include/astra/audio_mailbox.h"
 cp "$PUBLIC_STATUS" "$STAGED_SOURCE/include/astra/status.h"
 cp "$PUBLIC_VFS_SERVICE" "$STAGED_SOURCE/include/astra/vfs_service.h"
 cp "$PUBLIC_COMPILER" "$STAGED_SOURCE/include/astra/compiler.h"

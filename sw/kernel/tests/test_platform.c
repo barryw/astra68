@@ -3,6 +3,7 @@
 
 #include <astra/display.h>
 #include <astra/host.h>
+#include <astra/pcm_format.h>
 #include <astra/render_batch.h>
 #include <assert.h>
 #include <stdint.h>
@@ -317,6 +318,29 @@ static void test_owner_scoped_host_transport(void)
     assert(registers->HOST_ACCEL_RELEASE_OWNER == 0x10000021u);
     assert(!kernel_platform_test_host_channel_size(command_bytes - 1u, 1u));
     assert(kernel_platform_test_host_channel_size(command_bytes, 1u));
+}
+
+static void test_audio_stream_registers(void)
+{
+    VestaRegs *registers = kernel_platform_test_registers();
+
+    clear_registers(registers);
+    registers->HOST_ACCEL_ID = HOST_ACCEL_ID_MAGIC;
+    registers->HOST_ACCEL_VERSION = ASTRA_HOST_VERSION;
+    registers->HOST_ACCEL_STREAM_RESULT = ASTRA_SYSCALL_INVALID_ARGUMENT;
+    assert(kernel_platform_audio_stream_open(
+               0x10000021u, 7u, 3u, 5u, 0x02010000u, 5824u,
+               ASTRA_PCM_FORMAT_S16BE_STEREO, 480u, 3u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(registers->HOST_ACCEL_STREAM_CONFIG != 0u &&
+           (registers->HOST_ACCEL_STREAM_CONFIG & 63u) == 0u);
+    registers->HOST_ACCEL_STREAM_RESULT = ASTRA_SYSCALL_OK;
+    assert(kernel_platform_audio_stream_close(0x10000021u, 7u, 3u, 5u) ==
+           ASTRA_SYSCALL_OK);
+    kernel_platform_audio_stream_kick(5u);
+    assert(registers->HOST_ACCEL_STREAM_KICK == 5u);
+    kernel_platform_audio_stream_arm(6u);
+    assert(registers->HOST_ACCEL_STREAM_ARM == 6u);
 }
 
 /*
@@ -662,6 +686,7 @@ int main(void)
     test_monotonic_nanosecond_deadline_conversion();
     test_block_reset_contract();
     test_owner_scoped_host_transport();
+    test_audio_stream_registers();
     test_wall_clock_read_and_absence();
     test_fenced_display_transport();
     test_production_irq_qualification_controls();

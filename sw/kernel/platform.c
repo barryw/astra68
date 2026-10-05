@@ -7,6 +7,7 @@
 #include "vega.h"
 #include "vesta.h"
 
+#include <astra/audio_stream.h>
 #include <astra/copy_engine.h>
 #include <astra/display.h>
 #include <astra/host.h>
@@ -1532,6 +1533,97 @@ bool kernel_platform_test_host_channel_size(uint32_t byte_size,
                                    &data_offset);
 }
 #endif
+
+static uint32_t kernel_platform_audio_stream_configure(
+    uint16_t operation, uint32_t owner, uint32_t host_generation,
+    uint32_t stream_generation, uint32_t slot, uint32_t physical_buffer,
+    uint32_t byte_size, uint32_t format, uint32_t period_frames,
+    uint32_t buffer_count)
+{
+    static _Alignas(64) volatile AstraAudioStreamConfig config;
+
+    if (!kernel_platform_host_present())
+        return ASTRA_SYSCALL_UNSUPPORTED;
+    config.size = sizeof(config);
+    config.version = ASTRA_AUDIO_STREAM_CONFIG_VERSION;
+    config.operation = operation;
+    config.slot = slot;
+    config.owner = owner;
+    config.host_generation = host_generation;
+    config.stream_generation = stream_generation;
+    config.physical_buffer = physical_buffer;
+    config.byte_size = byte_size;
+    config.format = format;
+    config.period_frames = period_frames;
+    config.buffer_count = buffer_count;
+    for (uint32_t index = 0u;
+         index < sizeof(config.reserved) / sizeof(config.reserved[0]); ++index)
+        config.reserved[index] = 0u;
+    kernel_mmio_cpu_sync();
+    VESTA_WRITE(HOST_ACCEL_STREAM_CONFIG, (uint32_t)(uintptr_t)&config);
+    return kernel_mmio_fence32(VESTA_ADDRESS(HOST_ACCEL_STREAM_RESULT));
+}
+
+uint32_t kernel_platform_audio_stream_open(
+    uint32_t owner, uint32_t host_generation, uint32_t stream_generation,
+    uint32_t slot, uint32_t physical_buffer, uint32_t byte_size,
+    uint32_t format, uint32_t period_frames, uint32_t buffer_count)
+{
+    return kernel_platform_audio_stream_configure(
+        ASTRA_AUDIO_STREAM_CONFIG_OPEN, owner, host_generation,
+        stream_generation, slot, physical_buffer, byte_size, format,
+        period_frames, buffer_count);
+}
+
+uint32_t kernel_platform_audio_stream_close(
+    uint32_t owner, uint32_t host_generation, uint32_t stream_generation,
+    uint32_t slot)
+{
+    return kernel_platform_audio_stream_configure(
+        ASTRA_AUDIO_STREAM_CONFIG_CLOSE, owner, host_generation,
+        stream_generation, slot, 0u, 0u, 0u, 0u, 0u);
+}
+
+void kernel_platform_audio_stream_kick(uint32_t slot)
+{
+    VESTA_WRITE(HOST_ACCEL_STREAM_KICK, slot);
+}
+
+void kernel_platform_audio_stream_arm(uint32_t slot)
+{
+    VESTA_WRITE(HOST_ACCEL_STREAM_ARM, slot);
+}
+
+/*
+ * The counters as the header holds them. Only the host's fields are trusted
+ * for anything that matters to another process; the application can write
+ * `queued`, and the worst it can do with it is wake or sleep itself.
+ */
+bool kernel_platform_audio_stream_state(
+    uint32_t physical_buffer, uint32_t byte_size,
+    KernelPlatformAudioStreamState *state)
+{
+    volatile const AstraAudioStreamHeader *header;
+
+    if (state == NULL || physical_buffer == 0u ||
+        (physical_buffer & (ASTRA_ABI_ALIGNMENT - 1u)) != 0u ||
+        byte_size < ASTRA_AUDIO_STREAM_HEADER_SIZE)
+        return false;
+    header = (volatile const AstraAudioStreamHeader *)(uintptr_t)
+        physical_buffer;
+    kernel_mmio_cpu_sync();
+    if (header->magic != ASTRA_AUDIO_STREAM_MAGIC ||
+        header->version != ASTRA_AUDIO_STREAM_VERSION ||
+        header->header_size != ASTRA_AUDIO_STREAM_HEADER_SIZE ||
+        header->total_size != byte_size)
+        return false;
+    state->generation = header->stream_generation;
+    state->queued = header->queued;
+    state->consumed = header->consumed;
+    state->status = header->status;
+    kernel_mmio_cpu_sync();
+    return true;
+}
 
 void kernel_platform_host_channel_ack(void)
 {

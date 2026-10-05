@@ -44,3 +44,12 @@ ASTRA_PCM_2.4 {
         astra_midi_set;
         astra_midi_status;
 } ASTRA_PCM_2.3;
+
+ASTRA_PCM_2.5 {
+    global:
+        astra_pcm_buffers_open;
+        astra_pcm_buffers_get;
+        astra_pcm_buffers_queue;
+        astra_pcm_buffers_wait;
+        astra_pcm_buffers_close;
+} ASTRA_PCM_2.4;

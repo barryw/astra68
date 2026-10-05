@@ -117,6 +117,23 @@ gone; `wake_preemptions` stays kernel-internal (boot console). astra-top
 prints `by cause:`. Releases built before this one cannot be read by the new
 astra-top (record size), so A/B both sides from this tree.
 
+**Done: phase 1's data path** (`docs/MEDIA_DATA_PLANE.md`, "The stream
+object" and "The rest of the path"): kernel stream object (ABI
+`0x00010040`), QEMU stream registers and audio mailbox
+(`ASTRA_AUDIO_MAILBOX_PATH`; `/run/astra/audio.mailbox` via `astra.service`),
+daemon `pull_streams`, runtime.library 1.12, pcm.library 2.5 buffer groups,
+media `ASTRA_PCM_STREAM_GRANT`, SDL on buffer groups. NDK: `audio.md` guide,
+`pcm_tone` and `midi_notes` examples. Gates prove the path: loopwave and
+Doom fail unless their voice is a stream; the NDK examples gate fails unless
+the stand-in heard both examples.
+
+Not done in phase 1: priorities (media back to 16, the SDL audio thread
+to 24 -- SDL asks TIME_CRITICAL with SCHED_OTHER, which Astra's
+`sched_get_priority_max` refuses, so it runs at the app's priority);
+per-stream gain/pause from the media service; the clock record. Board A/B:
+baseline must be a release from `9669fb53` or later (astra-top reads only
+its own sample format).
+
 Order: counters (5), then the audio stream object + QEMU audio mailbox +
 daemon clock, then SDL/pcm library on it, then media service to control
 only and priorities (SDL audio thread 24, media 16).

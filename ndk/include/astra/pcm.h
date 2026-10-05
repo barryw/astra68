@@ -156,6 +156,87 @@ ASTRA_NODISCARD AstraResult astra_pcm_convert(AstraHandle service,
                                               uint32_t target_capacity,
                                               uint32_t *target_frames);
 
+/** An application's own group of playback buffers (pcm.library 2.5).
+ *
+ * The way to play a steady stream: Haiku's BBufferGroup and BSoundPlayer.
+ * The buffers are shared with the host, so the application fills them in
+ * place and the host mixer takes each as the output clock needs it; the
+ * media service only grants the stream and is not involved again. One
+ * system call per buffer (astra_pcm_buffers_wait()), no reply, no copy on
+ * the MC68040. Initialize with ::ASTRA_PCM_BUFFERS_INIT; every field is
+ * private.
+ *
+ * The loop: astra_pcm_buffers_get() names the buffer to fill,
+ * astra_pcm_buffers_queue() hands it over, astra_pcm_buffers_wait()
+ * sleeps until another is free.
+ */
+typedef struct AstraPcmBuffers {
+    /** Private kernel audio stream. */
+    AstraHandle stream;
+    /** Private DMA buffer holding the header and the buffers. */
+    AstraHandle dma;
+    /** Private shared stream header. */
+    void *header;
+    /** Private first buffer. */
+    uint8_t *first;
+    /** Private bytes from one buffer to the next. */
+    uint32_t stride;
+    /** Private frames per buffer. */
+    uint32_t period_frames;
+    /** Private number of buffers. */
+    uint32_t count;
+    /** Private buffers handed over since open. */
+    uint32_t queued;
+    /** Private format word. */
+    uint32_t format;
+} AstraPcmBuffers;
+
+/** Empty buffer group initializer. */
+#define ASTRA_PCM_BUFFERS_INIT {0u, 0u, NULL, NULL, 0u, 0u, 0u, 0u, 0u}
+
+/** Open a buffer group: @p count buffers of @p period_frames frames.
+ * Haiku's sizing is max(3, latency / period + 2) buffers of about 10 ms.
+ * @param service Startup `PCM` service capability.
+ * @param format A format word, as for astra_pcm_open().
+ * @param period_frames Frames per buffer, 64 to 4096.
+ * @param count Buffers, 2 to 32.
+ * @param buffers Empty group initialized with ::ASTRA_PCM_BUFFERS_INIT.
+ * @return ASTRA_OK; ASTRA_ERROR_UNSUPPORTED when the host has no streams
+ * (use astra_pcm_open()); otherwise an error.
+ */
+ASTRA_NODISCARD AstraResult astra_pcm_buffers_open(AstraHandle service,
+                                                   uint32_t format,
+                                                   uint32_t period_frames,
+                                                   uint32_t count,
+                                                   AstraPcmBuffers *buffers);
+/** The next buffer to fill: period_frames frames of the group's format.
+ * It is free once astra_pcm_buffers_wait() has returned ASTRA_OK since the
+ * last astra_pcm_buffers_queue(), and at first.
+ * @param buffers Open group.
+ * @return The buffer, or NULL for a group that is not open.
+ */
+void *astra_pcm_buffers_get(AstraPcmBuffers *buffers);
+/** Hand the buffer from astra_pcm_buffers_get() to the host. Returns at
+ * once; the host learns of it at the next astra_pcm_buffers_wait().
+ * @param buffers Open group.
+ * @return ASTRA_OK, or ASTRA_ERROR_BUSY when no buffer was free.
+ */
+ASTRA_NODISCARD AstraResult astra_pcm_buffers_queue(AstraPcmBuffers *buffers);
+/** Hand the host every queued buffer, then sleep until one is free.
+ * @param buffers Open group.
+ * @param deadline_ns Absolute monotonic deadline, or
+ * ::ASTRA_DEADLINE_FOREVER.
+ * @return ASTRA_OK when a buffer is free, ASTRA_ERROR_TIMEOUT, or
+ * ASTRA_ERROR_PEER_DEAD once the host is gone.
+ */
+ASTRA_NODISCARD AstraResult astra_pcm_buffers_wait(AstraPcmBuffers *buffers,
+                                                   uint64_t deadline_ns);
+/** Stop playback at once and release the group.
+ * @param buffers Open group.
+ * @return ASTRA_OK, otherwise an error; the group is released regardless.
+ */
+ASTRA_NODISCARD AstraResult astra_pcm_buffers_close(AstraPcmBuffers *buffers);
+
 #ifdef __cplusplus
 }
 #endif

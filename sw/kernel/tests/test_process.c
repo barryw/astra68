@@ -46,7 +46,9 @@
 #include "vm.h"
 #include "worker.h"
 
+#include <astra/audio_stream.h>
 #include <astra/block.h>
+#include <astra/pcm_format.h>
 #include <astra/host.h>
 #include <astra/network.h>
 #include <vesta.h>
@@ -925,6 +927,20 @@ static uint32_t host_channel_ack_calls;
 /* Nonzero: the host publishes this consumer position just as the kernel
  * acknowledges the interrupt -- the race a scan-then-ack service loses. */
 static uint32_t host_channel_publish_on_ack;
+/* The host's side of each audio stream, as the kernel reads it. */
+#define TEST_AUDIO_STREAMS 32u /* the kernel's KERNEL_AUDIO_STREAM_MAX */
+static KernelPlatformAudioStreamState
+    audio_stream_states[TEST_AUDIO_STREAMS];
+static uint32_t audio_stream_open_calls;
+static uint32_t audio_stream_close_calls;
+static uint32_t audio_stream_kick_calls;
+static uint32_t audio_stream_arm_calls;
+static uint32_t audio_stream_last_slot;
+static uint32_t audio_stream_physical[TEST_AUDIO_STREAMS];
+static uint32_t audio_stream_bytes[TEST_AUDIO_STREAMS];
+static uint32_t audio_stream_format;
+static uint32_t audio_stream_period;
+static uint32_t audio_stream_count;
 
 bool kernel_platform_host_state(KernelPlatformHostState *state)
 {
@@ -1036,6 +1052,66 @@ void kernel_platform_host_channel_ack(void)
     }
 }
 
+uint32_t kernel_platform_audio_stream_open(
+    uint32_t owner, uint32_t host_generation, uint32_t stream_generation,
+    uint32_t slot, uint32_t physical_buffer, uint32_t byte_size,
+    uint32_t format, uint32_t period_frames, uint32_t buffer_count)
+{
+    assert(owner != 0u && host_generation == host_state.host_generation);
+    assert(stream_generation != 0u && slot < TEST_AUDIO_STREAMS);
+    assert(audio_stream_states[slot].generation == 0u);
+    ++audio_stream_open_calls;
+    audio_stream_last_slot = slot;
+    audio_stream_physical[slot] = physical_buffer;
+    audio_stream_bytes[slot] = byte_size;
+    audio_stream_format = format;
+    audio_stream_period = period_frames;
+    audio_stream_count = buffer_count;
+    audio_stream_states[slot] = (KernelPlatformAudioStreamState){
+        .generation = stream_generation, .status = ASTRA_SYSCALL_OK};
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t kernel_platform_audio_stream_close(
+    uint32_t owner, uint32_t host_generation, uint32_t stream_generation,
+    uint32_t slot)
+{
+    assert(owner != 0u && host_generation == host_state.host_generation);
+    assert(slot < TEST_AUDIO_STREAMS &&
+           audio_stream_states[slot].generation == stream_generation);
+    ++audio_stream_close_calls;
+    memset(&audio_stream_states[slot], 0, sizeof(audio_stream_states[slot]));
+    return ASTRA_SYSCALL_OK;
+}
+
+void kernel_platform_audio_stream_kick(uint32_t slot)
+{
+    assert(slot < TEST_AUDIO_STREAMS);
+    ++audio_stream_kick_calls;
+    audio_stream_last_slot = slot;
+}
+
+void kernel_platform_audio_stream_arm(uint32_t slot)
+{
+    assert(slot < TEST_AUDIO_STREAMS);
+    ++audio_stream_arm_calls;
+}
+
+bool kernel_platform_audio_stream_state(
+    uint32_t physical_buffer, uint32_t byte_size,
+    KernelPlatformAudioStreamState *state)
+{
+    for (uint32_t slot = 0u; slot < TEST_AUDIO_STREAMS; ++slot) {
+        if (audio_stream_states[slot].generation != 0u &&
+            audio_stream_physical[slot] == physical_buffer &&
+            audio_stream_bytes[slot] == byte_size) {
+            *state = audio_stream_states[slot];
+            return true;
+        }
+    }
+    return false;
+}
+
 void kernel_platform_host_release_owner(uint32_t owner)
 {
     host_released_owner = owner;
@@ -1071,6 +1147,11 @@ static void reset_host_device(void)
     host_command_count = 0u;
     host_channel_open_calls = 0u;
     host_channel_close_calls = 0u;
+    memset(audio_stream_states, 0, sizeof(audio_stream_states));
+    audio_stream_open_calls = 0u;
+    audio_stream_close_calls = 0u;
+    audio_stream_kick_calls = 0u;
+    audio_stream_arm_calls = 0u;
     host_channel_physical = 0u;
     host_channel_byte_size = 0u;
     host_channel_slot = UINT32_MAX;
@@ -8394,6 +8475,228 @@ static void test_host_admission(void)
     assert(host_channel_close_calls == 1u);
 }
 
+static uint32_t audio_stream_syscall(uint32_t number, uint32_t a1,
+                                     uint32_t a2, uint32_t a3,
+                                     KernelProcessStatus expected_status,
+                                     KernelCpuContext **next)
+{
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 512u;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    registers[0] = number;
+    registers[1] = a1;
+    registers[2] = a2;
+    registers[3] = a3;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, next) ==
+           expected_status);
+    return *next == NULL ? UINT32_MAX : (*next)->data[0];
+}
+
+/*
+ * An application's audio stream: opened on its own DMA buffer with a device
+ * handle carrying only AUDIO_STREAM, kicked and waited on in one call, woken
+ * by the shared host interrupt, and ended -- host told first -- when either
+ * handle goes.
+ */
+static void test_audio_stream(void)
+{
+    const uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 64u;
+    const uint32_t user_open = KERNEL_PROCESS_STACK_TOP - 128u;
+    const uint32_t format = ASTRA_PCM_FORMAT_S16BE_STEREO;
+    KernelProcessBootstrapCapability capability = {0};
+    KernelCpuContext *next = NULL;
+    AstraDmaBufferInfo buffer;
+    AstraAudioStreamOpen open;
+    AstraStartupCapability table[3];
+    KernelThreadSnapshot thread;
+    uint32_t process_id = 0u;
+    uint32_t lease_handle = 0u;
+    uint32_t stream_only;
+    uint32_t stream;
+    uint32_t slot;
+    uint32_t woken;
+
+    loader_build_image();
+    initialize_test();
+    host_state.capabilities |= ASTRA_HOST_CAP_AUDIO_STREAM;
+    capability.name = ASTRA_CAPABILITY_HOST_DEVICE;
+    capability.kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+    capability.device_id = ASTRA_DEVICE_ID_HOST0;
+    capability.rights = KERNEL_DEVICE_RIGHTS;
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            &capability, 1u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(kernel_user_copy_from_asm(
+               table, KERNEL_VM_USER_MIN + ASTRA_STARTUP_INFO_SIZE,
+               sizeof(table)) == KERNEL_USER_COPY_OK);
+    for (uint32_t index = 0u; index < 3u; ++index)
+        if (astra_capability_name_equal(table[index].name,
+                                        ASTRA_CAPABILITY_HOST_DEVICE))
+            lease_handle = table[index].handle;
+    assert(lease_handle != 0u);
+
+    /* What the media service hands an application: streams, nothing else. */
+    assert(audio_stream_syscall(ASTRA_SYSCALL_HANDLE_DUPLICATE, lease_handle,
+                                ASTRA_RIGHT_AUDIO_STREAM, 0u,
+                                KERNEL_PROCESS_OK, &next) ==
+           ASTRA_SYSCALL_OK);
+    stream_only = next->data[1];
+    assert(audio_stream_syscall(ASTRA_SYSCALL_HOST_CHANNEL_OPEN, stream_only,
+                                user_open, 0u, KERNEL_PROCESS_OK, &next) ==
+           ASTRA_SYSCALL_ACCESS_DENIED);
+
+    assert(audio_stream_syscall(ASTRA_SYSCALL_DMA_CREATE,
+                                2u * KERNEL_PAGE_SIZE, user_info, 0u,
+                                KERNEL_PROCESS_OK, &next) ==
+           ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&buffer, user_info, sizeof(buffer)) ==
+           KERNEL_USER_COPY_OK);
+
+    /* Three buffers of 480 stereo 16-bit frames: 64 + 3 x 1920 bytes. */
+    open = (AstraAudioStreamOpen){
+        .size = sizeof(open), .buffer = buffer.handle, .format = format,
+        .period_frames = 480u, .buffer_count = 3u};
+#define TRY_OPEN(handle, expected) \
+    do { \
+        assert(kernel_user_copy_to_asm(user_open, &open, sizeof(open)) == \
+               KERNEL_USER_COPY_OK); \
+        assert(audio_stream_syscall(ASTRA_SYSCALL_AUDIO_STREAM_OPEN, \
+                                    (handle), user_open, 0u, \
+                                    KERNEL_PROCESS_OK, &next) == \
+               (expected)); \
+    } while (0)
+    /* A handle without the right, then every malformed request. */
+    assert(audio_stream_syscall(ASTRA_SYSCALL_HANDLE_DUPLICATE, lease_handle,
+                                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, 0u,
+                                KERNEL_PROCESS_OK, &next) ==
+           ASTRA_SYSCALL_OK);
+    TRY_OPEN(next->data[1], ASTRA_SYSCALL_ACCESS_DENIED);
+    open.buffer_count = 1u;
+    TRY_OPEN(stream_only, ASTRA_SYSCALL_INVALID_ARGUMENT);
+    open.buffer_count = 5u; /* 64 + 5 x 1920 > two pages */
+    TRY_OPEN(stream_only, ASTRA_SYSCALL_INVALID_ARGUMENT);
+    open.buffer_count = 3u;
+    open.period_frames = ASTRA_AUDIO_STREAM_PERIOD_MIN - 1u;
+    TRY_OPEN(stream_only, ASTRA_SYSCALL_INVALID_ARGUMENT);
+    open.period_frames = 480u;
+    open.format = ASTRA_PCM_FORMAT(99u, 2u, 48000u);
+    TRY_OPEN(stream_only, ASTRA_SYSCALL_INVALID_ARGUMENT);
+    open.format = format;
+    open.flags = 1u;
+    TRY_OPEN(stream_only, ASTRA_SYSCALL_INVALID_ARGUMENT);
+    open.flags = 0u;
+    host_state.capabilities &= ~ASTRA_HOST_CAP_AUDIO_STREAM;
+    TRY_OPEN(stream_only, ASTRA_SYSCALL_UNSUPPORTED);
+    host_state.capabilities |= ASTRA_HOST_CAP_AUDIO_STREAM;
+    assert(audio_stream_open_calls == 0u);
+
+    TRY_OPEN(stream_only, ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&open, user_open, sizeof(open)) ==
+           KERNEL_USER_COPY_OK);
+    stream = open.stream;
+    slot = audio_stream_last_slot;
+    assert(stream != 0u && open.stream_generation != 0u);
+    assert(audio_stream_open_calls == 1u &&
+           audio_stream_states[slot].generation == open.stream_generation);
+    assert(audio_stream_bytes[slot] ==
+           ASTRA_AUDIO_STREAM_HEADER_SIZE + 3u * 1920u);
+    assert(audio_stream_physical[slot] != 0u &&
+           audio_stream_physical[slot] != buffer.virtual_base);
+    assert(audio_stream_format == format && audio_stream_period == 480u &&
+           audio_stream_count == 3u);
+
+    /* Free buffers: the wait is a kick and nothing more. */
+    audio_stream_states[slot].queued = 2u;
+    assert(audio_stream_syscall(ASTRA_SYSCALL_AUDIO_STREAM_WAIT, stream,
+                                0x7fffffffu, 0xffffffffu, KERNEL_PROCESS_OK,
+                                &next) == ASTRA_SYSCALL_OK);
+    assert(audio_stream_kick_calls == 1u && audio_stream_arm_calls == 0u);
+    /* All three queued, a deadline already past: a kick, then TIMED_OUT. */
+    audio_stream_states[slot].queued = 3u;
+    assert(audio_stream_syscall(ASTRA_SYSCALL_AUDIO_STREAM_WAIT, stream,
+                                0u, 0u, KERNEL_PROCESS_OK, &next) ==
+           ASTRA_SYSCALL_TIMED_OUT);
+    assert(audio_stream_kick_calls == 2u && audio_stream_arm_calls == 0u);
+    /* Counters no host could have written. */
+    audio_stream_states[slot].queued = 4u;
+    assert(audio_stream_syscall(ASTRA_SYSCALL_AUDIO_STREAM_WAIT, stream,
+                                0x7fffffffu, 0xffffffffu, KERNEL_PROCESS_OK,
+                                &next) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    /* Full: the caller sleeps until the host frees one. */
+    audio_stream_states[slot].queued = 3u;
+    assert(audio_stream_syscall(ASTRA_SYSCALL_AUDIO_STREAM_WAIT, stream,
+                                0x7fffffffu, 0xffffffffu,
+                                KERNEL_PROCESS_NO_RUNNABLE, &next) ==
+           UINT32_MAX);
+    assert(audio_stream_arm_calls == 1u);
+    assert(kernel_thread_snapshot(0u, &thread));
+    assert(thread.state == KERNEL_THREAD_BLOCKED);
+    /* An interrupt that frees nothing wakes no one. */
+    assert(kernel_process_host_channel_irq_service(IRQ_SRC_HOST, 0u, NULL,
+                                                   &woken));
+    assert(woken == 0u);
+    audio_stream_states[slot].consumed = 1u;
+    assert(kernel_process_host_channel_irq_service(IRQ_SRC_HOST, 0u, NULL,
+                                                   &woken));
+    assert(woken == 1u);
+    next = kernel_process_resume_idle();
+    assert(next != NULL && next->data[0] == ASTRA_SYSCALL_OK);
+
+    /* A stream the host refuses fails its waits with the host's reason. */
+    audio_stream_states[slot].status = ASTRA_SYSCALL_UNSUPPORTED;
+    assert(audio_stream_syscall(ASTRA_SYSCALL_AUDIO_STREAM_WAIT, stream,
+                                0x7fffffffu, 0xffffffffu, KERNEL_PROCESS_OK,
+                                &next) == ASTRA_SYSCALL_UNSUPPORTED);
+    audio_stream_states[slot].status = ASTRA_SYSCALL_OK;
+
+    /* The wrong handle type, and a stream handle used as a device. */
+    assert(audio_stream_syscall(ASTRA_SYSCALL_AUDIO_STREAM_WAIT, buffer.handle,
+                                0u, 0u, KERNEL_PROCESS_OK, &next) ==
+           ASTRA_SYSCALL_INVALID_HANDLE);
+    TRY_OPEN(stream, ASTRA_SYSCALL_INVALID_HANDLE);
+
+    /* Closing the DMA buffer under the stream ends it, host first. */
+    assert(audio_stream_syscall(ASTRA_SYSCALL_CLOSE, buffer.handle, 0u, 0u,
+                                KERNEL_PROCESS_OK, &next) ==
+           ASTRA_SYSCALL_OK);
+    assert(audio_stream_close_calls == 1u &&
+           audio_stream_states[slot].generation == 0u);
+    assert(audio_stream_syscall(ASTRA_SYSCALL_AUDIO_STREAM_WAIT, stream,
+                                0x7fffffffu, 0xffffffffu, KERNEL_PROCESS_OK,
+                                &next) == ASTRA_SYSCALL_PEER_DEAD);
+    /* The dead stream keeps its slot until its handle goes. */
+    assert(audio_stream_syscall(ASTRA_SYSCALL_DMA_CREATE,
+                                2u * KERNEL_PAGE_SIZE, user_info, 0u,
+                                KERNEL_PROCESS_OK, &next) ==
+           ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&buffer, user_info, sizeof(buffer)) ==
+           KERNEL_USER_COPY_OK);
+    open = (AstraAudioStreamOpen){
+        .size = sizeof(open), .buffer = buffer.handle, .format = format,
+        .period_frames = 480u, .buffer_count = 3u};
+    TRY_OPEN(stream_only, ASTRA_SYSCALL_OK);
+    assert(audio_stream_last_slot != slot);
+    assert(audio_stream_syscall(ASTRA_SYSCALL_CLOSE, stream, 0u, 0u,
+                                KERNEL_PROCESS_OK, &next) ==
+           ASTRA_SYSCALL_OK);
+    assert(audio_stream_close_calls == 1u);
+    /* Closing the live stream's handle tells the host before the pin ends. */
+    assert(kernel_user_copy_from_asm(&open, user_open, sizeof(open)) ==
+           KERNEL_USER_COPY_OK);
+    assert(audio_stream_syscall(ASTRA_SYSCALL_CLOSE, open.stream, 0u, 0u,
+                                KERNEL_PROCESS_OK, &next) ==
+           ASTRA_SYSCALL_OK);
+    assert(audio_stream_close_calls == 2u);
+    open.stream = 0u;
+    open.stream_generation = 0u;
+    TRY_OPEN(stream_only, ASTRA_SYSCALL_OK);
+    assert(audio_stream_last_slot == slot);
+#undef TRY_OPEN
+}
+
 /*
  * Fault injection across the admission surface. STORAGE_AND_VFS.md requires
  * this before a filesystem is allowed to depend on the API, and the reason is
@@ -14030,6 +14333,7 @@ int main(void)
     test_block_admission_faults();
     test_network_admission();
     test_host_admission();
+    test_audio_stream();
     test_bootstrap_capabilities();
     test_capability_roots_are_carried();
     test_arguments_and_environment_are_published();

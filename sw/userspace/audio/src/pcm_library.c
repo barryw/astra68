@@ -28,17 +28,18 @@ static void release(AstraPcmStream *stream)
     (void)memset(stream, 0, sizeof(*stream));
 }
 
-static AstraResult receive_reply(AstraPcmStream *stream,
-                                 AstraPcmReply *reply,
-                                 uint32_t *received)
+AstraResult astra_pcm_reply_receive(uint32_t reply_port,
+                                    uint32_t transaction,
+                                    AstraPcmReply *reply,
+                                    uint32_t *received)
 {
     uint32_t bytes = 0u, count = 0u;
-    uint32_t status = astra_wait_one_restart(stream->reply,
+    uint32_t status = astra_wait_one_restart(reply_port,
                                               ASTRA_DEADLINE_FOREVER, NULL);
 
     if (status != ASTRA_SYSCALL_OK)
         return astra_result_from_syscall(status);
-    status = astra_port_receive(stream->reply, reply, sizeof(*reply),
+    status = astra_port_receive(reply_port, reply, sizeof(*reply),
                                 received, received == NULL ? 0u : 1u,
                                 &bytes, &count);
     if (status != ASTRA_SYSCALL_OK)
@@ -51,15 +52,25 @@ static AstraResult receive_reply(AstraPcmStream *stream,
         reply->header.protocol_version != ASTRA_PCM_PROTOCOL_VERSION ||
         reply->header.reserved != 0u ||
         reply->header.operation != ASTRA_PCM_REPLY ||
-        reply->header.transaction_id != stream->transaction ||
+        reply->header.transaction_id != transaction ||
         count != (received == NULL ? 0u :
                   reply->status == ASTRA_STATUS_OK ? 1u : 0u) ||
         (count == 1u && received != NULL && *received == 0u)) {
-        if (count == 1u && received != NULL && *received != 0u)
+        if (count == 1u && received != NULL && *received != 0u) {
             (void)astra_close(*received);
+            *received = 0u;
+        }
         return ASTRA_ERROR_IO;
     }
     return astra_result_from_service(reply->status);
+}
+
+static AstraResult receive_reply(AstraPcmStream *stream,
+                                 AstraPcmReply *reply,
+                                 uint32_t *received)
+{
+    return astra_pcm_reply_receive(stream->reply, stream->transaction, reply,
+                                   received);
 }
 
 AstraResult astra_pcm_session_exchange(AstraPcmStream *stream,

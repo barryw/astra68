@@ -182,6 +182,10 @@ def main():
                 if not voices:
                     raise RuntimeError("no 44.1 kHz stereo voice: %r" %
                                        [hex(v.format) for v in host.voices])
+                # SDL mixes into its own audio stream's buffers.
+                if not voices[0].generation:
+                    raise RuntimeError("Doom's audio went through the media "
+                                       "service, not an audio stream")
                 samples = numpy.frombuffer(bytes(voices[0].written),
                                            dtype=">i2")
                 loud = int(numpy.abs(samples).max()) if len(samples) else 0

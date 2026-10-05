@@ -38,6 +38,9 @@ typedef struct PcmSession {
 #define DIGEST_BYTES ASTRA_HOST_AUDIO_DIGEST_BYTES
 
 static AstraHostChannelClient host;
+/* HOST0 with every right; applications get it with AUDIO_STREAM alone. */
+static uint32_t host_device;
+static int host_streams;
 static PcmSession *sessions;
 static uint32_t session_count;
 static int host_failed;
@@ -164,6 +167,34 @@ static uint32_t open_midi(uint32_t *voice)
     return status;
 }
 
+/*
+ * Haiku's media_server hands an application its connection and is not
+ * involved per buffer again; this is that hand-off. The application gets a
+ * host device handle that opens audio streams on its own memory and does
+ * nothing else (ASTRA_RIGHT_AUDIO_STREAM), and plays without this service.
+ */
+static void serve_stream_grant(const AstraPcmRequest *request,
+                               uint32_t reply_port)
+{
+    uint32_t grant = 0u;
+    uint32_t status = request->frames == 0u && request->value == 0u ?
+        ASTRA_STATUS_OK : ASTRA_STATUS_PROTOCOL;
+
+    if (status == ASTRA_STATUS_OK && !host_streams)
+        status = ASTRA_STATUS_UNSUPPORTED;
+    if (status == ASTRA_STATUS_OK &&
+        astra_rt_handle_duplicate(
+            host_device, ASTRA_RIGHT_AUDIO_STREAM | ASTRA_RIGHT_TRANSFER,
+            &grant) != ASTRA_SYSCALL_OK)
+        status = ASTRA_STATUS_NO_SPACE;
+    if (send_reply(reply_port, request, status, NULL, 0u,
+                   status == ASTRA_STATUS_OK ? grant : 0u) ==
+            ASTRA_SYSCALL_OK)
+        grant = 0u;
+    if (grant != 0u)
+        (void)astra_close(grant);
+}
+
 static void serve_open(uint32_t factory)
 {
     AstraPcmRequest request = {0};
@@ -178,7 +209,12 @@ static void serve_open(uint32_t factory)
 
     if (status != ASTRA_SYSCALL_OK)
         return;
-    if (count != 2u)
+    if (count == 1u && astra_pcm_request_valid(&request, size, 1) &&
+        request.header.operation == ASTRA_PCM_STREAM_GRANT) {
+        serve_stream_grant(&request, handles[0]);
+        goto done;
+    }
+    if (count != 2u || request.header.operation == ASTRA_PCM_STREAM_GRANT)
         goto done;
     status = astra_pcm_request_valid(&request, size, 1) &&
              request.frames == 0u &&
@@ -560,6 +596,14 @@ int astra_main(const AstraStartupInfo *startup)
         return ASTRA_STATUS_BAD_HANDLE;
     status = astra_host_client_open(device->handle, ASTRA_HOST_CAP_AUDIO,
                                     ASTRA_PCM_TRANSFER_BYTES, &host);
+    host_device = device->handle;
+    {
+        AstraHostLeaseInfo lease = {0};
+
+        host_streams = astra_host_lease_query(host_device, &lease) ==
+                           ASTRA_SYSCALL_OK &&
+                       (lease.capabilities & ASTRA_HOST_CAP_AUDIO_STREAM) != 0u;
+    }
     if (status == ASTRA_SYSCALL_OK)
         status = astra_rt_port_create(1u, sizeof(AstraPcmRequest),
                                       &factory, &publication);

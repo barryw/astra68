@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 #define ASTRA_PCM_PROTOCOL UINT32_C(0x50434d31) /* PCM1 */
-#define ASTRA_PCM_PROTOCOL_VERSION UINT16_C(5)
+#define ASTRA_PCM_PROTOCOL_VERSION UINT16_C(6)
 
 enum {
     ASTRA_PCM_OPEN = 1u,
@@ -51,9 +51,14 @@ enum {
     /* frames bytes of short MIDI messages in the area. */
     ASTRA_PCM_MIDI_EVENTS,
     /* Setting value (ASTRA_HOST_MIDI_SET_*) becomes target. */
-    ASTRA_PCM_MIDI_SET
+    ASTRA_PCM_MIDI_SET,
+    /* Factory, with one handle: the reply port. The reply carries a host
+     * device handle with ASTRA_RIGHT_AUDIO_STREAM alone, with which the
+     * client opens audio streams on its own memory (audio_stream.h). The
+     * service is not involved again. UNSUPPORTED when the host has none. */
+    ASTRA_PCM_STREAM_GRANT
 };
-#define ASTRA_PCM_OPERATION_MAX ASTRA_PCM_MIDI_SET
+#define ASTRA_PCM_OPERATION_MAX ASTRA_PCM_STREAM_GRANT
 #define ASTRA_PCM_CONVERT_END 1u
 #define ASTRA_PCM_MIDI_FOREVER UINT32_C(0xffffffff)
 #define ASTRA_PCM_FONT_NAME_MAX 128u

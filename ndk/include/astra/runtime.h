@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include <astra/compiler.h>
+#include <astra/audio_stream.h>
 #include <astra/block.h>
 #include <astra/display.h>
 #include <astra/event.h>
@@ -439,12 +440,16 @@ uint32_t astra_rt_interval_timer_get(uint64_t *delay_ns,
 /** @return ASTRA_SYSCALL_* status after restoring interrupted thread state. */
 uint32_t astra_rt_signal_return(void);
 /**
- * Sleep the current thread until an absolute monotonic deadline.
- * @param deadline_ns Absolute monotonic nanoseconds.
- * @param flags Sleep behavior flags.
- * @param signal_mask Temporary blocked-signal mask.
+ * Sleep the current thread until a monotonic deadline.
+ * @param deadline_ns Monotonic nanoseconds: absolute, or from now with
+ * ::ASTRA_THREAD_SLEEP_RELATIVE.
+ * @param flags ASTRA_THREAD_SLEEP_* flags.
+ * @param signal_mask Temporary blocked-signal mask, with
+ * ::ASTRA_THREAD_SLEEP_REPLACE_SIGNAL_MASK.
  * @param previous_signal_mask Receives the prior mask when non-NULL.
- * @return ASTRA_SYSCALL_* status.
+ * @return ::ASTRA_SYSCALL_TIMED_OUT when the deadline arrived -- the normal
+ * end of a sleep -- ::ASTRA_SYSCALL_CANCELLED when a signal ended it early,
+ * or another ASTRA_SYSCALL_* failure.
  */
 uint32_t astra_rt_thread_sleep(uint64_t deadline_ns, uint32_t flags,
                                uint32_t signal_mask,
@@ -598,6 +603,26 @@ uint32_t astra_process_open(uint32_t observer, uint32_t process_id,
  * @return ASTRA_SYSCALL_* status.
  */
 uint32_t astra_scheduler_stats(uint32_t observer, AstraSchedulerStats *stats);
+/**
+ * Open an audio stream on one of the caller's DMA buffers
+ * (::ASTRA_SYSCALL_AUDIO_STREAM_OPEN; layout in %audio_stream.h).
+ * pcm.library's astra_pcm_buffers_open() is the usual way in.
+ * @param device Host device handle carrying ::ASTRA_RIGHT_AUDIO_STREAM.
+ * @param request In: buffer, format, period and count. Out: the stream
+ * handle and its generation.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_audio_stream_open(uint32_t device,
+                                 AstraAudioStreamOpen *request);
+/**
+ * Hand the host every queued buffer and wait for a free one
+ * (::ASTRA_SYSCALL_AUDIO_STREAM_WAIT).
+ * @param stream Stream handle.
+ * @param deadline_ns Absolute monotonic deadline, or
+ * ::ASTRA_DEADLINE_FOREVER; one already past only hands buffers over.
+ * @return ASTRA_SYSCALL_OK once a buffer is free, TIMED_OUT, or PEER_DEAD.
+ */
+uint32_t astra_audio_stream_wait(uint32_t stream, uint64_t deadline_ns);
 /**
  * Read a page of resident shared-library/process mapping records.
  * @param observer Process capability authorizing observation.

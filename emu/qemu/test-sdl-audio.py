@@ -34,7 +34,9 @@ import ctypes
 import fcntl
 import hashlib
 import importlib.util
+import mmap
 import os
+import platform
 import shutil
 import socket
 import struct
@@ -187,6 +189,17 @@ def frame_bytes(format_):
 OK, PROTOCOL, INVALID, BAD_HANDLE, UNSUPPORTED, BUSY = 0, 1, 8, 9, 13, 14
 RATE = 48000
 
+# sw/include/astra/audio_mailbox.h: host-native, beside QEMU.
+MAILBOX_MAGIC, MAILBOX_VERSION = 0x414D4258, 0x00010000
+MAILBOX_STREAMS, MAILBOX_DEPTH = 32, 2
+MAILBOX_RING_BYTES = MAILBOX_DEPTH * 4096 * MAX_FRAME_BYTES
+MAILBOX_RING_OFFSET = 4096
+MAILBOX_BYTES = MAILBOX_RING_OFFSET + MAILBOX_STREAMS * MAILBOX_RING_BYTES
+MAILBOX_ROOM, MAILBOX_SLOT = 20, 64  # room_sequence; the first slot
+SLOT = struct.Struct("=7I")  # generation .. start
+FUTEX_WAKE = 1
+SYS_FUTEX = {"x86_64": 202, "aarch64": 98}.get(platform.machine())
+
 
 class Voice:
     def __init__(self, handle, format_):
@@ -202,6 +215,11 @@ class Voice:
         self.written = bytearray()
         self.gaps = 0
         self.closed = False
+        # An application stream's voice (audio_mailbox.h).
+        self.generation = 0
+        self.position = 0
+        self.debt = 0.0
+        self.dry = False
 
 
 class AudioHost:
@@ -229,6 +247,7 @@ class AudioHost:
         self.synthesis.astra_audio_synth_set_sound_fonts(self.sound_fonts)
         self.uploads = {}
         self.midis = {}
+        self.closed_midis = []
         self.converters = {}
         self.conversions = 0
         self.lock = threading.Lock()
@@ -241,12 +260,91 @@ class AudioHost:
         self.listener.listen(8)
         self.stopping = False
         threading.Thread(target=self.accept, daemon=True).start()
+        # The mailbox QEMU copies application stream buffers into, read as
+        # the daemon's feed thread reads it: by the clock, 2 ms at a time.
+        mailbox = os.path.join(work, "audio.mailbox")
+        fd = os.open(mailbox, os.O_RDWR | os.O_CREAT, 0o600)
+        os.ftruncate(fd, MAILBOX_BYTES)
+        self.mailbox = mmap.mmap(fd, MAILBOX_BYTES)
+        os.close(fd)
+        os.environ["ASTRA_AUDIO_MAILBOX_PATH"] = mailbox
+        self.libc = ctypes.CDLL(None, use_errno=True)
+        self.streams = {}
+        self.room_wakes = 0
+        threading.Thread(target=self.feed, daemon=True).start()
+
+    def feed(self):
+        while not self.stopping:
+            time.sleep(0.002)
+            with self.lock:
+                self.drain()
+
+    def drain_streams(self, elapsed):
+        box = self.mailbox
+        magic, version = struct.unpack_from("=2I", box, 0)
+        if magic != MAILBOX_MAGIC or version != MAILBOX_VERSION:
+            return
+        room = False
+        for slot in range(MAILBOX_STREAMS):
+            at = MAILBOX_SLOT + slot * 64
+            generation, format_, _period, buffer_bytes, written, _read, \
+                start = SLOT.unpack_from(box, at)
+            voice = self.streams.get(slot)
+            if voice is not None and voice.generation != generation:
+                voice.closed = True
+                del self.streams[slot]
+            if generation == 0:
+                continue
+            if slot not in self.streams:
+                if not frame_bytes(format_):
+                    continue
+                voice = Voice(0x80000000 | slot, format_)
+                voice.generation, voice.position = generation, start
+                self.streams[slot] = voice
+                self.voices.append(voice)
+            voice = self.streams[slot]
+            available = (written - voice.position) & 0xFFFFFFFF
+            if available > MAILBOX_RING_BYTES:
+                continue
+            voice.debt += elapsed * voice.rate
+            want = int(voice.debt)
+            voice.debt -= want
+            frames = min(want, available // voice.frame_bytes)
+            if frames < want and voice.written and not voice.dry:
+                voice.gaps += 1
+            voice.dry = frames < want
+            taken = frames * voice.frame_bytes
+            ring = MAILBOX_RING_OFFSET + slot * MAILBOX_RING_BYTES
+            for _ in range(2 if taken else 0):
+                begin = voice.position % MAILBOX_RING_BYTES
+                part = min(taken, MAILBOX_RING_BYTES - begin)
+                voice.written += box[ring + begin:ring + begin + part]
+                voice.position = (voice.position + part) & 0xFFFFFFFF
+                taken -= part
+            if struct.unpack_from("=I", box, at)[0] != generation:
+                continue
+            struct.pack_into("=I", box, at + 20, voice.position)
+            after = (written - voice.position) & 0xFFFFFFFF
+            if available > buffer_bytes >= after:
+                room = True
+        if room:
+            sequence = struct.unpack_from("=I", box, MAILBOX_ROOM)[0]
+            struct.pack_into("=I", box, MAILBOX_ROOM,
+                             (sequence + 1) & 0xFFFFFFFF)
+            address = ctypes.addressof(ctypes.c_uint32.from_buffer(
+                box, MAILBOX_ROOM))
+            self.libc.syscall(SYS_FUTEX, ctypes.c_void_p(address),
+                              FUTEX_WAKE, 1, None, None, 0)
+            self.room_wakes += 1
 
     def drain(self):
         now = time.monotonic()
         elapsed = now - self.clock
         self.clock = now
+        self.drain_streams(elapsed)
         for voice in self.voices:
+            if voice.generation:
+                continue
             # The host resamples each voice to the sink, so its queue
             # drains at the voice's own rate.
             frames = elapsed * voice.rate
@@ -308,7 +406,7 @@ class AudioHost:
             return self.conversion(operation, handle, value,
                                    capacity if operation == CONVERT
                                    else value_hi, data, reply)
-        if FONT_QUERY <= operation <= MIDI_SYSTEM_FONT or \
+        if FONT_QUERY <= operation <= MIDI_SET or \
                 (operation in (CLOSE, GAIN, PAUSE) and
                  (handle in self.midis or handle in self.uploads)):
             return self.synth_request(operation, handle, value, value_hi,
@@ -498,8 +596,10 @@ class AudioHost:
             if handle in self.uploads:
                 del self.uploads[handle]
             else:
-                self.synthesis.astra_audio_synth_close(
-                    self.midis.pop(handle).synth)
+                closed = self.midis.pop(handle)
+                self.synthesis.astra_audio_synth_close(closed.synth)
+                # Kept, so a gate can ask what it played after it closed.
+                self.closed_midis.append(closed)
         return reply, out
 
     def voice_request(self, mine, operation, handle, value, data, reply):
@@ -795,6 +895,22 @@ def main():
                 if not voice.closed:
                     raise RuntimeError("loopwave exited without closing "
                                        "its stream")
+                # The data plane: SDL's own buffers through QEMU's mailbox,
+                # not WRITEs relayed by the media service. (Other clients,
+                # the desktop's sounds, may still WRITE their own voices.)
+                if not voice.generation:
+                    guest = [line for line in machine.said(0)[0]
+                             if "media" in line or "audio" in line]
+                    raise RuntimeError(
+                        "loopwave did not play through an audio stream "
+                        "(%d host WRITEs; mailbox magic %#x, %d streams "
+                        "seen %r; guest: %r)" % (
+                            host.requests[WRITE],
+                            struct.unpack_from("=I", host.mailbox, 0)[0],
+                            len([v for v in host.voices if v.generation]),
+                            [(hex(v.format), v.generation, len(v.written))
+                             for v in host.voices],
+                            guest[-12:]))
                 if arguments.save:
                     with open(arguments.save, "wb") as handle:
                         handle.write(voice.written)
@@ -809,7 +925,8 @@ def main():
             print("SDL upstream loopwave QEMU: PASS (command; %d frames of "
                   "S16BE mono 22050 Hz, bit-exact sample.wav looped; "
                   "Ctrl-C closed the stream and exited 0; %d queue "
-                  "underruns)" % (frames, gaps))
+                  "underruns; audio stream, %d room wakes)" %
+                  (frames, gaps, host.room_wakes))
         finally:
             machine.close()
             host.close()
