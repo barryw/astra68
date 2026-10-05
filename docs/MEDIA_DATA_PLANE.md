@@ -1,6 +1,6 @@
 # Media data plane: audio and video, the way Haiku does it
 
-Status: design for owner review, 2026-10-05. No code yet.
+Status: approved by the owner 2026-10-05. Phase 0 next; see `docs/HANDOVER_2026-10-05_MEDIA.md`.
 
 Owner direction: copy what Haiku has proven instead of inventing layers; SDL
 stays the game API; no direct framebuffer access; games need every cycle.
@@ -133,8 +133,7 @@ device round trips** (texture upload, three draw-list flushes, present):
 
 Plus two CPU copies of the texture (a private malloc lock buffer, then
 `AREA_COPY_IN`), ~1,200 display-service syscalls a second and a STATE event
-on every present. Full map: the 2026-10-05 investigation summarized in the
-handover.
+on every present. Full map: `docs/HANDOVER_2026-10-05_MEDIA.md`.
 
 ### Target (SDL stays the API)
 

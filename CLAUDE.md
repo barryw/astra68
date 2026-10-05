@@ -251,6 +251,12 @@ There is no alternative CPU or emulator implementation in the repository.
 
 ## Standing instructions
 
+- **Haiku first.** Before designing or building any subsystem, find how
+  Haiku does it (`~/Git/haiku`; SDL's Haiku backend in `~/Git/SDL2` on
+  beast) and copy the proven design, citing file:line. Deviate only for a
+  stated, measured reason. Inventing our own layers cost us a media stack
+  that relays every audio buffer and video frame through a server
+  (`docs/MEDIA_DATA_PLANE.md`).
 - **No throwaway code.** Build the real long-term piece even if incomplete.
 - **Modern methods, sized for this machine.** An MC68040 with an MMU, 512 MiB and
   one core. Take the *idea* a modern system expresses, not its implementation —
