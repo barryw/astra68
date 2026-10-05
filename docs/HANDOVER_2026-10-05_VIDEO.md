@@ -1,27 +1,54 @@
-# Handover 2026-10-05: phase 2, video (posted present and pipelining)
+# Handover 2026-10-05: video, phase 2 done; phase 3 next
 
 Read `CLAUDE.md` (the **Haiku first** standing instruction), `AGENTS.md`,
-then `docs/MEDIA_DATA_PLANE.md` -- the approved design; its Video section is
-this phase. `docs/HANDOVER_2026-10-05_MEDIA.md` holds phase 0 and phase 1
-in full, and its "Haiku VIDEO", "SDL2 Haiku backend" and "Astra DISPLAY
-today" sections are the research this phase starts from (file:line).
+then `docs/MEDIA_DATA_PLANE.md` -- the approved design; its Video section
+items 4-6 are phase 3. `docs/HANDOVER_2026-10-05_MEDIA.md` holds phases 0
+and 1; this page holds phase 2 (its phase 0 answers, decisions and board
+result, below).
 
 ## State
 
-- `main` is pushed and ends at the commit that adds this page. Phase 1
-  commits: `9669fb53` (switch counters), `1707179a` (audio data plane),
-  `6a5f6f87` (board measurements), the clean-checkout build fix, and
-  `f3180c7f` (media band for stream holders, media service at 16).
-- The DE25 runs release `547e66fc` (from `f3180c7f`), with `a9cf49d2`
-  (streams, no priorities) beside it. Both carry the new astra-top; a
-  release from before `9669fb53` cannot be compared with it (the sample
-  format changed).
-- `verify-nopc.sh` on beast is green. Known flake: the display gate's
-  "Terminal double-click launch failed: requests=31/32" once in 7
-  parallel runs; it passes alone and on a parallel rerun.
-- A clean checkout builds now: `assets/fonts/astra_8x16.hex` is tracked,
-  and graphics and QEMU's source preparation generate
-  `fpga/arty/linux/astra_render_protocol.h` from its spec.
+- `main` is pushed. Phase 2 commits: `9b0b3935` (posted present, one
+  submission a frame, a queue of two) and `ad5587aa` (system.library 3).
+- **system.library is major 3** (`system.library.3`, ABI 3.0, one
+  `ASTRA_SYSTEM_3.0` version node): `AstraDrawList` grew, so anything
+  linked against `.2` no longer loads. Every in-tree program was rebuilt
+  from wiped `build/` trees on beast and links `.3`; manifests require
+  `system.library 3 3.0.0`.
+- Versions that moved together: display host 1.1 (Vesta queue of two),
+  ADLT 1.6 (TARGET), GUI protocol 18 (posted FRAME). The display mailbox
+  (1.9) and the board helper did not change.
+- The DE25 runs release `f216bdb2` (from `ad5587aa`), with `82bf10be`
+  (phase 2 before the library bump, the A/B result below) beside it. The
+  board keeps two releases, so `547e66fc` (phase 1) is gone: republish it
+  from `28dab19c` to compare against phase 1 again.
+- `verify-nopc.sh` on beast is green on `ad5587aa`, from a clean build.
+- Board tip: a leftover `while pgrep -f de25-ab.sh ...` loop from an older
+  session matched its own pattern and made a wait on the A/B look endless.
+  Wait for the A/B's log, not with `pgrep -f de25-ab.sh`.
+
+## Phase 3: what to do
+
+From `docs/MEDIA_DATA_PLANE.md`, Video, items 4-6 ("copies"):
+
+4. **Textures are written where the device reads them.** Streaming
+   textures lock straight into the staging area (`ASTRA_LockTexture`'s
+   ponytail note, `SDL_astrarender.c`), removing the private malloc copy
+   and `AREA_COPY_IN`. The upload is then one more command of the posted
+   frame, not a SURFACE_WRITE call -- which needs staging recycled the way
+   lists are (the release event), or real fences (item 7).
+5. **QEMU does not copy on the vCPU thread.** Today the running request's
+   batch and attachment are copied in the MMIO store (`astra_display_start`
+   when the queue is idle); a queued one's attachment is staged at submit.
+   Hand the helper extents, or move the copy to the main loop.
+6. **Present flips a content bank** with a posted latest-value word (the
+   cursor's pattern), so a present is not a compose batch; the STATE event
+   is already gone for posted presents.
+
+Doom now runs at its own 35 Hz tic rate when idle, so it no longer shows a
+display gain there: measure phase 3 in 125 Hz motion (30.9 presents/s,
+guest idle 8%) and by guest idle and display CPU, or with a heavier
+client. Phase 0 first, as before: file:line answers, then code.
 
 ## Phase 1 result (Chocolate Doom, de25-ab.sh, 3 rounds each)
 
@@ -39,31 +66,11 @@ The priority change costs ~4% of frames in motion (SDL's audio thread at
 gaps. Kept by the owner: gaps are what a player hears, and a busier game
 would gap without it.
 
-## Phase 2: what to do
+## Phase 2 as planned
 
-From `docs/MEDIA_DATA_PLANE.md`, Video, items 1-3:
-
-1. **Present is posted, not called.** SDL's game thread hands the frame
-   over and continues; a newer present replaces an unprocessed older one
-   (Haiku: `SDL_bframebuffer.cc:95-103` posts `BWIN_UPDATE_FRAMEBUFFER`;
-   `SDL_BWin.h:452-462` drops stale ones). `SDL_RenderPresent`'s only wait
-   is the existing vsync wait (`SDL_astrarender.c:1104-1107`).
-2. **One submission per frame.** Draw lists travel in the shared list area;
-   target changes mark points in it instead of each being a port call
-   (today three LIST_SUBMITs a frame, `SDL_astrarender.c:916-1018`).
-3. **The display service pipelines.** Building frame N+1 never waits for
-   the device to finish frame N: drop the `settle()` in `builder_begin`
-   (`window_graphics.c:210-226`, `main.c:4106-4113`), two batch buffers,
-   a request queue of at least two through kernel, Vesta and mailbox
-   (today one: kernel `display_dma_active`, `process.c:2944-2977`; Vesta
-   `platform.c:523-527`), completion per request.
-
-Expect: four of the five per-frame waits gone, and the 34% guest idle
-turning into frames. Phase 0 for video first, as for audio: answer with
-file:line before code -- how SDL's present reaches the display service
-today and what blocks at each step; what a queue of two needs in the
-kernel, QEMU and the helper; how Haiku's app_server takes
-`DrawBitmapAsync` without a reply (`View.cpp:3126-3163`).
+Items 1-3 of the Video section: present posted, one submission per frame,
+the display service pipelines. Done; the decisions taken are below
+("Phase 0 answers"), and the measurement after them.
 
 ## How to measure
 
@@ -81,7 +88,9 @@ again (presents/s, audio gaps, guest idle, switches by cause, per-process
 CPU). `docs/DEBUGGING.md` section 7.
 
 Gates prove a new path is taken, not only that it works: phase 1's audio
-gates fail unless the voice is a stream. Do the same for posted presents.
+gates fail unless the voice is a stream; phase 2's Doom gate fails unless
+frames are posted, a frame is one submission and the device queued a
+request. Do the same for phase 3 (e.g. no SURFACE_WRITE per frame).
 
 ## Phase 0 answers (2026-10-05; file:line at `28dab19c`)
 
