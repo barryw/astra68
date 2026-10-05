@@ -482,13 +482,17 @@
  * `AstraDisplayFrameRequest` describing the operation (solid color, RGB565
  * blit, render batch, cursor image, or surface read-back) and its source
  * DMA buffer. The full request layout lives with the display subsystem,
- * not in this header.
+ * not in this header. The device holds up to ASTRA_DISPLAY_HOST_QUEUE_DEPTH
+ * requests and runs them in submission order; a request holds its slot
+ * until its completion is collected, and a submit with every slot held
+ * returns ::ASTRA_SYSCALL_WOULD_BLOCK.
  */
 #define ASTRA_SYSCALL_DISPLAY_SUBMIT   51
 /**
- * Collects a previously submitted display frame's completion. Same lease
- * and capability requirements as ::ASTRA_SYSCALL_DISPLAY_SUBMIT; data[2]
- * is the address of the completion record to fill in.
+ * Collects the oldest uncollected completion, in submission order. Same
+ * lease and capability requirements as ::ASTRA_SYSCALL_DISPLAY_SUBMIT;
+ * data[2] is the address of the completion record to fill in.
+ * ::ASTRA_SYSCALL_WOULD_BLOCK when none is ready.
  */
 #define ASTRA_SYSCALL_DISPLAY_COLLECT  52
 /* 53 retired: whole-image shared-library mapping was replaced by 89-91. */

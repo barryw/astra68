@@ -25,6 +25,14 @@ never receive physical addresses or program chipset registers.
    {c:func}`astra_window_present_discard` when the next frame redraws every
    pixel.
 
+A game hands each frame over instead: one list carries the whole frame --
+{c:func}`astra_draw_list_set_target` moves it between render targets and
+the window -- and {c:func}`astra_draw_post` with `ASTRA_DRAW_POST_PRESENT`
+sends it and presents the window without waiting for either. The list
+empties itself the next time it is changed, which waits only if the
+display service has not read it yet. Requests sent to the window after a
+post, such as {c:func}`astra_surface_write`, run after its commands.
+
 The screen is 1920x1080. A window's content is RGB565.
 {c:func}`astra_display_layout_calculate` computes the exact crop and viewport
 the hardware scaler would use for a logical scene, without floating point.

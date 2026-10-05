@@ -404,7 +404,7 @@ static void test_fenced_display_transport(void)
     clear_registers(registers);
     assert(kernel_platform_display_capabilities() == 0u);
     registers->DISPLAY_ID = ASTRA_DISPLAY_HOST_ID_MAGIC;
-    registers->DISPLAY_VERSION = ASTRA_DISPLAY_HOST_VERSION_1_0;
+    registers->DISPLAY_VERSION = ASTRA_DISPLAY_HOST_VERSION_1_1;
     registers->DISPLAY_CAPS = ASTRA_DISPLAY_HOST_CAP_SOLID_FRAME |
                               ASTRA_DISPLAY_HOST_CAP_FENCED_PRESENT |
                               ASTRA_DISPLAY_HOST_CAP_RENDER_BATCH |
@@ -520,26 +520,47 @@ static void test_fenced_display_transport(void)
         12u, 4u /* retired CURSOR_UPDATE */, 0u, 0u, 0u));
     assert((astraea->IRQ_EN & ASTRAEA_IRQ_DRAW_DONE) != 0u);
 
+#define ACCEPTED(count) \
+    ((uint32_t)(count) << ASTRA_DISPLAY_HOST_QUEUE_ACCEPTED_SHIFT)
     /* A fast device may complete between SUBMIT and the acceptance read. */
     kernel_platform_test_display_submit_result(
-        ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID, 13u);
+        ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID | ACCEPTED(1u));
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
     assert(kernel_platform_display_submit(
         13u, ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x2468u, 0u, 0u));
 
-    /* A completion for another fence, or no accepted request, is not ours. */
+    /* The device holds several requests: a submit needs a free slot, not
+       an idle device, and running or completed requests do not refuse it. */
     kernel_platform_test_display_submit_result(
-        ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID, 99u);
-    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
+        ASTRA_DISPLAY_HOST_QUEUE_BUSY |
+        ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID | ACCEPTED(0u));
+    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY |
+                               ASTRA_DISPLAY_HOST_QUEUE_BUSY | ACCEPTED(255u);
+    assert(kernel_platform_display_submit(
+        18u, ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x2468u, 0u, 0u));
+    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_BUSY |
+        (ASTRA_DISPLAY_HOST_QUEUE_DEPTH <<
+         ASTRA_DISPLAY_HOST_QUEUE_HELD_SHIFT);
+    registers->DISPLAY_REQ_ID = 0u;
+    assert(!kernel_platform_display_submit(
+        19u, ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x2468u, 0u, 0u));
+    assert(registers->DISPLAY_REQ_ID == 0u);
+
+    /* An earlier request still running is not this one's acceptance. */
+    kernel_platform_test_display_submit_result(
+        ASTRA_DISPLAY_HOST_QUEUE_BUSY | ACCEPTED(5u));
+    registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY |
+                               ASTRA_DISPLAY_HOST_QUEUE_BUSY | ACCEPTED(5u);
     assert(!kernel_platform_display_submit(
         14u, ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x2468u, 0u, 0u));
     kernel_platform_test_display_submit_result(
-        ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY, 0u);
+        ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY);
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY;
     assert(!kernel_platform_display_submit(
         15u, ASTRA_DISPLAY_FRAME_PRESENT_SOLID, 0x2468u, 0u, 0u));
     kernel_platform_test_display_submit_result(
-        ASTRA_DISPLAY_HOST_QUEUE_BUSY, 0u);
+        ASTRA_DISPLAY_HOST_QUEUE_BUSY | ACCEPTED(1u));
+#undef ACCEPTED
 
     assert(!kernel_platform_display_collect(NULL));
     registers->DISPLAY_QUEUE = ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID;
@@ -638,6 +659,19 @@ static void test_production_irq_qualification_controls(void)
     registers->NETWORK_QUEUE = 0u;
     assert(kernel_platform_device_irq_complete(IRQ_SRC_NETWORK, 8u));
     registers->NETWORK_READY_SEQ = 0u;
+
+    /* DRAW_DONE raised again is another display completion, new work; any
+     * other Astraea source still pending is a device that ignored the
+     * acknowledgement. */
+    astraea->IRQ_EN = ASTRAEA_IRQ_DRAW_DONE | ASTRAEA_IRQ_BLIT_DONE;
+    astraea->IRQ_STAT = ASTRAEA_IRQ_DRAW_DONE;
+    assert(kernel_platform_device_irq_complete(IRQ_SRC_ASTRAEA,
+                                               ASTRAEA_IRQ_DRAW_DONE));
+    astraea->IRQ_STAT = ASTRAEA_IRQ_DRAW_DONE | ASTRAEA_IRQ_BLIT_DONE;
+    assert(!kernel_platform_device_irq_complete(IRQ_SRC_ASTRAEA,
+                                                ASTRAEA_IRQ_BLIT_DONE));
+    astraea->IRQ_EN = 0u;
+    astraea->IRQ_STAT = 0u;
 
     usb->CONTROL = OHCI_CONTROL_HCFS_RESET;
     usb->INTERRUPT_STATUS = OHCI_INT_RHSC;

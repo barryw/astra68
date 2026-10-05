@@ -66,6 +66,33 @@ static AstraDrawListCommand fake_submitted[1200];
 /* The whole submitted list area, payload included. */
 static uint8_t fake_submitted_list[1u << 20];
 static uint32_t fake_duplicate_rights;
+/* Release events the NDK created, the service's signaling handles for
+   them, and whether a posted frame left one signaled. */
+#define FAKE_EVENTS 4u
+static uint32_t fake_events[FAKE_EVENTS];
+static uint32_t fake_event_aliases[FAKE_EVENTS];
+static uint32_t fake_release_signaled;
+static uint32_t fake_release_waits;
+static uint32_t fake_list_release;
+static AstraGuiGraphicsCommand fake_posted;
+static uint32_t fake_posts;
+
+static int fake_event(uint32_t handle)
+{
+    for (uint32_t index = 0u; index < FAKE_EVENTS; ++index)
+        if (handle != 0u && fake_events[index] == handle)
+            return 1;
+    return 0;
+}
+
+static int fake_event_alias(uint32_t handle)
+{
+    for (uint32_t index = 0u; index < FAKE_EVENTS; ++index)
+        if (handle != 0u && fake_event_aliases[index] == handle)
+            return 1;
+    return 0;
+}
+
 
 static FakeArea *fake_area(uint32_t handle)
 {
@@ -75,6 +102,21 @@ static FakeArea *fake_area(uint32_t handle)
              fake_areas[index].alias == handle))
             return &fake_areas[index];
     return 0;
+}
+
+/* The service's copy of the attached list, as it reads it. */
+static void fake_take_list(void)
+{
+    const AstraDrawListHeader *header =
+        (const AstraDrawListHeader *)fake_area(fake_list_area)->bytes;
+
+    fake_submitted_header = *header;
+    CHECK(header->command_count <= 1200u &&
+          header->total_bytes <= sizeof(fake_submitted_list) &&
+          header->total_bytes <= fake_area(fake_list_area)->size);
+    memcpy(fake_submitted, header + 1,
+           header->command_count * sizeof(AstraDrawListCommand));
+    memcpy(fake_submitted_list, header, header->total_bytes);
 }
 
 static void fake_reply_graphics(uint32_t transaction, uint32_t object,
@@ -118,23 +160,16 @@ static void fake_graphics(const AstraGuiGraphicsCommand *command,
         fake_staging_area = handles[1];
         break;
     case ASTRA_GUI_GRAPHICS_LIST_ATTACH:
-        CHECK(count == 2u && fake_area(handles[1]) != 0);
+        /* The list area, and the event to signal once a FRAME is read. */
+        CHECK(count == 3u && fake_area(handles[1]) != 0 &&
+              fake_event_alias(handles[2]));
         fake_list_area = handles[1];
+        fake_list_release = handles[2];
         object = ++fake_next_object;
         break;
-    case ASTRA_GUI_GRAPHICS_LIST_SUBMIT: {
-        const AstraDrawListHeader *header =
-            (const AstraDrawListHeader *)fake_area(fake_list_area)->bytes;
-
-        fake_submitted_header = *header;
-        CHECK(header->command_count <= 1200u &&
-              header->total_bytes <= sizeof(fake_submitted_list) &&
-              header->total_bytes <= fake_area(fake_list_area)->size);
-        memcpy(fake_submitted, header + 1,
-               header->command_count * sizeof(AstraDrawListCommand));
-        memcpy(fake_submitted_list, header, header->total_bytes);
+    case ASTRA_GUI_GRAPHICS_LIST_SUBMIT:
+        fake_take_list();
         break;
-    }
     case ASTRA_GUI_GRAPHICS_SURFACE_READ: {
         /* Row r, byte b of the read comes back as r * 16 + b. */
         uint8_t *staging = fake_area(fake_staging_area)->bytes;
@@ -229,9 +264,45 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         ++fake_area_copies;
         return ASTRA_SYSCALL_OK;
     }
+    case ASTRA_SYSCALL_EVENT_CREATE:
+        CHECK(d1 == 0u && d2 == (ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_WAIT |
+                                 ASTRA_RIGHT_TRANSFER));
+        for (uint32_t index = 0u; index < FAKE_EVENTS; ++index)
+            if (fake_events[index] == 0u) {
+                fake_events[index] = fake_next_handle++;
+                ++fake_live_handles;
+                *out_d1 = fake_events[index];
+                return ASTRA_SYSCALL_OK;
+            }
+        return ASTRA_SYSCALL_OUT_OF_MEMORY;
+    case ASTRA_SYSCALL_PORT_SEND_TRY: {
+        const AstraGuiGraphicsCommand *command =
+            (const AstraGuiGraphicsCommand *)d2;
+
+        /* Only a posted frame is sent without a reply. */
+        CHECK(d1 == FAKE_CONTROL && d3 == sizeof(*command) && d5 == 0u &&
+              command->header.operation == ASTRA_GUI_GRAPHICS_COMMAND &&
+              command->header.transaction_id != 0u &&
+              command->action == ASTRA_GUI_GRAPHICS_FRAME &&
+              command->window == FAKE_WINDOW);
+        fake_posted = *command;
+        ++fake_posts;
+        fake_take_list();
+        fake_release_signaled = 1u;
+        return ASTRA_SYSCALL_OK;
+    }
     case ASTRA_SYSCALL_HANDLE_DUPLICATE: {
         FakeArea *area = fake_area((uint32_t)d1);
 
+        if (fake_event((uint32_t)d1)) {
+            CHECK(d2 == (ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_TRANSFER));
+            for (uint32_t index = 0u; index < FAKE_EVENTS; ++index)
+                if (fake_events[index] == d1)
+                    fake_event_aliases[index] = fake_next_handle;
+            ++fake_live_handles;
+            *out_d1 = fake_next_handle++;
+            return ASTRA_SYSCALL_OK;
+        }
         CHECK(area != 0 && area->alias == 0u &&
               (d2 & ~(uint32_t)ASTRA_RIGHT_WRITE) ==
                   (ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP |
@@ -247,6 +318,9 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
 
         CHECK(fake_live_handles != 0u);
         --fake_live_handles;
+        for (uint32_t index = 0u; index < FAKE_EVENTS; ++index)
+            if (fake_events[index] == d1)
+                fake_events[index] = 0u;
         if (area != 0 && area->handle == d1) {
             munmap(area->bytes, area->size);
             *area = (FakeArea){0};
@@ -285,6 +359,13 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         return ASTRA_SYSCALL_OK;
     }
     case ASTRA_SYSCALL_WAIT_ONE:
+        /* A posted list is waited for only after it was posted, and its
+           event taken once. */
+        if (fake_event((uint32_t)d1)) {
+            CHECK(fake_release_signaled != 0u);
+            fake_release_signaled = 0u;
+            ++fake_release_waits;
+        }
         return ASTRA_SYSCALL_OK;
     default:
         fprintf(stderr, "unexpected syscall %u\n", number);
@@ -646,6 +727,83 @@ static void test_surface_read(AstraDisplay *display,
     CHECK(astra_surface_close(&readable) == ASTRA_OK);
 }
 
+static uint32_t list_command_count(const AstraDrawList *list)
+{
+    return ((const AstraDrawListHeader *)list->_private_commands)
+        ->command_count;
+}
+
+/* One list carries a frame for two destinations and is posted: the
+   service is not waited for until the list changes again. */
+static void test_posted_frame(AstraDisplay *display,
+                              const AstraSurface *content)
+{
+    AstraSurfaceCreateInfo create = ASTRA_SURFACE_CREATE_INFO_INIT;
+    AstraSurface target = ASTRA_SURFACE_INIT;
+    AstraDrawList list = ASTRA_DRAW_LIST_INIT;
+    AstraDrawPaint paint = ASTRA_DRAW_PAINT_INIT;
+    AstraRectI32 whole = { 0, 0, 320, 200 };
+    AstraRectI32 small = { 0, 0, 64, 32 };
+    AstraRectI32 huge = { 0, 0, 300, 100 };
+    uint32_t posts = fake_posts;
+
+    create.width = 64;
+    create.height = 32;
+    create.format = ASTRA_PIXEL_FORMAT_ARGB8888;
+    create.flags = ASTRA_SURFACE_DRAW_TARGET | ASTRA_SURFACE_DRAW_SOURCE;
+    CHECK(astra_surface_create(display, &create, &target) == ASTRA_OK);
+    CHECK(astra_draw_list_create(content, &whole, &list) == ASTRA_OK);
+    /* Retargeting an empty list just moves where it starts. */
+    CHECK(astra_draw_list_set_target(&list, &target) == ASTRA_OK);
+    CHECK(list._private_destination == target._private_id);
+    CHECK(astra_draw_rectangle(&list, &small, 1, &paint) == ASTRA_OK);
+    /* Clips follow the current destination. */
+    CHECK(astra_draw_list_set_clip(&list, &huge) == ASTRA_OK &&
+          list._private_clip.width == 64u && list._private_clip.height == 32u);
+    CHECK(astra_draw_list_set_target(&list, content) == ASTRA_OK);
+    CHECK(astra_draw_blit(&list, &target, &small, &whole, 0) == ASTRA_OK);
+    /* The same destination again adds nothing. */
+    CHECK(astra_draw_list_set_target(&list, content) == ASTRA_OK);
+    CHECK(astra_draw_post(&list, ASTRA_DRAW_POST_DISCARD) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    CHECK(astra_draw_post(&list, 4u) == ASTRA_ERROR_INVALID_ARGUMENT);
+    CHECK(astra_draw_post(&list, ASTRA_DRAW_POST_PRESENT |
+                                     ASTRA_DRAW_POST_DISCARD) == ASTRA_OK);
+    CHECK(fake_posts == posts + 1u && fake_release_waits == 0u &&
+          fake_posted.object == list._private_list &&
+          fake_posted.target == target._private_id &&
+          fake_posted.flags ==
+              (ASTRA_GUI_FRAME_PRESENT | ASTRA_GUI_FRAME_DISCARD));
+    CHECK(fake_submitted_header.version == ASTRA_DRAW_LIST_VERSION_1_6 &&
+          fake_submitted_header.command_count == 3u &&
+          fake_submitted[0].operation == ASTRA_DRAW_LIST_FILL &&
+          fake_submitted[0].clip_right == 64u &&
+          fake_submitted[1].operation == ASTRA_DRAW_LIST_TARGET &&
+          fake_submitted[1].source == ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID &&
+          fake_submitted[1].width == 320u &&
+          fake_submitted[1].clip_right == 320u &&
+          fake_submitted[1].clip_bottom == 200u &&
+          fake_submitted[2].operation == ASTRA_DRAW_LIST_BLIT &&
+          fake_submitted[2].source == target._private_id);
+    /* A blit from the current destination names it as such. */
+    CHECK(astra_draw_blit(&list, content, &small, &small, 0) == ASTRA_OK);
+    CHECK(fake_release_waits == 1u &&
+          list_command_count(&list) == 1u &&
+          list._private_destination == ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID);
+    CHECK(((const AstraDrawListCommand *)
+               ((const AstraDrawListHeader *)list._private_commands + 1))[0]
+              .source == ASTRA_DRAW_LIST_SOURCE_DESTINATION);
+    /* Posting twice in a row presents an empty frame. */
+    CHECK(astra_draw_post(&list, ASTRA_DRAW_POST_PRESENT) == ASTRA_OK);
+    CHECK(astra_draw_post(&list, ASTRA_DRAW_POST_PRESENT) == ASTRA_OK);
+    CHECK(fake_release_waits == 2u &&
+          fake_submitted_header.command_count == 0u &&
+          fake_posted.flags == ASTRA_GUI_FRAME_PRESENT);
+    CHECK(astra_draw_list_close(&list) == ASTRA_OK);
+    fake_release_signaled = 0u;
+    CHECK(astra_surface_close(&target) == ASTRA_OK);
+}
+
 static void test_window_graphics_session(void)
 {
     AstraWindow window = { FAKE_CONTROL, 0x305u, FAKE_WINDOW, 1u, 0x307u };
@@ -791,7 +949,7 @@ static void test_window_graphics_session(void)
           fake_last.object == list._private_list &&
           fake_last.target == ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID);
     CHECK(fake_submitted_header.magic == ASTRA_DRAW_LIST_MAGIC &&
-          fake_submitted_header.version == ASTRA_DRAW_LIST_VERSION_1_5 &&
+          fake_submitted_header.version == ASTRA_DRAW_LIST_VERSION_1_6 &&
           fake_submitted_header.width == 320u &&
           fake_submitted_header.command_count == 1107u &&
           fake_submitted_header.command_capacity >= 1107u);
@@ -853,6 +1011,7 @@ static void test_window_graphics_session(void)
     test_rectangles(&content);
     test_lines(&content);
     test_surface_read(&display, &sprite, &content);
+    test_posted_frame(&display, &content);
     CHECK(astra_draw_list_close(&list) == ASTRA_OK);
     CHECK(astra_surface_close(&content) == ASTRA_OK);
     CHECK(astra_surface_close(&sprite) == ASTRA_OK);

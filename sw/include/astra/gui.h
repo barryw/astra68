@@ -14,7 +14,7 @@
 /** GUI service wire protocol tag. */
 #define ASTRA_GUI_PROTOCOL UINT32_C(0x47554920) /* GUI  */
 /** Current GUI service wire protocol version. */
-#define ASTRA_GUI_VERSION 17u
+#define ASTRA_GUI_VERSION 18u
 
 /** Maximum counted UTF-8 bytes in a window title. */
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
@@ -311,7 +311,9 @@ enum {
     ASTRA_GUI_GRAPHICS_SURFACE_WRITE = 3u,
     /* handles[1] replaces the staging area */
     ASTRA_GUI_GRAPHICS_STAGING_SET = 4u,
-    /* handles[1] is an ADLT v1.5 area -> object = list id */
+    /* handles[1] is an ADLT v1.6 area, handles[2] an event the service
+       signals each time it has read a FRAME of the list -> object = list
+       id */
     ASTRA_GUI_GRAPHICS_LIST_ATTACH = 5u,
     ASTRA_GUI_GRAPHICS_LIST_DETACH = 6u,
     /* object = list, target = destination surface; replies after the
@@ -320,7 +322,18 @@ enum {
     /* object; x, y, width, height in the surface; offset and pitch of the
        rows written into the staging area */
     ASTRA_GUI_GRAPHICS_SURFACE_READ = 8u,
+    /* Posted: no reply capability, no reply. object = list, target = its
+       first destination surface, flags ASTRA_GUI_FRAME_*. The service
+       replays the list, signals its event, and with FRAME_PRESENT presents
+       the window as WINDOW_PRESENT does, without a STATE event. A frame
+       that fails is dropped and logged. */
+    ASTRA_GUI_GRAPHICS_FRAME = 9u,
 };
+
+/** FRAME flags. */
+#define ASTRA_GUI_FRAME_PRESENT 1u
+/** With FRAME_PRESENT: ASTRA_GUI_PRESENT_DISCARD's promise. */
+#define ASTRA_GUI_FRAME_DISCARD 2u
 
 /** WINDOW_PRESENT flag: the client redraws every content pixel of its next
     frame, so the service need not carry this frame forward into it. Only

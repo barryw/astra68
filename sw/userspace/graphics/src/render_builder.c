@@ -956,7 +956,7 @@ static int header_valid(const AstraDrawListHeader *header,
     uint32_t payload_offset;
 
     if (header->magic != ASTRA_DRAW_LIST_MAGIC ||
-        header->version != ASTRA_DRAW_LIST_VERSION_1_5 ||
+        header->version != ASTRA_DRAW_LIST_VERSION_1_6 ||
         !astra_words_zero(header->reserved, 9u) ||
         header->width == 0u || header->height == 0u ||
         header->command_capacity == 0u ||
@@ -989,8 +989,11 @@ enum {
     TRIANGLE_RECORD_BYTES = 3u * ASTRA_RENDER_TRIANGLE_VERTEX_BYTES,
 };
 
-static int command_valid(const AstraDrawListHeader *header,
-                         const AstraDrawListCommand *item)
+/* @p width x @p height is the destination the command draws into. A clip
+   may span it or the list's own size: the hardware clips to the
+   destination. */
+static int command_valid(const AstraDrawListHeader *header, uint16_t width,
+                         uint16_t height, const AstraDrawListCommand *item)
 {
     uint32_t payload_offset =
         astra_draw_list_payload_offset(header->command_capacity);
@@ -1001,11 +1004,27 @@ static int command_valid(const AstraDrawListHeader *header,
                          end <= (uint64_t)payload_offset +
                                     header->payload_bytes;
 
+    if (item->operation == ASTRA_DRAW_LIST_TARGET)
+        return item->flags == 0u && item->x == 0 && item->y == 0 &&
+               item->width != 0u && item->height != 0u &&
+               item->width <= INT16_MAX && item->height <= INT16_MAX &&
+               item->color == 0u && item->radius == 0u &&
+               item->source != ASTRA_DRAW_LIST_SOURCE_DESTINATION &&
+               item->source_x == 0 && item->source_y == 0 &&
+               item->source_width == 0u && item->source_height == 0u &&
+               no_payload && item->font_height == 0u &&
+               item->reserved16 == 0u && item->clip_left == 0u &&
+               item->clip_top == 0u && item->clip_right == item->width &&
+               item->clip_bottom == item->height;
+    if (width < header->width)
+        width = header->width;
+    if (height < header->height)
+        height = header->height;
     if (item->reserved16 != 0u ||
         item->clip_left >= item->clip_right ||
-        item->clip_right > header->width ||
+        item->clip_right > width ||
         item->clip_top >= item->clip_bottom ||
-        item->clip_bottom > header->height)
+        item->clip_bottom > height)
         return 0;
     if (item->operation == ASTRA_DRAW_LIST_FILL ||
         item->operation == ASTRA_DRAW_LIST_FILL_ROUNDED)
@@ -1097,7 +1116,7 @@ int astra_draw_list_covers(const AstraDrawListHeader *shared,
         header.command_count == 0u)
         return 0;
     first = *(const AstraDrawListCommand *)(shared + 1);
-    if (!command_valid(&header, &first) ||
+    if (!command_valid(&header, header.width, header.height, &first) ||
         first.operation != ASTRA_DRAW_LIST_FILL ||
         (ASTRA_DRAW_LIST_BLEND_MODE(first.flags) !=
              ASTRA_DRAW_LIST_BLEND_NONE &&
@@ -1801,12 +1820,16 @@ int astra_render_builder_replay_range(
 {
     const uint8_t *record = descriptor_record(builder, destination);
     AstraDrawListHeader header;
+    uint16_t width;
+    uint16_t height;
+    uint32_t commands;
     uint8_t format;
 
     if (next != NULL)
         *next = first;
     if (builder == NULL || record == NULL || shared == NULL ||
-        next == NULL || area_bytes < ASTRA_DRAW_LIST_HEADER_BYTES)
+        next == NULL || area_bytes < ASTRA_DRAW_LIST_HEADER_BYTES ||
+        !descriptor_dimensions(builder, destination, &width, &height))
         return ASTRA_RENDER_REPLAY_INVALID;
     /* The client can rewrite its area at any time: validate private copies,
        and lower only what was validated. */
@@ -1815,16 +1838,25 @@ int astra_render_builder_replay_range(
     if (!header_valid(&header, area_bytes) || !draw_target_format(format) ||
         first > header.command_count)
         return ASTRA_RENDER_REPLAY_INVALID;
+    commands = builder->command_count;
     for (uint32_t index = first; index < header.command_count; ++index) {
         AstraDrawListCommand item =
             ((const AstraDrawListCommand *)(shared + 1))[index];
         AstraRenderBuilder saved = *builder;
 
-        if (!command_valid(&header, &item))
+        if (!command_valid(&header, width, height, &item))
             return ASTRA_RENDER_REPLAY_INVALID;
+        if (item.operation == ASTRA_DRAW_LIST_TARGET) {
+            *next = index;
+            return ASTRA_RENDER_REPLAY_TARGET;
+        }
         if (!replay_command(builder, destination, format, shared, resolver,
                             &item)) {
-            if (index == first || !capacity_failure(builder->failed))
+            /* A command that fills an empty batch never fits. One that
+               fills a batch earlier commands or segments used may fit the
+               next. */
+            if ((index == first && commands == 0u) ||
+                !capacity_failure(builder->failed))
                 return ASTRA_RENDER_REPLAY_INVALID;
             *builder = saved;
             *next = index;

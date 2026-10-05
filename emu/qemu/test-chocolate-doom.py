@@ -9,6 +9,12 @@ renderer, and play its title and demos: the stand-in display helper must
 receive render-only batches steadily, and the stand-in audio daemon a
 44.1 kHz stereo S16BE voice carrying sound. No process may fault.
 
+Its frames take the posted path (docs/MEDIA_DATA_PLANE.md, Video): the
+display service logs a window's first posted frame; a frame is one
+submission, so the device sees at most an upload and a draw-list batch per
+compose, not one batch per render target; and the device held a request
+behind a running one.
+
 Then it is played from the keyboard, as a person would: Escape opens the
 menu over the demo, Enter starts a new game (episode, skill), Escape returns
 to the menu from play, Up and Enter choose Quit Game and `y` confirms. Doom
@@ -47,6 +53,7 @@ audio_gate = load("astra_sdl_audio_gate", "test-sdl-audio.py")
 runtime_gate = load("astra_sdl_runtime_gate", "test-sdl-runtime.py")
 
 PRESENT_RENDER_BATCH = 3
+RENDER_ONLY_VERSION = 0x00010004
 DOOM_AUDIO = audio_gate.S16BE | 2 << 8 | 44100 << 12
 
 
@@ -54,11 +61,26 @@ class Batches:
     def __init__(self):
         self.lock = threading.Lock()
         self.times = []
+        # (time, render-only) of each batch, read from the payload.
+        self.kinds = []
+        self.payload = None
 
     def observe(self, operation, frame_bytes):
         if operation == PRESENT_RENDER_BATCH:
+            now = time.monotonic()
+            render_only = self.payload is not None and \
+                int.from_bytes(self.payload[4:8], "big") == RENDER_ONLY_VERSION
             with self.lock:
-                self.times.append(time.monotonic())
+                self.times.append(now)
+                self.kinds.append((now, render_only))
+
+    def per_compose(self, seconds):
+        """Render-only batches per compose over the last @p seconds."""
+        now = time.monotonic()
+        with self.lock:
+            recent = [only for t, only in self.kinds if t > now - seconds]
+        composes = sum(1 for only in recent if not only)
+        return (len(recent) - composes) / max(composes, 1), composes
 
     def rate(self, seconds):
         now = time.monotonic()
@@ -133,6 +155,7 @@ def main():
         mailbox_gate.create_mailbox(mailbox)
         payload_file = open(mailbox_gate.payload_path(mailbox), "r+b")
         payload = mmap.mmap(payload_file.fileno(), 0)
+        batches.payload = payload
         stream = open(mailbox, "r+b")
         view = mmap.mmap(stream.fileno(), mailbox_gate.HEADER_BYTES)
         helper = mailbox_gate.Helper(view, observe=batches.observe)
@@ -176,6 +199,24 @@ def main():
             if errors:
                 raise RuntimeError("SDL reported errors: %r" % errors[:5])
             rate = batches.rate(arguments.seconds)
+            # One submission a frame: an upload and the frame's draw list
+            # per compose. Three draw-list submissions a frame, one per
+            # render target, would be four.
+            per_compose, composes = batches.per_compose(arguments.seconds)
+            if composes == 0 or per_compose > 2.5:
+                raise RuntimeError("Doom's frames are not one submission: "
+                                   "%.2f render-only batches per compose "
+                                   "(%d composes)" % (per_compose, composes))
+            if not any("display: a window posts its frames" in line
+                       for line in said):
+                raise RuntimeError("Doom's frames were not posted: %r" %
+                                   said[-20:])
+            queued = machine.qmp.execute("qom-get", {
+                "path": "/machine",
+                "property": "astra-display-queued-submissions"})
+            if queued == 0:
+                raise RuntimeError("the display never held a request behind "
+                                   "a running one")
             with host.lock:
                 host.drain()
                 voices = [v for v in host.voices if v.format == DOOM_AUDIO]
@@ -215,11 +256,14 @@ def main():
                 raise RuntimeError("a process faulted: %r" %
                                    machine.said(0)[0][-30:])
             print("Chocolate Doom QEMU: PASS (%.1f render batches/s over "
-                  "%.0f s; %d audio frames at 44.1 kHz, peak %d; %d effects "
+                  "%.0f s, %.2f render-only per compose, frames posted, %d "
+                  "requests queued behind another; %d audio frames at "
+                  "44.1 kHz, peak %d; %d effects "
                   "converted on the host; %.1f s of host MIDI music, peak "
                   "%.2f of full scale; played "
                   "from the keyboard, quit through ENDOOM; no faults)"
-                  % (rate, arguments.seconds, frames, loud, conversions,
+                  % (rate, arguments.seconds, per_compose, queued, frames,
+                     loud, conversions,
                      music_frames / 48000.0, music_peak))
         finally:
             machine.close()

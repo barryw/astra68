@@ -82,3 +82,135 @@ CPU). `docs/DEBUGGING.md` section 7.
 
 Gates prove a new path is taken, not only that it works: phase 1's audio
 gates fail unless the voice is a stream. Do the same for posted presents.
+
+## Phase 0 answers (2026-10-05; file:line at `28dab19c`)
+
+### How a present reaches the device today, and what blocks
+
+Per Doom frame (`chocolate-doom/src/i_video.c:790-820`, smooth scaling on):
+
+1. `SDL_LockTexture` returns a private malloc copy
+   (`SDL_astrarender.c:264-287`); Doom converts 8 -> 32 bit into it.
+2. Unlock -> `astra_surface_write` (`graphics.c:426-468`): `AREA_COPY_IN`
+   into staging offset 0 (synchronous copy engine, `process.c:3053-3062`),
+   then `SURFACE_WRITE`, a port call (`graphics.c:118-157`; every client
+   call is `astra_port_call`, `port.c:126-174`, into a control port of
+   capacity 1, `main.c:3978-3979`).
+3. Three `LIST_SUBMIT` port calls, one per SDL flush: SDL flushes on every
+   target change and on present (`SDL_render.c:2258, 4298`) and the
+   renderer keeps one list per target (`SDL_astrarender.c:144-190,
+   916-1018`). Doom's path is Clear(window) | SetTarget(upscaled) |
+   Copy(tex->upscaled) | SetTarget(NULL) | Copy(upscaled->window) | Present.
+4. `PRESENT_DISCARD`, a port call (`window.c:337-341`).
+5. The vblank wait (`SDL_astrarender.c:1104-1107`).
+
+In the display service (one thread, `serve_windows`, `main.c:4667-4783`):
+every `builder_begin` calls `storage()` -> `settle()` (`window_graphics.c:
+210-226`, `main.c:4106-4113`), which collects the previous batch, so each
+of steps 2-3 waits for the one before it on the device. PRESENT renders
+(`main.c:2570-2590`): settle, compose on the CPU, `present` ->
+`submit_request`, which waits for its own completion (`main.c:2417-2424,
+2454-2461`), and that completion can sit behind the previous present's
+flip (`docs/PRESENTATION.md`, Bank retirement). Then a STATE event on every
+present (`main.c:4320-4330`; PRESENT sets `changed`, `main.c:3113`), which
+SDL turns into MOVED+RESIZED (`SDL_astravideo.c:378-404`). While the
+service sits in `collect_request` it serves nothing, not even the vblank
+IRQ, so the client's vsync wake is late too. One 8 MiB batch buffer serves
+everything (`main.c:4816`).
+
+### What a queue of two needs, layer by layer
+
+| Layer | Single-slot today | Needed |
+|---|---|---|
+| Service | `in_flight {active, fence}` `main.c:2321-2328`; settle before every submit `:2398`; one batch buffer `:4816` | ring of in-flight requests by fence, each owning its batch buffer; two buffers; wait only for a buffer's own request |
+| Kernel | `display_dma_token/owner/active`, one `display_attachment` `process.c:395-402`; refuses while active `:3292, :3324`; collect completes "the" token without a fence `:3379-3399` | a slot per request {fence, token, owner, attachment, area}; collect by fence; abort walks slots |
+| Kernel platform | submit needs READY and not BUSY and no completion `platform.c:525-529`; collect fails if another completion remains `:587-588`; version 1.0 exact `:460-461` | submit on READY alone; accepted-count success test; collect succeeds with more pending |
+| Kernel IRQ | Astraea completion requires `IRQ_STAT & IRQ_EN == 0` at ack `platform.c:941-942`, else quarantine `irq.c:1081-1099` | a DRAW_DONE raised again is new work, as storage's level is (`platform.c:906-914`) |
+| Vesta | one REQ_* and one CPL_* set, QUEUE has BUSY/READY/CPL_VALID (`vesta.h:124-134`, `display.h:232-237`) | display host 1.1: held count and accepted sequence in QUEUE, completion FIFO behind CPL_*, DRAW_DONE level while completions are held |
+| QEMU | `busy`, `completion_valid`, one triple `astra68.c:349-400`; refuses while busy `:974`; copies on the vCPU in the store `:1031-1043` | request FIFO and completion FIFO; start the next request from the completion handler on the main loop |
+| Mailbox, helper | one request, one completion (`display_mailbox.h:39-56`); one 8 MiB payload | nothing (see decision 1) |
+
+### How Haiku takes `DrawBitmapAsync` without a reply (`~/Git/haiku`)
+
+The client appends `AS_VIEW_DRAW_BITMAP` {bitmap token, rects, options} to
+its link buffer and flushes it with one `write_port` unless it is inside a
+transaction (`View.cpp:3058-3077, 6813-6818`; `LinkSender.cpp:50, 96-103,
+424-461`). `DrawBitmap` is the same plus `Sync()`, one round trip
+(`View.cpp:3125-3163`, `Window.cpp:697-709`). The window's server thread
+(`B_DISPLAY_PRIORITY`, `MessageLooper.cpp:47`) draws it straight from the
+client's shared area (`ServerWindow.cpp:2681-2715`, `Bitmap.cpp:1160-1170`)
+and never replies; `B_WAIT_FOR_RETRACE` is commented out (`:2707-2709`).
+Back-pressure is only the window port's capacity of 100
+(`ServerWindow.cpp:274`): a client that gets ahead blocks in `write_port`.
+Drawing commands are never dropped; redraws are coalesced (`RequestRedraw`
+sets `fRedrawRequested`, the loop clears it once, `ServerWindow.cpp:
+378-386, 4319`). There is no fence: reusing a bitmap safely takes `Sync()`
+or a second bitmap. Retrace is the driver's semaphore, acquired by the
+client directly (`PrivateScreen.cpp:268-286, 717-731`). Latest-wins is
+SDL's, in the window thread (`SDL_BWin.h:452-462`), not app_server's.
+
+### Decisions
+
+1. **The queue of two lives in the device model, not the mailbox.** The
+   DE25 host arena is 8 MiB (`fpga/de25/linux/astra_host_arena_uapi.h:11`),
+   exactly one batch, and the engine runs one batch at a time, rebasing its
+   rings for each (`astra_terminal_display.c:900-917`). So Vesta holds two
+   requests and QEMU hands the helper one at a time through the unchanged
+   mailbox; the next starts from the completion handler on QEMU's main
+   loop, with no guest round trip between them. A queued request's
+   attachment is still copied when it is submitted (the client may reuse
+   staging once SURFACE_WRITE is answered, `graphics.c:1208-1212`); its batch
+   is read when it starts (the kernel holds the DMA until completion).
+2. **Service:** two batch buffers, in-flight requests by fence, each
+   holding its buffer; `builder_begin` waits only when its buffer's request
+   is still running. A present does not wait for its completion: the
+   service commits its render state at submit, which the bank rules allow
+   because the device runs requests in order (`docs/PRESENTATION.md`, Bank
+   retirement). READ_SURFACE and cursor images wait for their own fence.
+3. **One submission per frame:** ADLT 1.6 adds `TARGET`, a command that
+   changes the destination of the commands after it. The renderer keeps
+   one list; a target change appends a mark. The service replays the
+   segments into one batch, switching destination descriptor at each mark,
+   and validates clips against the current destination.
+4. **Present is posted:** a new graphics action `FRAME` {list, PRESENT,
+   DISCARD} is sent with no reply capability. The list is recycled through
+   an auto-reset event the client hands over at LIST_ATTACH and the service
+   signals once it has replayed the list -- Haiku's buffer recycle
+   (`SharedBufferList.cpp:353-365`), one buffer because the service
+   (priority 20) replays on arrival. A failed frame is logged and dropped,
+   as an async draw is. Composes coalesce: a window whose port holds more
+   messages is composed after them (Haiku's `fRedrawRequested`). A posted
+   present sends no STATE event; nothing in the window's state changed.
+   SDL posts its pending list before any synchronous call (texture update,
+   read, destroy), so order holds.
+5. **Not in this phase:** uploads stay one SURFACE_WRITE call (it no longer
+   waits for the device); real fences and the copies are phases 3 and 4.
+
+Per Doom frame after phase 2: one SURFACE_WRITE call, one posted FRAME,
+one vblank wait; the device runs upload, frame and compose back to back.
+
+## Phase 2 on the board (Chocolate Doom, de25-ab.sh, 3 rounds, 30 s windows)
+
+Release `547e66fc` (phase 1) against `82bf10be` (this phase):
+
+| | `547e66fc` | `82bf10be` |
+|---|---:|---:|
+| presents/s idle | 20.4-21.3 | 34.9-35.1 |
+| presents/s, 125 Hz motion | 15.2-15.5 | 30.5-31.5 |
+| guest idle (idle / motion) | 34-36% / 32-33% | 18-21% / 8% |
+| audio gaps | 0, 0, 2 idle; 0 motion | 0 |
+| cross-space switches/s idle / motion | 322-336 / 360-364 | 306-312 / 411-418 |
+| cursor in motion | 52/s, max 50-67 ms | 59/s, max 34 ms |
+
+The guest's idle time became frames, as predicted. Idle is now at Doom's
+own 35 Hz tic rate; motion doubled. Cross-space switches in motion rise
+with the frame rate (about the same per frame).
+
+Gates: the Doom gate fails unless the display logged a posted frame, the
+device saw at most 2.5 render-only batches per compose (2.00 measured; the
+old three-flush path is 4.00 -- perturbed and seen to fail), and a request
+was queued behind a running one. verify-nopc.sh is green.
+
+Next: phase 3 (copies: textures locked into staging, QEMU not copying on the
+vCPU, present as a bank flip). Doom is at its tic cap, so measure phase 3 on
+motion and on guest idle, or with a heavier client.

@@ -36,6 +36,8 @@ typedef struct DisplayGraphicsList {
     uint32_t area;
     const AstraDrawListHeader *mapping;
     uint32_t bytes;
+    /* Signaled each time a FRAME of the list has been read. */
+    uint32_t release;
 } DisplayGraphicsList;
 
 typedef struct DisplayWindowGraphics {
@@ -52,6 +54,8 @@ typedef struct DisplayWindowGraphics {
     /* Mapped read-write: SURFACE_READ returns pixels through it. */
     uint8_t *staging;
     uint32_t staging_bytes;
+    /* FRAMEs drawn: the first is logged, so a gate can see the path. */
+    uint32_t posted_frames;
 } DisplayWindowGraphics;
 
 /* Staged bytes the device places at batch offset `target` before running

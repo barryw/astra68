@@ -164,11 +164,18 @@ typedef struct AstraDrawList {
     AstraHandle _private_port;
     uint32_t _private_window;
     uint32_t _private_list;
+    /* The destination of the list's first command. */
     uint32_t _private_destination;
     void *_private_commands;
     uint32_t _private_bytes;
     uint32_t _private_sealed;
     AstraRectI32 _private_clip;
+    /* The event the service signals once it has read a posted list. */
+    AstraHandle _private_release;
+    /* The destination of the next command. */
+    uint32_t _private_target;
+    uint16_t _private_target_width;
+    uint16_t _private_target_height;
     /** @endcond */
 } AstraDrawList;
 /** One-shot asynchronous completion object. */
@@ -185,7 +192,7 @@ typedef struct AstraFence {
 /** Initializer for an empty ::AstraDrawList. */
 #define ASTRA_DRAW_LIST_INIT \
     { ASTRA_INVALID_HANDLE, ASTRA_INVALID_HANDLE, 0, 0, 0, 0, 0, 0, \
-      { 0, 0, 0, 0 } }
+      { 0, 0, 0, 0 }, ASTRA_INVALID_HANDLE, 0, 0, 0 }
 /** Initializer for an empty ::AstraFence. */
 #define ASTRA_FENCE_INIT { ASTRA_INVALID_HANDLE }
 /** Initializer for ::AstraSurfaceCreateInfo. */
@@ -493,6 +500,18 @@ ASTRA_NODISCARD AstraResult astra_draw_list_create(
     const AstraRectI32 *clip,
     AstraDrawList *draw_list);
 /**
+ * Make @p destination the destination of the commands appended after this
+ * call. One list then carries a frame for several surfaces -- a render
+ * target, then the window -- and travels as one submission. The clip
+ * becomes the whole of @p destination.
+ *
+ * @param[in,out] draw_list Mutable draw list.
+ * @param[in] destination Draw-target surface of the list's window.
+ * @return ::ASTRA_OK on success or a negative ::AstraResult error.
+ */
+ASTRA_NODISCARD AstraResult astra_draw_list_set_target(
+    AstraDrawList *draw_list, const AstraSurface *destination);
+/**
  * Remove queued commands while preserving the destination and clip.
  *
  * @param[in,out] draw_list Mutable, non-submitted draw list.
@@ -651,6 +670,28 @@ ASTRA_NODISCARD AstraResult astra_draw_ui_text(
  */
 ASTRA_NODISCARD AstraResult astra_draw_submit(
     AstraDrawList *draw_list, AstraFence *fence);
+
+/** ::astra_draw_post flag: present the window after the list's commands. */
+#define ASTRA_DRAW_POST_PRESENT 1u
+/** ::astra_draw_post flag, with ::ASTRA_DRAW_POST_PRESENT: the next frame
+    redraws every content pixel, so this one need not be carried into it. */
+#define ASTRA_DRAW_POST_DISCARD 2u
+
+/**
+ * Hand the list's commands to the display service and return without
+ * waiting for them, optionally presenting the window after them -- the
+ * frame a game hands over before it goes on with the next. Commands run in
+ * the order everything is sent to the window. The list empties itself the
+ * next time it is changed, waiting then, if it must, until the service has
+ * read it.
+ *
+ * @param[in,out] draw_list Mutable list of a window's surfaces.
+ * @param flags ::ASTRA_DRAW_POST_PRESENT, optionally with
+ *              ::ASTRA_DRAW_POST_DISCARD.
+ * @return ::ASTRA_OK once handed over, or a negative ::AstraResult error.
+ */
+ASTRA_NODISCARD AstraResult astra_draw_post(AstraDrawList *draw_list,
+                                            uint32_t flags);
 
 /**
  * Poll a fence without blocking.

@@ -429,7 +429,7 @@ static void test_draw_list_clip_reaches_hardware(void)
     astra_surface_fill(&surface, 0, 0, 20u, 10u, 0x1234u);
     header = (const AstraDrawListHeader *)(const void *)draw_storage;
     draw = (AstraDrawListCommand *)(void *)(header + 1);
-    assert(header->version == ASTRA_DRAW_LIST_VERSION_1_5);
+    assert(header->version == ASTRA_DRAW_LIST_VERSION_1_6);
     assert(draw->clip_left == 4u && draw->clip_top == 3u &&
            draw->clip_right == 12u && draw->clip_bottom == 8u);
     assert(!astra_draw_list_covers(header, 20u, 10u));
@@ -1058,7 +1058,7 @@ static void test_rounded_fill_has_no_overlap(void)
     }
 }
 
-/* ADLT v1.5 session lists: built by hand the way the NDK writes them. */
+/* ADLT v1.6 session lists: built by hand the way the NDK writes them. */
 enum {
     SESSION_CAPACITY = 1500u,
     /* Room for one command of 4097 triangles. */
@@ -1077,7 +1077,7 @@ static AstraDrawListHeader *session_begin(uint16_t width, uint16_t height)
     memset(session_list, 0, sizeof(session_list));
     *header = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_5,
+        .version = ASTRA_DRAW_LIST_VERSION_1_6,
         .total_bytes = sizeof(session_list),
         .width = width,
         .height = height,
@@ -1366,6 +1366,112 @@ static void test_session_list_splits_full_batches(void)
         ++batches;
     }
     assert(total == SESSION_CAPACITY && batches == 2u);
+}
+
+/* A TARGET mark ends a segment: what follows draws into the surface it
+   names, validated against that surface, in the same batch or the next. */
+static void test_session_targets(void)
+{
+    static uint8_t storage[ASTRA_RENDER_BUILDER_BYTES];
+    AstraDrawListHeader *header = session_begin(320u, 200u);
+    AstraDrawListCommand *command;
+    AstraRenderBuilder builder;
+    uint32_t window;
+    uint32_t sprite;
+    uint32_t next = 0u;
+
+    command = session_add(header, ASTRA_DRAW_LIST_FILL);
+    command->width = 320u;
+    command->height = 200u;
+    command = session_add(header, ASTRA_DRAW_LIST_TARGET);
+    command->source = 7u;
+    command->width = 64u;
+    command->height = 32u;
+    command->clip_right = 64u;
+    command->clip_bottom = 32u;
+    command = session_add(header, ASTRA_DRAW_LIST_FILL);
+    command->width = 64u;
+    command->height = 32u;
+    command->clip_right = 64u;
+    command->clip_bottom = 32u;
+    assert(astra_render_builder_init(&builder, storage,
+                                     ASTRA_RENDER_BUILDER_BYTES, 3u));
+    window = astra_render_builder_surface_at(
+        &builder, ASTRA_RENDER_BATCH_WORKSPACE_LIMIT, 320u * 200u * 2u,
+        320u, 200u);
+    assert(astra_render_builder_replay_range(
+               &builder, window, header, sizeof(session_list), NULL, 0u,
+               &next) == ASTRA_RENDER_REPLAY_TARGET &&
+           next == 1u && builder.command_count == 1u);
+    sprite = astra_render_builder_surface_format_at(
+        &builder, ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x40000u,
+        64u * 32u * 4u, 64u, 32u, 64u * 4u, ASTRA_RENDER_FORMAT_ARGB8888,
+        ASTRA_RENDER_SURFACE_READ | ASTRA_RENDER_SURFACE_WRITE);
+    assert(astra_render_builder_replay_range(
+               &builder, sprite, header, sizeof(session_list), NULL,
+               next + 1u, &next) == ASTRA_RENDER_REPLAY_DONE &&
+           next == 3u && builder.command_count == 2u);
+    assert(be32(batch_command(storage, 1u) + 32u) == sprite);
+
+    /* A clip spans the destination or the list: beyond both it is
+       invalid. */
+    command->clip_right = 321u;
+    assert(astra_render_builder_replay_range(
+               &builder, sprite, header, sizeof(session_list), NULL, 2u,
+               &next) == ASTRA_RENDER_REPLAY_INVALID);
+    command->clip_right = 64u;
+    /* A TARGET names a surface, never the list's own destination, and its
+       clip is that surface. */
+    command = &((AstraDrawListCommand *)(void *)(header + 1))[1];
+    command->source = ASTRA_DRAW_LIST_SOURCE_DESTINATION;
+    assert(astra_render_builder_replay_range(
+               &builder, window, header, sizeof(session_list), NULL, 1u,
+               &next) == ASTRA_RENDER_REPLAY_INVALID);
+    command->source = 7u;
+    command->clip_right = 63u;
+    assert(astra_render_builder_replay_range(
+               &builder, window, header, sizeof(session_list), NULL, 1u,
+               &next) == ASTRA_RENDER_REPLAY_INVALID);
+    command->clip_right = 64u;
+
+    /* A segment that fills the batch leaves the next one for a new batch:
+       its first command is FULL there, not invalid. */
+    header = session_begin(320u, 200u);
+    for (uint32_t index = 0u; index < ASTRA_RENDER_RING_ENTRIES; ++index) {
+        command = session_add(header, ASTRA_DRAW_LIST_FILL);
+        command->width = 4u;
+        command->height = 4u;
+    }
+    command = session_add(header, ASTRA_DRAW_LIST_TARGET);
+    command->source = 7u;
+    command->width = 64u;
+    command->height = 32u;
+    command->clip_right = 64u;
+    command->clip_bottom = 32u;
+    command = session_add(header, ASTRA_DRAW_LIST_FILL);
+    command->width = 4u;
+    command->height = 4u;
+    command->clip_right = 64u;
+    command->clip_bottom = 32u;
+    assert(astra_render_builder_init(&builder, storage,
+                                     ASTRA_RENDER_BUILDER_BYTES, 4u));
+    window = astra_render_builder_surface_at(
+        &builder, ASTRA_RENDER_BATCH_WORKSPACE_LIMIT, 320u * 200u * 2u,
+        320u, 200u);
+    assert(astra_render_builder_replay_range(
+               &builder, window, header, sizeof(session_list), NULL, 0u,
+               &next) == ASTRA_RENDER_REPLAY_TARGET &&
+           next == ASTRA_RENDER_RING_ENTRIES &&
+           builder.command_count == ASTRA_RENDER_RING_ENTRIES);
+    sprite = astra_render_builder_surface_format_at(
+        &builder, ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x40000u,
+        64u * 32u * 4u, 64u, 32u, 64u * 4u, ASTRA_RENDER_FORMAT_ARGB8888,
+        ASTRA_RENDER_SURFACE_READ | ASTRA_RENDER_SURFACE_WRITE);
+    assert(astra_render_builder_replay_range(
+               &builder, sprite, header, sizeof(session_list), NULL,
+               next + 1u, &next) == ASTRA_RENDER_REPLAY_FULL &&
+           next == ASTRA_RENDER_RING_ENTRIES + 1u &&
+           builder.command_count == ASTRA_RENDER_RING_ENTRIES);
 }
 
 static void test_session_header_is_bounded(void)
@@ -2540,6 +2646,7 @@ int main(void)
     test_session_blit_lowers_to_hardware();
     test_session_blended_fill();
     test_session_list_splits_full_batches();
+    test_session_targets();
     test_session_header_is_bounded();
     test_session_triangles_encoding();
     test_session_triangles_rejections();

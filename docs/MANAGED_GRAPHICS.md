@@ -110,10 +110,10 @@ arena, returns zero rows.
 
 `ASTRA_SURFACE_SCANOUT` returns `UNSUPPORTED`.
 
-## 4. Draw lists (ADLT v1.5)
+## 4. Draw lists (ADLT v1.6)
 
 The retained window list and the session draw list share one wire format and
-one lowering (`astra_render_builder_replay`). ADLT v1.5 replaces v1.4; every
+one lowering (`astra_render_builder_replay`). ADLT v1.6 replaces v1.5; every
 in-tree writer and reader moves together.
 
 - The header records `total_bytes` (16 KiB for retained window lists, up to
@@ -133,8 +133,17 @@ in-tree writer and reader moves together.
   - `font_height` and `radius`
   - a per-command clip in destination pixels
 - The operations are FILL, FILL_ROUNDED, TEXT, MONO_TEXT, LINE, BLIT,
-  TRIANGLES, FILL_RECTS, and LINES. COPY is removed: it is a BLIT whose
-  source is the destination.
+  TRIANGLES, FILL_RECTS, LINES, and TARGET. COPY is removed: it is a BLIT
+  whose source is the destination.
+- TARGET (10, v1.6) makes surface `source` (never 0) the destination of the
+  commands after it; `width` and `height` are that surface's and its clip
+  is all of it. So one session list carries a frame for several surfaces
+  -- a render target, then the window -- and is one submission. The list's
+  first destination is named by the request. A clip may span the current
+  destination or the list's own size; the hardware clips to the destination.
+  `astra_render_builder_replay_range` stops at a TARGET
+  (`ASTRA_RENDER_REPLAY_TARGET`) and the service resumes after it with the
+  new destination, in the same batch. Retained window lists have none.
 - FILL, FILL_RECTS, LINE, LINES, BLIT, and TRIANGLES carry a blend field (bits 6:4): `NONE`,
   `BLEND`, `ADD`, `MOD`, or `MUL`, SDL2's equations
   (`docs/TEXTURE_ENGINE.md` §6). BLIT also has `FLIP_X` and `FLIP_Y`; BLIT
@@ -192,6 +201,16 @@ in-tree writer and reader moves together.
 
 ## 5. Submission and batching
 
+`astra_draw_post(list, flags)` sends `FRAME`, posted: no reply capability
+and no reply (`docs/MEDIA_DATA_PLANE.md`, Video). The service replays the
+list as it would a `LIST_SUBMIT`, signals the event the client attached
+with the list -- Haiku's buffer recycling -- and with `FRAME_PRESENT`
+presents the window as `WINDOW_PRESENT` does, but without a STATE event and
+composed once no message is waiting, so presents that arrive together
+compose once. The client's next change to the list waits for that event; a
+failed frame is logged and dropped. It logs a window's first posted frame,
+which the gates check.
+
 `astra_draw_submit(list, fence)` sends `LIST_SUBMIT`. The service lowers the
 list into its batch, submits it, and replies without waiting for the FPGA, so
 the client's next frame runs while the hardware draws this one. The returned
@@ -204,10 +223,13 @@ failure of the service's next request that needs the device or the batch
 buffer, which collects it first. A submitted list is sealed until
 `astra_draw_list_reset`.
 
-The service keeps one batch buffer. A render-only batch still running when
-the next request arrives is collected before that request writes the buffer,
-so the overlap is the client's own time between requests, not the service's
-batch building.
+The service keeps two batch buffers and the device holds two requests
+(display host 1.1). Each request in flight holds the buffer it was built
+in; building the next batch waits only when that buffer's request is still
+running, and a present does not wait for its own completion -- its state is
+committed when it is submitted, because everything after it runs after it.
+The service collects a completion when it next needs the slot or buffer,
+the way Haiku's app_server syncs to the engine only when it must.
 
 A submitted list is lowered into **render-only batches**
 (batch version 1.4, `ASTRA_RENDER_BATCH_VERSION_1_4`), which never touch scanout or the window

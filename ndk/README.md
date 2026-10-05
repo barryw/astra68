@@ -163,7 +163,7 @@ link contract owned by the NDK and its OS-library implementations.
 - New hardware support lands with its public API, implementation, tests, and
   documentation in the same change.
 - Libraries are versioned by soname major and symbol versions (for example
-  `system.library.2` ABI 2.8, `runtime.library.1` ABI 1.10); a major bump
+  `system.library.2` ABI 2.9, `runtime.library.1` ABI 1.10); a major bump
   marks an incompatible change. A minor or patch bump is binary compatible.
 - Userspace is hard float: the MC68040 FPU, not a soft-float emulation
   library.

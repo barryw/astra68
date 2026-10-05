@@ -105,6 +105,8 @@ static void list_release(DisplayGraphicsList *list)
         (void)astra_rt_area_unmap((void *)(uintptr_t)list->mapping);
     if (list->area != 0u)
         (void)astra_close(list->area);
+    if (list->release != 0u)
+        (void)astra_close(list->release);
     *list = (DisplayGraphicsList){0};
 }
 
@@ -133,12 +135,14 @@ int display_window_graphics_command_valid(
     const AstraGuiGraphicsCommand *command, uint32_t size,
     uint32_t handle_count, uint32_t window)
 {
-    uint32_t attachment =
-        command->action == ASTRA_GUI_GRAPHICS_STAGING_SET ||
-        command->action == ASTRA_GUI_GRAPHICS_LIST_ATTACH;
+    /* A reply capability, then what the action carries; a FRAME is
+       posted and has neither. */
+    uint32_t handles =
+        command->action == ASTRA_GUI_GRAPHICS_FRAME ? 0u :
+        command->action == ASTRA_GUI_GRAPHICS_STAGING_SET ? 2u :
+        command->action == ASTRA_GUI_GRAPHICS_LIST_ATTACH ? 3u : 1u;
 
-    return size == sizeof(*command) &&
-           handle_count == 1u + attachment &&
+    return size == sizeof(*command) && handle_count == handles &&
            command->header.total_size == sizeof(*command) &&
            command->header.header_size == ASTRA_MESSAGE_HEADER_SIZE &&
            command->header.flags == 0u &&
@@ -149,7 +153,7 @@ int display_window_graphics_command_valid(
            command->header.transaction_id != 0u &&
            command->window == window && command->generation != 0u &&
            command->action >= ASTRA_GUI_GRAPHICS_SURFACE_CREATE &&
-           command->action <= ASTRA_GUI_GRAPHICS_SURFACE_READ &&
+           command->action <= ASTRA_GUI_GRAPHICS_FRAME &&
            astra_words_zero(command->reserved, 2u);
 }
 
@@ -523,7 +527,9 @@ static uint32_t list_attach(DisplayWindowGraphics *graphics,
     } while (find_list(graphics, graphics->next_list) != NULL);
     slot->id = graphics->next_list;
     slot->area = handles[1];
+    slot->release = handles[2];
     handles[1] = 0u;
+    handles[2] = 0u;
     reply->object = slot->id;
     return ASTRA_STATUS_OK;
 }
@@ -546,41 +552,69 @@ static uint32_t resolve_source(void *context, AstraRenderBuilder *builder,
                       ASTRA_RENDER_SURFACE_READ);
 }
 
-static uint32_t list_submit(DisplayWindowGraphics *graphics,
+/*
+ * Replays @p list from its first destination, @p first_target, switching
+ * destination at each TARGET: as few batches as fit, none waited for. A
+ * TARGET may name any draw-target surface of the window.
+ */
+static uint32_t list_replay(DisplayWindowGraphics *graphics,
                             const DisplayGraphicsHost *host,
-                            const AstraGuiGraphicsCommand *command)
+                            const DisplayGraphicsList *list,
+                            uint32_t first_target)
 {
-    DisplayGraphicsList *list = find_list(graphics, command->object);
     ResolveContext context = { graphics, host };
     AstraRenderSourceResolver resolver = { resolve_source, &context };
     DisplayGraphicsSurface target;
     uint32_t next = 0u;
     int result = ASTRA_RENDER_REPLAY_FULL;
 
-    if (list == NULL)
-        return ASTRA_STATUS_NOT_FOUND;
-    if (!lookup_surface(graphics, host, command->target, &target))
+    if (!lookup_surface(graphics, host, first_target, &target))
         return ASTRA_STATUS_NOT_FOUND;
     if ((target.flags & ASTRA_SURFACE_DRAW_TARGET) == 0u)
         return ASTRA_STATUS_ACCESS;
-    while (result == ASTRA_RENDER_REPLAY_FULL) {
+    while (result != ASTRA_RENDER_REPLAY_DONE) {
         AstraRenderBuilder builder;
-        uint32_t destination;
+        uint32_t destination = 0u;
         uint32_t status;
 
         status = builder_begin(&builder, host);
         if (status != ASTRA_STATUS_OK)
             return status;
-        destination = descriptor(&builder, &target, target.format,
-                                 ASTRA_RENDER_SURFACE_READ |
-                                     ASTRA_RENDER_SURFACE_WRITE);
-        if (destination == 0u)
-            return ASTRA_STATUS_LIMIT;
-        result = astra_render_builder_replay_range(
-            &builder, destination, list->mapping, list->bytes, &resolver,
-            next, &next);
-        if (result == ASTRA_RENDER_REPLAY_INVALID)
-            return ASTRA_STATUS_INVALID;
+        for (;;) {
+            if (destination == 0u)
+                destination = descriptor(&builder, &target, target.format,
+                                         ASTRA_RENDER_SURFACE_READ |
+                                             ASTRA_RENDER_SURFACE_WRITE);
+            if (destination == 0u) {
+                /* The descriptor table is full: the rest goes in the next
+                   batch, unless this one is empty and it never can. */
+                if (builder.command_count == 0u)
+                    return ASTRA_STATUS_LIMIT;
+                result = ASTRA_RENDER_REPLAY_FULL;
+                break;
+            }
+            result = astra_render_builder_replay_range(
+                &builder, destination, list->mapping, list->bytes, &resolver,
+                next, &next);
+            if (result == ASTRA_RENDER_REPLAY_INVALID)
+                return ASTRA_STATUS_INVALID;
+            if (result != ASTRA_RENDER_REPLAY_TARGET)
+                break;
+            {
+                /* replay_range validated the command; the client may
+                   rewrite its area, so read it once. */
+                AstraDrawListCommand mark =
+                    ((const AstraDrawListCommand *)(list->mapping + 1))[next];
+
+                if (mark.operation != ASTRA_DRAW_LIST_TARGET ||
+                    !lookup_surface(graphics, host, mark.source, &target))
+                    return ASTRA_STATUS_NOT_FOUND;
+                if ((target.flags & ASTRA_SURFACE_DRAW_TARGET) == 0u)
+                    return ASTRA_STATUS_ACCESS;
+            }
+            ++next;
+            destination = 0u;
+        }
         if (builder.command_count == 0u)
             continue;
         status = builder_submit(&builder, host, NULL);
@@ -588,6 +622,42 @@ static uint32_t list_submit(DisplayWindowGraphics *graphics,
             return status;
     }
     return ASTRA_STATUS_OK;
+}
+
+static uint32_t list_submit(DisplayWindowGraphics *graphics,
+                            const DisplayGraphicsHost *host,
+                            const AstraGuiGraphicsCommand *command)
+{
+    DisplayGraphicsList *list = find_list(graphics, command->object);
+
+    if (list == NULL)
+        return ASTRA_STATUS_NOT_FOUND;
+    return list_replay(graphics, host, list, command->target);
+}
+
+/* A posted frame: the list's commands, then the list back to its owner,
+   whatever became of them. */
+static uint32_t frame(DisplayWindowGraphics *graphics,
+                      const DisplayGraphicsHost *host,
+                      const AstraGuiGraphicsCommand *command)
+{
+    DisplayGraphicsList *list = find_list(graphics, command->object);
+    uint32_t status;
+
+    if (list == NULL)
+        return ASTRA_STATUS_NOT_FOUND;
+    status = (command->flags & ~(uint32_t)(ASTRA_GUI_FRAME_PRESENT |
+                                           ASTRA_GUI_FRAME_DISCARD)) != 0u ||
+             command->flags == ASTRA_GUI_FRAME_DISCARD ||
+             command->x != 0 || command->y != 0 || command->width != 0u ||
+             command->height != 0u || command->format != 0u ||
+             command->offset != 0u || command->pitch != 0u ?
+        ASTRA_STATUS_INVALID :
+        list_replay(graphics, host, list, command->target);
+    (void)astra_rt_signal(list->release, 1u, NULL);
+    if (status == ASTRA_STATUS_OK && graphics->posted_frames++ == 0u)
+        (void)astra_log("display: a window posts its frames");
+    return status;
 }
 
 uint32_t display_window_graphics_command(
@@ -634,6 +704,8 @@ uint32_t display_window_graphics_command(
     }
     case ASTRA_GUI_GRAPHICS_LIST_SUBMIT:
         return list_submit(graphics, host, command);
+    case ASTRA_GUI_GRAPHICS_FRAME:
+        return frame(graphics, host, command);
     case ASTRA_GUI_GRAPHICS_SURFACE_READ:
         return surface_read(graphics, host, command);
     default:

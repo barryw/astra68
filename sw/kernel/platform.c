@@ -81,8 +81,8 @@ static void host_state_copy(KernelPlatformHostState *destination,
 static _Alignas(4) uint8_t platform_test_mmio[PLATFORM_TEST_MMIO_SIZE];
 static _Alignas(256) OhciHcca platform_test_ohci_hcca;
 static uint32_t platform_test_display_submit_queue =
-    ASTRA_DISPLAY_HOST_QUEUE_BUSY;
-static uint32_t platform_test_display_submit_fence;
+    ASTRA_DISPLAY_HOST_QUEUE_BUSY |
+    (UINT32_C(1) << ASTRA_DISPLAY_HOST_QUEUE_ACCEPTED_SHIFT);
 
 VestaRegs *kernel_platform_test_registers(void)
 {
@@ -123,11 +123,9 @@ OhciHcca *kernel_platform_test_ohci_hcca(void)
     return &platform_test_ohci_hcca;
 }
 
-void kernel_platform_test_display_submit_result(uint32_t queue,
-                                                uint32_t fence)
+void kernel_platform_test_display_submit_result(uint32_t queue)
 {
     platform_test_display_submit_queue = queue;
-    platform_test_display_submit_fence = fence;
 }
 #endif
 
@@ -458,7 +456,7 @@ uint32_t kernel_platform_display_capabilities(void)
         ASTRA_DISPLAY_CAP_TEXT : 0u;
 
     if (VESTA_READ(DISPLAY_ID) == ASTRA_DISPLAY_HOST_ID_MAGIC &&
-        VESTA_READ(DISPLAY_VERSION) == ASTRA_DISPLAY_HOST_VERSION_1_0) {
+        VESTA_READ(DISPLAY_VERSION) == ASTRA_DISPLAY_HOST_VERSION_1_1) {
         uint32_t host = VESTA_READ(DISPLAY_CAPS);
 
         if ((host & ASTRA_DISPLAY_HOST_CAP_SOLID_FRAME) != 0u)
@@ -482,6 +480,7 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
                                     uint32_t attachment)
 {
     uint32_t queue;
+    uint32_t accepted;
     uint32_t host_operation = operation;
 
     if (id == 0u ||
@@ -523,10 +522,9 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
              ASTRA_DISPLAY_CAP_FENCED_PRESENT))
         return false;
     queue = VESTA_READ(DISPLAY_QUEUE);
-    if ((queue & ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY) == 0u ||
-        (queue & (ASTRA_DISPLAY_HOST_QUEUE_BUSY |
-                  ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID)) != 0u)
+    if ((queue & ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY) == 0u)
         return false;
+    accepted = ASTRA_DISPLAY_HOST_QUEUE_ACCEPTED(queue);
     VESTA_WRITE(DISPLAY_REQ_ID, id);
     if (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
         operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE ||
@@ -535,19 +533,20 @@ bool kernel_platform_display_submit(uint32_t id, uint32_t operation,
     VESTA_WRITE(DISPLAY_REQ_OP, host_operation);
     VESTA_WRITE(DISPLAY_REQ_COLOR, source);
     VESTA_WRITE(DISPLAY_REQ_ATTACH, attachment);
-    ASTRAEA_WRITE(IRQ_STAT, ASTRAEA_IRQ_DRAW_DONE);
+    /* Not cleared first: DRAW_DONE may already stand for an earlier
+       request's completion, which the device keeps raised until it is
+       popped. */
     ASTRAEA_WRITE(IRQ_EN,
                   ASTRAEA_READ(IRQ_EN) | ASTRAEA_IRQ_DRAW_DONE);
     VESTA_WRITE(DISPLAY_REQ_SUBMIT, ASTRA_DISPLAY_HOST_SUBMIT);
 #if defined(KERNEL_PLATFORM_HOST_TEST)
     VESTA_WRITE(DISPLAY_QUEUE, platform_test_display_submit_queue);
-    VESTA_WRITE(DISPLAY_CPL_ID, platform_test_display_submit_fence);
 #endif
     kernel_mmio_cpu_sync();
-    queue = VESTA_READ(DISPLAY_QUEUE);
-    return (queue & ASTRA_DISPLAY_HOST_QUEUE_BUSY) != 0u ||
-           ((queue & ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID) != 0u &&
-            VESTA_READ(DISPLAY_CPL_ID) == id);
+    /* Earlier requests may complete meanwhile; only the count of accepted
+       submits says whether this one was taken. */
+    return ASTRA_DISPLAY_HOST_QUEUE_ACCEPTED(VESTA_READ(DISPLAY_QUEUE)) ==
+           ((accepted + 1u) & 0xffu);
 }
 
 /* The posted cursor: one register write that replaces the device's newest
@@ -582,10 +581,10 @@ bool kernel_platform_display_collect(AstraDisplayFrameCompletion *completion)
 #if defined(KERNEL_PLATFORM_HOST_TEST)
     VESTA_WRITE(DISPLAY_QUEUE, ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY);
 #endif
+    /* The device raises DRAW_DONE again while further completions wait. */
     ASTRAEA_WRITE(IRQ_STAT, ASTRAEA_IRQ_DRAW_DONE);
     kernel_mmio_cpu_sync();
-    return (VESTA_READ(DISPLAY_QUEUE) &
-            ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID) == 0u;
+    return true;
 }
 
 bool kernel_platform_copy_present(void)
@@ -939,7 +938,14 @@ bool kernel_platform_device_irq_complete(uint8_t source,
         return (OHCI_READ(ASTRA_STATUS) &
                 (OHCI_ASTRA_DMA_FAULT | OHCI_ASTRA_IRQ)) == 0u;
     case IRQ_SRC_ASTRAEA:
-        return (ASTRAEA_READ(IRQ_STAT) & ASTRAEA_READ(IRQ_EN)) == 0u;
+        /*
+         * DRAW_DONE is the display's completion FIFO: the device holds
+         * several requests, and one may complete after the service collected
+         * the others but before it retires this record. That is new work,
+         * delivered again when the source is re-enabled, as storage's is.
+         */
+        return (ASTRAEA_READ(IRQ_STAT) & ASTRAEA_READ(IRQ_EN) &
+                ~(uint32_t)ASTRAEA_IRQ_DRAW_DONE) == 0u;
     default:
         return false;
     }

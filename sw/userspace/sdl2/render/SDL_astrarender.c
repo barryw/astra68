@@ -24,8 +24,6 @@
 
 typedef struct ASTRA_TextureData {
     AstraSurface surface;
-    AstraDrawList list;
-    int list_pending;
     uint8_t *lock_pixels;
     uint32_t lock_pitch;
     SDL_Rect locked;
@@ -35,10 +33,18 @@ typedef struct ASTRA_TextureData {
    astra_draw_lines call. */
 #define ASTRA_GATHER_MAX 4096u
 
+/*
+ * A frame is one draw list. Each flush appends to it, marking where the
+ * target changes; present posts it -- one submission the game does not
+ * wait for, as SDL's Haiku backend posts its frame to the window thread --
+ * and anything the service must see in order (an upload, a read, a
+ * destroyed texture) posts what is pending first.
+ */
 typedef struct ASTRA_RenderData {
     ASTRA_WindowData *window;
     AstraSurface content;
     AstraDrawList list;
+    /* Commands appended since the list was last posted. */
     int list_pending;
     /* ASTRA_GATHER_MAX of each, allocated on first use. */
     AstraRectI32 *rects;
@@ -123,16 +129,30 @@ static int ASTRA_Failed(const char *what, AstraResult result)
     return SDL_SetError("Astra renderer: %s failed (%d)", what, result);
 }
 
+/* Hands the service whatever the frame has drawn so far, so a request
+   made outside the list happens after it. */
+static int ASTRA_PostPending(ASTRA_RenderData *data)
+{
+    AstraResult result;
+
+    if (data->list_pending == 0)
+        return 0;
+    data->list_pending = 0;
+    result = astra_draw_post(&data->list, 0u);
+    return result == ASTRA_OK ? 0 : ASTRA_Failed("post", result);
+}
+
 static void ASTRA_DropWindowList(ASTRA_RenderData *data)
 {
-    if (data->list._private_handle != ASTRA_INVALID_HANDLE)
+    if (data->list._private_handle != ASTRA_INVALID_HANDLE) {
+        (void)ASTRA_PostPending(data);
         ASTRA_Ignore(astra_draw_list_close(&data->list));
+    }
     if (data->content._private_handle != ASTRA_INVALID_HANDLE)
         ASTRA_Ignore(astra_surface_close(&data->content));
     data->list_pending = 0;
 }
 
-/* The draw list for the current target, created on first use. */
 /* The window content surface, borrowed on first use. */
 static AstraResult ASTRA_Content(ASTRA_RenderData *data)
 {
@@ -141,51 +161,43 @@ static AstraResult ASTRA_Content(ASTRA_RenderData *data)
     return astra_window_surface(&data->window->native, &data->content);
 }
 
+/* The frame list, created on first use. */
+static AstraResult ASTRA_FrameList(ASTRA_RenderData *data)
+{
+    AstraResult result = ASTRA_Content(data);
+    AstraRectI32 whole;
+
+    if (result != ASTRA_OK ||
+        data->list._private_handle != ASTRA_INVALID_HANDLE)
+        return result;
+    whole = (AstraRectI32){ 0, 0, data->content._private_width,
+                            data->content._private_height };
+    return astra_draw_list_create(&data->content, &whole, &data->list);
+}
+
+/* The frame list, drawing next into the current target. */
 static AstraDrawList *ASTRA_TargetList(SDL_Renderer *renderer,
-                                       int **pending,
                                        uint16_t *width, uint16_t *height)
 {
     ASTRA_RenderData *data = renderer->driverdata;
     SDL_Texture *target = renderer->target;
-    AstraResult result;
+    const AstraSurface *surface;
+    AstraResult result = ASTRA_FrameList(data);
 
-    if (target != NULL) {
-        ASTRA_TextureData *texture = target->driverdata;
-
-        if (texture->list._private_handle == ASTRA_INVALID_HANDLE) {
-            AstraRectI32 whole = { 0, 0, (uint32_t)target->w,
-                                   (uint32_t)target->h };
-
-            result = astra_draw_list_create(&texture->surface, &whole,
-                                            &texture->list);
-            if (result != ASTRA_OK) {
-                ASTRA_Failed("target list", result);
-                return NULL;
-            }
-        }
-        *pending = &texture->list_pending;
-        *width = (uint16_t)target->w;
-        *height = (uint16_t)target->h;
-        return &texture->list;
+    if (result != ASTRA_OK) {
+        ASTRA_DropWindowList(data);
+        ASTRA_Failed("frame list", result);
+        return NULL;
     }
-    if (data->list._private_handle == ASTRA_INVALID_HANDLE) {
-        AstraRectI32 whole;
-
-        result = ASTRA_Content(data);
-        whole = (AstraRectI32){ 0, 0, data->content._private_width,
-                                data->content._private_height };
-        if (result == ASTRA_OK)
-            result = astra_draw_list_create(&data->content, &whole,
-                                            &data->list);
-        if (result != ASTRA_OK) {
-            ASTRA_DropWindowList(data);
-            ASTRA_Failed("window list", result);
-            return NULL;
-        }
+    surface = target != NULL ?
+        &((ASTRA_TextureData *)target->driverdata)->surface : &data->content;
+    result = astra_draw_list_set_target(&data->list, surface);
+    if (result != ASTRA_OK) {
+        ASTRA_Failed("render target", result);
+        return NULL;
     }
-    *pending = &data->list_pending;
-    *width = data->content._private_width;
-    *height = data->content._private_height;
+    *width = surface->_private_width;
+    *height = surface->_private_height;
     return &data->list;
 }
 
@@ -231,7 +243,6 @@ static int ASTRA_CreateTexture(SDL_Renderer *renderer, SDL_Texture *texture)
     if (texture_data == NULL)
         return SDL_OutOfMemory();
     texture_data->surface = (AstraSurface)ASTRA_SURFACE_INIT;
-    texture_data->list = (AstraDrawList)ASTRA_DRAW_LIST_INIT;
     result = astra_surface_create(&data->window->display, &info,
                                   &texture_data->surface);
     if (result != ASTRA_OK) {
@@ -253,6 +264,9 @@ static int ASTRA_UpdateTexture(SDL_Renderer *renderer, SDL_Texture *texture,
 
     if (rect->w <= 0 || rect->h <= 0)
         return 0;
+    /* Draws already queued read the texture as it was. */
+    if (ASTRA_PostPending(data) < 0)
+        return -1;
     target = (AstraRectI32){ rect->x, rect->y, (uint32_t)rect->w,
                              (uint32_t)rect->h };
     result = astra_surface_write(&data->window->display,
@@ -576,7 +590,6 @@ static int ASTRA_QueueCopyEx(SDL_Renderer *renderer, SDL_RenderCommand *cmd,
 typedef struct ASTRA_DrawState {
     ASTRA_RenderData *data;
     AstraDrawList *list;
-    int *pending;
     /* data->rects or data->segments [0, gathered) wait to be drawn in
        gather_paint; gather is what they are. */
     enum { ASTRA_GATHER_RECTS, ASTRA_GATHER_LINES } gather;
@@ -604,7 +617,7 @@ static int ASTRA_Flush(ASTRA_DrawState *state)
         astra_draw_lines(state->list, state->data->segments,
                          state->gathered, &state->gather_paint);
     state->gathered = 0u;
-    ++*state->pending;
+    ++state->data->list_pending;
     return result == ASTRA_OK ? 0 : ASTRA_Failed("batch", result);
 }
 
@@ -864,7 +877,7 @@ static int ASTRA_Triangles(ASTRA_DrawState *state,
         texture != NULL ?
             &((ASTRA_TextureData *)texture->driverdata)->surface : NULL,
         vertices, kept, ASTRA_Blend(cmd->data.draw.blend), record->flags);
-    ++*state->pending;
+    ++state->data->list_pending;
     return result == ASTRA_OK ? 0 : ASTRA_Failed("triangles", result);
 }
 
@@ -909,7 +922,7 @@ static int ASTRA_Copy(ASTRA_DrawState *state, const SDL_RenderCommand *cmd,
                          (uint32_t)target.h };
     result = astra_draw_blit(state->list, &texture->surface, &from, &to,
                              &options);
-    ++*state->pending;
+    ++state->data->list_pending;
     return result == ASTRA_OK ? 0 : ASTRA_Failed("copy", result);
 }
 
@@ -918,15 +931,13 @@ static int ASTRA_RunCommandQueue(SDL_Renderer *renderer,
                                  size_t vertsize)
 {
     ASTRA_DrawState state = {0};
-    AstraFence fence = ASTRA_FENCE_INIT;
     AstraResult result;
     int status = 0;
 
     (void)vertsize;
     state.data = renderer->driverdata;
     state.gather_paint = (AstraDrawPaint)ASTRA_DRAW_PAINT_INIT;
-    state.list = ASTRA_TargetList(renderer, &state.pending, &state.width,
-                                  &state.height);
+    state.list = ASTRA_TargetList(renderer, &state.width, &state.height);
     if (state.list == NULL)
         return -1;
     state.viewport = (SDL_Rect){ 0, 0, state.width, state.height };
@@ -959,7 +970,7 @@ static int ASTRA_RunCommandQueue(SDL_Renderer *renderer,
             if (result == ASTRA_OK)
                 result = astra_draw_rectangle(state.list, &whole, 1,
                                               &paint);
-            ++*state.pending;
+            ++state.data->list_pending;
             state.clip_dirty = SDL_TRUE;
             status = result == ASTRA_OK ? 0 : ASTRA_Failed("clear", result);
             break;
@@ -1005,15 +1016,6 @@ static int ASTRA_RunCommandQueue(SDL_Renderer *renderer,
     }
     if (status == 0)
         status = ASTRA_Flush(&state);
-    if (status == 0 && *state.pending != 0) {
-        result = astra_draw_submit(state.list, &fence);
-        if (result == ASTRA_OK)
-            ASTRA_Ignore(astra_fence_close(&fence));
-        else
-            status = ASTRA_Failed("submit", result);
-    }
-    ASTRA_Ignore(astra_draw_list_reset(state.list));
-    *state.pending = 0;
     return status;
 }
 
@@ -1035,6 +1037,8 @@ static int ASTRA_RenderReadPixels(SDL_Renderer *renderer,
 
     if (rect->w <= 0 || rect->h <= 0 || pitch <= 0)
         return SDL_SetError("Astra renderer: empty readback");
+    if (ASTRA_PostPending(data) < 0)
+        return -1;
     if (target != NULL) {
         surface = &((ASTRA_TextureData *)target->driverdata)->surface;
         native = target->format;
@@ -1092,10 +1096,15 @@ static int ASTRA_SetVSync(SDL_Renderer *renderer, const int vsync)
 static int ASTRA_RenderPresent(SDL_Renderer *renderer)
 {
     ASTRA_RenderData *data = renderer->driverdata;
-    /* SDL leaves the backbuffer undefined after a present; saying so
-       spares the display service carrying each frame forward. */
-    AstraResult result = astra_window_present_discard(&data->window->native);
+    AstraResult result = ASTRA_FrameList(data);
 
+    /* The frame is handed over and the game goes on. SDL leaves the
+       backbuffer undefined after a present; saying so spares the display
+       service carrying each frame forward. */
+    if (result == ASTRA_OK)
+        result = astra_draw_post(&data->list, ASTRA_DRAW_POST_PRESENT |
+                                                  ASTRA_DRAW_POST_DISCARD);
+    data->list_pending = 0;
     if (result != ASTRA_OK)
         return ASTRA_Failed("present", result);
     /* The vblank event resets when a wait takes it, so this waits for the
@@ -1113,11 +1122,10 @@ static void ASTRA_DestroyTexture(SDL_Renderer *renderer,
 {
     ASTRA_TextureData *texture_data = texture->driverdata;
 
-    (void)renderer;
     if (texture_data == NULL)
         return;
-    if (texture_data->list._private_handle != ASTRA_INVALID_HANDLE)
-        ASTRA_Ignore(astra_draw_list_close(&texture_data->list));
+    /* Queued draws from or into it come first. */
+    (void)ASTRA_PostPending(renderer->driverdata);
     ASTRA_Ignore(astra_surface_close(&texture_data->surface));
     SDL_free(texture_data->lock_pixels);
     SDL_free(texture_data);

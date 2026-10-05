@@ -392,15 +392,26 @@ static uint32_t exiting_process_count;
 static uint32_t initial_image_process_id;
 static uint32_t initial_image_progress;
 static uint8_t initial_image_exited;
-static KernelDmaToken display_dma_token;
-static uint32_t display_dma_owner;
-static uint8_t display_dma_active;
-/* The in-flight batch's attachment: the device reads the area's frames
-   through this list, and the reference keeps them until the batch is
-   collected or aborted. Kernel memory is identity-mapped, so the list's
-   address is the physical address the device is given. */
-static AstraRenderAttachment display_attachment KERNEL_TABLES;
-static KernelArea *display_attachment_area;
+/* One per request the display device holds, from the submit it accepted
+   until its completion is collected; the device completes in submission
+   order. `dma` is set while the request's buffer is held. */
+typedef struct DisplaySlot {
+    KernelDmaToken token;
+    uint32_t owner;
+    uint32_t fence;
+    uint8_t active;
+    uint8_t dma;
+    /* The attachment: the device reads the area's frames through this
+       list, and the reference keeps them until the batch is collected or
+       aborted. */
+    KernelArea *attachment_area;
+} DisplaySlot;
+
+static DisplaySlot display_slots[ASTRA_DISPLAY_HOST_QUEUE_DEPTH];
+/* Kernel memory is identity-mapped, so a list's address is the physical
+   address the device is given. */
+static AstraRenderAttachment
+    display_attachments[ASTRA_DISPLAY_HOST_QUEUE_DEPTH] KERNEL_TABLES;
 
 _Static_assert(sizeof(KernelAreaExtent) ==
                    sizeof(AstraRenderAttachmentExtent) &&
@@ -3170,25 +3181,42 @@ static uint32_t area_copy_in(KernelProcess *process, uint32_t user_request)
     return copy_list_flush() ? ASTRA_SYSCALL_OK : ASTRA_SYSCALL_IO_ERROR;
 }
 
-static bool display_attachment_release(void)
+/* Frees @p slot after its request completed (@p complete) or was
+   abandoned, releasing what it held. */
+static bool display_slot_release(uint32_t slot, bool complete)
 {
-    KernelArea *area = display_attachment_area;
+    DisplaySlot *held = &display_slots[slot];
+    KernelArea *area = held->attachment_area;
+    bool ok = true;
 
-    display_attachment_area = NULL;
-    display_attachment.magic = 0u;
+    if (held->dma != 0u)
+        ok = (complete ? kernel_dma_complete(&held->token) :
+                         kernel_dma_abort(&held->token)) == KERNEL_DMA_OK;
+    if (!ok)
+        return false;
+    kernel_bytes_clear(held, sizeof(*held));
+    display_attachments[slot].magic = 0u;
     return area == NULL || kernel_area_child_release(area) == KERNEL_AREA_OK;
 }
 
 static bool display_dma_abort_owner(uint32_t owner)
 {
-    if (display_dma_active == 0u || display_dma_owner != owner)
-        return true;
-    if (kernel_dma_abort(&display_dma_token) != KERNEL_DMA_OK)
-        return false;
-    kernel_bytes_clear(&display_dma_token, sizeof(display_dma_token));
-    display_dma_owner = 0u;
-    display_dma_active = 0u;
-    return display_attachment_release();
+    for (uint32_t slot = 0u; slot < ASTRA_DISPLAY_HOST_QUEUE_DEPTH; ++slot)
+        if (display_slots[slot].active != 0u &&
+            display_slots[slot].owner == owner &&
+            !display_slot_release(slot, false))
+            return false;
+    return true;
+}
+
+static uint32_t display_slot_free(void)
+{
+    uint32_t slot = 0u;
+
+    while (slot < ASTRA_DISPLAY_HOST_QUEUE_DEPTH &&
+           display_slots[slot].active != 0u)
+        ++slot;
+    return slot;
 }
 
 /*
@@ -3200,8 +3228,9 @@ static bool display_dma_abort_owner(uint32_t owner)
  */
 static uint32_t display_attachment_prepare(
     const KernelProcess *process, const AstraDisplayFrameRequest *request,
-    uint32_t *dma_bytes, uint32_t *physical)
+    uint32_t slot, uint32_t *dma_bytes, uint32_t *physical)
 {
+    AstraRenderAttachment *list = &display_attachments[slot];
     KernelArea *area = NULL;
     uint32_t count = 0u;
 
@@ -3227,19 +3256,19 @@ static uint32_t display_attachment_prepare(
         return ASTRA_SYSCALL_INVALID_HANDLE;
     if (kernel_area_extents(area, request->attachment_offset,
                             request->attachment_bytes,
-                            (KernelAreaExtent *)display_attachment.extents,
+                            (KernelAreaExtent *)list->extents,
                             ASTRA_RENDER_ATTACHMENT_EXTENT_MAX, &count) !=
         KERNEL_AREA_OK)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     if (kernel_area_child_retain(area) != KERNEL_AREA_OK)
         return ASTRA_SYSCALL_INVALID_HANDLE;
-    display_attachment_area = area;
-    display_attachment.magic = ASTRA_RENDER_ATTACHMENT_MAGIC;
-    display_attachment.count = count;
-    display_attachment.target = request->attachment_target;
-    display_attachment.bytes = request->attachment_bytes;
+    display_slots[slot].attachment_area = area;
+    list->magic = ASTRA_RENDER_ATTACHMENT_MAGIC;
+    list->count = count;
+    list->target = request->attachment_target;
+    list->bytes = request->attachment_bytes;
     *dma_bytes = request->attachment_target;
-    *physical = (uint32_t)(uintptr_t)&display_attachment;
+    *physical = (uint32_t)(uintptr_t)list;
     return ASTRA_SYSCALL_OK;
 }
 
@@ -3265,6 +3294,8 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
         AstraDisplayFrameRequest request;
         uint32_t platform_source;
         uint32_t attachment = 0u;
+        uint32_t slot = display_slot_free();
+        DisplaySlot *held;
 
         copy_status = kernel_copy_from_user(&request, user_address,
                                             sizeof(request));
@@ -3276,6 +3307,9 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
              (request.attachment | request.attachment_offset |
               request.attachment_bytes | request.attachment_target) != 0u))
             return ASTRA_SYSCALL_INVALID_ARGUMENT;
+        if (slot == ASTRA_DISPLAY_HOST_QUEUE_DEPTH)
+            return ASTRA_SYSCALL_WOULD_BLOCK;
+        held = &display_slots[slot];
         if (request.operation == ASTRA_DISPLAY_FRAME_PRESENT_SOLID) {
             if ((request.source & UINT32_C(0xffff0000)) != 0u ||
                 request.pitch != 0u || request.byte_size != 0u)
@@ -3289,8 +3323,7 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
             const uint32_t pitch = ASTRA_DISPLAY_WIDTH * sizeof(uint16_t);
             const uint32_t bytes = pitch * ASTRA_DISPLAY_HEIGHT;
 
-            if (display_dma_active != 0u || request.pitch != pitch ||
-                request.byte_size != bytes)
+            if (request.pitch != pitch || request.byte_size != bytes)
                 return ASTRA_SYSCALL_INVALID_ARGUMENT;
             handle_status = kernel_handle_lookup(
                 process->handles, request.source, KERNEL_OBJECT_DMA,
@@ -3302,11 +3335,10 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
                 return ASTRA_SYSCALL_INVALID_HANDLE;
             if (kernel_dma_begin(buffer->dma, process->owner, 0u, bytes,
                                  KERNEL_DMA_TO_DEVICE, device_generation,
-                                 &display_dma_token) != KERNEL_DMA_OK)
+                                 &held->token) != KERNEL_DMA_OK)
                 return ASTRA_SYSCALL_WOULD_BLOCK;
-            display_dma_owner = process->owner;
-            display_dma_active = 1u;
-            platform_source = display_dma_token.physical_address;
+            held->dma = 1u;
+            platform_source = held->token.physical_address;
         } else if (request.operation ==
                        ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
                    request.operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE ||
@@ -3321,7 +3353,7 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
             const bool read_back =
                 request.operation == ASTRA_DISPLAY_FRAME_READ_SURFACE;
 
-            if (display_dma_active != 0u || request.pitch != 0u ||
+            if (request.pitch != 0u ||
                 (request.operation ==
                          ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ?
                      (request.byte_size < ASTRA_RENDER_BATCH_MIN_BYTES ||
@@ -3346,24 +3378,26 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
                     KERNEL_DMA_OK || info.byte_size < request.byte_size)
                 return ASTRA_SYSCALL_INVALID_HANDLE;
             attachment_status = display_attachment_prepare(
-                process, &request, &dma_bytes, &attachment);
+                process, &request, slot, &dma_bytes, &attachment);
             if (attachment_status != ASTRA_SYSCALL_OK)
                 return attachment_status;
             if (kernel_dma_begin(buffer->dma, process->owner, 0u, dma_bytes,
                                  read_back ? KERNEL_DMA_BIDIRECTIONAL :
                                              KERNEL_DMA_TO_DEVICE,
                                  device_generation,
-                                 &display_dma_token) != KERNEL_DMA_OK) {
-                if (!display_attachment_release())
+                                 &held->token) != KERNEL_DMA_OK) {
+                if (!display_slot_release(slot, false))
                     return ASTRA_SYSCALL_IO_ERROR;
                 return ASTRA_SYSCALL_WOULD_BLOCK;
             }
-            display_dma_owner = process->owner;
-            display_dma_active = 1u;
-            platform_source = display_dma_token.physical_address;
+            held->dma = 1u;
+            platform_source = held->token.physical_address;
         } else {
             return ASTRA_SYSCALL_INVALID_ARGUMENT;
         }
+        held->active = 1u;
+        held->owner = process->owner;
+        held->fence = request.fence;
         if (kernel_platform_display_submit(
                 request.fence, request.operation, platform_source,
                 (request.operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
@@ -3372,24 +3406,27 @@ static uint32_t display_syscall(KernelProcess *process, KernelThread *thread,
                     request.byte_size : 0u,
                 attachment))
             return ASTRA_SYSCALL_OK;
-        if (!display_dma_abort_owner(process->owner))
+        if (!display_slot_release(slot, false))
             return ASTRA_SYSCALL_IO_ERROR;
         return ASTRA_SYSCALL_WOULD_BLOCK;
     }
     {
         AstraDisplayFrameCompletion completion;
+        uint32_t slot = 0u;
 
         if (!kernel_platform_display_collect(&completion))
             return ASTRA_SYSCALL_WOULD_BLOCK;
-        if (display_dma_active != 0u) {
-            if (display_dma_owner != process->owner ||
-                kernel_dma_complete(&display_dma_token) != KERNEL_DMA_OK)
-                return ASTRA_SYSCALL_IO_ERROR;
-            kernel_bytes_clear(&display_dma_token,
-                               sizeof(display_dma_token));
-            display_dma_owner = 0u;
-            display_dma_active = 0u;
-            if (!display_attachment_release())
+        /* The completion names its request by fence. A completion no slot
+           holds is the device's (a reset's), not a request's. */
+        while (slot < ASTRA_DISPLAY_HOST_QUEUE_DEPTH &&
+               (display_slots[slot].active == 0u ||
+                display_slots[slot].fence != completion.fence))
+            ++slot;
+        /* The device has popped it: the slot goes whoever asked. */
+        if (slot != ASTRA_DISPLAY_HOST_QUEUE_DEPTH) {
+            bool owned = display_slots[slot].owner == process->owner;
+
+            if (!display_slot_release(slot, true) || !owned)
                 return ASTRA_SYSCALL_IO_ERROR;
         }
         copy_status = kernel_copy_to_user(user_address, &completion,
@@ -3635,11 +3672,9 @@ void kernel_process_init(void)
     exiting_process_count = 0u;
     initial_image_progress = 0u;
     initial_image_exited = 0u;
-    kernel_bytes_clear(&display_dma_token, sizeof(display_dma_token));
-    display_dma_owner = 0u;
-    display_dma_active = 0u;
-    display_attachment_area = NULL;
-    display_attachment.magic = 0u;
+    kernel_bytes_clear(display_slots, sizeof(display_slots));
+    for (uint32_t slot = 0u; slot < ASTRA_DISPLAY_HOST_QUEUE_DEPTH; ++slot)
+        display_attachments[slot].magic = 0u;
     kernel_thread_pool_init();
     kernel_sync_pool_init();
     kernel_handle_transfer_pool_init();

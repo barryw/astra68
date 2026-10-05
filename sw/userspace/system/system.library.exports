@@ -163,3 +163,9 @@ ASTRA_SYSTEM_2.8 {
         astra_keymap_apply_modifier;
         astra_keymap_is_modifier;
 } ASTRA_SYSTEM_2.7;
+
+ASTRA_SYSTEM_2.9 {
+    global:
+        astra_draw_list_set_target;
+        astra_draw_post;
+} ASTRA_SYSTEM_2.8;

@@ -3376,6 +3376,82 @@ static void test_console_writes_through_a_display_lease(void)
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
 
+    /* The device holds two requests, each holding its own buffer until its
+       completion is collected. */
+    {
+        uint32_t second_dma;
+        const uint32_t fences[3] = { 20u, 21u, 22u };
+
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_DMA_CREATE;
+        registers[1] = ASTRA_RENDER_BATCH_MIN_BYTES;
+        registers[2] = user_cells;
+        assert(kernel_process_on_syscall(registers,
+                                         KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        second_dma = next->data[1];
+        for (uint32_t index = 0u; index < 3u; ++index) {
+            request = (AstraDisplayFrameRequest) {
+                .size = ASTRA_DISPLAY_FRAME_REQUEST_SIZE,
+                .operation = ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH,
+                .fence = fences[index],
+                .source = index == 1u ? second_dma : dma_handle,
+                .byte_size = ASTRA_RENDER_BATCH_MIN_BYTES,
+            };
+            assert(kernel_user_copy_to_asm(user_cells, &request,
+                                           sizeof(request)) ==
+                   KERNEL_USER_COPY_OK);
+            registers[0] = ASTRA_SYSCALL_DISPLAY_SUBMIT;
+            registers[1] = display_handle;
+            registers[2] = user_cells;
+            assert(kernel_process_on_syscall(
+                       registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                       &next) == KERNEL_PROCESS_OK);
+            /* The third finds every slot held. */
+            assert(next->data[0] == (index < 2u ? ASTRA_SYSCALL_OK :
+                                     ASTRA_SYSCALL_WOULD_BLOCK));
+        }
+        assert(display_submissions == 5u);
+        for (uint32_t index = 0u; index < 3u; ++index) {
+            display_completion = (AstraDisplayFrameCompletion) {
+                .size = ASTRA_DISPLAY_FRAME_COMPLETION_SIZE,
+                .fence = fences[index],
+                .status = ASTRA_DISPLAY_COMPLETION_OK,
+                .generation = 12u + index,
+            };
+            display_completion_ready = true;
+            registers[0] = ASTRA_SYSCALL_DISPLAY_COLLECT;
+            registers[1] = display_handle;
+            registers[2] = user_cells;
+            assert(kernel_process_on_syscall(
+                       registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                       &next) == KERNEL_PROCESS_OK);
+            assert(next->data[0] == ASTRA_SYSCALL_OK);
+            if (index == 0u) {
+                /* Collecting the first freed its slot and its buffer: the
+                   third request takes both. */
+                assert(kernel_user_copy_to_asm(user_cells, &request,
+                                               sizeof(request)) ==
+                       KERNEL_USER_COPY_OK);
+                registers[0] = ASTRA_SYSCALL_DISPLAY_SUBMIT;
+                assert(kernel_process_on_syscall(
+                           registers, KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                           &next) == KERNEL_PROCESS_OK);
+                assert(next->data[0] == ASTRA_SYSCALL_OK);
+                assert(display_request.fence == 22u);
+            }
+        }
+        memset(registers, 0, sizeof(registers));
+        registers[0] = ASTRA_SYSCALL_CLOSE;
+        registers[1] = second_dma;
+        assert(kernel_process_on_syscall(registers,
+                                         KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        display_submissions = 3u;
+    }
+
     /* A batch's attachment: the tail of the batch, read by the device from
        an area's frames. The batch DMA stops where the attachment starts. */
     {

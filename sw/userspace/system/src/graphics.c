@@ -115,17 +115,25 @@ static int list_live(const AstraDrawList *list)
            list->_private_commands != 0 && list->_private_list != 0u;
 }
 
-static AstraResult graphics_command(AstraHandle control, uint32_t window,
-                                    AstraGuiGraphicsCommand *request,
-                                    AstraHandle *attachment,
-                                    AstraGuiGraphicsReply *reply)
+static uint32_t graphics_transaction(void)
 {
     static uint32_t transaction;
-    AstraCall call = {0};
-    AstraResult result;
 
     if (++transaction == 0u)
         transaction = 1u;
+    return transaction;
+}
+
+static AstraResult graphics_command(AstraHandle control, uint32_t window,
+                                    AstraGuiGraphicsCommand *request,
+                                    AstraHandle *attachments,
+                                    uint32_t attachment_count,
+                                    AstraGuiGraphicsReply *reply)
+{
+    uint32_t transaction = graphics_transaction();
+    AstraCall call = {0};
+    AstraResult result;
+
     result = astra_message_header_init(
         &request->header, sizeof(*request), ASTRA_GUI_PROTOCOL,
         ASTRA_GUI_VERSION, ASTRA_GUI_GRAPHICS_COMMAND, transaction);
@@ -133,8 +141,8 @@ static AstraResult graphics_command(AstraHandle control, uint32_t window,
     request->generation = 1u;
     call.request = request;
     call.request_size = sizeof(*request);
-    call.handles = attachment;
-    call.handle_count = attachment != 0 ? 1u : 0u;
+    call.handles = attachments;
+    call.handle_count = attachment_count;
     call.reply = reply;
     call.reply_capacity = sizeof(*reply);
     if (result == ASTRA_OK)
@@ -247,7 +255,7 @@ AstraResult astra_display_staging(AstraDisplay *display,
         request.action = ASTRA_GUI_GRAPHICS_STAGING_SET;
         result = graphics_command(display->_private_handle,
                                   display->_private_window, &request,
-                                  &shared, &reply);
+                                  &shared, 1u, &reply);
         close_quietly(shared);
         if (result != ASTRA_OK) {
             area_release(&replacement);
@@ -301,7 +309,7 @@ AstraResult astra_surface_create(const AstraDisplay *display,
     request.format = create_info->format;
     request.flags = create_info->flags;
     result = graphics_command(display->_private_handle,
-                              display->_private_window, &request, 0,
+                              display->_private_window, &request, 0, 0u,
                               &reply);
     if (result != ASTRA_OK)
         return result;
@@ -379,7 +387,7 @@ AstraResult astra_surface_close(AstraSurface *surface)
         request.action = ASTRA_GUI_GRAPHICS_SURFACE_DESTROY;
         request.object = surface->_private_id;
         result = graphics_command(surface->_private_handle,
-                                  surface->_private_window, &request, 0,
+                                  surface->_private_window, &request, 0, 0u,
                                   &reply);
     }
     *surface = (AstraSurface)ASTRA_SURFACE_INIT;
@@ -420,7 +428,8 @@ AstraResult astra_surface_write_staged(const AstraSurface *surface,
     request.offset = offset;
     request.pitch = pitch;
     return graphics_command(surface->_private_handle,
-                            surface->_private_window, &request, 0, &reply);
+                            surface->_private_window, &request, 0, 0u,
+                            &reply);
 }
 
 AstraResult astra_surface_write(AstraDisplay *display,
@@ -501,7 +510,8 @@ AstraResult astra_surface_read(AstraDisplay *display,
     request.height = rectangle->height;
     request.pitch = row;
     result = graphics_command(surface->_private_handle,
-                              surface->_private_window, &request, 0, &reply);
+                              surface->_private_window, &request, 0, 0u,
+                              &reply);
     if (result != ASTRA_OK)
         return result;
     for (uint32_t y = 0u; y < rectangle->height; ++y)
@@ -531,7 +541,7 @@ static AstraResult list_attach(AstraDrawList *list, uint32_t capacity,
                                uint16_t height)
 {
     AstraArea area = ASTRA_AREA_INIT;
-    AstraHandle shared = ASTRA_INVALID_HANDLE;
+    AstraHandle shared[2] = { ASTRA_INVALID_HANDLE, ASTRA_INVALID_HANDLE };
     AstraGuiGraphicsCommand request = {0};
     AstraGuiGraphicsReply reply = {0};
     AstraDrawListHeader *header;
@@ -547,13 +557,21 @@ static AstraResult list_attach(AstraDrawList *list, uint32_t capacity,
                        ASTRA_DRAW_LIST_COMMAND_BYTES ||
         payload > ASTRA_DRAW_LIST_SESSION_BYTES_MAX - offset)
         return ASTRA_ERROR_NO_RESOURCES;
-    result = shared_area(offset + payload, SHARE_RIGHTS, &area, &shared);
-    if (result != ASTRA_OK)
+    result = shared_area(offset + payload, SHARE_RIGHTS, &area, &shared[0]);
+    if (result == ASTRA_OK)
+        result = astra_handle_duplicate(
+            list->_private_release, ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_TRANSFER,
+            &shared[1]);
+    if (result != ASTRA_OK) {
+        close_quietly(shared[0]);
+        if (area.handle != ASTRA_INVALID_HANDLE)
+            area_release(&area);
         return result;
+    }
     header = (AstraDrawListHeader *)area.address;
     *header = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_5,
+        .version = ASTRA_DRAW_LIST_VERSION_1_6,
         .total_bytes = area.size < ASTRA_DRAW_LIST_SESSION_BYTES_MAX ?
                        area.size : ASTRA_DRAW_LIST_SESSION_BYTES_MAX,
         .command_count = count,
@@ -579,8 +597,9 @@ static AstraResult list_attach(AstraDrawList *list, uint32_t capacity,
                used);
     request.action = ASTRA_GUI_GRAPHICS_LIST_ATTACH;
     result = graphics_command(list->_private_port, list->_private_window,
-                              &request, &shared, &reply);
-    close_quietly(shared);
+                              &request, shared, 2u, &reply);
+    close_quietly(shared[0]);
+    close_quietly(shared[1]);
     if (result == ASTRA_OK && reply.object == 0u)
         result = ASTRA_ERROR_IO;
     if (result != ASTRA_OK) {
@@ -598,7 +617,7 @@ static AstraResult list_attach(AstraDrawList *list, uint32_t capacity,
         request.action = ASTRA_GUI_GRAPHICS_LIST_DETACH;
         request.object = list->_private_list;
         (void)graphics_command(list->_private_port, list->_private_window,
-                               &request, 0, &reply);
+                               &request, 0, 0u, &reply);
         area_release(&previous);
     }
     list->_private_handle = area.handle;
@@ -628,11 +647,47 @@ static int clip_to(const AstraRectI32 *clip, uint16_t width,
     return 1;
 }
 
+/* The list's state values (_private_sealed). */
+enum {
+    LIST_OPEN = 0u,
+    /* Submitted with astra_draw_submit; reset before reuse. */
+    LIST_SUBMITTED = 1u,
+    /* Posted with astra_draw_post; reclaimed when next changed. */
+    LIST_POSTED = 2u,
+};
+
+/* A posted list empties itself before it changes again, once the service
+   has read it: that is the only wait a posted frame costs, and only when
+   the service is behind. */
+static AstraResult list_reclaim(AstraDrawList *list)
+{
+    uint32_t ignored_d1;
+    uint32_t ignored_d2;
+    AstraResult result;
+
+    if (list->_private_sealed != LIST_POSTED)
+        return ASTRA_OK;
+    result = astra_internal_result(astra_internal_syscall(
+        ASTRA_SYSCALL_WAIT_ONE, list->_private_release,
+        (uint32_t)(ASTRA_DEADLINE_INFINITE >> 32),
+        (uint32_t)ASTRA_DEADLINE_INFINITE, 0, 0, &ignored_d1,
+        &ignored_d2));
+    if (result != ASTRA_OK)
+        return result;
+    list_header(list)->command_count = 0u;
+    list_header(list)->payload_bytes = 0u;
+    list->_private_sealed = LIST_OPEN;
+    list->_private_destination = list->_private_target;
+    return ASTRA_OK;
+}
+
 AstraResult astra_draw_list_create(const AstraSurface *destination,
                                    const AstraRectI32 *clip,
                                    AstraDrawList *draw_list)
 {
     AstraDrawList created = ASTRA_DRAW_LIST_INIT;
+    uint32_t release = 0u;
+    uint32_t ignored;
     AstraResult result;
 
     if (destination == 0 || !rect_valid(clip) || draw_list == 0 ||
@@ -645,9 +700,19 @@ AstraResult astra_draw_list_create(const AstraSurface *destination,
     created._private_port = destination->_private_handle;
     created._private_window = destination->_private_window;
     created._private_destination = destination->_private_id;
+    created._private_target = destination->_private_id;
+    created._private_target_width = destination->_private_width;
+    created._private_target_height = destination->_private_height;
     if (!clip_to(clip, destination->_private_width,
                  destination->_private_height, &created._private_clip))
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_internal_result(astra_internal_syscall(
+        ASTRA_SYSCALL_EVENT_CREATE, 0u,
+        ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_WAIT | ASTRA_RIGHT_TRANSFER, 0, 0,
+        0, &release, &ignored));
+    if (result != ASTRA_OK)
+        return result;
+    created._private_release = release;
     result = list_attach(&created,
                          (LIST_INITIAL_BYTES - ASTRA_DRAW_LIST_HEADER_BYTES) /
                              ASTRA_DRAW_LIST_COMMAND_BYTES,
@@ -655,20 +720,73 @@ AstraResult astra_draw_list_create(const AstraSurface *destination,
                          destination->_private_height);
     if (result == ASTRA_OK)
         *draw_list = created;
+    else
+        close_quietly(created._private_release);
     return result;
+}
+
+AstraResult astra_draw_list_set_target(AstraDrawList *draw_list,
+                                       const AstraSurface *destination)
+{
+    AstraDrawListHeader *header;
+    AstraDrawListCommand *command;
+    AstraResult result;
+
+    if (draw_list == 0 || destination == 0)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (!list_live(draw_list) || !surface_live(destination) ||
+        destination->_private_window != draw_list->_private_window)
+        return ASTRA_ERROR_INVALID_HANDLE;
+    if ((destination->_private_flags & ASTRA_SURFACE_DRAW_TARGET) == 0u)
+        return ASTRA_ERROR_PERMISSION;
+    if (draw_list->_private_sealed == LIST_SUBMITTED)
+        return ASTRA_ERROR_BUSY;
+    result = list_reclaim(draw_list);
+    if (result != ASTRA_OK)
+        return result;
+    draw_list->_private_clip = (AstraRectI32){
+        0, 0, destination->_private_width, destination->_private_height };
+    if (destination->_private_id == draw_list->_private_target)
+        return ASTRA_OK;
+    draw_list->_private_target = destination->_private_id;
+    draw_list->_private_target_width = destination->_private_width;
+    draw_list->_private_target_height = destination->_private_height;
+    header = list_header(draw_list);
+    /* An empty list simply starts at the new destination. */
+    if (header->command_count == 0u) {
+        draw_list->_private_destination = destination->_private_id;
+        return ASTRA_OK;
+    }
+    if (header->command_count == header->command_capacity) {
+        result = list_attach(draw_list, header->command_capacity * 2u + 1u,
+                             payload_capacity(header), header->width,
+                             header->height);
+        if (result != ASTRA_OK)
+            return result;
+        header = list_header(draw_list);
+    }
+    command = &((AstraDrawListCommand *)(header + 1))
+                  [header->command_count++];
+    *command = (AstraDrawListCommand){
+        .operation = ASTRA_DRAW_LIST_TARGET,
+        .width = destination->_private_width,
+        .height = destination->_private_height,
+        .source = destination->_private_id,
+        .clip_right = destination->_private_width,
+        .clip_bottom = destination->_private_height,
+    };
+    return ASTRA_OK;
 }
 
 AstraResult astra_draw_list_set_clip(AstraDrawList *draw_list,
                                      const AstraRectI32 *clip)
 {
-    AstraDrawListHeader *header;
-
     if (draw_list == 0 || clip == 0)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (!list_live(draw_list))
         return ASTRA_ERROR_INVALID_HANDLE;
-    header = list_header(draw_list);
-    if (!clip_to(clip, header->width, header->height,
+    if (!clip_to(clip, draw_list->_private_target_width,
+                 draw_list->_private_target_height,
                  &draw_list->_private_clip))
         /* An empty clip suppresses later commands until it is replaced. */
         draw_list->_private_clip = (AstraRectI32){ 0, 0, 0, 0 };
@@ -677,13 +795,19 @@ AstraResult astra_draw_list_set_clip(AstraDrawList *draw_list,
 
 AstraResult astra_draw_list_reset(AstraDrawList *draw_list)
 {
+    AstraResult result;
+
     if (draw_list == 0)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (!list_live(draw_list))
         return ASTRA_ERROR_INVALID_HANDLE;
+    result = list_reclaim(draw_list);
+    if (result != ASTRA_OK)
+        return result;
     list_header(draw_list)->command_count = 0u;
     list_header(draw_list)->payload_bytes = 0u;
-    draw_list->_private_sealed = 0u;
+    draw_list->_private_sealed = LIST_OPEN;
+    draw_list->_private_destination = draw_list->_private_target;
     return ASTRA_OK;
 }
 
@@ -702,13 +826,14 @@ AstraResult astra_draw_list_close(AstraDrawList *draw_list)
     request.action = ASTRA_GUI_GRAPHICS_LIST_DETACH;
     request.object = draw_list->_private_list;
     result = graphics_command(draw_list->_private_port,
-                              draw_list->_private_window, &request, 0,
+                              draw_list->_private_window, &request, 0, 0u,
                               &reply);
     area.handle = draw_list->_private_handle;
     area.address = draw_list->_private_commands;
     area.size = draw_list->_private_bytes;
     area.map_flags = ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE;
     close_result = astra_area_close(&area);
+    close_quietly(draw_list->_private_release);
     *draw_list = (AstraDrawList)ASTRA_DRAW_LIST_INIT;
     return result == ASTRA_OK ? close_result : result;
 }
@@ -727,10 +852,13 @@ static AstraDrawListCommand *append(AstraDrawList *list, uint32_t operation,
         *result = ASTRA_ERROR_INVALID_HANDLE;
         return 0;
     }
-    if (list->_private_sealed != 0u) {
+    if (list->_private_sealed == LIST_SUBMITTED) {
         *result = ASTRA_ERROR_BUSY;
         return 0;
     }
+    *result = list_reclaim(list);
+    if (*result != ASTRA_OK)
+        return 0;
     clip = &list->_private_clip;
     if (clip->width == 0u || clip->height == 0u)
         return 0;
@@ -880,7 +1008,7 @@ AstraResult astra_draw_blit(AstraDrawList *draw_list,
         command->height = destination_rect->height;
         command->color = argb(options->modulate);
         command->source =
-            source->_private_id == draw_list->_private_destination ?
+            source->_private_id == draw_list->_private_target ?
                 ASTRA_DRAW_LIST_SOURCE_DESTINATION : source->_private_id;
         command->source_x = (int16_t)source_rect->x;
         command->source_y = (int16_t)source_rect->y;
@@ -949,7 +1077,7 @@ AstraResult astra_draw_triangles(AstraDrawList *draw_list,
         if (!surface_live(texture) ||
             texture->_private_window != draw_list->_private_window)
             return ASTRA_ERROR_INVALID_HANDLE;
-        if (texture->_private_id == draw_list->_private_destination)
+        if (texture->_private_id == draw_list->_private_target)
             return ASTRA_ERROR_INVALID_ARGUMENT;
         if (texture->_private_format != ASTRA_PIXEL_FORMAT_RGB565 &&
             texture->_private_format != ASTRA_PIXEL_FORMAT_XRGB8888 &&
@@ -1195,13 +1323,16 @@ AstraResult astra_draw_submit(AstraDrawList *draw_list, AstraFence *fence)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (!list_live(draw_list))
         return ASTRA_ERROR_INVALID_HANDLE;
-    if (draw_list->_private_sealed != 0u)
+    if (draw_list->_private_sealed == LIST_SUBMITTED)
         return ASTRA_ERROR_BUSY;
+    result = list_reclaim(draw_list);
+    if (result != ASTRA_OK)
+        return result;
     request.action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT;
     request.object = draw_list->_private_list;
     request.target = draw_list->_private_destination;
     result = graphics_command(draw_list->_private_port,
-                              draw_list->_private_window, &request, 0,
+                              draw_list->_private_window, &request, 0, 0u,
                               &reply);
     if (result != ASTRA_OK)
         return result;
@@ -1210,9 +1341,52 @@ AstraResult astra_draw_submit(AstraDrawList *draw_list, AstraFence *fence)
        copies uploads), so the caller may reuse them now, and the device
        runs requests in order, so any later draw, read or present sees this
        one's result even while the hardware is still running it. */
-    draw_list->_private_sealed = 1u;
+    draw_list->_private_sealed = LIST_SUBMITTED;
     fence->_private_handle = FENCE_SIGNALED;
     return ASTRA_OK;
+}
+
+AstraResult astra_draw_post(AstraDrawList *draw_list, uint32_t flags)
+{
+    AstraGuiGraphicsCommand request = {0};
+    AstraResult result;
+
+    if (draw_list == 0 ||
+        (flags & ~(ASTRA_DRAW_POST_PRESENT | ASTRA_DRAW_POST_DISCARD)) !=
+            0u ||
+        flags == ASTRA_DRAW_POST_DISCARD)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (!list_live(draw_list))
+        return ASTRA_ERROR_INVALID_HANDLE;
+    if (draw_list->_private_sealed == LIST_SUBMITTED)
+        return ASTRA_ERROR_BUSY;
+    /* A list posted twice without a change in between is an empty frame. */
+    result = list_reclaim(draw_list);
+    if (result != ASTRA_OK)
+        return result;
+    result = astra_message_header_init(
+        &request.header, sizeof(request), ASTRA_GUI_PROTOCOL,
+        ASTRA_GUI_VERSION, ASTRA_GUI_GRAPHICS_COMMAND,
+        graphics_transaction());
+    if (result != ASTRA_OK)
+        return result;
+    request.window = draw_list->_private_window;
+    request.generation = 1u;
+    request.action = ASTRA_GUI_GRAPHICS_FRAME;
+    request.object = draw_list->_private_list;
+    request.target = draw_list->_private_destination;
+    request.flags =
+        ((flags & ASTRA_DRAW_POST_PRESENT) != 0u ?
+             ASTRA_GUI_FRAME_PRESENT : 0u) |
+        ((flags & ASTRA_DRAW_POST_DISCARD) != 0u ?
+             ASTRA_GUI_FRAME_DISCARD : 0u);
+    /* No reply: a full port, the window's queue, is the only wait. */
+    result = astra_port_send_until(draw_list->_private_port, &request,
+                                   sizeof(request), 0, 0u,
+                                   ASTRA_DEADLINE_INFINITE);
+    if (result == ASTRA_OK)
+        draw_list->_private_sealed = LIST_POSTED;
+    return result;
 }
 
 AstraResult astra_fence_poll(const AstraFence *fence,

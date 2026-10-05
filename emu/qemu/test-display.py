@@ -23,7 +23,9 @@ DISPLAY_QUEUE = 0xFFF001E0
 ASTRAEA_IRQ_STATUS = 0xFFF10014
 INPUT_STATUS = 0xFFF0070C
 INPUT_COUNT_MASK = 0xFF
+QUEUE_BUSY = 1 << 0
 QUEUE_REQUEST_READY = 1 << 8
+QUEUE_COMPLETION_VALID = 1 << 20
 DRAW_DONE = 1 << 3
 PRESENT_BUDGET_CYCLES = 250000
 RESIZE_BUDGET_CYCLES = 250000
@@ -55,16 +57,19 @@ def parse_cpu_benchmark(line):
     return tuple(map(int, match.groups())) if match else None
 
 
-def collected_cycle_span(qmp):
-    """Return a span only after the guest has collected a stable submission."""
+def completed_cycle_span(qmp):
+    """Return the newest submission's span to its device completion, once it
+    has completed and nothing was submitted meanwhile. The service collects
+    a completion only when it next needs the slot, so the collect is not
+    part of the render."""
     before = qmp.property("astra-display-submissions")
     submit = qmp.property("astra-display-submit-cycle")
     complete = qmp.property("astra-display-completion-cycle")
-    collect = qmp.property("astra-display-collect-cycle")
     after = qmp.property("astra-display-submissions")
-    if before != after or not (0 < submit <= complete <= collect):
+    if before != after or after != qmp.property("astra-display-completions") \
+            or not (0 < submit <= complete):
         return None
-    return collect - submit
+    return complete - submit
 
 
 def pointer_route_settled(updates, x, y, submissions, completions,
@@ -236,7 +241,6 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
             submit_cycle = qmp.property("astra-display-submit-cycle")
             completion_cycle = qmp.property(
                 "astra-display-completion-cycle")
-            collect_cycle = qmp.property("astra-display-collect-cycle")
             operation = qmp.property("astra-display-operation")
             batches = qmp.property("astra-display-render-batches")
             commands = qmp.property("astra-display-render-commands")
@@ -263,11 +267,19 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                 raise RuntimeError(
                     "hardware command mix commands=%d fills=%d blits=%d glyphs=%d" %
                     (commands, fills, blits, glyphs))
-            if queue != QUEUE_REQUEST_READY:
-                raise RuntimeError("display completion was not consumed: "
+            # Idle, the device runs nothing. The service collects a
+            # completion when it next needs that request's slot or buffer,
+            # so completions may wait -- and DRAW_DONE stands for exactly
+            # those.
+            held = (queue >> 4) & 0xF
+            waiting = (queue & QUEUE_COMPLETION_VALID) != 0
+            if queue & QUEUE_BUSY or held > 2 or waiting != (held != 0) or \
+                    ((queue & QUEUE_REQUEST_READY) != 0) != (held < 2):
+                raise RuntimeError("display queue is not idle: "
                                    "queue=0x%08x" % queue)
-            if irq & DRAW_DONE:
-                raise RuntimeError("display completion IRQ was not cleared")
+            if bool(irq & DRAW_DONE) != waiting:
+                raise RuntimeError("display completion IRQ is 0x%08x with "
+                                   "queue 0x%08x" % (irq, queue))
             cursor_updates = qmp.property("astra-display-cursor-updates")
             cursor_x = qmp.property("astra-display-cursor-x")
             cursor_y = qmp.property("astra-display-cursor-y")
@@ -455,10 +467,10 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                 "astra-display-render-batches")
             resized_glyphs = qmp.property("astra-display-glyph-commands")
             collect_deadline = time.monotonic() + 1.0
-            resize_cycles = collected_cycle_span(qmp)
+            resize_cycles = completed_cycle_span(qmp)
             while resize_cycles is None and time.monotonic() < collect_deadline:
                 time.sleep(0.01)
-                resize_cycles = collected_cycle_span(qmp)
+                resize_cycles = completed_cycle_span(qmp)
             resize_elapsed = time.monotonic() - resize_started
             if resized_batches <= resize_batches or \
                     resized_glyphs <= resize_glyphs or \
@@ -634,11 +646,12 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
             glyphs = qmp.property("astra-display-glyph-commands")
             submissions = qmp.property("astra-display-submissions")
             batches = qmp.property("astra-display-render-batches")
-            present_cycles = collect_cycle - submit_cycle
-            if not (submit_cycle < completion_cycle <= collect_cycle):
-                raise RuntimeError("display cycle order invalid: %d %d %d" %
-                                   (submit_cycle, completion_cycle,
-                                    collect_cycle))
+            # A present's cost is the device's: the service collects its
+            # completion only when it next needs that slot.
+            present_cycles = completion_cycle - submit_cycle
+            if not submit_cycle < completion_cycle:
+                raise RuntimeError("display cycle order invalid: %d %d" %
+                                   (submit_cycle, completion_cycle))
             if present_cycles > PRESENT_BUDGET_CYCLES:
                 raise RuntimeError("display present took %d cycles; budget %d" %
                                    (present_cycles, PRESENT_BUDGET_CYCLES))

@@ -346,6 +346,34 @@ typedef struct AstraInputState {
     QemuInputHandlerState *handler;
 } AstraInputState;
 
+/* A request the display holds, from the submit it accepted until it
+   completes: queued, then running at the head of the FIFO. */
+typedef struct AstraDisplayRequest {
+    uint32_t id;
+    uint32_t operation;
+    /* The color, or the guest physical source (READ_SURFACE: the buffer the
+       rows return to). */
+    uint32_t source;
+    uint32_t byte_size;
+    /* Bytes taken from source: a batch ends where its attachment starts. */
+    uint32_t source_bytes;
+    uint32_t attachment;
+    uint32_t attachment_target;
+    uint32_t attachment_bytes;
+    /* The attachment as it was when the submit was accepted behind another
+       request: the guest may reuse its staging once accepted. Grown, never
+       shrunk. */
+    uint8_t *staged;
+    uint32_t staged_capacity;
+    bool staged_valid;
+} AstraDisplayRequest;
+
+typedef struct AstraDisplayCompletion {
+    uint32_t id;
+    uint32_t status;
+    uint32_t generation;
+} AstraDisplayCompletion;
+
 typedef struct AstraDisplayState {
     MemoryRegion mailbox_region;
     AstraDisplayMailbox *mailbox;
@@ -357,9 +385,16 @@ typedef struct AstraDisplayState {
     uint32_t request_op;
     uint32_t request_source;
     uint32_t request_attachment;
-    uint32_t completion_id;
-    uint32_t completion_status;
-    uint32_t completion_generation;
+    /* ASTRA_DISPLAY_HOST_QUEUE_DEPTH slots: requests (the head runs) and
+       the completions the guest has not popped. */
+    AstraDisplayRequest requests[ASTRA_DISPLAY_HOST_QUEUE_DEPTH];
+    uint32_t request_head;
+    uint32_t request_count;
+    AstraDisplayCompletion completion_fifo[ASTRA_DISPLAY_HOST_QUEUE_DEPTH];
+    uint32_t completion_head;
+    uint32_t completion_count;
+    /* Accepted submits, modulo 256 in DISPLAY_QUEUE. */
+    uint32_t accepted;
     uint32_t mailbox_sequence;
     uint64_t submissions;
     uint64_t completions;
@@ -376,8 +411,8 @@ typedef struct AstraDisplayState {
     uint64_t glyph_commands;
     uint64_t triangle_commands;
     uint64_t surface_reads;
-    uint32_t read_source;
-    uint32_t read_bytes;
+    /* Submits accepted while another request ran. */
+    uint64_t queued_submissions;
     uint64_t cursor_x;
     uint64_t cursor_y;
     uint64_t cursor_visible;
@@ -395,8 +430,6 @@ typedef struct AstraDisplayState {
     EventNotifier completion_notifier;
 #endif
     bool mailbox_enabled;
-    bool busy;
-    bool completion_valid;
 } AstraDisplayState;
 
 /* One application audio stream (astra/audio_stream.h): its buffers are in
@@ -639,13 +672,47 @@ static uint64_t astra_now_cycles(Astra68State *s);
 static void astra_panel_write32(Astra68State *s, hwaddr offset,
                                 uint32_t value);
 
+static uint32_t astra_display_held(const AstraDisplayState *display)
+{
+    return display->request_count + display->completion_count;
+}
+
 static uint32_t astra_display_queue(const AstraDisplayState *display)
 {
-    return (display->busy ? ASTRA_DISPLAY_HOST_QUEUE_BUSY : 0u) |
-           (!display->busy && !display->completion_valid ?
+    uint32_t held = astra_display_held(display);
+
+    return (display->request_count != 0u ?
+                ASTRA_DISPLAY_HOST_QUEUE_BUSY : 0u) |
+           (held << ASTRA_DISPLAY_HOST_QUEUE_HELD_SHIFT) |
+           (held < ASTRA_DISPLAY_HOST_QUEUE_DEPTH ?
                 ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY : 0u) |
-           (display->completion_valid ?
-                ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID : 0u);
+           (display->completion_count != 0u ?
+                ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID : 0u) |
+           ((display->accepted & 0xffu) <<
+            ASTRA_DISPLAY_HOST_QUEUE_ACCEPTED_SHIFT);
+}
+
+static AstraDisplayRequest *astra_display_running(AstraDisplayState *display)
+{
+    return display->request_count != 0u ?
+        &display->requests[display->request_head] : NULL;
+}
+
+/* Astraea IRQ_STAT: DRAW_DONE stands while any display completion waits to
+   be popped, so one that lands after the guest cleared the bit for an
+   earlier one still interrupts. */
+static uint32_t astra_astraea_irq_status(const Astra68State *s)
+{
+    return s->astraea.irq_status |
+           (s->display.completion_count != 0u ? ASTRAEA_IRQ_DRAW_DONE : 0u);
+}
+
+/* The oldest completion the guest has not popped, or NULL. */
+static const AstraDisplayCompletion *
+astra_display_completion(const AstraDisplayState *display)
+{
+    return display->completion_count != 0u ?
+        &display->completion_fifo[display->completion_head] : NULL;
 }
 
 static void astra_display_count_batch(Astra68State *s, uint32_t source,
@@ -742,12 +809,12 @@ static uint32_t astra_display_attachment_valid(Astra68State *s,
     return total == bytes ? target : 0u;
 }
 
+/* The attachment's extents, in order, to @p target. */
 static void astra_display_attachment_copy(Astra68State *s, uint32_t list,
-                                          uint8_t *batch)
+                                          uint8_t *target)
 {
     const uint8_t *header = s->sdram + (list - ASTRA_SDRAM_BASE);
     uint32_t count = ldl_be_p(header + 4u);
-    uint8_t *target = batch + ldl_be_p(header + 8u);
 
     for (uint32_t index = 0u; index < count; ++index) {
         uint32_t physical = ldl_be_p(header + 16u + index * 8u);
@@ -756,6 +823,20 @@ static void astra_display_attachment_copy(Astra68State *s, uint32_t list,
         memcpy(target, s->sdram + (physical - ASTRA_SDRAM_BASE), length);
         target += length;
     }
+}
+
+/* A request accepted behind another keeps its attachment's bytes now: the
+   guest owns its staging again once the submit is accepted. */
+static void astra_display_attachment_stage(Astra68State *s,
+                                           AstraDisplayRequest *request)
+{
+    if (request->staged_capacity < request->attachment_bytes) {
+        request->staged = g_realloc(request->staged,
+                                    request->attachment_bytes);
+        request->staged_capacity = request->attachment_bytes;
+    }
+    astra_display_attachment_copy(s, request->attachment, request->staged);
+    request->staged_valid = true;
 }
 
 /*
@@ -801,22 +882,36 @@ static uint32_t astra_copy_run(Astra68State *s, uint32_t list)
     return ASTRA_COPY_STATUS_OK;
 }
 
+static void astra_display_start(Astra68State *s);
+
+/* The running request is done: its completion joins the FIFO the guest
+   pops, and the next request, if one is queued, starts at once, so the
+   device runs back to back without waiting for the guest. */
 static void astra_display_complete(Astra68State *s, uint32_t status,
                                    uint32_t generation)
 {
     AstraDisplayState *display = &s->display;
+    AstraDisplayRequest *done = astra_display_running(display);
+    AstraDisplayCompletion *completion;
 
-    if (!display->busy)
+    if (done == NULL)
         return;
-    display->busy = false;
-    display->completion_valid = true;
-    display->completion_id = display->request_id;
-    display->completion_status = status;
-    display->completion_generation = generation;
+    completion = &display->completion_fifo[
+        (display->completion_head + display->completion_count) %
+        ASTRA_DISPLAY_HOST_QUEUE_DEPTH];
+    *completion = (AstraDisplayCompletion){
+        .id = done->id, .status = status, .generation = generation,
+    };
+    ++display->completion_count;
+    done->staged_valid = false;
+    display->request_head =
+        (display->request_head + 1u) % ASTRA_DISPLAY_HOST_QUEUE_DEPTH;
+    --display->request_count;
     display->generation = generation;
     display->completion_cycle = astra_now_cycles(s);
     ++display->completions;
-    s->astraea.irq_status |= ASTRAEA_IRQ_DRAW_DONE;
+    if (display->request_count != 0u)
+        astra_display_start(s);
     astra_update_irq(s);
 }
 
@@ -842,10 +937,10 @@ static uint32_t astra_display_read_pixel_bytes(uint32_t format)
  * surface the display service creates is cleared, so a consistent request
  * reads zeros. The helper performs the full arena validation.
  */
-static uint32_t astra_display_read_host_only(Astra68State *s)
+static uint32_t astra_display_read_host_only(Astra68State *s,
+                                             const AstraDisplayRequest *read)
 {
-    AstraDisplayState *display = &s->display;
-    uint8_t *buffer = s->sdram + (display->read_source - ASTRA_SDRAM_BASE);
+    uint8_t *buffer = s->sdram + (read->source - ASTRA_SDRAM_BASE);
     uint32_t size = ldl_be_p(buffer + 20u);
     uint32_t origin = ldl_be_p(buffer + 28u);
     uint32_t extent = ldl_be_p(buffer + 32u);
@@ -861,10 +956,10 @@ static uint32_t astra_display_read_host_only(Astra68State *s)
         pixel == 0u || (extent >> 16) == 0u || (extent & 0xffffu) == 0u ||
         (origin >> 16) + (extent >> 16) > (size >> 16) ||
         (origin & 0xffffu) + (extent & 0xffffu) > (size & 0xffffu) ||
-        ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES + rows != display->read_bytes)
+        ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES + rows != read->byte_size)
         return ASTRA_DISPLAY_COMPLETION_BAD_REQUEST;
     memset(buffer + ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES, 0,
-           display->read_bytes - ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES);
+           read->byte_size - ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES);
     return ASTRA_DISPLAY_COMPLETION_OK;
 }
 
@@ -872,15 +967,16 @@ static void astra_display_service(void *opaque)
 {
     Astra68State *s = opaque;
     AstraDisplayState *display = &s->display;
+    const AstraDisplayRequest *running = astra_display_running(display);
     uint32_t status;
 
-    if (!display->busy)
+    if (running == NULL)
         return;
     if (!display->mailbox_enabled) {
         astra_display_complete(
             s,
-            display->operation == ASTRA_DISPLAY_FRAME_READ_SURFACE ?
-                astra_display_read_host_only(s) :
+            running->operation == ASTRA_DISPLAY_FRAME_READ_SURFACE ?
+                astra_display_read_host_only(s, running) :
                 ASTRA_DISPLAY_COMPLETION_OK,
             (uint32_t)display->generation + 1u);
         return;
@@ -896,17 +992,17 @@ static void astra_display_service(void *opaque)
     }
     smp_rmb();
     status = qatomic_read(&display->mailbox->completion_id) ==
-                     display->request_id ?
+                     running->id ?
                  qatomic_read(&display->mailbox->completion_status) :
                  ASTRA_DISPLAY_COMPLETION_BAD_REQUEST;
     /* The helper wrote the rows behind the header; return them to the
        guest buffer, which submit validated against guest RAM. */
     if (status == ASTRA_DISPLAY_COMPLETION_OK &&
-        display->operation == ASTRA_DISPLAY_FRAME_READ_SURFACE)
-        memcpy(s->sdram + (display->read_source - ASTRA_SDRAM_BASE) +
+        running->operation == ASTRA_DISPLAY_FRAME_READ_SURFACE)
+        memcpy(s->sdram + (running->source - ASTRA_SDRAM_BASE) +
                    ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES,
                display->payload + ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES,
-               display->read_bytes - ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES);
+               running->byte_size - ASTRA_DISPLAY_SURFACE_READ_HEADER_BYTES);
     astra_display_complete(
         s, status, qatomic_read(&display->mailbox->completion_generation));
 }
@@ -958,6 +1054,79 @@ static void astra_display_post_cursor(Astra68State *s, uint32_t value)
 #endif
 }
 
+/*
+ * Hands the running request to the helper, or, without one, to the service
+ * timer. The batch is read from guest RAM now: the guest holds its DMA
+ * buffer until the completion. An attachment comes from guest RAM when the
+ * request starts as it is accepted, and from its staged copy otherwise.
+ */
+static void astra_display_start(Astra68State *s)
+{
+    AstraDisplayState *display = &s->display;
+    AstraDisplayRequest *request = astra_display_running(display);
+    uint32_t operation = request->operation;
+
+    display->operation = operation;
+    if (display->mailbox_enabled) {
+        qatomic_set(&display->mailbox_sequence,
+                    display->mailbox_sequence + 1u == 0u ?
+                        1u : display->mailbox_sequence + 1u);
+        qatomic_set(&display->mailbox->magic, ASTRA_DISPLAY_MAILBOX_MAGIC);
+        qatomic_set(&display->mailbox->version,
+                    ASTRA_DISPLAY_MAILBOX_VERSION_1_9);
+        qatomic_set(&display->mailbox->request_id, request->id);
+        qatomic_set(&display->mailbox->operation, operation);
+        qatomic_set(&display->mailbox->color_rgb565, request->source);
+        qatomic_set(&display->mailbox->frame_pitch,
+                    operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ?
+                        ASTRA_DISPLAY_WIDTH * 2u : 0u);
+        qatomic_set(&display->mailbox->frame_bytes,
+                    operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ?
+                        ASTRA_DISPLAY_MAILBOX_FRAME_BYTES :
+                    operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
+                    operation == ASTRA_DISPLAY_FRAME_READ_SURFACE ||
+                    operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE ?
+                        request->byte_size : 0u);
+        if (operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ||
+            operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
+            operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE ||
+            operation == ASTRA_DISPLAY_FRAME_READ_SURFACE) {
+            memcpy(display->payload,
+                   s->sdram + (request->source - ASTRA_SDRAM_BASE),
+                   operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ?
+                       ASTRA_DISPLAY_MAILBOX_FRAME_BYTES :
+                       request->source_bytes);
+            if (request->staged_valid)
+                memcpy(display->payload + request->attachment_target,
+                       request->staged, request->attachment_bytes);
+            else if (request->attachment != 0u)
+                astra_display_attachment_copy(
+                    s, request->attachment,
+                    display->payload + request->attachment_target);
+        }
+#if defined(__aarch64__)
+        /* The payload may be Normal non-cacheable memory the FPGA reads
+           over F2SDRAM, outside the CPUs' shareability domain: the stores
+           must be complete, not just ordered, before the helper can see the
+           request and ring the engine. */
+        asm volatile("dsb st" ::: "memory");
+#else
+        smp_wmb();
+#endif
+        qatomic_set(&display->mailbox->request_sequence,
+                    display->mailbox_sequence);
+        astra_display_wake_helper(display);
+#ifdef CONFIG_LINUX
+        qemu_event_set(&display->completion_armed);
+        return;
+#endif
+    }
+    timer_mod_ns(display->service_timer,
+                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL_RT));
+}
+
+/* DISPLAY_REQ_SUBMIT: accepts the staged request into a free slot, or
+   ignores it -- the guest sees ACCEPTED unchanged. */
 static void astra_display_submit(Astra68State *s)
 {
     AstraDisplayState *display = &s->display;
@@ -970,8 +1139,10 @@ static void astra_display_submit(Astra68State *s)
              ASTRA_DISPLAY_MAILBOX_FRAME_BYTES : byte_size);
     uint32_t attachment = display->request_attachment;
     uint32_t source_bytes = byte_size;
+    AstraDisplayRequest *request;
+    bool running;
 
-    if (display->busy || display->completion_valid ||
+    if (astra_display_held(display) >= ASTRA_DISPLAY_HOST_QUEUE_DEPTH ||
         display->request_id == 0u ||
         (operation != ASTRA_DISPLAY_FRAME_PRESENT_SOLID &&
          operation != ASTRA_DISPLAY_FRAME_PRESENT_RGB565 &&
@@ -996,70 +1167,35 @@ static void astra_display_submit(Astra68State *s)
           (source_bytes = astra_display_attachment_valid(
                s, attachment, byte_size)) == 0u)))
         return;
-    display->busy = true;
-    display->operation = operation;
+    request = &display->requests[
+        (display->request_head + display->request_count) %
+        ASTRA_DISPLAY_HOST_QUEUE_DEPTH];
+    request->id = display->request_id;
+    request->operation = operation;
+    request->source = display->request_source;
+    request->byte_size = byte_size;
+    request->source_bytes = source_bytes;
+    request->attachment = attachment;
+    request->attachment_target = attachment != 0u ? source_bytes : 0u;
+    request->attachment_bytes = attachment != 0u ?
+        ldl_be_p(s->sdram + (attachment - ASTRA_SDRAM_BASE) + 12u) : 0u;
+    request->staged_valid = false;
+    display->accepted = (display->accepted + 1u) & 0xffu;
     if (operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH)
-        astra_display_count_batch(s, display->request_source, byte_size);
-    if (operation == ASTRA_DISPLAY_FRAME_READ_SURFACE) {
-        display->read_source = display->request_source;
-        display->read_bytes = byte_size;
+        astra_display_count_batch(s, request->source, byte_size);
+    if (operation == ASTRA_DISPLAY_FRAME_READ_SURFACE)
         ++display->surface_reads;
-    }
     display->submit_cycle = astra_now_cycles(s);
     ++display->submissions;
-    if (display->mailbox_enabled) {
-        qatomic_set(&display->mailbox_sequence,
-                    display->mailbox_sequence + 1u == 0u ?
-                        1u : display->mailbox_sequence + 1u);
-        qatomic_set(&display->mailbox->magic, ASTRA_DISPLAY_MAILBOX_MAGIC);
-        qatomic_set(&display->mailbox->version,
-                    ASTRA_DISPLAY_MAILBOX_VERSION_1_9);
-        qatomic_set(&display->mailbox->request_id, display->request_id);
-        qatomic_set(&display->mailbox->operation, operation);
-        qatomic_set(&display->mailbox->color_rgb565,
-                    display->request_source);
-        qatomic_set(&display->mailbox->frame_pitch,
-                    operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ?
-                        ASTRA_DISPLAY_WIDTH * 2u : 0u);
-        qatomic_set(&display->mailbox->frame_bytes,
-                    operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ?
-                        ASTRA_DISPLAY_MAILBOX_FRAME_BYTES :
-                    operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
-                    operation == ASTRA_DISPLAY_FRAME_READ_SURFACE ||
-                    operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE ?
-                        byte_size : 0u);
-        if (operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ||
-            operation == ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH ||
-            operation == ASTRA_DISPLAY_CURSOR_IMAGE_UPDATE ||
-            operation == ASTRA_DISPLAY_FRAME_READ_SURFACE) {
-            memcpy(display->payload,
-                   s->sdram + (display->request_source - ASTRA_SDRAM_BASE),
-                   operation == ASTRA_DISPLAY_FRAME_PRESENT_RGB565 ?
-                       ASTRA_DISPLAY_MAILBOX_FRAME_BYTES : source_bytes);
-            if (attachment != 0u)
-                astra_display_attachment_copy(
-                    s, attachment,
-                    display->payload);
-        }
-#if defined(__aarch64__)
-        /* The payload may be Normal non-cacheable memory the FPGA reads
-           over F2SDRAM, outside the CPUs' shareability domain: the stores
-           must be complete, not just ordered, before the helper can see the
-           request and ring the engine. */
-        asm volatile("dsb st" ::: "memory");
-#else
-        smp_wmb();
-#endif
-        qatomic_set(&display->mailbox->request_sequence,
-                    display->mailbox_sequence);
-        astra_display_wake_helper(display);
-#ifdef CONFIG_LINUX
-        qemu_event_set(&display->completion_armed);
+    running = display->request_count != 0u;
+    ++display->request_count;
+    if (!running) {
+        astra_display_start(s);
         return;
-#endif
     }
-    timer_mod_ns(display->service_timer,
-                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL_RT));
+    ++display->queued_submissions;
+    if (display->mailbox_enabled && attachment != 0u)
+        astra_display_attachment_stage(s, request);
 }
 
 #ifdef CONFIG_LINUX
@@ -1110,18 +1246,17 @@ static void astra_display_reset(Astra68State *s)
 
     if (display->service_timer)
         timer_del(display->service_timer);
-    display->busy = false;
-    display->completion_valid = false;
+    display->request_head = 0u;
+    display->request_count = 0u;
+    display->completion_head = 0u;
+    display->completion_count = 0u;
+    for (uint32_t slot = 0u; slot < ASTRA_DISPLAY_HOST_QUEUE_DEPTH; ++slot)
+        display->requests[slot].staged_valid = false;
     display->request_id = 0u;
     display->request_op = 0u;
     display->request_source = 0u;
     display->request_attachment = 0u;
-    display->completion_id = 0u;
-    display->completion_status = 0u;
-    display->completion_generation = 0u;
     display->operation = 0u;
-    display->read_source = 0u;
-    display->read_bytes = 0u;
     display->cursor_x = 0u;
     display->cursor_y = 0u;
     display->cursor_visible = 0u;
@@ -5445,7 +5580,7 @@ static uint32_t astra_pending_raw(Astra68State *s)
     if (s->vega.irq_status & s->vega.irq_enable) {
         pending |= 1u << IRQ_SOURCE_VEGA;
     }
-    if (s->astraea.irq_status & s->astraea.irq_enable) {
+    if (astra_astraea_irq_status(s) & s->astraea.irq_enable) {
         pending |= 1u << IRQ_SOURCE_ASTRAEA;
     }
     if (s->ohci.present &&
@@ -5733,7 +5868,7 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     case 0x1b0:
         return astra_block_present(s) ? BLOCK_MAX_SECTORS : 0;
     case 0x1d4: return ASTRA_DISPLAY_HOST_ID_MAGIC;
-    case 0x1d8: return ASTRA_DISPLAY_HOST_VERSION_1_0;
+    case 0x1d8: return ASTRA_DISPLAY_HOST_VERSION_1_1;
     case 0x1dc:
         return ASTRA_DISPLAY_HOST_CAP_SOLID_FRAME |
                ASTRA_DISPLAY_HOST_CAP_FENCED_PRESENT |
@@ -5746,14 +5881,14 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     case 0x1e8: return s->display.request_op;
     case 0x1ec: return s->display.request_source;
     case 0x1f4:
-        return s->display.completion_valid ?
-               s->display.completion_id : 0u;
+        return astra_display_completion(&s->display) != NULL ?
+               astra_display_completion(&s->display)->id : 0u;
     case 0x1f8:
-        return s->display.completion_valid ?
-               s->display.completion_status : 0u;
+        return astra_display_completion(&s->display) != NULL ?
+               astra_display_completion(&s->display)->status : 0u;
     case 0x1fc:
-        return s->display.completion_valid ?
-               s->display.completion_generation : 0u;
+        return astra_display_completion(&s->display) != NULL ?
+               astra_display_completion(&s->display)->generation : 0u;
     case 0x300: return astra_pending_raw(s);
     case 0x304: return s->irq_enable;
     case 0x308: return s->irq_soft;
@@ -5972,8 +6107,12 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
         if (value & ASTRA_DISPLAY_HOST_RESET) {
             astra_display_reset(s);
         } else {
-            if (value & ASTRA_DISPLAY_HOST_POP) {
-                s->display.completion_valid = false;
+            if ((value & ASTRA_DISPLAY_HOST_POP) &&
+                s->display.completion_count != 0u) {
+                s->display.completion_head =
+                    (s->display.completion_head + 1u) %
+                    ASTRA_DISPLAY_HOST_QUEUE_DEPTH;
+                --s->display.completion_count;
                 s->display.collect_cycle = astra_now_cycles(s);
             }
             if (value & ASTRA_DISPLAY_HOST_SUBMIT)
@@ -6227,7 +6366,7 @@ static uint32_t astra_astraea_read32(Astra68State *s, hwaddr offset)
     case 0x000: return 0x41535452;
     case 0x004: return 0x00040000;
     case 0x010: return a->irq_enable;
-    case 0x014: return a->irq_status;
+    case 0x014: return astra_astraea_irq_status(s);
     case 0x018: return 0x000000ff;
     case 0x040: return a->src;
     case 0x044: return a->dst;
@@ -6938,6 +7077,10 @@ static void astra68_init(MachineState *machine)
     object_property_add_uint64_ptr(OBJECT(machine),
                                    "astra-display-surface-reads",
                                    &s->display.surface_reads,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-queued-submissions",
+                                   &s->display.queued_submissions,
                                    OBJ_PROP_FLAG_READ);
     object_property_add_uint64_ptr(OBJECT(machine),
                                    "astra-display-cursor-x",

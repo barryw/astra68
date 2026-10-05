@@ -9,7 +9,9 @@
  * through astra_render_builder_replay. See docs/MANAGED_GRAPHICS.md.
  */
 #define ASTRA_DRAW_LIST_MAGIC UINT32_C(0x41444c54) /* ADLT */
-#define ASTRA_DRAW_LIST_VERSION_1_5 UINT32_C(0x00010005)
+/* 1.6: TARGET changes the destination of the commands after it, so one
+   list carries a whole frame for several destinations. */
+#define ASTRA_DRAW_LIST_VERSION_1_6 UINT32_C(0x00010006)
 #define ASTRA_DRAW_LIST_HEADER_BYTES 64u
 #define ASTRA_DRAW_LIST_COMMAND_BYTES 64u
 /* A retained window list is one fixed 16 KiB area of 128 commands. */
@@ -39,6 +41,11 @@ enum {
     /* payload: n AstraDrawListSegment in the one color, each a LINE with
        the command's clip and blend field. */
     ASTRA_DRAW_LIST_LINES = 9u,
+    /* The commands after it draw into surface `source` (never
+       SOURCE_DESTINATION) of width x height; its clip is that whole
+       surface, its other fields zero. The list's own destination is the
+       first one's. */
+    ASTRA_DRAW_LIST_TARGET = 10u,
 };
 
 /* Command flags. TEXT and MONO_TEXT use ASTRA_TEXT_RENDER_STYLE_*. */

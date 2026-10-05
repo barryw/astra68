@@ -24,8 +24,15 @@ typedef struct Call {
 
 static Call calls[64];
 static int call_count;
-static int submits;
-static int resets;
+/* Posted frames: how many, the last one's flags, the last destination
+   the list was pointed at, and the posts seen when uploads and reads
+   happened -- what was drawn before them must reach the service first. */
+static int posts;
+static uint32_t last_post_flags;
+static const AstraSurface *last_target;
+static int targets;
+static int posts_at_write;
+static int posts_at_read;
 static int errors;
 static int lists_created;
 static int surfaces_created;
@@ -152,6 +159,7 @@ AstraResult astra_surface_write(AstraDisplay *display,
     (void)surface;
     assert(pixels != NULL);
     ++writes;
+    posts_at_write = posts;
     last_write = *rect;
     last_write_pitch = pitch;
     return ASTRA_OK;
@@ -171,10 +179,19 @@ AstraResult astra_draw_list_close(AstraDrawList *list)
     *list = (AstraDrawList)ASTRA_DRAW_LIST_INIT;
     return ASTRA_OK;
 }
-AstraResult astra_draw_list_reset(AstraDrawList *list)
+AstraResult astra_draw_list_set_target(AstraDrawList *list,
+                                       const AstraSurface *destination)
 {
-    (void)list;
-    ++resets;
+    assert(list->_private_handle == 11u);
+    last_target = destination;
+    ++targets;
+    return ASTRA_OK;
+}
+AstraResult astra_draw_post(AstraDrawList *list, uint32_t flags)
+{
+    assert(list->_private_handle == 11u);
+    last_post_flags = flags;
+    ++posts;
     return ASTRA_OK;
 }
 static void record(Call call)
@@ -278,28 +295,10 @@ AstraResult astra_surface_read(AstraDisplay *display,
     (void)display;
     assert(pixels != NULL);
     ++reads;
+    posts_at_read = posts;
     last_read = *rect;
     last_read_pitch = pitch;
     last_read_surface = surface;
-    return ASTRA_OK;
-}
-AstraResult astra_draw_submit(AstraDrawList *list, AstraFence *fence)
-{
-    (void)list;
-    ++submits;
-    fence->_private_handle = 13u;
-    return ASTRA_OK;
-}
-AstraResult astra_fence_close(AstraFence *fence)
-{
-    fence->_private_handle = ASTRA_INVALID_HANDLE;
-    return ASTRA_OK;
-}
-static int discarding_presents;
-AstraResult astra_window_present_discard(AstraWindow *window)
-{
-    (void)window;
-    ++discarding_presents;
     return ASTRA_OK;
 }
 static uint32_t window_event_mask;
@@ -384,10 +383,13 @@ int main(void)
     assert(hint_value != NULL && strcmp(hint_value, "2") == 0);
     assert(renderer.QueueGeometry == ASTRA_QueueGeometry &&
            renderer.SetTextureScaleMode == ASTRA_SetTextureScaleMode);
-    /* SDL's backbuffer is undefined after a present: the renderer says so,
-       and the display service carries nothing forward. */
-    assert(renderer.RenderPresent(&renderer) == 0 &&
-           discarding_presents == 1);
+    /* A present posts the frame and does not wait for it. SDL's backbuffer
+       is undefined after a present: the renderer says so, and the display
+       service carries nothing forward. */
+    assert(renderer.RenderPresent(&renderer) == 0 && posts == 1 &&
+           lists_created == 1 &&
+           last_post_flags == (ASTRA_DRAW_POST_PRESENT |
+                               ASTRA_DRAW_POST_DISCARD));
     /* Without vsync a present does not wait. */
     assert(vblank_waits == 0 &&
            (renderer.info.flags & SDL_RENDERER_PRESENTVSYNC) == 0u);
@@ -449,7 +451,11 @@ int main(void)
            calls[1].rect.x == 10 && calls[1].rect.y == 20 &&
            calls[1].blend == ASTRA_BLEND_ALPHA &&
            calls[1].color.alpha == 128);
-    assert(submits == 1 && resets == 1 && lists_created == 1);
+    /* A flush appends to the frame, into the current target; nothing is
+       sent until something must follow it. */
+    assert(posts == 3 && lists_created == 2 && targets == 1 &&
+           last_target == &((ASTRA_RenderData *)
+                                renderer.driverdata)->content);
 
     /* Clear ignores viewport and clip. */
     cmd = command(SDL_RENDERCMD_CLEAR);
@@ -601,7 +607,15 @@ int main(void)
     assert(ASTRA_LockTexture(&renderer, &texture,
                              &(SDL_Rect){ 4, 2, 8, 3 }, &pixels, &pitch) ==
            0 && pitch == 128);
-    ASTRA_UnlockTexture(&renderer, &texture);
+    {
+        int before = posts;
+
+        ASTRA_UnlockTexture(&renderer, &texture);
+        /* What the frame drew so far was posted first, without a present:
+           draws queued before the upload see the texture as it was. */
+        assert(posts == before + 1 && posts_at_write == before + 1 &&
+               last_post_flags == 0u);
+    }
     assert(writes == 1 && last_write.x == 4 && last_write.y == 2 &&
            last_write.width == 8u && last_write.height == 3u &&
            last_write_pitch == 128u);
@@ -741,7 +755,9 @@ int main(void)
        another format is converted by SDL from a staged copy. */
     assert(ASTRA_RenderReadPixels(&renderer, &(SDL_Rect){ 1, 2, 3, 4 },
                                   SDL_PIXELFORMAT_RGB565, pixels, 99) == 0);
-    assert(reads == 1 && last_read_pitch == 99u && last_read.x == 1 &&
+    assert(reads == 1 && posts_at_read == posts &&
+           ((ASTRA_RenderData *)renderer.driverdata)->list_pending == 0 &&
+           last_read_pitch == 99u && last_read.x == 1 &&
            last_read.height == 4u &&
            last_read_surface == &((ASTRA_RenderData *)
                                       renderer.driverdata)->content);

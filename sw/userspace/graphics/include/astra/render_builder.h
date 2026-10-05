@@ -24,6 +24,9 @@ typedef enum AstraRenderReplayResult {
     ASTRA_RENDER_REPLAY_DONE = 1,
     /* The batch is full: flush it and resume at *next in a new batch. */
     ASTRA_RENDER_REPLAY_FULL = 2,
+    /* *next is a TARGET command: replay what follows it into its surface,
+       from *next + 1, in this batch or another. */
+    ASTRA_RENDER_REPLAY_TARGET = 3,
 } AstraRenderReplayResult;
 
 typedef struct AstraRenderBuilder AstraRenderBuilder;

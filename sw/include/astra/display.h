@@ -185,7 +185,10 @@ _Static_assert(sizeof(AstraDisplaySurfaceRead) ==
  */
 /** @cond ASTRA_INTERNAL */
 #define ASTRA_DISPLAY_HOST_ID_MAGIC       UINT32_C(0x44504c59) /* DPLY */
-#define ASTRA_DISPLAY_HOST_VERSION_1_0    UINT32_C(0x00010000)
+/* 1.1: the device holds ASTRA_DISPLAY_HOST_QUEUE_DEPTH requests; DISPLAY_QUEUE
+   counts them and the submits it accepted, and CPL_* are the oldest of a
+   FIFO of completions that POP advances. */
+#define ASTRA_DISPLAY_HOST_VERSION_1_1    UINT32_C(0x00010001)
 #define ASTRA_DISPLAY_HOST_CAP_SOLID_FRAME    (UINT32_C(1) << 0)
 #define ASTRA_DISPLAY_HOST_CAP_FENCED_PRESENT (UINT32_C(1) << 1)
 #define ASTRA_DISPLAY_HOST_CAP_RENDER_BATCH   (UINT32_C(1) << 2)
@@ -229,9 +232,27 @@ _Static_assert(sizeof(AstraDisplaySurfaceRead) ==
 #define ASTRA_DISPLAY_HOST_OPERATION_MASK UINT32_C(0xff)
 #define ASTRA_DISPLAY_HOST_BYTE_SIZE_SHIFT 8u
 #define ASTRA_DISPLAY_HOST_BYTE_SIZE_MAX UINT32_C(0x00ffffff)
+/*
+ * DISPLAY_QUEUE. A request holds one of the device's DEPTH slots from the
+ * submit that is accepted until its completion is popped: BUSY while one
+ * runs, HELD the slots in use, REQUEST_READY while one is free,
+ * COMPLETION_VALID while a completion waits in CPL_*, and ACCEPTED counts
+ * accepted submits modulo 256, so a submitter tells its own acceptance from
+ * an earlier request's progress. The device raises Astraea DRAW_DONE while
+ * any completion waits.
+ */
+#define ASTRA_DISPLAY_HOST_QUEUE_DEPTH            2u
 #define ASTRA_DISPLAY_HOST_QUEUE_BUSY             (UINT32_C(1) << 0)
+#define ASTRA_DISPLAY_HOST_QUEUE_HELD_SHIFT       4u
+#define ASTRA_DISPLAY_HOST_QUEUE_HELD_MASK        UINT32_C(0x000000f0)
 #define ASTRA_DISPLAY_HOST_QUEUE_REQUEST_READY    (UINT32_C(1) << 8)
 #define ASTRA_DISPLAY_HOST_QUEUE_COMPLETION_VALID (UINT32_C(1) << 20)
+#define ASTRA_DISPLAY_HOST_QUEUE_ACCEPTED_SHIFT   24u
+#define ASTRA_DISPLAY_HOST_QUEUE_HELD(queue) \
+    (((uint32_t)(queue) & ASTRA_DISPLAY_HOST_QUEUE_HELD_MASK) >> \
+     ASTRA_DISPLAY_HOST_QUEUE_HELD_SHIFT)
+#define ASTRA_DISPLAY_HOST_QUEUE_ACCEPTED(queue) \
+    ((uint32_t)(queue) >> ASTRA_DISPLAY_HOST_QUEUE_ACCEPTED_SHIFT)
 #define ASTRA_DISPLAY_HOST_SUBMIT UINT32_C(1)
 #define ASTRA_DISPLAY_HOST_POP    UINT32_C(2)
 #define ASTRA_DISPLAY_HOST_RESET  UINT32_C(4)

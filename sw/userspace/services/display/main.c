@@ -31,7 +31,6 @@
     (ASTRA_DISPLAY_WIDTH * (DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP) * 2u)
 #define DISPLAY_CONTENT_BANKS 3u
 #define DISPLAY_CONTENT_NONE 0xffu
-#define DISPLAY_IRQ_DRAIN_MAX 8u
 #define DISPLAY_INPUT_QUEUE 8u
 #define DISPLAY_DOUBLE_CLICK_MS 500u
 #define DISPLAY_DOUBLE_CLICK_DISTANCE 4
@@ -210,6 +209,9 @@ typedef struct DisplayState {
     uint8_t scene_active;
     uint8_t scene_pending;
     uint8_t scene_valid;
+    /* A posted present waits to be composed until no message is ready, so
+       presents that arrive together compose once. */
+    uint8_t compose_deferred;
     uint8_t system_initialized;
     uint8_t system_pending;
     uint8_t overlay;
@@ -2318,47 +2320,83 @@ static void log_builder_failure(uint32_t failure)
 
 static uint32_t last_builder_failure;
 
-/* The device runs one request at a time, in submission order. A render-only
-   batch is left running when its client is answered, so the client's next
-   frame overlaps the hardware; it is collected before the device or the
-   batch buffer is next used. */
-static struct {
-    uint32_t active;
+/*
+ * The device holds ASTRA_DISPLAY_HOST_QUEUE_DEPTH requests and runs them in
+ * submission order, so building the next batch never waits for the last
+ * one to finish: each request holds the batch buffer it was built in, and
+ * a buffer is waited for only when it is needed again while its request
+ * still runs. A render-only batch is left running when its client is
+ * answered, and a present when its frame is committed (PRESENTATION.md:
+ * every later request runs after it).
+ */
+enum {
+    REQUEST_CLIENT,  /* a client's render-only batch or upload */
+    REQUEST_COMPOSE, /* the compositor's present */
+    REQUEST_WAITED,  /* collected by the submitter itself */
+};
+
+typedef struct InFlightRequest {
     uint32_t fence;
+    uint8_t buffer; /* DISPLAY_NO_BUFFER for none */
+    uint8_t kind;
+    /* REQUEST_COMPOSE: the scene that was active before it. */
+    uint8_t previous_scene;
+    uint8_t reserved;
+} InFlightRequest;
+
+#define DISPLAY_BATCH_BUFFERS 2u
+#define DISPLAY_NO_BUFFER 0xffu
+
+static struct {
+    InFlightRequest entry[ASTRA_DISPLAY_HOST_QUEUE_DEPTH];
+    uint32_t head;
+    uint32_t count;
+    /* Whose frame a refused present was. */
+    DisplayState *state;
 } in_flight;
 
-static uint32_t collect_request(uint32_t device, uint32_t irq)
+static void present_refused(DisplayState *state,
+                            const InFlightRequest *request);
+
+/* Collects the oldest request in flight; its own failure is returned. */
+static uint32_t collect_oldest(uint32_t device, uint32_t irq,
+                               InFlightRequest *collected)
 {
     AstraDisplayFrameCompletion completion;
     uint32_t status;
 
-    in_flight.active = 0u;
+    *collected = in_flight.entry[in_flight.head];
     for (;;) {
-        status = astra_wait_one(irq, ASTRA_DEADLINE_FOREVER, NULL);
-        if (status != ASTRA_SYSCALL_OK) {
-            (void)astra_log_failure("display completion wait", status);
-            return DISPLAY_FAIL_WAIT;
-        }
         status = astra_display_collect(device, &completion);
         if (status == ASTRA_SYSCALL_OK)
             break;
         if (status != ASTRA_SYSCALL_WOULD_BLOCK)
             return DISPLAY_FAIL_COMPLETION;
-    }
-    for (uint32_t drained = 0u; drained < DISPLAY_IRQ_DRAIN_MAX; ++drained) {
-        AstraIrqRecord record;
+        status = astra_wait_one(irq, ASTRA_DEADLINE_FOREVER, NULL);
+        if (status != ASTRA_SYSCALL_OK) {
+            (void)astra_log_failure("display completion wait", status);
+            return DISPLAY_FAIL_WAIT;
+        }
+        /* The record says a completion is waiting. DRAW_DONE stands while
+           any completion is uncollected, so acknowledging it records the
+           next one at once if the device holds more: one record per wait,
+           then collect again. */
+        {
+            AstraIrqRecord record;
 
-        status = astra_irq_read(irq, &record, NULL);
-        if (status == ASTRA_SYSCALL_WOULD_BLOCK)
-            break;
-        if (status != ASTRA_SYSCALL_OK ||
-            astra_irq_ack(irq, record.sequence) != ASTRA_SYSCALL_OK)
-            return DISPLAY_FAIL_IRQ;
-        if (drained + 1u == DISPLAY_IRQ_DRAIN_MAX)
-            return DISPLAY_FAIL_IRQ;
+            status = astra_irq_read(irq, &record, NULL);
+            if (status != ASTRA_SYSCALL_OK &&
+                status != ASTRA_SYSCALL_WOULD_BLOCK)
+                return DISPLAY_FAIL_IRQ;
+            if (status == ASTRA_SYSCALL_OK &&
+                astra_irq_ack(irq, record.sequence) != ASTRA_SYSCALL_OK)
+                return DISPLAY_FAIL_IRQ;
+        }
     }
+    in_flight.head = (in_flight.head + 1u) % ASTRA_DISPLAY_HOST_QUEUE_DEPTH;
+    --in_flight.count;
     if (completion.size != ASTRA_DISPLAY_FRAME_COMPLETION_SIZE ||
-        completion.fence != in_flight.fence || completion.reserved != 0u)
+        completion.fence != collected->fence || completion.reserved != 0u)
         return DISPLAY_FAIL_COMPLETION;
     if (completion.status != ASTRA_DISPLAY_COMPLETION_OK) {
         (void)astra_log_failure("display request refused by the device",
@@ -2370,35 +2408,63 @@ static uint32_t collect_request(uint32_t device, uint32_t irq)
     return ASTRA_STATUS_OK;
 }
 
-/* Collects the request still running, if any. Its failure is this call's:
-   the client it answered has already been told it was accepted. */
-static uint32_t settle(uint32_t device, uint32_t irq)
+/* Collects the oldest request for someone who did not wait for it. A
+   refusal is that request's alone: the client it answered lost that frame,
+   or a refused present is redrawn by the next one. */
+static uint32_t retire_oldest(uint32_t device, uint32_t irq)
 {
-    uint32_t status;
+    InFlightRequest request;
+    uint32_t status = collect_oldest(device, irq, &request);
 
-    if (in_flight.active == 0u)
-        return ASTRA_STATUS_OK;
-    status = collect_request(device, irq);
-    /* The batch in flight is a client's drawing: the client lost that
-       frame, and nothing else did. */
     if (status == DISPLAY_REQUEST_REFUSED) {
-        (void)astra_log("display dropped a client render the device "
-                        "refused");
+        if (request.kind == REQUEST_COMPOSE)
+            present_refused(in_flight.state, &request);
+        else
+            (void)astra_log("display dropped a client render the device "
+                            "refused");
         return ASTRA_STATUS_OK;
     }
     if (status != ASTRA_STATUS_OK)
-        (void)astra_log_failure("display render-only batch", status);
+        (void)astra_log_failure("display request in flight", status);
     return status;
+}
+
+/* A batch buffer no request in flight still uses. */
+static uint32_t batch_buffer(uint32_t device, uint32_t irq, uint32_t *index)
+{
+    for (;;) {
+        uint32_t used = 0u;
+
+        for (uint32_t at = 0u; at < in_flight.count; ++at) {
+            uint8_t buffer = in_flight.entry[
+                (in_flight.head + at) % ASTRA_DISPLAY_HOST_QUEUE_DEPTH].buffer;
+
+            if (buffer != DISPLAY_NO_BUFFER)
+                used |= 1u << buffer;
+        }
+        for (uint32_t buffer = 0u; buffer < DISPLAY_BATCH_BUFFERS; ++buffer)
+            if ((used & (1u << buffer)) == 0u) {
+                *index = buffer;
+                return ASTRA_STATUS_OK;
+            }
+        uint32_t status = retire_oldest(device, irq);
+
+        if (status != ASTRA_STATUS_OK)
+            return status;
+    }
 }
 
 static uint32_t start_request(uint32_t device, uint32_t irq,
                               const AstraDisplayFrameRequest *request,
-                              uint32_t *armed)
+                              InFlightRequest held, uint32_t *armed)
 {
-    uint32_t status = settle(device, irq);
+    uint32_t status;
 
-    if (status != ASTRA_STATUS_OK)
-        return status;
+    while (in_flight.count == ASTRA_DISPLAY_HOST_QUEUE_DEPTH) {
+        status = retire_oldest(device, irq);
+        if (status != ASTRA_STATUS_OK)
+            return status;
+    }
     if (*armed == 0u) {
         if (astra_irq_arm(irq) != ASTRA_SYSCALL_OK)
             return DISPLAY_FAIL_ARM;
@@ -2409,25 +2475,34 @@ static uint32_t start_request(uint32_t device, uint32_t irq,
         (void)astra_log_failure("display submit syscall", status);
         return DISPLAY_FAIL_SUBMIT;
     }
-    in_flight.active = 1u;
-    in_flight.fence = request->fence;
+    held.fence = request->fence;
+    in_flight.entry[(in_flight.head + in_flight.count) %
+                    ASTRA_DISPLAY_HOST_QUEUE_DEPTH] = held;
+    ++in_flight.count;
     return ASTRA_STATUS_OK;
 }
 
+/* Submits @p request and waits for its own completion, retiring the
+   requests ahead of it on the way. */
 static uint32_t submit_request(uint32_t device, uint32_t irq,
                                const AstraDisplayFrameRequest *request,
-                               uint32_t *armed)
+                               uint8_t buffer, uint32_t *armed)
 {
-    uint32_t status = start_request(device, irq, request, armed);
+    InFlightRequest held = { .buffer = buffer, .kind = REQUEST_WAITED };
+    uint32_t status = start_request(device, irq, request, held, armed);
 
-    return status == ASTRA_STATUS_OK ? collect_request(device, irq) : status;
+    while (status == ASTRA_STATUS_OK && in_flight.count > 1u)
+        status = retire_oldest(device, irq);
+    return status == ASTRA_STATUS_OK ? collect_oldest(device, irq, &held) :
+                                       status;
 }
 
 /* One DMA-buffer request: a render batch, or a READ_SURFACE whose rows the
    device writes back into the same buffer. */
 static uint32_t submit_buffer(uint32_t device, uint32_t irq,
-                              const AstraDmaBufferInfo *buffer,
-                              uint32_t operation, uint32_t byte_size,
+                              const AstraDmaBufferInfo *buffers,
+                              uint32_t buffer, uint32_t operation,
+                              uint32_t byte_size,
                               const DisplayGraphicsAttachment *attachment,
                               uint32_t fence, uint32_t *armed, int wait)
 {
@@ -2435,7 +2510,7 @@ static uint32_t submit_buffer(uint32_t device, uint32_t irq,
         .size = ASTRA_DISPLAY_FRAME_REQUEST_SIZE,
         .operation = operation,
         .fence = fence,
-        .source = buffer->handle,
+        .source = buffers[buffer].handle,
         .pitch = 0u,
         .byte_size = byte_size,
     };
@@ -2446,18 +2521,12 @@ static uint32_t submit_buffer(uint32_t device, uint32_t irq,
         request.attachment_bytes = attachment->bytes;
         request.attachment_target = attachment->target;
     }
-
-    return wait ? submit_request(device, irq, &request, armed) :
-                  start_request(device, irq, &request, armed);
-}
-
-static uint32_t present(uint32_t device, uint32_t irq,
-                        const AstraDmaBufferInfo *buffer, uint32_t byte_size,
-                        uint32_t fence, uint32_t *armed)
-{
-    return submit_buffer(device, irq, buffer,
-                         ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH, byte_size,
-                         NULL, fence, armed, 1);
+    return wait ?
+        submit_request(device, irq, &request, (uint8_t)buffer, armed) :
+        start_request(device, irq, &request,
+                      (InFlightRequest){ .buffer = (uint8_t)buffer,
+                                         .kind = REQUEST_CLIENT },
+                      armed);
 }
 
 /* The cursor at the pointer's position, in @p shape: a posted write that
@@ -2511,7 +2580,8 @@ static uint32_t update_cursor_image(
         .pitch = 0u,
         .byte_size = sizeof(*image),
     };
-    status = submit_request(device, irq, &request, armed);
+    /* The cursor image buffer is its own; it holds no batch buffer. */
+    status = submit_request(device, irq, &request, DISPLAY_NO_BUFFER, armed);
     if (status == ASTRA_STATUS_OK && ++*fence == 0u)
         *fence = 1u;
     return status;
@@ -2567,21 +2637,79 @@ static void commit_render_state(DisplayState *state)
     }
 }
 
+/*
+ * A present the device refused, found when it was collected. Its state was
+ * committed when it was submitted -- later requests were already built on
+ * it -- so the next frame redraws everything: the screen, every window
+ * cache, and the content banks that frame should have brought up to date.
+ * Its scene was never shown; when no later present was built on it, the
+ * one before it is still the active one.
+ */
+static void present_refused(DisplayState *state,
+                            const InFlightRequest *request)
+{
+    int later = 0;
+
+    (void)astra_log("display present refused; redrawing the screen");
+    for (uint32_t at = 0u; at < in_flight.count; ++at)
+        later |= in_flight.entry[(in_flight.head + at) %
+                                 ASTRA_DISPLAY_HOST_QUEUE_DEPTH].kind ==
+                 REQUEST_COMPOSE;
+    if (!later) {
+        state->scene_valid = request->previous_scene != DISPLAY_NO_BUFFER;
+        state->scene_active = state->scene_valid != 0u ?
+                              request->previous_scene : 0u;
+    }
+    state->damage[0] = state->damage[1] = (DamageRect){
+        0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u };
+    for (uint32_t index = 0u; index < state->count; ++index) {
+        DisplayWindow *window = &state->windows[index];
+        DamageRect whole = { 0, 0, window->request.width,
+                             window->request.height, 1u };
+
+        window->cache_dirty[0] = window->cache_dirty[1] = 1u;
+        for (uint32_t bank = 0u; bank < DISPLAY_CONTENT_BANKS; ++bank)
+            if (bank != window->content_front)
+                window->content_stale[bank] = whole;
+    }
+}
+
 static uint32_t render(uint32_t device, uint32_t irq,
                        AstraDmaBufferInfo *framebuffer, DisplayState *state,
                        uint32_t *next_fence, uint32_t *armed)
 {
-    uint32_t compose_status = settle(device, irq);
+    uint32_t buffer = 0u;
+    uint32_t compose_status = batch_buffer(device, irq, &buffer);
+    uint32_t bytes;
+    uint32_t status;
 
     last_builder_failure = ASTRA_RENDER_BUILDER_FAILURE_NONE;
     if (compose_status != ASTRA_STATUS_OK)
         return compose_status;
-    uint32_t bytes = compose((void *)(uintptr_t)framebuffer->virtual_base,
-                             *next_fence, state, &compose_status,
-                             &last_builder_failure);
-    uint32_t status = bytes == 0u ? compose_status :
-        present(device, irq, framebuffer, bytes, *next_fence, armed);
+    bytes = compose((void *)(uintptr_t)framebuffer[buffer].virtual_base,
+                    *next_fence, state, &compose_status,
+                    &last_builder_failure);
+    if (bytes == 0u)
+        return compose_status;
+    {
+        AstraDisplayFrameRequest request = {
+            .size = ASTRA_DISPLAY_FRAME_REQUEST_SIZE,
+            .operation = ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH,
+            .fence = *next_fence,
+            .source = framebuffer[buffer].handle,
+            .byte_size = bytes,
+        };
+        InFlightRequest held = {
+            .buffer = (uint8_t)buffer,
+            .kind = REQUEST_COMPOSE,
+            .previous_scene = state->scene_valid != 0u ?
+                              state->scene_active : DISPLAY_NO_BUFFER,
+        };
 
+        status = start_request(device, irq, &request, held, armed);
+    }
+    /* Committed now, not when the device finishes: everything submitted
+       after this runs after it (PRESENTATION.md, Bank retirement). */
     if (status == ASTRA_STATUS_OK) {
         ++*next_fence;
         commit_render_state(state);
@@ -4064,6 +4192,8 @@ typedef struct GraphicsHostContext {
     AstraDmaBufferInfo *framebuffer;
     DisplayState *state;
     uint32_t *armed;
+    /* The batch buffer storage() last handed out. */
+    uint32_t buffer;
 } GraphicsHostContext;
 
 static uint32_t graphics_allocate(void *context, uint32_t bytes)
@@ -4086,8 +4216,8 @@ static uint32_t graphics_request(void *context, uint32_t operation,
     if (++fence >= UINT32_C(0x80000000))
         fence = UINT32_C(0x40000001);
     return submit_buffer(host->device, host->irq, host->framebuffer,
-                         operation, bytes, attachment, fence, host->armed,
-                         wait);
+                         host->buffer, operation, bytes, attachment, fence,
+                         host->armed, wait);
 }
 
 static uint32_t graphics_submit(void *context, uint32_t bytes,
@@ -4105,23 +4235,25 @@ static uint32_t graphics_read(void *context, uint32_t bytes)
 
 static uint32_t graphics_storage(void *context, void **storage)
 {
-    const GraphicsHostContext *host = context;
-    uint32_t status = settle(host->device, host->irq);
+    GraphicsHostContext *host = context;
+    uint32_t status = batch_buffer(host->device, host->irq, &host->buffer);
 
-    *storage = (void *)(uintptr_t)host->framebuffer->virtual_base;
+    *storage = (void *)(uintptr_t)host->framebuffer[host->buffer].virtual_base;
     return status;
 }
 
-static void receive_graphics(uint32_t device, uint32_t irq,
-                             AstraDmaBufferInfo *framebuffer,
-                             DisplayState *state, uint32_t window_index,
-                             const AstraGuiGraphicsCommand *command,
-                             uint32_t size, uint32_t *handles,
-                             uint32_t handle_count, uint32_t *armed)
+/* Returns the ASTRA_GUI_FRAME_* flags of a posted frame that was drawn,
+   or zero. */
+static uint32_t receive_graphics(uint32_t device, uint32_t irq,
+                                 AstraDmaBufferInfo *framebuffer,
+                                 DisplayState *state, uint32_t window_index,
+                                 const AstraGuiGraphicsCommand *command,
+                                 uint32_t size, uint32_t *handles,
+                                 uint32_t handle_count, uint32_t *armed)
 {
     DisplayWindow *window = &state->windows[window_index];
     GraphicsHostContext context = {
-        device, irq, framebuffer, state, armed
+        device, irq, framebuffer, state, armed, 0u
     };
     DisplayGraphicsHost host = {
         .context = &context,
@@ -4149,6 +4281,17 @@ static void receive_graphics(uint32_t device, uint32_t irq,
         reply.object = 0u;
         reply.pitch = 0u;
     }
+    if (command->action == ASTRA_GUI_GRAPHICS_FRAME) {
+        /* Posted: nobody waits for an answer. */
+        for (uint32_t index = 0u; index < handle_count; ++index)
+            if (handles[index] != 0u)
+                (void)astra_close(handles[index]);
+        if (status != ASTRA_STATUS_OK) {
+            (void)astra_log_failure("display dropped a posted frame", status);
+            return 0u;
+        }
+        return command->flags;
+    }
     astra_message_header_set(&reply.header, sizeof(reply),
                              ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
                              ASTRA_GUI_GRAPHICS_REPLY,
@@ -4159,6 +4302,31 @@ static void receive_graphics(uint32_t device, uint32_t irq,
     for (uint32_t index = 0u; index < handle_count; ++index)
         if (handles[index] != 0u)
             (void)astra_close(handles[index]);
+    return 0u;
+}
+
+/* A posted frame's present: WINDOW_PRESENT's, without its reply or STATE
+   event -- nothing about the window changed -- and composed once no
+   message is ready (serve_windows). */
+static void frame_present(DisplayState *state, uint32_t window_index,
+                          uint32_t flags)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraGuiWindowCommand present = {
+        .window = state->windows[window_index].id,
+        .action = ASTRA_GUI_WINDOW_PRESENT,
+        .flags = (flags & ASTRA_GUI_FRAME_DISCARD) != 0u ?
+                 ASTRA_GUI_PRESENT_DISCARD : 0u,
+    };
+    DisplayWindow closed = {0};
+    int changed = 0;
+    uint32_t status = apply_command(state, &theme, &present, &closed,
+                                    &changed);
+
+    if (status != ASTRA_STATUS_OK)
+        (void)astra_log_failure("display posted present", status);
+    else if (changed)
+        state->compose_deferred = 1u;
 }
 
 static void receive_command(uint32_t device, uint32_t irq,
@@ -4221,9 +4389,12 @@ static void receive_command(uint32_t device, uint32_t irq,
         return;
     if (size >= ASTRA_MESSAGE_HEADER_SIZE &&
         message.graphics.header.operation == ASTRA_GUI_GRAPHICS_COMMAND) {
-        receive_graphics(device, irq, framebuffer, state, window_index,
-                         &message.graphics, size, handles, handle_count,
-                         armed);
+        uint32_t frame = receive_graphics(
+            device, irq, framebuffer, state, window_index,
+            &message.graphics, size, handles, handle_count, armed);
+
+        if ((frame & ASTRA_GUI_FRAME_PRESENT) != 0u)
+            frame_present(state, window_index, frame);
         return;
     }
     command = message.window;
@@ -4685,6 +4856,7 @@ static void serve_windows(uint32_t device, uint32_t irq,
     uint32_t armed = 0u;
     uint32_t first_wait = 0u;
 
+    in_flight.state = &state;
     if (astra_irq_arm(vblank_irq) != ASTRA_SYSCALL_OK)
         astra_process_exit(DISPLAY_FAIL_ARM);
     for (;;) {
@@ -4697,8 +4869,21 @@ static void serve_windows(uint32_t device, uint32_t irq,
         uint32_t status;
 
         status = astra_wait_multiple(waits, wait_count,
-                                     ASTRA_DEADLINE_FOREVER,
+                                     state.compose_deferred != 0u ?
+                                         0u : ASTRA_DEADLINE_FOREVER,
                                      &selected, NULL);
+        if (state.compose_deferred != 0u &&
+            selected == ASTRA_WAIT_INDEX_NONE) {
+            /* Every posted present that arrived together, in one frame. */
+            state.compose_deferred = 0u;
+            status = render_window_change(device, irq, framebuffer,
+                                          pointer_buffer, &state,
+                                          &next_fence, &cursor_fence,
+                                          &armed);
+            if (status != ASTRA_STATUS_OK)
+                render_failure("display posted present failed", status);
+            continue;
+        }
         if (selected >= wait_count ||
             (status != ASTRA_SYSCALL_OK &&
              !display_wait_client_ended(&state, sources[selected],
@@ -4784,7 +4969,7 @@ static void serve_windows(uint32_t device, uint32_t irq,
 
 int astra_main(const AstraStartupInfo *startup)
 {
-    AstraDmaBufferInfo framebuffer;
+    AstraDmaBufferInfo framebuffer[DISPLAY_BATCH_BUFFERS];
     AstraDmaBufferInfo pointer_buffer;
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *device;
@@ -4813,7 +4998,12 @@ int astra_main(const AstraStartupInfo *startup)
         vblank_irq == NULL ||
         input_service == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
-    status = astra_dma_create(ASTRA_RENDER_BUILDER_BYTES, &framebuffer);
+    status = ASTRA_SYSCALL_OK;
+    for (uint32_t buffer = 0u;
+         status == ASTRA_SYSCALL_OK && buffer < DISPLAY_BATCH_BUFFERS;
+         ++buffer)
+        status = astra_dma_create(ASTRA_RENDER_BUILDER_BYTES,
+                                  &framebuffer[buffer]);
     if (status == ASTRA_SYSCALL_OK)
         status = astra_dma_create(ASTRA_DISPLAY_CURSOR_IMAGE_BYTES,
                                   &pointer_buffer);
@@ -4842,7 +5032,7 @@ int astra_main(const AstraStartupInfo *startup)
         return (int)status;
     }
     serve_windows(device->handle, irq->handle, vblank_irq->handle,
-                  &framebuffer, &pointer_buffer, gui_receive, input_receive,
+                  framebuffer, &pointer_buffer, gui_receive, input_receive,
                   shared_pointer);
     return ASTRA_STATUS_OK;
 }

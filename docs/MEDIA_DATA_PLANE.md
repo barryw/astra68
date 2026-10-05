@@ -230,8 +230,11 @@ on every present. Full map: `docs/HANDOVER_2026-10-05_MEDIA.md`.
    it instead of each being a round trip. No reply per flush.
 3. **The display service pipelines.** Building frame N+1 never waits for
    the device to finish frame N: two batch buffers and a request queue of
-   at least two (kernel, Vesta, mailbox), with completion per request. The
-   `settle()` in `builder_begin` goes.
+   at least two (kernel and Vesta), with completion per request. The
+   `settle()` in `builder_begin` goes. The mailbox keeps one request: the
+   DE25 host arena holds exactly one batch and the engine runs one at a
+   time, so QEMU starts the queued request when the helper completes the
+   last (phase 0, `docs/HANDOVER_2026-10-05_VIDEO.md`).
 4. **Textures are written where the device reads them.** Streaming textures
    lock straight into the shared staging area (the existing ponytail note at
    `SDL_astrarender.c:271-272` names this), removing the malloc copy and
@@ -272,6 +275,9 @@ display CPU and runs/s, vCPU host overhead (`--perf`).
    >= 21 presents/s.
 2. **Video: posted present and pipelining** (items 1-3). Removes four of
    the five per-frame waits. Expect the 24% idle to turn into frames.
+   Landed and measured 2026-10-05: Doom 21 -> 35 presents/s idle (its tic
+   cap), 15.3 -> 30.9 in motion, guest idle 34% -> 19% / 8%
+   (`docs/HANDOVER_2026-10-05_VIDEO.md`).
 3. **Video: copies** (items 4-6).
 4. **Fences** (item 7) and retire what the new paths replace.
 

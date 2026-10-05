@@ -87,10 +87,18 @@ uint32_t astra_rt_area_unmap(void *address)
     return ASTRA_SYSCALL_INVALID_ARGUMENT;
 }
 
+/* Handles 0x7a0.. are the release events clients attach with lists. */
+#define TEST_RELEASE_EVENT 0x7a0u
+static uint32_t release_closes;
+
 uint32_t astra_close(uint32_t handle)
 {
     uint32_t index = handle - 0x800u;
 
+    if (handle >= TEST_RELEASE_EVENT && handle < 0x800u) {
+        ++release_closes;
+        return ASTRA_SYSCALL_OK;
+    }
     assert(index < TEST_AREA_COUNT && test_area_live[index] != 0u);
     test_area_live[index] = 0u;
     ++test_area_closes;
@@ -669,7 +677,11 @@ static uint32_t graphics_run(DisplayWindowGraphics *graphics,
                              uint32_t attachment,
                              AstraGuiGraphicsReply *reply)
 {
-    uint32_t handles[2] = {0x900u, attachment};
+    uint32_t handles[3] = {0x900u, attachment, TEST_RELEASE_EVENT};
+    /* A reply capability, what the action carries; a frame is posted. */
+    uint32_t count = command.action == ASTRA_GUI_GRAPHICS_FRAME ? 0u :
+                     command.action == ASTRA_GUI_GRAPHICS_LIST_ATTACH ? 3u :
+                     attachment != 0u ? 2u : 1u;
 
     command.header = (AstraMessageHeader){0};
     astra_message_header_set(&command.header, sizeof(command),
@@ -678,7 +690,10 @@ static uint32_t graphics_run(DisplayWindowGraphics *graphics,
     command.window = 42u;
     command.generation = 1u;
     assert(display_window_graphics_command_valid(
-        &command, sizeof(command), attachment != 0u ? 2u : 1u, 42u));
+        &command, sizeof(command), count, 42u));
+    /* The counts are exact. */
+    assert(!display_window_graphics_command_valid(
+        &command, sizeof(command), count + 1u, 42u));
     *reply = (AstraGuiGraphicsReply){0};
     graphics_batch_count = 0u;
     return display_window_graphics_command(graphics, host, &command, handles,
@@ -718,7 +733,7 @@ static void test_window_graphics_argb_target(DisplayWindowGraphics *graphics,
                              &mapped) == ASTRA_SYSCALL_OK);
     *list = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_5,
+        .version = ASTRA_DRAW_LIST_VERSION_1_6,
         .total_bytes = 8192u,
         .command_count = 1u,
         .width = 16u,
@@ -795,6 +810,63 @@ static void test_window_graphics_argb_target(DisplayWindowGraphics *graphics,
                read_be32(command + 48u) ==
                    ASTRA_RENDER_FILL_RECTS_OPTION_BLEND &&
                read_be32(command + 60u) == 0x40a0b0c0u);
+    }
+    /* A posted frame: one list draws into the target, then, after a
+       TARGET mark, into the window's content -- one batch -- and the list
+       goes back to its owner. */
+    {
+        AstraDrawListCommand *commands =
+            (AstraDrawListCommand *)(void *)(list + 1);
+        uint32_t signals = signal_count;
+        uint32_t into_target;
+
+        list->payload_bytes = 0u;
+        list->command_count = 3u;
+        commands[0] = (AstraDrawListCommand){
+            .operation = ASTRA_DRAW_LIST_FILL,
+            .width = 4u, .height = 4u, .color = 0xff102030u,
+            .clip_right = 16u, .clip_bottom = 8u,
+        };
+        commands[1] = (AstraDrawListCommand){
+            .operation = ASTRA_DRAW_LIST_TARGET,
+            .source = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID,
+            .width = 320u, .height = 200u,
+            .clip_right = 320u, .clip_bottom = 200u,
+        };
+        commands[2] = (AstraDrawListCommand){
+            .operation = ASTRA_DRAW_LIST_FILL,
+            .width = 300u, .height = 4u, .color = 0xff405060u,
+            .clip_right = 320u, .clip_bottom = 200u,
+        };
+        assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_FRAME,
+                   .object = list_id, .target = target,
+                   .flags = ASTRA_GUI_FRAME_PRESENT}, 0u,
+                   &reply) == ASTRA_STATUS_OK &&
+               graphics_batch_count == 1u &&
+               read_be32(graphics_batches[0] + 12u) == 2u &&
+               signal_count == signals + 1u &&
+               last_signal == TEST_RELEASE_EVENT);
+        into_target = read_be32(recorded_command(0u, 0u) + 32u);
+        assert(read_be32(recorded_command(0u, 1u) + 32u) != into_target &&
+               read_be32(recorded_record(
+                   0u, read_be32(recorded_command(0u, 1u) + 32u)) + 24u) >>
+                   24 == ASTRA_RENDER_FORMAT_RGB565);
+        /* A frame that cannot be drawn still returns the list. */
+        commands[1].source = 999u;
+        assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_FRAME,
+                   .object = list_id, .target = target,
+                   .flags = ASTRA_GUI_FRAME_PRESENT}, 0u,
+                   &reply) == ASTRA_STATUS_NOT_FOUND &&
+               signal_count == signals + 2u);
+        assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_FRAME,
+                   .object = list_id, .target = target,
+                   .flags = ASTRA_GUI_FRAME_DISCARD}, 0u,
+                   &reply) == ASTRA_STATUS_INVALID &&
+               signal_count == signals + 3u);
+        signal_count = signals;
     }
     assert(graphics_run(graphics, host, (AstraGuiGraphicsCommand){
                .action = ASTRA_GUI_GRAPHICS_SURFACE_DESTROY,
@@ -1088,7 +1160,7 @@ static void test_window_graphics(void)
                              &mapped) == ASTRA_SYSCALL_OK);
     *list = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_5,
+        .version = ASTRA_DRAW_LIST_VERSION_1_6,
         .total_bytes = 8192u,
         .command_count = 1u,
         .width = 320u,
@@ -1611,19 +1683,55 @@ int main(void)
             .size = ASTRA_DISPLAY_FRAME_COMPLETION_SIZE, .fence = 7u,
             .status = ASTRA_DISPLAY_COMPLETION_IO_ERROR, .generation = 3u,
         };
-        in_flight.active = 1u;
-        in_flight.fence = 7u;
-        assert(settle(0x600u, 0x500u) == ASTRA_STATUS_OK &&
-               in_flight.active == 0u && refusals_logged == 1u);
-        in_flight.active = 1u;
-        assert(collect_request(0x600u, 0x500u) == DISPLAY_REQUEST_REFUSED);
+        DisplayState refused = {0};
+        InFlightRequest held;
+        uint32_t buffer = DISPLAY_BATCH_BUFFERS;
+
+        in_flight.entry[0] = (InFlightRequest){ .fence = 7u, .buffer = 0u,
+                                                .kind = REQUEST_CLIENT };
+        in_flight.head = 0u;
+        in_flight.count = 1u;
+        assert(retire_oldest(0x600u, 0x500u) == ASTRA_STATUS_OK &&
+               in_flight.count == 0u && refusals_logged == 1u);
+        /* A refused present was committed when it was submitted: the next
+           frame redraws everything, and its scene was never shown. */
+        refused.scene_valid = 1u;
+        refused.scene_active = 1u;
+        in_flight.state = &refused;
+        in_flight.entry[1] = (InFlightRequest){ .fence = 7u, .buffer = 1u,
+                                                .kind = REQUEST_COMPOSE,
+                                                .previous_scene = 0u };
+        in_flight.count = 1u;
+        in_flight.head = 1u;
+        assert(retire_oldest(0x600u, 0x500u) == ASTRA_STATUS_OK &&
+               in_flight.count == 0u && refused.scene_active == 0u &&
+               refused.damage[0].valid != 0u &&
+               refused.damage[1].valid != 0u);
+        in_flight.state = NULL;
+        in_flight.count = 1u;
+        assert(collect_oldest(0x600u, 0x500u, &held) ==
+               DISPLAY_REQUEST_REFUSED);
         collected.status = ASTRA_DISPLAY_COMPLETION_OK;
-        in_flight.active = 1u;
-        assert(collect_request(0x600u, 0x500u) == ASTRA_STATUS_OK);
+        in_flight.count = 1u;
+        assert(collect_oldest(0x600u, 0x500u, &held) == ASTRA_STATUS_OK);
         collected.fence = 8u;
-        in_flight.active = 1u;
-        assert(collect_request(0x600u, 0x500u) == DISPLAY_FAIL_COMPLETION);
-        in_flight.active = 0u;
+        in_flight.count = 1u;
+        assert(collect_oldest(0x600u, 0x500u, &held) ==
+               DISPLAY_FAIL_COMPLETION && in_flight.count == 0u);
+        /* With both batch buffers held, the next batch waits for the
+           older request alone, and takes its buffer. */
+        in_flight.head = 0u;
+        in_flight.entry[0] = (InFlightRequest){ .fence = 8u, .buffer = 1u,
+                                                .kind = REQUEST_CLIENT };
+        in_flight.entry[1] = (InFlightRequest){ .fence = 9u, .buffer = 0u,
+                                                .kind = REQUEST_CLIENT };
+        in_flight.count = 2u;
+        assert(batch_buffer(0x600u, 0x500u, &buffer) == ASTRA_STATUS_OK &&
+               buffer == 1u && in_flight.count == 1u &&
+               in_flight.entry[in_flight.head].fence == 9u);
+        assert(batch_buffer(0x600u, 0x500u, &buffer) == ASTRA_STATUS_OK &&
+               buffer == 1u && in_flight.count == 1u);
+        in_flight.count = 0u;
     }
     test_dynamic_window_resources();
     test_window_graphics();
