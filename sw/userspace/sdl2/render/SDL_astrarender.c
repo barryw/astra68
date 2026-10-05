@@ -24,9 +24,15 @@
 
 typedef struct ASTRA_TextureData {
     AstraSurface surface;
-    uint8_t *lock_pixels;
-    uint32_t lock_pitch;
     SDL_Rect locked;
+    uint32_t lock_pitch;
+    /* The lock is rows of the display's staging area at lock_offset that
+       unlock hands to the frame as an upload. */
+    int lock_staged;
+    uint32_t lock_offset;
+    /* Otherwise a private copy, uploaded from at unlock: a lock made while
+       another is open and staging is full cannot move staging under it. */
+    uint8_t *lock_pixels;
 } ASTRA_TextureData;
 
 /* Rectangles or segments gathered into one astra_draw_rectangles or
@@ -35,10 +41,16 @@ typedef struct ASTRA_TextureData {
 
 /*
  * A frame is one draw list. Each flush appends to it, marking where the
- * target changes; present posts it -- one submission the game does not
- * wait for, as SDL's Haiku backend posts its frame to the window thread --
- * and anything the service must see in order (an upload, a read, a
- * destroyed texture) posts what is pending first.
+ * target changes, and so does each texture upload; present posts it -- one
+ * submission the game does not wait for, as SDL's Haiku backend posts its
+ * frame to the window thread -- and anything the service must see in
+ * order (a read, a destroyed texture) posts what is pending first.
+ *
+ * An upload's rows lie in the display's staging area, where a streaming
+ * lock hands them to the game to write (a BBitmap the game draws into,
+ * SDL_bframebuffer.cc). The frame's uploads lie there side by side from
+ * staging_used down; the area is reused once the service has read the
+ * frame, which is the list coming back.
  */
 typedef struct ASTRA_RenderData {
     ASTRA_WindowData *window;
@@ -46,6 +58,13 @@ typedef struct ASTRA_RenderData {
     AstraDrawList list;
     /* Commands appended since the list was last posted. */
     int list_pending;
+    /* The list was posted and has not come back: its uploads' rows are
+       still the service's. */
+    int list_posted;
+    /* Staging bytes the frame's uploads and the open locks hold. */
+    uint32_t staging_used;
+    /* Textures locked into staging and not yet unlocked. */
+    int staged_locks;
     /* ASTRA_GATHER_MAX of each, allocated on first use. */
     AstraRectI32 *rects;
     AstraPointI32 *segments; /* two endpoints per segment */
@@ -139,7 +158,66 @@ static int ASTRA_PostPending(ASTRA_RenderData *data)
         return 0;
     data->list_pending = 0;
     result = astra_draw_post(&data->list, 0u);
-    return result == ASTRA_OK ? 0 : ASTRA_Failed("post", result);
+    if (result != ASTRA_OK)
+        return ASTRA_Failed("post", result);
+    data->list_posted = 1;
+    return 0;
+}
+
+/* Staging is free again once the service has read every posted frame:
+   the list is back. A change since the post took it back already; an
+   untouched list is taken back here, waiting if the service is behind.
+   Open locks keep their rows. */
+static int ASTRA_StagingRecycle(ASTRA_RenderData *data)
+{
+    AstraResult result;
+
+    if (data->list_posted && data->list_pending == 0 &&
+        data->list._private_handle != ASTRA_INVALID_HANDLE) {
+        result = astra_draw_list_reset(&data->list);
+        if (result != ASTRA_OK)
+            return ASTRA_Failed("frame list", result);
+    }
+    data->list_posted = 0;
+    if (data->staged_locks == 0)
+        data->staging_used = 0u;
+    return 0;
+}
+
+/*
+ * @p bytes of staging for one upload of the frame, at *offset, mapped at
+ * *pixels. Returns 1 when they do not fit while a lock is open: the rows a
+ * lock holds cannot move, so the caller does without staging.
+ */
+static int ASTRA_StagingReserve(ASTRA_RenderData *data, uint32_t bytes,
+                                uint32_t *offset, uint8_t **pixels)
+{
+    AstraDisplay *display = &data->window->display;
+    uint32_t need = (bytes + 3u) & ~3u;
+    void *base = NULL;
+    uint32_t size = 0u;
+    AstraResult result;
+
+    if (data->list_posted && ASTRA_StagingRecycle(data) < 0)
+        return -1;
+    result = astra_display_staging(display, 1u, &base, &size);
+    if (result != ASTRA_OK)
+        return ASTRA_Failed("staging", result);
+    if (need > size - data->staging_used) {
+        if (data->staged_locks != 0)
+            return 1;
+        /* The frame so far goes first; staging then starts over, and
+           grows only while nothing uses it. */
+        if (ASTRA_PostPending(data) < 0 || ASTRA_StagingRecycle(data) < 0)
+            return -1;
+        result = astra_display_staging(display, need, &base, &size);
+        if (result != ASTRA_OK)
+            return ASTRA_Failed("staging", result);
+    }
+    *offset = data->staging_used;
+    *pixels = (uint8_t *)base + data->staging_used;
+    data->staging_used += need;
+    return 0;
 }
 
 static void ASTRA_DropWindowList(ASTRA_RenderData *data)
@@ -151,6 +229,11 @@ static void ASTRA_DropWindowList(ASTRA_RenderData *data)
     if (data->content._private_handle != ASTRA_INVALID_HANDLE)
         ASTRA_Ignore(astra_surface_close(&data->content));
     data->list_pending = 0;
+    /* Closing the list is a call the service answers after reading what
+       was posted before it. */
+    data->list_posted = 0;
+    if (data->staged_locks == 0)
+        data->staging_used = 0u;
 }
 
 /* The window content surface, borrowed on first use. */
@@ -253,49 +336,90 @@ static int ASTRA_CreateTexture(SDL_Renderer *renderer, SDL_Texture *texture)
     return 0;
 }
 
+/* The frame uploads @p rect of the texture from staging rows at @p offset;
+   draws already in the frame read the texture as it was. */
+static int ASTRA_QueueUpload(ASTRA_RenderData *data,
+                             ASTRA_TextureData *texture_data,
+                             const SDL_Rect *rect, uint32_t offset,
+                             uint32_t pitch)
+{
+    AstraRectI32 target = { rect->x, rect->y, (uint32_t)rect->w,
+                            (uint32_t)rect->h };
+    AstraResult result = ASTRA_FrameList(data);
+
+    if (result == ASTRA_OK)
+        result = astra_draw_upload(&data->list, &texture_data->surface,
+                                   &target, offset, pitch);
+    if (result != ASTRA_OK)
+        return ASTRA_Failed("texture upload", result);
+    data->list_pending = 1;
+    return 0;
+}
+
 static int ASTRA_UpdateTexture(SDL_Renderer *renderer, SDL_Texture *texture,
                                const SDL_Rect *rect, const void *pixels,
                                int pitch)
 {
     ASTRA_RenderData *data = renderer->driverdata;
     ASTRA_TextureData *texture_data = texture->driverdata;
-    AstraRectI32 target;
+    uint32_t row = (uint32_t)rect->w *
+                   (uint32_t)SDL_BYTESPERPIXEL(texture->format);
+    uint32_t offset = 0u;
+    uint8_t *staged = NULL;
     AstraResult result;
+    int status;
 
     if (rect->w <= 0 || rect->h <= 0)
         return 0;
-    /* Draws already queued read the texture as it was. */
-    if (ASTRA_PostPending(data) < 0)
+    status = ASTRA_StagingReserve(data, row * (uint32_t)rect->h, &offset,
+                                  &staged);
+    if (status > 0)
+        return SDL_SetError("Astra renderer: staging is full while a "
+                            "texture is locked");
+    if (status < 0)
         return -1;
-    target = (AstraRectI32){ rect->x, rect->y, (uint32_t)rect->w,
-                             (uint32_t)rect->h };
-    result = astra_surface_write(&data->window->display,
-                                 &texture_data->surface, &target, pixels,
-                                 (uint32_t)pitch);
-    return result == ASTRA_OK ? 0 : ASTRA_Failed("texture upload", result);
+    result = astra_display_stage(&data->window->display, offset, pixels,
+                                 (uint32_t)pitch, row, (uint32_t)rect->h);
+    if (result != ASTRA_OK)
+        return ASTRA_Failed("texture upload", result);
+    return ASTRA_QueueUpload(data, texture_data, rect, offset, row);
 }
 
+/* A lock is written straight into staging, where the device reads it: no
+   copy between the game and the device but its own. */
 static int ASTRA_LockTexture(SDL_Renderer *renderer, SDL_Texture *texture,
                              const SDL_Rect *rect, void **pixels, int *pitch)
 {
+    ASTRA_RenderData *data = renderer->driverdata;
     ASTRA_TextureData *texture_data = texture->driverdata;
-    int bytes_per_pixel = SDL_BYTESPERPIXEL(texture->format);
+    uint32_t bytes_per_pixel = (uint32_t)SDL_BYTESPERPIXEL(texture->format);
+    uint8_t *staged = NULL;
+    int status;
 
-    (void)renderer;
-    /* ponytail: a private CPU copy per streaming texture; lock straight
-       into the staging area once uploads are DMA-backed. */
+    texture_data->locked = *rect;
+    texture_data->lock_pitch = (uint32_t)rect->w * bytes_per_pixel;
+    status = ASTRA_StagingReserve(data,
+                                  texture_data->lock_pitch * (uint32_t)rect->h,
+                                  &texture_data->lock_offset, &staged);
+    if (status < 0)
+        return -1;
+    if (status == 0) {
+        texture_data->lock_staged = 1;
+        ++data->staged_locks;
+        *pixels = staged;
+        *pitch = (int)texture_data->lock_pitch;
+        return 0;
+    }
+    texture_data->lock_pitch = (uint32_t)texture->w * bytes_per_pixel;
     if (texture_data->lock_pixels == NULL) {
-        texture_data->lock_pitch = (uint32_t)texture->w *
-                                   (uint32_t)bytes_per_pixel;
         texture_data->lock_pixels = SDL_malloc(
             (size_t)texture_data->lock_pitch * (size_t)texture->h);
         if (texture_data->lock_pixels == NULL)
             return SDL_OutOfMemory();
     }
-    texture_data->locked = *rect;
     *pixels = texture_data->lock_pixels +
               (size_t)rect->y * texture_data->lock_pitch +
-              (size_t)rect->x * (size_t)bytes_per_pixel;
+              (size_t)rect->x * bytes_per_pixel;
     *pitch = (int)texture_data->lock_pitch;
     return 0;
 }
@@ -303,9 +427,19 @@ static int ASTRA_LockTexture(SDL_Renderer *renderer, SDL_Texture *texture,
 static void ASTRA_UnlockTexture(SDL_Renderer *renderer,
                                 SDL_Texture *texture)
 {
+    ASTRA_RenderData *data = renderer->driverdata;
     ASTRA_TextureData *texture_data = texture->driverdata;
     const SDL_Rect *rect = &texture_data->locked;
 
+    if (texture_data->lock_staged) {
+        texture_data->lock_staged = 0;
+        --data->staged_locks;
+        if (rect->w > 0 && rect->h > 0)
+            (void)ASTRA_QueueUpload(data, texture_data, rect,
+                                    texture_data->lock_offset,
+                                    texture_data->lock_pitch);
+        return;
+    }
     (void)ASTRA_UpdateTexture(
         renderer, texture, rect,
         texture_data->lock_pixels +
@@ -1037,6 +1171,11 @@ static int ASTRA_RenderReadPixels(SDL_Renderer *renderer,
 
     if (rect->w <= 0 || rect->h <= 0 || pitch <= 0)
         return SDL_SetError("Astra renderer: empty readback");
+    /* A readback returns its rows through staging, where an open lock's
+       rows are. */
+    if (data->staged_locks != 0)
+        return SDL_SetError("Astra renderer: readback while a texture is "
+                            "locked");
     if (ASTRA_PostPending(data) < 0)
         return -1;
     if (target != NULL) {
@@ -1107,6 +1246,7 @@ static int ASTRA_RenderPresent(SDL_Renderer *renderer)
     data->list_pending = 0;
     if (result != ASTRA_OK)
         return ASTRA_Failed("present", result);
+    data->list_posted = 1;
     /* The vblank event resets when a wait takes it, so this waits for the
      * first vblank since the previous present: a frame that is already
      * late is not held back a whole further frame. */
@@ -1124,6 +1264,8 @@ static void ASTRA_DestroyTexture(SDL_Renderer *renderer,
 
     if (texture_data == NULL)
         return;
+    if (texture_data->lock_staged)
+        --((ASTRA_RenderData *)renderer->driverdata)->staged_locks;
     /* Queued draws from or into it come first. */
     (void)ASTRA_PostPending(renderer->driverdata);
     ASTRA_Ignore(astra_surface_close(&texture_data->surface));

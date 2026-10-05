@@ -956,7 +956,7 @@ static int header_valid(const AstraDrawListHeader *header,
     uint32_t payload_offset;
 
     if (header->magic != ASTRA_DRAW_LIST_MAGIC ||
-        header->version != ASTRA_DRAW_LIST_VERSION_1_6 ||
+        header->version != ASTRA_DRAW_LIST_VERSION_1_7 ||
         !astra_words_zero(header->reserved, 9u) ||
         header->width == 0u || header->height == 0u ||
         header->command_capacity == 0u ||
@@ -1016,6 +1016,21 @@ static int command_valid(const AstraDrawListHeader *header, uint16_t width,
                item->reserved16 == 0u && item->clip_left == 0u &&
                item->clip_top == 0u && item->clip_right == item->width &&
                item->clip_bottom == item->height;
+    /* The caller resolves the surface and checks the rectangle and the
+       staging rows against them. */
+    if (item->operation == ASTRA_DRAW_LIST_UPLOAD)
+        return item->flags == 0u && item->x >= 0 && item->y >= 0 &&
+               item->x <= INT16_MAX && item->y <= INT16_MAX &&
+               item->width != 0u && item->height != 0u &&
+               item->width <= INT16_MAX && item->height <= INT16_MAX &&
+               item->color != 0u && item->radius == 0u &&
+               item->source != ASTRA_DRAW_LIST_SOURCE_DESTINATION &&
+               item->payload_bytes == 0u && item->font_height == 0u &&
+               item->reserved16 == 0u && item->clip_left == 0u &&
+               item->clip_top == 0u && item->clip_right == 0u &&
+               item->clip_bottom == 0u && item->source_x == 0 &&
+               item->source_y == 0 && item->source_width == 0u &&
+               item->source_height == 0u;
     if (width < header->width)
         width = header->width;
     if (height < header->height)
@@ -1849,6 +1864,10 @@ int astra_render_builder_replay_range(
         if (item.operation == ASTRA_DRAW_LIST_TARGET) {
             *next = index;
             return ASTRA_RENDER_REPLAY_TARGET;
+        }
+        if (item.operation == ASTRA_DRAW_LIST_UPLOAD) {
+            *next = index;
+            return ASTRA_RENDER_REPLAY_UPLOAD;
         }
         if (!replay_command(builder, destination, format, shared, resolver,
                             &item)) {

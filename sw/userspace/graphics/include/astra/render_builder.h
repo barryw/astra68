@@ -27,6 +27,10 @@ typedef enum AstraRenderReplayResult {
     /* *next is a TARGET command: replay what follows it into its surface,
        from *next + 1, in this batch or another. */
     ASTRA_RENDER_REPLAY_TARGET = 3,
+    /* *next is an UPLOAD command, validated but not lowered: the caller
+       writes its staging rows into its surface, then replays from
+       *next + 1. */
+    ASTRA_RENDER_REPLAY_UPLOAD = 4,
 } AstraRenderReplayResult;
 
 typedef struct AstraRenderBuilder AstraRenderBuilder;

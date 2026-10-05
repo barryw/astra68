@@ -1,4 +1,4 @@
-# Handover 2026-10-05: video, phase 2 done; phase 3 next
+# Handover 2026-10-05: video, phases 2 and 3 done
 
 Read `CLAUDE.md` (the **Haiku first** standing instruction), `AGENTS.md`,
 then `docs/MEDIA_DATA_PLANE.md` -- the approved design; its Video section
@@ -223,3 +223,81 @@ was queued behind a running one. verify-nopc.sh is green.
 Next: phase 3 (copies: textures locked into staging, QEMU not copying on the
 vCPU, present as a bank flip). Doom is at its tic cap, so measure phase 3 on
 motion and on guest idle, or with a heavier client.
+
+## Phase 3 (2026-10-05): item 4 done, items 5 and 6 dropped by the owner
+
+### Phase 0 answers (file:line at `eb4778ce`)
+
+- A Doom frame's texture went through two CPU copies and one call:
+  `ASTRA_LockTexture` handed out a private malloc copy
+  (`SDL_astrarender.c:278-301`, the ponytail note at :285); unlock called
+  `astra_surface_write` (`graphics.c:435-476`), which packed it into
+  staging with the copy engine (`AREA_COPY_IN`, :472, a memmove in the
+  vCPU's MMIO store, `astra68.c` `astra_copy_run`), then sent SURFACE_WRITE,
+  a port call (:476). The service built one upload batch per band with the
+  staging rows as its attachment (`window_graphics.c:374-431`).
+- The kernel already hands the device the staging area by extents and holds
+  it until the batch is collected (`process.c:3229-3274`). QEMU takes the
+  rows when it accepts the request -- into the payload when the queue is
+  idle (`astra68.c:1063-1120`, on the vCPU in the store), into a staged copy
+  when it is queued (:830-839, :1198) -- so staging is the client's again
+  once the request is accepted, which is before the service signals a
+  posted list's release. That is the recycling item 4 needed: no fences.
+- **Board profile, Doom on `f216bdb2`** (profiling QEMU built with
+  `emu/qemu/build.sh de25-profile`, run through a runtime drop-in;
+  `~/astra-mg/doom-prof/p3-board.aprof` on beast): the display service is
+  16-20% of guest time but 0.8-1.0% of guest instructions; the kernel is
+  8-11%. `astra-top --perf` on the vCPU thread: 85% translated code, TB
+  lookup ~11%, TLB flush 2-3%, `memcpy` below 0.9%. So QEMU's copies do
+  not cost the vCPU (item 5), and the compose is bounded by the display's
+  ~1% of instructions (item 6). The display's time goes per run, not per
+  instruction: what a run costs is not yet attributed (cold TLB and TB
+  lookups after a cross-space switch are the suspect).
+
+### What landed
+
+- ADLT 1.7 adds `UPLOAD` (11): rows of the window's staging area into a
+  CPU-writable surface, in order with the frame's draws
+  (`docs/MANAGED_GRAPHICS.md` section 4). The service ends the batch before
+  it and uploads exactly as SURFACE_WRITE does (`list_upload`,
+  `upload_rows` in `window_graphics.c`).
+- system.library 3.1.0 (ABI 3.1, node `ASTRA_SYSTEM_3.1`, additive):
+  `astra_draw_upload` appends an UPLOAD; `astra_display_stage` copies caller
+  rows into staging at an offset with the copy engine.
+  `astra_surface_write` is now built on it. SDL.kit requires 3.1.0.
+- SDL: a lock is rows of staging (Haiku: the game draws into the
+  `BBitmap`, `SDL_bframebuffer.cc:44-78`); unlock appends the UPLOAD. A
+  frame's uploads lie side by side; staging starts over once the list is
+  back. A second lock that does not fit beside an open one is a private
+  copy uploaded at unlock; a readback while a lock is open fails, because
+  readback returns through staging.
+- Per Doom frame now: one posted FRAME (its upload inside), one vblank wait.
+- Gate: the Doom gate fails unless the service logs a frame upload and the
+  copy engine runs under once per four composes (0 in 1051 measured;
+  forcing the private-copy lock gives 1051 in 1051 and fails).
+  `verify-nopc.sh` green.
+
+### On the board (de25-ab.sh, 3 rounds, `f216bdb2` against `8c1ce754`)
+
+| | `f216bdb2` | `8c1ce754` |
+|---|---:|---:|
+| presents/s idle | 35.0 | 35.0 (Doom's cap) |
+| presents/s, 125 Hz motion | 30.4-31.4 | 32.1-32.7 |
+| guest idle (idle / motion) | 19-21% / 8% | 22-24% / 9-10% |
+| display runs/s idle | 127 | 100 |
+| display CPU idle / motion | 15.7% / 19.9% | 14.4% / 18.9% |
+| Doom CPU idle | 62.6% | 60.6% |
+| cross-space switches/s idle / motion | 309 / 413 | 252 / 382 |
+| audio gaps | 0 | 0 |
+
+One display run a frame fewer costs ~1.3 points of display CPU: about
+0.5 ms of guest time per run for a few thousand instructions.
+
+### Dropped
+
+Items 5 (QEMU copying off the vCPU) and 6 (present as a posted bank flip)
+were dropped by the owner on these measurements. Item 7 (real fences) stays
+for whoever needs upload completion; nothing in-tree does today.
+
+Next: SDL2 mouse, in full (cursor show/hide, custom and system cursors,
+warp, relative mode, capture, global state).

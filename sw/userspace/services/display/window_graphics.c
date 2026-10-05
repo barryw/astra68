@@ -347,61 +347,64 @@ static uint32_t surface_destroy(DisplayWindowGraphics *graphics,
     return ASTRA_STATUS_OK;
 }
 
-/* The surface rectangle and staging rows a SURFACE_WRITE or SURFACE_READ
-   names; returns the row bytes, or zero when either is out of range. */
+/* The staging rows a transfer names: the rectangle x, y, width x height of
+   @p surface, its first row at staging @p offset and the next @p pitch
+   bytes on. Returns the row bytes, or zero when either is out of range. */
+static uint32_t staging_rows(const DisplayWindowGraphics *graphics,
+                             const DisplayGraphicsSurface *surface,
+                             int32_t x, int32_t y, uint32_t width,
+                             uint32_t height, uint32_t offset,
+                             uint32_t pitch)
+{
+    uint32_t row = astra_render_format_row_bytes(surface->format, width);
+    uint64_t end;
+
+    if (x < 0 || y < 0 || width == 0u || height == 0u ||
+        (uint32_t)x > surface->width || width > surface->width - (uint32_t)x ||
+        (uint32_t)y > surface->height ||
+        height > surface->height - (uint32_t)y || pitch < row || row == 0u)
+        return 0u;
+    end = (uint64_t)offset + (uint64_t)pitch * (height - 1u) + row;
+    return end > graphics->staging_bytes ? 0u : row;
+}
+
+/* The rectangle and staging rows a SURFACE_WRITE or SURFACE_READ names. */
 static uint32_t transfer_rows(const DisplayWindowGraphics *graphics,
                               const DisplayGraphicsSurface *surface,
                               const AstraGuiGraphicsCommand *command)
 {
-    uint32_t row = astra_render_format_row_bytes(surface->format,
-                                                 command->width);
-    uint64_t end;
-
-    if (command->x < 0 || command->y < 0 || command->width == 0u ||
-        command->height == 0u || command->target != 0u ||
-        command->format != 0u || command->flags != 0u ||
-        (uint32_t)command->x > surface->width ||
-        command->width > surface->width - (uint32_t)command->x ||
-        (uint32_t)command->y > surface->height ||
-        command->height > surface->height - (uint32_t)command->y ||
-        command->pitch < row || row == 0u)
+    if (command->target != 0u || command->format != 0u ||
+        command->flags != 0u)
         return 0u;
-    end = (uint64_t)command->offset +
-          (uint64_t)command->pitch * (command->height - 1u) + row;
-    return end > graphics->staging_bytes ? 0u : row;
+    return staging_rows(graphics, surface, command->x, command->y,
+                        command->width, command->height, command->offset,
+                        command->pitch);
 }
 
-static uint32_t surface_write(DisplayWindowGraphics *graphics,
-                              const DisplayGraphicsHost *host,
-                              const AstraGuiGraphicsCommand *command)
+/*
+ * Staging rows into @p surface, which the caller checked with
+ * staging_rows (@p row is its answer). The device reads the rows straight
+ * from the staging area: each band is its batch's attachment, and neither
+ * this service nor the MC68040 copies a pixel.
+ */
+static uint32_t upload_rows(DisplayWindowGraphics *graphics,
+                            const DisplayGraphicsHost *host,
+                            const DisplayGraphicsSurface *surface,
+                            int32_t x, int32_t y, uint32_t width,
+                            uint32_t height, uint32_t offset, uint32_t pitch,
+                            uint32_t row)
 {
-    DisplayGraphicsSurface surface;
-    uint32_t row;
-    uint32_t band;
+    uint32_t band = UPLOAD_BAND_BYTES / pitch;
 
-    if (!lookup_surface(graphics, host, command->object, &surface))
-        return ASTRA_STATUS_NOT_FOUND;
-    /* The content surface is CPU-writable: it is how a CPU-drawn
-       framebuffer reaches the window. */
-    if ((surface.flags & ASTRA_SURFACE_CPU_WRITE) == 0u)
-        return ASTRA_STATUS_ACCESS;
-    row = transfer_rows(graphics, &surface, command);
-    if (row == 0u)
-        return ASTRA_STATUS_INVALID;
-    /* The device reads the rows straight from the staging area: each band
-       is its batch's attachment, and neither this service nor the MC68040
-       copies a pixel. */
-    band = UPLOAD_BAND_BYTES / command->pitch;
     if (band == 0u)
         return ASTRA_STATUS_INVALID;
-    for (uint32_t done = 0u; done < command->height;) {
-        uint32_t rows = command->height - done < band ?
-                        command->height - done : band;
+    for (uint32_t done = 0u; done < height;) {
+        uint32_t rows = height - done < band ? height - done : band;
         AstraRenderBuilder builder;
         DisplayGraphicsAttachment attachment = {
             .area = graphics->staging_area,
-            .offset = command->offset + command->pitch * done,
-            .bytes = command->pitch * (rows - 1u) + row,
+            .offset = offset + pitch * done,
+            .bytes = pitch * (rows - 1u) + row,
         };
         uint32_t target;
         uint32_t source;
@@ -410,17 +413,16 @@ static uint32_t surface_write(DisplayWindowGraphics *graphics,
         status = builder_begin(&builder, host);
         if (status != ASTRA_STATUS_OK)
             return status;
-        target = descriptor(&builder, &surface, surface.format,
+        target = descriptor(&builder, surface, surface->format,
                             ASTRA_RENDER_SURFACE_READ |
                                 ASTRA_RENDER_SURFACE_WRITE);
         source = astra_render_builder_upload_reserve(
-            &builder, command->pitch, (uint16_t)command->width,
-            (uint16_t)rows, surface.format, &attachment.target);
+            &builder, pitch, (uint16_t)width, (uint16_t)rows,
+            surface->format, &attachment.target);
         if (target == 0u || source == 0u ||
             !astra_render_builder_blit_region(
-                &builder, target, source, 0, 0, command->x,
-                command->y + (int32_t)done, (uint16_t)command->width,
-                (uint16_t)rows))
+                &builder, target, source, 0, 0, x, y + (int32_t)done,
+                (uint16_t)width, (uint16_t)rows))
             return ASTRA_STATUS_LIMIT;
         status = builder_submit(&builder, host, &attachment);
         if (status != ASTRA_STATUS_OK)
@@ -428,6 +430,38 @@ static uint32_t surface_write(DisplayWindowGraphics *graphics,
         done += rows;
     }
     return ASTRA_STATUS_OK;
+}
+
+/* A writable surface by id: the content surface is CPU-writable, which is
+   how a CPU-drawn framebuffer reaches the window. */
+static uint32_t writable_surface(DisplayWindowGraphics *graphics,
+                                 const DisplayGraphicsHost *host,
+                                 uint32_t id,
+                                 DisplayGraphicsSurface *surface)
+{
+    if (!lookup_surface(graphics, host, id, surface))
+        return ASTRA_STATUS_NOT_FOUND;
+    return (surface->flags & ASTRA_SURFACE_CPU_WRITE) != 0u ?
+        ASTRA_STATUS_OK : ASTRA_STATUS_ACCESS;
+}
+
+static uint32_t surface_write(DisplayWindowGraphics *graphics,
+                              const DisplayGraphicsHost *host,
+                              const AstraGuiGraphicsCommand *command)
+{
+    DisplayGraphicsSurface surface;
+    uint32_t status = writable_surface(graphics, host, command->object,
+                                       &surface);
+    uint32_t row;
+
+    if (status != ASTRA_STATUS_OK)
+        return status;
+    row = transfer_rows(graphics, &surface, command);
+    if (row == 0u)
+        return ASTRA_STATUS_INVALID;
+    return upload_rows(graphics, host, &surface, command->x, command->y,
+                       command->width, command->height, command->offset,
+                       command->pitch, row);
 }
 
 /* Rows of a surface, read back from Media RAM by the display helper,
@@ -552,10 +586,42 @@ static uint32_t resolve_source(void *context, AstraRenderBuilder *builder,
                       ASTRA_RENDER_SURFACE_READ);
 }
 
+/* An UPLOAD of @p list at command @p index, which replay_range validated:
+   the client may rewrite its area, so the command is read once and its
+   surface and staging rows are checked here. */
+static uint32_t list_upload(DisplayWindowGraphics *graphics,
+                            const DisplayGraphicsHost *host,
+                            const DisplayGraphicsList *list, uint32_t index)
+{
+    AstraDrawListCommand upload =
+        ((const AstraDrawListCommand *)(list->mapping + 1))[index];
+    DisplayGraphicsSurface surface;
+    uint32_t status;
+    uint32_t row;
+
+    if (upload.operation != ASTRA_DRAW_LIST_UPLOAD)
+        return ASTRA_STATUS_INVALID;
+    status = writable_surface(graphics, host, upload.source, &surface);
+    if (status != ASTRA_STATUS_OK)
+        return status;
+    row = staging_rows(graphics, &surface, upload.x, upload.y, upload.width,
+                       upload.height, upload.payload_offset, upload.color);
+    if (row == 0u)
+        return ASTRA_STATUS_INVALID;
+    if (graphics->list_uploads++ == 0u)
+        (void)astra_log("display: a window uploads in its frames");
+    return upload_rows(graphics, host, &surface, upload.x, upload.y,
+                       upload.width, upload.height, upload.payload_offset,
+                       upload.color, row);
+}
+
 /*
  * Replays @p list from its first destination, @p first_target, switching
  * destination at each TARGET: as few batches as fit, none waited for. A
- * TARGET may name any draw-target surface of the window.
+ * TARGET may name any draw-target surface of the window. An UPLOAD ends
+ * the batch before it -- its rows are their own batch's attachment -- and
+ * the device runs them in order, so the draws before it read the surface
+ * as it was and the draws after it as it becomes.
  */
 static uint32_t list_replay(DisplayWindowGraphics *graphics,
                             const DisplayGraphicsHost *host,
@@ -615,11 +681,17 @@ static uint32_t list_replay(DisplayWindowGraphics *graphics,
             ++next;
             destination = 0u;
         }
-        if (builder.command_count == 0u)
-            continue;
-        status = builder_submit(&builder, host, NULL);
-        if (status != ASTRA_STATUS_OK)
-            return status;
+        if (builder.command_count != 0u) {
+            status = builder_submit(&builder, host, NULL);
+            if (status != ASTRA_STATUS_OK)
+                return status;
+        }
+        if (result == ASTRA_RENDER_REPLAY_UPLOAD) {
+            status = list_upload(graphics, host, list, next);
+            if (status != ASTRA_STATUS_OK)
+                return status;
+            ++next;
+        }
     }
     return ASTRA_STATUS_OK;
 }

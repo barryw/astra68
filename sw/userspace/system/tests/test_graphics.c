@@ -774,7 +774,7 @@ static void test_posted_frame(AstraDisplay *display,
           fake_posted.target == target._private_id &&
           fake_posted.flags ==
               (ASTRA_GUI_FRAME_PRESENT | ASTRA_GUI_FRAME_DISCARD));
-    CHECK(fake_submitted_header.version == ASTRA_DRAW_LIST_VERSION_1_6 &&
+    CHECK(fake_submitted_header.version == ASTRA_DRAW_LIST_VERSION_1_7 &&
           fake_submitted_header.command_count == 3u &&
           fake_submitted[0].operation == ASTRA_DRAW_LIST_FILL &&
           fake_submitted[0].clip_right == 64u &&
@@ -802,6 +802,72 @@ static void test_posted_frame(AstraDisplay *display,
     CHECK(astra_draw_list_close(&list) == ASTRA_OK);
     fake_release_signaled = 0u;
     CHECK(astra_surface_close(&target) == ASTRA_OK);
+}
+
+/* An upload travels in the frame: staging rows, named by offset and
+   pitch, ordered with the draws around it. */
+static void test_list_upload(AstraDisplay *display,
+                             const AstraSurface *sprite,
+                             const AstraSurface *content)
+{
+    AstraDrawList list = ASTRA_DRAW_LIST_INIT;
+    AstraDrawPaint paint = ASTRA_DRAW_PAINT_INIT;
+    AstraRectI32 whole = { 0, 0, 320, 200 };
+    AstraRectI32 rect = { 1, 2, 4, 3 };
+    /* Below 4 GiB: the copy request carries 32-bit Astra addresses. */
+    uint8_t (*rows)[24] = mmap(0, 3u * 24u, PROT_READ | PROT_WRITE,
+                               MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1,
+                               0);
+    void *staging = 0;
+    uint32_t bytes = 0u;
+    uint32_t copies = fake_area_copies;
+    uint32_t posts = fake_posts;
+
+    CHECK((void *)rows != MAP_FAILED && (uintptr_t)rows <= UINT32_MAX);
+    for (uint32_t y = 0u; y < 3u; ++y)
+        for (uint32_t x = 0u; x < 24u; ++x)
+            rows[y][x] = (uint8_t)(0x80u + y * 24u + x);
+    CHECK(astra_display_staging(display, 64u, &staging, &bytes) == ASTRA_OK);
+    /* The copy engine packs caller rows at the offset given. */
+    CHECK(astra_display_stage(display, 32u, rows, 24u, 16u, 3u) ==
+          ASTRA_OK && fake_area_copies == copies + 1u &&
+          memcmp((uint8_t *)staging + 32u, rows[0], 16u) == 0 &&
+          memcmp((uint8_t *)staging + 64u, rows[2], 16u) == 0);
+    CHECK(astra_display_stage(display, bytes - 16u, rows, 24u, 16u, 2u) ==
+          ASTRA_ERROR_INVALID_ARGUMENT &&
+          astra_display_stage(display, 0u, rows, 8u, 16u, 1u) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    CHECK(astra_draw_list_create(content, &whole, &list) == ASTRA_OK);
+    CHECK(astra_draw_rectangle(&list, &(AstraRectI32){ 0, 0, 8, 8 }, 1,
+                               &paint) == ASTRA_OK);
+    CHECK(astra_draw_upload(&list, sprite, &rect, 32u, 16u) == ASTRA_OK);
+    /* An upload ignores the clip, and is checked against its surface. */
+    CHECK(astra_draw_list_set_clip(&list, &(AstraRectI32){ 0, 0, 0, 0 }) ==
+          ASTRA_OK);
+    CHECK(astra_draw_upload(&list, sprite, &rect, 32u, 16u) == ASTRA_OK);
+    CHECK(astra_draw_upload(&list, sprite, &rect, 32u, 15u) ==
+              ASTRA_ERROR_INVALID_ARGUMENT &&
+          astra_draw_upload(&list, sprite, &(AstraRectI32){ 14, 0, 4, 1 },
+                            0u, 16u) == ASTRA_ERROR_INVALID_ARGUMENT);
+    CHECK(astra_draw_post(&list, ASTRA_DRAW_POST_PRESENT) == ASTRA_OK &&
+          fake_posts == posts + 1u);
+    CHECK(fake_submitted_header.command_count == 3u &&
+          fake_submitted[0].operation == ASTRA_DRAW_LIST_FILL &&
+          fake_submitted[1].operation == ASTRA_DRAW_LIST_UPLOAD &&
+          fake_submitted[1].source == sprite->_private_id &&
+          fake_submitted[1].x == 1 && fake_submitted[1].y == 2 &&
+          fake_submitted[1].width == 4u && fake_submitted[1].height == 3u &&
+          fake_submitted[1].payload_offset == 32u &&
+          fake_submitted[1].color == 16u &&
+          fake_submitted[1].payload_bytes == 0u &&
+          fake_submitted[1].clip_right == 0u &&
+          fake_submitted[2].operation == ASTRA_DRAW_LIST_UPLOAD);
+    /* Reset takes a posted list back. */
+    CHECK(astra_draw_list_reset(&list) == ASTRA_OK &&
+          list_command_count(&list) == 0u);
+    CHECK(astra_draw_list_close(&list) == ASTRA_OK);
+    fake_release_signaled = 0u;
+    munmap(rows, 3u * 24u);
 }
 
 static void test_window_graphics_session(void)
@@ -949,7 +1015,7 @@ static void test_window_graphics_session(void)
           fake_last.object == list._private_list &&
           fake_last.target == ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID);
     CHECK(fake_submitted_header.magic == ASTRA_DRAW_LIST_MAGIC &&
-          fake_submitted_header.version == ASTRA_DRAW_LIST_VERSION_1_6 &&
+          fake_submitted_header.version == ASTRA_DRAW_LIST_VERSION_1_7 &&
           fake_submitted_header.width == 320u &&
           fake_submitted_header.command_count == 1107u &&
           fake_submitted_header.command_capacity >= 1107u);
@@ -1012,6 +1078,7 @@ static void test_window_graphics_session(void)
     test_lines(&content);
     test_surface_read(&display, &sprite, &content);
     test_posted_frame(&display, &content);
+    test_list_upload(&display, &sprite, &content);
     CHECK(astra_draw_list_close(&list) == ASTRA_OK);
     CHECK(astra_surface_close(&content) == ASTRA_OK);
     CHECK(astra_surface_close(&sprite) == ASTRA_OK);

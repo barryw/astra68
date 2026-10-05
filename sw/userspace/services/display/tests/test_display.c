@@ -733,7 +733,7 @@ static void test_window_graphics_argb_target(DisplayWindowGraphics *graphics,
                              &mapped) == ASTRA_SYSCALL_OK);
     *list = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_6,
+        .version = ASTRA_DRAW_LIST_VERSION_1_7,
         .total_bytes = 8192u,
         .command_count = 1u,
         .width = 16u,
@@ -1160,7 +1160,7 @@ static void test_window_graphics(void)
                              &mapped) == ASTRA_SYSCALL_OK);
     *list = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_6,
+        .version = ASTRA_DRAW_LIST_VERSION_1_7,
         .total_bytes = 8192u,
         .command_count = 1u,
         .width = 320u,
@@ -1197,6 +1197,71 @@ static void test_window_graphics(void)
                          8u) == window.content_offset[window.content_back]);
         assert(read_be32(recorded_record(0u, read_be32(command + 36u)) +
                          8u) == sprite_offset);
+        /* An UPLOAD in the list ends the batch before it and is a batch
+           of its own, its rows the staging attachment: the blit before it
+           reads the sprite as it was, the one after as it becomes. */
+        {
+            AstraDrawListCommand blit = *draw;
+
+            draw[1] = (AstraDrawListCommand){
+                .operation = ASTRA_DRAW_LIST_UPLOAD,
+                .x = 4, .y = 2, .width = 8u, .height = 4u,
+                .color = 64u, .source = sprite, .payload_offset = 256u,
+            };
+            draw[2] = blit;
+            list->command_count = 3u;
+            assert(graphics_run(window.graphics, &host,
+                                (AstraGuiGraphicsCommand){
+                       .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                       .object = list_id,
+                       .target = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID}, 0u,
+                       &reply) == ASTRA_STATUS_OK &&
+                   graphics_batch_count == 3u);
+            command = recorded_command(1u, 0u);
+            assert(read_be32(command + 4u) >> 16 == ASTRA_RENDER_OP_BLIT &&
+                   read_be32(recorded_record(1u, read_be32(command + 32u)) +
+                             8u) == sprite_offset &&
+                   read_be32(command + 48u) == ((uint32_t)4u << 16 | 2u) &&
+                   read_be32(command + 52u) == ((uint32_t)8u << 16 | 4u));
+            assert(read_be32(recorded_record(1u, read_be32(command + 36u)) +
+                             16u) == 64u &&
+                   memcmp(recorded_record(
+                              1u, read_be32(recorded_record(
+                                                1u, read_be32(command +
+                                                              36u)) + 8u)),
+                          staging + 256u, 32u) == 0);
+            assert(read_be32(recorded_command(0u, 0u) + 4u) >> 16 ==
+                       ASTRA_RENDER_OP_BLIT &&
+                   read_be32(recorded_command(2u, 0u) + 4u) >> 16 ==
+                       ASTRA_RENDER_OP_BLIT);
+            /* Its rows stay inside the staging area and the surface. */
+            draw[1].payload_offset = 8192u - 64u * 3u;
+            assert(graphics_run(window.graphics, &host,
+                                (AstraGuiGraphicsCommand){
+                       .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                       .object = list_id,
+                       .target = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID}, 0u,
+                       &reply) == ASTRA_STATUS_INVALID);
+            draw[1].payload_offset = 256u;
+            draw[1].x = 12;
+            assert(graphics_run(window.graphics, &host,
+                                (AstraGuiGraphicsCommand){
+                       .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                       .object = list_id,
+                       .target = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID}, 0u,
+                       &reply) == ASTRA_STATUS_INVALID);
+            draw[1].x = 4;
+            /* The window's content surface is CPU-writable too; a surface
+               without CPU_WRITE is not. */
+            draw[1].source = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID;
+            assert(graphics_run(window.graphics, &host,
+                                (AstraGuiGraphicsCommand){
+                       .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                       .object = list_id,
+                       .target = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID}, 0u,
+                       &reply) == ASTRA_STATUS_OK);
+            list->command_count = 1u;
+        }
         /* The sprite is not a draw target; a surface without SOURCE is
            not a source. */
         assert(graphics_run(window.graphics, &host,

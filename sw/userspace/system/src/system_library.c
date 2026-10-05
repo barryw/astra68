@@ -10,5 +10,5 @@
 #include <astra/library.h>
 
 ASTRA_DYNAMIC_LIBRARY(
-    "system.library.3", 3, 0, 0, 3, 0,
+    "system.library.3", 3, 1, 0, 3, 1,
     "Astra68 contributors", "Copyright 2026 Astra68 contributors");

@@ -110,10 +110,10 @@ arena, returns zero rows.
 
 `ASTRA_SURFACE_SCANOUT` returns `UNSUPPORTED`.
 
-## 4. Draw lists (ADLT v1.6)
+## 4. Draw lists (ADLT v1.7)
 
 The retained window list and the session draw list share one wire format and
-one lowering (`astra_render_builder_replay`). ADLT v1.6 replaces v1.5; every
+one lowering (`astra_render_builder_replay`). ADLT v1.7 replaces v1.6; every
 in-tree writer and reader moves together.
 
 - The header records `total_bytes` (16 KiB for retained window lists, up to
@@ -133,7 +133,7 @@ in-tree writer and reader moves together.
   - `font_height` and `radius`
   - a per-command clip in destination pixels
 - The operations are FILL, FILL_ROUNDED, TEXT, MONO_TEXT, LINE, BLIT,
-  TRIANGLES, FILL_RECTS, LINES, and TARGET. COPY is removed: it is a BLIT
+  TRIANGLES, FILL_RECTS, LINES, TARGET, and UPLOAD. COPY is removed: it is a BLIT
   whose source is the destination.
 - TARGET (10, v1.6) makes surface `source` (never 0) the destination of the
   commands after it; `width` and `height` are that surface's and its clip
@@ -144,6 +144,17 @@ in-tree writer and reader moves together.
   `astra_render_builder_replay_range` stops at a TARGET
   (`ASTRA_RENDER_REPLAY_TARGET`) and the service resumes after it with the
   new destination, in the same batch. Retained window lists have none.
+- UPLOAD (11, v1.7) writes rows of the window's staging area into surface
+  `source` (never 0, CPU-writable) at the command's rectangle:
+  `payload_offset` is the staging offset of the first row and `color` the
+  staging pitch; the clip and every other field are zero. So a frame
+  carries its texture uploads, in order with its draws, instead of each
+  being a SURFACE_WRITE call (`astra_draw_upload`). The replay stops at it
+  (`ASTRA_RENDER_REPLAY_UPLOAD`); the service submits the batch so far and
+  uploads the rows as SURFACE_WRITE does -- each band its batch's
+  attachment -- then resumes. The client leaves the rows alone until the
+  list is back: the service has read it, and the device took the rows
+  when it accepted their batch.
 - FILL, FILL_RECTS, LINE, LINES, BLIT, and TRIANGLES carry a blend field (bits 6:4): `NONE`,
   `BLEND`, `ADD`, `MOD`, or `MUL`, SDL2's equations
   (`docs/TEXTURE_ENGINE.md` §6). BLIT also has `FLIP_X` and `FLIP_Y`; BLIT
@@ -275,7 +286,8 @@ same way as the video and audio drivers. Upstream SDL is unchanged.
 | SDL callback | Astra lowering |
 |---|---|
 | CreateTexture | `astra_surface_create` in RGB565, XRGB8888 (`RGB888`), or ARGB8888; targets are CPU-readable |
-| UpdateTexture / Lock / Unlock | `astra_surface_write` of the dirty rectangle |
+| LockTexture / UnlockTexture | the lock is rows of the display's staging area; unlock appends their UPLOAD to the frame list. A second lock that does not fit beside an open one is a private copy, uploaded as UpdateTexture at unlock |
+| UpdateTexture | `astra_display_stage` (copy engine) into staging beside the frame's other uploads, then an UPLOAD |
 | SetRenderTarget | draw list destination = texture, any of the three formats |
 | Clear | FILL |
 | QueueFillRects, QueueDrawPoints | `astra_draw_rectangles` with the SDL blend mode; consecutive commands in one color and mode, one rectangle per SDL call as `testdraw2` draws, gather into one FILL_RECTS until another draw or a clip change |

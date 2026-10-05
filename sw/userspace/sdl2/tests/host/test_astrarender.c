@@ -31,16 +31,28 @@ static int posts;
 static uint32_t last_post_flags;
 static const AstraSurface *last_target;
 static int targets;
-static int posts_at_write;
 static int posts_at_read;
 static int errors;
 static int lists_created;
 static int surfaces_created;
 static uint32_t created_flags;
 static uint16_t created_format;
-static int writes;
-static AstraRectI32 last_write;
-static uint32_t last_write_pitch;
+/* Staging: a pool the mock maps, of staging_size bytes; uploads appended
+   to the frame, the rows staged by the copy engine, and the times the
+   frame list was taken back. */
+static uint8_t staging_pool[1u << 18];
+static uint32_t staging_size = 4096u;
+static int staging_grows;
+static int uploads;
+static AstraRectI32 last_upload;
+static uint32_t last_upload_offset;
+static uint32_t last_upload_pitch;
+static int posts_at_upload;
+static int stages;
+static uint32_t last_stage_offset;
+static uint32_t last_stage_pitch;
+static uint32_t last_stage_row;
+static int list_resets;
 static const char *hint_value;
 static uint8_t vertex_pool[1u << 17];
 static AstraRectI32 last_read;
@@ -150,18 +162,50 @@ AstraResult astra_surface_close(AstraSurface *surface)
     *surface = (AstraSurface)ASTRA_SURFACE_INIT;
     return ASTRA_OK;
 }
-AstraResult astra_surface_write(AstraDisplay *display,
-                                const AstraSurface *surface,
-                                const AstraRectI32 *rect, const void *pixels,
-                                uint32_t pitch)
+AstraResult astra_display_staging(AstraDisplay *display,
+                                  uint32_t minimum_bytes, void **pixels,
+                                  uint32_t *bytes)
 {
     (void)display;
-    (void)surface;
-    assert(pixels != NULL);
-    ++writes;
-    posts_at_write = posts;
-    last_write = *rect;
-    last_write_pitch = pitch;
+    assert(minimum_bytes != 0u && minimum_bytes <= sizeof(staging_pool));
+    if (staging_size < minimum_bytes) {
+        staging_size = minimum_bytes;
+        ++staging_grows;
+    }
+    *pixels = staging_pool;
+    *bytes = staging_size;
+    return ASTRA_OK;
+}
+AstraResult astra_display_stage(AstraDisplay *display, uint32_t offset,
+                                const void *pixels, uint32_t pitch,
+                                uint32_t row_bytes, uint32_t rows)
+{
+    (void)display;
+    assert(pixels != NULL && rows != 0u &&
+           offset + row_bytes * rows <= staging_size);
+    ++stages;
+    last_stage_offset = offset;
+    last_stage_pitch = pitch;
+    last_stage_row = row_bytes;
+    return ASTRA_OK;
+}
+AstraResult astra_draw_upload(AstraDrawList *list,
+                              const AstraSurface *surface,
+                              const AstraRectI32 *rect,
+                              uint32_t staging_offset, uint32_t pitch)
+{
+    assert(list->_private_handle == 11u && surface != NULL);
+    ++uploads;
+    posts_at_upload = posts;
+    last_upload = *rect;
+    last_upload_offset = staging_offset;
+    last_upload_pitch = pitch;
+    return ASTRA_OK;
+}
+AstraResult astra_draw_list_reset(AstraDrawList *list)
+{
+    assert(list->_private_handle == 11u);
+    ++list_resets;
     return ASTRA_OK;
 }
 AstraResult astra_draw_list_create(const AstraSurface *destination,
@@ -604,21 +648,82 @@ int main(void)
                              ASTRA_SURFACE_CPU_WRITE |
                              ASTRA_SURFACE_DRAW_TARGET |
                              ASTRA_SURFACE_CPU_READ));
-    assert(ASTRA_LockTexture(&renderer, &texture,
-                             &(SDL_Rect){ 4, 2, 8, 3 }, &pixels, &pitch) ==
-           0 && pitch == 128);
+    /* A lock is rows of staging; unlock appends their upload to the frame,
+       after what it drew so far, and posts nothing. */
     {
         int before = posts;
+        int resets = list_resets;
 
+        assert(ASTRA_LockTexture(&renderer, &texture,
+                                 &(SDL_Rect){ 4, 2, 8, 3 }, &pixels,
+                                 &pitch) == 0 &&
+               pitch == 32 && pixels == staging_pool);
         ASTRA_UnlockTexture(&renderer, &texture);
-        /* What the frame drew so far was posted first, without a present:
-           draws queued before the upload see the texture as it was. */
-        assert(posts == before + 1 && posts_at_write == before + 1 &&
-               last_post_flags == 0u);
+        assert(posts == before && uploads == 1 && last_upload.x == 4 &&
+               last_upload.y == 2 && last_upload.width == 8u &&
+               last_upload.height == 3u && last_upload_offset == 0u &&
+               last_upload_pitch == 32u);
+        /* The next upload of the frame lies beside it; caller rows reach
+           staging through the copy engine, packed. */
+        assert(ASTRA_UpdateTexture(&renderer, &texture,
+                                   &(SDL_Rect){ 0, 0, 2, 2 },
+                                   vertex_pool, 64) == 0);
+        assert(uploads == 2 && stages == 1 && last_stage_offset == 96u &&
+               last_stage_pitch == 64u && last_stage_row == 8u &&
+               last_upload_offset == 96u && last_upload_pitch == 8u &&
+               posts == before && list_resets == resets);
+        /* A present hands the frame over. The next frame's uploads start
+           staging over once the list is back, which they wait for: its
+           uploads' rows were the service's until then. */
+        assert(renderer.RenderPresent(&renderer) == 0 &&
+               posts == before + 1);
+        assert(ASTRA_LockTexture(&renderer, &texture,
+                                 &(SDL_Rect){ 0, 0, 1, 1 }, &pixels,
+                                 &pitch) == 0 &&
+               pixels == staging_pool && list_resets == resets + 1);
+        ASTRA_UnlockTexture(&renderer, &texture);
+        /* An upload that does not fit sends the frame first, and staging
+           grows while nothing uses it. */
+        staging_size = 1024u;
+        assert(ASTRA_LockTexture(&renderer, &texture,
+                                 &(SDL_Rect){ 0, 0, 32, 16 }, &pixels,
+                                 &pitch) == 0 &&
+               pixels == staging_pool && pitch == 128 &&
+               posts == before + 2 && list_resets == resets + 2 &&
+               staging_grows == 1 && staging_size == 2048u);
+        /* No readback while a lock holds rows of staging. */
+        assert(ASTRA_RenderReadPixels(&renderer, &(SDL_Rect){ 0, 0, 1, 1 },
+                                      SDL_PIXELFORMAT_RGB565, vertex_pool,
+                                      2) < 0 && errors == 1);
+        errors = 0;
+        /* A second lock that does not fit beside an open one cannot move
+           staging: it is a private copy, uploaded from at unlock. */
+        {
+            SDL_Texture second = texture;
+            void *second_pixels;
+            int second_pitch;
+
+            second.driverdata = NULL;
+            assert(ASTRA_CreateTexture(&renderer, &second) == 0);
+            assert(ASTRA_LockTexture(&renderer, &second,
+                                     &(SDL_Rect){ 0, 0, 32, 16 },
+                                     &second_pixels, &second_pitch) == 0 &&
+                   second_pitch == 128 &&
+                   ((uint8_t *)second_pixels < staging_pool ||
+                    (uint8_t *)second_pixels >=
+                        staging_pool + sizeof(staging_pool)));
+            ASTRA_UnlockTexture(&renderer, &texture);
+            assert(uploads == 4 && last_upload_offset == 0u &&
+                   last_upload_pitch == 128u && posts == before + 2);
+            /* With nothing locked the frame goes first and staging starts
+               over for the private copy's rows. */
+            ASTRA_UnlockTexture(&renderer, &second);
+            assert(uploads == 5 && stages == 2 && posts == before + 3 &&
+                   list_resets == resets + 3 && last_upload_offset == 0u &&
+                   last_upload_pitch == 128u && last_stage_pitch == 128u);
+            ASTRA_DestroyTexture(&renderer, &second);
+        }
     }
-    assert(writes == 1 && last_write.x == 4 && last_write.y == 2 &&
-           last_write.width == 8u && last_write.height == 3u &&
-           last_write_pitch == 128u);
 
     /* Copy: blend and alpha modulation reach the blit. */
     cmd = command(SDL_RENDERCMD_COPY);

@@ -56,6 +56,8 @@ typedef struct DisplayWindowGraphics {
     uint32_t staging_bytes;
     /* FRAMEs drawn: the first is logged, so a gate can see the path. */
     uint32_t posted_frames;
+    /* UPLOADs replayed from lists: the first is logged, likewise. */
+    uint32_t list_uploads;
 } DisplayWindowGraphics;
 
 /* Staged bytes the device places at batch offset `target` before running

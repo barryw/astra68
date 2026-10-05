@@ -13,7 +13,10 @@ Its frames take the posted path (docs/MEDIA_DATA_PLANE.md, Video): the
 display service logs a window's first posted frame; a frame is one
 submission, so the device sees at most an upload and a draw-list batch per
 compose, not one batch per render target; and the device held a request
-behind a running one.
+behind a running one. Its texture is locked straight into the display's
+staging area and its upload travels in the frame: the service logs a
+window's first frame upload, and the copy engine -- which packed every
+frame of the old path into staging -- runs far less than once a frame.
 
 Then it is played from the keyboard, as a person would: Escape opens the
 menu over the demo, Enter starts a new game (episode, skill), Escape returns
@@ -190,7 +193,11 @@ def main():
                                        (len(batches.times),
                                         dict(host.requests), story(log)))
                 time.sleep(0.1)
+            copies = machine.qmp.execute("qom-get", {
+                "path": "/machine", "property": "astra-copy-lists"})
             time.sleep(arguments.seconds)
+            copies = machine.qmp.execute("qom-get", {
+                "path": "/machine", "property": "astra-copy-lists"}) - copies
             if faults(machine):
                 raise RuntimeError("a process faulted: %r" %
                                    machine.said(0)[0][-30:])
@@ -211,6 +218,14 @@ def main():
                        for line in said):
                 raise RuntimeError("Doom's frames were not posted: %r" %
                                    said[-20:])
+            if not any("display: a window uploads in its frames" in line
+                       for line in said):
+                raise RuntimeError("Doom's texture uploads are not in its "
+                                   "frames: %r" % said[-20:])
+            if copies * 4 > composes:
+                raise RuntimeError("the copy engine ran %d times in %d "
+                                   "composes: Doom's frames are copied into "
+                                   "staging" % (copies, composes))
             queued = machine.qmp.execute("qom-get", {
                 "path": "/machine",
                 "property": "astra-display-queued-submissions"})
@@ -256,13 +271,15 @@ def main():
                 raise RuntimeError("a process faulted: %r" %
                                    machine.said(0)[0][-30:])
             print("Chocolate Doom QEMU: PASS (%.1f render batches/s over "
-                  "%.0f s, %.2f render-only per compose, frames posted, %d "
+                  "%.0f s, %.2f render-only per compose, frames posted with "
+                  "their uploads, %d copy-engine runs in %d composes, %d "
                   "requests queued behind another; %d audio frames at "
                   "44.1 kHz, peak %d; %d effects "
                   "converted on the host; %.1f s of host MIDI music, peak "
                   "%.2f of full scale; played "
                   "from the keyboard, quit through ENDOOM; no faults)"
-                  % (rate, arguments.seconds, per_compose, queued, frames,
+                  % (rate, arguments.seconds, per_compose, copies, composes,
+                     queued, frames,
                      loud, conversions,
                      music_frames / 48000.0, music_peak))
         finally:

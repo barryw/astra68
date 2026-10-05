@@ -133,3 +133,9 @@ ASTRA_SYSTEM_3.0 {
     local:
         *;
 };
+
+ASTRA_SYSTEM_3.1 {
+    global:
+        astra_display_stage;
+        astra_draw_upload;
+} ASTRA_SYSTEM_3.0;

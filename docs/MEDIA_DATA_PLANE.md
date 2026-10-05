@@ -278,7 +278,11 @@ display CPU and runs/s, vCPU host overhead (`--perf`).
    Landed and measured 2026-10-05: Doom 21 -> 35 presents/s idle (its tic
    cap), 15.3 -> 30.9 in motion, guest idle 34% -> 19% / 8%
    (`docs/HANDOVER_2026-10-05_VIDEO.md`).
-3. **Video: copies** (items 4-6).
+3. **Video: copies** (items 4-6). Item 4 landed and measured 2026-10-05:
+   Doom 31.0 -> 32.3 presents/s in motion, display 127 -> 100 runs/s, guest
+   idle +3 points. Items 5 and 6 dropped: QEMU's copies are under 0.9% of
+   the vCPU and the display's code ~1% of guest instructions
+   (`docs/HANDOVER_2026-10-05_VIDEO.md`, Phase 3).
 4. **Fences** (item 7) and retire what the new paths replace.
 
 ## Corrections found on the way

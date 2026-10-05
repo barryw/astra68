@@ -10,8 +10,10 @@
  */
 #define ASTRA_DRAW_LIST_MAGIC UINT32_C(0x41444c54) /* ADLT */
 /* 1.6: TARGET changes the destination of the commands after it, so one
-   list carries a whole frame for several destinations. */
-#define ASTRA_DRAW_LIST_VERSION_1_6 UINT32_C(0x00010006)
+   list carries a whole frame for several destinations. 1.7: UPLOAD writes
+   rows the client left in its staging area into a surface, so a frame
+   carries its texture uploads too. */
+#define ASTRA_DRAW_LIST_VERSION_1_7 UINT32_C(0x00010007)
 #define ASTRA_DRAW_LIST_HEADER_BYTES 64u
 #define ASTRA_DRAW_LIST_COMMAND_BYTES 64u
 /* A retained window list is one fixed 16 KiB area of 128 commands. */
@@ -46,6 +48,14 @@ enum {
        surface, its other fields zero. The list's own destination is the
        first one's. */
     ASTRA_DRAW_LIST_TARGET = 10u,
+    /* Rows of the display's staging area (AstraDisplay) into surface
+       `source` (never SOURCE_DESTINATION) at x, y, width x height:
+       payload_offset is the staging offset of the first row and color the
+       staging pitch -- they name staging, not the list's payload. Every
+       other field is zero. The rows are read when the service reads the
+       list, so the client leaves them unchanged until it has the list
+       back. */
+    ASTRA_DRAW_LIST_UPLOAD = 11u,
 };
 
 /* Command flags. TEXT and MONO_TEXT use ASTRA_TEXT_RENDER_STYLE_*. */

@@ -33,6 +33,15 @@ empties itself the next time it is changed, which waits only if the
 display service has not read it yet. Requests sent to the window after a
 post, such as {c:func}`astra_surface_write`, run after its commands.
 
+The frame carries its texture uploads too. Write the pixels straight into
+the display's staging area ({c:func}`astra_display_staging`), or copy them
+there with {c:func}`astra_display_stage`, and append
+{c:func}`astra_draw_upload`: it runs in order with the frame's draws, so
+nothing waits for the device and nothing is sent until the post. The rows
+belong to the service until the list is back -- changed again, or reset
+with {c:func}`astra_draw_list_reset`, after the post -- so a frame lays its
+uploads side by side and the next frame may reuse the area.
+
 The screen is 1920x1080. A window's content is RGB565.
 {c:func}`astra_display_layout_calculate` computes the exact crop and viewport
 the hardware scaler would use for a logical scene, without floating point.

@@ -429,7 +429,7 @@ static void test_draw_list_clip_reaches_hardware(void)
     astra_surface_fill(&surface, 0, 0, 20u, 10u, 0x1234u);
     header = (const AstraDrawListHeader *)(const void *)draw_storage;
     draw = (AstraDrawListCommand *)(void *)(header + 1);
-    assert(header->version == ASTRA_DRAW_LIST_VERSION_1_6);
+    assert(header->version == ASTRA_DRAW_LIST_VERSION_1_7);
     assert(draw->clip_left == 4u && draw->clip_top == 3u &&
            draw->clip_right == 12u && draw->clip_bottom == 8u);
     assert(!astra_draw_list_covers(header, 20u, 10u));
@@ -1077,7 +1077,7 @@ static AstraDrawListHeader *session_begin(uint16_t width, uint16_t height)
     memset(session_list, 0, sizeof(session_list));
     *header = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_6,
+        .version = ASTRA_DRAW_LIST_VERSION_1_7,
         .total_bytes = sizeof(session_list),
         .width = width,
         .height = height,
@@ -1433,6 +1433,56 @@ static void test_session_targets(void)
                &builder, window, header, sizeof(session_list), NULL, 1u,
                &next) == ASTRA_RENDER_REPLAY_INVALID);
     command->clip_right = 64u;
+
+    /* An UPLOAD stops the replay unlowered, like a TARGET: its rows are
+       the caller's to attach to a batch of their own. */
+    header = session_begin(320u, 200u);
+    command = session_add(header, ASTRA_DRAW_LIST_FILL);
+    command->width = 320u;
+    command->height = 200u;
+    command = session_add(header, ASTRA_DRAW_LIST_UPLOAD);
+    command->source = 7u;
+    command->x = 2;
+    command->y = 3;
+    command->width = 16u;
+    command->height = 4u;
+    command->color = 64u;
+    command->payload_offset = 4096u;
+    command->clip_right = 0u;
+    command->clip_bottom = 0u;
+    assert(astra_render_builder_init(&builder, storage,
+                                     ASTRA_RENDER_BUILDER_BYTES, 4u));
+    window = astra_render_builder_surface_at(
+        &builder, ASTRA_RENDER_BATCH_WORKSPACE_LIMIT, 320u * 200u * 2u,
+        320u, 200u);
+    assert(astra_render_builder_replay_range(
+               &builder, window, header, sizeof(session_list), NULL, 0u,
+               &next) == ASTRA_RENDER_REPLAY_UPLOAD &&
+           next == 1u && builder.command_count == 1u);
+    /* It names a surface and a pitch, and nothing else. */
+    command->source = ASTRA_DRAW_LIST_SOURCE_DESTINATION;
+    assert(astra_render_builder_replay_range(
+               &builder, window, header, sizeof(session_list), NULL, 1u,
+               &next) == ASTRA_RENDER_REPLAY_INVALID);
+    command->source = 7u;
+    command->color = 0u;
+    assert(astra_render_builder_replay_range(
+               &builder, window, header, sizeof(session_list), NULL, 1u,
+               &next) == ASTRA_RENDER_REPLAY_INVALID);
+    command->color = 64u;
+    command->clip_right = 16u;
+    assert(astra_render_builder_replay_range(
+               &builder, window, header, sizeof(session_list), NULL, 1u,
+               &next) == ASTRA_RENDER_REPLAY_INVALID);
+    command->clip_right = 0u;
+    command->x = -1;
+    assert(astra_render_builder_replay_range(
+               &builder, window, header, sizeof(session_list), NULL, 1u,
+               &next) == ASTRA_RENDER_REPLAY_INVALID);
+    command->x = 2;
+    assert(astra_render_builder_replay_range(
+               &builder, window, header, sizeof(session_list), NULL, 1u,
+               &next) == ASTRA_RENDER_REPLAY_UPLOAD && next == 1u);
 
     /* A segment that fills the batch leaves the next one for a new batch:
        its first command is FULL there, not invalid. */

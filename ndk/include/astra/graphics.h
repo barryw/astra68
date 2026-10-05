@@ -470,6 +470,24 @@ ASTRA_NODISCARD AstraResult astra_surface_write(
     const AstraRectI32 *rectangle, const void *pixels, uint32_t pitch);
 
 /**
+ * Copy caller rows into the display's staging area at @p offset, packed
+ * @p row_bytes apart, with the machine's copy engine: the MC68040 copies
+ * nothing. The staging area must already hold them
+ * (::astra_display_staging).
+ *
+ * @param[in,out] display Open window display.
+ * @param offset Staging byte offset of the first row.
+ * @param[in] pixels First source row.
+ * @param pitch Source bytes between rows.
+ * @param row_bytes Bytes of each row.
+ * @param rows Row count.
+ * @return ::ASTRA_OK on success or a negative ::AstraResult error.
+ */
+ASTRA_NODISCARD AstraResult astra_display_stage(
+    AstraDisplay *display, uint32_t offset, const void *pixels,
+    uint32_t pitch, uint32_t row_bytes, uint32_t rows);
+
+/**
  * Copy a rectangle of a surface back into caller memory, in the surface's
  * format. The read happens after every list submitted before it completed.
  * The pixels travel from Media RAM through the display's staging area.
@@ -512,7 +530,28 @@ ASTRA_NODISCARD AstraResult astra_draw_list_create(
 ASTRA_NODISCARD AstraResult astra_draw_list_set_target(
     AstraDrawList *draw_list, const AstraSurface *destination);
 /**
- * Remove queued commands while preserving the destination and clip.
+ * Append an upload: rows of the display's staging area, the first at
+ * @p staging_offset and each @p pitch bytes after the one before, written
+ * into @p rectangle of @p surface in its format. It runs in order with the
+ * list's draws, so draws before it read the surface as it was. The service
+ * takes the rows when it reads the list: leave them unchanged until the
+ * list is back -- changed again, or reset, after ::astra_draw_post -- and
+ * do not grow the staging area while the list holds the upload.
+ *
+ * @param[in,out] draw_list Mutable draw list.
+ * @param[in] surface CPU-writable surface of the list's window.
+ * @param[in] rectangle Destination rectangle inside the surface.
+ * @param staging_offset Staging byte offset of the first row.
+ * @param pitch Staging bytes between rows.
+ * @return ::ASTRA_OK on success or a negative ::AstraResult error.
+ */
+ASTRA_NODISCARD AstraResult astra_draw_upload(
+    AstraDrawList *draw_list, const AstraSurface *surface,
+    const AstraRectI32 *rectangle, uint32_t staging_offset, uint32_t pitch);
+/**
+ * Remove queued commands while preserving the destination and clip. A
+ * posted list is taken back first, waiting, if it must, until the service
+ * has read it.
  *
  * @param[in,out] draw_list Mutable, non-submitted draw list.
  * @return ::ASTRA_OK on success or a negative ::AstraResult error.

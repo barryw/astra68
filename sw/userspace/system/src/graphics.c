@@ -432,17 +432,44 @@ AstraResult astra_surface_write_staged(const AstraSurface *surface,
                             &reply);
 }
 
+AstraResult astra_display_stage(AstraDisplay *display, uint32_t offset,
+                                const void *pixels, uint32_t pitch,
+                                uint32_t row_bytes, uint32_t rows)
+{
+    uint32_t ignored;
+    AstraAreaCopy copy;
+
+    if (!display_live(display) || pixels == 0 || row_bytes == 0u ||
+        rows == 0u || pitch < row_bytes ||
+        row_bytes > ASTRA_AREA_SIZE_MAX / rows ||
+        offset > display->_private_staging_bytes ||
+        row_bytes * rows > display->_private_staging_bytes - offset)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    /* The machine's copy engine packs the rows into staging; the MC68040
+       copies nothing. */
+    copy = (AstraAreaCopy){
+        .size = ASTRA_AREA_COPY_SIZE,
+        .area = display->_private_staging,
+        .area_offset = offset,
+        .area_pitch = row_bytes,
+        .source = (uint32_t)(uintptr_t)pixels,
+        .source_pitch = pitch,
+        .row_bytes = row_bytes,
+        .rows = rows,
+    };
+    return astra_internal_result(astra_internal_syscall(
+        ASTRA_SYSCALL_AREA_COPY_IN, (uintptr_t)&copy, 0, 0, 0, 0, &ignored,
+        &ignored));
+}
+
 AstraResult astra_surface_write(AstraDisplay *display,
                                 const AstraSurface *surface,
                                 const AstraRectI32 *rectangle,
                                 const void *pixels, uint32_t pitch)
 {
-    const uint8_t *source = pixels;
-    uint8_t *staging = 0;
+    void *staging = 0;
     uint32_t staging_bytes = 0u;
     uint32_t row;
-    uint32_t ignored;
-    AstraAreaCopy copy;
     AstraResult result;
 
     if (!display_live(display) || !surface_live(surface) ||
@@ -453,24 +480,10 @@ AstraResult astra_surface_write(AstraDisplay *display,
     if (pitch < row || row > ASTRA_AREA_SIZE_MAX / rectangle->height)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     result = astra_display_staging(display, row * rectangle->height,
-                                   (void **)&staging, &staging_bytes);
-    if (result != ASTRA_OK)
-        return result;
-    /* The machine's copy engine packs the rows into staging; the MC68040
-       copies nothing. */
-    copy = (AstraAreaCopy){
-        .size = ASTRA_AREA_COPY_SIZE,
-        .area = display->_private_staging,
-        .area_offset = 0u,
-        .area_pitch = row,
-        .source = (uint32_t)(uintptr_t)source,
-        .source_pitch = pitch,
-        .row_bytes = row,
-        .rows = rectangle->height,
-    };
-    result = astra_internal_result(astra_internal_syscall(
-        ASTRA_SYSCALL_AREA_COPY_IN, (uintptr_t)&copy, 0, 0, 0, 0, &ignored,
-        &ignored));
+                                   &staging, &staging_bytes);
+    if (result == ASTRA_OK)
+        result = astra_display_stage(display, 0u, pixels, pitch, row,
+                                     rectangle->height);
     if (result != ASTRA_OK)
         return result;
     return astra_surface_write_staged(surface, rectangle, 0u, row);
@@ -571,7 +584,7 @@ static AstraResult list_attach(AstraDrawList *list, uint32_t capacity,
     header = (AstraDrawListHeader *)area.address;
     *header = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_6,
+        .version = ASTRA_DRAW_LIST_VERSION_1_7,
         .total_bytes = area.size < ASTRA_DRAW_LIST_SESSION_BYTES_MAX ?
                        area.size : ASTRA_DRAW_LIST_SESSION_BYTES_MAX,
         .command_count = count,
@@ -725,10 +738,12 @@ AstraResult astra_draw_list_create(const AstraSurface *destination,
     return result;
 }
 
+static AstraDrawListCommand *append_slot(AstraDrawList *list,
+                                         AstraResult *result);
+
 AstraResult astra_draw_list_set_target(AstraDrawList *draw_list,
                                        const AstraSurface *destination)
 {
-    AstraDrawListHeader *header;
     AstraDrawListCommand *command;
     AstraResult result;
 
@@ -751,31 +766,22 @@ AstraResult astra_draw_list_set_target(AstraDrawList *draw_list,
     draw_list->_private_target = destination->_private_id;
     draw_list->_private_target_width = destination->_private_width;
     draw_list->_private_target_height = destination->_private_height;
-    header = list_header(draw_list);
     /* An empty list simply starts at the new destination. */
-    if (header->command_count == 0u) {
+    if (list_header(draw_list)->command_count == 0u) {
         draw_list->_private_destination = destination->_private_id;
         return ASTRA_OK;
     }
-    if (header->command_count == header->command_capacity) {
-        result = list_attach(draw_list, header->command_capacity * 2u + 1u,
-                             payload_capacity(header), header->width,
-                             header->height);
-        if (result != ASTRA_OK)
-            return result;
-        header = list_header(draw_list);
-    }
-    command = &((AstraDrawListCommand *)(header + 1))
-                  [header->command_count++];
-    *command = (AstraDrawListCommand){
-        .operation = ASTRA_DRAW_LIST_TARGET,
-        .width = destination->_private_width,
-        .height = destination->_private_height,
-        .source = destination->_private_id,
-        .clip_right = destination->_private_width,
-        .clip_bottom = destination->_private_height,
-    };
-    return ASTRA_OK;
+    command = append_slot(draw_list, &result);
+    if (command != 0)
+        *command = (AstraDrawListCommand){
+            .operation = ASTRA_DRAW_LIST_TARGET,
+            .width = destination->_private_width,
+            .height = destination->_private_height,
+            .source = destination->_private_id,
+            .clip_right = destination->_private_width,
+            .clip_bottom = destination->_private_height,
+        };
+    return result;
 }
 
 AstraResult astra_draw_list_set_clip(AstraDrawList *draw_list,
@@ -838,14 +844,13 @@ AstraResult astra_draw_list_close(AstraDrawList *draw_list)
     return result == ASTRA_OK ? close_result : result;
 }
 
-/* A zeroed command carrying the current clip, or NULL with *result set.
-   An empty clip yields NULL with ASTRA_OK: the command draws nothing. */
-static AstraDrawListCommand *append(AstraDrawList *list, uint32_t operation,
-                                    AstraResult *result)
+/* A zeroed command slot at the end of the list, or NULL with *result
+   set: the list reclaimed if it was posted, and grown if it is full. */
+static AstraDrawListCommand *append_slot(AstraDrawList *list,
+                                         AstraResult *result)
 {
     AstraDrawListHeader *header;
     AstraDrawListCommand *command;
-    const AstraRectI32 *clip;
 
     *result = ASTRA_OK;
     if (!list_live(list)) {
@@ -859,9 +864,6 @@ static AstraDrawListCommand *append(AstraDrawList *list, uint32_t operation,
     *result = list_reclaim(list);
     if (*result != ASTRA_OK)
         return 0;
-    clip = &list->_private_clip;
-    if (clip->width == 0u || clip->height == 0u)
-        return 0;
     header = list_header(list);
     if (header->command_count == header->command_capacity) {
         /* Double the command bytes; the payload keeps its capacity. */
@@ -874,6 +876,27 @@ static AstraDrawListCommand *append(AstraDrawList *list, uint32_t operation,
     }
     command = &((AstraDrawListCommand *)(header + 1))
                   [header->command_count++];
+    *command = (AstraDrawListCommand){ .operation = 0u };
+    return command;
+}
+
+/* A zeroed command carrying the current clip, or NULL with *result set.
+   An empty clip yields NULL with ASTRA_OK: the command draws nothing. */
+static AstraDrawListCommand *append(AstraDrawList *list, uint32_t operation,
+                                    AstraResult *result)
+{
+    AstraDrawListCommand *command;
+    const AstraRectI32 *clip = &list->_private_clip;
+
+    /* A posted list is reclaimed even for a command that draws nothing. */
+    *result = !list_live(list) ? ASTRA_ERROR_INVALID_HANDLE :
+              list->_private_sealed == LIST_SUBMITTED ? ASTRA_ERROR_BUSY :
+              list_reclaim(list);
+    if (*result != ASTRA_OK || clip->width == 0u || clip->height == 0u)
+        return 0;
+    command = append_slot(list, result);
+    if (command == 0)
+        return 0;
     *command = (AstraDrawListCommand){
         .operation = operation,
         .clip_left = (uint16_t)clip->x,
@@ -882,6 +905,39 @@ static AstraDrawListCommand *append(AstraDrawList *list, uint32_t operation,
         .clip_bottom = (uint16_t)(clip->y + (int32_t)clip->height),
     };
     return command;
+}
+
+AstraResult astra_draw_upload(AstraDrawList *draw_list,
+                              const AstraSurface *surface,
+                              const AstraRectI32 *rectangle,
+                              uint32_t staging_offset, uint32_t pitch)
+{
+    AstraDrawListCommand *command;
+    AstraResult result;
+
+    if (draw_list == 0 || surface == 0)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (!list_live(draw_list) || !surface_live(surface) ||
+        surface->_private_window != draw_list->_private_window)
+        return ASTRA_ERROR_INVALID_HANDLE;
+    if (!surface_rect_valid(surface, rectangle) ||
+        pitch < row_bytes(surface->_private_format, rectangle->width))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if ((surface->_private_flags & ASTRA_SURFACE_CPU_WRITE) == 0u)
+        return ASTRA_ERROR_PERMISSION;
+    command = append_slot(draw_list, &result);
+    if (command != 0)
+        *command = (AstraDrawListCommand){
+            .operation = ASTRA_DRAW_LIST_UPLOAD,
+            .x = rectangle->x,
+            .y = rectangle->y,
+            .width = rectangle->width,
+            .height = rectangle->height,
+            .color = pitch,
+            .source = surface->_private_id,
+            .payload_offset = staging_offset,
+        };
+    return result;
 }
 
 static AstraResult append_fill(AstraDrawList *list, int32_t x, int32_t y,
