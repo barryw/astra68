@@ -17,6 +17,8 @@ PUBLIC_POINTER_SHAPES="$REPOSITORY/ndk/include/astra/pointer_shapes.h"
 PUBLIC_DISPLAY_MAILBOX="$REPOSITORY/sw/include/astra/display_mailbox.h"
 PUBLIC_RENDER_BATCH="$REPOSITORY/sw/include/astra/render_batch.h"
 PUBLIC_RENDER_PROTOCOL="$REPOSITORY/fpga/arty/linux/astra_render_protocol.h"
+# Generated from the protocol spec; a clean checkout has none yet.
+make -s -C "$REPOSITORY/fpga/arty/linux" astra_render_protocol.h >&2
 PUBLIC_ADDRESS_SPACE="$REPOSITORY/sw/include/astra/address_space.h"
 PUBLIC_SYSCALL="$REPOSITORY/sw/include/astra/syscall.h"
 PUBLIC_MESSAGE_ABI="$REPOSITORY/sw/include/astra/message_abi.h"

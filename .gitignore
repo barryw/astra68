@@ -45,6 +45,8 @@ sw/harte/results/
 # ROM hex build products (regenerated from source via each ROM's Makefile)
 *.hex
 !fpga/soc/post_fonts.hex
+# A source font, not a ROM product.
+!assets/fonts/astra_8x16.hex
 
 # generated per-build (BUILD_ID = hash of RTL+firmware source)
 sw/harte/build_id.h

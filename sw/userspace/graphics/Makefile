@@ -97,6 +97,14 @@ build/m68k/%.o: src/%.c ../../../ndk/include/astra/surface.h \
 	$(CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(TARGET_FLAGS) \
 		$(DEPFLAGS) -c $< -o $@
 
+# Generated from the render protocol spec by its owner; a clean checkout
+# has no copy until this makes one.
+RENDER_PROTOCOL_DIR := ../../../fpga/arty/graphics/protocol
+../../../fpga/arty/linux/astra_render_protocol.h: \
+		$(RENDER_PROTOCOL_DIR)/astra_render_v1.json \
+		$(RENDER_PROTOCOL_DIR)/generate_protocol.py
+	$(MAKE) -C ../../../fpga/arty/linux astra_render_protocol.h
+
 build/m68k/surface.o: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
 build/m68k/render_builder.o: $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 	../../../fpga/arty/linux/astra_render_protocol.h
