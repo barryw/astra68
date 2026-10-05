@@ -73,7 +73,7 @@ uint32_t astra_vfs_read_source_close(void *context);
  * Open the installed provider of one library identity through the current
  * process namespace, which must already be initialized.
  *
- * @param identity Exact library identity, such as `system.library.2`.
+ * @param identity Exact library identity, such as `system.library.3`.
  * @param[out] source Closed source that receives the provider binary.
  * @param[out] reference Receives the provider's library reference.
  * @return ASTRA_VFS_OK or an ASTRA_VFS_ERR_* status.

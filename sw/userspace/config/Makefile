@@ -21,7 +21,7 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LIBRARY := build/m68k/libraries/config.library.1
 LIBRARY_OBJECTS := build/m68k/config_library.o build/m68k/config_document.o
 LIBRARY_MAP := config.library.exports
-SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.2
+SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.3
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.4
@@ -55,7 +55,7 @@ $(LIBRARY): $(LIBRARY_OBJECTS) $(LIBRARY_MAP) $(ASTRA_SHARED_LINK_INPUTS) \
 		-Wl,--version-script=$(LIBRARY_MAP) -o $@ $(LIBRARY_OBJECTS) \
 		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(COMPILER_LIBRARY)) -L$(dir $(FILESYSTEM_LIBRARY)) \
-		-Wl,--no-as-needed -Wl,-l:system.library.2 \
+		-Wl,--no-as-needed -Wl,-l:system.library.3 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		-Wl,-l:filesystem.library.4 $(ASTRA_SHARED_LINK_END)
 
@@ -70,7 +70,7 @@ library-contract: $(LIBRARY)
 		$(LIBRARY_MAP) $(LIBRARY)
 	@python3 ../../../tools/library_info.py $(LIBRARY) | \
 		grep -q '^config.library.1 1.0.0 ABI 1.0$$'
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [system.library.2]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [system.library.3]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [filesystem.library.4]')" = 1

@@ -177,7 +177,7 @@ assert len(annotated) == 1 and annotated[0]["executions"] == 8
 
 signature = "00112233445566778899aabbccddeeff"
 relocatable = {
-    "name": "system.library.2", "path": "loader.library.1",
+    "name": "system.library.3", "path": "loader.library.1",
     "base": None, "bias": 0,
     "relocatable": True, "addresses": [0x1000],
     "symbols": [(0x1000, 0x20, "astra_call")],
@@ -190,7 +190,7 @@ relocation_profile = [{"blocks": [{
 inferred = module.relocate_images(relocation_profile, [relocatable])
 assert len(inferred) == 1 and inferred[0]["bias"] == 0x20000000
 assert module.resolve_image(inferred, 0x20001000, signature)[:2] == \
-    ("system.library.2", "astra_call")
+    ("system.library.3", "astra_call")
 ambiguous = {**relocatable, "executable_segments": [
     (0x1000, bytes.fromhex(signature) * 2)]}
 assert module.relocate_images(relocation_profile, [ambiguous]) == []
@@ -248,7 +248,7 @@ with tempfile.TemporaryDirectory() as directory:
     image_path = root / "sw/userspace/services/demo/build/m68k/demo.elf"
     library_path = root / \
         "sw/userspace/runtime/build/m68k/libraries/runtime.library.1"
-    ndk_path = root / "sw/userspace/system/build/m68k/libraries/system.library.2"
+    ndk_path = root / "sw/userspace/system/build/m68k/libraries/system.library.3"
     image_path.parent.mkdir(parents=True)
     library_path.parent.mkdir(parents=True)
     ndk_path.parent.mkdir(parents=True)

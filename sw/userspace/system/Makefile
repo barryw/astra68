@@ -30,7 +30,7 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LIB := build/m68k/libastra.a
 PIC_LIB := build/m68k/libastra-pic.a
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
-SYSTEM_LIBRARY := build/m68k/libraries/system.library.2
+SYSTEM_LIBRARY := build/m68k/libraries/system.library.3
 SYSTEM_IDENTITY := build/m68k/dynamic/system_library.o
 SYSTEM_SOURCES := src/resource.c src/area.c src/port.c src/bulk_ring.c \
 	src/application.c src/service_definition.c src/service_manager.c \
@@ -123,7 +123,7 @@ $(SYSTEM_LIBRARY): $(SYSTEM_IDENTITY) $(SYSTEM_OBJECTS) $(SYSTEM_MAP) \
 		$(ASTRA_SHARED_LINK_INPUTS) | runtime-library-ready
 	@mkdir -p $(@D)
 	$(CC) $(CPU_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,system.library.2 \
+		-Wl,-soname,system.library.3 \
 		-Wl,--version-script=$(SYSTEM_MAP) -o $@ \
 		$(SYSTEM_IDENTITY) $(SYSTEM_OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -Wl,--no-as-needed \
@@ -138,15 +138,15 @@ system-library-contract: $(SYSTEM_LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(SYSTEM_MAP) $(SYSTEM_LIBRARY)
 	@python3 ../../../tools/library_info.py $< | \
-		grep -q '^system.library.2 2.9.0 ABI 2.9$$'
+		grep -q '^system.library.3 3.0.0 ABI 3.0$$'
 	@$(READELF) -hW $< | grep -q 'Type:.*DYN'
-	@$(READELF) -dW $< | grep -Fq 'Library soname: [system.library.2]'
+	@$(READELF) -dW $< | grep -Fq 'Library soname: [system.library.3]'
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 1
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'
 	@$(READELF) -lW $< | grep -q ' GNU_RELRO '
-	@$(READELF) -VW $< | grep -q 'ASTRA_SYSTEM_2.9'
+	@$(READELF) -VW $< | grep -q 'ASTRA_SYSTEM_3.0'
 	@echo "astra system shared library: PASS"
 
 define system_host_test

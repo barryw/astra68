@@ -26,7 +26,7 @@ INTERFACE_LIBRARY_MAP := interface.library.exports
 NDK_HOST_UTF8 := $(SYSTEM)/build/host/utf8.o
 GRAPHICS_LIBRARY := $(GRAPHICS)/build/m68k/libraries/graphics.library.2
 FONT_LIBRARY := $(GRAPHICS)/build/m68k/libraries/font.library.2
-SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.2
+SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.3
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
@@ -103,7 +103,7 @@ $(INTERFACE_TARGET): $(INTERFACE_OBJECTS) $(INTERFACE_LIBRARY_MAP) \
 		-L$(dir $(GRAPHICS_LIBRARY)) -L$(dir $(SYSTEM_LIBRARY)) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
 		-Wl,--no-as-needed -Wl,-l:graphics.library.2 \
-		-Wl,-l:font.library.2 -Wl,-l:system.library.2 \
+		-Wl,-l:font.library.2 -Wl,-l:system.library.3 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		$(ASTRA_SHARED_LINK_END)
 
@@ -127,7 +127,7 @@ library-contract: $(INTERFACE_TARGET)
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [font.library.2]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
-		grep -Fc 'Shared library: [system.library.2]')" = 1
+		grep -Fc 'Shared library: [system.library.3]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
