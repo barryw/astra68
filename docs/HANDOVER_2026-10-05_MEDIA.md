@@ -64,6 +64,53 @@ Phase 0 questions, answer each with file:line before writing code:
    `AstraDisplayScanout` (`display_mailbox.h:54-68`).
 5. Fix the kernel switch-cause counters so A/Bs attribute switches.
 
+### Phase 0 answers (2026-10-05; file:line in sw/, emu/, fpga/)
+
+1. **Notify.** Doorbell aperture 0xffd00000, 256 x 4 KiB pages, KICK 0x20
+   (`host.h:536-556`); user-mode MMIO store, no syscall (`syscall.c:701-713`).
+   QEMU already runs many outstanding commands per channel
+   (`astra68.c:4964-5038`); only the client uses capacity 1. Channels are
+   one per (process, thread) (`process.c:2343-2349`) and not waitable
+   (waitables: `process.c:8501-8509`; ring `ring.c:665-704`; IRQ
+   `irq.c:1184-1207`; IRQ-safe wake `thread.c:2191`).
+   **Decision:** a new kernel object, the *audio stream*: pins the app's DMA
+   buffer, takes a doorbell slot (not thread-bound), waitable via
+   `prepare_wait` on the return-ring producer word; QEMU raises
+   IRQ_SRC_HOST with a per-stream pending bit; IRQ service stays
+   ack-then-scan (`process.c:2511-2517`).
+2. **Memory.** DMA buffers are contiguous, QEMU-visible (`astra_dma_data`
+   `astra68.c:2005-2015`), <= 8 MiB, R|W only, owner-checked
+   (`process.c:1864-1952`, `dma.c:376`). **Decision:** the app creates the
+   DMA buffer itself (header with play/return rings + N buffers, N =
+   max(3, latency/period+2), ~10 ms periods) under an audio capability the
+   media service grants (control plane); close tells QEMU to stop before
+   `dma_end`, as host channels do (`process.c:1498`).
+3. **Daemon access.** Guest RAM is private anonymous
+   (`run-arty.sh:251-252`); socket per command today (`astra68.c:3448-3642`).
+   **Decision:** a file-backed shared *audio mailbox* (display mailbox
+   pattern, `astra68.c:6656-6683, 1025-1061`): QEMU's stream kick copies the
+   queued buffer from guest DMA into the stream's input ring there (Haiku's
+   single copy into the mixer's per-input ring) and futex-wakes the daemon.
+   No partial copies; versioned header.
+4. **Clock.** No FIFO IRQ; feed every 2 ms (`astra_audio_host.c:479-503`,
+   regs 45-61). **Decision:** daemon publishes a seqlock {frames_played =
+   mixed_frames - level, monotonic_ns, rate} and per-stream consumed
+   positions; QEMU times period boundaries from it (vblank pattern,
+   `astra68.c:5157-5205`), advances return rings, raises the stream IRQ --
+   one guest wake per period. Feed thread: absolute `clock_nanosleep`,
+   SCHED_FIFO (lift `RestrictRealtime`).
+5. **Counters.** One increment of `context_switches` (`process.c:1317`);
+   `voluntary_switches` counts only YIELD (10992); idle-resume/exit have no
+   cause; preemption causes overlap (1473-1485, 8166-8170). **Fix:** pass a
+   single cause into `activate`, one counter each (block, yield, quantum,
+   deadline, preempt, exit, idle-resume), `wait_blocks` only when a switch
+   follows; test that causes sum to `context_switches`; astra-top "blocked"
+   points at the new counter.
+
+Order: counters (5), then the audio stream object + QEMU audio mailbox +
+daemon clock, then SDL/pcm library on it, then media service to control
+only and priorities (SDL audio thread 24, media 16).
+
 Then phase 1 (audio) per the design; measure with `de25-ab.sh` against a
 release published from `main` first.
 
