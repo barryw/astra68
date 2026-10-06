@@ -14093,6 +14093,119 @@ static void test_process_start_names_each_image(void)
                                  "/system/services/events-service");
 }
 
+/*
+ * fork() copies every send handle, including one whose receiver is gone. The
+ * copy is as dead as the original -- PEER_DEAD on send -- and the fork itself
+ * must not fail over it: a shell holding a stale service handle could
+ * otherwise never run another command.
+ */
+static void test_fork_copies_a_send_handle_to_a_closed_port(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
+    const uint32_t message_address = KERNEL_PROCESS_STACK_TOP - 512u;
+    uint8_t message[ASTRA_MESSAGE_HEADER_SIZE + 8u];
+    KernelCpuContext *next;
+    KernelPortPoolStats ports;
+    KernelPortSnapshot port;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t parent_id;
+    uint32_t child_id;
+    uint32_t receive_handle;
+    uint32_t send_handle;
+    uint32_t duplicate;
+    KernelHandle child_handle;
+    uint32_t port_slot = UINT32_MAX;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &parent_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    test_call_message(message, sizeof(message), 1u, 7u);
+    assert(kernel_user_copy_to_asm(message_address, message,
+                                   sizeof(message)) == KERNEL_USER_COPY_OK);
+    assert(kernel_port_pool_stats(&ports));
+    assert(ports.closing_ports == 0u);
+
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_PORT_CREATE,
+                     ASTRA_PORT_MESSAGES_MAX, ASTRA_PORT_BYTES_MAX, 0u, 0u,
+                     0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    receive_handle = next->data[1];
+    send_handle = next->data[2];
+    /* The receiver goes; the parent's send handle now reports it. */
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     receive_handle, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     send_handle, message_address, sizeof(message), 0u,
+                     0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+    for (uint32_t slot = 0u; slot < KERNEL_PORT_MAX; ++slot) {
+        if (kernel_port_snapshot(slot, &port) &&
+            port.state == KERNEL_PORT_CLOSING) {
+            port_slot = slot;
+            break;
+        }
+    }
+    assert(port_slot != UINT32_MAX);
+    assert(port.send_references == 1u && port.receive_references == 0u);
+
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_PROCESS_CLONE,
+                     0u, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    child_handle = next->data[1];
+    child_id = next->data[2];
+    assert(child_id != 0u && child_id != parent_id);
+    assert(kernel_port_snapshot(port_slot, &port));
+    assert(port.state == KERNEL_PORT_CLOSING &&
+           port.send_references == 2u && port.references == 2u);
+
+    /* A duplicate is the same copy, and as dead. */
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_HANDLE_DUPLICATE,
+                     send_handle, KERNEL_PORT_SEND_RIGHTS, 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    duplicate = next->data[1];
+    assert(kernel_port_snapshot(port_slot, &port) &&
+           port.send_references == 3u);
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     duplicate, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(kernel_port_snapshot(port_slot, &port) &&
+           port.send_references == 2u);
+
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_PROCESS_RESUME,
+                     child_handle, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    select_process(child_id, registers, frame, &next);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     send_handle, message_address, sizeof(message), 0u,
+                     0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_PROCESS_EXIT,
+                     0u, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+
+    /* The child's copy went with it; the parent's is the last reference. */
+    select_process(parent_id, registers, frame, &next);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    assert(kernel_port_snapshot(port_slot, &port));
+    assert(port.state == KERNEL_PORT_CLOSING &&
+           port.send_references == 1u && port.references == 1u);
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     send_handle, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_port_pool_stats(&ports));
+    assert(ports.closing_ports == 0u);
+    assert(kernel_port_pool_valid());
+}
+
 static void test_process_growth_is_resource_backed(void)
 {
     static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
@@ -14689,6 +14802,7 @@ int main(void)
     test_private_memory_faults_in_through_the_exception_path();
     test_process_clone_returns_twice_and_is_waitable();
     test_process_start_names_each_image();
+    test_fork_copies_a_send_handle_to_a_closed_port();
     test_process_clone_rebinds_startup_identity();
     test_process_clone_rejects_multithreaded_source();
     test_process_growth_is_resource_backed();
