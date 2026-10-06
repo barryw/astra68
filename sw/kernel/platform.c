@@ -275,9 +275,12 @@ uint32_t kernel_platform_cpu_cycles_low(void)
 
 void kernel_platform_cpu_cycles(KernelPlatformCycleCount *cycles)
 {
-    // Reading LO latches the coherent HI value for the following MMIO read.
+    // Reading LO latches the coherent HI value for the following MMIO read;
+    // mask interrupts so a handler cannot re-latch between the two reads.
+    uint16_t saved_status = kernel_interrupt_save_disable();
     uint32_t low = VESTA_READ(CPU_CYCLES_LO);
     uint32_t high = VESTA_READ(CPU_CYCLES_HI);
+    kernel_interrupt_restore(saved_status);
 
     cycles->high = high;
     cycles->low = low;
@@ -329,14 +332,20 @@ bool kernel_platform_wall_clock(uint64_t *nanoseconds, int32_t *utc_offset,
                                 uint32_t *zone)
 {
     uint32_t status = VESTA_READ(RTC_STATUS);
+    uint16_t saved_status;
     uint32_t low;
     uint32_t high;
 
     if (nanoseconds == NULL || (status & RTC_VALID) == 0u)
         return false;
-    /* Reading LO latches the coherent HI half for the read that follows. */
+    /*
+     * Reading LO latches the coherent HI half for the read that follows;
+     * mask interrupts so a handler cannot re-latch between the two reads.
+     */
+    saved_status = kernel_interrupt_save_disable();
     low = VESTA_READ(RTC_NS_LO);
     high = VESTA_READ(RTC_NS_HI);
+    kernel_interrupt_restore(saved_status);
     *nanoseconds = ((uint64_t)high << 32) | low;
     if (utc_offset != NULL) {
         *utc_offset = (status & RTC_ZONE_VALID) != 0u ?
