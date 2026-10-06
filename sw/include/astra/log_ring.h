@@ -91,7 +91,8 @@ _Static_assert(sizeof(AstraLogRecordFields) == ASTRA_LOG_RECORD_HEADER_SIZE,
 #define ASTRA_LOG_OPERATION_DOORBELL 2u
 /* The most setups one process image makes: one per ring the live service let
  * go of, or per failed exec, each with a ring of its own that stays mapped
- * (runtime/src/log.c). A dead service ends setup for good. The service
+ * (runtime/src/log.c). A dead service ends setup for good, in the
+ * process and in any child it forks. The service
  * refuses a setup from a pid already holding this many. */
 #define ASTRA_LOG_SETUPS_MAX       8u
 

@@ -2904,10 +2904,76 @@ test_log_before_exec_closes_rings(void)
            astra_log_test_producer() == NULL);
     /* A writer still in the old ring is told it is dead. */
     assert(__atomic_load_n(&producer->dead, __ATOMIC_ACQUIRE) != 0u);
+    /* Setup backs off: a line in the exec window (a signal handler) goes
+     * to LOG_WRITE rather than set up a ring the exec would discard. */
     writes = fake.log_writes;        /* exec's own debug lines */
-    log_x();
+    for (uint32_t index = 0u; index < 63u; ++index)
+        log_x();
+    assert(fake.area_creates == 1u && fake.log_writes == writes + 63u);
+    log_x();                         /* the 64th sets up again */
     assert(fake.area_creates == 2u && fake.port_sends == 2u);
-    assert(fake.log_writes == writes && fake_ring_records() == 1u);
+    assert(fake.log_writes == writes + 63u && fake_ring_records() == 1u);
+}
+
+/* A failed exec after several setups closes every endpoint it holds. */
+static void
+test_log_before_exec_closes_every_generation(void)
+{
+    ExecutableLaunchReader program;
+    AstraReadSource source;
+    AstraExecRequest request = {
+        .size = ASTRA_EXEC_REQUEST_SIZE,
+    };
+
+    reset_fake_kernel();
+    log_x();
+    for (uint32_t ring = 1u; ring < 3u; ++ring) {
+        fake_ring_let_go();
+        log_x();
+    }
+    assert(fake.area_creates == 3u && fake.producer_closes == 0u);
+    executable_launch_fixture(&program, NULL);
+    source = (AstraReadSource){
+        .length = program.length,
+        .read_at = executable_launch_read,
+        .release = executable_launch_release,
+        .context = &program,
+    };
+    reset_exec_mocks();
+    assert(astra_exec_executable_stream(&source, NULL, NULL, NULL, NULL,
+                                        &request) == ASTRA_SYSCALL_OK);
+    assert(fake.producer_closes == 3u);
+}
+
+/* A child forked after the service died holds the same dead handle: it
+ * stays on LOG_WRITE and never sets up, however long it runs. */
+static void
+test_log_after_fork_keeps_the_service_dead_latch(void)
+{
+    uint32_t process_handle;
+    uint32_t process_id;
+    uint32_t writes;
+
+    reset_fake_kernel();
+    log_x();
+    fake.doorbell_result = ASTRA_SYSCALL_PEER_DEAD;
+    fake.port_send_result = ASTRA_SYSCALL_PEER_DEAD;
+    fake_consume_all();
+    for (uint32_t index = 0u; index < 66u; ++index)
+        log_x();                     /* dies, backs off, setup refused */
+    assert(fake.area_creates == 2u && fake.port_sends == 2u);
+    mock_clone_child = 1;
+    assert(astra_process_clone(&process_handle, &process_id) ==
+           ASTRA_SYSCALL_OK);
+    mock_clone_child = 0;
+    /* Only the live (dead) ring's mapping was inherited; the refused
+     * setup's was already undone. */
+    assert(fake.unmaps == 2u);
+    writes = fake.log_writes;
+    for (uint32_t index = 0u; index < 1000u; ++index)
+        log_x();
+    assert(fake.area_creates == 2u && fake.port_sends == 2u);
+    assert(fake.log_writes == writes + 1000u);
 }
 
 /*
@@ -3016,6 +3082,8 @@ main(void)
     test_log_line_service_death_latches();
     test_log_after_fork_child_sets_up_its_own_ring();
     test_log_before_exec_closes_rings();
+    test_log_before_exec_closes_every_generation();
+    test_log_after_fork_keeps_the_service_dead_latch();
     test_log_line_falls_back_when_consumer_closed();
     test_log_line_late_writer_stays_in_its_own_ring();
     return 0;

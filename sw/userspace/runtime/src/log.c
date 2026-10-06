@@ -179,14 +179,22 @@ log_write_level(const void *bytes, uint32_t length, uint32_t level)
  * producer endpoint stay too (64 KiB and one handle each). A new setup follows
  * only a ring the live service let go of (refused or reaped) or a failed exec;
  * after 8 the process stays on LOG_WRITE for good, which bounds that leak at
- * 512 KiB of reservation. A dead service latches LOG_WRITE at once
- * (log_setup): the startup handle names its port forever.
+ * 512 KiB of reservation.
  */
 #define LOG_PRODUCERS    ASTRA_LOG_SETUPS_MAX
 
 static uint32_t log_state;
 static uint32_t log_setup_backoff;
+/*
+ * The service is dead: a setup was refused PEER_DEAD. A restarted service
+ * makes a new port that the startup handle will never name, so this latches
+ * LOG_WRITE for good, and a forked child keeps it (it holds the same handle).
+ * Separate from the generation, which counts rings the live service let go.
+ */
+static uint32_t log_service_dead;
 static AstraLogProducer log_producers[LOG_PRODUCERS];
+/* Each producer's mapping, the address astra_rt_area_map returned. */
+static void *log_producer_areas[LOG_PRODUCERS];
 /* Each producer's own endpoint, its doorbell context: held so the process's
  * death reaches the service, and polled to see the service let go of it. */
 static uint32_t log_producer_endpoints[LOG_PRODUCERS];
@@ -274,7 +282,8 @@ log_setup(void)
     if ((state & LOG_STATE_MASK) == LOG_SETUP_READY)
         return state;
     if ((state & LOG_STATE_MASK) != LOG_SETUP_IDLE ||
-        generation == LOG_PRODUCERS)
+        generation == LOG_PRODUCERS ||
+        __atomic_load_n(&log_service_dead, __ATOMIC_RELAXED) != 0u)
         return 0u;
     backoff = __atomic_load_n(&log_setup_backoff, __ATOMIC_RELAXED);
     if (backoff != 0u) {
@@ -328,15 +337,13 @@ log_setup(void)
     /* Never blocks: a full queue is WOULD_BLOCK, and this line falls back. */
     status = astra_port_send(log->handle, &setup, sizeof(setup), handles, 2u);
     if (status != ASTRA_SYSCALL_OK) {
-        /* The service is gone, and a restarted one makes a new port that
-         * this startup handle will never name: LOG_WRITE for good, as if
-         * every setup were spent (the generation is not used to index). */
         if (status == ASTRA_SYSCALL_PEER_DEAD)
-            generation = LOG_PRODUCERS;
+            __atomic_store_n(&log_service_dead, 1u, __ATOMIC_RELAXED);
         goto failed;
     }
     /* Both handles moved to the service on success. */
     log_producer_endpoints[generation] = producer; /* older ones stay open */
+    log_producer_areas[generation] = address;
     if (generation == 0u) {
         /* Once: older rings' writers read these in their doorbells. */
         log_port = log->handle;
@@ -397,16 +404,17 @@ log_ring_died(uint32_t state)
  * parent's mappings of its rings and the state naming them, but not the
  * producer endpoints, which do not clone: unmap the areas, and forget the
  * endpoints unclosed, because their numbers may name a child handle later.
- * The child's next line sets up a ring of its own.
+ * The child's next line sets up a ring of its own, with a fresh budget of
+ * setups -- unless the service is dead (log_service_dead): the child holds
+ * the same startup handle, so it stays on LOG_WRITE too.
  */
 void
 astra_log_after_fork_child(void)
 {
     for (uint32_t index = 0u; index < LOG_PRODUCERS; ++index) {
-        if (log_producers[index].header != NULL)
-            (void)astra_rt_area_unmap(
-                (void *)((uintptr_t)log_producers[index].header -
-                         ASTRA_LOG_RING_OFFSET));
+        if (log_producer_areas[index] != NULL)
+            (void)astra_rt_area_unmap(log_producer_areas[index]);
+        log_producer_areas[index] = NULL;
         log_producer_endpoints[index] = 0u;
     }
     memset(log_producers, 0, sizeof(log_producers));
@@ -423,7 +431,9 @@ astra_log_after_fork_child(void)
  * LOG_WRITE. The mappings stay: the kernel refuses to exec a multi-threaded
  * process only after this point, and such a writer could still be in them.
  * A successful exec unmaps them; a failed one leaves the process IDLE at the
- * same generation, and its next line sets up a new ring.
+ * same generation, and a line 64 calls later sets up a new ring. The backoff
+ * is what keeps a line written in the exec window itself (a signal handler)
+ * from setting up a ring the exec is about to discard.
  */
 void
 astra_log_before_exec(void)
@@ -439,7 +449,8 @@ astra_log_before_exec(void)
         log_producer_endpoints[index] = 0u;
         (void)astra_close(endpoint);
     }
-    __atomic_store_n(&log_setup_backoff, 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&log_setup_backoff, LOG_SETUP_RETRY_AFTER,
+                     __ATOMIC_RELAXED);
     /* From READY only: a BUSY setup is another thread's, and exec will be
      * refused while it runs. */
     if ((state & LOG_STATE_MASK) == LOG_SETUP_READY)
@@ -474,8 +485,11 @@ astra_log_test_reset(void)
 {
     log_state = LOG_SETUP_IDLE;
     log_setup_backoff = 0u;
-    for (uint32_t index = 0u; index < LOG_PRODUCERS; ++index)
+    log_service_dead = 0u;
+    for (uint32_t index = 0u; index < LOG_PRODUCERS; ++index) {
         log_producer_endpoints[index] = 0u;
+        log_producer_areas[index] = NULL;
+    }
     memset(log_producers, 0, sizeof(log_producers));
     log_port = 0u;
 }
