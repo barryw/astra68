@@ -150,6 +150,12 @@ others return at once. CAS uses the explicit compare-exchange loop the NDK
 mutex already uses (`ndk/include/astra/runtime.h:796`), because of the MC68040
 GCC atomic-exchange defect recorded in `docs/CURRENT_STATE.md`.
 
+A thread killed between reserving and committing leaves its slots uncommitted
+forever; publication stops there and every later line is dropped and counted
+until the process exits. This is an accepted limit: Astra does not kill
+threads asynchronously, and a fault ends the whole process rather than one
+thread.
+
 **Setup.** On the process's first log call, the runtime:
 
 1. creates the area and ring with `astra_rt_area_create` and

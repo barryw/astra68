@@ -188,14 +188,23 @@ test_corrupt_slot_count_is_rejected(void)
     AstraLogRecordFields read;
     char text[64];
     uint32_t length;
+    AstraLogRecordFields *stored;
 
     format_ring();
     astra_log_producer_init(&producer, area, record_notify, NULL);
     assert(astra_log_producer_write(&producer, &value, "ok", 2u) ==
            ASTRA_LOG_WRITE_OK);
-    /* Claim 9 slots in the first slot's header: more than published. */
-    area[ASTRA_LOG_RING_HEADER_SIZE + 4u +
-         __builtin_offsetof(AstraLogRecordFields, slots)] = 9u;
+    /* Self-consistent claim: text_length=209 and slots=2 match each other
+     * (astra_log_record_slots(209) == 2) and both pass every other bound
+     * (slots <= ASTRA_LOG_RECORD_SLOTS_MAX, text_length <= ASTRA_LOG_TEXT_MAX),
+     * so only "fields->slots > produced - at" -- 2 claimed vs. 1 actually
+     * published -- can catch this. This isolates that check: a 9-slot claim
+     * (as before) is also independently caught by the SLOTS_MAX bound and
+     * proves nothing about this line. */
+    stored = (AstraLogRecordFields *)(void *)
+        (area + ASTRA_LOG_RING_HEADER_SIZE + 4u);
+    stored->text_length = 209u;
+    stored->slots = 2u;
     assert(astra_log_consumer_next(area, &position, &read, text, sizeof(text),
                                    &length) == ASTRA_LOG_READ_CORRUPT);
 }
@@ -210,6 +219,24 @@ test_corrupt_slot_count_is_rejected(void)
 #define CONCURRENCY_THREADS      4u
 #define CONCURRENCY_PER_THREAD   10000u
 #define CONCURRENCY_TOTAL        (CONCURRENCY_THREADS * CONCURRENCY_PER_THREAD)
+/* Every 7th record per thread is a 600-byte, 3-slot record instead of the
+ * usual 9-byte, 1-slot one: exercises multi-slot commit ordering under
+ * contention, not just the single-slot fast path. */
+#define CONCURRENCY_LONG_EVERY   7u
+#define CONCURRENCY_LONG_LENGTH  600u
+
+/* Deterministic content for a long record, reproducible from (thread, index)
+ * alone so the consumer can verify every byte without extra bookkeeping. */
+static void
+fill_long_pattern(char *text, uint32_t thread_id, uint32_t index,
+                  uint32_t total_length)
+{
+    int prefix_length = snprintf(text, total_length, "%u:%07u:", thread_id,
+                                 index);
+
+    for (uint32_t k = (uint32_t)prefix_length; k < total_length; ++k)
+        text[k] = (char)('a' + (thread_id + index + k) % 26u);
+}
 
 typedef struct {
     uint32_t thread_id;
@@ -238,11 +265,20 @@ concurrency_producer_main(void *argument)
     uint32_t index;
 
     for (index = 0u; index < CONCURRENCY_PER_THREAD; ++index) {
-        char text[32];
-        int length = snprintf(text, sizeof(text), "%u:%07u",
-                              args->thread_id, index);
-        uint32_t status = astra_log_producer_write(args->producer, &value,
-                                                   text, (uint32_t)length);
+        char text[CONCURRENCY_LONG_LENGTH];
+        uint32_t length;
+        uint32_t status;
+
+        if (index % CONCURRENCY_LONG_EVERY == 0u) {
+            fill_long_pattern(text, args->thread_id, index,
+                              CONCURRENCY_LONG_LENGTH);
+            length = CONCURRENCY_LONG_LENGTH;
+        } else {
+            length = (uint32_t)snprintf(text, sizeof(text), "%u:%07u",
+                                        args->thread_id, index);
+        }
+        status = astra_log_producer_write(args->producer, &value, text,
+                                          length);
 
         if (status == ASTRA_LOG_WRITE_OK)
             ++args->written;
@@ -262,19 +298,40 @@ concurrency_consumer_main(void *argument)
     (void)argument;
     for (;;) {
         AstraLogRecordFields read;
-        char text[64];
+        char text[CONCURRENCY_LONG_LENGTH];
+        char expected[CONCURRENCY_LONG_LENGTH];
         uint32_t length = 0u;
         uint32_t status = astra_log_consumer_next(area, &position, &read,
                                                   text, sizeof(text),
                                                   &length);
 
         if (status == ASTRA_LOG_READ_OK) {
-            ConcurrencyRecord *slot =
-                &concurrency_results[concurrency_result_count++];
+            ConcurrencyRecord *slot;
             unsigned thread_id = 0u, seq = 0u;
+            char head[16];
+            uint32_t head_length =
+                length < sizeof(head) - 1u ? length : sizeof(head) - 1u;
 
-            text[length < sizeof(text) ? length : sizeof(text) - 1u] = '\0';
-            sscanf(text, "%u:%u", &thread_id, &seq);
+            /* Parse from a bounded, NUL-terminated copy of the prefix, not
+             * from `text` itself: `text` must stay untouched so the memcmp
+             * below checks every one of its bytes, and without a bound a
+             * short record's "%u" could run past its 9 bytes into another
+             * record's leftover bytes from a previous iteration. */
+            memcpy(head, text, head_length);
+            head[head_length] = '\0';
+            sscanf(head, "%u:%u", &thread_id, &seq);
+            if (length == 9u) {
+                int expected_length = snprintf(expected, sizeof(expected),
+                                               "%u:%07u", thread_id, seq);
+                assert((uint32_t)expected_length == length);
+            } else {
+                assert(length == CONCURRENCY_LONG_LENGTH);
+                fill_long_pattern(expected, thread_id, seq,
+                                  CONCURRENCY_LONG_LENGTH);
+            }
+            assert(memcmp(text, expected, length) == 0);
+            assert(concurrency_result_count < CONCURRENCY_TOTAL);
+            slot = &concurrency_results[concurrency_result_count++];
             slot->thread_id = thread_id;
             slot->seq = seq;
             slot->dropped = read.dropped;
@@ -306,20 +363,19 @@ concurrency_consumer_main(void *argument)
 static void
 test_concurrent_producers(void)
 {
-    static uint8_t sequence_seen[CONCURRENCY_TOTAL];
     AstraLogProducer producer;
     pthread_t producers[CONCURRENCY_THREADS];
     pthread_t consumer;
     ConcurrencyProducerArgs args[CONCURRENCY_THREADS];
     int64_t last_seen[CONCURRENCY_THREADS];
     uint32_t delivered_count[CONCURRENCY_THREADS];
+    int64_t last_sequence = -1;
     uint32_t total_written = 0u;
     uint32_t total_dropped = 0u;
     uint32_t thread_index;
     uint32_t result_index;
 
     format_ring();
-    memset(sequence_seen, 0, sizeof(sequence_seen));
     concurrency_result_count = 0u;
     concurrency_producers_done = 0;
     concurrency_corrupt = 0;
@@ -369,11 +425,18 @@ test_concurrent_producers(void)
         assert((int64_t)record->seq > last_seen[thread]);
         last_seen[thread] = (int64_t)record->seq;
         ++delivered_count[thread];
-        /* The process-wide sequence counter hands out each value once:
-         * exactly-once delivery, proven independently of the text payload. */
-        assert(record->sequence < total_written);
-        assert(sequence_seen[record->sequence] == 0u);
-        sequence_seen[record->sequence] = 1u;
+        /* `sequence` is the record's ring position (the reserve CAS's
+         * winning `first`), so it strictly increases across every record in
+         * delivery order regardless of which thread produced it -- the
+         * consumer only ever advances forward through the ring. This proves
+         * both uniqueness (no two records share a ring position) and that
+         * sequence tracks real publish order; it would not reliably hold if
+         * sequence were still an independent counter CAS'd apart from the
+         * reserve, since that counter's own races need not land in ring
+         * order. Density (0..total_written-1) no longer holds now that
+         * multi-slot records skip ring positions, so that is not asserted. */
+        assert((int64_t)record->sequence > last_sequence);
+        last_sequence = (int64_t)record->sequence;
         /* The dropped count a record carries can never exceed the final
          * total: it is read once, at or before the end of the run. */
         assert(record->dropped <= total_dropped);

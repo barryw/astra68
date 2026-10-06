@@ -9,6 +9,16 @@
  * on a process-local counter, fill them, set each slot's commit word to its
  * position + 1, and advance the shared producer position over committed slots
  * with CAS. No writer waits for another.
+ *
+ * Doorbell pairing contract: the producer's maybe_notify() reads
+ * consumer_position after a seq_cst fence that follows publish()'s CAS on
+ * producer_position. For that fence to mean anything, the consumer must
+ * store consumer_position (after draining), then fence seq_cst, then re-read
+ * producer_position before deciding whether more work already arrived --
+ * the same store-then-reload shape, mirrored. Without a matching seq_cst
+ * fence on the consumer side, each side's load can miss the other's store
+ * (the store-buffering pattern log_ring.c's producer-side fence forbids),
+ * and a doorbell can be skipped when it was needed.
  */
 
 #include <stdint.h>
@@ -44,7 +54,7 @@ _Static_assert(ASTRA_LOG_RING_HEADER_SIZE +
 
 /** Decoded record header. Stored in the first slot, native byte order. */
 typedef struct AstraLogRecordFields {
-    uint32_t sequence;
+    uint32_t sequence;        /* ring position of the record's first slot */
     uint32_t monotonic_high;
     uint32_t monotonic_low;
     uint32_t wall_high;
@@ -83,15 +93,14 @@ typedef struct AstraLogSetup {
 typedef uint32_t (*AstraLogNotify)(void *context);
 #define ASTRA_LOG_DOORBELL_MAGIC   0x414c4442u /* "ALDB", 4-byte message */
 
-/** Process-local producer state. Every field is written only by CAS or by
- * the setup path before `ready` is published. */
+/** Process-local producer state. Every field is written only by CAS, by an
+ * atomic store (`dead`), or by the setup path before the producer is used. */
 typedef struct AstraLogProducer {
     volatile AstraBulkRingHeader *header;
     volatile uint8_t *slots;
     AstraLogNotify notify;
     void *context;
     uint32_t reserved;     /* next position to hand out */
-    uint32_t sequence;
     uint32_t dropped;
     uint32_t dead;         /* nonzero once the service is gone */
 } AstraLogProducer;

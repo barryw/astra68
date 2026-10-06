@@ -11,6 +11,8 @@
 
 #include <astra/log_ring.h>
 
+#include <astra/event.h>
+
 #include <stddef.h>
 
 static inline int
@@ -64,7 +66,6 @@ astra_log_producer_init(AstraLogProducer *producer, volatile void *ring_base,
     producer->notify = notify;
     producer->context = context;
     producer->reserved = producer->header->producer_position;
-    producer->sequence = 0u;
     producer->dropped = 0u;
     producer->dead = 0u;
 }
@@ -78,8 +79,22 @@ copy_out(volatile uint8_t *to, const void *from, uint32_t length)
         to[index] = bytes[index];
 }
 
-/* Advance producer_position over every committed slot. Any writer may do it;
- * CAS keeps it monotonic when two do it at once. */
+/*
+ * Advance producer_position over every committed slot. Any writer may do it;
+ * CAS keeps it monotonic when two do it at once.
+ *
+ * Scans forward verifying each individual slot's own commit word -- the same
+ * per-slot check as always, so a record committed out of order (its
+ * continuation slots not yet committed) still halts the scan at the first
+ * gap -- but makes exactly one CAS per call, from the position it started at
+ * straight to the end of the run of slots it verified. Advancing with one CAS
+ * per slot instead would make every interior position of a multi-slot record
+ * (its continuation slots, already committed before its first slot per the
+ * commit loop below) briefly visible in producer_position between those CAS
+ * calls; a concurrent reader landing in that window sees a record whose
+ * claimed slot count exceeds what producer_position reports and misreads a
+ * record still being published as corrupt.
+ */
 static void
 publish(AstraLogProducer *producer)
 {
@@ -88,11 +103,16 @@ publish(AstraLogProducer *producer)
 
     for (;;) {
         uint32_t at = __atomic_load_n(position, __ATOMIC_ACQUIRE);
+        uint32_t reserved = __atomic_load_n(&producer->reserved,
+                                            __ATOMIC_ACQUIRE);
+        uint32_t end = at;
 
-        if (at == __atomic_load_n(&producer->reserved, __ATOMIC_ACQUIRE) ||
-            load32(commit_word(slot_at(producer->slots, at))) != at + 1u)
+        while (end != reserved &&
+              load32(commit_word(slot_at(producer->slots, end))) == end + 1u)
+            ++end;
+        if (end == at)
             return;
-        (void)cas32(position, at, at + 1u);
+        (void)cas32(position, at, end);
     }
 }
 
@@ -108,8 +128,16 @@ publish(AstraLogProducer *producer)
 static void
 maybe_notify(AstraLogProducer *producer, uint32_t first)
 {
-    if (producer->notify == NULL ||
-        load32(&producer->header->consumer_position) != first)
+    if (producer->notify == NULL)
+        return;
+    /* Seq-cst fence: pairs with the consumer's store-then-reload (store
+     * consumer_position, fence seq_cst, re-read producer_position --
+     * log_ring.h's doorbell pairing contract) so this doorbell decision
+     * cannot store-buffer past the consumer's write, the same way
+     * astra_log_producer_write's commit/publish fence forbids it between
+     * two producers. */
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (load32(&producer->header->consumer_position) != first)
         return;
     if (producer->notify(producer->context) != 0u)
         __atomic_store_n(&producer->dead, 1u, __ATOMIC_RELEASE);
@@ -149,14 +177,7 @@ astra_log_producer_write(AstraLogProducer *producer,
         if (cas32(&producer->reserved, first, first + slots))
             break;
     }
-    {
-        uint32_t sequence = __atomic_load_n(&producer->sequence,
-                                            __ATOMIC_RELAXED);
-
-        while (!cas32(&producer->sequence, sequence, sequence + 1u))
-            sequence = __atomic_load_n(&producer->sequence, __ATOMIC_RELAXED);
-        header.sequence = sequence;
-    }
+    header.sequence = first;
     header.dropped = __atomic_load_n(&producer->dropped, __ATOMIC_RELAXED);
     header.text_length = (uint16_t)length;
     header.slots = (uint8_t)slots;
@@ -183,6 +204,12 @@ astra_log_producer_write(AstraLogProducer *producer,
             (uint32_t *)(uintptr_t)commit_word(
                 slot_at(producer->slots, first + index)),
             first + index + 1u, __ATOMIC_RELEASE);
+    /* Seq-cst fence: forbids the store-buffering reordering where this
+     * writer's commit-word store and publish()'s load of another writer's
+     * commit word could each appear to precede the other writer's matching
+     * pair, letting both writers miss each other's commit and leave a slot
+     * unpublished forever. */
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
     publish(producer);
     maybe_notify(producer, first);
     return ASTRA_LOG_WRITE_OK;
@@ -220,7 +247,10 @@ astra_log_consumer_next(volatile const void *ring_base, uint32_t *position,
         fields->slots > produced - at ||
         fields->text_length > ASTRA_LOG_TEXT_MAX ||
         astra_log_record_slots(fields->text_length) != fields->slots ||
-        fields->stream > ASTRA_LOG_STREAM_MAX || fields->level > 4u)
+        fields->stream > ASTRA_LOG_STREAM_MAX ||
+        fields->level > ASTRA_EVENT_LEVEL_ERROR)
+        return ASTRA_LOG_READ_CORRUPT;
+    if (text == NULL && fields->text_length != 0u)
         return ASTRA_LOG_READ_CORRUPT;
     for (uint32_t index = 0u; index < fields->slots; ++index) {
         const volatile uint8_t *payload = slot_at(slots, at + index) + 4u;
@@ -235,7 +265,10 @@ astra_log_consumer_next(volatile const void *ring_base, uint32_t *position,
             fields->text_length - copied : room;
         if (copied + chunk > capacity)
             chunk = capacity > copied ? capacity - copied : 0u;
-        copy_in(text + copied, payload, chunk);
+        /* text may be NULL when capacity is 0 (caller wants only fields);
+         * guard the pointer arithmetic rather than rely on chunk being 0. */
+        if (chunk != 0u)
+            copy_in(text + copied, payload, chunk);
         copied += chunk;
     }
     *length = copied;
