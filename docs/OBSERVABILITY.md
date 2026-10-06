@@ -151,19 +151,12 @@ paid per module, once.
 
 ## Logging
 
-Astra does not need a new logging subsystem. `sw/kernel/trace.c` is already a
-versioned ring: 64 KiB of storage, 32-byte records, 2047 entries, a magic and
-ABI version, monotonic sequence numbers, and an event enum that already covers
-syscall entry and exit, context switches, IRQ delivery, and allocation
-failures.
-
-Userspace emits bounded structured or inline records through `LOG_WRITE`, and
-`TRACE_READ` drains generation-checked process views under debug authority.
-User records and kernel events therefore share the ring's sequence numbers and
-ordering. The events service persists the records it accepts; a future
-introspection tree can expose that existing stream without creating another
-ring. Two buffers with two timestamps and two orderings is the failure this
-avoids.
+The kernel trace ring (`sw/kernel/trace.c`: 64 KiB, 32-byte records, 2047
+entries) carries kernel events, typed `ASTRA_EVENT*` records, and `LOG_WRITE`
+from code that runs before or without the log service. Program text does not go
+there: each process logs into its own shared ring, drained by the log service
+into one time-ordered text file. `docs/SYSTEM_LOG.md` is the design, and says
+why the single shared ring was given up for text.
 
 The kernel monitor in `sw/kernel/monitor.c` stays what it is: the kernel's own
 debug console over FTDI and AstraHost SPI. It is not the user terminal, in the
