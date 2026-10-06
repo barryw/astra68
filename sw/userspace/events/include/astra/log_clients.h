@@ -14,6 +14,7 @@
 
 #include <stdint.h>
 
+#include <astra/log_format.h>
 #include <astra/log_ring.h>
 
 /** Complete number of processes the events service can log for at once. */
@@ -69,7 +70,8 @@ typedef struct AstraLogClients {
  * @param consumer_handle Kernel ring-consumer handle for `ring`.
  * @param area_handle Kernel area handle backing `ring`.
  * @return The new client, or NULL if `setup`, the ring header, or the mapping
- *     fails validation, or the table is full.
+ *     (any size but ::ASTRA_LOG_RING_AREA_SIZE) fails validation, if `pid`
+ *     already holds ::ASTRA_LOG_SETUPS_MAX clients, or if the table is full.
  */
 AstraLogClient *astra_log_clients_add(AstraLogClients *clients, uint32_t pid,
     const AstraLogSetup *setup, uint32_t setup_size,
@@ -86,8 +88,15 @@ typedef void (*AstraLogConsumed)(void *context, AstraLogClient *client,
                                  uint32_t position);
 
 /**
- * Drain every client's ring, merge the records by monotonic time, and format
- * them into one batch.
+ * Drain every client's ring, merge the records -- and the caller's
+ * kernel-ring lines -- by monotonic time, and format them into one batch.
+ *
+ * `extra` is the kernel ring's text, already joined and named by the caller,
+ * in ring order. Its lines are drain input like any ring record: taken in
+ * order, reserved against the same budget (the first always, the rest while
+ * they stay within half of it, so ring clients keep the other half), and
+ * sorted into the batch by `monotonic_ns`. `*extra_taken` says how many were
+ * written; the caller drops those and passes the rest next time.
  *
  * Each call reads at most what its output budget -- the smaller of
  * `capacity` and ::ASTRA_LOG_DRAIN_OUT_BYTES -- can hold: before a record is
@@ -127,6 +136,10 @@ typedef void (*AstraLogConsumed)(void *context, AstraLogClient *client,
  * port when a call returns both 0 bytes and `*pending == 0`.
  *
  * @param clients Table to drain.
+ * @param extra Kernel-ring lines in ring order, or NULL.
+ * @param extra_count Lines at `extra`.
+ * @param extra_taken Set to how many of `extra` this call wrote; may be NULL
+ *     when `extra` is.
  * @param out Output buffer for the formatted batch.
  * @param capacity Size of `out` in bytes; pass ::ASTRA_LOG_DRAIN_OUT_BYTES.
  *     A smaller `out` shrinks the pass. One smaller than the longest
@@ -146,8 +159,9 @@ typedef void (*AstraLogConsumed)(void *context, AstraLogClient *client,
  *     NULL.
  * @return Bytes written into `out`.
  */
-uint32_t astra_log_clients_drain(AstraLogClients *clients, char *out,
-    uint32_t capacity, AstraLogConsumed consumed, void *context,
+uint32_t astra_log_clients_drain(AstraLogClients *clients,
+    const AstraLogLine *extra, uint32_t extra_count, uint32_t *extra_taken,
+    char *out, uint32_t capacity, AstraLogConsumed consumed, void *context,
     uint32_t *day, uint32_t *pending);
 
 #endif

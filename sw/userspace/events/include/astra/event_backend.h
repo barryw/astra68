@@ -69,6 +69,9 @@ typedef struct AstraEventsBackend {
      */
     int (*log_read)(void *context, uint64_t offset, void *buffer,
                     uint32_t length, uint32_t *moved);
+    /* The syslog's current size in `*bytes`, or 0 when it cannot be had
+     * (then it reports 0). May be NULL. */
+    int (*log_size)(void *context, uint64_t *bytes);
     void *log_context;
 } AstraEventsBackend;
 

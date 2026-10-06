@@ -173,8 +173,9 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/ntpd grants CLOCK CONFIG:r LIBS:r NETWORK "
     "serves NTP required priority=20\n"
     # The log service drains only in time nobody else wants: below
-    # applications (docs/SYSTEM_LOG.md section 3, Priority).
-    "service /services/events grants SYSTEM:r STORE:rw WORK:rw LIBS:r "
+    # applications (docs/SYSTEM_LOG.md section 3, Priority). PROC:r names
+    # the processes behind kernel-ring lines (section 5).
+    "service /services/events grants SYSTEM:r STORE:rw WORK:rw LIBS:r PROC:r "
     "serves EVENTS:r EVENT_CONTROL LOG required priority=12\n"
     "service /services/input grants INPUT INPUT_IRQ "
     "serves INPUT_SERVICE required priority=20\n"

@@ -117,7 +117,7 @@ test_fair(void)
     emit(ring_b, &fb, 1u, "quiet");
     for (uint32_t pass = 0u; pass < 2u && !seen; ++pass) {
         (void)fill(ring_a, &fa, &at, "flood");
-        n = astra_log_clients_drain(&fresh_clients, big,
+        n = astra_log_clients_drain(&fresh_clients, NULL, 0u, NULL, big,
                                     ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed,
                                     NULL, &day, &pending);
         big[n] = '\0';
@@ -129,7 +129,7 @@ test_fair(void)
     for (uint32_t pass = 0u; pass < 10u; ++pass) {
         (void)fill(ring_a, &fa, &at, "a");
         (void)fill(ring_b, &fb, &at, "b");
-        n = astra_log_clients_drain(&fresh_clients, big,
+        n = astra_log_clients_drain(&fresh_clients, NULL, 0u, NULL, big,
                                     ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed,
                                     NULL, &day, &pending);
         big[n] = '\0';
@@ -168,7 +168,7 @@ test_cursor(void)
     for (uint32_t pass = 0u; pass < 2u && !seen; ++pass) {
         for (uint32_t i = 0u; i < 7u; ++i)
             (void)fill(rings[i], &producers[i], &at, "f");
-        n = astra_log_clients_drain(&table, big, ASTRA_LOG_DRAIN_OUT_BYTES,
+        n = astra_log_clients_drain(&table, NULL, 0u, NULL, big, ASTRA_LOG_DRAIN_OUT_BYTES,
                                     on_consumed, NULL, &day, &pending);
         big[n] = '\0';
         seen = strstr(big, " long[00000008] stdout: LLLL") != NULL;
@@ -198,7 +198,7 @@ test_budget(void)
         emit(ring_a, &fa, 100u + i, text);
     }
     do {
-        n = astra_log_clients_drain(&fresh_clients, out, sizeof(out),
+        n = astra_log_clients_drain(&fresh_clients, NULL, 0u, NULL, out, sizeof(out),
                                     on_consumed, NULL, &day, &pending);
         assert(n == 0u || out[n - 1u] == '\n');
         assert(used + n < sizeof(all));
@@ -233,11 +233,11 @@ test_small_out_refused(void)
     emit(ring_a, &fa, 100u, "kept");
     before = fresh_clients.client[0].position;
     consumed_calls = 0u;
-    assert(astra_log_clients_drain(&fresh_clients, out, MIN_OUT - 1u,
+    assert(astra_log_clients_drain(&fresh_clients, NULL, 0u, NULL, out, MIN_OUT - 1u,
                                    on_consumed, NULL, &day, &pending) == 0u);
     assert(pending == 0u && consumed_calls == 0u);
     assert(fresh_clients.client[0].position == before);
-    assert(astra_log_clients_drain(&fresh_clients, out, MIN_OUT, on_consumed,
+    assert(astra_log_clients_drain(&fresh_clients, NULL, 0u, NULL, out, MIN_OUT, on_consumed,
                                    NULL, &day, &pending) != 0u);
     assert(fresh_clients.client[0].position != before);
 }
@@ -254,7 +254,7 @@ test_record_cap_moves_cursor(void)
     for (uint32_t i = 0u; i < ASTRA_LOG_RING_CAPACITY; ++i)
         emit(ring_b, &fb, 10u + i, "");
     assert(fresh_clients.cursor == 0u);
-    (void)astra_log_clients_drain(&fresh_clients, big,
+    (void)astra_log_clients_drain(&fresh_clients, NULL, 0u, NULL, big,
                                   ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed,
                                   NULL, &day, &pending);
     assert(pending == 1u);
@@ -276,7 +276,7 @@ test_drop_order(void)
     emit(ring_a, &fa, 200u, "y0");
     fa.dropped = 1u;
     emit(ring_a, &fa, 300u, "z1");
-    n = astra_log_clients_drain(&fresh_clients, big,
+    n = astra_log_clients_drain(&fresh_clients, NULL, 0u, NULL, big,
                                 ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed, NULL,
                                 &day, &pending);
     big[n] = '\0';
@@ -290,12 +290,123 @@ test_drop_order(void)
     emit(ring_a, &fa, 200u, "first");
     fa.dropped = 0u;
     emit(ring_a, &fa, 100u, "second");
-    n = astra_log_clients_drain(&fresh_clients, big,
+    n = astra_log_clients_drain(&fresh_clients, NULL, 0u, NULL, big,
                                 ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed, NULL,
                                 &day, &pending);
     big[n] = '\0';
     assert(count_of(big, "[1 lines dropped]\n") == 1u);
     assert(count_of(big, "lines dropped]") == 1u);
+}
+
+static AstraLogLine
+kernel_line(uint64_t monotonic, const char *text)
+{
+    AstraLogLine line;
+
+    memset(&line, 0, sizeof(line));
+    line.monotonic_ns = monotonic;
+    line.level = ASTRA_EVENT_LEVEL_NOTICE;
+    line.stream = ASTRA_LOG_STREAM_LOG;
+    line.pid = 1u;
+    line.ident = "supervisor";
+    line.text = text;
+    line.length = (uint32_t)strlen(text);
+    return line;
+}
+
+/* Kernel-ring lines are drain input like any ring record: one stamped
+ * between two ring records lands between them (docs/SYSTEM_LOG.md §5). */
+static void
+test_kernel_lines_merge_by_time(void)
+{
+    AstraLogLine extra[2];
+    uint32_t day = 0u, pending = 0u, taken = 0u, n;
+    const char *a, *k, *b, *k2;
+
+    fresh();
+    emit(ring_a, &fa, 100u, "ring-early");
+    emit(ring_b, &fb, 300u, "ring-late");
+    extra[0] = kernel_line(200u, "kernel-middle");
+    extra[1] = kernel_line(400u, "kernel-last");
+    n = astra_log_clients_drain(&fresh_clients, extra, 2u, &taken, big,
+                                ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed, NULL,
+                                &day, &pending);
+    big[n] = '\0';
+    assert(taken == 2u && pending == 0u);
+    a = strstr(big, "doom[10000011] stdout: ring-early\n");
+    k = strstr(big, "supervisor[00000001] log: kernel-middle\n");
+    b = strstr(big, "display[10000012] stdout: ring-late\n");
+    k2 = strstr(big, "supervisor[00000001] log: kernel-last\n");
+    assert(a && k && b && k2 && a < k && k < b && b < k2);
+    assert(count_of(big, "\n") == 4u);
+}
+
+/* Kernel lines share the output budget: a long queue of them at the
+ * smallest `out` is taken in order, each exactly once, over several passes,
+ * and a ring client still drains alongside it. */
+static void
+test_kernel_lines_budgeted(void)
+{
+    static AstraLogLine extra[300];
+    static char texts[300][8];
+    static char all[65536];
+    static char out[MIN_OUT];
+    uint32_t used = 0u, day = 0u, pending = 0u, first = 0u, passes = 0u, n;
+
+    fresh();
+    emit(ring_a, &fa, 5u, "ring-line");
+    for (uint32_t i = 0u; i < 300u; ++i) {
+        snprintf(texts[i], sizeof(texts[i]), "k%03u", (unsigned)i);
+        extra[i] = kernel_line(10u + i, texts[i]);
+    }
+    do {
+        uint32_t taken = 0u;
+
+        n = astra_log_clients_drain(&fresh_clients, extra + first,
+                                    300u - first, &taken, out, sizeof(out),
+                                    on_consumed, NULL, &day, &pending);
+        assert(taken <= 300u - first);
+        first += taken;
+        assert(used + n < sizeof(all));
+        memcpy(all + used, out, n);
+        used += n;
+        assert(++passes < 300u);
+    } while (n != 0u || pending != 0u || first != 300u);
+    assert(passes > 2u);
+    all[used] = '\0';
+    for (uint32_t i = 0u; i < 300u; ++i) {
+        char needle[32];
+
+        snprintf(needle, sizeof(needle), "log: k%03u\n", (unsigned)i);
+        assert(count_of(all, needle) == 1u);
+    }
+    assert(count_of(all, "stdout: ring-line\n") == 1u);
+    assert(strstr(all, "ring-line") < strstr(all, "k000"));
+}
+
+/* A setup is refused when the table is full, when one pid already holds as
+ * many rings as the runtime ever makes, and when the mapping is any size but
+ * the ring area's. */
+static void
+test_add_limits(void)
+{
+    static AstraLogClients table;
+    AstraLogSetup s = setup("x");
+
+    memset(&table, 0, sizeof(table));
+    format(ring_a);
+    for (uint32_t i = 0u; i < ASTRA_LOG_SETUPS_MAX; ++i)
+        assert(astra_log_clients_add(&table, 7u, &s, sizeof(s), ring_a,
+                                     sizeof(ring_a), 1u, 2u) != NULL);
+    assert(astra_log_clients_add(&table, 7u, &s, sizeof(s), ring_a,
+                                 sizeof(ring_a), 1u, 2u) == NULL);
+    assert(astra_log_clients_add(&table, 8u, &s, sizeof(s), ring_a,
+                                 sizeof(ring_a) + 4096u, 1u, 2u) == NULL);
+    for (uint32_t i = ASTRA_LOG_SETUPS_MAX; i < ASTRA_LOG_CLIENTS_MAX; ++i)
+        assert(astra_log_clients_add(&table, 100u + i, &s, sizeof(s), ring_a,
+                                     sizeof(ring_a), 1u, 2u) != NULL);
+    assert(astra_log_clients_add(&table, 9999u, &s, sizeof(s), ring_a,
+                                 sizeof(ring_a), 1u, 2u) == NULL);
 }
 
 /* Same helper the runtime uses to build a SETUP message (log_setup() in
@@ -381,7 +492,7 @@ main(void)
     emit(ring_a, &a, 300u, "a-late");
     emit(ring_b, &b, 100u, "b-early");
     emit(ring_a, &a, 200u, "a-middle");
-    n = astra_log_clients_drain(&clients, out, ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed, NULL,
+    n = astra_log_clients_drain(&clients, NULL, 0u, NULL, out, ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed, NULL,
                                 &day, &pending);
     out[n] = '\0';
     /* Merged by monotonic time across clients, each line once. */
@@ -397,7 +508,7 @@ main(void)
 
     /* Nothing new: no output, no consumed calls, nothing pending. */
     pending = 1u;
-    assert(astra_log_clients_drain(&clients, out, ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed,
+    assert(astra_log_clients_drain(&clients, NULL, 0u, NULL, out, ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed,
                                    NULL, &day, &pending) == 0u);
     assert(consumed_calls == 2u);
     assert(pending == 0u);
@@ -405,7 +516,7 @@ main(void)
     /* Drops are announced once, before the next line. */
     a.dropped = 3u;
     emit(ring_a, &a, 400u, "after-drop");
-    n = astra_log_clients_drain(&clients, out, ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed, NULL,
+    n = astra_log_clients_drain(&clients, NULL, 0u, NULL, out, ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed, NULL,
                                 &day, &pending);
     out[n] = '\0';
     assert(strstr(out, "warning doom[10000011] log: [3 lines dropped]\n"));
@@ -421,26 +532,26 @@ main(void)
 
         (void)fill(ring_a, &a, &at, "x");
     }
-    n = astra_log_clients_drain(&clients, out, ASTRA_LOG_DRAIN_OUT_BYTES,
+    n = astra_log_clients_drain(&clients, NULL, 0u, NULL, out, ASTRA_LOG_DRAIN_OUT_BYTES,
                                 on_consumed, NULL, &day, &pending);
     assert(n > 0u);
     assert(pending == 1u);
-    n = astra_log_clients_drain(&clients, out, ASTRA_LOG_DRAIN_OUT_BYTES,
+    n = astra_log_clients_drain(&clients, NULL, 0u, NULL, out, ASTRA_LOG_DRAIN_OUT_BYTES,
                                 on_consumed, NULL, &day, &pending);
     assert(n > 0u);
     assert(pending == 0u);
-    n = astra_log_clients_drain(&clients, out, ASTRA_LOG_DRAIN_OUT_BYTES,
+    n = astra_log_clients_drain(&clients, NULL, 0u, NULL, out, ASTRA_LOG_DRAIN_OUT_BYTES,
                                 on_consumed, NULL, &day, &pending);
     assert(n == 0u && pending == 0u); /* now actually caught up */
 
     /* A corrupt ring marks the client dead and stops reading it; the other
      * client still drains, and the dead one no longer counts as pending. */
     ((AstraBulkRingHeader *)ring_b)->producer_position = 100000u;
-    (void)astra_log_clients_drain(&clients, out, ASTRA_LOG_DRAIN_OUT_BYTES,
+    (void)astra_log_clients_drain(&clients, NULL, 0u, NULL, out, ASTRA_LOG_DRAIN_OUT_BYTES,
                                   on_consumed, NULL, &day, &pending);
     assert(clients.client[1].dead);
     emit(ring_a, &a, 5000u, "survivor");
-    n = astra_log_clients_drain(&clients, out, ASTRA_LOG_DRAIN_OUT_BYTES,
+    n = astra_log_clients_drain(&clients, NULL, 0u, NULL, out, ASTRA_LOG_DRAIN_OUT_BYTES,
                                 on_consumed, NULL, &day, &pending);
     out[n] = '\0';
     assert(strstr(out, "doom[10000011] stdout: survivor\n"));
@@ -452,6 +563,9 @@ main(void)
     test_small_out_refused();
     test_record_cap_moves_cursor();
     test_drop_order();
+    test_kernel_lines_merge_by_time();
+    test_kernel_lines_budgeted();
+    test_add_limits();
     puts("LOG CLIENTS PASS");
     return 0;
 }

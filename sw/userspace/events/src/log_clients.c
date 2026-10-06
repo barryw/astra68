@@ -1,8 +1,9 @@
 /*
- * Every process's ring, drained into one time-ordered batch. The merge is per
- * drain pass: records within a pass are ordered by monotonic time across
- * processes, and passes follow one another, so the file is in order to within
- * one pass (docs/SYSTEM_LOG.md section 5).
+ * Every process's ring, and the kernel ring's text lines, drained into one
+ * time-ordered batch. The merge is per drain pass: records within a pass are
+ * ordered by monotonic time across processes and the kernel ring, and passes
+ * follow one another, so the file is in order to within one pass
+ * (docs/SYSTEM_LOG.md section 5).
  */
 
 #include <astra/log_clients.h>
@@ -36,6 +37,7 @@ _Static_assert(ASTRA_LOG_DRAIN_OUT_BYTES >=
 typedef struct Pending {
     AstraLogRecordFields fields;
     AstraLogClient *client;
+    const AstraLogLine *line; /* a caller's kernel-ring line, or NULL */
     uint32_t offset;        /* text's start in `arena` */
     uint32_t length;
     uint32_t dropped_delta; /* drops to announce before this record */
@@ -56,6 +58,12 @@ monotonic(const AstraLogRecordFields *f)
     return ((uint64_t)f->monotonic_high << 32) | f->monotonic_low;
 }
 
+static uint64_t
+pending_time(const Pending *p)
+{
+    return p->line != NULL ? p->line->monotonic_ns : monotonic(&p->fields);
+}
+
 AstraLogClient *
 astra_log_clients_add(AstraLogClients *clients, uint32_t pid,
                       const AstraLogSetup *setup, uint32_t setup_size,
@@ -64,6 +72,7 @@ astra_log_clients_add(AstraLogClients *clients, uint32_t pid,
 {
     const volatile AstraBulkRingHeader *header = ring;
     uint32_t terminated = 0u;
+    uint32_t held = 0u;
 
     if (clients == NULL || setup == NULL || ring == NULL ||
         setup_size != sizeof(*setup) ||
@@ -85,7 +94,7 @@ astra_log_clients_add(AstraLogClients *clients, uint32_t pid,
         setup->ring_offset != ASTRA_LOG_RING_OFFSET ||
         setup->slot_size != ASTRA_LOG_RING_SLOT_SIZE ||
         setup->capacity != ASTRA_LOG_RING_CAPACITY ||
-        mapped_size < ASTRA_LOG_RING_AREA_SIZE ||
+        mapped_size != ASTRA_LOG_RING_AREA_SIZE ||
         header->magic != ASTRA_BULK_RING_MAGIC ||
         header->element_size != ASTRA_LOG_RING_SLOT_SIZE ||
         header->capacity != ASTRA_LOG_RING_CAPACITY ||
@@ -95,6 +104,12 @@ astra_log_clients_add(AstraLogClients *clients, uint32_t pid,
         if (setup->ident[index] == '\0')
             terminated = 1u;
     if (!terminated)
+        return NULL;
+    /* More rings than the runtime ever makes is not a process logging. */
+    for (uint32_t index = 0u; index < ASTRA_LOG_CLIENTS_MAX; ++index)
+        if (clients->client[index].used && clients->client[index].pid == pid)
+            ++held;
+    if (held >= ASTRA_LOG_SETUPS_MAX)
         return NULL;
     for (uint32_t index = 0u; index < ASTRA_LOG_CLIENTS_MAX; ++index) {
         AstraLogClient *client = &clients->client[index];
@@ -218,6 +233,7 @@ read_client(AstraLogClient *client, uint32_t quota, uint32_t budget,
         if (delta != 0u)
             client->last_dropped = p->fields.dropped;
         p->client = client;
+        p->line = NULL;
         p->offset = *arena_used;
         p->dropped_delta = delta;
         *arena_used += p->length;
@@ -228,10 +244,40 @@ read_client(AstraLogClient *client, uint32_t quota, uint32_t budget,
     }
 }
 
+/*
+ * The caller's kernel-ring lines, in order, into the batch: the first always
+ * (the budget holds the longest line), the rest while they stay within half
+ * the budget, so ring clients keep the other half.
+ */
+static void
+read_extra(const AstraLogLine *extra, uint32_t extra_count, uint32_t budget,
+           uint32_t *reserved, uint32_t *count, uint32_t *taken)
+{
+    for (*taken = 0u; *taken < extra_count && *count < DRAIN_RECORDS;
+         ++*taken) {
+        const AstraLogLine *line = &extra[*taken];
+        uint32_t length = line->length < ASTRA_LOG_TEXT_MAX ?
+            line->length : ASTRA_LOG_TEXT_MAX;
+        uint32_t need = ASTRA_LOG_LINE_BYTES(length);
+        Pending *p = &batch[*count];
+
+        if (*taken != 0u && *reserved + need > budget / 2u)
+            return;
+        p->client = NULL;
+        p->line = line;
+        p->dropped_delta = 0u;
+        *reserved += need;
+        order[*count] = p;
+        ++*count;
+    }
+}
+
 uint32_t
-astra_log_clients_drain(AstraLogClients *clients, char *out,
-                        uint32_t capacity, AstraLogConsumed consumed,
-                        void *context, uint32_t *day, uint32_t *pending)
+astra_log_clients_drain(AstraLogClients *clients, const AstraLogLine *extra,
+                        uint32_t extra_count, uint32_t *extra_taken,
+                        char *out, uint32_t capacity,
+                        AstraLogConsumed consumed, void *context,
+                        uint32_t *day, uint32_t *pending)
 {
     static uint32_t start[ASTRA_LOG_CLIENTS_MAX];
     uint32_t budget = capacity < ASTRA_LOG_DRAIN_OUT_BYTES ?
@@ -244,9 +290,17 @@ astra_log_clients_drain(AstraLogClients *clients, char *out,
     uint32_t cut = ASTRA_LOG_CLIENTS_MAX;
     uint32_t cursor = clients->cursor % ASTRA_LOG_CLIENTS_MAX;
 
+    uint32_t taken = 0u;
+
     *pending = 0u;
+    if (extra_taken != NULL)
+        *extra_taken = 0u;
     if (capacity < DRAIN_OUT_MIN)
         return 0u;
+    if (extra != NULL)
+        read_extra(extra, extra_count, budget, &reserved, &count, &taken);
+    if (extra_taken != NULL)
+        *extra_taken = taken;
     for (uint32_t index = 0u; index < ASTRA_LOG_CLIENTS_MAX; ++index) {
         const AstraLogClient *client = &clients->client[index];
 
@@ -256,14 +310,15 @@ astra_log_clients_drain(AstraLogClients *clients, char *out,
     }
     /*
      * Two sweeps from the cursor. The first gives every live client an
-     * equal share of the budget (and always its first record, if the budget
-     * holds it), so one process flooding its ring cannot crowd out another;
-     * the second hands what is left over in the same order. The first client
-     * refused for want of room starts the next pass, where the whole budget
-     * is still open to it.
+     * equal share of what the kernel-ring lines left of the budget (and
+     * always its first record, if that holds it), so one process flooding
+     * its ring cannot crowd out another; the second hands what is left over
+     * in the same order. The first client refused for want of room starts
+     * the next pass, where at least half the budget is open to it.
      */
     for (uint32_t sweep = 0u; sweep < 2u && live != 0u; ++sweep) {
-        uint32_t quota = sweep == 0u ? budget / live : UINT32_MAX;
+        uint32_t quota = sweep == 0u ? (budget - reserved) / live :
+                                       UINT32_MAX;
 
         for (uint32_t step = 0u; step < ASTRA_LOG_CLIENTS_MAX; ++step) {
             uint32_t index = (cursor + step) % ASTRA_LOG_CLIENTS_MAX;
@@ -286,14 +341,14 @@ astra_log_clients_drain(AstraLogClients *clients, char *out,
             consumed(context, client, client->position);
     }
     /* Insertion sort: a batch is at most DRAIN_RECORDS and nearly sorted
-     * (each client's own records already arrive in order). Stable, so one
-     * process's lines keep their order on equal timestamps. */
+     * (each client's own records, and the kernel ring's, already arrive in
+     * order). Stable, so one source's lines keep their order on equal
+     * timestamps. */
     for (uint32_t i = 1u; i < count; ++i) {
         Pending *item = order[i];
         uint32_t j = i;
 
-        while (j != 0u &&
-               monotonic(&order[j - 1u]->fields) > monotonic(&item->fields)) {
+        while (j != 0u && pending_time(order[j - 1u]) > pending_time(item)) {
             order[j] = order[j - 1u];
             --j;
         }
@@ -303,6 +358,18 @@ astra_log_clients_drain(AstraLogClients *clients, char *out,
         Pending *p = order[i];
         AstraLogClient *client = p->client;
 
+        if (p->line != NULL) {
+            AstraLogLine line = *p->line;
+            uint32_t local_day;
+
+            if (line.length > ASTRA_LOG_TEXT_MAX)
+                line.length = ASTRA_LOG_TEXT_MAX;
+            used += astra_log_format(out + used, capacity - used, &line);
+            local_day = astra_log_local_day(&line);
+            if (local_day != 0u)
+                *day = local_day;
+            continue;
+        }
         if (p->dropped_delta != 0u) {
             AstraLogRecordFields note = p->fields;
             char text[DROP_TEXT_MAX];

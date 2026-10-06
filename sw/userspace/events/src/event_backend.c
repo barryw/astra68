@@ -454,12 +454,26 @@ is_directory(uint8_t kind)
            kind == KIND_LOG_DIR;
 }
 
+/* The syslog is a real file read through, so it has a real size; every
+ * other leaf is rendered on read and reports zero (see events_open). */
+static uint64_t
+log_file_size(const AstraEventsBackend *backend)
+{
+    uint64_t bytes = 0u;
+
+    if (backend->log_size == NULL ||
+        !backend->log_size(backend->log_context, &bytes))
+        return 0u;
+    return bytes;
+}
+
 static void
-events_node_info(uint8_t kind, AstraVfsNodeInfo *info)
+events_node_info(const AstraEventsBackend *backend, uint8_t kind,
+                 AstraVfsNodeInfo *info)
 {
     int directory = is_directory(kind);
 
-    info->size = 0u;
+    info->size = kind == KIND_LOG_FILE ? log_file_size(backend) : 0u;
     info->kind = directory ? ASTRA_VFS_KIND_DIRECTORY : ASTRA_VFS_KIND_FILE;
     info->mode = directory ? 0500u : 0400u;
     info->nlink = directory ? 2u : 1u;
@@ -501,7 +515,7 @@ events_open(void *context, const char *path, uint32_t flags,
      * contract was written to allow, and a reader that trusts a size here
      * would be trusting a number that was true a moment ago.
      */
-    events_node_info(held->kind, info);
+    events_node_info(backend, held->kind, info);
     return ASTRA_VFS_OK;
 }
 
@@ -643,7 +657,7 @@ events_stat(void *context, const char *path, AstraVfsNodeInfo *info)
     if (status != ASTRA_VFS_OK) {
         return status;
     }
-    events_node_info(described.kind, info);
+    events_node_info(backend_of(context), described.kind, info);
     return ASTRA_VFS_OK;
 }
 
@@ -654,7 +668,7 @@ events_stat_node(void *context, uintptr_t token, AstraVfsNodeInfo *info)
 
     if (node == NULL)
         return ASTRA_VFS_ERR_INVALID;
-    events_node_info(node->kind, info);
+    events_node_info(backend_of(context), node->kind, info);
     return ASTRA_VFS_OK;
 }
 
@@ -775,6 +789,7 @@ events_readdir(void *context, uintptr_t directory, const char *path,
         if (cookie == 0u) {
             entry = "syslog";
             info->kind = ASTRA_VFS_KIND_FILE;
+            info->size = log_file_size(backend);
         }
         break;
     case KIND_BOOT:

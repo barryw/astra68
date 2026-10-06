@@ -293,11 +293,19 @@ if measurement says so.
   The fields are local wall time with offset, level, then ident `[pid]` with
   the pid in hex as `ps` prints it,
   then the stream (`stdout`, `stderr`, `log` or `kernel`), then the text.
+  A kernel-ring line (`LOG_WRITE` from a process with no ring) is named
+  `kernel` for pid 0, `supervisor` for pid 1, by its ring's ident when the
+  pid has one, otherwise by the name `PROC:snapshot` gives the pid (the
+  service holds `PROC:r` and asks only after its own READY, at most once per
+  drain, remembering misses). `?` is left only for a process that died
+  before it was asked.
   Control bytes (below 0x20, and 0x7f) are written as `\xNN` and backslash as
   `\\`; bytes from 0x80 up pass through so UTF-8 text survives. One record is
   always one line.
 - **Order.** Each drain pass merges the heads of all rings and the kernel ring
   by monotonic time, so the file is in time order to within one quantum.
+  Kernel-ring lines are drain input like ring records, within the same
+  output budget (up to half of it, so rings keep the rest).
 - **Rotation.** The log rotates when `syslog` reaches 1 MiB, or at the first
   write after local midnight, whichever comes first. Rotating renames `syslog`
   to `syslog.1` and shifts older files up (`syslog.1.gz` → `syslog.2.gz` …).
@@ -318,8 +326,19 @@ if measurement says so.
   - 5% free on the volume. Below it, the service stops writing, records one
     `log: paused, volume full` line, and resumes when space returns.
   The limits live in `CONFIG:services/events/settings.conf`.
-- **Boot.** Each boot begins with
-  `--- boot 2026-10-05T14:03:20-04:00 build <id> ---`.
+- **Boot.** Each boot begins with `--- boot 2026-10-05T14:03:20-04:00 ---`.
+  There is no build id: nothing userspace can reach without new ABI names
+  the build. A restarted service writes
+  `--- events service restarted <time> ---` instead, and skips kernel-ring
+  text older than its own start, which the previous instance wrote (what it
+  had not yet drained when it died is lost from the file, not the store).
+  It knows it is a restart because the kernel ring already holds the
+  supervisor's `launch /services/events` line, written only after the first
+  instance's READY, or because the ring has wrapped since boot.
+- **The service never logs.** `services/events/main.c` includes neither
+  `astra/event_emit.h` nor `astra/log.h` and never calls `astra_log_line` or
+  `astra_log_write`: a log service that logs about logging is how a logging
+  subsystem takes a machine down.
 - **Host copy.** The service is granted `WORK:rw` and appends the same lines to
   `WORK:.astra/syslog`. That is `/var/lib/astra/hostfs/work/.astra/syslog` on
   the DE25, which can be read from Beast with `tail -f` while the machine runs.
