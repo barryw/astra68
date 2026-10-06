@@ -23,6 +23,7 @@
 
 #include <stdint.h>
 
+#include <astra/message_abi.h>
 #include <astra/object_abi.h>
 
 #define ASTRA_LOG_RING_AREA_SIZE    65536u
@@ -73,13 +74,24 @@ typedef struct AstraLogRecordFields {
 _Static_assert(sizeof(AstraLogRecordFields) == ASTRA_LOG_RECORD_HEADER_SIZE,
                "log record header ABI");
 
-/* The setup message a process sends the LOG port with [consumer, area]. */
+/*
+ * Messages to the LOG port. The kernel refuses a port message that does not
+ * begin with a valid AstraMessageHeader (sw/kernel/process.c,
+ * valid_message_header), so both carry one: protocol ASTRA_LOG_SETUP_MAGIC,
+ * version ASTRA_LOG_SETUP_VERSION, and the operation below.
+ *
+ * SETUP is an AstraLogSetup sent with [consumer endpoint, area]. DOORBELL is
+ * the header alone, with no handles.
+ */
 #define ASTRA_CAPABILITY_LOG       "LOG"
 #define ASTRA_LOG_SETUP_MAGIC      0x414c4f47u /* "ALOG" */
 #define ASTRA_LOG_SETUP_VERSION    1u
 #define ASTRA_LOG_IDENT_MAX        32u
+#define ASTRA_LOG_OPERATION_SETUP    1u
+#define ASTRA_LOG_OPERATION_DOORBELL 2u
 
 typedef struct AstraLogSetup {
+    AstraMessageHeader header;  /* operation ASTRA_LOG_OPERATION_SETUP */
     uint32_t magic;
     uint32_t version;
     uint32_t area_size;
@@ -91,7 +103,6 @@ typedef struct AstraLogSetup {
 
 /* The doorbell: returns nonzero when the service is gone (PEER_DEAD). */
 typedef uint32_t (*AstraLogNotify)(void *context);
-#define ASTRA_LOG_DOORBELL_MAGIC   0x414c4442u /* "ALDB", 4-byte message */
 
 /** Process-local producer state. Every field is written only by CAS, by an
  * atomic store (`dead`), or by the setup path before the producer is used. */

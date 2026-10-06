@@ -1760,6 +1760,27 @@ uint32_t astra_log_debug(const void *bytes, uint32_t length);
  */
 uint32_t astra_log(const char *text);
 /**
+ * Record one line of a program's output in the system log.
+ *
+ * Trailing newlines are not part of the line; an empty line is recorded. The
+ * first call creates the process's log ring and hands it to the log service
+ * through the `LOG` startup capability; every later line is a lock-free ring
+ * write with no syscall. It never blocks: a full ring drops the line and
+ * counts it. Debug lines, and every line while the ring is unavailable (no
+ * `LOG` capability, setup refused or in progress on another thread, service
+ * gone), go to the kernel event ring instead, as astra_log_write() did.
+ * astra_log(), astra_log_write(), astra_log_failure() and assertion reports
+ * all come through here.
+ * @param level ASTRA_EVENT_LEVEL_*.
+ * @param stream ASTRA_LOG_STREAM_LOG, _STDOUT or _STDERR.
+ * @param text UTF-8 bytes; need not be NUL-terminated.
+ * @param length Byte count.
+ * @return ASTRA_SYSCALL_OK, or ASTRA_SYSCALL_INVALID_ARGUMENT for a bad
+ * level, a bad stream or NULL text.
+ */
+uint32_t astra_log_line(uint32_t level, uint32_t stream, const char *text,
+                        uint32_t length);
+/**
  * Emit a standardized operation failure.
  * @param operation NUL-terminated operation name.
  * @param status Failure status.

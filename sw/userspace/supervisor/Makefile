@@ -69,10 +69,8 @@ SERVICE_DEFINITION_TEST := build/host/test_service_definition_store
 LOADER_STATUS_TEST := build/host/test_loader_status
 LAUNCH_REPORT_TEST := build/host/test_launch_report
 VOLUME_READ_TEST := build/host/test_volume_read
-# log.c comes along because validating a startup block is what binds the
-# diagnostic channel, so the two cannot be linked apart.
 TEST_SOURCES := src/supervisor.c $(RUNTIME)/src/startup.c \
-	$(RUNTIME)/src/log.c tests/test_supervisor.c
+	tests/test_supervisor.c
 ASTRA_PROGRAM_OWNER_TARGETS := $(RUNTIME):all $(ALLOC):all $(STORAGE):all \
 	$(VFS):all ../graphics:all $(SYSTEM):all
 ASTRA_PROGRAM_TARGETS := image

@@ -247,6 +247,7 @@ ASTRA_RUNTIME_1.12 {
 ASTRA_RUNTIME_1.13 {
     global:
         astra_log_consumer_next;
+        astra_log_line;
         astra_log_producer_init;
         astra_log_producer_write;
         astra_log_record_slots;

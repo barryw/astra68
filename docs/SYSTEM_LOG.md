@@ -161,8 +161,16 @@ thread.
 1. creates the area and ring with `astra_rt_area_create` and
    `astra_rt_ring_create`;
 2. maps the area read-write and keeps the producer endpoint;
-3. sends the consumer endpoint and a `READ|MAP` duplicate of the area handle to
-   the `LOG` port in **one** `astra_port_send`.
+3. sends the consumer endpoint and a `READ|WRITE|MAP|TRANSFER` duplicate of
+   the area handle to the `LOG` port in **one** `astra_port_send`. The service
+   writes `consumer_position` into the shared header, so it maps read-write,
+   and the kernel moves only handles that carry `TRANSFER`.
+
+Both messages to the `LOG` port begin with an `AstraMessageHeader`, because
+the kernel refuses a port message that does not (`valid_message_header` in
+`sw/kernel/process.c`): protocol `ASTRA_LOG_SETUP_MAGIC`, operation
+`ASTRA_LOG_OPERATION_SETUP` or `ASTRA_LOG_OPERATION_DOORBELL`
+(`sw/include/astra/log_ring.h`).
 
 `astra_port_send` never blocks: a full queue returns `WOULD_BLOCK`
 (`sw/kernel/port.c:917-922`). The kernel stamps the sending process's id on the
@@ -187,7 +195,7 @@ its commit word. The record header carries:
 
 There is no thread id: reading one costs a syscall in the shared runtime.
 
-**Doorbell.** A 4-byte message to the `LOG` port, sent with the
+**Doorbell.** A header-only message (24 bytes, no handles) to the `LOG` port, sent with the
 non-blocking `astra_port_send`. A writer sends it only when its record begins
 where the consumer had stopped, that is, when the ring was empty as far as the
 service knew. During a burst the service is not running, so its position does

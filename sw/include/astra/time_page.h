@@ -18,7 +18,10 @@
 
 #include <astra/address_space.h>
 
+/* Overridable so a host test can supply a page it can map. */
+#ifndef ASTRA_TIME_PAGE_ADDRESS
 #define ASTRA_TIME_PAGE_ADDRESS ASTRA_TIME_PAGE_ADDRESS_START
+#endif
 #define ASTRA_TIME_PAGE_MAGIC   0x54494D45u /* "TIME" */
 #define ASTRA_TIME_PAGE_VERSION 1u
 /** Set in `flags` when the wall-clock fields are valid (RTC_STATUS valid). */

@@ -10,11 +10,178 @@
 #include <astra/event_catalog.h>
 #include <astra/event_emit.h>
 #include <astra/host.h>
+#include <astra/log_ring.h>
 #include <astra/runtime.h>
 #include <astra/status.h>
 #include <astra/syscall.h>
 
 #include "../src/log_internal.h"
+
+/*
+ * The log ring's kernel: the calls astra_log_line's setup makes, answered from
+ * one static area (static so its address fits the 32-bit syscall ABI under
+ * -no-pie), with every result switchable so each failure path can be driven.
+ * Inert until reset_fake_kernel() makes it active.
+ */
+static _Alignas(64) uint8_t fake_area[ASTRA_LOG_RING_AREA_SIZE];
+static AstraTimePage fake_time_page;
+
+static struct {
+    int active;
+    int startup_has_log;
+    uint32_t area_creates;
+    uint32_t ring_creates;
+    uint32_t port_sends;      /* setup sends, refused or not */
+    uint32_t doorbells;
+    uint32_t log_writes;      /* LOG_WRITE: the kernel-ring fallback */
+    uint32_t closed_handles;
+    uint32_t unmaps;
+    uint32_t duplicate_rights;
+    uint32_t last_send_handle_count;
+    uint32_t last_send_handles[2];
+    AstraLogSetup last_setup;
+    uint32_t port_send_result;
+    uint32_t doorbell_result;
+    volatile uint8_t *area;
+} fake;
+
+static struct {
+    AstraStartupInfo info;
+    AstraStartupCapability capabilities[3];
+} fake_startup;
+static uint32_t fake_argv[1];
+static const char fake_program[] = "/apps/ChocolateDoom.app/chocolate-doom";
+
+#define FAKE_LOG_PORT     0x7000u
+#define FAKE_AREA         0x7001u
+#define FAKE_PRODUCER     0x7002u
+#define FAKE_CONSUMER     0x7003u
+#define FAKE_AREA_READER  0x7004u
+
+const AstraStartupInfo *
+astra_test_startup(void)
+{
+    AstraStartupInfo *info = &fake_startup.info;
+    uint32_t count = fake.startup_has_log ? 3u : 2u;
+
+    memset(&fake_startup, 0, sizeof(fake_startup));
+    info->magic = ASTRA_STARTUP_MAGIC;
+    info->abi_version = ASTRA_STARTUP_ABI_VERSION;
+    info->header_size = ASTRA_STARTUP_INFO_SIZE;
+    info->total_size = ASTRA_STARTUP_INFO_SIZE +
+                       count * ASTRA_STARTUP_CAPABILITY_SIZE;
+    info->syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION;
+    info->program_entry = 0x00100000u;
+    info->capability_count = count;
+    info->capabilities_address =
+        (uint32_t)(uintptr_t)fake_startup.capabilities;
+    astra_capability_name_set(fake_startup.capabilities[0].name,
+                              ASTRA_CAPABILITY_PROCESS);
+    astra_capability_name_set(fake_startup.capabilities[1].name,
+                              ASTRA_CAPABILITY_THREAD);
+    astra_capability_name_set(fake_startup.capabilities[2].name,
+                              ASTRA_CAPABILITY_LOG);
+    fake_startup.capabilities[2].handle = FAKE_LOG_PORT;
+    fake_argv[0] = (uint32_t)(uintptr_t)fake_program;
+    info->argc = 1u;
+    info->argv_address = (uint32_t)(uintptr_t)fake_argv;
+    return info;
+}
+
+uintptr_t
+astra_test_time_page_address(void)
+{
+    return (uintptr_t)&fake_time_page;
+}
+
+static void
+fake_log_syscall(uint32_t number, uint32_t argument0, uint32_t argument1,
+                 uint32_t argument2, uint32_t argument3, uint32_t argument4,
+                 AstraSyscallResult *result)
+{
+    if (number == ASTRA_SYSCALL_LOG_WRITE)
+        ++fake.log_writes;
+    if (!fake.active)
+        return;
+    switch (number) {
+    case ASTRA_SYSCALL_AREA_CREATE:
+        result->status = ASTRA_SYSCALL_OK;
+        assert(argument0 == ASTRA_LOG_RING_AREA_SIZE);
+        ++fake.area_creates;
+        result->value0 = FAKE_AREA;
+        return;
+    case ASTRA_SYSCALL_AREA_MAP:
+        result->status = ASTRA_SYSCALL_OK;
+        assert(argument0 == FAKE_AREA);
+        result->value0 = (uint32_t)(uintptr_t)fake_area;
+        result->value1 = sizeof(fake_area);
+        return;
+    case ASTRA_SYSCALL_RING_CREATE: {
+        /* What kernel_ring_create_flagged writes: a fresh header. */
+        AstraBulkRingHeader *header =
+            (AstraBulkRingHeader *)(void *)(fake_area + argument1);
+
+        result->status = ASTRA_SYSCALL_OK;
+        ++fake.ring_creates;
+        memset(fake_area, 0, sizeof(fake_area));
+        header->magic = ASTRA_BULK_RING_MAGIC;
+        header->version = ASTRA_BULK_RING_ABI_VERSION;
+        header->header_size = ASTRA_BULK_RING_HEADER_SIZE;
+        header->element_size = argument2;
+        header->capacity = ASTRA_LOG_RING_CAPACITY;
+        header->data_offset = ASTRA_BULK_RING_HEADER_SIZE;
+        header->total_size = ASTRA_BULK_RING_HEADER_SIZE +
+                             ASTRA_LOG_RING_CAPACITY * argument2;
+        header->generation = 1u;
+        result->value0 = FAKE_PRODUCER;
+        result->value1 = FAKE_CONSUMER;
+        return;
+    }
+    case ASTRA_SYSCALL_HANDLE_DUPLICATE:
+        result->status = ASTRA_SYSCALL_OK;
+        assert(argument0 == FAKE_AREA);
+        fake.duplicate_rights = argument1;
+        result->value0 = FAKE_AREA_READER;
+        return;
+    case ASTRA_SYSCALL_PORT_SEND_TRY: {
+        const AstraMessageHeader *message =
+            (const AstraMessageHeader *)(uintptr_t)argument1;
+
+        assert(argument0 == FAKE_LOG_PORT);
+        /* What the kernel's valid_message_header demands of every send. */
+        assert(message->total_size == argument2 &&
+               message->header_size == ASTRA_MESSAGE_HEADER_SIZE &&
+               message->flags == 0u && message->reserved == 0u &&
+               message->protocol == ASTRA_LOG_SETUP_MAGIC);
+        if (message->operation == ASTRA_LOG_OPERATION_DOORBELL) {
+            assert(argument2 == ASTRA_MESSAGE_HEADER_SIZE && argument4 == 0u);
+            ++fake.doorbells;
+            result->status = fake.doorbell_result;
+            return;
+        }
+        assert(message->operation == ASTRA_LOG_OPERATION_SETUP &&
+               argument2 == sizeof(AstraLogSetup) && argument4 <= 2u);
+        ++fake.port_sends;
+        memcpy(&fake.last_setup, message, sizeof(fake.last_setup));
+        fake.last_send_handle_count = argument4;
+        memcpy(fake.last_send_handles, (const void *)(uintptr_t)argument3,
+               argument4 * sizeof(uint32_t));
+        result->status = fake.port_send_result;
+        return;
+    }
+    case ASTRA_SYSCALL_CLOSE:
+        result->status = ASTRA_SYSCALL_OK;
+        ++fake.closed_handles;
+        return;
+    case ASTRA_SYSCALL_AREA_UNMAP:
+        result->status = ASTRA_SYSCALL_OK;
+        assert(argument0 == (uint32_t)(uintptr_t)fake_area);
+        ++fake.unmaps;
+        return;
+    default:
+        return;
+    }
+}
 
 _Static_assert(ASTRA_LAUNCH_GRANT_MAX == ASTRA_STARTUP_CAPABILITY_MAX - 2u,
                "launch grants use every capability slot left after self");
@@ -178,14 +345,19 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_HOST_QUERY &&
         number != ASTRA_SYSCALL_HOST_EXECUTE &&
         number != ASTRA_SYSCALL_HOST_CHANNEL_OPEN &&
-        number != ASTRA_SYSCALL_HOST_CHANNEL_WAIT) {
+        number != ASTRA_SYSCALL_HOST_CHANNEL_WAIT &&
+        !(fake.active && (number == ASTRA_SYSCALL_AREA_CREATE ||
+                          number == ASTRA_SYSCALL_AREA_MAP ||
+                          number == ASTRA_SYSCALL_HANDLE_DUPLICATE ||
+                          number == ASTRA_SYSCALL_PORT_SEND_TRY))) {
         assert(argument1 == 0u);
         assert(argument2 == 0u);
         assert(argument3 == 0u);
     }
     if (number != ASTRA_SYSCALL_PROCESS_CREATE &&
         number != ASTRA_SYSCALL_PROCESS_EXEC &&
-        number != ASTRA_SYSCALL_RING_CREATE) {
+        number != ASTRA_SYSCALL_RING_CREATE &&
+        !(fake.active && number == ASTRA_SYSCALL_PORT_SEND_TRY)) {
         assert(argument4 == 0u);
     }
     result->status = mock_status;
@@ -265,6 +437,8 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
     } else if (number == ASTRA_SYSCALL_CLOSE) {
         mock_stream_closed_handle = argument0;
     }
+    fake_log_syscall(number, argument0, argument1, argument2, argument3,
+                           argument4, result);
 }
 
 static AstraStartupInfo
@@ -1917,6 +2091,9 @@ static void test_event_channel(void)
     char oversized[ASTRA_EVENT_ARGUMENT_MAX * 6u + 16u];
     uint32_t calls;
 
+    /* A trailing newline would be stripped: no stack garbage in the line. */
+    memset(oversized, 'x', sizeof(oversized));
+
     /*
      * No binding and no handle. Emitting is universal now: a process that has
      * validated nothing and holds nothing can still say what it is doing.
@@ -2006,9 +2183,10 @@ static void test_event_channel(void)
         file[sizeof(file) - 1u] = '\0';
         memset(expression, 'x', sizeof(expression) - 1u);
         expression[sizeof(expression) - 1u] = '\0';
+        /* One record's first slot of text: a longer assertion is cut. */
         expected_length = astra_assert_message(
-            expected, sizeof(expected), file, UINT32_MAX, expression);
-        assert(expected_length > 128);
+            expected, ASTRA_LOG_FIRST_TEXT, file, UINT32_MAX, expression);
+        assert(expected_length == ASTRA_LOG_FIRST_TEXT - 1u);
         calls = mock_calls;
         assert(astra_log_assertion(file, UINT32_MAX, expression) ==
                ASTRA_SYSCALL_OK);
@@ -2317,6 +2495,211 @@ static void test_assert_message(void)
     assert(astra_assert_message(message, 0u, "a.c", 1u, "x") == 0u);
 }
 
+static void
+reset_fake_kernel(void)
+{
+    AstraTimePageCopy now = {0};
+
+    memset(&fake, 0, sizeof(fake));
+    memset(fake_area, 0, sizeof(fake_area));
+    fake.active = 1;
+    fake.startup_has_log = 1;
+    fake.area = fake_area;
+    fake.port_send_result = ASTRA_SYSCALL_OK;
+    fake.doorbell_result = ASTRA_SYSCALL_OK;
+    mock_status = ASTRA_SYSCALL_OK;
+    memset(&fake_time_page, 0, sizeof(fake_time_page));
+    fake_time_page.magic = ASTRA_TIME_PAGE_MAGIC;
+    fake_time_page.version = ASTRA_TIME_PAGE_VERSION;
+    now.monotonic_low = 5000u;
+    now.wall_high = 0x179u;
+    now.wall_low = 0x12345678u;
+    now.flags = ASTRA_TIME_PAGE_WALL_VALID;
+    astra_time_page_publish(&fake_time_page, &now);
+    astra_log_test_reset();
+}
+
+/* The service catching up: everything published is consumed. */
+static void
+fake_consume_all(void)
+{
+    AstraBulkRingHeader *header = (AstraBulkRingHeader *)(void *)fake_area;
+
+    __atomic_store_n(&header->consumer_position, header->producer_position,
+                     __ATOMIC_SEQ_CST);
+}
+
+static char fake_last_text[ASTRA_LOG_TEXT_MAX + 1u];
+
+/* Every record from the ring's start; the newest one's text is kept. */
+static uint32_t
+fake_ring_records(void)
+{
+    AstraLogRecordFields fields;
+    uint32_t position = 0u;
+    uint32_t length;
+    uint32_t records = 0u;
+
+    while (astra_log_consumer_next(fake_area, &position, &fields,
+                                   fake_last_text, ASTRA_LOG_TEXT_MAX,
+                                   &length) == ASTRA_LOG_READ_OK) {
+        fake_last_text[length] = '\0';
+        ++records;
+    }
+    return records;
+}
+
+static int
+last_ring_text_equals(const char *text)
+{
+    return fake_ring_records() != 0u && strcmp(fake_last_text, text) == 0;
+}
+
+static void
+test_log_line_sets_up_ring_once_and_writes_records(void)
+{
+    reset_fake_kernel();
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_STDOUT,
+                          "V_Init: allocate screens.\n", 26u) ==
+           ASTRA_SYSCALL_OK);
+    assert(fake.area_creates == 1u && fake.ring_creates == 1u);
+    assert(fake.port_sends == 1u && fake.doorbells == 1u);
+    assert(fake.last_send_handle_count == 2u);
+    assert(fake.last_send_handles[0] == FAKE_CONSUMER &&
+           fake.last_send_handles[1] == FAKE_AREA_READER);
+    /* The service maps it read-write (it stores consumer_position), and the
+     * kernel moves only handles that carry TRANSFER. */
+    assert(fake.duplicate_rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                                     ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER));
+    assert(strcmp(fake.last_setup.ident, "chocolate-doom") == 0);
+    assert(fake.last_setup.magic == ASTRA_LOG_SETUP_MAGIC);
+    assert(fake.last_setup.capacity == ASTRA_LOG_RING_CAPACITY &&
+           fake.last_setup.slot_size == ASTRA_LOG_RING_SLOT_SIZE &&
+           fake.last_setup.area_size == ASTRA_LOG_RING_AREA_SIZE);
+    assert(fake.log_writes == 0u); /* not the kernel ring */
+    /* The producer endpoint is kept; only the area handle is let go. */
+    assert(fake.closed_handles == 1u && fake.unmaps == 0u);
+    {
+        AstraLogRecordFields read;
+        char text[64];
+        uint32_t length;
+        uint32_t position = 0u;
+
+        assert(astra_log_consumer_next(fake.area, &position, &read, text,
+                                       sizeof(text), &length) ==
+               ASTRA_LOG_READ_OK);
+        /* The trailing newline is not part of the record. */
+        assert(length == 25u && memcmp(text, "V_Init: allocate screens.", 25u)
+               == 0);
+        assert(read.level == ASTRA_EVENT_LEVEL_NOTICE &&
+               read.stream == ASTRA_LOG_STREAM_STDOUT);
+        /* Stamped from the time page. */
+        assert(read.monotonic_high == 0u && read.monotonic_low == 5000u);
+        assert(read.wall_high == 0x179u && read.wall_low == 0x12345678u);
+        assert((read.flags & ASTRA_LOG_FLAG_WALL_VALID) != 0u);
+    }
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_STDOUT,
+                          "two", 3u) == ASTRA_SYSCALL_OK);
+    assert(fake.area_creates == 1u && fake.port_sends == 1u);
+    assert(fake.doorbells == 1u); /* the service has not drained: no ring */
+    fake.doorbell_result = ASTRA_SYSCALL_PEER_DEAD;
+    fake_consume_all(); /* consumer catches up, so the next line rings */
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_LOG,
+                          "gone", 4u) == ASTRA_SYSCALL_OK);
+    assert(fake.doorbells == 2u && fake.log_writes == 0u);
+    /* the service died: that line was in the ring; the next one falls back */
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_LOG,
+                          "after", 5u) == ASTRA_SYSCALL_OK);
+    assert(fake.log_writes == 1u);
+    assert(fake_ring_records() == 3u && last_ring_text_equals("gone"));
+}
+
+static void
+test_log_line_falls_back_when_send_refused_then_retries(void)
+{
+    reset_fake_kernel();
+    fake.port_send_result = ASTRA_SYSCALL_WOULD_BLOCK;
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_ERROR, ASTRA_LOG_STREAM_LOG,
+                          "early", 5u) == ASTRA_SYSCALL_OK);
+    assert(fake.log_writes == 1u);       /* went to LOG_WRITE */
+    /* reader, consumer, producer and area closed; the mapping undone */
+    assert(fake.closed_handles == 4u && fake.unmaps == 1u);
+    fake.port_send_result = ASTRA_SYSCALL_OK;
+    for (uint32_t index = 0u; index < 63u; ++index)
+        (void)astra_log_line(ASTRA_EVENT_LEVEL_ERROR, ASTRA_LOG_STREAM_LOG,
+                             "x", 1u);
+    assert(fake.area_creates == 1u);     /* still backing off */
+    assert(fake.log_writes == 64u);
+    (void)astra_log_line(ASTRA_EVENT_LEVEL_ERROR, ASTRA_LOG_STREAM_LOG,
+                         "x", 1u);
+    assert(fake.area_creates == 2u && fake.port_sends == 2u);
+    assert(fake.log_writes == 64u && fake_ring_records() == 1u);
+}
+
+static void
+test_log_line_without_log_capability_uses_kernel_ring(void)
+{
+    reset_fake_kernel();
+    fake.startup_has_log = 0;
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_LOG,
+                          "boot", 4u) == ASTRA_SYSCALL_OK);
+    assert(fake.area_creates == 0u && fake.log_writes == 1u);
+}
+
+static void
+test_log_line_debug_never_enters_the_ring(void)
+{
+    reset_fake_kernel();
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_DEBUG, ASTRA_LOG_STREAM_LOG,
+                          "echo", 4u) == ASTRA_SYSCALL_OK);
+    assert(fake.area_creates == 0u && fake.log_writes == 1u);
+}
+
+static void
+test_log_line_records_empty_lines(void)
+{
+    reset_fake_kernel();
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_STDOUT,
+                          "\n", 1u) == ASTRA_SYSCALL_OK);
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_STDOUT,
+                          "", 0u) == ASTRA_SYSCALL_OK);
+    assert(fake_ring_records() == 2u && last_ring_text_equals(""));
+    /* Only the kernel ring cannot carry an empty line. */
+    fake.startup_has_log = 0;
+    astra_log_test_reset();
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_STDOUT,
+                          "\r\n", 2u) == ASTRA_SYSCALL_OK);
+    assert(fake.log_writes == 0u);
+}
+
+static void
+test_log_line_rejects_bad_arguments(void)
+{
+    assert(astra_log_line(5u, ASTRA_LOG_STREAM_LOG, "x", 1u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_log_line(2u, 9u, "x", 1u) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_log_line(2u, ASTRA_LOG_STREAM_KERNEL, "x", 1u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(astra_log_line(2u, 0u, NULL, 1u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+}
+
+static void
+test_existing_astra_log_routes_through_ring(void)
+{
+    reset_fake_kernel();
+    assert(astra_log("volume mounted at /") == ASTRA_SYSCALL_OK);
+    assert(fake_ring_records() == 1u && fake.log_writes == 0u);
+    assert(astra_log_failure("media host", 12u) == ASTRA_SYSCALL_OK);
+    assert(last_ring_text_equals("media host:12: failed"));
+    assert(astra_log_assertion("a.c", 7u, "x != 0") == ASTRA_SYSCALL_OK);
+    assert(last_ring_text_equals("a.c:7: x != 0"));
+    assert(astra_log("") == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    /* debug stays live commentary on the kernel ring */
+    assert(astra_log_debug("echo", 4u) == ASTRA_SYSCALL_OK);
+    assert(fake.log_writes == 1u && fake_ring_records() == 3u);
+}
+
 int
 main(void)
 {
@@ -2346,5 +2729,12 @@ main(void)
     test_event_descriptor_layout();
     test_event_catalog();
     test_assert_message();
+    test_log_line_rejects_bad_arguments();
+    test_log_line_sets_up_ring_once_and_writes_records();
+    test_log_line_falls_back_when_send_refused_then_retries();
+    test_log_line_without_log_capability_uses_kernel_ring();
+    test_log_line_debug_never_enters_the_ring();
+    test_log_line_records_empty_lines();
+    test_existing_astra_log_routes_through_ring();
     return 0;
 }

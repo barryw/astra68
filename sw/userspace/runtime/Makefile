@@ -41,7 +41,8 @@ TARGET := build/m68k/libastrart.a
 PIC_TARGET := build/m68k/libastrart-pic.a
 PIC_OBJECTS := build/m68k/pic/startup.o build/m68k/pic/syscall.o build/m68k/pic/port.o \
 	build/m68k/pic/memory.o \
-	build/m68k/pic/log.o build/m68k/pic/assert.o \
+	build/m68k/pic/log.o build/m68k/pic/log_ring.o \
+	build/m68k/pic/time_page.o build/m68k/pic/assert.o \
 	build/m68k/pic/event_catalog.o \
 	build/m68k/pic/m68k/syscall.o build/m68k/pic/common_memory_m68k.o
 DYNAMIC_PIC_C_SOURCES := $(filter-out src/dynamic_process.c,\
@@ -225,14 +226,20 @@ $(DYNAMIC_CRT0): src/m68k/crt0.S
 HOST_TEST_SOURCES := src/startup.c src/arguments.c src/syscall.c src/stream_source.c src/executable.c src/launch.c src/port.c src/shutdown.c \
 	src/event_control.c src/memory.c \
 	src/host_channel_client.c \
-	src/sort.c src/log.c src/event_catalog.c src/dynamic_loader.c \
+	src/sort.c src/log.c src/log_ring.c src/time_page.c \
+	src/event_catalog.c src/dynamic_loader.c \
 	$(COMMON_C_SOURCES) \
 	tests/test_runtime.c
+# The startup block and the time page live at fixed addresses a host process
+# cannot map; the test supplies both through these hooks.
+HOST_TEST_DEFINES := -include tests/log_test_hooks.h -DASTRA_LOG_TEST=1 \
+	'-DASTRA_LOG_STARTUP_ADDRESS=astra_test_startup()' \
+	'-DASTRA_TIME_PAGE_ADDRESS=astra_test_time_page_address()'
 
-$(HOST_TEST): $(HOST_TEST_SOURCES)
+$(HOST_TEST): $(HOST_TEST_SOURCES) tests/log_test_hooks.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		-no-pie $^ -o $@
+		$(HOST_TEST_DEFINES) -no-pie $(HOST_TEST_SOURCES) -o $@
 
 $(STARTUP_SERVICE_TEST): src/startup.c src/service.c tests/test_startup_service.c
 	@mkdir -p $(@D)
@@ -317,7 +324,7 @@ sanitize:
 	./build/host/test_string_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -DASTRA_LIBRARY_LOADER_TEST -no-pie \
-		$(HOST_TEST_SOURCES) \
+		$(HOST_TEST_DEFINES) $(HOST_TEST_SOURCES) \
 		-o build/host/test_runtime_sanitize
 	./build/host/test_runtime_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
