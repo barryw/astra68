@@ -354,11 +354,18 @@ if measurement says so.
   The service keeps a resume point in `STORE:syslog.state` (written to a
   temporary file and renamed, not synced): the last kernel-ring sequence
   whose text is in the file, one ring record of the boot that wrote it, the
-  boot's wall-clock identity, and the name table. It is saved when a pass
-  writes kernel-ring lines or a name changes, at most once a second. At
-  start, a resume point from this boot means a restart: the service takes
-  its names and carries on after its sequence, so what the dead instance had
-  not drained -- the lines around its death -- is written once and nothing
+  boot's wall-clock identity, and the name table. A pass that writes
+  kernel-ring text to the file saves the resume point immediately afterward
+  -- unsynced, temp file and rename as always -- so that text is never
+  written twice across a restart: the only duplicate window left is a crash
+  between the file append and the state rename, which spans one pass. A
+  name-table change, or the resume point catching up to records already
+  read with no kernel text pending, also marks the state dirty but is saved
+  at most once a second; neither can make a restart repeat a line, since
+  neither moves the point past text the file does not yet hold. At start, a
+  resume point from this boot means a restart: the service takes its names
+  and carries on after its sequence, so what the dead instance had not
+  drained -- the lines around its death -- is written once and nothing
   twice. Anything else is a boot, drained from this boot's first record.
   - **The ring decides first.** The saved record is named by its sequence,
     raw timestamp, process and message. If the ring still holds that
@@ -369,14 +376,20 @@ if measurement says so.
   - **The clock decides only when the ring has overwritten that record.**
     Boot identity is then the wall-clock second the boot began (wall time
     minus monotonic time); two must agree to within a second, and the saved
-    sequence must lie inside this boot's span of the ring. With no valid
-    wall clock the identity is 0, and a cold boot whose ring looks like the
-    last boot's could then be taken for a restart.
+    sequence must lie inside this boot's span of the ring. A real restart is
+    then mislabelled as a boot if the host clock stepped by more than a
+    second between the dead instance's last save and this one's start. With
+    no valid wall clock the identity is 0, and a cold boot whose ring looks
+    like the last boot's -- the previous boot's span fully overwritten --
+    could then be taken for a restart.
   - **Why no sync.** The state matters only within one boot, and within a
     boot the storage service's view of the volume is coherent whether or not
     a block reached the medium. After a power loss a stale or torn state
-    fails its CRC or names a record the new ring does not hold. A state up
-    to a second behind the file only widens what a restart writes twice.
+    fails its CRC or names a record the new ring does not hold. The
+    kernel-text save runs synchronously right after the write it follows, so
+    the 1 s rate limit on the name-table and idle-cursor saves cannot widen
+    a restart's duplicate window; only a crash inside that one pass, between
+    the append and the rename, can.
   - **The ring outlives a warm reset.** It is `NOLOAD` and the kernel keeps
     a valid header, so its sequence carries on, but each boot's timestamps
     start again from that boot's reset. A record stamped earlier than the one
@@ -384,7 +397,11 @@ if measurement says so.
     this boot's to write.
   - **What the ring lost.** When the ring overwrote records after the saved
     point while no service was running, the restart marker is followed by
-    `log: N kernel-ring records lost while the events service was down`.
+    `log: N kernel-ring records (not necessarily log lines) lost while the
+    events service was down`. The count is the ring's overwritten-record
+    gap, not a count of log lines: the lost records are gone, so there is no
+    way to know how many were kernel text versus anything else the ring
+    carries (a typed event, a name record).
   - **Names.** Names learned before the service went live (the boot set)
     are pinned: the least recently used unpinned name is evicted first. A
     pid the table does not know is named from its log ring's setup ident

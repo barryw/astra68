@@ -591,10 +591,12 @@ static void
 log_lost(uint32_t lost)
 {
     static const char tail[] =
-        " kernel-ring records lost while the events service was down";
+        " kernel-ring records (not necessarily log lines) lost while the"
+        " events service was down";
     AstraTimeSample now;
     AstraLogLine line = {0};
-    char text[80];
+    /* 10 digits (a uint32_t) plus sizeof(tail) - 1, with room to spare. */
+    char text[112];
     char digits[10];
     char out[192]; /* time, level, ident[pid], stream, text */
     uint32_t used = 0u;
@@ -767,7 +769,14 @@ log_pass(uint32_t *pending)
     if (taken != 0u) {
         log_resume.mark = log_kernel_mark[taken - 1u];
         log_resume.sequence = log_resume.mark.sequence;
-        log_state_dirty = 1;
+        /*
+         * Kernel-ring text just left for the file: save the resume point now
+         * rather than waiting for the 1 s rate limit, so a restart requested
+         * in that window cannot find a stale saved point and re-write what
+         * this pass already wrote. The only duplicate window left is a crash
+         * between this append and the rename inside log_state_save.
+         */
+        log_state_dirty = !log_state_save();
     }
     log_kernel_take(taken);
     return moved;
@@ -1260,9 +1269,11 @@ events_pump(void)
     log_drain();
     /* Nothing read is waiting to be written: resume after all of it. */
     if (log_kernel_count == 0u && kernel_line.length == 0u &&
-        !log_names.chain_open && log_seen.sequence != 0u) {
+        !log_names.chain_open && log_seen.sequence != 0u &&
+        log_resume.sequence != log_seen.sequence) {
         log_resume.sequence = log_seen.sequence;
         log_resume.mark = log_seen;
+        log_state_dirty = 1;
     }
     log_state_flush();
     if (changed) {
