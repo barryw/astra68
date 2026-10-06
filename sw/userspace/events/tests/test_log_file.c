@@ -115,6 +115,15 @@ test_format(void)
     assert(strncmp(out, "boot+12.345 ", 12) == 0);
     assert(astra_log_local_day(&line) == 0u);
 
+    /* The timestamp alone, as the boot marker uses it: no newline. */
+    n = astra_log_format_time(out, sizeof(out), &line); out[n] = '\0';
+    assert(strcmp(out, "boot+12.345") == 0);
+    line.wall_valid = 1;
+    n = astra_log_format_time(out, sizeof(out), &line); out[n] = '\0';
+    assert(strcmp(out, "2026-10-05T14:03:22.117-04:00") == 0);
+    assert(astra_log_format_time(out, 4u, &line) == 4u);
+    line.wall_valid = 0;
+
     /* Truncation marker and a tiny buffer never overflow. */
     line.truncated = 1; line.text = "x"; line.length = 1u;
     n = astra_log_format(out, sizeof(out), &line); out[n] = '\0';

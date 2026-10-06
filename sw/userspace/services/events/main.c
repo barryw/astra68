@@ -2,6 +2,11 @@
  * The protected events service. Every caller goes through the storage
  * protocol; this process owns the trace drain, bounded store and persistence.
  *
+ * It is also the log service (docs/SYSTEM_LOG.md sections 3 and 5): it
+ * publishes LOG, maps every process's log ring, and appends their lines and
+ * the kernel ring's text to STORE:syslog and WORK:.astra/syslog, served back
+ * as EVENTS:log/syslog.
+ *
  * Nothing here emits an event. An events service that logs about logging is
  * how a logging subsystem takes a machine down, and the rule has to be
  * structural rather than careful -- so this file does not include
@@ -14,11 +19,20 @@
 #include <astra/event_persist.h>
 #include <astra/event_store.h>
 #include <astra/bytes.h>
+#include <astra/clock.h>
+#include <astra/event.h>
 #include <astra/limits.h>
+#include <astra/log_clients.h>
+#include <astra/log_file.h>
+#include <astra/log_format.h>
+#include <astra/log_ring.h>
+#include <astra/message_abi.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
 #include <astra/status.h>
+#include <astra/string.h>
+#include <astra/time_page.h>
 #include <astra/vfs_process.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_service_core.h>
@@ -33,7 +47,21 @@
  */
 #define EVENTS_TRACE_POLL_NS 1000000000ull
 
-ASTRA_PROGRAM("events-service", 0, 2, 0, "Barry Walker",
+/*
+ * The LOG port carries setups and doorbells. A full queue means a wake is
+ * already pending, so it only has to be deep enough for a launch burst.
+ */
+#define LOG_PORT_MESSAGES 16u
+#define LOG_MAX_BYTES (1024u * 1024u)
+#define LOG_KEEP 3u
+#define LOG_PATH_MAX 64u
+/* Kernel-ring text lines collect here; each client drain pass appends after
+ * them, so a pass is one write per file. */
+#define LOG_KERNEL_BYTES ASTRA_LOG_DRAIN_OUT_BYTES
+/* Drain passes per pump before the ports are answered again. */
+#define LOG_DRAIN_PASSES 8u
+
+ASTRA_PROGRAM("events-service", 0, 3, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
 /*
@@ -86,6 +114,26 @@ static int drain_ready;
 static uint32_t catalog_status;
 static int events_ready;
 
+static uint32_t log_handle;        /* published as LOG */
+static uint32_t log_receive;
+static AstraLogClients log_clients;
+static uint8_t log_gone[ASTRA_LOG_CLIENTS_MAX]; /* producer died: last drain */
+static AstraLogFile log_store;     /* /store/syslog */
+static AstraLogFile log_host;      /* /work/.astra/syslog */
+static char log_batch[LOG_KERNEL_BYTES + ASTRA_LOG_DRAIN_OUT_BYTES];
+static uint32_t log_used;          /* kernel text waiting in log_batch */
+static uint32_t log_day;           /* YYYYMMDD of the newest dated line */
+static int log_more;               /* the drain stopped with work left */
+/* One kernel-ring text line, joined from its CONTINUED chunks. */
+static struct {
+    uint32_t process;
+    uint32_t thread;
+    uint32_t level;
+    uint32_t length;
+    uint64_t monotonic;
+    char text[ASTRA_LOG_TEXT_MAX];
+} kernel_line;
+
 enum {
     EVENTS_FAIL_STORE = ASTRA_STATUS_PROGRAM_FIRST,
     EVENTS_FAIL_PREVIOUS_STORE,
@@ -93,7 +141,8 @@ enum {
     EVENTS_FAIL_SERVICE,
     EVENTS_FAIL_PORT,
     EVENTS_FAIL_TRANSPORT,
-    EVENTS_FAIL_CONTROL_PORT
+    EVENTS_FAIL_CONTROL_PORT,
+    EVENTS_FAIL_LOG_PORT
 };
 
 static const char *const snapshot_path[] = {
@@ -326,6 +375,368 @@ load_catalog(void)
     }
 }
 
+/* ------------------------------------------------------------------ log */
+
+/* The two syslog directories; each AstraLogFileOps context is one of them. */
+static char log_store_dir[] = "/store/";
+static char log_host_dir[] = "/work/.astra/";
+
+static int
+log_path(char *out, const void *directory, const char *name)
+{
+    out[0] = '\0';
+    return astra_string_concat(out, LOG_PATH_MAX, directory) &&
+           astra_string_concat(out, LOG_PATH_MAX, name);
+}
+
+static int
+log_size(void *context, const char *name, uint64_t *bytes)
+{
+    char path[LOG_PATH_MAX];
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+    uint32_t status;
+
+    if (!log_path(path, context, name))
+        return 0;
+    status = astra_filesystem_stat(&process_filesystem.filesystem, path,
+                                   &info);
+    if (status == ASTRA_VFS_ERR_NOT_FOUND) {
+        *bytes = 0u;
+        return 1;
+    }
+    if (status != ASTRA_VFS_OK)
+        return 0;
+    *bytes = info.byte_size;
+    return 1;
+}
+
+static int
+log_append(void *context, const char *name, const void *bytes,
+           uint32_t length)
+{
+    char path[LOG_PATH_MAX];
+    AstraFile file = ASTRA_FILE_INIT;
+    const uint8_t *in = bytes;
+    uint32_t done = 0u;
+
+    if (!log_path(path, context, name) ||
+        astra_filesystem_open(&process_filesystem.filesystem, path,
+                              ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+                                  ASTRA_VFS_OPEN_APPEND,
+                              &file) != ASTRA_VFS_OK)
+        return 0;
+    while (done < length) {
+        uint32_t moved = 0u;
+
+        if (astra_filesystem_write(&file, in + done, length - done,
+                                   &moved) != ASTRA_VFS_OK || moved == 0u)
+            break;
+        done += moved;
+    }
+    return astra_filesystem_close(&file) == ASTRA_VFS_OK && done == length;
+}
+
+static int
+log_rename(void *context, const char *from, const char *to)
+{
+    char source[LOG_PATH_MAX];
+    char target[LOG_PATH_MAX];
+    uint32_t status;
+
+    if (!log_path(source, context, from) || !log_path(target, context, to))
+        return 0;
+    status = astra_filesystem_rename(&process_filesystem.filesystem, source,
+                                     target);
+    return status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_NOT_FOUND;
+}
+
+static const AstraLogFileOps log_store_ops = {
+    log_store_dir, log_size, log_append, log_rename
+};
+static const AstraLogFileOps log_host_ops = {
+    log_host_dir, log_size, log_append, log_rename
+};
+
+/* EVENTS:log/syslog: the boot volume's copy, read through. */
+static int
+syslog_read(void *context, uint64_t offset, void *buffer, uint32_t length,
+            uint32_t *moved)
+{
+    AstraFile file = ASTRA_FILE_INIT;
+    uint32_t status;
+
+    (void)context;
+    *moved = 0u;
+    status = astra_filesystem_open(&process_filesystem.filesystem,
+                                   "/store/syslog", ASTRA_VFS_OPEN_READ,
+                                   &file);
+    if (status == ASTRA_VFS_ERR_NOT_FOUND)
+        return 1;
+    if (status != ASTRA_VFS_OK)
+        return 0;
+    status = astra_filesystem_read_at(&file, offset, buffer, length, moved);
+    (void)astra_filesystem_close(&file);
+    return status == ASTRA_VFS_OK;
+}
+
+/*
+ * One batch, one append per file. A file that cannot be written drops the
+ * batch rather than stalling the drain: log_file.c retries opening it on the
+ * next one, and a log that cannot be written is never a service failure.
+ */
+static void
+log_write(const char *bytes, uint32_t length, uint32_t day)
+{
+    if (length == 0u)
+        return;
+    (void)astra_log_file_append(&log_store, bytes, length, day);
+    (void)astra_log_file_append(&log_host, bytes, length, day);
+}
+
+static void
+log_line_time(AstraLogLine *line, uint64_t monotonic,
+              const AstraTimeSample *now)
+{
+    line->monotonic_ns = monotonic;
+    line->wall_ns = now->wall_ns - now->monotonic_ns + monotonic;
+    line->utc_offset = now->utc_offset;
+    line->zone = now->zone;
+    line->wall_valid = now->wall_valid != 0u;
+}
+
+/* `--- boot <time> build <id> ---`: where one boot's lines begin. */
+static void
+log_boot_marker(void)
+{
+    static const char hex[] = "0123456789abcdef";
+    static const char build[] = " build ";
+    static const char tail[] = " ---\n";
+    AstraTimeSample now;
+    AstraLogLine line = {0};
+    /* 9 + a 33-byte timestamp (log_format.h) + 7 + 8 + 5. */
+    char text[64] = "--- boot ";
+    uint32_t used = 9u;
+
+    astra_time_now(&now);
+    log_line_time(&line, now.monotonic_ns, &now);
+    used += astra_log_format_time(text + used, 33u, &line);
+    for (uint32_t at = 0u; build[at] != '\0'; ++at)
+        text[used++] = build[at];
+    for (uint32_t shift = 32u; shift != 0u; shift -= 4u)
+        text[used++] = hex[((uint32_t)ASTRA_BUILD_ID >> (shift - 4u)) & 0xfu];
+    for (uint32_t at = 0u; tail[at] != '\0'; ++at)
+        text[used++] = tail[at];
+    if (astra_log_local_day(&line) != 0u)
+        log_day = astra_log_local_day(&line);
+    log_write(text, used, log_day);
+}
+
+static const char *
+log_ident(uint32_t pid)
+{
+    if (pid == 0u)
+        return "kernel";
+    for (uint32_t index = 0u; index < ASTRA_LOG_CLIENTS_MAX; ++index)
+        if (log_clients.client[index].used &&
+            log_clients.client[index].pid == pid)
+            return log_clients.client[index].ident;
+    return ""; /* the formatter writes "?" */
+}
+
+/* The joined kernel-ring line, rendered into the batch. Debug is live
+ * commentary and is not stored, as event_store.c does not store it. */
+static void
+kernel_line_end(const AstraTimeSample *now)
+{
+    AstraLogLine line;
+    uint32_t length = kernel_line.length;
+
+    kernel_line.length = 0u;
+    while (length != 0u && (kernel_line.text[length - 1u] == '\n' ||
+                            kernel_line.text[length - 1u] == '\r'))
+        --length;
+    if (length == 0u || kernel_line.level == ASTRA_EVENT_LEVEL_DEBUG)
+        return;
+    if (ASTRA_LOG_LINE_BYTES(length) > LOG_KERNEL_BYTES - log_used) {
+        log_write(log_batch, log_used, log_day);
+        log_used = 0u;
+    }
+    log_line_time(&line, kernel_line.monotonic, now);
+    line.level = (uint8_t)kernel_line.level;
+    line.stream = kernel_line.process == 0u ? ASTRA_LOG_STREAM_KERNEL :
+                                              ASTRA_LOG_STREAM_LOG;
+    line.truncated = 0u;
+    line.pid = kernel_line.process;
+    line.ident = log_ident(kernel_line.process);
+    line.text = kernel_line.text;
+    line.length = length;
+    log_used += astra_log_format(log_batch + log_used,
+                                 LOG_KERNEL_BYTES - log_used, &line);
+    if (astra_log_local_day(&line) != 0u)
+        log_day = astra_log_local_day(&line);
+}
+
+/*
+ * A text record from the kernel ring: LOG_WRITE from code without a log
+ * ring, chunked ASTRA_EVENT_ARGUMENT_MAX bytes at a time with CONTINUED on
+ * all but the last.
+ *
+ * ponytail: one chain is joined at a time, keyed by process and thread; a
+ * chunk from anyone else ends the open line early, so two LOG_WRITE lines
+ * interleaved in the ring come out split. Keep one chain per thread if that
+ * shows up in a real log.
+ */
+static void
+kernel_text(const AstraEventDrained *record, const AstraTimeSample *now)
+{
+    uint32_t length = record->payload_length;
+
+    if ((record->flags & ASTRA_EVENT_FLAG_INLINE_STRING) == 0u)
+        return;
+    if (length > ASTRA_EVENT_ARGUMENT_MAX)
+        length = ASTRA_EVENT_ARGUMENT_MAX;
+    if (kernel_line.length != 0u &&
+        (kernel_line.process != record->process ||
+         kernel_line.thread != record->thread ||
+         kernel_line.length + length > ASTRA_LOG_TEXT_MAX))
+        kernel_line_end(now);
+    if (kernel_line.length == 0u) {
+        kernel_line.process = record->process;
+        kernel_line.thread = record->thread;
+        kernel_line.level = record->flags & ASTRA_EVENT_LEVEL_MASK;
+        kernel_line.monotonic =
+            (((uint64_t)record->timestamp_high << 32) |
+             record->timestamp_low) * ASTRA_CLOCK_MONOTONIC_RESOLUTION_NS;
+    }
+    (void)memcpy(kernel_line.text + kernel_line.length, record->payload,
+                 length);
+    kernel_line.length += length;
+    if ((record->flags & ASTRA_EVENT_FLAG_CONTINUED) == 0u)
+        kernel_line_end(now);
+}
+
+/*
+ * Take every setup off the LOG port. Doorbells only wake the service: the
+ * drain reads every ring anyway. Nothing a sender put on the port can wedge
+ * it -- a message too large for a setup is received whole and discarded.
+ */
+static void
+log_accept(void)
+{
+    static uint8_t junk[LOG_PORT_MESSAGES * sizeof(AstraLogSetup)];
+    static uint32_t junk_handles[ASTRA_MESSAGE_HANDLES_MAX];
+
+    for (;;) {
+        AstraLogSetup setup;
+        uint32_t handles[2] = {0u, 0u};
+        uint32_t size = 0u;
+        uint32_t count = 0u;
+        uint32_t sender = 0u;
+        void *address = NULL;
+        uint32_t mapped = 0u;
+        uint32_t status = astra_port_receive_from(
+            log_receive, &setup, sizeof(setup), handles, 2u, &size, &count,
+            &sender);
+
+        if (status == ASTRA_SYSCALL_BUFFER_TOO_SMALL) {
+            if (astra_port_receive_from(log_receive, junk, sizeof(junk),
+                                        junk_handles,
+                                        ASTRA_MESSAGE_HANDLES_MAX, &size,
+                                        &count, &sender) != ASTRA_SYSCALL_OK)
+                return;
+            for (uint32_t index = 0u; index < count; ++index)
+                (void)astra_close(junk_handles[index]);
+            continue;
+        }
+        if (status != ASTRA_SYSCALL_OK)
+            return;
+        if (count == 2u &&
+            astra_rt_area_map(handles[1],
+                              ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                              &address, &mapped) == ASTRA_SYSCALL_OK &&
+            astra_log_clients_add(&log_clients, sender, &setup, size,
+                                  address, mapped, handles[0],
+                                  handles[1]) != NULL)
+            continue;
+        if (address != NULL)
+            (void)astra_rt_area_unmap(address);
+        for (uint32_t index = 0u; index < count; ++index)
+            (void)astra_close(handles[index]);
+    }
+}
+
+/* Publishes how far the service has read. Never notifies the kernel ring
+ * object (docs/SYSTEM_LOG.md section 3, Doorbell). */
+static void
+log_consumed(void *context, AstraLogClient *client, uint32_t position)
+{
+    (void)context;
+    __atomic_store_n(&((volatile AstraBulkRingHeader *)(uintptr_t)
+                       client->ring)->consumer_position,
+                     position, __ATOMIC_RELEASE);
+}
+
+static void
+log_release(AstraLogClient *client)
+{
+    (void)astra_rt_area_unmap((void *)(uintptr_t)client->ring);
+    (void)astra_close(client->consumer_handle);
+    (void)astra_close(client->area_handle);
+    client->used = 0u;
+}
+
+/*
+ * Every ring, drained into the batch after the kernel text, until a pass
+ * moves nothing and nothing is pending -- or LOG_DRAIN_PASSES, after which
+ * the ports are answered and the service polls rather than sleeps.
+ *
+ * A producer that died is found first (its consumer endpoint reports
+ * PEER_DEAD; the kernel ring object is never notified, so it is never
+ * otherwise ready), drained to the end with everyone else, then released.
+ */
+static void
+log_drain(void)
+{
+    uint32_t pending = 0u;
+
+    for (uint32_t index = 0u; index < ASTRA_LOG_CLIENTS_MAX; ++index) {
+        const AstraLogClient *client = &log_clients.client[index];
+        uint32_t status;
+
+        if (!client->used || client->dead || log_gone[index])
+            continue;
+        status = astra_wait_one(client->consumer_handle, 0u /* poll */,
+                                NULL);
+        log_gone[index] = status == ASTRA_SYSCALL_PEER_DEAD ||
+                          status == ASTRA_SYSCALL_CLOSED;
+    }
+    log_more = 0;
+    for (uint32_t pass = 0u;; ++pass) {
+        uint32_t moved;
+
+        if (pass == LOG_DRAIN_PASSES) {
+            log_more = 1;
+            break;
+        }
+        moved = astra_log_clients_drain(&log_clients, log_batch + log_used,
+                                        sizeof(log_batch) - log_used,
+                                        log_consumed, NULL, &log_day,
+                                        &pending);
+        log_write(log_batch, log_used + moved, log_day);
+        log_used = 0u;
+        if (moved == 0u && pending == 0u)
+            break;
+    }
+    for (uint32_t index = 0u; index < ASTRA_LOG_CLIENTS_MAX; ++index) {
+        AstraLogClient *client = &log_clients.client[index];
+
+        if (client->used && (client->dead || (log_gone[index] && !log_more))) {
+            log_release(client);
+            log_gone[index] = 0u;
+        }
+    }
+}
+
 static void events_pump(void);
 
 static uint32_t
@@ -392,6 +803,25 @@ events_start(uint32_t process_handle)
         ASTRA_SYSCALL_OK) {
         return EVENTS_FAIL_CONTROL_PORT;
     }
+    if (astra_rt_port_create(LOG_PORT_MESSAGES,
+                             LOG_PORT_MESSAGES *
+                                 (uint32_t)sizeof(AstraLogSetup),
+                             &log_receive, &log_handle) != ASTRA_SYSCALL_OK)
+        return EVENTS_FAIL_LOG_PORT;
+    /*
+     * Neither file is a condition of service. One that will not open now is
+     * retried on every append; until then its lines are dropped, and EVENTS:
+     * is served regardless.
+     */
+    (void)astra_log_file_open(&log_store, &log_store_ops, "syslog",
+                              LOG_MAX_BYTES, LOG_KEEP);
+    (void)astra_filesystem_mkdir(&process_filesystem.filesystem,
+                                 "/work/.astra");
+    (void)astra_log_file_open(&log_host, &log_host_ops, "syslog",
+                              LOG_MAX_BYTES, LOG_KEEP);
+    log_boot_marker();
+    backend.log_read = syslog_read;
+    backend.log_context = NULL;
     debug_handle = process_handle;
     events_ready = 1;
     drain_ready = 1;
@@ -417,6 +847,7 @@ events_pump(void)
         (void)astra_event_control_proxy_pump(control_receive,
                                              event_target_handle, 1u);
         (void)astra_vfs_port_service_pump(&events_port, EVENTS_PORT_BUDGET);
+        log_accept();
     }
     /* Static, not automatic: keep one page of transfer storage off the stack. */
     static AstraEventDrained drained[ASTRA_MEMORY_PAGE_SIZE /
@@ -425,10 +856,14 @@ events_pump(void)
         (uint32_t)(sizeof(drained) / sizeof(drained[0]));
     uint32_t passes = 0u;
     int changed = 0;
+    AstraTimeSample now;
 
     if (!drain_ready) {
+        if (events_ready)
+            log_drain();
         return;
     }
+    astra_time_now(&now);
     /*
      * Bounded per call. A burst costs several passes rather than a stall,
      * because the drain runs on the thread a person is typing at and logging
@@ -457,6 +892,7 @@ events_pump(void)
         changed |= lost != 0u;
         for (uint32_t index = 0u; index < copied; ++index) {
             astra_event_store_append(&store, &drained[index]);
+            kernel_text(&drained[index], &now);
         }
         changed |= copied != 0u;
         if (copied < drain_capacity) {
@@ -464,6 +900,7 @@ events_pump(void)
         }
         ++passes;
     }
+    log_drain();
     if (changed) {
         save_snapshot();
     }
@@ -473,7 +910,7 @@ int astra_main(const AstraStartupInfo *startup)
 {
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *event_target;
-    uint32_t published[2];
+    uint32_t published[3];
     uint32_t status = ASTRA_STATUS_OK;
 
     if (!astra_startup_validate(startup) ||
@@ -491,18 +928,23 @@ int astra_main(const AstraStartupInfo *startup)
         status = events_start(startup->process_handle);
     published[0] = events_handle;
     published[1] = control_handle;
-    (void)astra_service_ready(bootstrap->handle, status, published, 2u);
+    published[2] = log_handle;
+    (void)astra_service_ready(bootstrap->handle, status, published, 3u);
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_STATUS_OK)
         return (int)status;
     for (;;) {
-        uint32_t waits[] = {control_receive, events_receive};
+        /* Doorbells arrive on log_receive. The deadline is the backstop
+         * sweep, and when producers that died are reaped. */
+        uint32_t waits[] = {control_receive, events_receive, log_receive};
         uint64_t deadline;
         uint32_t wait_status;
 
         events_pump();
+        if (log_more)
+            continue; /* rings still hold lines: no sleeping on them */
         deadline = astra_clock_monotonic() + EVENTS_TRACE_POLL_NS;
-        wait_status = astra_wait_multiple(waits, 2u, deadline, NULL, NULL);
+        wait_status = astra_wait_multiple(waits, 3u, deadline, NULL, NULL);
         if (wait_status != ASTRA_SYSCALL_OK &&
             wait_status != ASTRA_SYSCALL_TIMED_OUT)
             return ASTRA_STATUS_PEER_DEAD;

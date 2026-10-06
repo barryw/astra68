@@ -81,6 +81,8 @@ reset(void)
                                     sizeof(catalog_records), base));
     assert(astra_event_store_init(&store, records, RECORD_COUNT, &catalog));
     assert(astra_events_backend_init(&backend, &store, NULL, &catalog));
+    backend.log_read = NULL;
+    backend.log_context = NULL;
 }
 
 /* Reads a whole leaf through the ops, one bounded page at a time. */
@@ -485,6 +487,88 @@ static void test_the_earliest_events_survive(void)
     assert(strncmp(text, "seq 1  ", 7) == 0);
 }
 
+static const char fake_syslog[] = "--- boot 2026 ---\nline two\n";
+
+static int
+fake_log_read(void *context, uint64_t offset, void *buffer, uint32_t length,
+              uint32_t *moved)
+{
+    uint32_t size = (uint32_t)sizeof(fake_syslog) - 1u;
+    uint32_t take;
+
+    assert(context == &backend);
+    *moved = 0u;
+    if (offset >= size)
+        return 1;
+    take = size - (uint32_t)offset;
+    if (take > length)
+        take = length;
+    memcpy(buffer, fake_syslog + offset, take);
+    *moved = take;
+    return 1;
+}
+
+/* EVENTS:log/syslog is the service's text log, read-only, and absent when the
+ * service has none. */
+static void test_the_syslog_is_a_file(void)
+{
+    const AstraVfsBackendOps *ops = astra_events_backend_ops();
+    AstraVfsNodeInfo info;
+    uintptr_t node = 0u;
+    char name[64];
+    char text[64];
+    uint64_t next = 0u;
+    uint32_t moved = 0u;
+
+    reset();
+    backend.log_read = fake_log_read;
+    backend.log_context = &backend;
+
+    assert(ops->readdir(&backend, 0u, "/", 3u, name, sizeof(name), &info,
+                        &next) == ASTRA_VFS_OK);
+    assert(strcmp(name, "log") == 0 && next == 4u);
+    assert(info.kind == ASTRA_VFS_KIND_DIRECTORY);
+    assert(ops->readdir(&backend, 0u, "/", 4u, name, sizeof(name), &info,
+                        &next) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(ops->readdir(&backend, 0u, "/log", 0u, name, sizeof(name), &info,
+                        &next) == ASTRA_VFS_OK);
+    assert(strcmp(name, "syslog") == 0 && info.kind == ASTRA_VFS_KIND_FILE);
+    assert(ops->readdir(&backend, 0u, "/log", next, name, sizeof(name),
+                        &info, &next) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(ops->stat(&backend, "/log", &info) == ASTRA_VFS_OK &&
+           info.kind == ASTRA_VFS_KIND_DIRECTORY);
+
+    assert(ops->open(&backend, "/log/syslog", ASTRA_VFS_OPEN_READ,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) == ASTRA_VFS_OK);
+    assert(info.kind == ASTRA_VFS_KIND_FILE);
+    assert(ops->read(&backend, node, 0u, text, sizeof(text), &moved) ==
+           ASTRA_VFS_OK);
+    assert(moved == sizeof(fake_syslog) - 1u);
+    assert(memcmp(text, fake_syslog, moved) == 0);
+    assert(ops->read(&backend, node, 5u, text, 4u, &moved) == ASTRA_VFS_OK);
+    assert(moved == 4u && memcmp(text, fake_syslog + 5, 4u) == 0);
+    assert(ops->close(&backend, node) == ASTRA_VFS_OK);
+    (void)read_all("/log/syslog", text, sizeof(text));
+    assert(strcmp(text, fake_syslog) == 0);
+
+    assert(ops->open(&backend, "/log/syslog",
+                     ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+           ASTRA_VFS_ERR_ACCESS);
+    assert(ops->open(&backend, "/log/other", ASTRA_VFS_OPEN_READ,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+           ASTRA_VFS_ERR_NOT_FOUND);
+
+    /* No log: neither the directory nor its listing exists. */
+    backend.log_read = NULL;
+    assert(ops->stat(&backend, "/log", &info) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(ops->open(&backend, "/log/syslog", ASTRA_VFS_OPEN_READ,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+           ASTRA_VFS_ERR_NOT_FOUND);
+    assert(ops->readdir(&backend, 0u, "/", 3u, name, sizeof(name), &info,
+                        &next) == ASTRA_VFS_ERR_NOT_FOUND);
+}
+
 int main(void)
 {
     test_a_leaf_renders_its_events();
@@ -496,6 +580,7 @@ int main(void)
     test_every_write_verb_is_refused();
     test_open_nodes_grow_past_old_ceiling();
     test_the_earliest_events_survive();
+    test_the_syslog_is_a_file();
     puts("astra events backend: PASS");
     return 0;
 }

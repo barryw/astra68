@@ -176,21 +176,25 @@ test_cursor(void)
     assert(seen);
 }
 
+/* The smallest `out` a pass accepts: the longest record plus its marker. */
+#define MIN_OUT (ASTRA_LOG_LINE_BYTES(ASTRA_LOG_TEXT_MAX) + \
+                 ASTRA_LOG_LINE_BYTES(26u))
+
 /* `out` smaller than the backlog: nothing is consumed that does not fit, so
  * successive drains deliver every record exactly once, whole. */
 static void
 test_budget(void)
 {
-    static char all[8192];
-    char out[3u * ASTRA_LOG_LINE_BYTES(3u)];
+    static char all[16384];
+    static char out[MIN_OUT];
     char text[8];
     uint32_t used = 0u, day = 0u, pending = 1u, n, passes = 0u;
 
     fresh();
-    for (uint32_t i = 0u; i < 20u; ++i) {
+    for (uint32_t i = 0u; i < 100u; ++i) {
         if (i == 7u)
             fa.dropped = 2u;
-        snprintf(text, sizeof(text), "r%02u", (unsigned)i);
+        snprintf(text, sizeof(text), "r%03u", (unsigned)i);
         emit(ring_a, &fa, 100u + i, text);
     }
     do {
@@ -202,17 +206,59 @@ test_budget(void)
         used += n;
         assert(++passes < 100u);
     } while (n != 0u || pending != 0u);
+    assert(passes > 2u); /* the backlog really was more than one pass */
     all[used] = '\0';
-    for (uint32_t i = 0u; i < 20u; ++i) {
+    for (uint32_t i = 0u; i < 100u; ++i) {
         char needle[24];
 
-        snprintf(needle, sizeof(needle), "stdout: r%02u\n", (unsigned)i);
+        snprintf(needle, sizeof(needle), "stdout: r%03u\n", (unsigned)i);
         assert(count_of(all, needle) == 1u);
     }
     assert(count_of(all, "[2 lines dropped]\n") == 1u);
-    assert(strstr(all, "[2 lines dropped]") < strstr(all, "r07"));
+    assert(strstr(all, "[2 lines dropped]") < strstr(all, "r007"));
     assert(strstr(all, "truncated") == NULL);
-    assert(count_of(all, "\n") == 21u);
+    assert(count_of(all, "\n") == 101u);
+}
+
+/* An `out` that could not hold the longest record and its marker is refused
+ * outright: nothing written, nothing consumed, nothing reported pending. */
+static void
+test_small_out_refused(void)
+{
+    static char out[MIN_OUT];
+    uint32_t day = 0u, pending = 1u;
+    uint32_t before;
+
+    fresh();
+    emit(ring_a, &fa, 100u, "kept");
+    before = fresh_clients.client[0].position;
+    consumed_calls = 0u;
+    assert(astra_log_clients_drain(&fresh_clients, out, MIN_OUT - 1u,
+                                   on_consumed, NULL, &day, &pending) == 0u);
+    assert(pending == 0u && consumed_calls == 0u);
+    assert(fresh_clients.client[0].position == before);
+    assert(astra_log_clients_drain(&fresh_clients, out, MIN_OUT, on_consumed,
+                                   NULL, &day, &pending) != 0u);
+    assert(fresh_clients.client[0].position != before);
+}
+
+/* A pass stopped by its record cap -- many empty lines from one client --
+ * starts the next pass at that client, like any other refusal for room. */
+static void
+test_record_cap_moves_cursor(void)
+{
+    uint32_t day = 0u, pending = 0u;
+
+    fresh();
+    emit(ring_a, &fa, 1u, "one");
+    for (uint32_t i = 0u; i < ASTRA_LOG_RING_CAPACITY; ++i)
+        emit(ring_b, &fb, 10u + i, "");
+    assert(fresh_clients.cursor == 0u);
+    (void)astra_log_clients_drain(&fresh_clients, big,
+                                  ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed,
+                                  NULL, &day, &pending);
+    assert(pending == 1u);
+    assert(fresh_clients.cursor == 1u);
 }
 
 /* Drop counts are announced in ring order: a later record (in time or in
@@ -403,6 +449,8 @@ main(void)
     test_fair();
     test_cursor();
     test_budget();
+    test_small_out_refused();
+    test_record_cap_moves_cursor();
     test_drop_order();
     puts("LOG CLIENTS PASS");
     return 0;

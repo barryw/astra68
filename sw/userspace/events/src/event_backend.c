@@ -27,6 +27,8 @@
 #define KIND_MERGED      6u   /* a leaf over the three level tiers */
 #define KIND_EARLIEST    7u   /* a leaf over the boot ring */
 #define KIND_SUBSYSTEM_ONE 8u /* one subsystem, and the levels under it */
+#define KIND_LOG_DIR     9u
+#define KIND_LOG_FILE    10u  /* the service's text log, read through */
 
 /* Longest line representable by the event ABI: fixed prefix, worst-case
  * expansion of four 32-bit conversions, source location, and newline. */
@@ -375,6 +377,12 @@ describe(const AstraEventsBackend *backend, AstraEventsNode *node,
         node->kind = KIND_SUBSYSTEM_DIR;
         return ASTRA_VFS_OK;
     }
+    if (strcmp(path, "/log") == 0 || strcmp(path, "/log/syslog") == 0) {
+        if (backend->log_read == NULL)
+            return ASTRA_VFS_ERR_NOT_FOUND;
+        node->kind = path[4] == '\0' ? KIND_LOG_DIR : KIND_LOG_FILE;
+        return ASTRA_VFS_OK;
+    }
     rest = after(path, "/boot/current/");
     if (rest == NULL && backend->previous != NULL) {
         rest = after(path, "/boot/-1/");
@@ -442,7 +450,8 @@ is_directory(uint8_t kind)
 {
     return kind == KIND_ROOT || kind == KIND_BOOT ||
            kind == KIND_BOOT_CURRENT || kind == KIND_ACTIVITY_DIR ||
-           kind == KIND_SUBSYSTEM_DIR || kind == KIND_SUBSYSTEM_ONE;
+           kind == KIND_SUBSYSTEM_DIR || kind == KIND_SUBSYSTEM_ONE ||
+           kind == KIND_LOG_DIR;
 }
 
 static void
@@ -528,6 +537,12 @@ events_read(void *context, uintptr_t token, uint64_t offset, void *buffer,
     }
     if (is_directory(node->kind)) {
         return ASTRA_VFS_ERR_INVALID;
+    }
+    /* The text log is the service's file, read through: no rendering. */
+    if (node->kind == KIND_LOG_FILE) {
+        return backend->log_read != NULL &&
+            backend->log_read(backend->log_context, offset, buffer, length,
+                              moved) ? ASTRA_VFS_OK : ASTRA_VFS_ERR_IO;
     }
     store = node->previous_boot != 0u ? backend->previous : backend->store;
     if (store == NULL) {
@@ -752,6 +767,14 @@ events_readdir(void *context, uintptr_t directory, const char *path,
             entry = "activity";
         } else if (cookie == 2u) {
             entry = "subsystem";
+        } else if (cookie == 3u && backend->log_read != NULL) {
+            entry = "log";
+        }
+        break;
+    case KIND_LOG_DIR:
+        if (cookie == 0u) {
+            entry = "syslog";
+            info->kind = ASTRA_VFS_KIND_FILE;
         }
         break;
     case KIND_BOOT:

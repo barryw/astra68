@@ -117,12 +117,10 @@ astra_log_local_day(const AstraLogLine *line)
     return (uint32_t)time.year * 10000u + time.month * 100u + time.day;
 }
 
-uint32_t
-astra_log_format(char *out, uint32_t capacity, const AstraLogLine *line)
+static void
+stamp(Out *o, const AstraLogLine *line)
 {
-    Out o = { out, 0u, capacity, capacity != 0u ? 1u : 0u };
     AstraCivilTime time;
-    const char *ident;
 
     if (civil(line, &time)) {
         /* Negated as unsigned: the offset is the producer's, and INT32_MIN
@@ -130,25 +128,43 @@ astra_log_format(char *out, uint32_t capacity, const AstraLogLine *line)
         uint32_t offset = time.utc_offset < 0 ?
             0u - (uint32_t)time.utc_offset : (uint32_t)time.utc_offset;
 
-        digits(&o, (uint32_t)time.year, 4u); put(&o, '-');
-        digits(&o, time.month, 2u); put(&o, '-');
-        digits(&o, time.day, 2u); put(&o, 'T');
-        digits(&o, time.hour, 2u); put(&o, ':');
-        digits(&o, time.minute, 2u); put(&o, ':');
-        digits(&o, time.second, 2u); put(&o, '.');
-        digits(&o, time.nanosecond / 1000000u, 3u);
-        put(&o, time.utc_offset < 0 ? '-' : '+');
-        digits(&o, offset / 3600u, 2u); put(&o, ':');
-        digits(&o, offset / 60u % 60u, 2u);
+        digits(o, (uint32_t)time.year, 4u); put(o, '-');
+        digits(o, time.month, 2u); put(o, '-');
+        digits(o, time.day, 2u); put(o, 'T');
+        digits(o, time.hour, 2u); put(o, ':');
+        digits(o, time.minute, 2u); put(o, ':');
+        digits(o, time.second, 2u); put(o, '.');
+        digits(o, time.nanosecond / 1000000u, 3u);
+        put(o, time.utc_offset < 0 ? '-' : '+');
+        digits(o, offset / 3600u, 2u); put(o, ':');
+        digits(o, offset / 60u % 60u, 2u);
     } else {
         uint32_t rest = 0u;
         uint64_t seconds = astra_divide_u64(line->monotonic_ns, 1000000000u,
                                             &rest);
 
-        puts_(&o, "boot+");
-        digits(&o, (uint32_t)seconds, 1u); put(&o, '.');
-        digits(&o, rest / 1000000u, 3u);
+        puts_(o, "boot+");
+        digits(o, (uint32_t)seconds, 1u); put(o, '.');
+        digits(o, rest / 1000000u, 3u);
     }
+}
+
+uint32_t
+astra_log_format_time(char *out, uint32_t capacity, const AstraLogLine *line)
+{
+    Out o = { out, 0u, capacity, 0u };
+
+    stamp(&o, line);
+    return o.used;
+}
+
+uint32_t
+astra_log_format(char *out, uint32_t capacity, const AstraLogLine *line)
+{
+    Out o = { out, 0u, capacity, capacity != 0u ? 1u : 0u };
+    const char *ident;
+
+    stamp(&o, line);
     put(&o, ' ');
     puts_(&o, level_names[line->level <= ASTRA_EVENT_LEVEL_ERROR ?
                           line->level : ASTRA_EVENT_LEVEL_ERROR]);

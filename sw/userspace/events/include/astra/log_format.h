@@ -80,6 +80,18 @@ uint32_t astra_log_format(char *out, uint32_t capacity,
                           const AstraLogLine *line);
 
 /**
+ * Render only `line`'s timestamp, exactly as ::astra_log_format begins a
+ * line (local wall time with offset, or `boot+S.mmm`), with no newline.
+ *
+ * @param out Output buffer.
+ * @param capacity Size of `out` in bytes.
+ * @param line Supplies the time fields; the rest is ignored.
+ * @return Bytes written, at most `capacity` (cut short when it does not fit).
+ */
+uint32_t astra_log_format_time(char *out, uint32_t capacity,
+                               const AstraLogLine *line);
+
+/**
  * The local calendar date `line` falls on, as YYYYMMDD, for midnight
  * rotation.
  *

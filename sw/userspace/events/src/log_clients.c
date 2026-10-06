@@ -20,6 +20,13 @@
 /* Every record reserves at least ASTRA_LOG_LINE_BYTES(0), so no pass can
  * accept more records than this. */
 #define DRAIN_RECORDS (ASTRA_LOG_DRAIN_OUT_BYTES / ASTRA_LOG_LINE_BYTES(0u))
+/* The smallest `out` a pass accepts: the longest record and its marker. */
+#define DRAIN_OUT_MIN (ASTRA_LOG_LINE_BYTES(ASTRA_LOG_TEXT_MAX) + \
+                       ASTRA_LOG_LINE_BYTES(DROP_TEXT_MAX))
+
+/* The first sweep gives every live client one record before the cap. */
+_Static_assert(ASTRA_LOG_CLIENTS_MAX <= DRAIN_RECORDS,
+               "one pass's record cap holds a record from every client");
 
 _Static_assert(ASTRA_LOG_DRAIN_OUT_BYTES >=
                ASTRA_LOG_LINE_BYTES(ASTRA_LOG_TEXT_MAX) +
@@ -175,12 +182,19 @@ read_client(AstraLogClient *client, uint32_t quota, uint32_t budget,
 {
     uint32_t taken = 0u;
 
-    while (*count < DRAIN_RECORDS) {
-        Pending *p = &batch[*count];
+    for (;;) {
+        Pending *p;
         uint32_t position = client->position;
         uint32_t delta;
         uint32_t need;
-        uint32_t status = astra_log_consumer_next(
+        uint32_t status;
+
+        /* The record cap is a refusal for room like the budget's, so the
+         * next pass starts here. */
+        if (*count >= DRAIN_RECORDS)
+            return 1u;
+        p = &batch[*count];
+        status = astra_log_consumer_next(
             client->ring, &position, &p->fields, arena + *arena_used,
             ASTRA_LOG_DRAIN_OUT_BYTES - *arena_used, &p->length);
 
@@ -212,7 +226,6 @@ read_client(AstraLogClient *client, uint32_t quota, uint32_t budget,
         order[*count] = p;
         ++*count;
     }
-    return 0u;
 }
 
 uint32_t
@@ -231,6 +244,9 @@ astra_log_clients_drain(AstraLogClients *clients, char *out,
     uint32_t cut = ASTRA_LOG_CLIENTS_MAX;
     uint32_t cursor = clients->cursor % ASTRA_LOG_CLIENTS_MAX;
 
+    *pending = 0u;
+    if (capacity < DRAIN_OUT_MIN)
+        return 0u;
     for (uint32_t index = 0u; index < ASTRA_LOG_CLIENTS_MAX; ++index) {
         const AstraLogClient *client = &clients->client[index];
 

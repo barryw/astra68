@@ -24,6 +24,7 @@
  *     boot/current/earliest           the boot ring: the first events, kept
  *     activity/0000001a               one request across every process
  *     subsystem/shell                 one subsystem's events
+ *     log/syslog                      the text log (docs/SYSTEM_LOG.md)
  *
  * `boot/-1` is present when a valid durable snapshot was recovered. One prior
  * boot is retained; see the bounded ceiling beside the supervisor's two-bank
@@ -61,6 +62,14 @@ typedef struct AstraEventsBackend {
     const AstraEventCatalog *catalog;
     AstraEventsNode *nodes;
     uint32_t node_capacity;
+    /*
+     * Bytes of the current syslog, or NULL when the service has none (then
+     * `log` does not exist). Returns nonzero with `*moved` (0 at the end),
+     * or 0 on an I/O failure.
+     */
+    int (*log_read)(void *context, uint64_t offset, void *buffer,
+                    uint32_t length, uint32_t *moved);
+    void *log_context;
 } AstraEventsBackend;
 
 #define ASTRA_EVENTS_BACKEND_INIT {0}

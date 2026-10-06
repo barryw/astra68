@@ -129,8 +129,12 @@ typedef void (*AstraLogConsumed)(void *context, AstraLogClient *client,
  * @param clients Table to drain.
  * @param out Output buffer for the formatted batch.
  * @param capacity Size of `out` in bytes; pass ::ASTRA_LOG_DRAIN_OUT_BYTES.
- *     A smaller `out` shrinks the pass, and a record whose worst-case line
- *     exceeds it is never read (it stays pending).
+ *     A smaller `out` shrinks the pass. One smaller than the longest
+ *     record's worst-case line plus its drop marker
+ *     (`ASTRA_LOG_LINE_BYTES(ASTRA_LOG_TEXT_MAX)` +
+ *     `ASTRA_LOG_LINE_BYTES(26)`) is refused: nothing is read or written,
+ *     and `*pending` is 0, because such a caller could never drain a long
+ *     record and would otherwise spin on it forever.
  * @param consumed Called once per client whose position moved; must not be
  *     NULL.
  * @param context Opaque context passed to every `consumed` call.
