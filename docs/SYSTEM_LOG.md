@@ -103,89 +103,115 @@ logging call.
 - **SDL**: the `SDL_log.c` patch calls `vsyslog` with SDL's priority mapped the
   same way. The 256-byte cut goes.
 - **The log descriptor** (fd 1 or 2 with no stream): fd 1 and fd 2 get separate
-  descriptions with their own level and stream tag. The descriptor keeps **no
-  line buffer**: each `write` becomes records at once, and a write that does
-  not end in a newline is marked CONTINUED. The service joins a thread's
-  continued records into one line (§3). Nothing is shared between threads, so
-  nothing is locked, and nothing is left unflushed when a program exits or
-  faults. picolibc's stdio buffer above it is flushed by stdio as usual.
+  descriptions with their own level and stream tag. Each thread assembles its
+  own line in a `_Thread_local` buffer (`_Thread_local` works in `libc.library`,
+  `posix/src/pthread.c:44`). A line is emitted at a newline or when the buffer
+  holds 240 bytes. This buffering is needed because picolibc's stderr is
+  unbuffered and calls `write` once per character
+  (`third_party/picolibc/libc/stdio/posixiob_stderr.c`), and one record per
+  character would spend a slot on each byte. Nothing is shared between
+  threads, so nothing is locked. The exiting thread's partial line is flushed
+  by a `destructor` that runs after stdio's own flush. A partial line that has
+  no newline when the program faults is lost, and nothing else is.
 
 The **ident** names the program in every line. It is the `ASTRA_PROGRAM` name
 when the image declares one, otherwise the basename of argv[0]. `openlog`
 overrides it.
 
-## 3. Transport: per-thread rings, no syscall and no lock per line
+## 3. Transport: a lock-free ring per process, no syscall per line
 
-Each logging **thread** has a **log ring**: one bulk ring
-(`docs/SHARED_AREAS_AND_BULK_RINGS.md`, `ndk/include/astra/bulk_ring.h`) in a
-shared area owned by its process. The thread is the ring's only producer and
-the log service is its only consumer, which is exactly the single-producer,
-single-consumer contract the ring ABI defines. Threads never touch each
-other's rings, so a log call takes no lock and performs no atomic
-read-modify-write.
+Each logging process has one **log ring**: a bulk ring
+(`docs/SHARED_AREAS_AND_BULK_RINGS.md`) in a 64 KiB shared area it owns. The
+log service is the consumer.
 
-**Area.** A process creates one reserved (commit-on-touch) area on its first
-log call and carves 16 KiB rings from it for threads as they first log. When
-the area is out of room it creates another. A process that never logs pays
-nothing, and one that logs from a single thread pays one committed 64 KiB
-fault unit.
+It is one ring per process, not one per thread, for a measured reason.
+Per-thread state needs thread-local storage, and the shared `runtime.library`
+has none (`runtime/src/syscall.c:25-27`: it is the dynamic loader and cannot
+relocate its own TLS). A4, the thread pointer, is 0 in any program without a
+TLS segment (`sw/kernel/process.c:3817`).
 
-**Setup.** When a thread first logs:
+**Writers never wait for each other.** The ring has one producer endpoint, but
+the writers inside the process coordinate without a lock:
 
-1. It creates its ring in the process's log area (a syscall, which never waits
-   on another process).
-2. It sends the consumer endpoint, a read-only area handle (with the first ring
-   only) and a reduced handle to its own process in **one asynchronous try-send**
-   to the `LOG` port.
-3. It does not wait for a reply.
+1. **Reserve.** A writer claims the slots it needs with one compare-and-swap
+   on a process-local `reserved` counter. The claim succeeds only if
+   `reserved + slots - consumer_position <= capacity`, using the consumer
+   position in the shared header. If it fails, the ring is full: the line is
+   dropped and the process's `dropped` counter is incremented with a CAS.
+2. **Write.** The writer copies the record into its slots, and then stores its
+   slot's commit word (the slot's position + 1) after a release fence.
+3. **Publish.** A writer advances the shared `producer_position` over every
+   slot whose commit word is set. It does this with a CAS on the header word,
+   so several writers publishing at once stay monotonic.
 
-If the try-send is refused (port full, service absent), that line goes to
-`LOG_WRITE` and setup is retried on the thread's next call.
+A writer preempted between reserve and commit holds back publication of later
+slots until it runs again, but no writer ever spins or sleeps on it: the
+others return at once. CAS uses the explicit compare-exchange loop the NDK
+mutex already uses (`ndk/include/astra/runtime.h:796`), because of the MC68040
+GCC atomic-exchange defect recorded in `docs/CURRENT_STATE.md`.
 
-**Hot path.** A log call:
+**Setup.** On the process's first log call, the runtime:
 
-1. Formats the line in the caller.
-2. Reserves one or more slots in the thread's own ring and copies the record
-   in.
-3. Commits.
+1. creates the area and ring with `astra_rt_area_create` and
+   `astra_rt_ring_create`;
+2. maps the area read-write and keeps the producer endpoint;
+3. sends the consumer endpoint and a `READ|MAP` duplicate of the area handle to
+   the `LOG` port in **one** `astra_port_send`.
 
-There is no syscall, no IPC and no lock.
+`astra_port_send` never blocks: a full queue returns `WOULD_BLOCK`
+(`sw/kernel/port.c:917-922`). The kernel stamps the sending process's id on the
+message (`sw/kernel/port.c:946`), so the service learns the pid from the kernel,
+and a program cannot log in another program's name. Setup is claimed with one
+CAS, so a second thread that logs during it does not wait: it uses the
+`LOG_WRITE` fallback for that line. If the send is refused, that line also goes
+to `LOG_WRITE`, and setup is retried after 64 further log calls.
 
-**Record.** One slot is one record; a line longer than a slot continues in the
-next slot with a CONTINUED flag. Each record carries:
+**Record.** A record is one or more consecutive 252-byte slots, reserved
+together, so a record is never interleaved with another. Each slot begins with
+its commit word. The record header carries:
 
-- a per-thread sequence number
+- a per-process sequence number
 - monotonic and wall time from the time page (§4)
-- level, stream and length
-- the text
+- level and stream
+- the dropped-line count at the time of writing
+- the text length
 
-The pid and thread come from the ring itself: the service knows which process
-handle and thread each ring arrived with. A program cannot write lines in
-another program's name.
+There is no thread id: reading one costs a syscall in the shared runtime.
 
-**Doorbell.** `astra_bulk_ring_notify` is called only when a commit lands in a
-ring the consumer had last left empty. That is one non-blocking syscall per
-burst, not per line. It wakes the service and never waits for it.
+**Doorbell.** A 4-byte message to the `LOG` port, sent with the
+non-blocking `astra_port_send`. A writer sends it only when its record begins
+where the consumer had stopped, that is, when the ring was empty as far as the
+service knew. During a burst the service is not running, so its position does
+not move and no further doorbells are sent: that is one syscall per burst, not
+per line.
 
-**Full ring.** The line is dropped and the thread's drop counter increments;
-the caller returns at once. The next record that fits carries the count, and
-the service writes `[N lines dropped]` before it.
+A full `LOG` queue means a wake is already pending, so `WOULD_BLOCK` is
+ignored. Several writers sending at once is harmless, so no flag serializes
+them. The service also sweeps every ring once a second as a backstop.
 
-**Crash.** After the producer dies, the consumer may still drain committed
-elements (`SHARED_AREAS_AND_BULK_RINGS.md`, "Ring object, waiting, and
-failure"). The service drains the ring, then sees `PEER_DEAD` and frees it.
-Because the descriptor does not buffer, every byte a program wrote before it
-faulted is kept.
+The kernel ring object is never notified, by either side. It exists so that
+the service's consumer endpoint reports `PEER_DEAD` when the producing process
+dies. Notifying through it would be wrong here: the service reads published
+slots straight from the shared header, and a consumer position reported beyond
+the kernel's producer shadow fails the ring (`sw/kernel/ring.c`, consumer
+branch of `kernel_ring_notify`).
+
+**Full ring.** The line is dropped and counted; the caller returns at once. The
+next record carries the count, and the service writes `[N lines dropped]`
+before it.
+
+**Crash.** After the producer dies, the consumer may still drain published
+elements. The service drains the ring, then sees `PEER_DEAD` and frees it.
 
 **Priority.** The log service drops below applications (from 20 to 12). Waking
 a lower-priority thread never preempts the running one
 (`sw/kernel/process.c:1519-1528`), so the service drains only in time nobody
-else wants. If an application never yields, its rings fill and lines are
+else wants. If an application never yields, its ring fills and lines are
 dropped and counted, never delayed. That is requirement 2 applied as stated.
 
 **What is not ours to unblock.** A `printf` waits on picolibc's `FILE` lock
-when another thread of the same program is inside `printf` on the same
-stream. That is stdio's contract in every C library and sits above logging.
+when another thread of the same program is inside `printf` on the same stream.
+That is stdio's contract in every C library, and it sits above logging.
 `syslog()`, `SDL_Log` and `astra_log*` do not use `FILE`.
 
 **The kernel ring stays** for kernel events, typed `ASTRA_EVENT*` records, and
@@ -200,7 +226,16 @@ a syscall per 24 bytes.
 ## 4. The time page
 
 This is Haiku's `real_time_data` for Astra: one kernel page mapped read-only at
-a fixed address in every process. It holds:
+`ASTRA_TIME_PAGE_ADDRESS` (`0x48000000`) in every process. It is a new region,
+carved from the reserved window, which `docs/MEMORY_MAP_AND_PMMU.md:42-46` names
+as the place for new fixed facilities. The frame is `KERNEL_FRAME_SHARED`, owned
+by the kernel, and mapped through `kernel_vm_map_shared_page` with a new alias
+class. It is mapped at launch and into the replacement space at exec; fork
+copies it as it copies every shared frame. Every RAM mapping on this machine
+is write-through and the MC68040 caches are physically tagged, so a kernel
+store through the identity alias is what the next user read sees
+(`docs/MEMORY_MAP_AND_PMMU.md:133-149`). The page begins with a magic word; a
+reader that does not find it falls back to the clock syscalls. It holds:
 
 - a version word
 - two copies of {monotonic ns, wall-clock ns since the epoch, UTC offset,
@@ -224,10 +259,11 @@ if measurement says so.
   format is:
 
   ```
-  2026-10-05T14:03:22.117-04:00 notice chocolate-doom[1000011.1] stdout: V_Init: allocate screens.
+  2026-10-05T14:03:22.117-04:00 notice chocolate-doom[10000011] stdout: V_Init: allocate screens.
   ```
 
-  The fields are local wall time with offset, level, then ident `[pid.thread]`,
+  The fields are local wall time with offset, level, then ident `[pid]` with
+  the pid in hex as `ps` prints it,
   then the stream (`stdout`, `stderr`, `log` or `kernel`), then the text.
   Non-printable bytes are written as `\xNN`, so one record is always one line.
 - **Order.** Each drain pass merges the heads of all rings and the kernel ring
@@ -357,15 +393,15 @@ Board: run Doom on the DE25 and read the banner from Beast with
    and APPL v5 with `open` passthrough.
 4. **Console.app**, on its own spec.
 
-## Open items for the plan to verify
+## Resolved during planning
 
-- That a try-send to a full port exists and fails rather than blocks. If only a
-  blocking send exists, the plan adds the try form first.
-- Where the runtime keeps per-thread state, for each thread's ring pointer and
-  drop counter.
-- The fixed slot size that packs a 16 KiB ring: capacity must be a power of
-  two, so 64 slots of 252 bytes fit beside the 64-byte header.
-- How the supervisor publishes a second named endpoint (`LOG`) from the events
-  service beside `EVENTS:` and `EVENT_CONTROL`.
-- zlib's cost per MiB at level 6 on the DE25 guest, and whether a lower level
-  is the better trade.
+- **A try-send exists:** `astra_port_send` never blocks.
+- **Per-thread state:** there is none in the shared runtime, so the design uses
+  one ring per process with CAS (§3).
+- **Slot size:** capacity must be a power of two and the 64-byte header shares
+  the area, so the ring is 256 slots of 252 bytes: 64 + 256 x 252 = 64,576
+  bytes in a 65,536-byte area.
+- **Publishing `LOG`:** the manifest's `serves` list maps names to
+  `astra_service_ready` handles by position (`supervisor/src/loader.c:1505`).
+  `LOG` is a raw capability, granted by name like `ENTROPY`.
+- **zlib's cost on the DE25** is measured in phase 2.
