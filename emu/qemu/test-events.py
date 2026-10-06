@@ -285,10 +285,8 @@ def main():
     if not re.search(r"^\S+ \S+ desktop\[[0-9a-f]{8}\] ", syslog, re.M):
         failures.append("no line names the desktop service")
 
-    # The restarts: a marker each, every line once. Requested: the refusal
-    # logged just before the kill and the one after it both follow the
-    # first marker. Killed: the supervisor's death report follows the
-    # second, and so does the last refusal.
+    # The restarts: a marker each, every line once. Killed: the supervisor's
+    # death report follows the second marker, and so does the last refusal.
     body = restarted.splitlines()
     markers = [line for line in body if line.startswith(RESTARTED)]
     if len(markers) != 2:
@@ -308,11 +306,16 @@ def main():
         requested, killed = rest.split(markers[1], 1)
         spans = [len(SYSLOG_LINE.findall(text))
                  for text in (head, requested, killed)]
-        if spans != [1, 2, 1]:
-            failures.append("refusals before, between and after the "
-                            "markers: %r, expected [1, 2, 1] (the one "
-                            "logged before the requested kill belongs "
-                            "after the first)" % spans)
+        # Whether the refusal logged just before the requested restart's
+        # kill lands in `head` or `requested` is a race, not a property:
+        # it depends on whether the dying instance drains the ring (a
+        # wake from the `service` command's own log setup can trigger
+        # that pump) before the kill reaches it. Only the killed span is
+        # positional -- the kill command waits for all three earlier
+        # refusals first, so it is always exactly the fourth.
+        if spans[2] != 1:
+            failures.append("%d refusals after the second marker, "
+                            "expected 1 (spans %r)" % (spans[2], spans))
         for text, which in ((requested, "requested"), (killed, "killed")):
             if not re.search(r"supervisor\[00000001\] log: launch "
                              r"/services/events ", text):
