@@ -125,8 +125,10 @@ astra_log_format(char *out, uint32_t capacity, const AstraLogLine *line)
     const char *ident;
 
     if (civil(line, &time)) {
-        uint32_t offset = (uint32_t)(time.utc_offset < 0 ?
-                                     -time.utc_offset : time.utc_offset);
+        /* Negated as unsigned: the offset is the producer's, and INT32_MIN
+         * has no int32 negation. */
+        uint32_t offset = time.utc_offset < 0 ?
+            0u - (uint32_t)time.utc_offset : (uint32_t)time.utc_offset;
 
         digits(&o, (uint32_t)time.year, 4u); put(&o, '-');
         digits(&o, time.month, 2u); put(&o, '-');

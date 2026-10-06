@@ -14,6 +14,30 @@
 
 #include <stdint.h>
 
+#include <astra/log_ring.h>
+
+/*
+ * The most bytes ::astra_log_format can write for a record of a given text
+ * length, whatever the record holds -- derived field by field from
+ * log_format.c, and held to it exactly by test_log_file.c:
+ *
+ *   timestamp  33  "YYYY-MM-DDTHH:MM:SS.mmm+HHHHHH:MM": the year stays four
+ *                  digits (a 64-bit nanosecond clock ends in 2554, an int32
+ *                  offset moves it at most 68 years) and the hours of an
+ *                  int32 offset reach six; "boot+" with a 32-bit second count
+ *                  is 19
+ *   " level "   9  "warning" is the longest level name
+ *   ident     124  ASTRA_LOG_IDENT_MAX - 1 bytes, each at most `\xNN`
+ *   "[pid] "   11
+ *   "stream: "  8  "stdout"/"stderr"/"kernel"
+ *   text       4n  each byte at most `\xNN`
+ *   " [truncated]\n" 13
+ */
+#define ASTRA_LOG_LINE_PREFIX_MAX \
+    (33u + 9u + 4u * (ASTRA_LOG_IDENT_MAX - 1u) + 11u + 8u)
+#define ASTRA_LOG_LINE_BYTES(text_length) \
+    (ASTRA_LOG_LINE_PREFIX_MAX + 4u * (uint32_t)(text_length) + 13u)
+
 /** One decoded log record, ready to render as one line. */
 typedef struct AstraLogLine {
     /** Monotonic nanoseconds since boot; used when `wall_valid` is false. */

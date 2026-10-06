@@ -362,9 +362,61 @@ test_rotate_failure_second(void)
     assert(content_is("syslog", "BASExBATCH"));
 }
 
+/* ASTRA_LOG_LINE_BYTES is a bound the drain reserves against, so no input a
+ * process can put in a record -- every byte a control byte, the longest
+ * ident, the widest timestamp and offset, the longest level and stream names
+ * -- may format longer than it. The widest case must hit it exactly, or the
+ * constant is not derived from the formatter. */
+static void
+test_line_bound(void)
+{
+    static char text[ASTRA_LOG_TEXT_MAX];
+    static char out[ASTRA_LOG_LINE_BYTES(ASTRA_LOG_TEXT_MAX) + 64u];
+    char ident[ASTRA_LOG_IDENT_MAX];
+    static const int32_t offsets[] = { 0, 2147483647, -2147483647 - 1, -18000 };
+    static const uint64_t walls[] = { 0u, 1000000000u, UINT64_MAX };
+
+    memset(text, 0x01, sizeof(text));
+    memset(ident, 0x7f, sizeof(ident) - 1u);
+    ident[sizeof(ident) - 1u] = '\0';
+    for (uint32_t w = 0u; w < 3u; ++w)
+        for (uint32_t z = 0u; z < 4u; ++z)
+            for (uint32_t valid = 0u; valid < 2u; ++valid)
+                for (uint32_t level = 0u; level <= 255u; level += 51u)
+                    for (uint32_t stream = 0u; stream < 5u; ++stream) {
+        AstraLogLine line = {
+            .monotonic_ns = UINT64_MAX, .wall_ns = walls[w],
+            .utc_offset = offsets[z], .zone = 0x41424344u,
+            .wall_valid = (uint8_t)valid, .level = (uint8_t)level,
+            .stream = (uint8_t)stream, .truncated = 1u, .pid = 0xffffffffu,
+            .ident = ident, .text = text, .length = ASTRA_LOG_TEXT_MAX };
+        uint32_t n = astra_log_format(out, sizeof(out), &line);
+
+        assert(n <= ASTRA_LOG_LINE_BYTES(ASTRA_LOG_TEXT_MAX));
+        assert(out[n - 1u] == '\n');
+    }
+    {
+        /* The widest line: max wall time, max positive offset, "warning",
+         * "stdout", every ident and text byte escaped, truncated. */
+        AstraLogLine line = {
+            .wall_ns = UINT64_MAX, .utc_offset = 2147483647,
+            .zone = 0x41424344u, .wall_valid = 1u,
+            .level = ASTRA_EVENT_LEVEL_WARNING,
+            .stream = ASTRA_LOG_STREAM_STDOUT, .truncated = 1u, .pid = 1u,
+            .ident = ident, .text = text, .length = ASTRA_LOG_TEXT_MAX };
+
+        assert(astra_log_format(out, sizeof(out), &line) ==
+               ASTRA_LOG_LINE_BYTES(ASTRA_LOG_TEXT_MAX));
+        line.length = 0u;
+        assert(astra_log_format(out, sizeof(out), &line) ==
+               ASTRA_LOG_LINE_BYTES(0u));
+    }
+}
+
 int
 main(void)
 {
+    test_line_bound();
     test_format();
     test_ident_escape();
     test_utf8_passthrough();
