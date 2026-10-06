@@ -36,6 +36,7 @@ static struct {
     uint32_t doorbells;
     uint32_t log_writes;      /* LOG_WRITE: the kernel-ring fallback */
     uint32_t closed_handles;
+    uint32_t producer_closes; /* CLOSE of a producer endpoint */
     uint32_t unmaps;
     uint32_t duplicate_rights;
     uint32_t last_send_handle_count;
@@ -177,6 +178,8 @@ fake_log_syscall(uint32_t number, uint32_t argument0, uint32_t argument1,
     case ASTRA_SYSCALL_CLOSE:
         result->status = ASTRA_SYSCALL_OK;
         ++fake.closed_handles;
+        if (argument0 == FAKE_PRODUCER)
+            ++fake.producer_closes;
         return;
     case ASTRA_SYSCALL_WAIT_ONE:
         if (argument0 != FAKE_PRODUCER)
@@ -188,7 +191,11 @@ fake_log_syscall(uint32_t number, uint32_t argument0, uint32_t argument1,
         return;
     case ASTRA_SYSCALL_AREA_UNMAP:
         result->status = ASTRA_SYSCALL_OK;
-        assert(argument0 == (uint32_t)(uintptr_t)fake.area);
+        /* The newest area on a failed setup; any of them after fork. */
+        assert(argument0 >= (uint32_t)(uintptr_t)fake_areas[0] &&
+               argument0 <= (uint32_t)(uintptr_t)fake.area &&
+               (argument0 - (uint32_t)(uintptr_t)fake_areas[0]) %
+                       ASTRA_LOG_RING_AREA_SIZE == 0u);
         ++fake.unmaps;
         return;
     default:
@@ -2728,18 +2735,16 @@ log_x(void)
 }
 
 /*
- * The service dies: a doorbell answers PEER_DEAD (that line is in the ring),
- * the next line falls back, and setup is retried on the 64th call after it.
- * Returns with the doorbell answering again.
+ * The service let go of the ring while its port lives on (it refused or
+ * reaped it: test_log_line_falls_back_when_consumer_closed drives the real
+ * detection), reported as a writer that found it DEAD would; setup is retried
+ * on the 64th call after. A dead service is not this: its port is gone, and
+ * the startup handle names it forever (test_log_line_service_death_latches).
  */
 static void
-fake_service_dies(void)
+fake_ring_let_go(void)
 {
-    fake.doorbell_result = ASTRA_SYSCALL_PEER_DEAD;
-    fake_consume_all();
-    log_x();                         /* rings, finds the service gone */
-    fake.doorbell_result = ASTRA_SYSCALL_OK;
-    log_x();                         /* DEAD: falls back, backs off */
+    astra_log_test_ring_died(astra_log_test_state());
     for (uint32_t index = 0u; index < 63u; ++index)
         log_x();
 }
@@ -2754,7 +2759,7 @@ test_log_line_stale_death_leaves_new_ring_alone(void)
     reset_fake_kernel();
     log_x();
     first = astra_log_test_state();
-    fake_service_dies();
+    fake_ring_let_go();
     assert(fake.area_creates == 1u);
     log_x();                         /* the 64th call sets up again */
     assert(fake.area_creates == 2u);
@@ -2769,25 +2774,140 @@ test_log_line_stale_death_leaves_new_ring_alone(void)
     assert(fake_ring_records() == 2u);
 }
 
+/* The service holds at most ASTRA_LOG_SETUPS_MAX rings per pid, and every
+ * let-go ring stays mapped here: after eight, LOG_WRITE for good. */
 static void
-test_log_line_gives_up_after_eight_service_deaths(void)
+test_log_line_gives_up_after_eight_rings(void)
 {
     uint32_t writes;
 
     reset_fake_kernel();
     log_x();
-    for (uint32_t death = 1u; death < 8u; ++death) {
-        fake_service_dies();
+    for (uint32_t ring = 1u; ring < 8u; ++ring) {
+        fake_ring_let_go();
         log_x();
-        assert(fake.area_creates == death + 1u);
-        assert(fake.log_writes == death * 64u);
+        assert(fake.area_creates == ring + 1u);
+        assert(fake.log_writes == ring * 63u);
     }
-    fake_service_dies();
+    fake_ring_let_go();
     writes = fake.log_writes;
     for (uint32_t index = 0u; index < 200u; ++index)
         log_x();
     assert(fake.area_creates == 8u);
     assert(fake.log_writes == writes + 200u);
+}
+
+/*
+ * The service dies: a doorbell answers PEER_DEAD, and the next line falls
+ * back. Its port never comes back -- a restarted service makes a new one, and
+ * the startup handle still names the old -- so the one setup retried on the
+ * 64th call after is refused PEER_DEAD, and that latches LOG_WRITE: no more
+ * areas, no more setups, however long the process runs.
+ */
+static void
+test_log_line_service_death_latches(void)
+{
+    uint32_t writes;
+
+    reset_fake_kernel();
+    log_x();
+    fake.doorbell_result = ASTRA_SYSCALL_PEER_DEAD;
+    fake.port_send_result = ASTRA_SYSCALL_PEER_DEAD;
+    fake_consume_all();
+    log_x();                         /* rings, finds the service gone */
+    log_x();                         /* DEAD: falls back, backs off */
+    for (uint32_t index = 0u; index < 63u; ++index)
+        log_x();
+    assert(fake.area_creates == 1u && fake.port_sends == 1u);
+    log_x();                         /* the 64th: setup, refused PEER_DEAD */
+    assert(fake.area_creates == 2u && fake.port_sends == 2u);
+    /* The refused setup's handles and mapping are undone. */
+    assert(fake.closed_handles == 1u + 4u && fake.unmaps == 1u);
+    writes = fake.log_writes;
+    for (uint32_t index = 0u; index < 1000u; ++index)
+        log_x();
+    assert(fake.area_creates == 2u && fake.port_sends == 2u);
+    assert(fake.log_writes == writes + 1000u);
+}
+
+/*
+ * fork(): the child inherits the parent's mapping of its ring and the
+ * runtime's state naming it, but not the producer endpoint (non-cloneable).
+ * The child unmaps the inherited area, forgets the stale endpoint without
+ * closing it (its number may name a child handle later), and its next line
+ * sets up a ring of its own. The parent's ring is not touched.
+ */
+static _Alignas(64) uint8_t parent_ring_before[ASTRA_LOG_RING_AREA_SIZE];
+
+static void
+test_log_after_fork_child_sets_up_its_own_ring(void)
+{
+    uint32_t process_handle;
+    uint32_t process_id;
+    uint32_t closes;
+
+    reset_fake_kernel();
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_LOG,
+                          "parent", 6u) == ASTRA_SYSCALL_OK);
+    memcpy(parent_ring_before, fake_areas[0], sizeof(parent_ring_before));
+    closes = fake.closed_handles;
+    mock_clone_child = 1;
+    assert(astra_process_clone(&process_handle, &process_id) ==
+           ASTRA_SYSCALL_OK);
+    mock_clone_child = 0;
+    assert(process_id == 0u);
+    assert(fake.unmaps == 1u && fake.closed_handles == closes);
+    assert(astra_log_test_state() == 0u && astra_log_test_producer() == NULL);
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_LOG,
+                          "child", 5u) == ASTRA_SYSCALL_OK);
+    assert(fake.area_creates == 2u && fake.port_sends == 2u);
+    assert(fake.area == fake_areas[1] && fake.log_writes == 0u);
+    assert(fake_ring_records() == 1u && last_ring_text_equals("child"));
+    assert(memcmp(parent_ring_before, fake_areas[0],
+                  sizeof(parent_ring_before)) == 0);
+}
+
+/*
+ * exec keeps the handle table, so the runtime closes its producer endpoints
+ * just before PROCESS_EXEC: the service sees PEER_DEAD and frees the client.
+ * The host process survives PROCESS_EXEC, which is what a failed exec looks
+ * like to the log: the next line sets up a new ring.
+ */
+static void
+test_log_before_exec_closes_rings(void)
+{
+    ExecutableLaunchReader program;
+    AstraReadSource source;
+    AstraExecRequest request = {
+        .size = ASTRA_EXEC_REQUEST_SIZE,
+    };
+    AstraLogProducer *producer;
+    uint32_t writes;
+
+    reset_fake_kernel();
+    log_x();
+    producer = astra_log_test_producer();
+    assert(producer != NULL && fake.producer_closes == 0u);
+    executable_launch_fixture(&program, NULL);
+    source = (AstraReadSource){
+        .length = program.length,
+        .read_at = executable_launch_read,
+        .release = executable_launch_release,
+        .context = &program,
+    };
+    reset_exec_mocks();
+    assert(astra_exec_executable_stream(&source, NULL, NULL, NULL, NULL,
+                                        &request) == ASTRA_SYSCALL_OK);
+    assert(mock_exec_handle == MOCK_STREAM_LOAD_HANDLE);
+    assert(fake.producer_closes == 1u);
+    assert((astra_log_test_state() & 3u) == 0u &&
+           astra_log_test_producer() == NULL);
+    /* A writer still in the old ring is told it is dead. */
+    assert(__atomic_load_n(&producer->dead, __ATOMIC_ACQUIRE) != 0u);
+    writes = fake.log_writes;        /* exec's own debug lines */
+    log_x();
+    assert(fake.area_creates == 2u && fake.port_sends == 2u);
+    assert(fake.log_writes == writes && fake_ring_records() == 1u);
 }
 
 /*
@@ -2836,7 +2956,7 @@ test_log_line_late_writer_stays_in_its_own_ring(void)
                           "one", 3u) == ASTRA_SYSCALL_OK);
     old_area = fake.area;
     old_producer = astra_log_test_producer();
-    fake_service_dies();
+    fake_ring_let_go();
     assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_LOG,
                           "back", 4u) == ASTRA_SYSCALL_OK);
     assert(fake.area_creates == 2u && fake.area != old_area);
@@ -2851,7 +2971,7 @@ test_log_line_late_writer_stays_in_its_own_ring(void)
     assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_LOG,
                           "new", 3u) == ASTRA_SYSCALL_OK);
     assert(fake_ring_records() == 2u && last_ring_text_equals("new"));
-    assert(fake_area_records(old_area) == 3u &&
+    assert(fake_area_records(old_area) == 2u &&
            strcmp(fake_last_text, "late") == 0);
 }
 
@@ -2892,7 +3012,10 @@ main(void)
     test_log_line_records_empty_lines();
     test_existing_astra_log_routes_through_ring();
     test_log_line_stale_death_leaves_new_ring_alone();
-    test_log_line_gives_up_after_eight_service_deaths();
+    test_log_line_gives_up_after_eight_rings();
+    test_log_line_service_death_latches();
+    test_log_after_fork_child_sets_up_its_own_ring();
+    test_log_before_exec_closes_rings();
     test_log_line_falls_back_when_consumer_closed();
     test_log_line_late_writer_stays_in_its_own_ring();
     return 0;

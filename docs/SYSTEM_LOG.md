@@ -221,12 +221,23 @@ full never moves its position, so the burst doorbell alone would never find
 it gone.
 
 **Service death.** A doorbell answered `PEER_DEAD` marks the producer dead, and
-lines go to `LOG_WRITE`. Setup is retried on the 64th call after. The setup
-state word carries a generation, so a late report of an older ring's death
-cannot retire a newer one, and each setup gets a fresh producer, so a writer
-preempted across a re-setup finishes in the ring it reserved in. Dead rings
-stay mapped. After eight setups the process stays on `LOG_WRITE`, which bounds
-that at 512 KiB.
+lines go to `LOG_WRITE`. Setup is retried on the 64th call after; a ring the
+live service let go of (the drop-path poll finds its consumer end closed) is
+retired the same way. The setup state word carries a generation, so a late
+report of an older ring's death cannot retire a newer one, and each setup gets
+a fresh producer, so a writer preempted across a re-setup finishes in the ring
+it reserved in. Dead rings stay mapped. After eight setups the process stays on
+`LOG_WRITE`, which bounds that at 512 KiB. A setup refused `PEER_DEAD` latches
+`LOG_WRITE` at once: a restarted service makes a new port, and the startup
+`LOG` handle names the dead one forever.
+
+**Fork and exec.** A forked child inherits its parent's ring mappings and the
+runtime state naming them, but not the producer endpoints, which do not clone.
+`astra_process_clone` resets the child: it unmaps the inherited areas, forgets
+the stale endpoints unclosed, and the child's next line sets up its own ring.
+Exec keeps the handle table, so `astra_exec_executable_stream` closes the
+producer endpoints just before `PROCESS_EXEC` and the service frees the client;
+a failed exec sets up a new ring on its next line.
 
 **Crash.** After the producer dies, the consumer may still drain published
 elements. The service drains the ring, then sees `PEER_DEAD` and frees it.

@@ -89,9 +89,10 @@ _Static_assert(sizeof(AstraLogRecordFields) == ASTRA_LOG_RECORD_HEADER_SIZE,
 #define ASTRA_LOG_IDENT_MAX        32u
 #define ASTRA_LOG_OPERATION_SETUP    1u
 #define ASTRA_LOG_OPERATION_DOORBELL 2u
-/* The most setups one process ever makes: one per service death, each with a
- * ring of its own that stays mapped (runtime/src/log.c). The service refuses
- * a setup from a pid already holding this many. */
+/* The most setups one process image makes: one per ring the live service let
+ * go of, or per failed exec, each with a ring of its own that stays mapped
+ * (runtime/src/log.c). A dead service ends setup for good. The service
+ * refuses a setup from a pid already holding this many. */
 #define ASTRA_LOG_SETUPS_MAX       8u
 
 typedef struct AstraLogSetup {

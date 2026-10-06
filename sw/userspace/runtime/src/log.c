@@ -176,9 +176,11 @@ log_write_level(const void *bytes, uint32_t length, uint32_t level)
 /*
  * ponytail: one producer per successful setup, never reused, so a late writer
  * can only write into the dead ring it reserved in. A dead ring's mapping and
- * producer endpoint stay too (64 KiB and one handle each). After 8 setups the
- * service has died (or refused the ring) 8 times and the process stays on
- * LOG_WRITE for good, which bounds that leak at 512 KiB of reservation.
+ * producer endpoint stay too (64 KiB and one handle each). A new setup follows
+ * only a ring the live service let go of (refused or reaped) or a failed exec;
+ * after 8 the process stays on LOG_WRITE for good, which bounds that leak at
+ * 512 KiB of reservation. A dead service latches LOG_WRITE at once
+ * (log_setup): the startup handle names its port forever.
  */
 #define LOG_PRODUCERS    ASTRA_LOG_SETUPS_MAX
 
@@ -267,6 +269,7 @@ log_setup(void)
     uint32_t state = __atomic_load_n(&log_state, __ATOMIC_ACQUIRE);
     uint32_t generation = state >> LOG_GENERATION_SHIFT;
     uint32_t backoff;
+    uint32_t status;
 
     if ((state & LOG_STATE_MASK) == LOG_SETUP_READY)
         return state;
@@ -323,9 +326,15 @@ log_setup(void)
     handles[0] = consumer;
     handles[1] = reader;
     /* Never blocks: a full queue is WOULD_BLOCK, and this line falls back. */
-    if (astra_port_send(log->handle, &setup, sizeof(setup), handles, 2u) !=
-        ASTRA_SYSCALL_OK)
+    status = astra_port_send(log->handle, &setup, sizeof(setup), handles, 2u);
+    if (status != ASTRA_SYSCALL_OK) {
+        /* The service is gone, and a restarted one makes a new port that
+         * this startup handle will never name: LOG_WRITE for good, as if
+         * every setup were spent (the generation is not used to index). */
+        if (status == ASTRA_SYSCALL_PEER_DEAD)
+            generation = LOG_PRODUCERS;
         goto failed;
+    }
     /* Both handles moved to the service on success. */
     log_producer_endpoints[generation] = producer; /* older ones stay open */
     if (generation == 0u) {
@@ -381,6 +390,65 @@ log_ring_died(uint32_t state)
                          __ATOMIC_RELAXED);
 }
 
+/*
+ * In a forked child, before it runs anything else (astra_process_clone). The
+ * kernel clones only a single-threaded process (sw/kernel/process.c,
+ * clone_current_process), so no writer is in a ring. The child inherited the
+ * parent's mappings of its rings and the state naming them, but not the
+ * producer endpoints, which do not clone: unmap the areas, and forget the
+ * endpoints unclosed, because their numbers may name a child handle later.
+ * The child's next line sets up a ring of its own.
+ */
+void
+astra_log_after_fork_child(void)
+{
+    for (uint32_t index = 0u; index < LOG_PRODUCERS; ++index) {
+        if (log_producers[index].header != NULL)
+            (void)astra_rt_area_unmap(
+                (void *)((uintptr_t)log_producers[index].header -
+                         ASTRA_LOG_RING_OFFSET));
+        log_producer_endpoints[index] = 0u;
+    }
+    memset(log_producers, 0, sizeof(log_producers));
+    log_port = 0u;
+    log_setup_backoff = 0u;
+    __atomic_store_n(&log_state, LOG_SETUP_IDLE, __ATOMIC_RELEASE);
+}
+
+/*
+ * Just before PROCESS_EXEC (astra_exec_executable_stream). Exec keeps the
+ * handle table, so without this the service would never see these rings end:
+ * close the producer endpoints, and it sees PEER_DEAD and frees the client.
+ * Each producer is marked dead first, so a writer still in one falls back to
+ * LOG_WRITE. The mappings stay: the kernel refuses to exec a multi-threaded
+ * process only after this point, and such a writer could still be in them.
+ * A successful exec unmaps them; a failed one leaves the process IDLE at the
+ * same generation, and its next line sets up a new ring.
+ */
+void
+astra_log_before_exec(void)
+{
+    uint32_t state = __atomic_load_n(&log_state, __ATOMIC_ACQUIRE);
+
+    for (uint32_t index = 0u; index < LOG_PRODUCERS; ++index) {
+        uint32_t endpoint = log_producer_endpoints[index];
+
+        if (endpoint == 0u)
+            continue;
+        __atomic_store_n(&log_producers[index].dead, 1u, __ATOMIC_RELEASE);
+        log_producer_endpoints[index] = 0u;
+        (void)astra_close(endpoint);
+    }
+    __atomic_store_n(&log_setup_backoff, 0u, __ATOMIC_RELAXED);
+    /* From READY only: a BUSY setup is another thread's, and exec will be
+     * refused while it runs. */
+    if ((state & LOG_STATE_MASK) == LOG_SETUP_READY)
+        (void)__atomic_compare_exchange_n(&log_state, &state,
+                                          state & ~LOG_STATE_MASK, 0,
+                                          __ATOMIC_ACQ_REL,
+                                          __ATOMIC_RELAXED);
+}
+
 #ifdef ASTRA_LOG_TEST
 uint32_t
 astra_log_test_state(void)
@@ -408,6 +476,7 @@ astra_log_test_reset(void)
     log_setup_backoff = 0u;
     for (uint32_t index = 0u; index < LOG_PRODUCERS; ++index)
         log_producer_endpoints[index] = 0u;
+    memset(log_producers, 0, sizeof(log_producers));
     log_port = 0u;
 }
 #endif
