@@ -309,11 +309,17 @@ if measurement says so.
   the pid in hex as `ps` prints it,
   then the stream (`stdout`, `stderr`, `log` or `kernel`), then the text.
   A kernel-ring line (`LOG_WRITE` from a process with no ring) is named
-  `kernel` for pid 0, `supervisor` for pid 1, by its ring's ident when the
-  pid has one, otherwise by the name `PROC:snapshot` gives the pid (the
-  service holds `PROC:r` and asks only after its own READY, at most once per
-  drain, remembering misses). `?` is left only for a process that died
-  before it was asked.
+  `kernel` for pid 0, otherwise by the basename of the name the kernel's
+  `PROCESS_START` record gave the pid -- the same string a ring's setup ident
+  is (`sw/include/astra/event.h`). The kernel writes that record, in one or
+  two chunks, when it launches, forks or execs an image and before anything
+  else from it, so the service reads names from the ring in order and never
+  asks anyone; a later one renames the pid. Each chunk's `activity` is its
+  byte offset in the name, so a tail whose head the ring overwrote is
+  discarded. The table holds 128 names, least recently used first out
+  (`sw/userspace/events/include/astra/log_names.h`). `?` is left for a pid
+  whose record is older than the ring, or forgotten. The records themselves
+  are neither syslog lines nor stored events.
   Control bytes (below 0x20, and 0x7f) are written as `\xNN` and backslash as
   `\\`; bytes from 0x80 up pass through so UTF-8 text survives. One record is
   always one line.
@@ -344,12 +350,26 @@ if measurement says so.
 - **Boot.** Each boot begins with `--- boot 2026-10-05T14:03:20-04:00 ---`.
   There is no build id: nothing userspace can reach without new ABI names
   the build. A restarted service writes
-  `--- events service restarted <time> ---` instead, and skips kernel-ring
-  text older than its own start, which the previous instance wrote (what it
-  had not yet drained when it died is lost from the file, not the store).
-  It knows it is a restart because the kernel ring already holds the
-  supervisor's `launch /services/events` line, written only after the first
-  instance's READY, or because the ring has wrapped since boot.
+  `--- events service restarted <time> ---` instead.
+  The service keeps a resume point in `STORE:syslog.state` (written to a
+  temporary file, synced and renamed): the boot's identity, the last
+  kernel-ring sequence whose text is in the file, and the name table. It is
+  rewritten whenever a pass writes kernel-ring lines or a name changes. At
+  start, a resume point from this boot means a restart: the service takes
+  its names and carries on after its sequence, so what the dead instance had
+  not drained -- the lines around its death -- is written once and nothing
+  twice. Anything else is a boot, drained from this boot's first record.
+  - **Boot identity** is the wall-clock second the boot began (wall time
+    minus monotonic time); two must agree to within a second. The saved
+    sequence must also lie inside this boot's span of the ring.
+  - **The ring outlives a warm reset.** It is `NOLOAD` and the kernel keeps
+    a valid header, so its sequence carries on, but each boot's timestamps
+    start again from that boot's reset. A record stamped earlier than the one
+    before it is therefore the first of a later boot, and nothing older is
+    this boot's to write.
+  - A machine with no valid wall clock has boot identity 0 and relies on the
+    ring alone; a cold boot that leaves the ring looking like the last boot's
+    is then taken for a restart.
 - **The service never logs.** `services/events/main.c` includes neither
   `astra/event_emit.h` nor `astra/log.h` and never calls `astra_log_line` or
   `astra_log_write`: a log service that logs about logging is how a logging

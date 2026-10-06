@@ -27,9 +27,9 @@
 #include <astra/log_clients.h>
 #include <astra/log_file.h>
 #include <astra/log_format.h>
+#include <astra/log_names.h>
 #include <astra/log_ring.h>
 #include <astra/message_abi.h>
-#include <astra/proc.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
@@ -67,8 +67,6 @@
 #define LOG_KERNEL_TEXT (16u * 1024u)
 /* Drain passes per pump before the ports are answered again. */
 #define LOG_DRAIN_PASSES 8u
-/* Process names remembered for kernel-ring lines (log_ident). */
-#define LOG_NAMES 64u
 /* The initial user image -- the supervisor -- is process 1, and the kernel
  * never hands 1 out again: ids wrap to 2 (sw/kernel/process.c). */
 #define LOG_SUPERVISOR_PID 1u
@@ -135,29 +133,33 @@ static AstraLogFile log_host;      /* /work/.astra/syslog */
 static char log_batch[ASTRA_LOG_DRAIN_OUT_BYTES];
 static uint32_t log_day;           /* YYYYMMDD of the newest dated line */
 static int log_more;               /* the drain stopped with work left */
-/* READY has been sent: the drain runs, and PROC may be asked (the supervisor
- * that serves it waits for this service's READY first). */
+/* READY has been sent: the drain writes. Boot services wait on READY, so
+ * nothing before it does file I/O it could put off. */
 static int log_live;
-/* Kernel-ring records older than this were the previous instance's to write
- * (log_restarted); 0 at boot, when every one is this instance's. */
-static uint64_t log_since;
-/* The kernel-ring queue: lines in ring order, their text packed in order. */
+/*
+ * The resume point (log_begin, log_state_save). Kernel-ring records not
+ * after `log_after` were written by an earlier instance, or belong to an
+ * earlier boot; 0 means none did. `log_resume` is the last record whose
+ * text is in the file, or that wrote nothing; `log_seen` the last one read.
+ */
+static uint32_t log_after;
+static uint32_t log_resume;
+static uint32_t log_seen;
+static uint64_t log_boot;
+static int log_state_dirty;
+static AstraLogNames log_names;    /* pid -> name, from PROCESS_START */
+static uint8_t log_state_bytes[ASTRA_LOG_STATE_BYTES_MAX];
+/* The kernel-ring queue: lines in ring order, their text packed in order,
+ * each named when it was read and with its last record's sequence. */
 static AstraLogLine log_kernel[LOG_KERNEL_LINES];
 static char log_kernel_ident[LOG_KERNEL_LINES][ASTRA_LOG_IDENT_MAX];
+static uint32_t log_kernel_sequence[LOG_KERNEL_LINES];
 static char log_kernel_text[LOG_KERNEL_TEXT];
 static uint32_t log_kernel_count;
 static uint32_t log_kernel_bytes;
-/* pid -> program name for lines with no ring; "" is a pid PROC did not
- * know. Oldest entry is replaced first. */
-static struct {
-    uint32_t pid;
-    char name[ASTRA_LOG_IDENT_MAX];
-} log_names[LOG_NAMES];
-static uint32_t log_names_next;
-static int log_proc_failed;        /* PROC refused once: never asked again */
-static int log_proc_asked;         /* PROC was read during this drain */
 /* One kernel-ring text line, joined from its CONTINUED chunks. */
 static struct {
+    uint32_t sequence;             /* the last chunk's */
     uint32_t process;
     uint32_t thread;
     uint32_t level;
@@ -576,86 +578,12 @@ log_marker(int restarted)
     log_write(text, used, log_day);
 }
 
-static const char *
-log_name_find(uint32_t pid)
-{
-    for (uint32_t index = 0u; index < LOG_NAMES; ++index)
-        if (log_names[index].pid == pid)
-            return log_names[index].name;
-    return NULL;
-}
-
-/* Remember `pid` as `name` (basename, truncated), replacing what it was. */
-static void
-log_name_put(uint32_t pid, const char *name, uint32_t length)
-{
-    uint32_t slot = LOG_NAMES;
-    uint32_t start = 0u;
-    uint32_t at = 0u;
-
-    for (uint32_t index = 0u; index < LOG_NAMES; ++index)
-        if (log_names[index].pid == pid)
-            slot = index;
-    if (slot == LOG_NAMES)
-        slot = log_names_next++ % LOG_NAMES;
-    for (uint32_t index = 0u; index < length; ++index)
-        if (name[index] == '/')
-            start = index + 1u;
-    while (start + at < length && at + 1u < ASTRA_LOG_IDENT_MAX) {
-        log_names[slot].name[at] = name[start + at];
-        ++at;
-    }
-    log_names[slot].name[at] = '\0';
-    log_names[slot].pid = pid;
-}
-
 /*
- * Every live process's name from PROC:snapshot, at most once per drain.
- *
- * PROC is served by the supervisor, synchronously: a read waits until the
- * supervisor is back in its watch loop (during boot, until every boot
- * service is ready; later, until any service it is restarting is). It is
- * never asked before this service's READY -- the supervisor is waiting for
- * that, so it would never answer. Each refresh names every live process at
- * once, so a service that logs and dies after it is still named.
- *
- * ponytail: pids are not generation-tagged in the kernel ring. A name kept
- * for a dead pid would be wrong for a new process given the same id, which
- * takes 65534 launches (ids wrap at ASTRA_PROCESS_ID_MAX); a refresh puts
- * the right name back. Carry the generation in the record if that matters.
- */
-static void
-log_names_refresh(void)
-{
-    AstraProcSnapshot *records = NULL;
-    uint32_t bytes = 0u;
-
-    log_proc_asked = 1;
-    if (astra_process_read_file_alloc(&process_filesystem, "/proc/snapshot",
-                                      (void **)&records, &bytes) !=
-        ASTRA_VFS_OK) {
-        log_proc_failed = 1; /* not granted, or no supervisor PROC: */
-        return;
-    }
-    for (uint32_t index = 0u; index < bytes / sizeof(records[0]); ++index) {
-        const AstraProcSnapshot *record = &records[index];
-        uint32_t length = 0u;
-
-        if (record->process.size != sizeof(record->process) ||
-            record->process.id == 0u)
-            continue;
-        while (length < ASTRA_PROC_NAME_MAX && record->name[length] != '\0')
-            ++length;
-        log_name_put(record->process.id, record->name, length);
-    }
-    astra_runtime_deallocate(records);
-}
-
-/*
- * The program a kernel-ring line came from: `kernel` and `supervisor` by
- * their fixed pids, a ring client by its own ident, otherwise the name PROC
- * gave that pid. "" (the formatter writes `?`) only when none of these knows
- * it -- a process that died before the drain first asked, or no PROC.
+ * The program a kernel-ring line came from: `kernel` for pid 0, otherwise
+ * the basename of the name its PROCESS_START gave it -- the same thing a
+ * ring's setup ident is. "" (the formatter writes `?`) only for a pid the
+ * table does not know: started before the ring's oldest record, or
+ * forgotten (log_names.h).
  */
 static const char *
 log_ident(uint32_t pid)
@@ -664,26 +592,61 @@ log_ident(uint32_t pid)
 
     if (pid == 0u)
         return "kernel";
-    if (pid == LOG_SUPERVISOR_PID)
-        return "supervisor";
-    for (uint32_t index = 0u; index < ASTRA_LOG_CLIENTS_MAX; ++index)
-        if (log_clients.client[index].used &&
-            log_clients.client[index].pid == pid)
-            return log_clients.client[index].ident;
-    name = log_name_find(pid);
+    name = astra_log_names_find(&log_names, pid);
     if (name != NULL)
         return name;
-    if (!log_live || log_proc_failed)
-        return "";
-    if (!log_proc_asked) {
-        log_names_refresh();
-        name = log_name_find(pid);
-        if (name != NULL)
-            return name;
+    return pid == LOG_SUPERVISOR_PID ? "supervisor" : "";
+}
+
+/*
+ * The resume point, written whole to a temporary file and renamed over the
+ * last one, so a crash leaves one or the other. A failure is dropped: the
+ * next change writes it again, and the worst a stale one costs a restart is
+ * lines written twice.
+ */
+static void
+log_state_save(void)
+{
+    AstraFile file = ASTRA_FILE_INIT;
+    uint32_t length;
+    uint32_t done = 0u;
+    int saved;
+
+    log_state_dirty = 0;
+    length = astra_log_state_encode(log_boot, log_resume, &log_names,
+                                    log_state_bytes,
+                                    sizeof(log_state_bytes));
+    if (length == 0u ||
+        astra_filesystem_open(&process_filesystem.filesystem,
+                              "/store/syslog.state.tmp",
+                              ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+                                  ASTRA_VFS_OPEN_TRUNCATE,
+                              &file) != ASTRA_VFS_OK)
+        return;
+    while (done < length) {
+        uint32_t moved = 0u;
+
+        if (astra_filesystem_write(&file, log_state_bytes + done,
+                                   length - done, &moved) != ASTRA_VFS_OK ||
+            moved == 0u)
+            break;
+        done += moved;
     }
-    if (!log_proc_failed)
-        log_name_put(pid, "", 0u); /* asked, unknown: never asked again */
-    return "";
+    saved = done == length &&
+            astra_filesystem_sync(&file) == ASTRA_VFS_OK;
+    if (astra_filesystem_close(&file) != ASTRA_VFS_OK || !saved)
+        return;
+    (void)astra_filesystem_rename(&process_filesystem.filesystem,
+                                  "/store/syslog.state.tmp",
+                                  "/store/syslog.state");
+}
+
+/* Whether this kernel-ring record is this instance's to log. */
+static int
+log_wanted(const AstraEventDrained *record)
+{
+    return log_after == 0u ||
+           astra_log_sequence_after(record->sequence, log_after);
 }
 
 /* Drop the first `taken` queued kernel lines; the rest move to the front. */
@@ -706,16 +669,23 @@ log_kernel_take(uint32_t taken)
                   log_kernel_bytes);
     (void)memmove(log_kernel, log_kernel + taken,
                   log_kernel_count * sizeof(log_kernel[0]));
-    for (uint32_t index = 0u; index < log_kernel_count; ++index)
+    (void)memmove(log_kernel_ident, log_kernel_ident + taken,
+                  log_kernel_count * sizeof(log_kernel_ident[0]));
+    (void)memmove(log_kernel_sequence, log_kernel_sequence + taken,
+                  log_kernel_count * sizeof(log_kernel_sequence[0]));
+    for (uint32_t index = 0u; index < log_kernel_count; ++index) {
         log_kernel[index].text -= offset;
+        log_kernel[index].ident = log_kernel_ident[index];
+    }
 }
 
 static void log_consumed(void *context, AstraLogClient *client,
                          uint32_t position);
 
 /*
- * One drain pass: the queued kernel lines, named now, and every ring,
- * merged by time into one batch and one append per file.
+ * One drain pass: the queued kernel lines and every ring, merged by time
+ * into one batch and one append per file. The kernel lines it took move the
+ * resume point.
  */
 static uint32_t
 log_pass(uint32_t *pending)
@@ -723,22 +693,15 @@ log_pass(uint32_t *pending)
     uint32_t taken = 0u;
     uint32_t moved;
 
-    for (uint32_t index = 0u; index < log_kernel_count; ++index) {
-        const char *ident = log_ident(log_kernel[index].pid);
-        uint32_t at = 0u;
-
-        while (ident[at] != '\0' && at + 1u < ASTRA_LOG_IDENT_MAX) {
-            log_kernel_ident[index][at] = ident[at];
-            ++at;
-        }
-        log_kernel_ident[index][at] = '\0';
-        log_kernel[index].ident = log_kernel_ident[index];
-    }
     moved = astra_log_clients_drain(&log_clients, log_kernel,
                                     log_kernel_count, &taken, log_batch,
                                     sizeof(log_batch), log_consumed, NULL,
                                     &log_day, pending);
     log_write(log_batch, moved, log_day);
+    if (taken != 0u) {
+        log_resume = log_kernel_sequence[taken - 1u];
+        log_state_dirty = 1;
+    }
     log_kernel_take(taken);
     return moved;
 }
@@ -765,14 +728,26 @@ kernel_line_end(const AstraTimeSample *now)
 
         (void)log_pass(&pending);
     }
-    line = &log_kernel[log_kernel_count++];
+    {
+        const char *ident = log_ident(kernel_line.process);
+        uint32_t at = 0u;
+
+        while (ident[at] != '\0' && at + 1u < ASTRA_LOG_IDENT_MAX) {
+            log_kernel_ident[log_kernel_count][at] = ident[at];
+            ++at;
+        }
+        log_kernel_ident[log_kernel_count][at] = '\0';
+    }
+    log_kernel_sequence[log_kernel_count] = kernel_line.sequence;
+    line = &log_kernel[log_kernel_count];
+    line->ident = log_kernel_ident[log_kernel_count];
+    ++log_kernel_count;
     log_line_time(line, kernel_line.monotonic, now);
     line->level = (uint8_t)kernel_line.level;
     line->stream = kernel_line.process == 0u ? ASTRA_LOG_STREAM_KERNEL :
                                                ASTRA_LOG_STREAM_LOG;
     line->truncated = 0u;
     line->pid = kernel_line.process;
-    line->ident = "";
     line->text = log_kernel_text + log_kernel_bytes;
     line->length = length;
     (void)memcpy(log_kernel_text + log_kernel_bytes, kernel_line.text,
@@ -802,8 +777,7 @@ kernel_text(const AstraEventDrained *record, const AstraTimeSample *now)
 {
     uint32_t length = record->payload_length;
 
-    if ((record->flags & ASTRA_EVENT_FLAG_INLINE_STRING) == 0u ||
-        record_monotonic(record) < log_since)
+    if ((record->flags & ASTRA_EVENT_FLAG_INLINE_STRING) == 0u)
         return;
     if (length > ASTRA_EVENT_ARGUMENT_MAX)
         length = ASTRA_EVENT_ARGUMENT_MAX;
@@ -821,6 +795,7 @@ kernel_text(const AstraEventDrained *record, const AstraTimeSample *now)
     (void)memcpy(kernel_line.text + kernel_line.length, record->payload,
                  length);
     kernel_line.length += length;
+    kernel_line.sequence = record->sequence;
     if ((record->flags & ASTRA_EVENT_FLAG_CONTINUED) == 0u)
         kernel_line_end(now);
 }
@@ -916,7 +891,6 @@ log_drain(void)
 
     if (!log_live)
         return;
-    log_proc_asked = 0;
 
     for (uint32_t index = 0u; index < ASTRA_LOG_CLIENTS_MAX; ++index) {
         const AstraLogClient *client = &log_clients.client[index];
@@ -967,79 +941,66 @@ static AstraEventDrained drained[ASTRA_MEMORY_PAGE_SIZE /
 #define DRAINED_CAPACITY ((uint32_t)(sizeof(drained) / sizeof(drained[0])))
 
 /*
- * Whether this instance is a restart rather than the boot's first start,
- * from the kernel ring alone -- nothing in the startup block says, and PROC
- * cannot be asked before READY.
+ * Where this instance's kernel-ring text begins, and whether it is a boot or
+ * a restart (docs/SYSTEM_LOG.md section 5, Boot).
  *
- * At boot nothing has yet reported this service launched: the supervisor
- * writes `launch <path> ...` (pid 1) only after it receives READY. So the
- * ring holding that line for this program's path means a previous instance
- * started. If the ring has wrapped since the boot began, that line may be
- * gone -- but a ring that has wrapped is not at the start of a boot either
- * (2047 slots; a boot up to this service writes a few hundred), so a lost
- * record counts as a restart too.
+ * The saved resume point says which boot wrote it and how far. Same boot:
+ * a restart, which takes the saved names and carries on after the saved
+ * sequence -- so the previous instance's undrained lines and its death
+ * report are written, and nothing twice. Otherwise a boot: from this boot's
+ * first record. The ring outlives a warm reset, so a previous boot's
+ * records may still be in it; astra_log_boot_scan finds where this one
+ * begins.
  */
 static int
-log_restarted(const char *self)
+log_begin(void)
 {
-    static const char launch[] = "launch ";
-    char needle[sizeof(launch) + ASTRA_VFS_PATH_MAX + 1u];
-    uint32_t needle_length = 0u;
-    uint32_t cursor = 1u;
+    AstraLogBootScan scan = {0u, 0u, 0u};
+    AstraTimeSample now;
+    uint8_t *bytes = NULL;
+    uint32_t length = 0u;
+    uint64_t saved_boot = 0u;
+    uint32_t saved_sequence = 0u;
+    uint32_t cursor = 0u;
     uint32_t copied = 0u;
     uint32_t lost = 0u;
-    uint32_t matched = 0u;
-    int line_start = 1;
+    int restarted = 0;
 
-    if (self == NULL)
-        return 0;
-    for (uint32_t at = 0u; launch[at] != '\0'; ++at)
-        needle[needle_length++] = launch[at];
-    for (uint32_t at = 0u;
-         self[at] != '\0' && needle_length + 1u < sizeof(needle); ++at)
-        needle[needle_length++] = self[at];
-    needle[needle_length++] = ' ';
-    /* From just after the first sequence: a ring that has lost anything
-     * reports it here. */
-    if (astra_trace_read(debug_handle, &cursor, drained, 1u, &copied,
-                         &lost) != ASTRA_SYSCALL_OK)
-        return 0;
-    if (lost != 0u)
-        return 1;
-    cursor = 0u;
+    astra_time_now(&now);
+    log_boot = astra_log_boot_id(now.wall_ns, now.monotonic_ns,
+                                 now.wall_valid != 0u);
     do {
         if (astra_trace_read(debug_handle, &cursor, drained,
                              DRAINED_CAPACITY, &copied, &lost) !=
             ASTRA_SYSCALL_OK)
-            return 0;
-        for (uint32_t index = 0u; index < copied; ++index) {
-            const AstraEventDrained *record = &drained[index];
-            uint32_t length = record->payload_length;
-
-            if (record->process != LOG_SUPERVISOR_PID ||
-                (record->flags & ASTRA_EVENT_FLAG_INLINE_STRING) == 0u)
-                continue;
-            if (length > ASTRA_EVENT_ARGUMENT_MAX)
-                length = ASTRA_EVENT_ARGUMENT_MAX;
-            if (line_start)
-                matched = 0u;
-            for (uint32_t at = 0u; at < length && matched < needle_length &&
-                                   matched != UINT32_MAX; ++at)
-                matched = record->payload[at] == (uint8_t)needle[matched] ?
-                    matched + 1u : UINT32_MAX;
-            if (matched == needle_length)
-                return 1;
-            line_start = (record->flags & ASTRA_EVENT_FLAG_CONTINUED) == 0u;
-        }
+            break;
+        for (uint32_t index = 0u; index < copied; ++index)
+            astra_log_boot_scan(&scan, &drained[index]);
     } while (copied == DRAINED_CAPACITY);
-    return 0;
+    if (astra_process_read_file_alloc(&process_filesystem,
+                                      "/store/syslog.state",
+                                      (void **)&bytes, &length) ==
+        ASTRA_VFS_OK) {
+        restarted = astra_log_state_decode(bytes, length, &saved_boot,
+                                           &saved_sequence, &log_names) &&
+                    astra_log_state_restart(saved_boot, saved_sequence,
+                                            log_boot, &scan);
+        astra_runtime_deallocate(bytes);
+    }
+    if (restarted) {
+        log_after = saved_sequence;
+    } else {
+        astra_log_names_reset(&log_names);
+        log_after = scan.first != 0u ? scan.first - 1u : 0u;
+    }
+    log_resume = log_after;
+    log_state_save();
+    return restarted;
 }
 
 static uint32_t
 events_start(const AstraStartupInfo *startup)
 {
-    int restarted;
-
     if (events_ready) {
         return ASTRA_STATUS_OK;
     }
@@ -1118,17 +1079,7 @@ events_start(const AstraStartupInfo *startup)
     (void)astra_log_file_open(&log_host, &log_host_ops, "syslog",
                               LOG_MAX_BYTES, LOG_KEEP);
     debug_handle = startup->process_handle;
-    /*
-     * A restart re-reads the kernel ring from its start for the store, but
-     * its text up to now was the previous instance's to write: skip it
-     * rather than write it twice. ponytail: what that instance had not yet
-     * drained when it died (at most one sweep, EVENTS_TRACE_POLL_NS) is
-     * lost from the syslog; the store still has it.
-     */
-    restarted = log_restarted(astra_startup_argument(startup, 0u));
-    if (restarted)
-        log_since = astra_clock_monotonic();
-    log_marker(restarted);
+    log_marker(log_begin());
     backend.log_read = syslog_read;
     backend.log_size = syslog_size;
     backend.log_context = NULL;
@@ -1196,8 +1147,20 @@ events_pump(void)
         astra_event_store_lost(&store, lost);
         changed |= lost != 0u;
         for (uint32_t index = 0u; index < copied; ++index) {
-            astra_event_store_append(&store, &drained[index]);
-            kernel_text(&drained[index], &now);
+            const AstraEventDrained *record = &drained[index];
+            int wanted = log_wanted(record);
+
+            if (wanted)
+                log_seen = record->sequence;
+            /* A process's name, not something it said: the table only. */
+            if (record->message == ASTRA_EVENT_MESSAGE_PROCESS_START) {
+                if (wanted && astra_log_names_record(&log_names, record))
+                    log_state_dirty = 1;
+                continue;
+            }
+            astra_event_store_append(&store, record);
+            if (wanted)
+                kernel_text(record, &now);
         }
         changed |= copied != 0u;
         if (copied < drain_capacity) {
@@ -1206,6 +1169,12 @@ events_pump(void)
         ++passes;
     }
     log_drain();
+    /* Nothing read is waiting to be written: resume after all of it. */
+    if (log_kernel_count == 0u && kernel_line.length == 0u &&
+        !log_names.chain_open && log_seen != 0u)
+        log_resume = log_seen;
+    if (log_state_dirty)
+        log_state_save();
     if (changed) {
         save_snapshot();
     }
@@ -1238,7 +1207,7 @@ int astra_main(const AstraStartupInfo *startup)
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_STATUS_OK)
         return (int)status;
-    log_live = 1; /* the supervisor has READY: it can answer PROC again */
+    log_live = 1;
     for (;;) {
         /* Doorbells arrive on log_receive. The deadline is the backstop
          * sweep, and when producers that died are reaped. */
