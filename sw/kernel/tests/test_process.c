@@ -9512,8 +9512,6 @@ static void test_reading_the_stream_is_the_privileged_half(void)
     assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
     assert(kernel_process_snapshot(0u, &snapshot));
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
-    assert(kernel_user_copy_to_asm(user_text, line, sizeof(line) - 1u) ==
-           KERNEL_USER_COPY_OK);
 
     /*
      * The ring survives a re-init on purpose -- it is what a machine that just
@@ -9533,6 +9531,9 @@ static void test_reading_the_stream_is_the_privileged_half(void)
         registers[2] = next->data[2];
     } while (next->data[1] != 0u);
     cursor = registers[2];
+    /* After the drain: a full ten-event page reaches user_text. */
+    assert(kernel_user_copy_to_asm(user_text, line, sizeof(line) - 1u) ==
+           KERNEL_USER_COPY_OK);
 
     /* Two events to read back: one bare, one carrying its text. */
     memset(registers, 0, sizeof(registers));
@@ -9810,6 +9811,56 @@ static void launch_build_image(void)
 
     launch_image[0x100] = 0x4eu; /* NOP at the entry point */
     launch_image[0x101] = 0x71u;
+}
+
+/* The sequence a drain should resume after to see only what comes next. */
+static uint32_t trace_cursor_now(void)
+{
+    KernelTraceHeader header;
+
+    assert(kernel_trace_header(&header));
+    return header.next_sequence - 1u;
+}
+
+/*
+ * The first event from `process_id` after `after` is its PROCESS_START chain,
+ * and the chain spells `name`. Returns the drain index just past the chain.
+ */
+static uint32_t assert_process_started(uint32_t after, uint32_t process_id,
+                                       const char *name)
+{
+    static AstraEventDrained events[128];
+    char joined[ASTRA_PROC_NAME_MAX];
+    uint32_t cursor = 0u;
+    uint32_t lost = 0u;
+    uint32_t length = 0u;
+    uint32_t index = 0u;
+    uint32_t count = kernel_trace_drain_user(after, events, 128u, &cursor,
+                                             &lost);
+
+    assert(lost == 0u);
+    while (index < count && events[index].process != process_id)
+        ++index;
+    for (;;) {
+        const AstraEventDrained *event = &events[index];
+
+        assert(index < count);
+        assert(event->process == process_id);
+        assert(event->message == ASTRA_EVENT_MESSAGE_PROCESS_START);
+        assert(event->thread == 0u && event->activity == 0u);
+        assert((event->flags & ASTRA_EVENT_LEVEL_MASK) ==
+               ASTRA_EVENT_LEVEL_INFO);
+        assert((event->flags & ASTRA_EVENT_FLAG_INLINE_STRING) != 0u);
+        assert(length + event->payload_length < sizeof(joined));
+        memcpy(joined + length, event->payload, event->payload_length);
+        length += event->payload_length;
+        ++index;
+        if ((event->flags & ASTRA_EVENT_FLAG_CONTINUED) == 0u)
+            break;
+    }
+    joined[length] = '\0';
+    assert(strcmp(joined, name) == 0);
+    return index;
 }
 
 static void test_a_program_can_launch_a_program(void)
@@ -11759,6 +11810,7 @@ static void test_exec_replaces_one_image_and_preserves_argv(void)
     uint32_t user_handoff = user_environment + sizeof(environment);
     uint32_t user_channel = user_page + KERNEL_PAGE_SIZE - 256u;
     uint32_t host_handle = 0u;
+    uint32_t trace_after;
 
     launch_build_image();
     initialize_test();
@@ -11890,9 +11942,13 @@ static void test_exec_replaces_one_image_and_preserves_argv(void)
         assert(after.address_spaces == before.address_spaces);
         assert(next->program_counter == LAUNCH_VADDR + 0x100u);
     }
+    assert(kernel_trace_init());
+    trace_after = trace_cursor_now();
     assert(stream_exec(launch_image, sizeof(launch_image), NULL, 0u,
                        user_page, user_request, frame, &next) ==
            ASTRA_SYSCALL_OK);
+    /* The new image is named before it runs. */
+    (void)assert_process_started(trace_after, process_id, "vim");
     assert(next->program_counter == LAUNCH_VADDR + 0x100u);
     assert(next->usp == KERNEL_PROCESS_STACK_TOP);
     {
@@ -13956,6 +14012,87 @@ static void test_process_clone_rejects_multithreaded_source(void)
     assert(stats.live_processes == 1u && stats.live_threads == 2u);
 }
 
+/*
+ * Every image a process runs is named in the ring before it says anything,
+ * so a log reader never has to ask a service who a pid is.
+ */
+static void test_process_start_names_each_image(void)
+{
+    /* 31 bytes, the most a name holds: a two-record chain. */
+    static const char arguments[] = "/system/services/events-service\0-v\0";
+    static const char line[] = "hello";
+    AstraLaunchArguments launch;
+    AstraEventDrained events[8];
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
+    uint32_t user_text = KERNEL_PROCESS_STACK_TOP - 512u;
+    uint32_t process_id = 0u;
+    uint32_t child_id;
+    uint32_t after;
+    uint32_t index;
+    uint32_t count;
+    uint32_t cursor;
+    uint32_t lost;
+
+    launch_build_image();
+    initialize_test();
+    assert(kernel_trace_init());
+
+    /* Launch. */
+    after = trace_cursor_now();
+    memset(&launch, 0, sizeof(launch));
+    launch.count = 2u;
+    launch.length = sizeof(arguments) - 1u;
+    launch.source = ASTRA_LAUNCH_SOURCE_SHELL;
+    assert(kernel_process_launch(launch_image, sizeof(launch_image), 0u,
+                                 NULL, NULL, 0u, &launch, arguments, NULL,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LAUNCH_VADDR + 0x100u, 0u);
+    assert(kernel_user_copy_to_asm(user_text, line, sizeof(line) - 1u) ==
+           KERNEL_USER_COPY_OK);
+    registers[0] = ASTRA_SYSCALL_LOG_WRITE;
+    registers[1] = ASTRA_EVENT_MESSAGE_UNSTRUCTURED;
+    registers[2] = ASTRA_EVENT_LEVEL_NOTICE | ASTRA_EVENT_FLAG_INLINE_STRING;
+    registers[3] = user_text;
+    registers[4] = sizeof(line) - 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    index = assert_process_started(after, process_id,
+                                   "/system/services/events-service");
+    count = kernel_trace_drain_user(after, events, 8u, &cursor, &lost);
+    assert(index < count && events[index].process == process_id &&
+           events[index].message == ASTRA_EVENT_MESSAGE_UNSTRUCTURED);
+
+    /* Only the kernel says a process started. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_LOG_WRITE;
+    registers[1] = ASTRA_EVENT_MESSAGE_PROCESS_START;
+    registers[2] = ASTRA_EVENT_LEVEL_INFO | ASTRA_EVENT_FLAG_INLINE_STRING;
+    registers[3] = user_text;
+    registers[4] = sizeof(line) - 1u;
+    after = trace_cursor_now();
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(trace_cursor_now() == after);
+
+    /* Fork: the child carries the parent's name. */
+    after = trace_cursor_now();
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_CLONE;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    child_id = next->data[2];
+    assert(child_id != 0u && child_id != process_id);
+    (void)assert_process_started(after, child_id,
+                                 "/system/services/events-service");
+}
+
 static void test_process_growth_is_resource_backed(void)
 {
     static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
@@ -14551,6 +14688,7 @@ int main(void)
     test_reserved_area_faults_in_through_the_exception_path();
     test_private_memory_faults_in_through_the_exception_path();
     test_process_clone_returns_twice_and_is_waitable();
+    test_process_start_names_each_image();
     test_process_clone_rebinds_startup_identity();
     test_process_clone_rejects_multithreaded_source();
     test_process_growth_is_resource_backed();

@@ -1092,6 +1092,38 @@ static void process_name_set(KernelProcess *process,
     process->name[length] = '\0';
 }
 
+/*
+ * ASTRA_EVENT_MESSAGE_PROCESS_START: the process's name, chunked the way a
+ * user text line is, so a log reader learns who a pid is from the ring
+ * itself instead of asking a service that may not be up yet. One
+ * interrupt-disabled window keeps a chain's records consecutive.
+ */
+static void trace_process_start(const KernelProcess *process)
+{
+    uint32_t length = 0u;
+    uint32_t offset = 0u;
+    uint16_t saved_status;
+
+    while (length < sizeof(process->name) && process->name[length] != '\0')
+        ++length;
+    saved_status = kernel_interrupt_save_disable();
+    do {
+        uint32_t chunk = length - offset;
+        uint16_t flags = (uint16_t)(KERNEL_TRACE_LEVEL_INFO |
+                                    KERNEL_TRACE_FLAG_INLINE_STRING);
+
+        if (chunk > KERNEL_TRACE_ARGUMENT_BYTES) {
+            chunk = KERNEL_TRACE_ARGUMENT_BYTES;
+            flags |= KERNEL_TRACE_FLAG_CONTINUED;
+        }
+        (void)kernel_trace_write_user(
+            ASTRA_EVENT_MESSAGE_PROCESS_START, process->id, 0u, 0u, flags,
+            chunk != 0u ? process->name + offset : NULL, chunk);
+        offset += chunk;
+    } while (offset < length);
+    kernel_interrupt_restore(saved_status);
+}
+
 static uint64_t interval_timer_earliest(void)
 {
     uint64_t earliest = KERNEL_THREAD_DEADLINE_NEVER;
@@ -4418,6 +4450,7 @@ static KernelProcessStatus clone_current_process(
         ++scheduler_stats.live_processes;
         *process_id = child->id;
         *process_handle = parent_handle;
+        trace_process_start(child);
     }
     kernel_interrupt_restore(saved_status);
     if (result != KERNEL_PROCESS_OK)
@@ -4568,6 +4601,7 @@ static KernelProcessStatus create_process(const void *image,
         ++scheduler_stats.created_processes;
         ++scheduler_stats.live_processes;
         *process_id = process->id;
+        trace_process_start(process);
     }
     kernel_interrupt_restore(saved_status);
     if (result != KERNEL_PROCESS_OK) {
@@ -4998,6 +5032,7 @@ static KernelProcessStatus exec_replace(
     process_name_set(process, &request->arguments,
                      request->arguments.count != 0u ?
                          syscall_data.bytes : NULL);
+    trace_process_start(process);
     kernel_bytes_clear(&process->tls, sizeof(process->tls));
     if (replacement_tls.memory_size != 0u)
         kernel_bytes_copy(&process->tls, &replacement_tls,
@@ -7527,6 +7562,7 @@ static KernelProcessStatus commit_executable_process(
         ++scheduler_stats.created_processes;
         ++scheduler_stats.live_processes;
         *process_id = process->id;
+        trace_process_start(process);
     }
     kernel_interrupt_restore(saved_status);
     (void)initial_thread_id;
@@ -8082,6 +8118,7 @@ void kernel_process_register_initial_image(uint32_t process_id)
         static const char name[] = "/rom/supervisor";
 
         kernel_bytes_copy(process->name, name, sizeof(name));
+        trace_process_start(process);
     }
 }
 
@@ -10701,7 +10738,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         uint32_t length = thread->context.data[4];
         int copy_status;
 
-        if (message == 0u || flags > UINT16_MAX ||
+        if (message == 0u || message == ASTRA_EVENT_MESSAGE_PROCESS_START ||
+            flags > UINT16_MAX ||
             (flags & ~(uint32_t)ASTRA_EVENT_FLAG_MASK) != 0u ||
             (flags & ASTRA_EVENT_LEVEL_MASK) > ASTRA_EVENT_LEVEL_ERROR ||
             length > ASTRA_EVENT_ARGUMENT_MAX ||
