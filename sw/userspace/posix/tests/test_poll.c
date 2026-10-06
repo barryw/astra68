@@ -14,11 +14,17 @@
 #include <astra/stream.h>
 #include <astra/syscall.h>
 
-/* Lines a program without streams writes to stdout go to the log. */
-uint32_t astra_log(const char *text);
-uint32_t astra_log(const char *text)
+/* console.c's LOG-descriptor write path calls this; every descriptor this
+ * test opens is a stream, not POSIX_DESCRIPTOR_LOG, but the link still needs
+ * the symbol. */
+uint32_t
+astra_log_line(uint32_t level, uint32_t stream, const char *text,
+              uint32_t length)
 {
+    (void)level;
+    (void)stream;
     (void)text;
+    (void)length;
     return 0u;
 }
 

@@ -89,6 +89,14 @@ int astra_posix_descriptor_poll(int fd, short events, short *revents,
                                 uint32_t handles[2], uint32_t *count);
 
 int astra_posix_exec_export(void **state, uint32_t *size);
+
+/* Emits whatever either stream's calling-thread buffer still holds (console.c
+ * log_write's _Thread_local lines). `_exit` calls this before the process
+ * exits and `astra_posix_exec_export` before exec replaces it; only the
+ * calling thread's own partial lines are reachable this way, since another
+ * thread's TLS is not. */
+void astra_posix_log_flush(void);
+
 void astra_posix_file_prepare(void);
 void astra_posix_socket_prepare(void);
 int astra_posix_file_fork_ready(void);

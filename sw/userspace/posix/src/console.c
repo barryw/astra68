@@ -16,6 +16,7 @@
 #include <astra/posix.h>
 #include <astra/posix_descriptor.h>
 
+#include <astra/log_ring.h>
 #include <astra/process.h>
 #include <astra/runtime.h>
 #include <astra/status.h>
@@ -278,6 +279,7 @@ release_description(PosixOpenDescription *description)
              socket_ops != NULL)
         result = socket_ops->close(description->value);
     else if (description->kind != POSIX_DESCRIPTOR_TTY &&
+             description->kind != POSIX_DESCRIPTOR_LOG &&
              description->value != 0u &&
              description->value != controlling_terminal_read &&
              description->value != controlling_terminal_write &&
@@ -573,6 +575,8 @@ astra_posix_exec_export(void **state, uint32_t *size)
     }
     *state = NULL;
     *size = 0u;
+    /* Exec discards this thread's buffers; what was written must not be. */
+    astra_posix_log_flush();
     for (uint32_t fd = 0u; fd < descriptor_capacity; ++fd)
         if (descriptors[fd].description != NULL &&
             (descriptors[fd].descriptor_flags & FD_CLOEXEC) == 0u)
@@ -1026,16 +1030,19 @@ astra_posix_start(const AstraStartupInfo *startup)
         ++descriptors[POSIX_STDERR].description->references;
     }
     /* A program started with no stream at all (an application from the
-     * desktop) still says why it failed: its output goes to the system log. */
+     * desktop) still says why it failed: its output goes to the system log.
+     * stdout and stderr get separate descriptions -- different level and
+     * stream tag -- rather than sharing one, so the two are told apart. */
     if (descriptors[POSIX_STDOUT].description == NULL &&
         descriptors[POSIX_STDERR].description == NULL) {
-        initial_descriptions[POSIX_STDOUT].kind = POSIX_DESCRIPTOR_LOG;
-        initial_descriptions[POSIX_STDOUT].status_flags = O_WRONLY;
-        initial_descriptions[POSIX_STDOUT].references = 2u;
-        descriptors[POSIX_STDOUT].description =
-            &initial_descriptions[POSIX_STDOUT];
-        descriptors[POSIX_STDERR].description =
-            &initial_descriptions[POSIX_STDOUT];
+        for (uint32_t fd = POSIX_STDOUT; fd <= POSIX_STDERR; ++fd) {
+            initial_descriptions[fd].kind = POSIX_DESCRIPTOR_LOG;
+            initial_descriptions[fd].status_flags = O_WRONLY;
+            initial_descriptions[fd].value = fd == POSIX_STDOUT ?
+                ASTRA_LOG_STREAM_STDOUT : ASTRA_LOG_STREAM_STDERR;
+            initial_descriptions[fd].references = 1u;
+            descriptors[fd].description = &initial_descriptions[fd];
+        }
     }
     {
         AstraPosixProcessReply foreground;
@@ -1069,26 +1076,64 @@ astra_posix_start(const AstraStartupInfo *startup)
     }
 }
 
+#define POSIX_LOG_LINE_MAX 240u
+
+typedef struct PosixLogLine {
+    char text[POSIX_LOG_LINE_MAX];
+    uint8_t used;
+    uint8_t pending; /* bytes waiting, even zero of them after a newline */
+} PosixLogLine;
+
+/* One per thread per stream: picolibc's stderr writes a byte at a time, and
+ * threads must not interleave inside one line. No lock. */
+static _Thread_local PosixLogLine log_lines[2];
+
+static uint32_t
+log_level(uint32_t stream)
+{
+    return stream == ASTRA_LOG_STREAM_STDERR ? ASTRA_EVENT_LEVEL_WARNING :
+                                               ASTRA_EVENT_LEVEL_NOTICE;
+}
+
+static void
+log_emit(uint32_t stream, PosixLogLine *line)
+{
+    (void)astra_log_line(log_level(stream), stream, line->text, line->used);
+    line->used = 0u;
+    line->pending = 0u;
+}
+
 /* One line at a time into the system log; a line longer than the buffer
  * is logged in pieces. */
 static ssize_t
-log_write(const void *bytes, size_t length)
+log_write(uint32_t stream, const void *bytes, size_t length)
 {
-    static char line[200];
-    static size_t used;
+    PosixLogLine *line = &log_lines[stream == ASTRA_LOG_STREAM_STDERR];
     const char *text = bytes;
 
     for (size_t at = 0u; at < length; ++at) {
-        if (text[at] != '\n')
-            line[used++] = text[at];
-        if (text[at] == '\n' || used == sizeof(line) - 1u) {
-            line[used] = '\0';
-            if (used != 0u)
-                (void)astra_log(line);
-            used = 0u;
+        if (text[at] == '\n') {
+            log_emit(stream, line);
+            continue;
         }
+        line->text[line->used++] = text[at];
+        line->pending = 1u;
+        if (line->used == POSIX_LOG_LINE_MAX)
+            log_emit(stream, line);
     }
     return (ssize_t)length;
+}
+
+/* _exit's flush: only the calling thread's partial lines can be reached --
+ * other threads' TLS is not reachable from here. */
+void
+astra_posix_log_flush(void)
+{
+    for (uint32_t index = 0u; index < 2u; ++index)
+        if (log_lines[index].pending)
+            log_emit(index == 0u ? ASTRA_LOG_STREAM_STDOUT :
+                                   ASTRA_LOG_STREAM_STDERR,
+                     &log_lines[index]);
 }
 
 ssize_t
@@ -1109,7 +1154,7 @@ write(int fd, const void *bytes, size_t length)
         return -1;
     }
     if (slot->kind == POSIX_DESCRIPTOR_LOG)
-        return log_write(bytes, length);
+        return log_write(slot->value, bytes, length);
     if (slot->kind == POSIX_DESCRIPTOR_FILE) {
         if (file_ops == NULL) {
             errno = EBADF;
@@ -1624,6 +1669,7 @@ lseek(int fd, off_t offset, int whence)
 void
 _exit(int status)
 {
+    astra_posix_log_flush();
     astra_process_exit((uint32_t)status);
     for (;;) {
     }

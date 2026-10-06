@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <astra/event.h>
+#include <astra/log_ring.h>
 #include <astra/posix.h>
 #include <astra/posix_descriptor.h>
 #include <astra/posix_process.h>
@@ -34,10 +36,20 @@ static uint32_t stream_write_calls;
 static uint32_t stream_write_cancel_once;
 static off_t positioned_offset;
 
-/* Lines a program without streams writes to stdout go to the log. */
-uint32_t astra_log(const char *text)
+/* Lines a program without streams writes to stdout/stderr go to the log. */
+static struct { uint32_t level, stream; char text[512]; } logged[32];
+static uint32_t logged_count;
+
+uint32_t
+astra_log_line(uint32_t level, uint32_t stream, const char *text,
+               uint32_t length)
 {
-    (void)text;
+    assert(logged_count < 32u && length < 512u);
+    logged[logged_count].level = level;
+    logged[logged_count].stream = stream;
+    memcpy(logged[logged_count].text, text, length);
+    logged[logged_count].text[length] = '\0';
+    ++logged_count;
     return ASTRA_SYSCALL_OK;
 }
 
@@ -337,6 +349,125 @@ astra_process_exit(uint32_t status)
     }
 }
 
+static void
+test_log_descriptors_without_streams(void)
+{
+    AstraStartupInfo startup = {
+        .magic = ASTRA_STARTUP_MAGIC,
+        .abi_version = ASTRA_STARTUP_ABI_VERSION,
+        .program_entry = 0x00100000u,
+        .header_size = ASTRA_STARTUP_INFO_SIZE,
+        .total_size = ASTRA_STARTUP_INFO_SIZE,
+        .syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION,
+        .capability_count = 0u,
+    };
+
+    logged_count = 0u;
+    astra_posix_start(&startup);
+    assert(!isatty(1) && !isatty(2));
+    /* stderr arrives a byte at a time from picolibc; one record per line. */
+    assert(write(2, "e", 1) == 1 && write(2, "rr\n", 3) == 3);
+    assert(write(1, "out one\nout two\n", 16) == 16);
+    assert(logged_count == 3u);
+    assert(strcmp(logged[0].text, "err") == 0 &&
+           logged[0].stream == ASTRA_LOG_STREAM_STDERR &&
+           logged[0].level == ASTRA_EVENT_LEVEL_WARNING);
+    assert(strcmp(logged[1].text, "out one") == 0 &&
+           logged[1].stream == ASTRA_LOG_STREAM_STDOUT &&
+           logged[1].level == ASTRA_EVENT_LEVEL_NOTICE);
+    assert(strcmp(logged[2].text, "out two") == 0);
+    /* Interleaved partial lines on the two streams stay separate. */
+    assert(write(1, "par", 3) == 3 && write(2, "tial", 4) == 4);
+    assert(logged_count == 3u);
+    assert(write(1, "t\n", 2) == 2);
+    assert(strcmp(logged[3].text, "part") == 0);
+    /* Blank lines are kept: a program's blank line is part of its output. */
+    assert(write(1, "\n", 1) == 1);
+    assert(logged_count == 5u && logged[4].text[0] == '\0');
+    /* A 300-byte line is emitted in 240-byte pieces. */
+    {
+        char line[300];
+        memset(line, 'z', sizeof(line));
+        assert(write(1, line, sizeof(line)) == 300);
+        assert(logged_count == 6u && strlen(logged[5].text) == 240u);
+    }
+    /* _exit's flush emits what is pending on both streams. */
+    astra_posix_log_flush();
+    assert(logged_count == 8u);
+    assert((strcmp(logged[6].text, "tial") == 0 &&
+            strlen(logged[7].text) == 60u) ||
+           (strcmp(logged[7].text, "tial") == 0 &&
+            strlen(logged[6].text) == 60u));
+
+    /* dup/dup2 of a LOG fd shares the description: the stream is preserved,
+     * not reset to a default. */
+    logged_count = 0u;
+    assert(dup2(1, 5) == 5);
+    assert(write(5, "dup\n", 4) == 4);
+    assert(logged_count == 1u && strcmp(logged[0].text, "dup") == 0 &&
+           logged[0].stream == ASTRA_LOG_STREAM_STDOUT &&
+           logged[0].level == ASTRA_EVENT_LEVEL_NOTICE);
+    assert(close(5) == 0);
+    logged_count = 0u;
+    assert(dup2(2, 6) == 6);
+    assert(write(6, "dup2\n", 5) == 5);
+    assert(logged_count == 1u && strcmp(logged[0].text, "dup2") == 0 &&
+           logged[0].stream == ASTRA_LOG_STREAM_STDERR &&
+           logged[0].level == ASTRA_EVENT_LEVEL_WARNING);
+    assert(close(6) == 0);
+}
+
+static void
+test_log_descriptors_survive_exec(void)
+{
+    AstraStartupInfo first = {
+        .magic = ASTRA_STARTUP_MAGIC,
+        .abi_version = ASTRA_STARTUP_ABI_VERSION,
+        .program_entry = 0x00100000u,
+        .header_size = ASTRA_STARTUP_INFO_SIZE,
+        .total_size = ASTRA_STARTUP_INFO_SIZE,
+        .syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION,
+        .capability_count = 0u,
+    };
+    void *handoff;
+    uint32_t handoff_size;
+
+    astra_posix_start(&first);
+    astra_posix_file_bind(&file_ops);
+    assert(!isatty(1) && !isatty(2));
+    /* A partial line written before exec was written: exec replaces the
+     * thread's buffer, so the export emits it first. */
+    logged_count = 0u;
+    assert(write(1, "before exec", 11) == 11);
+    assert(logged_count == 0u);
+    assert(astra_posix_exec_export(&handoff, &handoff_size) == 0);
+    assert(logged_count == 1u && strcmp(logged[0].text, "before exec") == 0 &&
+           logged[0].stream == ASTRA_LOG_STREAM_STDOUT);
+    /* ASan deliberately allocates above the target's 32-bit address space.
+     * The ordinary non-PIE host gate exercises import; the sanitizer still
+     * checks the complete exporter and owns/frees its result. */
+    if ((uintptr_t)handoff <= UINT32_MAX) {
+        AstraStartupInfo startup = {
+            .handoff_address = (uint32_t)(uintptr_t)handoff,
+            .handoff_size = handoff_size
+        };
+
+        astra_posix_start(&startup);
+        assert(!isatty(1) && !isatty(2));
+        logged_count = 0u;
+        assert(write(1, "o\n", 2) == 2);
+        assert(write(2, "e\n", 2) == 2);
+        assert(logged_count == 2u);
+        assert(strcmp(logged[0].text, "o") == 0 &&
+               logged[0].stream == ASTRA_LOG_STREAM_STDOUT &&
+               logged[0].level == ASTRA_EVENT_LEVEL_NOTICE);
+        assert(strcmp(logged[1].text, "e") == 0 &&
+               logged[1].stream == ASTRA_LOG_STREAM_STDERR &&
+               logged[1].level == ASTRA_EVENT_LEVEL_WARNING);
+    }
+    free(handoff);
+}
+
 int
 main(void)
 {
@@ -500,5 +631,8 @@ main(void)
         assert(restore_failures == 1u && restore_status == EINVAL);
     }
     free(handoff);
+
+    test_log_descriptors_without_streams();
+    test_log_descriptors_survive_exec();
     return 0;
 }
