@@ -21,7 +21,7 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 TARGET_C_SOURCES := src/startup.c src/lifecycle.c src/service.c src/arguments.c src/syscall.c src/stream_source.c src/executable.c src/launch.c src/port.c src/shutdown.c src/posix_process.c \
 	src/event_control.c src/memory.c \
 	src/host_channel_client.c \
-	src/log.c src/sort.c src/string.c src/assert.c src/event_catalog.c src/allocator_heap.c src/allocator.c \
+	src/log.c src/log_ring.c src/sort.c src/string.c src/assert.c src/event_catalog.c src/allocator_heap.c src/allocator.c \
 	src/dynamic_loader.c src/dynamic_process.c src/time_page.c
 TARGET_ASM_SOURCES := src/m68k/syscall.S src/m68k/thread_start.S \
 	src/m68k/read_tp.S
@@ -79,6 +79,7 @@ MUTEX_TEST := build/host/test_mutex
 HOST_CHANNEL_CLIENT_TEST := build/host/test_host_channel_client
 STRING_TEST := build/host/test_string
 TIME_PAGE_TEST := build/host/test_time_page
+LOG_RING_TEST := build/host/test_log_ring
 DYNAMIC_CONTRACT_LIBRARY := build/contract/dynamic.library
 DYNAMIC_CONTRACT_PROGRAM := build/contract/dynamic.elf
 DYNAMIC_TLS_CONTRACT_LIBRARY := build/contract/dynamic-tls.library
@@ -277,9 +278,11 @@ $(DYNAMIC_LOADER_TEST): src/dynamic_loader.c tests/test_dynamic_loader.c \
 test: $(HOST_TEST) $(STARTUP_SERVICE_TEST) $(LIFECYCLE_TEST) \
 		$(SHUTDOWN_CONTRACT_TEST) \
 		$(POSIX_PROCESS_TEST) $(ALLOCATOR_TEST) $(HOST_CHANNEL_CLIENT_TEST) \
-		$(DYNAMIC_LOADER_TEST) $(MUTEX_TEST) $(STRING_TEST) $(TIME_PAGE_TEST)
+		$(DYNAMIC_LOADER_TEST) $(MUTEX_TEST) $(STRING_TEST) $(TIME_PAGE_TEST) \
+		$(LOG_RING_TEST)
 	./$(TIME_PAGE_TEST)
 	./$(STRING_TEST)
+	./$(LOG_RING_TEST)
 	./$(HOST_TEST)
 	./$(STARTUP_SERVICE_TEST)
 	./$(LIFECYCLE_TEST)
@@ -300,6 +303,12 @@ $(STRING_TEST): src/string.c tests/test_string.c \
 $(TIME_PAGE_TEST): tests/test_time_page.c ../../include/astra/time_page.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $< -o $@
+
+$(LOG_RING_TEST): src/log_ring.c tests/test_log_ring.c \
+		../../include/astra/log_ring.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -pthread \
+		src/log_ring.c tests/test_log_ring.c -o $@
 
 sanitize:
 	@mkdir -p build/host
