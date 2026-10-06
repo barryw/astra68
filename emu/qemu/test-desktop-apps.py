@@ -37,7 +37,11 @@ def open_application(machine, bundle, deadline):
     machine.qmp.double_click(*machine.desktop_icon(bundle))
     end = time.monotonic() + deadline
     while time.monotonic() < end:
-        lines, _ = machine.said(before)
+        # desktop holds LOG (docs/SYSTEM_LOG.md section 7): its
+        # astra_log_failure("desktop launch", ...) ERROR line leaves the
+        # kernel ring for its own per-process ring and the host syslog, not
+        # said()'s kernel-ring-only view. said_with_syslog() reads both.
+        lines, _ = machine.said_with_syslog(before)
         refused = [line for line in lines
                    if "application launch refused" in line or
                    "desktop launch" in line]
@@ -48,7 +52,8 @@ def open_application(machine, bundle, deadline):
             return
         time.sleep(0.25)
     raise RuntimeError("%s launched no drawing within %.0fs: %s" %
-                       (bundle, deadline, machine.said(before)[0][-20:]))
+                       (bundle, deadline,
+                        machine.said_with_syslog(before)[0][-20:]))
 
 
 # TestDraw2's 640x480 window opens centred; with the system theme's frame,
