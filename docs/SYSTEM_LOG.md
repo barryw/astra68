@@ -293,7 +293,9 @@ if measurement says so.
   The fields are local wall time with offset, level, then ident `[pid]` with
   the pid in hex as `ps` prints it,
   then the stream (`stdout`, `stderr`, `log` or `kernel`), then the text.
-  Non-printable bytes are written as `\xNN`, so one record is always one line.
+  Control bytes (below 0x20, and 0x7f) are written as `\xNN` and backslash as
+  `\\`; bytes from 0x80 up pass through so UTF-8 text survives. One record is
+  always one line.
 - **Order.** Each drain pass merges the heads of all rings and the kernel ring
   by monotonic time, so the file is in time order to within one quantum.
 - **Rotation.** The log rotates when `syslog` reaches 1 MiB, or at the first

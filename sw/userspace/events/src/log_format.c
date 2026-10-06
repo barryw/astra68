@@ -17,7 +17,17 @@ static const char *const level_names[] = {
 static const char *const stream_names[] = {
     "log", "stdout", "stderr", "kernel" };
 
-typedef struct Out { char *at; uint32_t used; uint32_t capacity; } Out;
+typedef struct Out {
+    char *at;
+    uint32_t used;
+    uint32_t capacity;
+    /*
+     * Bytes held back at the end of `capacity` for the line's own trailing
+     * newline, so `escape()` never has to split one of its own multi-byte
+     * sequences just to make room for it.
+     */
+    uint32_t reserve;
+} Out;
 
 static void put(Out *o, char c)
 { if (o->used < o->capacity) o->at[o->used++] = c; }
@@ -36,6 +46,50 @@ static void hex(Out *o, uint32_t value, uint32_t width)
         put(o, x[(value >> (shift - 4u)) & 0xfu]);
 }
 
+/*
+ * Shared by ident and text: a byte that could split a line (a control byte
+ * or DEL) or masquerade as an escape (backslash) is written as `\xNN` or
+ * `\\`. Bytes from 0x80 up pass through unescaped: every continuation byte
+ * of a multi-byte UTF-8 sequence is already outside 0x00-0x1f, 0x7f and '\',
+ * so UTF-8 text survives byte-identical.
+ *
+ * Never writes part of a sequence: when fewer than its full width (4 bytes
+ * for `\xNN`, 2 for `\\`) remains before `capacity - reserve`, it stops
+ * instead of writing a prefix of it, so the line's own trailing newline
+ * (held back in `reserve`) can never land inside one.
+ */
+static void
+escape(Out *o, const char *text, uint32_t length)
+{
+    uint32_t limit = o->capacity - o->reserve;
+
+    for (uint32_t index = 0u; index < length; ++index) {
+        unsigned char c = (unsigned char)text[index];
+
+        if (c < 0x20u || c == 0x7fu) {
+            if (o->used + 4u > limit)
+                break;
+            puts_(o, "\\x"); hex(o, c, 2u);
+        } else if (c == '\\') {
+            if (o->used + 2u > limit)
+                break;
+            puts_(o, "\\\\");
+        } else {
+            put(o, (char)c);
+        }
+    }
+}
+
+static uint32_t
+length_of(const char *text)
+{
+    uint32_t length = 0u;
+
+    while (text[length] != '\0')
+        ++length;
+    return length;
+}
+
 static int
 civil(const AstraLogLine *line, AstraCivilTime *out_time)
 {
@@ -52,7 +106,13 @@ astra_log_local_day(const AstraLogLine *line)
 {
     AstraCivilTime time;
 
-    if (!civil(line, &time) || time.year < 0)
+    /*
+     * No `time.year < 0` guard: astra_civil_from_unix_seconds
+     * (sw/common/civil.c) already refuses any instant whose year is before
+     * 1970, so `civil()` above has already returned 0 for every case that
+     * could produce one here.
+     */
+    if (!civil(line, &time))
         return 0u;
     return (uint32_t)time.year * 10000u + time.month * 100u + time.day;
 }
@@ -60,8 +120,9 @@ astra_log_local_day(const AstraLogLine *line)
 uint32_t
 astra_log_format(char *out, uint32_t capacity, const AstraLogLine *line)
 {
-    Out o = { out, 0u, capacity };
+    Out o = { out, 0u, capacity, capacity != 0u ? 1u : 0u };
     AstraCivilTime time;
+    const char *ident;
 
     if (civil(line, &time)) {
         uint32_t offset = (uint32_t)(time.utc_offset < 0 ?
@@ -87,24 +148,16 @@ astra_log_format(char *out, uint32_t capacity, const AstraLogLine *line)
         digits(&o, rest / 1000000u, 3u);
     }
     put(&o, ' ');
-    puts_(&o, level_names[line->level <= 4u ? line->level : 4u]);
+    puts_(&o, level_names[line->level <= ASTRA_EVENT_LEVEL_ERROR ?
+                          line->level : ASTRA_EVENT_LEVEL_ERROR]);
     put(&o, ' ');
-    puts_(&o, line->ident != NULL && line->ident[0] != '\0' ?
-              line->ident : "?");
+    ident = line->ident != NULL && line->ident[0] != '\0' ? line->ident : "?";
+    escape(&o, ident, length_of(ident));
     put(&o, '['); hex(&o, line->pid, 8u); puts_(&o, "] ");
-    puts_(&o, stream_names[line->stream <= 3u ? line->stream : 0u]);
+    puts_(&o, stream_names[line->stream <= ASTRA_LOG_STREAM_MAX ?
+                          line->stream : ASTRA_LOG_STREAM_LOG]);
     puts_(&o, ": ");
-    for (uint32_t index = 0u; index < line->length; ++index) {
-        unsigned char c = (unsigned char)line->text[index];
-
-        if (c < 0x20u || c == 0x7fu) {
-            puts_(&o, "\\x"); hex(&o, c, 2u);
-        } else if (c == '\\') {
-            puts_(&o, "\\\\");
-        } else {
-            put(&o, (char)c);
-        }
-    }
+    escape(&o, line->text, line->length);
     if (line->truncated)
         puts_(&o, " [truncated]");
     /* The newline always fits: back up over text if the buffer is full. */

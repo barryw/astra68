@@ -63,7 +63,8 @@ MC68040 cross toolchain (`m68k-astra-gcc` on `beast`), host tests with plain
   - text max 1,944 bytes (8 slots); longer text is truncated and flagged
 - Line format, one record per line:
   `YYYY-MM-DDTHH:MM:SS.mmm+HH:MM level ident[pid-hex] stream: text\n`.
-  - Non-printable bytes are written as `\xNN`.
+  - Control bytes (below 0x20, and 0x7f) are written as `\xNN` and backslash
+    as `\\`; bytes from 0x80 up pass through so UTF-8 text survives.
   - Levels are `debug info notice warning error`.
   - Streams are `log stdout stderr kernel`.
 - Rotation (phase 1, plain text): rotate at 1,048,576 bytes or at the first

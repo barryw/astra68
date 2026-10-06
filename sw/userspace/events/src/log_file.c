@@ -28,6 +28,15 @@ numbered(char *out, const char *base, uint32_t number)
     out[length] = '\0';
 }
 
+/*
+ * Shifts every rotated generation up by one and moves the current base file
+ * into slot 1. Stops at the first remove/rename failure and reports it: per
+ * ::AstraLogFileOps's contract an absent source is itself success, so a
+ * nonzero failure here is a real I/O problem, and the right response is to
+ * leave every file exactly where it is -- including the base file, left
+ * un-renamed -- rather than cascade a partial shift that could overwrite or
+ * lose an older generation.
+ */
 static int
 rotate(AstraLogFile *file)
 {
@@ -35,17 +44,34 @@ rotate(AstraLogFile *file)
     char to[32];
 
     numbered(to, file->base, file->keep);
-    (void)file->ops.remove(file->ops.context, to);
+    if (!file->ops.remove(file->ops.context, to))
+        return 0;
     for (uint32_t number = file->keep; number > 1u; --number) {
         numbered(from, file->base, number - 1u);
         numbered(to, file->base, number);
-        (void)file->ops.rename(file->ops.context, from, to);
+        if (!file->ops.rename(file->ops.context, from, to))
+            return 0;
     }
     numbered(to, file->base, 1u);
     if (!file->ops.rename(file->ops.context, file->base, to))
         return 0;
     file->bytes = 0u;
     return 1;
+}
+
+/*
+ * (Re-)establishes `bytes` from the backing store and marks the file ready,
+ * or not, on `ops.size`'s word. Used both by the first open and by a later
+ * retry after a transient `size` failure; see the `day` field comment in
+ * log_file.h for why it always resets `day` to 0.
+ */
+static int
+establish(AstraLogFile *file)
+{
+    file->day = 0u;
+    file->bytes = 0u;
+    file->ready = file->ops.size(file->ops.context, file->base, &file->bytes);
+    return file->ready;
 }
 
 int
@@ -59,34 +85,35 @@ astra_log_file_open(AstraLogFile *file, const AstraLogFileOps *ops,
     file->base = base;
     file->max_bytes = max_bytes;
     file->keep = keep;
-    /*
-     * 0 until this boot's first write. A reopen after reboot must not treat
-     * "unknown" as "yesterday": the boot marker already written into the
-     * file is the record of the reboot, so the first write this boot rotates
-     * only on size, and the next *actual* date change (one this boot
-     * observed) rotates as usual.
-     */
-    file->day = 0u;
-    file->bytes = 0u;
-    file->ready = ops->size(ops->context, base, &file->bytes);
-    return file->ready;
+    return establish(file);
 }
 
-int
+uint32_t
 astra_log_file_append(AstraLogFile *file, const char *bytes, uint32_t length,
                       uint32_t day)
 {
-    if (file == NULL || !file->ready || length == 0u)
-        return file != NULL && file->ready;
+    uint32_t result = ASTRA_LOG_FILE_OK;
+
+    if (file == NULL)
+        return ASTRA_LOG_FILE_FAILED;
+    /*
+     * A `size` failure at open does not disable logging for the rest of the
+     * boot: every append while not ready retries establishing the file, so a
+     * transient backend error only delays logging until it clears.
+     */
+    if (!file->ready && !establish(file))
+        return ASTRA_LOG_FILE_FAILED;
+    if (length == 0u)
+        return ASTRA_LOG_FILE_OK;
     if (file->bytes != 0u &&
         (file->bytes + length > file->max_bytes ||
          (day != 0u && file->day != 0u && day != file->day)) &&
         !rotate(file))
-        return 0;
+        result = ASTRA_LOG_FILE_ROTATE_FAILED;
     if (day != 0u)
         file->day = day;
     if (!file->ops.append(file->ops.context, file->base, bytes, length))
-        return 0;
+        return ASTRA_LOG_FILE_FAILED;
     file->bytes += length;
-    return 1;
+    return result;
 }
