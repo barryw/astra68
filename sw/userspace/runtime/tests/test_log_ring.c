@@ -213,8 +213,10 @@ test_corrupt_slot_count_is_rejected(void)
  * The real proof of the lock-free claim: several threads writing the SAME
  * AstraLogProducer concurrently, coordinated only by CAS, with a consumer
  * draining concurrently. Every record must arrive exactly once, intact, with
- * each thread's own records in its own order; the process-wide 'dropped' and
- * 'sequence' counters must stay internally consistent under the race.
+ * each thread's own records in its own order; the process-wide 'dropped'
+ * counter and each record's 'sequence' -- the ring position of its first
+ * slot, not an independent counter -- must stay internally consistent under
+ * the race.
  */
 #define CONCURRENCY_THREADS      4u
 #define CONCURRENCY_PER_THREAD   10000u
@@ -301,9 +303,14 @@ concurrency_consumer_main(void *argument)
         char text[CONCURRENCY_LONG_LENGTH];
         char expected[CONCURRENCY_LONG_LENGTH];
         uint32_t length = 0u;
-        uint32_t status = astra_log_consumer_next(area, &position, &read,
-                                                  text, sizeof(text),
-                                                  &length);
+        uint32_t status;
+        /* Read before polling the ring -- see the EMPTY branch below for why
+         * the order matters. */
+        int done_before = __atomic_load_n(&concurrency_producers_done,
+                                          __ATOMIC_ACQUIRE);
+
+        status = astra_log_consumer_next(area, &position, &read, text,
+                                         sizeof(text), &length);
 
         if (status == ASTRA_LOG_READ_OK) {
             ConcurrencyRecord *slot;
@@ -352,9 +359,17 @@ concurrency_consumer_main(void *argument)
             __atomic_store_n(&concurrency_corrupt, 1, __ATOMIC_RELEASE);
             break;
         }
-        /* EMPTY: stop only once every producer has returned, so the final
-         * burst is never missed. */
-        if (__atomic_load_n(&concurrency_producers_done, __ATOMIC_ACQUIRE))
+        /* EMPTY: exit only when `done` was observed set BEFORE this call,
+         * not after. `done` is read ahead of next() below; if it was already
+         * 1 at that point, every producer had already joined and every one
+         * of its commits/publishes happened-before that join, so this same
+         * next() call is guaranteed to see the fully published ring and an
+         * EMPTY here is final. Checking `done` only after next() (as this
+         * used to) lets next() load a stale producer_position, decide EMPTY,
+         * and only then observe done==1 -- missing whatever the last publish
+         * added in the gap between the two. That race was real: it failed
+         * concurrency_result_count == total_written intermittently. */
+        if (done_before)
             break;
     }
     return NULL;

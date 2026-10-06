@@ -176,7 +176,10 @@ to `LOG_WRITE`, and setup is retried after 64 further log calls.
 together, so a record is never interleaved with another. Each slot begins with
 its commit word. The record header carries:
 
-- a per-process sequence number
+- `sequence`, the ring position of the record's first slot -- not a count of
+  records, so a multi-slot record advances it by more than one and a gap
+  between consecutive values is expected and is not loss; loss is the
+  dropped-line count below
 - monotonic and wall time from the time page (§4)
 - level and stream
 - the dropped-line count at the time of writing
