@@ -109,11 +109,30 @@ def command(machine, text, expected, timeout, number):
     return lines
 
 
-def event(machine, phrase, number):
-    pattern = phrase.replace(" ", "\\ ")
-    return command(machine, "events | while IFS= read -r line; do "
-                   "[[ $line == *%s* ]] && print -r -- $line; "
-                   "done; true" % pattern, phrase, 30.0, number)
+def logged(machine, phrase):
+    """Syslog lines carrying `phrase`.
+
+    remote-desktop holds LOG, so its astra_log lines go to its own ring and
+    the syslog, not the kernel ring the guest `events` command prints
+    (docs/SYSTEM_LOG.md section 7). The syslog only grows; the kernel ring
+    wraps, so counting there could go backwards."""
+    return [line for line in terminal.read_host_syslog(
+                machine.reader.hostfs_root).splitlines() if phrase in line]
+
+
+def event(machine, phrase, seen, timeout=30.0):
+    """Wait for a line carrying `phrase` beyond the `seen` already logged.
+
+    The events service drains rings asynchronously, so poll."""
+    deadline = time.monotonic() + timeout
+    while True:
+        lines = logged(machine, phrase)
+        if len(lines) > seen:
+            return lines
+        if time.monotonic() >= deadline:
+            raise RuntimeError("no new %r within %.0fs (%d seen before)" %
+                               (phrase, timeout, seen))
+        time.sleep(0.25)
 
 
 def wait_state(machine, state, timeout, number):
@@ -241,11 +260,12 @@ def main():
             command(machine, "service delete remote-probe", None, 30.0,
                     number[0]); number[0] += 1
 
+            ready = len(logged(machine, "remote desktop ready"))
             command(machine, "service start remote-desktop", None, 30.0,
                     number[0]); number[0] += 1
             wait_for(lambda: not port_available(port), "VNC activation", 10.0)
             wait_state(machine, "running", 30.0, number)
-            event(machine, "remote desktop ready", number[0]); number[0] += 1
+            event(machine, "remote desktop ready", ready)
 
             command(machine, "service pause remote-desktop", None, 30.0,
                     number[0]); number[0] += 1
@@ -271,10 +291,12 @@ def main():
             if broker.generations() != generation:
                 raise RuntimeError("stable service reacquired its host lease")
 
+            peer = len(logged(machine, "remote desktop peer"))
+            ready = len(logged(machine, "remote desktop ready"))
             broker.close()
             wait_for(lambda: port_available(port), "broker failure", 10.0)
             wait_state(machine, "failed", 30.0, number)
-            event(machine, "remote desktop peer", number[0]); number[0] += 1
+            event(machine, "remote desktop peer", peer)
             listed = command(machine, "service list", "remote-desktop",
                              30.0, number[0]); number[0] += 1
             if not any(line.startswith("remote-desktop") and
@@ -290,7 +312,7 @@ def main():
                 raise RuntimeError("broker recovery was not retried")
             running = wait_state(machine, "running", 30.0, number)
             pid = restarted_service_pid(running, pid)
-            event(machine, "remote desktop ready", number[0]); number[0] += 1
+            event(machine, "remote desktop ready", ready)
 
             command(machine, "service stop remote-desktop", None, 30.0,
                     number[0]); number[0] += 1
