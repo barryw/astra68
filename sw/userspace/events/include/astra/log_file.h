@@ -17,10 +17,10 @@
 /**
  * I/O the log file needs, supplied by the caller.
  *
- * `size`, `rename` and `remove` each report 0 only for a *real* I/O failure.
- * A rotation routinely renames or removes a generation that does not exist
- * yet (there may be no `syslog.2` after only one rotation), so "there was
- * nothing there" is success, not failure, for every one of these calls.
+ * `size` and `rename` each report 0 only for a *real* I/O failure. A
+ * rotation routinely renames a generation that does not exist yet (there may
+ * be no `syslog.2` after only one rotation), so "there was nothing there" is
+ * success, not failure, for `rename`.
  */
 typedef struct AstraLogFileOps {
     /** Opaque context passed back to every callback. */
@@ -41,11 +41,6 @@ typedef struct AstraLogFileOps {
      * 0 only on a real I/O failure.
      */
     int (*rename)(void *context, const char *from, const char *to);
-    /**
-     * Remove `name`. Return nonzero on success, including when `name` does
-     * not exist (nothing to do). Return 0 only on a real I/O failure.
-     */
-    int (*remove)(void *context, const char *name);
 } AstraLogFileOps;
 
 /** One rotating log file's state. */
@@ -77,11 +72,16 @@ typedef struct AstraLogFile {
 /** ::astra_log_file_append succeeded: the batch was written. */
 #define ASTRA_LOG_FILE_OK            0u
 /**
- * Rotation failed, but the batch was still appended to the current (now
- * over-size, or still on yesterday's date) base file rather than dropped.
- * The caller should count this: appending to a file that should have
- * rotated is better than losing an older generation to a partial shift, but
- * it means rotation needs attention.
+ * Rotation failed partway, but the batch was still appended to the current
+ * (now over-size, or still on yesterday's date) base file rather than
+ * dropped. Every generation the shift had not yet reached when it failed is
+ * untouched. Because the shift is a sequence of renames rather than one
+ * atomic step, a failure after the first rename already succeeded costs
+ * exactly one generation: the oldest kept one (`syslog.<keep>`), whose
+ * content was already overwritten by that first rename before the failure.
+ * If the very first rename is what failed, nothing moved and nothing is
+ * lost. Either way, at most one generation is ever lost. The caller should
+ * count this: rotation needs attention.
  */
 #define ASTRA_LOG_FILE_ROTATE_FAILED 1u
 /** The batch was not written. */
@@ -110,7 +110,8 @@ int astra_log_file_open(AstraLogFile *file, const AstraLogFileOps *ops,
  * `day` differs from the day of the last write this boot (and both are
  * nonzero). A batch larger than `max_bytes` by itself is still written
  * whole, into a freshly rotated file. If rotation itself fails partway, the
- * batch is still appended to the current base file rather than dropped (see
+ * batch is still appended to the current base file rather than dropped, and
+ * at most one generation -- the oldest kept one -- is lost in the shift (see
  * ::ASTRA_LOG_FILE_ROTATE_FAILED).
  *
  * If `file` is not ready (construction failed, or a previous `ops.size` call

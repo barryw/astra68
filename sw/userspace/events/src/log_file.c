@@ -30,12 +30,20 @@ numbered(char *out, const char *base, uint32_t number)
 
 /*
  * Shifts every rotated generation up by one and moves the current base file
- * into slot 1. Stops at the first remove/rename failure and reports it: per
- * ::AstraLogFileOps's contract an absent source is itself success, so a
- * nonzero failure here is a real I/O problem, and the right response is to
- * leave every file exactly where it is -- including the base file, left
- * un-renamed -- rather than cascade a partial shift that could overwrite or
- * lose an older generation.
+ * into slot 1, oldest pair first (syslog.(keep-1) -> syslog.keep, ...,
+ * syslog.1 -> syslog.2, base -> syslog.1). ::AstraLogFileOps's `rename`
+ * replaces its target if one exists, so no generation needs removing first.
+ *
+ * A real rename failure stops the shift immediately: every generation not
+ * yet renamed stays exactly where it was, including the base file, left
+ * un-renamed, so the caller still appends the batch to it instead of losing
+ * it. This is a non-atomic multi-rename shift (logrotate and newsyslog have
+ * the same property), so a failure partway can still cost one generation --
+ * if the first rename (syslog.(keep-1) -> syslog.keep) already succeeded
+ * before the one that failed, syslog.keep's original content was already
+ * overwritten and is gone. If the failure is that first rename itself,
+ * nothing has moved yet and nothing is lost. Either way, never more than
+ * that one, oldest-kept, generation.
  */
 static int
 rotate(AstraLogFile *file)
@@ -43,9 +51,6 @@ rotate(AstraLogFile *file)
     char from[32];
     char to[32];
 
-    numbered(to, file->base, file->keep);
-    if (!file->ops.remove(file->ops.context, to))
-        return 0;
     for (uint32_t number = file->keep; number > 1u; --number) {
         numbered(from, file->base, number - 1u);
         numbered(to, file->base, number);

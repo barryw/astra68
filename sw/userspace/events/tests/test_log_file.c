@@ -62,13 +62,26 @@ static int fs_rename(void *c, const char *f, const char *t)
         return 1;
     }
 }
-static int fs_remove(void *c, const char *n)
-{ (void)c; int i = find(n); if (i >= 0) files[i].used = 0; return 1; }
-
-static const AstraLogFileOps ops = { NULL, fs_size, fs_append, fs_rename,
-                                     fs_remove };
+static const AstraLogFileOps ops = { NULL, fs_size, fs_append, fs_rename };
 static const AstraLogFileOps ops_flaky_size = { NULL, fs_size_flaky, fs_append,
-                                                fs_rename, fs_remove };
+                                                fs_rename };
+
+/* Test-only: seed `name` with exactly `data`, overwriting any prior content.
+ * fs_append() already creates an absent file; reset length first so a
+ * pre-existing one is replaced instead of appended to. */
+static void seed(const char *name, const char *data)
+{
+    int i = find(name);
+    if (i >= 0) files[i].length = 0;
+    fs_append(NULL, name, data, (uint32_t)strlen(data));
+}
+
+static int content_is(const char *name, const char *expected)
+{
+    int i = find(name);
+    return i >= 0 && files[i].length == strlen(expected) &&
+           memcmp(files[i].data, expected, files[i].length) == 0;
+}
 
 static void
 test_format(void)
@@ -276,47 +289,77 @@ test_open_retry(void)
           files[find("syslog")].length == sizeof(line) - 1u);
 }
 
-/* Fix 4: a real rename failure partway through a shift must stop immediately
- * -- no generation already on disk is shifted, overwritten or lost -- and
- * the batch still lands in the current base file instead of being dropped. */
+/* Fix 4 / fix 5: a real rename failure partway through a shift must stop
+ * immediately, and the batch still lands in the current base file instead of
+ * being dropped. The shift is three real renames here (syslog.2 -> syslog.3,
+ * syslog.1 -> syslog.2, syslog -> syslog.1); failing the first means nothing
+ * has moved yet, so every generation is untouched. */
 static void
-test_rotate_failure(void)
+test_rotate_failure_first(void)
 {
     AstraLogFile file;
-    char line[100];
 
     memset(files, 0, sizeof(files));
-    fail_rename_at = 0;
-    rename_call_count = 0;
-    memset(line, 'a', sizeof(line) - 1u); line[sizeof(line) - 1u] = '\n';
+    seed("syslog", "BASE");
+    seed("syslog.1", "ONE");
+    seed("syslog.2", "TWO");
+    seed("syslog.3", "THREE");
 
-    assert(astra_log_file_open(&file, &ops, "syslog", 250u, 3u));
-    assert(astra_log_file_append(&file, line, 100u, 20261005u) ==
+    assert(astra_log_file_open(&file, &ops, "syslog", 1000u, 3u));
+    /* Records today's day without rotating (file->day starts at 0, so no
+     * write ever rotates on the day of the very first append). */
+    assert(astra_log_file_append(&file, "x", 1u, 20261005u) ==
           ASTRA_LOG_FILE_OK);
-    assert(astra_log_file_append(&file, line, 100u, 20261005u) ==
-          ASTRA_LOG_FILE_OK);
-    /* Rotates: syslog (200 bytes) -> syslog.1. */
-    assert(astra_log_file_append(&file, line, 100u, 20261005u) ==
-          ASTRA_LOG_FILE_OK);
-    assert(find("syslog.1") >= 0 && files[find("syslog.1")].length == 200u);
-    assert(files[find("syslog")].length == 100u);
 
-    /* A new local day forces another rotation. Fail its second rename call:
-     * the shift of the existing syslog.1 -> syslog.2 (the first call is
-     * syslog.2 -> syslog.3, an absent-source no-op that always succeeds). */
+    /* A new day forces rotation. Fail the first real rename. */
     rename_call_count = 0;
-    fail_rename_at = 2;
-    assert(astra_log_file_append(&file, line, 100u, 20261006u) ==
+    fail_rename_at = 1;
+    assert(astra_log_file_append(&file, "BATCH", 5u, 20261006u) ==
           ASTRA_LOG_FILE_ROTATE_FAILED);
     fail_rename_at = 0;
 
-    /* No generation lost: syslog.1 is exactly as it was. */
-    assert(find("syslog.1") >= 0 && files[find("syslog.1")].length == 200u);
+    /* Nothing moved: every generation holds its original content. */
+    assert(content_is("syslog.1", "ONE"));
+    assert(content_is("syslog.2", "TWO"));
+    assert(content_is("syslog.3", "THREE"));
+    /* The batch still landed in the base file instead of being dropped. */
+    assert(content_is("syslog", "BASExBATCH"));
+}
+
+/* Same shift, but the first rename (syslog.2 -> syslog.3) succeeds before
+ * the second (syslog.1 -> syslog.2) fails. Per the documented guarantee,
+ * exactly one generation -- the oldest kept one -- is lost: syslog.3's
+ * original content is gone, overwritten by what was syslog.2's. */
+static void
+test_rotate_failure_second(void)
+{
+    AstraLogFile file;
+
+    memset(files, 0, sizeof(files));
+    seed("syslog", "BASE");
+    seed("syslog.1", "ONE");
+    seed("syslog.2", "TWO");
+    seed("syslog.3", "THREE");
+
+    assert(astra_log_file_open(&file, &ops, "syslog", 1000u, 3u));
+    assert(astra_log_file_append(&file, "x", 1u, 20261005u) ==
+          ASTRA_LOG_FILE_OK);
+
+    rename_call_count = 0;
+    fail_rename_at = 2;
+    assert(astra_log_file_append(&file, "BATCH", 5u, 20261006u) ==
+          ASTRA_LOG_FILE_ROTATE_FAILED);
+    fail_rename_at = 0;
+
+    /* Named exactly: syslog.1 untouched (its rename is the one that failed);
+     * syslog.2 no longer exists (its content already moved to slot 3);
+     * syslog.3 holds syslog.2's old content, having lost its own -- the one
+     * generation a partial shift costs, never more than one. */
+    assert(content_is("syslog.1", "ONE"));
     assert(find("syslog.2") < 0);
-    /* The current base file was left in place and the batch still landed in
-     * it, rather than being dropped. */
-    assert(files[find("syslog")].length == 200u);
-    assert(file.bytes == 200u);
+    assert(content_is("syslog.3", "TWO"));
+    /* The batch still landed in the base file instead of being dropped. */
+    assert(content_is("syslog", "BASExBATCH"));
 }
 
 int
@@ -329,7 +372,8 @@ main(void)
     test_rotation();
     test_open_first_boot();
     test_open_retry();
-    test_rotate_failure();
+    test_rotate_failure_first();
+    test_rotate_failure_second();
     puts("LOG FILE PASS");
     return 0;
 }
