@@ -14,6 +14,7 @@
 #include <astra/host.h>
 #include <astra/library.h>
 #include <astra/civil.h>
+#include <astra/time_page.h>
 #include <astra/process.h>
 #include <astra/proc.h>
 #include <astra/posix_process.h>
@@ -679,6 +680,13 @@ uint32_t astra_device_query(uint32_t handle, AstraDeviceInfo *info);
 uint32_t astra_device_reset(uint32_t handle);
 /** @return Monotonic nanoseconds since the current boot. */
 uint64_t astra_clock_monotonic(void);
+/**
+ * Read the time page without a syscall, falling back to the clock syscalls
+ * when the page is absent (a kernel older than the page).
+ * @param sample Receives the monotonic and wall-clock reading; untouched
+ * when NULL.
+ */
+void astra_time_now(AstraTimeSample *sample);
 /**
  * Compute a saturated elapsed interval in microseconds.
  * @param from Earlier monotonic nanosecond timestamp.
