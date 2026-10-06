@@ -153,7 +153,7 @@ test_full_ring_drops_and_counts(void)
     assert(written == ASTRA_LOG_RING_CAPACITY);
     assert(astra_log_producer_write(&producer, &value, "line", 4u) ==
            ASTRA_LOG_WRITE_DROPPED);
-    assert(producer.dropped == 2u);
+    assert(ASTRA_LOG_RING_DROPPED((AstraBulkRingHeader *)(void *)area) == 2u);
     for (uint32_t index = 0u; index < written; ++index)
         drain_expect(&position, "line", 0u);
     ((volatile AstraBulkRingHeader *)area)->consumer_position = position;
@@ -462,7 +462,8 @@ test_concurrent_producers(void)
         delivered_count[thread_index] = 0u;
     }
     assert(total_written + total_dropped == CONCURRENCY_TOTAL);
-    assert(producer.dropped == total_dropped);
+    assert(ASTRA_LOG_RING_DROPPED((AstraBulkRingHeader *)(void *)area) ==
+           total_dropped);
     assert(concurrency_result_count == total_written);
 
     for (result_index = 0u; result_index < concurrency_result_count;

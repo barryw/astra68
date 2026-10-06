@@ -995,14 +995,11 @@ log_drain(void)
         AstraLogClient *client = &log_clients.client[index];
 
         /* A gone producer writes nothing more: once this table has read up
-         * to its last published slot, it is done, whatever else is left. */
+         * to its last published slot and announced its last drops, it is
+         * done, whatever else is left. */
         if (client->used &&
             (client->dead ||
-             (log_gone[index] &&
-              client->position ==
-                  __atomic_load_n(&((const volatile AstraBulkRingHeader *)
-                                    client->ring)->producer_position,
-                                  __ATOMIC_ACQUIRE)))) {
+             (log_gone[index] && astra_log_client_caught_up(client)))) {
             log_release(client);
             log_gone[index] = 0u;
         }

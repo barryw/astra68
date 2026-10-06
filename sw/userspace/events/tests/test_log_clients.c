@@ -193,7 +193,7 @@ test_budget(void)
     fresh();
     for (uint32_t i = 0u; i < 100u; ++i) {
         if (i == 7u)
-            fa.dropped = 2u;
+            ASTRA_LOG_RING_DROPPED((AstraBulkRingHeader *)(void *)ring_a) = 2u;
         snprintf(text, sizeof(text), "r%03u", (unsigned)i);
         emit(ring_a, &fa, 100u + i, text);
     }
@@ -270,11 +270,11 @@ test_drop_order(void)
     uint32_t day = 0u, pending = 0u, n;
 
     fresh();
-    fa.dropped = 1u;
+    ASTRA_LOG_RING_DROPPED((AstraBulkRingHeader *)(void *)ring_a) = 1u;
     emit(ring_a, &fa, 100u, "x1");
-    fa.dropped = 0u;
+    ASTRA_LOG_RING_DROPPED((AstraBulkRingHeader *)(void *)ring_a) = 0u;
     emit(ring_a, &fa, 200u, "y0");
-    fa.dropped = 1u;
+    ASTRA_LOG_RING_DROPPED((AstraBulkRingHeader *)(void *)ring_a) = 1u;
     emit(ring_a, &fa, 300u, "z1");
     n = astra_log_clients_drain(&fresh_clients, NULL, 0u, NULL, big,
                                 ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed, NULL,
@@ -286,9 +286,9 @@ test_drop_order(void)
 
     /* Ring order 1 then 0, monotonic reversed. */
     fresh();
-    fa.dropped = 1u;
+    ASTRA_LOG_RING_DROPPED((AstraBulkRingHeader *)(void *)ring_a) = 1u;
     emit(ring_a, &fa, 200u, "first");
-    fa.dropped = 0u;
+    ASTRA_LOG_RING_DROPPED((AstraBulkRingHeader *)(void *)ring_a) = 0u;
     emit(ring_a, &fa, 100u, "second");
     n = astra_log_clients_drain(&fresh_clients, NULL, 0u, NULL, big,
                                 ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed, NULL,
@@ -296,6 +296,57 @@ test_drop_order(void)
     big[n] = '\0';
     assert(count_of(big, "[1 lines dropped]\n") == 1u);
     assert(count_of(big, "lines dropped]") == 1u);
+}
+
+/* Drops with no record after them -- a burst that fills the ring, then the
+ * program exits -- are announced from the ring header once the table has
+ * read to the end, after the last line, exactly once. Until then the client
+ * is neither caught up (the service would release a reaped one) nor not
+ * pending. A later record carrying the same count announces nothing. */
+static void
+test_drops_at_ring_end(void)
+{
+    AstraLogRecordFields f;
+    uint64_t at = 1000u;
+    uint32_t day = 0u, pending = 0u, n, passes = 0u, used = 0u;
+    static char all[2u * ASTRA_LOG_RING_CAPACITY * 128u];
+    const char *last, *marker;
+
+    fresh();
+    (void)fill(ring_a, &fa, &at, "burst");
+    memset(&f, 0, sizeof(f));
+    f.level = ASTRA_EVENT_LEVEL_NOTICE;
+    for (uint32_t i = 0u; i < 5u; ++i)
+        assert(astra_log_producer_write(&fa, &f, "lost", 4u) ==
+               ASTRA_LOG_WRITE_DROPPED);
+    assert(!astra_log_client_caught_up(&fresh_clients.client[0]));
+    do {
+        n = astra_log_clients_drain(&fresh_clients, NULL, 0u, NULL, big,
+                                    ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed,
+                                    NULL, &day, &pending);
+        assert(used + n < sizeof(all));
+        memcpy(all + used, big, n);
+        used += n;
+        assert(++passes < 100u);
+    } while (n != 0u || pending != 0u);
+    all[used] = '\0';
+    assert(astra_log_client_caught_up(&fresh_clients.client[0]));
+    assert(count_of(all, "stdout: burst\n") == ASTRA_LOG_RING_CAPACITY);
+    assert(count_of(all, "lines dropped]") == 1u);
+    marker = strstr(all, "warning doom[10000011] log: [5 lines dropped]\n");
+    last = all;
+    for (const char *at_line = strstr(all, "stdout: burst\n");
+         at_line != NULL; at_line = strstr(at_line + 1, "stdout: burst\n"))
+        last = at_line;
+    assert(marker != NULL && marker > last);
+
+    emit(ring_a, &fa, at++, "after");
+    n = astra_log_clients_drain(&fresh_clients, NULL, 0u, NULL, big,
+                                ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed, NULL,
+                                &day, &pending);
+    big[n] = '\0';
+    assert(strstr(big, "stdout: after\n") != NULL);
+    assert(strstr(big, "lines dropped]") == NULL);
 }
 
 static AstraLogLine
@@ -514,7 +565,7 @@ main(void)
     assert(pending == 0u);
 
     /* Drops are announced once, before the next line. */
-    a.dropped = 3u;
+    ASTRA_LOG_RING_DROPPED((AstraBulkRingHeader *)(void *)ring_a) = 3u;
     emit(ring_a, &a, 400u, "after-drop");
     n = astra_log_clients_drain(&clients, NULL, 0u, NULL, out, ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed, NULL,
                                 &day, &pending);
@@ -536,10 +587,13 @@ main(void)
                                 on_consumed, NULL, &day, &pending);
     assert(n > 0u);
     assert(pending == 1u);
-    n = astra_log_clients_drain(&clients, NULL, 0u, NULL, out, ASTRA_LOG_DRAIN_OUT_BYTES,
-                                on_consumed, NULL, &day, &pending);
-    assert(n > 0u);
-    assert(pending == 0u);
+    for (uint32_t passes = 0u; pending != 0u; ++passes) {
+        assert(passes < 16u);
+        n = astra_log_clients_drain(&clients, NULL, 0u, NULL, out,
+                                    ASTRA_LOG_DRAIN_OUT_BYTES, on_consumed,
+                                    NULL, &day, &pending);
+        assert(n > 0u);
+    }
     n = astra_log_clients_drain(&clients, NULL, 0u, NULL, out, ASTRA_LOG_DRAIN_OUT_BYTES,
                                 on_consumed, NULL, &day, &pending);
     assert(n == 0u && pending == 0u); /* now actually caught up */
@@ -558,6 +612,7 @@ main(void)
     assert(pending == 0u);
 
     test_fair();
+    test_drops_at_ring_end();
     test_cursor();
     test_budget();
     test_small_out_refused();

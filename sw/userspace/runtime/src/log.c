@@ -176,10 +176,11 @@ log_write_level(const void *bytes, uint32_t length, uint32_t level)
 /*
  * ponytail: one producer per successful setup, never reused, so a late writer
  * can only write into the dead ring it reserved in. A dead ring's mapping and
- * producer endpoint stay too (64 KiB and one handle each). A new setup follows
- * only a ring the live service let go of (refused or reaped) or a failed exec;
- * after 8 the process stays on LOG_WRITE for good, which bounds that leak at
- * 512 KiB of reservation.
+ * producer endpoint stay too (a 256 KiB reserved area, committed only where
+ * it was written, and one handle each). A new setup follows only a ring the
+ * live service let go of (refused or reaped) or a failed exec; after 8 the
+ * process stays on LOG_WRITE for good, which bounds that leak at 2 MiB of
+ * reservation.
  */
 #define LOG_PRODUCERS    ASTRA_LOG_SETUPS_MAX
 

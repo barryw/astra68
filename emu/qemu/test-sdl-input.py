@@ -20,6 +20,7 @@ import collections
 import importlib.util
 import mmap
 import os
+import re
 import shutil
 import struct
 import sys
@@ -141,7 +142,7 @@ def wait_for(condition, what, seconds=10.0):
         time.sleep(0.05)
 
 
-def exits_after(machine, sequence):
+def exits_after(machine, sequence, pid=None):
     exits = []
     for line in machine.trace():
         record = terminal_gate.TRACE_RECORD.match(line)
@@ -149,17 +150,20 @@ def exits_after(machine, sequence):
                 "process_exit" not in line):
             continue
         fields = line.split()
+        if pid is not None and int(fields[-4], 16) != pid:
+            continue
         exits.append((int(fields[-3], 16), int(fields[-2], 16)))
     return exits
 
 
-def wait_clean_exit(machine, sequence, program):
+def wait_clean_exit(machine, sequence, program, pid=None):
     # Other processes exit too (remote desktop retries with no host helper),
     # so the test is a clean exit among them and no faulting exit at all.
-    # Reasons 3 and 4: user fault, signal (kernel process.h).
+    # Reasons 3 and 4: user fault, signal (kernel process.h). With @p pid,
+    # only that process's exit counts, wherever it is in the ring.
     deadline = time.monotonic() + 20
     while True:
-        exits = exits_after(machine, sequence)
+        exits = exits_after(machine, sequence, pid)
         if any(reason in (3, 4) for _, reason in exits):
             raise RuntimeError("a process faulted: %r" % exits)
         if (0, 1) in exits:
@@ -210,33 +214,26 @@ def test_testkeys(machine):
     deadline = time.monotonic() + 60
     while True:
         # testkeys holds LOG (docs/SYSTEM_LOG.md section 7): its SDL_Log
-        # scancode table leaves the kernel ring for the host syslog on its
-        # first log call, so said_with_syslog is required to see it, and
-        # with it gone from the ring there is no trace sequence number to
-        # anchor the table's last line -- trace_sequence() here instead,
-        # taken once the whole table is confirmed present.
-        said = "\n".join(machine.said_with_syslog(0)[0])
-        if all(text in said for text in wanted) and last in said:
+        # scancode table leaves the kernel ring for the host syslog, which
+        # the events service drains below applications -- the whole
+        # 512-line burst lands in testkeys' log ring before the service
+        # runs, and the file may get it after testkeys has exited.
+        said = machine.said_with_syslog(0)[0]
+        ends = [line for line in said if last in line]
+        if all(any(text in line for line in said) for text in wanted) and \
+                ends:
             break
         if time.monotonic() >= deadline:
-            # Known gap, not a gate-script bug: testkeys logs all 512
-            # scancodes in a tight loop with no syscall between them (it is
-            # upstream, unmodified SDL2 test/testkeys.c), so the whole burst
-            # lands before the kernel ever schedules the events service
-            # (lower priority than an application since this branch's log
-            # work, docs/SYSTEM_LOG.md section 3 Priority). The per-process
-            # ring holds ASTRA_LOG_RING_CAPACITY (256, sw/include/astra/
-            # log_ring.h) lines; testkeys reliably stops at "Scancode #255"
-            # with no "[N lines dropped]" marker ever appearing (confirmed:
-            # the ring's own drop counter, log_ring.c, is never drained and
-            # reported once testkeys exits). "Scancode #511" is therefore
-            # unreachable until that drain-on-exit gap is fixed; this is not
-            # a timeout to extend.
             raise RuntimeError("testkeys logged no scancode table: %r" %
-                               machine.recent_serial(30))
+                               (said[-30:],))
         time.sleep(0.2)
-    # Its own exit follows the table's last line.
-    wait_clean_exit(machine, machine.trace_sequence(), "testkeys")
+    # Its own exit, by the pid its syslog line names: the exit may already
+    # be in the ring before the line reached the file.
+    owner = re.search(r"\[([0-9a-f]{8})\] \w+: ", ends[0])
+    if owner is None:
+        raise RuntimeError("testkeys' last line names no process: %r" %
+                           ends[0])
+    wait_clean_exit(machine, 0, "testkeys", int(owner.group(1), 16))
 
 
 def main():

@@ -66,7 +66,6 @@ astra_log_producer_init(AstraLogProducer *producer, volatile void *ring_base,
     producer->notify = notify;
     producer->context = context;
     producer->reserved = producer->header->producer_position;
-    producer->dropped = 0u;
     producer->dead = 0u;
 }
 
@@ -176,11 +175,12 @@ astra_log_producer_write(AstraLogProducer *producer,
 
         first = __atomic_load_n(&producer->reserved, __ATOMIC_ACQUIRE);
         if (first + slots - consumer > ASTRA_LOG_RING_CAPACITY) {
-            uint32_t seen = __atomic_load_n(&producer->dropped,
-                                            __ATOMIC_RELAXED);
+            uint32_t *dropped = (uint32_t *)(uintptr_t)
+                &ASTRA_LOG_RING_DROPPED(producer->header);
+            uint32_t seen = __atomic_load_n(dropped, __ATOMIC_RELAXED);
 
-            while (!cas32(&producer->dropped, seen, seen + 1u))
-                seen = __atomic_load_n(&producer->dropped, __ATOMIC_RELAXED);
+            while (!cas32(dropped, seen, seen + 1u))
+                seen = __atomic_load_n(dropped, __ATOMIC_RELAXED);
             /*
              * A service that died behind never moves consumer_position, so
              * the burst doorbell would never ring again and every line would
@@ -198,7 +198,8 @@ astra_log_producer_write(AstraLogProducer *producer,
             break;
     }
     header.sequence = first;
-    header.dropped = __atomic_load_n(&producer->dropped, __ATOMIC_RELAXED);
+    header.dropped = __atomic_load_n(
+        &ASTRA_LOG_RING_DROPPED(producer->header), __ATOMIC_RELAXED);
     header.text_length = (uint16_t)length;
     header.slots = (uint8_t)slots;
     header.reserved = 0u;

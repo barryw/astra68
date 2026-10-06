@@ -121,8 +121,16 @@ overrides it.
 ## 3. Transport: a lock-free ring per process, no syscall per line
 
 Each logging process has one **log ring**: a bulk ring
-(`docs/SHARED_AREAS_AND_BULK_RINGS.md`) in a 64 KiB shared area it owns. The
-log service is the consumer.
+(`docs/SHARED_AREAS_AND_BULK_RINGS.md`) of 1024 slots in a 256 KiB shared
+area it owns. The log service is the consumer.
+
+The area is created reserved (`ASTRA_AREA_CREATE_RESERVED`), so a page is
+committed only when a slot in it is first written, and 256 KiB is one
+shared-table span of address space -- what a 64 KiB area took too -- in the
+process and in the service. The size is measured, not guessed: the service runs
+below applications, so a program's burst lands whole before the service runs,
+and SDL's `testkeys` writes its 512-line scancode table with no call that
+blocks. 256 slots dropped half of it.
 
 It is one ring per process, not one per thread, for a measured reason.
 Per-thread state needs thread-local storage, and the shared `runtime.library`
@@ -137,7 +145,10 @@ the writers inside the process coordinate without a lock:
    on a process-local `reserved` counter. The claim succeeds only if
    `reserved + slots - consumer_position <= capacity`, using the consumer
    position in the shared header. If it fails, the ring is full: the line is
-   dropped and the process's `dropped` counter is incremented with a CAS.
+   dropped and the process's dropped-line count is incremented with a CAS.
+   The count lives in the ring header (`ASTRA_LOG_RING_DROPPED`, the first
+   `producer_reserved` word, which the kernel never reads), so the service can
+   read it without a record.
 2. **Write.** The writer copies the record into its slots, and then stores its
    slot's commit word (the slot's position + 1) after a release fence.
 3. **Publish.** A writer advances the shared `producer_position` over every
@@ -215,7 +226,11 @@ branch of `kernel_ring_notify`).
 
 **Full ring.** The line is dropped and counted; the caller returns at once. The
 next record carries the count, and the service writes `[N lines dropped]`
-before it. The first drop and every 64th after it also ring the doorbell
+before it. Drops no record carries -- the program filled the ring and wrote
+nothing after, or exited -- are announced from the header's count when the
+service has read the ring to its end: after the last line, stamped with its
+time. A ring is not done, and an exited process's ring is not released, until
+both its last slot and its last drop are written. The first drop and every 64th after it also ring the doorbell
 (`ASTRA_LOG_DROP_DOORBELL_INTERVAL`): a service that died while the ring was
 full never moves its position, so the burst doorbell alone would never find
 it gone.
@@ -227,7 +242,7 @@ retired the same way. The setup state word carries a generation, so a late
 report of an older ring's death cannot retire a newer one, and each setup gets
 a fresh producer, so a writer preempted across a re-setup finishes in the ring
 it reserved in. Dead rings stay mapped. After eight setups the process stays on
-`LOG_WRITE`, which bounds that at 512 KiB. A setup refused `PEER_DEAD` latches
+`LOG_WRITE`, which bounds that at 2 MiB of reservation. A setup refused `PEER_DEAD` latches
 `LOG_WRITE` at once, in a flag of its own rather than the generation: a
 restarted service makes a new port, and the startup `LOG` handle names the dead
 one forever. A forked child keeps that flag, since it holds the same handle.
@@ -519,8 +534,9 @@ Board: run Doom on the DE25 and read the banner from Beast with
 - **Per-thread state:** there is none in the shared runtime, so the design uses
   one ring per process with CAS (§3).
 - **Slot size:** capacity must be a power of two and the 64-byte header shares
-  the area, so the ring is 256 slots of 252 bytes: 64 + 256 x 252 = 64,576
-  bytes in a 65,536-byte area.
+  the area, so the ring is 1024 slots of 252 bytes: 64 + 1024 x 252 =
+  258,112 bytes in a 262,144-byte area (first planned as 256 slots in 64 KiB;
+  see §3 for why it grew).
 - **Publishing `LOG`:** the manifest's `serves` list maps names to
   `astra_service_ready` handles by position (`supervisor/src/loader.c:1505`).
   `LOG` is a raw capability, granted by name like `ENTROPY`.

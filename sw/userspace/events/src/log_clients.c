@@ -41,6 +41,7 @@ typedef struct Pending {
     uint32_t offset;        /* text's start in `arena` */
     uint32_t length;
     uint32_t dropped_delta; /* drops to announce before this record */
+    uint32_t marker_only;   /* the ring's end: the announcement alone */
 } Pending;
 
 /*
@@ -124,6 +125,8 @@ astra_log_clients_add(AstraLogClients *clients, uint32_t pid,
         client->position = header->consumer_position;
         client->last_dropped = 0u;
         client->dead = 0u;
+        for (uint32_t at = 0u; at < sizeof(client->last); ++at)
+            ((uint8_t *)&client->last)[at] = 0u;
         for (uint32_t at = 0u; at < ASTRA_LOG_IDENT_MAX; ++at)
             client->ident[at] = setup->ident[at];
         return client;
@@ -178,6 +181,18 @@ dropped_text(char *out, uint32_t count)
     return used;
 }
 
+/* Drops the ring header counts that this table has not announced. Only
+ * forward, like a record's count: a smaller value is not a new drop. */
+static uint32_t
+unannounced(const AstraLogClient *client, uint32_t *dropped)
+{
+    *dropped = __atomic_load_n(
+        &ASTRA_LOG_RING_DROPPED((const volatile AstraBulkRingHeader *)
+                                client->ring), __ATOMIC_ACQUIRE);
+    return (int32_t)(*dropped - client->last_dropped) > 0 ?
+        *dropped - client->last_dropped : 0u;
+}
+
 /*
  * Read `client`'s records into the batch, in ring order, while each one's
  * worst-case line -- plus a drop marker when it carries new drops -- fits the
@@ -213,8 +228,31 @@ read_client(AstraLogClient *client, uint32_t quota, uint32_t budget,
             client->ring, &position, &p->fields, arena + *arena_used,
             ASTRA_LOG_DRAIN_OUT_BYTES - *arena_used, &p->length);
 
-        if (status == ASTRA_LOG_READ_EMPTY)
+        if (status == ASTRA_LOG_READ_EMPTY) {
+            uint32_t dropped;
+
+            /* The end of the ring: drops no record carries yet -- the
+             * program may never write another -- are announced here, after
+             * its last line, timed with it. */
+            delta = unannounced(client, &dropped);
+            if (delta == 0u)
+                return 0u;
+            need = ASTRA_LOG_LINE_BYTES(DROP_TEXT_MAX);
+            if (need > budget - *reserved)
+                return 1u;
+            client->last_dropped = dropped;
+            p->fields = client->last;
+            p->client = client;
+            p->line = NULL;
+            p->offset = *arena_used;
+            p->length = 0u;
+            p->dropped_delta = delta;
+            p->marker_only = 1u;
+            *reserved += need;
+            order[*count] = p;
+            ++*count;
             return 0u;
+        }
         if (status == ASTRA_LOG_READ_CORRUPT) {
             client->dead = 1u;
             return 0u;
@@ -230,12 +268,14 @@ read_client(AstraLogClient *client, uint32_t quota, uint32_t budget,
         /* Accepted: need <= unreserved budget <= free arena, so the whole
          * text was copied (p->length == text_length). */
         client->position = position;
+        client->last = p->fields;
         if (delta != 0u)
             client->last_dropped = p->fields.dropped;
         p->client = client;
         p->line = NULL;
         p->offset = *arena_used;
         p->dropped_delta = delta;
+        p->marker_only = 0u;
         *arena_used += p->length;
         taken += need;
         *reserved += need;
@@ -266,6 +306,7 @@ read_extra(const AstraLogLine *extra, uint32_t extra_count, uint32_t budget,
         p->client = NULL;
         p->line = line;
         p->dropped_delta = 0u;
+        p->marker_only = 0u;
         *reserved += need;
         order[*count] = p;
         ++*count;
@@ -381,6 +422,8 @@ astra_log_clients_drain(AstraLogClients *clients, const AstraLogLine *extra,
             used = append_line(out, capacity, used, &note, client, text,
                                length, day);
         }
+        if (p->marker_only)
+            continue;
         used = append_line(out, capacity, used, &p->fields, client,
                            arena + p->offset, p->length, day);
     }
@@ -396,14 +439,22 @@ astra_log_clients_drain(AstraLogClients *clients, const AstraLogLine *extra,
     *pending = 0u;
     for (uint32_t index = 0u; index < ASTRA_LOG_CLIENTS_MAX; ++index) {
         const AstraLogClient *client = &clients->client[index];
-        const volatile AstraBulkRingHeader *header;
 
-        if (!client->used || client->dead)
-            continue;
-        header = client->ring;
-        if (__atomic_load_n(&header->producer_position, __ATOMIC_ACQUIRE) !=
-            client->position)
+        if (client->used && !client->dead &&
+            !astra_log_client_caught_up(client))
             *pending = 1u;
     }
     return used;
+}
+
+uint32_t
+astra_log_client_caught_up(const AstraLogClient *client)
+{
+    const volatile AstraBulkRingHeader *header = client->ring;
+
+    uint32_t dropped;
+
+    return __atomic_load_n(&header->producer_position, __ATOMIC_ACQUIRE) ==
+               client->position &&
+           unannounced(client, &dropped) == 0u;
 }

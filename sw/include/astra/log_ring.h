@@ -26,10 +26,15 @@
 #include <astra/message_abi.h>
 #include <astra/object_abi.h>
 
-#define ASTRA_LOG_RING_AREA_SIZE    65536u
+/* 1024 slots: an ordinary burst (SDL's 512-line scancode table) fits while
+ * the service, below applications, waits for the program to yield. The area
+ * is created reserved, so pages commit as slots are first touched, and a
+ * 256 KiB area takes the same one shared-table span of address space a
+ * 64 KiB one did (KERNEL_VM_SHARED_TABLE_SPAN). */
+#define ASTRA_LOG_RING_AREA_SIZE    262144u
 #define ASTRA_LOG_RING_OFFSET       0u
 #define ASTRA_LOG_RING_SLOT_SIZE    252u
-#define ASTRA_LOG_RING_CAPACITY     256u
+#define ASTRA_LOG_RING_CAPACITY     1024u
 #define ASTRA_LOG_RING_HEADER_SIZE  64u
 #define ASTRA_LOG_SLOT_PAYLOAD      (ASTRA_LOG_RING_SLOT_SIZE - 4u)   /* 248 */
 #define ASTRA_LOG_RECORD_HEADER_SIZE 40u
@@ -43,6 +48,16 @@
 _Static_assert(ASTRA_LOG_RING_HEADER_SIZE +
                ASTRA_LOG_RING_CAPACITY * ASTRA_LOG_RING_SLOT_SIZE <=
                ASTRA_LOG_RING_AREA_SIZE, "log ring fits its area");
+
+/*
+ * Lines this process has dropped, ever: the first producer_reserved word of
+ * the ring header, which the kernel never reads. The producer bumps it with a
+ * CAS on each drop; every record also carries the count at its writing. The
+ * service announces drops before the record that carries them, and from this
+ * word when it has read to the end of the ring -- so drops after a program's
+ * last line, with no record left to carry them, are still reported.
+ */
+#define ASTRA_LOG_RING_DROPPED(header) ((header)->producer_reserved[0])
 
 #define ASTRA_LOG_STREAM_LOG    0u
 #define ASTRA_LOG_STREAM_STDOUT 1u
@@ -85,7 +100,7 @@ _Static_assert(sizeof(AstraLogRecordFields) == ASTRA_LOG_RECORD_HEADER_SIZE,
  */
 #define ASTRA_CAPABILITY_LOG       "LOG"
 #define ASTRA_LOG_SETUP_MAGIC      0x414c4f47u /* "ALOG" */
-#define ASTRA_LOG_SETUP_VERSION    1u
+#define ASTRA_LOG_SETUP_VERSION    2u /* 2: 1024 slots, header drop count */
 #define ASTRA_LOG_IDENT_MAX        32u
 #define ASTRA_LOG_OPERATION_SETUP    1u
 #define ASTRA_LOG_OPERATION_DOORBELL 2u
@@ -124,7 +139,6 @@ typedef struct AstraLogProducer {
     AstraLogNotify notify;
     void *context;
     uint32_t reserved;     /* next position to hand out */
-    uint32_t dropped;
     uint32_t dead;         /* nonzero once the service is gone */
 } AstraLogProducer;
 

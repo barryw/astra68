@@ -38,6 +38,8 @@ typedef struct AstraLogClient {
     uint32_t position;         /* next ring position to read */
     uint32_t last_dropped;     /* dropped count already announced */
     uint32_t dead;             /* nonzero once the ring read something corrupt */
+    AstraLogRecordFields last; /* the last record read: an end-of-ring drop
+                                  marker's time */
     volatile const void *ring; /* mapped AstraBulkRingHeader + slots */
     char ident[ASTRA_LOG_IDENT_MAX];
 } AstraLogClient;
@@ -114,7 +116,11 @@ typedef void (*AstraLogConsumed)(void *context, AstraLogClient *client,
  * Drops are counted in ring order: a record whose `dropped` count exceeds
  * the last one announced for its client gets one `[N lines dropped]` line
  * immediately before it; a count that goes backwards (racing producer
- * threads) announces nothing. A client whose ring reads back corrupt is
+ * threads) announces nothing. Drops no record carries -- the ring was full
+ * and the program wrote nothing after -- are announced from the ring
+ * header's count (::ASTRA_LOG_RING_DROPPED) once the ring is read to its
+ * end, after the last line and stamped with its time; until then the client
+ * counts as pending. A client whose ring reads back corrupt is
  * marked dead (`AstraLogClient::dead`), skipped by every later call, and
  * never reported as pending.
  *
@@ -129,7 +135,8 @@ typedef void (*AstraLogConsumed)(void *context, AstraLogClient *client,
  * re-reads each live client's `producer_position`, so a producer's doorbell
  * decision racing this call's `consumer_position` store is never silently
  * lost. `*pending` reports the result: nonzero if, after that reread, any
- * live client still has data published but not yet read by this table --
+ * live client still has data published but not yet read by this table, or
+ * drops counted but not yet announced --
  * whether because it arrived in that race window or because this call's
  * output budget left it unread. The caller must treat `*pending` as part
  * of "is there more work right now": only call it safe to block on the LOG
@@ -163,5 +170,12 @@ uint32_t astra_log_clients_drain(AstraLogClients *clients,
     const AstraLogLine *extra, uint32_t extra_count, uint32_t *extra_taken,
     char *out, uint32_t capacity, AstraLogConsumed consumed, void *context,
     uint32_t *day, uint32_t *pending);
+
+/**
+ * Whether the table has read `client`'s ring to its last published slot and
+ * announced every drop the ring header counts. A reaped client is released
+ * only then, so drops after its last line are still written.
+ */
+uint32_t astra_log_client_caught_up(const AstraLogClient *client);
 
 #endif
