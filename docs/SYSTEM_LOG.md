@@ -215,7 +215,18 @@ branch of `kernel_ring_notify`).
 
 **Full ring.** The line is dropped and counted; the caller returns at once. The
 next record carries the count, and the service writes `[N lines dropped]`
-before it.
+before it. The first drop and every 64th after it also ring the doorbell
+(`ASTRA_LOG_DROP_DOORBELL_INTERVAL`): a service that died while the ring was
+full never moves its position, so the burst doorbell alone would never find
+it gone.
+
+**Service death.** A doorbell answered `PEER_DEAD` marks the producer dead, and
+lines go to `LOG_WRITE`. Setup is retried on the 64th call after. The setup
+state word carries a generation, so a late report of an older ring's death
+cannot retire a newer one, and each setup gets a fresh producer, so a writer
+preempted across a re-setup finishes in the ring it reserved in. Dead rings
+stay mapped. After eight setups the process stays on `LOG_WRITE`, which bounds
+that at 512 KiB.
 
 **Crash.** After the producer dies, the consumer may still drain published
 elements. The service drains the ring, then sees `PEER_DEAD` and frees it.

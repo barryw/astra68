@@ -116,6 +116,11 @@ typedef struct AstraLogProducer {
     uint32_t dead;         /* nonzero once the service is gone */
 } AstraLogProducer;
 
+/* A dropped line rings the doorbell on the first drop and every 64th after:
+ * a service that died while the ring was full is found within 64 lines, at a
+ * cost of one non-blocking send per 64 drops. */
+#define ASTRA_LOG_DROP_DOORBELL_INTERVAL 64u
+
 #define ASTRA_LOG_WRITE_OK      0u
 #define ASTRA_LOG_WRITE_DROPPED 1u
 #define ASTRA_LOG_WRITE_DEAD    2u

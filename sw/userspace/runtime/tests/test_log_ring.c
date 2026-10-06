@@ -8,6 +8,7 @@
 static uint8_t area[ASTRA_LOG_RING_AREA_SIZE];
 static uint32_t notifications[16];
 static uint32_t notification_count;
+static uint32_t notify_result; /* nonzero: the service is gone */
 
 static uint32_t
 record_notify(void *context)
@@ -16,7 +17,7 @@ record_notify(void *context)
     notifications[notification_count % 16u] =
         ((AstraBulkRingHeader *)(void *)area)->producer_position;
     ++notification_count;
-    return 0u; /* the service is alive */
+    return notify_result;
 }
 
 static void
@@ -30,6 +31,7 @@ format_ring(void)
     header->capacity = ASTRA_LOG_RING_CAPACITY;
     header->data_offset = ASTRA_LOG_RING_HEADER_SIZE;
     notification_count = 0u;
+    notify_result = 0u;
 }
 
 static AstraLogRecordFields
@@ -155,6 +157,39 @@ test_full_ring_drops_and_counts(void)
     assert(astra_log_producer_write(&producer, &value, "after", 5u) ==
            ASTRA_LOG_WRITE_OK);
     drain_expect(&position, "after", 2u);
+}
+
+/*
+ * A service that dies while the ring is full never moves consumer_position, so
+ * the burst doorbell never rings again. Drops ring it instead, on the first and
+ * every ASTRA_LOG_DROP_DOORBELL_INTERVAL-th, and PEER_DEAD there kills the
+ * producer.
+ */
+static void
+test_drops_ring_the_doorbell_and_find_the_service_dead(void)
+{
+    AstraLogProducer producer;
+    AstraLogRecordFields value = fields(2u, ASTRA_LOG_STREAM_LOG);
+
+    format_ring();
+    astra_log_producer_init(&producer, area, record_notify, NULL);
+    for (uint32_t index = 0u; index < ASTRA_LOG_RING_CAPACITY; ++index)
+        assert(astra_log_producer_write(&producer, &value, "line", 4u) ==
+               ASTRA_LOG_WRITE_OK);
+    notification_count = 0u;
+    for (uint32_t index = 0u; index < 3u * ASTRA_LOG_DROP_DOORBELL_INTERVAL;
+         ++index)
+        assert(astra_log_producer_write(&producer, &value, "line", 4u) ==
+               ASTRA_LOG_WRITE_DROPPED);
+    assert(notification_count == 3u);
+    notify_result = 1u;
+    /* The next drop is the 3*INTERVAL+1-th: it rings and finds it gone. */
+    assert(astra_log_producer_write(&producer, &value, "line", 4u) ==
+           ASTRA_LOG_WRITE_DEAD);
+    assert(producer.dead != 0u && notification_count == 4u);
+    assert(astra_log_producer_write(&producer, &value, "line", 4u) ==
+           ASTRA_LOG_WRITE_DEAD);
+    assert(notification_count == 4u);
 }
 
 static void
@@ -472,6 +507,7 @@ main(void)
     test_round_trip_and_notify_once_per_burst();
     test_long_record_wraps_the_ring();
     test_full_ring_drops_and_counts();
+    test_drops_ring_the_doorbell_and_find_the_service_dead();
     test_uncommitted_slot_holds_back_publication();
     test_corrupt_slot_count_is_rejected();
     test_concurrent_producers();

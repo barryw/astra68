@@ -16,5 +16,11 @@ const struct AstraStartupInfo *astra_test_startup(void);
 uintptr_t astra_test_time_page_address(void);
 /* log.c: forget the ring and the retry back-off (ASTRA_LOG_TEST builds). */
 void astra_log_test_reset(void);
+/* log.c: the setup state word, the producer it names (NULL unless READY), and
+ * the DEAD path run as a writer that loaded `state` earlier would run it. */
+struct AstraLogProducer;
+uint32_t astra_log_test_state(void);
+struct AstraLogProducer *astra_log_test_producer(void);
+void astra_log_test_ring_died(uint32_t state);
 
 #endif

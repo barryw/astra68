@@ -19,11 +19,12 @@
 
 /*
  * The log ring's kernel: the calls astra_log_line's setup makes, answered from
- * one static area (static so its address fits the 32-bit syscall ABI under
- * -no-pie), with every result switchable so each failure path can be driven.
- * Inert until reset_fake_kernel() makes it active.
+ * static areas (static so their addresses fit the 32-bit syscall ABI under
+ * -no-pie), a fresh one per AREA_CREATE, with every result switchable so each
+ * failure path can be driven. Inert until reset_fake_kernel() makes it active.
  */
-static _Alignas(64) uint8_t fake_area[ASTRA_LOG_RING_AREA_SIZE];
+#define FAKE_AREAS 10u
+static _Alignas(64) uint8_t fake_areas[FAKE_AREAS][ASTRA_LOG_RING_AREA_SIZE];
 static AstraTimePage fake_time_page;
 
 static struct {
@@ -107,23 +108,25 @@ fake_log_syscall(uint32_t number, uint32_t argument0, uint32_t argument1,
     case ASTRA_SYSCALL_AREA_CREATE:
         result->status = ASTRA_SYSCALL_OK;
         assert(argument0 == ASTRA_LOG_RING_AREA_SIZE);
+        assert(fake.area_creates < FAKE_AREAS);
         ++fake.area_creates;
         result->value0 = FAKE_AREA;
         return;
     case ASTRA_SYSCALL_AREA_MAP:
         result->status = ASTRA_SYSCALL_OK;
         assert(argument0 == FAKE_AREA);
-        result->value0 = (uint32_t)(uintptr_t)fake_area;
-        result->value1 = sizeof(fake_area);
+        fake.area = fake_areas[fake.area_creates - 1u];
+        result->value0 = (uint32_t)(uintptr_t)fake.area;
+        result->value1 = ASTRA_LOG_RING_AREA_SIZE;
         return;
     case ASTRA_SYSCALL_RING_CREATE: {
         /* What kernel_ring_create_flagged writes: a fresh header. */
         AstraBulkRingHeader *header =
-            (AstraBulkRingHeader *)(void *)(fake_area + argument1);
+            (AstraBulkRingHeader *)(void *)(fake.area + argument1);
 
         result->status = ASTRA_SYSCALL_OK;
         ++fake.ring_creates;
-        memset(fake_area, 0, sizeof(fake_area));
+        memset((void *)fake.area, 0, ASTRA_LOG_RING_AREA_SIZE);
         header->magic = ASTRA_BULK_RING_MAGIC;
         header->version = ASTRA_BULK_RING_ABI_VERSION;
         header->header_size = ASTRA_BULK_RING_HEADER_SIZE;
@@ -175,7 +178,7 @@ fake_log_syscall(uint32_t number, uint32_t argument0, uint32_t argument1,
         return;
     case ASTRA_SYSCALL_AREA_UNMAP:
         result->status = ASTRA_SYSCALL_OK;
-        assert(argument0 == (uint32_t)(uintptr_t)fake_area);
+        assert(argument0 == (uint32_t)(uintptr_t)fake.area);
         ++fake.unmaps;
         return;
     default:
@@ -2501,10 +2504,10 @@ reset_fake_kernel(void)
     AstraTimePageCopy now = {0};
 
     memset(&fake, 0, sizeof(fake));
-    memset(fake_area, 0, sizeof(fake_area));
+    memset(fake_areas, 0, sizeof(fake_areas));
     fake.active = 1;
     fake.startup_has_log = 1;
-    fake.area = fake_area;
+    fake.area = fake_areas[0];
     fake.port_send_result = ASTRA_SYSCALL_OK;
     fake.doorbell_result = ASTRA_SYSCALL_OK;
     mock_status = ASTRA_SYSCALL_OK;
@@ -2523,7 +2526,7 @@ reset_fake_kernel(void)
 static void
 fake_consume_all(void)
 {
-    AstraBulkRingHeader *header = (AstraBulkRingHeader *)(void *)fake_area;
+    AstraBulkRingHeader *header = (AstraBulkRingHeader *)(void *)fake.area;
 
     __atomic_store_n(&header->consumer_position, header->producer_position,
                      __ATOMIC_SEQ_CST);
@@ -2531,22 +2534,28 @@ fake_consume_all(void)
 
 static char fake_last_text[ASTRA_LOG_TEXT_MAX + 1u];
 
-/* Every record from the ring's start; the newest one's text is kept. */
+/* Every record from an area's ring start; the newest one's text is kept. */
 static uint32_t
-fake_ring_records(void)
+fake_area_records(volatile const uint8_t *area)
 {
     AstraLogRecordFields fields;
     uint32_t position = 0u;
     uint32_t length;
     uint32_t records = 0u;
 
-    while (astra_log_consumer_next(fake_area, &position, &fields,
+    while (astra_log_consumer_next(area, &position, &fields,
                                    fake_last_text, ASTRA_LOG_TEXT_MAX,
                                    &length) == ASTRA_LOG_READ_OK) {
         fake_last_text[length] = '\0';
         ++records;
     }
     return records;
+}
+
+static uint32_t
+fake_ring_records(void)
+{
+    return fake_area_records(fake.area);
 }
 
 static int
@@ -2700,6 +2709,107 @@ test_existing_astra_log_routes_through_ring(void)
     assert(fake.log_writes == 1u && fake_ring_records() == 3u);
 }
 
+static void
+log_x(void)
+{
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_LOG,
+                          "x", 1u) == ASTRA_SYSCALL_OK);
+}
+
+/*
+ * The service dies: a doorbell answers PEER_DEAD (that line is in the ring),
+ * the next line falls back, and setup is retried on the 64th call after it.
+ * Returns with the doorbell answering again.
+ */
+static void
+fake_service_dies(void)
+{
+    fake.doorbell_result = ASTRA_SYSCALL_PEER_DEAD;
+    fake_consume_all();
+    log_x();                         /* rings, finds the service gone */
+    fake.doorbell_result = ASTRA_SYSCALL_OK;
+    log_x();                         /* DEAD: falls back, backs off */
+    for (uint32_t index = 0u; index < 63u; ++index)
+        log_x();
+}
+
+static void
+test_log_line_stale_death_leaves_new_ring_alone(void)
+{
+    uint32_t first;
+    uint32_t second;
+    uint32_t writes;
+
+    reset_fake_kernel();
+    log_x();
+    first = astra_log_test_state();
+    fake_service_dies();
+    assert(fake.area_creates == 1u);
+    log_x();                         /* the 64th call sets up again */
+    assert(fake.area_creates == 2u);
+    second = astra_log_test_state();
+    /* A writer that loaded the first setup's state and found that ring dead
+     * only now gets to report it. */
+    astra_log_test_ring_died(first);
+    assert(astra_log_test_state() == second);
+    writes = fake.log_writes;
+    log_x();
+    assert(fake.log_writes == writes && fake.area_creates == 2u);
+    assert(fake_ring_records() == 2u);
+}
+
+static void
+test_log_line_gives_up_after_eight_service_deaths(void)
+{
+    uint32_t writes;
+
+    reset_fake_kernel();
+    log_x();
+    for (uint32_t death = 1u; death < 8u; ++death) {
+        fake_service_dies();
+        log_x();
+        assert(fake.area_creates == death + 1u);
+        assert(fake.log_writes == death * 64u);
+    }
+    fake_service_dies();
+    writes = fake.log_writes;
+    for (uint32_t index = 0u; index < 200u; ++index)
+        log_x();
+    assert(fake.area_creates == 8u);
+    assert(fake.log_writes == writes + 200u);
+}
+
+static void
+test_log_line_late_writer_stays_in_its_own_ring(void)
+{
+    volatile uint8_t *old_area;
+    AstraLogProducer *old_producer;
+    AstraLogRecordFields fields;
+
+    reset_fake_kernel();
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_LOG,
+                          "one", 3u) == ASTRA_SYSCALL_OK);
+    old_area = fake.area;
+    old_producer = astra_log_test_producer();
+    fake_service_dies();
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_LOG,
+                          "back", 4u) == ASTRA_SYSCALL_OK);
+    assert(fake.area_creates == 2u && fake.area != old_area);
+    assert(astra_log_test_producer() != old_producer);
+    /* A writer that passed the dead check before the death and was preempted
+     * across the new setup finishes with the producer it loaded. */
+    __atomic_store_n(&old_producer->dead, 0u, __ATOMIC_RELEASE);
+    memset(&fields, 0, sizeof(fields));
+    fields.level = ASTRA_EVENT_LEVEL_NOTICE;
+    assert(astra_log_producer_write(old_producer, &fields, "late", 4u) ==
+           ASTRA_LOG_WRITE_OK);
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_LOG,
+                          "new", 3u) == ASTRA_SYSCALL_OK);
+    assert(fake_ring_records() == 2u && last_ring_text_equals("new"));
+    assert(fake_area_records(old_area) == 3u &&
+           strcmp(fake_last_text, "late") == 0);
+}
+
 int
 main(void)
 {
@@ -2736,5 +2846,8 @@ main(void)
     test_log_line_debug_never_enters_the_ring();
     test_log_line_records_empty_lines();
     test_existing_astra_log_routes_through_ring();
+    test_log_line_stale_death_leaves_new_ring_alone();
+    test_log_line_gives_up_after_eight_service_deaths();
+    test_log_line_late_writer_stays_in_its_own_ring();
     return 0;
 }

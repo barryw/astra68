@@ -160,15 +160,31 @@ log_write_level(const void *bytes, uint32_t length, uint32_t level)
  * The process's log ring, made on the first line that wants it. Setup is
  * claimed with one CAS; a thread that logs while another is setting up uses
  * LOG_WRITE for that line rather than wait (docs/SYSTEM_LOG.md section 3).
+ *
+ * log_state is one word: the setup state in the low two bits, and above them
+ * the generation, the number of setups that have succeeded. A writer loads it
+ * once per line and uses only the producer that generation names, so a writer
+ * preempted across a re-setup finishes in the ring it reserved in, and its
+ * report of a dead ring can only retire the setup it saw (log_ring_died).
  */
 #define LOG_SETUP_IDLE   0u
 #define LOG_SETUP_BUSY   1u
 #define LOG_SETUP_READY  2u
+#define LOG_STATE_MASK   3u
+#define LOG_GENERATION_SHIFT 2u
 #define LOG_SETUP_RETRY_AFTER 64u
+/*
+ * ponytail: one producer per successful setup, never reused, so a late writer
+ * can only write into the dead ring it reserved in. A dead ring's mapping and
+ * producer endpoint stay too (64 KiB and one handle each). After 8 setups the
+ * service has died 8 times and the process stays on LOG_WRITE for good, which
+ * bounds that leak at 512 KiB of reservation.
+ */
+#define LOG_PRODUCERS    8u
 
-static uint32_t log_setup_state;
+static uint32_t log_state;
 static uint32_t log_setup_backoff;
-static AstraLogProducer log_producer;
+static AstraLogProducer log_producers[LOG_PRODUCERS];
 static uint32_t log_producer_endpoint; /* held only so death reaches the service */
 static uint32_t log_port;
 static AstraMessageHeader log_doorbell; /* written by setup before READY */
@@ -204,11 +220,25 @@ log_ident(char out[ASTRA_LOG_IDENT_MAX])
         out[length++] = '\0';
 }
 
-/* Returns 1 when the ring is ready after this call. */
-static int
+/* A READY state word's producer: generation g names log_producers[g - 1]. */
+static AstraLogProducer *
+log_producer_of(uint32_t state)
+{
+    return &log_producers[(state >> LOG_GENERATION_SHIFT) - 1u];
+}
+
+/* Returns the READY state word when the ring is ready after this call, else
+ * 0 (READY is never 0). */
+static uint32_t
 log_setup(void)
 {
-    /* Static, not on the stack: only the thread holding BUSY touches them. */
+    /*
+     * Static, not on the stack, so the 64-bit host fake can read them through
+     * the 32-bit syscall ABI. Safe only because the BUSY claim below is
+     * exclusive: no other thread can hold BUSY until this one stores IDLE or
+     * READY, and log_ring_died cannot release a BUSY claim (it CASes from a
+     * READY word).
+     */
     static AstraLogSetup setup;
     static uint32_t handles[2];
     const AstraStartupCapability *log;
@@ -218,22 +248,26 @@ log_setup(void)
     uint32_t consumer = 0u;
     void *address = NULL;
     uint32_t size = 0u;
-    uint32_t expected = LOG_SETUP_IDLE;
+    uint32_t state = __atomic_load_n(&log_state, __ATOMIC_ACQUIRE);
+    uint32_t generation = state >> LOG_GENERATION_SHIFT;
     uint32_t backoff;
 
-    if (__atomic_load_n(&log_setup_state, __ATOMIC_ACQUIRE) == LOG_SETUP_READY)
-        return 1;
+    if ((state & LOG_STATE_MASK) == LOG_SETUP_READY)
+        return state;
+    if ((state & LOG_STATE_MASK) != LOG_SETUP_IDLE ||
+        generation == LOG_PRODUCERS)
+        return 0u;
     backoff = __atomic_load_n(&log_setup_backoff, __ATOMIC_RELAXED);
     if (backoff != 0u) {
         /* Racy by design: a lost decrement only retries a little later. */
         __atomic_store_n(&log_setup_backoff, backoff - 1u, __ATOMIC_RELAXED);
         if (backoff != 1u)
-            return 0;
+            return 0u;
     }
-    if (!__atomic_compare_exchange_n(&log_setup_state, &expected,
-                                     LOG_SETUP_BUSY, 0, __ATOMIC_ACQ_REL,
-                                     __ATOMIC_RELAXED))
-        return 0;
+    if (!__atomic_compare_exchange_n(&log_state, &state,
+                                     state | LOG_SETUP_BUSY, 0,
+                                     __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+        return 0u;
     log = astra_startup_capability(ASTRA_LOG_STARTUP_ADDRESS,
                                    ASTRA_CAPABILITY_LOG);
     if (log == NULL || log->handle == 0u)
@@ -277,15 +311,21 @@ log_setup(void)
         ASTRA_SYSCALL_OK)
         goto failed;
     /* Both handles moved to the service on success. */
-    log_producer_endpoint = producer;
-    log_port = log->handle;
-    astra_message_header_set(&log_doorbell, sizeof(log_doorbell),
-                             ASTRA_LOG_SETUP_MAGIC, ASTRA_LOG_SETUP_VERSION,
-                             ASTRA_LOG_OPERATION_DOORBELL, 0u);
-    astra_log_producer_init(&log_producer, address, log_ring_notify, NULL);
+    log_producer_endpoint = producer; /* an older one stays open: LOG_PRODUCERS */
+    if (generation == 0u) {
+        /* Once: older rings' writers read these in their doorbells. */
+        log_port = log->handle;
+        astra_message_header_set(&log_doorbell, sizeof(log_doorbell),
+                                 ASTRA_LOG_SETUP_MAGIC,
+                                 ASTRA_LOG_SETUP_VERSION,
+                                 ASTRA_LOG_OPERATION_DOORBELL, 0u);
+    }
+    astra_log_producer_init(&log_producers[generation], address,
+                            log_ring_notify, NULL);
     (void)astra_close(area); /* the mapping keeps the area alive */
-    __atomic_store_n(&log_setup_state, LOG_SETUP_READY, __ATOMIC_RELEASE);
-    return 1;
+    state = ((generation + 1u) << LOG_GENERATION_SHIFT) | LOG_SETUP_READY;
+    __atomic_store_n(&log_state, state, __ATOMIC_RELEASE);
+    return state;
 
 failed:
     if (reader != 0u)
@@ -301,15 +341,53 @@ failed:
 unavailable:
     __atomic_store_n(&log_setup_backoff, LOG_SETUP_RETRY_AFTER,
                      __ATOMIC_RELAXED);
-    __atomic_store_n(&log_setup_state, LOG_SETUP_IDLE, __ATOMIC_RELEASE);
-    return 0;
+    __atomic_store_n(&log_state, generation << LOG_GENERATION_SHIFT,
+                     __ATOMIC_RELEASE);
+    return 0u;
+}
+
+/*
+ * The ring of the READY word `state` reported DEAD. Only that setup is
+ * retired: a CAS from exactly that word to IDLE of the same generation. A
+ * stale report (a newer setup is READY, or one is BUSY) changes nothing, and
+ * only the winner backs off, so setup is retried on the 64th call after.
+ */
+static void
+log_ring_died(uint32_t state)
+{
+    uint32_t expected = state;
+
+    if (__atomic_compare_exchange_n(&log_state, &expected,
+                                    state & ~LOG_STATE_MASK, 0,
+                                    __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+        __atomic_store_n(&log_setup_backoff, LOG_SETUP_RETRY_AFTER,
+                         __ATOMIC_RELAXED);
 }
 
 #ifdef ASTRA_LOG_TEST
+uint32_t
+astra_log_test_state(void)
+{
+    return log_state;
+}
+
+struct AstraLogProducer *
+astra_log_test_producer(void)
+{
+    return (log_state & LOG_STATE_MASK) == LOG_SETUP_READY ?
+               log_producer_of(log_state) : NULL;
+}
+
+void
+astra_log_test_ring_died(uint32_t state)
+{
+    log_ring_died(state);
+}
+
 void
 astra_log_test_reset(void)
 {
-    log_setup_state = LOG_SETUP_IDLE;
+    log_state = LOG_SETUP_IDLE;
     log_setup_backoff = 0u;
     log_producer_endpoint = 0u;
     log_port = 0u;
@@ -322,6 +400,7 @@ astra_log_line(uint32_t level, uint32_t stream, const char *text,
 {
     AstraLogRecordFields fields;
     AstraTimeSample now;
+    uint32_t state;
 
     if (text == NULL || level > ASTRA_EVENT_LEVEL_ERROR ||
         stream > ASTRA_LOG_STREAM_MAX || stream == ASTRA_LOG_STREAM_KERNEL)
@@ -332,7 +411,8 @@ astra_log_line(uint32_t level, uint32_t stream, const char *text,
     /* An empty line is recorded: a program's blank line is part of its
      * output. Only the kernel-ring fallback cannot carry one.
      * Debug is live commentary, never stored (event_store.c drops it). */
-    if (level == ASTRA_EVENT_LEVEL_DEBUG || !log_setup())
+    state = level == ASTRA_EVENT_LEVEL_DEBUG ? 0u : log_setup();
+    if (state == 0u)
         return length == 0u ? ASTRA_SYSCALL_OK :
                               log_write_level(text, length, level);
     astra_time_now(&now);
@@ -346,17 +426,11 @@ astra_log_line(uint32_t level, uint32_t stream, const char *text,
     fields.level = (uint8_t)level;
     fields.stream = (uint8_t)stream;
     fields.flags = now.wall_valid ? ASTRA_LOG_FLAG_WALL_VALID : 0u;
-    if (astra_log_producer_write(&log_producer, &fields, text, length) ==
-        ASTRA_LOG_WRITE_DEAD) {
-        /*
-         * The service went away: kernel ring until a later setup works.
-         * ponytail: the dead ring's mapping and producer endpoint are left in
-         * place (another thread may still be inside a write to it), so each
-         * service death leaks one 64 KiB reservation and one handle.
-         */
-        __atomic_store_n(&log_setup_backoff, LOG_SETUP_RETRY_AFTER,
-                         __ATOMIC_RELAXED);
-        __atomic_store_n(&log_setup_state, LOG_SETUP_IDLE, __ATOMIC_RELEASE);
+    if (astra_log_producer_write(log_producer_of(state), &fields, text,
+                                 length) == ASTRA_LOG_WRITE_DEAD) {
+        /* The service went away: kernel ring until a later setup works. The
+         * dead ring stays mapped (LOG_PRODUCERS): other writers may be in it. */
+        log_ring_died(state);
         return length == 0u ? ASTRA_SYSCALL_OK :
                               log_write_level(text, length, level);
     }

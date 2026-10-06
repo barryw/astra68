@@ -116,6 +116,14 @@ publish(AstraLogProducer *producer)
     }
 }
 
+/* The doorbell itself. Never blocks; PEER_DEAD marks the producer dead. */
+static void
+ring_doorbell(AstraLogProducer *producer)
+{
+    if (producer->notify != NULL && producer->notify(producer->context) != 0u)
+        __atomic_store_n(&producer->dead, 1u, __ATOMIC_RELEASE);
+}
+
 /*
  * One doorbell per burst: ring only when this record begins where the
  * consumer stopped, i.e. the ring was empty as far as the service knew. While
@@ -139,8 +147,7 @@ maybe_notify(AstraLogProducer *producer, uint32_t first)
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
     if (load32(&producer->header->consumer_position) != first)
         return;
-    if (producer->notify(producer->context) != 0u)
-        __atomic_store_n(&producer->dead, 1u, __ATOMIC_RELEASE);
+    ring_doorbell(producer);
 }
 
 uint32_t
@@ -172,6 +179,17 @@ astra_log_producer_write(AstraLogProducer *producer,
 
             while (!cas32(&producer->dropped, seen, seen + 1u))
                 seen = __atomic_load_n(&producer->dropped, __ATOMIC_RELAXED);
+            /*
+             * A service that died behind never moves consumer_position, so
+             * the burst doorbell would never ring again and every line would
+             * drop forever. Each drop count is claimed by exactly one CAS
+             * winner above, so exactly one writer rings per interval.
+             */
+            if (seen % ASTRA_LOG_DROP_DOORBELL_INTERVAL == 0u) {
+                ring_doorbell(producer);
+                if (__atomic_load_n(&producer->dead, __ATOMIC_ACQUIRE) != 0u)
+                    return ASTRA_LOG_WRITE_DEAD; /* caller falls back */
+            }
             return ASTRA_LOG_WRITE_DROPPED;
         }
         if (cas32(&producer->reserved, first, first + slots))
