@@ -1326,6 +1326,57 @@ static void test_shared_aliases_are_not_limited_by_process_table_size(void)
            KERNEL_MEMORY_OK);
 }
 
+static void test_time_page_region_is_shared_and_read_only(void)
+{
+    KernelAddressSpace first = {0};
+    KernelAddressSpace second = {0};
+    KernelAddressSpace child = {0};
+    KernelFrameInfo frame;
+    const uint32_t frame_owner = 0x30000002u;
+    const uint32_t address = ASTRA_TIME_PAGE_ADDRESS_START;
+    uint32_t physical;
+    uint32_t word = 0u;
+
+    initialize_test();
+    assert(kernel_vm_enable() == KERNEL_VM_OK);
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_SHARED, frame_owner,
+                               &physical) == KERNEL_MEMORY_OK);
+    *physical_words(physical) = 0x54494d45u;
+    assert(kernel_vm_create_address_space(81u, &first) == KERNEL_VM_OK);
+    assert(kernel_vm_create_address_space(82u, &second) == KERNEL_VM_OK);
+    /* A writable alias of the time page is refused before anything moves. */
+    assert(kernel_vm_map_shared_page(&first, address, physical, frame_owner,
+                                     KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+           KERNEL_VM_INVALID_ARGUMENT);
+    assert(kernel_vm_map_shared_page(&first, address, physical, frame_owner,
+                                     KERNEL_VM_READ) == KERNEL_VM_OK);
+    assert(kernel_vm_map_shared_page(&second, address, physical, frame_owner,
+                                     KERNEL_VM_READ) == KERNEL_VM_OK);
+    assert(page_descriptor(first.root_physical, address) ==
+           (physical | 5u));
+    assert(kernel_vm_read(&second, address, &word, sizeof(word)) ==
+           KERNEL_VM_OK);
+    assert(word == 0x54494d45u);
+    /* fork() carries it read-only into the child. */
+    assert(kernel_vm_clone_address_space(&first, 83u, &child) ==
+           KERNEL_VM_OK);
+    assert(page_descriptor(child.root_physical, address) ==
+           (physical | 5u));
+    assert(kernel_memory_frame_info(physical, &frame));
+    assert(frame.references == 4u);
+    assert(kernel_vm_destroy_address_space(&first) == KERNEL_VM_OK);
+    word = 0u;
+    assert(kernel_vm_read(&second, address, &word, sizeof(word)) ==
+           KERNEL_VM_OK);
+    assert(word == 0x54494d45u);
+    assert(kernel_vm_destroy_address_space(&child) == KERNEL_VM_OK);
+    assert(kernel_vm_destroy_address_space(&second) == KERNEL_VM_OK);
+    assert(kernel_memory_frame_info(physical, &frame));
+    assert(frame.references == 1u);
+    assert(kernel_memory_release(physical, 1u, frame_owner) ==
+           KERNEL_MEMORY_OK);
+}
+
 static void test_dynamic_code_range_is_shared_and_executable(void)
 {
     const uint32_t frame_owner = 0x30000001u;
@@ -1697,6 +1748,7 @@ int main(void)
     test_shared_range_duplicate_validation_is_atomic();
     test_shared_aliases_are_not_limited_by_process_table_size();
     test_dynamic_code_range_is_shared_and_executable();
+    test_time_page_region_is_shared_and_read_only();
     test_shared_table_maps_a_span_with_one_descriptor();
     test_device_aperture_above_the_low_region_is_uncached();
     test_private_reservation_fault_and_decommit();

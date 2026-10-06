@@ -134,7 +134,7 @@ OBJECTS = $(BUILD_DIR)/entry.o $(BUILD_DIR)/vectors.o \
           $(BUILD_DIR)/area.o $(BUILD_DIR)/ring.o \
           $(BUILD_DIR)/elf.o \
           $(BUILD_DIR)/utf8.o \
-          $(BUILD_DIR)/process.o \
+          $(BUILD_DIR)/process.o $(BUILD_DIR)/time_page.o \
           $(BUILD_DIR)/user_test.o \
           $(BUILD_DIR)/dispatch.o $(BUILD_DIR)/worker.o \
           $(BUILD_DIR)/worker_asm.o \
@@ -168,7 +168,7 @@ $(BUILD_DIR)/vectors.o: vectors.S context.h dispatch.h thread.h user_copy.h \
                         irq_latency.h kernel.ld | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) allocation.h bytes.h device.h dispatch.h fault.h format.h interrupt.h irq_latency.h monitor.h process.h thread.h trace.h \
+$(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) allocation.h bytes.h device.h dispatch.h fault.h format.h interrupt.h irq_latency.h monitor.h process.h thread.h time_page.h trace.h \
                        ../include/astra/boot.h ../include/astra/supervisor.h \
                        | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
@@ -283,7 +283,13 @@ $(BUILD_DIR)/process.o: process.c process.h thread.h sync.h port.h area.h ring.h
                         object_cache.h allocation.h \
                         performance.h platform.h \
                         memory.h vm.h exception.h user_copy.h \
-                        qualification.h ../include/astra/syscall.h | $(BUILD_DIR)
+                        qualification.h time_page.h \
+                        ../include/astra/syscall.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/time_page.o: time_page.c time_page.h process.h vm.h memory.h \
+                          allocation.h bytes.h platform.h \
+                          ../include/astra/time_page.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/dispatch.o: dispatch.c dispatch.h process.h thread.h context.h \
@@ -688,6 +694,7 @@ $(BUILD_DIR)/test_ring: tests/test_ring.c ring.c ring.h area.c area.h \
 		tests/test_ring.c -o $@
 
 $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
+			    time_page.c time_page.h ../include/astra/time_page.h \
 			    allocation.c allocation.h object_cache.c object_cache.h \
 			    performance.c performance.h bytes.c bytes.h generation.h \
                             trace.c trace.h \
@@ -723,7 +730,7 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
 		user_copy.c \
 		bytes.c context.c handle.c performance.c thread.c sync.c port.c \
 		area.c ring.c irq.c elf.c trace.c ../common/utf8.c process.c \
-		tests/test_process.c -o $@
+		time_page.c tests/test_process.c -o $@
 
 $(BUILD_DIR)/test_dispatch: tests/test_dispatch.c dispatch.c dispatch.h \
 			     fault.h interrupt.h trace.h \

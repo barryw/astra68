@@ -153,6 +153,9 @@ static const KernelAllocationSiteInfo site_info[KERNEL_ALLOCATION_SITE_COUNT] = 
     },
     [KERNEL_ALLOCATION_SITE_LIBRARY_METADATA] = {
         "library-metadata", KERNEL_ALLOCATION_TAG_PROCESS, 0u, 1u, 0u
+    },
+    [KERNEL_ALLOCATION_SITE_TIME_PAGE] = {
+        "time-page", KERNEL_ALLOCATION_TAG_PROCESS, 0u, 1u, 0u
     }
 };
 

@@ -10,8 +10,10 @@
 #include "pmmu.h"
 #include "port.h"
 #include "process.h"
+#include "time_page.h"
 
 #include <astra/copy_engine.h>
+#include <astra/time_page.h>
 #include <astra/render_batch.h>
 #include <astra/tls.h>
 #include <vesta.h>
@@ -1528,6 +1530,7 @@ static void initialize_test(void)
     timer_on_disable_armed = false;
     timer_on_disable_fired = false;
     kernel_process_init();
+    assert(kernel_time_page_init());
     milestone_calls = 0u;
     initial_image_exits = 0u;
     system_failures = 0u;
@@ -11646,6 +11649,90 @@ static uint32_t stream_exec(const uint8_t *program, uint32_t program_size,
     return status;
 }
 
+static void read_time_page(AstraTimePage *page)
+{
+    assert(kernel_user_copy_from_asm(page, ASTRA_TIME_PAGE_ADDRESS,
+                                     sizeof(*page)) == KERNEL_USER_COPY_OK);
+    assert(page->magic == ASTRA_TIME_PAGE_MAGIC);
+    assert(page->version == ASTRA_TIME_PAGE_VERSION);
+}
+
+static uint64_t time_page_monotonic(const AstraTimePage *page)
+{
+    const AstraTimePageCopy *copy = &page->copy[page->sequence & 1u];
+
+    return (uint64_t)copy->monotonic_high << 32 | copy->monotonic_low;
+}
+
+/*
+ * Every launched process reads the kernel's time page without a syscall,
+ * and the page moves with the tick and the context switch.
+ */
+static void test_time_page_is_mapped_and_follows_the_clock(void)
+{
+    AstraTimePage page;
+    const AstraTimePageCopy *copy;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id = 0u;
+    uint32_t sequence;
+
+    launch_build_image();
+    initialize_test();
+    wall_clock_valid = true;
+    wall_clock_ns = UINT64_C(1755648000) * 1000000000u + 456u;
+    wall_clock_offset = -4 * 3600;
+    wall_clock_zone = 0x45445400u; /* "EDT" */
+    scheduler_test_cycles = 5000u;
+    assert(kernel_process_create_executable(
+               launch_image, sizeof(launch_image), NULL, 0u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+
+    /* Boot published once; switching to the new process published again. */
+    read_time_page(&page);
+    assert(page.sequence == 2u);
+    assert(time_page_monotonic(&page) ==
+           (uint64_t)5000u * KERNEL_PLATFORM_NS_PER_CPU_CYCLE);
+    copy = &page.copy[page.sequence & 1u];
+    assert(copy->flags == ASTRA_TIME_PAGE_WALL_VALID);
+    assert(((uint64_t)copy->wall_high << 32 | copy->wall_low) ==
+           wall_clock_ns);
+    assert(copy->utc_offset == -4 * 3600);
+    assert(copy->zone == 0x45445400u);
+    sequence = page.sequence;
+
+    /* A user-mode timer tick republishes. */
+    scheduler_test_cycles += 1000u;
+    make_frame(frame, 0u, 80u, LAUNCH_VADDR + 0x100u, 0u);
+    assert(kernel_process_on_timer(registers,
+                                   KERNEL_PROCESS_STACK_TOP - 16u, frame,
+                                   &next) == KERNEL_PROCESS_OK);
+    read_time_page(&page);
+    assert(page.sequence == sequence + 1u);
+    assert(time_page_monotonic(&page) ==
+           (uint64_t)6000u * KERNEL_PLATFORM_NS_PER_CPU_CYCLE);
+
+    /* With the clock invalid the page says so rather than answering 1970. */
+    wall_clock_valid = false;
+    scheduler_test_cycles += 1000u;
+    assert(kernel_process_on_timer(registers,
+                                   KERNEL_PROCESS_STACK_TOP - 16u, frame,
+                                   &next) == KERNEL_PROCESS_OK);
+    read_time_page(&page);
+    assert(page.sequence == sequence + 2u);
+    assert(page.copy[page.sequence & 1u].flags == 0u);
+
+    /* A supervisor-mode tick republishes too. */
+    scheduler_test_cycles += 1000u;
+    assert(kernel_process_on_supervisor_timer() == KERNEL_PROCESS_OK);
+    read_time_page(&page);
+    assert(page.sequence == sequence + 3u);
+    assert(time_page_monotonic(&page) ==
+           (uint64_t)8000u * KERNEL_PLATFORM_NS_PER_CPU_CYCLE);
+}
+
 static void test_exec_replaces_one_image_and_preserves_argv(void)
 {
     static const char arguments[] = "vim\0-R\0/work/notes.txt\0";
@@ -11808,6 +11895,12 @@ static void test_exec_replaces_one_image_and_preserves_argv(void)
            ASTRA_SYSCALL_OK);
     assert(next->program_counter == LAUNCH_VADDR + 0x100u);
     assert(next->usp == KERNEL_PROCESS_STACK_TOP);
+    {
+        AstraTimePage after;
+
+        /* The replacement space was given the page before the commit. */
+        read_time_page(&after);
+    }
     assert(next->data[2] == KERNEL_VM_USER_MIN);
     assert(next->data[4] == process_handle);
     assert(host_channel_close_calls == 1u);
@@ -14444,6 +14537,7 @@ int main(void)
     test_streamed_launch_is_large_and_transactional();
     test_dynamic_stream_enters_interpreter_atomically();
     test_streamed_library_is_sparse_atomic_and_reclaimable();
+    test_time_page_is_mapped_and_follows_the_clock();
     test_exec_replaces_one_image_and_preserves_argv();
     test_exec_dynamic_image_enters_interpreter_atomically();
     test_reading_the_stream_is_the_privileged_half();

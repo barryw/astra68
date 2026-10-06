@@ -530,7 +530,7 @@ Run: `sw/kernel/build/test_vm` (rebuilt). Expected: PASS.
 #include "process.h"
 #include "vm.h"
 
-#define KERNEL_TIME_PAGE_OWNER 0x54494d45u /* "TIME" */
+#define KERNEL_TIME_PAGE_OWNER 0x30000002u /* kernel shared-frame namespace; "TIME" collides with area owners */
 
 bool kernel_time_page_init(void);
 void kernel_time_page_update(void);

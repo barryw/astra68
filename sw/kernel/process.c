@@ -39,6 +39,7 @@
 #include "qualification.h"
 #include "ring.h"
 #include "sync.h"
+#include "time_page.h"
 #include "trace.h"
 #include "user_copy.h"
 #include "vm.h"
@@ -1394,6 +1395,7 @@ KernelProcessStatus activate_fast(KernelThread *next, SwitchCause cause,
     if (previous != next) {
         if (kernel_vm_switch(&next_process->address_space) != KERNEL_VM_OK)
             return KERNEL_PROCESS_CORRUPT;
+        kernel_time_page_update();
         runtime_stop(process_for_thread(previous), previous);
         count_switch(previous == NULL ? SWITCH_IDLE : cause);
         if (previous != NULL) {
@@ -4872,6 +4874,9 @@ static KernelProcessStatus exec_replace(
         if (status != KERNEL_PROCESS_OK)
             goto failed;
     }
+    status = kernel_time_page_map(replacement);
+    if (status != KERNEL_PROCESS_OK)
+        goto failed;
 
     /* Everything below is the no-allocation commit. */
     if (host_channels_close_process(process) != ASTRA_SYSCALL_OK) {
@@ -7491,6 +7496,9 @@ static KernelProcessStatus prepare_executable_process(
         argument_bytes, environment, 0u, 0u, &initial_image);
     if (result != KERNEL_PROCESS_OK)
         goto failed;
+    result = kernel_time_page_map(&process->address_space);
+    if (result != KERNEL_PROCESS_OK)
+        goto failed;
     process_name_set(process, arguments, argument_bytes);
     *created = process;
     return KERNEL_PROCESS_OK;
@@ -8505,6 +8513,7 @@ KernelProcessStatus kernel_process_on_timer(const uint32_t *registers,
     uint32_t expired;
     uint8_t highest;
 
+    kernel_time_page_update();
     if (next_context == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     *next_context = NULL;
@@ -8565,6 +8574,7 @@ KernelProcessStatus kernel_process_on_supervisor_timer(void)
     KernelProcessStatus status;
     uint64_t now;
 
+    kernel_time_page_update();
     if (scheduler_initialized == 0u)
         return KERNEL_PROCESS_OK;
     /*
