@@ -180,7 +180,8 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
         try:
             qmp = Qmp(socket_path)
             reader = terminal_gate.TraceReader(
-                qmp.monitor, os.path.join(directory, "ring.bin"))
+                qmp.monitor, os.path.join(directory, "ring.bin"),
+                hostfs_root=os.path.join(directory, "hostfs"))
             end = time.monotonic() + deadline
             last_counts = (0, 0, 0)
             while not booted.is_set() and machine.poll() is None and \

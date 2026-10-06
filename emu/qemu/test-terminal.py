@@ -611,13 +611,35 @@ class Qmp:
             self.button(False)
 
 
+def read_host_syslog(root):
+    """The host copy of the syslog under the hostfs root, or ''.
+
+    docs/SYSTEM_LOG.md: once a program holds LOG (every program the
+    supervisor launches, except the service that serves it), its
+    astra_log/astra_log_line calls leave the kernel trace ring for its own
+    per-process ring, drained here by the events service rather than left
+    for a pmemsave of the ring. The desktop is one such program."""
+    for directory, _, files in os.walk(root):
+        if os.path.basename(directory) == ".astra" and "syslog" in files:
+            with open(os.path.join(directory, "syslog"), "r",
+                      errors="replace") as handle:
+                return handle.read()
+    return ""
+
+
 class TraceReader:
     """The kernel trace ring of a running machine, decoded, through any QMP
-    client with a `monitor(line)` method. Shared by every desktop gate."""
+    client with a `monitor(line)` method. Shared by every desktop gate.
 
-    def __init__(self, monitor, ring_path):
+    `hostfs_root`, when given, is also searched for lines a program only
+    reaches the kernel ring with LOG_WRITE (docs/SYSTEM_LOG.md section 7):
+    desktop_icon() needs both, since the desktop now holds LOG and its own
+    icon-placement line goes to its per-process ring instead."""
+
+    def __init__(self, monitor, ring_path, hostfs_root=None):
         self.monitor = monitor
         self.ring_path = ring_path
+        self.hostfs_root = hostfs_root
         self.names = trace_decode.kernel_event_names(
             os.path.join(ROOT, "sw/kernel/trace.h"))
         self.catalog = trace_decode.load_catalogs([
@@ -675,7 +697,10 @@ class TraceReader:
         a constant in a gate last remembered it."""
         end = time.monotonic() + deadline
         while True:
-            for line in self.said()[0]:
+            lines = self.said()[0]
+            if self.hostfs_root is not None:
+                lines = lines + read_host_syslog(self.hostfs_root).splitlines()
+            for line in lines:
                 match = DESKTOP_ICON.search(line)
                 if match is not None and match.group(1) == bundle:
                     left, top, width, height = (
@@ -691,9 +716,12 @@ class Machine:
                  hostfs_root=None, debug_guest=False):
         # Resolve every source-relative input before starting QEMU.  A missing
         # catalog must not leave a live emulator behind.
+        hostfs_root = hostfs_root or os.environ.get(
+            "ASTRA_HOSTFS_ROOT", os.path.join(socket_directory, "hostfs"))
         self.reader = TraceReader(
             lambda line: self.qmp.monitor(line),
-            os.path.join(socket_directory, "ring.bin"))
+            os.path.join(socket_directory, "ring.bin"),
+            hostfs_root=hostfs_root)
         self.runtime_directory = tempfile.mkdtemp(prefix="astra-qmp-")
         self.qmp_path = os.path.join(self.runtime_directory, "qmp.sock")
         self.gdb_path = (os.path.join(self.runtime_directory, "gdb.sock")
@@ -707,8 +735,6 @@ class Machine:
                     if self.gdb_path else []) +
                    list(extra_args) +
                    ["-drive", "if=none,format=raw,file=%s" % image])
-        hostfs_root = hostfs_root or os.environ.get(
-            "ASTRA_HOSTFS_ROOT", os.path.join(socket_directory, "hostfs"))
         environment = qemu_environment(qemu, hostfs_root=hostfs_root)
         self.process = subprocess.Popen(
             command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -773,6 +799,23 @@ class Machine:
 
     def said(self, after=0):
         return self.reader.said(after)
+
+    def said_with_syslog(self, after=0):
+        """`said(after)`, plus the host syslog (docs/SYSTEM_LOG.md section 7).
+
+        A program holding LOG -- every program the supervisor launches,
+        except the service that serves it -- leaves the kernel ring for its
+        own per-process ring on its very first astra_log/astra_log_line
+        call. A gate that greps `said()` for one of those programs' NOTICE+
+        text (not a DEBUG echo, which always stays on the kernel ring; see
+        TraceReader.desktop_icon) needs this instead, or the text is gone
+        the moment that program's ring is set up.
+        """
+        lines, highest = self.said(after)
+        if self.reader.hostfs_root is not None:
+            lines = lines + read_host_syslog(
+                self.reader.hostfs_root).splitlines()
+        return lines, highest
 
     def sequence(self):
         return self.said()[1]

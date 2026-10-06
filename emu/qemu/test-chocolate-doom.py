@@ -163,7 +163,7 @@ def play_and_quit(machine, log):
             # The lock is the display's, not SDL's warp-to-centre fallback,
             # which hides the cursor and pulls the pointer back too.
             if not any("display: a window locks the pointer" in line
-                       for line in machine.said(0)[0]):
+                       for line in machine.said_with_syslog(0)[0]):
                 raise RuntimeError("Doom's relative mode is not a pointer "
                                    "lock")
     # ENDOOM waits for a key: Doom is still alive.
@@ -240,7 +240,7 @@ def main():
             if faults(machine):
                 raise RuntimeError("a process faulted: %r" %
                                    machine.said(0)[0][-30:])
-            said = machine.said(0)[0]
+            said = machine.said_with_syslog(0)[0]
             errors = [line for line in said if "ERROR:" in line]
             if errors:
                 raise RuntimeError("SDL reported errors: %r" % errors[:5])
