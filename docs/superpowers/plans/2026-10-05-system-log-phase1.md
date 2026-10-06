@@ -836,7 +836,8 @@ typedef struct AstraLogSetup {
 
 /* The doorbell: returns nonzero when the service is gone (PEER_DEAD). */
 typedef uint32_t (*AstraLogNotify)(void *context);
-#define ASTRA_LOG_DOORBELL_MAGIC   0x414c4442u /* "ALDB", 4-byte message */
+/* (Superseded in Task 4: the doorbell is a header-only AstraMessageHeader
+ * message with operation ASTRA_LOG_OPERATION_DOORBELL -- see log_ring.h.) */
 
 /** Process-local producer state. Every field is written only by CAS or by
  * the setup path before `ready` is published. */
@@ -2766,7 +2767,13 @@ In `sw/userspace/services/events/main.c` (no `event_emit.h`, no `astra_log*`):
                                    handles, 2u, &size, &count, &sender) !=
            ASTRA_SYSCALL_OK)
            break;
-       if (size == sizeof(uint32_t) && count == 0u)
+       /* Wire format as built in Task 4 (sw/include/astra/log_ring.h): every
+        * message begins with AstraMessageHeader. A doorbell is a header-only
+        * message with operation ASTRA_LOG_OPERATION_DOORBELL; a setup is
+        * AstraLogSetup with operation ASTRA_LOG_OPERATION_SETUP. Validate the
+        * header (protocol, version, operation) before using either. */
+       if (count == 0u && size == ASTRA_MESSAGE_HEADER_SIZE &&
+           setup.header.operation == ASTRA_LOG_OPERATION_DOORBELL)
            continue; /* a doorbell: the drain below reads every ring */
        if (count != 2u ||
            astra_rt_area_map(handles[1],
