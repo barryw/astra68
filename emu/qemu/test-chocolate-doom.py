@@ -119,9 +119,9 @@ def wait_exit(log, after, seconds):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         log.poll()
-        if any(reason in (3, 4) for _, _, reason in log.exits):
+        if any(reason in (3, 4) for _, _, reason, _ in log.exits):
             raise RuntimeError("a process faulted: %r" % log.exits[-6:])
-        for at, status, reason in log.exits:
+        for at, status, reason, _ in log.exits:
             if at > after and (status, reason) == (0, 1):
                 return at
         time.sleep(0.25)
@@ -220,7 +220,7 @@ def main():
                 log.poll()
                 # Status 0x10 is the remote desktop's retry under QEMU.
                 if any(status not in (0, 0x10) and reason == 1
-                       for _, status, reason in log.exits):
+                       for _, status, reason, _ in log.exits):
                     raise RuntimeError("a program exited with an error: %r"
                                        % (story(log),))
                 if faults(machine):

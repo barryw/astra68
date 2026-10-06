@@ -88,7 +88,7 @@ class Log:
                 self.seen_exits.add(sequence)
                 fields = line.split()
                 self.exits.append((sequence, int(fields[-3], 16),
-                                   int(fields[-2], 16)))
+                                   int(fields[-2], 16), int(fields[-4], 16)))
             text = terminal_gate.RECORD.match(line)
             if text is not None:
                 self.records[sequence] = text.group(2)
@@ -138,7 +138,7 @@ def run_until(log, program, done, seconds):
     deadline = time.monotonic() + seconds
     while True:
         log.poll()
-        if any(reason in (3, 4) for _, _, reason in log.exits):
+        if any(reason in (3, 4) for _, _, reason, _ in log.exits):
             raise RuntimeError("a process faulted: %r" % log.exits)
         errors = log.find(r"ERROR: (.*)")
         if errors:
@@ -153,11 +153,29 @@ def run_until(log, program, done, seconds):
         time.sleep(0.25)
 
 
-def exited_clean_after(log, sequence):
-    # Other processes exit too (remote desktop retries with no host helper);
-    # this program's exit is the clean one after its last line.
+SYSLOG_PID = re.compile(r"\[([0-9a-f]{8})\] \w+: ")
+
+
+def exited_clean_after(log, found):
+    """Whether the process that logged @p found, a (sequence, match) from
+    first(), has exited clean.
+
+    Other processes exit too (remote desktop retries with no host helper).
+    A syslog line names its process, and is matched to that process's own
+    exit: the events service drains below applications, so a program's last
+    lines can reach the file after its exit is in the trace ring, and the
+    synthetic sequence they get then is not after the exit's. A kernel-ring
+    line has no pid here, and its exit is the clean one after it."""
+    sequence, match = found
+    if sequence is None:
+        return False
+    owner = SYSLOG_PID.search(match.string)
+    if owner is not None:
+        pid = int(owner.group(1), 16)
+        return any((process, status, reason) == (pid, 0, 1)
+                   for _, status, reason, process in log.exits)
     return any(at > sequence and (status, reason) == (0, 1)
-               for at, status, reason in log.exits)
+               for at, status, reason, _ in log.exits)
 
 
 def first(log, pattern):
@@ -175,8 +193,7 @@ def test_testtimer(log):
     last = r"Delay 1 second = (\d+) ms in ticks, (\d+) ms in ticks64, " \
            r"([0-9.]+) ms according to performance counter"
     run_until(log, "testtimer",
-              lambda log: (first(log, last)[0] is not None and
-                           exited_clean_after(log, first(log, last)[0])),
+              lambda log: exited_clean_after(log, first(log, last)),
               150)
 
     resolution = first(log, r"Timer resolution: desired = 1 ms, "
@@ -217,8 +234,7 @@ def test_testtimer(log):
 def test_testthread(log):
     finished = r"Thread '#2' exiting!"
     run_until(log, "testthread",
-              lambda log: (first(log, finished)[0] is not None and
-                           exited_clean_after(log, first(log, finished)[0])),
+              lambda log: exited_clean_after(log, first(log, finished)),
               90)
     # The program raises SIGTERM right after creating thread #2, so the
     # handler's line and #2's first line may come in either order.
