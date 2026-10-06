@@ -23,6 +23,7 @@
     X("ENTROPY", RAW) \
     X("POSIX_PROCESS", RAW) \
     X("APP_LAUNCH", RAW) \
+    X("LOG", RAW) \
     X("APPS", R) \
     X("LIBS", R) \
     X("STORE", RW) \
