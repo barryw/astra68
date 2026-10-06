@@ -177,27 +177,43 @@ log_write_level(const void *bytes, uint32_t length, uint32_t level)
  * ponytail: one producer per successful setup, never reused, so a late writer
  * can only write into the dead ring it reserved in. A dead ring's mapping and
  * producer endpoint stay too (64 KiB and one handle each). After 8 setups the
- * service has died 8 times and the process stays on LOG_WRITE for good, which
- * bounds that leak at 512 KiB of reservation.
+ * service has died (or refused the ring) 8 times and the process stays on
+ * LOG_WRITE for good, which bounds that leak at 512 KiB of reservation.
  */
-#define LOG_PRODUCERS    8u
+#define LOG_PRODUCERS    ASTRA_LOG_SETUPS_MAX
 
 static uint32_t log_state;
 static uint32_t log_setup_backoff;
 static AstraLogProducer log_producers[LOG_PRODUCERS];
-static uint32_t log_producer_endpoint; /* held only so death reaches the service */
+/* Each producer's own endpoint, its doorbell context: held so the process's
+ * death reaches the service, and polled to see the service let go of it. */
+static uint32_t log_producer_endpoints[LOG_PRODUCERS];
 static uint32_t log_port;
 static AstraMessageHeader log_doorbell; /* written by setup before READY */
 
-/* The doorbell. Never blocks: a full queue is WOULD_BLOCK, which means a
- * wake is already pending. Only PEER_DEAD reports the service gone. */
+/*
+ * The doorbell. Never blocks: a full queue is WOULD_BLOCK, which means a
+ * wake is already pending. PEER_DEAD from the port reports the service gone.
+ *
+ * On the drop path the ring is full, and that is also what a ring the service
+ * refused or reaped looks like: it closed the consumer end, and its port
+ * still takes doorbells. So there, and only there (once per
+ * ASTRA_LOG_DROP_DOORBELL_INTERVAL drops), the producer endpoint is polled:
+ * PEER_DEAD or CLOSED means nobody will ever read this ring.
+ */
 static uint32_t
-log_ring_notify(void *context)
+log_ring_notify(void *context, uint32_t dropping)
 {
-    (void)context;
-    return astra_port_send(log_port, &log_doorbell, sizeof(log_doorbell),
-                           NULL, 0u) ==
-                   ASTRA_SYSCALL_PEER_DEAD ? 1u : 0u;
+    uint32_t status;
+
+    if (astra_port_send(log_port, &log_doorbell, sizeof(log_doorbell), NULL,
+                        0u) == ASTRA_SYSCALL_PEER_DEAD)
+        return 1u;
+    if (!dropping)
+        return 0u;
+    status = astra_wait_one(*(const uint32_t *)context, 0u /* poll */, NULL);
+    return status == ASTRA_SYSCALL_PEER_DEAD ||
+           status == ASTRA_SYSCALL_CLOSED ? 1u : 0u;
 }
 
 static void
@@ -311,7 +327,7 @@ log_setup(void)
         ASTRA_SYSCALL_OK)
         goto failed;
     /* Both handles moved to the service on success. */
-    log_producer_endpoint = producer; /* an older one stays open: LOG_PRODUCERS */
+    log_producer_endpoints[generation] = producer; /* older ones stay open */
     if (generation == 0u) {
         /* Once: older rings' writers read these in their doorbells. */
         log_port = log->handle;
@@ -321,7 +337,8 @@ log_setup(void)
                                  ASTRA_LOG_OPERATION_DOORBELL, 0u);
     }
     astra_log_producer_init(&log_producers[generation], address,
-                            log_ring_notify, NULL);
+                            log_ring_notify,
+                            &log_producer_endpoints[generation]);
     (void)astra_close(area); /* the mapping keeps the area alive */
     state = ((generation + 1u) << LOG_GENERATION_SHIFT) | LOG_SETUP_READY;
     __atomic_store_n(&log_state, state, __ATOMIC_RELEASE);
@@ -389,7 +406,8 @@ astra_log_test_reset(void)
 {
     log_state = LOG_SETUP_IDLE;
     log_setup_backoff = 0u;
-    log_producer_endpoint = 0u;
+    for (uint32_t index = 0u; index < LOG_PRODUCERS; ++index)
+        log_producer_endpoints[index] = 0u;
     log_port = 0u;
 }
 #endif
@@ -428,8 +446,9 @@ astra_log_line(uint32_t level, uint32_t stream, const char *text,
     fields.flags = now.wall_valid ? ASTRA_LOG_FLAG_WALL_VALID : 0u;
     if (astra_log_producer_write(log_producer_of(state), &fields, text,
                                  length) == ASTRA_LOG_WRITE_DEAD) {
-        /* The service went away: kernel ring until a later setup works. The
-         * dead ring stays mapped (LOG_PRODUCERS): other writers may be in it. */
+        /* The service went away, or let go of this ring: kernel ring until a
+         * later setup works. The dead ring stays mapped (LOG_PRODUCERS):
+         * other writers may be in it. */
         log_ring_died(state);
         return length == 0u ? ASTRA_SYSCALL_OK :
                               log_write_level(text, length, level);

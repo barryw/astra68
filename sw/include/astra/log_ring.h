@@ -89,6 +89,10 @@ _Static_assert(sizeof(AstraLogRecordFields) == ASTRA_LOG_RECORD_HEADER_SIZE,
 #define ASTRA_LOG_IDENT_MAX        32u
 #define ASTRA_LOG_OPERATION_SETUP    1u
 #define ASTRA_LOG_OPERATION_DOORBELL 2u
+/* The most setups one process ever makes: one per service death, each with a
+ * ring of its own that stays mapped (runtime/src/log.c). The service refuses
+ * a setup from a pid already holding this many. */
+#define ASTRA_LOG_SETUPS_MAX       8u
 
 typedef struct AstraLogSetup {
     AstraMessageHeader header;  /* operation ASTRA_LOG_OPERATION_SETUP */
@@ -101,8 +105,14 @@ typedef struct AstraLogSetup {
     char     ident[ASTRA_LOG_IDENT_MAX];   /* NUL-terminated */
 } AstraLogSetup;
 
-/* The doorbell: returns nonzero when the service is gone (PEER_DEAD). */
-typedef uint32_t (*AstraLogNotify)(void *context);
+/*
+ * The doorbell: returns nonzero when the service is gone. `dropping` is
+ * nonzero on the drop path (a full ring, every
+ * ASTRA_LOG_DROP_DOORBELL_INTERVAL drops), where the caller may also check
+ * that the service still holds this ring's consumer end: a service that
+ * refused or abandoned the ring closes it while its port lives on.
+ */
+typedef uint32_t (*AstraLogNotify)(void *context, uint32_t dropping);
 
 /** Process-local producer state. Every field is written only by CAS, by an
  * atomic store (`dead`), or by the setup path before the producer is used. */

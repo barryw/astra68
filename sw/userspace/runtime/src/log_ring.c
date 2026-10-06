@@ -116,11 +116,13 @@ publish(AstraLogProducer *producer)
     }
 }
 
-/* The doorbell itself. Never blocks; PEER_DEAD marks the producer dead. */
+/* The doorbell itself. Never blocks; a gone service marks the producer
+ * dead. `dropping` tells the callback this is the drop path. */
 static void
-ring_doorbell(AstraLogProducer *producer)
+ring_doorbell(AstraLogProducer *producer, uint32_t dropping)
 {
-    if (producer->notify != NULL && producer->notify(producer->context) != 0u)
+    if (producer->notify != NULL &&
+        producer->notify(producer->context, dropping) != 0u)
         __atomic_store_n(&producer->dead, 1u, __ATOMIC_RELEASE);
 }
 
@@ -147,7 +149,7 @@ maybe_notify(AstraLogProducer *producer, uint32_t first)
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
     if (load32(&producer->header->consumer_position) != first)
         return;
-    ring_doorbell(producer);
+    ring_doorbell(producer, 0u);
 }
 
 uint32_t
@@ -186,7 +188,7 @@ astra_log_producer_write(AstraLogProducer *producer,
              * winner above, so exactly one writer rings per interval.
              */
             if (seen % ASTRA_LOG_DROP_DOORBELL_INTERVAL == 0u) {
-                ring_doorbell(producer);
+                ring_doorbell(producer, 1u);
                 if (__atomic_load_n(&producer->dead, __ATOMIC_ACQUIRE) != 0u)
                     return ASTRA_LOG_WRITE_DEAD; /* caller falls back */
             }

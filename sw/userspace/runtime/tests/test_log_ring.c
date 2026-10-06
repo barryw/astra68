@@ -9,11 +9,13 @@ static uint8_t area[ASTRA_LOG_RING_AREA_SIZE];
 static uint32_t notifications[16];
 static uint32_t notification_count;
 static uint32_t notify_result; /* nonzero: the service is gone */
+static uint32_t notify_dropping; /* `dropping` of the last notify */
 
 static uint32_t
-record_notify(void *context)
+record_notify(void *context, uint32_t dropping)
 {
     (void)context;
+    notify_dropping = dropping;
     notifications[notification_count % 16u] =
         ((AstraBulkRingHeader *)(void *)area)->producer_position;
     ++notification_count;
@@ -86,6 +88,7 @@ test_round_trip_and_notify_once_per_burst(void)
            ASTRA_LOG_WRITE_OK);
     assert(header->producer_position == 1u);
     assert(notification_count == 1u && notifications[0] == 1u);
+    assert(notify_dropping == 0u); /* the burst doorbell, not the drop path */
     /* Consumer has not moved: the second line in the burst does not notify. */
     assert(astra_log_producer_write(&producer, &value, "second", 6u) ==
            ASTRA_LOG_WRITE_OK);
@@ -181,7 +184,7 @@ test_drops_ring_the_doorbell_and_find_the_service_dead(void)
          ++index)
         assert(astra_log_producer_write(&producer, &value, "line", 4u) ==
                ASTRA_LOG_WRITE_DROPPED);
-    assert(notification_count == 3u);
+    assert(notification_count == 3u && notify_dropping == 1u);
     notify_result = 1u;
     /* The next drop is the 3*INTERVAL+1-th: it rings and finds it gone. */
     assert(astra_log_producer_write(&producer, &value, "line", 4u) ==

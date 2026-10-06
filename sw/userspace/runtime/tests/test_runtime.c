@@ -43,6 +43,8 @@ static struct {
     AstraLogSetup last_setup;
     uint32_t port_send_result;
     uint32_t doorbell_result;
+    uint32_t producer_polls;  /* WAIT_ONE on the producer endpoint */
+    uint32_t producer_wait_result;
     volatile uint8_t *area;
 } fake;
 
@@ -175,6 +177,14 @@ fake_log_syscall(uint32_t number, uint32_t argument0, uint32_t argument1,
     case ASTRA_SYSCALL_CLOSE:
         result->status = ASTRA_SYSCALL_OK;
         ++fake.closed_handles;
+        return;
+    case ASTRA_SYSCALL_WAIT_ONE:
+        if (argument0 != FAKE_PRODUCER)
+            return;
+        /* A poll: the deadline is zero, never a wait. */
+        assert(argument1 == 0u && argument2 == 0u);
+        ++fake.producer_polls;
+        result->status = fake.producer_wait_result;
         return;
     case ASTRA_SYSCALL_AREA_UNMAP:
         result->status = ASTRA_SYSCALL_OK;
@@ -2510,6 +2520,7 @@ reset_fake_kernel(void)
     fake.area = fake_areas[0];
     fake.port_send_result = ASTRA_SYSCALL_OK;
     fake.doorbell_result = ASTRA_SYSCALL_OK;
+    fake.producer_wait_result = ASTRA_SYSCALL_OK;
     mock_status = ASTRA_SYSCALL_OK;
     memset(&fake_time_page, 0, sizeof(fake_time_page));
     fake_time_page.magic = ASTRA_TIME_PAGE_MAGIC;
@@ -2779,6 +2790,40 @@ test_log_line_gives_up_after_eight_service_deaths(void)
     assert(fake.log_writes == writes + 200u);
 }
 
+/*
+ * The service refused the ring, or reaped it as corrupt: it closed the
+ * consumer end while its port lives on, so doorbells still succeed and the
+ * ring only fills. The drop doorbell also polls the producer endpoint; once
+ * that says the consumer is gone, lines fall back to LOG_WRITE. A healthy
+ * ring's burst doorbell never polls.
+ */
+static void
+test_log_line_falls_back_when_consumer_closed(void)
+{
+    uint32_t writes;
+
+    reset_fake_kernel();
+    log_x();
+    assert(fake.doorbells == 1u && fake.producer_polls == 0u);
+    for (uint32_t index = 1u; index < ASTRA_LOG_RING_CAPACITY; ++index)
+        log_x();
+    assert(fake.producer_polls == 0u && fake.log_writes == 0u);
+    fake.producer_wait_result = ASTRA_SYSCALL_PEER_DEAD;
+    log_x();                         /* first drop: rings, polls, finds it */
+    assert(fake.producer_polls == 1u);
+    assert(fake.log_writes == 1u);   /* that line fell back */
+    writes = fake.log_writes;
+    log_x();
+    assert(fake.log_writes == writes + 1u && fake.producer_polls == 1u);
+    /* A live consumer (the poll answers OK or TIMED_OUT) keeps the ring. */
+    reset_fake_kernel();
+    for (uint32_t index = 0u; index < ASTRA_LOG_RING_CAPACITY; ++index)
+        log_x();
+    fake.producer_wait_result = ASTRA_SYSCALL_TIMED_OUT;
+    log_x();
+    assert(fake.producer_polls == 1u && fake.log_writes == 0u);
+}
+
 static void
 test_log_line_late_writer_stays_in_its_own_ring(void)
 {
@@ -2848,6 +2893,7 @@ main(void)
     test_existing_astra_log_routes_through_ring();
     test_log_line_stale_death_leaves_new_ring_alone();
     test_log_line_gives_up_after_eight_service_deaths();
+    test_log_line_falls_back_when_consumer_closed();
     test_log_line_late_writer_stays_in_its_own_ring();
     return 0;
 }
