@@ -887,7 +887,10 @@ def main():
                                      exact=True)[0] is None:
                 raise RuntimeError("Ctrl-C did not end loopwave clean: %r" %
                                    machine.said(before)[0][-20:])
-            said = "\n".join(machine.said(before)[0])
+            # loopwave holds LOG (docs/SYSTEM_LOG.md section 7): SDL's own
+            # "Using audio driver" line leaves the kernel ring for the host
+            # syslog on loopwave's first log call.
+            said = "\n".join(machine.said_with_syslog(before)[0])
             if "Using audio driver: astra" not in said:
                 raise RuntimeError("loopwave did not use the Astra driver")
             with host.lock:

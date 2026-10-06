@@ -831,6 +831,16 @@ class Machine:
                 highest = max(highest, int(match.group(1)))
         return highest
 
+    def trace_with_syslog(self):
+        """`trace()`, plus the host syslog (docs/SYSTEM_LOG.md section 7),
+        for callers that read `trace()` directly rather than through
+        `said()`'s continuation-joined view. See `said_with_syslog`."""
+        lines = self.trace()
+        if self.reader.hostfs_root is not None:
+            lines = lines + read_host_syslog(
+                self.reader.hostfs_root).splitlines()
+        return lines
+
     def wait_for_trace_text(self, text, deadline, after=0):
         end = time.monotonic() + deadline
         while True:
@@ -839,6 +849,13 @@ class Machine:
                 if (match is not None and int(match.group(1)) > after and
                         text in line):
                     return True
+            # A program holding LOG moves its NOTICE+ text off the kernel
+            # ring the first time it logs (docs/SYSTEM_LOG.md section 7);
+            # `after` has no meaning in the syslog, so this just requires
+            # presence, like `said_with_syslog`.
+            if self.reader.hostfs_root is not None and \
+                    text in read_host_syslog(self.reader.hostfs_root):
+                return True
             if time.monotonic() >= end:
                 return False
             time.sleep(0.25)

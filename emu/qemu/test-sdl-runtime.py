@@ -61,6 +61,18 @@ class Log:
         # Newest record of any kind seen: the ring also carries kernel
         # events, so text records alone cannot say whether it wrapped.
         self.newest = 0
+        # testtimer/testthread hold LOG (docs/SYSTEM_LOG.md section 7): their
+        # SDL_Log lines leave the kernel ring for the host syslog on the
+        # first log call. syslog has no ring sequence of its own, so each
+        # new line gets a synthetic one: always just above the ring's
+        # current high-water mark (so a later, real process_exit -- which
+        # stays a kernel-ring event -- still reads as "after" it), and
+        # always strictly increasing even across polls where the ring stays
+        # quiet, via a counter that never resets. syslog_seen is a line
+        # count, not a byte offset, so the file is read whole but a line
+        # already given a sequence is never reprocessed.
+        self.syslog_seen = 0
+        self.syslog_counter = 0
 
     def poll(self):
         highest = self.newest
@@ -86,6 +98,18 @@ class Log:
                 return
             raise RuntimeError("the trace ring wrapped between polls "
                                "(%d to %d)" % (highest, oldest))
+        if self.machine.reader.hostfs_root is not None:
+            lines = terminal_gate.read_host_syslog(
+                self.machine.reader.hostfs_root).splitlines()
+            for text in lines[self.syslog_seen:]:
+                self.syslog_counter += 1
+                # Never an integer, so this can never collide with a real
+                # (always-integer) kernel-ring sequence seen on a later
+                # poll; the counter never resets, so two quiet-ring polls in
+                # a row still hand out strictly increasing keys.
+                self.records[self.newest + 0.5 +
+                            self.syslog_counter * 1e-6] = text
+            self.syslog_seen = len(lines)
 
     def lines(self, after=0):
         lines, pending = [], ""

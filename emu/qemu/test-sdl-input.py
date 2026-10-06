@@ -209,18 +209,34 @@ def test_testkeys(machine):
     last = "Scancode #511"
     deadline = time.monotonic() + 60
     while True:
-        said = "\n".join(machine.said(0)[0])
-        ends = [int(record.group(1)) for record in
-                map(terminal_gate.TRACE_RECORD.match, machine.trace())
-                if record is not None and last in record.string]
-        if all(text in said for text in wanted) and ends:
+        # testkeys holds LOG (docs/SYSTEM_LOG.md section 7): its SDL_Log
+        # scancode table leaves the kernel ring for the host syslog on its
+        # first log call, so said_with_syslog is required to see it, and
+        # with it gone from the ring there is no trace sequence number to
+        # anchor the table's last line -- trace_sequence() here instead,
+        # taken once the whole table is confirmed present.
+        said = "\n".join(machine.said_with_syslog(0)[0])
+        if all(text in said for text in wanted) and last in said:
             break
         if time.monotonic() >= deadline:
+            # Known gap, not a gate-script bug: testkeys logs all 512
+            # scancodes in a tight loop with no syscall between them (it is
+            # upstream, unmodified SDL2 test/testkeys.c), so the whole burst
+            # lands before the kernel ever schedules the events service
+            # (lower priority than an application since this branch's log
+            # work, docs/SYSTEM_LOG.md section 3 Priority). The per-process
+            # ring holds ASTRA_LOG_RING_CAPACITY (256, sw/include/astra/
+            # log_ring.h) lines; testkeys reliably stops at "Scancode #255"
+            # with no "[N lines dropped]" marker ever appearing (confirmed:
+            # the ring's own drop counter, log_ring.c, is never drained and
+            # reported once testkeys exits). "Scancode #511" is therefore
+            # unreachable until that drain-on-exit gap is fixed; this is not
+            # a timeout to extend.
             raise RuntimeError("testkeys logged no scancode table: %r" %
                                machine.recent_serial(30))
         time.sleep(0.2)
     # Its own exit follows the table's last line.
-    wait_clean_exit(machine, ends[0], "testkeys")
+    wait_clean_exit(machine, machine.trace_sequence(), "testkeys")
 
 
 def main():
