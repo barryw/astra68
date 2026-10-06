@@ -24,6 +24,14 @@ It asserts four properties in one pass:
     ring, and the events service appends it to the host's
     WORK:.astra/syslog, named `supervisor` (docs/SYSTEM_LOG.md section 5).
 
+  * kernel-ring lines are named from the ring itself (PROCESS_START): the
+    supervisor and every boot service by name, never `?`.
+  * a restarted events service resumes where the last one stopped. The
+    gate's manifest makes the service a user one so `service restart
+    events` may kill it (a required service is the machine's and refuses);
+    the host syslog then holds the `restarted` marker, every line once, the
+    refusal logged just before the kill, and one logged after it.
+
 The shell's per-command activity clause is gone with the shell that emitted
 it: zsh emits no typed events, so there is nothing for it to tag.
 """
@@ -41,6 +49,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import astra_image
 
 COMMAND = "open /apps/Nope.app"
+RESTART_COMMAND = "open /apps/Nope.app; service restart events"
+RESTARTED = "--- events service restarted "
+# The same service, not required: a user may restart it.
+MANIFEST = astra_image.STARTUP_MANIFEST.replace(
+    "serves EVENTS:r EVENT_CONTROL LOG required priority=12",
+    "serves EVENTS:r EVENT_CONTROL LOG priority=12")
 REFUSAL = "open: application launch failed"
 SYSLOG_LINE = re.compile(
     r"^\S+ error supervisor\[00000001\] log: application launch:\d+: "
@@ -69,6 +83,21 @@ def read_host_syslog(root):
                       errors="replace") as handle:
                 return handle.read()
     return ""
+
+
+def wait_for_syslog(directory, refusals):
+    """The host syslog once it holds `refusals` refusal lines, or after 30 s.
+
+    The kernel ring is not waitable: the events service sweeps it at least
+    once a second."""
+    syslog = ""
+    limit = time.monotonic() + 30.0
+    while time.monotonic() < limit:
+        syslog = read_host_syslog(os.path.join(directory, "hostfs"))
+        if len(SYSLOG_LINE.findall(syslog)) >= refusals:
+            break
+        time.sleep(0.5)
+    return syslog
 
 
 def save_ring(machine, path):
@@ -104,7 +133,9 @@ def run(qemu, rom, image, catalog, deadline):
     # image that happens to be lying around.
     scratch = os.path.join(directory, "card.img")
     shutil.copyfile(image, scratch)
-    astra_image.install(scratch, catalog)
+    if MANIFEST == astra_image.STARTUP_MANIFEST:
+        raise RuntimeError("the events manifest line changed: update MANIFEST")
+    astra_image.install(scratch, catalog, manifest_text=MANIFEST)
     machine = gate.Machine(qemu, rom, scratch, directory)
     boot = {}
     wait_for_serial = machine.wait_for_serial
@@ -130,15 +161,23 @@ def run(qemu, rom, image, catalog, deadline):
         machine.settle()
         # The kernel ring is not waitable: the events service sweeps it at
         # least once a second.
-        syslog = ""
-        limit = time.monotonic() + 30.0
-        while time.monotonic() < limit:
-            syslog = read_host_syslog(os.path.join(directory, "hostfs"))
-            if SYSLOG_LINE.search(syslog):
-                break
-            time.sleep(0.5)
-        return (boot["ring"], save_ring(machine, ring_path), machine.log,
-                syslog)
+        syslog = wait_for_syslog(directory, 1)
+        ring = save_ring(machine, ring_path)
+        # A refusal, then the service killed before it can drain it, then
+        # a refusal the new instance must write.
+        before = machine.sequence()
+        machine.qmp.type_line(RESTART_COMMAND)
+        if machine.wait_for_text(REFUSAL, 60.0, before)[0] is None:
+            raise RuntimeError("the shell never ran %r" % RESTART_COMMAND)
+        machine.settle()
+        before = machine.sequence()
+        machine.qmp.type_line(COMMAND)
+        if machine.wait_for_text(REFUSAL, 60.0, before)[0] is None:
+            raise RuntimeError("the shell never refused %r after the "
+                               "restart" % COMMAND)
+        machine.settle()
+        restarted = wait_for_syslog(directory, 3)
+        return (boot["ring"], ring, machine.log, syslog, restarted)
     finally:
         machine.close()
 
@@ -164,7 +203,7 @@ def main():
     names = trace_decode.kernel_event_names(
         os.path.join(ROOT, "sw/kernel/trace.h"))
 
-    boot_ring, ring, serial, syslog = run(
+    boot_ring, ring, serial, syslog, restarted = run(
         arguments.qemu, arguments.rom, arguments.image, arguments.catalog,
         arguments.boot_deadline)
     _, boot_lines = trace_decode.decode(boot_ring, catalog, names)
@@ -211,6 +250,35 @@ def main():
         print("syslog: %s" % found[-1])
     if not syslog.startswith("--- boot "):
         failures.append("the host syslog does not begin with a boot marker")
+    # Named from the ring: no `?` for anything that started this boot.
+    unnamed = [line for line in syslog.splitlines() if " ?[" in line]
+    if unnamed:
+        failures.append("unnamed kernel-ring lines: %r" % unnamed[:3])
+    if not re.search(r"^\S+ \S+ desktop\[[0-9a-f]{8}\] ", syslog, re.M):
+        failures.append("no line names the desktop service")
+
+    # The restart: a marker, the line logged just before the kill, the line
+    # logged after it, and nothing written twice.
+    body = restarted.splitlines()
+    markers = [line for line in body if line.startswith(RESTARTED)]
+    if len(markers) != 1:
+        failures.append("%d restart markers in the host syslog" %
+                        len(markers))
+    count = len(SYSLOG_LINE.findall(restarted))
+    if count != 3:
+        failures.append("%d refusal lines across the restart, expected 3" %
+                        count)
+    lines = [line for line in body if not line.startswith("--- ")]
+    repeated = sorted({line for line in lines if lines.count(line) > 1})
+    if repeated:
+        failures.append("lines written twice across the restart: %r" %
+                        repeated[:3])
+    if markers and not re.search(
+            r"supervisor\[00000001\] log: launch /services/events ",
+            restarted.split(markers[0], 1)[1]):
+        failures.append("no launch line for the restarted service")
+    for line in body[-12:]:
+        print("restart: %s" % line)
 
     print("ring: %d records, %d wraps, %d dropped" %
           (len(lines), header["wraps"], header["dropped"]))
