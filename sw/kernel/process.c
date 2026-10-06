@@ -1096,7 +1096,9 @@ static void process_name_set(KernelProcess *process,
  * ASTRA_EVENT_MESSAGE_PROCESS_START: the process's name, chunked the way a
  * user text line is, so a log reader learns who a pid is from the ring
  * itself instead of asking a service that may not be up yet. One
- * interrupt-disabled window keeps a chain's records consecutive.
+ * interrupt-disabled window keeps a chain's records consecutive. Each
+ * record's `activity` is its chunk's byte offset in the name, so a reader
+ * that meets a second half whose head the ring overwrote can tell.
  */
 static void trace_process_start(const KernelProcess *process)
 {
@@ -1117,7 +1119,7 @@ static void trace_process_start(const KernelProcess *process)
             flags |= KERNEL_TRACE_FLAG_CONTINUED;
         }
         (void)kernel_trace_write_user(
-            ASTRA_EVENT_MESSAGE_PROCESS_START, process->id, 0u, 0u, flags,
+            ASTRA_EVENT_MESSAGE_PROCESS_START, process->id, 0u, offset, flags,
             chunk != 0u ? process->name + offset : NULL, chunk);
         offset += chunk;
     } while (offset < length);
@@ -10738,7 +10740,10 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         uint32_t length = thread->context.data[4];
         int copy_status;
 
-        if (message == 0u || message == ASTRA_EVENT_MESSAGE_PROCESS_START ||
+        /* The reserved ids above UNSTRUCTURED are the kernel's to say. */
+        if (message == 0u ||
+            (message > ASTRA_EVENT_MESSAGE_UNSTRUCTURED &&
+             message <= ASTRA_EVENT_MESSAGE_RESERVED_MAX) ||
             flags > UINT16_MAX ||
             (flags & ~(uint32_t)ASTRA_EVENT_FLAG_MASK) != 0u ||
             (flags & ASTRA_EVENT_LEVEL_MASK) > ASTRA_EVENT_LEVEL_ERROR ||

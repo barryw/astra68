@@ -9847,7 +9847,9 @@ static uint32_t assert_process_started(uint32_t after, uint32_t process_id,
         assert(index < count);
         assert(event->process == process_id);
         assert(event->message == ASTRA_EVENT_MESSAGE_PROCESS_START);
-        assert(event->thread == 0u && event->activity == 0u);
+        /* activity is the chunk's byte offset in the name: a reader can
+         * tell a chain's head from a second half orphaned by a wrap. */
+        assert(event->thread == 0u && event->activity == length);
         assert((event->flags & ASTRA_EVENT_LEVEL_MASK) ==
                ASTRA_EVENT_LEVEL_INFO);
         assert((event->flags & ASTRA_EVENT_FLAG_INLINE_STRING) != 0u);
@@ -14079,6 +14081,20 @@ static void test_process_start_names_each_image(void)
            KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(trace_cursor_now() == after);
+    /* Nor anything else in the kernel's reserved range. */
+    for (uint32_t message = ASTRA_EVENT_MESSAGE_PROCESS_START + 1u;
+         message <= ASTRA_EVENT_MESSAGE_RESERVED_MAX; ++message) {
+        registers[0] = ASTRA_SYSCALL_LOG_WRITE;
+        registers[1] = message;
+        registers[2] = ASTRA_EVENT_LEVEL_INFO |
+                       ASTRA_EVENT_FLAG_INLINE_STRING;
+        registers[3] = user_text;
+        registers[4] = sizeof(line) - 1u;
+        assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+        assert(trace_cursor_now() == after);
+    }
 
     /* Fork: the child carries the parent's name. */
     after = trace_cursor_now();

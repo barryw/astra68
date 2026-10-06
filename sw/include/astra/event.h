@@ -108,7 +108,8 @@
  * A process began running an image. Written by the kernel, never by a
  * program: `ASTRA_SYSCALL_LOG_WRITE` refuses this id.
  *
- * `process` is the process; `thread` is zero; the level is
+ * `process` is the process; `thread` is zero; `activity` is the record's
+ * byte offset in the name (zero for the chain's first record); the level is
  * ::ASTRA_EVENT_LEVEL_INFO; ::ASTRA_EVENT_FLAG_INLINE_STRING is set and the
  * payload is the process name (argv[0], at most ASTRA_PROC_NAME_MAX - 1
  * bytes, no NUL). A name longer than ::ASTRA_EVENT_ARGUMENT_MAX is a chain:
@@ -122,7 +123,7 @@
  * anew.
  */
 #define ASTRA_EVENT_MESSAGE_PROCESS_START 2u
-/** Highest message id reserved by this header; application message ids (descriptor addresses) start above it. */
+/** Highest message id reserved by this header; application message ids (descriptor addresses) start above it. `ASTRA_SYSCALL_LOG_WRITE` refuses every reserved id above ::ASTRA_EVENT_MESSAGE_UNSTRUCTURED. */
 #define ASTRA_EVENT_MESSAGE_RESERVED_MAX 15u
 
 /** Byte size of ::AstraEventDrained, fixed by the ABI. */
