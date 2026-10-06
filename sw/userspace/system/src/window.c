@@ -51,7 +51,7 @@ static AstraResult command(AstraWindow *window, uint32_t action,
     AstraResult result;
 
     if (!window_live(window) || action < ASTRA_GUI_WINDOW_QUERY ||
-        action > ASTRA_GUI_WINDOW_FULLSCREEN ||
+        action > ASTRA_GUI_WINDOW_WARP_POINTER ||
         (attachment != NULL && *attachment == ASTRA_INVALID_HANDLE) ||
         !astra_utf8_validate(title, title_length, 0u) ||
         title_length > ASTRA_WINDOW_TITLE_MAX)
@@ -381,6 +381,34 @@ AstraResult astra_window_set_pointer_shape(AstraWindow *window,
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return command(window, ASTRA_GUI_WINDOW_SET_POINTER_SHAPE, 0, 0, 0u,
                    (uint32_t)shape, 0, NULL);
+}
+
+AstraResult astra_window_set_pointer_grab(AstraWindow *window,
+                                          uint32_t flags,
+                                          const AstraWindowFrame *rectangle)
+{
+    AstraWindowFrame whole = { 0u, 0u, 0u, 0u };
+
+    if ((flags & ~ASTRA_WINDOW_POINTER_GRAB_ALL) != 0u ||
+        (rectangle != NULL &&
+         ((flags & ASTRA_WINDOW_POINTER_CONFINE) == 0u ||
+          rectangle->width == 0u || rectangle->height == 0u)))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return command(window, ASTRA_GUI_WINDOW_SET_POINTER_GRAB,
+                   rectangle != NULL ? rectangle : &whole, NULL, 0u, flags,
+                   NULL, NULL);
+}
+
+AstraResult astra_window_warp_pointer(AstraWindow *window, int32_t x,
+                                      int32_t y)
+{
+    AstraWindowFrame position;
+
+    if (x < 0 || y < 0 || x > UINT16_MAX || y > UINT16_MAX)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    position = (AstraWindowFrame){ (uint16_t)x, (uint16_t)y, 0u, 0u };
+    return command(window, ASTRA_GUI_WINDOW_WARP_POINTER, &position, NULL,
+                   0u, 0u, NULL, NULL);
 }
 
 AstraResult astra_window_set_pointer_image(

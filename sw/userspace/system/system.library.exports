@@ -139,3 +139,9 @@ ASTRA_SYSTEM_3.1 {
         astra_display_stage;
         astra_draw_upload;
 } ASTRA_SYSTEM_3.0;
+
+ASTRA_SYSTEM_3.2 {
+    global:
+        astra_window_set_pointer_grab;
+        astra_window_warp_pointer;
+} ASTRA_SYSTEM_3.1;

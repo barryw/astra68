@@ -311,6 +311,86 @@ static void test_pointer_acceleration_clipping_and_coalescing(void)
     assert(sink.events[sink.count - 1u].value_x == 0);
 }
 
+/* The totals are the device's motion, unaccelerated and unclamped; the
+   seat owner's control confines and warps the pointer but never the
+   totals. */
+static void test_pointer_totals_confine_and_warp(void)
+{
+    AstraInputService service = make_service();
+    TestSink sink = {0};
+    AstraInputEvent event;
+    AstraInputPointerControl control = {
+        .sequence = 2u, .left = 100, .top = 50, .right = 200, .bottom = 60,
+    };
+    uint32_t before;
+
+    focus(&service, &sink);
+    event = pointer(ASTRA_INPUT_POINTER_RELATIVE, 0u, 10, 1u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(sink.events[sink.count - 1u].total_x == 10 &&
+           sink.events[sink.count - 1u].value_x == 656);
+    /* Far past the screen edge the position stops; the totals do not. */
+    event = pointer(ASTRA_INPUT_POINTER_RELATIVE, 0u, 5000, 2u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(sink.events[sink.count - 1u].value_x == 1279 &&
+           sink.events[sink.count - 1u].total_x == 5010);
+    event = pointer(ASTRA_INPUT_POINTER_RELATIVE, ASTRA_INPUT_FLAG_AXIS_Y,
+                    -7, 3u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(sink.events[sink.count - 1u].total_y == -7);
+    /* Confinement moves the pointer inside, as a synthetic motion that
+       names the control; applying it again changes nothing. */
+    before = sink.count;
+    assert(astra_input_service_pointer_control(&service, &control, 4u));
+    assert(sink.count == before + 1u &&
+           sink.events[before].type == ASTRA_INPUT_EVENT_POINTER_MOTION &&
+           (sink.events[before].flags & ASTRA_INPUT_LOGICAL_SYNTHETIC) != 0u &&
+           sink.events[before].value_x == 199 &&
+           sink.events[before].value_y == 59 &&
+           sink.events[before].code == 2u &&
+           sink.events[before].total_x == 5010);
+    assert(astra_input_service_pointer_control(&service, &control, 5u) &&
+           sink.count == before + 1u);
+    event = pointer(ASTRA_INPUT_POINTER_RELATIVE, 0u, -500, 6u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(sink.events[sink.count - 1u].value_x == 100 &&
+           sink.events[sink.count - 1u].total_x == 4510 &&
+           sink.events[sink.count - 1u].code == 2u);
+    /* A warp moves the pointer, kept inside the confinement. */
+    control.sequence = 4u;
+    control.warp = 1u;
+    control.warp_x = 150;
+    control.warp_y = 0;
+    assert(astra_input_service_pointer_control(&service, &control, 7u));
+    assert(sink.events[sink.count - 1u].value_x == 150 &&
+           sink.events[sink.count - 1u].value_y == 50 &&
+           sink.events[sink.count - 1u].code == 4u);
+    /* An empty rectangle holds the pointer; motion still counts. */
+    control.sequence = 6u;
+    control.right = control.left;
+    assert(astra_input_service_pointer_control(&service, &control, 8u));
+    event = pointer(ASTRA_INPUT_POINTER_RELATIVE, 0u, 30, 9u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(sink.events[sink.count - 1u].value_x == 150 &&
+           sink.events[sink.count - 1u].total_x == 4540);
+    /* An absolute device's motion is its change, from its first report;
+       the warp does not repeat when the rectangle changes. */
+    control.sequence = 8u;
+    control.left = 0;
+    control.top = 0;
+    control.right = 1280;
+    control.bottom = 720;
+    assert(astra_input_service_pointer_control(&service, &control, 10u) &&
+           sink.events[sink.count - 1u].value_x == 150);
+    event = pointer(ASTRA_INPUT_POINTER_ABSOLUTE, 0u, 300, 11u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(sink.events[sink.count - 1u].total_x == 4540 &&
+           sink.events[sink.count - 1u].value_x == 300);
+    event = pointer(ASTRA_INPUT_POINTER_ABSOLUTE, 0u, 290, 12u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(sink.events[sink.count - 1u].total_x == 4530);
+}
+
 static void test_pointer_batch_emits_one_motion(void)
 {
     AstraInputService service = make_service();
@@ -592,15 +672,37 @@ static void test_shared_pointer_sink(void)
                ASTRA_INPUT_DELIVERY_OK);
     }
     assert(port.sends == 0u);
-    assert(astra_input_pointer_read(&shared, &copy) == 6u &&
+    event.total_x = -9;
+    event.total_y = 4;
+    event.code = 6u;
+    assert(astra_input_port_deliver(&sink, &event) ==
+           ASTRA_INPUT_DELIVERY_OK);
+    assert(port.sends == 0u);
+    assert(astra_input_pointer_read(&shared, &copy) == 8u &&
            copy.x == 323 && copy.y == 123 && copy.timestamp_ms == 40u &&
-           copy.modifiers == ASTRA_INPUT_MOD_LEFT_SHIFT);
+           copy.modifiers == ASTRA_INPUT_MOD_LEFT_SHIFT &&
+           copy.total_x == -9 && copy.total_y == 4 && copy.control == 6u);
+    /* The control beside it reads back as written. */
+    {
+        AstraInputPointerControl written = {
+            .left = 1, .top = 2, .right = 3, .bottom = 4, .warp = 5u,
+            .warp_x = 6, .warp_y = 7,
+        };
+        AstraInputPointerControl control = {0};
+        AstraInputPointerControl read = {0};
+
+        assert(astra_input_pointer_control_read(&control, &read) == 0u);
+        astra_input_pointer_control_write(&control, &written);
+        assert(astra_input_pointer_control_read(&control, &read) == 2u &&
+               read.left == 1 && read.bottom == 4 && read.warp == 5u &&
+               read.warp_x == 6 && read.warp_y == 7);
+    }
     event.type = ASTRA_INPUT_EVENT_POINTER_BUTTON;
     assert(astra_input_port_deliver(&sink, &event) ==
            ASTRA_INPUT_DELIVERY_OK);
     assert(port.sends == 1u &&
            port.message.event.type == ASTRA_INPUT_EVENT_POINTER_BUTTON);
-    assert(astra_input_pointer_read(&shared, &copy) == 6u);
+    assert(astra_input_pointer_read(&shared, &copy) == 8u);
 }
 
 int main(void)
@@ -611,6 +713,7 @@ int main(void)
     test_caps_focus_and_repairs();
     test_focus_subscription_mask();
     test_pointer_acceleration_clipping_and_coalescing();
+    test_pointer_totals_confine_and_warp();
     test_pointer_batch_emits_one_motion();
     test_pointer_events_retain_modifiers();
     test_windowless_pointer_subscription();

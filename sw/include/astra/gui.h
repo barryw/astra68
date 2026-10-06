@@ -14,7 +14,7 @@
 /** GUI service wire protocol tag. */
 #define ASTRA_GUI_PROTOCOL UINT32_C(0x47554920) /* GUI  */
 /** Current GUI service wire protocol version. */
-#define ASTRA_GUI_VERSION 18u
+#define ASTRA_GUI_VERSION 19u
 
 /** Maximum counted UTF-8 bytes in a window title. */
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
@@ -57,6 +57,26 @@ enum {
     ASTRA_WINDOW_ACTIVE = 1u << 2
 };
 
+/**
+ * Pointer grab of a window (::astra_window_set_pointer_grab). A grab holds
+ * only while the window is active: it lapses when the window loses
+ * activation and comes back when it regains it.
+ */
+enum {
+    /** Keep the pointer inside a rectangle of the window's content. */
+    ASTRA_WINDOW_POINTER_CONFINE = 1u << 0,
+    /** Hold the pointer still: motion arrives only as the device's motion
+        totals (::AstraWindowMotionEvent), never as a new position. */
+    ASTRA_WINDOW_POINTER_LOCK = 1u << 1,
+    /** Send the window pointer motion and buttons wherever the pointer
+        is, as a press inside the window does until its release. */
+    ASTRA_WINDOW_POINTER_CAPTURE = 1u << 2
+};
+/** Every pointer grab flag. */
+#define ASTRA_WINDOW_POINTER_GRAB_ALL \
+    (ASTRA_WINDOW_POINTER_CONFINE | ASTRA_WINDOW_POINTER_LOCK | \
+     ASTRA_WINDOW_POINTER_CAPTURE)
+
 /** Standard title-bar gadget mask. */
 enum {
     ASTRA_WINDOW_GADGET_CLOSE = 1u << 0,
@@ -88,7 +108,7 @@ typedef struct AstraWindowFrame {
 } AstraWindowFrame;
 
 /** Current serialized window-event version. */
-#define ASTRA_WINDOW_EVENT_VERSION 6u
+#define ASTRA_WINDOW_EVENT_VERSION 7u
 
 /** Window event kinds. */
 enum {
@@ -167,6 +187,30 @@ typedef struct AstraWindowPointerEvent {
     uint32_t modifiers;
 } AstraWindowPointerEvent;
 
+/**
+ * POINTER_MOTION payload: the pointer event's position words, and in place
+ * of its button and click count the device's motion totals -- unaccelerated,
+ * never clamped to the screen or held by a grab, summed and wrapping. The
+ * difference between two events is how far the device moved between them,
+ * however many motions were coalesced: what a relative mouse mode reads.
+ */
+typedef struct AstraWindowMotionEvent {
+    /** Client-local x coordinate. */
+    int32_t x;
+    /** Client-local y coordinate. */
+    int32_t y;
+    /** Screen x coordinate. */
+    int32_t screen_x;
+    /** Screen y coordinate. */
+    int32_t screen_y;
+    /** Device motion total on x. */
+    int32_t motion_x;
+    /** Device motion total on y. */
+    int32_t motion_y;
+    /** Normalized modifier state at event generation. */
+    uint32_t modifiers;
+} AstraWindowMotionEvent;
+
 /** Pointer-wheel event payload. */
 typedef struct AstraWindowWheelEvent {
     /** Client-local x coordinate. */
@@ -239,6 +283,8 @@ typedef struct AstraWindowSystemActionEvent {
 typedef union AstraWindowEventData {
     /** Pointer motion or button data. */
     AstraWindowPointerEvent pointer;
+    /** Pointer motion data, with the device's motion totals. */
+    AstraWindowMotionEvent motion;
     /** Pointer-wheel data. */
     AstraWindowWheelEvent wheel;
     /** Complete state after an active/geometry/presentation transition. */
@@ -363,6 +409,12 @@ enum {
     ASTRA_GUI_WINDOW_SET_POINTER_IMAGE = 17u,
     ASTRA_GUI_WINDOW_SET_APPLICATION_NAME = 18u,
     ASTRA_GUI_WINDOW_FULLSCREEN = 19u,
+    /* flags: ASTRA_WINDOW_POINTER_* grab; x, y, width, height: the content
+       rectangle CONFINE keeps the pointer in, all zero for the whole
+       content. */
+    ASTRA_GUI_WINDOW_SET_POINTER_GRAB = 20u,
+    /* x, y: the content position the pointer moves to. */
+    ASTRA_GUI_WINDOW_WARP_POINTER = 21u,
 };
 
 typedef struct AstraGuiOpenWindow {

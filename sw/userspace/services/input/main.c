@@ -92,7 +92,7 @@ static uint32_t map_pointer(uint32_t area,
 
     if (status != ASTRA_SYSCALL_OK)
         return ASTRA_STATUS_ACCESS;
-    if (bytes < sizeof(AstraInputPointerState)) {
+    if (bytes < ASTRA_INPUT_POINTER_AREA_BYTES) {
         (void)astra_rt_area_unmap(address);
         return ASTRA_STATUS_PROTOCOL;
     }
@@ -236,6 +236,30 @@ static uint32_t now_ms(uint64_t now_ns)
     return (uint32_t)(now_ns / UINT64_C(1000000));
 }
 
+/* The seat owner's confinement and warp, applied before the device input
+   they precede: the owner reads which in the state it is shown. */
+static void apply_pointer_control(
+    AstraInputService *service,
+    const AstraInputPortSink sinks[ASTRA_INPUT_CLIENT_MAX])
+{
+    const AstraInputPortSink *owner;
+    AstraInputPointerControl control;
+
+    if (service->focus_id == 0u ||
+        service->focus_id > ASTRA_INPUT_CLIENT_MAX)
+        return;
+    owner = &sinks[service->focus_id - 1u];
+    if (owner->pointer == NULL)
+        return;
+    if (astra_input_pointer_control_read(
+            (const volatile AstraInputPointerControl *)(const volatile void *)
+                ((const volatile uint8_t *)owner->pointer +
+                 ASTRA_INPUT_POINTER_CONTROL_OFFSET),
+            &control) != 0u)
+        (void)astra_input_service_pointer_control(
+            service, &control, now_ms(astra_clock_monotonic()));
+}
+
 static void serve(uint32_t receive, uint32_t input, uint32_t irq,
                   AstraInputService *service)
 {
@@ -280,6 +304,7 @@ static void serve(uint32_t receive, uint32_t input, uint32_t irq,
             status = astra_irq_read(irq, &record, NULL);
             if (status != ASTRA_SYSCALL_OK)
                 astra_process_exit(ASTRA_STATUS_IO);
+            apply_pointer_control(service, sinks);
             for (;;) {
                 uint32_t count = 0u;
                 uint32_t flags = 0u;

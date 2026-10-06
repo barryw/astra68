@@ -42,9 +42,6 @@ typedef struct AstraInputClient {
     uint32_t id;
     uint32_t generation;
     uint32_t subscriptions;
-    int32_t pending_dx;
-    int32_t pending_dy;
-    uint32_t pending_modifiers;
     uint8_t active;
     uint8_t desynchronized;
     uint8_t motion_pending;
@@ -77,6 +74,22 @@ typedef struct AstraInputService {
     uint32_t repeat_deadline_ms;
     int32_t pointer_x;
     int32_t pointer_y;
+    /* The device's motion totals (AstraLogicalInputEvent). */
+    int32_t total_x;
+    int32_t total_y;
+    /* The last absolute position on each axis, for its motion; bit 0 x,
+       bit 1 y once one was seen. */
+    int32_t absolute_x;
+    int32_t absolute_y;
+    uint32_t absolute_seen;
+    /* Where the pointer may go: [left, right) x [top, bottom). */
+    int32_t confine_left;
+    int32_t confine_top;
+    int32_t confine_right;
+    int32_t confine_bottom;
+    /* The seat owner's AstraInputPointerControl applied last. */
+    uint32_t control_applied;
+    uint32_t warp_applied;
     uint16_t repeat_usage;
     uint16_t reserved;
 } AstraInputService;
@@ -104,6 +117,12 @@ void astra_input_service_tick(AstraInputService *service,
                               uint32_t timestamp_ms);
 uint32_t astra_input_service_next_delay(const AstraInputService *service,
                                         uint32_t timestamp_ms);
+/* Applies the seat owner's confinement and warp (input_service.h); a
+   control already applied changes nothing. A change is a synthetic motion
+   to every client. */
+bool astra_input_service_pointer_control(
+    AstraInputService *service, const AstraInputPointerControl *control,
+    uint32_t timestamp_ms);
 bool astra_input_service_stats(const AstraInputService *service,
                                AstraInputServiceStats *stats);
 

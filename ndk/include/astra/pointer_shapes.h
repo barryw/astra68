@@ -21,12 +21,24 @@ typedef enum AstraPointerShape {
     ASTRA_POINTER_SHAPE_RESIZE_NW_SE = 5,
     /** Northeast/southwest diagonal resize pointer. */
     ASTRA_POINTER_SHAPE_RESIZE_NE_SW = 6,
+    /** Precise selection: a thin cross. */
+    ASTRA_POINTER_SHAPE_CROSSHAIR = 7,
+    /** A link or other pressable target: a pointing hand. */
+    ASTRA_POINTER_SHAPE_HAND = 8,
+    /** The action under the pointer is refused: a slashed circle. */
+    ASTRA_POINTER_SHAPE_NOT_ALLOWED = 9,
+    /** Move in any direction: four arrows. */
+    ASTRA_POINTER_SHAPE_MOVE = 10,
+    /** Working, and still usable: the arrow with a small hourglass. */
+    ASTRA_POINTER_SHAPE_PROGRESS = 11,
+    /** No pointer is shown over the window's content. */
+    ASTRA_POINTER_SHAPE_NONE = 12,
     /** Window-owned image installed through the window API. */
-    ASTRA_POINTER_SHAPE_CUSTOM = 7
+    ASTRA_POINTER_SHAPE_CUSTOM = 13
 } AstraPointerShape;
 
 /** Number of valid ::AstraPointerShape values. */
-#define ASTRA_POINTER_SHAPE_COUNT 8u
+#define ASTRA_POINTER_SHAPE_COUNT 14u
 
 /** Ask Interface Kit to derive the shape from current hover/capture state. */
 #define ASTRA_POINTER_SHAPE_AUTOMATIC UINT32_MAX

@@ -155,6 +155,10 @@ typedef struct DisplayWindow {
     uint16_t pointer_hot_x;
     uint16_t pointer_hot_y;
     uint32_t pointer_image_generation;
+    /* ASTRA_WINDOW_POINTER_* the client asked for, and CONFINE's content
+       rectangle (all zero for the whole content). */
+    uint32_t pointer_grab;
+    AstraWindowFrame pointer_grab_rect;
     DamageRect content_damage;
     /* Where each bank differs from content_front. */
     DamageRect content_stale[DISPLAY_CONTENT_BANKS];
@@ -237,6 +241,22 @@ typedef struct DisplayState {
        never delivered one message per mouse report. */
     const volatile AstraInputPointerState *shared_pointer;
     uint32_t shared_pointer_sequence;
+    /* Beside it, where the display tells the service to keep or move the
+       pointer; control.sequence is the newest written. A published
+       position from before it is stale: the display's own position holds
+       until the service applies it. */
+    volatile AstraInputPointerControl *pointer_control;
+    AstraInputPointerControl control;
+    /* The device's newest motion totals (AstraWindowMotionEvent). */
+    int32_t motion_x;
+    int32_t motion_y;
+    /* The grab in force: the active window's, while it is active. */
+    uint32_t grab_window;
+    uint32_t grab_flags;
+    /* The cursor moved or changed outside an input event. */
+    uint8_t cursor_dirty;
+    /* Pointer locks granted: the first is logged. */
+    uint32_t pointer_locks;
     uint32_t pending_input_window;
     AstraGuiWindowEvent pending_input;
     /* Open GUI sessions, waited on after the windows. Every session and
@@ -1347,29 +1367,65 @@ static int resize_captured_window(DisplayState *state,
     return 1;
 }
 
+/* Where a window's content begins on the screen. */
+static void content_origin(const AstraTheme *theme,
+                           const DisplayWindow *window, int32_t *x,
+                           int32_t *y)
+{
+    uint16_t frame = frame_width(theme, window->request.type);
+    uint16_t title = title_height(theme, window->request.type);
+    uint16_t signal = title == 0u ? 0u : theme->signal_height;
+
+    *x = window->request.x + frame;
+    *y = window->request.y + frame + title + signal;
+}
+
 static void pointer_event(DisplayWindow *window, const AstraTheme *theme,
                           uint16_t type, uint32_t flags,
                           uint32_t timestamp_ms, int32_t screen_x,
                           int32_t screen_y, uint32_t button,
                           uint32_t click_count, uint32_t modifiers)
 {
-    uint16_t frame = frame_width(theme, window->request.type);
-    uint16_t title = title_height(theme, window->request.type);
-    uint16_t signal = title == 0u ? 0u : theme->signal_height;
+    int32_t origin_x;
+    int32_t origin_y;
     AstraWindowEvent event = {
         .type = type,
         .flags = flags,
         .timestamp_ms = timestamp_ms,
     };
 
-    event.data.pointer.x = screen_x - window->request.x - frame;
-    event.data.pointer.y = screen_y - window->request.y - frame - title -
-                           signal;
+    content_origin(theme, window, &origin_x, &origin_y);
+    event.data.pointer.x = screen_x - origin_x;
+    event.data.pointer.y = screen_y - origin_y;
     event.data.pointer.screen_x = screen_x;
     event.data.pointer.screen_y = screen_y;
     event.data.pointer.button = button;
     event.data.pointer.click_count = click_count;
     event.data.pointer.modifiers = modifiers;
+    (void)send_event(window, &event);
+}
+
+/* Motion at the display's pointer, with the device's motion totals. */
+static void motion_event(const DisplayState *state, DisplayWindow *window,
+                         const AstraTheme *theme, uint32_t flags,
+                         uint32_t timestamp_ms, uint32_t modifiers)
+{
+    int32_t origin_x;
+    int32_t origin_y;
+    AstraWindowEvent event = {
+        .type = ASTRA_WINDOW_EVENT_POINTER_MOTION,
+        .flags = flags,
+        .timestamp_ms = timestamp_ms,
+    };
+
+    content_origin(theme, window, &origin_x, &origin_y);
+    event.data.motion.x = state->pointer_x - origin_x;
+    event.data.motion.y = state->pointer_y - origin_y;
+    event.data.motion.screen_x = state->pointer_x;
+    event.data.motion.screen_y = state->pointer_y;
+    event.data.motion.motion_x = state->motion_x;
+    event.data.motion.motion_y = state->motion_y;
+    event.data.motion.modifiers = modifiers;
     (void)send_event(window, &event);
 }
 
@@ -1431,6 +1487,141 @@ static uint32_t active_window(const DisplayState *state)
                 ASTRA_WINDOW_STATE_MINIMIZED)
             return index - 1u;
     return state->count;
+}
+
+/* @p value in [low, high); an empty range gives low. */
+static int32_t clamp_range(int32_t value, int32_t low, int32_t high)
+{
+    if (high <= low || value < low)
+        return low;
+    return value >= high ? high - 1 : value;
+}
+
+/* Tells the input service where the pointer may go and where to move it,
+   as the newest control (input_service.h). */
+static void write_pointer_control(DisplayState *state)
+{
+    if (state->pointer_control == NULL)
+        return;
+    astra_input_pointer_control_write(state->pointer_control,
+                                      &state->control);
+    state->control.sequence = state->pointer_control->sequence;
+}
+
+/*
+ * The grab in force and where it keeps the pointer: the active window's,
+ * for as long as it is active -- Haiku's focus lock likewise ends with its
+ * window's focus (Desktop.cpp SetFocusLocked). LOCK holds the pointer;
+ * CONFINE keeps it in the content, or a rectangle of it. The service is
+ * told when that changed; the display's own pointer obeys at once, so the
+ * cursor never shows where the pointer may not be.
+ */
+static void update_pointer_grab(DisplayState *state, const AstraTheme *theme)
+{
+    uint32_t index = active_window(state);
+    const DisplayWindow *window =
+        index != state->count ? &state->windows[index] : NULL;
+    uint32_t flags = window != NULL ? window->pointer_grab : 0u;
+    int32_t left = 0;
+    int32_t top = 0;
+    int32_t right = ASTRA_DISPLAY_WIDTH;
+    int32_t bottom = ASTRA_DISPLAY_HEIGHT;
+
+    state->grab_window = flags != 0u ? window->id : 0u;
+    state->grab_flags = flags;
+    if ((flags & ASTRA_WINDOW_POINTER_LOCK) != 0u) {
+        right = left;
+        bottom = top;
+    } else if ((flags & ASTRA_WINDOW_POINTER_CONFINE) != 0u) {
+        const AstraWindowFrame *rect = &window->pointer_grab_rect;
+        int32_t origin_x;
+        int32_t origin_y;
+
+        content_origin(theme, window, &origin_x, &origin_y);
+        left = origin_x + rect->x;
+        top = origin_y + rect->y;
+        right = left + (rect->width != 0u ? rect->width :
+                                            window->request.width);
+        bottom = top + (rect->height != 0u ? rect->height :
+                                             window->request.height);
+        left = clamp_range(left, 0, ASTRA_DISPLAY_WIDTH);
+        top = clamp_range(top, 0, ASTRA_DISPLAY_HEIGHT);
+        right = right > (int32_t)ASTRA_DISPLAY_WIDTH ?
+                (int32_t)ASTRA_DISPLAY_WIDTH : right;
+        bottom = bottom > (int32_t)ASTRA_DISPLAY_HEIGHT ?
+                 (int32_t)ASTRA_DISPLAY_HEIGHT : bottom;
+        if (right <= left)
+            right = left + 1;
+        if (bottom <= top)
+            bottom = top + 1;
+    }
+    if (left != state->control.left || top != state->control.top ||
+        right != state->control.right || bottom != state->control.bottom) {
+        state->control.left = left;
+        state->control.top = top;
+        state->control.right = right;
+        state->control.bottom = bottom;
+        write_pointer_control(state);
+    }
+    if (right > left && bottom > top) {
+        int32_t x = clamp_range(state->pointer_x, left, right);
+        int32_t y = clamp_range(state->pointer_y, top, bottom);
+
+        if (x != state->pointer_x || y != state->pointer_y) {
+            state->pointer_x = x;
+            state->pointer_y = y;
+            state->cursor_dirty = 1u;
+        }
+    }
+}
+
+/* The window the grab sends every pointer event to, or state->count. */
+static uint32_t grab_target(const DisplayState *state)
+{
+    if ((state->grab_flags & (ASTRA_WINDOW_POINTER_CAPTURE |
+                              ASTRA_WINDOW_POINTER_LOCK)) == 0u)
+        return state->count;
+    return find_id(state, state->grab_window);
+}
+
+/* Moves the pointer to a content position of the active window -- Haiku's
+   set_mouse_position, a move the input service makes as if the device had
+   (InputServer.cpp IS_SET_MOUSE_POSITION). A locked pointer stays. */
+static uint32_t warp_pointer(DisplayState *state, const AstraTheme *theme,
+                             uint32_t index, uint16_t x, uint16_t y)
+{
+    DisplayWindow *window = &state->windows[index];
+    int32_t origin_x;
+    int32_t origin_y;
+    int32_t target_x;
+    int32_t target_y;
+
+    if (active_window(state) != index)
+        return ASTRA_STATUS_ACCESS;
+    if ((state->grab_flags & ASTRA_WINDOW_POINTER_LOCK) != 0u)
+        return ASTRA_STATUS_OK;
+    content_origin(theme, window, &origin_x, &origin_y);
+    target_x = clamp_range(origin_x + x, origin_x,
+                           origin_x + window->request.width);
+    target_y = clamp_range(origin_y + y, origin_y,
+                           origin_y + window->request.height);
+    target_x = clamp_range(target_x, state->control.left,
+                           state->control.right);
+    target_y = clamp_range(target_y, state->control.top,
+                           state->control.bottom);
+    target_x = clamp_range(target_x, 0, ASTRA_DISPLAY_WIDTH);
+    target_y = clamp_range(target_y, 0, ASTRA_DISPLAY_HEIGHT);
+    state->pointer_x = target_x;
+    state->pointer_y = target_y;
+    state->control.warp += 1u;
+    state->control.warp_x = target_x;
+    state->control.warp_y = target_y;
+    write_pointer_control(state);
+    state->cursor_dirty = 1u;
+    motion_event(state, window, theme, ASTRA_WINDOW_EVENT_SYNTHETIC,
+                 (uint32_t)(astra_clock_monotonic() / UINT64_C(1000000)),
+                 0u);
+    return ASTRA_STATUS_OK;
 }
 
 static void key_event(DisplayState *state, DisplayWindow *window,
@@ -2537,9 +2728,15 @@ static uint32_t submit_buffer(uint32_t device, uint32_t irq,
 static uint32_t update_cursor(uint32_t device, const DisplayState *state,
                               uint32_t shape)
 {
+    /* NONE is no image: the cursor is hidden, its plane left as it was. */
     uint32_t status = astra_display_cursor(
         device, (uint32_t)state->pointer_x, (uint32_t)state->pointer_y,
-        ASTRA_DISPLAY_CURSOR_VISIBLE | ASTRA_DISPLAY_CURSOR_SHAPE(shape));
+        shape == ASTRA_POINTER_SHAPE_NONE ?
+            ASTRA_DISPLAY_CURSOR_SHAPE(state->loaded_pointer_shape ==
+                                               ASTRA_POINTER_SHAPE_NONE ?
+                                           ASTRA_POINTER_SHAPE_DEFAULT :
+                                           state->loaded_pointer_shape) :
+            ASTRA_DISPLAY_CURSOR_VISIBLE | ASTRA_DISPLAY_CURSOR_SHAPE(shape));
 
     if (status != ASTRA_SYSCALL_OK) {
         (void)astra_log_failure("display cursor syscall", status);
@@ -2844,9 +3041,20 @@ static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
         request->generation == 0u ||
         request->reserved16 != 0u || request->reserved != 0u ||
         request->action < ASTRA_GUI_WINDOW_QUERY ||
-        request->action > ASTRA_GUI_WINDOW_FULLSCREEN ||
+        request->action > ASTRA_GUI_WINDOW_WARP_POINTER ||
         request->title_length > ASTRA_WINDOW_TITLE_MAX)
         return 0;
+    if (request->action == ASTRA_GUI_WINDOW_SET_POINTER_GRAB)
+        return request->title_length == 0u &&
+               (request->flags & ~ASTRA_WINDOW_POINTER_GRAB_ALL) == 0u &&
+               (frame_zero ||
+                ((request->flags & ASTRA_WINDOW_POINTER_CONFINE) != 0u &&
+                 request->width != 0u && request->height != 0u &&
+                 (uint32_t)request->x + request->width <= content_width &&
+                 (uint32_t)request->y + request->height <= content_height));
+    if (request->action == ASTRA_GUI_WINDOW_WARP_POINTER)
+        return request->width == 0u && request->height == 0u &&
+               request->title_length == 0u && request->flags == 0u;
     if (request->action == ASTRA_GUI_WINDOW_SET_FRAME)
         return request->width != 0u && request->height != 0u &&
                request->title_length == 0u && request->flags == 0u;
@@ -3216,9 +3424,23 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
             window->pointer_image == NULL)
             return ASTRA_STATUS_NOT_FOUND;
         window->pointer_shape = command->flags;
+        state->cursor_dirty = 1u;
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_SET_POINTER_IMAGE:
         return ASTRA_STATUS_OK;
+    case ASTRA_GUI_WINDOW_SET_POINTER_GRAB:
+        /* The first lock is logged, so a gate can see relative mode is the
+           display's and not a warp-to-centre fallback. */
+        if ((command->flags & ASTRA_WINDOW_POINTER_LOCK) != 0u &&
+            state->pointer_locks++ == 0u)
+            (void)astra_log("display: a window locks the pointer");
+        window->pointer_grab = command->flags;
+        window->pointer_grab_rect = (AstraWindowFrame){
+            command->x, command->y, command->width, command->height };
+        state->cursor_dirty = 1u;
+        return ASTRA_STATUS_OK;
+    case ASTRA_GUI_WINDOW_WARP_POINTER:
+        return warp_pointer(state, theme, index, command->x, command->y);
     case ASTRA_GUI_WINDOW_PRESENT:
         if ((command->flags & ASTRA_GUI_PRESENT_DISCARD) != 0u &&
             window->request.content_format != ASTRA_WINDOW_CONTENT_SURFACE)
@@ -3258,6 +3480,11 @@ static uint32_t pointer_target(DisplayState *state, const AstraTheme *theme,
         }
         state->capture_window = 0u;
         state->capture_region = HIT_NONE;
+    }
+    index = grab_target(state);
+    if (index != state->count) {
+        *region = HIT_CONTENT;
+        return index;
     }
     return hit_test(state, theme, state->pointer_x, state->pointer_y, region);
 }
@@ -3508,12 +3735,11 @@ static uint32_t handle_pointer(DisplayState *state,
                     under == state->capture_region ?
                         ASTRA_GADGET_PRESSED : ASTRA_GADGET_NORMAL);
             } else {
-                pointer_event(
-                    window, &theme, ASTRA_WINDOW_EVENT_POINTER_MOTION,
-                    state->capture_window != 0u ?
-                        ASTRA_WINDOW_EVENT_CAPTURED : 0u,
-                    input->timestamp_ms, state->pointer_x,
-                    state->pointer_y, 0u, 0u, input->modifiers);
+                motion_event(state, window, &theme,
+                             state->capture_window != 0u ||
+                                     grab_target(state) == index ?
+                                 ASTRA_WINDOW_EVENT_CAPTURED : 0u,
+                             input->timestamp_ms, input->modifiers);
                 if (state->capture_window == 0u)
                     changed = update_hover(state, &theme,
                                            window->id, region);
@@ -3552,7 +3778,7 @@ static uint32_t handle_pointer(DisplayState *state,
         return ASTRA_STATUS_OK;
     if (input->code == ASTRA_INPUT_BUTTON_LEFT &&
         (input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u &&
-        state->capture_window == 0u) {
+        state->capture_window == 0u && grab_target(state) == state->count) {
         uint8_t previous_overlay = state->overlay;
 
         if (point_in_bounds(state->pointer_x, state->pointer_y,
@@ -3621,7 +3847,9 @@ window_pointer_button:
             changed |= activate(state, &theme, id, 1,
                                 input->timestamp_ms);
             index = find_id(state, id);
-            region = hit_region(&theme, &state->windows[index],
+            /* A grab sends the press to the content wherever it is. */
+            region = grab_target(state) == index ? HIT_CONTENT :
+                     hit_region(&theme, &state->windows[index],
                                 state->pointer_x, state->pointer_y);
             state->capture_window = id;
             state->capture_region = region;
@@ -4552,13 +4780,16 @@ static uint32_t connect_input(
                                   &reply_receive, &reply_send);
     if (status != ASTRA_SYSCALL_OK)
         goto done;
+    /* The state the service writes, and beside it the pointer control the
+       display writes (input_service.h). */
     status = astra_rt_area_create(
-        sizeof(AstraInputPointerState),
+        ASTRA_INPUT_POINTER_AREA_BYTES,
         ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
             ASTRA_RIGHT_TRANSFER,
         &pointer_area);
     if (status == ASTRA_SYSCALL_OK)
-        status = astra_rt_area_map(pointer_area, ASTRA_AREA_MAP_READ,
+        status = astra_rt_area_map(pointer_area,
+                                   ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
                                    &pointer, &pointer_bytes);
     if (status == ASTRA_SYSCALL_OK)
         status = astra_rt_handle_duplicate(
@@ -4681,10 +4912,17 @@ static uint32_t sample_pointer(DisplayState *state, uint32_t *effects,
             state->shared_pointer_sequence)
         return ASTRA_STATUS_OK;
     state->shared_pointer_sequence = now.sequence;
+    state->motion_x = now.total_x;
+    state->motion_y = now.total_y;
     motion.timestamp_ms = now.timestamp_ms;
     motion.modifiers = now.modifiers;
-    motion.value_x = now.x;
-    motion.value_y = now.y;
+    /* A position from before the newest control is stale: the display's
+       own -- a warp's, a confinement's -- holds until the service has
+       applied it. The motion totals are never stale. */
+    motion.value_x = now.control == state->control.sequence ? now.x :
+                                                              state->pointer_x;
+    motion.value_y = now.control == state->control.sequence ? now.y :
+                                                              state->pointer_y;
     return handle_pointer(state, &motion, effects, frame_window,
                           frame_timestamp);
 }
@@ -4850,6 +5088,13 @@ static void serve_windows(uint32_t device, uint32_t irq,
         },
         .loaded_pointer_shape = ASTRA_POINTER_SHAPE_DEFAULT,
         .shared_pointer = pointer,
+        /* The mapping is read-write: the control beside the state is the
+           display's to write. */
+        .pointer_control = pointer == NULL ? NULL :
+            (volatile AstraInputPointerControl *)(uintptr_t)
+                ((uintptr_t)pointer + ASTRA_INPUT_POINTER_CONTROL_OFFSET),
+        .control = { .right = ASTRA_DISPLAY_WIDTH,
+                     .bottom = ASTRA_DISPLAY_HEIGHT },
     };
     uint32_t next_fence = 1u;
     uint32_t cursor_fence = UINT32_C(0x80000001);
@@ -4862,7 +5107,26 @@ static void serve_windows(uint32_t device, uint32_t irq,
     for (;;) {
         uint32_t waits[ASTRA_WAIT_MULTIPLE_MAX];
         uint32_t sources[ASTRA_WAIT_MULTIPLE_MAX];
-        uint32_t wait_count = display_wait_handles(
+        uint32_t wait_count;
+
+        /* Whatever was handled last may have changed the grab (an
+           activation, a move, a request) or moved the cursor (a warp). */
+        update_pointer_grab(&state, &theme);
+        if (state.cursor_dirty != 0u) {
+            uint32_t status;
+
+            state.cursor_dirty = 0u;
+            status = prepare_pointer_image(device, irq, pointer_buffer,
+                                           &state, &theme, &cursor_fence,
+                                           &armed);
+            if (status == ASTRA_STATUS_OK)
+                status = update_cursor(device, &state,
+                                       display_pointer_shape(&state, &theme));
+            if (status != ASTRA_STATUS_OK)
+                render_failure("display cursor update failed", status);
+            pointer_shape_presented(&state, &theme);
+        }
+        wait_count = display_wait_handles(
             &state, gui_receive, input_receive, vblank_irq, first_wait,
             waits, sources);
         uint32_t selected = 0u;

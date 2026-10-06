@@ -138,7 +138,7 @@ system-library-contract: $(SYSTEM_LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(SYSTEM_MAP) $(SYSTEM_LIBRARY)
 	@python3 ../../../tools/library_info.py $< | \
-		grep -q '^system.library.3 3.1.0 ABI 3.1$$'
+		grep -q '^system.library.3 3.2.0 ABI 3.2$$'
 	@$(READELF) -hW $< | grep -q 'Type:.*DYN'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [system.library.3]'
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
@@ -147,7 +147,7 @@ system-library-contract: $(SYSTEM_LIBRARY)
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'
 	@$(READELF) -lW $< | grep -q ' GNU_RELRO '
 	@$(READELF) -VW $< | grep -q 'ASTRA_SYSTEM_3.0' && \
-		$(READELF) -VW $< | grep -q 'ASTRA_SYSTEM_3.1'
+		$(READELF) -VW $< | grep -q 'ASTRA_SYSTEM_3.2'
 	@echo "astra system shared library: PASS"
 
 define system_host_test

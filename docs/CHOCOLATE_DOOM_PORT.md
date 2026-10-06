@@ -47,7 +47,7 @@ failed, and nothing ran.
    copy burst mover's pixel mode (the handover's named next step). Stopgap is
    configuration: `smooth_pixel_scaling 0`, `fullscreen 0`.
 5. **Fullscreen (SDL video backend)** via the native `ASTRA_WINDOW_FULLSCREEN`.
-6. **Relative mouse (GUI protocol + SDL backend):** pointer capture, warp.
+6. **Relative mouse (GUI protocol + SDL backend):** pointer capture, warp. Done 2026-10-06: GUI protocol 19 pointer grab (LOCK/CONFINE/CAPTURE) and warp, every SDL mouse hook; the Doom gate checks the pointer is locked and hidden in play.
 7. **Guest float cost in audio.** SDL_mixer panning and SDL's audio conversion
    run soft-float per sample. Measure on the DE25 first (decision 1).
 8. **Audio latency (SDL backend / pcm.library).** Bound what sits in the host

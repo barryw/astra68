@@ -23,7 +23,10 @@ menu over the demo, Enter starts a new game (episode, skill), Escape returns
 to the menu from play, Up and Enter choose Quit Game and `y` confirms. Doom
 must then show ENDOOM and wait for a key, and that key must end it with
 status 0. Every step depends on the one before, so a key that is lost or
-misread leaves Doom running and fails the gate.
+misread leaves Doom running and fails the gate. While it plays, Doom holds
+SDL's relative mode: the cursor is hidden and device motion leaves the
+pointer where it is (full screen, Doom grabs in its menu too); when it
+quits the desktop shows the cursor again.
 """
 
 import argparse
@@ -125,12 +128,44 @@ def wait_exit(log, after, seconds):
     return None
 
 
+def cursor(machine):
+    """(visible, x, y) of the display's hardware cursor."""
+    return tuple(machine.qmp.execute("qom-get", {
+        "path": "/machine", "property": "astra-display-cursor-" + name})
+        for name in ("visible", "x", "y"))
+
+
+def check_locked_pointer(machine):
+    """In play Doom takes SDL's relative mode: the pointer is locked and
+    hidden, so device motion moves neither it nor the cursor."""
+    visible, x, y = cursor(machine)
+    if visible:
+        raise RuntimeError("the cursor shows while Doom plays")
+    for _ in range(3):
+        machine.qmp.execute("input-send-event", {"events": [
+            {"type": "rel", "data": {"axis": "x", "value": 300}},
+            {"type": "rel", "data": {"axis": "y", "value": 200}}]})
+        time.sleep(0.2)
+    time.sleep(0.5)
+    if cursor(machine)[1:] != (x, y):
+        raise RuntimeError("Doom's locked pointer moved: %r -> %r" %
+                           ((x, y), cursor(machine)[1:]))
+
+
 def play_and_quit(machine, log):
     log.poll()
     start = log.newest
-    for qcode, settle in PLAY:
+    for index, (qcode, settle) in enumerate(PLAY):
         machine.qmp.key(qcode)
         time.sleep(settle)
+        if index == 3:
+            check_locked_pointer(machine)
+            # The lock is the display's, not SDL's warp-to-centre fallback,
+            # which hides the cursor and pulls the pointer back too.
+            if not any("display: a window locks the pointer" in line
+                       for line in machine.said(0)[0]):
+                raise RuntimeError("Doom's relative mode is not a pointer "
+                                   "lock")
     # ENDOOM waits for a key: Doom is still alive.
     if wait_exit(log, start, 2) is not None:
         raise RuntimeError("Doom exited without showing ENDOOM: %r" %
@@ -141,6 +176,10 @@ def play_and_quit(machine, log):
     if wait_exit(log, before, 20) is None:
         raise RuntimeError("Doom did not quit from its menu and ENDOOM: %r"
                            % (story(log),))
+    # Its grab went with its window: the desktop shows the cursor again.
+    time.sleep(1)
+    if not cursor(machine)[0]:
+        raise RuntimeError("the cursor stays hidden after Doom quit")
 
 
 def main():
@@ -277,7 +316,8 @@ def main():
                   "44.1 kHz, peak %d; %d effects "
                   "converted on the host; %.1f s of host MIDI music, peak "
                   "%.2f of full scale; played "
-                  "from the keyboard, quit through ENDOOM; no faults)"
+                  "from the keyboard with the pointer locked and hidden, quit "
+                  "through ENDOOM; no faults)"
                   % (rate, arguments.seconds, per_compose, copies, composes,
                      queued, frames,
                      loud, conversions,

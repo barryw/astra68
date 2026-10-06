@@ -452,7 +452,7 @@ static void test_fenced_display_transport(void)
            ASTRA_DISPLAY_HOST_CURSOR_Y(registers->DISPLAY_CURSOR) == 123u);
     assert(!kernel_platform_display_cursor(ASTRA_DISPLAY_WIDTH, 0u, 0u));
     assert(!kernel_platform_display_cursor(0u, ASTRA_DISPLAY_HEIGHT, 0u));
-    assert(!kernel_platform_display_cursor(0u, 0u, UINT32_C(0x10)));
+    assert(!kernel_platform_display_cursor(0u, 0u, UINT32_C(0x20)));
     assert(!kernel_platform_display_cursor(
         0u, 0u, ASTRA_DISPLAY_CURSOR_SHAPE(ASTRA_POINTER_SHAPE_COUNT)));
     assert(registers->DISPLAY_CURSOR ==

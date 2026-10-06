@@ -161,6 +161,33 @@ ASTRA_NODISCARD AstraResult astra_window_set_pointer_shape(
 /** Copy, install, and select a window-owned custom pointer image. Pixels are normalized to the native 32 by 32 pointer plane and cannot be mutated after return. @param window Open window. @param image Valid RGBA image and hotspot. @return ASTRA_OK or an error. */
 ASTRA_NODISCARD AstraResult astra_window_set_pointer_image(
     AstraWindow *window, const AstraHardwarePointerImage *image);
+/** Grab the pointer for this window while it is active (Haiku's
+ * SetEventMask(B_POINTER_EVENTS) and B_LOCK_WINDOW_FOCUS, made explicit).
+ * CONFINE keeps the pointer inside @p rectangle of the content, or the
+ * whole content when it is NULL; LOCK holds it still, motion arriving only
+ * as the device's motion totals; CAPTURE sends the window the pointer's
+ * motion and buttons wherever it is. The grab lapses while the window is
+ * inactive and resumes when it is active again; zero releases it.
+ * @param window Open window.
+ * @param flags ASTRA_WINDOW_POINTER_* grab flags, or zero.
+ * @param rectangle Content rectangle for CONFINE, or NULL.
+ * @return ASTRA_OK or an error.
+ * @since system.library 3.2.
+ */
+ASTRA_NODISCARD AstraResult astra_window_set_pointer_grab(
+    AstraWindow *window, uint32_t flags, const AstraWindowFrame *rectangle);
+/** Move the pointer to a content position of this window, kept inside the
+ * content and any confinement. Only the active window may move it; the
+ * window then receives a synthetic motion event at the new position.
+ * @param window Active open window.
+ * @param x Content x, 0 to 65535.
+ * @param y Content y, 0 to 65535.
+ * @return ASTRA_OK, ::ASTRA_ERROR_PERMISSION when the window is not active,
+ *         or another error.
+ * @since system.library 3.2.
+ */
+ASTRA_NODISCARD AstraResult astra_window_warp_pointer(AstraWindow *window,
+                                                      int32_t x, int32_t y);
 /** Publish the draw-list or pixel content currently in the shared area.
  * @param window Open window.
  * @return ASTRA_OK on success or an AstraResult error.

@@ -16,6 +16,12 @@
 
 static AstraGuiWindowEvent delivered;
 static AstraGuiWindowEvent previous_delivered;
+
+/* Warp stamps its synthetic motion with the clock. */
+uint64_t astra_clock_monotonic(void)
+{
+    return UINT64_C(5000000);
+}
 static uint32_t delivered_count;
 static uint32_t send_would_block;
 static uint32_t wait_count;
@@ -2627,7 +2633,8 @@ int main(void)
                               &frame_timestamp) == ASTRA_STATUS_OK &&
                effects == 0u);
         for (int32_t step = 0; step < 8; ++step)
-            astra_input_pointer_publish(&shared, 600 + step, 500, 0u, 150u);
+            astra_input_pointer_publish(&shared, 600 + step, 500, 0u, 150u,
+                                        step, 0, 0u);
         assert(sample_pointer(&state, &effects, &frame_window,
                               &frame_timestamp) == ASTRA_STATUS_OK);
         assert(state.pointer_x == 607 && state.pointer_y == 500 &&
@@ -2636,7 +2643,7 @@ int main(void)
         assert(sample_pointer(&state, &effects, &frame_window,
                               &frame_timestamp) == ASTRA_STATUS_OK &&
                effects == 0u);
-        astra_input_pointer_publish(&shared, 640, 520, 0u, 151u);
+        astra_input_pointer_publish(&shared, 640, 520, 0u, 151u, 9, -4, 0u);
         motion.type = ASTRA_INPUT_EVENT_FOCUS;
         astra_message_header_set(
             &input_messages[0].header, sizeof(AstraInputEventMessage),
@@ -2649,9 +2656,89 @@ int main(void)
                            &frame_timestamp) == ASTRA_STATUS_OK);
         assert(input_message_index == 1u && state.pointer_x == 640 &&
                state.pointer_y == 520);
+        assert(state.motion_x == 9 && state.motion_y == -4);
+        /* A position from before the newest control is stale: the
+           display's own holds until the service applied it; the totals
+           are taken either way. */
+        state.control.sequence = 4u;
+        astra_input_pointer_publish(&shared, 10, 10, 0u, 152u, 12, -4, 2u);
+        assert(sample_pointer(&state, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK &&
+               state.pointer_x == 640 && state.pointer_y == 520 &&
+               state.motion_x == 12);
+        astra_input_pointer_publish(&shared, 650, 530, 0u, 153u, 12, -4, 4u);
+        assert(sample_pointer(&state, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK &&
+               state.pointer_x == 650 && state.pointer_y == 530);
         motion.type = ASTRA_INPUT_EVENT_POINTER_MOTION;
         state.shared_pointer = NULL;
         state.shared_pointer_sequence = 0u;
+        state.control = (AstraInputPointerControl){
+            .right = ASTRA_DISPLAY_WIDTH, .bottom = ASTRA_DISPLAY_HEIGHT };
+    }
+    {
+        /* A grab is the active window's: CONFINE keeps the pointer in its
+           content, at once and in the service; LOCK holds it; a warp moves
+           it inside, with a synthetic motion; another window may not. */
+        AstraInputPointerControl control = {0};
+        uint32_t active = active_window(&state);
+        DisplayWindow *window = &state.windows[active];
+        int32_t origin_x;
+        int32_t origin_y;
+
+        assert(active != state.count);
+        content_origin(&theme, window, &origin_x, &origin_y);
+        state.pointer_control = &control;
+        state.pointer_x = 0;
+        state.pointer_y = 0;
+        window->pointer_grab = ASTRA_WINDOW_POINTER_CONFINE;
+        update_pointer_grab(&state, &theme);
+        assert(control.sequence == 2u && state.control.sequence == 2u &&
+               control.left == origin_x && control.top == origin_y &&
+               control.right == origin_x + window->request.width &&
+               control.bottom == origin_y + window->request.height &&
+               state.pointer_x == origin_x && state.pointer_y == origin_y &&
+               state.cursor_dirty != 0u);
+        update_pointer_grab(&state, &theme);
+        assert(control.sequence == 2u);
+        state.motion_x = 77;
+        state.motion_y = -3;
+        assert(warp_pointer(&state, &theme, active, 5u, 6u) ==
+                   ASTRA_STATUS_OK &&
+               control.sequence == 4u && control.warp == 1u &&
+               control.warp_x == origin_x + 5 &&
+               control.warp_y == origin_y + 6 &&
+               state.pointer_x == origin_x + 5 &&
+               delivered.event.type == ASTRA_WINDOW_EVENT_POINTER_MOTION &&
+               (delivered.event.flags & ASTRA_WINDOW_EVENT_SYNTHETIC) != 0u &&
+               delivered.event.data.motion.x == 5 &&
+               delivered.event.data.motion.y == 6 &&
+               delivered.event.data.motion.motion_x == 77 &&
+               delivered.event.data.motion.motion_y == -3);
+        /* Past the content edge it stops at the edge. */
+        assert(warp_pointer(&state, &theme, active, 60000u, 0u) ==
+                   ASTRA_STATUS_OK &&
+               state.pointer_x == origin_x + window->request.width - 1);
+        for (uint32_t other = 0u; other < state.count; ++other)
+            if (other != active)
+                assert(warp_pointer(&state, &theme, other, 0u, 0u) ==
+                       ASTRA_STATUS_ACCESS);
+        window->pointer_grab = ASTRA_WINDOW_POINTER_LOCK;
+        update_pointer_grab(&state, &theme);
+        assert(control.right == control.left &&
+               control.bottom == control.top &&
+               grab_target(&state) == active);
+        /* A locked pointer does not warp. */
+        assert(warp_pointer(&state, &theme, active, 1u, 1u) ==
+                   ASTRA_STATUS_OK && control.warp == 2u);
+        window->pointer_grab = 0u;
+        update_pointer_grab(&state, &theme);
+        assert(control.left == 0 && control.top == 0 &&
+               control.right == ASTRA_DISPLAY_WIDTH &&
+               control.bottom == ASTRA_DISPLAY_HEIGHT &&
+               grab_target(&state) == state.count);
+        state.pointer_control = NULL;
+        state.cursor_dirty = 0u;
     }
     pointer_event(&state.windows[3], &theme,
                   ASTRA_WINDOW_EVENT_POINTER_MOTION, 0u, 77u,

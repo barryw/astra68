@@ -212,6 +212,8 @@ bool kernel_platform_display_cursor(uint32_t x, uint32_t y, uint32_t flags)
 
     if (x >= ASTRA_DISPLAY_WIDTH || y >= ASTRA_DISPLAY_HEIGHT ||
         (flags & ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) != 0u ||
+        ((flags & ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
+         ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT) >= ASTRA_POINTER_SHAPE_COUNT ||
         !ASTRA_DISPLAY_HOST_CURSOR_VALID(word))
         return false;
     display_cursor_word = word;
@@ -3797,7 +3799,7 @@ static void test_console_writes_through_a_display_lease(void)
     assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
     registers[0] = ASTRA_SYSCALL_DISPLAY_CURSOR;
     registers[2] = 0u;
-    registers[4] = UINT32_C(0x10);
+    registers[4] = UINT32_C(0x20);
     assert(kernel_process_on_syscall(registers,
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);

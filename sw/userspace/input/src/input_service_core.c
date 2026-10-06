@@ -99,6 +99,23 @@ static AstraInputDeliveryResult deliver(
 
 static uint32_t subscription_for(const AstraLogicalInputEvent *event);
 
+/* A motion event carries the newest position, the motion totals and, in
+   code, the pointer control sequence applied before it. */
+static AstraLogicalInputEvent motion_event(AstraInputService *service,
+                                           uint16_t flags,
+                                           uint32_t timestamp_ms)
+{
+    AstraLogicalInputEvent motion = make_event(
+        service, ASTRA_INPUT_EVENT_POINTER_MOTION, flags, timestamp_ms);
+
+    motion.code = service->control_applied;
+    motion.value_x = service->pointer_x;
+    motion.value_y = service->pointer_y;
+    motion.total_x = service->total_x;
+    motion.total_y = service->total_y;
+    return motion;
+}
+
 static void deliver_critical(AstraInputService *service,
                              AstraLogicalInputEvent *event)
 {
@@ -145,15 +162,18 @@ static void deliver_pointer(AstraInputService *service,
         if (client->active != 0u &&
             (client->subscriptions & subscription) != 0u &&
             deliver(service, client, event) == ASTRA_INPUT_DELIVERY_FULL) {
+            /* Motion is the newest position and running totals: a client
+               that is full takes the newest later, losing nothing. */
             if (event->type == ASTRA_INPUT_EVENT_POINTER_MOTION) {
-                client->pending_dx = event->value_x;
-                client->pending_dy = event->value_y;
-                client->pending_modifiers = event->modifiers;
                 client->motion_pending = 1u;
                 ++service->stats.coalesced_motion;
             } else {
                 client->desynchronized = 1u;
             }
+        } else if (client->active != 0u &&
+                   event->type == ASTRA_INPUT_EVENT_POINTER_MOTION &&
+                   (client->subscriptions & subscription) != 0u) {
+            client->motion_pending = 0u;
         }
     }
 }
@@ -288,23 +308,82 @@ static int32_t accelerate(const AstraInputService *service, int32_t delta)
     return delta < 0 ? -(int32_t)scaled : (int32_t)scaled;
 }
 
-static int32_t clamp_coordinate(int64_t value, uint32_t extent)
+/* @p value kept in [low, high), the confinement on one axis; an empty
+   range holds the pointer at @p current. */
+static int32_t clamp_coordinate(int64_t value, int32_t low, int32_t high,
+                                int32_t current)
 {
-    if (value < 0)
-        return 0;
-    if ((uint32_t)value >= extent)
-        return (int32_t)(extent - 1u);
-    return value;
+    if (low >= high)
+        return current;
+    if (value < low)
+        return low;
+    if (value >= high)
+        return high - 1;
+    return (int32_t)value;
+}
+
+static int32_t clamp_x(const AstraInputService *service, int64_t value)
+{
+    return clamp_coordinate(value, service->confine_left,
+                            service->confine_right, service->pointer_x);
+}
+
+static int32_t clamp_y(const AstraInputService *service, int64_t value)
+{
+    return clamp_coordinate(value, service->confine_top,
+                            service->confine_bottom, service->pointer_y);
 }
 
 static void emit_motion(AstraInputService *service, uint32_t timestamp_ms)
 {
-    AstraLogicalInputEvent motion = make_event(
-        service, ASTRA_INPUT_EVENT_POINTER_MOTION, 0u, timestamp_ms);
+    AstraLogicalInputEvent motion = motion_event(service, 0u, timestamp_ms);
 
-    motion.value_x = service->pointer_x;
-    motion.value_y = service->pointer_y;
     deliver_pointer(service, &motion);
+}
+
+static int32_t clip(int32_t value, int32_t low, int32_t high)
+{
+    return value < low ? low : value > high ? high : value;
+}
+
+bool astra_input_service_pointer_control(
+    AstraInputService *service, const AstraInputPointerControl *control,
+    uint32_t timestamp_ms)
+{
+    int32_t width;
+    int32_t height;
+    int32_t x;
+    int32_t y;
+
+    if (service == NULL || control == NULL)
+        return false;
+    if (control->sequence == service->control_applied)
+        return true;
+    width = (int32_t)service->config.pointer_width;
+    height = (int32_t)service->config.pointer_height;
+    service->confine_left = clip(control->left, 0, width);
+    service->confine_right = clip(control->right, 0, width);
+    service->confine_top = clip(control->top, 0, height);
+    service->confine_bottom = clip(control->bottom, 0, height);
+    x = service->pointer_x;
+    y = service->pointer_y;
+    if (control->warp != service->warp_applied) {
+        service->warp_applied = control->warp;
+        x = control->warp_x;
+        y = control->warp_y;
+    }
+    service->pointer_x = clamp_x(service, x);
+    service->pointer_y = clamp_y(service, y);
+    service->control_applied = control->sequence;
+    /* Every client sees where the pointer is now, flagged as not the
+       device's doing; the totals do not move. */
+    {
+        AstraLogicalInputEvent motion = motion_event(
+            service, ASTRA_INPUT_LOGICAL_SYNTHETIC, timestamp_ms);
+
+        deliver_pointer(service, &motion);
+    }
+    return true;
 }
 
 bool astra_input_service_init(AstraInputService *service,
@@ -328,6 +407,8 @@ bool astra_input_service_init(AstraInputService *service,
     service->repeat_deadline_ms = ASTRA_INPUT_REPEAT_DISABLED;
     service->pointer_x = (int32_t)(config->pointer_width / 2u);
     service->pointer_y = (int32_t)(config->pointer_height / 2u);
+    service->confine_right = (int32_t)config->pointer_width;
+    service->confine_bottom = (int32_t)config->pointer_height;
     return true;
 }
 
@@ -354,9 +435,6 @@ bool astra_input_service_attach(AstraInputService *service, uint32_t client_id,
     available->context = context;
     available->id = client_id;
     available->subscriptions = ASTRA_INPUT_SUBSCRIBE_ALL;
-    available->pending_dx = 0;
-    available->pending_dy = 0;
-    available->pending_modifiers = 0u;
     available->active = 1u;
     available->desynchronized = 0u;
     available->motion_pending = 0u;
@@ -377,16 +455,10 @@ bool astra_input_service_subscribe(AstraInputService *service,
         return false;
     client->subscriptions = subscriptions;
     if ((subscriptions & ASTRA_INPUT_SUBSCRIBE_POINTER_MOTION) != 0u) {
-        AstraLogicalInputEvent motion = make_event(
-            service, ASTRA_INPUT_EVENT_POINTER_MOTION,
-            ASTRA_INPUT_LOGICAL_SYNTHETIC, timestamp_ms);
+        AstraLogicalInputEvent motion = motion_event(
+            service, ASTRA_INPUT_LOGICAL_SYNTHETIC, timestamp_ms);
 
-        motion.value_x = service->pointer_x;
-        motion.value_y = service->pointer_y;
         if (deliver(service, client, &motion) == ASTRA_INPUT_DELIVERY_FULL) {
-            client->pending_dx = motion.value_x;
-            client->pending_dy = motion.value_y;
-            client->pending_modifiers = motion.modifiers;
             client->motion_pending = 1u;
             ++service->stats.coalesced_motion;
         }
@@ -516,23 +588,40 @@ static void ingest_one(AstraInputService *service,
     if (kind == ASTRA_INPUT_POINTER_RELATIVE) {
         int32_t delta = accelerate(service, (int32_t)event->value);
 
-        if ((flags & ASTRA_INPUT_FLAG_AXIS_Y) != 0u)
-            service->pointer_y = clamp_coordinate(
-                (int64_t)service->pointer_y + delta,
-                service->config.pointer_height);
-        else
-            service->pointer_x = clamp_coordinate(
-                (int64_t)service->pointer_x + delta,
-                service->config.pointer_width);
+        /* The totals take the device's motion as it came: wrapping, not
+           clamped, not accelerated. */
+        if ((flags & ASTRA_INPUT_FLAG_AXIS_Y) != 0u) {
+            service->total_y = (int32_t)((uint32_t)service->total_y +
+                                         event->value);
+            service->pointer_y =
+                clamp_y(service, (int64_t)service->pointer_y + delta);
+        } else {
+            service->total_x = (int32_t)((uint32_t)service->total_x +
+                                         event->value);
+            service->pointer_x =
+                clamp_x(service, (int64_t)service->pointer_x + delta);
+        }
         if (emit_pointer_motion)
             emit_motion(service, event->timestamp_ms);
     } else if (kind == ASTRA_INPUT_POINTER_ABSOLUTE) {
-        if ((flags & ASTRA_INPUT_FLAG_AXIS_Y) != 0u)
-            service->pointer_y = clamp_coordinate(
-                (int32_t)event->value, service->config.pointer_height);
-        else
-            service->pointer_x = clamp_coordinate(
-                (int32_t)event->value, service->config.pointer_width);
+        /* An absolute device's motion is how far it moved. */
+        if ((flags & ASTRA_INPUT_FLAG_AXIS_Y) != 0u) {
+            if ((service->absolute_seen & 2u) != 0u)
+                service->total_y = (int32_t)(
+                    (uint32_t)service->total_y +
+                    ((uint32_t)event->value - (uint32_t)service->absolute_y));
+            service->absolute_y = (int32_t)event->value;
+            service->absolute_seen |= 2u;
+            service->pointer_y = clamp_y(service, (int32_t)event->value);
+        } else {
+            if ((service->absolute_seen & 1u) != 0u)
+                service->total_x = (int32_t)(
+                    (uint32_t)service->total_x +
+                    ((uint32_t)event->value - (uint32_t)service->absolute_x));
+            service->absolute_x = (int32_t)event->value;
+            service->absolute_seen |= 1u;
+            service->pointer_x = clamp_x(service, (int32_t)event->value);
+        }
         if (emit_pointer_motion)
             emit_motion(service, event->timestamp_ms);
     } else if (kind == ASTRA_INPUT_POINTER_BUTTON) {
@@ -609,12 +698,9 @@ void astra_input_service_tick(AstraInputService *service,
     for (uint32_t index = 0u; index < ASTRA_INPUT_CLIENT_MAX; ++index) {
         client = &service->clients[index];
         if (client->active != 0u && client->motion_pending != 0u) {
-            AstraLogicalInputEvent motion = make_event(
-                service, ASTRA_INPUT_EVENT_POINTER_MOTION, 0u, timestamp_ms);
+            AstraLogicalInputEvent motion =
+                motion_event(service, 0u, timestamp_ms);
 
-            motion.value_x = client->pending_dx;
-            motion.value_y = client->pending_dy;
-            motion.modifiers = client->pending_modifiers;
             if (deliver(service, client, &motion) == ASTRA_INPUT_DELIVERY_OK)
                 client->motion_pending = 0u;
         }

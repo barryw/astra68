@@ -92,6 +92,45 @@ static const uint16_t pointer_inner[POINTER_HEIGHT] = {
     0x0000u, 0x0000u, 0x0000u, 0x0000u, 0x0000u, 0x0000u,
 };
 
+/* The pointing hand: '#' black outline, '.' white, its fingertip at
+   POINTER_HAND_HOT_X, 0. */
+#define POINTER_HAND_HOT_X 5u
+static const char *const pointer_hand[] = {
+    "     ##           ",
+    "    #..#          ",
+    "    #..#          ",
+    "    #..#          ",
+    "    #..#          ",
+    "    #..###        ",
+    "    #..#..###     ",
+    "    #..#..#..##   ",
+    " ## #..#..#..#.#  ",
+    "#..##..........#  ",
+    "#...#..........#  ",
+    " #.............#  ",
+    "  #............#  ",
+    "  #...........#   ",
+    "   #..........#   ",
+    "   #.........#    ",
+    "    #........#    ",
+    "    #........#    ",
+    "    ##########    ",
+};
+
+static uint32_t pointer_builtin_pixel(uint32_t shape, unsigned x, unsigned y);
+
+/* The default arrow, and below and right of it a half-size hourglass:
+   working, and still usable. */
+static uint32_t pointer_progress_pixel(unsigned x, unsigned y)
+{
+    uint32_t arrow = pointer_builtin_pixel(ASTRA_POINTER_SHAPE_DEFAULT, x, y);
+
+    if (arrow != 0u || x < 14u || y < 14u)
+        return arrow;
+    return pointer_builtin_pixel(ASTRA_POINTER_SHAPE_WAIT, (x - 14u) * 2u,
+                                 (y - 14u) * 2u);
+}
+
 static uint32_t pointer_builtin_pixel(uint32_t shape, unsigned x, unsigned y)
 {
     int dx = (int)x - 16;
@@ -164,6 +203,30 @@ static uint32_t pointer_builtin_pixel(uint32_t shape, unsigned x, unsigned y)
                 (x >= 14u && x <= 18u && y >= 5u && y <= 27u);
         inner = (x >= 11u && x <= 21u && (y == 6u || y == 26u)) ||
                 (x >= 15u && x <= 17u && y >= 6u && y <= 26u);
+    } else if (shape == ASTRA_POINTER_SHAPE_CROSSHAIR) {
+        outer = (ax <= 1 && y >= 3u && y <= 29u) ||
+                (ay <= 1 && x >= 3u && x <= 29u);
+        inner = (dx == 0 && y >= 4u && y <= 28u && ay >= 2) ||
+                (dy == 0 && x >= 4u && x <= 28u && ax >= 2);
+    } else if (shape == ASTRA_POINTER_SHAPE_HAND) {
+        if (y < sizeof(pointer_hand) / sizeof(pointer_hand[0]) &&
+            x < 18u) {
+            outer = pointer_hand[y][x] == '#';
+            inner = pointer_hand[y][x] == '.';
+        }
+    } else if (shape == ASTRA_POINTER_SHAPE_NOT_ALLOWED) {
+        int d2 = dx * dx + dy * dy;
+        int slash = dx - dy < 0 ? dy - dx : dx - dy;
+
+        outer = (d2 >= 64 && d2 <= 156) || (d2 < 100 && slash <= 2);
+        inner = (d2 >= 81 && d2 <= 132) || (d2 < 81 && slash <= 1);
+    } else if (shape == ASTRA_POINTER_SHAPE_MOVE) {
+        return pointer_builtin_pixel(ASTRA_POINTER_SHAPE_RESIZE_HORIZONTAL,
+                                     x, y) |
+               pointer_builtin_pixel(ASTRA_POINTER_SHAPE_RESIZE_VERTICAL,
+                                     x, y);
+    } else if (shape == ASTRA_POINTER_SHAPE_PROGRESS) {
+        return pointer_progress_pixel(x, y);
     } else if (shape == ASTRA_POINTER_SHAPE_WAIT) {
         outer = (x >= 8u && x <= 24u &&
                  ((y >= 4u && y <= 7u) || (y >= 25u && y <= 28u))) ||
@@ -183,8 +246,12 @@ static uint32_t pointer_builtin_pixel(uint32_t shape, unsigned x, unsigned y)
 
 static void pointer_builtin_hotspot(uint32_t shape, unsigned *x, unsigned *y)
 {
-    *x = shape == ASTRA_POINTER_SHAPE_DEFAULT ? POINTER_HOT_X : 16u;
-    *y = shape == ASTRA_POINTER_SHAPE_DEFAULT ? POINTER_HOT_Y : 16u;
+    int arrow = shape == ASTRA_POINTER_SHAPE_DEFAULT ||
+                shape == ASTRA_POINTER_SHAPE_PROGRESS;
+
+    *x = arrow ? POINTER_HOT_X : shape == ASTRA_POINTER_SHAPE_HAND ?
+                                     POINTER_HAND_HOT_X : 16u;
+    *y = arrow ? POINTER_HOT_Y : shape == ASTRA_POINTER_SHAPE_HAND ? 0u : 16u;
 }
 
 static int pointer_write_builtin(const struct astra_graphics_device *device,
@@ -2042,8 +2109,26 @@ static int self_test(void)
             0u ||
         pointer_builtin_pixel(ASTRA_POINTER_SHAPE_RESIZE_NE_SW, 0u, 0u) !=
             0u ||
-        pointer_builtin_pixel(ASTRA_POINTER_SHAPE_CUSTOM, 16u, 16u) != 0u)
+        pointer_builtin_pixel(ASTRA_POINTER_SHAPE_CUSTOM, 16u, 16u) != 0u ||
+        pointer_builtin_pixel(ASTRA_POINTER_SHAPE_NONE, 16u, 16u) != 0u)
         return EXIT_FAILURE;
+    /* Every drawn shape is a white figure inside a black outline, and has
+       its hotspot on the figure. */
+    for (uint32_t shape = ASTRA_POINTER_SHAPE_CROSSHAIR;
+         shape <= ASTRA_POINTER_SHAPE_PROGRESS; ++shape) {
+        unsigned hot_x;
+        unsigned hot_y;
+        uint32_t white = 0u;
+
+        for (unsigned y = 0u; y < POINTER_IMAGE_HEIGHT; ++y)
+            for (unsigned x = 0u; x < POINTER_IMAGE_WIDTH; ++x)
+                white += pointer_builtin_pixel(shape, x, y) ==
+                         UINT32_C(0xffffffff);
+        pointer_builtin_hotspot(shape, &hot_x, &hot_y);
+        if (white < 20u ||
+            pointer_builtin_pixel(shape, hot_x, hot_y) == 0u)
+            return EXIT_FAILURE;
+    }
     (void)memset(validation_cursor, 0, sizeof(validation_cursor));
     store_be32(validation_cursor, ASTRA_DISPLAY_CURSOR_IMAGE_MAGIC);
     store_be32(validation_cursor + 4u,

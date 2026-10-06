@@ -16,7 +16,8 @@ AstraInputDeliveryResult astra_input_port_deliver(
         event->type == ASTRA_INPUT_EVENT_POINTER_MOTION) {
         astra_input_pointer_publish(sink->pointer, event->value_x,
                                     event->value_y, event->modifiers,
-                                    event->timestamp_ms);
+                                    event->timestamp_ms, event->total_x,
+                                    event->total_y, event->code);
         return ASTRA_INPUT_DELIVERY_OK;
     }
     astra_message_header_set(&message.header, sizeof(message),

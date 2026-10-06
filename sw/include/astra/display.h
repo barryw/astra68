@@ -83,7 +83,7 @@
 /** Bit position of the pointer shape within the cursor flags. */
 #define ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT 1u
 /** Mask of the pointer shape within the cursor flags. */
-#define ASTRA_DISPLAY_CURSOR_SHAPE_MASK (UINT32_C(7) << ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT)
+#define ASTRA_DISPLAY_CURSOR_SHAPE_MASK (UINT32_C(15) << ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT)
 /** Encode a pointer shape into the cursor flags.
  * @param shape ASTRA_POINTER_SHAPE_* index to encode.
  * @return shape shifted into ::ASTRA_DISPLAY_CURSOR_SHAPE_MASK's position.

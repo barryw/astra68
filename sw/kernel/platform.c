@@ -558,6 +558,8 @@ bool kernel_platform_display_cursor(uint32_t x, uint32_t y, uint32_t flags)
 
     if (x >= ASTRA_DISPLAY_WIDTH || y >= ASTRA_DISPLAY_HEIGHT ||
         (flags & ~ASTRA_DISPLAY_CURSOR_FLAGS_MASK) != 0u ||
+        ((flags & ASTRA_DISPLAY_CURSOR_SHAPE_MASK) >>
+         ASTRA_DISPLAY_CURSOR_SHAPE_SHIFT) >= ASTRA_POINTER_SHAPE_COUNT ||
         !ASTRA_DISPLAY_HOST_CURSOR_VALID(word) ||
         (kernel_platform_display_capabilities() &
          ASTRA_DISPLAY_CAP_HARDWARE_CURSOR) == 0u)

@@ -300,6 +300,24 @@ same way as the video and audio drivers. Upstream SDL is unchanged.
 | RenderPresent | submit the list, then `astra_window_present` |
 | RenderReadPixels | `astra_surface_read`; `SDL_ConvertPixels` only for another format |
 
+The mouse is the video driver's (`SDL_astravideo.c`), every `SDL_Mouse`
+hook and both window grab hooks:
+
+| SDL hook | Astra |
+|---|---|
+| CreateSystemCursor | the twelve system cursors are display shapes (`pointer_shapes.h`): arrow, I-beam, wait, crosshair, wait-arrow (PROGRESS), the four resize shapes, move, no (NOT_ALLOWED), hand |
+| CreateCursor | a window pointer image; larger than 32x32 is scaled down, keeping proportions and hotspot, each pixel an alpha-weighted box average |
+| ShowCursor | the cursor's shape or image in every window; NULL is shape NONE, which the display shows as no cursor |
+| WarpMouse / WarpMouseGlobal | `astra_window_warp_pointer`: only the active window, kept inside its content and any confinement; global positions go through the content origin the last pointer event gave |
+| SetRelativeMouseMode | `astra_window_set_pointer_grab(LOCK)`; motion is the device's own, from the motion totals of each event (`AstraWindowMotionEvent`) |
+| CaptureMouse | grab CAPTURE: motion and buttons wherever the pointer is |
+| SetWindowMouseGrab / SetWindowMouseRect | grab CONFINE, the whole content or the mouse rectangle in it |
+| GetGlobalMouseState | the last screen position any window was told, and SDL's buttons |
+
+A grab holds only while its window is active, as Haiku's focus lock ends
+with its window's focus; the input service keeps the pointer where the
+grab allows (`AstraInputPointerControl`, input protocol 3).
+
 Anything the hardware cannot do fails the SDL call with a message. There is
 no silent MC68040 fallback.
 
