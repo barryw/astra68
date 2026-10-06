@@ -30,7 +30,12 @@ It asserts four properties in one pass:
     gate's manifest makes the service a user one so `service restart
     events` may kill it (a required service is the machine's and refuses);
     the host syslog then holds the `restarted` marker, every line once, the
-    refusal logged just before the kill, and one logged after it.
+    refusal logged just before the kill -- after the marker, written by the
+    new instance -- and one logged after it.
+  * a death nobody asked for is reported. `kill` through the service's
+    PROC: ctl file ends it the way a fault would; the supervisor restarts
+    it on its own and reports `resident process exited`, which only the
+    new instance can write: after a second marker.
 
 The shell's per-command activity clause is gone with the shell that emitted
 it: zsh emits no typed events, so there is nothing for it to tag.
@@ -51,6 +56,15 @@ import astra_image
 COMMAND = "open /apps/Nope.app"
 RESTART_COMMAND = "open /apps/Nope.app; service restart events"
 RESTARTED = "--- events service restarted "
+# Ends the service the way a fault would: not through the service manager,
+# so the supervisor sees a death it did not ask for.
+KILL_COMMAND = ("ps | while read -r id rest; do "
+                "[[ $rest == *' /services/events' ]] && "
+                "print kill > /proc/$id/ctl; print ASTRA-KILL-$?; done")
+KILLED = "ASTRA-KILL-0"
+DEATH_LINE = re.compile(
+    r"^\S+ error supervisor\[00000001\] log: resident process "
+    r"exited:\d+: failed$", re.M)
 # The same service, not required: a user may restart it.
 MANIFEST = astra_image.STARTUP_MANIFEST.replace(
     "serves EVENTS:r EVENT_CONTROL LOG required priority=12",
@@ -176,7 +190,21 @@ def run(qemu, rom, image, catalog, deadline):
             raise RuntimeError("the shell never refused %r after the "
                                "restart" % COMMAND)
         machine.settle()
-        restarted = wait_for_syslog(directory, 3)
+        # Settled: the new instance has drained that refusal. Then a death
+        # the supervisor did not ask for, and one more refusal after it.
+        wait_for_syslog(directory, 3)
+        before = machine.sequence()
+        machine.qmp.type_line(KILL_COMMAND)
+        if machine.wait_for_text(KILLED, 60.0, before)[0] is None:
+            raise RuntimeError("the shell never killed the events service")
+        machine.settle()
+        before = machine.sequence()
+        machine.qmp.type_line(COMMAND)
+        if machine.wait_for_text(REFUSAL, 60.0, before)[0] is None:
+            raise RuntimeError("the shell never refused %r after the "
+                               "kill" % COMMAND)
+        machine.settle()
+        restarted = wait_for_syslog(directory, 4)
         return (boot["ring"], ring, machine.log, syslog, restarted)
     finally:
         machine.close()
@@ -257,27 +285,44 @@ def main():
     if not re.search(r"^\S+ \S+ desktop\[[0-9a-f]{8}\] ", syslog, re.M):
         failures.append("no line names the desktop service")
 
-    # The restart: a marker, the line logged just before the kill, the line
-    # logged after it, and nothing written twice.
+    # The restarts: a marker each, every line once. Requested: the refusal
+    # logged just before the kill and the one after it both follow the
+    # first marker. Killed: the supervisor's death report follows the
+    # second, and so does the last refusal.
     body = restarted.splitlines()
     markers = [line for line in body if line.startswith(RESTARTED)]
-    if len(markers) != 1:
-        failures.append("%d restart markers in the host syslog" %
+    if len(markers) != 2:
+        failures.append("%d restart markers in the host syslog, expected 2" %
                         len(markers))
     count = len(SYSLOG_LINE.findall(restarted))
-    if count != 3:
-        failures.append("%d refusal lines across the restart, expected 3" %
+    if count != 4:
+        failures.append("%d refusal lines across the restarts, expected 4" %
                         count)
     lines = [line for line in body if not line.startswith("--- ")]
     repeated = sorted({line for line in lines if lines.count(line) > 1})
     if repeated:
-        failures.append("lines written twice across the restart: %r" %
+        failures.append("lines written twice across the restarts: %r" %
                         repeated[:3])
-    if markers and not re.search(
-            r"supervisor\[00000001\] log: launch /services/events ",
-            restarted.split(markers[0], 1)[1]):
-        failures.append("no launch line for the restarted service")
-    for line in body[-12:]:
+    if len(markers) == 2:
+        head, rest = restarted.split(markers[0], 1)
+        requested, killed = rest.split(markers[1], 1)
+        spans = [len(SYSLOG_LINE.findall(text))
+                 for text in (head, requested, killed)]
+        if spans != [1, 2, 1]:
+            failures.append("refusals before, between and after the "
+                            "markers: %r, expected [1, 2, 1] (the one "
+                            "logged before the requested kill belongs "
+                            "after the first)" % spans)
+        for text, which in ((requested, "requested"), (killed, "killed")):
+            if not re.search(r"supervisor\[00000001\] log: launch "
+                             r"/services/events ", text):
+                failures.append("no launch line for the %s restart" % which)
+        if not DEATH_LINE.search(killed):
+            failures.append("the supervisor's death report is not after "
+                            "the second marker")
+        if DEATH_LINE.search(head + requested):
+            failures.append("a death report before the kill")
+    for line in body[-16:]:
         print("restart: %s" % line)
 
     print("ring: %d records, %d wraps, %d dropped" %

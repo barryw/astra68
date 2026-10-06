@@ -352,24 +352,43 @@ if measurement says so.
   the build. A restarted service writes
   `--- events service restarted <time> ---` instead.
   The service keeps a resume point in `STORE:syslog.state` (written to a
-  temporary file, synced and renamed): the boot's identity, the last
-  kernel-ring sequence whose text is in the file, and the name table. It is
-  rewritten whenever a pass writes kernel-ring lines or a name changes. At
+  temporary file and renamed, not synced): the last kernel-ring sequence
+  whose text is in the file, one ring record of the boot that wrote it, the
+  boot's wall-clock identity, and the name table. It is saved when a pass
+  writes kernel-ring lines or a name changes, at most once a second. At
   start, a resume point from this boot means a restart: the service takes
   its names and carries on after its sequence, so what the dead instance had
   not drained -- the lines around its death -- is written once and nothing
   twice. Anything else is a boot, drained from this boot's first record.
-  - **Boot identity** is the wall-clock second the boot began (wall time
-    minus monotonic time); two must agree to within a second. The saved
-    sequence must also lie inside this boot's span of the ring.
+  - **The ring decides first.** The saved record is named by its sequence,
+    raw timestamp, process and message. If the ring still holds that
+    sequence, it is a restart exactly when the record there is the same one
+    and is not before this boot's first record. The wall clock plays no
+    part, so neither an NTP step nor a machine with no valid clock changes
+    the answer.
+  - **The clock decides only when the ring has overwritten that record.**
+    Boot identity is then the wall-clock second the boot began (wall time
+    minus monotonic time); two must agree to within a second, and the saved
+    sequence must lie inside this boot's span of the ring. With no valid
+    wall clock the identity is 0, and a cold boot whose ring looks like the
+    last boot's could then be taken for a restart.
+  - **Why no sync.** The state matters only within one boot, and within a
+    boot the storage service's view of the volume is coherent whether or not
+    a block reached the medium. After a power loss a stale or torn state
+    fails its CRC or names a record the new ring does not hold. A state up
+    to a second behind the file only widens what a restart writes twice.
   - **The ring outlives a warm reset.** It is `NOLOAD` and the kernel keeps
     a valid header, so its sequence carries on, but each boot's timestamps
     start again from that boot's reset. A record stamped earlier than the one
     before it is therefore the first of a later boot, and nothing older is
     this boot's to write.
-  - A machine with no valid wall clock has boot identity 0 and relies on the
-    ring alone; a cold boot that leaves the ring looking like the last boot's
-    is then taken for a restart.
+  - **What the ring lost.** When the ring overwrote records after the saved
+    point while no service was running, the restart marker is followed by
+    `log: N kernel-ring records lost while the events service was down`.
+  - **Names.** Names learned before the service went live (the boot set)
+    are pinned: the least recently used unpinned name is evicted first. A
+    pid the table does not know is named from its log ring's setup ident
+    when it has one.
 - **The service never logs.** `services/events/main.c` includes neither
   `astra/event_emit.h` nor `astra/log.h` and never calls `astra_log_line` or
   `astra_log_write`: a log service that logs about logging is how a logging

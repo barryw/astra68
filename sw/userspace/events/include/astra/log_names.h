@@ -36,6 +36,7 @@
 typedef struct AstraLogName {
     uint32_t pid;              /* 0: free */
     uint32_t used;             /* recency stamp, larger is newer */
+    uint32_t pinned;           /* the boot set: evicted only when all are */
     char name[ASTRA_LOG_IDENT_MAX];
 } AstraLogName;
 
@@ -67,19 +68,58 @@ int astra_log_names_record(AstraLogNames *names,
 /** The name of `pid`, or NULL. Marks it recently used. */
 const char *astra_log_names_find(AstraLogNames *names, uint32_t pid);
 
+/**
+ * Pin every name known now: the boot set, learned before the service went
+ * live. The services that start at boot live for the whole boot and are the
+ * lines most worth naming, so a stream of short-lived programs evicts every
+ * unpinned name before any pinned one.
+ */
+void astra_log_names_pin(AstraLogNames *names);
+
+/* ---------------------------------------------------------- ring records */
+
+/**
+ * One kernel-ring record's identity: its sequence, and what no other record
+ * at that sequence would share -- the raw timestamp, process and message.
+ * A record that is still in the ring with the same identity is the same
+ * record, whatever the wall clock has done since. `sequence` 0: none.
+ */
+typedef struct AstraLogMark {
+    uint32_t sequence;
+    uint32_t process;
+    uint32_t message;
+    uint64_t stamp;            /* timestamp_high:timestamp_low */
+} AstraLogMark;
+
+/** `record`'s identity. */
+AstraLogMark astra_log_mark(const AstraEventDrained *record);
+
 /* ---------------------------------------------------------- resume state */
+
+/**
+ * Where a log service resumes. `sequence` is the last kernel-ring record
+ * whose text is in the file (0: none). `mark` is a record of the boot that
+ * wrote it: the record at `sequence`, or -- before anything is written --
+ * this boot's first record. `boot` is the wall-clock identity, used only
+ * when the ring no longer holds `mark`.
+ */
+typedef struct AstraLogResume {
+    uint64_t boot;
+    uint32_t sequence;
+    AstraLogMark mark;
+} AstraLogResume;
 
 /** Largest encoding ::astra_log_state_encode produces. */
 #define ASTRA_LOG_STATE_BYTES_MAX \
-    (28u + ASTRA_LOG_NAMES_MAX * (8u + ASTRA_LOG_IDENT_MAX))
+    (48u + ASTRA_LOG_NAMES_MAX * (12u + ASTRA_LOG_IDENT_MAX))
 
 /**
- * The resume point as bytes: `boot`, `sequence` and every name, with a
- * magic, a version and a CRC-32.
+ * The resume point and every name as bytes, with a magic, a version and a
+ * CRC-32.
  *
  * @return Bytes written, or 0 when `capacity` is too small.
  */
-uint32_t astra_log_state_encode(uint64_t boot, uint32_t sequence,
+uint32_t astra_log_state_encode(const AstraLogResume *resume,
                                 const AstraLogNames *names, uint8_t *out,
                                 uint32_t capacity);
 
@@ -91,8 +131,7 @@ uint32_t astra_log_state_encode(uint64_t boot, uint32_t sequence,
  * @return Nonzero on success.
  */
 int astra_log_state_decode(const uint8_t *bytes, uint32_t length,
-                           uint64_t *boot, uint32_t *sequence,
-                           AstraLogNames *names);
+                           AstraLogResume *resume, AstraLogNames *names);
 
 /**
  * This boot's identity: the wall-clock second it began (wall - monotonic,
@@ -114,21 +153,33 @@ typedef struct AstraLogBootScan {
     uint32_t first;            /* first record of the newest boot; 0: the
                                   whole ring is one boot */
     uint32_t newest;           /* the newest record's sequence; 0: none */
+    AstraLogMark anchor;       /* the newest boot's first record */
+    uint32_t want;             /* in: a sequence to look for; 0: none */
+    uint32_t found;            /* out: `want` was in the ring, as `at` */
+    AstraLogMark at;
 } AstraLogBootScan;
 
-/** Feed one record, in ring order. Start from a zeroed scan. */
+/** Feed one record, in ring order. Start from a zeroed scan, `want` set. */
 void astra_log_boot_scan(AstraLogBootScan *scan,
                          const AstraEventDrained *record);
 
 /**
  * Whether a saved resume point continues this boot (a service restart)
- * rather than an earlier one (a boot). Both the boot identities must agree
- * to within a second -- the two clocks are sampled apart -- and the saved
- * sequence must lie inside what the ring says is this boot: not after its
- * newest record, and not before its first when that is known.
+ * rather than an earlier one (a boot). Scan with `want` = the saved mark's
+ * sequence.
+ *
+ * - The ring still holds the saved mark's sequence: a restart exactly when
+ *   that record is the same one (::AstraLogMark) and is not before this
+ *   boot's first. The wall clock plays no part, so a stepped clock cannot
+ *   make a restart a boot, nor a cold boot without a clock a restart.
+ * - It does not (the ring wrapped past it, or nothing was marked): the boot
+ *   identities must agree to within a second -- the two clocks are sampled
+ *   apart -- and the saved sequence must lie inside what the ring says is
+ *   this boot: not after its newest record, and not before its first when
+ *   that is known.
  */
-int astra_log_state_restart(uint64_t saved_boot, uint32_t saved_sequence,
-                            uint64_t boot, const AstraLogBootScan *scan);
+int astra_log_state_restart(const AstraLogResume *saved, uint64_t boot,
+                            const AstraLogBootScan *scan);
 
 /** Whether ring sequence `sequence` is strictly after `other` (they wrap). */
 int astra_log_sequence_after(uint32_t sequence, uint32_t other);
