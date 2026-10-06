@@ -19,13 +19,14 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 
 HEADERS := include/astra/event_store.h include/astra/event_backend.h \
 	include/astra/event_persist.h include/astra/log_format.h \
-	include/astra/log_file.h ../../include/astra/crc32.h \
+	include/astra/log_file.h include/astra/log_clients.h \
+	../../include/astra/crc32.h \
 	$(NDK)/include/astra/event_catalog.h \
 	../../include/astra/event.h ../../include/astra/event_descriptor.h
 
 TARGET := build/m68k/libastraevents.a
 SOURCES := src/event_store.c src/event_backend.c src/event_persist.c \
-	src/log_format.c src/log_file.c
+	src/log_format.c src/log_file.c src/log_clients.c
 TARGET_OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES)) \
 	build/m68k/crc32.o
 ANALYZER_SOURCES := $(SOURCES)
@@ -34,12 +35,16 @@ ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(ANALYZER_SOURCES)) \
 STORE_TEST := build/host/test_event_store
 BACKEND_TEST := build/host/test_event_backend
 LOG_FILE_TEST := build/host/test_log_file
+LOG_CLIENTS_TEST := build/host/test_log_clients
 # The catalog reader comes along because an eviction is attributed by looking a
 # message id up in it, so the two cannot be tested apart.
 STORE_TEST_SOURCES := src/event_store.c src/event_persist.c \
 	../../common/crc32.c $(RUNTIME)/src/event_catalog.c tests/test_event_store.c
 LOG_FILE_TEST_SOURCES := src/log_format.c src/log_file.c \
 	tests/test_log_file.c ../../common/civil.c ../../common/divide.c
+LOG_CLIENTS_TEST_SOURCES := src/log_clients.c src/log_format.c \
+	$(RUNTIME)/src/log_ring.c tests/test_log_clients.c \
+	../../common/civil.c ../../common/divide.c
 
 all: $(TARGET)
 
@@ -75,10 +80,17 @@ $(LOG_FILE_TEST): $(LOG_FILE_TEST_SOURCES) include/astra/log_format.h \
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(LOG_FILE_TEST_SOURCES) -o $@
 
-test: $(STORE_TEST) $(BACKEND_TEST) $(LOG_FILE_TEST)
+$(LOG_CLIENTS_TEST): $(LOG_CLIENTS_TEST_SOURCES) include/astra/log_clients.h \
+		include/astra/log_format.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(LOG_CLIENTS_TEST_SOURCES) -o $@
+
+test: $(STORE_TEST) $(BACKEND_TEST) $(LOG_FILE_TEST) $(LOG_CLIENTS_TEST)
 	./$(STORE_TEST)
 	./$(BACKEND_TEST)
 	./$(LOG_FILE_TEST)
+	./$(LOG_CLIENTS_TEST)
 
 # Ring arithmetic over a caller-owned array, which is exactly the shape a
 # sanitizer catches and a reviewer does not.
@@ -96,6 +108,10 @@ sanitize:
 		$(SANITIZER_FLAGS) $(LOG_FILE_TEST_SOURCES) \
 		-o build/host/test_log_file_sanitize
 	./build/host/test_log_file_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) $(LOG_CLIENTS_TEST_SOURCES) \
+		-o build/host/test_log_clients_sanitize
+	./build/host/test_log_clients_sanitize
 
 analyze: $(ANALYZER_OBJECTS)
 
