@@ -50,12 +50,20 @@ _Static_assert(ASTRA_LOG_RING_HEADER_SIZE +
                ASTRA_LOG_RING_AREA_SIZE, "log ring fits its area");
 
 /*
- * Lines this process has dropped, ever: the first producer_reserved word of
- * the ring header, which the kernel never reads. The producer bumps it with a
- * CAS on each drop; every record also carries the count at its writing. The
- * service announces drops before the record that carries them, and from this
- * word when it has read to the end of the ring -- so drops after a program's
- * last line, with no record left to carry them, are still reported.
+ * Lines dropped from this ring, ever: the first producer_reserved word of the
+ * ring header, which the kernel never reads. The count is per ring, not per
+ * process: a process that sets up a new ring starts it at zero. The producer
+ * bumps it with a CAS on each drop; every record also carries the count at
+ * its writing. The service announces drops before the record that carries
+ * them, and from this word when it has read to the end of the ring -- so
+ * drops after a program's last line, with no record left to carry them, are
+ * still reported, as a marker stamped with the last record's time. A ring
+ * whose first record never committed has no last record: that marker carries
+ * zero time and is written as `boot+0.000`, first in its drain pass.
+ *
+ * A nonzero reserved word fails the generic bulk-ring validator
+ * (system/src/bulk_ring.c requires producer_reserved to be zero), so a log
+ * ring is never opened through it: astra_log_consumer_next reads it.
  */
 #define ASTRA_LOG_RING_DROPPED(header) ((header)->producer_reserved[0])
 

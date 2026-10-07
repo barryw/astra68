@@ -1,7 +1,8 @@
 # System log: one place for every program's output
 
-Status: design, approved for planning 2026-10-05. Supersedes the 2026-10-01
-proposal (segments, LZ4, query protocol), which is in git history.
+Status: phase 1 built (a3f666f7), phases 2-4 open. Design approved for
+planning 2026-10-05. Supersedes the 2026-10-01 proposal (segments, LZ4, query
+protocol), which is in git history.
 
 ## The problem
 
@@ -136,7 +137,7 @@ It is one ring per process, not one per thread, for a measured reason.
 Per-thread state needs thread-local storage, and the shared `runtime.library`
 has none (`runtime/src/syscall.c:25-27`: it is the dynamic loader and cannot
 relocate its own TLS). A4, the thread pointer, is 0 in any program without a
-TLS segment (`sw/kernel/process.c:3817`).
+TLS segment (`sw/kernel/process.c:3891`).
 
 **Writers never wait for each other.** The ring has one producer endpoint, but
 the writers inside the process coordinate without a lock:
@@ -158,7 +159,7 @@ the writers inside the process coordinate without a lock:
 A writer preempted between reserve and commit holds back publication of later
 slots until it runs again, but no writer ever spins or sleeps on it: the
 others return at once. CAS uses the explicit compare-exchange loop the NDK
-mutex already uses (`ndk/include/astra/runtime.h:796`), because of the MC68040
+mutex already uses (`ndk/include/astra/runtime.h:796-807`), because of the MC68040
 GCC atomic-exchange defect recorded in `docs/CURRENT_STATE.md`.
 
 A thread killed between reserving and committing leaves its slots uncommitted
@@ -184,8 +185,8 @@ the kernel refuses a port message that does not (`valid_message_header` in
 (`sw/include/astra/log_ring.h`).
 
 `astra_port_send` never blocks: a full queue returns `WOULD_BLOCK`
-(`sw/kernel/port.c:917-922`). The kernel stamps the sending process's id on the
-message (`sw/kernel/port.c:946`), so the service learns the pid from the kernel,
+(`sw/kernel/port.c:926-930`). The kernel stamps the sending process's id on the
+message (`sw/kernel/port.c:954`), so the service learns the pid from the kernel,
 and a program cannot log in another program's name. Setup is claimed with one
 CAS, so a second thread that logs during it does not wait: it uses the
 `LOG_WRITE` fallback for that line. If the send is refused, that line also goes
@@ -263,7 +264,7 @@ elements. The service drains the ring, then sees `PEER_DEAD` and frees it.
 
 **Priority.** The log service drops below applications (from 20 to 12). Waking
 a lower-priority thread never preempts the running one
-(`sw/kernel/process.c:1519-1528`), so the service drains only in time nobody
+(`ready_thread_preempts`, `sw/kernel/process.c:1593-1603`), so the service drains only in time nobody
 else wants. If an application never yields, its ring fills and lines are
 dropped and counted, never delayed. That is requirement 2 applied as stated.
 
@@ -292,16 +293,16 @@ class. It is mapped at launch and into the replacement space at exec; fork
 copies it as it copies every shared frame. Every RAM mapping on this machine
 is write-through and the MC68040 caches are physically tagged, so a kernel
 store through the identity alias is what the next user read sees
-(`docs/MEMORY_MAP_AND_PMMU.md:133-149`). The page begins with a magic word; a
+(`docs/MEMORY_MAP_AND_PMMU.md:134-150`). The page begins with a magic word; a
 reader that does not find it falls back to the clock syscalls. It holds:
 
-- a version word
+- an ABI version and a sequence word
 - two copies of {monotonic ns, wall-clock ns since the epoch, UTC offset,
-  zone name}
+  zone name, wall-valid flag}
 
-The kernel writes the inactive copy and then bumps the version, on every timer
-tick and every context switch. A reader loops until the version is unchanged
-across its read. Resolution is at most one quantum (5 ms,
+The kernel writes the inactive copy and then bumps the sequence, on every
+timer tick and every context switch. A reader loops until the sequence is
+unchanged across its read (`docs/ABI.md`, "Time page"). Resolution is at most one quantum (5 ms,
 `sw/include/astra/process.h:110`) and usually better.
 
 The source is the one `CLOCK_MONOTONIC` and `CLOCK_REALTIME` already use
@@ -434,7 +435,8 @@ if measurement says so.
   file.
 - **`debug` is not written.** It is dropped at drain and counted, as the event
   store does today. Terminal emits every line it prints at `debug`
-  (`runtime/src/log.c:198-206`), and that is commentary, not record.
+  (`echo_line`, `services/terminal/console_session.c:51-55`), and that is
+  commentary, not record.
 - **Kept as it is:** the 256-record tiered store, which holds notification
   history.
 
@@ -458,9 +460,9 @@ if measurement says so.
 - **`LOG` for every process.** `LOG` is the send endpoint the log service
   publishes.
   - `build_grants` gives it to every entry, as it does `LIBS:`
-    (`supervisor/src/loader.c:1017`).
+    (`supervisor/src/loader.c:1018`).
   - Terminal's `launch_grants` adds it
-    (`services/terminal/console_session.c:98`).
+    (`services/terminal/console_session.c:99`).
   - It joins the application ceiling (`sw/include/astra/application_policy.h`).
   - zsh children inherit it through exec.
 - **APPL v5.** A launch request may carry STDIN, STDOUT and STDERR handles.
@@ -564,6 +566,6 @@ Board: run Doom on the DE25 and read the banner from Beast with
   258,112 bytes in a 262,144-byte area (first planned as 256 slots in 64 KiB;
   see §3 for why it grew).
 - **Publishing `LOG`:** the manifest's `serves` list maps names to
-  `astra_service_ready` handles by position (`supervisor/src/loader.c:1505`).
+  `astra_service_ready` handles by position (`supervisor/src/loader.c:1523-1526`).
   `LOG` is a raw capability, granted by name like `ENTROPY`.
 - **zlib's cost on the DE25** is measured in phase 2.

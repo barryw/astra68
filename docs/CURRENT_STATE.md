@@ -1297,6 +1297,50 @@ host execution and 80,284,785,733 ns of queue time. The retained log is
 This is the current durable end-to-end baseline; it does not yet meet the
 1,000-operations/s target.
 
+## System log, phase 1
+
+Branch `system-log` builds phase 1 of `docs/SYSTEM_LOG.md` (through
+`a3f666f7`). Every program's lines go through its own lock-free ring to the
+events service, which writes one time-ordered file: `/events/syslog` on the
+boot volume and a live host copy at `WORK:.astra/syslog`. Reading it is in
+`docs/DEBUGGING.md` section 2; the ABI is in `docs/ABI.md`, "Time page" and
+"Log ring". All 16 QEMU gates, `test-system-log.py` with and without
+`--no-sweep`, `test-events.py`, `test-terminal.py` and
+`test-desktop-apps.py` pass on the branch at `a3f666f7`.
+
+DE25 release
+`1c6898197a3811d0d12e64b369be92bb4ad3915b520fc1fbfa3552797bbde985`, built
+from `a3f666f7` by `emu/qemu/publish-de25-release.sh`, is installed and
+current. The QEMU the service runs is that release's
+`qemu/bin/qemu-system-m68k-astra` (from `/proc/<pid>/exe`), and it carries
+the block device model (two `Astra68 storage image` strings). Doom opened
+over the remote desktop wrote its banner to
+`/var/lib/astra/hostfs/work/.astra/syslog`, in two boots after the install,
+for example:
+
+```
+2026-10-07T06:25:48.865+00:00 notice chocolate-doom[00000011] stdout: V_Init: allocate screens.
+2026-10-07T06:25:49.028+00:00 notice chocolate-doom[00000011] stdout: W_Init: Init WADfiles.
+```
+
+`de25-ab.sh -n 2 -s 10` against the previous release
+(`c023fdc6c10bc5c964030b788c80d431e1531598d36a549c89aaf83fe0c1fe66`) with
+Doom running. This compares the whole branch against the previous release,
+not the time page alone, with n=2 rounds:
+
+| Window | Previous: vCPU thread | Previous: guest idle | Branch: vCPU thread | Branch: guest idle |
+|---|---|---|---|---|
+| idle | 82.0%, 80.1% | 21.6%, 22.9% | 82.9%, 81.5% | 20.1%, 20.2% |
+| motion (125 Hz) | 88.0%, 85.2% | 8.3%, 7.5% | 86.0%, 84.2% | 6.4%, 7.3% |
+| idle after | 81.1%, 80.6% | 21.8%, 22.2% | 81.8%, 83.0% | 20.5%, 19.0% |
+
+Doom presented 35.1-35.3 frames/s idle on both, with no audio gaps. The
+host vCPU figures overlap between the two. Guest idle is about two points
+lower on the branch in every idle window, and cross-space switches rise from
+about 255/s to about 290/s. That is the cost of the whole branch on this
+workload; two rounds cannot say how much of it, if any, is the time-page
+update on each switch.
+
 ## Developer observability
 
 `PROC:` is the supervisor-rendered, capability-gated process view used by `ps`.

@@ -58,7 +58,8 @@ covered by the kernel and machine qualification suites.
 | `0x00011000` | `0x20000000` | Main executable image |
 | `0x20000000` | `0x40000000` | Eager loader and shared-library images |
 | `0x40000000` | `0x48000000` | Kernel shared-area mappings |
-| `0x48000000` | `0x4FF00000` | Reserved; no current owner |
+| `0x48000000` | `0x48001000` | Kernel time page (read-only) |
+| `0x48001000` | `0x4FF00000` | Reserved; no current owner |
 | `0x4FF00000` | `0x50000000` | Per-thread AstraHost channel pages |
 | `0x50000000` | `0x52000000` | Process-private DMA buffers |
 | `0x52000000` | `0x70000000` | Anonymous private VM |

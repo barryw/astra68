@@ -163,7 +163,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 41 | `BLOCK_COLLECT` | CURRENT CANDIDATE | `D1=block lease with TRANSFER right`, `D2=aligned AstraBlockCompletion`, `D3=request handle`; `WOULD_BLOCK` until the device answers |
 | 42 | `CONSOLE_INFO` | CURRENT CANDIDATE | `D1=display lease with QUERY right`; returns character-plane `D1=columns`, `D2=rows` |
 | 43 | `CONSOLE_WRITE` | CURRENT CANDIDATE | `D1=display lease with TRANSFER right`, `D2=first cell index`, `D3=cell bytes`, `D4=count`; writes any run that fits in the character plane |
-| 44 | `LOG_WRITE` | CURRENT CANDIDATE | emits one bounded typed event into the kernel ring |
+| 44 | `LOG_WRITE` | CURRENT CANDIDATE | `D1=message id`, `D2=flags and level`, `D3=payload`, `D4=length` (at most 24); emits one bounded typed event into the kernel ring as the caller. No handle or right is required; ids 2-15 are the kernel's and refused |
 | 45 | `ACTIVITY` | CURRENT CANDIDATE | `D1=0` allocates a new activity, a nonzero value adopts it, and `D1=0xffffffff` clears it; returns the current activity in `D1` |
 | 46 | `TRACE_READ` | CURRENT CANDIDATE | drains the caller-authorized kernel event stream with explicit cursor and loss accounting |
 | 47 | `DIAGNOSTIC_CONSOLE_OPEN` | CURRENT CANDIDATE | marks the userspace diagnostic reader active so the boot console stops narrating the same stream |
@@ -673,6 +673,131 @@ as thread death. A timer wait returns `OK` on expiry, `CANCELLED` on explicit
 timer cancellation, and the ordinary terminal result on close or owner death.
 All five waitable object classes use the same scheduler registration and
 deadline machinery.
+
+## Time page
+
+`sw/include/astra/time_page.h` defines `AstraTimePage`, version 1: one
+kernel frame mapped read-only at `ASTRA_TIME_PAGE_ADDRESS` (`0x48000000`,
+one page) in every process, so a program reads monotonic and wall time
+without a syscall. It is Haiku's `real_time_data`. The kernel maps it at
+launch and into the replacement space at exec; fork copies it like every
+shared frame. Only the kernel's raw-image processes (`kernel_process_create`,
+the qualification kernel's test images) run without it.
+
+```c
+typedef struct AstraTimePageCopy {      /* 32 bytes */
+    uint32_t monotonic_high;            /* ns since boot */
+    uint32_t monotonic_low;
+    uint32_t wall_high;                 /* ns since 1970-01-01T00:00:00Z */
+    uint32_t wall_low;
+    int32_t  utc_offset;                /* seconds east of UTC */
+    uint32_t zone;                      /* packed 4-character zone name */
+    uint32_t flags;                     /* ASTRA_TIME_PAGE_WALL_VALID (0x1) */
+    uint32_t reserved;
+} AstraTimePageCopy;
+
+typedef struct AstraTimePage {          /* 80 bytes */
+    uint32_t magic;                     /* 0x54494D45, "TIME" */
+    uint32_t version;                   /* 1 */
+    uint32_t sequence;                  /* copy[sequence & 1] is current */
+    uint32_t reserved;
+    AstraTimePageCopy copy[2];
+} AstraTimePage;
+```
+
+The kernel writes the copy readers are not using, fences, and then advances
+`sequence`. It does this on every timer tick and every context switch, so the
+values trail the clock registers by at most one quantum (5 ms). Wall fields
+are meaningful only when `flags` carries `ASTRA_TIME_PAGE_WALL_VALID`.
+
+A reader (`astra_time_page_read`, and `astra_time_now` in the runtime):
+
+1. checks `magic` and `version`, and falls back to `CLOCK_MONOTONIC` and
+   `CLOCK_REALTIME` when either differs or the page is absent;
+2. loads `sequence` with acquire and copies `copy[sequence & 1]`;
+3. fences acquire and loads `sequence` again;
+4. retries from step 2 if it moved.
+
+The kernel publishes the magic word last at boot, so a reader never sees a
+page with magic and no time. Callers that need the clock register's 80 ns
+resolution keep the clock syscalls.
+
+## Log ring
+
+`sw/include/astra/log_ring.h` defines the per-process log ring that carries a
+program's lines to the log service (`docs/SYSTEM_LOG.md` section 3). It is a
+bulk ring in a 262,144-byte area created `ASTRA_AREA_CREATE_RESERVED`, so a
+page commits when a slot in it is first written. The ring sits at offset 0:
+the 64-byte `AstraBulkRingHeader`, then 1024 slots of 252 bytes, 258,112
+bytes in all.
+
+- **Slot.** A 4-byte commit word, then 248 payload bytes. A writer stores the
+  commit word, the slot's ring position + 1, after a release fence.
+- **Record.** One to eight consecutive slots, reserved together. The first
+  slot's payload is the 40-byte record header and 208 text bytes; each
+  continuation slot carries 248 text bytes. Text is at most 1,944 bytes;
+  longer text is truncated and flagged `ASTRA_LOG_FLAG_TRUNCATED`.
+
+```c
+typedef struct AstraLogRecordFields {   /* 40 bytes, native byte order */
+    uint32_t sequence;        /* ring position of the record's first slot */
+    uint32_t monotonic_high;  /* from the time page */
+    uint32_t monotonic_low;
+    uint32_t wall_high;
+    uint32_t wall_low;
+    int32_t  utc_offset;
+    uint32_t zone;
+    uint32_t dropped;         /* lines this process dropped, ever */
+    uint16_t text_length;
+    uint8_t  level;           /* ASTRA_EVENT_LEVEL_* */
+    uint8_t  stream;          /* 0 log, 1 stdout, 2 stderr, 3 kernel */
+    uint8_t  slots;           /* 1..8 */
+    uint8_t  flags;           /* TRUNCATED 0x1, WALL_VALID 0x2 */
+    uint16_t reserved;
+} AstraLogRecordFields;
+```
+
+`sequence` is a ring position, not a record count: a gap between records is
+not loss. Loss is the drop count, which also lives in the ring header as the
+first `producer_reserved` word (`ASTRA_LOG_RING_DROPPED`). The kernel never
+reads ring memory, but this makes a log ring header fail the generic
+`bulk_ring.c` validator, which requires the reserved words to be zero; a log
+ring is read only through `astra_log_consumer_next`.
+
+Writers inside a process reserve slots with one compare-and-swap on a
+process-local counter and advance `producer_position` with CAS over committed
+slots, never mid-record. A full ring drops the line and counts it; nothing
+waits.
+
+The process hands the ring over with one `PORT_SEND_TRY` to its `LOG`
+startup capability. Both messages begin with `AstraMessageHeader`, protocol
+`ASTRA_LOG_SETUP_MAGIC` (`0x414C4F47`, "ALOG"), protocol version 2:
+
+| Operation | Message | Handles |
+|---|---|---|
+| 1 `SETUP` | 80-byte `AstraLogSetup`: the header, then `magic`, `version`, `area_size`, `ring_offset`, `slot_size`, `capacity` restating the layout above, and a NUL-terminated 32-byte `ident` | the consumer endpoint, then an area duplicate with `read`, `write`, `map` and `transfer` |
+| 2 `DOORBELL` | the 24-byte header alone | none |
+
+The service refuses a setup whose fields or mapped size differ from this
+build's layout, and a ninth setup from one process (`ASTRA_LOG_SETUPS_MAX`).
+The kernel stamps the sender's process id on the message, so a ring is
+always attributed to the process that sent it.
+
+Doorbell rule: a writer publishes first and decides on the doorbell after.
+After its CAS on `producer_position` it fences sequentially consistent and
+sends a doorbell only when `consumer_position` equals its record's first
+position, that is, when the service had read everything before it. The
+consumer mirrors this: it stores `consumer_position`, fences sequentially
+consistent, and re-reads `producer_position` before it decides there is
+nothing left to read. A full ring
+also rings on its first drop and every 64th after
+(`ASTRA_LOG_DROP_DOORBELL_INTERVAL`). `WOULD_BLOCK` on a doorbell is
+ignored: a wake is already queued.
+
+Neither side calls `RING_NOTIFY` on a log ring. The kernel ring object exists
+so that the consumer endpoint reports `PEER_DEAD` when the producer dies; a
+consumer position reported past the kernel's producer shadow would fail the
+ring.
 
 ## Service protocol rules
 
