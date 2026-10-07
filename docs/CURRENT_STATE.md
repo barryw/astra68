@@ -2065,6 +2065,38 @@ ASan/UBSan, the ext4 native `open_at` mount gate, and a fresh-image QEMU
 Terminal gate pass 96 commands including RAM create/read/remove and protected
 root removal. This RAM change has not yet been deployed to the DE25.
 
+CDFS now has an Astra-owned read-only VFS adapter around the unchanged
+`third_party/odfs` core. The optional `cdfs` service is packaged disabled and
+mounts a configured immutable image at `/cd0`; the same adapter accepts native
+block sources. Source generation/geometry changes invalidate cached block
+reads and metadata, and image size/mtime changes invalidate image mounts.
+Terminal and child commands can receive the read-only volume grant. ODFS
+supports ISO/Rock Ridge/Joliet, older UDF and HFS-family data forks; current
+VFS name/path limits still apply. Physical-drive discovery, TOC/eject and
+hotplug mount management remain unimplemented. The implementation gap audit
+in `docs/DEVICE_AND_VOLUME_PLAN.md` identifies the existing single-device
+block assumptions and the required native inventory/mount authority.
+Beast host VFS/CDFS tests, CDFS ASan/UBSan and analyzer checks, the MC68040
+service link checks, and the full userspace build pass. On 2026-10-04 the
+dedicated republished-image QEMU gate passed all nine commands: listing,
+reads, cwd traversal, missing-file/write refusals, changed-image invalidation,
+clean stop, post-stop read failure and unrelated `/home` I/O. Provider-index
+packaging and userspace boundary checks also pass. ISO 9660 and Rock Ridge
+are covered; Joliet, UDF and HFS-family readers still need representative-image
+qualification. Physical optical drives and DE25 deployment are not qualified.
+
+That gate exposed a shared port-lifetime defect: a dead service's send
+capability prevented an unrelated fork. The kernel fix landed on main with
+the system log (`e9aec561`, `kernel_port_handle_retain()` copies an
+already-held closing send endpoint, which keeps reporting peer death); the
+CDFS branch keeps its port-level test of the same behavior.
+
+Rebased onto main after the system log merged (2026-10-07). On Beast the
+CDFS host test, ASan/UBSan and analyzer builds, the kernel suite, and the
+full QEMU suite pass, with `test-cdfs.py` now part of the suite:
+`ASTRA CDFS PASS: listing, reads, cwd, refusals, changed image, clean stop
+and unrelated I/O`.
+
 ## Build and artifact rules
 
 Build, QEMU, FPGA, and physical work run through Beast. Source transfer is an

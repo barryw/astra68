@@ -17,8 +17,9 @@ is modified.
 A read-only optical filesystem for Astra's VFS: ISO 9660 (levels 1-3,
 multi-extent), High Sierra, Joliet, Rock Ridge, UDF (type-1 partitions:
 pressed DVD-era discs, not UDF 2.50+ / Blu-ray), HFS and HFS+ data forks,
-multisession and CDDA. `docs/DEVICE_AND_VOLUME_PLAN.md` lists CDFS as a future
-VFS adapter; this is its core. **Not wired into any Astra build yet.**
+multisession and CDDA. This is the portable core for Astra's CDFS adapter.
+Astra builds the portable reader privately
+into `sw/userspace/services/cdfs`; the upstream sources remain unchanged.
 
 The portable part is `core/`, `backends/` and `include/odfs/`: I/O through
 `odfs_media_ops_t` (a sector-read callback), all on-disc fields read with
@@ -52,15 +53,26 @@ cp -a third_party/odfs /tmp/odfs && make -C /tmp/odfs check   # all suites pass
 "fixture tests/images/... unavailable" because the images are not imported.
 Build in a copy: upstream's Makefile writes `build/` inside its own tree.
 
-## Plan for the adapter (not started)
+## Astra adapter
 
-- Media adapter over `AstraBlockDevice`: ISO's 2048-byte sectors on Astra's
-  512-byte block transport (LBA x 4), no TOC (session 0, CDDA off), media
-  change mapped to `ODFS_ERR_MEDIA_CHANGED`. A second adapter over a VFS
-  file handle mounts `.iso` files, the realistic first use.
-- A read-only `AstraVfsBackendOps` beside ext4: open through
-  `odfs_resolve_path`/`odfs_lookup`, read, stat from node fields, readdir with
-  ODFS's resume offset as the cookie, readlink; writes denied.
-- Open questions: absolute Rock Ridge symlinks against Astra's `ASSIGN:path`
-  form, the per-node size (`ODFS_NAME_MAX` 512 on non-Amiga builds), and
-  timestamp conversion to epoch seconds.
+`sw/userspace/vfs/src/backends/cdfs.c` implements the read-only backend;
+`cdfs_media.c` supplies borrowed `AstraBlockDevice` and native `AstraFile`
+sources. Sector conversion respects transfer limits. The adapter checks the
+source before cached operations and permanently invalidates changed media.
+ODFS's directory resume value is the opaque VFS cookie. Metadata dates become
+UTC epoch seconds; fields absent from ODFS's public node remain unknown.
+
+The upstream host path helper lacks the required `open_at`, dot and trailing
+separator semantics, so the adapter uses the existing ODFS component lookup
+and parent resolver. The common Astra namespace layer owns symlink traversal
+and authority; Rock Ridge targets remain byte-exact. Astra currently permits
+63-byte UTF-8 names, so larger names fail without truncation. ODFS retains its
+512-byte node-name representation.
+
+The optional image service publishes `/cd0`, using the normal VFS sessions,
+private service configuration and shutdown contract. Native builds remap
+ODFS's standard allocation names to the canonical runtime allocator through
+an Astra-owned forced-include header; no POSIX library or Amiga handler is
+linked. Parser logging and CDDA are disabled. TOC/session/eject transport and
+physical optical-drive qualification await the native device layer.
+See `sw/userspace/services/cdfs/README.md` for usage and checks.

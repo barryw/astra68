@@ -539,13 +539,21 @@ def check_store(image, text, work, stopped):
                           stderr=subprocess.STDOUT)
     if fsck.returncode > 2:
         fail("store: e2fsck %d: %s" % (fsck.returncode, fsck.stdout[-400:]))
-    subprocess.run(["debugfs", "-R", "dump %s %s" % (STORE_SYSLOG, out),
-                    volume], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                   check=False)
-    if not os.path.exists(out):
-        fail("store: no %s on the volume" % STORE_SYSLOG)
-    with open(out, encoding="utf-8", errors="replace") as handle:
-        stored = handle.read().splitlines()
+    # Every kept generation, oldest first, as the host text is read.
+    stored = []
+    for suffix in (".3", ".2", ".1", ""):
+        if os.path.exists(out):
+            os.remove(out)
+        subprocess.run(["debugfs", "-R", "dump %s%s %s" %
+                        (STORE_SYSLOG, suffix, out), volume],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                       check=False)
+        if not os.path.exists(out):
+            if suffix == "":
+                fail("store: no %s on the volume" % STORE_SYSLOG)
+            continue
+        with open(out, encoding="utf-8", errors="replace") as handle:
+            stored += handle.read().splitlines()
     host = text.splitlines()
     # The machine is stopped, not shut down, and the service keeps writing
     # to the end (the display, the sampler): the volume can lack

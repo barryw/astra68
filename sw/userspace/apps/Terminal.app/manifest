@@ -11,6 +11,7 @@ capability WORK:rw
 capability HOME:rw
 capability TMP:rw
 capability RAM:rw
+capability CD0:r
 capability DH0:r
 capability SYSTEM:r
 capability LOCAL:rw

@@ -100,7 +100,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
 {
     static const char *const stream_names[] = {"STDOUT", "STDERR", "STDIN"};
     static const char *const mount_names[] = {
-        "DH0", "SYSTEM", "WORK", "HOME", "TMP", "RAM", "LOCAL", "COMMANDS", "APPS",
+        "DH0", "SYSTEM", "WORK", "HOME", "TMP", "RAM", "CD0", "LOCAL", "COMMANDS", "APPS",
         "LIBS", "EVENTS", "PROC", "METRICS",
         ASTRA_CONFIG_COMMANDS_CAPABILITY
     };

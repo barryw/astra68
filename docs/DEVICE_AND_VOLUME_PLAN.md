@@ -6,6 +6,98 @@ protected root links pass the fresh-image QEMU terminal gate; the expanded
 root layout and logical `/ram` volume still need DE25 qualification. Validated boot-partition identity
 and hotplug are not yet implemented.
 
+## Implementation gap audit, 2026-10-04
+
+The existing substrate is useful: `sw/kernel/device.c` registers devices,
+issues exclusive leases, revokes owners and supports reset; its storage grows
+with resources. `sw/kernel/block.c` validates DMA-backed requests, queues
+completions and checks media/host generations. Userspace already has
+`AstraBlockDevice`, `AstraLeaseBlock`, bounded partition windows, an MBR reader,
+and the common VFS session/shutdown contract. These mechanisms should be
+extended rather than replaced.
+
+The remaining work is broader than exposing `/dev`:
+
+One native inventory/mount manager chooses names by device type: the fixed SD
+system volume is `/dh0`, USB storage uses `/usb0`, `/usb1`, and so on, and
+optical drives use `/cd0`, `/cd1`, and so on. Optical classification takes
+precedence over transport: a USB CD/DVD drive is a `/cdN` drive, not a USB
+storage volume. Drivers report identity, media and I/O capabilities; they do
+not each implement naming or mount policy. POSIX adapts this same namespace.
+
+| Step | Concrete gap and change | Acceptance gate |
+| --- | --- | --- |
+| 1. Inventory and system-volume identity | `devices` sees granted capabilities, not an authoritative disk inventory. Add native device/media descriptors and a rights-checked inventory/change feed. Classify fixed SD, USB disk and optical media, with stable physical identity and separate media generations. Consolidate the independent first-`0x83` selection in Supervisor `volume.c` and storage `main.c` into one validated partition/UUID handoff. Reuse the MBR parser; explicitly reject unsupported GPT/extended layouts until their parsers exist. | Multiple/ambiguous partitions, duplicate UUIDs, malformed tables, changed media and missing system disk fail before writable mount; verify neighboring partitions remain intact. |
+| 2. Multiple block devices | The kernel block engine has one global `device_state`; the syscall dispatch accepts only `ASTRA_DEVICE_ID_BLOCK0`. Platform access has one MMIO aperture. QEMU has one `AstraBlockState`, claims only `drive_get(IF_NONE, 0, 0)`, fixes sectors at 512 bytes and sets `no_cdrom`. Make those existing paths device-aware, with per-device geometry, queues, generations and leases. Linux remains the physical USB/SCSI driver owner. Update the versioned host transport and every producer/consumer together. | Read concurrently from the system disk and a second read-only device; reset/remove the second while preserving the first device's I/O and completions. Establish cycle baselines and budgets before new kernel paths become dependencies. |
+| 3. Mount authority and tools | `AstraVfsMountOps` supplies shutdown callbacks, not a mount table. Supervisor `publish()`/assigns currently bind service roots. Extend that authority with mounted-volume instances, verified identity, source capabilities, labels, mountpoints and generation-pinned lifetimes. Apply `/system` mount policy there; add native-backed `lsblk`, `blkid`, `mount`, `umount` and `df` views. `/dev` is a capability adapter over the same inventory, not a second registry. | Conflicting/nonempty mountpoints, duplicate identity, denied grants and failed publication roll back. Aliases share one volume identity and capacity row; old handles never retarget. |
+| 4. Hotplug and removal | Low-level generation checking exists, but QEMU currently reads media size once at startup and no common mount authority handles removal. Add Linux/QEMU media insertion/ejection notifications, revoke the affected mount generation and namespace publication, then close sessions/caches. Reuse ordinary flush/unmount for clean removal and report forced removal distinctly. | Remove during I/O, enumeration and cwd use; fail stale/cache-hit requests, preserve unrelated devices, mounts and program launches, reject generation reuse and exercise shutdown failures. |
+| 5. Optical controls | CDFS now mounts images through VFS and accepts native block sources. Physical drives still need device discovery/read transport; TOC/session discovery, media-change detection and eject are native device operations supplied by Linux behind the versioned protocol. Only add raw CDDA transport when audio-CD support is required. | Real USB CD and DVD mounts on the DE25, repeated insert/eject, multisession selection if implemented, corrupt/unsupported media refusal, and a read-only guarantee. |
+
+The smallest usable hardware milestone is steps 1–4 plus read-only optical
+data transport: keep the SD system volume mounted, attach a second device,
+publish a CDFS volume, list/read it, and remove it without affecting `/system`.
+TOC/audio, formatting and partition editors do not block that milestone.
+Arbitrary mountpoints, stable device/inode identity and the complete edge-case
+gate below remain requirements for a finished general device layer. This
+audit does not implement those missing facilities.
+
+The optical namespace identifies attached drives: the first drive owns
+`/cd0`, the second `/cd1`, and so on. Each attached drive publishes its empty
+root even without a disc. Insertion classifies the medium and mounts a
+supported data filesystem beneath that same root; ejecting the disc returns
+the root to an empty directory. Unplugging the drive withdraws its root and
+inventory entry. Surviving drives are not renumbered, and retired drive slot
+names are not reused within the boot.
+
+Each inserted disc has a fresh media/mount generation. Open files and cwd
+handles below the drive root remain pinned to their original generation and
+fail after ejection; a new path lookup can see the newly inserted disc.
+Directory iteration must detect a disc change rather than reuse its old
+cookies. The attached drive root itself remains usable while empty. Media
+type, unsupported-format and mount-error status belong in the device
+inventory, leaving an empty root empty. The current CDFS image service does
+not implement this drive discovery/media transition flow.
+
+Hotplug must update the native namespace of already-running authorized
+applications. Today's Terminal ceiling and child mount list grant only
+`CD0:r` at startup, and opening a new Terminal is required after starting the
+image service. Finishing the manager includes a rights-checked live namespace
+refresh and authority for additional permitted drives; hardcoding more mount
+names in Terminal or implementing discovery separately in POSIX is not the
+general device layer.
+
+### Change notifications
+
+Use the existing bounded native message ports and wait primitives, following
+the input/pointer observer pattern (`ndk/include/astra/port.h`, `pointer.h`,
+and `sw/include/astra/input_service.h`). The device/mount authority owns the
+subscription and publishes versioned, typed messages for drive attachment,
+removal, media insertion/ejection, and mount-state changes. Subscribers select
+the changes they need and receive only their authorized view. This is the
+same native IPC mechanism used by other services; POSIX exposes adapters.
+
+Subscription must establish an initial snapshot and its sequence without a
+gap in which a change can be missed. Messages identify the stable device,
+drive root, sequence, and media/mount generation. Commit the authoritative
+state and fence retired handles before publishing the change, so a receiver
+can immediately query the new state. An existing Terminal or file manager
+updates its namespace/view from these messages instead of waiting for a new
+process or polling directory listings.
+
+Queues remain bounded. Lost/coalesced changes require an explicit resync
+notification and a fresh snapshot; a slow/dead subscriber cannot stall device
+removal or consume unbounded storage. Generation checks still reject I/O
+that races with removal, even before the notification is handled. Service
+restart invalidates its subscription generation and requires reconnection.
+The current EVENTS filesystem is rendered diagnostic history, not this live
+state subscription; applications must not parse log text for device state.
+
+Qualify the full sequence with two drives: attach both empty, insert different
+supported discs, eject/reinsert one without changing its `/cdN`, then unplug
+it without renumbering the other. Reusing a filename on the second disc must
+not make a stale file/cwd handle read that disc. Exercise disc changes during
+directory iteration and I/O, plus unsupported media and mount failures.
+
 ## One namespace
 
 `/dh0` names the first mounted hard-disk volume, **not** the raw SD controller

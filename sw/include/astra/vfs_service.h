@@ -399,6 +399,8 @@ typedef uint32_t AstraVfsSession;
 
 /** Encoded byte size of ::AstraVfsFilesystemInfo. */
 #define ASTRA_VFS_FILESYSTEM_INFO_SIZE 64u
+/** Filesystem attribute: mutations fail with ASTRA_VFS_ERR_READ_ONLY. */
+#define ASTRA_VFS_FILESYSTEM_READ_ONLY UINT32_C(1)
 /** Backend-neutral filesystem capacity and naming limits. */
 typedef struct AstraVfsFilesystemInfo {
     /** Structure size; always ::ASTRA_VFS_FILESYSTEM_INFO_SIZE. */

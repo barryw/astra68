@@ -1,4 +1,4 @@
-SUBDIRS := storage ramfs hostfs hostbench entropy events network ntpd posixd clipboard \
+SUBDIRS := storage ramfs cdfs hostfs hostbench entropy events network ntpd posixd clipboard \
 	terminal input display desktop remote-desktop media audio-certify pcm-certify fault-probe sampler
 
 all test sanitize analyze clean:
