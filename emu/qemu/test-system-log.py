@@ -12,7 +12,10 @@ boot volume's copy:
            in the file, or the missing ones are counted by exactly one
            `[N lines dropped]`.
   wake     a line written after the service went back to sleep reaches the
-           file within 3 s: the doorbell wakes the service.
+           file within 3 s: the doorbell wakes the service. With --no-sweep
+           the service has no timed wake at all, so only the doorbell can.
+  fast-exit  ten programs that log one line and exit at once: every line
+           is in the file.
   fault    `logburst 1 --fault` logs a line and faults: the line is kept,
            and the kernel's user-fault report names the same process.
   show     `log show` finds both, by program, level and text.
@@ -81,7 +84,8 @@ DOOM = ("Z_Init: Init zone memory allocation daemon. ",
         "V_Init: allocate screens.")
 DOOM_BUNDLE = "/apps/ChocolateDoom.app"
 STORE_SYSLOG = "/events/syslog"
-CHECKS = ("cost", "burst", "wake", "fault", "doom", "stream")
+CHECKS = ("cost", "burst", "wake", "fast-exit", "fault", "doom", "stream")
+FAST_EXITS = 10
 # The doorbell answers at once and the sweep within its 1 s interval; with
 # neither the line waits for an unrelated wake (a ring setup elsewhere).
 WAKE_S = 3.0
@@ -259,6 +263,35 @@ def check_wake(machine):
           (time.monotonic() - returned))
 
 
+def check_fast_exit(machine):
+    """FAST_EXITS programs that log one line and exit at once: each line is
+    in the file. The producer is gone before the service drains its ring,
+    which the service must still read to its end (docs/SYSTEM_LOG.md
+    requirement 6)."""
+    pids = burst_pids(machine)
+    lines, status = command(machine, "repeat %d logburst 1" % FAST_EXITS,
+                            120, 10)
+    if status != 0 or sum(1 for line in lines if BURST.match(line)) != \
+            FAST_EXITS:
+        fail("fast-exit: status %d, %r" % (status, lines[-10:]))
+    deadline = time.monotonic() + WAKE_S
+    while len(burst_pids(machine) - pids) < FAST_EXITS:
+        if time.monotonic() > deadline:
+            break
+        time.sleep(0.1)
+    new = burst_pids(machine) - pids
+    missing = FAST_EXITS - len(new)
+    for pid in new:
+        pairs, dropped = burst_lines(machine, pid)
+        if pairs != [(0, 0)] or dropped:
+            fail("fast-exit: pid %08x logged %r, dropped %r" %
+                 (pid, pairs, dropped))
+    if missing:
+        fail("fast-exit: %d of %d one-line programs' lines are not in the "
+             "file within %.0f s" % (missing, FAST_EXITS, WAKE_S))
+    print("PASS fast-exit (%d programs)" % FAST_EXITS)
+
+
 def check_fault(machine):
     lines, status = command(machine, "logburst 1 --fault", 60, 5)
     if status == 0:
@@ -421,6 +454,11 @@ def main():
     parser.add_argument("qemu")
     parser.add_argument("rom")
     parser.add_argument("image")
+    parser.add_argument("--no-sweep", action="store_true",
+                        help="install the events service built without its "
+                             "1 s backstop sweep (services/events VARIANT="
+                             "nosweep), so wake and fast-exit prove the "
+                             "doorbell alone")
     parser.add_argument("--only", action="append", choices=CHECKS,
                         help="run only these machine checks (for "
                              "perturbation runs); format and store always run")
@@ -436,6 +474,20 @@ def main():
         if result.returncode != 0:
             fail("could not build logburst: %s" % result.stdout[-400:])
         astra_image.install_test_command(image, "logburst")
+        if arguments.no_sweep:
+            events = os.path.join(ROOT, "sw", "userspace", "services",
+                                  "events")
+            result = subprocess.run(["make", "-C", events, "VARIANT=nosweep",
+                                     "build/m68k-nosweep/events"],
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT)
+            if result.returncode != 0:
+                fail("could not build the no-sweep events service: %s" %
+                     result.stdout[-400:])
+            astra_image._replace_volume_file(
+                image, os.path.join(events, "build", "m68k-nosweep",
+                                    "events"), "/services/events")
+            print("events service: no-sweep test build")
         run = os.path.join(work, "run")
         os.mkdir(run)
         # Doom needs a display helper and the host audio daemon, as in
@@ -465,6 +517,8 @@ def main():
                 single = check_burst(machine, earlier)
             if "wake" in wanted:
                 check_wake(machine)
+            if "fast-exit" in wanted:
+                check_fast_exit(machine)
             if "fault" in wanted:
                 pid = check_fault(machine)
                 check_show(machine, pid)

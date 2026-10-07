@@ -514,6 +514,14 @@ QEMU gates:
   about 2,060 ns. The bound sits between the two: it has headroom for a
   loaded host, and it still fails a logger that traps per line.
 - A program logs a line and faults. The line must be in the file.
+- Ten programs each log one line and exit at once. Every line must be in the
+  file: the service reads a dead producer's ring to its end before it lets
+  the ring go.
+- A program logs a line, sleeps until the service has drained it and gone
+  back to sleep, then logs another and exits. The second line must reach the
+  file within 3 s. The gate also runs this with a test build of the service
+  that has no 1 s sweep (`services/events` `VARIANT=nosweep`,
+  `test-system-log.py --no-sweep`), where only the doorbell can wake it.
 - `open` from Terminal prints the bundle's output in the terminal.
 
 Perturbation, so a green gate means the path is really taken:
@@ -523,7 +531,8 @@ Perturbation, so a green gate means the path is really taken:
   bound while the count check fails.
 - Run the burst from four threads at once and require the same bound: no
   thread waits on another.
-- Remove the doorbell and require lines to arrive late, then not at all.
+- Remove the doorbell from a no-sweep build and require the wake check to
+  fail.
 
 Board: run Doom on the DE25 and read the banner from Beast with
 `tail -f /var/lib/astra/hostfs/work/.astra/syslog`.
