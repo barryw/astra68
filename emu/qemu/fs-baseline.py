@@ -2,6 +2,7 @@
 """DE25 filesystem baseline (docs/FILESYSTEM_PRODUCTION_PRD.md).
 
 usage: fs-baseline.py LABEL OUT.json [--restart] [--no-cold]
+                      [--held-miss-floor MB_S]
 
 Runs on the board, as root, from the release's bin directory:
   - with --restart, restarts astra.service and waits for the remote desktop;
@@ -16,8 +17,12 @@ Runs on the board, as root, from the release's bin directory:
     evict `big` too and contaminate the "cached" half of that measurement
     (it showed up as held-miss's p95 running ~4x its median);
   - samples QEMU's RSS, descriptor count and CPU time before and after;
-  - checks held-miss's own throughput as a regression guard;
-  - writes {"identity", "host", "guest"} to OUT.json.
+  - writes {"identity", "host", "guest", "checks"} to OUT.json, always --
+    before anything below can fail the run, so no workload's data is ever
+    discarded;
+  - then checks held-miss's own throughput as a regression guard (floor
+    --held-miss-floor MB/s, default 20.0, 0 disables) and exits non-zero on
+    a miss, after OUT.json is already on disk.
 """
 
 import argparse
@@ -123,7 +128,7 @@ def evict_file(path):
         os.close(fd)
 
 
-def check_held_miss(guest):
+def check_held_miss(guest, floor_mb_s):
     """held-miss is cached reads of `big` under a concurrently cold `big2`
     (docs/FILESYSTEM_PRODUCTION_PRD.md, "concurrent cached reads under a
     held miss"): its 200 cached 4 KiB reads should sustain real page-cache
@@ -134,16 +139,35 @@ def check_held_miss(guest):
     4.03x, overlapping the ratios healthy runs produce under ordinary
     scheduling noise. Throughput separates them cleanly: the same five
     buggy runs measured 12.3-15.3 MB/s; a fixed run measured 27.2 MB/s.
-    20 MB/s is the floor, with margin on both sides."""
+    20 MB/s is the floor, with margin on both sides. --held-miss-floor
+    overrides it; 0 disables the check.
+
+    Returns a JSON-able record of the result -- it does not raise. The
+    caller writes the whole benchmark record to disk first, regardless of
+    this result, and only then decides whether to fail the run."""
     workload = guest.get("workloads", {}).get("held-miss")
     throughput = workload.get("throughput_bps") if workload else None
-    if not throughput:
-        return
-    if throughput < 20_000_000:
+    mb_s = throughput / 1e6 if throughput else None
+    ok = floor_mb_s <= 0 or mb_s is None or mb_s >= floor_mb_s
+    return {"ok": ok, "mb_s": mb_s, "floor": floor_mb_s}
+
+
+def write_record(record, guest, floor_mb_s, output_path):
+    """Write the full benchmark record to output_path unconditionally,
+    then apply the held-miss regression guard. On a miss this raises
+    SystemExit, but only after the write above -- see check_held_miss."""
+    record = dict(record, guest=guest)
+    check = check_held_miss(guest, floor_mb_s)
+    record["checks"] = {"held_miss_floor": check}
+    with open(output_path, "w") as output:
+        json.dump(record, output, indent=1, sort_keys=True)
+    print("fs-baseline: wrote %s" % output_path)
+    if not check["ok"]:
         raise SystemExit(
-            "fs-baseline: held-miss throughput %.1f MB/s -- `big` looks "
-            "evicted along with big2 (contaminated cached-read "
-            "measurement)" % (throughput / 1e6))
+            "fs-baseline: held-miss throughput %.1f MB/s below floor "
+            "%.1f MB/s: big may have been evicted (cold point), or the "
+            "provider path slowed; record written to %s" %
+            (check["mb_s"], check["floor"], output_path))
 
 
 def main():
@@ -152,6 +176,9 @@ def main():
     parser.add_argument("output")
     parser.add_argument("--restart", action="store_true")
     parser.add_argument("--no-cold", action="store_true")
+    parser.add_argument("--held-miss-floor", type=float, default=20.0,
+                        metavar="MB_S", help="held-miss throughput floor "
+                        "in MB/s regression guard (0 disables)")
     arguments = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit("fs-baseline: run as root on the board")
@@ -197,14 +224,10 @@ def main():
     after = host_sample(pid)
     with open(result_path) as source:
         guest = json.load(source)
-    check_held_miss(guest)
     record = {"identity": identity(),
               "host": {"before": before, "after": after, "peak": peak,
-                       "cpu_s": after["cpu_s"] - before["cpu_s"]},
-              "guest": guest}
-    with open(arguments.output, "w") as output:
-        json.dump(record, output, indent=1, sort_keys=True)
-    print("fs-baseline: wrote %s" % arguments.output)
+                       "cpu_s": after["cpu_s"] - before["cpu_s"]}}
+    write_record(record, guest, arguments.held_miss_floor, arguments.output)
 
 
 if __name__ == "__main__":
