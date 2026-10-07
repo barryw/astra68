@@ -330,6 +330,9 @@ resolve_token(AstraEventsBackend *backend, uintptr_t token)
         &backend->nodes[token - 1u] : NULL;
 }
 
+static uint64_t log_file_size(const AstraEventsBackend *backend,
+                              uint32_t index);
+
 /*
  * A path becomes a filter. `describe` fills the node without claiming one, so
  * stat and open share one parser -- two parsers for one namespace is how a
@@ -348,6 +351,7 @@ describe(const AstraEventsBackend *backend, AstraEventsNode *node,
     node->activity = 0u;
     node->activity_filter = 0u;
     node->previous_boot = 0u;
+    node->log_index = 0u;
 
     if (strcmp(path, "/") == 0 || strcmp(path, "") == 0) {
         node->kind = KIND_ROOT;
@@ -381,6 +385,20 @@ describe(const AstraEventsBackend *backend, AstraEventsNode *node,
         if (backend->log_read == NULL)
             return ASTRA_VFS_ERR_NOT_FOUND;
         node->kind = path[4] == '\0' ? KIND_LOG_DIR : KIND_LOG_FILE;
+        node->log_index = 0u;
+        return ASTRA_VFS_OK;
+    }
+    rest = after(path, "/log/syslog.");
+    if (rest != NULL) {
+        /* syslog.1 .. syslog.KEEP, and only while it exists: a rotation is
+         * never empty (log_file.c rotates a file only once it has bytes). */
+        if (backend->log_read == NULL || rest[0] < '1' ||
+            rest[0] > (char)('0' + ASTRA_EVENTS_LOG_KEEP) || rest[1] != '\0')
+            return ASTRA_VFS_ERR_NOT_FOUND;
+        node->log_index = (uint8_t)(rest[0] - '0');
+        if (log_file_size(backend, node->log_index) == 0u)
+            return ASTRA_VFS_ERR_NOT_FOUND;
+        node->kind = KIND_LOG_FILE;
         return ASTRA_VFS_OK;
     }
     rest = after(path, "/boot/current/");
@@ -457,23 +475,24 @@ is_directory(uint8_t kind)
 /* The syslog is a real file read through, so it has a real size; every
  * other leaf is rendered on read and reports zero (see events_open). */
 static uint64_t
-log_file_size(const AstraEventsBackend *backend)
+log_file_size(const AstraEventsBackend *backend, uint32_t index)
 {
     uint64_t bytes = 0u;
 
     if (backend->log_size == NULL ||
-        !backend->log_size(backend->log_context, &bytes))
+        !backend->log_size(backend->log_context, index, &bytes))
         return 0u;
     return bytes;
 }
 
 static void
-events_node_info(const AstraEventsBackend *backend, uint8_t kind,
-                 AstraVfsNodeInfo *info)
+events_node_info(const AstraEventsBackend *backend,
+                 const AstraEventsNode *node, AstraVfsNodeInfo *info)
 {
-    int directory = is_directory(kind);
+    int directory = is_directory(node->kind);
 
-    info->size = kind == KIND_LOG_FILE ? log_file_size(backend) : 0u;
+    info->size = node->kind == KIND_LOG_FILE ?
+        log_file_size(backend, node->log_index) : 0u;
     info->kind = directory ? ASTRA_VFS_KIND_DIRECTORY : ASTRA_VFS_KIND_FILE;
     info->mode = directory ? 0500u : 0400u;
     info->nlink = directory ? 2u : 1u;
@@ -509,13 +528,14 @@ events_open(void *context, const char *path, uint32_t flags,
     held->activity = described.activity;
     held->activity_filter = described.activity_filter;
     held->previous_boot = described.previous_boot;
+    held->log_index = described.log_index;
     /*
      * A leaf has no size until it is read: the text is rendered from records
      * that are still arriving. Reporting zero is the honest answer the handler
      * contract was written to allow, and a reader that trusts a size here
      * would be trusting a number that was true a moment ago.
      */
-    events_node_info(backend, held->kind, info);
+    events_node_info(backend, held, info);
     return ASTRA_VFS_OK;
 }
 
@@ -555,8 +575,9 @@ events_read(void *context, uintptr_t token, uint64_t offset, void *buffer,
     /* The text log is the service's file, read through: no rendering. */
     if (node->kind == KIND_LOG_FILE) {
         return backend->log_read != NULL &&
-            backend->log_read(backend->log_context, offset, buffer, length,
-                              moved) ? ASTRA_VFS_OK : ASTRA_VFS_ERR_IO;
+            backend->log_read(backend->log_context, node->log_index, offset,
+                              buffer, length, moved) ?
+            ASTRA_VFS_OK : ASTRA_VFS_ERR_IO;
     }
     store = node->previous_boot != 0u ? backend->previous : backend->store;
     if (store == NULL) {
@@ -657,7 +678,7 @@ events_stat(void *context, const char *path, AstraVfsNodeInfo *info)
     if (status != ASTRA_VFS_OK) {
         return status;
     }
-    events_node_info(backend_of(context), described.kind, info);
+    events_node_info(backend_of(context), &described, info);
     return ASTRA_VFS_OK;
 }
 
@@ -668,7 +689,7 @@ events_stat_node(void *context, uintptr_t token, AstraVfsNodeInfo *info)
 
     if (node == NULL)
         return ASTRA_VFS_ERR_INVALID;
-    events_node_info(backend_of(context), node->kind, info);
+    events_node_info(backend_of(context), node, info);
     return ASTRA_VFS_OK;
 }
 
@@ -786,10 +807,25 @@ events_readdir(void *context, uintptr_t directory, const char *path,
         }
         break;
     case KIND_LOG_DIR:
-        if (cookie == 0u) {
-            entry = "syslog";
+        /* syslog, then each rotation that exists; the cookie is the next
+         * file index to look at. */
+        for (; cookie <= ASTRA_EVENTS_LOG_KEEP; ++cookie) {
+            uint64_t size = log_file_size(backend, (uint32_t)cookie);
+
+            if (cookie != 0u && size == 0u)
+                continue;
+            if (capacity < sizeof("syslog.0"))
+                return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
+            (void)copy_name(name, capacity, "syslog");
+            if (cookie != 0u) {
+                name[6] = '.';
+                name[7] = (char)('0' + cookie);
+                name[8] = '\0';
+            }
             info->kind = ASTRA_VFS_KIND_FILE;
-            info->size = log_file_size(backend);
+            info->size = size;
+            *next = cookie + 1u;
+            return ASTRA_VFS_OK;
         }
         break;
     case KIND_BOOT:

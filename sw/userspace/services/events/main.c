@@ -494,19 +494,29 @@ static const AstraLogFileOps log_host_ops = {
     log_host_dir, log_size, log_append, log_rename
 };
 
-/* EVENTS:log/syslog: the boot volume's copy, read through. */
+/* EVENTS:log/syslog and syslog.N: the boot volume's copies, read through.
+ * Names as log_file.c rotate() makes them. */
+static const char *const syslog_names[ASTRA_EVENTS_LOG_KEEP + 1u] = {
+    "syslog", "syslog.1", "syslog.2", "syslog.3"
+};
+_Static_assert(LOG_KEEP == ASTRA_EVENTS_LOG_KEEP,
+               "EVENTS:log serves every rotation the service keeps");
+
 static int
-syslog_read(void *context, uint64_t offset, void *buffer, uint32_t length,
-            uint32_t *moved)
+syslog_read(void *context, uint32_t index, uint64_t offset, void *buffer,
+            uint32_t length, uint32_t *moved)
 {
+    char path[LOG_PATH_MAX];
     AstraFile file = ASTRA_FILE_INIT;
     uint32_t status;
 
     (void)context;
     *moved = 0u;
-    status = astra_filesystem_open(&process_filesystem.filesystem,
-                                   "/store/syslog", ASTRA_VFS_OPEN_READ,
-                                   &file);
+    if (index > ASTRA_EVENTS_LOG_KEEP ||
+        !log_path(path, log_store_dir, syslog_names[index]))
+        return 0;
+    status = astra_filesystem_open(&process_filesystem.filesystem, path,
+                                   ASTRA_VFS_OPEN_READ, &file);
     if (status == ASTRA_VFS_ERR_NOT_FOUND)
         return 1;
     if (status != ASTRA_VFS_OK)
@@ -517,10 +527,12 @@ syslog_read(void *context, uint64_t offset, void *buffer, uint32_t length,
 }
 
 static int
-syslog_size(void *context, uint64_t *bytes)
+syslog_size(void *context, uint32_t index, uint64_t *bytes)
 {
     (void)context;
-    return log_size(log_store_dir, "syslog", bytes);
+    if (index > ASTRA_EVENTS_LOG_KEEP)
+        return 0;
+    return log_size(log_store_dir, syslog_names[index], bytes);
 }
 
 /*
