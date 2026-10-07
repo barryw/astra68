@@ -89,18 +89,25 @@ What actually runs today, verified against source:
   service bound to one host directory export at startup. This is not a
   dynamic volume inventory: the volume a session reaches is fixed at
   compile/link time, not discovered or mounted.
-- **The trusted-boundary prototype is further along than the PRD's gap table
-  suggests.** `ASTRA_HOST_CAP_OWNER_SCOPED` is already a required capability
-  (`sw/userspace/vfs/src/vfs_host_transport.c` refuses to initialize without
-  it), and on the Linux/QEMU side
-  (`emu/qemu/qemu-9.2/hw/m68k/astra68.c`) every open host file handle is
-  stamped with the kernel-authenticated channel/submission owner and checked
-  against it on every later operation and release — never a value read from
-  the wire command. Host-root opens already use
-  `openat2(..., RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS)`. What is still
-  missing is the dynamic, per-grant rooted session FS15 specifies: today
-  there are exactly two fixed roots (WORK, SOUND), confined the same way, not
-  one rooted session per mounted volume and grant.
+- **Grant enforcement is client-only, and the host device is handed to
+  clients.** Rights and assign roots are checked only in the client library
+  (`astra_assign_resolve`, `sw/userspace/vfs/src/vfs_assign.c`); the VFS
+  service binds a session to the kernel-stamped sender pid and checks
+  neither root nor rights. `..` is folded lexically before lookup
+  (`astra_path_normalise`). On HELLO the port service duplicates the
+  host-device capability (READ|WRITE|TRANSFER) to every client
+  (`vfs_port_transport.c`, HELLO version 18 and later), and the client then
+  sends raw host commands itself (`vfs_host_direct.c`, WORK hard-coded).
+  QEMU's per-handle owner stamp (`ASTRA_HOST_CAP_OWNER_SCOPED`) is the
+  kernel-authenticated owner of the process holding that device -- HostFS,
+  or any client that received the duplicate -- never the client
+  application, and QEMU takes the command's `volume` field as given. So a
+  client of one host volume can address the other, and can issue other
+  host services' commands. Host-root opens are confined with
+  `openat2(..., RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS)`,
+  which keeps every request inside the two fixed exports but cannot
+  separate one client's grant from another's. This is the FS15/FS44 gap
+  Phase 1 closes.
 - **RAM storage.** `sw/userspace/services/ramfs/main.c` is a guest-side
   allocator bounded by `max_bytes` read from
   `/system/config/services/ramfs/settings.conf` (`astra_vfs_ram_init`) — not
