@@ -345,8 +345,10 @@ if measurement says so.
   output budget (up to half of it, so rings keep the rest).
 - **Rotation.** The log rotates when `syslog` reaches 1 MiB, or at the first
   write after local midnight, whichever comes first. Rotating renames `syslog`
-  to `syslog.1` and shifts older files up (`syslog.1.gz` → `syslog.2.gz` …).
-  The service then compresses `syslog.1` to `syslog.1.gz` in the background.
+  to `syslog.1` and shifts older files up (`syslog.1` → `syslog.2` …). Phase 1
+  keeps `syslog.1` to `syslog.3`, plain. From phase 2 the service then
+  compresses `syslog.1` to `syslog.1.gz` in the background, and the shifted
+  files are `syslog.N.gz`.
 - **Compression.** Rotated files are gzip, produced by zlib (vendored unmodified
   in `third_party/zlib`). They are written to `syslog.1.gz.tmp`, synced and
   renamed, and only then is `syslog.1` removed, so a crash leaves either the
@@ -460,7 +462,7 @@ if measurement says so.
 - **`LOG` for every process.** `LOG` is the send endpoint the log service
   publishes.
   - `build_grants` gives it to every entry, as it does `LIBS:`
-    (`supervisor/src/loader.c:1018`).
+    (`supervisor/src/loader.c:1043`, the `LOG` grant block).
   - Terminal's `launch_grants` adds it
     (`services/terminal/console_session.c:99`).
   - It joins the application ceiling (`sw/include/astra/application_policy.h`).

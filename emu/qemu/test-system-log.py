@@ -562,8 +562,10 @@ def check_store(image, text, work, stopped):
     tail = host[len(stored):]
     for line in tail:
         match = LINE.match(line)
+        if match is not None and match.group(1).startswith("boot+"):
+            continue  # no wall time to age it by; its place is checked above
         stamp = (datetime.datetime.fromisoformat(match.group(1)).timestamp()
-                 if match is not None and match.group(1)[0] != "b" else None)
+                 if match is not None else None)
         if stamp is None or stamp < stopped - STORE_TAIL_S:
             fail("store: the volume lacks %d host lines, from %r, older "
                  "than the last %d s" % (len(tail), line, STORE_TAIL_S))

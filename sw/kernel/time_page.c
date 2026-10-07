@@ -47,6 +47,8 @@ bool kernel_time_page_init(void)
         time_physical = 0u;
         return false;
     }
+    /* Not redundant: a KERNEL_MEMORY_NO_POISON host build (test_process,
+     * test_vm) does not fill "zeroed" frames (memory.c, poison). */
     kernel_bytes_clear(bytes, sizeof(AstraTimePage));
     time_page = bytes;
     time_page->version = ASTRA_TIME_PAGE_VERSION;

@@ -590,34 +590,35 @@ astra_log_line(uint32_t level, uint32_t stream, const char *text,
     full = astra_log_producer_drop_if_full(log_producer_of(state), length);
     if (full == ASTRA_LOG_WRITE_DROPPED)
         return ASTRA_SYSCALL_OK;
-    astra_time_now(&now);
-    /* Every field, without a memset call; the writer overwrites sequence,
-     * dropped, text_length and slots. */
-    fields.sequence = 0u;
-    fields.dropped = 0u;
-    fields.text_length = 0u;
-    fields.slots = 0u;
-    fields.reserved = 0u;
-    fields.monotonic_high = (uint32_t)(now.monotonic_ns >> 32);
-    fields.monotonic_low = (uint32_t)now.monotonic_ns;
-    fields.wall_high = (uint32_t)(now.wall_ns >> 32);
-    fields.wall_low = (uint32_t)now.wall_ns;
-    fields.utc_offset = now.utc_offset;
-    fields.zone = now.zone;
-    fields.level = (uint8_t)level;
-    fields.stream = (uint8_t)stream;
-    fields.flags = now.wall_valid ? ASTRA_LOG_FLAG_WALL_VALID : 0u;
-    if (full == ASTRA_LOG_WRITE_DEAD ||
-        astra_log_producer_write(log_producer_of(state), &fields, text,
-                                 length) == ASTRA_LOG_WRITE_DEAD) {
-        /* The service went away, or let go of this ring: kernel ring until a
-         * later setup works. The dead ring stays mapped (LOG_PRODUCERS):
-         * other writers may be in it. */
-        log_ring_died(state);
-        return length == 0u ? ASTRA_SYSCALL_OK :
-                              log_write_level(text, length, level);
+    /* A dead ring falls back before it costs a clock read too. */
+    if (full != ASTRA_LOG_WRITE_DEAD) {
+        astra_time_now(&now);
+        /* Every field, without a memset call; the writer overwrites
+         * sequence, dropped, text_length and slots. */
+        fields.sequence = 0u;
+        fields.dropped = 0u;
+        fields.text_length = 0u;
+        fields.slots = 0u;
+        fields.reserved = 0u;
+        fields.monotonic_high = (uint32_t)(now.monotonic_ns >> 32);
+        fields.monotonic_low = (uint32_t)now.monotonic_ns;
+        fields.wall_high = (uint32_t)(now.wall_ns >> 32);
+        fields.wall_low = (uint32_t)now.wall_ns;
+        fields.utc_offset = now.utc_offset;
+        fields.zone = now.zone;
+        fields.level = (uint8_t)level;
+        fields.stream = (uint8_t)stream;
+        fields.flags = now.wall_valid ? ASTRA_LOG_FLAG_WALL_VALID : 0u;
+        if (astra_log_producer_write(log_producer_of(state), &fields, text,
+                                     length) != ASTRA_LOG_WRITE_DEAD)
+            return ASTRA_SYSCALL_OK; /* written, or dropped and counted */
     }
-    return ASTRA_SYSCALL_OK; /* written, or dropped and counted */
+    /* The service went away, or let go of this ring: kernel ring until a
+     * later setup works. The dead ring stays mapped (LOG_PRODUCERS): other
+     * writers may be in it. */
+    log_ring_died(state);
+    return length == 0u ? ASTRA_SYSCALL_OK :
+                          log_write_level(text, length, level);
 }
 
 uint32_t
