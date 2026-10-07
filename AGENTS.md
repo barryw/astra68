@@ -30,6 +30,13 @@
   session through completion. A wrapper returning without visible output is not
   proof that its remote child completed or failed; confirm both the session exit
   status and the expected artifact/log before starting a replacement run.
+- Filesystem gates run QEMU as root, as `astra.service` does on the board:
+  `tools/astra-qemu-root` (installed as `/usr/local/sbin/astra-qemu-root`,
+  allowed by `/etc/sudoers.d/astra-qemu-root`) loop-mounts a fresh ext4
+  provider image and runs only a `beast` host build of QEMU, with an
+  allowlisted argument shape, in a private mount namespace. Reinstall it
+  with `sudo install -o root -g root -m 0755 tools/astra-qemu-root
+  /usr/local/sbin/` after any change; gates refuse a stale copy.
 
 ## Kernel Development Discipline
 

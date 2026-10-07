@@ -720,7 +720,7 @@ class TraceReader:
 
 class Machine:
     def __init__(self, qemu, rom, image, socket_directory, extra_args=(),
-                 hostfs_root=None, debug_guest=False):
+                 hostfs_root=None, debug_guest=False, launcher=()):
         # Resolve every source-relative input before starting QEMU.  A missing
         # catalog must not leave a live emulator behind.
         hostfs_root = hostfs_root or os.environ.get(
@@ -734,7 +734,8 @@ class Machine:
         self.gdb_path = (os.path.join(self.runtime_directory, "gdb.sock")
                          if debug_guest else None)
         self.ring_path = os.path.join(socket_directory, "ring.bin")
-        command = ([qemu, "-M", "astra68", "-m", MEMORY, "-bios", rom,
+        command = list(launcher) + ([qemu, "-M", "astra68", "-m", MEMORY,
+                    "-bios", rom,
                     "-display", "none", "-monitor", "none", "-serial", "stdio",
                     "-no-reboot",
                     "-qmp", "unix:%s,server=on,wait=off" % self.qmp_path] +
@@ -742,7 +743,8 @@ class Machine:
                     if self.gdb_path else []) +
                    list(extra_args) +
                    ["-drive", "if=none,format=raw,file=%s" % image])
-        environment = qemu_environment(qemu, hostfs_root=hostfs_root)
+        environment = qemu_environment(
+            qemu, hostfs_root=None if launcher else hostfs_root)
         self.process = subprocess.Popen(
             command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1, env=environment)
