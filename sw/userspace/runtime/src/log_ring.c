@@ -69,13 +69,32 @@ astra_log_producer_init(AstraLogProducer *producer, volatile void *ring_base,
     producer->dead = 0u;
 }
 
+/*
+ * Plain stores into the ring are enough: the release fence before the commit
+ * words (astra_log_producer_write) orders them for the consumer, exactly as
+ * it ordered the old byte-at-a-time volatile stores. `to` is a slot payload,
+ * which is word-aligned (64-byte header, 252-byte slots, 4-byte commit
+ * word); `from` is whatever the caller passed. Long words from any even
+ * address: the m68k ABI aligns a long to 2, so GCC emits one move.l for an
+ * aligned(2) access, and gives anything weaker byte moves and shifts. An odd
+ * source is copied a byte at a time.
+ */
+typedef uint32_t __attribute__((aligned(2), may_alias)) even_u32;
+
 static void
 copy_out(volatile uint8_t *to, const void *from, uint32_t length)
 {
-    const uint8_t *bytes = from;
+    uint8_t *out = (uint8_t *)(uintptr_t)to;
+    const uint8_t *in = from;
+    uint32_t done = 0u;
 
-    for (uint32_t index = 0u; index < length; ++index)
-        to[index] = bytes[index];
+    if (((uintptr_t)in & 1u) == 0u) {
+        for (; done + 4u <= length; done += 4u)
+            *(uint32_t *)(void *)(out + done) =
+                *(const even_u32 *)(const void *)(in + done);
+    }
+    for (; done < length; ++done)
+        out[done] = in[done];
 }
 
 /*
@@ -151,6 +170,45 @@ maybe_notify(AstraLogProducer *producer, uint32_t first)
     ring_doorbell(producer, 0u);
 }
 
+/*
+ * A full ring: count the line, and ring the doorbell on the first drop and
+ * every ASTRA_LOG_DROP_DOORBELL_INTERVAL after it. A service that died
+ * behind never moves consumer_position, so the burst doorbell would never
+ * ring again and every line would drop forever. Each drop count is claimed
+ * by exactly one CAS winner, so exactly one writer rings per interval.
+ */
+static uint32_t
+drop(AstraLogProducer *producer)
+{
+    uint32_t *dropped = (uint32_t *)(uintptr_t)
+        &ASTRA_LOG_RING_DROPPED(producer->header);
+    uint32_t seen = __atomic_load_n(dropped, __ATOMIC_RELAXED);
+
+    while (!cas32(dropped, seen, seen + 1u))
+        seen = __atomic_load_n(dropped, __ATOMIC_RELAXED);
+    if (seen % ASTRA_LOG_DROP_DOORBELL_INTERVAL == 0u) {
+        ring_doorbell(producer, 1u);
+        if (__atomic_load_n(&producer->dead, __ATOMIC_ACQUIRE) != 0u)
+            return ASTRA_LOG_WRITE_DEAD; /* caller falls back */
+    }
+    return ASTRA_LOG_WRITE_DROPPED;
+}
+
+uint32_t
+astra_log_producer_drop_if_full(AstraLogProducer *producer, uint32_t length)
+{
+    uint32_t slots;
+
+    if (__atomic_load_n(&producer->dead, __ATOMIC_ACQUIRE) != 0u)
+        return ASTRA_LOG_WRITE_DEAD;
+    slots = astra_log_record_slots(length);
+    if (__atomic_load_n(&producer->reserved, __ATOMIC_ACQUIRE) + slots -
+            load32(&producer->header->consumer_position) <=
+        ASTRA_LOG_RING_CAPACITY)
+        return ASTRA_LOG_WRITE_OK;
+    return drop(producer);
+}
+
 uint32_t
 astra_log_producer_write(AstraLogProducer *producer,
                          const AstraLogRecordFields *fields,
@@ -174,26 +232,8 @@ astra_log_producer_write(AstraLogProducer *producer,
         uint32_t consumer = load32(&producer->header->consumer_position);
 
         first = __atomic_load_n(&producer->reserved, __ATOMIC_ACQUIRE);
-        if (first + slots - consumer > ASTRA_LOG_RING_CAPACITY) {
-            uint32_t *dropped = (uint32_t *)(uintptr_t)
-                &ASTRA_LOG_RING_DROPPED(producer->header);
-            uint32_t seen = __atomic_load_n(dropped, __ATOMIC_RELAXED);
-
-            while (!cas32(dropped, seen, seen + 1u))
-                seen = __atomic_load_n(dropped, __ATOMIC_RELAXED);
-            /*
-             * A service that died behind never moves consumer_position, so
-             * the burst doorbell would never ring again and every line would
-             * drop forever. Each drop count is claimed by exactly one CAS
-             * winner above, so exactly one writer rings per interval.
-             */
-            if (seen % ASTRA_LOG_DROP_DOORBELL_INTERVAL == 0u) {
-                ring_doorbell(producer, 1u);
-                if (__atomic_load_n(&producer->dead, __ATOMIC_ACQUIRE) != 0u)
-                    return ASTRA_LOG_WRITE_DEAD; /* caller falls back */
-            }
-            return ASTRA_LOG_WRITE_DROPPED;
-        }
+        if (first + slots - consumer > ASTRA_LOG_RING_CAPACITY)
+            return drop(producer);
         if (cas32(&producer->reserved, first, first + slots))
             break;
     }

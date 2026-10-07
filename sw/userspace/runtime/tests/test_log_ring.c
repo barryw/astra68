@@ -195,6 +195,99 @@ test_drops_ring_the_doorbell_and_find_the_service_dead(void)
     assert(notification_count == 4u);
 }
 
+/*
+ * The cheap check before a caller pays for a record: room means OK and counts
+ * nothing; a full ring drops exactly as a write would -- counted, the doorbell
+ * on the first drop and every ASTRA_LOG_DROP_DOORBELL_INTERVAL-th, DEAD once
+ * that doorbell finds the service gone -- and both paths share one count.
+ */
+static void
+test_drop_if_full_counts_like_a_write(void)
+{
+    AstraLogProducer producer;
+    AstraLogRecordFields value = fields(2u, ASTRA_LOG_STREAM_LOG);
+    AstraBulkRingHeader *header = (AstraBulkRingHeader *)(void *)area;
+
+    format_ring();
+    astra_log_producer_init(&producer, area, record_notify, NULL);
+    assert(astra_log_producer_drop_if_full(&producer, 4u) ==
+           ASTRA_LOG_WRITE_OK);
+    for (uint32_t index = 0u; index + 1u < ASTRA_LOG_RING_CAPACITY; ++index)
+        assert(astra_log_producer_write(&producer, &value, "line", 4u) ==
+               ASTRA_LOG_WRITE_OK);
+    /* One slot left: a one-slot line fits, a two-slot line does not. */
+    notification_count = 0u;
+    assert(astra_log_producer_drop_if_full(&producer, 4u) ==
+           ASTRA_LOG_WRITE_OK);
+    assert(ASTRA_LOG_RING_DROPPED(header) == 0u && notification_count == 0u);
+    assert(astra_log_producer_drop_if_full(&producer, 209u) ==
+           ASTRA_LOG_WRITE_DROPPED);
+    assert(ASTRA_LOG_RING_DROPPED(header) == 1u);
+    assert(notification_count == 1u && notify_dropping == 1u);
+    assert(astra_log_producer_write(&producer, &value, "line", 4u) ==
+           ASTRA_LOG_WRITE_OK);
+    /* Full: drops 2 .. 2*INTERVAL, by either path, ring at 65 and 129. */
+    for (uint32_t index = 1u; index < 2u * ASTRA_LOG_DROP_DOORBELL_INTERVAL;
+         ++index) {
+        uint32_t result = index % 2u ?
+            astra_log_producer_drop_if_full(&producer, 4u) :
+            astra_log_producer_write(&producer, &value, "line", 4u);
+
+        assert(result == ASTRA_LOG_WRITE_DROPPED);
+    }
+    assert(ASTRA_LOG_RING_DROPPED(header) ==
+           2u * ASTRA_LOG_DROP_DOORBELL_INTERVAL);
+    assert(notification_count == 2u);
+    notify_result = 1u;
+    assert(astra_log_producer_drop_if_full(&producer, 4u) ==
+           ASTRA_LOG_WRITE_DEAD);
+    assert(producer.dead != 0u && notification_count == 3u);
+    assert(astra_log_producer_drop_if_full(&producer, 4u) ==
+           ASTRA_LOG_WRITE_DEAD);
+    assert(notification_count == 3u);
+}
+
+/*
+ * Text is copied a word at a time from wherever the caller keeps it: every
+ * source alignment and every tail length, in one slot and across slots,
+ * reads back byte for byte.
+ */
+static void
+test_text_from_any_alignment(void)
+{
+    static char source[ASTRA_LOG_TEXT_MAX + 8u];
+    AstraLogProducer producer;
+    AstraLogRecordFields value = fields(2u, ASTRA_LOG_STREAM_LOG);
+    static const uint32_t lengths[] = {0u, 1u, 3u, 4u, 5u, 207u, 208u, 209u,
+                                       455u, 457u, ASTRA_LOG_TEXT_MAX};
+    uint32_t position = 0u;
+
+    for (uint32_t index = 0u; index < sizeof(source); ++index)
+        source[index] = (char)('!' + index * 7u % 90u);
+    format_ring();
+    astra_log_producer_init(&producer, area, NULL, NULL);
+    for (uint32_t offset = 0u; offset < 4u; ++offset) {
+        for (uint32_t index = 0u; index < sizeof(lengths) / sizeof(lengths[0]);
+             ++index) {
+            AstraLogRecordFields read;
+            char text[ASTRA_LOG_TEXT_MAX];
+            uint32_t length = 0u;
+
+            assert(astra_log_producer_write(&producer, &value,
+                                            source + offset, lengths[index]) ==
+                   ASTRA_LOG_WRITE_OK);
+            assert(astra_log_consumer_next(area, &position, &read, text,
+                                           sizeof(text), &length) ==
+                   ASTRA_LOG_READ_OK);
+            assert(length == lengths[index]);
+            assert(memcmp(text, source + offset, length) == 0);
+            assert(read.monotonic_low == 42u && read.level == 2u);
+            ((volatile AstraBulkRingHeader *)area)->consumer_position =
+                position;
+        }
+    }
+}
+
 static void
 test_uncommitted_slot_holds_back_publication(void)
 {
@@ -512,6 +605,8 @@ main(void)
     test_long_record_wraps_the_ring();
     test_full_ring_drops_and_counts();
     test_drops_ring_the_doorbell_and_find_the_service_dead();
+    test_drop_if_full_counts_like_a_write();
+    test_text_from_any_alignment();
     test_uncommitted_slot_holds_back_publication();
     test_corrupt_slot_count_is_rejected();
     test_concurrent_producers();

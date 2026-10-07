@@ -162,6 +162,13 @@ uint32_t astra_log_record_slots(uint32_t text_length);
 uint32_t astra_log_producer_write(AstraLogProducer *producer,
                                   const AstraLogRecordFields *fields,
                                   const char *text, uint32_t length);
+/* Before a caller pays for a record's time and fields: ASTRA_LOG_WRITE_OK
+ * when the ring has room for `length` bytes of text now; otherwise the line
+ * is dropped and counted exactly as astra_log_producer_write drops it
+ * (ASTRA_LOG_WRITE_DROPPED), or the producer is dead (ASTRA_LOG_WRITE_DEAD).
+ * Room now is not a reservation: the write still checks. */
+uint32_t astra_log_producer_drop_if_full(AstraLogProducer *producer,
+                                         uint32_t length);
 uint32_t astra_log_consumer_next(volatile const void *ring_base,
                                  uint32_t *position,
                                  AstraLogRecordFields *fields, char *text,
