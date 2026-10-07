@@ -8,8 +8,15 @@ Runs on the board, as root, from the release's bin directory:
   - opens Terminal by double-clicking its icon (the desktop logs the icon's
     rectangle as "desktop icon /apps/Terminal.app L T W H");
   - types `fsbench --label LABEL --cold-handshake`;
-  - at each cold marker drops the Linux page cache and removes the marker;
+  - at the shared cold marker, drops the whole Linux page cache;
+  - at held-miss's own marker (fsbench-LABEL.heldmiss.cold), evicts only
+    `big2`'s host file with posix_fadvise(DONTNEED), leaving `big` -- and
+    everything else fsbench wrote -- warm. held-miss measures cached reads
+    of `big` under a concurrently cold `big2`; a global drop here would
+    evict `big` too and contaminate the "cached" half of that measurement
+    (it showed up as held-miss's p95 running ~4x its median);
   - samples QEMU's RSS, descriptor count and CPU time before and after;
+  - checks held-miss's own throughput as a regression guard;
   - writes {"identity", "host", "guest"} to OUT.json.
 """
 
@@ -105,6 +112,40 @@ def drop_caches():
         control.write("3\n")
 
 
+def evict_file(path):
+    """Drop one file's pages from the host page cache, not the whole
+    cache -- so held-miss's `big` stays warm while `big2` goes cold."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+    finally:
+        os.close(fd)
+
+
+def check_held_miss(guest):
+    """held-miss is cached reads of `big` under a concurrently cold `big2`
+    (docs/FILESYSTEM_PRODUCTION_PRD.md, "concurrent cached reads under a
+    held miss"): its 200 cached 4 KiB reads should sustain real page-cache
+    throughput. p95/median looked like the natural signal for `big` being
+    evicted too, but it is not reliable -- five runs with the global-drop
+    bug reintroduced (the three original pre-fix runs, plus two reproduced
+    while diagnosing the fix) measured p95/median anywhere from 1.78x to
+    4.03x, overlapping the ratios healthy runs produce under ordinary
+    scheduling noise. Throughput separates them cleanly: the same five
+    buggy runs measured 12.3-15.3 MB/s; a fixed run measured 27.2 MB/s.
+    20 MB/s is the floor, with margin on both sides."""
+    workload = guest.get("workloads", {}).get("held-miss")
+    throughput = workload.get("throughput_bps") if workload else None
+    if not throughput:
+        return
+    if throughput < 20_000_000:
+        raise SystemExit(
+            "fs-baseline: held-miss throughput %.1f MB/s -- `big` looks "
+            "evicted along with big2 (contaminated cached-read "
+            "measurement)" % (throughput / 1e6))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("label")
@@ -131,6 +172,9 @@ def main():
     before = host_sample(pid)
     result_path = os.path.join(ASTRA, "fsbench-%s.json" % arguments.label)
     cold_path = os.path.join(ASTRA, "fsbench-%s.cold" % arguments.label)
+    held_cold_path = os.path.join(
+        ASTRA, "fsbench-%s.heldmiss.cold" % arguments.label)
+    held_file = os.path.join(WORK, "fsbench-%s" % arguments.label, "big2")
     command = "fsbench --label %s%s\n" % (
         arguments.label, "" if arguments.no_cold else " --cold-handshake")
     if not rfb("--keys", command):
@@ -140,6 +184,9 @@ def main():
     while not os.path.exists(result_path):
         if time.monotonic() > deadline:
             raise SystemExit("fs-baseline: fsbench never finished")
+        if os.path.exists(held_cold_path):
+            evict_file(held_file)
+            os.unlink(held_cold_path)
         if os.path.exists(cold_path):
             drop_caches()
             os.unlink(cold_path)
@@ -150,6 +197,7 @@ def main():
     after = host_sample(pid)
     with open(result_path) as source:
         guest = json.load(source)
+    check_held_miss(guest)
     record = {"identity": identity(),
               "host": {"before": before, "after": after, "peak": peak,
                        "cpu_s": after["cpu_s"] - before["cpu_s"]},

@@ -11,6 +11,14 @@
  * "fsbench: cold NAME", and waits (60 s at most) until a host driver has
  * dropped the Linux page cache and removed the file.
  *
+ * held-miss gets its own handshake and its own marker,
+ * /work/.astra/fsbench-NAME.heldmiss.cold: it needs `big2` cold and `big`
+ * left warm, and the shared marker's host-side handler drops the whole
+ * Linux page cache, which would evict `big` too. A host driver that only
+ * understands the shared marker (drops everything) still unblocks this one
+ * correctly -- it just contaminates the measurement again, which is why it
+ * is a separate marker rather than a separate protocol.
+ *
  * Times are CLOCK_MONOTONIC, which Astra derives from QEMU's guest timebase:
  * 12.5 MHz, so MC68040 cycles = ns / 80. "host_commands" and "max_inflight"
  * are the HostFS host.channel counters around the workload, when METRICS: is
@@ -175,19 +183,23 @@ static uint64_t percentile(Result *result, uint32_t percent)
     return result->samples[index == 0u ? 0u : index - 1u];
 }
 
-static int cold_point(void)
+/* `suffix` distinguishes which marker a waiting host driver sees, so it can
+ * tell the shared cold point (drop everything) from held-miss's own (drop
+ * only big2) without guessing from call order. */
+static int cold_point_named(const char *suffix)
 {
-    char path[128];
+    char path[160];
     int fd;
 
     if (!handshake)
         return 0;
-    (void)snprintf(path, sizeof(path), "/work/.astra/fsbench-%s.cold", label);
+    (void)snprintf(path, sizeof(path), "/work/.astra/fsbench-%s%s.cold",
+                   label, suffix);
     fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0)
         return -1;
     (void)close(fd);
-    printf("fsbench: cold %s\n", label);
+    printf("fsbench: cold %s%s\n", label, suffix);
     fflush(stdout);
     for (uint32_t waited = 0u; waited < 600u; ++waited) {
         struct stat st;
@@ -198,6 +210,16 @@ static int cold_point(void)
         (void)nanosleep(&pause, NULL);
     }
     return -1;
+}
+
+static int cold_point(void)
+{
+    return cold_point_named("");
+}
+
+static int held_miss_cold_point(void)
+{
+    return cold_point_named(".heldmiss");
 }
 
 static int write_whole(const char *path, uint32_t bytes)
@@ -588,12 +610,16 @@ int main(int argc, char **argv)
     for (uint32_t workload = 0u; workload < W_COUNT; ++workload) {
         Result *result = &results[workload];
         int cold = workload == W_STAT_COLD || workload == W_OPEN_COLD ||
-                   workload == W_SEQ_READ_COLD || workload == W_HELD_MISS;
+                   workload == W_SEQ_READ_COLD;
 
         if (!wanted(workload))
             continue;
         if (cold && cold_point() != 0) {
             fprintf(stderr, "fsbench: no cold handshake\n");
+            return 1;
+        }
+        if (workload == W_HELD_MISS && held_miss_cold_point() != 0) {
+            fprintf(stderr, "fsbench: no held-miss cold handshake\n");
             return 1;
         }
         begin(result, workload);

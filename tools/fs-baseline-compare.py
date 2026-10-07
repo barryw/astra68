@@ -5,9 +5,11 @@ usage: fs-baseline-compare.py BASE.json NEW.json [--budget 0.10]
 
 A workload passes when its median and p95 are at most (1 + budget) times
 the baseline's, and its throughput, when it has one, is at least
-(1 - budget) times the baseline's. Exit 0 when every workload present in
-both passes, 1 otherwise. docs/FILESYSTEM_PRODUCTION_PRD.md, "Acceptance
-and performance gates".
+(1 - budget) times the baseline's. A workload present in only one of the
+two records is a FAIL naming it: a partial run must not read as a clean
+comparison. Exit 0 when every workload is present in both and passes,
+1 otherwise. docs/FILESYSTEM_PRODUCTION_PRD.md, "Acceptance and
+performance gates".
 """
 
 import argparse
@@ -30,6 +32,12 @@ def main():
     base = workloads(arguments.base)
     new = workloads(arguments.new)
     failed = False
+    for name in sorted(set(base) - set(new)):
+        print("%-16s MISSING (only in base)" % name)
+        failed = True
+    for name in sorted(set(new) - set(base)):
+        print("%-16s MISSING (only in new)" % name)
+        failed = True
     for name in sorted(set(base) & set(new)):
         old, now = base[name], new[name]
         verdicts = []
