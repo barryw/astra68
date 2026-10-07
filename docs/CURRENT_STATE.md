@@ -1306,12 +1306,14 @@ boot volume and a live host copy at `WORK:.astra/syslog`. Reading it is in
 `docs/DEBUGGING.md` section 2; the ABI is in `docs/ABI.md`, "Time page" and
 "Log ring". All 16 QEMU gates, `test-system-log.py` with and without
 `--no-sweep`, `test-events.py`, `test-terminal.py` and
-`test-desktop-apps.py` pass on the branch at `a3f666f7`.
+`test-desktop-apps.py` pass on the branch at `a3f666f7`, and again, with
+the final-review fixes (fork and quiet checks added to
+`test-system-log.py`), at `986ef6f3`.
 
 DE25 release
 `1c6898197a3811d0d12e64b369be92bb4ad3915b520fc1fbfa3552797bbde985`, built
-from `a3f666f7` by `emu/qemu/publish-de25-release.sh`, is installed and
-current. The QEMU the service runs is that release's
+from `a3f666f7` by `emu/qemu/publish-de25-release.sh`, was the first
+installed. The QEMU the service runs is that release's
 `qemu/bin/qemu-system-m68k-astra` (from `/proc/<pid>/exe`), and it carries
 the block device model (two `Astra68 storage image` strings). Doom opened
 over the remote desktop wrote its banner to
@@ -1334,12 +1336,49 @@ not the time page alone, with n=2 rounds:
 | motion (125 Hz) | 88.0%, 85.2% | 8.3%, 7.5% | 86.0%, 84.2% | 6.4%, 7.3% |
 | idle after | 81.1%, 80.6% | 21.8%, 22.2% | 81.8%, 83.0% | 20.5%, 19.0% |
 
-Doom presented 35.1-35.3 frames/s idle on both, with no audio gaps. The
-host vCPU figures overlap between the two. Guest idle is about two points
-lower on the branch in every idle window, and cross-space switches rise from
-about 255/s to about 290/s. That is the cost of the whole branch on this
-workload; two rounds cannot say how much of it, if any, is the time-page
-update on each switch.
+Doom presented 35.1-35.3 frames/s idle on both, with no audio gaps.
+
+The ~2 points and the ~35 extra cross-space switches/s were not the time
+page. They were a stuck kernel-trace cursor (`ded44dc0`):
+`kernel_trace_drain_user` advanced its cursor only on a returned user
+record, so once Doom's start-up page faults wrapped the ring past every user
+record (program text now goes to log rings, so nothing refreshes it), every
+1 s sweep reported the same ~2,000-slot gap again, and the events service
+counted it as loss and rewrote `/events/store.N` through the storage
+service. The cursor now means "examined through" and a gap is reported once.
+`.superpowers/sdd/system-log-switch-investigation.md` is the diagnosis.
+
+DE25 release
+`701e4c0fb2102d34d24157c381d523ea613b0b3dd86d336a16e9122753b9913c`, built
+from `986ef6f3`, is installed and current. `de25-ab.sh -n 2 -s 20` against
+`1c689819` with Doom running (per-process figures from the same astra-top
+windows; the second `1c689819` round stopped in its idle-after window
+because the sampler stopped writing, and one more `701e4c0f` round was taken
+with `-n 1`):
+
+| Window | `1c689819` cross-space/s | `701e4c0f` cross-space/s | `1c689819` guest idle | `701e4c0f` guest idle |
+|---|---|---|---|---|
+| idle | 282, 284 | 257, 250 | 22.4%, 21.9% | 23.8%, 22.2% |
+| motion (125 Hz) | 401, 393 | 388, 382 | 9.8%, 9.6% | 10.9%, 9.3% |
+| idle after | 287 | 259, 254 | 18.2% | 20.1%, 18.1% |
+
+- events: 8.0-8.8 runs/s (19 syscalls/s) idle before, 1.2-1.3 runs/s
+  after; storage: 10.3-10.8 runs/s (123-125 syscalls/s) before, 0.3 runs/s
+  (under 1 syscall/s) after. Doom's own runs/s are unchanged.
+- Cross-space switches are back to main's ~255/s (main measured 252-257).
+- Over 74 s of Doom on `701e4c0f`, both store banks read from the board's
+  storage image (copied, journal replayed) held generation 0xE and 0xF and
+  `lost_in_transport` 0 at both ends; QEMU's `write_bytes` grew about
+  4.6 KB/s (hostfs sample and syslog included), against about 34 KB/s of
+  store rewrites before. Whether the trace ring wrapped in that boot was
+  not checked (the QMP socket is the input helper's).
+- Guest idle on the idle windows overlaps main's range (main 21.6-22.9%),
+  with n=2.
+- Open: on `1c689819` the sampler twice stopped writing
+  `WORK:.astra/sample` while QEMU kept running Doom: at 15:26 board time
+  with Doom long up, before this A/B, and about a minute into its second
+  `1c689819` round. Not seen on `701e4c0f`
+  in its three rounds; not yet explained.
 
 ## Developer observability
 
