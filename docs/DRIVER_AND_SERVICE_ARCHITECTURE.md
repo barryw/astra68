@@ -309,37 +309,32 @@ physical input capability reaches an application.
 
 ## 8. Storage stack
 
-**DIRECTION:** Storage uses these replaceable layers:
+**DIRECTION superseded by** [the filesystem production PRD](FILESYSTEM_PRODUCTION_PRD.md).
+That document, not the layering below, is authoritative for storage. In
+summary: Linux owns filesystem machinery (mounts, formats, partition probing,
+caching, journaling); Astra owns the native API, namespace, named volumes,
+grants, mount policy, desktop behavior, and diagnostics over it. The trusted
+boundary is enforced in the guest HostFS service using a kernel-stamped
+sender owner on every request, never a client-supplied one; Linux confines
+each rooted session with `openat2` `RESOLVE_BENEATH`. There is no guest-side
+filesystem-format implementation to keep in sync with Linux's.
 
-```text
-application
-    |
-storage/VFS: paths, mounts, volumes, assigns, object identity
-    |
-filesystem handler: FAT | AstraFS | RAM filesystem | future format
-    |
-generic block protocol
-    |
-physical block driver: SD | memory image | future network/device
-```
-
-The generic block class provides media identity and generation, logical and
-physical block sizes, capacity, read-only/removable state, batched reads and
-writes, flush and durability barriers, media notification, cancellation,
-timeout, and reset. Exact operation records, queue limits, ordering, and
-durability semantics remain **OPEN** for the block protocol specification.
-
-Filesystem handlers implement one node-oriented contract: mount/unmount,
-lookup relative to a directory handle, open/create, batched read/write,
-directory enumeration, attributes, timestamps, rename/link/unlink,
-synchronization, volume information, and notifications. VFS owns paths,
-assigns, permissions, mount policy, and open-object identity. A handler owns
-on-disk parsing and transactions.
+The layering this section used to specify — a guest filesystem handler
+(FAT/AstraFS/RAM) behind a generic block protocol behind a physical block
+driver — is retired as the production design, not merely superseded in
+emphasis: Linux performs the mount, cache, and journal that layer assumed
+Astra's own code would parse. See
+[Storage and VFS](STORAGE_AND_VFS.md#current-implementation-to-be-replaced)
+for what that retired layering still runs as today, and
+[Devices and volumes](DEVICE_AND_VOLUME_PLAN.md) for the namespace and naming
+rules built on top of it.
 
 Native logical locations may include `SYS:`, `WORK:`, `HOME:`, `RAM:`, and
 `APP:`. Assigns resolve transactionally and are inspectable. An already-open
 object remains bound to its handle when an assign changes. The POSIX
 personality is another view of these objects, not a second mount authority.
+This paragraph is unaffected by the PRD: Astra's namespace/assign semantics
+are the client-facing contract the PRD's Linux-owned backend sits behind.
 
 ## 8. Graphics stack
 

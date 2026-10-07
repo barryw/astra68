@@ -59,13 +59,15 @@ application is deciding.
    does not become a kernel panic. Never terminate a writable volume before
    its clients and request workers have stopped.
 3. For each mounted filesystem, VFS releases sessions, invokes the backend's
-   `flush` hook, then its `unmount` hook. Read-only filesystems such as CDFS
-   use a no-op flush. Ext4 commits its journal, disables write-back, stops the
-   journal, unmounts, unregisters the device, and flushes the block device.
-   RAMFS releases its memory; HostFS closes guest sessions and lets Linux's
-   normal poweroff flush its host filesystem. AstraFS and other backends
-   provide their own hooks; the supervisor never calls filesystem-specific
-   functions. Any failure prevents clean shutdown.
+   `flush` hook, then its `unmount` hook. A read-only backend uses a no-op
+   flush. Ext4 commits its journal, disables write-back, stops the journal,
+   unmounts, unregisters the device, and flushes the block device. RAMFS
+   releases its memory; HostFS closes guest sessions and lets Linux's normal
+   poweroff flush its host filesystem. AstraFS and other backends provide
+   their own hooks; the supervisor never calls filesystem-specific functions.
+   Any failure prevents clean shutdown. See
+   [the filesystem production PRD](FILESYSTEM_PRODUCTION_PRD.md) for how this
+   contract integrates with Linux-owned mounts going forward (FS33).
 4. PID 1 invokes `ASTRA_SYSCALL_SYSTEM_SHUTDOWN` or
    `ASTRA_SYSCALL_SYSTEM_RESTART` only after every phase succeeds. Axiom
    rejects any other caller and refuses while any other guest process or PID 1

@@ -5,9 +5,12 @@ linearization checkpoints pass, as does the first physical Phase E
 dirty-shutdown checkpoint
 
 This document defines what Astra means by a multi-threaded filesystem and the
-minimum implementation that may claim it. It extends
-[`STORAGE_AND_VFS.md`](STORAGE_AND_VFS.md); that document remains authoritative
-for namespace, media, persistence, resource, and block-device behavior.
+minimum implementation that may claim it, for the guest ext4 engine described
+in [`STORAGE_AND_VFS.md`](STORAGE_AND_VFS.md#current-implementation-to-be-replaced).
+[The filesystem production PRD](FILESYSTEM_PRODUCTION_PRD.md) is now
+authoritative for namespace, media, persistence, resource, and block-device
+behavior going forward; this document's concurrency proof applies to the
+engine it retires.
 
 ## 1. Goal
 
