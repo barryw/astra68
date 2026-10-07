@@ -17,6 +17,7 @@ for required in (
     'make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux"',
     "bin/astra-remote-desktop=",
     "bin/astra-audio-host=",
+    "bin/fs-baseline.py=",
     "systemd/astra-remote-desktop.service=",
     "systemd/astra-audio-host.service=",
     "systemd/astra.service=",

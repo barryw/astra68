@@ -73,7 +73,7 @@ TERMINFO_LIBRARY := $(ASTRA_TERMINFO_LIBRARY)
 SDL_COMMANDS := loopwave
 COMMANDS := status events log devices which open service shutdown restart ls ps metrics cat mkdir rm \
 	    nice renice \
-	    heapbench fsstress date echo ntp ping lua vim zsh $(SDL_COMMANDS)
+	    heapbench fsstress fsbench date echo ntp ping lua vim zsh $(SDL_COMMANDS)
 TEST_COMMANDS := posix hello cxx fpucheck logburst
 SBASE_PRIMARY := ls mkdir nice renice
 SOURCE_COMMANDS := $(filter-out lua cxx vim zsh $(SDL_COMMANDS) \
@@ -112,6 +112,7 @@ fpucheck_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 logburst_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 heapbench_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 fsstress_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+fsbench_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 date_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 echo_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 ntp_LIBRARIES := $(LIBC_LIBRARY) $(NTP_LIBRARY) $(RUNTIME_LIBRARY)

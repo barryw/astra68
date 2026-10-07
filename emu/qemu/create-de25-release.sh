@@ -62,5 +62,6 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$RELEASE_TOOL" create "$OUTPUT" \
     "bin/astra-top=$SCRIPT_DIR/astra-top.py" \
     "bin/de25-ab.sh=$SCRIPT_DIR/de25-ab.sh" \
     "bin/de25-rfb.py=$SCRIPT_DIR/de25-rfb.py" \
+    "bin/fs-baseline.py=$SCRIPT_DIR/fs-baseline.py" \
     "bin/astra-release.py=$RELEASE_TOOL" \
     "$@"
