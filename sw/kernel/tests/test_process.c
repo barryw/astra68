@@ -14268,6 +14268,73 @@ static void test_fork_copies_a_send_handle_to_a_closed_port(void)
     assert(kernel_port_pool_valid());
 }
 
+/*
+ * A user-copy ring endpoint is not inherited (the ring has one producer and
+ * one consumer), and holding one must not make fork() fail.  The runtime's
+ * log ring is one: a program that has logged once still forks.
+ */
+static void test_fork_leaves_a_user_copy_ring_endpoint_behind(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
+    const uint32_t area_rights =
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+        ASTRA_RIGHT_TRANSFER | ASTRA_RIGHT_ADMINISTER;
+    KernelCpuContext *next;
+    KernelRingSnapshot snapshot;
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t parent_id;
+    uint32_t child_id;
+    uint32_t area_handle;
+    uint32_t producer;
+    uint32_t ring_slot = UINT32_MAX;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &parent_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_AREA_CREATE,
+                     4u * KERNEL_PAGE_SIZE, area_rights, 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    area_handle = next->data[1];
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_AREA_MAP,
+                     area_handle, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                     0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_RING_CREATE,
+                     area_handle, 0u, 16u, 4u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    producer = next->data[1];
+    for (uint32_t slot = 0u; slot < KERNEL_RING_MAX; ++slot) {
+        if (kernel_ring_snapshot(slot, &snapshot) &&
+            snapshot.producer_references != 0u) {
+            ring_slot = slot;
+            break;
+        }
+    }
+    assert(ring_slot != UINT32_MAX);
+    assert(snapshot.producer_references == 1u &&
+           snapshot.consumer_references == 1u);
+
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_PROCESS_CLONE,
+                     0u, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    child_id = next->data[2];
+    assert(child_id != 0u && child_id != parent_id);
+    /* The child has neither endpoint; the parent's still work. */
+    assert(kernel_ring_snapshot(ring_slot, &snapshot));
+    assert(snapshot.producer_references == 1u &&
+           snapshot.consumer_references == 1u);
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_RING_NOTIFY,
+                     producer, 0u, 0u, ASTRA_BULK_RING_PRODUCER, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_ring_pool_valid());
+}
+
 static void test_process_growth_is_resource_backed(void)
 {
     static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
@@ -14865,6 +14932,7 @@ int main(void)
     test_process_clone_returns_twice_and_is_waitable();
     test_process_start_names_each_image();
     test_fork_copies_a_send_handle_to_a_closed_port();
+    test_fork_leaves_a_user_copy_ring_endpoint_behind();
     test_process_clone_rebinds_startup_identity();
     test_process_clone_rejects_multithreaded_source();
     test_process_growth_is_resource_backed();

@@ -16,6 +16,8 @@ boot volume's copy:
            the service has no timed wake at all, so only the doorbell can.
   fast-exit  ten programs that log one line and exit at once: every line
            is in the file.
+  fork     `logburst --fork` logs a line and forks: the fork succeeds, the
+           child logs from its own ring, and both lines are in the file.
   fault    `logburst 1 --fault` logs a line and faults: the line is kept,
            and the kernel's user-fault report names the same process.
   show     `log show` finds both, by program, level and text.
@@ -66,6 +68,7 @@ LINE = re.compile(
     r"(debug|info|notice|warning|error) (\S+)\[([0-9a-f]{8})\] "
     r"(log|stdout|stderr|kernel): (.*)$")
 BURST = re.compile(r"^logburst: (\d+) lines, (\d+) threads, (\d+) ns$")
+FORKED = re.compile(r"^logburst: fork child ([0-9a-f]{8}) status (-?\d+)$")
 BURST_LINE = re.compile(r"^burst (\d+) (\d+)$")
 DROPPED = re.compile(r"^\[(\d+) lines dropped\]$")
 COUNT = 5000
@@ -84,7 +87,8 @@ DOOM = ("Z_Init: Init zone memory allocation daemon. ",
         "V_Init: allocate screens.")
 DOOM_BUNDLE = "/apps/ChocolateDoom.app"
 STORE_SYSLOG = "/events/syslog"
-CHECKS = ("cost", "burst", "wake", "fast-exit", "fault", "doom", "stream")
+CHECKS = ("cost", "burst", "wake", "fast-exit", "fork", "fault", "doom",
+          "stream")
 FAST_EXITS = 10
 # The doorbell answers at once and the sweep within its 1 s interval; with
 # neither the line waits for an unrelated wake (a ring setup elsewhere).
@@ -290,6 +294,34 @@ def check_fast_exit(machine):
         fail("fast-exit: %d of %d one-line programs' lines are not in the "
              "file within %.0f s" % (missing, FAST_EXITS, WAKE_S))
     print("PASS fast-exit (%d programs)" % FAST_EXITS)
+
+
+def check_fork(machine):
+    """A program that has logged (so holds a ring producer) forks: the fork
+    succeeds, and parent and child each have their line in the file, the
+    child's under its own pid (docs/SYSTEM_LOG.md section 3, Fork and
+    exec)."""
+    lines, status = command(machine, "logburst --fork", 60, 11)
+    forked = [FORKED.match(line) for line in lines if FORKED.match(line)]
+    if status != 0 or not forked:
+        fail("fork: status %d, %r" % (status, lines[-10:]))
+    child = forked[-1].group(1)
+    deadline = time.monotonic() + WAKE_S
+    while True:
+        said = [match for _, match in records(host_text(machine))
+                if match is not None and match.group(3) == "logburst"]
+        kids = [m for m in said if m.group(6) == "logburst: child" and
+                m.group(4) == child]
+        parents = [m for m in said if m.group(6) == "logburst: parent" and
+                   m.group(4) != child]
+        if kids and parents:
+            break
+        if time.monotonic() > deadline:
+            fail("fork: child %s line %s, parent line %s" %
+                 (child, "kept" if kids else "missing",
+                  "kept" if parents else "missing"))
+        time.sleep(0.1)
+    print("PASS fork (child %s)" % child)
 
 
 def check_fault(machine):
@@ -519,6 +551,8 @@ def main():
                 check_wake(machine)
             if "fast-exit" in wanted:
                 check_fast_exit(machine)
+            if "fork" in wanted:
+                check_fork(machine)
             if "fault" in wanted:
                 pid = check_fault(machine)
                 check_show(machine, pid)

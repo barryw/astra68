@@ -1,6 +1,7 @@
 /*
  * Measures what logging costs the program that logs.
  *   logburst COUNT [--threads N] [--fault] [--off] [--warm] [--settle MS]
+ *   logburst --fork
  * Prints "logburst: COUNT lines, N threads, ELAPSED ns" on stdout.
  * --off formats every line but does not log it: the baseline.
  * --warm logs one line "logburst: warm" before the clock starts, so the
@@ -9,6 +10,9 @@
  *   burst: long enough for the log service to drain the warm line and sleep
  *   again, so only a doorbell (or its 1 s sweep) can bring the burst in.
  * --fault logs one line and then faults, for the crash gate.
+ * --fork logs "logburst: parent" and then fork()s: the child logs
+ *   "logburst: child" and exits 0, the parent waits for it. Prints
+ *   "logburst: fork child PID status S"; a fork that fails exits 6.
  *
  * Each thread writes COUNT / N lines "burst T I" (the first COUNT % N
  * threads one more), straight through astra_log_line so the result does not
@@ -27,7 +31,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <time.h>
+#include <unistd.h>
 
 ASTRA_PROGRAM("logburst", 1, 0, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
@@ -61,6 +67,37 @@ burst(void *argument)
     return NULL;
 }
 
+static void
+say(const char *text)
+{
+    (void)astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_LOG, text,
+                         (uint32_t)strlen(text));
+}
+
+/* A process that has logged forks, and both sides log again. */
+static int
+fork_test(void)
+{
+    int status = 0;
+    pid_t child;
+
+    say("logburst: parent");
+    child = fork();
+    if (child < 0) {
+        perror("logburst: fork");
+        return 6;
+    }
+    if (child == 0) {
+        say("logburst: child");
+        _exit(0);
+    }
+    if (waitpid(child, &status, 0) != child)
+        return 7;
+    printf("logburst: fork child %08x status %d\n", (unsigned)child,
+           WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : 8;
+}
+
 static int
 parse_count(const char *text, uint32_t *value)
 {
@@ -85,9 +122,12 @@ main(int argc, char **argv)
     uint32_t settle = 0u;
     uint64_t elapsed;
 
+    if (argc == 2 && strcmp(argv[1], "--fork") == 0)
+        return fork_test();
     if (argc < 2 || !parse_count(argv[1], &count)) {
         (void)fputs("usage: logburst COUNT [--threads N] [--fault] [--off] "
-                    "[--warm] [--settle MS]\n", stderr);
+                    "[--warm] [--settle MS]\n"
+                    "       logburst --fork\n", stderr);
         return 2;
     }
     for (int index = 2; index < argc; ++index) {
