@@ -723,22 +723,34 @@ static void test_owner_may_use_the_complete_transfer_pool(void)
 static void test_owner_death_discards_queued_authority(void)
 {
     KernelHandleTable source;
+    KernelHandleTable child;
     KernelPortSnapshot snapshot;
     KernelPortPoolStats stats;
     KernelPort *port;
     TestObject object = {0u, 7u};
     KernelHandle attached;
+    KernelHandle sender;
+    void *inherited;
     uint8_t message[24];
     uint32_t closed;
     uint32_t woken;
 
     initialize_test();
     kernel_handle_table_init(&source);
+    kernel_handle_table_init(&child);
+    assert(kernel_handle_table_set_owner(&source, 0x1002u, 0x1002u));
+    assert(kernel_handle_table_set_owner(&child, 0x1003u, 0x1003u));
     make_message(message, sizeof(message), 0x51u);
     attached = install_transfer_handle(
         &source, &object, ASTRA_RIGHT_READ | ASTRA_RIGHT_TRANSFER);
     assert(kernel_port_create(0x1001u, 4u, 256u, &port) ==
            KERNEL_PORT_OK);
+    assert(kernel_handle_install_cloneable(
+               &source, KERNEL_OBJECT_PORT_SEND,
+               ASTRA_RIGHT_WRITE | ASTRA_RIGHT_TRANSFER, port,
+               kernel_port_handle_retain, kernel_port_handle_release,
+               (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND, &sender) ==
+           KERNEL_HANDLE_OK);
     assert(kernel_port_send(port, &source, message, sizeof(message),
                             &attached, 1u, &woken) == KERNEL_PORT_OK);
     assert(kernel_port_owner_died(0x1001u, &closed, &woken) ==
@@ -752,11 +764,25 @@ static void test_owner_death_discards_queued_authority(void)
     assert(stats.discarded_messages == 1u);
     assert(stats.discarded_handles == 1u);
     kernel_port_handle_release(
-        port, (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND);
-    kernel_port_handle_release(
         port, (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_RECEIVE);
+    /* Fork inherits a dead sender without reviving its service. */
+    assert(kernel_handle_clone_table(&source, &child) == KERNEL_HANDLE_OK);
+    assert(kernel_handle_lookup(&child, sender, KERNEL_OBJECT_PORT_SEND,
+                                ASTRA_RIGHT_WRITE, &inherited) == KERNEL_HANDLE_OK);
+    assert(inherited == port);
+    assert(kernel_port_send(inherited, &child, message, sizeof(message),
+                            NULL, 0u, &woken) == KERNEL_PORT_PEER_DEAD);
+    assert(kernel_port_snapshot(0u, &snapshot));
+    assert(snapshot.state == KERNEL_PORT_CLOSING &&
+           snapshot.send_references == 2u && snapshot.receive_references == 0u);
+    assert(!kernel_port_handle_retain(
+        port, (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_RECEIVE));
+    assert(kernel_handle_close_all(&child) == 1u);
+    assert(kernel_handle_close_all(&source) == 1u);
     assert(kernel_port_snapshot(0u, &snapshot));
     assert(snapshot.state == KERNEL_PORT_FREE);
+    assert(!kernel_port_handle_retain(
+        port, (void *)(uintptr_t)KERNEL_PORT_ENDPOINT_SEND));
     assert(kernel_port_pool_valid());
 }
 
