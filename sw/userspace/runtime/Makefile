@@ -234,7 +234,8 @@ HOST_TEST_SOURCES := src/startup.c src/arguments.c src/syscall.c src/stream_sour
 # cannot map; the test supplies both through these hooks.
 HOST_TEST_DEFINES := -include tests/log_test_hooks.h -DASTRA_LOG_TEST=1 \
 	'-DASTRA_LOG_STARTUP_ADDRESS=astra_test_startup()' \
-	'-DASTRA_TIME_PAGE_ADDRESS=astra_test_time_page_address()'
+	'-DASTRA_TIME_PAGE_ADDRESS=astra_test_time_page_address()' \
+	'-DASTRA_LOG_PROGRAM_ORIGIN=astra_test_program_origin()'
 
 $(HOST_TEST): $(HOST_TEST_SOURCES) tests/log_test_hooks.h
 	@mkdir -p $(@D)

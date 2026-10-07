@@ -24,6 +24,7 @@
 #include <astra/endian.h>
 #include <astra/log_ring.h>
 #include <astra/process.h>
+#include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/status.h>
 #include <astra/syscall.h>
@@ -227,19 +228,86 @@ log_ring_notify(void *context, uint32_t dropping)
            status == ASTRA_SYSCALL_CLOSED ? 1u : 0u;
 }
 
+#ifndef ASTRA_LOG_PROGRAM_ORIGIN
+#define ASTRA_LOG_PROGRAM_ORIGIN ((uintptr_t)0)
+#endif
+
+/*
+ * The image's own ASTRA_PROGRAM name, or NULL. astra_user.ld puts the ELF and
+ * program headers at the start of the text segment, at
+ * ASTRA_EXECUTABLE_LINK_ADDRESS, and the record first in the read-only
+ * segment after it (astra_user_sections.ld). Only a dynamic program is read:
+ * its startup block says everything below the interpreter is its own, which
+ * bounds every read here. A static image falls back to argv[0].
+ */
+static const char *
+log_program_name(const AstraStartupInfo *startup)
+{
+    const uint32_t low = ASTRA_EXECUTABLE_LINK_ADDRESS;
+    uint32_t high;
+    const uint8_t *header;
+    uint32_t table;
+    uint32_t count;
+
+    if (startup == NULL ||
+        (startup->flags & ASTRA_STARTUP_FLAG_INTERPRETED) == 0u ||
+        startup->interpreter_base <= low ||
+        startup->interpreter_base - low < 52u)
+        return NULL;
+    high = startup->interpreter_base;
+    header = (const uint8_t *)(ASTRA_LOG_PROGRAM_ORIGIN + low);
+    if (header[0] != 0x7fu || header[1] != 'E' || header[2] != 'L' ||
+        header[3] != 'F' || astra_load_be16(header + 42u) != 32u)
+        return NULL;
+    table = astra_load_be32(header + 28u);
+    count = astra_load_be16(header + 44u);
+    if (table > high - low || count > (high - low - table) / 32u)
+        return NULL;
+    for (uint32_t index = 0u; index < count; ++index) {
+        const uint8_t *entry = header + table + index * 32u;
+        uint32_t address = astra_load_be32(entry + 8u);
+        const AstraProgram *record;
+
+        /* PT_LOAD, read-only: the rodata segment. */
+        if (astra_load_be32(entry) != 1u ||
+            astra_load_be32(entry + 24u) != 4u)
+            continue;
+        if (address < low || address > high ||
+            high - address < ASTRA_PROGRAM_SIZE ||
+            astra_load_be32(entry + 20u) < ASTRA_PROGRAM_SIZE)
+            return NULL;
+        record = (const AstraProgram *)(ASTRA_LOG_PROGRAM_ORIGIN + address);
+        return astra_load_be32(&record->magic) == ASTRA_PROGRAM_MAGIC &&
+               astra_load_be16(&record->record_version) ==
+                   ASTRA_PROGRAM_RECORD_VERSION &&
+               record->name[0] != '\0' ? record->name : NULL;
+    }
+    return NULL;
+}
+
+/* The ASTRA_PROGRAM name when the image declares one, else the basename of
+ * argv[0] (docs/SYSTEM_LOG.md section 2). */
 static void
 log_ident(char out[ASTRA_LOG_IDENT_MAX])
 {
-    const char *path = astra_startup_argument(ASTRA_LOG_STARTUP_ADDRESS, 0u);
-    const char *name = path;
+    const char *name = log_program_name(ASTRA_LOG_STARTUP_ADDRESS);
+    uint32_t limit = ASTRA_PROGRAM_NAME_MAX;
     uint32_t length = 0u;
 
-    if (path == NULL)
-        path = name = "?";
-    for (const char *at = path; *at != '\0'; ++at)
-        if (*at == '/')
-            name = at + 1;
-    while (name[length] != '\0' && length + 1u < ASTRA_LOG_IDENT_MAX) {
+    if (name == NULL) {
+        const char *path =
+            astra_startup_argument(ASTRA_LOG_STARTUP_ADDRESS, 0u);
+
+        if (path == NULL)
+            path = "?";
+        name = path;
+        for (const char *at = path; *at != '\0'; ++at)
+            if (*at == '/')
+                name = at + 1;
+        limit = ASTRA_LOG_IDENT_MAX - 1u;
+    }
+    while (length < limit && length + 1u < ASTRA_LOG_IDENT_MAX &&
+           name[length] != '\0') {
         out[length] = name[length];
         ++length;
     }

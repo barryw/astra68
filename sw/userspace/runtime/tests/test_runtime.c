@@ -16,6 +16,9 @@
 #include <astra/syscall.h>
 
 #include "../src/log_internal.h"
+#include <astra/address_space.h>
+#include <astra/endian.h>
+#include <astra/program.h>
 
 /*
  * The log ring's kernel: the calls astra_log_line's setup makes, answered from
@@ -30,6 +33,7 @@ static AstraTimePage fake_time_page;
 static struct {
     int active;
     int startup_has_log;
+    int startup_interpreted;  /* the program is a dynamic image (fake_image) */
     uint32_t area_creates;
     uint32_t ring_creates;
     uint32_t port_sends;      /* setup sends, refused or not */
@@ -55,6 +59,8 @@ static struct {
 } fake_startup;
 static uint32_t fake_argv[1];
 static const char fake_program[] = "/apps/ChocolateDoom.app/chocolate-doom";
+#define FAKE_IMAGE_BYTES 0x3000u
+static _Alignas(4) uint8_t fake_image[FAKE_IMAGE_BYTES];
 
 #define FAKE_LOG_PORT     0x7000u
 #define FAKE_AREA         0x7001u
@@ -89,7 +95,69 @@ astra_test_startup(void)
     fake_argv[0] = (uint32_t)(uintptr_t)fake_program;
     info->argc = 1u;
     info->argv_address = (uint32_t)(uintptr_t)fake_argv;
+    if (fake.startup_interpreted) {
+        info->flags |= ASTRA_STARTUP_FLAG_INTERPRETED;
+        /* Everything below the interpreter is the program's. */
+        info->interpreter_base = ASTRA_EXECUTABLE_LINK_ADDRESS +
+                                 FAKE_IMAGE_BYTES;
+        info->interpreter_span = 0x1000u;
+        info->interpreter_entry = info->interpreter_base;
+    }
     return info;
+}
+
+/*
+ * The program image as the loader leaves it at ASTRA_EXECUTABLE_LINK_ADDRESS
+ * (astra_user.ld): ELF and program headers in the text segment, and the
+ * ASTRA_PROGRAM record first in the read-only segment that follows.
+ */
+uintptr_t
+astra_test_program_origin(void)
+{
+    return (uintptr_t)fake_image - ASTRA_EXECUTABLE_LINK_ADDRESS;
+}
+
+static void
+fake_program_header(uint32_t index, uint32_t flags, uint32_t address,
+                    uint32_t bytes)
+{
+    uint8_t *header = fake_image + 52u + index * 32u;
+
+    astra_store_be32(header, 1u);               /* PT_LOAD */
+    astra_store_be32(header + 8u, address);     /* p_vaddr */
+    astra_store_be32(header + 16u, bytes);      /* p_filesz */
+    astra_store_be32(header + 20u, bytes);      /* p_memsz */
+    astra_store_be32(header + 24u, flags);
+}
+
+/* A dynamic program image declaring `name` (NULL: a record with a bad
+ * magic, as a non-Astra image would have). */
+static void
+fake_program_image(const char *name)
+{
+    AstraProgram record = {0};
+
+    memset(fake_image, 0, sizeof(fake_image));
+    memcpy(fake_image, "\177ELF\1\2\1", 7u);
+    astra_store_be16(fake_image + 16u, 2u);    /* ET_EXEC */
+    astra_store_be16(fake_image + 18u, 4u);    /* EM_68K */
+    astra_store_be32(fake_image + 20u, 1u);
+    astra_store_be32(fake_image + 28u, 52u);   /* e_phoff */
+    astra_store_be16(fake_image + 42u, 32u);   /* e_phentsize */
+    astra_store_be16(fake_image + 44u, 3u);    /* e_phnum */
+    fake_program_header(0u, 5u, ASTRA_EXECUTABLE_LINK_ADDRESS, 0x1000u);
+    fake_program_header(1u, 4u, ASTRA_EXECUTABLE_LINK_ADDRESS + 0x1000u,
+                        0x200u);
+    fake_program_header(2u, 6u, ASTRA_EXECUTABLE_LINK_ADDRESS + 0x2000u,
+                        0x100u);
+    astra_store_be32(&record.magic, name != NULL ? ASTRA_PROGRAM_MAGIC :
+                                                   0x12345678u);
+    astra_store_be16(&record.record_version, ASTRA_PROGRAM_RECORD_VERSION);
+    for (uint32_t at = 0u; name != NULL && at < sizeof(record.name) &&
+                           name[at] != '\0'; ++at)
+        record.name[at] = name[at];
+    memcpy(fake_image + 0x1000u, &record, sizeof(record));
+    fake.startup_interpreted = 1;
 }
 
 uintptr_t
@@ -2582,6 +2650,42 @@ last_ring_text_equals(const char *text)
     return fake_ring_records() != 0u && strcmp(fake_last_text, text) == 0;
 }
 
+/*
+ * The ident is the image's ASTRA_PROGRAM name when it declares one, else the
+ * basename of argv[0] (docs/SYSTEM_LOG.md section 2): a bundle opened from the
+ * desktop has the bundle as argv[0], and must still log as itself.
+ */
+static void
+test_log_ident_is_the_declared_program_name(void)
+{
+    static const char *const cases[][2] = {
+        /* declared name, expected ident */
+        {"doom-declared", "doom-declared"},
+        {NULL, "chocolate-doom"},                   /* no record: argv[0] */
+        {"", "chocolate-doom"},                     /* empty name: argv[0] */
+        /* A name filling the field has no NUL; it is still the name. */
+        {"abcdefghijklmnopqrstuvwx", "abcdefghijklmnopqrstuvwx"},
+    };
+
+    for (uint32_t index = 0u; index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        reset_fake_kernel();
+        fake_program_image(cases[index][0]);
+        assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_LOG,
+                              "x", 1u) == ASTRA_SYSCALL_OK);
+        assert(fake.port_sends == 1u);
+        assert(strcmp(fake.last_setup.ident, cases[index][1]) == 0);
+    }
+    /* A program header table that leaves the program's span is not read. */
+    reset_fake_kernel();
+    fake_program_image("doom-declared");
+    astra_store_be32(fake_image + 28u, FAKE_IMAGE_BYTES - 40u);
+    assert(astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_LOG,
+                          "x", 1u) == ASTRA_SYSCALL_OK);
+    assert(strcmp(fake.last_setup.ident, "chocolate-doom") == 0);
+    reset_fake_kernel();
+}
+
 static void
 test_log_line_sets_up_ring_once_and_writes_records(void)
 {
@@ -3072,6 +3176,7 @@ main(void)
     test_assert_message();
     test_log_line_rejects_bad_arguments();
     test_log_line_sets_up_ring_once_and_writes_records();
+    test_log_ident_is_the_declared_program_name();
     test_log_line_falls_back_when_send_refused_then_retries();
     test_log_line_without_log_capability_uses_kernel_ring();
     test_log_line_debug_never_enters_the_ring();

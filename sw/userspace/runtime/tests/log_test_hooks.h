@@ -14,6 +14,8 @@ struct AstraStartupInfo;
 
 const struct AstraStartupInfo *astra_test_startup(void);
 uintptr_t astra_test_time_page_address(void);
+/* Where the program image's virtual addresses live in this host process. */
+uintptr_t astra_test_program_origin(void);
 /* log.c: forget the ring and the retry back-off (ASTRA_LOG_TEST builds). */
 void astra_log_test_reset(void);
 /* log.c: the setup state word, the producer it names (NULL unless READY), and
