@@ -40,6 +40,7 @@
 #include "ring.h"
 #include "sync.h"
 #include "time_page.h"
+#include "format.h"
 #include "trace.h"
 #include "user_copy.h"
 #include "vm.h"
@@ -1123,6 +1124,43 @@ static void trace_process_start(const KernelProcess *process)
             chunk != 0u ? process->name + offset : NULL, chunk);
         offset += chunk;
     } while (offset < length);
+    kernel_interrupt_restore(saved_status);
+}
+
+/*
+ * A user fault as the kernel's own text line (process 0), so the events
+ * service writes it into the system log beside the program's last lines
+ * (docs/SYSTEM_LOG.md section 3). The console report says more; this is
+ * the one line a log reader searches for. The pid is printed as the log and
+ * `ps` print it. Chunked and kept consecutive as trace_process_start's chain.
+ */
+static void trace_fault_text(uint32_t process_id, uint32_t program_counter,
+                             uint32_t fault_address, uint32_t vector)
+{
+    char text[96];
+    uint32_t length = kernel_format(
+        text, sizeof(text), "user fault: process %08x pc 0x%08X address "
+        "0x%08X vector %u", process_id, program_counter, fault_address,
+        vector);
+    uint32_t offset = 0u;
+    uint16_t saved_status;
+
+    if (length >= sizeof(text))
+        length = sizeof(text) - 1u;
+    saved_status = kernel_interrupt_save_disable();
+    while (offset < length) {
+        uint32_t chunk = length - offset;
+        uint16_t flags = (uint16_t)(KERNEL_TRACE_LEVEL_ERROR |
+                                    KERNEL_TRACE_FLAG_INLINE_STRING);
+
+        if (chunk > KERNEL_TRACE_ARGUMENT_BYTES) {
+            chunk = KERNEL_TRACE_ARGUMENT_BYTES;
+            flags |= KERNEL_TRACE_FLAG_CONTINUED;
+        }
+        (void)kernel_trace_write_user(ASTRA_EVENT_MESSAGE_UNSTRUCTURED, 0u,
+                                      0u, 0u, flags, text + offset, chunk);
+        offset += chunk;
+    }
     kernel_interrupt_restore(saved_status);
 }
 
@@ -13993,6 +14031,8 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
     current->fault_status = frame.special_status;
     current->fault_address = frame.fault_address;
     ++scheduler_stats.user_faults;
+    trace_fault_text(current->id, frame.program_counter, frame.fault_address,
+                     frame.vector_offset >> 2);
     kernel_process_fault_report(current->id, thread->id,
                                 frame.program_counter, frame.fault_address,
                                 frame.vector_offset >> 2,

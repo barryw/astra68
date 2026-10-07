@@ -277,7 +277,7 @@ $(BUILD_DIR)/utf8.o: ../common/utf8.c \
                          ../../ndk/include/astra/utf8.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/process.o: process.c process.h thread.h sync.h port.h area.h ring.h context.h handle.h block.h device.h interrupt.h \
+$(BUILD_DIR)/process.o: process.c process.h format.h thread.h sync.h port.h area.h ring.h context.h handle.h block.h device.h interrupt.h \
                         bytes.h \
                         generation.h \
                         object_cache.h allocation.h \
@@ -697,7 +697,7 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
 			    time_page.c time_page.h ../include/astra/time_page.h \
 			    allocation.c allocation.h object_cache.c object_cache.h \
 			    performance.c performance.h bytes.c bytes.h generation.h \
-                            trace.c trace.h \
+                            trace.c trace.h format.c format.h \
                             thread.c thread.h sync.c sync.h \
                             port.c port.h \
                             area.c area.h ring.c ring.h \
@@ -729,8 +729,8 @@ $(BUILD_DIR)/test_process: tests/test_process.c process.c process.h \
 		dma.c block.c device.c vm.c exception.c \
 		user_copy.c \
 		bytes.c context.c handle.c performance.c thread.c sync.c port.c \
-		area.c ring.c irq.c elf.c trace.c ../common/utf8.c process.c \
-		time_page.c tests/test_process.c -o $@
+		area.c ring.c irq.c elf.c trace.c format.c ../common/utf8.c \
+		process.c time_page.c tests/test_process.c -o $@
 
 $(BUILD_DIR)/test_dispatch: tests/test_dispatch.c dispatch.c dispatch.h \
 			     fault.h interrupt.h trace.h \

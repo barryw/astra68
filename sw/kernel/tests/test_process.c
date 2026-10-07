@@ -13541,6 +13541,52 @@ static void test_fault_report_names_only_what_it_knows(void)
     assert(fault_reports == 1u);
     assert(last_fault_address == 0x60000000u);
     assert(last_fault_kind == KERNEL_PROCESS_FAULT_PRIVATE_WINDOW);
+    /*
+     * And in the ring, as the kernel's own text line (process 0), so the
+     * system log has it beside the program's last lines
+     * (docs/SYSTEM_LOG.md section 3: the kernel ring carries fault reports).
+     */
+    {
+        static AstraEventDrained drained[64];
+        char text[160];
+        char expected[160];
+        uint32_t used = 0u;
+        uint32_t after = 0u;
+        uint32_t count;
+        int complete = 0;
+
+        /* The ring is not reset between tests: the last chain counts. */
+        do {
+            uint32_t cursor = 0u;
+            uint32_t lost = 0u;
+
+            count = kernel_trace_drain_user(after, drained, 64u, &cursor,
+                                            &lost);
+            after = cursor;
+            for (uint32_t index = 0u; index < count; ++index) {
+                const AstraEventDrained *event = &drained[index];
+
+                if (event->process != 0u ||
+                    event->message != ASTRA_EVENT_MESSAGE_UNSTRUCTURED)
+                    continue;
+                assert((event->flags & ASTRA_EVENT_FLAG_INLINE_STRING) != 0u);
+                assert((event->flags & ASTRA_EVENT_LEVEL_MASK) ==
+                       ASTRA_EVENT_LEVEL_ERROR);
+                if (complete)
+                    used = 0u;
+                assert(used + event->payload_length < sizeof(text));
+                memcpy(text + used, event->payload, event->payload_length);
+                used += event->payload_length;
+                complete = (event->flags & ASTRA_EVENT_FLAG_CONTINUED) == 0u;
+            }
+        } while (count == 64u);
+        assert(complete);
+        text[used] = '\0';
+        snprintf(expected, sizeof(expected),
+                 "user fault: process %08x pc 0x%08X address 0x60000000 "
+                 "vector 2", process_id, KERNEL_PROCESS_CODE_BASE + 6u);
+        assert(strcmp(text, expected) == 0);
+    }
 
     /*
      * An address in another thread's slot is inside the arena and outside this
