@@ -2086,26 +2086,16 @@ are covered; Joliet, UDF and HFS-family readers still need representative-image
 qualification. Physical optical drives and DE25 deployment are not qualified.
 
 That gate exposed a shared port-lifetime defect: a dead service's send
-capability prevented an unrelated fork. `kernel_port_handle_retain()` now
-copies an already-held closing endpoint while retaining its peer-dead status.
-The existing port owner-death test fails before the change and passes after;
-port and handle suites pass, including final-reference reclamation and refusal
-to revive a freed port or copy a receive endpoint. An automated MC68040
-object-code comparison confirms the retain function changes only its state
-comparison immediate from 1 to 2: zero added instructions or branches on the
-existing path. The completed qualification run used the shared Beast lock and
-private dependency, QEMU, image and log paths.
-The retained log is on Beast at
-`/home/barry/Git/astra68-cdfs/build/cdfs-qualification.log`.
+capability prevented an unrelated fork. The kernel fix landed on main with
+the system log (`e9aec561`, `kernel_port_handle_retain()` copies an
+already-held closing send endpoint, which keeps reporting peer death); the
+CDFS branch keeps its port-level test of the same behavior.
 
-Qualified implementation source: `feat/cdfs` at
-`aaeabd382f6283ac9e8f4c5e4b22bba0dee80c69`. Artifact SHA-256 identities:
-
-| Artifact | SHA-256 |
-| --- | --- |
-| `sw/boot/build/astra_boot.bin` | `f91ae7294b29f5bbaa252a8b9e87c2f5baaf46931df83bbefeb4f56936a605c7` |
-| `sw/userspace/services/cdfs/build/m68k/cdfs` | `44beec5c7e285b46eada5887998575bde6cbda411bd45780228b323c307ca960` |
-| `build/qemu-system-m68k` | `84a42b558d1f0af1b102b023bc96b75d2fd596a38766b6ab7965aa47c5d12fa1` |
+Rebased onto main after the system log merged (2026-10-07). On Beast the
+CDFS host test, ASan/UBSan and analyzer builds, the kernel suite, and the
+full QEMU suite pass, with `test-cdfs.py` now part of the suite:
+`ASTRA CDFS PASS: listing, reads, cwd, refusals, changed image, clean stop
+and unrelated I/O`.
 
 ## Build and artifact rules
 
