@@ -127,3 +127,26 @@ stores with a DSB before the engine is rung.
 `astra-host-read-bench` (built with `PLATFORM=de25` in `fpga/arty/linux`)
 measures CPU writes into the host arena and into media RAM, and an uploaded
 BLIT read from each, checked byte for byte. Run it with Astra stopped.
+
+## Storage drivers
+
+The vendor Image lacks most of what `docs/FILESYSTEM_PRODUCTION_PRD.md`
+mounts. `kernel/astra-storage.config` adds exFAT, ISO9660 (Joliet, Rock
+Ridge, zisofs), UDF, `nls_utf8` and UAS as exact-source modules;
+`kernel/de25-6.12.11-gd7d192a9ddd9.config` is the board's own
+`/proc/config.gz`, the baseline the build refuses to drift from. On beast:
+
+```sh
+~/astra-mg/locked fpga/de25/linux/kernel/build-storage-modules.sh \
+    --install root@192.168.1.52
+```
+
+The modules land in `/lib/modules/6.12.11-gd7d192a9ddd9/updates/astra-storage/`
+with a `MANIFEST`; removing that directory and running `depmod -a` reverses
+the install. They autoload on mount (`fs-*` aliases) and on device attach, so
+no `modules-load.d` entry is needed. `sr_mod`/`cdrom` cannot be added this
+way: `CONFIG_CDROM` changes `struct gendisk` in the Image, so optical drives
+need a rebuilt Image. `../check_fs_drivers.sh` reports what the board has.
+
+The board's `udisks2.service` is masked: it is a second mount authority, and
+nothing here uses it.
