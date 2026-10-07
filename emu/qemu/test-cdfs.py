@@ -57,16 +57,22 @@ def main():
                  ("CDFS-CHANGED-1",)),
                 ("service stop cdfs; print CDFS-STOP-$?", ("CDFS-STOP-0",)),
                 ("cat /cd0/docs/note.txt; print CDFS-STOPPED-$?", ("CDFS-STOPPED-1",)),
+                ("print home-ok > /home/cdfs-check; cat /home/cdfs-check; print CDFS-HOME-$?",
+                 ("home-ok", "CDFS-HOME-0")),
             )
             for command, expected in cases:
                 before = machine.sequence()
                 machine.qmp.type_line(command)
                 if gate.wait_for_command(machine, expected, args.command_deadline, before) is None:
                     print("FAIL:", command)
-                    for line in machine.said(before)[0][-40:]:
+                    said = machine.said(before)[0]
+                    for line in said[:40] + said[-40:]:
+                        print(line)
+                    for line in machine.recent_trace(20):
                         print(line)
                     return 1
-            print("ASTRA CDFS PASS: listing, reads, cwd, refusals, changed image and clean stop")
+                print("PASS:", command, flush=True)
+            print("ASTRA CDFS PASS: listing, reads, cwd, refusals, changed image, clean stop and unrelated I/O")
             return 0
         finally:
             machine.close()
