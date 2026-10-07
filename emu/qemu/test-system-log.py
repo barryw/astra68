@@ -18,6 +18,10 @@ boot volume's copy:
            is in the file.
   fork     `logburst --fork` logs a line and forks: the fork succeeds, the
            child logs from its own ring, and both lines are in the file.
+  quiet    `logburst --wrap` fills the kernel ring with kernel records only:
+           the events service reports that gap once, and over QUIET_S idle
+           seconds the store's lost count does not move and its snapshot is
+           not rewritten every sweep (a stuck trace cursor did both).
   fault    `logburst 1 --fault` logs a line and faults: the line is kept,
            and the kernel's user-fault report names the same process.
   show     `log show` finds both, by program, level and text.
@@ -87,13 +91,21 @@ DOOM = ("Z_Init: Init zone memory allocation daemon. ",
         "V_Init: allocate screens.")
 DOOM_BUNDLE = "/apps/ChocolateDoom.app"
 STORE_SYSLOG = "/events/syslog"
-CHECKS = ("cost", "burst", "wake", "fast-exit", "fork", "fault", "doom",
-          "stream")
+CHECKS = ("cost", "burst", "wake", "fast-exit", "fork", "quiet", "fault",
+          "doom", "stream")
 FAST_EXITS = 10
 # The doorbell answers at once and the sweep within its 1 s interval; with
 # neither the line waits for an unrelated wake (a ring setup elsewhere).
 WAKE_S = 3.0
 STORE_TAIL_S = 10
+# The kernel ring holds 2047 slots; 2 records a map and unmap.
+WRAP_PAGES = 2500
+QUIET_S = 8
+# A pump that reads any user record saves the store once; a stuck cursor
+# saved it every 1 s sweep (8 in QUIET_S). One for an unrelated event.
+QUIET_SAVES = 1
+REMOTE_DESKTOP_CONF = "services/remote-desktop/service.conf"
+STORE_BANKS = ("/events/store.0", "/events/store.1")
 
 
 def fail(text):
@@ -324,6 +336,84 @@ def check_fork(machine):
     print("PASS fork (child %s)" % child)
 
 
+def store_header(image, work):
+    """(generation, lost_in_transport) of the newest store snapshot on the
+    running machine's volume, read from a copy whose journal is replayed
+    first: early in a boot the banks' inodes may be only in the journal."""
+    offset, length = astra_image.ext4_partition(image)
+    volume = os.path.join(work, "live.img")
+    astra_image._slice(image, offset, length, volume)
+    subprocess.run(["e2fsck", "-fy", volume], stdout=subprocess.PIPE,
+                   stderr=subprocess.STDOUT, check=False)
+    newest = None
+    for bank in STORE_BANKS:
+        out = os.path.join(work, "bank")
+        if os.path.exists(out):
+            os.unlink(out)
+        subprocess.run(["debugfs", "-R", "dump %s %s" % (bank, out), volume],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                       check=False)
+        if not os.path.exists(out):
+            continue
+        with open(out, "rb") as handle:
+            head = handle.read(100)
+        if len(head) < 100:
+            continue
+        generation = int.from_bytes(head[12:16], "big")
+        lost = int.from_bytes(head[96:100], "big")
+        if newest is None or generation > newest[0]:
+            newest = (generation, lost)
+    os.unlink(volume)
+    if newest is None:
+        fail("quiet: no store snapshot on the volume")
+    return newest
+
+
+def check_quiet(machine, image, work):
+    """A ring that wrapped past every user record holds only kernel records
+    the events service skips. The gap is reported once; after that an idle
+    machine neither counts more loss nor rewrites the store each sweep."""
+    # logburst stays alive, holding the ring as it left it, while the store
+    # is watched: its exit is the next thing to write a user record.
+    # A second run would see the first's line: count them.
+    wrapped = "logburst: wrapped %d" % WRAP_PAGES
+    seen = sum(1 for _, m in records(host_text(machine))
+               if m is not None and m.group(3) == "logburst" and
+               m.group(6) == wrapped)
+    settle_ms = (3 + QUIET_S + 20) * 1000
+    machine.settle()
+    start = machine.sequence()
+    machine.qmp.type_line("logburst --wrap %d --settle %d; print -r -- "
+                          "SYSLOG-GATE-12-$?" % (WRAP_PAGES, settle_ms))
+    deadline = time.monotonic() + 60
+    # Logged, not printed: drawing the line would emit display events, user
+    # records that move even a stuck cursor back into the ring.
+    while sum(1 for _, m in records(host_text(machine))
+              if m is not None and m.group(3) == "logburst" and
+              m.group(6) == wrapped) <= seen:
+        if time.monotonic() > deadline:
+            fail("quiet: logburst --wrap never logged %r: %r" %
+                 (wrapped, machine.said(start)[0][-10:]))
+        time.sleep(0.1)
+    time.sleep(3)  # the next sweep reports the gap, once
+    before = store_header(image, work)
+    time.sleep(QUIET_S)
+    after = store_header(image, work)
+    deadline = time.monotonic() + settle_ms / 1000 + 60
+    while "SYSLOG-GATE-12-0" not in machine.said(start)[0]:
+        if time.monotonic() > deadline:
+            fail("quiet: logburst --wrap did not exit 0: %r" %
+                 machine.said(start)[0][-10:])
+        time.sleep(0.2)
+    saves = (after[0] - before[0]) & 0xFFFFFFFF
+    if after[1] != before[1] or saves > QUIET_SAVES:
+        fail("quiet: over %d s idle the store's lost count went %d -> %d "
+             "and it was saved %d times (at most %d)" %
+             (QUIET_S, before[1], after[1], saves, QUIET_SAVES))
+    print("PASS quiet (lost %d steady, %d saves in %d s)" %
+          (after[1], saves, QUIET_S))
+
+
 def check_fault(machine):
     lines, status = command(machine, "logburst 1 --fault", 60, 5)
     if status == 0:
@@ -458,7 +548,7 @@ def check_store(image, text, work, stopped):
         stored = handle.read().splitlines()
     host = text.splitlines()
     # The machine is stopped, not shut down, and the service keeps writing
-    # to the end (remote-desktop retries, the display): the volume can lack
+    # to the end (the display, the sampler): the volume can lack
     # the last pass or two that never left the storage service's cache. So
     # the volume's copy must be the host copy, line for line, less only a
     # tail written in the last STORE_TAIL_S seconds before the stop.
@@ -506,6 +596,16 @@ def main():
         if result.returncode != 0:
             fail("could not build logburst: %s" % result.stdout[-400:])
         astra_image.install_test_command(image, "logburst")
+        # Without its host helper remote-desktop fails to launch, and the
+        # supervisor reports each retry through the kernel ring: user records
+        # every few seconds, which would mask the quiet check's stuck cursor.
+        conf = os.path.join(work, "remote-desktop.conf")
+        with open(conf, "w", encoding="ascii", newline="\n") as handle:
+            handle.write(astra_image.CONFIGURATION[REMOTE_DESKTOP_CONF]
+                         .replace("enabled true\n", "enabled false\n"))
+        astra_image._replace_volume_file(
+            image, conf, "/%s/%s" % (astra_image.CONFIG_DIRECTORY,
+                                     REMOTE_DESKTOP_CONF))
         if arguments.no_sweep:
             events = os.path.join(ROOT, "sw", "userspace", "services",
                                   "events")
@@ -553,6 +653,8 @@ def main():
                 check_fast_exit(machine)
             if "fork" in wanted:
                 check_fork(machine)
+            if "quiet" in wanted:
+                check_quiet(machine, image, work)
             if "fault" in wanted:
                 pid = check_fault(machine)
                 check_show(machine, pid)

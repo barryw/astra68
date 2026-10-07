@@ -9578,14 +9578,17 @@ static void test_reading_the_stream_is_the_privileged_half(void)
     assert(drained[1].payload[0] == 's');
     assert(drained[1].sequence == cursor);
 
-    /* The cursor is where it stopped: nothing new, nothing repeated. */
+    /* The cursor is where it stopped: nothing new, nothing repeated. The
+     * full page stopped before the last record's argument slot, which this
+     * read examines, so the cursor moves past it and no further. */
     registers[2] = cursor;
     assert(kernel_process_on_syscall(registers,
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(next->data[1] == 0u);
-    assert(next->data[2] == cursor);
+    assert(next->data[2] == cursor + 1u);
+    cursor = next->data[2];
 
     /* A caller can drain more than the old stack-array batch of eight. */
     for (uint32_t index = 0u; index < 10u; ++index) {

@@ -400,11 +400,12 @@ static void test_a_drain_is_a_page_and_a_cursor(void)
     /* The bytes past the length are zero, and mean nothing. */
     assert(events[1].payload[4] == 0u);
     assert(events[1].sequence > events[0].sequence);
-    assert(cursor == events[1].sequence);
+    /* The cursor is what was examined: through the last argument slot. */
+    assert(cursor == events[1].sequence + 1u);
 
     /* Draining again from the cursor yields nothing, and does not move it. */
     assert(kernel_trace_drain_user(cursor, events, 4u, &cursor, &lost) == 0u);
-    assert(cursor == events[1].sequence);
+    assert(cursor == events[1].sequence + 1u);
     assert(lost == 0u);
 
     /* Only what is new. */
@@ -464,6 +465,44 @@ static void test_a_drain_says_what_it_lost(void)
     assert(lost == 1u);
 }
 
+/*
+ * A gap is reported once. The cursor means "examined through", so it moves
+ * past the kernel's own records too: a reader whose cursor fell out of a ring
+ * that now holds only kernel records must not hear about the same gap on
+ * every drain (the events service saved its store once a second for it).
+ */
+static void test_a_gap_is_reported_once(void)
+{
+    AstraEventDrained events[2];
+    uint32_t cursor = 0u;
+    uint32_t lost = 0u;
+
+    reset_ring();
+    assert(kernel_trace_write_user(1u, 0x1000u, 1u, 0u,
+                                   KERNEL_TRACE_LEVEL_INFO, NULL, 0u));
+    assert(kernel_trace_drain_user(0u, events, 2u, &cursor, &lost) == 1u);
+    for (uint32_t index = 0u; index < KERNEL_TRACE_CAPACITY + 4u; ++index)
+        assert(kernel_trace_write_at(KERNEL_TRACE_EVENT_BOOT, 0u, index, 0u,
+                                     0u, 0u, 0u));
+    assert(kernel_trace_drain_user(cursor, events, 2u, &cursor, &lost) == 0u);
+    assert(lost != 0u);
+    assert(kernel_trace_drain_user(cursor, events, 2u, &cursor, &lost) == 0u);
+    assert(lost == 0u);
+
+    /* And once when the page fills before the ring is examined. */
+    reset_ring();
+    assert(kernel_trace_write_user(1u, 0x1000u, 1u, 0u,
+                                   KERNEL_TRACE_LEVEL_INFO, NULL, 0u));
+    assert(kernel_trace_drain_user(0u, events, 2u, &cursor, &lost) == 1u);
+    for (uint32_t index = 0u; index < KERNEL_TRACE_CAPACITY + 4u; ++index)
+        assert(kernel_trace_write_user(2u, 0x1000u, 1u, 0u,
+                                       KERNEL_TRACE_LEVEL_INFO, NULL, 0u));
+    assert(kernel_trace_drain_user(cursor, events, 2u, &cursor, &lost) == 2u);
+    assert(lost != 0u);
+    assert(kernel_trace_drain_user(cursor, events, 2u, &cursor, &lost) == 2u);
+    assert(lost == 0u);
+}
+
 int main(void)
 {
     test_retained_ring_wrap_and_torn_read();
@@ -476,6 +515,7 @@ int main(void)
     test_a_user_event_shares_the_one_ring();
     test_a_drain_is_a_page_and_a_cursor();
     test_a_drain_says_what_it_lost();
+    test_a_gap_is_reported_once();
     /* Last: the ring is retained, and this one writes into it. */
     test_the_build_decides_which_levels_are_kept();
     puts("retained trace tests passed");

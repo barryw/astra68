@@ -2,6 +2,7 @@
  * Measures what logging costs the program that logs.
  *   logburst COUNT [--threads N] [--fault] [--off] [--warm] [--settle MS]
  *   logburst --fork
+ *   logburst --wrap N [--settle MS]
  * Prints "logburst: COUNT lines, N threads, ELAPSED ns" on stdout.
  * --off formats every line but does not log it: the baseline.
  * --warm logs one line "logburst: warm" before the clock starts, so the
@@ -13,6 +14,11 @@
  * --fork logs "logburst: parent" and then fork()s: the child logs
  *   "logburst: child" and exits 0, the parent waits for it. Prints
  *   "logburst: fork child PID status S"; a fork that fails exits 6.
+ * --wrap N maps and unmaps one page N times: 2N kernel-only trace records,
+ *   enough at N >= 1024 to wrap the kernel ring past every user record.
+ *   It waits 3 s first, so the terminal's echo is drawn and quiet, then
+ *   logs (not prints) "logburst: wrapped N", sleeps --settle MS so the ring
+ *   stays that way while a gate watches, and only then prints the same line.
  *
  * Each thread writes COUNT / N lines "burst T I" (the first COUNT % N
  * threads one more), straight through astra_log_line so the result does not
@@ -98,6 +104,47 @@ fork_test(void)
     return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : 8;
 }
 
+static void
+pause_ms(uint32_t milliseconds)
+{
+    struct timespec pause = {(time_t)(milliseconds / 1000u),
+                             (long)(milliseconds % 1000u) * 1000000L};
+
+    while (nanosleep(&pause, &pause) != 0 && errno == EINTR)
+        ;
+}
+
+/* Kernel records only: AREA_MAP and AREA_UNMAP each write one. */
+static int
+wrap_test(uint32_t count, uint32_t settle)
+{
+    char text[40];
+    uint32_t area = 0u;
+
+    pause_ms(3000u);
+    if (astra_rt_area_create_flagged(4096u, ASTRA_RIGHT_READ |
+                                                ASTRA_RIGHT_WRITE |
+                                                ASTRA_RIGHT_MAP,
+                                     0u, &area) != ASTRA_SYSCALL_OK)
+        return 9;
+    for (uint32_t index = 0u; index < count; ++index) {
+        void *address = NULL;
+        uint32_t size = 0u;
+
+        if (astra_rt_area_map(area, ASTRA_AREA_MAP_READ, &address, &size) !=
+                ASTRA_SYSCALL_OK ||
+            astra_rt_area_unmap(address) != ASTRA_SYSCALL_OK)
+            return 10;
+    }
+    (void)astra_close(area);
+    (void)snprintf(text, sizeof(text), "logburst: wrapped %u",
+                   (unsigned)count);
+    say(text);
+    pause_ms(settle);
+    printf("%s\n", text);
+    return 0;
+}
+
 static int
 parse_count(const char *text, uint32_t *value)
 {
@@ -124,10 +171,18 @@ main(int argc, char **argv)
 
     if (argc == 2 && strcmp(argv[1], "--fork") == 0)
         return fork_test();
+    if (argc >= 3 && strcmp(argv[1], "--wrap") == 0 &&
+        parse_count(argv[2], &count)) {
+        if (argc == 5 && strcmp(argv[3], "--settle") == 0 &&
+            parse_count(argv[4], &settle))
+            return wrap_test(count, settle);
+        return argc == 3 ? wrap_test(count, 0u) : 2;
+    }
     if (argc < 2 || !parse_count(argv[1], &count)) {
         (void)fputs("usage: logburst COUNT [--threads N] [--fault] [--off] "
                     "[--warm] [--settle MS]\n"
-                    "       logburst --fork\n", stderr);
+                    "       logburst --fork | --wrap N [--settle MS]\n",
+                    stderr);
         return 2;
     }
     for (int index = 2; index < argc; ++index) {
@@ -168,13 +223,8 @@ main(int argc, char **argv)
         (void)astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_LOG,
                              line, (uint32_t)(sizeof(line) - 1u));
     }
-    if (settle != 0u) {
-        struct timespec pause = {(time_t)(settle / 1000u),
-                                 (long)(settle % 1000u) * 1000000L};
-
-        while (nanosleep(&pause, &pause) != 0 && errno == EINTR)
-            ;
-    }
+    if (settle != 0u)
+        pause_ms(settle);
     if (clock_gettime(CLOCK_MONOTONIC, &start) != 0)
         return 4;
     if (threads == 1u) {
